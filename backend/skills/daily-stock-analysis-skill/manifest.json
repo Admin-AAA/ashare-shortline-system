@@ -1,0 +1,8 @@
+{
+  "id": "daily-stock-analysis-skill",
+  "name": "Daily Stock Analysis 主评分",
+  "version": "0.1.0",
+  "enabled": true,
+  "source_type": "local",
+  "description": "引入 daily_stock_analysis 的技术评分框架，覆盖趋势、乖离、量能、支撑、MACD、RSI。"
+}

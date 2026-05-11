@@ -1,0 +1,111 @@
+id: daily-stock-analysis-skill
+name: Daily Stock Analysis 主评分
+enabled: true
+weight: 1.0
+
+meta:
+  author: system
+  style: technical-score
+  version: 0.1.0
+  holding_days: [1, 3, 5]
+
+contract:
+  type: strategy
+  executable: true
+  schema_version: 1
+
+universe:
+  include:
+    - "amount_yi >= 3"
+    - "turnover_rate >= 0.3"
+  exclude:
+    - "is_st == true"
+    - "announcement_negative_count > 0"
+
+phases:
+  - name: 风险否决
+    when: "news_risk_count > 1 or (dsa_trend_score <= 4 and dsa_macd_score == 0)"
+    score_cap: 20
+    hard_veto: true
+    risk_flags: ["重大风险情报或趋势破坏"]
+
+  - name: 过热观察
+    when: "dsa_bias_score <= 4 and rsi_12 > 70"
+    score_cap: 68
+    hard_veto: false
+    risk_flags: ["偏离均线过远，进入过热观察区"]
+
+  - name: 趋势跟踪
+    when: "dsa_trend_score >= 18"
+    score_cap: 100
+    hard_veto: false
+
+setups:
+  - name: 缩量回踩
+    when: "volume_shrink_pullback == true and (support_ma5 == true or support_ma10 == true) and dsa_signal_score >= 68"
+    score_delta: 6
+    entry_rule: "缩量回踩 MA5/MA10 附近止跌后再确认承接"
+    invalid_rule: "跌破均线支撑且收不回"
+
+  - name: 放量突破
+    when: "volume_breakout_signal == true and resistance_distance_pct <= 2.5 and dsa_signal_score >= 65"
+    score_delta: 5
+    entry_rule: "放量突破近端压力位后跟随"
+    invalid_rule: "突破失败，重新跌回压力位下方"
+
+  - name: 多头顺势
+    when: "dsa_trend_score >= 26 and dsa_bias_score >= 14 and dsa_macd_score >= 8"
+    score_delta: 4
+    entry_rule: "多头趋势内优先等回踩而不是追高"
+    invalid_rule: "趋势走平且 MACD 转弱"
+
+scoring:
+  base: 0
+  score_fields:
+    - field: dsa_trend_score
+      reason: 趋势分
+    - field: dsa_bias_score
+      reason: 乖离分
+    - field: dsa_volume_score
+      reason: 量能分
+    - field: dsa_support_score
+      reason: 支撑分
+    - field: dsa_macd_score
+      reason: MACD 分
+    - field: dsa_rsi_score
+      reason: RSI 分
+  rules:
+    - when: "capital_flow_score >= 72"
+      delta: 4
+      reason: 资金确认
+    - when: "chip_health_score >= 72"
+      delta: 3
+      reason: 筹码结构健康
+    - when: "intelligence_score >= 66"
+      delta: 3
+      reason: 情报环境较优
+    - when: "fundamental_score >= 68"
+      delta: 2
+      reason: 基本面拖累较小
+    - when: "dsa_bias_score <= 4"
+      delta: -8
+      reason: 偏离均线过远
+
+risk:
+  rules:
+    - when: "news_risk_count > 0"
+      level: high
+      flag: 新闻或公告风险
+      score_delta: -18
+    - when: "rsi_12 > 70"
+      level: medium
+      flag: RSI 超买
+      score_delta: -8
+    - when: "dsa_macd_score == 0"
+      level: high
+      flag: MACD 转弱
+      score_delta: -12
+    - when: "profit_ratio > 85"
+      level: medium
+      flag: 获利盘过高
+      score_delta: -6

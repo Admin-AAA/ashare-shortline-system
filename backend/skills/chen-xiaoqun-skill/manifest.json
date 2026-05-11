@@ -1,0 +1,9 @@
+{
+  "id": "chen-xiaoqun-skill",
+  "name": "陈小群龙头战法",
+  "version": "0.1.0",
+  "enabled": true,
+  "source_type": "local",
+  "description": "A股短线龙头、分歧转一致、加速阶段识别。"
+}
+

@@ -1,0 +1,17 @@
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+SQLAlchemy==2.0.40
+pydantic==2.11.4
+pydantic-settings==2.9.1
+PyYAML==6.0.2
+APScheduler==3.11.0
+python-multipart==0.0.20
+httpx==0.28.1
+akshare==1.16.98
+tushare==1.4.21
+pandas==2.2.3
+pytest==8.3.5
+baostock==0.8.9
+thsdk==1.7.18
+agno>=2.6.0
+openai>=1.68.0

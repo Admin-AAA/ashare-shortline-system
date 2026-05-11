@@ -1,0 +1,86 @@
+id: chen-xiaoqun-skill
+name: 陈小群龙头战法
+enabled: true
+weight: 1.0
+
+meta:
+  author: system
+  style: shortline
+  version: 0.1.0
+  holding_days: [1, 3, 5]
+
+contract:
+  type: strategy
+  executable: true
+  schema_version: 1
+
+universe:
+  include:
+    - "amount_yi >= 3"
+    - "free_mv_yi >= 20"
+  exclude:
+    - "announcement_negative_count > 0"
+    - "is_st == true"
+
+phases:
+  - name: 退潮
+    when: "(dist20 < 0 and chg20 < 0) or max_dd20 < -15"
+    score_cap: 35
+    hard_veto: true
+    risk_flags: ["退潮不开仓"]
+
+  - name: 加速末期
+    when: "(upper_shadow_count20 >= 5 and pos60 > 95) or (turnover_rate > 9 and vol5_20 < 0.85) or (dist60 > 40 and pos60 > 98)"
+    score_cap: 45
+    hard_veto: false
+    risk_flags: ["加速末期不追高"]
+
+  - name: 加速初期
+    when: "dist20 >= 15 and chg20 > 25 and eff20 > 0.4 and turnover_rate < 8 and upper_shadow_count20 <= 3"
+    score_cap: 88
+    hard_veto: false
+    risk_flags: ["注意换手确认"]
+
+  - name: 启动
+    when: "dist20 < 15 and chg20 < 25 and pos20 < 85"
+    score_cap: 92
+    hard_veto: false
+
+setups:
+  - name: 分歧转一致
+    when: "breakout20 == true and turnover_rate >= 3 and turnover_rate <= 8 and upper_shadow_count20 <= 3"
+    score_delta: 14
+    entry_rule: "放量突破昨日高点或20日平台，且不冲高回落"
+    invalid_rule: "跌回突破平台并收不回"
+
+  - name: 弱转强
+    when: "off_high_pct < -2 and pct > 1 and vol5_20 >= 1"
+    score_delta: 10
+    entry_rule: "放量修复分歧日高点"
+    invalid_rule: "失守分歧日低点"
+
+scoring:
+  base: 50
+  rules:
+    - when: "_is_main == true"
+      delta: 15
+      reason: 主线行业
+    - when: "primary_excess20 > 10"
+      delta: 8
+      reason: 20日超额收益强
+    - when: "turnover_rate >= 3 and turnover_rate <= 8"
+      delta: 6
+      reason: 换手处于健康区间
+    - when: "_is_main == false"
+      delta: -12
+      reason: 非主线降权
+
+risk:
+  rules:
+    - when: "upper_shadow_count20 >= 4"
+      level: medium
+      flag: 上影线偏多
+    - when: "turnover_rate > 12"
+      level: high
+      flag: 高换手风险
+

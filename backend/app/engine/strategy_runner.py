@@ -1,0 +1,187 @@
+from typing import Any
+
+from app.engine.evaluator import evaluate
+from app.engine.skill_loader import StrategySkill
+
+
+def run_strategy(skill: StrategySkill, stock: dict[str, Any], main_industries: list[str]) -> dict[str, Any]:
+    contract = skill.contract or {}
+    context = dict(stock)
+    industry = stock.get("industry")
+    context["_is_main"] = industry in set(main_industries) and industry != "未分类"
+    data_quality = dict(stock.get("data_quality") or {})
+    missing_fields = set(data_quality.get("missing_fields") or [])
+    data_completeness = float(stock.get("data_completeness_score") or data_quality.get("data_completeness_score") or 100.0)
+    evidence_quality = float(stock.get("evidence_quality_score") or data_quality.get("evidence_quality_score") or 100.0)
+    coverage_cap = _evidence_score_cap(
+        sample_count=int(stock.get("market_sample_count") or 0),
+        data_completeness=data_completeness,
+        evidence_quality=evidence_quality,
+        missing_fields=missing_fields,
+    )
+
+    if not _passes_universe(contract, context):
+        return _signal(skill, score=0, phase="排除", hard_veto=True, veto_reason="不在策略股票池", risk_flags=["不符合股票池"])
+
+    phase = "未分类"
+    score_cap = 100.0
+    hard_veto = False
+    risk_flags: list[str] = []
+    evidence: list[str] = []
+
+    for rule in contract.get("phases", []):
+        if evaluate(str(rule.get("when", "")), context):
+            phase = str(rule.get("name", phase))
+            score_cap = float(rule.get("score_cap", score_cap))
+            hard_veto = bool(rule.get("hard_veto", False))
+            risk_flags.extend(rule.get("risk_flags", []) or [])
+            evidence.append(f"阶段命中: {phase}")
+            break
+
+    scoring = contract.get("scoring", {})
+    score = float(scoring.get("base", 50))
+    for field_rule in scoring.get("score_fields", []) or []:
+        field = str(field_rule.get("field", "")).strip()
+        if not field:
+            continue
+        raw_value = context.get(field, 0)
+        try:
+            value = float(raw_value or 0)
+        except (TypeError, ValueError):
+            value = 0.0
+        multiplier = float(field_rule.get("multiplier", 1.0))
+        cap = field_rule.get("cap")
+        floor = field_rule.get("floor")
+        delta = value * multiplier
+        if floor is not None:
+            delta = max(float(floor), delta)
+        if cap is not None:
+            delta = min(float(cap), delta)
+        score += delta
+        reason = str(field_rule.get("reason") or field)
+        evidence.append(f"{reason}: {round(delta, 2)}")
+    for rule in scoring.get("rules", []) or []:
+        if evaluate(str(rule.get("when", "")), context):
+            delta = float(rule.get("delta", 0))
+            score += delta
+            if reason := rule.get("reason"):
+                evidence.append(str(reason))
+
+    setup_name = ""
+    entry_rule = ""
+    invalid_rule = ""
+    setup_quality = 50.0
+    for setup in contract.get("setups", []) or []:
+        if evaluate(str(setup.get("when", "")), context):
+            setup_name = str(setup.get("name", ""))
+            score += float(setup.get("score_delta", 0))
+            setup_quality = min(100.0, 60.0 + float(setup.get("score_delta", 0)))
+            entry_rule = str(setup.get("entry_rule", ""))
+            invalid_rule = str(setup.get("invalid_rule", ""))
+            evidence.append(f"买点命中: {setup_name}")
+            break
+
+    for rule in contract.get("risk", {}).get("rules", []) or []:
+        if evaluate(str(rule.get("when", "")), context):
+            risk_flags.append(str(rule.get("flag", "风险提示")))
+            if "score_delta" in rule:
+                score += float(rule.get("score_delta", 0))
+            elif rule.get("level") == "high":
+                score -= 12
+
+    score_cap = min(score_cap, coverage_cap)
+    if coverage_cap < 82:
+        risk_flags.append("样本或证据覆盖不足，评分已降权")
+        evidence.append(f"诚实性上限: {round(coverage_cap, 1)}")
+
+    score = max(0.0, min(score, score_cap))
+    return _signal(
+        skill,
+        score=score,
+        phase=phase,
+        hard_veto=hard_veto,
+        veto_reason="硬风控阶段命中" if hard_veto else "",
+        risk_flags=risk_flags,
+        setup_match=setup_name,
+        entry_rule=entry_rule,
+        invalid_rule=invalid_rule,
+        evidence=evidence,
+        setup_quality=setup_quality,
+        score_cap=score_cap,
+    )
+
+
+def _passes_universe(contract: dict[str, Any], context: dict[str, Any]) -> bool:
+    universe = contract.get("universe", {})
+    for expr in universe.get("include", []) or []:
+        if not evaluate(str(expr), context):
+            return False
+    for expr in universe.get("exclude", []) or []:
+        if evaluate(str(expr), context):
+            return False
+    return True
+
+
+def _signal(
+    skill: StrategySkill,
+    score: float,
+    phase: str,
+    hard_veto: bool,
+    veto_reason: str = "",
+    risk_flags: list[str] | None = None,
+    setup_match: str = "",
+    entry_rule: str = "",
+    invalid_rule: str = "",
+    evidence: list[str] | None = None,
+    setup_quality: float = 50.0,
+    score_cap: float = 100.0,
+) -> dict[str, Any]:
+    score = min(score, score_cap)
+    return {
+        "strategy_id": skill.skill_id,
+        "strategy_name": skill.name,
+        "version_id": f"{skill.skill_id}:{skill.version}:{skill.contract_hash[:8] if skill.contract_hash else 'none'}",
+        "phase": phase,
+        "score": round(score, 2),
+        "score_cap": round(score_cap, 2),
+        "confidence": round(min(0.95, max(0.2, score / 100)), 2),
+        "bucket_preference": _bucket_for_score(score),
+        "setup_match": setup_match,
+        "entry_rule": entry_rule,
+        "invalid_rule": invalid_rule,
+        "setup_quality": setup_quality,
+        "hard_veto": hard_veto,
+        "veto_reason": veto_reason,
+        "risk_flags": risk_flags or [],
+        "evidence": evidence or [],
+    }
+
+
+def _bucket_for_score(score: float) -> str:
+    if score >= 82:
+        return "容量核心"
+    if score >= 72:
+        return "高弹观察"
+    if score <= 30:
+        return "明确回避"
+    return "证据不足"
+
+
+def _evidence_score_cap(
+    sample_count: int,
+    data_completeness: float,
+    evidence_quality: float,
+    missing_fields: set[str],
+) -> float:
+    cap = 100.0
+    if sample_count and sample_count < 20:
+        cap = min(cap, 68.0)
+    elif sample_count and sample_count < 100:
+        cap = min(cap, 78.0)
+    if data_completeness < 65:
+        cap = min(cap, 72.0)
+    if evidence_quality < 55:
+        cap = min(cap, 76.0)
+    if {"industry", "news", "announcements"}.issubset(missing_fields):
+        cap = min(cap, 74.0)
+    return cap
