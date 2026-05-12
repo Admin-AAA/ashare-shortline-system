@@ -84,7 +84,10 @@ LOCAL_DAILY_BAR_FIELDS = DERIVED_RETURN_FIELDS | {"ma5", "ma10", "ma20"}
 def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     settings = get_settings()
     quotes, quote_meta = _load_or_refresh_quotes(db, settings) if refresh else _load_quotes_from_pool(db, settings)
-    target_count = max(1, int(settings.market_candidate_count))
+    target_count = int(settings.market_candidate_count)
+    if target_count <= 0:
+        target_count = len(quotes)  # 0 = 使用所有合格股票
+    target_count = max(1, target_count)
     lookahead_count = min(
         len(quotes),
         max(target_count, target_count * max(1, int(settings.market_candidate_lookahead_multiplier))),

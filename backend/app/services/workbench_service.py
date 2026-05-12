@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import shutil
 import subprocess
 import threading
@@ -9,6 +10,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 import asyncio
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -584,7 +587,7 @@ async def run_workbench(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
         cards: list[dict[str, Any]] = []
 
         # ═══ 阶段一：策略规则快速粗筛（所有股票，无 LLM） ═══
-        candidate_count = max(params["output_count"] * 3, 10)
+        candidate_count = max(params["output_count"] * 2, 8)
         prelim_entries: list[tuple[float, Any, dict, Any]] = []  # (prelim_score, context, rule_signals, stock)
 
         for context in research_contexts:
@@ -623,7 +626,7 @@ async def run_workbench(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
             *[_process_candidate(ps, ctx, rs, st) for ps, ctx, rs, st in candidates]
         )
 
-        # ═══ 阶段三：聚合所有股票（候选池有 Agent 审查，非候选池仅规则） ═══
+        # ═══ 阶段三：聚合（候选池有 Agent 审查，非候选池仅作为补充） ═══
         def _build_card(context, stock, rule_signals_by_skill, skill_reviews):
             signals = []
             for review_result in skill_reviews:
@@ -696,36 +699,50 @@ async def run_workbench(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
             card["recent_repeat"] = stock["code"] in recent_codes
             return card
 
-        # 处理候选池（有 Agent 审查）
+        # 处理候选池（有 Agent 审查）— 这些是主力推荐
+        candidate_success_count = 0
         for _, context, rule_signals, stock, skill_reviews in candidate_results:
             card = _build_card(context, stock, rule_signals, skill_reviews)
+            if card.get("agent_logs"):
+                candidate_success_count += 1
             if params["hide_recent_repeats"] and card["recent_repeat"]:
                 continue
             cards.append(card)
 
-        # 处理非候选池（仅规则评分，无 Agent 审查）
-        for _, context, rule_signals, stock in non_candidates:
-            # 构造空的 skill_reviews（无 Agent，纯规则信号）
-            dummy_reviews = []
-            for selected in selected_skills:
-                skill_id = selected["skill_id"]
-                rule_signal = rule_signals.get(skill_id)
-                dummy_reviews.append({
-                    "skill_id": skill_id,
-                    "skill_name": selected["name"],
-                    "review": None,
-                    "hallucination_check": None,
-                    "error": None,
-                    "from_rule_only": True,
-                })
-            card = _build_card(context, stock, rule_signals, dummy_reviews)
-            # 规则-only 标记降低置信度
-            if card.get("final_score"):
-                card["final_score"] *= 0.9
-            card["agent_logs"] = []
-            if params["hide_recent_repeats"] and card["recent_repeat"]:
-                continue
-            cards.append(card)
+        logger.info(
+            "Agent review: %d/%d candidates got at least one successful review",
+            candidate_success_count, len(candidate_results),
+        )
+
+        # 非候选池仅作为补充（候选池不足时填充）
+        if len(cards) < params["output_count"]:
+            logger.info(
+                "Candidate pool yielded %d cards (need %d), adding non-candidate fallbacks",
+                len(cards), params["output_count"],
+            )
+            # 为剩余非候选股票构造卡片
+            for _, context, rule_signals, stock in non_candidates:
+                dummy_reviews = []
+                for selected in selected_skills:
+                    skill_id = selected["skill_id"]
+                    rule_signal = rule_signals.get(skill_id)
+                    dummy_reviews.append({
+                        "skill_id": skill_id,
+                        "skill_name": selected["name"],
+                        "review": None,
+                        "hallucination_check": None,
+                        "error": None,
+                        "from_rule_only": True,
+                    })
+                card = _build_card(context, stock, rule_signals, dummy_reviews)
+                if card.get("final_score"):
+                    card["final_score"] *= 0.85  # 无 Agent 审查重度降权
+                card["agent_logs"] = []
+                if params["hide_recent_repeats"] and card["recent_repeat"]:
+                    continue
+                cards.append(card)
+                if len(cards) >= params["output_count"] * 2:
+                    break
 
         cards = apply_pool_rules(cards, params["bucket_limits"], params["output_count"])
         saved: list[Recommendation] = []
@@ -1032,6 +1049,7 @@ def _serialize_recommendation(db: Session, rec: Recommendation) -> dict[str, Any
         "feature_snapshot": _loads(rec.feature_snapshot_json, {}),
         "market_context": _loads(rec.market_context_json, {}),
         "skill_breakdown": _loads(rec.skill_breakdown_json, []),
+        "agent_logs": (_loads(rec.agent_summary_json, {}) or {}).get("logs", []),
         "status": rec.status,
         "recent_repeat": rec.recent_repeat,
         "watch_status": watch.watch_status if watch else "none",
@@ -1392,12 +1410,17 @@ def _persist_market(db: Session, snapshot: dict[str, Any]) -> None:
 
 
 def _persist_stocks_and_bars(db: Session, stocks: list[dict[str, Any]]) -> None:
+    seen: set[str] = set()
     for stock in stocks:
-        existing = db.get(Stock, stock["code"])
+        code = stock["code"]
+        if code in seen:
+            continue
+        seen.add(code)
+        existing = db.get(Stock, code)
         if existing is None:
             db.add(
                 Stock(
-                    code=stock["code"],
+                    code=code,
                     name=stock["name"],
                     exchange=stock.get("exchange"),
                     industry=stock.get("industry"),

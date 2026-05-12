@@ -11,6 +11,7 @@ from app.agents.agno_skill_agent import (
     SkillReviewOutput,
     create_skill_agent,
     run_skill_agent,
+    run_skill_agent_direct,
 )
 from app.agents.hallucination_check import verify_review_output
 from app.engine.skill_loader import StrategySkill
@@ -41,12 +42,12 @@ async def run_skill_reviews(
     # 筛选有 SKILL.md 的已启用 Skill
     active_skills = [s for s in skills if s.enabled and s.skill_body.strip()]
 
-    SKILL_TIMEOUT_SECONDS = 180
+    SKILL_TIMEOUT_SECONDS = 300
 
     async def review_one(skill: StrategySkill, stagger_index: int = 0) -> dict[str, Any]:
         # 交错启动，避免瞬间并发冲击 LLM API
         if stagger_index > 0:
-            await asyncio.sleep(0.5 * stagger_index)
+            await asyncio.sleep(0.3 * stagger_index)
 
         result = {
             "skill_id": skill.skill_id,
@@ -57,16 +58,15 @@ async def run_skill_reviews(
             "error": None,
         }
         try:
-            agent = create_skill_agent(skill, session_id)
             rule_signal = rule_signals_by_skill.get(skill.skill_id)
 
+            # 使用直接 API 调用（单次请求，无工具调用开销）
             review = await asyncio.wait_for(
-                run_skill_agent(
-                    agent=agent,
+                run_skill_agent_direct(
+                    skill=skill,
                     stock=stock,
                     snapshot=snapshot,
                     rule_signal=rule_signal,
-                    session_id=session_id,
                 ),
                 timeout=SKILL_TIMEOUT_SECONDS,
             )

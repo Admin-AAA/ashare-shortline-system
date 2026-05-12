@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     quote_sources: str = "thsdk,eastmoney,akshare,tencent,sina"
     kline_sources: str = "tencent,thsdk,eastmoney,akshare"
     market_scan_size: int = 5200
-    market_candidate_count: int = 60
+    market_candidate_count: int = 0  # 0 = 使用所有合格股票
     market_candidate_lookahead_multiplier: int = 4
     market_kline_days: int = 90
     market_kline_seed_days: int = 250

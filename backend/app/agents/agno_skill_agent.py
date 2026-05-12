@@ -435,3 +435,112 @@ def _parse_to_output(raw: dict) -> SkillReviewOutput:
         summary=summary,
         market_regime_judgment=regime,
     )
+
+
+# ── 快速通道：直接 OpenAI 兼容 API 调用（绕过 Agno 工具调用开销） ──
+
+async def run_skill_agent_direct(
+    skill: StrategySkill,
+    stock: dict[str, Any],
+    snapshot: dict[str, Any],
+    rule_signal: dict[str, Any] | None,
+) -> SkillReviewOutput:
+    """
+    直接调用 DeepSeek API（单次请求，无工具调用），快速获取审查结果。
+
+    绕过 Agno Agent 框架的工具调用开销（2-3 次 API 往返 → 1 次）。
+    """
+    import asyncio as _asyncio
+    from openai import AsyncOpenAI
+
+    settings = get_settings()
+    model_id = settings.agent_model
+    user_prompt = _build_direct_prompt(stock, snapshot, rule_signal, skill)
+    system_prompt = _build_direct_system(skill)
+
+    client = AsyncOpenAI(
+        api_key=settings.agent_skill_api_key,
+        base_url=settings.agent_skill_base_url,
+        timeout=settings.agent_skill_timeout_seconds * 3,
+    )
+
+    max_retries = settings.agent_retry_count
+    backoff = settings.agent_retry_backoff
+
+    last_error = ""
+    for attempt in range(max_retries + 1):
+        try:
+            resp = await client.chat.completions.create(
+                model=model_id,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=settings.agent_temperature,
+                max_tokens=settings.agent_max_tokens,
+                response_format={"type": "json_object"},
+            )
+            content = resp.choices[0].message.content or ""
+            parsed = json.loads(content)
+            return _parse_to_output(parsed)
+        except Exception as e:
+            last_error = str(e)
+            if attempt < max_retries:
+                await _asyncio.sleep(backoff ** attempt)
+            continue
+
+    raise RuntimeError(f"Skill Agent 直接审查失败 (已重试 {max_retries} 次): {last_error}")
+
+
+def _build_direct_system(skill: StrategySkill) -> str:
+    """构建精简版 System Prompt（不引导工具调用）。"""
+    md_body = skill.skill_body.strip()
+    # 限制长度避免超时
+    if len(md_body) > 6000:
+        md_body = md_body[:6000] + "\n\n... (SKILL.md 内容已按长度截断)"
+
+    ref_text = ""
+    for ref in skill.reference_files[:3]:
+        ref_path = skill.path / ref["path"]
+        if ref_path.exists() and ref_path.stat().st_size < 50000:
+            content = ref_path.read_text(encoding="utf-8", errors="replace")[:3000]
+            ref_text += f"\n\n## 参考: {ref['path']}\n{content}"
+
+    return f"""你是 A 股短线交易系统的 Skill Agent，严格按以下方法论审查股票。
+
+{md_body}
+{ref_text}
+
+输出 JSON 格式审查结果，包含: stance, score(0-100), confidence(0-1), evidence, risks, summary, market_regime_judgment。
+不要编造数据，数据不足时降低 confidence 并在 risks 中注明。"""
+
+
+def _build_direct_prompt(
+    stock: dict[str, Any],
+    snapshot: dict[str, Any],
+    rule_signal: dict[str, Any] | None,
+    skill: StrategySkill,
+) -> str:
+    """构建一次性审查 Prompt（包含所有数据，无需工具查询）。"""
+    parts = []
+
+    parts.append("# 候选股票数据\n")
+    parts.append(json.dumps(_compact_stock(stock), ensure_ascii=False, indent=2))
+
+    parts.append("\n\n# 市场快照\n")
+    parts.append(json.dumps(_compact_snapshot(snapshot), ensure_ascii=False, indent=2))
+
+    parts.append("\n\n# strategy.yaml 规则评分\n")
+    if rule_signal:
+        parts.append(json.dumps(_compact_signal(rule_signal), ensure_ascii=False, indent=2))
+    else:
+        parts.append('{"runtime": "agent_only"}')
+
+    parts.append(f"""
+
+请严格按 {skill.name} 方法论审查以上股票。市场数据、股票特征、规则评分均已提供——不需要额外查询。
+
+直接输出 JSON 审查结果（不要 markdown 包裹）：
+{{"stance": "...", "score": 75, "confidence": 0.8, "evidence": [...], "risks": [...], "summary": "...", "market_regime_judgment": "..."}}
+""")
+    return "\n\n".join(parts)
