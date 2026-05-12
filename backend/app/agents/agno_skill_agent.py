@@ -22,8 +22,11 @@ from pydantic import BaseModel, Field
 from app.core.config import get_settings
 from app.engine.skill_loader import StrategySkill
 
+from app.agents.circuit_breaker import check_circuit, record_result
 from app.agents.tools import (
     audit_data_quality,
+    query_dragon_tiger,
+    query_industry_peers,
     query_market_snapshot,
     query_skill_signals,
     query_stock_detail,
@@ -65,23 +68,31 @@ def _register_tools(session_id: str) -> list:
 
     @tool
     def _query_market_snapshot() -> dict:
-        return query_market_snapshot(session_id)
+        return query_market_snapshot.entrypoint(session_id)
 
     @tool
     def _query_stock_detail(code: str) -> dict:
-        return query_stock_detail(code, session_id)
+        return query_stock_detail.entrypoint(code, session_id)
 
     @tool
     def _query_skill_signals(code: str, skill_id: str) -> dict:
-        return query_skill_signals(code, skill_id, session_id)
+        return query_skill_signals.entrypoint(code, skill_id, session_id)
 
     @tool
     def _audit_data_quality(code: str) -> dict:
-        return audit_data_quality(code, session_id)
+        return audit_data_quality.entrypoint(code, session_id)
 
     @tool
     def _query_stock_history(code: str, days: int) -> dict:
-        return query_stock_history(code, days, session_id)
+        return query_stock_history.entrypoint(code, days, session_id)
+
+    @tool
+    def _query_dragon_tiger(code: str) -> dict:
+        return query_dragon_tiger.entrypoint(code, session_id)
+
+    @tool
+    def _query_industry_peers(code: str) -> dict:
+        return query_industry_peers.entrypoint(code, session_id)
 
     tools_list = [
         _query_market_snapshot,
@@ -89,6 +100,8 @@ def _register_tools(session_id: str) -> list:
         _query_skill_signals,
         _audit_data_quality,
         _query_stock_history,
+        _query_dragon_tiger,
+        _query_industry_peers,
     ]
     return tools_list
 
@@ -243,7 +256,7 @@ def create_skill_agent(skill: StrategySkill, session_id: str):
 
     try:
         from agno.agent import Agent
-        from agno.models.openai import OpenAIChat
+        from agno.models.deepseek import DeepSeek
     except ImportError as e:
         raise RuntimeError(
             "Agno 框架未安装。请运行: pip install 'agno>=2.6.0'"
@@ -255,10 +268,9 @@ def create_skill_agent(skill: StrategySkill, session_id: str):
         room = int(limit * 0.6)
         system_prompt = system_prompt[: room - 80] + "\n\n...[完整 SKILL.md 保存在本地 Skill 包中]"
 
-    model = OpenAIChat(
+    model = DeepSeek(
         id=settings.agent_model,
         api_key=settings.agent_skill_api_key,
-        base_url=settings.agent_skill_base_url.rstrip("/") + "/v1",
         temperature=settings.agent_temperature,
         max_tokens=settings.agent_max_tokens,
         timeout=settings.agent_skill_timeout_seconds,
@@ -300,9 +312,13 @@ async def run_skill_agent(
         SkillReviewOutput 结构化审查结果
     """
     settings = get_settings()
+    model_id = settings.agent_model
     max_retries = settings.agent_retry_count
     backoff = settings.agent_retry_backoff
     user_prompt = _build_user_prompt(stock, snapshot, rule_signal, None)
+
+    # 断路器检查 — 在进入重试循环前快速失败
+    check_circuit(model_id)
 
     # 不传 history（Agent 应该通过 Tool 自己查询历史）
     last_error: str | None = None
@@ -324,10 +340,14 @@ async def run_skill_agent(
 
             # 校验并转换为 SkillReviewOutput
             output = _parse_to_output(parsed)
+
+            # 成功：重置断路器计数器
+            record_result(model_id, success=True)
             return output
 
         except Exception as e:
             last_error = str(e)
+            record_result(model_id, success=False)
             if attempt < max_retries:
                 wait = backoff ** attempt
                 await asyncio.sleep(wait)
@@ -353,7 +373,27 @@ def _extract_json(text: str) -> dict:
         except json.JSONDecodeError:
             pass
 
-    # 尝试提取第一个 { ... } 块
+    # 尝试提取第一个平衡的 { ... } JSON 对象
+    try:
+        first_brace = text.find("{")
+        if first_brace >= 0:
+            depth = 0
+            for i in range(first_brace, len(text)):
+                if text[i] == "{":
+                    depth += 1
+                elif text[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidate = text[first_brace:i + 1]
+                        try:
+                            return json.loads(candidate)
+                        except json.JSONDecodeError:
+                            pass
+                        break
+    except Exception:
+        pass
+
+    # 最后 fallback：贪婪匹配
     match = re.search(r"\{[\s\S]*\}", text)
     if match:
         try:

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -15,7 +16,7 @@ router = APIRouter(prefix="/api/runs", tags=["runs"])
 @router.post("")
 def create_run(payload: dict, db: Session = Depends(get_db)):
     try:
-        return run_workbench(db, payload)
+        return asyncio.run(run_workbench(db, payload))
     except (ValueError, MarketDataError, RuntimeError) as exc:
         logger.exception("create_run failed")
         raise HTTPException(status_code=400, detail=str(exc)) from exc

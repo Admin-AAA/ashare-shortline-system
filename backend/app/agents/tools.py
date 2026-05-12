@@ -16,7 +16,15 @@ from typing import Any
 from sqlalchemy import desc, func, select
 
 from app.agents.session_registry import AgentSessionRegistry
-from app.models.tables import DailyBar, DailyIndicator, UnifiedQuote
+from app.models.tables import (
+    DailyBar,
+    DailyIndicator,
+    DragonTiger,
+    LimitUpBoard,
+    RawDragonTiger,
+    Stock,
+    UnifiedQuote,
+)
 
 
 # ── Agno tool 装饰器 ──────────────────────────────────────────────────
@@ -491,6 +499,297 @@ def query_stock_history(code: str, days: int, session_id: str) -> dict:
         }
     except Exception as e:
         return {"error": f"查询股票历史数据失败: {e}", "code": code}
+
+
+@tool
+def query_dragon_tiger(code: str, session_id: str) -> dict:
+    """查询个股最新龙虎榜数据。
+
+    从 DragonTiger 标准化表获取最新交易日的龙虎榜上榜信息，
+    同时尝试从 RawDragonTiger 原始数据中提取详细的买卖席位列表。
+
+    返回买入席位、卖出席位、净买入额、机构参与度、游资标记等。
+
+    Args:
+        code: 股票代码（如 600519）
+        session_id: Agent 会话 ID
+    """
+    try:
+        ctx = AgentSessionRegistry.get(session_id)
+        if ctx is None:
+            return {"error": "会话不存在或已过期", "session_id": session_id}
+
+        db = ctx.db
+
+        # 查询最新 DragonTiger 标准化记录
+        dt_row = db.scalar(
+            select(DragonTiger)
+            .where(DragonTiger.code == code)
+            .order_by(DragonTiger.trade_date.desc())
+            .limit(1)
+        )
+        if dt_row is None:
+            return {"error": "未找到该股票的龙虎榜数据", "code": code}
+
+        # 字段提取
+        buy_amount = round(float(dt_row.buy_amount_yi or 0), 4)
+        sell_amount = round(float(dt_row.sell_amount_yi or 0), 4)
+        net_amount = round(float(dt_row.net_amount_yi or 0), 4)
+        institution_net_buy = round(float(dt_row.institution_net_buy_yi or 0), 4)
+
+        buy_seats: list[dict] = []
+        sell_seats: list[dict] = []
+
+        # 尝试从原始数据提取更详细的席位信息
+        raw_row = db.scalar(
+            select(RawDragonTiger)
+            .where(
+                RawDragonTiger.code == code,
+                RawDragonTiger.trade_date == dt_row.trade_date,
+            )
+            .limit(1)
+        )
+        if raw_row and raw_row.payload_json:
+            import json as _json
+
+            try:
+                raw_data = _json.loads(raw_row.payload_json)
+                # 东方财富格式：BUYER_TRADER_NAME1-N, BUYER_TRADER_AMT1-N
+                for i in range(1, 6):
+                    seat_name = raw_data.get(f"BUYER_TRADER_NAME{i}") or raw_data.get(f"BUYER_TRADER_NAME_{i}") or ""
+                    seat_amt = raw_data.get(f"BUYER_TRADER_AMT{i}") or raw_data.get(f"BUYER_TRADER_AMT_{i}") or 0
+                    if seat_name and float(seat_amt) > 0:
+                        buy_seats.append({
+                            "rank": i,
+                            "name": str(seat_name),
+                            "amount_yi": round(float(seat_amt) / 1e8, 4),
+                        })
+                for i in range(1, 6):
+                    seat_name = raw_data.get(f"SELLER_TRADER_NAME{i}") or raw_data.get(f"SELLER_TRADER_NAME_{i}") or ""
+                    seat_amt = raw_data.get(f"SELLER_TRADER_AMT{i}") or raw_data.get(f"SELLER_TRADER_AMT_{i}") or 0
+                    if seat_name and float(seat_amt) > 0:
+                        sell_seats.append({
+                            "rank": i,
+                            "name": str(seat_name),
+                            "amount_yi": round(float(seat_amt) / 1e8, 4),
+                        })
+            except Exception:
+                pass
+
+        # 若从原始数据未解析出席位，用标准化表的 top_buy_broker / top_sell_broker 兜底
+        if not buy_seats and dt_row.top_buy_broker:
+            buy_seats = [{"rank": 1, "name": dt_row.top_buy_broker, "amount_yi": buy_amount}]
+        if not sell_seats and dt_row.top_sell_broker:
+            sell_seats = [{"rank": 1, "name": dt_row.top_sell_broker, "amount_yi": sell_amount}]
+
+        # 机构参与度判定
+        total_amount = buy_amount + sell_amount
+        institution_ratio = abs(institution_net_buy) / total_amount if total_amount > 0 else 0
+        if institution_ratio >= 0.15 and institution_net_buy > 0:
+            institutional_dominance = "机构主导净买入"
+        elif institution_ratio >= 0.15 and institution_net_buy < 0:
+            institutional_dominance = "机构主导净卖出"
+        elif institution_ratio >= 0.05:
+            institutional_dominance = "机构参与"
+        else:
+            institutional_dominance = "无明显机构参与"
+
+        # 游资标记：识别知名游资席位关键词
+        hot_money_keywords = [
+            "拉萨", "东方财富证券", "国泰君安", "中信证券",
+            "华泰证券", "国盛证券", "银河证券", "财通证券",
+            "光大证券", "申万宏源",
+        ]
+        hot_money_flags: list[str] = []
+        for seat in buy_seats + sell_seats:
+            name = str(seat.get("name", ""))
+            for kw in hot_money_keywords:
+                if kw in name and name not in hot_money_flags:
+                    hot_money_flags.append(name)
+        has_hot_money = any(
+            any(kw in str(s.get("name", "")) for kw in hot_money_keywords)
+            for s in buy_seats + sell_seats
+        )
+
+        return {
+            "code": code,
+            "name": dt_row.name or code,
+            "trade_date": dt_row.trade_date,
+            "reason": dt_row.reason or "",
+            "buy_amount_yi": buy_amount,
+            "sell_amount_yi": sell_amount,
+            "net_amount_yi": net_amount,
+            "buy_seat_count": int(dt_row.buy_seat_count or 0),
+            "sell_seat_count": int(dt_row.sell_seat_count or 0),
+            "institution_net_buy_yi": institution_net_buy,
+            "institutional_dominance": institutional_dominance,
+            "buy_seats": buy_seats,
+            "sell_seats": sell_seats,
+            "hot_money_flags": hot_money_flags[:5],
+            "has_hot_money": has_hot_money,
+        }
+    except Exception as e:
+        return {"error": f"查询龙虎榜数据失败: {e}", "code": code}
+
+
+@tool
+def query_industry_peers(code: str, session_id: str) -> dict:
+    """查询同行业股票对比。
+
+    找出与指定股票同行业的所有股票，计算该股票在同行业中的
+    涨幅排名、行业涨停家数、是否为行业龙头等信息。
+
+    Args:
+        code: 股票代码（如 600519）
+        session_id: Agent 会话 ID
+    """
+    try:
+        ctx = AgentSessionRegistry.get(session_id)
+        if ctx is None:
+            return {"error": "会话不存在或已过期", "session_id": session_id}
+
+        db = ctx.db
+
+        # 获取目标股票的最新 quote 和行业信息
+        quote_row = db.scalar(
+            select(UnifiedQuote)
+            .where(UnifiedQuote.code == code)
+            .order_by(UnifiedQuote.trade_date.desc())
+            .limit(1)
+        )
+        if quote_row is None:
+            return {"error": "未找到该股票数据", "code": code}
+
+        import json as _json
+
+        quote_data = _json.loads(quote_row.quote_json) if quote_row.quote_json else {}
+        trade_date = quote_row.trade_date
+
+        # 行业来源：优先 quote_json，其次 Stock 表
+        industry = quote_data.get("industry") or ""
+        if (not industry or industry == "未分类"):
+            stock_row = db.scalar(select(Stock).where(Stock.code == code))
+            if stock_row and stock_row.industry:
+                industry = stock_row.industry
+        if not industry or industry == "未分类":
+            return {"error": "该股票无行业分类信息", "code": code}
+
+        # 获取同行业所有股票的最新 UnifiedQuote
+        peer_quotes = (
+            db.execute(
+                select(UnifiedQuote, Stock)
+                .join(Stock, UnifiedQuote.code == Stock.code)
+                .where(Stock.industry == industry, UnifiedQuote.code != code)
+                .order_by(UnifiedQuote.trade_date.desc())
+            )
+            .all()
+        )
+
+        # 按 trade_date 去重，保留每只股票最新记录
+        seen_codes: set[str] = set()
+        peer_rows: list[tuple] = []
+        for quote, stock in peer_quotes:
+            if quote.code in seen_codes:
+                continue
+            seen_codes.add(quote.code)
+            if quote.trade_date == trade_date:
+                peer_rows.append((quote, stock))
+            else:
+                # 非当日数据也保留（至少可提供静态信息）
+                if len(peer_rows) < 100:
+                    peer_rows.append((quote, stock))
+
+        # 解析目标股票自身数据
+        self_name = quote_data.get("name") or code
+        self_pct = _num(quote_data.get("pct"))
+        self_amount_yi = _num(quote_data.get("amount_yi"))
+        self_turnover = _num(quote_data.get("turnover_rate"))
+        self_free_mv_yi = _num(quote_data.get("free_mv_yi"))
+
+        # 构建同业列表并排序
+        peers: list[dict] = []
+        all_pcts: list[float] = [self_pct]
+        for quote, stock in peer_rows:
+            peer_data = _json.loads(quote.quote_json) if quote.quote_json else {}
+            peer_pct = _num(peer_data.get("pct"))
+            peer_amount = _num(peer_data.get("amount_yi"))
+            peer_turnover = _num(peer_data.get("turnover_rate"))
+            peer_mv = _num(peer_data.get("free_mv_yi"))
+            peers.append({
+                "code": quote.code,
+                "name": peer_data.get("name") or str(stock.name),
+                "pct": round(peer_pct, 3),
+                "amount_yi": round(peer_amount, 3),
+                "turnover_rate": round(peer_turnover, 3),
+                "free_mv_yi": round(peer_mv, 3),
+            })
+            all_pcts.append(peer_pct)
+
+        # 按 pct 降序排列
+        peers_sorted = sorted(peers, key=lambda x: -x["pct"])
+        self_rank = sum(1 for p in peers_sorted if p["pct"] > self_pct) + 1
+        total_peers = len(peers_sorted) + 1  # 含自身
+
+        # 行业涨停家数：查询同日 LimitUpBoard 并在同业中的股票数
+        peer_codes = [p["code"] for p in peers] + [code]
+        limit_up_rows = (
+            db.scalars(
+                select(LimitUpBoard)
+                .where(
+                    LimitUpBoard.code.in_(peer_codes),
+                    LimitUpBoard.trade_date == trade_date,
+                )
+            )
+            .all()
+        )
+        limit_up_codes = {r.code for r in limit_up_rows}
+        industry_limit_up_count = len(limit_up_codes)
+        self_is_limit_up = code in limit_up_codes
+
+        # 是否为行业龙头判断
+        leader_signals: list[str] = []
+        # 市值龙头
+        if self_free_mv_yi > 0:
+            all_mvs = [self_free_mv_yi] + [p["free_mv_yi"] for p in peers if p["free_mv_yi"] > 0]
+            if all_mvs and self_free_mv_yi == max(all_mvs):
+                leader_signals.append("市值最大")
+        # 成交额龙头
+        if self_amount_yi > 0:
+            all_amounts = [self_amount_yi] + [p["amount_yi"] for p in peers if p["amount_yi"] > 0]
+            if all_amounts and self_amount_yi == max(all_amounts):
+                leader_signals.append("成交额最大")
+        # 涨幅龙头（涨停且最早封板视为信号）
+        if self_is_limit_up and self_rank <= 3:
+            leader_signals.append("涨幅领先(涨停)")
+
+        is_leader = len(leader_signals) >= 2
+        leader_judgment = {
+            "is_leader": is_leader,
+            "signals": leader_signals,
+            "detail": "、".join(leader_signals) if leader_signals else "无明显龙头特征",
+        }
+
+        # 同业涨幅前三
+        top3 = peers_sorted[:3] if len(peers_sorted) >= 3 else peers_sorted[:len(peers_sorted)]
+
+        return {
+            "code": code,
+            "name": self_name,
+            "industry": industry,
+            "trade_date": trade_date,
+            "self_pct": round(self_pct, 3),
+            "self_rank": self_rank,
+            "total_peers": total_peers,
+            "rank_pct": round(self_rank / max(1, total_peers) * 100, 1),
+            "industry_limit_up_count": industry_limit_up_count,
+            "self_is_limit_up": self_is_limit_up,
+            "leader_judgment": leader_judgment,
+            "top3_peers": top3,
+            "peer_count": len(peers),
+            "all_peers": peers_sorted[:30],  # 最多返回 30 只
+        }
+    except Exception as e:
+        return {"error": f"查询同行业数据失败: {e}", "code": code}
 
 
 # ── 内部工具函数 ──────────────────────────────────────────────────────

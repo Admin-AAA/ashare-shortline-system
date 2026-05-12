@@ -29,7 +29,7 @@ DEFAULT_AGG_WEIGHTS = {
 # ---------------------------------------------------------------------------
 STANCE_MULTIPLIER = {
     "strong_support": 1.15,
-    "support": 1.05,
+    "support": 1.08,       # 与 strong_support 拉开差距，更精确区分支持力度
     "neutral_support": 1.0,
     "neutral": 0.85,
     "oppose": 0.6,
@@ -73,22 +73,71 @@ def _extract_skill_agent_score(signals: list[dict[str, Any]]) -> float:
     return weighted_total / max(weight_sum, 1e-6)
 
 
-def _consensus_boost(signals: list[dict[str, Any]]) -> float:
-    """共识加权机制：多 Skill Agent 给同一股票高分时额外加成。
+def _consensus_boost(
+    signals: list[dict[str, Any]],
+    stance_summary: list[dict[str, Any]] | None = None,
+) -> tuple[float, list[str]]:
+    """共识加权 + 立场协同/冲突机制。
 
-    公式: 1.0 + 0.1 * (agreeing_skills - 1)
-    - 1 个 Skill 高分：无加成（1.0x）
-    - 2 个 Skill 一致（score >= 70）：1.10x
-    - 3 个 Skill 一致：1.20x
-    - 以此类推
+    返回 (boost_multiplier, consensus_tags)。
+
+    包含四个维度：
+    1. 高分一致性加成：多 Skill 一致高分（>= 70）时额外加成
+    2. 联合否决打击（strike counting）：2+ Skill 都给出 oppose 时降低得分
+    3. 一致方向加成：所有 Skill 方向一致时提升置信度
+    4. 严重分歧惩罚：strong_support 与 veto 同时出现时标记争议
     """
+    consensus_tags: list[str] = []
+    boost = 1.0
+
+    # ── 1. 高分一致性加成 ──
     agreeing_skills = sum(
         1 for signal in signals
         if float(signal.get("score", 0)) >= 70
     )
-    if agreeing_skills <= 1:
-        return 1.0
-    return 1.0 + 0.1 * (agreeing_skills - 1)
+    if agreeing_skills >= 2:
+        boost = 1.0 + 0.1 * (agreeing_skills - 1)
+        consensus_tags.append("high_agreement")
+
+    # ── 2. 联合否决打击：2+ Skill 给出 oppose 时额外扣分 ──
+    oppose_count = sum(
+        1 for signal in signals
+        if (review := signal.get("agent_skill_review"))
+        and isinstance(review, dict)
+        and review.get("stance") == "oppose"
+    )
+    if oppose_count >= 2:
+        boost *= 0.90
+        consensus_tags.append("multi_oppose_strike")
+
+    # ── 3. 一致方向加成 ──
+    if stance_summary and len(stance_summary) >= 2:
+        bullish_stances = {"strong_support", "support", "neutral_support"}
+        bearish_stances = {"oppose", "veto"}
+
+        all_bullish = all(
+            s.get("stance") in bullish_stances for s in stance_summary
+        )
+        all_bearish = all(
+            s.get("stance") in bearish_stances for s in stance_summary
+        )
+
+        if all_bullish:
+            boost *= 1.05
+            consensus_tags.append("all_bullish_aligned")
+        elif all_bearish:
+            boost *= 1.03
+            consensus_tags.append("all_bearish_aligned")
+
+    # ── 4. 严重分歧惩罚 ──
+    if stance_summary:
+        has_strong_support = any(s.get("stance") == "strong_support" for s in stance_summary)
+        has_veto = any(s.get("stance") == "veto" for s in stance_summary)
+        if has_strong_support and has_veto:
+            boost *= 0.88
+            consensus_tags.append("high_controversy")
+
+    return boost, consensus_tags
 
 
 def _compute_strategy_rule_score(signals: list[dict[str, Any]]) -> float:
@@ -176,10 +225,12 @@ def aggregate(
         + weights.get("evidence", 0.05) * evidence_quality_score
     )
 
-    # --- 共识加权：多 Skill 一致高分 → 额外加成 ---
-    consensus_boost = _consensus_boost(signals)
-    if consensus_boost > 1.0:
-        final_score *= consensus_boost
+    # --- 提取 stance 摘要 ---
+    stance_summary = _stance_summary(signals)
+
+    # --- 共识加权：多 Skill 一致高分/联合否决/方向对齐 → 加成或惩罚 ---
+    consensus_boost, consensus_tags = _consensus_boost(signals, stance_summary)
+    final_score *= consensus_boost
 
     # --- 真实性折扣 ---
     authenticity = float(stock.get("data_authenticity", 1.0))
@@ -236,9 +287,6 @@ def aggregate(
     # --- 最佳信号 ---
     best_setup = max(signals, key=lambda signal: float(signal.get("score", 0)))
 
-    # --- 提取 stance 摘要 ---
-    stance_summary = _stance_summary(signals)
-
     return {
         "code": stock["code"],
         "name": stock["name"],
@@ -256,6 +304,7 @@ def aggregate(
         "component_scores": component_scores,
         "data_authenticity": authenticity,
         "consensus_boost": round(consensus_boost, 4),
+        "consensus_tags": consensus_tags,
         "stance_summary": stance_summary,
         "authenticity_bucket_downgrade": authenticity_bucket_downgrade,
     }

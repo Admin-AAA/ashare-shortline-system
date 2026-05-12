@@ -11,7 +11,25 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models.tables import DailyBar, DailyIndicator, DataSourceHealth, RawDailyBar, RawQuote, UnifiedQuote
+from app.models.tables import (
+    CapitalFlow,
+    ConceptSector,
+    ConceptSectorStock,
+    DailyBar,
+    DailyIndicator,
+    DataSourceHealth,
+    DragonTiger,
+    LimitUpBoard,
+    NewsAnnouncement,
+    RawCapitalFlow,
+    RawConceptSector,
+    RawDailyBar,
+    RawDragonTiger,
+    RawLimitUpBoard,
+    RawNewsAnnouncement,
+    RawQuote,
+    UnifiedQuote,
+)
 from app.services.data_sources import enabled_sources
 from app.services.indicator_computer import compute_daily_bar_indicators, compute_daily_indicators
 from app.services.market_data import (
@@ -29,6 +47,18 @@ from app.services.market_data import (
     _quote_sources,
     _select_candidates,
     _top_industries_from_quotes,
+)
+from app.services.market_auxiliary import (
+    _capital_flow_sources,
+    _concept_sector_sources,
+    _dragon_tiger_sources,
+    _fetch_capital_flow,
+    _fetch_concept_sectors,
+    _fetch_dragon_tiger,
+    _fetch_limit_up_board,
+    _fetch_news,
+    _limit_up_sources,
+    _news_sources,
 )
 
 
@@ -1026,3 +1056,464 @@ def _loads(raw: str | None, default: Any) -> Any:
         return json.loads(raw)
     except json.JSONDecodeError:
         return default
+
+
+# ── 辅助数据池：刷新入口 ───────────────────────────────────────────────
+
+def refresh_limit_up_board(db: Session) -> list[dict[str, Any]]:
+    """刷新涨停板数据。"""
+    settings = get_settings()
+    if not settings.enable_limit_up_fetch:
+        return []
+    sources = enabled_sources(db, "limit_up", _limit_up_sources(settings))
+    return _refresh_aux_data(
+        db, "limit_up", sources, settings,
+        fetcher=lambda source, _settings: _fetch_limit_up_board(source, _settings),
+        raw_persister=_persist_raw_limit_up_board,
+        normalized_persister=_persist_normalized_limit_up_board,
+    )
+
+
+def refresh_concept_sectors(db: Session) -> list[dict[str, Any]]:
+    """刷新概念板块数据。"""
+    settings = get_settings()
+    if not settings.enable_concept_sector_fetch:
+        return []
+    sources = enabled_sources(db, "concept_sector", _concept_sector_sources(settings))
+    result = _refresh_aux_data(
+        db, "concept_sector", sources, settings,
+        fetcher=lambda source, _settings: _fetch_concept_sectors(source, _settings),
+        raw_persister=_persist_raw_concept_sector,
+        normalized_persister=_persist_normalized_concept_sector,
+    )
+    # 额外持久化热门板块的成分股
+    from app.services.market_auxiliary import _fetch_eastmoney_concept_sector_stocks
+    top_sectors = [s for s in result if s.get("heat_rank", 999) <= 30]
+    if top_sectors:
+        for sector in top_sectors:
+            try:
+                stocks = _fetch_eastmoney_concept_sector_stocks(sector["sector_code"], settings)
+                _persist_concept_sector_stocks(db, stocks)
+            except Exception:
+                pass
+        db.commit()
+    return result
+
+
+def refresh_dragon_tiger(db: Session) -> list[dict[str, Any]]:
+    """刷新龙虎榜数据。"""
+    settings = get_settings()
+    if not settings.enable_dragon_tiger_fetch:
+        return []
+    sources = enabled_sources(db, "dragon_tiger", _dragon_tiger_sources(settings))
+    return _refresh_aux_data(
+        db, "dragon_tiger", sources, settings,
+        fetcher=lambda source, _settings: _fetch_dragon_tiger(source, _settings),
+        raw_persister=_persist_raw_dragon_tiger,
+        normalized_persister=_persist_normalized_dragon_tiger,
+    )
+
+
+def refresh_capital_flows_for_codes(db: Session, codes: list[str]) -> dict[str, dict[str, Any]]:
+    """按股刷新资金流向数据。"""
+    settings = get_settings()
+    if not settings.enable_capital_flow_fetch:
+        return {}
+    sources = enabled_sources(db, "capital_flow", _capital_flow_sources(settings))
+    if not sources:
+        return {}
+    source = sources[0]
+    result: dict[str, dict[str, Any]] = {}
+    for code in codes:
+        try:
+            data = _fetch_capital_flow(source, code, settings)
+            if data:
+                _persist_raw_capital_flow(db, source, data)
+                _persist_normalized_capital_flow(db, data)
+                result[code] = data
+        except Exception:
+            pass
+    db.commit()
+    return result
+
+
+def refresh_news_for_codes(db: Session, codes: list[str]) -> dict[str, list[dict[str, Any]]]:
+    """按股刷新新闻公告数据。"""
+    settings = get_settings()
+    if not settings.enable_news_fetch:
+        return {}
+    sources = enabled_sources(db, "news", _news_sources(settings))
+    if not sources:
+        return {}
+    source = sources[0]
+    result: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for code in codes:
+        try:
+            items = _fetch_news(source, code, settings)
+            if items:
+                _persist_raw_news(db, source, items)
+                _persist_normalized_news(db, items)
+                result[code] = items
+        except Exception:
+            pass
+    db.commit()
+    return dict(result)
+
+
+# ── 辅助数据池：通用刷新模式 ───────────────────────────────────────────
+
+def _refresh_aux_data(
+    db: Session,
+    source_type: str,
+    sources: list[str],
+    settings: Any,
+    fetcher: Any,
+    raw_persister: Any,
+    normalized_persister: Any,
+) -> list[dict[str, Any]]:
+    if not sources:
+        return []
+    all_rows: list[dict[str, Any]] = []
+    for source in sources:
+        start = time.perf_counter()
+        try:
+            rows = fetcher(source, settings)
+            latency_ms = (time.perf_counter() - start) * 1000
+            if not rows:
+                _record_source_health(db, source, source_type, "empty", latency_ms=latency_ms)
+                continue
+            raw_persister(db, source, rows)
+            _record_source_health(db, source, source_type, "success", latency_ms=latency_ms)
+            if all_rows:
+                all_rows.extend(rows)
+            else:
+                all_rows = rows
+        except Exception as exc:
+            latency_ms = (time.perf_counter() - start) * 1000
+            _record_source_health(db, source, source_type, "failure", error=str(exc), latency_ms=latency_ms)
+    if all_rows:
+        normalized_persister(db, all_rows)
+        db.commit()
+    return all_rows
+
+
+# ── 辅助数据池：原始数据持久化 ─────────────────────────────────────────
+
+def _persist_raw_limit_up_board(db: Session, source: str, rows: list[dict[str, Any]]) -> None:
+    for row in rows:
+        code = str(row.get("code") or "")
+        trade_date = str(row.get("trade_date") or "")
+        if not code or not trade_date:
+            continue
+        existing = db.scalar(
+            select(RawLimitUpBoard).where(
+                RawLimitUpBoard.source == source,
+                RawLimitUpBoard.code == code,
+                RawLimitUpBoard.trade_date == trade_date,
+            )
+        )
+        payload = _dumps(row)
+        if existing is None:
+            db.add(RawLimitUpBoard(source=source, code=code, trade_date=trade_date, payload_json=payload))
+        else:
+            existing.payload_json = payload
+            existing.fetched_at = datetime.utcnow()
+
+
+def _persist_raw_concept_sector(db: Session, source: str, rows: list[dict[str, Any]]) -> None:
+    for row in rows:
+        sector_code = str(row.get("sector_code") or "")
+        trade_date = str(row.get("trade_date") or "")
+        if not sector_code or not trade_date:
+            continue
+        existing = db.scalar(
+            select(RawConceptSector).where(
+                RawConceptSector.source == source,
+                RawConceptSector.sector_code == sector_code,
+                RawConceptSector.trade_date == trade_date,
+            )
+        )
+        payload = _dumps(row)
+        if existing is None:
+            db.add(RawConceptSector(source=source, sector_code=sector_code, trade_date=trade_date, payload_json=payload))
+        else:
+            existing.payload_json = payload
+            existing.fetched_at = datetime.utcnow()
+
+
+def _persist_raw_capital_flow(db: Session, source: str, data: dict[str, Any]) -> None:
+    code = str(data.get("code") or "")
+    trade_date = str(data.get("trade_date") or "")
+    if not code or not trade_date:
+        return
+    existing = db.scalar(
+        select(RawCapitalFlow).where(
+            RawCapitalFlow.source == source,
+            RawCapitalFlow.code == code,
+            RawCapitalFlow.trade_date == trade_date,
+        )
+    )
+    payload = _dumps(data)
+    if existing is None:
+        db.add(RawCapitalFlow(source=source, code=code, trade_date=trade_date, payload_json=payload))
+    else:
+        existing.payload_json = payload
+        existing.fetched_at = datetime.utcnow()
+
+
+def _persist_raw_dragon_tiger(db: Session, source: str, rows: list[dict[str, Any]]) -> None:
+    for row in rows:
+        code = str(row.get("code") or "")
+        trade_date = str(row.get("trade_date") or "")
+        if not code or not trade_date:
+            continue
+        existing = db.scalar(
+            select(RawDragonTiger).where(
+                RawDragonTiger.source == source,
+                RawDragonTiger.code == code,
+                RawDragonTiger.trade_date == trade_date,
+            )
+        )
+        payload = _dumps(row)
+        if existing is None:
+            db.add(RawDragonTiger(source=source, code=code, trade_date=trade_date, payload_json=payload))
+        else:
+            existing.payload_json = payload
+            existing.fetched_at = datetime.utcnow()
+
+
+def _persist_raw_news(db: Session, source: str, rows: list[dict[str, Any]]) -> None:
+    for row in rows:
+        article_id = str(row.get("article_id") or "")
+        if not article_id:
+            continue
+        existing = db.scalar(
+            select(RawNewsAnnouncement).where(
+                RawNewsAnnouncement.source == source,
+                RawNewsAnnouncement.article_id == article_id,
+            )
+        )
+        payload = _dumps(row)
+        if existing is None:
+            db.add(RawNewsAnnouncement(
+                source=source,
+                code=str(row.get("code") or ""),
+                article_id=article_id,
+                announce_date=str(row.get("announce_date") or ""),
+                payload_json=payload,
+            ))
+        else:
+            existing.payload_json = payload
+            existing.fetched_at = datetime.utcnow()
+
+
+# ── 辅助数据池：标准化数据持久化 ────────────────────────────────────────
+
+def _persist_normalized_limit_up_board(db: Session, rows: list[dict[str, Any]]) -> None:
+    for row in rows:
+        code = str(row.get("code") or "")
+        trade_date = str(row.get("trade_date") or "")
+        if not code or not trade_date:
+            continue
+        existing = db.scalar(
+            select(LimitUpBoard).where(LimitUpBoard.code == code, LimitUpBoard.trade_date == trade_date)
+        )
+        if existing is None:
+            db.add(LimitUpBoard(**{k: v for k, v in row.items() if hasattr(LimitUpBoard, k)}))
+        else:
+            for key, value in row.items():
+                if hasattr(existing, key) and key not in {"id", "created_at"}:
+                    setattr(existing, key, value)
+
+
+def _persist_normalized_concept_sector(db: Session, rows: list[dict[str, Any]]) -> None:
+    for row in rows:
+        sector_code = str(row.get("sector_code") or "")
+        trade_date = str(row.get("trade_date") or "")
+        if not sector_code or not trade_date:
+            continue
+        existing = db.scalar(
+            select(ConceptSector).where(ConceptSector.sector_code == sector_code, ConceptSector.trade_date == trade_date)
+        )
+        if existing is None:
+            db.add(ConceptSector(**{k: v for k, v in row.items() if hasattr(ConceptSector, k)}))
+        else:
+            for key, value in row.items():
+                if hasattr(existing, key) and key not in {"id", "created_at"}:
+                    setattr(existing, key, value)
+
+
+def _persist_concept_sector_stocks(db: Session, rows: list[dict[str, Any]]) -> None:
+    for row in rows:
+        sector_code = str(row.get("sector_code") or "")
+        code = str(row.get("code") or "")
+        trade_date = str(row.get("trade_date") or "")
+        if not sector_code or not code or not trade_date:
+            continue
+        existing = db.scalar(
+            select(ConceptSectorStock).where(
+                ConceptSectorStock.sector_code == sector_code,
+                ConceptSectorStock.code == code,
+                ConceptSectorStock.trade_date == trade_date,
+            )
+        )
+        if existing is None:
+            db.add(ConceptSectorStock(**{k: v for k, v in row.items() if hasattr(ConceptSectorStock, k)}))
+        else:
+            for key, value in row.items():
+                if hasattr(existing, key) and key not in {"id", "created_at"}:
+                    setattr(existing, key, value)
+
+
+def _persist_normalized_capital_flow(db: Session, data: dict[str, Any]) -> None:
+    code = str(data.get("code") or "")
+    trade_date = str(data.get("trade_date") or "")
+    if not code or not trade_date:
+        return
+    existing = db.scalar(
+        select(CapitalFlow).where(CapitalFlow.code == code, CapitalFlow.trade_date == trade_date)
+    )
+    if existing is None:
+        db.add(CapitalFlow(**{k: v for k, v in data.items() if hasattr(CapitalFlow, k)}))
+    else:
+        for key, value in data.items():
+            if hasattr(existing, key) and key not in {"id", "created_at"}:
+                setattr(existing, key, value)
+
+
+def _persist_normalized_dragon_tiger(db: Session, rows: list[dict[str, Any]]) -> None:
+    for row in rows:
+        code = str(row.get("code") or "")
+        trade_date = str(row.get("trade_date") or "")
+        if not code or not trade_date:
+            continue
+        existing = db.scalar(
+            select(DragonTiger).where(DragonTiger.code == code, DragonTiger.trade_date == trade_date)
+        )
+        if existing is None:
+            db.add(DragonTiger(**{k: v for k, v in row.items() if hasattr(DragonTiger, k)}))
+        else:
+            for key, value in row.items():
+                if hasattr(existing, key) and key not in {"id", "created_at"}:
+                    setattr(existing, key, value)
+
+
+def _persist_normalized_news(db: Session, rows: list[dict[str, Any]]) -> None:
+    for row in rows:
+        article_id = str(row.get("article_id") or "")
+        source = str(row.get("source", "eastmoney"))
+        if not article_id:
+            continue
+        existing = db.scalar(
+            select(NewsAnnouncement).where(NewsAnnouncement.source == source, NewsAnnouncement.article_id == article_id)
+        )
+        if existing is None:
+            db.add(NewsAnnouncement(**{k: v for k, v in row.items() if hasattr(NewsAnnouncement, k)}))
+        else:
+            for key, value in row.items():
+                if hasattr(existing, key) and key not in {"id", "created_at"}:
+                    setattr(existing, key, value)
+
+
+# ── 辅助数据池：缓存读取 ───────────────────────────────────────────────
+
+def _load_cached_limit_up_board(db: Session, max_age_seconds: int | None = None) -> list[dict[str, Any]]:
+    cutoff = datetime.utcnow() - timedelta(seconds=max_age_seconds) if max_age_seconds else None
+    stmt = select(LimitUpBoard).order_by(LimitUpBoard.consecutive_days.desc())
+    if cutoff is not None:
+        stmt = stmt.where(LimitUpBoard.created_at >= cutoff)
+    rows = db.scalars(stmt).all()
+    return [
+        {c.name: getattr(r, c.name) for c in r.__table__.columns}
+        for r in rows
+    ]
+
+
+def _load_cached_concept_sectors(db: Session, max_age_seconds: int | None = None) -> list[dict[str, Any]]:
+    cutoff = datetime.utcnow() - timedelta(seconds=max_age_seconds) if max_age_seconds else None
+    stmt = select(ConceptSector).order_by(ConceptSector.heat_rank)
+    if cutoff is not None:
+        stmt = stmt.where(ConceptSector.created_at >= cutoff)
+    rows = db.scalars(stmt).all()
+    return [
+        {c.name: getattr(r, c.name) for c in r.__table__.columns}
+        for r in rows
+    ]
+
+
+def _load_cached_capital_flows(
+    db: Session, codes: list[str], max_age_seconds: int | None = None
+) -> dict[str, dict[str, Any]]:
+    cutoff = datetime.utcnow() - timedelta(seconds=max_age_seconds) if max_age_seconds else None
+    stmt = select(CapitalFlow).where(CapitalFlow.code.in_(codes))
+    if cutoff is not None:
+        stmt = stmt.where(CapitalFlow.created_at >= cutoff)
+    rows = db.scalars(stmt).all()
+    return {
+        r.code: {c.name: getattr(r, c.name) for c in r.__table__.columns}
+        for r in rows
+    }
+
+
+def _load_cached_dragon_tigers(
+    db: Session, codes: list[str], max_age_seconds: int | None = None
+) -> dict[str, dict[str, Any]]:
+    cutoff = datetime.utcnow() - timedelta(seconds=max_age_seconds) if max_age_seconds else None
+    stmt = select(DragonTiger).where(DragonTiger.code.in_(codes))
+    if cutoff is not None:
+        stmt = stmt.where(DragonTiger.created_at >= cutoff)
+    rows = db.scalars(stmt).all()
+    return {
+        r.code: {c.name: getattr(r, c.name) for c in r.__table__.columns}
+        for r in rows
+    }
+
+
+def _load_cached_news(
+    db: Session, codes: list[str], max_age_seconds: int | None = None
+) -> dict[str, list[dict[str, Any]]]:
+    cutoff = datetime.utcnow() - timedelta(seconds=max_age_seconds) if max_age_seconds else None
+    stmt = select(NewsAnnouncement).where(NewsAnnouncement.code.in_(codes))
+    if cutoff is not None:
+        stmt = stmt.where(NewsAnnouncement.created_at >= cutoff)
+    rows = db.scalars(stmt).all()
+    result: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for r in rows:
+        result[r.code].append({c.name: getattr(r, c.name) for c in r.__table__.columns})
+    return dict(result)
+
+
+def _load_concept_sectors_for_stocks(
+    db: Session, codes: list[str]
+) -> dict[str, list[dict[str, Any]]]:
+    """根据成分股表返回每只股票所属的概念板块。"""
+    rows = db.scalars(
+        select(ConceptSectorStock).where(ConceptSectorStock.code.in_(codes))
+    ).all()
+    sector_codes = {r.sector_code for r in rows}
+    sectors = {
+        s.sector_code: {c.name: getattr(s, c.name) for c in s.__table__.columns}
+        for s in db.scalars(
+            select(ConceptSector).where(ConceptSector.sector_code.in_(sector_codes))
+        ).all()
+    }
+    result: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for r in rows:
+        sector = sectors.get(r.sector_code)
+        if sector:
+            result[r.code].append(sector)
+    return dict(result)
+
+
+# ── 辅助数据：批量加载入口（供feature_builder使用） ────────────────────
+
+def load_auxiliary_for_stocks(db: Session, codes: list[str]) -> dict[str, Any]:
+    """批量加载所有辅助数据，返回按code索引的字典。"""
+    settings = get_settings()
+    return {
+        "limit_up": {r["code"]: r for r in _load_cached_limit_up_board(db, max_age_seconds=settings.limit_up_cache_ttl_seconds)},
+        "concept_sectors": _load_concept_sectors_for_stocks(db, codes),
+        "capital_flows": _load_cached_capital_flows(db, codes, max_age_seconds=settings.capital_flow_cache_ttl_seconds),
+        "dragon_tigers": _load_cached_dragon_tigers(db, codes, max_age_seconds=settings.dragon_tiger_cache_ttl_seconds),
+        "news": _load_cached_news(db, codes, max_age_seconds=settings.news_cache_ttl_seconds),
+    }

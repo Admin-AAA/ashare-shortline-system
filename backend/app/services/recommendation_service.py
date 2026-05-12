@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from sqlalchemy import select
@@ -20,7 +21,7 @@ def run_recommendations(db: Session) -> dict[str, Any]:
     market data only and will raise if configured data sources fail.
     """
 
-    result = run_workbench(
+    result = asyncio.run(run_workbench(
         db,
         {
             "run_name": "兼容入口真实行情运行",
@@ -32,7 +33,7 @@ def run_recommendations(db: Session) -> dict[str, Any]:
                 {"skill_id": "daily-stock-analysis-skill", "weight": 1.0, "sort_order": 0},
             ],
         },
-    )
+    ))
     return {
         "run_id": result["run"]["run_id"],
         "recommended_count": result["run"]["recommended_count"],

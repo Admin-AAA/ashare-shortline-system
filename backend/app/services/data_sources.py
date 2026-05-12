@@ -7,7 +7,33 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models.tables import DailyBar, DailyIndicator, DataSourceConfig, DataSourceHealth, RawDailyBar, RawQuote, UnifiedQuote
+from app.models.tables import (
+    CapitalFlow,
+    ConceptSector,
+    ConceptSectorStock,
+    DailyBar,
+    DailyIndicator,
+    DataSourceConfig,
+    DataSourceHealth,
+    DragonTiger,
+    LimitUpBoard,
+    NewsAnnouncement,
+    RawCapitalFlow,
+    RawConceptSector,
+    RawDailyBar,
+    RawDragonTiger,
+    RawLimitUpBoard,
+    RawNewsAnnouncement,
+    RawQuote,
+    UnifiedQuote,
+)
+from app.services.market_auxiliary import (
+    _capital_flow_sources,
+    _concept_sector_sources,
+    _dragon_tiger_sources,
+    _limit_up_sources,
+    _news_sources,
+)
 from app.services.market_data import _kline_sources, _quote_sources
 
 
@@ -99,9 +125,15 @@ def get_local_pool_status(
             "latest_quote_date": latest_quote_date,
             "latest_bar_date": latest_bar_date,
             "latest_unified_at": latest_unified.isoformat() if latest_unified else None,
+            "limit_up_board_count": _count(db, LimitUpBoard),
+            "concept_sector_count": _count(db, ConceptSector),
+            "capital_flow_count": _count(db, CapitalFlow),
+            "dragon_tiger_count": _count(db, DragonTiger),
+            "news_count": _count(db, NewsAnnouncement),
         },
         "quote_sources": _raw_quote_source_rows(db),
         "kline_sources": _raw_bar_source_rows(db),
+        "auxiliary_sources": _raw_aux_source_rows(db),
         "recommendation_readiness": local_pool_recommendation_readiness(db),
         "unified_quotes": _unified_quote_rows(db, limit=unified_limit, offset=unified_offset),
         "unified_quotes_total": unified_quote_count,
@@ -160,6 +192,11 @@ def sync_data_source_configs(db: Session) -> None:
     desired = {
         "quote": _quote_sources(settings),
         "kline": _kline_sources(settings),
+        "limit_up": _limit_up_sources(settings),
+        "concept_sector": _concept_sector_sources(settings),
+        "capital_flow": _capital_flow_sources(settings),
+        "dragon_tiger": _dragon_tiger_sources(settings),
+        "news": _news_sources(settings),
     }
     changed = False
     for source_type, sources in desired.items():
@@ -316,6 +353,33 @@ def _unified_quote_payload(db: Session, row: UnifiedQuote, precomputed_metrics: 
         "quote": quote,
         "source_trace": source_trace,
     }
+
+
+def _raw_aux_source_rows(db: Session) -> list[dict[str, Any]]:
+    """汇总所有辅助数据源的 original source breakdown。"""
+    aux_models: dict[str, tuple[type, str]] = {
+        "limit_up": (RawLimitUpBoard, "limit_up"),
+        "concept_sector": (RawConceptSector, "concept_sector"),
+        "capital_flow": (RawCapitalFlow, "capital_flow"),
+        "dragon_tiger": (RawDragonTiger, "dragon_tiger"),
+        "news": (RawNewsAnnouncement, "news"),
+    }
+    rows: list[dict[str, Any]] = []
+    for aux_type, (model, label) in aux_models.items():
+        for row in db.execute(
+            select(
+                model.source,
+                func.count().label("row_count"),
+                func.max(model.fetched_at).label("latest_fetched_at"),
+            ).group_by(model.source)
+        ).all():
+            rows.append({
+                "source": row.source,
+                "source_type": label,
+                "row_count": int(row.row_count or 0),
+                "latest_fetched_at": row.latest_fetched_at.isoformat() if row.latest_fetched_at else None,
+            })
+    return rows
 
 
 def _latest_allowed_bar_date(today: date | None = None) -> str:

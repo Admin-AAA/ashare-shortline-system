@@ -2435,3 +2435,396 @@ pre {
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* ======================== Enhanced Recommendation Card ======================== */
+
+.rec-list {
+  display: grid;
+  gap: 10px;
+}
+
+.enhanced-rec-card {
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  overflow: hidden;
+  cursor: pointer;
+  transition:
+    box-shadow 180ms ease,
+    border-color 180ms ease,
+    transform 150ms ease;
+}
+
+.enhanced-rec-card:hover {
+  box-shadow: var(--shadow-hover);
+  border-color: var(--line-strong);
+  transform: translateY(-1px);
+}
+
+.enhanced-rec-card.selected {
+  border-color: var(--emerald-line);
+  box-shadow: 0 0 0 2px var(--emerald-soft);
+}
+
+.erc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px 8px;
+}
+
+.erc-code-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.erc-code {
+  font-size: 16px;
+  font-weight: 760;
+  color: var(--ink);
+}
+
+.erc-name {
+  font-size: 14px;
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+.erc-industry {
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--surface-muted);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.erc-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.erc-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 0 16px 12px;
+}
+
+.erc-gauge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.erc-bucket {
+  font-size: 11px;
+  font-weight: 720;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.erc-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.erc-rationale {
+  font-size: 13px;
+  color: var(--ink-soft);
+  line-height: 1.55;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.erc-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.erc-price {
+  font-size: 15px;
+  font-weight: 720;
+  color: var(--ink);
+}
+
+.erc-skill-count {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.erc-setup {
+  font-size: 11px;
+  color: var(--blue);
+  background: var(--blue-soft);
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-weight: 650;
+}
+
+.erc-risks {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px 0;
+  color: var(--gold);
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+
+.risk-tag {
+  font-size: 11px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.erc-expand-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px;
+  border: none;
+  border-top: 1px solid var(--line-soft);
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    color 160ms ease;
+}
+
+.erc-expand-btn:hover {
+  background: var(--surface-muted);
+  color: var(--ink-soft);
+}
+
+.erc-agent-reviews {
+  display: grid;
+  gap: 8px;
+  padding: 10px 14px 14px;
+  background: var(--surface-soft);
+  border-top: 1px solid var(--line-soft);
+}
+
+.erc-no-agent-review {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ======================== Agent Review Panel ======================== */
+
+.agent-review-panel {
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  padding: 12px;
+  transition: border-color 160ms ease;
+}
+
+.agent-review-panel:hover {
+  border-color: var(--line-strong);
+}
+
+.arp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.arp-skill-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+
+.arp-score-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.arp-score {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+}
+
+.arp-score-num {
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.arp-score-label {
+  font-size: 11px;
+  color: var(--muted-soft);
+}
+
+.arp-confidence {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.arp-stance {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 650;
+  margin-bottom: 8px;
+}
+
+.arp-stance-icon {
+  display: flex;
+  align-items: center;
+}
+
+.arp-summary {
+  font-size: 12px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+.arp-list {
+  margin-bottom: 8px;
+}
+
+.arp-list.supports {
+  border-left: 2px solid var(--emerald-line);
+  padding-left: 10px;
+}
+
+.arp-list.risks {
+  border-left: 2px solid #edb4ac;
+  padding-left: 10px;
+}
+
+.arp-list-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  margin-bottom: 4px;
+}
+
+.arp-list-item {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+  padding: 1px 0;
+}
+
+.arp-list-item::before {
+  content: "\2022";
+  margin-right: 5px;
+  color: var(--line-strong);
+}
+
+.arp-hallucination {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  background: var(--gold-soft);
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--gold);
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.arp-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 10px;
+  color: var(--muted-soft);
+}
+
+/* ======================== Market Snapshot Panel ======================== */
+
+.market-snapshot-panel {
+  padding: 4px 0;
+}
+
+.market-snapshot-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(80px, 1fr));
+  gap: 12px;
+}
+
+/* ======================== Skill Config Panel ======================== */
+
+.skill-config-panel .preset-select {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+  margin-bottom: 10px;
+}
+
+.skill-config-panel .preset-select:focus {
+  outline: none;
+  border-color: var(--emerald);
+  box-shadow: 0 0 0 3px var(--emerald-soft);
+}
+
+/* ======================== Responsive ======================== */
+
+@media (max-width: 900px) {
+  .erc-body {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+
+  .erc-meta-row {
+    justify-content: center;
+  }
+
+  .market-snapshot-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

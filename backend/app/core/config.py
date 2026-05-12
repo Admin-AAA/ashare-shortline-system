@@ -38,6 +38,22 @@ class Settings(BaseSettings):
     agent_temperature: float = 0.3
     agent_max_tokens: int = 4096
     agent_skill_weight: float = 0.50
+    # 辅助数据源
+    limit_up_sources: str = "eastmoney"
+    concept_sector_sources: str = "eastmoney"
+    capital_flow_sources: str = "eastmoney"
+    dragon_tiger_sources: str = "eastmoney"
+    news_sources: str = "eastmoney"
+    limit_up_cache_ttl_seconds: int = 3600
+    concept_sector_cache_ttl_seconds: int = 3600
+    capital_flow_cache_ttl_seconds: int = 7200
+    dragon_tiger_cache_ttl_seconds: int = 3600
+    news_cache_ttl_seconds: int = 7200
+    enable_limit_up_fetch: bool = True
+    enable_concept_sector_fetch: bool = True
+    enable_capital_flow_fetch: bool = True
+    enable_dragon_tiger_fetch: bool = True
+    enable_news_fetch: bool = True
     log_level: str = "INFO"
     log_dir_override: str = Field(default="", alias="log_dir")
     log_max_bytes: int = 10 * 1024 * 1024

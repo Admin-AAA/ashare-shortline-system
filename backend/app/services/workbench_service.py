@@ -508,7 +508,7 @@ def list_run_recommendations(db: Session, run_id: str) -> list[dict[str, Any]]:
     return [_serialize_recommendation(db, rec) for rec in recs]
 
 
-def run_workbench(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+async def run_workbench(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
     skills = sync_skills(db)
     skill_map = {skill.skill_id: skill for skill in skills}
     preset = db.get(Preset, payload["preset_id"]) if payload.get("preset_id") else None
@@ -531,7 +531,7 @@ def run_workbench(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
     snapshot.setdefault("breadth", {})["run_data_source_mode"] = data_source
     _persist_market(db, snapshot)
     _persist_stocks_and_bars(db, stocks)
-    features = _apply_market_scope(db, build_features(stocks, snapshot, _load_calibrated_dsa_weights(db)), params)
+    features = _apply_market_scope(db, build_features(stocks, snapshot, _load_calibrated_dsa_weights(db), db=db), params)
     research_contexts = build_research_contexts(features, snapshot)
 
     run_id = f"run_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
@@ -580,28 +580,51 @@ def run_workbench(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
     try:
         recent_codes = _recent_recommended_codes(db, snapshot["trade_date"])
         market_score = market_regime_score(snapshot)
+        calibrated_weights = _load_calibrated_agg_weights(db)
         cards: list[dict[str, Any]] = []
+
+        # ═══ 阶段一：策略规则快速粗筛（所有股票，无 LLM） ═══
+        candidate_count = max(params["output_count"] * 3, 10)
+        prelim_entries: list[tuple[float, Any, dict, Any]] = []  # (prelim_score, context, rule_signals, stock)
 
         for context in research_contexts:
             stock = context.to_skill_input()
-
-            # 收集规则信号
-            rule_signals_by_skill = {}
+            rule_signals_by_skill: dict[str, Any] = {}
             for selected in selected_skills:
                 skill_obj = selected["skill"]
                 signal = run_strategy(skill_obj, stock, snapshot["main_industries"]) if skill_obj.executable else None
                 rule_signals_by_skill[skill_obj.skill_id] = signal
 
-            # 并发 Agno Agent Skill 审查
-            skill_reviews = asyncio.run(run_skill_reviews(
+            # 用规则信号计算初筛分（不含 Agent）
+            scores = [s["score"] for s in rule_signals_by_skill.values() if s and not s.get("hard_veto")]
+            prelim_score = max(scores) if scores else 0.0
+            # 主线行业加成（简单快速）
+            industry = stock.get("industry", "")
+            if industry and industry != "未分类" and industry in (snapshot.get("main_industries") or []):
+                prelim_score += 3.0
+            prelim_entries.append((prelim_score, context, rule_signals_by_skill, stock))
+
+        prelim_entries.sort(key=lambda x: x[0], reverse=True)
+        candidates = prelim_entries[:candidate_count]
+        non_candidates = prelim_entries[candidate_count:]
+
+        # ═══ 阶段二：Agent 深度审查（仅候选池） ═══
+        async def _process_candidate(prelim_score, context, rule_signals_by_skill, stock):
+            skill_reviews = await run_skill_reviews(
                 stock=stock,
                 skills=[s["skill"] for s in selected_skills],
                 snapshot=snapshot,
                 rule_signals_by_skill=rule_signals_by_skill,
                 session_id=agent_session_id,
-            ))
+            )
+            return (prelim_score, context, rule_signals_by_skill, stock, skill_reviews)
 
-            # 合并 Agent 审查结果到各 Skill 信号
+        candidate_results = await asyncio.gather(
+            *[_process_candidate(ps, ctx, rs, st) for ps, ctx, rs, st in candidates]
+        )
+
+        # ═══ 阶段三：聚合所有股票（候选池有 Agent 审查，非候选池仅规则） ═══
+        def _build_card(context, stock, rule_signals_by_skill, skill_reviews):
             signals = []
             for review_result in skill_reviews:
                 skill_id = review_result["skill_id"]
@@ -634,42 +657,34 @@ def run_workbench(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
                     signal["hallucination_flags"] = hc.get("flags", [])
                     signal["hallucination_severity"] = hc.get("severity", "low")
 
-                # 设置 weight 和 skill_mode
                 for selected in selected_skills:
                     if selected["skill_id"] == skill_id:
                         signal["weight"] = selected["weight"]
                         signal["skill_mode"] = selected["mode"]
                         break
-
                 signals.append(signal)
 
-            # 计算 agent_review_score
             valid_reviews = [r for r in skill_reviews if r.get("review") and not r.get("error")]
             if valid_reviews:
-                scores = [r["review"]["score"] for r in valid_reviews]
-                confidences = [r["review"]["confidence"] for r in valid_reviews]
-                agent_review_score = sum(s * c for s, c in zip(scores, confidences)) / max(sum(confidences), 0.01)
+                scores_list = [r["review"]["score"] for r in valid_reviews]
+                confidences_list = [r["review"]["confidence"] for r in valid_reviews]
+                agent_review_score = sum(s * c for s, c in zip(scores_list, confidences_list)) / max(sum(confidences_list), 0.01)
             else:
                 agent_review_score = 50.0
 
-            review = {
+            review_log = {
                 "agent_review_score": round(agent_review_score, 2),
                 "logs": [
-                    {
-                        "agent_name": f"Skill Agent · {r.get('skill_name', 'Unknown')}",
-                        "output": r.get("review") or {},
-                    }
-                    for r in skill_reviews
-                    if r.get("review")
+                    {"agent_name": f"Skill Agent · {r.get('skill_name', 'Unknown')}", "output": r.get("review") or {}}
+                    for r in skill_reviews if r.get("review")
                 ],
             }
 
-            calibrated_weights = _load_calibrated_agg_weights(db)
             card = aggregate(
                 stock=stock,
                 signals=signals,
                 market_score=market_score,
-                agent_review_score=review["agent_review_score"],
+                agent_review_score=review_log["agent_review_score"],
                 risk_template=params["risk_template"],
                 calibrated_weights=calibrated_weights if calibrated_weights else None,
             )
@@ -677,8 +692,37 @@ def run_workbench(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
             card["feature_snapshot"]["component_scores"] = card.get("component_scores", {})
             card["feature_snapshot"]["data_authenticity"] = card.get("data_authenticity", 1.0)
             card["market_snapshot"] = snapshot
-            card["agent_logs"] = review["logs"]
+            card["agent_logs"] = review_log["logs"]
             card["recent_repeat"] = stock["code"] in recent_codes
+            return card
+
+        # 处理候选池（有 Agent 审查）
+        for _, context, rule_signals, stock, skill_reviews in candidate_results:
+            card = _build_card(context, stock, rule_signals, skill_reviews)
+            if params["hide_recent_repeats"] and card["recent_repeat"]:
+                continue
+            cards.append(card)
+
+        # 处理非候选池（仅规则评分，无 Agent 审查）
+        for _, context, rule_signals, stock in non_candidates:
+            # 构造空的 skill_reviews（无 Agent，纯规则信号）
+            dummy_reviews = []
+            for selected in selected_skills:
+                skill_id = selected["skill_id"]
+                rule_signal = rule_signals.get(skill_id)
+                dummy_reviews.append({
+                    "skill_id": skill_id,
+                    "skill_name": selected["name"],
+                    "review": None,
+                    "hallucination_check": None,
+                    "error": None,
+                    "from_rule_only": True,
+                })
+            card = _build_card(context, stock, rule_signals, dummy_reviews)
+            # 规则-only 标记降低置信度
+            if card.get("final_score"):
+                card["final_score"] *= 0.9
+            card["agent_logs"] = []
             if params["hide_recent_repeats"] and card["recent_repeat"]:
                 continue
             cards.append(card)

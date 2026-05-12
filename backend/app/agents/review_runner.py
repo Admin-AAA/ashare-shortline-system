@@ -41,7 +41,13 @@ async def run_skill_reviews(
     # 筛选有 SKILL.md 的已启用 Skill
     active_skills = [s for s in skills if s.enabled and s.skill_body.strip()]
 
-    async def review_one(skill: StrategySkill) -> dict[str, Any]:
+    SKILL_TIMEOUT_SECONDS = 180
+
+    async def review_one(skill: StrategySkill, stagger_index: int = 0) -> dict[str, Any]:
+        # 交错启动，避免瞬间并发冲击 LLM API
+        if stagger_index > 0:
+            await asyncio.sleep(0.5 * stagger_index)
+
         result = {
             "skill_id": skill.skill_id,
             "skill_name": skill.name,
@@ -54,12 +60,15 @@ async def run_skill_reviews(
             agent = create_skill_agent(skill, session_id)
             rule_signal = rule_signals_by_skill.get(skill.skill_id)
 
-            review = await run_skill_agent(
-                agent=agent,
-                stock=stock,
-                snapshot=snapshot,
-                rule_signal=rule_signal,
-                session_id=session_id,
+            review = await asyncio.wait_for(
+                run_skill_agent(
+                    agent=agent,
+                    stock=stock,
+                    snapshot=snapshot,
+                    rule_signal=rule_signal,
+                    session_id=session_id,
+                ),
+                timeout=SKILL_TIMEOUT_SECONDS,
             )
             result["review"] = review.model_dump() if hasattr(review, 'model_dump') else review
 
@@ -72,13 +81,15 @@ async def run_skill_reviews(
             )
             result["hallucination_check"] = hc
 
+        except asyncio.TimeoutError:
+            result["error"] = f"Skill '{skill.name}' 审查超时 (>{SKILL_TIMEOUT_SECONDS}s)，已跳过"
         except Exception as e:
             result["error"] = str(e)
 
         return result
 
-    # 并发执行所有 Skill Agent
-    tasks = [review_one(s) for s in active_skills]
+    # 并发执行所有 Skill Agent（交错启动以减轻 API 瞬时压力）
+    tasks = [review_one(s, i) for i, s in enumerate(active_skills)]
     results = await asyncio.gather(*tasks, return_exceptions=False)
     return list(results)
 

@@ -45,7 +45,7 @@ def verify_review_output(
     severity = "low"
 
     # ── 构建可追溯字段集合 ──
-    traceable_values = _build_traceable_set(stock)
+    traceable_values = _build_traceable_set(stock, snapshot)
 
     # ── 检查 evidence ──
     evidence_list = review.get("evidence", [])
@@ -73,10 +73,14 @@ def verify_review_output(
 
     # ── 检查特定幻觉模式 ──
 
-    # 1. 编造新闻事件
+    # 1. 编造新闻事件（排除关于"缺少/缺失"数据的陈述）
     news_keywords = ["公告", "新闻", "披露", "发布", "宣布", "年报", "季报", "业绩预告", "重组", "停牌"]
+    missing_patterns = ["缺少", "缺失", "不足", "没有", "无", "未获取", "未获得"]
     for item in evidence_list + risks_list:
         item_str = str(item).strip()
+        # 跳过关于数据缺失的陈述（这不是编造）
+        if any(p in item_str for p in missing_patterns):
+            continue
         for kw in news_keywords:
             if kw in item_str:
                 # 检查是否在规则信号的 evidence/risk_flags 中
@@ -86,7 +90,7 @@ def verify_review_output(
                     break
 
     # 2. 编造具体数值（不在输入数据中）
-    numeric_match = _find_unverified_numbers(evidence_list + risks_list, stock)
+    numeric_match = _find_unverified_numbers(evidence_list + risks_list, stock, snapshot)
     for match in numeric_match:
         flags.append(f"数值无法追溯: {match}")
         severity = _raise_severity(severity, "low")
@@ -131,8 +135,8 @@ def verify_review_output(
     }
 
 
-def _build_traceable_set(stock: dict[str, Any]) -> set[str]:
-    """从股票数据中构建可追溯的字符串集合。"""
+def _build_traceable_set(stock: dict[str, Any], snapshot: dict[str, Any] | None = None) -> set[str]:
+    """从股票数据 + 市场快照中构建可追溯的字符串集合。"""
     values: set[str] = set()
 
     def _add(val: Any) -> None:
@@ -141,7 +145,6 @@ def _build_traceable_set(stock: dict[str, Any]) -> set[str]:
         s = str(val).strip()
         if s and len(s) > 1:
             values.add(s)
-            # 也加入去掉负号的版本
             if s.startswith("-"):
                 values.add(s[1:])
 
@@ -177,6 +180,25 @@ def _build_traceable_set(stock: dict[str, Any]) -> set[str]:
         for k, v in dq.items():
             _add(str(v))
 
+    # ── 市场快照数据（Agent 引用的涨跌停数字来源）──
+    if snapshot:
+        for key in [
+            "sample_count", "up_count", "down_count",
+            "limit_up_count", "limit_down_count", "trade_date",
+        ]:
+            val = snapshot.get(key)
+            if val is not None:
+                _add(str(val))
+        # 主线行业
+        for industry in snapshot.get("main_industries", []) or []:
+            _add(str(industry))
+        # 市场状态（regime）
+        breadth = snapshot.get("breadth", {})
+        if isinstance(breadth, dict):
+            regime = breadth.get("regime", "")
+            if regime:
+                values.add(str(regime))
+
     return values
 
 
@@ -207,7 +229,12 @@ def _is_traceable(
     if code and code in statement:
         return True
 
-    # 4. 通用技术术语（放行，这些不需要追溯到具体数值）
+    # 4. 快照 trade_date 匹配（如 "2025-12-24" 应匹配 snapshot 的 trade_date）
+    trade_date = str(snapshot.get("trade_date", ""))
+    if trade_date and len(trade_date) >= 8 and trade_date in statement:
+        return True
+
+    # 5. 通用技术术语（放行，这些不需要追溯到具体数值）
     generic_terms = [
         "均线", "多头", "空头", "金叉", "死叉", "MACD", "RSI", "KDJ",
         "量能", "缩量", "放量", "换手", "乖离", "回撤", "支撑", "压力",
@@ -220,7 +247,7 @@ def _is_traceable(
         if term in statement:
             return True
 
-    # 5. 在规则信号的 evidence/risk_flags 中
+    # 6. 在规则信号的 evidence/risk_flags 中
     if _in_rule_signal(statement, rule_signal):
         return True
 
@@ -247,29 +274,80 @@ def _in_rule_signal(statement: str, rule_signal: dict[str, Any] | None) -> bool:
 def _find_unverified_numbers(
     statements: list[str],
     stock: dict[str, Any],
+    snapshot: dict[str, Any] | None = None,
 ) -> list[str]:
-    """查找声明中无法追溯到股票数据的数值。"""
+    """查找声明中无法追溯到股票/快照数据的数值。
+
+    跳过明显是计算结果而非独立来源的数值：
+    - 前有 "="、"约"、"约为"、"约等于" 等计算标记
+    - 出现在含 ":" 的比率上下文中的小数
+    - 属于 (0, 1) 且精度 >= 2 位的小数（大概率是比率）
+    """
     import re as _re
 
     unverified: list[str] = []
-    traceable = _build_traceable_set(stock)
+    traceable = _build_traceable_set(stock, snapshot)
 
     for stmt in statements:
+        stmt_str = str(stmt)
         # 找浮点数（如 3.5%、12.8亿）
-        numbers = _re.findall(r"\d+\.?\d*", str(stmt))
+        numbers = _re.findall(r"\d+\.?\d*", stmt_str)
         for num in numbers:
             num_str = num.strip()
-            if len(num_str) >= 2 and any(c.isdigit() for c in num_str):
-                # 检查是否存在于 traceable 集合
-                found = False
-                for tv in traceable:
-                    if num_str in tv or tv in num_str:
-                        found = True
-                        break
-                if not found:
-                    unverified.append(f"'{num_str}' in '{str(stmt)[:60]}'")
+            if len(num_str) < 2 or not any(c.isdigit() for c in num_str):
+                continue
+
+            # 跳过明显是计算/比率的数值
+            if _is_calculated_number(num_str, stmt_str):
+                continue
+
+            # 检查是否存在于 traceable 集合
+            found = False
+            for tv in traceable:
+                if num_str in tv or tv in num_str:
+                    found = True
+                    break
+            if not found:
+                unverified.append(f"'{num_str}' in '{stmt_str[:60]}'")
 
     return unverified[:5]  # 最多 5 条
+
+
+def _is_calculated_number(num_str: str, context: str) -> bool:
+    """判断一个数值是否更像计算结果而非独立来源数据。
+
+    检测规则：
+    1. 数值前紧邻 "="、"约"、"约为"、"约等于" 等标记 → 计算结果
+    2. 数值是 (0, 1) 区间且小数位 >= 2 → 大概率是比率（如 0.146 = 29/199）
+    3. 数值在含比例的句子中（如 "29:199" 附近出现）→ 比率计算
+    """
+    import re as _re
+
+    # Pattern 1: preceded by calculation markers
+    if _re.search(rf"(?:=|约|约为|约等于)\s*{_re.escape(num_str)}", context):
+        return True
+
+    # Pattern 2: no leading "=" but appears in a sentence with colon notation
+    # e.g. "29:199" context suggests the number is a ratio
+    # Check for colon-based ratio in same sentence before this number
+    num_pos = context.find(num_str)
+    if num_pos > 0:
+        prefix = context[:num_pos]
+        if _re.search(r"\d+:\d+", prefix):
+            return True
+
+    # Pattern 3: small decimal (0 < val < 1) with sufficient precision
+    # that is likely a derived ratio
+    try:
+        val = float(num_str)
+        if 0 < val < 1:
+            parts = num_str.split(".")
+            if len(parts) == 2 and len(parts[1]) >= 2:
+                return True
+    except ValueError:
+        pass
+
+    return False
 
 
 def _find_external_symbols(

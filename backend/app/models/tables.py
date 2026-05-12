@@ -354,3 +354,180 @@ class CalibrationConfig(Base):
     key: Mapped[str] = mapped_column(String(80), primary_key=True)
     value: Mapped[float] = mapped_column(Float, default=0.0)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+# ── 辅助数据源：原始数据表 ──────────────────────────────────────────────
+
+class RawLimitUpBoard(Base):
+    __tablename__ = "raw_limit_up_board"
+    __table_args__ = (UniqueConstraint("source", "code", "trade_date", name="uq_raw_limit_up_board_s_c_d"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(40), index=True)
+    code: Mapped[str] = mapped_column(String(12), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class RawConceptSector(Base):
+    __tablename__ = "raw_concept_sector"
+    __table_args__ = (UniqueConstraint("source", "sector_code", "trade_date", name="uq_raw_concept_sector_sc_td"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(40), index=True)
+    sector_code: Mapped[str] = mapped_column(String(20), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class RawCapitalFlow(Base):
+    __tablename__ = "raw_capital_flow"
+    __table_args__ = (UniqueConstraint("source", "code", "trade_date", name="uq_raw_capital_flow_s_c_d"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(40), index=True)
+    code: Mapped[str] = mapped_column(String(12), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class RawDragonTiger(Base):
+    __tablename__ = "raw_dragon_tiger"
+    __table_args__ = (UniqueConstraint("source", "code", "trade_date", name="uq_raw_dragon_tiger_s_c_d"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(40), index=True)
+    code: Mapped[str] = mapped_column(String(12), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class RawNewsAnnouncement(Base):
+    __tablename__ = "raw_news_announcement"
+    __table_args__ = (UniqueConstraint("source", "article_id", name="uq_raw_news_announcement_s_aid"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(40), index=True)
+    code: Mapped[str] = mapped_column(String(12), index=True)
+    article_id: Mapped[str] = mapped_column(String(80), index=True)
+    announce_date: Mapped[str] = mapped_column(String(10), index=True)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+# ── 辅助数据源：标准化数据表 ────────────────────────────────────────────
+
+class LimitUpBoard(Base):
+    __tablename__ = "limit_up_board"
+    __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_limit_up_board_code_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(12), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    name: Mapped[str | None] = mapped_column(String(80))
+    consecutive_days: Mapped[int] = mapped_column(Integer, default=1)
+    limit_up_time: Mapped[str | None] = mapped_column(String(8))
+    first_limit_up_time: Mapped[str | None] = mapped_column(String(8))
+    is_sealed: Mapped[bool] = mapped_column(Boolean, default=True)
+    seal_amount_yi: Mapped[float | None] = mapped_column(Float)
+    limit_up_reason: Mapped[str | None] = mapped_column(Text)
+    concept_sector: Mapped[str | None] = mapped_column(String(80))
+    turnover_amount_yi: Mapped[float | None] = mapped_column(Float)
+    turnover_rate: Mapped[float | None] = mapped_column(Float)
+    seal_count: Mapped[int] = mapped_column(Integer, default=0)
+    open_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ConceptSector(Base):
+    __tablename__ = "concept_sector"
+    __table_args__ = (UniqueConstraint("sector_code", "trade_date", name="uq_concept_sector_code_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    sector_code: Mapped[str] = mapped_column(String(20), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    sector_name: Mapped[str] = mapped_column(String(80))
+    pct_chg: Mapped[float | None] = mapped_column(Float)
+    leading_code: Mapped[str | None] = mapped_column(String(12))
+    leading_name: Mapped[str | None] = mapped_column(String(80))
+    leading_pct: Mapped[float | None] = mapped_column(Float)
+    stock_count: Mapped[int] = mapped_column(Integer, default=0)
+    limit_up_count: Mapped[int] = mapped_column(Integer, default=0)
+    total_amount_yi: Mapped[float | None] = mapped_column(Float)
+    heat_rank: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ConceptSectorStock(Base):
+    __tablename__ = "concept_sector_stock"
+    __table_args__ = (UniqueConstraint("sector_code", "code", "trade_date", name="uq_concept_sector_stock_sc_c_d"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    sector_code: Mapped[str] = mapped_column(String(20), index=True)
+    code: Mapped[str] = mapped_column(String(12), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    name: Mapped[str | None] = mapped_column(String(80))
+    pct_chg: Mapped[float | None] = mapped_column(Float)
+    market_cap_yi: Mapped[float | None] = mapped_column(Float)
+    is_leading: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class CapitalFlow(Base):
+    __tablename__ = "capital_flow"
+    __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_capital_flow_code_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(12), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    main_net_inflow_yi: Mapped[float | None] = mapped_column(Float)
+    super_large_net_inflow_yi: Mapped[float | None] = mapped_column(Float)
+    large_net_inflow_yi: Mapped[float | None] = mapped_column(Float)
+    medium_net_inflow_yi: Mapped[float | None] = mapped_column(Float)
+    small_net_inflow_yi: Mapped[float | None] = mapped_column(Float)
+    main_net_inflow_ratio: Mapped[float | None] = mapped_column(Float)
+    cumulative_inflow_3d_yi: Mapped[float | None] = mapped_column(Float)
+    cumulative_inflow_5d_yi: Mapped[float | None] = mapped_column(Float)
+    cumulative_inflow_10d_yi: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class DragonTiger(Base):
+    __tablename__ = "dragon_tiger"
+    __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_dragon_tiger_code_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(12), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    name: Mapped[str | None] = mapped_column(String(80))
+    reason: Mapped[str | None] = mapped_column(Text)
+    buy_amount_yi: Mapped[float | None] = mapped_column(Float)
+    sell_amount_yi: Mapped[float | None] = mapped_column(Float)
+    net_amount_yi: Mapped[float | None] = mapped_column(Float)
+    buy_seat_count: Mapped[int] = mapped_column(Integer, default=0)
+    sell_seat_count: Mapped[int] = mapped_column(Integer, default=0)
+    institution_net_buy_yi: Mapped[float | None] = mapped_column(Float)
+    top_buy_broker: Mapped[str | None] = mapped_column(String(80))
+    top_sell_broker: Mapped[str | None] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class NewsAnnouncement(Base):
+    __tablename__ = "news_announcement"
+    __table_args__ = (UniqueConstraint("source", "article_id", name="uq_news_announcement_src_aid"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(40))
+    article_id: Mapped[str] = mapped_column(String(80), index=True)
+    code: Mapped[str] = mapped_column(String(12), index=True)
+    announce_date: Mapped[str] = mapped_column(String(10), index=True)
+    title: Mapped[str | None] = mapped_column(Text)
+    summary: Mapped[str | None] = mapped_column(Text)
+    category: Mapped[str | None] = mapped_column(String(40))
+    sentiment: Mapped[str | None] = mapped_column(String(20))
+    is_risk_warning: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

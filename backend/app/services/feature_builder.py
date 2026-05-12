@@ -30,7 +30,7 @@ MACD_SCORE_MAP = {
 }
 
 
-def build_features(stocks: list[dict[str, Any]], snapshot: dict[str, Any], dsa_weights: dict[str, float] | None = None) -> list[dict[str, Any]]:
+def build_features(stocks: list[dict[str, Any]], snapshot: dict[str, Any], dsa_weights: dict[str, float] | None = None, db: Any = None) -> list[dict[str, Any]]:
     main_industries = set(snapshot.get("main_industries", []))
     enriched = []
     for stock in stocks:
@@ -41,9 +41,15 @@ def build_features(stocks: list[dict[str, Any]], snapshot: dict[str, Any], dsa_w
         item["market_regime"] = snapshot.get("breadth", {}).get("regime", "未知")
         _apply_dsa_context(item, profile, dsa_weights)
         item["risk_score"] = _risk_score(item)
+        enriched.append(item)
+
+    # 从本地辅助数据池丰富特征（涨停板/龙虎榜/新闻/资金流/概念板块）
+    if db is not None:
+        _enrich_with_auxiliary_data(enriched, db)
+
+    for item in enriched:
         _tag_features(item)
         item["data_authenticity"] = _compute_authenticity(item)
-        enriched.append(item)
     return enriched
 
 
@@ -633,6 +639,19 @@ _OBSERVABLE_FIELDS = {
     "industry",
 }
 
+# Fields that come from external data sources and may or may not be available
+# Now including fields from auxiliary data sources (limit_up, dragon_tiger, news, capital_flow)
+_OBSERVABLE_FIELDS.update({
+    "dragon_tiger_is_on_list", "dragon_tiger_recent_count", "dragon_tiger_latest_date",
+    "news_risk_count", "positive_catalyst_count",
+    "risk_alerts", "positive_catalysts", "latest_news",
+    "inflow_5d_yi", "inflow_10d_yi",
+    "is_limit_up", "limit_up_consecutive_days", "limit_up_seal_time", "limit_up_reason",
+    "concept_sector_name", "concept_sector_heat_rank",
+    "super_large_net_inflow_yi", "large_net_inflow_yi", "medium_net_inflow_yi", "small_net_inflow_yi",
+    "main_net_inflow_ratio", "cumulative_inflow_3d_yi",
+})
+
 # Fields that are always synthetically estimated (no real data source)
 _SYNTHETIC_FIELDS = {
     "concentration_90", "profit_ratio",
@@ -640,14 +659,10 @@ _SYNTHETIC_FIELDS = {
     "concentration_70", "avg_cost",
     "revenue_yoy", "net_profit_yoy", "roe", "gross_margin",
     "sector_fund_rank",
-    "dragon_tiger_is_on_list", "dragon_tiger_recent_count", "dragon_tiger_latest_date",
-    "news_risk_count", "positive_catalyst_count",
-    "risk_alerts", "positive_catalysts", "latest_news",
     "chip_health", "chip_health_score", "chip_concentration",
     "capital_flow_score", "fundamental_score", "intelligence_score",
     "earnings_outlook", "sentiment_summary",
     "institution_holding_change", "top10_holder_change",
-    "inflow_5d_yi", "inflow_10d_yi",
     "volume_breakout_signal", "volume_shrink_pullback",
 }
 
@@ -662,6 +677,83 @@ _SCORED_FEATURES = {
     "capital_flow_score", "fundamental_score", "intelligence_score",
     "chip_health_score",
 }
+
+
+def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any) -> None:
+    """从本地辅助数据池加载真实数据，覆盖 SYNTHETIC 默认值。"""
+    from app.services.market_pool import load_auxiliary_for_stocks
+
+    codes = [s["code"] for s in stocks]
+    if not codes:
+        return
+    aux = load_auxiliary_for_stocks(db, codes)
+
+    limit_up_map = aux.get("limit_up", {})
+    concept_map = aux.get("concept_sectors", {})
+    flow_map = aux.get("capital_flows", {})
+    dt_map = aux.get("dragon_tigers", {})
+    news_map = aux.get("news", {})
+
+    for stock in stocks:
+        code = stock["code"]
+        profile = stock.get("dsa_profile", {})
+        if not isinstance(profile, dict):
+            profile = {}
+
+        # ── 涨停板特征 ──
+        lu = limit_up_map.get(code)
+        if lu:
+            stock["is_limit_up"] = True
+            stock["limit_up_consecutive_days"] = lu.get("consecutive_days", 1)
+            stock["limit_up_seal_time"] = lu.get("limit_up_time")
+            stock["limit_up_reason"] = lu.get("limit_up_reason")
+        else:
+            stock["is_limit_up"] = False
+            stock["limit_up_consecutive_days"] = 0
+
+        # ── 龙虎榜特征 ──
+        dt = dt_map.get(code)
+        if dt:
+            stock["dragon_tiger_is_on_list"] = True
+            stock["dragon_tiger_recent_count"] = 1
+            stock["dragon_tiger_latest_date"] = dt.get("trade_date")
+            profile["dragon_tiger_net_amount_yi"] = dt.get("net_amount_yi", 0)
+
+        # ── 新闻/公告特征 ──
+        news_items = news_map.get(code, [])
+        risk_items = [n for n in news_items if n.get("is_risk_warning")]
+        positive_items = [n for n in news_items if n.get("sentiment") == "positive"]
+        stock["news_risk_count"] = len(risk_items)
+        stock["positive_catalyst_count"] = len(positive_items)
+        if risk_items:
+            stock["risk_alerts"] = [n["title"] for n in risk_items[:3]]
+        if positive_items:
+            stock["positive_catalysts"] = [n["title"] for n in positive_items[:3]]
+        if news_items:
+            stock["latest_news"] = news_items[0].get("title", "")
+
+        # ── 概念板块特征 ──
+        concepts = concept_map.get(code, [])
+        if concepts:
+            best = min(concepts, key=lambda c: c.get("heat_rank", 999))
+            stock["concept_sector_name"] = best.get("sector_name")
+            stock["concept_sector_heat_rank"] = best.get("heat_rank", 0)
+
+        # ── 资金流向细分 ──
+        cf = flow_map.get(code)
+        if cf:
+            stock["main_net_inflow_yi"] = cf.get("main_net_inflow_yi", 0)
+            stock["super_large_net_inflow_yi"] = cf.get("super_large_net_inflow_yi", 0)
+            stock["large_net_inflow_yi"] = cf.get("large_net_inflow_yi", 0)
+            stock["medium_net_inflow_yi"] = cf.get("medium_net_inflow_yi", 0)
+            stock["small_net_inflow_yi"] = cf.get("small_net_inflow_yi", 0)
+            stock["main_net_inflow_ratio"] = cf.get("main_net_inflow_ratio", 0)
+            stock["inflow_5d_yi"] = cf.get("cumulative_inflow_5d_yi", 0)
+            stock["inflow_10d_yi"] = cf.get("cumulative_inflow_10d_yi", 0)
+            stock["cumulative_inflow_3d_yi"] = cf.get("cumulative_inflow_3d_yi", 0)
+            profile["main_net_inflow_yi"] = cf.get("main_net_inflow_yi", 0)
+
+        stock["dsa_profile"] = profile
 
 
 def _tag_features(item: dict[str, Any]) -> None:

@@ -41,6 +41,14 @@ def _migrate_sqlite_schema() -> None:
         # Drop redundant single-column index that confuses the query planner
         _drop_index_if_exists(connection, inspector, "daily_bars", "ix_daily_bars_trade_date")
 
+        # Auxiliary data indexes
+        _ensure_index(connection, inspector, "limit_up_board", "idx_lub_td_cdays", "trade_date, consecutive_days")
+        _ensure_index(connection, inspector, "concept_sector", "idx_cs_td_heat", "trade_date, heat_rank")
+        _ensure_index(connection, inspector, "capital_flow", "idx_cf_td_main", "trade_date, main_net_inflow_yi")
+        _ensure_index(connection, inspector, "dragon_tiger", "idx_dt_td_net", "trade_date, net_amount_yi")
+        _ensure_index(connection, inspector, "news_announcement", "idx_na_code_date", "code, announce_date")
+        _ensure_index(connection, inspector, "concept_sector_stock", "idx_css_code", "code, sector_code")
+
 
 def _ensure_index(connection, inspector, table: str, index_name: str, columns: str) -> None:
     existing = {idx["name"] for idx in inspector.get_indexes(table)}

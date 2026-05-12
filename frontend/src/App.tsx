@@ -7,7 +7,6 @@ import {
   ChevronDown,
   ChevronUp,
   CircleAlert,
-  Copy,
   DatabaseZap,
   HardDrive,
   Eye,
@@ -21,11 +20,7 @@ import {
   Play,
   Plus,
   RefreshCcw,
-  Save,
-  ShieldAlert,
-  SquarePen,
   Target,
-  TrendingUp,
   Trash2,
   Wrench,
   X,
@@ -39,10 +34,13 @@ import type {
   LocalPoolStatus,
   UnifiedQuotePoolRow,
   Preset,
+  PresetDraft,
+  PresetSkillDraft,
   PresetStatsRow,
   RecommendationCard,
   RecommendationDetail,
   RunMode,
+  RunTarget,
   RunSummary,
   SkillDetail,
   SkillMode,
@@ -50,27 +48,13 @@ import type {
   SkillSummary,
   StatsOverview,
 } from "./types";
+import SkillConfigPanel from "./components/SkillConfigPanel";
+import MarketSnapshotPanel from "./components/MarketSnapshot";
+import RecommendationList from "./components/RecommendationList";
+import DataSourcePanel from "./components/DataSourcePanel";
+import RunHistoryPanel, { type RunHistoryMode } from "./components/RunHistoryPanel";
 
 type Section = "desk" | "pool" | "runs" | "skills" | "sources" | "localPool" | "stats";
-type RunTarget = "preset" | "single-skill";
-
-type PresetDraft = {
-  name: string;
-  description: string;
-  run_mode: RunMode;
-  market_scope: string;
-  market_scope_value: string;
-  risk_template: string;
-  output_count: number;
-  data_source: string;
-  hide_recent_repeats: boolean;
-};
-
-type PresetSkillDraft = {
-  skill_id: string;
-  weight: number;
-  sort_order: number;
-};
 
 type ReviewDraft = {
   user_label: string;
@@ -159,7 +143,6 @@ export default function App() {
   const [recommendations, setRecommendations] = useState<RecommendationCard[]>([]);
   const [recommendationDetail, setRecommendationDetail] = useState<RecommendationDetail | null>(null);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
-  const [runModalOpen, setRunModalOpen] = useState(false);
   const [skillDetail, setSkillDetail] = useState<SkillDetail | null>(null);
   const [reviewDraft, setReviewDraft] = useState<ReviewDraft>(EMPTY_REVIEW_DRAFT);
   const [outcomeDraft, setOutcomeDraft] = useState<OutcomeDraft>(EMPTY_OUTCOME_DRAFT);
@@ -184,17 +167,8 @@ export default function App() {
     () => visibleRuns.find((run) => run.run_id === selectedRunId) ?? visibleRuns[0] ?? null,
     [visibleRuns, selectedRunId],
   );
-  const selectedRunAny = useMemo(
-    () => runs.find((run) => run.run_id === selectedRunId) ?? runs[0] ?? null,
-    [runs, selectedRunId],
-  );
   const selectedRecommendation =
     recommendationDetail?.recommendation_id === selectedRecommendationId ? recommendationDetail : null;
-  const visibleHistoryRuns = useMemo(
-    () => runs.filter((run) => runHistoryMode === "all" || run.run_mode === runHistoryMode),
-    [runHistoryMode, runs],
-  );
-
   const availableBuckets = useMemo(
     () => Array.from(new Set(recommendations.map((item) => item.bucket))).sort(),
     [recommendations],
@@ -625,6 +599,24 @@ export default function App() {
     }
   }
 
+  async function watchById(id: string, status: string) {
+    try {
+      if (status === "ignored") {
+        await api.ignoreRecommendation(id, {});
+      } else {
+        await api.watchRecommendation(id, { watch_status: status });
+      }
+      await loadRunRecommendations(selectedRunId);
+      if (selectedRecommendationId === id) {
+        await loadRecommendationDetail(id);
+      }
+      await loadStats(statsMode);
+      setMessage(status === "watching" ? "已加入观察" : "已忽略此票");
+    } catch (err) {
+      setError(messageFromError(err));
+    }
+  }
+
   async function setSkillMode(mode: SkillMode) {
     if (!selectedSkillSummary && !skillDetail) return;
     try {
@@ -771,200 +763,30 @@ export default function App() {
           <div className="desk-grid">
             <section className="panel">
               <PanelTitle title="运行配置" subtitle={editingPresetId ? "正在编辑当前预设" : "新建预设"} />
-
-              <div className="preset-selector">
-                <select
-                  value={selectedPresetId}
-                  onChange={(event) => setSelectedPresetId(event.target.value)}
-                >
-                  <optgroup label="正式">
-                    {presets.filter((p) => p.run_mode === "formal").map((p) => (
-                      <option key={p.preset_id} value={p.preset_id}>{p.name}</option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="实验">
-                    {presets.filter((p) => p.run_mode === "experiment").map((p) => (
-                      <option key={p.preset_id} value={p.preset_id}>{p.name}</option>
-                    ))}
-                  </optgroup>
-                </select>
-                <button className="ghost-btn" onClick={resetToNewPreset}>
-                  <Plus size={14} />
-                  新建
-                </button>
-                <button className="ghost-btn" onClick={duplicatePreset} disabled={!selectedPreset}>
-                  <Copy size={14} />
-                  复制
-                </button>
-              </div>
-
-              <div className="mode-switch">
-                <button className={runTarget === "preset" ? "active" : ""} onClick={() => setRunTarget("preset")}>
-                  <Layers3 size={14} />
-                  运行预设
-                </button>
-                <button className={runTarget === "single-skill" ? "active" : ""} onClick={() => setRunTarget("single-skill")}>
-                  <BrainCircuit size={14} />
-                  单 Skill
-                </button>
-              </div>
-
-              {runTarget === "preset" ? (
-                <>
-                  <div className="config-card">
-                    <h3 className="config-card-title">基本参数</h3>
-                    <div className="form-grid">
-                      <Field label="名称" value={presetDraft.name} onChange={(value) => setPresetDraft((current) => ({ ...current, name: value }))} />
-                      <Field
-                        label="描述"
-                        value={presetDraft.description}
-                        onChange={(value) => setPresetDraft((current) => ({ ...current, description: value }))}
-                        multiline
-                      />
-                      <SelectField
-                        label="模式"
-                        value={presetDraft.run_mode}
-                        options={[
-                          { value: "formal", label: "正式" },
-                          { value: "experiment", label: "实验" },
-                        ]}
-                        onChange={(value) => setPresetDraft((current) => ({ ...current, run_mode: value as RunMode }))}
-                      />
-                      <SelectField
-                        label="市场范围"
-                        value={presetDraft.market_scope}
-                        options={[
-                          { value: "all", label: "全部" },
-                          { value: "watchlist", label: "自选股" },
-                          { value: "industry", label: "行业" },
-                        ]}
-                        onChange={(value) => setPresetDraft((current) => ({ ...current, market_scope: value }))}
-                      />
-                      <Field
-                        label="范围值"
-                        value={presetDraft.market_scope_value}
-                        onChange={(value) => setPresetDraft((current) => ({ ...current, market_scope_value: value }))}
-                      />
-                      <SelectField
-                        label="风控模板"
-                        value={presetDraft.risk_template}
-                        options={[
-                          { value: "conservative", label: "保守" },
-                          { value: "balanced", label: "均衡" },
-                          { value: "aggressive", label: "激进" },
-                        ]}
-                        onChange={(value) => setPresetDraft((current) => ({ ...current, risk_template: value }))}
-                      />
-                      <NumberField
-                        label="输出数量"
-                        value={presetDraft.output_count}
-                        min={1}
-                        max={30}
-                        onChange={(value) => setPresetDraft((current) => ({ ...current, output_count: value }))}
-                      />
-                      <ToggleField
-                        label="隐藏近期重复票"
-                        value={presetDraft.hide_recent_repeats}
-                        onChange={(value) => setPresetDraft((current) => ({ ...current, hide_recent_repeats: value }))}
-                      />
-                      <SelectField
-                        label="运行数据"
-                        value={presetDraft.data_source}
-                        options={[
-                          { value: "local_pool", label: "仅本地池" },
-                          { value: "local_pool_preferred", label: "本地池优先" },
-                          { value: "realtime", label: "仅实时数据源" },
-                        ]}
-                        onChange={(value) => setPresetDraft((current) => ({ ...current, data_source: value }))}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="config-card">
-                    <div className="config-card-head">
-                      <h3 className="config-card-title">Skill 组合</h3>
-                      <span className="config-card-count">{presetSkillDrafts.length} 个已启用</span>
-                    </div>
-                    <div className="skill-picker">
-                      {skills.map((skill) => {
-                        const enabled = presetSkillDrafts.some((item) => item.skill_id === skill.skill_id);
-                        const draft = presetSkillDrafts.find((item) => item.skill_id === skill.skill_id);
-                        return (
-                          <div key={skill.skill_id} className={`skill-picker-row ${enabled ? "enabled" : ""}`}>
-                            <button className={`skill-toggle ${enabled ? "on" : ""}`} onClick={() => togglePresetSkill(skill.skill_id)}>
-                              {enabled ? "已选" : "加入"}
-                            </button>
-                            <div className="skill-picker-meta">
-                              <strong>{skill.name}</strong>
-                              <span>{displayText(skill.mode)}</span>
-                            </div>
-                            {enabled ? (
-                              <input
-                                className="weight-input"
-                                type="number"
-                                min="0.1"
-                                max="5"
-                                step="0.05"
-                                value={draft?.weight ?? 1}
-                                onChange={(event) =>
-                                  updatePresetSkill(skill.skill_id, { weight: Number(event.target.value) || 1 })
-                                }
-                              />
-                            ) : (
-                              <span className="weight-placeholder">-</span>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <div className="config-card">
-                    <h3 className="config-card-title">分桶限制</h3>
-                    <div className="bucket-limits-row">
-                      <NumberField
-                        label="容量核心"
-                        value={bucketLimits["容量核心"] ?? 3}
-                        min={0}
-                        max={20}
-                        onChange={(value) => setBucketLimits((c) => ({ ...c, "容量核心": value }))}
-                      />
-                      <NumberField
-                        label="高弹观察"
-                        value={bucketLimits["高弹观察"] ?? 2}
-                        min={0}
-                        max={20}
-                        onChange={(value) => setBucketLimits((c) => ({ ...c, "高弹观察": value }))}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="inline-actions">
-                    <button className="ghost-btn" onClick={() => void savePreset()}>
-                      <Save size={14} />
-                      保存预设
-                    </button>
-                    <button className="ghost-btn" onClick={resetToNewPreset}>
-                      <SquarePen size={14} />
-                      新草稿
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <div className="config-card">
-                  <h3 className="config-card-title">单 Skill 实验</h3>
-                  <div className="form-grid">
-                    <SelectField
-                      label="Skill"
-                      value={singleSkillId}
-                      options={skills.map((skill) => ({ value: skill.skill_id, label: skill.name }))}
-                      onChange={setSingleSkillId}
-                    />
-                    <NumberField label="权重" value={singleSkillWeight} min={0.1} max={5} step={0.05} onChange={setSingleSkillWeight} />
-                  </div>
-                  <div className="hint-box">单 Skill 运行默认进入实验，不污染正式统计。</div>
-                </div>
-              )}
+              <SkillConfigPanel
+                runTarget={runTarget}
+                setRunTarget={setRunTarget}
+                selectedPresetId={selectedPresetId}
+                setSelectedPresetId={setSelectedPresetId}
+                presets={presets}
+                skills={skills}
+                editingPresetId={editingPresetId}
+                presetDraft={presetDraft}
+                onPresetDraftChange={(patch) => setPresetDraft((current) => ({ ...current, ...patch }))}
+                presetSkillDrafts={presetSkillDrafts}
+                onTogglePresetSkill={togglePresetSkill}
+                onUpdatePresetSkill={updatePresetSkill}
+                bucketLimits={bucketLimits}
+                onBucketLimitChange={(bucket, value) => setBucketLimits((c) => ({ ...c, [bucket]: value }))}
+                singleSkillId={singleSkillId}
+                setSingleSkillId={setSingleSkillId}
+                singleSkillWeight={singleSkillWeight}
+                setSingleSkillWeight={setSingleSkillWeight}
+                onSavePreset={() => void savePreset()}
+                onResetToNewPreset={resetToNewPreset}
+                onDuplicatePreset={duplicatePreset}
+                onCopyPreset={duplicatePreset}
+              />
             </section>
 
             <section className="panel">
@@ -979,7 +801,7 @@ export default function App() {
 
               <PanelTitle title="市场快照" subtitle={bootstrap?.market_snapshot.trade_date ?? ""} />
               {bootstrap?.market_snapshot ? (
-                <MarketCard snapshot={bootstrap.market_snapshot} />
+                <MarketSnapshotPanel snapshot={bootstrap.market_snapshot} />
               ) : (
                 <EmptyHint text="暂无市场快照" />
               )}
@@ -1068,13 +890,14 @@ export default function App() {
 
             <section className="panel pool-table-panel">
               <PanelTitle title="机会池" subtitle={selectedRun?.run_name ?? "暂无 Run"} />
-              <TableRecommendations
+              <RecommendationList
                 recommendations={filteredRecommendations}
                 selectedId={selectedRecommendationId}
-                onSelect={(recommendationId) => {
-                  setSelectedRecommendationId(recommendationId);
+                onSelect={(id) => {
+                  setSelectedRecommendationId(id);
                   setDetailModalOpen(true);
                 }}
+                onWatch={watchById}
               />
             </section>
 
@@ -1105,61 +928,19 @@ export default function App() {
         )}
 
         {section === "runs" && (
-          <div className="run-workspace">
-            <section className="panel run-filter-bar">
-              <PanelTitle title="运行池" subtitle="按模式查看历史 Run" />
-              <div className="mode-switch">
-                <button className={runHistoryMode === "all" ? "active" : ""} onClick={() => setRunHistoryMode("all")}>
-                  <Layers3 size={14} />
-                  全部
-                </button>
-                <button className={runHistoryMode === "formal" ? "active" : ""} onClick={() => setRunHistoryMode("formal")}>
-                  <Target size={14} />
-                  正式
-                </button>
-                <button className={runHistoryMode === "experiment" ? "active" : ""} onClick={() => setRunHistoryMode("experiment")}>
-                  <Flame size={14} />
-                  实验
-                </button>
-              </div>
-              <div className="mini-stat-row run-stat-row">
-                <MiniStat label="Run 总数" value={visibleHistoryRuns.length} />
-                <MiniStat label="正式" value={visibleHistoryRuns.filter((run) => run.run_mode === "formal").length} />
-                <MiniStat label="实验" value={visibleHistoryRuns.filter((run) => run.run_mode === "experiment").length} />
-                <MiniStat label="推荐合计" value={visibleHistoryRuns.reduce((sum, run) => sum + run.recommended_count, 0)} />
-              </div>
-            </section>
-
-            <section className="panel run-table-panel">
-              <PanelTitle title="运行记录" subtitle="点击 Run 查看摘要" />
-              <RunList
-                runs={visibleHistoryRuns}
-                selectedId={selectedRunId}
-                onSelect={(run) => {
-                  setPoolMode(run.run_mode);
-                  setSelectedRunId(run.run_id);
-                  setRunModalOpen(true);
-                }}
-              />
-            </section>
-
-            {runModalOpen && selectedRunAny ? (
-              <div className="modal-backdrop" onClick={() => setRunModalOpen(false)}>
-                <section className="detail-modal run-modal" role="dialog" aria-modal="true" aria-label={`${selectedRunAny.run_name} 摘要`} onClick={(event) => event.stopPropagation()}>
-                  <button className="modal-close" aria-label="关闭摘要" onClick={() => setRunModalOpen(false)}>
-                    <X size={18} />
-                  </button>
-                  <RunDetailPane
-                    run={selectedRunAny}
-                    onOpenPool={() => {
-                      setRunModalOpen(false);
-                      setSection("pool");
-                    }}
-                  />
-                </section>
-              </div>
-            ) : null}
-          </div>
+          <RunHistoryPanel
+            runs={runs}
+            runHistoryMode={runHistoryMode}
+            onModeChange={setRunHistoryMode}
+            selectedRunId={selectedRunId}
+            onSelect={(run) => {
+              setPoolMode(run.run_mode);
+              setSelectedRunId(run.run_id);
+            }}
+            onOpenPool={() => {
+              setSection("pool");
+            }}
+          />
         )}
 
         {section === "skills" && (
@@ -1206,7 +987,7 @@ export default function App() {
         )}
 
         {section === "sources" && (
-          <DataSourcesPage rows={dataSources} onRefresh={loadDataSources} onToggle={toggleDataSource} />
+          <DataSourcePanel rows={dataSources} onRefresh={loadDataSources} onToggle={toggleDataSource} />
         )}
 
         {section === "localPool" && (
@@ -1454,155 +1235,6 @@ function PresetSummary({ preset }: { preset: Preset }) {
           ))}
         </div>
       </div>
-    </div>
-  );
-}
-
-function MarketCard({ snapshot }: { snapshot: MarketSnapshot }) {
-  const breadth = snapshot.breadth || {};
-  return (
-    <div className="summary-grid">
-      <MiniStat label="数据" value={String(breadth.data_source ?? "unknown")} />
-      <MiniStat label="报价源" value={String(breadth.quote_source ?? "-")} />
-      <MiniStat label="上涨" value={snapshot.up_count} />
-      <MiniStat label="下跌" value={snapshot.down_count} />
-      <MiniStat label="涨停" value={snapshot.limit_up_count} />
-      <MiniStat label="跌停" value={snapshot.limit_down_count} />
-      <MiniStat label="主线" value={snapshot.main_industries.slice(0, 2).join(" / ")} />
-      <div className="summary-block wide">
-        <span>市场结论</span>
-        <strong>{String(breadth.regime ?? "未知")}</strong>
-      </div>
-    </div>
-  );
-}
-
-function listActionTier(item: RecommendationCard): { cls: string } {
-  if (item.bucket === "容量核心" && item.final_score >= 60) return { cls: "tier-core" };
-  if (item.bucket === "明确回避" || item.final_score < 45) return { cls: "tier-avoid" };
-  const fs = item.feature_snapshot;
-  const bs = String(fs.buy_signal ?? "");
-  if (bs === "强烈买入" || bs === "买入") return { cls: "tier-actionable" };
-  return { cls: "tier-wait" };
-}
-
-function TableRecommendations({
-  recommendations,
-  selectedId,
-  onSelect,
-}: {
-  recommendations: RecommendationCard[];
-  selectedId: string;
-  onSelect: (recommendationId: string) => void;
-}) {
-  if (!recommendations.length) {
-    return <EmptyHint text="当前 Run 下暂无推荐" />;
-  }
-  return (
-    <div className="opportunity-list" role="list">
-      {recommendations.map((item) => {
-        const tier = listActionTier(item);
-        return (
-          <button
-            key={item.recommendation_id}
-            className={`opportunity-row ${tier.cls} ${item.recommendation_id === selectedId ? "selected" : ""}`}
-            onClick={() => onSelect(item.recommendation_id)}
-            role="listitem"
-          >
-            <div className={`op-tier-strip ${tier.cls}`} />
-            <div className="opportunity-main">
-              <div className="stock-title">
-                <strong>{item.name}</strong>
-                <span>{item.code}</span>
-              </div>
-              <div className="stock-meta">
-                <Tag text={item.bucket} />
-                <span>{item.industry ?? "未分行业"}</span>
-                {item.watch_status !== "none" ? <Tag text={item.watch_status} /> : null}
-                {item.recent_repeat ? <span className="mini-chip warning">近期重复</span> : null}
-              </div>
-            </div>
-            <div className="opportunity-thesis">
-              <span>{item.setup_type || item.entry_rule || "观察"}</span>
-              <strong>{item.rationale || "等待盘中验证"}</strong>
-            </div>
-            <div className="opportunity-score">
-              <span>最终分</span>
-              <strong>{item.final_score.toFixed(1)}</strong>
-              <small>共识 {item.consensus_score.toFixed(0)}</small>
-            </div>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function RunList({
-  runs,
-  selectedId,
-  onSelect,
-}: {
-  runs: RunSummary[];
-  selectedId: string;
-  onSelect: (run: RunSummary) => void;
-}) {
-  if (!runs.length) {
-    return <EmptyHint text="暂无运行记录" />;
-  }
-  return (
-    <div className="run-list" role="list">
-      {runs.map((run) => {
-        const isRunning = run.status === "running";
-        const isFailed = run.status === "failed";
-        return (
-        <button
-          key={run.run_id}
-          className={`run-row ${run.run_id === selectedId ? "selected" : ""}`}
-          onClick={() => onSelect(run)}
-          role="listitem"
-        >
-          <div className="run-main">
-            <div className="run-title">
-              <strong>{run.run_name}</strong>
-              <Tag text={run.run_mode} />
-              {isRunning && <span className="tag" style={{ background: "#dbeafe", color: "#2563eb" }}>运行中</span>}
-              {isFailed && <span className="tag" style={{ background: "#fee2e2", color: "#dc2626" }}>运行失败</span>}
-            </div>
-            <div className="run-meta">
-              <span>{run.trade_date}</span>
-              <span>{run.market_scope}</span>
-              <span>{run.skill_count} 个 Skill</span>
-            </div>
-          </div>
-          {isFailed ? (
-            <div className="run-summary-line" style={{ color: "#dc2626" }}>
-              {run.error_message ? run.error_message.slice(0, 80) + (run.error_message.length > 80 ? "…" : "") : "未知错误"}
-            </div>
-          ) : isRunning ? (
-            <div className="run-summary-line" style={{ color: "#6b7280" }}>
-              处理中…
-            </div>
-          ) : (
-            <>
-              <div className="run-summary-line">
-                <span>输出概览</span>
-                <strong>
-                  推荐 {run.recommended_count} / 股票池 {run.universe_count}
-                </strong>
-              </div>
-              <div className="run-score">
-                <span>胜率</span>
-                <strong>{(run.hit_rate * 100).toFixed(1)}%</strong>
-              </div>
-              <div className="run-score">
-                <span>均分</span>
-                <strong>{Number(run.result_summary.avg_score ?? 0).toFixed(1)}</strong>
-              </div>
-            </>
-          )}
-        </button>
-      )})}
     </div>
   );
 }
@@ -2103,72 +1735,6 @@ function toneForTag(text: string) {
   return "neutral";
 }
 
-function RunSummaryCard({ run }: { run: RunSummary }) {
-  return (
-    <div className="summary-grid">
-      <MiniStat label="日期" value={run.trade_date} />
-      <MiniStat label="模式" value={displayText(run.run_mode)} />
-      <MiniStat label="运行数据" value={displayText(run.result_summary.data_source_mode || "-")} />
-      <MiniStat label="数据源" value={run.result_summary.data_source || "-"} />
-      <MiniStat label="报价源" value={run.result_summary.quote_source || "-"} />
-      <MiniStat label="Agent" value={run.result_summary.agent_runtime || "-"} />
-      <MiniStat label="推荐数" value={run.recommended_count} />
-      <MiniStat label="胜率" value={`${(run.hit_rate * 100).toFixed(1)}%`} />
-      <MiniStat label="Skill 数" value={run.skill_count} />
-      <div className="summary-block wide">
-        <span>Top Codes</span>
-        <div className="pill-row">
-          {(run.result_summary.top_codes || []).map((code) => (
-            <span key={code} className="pill static">
-              {code}
-            </span>
-          ))}
-        </div>
-      </div>
-      <div className="summary-block wide">
-        <span>K线源</span>
-        <div className="pill-row">
-          {Object.entries(run.result_summary.kline_sources || {}).map(([source, count]) => (
-            <span key={source} className="pill static">
-              {source} x {count}
-            </span>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function RunDetailPane({ run, onOpenPool }: { run: RunSummary; onOpenPool: () => void }) {
-  return (
-    <div className="detail-stack">
-      <header className="detail-hero">
-        <div className="detail-identity">
-          <span className="eyebrow">运行摘要</span>
-          <h2>{run.run_name}</h2>
-          <div className="detail-meta">
-            <strong>{run.trade_date}</strong>
-            <Tag text={run.run_mode} />
-            <span>{displayText(run.status)}</span>
-          </div>
-        </div>
-        <div className="score-card">
-          <span>胜率</span>
-          <strong>{(run.hit_rate * 100).toFixed(1)}%</strong>
-          <small>{run.recommended_count} 条推荐</small>
-        </div>
-      </header>
-      <div className="detail-quick-actions">
-        <button className="ghost-btn primary" onClick={onOpenPool}>
-          <Layers3 size={14} />
-          查看机会池
-        </button>
-      </div>
-      <RunSummaryCard run={run} />
-    </div>
-  );
-}
-
 function SkillPane({
   skill,
   onModeChange,
@@ -2251,98 +1817,6 @@ function SkillPane({
         </div>
       </section>
     </div>
-  );
-}
-
-function DataSourcesPage({
-  rows,
-  onRefresh,
-  onToggle,
-}: {
-  rows: DataSourceHealthRow[];
-  onRefresh: () => void;
-  onToggle: (row: DataSourceHealthRow) => void;
-}) {
-  const quoteRows = rows.filter((row) => row.source_type === "quote");
-  const klineRows = rows.filter((row) => row.source_type === "kline");
-  const enabledCount = rows.filter((row) => row.enabled).length;
-  const degradedCount = rows.filter((row) => row.status === "degraded").length;
-  const disabledCount = rows.filter((row) => !row.enabled).length;
-
-  return (
-    <div className="sources-workspace">
-      <section className="panel source-overview-panel">
-        <PanelTitle
-          title="数据源总览"
-          subtitle="关闭后不再参与后续行情刷新，历史健康记录保留"
-          action={
-            <button className="ghost-btn" onClick={onRefresh}>
-              <RefreshCcw size={14} />
-              刷新状态
-            </button>
-          }
-        />
-        <div className="summary-grid source-summary-grid">
-          <MiniStat label="启用源" value={enabledCount} />
-          <MiniStat label="降级源" value={degradedCount} />
-          <MiniStat label="关闭源" value={disabledCount} />
-          <MiniStat label="总记录" value={rows.length} />
-        </div>
-      </section>
-
-      <SourceHealthPanel title="报价源" subtitle="用于统一报价池合成" rows={quoteRows} onToggle={onToggle} />
-      <SourceHealthPanel title="日K源" subtitle="用于补齐本地日 K 缓存" rows={klineRows} onToggle={onToggle} />
-    </div>
-  );
-}
-
-function SourceHealthPanel({
-  title,
-  subtitle,
-  rows,
-  onToggle,
-}: {
-  title: string;
-  subtitle: string;
-  rows: DataSourceHealthRow[];
-  onToggle: (row: DataSourceHealthRow) => void;
-}) {
-  return (
-    <section className="panel">
-      <PanelTitle title={title} subtitle={subtitle} />
-      {rows.length ? (
-        <div className="source-table">
-          {rows.map((row) => (
-            <div className={`source-row ${row.enabled ? "" : "disabled"}`} key={`${row.source_type}:${row.source}`}>
-              <div className="source-main">
-                <div className="source-title">
-                  <strong>{row.source}</strong>
-                  <Tag text={row.status} />
-                  <span className="mini-chip">优先级 {row.priority}</span>
-                </div>
-                <div className="source-meta">
-                  <span>成功 {row.success_count}</span>
-                  <span>失败 {row.failure_count}</span>
-                  <span>空结果 {row.empty_count}</span>
-                  <span>延迟 {row.latency_ms == null ? "-" : `${row.latency_ms.toFixed(0)}ms`}</span>
-                </div>
-                {row.last_error ? <p>{row.last_error}</p> : null}
-              </div>
-              <div className="source-status">
-                <span>{row.success_rate == null ? "未测试" : `成功率 ${(row.success_rate * 100).toFixed(0)}%`}</span>
-                <small>{row.last_success_at ? `最近成功 ${formatShortTime(row.last_success_at)}` : "暂无成功记录"}</small>
-              </div>
-              <button className={`ghost-btn ${row.enabled ? "subtle" : "primary"}`} onClick={() => onToggle(row)}>
-                {row.enabled ? <PauseCircle size={14} /> : <Play size={14} />}
-                {row.enabled ? "关闭" : "启用"}
-              </button>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <EmptyHint text="暂无数据源配置" />
-      )}
-    </section>
   );
 }
 

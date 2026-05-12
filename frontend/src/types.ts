@@ -498,6 +498,26 @@ export type SkillStatsRow = {
   top_setups?: Array<{ name: string; count: number }>;
 };
 
+export type RunTarget = "preset" | "single-skill";
+
+export type PresetDraft = {
+  name: string;
+  description: string;
+  run_mode: RunMode;
+  market_scope: string;
+  market_scope_value: string;
+  risk_template: string;
+  output_count: number;
+  data_source: string;
+  hide_recent_repeats: boolean;
+};
+
+export type PresetSkillDraft = {
+  skill_id: string;
+  weight: number;
+  sort_order: number;
+};
+
 export type PresetStatsRow = {
   preset_id?: string | null;
   preset_name: string;
