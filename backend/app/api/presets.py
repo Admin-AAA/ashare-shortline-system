@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.services.workbench_service import create_preset, list_presets, update_preset
+from app.services.workbench_service import create_preset, delete_preset, list_presets, update_preset
 
 router = APIRouter(prefix="/api/presets", tags=["presets"])
 
@@ -15,6 +15,14 @@ def get_presets(db: Session = Depends(get_db)):
 @router.post("")
 def post_preset(payload: dict, db: Session = Depends(get_db)):
     return create_preset(db, payload)
+
+
+@router.delete("/{preset_id}")
+def delete(preset_id: str, db: Session = Depends(get_db)):
+    ok = delete_preset(db, preset_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="preset not found")
+    return {"deleted": preset_id}
 
 
 @router.patch("/{preset_id}")

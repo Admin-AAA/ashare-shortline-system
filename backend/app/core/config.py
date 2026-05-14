@@ -7,7 +7,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "AShare Shortline System"
-    database_url: str = "sqlite:///./ashare_workbench.db"
+    database_url: str = "mysql+pymysql://aowang:1279990918@127.0.0.1:13306/ashare_workbench?charset=utf8mb4"
+    # SSH 隧道配置（本地开发时连接远程 MySQL）
+    ssh_host: str = ""
+    ssh_port: int = 22
+    ssh_user: str = "root"
+    ssh_password: str = ""
     data_provider: str = "multi"
     tushare_token: str = ""
     tushare_rate_limit_per_minute: int = 50
@@ -103,8 +108,4 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    settings = Settings()
-    if settings.database_url.startswith("sqlite:///./"):
-        filename = settings.database_url.removeprefix("sqlite:///./")
-        settings.database_url = f"sqlite:///{settings.backend_root / filename}"
-    return settings
+    return Settings()

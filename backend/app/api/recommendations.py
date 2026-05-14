@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.services.workbench_service import get_recommendation_detail, save_review_note, set_watch_status
+from app.services.workbench_service import delete_recommendation, get_recommendation_detail, save_review_note, set_watch_status
 
 router = APIRouter(prefix="/api/recommendations", tags=["recommendations"])
 
@@ -39,6 +39,14 @@ def ignore(recommendation_id: str, payload: dict | None = None, db: Session = De
     if result is None:
         raise HTTPException(status_code=404, detail="recommendation not found")
     return result
+
+
+@router.delete("/{recommendation_id}")
+def delete(recommendation_id: str, db: Session = Depends(get_db)):
+    ok = delete_recommendation(db, recommendation_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="recommendation not found")
+    return {"deleted": recommendation_id}
 
 
 @router.post("/{recommendation_id}/review")

@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.services.market_data import MarketDataError
 from app.services.workbench_service import (
+    delete_run,
     enqueue_workbench_run,
     get_run_detail,
     list_run_recommendations,
@@ -85,6 +86,14 @@ def detail(run_id: str, db: Session = Depends(get_db)):
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
     return run
+
+
+@router.delete("/{run_id}")
+def delete(run_id: str, db: Session = Depends(get_db)):
+    ok = delete_run(db, run_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="run not found")
+    return {"deleted": run_id}
 
 
 @router.get("/{run_id}/recommendations")

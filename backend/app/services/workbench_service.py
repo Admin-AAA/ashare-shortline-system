@@ -15,7 +15,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.agents.review_runner import run_skill_reviews
@@ -606,6 +606,54 @@ def get_run_detail(db: Session, run_id: str) -> dict[str, Any] | None:
         or {}
     )
     return data
+
+
+def delete_run(db: Session, run_id: str) -> bool:
+    run = db.get(RecommendationRun, run_id)
+    if run is None:
+        return False
+    recs = db.scalars(select(Recommendation).where(Recommendation.run_id == run_id)).all()
+    rec_ids = [rec.recommendation_id for rec in recs]
+    if rec_ids:
+        db.execute(select(AgentDecisionLog).where(AgentDecisionLog.recommendation_id.in_(rec_ids)))
+        for aidl in db.scalars(select(AgentDecisionLog).where(AgentDecisionLog.recommendation_id.in_(rec_ids))).all():
+            db.delete(aidl)
+        for rid in rec_ids:
+            db.execute(text("DELETE FROM review_notes WHERE recommendation_id = :rid"), {"rid": rid})
+            db.execute(text("DELETE FROM watch_items WHERE source_recommendation_id = :rid"), {"rid": rid})
+            db.execute(text("DELETE FROM recommendation_outcomes WHERE recommendation_id = :rid"), {"rid": rid})
+        for rec in recs:
+            db.delete(rec)
+    db.execute(text("DELETE FROM watch_items WHERE source_run_id = :run_id"), {"run_id": run_id})
+    db.delete(run)
+    db.commit()
+    invalidate_bootstrap_cache()
+    return True
+
+
+def delete_recommendation(db: Session, recommendation_id: str) -> bool:
+    rec = db.get(Recommendation, recommendation_id)
+    if rec is None:
+        return False
+    db.execute(text("DELETE FROM agent_decision_logs WHERE recommendation_id = :rid"), {"rid": recommendation_id})
+    db.execute(text("DELETE FROM review_notes WHERE recommendation_id = :rid"), {"rid": recommendation_id})
+    db.execute(text("DELETE FROM watch_items WHERE source_recommendation_id = :rid"), {"rid": recommendation_id})
+    db.execute(text("DELETE FROM recommendation_outcomes WHERE recommendation_id = :rid"), {"rid": recommendation_id})
+    db.delete(rec)
+    db.commit()
+    invalidate_bootstrap_cache()
+    return True
+
+
+def delete_preset(db: Session, preset_id: str) -> bool:
+    preset = db.get(Preset, preset_id)
+    if preset is None:
+        return False
+    db.execute(text("DELETE FROM preset_skills WHERE preset_id = :pid"), {"pid": preset_id})
+    db.delete(preset)
+    db.commit()
+    invalidate_bootstrap_cache()
+    return True
 
 
 def list_run_recommendations(db: Session, run_id: str) -> list[dict[str, Any]]:
