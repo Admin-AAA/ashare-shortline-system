@@ -18,4 +18,3 @@ openai>=1.68.0
 tickflow
 PyMySQL>=1.1.0
 cryptography>=42.0.0
-sshtunnel>=0.4.0

@@ -7,12 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "AShare Shortline System"
-    database_url: str = "mysql+pymysql://aowang:1279990918@127.0.0.1:13306/ashare_workbench?charset=utf8mb4"
-    # SSH 隧道配置（本地开发时连接远程 MySQL）
-    ssh_host: str = ""
-    ssh_port: int = 22
-    ssh_user: str = "root"
-    ssh_password: str = ""
+    database_url: str = "mysql+pymysql://aowang:1279990918@139.196.242.53:4407/ashare_workbench?charset=utf8mb4"
     data_provider: str = "multi"
     tushare_token: str = ""
     tushare_rate_limit_per_minute: int = 50
