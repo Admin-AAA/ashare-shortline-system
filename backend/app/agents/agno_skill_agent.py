@@ -52,6 +52,18 @@ class SkillReviewOutput(BaseModel):
     )
 
 
+# 模块级成本累积器（线程安全）
+_pending_api_costs: list[dict[str, Any]] = []
+
+
+def drain_api_costs() -> list[dict[str, Any]]:
+    """取出并清空累积的 API 调用成本记录。"""
+    global _pending_api_costs
+    costs = _pending_api_costs[:]
+    _pending_api_costs = []
+    return costs
+
+
 # ── 内部: 工具注册包装 ────────────────────────────────────────────────
 
 def _register_tools(session_id: str) -> list:
@@ -202,7 +214,12 @@ def _build_user_prompt(
 
 
 def _compact_stock(stock: dict[str, Any]) -> dict[str, Any]:
-    """精简股票字段，只传关键信息给 Agent。"""
+    """精简股票字段，只传关键信息给 Agent。
+
+    关键补充：DSA 评分字段（support_ma5/support_ma10/dsa_support_score/
+    trend_status/ma_alignment/macd_status/rsi_status/buy_signal）必须传入，
+    防止 Agent 在没有数据情况下凭空推断"MA5支撑确认"等结论。
+    """
     keys = [
         "code", "name", "industry", "price", "pct",
         "turnover_rate", "amount_yi", "free_mv_yi",
@@ -211,6 +228,21 @@ def _compact_stock(stock: dict[str, Any]) -> dict[str, Any]:
         "upper_shadow_count20", "limit_up_days20",
         "data_source", "quote_source", "kline_source",
         "latest_trade_date", "data_quality",
+        # DSA 评分关键字段（防止 Agent 幻觉）
+        "support_ma5", "support_ma10", "dsa_support_score",
+        "dsa_trend_score", "dsa_bias_score", "dsa_volume_score",
+        "dsa_macd_score", "dsa_rsi_score", "dsa_signal_score",
+        "trend_status", "ma_alignment",
+        "macd_status", "macd_signal",
+        "macd_dif", "macd_dea", "macd_bar",
+        "rsi_6", "rsi_12", "rsi_24", "rsi_status", "rsi_signal",
+        "buy_signal", "bias_ma5", "bias_ma10", "bias_ma20",
+        "volume_status", "volume_trend", "volume_ratio_5d",
+        "volume_ratio_vs_5d", "volume_ratio_vs_20d",
+        "volume_breakout_signal", "volume_shrink_pullback",
+        "pos20", "pos60", "pos120",
+        "chg20", "chg60",
+        "breakout20", "breakout60",
     ]
     return {key: stock.get(key) for key in keys if key in stock}
 
@@ -450,45 +482,70 @@ async def run_skill_agent_direct(
 
     绕过 Agno Agent 框架的工具调用开销（2-3 次 API 往返 → 1 次）。
     """
-    import asyncio as _asyncio
     from openai import AsyncOpenAI
 
     settings = get_settings()
     model_id = settings.agent_model
+
+    # 熔断器检查：连续失败过多则直接拒绝，避免雪崩
+    check_circuit(model_id)
+
     user_prompt = _build_direct_prompt(stock, snapshot, rule_signal, skill)
     system_prompt = _build_direct_system(skill)
 
-    client = AsyncOpenAI(
+    async with AsyncOpenAI(
         api_key=settings.agent_skill_api_key,
         base_url=settings.agent_skill_base_url,
         timeout=settings.agent_skill_timeout_seconds * 3,
-    )
+    ) as client:
+        max_retries = settings.agent_retry_count
+        backoff = settings.agent_retry_backoff
 
-    max_retries = settings.agent_retry_count
-    backoff = settings.agent_retry_backoff
+        last_error = ""
+        for attempt in range(max_retries + 1):
+            t0 = asyncio.get_event_loop().time()
+            try:
+                resp = await client.chat.completions.create(
+                    model=model_id,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=settings.agent_temperature,
+                    max_tokens=settings.agent_max_tokens,
+                    response_format={"type": "json_object"},
+                )
+                elapsed_ms = (asyncio.get_event_loop().time() - t0) * 1000
+                content = resp.choices[0].message.content or ""
+                parsed = json.loads(content)
+                result = _parse_to_output(parsed)
+                _pending_api_costs.append({
+                    "model": model_id,
+                    "endpoint": settings.agent_skill_base_url,
+                    "prompt_chars": len(system_prompt) + len(user_prompt),
+                    "completion_chars": len(content),
+                    "latency_ms": round(elapsed_ms, 1),
+                    "status": "success",
+                })
+                record_result(model_id, success=True)
+                return result
+            except Exception as e:
+                last_error = str(e)
+                if attempt < max_retries:
+                    await asyncio.sleep(backoff ** attempt)
+                continue
 
-    last_error = ""
-    for attempt in range(max_retries + 1):
-        try:
-            resp = await client.chat.completions.create(
-                model=model_id,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=settings.agent_temperature,
-                max_tokens=settings.agent_max_tokens,
-                response_format={"type": "json_object"},
-            )
-            content = resp.choices[0].message.content or ""
-            parsed = json.loads(content)
-            return _parse_to_output(parsed)
-        except Exception as e:
-            last_error = str(e)
-            if attempt < max_retries:
-                await _asyncio.sleep(backoff ** attempt)
-            continue
-
+    # 最后尝试也失败了，记录错误成本和熔断器状态
+    record_result(model_id, success=False)
+    _pending_api_costs.append({
+        "model": model_id,
+        "endpoint": settings.agent_skill_base_url,
+        "prompt_chars": len(system_prompt) + len(user_prompt),
+        "completion_chars": 0,
+        "latency_ms": 0,
+        "status": "error",
+        "error_message": last_error,
+    })
     raise RuntimeError(f"Skill Agent 直接审查失败 (已重试 {max_retries} 次): {last_error}")
 
 
@@ -512,7 +569,8 @@ def _build_direct_system(skill: StrategySkill) -> str:
 {ref_text}
 
 输出 JSON 格式审查结果，包含: stance, score(0-100), confidence(0-1), evidence, risks, summary, market_regime_judgment。
-不要编造数据，数据不足时降低 confidence 并在 risks 中注明。"""
+不要编造数据，数据不足时降低 confidence 并在 risks 中注明。
+技术面结论必须引用候选股票数据里的具体字段和值；如果 rsi_6/rsi_12/rsi_24、MACD 或均线字段已提供，不得声称这些技术指标缺失或只能推断。"""
 
 
 def _build_direct_prompt(
@@ -539,6 +597,8 @@ def _build_direct_prompt(
     parts.append(f"""
 
 请严格按 {skill.name} 方法论审查以上股票。市场数据、股票特征、规则评分均已提供——不需要额外查询。
+所有趋势、均线、MACD、RSI、量能、乖离、支撑描述都必须落到候选股票数据中的字段和值。
+如果字段存在，例如 rsi_12、macd_dif、ma5，不要写“未提供”“只能推断”。
 
 直接输出 JSON 审查结果（不要 markdown 包裹）：
 {{"stance": "...", "score": 75, "confidence": 0.8, "evidence": [...], "risks": [...], "summary": "...", "market_regime_judgment": "..."}}

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import math
 import statistics
+import threading
 import time
 from collections import Counter, defaultdict
+from collections import deque
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -22,16 +24,27 @@ HTTP_HEADERS = {
     "Referer": "https://quote.eastmoney.com/",
 }
 
+_TUSHARE_CALL_TIMES: deque[float] = deque()
+_TUSHARE_RATE_LOCK = threading.Lock()
+
 
 def get_market_universe() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     settings = get_settings()
     quote_source, quotes, quote_errors = _fetch_first_candidate_quotes(_quote_sources(settings), settings)
-    target_count = max(1, int(getattr(settings, "market_candidate_count", 60)))
-    lookahead_count = min(
-        len(quotes),
-        max(target_count, target_count * max(1, int(getattr(settings, "market_candidate_lookahead_multiplier", 4)))),
-    )
-    candidates = _select_candidates(quotes, lookahead_count)
+    total_quote_count = len(quotes)
+    raw_target_count = int(getattr(settings, "market_candidate_count", 60))
+    full_market_mode = raw_target_count <= 0
+    if full_market_mode:
+        target_count = total_quote_count
+        lookahead_count = total_quote_count
+    else:
+        target_count = max(1, raw_target_count)
+        lookahead_count = min(
+            total_quote_count,
+            max(target_count, target_count * max(1, int(getattr(settings, "market_candidate_lookahead_multiplier", 4)))),
+        )
+    all_candidates = _select_candidates(quotes, total_quote_count)
+    candidates = all_candidates[:lookahead_count]
     if not candidates:
         raise MarketDataError("真实行情源返回了空股票池，已停止运行。")
 
@@ -65,6 +78,22 @@ def get_market_universe() -> tuple[list[dict[str, Any]], dict[str, Any]]:
         kline_usage=kline_usage,
         kline_errors=kline_errors,
         disabled_kline_sources=disabled_kline_sources,
+    )
+    snapshot.setdefault("breadth", {}).update(
+        {
+            "full_market_mode": full_market_mode,
+            "unified_quote_total": total_quote_count,
+            "base_filter_eligible_count": len(all_candidates),
+            "actual_scan_count": len(stocks),
+            "kline_missing_count": len(kline_errors),
+            "kline_skip_reasons": _summarize_kline_skip_reasons(kline_errors),
+            "candidate_limit_config": {
+                "market_candidate_count": raw_target_count,
+                "lookahead_multiplier": int(getattr(settings, "market_candidate_lookahead_multiplier", 4)),
+                "lookahead_count": lookahead_count,
+                "target_scan_count": target_count,
+            },
+        }
     )
     return stocks, snapshot
 
@@ -126,7 +155,8 @@ def _fetch_first_candidate_quotes(sources: list[str], settings: Any) -> tuple[st
     for source in sources:
         try:
             quotes = _fetch_quotes(source, settings)
-            candidate_count = len(_select_candidates(quotes, max(1, int(getattr(settings, "market_candidate_count", 60)))))
+            requested_count = int(getattr(settings, "market_candidate_count", 60))
+            candidate_count = len(_select_candidates(quotes, len(quotes) if requested_count <= 0 else max(1, requested_count)))
             if candidate_count:
                 return source, quotes, errors
             errors.append(f"{source}: {len(quotes)} quotes but 0 candidates after filters")
@@ -183,6 +213,8 @@ def _fetch_kline(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> list[dict[str, Any]]:
+    if source == "tickflow":
+        return _fetch_tickflow_kline(quote, settings, start_date=start_date, end_date=end_date)
     if source in {"thsdk", "thssdk"}:
         return _fetch_thsdk_kline(quote, settings)
     if source == "baostock":
@@ -299,50 +331,7 @@ def _fetch_tencent_quotes(settings: Any) -> list[dict[str, Any]]:
 
 
 def _fetch_tushare_quotes(settings: Any) -> list[dict[str, Any]]:
-    if not settings.tushare_token:
-        raise MarketDataError("未配置 ASHARE_TUSHARE_TOKEN。")
-    try:
-        import pandas as pd
-        import tushare as ts
-    except ImportError as exc:
-        raise MarketDataError("未安装 tushare/pandas，请先安装后端依赖。") from exc
-    ts.set_token(settings.tushare_token)
-    pro = ts.pro_api()
-    trade_date = _latest_tushare_trade_date(pro)
-    daily = pro.daily(trade_date=trade_date)
-    basic = pro.daily_basic(
-        trade_date=trade_date,
-        fields="ts_code,turnover_rate,volume_ratio,pe_ttm,total_mv,circ_mv",
-    )
-    stock_basic = pro.stock_basic(
-        exchange="",
-        list_status="L",
-        fields="ts_code,symbol,name,industry",
-    )
-    df = daily.merge(basic, on="ts_code", how="left").merge(stock_basic, on="ts_code", how="left")
-    df = df.sort_values("amount", ascending=False).head(settings.market_scan_size)
-    rows = df.to_dict("records")
-    return [
-        _quote(
-            code=str(row.get("symbol") or str(row.get("ts_code", "")).split(".")[0]),
-            name=str(row.get("name") or ""),
-            price=_num(row.get("close")),
-            pct=_num(row.get("pct_chg")),
-            volume=_num(row.get("vol")),
-            amount_yi=_num(row.get("amount")) / 100000,
-            turnover_rate=_num(row.get("turnover_rate")),
-            pe_ttm=_num(row.get("pe_ttm")),
-            total_mv_yi=_num(row.get("total_mv")) / 10000,
-            free_mv_yi=_num(row.get("circ_mv")) / 10000,
-            chg60=0,
-            ytd_chg=0,
-            main_net_inflow_yi=0,
-            industry=str(row.get("industry") or "未分类"),
-            source="tushare",
-        )
-        for row in rows
-        if not pd.isna(row.get("close"))
-    ]
+    raise MarketDataError("Tushare 免费 token 仅接入非复权日线，不作为报价源。")
 
 
 def _fetch_thsdk_quotes(settings: Any) -> list[dict[str, Any]]:
@@ -396,6 +385,72 @@ def _fetch_thsdk_quotes(settings: Any) -> list[dict[str, Any]]:
     if not quotes and batch_errors:
         raise MarketDataError("thsdk 行情查询失败：" + "；".join(batch_errors[:5]))
     return quotes[:scan_size]
+
+
+def _fetch_tickflow_kline(
+    quote: dict[str, Any],
+    settings: Any,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """使用 TickFlow 免费 API 获取历史日K线。"""
+    exchange = str(quote.get("exchange", "")).upper()
+    code = str(quote.get("code", ""))
+    if exchange not in {"SH", "SZ", "BJ"}:
+        raise MarketDataError(f"tickflow 暂不支持交易所: {exchange}")
+    symbol = f"{code}.{exchange}"
+
+    try:
+        from tickflow import TickFlow
+    except ImportError as exc:
+        raise MarketDataError("未安装 tickflow，请先安装后端依赖。") from exc
+
+    client = TickFlow.free()
+    days = max(30, int(getattr(settings, "market_kline_days", 90)))
+
+    start_ms: int | None = None
+    if start_date:
+        start_ms = int(datetime.strptime(start_date, "%Y%m%d").timestamp() * 1000)
+    elif end_date:
+        start_ms = int(datetime.strptime(end_date, "%Y%m%d").timestamp() * 1000) - days * 86400000
+
+    count = min(10000, max(days * 4, 500)) if start_ms else days * 4
+
+    df = client.klines.get(
+        symbol,
+        period="1d",
+        count=count,
+        start_time=start_ms,
+        as_dataframe=True,
+    )
+    if df is None or df.empty:
+        raise MarketDataError(f"tickflow 返回空日K: {symbol}")
+
+    df = df.sort_values("trade_date")
+    bars: list[dict[str, Any]] = []
+    previous_close = 0.0
+    for _, row in df.iterrows():
+        close_val = float(row.get("close") or 0)
+        pct_chg = ((close_val - previous_close) / previous_close * 100) if previous_close else 0.0
+        bars.append(
+            {
+                "code": quote["code"],
+                "trade_date": str(row.get("trade_date") or ""),
+                "open": float(row.get("open") or 0),
+                "high": float(row.get("high") or 0),
+                "low": float(row.get("low") or 0),
+                "close": close_val,
+                "volume": float(row.get("volume") or 0),
+                "amount": float(row.get("amount") or 0),
+                "pct_chg": pct_chg,
+                "turnover_rate": 0.0,
+            }
+        )
+        previous_close = close_val
+
+    if bars:
+        bars[-1]["turnover_rate"] = float(quote.get("turnover_rate") or 0)
+    return bars[-days:]
 
 
 def _fetch_eastmoney_kline(
@@ -482,26 +537,44 @@ def _fetch_akshare_kline(
         raise MarketDataError("未安装 akshare，请先安装后端依赖。") from exc
     sd = start_date or (date.today() - timedelta(days=settings.market_kline_days * 3)).strftime("%Y%m%d")
     ed = end_date or date.today().strftime("%Y%m%d")
-    df = ak.stock_zh_a_hist(symbol=quote["code"], period="daily", start_date=sd, end_date=ed, adjust="qfq")
+    exchange = str(quote.get("exchange", "")).lower()
+    symbol = f"{exchange}{quote['code']}"
+    adjust = "" if start_date else "qfq"
+    df = ak.stock_zh_a_hist_tx(symbol=symbol, start_date=sd, end_date=ed, adjust=adjust, timeout=15)
+    if df is None or df.empty:
+        raise MarketDataError(f"akshare_tx 返回空日K: {symbol}")
     if start_date is None:
         rows = df.tail(settings.market_kline_days).to_dict("records")
     else:
         rows = df.to_dict("records")
-    return [
-        {
-            "code": quote["code"],
-            "trade_date": str(row.get("日期")),
-            "open": _num(row.get("开盘")),
-            "high": _num(row.get("最高")),
-            "low": _num(row.get("最低")),
-            "close": _num(row.get("收盘")),
-            "volume": _num(row.get("成交量")),
-            "amount": _num(row.get("成交额")),
-            "pct_chg": _num(row.get("涨跌幅")),
-            "turnover_rate": _num(row.get("换手率")),
-        }
-        for row in rows
-    ]
+    bars: list[dict[str, Any]] = []
+    previous_close = 0.0
+    for row in rows:
+        close_val = _num(row.get("close"))
+        pct_chg = ((close_val - previous_close) / previous_close * 100) if previous_close else 0.0
+        open_val = _num(row.get("open"))
+        high_val = _num(row.get("high"))
+        low_val = _num(row.get("low"))
+        amount_val = _num(row.get("amount"))
+        volume_val = amount_val / close_val / 100 if close_val else 0.0
+        bars.append(
+            {
+                "code": quote["code"],
+                "trade_date": str(row.get("date") or ""),
+                "open": open_val,
+                "high": high_val,
+                "low": low_val,
+                "close": close_val,
+                "volume": volume_val,
+                "amount": amount_val,
+                "pct_chg": pct_chg,
+                "turnover_rate": 0.0,
+            }
+        )
+        previous_close = close_val
+    if bars:
+        bars[-1]["turnover_rate"] = float(quote.get("turnover_rate") or 0)
+    return bars
 
 
 def _fetch_baostock_kline(
@@ -577,19 +650,21 @@ def _fetch_tushare_kline(
         import tushare as ts
     except ImportError as exc:
         raise MarketDataError("未安装 tushare，请先安装后端依赖。") from exc
+    _throttle_tushare(settings)
     ts.set_token(settings.tushare_token)
     pro = ts.pro_api()
     ts_code = f"{quote['code']}.{quote['exchange']}"
     sd = start_date or (date.today() - timedelta(days=settings.market_kline_days * 3)).strftime("%Y%m%d")
     ed = end_date or date.today().strftime("%Y%m%d")
     daily = pro.daily(ts_code=ts_code, start_date=sd, end_date=ed)
-    basic = pro.daily_basic(ts_code=ts_code, start_date=sd, end_date=ed, fields="ts_code,trade_date,turnover_rate")
-    df = daily.merge(basic, on=["ts_code", "trade_date"], how="left").sort_values("trade_date")
+    if daily is None or daily.empty:
+        raise MarketDataError(f"tushare 返回空日K: {ts_code}")
+    df = daily.sort_values("trade_date")
     if start_date is None:
         rows = df.tail(settings.market_kline_days).to_dict("records")
     else:
         rows = df.to_dict("records")
-    return [
+    bars = [
         {
             "code": quote["code"],
             "trade_date": _format_yyyymmdd(row.get("trade_date")),
@@ -600,10 +675,82 @@ def _fetch_tushare_kline(
             "volume": _num(row.get("vol")),
             "amount": _num(row.get("amount")) * 1000,
             "pct_chg": _num(row.get("pct_chg")),
-            "turnover_rate": _num(row.get("turnover_rate")),
+            "turnover_rate": 0.0,
         }
         for row in rows
     ]
+    if bars:
+        bars[-1]["turnover_rate"] = float(quote.get("turnover_rate") or 0)
+    return bars
+
+
+_TUSHARE_INDUSTRY_MAP: dict[str, str] | None = None
+
+
+_INDUSTRY_CACHE_PATH: str | None = None
+
+
+def _industry_cache_path() -> str:
+    global _INDUSTRY_CACHE_PATH
+    if _INDUSTRY_CACHE_PATH is None:
+        from pathlib import Path
+
+        _INDUSTRY_CACHE_PATH = str(Path(__file__).resolve().parent.parent.parent / "data" / "industry_cache.json")
+    return _INDUSTRY_CACHE_PATH
+
+
+def _load_industry_cache() -> dict[str, str]:
+    import json as _json
+    from pathlib import Path
+
+    p = Path(_industry_cache_path())
+    if p.exists():
+        try:
+            return _json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def _save_industry_cache(data: dict[str, str]) -> None:
+    import json as _json
+    from pathlib import Path
+
+    p = Path(_industry_cache_path())
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(_json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def fetch_tushare_industries(settings: Any) -> dict[str, str]:
+    """从 Tushare stock_basic 获取 A 股行业分类映射，结果双级缓存（内存 + 文件）。"""
+    global _TUSHARE_INDUSTRY_MAP
+    if _TUSHARE_INDUSTRY_MAP is not None:
+        return _TUSHARE_INDUSTRY_MAP
+    cached = _load_industry_cache()
+    if cached:
+        _TUSHARE_INDUSTRY_MAP = cached
+        return cached
+    if not settings.tushare_token:
+        return {}
+    try:
+        import tushare as ts
+    except ImportError:
+        return {}
+    _throttle_tushare(settings)
+    ts.set_token(settings.tushare_token)
+    pro = ts.pro_api()
+    df = pro.stock_basic(exchange="", list_status="L", fields="symbol,industry")
+    if df is None or df.empty:
+        return {}
+    result: dict[str, str] = {}
+    for _, row in df.iterrows():
+        code = str(row.get("symbol") or "").strip()
+        industry = str(row.get("industry") or "").strip()
+        if code and industry:
+            result[code] = industry
+    _TUSHARE_INDUSTRY_MAP = result
+    _save_industry_cache(result)
+    return result
 
 
 def _quote(**kwargs: Any) -> dict[str, Any]:
@@ -624,8 +771,8 @@ def _select_candidates(quotes: list[dict[str, Any]], count: int) -> list[dict[st
         if _is_supported_a_share(item)
         and not item.get("is_st")
         and float(item.get("price") or 0) > 1
-        and float(item.get("amount_yi") or 0) >= 2
-        and float(item.get("turnover_rate") or 0) >= 0.2
+        and float(item.get("amount_yi") or 0) >= 0.5
+        and float(item.get("turnover_rate") or 0) >= 0.1
     ]
     filtered.sort(key=_candidate_score, reverse=True)
     return filtered[:count]
@@ -957,6 +1104,22 @@ def _global_failed_kline_sources(errors: list[str]) -> set[str]:
     return disabled
 
 
+def _summarize_kline_skip_reasons(kline_errors: dict[str, list[str]]) -> dict[str, int]:
+    summary: Counter[str] = Counter()
+    for errors in kline_errors.values():
+        if not errors:
+            summary["unknown"] += 1
+            continue
+        first = str(errors[0])
+        if "不足30条" in first:
+            summary["日K不足30条"] += 1
+        elif "未覆盖报价日期" in first:
+            summary["日K未覆盖报价日期"] += 1
+        else:
+            summary[first.split(":", 1)[0] or "其他"] += 1
+    return dict(summary)
+
+
 def _is_global_kline_source_error(source: str, message: str) -> bool:
     text = str(message)
     if source == "baostock":
@@ -1112,9 +1275,9 @@ def _batched(items: list[str], size: int) -> list[list[str]]:
 
 
 def _quote_sources(settings: Any) -> list[str]:
-    if settings.data_provider in {"eastmoney", "akshare", "tushare", "thsdk", "thssdk"}:
+    if settings.data_provider in {"eastmoney", "akshare", "thsdk", "thssdk"}:
         return [settings.data_provider]
-    return _split_sources(settings.quote_sources)
+    return [source for source in _split_sources(settings.quote_sources) if source != "tushare"]
 
 
 def _kline_sources(settings: Any) -> list[str]:
@@ -1125,6 +1288,21 @@ def _kline_sources(settings: Any) -> list[str]:
 
 def _split_sources(raw: str) -> list[str]:
     return [item.strip().lower() for item in raw.split(",") if item.strip()]
+
+
+def _throttle_tushare(settings: Any) -> None:
+    limit = max(1, int(getattr(settings, "tushare_rate_limit_per_minute", 50) or 50))
+    now = time.monotonic()
+    with _TUSHARE_RATE_LOCK:
+        while _TUSHARE_CALL_TIMES and now - _TUSHARE_CALL_TIMES[0] >= 60:
+            _TUSHARE_CALL_TIMES.popleft()
+        if len(_TUSHARE_CALL_TIMES) >= limit:
+            sleep_for = max(0.0, 60 - (now - _TUSHARE_CALL_TIMES[0]))
+            time.sleep(sleep_for)
+            now = time.monotonic()
+            while _TUSHARE_CALL_TIMES and now - _TUSHARE_CALL_TIMES[0] >= 60:
+                _TUSHARE_CALL_TIMES.popleft()
+        _TUSHARE_CALL_TIMES.append(now)
 
 
 def _http_get_text(

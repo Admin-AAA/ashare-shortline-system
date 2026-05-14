@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,11 +10,19 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./ashare_workbench.db"
     data_provider: str = "multi"
     tushare_token: str = ""
+    tushare_rate_limit_per_minute: int = 50
     quote_sources: str = "thsdk,eastmoney,akshare,tencent,sina"
-    kline_sources: str = "tencent,thsdk,eastmoney,akshare"
+    kline_sources: str = "tickflow,tencent,tushare,thsdk,eastmoney,akshare"
     market_scan_size: int = 5200
     market_candidate_count: int = 0  # 0 = 使用所有合格股票
     market_candidate_lookahead_multiplier: int = 4
+    market_skill_review_limit: int = 0  # 0 = Skill Agent 接收本次实际扫描的全部股票
+    market_skill_review_concurrency: int = 6
+    market_skill_rule_gate_min_score: float = 58.0
+    market_skill_rule_gate_min_per_skill: int = 20
+    market_skill_rule_gate_min_total: int = 20
+    market_skill_rule_gate_max_per_skill: int = 0  # 0 = 动态计算 max(20, min(eligible * 10%, 30))
+    market_skill_rule_gate_max_total: int = 120
     market_kline_days: int = 90
     market_kline_seed_days: int = 250
     market_kline_incremental_buffer: int = 10
@@ -38,12 +46,12 @@ class Settings(BaseSettings):
     agent_temperature: float = 0.3
     agent_max_tokens: int = 4096
     agent_skill_weight: float = 0.50
-    # 辅助数据源
-    limit_up_sources: str = "eastmoney"
-    concept_sector_sources: str = "eastmoney"
-    capital_flow_sources: str = "eastmoney"
-    dragon_tiger_sources: str = "eastmoney"
-    news_sources: str = "eastmoney"
+    # 辅助数据源（akshare 优先，eastmoney 备用）
+    limit_up_sources: str = "akshare,eastmoney"
+    concept_sector_sources: str = "akshare,eastmoney"
+    capital_flow_sources: str = "akshare,eastmoney"
+    dragon_tiger_sources: str = "akshare,eastmoney"
+    news_sources: str = "akshare,eastmoney"
     limit_up_cache_ttl_seconds: int = 3600
     concept_sector_cache_ttl_seconds: int = 3600
     capital_flow_cache_ttl_seconds: int = 7200
@@ -60,6 +68,21 @@ class Settings(BaseSettings):
     log_backup_count: int = 5
 
     model_config = SettingsConfigDict(env_prefix="ASHARE_", env_file=".env", extra="ignore")
+
+    @model_validator(mode="after")
+    def _validate_critical_config(self):
+        if self.agent_skill_runtime == "llm" and not self.agent_skill_api_key:
+            import logging
+            logging.getLogger(__name__).warning(
+                "ASHARE_AGENT_SKILL_API_KEY 未配置 — LLM Agent 审查将全部失败，"
+                "系统将仅依赖策略规则引擎。请设置环境变量或 .env 文件。"
+            )
+        if not self.tushare_token:
+            import logging
+            logging.getLogger(__name__).warning(
+                "ASHARE_TUSHARE_TOKEN 未配置 — Tushare 数据源将不可用。"
+            )
+        return self
 
     @property
     def project_root(self) -> Path:

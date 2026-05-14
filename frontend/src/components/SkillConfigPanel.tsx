@@ -181,7 +181,14 @@ export default function SkillConfigPanel(props: Props) {
                 const draftItem = presetSkillDrafts.find((item) => item.skill_id === skill.skill_id);
                 return (
                   <div key={skill.skill_id} className={`skill-picker-row ${enabled ? "enabled" : ""}`}>
-                    <button className={`skill-toggle ${enabled ? "on" : ""}`} onClick={() => onTogglePresetSkill(skill.skill_id)}>
+                    <button
+                      className={`skill-toggle ${enabled ? "on" : ""}`}
+                      type="button"
+                      role="switch"
+                      aria-checked={enabled}
+                      aria-label={`${enabled ? "移除" : "加入"} ${skill.name}`}
+                      onClick={() => onTogglePresetSkill(skill.skill_id)}
+                    >
                       {enabled ? "已选" : "加入"}
                     </button>
                     <div className="skill-picker-meta">
@@ -230,11 +237,11 @@ export default function SkillConfigPanel(props: Props) {
           </div>
 
           <div className="inline-actions">
-            <button className="ghost-btn" onClick={onSavePreset}>
+            <button className="ghost-btn" type="button" onClick={onSavePreset}>
               <Save size={14} />
               保存预设
             </button>
-            <button className="ghost-btn" onClick={onResetToNewPreset}>
+            <button className="ghost-btn" type="button" onClick={onResetToNewPreset}>
               <SquarePen size={14} />
               新草稿
             </button>

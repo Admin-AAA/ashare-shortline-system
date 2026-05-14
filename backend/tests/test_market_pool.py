@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.session import Base
 from app.models.tables import DailyBar, DataSourceConfig, RawQuote, UnifiedQuote
-from app.services.data_sources import get_local_pool_status
+from app.services.data_sources import enabled_sources, get_local_pool_status, sync_data_source_configs
 from app.services import market_pool
 
 
@@ -20,6 +20,11 @@ class DummySettings:
     market_pool_min_source_count = 2
     quote_sources = "eastmoney,tencent,sina"
     kline_sources = "tencent"
+    limit_up_sources = "eastmoney"
+    concept_sector_sources = "eastmoney"
+    capital_flow_sources = "eastmoney"
+    dragon_tiger_sources = "eastmoney"
+    news_sources = "eastmoney"
     data_provider = "multi"
     thsdk_batch_size = 600
     thsdk_username = ""
@@ -271,6 +276,27 @@ def test_all_quote_sources_disabled_raises_without_fetching(monkeypatch):
         raise AssertionError("expected MarketDataError")
 
 
+def test_enabled_sources_respects_synced_config_without_extra_insert(monkeypatch):
+    db = _session()
+    settings = DummySettings()
+    monkeypatch.setattr("app.services.data_sources.get_settings", lambda: settings)
+
+    sync_data_source_configs(db)
+    row = db.get(DataSourceConfig, {"source": "eastmoney", "source_type": "quote"})
+    assert row is not None
+    row.enabled = False
+    db.commit()
+
+    active = enabled_sources(db, "quote", ["eastmoney", "tencent", "sina"])
+    count = db.query(DataSourceConfig).filter(
+        DataSourceConfig.source == "eastmoney",
+        DataSourceConfig.source_type == "quote",
+    ).count()
+
+    assert active == ["tencent", "sina"]
+    assert count == 1
+
+
 def test_load_quotes_from_pool_never_fetches_external_sources(monkeypatch):
     db = _session()
     settings = DummySettings()
@@ -399,7 +425,68 @@ def test_local_pool_status_reports_recommendation_readiness(monkeypatch):
 
     assert readiness["status"] == "ready"
     assert readiness["can_run_local_recommendation"] is True
+    assert readiness["full_market_mode"] is False
+    assert readiness["required_candidate_count"] == 2
+    assert readiness["quote"]["candidate_count"] == 2
+    assert readiness["quote"]["base_filter_eligible_count"] == 2
+    assert readiness["kline"]["checked_count"] == 2
     assert readiness["kline"]["ready_count"] == 2
+    assert readiness["scan"]["actual_scan_count"] == 2
+    assert readiness["scan"]["skill_input_count"] == 2
+
+
+def test_local_pool_readiness_treats_zero_candidate_count_as_full_market(monkeypatch):
+    db = _session()
+    settings = DummySettings()
+    settings.market_candidate_count = 0
+
+    quotes = [_quote("000001", "eastmoney", 10.00), _quote("000002", "eastmoney", 20.00), _quote("000003", "eastmoney", 30.00)]
+    market_pool._persist_unified_quotes(
+        db,
+        [
+            {
+                **quote,
+                "source_count": 1,
+                "raw_sources": ["eastmoney"],
+                "quality_score": 80.0,
+                "freshness_status": "fresh",
+                "source_trace": {"raw_sources": ["eastmoney"], "source_count": 1, "field_sources": {}},
+            }
+            for quote in quotes
+        ],
+    )
+    for quote in quotes:
+        market_pool._persist_normalized_bars(db, _bars(quote["code"], days=35))
+    db.commit()
+
+    monkeypatch.setattr(market_pool, "get_settings", lambda: settings)
+
+    status = get_local_pool_status(db)
+    readiness = status["recommendation_readiness"]
+
+    assert readiness["status"] == "ready"
+    assert readiness["can_run_local_recommendation"] is True
+    assert readiness["full_market_mode"] is True
+    assert readiness["required_candidate_count"] == 3
+    assert readiness["quote"]["available_count"] == 3
+    assert readiness["quote"]["candidate_count"] == 3
+    assert readiness["quote"]["base_filter_eligible_count"] == 3
+    assert readiness["kline"]["checked_count"] == 3
+    assert readiness["kline"]["ready_count"] == 3
+    assert readiness["scan"]["actual_scan_count"] == 3
+    assert readiness["scan"]["skill_input_count"] == 3
+    assert "全市场模式" in readiness["messages"][0]
+
+
+def test_latest_allowed_bar_date_uses_previous_session_before_close(monkeypatch):
+    class FakeDateTime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 5, 13, 0, 30)
+
+    monkeypatch.setattr(market_pool, "datetime", FakeDateTime)
+
+    assert market_pool._latest_allowed_bar_date() == "2026-05-12"
 
 
 def test_local_pool_status_reports_missing_kline_gap(monkeypatch):
@@ -422,3 +509,74 @@ def test_local_pool_status_reports_missing_kline_gap(monkeypatch):
     assert readiness["can_run_local_recommendation"] is False
     assert readiness["kline"]["missing_count"] == 2
     assert readiness["kline"]["examples"]
+
+
+def test_local_pool_status_separates_pool_coverage_from_demo_scan_limit(monkeypatch):
+    db = _session()
+    settings = DummySettings()
+    settings.market_candidate_count = 1
+    settings.market_candidate_lookahead_multiplier = 1
+    quotes = [_quote("000001", "eastmoney", 10.00), _quote("000002", "eastmoney", 20.00), _quote("000003", "eastmoney", 30.00)]
+    market_pool._persist_unified_quotes(
+        db,
+        [
+            {
+                **quote,
+                "source_count": 1,
+                "raw_sources": ["eastmoney"],
+                "quality_score": 80.0,
+                "freshness_status": "fresh",
+                "source_trace": {"raw_sources": ["eastmoney"], "source_count": 1, "field_sources": {}},
+            }
+            for quote in quotes
+        ],
+    )
+    for quote in quotes:
+        market_pool._persist_normalized_bars(db, _bars(quote["code"], days=35))
+    db.commit()
+
+    monkeypatch.setattr(market_pool, "get_settings", lambda: settings)
+
+    status = get_local_pool_status(db)
+
+    assert status["summary"]["eligible_quote_count"] == 3
+    assert status["summary"]["eligible_daily_bar_count"] == 3
+    assert status["summary"]["daily_bar_missing_count"] == 0
+    assert status["summary"]["daily_bar_short_history_count"] == 0
+    assert status["summary"]["actual_recommend_scan_count"] == 1
+    assert status["summary"]["skill_input_count"] == 1
+    assert status["recommendation_readiness"]["scan"]["demo_limited"] is True
+
+
+def test_local_pool_status_reports_short_history_separately(monkeypatch):
+    db = _session()
+    settings = DummySettings()
+    settings.market_candidate_count = 0
+    quotes = [_quote("000001", "eastmoney", 10.00), _quote("000002", "eastmoney", 20.00)]
+    market_pool._persist_unified_quotes(
+        db,
+        [
+            {
+                **quote,
+                "source_count": 1,
+                "raw_sources": ["eastmoney"],
+                "quality_score": 80.0,
+                "freshness_status": "fresh",
+                "source_trace": {"raw_sources": ["eastmoney"], "source_count": 1, "field_sources": {}},
+            }
+            for quote in quotes
+        ],
+    )
+    market_pool._persist_normalized_bars(db, _bars("000001", days=35))
+    market_pool._persist_normalized_bars(db, _bars("000002", days=12))
+    db.commit()
+
+    monkeypatch.setattr(market_pool, "get_settings", lambda: settings)
+
+    status = get_local_pool_status(db)
+
+    assert status["summary"]["eligible_quote_count"] == 2
+    assert status["summary"]["eligible_daily_bar_count"] == 1
+    assert status["summary"]["daily_bar_short_history_count"] == 1
+    assert status["summary"]["daily_bar_missing_count"] == 0
+    assert status["summary"]["eligible_daily_bar_coverage_rate"] == 50.0

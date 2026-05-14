@@ -117,7 +117,12 @@ def enrich_signal_with_agent_review(signal: dict[str, Any], review: dict[str, An
     enriched["agent_skill_review"] = review
     enriched["runtime"] = "strategy_yaml+agent_skill"
     score_cap = float(enriched.get("score_cap") or 100.0)
-    enriched["score"] = max(0.0, min(score_cap, float(enriched.get("score", 0)) + float(review.get("score_delta", 0))))
+    # 兼容两种字段名：score_delta（旧）或 score（SkillReviewOutput 原始）
+    if "score_delta" in review:
+        delta = float(review.get("score_delta", 0))
+    else:
+        delta = float(review.get("score", 50)) - 50.0
+    enriched["score"] = max(0.0, min(score_cap, float(enriched.get("score", 0)) + delta))
     enriched["confidence"] = max(float(enriched.get("confidence", 0)), float(review.get("confidence", 0)))
     enriched.setdefault("evidence", [])
     enriched["evidence"] = list(enriched["evidence"]) + [str(review.get("summary", ""))]
@@ -132,7 +137,10 @@ def enrich_signal_with_agent_review(signal: dict[str, Any], review: dict[str, An
 
 
 def agent_only_signal(skill: StrategySkill, stock: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
-    score = 50 + float(review.get("score_delta", 0))
+    if "score_delta" in review:
+        score = 50 + float(review.get("score_delta", 0))
+    else:
+        score = float(review.get("score", 50))
     return {
         "strategy_id": skill.skill_id,
         "strategy_name": skill.name,
@@ -312,6 +320,32 @@ def _compact_stock(stock: dict[str, Any]) -> dict[str, Any]:
         "data_quality",
         "market_regime",
         "_is_main",
+        "_is_leader_candidate",
+        "_consensus_signal",
+        "_dragon_tiger_dispersion",
+        "_dragon_tiger_inst_ratio",
+        "_sentiment_phase",
+        "is_limit_up",
+        "dragon_tiger_is_on_list",
+        "dragon_tiger_recent_count",
+        "concept_sector_name",
+        "concept_sector_heat_rank",
+        "super_large_net_inflow_yi",
+        "large_net_inflow_yi",
+        "medium_net_inflow_yi",
+        "small_net_inflow_yi",
+        "main_net_inflow_yi",
+        "main_net_inflow_ratio",
+        # DSA 评分关键字段（防止 Agent 凭空推断"MA5支撑确认"等）
+        "support_ma5", "support_ma10", "dsa_support_score",
+        "trend_status", "ma_alignment",
+        "macd_status", "macd_signal",
+        "rsi_status", "rsi_signal",
+        "buy_signal", "bias_ma5", "bias_ma10", "bias_ma20",
+        "volume_breakout_signal", "volume_shrink_pullback",
+        "pos20", "pos60", "pos120",
+        "chg20", "chg60",
+        "breakout20", "breakout60",
     ]
     return {key: stock.get(key) for key in keys if key in stock}
 

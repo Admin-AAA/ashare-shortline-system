@@ -1,8 +1,13 @@
+import logging
+import time
+import threading
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.services.data_sources import get_local_pool_status, list_data_sources, set_data_source_enabled
+from app.services.workbench_service import invalidate_bootstrap_cache
 from app.services.market_pool import (
     refresh_capital_flows_for_codes,
     refresh_concept_sectors,
@@ -14,11 +19,40 @@ from app.services.market_pool import (
 
 
 router = APIRouter(prefix="/api/data-sources", tags=["data-sources"])
+logger = logging.getLogger(__name__)
+
+# ── 本地池状态缓存（TTL 30 秒，避免前端轮询重复计算）──
+# 缓存 key 不含分页参数：heavy computation 共享，pagination 按需裁剪
+_pool_status_cache: dict = {}
+_pool_status_lock = threading.Lock()
+_POOL_CACHE_KEY = "__pool__"  # 单一 key，不按分页拆分
 
 
 @router.get("")
 def list_sources(db: Session = Depends(get_db)):
-    return list_data_sources(db)
+    try:
+        return list_data_sources(db)
+    except Exception as exc:  # noqa: BLE001 - surface unready state without breaking the page
+        logger.exception("list data sources failed")
+        return [
+            {
+                "source": "system",
+                "source_type": "quote",
+                "enabled": False,
+                "priority": 999,
+                "note": "数据源配置未就绪",
+                "success_count": 0,
+                "failure_count": 1,
+                "empty_count": 0,
+                "success_rate": None,
+                "latency_ms": None,
+                "last_success_at": None,
+                "last_failure_at": None,
+                "last_error": str(exc),
+                "status": "degraded",
+                "updated_at": None,
+            }
+        ]
 
 
 @router.get("/pool")
@@ -28,20 +62,124 @@ def local_pool(
     u_offset: int = 0,
     b_limit: int = 50,
     b_offset: int = 0,
+    cache_ttl: int = 30,
 ):
-    return get_local_pool_status(
-        db,
-        unified_limit=u_limit,
-        unified_offset=u_offset,
-        bars_limit=b_limit,
-        bars_offset=b_offset,
-    )
+    now = time.monotonic()
+    with _pool_status_lock:
+        cached = _pool_status_cache.get(_POOL_CACHE_KEY)
+        if cached and (now - cached["ts"]) < cache_ttl:
+            data = dict(cached["data"])
+            data["unified_quotes"], data["daily_bars"] = _load_paginated(
+                db, u_limit, u_offset, b_limit, b_offset, cached.get("_all_quote_rows")
+            )
+            return data
+
+    try:
+        data = get_local_pool_status(
+            db,
+            unified_limit=u_limit,
+            unified_offset=u_offset,
+            bars_limit=b_limit,
+            bars_offset=b_offset,
+        )
+        with _pool_status_lock:
+            _pool_status_cache[_POOL_CACHE_KEY] = {"ts": time.monotonic(), "data": data}
+        return data
+    except Exception as exc:
+        logger.exception("local pool status failed")
+        return _unready_pool_status(str(exc))
+
+
+def _load_paginated(db, u_limit, u_offset, b_limit, b_offset, _cached_rows=None):
+    from app.services.data_sources import _daily_bar_rows, _unified_quote_rows, _unified_quote_rows_from_rows
+    if _cached_rows is not None:
+        unified = _unified_quote_rows_from_rows(_cached_rows, limit=u_limit, offset=u_offset, db=db)
+    else:
+        unified = _unified_quote_rows(db, limit=u_limit, offset=u_offset)
+    bars = _daily_bar_rows(db, limit=b_limit, offset=b_offset)
+    return unified, bars
 
 
 @router.post("/pool/refresh")
 def refresh_pool(db: Session = Depends(get_db)):
     quotes, meta = refresh_quote_pool(db)
+    with _pool_status_lock:
+        _pool_status_cache.clear()
+    invalidate_bootstrap_cache()
     return {"refreshed": len(quotes), "meta": meta}
+
+
+def _unready_pool_status(message: str) -> dict:
+    return {
+        "summary": {
+            "raw_quote_count": 0,
+            "raw_bar_count": 0,
+            "unified_quote_count": 0,
+            "active_unified_quote_count": 0,
+            "eligible_quote_count": 0,
+            "daily_bar_count": 0,
+            "active_daily_bar_count": 0,
+            "eligible_daily_bar_count": 0,
+            "daily_bar_coverage_rate": 0.0,
+            "daily_bar_missing_count": 0,
+            "daily_bar_stale_count": 0,
+            "actual_recommend_scan_count": 0,
+            "skill_input_count": 0,
+            "daily_bar_row_count": 0,
+            "daily_indicator_count": 0,
+            "indicator_coverage_pct": 0.0,
+            "latest_quote_date": None,
+            "latest_bar_date": None,
+            "latest_unified_at": None,
+            "limit_up_board_count": 0,
+            "concept_sector_count": 0,
+            "capital_flow_count": 0,
+            "dragon_tiger_count": 0,
+            "news_count": 0,
+        },
+        "quote_sources": [],
+        "kline_sources": [],
+        "auxiliary_sources": [],
+        "recommendation_readiness": {
+            "status": "blocked",
+            "can_run_local_recommendation": False,
+            "has_missing_data": True,
+            "full_market_mode": True,
+            "required_candidate_count": 0,
+            "quote": {
+                "available_count": 0,
+                "candidate_count": 0,
+                "base_filter_eligible_count": 0,
+                "unified_quote_total": 0,
+                "latest_trade_date": None,
+                "active_sources": [],
+            },
+            "kline": {
+                "checked_count": 0,
+                "ready_count": 0,
+                "missing_count": 0,
+                "stale_count": 0,
+                "min_bars": 30,
+                "coverage_count": 0,
+                "coverage_rate": 0.0,
+                "latest_trade_date": None,
+                "examples": [],
+            },
+            "scan": {
+                "configured_candidate_count": 0,
+                "lookahead_multiplier": 0,
+                "lookahead_count": 0,
+                "actual_scan_count": 0,
+                "skill_input_count": 0,
+                "demo_limited": False,
+            },
+            "messages": [f"本地数据池未就绪：{message}"],
+        },
+        "unified_quotes": [],
+        "unified_quotes_total": 0,
+        "daily_bars": [],
+        "daily_bars_total": 0,
+    }
 
 
 @router.post("/{source_type}/{source}/enabled")
@@ -60,22 +198,34 @@ def set_enabled(source_type: str, source: str, payload: dict, db: Session = Depe
     )
     if result is None:
         raise HTTPException(status_code=404, detail="data source not found")
+    with _pool_status_lock:
+        _pool_status_cache.clear()
+    invalidate_bootstrap_cache()
     return result
 
 
 @router.post("/pool/refresh/limit-up")
 def refresh_limit_up(db: Session = Depends(get_db)):
     rows = refresh_limit_up_board(db)
+    with _pool_status_lock:
+        _pool_status_cache.clear()
+    invalidate_bootstrap_cache()
     return {"refreshed": len(rows)}
 
 
 @router.post("/pool/refresh/concept-sectors")
 def refresh_sectors(db: Session = Depends(get_db)):
     rows = refresh_concept_sectors(db)
+    with _pool_status_lock:
+        _pool_status_cache.clear()
+    invalidate_bootstrap_cache()
     return {"refreshed": len(rows)}
 
 
 @router.post("/pool/refresh/dragon-tiger")
 def refresh_dt(db: Session = Depends(get_db)):
     rows = refresh_dragon_tiger(db)
+    with _pool_status_lock:
+        _pool_status_cache.clear()
+    invalidate_bootstrap_cache()
     return {"refreshed": len(rows)}

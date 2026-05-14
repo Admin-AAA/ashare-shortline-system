@@ -42,7 +42,7 @@ def test_fetch_first_quotes_falls_back_to_second_source(monkeypatch):
             return [{"code": "000001", "name": "平安银行"}]
         return []
 
-    monkeypatch.setattr("backend.app.services.market_data._fetch_quotes", fake_fetch_quotes)
+    monkeypatch.setattr(market_data, "_fetch_quotes", fake_fetch_quotes)
 
     source, quotes, errors = _fetch_first_quotes(["eastmoney", "sina", "tencent"], DummySettings())
 
@@ -56,7 +56,7 @@ def test_fetch_first_quotes_raises_when_all_sources_fail(monkeypatch):
     def fake_fetch_quotes(source, settings):
         raise RuntimeError(f"{source} down")
 
-    monkeypatch.setattr("backend.app.services.market_data._fetch_quotes", fake_fetch_quotes)
+    monkeypatch.setattr(market_data, "_fetch_quotes", fake_fetch_quotes)
 
     with pytest.raises(MarketDataError) as exc:
         _fetch_first_quotes(["eastmoney", "sina", "tencent"], DummySettings())
@@ -94,7 +94,7 @@ def test_fetch_first_kline_falls_back_to_second_source(monkeypatch):
             ]
         return []
 
-    monkeypatch.setattr("backend.app.services.market_data._fetch_kline", fake_fetch_kline)
+    monkeypatch.setattr(market_data, "_fetch_kline", fake_fetch_kline)
 
     bars, source, errors = _fetch_first_kline(quote, ["eastmoney", "tencent", "baostock"], DummySettings())
 
@@ -110,7 +110,7 @@ def test_fetch_first_kline_raises_upstream_errors_to_caller(monkeypatch):
     def fake_fetch_kline(source, quote_arg, settings):
         raise RuntimeError(f"{source} bad")
 
-    monkeypatch.setattr("backend.app.services.market_data._fetch_kline", fake_fetch_kline)
+    monkeypatch.setattr(market_data, "_fetch_kline", fake_fetch_kline)
 
     bars, source, errors = _fetch_first_kline(quote, ["eastmoney", "tencent", "baostock"], DummySettings())
 
@@ -134,7 +134,7 @@ def test_fetch_first_kline_disables_global_baostock_login_failures(monkeypatch):
             raise RuntimeError("baostock login failed: 网络接收错误")
         return []
 
-    monkeypatch.setattr("backend.app.services.market_data._fetch_kline", fake_fetch_kline)
+    monkeypatch.setattr(market_data, "_fetch_kline", fake_fetch_kline)
 
     bars, source, errors = _fetch_first_kline(quote, ["baostock", "tencent"], DummySettings(), disabled_sources)
     bars2, source2, errors2 = _fetch_first_kline(quote, ["baostock", "tencent"], DummySettings(), disabled_sources)
@@ -288,3 +288,95 @@ def test_small_market_sample_caps_final_score_honestly():
     assert card["final_score"] == 68.0
     assert "市场样本仅6只，评分已按覆盖率降权" in card["risk_flags"]
     assert card["bucket"] != "容量核心"
+
+def test_authenticity_treats_composite_scores_as_observed_when_inputs_are_real():
+    from app.services.feature_builder import build_features
+
+    stock = {
+        "code": "000001",
+        "name": "平安银行",
+        "industry": "银行",
+        "price": 10.0,
+        "pct": 1.2,
+        "amount_yi": 12.0,
+        "turnover_rate": 3.0,
+        "free_mv_yi": 500.0,
+        "total_mv_yi": 1000.0,
+        "chg20": 12.0,
+        "chg60": 18.0,
+        "dist20": 3.0,
+        "dist60": 6.0,
+        "vol5_20": 1.2,
+        "upper_shadow_count20": 1,
+        "max_dd20": -4.0,
+        "data_quality": {"strict_real_data": True, "missing_fields": []},
+    }
+    snapshot = {"sample_count": 5000, "main_industries": ["银行"], "breadth": {"regime": "温和"}}
+
+    enriched = build_features([stock], snapshot)[0]
+
+    assert enriched["_feature_tags"]["capital_flow_score"] == "OBSERVED"
+    assert enriched["_feature_tags"]["fundamental_score"] == "OBSERVED"
+    assert enriched["_feature_tags"]["intelligence_score"] == "OBSERVED"
+    assert enriched["data_authenticity"] >= 0.8
+
+
+def test_default_presets_do_not_overwrite_user_skill_selection(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.models.tables import Base, Preset, PresetSkill
+    from app.services import workbench_service
+
+    db_path = tmp_path / "workbench.db"
+    engine = create_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(bind=engine)
+    db = SessionLocal()
+    try:
+        db.add(
+            Preset(
+                preset_id="preset_formal_opening",
+                name="正式盘前组合",
+                run_mode="formal",
+                market_scope="all",
+                risk_template="balanced",
+                output_count=6,
+                bucket_limits_json='{"容量核心": 6}',
+                data_source="local_pool",
+                hide_recent_repeats=True,
+                status="active",
+            )
+        )
+        db.add(
+            PresetSkill(
+                id="preset_formal_opening:chen-xiaoqun-skill",
+                preset_id="preset_formal_opening",
+                skill_id="chen-xiaoqun-skill",
+                weight=1.0,
+                sort_order=0,
+            )
+        )
+        db.commit()
+
+        class Skill:
+            def __init__(self, skill_id):
+                self.skill_id = skill_id
+
+        skills = [Skill("chen-xiaoqun-skill"), Skill("chao-gu-yang-jia-skill"), Skill("daily-stock-analysis-skill")]
+        workbench_service._ensure_default_presets(db, skills)
+
+        rows = db.query(PresetSkill).filter(PresetSkill.preset_id == "preset_formal_opening").order_by(PresetSkill.sort_order).all()
+        assert [row.skill_id for row in rows] == ["chen-xiaoqun-skill"]
+        assert [row.weight for row in rows] == [1.0]
+
+        created = db.get(Preset, "preset_formal_trend_core")
+        assert created is not None
+        created_rows = db.query(PresetSkill).filter(PresetSkill.preset_id == "preset_formal_trend_core").order_by(PresetSkill.sort_order).all()
+        assert [row.skill_id for row in created_rows] == [
+            "chen-xiaoqun-skill",
+            "chao-gu-yang-jia-skill",
+            "daily-stock-analysis-skill",
+        ]
+    finally:
+        db.close()

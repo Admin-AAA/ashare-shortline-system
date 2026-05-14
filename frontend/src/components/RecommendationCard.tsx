@@ -1,6 +1,6 @@
-import { TrendingUp, Target, AlertTriangle, ChevronDown, ChevronUp, Layers3, BrainCircuit } from "lucide-react";
-import { useState } from "react";
-import type { RecommendationCard, SkillSignal } from "../types";
+import { Target, AlertTriangle, ChevronDown, ChevronUp, Layers3, BrainCircuit } from "lucide-react";
+import { useState, type MouseEvent } from "react";
+import type { RecommendationCard } from "../types";
 import ScoreGauge from "./ScoreGauge";
 import AgentReviewPanel from "./AgentReviewPanel";
 
@@ -22,11 +22,24 @@ export default function EnhancedRecommendationCard({ item, isSelected, onSelect,
   const [expanded, setExpanded] = useState(false);
   const bucketColor = BUCKET_COLORS[item.bucket] ?? "#87928b";
 
+  function handleCardClick(event: MouseEvent<HTMLDivElement>) {
+    if ((event.target as HTMLElement).closest("button, a, [data-card-interactive='true']")) {
+      return;
+    }
+    onSelect(item.recommendation_id);
+  }
+
+  function toggleAgentReview(event: MouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setExpanded((current) => !current);
+  }
+
   return (
     <div
       className={`enhanced-rec-card ${isSelected ? "selected" : ""}`}
       style={{ borderLeft: `3px solid ${bucketColor}` }}
-      onClick={() => onSelect(item.recommendation_id)}
+      onClick={handleCardClick}
     >
       <div className="erc-header">
         <div className="erc-code-name">
@@ -37,7 +50,7 @@ export default function EnhancedRecommendationCard({ item, isSelected, onSelect,
           )}
         </div>
         <div className="erc-actions" onClick={(e) => e.stopPropagation()}>
-          <button className="ghost-btn small" onClick={() => onWatch(item.recommendation_id, "watching")}>
+          <button className="ghost-btn small" type="button" onClick={() => onWatch(item.recommendation_id, "watching")}>
             <Target size={13} />
           </button>
         </div>
@@ -54,12 +67,23 @@ export default function EnhancedRecommendationCard({ item, isSelected, onSelect,
           <div className="erc-rationale">{item.rationale || "暂无摘要"}</div>
           <div className="erc-meta-row">
             <span className="erc-price">{(item.recommend_price ?? 0).toFixed(2)}</span>
+            {item.stop_loss != null ? <span>止损 {(item.stop_loss ?? 0).toFixed(2)}</span> : null}
+            {item.take_profit != null ? <span>止盈 {(item.take_profit ?? 0).toFixed(2)}</span> : null}
             <span className="erc-skill-count">
               <BrainCircuit size={12} />
               {item.skill_breakdown?.length ?? 0} Skills
             </span>
             {item.setup_type && <span className="erc-setup">{item.setup_type}</span>}
+            {item.market_regime && (
+              <span className="erc-market-regime">{item.market_regime}</span>
+            )}
           </div>
+          {item.skill_disagreement && item.skill_disagreement.disagreement_level !== "一致" && (
+            <div className={`erc-disagreement erc-disagreement-${item.skill_disagreement.disagreement_level}`}>
+              技能分歧：{item.skill_disagreement.disagreement_level}
+              {item.skill_disagreement.stance_conflict ? " · 多空冲突" : ""}
+            </div>
+          )}
         </div>
       </div>
 
@@ -74,10 +98,9 @@ export default function EnhancedRecommendationCard({ item, isSelected, onSelect,
 
       <button
         className="erc-expand-btn"
-        onClick={(e) => {
-          e.stopPropagation();
-          setExpanded(!expanded);
-        }}
+        type="button"
+        aria-expanded={expanded}
+        onClick={toggleAgentReview}
       >
         {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         {expanded ? "收起 Agent 审查" : "查看 Agent 审查详情"}
@@ -85,7 +108,11 @@ export default function EnhancedRecommendationCard({ item, isSelected, onSelect,
       </button>
 
       {expanded && item.skill_breakdown && (
-        <div className="erc-agent-reviews">
+        <div
+          className="erc-agent-reviews"
+          data-card-interactive="true"
+          onClick={(event) => event.stopPropagation()}
+        >
           {item.skill_breakdown.map((signal) => {
             const review = signal.agent_skill_review;
             if (!review) {

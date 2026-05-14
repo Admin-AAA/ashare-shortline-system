@@ -53,8 +53,9 @@ import MarketSnapshotPanel from "./components/MarketSnapshot";
 import RecommendationList from "./components/RecommendationList";
 import DataSourcePanel from "./components/DataSourcePanel";
 import RunHistoryPanel, { type RunHistoryMode } from "./components/RunHistoryPanel";
+import BacktestPanel from "./components/BacktestPanel";
 
-type Section = "desk" | "pool" | "runs" | "skills" | "sources" | "localPool" | "stats";
+type Section = "desk" | "pool" | "runs" | "skills" | "sources" | "localPool" | "stats" | "backtest";
 
 type ReviewDraft = {
   user_label: string;
@@ -133,8 +134,8 @@ export default function App() {
   const [selectedSkillId, setSelectedSkillId] = useState("");
   const [singleSkillId, setSingleSkillId] = useState("");
   const [singleSkillWeight, setSingleSkillWeight] = useState(1);
-  const [installSource, setInstallSource] = useState("https://github.com/sherjy/chen-xiaoqun-skill");
-  const [installSkillId, setInstallSkillId] = useState("sherjy-chen-xiaoqun-skill");
+  const [installSource, setInstallSource] = useState("");
+  const [installSkillId, setInstallSkillId] = useState("chen-xiaoqun-skill");
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [presetDraft, setPresetDraft] = useState<PresetDraft>(EMPTY_PRESET_DRAFT);
   const [presetSkillDrafts, setPresetSkillDrafts] = useState<PresetSkillDraft[]>([]);
@@ -150,6 +151,7 @@ export default function App() {
   const [statsBySkill, setStatsBySkill] = useState<SkillStatsRow[]>([]);
   const [statsByPreset, setStatsByPreset] = useState<PresetStatsRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [poolRefreshing, setPoolRefreshing] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -321,7 +323,7 @@ export default function App() {
   }
 
   async function refreshLocalPool() {
-    setLoading(true);
+    setPoolRefreshing(true);
     setError("");
     try {
       const result = await api.refreshLocalPool();
@@ -330,7 +332,7 @@ export default function App() {
     } catch (err) {
       setError(messageFromError(err));
     } finally {
-      setLoading(false);
+      setPoolRefreshing(false);
     }
   }
 
@@ -450,11 +452,16 @@ export default function App() {
         return;
       }
       if (editingPresetId) {
-        await api.updatePreset(editingPresetId, payload);
+        const updated = await api.updatePreset(editingPresetId, payload);
+        setPresets((current) => current.map((preset) => (preset.preset_id === updated.preset_id ? updated : preset)));
+        setSelectedPresetId(updated.preset_id);
+        syncDraftFromPreset(updated);
         setMessage("预设已更新");
       } else {
         const created = await api.createPreset(payload);
+        setPresets((current) => [...current.filter((preset) => preset.preset_id !== created.preset_id), created]);
         setSelectedPresetId(created.preset_id);
+        syncDraftFromPreset(created);
         setMessage("预设已创建");
       }
       await refreshHomeData();
@@ -522,16 +529,8 @@ export default function App() {
         runTarget === "preset"
           ? {
               preset_id: selectedPreset?.preset_id,
-              run_mode: presetDraft.run_mode,
-              run_name: presetDraft.name || selectedPreset?.name || "预设运行",
-              market_scope: presetDraft.market_scope,
-              market_scope_value: presetDraft.market_scope_value || null,
-              risk_template: presetDraft.risk_template,
-              output_count: presetDraft.output_count,
-              hide_recent_repeats: presetDraft.hide_recent_repeats,
-              data_source: presetDraft.data_source,
-              bucket_limits: bucketLimits,
-              skills: presetSkillDrafts,
+              run_mode: selectedPreset?.run_mode ?? presetDraft.run_mode,
+              run_name: selectedPreset?.name || presetDraft.name || "预设运行",
             }
           : {
               run_mode: "experiment",
@@ -545,16 +544,51 @@ export default function App() {
       setSelectedRunId(result.run.run_id);
       setRecommendations(result.recommendations);
       setSelectedRecommendationId(result.recommendations[0]?.recommendation_id ?? "");
-      setSection("pool");
+      setSection(result.run.status === "completed" ? "pool" : "runs");
       await refreshHomeData();
       await loadStats(statsMode);
-      setMessage("运行完成");
+      if (result.run.status === "completed") {
+        setMessage("运行完成");
+      } else {
+        setMessage("运行已启动，Agent 审查在后台继续");
+        void pollRunUntilDone(result.run.run_id);
+      }
     } catch (err) {
       setError(messageFromError(err));
       await refreshHomeData();
     } finally {
       setRunning(false);
     }
+  }
+
+  async function pollRunUntilDone(runId: string) {
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await delay(2000);
+      try {
+        const run = await api.runDetail(runId);
+        setRuns((current) => [run, ...current.filter((item) => item.run_id !== run.run_id)]);
+        setSelectedRunId(run.run_id);
+        if (run.status === "completed") {
+          setPoolMode(run.run_mode);
+          await loadRunRecommendations(run.run_id);
+          await refreshHomeData();
+          await loadStats(statsMode);
+          setSection("pool");
+          setMessage("后台审查完成，机会池已更新");
+          return;
+        }
+        if (run.status === "failed") {
+          await refreshHomeData();
+          setSection("runs");
+          setError(run.error_message || "运行失败");
+          return;
+        }
+      } catch (err) {
+        setError(messageFromError(err));
+        return;
+      }
+    }
+    setMessage("运行仍在后台处理中，可在运行记录查看进度");
   }
 
   async function saveReview() {
@@ -702,6 +736,7 @@ export default function App() {
           <NavButton active={section === "sources"} icon={<DatabaseZap size={16} />} label="数据源" onClick={() => setSection("sources")} />
           <NavButton active={section === "localPool"} icon={<HardDrive size={16} />} label="本地数据池" onClick={() => setSection("localPool")} />
           <NavButton active={section === "stats"} icon={<BarChart3 size={16} />} label="统计实验室" onClick={() => setSection("stats")} />
+          <NavButton active={section === "backtest"} icon={<History size={16} />} label="回测" onClick={() => setSection("backtest")} />
         </nav>
 
         <div className="sidebar-card">
@@ -991,7 +1026,7 @@ export default function App() {
         )}
 
         {section === "localPool" && (
-          <LocalPoolPage pool={localPool} onRefresh={loadLocalPool} onRefreshRemote={refreshLocalPool} refreshing={loading} />
+          <LocalPoolPage pool={localPool} onRefresh={loadLocalPool} onRefreshRemote={refreshLocalPool} refreshing={poolRefreshing} />
         )}
 
         {section === "stats" && (
@@ -1020,6 +1055,7 @@ export default function App() {
             </section>
           </div>
         )}
+        {section === "backtest" && <BacktestPanel />}
       </main>
     </div>
   );
@@ -1034,6 +1070,7 @@ function titleFor(section: Section) {
     sources: "数据源",
     localPool: "本地数据池",
     stats: "统计实验室",
+    backtest: "回测",
   }[section];
 }
 
@@ -1046,6 +1083,7 @@ function subtitleFor(section: Section) {
     sources: "维护报价与日 K 数据源的健康度和参与状态。",
     localPool: "查看本地行情池覆盖情况，按需显式刷新外部源。",
     stats: "用可复盘的数据决定 Skill 晋级或淘汰。",
+    backtest: "在历史日期重跑策略，自动标注 N 日胜率和收益。",
   }[section];
 }
 
@@ -1665,6 +1703,10 @@ function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => String(item)) : [];
 }
 
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function displayText(key: string): string {
   const labels: Record<string, string> = {
     formal: "正式",
@@ -1684,6 +1726,8 @@ function displayText(key: string): string {
     failed: "失败",
     not_triggered: "未触发",
     risk_hit: "风控触发",
+    running: "运行中",
+    completed: "已完成",
     ready: "可运行",
     blocked: "不可运行",
     warning: "有缺口",
@@ -1714,6 +1758,8 @@ function displayTagText(text: string) {
     failed: "失败",
     not_triggered: "未触发",
     risk_hit: "风控命中",
+    running: "运行中",
+    completed: "已完成",
     local_pool: "仅本地池",
     local_pool_preferred: "本地池优先",
     realtime: "仅实时数据源",
@@ -1859,7 +1905,10 @@ function LocalPoolPage({
               </div>
             }
           />
-          <EmptyHint text="暂无本地数据池状态" />
+          <div className="loading-block">
+            <Loader2 size={32} className="spin" />
+            <span>正在加载本地数据池…</span>
+          </div>
         </section>
       </div>
     );
@@ -1938,13 +1987,34 @@ function LocalPoolPage({
             </div>
           </div>
           <div className="pool-readiness-stats">
+            <MiniStat label="统一报价" value={readiness.quote.unified_quote_total ?? readiness.quote.available_count} />
+            <MiniStat label="基础合格" value={readiness.quote.base_filter_eligible_count ?? readiness.quote.candidate_count} />
             <MiniStat label="目标候选" value={readiness.required_candidate_count} />
-            <MiniStat label="可用报价" value={readiness.quote.available_count} />
-            <MiniStat label="过滤候选" value={readiness.quote.candidate_count} />
-            <MiniStat label="日K可用" value={readiness.kline.ready_count} />
+            <MiniStat label="本次扫描" value={readiness.scan?.actual_scan_count ?? readiness.kline.ready_count} />
+            <MiniStat label="Skill 输入" value={readiness.scan?.skill_input_count ?? 0} />
+            <MiniStat label="日K覆盖" value={readiness.kline.ready_count} />
             <MiniStat label="日K缺失" value={readiness.kline.missing_count} />
             <MiniStat label="日K过期" value={readiness.kline.stale_count} />
+            <MiniStat label="覆盖率" value={`${(((readiness.kline.coverage_rate ?? 0) as number) * 100).toFixed(1)}%`} />
           </div>
+          {readiness.scan?.demo_limited ? (
+            <div className="pool-readiness-messages prominent">
+              <span>
+                Demo 限流模式：
+                {readiness.scan.configured_candidate_count > 0 ? "推荐扫描少于基础合格股票" : "Skill 输入少于实际扫描股票"}
+                ，请确认配置后再做正式验收。
+              </span>
+            </div>
+          ) : null}
+          {readiness.scan && !readiness.scan.demo_limited ? (
+            <div className="pool-readiness-messages">
+              <span>
+                全市场扫描：基础合格 {readiness.quote.base_filter_eligible_count ?? readiness.quote.candidate_count}
+                ，本次实际扫描 {readiness.scan.actual_scan_count}
+                ，Skill 接收 {readiness.scan.skill_input_count}。
+              </span>
+            </div>
+          ) : null}
           {readiness.kline.examples.length > 0 && (
             <div className="pool-readiness-examples">
               {readiness.kline.examples.slice(0, 6).map((item) => (
@@ -1972,8 +2042,17 @@ function LocalPoolPage({
         <div className="summary-grid source-summary-grid">
           <MiniStat label="原始报价" value={pool.summary.raw_quote_count} />
           <MiniStat label="统一报价" value={pool.summary.active_unified_quote_count} />
+          <MiniStat label="合格数" value={pool.summary.eligible_quote_count ?? readiness.quote.candidate_count} />
           <MiniStat label="原始日K" value={pool.summary.raw_bar_count} />
-          <MiniStat label="标准日K" value={pool.summary.daily_bar_count} />
+          <MiniStat label="全市场日K" value={pool.summary.full_market_daily_bar_count ?? pool.summary.daily_bar_count} />
+          <MiniStat label="全市场覆盖率" value={`${Number(pool.summary.daily_bar_coverage_rate ?? 0).toFixed(1)}%`} />
+          <MiniStat label="合格日K" value={pool.summary.eligible_daily_bar_count ?? readiness.kline.ready_count} />
+          <MiniStat label="合格覆盖率" value={`${Number(pool.summary.eligible_daily_bar_coverage_rate ?? ((readiness.kline.coverage_rate ?? 0) * 100)).toFixed(1)}%`} />
+          <MiniStat label="日K缺失" value={pool.summary.daily_bar_missing_count ?? readiness.kline.missing_count} />
+          <MiniStat label="短历史" value={pool.summary.daily_bar_short_history_count ?? 0} />
+          <MiniStat label="日K过期" value={pool.summary.daily_bar_stale_count ?? readiness.kline.stale_count} />
+          <MiniStat label="推荐扫描" value={pool.summary.actual_recommend_scan_count ?? readiness.kline.ready_count} />
+          <MiniStat label="Skill 输入" value={pool.summary.skill_input_count ?? 0} />
           <MiniStat label="技术指标" value={pool.summary.daily_indicator_count} />
           <MiniStat label="指标覆盖率" value={pool.summary.indicator_coverage_pct != null ? `${pool.summary.indicator_coverage_pct}%` : "-"} />
           <MiniStat label="报价日期" value={pool.summary.latest_quote_date || "-"} />

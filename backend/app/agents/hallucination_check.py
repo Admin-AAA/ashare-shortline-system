@@ -89,6 +89,10 @@ def verify_review_output(
                     severity = _raise_severity(severity, "medium")
                     break
 
+    for claim in _find_contradicted_missing_claims(evidence_list + risks_list, stock):
+        flags.append(claim)
+        severity = _raise_severity(severity, "medium")
+
     # 2. 编造具体数值（不在输入数据中）
     numeric_match = _find_unverified_numbers(evidence_list + risks_list, stock, snapshot)
     for match in numeric_match:
@@ -157,6 +161,13 @@ def _build_traceable_set(stock: dict[str, Any], snapshot: dict[str, Any] | None 
         "price", "pct", "turnover_rate", "amount_yi", "free_mv_yi",
         "dist20", "dist60", "ma5", "ma10", "ma20", "ma60",
         "vol5_20", "off_high_pct", "max_dd20",
+        "bias_ma5", "bias_ma10", "bias_ma20",
+        "macd_dif", "macd_dea", "macd_bar",
+        "rsi_6", "rsi_12", "rsi_24",
+        "volume_ratio_5d", "volume_ratio_vs_5d", "volume_ratio_vs_20d",
+        "dsa_trend_score", "dsa_bias_score", "dsa_volume_score",
+        "dsa_support_score", "dsa_macd_score", "dsa_rsi_score",
+        "dsa_signal_score", "resistance_distance_pct",
     ]:
         val = stock.get(key)
         if val is not None:
@@ -165,11 +176,17 @@ def _build_traceable_set(stock: dict[str, Any], snapshot: dict[str, Any] | None 
                 values.add(s)
                 s1 = f"{float(val):.1f}"
                 values.add(s1)
+                if float(val).is_integer():
+                    values.add(str(int(float(val))))
             except (TypeError, ValueError):
                 _add(val)
 
     # 整数/计数字段
-    for key in ["upper_shadow_count20", "limit_up_days20", "sample_count"]:
+    for key in [
+        "upper_shadow_count20", "limit_up_days20", "sample_count",
+        "announcement_negative_count", "news_risk_count",
+        "positive_catalyst_count", "dragon_tiger_recent_count",
+    ]:
         val = stock.get(key)
         if val is not None:
             _add(str(val))
@@ -179,6 +196,14 @@ def _build_traceable_set(stock: dict[str, Any], snapshot: dict[str, Any] | None 
     if isinstance(dq, dict):
         for k, v in dq.items():
             _add(str(v))
+            if isinstance(v, (int, float)):
+                values.add(f"{float(v):.2f}")
+                values.add(f"{float(v):.1f}")
+                if float(v).is_integer():
+                    values.add(str(int(float(v))))
+
+    for key in ["trend_status", "ma_alignment", "macd_status", "rsi_status", "rsi_signal", "buy_signal"]:
+        _add(stock.get(key))
 
     # ── 市场快照数据（Agent 引用的涨跌停数字来源）──
     if snapshot:
@@ -313,6 +338,54 @@ def _find_unverified_numbers(
     return unverified[:5]  # 最多 5 条
 
 
+def _find_contradicted_missing_claims(
+    statements: list[str],
+    stock: dict[str, Any],
+) -> list[str]:
+    """Find claims that say an input field is missing when it is actually present."""
+
+    missing_patterns = [
+        "数据缺少", "数据缺失", "指标缺少", "指标缺失",
+        "数值缺少", "数值缺失", "字段缺少", "字段缺失",
+        "未获取", "未获得", "未提供", "无法获取",
+        "数据不足", "指标不足", "缺少数据", "缺失数据",
+        "没有数据", "无数据",
+    ]
+    field_groups = {
+        "RSI": ("RSI", "rsi", ["rsi_6", "rsi_12", "rsi_24", "rsi_status", "rsi_signal"]),
+        "MACD": ("MACD", "macd", ["macd_dif", "macd_dea", "macd_bar", "macd_status", "macd_signal"]),
+        "均线": ("均线", "MA", "ma", ["ma5", "ma10", "ma20", "ma60", "ma_alignment", "trend_status"]),
+        "量能": ("量能", "量比", "volume", ["volume_ratio_5d", "volume_ratio_vs_5d", "vol5_20", "volume_status"]),
+    }
+    claims: list[str] = []
+    for statement in statements:
+        text = str(statement).strip()
+        if not text or not any(pattern in text for pattern in missing_patterns):
+            continue
+        for label, group in field_groups.items():
+            *keywords, fields = group
+            if not any(str(keyword) in text for keyword in keywords):
+                continue
+            present = [field for field in fields if stock.get(field) not in (None, "", [])]
+            if present:
+                claims.append(f"数据缺失声明与输入矛盾: {label} 字段已提供({', '.join(present[:3])})")
+                break
+    return claims[:5]
+
+
+def _near_number(text: str, number: float, tolerance: float = 0.01) -> bool:
+    """Return True when text contains a numeric token close to number."""
+    import re as _re
+
+    for token in _re.findall(r"-?\d+\.?\d*", text):
+        try:
+            if abs(float(token) - number) <= tolerance:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def _is_calculated_number(num_str: str, context: str) -> bool:
     """判断一个数值是否更像计算结果而非独立来源数据。
 
@@ -325,6 +398,25 @@ def _is_calculated_number(num_str: str, context: str) -> bool:
 
     # Pattern 1: preceded by calculation markers
     if _re.search(rf"(?:=|约|约为|约等于)\s*{_re.escape(num_str)}", context):
+        return True
+
+    # Pattern 1.5: score-scale fractions such as 26/30 or 15/15 come from
+    # the strategy rubric, not from market data. The numerator is checked
+    # separately when it appears as a derived score.
+    if f"/{num_str}" in context or f"{num_str}/" in context:
+        return True
+    if _re.search(rf"{_re.escape(num_str)}\s*[-~至到]\s*\d+", context):
+        return True
+    if _re.search(rf"\d+\s*[-~至到]\s*{_re.escape(num_str)}", context):
+        return True
+
+    # Pattern 1.6: well-known DSA/indicator thresholds referenced as rubric
+    # boundaries, not external market facts.
+    if ("RSI" in context or "rsi" in context) and num_str in {"6", "12", "24", "30", "40", "50", "70", "80"}:
+        return True
+    if ("乖离" in context or "bias" in context) and num_str in {"2", "4", "5", "7", "8"}:
+        return True
+    if ("MA" in context or "均线" in context) and num_str in {"5", "10", "20", "60", "120"}:
         return True
 
     # Pattern 2: no leading "=" but appears in a sentence with colon notation

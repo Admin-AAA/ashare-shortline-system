@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
-from datetime import date
+import time
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from app.core.config import get_settings
@@ -18,6 +20,36 @@ from app.services.market_data import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ── akshare 限流控制 ──
+_AK_LAST_CALL = 0.0
+_AK_MIN_INTERVAL = 3.0  # 秒
+
+
+def _ak_throttle():
+    """确保 akshare 调用间隔不小于 _AK_MIN_INTERVAL，避免被封。"""
+    global _AK_LAST_CALL
+    elapsed = time.monotonic() - _AK_LAST_CALL
+    if elapsed < _AK_MIN_INTERVAL:
+        time.sleep(_AK_MIN_INTERVAL - elapsed)
+    _AK_LAST_CALL = time.monotonic()
+
+
+def _ak_retry(fn, name: str, max_retries: int = 3):
+    """带重试的 akshare 调用，间隔指数退避。"""
+    import time as _time
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            _ak_throttle()
+            return fn()
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                delay = _AK_MIN_INTERVAL * (2 ** attempt)
+                logger.debug("akshare %s 第%d次失败，%0.1f秒后重试: %s", name, attempt + 1, delay, str(e)[:80])
+                _time.sleep(delay)
+    raise last_error
 
 
 # ── 源定义 ─────────────────────────────────────────────────────────────
@@ -45,6 +77,8 @@ def _news_sources(settings: Any) -> list[str]:
 # ── Dispatch ────────────────────────────────────────────────────────────
 
 def _fetch_limit_up_board(source: str, settings: Any) -> list[dict[str, Any]]:
+    if source == "akshare":
+        return _fetch_ak_limit_up_board(settings)
     if source == "eastmoney":
         return _fetch_eastmoney_limit_up_board(settings)
     if source in {"thsdk", "thssdk"}:
@@ -53,6 +87,8 @@ def _fetch_limit_up_board(source: str, settings: Any) -> list[dict[str, Any]]:
 
 
 def _fetch_concept_sectors(source: str, settings: Any) -> list[dict[str, Any]]:
+    if source == "akshare":
+        return _fetch_ak_concept_sectors(settings)
     if source == "eastmoney":
         return _fetch_eastmoney_concept_sectors(settings)
     if source in {"thsdk", "thssdk"}:
@@ -61,6 +97,8 @@ def _fetch_concept_sectors(source: str, settings: Any) -> list[dict[str, Any]]:
 
 
 def _fetch_capital_flow(source: str, code: str, settings: Any) -> dict[str, Any] | None:
+    if source == "akshare":
+        return _fetch_ak_capital_flow(code, settings)
     if source == "eastmoney":
         return _fetch_eastmoney_capital_flow(code, settings)
     if source in {"thsdk", "thssdk"}:
@@ -69,6 +107,8 @@ def _fetch_capital_flow(source: str, code: str, settings: Any) -> dict[str, Any]
 
 
 def _fetch_dragon_tiger(source: str, settings: Any) -> list[dict[str, Any]]:
+    if source == "akshare":
+        return _fetch_ak_dragon_tiger(settings)
     if source == "eastmoney":
         return _fetch_eastmoney_dragon_tiger(settings)
     if source in {"thsdk", "thssdk"}:
@@ -79,6 +119,8 @@ def _fetch_dragon_tiger(source: str, settings: Any) -> list[dict[str, Any]]:
 def _fetch_news(source: str, code: str, settings: Any) -> list[dict[str, Any]]:
     if source == "eastmoney":
         return _fetch_eastmoney_news(code, settings)
+    if source == "akshare":
+        return _fetch_ak_news(code, settings)
     if source in {"thsdk", "thssdk"}:
         return _fetch_thsdk_news(code, settings)
     return []
@@ -123,7 +165,7 @@ def _fetch_eastmoney_limit_up_board(settings: Any) -> list[dict[str, Any]]:
             })
         return result
     except Exception as e:
-        logger.warning("东方财富涨停板API不可用: %s", e)
+        logger.info("东方财富涨停板API不可用: %s", e)
         return []
 
 
@@ -156,7 +198,7 @@ def _fetch_eastmoney_concept_sectors(settings: Any) -> list[dict[str, Any]]:
             })
         return result
     except Exception as e:
-        logger.warning("东方财富概念板块API不可用: %s", e)
+        logger.info("东方财富概念板块API不可用: %s", e)
         return []
 
 
@@ -188,7 +230,7 @@ def _fetch_eastmoney_concept_sector_stocks(sector_code: str, settings: Any) -> l
             })
         return result
     except Exception as e:
-        logger.warning("东方财富概念成分股API不可用: %s", e)
+        logger.info("东方财富概念成分股API不可用: %s", e)
         return []
 
 
@@ -280,7 +322,7 @@ def _fetch_eastmoney_dragon_tiger(settings: Any) -> list[dict[str, Any]]:
             })
         return result
     except Exception as e:
-        logger.warning("东方财富龙虎榜API不可用: %s", e)
+        logger.info("东方财富龙虎榜API不可用: %s", e)
         return []
 
 
@@ -305,6 +347,7 @@ def _fetch_eastmoney_news(code: str, settings: Any) -> list[dict[str, Any]]:
                 for kw in ["风险", "警示", "退市", "ST", "处罚", "监管", "立案", "亏损", "减持", "问询", "通报"]
             )
             items.append({
+                "source": "eastmoney",
                 "article_id": str(row.get("notice_id", "")),
                 "code": code,
                 "announce_date": str(row.get("notice_date", ""))[:10],
@@ -344,6 +387,7 @@ def _fetch_eastmoney_news(code: str, settings: Any) -> list[dict[str, Any]]:
             else:
                 sentiment = "neutral"
             items.append({
+                "source": "eastmoney",
                 "article_id": str(row.get("notice_id", "")),
                 "code": code,
                 "announce_date": str(row.get("notice_date", ""))[:10],
@@ -567,4 +611,223 @@ def _fetch_thsdk_news(code: str, settings: Any) -> list[dict[str, Any]]:
             return items
     except Exception as e:
         logger.debug("THS SDK新闻公告不可用 (%s): %s", code, e)
+        return []
+
+
+# ── akshare 抓取函数 ─────────────────────────────────────────────────────
+
+
+def _fetch_ak_concept_sectors(settings: Any) -> list[dict[str, Any]]:
+    """通过 akshare (同花顺源) 获取概念板块列表。"""
+    try:
+        import akshare as ak
+
+        df = _ak_retry(lambda: ak.stock_board_concept_name_ths(), "概念板块列表")
+        if df is None or df.empty:
+            return []
+        trade_date = date.today().isoformat()
+        result = []
+        for rank, (_, row) in enumerate(df.iterrows(), start=1):
+            result.append({
+                "sector_code": str(row.get("code", "")),
+                "sector_name": str(row.get("name", "")),
+                "trade_date": trade_date,
+                "pct_chg": 0.0,  # 概念板块列表不含涨跌幅
+                "leading_code": "",
+                "leading_name": "",
+                "leading_pct": 0.0,
+                "total_amount_yi": 0.0,
+                "stock_count": 0,
+                "limit_up_count": 0,
+                "heat_rank": rank,
+            })
+        return result
+    except Exception as e:
+        logger.warning("akshare概念板块不可用: %s", e)
+        return []
+
+
+def _fetch_ak_concept_sector_stocks(sector_name: str, settings: Any) -> list[dict[str, Any]]:
+    """通过 akshare (同花顺源) 获取概念板块成分股。
+    DEPRECATED: akshare 1.18.60 起 stock_board_concept_info_ths 改为返回板块摘要（项目/值），
+    不再返回成分股列表。THS 网站成分股通过 JS 动态加载，无可用 JSON API。
+    Eastmoney push2 API 在本机 IP 被永久封禁。
+    此函数此后一律返回空列表。
+    """
+    return []
+
+
+def _fetch_ak_capital_flow(code: str, settings: Any) -> dict[str, Any] | None:
+    """通过 akshare 获取个股资金流向。
+    DEPRECATED: 东方财富源在本机已永久被封，此函数此后一律返回 None。
+    """
+    return None
+
+
+def _fetch_ak_capital_flow_deprecated(code: str, settings: Any) -> dict[str, Any] | None:
+    """[已废弃] 通过 akshare (东方财富源) 获取个股资金流向。"""
+    try:
+        import akshare as ak
+
+        market = "sh" if code.startswith(("6", "9")) else "sz"
+        df = _ak_retry(lambda: ak.stock_individual_fund_flow(stock=code, market=market), f"资金流向({code})")
+        if df is None or df.empty:
+            return None
+
+        latest = df.iloc[0]
+        trade_date = str(latest.get("日期", date.today()))
+        if hasattr(trade_date, "strftime"):
+            trade_date = trade_date.strftime("%Y-%m-%d")
+
+        cum_3d = 0.0
+        cum_5d = 0.0
+        cum_10d = 0.0
+        for i in range(min(len(df), 10)):
+            row = df.iloc[i]
+            net = float(row.get("主力净流入-净额", 0) or 0)
+            if i < 3:
+                cum_3d += net
+            if i < 5:
+                cum_5d += net
+            cum_10d += net
+
+        return {
+            "code": code,
+            "trade_date": trade_date,
+            "main_net_inflow_yi": round(float(latest.get("主力净流入-净额", 0) or 0) / 1e8, 4),
+            "super_large_net_inflow_yi": round(float(latest.get("超大单净流入-净额", 0) or 0) / 1e8, 4),
+            "large_net_inflow_yi": round(float(latest.get("大单净流入-净额", 0) or 0) / 1e8, 4),
+            "medium_net_inflow_yi": round(float(latest.get("中单净流入-净额", 0) or 0) / 1e8, 4),
+            "small_net_inflow_yi": round(float(latest.get("小单净流入-净额", 0) or 0) / 1e8, 4),
+            "main_net_inflow_ratio": round(float(latest.get("主力净流入-净占比", 0) or 0), 2),
+            "cumulative_inflow_3d_yi": round(cum_3d / 1e8, 4),
+            "cumulative_inflow_5d_yi": round(cum_5d / 1e8, 4),
+            "cumulative_inflow_10d_yi": round(cum_10d / 1e8, 4),
+        }
+    except Exception as e:
+        logger.debug("akshare资金流向不可用 (%s): %s", code, e)
+        return None
+
+
+def _fetch_ak_dragon_tiger(settings: Any) -> list[dict[str, Any]]:
+    """通过 akshare 获取龙虎榜数据。"""
+    try:
+        import akshare as ak
+
+        today = date.today()
+        start = (today - timedelta(days=3)).strftime("%Y%m%d")
+        end = today.strftime("%Y%m%d")
+        df = _ak_retry(lambda: ak.stock_lhb_detail_em(start_date=start, end_date=end), "龙虎榜")
+        if df is None or df.empty:
+            return []
+        result = []
+        for _, row in df.iterrows():
+            code = str(row.get("代码", ""))
+            if not code or len(code) != 6:
+                continue
+            trade_d = row.get("上榜日")
+            if hasattr(trade_d, "strftime"):
+                trade_d = trade_d.strftime("%Y-%m-%d")
+            else:
+                trade_d = str(trade_d)[:10]
+            result.append({
+                "code": code,
+                "name": str(row.get("名称", "")),
+                "trade_date": trade_d,
+                "reason": str(row.get("上榜原因", "")),
+                "buy_amount_yi": round(float(row.get("龙虎榜买入额", 0) or 0) / 1e8, 4),
+                "sell_amount_yi": round(float(row.get("龙虎榜卖出额", 0) or 0) / 1e8, 4),
+                "net_amount_yi": round(float(row.get("龙虎榜净买额", 0) or 0) / 1e8, 4),
+                "buy_seat_count": 0,
+                "sell_seat_count": 0,
+                "institution_net_buy_yi": 0.0,
+                "top_buy_broker": "",
+                "top_sell_broker": "",
+            })
+        return result
+    except Exception as e:
+        logger.warning("akshare龙虎榜不可用: %s", e)
+        return []
+
+
+def _fetch_ak_limit_up_board(settings: Any) -> list[dict[str, Any]]:
+    """通过 akshare 获取涨停板数据。"""
+    try:
+        import akshare as ak
+
+        today = date.today()
+        df = _ak_retry(lambda: ak.stock_zt_pool_em(date=today.strftime("%Y%m%d")), "涨停板")
+        if df is None or df.empty:
+            return []
+        trade_date = today.isoformat()
+        result = []
+        for _, row in df.iterrows():
+            code = str(row.get("代码", ""))
+            if not code or len(code) != 6:
+                continue
+            result.append({
+                "code": code,
+                "name": str(row.get("名称", "")),
+                "trade_date": trade_date,
+                "consecutive_days": int(row.get("连板数", 0) or 1),
+                "limit_up_time": str(row.get("封板时间", "")),
+                "first_limit_up_time": str(row.get("首次封板时间", "")),
+                "is_sealed": str(row.get("封板状态", "")) == "封板",
+                "seal_amount_yi": float(row.get("封单金额", 0) or 0) / 1e8,
+                "limit_up_reason": str(row.get("涨停原因", "")),
+                "concept_sector": str(row.get("所属行业", "")),
+                "turnover_amount_yi": float(row.get("成交额", 0) or 0) / 1e8,
+                "turnover_rate": float(row.get("换手率", 0) or 0),
+                "seal_count": 0,
+                "open_count": int(row.get("炸板次数", 0) or 0),
+            })
+        return result
+    except Exception as e:
+        logger.warning("akshare涨停板不可用: %s", e)
+        return []
+
+
+def _fetch_ak_news(code: str, settings: Any) -> list[dict[str, Any]]:
+    """通过 akshare 获取个股新闻。"""
+    try:
+        import akshare as ak
+
+        df = _ak_retry(lambda: ak.stock_news_em(symbol=code), f"新闻({code})")
+        if df is None or df.empty:
+            return []
+        items: list[dict[str, Any]] = []
+        for _, row in df.iterrows():
+            title = str(row.get("新闻标题", "") or row.get("title", "") or "")
+            summary = str(row.get("新闻内容", "") or row.get("summary", "") or "")
+            pub_time = str(row.get("发布时间", "") or row.get("datetime", "") or "")
+            news_link = str(row.get("新闻链接", "") or row.get("url", "") or "")
+            is_negative = any(
+                kw in title
+                for kw in ["风险", "亏损", "下滑", "减持", "处罚", "跌停", "爆雷", "问询"]
+            )
+            is_positive = any(
+                kw in title
+                for kw in ["增长", "预增", "利好", "突破", "签约", "中标", "回购", "增持", "分红"]
+            )
+            if is_negative:
+                sentiment = "negative"
+            elif is_positive:
+                sentiment = "positive"
+            else:
+                sentiment = "neutral"
+            article_id = news_link or (pub_time[:16] + "_" + title[:20] if pub_time else title[:30])
+            items.append({
+                "source": "akshare",
+                "article_id": article_id,
+                "code": code,
+                "announce_date": pub_time[:10] if len(pub_time) >= 10 else date.today().isoformat(),
+                "title": title,
+                "summary": summary[:500] if summary else "",
+                "category": "news",
+                "sentiment": sentiment,
+                "is_risk_warning": is_negative,
+            })
+        return items
+    except Exception as e:
+        logger.debug("akshare新闻不可用 (%s): %s", code, e)
         return []

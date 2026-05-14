@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
@@ -9,11 +9,12 @@ from sqlalchemy.orm import Session
 class AgentSessionContext:
     """一次 Agent 推荐运行的共享上下文。
 
-    每次推荐运行时注册一个会话，持有数据库连接、已加载的 Skill 列表、
-    市场快照以及线程间共享的缓存（股票详情、策略信号）。
+    session_factory 是可调用对象（如 SessionLocal），每次调用返回新的独立 Session。
+    工具函数应使用 `with ctx.session_factory() as db:` 获取短生命周期连接，
+    避免跨线程共享 Session 导致的并发问题。
     """
 
-    db: Session
+    session_factory: Callable[[], Session]
     skills: list[Any]  # list of StrategySkill
     snapshot: dict[str, Any]
     stocks_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -30,13 +31,13 @@ class AgentSessionRegistry:
     def register(
         cls,
         session_id: str,
-        db: Session,
+        session_factory: Callable[[], Session],
         skills: list[Any],
         snapshot: dict[str, Any],
     ) -> None:
         with cls._lock:
             cls._sessions[session_id] = AgentSessionContext(
-                db=db,
+                session_factory=session_factory,
                 skills=skills,
                 snapshot=snapshot,
             )

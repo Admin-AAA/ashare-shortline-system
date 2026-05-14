@@ -136,7 +136,10 @@ npm run dev
 └─────────────────────────────┘
     │
     ▼
-  候选股票选取 (top 60)
+  候选股票筛选（默认使用全部合格股票；`ASHARE_MARKET_CANDIDATE_COUNT=0`）
+    │
+    ▼
+  日K补齐与特征构建（默认 90 日）
     │
     ▼
 ┌─────────────────────────────┐
@@ -205,7 +208,7 @@ npm run dev
 | `ASHARE_DATABASE_URL` | `sqlite:///./ashare_workbench.db` | 数据库连接 |
 | `ASHARE_QUOTE_SOURCES` | `thsdk,eastmoney,akshare,tencent,sina` | 报价数据源优先级 |
 | `ASHARE_KLINE_SOURCES` | `tencent,thsdk,eastmoney,akshare` | K线数据源优先级 |
-| `ASHARE_MARKET_CANDIDATE_COUNT` | `60` | 候选股票数量 |
+| `ASHARE_MARKET_CANDIDATE_COUNT` | `0` | 候选股票数量上限；`0` 表示使用全部合格股票 |
 | `ASHARE_MARKET_KLINE_DAYS` | `90` | K线数据天数 |
 | `ASHARE_MARKET_QUOTE_CACHE_TTL_SECONDS` | `28800` | 行情缓存有效期（秒），默认 8 小时 |
 | `ASHARE_MARKET_KLINE_CACHE_TTL_HOURS` | `20` | K线缓存有效期（小时） |
@@ -233,7 +236,7 @@ npm run dev
 - **AkShare**：补充源
 - **BaoStock**：可选日K兜底源，需加入 `ASHARE_KLINE_SOURCES`
 
-数据源可在前端界面或 API 中启用/禁用。如果所有数据源都失败，系统返回错误，不会回退模拟数据。推荐运行支持 `local_pool`、`local_pool_preferred`、`realtime` 三档；本地数据池页面会显示当前是否缺失数据，以及能否只靠本地池推荐股票。
+数据源可在前端界面或 API 中启用/禁用。如果所有数据源都失败，系统返回错误，不会回退模拟数据。推荐运行支持 `local_pool`、`local_pool_preferred`、`realtime` 三档；本地数据池页面会显示当前是否缺失数据，以及能否只靠本地池推荐股票。默认配置下会先筛出全部合格股票（`ASHARE_MARKET_CANDIDATE_COUNT=0`），再结合日K可用性、去重和预设 `output_count` 产出最终推荐结果。
 
 ## 技能系统
 

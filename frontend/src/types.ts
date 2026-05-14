@@ -53,6 +53,59 @@ export type RunSummary = {
     kline_sources?: Record<string, number>;
     agent_runtime?: string;
     main_industries?: string[];
+    unified_quote_total?: number;
+    base_filter_eligible_count?: number;
+    daily_kline_coverage_count?: number;
+    filtered_kline_coverage_count?: number;
+    actual_scan_count?: number;
+    skill_input_count?: number;
+    demo_limited?: boolean;
+    scan_limited?: boolean;
+    skill_limited?: boolean;
+    skip_reasons?: Record<string, unknown>;
+    pipeline?: {
+      unified_quote_total?: number;
+      base_filter_eligible_count?: number;
+      daily_kline_coverage_count?: number;
+      filtered_kline_coverage_count?: number;
+      actual_scan_count?: number;
+      skill_input_count?: number;
+      skill_review_success_count?: number;
+      skill_agent_call_count?: number;
+      skill_rule_candidate_count?: number;
+      skill_gate_candidate_count?: number;
+      output_count?: number;
+      market_candidate_count?: number;
+      lookahead_multiplier?: number;
+      lookahead_count?: number;
+      skill_review_limit?: number;
+      skill_review_concurrency?: number;
+      demo_limited?: boolean;
+      scan_limited?: boolean;
+      skill_limited?: boolean;
+      skip_reasons?: Record<string, unknown>;
+      auxiliary_data?: Record<string, unknown>;
+      skill_gate?: {
+        mode?: string;
+        min_score?: number;
+        min_per_skill?: number;
+        min_total?: number;
+        max_total?: number;
+        quality_tiers?: Record<string, string>;
+        per_skill?: Record<string, {
+          scanned: number;
+          rule_eligible: number;
+          gate_pass: number;
+          llm_reviewed: number;
+          skipped_hard_veto: number;
+          skipped_low_score: number;
+          skipped_no_rule: number;
+          high_quality_count: number;
+          mid_quality_count: number;
+          dynamic_max_per_skill: number;
+        }>;
+      };
+    };
   };
 };
 
@@ -153,10 +206,13 @@ export type LocalPoolReadiness = {
   status: "ready" | "warning" | "blocked";
   can_run_local_recommendation: boolean;
   has_missing_data: boolean;
+  full_market_mode?: boolean;
   required_candidate_count: number;
   quote: {
     available_count: number;
     candidate_count: number;
+    base_filter_eligible_count?: number;
+    unified_quote_total?: number;
     latest_trade_date?: string | null;
     active_sources: string[];
   };
@@ -166,6 +222,9 @@ export type LocalPoolReadiness = {
     missing_count: number;
     stale_count: number;
     min_bars: number;
+    coverage_count?: number;
+    coverage_rate?: number;
+    latest_trade_date?: string | null;
     examples: Array<{
       code?: string | null;
       name?: string | null;
@@ -174,6 +233,16 @@ export type LocalPoolReadiness = {
       latest_bar_date?: string | null;
       quote_date?: string | null;
     }>;
+  };
+  scan?: {
+    configured_candidate_count: number;
+    lookahead_multiplier: number;
+    lookahead_count: number;
+    actual_scan_count: number;
+    skill_input_count: number;
+    agent_review_input_count?: number;
+    scan_limited?: boolean;
+    demo_limited: boolean;
   };
   messages: string[];
 };
@@ -184,7 +253,18 @@ export type LocalPoolStatus = {
     raw_bar_count: number;
     unified_quote_count: number;
     active_unified_quote_count: number;
+    eligible_quote_count?: number;
     daily_bar_count: number;
+    full_market_daily_bar_count?: number;
+    active_daily_bar_count?: number;
+    eligible_daily_bar_count?: number;
+    daily_bar_coverage_rate?: number;
+    eligible_daily_bar_coverage_rate?: number;
+    daily_bar_missing_count?: number;
+    daily_bar_stale_count?: number;
+    daily_bar_short_history_count?: number;
+    actual_recommend_scan_count?: number;
+    skill_input_count?: number;
     daily_bar_row_count?: number;
     daily_indicator_count: number;
     indicator_coverage_pct: number;
@@ -244,6 +324,16 @@ export type AgentSkillReview = {
     prompt_chars?: number;
   };
   prompt_contract?: Record<string, unknown>;
+  score?: number;
+  hallucination_flags?: string[];
+  hallucination_severity?: string;
+};
+
+export type SkillDisagreement = {
+  disagreement_level: string;
+  score_variance: number;
+  stance_conflict: boolean;
+  stance_distribution: Record<string, number>;
 };
 
 export type FeatureSnapshot = {
@@ -326,6 +416,8 @@ export type RecommendationCard = {
   name: string;
   industry?: string | null;
   recommend_price: number;
+  stop_loss?: number | null;
+  take_profit?: number | null;
   bucket: string;
   final_score: number;
   consensus_score: number;
@@ -341,6 +433,9 @@ export type RecommendationCard = {
   recent_repeat: boolean;
   watch_status: string;
   watch_note?: string | null;
+  aggregation_weights?: Record<string, number>;
+  market_regime?: string;
+  skill_disagreement?: SkillDisagreement;
 };
 
 export type RecommendationOutcome = {
@@ -402,6 +497,7 @@ export type RecommendationDetail = RecommendationCard & {
 export type RunResult = {
   run: RunSummary;
   recommendations: RecommendationCard[];
+  queued?: boolean;
 };
 
 export type RunDetail = RunSummary & {

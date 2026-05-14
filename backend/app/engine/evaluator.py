@@ -1,5 +1,8 @@
 import ast
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class UnsafeExpression(ValueError):
@@ -17,6 +20,7 @@ ALLOWED_NAMES = {
     "chip_concentration",
     "chip_health_score",
     "dragon_tiger_recent_count",
+    "dragon_tiger_is_on_list",
     "dist20",
     "dist60",
     "dsa_bias_score",
@@ -37,12 +41,14 @@ ALLOWED_NAMES = {
     "inflow_5d_yi",
     "inflow_10d_yi",
     "intelligence_score",
+    "is_limit_up",
     "is_st",
     "ma5",
     "ma10",
     "ma20",
     "ma60",
     "main_net_inflow_yi",
+    "main_net_inflow_ratio",
     "max_dd20",
     "max_dd60",
     "net_profit_yoy",
@@ -70,9 +76,13 @@ ALLOWED_NAMES = {
     "upper_shadow_count20",
     "vol5_20",
     "volume_breakout_signal",
-    "volume_ratio_5d",
     "volume_shrink_pullback",
+    "_consensus_signal",
+    "_dragon_tiger_dispersion",
+    "_dragon_tiger_inst_ratio",
+    "_is_leader_candidate",
     "_is_main",
+    "_sentiment_phase",
 }
 
 
@@ -89,7 +99,10 @@ def evaluate(expression: str, context: dict[str, Any]) -> bool:
     try:
         node = ast.parse(normalized, mode="eval")
         return bool(_eval(node.body, context))
+    except UnsafeExpression:
+        return False
     except Exception:
+        logger.warning("规则表达式求值异常: %r", expression[:200], exc_info=True)
         return False
 
 
@@ -125,9 +138,9 @@ def _eval(node: ast.AST, context: dict[str, Any]) -> Any:
         return _coerce(context.get(name))
 
     if isinstance(node, ast.Constant):
-        if isinstance(node.value, (int, float, bool)):
+        if isinstance(node.value, (int, float, bool, str)):
             return node.value
-        raise UnsafeExpression("only numeric and bool constants are allowed")
+        raise UnsafeExpression("only numeric, bool and string constants are allowed")
 
     if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div)):
         left = _eval(node.left, context)
@@ -164,6 +177,8 @@ def _coerce(value: Any) -> Any:
     if value is None:
         return 0.0
     if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
         return value
     try:
         return float(value)

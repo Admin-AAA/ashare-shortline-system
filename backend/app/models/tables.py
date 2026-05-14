@@ -531,3 +531,37 @@ class NewsAnnouncement(Base):
     sentiment: Mapped[str | None] = mapped_column(String(20))
     is_risk_warning: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ApiCallLog(Base):
+    """LLM API 调用日志 — 用于成本追踪。"""
+    __tablename__ = "api_call_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str | None] = mapped_column(String(60), index=True)
+    skill_id: Mapped[str | None] = mapped_column(String(80))
+    model: Mapped[str] = mapped_column(String(80))
+    endpoint: Mapped[str] = mapped_column(String(200))
+    prompt_chars: Mapped[int] = mapped_column(Integer, default=0)
+    completion_chars: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms: Mapped[float] = mapped_column(Float, default=0)
+    status: Mapped[str] = mapped_column(String(30), default="success")  # success / error / timeout
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ScheduledTask(Base):
+    """定时任务配置 — 支持按 Cron 表达式调度。"""
+    __tablename__ = "scheduled_tasks"
+
+    task_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    task_type: Mapped[str] = mapped_column(String(40))  # pool_refresh / recommendation_run / data_backfill
+    cron_expression: Mapped[str] = mapped_column(String(80))  # e.g. "30 9 * * 1-5" (weekdays 9:30)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_status: Mapped[str | None] = mapped_column(String(30))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

@@ -122,138 +122,153 @@ def query_stock_detail(code: str, session_id: str) -> dict:
             cached.pop("dsa_profile", None)
             return cached
 
-        db = ctx.db
+        with ctx.session_factory() as db:
 
-        # 查询最新一条 UnifiedQuote
-        quote_row = db.scalar(
-            select(UnifiedQuote)
-            .where(UnifiedQuote.code == code)
-            .order_by(UnifiedQuote.trade_date.desc())
-            .limit(1)
-        )
-        if quote_row is None:
-            return {"error": "未找到该股票数据", "code": code}
-
-        import json as _json
-
-        quote_data = _json.loads(quote_row.quote_json) if quote_row.quote_json else {}
-
-        # 查询最近 60 条日 K
-        bars = (
-            db.scalars(
-                select(DailyBar)
-                .where(DailyBar.code == code)
-                .order_by(DailyBar.trade_date.desc())
-                .limit(60)
+            # 查询最新一条 UnifiedQuote
+            quote_row = db.scalar(
+                select(UnifiedQuote)
+                .where(UnifiedQuote.code == code)
+                .order_by(UnifiedQuote.trade_date.desc())
+                .limit(1)
             )
-            .all()
-        )
-        if not bars:
-            return {"error": "未找到该股票的日K数据", "code": code}
+            if quote_row is None:
+                return {"error": "未找到该股票数据", "code": code}
 
-        # 按日期升序排列
-        bars = list(reversed(bars))
+            import json as _json
 
-        # 查询最新 DailyIndicator
-        indicator_row = db.scalar(
-            select(DailyIndicator)
-            .where(DailyIndicator.code == code)
-            .order_by(DailyIndicator.trade_date.desc())
-            .limit(1)
-        )
-        indicator = indicator_row
+            quote_data = _json.loads(quote_row.quote_json) if quote_row.quote_json else {}
 
-        latest = bars[-1]
-        closes = [float(bar.close) for bar in bars]
-        highs = [float(bar.high) for bar in bars]
-        lows = [float(bar.low) for bar in bars]
-        volumes = [float(bar.volume) for bar in bars]
+            # 查询最近 60 条日 K
+            bars = (
+                db.scalars(
+                    select(DailyBar)
+                    .where(DailyBar.code == code)
+                    .order_by(DailyBar.trade_date.desc())
+                    .limit(60)
+                )
+                .all()
+            )
+            if not bars:
+                return {"error": "未找到该股票的日K数据", "code": code}
 
-        price = _num(quote_data.get("price"), float(latest.close))
-        pct = _num(quote_data.get("pct"), float(latest.pct_chg))
-        turnover_rate = _num(quote_data.get("turnover_rate"), float(latest.turnover_rate))
-        amount_yi = _num(quote_data.get("amount_yi"), float(latest.amount or 0) / 100000000)
-        free_mv_yi = _num(quote_data.get("free_mv_yi"))
+            # 按日期升序排列
+            bars = list(reversed(bars))
 
-        # 均线
-        _ma5 = float(latest.ma5) if latest.ma5 is not None else _ma(closes, 5)
-        _ma10 = float(latest.ma10) if latest.ma10 is not None else _ma(closes, 10)
-        _ma20 = float(latest.ma20) if latest.ma20 is not None else _ma(closes, 20)
-        _ma60 = float(latest.ma60) if latest.ma60 is not None else _ma(closes, 60)
+            # 查询最新 DailyIndicator
+            indicator_row = db.scalar(
+                select(DailyIndicator)
+                .where(DailyIndicator.code == code)
+                .order_by(DailyIndicator.trade_date.desc())
+                .limit(1)
+            )
+            indicator = indicator_row
 
-        dist20 = _bias(price, _ma20)
-        dist60 = _bias(price, _ma60)
+            latest = bars[-1]
+            closes = [float(bar.close) for bar in bars]
+            highs = [float(bar.high) for bar in bars]
+            lows = [float(bar.low) for bar in bars]
+            volumes = [float(bar.volume) for bar in bars]
 
-        # 量能
-        ma_vol20 = _ma(volumes, 20)
-        vol5_20 = float(latest.volume_ratio_5d) if latest.volume_ratio_5d is not None else (
-            _ma(volumes, 5) / ma_vol20 if ma_vol20 else 1.0
-        )
+            price = _num(quote_data.get("price"), float(latest.close))
+            pct = _num(quote_data.get("pct"), float(latest.pct_chg))
+            turnover_rate = _num(quote_data.get("turnover_rate"), float(latest.turnover_rate))
+            amount_yi = _num(quote_data.get("amount_yi"), float(latest.amount or 0) / 100000000)
+            free_mv_yi = _num(quote_data.get("free_mv_yi"))
 
-        # primary_excess20 用 chg20 近似：相对于市场均值的超额
-        chg20 = ((closes[-1] - closes[-21]) / closes[-21] * 100) if len(closes) >= 21 else 0.0
+            # 均线
+            _ma5 = float(latest.ma5) if latest.ma5 is not None else _ma(closes, 5)
+            _ma10 = float(latest.ma10) if latest.ma10 is not None else _ma(closes, 10)
+            _ma20 = float(latest.ma20) if latest.ma20 is not None else _ma(closes, 20)
+            _ma60 = float(latest.ma60) if latest.ma60 is not None else _ma(closes, 60)
 
-        # 最大回撤和上影线
-        max_high20 = max(highs[-20:]) if len(highs) >= 20 else max(highs)
-        off_high_pct = (price - max_high20) / max_high20 * 100 if max_high20 else 0.0
+            dist20 = _bias(price, _ma20)
+            dist60 = _bias(price, _ma60)
 
-        max_dd20: float = 0.0
-        if indicator is not None and indicator.max_dd20 is not None:
-            max_dd20 = float(indicator.max_dd20)
-        else:
-            peak = closes[-min(20, len(closes))]
-            for i in range(len(closes) - min(20, len(closes)) + 1, len(closes)):
-                peak = max(peak, closes[i])
-                dd = (closes[i] - peak) / peak * 100 if peak else 0
-                max_dd20 = min(max_dd20, dd)
+            # 量能
+            ma_vol20 = _ma(volumes, 20)
+            vol5_20 = float(latest.volume_ratio_5d) if latest.volume_ratio_5d is not None else (
+                _ma(volumes, 5) / ma_vol20 if ma_vol20 else 1.0
+            )
 
-        upper_shadow_count20: int = 0
-        if indicator is not None:
-            upper_shadow_count20 = int(indicator.upper_shadow_count20 or 0)
-        else:
-            upper_shadow_count20 = _upper_shadow_count(bars[-20:])
+            # primary_excess20 用 chg20 近似：相对于市场均值的超额
+            chg20 = ((closes[-1] - closes[-21]) / closes[-21] * 100) if len(closes) >= 21 else 0.0
 
-        limit_up_days20 = sum(1 for bar in bars[-20:] if float(bar.pct_chg or 0) >= 9.8)
+            # 最大回撤和上影线
+            max_high20 = max(highs[-20:]) if len(highs) >= 20 else max(highs)
+            off_high_pct = (price - max_high20) / max_high20 * 100 if max_high20 else 0.0
 
-        # 资金
-        main_net_flow = quote_data.get("main_net_inflow_yi")
+            max_dd20: float = 0.0
+            if indicator is not None and indicator.max_dd20 is not None:
+                max_dd20 = float(indicator.max_dd20)
+            else:
+                peak = closes[-min(20, len(closes))]
+                for i in range(len(closes) - min(20, len(closes)) + 1, len(closes)):
+                    peak = max(peak, closes[i])
+                    dd = (closes[i] - peak) / peak * 100 if peak else 0
+                    max_dd20 = min(max_dd20, dd)
 
-        # 数据质量
-        missing_fields = _detect_missing(quote_data, bars)
-        data_quality = {
-            "missing_fields": missing_fields,
-            "kline_days": len(bars),
-            "quote_source_count": int(quote_row.source_count or 0),
-            "quote_quality_score": float(quote_row.quality_score or 0),
-        }
+            upper_shadow_count20: int = 0
+            if indicator is not None:
+                upper_shadow_count20 = int(indicator.upper_shadow_count20 or 0)
+            else:
+                upper_shadow_count20 = _upper_shadow_count(bars[-20:])
 
-        result = {
-            "code": code,
-            "name": quote_data.get("name") or code,
-            "industry": quote_data.get("industry") or "未分类",
-            "price": round(price, 3),
-            "pct": round(pct, 3),
-            "turnover_rate": round(turnover_rate, 3),
-            "amount_yi": round(amount_yi, 3),
-            "free_mv_yi": round(free_mv_yi, 3),
-            "ma5": round(_ma5, 3),
-            "ma10": round(_ma10, 3),
-            "ma20": round(_ma20, 3),
-            "ma60": round(_ma60, 3),
-            "dist20": round(dist20, 3),
-            "dist60": round(dist60, 3),
-            "off_high_pct": round(off_high_pct, 3),
-            "vol5_20": round(vol5_20, 3),
-            "primary_excess20": round(chg20, 3),
-            "max_dd20": round(max_dd20, 3),
-            "upper_shadow_count20": upper_shadow_count20,
-            "limit_up_days20": limit_up_days20,
-            "data_quality": data_quality,
-        }
-        if main_net_flow is not None:
-            result["main_net_flow"] = round(_num(main_net_flow), 3)
+            limit_up_days20 = sum(1 for bar in bars[-20:] if float(bar.pct_chg or 0) >= 9.8)
 
-        return result
+            # 资金
+            main_net_flow = quote_data.get("main_net_inflow_yi")
+
+            # 数据质量
+            missing_fields = _detect_missing(quote_data, bars)
+            data_quality = {
+                "missing_fields": missing_fields,
+                "kline_days": len(bars),
+                "quote_source_count": int(quote_row.source_count or 0),
+                "quote_quality_score": float(quote_row.quality_score or 0),
+            }
+
+            result = {
+                "code": code,
+                "name": quote_data.get("name") or code,
+                "industry": quote_data.get("industry") or "未分类",
+                "price": round(price, 3),
+                "pct": round(pct, 3),
+                "turnover_rate": round(turnover_rate, 3),
+                "amount_yi": round(amount_yi, 3),
+                "free_mv_yi": round(free_mv_yi, 3),
+                "ma5": round(_ma5, 3),
+                "ma10": round(_ma10, 3),
+                "ma20": round(_ma20, 3),
+                "ma60": round(_ma60, 3),
+                "dist20": round(dist20, 3),
+                "dist60": round(dist60, 3),
+                "off_high_pct": round(off_high_pct, 3),
+                "vol5_20": round(vol5_20, 3),
+                "primary_excess20": round(chg20, 3),
+                "max_dd20": round(max_dd20, 3),
+                "upper_shadow_count20": upper_shadow_count20,
+                "limit_up_days20": limit_up_days20,
+                "data_quality": data_quality,
+            }
+            if main_net_flow is not None:
+                result["main_net_flow"] = round(_num(main_net_flow), 3)
+
+            # ── DSA 关键字段（从 stocks_cache 补充，防止 Agent 凭空推断 ──
+            stock_cached = ctx.stocks_cache.get(code) if ctx.stocks_cache else None
+            if stock_cached:
+                for dsa_key in (
+                    "support_ma5", "support_ma10", "dsa_support_score",
+                    "trend_status", "ma_alignment",
+                    "macd_status", "macd_signal",
+                    "rsi_status", "rsi_signal",
+                    "buy_signal", "bias_ma5", "bias_ma10", "bias_ma20",
+                    "volume_breakout_signal", "volume_shrink_pullback",
+                    "pos20", "pos60", "pos120",
+                ):
+                    if dsa_key in stock_cached:
+                        result[dsa_key] = stock_cached[dsa_key]
+
+            return result
     except Exception as e:
         return {"error": f"查询股票详情失败: {e}", "code": code}
 
@@ -347,103 +362,103 @@ def audit_data_quality(code: str, session_id: str) -> dict:
 
         # 尝试从 stocks_cache 获取已构建的股票特征
         stock = ctx.stocks_cache.get(code) if ctx.stocks_cache else None
-        db = ctx.db
+        with ctx.session_factory() as db:
 
-        # 查询 UnifiedQuote
-        quote_row = db.scalar(
-            select(UnifiedQuote)
-            .where(UnifiedQuote.code == code)
-            .order_by(UnifiedQuote.trade_date.desc())
-            .limit(1)
-        )
-        if quote_row is None and stock is None:
-            return {"error": "未找到该股票数据", "code": code}
+            # 查询 UnifiedQuote
+            quote_row = db.scalar(
+                select(UnifiedQuote)
+                .where(UnifiedQuote.code == code)
+                .order_by(UnifiedQuote.trade_date.desc())
+                .limit(1)
+            )
+            if quote_row is None and stock is None:
+                return {"error": "未找到该股票数据", "code": code}
 
-        import json as _json
+            import json as _json
 
-        quote_data = _json.loads(quote_row.quote_json) if quote_row and quote_row.quote_json else {}
+            quote_data = _json.loads(quote_row.quote_json) if quote_row and quote_row.quote_json else {}
 
-        # 统计特征来源
-        missing_fields: list[str] = []
-        observed_count = 0
-        synthetic_count = 0
-        total_features = 0
+            # 统计特征来源
+            missing_fields: list[str] = []
+            observed_count = 0
+            synthetic_count = 0
+            total_features = 0
 
-        # -- 从数据库字段判定 OBSERVED 特征 --
-        # 日K直出字段（总是 OBSERVED）
-        bar_fields = {
-            "price", "pct", "open", "high", "low", "close",
-            "volume", "amount", "turnover_rate",
-            "ma5", "ma10", "ma20", "ma60",
-        }
-        for field in bar_fields:
-            total_features += 1
-            observed_count += 1  # 日K 或 quote 总是有这些字段
+            # -- 从数据库字段判定 OBSERVED 特征 --
+            # 日K直出字段（总是 OBSERVED）
+            bar_fields = {
+                "price", "pct", "open", "high", "low", "close",
+                "volume", "amount", "turnover_rate",
+                "ma5", "ma10", "ma20", "ma60",
+            }
+            for field in bar_fields:
+                total_features += 1
+                observed_count += 1  # 日K 或 quote 总是有这些字段
 
-        # 量能与趋势字段（从日K派生）
-        derived_fields = [
-            "dist20", "dist60", "vol5_20", "off_high_pct",
-            "max_dd20", "upper_shadow_count20", "limit_up_days20",
-        ]
-        for field in derived_fields:
-            total_features += 1
-            observed_count += 1  # 均可从日K计算
+            # 量能与趋势字段（从日K派生）
+            derived_fields = [
+                "dist20", "dist60", "vol5_20", "off_high_pct",
+                "max_dd20", "upper_shadow_count20", "limit_up_days20",
+            ]
+            for field in derived_fields:
+                total_features += 1
+                observed_count += 1  # 均可从日K计算
 
-        # -- OBSERVABLE 字段（来自外部数据源）--
-        observable_fields = {
-            "main_net_inflow_yi": "main_net_inflow",
-            "pe_ttm": "valuation",
-            "industry": "industry",
-        }
-        for field, gap_name in observable_fields.items():
-            total_features += 1
-            value = quote_data.get(field) if quote_data else None
-            if value is None or value == "":
-                missing_fields.append(gap_name)
+            # -- OBSERVABLE 字段（来自外部数据源）--
+            observable_fields = {
+                "main_net_inflow_yi": "main_net_inflow",
+                "pe_ttm": "valuation",
+                "industry": "industry",
+            }
+            for field, gap_name in observable_fields.items():
+                total_features += 1
+                value = quote_data.get(field) if quote_data else None
+                if value is None or value == "":
+                    missing_fields.append(gap_name)
+                else:
+                    observed_count += 1  # 有值则计入
+
+            # -- SYNTHETIC 字段（始终估算）--
+            synthetic_keys = [
+                "profit_ratio", "avg_cost", "concentration_90",
+                "chip_health", "capital_flow_score", "fundamental_score",
+                "intelligence_score", "sentiment_summary",
+            ]
+            for key in synthetic_keys:
+                total_features += 1
+                synthetic_count += 1
+
+            # 检查关键字段
+            critical_missing = {"news", "announcements", "dragon_tiger"}
+            for gap in critical_missing:
+                if gap not in missing_fields:
+                    missing_fields.append(gap)
+
+            authenticity_score = round(observed_count / max(1, total_features), 4)
+            observed_ratio = round(observed_count / max(1, total_features), 4)
+            synthetic_ratio = round(synthetic_count / max(1, total_features), 4)
+
+            # 构建来源摘要
+            quote_sources = int(quote_row.source_count if quote_row else 0)
+            quote_quality = float(quote_row.quality_score if quote_row else 0)
+            if quote_sources >= 3:
+                source_summary = f"多源验证 ({quote_sources} 源，质量 {quote_quality})"
+            elif quote_sources >= 2:
+                source_summary = f"双源确认 ({quote_sources} 源，质量 {quote_quality})"
+            elif quote_sources == 1:
+                source_summary = "单源报价，存在偏差风险"
             else:
-                observed_count += 1  # 有值则计入
+                source_summary = "本地日K缓存"
 
-        # -- SYNTHETIC 字段（始终估算）--
-        synthetic_keys = [
-            "profit_ratio", "avg_cost", "concentration_90",
-            "chip_health", "capital_flow_score", "fundamental_score",
-            "intelligence_score", "sentiment_summary",
-        ]
-        for key in synthetic_keys:
-            total_features += 1
-            synthetic_count += 1
-
-        # 检查关键字段
-        critical_missing = {"news", "announcements", "dragon_tiger"}
-        for gap in critical_missing:
-            if gap not in missing_fields:
-                missing_fields.append(gap)
-
-        authenticity_score = round(observed_count / max(1, total_features), 4)
-        observed_ratio = round(observed_count / max(1, total_features), 4)
-        synthetic_ratio = round(synthetic_count / max(1, total_features), 4)
-
-        # 构建来源摘要
-        quote_sources = int(quote_row.source_count if quote_row else 0)
-        quote_quality = float(quote_row.quality_score if quote_row else 0)
-        if quote_sources >= 3:
-            source_summary = f"多源验证 ({quote_sources} 源，质量 {quote_quality})"
-        elif quote_sources >= 2:
-            source_summary = f"双源确认 ({quote_sources} 源，质量 {quote_quality})"
-        elif quote_sources == 1:
-            source_summary = "单源报价，存在偏差风险"
-        else:
-            source_summary = "本地日K缓存"
-
-        return {
-            "code": code,
-            "authenticity_score": authenticity_score,
-            "observed_ratio": observed_ratio,
-            "synthetic_ratio": synthetic_ratio,
-            "missing_fields": sorted(set(missing_fields)),
-            "source_summary": source_summary,
-            "total_features": total_features,
-        }
+            return {
+                "code": code,
+                "authenticity_score": authenticity_score,
+                "observed_ratio": observed_ratio,
+                "synthetic_ratio": synthetic_ratio,
+                "missing_fields": sorted(set(missing_fields)),
+                "source_summary": source_summary,
+                "total_features": total_features,
+            }
     except Exception as e:
         return {"error": f"审计数据质量失败: {e}", "code": code}
 
@@ -464,39 +479,39 @@ def query_stock_history(code: str, days: int, session_id: str) -> dict:
         if ctx is None:
             return {"error": "会话不存在或已过期", "session_id": session_id}
 
-        db = ctx.db
-        bars = (
-            db.scalars(
-                select(DailyBar)
-                .where(DailyBar.code == code)
-                .order_by(DailyBar.trade_date.desc())
-                .limit(max(1, min(days, 120)))
+        with ctx.session_factory() as db:
+            bars = (
+                db.scalars(
+                    select(DailyBar)
+                    .where(DailyBar.code == code)
+                    .order_by(DailyBar.trade_date.desc())
+                    .limit(max(1, min(days, 120)))
+                )
+                .all()
             )
-            .all()
-        )
-        if not bars:
-            return {"error": "未找到该股票的日K数据", "code": code}
+            if not bars:
+                return {"error": "未找到该股票的日K数据", "code": code}
 
-        # 按日期升序
-        bars = list(reversed(bars))
-        history = []
-        for bar in bars:
-            history.append({
-                "trade_date": bar.trade_date,
-                "open": round(float(bar.open), 3),
-                "high": round(float(bar.high), 3),
-                "low": round(float(bar.low), 3),
-                "close": round(float(bar.close), 3),
-                "volume": float(bar.volume or 0),
-                "pct_chg": round(float(bar.pct_chg or 0), 3),
-                "turnover_rate": round(float(bar.turnover_rate or 0), 3),
-            })
+            # 按日期升序
+            bars = list(reversed(bars))
+            history = []
+            for bar in bars:
+                history.append({
+                    "trade_date": bar.trade_date,
+                    "open": round(float(bar.open), 3),
+                    "high": round(float(bar.high), 3),
+                    "low": round(float(bar.low), 3),
+                    "close": round(float(bar.close), 3),
+                    "volume": float(bar.volume or 0),
+                    "pct_chg": round(float(bar.pct_chg or 0), 3),
+                    "turnover_rate": round(float(bar.turnover_rate or 0), 3),
+                })
 
-        return {
-            "code": code,
-            "count": len(history),
-            "history": history,
-        }
+            return {
+                "code": code,
+                "count": len(history),
+                "history": history,
+            }
     except Exception as e:
         return {"error": f"查询股票历史数据失败: {e}", "code": code}
 
@@ -519,115 +534,115 @@ def query_dragon_tiger(code: str, session_id: str) -> dict:
         if ctx is None:
             return {"error": "会话不存在或已过期", "session_id": session_id}
 
-        db = ctx.db
+        with ctx.session_factory() as db:
 
-        # 查询最新 DragonTiger 标准化记录
-        dt_row = db.scalar(
-            select(DragonTiger)
-            .where(DragonTiger.code == code)
-            .order_by(DragonTiger.trade_date.desc())
-            .limit(1)
-        )
-        if dt_row is None:
-            return {"error": "未找到该股票的龙虎榜数据", "code": code}
-
-        # 字段提取
-        buy_amount = round(float(dt_row.buy_amount_yi or 0), 4)
-        sell_amount = round(float(dt_row.sell_amount_yi or 0), 4)
-        net_amount = round(float(dt_row.net_amount_yi or 0), 4)
-        institution_net_buy = round(float(dt_row.institution_net_buy_yi or 0), 4)
-
-        buy_seats: list[dict] = []
-        sell_seats: list[dict] = []
-
-        # 尝试从原始数据提取更详细的席位信息
-        raw_row = db.scalar(
-            select(RawDragonTiger)
-            .where(
-                RawDragonTiger.code == code,
-                RawDragonTiger.trade_date == dt_row.trade_date,
+            # 查询最新 DragonTiger 标准化记录
+            dt_row = db.scalar(
+                select(DragonTiger)
+                .where(DragonTiger.code == code)
+                .order_by(DragonTiger.trade_date.desc())
+                .limit(1)
             )
-            .limit(1)
-        )
-        if raw_row and raw_row.payload_json:
-            import json as _json
+            if dt_row is None:
+                return {"error": "未找到该股票的龙虎榜数据", "code": code}
 
-            try:
-                raw_data = _json.loads(raw_row.payload_json)
-                # 东方财富格式：BUYER_TRADER_NAME1-N, BUYER_TRADER_AMT1-N
-                for i in range(1, 6):
-                    seat_name = raw_data.get(f"BUYER_TRADER_NAME{i}") or raw_data.get(f"BUYER_TRADER_NAME_{i}") or ""
-                    seat_amt = raw_data.get(f"BUYER_TRADER_AMT{i}") or raw_data.get(f"BUYER_TRADER_AMT_{i}") or 0
-                    if seat_name and float(seat_amt) > 0:
-                        buy_seats.append({
-                            "rank": i,
-                            "name": str(seat_name),
-                            "amount_yi": round(float(seat_amt) / 1e8, 4),
-                        })
-                for i in range(1, 6):
-                    seat_name = raw_data.get(f"SELLER_TRADER_NAME{i}") or raw_data.get(f"SELLER_TRADER_NAME_{i}") or ""
-                    seat_amt = raw_data.get(f"SELLER_TRADER_AMT{i}") or raw_data.get(f"SELLER_TRADER_AMT_{i}") or 0
-                    if seat_name and float(seat_amt) > 0:
-                        sell_seats.append({
-                            "rank": i,
-                            "name": str(seat_name),
-                            "amount_yi": round(float(seat_amt) / 1e8, 4),
-                        })
-            except Exception:
-                pass
+            # 字段提取
+            buy_amount = round(float(dt_row.buy_amount_yi or 0), 4)
+            sell_amount = round(float(dt_row.sell_amount_yi or 0), 4)
+            net_amount = round(float(dt_row.net_amount_yi or 0), 4)
+            institution_net_buy = round(float(dt_row.institution_net_buy_yi or 0), 4)
 
-        # 若从原始数据未解析出席位，用标准化表的 top_buy_broker / top_sell_broker 兜底
-        if not buy_seats and dt_row.top_buy_broker:
-            buy_seats = [{"rank": 1, "name": dt_row.top_buy_broker, "amount_yi": buy_amount}]
-        if not sell_seats and dt_row.top_sell_broker:
-            sell_seats = [{"rank": 1, "name": dt_row.top_sell_broker, "amount_yi": sell_amount}]
+            buy_seats: list[dict] = []
+            sell_seats: list[dict] = []
 
-        # 机构参与度判定
-        total_amount = buy_amount + sell_amount
-        institution_ratio = abs(institution_net_buy) / total_amount if total_amount > 0 else 0
-        if institution_ratio >= 0.15 and institution_net_buy > 0:
-            institutional_dominance = "机构主导净买入"
-        elif institution_ratio >= 0.15 and institution_net_buy < 0:
-            institutional_dominance = "机构主导净卖出"
-        elif institution_ratio >= 0.05:
-            institutional_dominance = "机构参与"
-        else:
-            institutional_dominance = "无明显机构参与"
+            # 尝试从原始数据提取更详细的席位信息
+            raw_row = db.scalar(
+                select(RawDragonTiger)
+                .where(
+                    RawDragonTiger.code == code,
+                    RawDragonTiger.trade_date == dt_row.trade_date,
+                )
+                .limit(1)
+            )
+            if raw_row and raw_row.payload_json:
+                import json as _json
 
-        # 游资标记：识别知名游资席位关键词
-        hot_money_keywords = [
-            "拉萨", "东方财富证券", "国泰君安", "中信证券",
-            "华泰证券", "国盛证券", "银河证券", "财通证券",
-            "光大证券", "申万宏源",
-        ]
-        hot_money_flags: list[str] = []
-        for seat in buy_seats + sell_seats:
-            name = str(seat.get("name", ""))
-            for kw in hot_money_keywords:
-                if kw in name and name not in hot_money_flags:
-                    hot_money_flags.append(name)
-        has_hot_money = any(
-            any(kw in str(s.get("name", "")) for kw in hot_money_keywords)
-            for s in buy_seats + sell_seats
-        )
+                try:
+                    raw_data = _json.loads(raw_row.payload_json)
+                    # 东方财富格式：BUYER_TRADER_NAME1-N, BUYER_TRADER_AMT1-N
+                    for i in range(1, 6):
+                        seat_name = raw_data.get(f"BUYER_TRADER_NAME{i}") or raw_data.get(f"BUYER_TRADER_NAME_{i}") or ""
+                        seat_amt = raw_data.get(f"BUYER_TRADER_AMT{i}") or raw_data.get(f"BUYER_TRADER_AMT_{i}") or 0
+                        if seat_name and float(seat_amt) > 0:
+                            buy_seats.append({
+                                "rank": i,
+                                "name": str(seat_name),
+                                "amount_yi": round(float(seat_amt) / 1e8, 4),
+                            })
+                    for i in range(1, 6):
+                        seat_name = raw_data.get(f"SELLER_TRADER_NAME{i}") or raw_data.get(f"SELLER_TRADER_NAME_{i}") or ""
+                        seat_amt = raw_data.get(f"SELLER_TRADER_AMT{i}") or raw_data.get(f"SELLER_TRADER_AMT_{i}") or 0
+                        if seat_name and float(seat_amt) > 0:
+                            sell_seats.append({
+                                "rank": i,
+                                "name": str(seat_name),
+                                "amount_yi": round(float(seat_amt) / 1e8, 4),
+                            })
+                except Exception:
+                    pass
 
-        return {
-            "code": code,
-            "name": dt_row.name or code,
-            "trade_date": dt_row.trade_date,
-            "reason": dt_row.reason or "",
-            "buy_amount_yi": buy_amount,
-            "sell_amount_yi": sell_amount,
-            "net_amount_yi": net_amount,
-            "buy_seat_count": int(dt_row.buy_seat_count or 0),
-            "sell_seat_count": int(dt_row.sell_seat_count or 0),
-            "institution_net_buy_yi": institution_net_buy,
-            "institutional_dominance": institutional_dominance,
-            "buy_seats": buy_seats,
-            "sell_seats": sell_seats,
-            "hot_money_flags": hot_money_flags[:5],
-            "has_hot_money": has_hot_money,
-        }
+            # 若从原始数据未解析出席位，用标准化表的 top_buy_broker / top_sell_broker 兜底
+            if not buy_seats and dt_row.top_buy_broker:
+                buy_seats = [{"rank": 1, "name": dt_row.top_buy_broker, "amount_yi": buy_amount}]
+            if not sell_seats and dt_row.top_sell_broker:
+                sell_seats = [{"rank": 1, "name": dt_row.top_sell_broker, "amount_yi": sell_amount}]
+
+            # 机构参与度判定
+            total_amount = buy_amount + sell_amount
+            institution_ratio = abs(institution_net_buy) / total_amount if total_amount > 0 else 0
+            if institution_ratio >= 0.15 and institution_net_buy > 0:
+                institutional_dominance = "机构主导净买入"
+            elif institution_ratio >= 0.15 and institution_net_buy < 0:
+                institutional_dominance = "机构主导净卖出"
+            elif institution_ratio >= 0.05:
+                institutional_dominance = "机构参与"
+            else:
+                institutional_dominance = "无明显机构参与"
+
+            # 游资标记：识别知名游资席位关键词
+            hot_money_keywords = [
+                "拉萨", "东方财富证券", "国泰君安", "中信证券",
+                "华泰证券", "国盛证券", "银河证券", "财通证券",
+                "光大证券", "申万宏源",
+            ]
+            hot_money_flags: list[str] = []
+            for seat in buy_seats + sell_seats:
+                name = str(seat.get("name", ""))
+                for kw in hot_money_keywords:
+                    if kw in name and name not in hot_money_flags:
+                        hot_money_flags.append(name)
+            has_hot_money = any(
+                any(kw in str(s.get("name", "")) for kw in hot_money_keywords)
+                for s in buy_seats + sell_seats
+            )
+
+            return {
+                "code": code,
+                "name": dt_row.name or code,
+                "trade_date": dt_row.trade_date,
+                "reason": dt_row.reason or "",
+                "buy_amount_yi": buy_amount,
+                "sell_amount_yi": sell_amount,
+                "net_amount_yi": net_amount,
+                "buy_seat_count": int(dt_row.buy_seat_count or 0),
+                "sell_seat_count": int(dt_row.sell_seat_count or 0),
+                "institution_net_buy_yi": institution_net_buy,
+                "institutional_dominance": institutional_dominance,
+                "buy_seats": buy_seats,
+                "sell_seats": sell_seats,
+                "hot_money_flags": hot_money_flags[:5],
+                "has_hot_money": has_hot_money,
+            }
     except Exception as e:
         return {"error": f"查询龙虎榜数据失败: {e}", "code": code}
 
@@ -648,146 +663,146 @@ def query_industry_peers(code: str, session_id: str) -> dict:
         if ctx is None:
             return {"error": "会话不存在或已过期", "session_id": session_id}
 
-        db = ctx.db
+        with ctx.session_factory() as db:
 
-        # 获取目标股票的最新 quote 和行业信息
-        quote_row = db.scalar(
-            select(UnifiedQuote)
-            .where(UnifiedQuote.code == code)
-            .order_by(UnifiedQuote.trade_date.desc())
-            .limit(1)
-        )
-        if quote_row is None:
-            return {"error": "未找到该股票数据", "code": code}
-
-        import json as _json
-
-        quote_data = _json.loads(quote_row.quote_json) if quote_row.quote_json else {}
-        trade_date = quote_row.trade_date
-
-        # 行业来源：优先 quote_json，其次 Stock 表
-        industry = quote_data.get("industry") or ""
-        if (not industry or industry == "未分类"):
-            stock_row = db.scalar(select(Stock).where(Stock.code == code))
-            if stock_row and stock_row.industry:
-                industry = stock_row.industry
-        if not industry or industry == "未分类":
-            return {"error": "该股票无行业分类信息", "code": code}
-
-        # 获取同行业所有股票的最新 UnifiedQuote
-        peer_quotes = (
-            db.execute(
-                select(UnifiedQuote, Stock)
-                .join(Stock, UnifiedQuote.code == Stock.code)
-                .where(Stock.industry == industry, UnifiedQuote.code != code)
+            # 获取目标股票的最新 quote 和行业信息
+            quote_row = db.scalar(
+                select(UnifiedQuote)
+                .where(UnifiedQuote.code == code)
                 .order_by(UnifiedQuote.trade_date.desc())
+                .limit(1)
             )
-            .all()
-        )
+            if quote_row is None:
+                return {"error": "未找到该股票数据", "code": code}
 
-        # 按 trade_date 去重，保留每只股票最新记录
-        seen_codes: set[str] = set()
-        peer_rows: list[tuple] = []
-        for quote, stock in peer_quotes:
-            if quote.code in seen_codes:
-                continue
-            seen_codes.add(quote.code)
-            if quote.trade_date == trade_date:
-                peer_rows.append((quote, stock))
-            else:
-                # 非当日数据也保留（至少可提供静态信息）
-                if len(peer_rows) < 100:
-                    peer_rows.append((quote, stock))
+            import json as _json
 
-        # 解析目标股票自身数据
-        self_name = quote_data.get("name") or code
-        self_pct = _num(quote_data.get("pct"))
-        self_amount_yi = _num(quote_data.get("amount_yi"))
-        self_turnover = _num(quote_data.get("turnover_rate"))
-        self_free_mv_yi = _num(quote_data.get("free_mv_yi"))
+            quote_data = _json.loads(quote_row.quote_json) if quote_row.quote_json else {}
+            trade_date = quote_row.trade_date
 
-        # 构建同业列表并排序
-        peers: list[dict] = []
-        all_pcts: list[float] = [self_pct]
-        for quote, stock in peer_rows:
-            peer_data = _json.loads(quote.quote_json) if quote.quote_json else {}
-            peer_pct = _num(peer_data.get("pct"))
-            peer_amount = _num(peer_data.get("amount_yi"))
-            peer_turnover = _num(peer_data.get("turnover_rate"))
-            peer_mv = _num(peer_data.get("free_mv_yi"))
-            peers.append({
-                "code": quote.code,
-                "name": peer_data.get("name") or str(stock.name),
-                "pct": round(peer_pct, 3),
-                "amount_yi": round(peer_amount, 3),
-                "turnover_rate": round(peer_turnover, 3),
-                "free_mv_yi": round(peer_mv, 3),
-            })
-            all_pcts.append(peer_pct)
+            # 行业来源：优先 quote_json，其次 Stock 表
+            industry = quote_data.get("industry") or ""
+            if (not industry or industry == "未分类"):
+                stock_row = db.scalar(select(Stock).where(Stock.code == code))
+                if stock_row and stock_row.industry:
+                    industry = stock_row.industry
+            if not industry or industry == "未分类":
+                return {"error": "该股票无行业分类信息", "code": code}
 
-        # 按 pct 降序排列
-        peers_sorted = sorted(peers, key=lambda x: -x["pct"])
-        self_rank = sum(1 for p in peers_sorted if p["pct"] > self_pct) + 1
-        total_peers = len(peers_sorted) + 1  # 含自身
-
-        # 行业涨停家数：查询同日 LimitUpBoard 并在同业中的股票数
-        peer_codes = [p["code"] for p in peers] + [code]
-        limit_up_rows = (
-            db.scalars(
-                select(LimitUpBoard)
-                .where(
-                    LimitUpBoard.code.in_(peer_codes),
-                    LimitUpBoard.trade_date == trade_date,
+            # 获取同行业所有股票的最新 UnifiedQuote
+            peer_quotes = (
+                db.execute(
+                    select(UnifiedQuote, Stock)
+                    .join(Stock, UnifiedQuote.code == Stock.code)
+                    .where(Stock.industry == industry, UnifiedQuote.code != code)
+                    .order_by(UnifiedQuote.trade_date.desc())
                 )
+                .all()
             )
-            .all()
-        )
-        limit_up_codes = {r.code for r in limit_up_rows}
-        industry_limit_up_count = len(limit_up_codes)
-        self_is_limit_up = code in limit_up_codes
 
-        # 是否为行业龙头判断
-        leader_signals: list[str] = []
-        # 市值龙头
-        if self_free_mv_yi > 0:
-            all_mvs = [self_free_mv_yi] + [p["free_mv_yi"] for p in peers if p["free_mv_yi"] > 0]
-            if all_mvs and self_free_mv_yi == max(all_mvs):
-                leader_signals.append("市值最大")
-        # 成交额龙头
-        if self_amount_yi > 0:
-            all_amounts = [self_amount_yi] + [p["amount_yi"] for p in peers if p["amount_yi"] > 0]
-            if all_amounts and self_amount_yi == max(all_amounts):
-                leader_signals.append("成交额最大")
-        # 涨幅龙头（涨停且最早封板视为信号）
-        if self_is_limit_up and self_rank <= 3:
-            leader_signals.append("涨幅领先(涨停)")
+            # 按 trade_date 去重，保留每只股票最新记录
+            seen_codes: set[str] = set()
+            peer_rows: list[tuple] = []
+            for quote, stock in peer_quotes:
+                if quote.code in seen_codes:
+                    continue
+                seen_codes.add(quote.code)
+                if quote.trade_date == trade_date:
+                    peer_rows.append((quote, stock))
+                else:
+                    # 非当日数据也保留（至少可提供静态信息）
+                    if len(peer_rows) < 100:
+                        peer_rows.append((quote, stock))
 
-        is_leader = len(leader_signals) >= 2
-        leader_judgment = {
-            "is_leader": is_leader,
-            "signals": leader_signals,
-            "detail": "、".join(leader_signals) if leader_signals else "无明显龙头特征",
-        }
+            # 解析目标股票自身数据
+            self_name = quote_data.get("name") or code
+            self_pct = _num(quote_data.get("pct"))
+            self_amount_yi = _num(quote_data.get("amount_yi"))
+            self_turnover = _num(quote_data.get("turnover_rate"))
+            self_free_mv_yi = _num(quote_data.get("free_mv_yi"))
 
-        # 同业涨幅前三
-        top3 = peers_sorted[:3] if len(peers_sorted) >= 3 else peers_sorted[:len(peers_sorted)]
+            # 构建同业列表并排序
+            peers: list[dict] = []
+            all_pcts: list[float] = [self_pct]
+            for quote, stock in peer_rows:
+                peer_data = _json.loads(quote.quote_json) if quote.quote_json else {}
+                peer_pct = _num(peer_data.get("pct"))
+                peer_amount = _num(peer_data.get("amount_yi"))
+                peer_turnover = _num(peer_data.get("turnover_rate"))
+                peer_mv = _num(peer_data.get("free_mv_yi"))
+                peers.append({
+                    "code": quote.code,
+                    "name": peer_data.get("name") or str(stock.name),
+                    "pct": round(peer_pct, 3),
+                    "amount_yi": round(peer_amount, 3),
+                    "turnover_rate": round(peer_turnover, 3),
+                    "free_mv_yi": round(peer_mv, 3),
+                })
+                all_pcts.append(peer_pct)
 
-        return {
-            "code": code,
-            "name": self_name,
-            "industry": industry,
-            "trade_date": trade_date,
-            "self_pct": round(self_pct, 3),
-            "self_rank": self_rank,
-            "total_peers": total_peers,
-            "rank_pct": round(self_rank / max(1, total_peers) * 100, 1),
-            "industry_limit_up_count": industry_limit_up_count,
-            "self_is_limit_up": self_is_limit_up,
-            "leader_judgment": leader_judgment,
-            "top3_peers": top3,
-            "peer_count": len(peers),
-            "all_peers": peers_sorted[:30],  # 最多返回 30 只
-        }
+            # 按 pct 降序排列
+            peers_sorted = sorted(peers, key=lambda x: -x["pct"])
+            self_rank = sum(1 for p in peers_sorted if p["pct"] > self_pct) + 1
+            total_peers = len(peers_sorted) + 1  # 含自身
+
+            # 行业涨停家数：查询同日 LimitUpBoard 并在同业中的股票数
+            peer_codes = [p["code"] for p in peers] + [code]
+            limit_up_rows = (
+                db.scalars(
+                    select(LimitUpBoard)
+                    .where(
+                        LimitUpBoard.code.in_(peer_codes),
+                        LimitUpBoard.trade_date == trade_date,
+                    )
+                )
+                .all()
+            )
+            limit_up_codes = {r.code for r in limit_up_rows}
+            industry_limit_up_count = len(limit_up_codes)
+            self_is_limit_up = code in limit_up_codes
+
+            # 是否为行业龙头判断
+            leader_signals: list[str] = []
+            # 市值龙头
+            if self_free_mv_yi > 0:
+                all_mvs = [self_free_mv_yi] + [p["free_mv_yi"] for p in peers if p["free_mv_yi"] > 0]
+                if all_mvs and self_free_mv_yi == max(all_mvs):
+                    leader_signals.append("市值最大")
+            # 成交额龙头
+            if self_amount_yi > 0:
+                all_amounts = [self_amount_yi] + [p["amount_yi"] for p in peers if p["amount_yi"] > 0]
+                if all_amounts and self_amount_yi == max(all_amounts):
+                    leader_signals.append("成交额最大")
+            # 涨幅龙头（涨停且最早封板视为信号）
+            if self_is_limit_up and self_rank <= 3:
+                leader_signals.append("涨幅领先(涨停)")
+
+            is_leader = len(leader_signals) >= 2
+            leader_judgment = {
+                "is_leader": is_leader,
+                "signals": leader_signals,
+                "detail": "、".join(leader_signals) if leader_signals else "无明显龙头特征",
+            }
+
+            # 同业涨幅前三
+            top3 = peers_sorted[:3] if len(peers_sorted) >= 3 else peers_sorted[:len(peers_sorted)]
+
+            return {
+                "code": code,
+                "name": self_name,
+                "industry": industry,
+                "trade_date": trade_date,
+                "self_pct": round(self_pct, 3),
+                "self_rank": self_rank,
+                "total_peers": total_peers,
+                "rank_pct": round(self_rank / max(1, total_peers) * 100, 1),
+                "industry_limit_up_count": industry_limit_up_count,
+                "self_is_limit_up": self_is_limit_up,
+                "leader_judgment": leader_judgment,
+                "top3_peers": top3,
+                "peer_count": len(peers),
+                "all_peers": peers_sorted[:30],  # 最多返回 30 只
+            }
     except Exception as e:
         return {"error": f"查询同行业数据失败: {e}", "code": code}
 

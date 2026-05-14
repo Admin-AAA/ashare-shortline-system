@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import statistics
 import time
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -84,15 +87,20 @@ LOCAL_DAILY_BAR_FIELDS = DERIVED_RETURN_FIELDS | {"ma5", "ma10", "ma20"}
 def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     settings = get_settings()
     quotes, quote_meta = _load_or_refresh_quotes(db, settings) if refresh else _load_quotes_from_pool(db, settings)
-    target_count = int(settings.market_candidate_count)
-    if target_count <= 0:
-        target_count = len(quotes)  # 0 = 使用所有合格股票
-    target_count = max(1, target_count)
-    lookahead_count = min(
-        len(quotes),
-        max(target_count, target_count * max(1, int(settings.market_candidate_lookahead_multiplier))),
-    )
-    candidates = _select_candidates(quotes, lookahead_count)
+    total_quote_count = len(quotes)
+    raw_target_count = int(settings.market_candidate_count)
+    full_market_mode = raw_target_count <= 0
+    if full_market_mode:
+        target_count = total_quote_count
+        lookahead_count = total_quote_count
+    else:
+        target_count = max(1, raw_target_count)
+        lookahead_count = min(
+            total_quote_count,
+            max(target_count, target_count * max(1, int(settings.market_candidate_lookahead_multiplier))),
+        )
+    all_candidates = _select_candidates(quotes, total_quote_count)
+    candidates = all_candidates[:lookahead_count]
     if not candidates:
         raise MarketDataError("统一行情池没有可用候选股票，已停止运行。")
 
@@ -158,6 +166,18 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[l
             "quote_cache_age_seconds": quote_meta.get("cache_age_seconds"),
             "quote_pool_min_source_count": settings.market_pool_min_source_count,
             "generated_at": datetime.utcnow().isoformat(),
+            "full_market_mode": full_market_mode,
+            "unified_quote_total": total_quote_count,
+            "base_filter_eligible_count": len(all_candidates),
+            "actual_scan_count": len(stocks),
+            "kline_missing_count": len(kline_errors),
+            "kline_skip_reasons": _summarize_kline_skip_reasons(kline_errors),
+            "candidate_limit_config": {
+                "market_candidate_count": raw_target_count,
+                "lookahead_multiplier": int(settings.market_candidate_lookahead_multiplier),
+                "lookahead_count": lookahead_count,
+                "target_scan_count": target_count,
+            },
         }
     )
     snapshot["snapshot_id"] = f"snapshot_pool_{snapshot['trade_date']}_{datetime.utcnow().strftime('%H%M%S')}"
@@ -166,8 +186,10 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[l
 
 def get_market_snapshot_from_pool(db: Session, refresh: bool = False) -> dict[str, Any]:
     settings = get_settings()
-    quotes, quote_meta = _load_or_refresh_quotes(db, settings) if refresh else _load_quotes_from_pool(db, settings)
-    quotes = _select_candidates(quotes, min(settings.market_scan_size, 300))
+    quotes, quote_meta = _load_or_refresh_quotes(db, settings) if refresh else _load_quotes_from_pool(db, settings, skip_metrics=True)
+    total_quote_count = len(quotes)
+    eligible_quotes = _select_candidates(quotes, len(quotes))
+    quotes = eligible_quotes[: min(settings.market_scan_size, 300)]
     if not quotes:
         raise MarketDataError("统一行情池没有可用市场快照。")
     trade_date = _latest_trade_date_from_quotes(quotes)
@@ -184,6 +206,9 @@ def get_market_snapshot_from_pool(db: Session, refresh: bool = False) -> dict[st
             "quote_source_count": quote_meta.get("source_count"),
             "quote_sources": quote_meta.get("sources", []),
             "quote_cache_age_seconds": quote_meta.get("cache_age_seconds"),
+            "unified_quote_total": total_quote_count,
+            "base_filter_eligible_count": len(eligible_quotes),
+            "actual_scan_count": len(quotes),
             "generated_at": datetime.utcnow().isoformat(),
             "hot_theme": " / ".join(industries[:2]) if industries else "未知",
         }
@@ -205,10 +230,10 @@ def refresh_quote_pool(db: Session) -> tuple[list[dict[str, Any]], dict[str, Any
     return _refresh_quote_pool(db, get_settings())
 
 
-def local_pool_recommendation_readiness(db: Session) -> dict[str, Any]:
+def local_pool_recommendation_readiness(db: Session, cached_quotes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     settings = get_settings()
-    target_count = max(1, int(settings.market_candidate_count))
-    lookahead_count = target_count * max(1, int(settings.market_candidate_lookahead_multiplier))
+    raw_target_count = int(settings.market_candidate_count)
+    full_market_mode = raw_target_count <= 0
     min_bar_count = 30
     messages: list[str] = []
     examples: list[dict[str, Any]] = []
@@ -219,7 +244,8 @@ def local_pool_recommendation_readiness(db: Session) -> dict[str, Any]:
             "status": "blocked",
             "can_run_local_recommendation": False,
             "has_missing_data": True,
-            "required_candidate_count": target_count,
+            "full_market_mode": full_market_mode,
+            "required_candidate_count": 0 if full_market_mode else max(1, raw_target_count),
             "quote": {
                 "available_count": 0,
                 "candidate_count": 0,
@@ -237,9 +263,20 @@ def local_pool_recommendation_readiness(db: Session) -> dict[str, Any]:
             "messages": ["所有报价数据源都已关闭，本地池无法确认可用报价。"],
         }
 
-    quotes = _load_cached_quotes(db, allowed_sources=set(active_sources), skip_metrics=True)
+    quotes = cached_quotes if cached_quotes is not None else _load_cached_quotes(db, allowed_sources=set(active_sources), skip_metrics=True)
     quote_trade_dates = [str(item.get("trade_date") or "") for item in quotes if item.get("trade_date")]
-    candidates = _select_candidates(quotes, min(len(quotes), lookahead_count)) if quotes else []
+    all_candidates = _select_candidates(quotes, len(quotes)) if quotes else []
+    if full_market_mode:
+        lookahead_count = len(quotes)
+        target_count = 0
+    else:
+        target_count = max(1, raw_target_count)
+        lookahead_count = min(
+            len(quotes),
+            target_count * max(1, int(settings.market_candidate_lookahead_multiplier)),
+        )
+    candidates = all_candidates[:lookahead_count]
+    effective_required_count = len(candidates) if full_market_mode else target_count
 
     # Batch load bar summaries for all candidates in a single query
     candidate_codes = [str(item.get("code") or "") for item in candidates]
@@ -285,9 +322,16 @@ def local_pool_recommendation_readiness(db: Session) -> dict[str, Any]:
             continue
         ready_count += 1
 
-    can_run = len(quotes) >= target_count and ready_count > 0
-    has_missing_data = len(quotes) < target_count or len(candidates) < target_count or ready_count < target_count
-    if len(quotes) < target_count:
+    can_run = (len(quotes) > 0 if full_market_mode else len(quotes) >= target_count) and ready_count > 0
+    has_missing_data = (
+        not candidates
+        or ready_count < effective_required_count
+        or (not full_market_mode and (len(quotes) < target_count or len(candidates) < target_count))
+    )
+    if full_market_mode and not quotes:
+        status = "blocked"
+        messages.append("本地统一报价为空，全市场模式无法运行推荐。")
+    elif not full_market_mode and len(quotes) < target_count:
         status = "blocked"
         messages.append(f"本地统一报价不足，当前 {len(quotes)} 条，至少需要 {target_count} 条。")
     elif not candidates:
@@ -296,12 +340,21 @@ def local_pool_recommendation_readiness(db: Session) -> dict[str, Any]:
     elif ready_count == 0:
         status = "blocked"
         messages.append("候选股的本地日K全部缺失或未覆盖报价日期。")
-    elif ready_count < target_count:
+    elif ready_count < effective_required_count:
         status = "warning"
-        messages.append(f"可运行本地推荐，但可用候选只有 {ready_count} 只，目标候选数为 {target_count}。")
+        if full_market_mode:
+            messages.append(
+                f"全市场模式可运行本地推荐，将扫描 {len(candidates)} 只候选；"
+                f"当前日K覆盖完整 {ready_count} 只，真实运行会跳过缺口股票。"
+            )
+        else:
+            messages.append(f"可运行本地推荐，但可用候选只有 {ready_count} 只，目标候选数为 {target_count}。")
     else:
         status = "ready"
-        messages.append(f"本地池可直接运行推荐，已有 {ready_count} 只候选股报价与日K覆盖完整。")
+        if full_market_mode:
+            messages.append(f"全市场模式可直接运行推荐，{ready_count} / {len(candidates)} 只候选股报价与日K覆盖完整。")
+        else:
+            messages.append(f"本地池可直接运行推荐，已有 {ready_count} 只候选股报价与日K覆盖完整。")
 
     if missing_count or stale_count:
         messages.append(f"当前存在数据缺口：日K缺失 {missing_count} 只，日K过期 {stale_count} 只。")
@@ -310,10 +363,13 @@ def local_pool_recommendation_readiness(db: Session) -> dict[str, Any]:
         "status": status,
         "can_run_local_recommendation": can_run,
         "has_missing_data": has_missing_data,
-        "required_candidate_count": target_count,
+        "full_market_mode": full_market_mode,
+        "required_candidate_count": effective_required_count,
         "quote": {
             "available_count": len(quotes),
             "candidate_count": len(candidates),
+            "base_filter_eligible_count": len(all_candidates),
+            "unified_quote_total": len(quotes),
             "latest_trade_date": max(quote_trade_dates) if quote_trade_dates else None,
             "active_sources": active_sources,
         },
@@ -323,20 +379,37 @@ def local_pool_recommendation_readiness(db: Session) -> dict[str, Any]:
             "missing_count": missing_count,
             "stale_count": stale_count,
             "min_bars": min_bar_count,
+            "coverage_count": ready_count,
+            "coverage_rate": round(ready_count / max(1, len(candidates)), 4) if candidates else 0.0,
+            "latest_trade_date": max(
+                [str(summary.get("latest_trade_date") or "") for summary in bar_summaries.values() if summary.get("latest_trade_date")],
+                default=None,
+            ),
             "examples": examples,
+        },
+        "scan": {
+            "configured_candidate_count": raw_target_count,
+            "lookahead_multiplier": int(settings.market_candidate_lookahead_multiplier),
+            "lookahead_count": lookahead_count,
+            "actual_scan_count": ready_count,
+            "skill_input_count": ready_count,
+            "agent_review_input_count": ready_count,
+            "scan_limited": (not full_market_mode) and len(all_candidates) > lookahead_count,
+            "demo_limited": (not full_market_mode) and len(all_candidates) > lookahead_count,
         },
         "messages": messages,
     }
 
 
-def _load_quotes_from_pool(db: Session, settings: Any) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _load_quotes_from_pool(db: Session, settings: Any, skip_metrics: bool = False) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     active_sources = enabled_sources(db, "quote", _quote_sources(settings))
     if not active_sources:
         raise MarketDataError("所有报价数据源都已关闭，请至少启用一个报价源。")
-    quotes = _load_cached_quotes(db, allowed_sources=set(active_sources))
-    if len(quotes) < int(settings.market_candidate_count):
+    quotes = _load_cached_quotes(db, allowed_sources=set(active_sources), skip_metrics=skip_metrics)
+    required_count = max(0, int(settings.market_candidate_count))
+    if required_count > 0 and len(quotes) < required_count:
         raise MarketDataError(
-            f"本地数据池可用报价不足，当前 {len(quotes)} 条，至少需要 {settings.market_candidate_count} 条。"
+            f"本地数据池可用报价不足，当前 {len(quotes)} 条，至少需要 {required_count} 条。"
             "请先显式刷新本地数据池，或切换为实时数据。"
         )
     return quotes, _quote_meta("local_pool_readonly", quotes)
@@ -353,7 +426,8 @@ def _load_or_refresh_quotes(db: Session, settings: Any) -> tuple[list[dict[str, 
         max_age=timedelta(seconds=settings.market_quote_cache_ttl_seconds),
         allowed_sources=allowed_sources,
     )
-    if len(cached) >= int(settings.market_candidate_count):
+    required_count = max(0, int(settings.market_candidate_count))
+    if len(cached) > 0 and (required_count == 0 or len(cached) >= required_count):
         return cached, _quote_meta("fresh_cache", cached)
     return _refresh_quote_pool(db, settings, active_sources=active_sources)
 
@@ -394,6 +468,7 @@ def _refresh_quote_pool(
         raise MarketDataError("统一行情池刷新失败，所有报价源不可用。" + "；".join(errors))
 
     merged = [_merge_quote_rows(code, rows, sources, settings) for code, rows in grouped.items()]
+    _enrich_industries(settings, merged)
     _persist_unified_quotes(db, merged)
     db.commit()
     return merged, _quote_meta("refreshed", merged, errors=errors)
@@ -619,6 +694,22 @@ def _readiness_example(
     }
 
 
+def _summarize_kline_skip_reasons(kline_errors: dict[str, list[str]]) -> dict[str, int]:
+    summary: Counter[str] = Counter()
+    for errors in kline_errors.values():
+        if not errors:
+            summary["unknown"] += 1
+            continue
+        first = str(errors[0])
+        if "不足30条" in first:
+            summary["日K不足30条"] += 1
+        elif "未覆盖报价日期" in first:
+            summary["日K未覆盖报价日期"] += 1
+        else:
+            summary[first.split(":", 1)[0] or "其他"] += 1
+    return dict(summary)
+
+
 def _merge_quote_rows(
     code: str,
     rows: list[dict[str, Any]],
@@ -660,14 +751,8 @@ def _merge_quote_rows(
             if max_deviation > STRICT_CONSENSUS_FIELDS[field]:
                 conflicts.append(f"{field}: 多源偏差 {round(max_deviation * 100, 2)}%")
 
-    coverage = sum(1 for field in NUMERIC_QUOTE_FIELDS if result.get(field) not in {None, 0.0})
     source_count = int(result["source_count"])
-    min_sources = int(getattr(settings, "market_pool_min_source_count", 2))
-    quality = 48 + min(source_count, 4) * 12 + coverage / max(1, len(NUMERIC_QUOTE_FIELDS)) * 24
-    if source_count < min_sources:
-        conflicts.append(f"source_count: 仅 {source_count} 个报价源")
-        quality -= 12
-    quality -= min(30, len(conflicts) * 8)
+    quality = 100.0 - min(60.0, len(conflicts) * 12.0)
     result["quality_score"] = round(max(0.0, min(100.0, quality)), 2)
     result["freshness_status"] = "fresh"
     result["conflicts"] = conflicts
@@ -679,6 +764,25 @@ def _merge_quote_rows(
         "merged_at": datetime.utcnow().isoformat(),
     }
     return result
+
+
+def _enrich_industries(settings: Any, merged: list[dict[str, Any]]) -> None:
+    from app.services.market_data import fetch_tushare_industries
+
+    industry_map = fetch_tushare_industries(settings)
+    if not industry_map:
+        return
+    enriched = 0
+    for quote in merged:
+        code = str(quote.get("code") or "")
+        if not code:
+            continue
+        industry = industry_map.get(code)
+        if industry and str(quote.get("industry")) == "未分类":
+            quote["industry"] = industry
+            enriched += 1
+    if enriched:
+        logger.info("行业富化: %d 只股票从 Tushare stock_basic 获取行业分类", enriched)
 
 
 def _merge_quality(
@@ -697,8 +801,6 @@ def _merge_quality(
     quality["quote_cache_status"] = quote.get("freshness_status")
     quality["bars_source"] = kline_trace.get("selected_source")
     quality["kline_cache_status"] = kline_trace.get("freshness_status")
-    if source_count < int(get_settings().market_pool_min_source_count):
-        missing.add("quote_consensus")
     if quote.get("conflicts"):
         missing.add("quote_conflict")
     if quote.get("freshness_status") == "stale_cache":
@@ -708,10 +810,15 @@ def _merge_quality(
 
 
 def _persist_raw_quotes(db: Session, source: str, trade_date: str, rows: list[dict[str, Any]]) -> None:
+    seen_batch: set[tuple] = set()
     for row in rows:
         code = str(row.get("code") or "")
         if not code:
             continue
+        key = (source, code, trade_date)
+        if key in seen_batch:
+            continue
+        seen_batch.add(key)
         existing = db.scalar(
             select(RawQuote).where(
                 RawQuote.source == source,
@@ -732,7 +839,12 @@ def _persist_raw_quotes(db: Session, source: str, trade_date: str, rows: list[di
 def _persist_unified_quotes(db: Session, rows: list[dict[str, Any]]) -> None:
     trade_date = _latest_trade_date_from_quotes(rows)
     active_codes = {row["code"] for row in rows}
+    seen_batch: set[tuple] = set()
     for row in rows:
+        key = (row["code"], trade_date)
+        if key in seen_batch:
+            continue
+        seen_batch.add(key)
         existing = db.scalar(select(UnifiedQuote).where(UnifiedQuote.code == row["code"], UnifiedQuote.trade_date == trade_date))
         quote_json = _dumps({key: value for key, value in row.items() if key not in {"source_trace", "conflicts"}})
         trace_json = _dumps(row.get("source_trace", {}))
@@ -770,9 +882,14 @@ def _persist_unified_quotes(db: Session, rows: list[dict[str, Any]]) -> None:
 
 def _persist_raw_bars(db: Session, source: str, bars: list[dict[str, Any]]) -> None:
     latest_allowed_date = _latest_allowed_bar_date()
+    seen_batch: set[tuple] = set()
     for bar in bars:
         if str(bar.get("trade_date") or "") > latest_allowed_date:
             continue
+        key = (source, bar["code"], bar["trade_date"])
+        if key in seen_batch:
+            continue
+        seen_batch.add(key)
         existing = db.scalar(
             select(RawDailyBar).where(
                 RawDailyBar.source == source,
@@ -794,7 +911,12 @@ def _persist_normalized_bars(db: Session, bars: list[dict[str, Any]]) -> None:
     latest_allowed_date = _latest_allowed_bar_date()
     code = str(bars[0].get("code") or "")
     filtered = [bar for bar in bars if str(bar.get("trade_date") or "") <= latest_allowed_date]
+    seen_batch: set[tuple] = set()
     for bar in filtered:
+        key = (bar["code"], bar["trade_date"])
+        if key in seen_batch:
+            continue
+        seen_batch.add(key)
         existing = db.scalar(select(DailyBar).where(DailyBar.code == bar["code"], DailyBar.trade_date == bar["trade_date"]))
         if existing is None:
             db.add(DailyBar(**bar))
@@ -1013,12 +1135,23 @@ def _bars_cover_quote_date(bars: list[dict[str, Any]], quote: dict[str, Any]) ->
 
 
 def _latest_allowed_bar_date(today: date | None = None) -> str:
-    today = today or date.today()
+    if today is None:
+        now = datetime.now()
+        today = now.date()
+        if today.weekday() < 5 and now.hour < 16:
+            today = _previous_weekday(today)
     if today.weekday() == 5:
         return (today - timedelta(days=1)).isoformat()
     if today.weekday() == 6:
         return (today - timedelta(days=2)).isoformat()
     return today.isoformat()
+
+
+def _previous_weekday(day: date) -> date:
+    current = day - timedelta(days=1)
+    while current.weekday() >= 5:
+        current -= timedelta(days=1)
+    return current
 
 
 def _source_rank(source: Any, source_priority: list[str]) -> int:
@@ -1089,16 +1222,26 @@ def refresh_concept_sectors(db: Session) -> list[dict[str, Any]]:
         raw_persister=_persist_raw_concept_sector,
         normalized_persister=_persist_normalized_concept_sector,
     )
-    # 额外持久化热门板块的成分股
-    from app.services.market_auxiliary import _fetch_eastmoney_concept_sector_stocks
-    top_sectors = [s for s in result if s.get("heat_rank", 999) <= 30]
+    # 额外持久化热门板块的成分股（优先 akshare 同花顺源，东财源被封）
+    from app.services.market_auxiliary import _fetch_ak_concept_sector_stocks, _fetch_eastmoney_concept_sector_stocks
+    top_sectors = [s for s in result if s.get("heat_rank", 999) <= 60]
     if top_sectors:
         for sector in top_sectors:
-            try:
-                stocks = _fetch_eastmoney_concept_sector_stocks(sector["sector_code"], settings)
+            sector_name = str(sector.get("sector_name") or "")
+            sector_code = str(sector.get("sector_code") or "")
+            stocks: list[dict[str, Any]] = []
+            if sector_name:
+                try:
+                    stocks = _fetch_ak_concept_sector_stocks(sector_name, settings)
+                except Exception:
+                    pass
+            if not stocks and sector_code:
+                try:
+                    stocks = _fetch_eastmoney_concept_sector_stocks(sector_code, settings)
+                except Exception:
+                    pass
+            if stocks:
                 _persist_concept_sector_stocks(db, stocks)
-            except Exception:
-                pass
         db.commit()
     return result
 
@@ -1203,11 +1346,16 @@ def _refresh_aux_data(
 # ── 辅助数据池：原始数据持久化 ─────────────────────────────────────────
 
 def _persist_raw_limit_up_board(db: Session, source: str, rows: list[dict[str, Any]]) -> None:
+    seen_batch: set[tuple] = set()
     for row in rows:
         code = str(row.get("code") or "")
         trade_date = str(row.get("trade_date") or "")
         if not code or not trade_date:
             continue
+        key = (source, code, trade_date)
+        if key in seen_batch:
+            continue
+        seen_batch.add(key)
         existing = db.scalar(
             select(RawLimitUpBoard).where(
                 RawLimitUpBoard.source == source,
@@ -1224,11 +1372,16 @@ def _persist_raw_limit_up_board(db: Session, source: str, rows: list[dict[str, A
 
 
 def _persist_raw_concept_sector(db: Session, source: str, rows: list[dict[str, Any]]) -> None:
+    seen_batch: set[tuple] = set()
     for row in rows:
         sector_code = str(row.get("sector_code") or "")
         trade_date = str(row.get("trade_date") or "")
         if not sector_code or not trade_date:
             continue
+        key = (source, sector_code, trade_date)
+        if key in seen_batch:
+            continue
+        seen_batch.add(key)
         existing = db.scalar(
             select(RawConceptSector).where(
                 RawConceptSector.source == source,
@@ -1265,11 +1418,16 @@ def _persist_raw_capital_flow(db: Session, source: str, data: dict[str, Any]) ->
 
 
 def _persist_raw_dragon_tiger(db: Session, source: str, rows: list[dict[str, Any]]) -> None:
+    seen_batch: set[tuple] = set()
     for row in rows:
         code = str(row.get("code") or "")
         trade_date = str(row.get("trade_date") or "")
         if not code or not trade_date:
             continue
+        key = (source, code, trade_date)
+        if key in seen_batch:
+            continue
+        seen_batch.add(key)
         existing = db.scalar(
             select(RawDragonTiger).where(
                 RawDragonTiger.source == source,
@@ -1286,10 +1444,15 @@ def _persist_raw_dragon_tiger(db: Session, source: str, rows: list[dict[str, Any
 
 
 def _persist_raw_news(db: Session, source: str, rows: list[dict[str, Any]]) -> None:
+    seen_batch: set[tuple] = set()
     for row in rows:
         article_id = str(row.get("article_id") or "")
         if not article_id:
             continue
+        key = (source, article_id)
+        if key in seen_batch:
+            continue
+        seen_batch.add(key)
         existing = db.scalar(
             select(RawNewsAnnouncement).where(
                 RawNewsAnnouncement.source == source,
@@ -1313,46 +1476,63 @@ def _persist_raw_news(db: Session, source: str, rows: list[dict[str, Any]]) -> N
 # ── 辅助数据池：标准化数据持久化 ────────────────────────────────────────
 
 def _persist_normalized_limit_up_board(db: Session, rows: list[dict[str, Any]]) -> None:
+    seen_batch: set[tuple] = set()
     for row in rows:
         code = str(row.get("code") or "")
         trade_date = str(row.get("trade_date") or "")
         if not code or not trade_date:
             continue
+        key = (code, trade_date)
+        if key in seen_batch:
+            continue
+        seen_batch.add(key)
         existing = db.scalar(
             select(LimitUpBoard).where(LimitUpBoard.code == code, LimitUpBoard.trade_date == trade_date)
         )
         if existing is None:
             db.add(LimitUpBoard(**{k: v for k, v in row.items() if hasattr(LimitUpBoard, k)}))
         else:
-            for key, value in row.items():
-                if hasattr(existing, key) and key not in {"id", "created_at"}:
-                    setattr(existing, key, value)
+            for key_name, value in row.items():
+                if hasattr(existing, key_name) and key_name not in {"id", "created_at"}:
+                    setattr(existing, key_name, value)
+            existing.created_at = datetime.utcnow()
 
 
 def _persist_normalized_concept_sector(db: Session, rows: list[dict[str, Any]]) -> None:
+    seen_batch: set[tuple] = set()
     for row in rows:
         sector_code = str(row.get("sector_code") or "")
         trade_date = str(row.get("trade_date") or "")
         if not sector_code or not trade_date:
             continue
+        key = (sector_code, trade_date)
+        if key in seen_batch:
+            continue
+        seen_batch.add(key)
         existing = db.scalar(
             select(ConceptSector).where(ConceptSector.sector_code == sector_code, ConceptSector.trade_date == trade_date)
         )
         if existing is None:
             db.add(ConceptSector(**{k: v for k, v in row.items() if hasattr(ConceptSector, k)}))
         else:
-            for key, value in row.items():
-                if hasattr(existing, key) and key not in {"id", "created_at"}:
-                    setattr(existing, key, value)
+            for key_name, value in row.items():
+                if hasattr(existing, key_name) and key_name not in {"id", "created_at"}:
+                    setattr(existing, key_name, value)
+            existing.created_at = datetime.utcnow()
 
 
 def _persist_concept_sector_stocks(db: Session, rows: list[dict[str, Any]]) -> None:
+    seen_batch: set[tuple] = set()
     for row in rows:
         sector_code = str(row.get("sector_code") or "")
         code = str(row.get("code") or "")
         trade_date = str(row.get("trade_date") or "")
         if not sector_code or not code or not trade_date:
             continue
+        key = (sector_code, code, trade_date)
+        if key in seen_batch:
+            continue
+        seen_batch.add(key)
         existing = db.scalar(
             select(ConceptSectorStock).where(
                 ConceptSectorStock.sector_code == sector_code,
@@ -1363,9 +1543,10 @@ def _persist_concept_sector_stocks(db: Session, rows: list[dict[str, Any]]) -> N
         if existing is None:
             db.add(ConceptSectorStock(**{k: v for k, v in row.items() if hasattr(ConceptSectorStock, k)}))
         else:
-            for key, value in row.items():
-                if hasattr(existing, key) and key not in {"id", "created_at"}:
-                    setattr(existing, key, value)
+            for key_name, value in row.items():
+                if hasattr(existing, key_name) and key_name not in {"id", "created_at"}:
+                    setattr(existing, key_name, value)
+            existing.created_at = datetime.utcnow()
 
 
 def _persist_normalized_capital_flow(db: Session, data: dict[str, Any]) -> None:
@@ -1382,40 +1563,58 @@ def _persist_normalized_capital_flow(db: Session, data: dict[str, Any]) -> None:
         for key, value in data.items():
             if hasattr(existing, key) and key not in {"id", "created_at"}:
                 setattr(existing, key, value)
+        existing.created_at = datetime.utcnow()
 
 
 def _persist_normalized_dragon_tiger(db: Session, rows: list[dict[str, Any]]) -> None:
+    seen_batch: set[tuple] = set()
     for row in rows:
         code = str(row.get("code") or "")
         trade_date = str(row.get("trade_date") or "")
         if not code or not trade_date:
             continue
+        key = (code, trade_date)
+        if key in seen_batch:
+            continue
+        seen_batch.add(key)
         existing = db.scalar(
             select(DragonTiger).where(DragonTiger.code == code, DragonTiger.trade_date == trade_date)
         )
         if existing is None:
             db.add(DragonTiger(**{k: v for k, v in row.items() if hasattr(DragonTiger, k)}))
         else:
-            for key, value in row.items():
-                if hasattr(existing, key) and key not in {"id", "created_at"}:
-                    setattr(existing, key, value)
+            for key_name, value in row.items():
+                if hasattr(existing, key_name) and key_name not in {"id", "created_at"}:
+                    setattr(existing, key_name, value)
+            existing.created_at = datetime.utcnow()
 
 
 def _persist_normalized_news(db: Session, rows: list[dict[str, Any]]) -> None:
+    seen_batch: set[tuple] = set()
     for row in rows:
         article_id = str(row.get("article_id") or "")
-        source = str(row.get("source", "eastmoney"))
+        source = str(row.get("source") or "unknown")
         if not article_id:
             continue
+        key = (source, article_id)
+        if key in seen_batch:
+            continue
+        seen_batch.add(key)
+        row_with_source = {**row, "source": source}
         existing = db.scalar(
             select(NewsAnnouncement).where(NewsAnnouncement.source == source, NewsAnnouncement.article_id == article_id)
         )
         if existing is None:
-            db.add(NewsAnnouncement(**{k: v for k, v in row.items() if hasattr(NewsAnnouncement, k)}))
+            try:
+                db.add(NewsAnnouncement(**{k: v for k, v in row_with_source.items() if hasattr(NewsAnnouncement, k)}))
+                db.flush()
+            except Exception:
+                db.rollback()
         else:
-            for key, value in row.items():
-                if hasattr(existing, key) and key not in {"id", "created_at"}:
-                    setattr(existing, key, value)
+            for key_name, value in row_with_source.items():
+                if hasattr(existing, key_name) and key_name not in {"id", "created_at"}:
+                    setattr(existing, key_name, value)
+            existing.created_at = datetime.utcnow()
 
 
 # ── 辅助数据池：缓存读取 ───────────────────────────────────────────────

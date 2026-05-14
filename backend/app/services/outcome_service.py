@@ -1,11 +1,30 @@
 import json
+import threading
+import time
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.tables import DailyBar, Recommendation, RecommendationOutcome
+
+# 短时缓存
+_metrics_cache: dict[str, tuple[float, Any]] = {}
+_metrics_cache_lock = threading.Lock()
+_METRICS_CACHE_TTL = 5.0
+
+
+def _cached(key: str, factory):
+    now = time.time()
+    with _metrics_cache_lock:
+        entry = _metrics_cache.get(key)
+        if entry is not None and (now - entry[0]) < _METRICS_CACHE_TTL:
+            return entry[1]
+    result = factory()
+    with _metrics_cache_lock:
+        _metrics_cache[key] = (time.time(), result)
+    return result
 
 
 def label_pending_outcomes(db: Session, horizon_days: int = 5) -> dict[str, Any]:
@@ -104,17 +123,18 @@ def label_pending_outcomes(db: Session, horizon_days: int = 5) -> dict[str, Any]
 
 
 def overview_metrics(db: Session) -> dict[str, Any]:
-    """返回推荐结果的全局概览指标。
+    return _cached("overview", lambda: _overview_metrics(db))
 
-    使用新标准（close_return >= 3% AND min_return > -4%）计算主命中率，
-    旧标准（max_return >= 5% AND min_return > -4%）作为 legacy_hit_rate 对比。
-    新增 avg_close_return、avg_achievable_return 等字段。
-    """
-    outcomes = db.scalars(select(RecommendationOutcome)).all()
-    recs = db.scalars(select(Recommendation)).all()
-    if not outcomes:
+
+def _overview_metrics(db: Session) -> dict[str, Any]:
+    total_recs = db.scalar(select(func.count()).select_from(Recommendation)) or 0
+    outcome_rows = db.execute(
+        select(RecommendationOutcome.close_return, RecommendationOutcome.max_return, RecommendationOutcome.min_return, RecommendationOutcome.achievable_return)
+    ).all()
+
+    if not outcome_rows:
         return {
-            "total_recommendations": len(recs),
+            "total_recommendations": total_recs,
             "labeled_count": 0,
             "hit_rate": 0,
             "legacy_hit_rate": 0,
@@ -125,52 +145,42 @@ def overview_metrics(db: Session) -> dict[str, Any]:
             "avg_mae": 0,
         }
 
-    # 新标准命中率（close_return >= 3% AND min_return > -4%）
-    success_new = sum(
-        1 for o in outcomes
-        if o.close_return is not None and o.close_return >= 3
-        and o.min_return is not None and o.min_return > -4
-    )
-    # 旧标准命中率（max_return >= 5% AND min_return > -4%）
-    success_legacy = sum(
-        1 for o in outcomes
-        if o.max_return is not None and o.max_return >= 5
-        and o.min_return is not None and o.min_return > -4
-    )
-    n = len(outcomes)
+    success_new = sum(1 for o in outcome_rows if o.close_return is not None and o.close_return >= 3 and o.min_return is not None and o.min_return > -4)
+    success_legacy = sum(1 for o in outcome_rows if o.max_return is not None and o.max_return >= 5 and o.min_return is not None and o.min_return > -4)
+    n = len(outcome_rows)
 
-    avg_achievable = (
-        sum(o.achievable_return for o in outcomes if o.achievable_return is not None) / n
-    )
+    avg_achievable = sum(o.achievable_return for o in outcome_rows if o.achievable_return is not None) / n
 
     return {
-        "total_recommendations": len(recs),
+        "total_recommendations": total_recs,
         "labeled_count": n,
         "hit_rate": round(success_new / n, 3),
         "legacy_hit_rate": round(success_legacy / n, 3),
-        "avg_return": round(sum(o.close_return or 0 for o in outcomes) / n, 2),
-        "avg_close_return": round(sum(o.close_return or 0 for o in outcomes) / n, 2),
+        "avg_return": round(sum(o.close_return or 0 for o in outcome_rows) / n, 2),
+        "avg_close_return": round(sum(o.close_return or 0 for o in outcome_rows) / n, 2),
         "avg_achievable_return": round(avg_achievable, 2),
-        "avg_mfe": round(sum(o.max_return or 0 for o in outcomes) / n, 2),
-        "avg_mae": round(sum(o.min_return or 0 for o in outcomes) / n, 2),
+        "avg_mfe": round(sum(o.max_return or 0 for o in outcome_rows) / n, 2),
+        "avg_mae": round(sum(o.min_return or 0 for o in outcome_rows) / n, 2),
     }
 
 
 def metrics_by_strategy(db: Session) -> list[dict[str, Any]]:
-    """按策略维度汇总成功率、平均分等指标。
+    return _cached("by_strategy", lambda: _metrics_by_strategy(db))
 
-    使用新标准（close_return >= 3% AND min_return > -4%）判定成功率，
-    从 outcome.outcome_label 读取主标注结果。
-    """
-    recs = db.scalars(select(Recommendation)).all()
+
+def _metrics_by_strategy(db: Session) -> list[dict[str, Any]]:
+    rec_rows = db.execute(
+        select(Recommendation.recommendation_id, Recommendation.skill_breakdown_json)
+    ).all()
+
+    outcome_rows = db.execute(
+        select(RecommendationOutcome.recommendation_id, RecommendationOutcome.outcome_label)
+    ).all()
+    success_ids = {row.recommendation_id for row in outcome_rows if row.outcome_label == "success"}
+
     buckets: dict[str, dict[str, Any]] = {}
-    outcomes = {
-        o.recommendation_id: o
-        for o in db.scalars(select(RecommendationOutcome)).all()
-    }
-    for rec in recs:
-        signals = json.loads(rec.skill_breakdown_json or "[]")
-        for signal in signals:
+    for rec in rec_rows:
+        for signal in _loads(rec.skill_breakdown_json, []):
             sid = signal.get("strategy_id", "unknown")
             item = buckets.setdefault(
                 sid,
@@ -183,9 +193,9 @@ def metrics_by_strategy(db: Session) -> list[dict[str, Any]]:
             )
             item["sample_count"] += 1
             item["avg_score"] += float(signal.get("score", 0))
-            outcome = outcomes.get(rec.recommendation_id)
-            if outcome is not None and outcome.outcome_label == "success":
+            if rec.recommendation_id in success_ids:
                 item["success_count"] += 1
+
     result = []
     for item in buckets.values():
         count = max(1, item["sample_count"])
@@ -193,3 +203,12 @@ def metrics_by_strategy(db: Session) -> list[dict[str, Any]]:
         item["avg_score"] = round(item["avg_score"] / count, 2)
         result.append(item)
     return sorted(result, key=lambda x: x["sample_count"], reverse=True)
+
+
+def _loads(raw: str | None, default: Any = None) -> Any:
+    if not raw:
+        return [] if default is None else default
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return [] if default is None else default

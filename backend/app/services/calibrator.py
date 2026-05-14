@@ -11,13 +11,11 @@ from app.models.tables import Recommendation, RecommendationOutcome
 
 
 DEFAULT_AGG_WEIGHTS = {
-    "agg_w_strategy": 0.36,
-    "agg_w_market": 0.20,
-    "agg_w_setup": 0.15,
-    "agg_w_risk": 0.10,
-    "agg_w_consensus": 0.10,
-    "agg_w_agent": 0.05,
-    "agg_w_evidence": 0.04,
+    "skill_agent": 0.50,
+    "strategy_rule": 0.25,
+    "market": 0.10,
+    "risk": 0.10,
+    "evidence": 0.05,
 }
 
 DEFAULT_DSA_WEIGHTS = {
@@ -30,16 +28,14 @@ DEFAULT_DSA_WEIGHTS = {
 }
 
 AGG_WEIGHT_KEYS = [
-    "agg_w_strategy",
-    "agg_w_market",
-    "agg_w_setup",
-    "agg_w_risk",
-    "agg_w_consensus",
-    "agg_w_agent",
-    "agg_w_evidence",
+    "skill_agent",
+    "strategy_rule",
+    "market",
+    "risk",
+    "evidence",
 ]
 
-COMPONENT_KEYS = ["strategy", "market", "setup", "risk", "consensus", "agent", "evidence"]
+COMPONENT_KEYS = ["skill_agent", "strategy_rule", "market", "risk", "evidence"]
 
 DSA_WEIGHT_KEYS = [
     "dsa_w_trend",

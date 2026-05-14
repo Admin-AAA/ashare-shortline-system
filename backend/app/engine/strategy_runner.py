@@ -158,11 +158,13 @@ def _signal(
 
 
 def _bucket_for_score(score: float) -> str:
-    if score >= 82:
+    if score >= 80:
         return "容量核心"
-    if score >= 72:
+    if score >= 64:
         return "高弹观察"
-    if score <= 30:
+    if score >= 50:
+        return "关注"
+    if score <= 28:
         return "明确回避"
     return "证据不足"
 

@@ -6,6 +6,7 @@ from typing import Any, Coroutine
 
 from sqlalchemy.orm import Session
 
+from app.db.session import SessionLocal
 from app.agents.session_registry import AgentSessionRegistry
 from app.agents.agno_skill_agent import (
     SkillReviewOutput,
@@ -39,10 +40,12 @@ async def run_skill_reviews(
           "hallucination_check": dict, "error": str|None}, ...]
     """
 
+    from app.core.config import get_settings
+
     # 筛选有 SKILL.md 的已启用 Skill
     active_skills = [s for s in skills if s.enabled and s.skill_body.strip()]
 
-    SKILL_TIMEOUT_SECONDS = 300
+    SKILL_TIMEOUT_SECONDS = int(get_settings().agent_skill_timeout_seconds * 1.5)
 
     async def review_one(skill: StrategySkill, stagger_index: int = 0) -> dict[str, Any]:
         # 交错启动，避免瞬间并发冲击 LLM API
@@ -70,15 +73,20 @@ async def run_skill_reviews(
                 ),
                 timeout=SKILL_TIMEOUT_SECONDS,
             )
-            result["review"] = review.model_dump() if hasattr(review, 'model_dump') else review
+            raw = review.model_dump() if hasattr(review, 'model_dump') else review
 
-            # 验证输出
+            # 验证输出（在字段名标准化之前，hallucination_check 读取 evidence）
             hc = verify_review_output(
-                review=result["review"],
+                review=raw,
                 stock=stock,
                 snapshot=snapshot,
                 rule_signal=rule_signal,
             )
+
+            # 标准化字段名：SkillReviewOutput 用 evidence/score，下游用 supports/score_delta
+            raw.setdefault("supports", raw.pop("evidence", []))
+            raw["score_delta"] = round(float(raw.get("score", 50)) - 50.0, 2)
+            result["review"] = raw
             result["hallucination_check"] = hc
 
         except asyncio.TimeoutError:
@@ -114,7 +122,7 @@ async def run_full_review(
     """
 
     session_id = f"sess_{uuid.uuid4().hex[:12]}"
-    AgentSessionRegistry.register(session_id, db, skills, snapshot)
+    AgentSessionRegistry.register(session_id, SessionLocal, skills, snapshot)
 
     try:
         # 为每只股票预计算 rule_signals（由外部 workbench_service 传入更好，

@@ -4,11 +4,15 @@ __pycache__/
 *.pyc
 .pytest_cache/
 backend/ashare_workbench.db*
+backend/data/
 backend/data/*.db
+backend/.pytest_ashare_workbench.db
+backend/scripts/.backfill_daily_bars_progress.jsonl
+backend/acceptance_report.json
+.playwright-cli/
 node_modules/
 
 frontend/dist/
 frontend/.vite/
 .env
 backend/logs/
-

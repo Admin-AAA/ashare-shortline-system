@@ -6,7 +6,7 @@ weight: 1.0
 meta:
   author: system
   style: shortline
-  version: 0.1.0
+  version: 0.2.0
   holding_days: [1, 3, 5]
 
 contract:
@@ -41,6 +41,12 @@ phases:
     hard_veto: false
     risk_flags: ["注意换手确认"]
 
+  - name: 高潮期
+    when: "_sentiment_phase == '高潮'"
+    score_cap: 95
+    hard_veto: false
+    risk_flags: ["高潮期注意分歧"]
+
   - name: 启动
     when: "dist20 < 15 and chg20 < 25 and pos20 < 85"
     score_cap: 92
@@ -59,21 +65,113 @@ setups:
     entry_rule: "放量修复分歧日高点"
     invalid_rule: "失守分歧日低点"
 
+  - name: 龙头启动
+    when: "_is_leader_candidate == true and breakout20 == true and turnover_rate >= 2 and turnover_rate <= 10"
+    score_delta: 12
+    entry_rule: "龙头候选放量突破，关注板块联动"
+    invalid_rule: "板块退潮或龙头炸板"
+
 scoring:
-  base: 50
+  base: 40
   rules:
+    # ── 主线与行业 ──
     - when: "_is_main == true"
-      delta: 15
+      delta: 18
       reason: 主线行业
-    - when: "primary_excess20 > 10"
-      delta: 8
-      reason: 20日超额收益强
-    - when: "turnover_rate >= 3 and turnover_rate <= 8"
-      delta: 6
-      reason: 换手处于健康区间
     - when: "_is_main == false"
-      delta: -12
+      delta: -15
       reason: 非主线降权
+    - when: "primary_excess20 > 15"
+      delta: 10
+      reason: 20日超额收益极强
+    - when: "primary_excess20 > 5"
+      delta: 5
+      reason: 20日超额收益偏强
+    - when: "primary_excess20 < -10"
+      delta: -6
+      reason: 20日超额收益偏弱
+    # ── 换手健康度 (分层) ──
+    - when: "turnover_rate >= 3 and turnover_rate <= 6"
+      delta: 8
+      reason: 换手黄金区间
+    - when: "turnover_rate >= 6 and turnover_rate <= 8"
+      delta: 4
+      reason: 换手适中
+    - when: "turnover_rate >= 8 and turnover_rate <= 10 and _is_leader_candidate == true"
+      delta: 3
+      reason: 龙头可接受偏高换手
+    - when: "turnover_rate < 1.5"
+      delta: -6
+      reason: 换手过低，关注度不足
+    - when: "turnover_rate > 10 and _is_leader_candidate == false"
+      delta: -8
+      reason: 非龙头高换手疑为主力出货
+    # ── 龙头识别 (放大) ──
+    - when: "_is_leader_candidate == true"
+      delta: 16
+      reason: 龙头候选
+    - when: "_is_leader_candidate == true and is_limit_up == true"
+      delta: 8
+      reason: 涨停龙头确认
+    - when: "_is_leader_candidate == true and _is_main == true"
+      delta: 6
+      reason: 主线龙头共振
+    # ── 主力共识 (放大) ──
+    - when: "_consensus_signal == '主力吸筹'"
+      delta: 12
+      reason: 超大单净流入+散户净流出
+    - when: "_consensus_signal == '机构共识'"
+      delta: 8
+      reason: 主力与超大单共振流入
+    - when: "_consensus_signal == '散户主导'"
+      delta: -12
+      reason: 散户主导，缺乏主力共识
+    - when: "main_net_inflow_yi > 0.5"
+      delta: 5
+      reason: 主力日内净流入超5kw
+    - when: "main_net_inflow_ratio > 8"
+      delta: 4
+      reason: 主力净流入占比超8%
+    # ── 龙虎榜买榜质量 ──
+    - when: "dragon_tiger_is_on_list == true and _dragon_tiger_dispersion == '集中'"
+      delta: 8
+      reason: 龙虎榜买榜集中
+    - when: "dragon_tiger_is_on_list == true and _dragon_tiger_dispersion == '分散'"
+      delta: -6
+      reason: 龙虎榜买榜分散，主力分歧
+    - when: "dragon_tiger_is_on_list == true and _dragon_tiger_inst_ratio >= 0.5"
+      delta: 6
+      reason: 机构净买入占比过半
+    - when: "dragon_tiger_is_on_list == true and _dragon_tiger_inst_ratio >= 0.7"
+      delta: 4
+      reason: 机构净买入高度集中
+    # ── 市场情绪 (分层) ──
+    - when: "_sentiment_phase == '高潮'"
+      delta: 6
+      reason: 市场情绪高潮
+    - when: "_sentiment_phase == '活跃'"
+      delta: 3
+      reason: 市场情绪活跃
+    - when: "_sentiment_phase == '冰点'"
+      delta: -10
+      reason: 市场情绪冰点，降权
+    # ── 价格位置 (新增) ──
+    - when: "pos20 > 90"
+      delta: -5
+      reason: 20日高位追涨风险
+    - when: "pos60 > 95"
+      delta: -7
+      reason: 60日极高位
+    - when: "pos20 < 30 and chg20 > 0"
+      delta: 4
+      reason: 低位企稳
+    # ── 跌幅与风险 (新增) ──
+    - when: "max_dd20 < -20"
+      delta: -8
+      reason: 20日最大回撤过大
+    - when: "off_high_pct < -15"
+      delta: -6
+      reason: 距20日高点太远
 
 risk:
   rules:
@@ -83,4 +181,12 @@ risk:
     - when: "turnover_rate > 12"
       level: high
       flag: 高换手风险
-
+    - when: "_consensus_signal == '散户主导'"
+      level: medium
+      flag: 散户主导无主力共识
+    - when: "dragon_tiger_is_on_list == true and _dragon_tiger_dispersion == '分散'"
+      level: medium
+      flag: 龙虎榜买榜分散
+    - when: "_sentiment_phase == '冰点' and _is_leader_candidate == false"
+      level: high
+      flag: 冰点期非龙头不参与
