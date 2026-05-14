@@ -1,4 +1,4 @@
-import { Target, AlertTriangle, ChevronDown, ChevronUp, Layers3, BrainCircuit } from "lucide-react";
+import { Target, AlertTriangle, ChevronDown, ChevronUp, Layers3, BrainCircuit, Trash2 } from "lucide-react";
 import { useState, type MouseEvent } from "react";
 import type { RecommendationCard } from "../types";
 import ScoreGauge from "./ScoreGauge";
@@ -9,6 +9,7 @@ type Props = {
   isSelected?: boolean;
   onSelect: (id: string) => void;
   onWatch: (id: string, status: string) => void;
+  onDelete: (id: string) => void;
 };
 
 const BUCKET_COLORS: Record<string, string> = {
@@ -18,7 +19,7 @@ const BUCKET_COLORS: Record<string, string> = {
   "明确回避": "#c0392b",
 };
 
-export default function EnhancedRecommendationCard({ item, isSelected, onSelect, onWatch }: Props) {
+export default function EnhancedRecommendationCard({ item, isSelected, onSelect, onWatch, onDelete }: Props) {
   const [expanded, setExpanded] = useState(false);
   const bucketColor = BUCKET_COLORS[item.bucket] ?? "#87928b";
 
@@ -52,6 +53,9 @@ export default function EnhancedRecommendationCard({ item, isSelected, onSelect,
         <div className="erc-actions" onClick={(e) => e.stopPropagation()}>
           <button className="ghost-btn small" type="button" onClick={() => onWatch(item.recommendation_id, "watching")}>
             <Target size={13} />
+          </button>
+          <button className="ghost-btn small danger" type="button" onClick={() => onDelete(item.recommendation_id)}>
+            <Trash2 size={13} />
           </button>
         </div>
       </div>

@@ -300,6 +300,23 @@ button:disabled {
   border-color: var(--line-soft);
 }
 
+.ghost-btn.danger {
+  color: var(--danger);
+}
+.ghost-btn.danger:hover {
+  background: #fef2f2;
+  border-color: var(--danger);
+}
+
+.icon-btn.danger {
+  color: var(--danger);
+  opacity: 0.5;
+}
+.icon-btn.danger:hover {
+  opacity: 1;
+  background: #fef2f2;
+}
+
 .toast {
   display: flex;
   align-items: center;

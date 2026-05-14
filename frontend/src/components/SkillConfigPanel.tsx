@@ -5,6 +5,7 @@ import {
   Plus,
   Save,
   SquarePen,
+  Trash2,
 } from "lucide-react";
 import type { Preset, PresetDraft, PresetSkillDraft, RunMode, RunTarget, SkillSummary } from "../types";
 
@@ -31,6 +32,7 @@ type Props = {
   onResetToNewPreset: () => void;
   onDuplicatePreset: () => void;
   onCopyPreset: () => void;
+  onDeletePreset: () => void;
 };
 
 export default function SkillConfigPanel(props: Props) {
@@ -57,6 +59,7 @@ export default function SkillConfigPanel(props: Props) {
     onResetToNewPreset,
     onDuplicatePreset,
     onCopyPreset,
+    onDeletePreset,
   } = props;
 
   return (
@@ -85,6 +88,15 @@ export default function SkillConfigPanel(props: Props) {
         <button className="ghost-btn" onClick={onCopyPreset}>
           <Copy size={14} />
           复制
+        </button>
+        <button
+          className="ghost-btn danger"
+          onClick={onDeletePreset}
+          disabled={!selectedPresetId}
+          title="删除当前预设"
+        >
+          <Trash2 size={14} />
+          删除
         </button>
       </div>
 

@@ -2,6 +2,7 @@ import {
   Flame,
   Layers3,
   Target,
+  Trash2,
   X,
 } from "lucide-react";
 import { useState } from "react";
@@ -14,6 +15,7 @@ type Props = {
   selectedRunId: string;
   onSelect: (run: RunSummary) => void;
   onOpenPool: (run: RunSummary) => void;
+  onDelete: (runId: string) => void;
 };
 
 export type RunHistoryMode = "all" | "formal" | "experiment";
@@ -25,6 +27,7 @@ export default function RunHistoryPanel({
   selectedRunId,
   onSelect,
   onOpenPool,
+  onDelete,
 }: Props) {
   const [modalOpen, setModalOpen] = useState(false);
   const [modalRun, setModalRun] = useState<RunSummary | null>(null);
@@ -85,6 +88,14 @@ export default function RunHistoryPanel({
                       <Tag text={run.run_mode} />
                       {isRunning && <span className="tag" style={{ background: "#dbeafe", color: "#2563eb" }}>运行中</span>}
                       {isFailed && <span className="tag" style={{ background: "#fee2e2", color: "#dc2626" }}>运行失败</span>}
+                      <button
+                        className="icon-btn danger"
+                        title="删除运行记录"
+                        onClick={(e) => { e.stopPropagation(); onDelete(run.run_id); }}
+                        style={{ marginLeft: "auto" }}
+                      >
+                        <Trash2 size={14} />
+                      </button>
                     </div>
                     <div className="run-meta">
                       <span>{run.trade_date}</span>

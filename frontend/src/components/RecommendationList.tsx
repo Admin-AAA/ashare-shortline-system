@@ -6,9 +6,10 @@ type Props = {
   selectedId: string;
   onSelect: (id: string) => void;
   onWatch: (id: string, status: string) => void;
+  onDelete: (id: string) => void;
 };
 
-export default function RecommendationList({ recommendations, selectedId, onSelect, onWatch }: Props) {
+export default function RecommendationList({ recommendations, selectedId, onSelect, onWatch, onDelete }: Props) {
   if (!recommendations.length) {
     return (
       <div className="empty-hint">
@@ -27,6 +28,7 @@ export default function RecommendationList({ recommendations, selectedId, onSele
           isSelected={item.recommendation_id === selectedId}
           onSelect={onSelect}
           onWatch={onWatch}
+          onDelete={onDelete}
         />
       ))}
     </div>

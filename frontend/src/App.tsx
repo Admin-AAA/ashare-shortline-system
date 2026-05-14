@@ -717,6 +717,41 @@ export default function App() {
     }
   }
 
+  async function deleteRun(runId: string) {
+    if (!confirm("确定删除此运行记录？将同时删除关联的推荐、结果和审查数据。")) return;
+    try {
+      await api.deleteRun(runId);
+      setMessage(`已删除运行记录 ${runId}`);
+      await bootstrapApp();
+    } catch (err) {
+      setError(messageFromError(err));
+    }
+  }
+
+  async function deleteRecommendation(recId: string) {
+    if (!confirm("确定删除此推荐？")) return;
+    try {
+      await api.deleteRecommendation(recId);
+      setMessage("已删除推荐");
+      if (selectedRunId) await loadRunRecommendations(selectedRunId);
+    } catch (err) {
+      setError(messageFromError(err));
+    }
+  }
+
+  async function deletePreset() {
+    if (!selectedPresetId) return;
+    if (!confirm(`确定删除预设 "${presets.find(p => p.preset_id === selectedPresetId)?.name || selectedPresetId}"？`)) return;
+    try {
+      await api.deletePreset(selectedPresetId);
+      setMessage("已删除预设");
+      await bootstrapApp();
+      setSelectedPresetId("");
+    } catch (err) {
+      setError(messageFromError(err));
+    }
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -757,16 +792,6 @@ export default function App() {
           </div>
         </div>
 
-        <div className="sidebar-actions">
-          <button className="ghost-btn" onClick={() => void bootstrapApp()}>
-            {loading ? <Loader2 size={14} className="spin" /> : <RefreshCcw size={14} />}
-            刷新
-          </button>
-          <button className="ghost-btn" onClick={() => void autoLabelPending()}>
-            <Target size={14} />
-            批量回填
-          </button>
-        </div>
       </aside>
 
       <main className="workspace">
@@ -778,11 +803,7 @@ export default function App() {
           <div className="topbar-actions">
             <button onClick={() => void bootstrapApp()}>
               <RefreshCcw size={14} />
-              刷新全局
-            </button>
-            <button className="primary" onClick={() => void runCurrentSelection()} disabled={running}>
-              {running ? <Loader2 size={14} className="spin" /> : <Play size={14} />}
-              运行
+              刷新
             </button>
           </div>
         </header>
@@ -821,6 +842,7 @@ export default function App() {
                 onResetToNewPreset={resetToNewPreset}
                 onDuplicatePreset={duplicatePreset}
                 onCopyPreset={duplicatePreset}
+                onDeletePreset={() => void deletePreset()}
               />
             </section>
 
@@ -933,6 +955,7 @@ export default function App() {
                   setDetailModalOpen(true);
                 }}
                 onWatch={watchById}
+                onDelete={(id) => void deleteRecommendation(id)}
               />
             </section>
 
@@ -975,6 +998,7 @@ export default function App() {
             onOpenPool={() => {
               setSection("pool");
             }}
+            onDelete={(id) => void deleteRun(id)}
           />
         )}
 
@@ -1041,6 +1065,10 @@ export default function App() {
                 <button className={statsMode === "experiment" ? "active" : ""} onClick={() => setStatsMode("experiment")}>
                   <Flame size={14} />
                   实验
+                </button>
+                <button className="ghost-btn" style={{ marginLeft: 16 }} onClick={() => void autoLabelPending()}>
+                  <RefreshCcw size={14} />
+                  批量回填
                 </button>
               </div>
               {overview ? <OverviewCards overview={overview} /> : <EmptyHint text="暂无统计" />}
