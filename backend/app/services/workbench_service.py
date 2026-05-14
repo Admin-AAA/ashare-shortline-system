@@ -611,7 +611,9 @@ def get_run_detail(db: Session, run_id: str) -> dict[str, Any] | None:
 def delete_run(db: Session, run_id: str) -> bool:
     run = db.get(RecommendationRun, run_id)
     if run is None:
-        return False
+        logger.warning("delete_run: run_id=%s not found (already deleted or never existed), treating as idempotent success", run_id)
+        invalidate_bootstrap_cache()
+        return True
     recs = db.scalars(select(Recommendation).where(Recommendation.run_id == run_id)).all()
     rec_ids = [rec.recommendation_id for rec in recs]
     if rec_ids:
@@ -634,7 +636,9 @@ def delete_run(db: Session, run_id: str) -> bool:
 def delete_recommendation(db: Session, recommendation_id: str) -> bool:
     rec = db.get(Recommendation, recommendation_id)
     if rec is None:
-        return False
+        logger.warning("delete_recommendation: recommendation_id=%s not found, treating as idempotent success", recommendation_id)
+        invalidate_bootstrap_cache()
+        return True
     db.execute(text("DELETE FROM agent_decision_logs WHERE recommendation_id = :rid"), {"rid": recommendation_id})
     db.execute(text("DELETE FROM review_notes WHERE recommendation_id = :rid"), {"rid": recommendation_id})
     db.execute(text("DELETE FROM watch_items WHERE source_recommendation_id = :rid"), {"rid": recommendation_id})
@@ -648,7 +652,9 @@ def delete_recommendation(db: Session, recommendation_id: str) -> bool:
 def delete_preset(db: Session, preset_id: str) -> bool:
     preset = db.get(Preset, preset_id)
     if preset is None:
-        return False
+        logger.warning("delete_preset: preset_id=%s not found, treating as idempotent success", preset_id)
+        invalidate_bootstrap_cache()
+        return True
     db.execute(text("DELETE FROM preset_skills WHERE preset_id = :pid"), {"pid": preset_id})
     db.delete(preset)
     db.commit()

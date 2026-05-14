@@ -722,9 +722,10 @@ export default function App() {
     try {
       await api.deleteRun(runId);
       setMessage(`已删除运行记录 ${runId}`);
-      await bootstrapApp();
     } catch (err) {
       setError(messageFromError(err));
+    } finally {
+      await bootstrapApp();
     }
   }
 
@@ -733,9 +734,10 @@ export default function App() {
     try {
       await api.deleteRecommendation(recId);
       setMessage("已删除推荐");
-      if (selectedRunId) await loadRunRecommendations(selectedRunId);
     } catch (err) {
       setError(messageFromError(err));
+    } finally {
+      if (selectedRunId) await loadRunRecommendations(selectedRunId);
     }
   }
 
@@ -745,10 +747,11 @@ export default function App() {
     try {
       await api.deletePreset(selectedPresetId);
       setMessage("已删除预设");
-      await bootstrapApp();
       setSelectedPresetId("");
     } catch (err) {
       setError(messageFromError(err));
+    } finally {
+      await bootstrapApp();
     }
   }
 
