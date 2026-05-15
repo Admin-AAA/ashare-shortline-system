@@ -63,6 +63,8 @@ from app.services.research_context import build_research_contexts
 
 DEFAULT_BUCKET_LIMITS = {"容量核心": 3, "高弹观察": 2}
 BOOTSTRAP_CACHE_TTL_SECONDS = 30.0
+RUN_HEARTBEAT_STALE_SECONDS = 90
+RUN_ACTIVE_STATUSES = {"queued", "running"}
 DATA_SOURCE_LOCAL_POOL = "local_pool"
 DATA_SOURCE_LOCAL_POOL_PREFERRED = "local_pool_preferred"
 DATA_SOURCE_REALTIME = "realtime"
@@ -197,12 +199,14 @@ def enqueue_workbench_run(db: Session, payload: dict[str, Any]) -> dict[str, Any
         raise ValueError("没有可运行的 Skill，请检查预设配置或 Skill 状态")
 
     run_id = _new_run_id()
+    now = datetime.utcnow()
     run = RecommendationRun(
         run_id=run_id,
         preset_id=params.get("preset_id"),
         run_name=params["run_name"],
         run_mode=params["run_mode"],
         trade_date=_latest_trade_date(db),
+        started_at=now,
         universe_count=0,
         recommended_count=0,
         market_scope=params["market_scope"],
@@ -213,7 +217,12 @@ def enqueue_workbench_run(db: Session, payload: dict[str, Any]) -> dict[str, Any
         params_json=_dumps(params),
         market_snapshot_json=_dumps({}),
         result_summary_json=_dumps({"agent_runtime": "queued"}),
-        status="running",
+        status="queued",
+        heartbeat_at=now,
+        progress_phase="queued",
+        progress_current=0,
+        progress_total=0,
+        progress_message="等待后台工作线程接管",
     )
     db.add(run)
     db.commit()
@@ -692,6 +701,15 @@ def _run_queue_worker() -> None:
         run_id, payload = _run_queue.get()
         db = SessionLocal()
         try:
+            _update_run_progress(
+                db,
+                run_id,
+                phase="starting",
+                current=0,
+                total=0,
+                message="后台任务已接管，开始准备运行",
+                status="running",
+            )
             asyncio.run(run_workbench(db, payload, existing_run_id=run_id))
         except Exception as exc:
             logger.exception("background run failed: %s", run_id)
@@ -709,6 +727,9 @@ def _mark_run_failed(db: Session, run_id: str, exc: Exception) -> None:
         run.status = "failed"
         run.error_message = str(exc)
         run.finished_at = datetime.utcnow()
+        run.heartbeat_at = run.finished_at
+        run.progress_phase = "failed"
+        run.progress_message = str(exc)
         db.commit()
         invalidate_bootstrap_cache()
     except Exception:
@@ -716,7 +737,77 @@ def _mark_run_failed(db: Session, run_id: str, exc: Exception) -> None:
         logger.exception("failed to persist background run failure: %s", run_id)
 
 
+def _update_run_progress(
+    db: Session,
+    run_id: str | None,
+    phase: str,
+    current: int | None = None,
+    total: int | None = None,
+    message: str | None = None,
+    status: str | None = None,
+    commit: bool = True,
+) -> RecommendationRun | None:
+    if not run_id:
+        return None
+    run = db.get(RecommendationRun, run_id)
+    if run is None:
+        return None
+    now = datetime.utcnow()
+    run.heartbeat_at = now
+    run.progress_phase = phase
+    if current is not None:
+        run.progress_current = max(0, int(current))
+    if total is not None:
+        run.progress_total = max(0, int(total))
+    if message is not None:
+        run.progress_message = message
+    if status is not None:
+        run.status = status
+        if status in RUN_ACTIVE_STATUSES:
+            run.finished_at = None
+            run.interrupted_at = None
+        if status != "failed":
+            run.error_message = None
+    if commit:
+        db.commit()
+        invalidate_bootstrap_cache()
+    else:
+        db.flush()
+    return run
+
+
+def recover_interrupted_runs(db: Session) -> int:
+    now = datetime.utcnow()
+    runs = db.scalars(select(RecommendationRun).where(RecommendationRun.status.in_(tuple(RUN_ACTIVE_STATUSES)))).all()
+    recovered = 0
+    for run in runs:
+        run.status = "interrupted"
+        run.interrupted_at = now
+        run.finished_at = now
+        run.heartbeat_at = now
+        run.error_message = "服务重启或进程退出，后台任务已中断；请重新发起运行。"
+        run.progress_phase = "interrupted"
+        if not run.progress_message:
+            run.progress_message = "任务未正常结束"
+        recovered += 1
+    if recovered:
+        db.commit()
+        invalidate_bootstrap_cache()
+        logger.warning("marked %d stale recommendation runs as interrupted on startup", recovered)
+    return recovered
+
+
 async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: str | None = None) -> dict[str, Any]:
+    run_id = existing_run_id or _new_run_id()
+    _update_run_progress(
+        db,
+        existing_run_id,
+        phase="prepare",
+        current=0,
+        total=0,
+        message="同步 Skill 与运行参数",
+        status="running",
+    )
     skills = sync_skills(db)
     skill_map = {skill.skill_id: skill for skill in skills}
     preset = db.get(Preset, payload["preset_id"]) if payload.get("preset_id") else None
@@ -730,6 +821,15 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         raise ValueError("没有可运行的 Skill，请检查预设配置或 Skill 状态")
 
     data_source = _normalize_data_source(params.get("data_source"))
+    _update_run_progress(
+        db,
+        existing_run_id,
+        phase="market_data",
+        current=0,
+        total=0,
+        message="拉取并校验市场股票池",
+        status="running",
+    )
     if data_source == DATA_SOURCE_REALTIME:
         stocks, snapshot = get_market_universe()
     elif data_source == DATA_SOURCE_LOCAL_POOL_PREFERRED:
@@ -737,12 +837,30 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     else:
         stocks, snapshot = get_market_universe_from_pool(db, refresh=False)
     snapshot.setdefault("breadth", {})["run_data_source_mode"] = data_source
+    _update_run_progress(
+        db,
+        existing_run_id,
+        phase="market_data",
+        current=len(stocks),
+        total=len(stocks),
+        message=f"股票池已就绪，共 {len(stocks)} 只",
+        status="running",
+    )
     _persist_market(db, snapshot)
     _persist_stocks_and_bars(db, stocks)
     scoped_stocks = _apply_market_scope_to_stocks(db, stocks, params)
     if not scoped_stocks:
         raise ValueError("当前市场范围内没有可运行的股票，请调整预设范围后重试")
     snapshot.setdefault("breadth", {})["scoped_candidate_count"] = len(scoped_stocks)
+    _update_run_progress(
+        db,
+        existing_run_id,
+        phase="scope_filter",
+        current=len(scoped_stocks),
+        total=len(stocks),
+        message=f"市场范围过滤完成，候选 {len(scoped_stocks)} 只",
+        status="running",
+    )
 
     # ── 辅助数据刷新：概念板块 / 龙虎榜 / 资金流向 / 新闻公告 ──
     aux_audit: dict[str, Any] = {
@@ -758,6 +876,15 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         stock["code"]
         for stock in sorted(scoped_stocks, key=lambda item: float(item.get("free_mv_yi") or 0), reverse=True)[:aux_prefetch_count]
     ]
+    _update_run_progress(
+        db,
+        existing_run_id,
+        phase="auxiliary_data",
+        current=0,
+        total=4,
+        message="刷新辅助数据：概念板块、龙虎榜、资金流向、新闻公告",
+        status="running",
+    )
     # 概念板块：全量刷新（数据量小，覆盖所有 A 股板块）
     if skip_aux_refresh:
         for key in aux_audit:
@@ -790,6 +917,15 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                     "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
                     "error": str(exc),
                 }
+    _update_run_progress(
+        db,
+        existing_run_id,
+        phase="auxiliary_data",
+        current=1,
+        total=4,
+        message="概念板块数据检查完成",
+        status="running",
+    )
     # 龙虎榜：全量刷新（每日上榜股票总量小）
     if not skip_aux_refresh and settings.enable_dragon_tiger_fetch:
         if _has_fresh_dragon_tiger_cache(db, snapshot["trade_date"], settings.dragon_tiger_cache_ttl_seconds):
@@ -819,6 +955,15 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                     "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
                     "error": str(exc),
                 }
+    _update_run_progress(
+        db,
+        existing_run_id,
+        phase="auxiliary_data",
+        current=2,
+        total=4,
+        message="龙虎榜数据检查完成",
+        status="running",
+    )
     # 资金流向 + 新闻：只补当前范围内、市值靠前股票的缺失缓存。
     if not skip_aux_refresh and settings.enable_capital_flow_fetch and aux_prefetch_codes:
         stale_capital_flow_codes = _stale_capital_flow_codes(
@@ -853,6 +998,15 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                 "requested_count": 0,
                 "elapsed_ms": 0,
             }
+    _update_run_progress(
+        db,
+        existing_run_id,
+        phase="auxiliary_data",
+        current=3,
+        total=4,
+        message="资金流向数据检查完成",
+        status="running",
+    )
     if not skip_aux_refresh and settings.enable_news_fetch and aux_prefetch_codes:
         stale_news_codes = _stale_news_codes(
             db,
@@ -886,12 +1040,29 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                 "requested_count": 0,
                 "elapsed_ms": 0,
             }
+    _update_run_progress(
+        db,
+        existing_run_id,
+        phase="auxiliary_data",
+        current=4,
+        total=4,
+        message="辅助数据刷新完成",
+        status="running",
+    )
     snapshot.setdefault("breadth", {})["auxiliary_data_audit"] = aux_audit
 
+    _update_run_progress(
+        db,
+        existing_run_id,
+        phase="feature_build",
+        current=0,
+        total=len(scoped_stocks),
+        message=f"构建 {len(scoped_stocks)} 只股票的特征与研究上下文",
+        status="running",
+    )
     features = build_features(scoped_stocks, snapshot, _load_calibrated_dsa_weights(db), db=db)
     research_contexts = build_research_contexts(features, snapshot)
 
-    run_id = existing_run_id or _new_run_id()
     run = db.get(RecommendationRun, run_id) if existing_run_id else None
     if run is None:
         run = RecommendationRun(run_id=run_id)
@@ -900,7 +1071,8 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     run.run_name = params["run_name"]
     run.run_mode = params["run_mode"]
     run.trade_date = snapshot["trade_date"]
-    run.started_at = datetime.utcnow()
+    if not run.started_at:
+        run.started_at = datetime.utcnow()
     run.finished_at = None
     run.universe_count = len(research_contexts)
     run.recommended_count = 0
@@ -914,6 +1086,12 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     run.result_summary_json = _dumps({})
     run.status = "running"
     run.error_message = None
+    run.heartbeat_at = datetime.utcnow()
+    run.progress_phase = "feature_build"
+    run.progress_current = len(research_contexts)
+    run.progress_total = len(research_contexts)
+    run.progress_message = f"特征构建完成，进入规则扫描：{len(research_contexts)} 只"
+    run.interrupted_at = None
     db.flush()
     db.commit()  # Persist immediately so the run record survives failures
     invalidate_bootstrap_cache()
@@ -943,8 +1121,18 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             skill_review_limit = min(max(int(params.get("output_count") or 0) * default_multiple, default_min), 60)
         skill_review_concurrency = max(1, int(settings.market_skill_review_concurrency or 1))
         prelim_entries: list[dict[str, Any]] = []
+        total_contexts = len(research_contexts)
+        _update_run_progress(
+            db,
+            run_id,
+            phase="rule_scan",
+            current=0,
+            total=total_contexts,
+            message=f"开始规则扫描：{total_contexts} 只",
+            status="running",
+        )
 
-        for i, context in enumerate(research_contexts):
+        for i, context in enumerate(research_contexts, start=1):
             if i % 50 == 0:
                 await asyncio.sleep(0)
             stock = context.to_skill_input()
@@ -962,6 +1150,16 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                     "stock": stock,
                 }
             )
+            if i == 1 or i % 100 == 0 or i == total_contexts:
+                _update_run_progress(
+                    db,
+                    run_id,
+                    phase="rule_scan",
+                    current=i,
+                    total=total_contexts,
+                    message=f"规则扫描 {i}/{total_contexts}",
+                    status="running",
+                )
 
         prelim_entries.sort(key=lambda item: float(item.get("prelim_score") or 0), reverse=True)
         gate_result = _build_skill_rule_gate(prelim_entries, selected_skills, settings)
@@ -995,6 +1193,15 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             skill_demo_limited=skill_demo_limited,
         )
         snapshot.setdefault("breadth", {})["recommendation_pipeline"] = pipeline_audit
+        _update_run_progress(
+            db,
+            run_id,
+            phase="skill_gate",
+            current=len(skill_candidates),
+            total=len(prelim_entries),
+            message=f"规则门完成，进入 Skill 深审 {len(skill_candidates)} 只",
+            status="running",
+        )
 
         # ═══ 阶段二：Agent / Skill 深度审查（显式扫描集） ═══
         semaphore = asyncio.Semaphore(skill_review_concurrency)
@@ -1020,9 +1227,30 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                 "skill_reviews": skill_reviews,
             }
 
-        candidate_results = await asyncio.gather(
-            *[_process_candidate(entry) for entry in skill_candidates]
+        candidate_results: list[dict[str, Any]] = []
+        review_total = len(skill_candidates)
+        _update_run_progress(
+            db,
+            run_id,
+            phase="skill_review",
+            current=0,
+            total=review_total,
+            message=f"Skill 深审启动：{review_total} 只，最多并发 {skill_review_concurrency}",
+            status="running",
         )
+        if skill_candidates:
+            tasks = [asyncio.create_task(_process_candidate(entry)) for entry in skill_candidates]
+            for i, task in enumerate(asyncio.as_completed(tasks), start=1):
+                candidate_results.append(await task)
+                _update_run_progress(
+                    db,
+                    run_id,
+                    phase="skill_review",
+                    current=i,
+                    total=review_total,
+                    message=f"Skill 深审 {i}/{review_total}",
+                    status="running",
+                )
 
         # 将 Agent API 调用成本写入数据库
         from app.agents.agno_skill_agent import drain_api_costs
@@ -1031,6 +1259,15 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             record_api_call(db, run_id=run_id, **cost)
 
         # ═══ 阶段三：聚合（Skill 输入集有 Agent 审查，非输入集仅作显式降权补充） ═══
+        _update_run_progress(
+            db,
+            run_id,
+            phase="aggregate",
+            current=0,
+            total=max(len(candidate_results), 1),
+            message="聚合 Skill 结论并生成候选卡片",
+            status="running",
+        )
         def _build_card(entry, skill_reviews):
             context = entry["context"]
             stock = entry["stock"]
@@ -1160,7 +1397,25 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             for entry in non_skill_entries:
                 card = _build_card(entry, [])
                 if card.get("final_score"):
+                    discount = 0.85
                     card["final_score"] *= 0.85  # 无 Agent 审查重度降权
+                    card["final_score"] = round(float(card["final_score"]), 2)
+                    card["bucket"] = _bucket_for_final_score(card["final_score"], card.get("bucket"))
+                    card["component_scores"] = {
+                        key: round(float(value) * discount, 2)
+                        for key, value in (card.get("component_scores") or {}).items()
+                    }
+                    card["component_scale"] = round(float(card.get("component_scale") or 1.0) * discount, 4)
+                    discipline = card.get("market_discipline")
+                    if isinstance(discipline, dict):
+                        discipline["action"] = "规则补充观察"
+                        discipline["max_position_pct"] = min(float(discipline.get("max_position_pct") or 0), 15.0)
+                        discipline.setdefault("risk_flags", []).append("规则补充票，等待深审或盘中确认")
+                        card["risk_flags"] = list(dict.fromkeys((card.get("risk_flags") or []) + discipline["risk_flags"]))
+                    if card.get("feature_snapshot"):
+                        card["feature_snapshot"]["component_scores"] = card.get("component_scores", {})
+                        card["feature_snapshot"]["market_discipline"] = card.get("market_discipline", {})
+                        card["feature_snapshot"]["component_scale"] = card.get("component_scale", 1.0)
                 card["agent_logs"] = []
                 if params["hide_recent_repeats"] and card["recent_repeat"]:
                     continue
@@ -1169,6 +1424,15 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                     break
 
         cards = apply_pool_rules(cards, params["bucket_limits"], params["output_count"])
+        _update_run_progress(
+            db,
+            run_id,
+            phase="persist",
+            current=0,
+            total=len(cards),
+            message=f"候选池裁剪完成，开始保存 {len(cards)} 条推荐",
+            status="running",
+        )
         saved: list[Recommendation] = []
         for index, card in enumerate(cards, start=1):
             recommendation_id = f"rec_{snapshot['trade_date'].replace('-', '')}_{index:03d}_{uuid.uuid4().hex[:4]}"
@@ -1195,6 +1459,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                         "recommend_price": card.get("recommend_price"),
                         "stop_loss": card.get("stop_loss"),
                         "take_profit": card.get("take_profit"),
+                        "market_discipline": card.get("market_discipline", {}),
                         "aggregation_weights": card.get("aggregation_weights", {}),
                         "raw_component_scores": card.get("raw_component_scores", {}),
                         "component_scale": card.get("component_scale", 1.0),
@@ -1224,10 +1489,25 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                     )
                 )
             saved.append(rec)
+            _update_run_progress(
+                db,
+                run_id,
+                phase="persist",
+                current=index,
+                total=len(cards),
+                message=f"保存推荐 {index}/{len(cards)}",
+                status="running",
+                commit=False,
+            )
 
         run.recommended_count = len(saved)
         run.finished_at = datetime.utcnow()
         run.status = "completed"
+        run.heartbeat_at = run.finished_at
+        run.progress_phase = "completed"
+        run.progress_current = len(saved)
+        run.progress_total = len(saved)
+        run.progress_message = "运行完成"
         run.result_summary_json = _dumps(_build_run_summary(cards, saved, snapshot, pipeline_audit))
         db.commit()
         invalidate_bootstrap_cache()
@@ -1239,6 +1519,9 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         run.status = "failed"
         run.error_message = str(exc)
         run.finished_at = datetime.utcnow()
+        run.heartbeat_at = run.finished_at
+        run.progress_phase = "failed"
+        run.progress_message = str(exc)
         db.commit()
         invalidate_bootstrap_cache()
         raise
@@ -1471,6 +1754,17 @@ def _serialize_run_summary(db: Session, run: RecommendationRun) -> dict[str, Any
     )
     success_count = sum(1 for outcome in outcomes if outcome.outcome_label == "success")
     hit_rate = round(success_count / len(outcomes), 3) if outcomes else 0.0
+    heartbeat_age_seconds = None
+    if run.heartbeat_at:
+        heartbeat_age_seconds = max(0, int((datetime.utcnow() - run.heartbeat_at).total_seconds()))
+    progress_total = int(run.progress_total or 0)
+    progress_current = int(run.progress_current or 0)
+    progress_pct = round(min(1.0, progress_current / progress_total), 4) if progress_total > 0 else None
+    is_stale = (
+        run.status in RUN_ACTIVE_STATUSES
+        and heartbeat_age_seconds is not None
+        and heartbeat_age_seconds > RUN_HEARTBEAT_STALE_SECONDS
+    )
     return {
         "run_id": run.run_id,
         "run_name": run.run_name,
@@ -1488,6 +1782,16 @@ def _serialize_run_summary(db: Session, run: RecommendationRun) -> dict[str, Any
         "recommended_count": run.recommended_count,
         "status": run.status,
         "error_message": run.error_message,
+        "heartbeat_at": run.heartbeat_at.isoformat() if run.heartbeat_at else None,
+        "heartbeat_age_seconds": heartbeat_age_seconds,
+        "heartbeat_stale_seconds": RUN_HEARTBEAT_STALE_SECONDS,
+        "is_stale": is_stale,
+        "progress_phase": run.progress_phase,
+        "progress_current": progress_current,
+        "progress_total": progress_total,
+        "progress_pct": progress_pct,
+        "progress_message": run.progress_message,
+        "interrupted_at": run.interrupted_at.isoformat() if run.interrupted_at else None,
         "skill_count": len(_loads(run.selected_skills_json, [])),
         "hit_rate": hit_rate,
         "result_summary": summary,
@@ -1757,6 +2061,22 @@ def _skill_gate_reason(signal: dict[str, Any], gate_score: float, min_score: flo
     if bucket in {"容量核心", "高弹观察"}:
         reasons.append(f"分层: {bucket}")
     return "；".join(reasons)
+
+
+def _bucket_for_final_score(score: float, current_bucket: str | None = None) -> str:
+    if score >= 80:
+        computed = "容量核心"
+    elif score >= 64:
+        computed = "高弹观察"
+    elif score >= 50:
+        computed = "关注"
+    elif score <= 28:
+        computed = "明确回避"
+    else:
+        computed = "证据不足"
+    if current_bucket == "证据不足" and computed in {"容量核心", "高弹观察", "关注"}:
+        return "证据不足"
+    return computed
 
 
 def _finalize_skill_gate_audit(

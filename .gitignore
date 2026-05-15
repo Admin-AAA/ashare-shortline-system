@@ -16,3 +16,5 @@ frontend/dist/
 frontend/.vite/
 .env
 backend/logs/
+
+.claude/

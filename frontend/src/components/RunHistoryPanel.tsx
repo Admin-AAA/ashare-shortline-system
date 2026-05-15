@@ -35,6 +35,7 @@ export default function RunHistoryPanel({
   const visibleRuns = runs.filter(
     (run) => runHistoryMode === "all" || run.run_mode === runHistoryMode,
   );
+  const currentModalRun = modalRun ? runs.find((run) => run.run_id === modalRun.run_id) ?? modalRun : null;
 
   function handleSelect(run: RunSummary) {
     onSelect(run);
@@ -73,8 +74,9 @@ export default function RunHistoryPanel({
         {visibleRuns.length ? (
           <div className="run-list" role="list">
             {visibleRuns.map((run) => {
-              const isRunning = run.status === "running";
+              const isActive = run.status === "queued" || run.status === "running";
               const isFailed = run.status === "failed";
+              const isInterrupted = run.status === "interrupted";
               return (
                 <button
                   key={run.run_id}
@@ -86,8 +88,7 @@ export default function RunHistoryPanel({
                     <div className="run-title">
                       <strong>{run.run_name}</strong>
                       <Tag text={run.run_mode} />
-                      {isRunning && <span className="tag" style={{ background: "#dbeafe", color: "#2563eb" }}>运行中</span>}
-                      {isFailed && <span className="tag" style={{ background: "#fee2e2", color: "#dc2626" }}>运行失败</span>}
+                      <Tag text={run.is_stale ? "stale" : run.status} />
                       <button
                         className="icon-btn danger"
                         title="删除运行记录"
@@ -103,13 +104,14 @@ export default function RunHistoryPanel({
                       <span>{run.skill_count} 个 Skill</span>
                     </div>
                   </div>
-                  {isFailed ? (
+                  {isFailed || isInterrupted ? (
                     <div className="run-summary-line" style={{ color: "#dc2626" }}>
                       {run.error_message ? run.error_message.slice(0, 80) + (run.error_message.length > 80 ? "..." : "") : "未知错误"}
+                      <RunProgress run={run} compact />
                     </div>
-                  ) : isRunning ? (
-                    <div className="run-summary-line" style={{ color: "#6b7280" }}>
-                      处理中...
+                  ) : isActive ? (
+                    <div className="run-summary-line active-run-summary">
+                      <RunProgress run={run} />
                     </div>
                   ) : (
                     <>
@@ -138,17 +140,17 @@ export default function RunHistoryPanel({
         )}
       </section>
 
-      {modalOpen && modalRun ? (
+      {modalOpen && currentModalRun ? (
         <div className="modal-backdrop" onClick={() => setModalOpen(false)}>
-          <section className="detail-modal run-modal" role="dialog" aria-modal="true" aria-label={`${modalRun.run_name} 摘要`} onClick={(event) => event.stopPropagation()}>
+          <section className="detail-modal run-modal" role="dialog" aria-modal="true" aria-label={`${currentModalRun.run_name} 摘要`} onClick={(event) => event.stopPropagation()}>
             <button className="modal-close" aria-label="关闭摘要" onClick={() => setModalOpen(false)}>
               <X size={18} />
             </button>
             <RunDetailPane
-              run={modalRun}
+              run={currentModalRun}
               onOpenPool={() => {
                 setModalOpen(false);
-                onOpenPool(modalRun);
+                onOpenPool(currentModalRun);
               }}
             />
           </section>
@@ -242,6 +244,12 @@ function RunSummaryCard({ run }: { run: RunSummary }) {
   const skillLimited = Boolean(run.result_summary.skill_limited ?? pipeline.skill_limited);
   return (
     <div className="summary-grid">
+      {(run.status === "queued" || run.status === "running" || run.status === "interrupted" || run.is_stale) ? (
+        <div className="summary-block wide">
+          <span>运行进度</span>
+          <RunProgress run={run} />
+        </div>
+      ) : null}
       <MiniStat label="日期" value={run.trade_date} />
       <MiniStat label="模式" value={displayText(run.run_mode)} />
       <MiniStat label="运行数据" value={displayText(run.result_summary.data_source_mode || "-")} />
@@ -289,6 +297,33 @@ function RunSummaryCard({ run }: { run: RunSummary }) {
         </div>
       </div>
       <SkillGateFunnel pipeline={pipeline} />
+    </div>
+  );
+}
+
+function RunProgress({ run, compact = false }: { run: RunSummary; compact?: boolean }) {
+  const pct = progressPercent(run);
+  const message = run.progress_message || displayText(run.progress_phase || run.status);
+  const count =
+    (run.progress_total || 0) > 0
+      ? `${run.progress_current || 0} / ${run.progress_total}`
+      : displayText(run.progress_phase || run.status);
+  return (
+    <div className={compact ? "run-progress compact" : "run-progress"}>
+      <div className="run-progress-head">
+        <strong>{message}</strong>
+        <span>{count}</span>
+      </div>
+      {(run.progress_total || 0) > 0 ? (
+        <div className="run-progress-track" aria-label="运行进度">
+          <div className="run-progress-fill" style={{ width: `${pct}%` }} />
+        </div>
+      ) : null}
+      <div className="run-progress-meta">
+        <span>{displayText(run.progress_phase || run.status)}</span>
+        {run.heartbeat_age_seconds != null ? <span>心跳 {formatDuration(run.heartbeat_age_seconds)}前</span> : null}
+        {run.is_stale ? <span className="danger-text">疑似中断</span> : null}
+      </div>
     </div>
   );
 }
@@ -357,9 +392,23 @@ function displayText(key: string): string {
     local_pool: "仅本地池",
     local_pool_preferred: "本地池优先",
     realtime: "仅实时数据源",
+    queued: "排队中",
     running: "运行中",
     completed: "已完成",
     failed: "运行失败",
+    interrupted: "已中断",
+    stale: "疑似中断",
+    prepare: "准备运行",
+    starting: "启动中",
+    market_data: "市场数据",
+    scope_filter: "范围过滤",
+    auxiliary_data: "辅助数据",
+    feature_build: "特征构建",
+    rule_scan: "规则扫描",
+    skill_gate: "规则门",
+    skill_review: "Skill 深审",
+    aggregate: "聚合",
+    persist: "保存结果",
   };
   return labels[key] ?? key;
 }
@@ -368,15 +417,35 @@ function displayTagText(text: string) {
   const labels: Record<string, string> = {
     formal: "正式",
     experiment: "实验",
+    queued: "排队中",
+    running: "运行中",
     completed: "已完成",
     failed: "运行失败",
+    interrupted: "已中断",
+    stale: "疑似中断",
   };
   return displayText(text) || labels[text] || text;
 }
 
 function toneForTag(text: string) {
   if (["formal", "completed"].includes(text)) return "positive";
-  if (["experiment"].includes(text)) return "warning";
-  if (["failed"].includes(text)) return "danger";
+  if (["experiment", "queued", "running"].includes(text)) return "warning";
+  if (["failed", "interrupted", "stale"].includes(text)) return "danger";
   return "neutral";
+}
+
+function progressPercent(run: RunSummary) {
+  if (typeof run.progress_pct === "number") {
+    return Math.max(0, Math.min(100, run.progress_pct * 100));
+  }
+  if (!run.progress_total) return 0;
+  return Math.max(0, Math.min(100, ((run.progress_current || 0) / run.progress_total) * 100));
+}
+
+function formatDuration(seconds: number) {
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours} 小时`;
 }

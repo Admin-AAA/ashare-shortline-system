@@ -35,22 +35,23 @@ def build_features(stocks: list[dict[str, Any]], snapshot: dict[str, Any], dsa_w
     enriched = []
     for stock in stocks:
         item = dict(stock)
-        profile = dict(item.pop("dsa_profile", {}) or {})
         item["_is_main"] = item.get("industry") in main_industries and item.get("industry") != "未分类"
         item["market_sample_count"] = int(snapshot.get("sample_count") or 0)
         item["market_regime"] = snapshot.get("breadth", {}).get("regime", "未知")
-        _apply_dsa_context(item, profile, dsa_weights)
-        item["risk_score"] = _risk_score(item)
         enriched.append(item)
-
-    # ── 计算陈小群龙头战法专属信号（辅助数据不可用时从 snapshot + stocks 推断）──
-    _compute_chen_xiaoqun_signals(stocks, snapshot, {}, {}, {})
 
     # 从本地辅助数据池丰富特征（涨停板/龙虎榜/新闻/资金流/概念板块）
     if db is not None:
         _enrich_with_auxiliary_data(enriched, db, snapshot)
 
     for item in enriched:
+        profile = dict(item.pop("dsa_profile", {}) or {})
+        _apply_dsa_context(item, profile, dsa_weights)
+        item["risk_score"] = _risk_score(item)
+        if db is None:
+            # 无辅助数据池时也必须把龙头、情绪、主力共识等短线字段写回策略输入。
+            # 有 db 时 _enrich_with_auxiliary_data 已用真实辅助表计算过，避免被价量回退逻辑覆盖。
+            _compute_chen_xiaoqun_signals([item], snapshot, {}, {}, {})
         _tag_features(item)
         item["data_authenticity"] = _compute_authenticity(item)
     return enriched
@@ -174,49 +175,49 @@ def _apply_context_blocks(item: dict[str, Any], profile: dict[str, Any]) -> None
     strict_real = item.get("data_source") == "real_market"
 
     item["main_net_inflow_yi"] = _num(
-        profile.get("main_net_inflow_yi"),
+        profile.get("main_net_inflow_yi", item.get("main_net_inflow_yi")),
         0.0 if strict_real else _default_main_inflow(item),
     )
     item["inflow_5d_yi"] = _num(
-        profile.get("inflow_5d_yi"),
+        profile.get("inflow_5d_yi", item.get("inflow_5d_yi")),
         item["main_net_inflow_yi"] if strict_real else round(item["main_net_inflow_yi"] * 2.2, 2),
     )
     item["inflow_10d_yi"] = _num(
-        profile.get("inflow_10d_yi"),
+        profile.get("inflow_10d_yi", item.get("inflow_10d_yi")),
         item["main_net_inflow_yi"] if strict_real else round(item["main_net_inflow_yi"] * 3.4, 2),
     )
-    item["sector_fund_rank"] = int(_num(profile.get("sector_fund_rank"), 99 if strict_real else 5 if item.get("_is_main") else 26))
+    item["sector_fund_rank"] = int(_num(profile.get("sector_fund_rank", item.get("sector_fund_rank")), 99 if strict_real else 5 if item.get("_is_main") else 26))
     item["capital_flow_score"] = _capital_flow_score(item)
 
-    item["profit_ratio"] = _num(profile.get("profit_ratio"), 50.0 if strict_real else _default_profit_ratio(item))
-    item["avg_cost"] = _num(profile.get("avg_cost"), round(_num(item.get("price")) * 0.94, 2))
-    item["cost_90_low"] = _num(profile.get("cost_90_low"), round(item["avg_cost"] * 0.92, 2))
-    item["cost_90_high"] = _num(profile.get("cost_90_high"), round(item["avg_cost"] * 1.08, 2))
-    item["concentration_90"] = _num(profile.get("concentration_90"), 13.5 if item.get("_is_main") else 22.0)
-    item["cost_70_low"] = _num(profile.get("cost_70_low"), round(item["avg_cost"] * 0.96, 2))
-    item["cost_70_high"] = _num(profile.get("cost_70_high"), round(item["avg_cost"] * 1.04, 2))
-    item["concentration_70"] = _num(profile.get("concentration_70"), 8.5 if item.get("_is_main") else 15.0)
+    item["profit_ratio"] = _num(profile.get("profit_ratio", item.get("profit_ratio")), 50.0 if strict_real else _default_profit_ratio(item))
+    item["avg_cost"] = _num(profile.get("avg_cost", item.get("avg_cost")), round(_num(item.get("price")) * 0.94, 2))
+    item["cost_90_low"] = _num(profile.get("cost_90_low", item.get("cost_90_low")), round(item["avg_cost"] * 0.92, 2))
+    item["cost_90_high"] = _num(profile.get("cost_90_high", item.get("cost_90_high")), round(item["avg_cost"] * 1.08, 2))
+    item["concentration_90"] = _num(profile.get("concentration_90", item.get("concentration_90")), 13.5 if item.get("_is_main") else 22.0)
+    item["cost_70_low"] = _num(profile.get("cost_70_low", item.get("cost_70_low")), round(item["avg_cost"] * 0.96, 2))
+    item["cost_70_high"] = _num(profile.get("cost_70_high", item.get("cost_70_high")), round(item["avg_cost"] * 1.04, 2))
+    item["concentration_70"] = _num(profile.get("concentration_70", item.get("concentration_70")), 8.5 if item.get("_is_main") else 15.0)
     item["chip_concentration"] = item["concentration_90"]
     item["chip_health"] = str(profile.get("chip_health") or _chip_health(item))
     item["chip_health_score"] = _chip_health_score(item)
 
-    item["revenue_yoy"] = _num(profile.get("revenue_yoy"), 0.0 if strict_real else 12.0 if item.get("_is_main") else 3.0)
-    item["net_profit_yoy"] = _num(profile.get("net_profit_yoy"), 0.0 if strict_real else 10.0 if item.get("_is_main") else -2.0)
-    item["roe"] = _num(profile.get("roe"), 0.0 if strict_real else 11.5)
-    item["gross_margin"] = _num(profile.get("gross_margin"), 0.0 if strict_real else 28.0)
-    item["pe_ttm"] = _num(profile.get("pe_ttm"), 0.0 if strict_real else 32.0 if item.get("_is_main") else 26.0)
+    item["revenue_yoy"] = _num(profile.get("revenue_yoy", item.get("revenue_yoy")), 0.0 if strict_real else 12.0 if item.get("_is_main") else 3.0)
+    item["net_profit_yoy"] = _num(profile.get("net_profit_yoy", item.get("net_profit_yoy")), 0.0 if strict_real else 10.0 if item.get("_is_main") else -2.0)
+    item["roe"] = _num(profile.get("roe", item.get("roe")), 0.0 if strict_real else 11.5)
+    item["gross_margin"] = _num(profile.get("gross_margin", item.get("gross_margin")), 0.0 if strict_real else 28.0)
+    item["pe_ttm"] = _num(profile.get("pe_ttm", item.get("pe_ttm")), 0.0 if strict_real else 32.0 if item.get("_is_main") else 26.0)
     item["earnings_outlook"] = str(profile.get("earnings_outlook") or ("未接入真实财务增强数据" if strict_real else "暂无重大负面业绩信号"))
     item["fundamental_score"] = _fundamental_score(item)
-    item["institution_holding_change"] = _num(profile.get("institution_holding_change"), 0.0)
-    item["top10_holder_change"] = _num(profile.get("top10_holder_change"), 0.0)
+    item["institution_holding_change"] = _num(profile.get("institution_holding_change", item.get("institution_holding_change")), 0.0)
+    item["top10_holder_change"] = _num(profile.get("top10_holder_change", item.get("top10_holder_change")), 0.0)
 
-    risk_alerts = list(profile.get("risk_alerts") or [])
-    positive_catalysts = list(profile.get("positive_catalysts") or [])
-    item["latest_news"] = str(profile.get("latest_news") or ("未接入实时新闻源" if strict_real else "暂无重大未处理新闻"))
+    risk_alerts = list(profile.get("risk_alerts") or item.get("risk_alerts") or [])
+    positive_catalysts = list(profile.get("positive_catalysts") or item.get("positive_catalysts") or [])
+    item["latest_news"] = str(profile.get("latest_news") or item.get("latest_news") or ("未接入实时新闻源" if strict_real else "暂无重大未处理新闻"))
     item["risk_alerts"] = risk_alerts
     item["positive_catalysts"] = positive_catalysts
-    item["news_risk_count"] = int(_num(profile.get("news_risk_count"), len(risk_alerts)))
-    item["positive_catalyst_count"] = int(_num(profile.get("positive_catalyst_count"), len(positive_catalysts)))
+    item["news_risk_count"] = int(_num(profile.get("news_risk_count", item.get("news_risk_count")), len(risk_alerts)))
+    item["positive_catalyst_count"] = int(_num(profile.get("positive_catalyst_count", item.get("positive_catalyst_count")), len(positive_catalysts)))
     item["sentiment_summary"] = str(profile.get("sentiment_summary") or _sentiment_summary(item))
     item["intelligence_score"] = _intelligence_score(item)
     if strict_real:
@@ -226,9 +227,9 @@ def _apply_context_blocks(item: dict[str, Any], profile: dict[str, Any]) -> None
             item["fundamental_score"] = min(item["fundamental_score"], 50)
         item["intelligence_score"] = min(item["intelligence_score"], 50)
 
-    item["dragon_tiger_is_on_list"] = _bool(profile.get("dragon_tiger_is_on_list"), False)
-    item["dragon_tiger_recent_count"] = int(_num(profile.get("dragon_tiger_recent_count"), 0))
-    item["dragon_tiger_latest_date"] = profile.get("dragon_tiger_latest_date")
+    item["dragon_tiger_is_on_list"] = _bool(profile.get("dragon_tiger_is_on_list", item.get("dragon_tiger_is_on_list")), False)
+    item["dragon_tiger_recent_count"] = int(_num(profile.get("dragon_tiger_recent_count", item.get("dragon_tiger_recent_count")), 0))
+    item["dragon_tiger_latest_date"] = profile.get("dragon_tiger_latest_date", item.get("dragon_tiger_latest_date"))
 
     item["volume_breakout_signal"] = _bool(
         profile.get("volume_breakout_signal"),

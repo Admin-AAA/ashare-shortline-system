@@ -94,6 +94,8 @@ def get_local_pool_status(
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
     latest_allowed_bar_date = _latest_allowed_bar_date()
+    latest_quote_date_for_coverage = db.scalar(select(func.max(UnifiedQuote.trade_date)))
+    coverage_trade_date = _coverage_reference_date(latest_quote_date_for_coverage, latest_allowed_bar_date)
 
     # ── 批量加载计数（使用标量子查询避免笛卡尔积）──
     raw_quote_count = _count(db, RawQuote)
@@ -106,7 +108,7 @@ def get_local_pool_status(
     ) or 0
     active_daily_bar_code_count = db.scalar(
         select(func.count(func.distinct(DailyBar.code)))
-        .where(DailyBar.trade_date == latest_allowed_bar_date)
+        .where(DailyBar.trade_date == coverage_trade_date)
     ) or 0
     daily_indicator_count = _count_with_limit(db, DailyIndicator, DailyIndicator.trade_date <= latest_allowed_bar_date)
     daily_bar_row_count = _count_with_limit(db, DailyBar, DailyBar.trade_date <= latest_allowed_bar_date)
@@ -120,7 +122,7 @@ def get_local_pool_status(
     # ── 日期/时间聚合 ──
     latest_unified = db.scalar(select(func.max(UnifiedQuote.fetched_at)))
     latest_bar_date = db.scalar(select(func.max(DailyBar.trade_date)).where(DailyBar.trade_date <= latest_allowed_bar_date))
-    latest_quote_date = db.scalar(select(func.max(UnifiedQuote.trade_date)))
+    latest_quote_date = latest_quote_date_for_coverage
     t_dates = time.perf_counter()
 
     # ── 一次性加载全部活跃 UnifiedQuote 行（供多处复用）──
@@ -135,14 +137,14 @@ def get_local_pool_status(
         db.scalar(
             select(func.count(func.distinct(DailyBar.code))).where(
                 DailyBar.code.in_(active_unified_codes) if active_unified_codes else [],
-                DailyBar.trade_date <= latest_allowed_bar_date,
+                DailyBar.trade_date <= coverage_trade_date,
             )
         ) or 0
     ) if active_unified_codes else 0
     t_full_market_bars = time.perf_counter()
 
     from app.services.market_pool import _loads, _apply_local_quote_metrics, local_pool_recommendation_readiness
-    from app.services.market_data import _select_candidates
+    from app.services.market_data import _candidate_filter_summary, _select_candidates
 
     # ── 从已加载的 ORM 行直接构建 quotes（跳过 _load_cached_quotes 的重复查询+JSON反序列化）──
     all_quotes = _unified_rows_to_quotes(all_quote_rows, skip_metrics=True)
@@ -154,8 +156,9 @@ def get_local_pool_status(
 
     eligible_quotes = _select_candidates(all_quotes, len(all_quotes)) if all_quotes else []
     eligible_codes = [str(item.get("code") or "") for item in eligible_quotes if item.get("code")]
-    eligible_bar_stats = _eligible_daily_bar_stats(db, eligible_codes, latest_allowed_bar_date)
+    eligible_bar_stats = _eligible_daily_bar_stats(db, eligible_codes, coverage_trade_date)
     base_filter_count = len(eligible_codes)
+    candidate_filter = _candidate_filter_summary(all_quotes)
     daily_bar_coverage_rate = (
         round(int(full_market_daily_bar_code_count or 0) / active_unified_quote_count * 100, 1)
         if active_unified_quote_count
@@ -192,6 +195,7 @@ def get_local_pool_status(
             "unified_quote_count": unified_quote_count,
             "active_unified_quote_count": active_unified_quote_count,
             "eligible_quote_count": base_filter_count,
+            "candidate_filter": candidate_filter,
             "daily_bar_count": daily_bar_code_count,
             "full_market_daily_bar_count": int(full_market_daily_bar_code_count or 0),
             "active_daily_bar_count": active_daily_bar_code_count,
@@ -208,6 +212,7 @@ def get_local_pool_status(
             "indicator_coverage_pct": indicator_coverage_pct,
             "latest_quote_date": latest_quote_date,
             "latest_bar_date": latest_bar_date,
+            "coverage_trade_date": coverage_trade_date,
             "latest_unified_at": latest_unified.isoformat() if latest_unified else None,
             "limit_up_board_count": limit_up_board_count,
             "concept_sector_count": concept_sector_count,
@@ -377,6 +382,15 @@ def _eligible_daily_bar_stats(db: Session, codes: list[str], latest_allowed_bar_
         "short_history_count": short_history_count,
         "coverage_rate": round(ready_count / max(1, len(codes)) * 100, 1),
     }
+
+
+def _coverage_reference_date(latest_quote_date: str | None, latest_allowed_bar_date: str) -> str:
+    if not latest_quote_date:
+        return latest_allowed_bar_date
+    quote_date = str(latest_quote_date)[:10]
+    if not quote_date:
+        return latest_allowed_bar_date
+    return min(quote_date, latest_allowed_bar_date)
 
 
 def _raw_quote_source_rows(db: Session) -> list[dict[str, Any]]:

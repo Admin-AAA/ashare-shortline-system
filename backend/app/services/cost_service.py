@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -144,17 +145,20 @@ def system_health(db: Session) -> dict[str, Any]:
 
 def list_scheduled_tasks(db: Session) -> list[dict[str, Any]]:
     """列出所有调度任务。"""
-    tasks = db.scalars(select(ScheduledTask)).all()
+    tasks = db.scalars(select(ScheduledTask).order_by(ScheduledTask.created_at.asc())).all()
     return [
         {
             "task_id": t.task_id,
             "name": t.name,
             "task_type": t.task_type,
             "cron_expression": t.cron_expression,
+            "trigger_time": _daily_trigger_time(t.cron_expression),
+            "payload": _loads(t.payload_json, {}),
             "enabled": t.enabled,
             "last_run_at": t.last_run_at.isoformat() if t.last_run_at else None,
             "last_status": t.last_status,
             "last_error": t.last_error,
+            "updated_at": t.updated_at.isoformat() if t.updated_at else None,
         }
         for t in tasks
     ]
@@ -177,11 +181,21 @@ def upsert_scheduled_task(
     task.name = name
     task.task_type = task_type
     task.cron_expression = cron_expression
-    task.payload_json = __import__("json").dumps(payload or {})
+    task.payload_json = json.dumps(payload or {}, ensure_ascii=False)
     task.enabled = enabled
     task.updated_at = datetime.utcnow()
     db.commit()
     return task
+
+
+def delete_scheduled_task(db: Session, task_id: str) -> bool:
+    """删除调度任务。"""
+    task = db.get(ScheduledTask, task_id)
+    if task is None:
+        return False
+    db.delete(task)
+    db.commit()
+    return True
 
 
 def record_task_run(
@@ -197,3 +211,25 @@ def record_task_run(
         task.last_status = status
         task.last_error = error
         db.commit()
+
+
+def _loads(value: str | None, fallback: Any) -> Any:
+    if not value:
+        return fallback
+    try:
+        return json.loads(value)
+    except Exception:
+        return fallback
+
+
+def _daily_trigger_time(cron_expression: str | None) -> str | None:
+    parts = (cron_expression or "").split()
+    if len(parts) != 5:
+        return None
+    minute, hour, day, month, weekday = parts
+    if day != "*" or month != "*" or weekday != "*":
+        return None
+    try:
+        return f"{int(hour):02d}:{int(minute):02d}"
+    except ValueError:
+        return None

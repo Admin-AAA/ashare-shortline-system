@@ -1,5 +1,6 @@
 export type RunMode = "formal" | "experiment";
 export type SkillMode = "formal" | "experiment" | "disabled";
+export type ScheduledTaskType = "pool_refresh" | "recommendation_run" | "data_backfill";
 
 export type PresetSkill = {
   skill_id: string;
@@ -24,6 +25,30 @@ export type Preset = {
   skills: PresetSkill[];
 };
 
+export type ScheduledTask = {
+  task_id: string;
+  name: string;
+  task_type: ScheduledTaskType;
+  cron_expression: string;
+  trigger_time?: string | null;
+  payload: Record<string, unknown>;
+  enabled: boolean;
+  last_run_at?: string | null;
+  last_status?: string | null;
+  last_error?: string | null;
+  updated_at?: string | null;
+};
+
+export type ScheduledTaskPayload = {
+  task_id: string;
+  name: string;
+  task_type: ScheduledTaskType;
+  trigger_time?: string;
+  cron_expression?: string;
+  payload?: Record<string, unknown>;
+  enabled: boolean;
+};
+
 export type RunSummary = {
   run_id: string;
   run_name: string;
@@ -41,6 +66,16 @@ export type RunSummary = {
   recommended_count: number;
   status: string;
   error_message?: string | null;
+  heartbeat_at?: string | null;
+  heartbeat_age_seconds?: number | null;
+  heartbeat_stale_seconds?: number;
+  is_stale?: boolean;
+  progress_phase?: string | null;
+  progress_current?: number;
+  progress_total?: number;
+  progress_pct?: number | null;
+  progress_message?: string | null;
+  interrupted_at?: string | null;
   skill_count: number;
   hit_rate: number;
   result_summary: {
@@ -213,6 +248,7 @@ export type LocalPoolReadiness = {
     candidate_count: number;
     base_filter_eligible_count?: number;
     unified_quote_total?: number;
+    filter_summary?: CandidateFilterSummary;
     latest_trade_date?: string | null;
     active_sources: string[];
   };
@@ -220,6 +256,7 @@ export type LocalPoolReadiness = {
     checked_count: number;
     ready_count: number;
     missing_count: number;
+    short_history_count?: number;
     stale_count: number;
     min_bars: number;
     coverage_count?: number;
@@ -254,6 +291,7 @@ export type LocalPoolStatus = {
     unified_quote_count: number;
     active_unified_quote_count: number;
     eligible_quote_count?: number;
+    candidate_filter?: CandidateFilterSummary;
     daily_bar_count: number;
     full_market_daily_bar_count?: number;
     active_daily_bar_count?: number;
@@ -270,6 +308,7 @@ export type LocalPoolStatus = {
     indicator_coverage_pct: number;
     latest_quote_date?: string | null;
     latest_bar_date?: string | null;
+    coverage_trade_date?: string | null;
     latest_unified_at?: string | null;
   };
   quote_sources: PoolSourceSummary[];
@@ -279,6 +318,19 @@ export type LocalPoolStatus = {
   unified_quotes_total: number;
   daily_bars: DailyBarPoolRow[];
   daily_bars_total: number;
+};
+
+export type CandidateFilterSummary = {
+  total_count: number;
+  base_eligible_count: number;
+  excluded_count: number;
+  high_liquidity_count: number;
+  low_liquidity_count: number;
+  exclusion_counts: Record<string, number>;
+  high_liquidity_threshold: {
+    amount_yi: number;
+    turnover_rate: number;
+  };
 };
 
 export type SkillSignal = {

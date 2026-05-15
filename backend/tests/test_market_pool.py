@@ -61,6 +61,13 @@ def _quote(code: str, source: str, price: float, pct: float = 3.0) -> dict:
     }
 
 
+def _low_liquidity_quote(code: str, source: str, price: float = 10.0) -> dict:
+    quote = _quote(code, source, price)
+    quote["amount_yi"] = 0.2
+    quote["turnover_rate"] = 0.05
+    return quote
+
+
 def _bars(code: str, days: int = 35, end: date | None = None) -> list[dict]:
     end = end or date.today()
     return [
@@ -580,3 +587,77 @@ def test_local_pool_status_reports_short_history_separately(monkeypatch):
     assert status["summary"]["daily_bar_short_history_count"] == 1
     assert status["summary"]["daily_bar_missing_count"] == 0
     assert status["summary"]["eligible_daily_bar_coverage_rate"] == 50.0
+    assert status["recommendation_readiness"]["kline"]["missing_count"] == 0
+    assert status["recommendation_readiness"]["kline"]["short_history_count"] == 1
+    assert "短历史 1 只" in status["recommendation_readiness"]["messages"][1]
+
+
+def test_local_pool_status_counts_low_liquidity_as_available_universe(monkeypatch):
+    db = _session()
+    settings = DummySettings()
+    settings.market_candidate_count = 0
+    quotes = [
+        _quote("000001", "eastmoney", 10.00),
+        _low_liquidity_quote("000002", "eastmoney", 20.00),
+    ]
+    market_pool._persist_unified_quotes(
+        db,
+        [
+            {
+                **quote,
+                "source_count": 1,
+                "raw_sources": ["eastmoney"],
+                "quality_score": 80.0,
+                "freshness_status": "fresh",
+                "source_trace": {"raw_sources": ["eastmoney"], "source_count": 1, "field_sources": {}},
+            }
+            for quote in quotes
+        ],
+    )
+    for quote in quotes:
+        market_pool._persist_normalized_bars(db, _bars(quote["code"], days=35))
+    db.commit()
+
+    monkeypatch.setattr(market_pool, "get_settings", lambda: settings)
+
+    status = get_local_pool_status(db)
+    filter_summary = status["summary"]["candidate_filter"]
+
+    assert status["summary"]["eligible_quote_count"] == 2
+    assert status["recommendation_readiness"]["quote"]["candidate_count"] == 2
+    assert status["summary"]["eligible_daily_bar_count"] == 2
+    assert filter_summary["high_liquidity_count"] == 1
+    assert filter_summary["low_liquidity_count"] == 1
+    assert filter_summary["excluded_count"] == 0
+
+
+def test_local_pool_status_uses_quote_date_for_coverage_reference(monkeypatch):
+    db = _session()
+    settings = DummySettings()
+    settings.market_candidate_count = 0
+    quote = _quote("000001", "eastmoney", 10.00)
+    market_pool._persist_unified_quotes(
+        db,
+        [
+            {
+                **quote,
+                "trade_date": "2026-05-13",
+                "source_count": 1,
+                "raw_sources": ["eastmoney"],
+                "quality_score": 80.0,
+                "freshness_status": "fresh",
+                "source_trace": {"raw_sources": ["eastmoney"], "source_count": 1, "field_sources": {}},
+            }
+        ],
+    )
+    market_pool._persist_normalized_bars(db, _bars("000001", days=35, end=date(2026, 5, 13)))
+    db.commit()
+
+    monkeypatch.setattr(market_pool, "get_settings", lambda: settings)
+    monkeypatch.setattr("app.services.data_sources._latest_allowed_bar_date", lambda today=None: "2026-05-15")
+
+    status = get_local_pool_status(db)
+
+    assert status["summary"]["coverage_trade_date"] == "2026-05-13"
+    assert status["summary"]["eligible_daily_bar_count"] == 1
+    assert status["summary"]["daily_bar_stale_count"] == 0

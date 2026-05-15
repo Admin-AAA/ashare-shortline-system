@@ -21,6 +21,11 @@ def test_research_context_projects_skill_input_without_raw_transport_fields():
         "_bars": [{"code": "000001", "trade_date": "2026-05-08", "close": 10.5}],
         "dsa_profile": {"ma5": 10.0},
         "_is_main": True,
+        "_is_leader_candidate": True,
+        "_sentiment_phase": "活跃",
+        "_consensus_signal": "主力吸筹",
+        "_dragon_tiger_dispersion": "集中",
+        "_dragon_tiger_inst_ratio": 0.66,
     }
     snapshot = {
         "snapshot_id": "snapshot_test",
@@ -36,6 +41,11 @@ def test_research_context_projects_skill_input_without_raw_transport_fields():
     assert "_bars" not in skill_input
     assert "dsa_profile" not in skill_input
     assert skill_input["_is_main"] is True
+    assert skill_input["_is_leader_candidate"] is True
+    assert skill_input["_sentiment_phase"] == "活跃"
+    assert skill_input["_consensus_signal"] == "主力吸筹"
+    assert skill_input["_dragon_tiger_dispersion"] == "集中"
+    assert skill_input["_dragon_tiger_inst_ratio"] == 0.66
     assert skill_input["source_trace"]["quote_source"] == "sina"
     assert skill_input["source_trace"]["kline_source"] == "tencent"
     assert "research_context" in context.to_feature_snapshot()

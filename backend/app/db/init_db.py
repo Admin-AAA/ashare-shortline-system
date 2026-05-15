@@ -6,16 +6,25 @@ from app.models import tables  # noqa: F401
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
-    _migrate_sqlite_schema()
+    _migrate_schema()
 
 
-def _migrate_sqlite_schema() -> None:
-    if engine.dialect.name != "sqlite":
-        return
-
+def _migrate_schema() -> None:
     with engine.begin() as connection:
         inspector = inspect(connection)
         table_names = set(inspector.get_table_names())
+        if "recommendation_runs" in table_names:
+            run_columns = {column["name"] for column in inspector.get_columns("recommendation_runs")}
+            _ensure_column(connection, run_columns, "recommendation_runs", "heartbeat_at", "DATETIME")
+            _ensure_column(connection, run_columns, "recommendation_runs", "progress_phase", "VARCHAR(80)")
+            _ensure_column(connection, run_columns, "recommendation_runs", "progress_current", "INTEGER NOT NULL DEFAULT 0")
+            _ensure_column(connection, run_columns, "recommendation_runs", "progress_total", "INTEGER NOT NULL DEFAULT 0")
+            _ensure_column(connection, run_columns, "recommendation_runs", "progress_message", "TEXT")
+            _ensure_column(connection, run_columns, "recommendation_runs", "interrupted_at", "DATETIME")
+
+        if engine.dialect.name != "sqlite":
+            return
+
         if "presets" in table_names:
             preset_columns = {column["name"] for column in inspector.get_columns("presets")}
             if "data_source" not in preset_columns:
@@ -62,6 +71,12 @@ def _ensure_index(connection, inspector, table: str, index_name: str, columns: s
     existing = {idx["name"] for idx in inspector.get_indexes(table)}
     if index_name not in existing:
         connection.execute(text(f"CREATE INDEX {index_name} ON {table}({columns})"))
+
+
+def _ensure_column(connection, existing_columns: set[str], table: str, column: str, definition: str) -> None:
+    if column not in existing_columns:
+        connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {definition}"))
+        existing_columns.add(column)
 
 
 def _drop_index_if_exists(connection, inspector, table: str, index_name: str) -> None:

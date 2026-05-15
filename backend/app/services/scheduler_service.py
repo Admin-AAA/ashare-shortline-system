@@ -17,7 +17,6 @@ from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.models.tables import ScheduledTask
 from app.services.cost_service import record_task_run
@@ -75,13 +74,13 @@ def _load_and_schedule() -> None:
         logger.exception("加载调度任务失败")
 
 
-def _execute_task(task_id: str) -> None:
+def _execute_task(task_id: str, *, force: bool = False) -> None:
     """执行单个调度任务（同步包装异步）。"""
     logger.info("调度任务开始: %s", task_id)
     db = SessionLocal()
     try:
         task = db.get(ScheduledTask, task_id)
-        if not task or not task.enabled:
+        if not task or (not task.enabled and not force):
             logger.info("调度任务 %s 已禁用或不存在，跳过", task_id)
             return
 
@@ -114,8 +113,10 @@ def _execute_task(task_id: str) -> None:
 def _run_pool_refresh(db, payload: dict) -> None:
     """刷新行情池。"""
     from app.services.market_pool import refresh_quote_pool
+    from app.services.workbench_service import invalidate_bootstrap_cache
 
     quotes, meta = refresh_quote_pool(db)
+    invalidate_bootstrap_cache()
     logger.info("行情池刷新: %d 条行情, %s", len(quotes), meta)
 
 
@@ -123,16 +124,27 @@ async def _run_recommendation(db, payload: dict) -> None:
     """执行推荐流水线。"""
     from app.services.workbench_service import run_workbench
 
-    settings = get_settings()
-    result = await run_workbench(db, {
+    run_payload = {
+        "preset_id": payload.get("preset_id"),
         "run_name": payload.get("run_name", f"定时推荐 {datetime.utcnow().strftime('%Y%m%d')}"),
-        "run_mode": payload.get("run_mode", "formal"),
-        "data_mode": payload.get("data_mode", "realtime"),
-        "risk_template": payload.get("risk_template", "balanced"),
-        "output_count": payload.get("output_count", 20),
-        "selected_skill_ids": payload.get("selected_skill_ids"),
-    })
+    }
+    for key in (
+        "run_mode",
+        "data_source",
+        "risk_template",
+        "output_count",
+        "selected_skill_ids",
+        "skip_aux_refresh",
+    ):
+        if key in payload:
+            run_payload[key] = payload.get(key)
+    result = await run_workbench(db, run_payload)
     logger.info("定时推荐完成: %d 条", result.get("recommended_count", 0))
+
+
+def run_task_now(task_id: str) -> None:
+    """立即执行一个调度任务，用于页面上的手动触发。"""
+    _execute_task(task_id, force=True)
 
 
 def _run_data_backfill(payload: dict) -> None:

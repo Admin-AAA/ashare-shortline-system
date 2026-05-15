@@ -34,12 +34,14 @@ from app.services.outcome_service import label_pending_outcomes
 from app.services.stats_service import get_overview_stats
 from app.services.workbench_service import (
     _build_pipeline_audit,
+    _update_run_progress,
     enqueue_workbench_run,
     get_recommendation_detail,
     get_run_detail,
     invalidate_bootstrap_cache,
     list_run_recommendations,
     list_runs,
+    recover_interrupted_runs,
 )
 
 
@@ -703,8 +705,8 @@ class TestE2ERecommendationFlow:
         assert calls["count"] == 2
         assert third["market_snapshot"]["snapshot_id"] != first["market_snapshot"]["snapshot_id"]
 
-    def test_enqueue_workbench_run_persists_running_run(self, db, monkeypatch):
-        """Async run API should return immediately with a persisted running row."""
+    def test_enqueue_workbench_run_persists_queued_run(self, db, monkeypatch):
+        """Async run API should return immediately with a persisted queued row."""
         from app.services import workbench_service
 
         _seed_skill_registry(db)
@@ -733,8 +735,73 @@ class TestE2ERecommendationFlow:
         assert result["queued"] is True
         assert result["recommendations"] == []
         assert persisted is not None
-        assert persisted.status == "running"
+        assert persisted.status == "queued"
+        assert persisted.heartbeat_at is not None
+        assert persisted.progress_phase == "queued"
+        assert persisted.progress_message == "等待后台工作线程接管"
+        assert result["run"]["status"] == "queued"
+        assert result["run"]["progress_phase"] == "queued"
         assert queued and queued[0][0] == run_id
+
+    def test_update_run_progress_records_heartbeat_and_counts(self, db):
+        run = RecommendationRun(
+            run_id="run_progress",
+            run_name="进度测试",
+            run_mode="experiment",
+            trade_date="2026-05-12",
+            status="queued",
+            selected_skills_json="[]",
+            params_json="{}",
+            market_snapshot_json="{}",
+            result_summary_json="{}",
+        )
+        db.add(run)
+        db.commit()
+
+        updated = _update_run_progress(
+            db,
+            "run_progress",
+            phase="rule_scan",
+            current=42,
+            total=100,
+            message="规则扫描 42/100",
+            status="running",
+        )
+
+        assert updated is not None
+        persisted = db.get(RecommendationRun, "run_progress")
+        assert persisted.status == "running"
+        assert persisted.heartbeat_at is not None
+        assert persisted.progress_phase == "rule_scan"
+        assert persisted.progress_current == 42
+        assert persisted.progress_total == 100
+        assert persisted.progress_message == "规则扫描 42/100"
+
+    def test_recover_interrupted_runs_marks_active_runs(self, db):
+        for run_id, status in [("run_queued", "queued"), ("run_running", "running"), ("run_done", "completed")]:
+            db.add(
+                RecommendationRun(
+                    run_id=run_id,
+                    run_name=run_id,
+                    run_mode="experiment",
+                    trade_date="2026-05-12",
+                    status=status,
+                    selected_skills_json="[]",
+                    params_json="{}",
+                    market_snapshot_json="{}",
+                    result_summary_json="{}",
+                )
+            )
+        db.commit()
+
+        recovered = recover_interrupted_runs(db)
+
+        assert recovered == 2
+        assert db.get(RecommendationRun, "run_queued").status == "interrupted"
+        assert db.get(RecommendationRun, "run_running").status == "interrupted"
+        assert db.get(RecommendationRun, "run_done").status == "completed"
+        assert db.get(RecommendationRun, "run_running").interrupted_at is not None
+        assert "重新发起运行" in db.get(RecommendationRun, "run_running").error_message
 
     def test_aggregate_scoring_determinism(self):
         """Verify aggregate produces deterministic output for same inputs."""

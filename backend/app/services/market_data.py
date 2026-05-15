@@ -44,6 +44,7 @@ def get_market_universe() -> tuple[list[dict[str, Any]], dict[str, Any]]:
             max(target_count, target_count * max(1, int(getattr(settings, "market_candidate_lookahead_multiplier", 4)))),
         )
     all_candidates = _select_candidates(quotes, total_quote_count)
+    filter_summary = _candidate_filter_summary(quotes)
     candidates = all_candidates[:lookahead_count]
     if not candidates:
         raise MarketDataError("真实行情源返回了空股票池，已停止运行。")
@@ -84,6 +85,7 @@ def get_market_universe() -> tuple[list[dict[str, Any]], dict[str, Any]]:
             "full_market_mode": full_market_mode,
             "unified_quote_total": total_quote_count,
             "base_filter_eligible_count": len(all_candidates),
+            "candidate_filter": filter_summary,
             "actual_scan_count": len(stocks),
             "kline_missing_count": len(kline_errors),
             "kline_skip_reasons": _summarize_kline_skip_reasons(kline_errors),
@@ -101,6 +103,7 @@ def get_market_universe() -> tuple[list[dict[str, Any]], dict[str, Any]]:
 def get_market_snapshot() -> dict[str, Any]:
     settings = get_settings()
     quote_source, quotes, quote_errors = _fetch_first_candidate_quotes(_quote_sources(settings), settings)
+    filter_summary = _candidate_filter_summary(quotes)
     quotes = _select_candidates(quotes, min(settings.market_scan_size, 300))
     if not quotes:
         raise MarketDataError("真实行情源返回了空市场快照。")
@@ -121,6 +124,7 @@ def get_market_snapshot() -> dict[str, Any]:
             "quote_source": quote_source,
             "quote_errors": quote_errors,
             "generated_at": datetime.utcnow().isoformat(),
+            "candidate_filter": filter_summary,
             "hot_theme": " / ".join(industries[:2]) if industries else "未知",
         }
     )
@@ -768,14 +772,49 @@ def _select_candidates(quotes: list[dict[str, Any]], count: int) -> list[dict[st
     filtered = [
         item
         for item in quotes
-        if _is_supported_a_share(item)
-        and not item.get("is_st")
-        and float(item.get("price") or 0) > 1
-        and float(item.get("amount_yi") or 0) >= 0.5
-        and float(item.get("turnover_rate") or 0) >= 0.1
+        if _candidate_exclusion_reason(item) is None
     ]
     filtered.sort(key=_candidate_score, reverse=True)
     return filtered[:count]
+
+
+def _candidate_exclusion_reason(item: dict[str, Any]) -> str | None:
+    if not _is_supported_a_share(item):
+        return "unsupported_market"
+    name = str(item.get("name") or "")
+    if item.get("is_st") or "ST" in name.upper() or "退" in name:
+        return "st_or_delisting_risk"
+    if float(item.get("price") or 0) <= 1:
+        return "invalid_price"
+    if float(item.get("amount_yi") or 0) <= 0 or float(item.get("turnover_rate") or 0) <= 0:
+        return "suspended_or_no_trade"
+    return None
+
+
+def _candidate_filter_summary(quotes: list[dict[str, Any]]) -> dict[str, Any]:
+    exclusion_counts: Counter[str] = Counter()
+    eligible_count = 0
+    high_liquidity_count = 0
+    for item in quotes:
+        reason = _candidate_exclusion_reason(item)
+        if reason is not None:
+            exclusion_counts[reason] += 1
+            continue
+        eligible_count += 1
+        if float(item.get("amount_yi") or 0) >= 0.5 and float(item.get("turnover_rate") or 0) >= 0.1:
+            high_liquidity_count += 1
+    return {
+        "total_count": len(quotes),
+        "base_eligible_count": eligible_count,
+        "excluded_count": len(quotes) - eligible_count,
+        "high_liquidity_count": high_liquidity_count,
+        "low_liquidity_count": max(0, eligible_count - high_liquidity_count),
+        "exclusion_counts": dict(exclusion_counts),
+        "high_liquidity_threshold": {
+            "amount_yi": 0.5,
+            "turnover_rate": 0.1,
+        },
+    }
 
 
 def _candidate_score(item: dict[str, Any]) -> float:

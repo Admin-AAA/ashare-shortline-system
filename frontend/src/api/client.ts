@@ -11,6 +11,8 @@ import type {
   RunDetail,
   RunResult,
   RunSummary,
+  ScheduledTask,
+  ScheduledTaskPayload,
   SkillDetail,
   SkillMode,
   SkillStatsRow,
@@ -22,15 +24,23 @@ type PresetPayload = Omit<Partial<Preset>, "skills"> & {
   skills?: Array<{ skill_id: string; weight: number; sort_order?: number }>;
 };
 
+export type AuthStatus = {
+  enabled: boolean;
+  authenticated: boolean;
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: { "Content-Type": "application/json" },
     ...init
   });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || `Request failed: ${res.status}`);
-  }
+    if (!res.ok) {
+      const text = await res.text();
+      if (res.status === 401) {
+        throw new Error("UNAUTHORIZED");
+      }
+      throw new Error(text || `Request failed: ${res.status}`);
+    }
   return (await res.json()) as T;
 }
 
@@ -52,6 +62,9 @@ async function requestWithTimeout<T>(path: string, timeoutMs: number, init?: Req
     });
     if (!res.ok) {
       const text = await res.text();
+      if (res.status === 401) {
+        throw new Error("UNAUTHORIZED");
+      }
       throw new Error(text || `Request failed: ${res.status}`);
     }
     return (await res.json()) as T;
@@ -66,6 +79,9 @@ async function requestWithTimeout<T>(path: string, timeoutMs: number, init?: Req
 }
 
 export const api = {
+  authStatus: () => request<AuthStatus>("/api/auth/status"),
+  login: (password: string) => request<{ ok: boolean }>("/api/auth/login", json("POST", { password })),
+
   bootstrap: () => request<HomeBootstrap>("/api/home/bootstrap"),
 
   presets: () => request<Preset[]>("/api/presets"),
@@ -110,6 +126,16 @@ export const api = {
   refreshLocalPool: () => requestWithTimeout<PoolRefreshResult>("/api/data-sources/pool/refresh", 300_000, json("POST")),
   setDataSourceEnabled: (sourceType: string, source: string, enabled: boolean) =>
     request<DataSourceHealthRow>(`/api/data-sources/${sourceType}/${source}/enabled`, json("POST", { enabled })),
+
+  scheduledTasks: () => request<ScheduledTask[]>("/api/admin/tasks"),
+  createScheduledTask: (payload: ScheduledTaskPayload) =>
+    request<ScheduledTask>("/api/admin/tasks", json("POST", payload)),
+  updateScheduledTask: (taskId: string, payload: ScheduledTaskPayload) =>
+    request<ScheduledTask>(`/api/admin/tasks/${taskId}`, json("PATCH", payload)),
+  deleteScheduledTask: (taskId: string) =>
+    request<{ deleted: string }>(`/api/admin/tasks/${taskId}`, json("DELETE")),
+  runScheduledTask: (taskId: string) =>
+    request<{ ok: boolean }>(`/api/admin/tasks/${taskId}/run`, json("POST")),
 
   skills: () => request<SkillSummary[]>("/api/skills"),
   installSkill: (payload: { source: string; skill_id?: string }) =>

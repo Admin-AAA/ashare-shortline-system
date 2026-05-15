@@ -41,6 +41,7 @@ from app.services.market_data import (
     _breadth_from_counts,
     _build_snapshot,
     _build_stock_from_bars,
+    _candidate_filter_summary,
     _fetch_kline,
     _fetch_quotes,
     _global_failed_kline_sources,
@@ -100,6 +101,7 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[l
             max(target_count, target_count * max(1, int(settings.market_candidate_lookahead_multiplier))),
         )
     all_candidates = _select_candidates(quotes, total_quote_count)
+    filter_summary = _candidate_filter_summary(quotes)
     candidates = all_candidates[:lookahead_count]
     if not candidates:
         raise MarketDataError("统一行情池没有可用候选股票，已停止运行。")
@@ -169,6 +171,7 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[l
             "full_market_mode": full_market_mode,
             "unified_quote_total": total_quote_count,
             "base_filter_eligible_count": len(all_candidates),
+            "candidate_filter": filter_summary,
             "actual_scan_count": len(stocks),
             "kline_missing_count": len(kline_errors),
             "kline_skip_reasons": _summarize_kline_skip_reasons(kline_errors),
@@ -189,6 +192,7 @@ def get_market_snapshot_from_pool(db: Session, refresh: bool = False) -> dict[st
     quotes, quote_meta = _load_or_refresh_quotes(db, settings) if refresh else _load_quotes_from_pool(db, settings, skip_metrics=True)
     total_quote_count = len(quotes)
     eligible_quotes = _select_candidates(quotes, len(quotes))
+    filter_summary = _candidate_filter_summary(quotes)
     quotes = eligible_quotes[: min(settings.market_scan_size, 300)]
     if not quotes:
         raise MarketDataError("统一行情池没有可用市场快照。")
@@ -208,6 +212,7 @@ def get_market_snapshot_from_pool(db: Session, refresh: bool = False) -> dict[st
             "quote_cache_age_seconds": quote_meta.get("cache_age_seconds"),
             "unified_quote_total": total_quote_count,
             "base_filter_eligible_count": len(eligible_quotes),
+            "candidate_filter": filter_summary,
             "actual_scan_count": len(quotes),
             "generated_at": datetime.utcnow().isoformat(),
             "hot_theme": " / ".join(industries[:2]) if industries else "未知",
@@ -266,6 +271,15 @@ def local_pool_recommendation_readiness(db: Session, cached_quotes: list[dict[st
     quotes = cached_quotes if cached_quotes is not None else _load_cached_quotes(db, allowed_sources=set(active_sources), skip_metrics=True)
     quote_trade_dates = [str(item.get("trade_date") or "") for item in quotes if item.get("trade_date")]
     all_candidates = _select_candidates(quotes, len(quotes)) if quotes else []
+    filter_summary = _candidate_filter_summary(quotes) if quotes else {
+        "total_count": 0,
+        "base_eligible_count": 0,
+        "excluded_count": 0,
+        "high_liquidity_count": 0,
+        "low_liquidity_count": 0,
+        "exclusion_counts": {},
+        "high_liquidity_threshold": {"amount_yi": 0.5, "turnover_rate": 0.1},
+    }
     if full_market_mode:
         lookahead_count = len(quotes)
         target_count = 0
@@ -284,6 +298,7 @@ def local_pool_recommendation_readiness(db: Session, cached_quotes: list[dict[st
 
     ready_count = 0
     missing_count = 0
+    short_history_count = 0
     stale_count = 0
     checked_count = 0
     for quote in candidates:
@@ -295,7 +310,10 @@ def local_pool_recommendation_readiness(db: Session, cached_quotes: list[dict[st
         quote_date = min(str(quote.get("trade_date") or date.today().isoformat()), _latest_allowed_bar_date())
         quote_date = _latest_allowed_bar_date(date.fromisoformat(quote_date))
         if bar_count < min_bar_count:
-            missing_count += 1
+            if bar_count <= 0:
+                missing_count += 1
+            else:
+                short_history_count += 1
             if len(examples) < 8:
                 examples.append(
                     _readiness_example(
@@ -357,7 +375,16 @@ def local_pool_recommendation_readiness(db: Session, cached_quotes: list[dict[st
             messages.append(f"本地池可直接运行推荐，已有 {ready_count} 只候选股报价与日K覆盖完整。")
 
     if missing_count or stale_count:
-        messages.append(f"当前存在数据缺口：日K缺失 {missing_count} 只，日K过期 {stale_count} 只。")
+        gap_parts = []
+        if missing_count:
+            gap_parts.append(f"日K缺失 {missing_count} 只")
+        if short_history_count:
+            gap_parts.append(f"短历史 {short_history_count} 只")
+        if stale_count:
+            gap_parts.append(f"日K过期 {stale_count} 只")
+        messages.append(f"当前存在数据缺口：{'，'.join(gap_parts)}。")
+    elif short_history_count:
+        messages.append(f"当前存在数据缺口：短历史 {short_history_count} 只。")
 
     return {
         "status": status,
@@ -370,6 +397,7 @@ def local_pool_recommendation_readiness(db: Session, cached_quotes: list[dict[st
             "candidate_count": len(candidates),
             "base_filter_eligible_count": len(all_candidates),
             "unified_quote_total": len(quotes),
+            "filter_summary": filter_summary,
             "latest_trade_date": max(quote_trade_dates) if quote_trade_dates else None,
             "active_sources": active_sources,
         },
@@ -377,6 +405,7 @@ def local_pool_recommendation_readiness(db: Session, cached_quotes: list[dict[st
             "checked_count": checked_count,
             "ready_count": ready_count,
             "missing_count": missing_count,
+            "short_history_count": short_history_count,
             "stale_count": stale_count,
             "min_bars": min_bar_count,
             "coverage_count": ready_count,
@@ -1043,44 +1072,34 @@ def _record_source_health(
     latency_ms: float = 0.0,
 ) -> None:
     now = datetime.utcnow()
-    # Use raw INSERT OR REPLACE to avoid UNIQUE constraint race with multi-source fetch
-    from sqlalchemy import text
+    latency = round(float(latency_ms), 2)
+    row = db.get(DataSourceHealth, {"source": source, "source_type": source_type})
+    if row is None:
+        row = DataSourceHealth(
+            source=source,
+            source_type=source_type,
+            success_count=0,
+            failure_count=0,
+            empty_count=0,
+            latency_ms=latency,
+            updated_at=now,
+        )
+        db.add(row)
+
     if status == "success":
-        db.execute(text("""
-            INSERT INTO data_source_health (source, source_type, success_count, failure_count, empty_count,
-                last_success_at, last_failure_at, last_error, latency_ms, updated_at)
-            VALUES (:source, :source_type, 1, 0, 0, :now, NULL, NULL, :latency, :now)
-            ON CONFLICT(source, source_type) DO UPDATE SET
-                success_count = data_source_health.success_count + 1,
-                last_success_at = :now,
-                last_error = NULL,
-                latency_ms = :latency,
-                updated_at = :now
-        """), {"source": source, "source_type": source_type, "now": now, "latency": round(float(latency_ms), 2)})
+        row.success_count = int(row.success_count or 0) + 1
+        row.last_success_at = now
+        row.last_error = None
     elif status == "empty":
-        db.execute(text("""
-            INSERT INTO data_source_health (source, source_type, success_count, failure_count, empty_count,
-                last_success_at, last_failure_at, last_error, latency_ms, updated_at)
-            VALUES (:source, :source_type, 0, 0, 1, NULL, :now, :err, :latency, :now)
-            ON CONFLICT(source, source_type) DO UPDATE SET
-                empty_count = data_source_health.empty_count + 1,
-                last_failure_at = :now,
-                last_error = :err,
-                latency_ms = :latency,
-                updated_at = :now
-        """), {"source": source, "source_type": source_type, "now": now, "err": "empty result", "latency": round(float(latency_ms), 2)})
+        row.empty_count = int(row.empty_count or 0) + 1
+        row.last_failure_at = now
+        row.last_error = error or "empty result"
     else:
-        db.execute(text("""
-            INSERT INTO data_source_health (source, source_type, success_count, failure_count, empty_count,
-                last_success_at, last_failure_at, last_error, latency_ms, updated_at)
-            VALUES (:source, :source_type, 0, 1, 0, NULL, :now, :err, :latency, :now)
-            ON CONFLICT(source, source_type) DO UPDATE SET
-                failure_count = data_source_health.failure_count + 1,
-                last_failure_at = :now,
-                last_error = :err,
-                latency_ms = :latency,
-                updated_at = :now
-        """), {"source": source, "source_type": source_type, "now": now, "err": error or "unknown", "latency": round(float(latency_ms), 2)})
+        row.failure_count = int(row.failure_count or 0) + 1
+        row.last_failure_at = now
+        row.last_error = error or "unknown"
+    row.latency_ms = latency
+    row.updated_at = now
 
 def _quote_meta(status: str, quotes: list[dict[str, Any]], errors: list[str] | None = None) -> dict[str, Any]:
     fetched_times = [

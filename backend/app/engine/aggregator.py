@@ -332,6 +332,10 @@ def aggregate(
     has_agent_reviews = any(
         isinstance(s.get("agent_skill_review"), dict) for s in signals
     )
+    agent_review_count = sum(
+        1 for s in signals
+        if isinstance(s.get("agent_skill_review"), dict)
+    )
 
     # --- 加权聚合（动态权重 + 校准权重覆盖） ---
     if market_snapshot:
@@ -438,14 +442,22 @@ def aggregate(
 
     # ── 证据质量降级：分数足够但证据不足时降一档 ──
     evidence_score = float(stock.get("evidence_quality_score") or 60.0)
-    agent_review_count = sum(
-        1 for s in signals
-        if isinstance(s.get("agent_skill_review"), dict)
-    )
     if evidence_score < 60 and agent_review_count < 2 and bucket == "高弹观察":
         bucket = "关注"
     if evidence_score < 55 and agent_review_count < 2 and bucket == "关注":
         bucket = "证据不足"
+
+    market_discipline = _market_discipline(
+        stock=stock,
+        market_snapshot=market_snapshot,
+        final_score=final_score,
+        bucket=bucket,
+        risk_template=risk_template,
+        agent_review_count=agent_review_count,
+    )
+    final_risk_flags = list(
+        dict.fromkeys(_collect_risks(signals) + quality_risks + market_discipline["risk_flags"])
+    )
 
     return {
         "code": stock["code"],
@@ -461,7 +473,7 @@ def aggregate(
         "entry_rule": best_setup.get("entry_rule") or "等待买点确认后再参与",
         "invalid_rule": best_setup.get("invalid_rule") or "跌破关键支撑且收不回",
         "rationale": _rationale(signals),
-        "risk_flags": list(dict.fromkeys(_collect_risks(signals) + quality_risks)),
+        "risk_flags": final_risk_flags,
         "strategy_signals": signals,
         "component_scores": component_scores,
         "raw_component_scores": raw_component_scores,
@@ -474,6 +486,7 @@ def aggregate(
         "component_scale": round(component_scale, 4),
         "market_regime": _market_regime_label(market_snapshot),
         "skill_disagreement": skill_disagreement_metrics(signals),
+        "market_discipline": market_discipline,
     }
 
 
@@ -495,6 +508,8 @@ def apply_pool_rules(
     )
     result: list[dict[str, Any]] = []
     for card in ordered:
+        if card.get("bucket") == "明确回避" or float(card.get("final_score") or 0) <= 0:
+            continue
         bucket = card.get("bucket", "证据不足")
         limit = bucket_limits.get(bucket) if bucket_limits else None
         if limit is not None and counts[bucket] >= limit:
@@ -591,12 +606,25 @@ def _quality_score_cap(stock: dict[str, Any]) -> float:
 
 
 def _quality_risks(stock: dict[str, Any], quality_cap: float) -> list[str]:
-    if quality_cap >= 100:
-        return []
+    risks: list[str] = []
     sample_count = int(stock.get("market_sample_count") or 0)
-    if sample_count and sample_count < 100:
-        return [f"市场样本仅{sample_count}只，评分已按覆盖率降权"]
-    return ["证据质量不足，评分已降权"]
+    if quality_cap < 100:
+        if sample_count and sample_count < 100:
+            risks.append(f"市场样本仅{sample_count}只，评分已按覆盖率降权")
+        else:
+            risks.append("证据质量不足，评分已降权")
+
+    data_quality = stock.get("data_quality") or {}
+    missing_fields = set(data_quality.get("missing_fields") or [])
+    if {"news", "announcements"} & missing_fields:
+        risks.append("新闻/公告未完整覆盖，题材与黑天鹅风险需人工复核")
+    if "theme_tags" in missing_fields:
+        risks.append("题材标签缺失，主线识别置信度降低")
+    if "dragon_tiger" in missing_fields:
+        risks.append("龙虎榜数据缺失，游资合力证据不足")
+    if "quote_conflict" in missing_fields:
+        risks.append("多源报价存在冲突，价格证据需复核")
+    return list(dict.fromkeys(risks))
 
 
 def _detect_skill_conflicts(signals: list[dict[str, Any]]) -> list[str]:
@@ -687,3 +715,142 @@ def _market_regime_label(snapshot: dict[str, Any] | None) -> str:
     if sentiment and sentiment not in ("", "平淡"):
         return f"{base}·{sentiment}"
     return base
+
+
+def _market_discipline(
+    stock: dict[str, Any],
+    market_snapshot: dict[str, Any] | None,
+    final_score: float,
+    bucket: str,
+    risk_template: str,
+    agent_review_count: int,
+) -> dict[str, Any]:
+    """Translate the score into short-line position and risk discipline."""
+    label = _market_regime_label(market_snapshot)
+    has_snapshot = bool(market_snapshot)
+    sample = max(1, int((market_snapshot or {}).get("sample_count") or stock.get("market_sample_count") or 1))
+    up_ratio = float((market_snapshot or {}).get("up_count") or 0) / sample if has_snapshot else 0.5
+    limit_up = int((market_snapshot or {}).get("limit_up_count") or 0)
+    limit_down = int((market_snapshot or {}).get("limit_down_count") or 0)
+    risk_flags: list[str] = []
+
+    if not has_snapshot:
+        market_position_cap = 0.35
+        regime_note = "市场快照缺失，按试错区间"
+        risk_flags.append("市场快照缺失，仓位按试错处理")
+    elif label.startswith("强牛") or label.startswith("偏多"):
+        market_position_cap = 0.80
+        regime_note = "可操作区间"
+    elif label.startswith("震荡"):
+        market_position_cap = 0.50
+        regime_note = "试错区间"
+    else:
+        market_position_cap = 0.30
+        regime_note = "防守区间"
+        risk_flags.append("市场弱势，按防守仓位处理")
+
+    if "冰点" in label:
+        market_position_cap = min(market_position_cap, 0.20)
+        risk_flags.append("情绪冰点，非主线非龙头不放大仓位")
+    if "高潮" in label:
+        market_position_cap = min(market_position_cap, 0.65)
+        risk_flags.append("情绪高潮，追高仓位降档")
+    if limit_down >= max(5, limit_up):
+        market_position_cap = min(market_position_cap, 0.20)
+        risk_flags.append("跌停压力不低于涨停，先控制回撤")
+
+    win_rate = _estimated_win_rate(stock, final_score, bucket, agent_review_count, up_ratio)
+    if win_rate < 0.60:
+        base_position = 0.0
+        position_label = "观望"
+    elif win_rate < 0.70:
+        base_position = 0.15
+        position_label = "观察仓"
+    elif win_rate < 0.80:
+        base_position = 0.35
+        position_label = "小仓"
+    elif win_rate < 0.90:
+        base_position = 0.55
+        position_label = "中仓"
+    else:
+        base_position = 0.75
+        position_label = "大仓"
+
+    if bucket in {"证据不足", "明确回避"}:
+        base_position = 0.0
+        position_label = "观望"
+    elif bucket == "关注":
+        base_position = min(base_position, 0.20)
+        position_label = "观察仓" if base_position > 0 else "观望"
+
+    template_cap = {"conservative": 0.45, "balanced": 0.65, "aggressive": 0.80}.get(risk_template, 0.65)
+    max_position_pct = round(min(base_position, market_position_cap, template_cap) * 100, 1)
+
+    if max_position_pct == 0:
+        action = "仅观察"
+    elif max_position_pct <= 20:
+        action = "轻仓试错"
+    elif max_position_pct <= 45:
+        action = "小仓跟踪"
+    else:
+        action = "确认后加仓"
+
+    price = _float(stock.get("price") or stock.get("close") or 0)
+    stop_loss = _float(stock.get("stop_loss"))
+    take_profit = _float(stock.get("take_profit"))
+    downside_pct = round((price - stop_loss) / price * 100, 2) if price and stop_loss else 0.0
+    upside_pct = round((take_profit - price) / price * 100, 2) if price and take_profit else 0.0
+    rr_ratio = round(upside_pct / max(downside_pct, 0.01), 2) if upside_pct > 0 and downside_pct > 0 else 0.0
+    if rr_ratio and rr_ratio < 1.0:
+        risk_flags.append("盈亏比低于1:1，除非次日快速确认否则不追")
+    if agent_review_count == 0:
+        risk_flags.append("未进入 Skill Agent 深审，仅按规则信号降权输出")
+
+    return {
+        "market_regime": label,
+        "regime_note": regime_note,
+        "estimated_win_rate": round(win_rate, 3),
+        "position_label": position_label,
+        "max_position_pct": max_position_pct,
+        "action": action,
+        "market_position_cap_pct": round(market_position_cap * 100, 1),
+        "risk_reward": {
+            "downside_pct": downside_pct,
+            "upside_pct": upside_pct,
+            "rr_ratio": rr_ratio,
+        },
+        "risk_flags": risk_flags,
+    }
+
+
+def _estimated_win_rate(
+    stock: dict[str, Any],
+    final_score: float,
+    bucket: str,
+    agent_review_count: int,
+    up_ratio: float,
+) -> float:
+    bucket_adjust = {
+        "容量核心": 0.08,
+        "高弹观察": 0.03,
+        "关注": -0.04,
+        "证据不足": -0.12,
+        "明确回避": -0.25,
+    }.get(bucket, -0.08)
+    evidence = float(stock.get("evidence_quality_score") or 60.0)
+    authenticity = float(stock.get("data_authenticity", 1.0))
+    risk_score = float(stock.get("risk_score") or 0.0)
+    win_rate = 0.35 + final_score / 200.0 + bucket_adjust
+    win_rate += (evidence - 60.0) / 500.0
+    win_rate += (authenticity - 0.75) * 0.08
+    win_rate += min(0.06, max(-0.08, (up_ratio - 0.5) * 0.18))
+    win_rate += min(0.04, agent_review_count * 0.015)
+    win_rate -= min(0.12, risk_score / 700.0)
+    return max(0.15, min(0.93, win_rate))
+
+
+def _float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value if value is not None else default)
+    except (TypeError, ValueError):
+        return default

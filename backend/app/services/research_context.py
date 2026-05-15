@@ -113,6 +113,14 @@ IMPUTED_WHEN_MISSING = {
 QUALITY_CRITICAL_MISSING = {"news", "announcements", "theme_tags"}
 
 PRIVATE_KEYS_TO_DROP = {"_bars", "dsa_profile"}
+STRATEGY_PRIVATE_KEYS = {
+    "_consensus_signal",
+    "_dragon_tiger_dispersion",
+    "_dragon_tiger_inst_ratio",
+    "_is_leader_candidate",
+    "_is_main",
+    "_sentiment_phase",
+}
 
 
 @dataclass(frozen=True)
@@ -243,7 +251,7 @@ def _legacy_skill_stock(
     legacy = {
         key: value
         for key, value in stock.items()
-        if key not in PRIVATE_KEYS_TO_DROP and (not key.startswith("_") or key == "_is_main")
+        if key not in PRIVATE_KEYS_TO_DROP and (not key.startswith("_") or key in STRATEGY_PRIVATE_KEYS)
     }
     legacy["data_quality"] = quality
     legacy["source_trace"] = source_trace
@@ -260,7 +268,7 @@ def _context_features(stock: dict[str, Any]) -> dict[str, Any]:
         key: value
         for key, value in stock.items()
         if key not in PRIVATE_KEYS_TO_DROP
-        and not key.startswith("_")
+        and (not key.startswith("_") or key in STRATEGY_PRIVATE_KEYS)
         and key
         not in {
             "code",

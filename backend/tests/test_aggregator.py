@@ -282,6 +282,46 @@ def test_aggregate_stance_summary():
     assert summary[1]["stance"] == "neutral"
 
 
+def test_aggregate_market_discipline_caps_position_in_weak_ice_market():
+    stock = _stock(
+        price=100.0,
+        stop_loss=96.0,
+        take_profit=112.0,
+        evidence_quality_score=88.0,
+        data_authenticity=1.0,
+        risk_score=0.0,
+    )
+    signals = [_signal("strong_support", 92), _signal("support", 88)]
+    snapshot = {
+        "sample_count": 300,
+        "up_count": 70,
+        "limit_up_count": 2,
+        "limit_down_count": 12,
+    }
+
+    card = aggregate(stock, signals, market_score=42, agent_review_score=90, market_snapshot=snapshot)
+    discipline = card["market_discipline"]
+
+    assert discipline["market_regime"] == "弱势·冰点"
+    assert discipline["max_position_pct"] <= 20
+    assert "市场弱势，按防守仓位处理" in card["risk_flags"]
+    assert "情绪冰点，非主线非龙头不放大仓位" in card["risk_flags"]
+
+
+def test_aggregate_records_missing_theme_and_news_risks():
+    stock = _stock(
+        evidence_quality_score=90,
+        data_quality={"missing_fields": ["theme_tags", "news", "dragon_tiger"]},
+    )
+    signals = [_signal("support", 78)]
+
+    card = aggregate(stock, signals, market_score=70, agent_review_score=75)
+
+    assert "题材标签缺失，主线识别置信度降低" in card["risk_flags"]
+    assert "新闻/公告未完整覆盖，题材与黑天鹅风险需人工复核" in card["risk_flags"]
+    assert "龙虎榜数据缺失，游资合力证据不足" in card["risk_flags"]
+
+
 def test_aggregate_consensus_tags_empty_when_no_skills():
     stock = _stock()
     # Signal without agent_skill_review
@@ -341,6 +381,17 @@ def test_apply_pool_rules_sorted_by_score():
     assert result[0]["code"] == "A"
     assert result[1]["code"] == "B"
     assert result[2]["code"] == "C"
+
+
+def test_apply_pool_rules_filters_explicit_avoid_cards():
+    cards = [
+        {"code": "A", "final_score": 0, "bucket": "明确回避"},
+        {"code": "B", "final_score": 62, "bucket": "关注"},
+    ]
+
+    result = apply_pool_rules(cards, {}, output_count=3)
+
+    assert [card["code"] for card in result] == ["B"]
 
 
 # ---------------------------------------------------------------------------

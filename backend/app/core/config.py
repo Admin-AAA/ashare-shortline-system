@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     log_dir_override: str = Field(default="", alias="log_dir")
     log_max_bytes: int = 10 * 1024 * 1024
     log_backup_count: int = 5
+    access_password: str = ""
+    access_cookie_name: str = "ashare_access"
+    access_session_days: int = 7
 
     model_config = SettingsConfigDict(env_prefix="ASHARE_", env_file=".env", extra="ignore")
 

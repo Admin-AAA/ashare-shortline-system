@@ -246,6 +246,12 @@ class RecommendationRun(Base):
     result_summary_json: Mapped[str] = mapped_column(Text, default="{}")
     status: Mapped[str] = mapped_column(String(30), default="running")
     error_message: Mapped[str | None] = mapped_column(Text)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    progress_phase: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    progress_current: Mapped[int] = mapped_column(Integer, default=0)
+    progress_total: Mapped[int] = mapped_column(Integer, default=0)
+    progress_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    interrupted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class Recommendation(Base):

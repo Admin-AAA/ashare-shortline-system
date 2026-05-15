@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronUp,
   CircleAlert,
+  Clock3,
   DatabaseZap,
   HardDrive,
   Eye,
@@ -25,7 +26,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type MouseEvent } from "react";
 import { api } from "./api/client";
 import type {
   HomeBootstrap,
@@ -42,6 +43,9 @@ import type {
   RunMode,
   RunTarget,
   RunSummary,
+  ScheduledTask,
+  ScheduledTaskPayload,
+  ScheduledTaskType,
   SkillDetail,
   SkillMode,
   SkillStatsRow,
@@ -55,7 +59,7 @@ import DataSourcePanel from "./components/DataSourcePanel";
 import RunHistoryPanel, { type RunHistoryMode } from "./components/RunHistoryPanel";
 import BacktestPanel from "./components/BacktestPanel";
 
-type Section = "desk" | "pool" | "runs" | "skills" | "sources" | "localPool" | "stats" | "backtest";
+type Section = "desk" | "pool" | "runs" | "automation" | "skills" | "sources" | "localPool" | "stats" | "backtest";
 
 type ReviewDraft = {
   user_label: string;
@@ -76,6 +80,15 @@ type PoolFilters = {
   watchOnly: boolean;
   hideIgnored: boolean;
   hideRepeat: boolean;
+};
+
+type ScheduledTaskDraft = {
+  task_id: string;
+  name: string;
+  task_type: ScheduledTaskType;
+  trigger_time: string;
+  preset_id: string;
+  enabled: boolean;
 };
 
 const DEFAULT_BUCKET_LIMITS: Record<string, number> = {
@@ -116,13 +129,30 @@ const EMPTY_POOL_FILTERS: PoolFilters = {
   hideRepeat: false,
 };
 
+const ALL_POOL_RUNS_VALUE = "__all_pool_runs__";
+
+const EMPTY_TASK_DRAFT: ScheduledTaskDraft = {
+  task_id: "",
+  name: "",
+  task_type: "recommendation_run",
+  trigger_time: "07:00",
+  preset_id: "",
+  enabled: true,
+};
+
 export default function App() {
+  const [authReady, setAuthReady] = useState(false);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [loginLoading, setLoginLoading] = useState(false);
   const [section, setSection] = useState<Section>("desk");
   const [bootstrap, setBootstrap] = useState<HomeBootstrap | null>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [dataSources, setDataSources] = useState<DataSourceHealthRow[]>([]);
+  const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
   const [localPool, setLocalPool] = useState<LocalPoolStatus | null>(null);
   const [statsMode, setStatsMode] = useState<RunMode>("formal");
   const [poolMode, setPoolMode] = useState<RunMode>("formal");
@@ -140,6 +170,8 @@ export default function App() {
   const [presetDraft, setPresetDraft] = useState<PresetDraft>(EMPTY_PRESET_DRAFT);
   const [presetSkillDrafts, setPresetSkillDrafts] = useState<PresetSkillDraft[]>([]);
   const [bucketLimits, setBucketLimits] = useState<Record<string, number>>({ ...DEFAULT_BUCKET_LIMITS });
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [taskDraft, setTaskDraft] = useState<ScheduledTaskDraft>(EMPTY_TASK_DRAFT);
   const [poolFilters, setPoolFilters] = useState<PoolFilters>(EMPTY_POOL_FILTERS);
   const [recommendations, setRecommendations] = useState<RecommendationCard[]>([]);
   const [recommendationDetail, setRecommendationDetail] = useState<RecommendationDetail | null>(null);
@@ -166,11 +198,27 @@ export default function App() {
   );
   const visibleRuns = useMemo(() => runs.filter((run) => run.run_mode === poolMode), [runs, poolMode]);
   const selectedRun = useMemo(
-    () => visibleRuns.find((run) => run.run_id === selectedRunId) ?? visibleRuns[0] ?? null,
+    () => visibleRuns.find((run) => run.run_id === selectedRunId) ?? null,
     [visibleRuns, selectedRunId],
   );
+  const poolRunOptions = useMemo(
+    () => [
+      { value: ALL_POOL_RUNS_VALUE, label: "全部" },
+      ...visibleRuns.map((run) => ({
+        value: run.run_id,
+        label: `${run.run_name} · ${run.trade_date}`,
+      })),
+    ],
+    [visibleRuns],
+  );
+  const poolTitleSubtitle =
+    selectedRunId === ALL_POOL_RUNS_VALUE ? `全部 Run · ${displayText(poolMode)}` : selectedRun?.run_name ?? "暂无 Run";
   const selectedRecommendation =
     recommendationDetail?.recommendation_id === selectedRecommendationId ? recommendationDetail : null;
+  const hasActiveRun = useMemo(
+    () => runs.some((run) => run.status === "queued" || run.status === "running"),
+    [runs],
+  );
   const availableBuckets = useMemo(
     () => Array.from(new Set(recommendations.map((item) => item.bucket))).sort(),
     [recommendations],
@@ -197,14 +245,32 @@ export default function App() {
   }, [poolFilters, recommendations]);
 
   useEffect(() => {
-    void bootstrapApp();
+    void prepareAuth();
   }, []);
+
+  useEffect(() => {
+    if (authenticated) {
+      void bootstrapApp();
+    }
+  }, [authenticated]);
+
+  useEffect(() => {
+    if (authenticated && section === "automation") {
+      void loadScheduledTasks();
+    }
+  }, [authenticated, section]);
 
   useEffect(() => {
     if (!selectedPresetId && presets[0]) {
       setSelectedPresetId(presets[0].preset_id);
     }
   }, [presets, selectedPresetId]);
+
+  useEffect(() => {
+    if (!taskDraft.preset_id && !editingTaskId && presets[0]) {
+      setTaskDraft((current) => ({ ...current, preset_id: presets[0].preset_id }));
+    }
+  }, [editingTaskId, presets, taskDraft.preset_id]);
 
   useEffect(() => {
     if (!selectedSkillId && skills[0]) {
@@ -216,16 +282,24 @@ export default function App() {
   }, [selectedSkillId, singleSkillId, skills]);
 
   useEffect(() => {
-    if (!visibleRuns.length) return;
+    if (selectedRunId === ALL_POOL_RUNS_VALUE) return;
+    if (!visibleRuns.length) {
+      setSelectedRunId(ALL_POOL_RUNS_VALUE);
+      return;
+    }
     if (!visibleRuns.some((run) => run.run_id === selectedRunId)) {
       setSelectedRunId(visibleRuns[0].run_id);
     }
   }, [selectedRunId, visibleRuns]);
 
   useEffect(() => {
+    if (selectedRunId === ALL_POOL_RUNS_VALUE) {
+      void loadPoolRecommendations(ALL_POOL_RUNS_VALUE, visibleRuns);
+      return;
+    }
     if (!selectedRunId) return;
     if (!visibleRuns.some((run) => run.run_id === selectedRunId)) return;
-    void loadRunRecommendations(selectedRunId);
+    void loadPoolRecommendations(selectedRunId, visibleRuns);
   }, [selectedRunId, visibleRuns]);
 
   useEffect(() => {
@@ -252,19 +326,62 @@ export default function App() {
   }, [selectedPreset]);
 
   useEffect(() => {
-    void loadStats(statsMode);
-  }, [statsMode]);
+    if (authenticated) {
+      void loadStats(statsMode);
+    }
+  }, [authenticated, statsMode]);
+
+  useEffect(() => {
+    if (!authenticated || !hasActiveRun) return;
+    const timer = window.setInterval(() => {
+      void refreshRunsOnly();
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [authenticated, hasActiveRun]);
+
+  async function prepareAuth() {
+    setAuthReady(false);
+    try {
+      const status = await api.authStatus();
+      const isAuthenticated = !status.enabled || status.authenticated;
+      setAuthenticated(isAuthenticated);
+      if (!isAuthenticated) {
+        setBootstrap(null);
+      }
+    } catch (err) {
+      setLoginError(messageFromError(err));
+    } finally {
+      setAuthReady(true);
+    }
+  }
+
+  async function submitLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoginLoading(true);
+    setLoginError("");
+    try {
+      await api.login(loginPassword);
+      setAuthenticated(true);
+      setLoginPassword("");
+    } catch (err) {
+      setLoginError(messageFromError(err));
+    } finally {
+      setLoginLoading(false);
+    }
+  }
 
   async function bootstrapApp() {
+    if (!authenticated) return;
     setLoading(true);
     setError("");
     try {
-      const [home, presetList, runList, skillList, sourceRows, poolStatus] = await Promise.all([
+      const [home, presetList, runList, skillList, sourceRows, taskRows, poolStatus] = await Promise.all([
         api.bootstrap(),
         api.presets(),
         api.runs(),
         api.skills(),
         api.dataSources(),
+        api.scheduledTasks(),
         api.localPool(),
       ]);
       setBootstrap(home);
@@ -272,14 +389,17 @@ export default function App() {
       setRuns(runList);
       setSkills(skillList);
       setDataSources(sourceRows);
+      setScheduledTasks(taskRows);
       setLocalPool(poolStatus);
       setSelectedPresetId((current) => current || presetList[0]?.preset_id || "");
       setSelectedSkillId((current) => current || skillList[0]?.skill_id || "");
       setSingleSkillId((current) => current || skillList[0]?.skill_id || "");
-      const initialRun = runList.find((run) => run.run_mode === poolMode) ?? runList[0];
-      if (initialRun) {
-        setSelectedRunId(initialRun.run_id);
-      }
+      const initialRun = runList.find((run) => run.run_mode === poolMode);
+      setSelectedRunId((current) => {
+        if (current === ALL_POOL_RUNS_VALUE) return current;
+        if (current && runList.some((run) => run.run_id === current && run.run_mode === poolMode)) return current;
+        return initialRun?.run_id ?? ALL_POOL_RUNS_VALUE;
+      });
       await loadStats(statsMode);
     } catch (err) {
       setError(messageFromError(err));
@@ -313,6 +433,14 @@ export default function App() {
     }
   }
 
+  async function loadScheduledTasks() {
+    try {
+      setScheduledTasks(await api.scheduledTasks());
+    } catch (err) {
+      setError(messageFromError(err));
+    }
+  }
+
   async function loadLocalPool(params?: { u_limit?: number; u_offset?: number; b_limit?: number; b_offset?: number }) {
     try {
       const poolStatus = await api.localPool(params);
@@ -336,9 +464,18 @@ export default function App() {
     }
   }
 
-  async function loadRunRecommendations(runId: string) {
+  async function loadPoolRecommendations(runSelection: string, runList: RunSummary[] = visibleRuns) {
     try {
-      const recs = await api.runRecommendations(runId);
+      const recs =
+        runSelection === ALL_POOL_RUNS_VALUE
+          ? (await Promise.all(runList.map((run) => api.runRecommendations(run.run_id))))
+              .flat()
+              .sort((left, right) => {
+                const dateOrder = right.trade_date.localeCompare(left.trade_date);
+                if (dateOrder !== 0) return dateOrder;
+                return right.final_score - left.final_score;
+              })
+          : await api.runRecommendations(runSelection);
       setRecommendations(recs);
       setSelectedRecommendationId((current) => {
         if (current && recs.some((item) => item.recommendation_id === current)) return current;
@@ -347,6 +484,14 @@ export default function App() {
     } catch (err) {
       setError(messageFromError(err));
     }
+  }
+
+  async function refreshSelectedPoolRecommendations() {
+    await loadPoolRecommendations(selectedRunId || ALL_POOL_RUNS_VALUE, visibleRuns);
+  }
+
+  async function loadRunRecommendations(runId: string) {
+    await loadPoolRecommendations(runId, visibleRuns);
   }
 
   async function loadRecommendationDetail(recommendationId: string) {
@@ -407,6 +552,27 @@ export default function App() {
       skills[0] ? [{ skill_id: skills[0].skill_id, weight: 1, sort_order: 0 }] : [],
     );
     setBucketLimits({ ...DEFAULT_BUCKET_LIMITS });
+  }
+
+  function editScheduledTask(task: ScheduledTask) {
+    const payload = task.payload ?? {};
+    setEditingTaskId(task.task_id);
+    setTaskDraft({
+      task_id: task.task_id,
+      name: task.name,
+      task_type: task.task_type,
+      trigger_time: task.trigger_time ?? cronToClockTime(task.cron_expression) ?? "07:00",
+      preset_id: String(payload.preset_id ?? ""),
+      enabled: task.enabled,
+    });
+  }
+
+  function resetScheduledTaskDraft() {
+    setEditingTaskId(null);
+    setTaskDraft({
+      ...EMPTY_TASK_DRAFT,
+      preset_id: presets[0]?.preset_id ?? "",
+    });
   }
 
   function updatePresetSkill(skillId: string, patch: Partial<PresetSkillDraft>) {
@@ -505,12 +671,13 @@ export default function App() {
   }
 
   async function refreshHomeData() {
-    const [home, presetList, runList, skillList, sourceRows, poolStatus] = await Promise.all([
+    const [home, presetList, runList, skillList, sourceRows, taskRows, poolStatus] = await Promise.all([
       api.bootstrap(),
       api.presets(),
       api.runs(),
       api.skills(),
       api.dataSources(),
+      api.scheduledTasks(),
       api.localPool(),
     ]);
     setBootstrap(home);
@@ -518,7 +685,17 @@ export default function App() {
     setRuns(runList);
     setSkills(skillList);
     setDataSources(sourceRows);
+    setScheduledTasks(taskRows);
     setLocalPool(poolStatus);
+  }
+
+  async function refreshRunsOnly() {
+    try {
+      const runList = await api.runs();
+      setRuns(runList);
+    } catch (err) {
+      console.warn("refresh runs failed", err);
+    }
   }
 
   async function runCurrentSelection() {
@@ -577,10 +754,10 @@ export default function App() {
           setMessage("后台审查完成，机会池已更新");
           return;
         }
-        if (run.status === "failed") {
+        if (run.status === "failed" || run.status === "interrupted") {
           await refreshHomeData();
           setSection("runs");
-          setError(run.error_message || "运行失败");
+          setError(run.error_message || (run.status === "interrupted" ? "运行已中断，请重新发起" : "运行失败"));
           return;
         }
       } catch (err) {
@@ -607,7 +784,7 @@ export default function App() {
     if (!selectedRecommendation) return;
     try {
       await api.labelOutcome(selectedRecommendation.recommendation_id, outcomeDraft);
-      await loadRunRecommendations(selectedRecommendation.run_id);
+      await refreshSelectedPoolRecommendations();
       await loadRecommendationDetail(selectedRecommendation.recommendation_id);
       await loadStats(statsMode);
       setMessage("结果已标注");
@@ -624,7 +801,7 @@ export default function App() {
       } else {
         await api.watchRecommendation(selectedRecommendation.recommendation_id, { watch_status: status });
       }
-      await loadRunRecommendations(selectedRecommendation.run_id);
+      await refreshSelectedPoolRecommendations();
       await loadRecommendationDetail(selectedRecommendation.recommendation_id);
       await loadStats(statsMode);
       setMessage(status === "watching" ? "已加入观察" : "已忽略此票");
@@ -640,7 +817,7 @@ export default function App() {
       } else {
         await api.watchRecommendation(id, { watch_status: status });
       }
-      await loadRunRecommendations(selectedRunId);
+      await refreshSelectedPoolRecommendations();
       if (selectedRecommendationId === id) {
         await loadRecommendationDetail(id);
       }
@@ -717,6 +894,95 @@ export default function App() {
     }
   }
 
+  async function saveScheduledTask() {
+    setError("");
+    if (!taskDraft.name.trim()) {
+      setError("请输入任务名称");
+      return;
+    }
+    if (!taskDraft.trigger_time) {
+      setError("请选择触发时间");
+      return;
+    }
+    if (taskDraft.task_type === "recommendation_run" && taskDraft.enabled && !taskDraft.preset_id) {
+      setError("请选择策略预设");
+      return;
+    }
+
+    const taskId = editingTaskId ?? (taskDraft.task_id || makeTaskId(taskDraft));
+    const existingTask = editingTaskId ? scheduledTasks.find((task) => task.task_id === editingTaskId) : null;
+    const payload: ScheduledTaskPayload = {
+      task_id: taskId,
+      name: taskDraft.name.trim(),
+      task_type: taskDraft.task_type,
+      trigger_time: taskDraft.trigger_time,
+      payload:
+        taskDraft.task_type === "recommendation_run"
+          ? {
+              preset_id: taskDraft.preset_id,
+              run_name: `${taskDraft.name.trim()} · 自动推荐`,
+            }
+          : taskDraft.task_type === "data_backfill"
+            ? { ...(existingTask?.payload ?? {}) }
+          : {},
+      enabled: taskDraft.enabled,
+    };
+    if (
+      existingTask &&
+      !existingTask.trigger_time &&
+      existingTask.cron_expression &&
+      taskDraft.trigger_time === cronToClockTime(existingTask.cron_expression)
+    ) {
+      payload.cron_expression = existingTask.cron_expression;
+      delete payload.trigger_time;
+    }
+
+    try {
+      const saved = editingTaskId
+        ? await api.updateScheduledTask(editingTaskId, payload)
+        : await api.createScheduledTask(payload);
+      await loadScheduledTasks();
+      editScheduledTask(saved);
+      setMessage(editingTaskId ? "自动任务已更新" : "自动任务已创建");
+    } catch (err) {
+      setError(messageFromError(err));
+    }
+  }
+
+  async function toggleScheduledTask(task: ScheduledTask) {
+    const payload = taskToPayload(task, presets);
+    try {
+      await api.updateScheduledTask(task.task_id, { ...payload, enabled: !task.enabled });
+      await loadScheduledTasks();
+      setMessage(task.enabled ? "任务已停用" : "任务已启用");
+    } catch (err) {
+      setError(messageFromError(err));
+    }
+  }
+
+  async function runScheduledTaskNow(task: ScheduledTask) {
+    try {
+      await api.runScheduledTask(task.task_id);
+      await bootstrapApp();
+      setMessage("任务已执行");
+    } catch (err) {
+      setError(messageFromError(err));
+      await loadScheduledTasks();
+    }
+  }
+
+  async function deleteScheduledTask(taskId: string) {
+    if (!confirm("确定删除这个自动任务？")) return;
+    try {
+      await api.deleteScheduledTask(taskId);
+      if (editingTaskId === taskId) resetScheduledTaskDraft();
+      await loadScheduledTasks();
+      setMessage("自动任务已删除");
+    } catch (err) {
+      setError(messageFromError(err));
+    }
+  }
+
   async function deleteRun(runId: string) {
     if (!confirm("确定删除此运行记录？将同时删除关联的推荐、结果和审查数据。")) return;
     try {
@@ -737,7 +1003,7 @@ export default function App() {
     } catch (err) {
       setError(messageFromError(err));
     } finally {
-      if (selectedRunId) await loadRunRecommendations(selectedRunId);
+      await refreshSelectedPoolRecommendations();
     }
   }
 
@@ -755,6 +1021,52 @@ export default function App() {
     }
   }
 
+  if (!authReady) {
+    return (
+      <div className="auth-screen">
+        <div className="auth-panel">
+          <div className="brand auth-brand">
+            <div className="brand-mark">A</div>
+            <div>
+              <strong>A股短线工作台</strong>
+              <span>正在校验访问状态</span>
+            </div>
+          </div>
+          <Loader2 size={22} className="spin" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!authenticated) {
+    return (
+      <div className="auth-screen">
+        <form className="auth-panel" onSubmit={submitLogin}>
+          <div className="brand auth-brand">
+            <div className="brand-mark">A</div>
+            <div>
+              <strong>A股短线工作台</strong>
+              <span>请输入访问密码</span>
+            </div>
+          </div>
+          <input
+            autoFocus
+            className="auth-input"
+            type="password"
+            value={loginPassword}
+            onChange={(event) => setLoginPassword(event.target.value)}
+            placeholder="访问密码"
+          />
+          {loginError && <div className="auth-error">{loginError}</div>}
+          <button className="primary auth-submit" type="submit" disabled={loginLoading || !loginPassword}>
+            {loginLoading ? <Loader2 size={16} className="spin" /> : <Play size={16} />}
+            进入系统
+          </button>
+        </form>
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -770,6 +1082,7 @@ export default function App() {
           <NavButton active={section === "desk"} icon={<Play size={16} />} label="运行台" onClick={() => setSection("desk")} />
           <NavButton active={section === "pool"} icon={<Layers3 size={16} />} label="机会池" onClick={() => setSection("pool")} />
           <NavButton active={section === "runs"} icon={<History size={16} />} label="运行记录" onClick={() => setSection("runs")} />
+          <NavButton active={section === "automation"} icon={<Clock3 size={16} />} label="自动任务" onClick={() => setSection("automation")} />
           <NavButton active={section === "skills"} icon={<BrainCircuit size={16} />} label="Skill 工作室" onClick={() => setSection("skills")} />
           <NavButton active={section === "sources"} icon={<DatabaseZap size={16} />} label="数据源" onClick={() => setSection("sources")} />
           <NavButton active={section === "localPool"} icon={<HardDrive size={16} />} label="本地数据池" onClick={() => setSection("localPool")} />
@@ -900,11 +1213,8 @@ export default function App() {
                 />
                 <SelectField
                   label="Run"
-                  value={selectedRun?.run_id ?? ""}
-                  options={visibleRuns.map((run) => ({
-                    value: run.run_id,
-                    label: `${run.run_name} · ${run.trade_date}`,
-                  }))}
+                  value={selectedRunId || ALL_POOL_RUNS_VALUE}
+                  options={poolRunOptions}
                   onChange={setSelectedRunId}
                 />
                 <SelectField
@@ -949,7 +1259,7 @@ export default function App() {
             </section>
 
             <section className="panel pool-table-panel">
-              <PanelTitle title="机会池" subtitle={selectedRun?.run_name ?? "暂无 Run"} />
+              <PanelTitle title="机会池" subtitle={poolTitleSubtitle} />
               <RecommendationList
                 recommendations={filteredRecommendations}
                 selectedId={selectedRecommendationId}
@@ -1002,6 +1312,23 @@ export default function App() {
               setSection("pool");
             }}
             onDelete={(id) => void deleteRun(id)}
+          />
+        )}
+
+        {section === "automation" && (
+          <AutomationPage
+            tasks={scheduledTasks}
+            presets={presets}
+            draft={taskDraft}
+            editingTaskId={editingTaskId}
+            onDraftChange={(patch) => setTaskDraft((current) => ({ ...current, ...patch }))}
+            onEdit={editScheduledTask}
+            onNew={resetScheduledTaskDraft}
+            onSave={() => void saveScheduledTask()}
+            onToggle={(task) => void toggleScheduledTask(task)}
+            onRunNow={(task) => void runScheduledTaskNow(task)}
+            onDelete={(taskId) => void deleteScheduledTask(taskId)}
+            onRefresh={() => void loadScheduledTasks()}
           />
         )}
 
@@ -1097,6 +1424,7 @@ function titleFor(section: Section) {
     desk: "运行台",
     pool: "机会池",
     runs: "运行记录",
+    automation: "自动任务",
     skills: "Skill 工作室",
     sources: "数据源",
     localPool: "本地数据池",
@@ -1110,6 +1438,7 @@ function subtitleFor(section: Section) {
     desk: "用预设组织一次运行，输出进入机会池。",
     pool: "按 Run、桶和 Skill 快速定位值得复盘的标的。",
     runs: "回看每次运行的市场状态、命中率和输出质量。",
+    automation: "让系统按用户选择的时间自动刷新数据或触发策略预设。",
     skills: "管理策略资产，控制正式、实验和停用状态。",
     sources: "维护报价与日 K 数据源的健康度和参与状态。",
     localPool: "查看本地行情池覆盖情况，按需显式刷新外部源。",
@@ -1304,6 +1633,185 @@ function PresetSummary({ preset }: { preset: Preset }) {
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+function AutomationPage({
+  tasks,
+  presets,
+  draft,
+  editingTaskId,
+  onDraftChange,
+  onEdit,
+  onNew,
+  onSave,
+  onToggle,
+  onRunNow,
+  onDelete,
+  onRefresh,
+}: {
+  tasks: ScheduledTask[];
+  presets: Preset[];
+  draft: ScheduledTaskDraft;
+  editingTaskId: string | null;
+  onDraftChange: (patch: Partial<ScheduledTaskDraft>) => void;
+  onEdit: (task: ScheduledTask) => void;
+  onNew: () => void;
+  onSave: () => void;
+  onToggle: (task: ScheduledTask) => void;
+  onRunNow: (task: ScheduledTask) => void;
+  onDelete: (taskId: string) => void;
+  onRefresh: () => void;
+}) {
+  const recommendationTasks = tasks.filter((task) => task.task_type === "recommendation_run").length;
+  const enabledTasks = tasks.filter((task) => task.enabled).length;
+  const currentTask = tasks.find((task) => task.task_id === editingTaskId) ?? null;
+  const runTimes = tasks
+    .map((task) => task.last_run_at)
+    .filter(Boolean)
+    .sort();
+  const latestRunAt = runTimes.length ? runTimes[runTimes.length - 1] : null;
+
+  return (
+    <div className="automation-grid">
+      <section className="panel">
+        <PanelTitle
+          title="任务列表"
+          subtitle="每日触发，按北京时间执行"
+          action={
+            <div className="inline-actions compact-actions">
+              <button className="ghost-btn subtle" onClick={onRefresh}>
+                <RefreshCcw size={14} />
+                刷新
+              </button>
+              <button className="ghost-btn" onClick={onNew}>
+                <Plus size={14} />
+                新建
+              </button>
+            </div>
+          }
+        />
+        <div className="summary-grid automation-summary">
+          <MiniStat label="任务数" value={tasks.length} />
+          <MiniStat label="启用中" value={enabledTasks} />
+          <MiniStat label="推荐任务" value={recommendationTasks} />
+          <MiniStat label="最近运行" value={latestRunAt ? formatShortTime(latestRunAt) : "-"} />
+        </div>
+        <div className="automation-task-list">
+          {tasks.length ? (
+            tasks.map((task) => (
+              <button
+                key={task.task_id}
+                className={`automation-task ${task.task_id === editingTaskId ? "active" : ""}`}
+                onClick={() => onEdit(task)}
+              >
+                <div className="automation-task-main">
+                  <div>
+                    <strong>{task.name}</strong>
+                    <span>
+                      {formatTaskTime(task)} · {displayText(task.task_type)}
+                    </span>
+                  </div>
+                  <Tag text={task.enabled ? "active" : "inactive"} />
+                </div>
+                <div className="automation-task-meta">
+                  <span>{describeTaskPayload(task, presets)}</span>
+                  <span>{task.last_run_at ? `上次 ${formatShortTime(task.last_run_at)}` : "尚未运行"}</span>
+                  {task.last_error ? <span className="danger-text">{task.last_error}</span> : null}
+                </div>
+              </button>
+            ))
+          ) : (
+            <EmptyHint text="暂无自动任务" />
+          )}
+        </div>
+      </section>
+
+      <section className="panel">
+        <PanelTitle title={editingTaskId ? "编辑任务" : "新建任务"} subtitle="选择时间和要触发的动作" />
+        <div className="form-grid automation-form">
+          <Field label="任务名称" value={draft.name} onChange={(value) => onDraftChange({ name: value })} />
+          <label className="field">
+            <span>触发时间</span>
+            <input
+              type="time"
+              value={draft.trigger_time}
+              onChange={(event) => onDraftChange({ trigger_time: event.target.value })}
+            />
+          </label>
+          <SelectField
+            label="任务类型"
+            value={draft.task_type}
+            options={[
+              { value: "recommendation_run", label: "股票推荐" },
+              { value: "pool_refresh", label: "更新本地股票池" },
+              { value: "data_backfill", label: "数据回填" },
+            ]}
+            onChange={(value) => onDraftChange({ task_type: value as ScheduledTaskType })}
+          />
+          {draft.task_type === "recommendation_run" ? (
+            <SelectField
+              label="策略预设"
+              value={draft.preset_id}
+              options={[
+                { value: "", label: "请选择预设" },
+                ...presets.map((preset) => ({
+                  value: preset.preset_id,
+                  label: `${preset.name} · ${displayText(preset.run_mode)}`,
+                })),
+              ]}
+              onChange={(value) => onDraftChange({ preset_id: value })}
+            />
+          ) : draft.task_type === "pool_refresh" ? (
+            <div className="automation-note">
+              <DatabaseZap size={16} />
+              <span>到点后拉取外部行情并刷新本地股票池。</span>
+            </div>
+          ) : (
+            <div className="automation-note">
+              <DatabaseZap size={16} />
+              <span>保留已有回填脚本参数，仅调整时间和启停状态。</span>
+            </div>
+          )}
+          <ToggleField label="启用任务" value={draft.enabled} onChange={(value) => onDraftChange({ enabled: value })} />
+        </div>
+        <div className="inline-actions wrap">
+          <button className="ghost-btn primary" onClick={onSave}>
+            <CheckCircle2 size={14} />
+            保存任务
+          </button>
+          <button className="ghost-btn subtle" onClick={onNew}>
+            <Plus size={14} />
+            新建
+          </button>
+        </div>
+
+        {editingTaskId ? (
+          <>
+            <div className="divider" />
+            <PanelTitle title="当前任务操作" subtitle={editingTaskId} />
+            <div className="inline-actions wrap">
+              {currentTask ? (
+                <>
+                  <button className="ghost-btn" onClick={() => onRunNow(currentTask)}>
+                    <Play size={14} />
+                    立即执行
+                  </button>
+                  <button className="ghost-btn" onClick={() => onToggle(currentTask)}>
+                    <PauseCircle size={14} />
+                    {currentTask.enabled ? "停用" : "启用"}
+                  </button>
+                  <button className="ghost-btn danger" onClick={() => onDelete(editingTaskId)}>
+                    <Trash2 size={14} />
+                    删除
+                  </button>
+                </>
+              ) : null}
+            </div>
+          </>
+        ) : null}
+      </section>
     </div>
   );
 }
@@ -1738,8 +2246,62 @@ function delay(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+function makeTaskId(draft: ScheduledTaskDraft) {
+  const suffix = `${draft.task_type}_${draft.trigger_time || "time"}_${draft.preset_id || "pool"}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 52);
+  return `task_${suffix}_${Date.now().toString(36)}`;
+}
+
+function taskToPayload(task: ScheduledTask, presets: Preset[]): ScheduledTaskPayload {
+  const triggerTime = task.trigger_time ?? cronToClockTime(task.cron_expression) ?? "07:00";
+  const presetId = String(task.payload?.preset_id ?? "");
+  const payload: ScheduledTaskPayload = {
+    task_id: task.task_id,
+    name: task.name,
+    task_type: task.task_type,
+    trigger_time: triggerTime,
+    payload: task.task_type === "recommendation_run" ? { ...task.payload, preset_id: presetId } : { ...task.payload },
+    enabled: task.enabled,
+  };
+  if (!task.trigger_time && task.cron_expression && triggerTime === cronToClockTime(task.cron_expression)) {
+    payload.cron_expression = task.cron_expression;
+    delete payload.trigger_time;
+  }
+  return payload;
+}
+
+function formatTaskTime(task: ScheduledTask) {
+  return task.trigger_time ?? cronToClockTime(task.cron_expression) ?? task.cron_expression;
+}
+
+function cronToClockTime(cronExpression: string) {
+  const parts = cronExpression.split(/\s+/);
+  if (parts.length !== 5) return null;
+  const [minute, hour] = parts;
+  const h = Number(hour);
+  const m = Number(minute);
+  if (!Number.isInteger(h) || !Number.isInteger(m)) return null;
+  if (h < 0 || h > 23 || m < 0 || m > 59) return null;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function describeTaskPayload(task: ScheduledTask, presets: Preset[]) {
+  if (task.task_type === "pool_refresh") return "本地股票池";
+  if (task.task_type === "recommendation_run") {
+    const presetId = String(task.payload?.preset_id ?? "");
+    return presets.find((preset) => preset.preset_id === presetId)?.name ?? presetId ?? "未选择预设";
+  }
+  return "数据回填";
+}
+
 function displayText(key: string): string {
   const labels: Record<string, string> = {
+    recommendation_run: "股票推荐",
+    pool_refresh: "更新本地股票池",
+    data_backfill: "数据回填",
     formal: "正式",
     experiment: "实验",
     disabled: "停用",
@@ -1757,8 +2319,22 @@ function displayText(key: string): string {
     failed: "失败",
     not_triggered: "未触发",
     risk_hit: "风控触发",
+    queued: "排队中",
     running: "运行中",
     completed: "已完成",
+    interrupted: "已中断",
+    stale: "疑似中断",
+    prepare: "准备运行",
+    starting: "启动中",
+    market_data: "市场数据",
+    scope_filter: "范围过滤",
+    auxiliary_data: "辅助数据",
+    feature_build: "特征构建",
+    rule_scan: "规则扫描",
+    skill_gate: "规则门",
+    skill_review: "Skill 深审",
+    aggregate: "聚合",
+    persist: "保存结果",
     ready: "可运行",
     blocked: "不可运行",
     warning: "有缺口",
@@ -1789,8 +2365,11 @@ function displayTagText(text: string) {
     failed: "失败",
     not_triggered: "未触发",
     risk_hit: "风控命中",
+    queued: "排队中",
     running: "运行中",
     completed: "已完成",
+    interrupted: "已中断",
+    stale: "疑似中断",
     local_pool: "仅本地池",
     local_pool_preferred: "本地池优先",
     realtime: "仅实时数据源",
@@ -1804,9 +2383,9 @@ function displayTagText(text: string) {
 function toneForTag(text: string) {
   if (["formal", "watching", "success", "容量核心", "ready"].includes(text)) return "positive";
   if (["healthy"].includes(text)) return "positive";
-  if (["experiment", "pending", "高弹观察", "warning", "local_pool_preferred"].includes(text)) return "warning";
+  if (["experiment", "pending", "高弹观察", "warning", "local_pool_preferred", "queued", "running"].includes(text)) return "warning";
   if (["degraded", "untested"].includes(text)) return "warning";
-  if (["failed", "ignored", "risk_hit", "blocked"].includes(text)) return "danger";
+  if (["failed", "ignored", "risk_hit", "blocked", "interrupted", "stale"].includes(text)) return "danger";
   if (["not_triggered", "realtime"].includes(text)) return "blue";
   if (["disabled", "none", "inactive", "local_pool"].includes(text)) return "muted";
   return "neutral";
@@ -1960,6 +2539,10 @@ function LocalPoolPage({
   const readinessSubtitle =
     readiness.messages[0] ??
     (readiness.can_run_local_recommendation ? "本地池当前可运行。" : "请先补齐本地报价和日K覆盖。");
+  const candidateFilter = pool.summary.candidate_filter ?? readiness.quote.filter_summary;
+  const highLiquidityCount = candidateFilter?.high_liquidity_count;
+  const lowLiquidityCount = candidateFilter?.low_liquidity_count;
+  const excludedCount = candidateFilter?.excluded_count;
 
   function goUPage(page: number) {
     const p = Math.max(1, Math.min(page, uTotalPages));
@@ -2020,11 +2603,14 @@ function LocalPoolPage({
           <div className="pool-readiness-stats">
             <MiniStat label="统一报价" value={readiness.quote.unified_quote_total ?? readiness.quote.available_count} />
             <MiniStat label="基础合格" value={readiness.quote.base_filter_eligible_count ?? readiness.quote.candidate_count} />
+            <MiniStat label="高流动性" value={highLiquidityCount ?? "-"} />
+            <MiniStat label="低流动性" value={lowLiquidityCount ?? "-"} />
             <MiniStat label="目标候选" value={readiness.required_candidate_count} />
             <MiniStat label="本次扫描" value={readiness.scan?.actual_scan_count ?? readiness.kline.ready_count} />
             <MiniStat label="Skill 输入" value={readiness.scan?.skill_input_count ?? 0} />
             <MiniStat label="日K覆盖" value={readiness.kline.ready_count} />
             <MiniStat label="日K缺失" value={readiness.kline.missing_count} />
+            <MiniStat label="短历史" value={readiness.kline.short_history_count ?? 0} />
             <MiniStat label="日K过期" value={readiness.kline.stale_count} />
             <MiniStat label="覆盖率" value={`${(((readiness.kline.coverage_rate ?? 0) as number) * 100).toFixed(1)}%`} />
           </div>
@@ -2041,6 +2627,7 @@ function LocalPoolPage({
             <div className="pool-readiness-messages">
               <span>
                 全市场扫描：基础合格 {readiness.quote.base_filter_eligible_count ?? readiness.quote.candidate_count}
+                {candidateFilter ? `，高流动性 ${candidateFilter.high_liquidity_count}，低流动性 ${candidateFilter.low_liquidity_count}` : ""}
                 ，本次实际扫描 {readiness.scan.actual_scan_count}
                 ，Skill 接收 {readiness.scan.skill_input_count}。
               </span>
@@ -2074,6 +2661,9 @@ function LocalPoolPage({
           <MiniStat label="原始报价" value={pool.summary.raw_quote_count} />
           <MiniStat label="统一报价" value={pool.summary.active_unified_quote_count} />
           <MiniStat label="合格数" value={pool.summary.eligible_quote_count ?? readiness.quote.candidate_count} />
+          <MiniStat label="高流动性" value={highLiquidityCount ?? "-"} />
+          <MiniStat label="低流动性" value={lowLiquidityCount ?? "-"} />
+          <MiniStat label="策略排除" value={excludedCount ?? "-"} />
           <MiniStat label="原始日K" value={pool.summary.raw_bar_count} />
           <MiniStat label="全市场日K" value={pool.summary.full_market_daily_bar_count ?? pool.summary.daily_bar_count} />
           <MiniStat label="全市场覆盖率" value={`${Number(pool.summary.daily_bar_coverage_rate ?? 0).toFixed(1)}%`} />
@@ -2088,6 +2678,7 @@ function LocalPoolPage({
           <MiniStat label="指标覆盖率" value={pool.summary.indicator_coverage_pct != null ? `${pool.summary.indicator_coverage_pct}%` : "-"} />
           <MiniStat label="报价日期" value={pool.summary.latest_quote_date || "-"} />
           <MiniStat label="日K日期" value={pool.summary.latest_bar_date || "-"} />
+          <MiniStat label="覆盖基准" value={pool.summary.coverage_trade_date || "-"} />
           <MiniStat label="更新时间" value={pool.summary.latest_unified_at ? formatShortTime(pool.summary.latest_unified_at) : "-"} />
           <MiniStat label="历史统一报价" value={pool.summary.unified_quote_count} />
         </div>

@@ -314,3 +314,48 @@ def test_build_features_with_snapshot():
         assert "buy_signal" in stock
         assert "_feature_tags" in stock
         assert "data_authenticity" in stock
+
+
+def test_shortline_enhancement_fields_survive_without_auxiliary_db():
+    stock = _stock(
+        code="002897",
+        name="意华股份",
+        industry="电子",
+        pct=6.2,
+        amount_yi=9.0,
+        turnover_rate=5.5,
+        free_mv_yi=90.0,
+        chg20=18.0,
+        breakout20=True,
+        vol5_20=1.8,
+    )
+    enriched = build_features([stock], _snapshot(main_industries=["电子"], limit_up_count=28))[0]
+
+    assert enriched["_is_main"] is True
+    assert enriched["_is_leader_candidate"] is True
+    assert enriched["_consensus_signal"] == "主力吸筹"
+    assert enriched["_sentiment_phase"] == "活跃"
+
+
+def test_auxiliary_values_are_not_overwritten_by_dsa_defaults():
+    stock = _stock(
+        main_net_inflow_yi=1.6,
+        inflow_5d_yi=3.2,
+        news_risk_count=1,
+        positive_catalyst_count=2,
+        latest_news="真实公告标题",
+        risk_alerts=["减持风险"],
+        positive_catalysts=["订单增长"],
+        dragon_tiger_is_on_list=True,
+        dragon_tiger_recent_count=1,
+    )
+
+    enriched = build_features([stock], _snapshot())[0]
+
+    assert enriched["main_net_inflow_yi"] == 1.6
+    assert enriched["inflow_5d_yi"] == 3.2
+    assert enriched["news_risk_count"] == 1
+    assert enriched["positive_catalyst_count"] == 2
+    assert enriched["latest_news"] == "真实公告标题"
+    assert enriched["dragon_tiger_is_on_list"] is True
+    assert enriched["dragon_tiger_recent_count"] == 1

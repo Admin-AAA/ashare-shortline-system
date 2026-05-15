@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.services.cost_service import (
     cost_summary,
+    delete_scheduled_task,
     list_scheduled_tasks,
     record_task_run,
     system_health,
@@ -54,20 +55,34 @@ def get_readiness(db: Session = Depends(get_db)):
 
 @router.post("/tasks")
 def create_task(payload: dict, db: Session = Depends(get_db)):
-    task_id = payload.get("task_id")
-    if not task_id:
-        raise HTTPException(status_code=400, detail="task_id is required")
-    return {
-        "task_id": upsert_scheduled_task(
-            db,
-            task_id=task_id,
-            name=payload.get("name", task_id),
-            task_type=payload.get("task_type", ""),
-            cron_expression=payload.get("cron_expression", ""),
-            payload=payload.get("payload"),
-            enabled=payload.get("enabled", True),
-        ).task_id
-    }
+    task = _upsert_task_from_payload(db, payload)
+    _reload_scheduler()
+    return task
+
+
+@router.patch("/tasks/{task_id}")
+def update_task(task_id: str, payload: dict, db: Session = Depends(get_db)):
+    task = _upsert_task_from_payload(db, {**payload, "task_id": task_id})
+    _reload_scheduler()
+    return task
+
+
+@router.delete("/tasks/{task_id}")
+def delete_task(task_id: str, db: Session = Depends(get_db)):
+    if not delete_scheduled_task(db, task_id):
+        raise HTTPException(status_code=404, detail="task not found")
+    _reload_scheduler()
+    return {"deleted": task_id}
+
+
+@router.post("/tasks/{task_id}/run")
+def run_task_now(task_id: str, db: Session = Depends(get_db)):
+    if not any(task["task_id"] == task_id for task in list_scheduled_tasks(db)):
+        raise HTTPException(status_code=404, detail="task not found")
+    from app.services.scheduler_service import run_task_now
+
+    run_task_now(task_id)
+    return {"ok": True}
 
 
 @router.post("/tasks/{task_id}/_record")
@@ -79,6 +94,62 @@ def record_task(task_id: str, payload: dict, db: Session = Depends(get_db)):
 @router.post("/tasks/_reload")
 def reload_tasks():
     """热重载调度器任务（Cron 配置变更后调用）。"""
-    from app.services.scheduler_service import reload_tasks
-    count = reload_tasks()
+    count = _reload_scheduler()
     return {"ok": True, "active_jobs": count}
+
+
+def _upsert_task_from_payload(db: Session, payload: dict) -> dict:
+    task_id = str(payload.get("task_id") or "").strip()
+    if not task_id:
+        raise HTTPException(status_code=400, detail="task_id is required")
+
+    task_type = str(payload.get("task_type") or "").strip()
+    if task_type not in {"pool_refresh", "recommendation_run", "data_backfill"}:
+        raise HTTPException(status_code=400, detail="task_type is invalid")
+
+    payload_data = dict(payload.get("payload") or {})
+    enabled = bool(payload.get("enabled", True))
+    if task_type == "recommendation_run" and enabled and not payload_data.get("preset_id"):
+        raise HTTPException(status_code=400, detail="preset_id is required")
+
+    cron_expression = str(payload.get("cron_expression") or "").strip()
+    if not cron_expression:
+        trigger_time = str(payload.get("trigger_time") or "").strip()
+        cron_expression = _daily_cron(trigger_time)
+    _validate_cron(cron_expression)
+
+    task = upsert_scheduled_task(
+        db,
+        task_id=task_id,
+        name=str(payload.get("name") or task_id).strip(),
+        task_type=task_type,
+        cron_expression=cron_expression,
+        payload=payload_data,
+        enabled=enabled,
+    )
+    return next(item for item in list_scheduled_tasks(db) if item["task_id"] == task.task_id)
+
+
+def _daily_cron(trigger_time: str) -> str:
+    try:
+        hour, minute = [int(part) for part in trigger_time.split(":", 1)]
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="trigger_time must be HH:MM") from exc
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        raise HTTPException(status_code=400, detail="trigger_time must be HH:MM")
+    return f"{minute} {hour} * * *"
+
+
+def _validate_cron(cron_expression: str) -> None:
+    from apscheduler.triggers.cron import CronTrigger
+
+    try:
+        CronTrigger.from_crontab(cron_expression, timezone="Asia/Shanghai")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="cron_expression is invalid") from exc
+
+
+def _reload_scheduler() -> int:
+    from app.services.scheduler_service import reload_tasks
+
+    return reload_tasks()

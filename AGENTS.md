@@ -28,6 +28,20 @@ The project is still in active development, so prioritize the most suitable arch
 - Refactor boldly when it meaningfully improves the design, even if that changes existing APIs, file layout, or internal contracts.
 - Do not optimize for stable iteration history, migration paths, or compatibility with unfinished earlier designs unless the user explicitly asks for it.
 
+# Deployment Sync Policy
+
+后续对当前系统做代码或配置改动时，如果需要推送到 GitHub，也必须同步上传并部署到云端 Ubuntu 服务器。
+
+- 服务器：`139.196.242.53`
+- SSH 用户：`root`
+- 本机免密 SSH 别名：`ashare-server`
+- 云端项目目录：`/opt/ashare-shortline-system`
+- 对外访问地址：`http://139.196.242.53:18000`
+- 后端服务：`ashare-backend`
+- Web 入口：`nginx`
+- 部署时同步当前工作区产物到服务器，重启后端服务与 Web 入口，并验证公网地址可访问。
+- 不要把服务器密码、API Key、数据库密码等敏感信息写入 GitHub 跟踪文件；需要连接服务器时，从用户提供的信息或安全环境中获取凭据。
+
 # Document Font Policy
 
 Do not use `Courier` or `Courier New` in any generated or edited document, including but not limited to `.docx`, `.pdf`, templates, styles, hidden styles, or exported assets.
