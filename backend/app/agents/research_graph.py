@@ -38,6 +38,8 @@ def review_stock(
                         "confidence": review.get("confidence"),
                         "summary": review.get("summary", ""),
                         "market_regime": review.get("market_regime_judgment", ""),
+                        "action": review.get("action", ""),
+                        "position_range": review.get("position_range", ""),
                     },
                 })
                 valid_scores.append(float(review.get("score", 50)))

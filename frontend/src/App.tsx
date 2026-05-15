@@ -2120,6 +2120,10 @@ function RecommendationPane({
                     ))}
                   </div>
                   <div className="agent-contract-grid">
+                    <InfoLine label="动作" value={String(signal.agent_skill_review.action ?? "-")} />
+                    <InfoLine label="仓位" value={String(signal.agent_skill_review.position_range ?? "-")} />
+                    <InfoLine label="入场" value={String(signal.agent_skill_review.entry_style ?? "-")} />
+                    <InfoLine label="市场" value={String(signal.agent_skill_review.market_regime_judgment ?? "-")} />
                     <InfoLine label="分数修正" value={String(signal.agent_skill_review.score_delta ?? 0)} />
                     <InfoLine label="置信度" value={`${(Number(signal.agent_skill_review.confidence ?? 0) * 100).toFixed(0)}%`} />
                     <InfoLine
@@ -2127,6 +2131,12 @@ function RecommendationPane({
                       value={String(signal.agent_skill_review.instruction_digest?.body_hash ?? signal.agent_skill_review.skill_hash ?? "-").slice(0, 12)}
                     />
                   </div>
+                  {asStringArray(signal.agent_skill_review.invalidation_conditions).length ? (
+                    <p>失效条件：{asStringArray(signal.agent_skill_review.invalidation_conditions).slice(0, 3).join("；")}</p>
+                  ) : null}
+                  {asStringArray(signal.agent_skill_review.next_day_plan).length ? (
+                    <p>次日计划：{asStringArray(signal.agent_skill_review.next_day_plan).slice(0, 3).join("；")}</p>
+                  ) : null}
                   {signal.agent_skill_review.runtime_note ? <p>{signal.agent_skill_review.runtime_note}</p> : null}
                 </div>
               ) : null}

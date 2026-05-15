@@ -2,20 +2,38 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Any, Coroutine
+from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.agents.session_registry import AgentSessionRegistry
 from app.agents.agno_skill_agent import (
-    SkillReviewOutput,
     create_skill_agent,
     run_skill_agent,
-    run_skill_agent_direct,
 )
 from app.agents.hallucination_check import verify_review_output
 from app.engine.skill_loader import StrategySkill
+
+
+def _prime_agent_session_context(
+    session_id: str,
+    stock: dict[str, Any],
+    rule_signals_by_skill: dict[str, dict[str, Any]],
+) -> None:
+    """预热 Agent 会话缓存，让 Tool 调用拿到正式链路上下文。"""
+    ctx = AgentSessionRegistry.get(session_id)
+    if ctx is None:
+        return
+
+    code = str(stock.get("code") or "").strip()
+    if code:
+        ctx.stocks_cache[code] = dict(stock)
+
+    for skill_id, signal in (rule_signals_by_skill or {}).items():
+        if not skill_id or not isinstance(signal, dict) or not code:
+            continue
+        ctx.strategy_signals_cache[f"{skill_id}:{code}"] = dict(signal)
 
 
 async def run_skill_reviews(
@@ -46,6 +64,7 @@ async def run_skill_reviews(
     active_skills = [s for s in skills if s.enabled and s.skill_body.strip()]
 
     SKILL_TIMEOUT_SECONDS = int(get_settings().agent_skill_timeout_seconds * 1.5)
+    _prime_agent_session_context(session_id, stock, rule_signals_by_skill)
 
     async def review_one(skill: StrategySkill, stagger_index: int = 0) -> dict[str, Any]:
         # 交错启动，避免瞬间并发冲击 LLM API
@@ -63,13 +82,15 @@ async def run_skill_reviews(
         try:
             rule_signal = rule_signals_by_skill.get(skill.skill_id)
 
-            # 使用直接 API 调用（单次请求，无工具调用开销）
+            agent = create_skill_agent(skill, session_id)
             review = await asyncio.wait_for(
-                run_skill_agent_direct(
-                    skill=skill,
+                run_skill_agent(
+                    agent=agent,
                     stock=stock,
                     snapshot=snapshot,
                     rule_signal=rule_signal,
+                    session_id=session_id,
+                    skill_id=skill.skill_id,
                 ),
                 timeout=SKILL_TIMEOUT_SECONDS,
             )
@@ -84,7 +105,8 @@ async def run_skill_reviews(
             )
 
             # 标准化字段名：SkillReviewOutput 用 evidence/score，下游用 supports/score_delta
-            raw.setdefault("supports", raw.pop("evidence", []))
+            raw.setdefault("runtime", "agent_skill_agno")
+            raw.setdefault("supports", list(raw.get("evidence") or []))
             raw["score_delta"] = round(float(raw.get("score", 50)) - 50.0, 2)
             result["review"] = raw
             result["hallucination_check"] = hc

@@ -3016,6 +3016,36 @@ pre {
   margin-bottom: 8px;
 }
 
+.arp-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.arp-plan-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-height: 56px;
+  padding: 8px 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+}
+
+.arp-plan-card span {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.arp-plan-card strong {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink-soft);
+}
+
 .arp-list {
   margin-bottom: 8px;
 }
@@ -3027,6 +3057,16 @@ pre {
 
 .arp-list.risks {
   border-left: 2px solid #edb4ac;
+  padding-left: 10px;
+}
+
+.arp-list.invalidation {
+  border-left: 2px solid #d4b16e;
+  padding-left: 10px;
+}
+
+.arp-list.next-plan {
+  border-left: 2px solid #8eb6de;
   padding-left: 10px;
 }
 
@@ -3068,6 +3108,7 @@ pre {
 
 .arp-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   font-size: 10px;
@@ -3123,6 +3164,10 @@ pre {
 
   .market-snapshot-grid {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .arp-plan-grid {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -368,6 +368,12 @@ export type AgentSkillReview = {
   supports?: string[];
   risks?: string[];
   summary?: string;
+  market_regime_judgment?: string;
+  action?: string;
+  position_range?: string;
+  entry_style?: string;
+  invalidation_conditions?: string[];
+  next_day_plan?: string[];
   instruction_digest?: {
     frontmatter?: Record<string, unknown>;
     principles?: string[];

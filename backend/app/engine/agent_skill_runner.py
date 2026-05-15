@@ -22,6 +22,11 @@ OUTPUT_SCHEMA = {
     "supports": ["支持该股票进入观察/推荐池的证据"],
     "risks": ["反对、否决或仅观察的风险"],
     "summary": "一句中文审查结论",
+    "action": "观察 | 轻仓试错 | 确认后加仓 | 不做",
+    "position_range": "建议仓位范围",
+    "entry_style": "建议入场方式",
+    "invalidation_conditions": ["使当前判断失效的条件"],
+    "next_day_plan": ["次日跟踪或执行计划"],
 }
 
 
@@ -260,6 +265,7 @@ def _run_llm_review(invocation: AgentSkillInvocation) -> dict[str, Any]:
                 snapshot=snapshot,
                 rule_signal=rule_signal,
                 session_id=session_id,
+                skill_id=skill.skill_id,
             )
         )
     except RuntimeError:
@@ -281,6 +287,11 @@ def _run_llm_review(invocation: AgentSkillInvocation) -> dict[str, Any]:
         "risks": output.risks,
         "summary": summary,
         "market_regime_judgment": output.market_regime_judgment,
+        "action": output.action,
+        "position_range": output.position_range,
+        "entry_style": output.entry_style,
+        "invalidation_conditions": output.invalidation_conditions,
+        "next_day_plan": output.next_day_plan,
         "raw_score": raw_score,
         "runtime": "agent_skill_agno",
     }
@@ -377,12 +388,21 @@ def _input_sources(stock: dict[str, Any], snapshot: dict[str, Any]) -> dict[str,
 
 
 def _agent_entry_rule(stock: dict[str, Any], review: dict[str, Any]) -> str:
+    if review.get("entry_style"):
+        style = str(review.get("entry_style")).strip()
+        position = str(review.get("position_range") or "").strip()
+        if position:
+            return f"{style}；建议仓位 {position}"
+        return style
     if review.get("supports"):
         return "等待 Skill 方法论中的关键买点被盘面确认后再参与"
     return "仅观察，不主动买入"
 
 
 def _agent_invalid_rule(review: dict[str, Any]) -> str:
+    invalidation_conditions = review.get("invalidation_conditions") or []
+    if invalidation_conditions:
+        return f"若出现失效条件: {str(invalidation_conditions[0])}"
     risks = review.get("risks", [])
     if risks:
         return f"若出现/强化风险: {risks[0]}"

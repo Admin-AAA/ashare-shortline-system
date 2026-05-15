@@ -1289,6 +1289,12 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                     "risks": review_data.get("risks", []),
                     "summary": review_data.get("summary", ""),
                     "market_regime_judgment": review_data.get("market_regime_judgment", ""),
+                    "action": review_data.get("action", "观察"),
+                    "position_range": review_data.get("position_range", "0-5%"),
+                    "entry_style": review_data.get("entry_style", ""),
+                    "invalidation_conditions": review_data.get("invalidation_conditions", []),
+                    "next_day_plan": review_data.get("next_day_plan", []),
+                    "runtime": review_data.get("runtime", "agent_skill_agno"),
                 } if review_data else {
                     "stance": "neutral",
                     "score_delta": 0,
@@ -1297,6 +1303,11 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                     "supports": [],
                     "risks": [str(review_result.get("error") or "Skill Agent 未返回有效审查，已按中性降级处理")],
                     "summary": str(review_result.get("error") or "Skill Agent 未返回有效审查，已按中性降级处理"),
+                    "action": "不做",
+                    "position_range": "0%",
+                    "entry_style": "当前不设买点",
+                    "invalidation_conditions": [str(review_result.get("error") or "等待数据恢复后再观察")],
+                    "next_day_plan": ["等待更强主线或 Agent 审查恢复后再评估"],
                     "runtime_note": "agent_review_failed",
                 }
 

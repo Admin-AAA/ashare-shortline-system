@@ -10,6 +10,12 @@ type AgentReview = {
   summary?: string;
   lenses?: string[];
   runtime?: string;
+  market_regime_judgment?: string;
+  action?: string;
+  position_range?: string;
+  entry_style?: string;
+  invalidation_conditions?: string[];
+  next_day_plan?: string[];
   instruction_digest?: Record<string, unknown>;
   hallucination_flags?: string[];
   hallucination_severity?: string;
@@ -35,6 +41,12 @@ export default function AgentReviewPanel({ review, skillName }: Props) {
   const score = review.score ?? 50;
   const confidence = (review.confidence ?? 0.5) * 100;
   const scoreColor = score >= 72 ? "#1a6b4a" : score >= 50 ? "#b8860b" : "#c0392b";
+  const planCards = [
+    review.action ? { label: "动作", value: review.action } : null,
+    review.position_range ? { label: "仓位", value: review.position_range } : null,
+    review.entry_style ? { label: "入场", value: review.entry_style } : null,
+    review.market_regime_judgment ? { label: "市场", value: review.market_regime_judgment } : null,
+  ].filter((item): item is { label: string; value: string } => Boolean(item?.value));
 
   return (
     <div className="agent-review-panel">
@@ -64,6 +76,17 @@ export default function AgentReviewPanel({ review, skillName }: Props) {
         <div className="arp-summary">{review.summary}</div>
       )}
 
+      {planCards.length > 0 && (
+        <div className="arp-plan-grid">
+          {planCards.map((item) => (
+            <div key={item.label} className="arp-plan-card">
+              <span>{item.label}</span>
+              <strong>{item.value}</strong>
+            </div>
+          ))}
+        </div>
+      )}
+
       {(review.supports && review.supports.length > 0) && (
         <div className="arp-list supports">
           <div className="arp-list-title">
@@ -83,6 +106,30 @@ export default function AgentReviewPanel({ review, skillName }: Props) {
             <span>风险提示</span>
           </div>
           {review.risks.slice(0, 4).map((item, i) => (
+            <div key={i} className="arp-list-item">{item}</div>
+          ))}
+        </div>
+      )}
+
+      {(review.invalidation_conditions && review.invalidation_conditions.length > 0) && (
+        <div className="arp-list invalidation">
+          <div className="arp-list-title">
+            <ShieldAlert size={13} />
+            <span>失效条件</span>
+          </div>
+          {review.invalidation_conditions.slice(0, 3).map((item, i) => (
+            <div key={i} className="arp-list-item">{item}</div>
+          ))}
+        </div>
+      )}
+
+      {(review.next_day_plan && review.next_day_plan.length > 0) && (
+        <div className="arp-list next-plan">
+          <div className="arp-list-title">
+            <Target size={13} />
+            <span>次日计划</span>
+          </div>
+          {review.next_day_plan.slice(0, 3).map((item, i) => (
             <div key={i} className="arp-list-item">{item}</div>
           ))}
         </div>
