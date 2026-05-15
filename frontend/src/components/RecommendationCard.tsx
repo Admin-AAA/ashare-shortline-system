@@ -1,5 +1,5 @@
+import { memo, useState, type MouseEvent } from "react";
 import { Target, AlertTriangle, ChevronDown, ChevronUp, Layers3, BrainCircuit, Trash2 } from "lucide-react";
-import { useState, type MouseEvent } from "react";
 import type { RecommendationCard } from "../types";
 import ScoreGauge from "./ScoreGauge";
 import AgentReviewPanel from "./AgentReviewPanel";
@@ -12,16 +12,23 @@ type Props = {
   onDelete: (id: string) => void;
 };
 
-const BUCKET_COLORS: Record<string, string> = {
-  "容量核心": "#1a6b4a",
-  "高弹观察": "#2d8a56",
-  "证据不足": "#b8860b",
-  "明确回避": "#c0392b",
+const SCORE_COLORS: Record<string, string> = {
+  "80": "#1a6b4a",
+  "64": "#2d8a56",
+  "50": "#b8860b",
+  "0": "#c0392b",
 };
 
-export default function EnhancedRecommendationCard({ item, isSelected, onSelect, onWatch, onDelete }: Props) {
+function scoreBorderColor(score: number): string {
+  if (score >= 80) return SCORE_COLORS["80"];
+  if (score >= 64) return SCORE_COLORS["64"];
+  if (score >= 50) return SCORE_COLORS["50"];
+  return SCORE_COLORS["0"];
+}
+
+export default memo(function EnhancedRecommendationCard({ item, isSelected, onSelect, onWatch, onDelete }: Props) {
   const [expanded, setExpanded] = useState(false);
-  const bucketColor = BUCKET_COLORS[item.bucket] ?? "#87928b";
+  const borderColor = scoreBorderColor(item.final_score);
 
   function handleCardClick(event: MouseEvent<HTMLDivElement>) {
     if ((event.target as HTMLElement).closest("button, a, [data-card-interactive='true']")) {
@@ -39,7 +46,7 @@ export default function EnhancedRecommendationCard({ item, isSelected, onSelect,
   return (
     <div
       className={`enhanced-rec-card ${isSelected ? "selected" : ""}`}
-      style={{ borderLeft: `3px solid ${bucketColor}` }}
+      style={{ borderLeft: `3px solid ${borderColor}` }}
       onClick={handleCardClick}
     >
       <div className="erc-header">
@@ -63,9 +70,6 @@ export default function EnhancedRecommendationCard({ item, isSelected, onSelect,
       <div className="erc-body">
         <div className="erc-gauge">
           <ScoreGauge score={item.final_score} size={100} />
-          <div className="erc-bucket" style={{ color: bucketColor }}>
-            {item.bucket}
-          </div>
         </div>
         <div className="erc-info">
           <div className="erc-rationale">{item.rationale || "暂无摘要"}</div>
@@ -139,4 +143,4 @@ export default function EnhancedRecommendationCard({ item, isSelected, onSelect,
       )}
     </div>
   );
-}
+});

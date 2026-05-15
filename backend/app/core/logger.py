@@ -38,6 +38,20 @@ def setup_logging() -> None:
     file_handler.setFormatter(formatter)
     root_logger.addHandler(file_handler)
 
+    # Access log — INFO and above, separate file for API timing
+    access_handler = RotatingFileHandler(
+        log_dir / "access.log",
+        maxBytes=settings.log_max_bytes,
+        backupCount=settings.log_backup_count,
+        encoding="utf-8",
+    )
+    access_handler.setLevel(logging.INFO)
+    access_handler.setFormatter(formatter)
+    access_logger = logging.getLogger("app.access")
+    access_logger.setLevel(logging.INFO)
+    access_logger.propagate = False
+    access_logger.addHandler(access_handler)
+
     # Console handler — INFO and above
     console_handler = logging.StreamHandler(sys.stderr)
     console_handler.setLevel(logging.INFO)

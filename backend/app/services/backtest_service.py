@@ -550,7 +550,7 @@ def _persist_backtest_recommendations(
             name=card.get("name", ""),
             industry=card.get("industry"),
             recommend_price=card.get("recommend_price", 0),
-            bucket=card.get("bucket", "证据不足"),
+            bucket="",
             final_score=card.get("final_score", 0),
             consensus_score=card.get("consensus_score", 0),
             setup_type=card.get("setup_type"),
@@ -572,7 +572,7 @@ def _persist_backtest_recommendations(
 def _backtest_breakdown(
     db: Session, start_date: str, end_date: str, run_mode: str
 ) -> dict[str, Any]:
-    """按 Skill / 行业 / Bucket 分组统计。"""
+    """按 Skill / 行业 / 分数段 分组统计。"""
     recs = db.scalars(
         select(Recommendation).join(RecommendationRun).where(
             RecommendationRun.trade_date >= start_date,
@@ -632,18 +632,29 @@ def _backtest_breakdown(
             "hit_rate": round(stats["success"] / max(1, n), 3),
         })
 
-    bucket_stats: dict[str, dict[str, Any]] = defaultdict(lambda: {"count": 0, "success": 0})
+    score_range_stats: dict[str, dict[str, Any]] = defaultdict(lambda: {"count": 0, "success": 0})
     for rec in recs:
         outcome = outcomes.get(rec.recommendation_id)
-        bucket_stats[rec.bucket]["count"] += 1
+        if rec.final_score >= 80:
+            rng = "80-100"
+        elif rec.final_score >= 64:
+            rng = "64-79"
+        elif rec.final_score >= 50:
+            rng = "50-63"
+        else:
+            rng = "0-49"
+        score_range_stats[rng]["count"] += 1
         if outcome is not None and outcome.outcome_label == "success":
-            bucket_stats[rec.bucket]["success"] += 1
+            score_range_stats[rng]["success"] += 1
 
-    by_bucket = []
-    for bucket, stats in sorted(bucket_stats.items(), key=lambda x: x[1]["count"], reverse=True):
+    by_score_range = []
+    for rng in ["80-100", "64-79", "50-63", "0-49"]:
+        stats = score_range_stats.get(rng)
+        if not stats:
+            continue
         n = stats["count"]
-        by_bucket.append({
-            "bucket": bucket,
+        by_score_range.append({
+            "range": rng,
             "recommendation_count": n,
             "success_count": stats["success"],
             "hit_rate": round(stats["success"] / max(1, n), 3),
@@ -652,7 +663,7 @@ def _backtest_breakdown(
     return {
         "by_skill": by_skill,
         "by_industry": by_industry,
-        "by_bucket": by_bucket,
+        "by_score_range": by_score_range,
     }
 
 

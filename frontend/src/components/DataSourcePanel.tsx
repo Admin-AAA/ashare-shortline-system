@@ -1,3 +1,4 @@
+import { memo } from "react";
 import {
   PauseCircle,
   Play,
@@ -11,7 +12,7 @@ type Props = {
   onToggle: (row: DataSourceHealthRow) => void;
 };
 
-export default function DataSourcePanel({ rows, onRefresh, onToggle }: Props) {
+export default memo(function DataSourcePanel({ rows, onRefresh, onToggle }: Props) {
   const quoteRows = rows.filter((row) => row.source_type === "quote");
   const klineRows = rows.filter((row) => row.source_type === "kline");
   const enabledCount = rows.filter((row) => row.enabled).length;
@@ -43,7 +44,7 @@ export default function DataSourcePanel({ rows, onRefresh, onToggle }: Props) {
       <SourceHealthPanel title="日K源" subtitle="用于补齐本地日 K 缓存" rows={klineRows} onToggle={onToggle} />
     </div>
   );
-}
+});
 
 function PanelTitle({
   title,

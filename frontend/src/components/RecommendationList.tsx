@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { RecommendationCard } from "../types";
 import EnhancedRecommendationCard from "./RecommendationCard";
 
@@ -9,7 +10,7 @@ type Props = {
   onDelete: (id: string) => void;
 };
 
-export default function RecommendationList({ recommendations, selectedId, onSelect, onWatch, onDelete }: Props) {
+export default memo(function RecommendationList({ recommendations, selectedId, onSelect, onWatch, onDelete }: Props) {
   if (!recommendations.length) {
     return (
       <div className="empty-hint">
@@ -33,4 +34,4 @@ export default function RecommendationList({ recommendations, selectedId, onSele
       ))}
     </div>
   );
-}
+});

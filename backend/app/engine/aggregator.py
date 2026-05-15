@@ -1,4 +1,3 @@
-from collections import Counter
 from typing import Any
 
 # 保持旧接口兼容：从 agent_skill_runner 导入 enrich_signal_with_agent_review
@@ -13,67 +12,88 @@ RISK_TEMPLATE_PENALTY = {
 
 # ---------------------------------------------------------------------------
 # 权重体系：Skill Agent 成为核心评分来源
-# 去掉了 setup、consensus 独立维度，它们已融入 skill_agent
 # ---------------------------------------------------------------------------
 DEFAULT_AGG_WEIGHTS = {
-    "skill_agent": 0.50,     # Skill Agent 核心评分（曾 agent: 0.05）
-    "strategy_rule": 0.25,   # Strategy.yaml 规则辅助（曾 strategy: 0.36）
-    "market": 0.10,          # 市场环境（曾 0.20）
-    "risk": 0.10,            # 风险调整（保持）
-    "evidence": 0.05,        # 证据质量（曾 0.04）
+    "skill_agent": 0.50,
+    "strategy_rule": 0.25,
+    "market": 0.10,
+    "risk": 0.10,
+    "evidence": 0.05,
+}
+
+# 技能独立性权重 —— 当多个技能使用相同数据源/方法论时降低共识加成
+# 值越低表示技能越独立（越不容易放大同一噪音）
+SKILL_INDEPENDENCE: dict[str, float] = {
+    "chen-xiaoqun-skill": 0.75,
+    "chao-gu-yang-jia-skill": 0.75,
+    "daily-stock-analysis-skill": 0.85,
 }
 
 
-def market_regime_weights(snapshot: dict[str, Any] | None = None) -> dict[str, float]:
-    """根据市场阶段动态调整聚合权重。
+def _market_sentiment(snapshot: dict[str, Any] | None) -> str:
+    """统一的市场情绪判断，全系统唯一入口。"""
+    if not snapshot:
+        return "平淡"
+    sample = max(1, int(snapshot.get("sample_count") or 1))
+    limit_up = int(snapshot.get("limit_up_count") or 0)
+    limit_down = int(snapshot.get("limit_down_count") or 0)
+    # 用涨停率而非绝对数，适配不同市场规模
+    lu_rate = limit_up / sample
+    ld_rate = limit_down / sample
+    if lu_rate > 0.012 and (ld_rate == 0 or lu_rate / max(ld_rate, 0.0001) > 3):
+        return "高潮"
+    if lu_rate > 0.005:
+        return "活跃"
+    if lu_rate >= 0.001:
+        return "平淡"
+    return "冰点"
 
-    强牛市场 → 信任 LLM 判断，降低风险和证据权重；
-    弱势市场 → 信任规则引擎，提高风险和证据权重。
-    """
+
+def _market_base(snapshot: dict[str, Any] | None) -> str:
+    """统一的市场方向判断，全系统唯一入口。"""
+    if not snapshot:
+        return "震荡"
+    sample = max(1, int(snapshot.get("sample_count") or 1))
+    up_ratio = float(snapshot.get("up_count") or 0) / sample
+    if up_ratio >= 0.65:
+        return "强牛"
+    if up_ratio >= 0.50:
+        return "偏多"
+    if up_ratio >= 0.35:
+        return "震荡"
+    return "弱势"
+
+
+def market_regime_weights(snapshot: dict[str, Any] | None = None) -> dict[str, float]:
+    """根据市场阶段动态调整聚合权重。"""
     if not snapshot:
         return dict(DEFAULT_AGG_WEIGHTS)
 
     weights = dict(DEFAULT_AGG_WEIGHTS)
-    sample = max(1, int(snapshot.get("sample_count") or 1))
-    up_ratio = float(snapshot.get("up_count") or 0) / sample
-    # 从快照数据直接推断市场情绪阶段
-    limit_up = int(snapshot.get("limit_up_count") or 0)
-    limit_down = int(snapshot.get("limit_down_count") or 0)
-    if limit_up > 50 and (limit_down == 0 or limit_up / max(1, limit_down) > 3):
-        sentiment = "高潮"
-    elif limit_up > 20:
-        sentiment = "活跃"
-    elif limit_up >= 5:
-        sentiment = "平淡"
-    else:
-        sentiment = "冰点"
+    base = _market_base(snapshot)
+    sentiment = _market_sentiment(snapshot)
 
-    if up_ratio >= 0.65:
-        # 强牛：LLM 判断更可靠
+    if base == "强牛":
         weights["skill_agent"] = 0.55
         weights["risk"] = 0.05
         weights["evidence"] = 0.05
         weights["strategy_rule"] = 0.25
-    elif up_ratio >= 0.50:
-        # 偏多：略微倾向 LLM
+    elif base == "偏多":
         weights["skill_agent"] = 0.52
         weights["risk"] = 0.08
         weights["evidence"] = 0.05
         weights["strategy_rule"] = 0.25
-    elif up_ratio >= 0.35:
-        # 中性/震荡：均衡，略微提高证据权重
+    elif base == "震荡":
         weights["skill_agent"] = 0.50
         weights["strategy_rule"] = 0.25
         weights["risk"] = 0.10
         weights["evidence"] = 0.05
     else:
-        # 弱势：规则引擎更可靠，风险权重提高
         weights["skill_agent"] = 0.40
         weights["strategy_rule"] = 0.30
         weights["risk"] = 0.12
         weights["evidence"] = 0.08
 
-    # 市场情绪微调
     if sentiment == "高潮":
         weights["skill_agent"] = min(0.58, weights["skill_agent"] + 0.03)
         weights["risk"] = max(0.03, weights["risk"] - 0.02)
@@ -82,7 +102,6 @@ def market_regime_weights(snapshot: dict[str, Any] | None = None) -> dict[str, f
         weights["risk"] = min(0.18, weights["risk"] + 0.05)
         weights["strategy_rule"] = min(0.35, weights["strategy_rule"] + 0.03)
 
-    # 归一化
     total = sum(weights.values())
     return {k: round(v / total, 4) for k, v in weights.items()}
 
@@ -187,33 +206,52 @@ def _extract_skill_agent_score(signals: list[dict[str, Any]]) -> float:
     return weighted_total / max(weight_sum, 1e-6)
 
 
+def _skill_independence_factor(signals: list[dict[str, Any]]) -> float:
+    """计算技能独立性修正因子。
+
+    当多个技能依赖相同数据源/方法论时，高分一致性加成应衰减，
+    避免同一技术特征被重复计数放大噪音。
+    """
+    skill_ids = [
+        s.get("strategy_id", s.get("strategy_name", ""))
+        for s in signals
+    ]
+    if len(set(skill_ids)) < 2:
+        return 1.0
+    # 取所有技能独立性的均值作为衰减系数
+    indeps = [SKILL_INDEPENDENCE.get(sid, 0.85) for sid in skill_ids if sid in SKILL_INDEPENDENCE]
+    if not indeps:
+        return 0.85
+    return sum(indeps) / len(indeps)
+
+
 def _consensus_boost(
     signals: list[dict[str, Any]],
     stance_summary: list[dict[str, Any]] | None = None,
 ) -> tuple[float, list[str]]:
     """共识加权 + 立场协同/冲突机制。
 
-    返回 (boost_multiplier, consensus_tags)。
-
     包含四个维度：
-    1. 高分一致性加成：多 Skill 一致高分（>= 70）时额外加成
-    2. 联合否决打击（strike counting）：2+ Skill 都给出 oppose 时降低得分
-    3. 一致方向加成：所有 Skill 方向一致时提升置信度
-    4. 严重分歧惩罚：strong_support 与 veto 同时出现时标记争议
+    1. 高分一致性加成（经技能独立性衰减）
+    2. 联合否决打击
+    3. 一致方向加成
+    4. 严重分歧惩罚
     """
     consensus_tags: list[str] = []
     boost = 1.0
+    indep_factor = _skill_independence_factor(signals)
 
-    # ── 1. 高分一致性加成 ──
+    # ── 1. 高分一致性加成（独立性衰减） ──
     agreeing_skills = sum(
         1 for signal in signals
         if float(signal.get("score", 0)) >= 70
     )
     if agreeing_skills >= 2:
-        boost = 1.0 + 0.1 * (agreeing_skills - 1)
+        raw_boost = 0.1 * (agreeing_skills - 1)
+        boost = 1.0 + raw_boost * indep_factor
         consensus_tags.append("high_agreement")
 
-    # ── 2. 联合否决打击：2+ Skill 给出 oppose 时额外扣分 ──
+    # ── 2. 联合否决打击 ──
     oppose_count = sum(
         1 for signal in signals
         if (review := signal.get("agent_skill_review"))
@@ -228,14 +266,8 @@ def _consensus_boost(
     if stance_summary and len(stance_summary) >= 2:
         bullish_stances = {"strong_support", "support", "neutral_support"}
         bearish_stances = {"oppose", "veto"}
-
-        all_bullish = all(
-            s.get("stance") in bullish_stances for s in stance_summary
-        )
-        all_bearish = all(
-            s.get("stance") in bearish_stances for s in stance_summary
-        )
-
+        all_bullish = all(s.get("stance") in bullish_stances for s in stance_summary)
+        all_bearish = all(s.get("stance") in bearish_stances for s in stance_summary)
         if all_bullish:
             boost *= 1.05
             consensus_tags.append("all_bullish_aligned")
@@ -345,15 +377,13 @@ def aggregate(
     if calibrated_weights:
         weights.update(calibrated_weights)
 
-    # 无 Agent 审查时重平衡：策略规则为主 + 扩大分数分布映射
+    # 无 Agent 审查时重平衡：策略规则为主
     if not has_agent_reviews:
         weights["skill_agent"] = 0.00
         weights["strategy_rule"] = 0.55
         weights["market"] = 0.20
         weights["risk"] = 0.15
         weights["evidence"] = 0.10
-        # 策略分数扩大映射：将 20-80 范围映射到 0-100
-        strategy_rule_score = max(0.0, min(100.0, (strategy_rule_score - 20) / 60 * 100))
 
     # 归一化
     total_w = sum(weights.values())
@@ -398,10 +428,10 @@ def aggregate(
         final_score *= 0.75
         authenticity_discount_applied = True
 
-    # 真实性严重不足 + SYNTHETIC 主导 → 直接降 bucket
-    authenticity_bucket_downgrade = False
+    # 真实性严重不足 + SYNTHETIC 主导 → 标记严重折扣
+    authenticity_severe_discount = False
     if authenticity < 0.5 and synthetic_pct > 0.5:
-        authenticity_bucket_downgrade = True
+        authenticity_severe_discount = True
 
     final_score = min(final_score, quality_cap)
     component_scale = final_score / max(weighted_base_score, 1e-6)
@@ -410,29 +440,6 @@ def aggregate(
         for key, value in raw_component_scores.items()
     }
 
-    # --- Bucket 分桶 ---
-    preferred = [
-        signal.get("bucket_preference")
-        for signal in signals
-        if signal.get("bucket_preference")
-    ]
-    if authenticity_bucket_downgrade:
-        bucket = "证据不足"
-    elif preferred:
-        top = Counter(preferred).most_common(1)[0][0]
-        # 信号级别的 "证据不足" 不作为覆盖，让聚合分数来决定
-        if top != "证据不足":
-            bucket = top
-        else:
-            bucket = _bucket_for_score(final_score)
-    else:
-        bucket = _bucket_for_score(final_score)
-
-    if final_score < 45:
-        bucket = "证据不足"
-    if final_score < 78 and bucket == "容量核心":
-        bucket = _bucket_for_score(final_score)
-
     quality_risks = _quality_risks(stock, quality_cap)
     conflict_risks = _detect_skill_conflicts(signals)
     quality_risks = list(dict.fromkeys(quality_risks + conflict_risks))
@@ -440,18 +447,10 @@ def aggregate(
     # --- 最佳信号 ---
     best_setup = max(signals, key=lambda signal: float(signal.get("score", 0)))
 
-    # ── 证据质量降级：分数足够但证据不足时降一档 ──
-    evidence_score = float(stock.get("evidence_quality_score") or 60.0)
-    if evidence_score < 60 and agent_review_count < 2 and bucket == "高弹观察":
-        bucket = "关注"
-    if evidence_score < 55 and agent_review_count < 2 and bucket == "关注":
-        bucket = "证据不足"
-
     market_discipline = _market_discipline(
         stock=stock,
         market_snapshot=market_snapshot,
         final_score=final_score,
-        bucket=bucket,
         risk_template=risk_template,
         agent_review_count=agent_review_count,
     )
@@ -466,7 +465,6 @@ def aggregate(
         "recommend_price": stock.get("price", stock.get("close", 0)),
         "stop_loss": stock.get("stop_loss"),
         "take_profit": stock.get("take_profit"),
-        "bucket": bucket,
         "final_score": round(final_score, 2),
         "consensus_score": round(consensus_score, 2),
         "setup_type": best_setup.get("setup_match") or "",
@@ -481,7 +479,7 @@ def aggregate(
         "consensus_boost": round(consensus_boost, 4),
         "consensus_tags": consensus_tags,
         "stance_summary": stance_summary,
-        "authenticity_bucket_downgrade": authenticity_bucket_downgrade,
+        "authenticity_severe_discount": authenticity_severe_discount,
         "aggregation_weights": weights,
         "component_scale": round(component_scale, 4),
         "market_regime": _market_regime_label(market_snapshot),
@@ -492,15 +490,12 @@ def aggregate(
 
 def apply_pool_rules(
     cards: list[dict[str, Any]],
-    bucket_limits: dict[str, int],
     output_count: int,
 ) -> list[dict[str, Any]]:
-    """Pool-level bucket rules: enforce per-bucket output limits.
+    """Pool-level rules: 按 final_score 降序取前 output_count 只。
 
-    按 final_score 降序排列，每桶不超过 bucket_limits 限制，
-    总输出不超过 output_count。
+    过滤明确回避（分数为 0 的卡片）。
     """
-    counts: Counter[str] = Counter()
     ordered = sorted(
         cards,
         key=lambda card: float(card.get("final_score", 0)),
@@ -508,13 +503,8 @@ def apply_pool_rules(
     )
     result: list[dict[str, Any]] = []
     for card in ordered:
-        if card.get("bucket") == "明确回避" or float(card.get("final_score") or 0) <= 0:
+        if float(card.get("final_score") or 0) <= 0:
             continue
-        bucket = card.get("bucket", "证据不足")
-        limit = bucket_limits.get(bucket) if bucket_limits else None
-        if limit is not None and counts[bucket] >= limit:
-            continue
-        counts[bucket] += 1
         result.append(card)
         if len(result) >= output_count:
             break
@@ -533,7 +523,6 @@ def _empty(stock: dict[str, Any], reason: str) -> dict[str, Any]:
         "recommend_price": stock.get("price", stock.get("close", 0)),
         "stop_loss": stock.get("stop_loss"),
         "take_profit": stock.get("take_profit"),
-        "bucket": "明确回避",
         "final_score": 0.0,
         "consensus_score": 0.0,
         "setup_type": "",
@@ -543,18 +532,6 @@ def _empty(stock: dict[str, Any], reason: str) -> dict[str, Any]:
         "risk_flags": [reason],
         "strategy_signals": [],
     }
-
-
-def _bucket_for_score(score: float) -> str:
-    if score >= 80:
-        return "容量核心"
-    if score >= 64:
-        return "高弹观察"
-    if score >= 50:
-        return "关注"
-    if score <= 28:
-        return "明确回避"
-    return "证据不足"
 
 
 def _collect_risks(signals: list[dict[str, Any]]) -> list[str]:
@@ -689,29 +666,9 @@ def _stance_summary(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _market_regime_label(snapshot: dict[str, Any] | None) -> str:
-    """从快照中提取市场阶段标签。"""
-    if not snapshot:
-        return "未知"
-    sample = max(1, int(snapshot.get("sample_count") or 1))
-    up_ratio = float(snapshot.get("up_count") or 0) / sample
-    limit_up = int(snapshot.get("limit_up_count") or 0)
-    limit_down = int(snapshot.get("limit_down_count") or 0)
-    if limit_up > 50 and (limit_down == 0 or limit_up / max(1, limit_down) > 3):
-        sentiment = "高潮"
-    elif limit_up > 20:
-        sentiment = "活跃"
-    elif limit_up >= 5:
-        sentiment = "平淡"
-    else:
-        sentiment = "冰点"
-    if up_ratio >= 0.65:
-        base = "强牛"
-    elif up_ratio >= 0.50:
-        base = "偏多"
-    elif up_ratio >= 0.35:
-        base = "震荡"
-    else:
-        base = "弱势"
+    """从快照中提取市场阶段标签。使用统一的判断函数。"""
+    base = _market_base(snapshot)
+    sentiment = _market_sentiment(snapshot)
     if sentiment and sentiment not in ("", "平淡"):
         return f"{base}·{sentiment}"
     return base
@@ -721,7 +678,6 @@ def _market_discipline(
     stock: dict[str, Any],
     market_snapshot: dict[str, Any] | None,
     final_score: float,
-    bucket: str,
     risk_template: str,
     agent_review_count: int,
 ) -> dict[str, Any]:
@@ -759,29 +715,22 @@ def _market_discipline(
         market_position_cap = min(market_position_cap, 0.20)
         risk_flags.append("跌停压力不低于涨停，先控制回撤")
 
-    win_rate = _estimated_win_rate(stock, final_score, bucket, agent_review_count, up_ratio)
-    if win_rate < 0.60:
+    win_rate = _estimated_win_rate(stock, final_score, agent_review_count, up_ratio)
+    if final_score < 40:
         base_position = 0.0
         position_label = "观望"
-    elif win_rate < 0.70:
+    elif win_rate < 0.60:
         base_position = 0.15
         position_label = "观察仓"
-    elif win_rate < 0.80:
+    elif win_rate < 0.70:
         base_position = 0.35
         position_label = "小仓"
-    elif win_rate < 0.90:
+    elif win_rate < 0.80:
         base_position = 0.55
         position_label = "中仓"
     else:
         base_position = 0.75
         position_label = "大仓"
-
-    if bucket in {"证据不足", "明确回避"}:
-        base_position = 0.0
-        position_label = "观望"
-    elif bucket == "关注":
-        base_position = min(base_position, 0.20)
-        position_label = "观察仓" if base_position > 0 else "观望"
 
     template_cap = {"conservative": 0.45, "balanced": 0.65, "aggressive": 0.80}.get(risk_template, 0.65)
     max_position_pct = round(min(base_position, market_position_cap, template_cap) * 100, 1)
@@ -826,27 +775,20 @@ def _market_discipline(
 def _estimated_win_rate(
     stock: dict[str, Any],
     final_score: float,
-    bucket: str,
     agent_review_count: int,
     up_ratio: float,
 ) -> float:
-    bucket_adjust = {
-        "容量核心": 0.08,
-        "高弹观察": 0.03,
-        "关注": -0.04,
-        "证据不足": -0.12,
-        "明确回避": -0.25,
-    }.get(bucket, -0.08)
     evidence = float(stock.get("evidence_quality_score") or 60.0)
     authenticity = float(stock.get("data_authenticity", 1.0))
     risk_score = float(stock.get("risk_score") or 0.0)
-    win_rate = 0.35 + final_score / 200.0 + bucket_adjust
-    win_rate += (evidence - 60.0) / 500.0
-    win_rate += (authenticity - 0.75) * 0.08
+    # 分数越高胜率越高，基准不再依赖 bucket
+    win_rate = 0.30 + final_score / 200.0
+    win_rate += (evidence - 60.0) / 400.0
+    win_rate += (authenticity - 0.70) * 0.10
     win_rate += min(0.06, max(-0.08, (up_ratio - 0.5) * 0.18))
-    win_rate += min(0.04, agent_review_count * 0.015)
+    win_rate += min(0.05, agent_review_count * 0.02)
     win_rate -= min(0.12, risk_score / 700.0)
-    return max(0.15, min(0.93, win_rate))
+    return max(0.10, min(0.93, win_rate))
 
 
 def _float(value: Any, default: float = 0.0) -> float:

@@ -1,8 +1,7 @@
-"""Tests for signal aggregation, stance mapping, consensus, and bucketing."""
+"""Tests for signal aggregation, stance mapping, consensus, and scoring."""
 from app.engine.aggregator import (
     DEFAULT_AGG_WEIGHTS,
     STANCE_MULTIPLIER,
-    _bucket_for_score,
     _consensus_boost,
     _extract_skill_agent_score,
     aggregate,
@@ -150,34 +149,6 @@ def test_consensus_boost_no_agreement():
 
 
 # ---------------------------------------------------------------------------
-# _bucket_for_score
-# ---------------------------------------------------------------------------
-
-def test_bucket_capacity_core():
-    assert _bucket_for_score(90) == "容量核心"
-    assert _bucket_for_score(84) == "容量核心"
-
-
-def test_bucket_high_elastic():
-    assert _bucket_for_score(83) == "容量核心"
-    assert _bucket_for_score(78) == "高弹观察"
-    assert _bucket_for_score(72) == "高弹观察"
-    assert _bucket_for_score(64) == "高弹观察"
-
-
-def test_bucket_insufficient_evidence():
-    assert _bucket_for_score(49) == "证据不足"
-    assert _bucket_for_score(35) == "证据不足"
-    assert _bucket_for_score(31) == "证据不足"
-    assert _bucket_for_score(28) == "明确回避"
-
-
-def test_bucket_explicit_avoid():
-    assert _bucket_for_score(28) == "明确回避"
-    assert _bucket_for_score(0) == "明确回避"
-
-
-# ---------------------------------------------------------------------------
 # aggregate — end-to-end unit
 # ---------------------------------------------------------------------------
 
@@ -187,7 +158,6 @@ def test_aggregate_basic():
     card = aggregate(stock, signals, market_score=70, agent_review_score=75)
     assert card["code"] == "600519"
     assert card["final_score"] > 0
-    assert card["bucket"] in {"容量核心", "高弹观察", "证据不足", "明确回避"}
 
 
 def test_aggregate_hard_veto():
@@ -195,7 +165,6 @@ def test_aggregate_hard_veto():
     signals = [_signal("veto", 10, hard_veto=True)]
     card = aggregate(stock, signals, market_score=70, agent_review_score=10)
     assert card["final_score"] == 0.0
-    assert card["bucket"] == "明确回避"
 
 
 def test_aggregate_veto_stance():
@@ -203,7 +172,6 @@ def test_aggregate_veto_stance():
     signals = [_signal("veto", 10, review_score=10)]
     card = aggregate(stock, signals, market_score=70, agent_review_score=10)
     assert card["final_score"] == 0.0
-    assert card["bucket"] == "明确回避"
 
 
 def test_aggregate_component_scores():
@@ -245,31 +213,30 @@ def test_aggregate_authenticity_discount():
     assert card["data_authenticity"] == 0.4
 
 
-def test_aggregate_authenticity_bucket_downgrade():
+def test_aggregate_authenticity_discount_with_low_quality():
     stock = _stock(
         data_authenticity=0.4,
         data_quality={"source_breakdown": {"OBSERVED": 3, "SYNTHETIC": 7}},
     )
     signals = [_signal("strong_support", 90)]
     card = aggregate(stock, signals, market_score=85, agent_review_score=90)
-    # authenticity < 0.5 and SYNTHETIC > 50% → bucket downgrade to 证据不足
-    assert card["bucket"] == "证据不足"
-    assert card["authenticity_bucket_downgrade"] is True
+    # authenticity < 0.5 and SYNTHETIC > 50% → score heavily discounted
+    assert card["authenticity_severe_discount"] is True
+    assert card["final_score"] < 70
 
 
-def test_aggregate_bucket_capacity_core_via_score():
+def test_aggregate_high_score():
     stock = _stock()
     signals = [_signal("strong_support", 95)]
     card = aggregate(stock, signals, market_score=90, agent_review_score=95)
-    # High score should land in 容量核心
-    assert card["bucket"] in {"容量核心", "高弹观察"}
+    # High quality signals should produce high final_score
+    assert card["final_score"] >= 75
 
 
 def test_aggregate_empty_signals():
     stock = _stock()
     card = aggregate(stock, [], market_score=70, agent_review_score=50)
     assert card["final_score"] == 0.0
-    assert card["bucket"] == "明确回避"
 
 
 def test_aggregate_stance_summary():
@@ -282,7 +249,7 @@ def test_aggregate_stance_summary():
     assert summary[1]["stance"] == "neutral"
 
 
-def test_aggregate_market_discipline_caps_position_in_weak_ice_market():
+def test_aggregate_market_discipline_caps_position_in_weak_market():
     stock = _stock(
         price=100.0,
         stop_loss=96.0,
@@ -302,10 +269,10 @@ def test_aggregate_market_discipline_caps_position_in_weak_ice_market():
     card = aggregate(stock, signals, market_score=42, agent_review_score=90, market_snapshot=snapshot)
     discipline = card["market_discipline"]
 
-    assert discipline["market_regime"] == "弱势·冰点"
+    assert discipline["market_regime"] == "弱势·活跃"
     assert discipline["max_position_pct"] <= 20
     assert "市场弱势，按防守仓位处理" in card["risk_flags"]
-    assert "情绪冰点，非主线非龙头不放大仓位" in card["risk_flags"]
+    assert "跌停压力不低于涨停，先控制回撤" in card["risk_flags"]
 
 
 def test_aggregate_records_missing_theme_and_news_risks():
@@ -340,32 +307,14 @@ def test_aggregate_consensus_tags_empty_when_no_skills():
 # apply_pool_rules
 # ---------------------------------------------------------------------------
 
-def test_apply_pool_rules_bucket_limits():
-    cards = [
-        {"code": c, "final_score": s, "bucket": b}
-        for c, s, b in [
-            ("A", 95, "容量核心"),
-            ("B", 90, "容量核心"),
-            ("C", 85, "容量核心"),
-            ("D", 80, "高弹观察"),
-            ("E", 75, "高弹观察"),
-        ]
-    ]
-    result = apply_pool_rules(cards, {"容量核心": 2, "高弹观察": 1}, output_count=3)
-    assert len(result) == 3
-    buckets = [r["bucket"] for r in result]
-    assert buckets.count("容量核心") <= 2
-    assert buckets.count("高弹观察") <= 1
-
-
 def test_apply_pool_rules_output_count_limit():
     cards = [
-        {"code": c, "final_score": s, "bucket": "证据不足"}
+        {"code": c, "final_score": s}
         for c, s in [
             ("A", 70), ("B", 65), ("C", 60), ("D", 55), ("E", 50), ("F", 45), ("G", 40),
         ]
     ]
-    result = apply_pool_rules(cards, {}, output_count=3)
+    result = apply_pool_rules(cards, output_count=3)
     assert len(result) == 3
     # Should be top 3 by score
     assert result[0]["code"] == "A"
@@ -373,11 +322,11 @@ def test_apply_pool_rules_output_count_limit():
 
 def test_apply_pool_rules_sorted_by_score():
     cards = [
-        {"code": "C", "final_score": 60, "bucket": "证据不足"},
-        {"code": "A", "final_score": 95, "bucket": "容量核心"},
-        {"code": "B", "final_score": 80, "bucket": "高弹观察"},
+        {"code": "C", "final_score": 60},
+        {"code": "A", "final_score": 95},
+        {"code": "B", "final_score": 80},
     ]
-    result = apply_pool_rules(cards, {}, output_count=10)
+    result = apply_pool_rules(cards, output_count=10)
     assert result[0]["code"] == "A"
     assert result[1]["code"] == "B"
     assert result[2]["code"] == "C"
@@ -385,11 +334,11 @@ def test_apply_pool_rules_sorted_by_score():
 
 def test_apply_pool_rules_filters_explicit_avoid_cards():
     cards = [
-        {"code": "A", "final_score": 0, "bucket": "明确回避"},
-        {"code": "B", "final_score": 62, "bucket": "关注"},
+        {"code": "A", "final_score": 0},
+        {"code": "B", "final_score": 62},
     ]
 
-    result = apply_pool_rules(cards, {}, output_count=3)
+    result = apply_pool_rules(cards, output_count=3)
 
     assert [card["code"] for card in result] == ["B"]
 

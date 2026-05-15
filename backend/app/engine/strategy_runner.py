@@ -145,7 +145,6 @@ def _signal(
         "score": round(score, 2),
         "score_cap": round(score_cap, 2),
         "confidence": round(min(0.95, max(0.2, score / 100)), 2),
-        "bucket_preference": _bucket_for_score(score),
         "setup_match": setup_match,
         "entry_rule": entry_rule,
         "invalid_rule": invalid_rule,
@@ -155,18 +154,6 @@ def _signal(
         "risk_flags": risk_flags or [],
         "evidence": evidence or [],
     }
-
-
-def _bucket_for_score(score: float) -> str:
-    if score >= 80:
-        return "容量核心"
-    if score >= 64:
-        return "高弹观察"
-    if score >= 50:
-        return "关注"
-    if score <= 28:
-        return "明确回避"
-    return "证据不足"
 
 
 def _evidence_score_cap(

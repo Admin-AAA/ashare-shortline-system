@@ -284,7 +284,7 @@ def _in_rule_signal(statement: str, rule_signal: dict[str, Any] | None) -> bool:
     """检查声明是否出现在规则信号中。"""
     if rule_signal is None:
         return False
-    for field in ["evidence", "risk_flags", "phase", "setup_match", "bucket_preference"]:
+    for field in ["evidence", "risk_flags", "phase", "setup_match"]:
         value = rule_signal.get(field)
         if isinstance(value, str) and len(value) >= 3 and value in statement:
             return True

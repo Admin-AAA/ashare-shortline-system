@@ -325,7 +325,7 @@ def _compact_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
 def _compact_signal(signal: dict[str, Any]) -> dict[str, Any]:
     """精简规则信号。"""
     keys = ["phase", "score", "setup_match", "evidence", "risk_flags",
-            "score_cap", "runtime", "bucket_preference"]
+            "score_cap", "runtime"]
     return {key: signal.get(key) for key in keys if key in signal}
 
 

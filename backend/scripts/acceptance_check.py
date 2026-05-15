@@ -83,7 +83,7 @@ def main() -> int:
     status, presets = request("GET", "/api/presets")
     add(checks, "GET /api/presets", status == 200 and isinstance(presets, list) and len(presets) > 0)
     first_preset = presets[0]
-    required_preset_fields = {"preset_id", "name", "run_mode", "output_count", "bucket_limits", "skills"}
+    required_preset_fields = {"preset_id", "name", "run_mode", "output_count", "skills"}
     add(checks, "preset fields complete", required_preset_fields.issubset(first_preset), str(first_preset.keys()))
 
     status, skills = request("GET", "/api/skills")
@@ -106,7 +106,6 @@ def main() -> int:
         "output_count": 2,
         "data_source": "local_pool",
         "hide_recent_repeats": False,
-        "bucket_limits": {"容量核心": 1, "高弹观察": 1},
         "skills": [{"skill_id": skill_id, "weight": 1.0, "sort_order": 0}],
     }
     status, created_preset = request("POST", "/api/presets", preset_payload)
@@ -121,7 +120,6 @@ def main() -> int:
         "name": f"{preset_payload['name']}-patched",
         "output_count": 3,
         "skills": [{"skill_id": skill_id, "weight": 1.37, "sort_order": 0}],
-        "bucket_limits": {"容量核心": 2, "高弹观察": 1},
     }
     status, patched = request("PATCH", f"/api/presets/{preset_id}", patch_payload)
     status2, after_patch = request("GET", "/api/presets")

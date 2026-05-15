@@ -18,7 +18,6 @@ export type Preset = {
   market_scope_value?: string | null;
   risk_template: string;
   output_count: number;
-  bucket_limits: Record<string, number>;
   data_source: string;
   hide_recent_repeats: boolean;
   status: string;
@@ -79,7 +78,6 @@ export type RunSummary = {
   skill_count: number;
   hit_rate: number;
   result_summary: {
-    bucket_counts?: Record<string, number>;
     top_codes?: string[];
     avg_score?: number;
     data_source_mode?: string;
@@ -340,7 +338,6 @@ export type SkillSignal = {
   phase: string;
   score: number;
   confidence: number;
-  bucket_preference: string;
   setup_match: string;
   entry_rule: string;
   invalid_rule: string;
@@ -385,6 +382,22 @@ export type AgentSkillReview = {
   score?: number;
   hallucination_flags?: string[];
   hallucination_severity?: string;
+};
+
+export type MarketDiscipline = {
+  market_regime: string;
+  regime_note: string;
+  estimated_win_rate: number;
+  position_label: string;
+  max_position_pct: number;
+  action: string;
+  market_position_cap_pct: number;
+  risk_reward: {
+    downside_pct: number;
+    upside_pct: number;
+    rr_ratio: number;
+  };
+  risk_flags: string[];
 };
 
 export type SkillDisagreement = {
@@ -476,7 +489,6 @@ export type RecommendationCard = {
   recommend_price: number;
   stop_loss?: number | null;
   take_profit?: number | null;
-  bucket: string;
   final_score: number;
   consensus_score: number;
   setup_type?: string | null;
@@ -494,6 +506,7 @@ export type RecommendationCard = {
   aggregation_weights?: Record<string, number>;
   market_regime?: string;
   skill_disagreement?: SkillDisagreement;
+  market_discipline?: MarketDiscipline;
 };
 
 export type RecommendationOutcome = {
@@ -539,7 +552,6 @@ export type RecommendationHistoryRow = {
   run_id: string;
   trade_date: string;
   final_score: number;
-  bucket: string;
   status: string;
 };
 
@@ -631,7 +643,6 @@ export type StatsOverview = {
   avg_drawdown: number;
   avg_score: number;
   latest_run_at?: string | null;
-  top_buckets: Array<{ bucket: string; count: number }>;
 };
 
 export type SkillStatsRow = {

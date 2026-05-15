@@ -26,8 +26,9 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type FormEvent, type MouseEvent } from "react";
-import { api } from "./api/client";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from "react";
+import { api, cancelActivePoll, createPollController } from "./api/client";
+import { logger } from "./utils/logger";
 import type {
   HomeBootstrap,
   DataSourceHealthRow,
@@ -74,7 +75,6 @@ type OutcomeDraft = {
 };
 
 type PoolFilters = {
-  bucket: string;
   industry: string;
   skillId: string;
   watchOnly: boolean;
@@ -89,11 +89,6 @@ type ScheduledTaskDraft = {
   trigger_time: string;
   preset_id: string;
   enabled: boolean;
-};
-
-const DEFAULT_BUCKET_LIMITS: Record<string, number> = {
-  "容量核心": 3,
-  "高弹观察": 2,
 };
 
 const EMPTY_PRESET_DRAFT: PresetDraft = {
@@ -121,7 +116,6 @@ const EMPTY_OUTCOME_DRAFT: OutcomeDraft = {
 };
 
 const EMPTY_POOL_FILTERS: PoolFilters = {
-  bucket: "all",
   industry: "all",
   skillId: "all",
   watchOnly: false,
@@ -169,7 +163,6 @@ export default function App() {
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [presetDraft, setPresetDraft] = useState<PresetDraft>(EMPTY_PRESET_DRAFT);
   const [presetSkillDrafts, setPresetSkillDrafts] = useState<PresetSkillDraft[]>([]);
-  const [bucketLimits, setBucketLimits] = useState<Record<string, number>>({ ...DEFAULT_BUCKET_LIMITS });
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [taskDraft, setTaskDraft] = useState<ScheduledTaskDraft>(EMPTY_TASK_DRAFT);
   const [poolFilters, setPoolFilters] = useState<PoolFilters>(EMPTY_POOL_FILTERS);
@@ -184,9 +177,18 @@ export default function App() {
   const [statsByPreset, setStatsByPreset] = useState<PresetStatsRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [poolRefreshing, setPoolRefreshing] = useState(false);
+  const [poolLoading, setPoolLoading] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+
+  const pollingAbortRef = useRef<AbortController | null>(null);
+  const pollingRunIdRef = useRef<string | null>(null);
+  // 保存最新函数引用的 refs，配合 useCallback 使 React.memo 生效
+  const savePresetRef = useRef<() => Promise<void>>(async () => {});
+  const deletePresetRef = useRef<() => Promise<void>>(async () => {});
+  const deleteRecommendationRef = useRef<(id: string) => Promise<void>>(async () => {});
+  const deleteRunRef = useRef<(id: string) => Promise<void>>(async () => {});
 
   const selectedPreset = useMemo(
     () => presets.find((preset) => preset.preset_id === selectedPresetId) ?? presets[0] ?? null,
@@ -219,17 +221,12 @@ export default function App() {
     () => runs.some((run) => run.status === "queued" || run.status === "running"),
     [runs],
   );
-  const availableBuckets = useMemo(
-    () => Array.from(new Set(recommendations.map((item) => item.bucket))).sort(),
-    [recommendations],
-  );
   const availableIndustries = useMemo(
     () => Array.from(new Set(recommendations.map((item) => item.industry).filter(Boolean) as string[])).sort(),
     [recommendations],
   );
   const filteredRecommendations = useMemo(() => {
     return recommendations.filter((item) => {
-      if (poolFilters.bucket !== "all" && item.bucket !== poolFilters.bucket) return false;
       if (poolFilters.industry !== "all" && item.industry !== poolFilters.industry) return false;
       if (
         poolFilters.skillId !== "all" &&
@@ -244,6 +241,25 @@ export default function App() {
     });
   }, [poolFilters, recommendations]);
 
+  // 稳定的回调引用（配合子组件 React.memo 使用）
+  const onPresetDraftChange = useCallback(
+    (patch: Partial<PresetDraft>) => setPresetDraft((current) => ({ ...current, ...patch })),
+    [],
+  );
+  const onSavePreset = useCallback(() => void savePresetRef.current(), []);
+  const onDeletePreset = useCallback(() => void deletePresetRef.current(), []);
+  const onPoolSelect = useCallback((id: string) => {
+    setSelectedRecommendationId(id);
+    setDetailModalOpen(true);
+  }, []);
+  const onPoolDelete = useCallback((id: string) => void deleteRecommendationRef.current(id), []);
+  const onRunSelect = useCallback((run: RunSummary) => {
+    setPoolMode(run.run_mode);
+    setSelectedRunId(run.run_id);
+  }, []);
+  const onRunOpenPool = useCallback(() => setSection("pool"), []);
+  const onRunDelete = useCallback((id: string) => void deleteRunRef.current(id), []);
+
   useEffect(() => {
     void prepareAuth();
   }, []);
@@ -257,6 +273,13 @@ export default function App() {
   useEffect(() => {
     if (authenticated && section === "automation") {
       void loadScheduledTasks();
+    }
+  }, [authenticated, section]);
+
+  useEffect(() => {
+    if (authenticated && section === "localPool" && !localPool) {
+      logger.info("state", "进入本地数据池页面，按需加载");
+      void loadLocalPool();
     }
   }, [authenticated, section]);
 
@@ -288,12 +311,14 @@ export default function App() {
       return;
     }
     if (!visibleRuns.some((run) => run.run_id === selectedRunId)) {
+      // 默认选中最新一个 Run，避免加载全部 Run 导致卡顿
       setSelectedRunId(visibleRuns[0].run_id);
     }
   }, [selectedRunId, visibleRuns]);
 
   useEffect(() => {
     if (selectedRunId === ALL_POOL_RUNS_VALUE) {
+      logger.info("pool", "用户选择全部 Run，加载所有推荐数据（可能较慢）");
       void loadPoolRecommendations(ALL_POOL_RUNS_VALUE, visibleRuns);
       return;
     }
@@ -326,17 +351,37 @@ export default function App() {
   }, [selectedPreset]);
 
   useEffect(() => {
-    if (authenticated) {
+    if (authenticated && section === "stats") {
       void loadStats(statsMode);
     }
-  }, [authenticated, statsMode]);
+  }, [authenticated, statsMode, section]);
+
+  // 组件卸载时取消所有轮询
+  useEffect(() => {
+    return () => {
+      if (pollingAbortRef.current) {
+        pollingAbortRef.current.abort();
+        pollingAbortRef.current = null;
+        pollingRunIdRef.current = null;
+      }
+      cancelActivePoll();
+    };
+  }, []);
 
   useEffect(() => {
     if (!authenticated || !hasActiveRun) return;
+    if (pollingRunIdRef.current) {
+      logger.debug("poll", "pollRunUntilDone 已接管轮询，跳过全局定时器");
+      return;
+    }
+    logger.info("state", "启动全局运行状态轮询 (3s)");
     const timer = window.setInterval(() => {
       void refreshRunsOnly();
     }, 3000);
-    return () => window.clearInterval(timer);
+    return () => {
+      logger.debug("poll", "停止全局运行状态轮询");
+      window.clearInterval(timer);
+    };
   }, [authenticated, hasActiveRun]);
 
   async function prepareAuth() {
@@ -375,32 +420,31 @@ export default function App() {
     setLoading(true);
     setError("");
     try {
-      const [home, presetList, runList, skillList, sourceRows, taskRows, poolStatus] = await Promise.all([
+      const [home, presetList, runList, skillList, sourceRows] = await Promise.all([
         api.bootstrap(),
         api.presets(),
         api.runs(),
         api.skills(),
         api.dataSources(),
-        api.scheduledTasks(),
-        api.localPool(),
       ]);
       setBootstrap(home);
       setPresets(presetList);
       setRuns(runList);
       setSkills(skillList);
       setDataSources(sourceRows);
-      setScheduledTasks(taskRows);
-      setLocalPool(poolStatus);
       setSelectedPresetId((current) => current || presetList[0]?.preset_id || "");
       setSelectedSkillId((current) => current || skillList[0]?.skill_id || "");
       setSingleSkillId((current) => current || skillList[0]?.skill_id || "");
+      // 默认选中最新 Run（不选中"全部"，避免并发加载所有 Run 导致卡顿）
       const initialRun = runList.find((run) => run.run_mode === poolMode);
       setSelectedRunId((current) => {
         if (current === ALL_POOL_RUNS_VALUE) return current;
         if (current && runList.some((run) => run.run_id === current && run.run_mode === poolMode)) return current;
         return initialRun?.run_id ?? ALL_POOL_RUNS_VALUE;
       });
-      await loadStats(statsMode);
+      if (section === "stats") {
+        void loadStats(statsMode);
+      }
     } catch (err) {
       setError(messageFromError(err));
     } finally {
@@ -465,6 +509,7 @@ export default function App() {
   }
 
   async function loadPoolRecommendations(runSelection: string, runList: RunSummary[] = visibleRuns) {
+    setPoolLoading(true);
     try {
       const recs =
         runSelection === ALL_POOL_RUNS_VALUE
@@ -483,6 +528,8 @@ export default function App() {
       });
     } catch (err) {
       setError(messageFromError(err));
+    } finally {
+      setPoolLoading(false);
     }
   }
 
@@ -542,7 +589,6 @@ export default function App() {
         sort_order: skill.sort_order ?? index,
       })),
     );
-    setBucketLimits({ ...preset.bucket_limits });
   }
 
   function resetToNewPreset() {
@@ -551,7 +597,6 @@ export default function App() {
     setPresetSkillDrafts(
       skills[0] ? [{ skill_id: skills[0].skill_id, weight: 1, sort_order: 0 }] : [],
     );
-    setBucketLimits({ ...DEFAULT_BUCKET_LIMITS });
   }
 
   function editScheduledTask(task: ScheduledTask) {
@@ -605,7 +650,6 @@ export default function App() {
         output_count: presetDraft.output_count,
         hide_recent_repeats: presetDraft.hide_recent_repeats,
         data_source: presetDraft.data_source,
-        bucket_limits: bucketLimits,
         skills: presetSkillDrafts.map((item, index) => ({
           skill_id: item.skill_id,
           weight: item.weight,
@@ -653,7 +697,6 @@ export default function App() {
         output_count: selectedPreset.output_count,
         hide_recent_repeats: selectedPreset.hide_recent_repeats,
         data_source: (selectedPreset as any).data_source ?? "local_pool",
-        bucket_limits: selectedPreset.bucket_limits,
         skills: selectedPreset.skills.map((skill, index) => ({
           skill_id: skill.skill_id,
           weight: skill.weight,
@@ -671,22 +714,25 @@ export default function App() {
   }
 
   async function refreshHomeData() {
-    const [home, presetList, runList, skillList, sourceRows, taskRows, poolStatus] = await Promise.all([
-      api.bootstrap(),
-      api.presets(),
-      api.runs(),
-      api.skills(),
-      api.dataSources(),
-      api.scheduledTasks(),
-      api.localPool(),
-    ]);
-    setBootstrap(home);
-    setPresets(presetList);
-    setRuns(runList);
-    setSkills(skillList);
-    setDataSources(sourceRows);
-    setScheduledTasks(taskRows);
-    setLocalPool(poolStatus);
+    const perfMark = logger.perfMark("refreshHomeData");
+    try {
+      const [home, presetList, runList, skillList, sourceRows] = await Promise.all([
+        api.bootstrap(),
+        api.presets(),
+        api.runs(),
+        api.skills(),
+        api.dataSources(),
+      ]);
+      setBootstrap(home);
+      setPresets(presetList);
+      setRuns(runList);
+      setSkills(skillList);
+      setDataSources(sourceRows);
+      perfMark.end();
+    } catch (err) {
+      perfMark.end({ error: String(err) });
+      throw err;
+    }
   }
 
   async function refreshRunsOnly() {
@@ -694,11 +740,13 @@ export default function App() {
       const runList = await api.runs();
       setRuns(runList);
     } catch (err) {
-      console.warn("refresh runs failed", err);
+      logger.warn("state", "刷新运行列表失败", { error: String(err) });
     }
   }
 
   async function runCurrentSelection() {
+    logger.info("run", "开始运行", { runTarget });
+    const perfMark = logger.perfMark("runCurrentSelection");
     setRunning(true);
     setError("");
     try {
@@ -716,56 +764,93 @@ export default function App() {
               single_skill_weight: singleSkillWeight,
             };
       const result = await api.createRun(payload);
+      logger.info("run", `运行创建完成, run_id=${result.run.run_id}, status=${result.run.status}`);
       setRuns((current) => [result.run, ...current.filter((run) => run.run_id !== result.run.run_id)]);
       setPoolMode(result.run.run_mode);
       setSelectedRunId(result.run.run_id);
       setRecommendations(result.recommendations);
       setSelectedRecommendationId(result.recommendations[0]?.recommendation_id ?? "");
       setSection(result.run.status === "completed" ? "pool" : "runs");
-      await refreshHomeData();
-      await loadStats(statsMode);
+      // 异步刷新首页数据和统计，不阻塞 UI
+      void refreshHomeData().catch((err) => logger.error("run", "refreshHomeData 失败", { error: String(err) }));
+      void loadStats(statsMode).catch((err) => logger.error("run", "loadStats 失败", { error: String(err) }));
       if (result.run.status === "completed") {
         setMessage("运行完成");
+        pollingRunIdRef.current = null;
       } else {
         setMessage("运行已启动，Agent 审查在后台继续");
         void pollRunUntilDone(result.run.run_id);
       }
+      perfMark.end({ run_id: result.run.run_id, status: result.run.status });
     } catch (err) {
       setError(messageFromError(err));
-      await refreshHomeData();
+      pollingRunIdRef.current = null;
+      void refreshHomeData().catch(() => {});
     } finally {
       setRunning(false);
     }
   }
 
   async function pollRunUntilDone(runId: string) {
+    // 取消之前的轮询
+    if (pollingAbortRef.current) {
+      pollingAbortRef.current.abort();
+    }
+    pollingAbortRef.current = new AbortController();
+    pollingRunIdRef.current = runId;
+    const signal = pollingAbortRef.current.signal;
+    logger.info("poll", `开始轮询 run_id=${runId.slice(0, 8)}...`);
+    const perfMark = logger.perfMark(`poll-${runId.slice(0, 8)}`);
     for (let attempt = 0; attempt < 120; attempt += 1) {
+      if (signal.aborted) {
+        logger.info("poll", `轮询已取消 run_id=${runId.slice(0, 8)}...`, { attempt });
+        pollingRunIdRef.current = null;
+        return;
+      }
       await delay(2000);
+      if (signal.aborted) {
+        pollingRunIdRef.current = null;
+        return;
+      }
       try {
         const run = await api.runDetail(runId);
         setRuns((current) => [run, ...current.filter((item) => item.run_id !== run.run_id)]);
         setSelectedRunId(run.run_id);
         if (run.status === "completed") {
+          logger.info("poll", `运行完成 run_id=${runId.slice(0, 8)}...`, { attempt });
           setPoolMode(run.run_mode);
           await loadRunRecommendations(run.run_id);
           await refreshHomeData();
           await loadStats(statsMode);
           setSection("pool");
           setMessage("后台审查完成，机会池已更新");
+          perfMark.end({ attempts: attempt + 1, status: "completed" });
+          pollingRunIdRef.current = null;
           return;
         }
         if (run.status === "failed" || run.status === "interrupted") {
+          logger.warn("poll", `运行${run.status} run_id=${runId.slice(0, 8)}...`, { attempt, error: run.error_message });
           await refreshHomeData();
           setSection("runs");
           setError(run.error_message || (run.status === "interrupted" ? "运行已中断，请重新发起" : "运行失败"));
+          perfMark.end({ attempts: attempt + 1, status: run.status });
+          pollingRunIdRef.current = null;
           return;
         }
       } catch (err) {
+        if (signal.aborted) {
+          pollingRunIdRef.current = null;
+          return;
+        }
+        logger.error("poll", `轮询出错 run_id=${runId.slice(0, 8)}...`, { attempt, error: String(err) });
         setError(messageFromError(err));
+        pollingRunIdRef.current = null;
         return;
       }
     }
+    logger.warn("poll", `轮询超时 run_id=${runId.slice(0, 8)}...`, { maxAttempts: 120 });
     setMessage("运行仍在后台处理中，可在运行记录查看进度");
+    pollingRunIdRef.current = null;
   }
 
   async function saveReview() {
@@ -1038,6 +1123,23 @@ export default function App() {
     );
   }
 
+  if (!authenticated && !bootstrap) {
+    return (
+      <div className="auth-screen">
+        <div className="auth-panel">
+          <div className="brand auth-brand">
+            <div className="brand-mark">A</div>
+            <div>
+              <strong>A股短线工作台</strong>
+              <span>正在加载首页数据…</span>
+            </div>
+          </div>
+          <Loader2 size={22} className="spin" />
+        </div>
+      </div>
+    );
+  }
+
   if (!authenticated) {
     return (
       <div className="auth-screen">
@@ -1066,6 +1168,12 @@ export default function App() {
       </div>
     );
   }
+
+  // 保持最新函数引用的 refs，避免 useCallback 依赖变化使 React.memo 失效
+  savePresetRef.current = savePreset;
+  deletePresetRef.current = deletePreset;
+  deleteRecommendationRef.current = deleteRecommendation;
+  deleteRunRef.current = deleteRun;
 
   return (
     <div className="app-shell">
@@ -1144,21 +1252,19 @@ export default function App() {
                 skills={skills}
                 editingPresetId={editingPresetId}
                 presetDraft={presetDraft}
-                onPresetDraftChange={(patch) => setPresetDraft((current) => ({ ...current, ...patch }))}
+                onPresetDraftChange={onPresetDraftChange}
                 presetSkillDrafts={presetSkillDrafts}
                 onTogglePresetSkill={togglePresetSkill}
                 onUpdatePresetSkill={updatePresetSkill}
-                bucketLimits={bucketLimits}
-                onBucketLimitChange={(bucket, value) => setBucketLimits((c) => ({ ...c, [bucket]: value }))}
                 singleSkillId={singleSkillId}
                 setSingleSkillId={setSingleSkillId}
                 singleSkillWeight={singleSkillWeight}
                 setSingleSkillWeight={setSingleSkillWeight}
-                onSavePreset={() => void savePreset()}
+                onSavePreset={onSavePreset}
                 onResetToNewPreset={resetToNewPreset}
                 onDuplicatePreset={duplicatePreset}
                 onCopyPreset={duplicatePreset}
-                onDeletePreset={() => void deletePreset()}
+                onDeletePreset={onDeletePreset}
               />
             </section>
 
@@ -1218,12 +1324,6 @@ export default function App() {
                   onChange={setSelectedRunId}
                 />
                 <SelectField
-                  label="桶"
-                  value={poolFilters.bucket}
-                  options={[{ value: "all", label: "全部" }, ...availableBuckets.map((item) => ({ value: item, label: item }))]}
-                  onChange={(value) => setPoolFilters((current) => ({ ...current, bucket: value }))}
-                />
-                <SelectField
                   label="行业"
                   value={poolFilters.industry}
                   options={[{ value: "all", label: "全部" }, ...availableIndustries.map((item) => ({ value: item, label: item }))]}
@@ -1253,23 +1353,26 @@ export default function App() {
               </div>
               <div className="mini-stat-row">
                 <MiniStat label="当前推荐" value={filteredRecommendations.length} />
-                <MiniStat label="容量核心" value={filteredRecommendations.filter((item) => item.bucket === "容量核心").length} />
                 <MiniStat label="观察中" value={filteredRecommendations.filter((item) => item.watch_status === "watching").length} />
               </div>
             </section>
 
             <section className="panel pool-table-panel">
               <PanelTitle title="机会池" subtitle={poolTitleSubtitle} />
+              {poolLoading ? (
+                <div className="loading-block">
+                  <Loader2 size={24} className="spin" />
+                  <span>正在加载推荐数据…</span>
+                </div>
+              ) : (
               <RecommendationList
                 recommendations={filteredRecommendations}
                 selectedId={selectedRecommendationId}
-                onSelect={(id) => {
-                  setSelectedRecommendationId(id);
-                  setDetailModalOpen(true);
-                }}
+                onSelect={onPoolSelect}
                 onWatch={watchById}
-                onDelete={(id) => void deleteRecommendation(id)}
+                onDelete={onPoolDelete}
               />
+              )}
             </section>
 
             {detailModalOpen ? (
@@ -1304,14 +1407,9 @@ export default function App() {
             runHistoryMode={runHistoryMode}
             onModeChange={setRunHistoryMode}
             selectedRunId={selectedRunId}
-            onSelect={(run) => {
-              setPoolMode(run.run_mode);
-              setSelectedRunId(run.run_id);
-            }}
-            onOpenPool={() => {
-              setSection("pool");
-            }}
-            onDelete={(id) => void deleteRun(id)}
+            onSelect={onRunSelect}
+            onOpenPool={onRunOpenPool}
+            onDelete={onRunDelete}
           />
         )}
 
@@ -1380,10 +1478,23 @@ export default function App() {
         )}
 
         {section === "localPool" && (
+          localPool === null ? (
+            <div className="loading-block">
+              <Loader2 size={24} className="spin" />
+              <span>正在加载本地数据池…</span>
+            </div>
+          ) : (
           <LocalPoolPage pool={localPool} onRefresh={loadLocalPool} onRefreshRemote={refreshLocalPool} refreshing={poolRefreshing} />
+          )
         )}
 
         {section === "stats" && (
+          overview === null ? (
+            <div className="loading-block">
+              <Loader2 size={24} className="spin" />
+              <span>正在加载统计数据…</span>
+            </div>
+          ) : (
           <div className="stats-grid">
             <section className="panel">
               <PanelTitle title="统计概览" subtitle={`当前模式：${displayText(statsMode)}`} />
@@ -1412,6 +1523,7 @@ export default function App() {
               <StatsTable rows={statsByPreset} nameKey="preset_name" subKey="preset_id" countKey="recommendation_count" />
             </section>
           </div>
+          )
         )}
         {section === "backtest" && <BacktestPanel />}
       </main>
@@ -1847,14 +1959,14 @@ function MarketContextBar({ market }: { market: MarketSnapshot | null }) {
   );
 }
 
-function actionTier(bucket: string, buySignal?: string, score?: number): { tier: string; cls: string; desc: string } {
-  if (bucket === "容量核心" && (score ?? 0) >= 60) {
-    return { tier: "A", cls: "tier-core", desc: "核心推荐 — 可执行，等买点触发" };
+function actionTier(score?: number, buySignal?: string): { tier: string; cls: string; desc: string } {
+  if ((score ?? 0) >= 80) {
+    return { tier: "A", cls: "tier-core", desc: "高分推荐 — 可执行，等买点触发" };
   }
   if (buySignal === "强烈买入" || buySignal === "买入") {
     return { tier: "B", cls: "tier-actionable", desc: "可执行 — 等买点触发" };
   }
-  if (bucket === "明确回避" || (score ?? 100) < 45) {
+  if ((score ?? 100) < 45) {
     return { tier: "D", cls: "tier-avoid", desc: "回避 — 风险大于机会" };
   }
   return { tier: "C", cls: "tier-wait", desc: "等待触发 — 条件未满足" };
@@ -1945,7 +2057,7 @@ function RecommendationPane({
   onSaveOutcome: () => void;
 }) {
   const fs = item.feature_snapshot;
-  const tier = actionTier(item.bucket, String(fs.buy_signal ?? ""), item.final_score);
+  const tier = actionTier(item.final_score, String(fs.buy_signal ?? ""));
   const signalReasons: string[] = Array.isArray(fs.signal_reasons) ? fs.signal_reasons : [];
   const riskFactors: string[] = Array.isArray(fs.risk_factors) ? fs.risk_factors : [];
   const supportLevels: number[] = Array.isArray(fs.support_levels) ? fs.support_levels : [];
@@ -1966,7 +2078,6 @@ function RecommendationPane({
           <span className="eyebrow">{item.code}</span>
           <h2>{item.name}</h2>
           <div className="detail-meta">
-            <Tag text={item.bucket} />
             <span>{item.industry ?? "未分行业"}</span>
             {fs.suggested_position ? <span className="position-hint">{String(fs.suggested_position)}</span> : null}
           </div>
@@ -2226,7 +2337,7 @@ function RecommendationPane({
               <div key={row.recommendation_id} className="history-item">
                 <strong>{row.trade_date}</strong>
                 <span>
-                  {row.bucket} · {row.final_score.toFixed(1)} · {displayText(row.status)}
+                  {row.final_score.toFixed(1)} · {displayText(row.status)}
                 </span>
               </div>
             ))
@@ -2391,9 +2502,9 @@ function displayTagText(text: string) {
 }
 
 function toneForTag(text: string) {
-  if (["formal", "watching", "success", "容量核心", "ready"].includes(text)) return "positive";
+  if (["formal", "watching", "success", "ready"].includes(text)) return "positive";
   if (["healthy"].includes(text)) return "positive";
-  if (["experiment", "pending", "高弹观察", "warning", "local_pool_preferred", "queued", "running"].includes(text)) return "warning";
+  if (["experiment", "pending", "warning", "local_pool_preferred", "queued", "running"].includes(text)) return "warning";
   if (["degraded", "untested"].includes(text)) return "warning";
   if (["failed", "ignored", "risk_hit", "blocked", "interrupted", "stale"].includes(text)) return "danger";
   if (["not_triggered", "realtime"].includes(text)) return "blue";

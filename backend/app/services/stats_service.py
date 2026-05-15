@@ -52,7 +52,7 @@ def _get_overview_stats(db: Session, mode: str) -> dict[str, Any]:
         return _empty_overview(mode)
 
     rec_rows = db.execute(
-        select(Recommendation.recommendation_id, Recommendation.run_id, Recommendation.bucket, Recommendation.final_score)
+        select(Recommendation.recommendation_id, Recommendation.run_id, Recommendation.final_score)
         .where(Recommendation.run_id.in_(run_ids))
     ).all()
 
@@ -70,7 +70,6 @@ def _get_overview_stats(db: Session, mode: str) -> dict[str, Any]:
     failed_count = sum(1 for row in labeled if row.outcome_label == "failed")
     reviewed_count = _reviewed_count(db, rec_ids)
     watched_count = _watched_count(db, run_ids)
-    bucket_counts = Counter(row.bucket for row in rec_rows)
 
     return {
         "mode": mode,
@@ -88,7 +87,6 @@ def _get_overview_stats(db: Session, mode: str) -> dict[str, Any]:
         "avg_drawdown": _mean([row.max_drawdown for row in labeled]),
         "avg_score": _mean([row.final_score for row in rec_rows]),
         "latest_run_at": runs[0].finished_at.isoformat() if runs and runs[0].finished_at else None,
-        "top_buckets": [{"bucket": bucket, "count": count} for bucket, count in bucket_counts.most_common(5)],
     }
 
 
@@ -318,7 +316,6 @@ def _empty_overview(mode: str) -> dict[str, Any]:
         "avg_drawdown": 0.0,
         "avg_score": 0.0,
         "latest_run_at": None,
-        "top_buckets": [],
     }
 
 

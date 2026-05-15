@@ -19,6 +19,7 @@ import type {
   SkillSummary,
   StatsOverview
 } from "../types";
+import { logger } from "../utils/logger";
 
 type PresetPayload = Omit<Partial<Preset>, "skills"> & {
   skills?: Array<{ skill_id: string; weight: number; sort_order?: number }>;
@@ -29,11 +30,21 @@ export type AuthStatus = {
   authenticated: boolean;
 };
 
+const LONG_REQUEST_THRESHOLD_MS = 3000;
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...init
-  });
+  const method = init?.method ?? "GET";
+  const start = performance.now();
+  try {
+    const res = await fetch(path, {
+      headers: { "Content-Type": "application/json" },
+      ...init
+    });
+    const duration = Math.round(performance.now() - start);
+    logger.api(method, path, duration, res.status);
+    if (duration > LONG_REQUEST_THRESHOLD_MS) {
+      logger.warn("api", `慢请求: ${method} ${path}`, { duration, status: res.status });
+    }
     if (!res.ok) {
       const text = await res.text();
       if (res.status === 401) {
@@ -41,7 +52,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       }
       throw new Error(text || `Request failed: ${res.status}`);
     }
-  return (await res.json()) as T;
+    return (await res.json()) as T;
+  } catch (err) {
+    const duration = Math.round(performance.now() - start);
+    if ((err as Error).message === "UNAUTHORIZED") throw err;
+    logger.error("api", `${method} ${path} failed`, { duration, error: String(err) });
+    throw err;
+  }
 }
 
 function json(method: string, body?: unknown): RequestInit {
@@ -52,14 +69,21 @@ function json(method: string, body?: unknown): RequestInit {
 }
 
 async function requestWithTimeout<T>(path: string, timeoutMs: number, init?: RequestInit): Promise<T> {
+  const method = init?.method ?? "POST";
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const start = performance.now();
   try {
     const res = await fetch(path, {
       headers: { "Content-Type": "application/json" },
       signal: controller.signal,
       ...init
     });
+    const duration = Math.round(performance.now() - start);
+    logger.api(method, path, duration, res.status);
+    if (duration > LONG_REQUEST_THRESHOLD_MS) {
+      logger.warn("api", `慢请求: ${method} ${path}`, { duration, status: res.status });
+    }
     if (!res.ok) {
       const text = await res.text();
       if (res.status === 401) {
@@ -69,13 +93,36 @@ async function requestWithTimeout<T>(path: string, timeoutMs: number, init?: Req
     }
     return (await res.json()) as T;
   } catch (err) {
+    const duration = Math.round(performance.now() - start);
     if ((err as Error).name === "AbortError") {
+      logger.warn("api", `${method} ${path} 超时 (${timeoutMs}ms)`, { duration });
       throw new Error("请求超时，请检查网络后刷新重试");
+    }
+    if ((err as Error).message !== "UNAUTHORIZED") {
+      logger.error("api", `${method} ${path} failed`, { duration, error: String(err) });
     }
     throw err;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** 当前活跃的轮询 AbortController，用于取消 */
+let activePollController: AbortController | null = null;
+
+export function cancelActivePoll() {
+  if (activePollController) {
+    logger.info("poll", "取消活跃轮询");
+    activePollController.abort();
+    activePollController = null;
+  }
+}
+
+export function createPollController(): AbortController {
+  cancelActivePoll();
+  activePollController = new AbortController();
+  logger.debug("poll", "创建新轮询控制器");
+  return activePollController;
 }
 
 export const api = {

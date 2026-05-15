@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { BrainCircuit, ShieldAlert, TrendingUp, Target, AlertTriangle, CheckCircle, BarChart3 } from "lucide-react";
 
 type AgentReview = {
@@ -35,7 +36,7 @@ const STANCE_CONFIG: Record<string, { label: string; color: string; icon: React.
   veto: { label: "否决", color: "#a01020", icon: <ShieldAlert size={14} /> },
 };
 
-export default function AgentReviewPanel({ review, skillName }: Props) {
+export default memo(function AgentReviewPanel({ review, skillName }: Props) {
   const stance = review.stance ?? "neutral";
   const config = STANCE_CONFIG[stance] ?? STANCE_CONFIG.neutral;
   const score = review.score ?? 50;
@@ -150,4 +151,4 @@ export default function AgentReviewPanel({ review, skillName }: Props) {
       </div>
     </div>
   );
-}
+});

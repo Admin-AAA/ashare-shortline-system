@@ -287,7 +287,6 @@ def test_small_market_sample_caps_final_score_honestly():
 
     assert card["final_score"] == 68.0
     assert "市场样本仅6只，评分已按覆盖率降权" in card["risk_flags"]
-    assert card["bucket"] != "容量核心"
 
 def test_authenticity_treats_composite_scores_as_observed_when_inputs_are_real():
     from app.services.feature_builder import build_features
@@ -342,7 +341,7 @@ def test_default_presets_do_not_overwrite_user_skill_selection(tmp_path, monkeyp
                 market_scope="all",
                 risk_template="balanced",
                 output_count=6,
-                bucket_limits_json='{"容量核心": 6}',
+                bucket_limits_json='{}',
                 data_source="local_pool",
                 hide_recent_repeats=True,
                 status="active",

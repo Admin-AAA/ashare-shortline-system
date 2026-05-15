@@ -5,7 +5,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { memo, useState } from "react";
 import type { RunSummary } from "../types";
 
 type Props = {
@@ -20,7 +20,7 @@ type Props = {
 
 export type RunHistoryMode = "all" | "formal" | "experiment";
 
-export default function RunHistoryPanel({
+export default memo(function RunHistoryPanel({
   runs,
   runHistoryMode,
   onModeChange,
@@ -158,7 +158,7 @@ export default function RunHistoryPanel({
       ) : null}
     </div>
   );
-}
+});
 
 function PanelTitle({
   title,

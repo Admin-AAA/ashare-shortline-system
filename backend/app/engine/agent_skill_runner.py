@@ -153,7 +153,6 @@ def agent_only_signal(skill: StrategySkill, stock: dict[str, Any], review: dict[
         "phase": "Agent Skill 审查",
         "score": round(max(0.0, min(100.0, score)), 2),
         "confidence": review.get("confidence", 0.45),
-        "bucket_preference": _bucket_for_score(score),
         "setup_match": "Skill 方法论匹配" if review.get("stance") in {"support", "strong_support"} else "",
         "entry_rule": _agent_entry_rule(stock, review),
         "invalid_rule": _agent_invalid_rule(review),
@@ -407,16 +406,6 @@ def _agent_invalid_rule(review: dict[str, Any]) -> str:
     if risks:
         return f"若出现/强化风险: {risks[0]}"
     return "Skill 核心假设失效时退出观察"
-
-
-def _bucket_for_score(score: float) -> str:
-    if score >= 82:
-        return "容量核心"
-    if score >= 72:
-        return "高弹观察"
-    if score <= 30:
-        return "明确回避"
-    return "证据不足"
 
 
 def _clean_markdown(text: str) -> str:

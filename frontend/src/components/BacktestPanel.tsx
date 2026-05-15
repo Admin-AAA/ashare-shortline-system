@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import { History, Loader2, Play, TrendingUp, AlertTriangle } from "lucide-react";
 
 type BacktestResult = {
@@ -45,8 +45,8 @@ type BacktestResult = {
       success_count: number;
       hit_rate: number;
     }>;
-    by_bucket: Array<{
-      bucket: string;
+    by_score_range: Array<{
+      range: string;
       recommendation_count: number;
       success_count: number;
       hit_rate: number;
@@ -54,7 +54,7 @@ type BacktestResult = {
   };
 };
 
-export default function BacktestPanel() {
+export default memo(function BacktestPanel() {
   const [startDate, setStartDate] = useState("2026-04-01");
   const [endDate, setEndDate] = useState("2026-05-13");
   const [runMode, setRunMode] = useState("experiment");
@@ -226,8 +226,8 @@ export default function BacktestPanel() {
                   { key: "success_count", label: "成功" },
                   { key: "hit_rate", label: "胜率", format: (v: number) => `${(v * 100).toFixed(1)}%` },
                 ]} />
-                <BreakdownTable title="按分桶分组" data={result.breakdown.by_bucket} columns={[
-                  { key: "bucket", label: "分桶" },
+                <BreakdownTable title="按分数段分组" data={result.breakdown.by_score_range} columns={[
+                  { key: "range", label: "分数段" },
                   { key: "recommendation_count", label: "推荐数" },
                   { key: "success_count", label: "成功" },
                   { key: "hit_rate", label: "胜率", format: (v: number) => `${(v * 100).toFixed(1)}%` },
@@ -272,7 +272,7 @@ export default function BacktestPanel() {
       </section>
     </div>
   );
-}
+});
 
 function BreakdownTable({
   title,

@@ -1,3 +1,4 @@
+import { memo } from "react";
 import {
   BrainCircuit,
   Copy,
@@ -22,8 +23,6 @@ type Props = {
   presetSkillDrafts: PresetSkillDraft[];
   onTogglePresetSkill: (skillId: string) => void;
   onUpdatePresetSkill: (skillId: string, patch: Partial<PresetSkillDraft>) => void;
-  bucketLimits: Record<string, number>;
-  onBucketLimitChange: (bucket: string, value: number) => void;
   singleSkillId: string;
   setSingleSkillId: (id: string) => void;
   singleSkillWeight: number;
@@ -35,7 +34,7 @@ type Props = {
   onDeletePreset: () => void;
 };
 
-export default function SkillConfigPanel(props: Props) {
+export default memo(function SkillConfigPanel(props: Props) {
   const {
     runTarget,
     setRunTarget,
@@ -49,8 +48,6 @@ export default function SkillConfigPanel(props: Props) {
     presetSkillDrafts,
     onTogglePresetSkill,
     onUpdatePresetSkill,
-    bucketLimits,
-    onBucketLimitChange,
     singleSkillId,
     setSingleSkillId,
     singleSkillWeight,
@@ -228,26 +225,6 @@ export default function SkillConfigPanel(props: Props) {
             </div>
           </div>
 
-          <div className="config-card">
-            <h3 className="config-card-title">分桶限制</h3>
-            <div className="bucket-limits-row">
-              <NumberField
-                label="容量核心"
-                value={bucketLimits["容量核心"] ?? 3}
-                min={0}
-                max={20}
-                onChange={(value) => onBucketLimitChange("容量核心", value)}
-              />
-              <NumberField
-                label="高弹观察"
-                value={bucketLimits["高弹观察"] ?? 2}
-                min={0}
-                max={20}
-                onChange={(value) => onBucketLimitChange("高弹观察", value)}
-              />
-            </div>
-          </div>
-
           <div className="inline-actions">
             <button className="ghost-btn" type="button" onClick={onSavePreset}>
               <Save size={14} />
@@ -276,7 +253,7 @@ export default function SkillConfigPanel(props: Props) {
       )}
     </div>
   );
-}
+});
 
 function Field({
   label,

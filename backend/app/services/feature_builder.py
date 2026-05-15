@@ -705,7 +705,12 @@ _SYNTHETIC_FIELDS = {
 # auxiliary flow/news/fundamental data). Treating them as intrinsically
 # synthetic made local-pool runs look less authentic even when the underlying
 # evidence was real; quality gates should inspect source/missing fields instead.
-_DERIVED_SCORE_FIELDS = {"capital_flow_score", "fundamental_score", "intelligence_score"}
+_DERIVED_SCORE_FIELDS = {
+    "capital_flow_score", "fundamental_score", "intelligence_score",
+    "dsa_trend_score", "dsa_bias_score", "dsa_volume_score",
+    "dsa_support_score", "dsa_macd_score", "dsa_rsi_score",
+    "chip_health_score", "dsa_signal_score", "risk_score",
+}
 
 # Features that participate directly in scoring (DSA + risk + buy signal inputs)
 _SCORED_FEATURES = {
@@ -716,7 +721,7 @@ _SCORED_FEATURES = {
     "dsa_trend_score", "dsa_bias_score", "dsa_volume_score",
     "dsa_support_score", "dsa_macd_score", "dsa_rsi_score",
     "capital_flow_score", "fundamental_score", "intelligence_score",
-    "chip_health_score",
+    "chip_health_score", "dsa_signal_score", "risk_score",
 }
 
 
@@ -816,21 +821,14 @@ def _compute_chen_xiaoqun_signals(
     当辅助数据（概念板块、资金流、龙虎榜）不可用时，使用价格/成交量
     推断回退逻辑，确保回测和实时模式都能产生有区分度的信号。
     """
+    from app.engine.aggregator import _market_sentiment as unified_sentiment
+
     concept_available = bool(concept_map)
     flow_available = bool(flow_map)
     dt_available = bool(dt_map)
 
-    # ── _sentiment_phase（市场情绪阶段）──
-    limit_up_count = int(snapshot.get("limit_up_count") or 0)
-    limit_down_count = int(snapshot.get("limit_down_count") or 0)
-    if limit_up_count > 50 and (limit_down_count == 0 or limit_up_count / max(1, limit_down_count) > 3):
-        sentiment_phase = "高潮"
-    elif limit_up_count > 20:
-        sentiment_phase = "活跃"
-    elif limit_up_count >= 5:
-        sentiment_phase = "平淡"
-    else:
-        sentiment_phase = "冰点"
+    # ── _sentiment_phase（市场情绪阶段）── 使用统一判断函数
+    sentiment_phase = unified_sentiment(snapshot)
 
     # 统计用于回退推断的 top 行业
     main_industries = set(snapshot.get("main_industries", []))

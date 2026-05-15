@@ -3379,4 +3379,15 @@ pre {
   .bt-breakdown {
     grid-template-columns: 1fr;
   }
+
+  .loading-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 48px 24px;
+    gap: 12px;
+    color: var(--text-secondary);
+    font-size: 14px;
+  }
 }

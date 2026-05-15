@@ -1,10 +1,11 @@
+import { memo } from "react";
 import type { MarketSnapshot } from "../types";
 
 type Props = {
   snapshot: MarketSnapshot;
 };
 
-export default function MarketSnapshotPanel({ snapshot }: Props) {
+export default memo(function MarketSnapshotPanel({ snapshot }: Props) {
   const breadth = snapshot.breadth || {};
   return (
     <div className="market-snapshot-panel">
@@ -23,7 +24,7 @@ export default function MarketSnapshotPanel({ snapshot }: Props) {
       </div>
     </div>
   );
-}
+});
 
 function MiniStatCell({ label, value }: { label: string; value: string | number }) {
   return (

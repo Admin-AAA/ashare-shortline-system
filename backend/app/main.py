@@ -7,12 +7,13 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import admin, data_sources, home, metrics, outcomes, presets, recommendations, runs, skills, stats
+from app.api import admin, data_sources, frontend_logs, home, metrics, outcomes, presets, recommendations, runs, skills, stats
 from app.core.config import get_settings
 from app.core.logger import setup_logging
 from app.db.init_db import init_db
 
 logger = logging.getLogger(__name__)
+access_logger = logging.getLogger("app.access")
 settings = get_settings()
 
 _AUTH_EXEMPT_PATHS = {
@@ -54,6 +55,7 @@ def _request_is_authorized(request: Request) -> bool:
 
 @app.middleware("http")
 async def catch_unhandled_exceptions(request: Request, call_next):
+    start = __import__("time").time()
     try:
         needs_auth = (
             request.url.path in _AUTH_PROTECTED_PATHS
@@ -62,8 +64,16 @@ async def catch_unhandled_exceptions(request: Request, call_next):
         if needs_auth:
             if not _request_is_authorized(request):
                 return JSONResponse(status_code=401, content={"detail": "需要访问密码"})
-        return await call_next(request)
+        response = await call_next(request)
+        elapsed = (__import__("time").time() - start) * 1000
+        if elapsed > 3000:
+            access_logger.warning("%s %s → %s (%.0fms) [SLOW]", request.method, request.url.path, response.status_code, elapsed)
+        else:
+            access_logger.info("%s %s → %s (%.0fms)", request.method, request.url.path, response.status_code, elapsed)
+        return response
     except Exception:
+        elapsed = (__import__("time").time() - start) * 1000
+        access_logger.error("%s %s → 500 (%.0fms) [ERROR]", request.method, request.url.path, elapsed)
         logger.exception("Unhandled request exception: %s %s", request.method, request.url.path)
         return JSONResponse(
             status_code=500,
@@ -160,3 +170,4 @@ app.include_router(stats.router)
 app.include_router(metrics.router)
 app.include_router(outcomes.router)
 app.include_router(admin.router)
+app.include_router(frontend_logs.router)

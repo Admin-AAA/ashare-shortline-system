@@ -61,7 +61,6 @@ from app.services.market_pool import (
 from app.services.research_context import build_research_contexts
 
 
-DEFAULT_BUCKET_LIMITS = {"容量核心": 3, "高弹观察": 2}
 BOOTSTRAP_CACHE_TTL_SECONDS = 30.0
 RUN_HEARTBEAT_STALE_SECONDS = 90
 RUN_ACTIVE_STATUSES = {"queued", "running"}
@@ -83,7 +82,6 @@ DEFAULT_PRESETS = [
         "market_scope_value": None,
         "risk_template": "balanced",
         "output_count": 6,
-        "bucket_limits": {"容量核心": 3, "高弹观察": 2},
         "hide_recent_repeats": True,
         "skills": [
             ("chen-xiaoqun-skill", 1.05),
@@ -100,7 +98,6 @@ DEFAULT_PRESETS = [
         "market_scope_value": None,
         "risk_template": "aggressive",
         "output_count": 5,
-        "bucket_limits": {"容量核心": 3, "高弹观察": 2},
         "hide_recent_repeats": True,
         "skills": [
             ("chen-xiaoqun-skill", 1.15),
@@ -117,7 +114,6 @@ DEFAULT_PRESETS = [
         "market_scope_value": None,
         "risk_template": "balanced",
         "output_count": 6,
-        "bucket_limits": {"容量核心": 3, "高弹观察": 3},
         "hide_recent_repeats": False,
         "skills": [
             ("daily-stock-analysis-skill", 1.0),
@@ -544,7 +540,7 @@ def create_preset(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
         market_scope_value=payload.get("market_scope_value"),
         risk_template=str(payload.get("risk_template") or "balanced"),
         output_count=int(payload.get("output_count") or 6),
-        bucket_limits_json=_dumps(payload.get("bucket_limits") or DEFAULT_BUCKET_LIMITS),
+        bucket_limits_json="{}",
         data_source=_normalize_data_source(payload.get("data_source")),
         hide_recent_repeats=bool(payload.get("hide_recent_repeats", True)),
         status=str(payload.get("status") or "active"),
@@ -576,8 +572,6 @@ def update_preset(db: Session, preset_id: str, payload: dict[str, Any]) -> dict[
             setattr(preset, field, value)
     if "output_count" in payload:
         preset.output_count = int(payload["output_count"])
-    if "bucket_limits" in payload:
-        preset.bucket_limits_json = _dumps(payload["bucket_limits"] or DEFAULT_BUCKET_LIMITS)
     if "hide_recent_repeats" in payload:
         preset.hide_recent_repeats = bool(payload["hide_recent_repeats"])
     preset.updated_at = datetime.utcnow()
@@ -598,7 +592,32 @@ def list_runs(db: Session, run_mode: str | None = None, limit: int = 100) -> lis
             .limit(limit)
         )
     runs = db.scalars(stmt).all()
-    return [_serialize_run_summary(db, run) for run in runs]
+    _auto_recover_stale_runs(db, runs)
+    return _serialize_run_summaries_batched(db, runs)
+
+
+def _auto_recover_stale_runs(db: Session, runs: list[RecommendationRun]) -> int:
+    """自动将心跳超时的活跃运行标记为 interrupted。"""
+    now = datetime.utcnow()
+    recovered = 0
+    for run in runs:
+        if run.status not in RUN_ACTIVE_STATUSES:
+            continue
+        if run.heartbeat_at and (now - run.heartbeat_at).total_seconds() > RUN_HEARTBEAT_STALE_SECONDS:
+            run.status = "interrupted"
+            run.interrupted_at = now
+            run.finished_at = now
+            run.heartbeat_at = now
+            run.error_message = f"心跳超时（>{RUN_HEARTBEAT_STALE_SECONDS}s），自动标记为中断"
+            run.progress_phase = "interrupted"
+            if not run.progress_message:
+                run.progress_message = "心跳超时自动中断"
+            recovered += 1
+    if recovered:
+        db.commit()
+        invalidate_bootstrap_cache()
+        logger.warning("auto-recovered %d stale runs", recovered)
+    return recovered
 
 
 def get_run_detail(db: Session, run_id: str) -> dict[str, Any] | None:
@@ -675,7 +694,7 @@ def list_run_recommendations(db: Session, run_id: str) -> list[dict[str, Any]]:
     recs = db.scalars(
         select(Recommendation).where(Recommendation.run_id == run_id).order_by(Recommendation.final_score.desc())
     ).all()
-    return [_serialize_recommendation(db, rec) for rec in recs]
+    return _serialize_recommendations_batched(db, recs)
 
 
 def _enqueue_background_run(run_id: str, payload: dict[str, Any]) -> None:
@@ -1114,11 +1133,16 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
 
         # ═══ 阶段一：策略规则全市场扫描（所有基础过滤合格股票，无 LLM） ═══
         settings = get_settings()
-        skill_review_limit = int(params.get("agent_review_limit") or settings.market_skill_review_limit or 0)
-        if skill_review_limit <= 0:
-            default_multiple = 3 if params["run_mode"] == "experiment" else 8
-            default_min = 8 if params["run_mode"] == "experiment" else 30
-            skill_review_limit = min(max(int(params.get("output_count") or 0) * default_multiple, default_min), 60)
+        # disable_agent_review: 显式关闭 Agent 深审（回测/离线验收模式）
+        disable_agent_review = bool(params.get("disable_agent_review"))
+        if disable_agent_review:
+            skill_review_limit = 0
+        else:
+            skill_review_limit = int(params.get("agent_review_limit") or settings.market_skill_review_limit or 0)
+            if skill_review_limit <= 0:
+                default_multiple = 3 if params["run_mode"] == "experiment" else 8
+                default_min = 8 if params["run_mode"] == "experiment" else 30
+                skill_review_limit = min(max(int(params.get("output_count") or 0) * default_multiple, default_min), 60)
         skill_review_concurrency = max(1, int(settings.market_skill_review_concurrency or 1))
         prelim_entries: list[dict[str, Any]] = []
         total_contexts = len(research_contexts)
@@ -1409,9 +1433,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                 card = _build_card(entry, [])
                 if card.get("final_score"):
                     discount = 0.85
-                    card["final_score"] *= 0.85  # 无 Agent 审查重度降权
-                    card["final_score"] = round(float(card["final_score"]), 2)
-                    card["bucket"] = _bucket_for_final_score(card["final_score"], card.get("bucket"))
+                    card["final_score"] = round(float(card["final_score"]) * discount, 2)
                     card["component_scores"] = {
                         key: round(float(value) * discount, 2)
                         for key, value in (card.get("component_scores") or {}).items()
@@ -1434,7 +1456,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                 if len(cards) >= params["output_count"] * 2:
                     break
 
-        cards = apply_pool_rules(cards, params["bucket_limits"], params["output_count"])
+        cards = apply_pool_rules(cards, params["output_count"])
         _update_run_progress(
             db,
             run_id,
@@ -1455,7 +1477,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                 name=card["name"],
                 industry=card.get("industry"),
                 recommend_price=float(card.get("recommend_price") or 0),
-                bucket=card["bucket"],
+                bucket="",
                 final_score=float(card["final_score"]),
                 consensus_score=float(card.get("consensus_score") or 0),
                 setup_type=card.get("setup_type"),
@@ -1714,7 +1736,6 @@ def _serialize_preset(db: Session, preset: Preset) -> dict[str, Any]:
         "market_scope_value": preset.market_scope_value,
         "risk_template": preset.risk_template,
         "output_count": preset.output_count,
-        "bucket_limits": _loads(preset.bucket_limits_json, DEFAULT_BUCKET_LIMITS),
         "data_source": preset.data_source,
         "hide_recent_repeats": preset.hide_recent_repeats,
         "status": preset.status,
@@ -1752,6 +1773,91 @@ def _selected_skill_rows(selected_skills: list[dict[str, Any]]) -> list[dict[str
         }
         for item in selected_skills
     ]
+
+
+def _serialize_run_summaries_batched(db: Session, runs: list[RecommendationRun]) -> list[dict[str, Any]]:
+    """批量序列化 Run 摘要，避免 N+1 查询。"""
+    if not runs:
+        return []
+    run_ids = [run.run_id for run in runs]
+    preset_ids = list({run.preset_id for run in runs if run.preset_id})
+
+    # 批量加载 Preset
+    preset_map: dict[str, Preset] = {}
+    if preset_ids:
+        preset_map = {p.preset_id: p for p in db.scalars(select(Preset).where(Preset.preset_id.in_(preset_ids))).all()}
+
+    # 批量加载所有 run 对应的 Recommendation
+    all_recs = db.scalars(select(Recommendation).where(Recommendation.run_id.in_(run_ids))).all()
+    recs_by_run: dict[str, list[Recommendation]] = {}
+    for rec in all_recs:
+        recs_by_run.setdefault(rec.run_id, []).append(rec)
+
+    # 批量加载所有 Outcome
+    all_rec_ids = [rec.recommendation_id for rec in all_recs]
+    outcome_map: dict[str, str] = {}  # recommendation_id → outcome_label
+    if all_rec_ids:
+        all_outcomes = db.scalars(
+            select(RecommendationOutcome).where(RecommendationOutcome.recommendation_id.in_(all_rec_ids))
+        ).all()
+        for o in all_outcomes:
+            outcome_map[o.recommendation_id] = o.outcome_label
+
+    results = []
+    for run in runs:
+        preset = preset_map.get(run.preset_id) if run.preset_id else None
+        run_recs = recs_by_run.get(run.run_id, [])
+        outcomes_labels = [outcome_map.get(rec.recommendation_id) for rec in run_recs]
+        success_count = sum(1 for label in outcomes_labels if label == "success")
+        hit_rate = round(success_count / len(outcomes_labels), 3) if outcomes_labels else 0.0
+        results.append(_serialize_run_summary_from_cache(run, preset, hit_rate))
+    return results
+
+
+def _serialize_run_summary_from_cache(run: RecommendationRun, preset: Preset | None, hit_rate: float) -> dict[str, Any]:
+    summary = _loads(run.result_summary_json, {})
+    heartbeat_age_seconds = None
+    if run.heartbeat_at:
+        heartbeat_age_seconds = max(0, int((datetime.utcnow() - run.heartbeat_at).total_seconds()))
+    progress_total = int(run.progress_total or 0)
+    progress_current = int(run.progress_current or 0)
+    progress_pct = round(min(1.0, progress_current / progress_total), 4) if progress_total > 0 else None
+    is_stale = (
+        run.status in RUN_ACTIVE_STATUSES
+        and heartbeat_age_seconds is not None
+        and heartbeat_age_seconds > RUN_HEARTBEAT_STALE_SECONDS
+    )
+    return {
+        "run_id": run.run_id,
+        "run_name": run.run_name,
+        "preset_id": run.preset_id,
+        "preset_name": preset.name if preset else "临时运行",
+        "run_mode": run.run_mode,
+        "trade_date": run.trade_date,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "market_scope": run.market_scope,
+        "market_scope_value": run.market_scope_value,
+        "risk_template": run.risk_template,
+        "output_count": run.output_count,
+        "universe_count": run.universe_count,
+        "recommended_count": run.recommended_count,
+        "status": run.status,
+        "error_message": run.error_message,
+        "heartbeat_at": run.heartbeat_at.isoformat() if run.heartbeat_at else None,
+        "heartbeat_age_seconds": heartbeat_age_seconds,
+        "heartbeat_stale_seconds": RUN_HEARTBEAT_STALE_SECONDS,
+        "is_stale": is_stale,
+        "progress_phase": run.progress_phase,
+        "progress_current": progress_current,
+        "progress_total": progress_total,
+        "progress_pct": progress_pct,
+        "progress_message": run.progress_message,
+        "interrupted_at": run.interrupted_at.isoformat() if run.interrupted_at else None,
+        "skill_count": len(_loads(run.selected_skills_json, [])),
+        "hit_rate": hit_rate,
+        "result_summary": summary,
+    }
 
 
 def _serialize_run_summary(db: Session, run: RecommendationRun) -> dict[str, Any]:
@@ -1809,6 +1915,54 @@ def _serialize_run_summary(db: Session, run: RecommendationRun) -> dict[str, Any
     }
 
 
+def _serialize_recommendations_batched(db: Session, recs: list[Recommendation]) -> list[dict[str, Any]]:
+    """批量序列化推荐，避免 N+1 WatchItem 查询。"""
+    if not recs:
+        return []
+    rec_ids = [rec.recommendation_id for rec in recs]
+    watch_map: dict[str, WatchItem] = {}
+    watches = db.scalars(select(WatchItem).where(WatchItem.source_recommendation_id.in_(rec_ids))).all()
+    for w in watches:
+        watch_map[w.source_recommendation_id] = w
+    return [_serialize_recommendation_cached(rec, watch_map.get(rec.recommendation_id)) for rec in recs]
+
+
+def _serialize_recommendation_cached(rec: Recommendation, watch: WatchItem | None) -> dict[str, Any]:
+    feature_snapshot = _loads(rec.feature_snapshot_json, {})
+    market_context = _loads(rec.market_context_json, {})
+    if "aggregation_weights" not in feature_snapshot:
+        weights = market_regime_weights(market_context)
+        feature_snapshot["aggregation_weights"] = weights
+    return {
+        "recommendation_id": rec.recommendation_id,
+        "run_id": rec.run_id,
+        "trade_date": rec.trade_date,
+        "recommended_at": rec.recommended_at.isoformat(),
+        "code": rec.code,
+        "name": rec.name,
+        "industry": rec.industry,
+        "recommend_price": rec.recommend_price,
+        "stop_loss": feature_snapshot.get("stop_loss"),
+        "take_profit": feature_snapshot.get("take_profit"),
+        "bucket": "",
+        "final_score": rec.final_score,
+        "consensus_score": rec.consensus_score,
+        "setup_type": rec.setup_type,
+        "entry_rule": rec.entry_rule,
+        "invalid_rule": rec.invalid_rule,
+        "rationale": rec.rationale,
+        "risk_tags": _loads(rec.risk_tags_json, []),
+        "feature_snapshot": feature_snapshot,
+        "market_context": market_context,
+        "skill_breakdown": _loads(rec.skill_breakdown_json, []),
+        "agent_logs": (_loads(rec.agent_summary_json, {}) or {}).get("logs", []),
+        "status": rec.status,
+        "recent_repeat": rec.recent_repeat,
+        "watch_status": watch.watch_status if watch else "none",
+        "watch_note": watch.note if watch else None,
+    }
+
+
 def _serialize_recommendation(db: Session, rec: Recommendation) -> dict[str, Any]:
     watch = db.scalar(select(WatchItem).where(WatchItem.source_recommendation_id == rec.recommendation_id))
     feature_snapshot = _loads(rec.feature_snapshot_json, {})
@@ -1827,7 +1981,7 @@ def _serialize_recommendation(db: Session, rec: Recommendation) -> dict[str, Any
         "recommend_price": rec.recommend_price,
         "stop_loss": feature_snapshot.get("stop_loss"),
         "take_profit": feature_snapshot.get("take_profit"),
-        "bucket": rec.bucket,
+        "bucket": "",
         "final_score": rec.final_score,
         "consensus_score": rec.consensus_score,
         "setup_type": rec.setup_type,
@@ -2055,9 +2209,9 @@ def _skill_gate_score(signal: dict[str, Any], entry: dict[str, Any]) -> float:
     score = float(signal.get("score") or 0)
     if signal.get("setup_match"):
         score += 8.0
-    if signal.get("bucket_preference") == "容量核心":
+    if float(signal.get("score") or 0) >= 80:
         score += 6.0
-    elif signal.get("bucket_preference") == "高弹观察":
+    elif float(signal.get("score") or 0) >= 64:
         score += 3.0
     score += min(4.0, float(signal.get("setup_quality") or 50.0) / 25.0)
     score += min(2.0, float(entry.get("prelim_score") or 0) / 50.0)
@@ -2068,26 +2222,12 @@ def _skill_gate_reason(signal: dict[str, Any], gate_score: float, min_score: flo
     reasons = [f"规则门分 {round(gate_score, 2)} >= {round(min_score, 2)}"]
     if signal.get("setup_match"):
         reasons.append(f"买点: {signal.get('setup_match')}")
-    bucket = signal.get("bucket_preference")
-    if bucket in {"容量核心", "高弹观察"}:
-        reasons.append(f"分层: {bucket}")
+    signal_score = float(signal.get("score") or 0)
+    if signal_score >= 80:
+        reasons.append(f"高分信号: {signal_score}")
+    elif signal_score >= 64:
+        reasons.append(f"中等信号: {signal_score}")
     return "；".join(reasons)
-
-
-def _bucket_for_final_score(score: float, current_bucket: str | None = None) -> str:
-    if score >= 80:
-        computed = "容量核心"
-    elif score >= 64:
-        computed = "高弹观察"
-    elif score >= 50:
-        computed = "关注"
-    elif score <= 28:
-        computed = "明确回避"
-    else:
-        computed = "证据不足"
-    if current_bucket == "证据不足" and computed in {"容量核心", "高弹观察", "关注"}:
-        return "证据不足"
-    return computed
 
 
 def _finalize_skill_gate_audit(
@@ -2172,7 +2312,7 @@ def _historical_recommendations(db: Session, code: str, exclude_recommendation_i
             "run_id": rec.run_id,
             "trade_date": rec.trade_date,
             "final_score": rec.final_score,
-            "bucket": rec.bucket,
+            "bucket": "",
             "status": rec.status,
         }
         for rec in history
@@ -2195,7 +2335,6 @@ def _merge_run_params(db: Session, preset: Preset | None, payload: dict[str, Any
         "market_scope_value": payload.get("market_scope_value", preset_data.get("market_scope_value")),
         "risk_template": str(payload.get("risk_template") or preset_data.get("risk_template") or "balanced"),
         "output_count": int(payload.get("output_count") or preset_data.get("output_count") or 6),
-        "bucket_limits": payload.get("bucket_limits") or preset_data.get("bucket_limits") or DEFAULT_BUCKET_LIMITS,
         "data_source": _normalize_data_source(payload.get("data_source") or preset_data.get("data_source")),
         "skip_aux_refresh": bool(
             payload.get("skip_aux_refresh")
@@ -2352,7 +2491,7 @@ def _agent_history_context(db: Session, skill_id: str, stock: dict[str, Any]) ->
         same_stock_history.append(
             {
                 "trade_date": rec.trade_date,
-                "bucket": rec.bucket,
+                "bucket": "",
                 "final_score": rec.final_score,
                 "setup_type": rec.setup_type,
                 "outcome_label": outcome.outcome_label if outcome else rec.status,
@@ -2425,7 +2564,7 @@ def _build_pipeline_audit(
         "skip_reasons": {
             "kline": breadth.get("kline_skip_reasons") or {},
             "recent_repeat_filter_enabled": bool(params.get("hide_recent_repeats")),
-            "pool_rules": "按 bucket_limits 与 output_count 截取最终展示，不压缩 Skill 输入范围",
+            "pool_rules": "按 final_score 降序取前 output_count 只",
             "skill_rule_gate": "全市场先跑 strategy.yaml 规则；只有通过规则门的股票-Skill 组合进入真实 Skill Agent 深审",
             "rule_only_fallback": "仅当 Skill 审查后卡片不足 output_count 时使用",
         },
@@ -2438,13 +2577,9 @@ def _build_run_summary(
     snapshot: dict[str, Any],
     pipeline_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    buckets: dict[str, int] = {}
-    for card in cards:
-        buckets[card["bucket"]] = buckets.get(card["bucket"], 0) + 1
     breadth = snapshot.get("breadth", {}) or {}
     pipeline = pipeline_audit or breadth.get("recommendation_pipeline") or {}
     return {
-        "bucket_counts": buckets,
         "top_codes": [rec.code for rec in saved[:5]],
         "avg_score": round(sum(rec.final_score for rec in saved) / len(saved), 2) if saved else 0.0,
         "data_source_mode": breadth.get("run_data_source_mode"),
@@ -2517,7 +2652,7 @@ def _ensure_default_presets(db: Session, skills: list[StrategySkill]) -> None:
             market_scope_value=item["market_scope_value"],
             risk_template=item["risk_template"],
             output_count=item["output_count"],
-            bucket_limits_json=_dumps(item["bucket_limits"]),
+            bucket_limits_json="{}",
             data_source=DATA_SOURCE_LOCAL_POOL,
             hide_recent_repeats=item["hide_recent_repeats"],
             status="active",

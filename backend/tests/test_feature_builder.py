@@ -334,7 +334,7 @@ def test_shortline_enhancement_fields_survive_without_auxiliary_db():
     assert enriched["_is_main"] is True
     assert enriched["_is_leader_candidate"] is True
     assert enriched["_consensus_signal"] == "主力吸筹"
-    assert enriched["_sentiment_phase"] == "活跃"
+    assert enriched["_sentiment_phase"] == "高潮"
 
 
 def test_auxiliary_values_are_not_overwritten_by_dsa_defaults():

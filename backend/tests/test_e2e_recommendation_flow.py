@@ -1,6 +1,6 @@
 """End-to-end recommendation flow tests with mocked external dependencies.
 
-Covers: run → market/K-line → features → aggregation → bucketing → persistence →
+Covers: run → market/K-line → features → aggregation → persistence →
         run detail query → recommendations query → stats consistency.
 
 All external data sources and LLM calls are mocked for deterministic verification.
@@ -309,7 +309,6 @@ class TestE2ERecommendationFlow:
         # Verify card structure
         assert card["code"] == stocks[0]["code"]
         assert card["final_score"] > 0
-        assert card["bucket"] in {"容量核心", "高弹观察", "证据不足", "明确回避"}
         assert "component_scores" in card
         assert card["component_scores"]["skill_agent"] > 0
         assert card["component_scores"]["strategy_rule"] > 0
@@ -345,7 +344,7 @@ class TestE2ERecommendationFlow:
                 risk_template="balanced",
             ))
 
-        result = apply_pool_rules(cards, {"容量核心": 3, "高弹观察": 2}, output_count=6)
+        result = apply_pool_rules(cards, output_count=6)
         assert 1 <= len(result) <= 6
 
         # Persist run and recommendations
@@ -380,7 +379,7 @@ class TestE2ERecommendationFlow:
                 name=card["name"],
                 industry=card.get("industry"),
                 recommend_price=float(card.get("recommend_price", 0)),
-                bucket=card["bucket"],
+                bucket="",
                 final_score=float(card["final_score"]),
                 consensus_score=float(card.get("consensus_score", 0)),
                 setup_type=card.get("setup_type"),
@@ -410,7 +409,7 @@ class TestE2ERecommendationFlow:
             assert rec["recommendation_id"] is not None
             assert rec["code"] is not None
             assert rec["final_score"] > 0
-            assert rec["bucket"] in {"容量核心", "高弹观察", "证据不足", "明确回避"}
+            assert rec["bucket"] == ""
 
         # Verify recommendation detail
         if recs:
@@ -452,7 +451,7 @@ class TestE2ERecommendationFlow:
                 trade_date="2026-05-12",
                 code=code,
                 name=f"测试股{i}",
-                bucket="容量核心",
+                bucket="",
                 final_score=85.0 - i * 5,
                 recommend_price=100.0,
                 status="pending",
@@ -825,4 +824,3 @@ class TestE2ERecommendationFlow:
         card1 = aggregate(stock, signals, market_score=72, agent_review_score=75)
         card2 = aggregate(stock, signals, market_score=72, agent_review_score=75)
         assert card1["final_score"] == card2["final_score"]
-        assert card1["bucket"] == card2["bucket"]
