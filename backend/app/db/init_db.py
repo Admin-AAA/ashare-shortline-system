@@ -21,6 +21,7 @@ def _migrate_schema() -> None:
             _ensure_column(connection, run_columns, "recommendation_runs", "progress_total", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column(connection, run_columns, "recommendation_runs", "progress_message", "TEXT")
             _ensure_column(connection, run_columns, "recommendation_runs", "interrupted_at", "DATETIME")
+            _ensure_column(connection, run_columns, "recommendation_runs", "checkpoint_phase", "VARCHAR(80)")
 
         if engine.dialect.name != "sqlite":
             return

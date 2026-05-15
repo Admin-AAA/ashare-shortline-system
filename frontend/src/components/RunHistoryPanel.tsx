@@ -1,6 +1,7 @@
 import {
   Flame,
   Layers3,
+  Play,
   Target,
   Trash2,
   X,
@@ -16,6 +17,7 @@ type Props = {
   onSelect: (run: RunSummary) => void;
   onOpenPool: (run: RunSummary) => void;
   onDelete: (runId: string) => void;
+  onResume: (runId: string) => void;
 };
 
 export type RunHistoryMode = "all" | "formal" | "experiment";
@@ -28,6 +30,7 @@ export default memo(function RunHistoryPanel({
   onSelect,
   onOpenPool,
   onDelete,
+  onResume,
 }: Props) {
   const [modalOpen, setModalOpen] = useState(false);
   const [modalRun, setModalRun] = useState<RunSummary | null>(null);
@@ -89,11 +92,21 @@ export default memo(function RunHistoryPanel({
                       <strong>{run.run_name}</strong>
                       <Tag text={run.run_mode} />
                       <Tag text={run.is_stale ? "stale" : run.status} />
+                      {isInterrupted || isFailed ? (
+                        <button
+                          className="icon-btn primary"
+                          title="从中断点继续执行"
+                          onClick={(e) => { e.stopPropagation(); onResume(run.run_id); }}
+                          style={{ marginLeft: "auto" }}
+                        >
+                          <Play size={14} />
+                        </button>
+                      ) : null}
                       <button
                         className="icon-btn danger"
                         title="删除运行记录"
                         onClick={(e) => { e.stopPropagation(); onDelete(run.run_id); }}
-                        style={{ marginLeft: "auto" }}
+                        style={{ marginLeft: isInterrupted || isFailed ? undefined : "auto" }}
                       >
                         <Trash2 size={14} />
                       </button>

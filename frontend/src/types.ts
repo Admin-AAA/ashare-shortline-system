@@ -1,6 +1,6 @@
 export type RunMode = "formal" | "experiment";
 export type SkillMode = "formal" | "experiment" | "disabled";
-export type ScheduledTaskType = "pool_refresh" | "recommendation_run" | "data_backfill";
+export type ScheduledTaskType = "data_sync" | "recommendation_run" | "pool_refresh" | "data_backfill";
 
 export type PresetSkill = {
   skill_id: string;
@@ -32,6 +32,7 @@ export type ScheduledTask = {
   trigger_time?: string | null;
   payload: Record<string, unknown>;
   enabled: boolean;
+  is_running: boolean;
   last_run_at?: string | null;
   last_status?: string | null;
   last_error?: string | null;
@@ -75,6 +76,7 @@ export type RunSummary = {
   progress_pct?: number | null;
   progress_message?: string | null;
   interrupted_at?: string | null;
+  checkpoint_phase?: string | null;
   skill_count: number;
   hit_rate: number;
   result_summary: {

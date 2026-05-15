@@ -155,6 +155,7 @@ def list_scheduled_tasks(db: Session) -> list[dict[str, Any]]:
             "trigger_time": _daily_trigger_time(t.cron_expression),
             "payload": _loads(t.payload_json, {}),
             "enabled": t.enabled,
+            "is_running": t.is_running,
             "last_run_at": t.last_run_at.isoformat() if t.last_run_at else None,
             "last_status": t.last_status,
             "last_error": t.last_error,

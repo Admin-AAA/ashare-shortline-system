@@ -1,25 +1,33 @@
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/frontend-logs", tags=["frontend-logs"])
 
 
+class LogEntry(BaseModel):
+    level: str = "info"
+    category: str = "unknown"
+    message: str = ""
+    extra: dict[str, Any] | None = None
+
+
 @router.post("")
-async def ingest_frontend_logs(request: Request):
+async def ingest_frontend_logs(payload: list[LogEntry] | None = None):
     """接收前端关键日志（性能异常、错误）并写入服务端日志。支持单条或批量。"""
-    body = await request.json()
-    entries: list[dict[str, Any]] = body if isinstance(body, list) else [body]
+    if payload is None:
+        return {"ok": True, "count": 0}
+
+    entries = payload if isinstance(payload, list) else [payload]
     for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        level = entry.get("level", "info")
-        category = entry.get("category", "unknown")
-        message = entry.get("message", "")
-        extra = entry.get("extra", {})
+        level = entry.level
+        category = entry.category
+        message = entry.message
+        extra = entry.extra or {}
 
         msg = f"[FRONTEND] [{category}] {message}"
         if extra:

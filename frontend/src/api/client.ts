@@ -191,6 +191,7 @@ export const api = {
   setSkillMode: (id: string, mode: SkillMode) => request<{ skill_id: string; mode: SkillMode; enabled: boolean }>(`/api/skills/${id}/mode`, json("POST", { mode })),
   backtestSkill: (id: string) => request<{ skill_id: string; status: string; sample_count: number; hit_rate: number; avg_return: number; errors: string[] }>(`/api/skills/${id}/backtest`, json("POST")),
 
+  resumeRun: (id: string) => requestWithTimeout<RunResult>(`/api/runs/${id}/resume`, 300_000, json("POST")),
   deleteRun: (id: string) => request<{ deleted: string }>(`/api/runs/${id}`, json("DELETE")),
   deleteRecommendation: (id: string) => request<{ deleted: string }>(`/api/recommendations/${id}`, json("DELETE")),
   deletePreset: (id: string) => request<{ deleted: string }>(`/api/presets/${id}`, json("DELETE")),

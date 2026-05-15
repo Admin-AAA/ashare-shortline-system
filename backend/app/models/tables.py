@@ -252,6 +252,7 @@ class RecommendationRun(Base):
     progress_total: Mapped[int] = mapped_column(Integer, default=0)
     progress_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     interrupted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    checkpoint_phase: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
 
 class Recommendation(Base):
@@ -562,10 +563,11 @@ class ScheduledTask(Base):
 
     task_id: Mapped[str] = mapped_column(String(80), primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
-    task_type: Mapped[str] = mapped_column(String(40))  # pool_refresh / recommendation_run / data_backfill
+    task_type: Mapped[str] = mapped_column(String(40))  # data_sync / recommendation_run
     cron_expression: Mapped[str] = mapped_column(String(80))  # e.g. "30 9 * * 1-5" (weekdays 9:30)
     payload_json: Mapped[str] = mapped_column(Text, default="{}")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_running: Mapped[bool] = mapped_column(Boolean, default=False)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime)
     last_status: Mapped[str | None] = mapped_column(String(30))
     last_error: Mapped[str | None] = mapped_column(Text)

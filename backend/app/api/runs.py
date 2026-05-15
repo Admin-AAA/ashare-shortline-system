@@ -88,6 +88,27 @@ def detail(run_id: str, db: Session = Depends(get_db)):
     return run
 
 
+@router.post("/{run_id}/resume")
+async def resume(run_id: str, db: Session = Depends(get_db)):
+    """从中断点继续执行 Run。"""
+    run = get_run_detail(db, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    if run["status"] not in ("interrupted", "failed"):
+        raise HTTPException(status_code=400, detail=f"run status '{run['status']}' is not resumable")
+    params = run.get("params", {})
+    if not params:
+        raise HTTPException(status_code=400, detail="run has no saved params to resume from")
+    try:
+        return await run_workbench(db, params, existing_run_id=run_id)
+    except (ValueError, MarketDataError, RuntimeError) as exc:
+        logger.exception("resume run failed")
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("resume run unexpected error")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.delete("/{run_id}")
 def delete(run_id: str, db: Session = Depends(get_db)):
     ok = delete_run(db, run_id)

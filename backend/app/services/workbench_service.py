@@ -64,6 +64,21 @@ from app.services.research_context import build_research_contexts
 BOOTSTRAP_CACHE_TTL_SECONDS = 30.0
 RUN_HEARTBEAT_STALE_SECONDS = 300
 RUN_ACTIVE_STATUSES = {"queued", "running"}
+RUN_RESUMABLE_STATUSES = {"interrupted"}
+
+# 断点阶段常量，按执行顺序排列
+CHECKPOINT_ORDER = [
+    "prepare",
+    "market_data",
+    "scope_filter",
+    "auxiliary_data",
+    "feature_build",
+    "rule_scan",
+    "skill_gate",
+    "skill_review",
+    "aggregate",
+    "persist",
+]
 DATA_SOURCE_LOCAL_POOL = "local_pool"
 DATA_SOURCE_LOCAL_POOL_PREFERRED = "local_pool_preferred"
 DATA_SOURCE_REALTIME = "realtime"
@@ -816,28 +831,72 @@ def recover_interrupted_runs(db: Session) -> int:
     return recovered
 
 
+def _save_checkpoint(db: Session, run_id: str, phase: str) -> None:
+    """将当前阶段写入断点，commit 确保中断后可恢复。"""
+    run = db.get(RecommendationRun, run_id)
+    if run is None:
+        return
+    run.checkpoint_phase = phase
+    run.heartbeat_at = datetime.utcnow()
+    db.commit()
+
+
+def _phase_index(phase: str) -> int:
+    """返回阶段在 CHECKPOINT_ORDER 中的索引，未知阶段返回 -1。"""
+    try:
+        return CHECKPOINT_ORDER.index(phase)
+    except ValueError:
+        return -1
+
+
 async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: str | None = None) -> dict[str, Any]:
     run_id = existing_run_id or _new_run_id()
-    _update_run_progress(
-        db,
-        existing_run_id,
-        phase="prepare",
-        current=0,
-        total=0,
-        message="同步 Skill 与运行参数",
-        status="running",
-    )
-    skills = sync_skills(db)
-    skill_map = {skill.skill_id: skill for skill in skills}
-    preset = db.get(Preset, payload["preset_id"]) if payload.get("preset_id") else None
-    if payload.get("preset_id") and preset is None:
-        raise ValueError("预设不存在，请刷新后重试")
-    params = _merge_run_params(db, preset, payload)
-    if params["run_mode"] not in {"formal", "experiment"}:
-        raise ValueError("运行模式仅支持 formal 或 experiment")
-    selected_skills = _select_skills_for_run(db, skill_map, params["run_mode"], params["skills"])
-    if not selected_skills:
-        raise ValueError("没有可运行的 Skill，请检查预设配置或 Skill 状态")
+    is_resume = bool(existing_run_id)
+
+    # 读取断点信息
+    checkpoint_phase: str | None = None
+    if is_resume:
+        existing_run = db.get(RecommendationRun, run_id)
+        if existing_run and existing_run.checkpoint_phase:
+            checkpoint_phase = existing_run.checkpoint_phase
+        logger.info("resume run %s from checkpoint %s", run_id, checkpoint_phase or "start")
+
+    def _should_run(phase: str) -> bool:
+        """断点之前的阶段跳过，从断点下一阶段开始执行。"""
+        if not checkpoint_phase:
+            return True
+        return _phase_index(phase) > _phase_index(checkpoint_phase)
+
+    if not is_resume or _should_run("prepare"):
+        _update_run_progress(
+            db,
+            existing_run_id,
+            phase="prepare",
+            current=0,
+            total=0,
+            message="同步 Skill 与运行参数",
+            status="running",
+        )
+        skills = sync_skills(db)
+        skill_map = {skill.skill_id: skill for skill in skills}
+        preset = db.get(Preset, payload["preset_id"]) if payload.get("preset_id") else None
+        if payload.get("preset_id") and preset is None:
+            raise ValueError("预设不存在，请刷新后重试")
+        params = _merge_run_params(db, preset, payload)
+        if params["run_mode"] not in {"formal", "experiment"}:
+            raise ValueError("运行模式仅支持 formal 或 experiment")
+        selected_skills = _select_skills_for_run(db, skill_map, params["run_mode"], params["skills"])
+        if not selected_skills:
+            raise ValueError("没有可运行的 Skill，请检查预设配置或 Skill 状态")
+        _save_checkpoint(db, run_id, "prepare")
+    else:
+        # 从已有 Run 重建状态
+        run = existing_run
+        skills = sync_skills(db)
+        skill_map = {skill.skill_id: skill for skill in skills}
+        params = _loads(run.params_json, {})
+        selected_skills = _loads(run.selected_skills_json, [])
+        preset = db.get(Preset, run.preset_id) if run.preset_id else None
 
     data_source = _normalize_data_source(params.get("data_source"))
     _update_run_progress(
@@ -871,6 +930,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     if not scoped_stocks:
         raise ValueError("当前市场范围内没有可运行的股票，请调整预设范围后重试")
     snapshot.setdefault("breadth", {})["scoped_candidate_count"] = len(scoped_stocks)
+    _save_checkpoint(db, run_id, "scope_filter")
     _update_run_progress(
         db,
         existing_run_id,
@@ -1069,6 +1129,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         status="running",
     )
     snapshot.setdefault("breadth", {})["auxiliary_data_audit"] = aux_audit
+    _save_checkpoint(db, run_id, "auxiliary_data")
 
     _update_run_progress(
         db,
@@ -1089,6 +1150,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         ),
     )
     research_contexts = build_research_contexts(features, snapshot)
+    _save_checkpoint(db, run_id, "feature_build")
 
     run = db.get(RecommendationRun, run_id) if existing_run_id else None
     if run is None:
@@ -1225,6 +1287,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             skill_demo_limited=skill_demo_limited,
         )
         snapshot.setdefault("breadth", {})["recommendation_pipeline"] = pipeline_audit
+        _save_checkpoint(db, run_id, "rule_scan")
         _update_run_progress(
             db,
             run_id,
@@ -1236,6 +1299,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         )
 
         # ═══ 阶段二：Agent / Skill 深度审查（显式扫描集） ═══
+        _save_checkpoint(db, run_id, "skill_gate")
         semaphore = asyncio.Semaphore(skill_review_concurrency)
 
         async def _process_candidate(entry):
@@ -1287,6 +1351,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         # 将 Agent API 调用成本写入数据库
         from app.agents.agno_skill_agent import drain_api_costs
         from app.services.cost_service import record_api_call
+        _save_checkpoint(db, run_id, "skill_review")
         for cost in drain_api_costs():
             record_api_call(db, run_id=run_id, **cost)
 
@@ -1465,6 +1530,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                     break
 
         cards = apply_pool_rules(cards, params["output_count"])
+        _save_checkpoint(db, run_id, "aggregate")
         _update_run_progress(
             db,
             run_id,
@@ -1865,6 +1931,7 @@ def _serialize_run_summary_from_cache(run: RecommendationRun, preset: Preset | N
         "skill_count": len(_loads(run.selected_skills_json, [])),
         "hit_rate": hit_rate,
         "result_summary": summary,
+        "checkpoint_phase": run.checkpoint_phase,
     }
 
 
@@ -1920,6 +1987,7 @@ def _serialize_run_summary(db: Session, run: RecommendationRun) -> dict[str, Any
         "skill_count": len(_loads(run.selected_skills_json, [])),
         "hit_rate": hit_rate,
         "result_summary": summary,
+        "checkpoint_phase": run.checkpoint_phase,
     }
 
 

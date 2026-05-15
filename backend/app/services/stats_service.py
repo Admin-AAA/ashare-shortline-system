@@ -57,12 +57,13 @@ def _get_overview_stats(db: Session, mode: str) -> dict[str, Any]:
     ).all()
 
     rec_ids = [row.recommendation_id for row in rec_rows]
+    outcome_rows: list[Any] = []
     outcome_map: dict[str, Any] = {}
     if rec_ids:
-        outcome_rows = db.execute(
+        outcome_rows = list(db.execute(
             select(RecommendationOutcome.recommendation_id, RecommendationOutcome.outcome_label, RecommendationOutcome.close_return, RecommendationOutcome.max_return, RecommendationOutcome.max_drawdown)
             .where(RecommendationOutcome.recommendation_id.in_(rec_ids))
-        ).all()
+        ).all())
         outcome_map = {row.recommendation_id: row for row in outcome_rows}
 
     labeled = [row for row in outcome_rows if row.outcome_label != "pending"]

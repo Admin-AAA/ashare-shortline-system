@@ -189,6 +189,7 @@ export default function App() {
   const deletePresetRef = useRef<() => Promise<void>>(async () => {});
   const deleteRecommendationRef = useRef<(id: string) => Promise<void>>(async () => {});
   const deleteRunRef = useRef<(id: string) => Promise<void>>(async () => {});
+  const resumeRunRef = useRef<(id: string) => Promise<void>>(async () => {});
 
   const selectedPreset = useMemo(
     () => presets.find((preset) => preset.preset_id === selectedPresetId) ?? presets[0] ?? null,
@@ -259,6 +260,7 @@ export default function App() {
   }, []);
   const onRunOpenPool = useCallback(() => setSection("pool"), []);
   const onRunDelete = useCallback((id: string) => void deleteRunRef.current(id), []);
+  const onRunResume = useCallback((id: string) => void resumeRunRef.current(id), []);
 
   useEffect(() => {
     void prepareAuth();
@@ -1007,8 +1009,8 @@ export default function App() {
               preset_id: taskDraft.preset_id,
               run_name: `${taskDraft.name.trim()} · 自动推荐`,
             }
-          : taskDraft.task_type === "data_backfill"
-            ? { ...(existingTask?.payload ?? {}) }
+          : taskDraft.task_type === "data_sync"
+            ? { sync_scope: "all", scope: "eligible", ...(existingTask?.payload ?? {}) }
           : {},
       enabled: taskDraft.enabled,
     };
@@ -1065,6 +1067,24 @@ export default function App() {
       setMessage("自动任务已删除");
     } catch (err) {
       setError(messageFromError(err));
+    }
+  }
+
+  async function resumeRun(runId: string) {
+    if (!confirm("确定从中断点继续执行此 Run？将跳过已完成的阶段。")) return;
+    try {
+      setMessage("正在继续执行 Run...");
+      const result = await api.resumeRun(runId);
+      if (result.queued) {
+        setMessage("Run 已加入队列，Agent 审查将在后台继续");
+      } else {
+        setSelectedRunId(result.run.run_id);
+        setMessage("Run 继续执行完成");
+      }
+    } catch (err) {
+      setError(messageFromError(err));
+    } finally {
+      await bootstrapApp();
     }
   }
 
@@ -1174,6 +1194,7 @@ export default function App() {
   deletePresetRef.current = deletePreset;
   deleteRecommendationRef.current = deleteRecommendation;
   deleteRunRef.current = deleteRun;
+  resumeRunRef.current = resumeRun;
 
   return (
     <div className="app-shell">
@@ -1410,6 +1431,7 @@ export default function App() {
             onSelect={onRunSelect}
             onOpenPool={onRunOpenPool}
             onDelete={onRunDelete}
+            onResume={onRunResume}
           />
         )}
 
@@ -1815,7 +1837,7 @@ function AutomationPage({
             tasks.map((task) => (
               <button
                 key={task.task_id}
-                className={`automation-task ${task.task_id === editingTaskId ? "active" : ""}`}
+                className={`automation-task ${task.task_id === editingTaskId ? "active" : ""} ${task.is_running ? "task-running" : ""}`}
                 onClick={() => onEdit(task)}
               >
                 <div className="automation-task-main">
@@ -1825,7 +1847,11 @@ function AutomationPage({
                       {formatTaskTime(task)} · {displayText(task.task_type)}
                     </span>
                   </div>
-                  <Tag text={task.enabled ? "active" : "inactive"} />
+                  {task.is_running ? (
+                    <span className="running-badge">正在执行</span>
+                  ) : (
+                    <Tag text={task.enabled ? "active" : "inactive"} />
+                  )}
                 </div>
                 <div className="automation-task-meta">
                   <span>{describeTaskPayload(task, presets)}</span>
@@ -1857,8 +1883,7 @@ function AutomationPage({
             value={draft.task_type}
             options={[
               { value: "recommendation_run", label: "股票推荐" },
-              { value: "pool_refresh", label: "更新本地股票池" },
-              { value: "data_backfill", label: "数据回填" },
+              { value: "data_sync", label: "数据同步" },
             ]}
             onChange={(value) => onDraftChange({ task_type: value as ScheduledTaskType })}
           />
@@ -1875,15 +1900,10 @@ function AutomationPage({
               ]}
               onChange={(value) => onDraftChange({ preset_id: value })}
             />
-          ) : draft.task_type === "pool_refresh" ? (
-            <div className="automation-note">
-              <DatabaseZap size={16} />
-              <span>到点后拉取外部行情并刷新本地股票池。</span>
-            </div>
           ) : (
             <div className="automation-note">
               <DatabaseZap size={16} />
-              <span>保留已有回填脚本参数，仅调整时间和启停状态。</span>
+              <span>刷新报价池 + 回填日K线 + 辅助数据。合并了原来的股票池刷新和数据回填。</span>
             </div>
           )}
           <ToggleField label="启用任务" value={draft.enabled} onChange={(value) => onDraftChange({ enabled: value })} />
@@ -1906,9 +1926,13 @@ function AutomationPage({
             <div className="inline-actions wrap">
               {currentTask ? (
                 <>
-                  <button className="ghost-btn" onClick={() => onRunNow(currentTask)}>
+                  <button
+                    className="ghost-btn"
+                    onClick={() => onRunNow(currentTask)}
+                    disabled={currentTask.is_running}
+                  >
                     <Play size={14} />
-                    立即执行
+                    {currentTask.is_running ? "执行中…" : "立即执行"}
                   </button>
                   <button className="ghost-btn" onClick={() => onToggle(currentTask)}>
                     <PauseCircle size={14} />
@@ -2410,17 +2434,18 @@ function cronToClockTime(cronExpression: string) {
 }
 
 function describeTaskPayload(task: ScheduledTask, presets: Preset[]) {
-  if (task.task_type === "pool_refresh") return "本地股票池";
+  if (task.task_type === "data_sync") return "行情 + 日K同步";
   if (task.task_type === "recommendation_run") {
     const presetId = String(task.payload?.preset_id ?? "");
     return presets.find((preset) => preset.preset_id === presetId)?.name ?? presetId ?? "未选择预设";
   }
-  return "数据回填";
+  return "";
 }
 
 function displayText(key: string): string {
   const labels: Record<string, string> = {
     recommendation_run: "股票推荐",
+    data_sync: "数据同步",
     pool_refresh: "更新本地股票池",
     data_backfill: "数据回填",
     formal: "正式",
