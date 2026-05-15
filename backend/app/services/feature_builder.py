@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Any
 
 
@@ -30,7 +31,13 @@ MACD_SCORE_MAP = {
 }
 
 
-def build_features(stocks: list[dict[str, Any]], snapshot: dict[str, Any], dsa_weights: dict[str, float] | None = None, db: Any = None) -> list[dict[str, Any]]:
+def build_features(
+    stocks: list[dict[str, Any]],
+    snapshot: dict[str, Any],
+    dsa_weights: dict[str, float] | None = None,
+    db: Any = None,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> list[dict[str, Any]]:
     main_industries = set(snapshot.get("main_industries", []))
     enriched = []
     for stock in stocks:
@@ -44,16 +51,17 @@ def build_features(stocks: list[dict[str, Any]], snapshot: dict[str, Any], dsa_w
     if db is not None:
         _enrich_with_auxiliary_data(enriched, db, snapshot)
 
-    for item in enriched:
+    total = len(enriched)
+    for i, item in enumerate(enriched, start=1):
         profile = dict(item.pop("dsa_profile", {}) or {})
         _apply_dsa_context(item, profile, dsa_weights)
         item["risk_score"] = _risk_score(item)
         if db is None:
-            # 无辅助数据池时也必须把龙头、情绪、主力共识等短线字段写回策略输入。
-            # 有 db 时 _enrich_with_auxiliary_data 已用真实辅助表计算过，避免被价量回退逻辑覆盖。
             _compute_chen_xiaoqun_signals([item], snapshot, {}, {}, {})
         _tag_features(item)
         item["data_authenticity"] = _compute_authenticity(item)
+        if on_progress and (i == 1 or i % 50 == 0 or i == total):
+            on_progress(i, total)
     return enriched
 
 

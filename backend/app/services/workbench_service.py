@@ -62,7 +62,7 @@ from app.services.research_context import build_research_contexts
 
 
 BOOTSTRAP_CACHE_TTL_SECONDS = 30.0
-RUN_HEARTBEAT_STALE_SECONDS = 90
+RUN_HEARTBEAT_STALE_SECONDS = 300
 RUN_ACTIVE_STATUSES = {"queued", "running"}
 DATA_SOURCE_LOCAL_POOL = "local_pool"
 DATA_SOURCE_LOCAL_POOL_PREFERRED = "local_pool_preferred"
@@ -1079,7 +1079,15 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         message=f"构建 {len(scoped_stocks)} 只股票的特征与研究上下文",
         status="running",
     )
-    features = build_features(scoped_stocks, snapshot, _load_calibrated_dsa_weights(db), db=db)
+    features = build_features(
+        scoped_stocks, snapshot, _load_calibrated_dsa_weights(db), db=db,
+        on_progress=lambda current, total: _update_run_progress(
+            db, existing_run_id, phase="feature_build",
+            current=current, total=total,
+            message=f"构建特征 {current}/{total}",
+            status="running",
+        ),
+    )
     research_contexts = build_research_contexts(features, snapshot)
 
     run = db.get(RecommendationRun, run_id) if existing_run_id else None
