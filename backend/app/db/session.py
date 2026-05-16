@@ -19,7 +19,7 @@ _connect_args = {}
 _engine_kwargs = {}
 
 if settings.database_url.startswith("mysql"):
-    _connect_args = {"charset": "utf8mb4", "connect_timeout": 10}
+    _connect_args = {"charset": "utf8mb4", "connect_timeout": 10, "read_timeout": 30, "write_timeout": 30}
     _engine_kwargs = {
         "pool_size": 20,
         "max_overflow": 15,
