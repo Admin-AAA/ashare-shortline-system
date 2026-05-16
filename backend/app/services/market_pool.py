@@ -87,7 +87,7 @@ LOCAL_DAILY_BAR_FIELDS = DERIVED_RETURN_FIELDS | {"ma5", "ma10", "ma20"}
 
 def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     settings = get_settings()
-    quotes, quote_meta = _load_or_refresh_quotes(db, settings) if refresh else _load_quotes_from_pool(db, settings)
+    quotes, quote_meta = _load_or_refresh_quotes(db, settings) if refresh else _load_quotes_from_pool(db, settings, skip_metrics=True)
     total_quote_count = len(quotes)
     raw_target_count = int(settings.market_candidate_count)
     full_market_mode = raw_target_count <= 0
@@ -110,13 +110,31 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[l
     kline_errors: dict[str, list[str]] = {}
     kline_usage: Counter[str] = Counter()
     disabled_kline_sources: set[str] = set()
+
+    # ── 批量预加载日K（非刷新模式），避免 N 次逐个查询 ──
+    candidate_codes = [quote["code"] for quote in candidates]
+    if not refresh:
+        bars_batch = _load_cached_bars_batch(db, candidate_codes, settings.market_kline_days)
+    else:
+        bars_batch = None
+
     for quote in candidates:
         if len(stocks) >= target_count:
             break
         if refresh:
             bars, kline_trace, errors = _load_or_refresh_bars(db, quote, settings, disabled_kline_sources)
         else:
-            bars, kline_trace, errors = _load_bars_from_pool(db, quote, settings)
+            cached = bars_batch.get(quote["code"], []) if bars_batch else []
+            if len(cached) < 30:
+                bars, kline_trace, errors = cached, {"selected_source": "daily_bars_cache", "freshness_status": "missing"}, [
+                    f"daily_bars_cache: 本地日K不足30条，仅 {len(cached)} 条"
+                ]
+            elif not _bars_cover_quote_date(cached, quote):
+                bars, kline_trace, errors = cached, {"selected_source": "daily_bars_cache", "freshness_status": "stale_cache"}, [
+                    "daily_bars_cache: 本地日K未覆盖报价日期"
+                ]
+            else:
+                bars, kline_trace, errors = cached, {"selected_source": "daily_bars_cache", "freshness_status": "local_pool_readonly"}, []
         disabled_kline_sources.update(_global_failed_kline_sources(errors))
         if errors:
             kline_errors[quote["code"]] = errors
@@ -235,7 +253,11 @@ def refresh_quote_pool(db: Session) -> tuple[list[dict[str, Any]], dict[str, Any
     return _refresh_quote_pool(db, get_settings())
 
 
-def local_pool_recommendation_readiness(db: Session, cached_quotes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def local_pool_recommendation_readiness(
+    db: Session,
+    cached_quotes: list[dict[str, Any]] | None = None,
+    cached_bar_summaries: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     settings = get_settings()
     raw_target_count = int(settings.market_candidate_count)
     full_market_mode = raw_target_count <= 0
@@ -292,9 +314,12 @@ def local_pool_recommendation_readiness(db: Session, cached_quotes: list[dict[st
     candidates = all_candidates[:lookahead_count]
     effective_required_count = len(candidates) if full_market_mode else target_count
 
-    # Batch load bar summaries for all candidates in a single query
+    # Bar summaries：优先用传入缓存，避免重复 GROUP BY 查询
     candidate_codes = [str(item.get("code") or "") for item in candidates]
-    bar_summaries = _load_cached_bars_summary(db, candidate_codes, min_bar_count) if candidate_codes else {}
+    if cached_bar_summaries is not None:
+        bar_summaries = {code: cached_bar_summaries[code] for code in candidate_codes if code in cached_bar_summaries}
+    else:
+        bar_summaries = _load_cached_bars_summary(db, candidate_codes, min_bar_count) if candidate_codes else {}
 
     ready_count = 0
     missing_count = 0
@@ -996,6 +1021,90 @@ def _persist_normalized_bars(db: Session, bars: list[dict[str, Any]]) -> None:
         else:
             for key, value in ind.items():
                 setattr(existing_ind, key, value)
+
+
+def _load_cached_bars_batch(
+    db: Session, codes: list[str], limit: int
+) -> dict[str, list[dict[str, Any]]]:
+    """批量加载日K + 指标，一次查询替代 N 次逐个查询。"""
+    if not codes:
+        return {}
+    latest_allowed_date = _latest_allowed_bar_date()
+
+    # 1) 一次性加载所有候选 code 的日K（按 code + trade_date DESC 排序）
+    all_rows = db.scalars(
+        select(DailyBar)
+        .where(DailyBar.code.in_(codes), DailyBar.trade_date <= latest_allowed_date)
+        .order_by(DailyBar.code, DailyBar.trade_date.desc())
+    ).all()
+
+    # 2) 按 code 分组，每个 code 只取最近 limit 条
+    bars_by_code: dict[str, list] = defaultdict(list)
+    all_trade_dates: set[str] = set()
+    for row in all_rows:
+        if len(bars_by_code[row.code]) >= limit:
+            continue
+        bars_by_code[row.code].append(row)
+        all_trade_dates.add(row.trade_date)
+
+    # 3) 一次性加载所有指标
+    indicator_map: dict[tuple[str, str], Any] = {}
+    if all_trade_dates:
+        ind_rows = db.scalars(
+            select(DailyIndicator).where(
+                DailyIndicator.code.in_(codes),
+                DailyIndicator.trade_date.in_(all_trade_dates),
+            )
+        ).all()
+        indicator_map = {(ind.code, ind.trade_date): ind for ind in ind_rows}
+
+    # 4) 构建返回（按 trade_date 升序）
+    result: dict[str, list[dict[str, Any]]] = {}
+    for code in codes:
+        rows = bars_by_code.get(code, [])
+        if not rows:
+            result[code] = []
+            continue
+        rows_sorted = sorted(rows, key=lambda r: r.trade_date)
+        bars = []
+        for row in rows_sorted:
+            ind = indicator_map.get((row.code, row.trade_date))
+            bar = {
+                "code": row.code,
+                "trade_date": row.trade_date,
+                "open": row.open,
+                "high": row.high,
+                "low": row.low,
+                "close": row.close,
+                "volume": row.volume,
+                "amount": row.amount,
+                "pct_chg": row.pct_chg,
+                "turnover_rate": row.turnover_rate,
+                "ma5": row.ma5,
+                "ma10": row.ma10,
+                "ma20": row.ma20,
+                "ma60": row.ma60,
+                "volume_ratio_5d": row.volume_ratio_5d,
+                "_indicator": {
+                    "rsi_6": ind.rsi_6 if ind else None,
+                    "rsi_12": ind.rsi_12 if ind else None,
+                    "rsi_24": ind.rsi_24 if ind else None,
+                    "macd_dif": ind.macd_dif if ind else None,
+                    "macd_dea": ind.macd_dea if ind else None,
+                    "macd_bar": ind.macd_bar if ind else None,
+                    "bias_ma5": ind.bias_ma5 if ind else None,
+                    "bias_ma10": ind.bias_ma10 if ind else None,
+                    "bias_ma20": ind.bias_ma20 if ind else None,
+                    "breakout20": ind.breakout20 if ind else None,
+                    "breakout60": ind.breakout60 if ind else None,
+                    "upper_shadow_count20": ind.upper_shadow_count20 if ind else None,
+                    "max_dd20": ind.max_dd20 if ind else None,
+                    "max_dd60": ind.max_dd60 if ind else None,
+                } if ind else {},
+            }
+            bars.append(bar)
+        result[code] = bars
+    return result
 
 
 def _load_cached_bars(db: Session, code: str, limit: int) -> list[dict[str, Any]]:

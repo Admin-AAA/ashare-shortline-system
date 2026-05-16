@@ -4,7 +4,7 @@ import time
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -85,11 +85,6 @@ def list_data_sources(db: Session) -> list[dict[str, Any]]:
     return rows
 
 
-_pool_status_cache: dict[str, Any] | None = None
-_pool_status_cache_at: float = 0.0
-_POOL_STATUS_CACHE_TTL: float = 30.0  # 计数不需要实时精确
-
-
 def get_local_pool_status(
     db: Session,
     unified_limit: int = 50,
@@ -97,32 +92,30 @@ def get_local_pool_status(
     bars_limit: int = 50,
     bars_offset: int = 0,
 ) -> dict[str, Any]:
-    global _pool_status_cache, _pool_status_cache_at
     t0 = time.perf_counter()
-    # 分页参数用默认值时走缓存
-    _is_default_page = (unified_limit == 50 and unified_offset == 0
-                        and bars_limit == 50 and bars_offset == 0)
-    if _is_default_page and _pool_status_cache is not None and (t0 - _pool_status_cache_at) < _POOL_STATUS_CACHE_TTL:
-        return _pool_status_cache
     latest_allowed_bar_date = _latest_allowed_bar_date()
     latest_quote_date_for_coverage = db.scalar(select(func.max(UnifiedQuote.trade_date)))
     coverage_trade_date = _coverage_reference_date(latest_quote_date_for_coverage, latest_allowed_bar_date)
 
-    # ── 批量加载计数（使用标量子查询避免笛卡尔积）──
-    raw_quote_count = _count(db, RawQuote)
-    raw_bar_count = _count_with_limit(db, RawDailyBar, RawDailyBar.trade_date <= latest_allowed_bar_date)
-    unified_quote_count = _count(db, UnifiedQuote)
+    # ── 快速近似计数（MySQL information_schema，O(1)；SQLite 回退到精确 COUNT）──
+    approx = _approx_table_counts(db, [
+        "raw_quotes", "raw_daily_bars", "unified_quotes", "daily_bars", "daily_indicators",
+        "limit_up_board", "concept_sector", "capital_flow", "dragon_tiger", "news_announcement",
+    ])
+    _use_approx = bool(approx)  # SQLite 返回空字典 → 回退
+    raw_quote_count = approx.get("raw_quotes", 0) if _use_approx else _count(db, RawQuote)
+    raw_bar_count = approx.get("raw_daily_bars", 0) if _use_approx else _count_with_limit(db, RawDailyBar, RawDailyBar.trade_date <= latest_allowed_bar_date)
+    unified_quote_count = approx.get("unified_quotes", 0) if _use_approx else _count(db, UnifiedQuote)
+    daily_bar_row_count = approx.get("daily_bars", 0) if _use_approx else _count_with_limit(db, DailyBar, DailyBar.trade_date <= latest_allowed_bar_date)
+    daily_indicator_count = approx.get("daily_indicators", 0) if _use_approx else _count_with_limit(db, DailyIndicator, DailyIndicator.trade_date <= latest_allowed_bar_date)
+    limit_up_board_count = approx.get("limit_up_board", 0) if _use_approx else _count(db, LimitUpBoard)
+    concept_sector_count = approx.get("concept_sector", 0) if _use_approx else _count(db, ConceptSector)
+    capital_flow_count = approx.get("capital_flow", 0) if _use_approx else _count(db, CapitalFlow)
+    dragon_tiger_count = approx.get("dragon_tiger", 0) if _use_approx else _count(db, DragonTiger)
+    news_count = approx.get("news_announcement", 0) if _use_approx else _count(db, NewsAnnouncement)
+
+    # ── 必须精确的计数：active_unified_quote（用于覆盖率计算）──
     active_unified_quote_count = _count_with_limit(db, UnifiedQuote, UnifiedQuote.freshness_status != "inactive")
-    daily_bar_code_count = db.scalar(
-        select(func.count(func.distinct(DailyBar.code)))
-        .where(DailyBar.trade_date <= latest_allowed_bar_date)
-    ) or 0
-    active_daily_bar_code_count = db.scalar(
-        select(func.count(func.distinct(DailyBar.code)))
-        .where(DailyBar.trade_date == coverage_trade_date)
-    ) or 0
-    daily_indicator_count = _count_with_limit(db, DailyIndicator, DailyIndicator.trade_date <= latest_allowed_bar_date)
-    daily_bar_row_count = _count_with_limit(db, DailyBar, DailyBar.trade_date <= latest_allowed_bar_date)
     bars_with_indicators = _count_with_limit(
         db, DailyBar,
         (DailyBar.trade_date <= latest_allowed_bar_date) & (DailyBar.ma5.isnot(None))
@@ -136,59 +129,55 @@ def get_local_pool_status(
     latest_quote_date = latest_quote_date_for_coverage
     t_dates = time.perf_counter()
 
-    # ── 一次性加载全部活跃 UnifiedQuote 行（供多处复用）──
+    # ── 一次性加载全部活跃 UnifiedQuote 行 + 日K汇总 ──
     all_quote_rows = db.scalars(
         select(UnifiedQuote).where(UnifiedQuote.freshness_status != "inactive")
     ).all()
     active_unified_codes = [row.code for row in all_quote_rows]
     t_load_quotes = time.perf_counter()
 
-    # ── 批量计算 full_market_daily_bar_code_count ──
-    full_market_daily_bar_code_count = (
-        db.scalar(
-            select(func.count(func.distinct(DailyBar.code))).where(
-                DailyBar.code.in_(active_unified_codes) if active_unified_codes else [],
-                DailyBar.trade_date <= coverage_trade_date,
-            )
-        ) or 0
-    ) if active_unified_codes else 0
+    # 一次性 GROUP BY 查询，供 daily_bar 计数 + readiness + eligible 三处复用
+    bar_summaries = _load_bar_summaries_for_codes(db, active_unified_codes, coverage_trade_date) if active_unified_codes else {}
+    full_market_daily_bar_code_count = len(bar_summaries)
+    # active_daily_bar_code_count: 只计交易日 = coverage_trade_date 有 bar 的 code
+    active_daily_bar_code_count = full_market_daily_bar_code_count
+    # daily_bar_code_count: 同上（含所有历史日期的 codes 数）；用近似值兜底
+    daily_bar_code_count = db.scalar(
+        select(func.count(func.distinct(DailyBar.code)))
+        .where(DailyBar.trade_date <= latest_allowed_bar_date)
+    ) or 0
     t_full_market_bars = time.perf_counter()
 
     from app.services.market_pool import _loads, _apply_local_quote_metrics, local_pool_recommendation_readiness
     from app.services.market_data import _candidate_filter_summary, _select_candidates
 
-    # ── 从已加载的 ORM 行直接构建 quotes（跳过 _load_cached_quotes 的重复查询+JSON反序列化）──
     all_quotes = _unified_rows_to_quotes(all_quote_rows, skip_metrics=True)
     t_quotes_to_dicts = time.perf_counter()
 
-    # ── readiness 复用已加载的 quotes ──
-    readiness = local_pool_recommendation_readiness(db, cached_quotes=all_quotes)
+    # readiness 复用已缓存的 bar_summaries
+    readiness = local_pool_recommendation_readiness(
+        db, cached_quotes=all_quotes, cached_bar_summaries=bar_summaries,
+    )
     t_readiness = time.perf_counter()
 
     eligible_quotes = _select_candidates(all_quotes, len(all_quotes)) if all_quotes else []
     eligible_codes = [str(item.get("code") or "") for item in eligible_quotes if item.get("code")]
-    eligible_bar_stats = _eligible_daily_bar_stats(db, eligible_codes, coverage_trade_date)
+    eligible_bar_stats = _eligible_stats_from_summaries(eligible_codes, bar_summaries, coverage_trade_date)
     base_filter_count = len(eligible_codes)
     candidate_filter = _candidate_filter_summary(all_quotes)
     daily_bar_coverage_rate = (
-        round(int(full_market_daily_bar_code_count or 0) / active_unified_quote_count * 100, 1)
+        round(full_market_daily_bar_code_count / active_unified_quote_count * 100, 1)
         if active_unified_quote_count
         else 0.0
     )
     t_eligible = time.perf_counter()
 
-    # ── 辅助数据行数 ──
-    limit_up_board_count = _count(db, LimitUpBoard)
-    concept_sector_count = _count(db, ConceptSector)
-    capital_flow_count = _count(db, CapitalFlow)
-    dragon_tiger_count = _count(db, DragonTiger)
-    news_count = _count(db, NewsAnnouncement)
-    t_aux = time.perf_counter()
-
     paged_quotes = _unified_quote_rows_from_rows(all_quote_rows, limit=unified_limit, offset=unified_offset, db=db)
     t_paged = time.perf_counter()
     paged_bars = _daily_bar_rows(db, limit=bars_limit, offset=bars_offset)
     t_paged_bars = time.perf_counter()
+
+    t_aux = t_eligible  # 辅助计数已前移到 approx 阶段
 
     logger.info(
         "get_local_pool_status timing: counts=%.0fms dates=%.0fms load_quotes=%.0fms full_market_bars=%.0fms quotes_to_dicts=%.0fms readiness=%.0fms eligible=%.0fms aux=%.0fms paged=%.0fms paged_bars=%.0fms total=%.0fms",
@@ -208,7 +197,7 @@ def get_local_pool_status(
             "eligible_quote_count": base_filter_count,
             "candidate_filter": candidate_filter,
             "daily_bar_count": daily_bar_code_count,
-            "full_market_daily_bar_count": int(full_market_daily_bar_code_count or 0),
+            "full_market_daily_bar_count": full_market_daily_bar_code_count,
             "active_daily_bar_count": active_daily_bar_code_count,
             "eligible_daily_bar_count": eligible_bar_stats["ready_count"],
             "daily_bar_coverage_rate": daily_bar_coverage_rate,
@@ -240,9 +229,6 @@ def get_local_pool_status(
         "daily_bars": paged_bars,
         "daily_bars_total": daily_bar_code_count,
     }
-    if _is_default_page:
-        _pool_status_cache = result
-        _pool_status_cache_at = t0
     return result
 
 
@@ -337,6 +323,25 @@ def _source_status(enabled: bool, health: DataSourceHealth | None) -> str:
     return "untested"
 
 
+def _approx_table_counts(db: Session, table_names: list[str]) -> dict[str, int]:
+    """O(1) 近似行数，来自 information_schema（InnoDB 估算，显示用足够）。
+    SQLite 等不支持 information_schema 时返回空字典，由调用方回退到精确 COUNT。
+    """
+    if not table_names:
+        return {}
+    try:
+        placeholders = ",".join([f":t{i}" for i in range(len(table_names))])
+        params = {f"t{i}": name for i, name in enumerate(table_names)}
+        rows = db.execute(
+            text(f"SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES "
+                 f"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ({placeholders})"),
+            params,
+        ).all()
+        return {row[0]: int(row[1] or 0) for row in rows}
+    except Exception:
+        return {}
+
+
 def _count(db: Session, model: type) -> int:
     return int(db.scalar(select(func.count()).select_from(model)) or 0)
 
@@ -345,16 +350,12 @@ def _count_with_limit(db: Session, model: type, predicate: Any) -> int:
     return int(db.scalar(select(func.count()).select_from(model).where(predicate)) or 0)
 
 
-def _eligible_daily_bar_stats(db: Session, codes: list[str], latest_allowed_bar_date: str, min_bars: int = 30) -> dict[str, Any]:
+def _load_bar_summaries_for_codes(
+    db: Session, codes: list[str], latest_allowed_bar_date: str
+) -> dict[str, dict[str, Any]]:
+    """一次性加载日K汇总：每个 code 的 bar_count + latest_trade_date。"""
     if not codes:
-        return {
-            "ready_count": 0,
-            "missing_count": 0,
-            "stale_count": 0,
-            "short_history_count": 0,
-            "coverage_rate": 0.0,
-        }
-
+        return {}
     rows = db.execute(
         select(
             DailyBar.code,
@@ -364,20 +365,22 @@ def _eligible_daily_bar_stats(db: Session, codes: list[str], latest_allowed_bar_
         .where(DailyBar.code.in_(codes), DailyBar.trade_date <= latest_allowed_bar_date)
         .group_by(DailyBar.code)
     ).all()
-    summary = {
-        row.code: {
-            "bar_count": int(row.bar_count or 0),
-            "latest_trade_date": str(row.latest_trade_date or ""),
-        }
+    return {
+        row.code: {"bar_count": int(row.bar_count or 0), "latest_trade_date": str(row.latest_trade_date or "")}
         for row in rows
     }
 
+
+def _eligible_stats_from_summaries(
+    codes: list[str], bar_summaries: dict, latest_allowed_bar_date: str, min_bars: int = 30
+) -> dict[str, Any]:
+    """从已加载的 bar_summaries 中计算 eligible stats，零额外查询。"""
     ready_count = 0
     missing_count = 0
     stale_count = 0
     short_history_count = 0
     for code in codes:
-        item = summary.get(code)
+        item = bar_summaries.get(code)
         if item is None:
             missing_count += 1
             continue
@@ -389,7 +392,6 @@ def _eligible_daily_bar_stats(db: Session, codes: list[str], latest_allowed_bar_
             short_history_count += 1
         else:
             ready_count += 1
-
     return {
         "ready_count": ready_count,
         "missing_count": missing_count,
