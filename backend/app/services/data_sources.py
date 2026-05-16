@@ -85,6 +85,11 @@ def list_data_sources(db: Session) -> list[dict[str, Any]]:
     return rows
 
 
+_pool_status_cache: dict[str, Any] | None = None
+_pool_status_cache_at: float = 0.0
+_POOL_STATUS_CACHE_TTL: float = 30.0  # 计数不需要实时精确
+
+
 def get_local_pool_status(
     db: Session,
     unified_limit: int = 50,
@@ -92,7 +97,13 @@ def get_local_pool_status(
     bars_limit: int = 50,
     bars_offset: int = 0,
 ) -> dict[str, Any]:
+    global _pool_status_cache, _pool_status_cache_at
     t0 = time.perf_counter()
+    # 分页参数用默认值时走缓存
+    _is_default_page = (unified_limit == 50 and unified_offset == 0
+                        and bars_limit == 50 and bars_offset == 0)
+    if _is_default_page and _pool_status_cache is not None and (t0 - _pool_status_cache_at) < _POOL_STATUS_CACHE_TTL:
+        return _pool_status_cache
     latest_allowed_bar_date = _latest_allowed_bar_date()
     latest_quote_date_for_coverage = db.scalar(select(func.max(UnifiedQuote.trade_date)))
     coverage_trade_date = _coverage_reference_date(latest_quote_date_for_coverage, latest_allowed_bar_date)
@@ -188,7 +199,7 @@ def get_local_pool_status(
         (t_paged_bars - t0) * 1000,
     )
 
-    return {
+    result = {
         "summary": {
             "raw_quote_count": raw_quote_count,
             "raw_bar_count": raw_bar_count,
@@ -229,6 +240,10 @@ def get_local_pool_status(
         "daily_bars": paged_bars,
         "daily_bars_total": daily_bar_code_count,
     }
+    if _is_default_page:
+        _pool_status_cache = result
+        _pool_status_cache_at = t0
+    return result
 
 
 def set_data_source_enabled(
