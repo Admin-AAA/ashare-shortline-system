@@ -174,6 +174,8 @@ def _run_backfill_script(payload: dict) -> None:
     import sys
     from pathlib import Path
 
+    from app.core.config import get_settings
+
     scripts_dir = Path(__file__).resolve().parents[2] / "scripts"
     script = scripts_dir / "backfill_daily_bars.py"
     if not script.exists():
@@ -190,7 +192,8 @@ def _run_backfill_script(payload: dict) -> None:
     if payload.get("force"):
         args.append("--force")
 
-    result = subprocess.run(args, capture_output=True, text=True, timeout=3600)
+    timeout = get_settings().script_timeout_seconds or None
+    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(f"日K回填脚本失败: {result.stderr[:500]}")
     logger.info("backfill_daily_bars.py 完成:\n%s", result.stdout[-500:])
@@ -201,6 +204,8 @@ def _run_auxiliary_script(payload: dict) -> None:
     import subprocess
     import sys
     from pathlib import Path
+
+    from app.core.config import get_settings
 
     scripts_dir = Path(__file__).resolve().parents[2] / "scripts"
     script = scripts_dir / "backfill_auxiliary_data.py"
@@ -219,7 +224,8 @@ def _run_auxiliary_script(payload: dict) -> None:
     if payload.get("flow_top_n"):
         args.extend(["--flow-top-n", str(payload["flow_top_n"])])
 
-    result = subprocess.run(args, capture_output=True, text=True, timeout=3600)
+    timeout = get_settings().script_timeout_seconds or None
+    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(f"辅助数据回填脚本失败: {result.stderr[:500]}")
     logger.info("backfill_auxiliary_data.py 完成:\n%s", result.stdout[-500:])
