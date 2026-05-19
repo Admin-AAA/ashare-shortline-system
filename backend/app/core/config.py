@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     market_candidate_count: int = 900  # 全市场候选上限；本地池模式 900 只比 300 只多约 1 分钟，不会触发 MySQL 写入瓶颈
     market_candidate_lookahead_multiplier: int = 4
     market_skill_review_limit: int = 0  # 0 = Skill Agent 接收本次实际扫描的全部股票
-    market_skill_review_concurrency: int = 6  # LLM provider 无速率限制，6 并发加速批量深审
+    market_skill_review_concurrency: int = 10  # 默认 10 并发；运行时可通过 agent_review_concurrency 参数覆盖
     market_skill_rule_gate_min_score: float = 58.0
     market_skill_rule_gate_min_per_skill: int = 20
     market_skill_rule_gate_min_total: int = 20

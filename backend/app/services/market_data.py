@@ -32,7 +32,7 @@ def get_market_universe() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     settings = get_settings()
     quote_source, quotes, quote_errors = _fetch_first_candidate_quotes(_quote_sources(settings), settings)
     total_quote_count = len(quotes)
-    raw_target_count = int(getattr(settings, "market_candidate_count", 60))
+    raw_target_count = int(getattr(settings, "market_candidate_count", 300))
     full_market_mode = raw_target_count <= 0
     if full_market_mode:
         target_count = total_quote_count
@@ -159,7 +159,7 @@ def _fetch_first_candidate_quotes(sources: list[str], settings: Any) -> tuple[st
     for source in sources:
         try:
             quotes = _fetch_quotes(source, settings)
-            requested_count = int(getattr(settings, "market_candidate_count", 60))
+            requested_count = int(getattr(settings, "market_candidate_count", 300))
             candidate_count = len(_select_candidates(quotes, len(quotes) if requested_count <= 0 else max(1, requested_count)))
             if candidate_count:
                 return source, quotes, errors
@@ -795,6 +795,7 @@ def _candidate_filter_summary(quotes: list[dict[str, Any]]) -> dict[str, Any]:
     exclusion_counts: Counter[str] = Counter()
     eligible_count = 0
     high_liquidity_count = 0
+    tradeable_quote_count = 0
     for item in quotes:
         reason = _candidate_exclusion_reason(item)
         if reason is not None:
@@ -803,27 +804,83 @@ def _candidate_filter_summary(quotes: list[dict[str, Any]]) -> dict[str, Any]:
         eligible_count += 1
         if float(item.get("amount_yi") or 0) >= 0.5 and float(item.get("turnover_rate") or 0) >= 0.1:
             high_liquidity_count += 1
+        if float(item.get("amount_yi") or 0) >= 1.5 and 1.0 <= float(item.get("turnover_rate") or 0) <= 12.0:
+            tradeable_quote_count += 1
     return {
         "total_count": len(quotes),
         "base_eligible_count": eligible_count,
         "excluded_count": len(quotes) - eligible_count,
         "high_liquidity_count": high_liquidity_count,
         "low_liquidity_count": max(0, eligible_count - high_liquidity_count),
+        "tradeable_quote_count": tradeable_quote_count,
         "exclusion_counts": dict(exclusion_counts),
         "high_liquidity_threshold": {
             "amount_yi": 0.5,
             "turnover_rate": 0.1,
+        },
+        "preferred_tradeability_threshold": {
+            "amount_yi": 1.5,
+            "turnover_rate_min": 1.0,
+            "turnover_rate_max": 12.0,
         },
     }
 
 
 def _candidate_score(item: dict[str, Any]) -> float:
     return (
-        math.log1p(max(0.0, float(item.get("amount_yi") or 0))) * 12
-        + max(-8.0, min(10.0, float(item.get("pct") or 0))) * 2.5
-        + max(-20.0, min(80.0, float(item.get("chg60") or 0))) * 0.25
-        + min(12.0, float(item.get("turnover_rate") or 0)) * 1.2
+        _candidate_amount_score(float(item.get("amount_yi") or 0))
+        + _candidate_pct_score(float(item.get("pct") or 0))
+        + _candidate_turnover_score(float(item.get("turnover_rate") or 0))
+        + _candidate_trend_score(float(item.get("chg60") or 0))
     )
+
+
+def _candidate_amount_score(amount_yi: float) -> float:
+    if amount_yi <= 0:
+        return -20.0
+    return min(18.0, math.log1p(amount_yi) * 7.5)
+
+
+def _candidate_pct_score(pct: float) -> float:
+    if pct <= -7:
+        return -10.0
+    if pct <= -3:
+        return -5.0
+    if pct < 0:
+        return -1.5
+    if pct <= 1:
+        return 4.0
+    if pct <= 5:
+        return 15.0 - abs(pct - 3.0) * 2.0
+    if pct <= 8:
+        return 11.0 - (pct - 5.0) * 1.5
+    return max(-6.0, 6.5 - (pct - 8.0) * 2.4)
+
+
+def _candidate_turnover_score(turnover_rate: float) -> float:
+    if turnover_rate < 0.8:
+        return -8.0
+    if turnover_rate < 2.0:
+        return 3.0 + (turnover_rate - 0.8) * 4.0
+    if turnover_rate <= 8.0:
+        return 15.0 - abs(turnover_rate - 5.0) * 1.2
+    if turnover_rate <= 12.0:
+        return 8.5 - (turnover_rate - 8.0) * 2.0
+    return max(-8.0, 0.5 - (turnover_rate - 12.0) * 1.8)
+
+
+def _candidate_trend_score(chg60: float) -> float:
+    if chg60 <= -15:
+        return -8.0
+    if chg60 < 0:
+        return -2.5
+    if chg60 <= 5:
+        return 2.0 + chg60 * 0.6
+    if chg60 <= 30:
+        return 5.0 + (chg60 - 5.0) * 0.32
+    if chg60 <= 50:
+        return 13.0 - (chg60 - 30.0) * 0.22
+    return max(-4.0, 8.6 - (chg60 - 50.0) * 0.28)
 
 
 def _build_stock_from_bars(
@@ -935,6 +992,15 @@ def _build_stock_from_bars(
         "pos120": round(_position(price, highs[-120:], lows[-120:]), 3),
         "eff20": round(_efficiency(closes, 20), 3),
         "vol5_20": round(vol5_20, 3),
+        "ma5": round(ma5, 3),
+        "ma10": round(ma10, 3),
+        "ma20": round(ma20, 3),
+        "ma60": round(ma60, 3),
+        "support_ma5": support_ma5,
+        "support_ma10": support_ma10,
+        "rsi_12": round(rsi12, 3),
+        "volume_shrink_pullback": vol5_20 <= 0.85 and (support_ma5 or support_ma10) and quote.get("pct", 0) <= 1,
+        "volume_breakout_signal": vol5_20 >= 1.15 and price >= previous_high20 * 0.995 and quote.get("pct", 0) > 0,
         "upper_shadow_count20": upper_shadow_count20,
         "max_dd20": round(max_dd20, 3),
         "max_dd60": round(max_dd60, 3),

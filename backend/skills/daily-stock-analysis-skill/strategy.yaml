@@ -22,6 +22,34 @@ universe:
     - "is_st == true"
     - "announcement_negative_count > 0"
 
+prefilter:
+  market:
+    include:
+      - when: "turnover_rate >= 0.8"
+        reason: "turnover_too_low"
+      - when: "turnover_rate <= 12"
+        reason: "turnover_too_high"
+      - when: "max_dd20 >= -20"
+        reason: "drawdown_too_large"
+      - when: "upper_shadow_count20 <= 6"
+        reason: "upper_shadow_too_many"
+    include_any:
+      - when: "breakout20 == 1"
+        reason: "requires_breakout_or_support"
+      - when: "support_ma5 == true"
+        reason: "requires_breakout_or_support"
+      - when: "support_ma10 == true"
+        reason: "requires_breakout_or_support"
+      - when: "off_high_pct >= -10 and pct >= -2"
+        reason: "requires_tradeable_position"
+    exclude:
+      - when: "pos60 > 97 and dist60 > 32"
+        reason: "late_acceleration"
+      - when: "rsi_12 > 78 and dist20 > 12"
+        reason: "overheated_extension"
+      - when: "off_high_pct < -18 and pct < 0"
+        reason: "broken_trend"
+
 phases:
   - name: 风险否决
     when: "news_risk_count > 1 or (dsa_trend_score <= 4 and dsa_macd_score == 0)"

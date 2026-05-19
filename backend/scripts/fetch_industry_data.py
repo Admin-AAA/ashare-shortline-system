@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-从 Sina Finance API 获取申万一级行业分类数据，更新到 unified_quotes 表。
+从 Sina Finance API 获取申万一级行业分类数据，更新到 MySQL 中的 unified_quotes 表。
 
 用法:
     source .venv/bin/activate
@@ -9,9 +9,14 @@
 
 import json
 import time
-import sqlite3
+from datetime import datetime
 import urllib.request
 from pathlib import Path
+
+from sqlalchemy import select
+
+from app.db.session import SessionLocal
+from app.models.tables import UnifiedQuote
 
 SINA_NODES_URL = (
     "http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php"
@@ -23,7 +28,6 @@ SINA_NODE_DATA_URL = (
 )
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-DB_PATH = BACKEND_DIR / "ashare_workbench.db"
 
 
 def http_get(url: str, timeout: float = 15.0) -> dict | list:
@@ -158,47 +162,43 @@ def update_database(code_to_industry: dict[str, str]) -> int:
     Returns:
         更新的记录数
     """
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
+    session = SessionLocal()
+    try:
+        rows = session.scalars(select(UnifiedQuote)).all()
+        db_codes = {row.code for row in rows if row.code}
+        print(f"\nDatabase has {len(db_codes)} distinct stock codes")
 
-    # 先查看有多少 distinct codes
-    cur.execute("SELECT DISTINCT code FROM unified_quotes")
-    db_codes = {row["code"] for row in cur.fetchall()}
-    print(f"\nDatabase has {len(db_codes)} distinct stock codes")
+        matched = db_codes & set(code_to_industry.keys())
+        unmatched = db_codes - set(code_to_industry.keys())
+        print(f"Matched: {len(matched)}, Unmatched: {len(unmatched)}")
 
-    matched = db_codes & set(code_to_industry.keys())
-    unmatched = db_codes - set(code_to_industry.keys())
-    print(f"Matched: {len(matched)}, Unmatched: {len(unmatched)}")
+        if unmatched:
+            print(f"Sample unmatched codes: {list(unmatched)[:20]}")
 
-    if unmatched:
-        print(f"Sample unmatched codes: {list(unmatched)[:20]}")
+        updated = 0
+        now = datetime.utcnow()
+        for row in rows:
+            industry = code_to_industry.get(row.code)
+            if not industry:
+                continue
+            payload = json.loads(row.quote_json or "{}")
+            if "industry" not in payload:
+                continue
+            if payload.get("industry") == industry:
+                continue
+            payload["industry"] = industry
+            row.quote_json = json.dumps(payload, ensure_ascii=False)
+            row.updated_at = now
+            updated += 1
 
-    updated = 0
-    for code in matched:
-        industry = code_to_industry[code]
-        # 更新 quote_json 中的 industry 字段
-        cur.execute(
-            """
-            UPDATE unified_quotes
-            SET quote_json = json_set(quote_json, '$.industry', ?)
-            WHERE code = ? AND json_extract(quote_json, '$.industry') IS NOT NULL
-            """,
-            (industry, code),
-        )
-        updated += cur.rowcount
-
-    conn.commit()
-    conn.close()
-    print(f"Updated {updated} records")
-    return updated
+        session.commit()
+        print(f"Updated {updated} records")
+        return updated
+    finally:
+        session.close()
 
 
 def main():
-    print(f"Database: {DB_PATH}")
-    print(f"DB exists: {DB_PATH.exists()}")
-    print()
-
     # Step 1: Build mapping
     code_to_industry = build_code_industry_map()
 

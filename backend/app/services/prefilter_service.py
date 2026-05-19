@@ -1,0 +1,130 @@
+from __future__ import annotations
+
+from collections import Counter
+from typing import Any
+
+from app.engine.strategy_runner import evaluate_skill_prefilter
+
+
+def apply_prefilters(
+    stocks: list[dict[str, Any]],
+    selected_skills: list[dict[str, Any]],
+    min_candidate_count: int = 24,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    ordered_stocks = list(stocks)
+    common_filtered: list[dict[str, Any]] = []
+    common_exclusion_counts: Counter[str] = Counter()
+
+    for stock in ordered_stocks:
+        reason = common_tradeability_exclusion_reason(stock)
+        if reason is not None:
+            common_exclusion_counts[reason] += 1
+            continue
+        common_filtered.append(stock)
+
+    per_skill: dict[str, dict[str, Any]] = {}
+    union_codes: set[str] = set()
+
+    for selected in selected_skills:
+        skill = selected["skill"]
+        skill_id = str(selected["skill_id"])
+        pass_count = 0
+        exclusion_counts: Counter[str] = Counter()
+        sample_codes: list[str] = []
+
+        for stock in common_filtered:
+            passed, reason = evaluate_skill_prefilter(skill, stock, stage="market")
+            if passed:
+                pass_count += 1
+                code = str(stock.get("code") or "")
+                if code:
+                    union_codes.add(code)
+                    if len(sample_codes) < 8:
+                        sample_codes.append(code)
+            else:
+                exclusion_counts[reason] += 1
+
+        per_skill[skill_id] = {
+            "name": selected.get("name") or skill.name,
+            "input_count": len(common_filtered),
+            "pass_count": pass_count,
+            "excluded_count": max(0, len(common_filtered) - pass_count),
+            "exclusion_counts": dict(exclusion_counts),
+            "sample_codes": sample_codes,
+        }
+
+    filtered = [stock for stock in common_filtered if str(stock.get("code") or "") in union_codes]
+    union_pass_count = len(filtered)
+    fill_count = 0
+    fallback_used = False
+
+    target_count = min(len(common_filtered), max(0, int(min_candidate_count)))
+    if target_count and len(filtered) < target_count:
+        chosen_codes = {str(stock.get("code") or "") for stock in filtered}
+        for stock in common_filtered:
+            code = str(stock.get("code") or "")
+            if not code or code in chosen_codes:
+                continue
+            filtered.append(stock)
+            chosen_codes.add(code)
+            fill_count += 1
+            if len(filtered) >= target_count:
+                break
+
+    if not filtered:
+        source = common_filtered or ordered_stocks
+        fallback_count = min(len(source), max(12, target_count or 12))
+        filtered = source[:fallback_count]
+        fallback_used = True
+
+    audit = {
+        "mode": "common_tradeability_plus_skill_market_prefilter",
+        "input_count": len(ordered_stocks),
+        "common": {
+            "pass_count": len(common_filtered),
+            "excluded_count": max(0, len(ordered_stocks) - len(common_filtered)),
+            "exclusion_counts": dict(common_exclusion_counts),
+            "thresholds": {
+                "amount_yi_min": 1.5,
+                "turnover_rate_min": 1.0,
+                "turnover_rate_max": 12.0,
+                "late_acceleration_pos60": 96.0,
+                "late_acceleration_dist60": 35.0,
+                "max_drawdown20_min": -18.0,
+            },
+        },
+        "per_skill": per_skill,
+        "union_pass_count": union_pass_count,
+        "prefilter_candidate_count": len(filtered),
+        "fill_count": fill_count,
+        "fallback_used": fallback_used,
+        "selected_skill_count": len(selected_skills),
+    }
+    return filtered, audit
+
+
+def common_tradeability_exclusion_reason(stock: dict[str, Any]) -> str | None:
+    amount_yi = float(stock.get("amount_yi") or 0)
+    turnover_rate = float(stock.get("turnover_rate") or 0)
+    pos60 = float(stock.get("pos60") or 0)
+    dist60 = float(stock.get("dist60") or 0)
+    off_high_pct = float(stock.get("off_high_pct") or 0)
+    pct = float(stock.get("pct") or 0)
+    upper_shadow_count20 = float(stock.get("upper_shadow_count20") or 0)
+    max_dd20 = float(stock.get("max_dd20") or 0)
+
+    if amount_yi < 1.5:
+        return "low_amount"
+    if turnover_rate < 1.0:
+        return "low_turnover"
+    if turnover_rate > 12.0 and pct > 0:
+        return "overheated_turnover"
+    if pos60 > 96.0 and dist60 > 35.0:
+        return "late_acceleration"
+    if off_high_pct < -18.0 and pct < 0:
+        return "broken_trend"
+    if upper_shadow_count20 >= 6:
+        return "upper_shadow_overhang"
+    if max_dd20 < -18.0:
+        return "unstable_drawdown"
+    return None

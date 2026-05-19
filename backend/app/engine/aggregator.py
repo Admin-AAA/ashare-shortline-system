@@ -14,11 +14,20 @@ RISK_TEMPLATE_PENALTY = {
 # 权重体系：Skill Agent 成为核心评分来源
 # ---------------------------------------------------------------------------
 DEFAULT_AGG_WEIGHTS = {
-    "skill_agent": 0.50,
-    "strategy_rule": 0.25,
+    "skill_agent": 0.55,
+    "strategy_rule": 0.15,
     "market": 0.10,
     "risk": 0.10,
-    "evidence": 0.05,
+    "evidence": 0.10,
+}
+
+# 有 Agent 审查时的权重（strategy_rule 降为辅证，skill_agent 主导）
+AGENT_PRESENT_WEIGHTS = {
+    "skill_agent": 0.60,
+    "strategy_rule": 0.10,
+    "market": 0.10,
+    "risk": 0.10,
+    "evidence": 0.10,
 }
 
 # 技能独立性权重 —— 当多个技能使用相同数据源/方法论时降低共识加成
@@ -74,25 +83,25 @@ def market_regime_weights(snapshot: dict[str, Any] | None = None) -> dict[str, f
     sentiment = _market_sentiment(snapshot)
 
     if base == "强牛":
-        weights["skill_agent"] = 0.55
+        weights["skill_agent"] = 0.60
         weights["risk"] = 0.05
-        weights["evidence"] = 0.05
-        weights["strategy_rule"] = 0.25
-    elif base == "偏多":
-        weights["skill_agent"] = 0.52
-        weights["risk"] = 0.08
-        weights["evidence"] = 0.05
-        weights["strategy_rule"] = 0.25
-    elif base == "震荡":
-        weights["skill_agent"] = 0.50
-        weights["strategy_rule"] = 0.25
-        weights["risk"] = 0.10
-        weights["evidence"] = 0.05
-    else:
-        weights["skill_agent"] = 0.40
-        weights["strategy_rule"] = 0.30
-        weights["risk"] = 0.12
         weights["evidence"] = 0.08
+        weights["strategy_rule"] = 0.12
+    elif base == "偏多":
+        weights["skill_agent"] = 0.57
+        weights["risk"] = 0.08
+        weights["evidence"] = 0.08
+        weights["strategy_rule"] = 0.12
+    elif base == "震荡":
+        weights["skill_agent"] = 0.55
+        weights["strategy_rule"] = 0.12
+        weights["risk"] = 0.10
+        weights["evidence"] = 0.08
+    else:
+        weights["skill_agent"] = 0.45
+        weights["strategy_rule"] = 0.18
+        weights["risk"] = 0.12
+        weights["evidence"] = 0.10
 
     if sentiment == "高潮":
         weights["skill_agent"] = min(0.58, weights["skill_agent"] + 0.03)
@@ -186,17 +195,20 @@ def _extract_skill_agent_score(signals: list[dict[str, Any]]) -> float:
         if not isinstance(review, dict):
             continue
         stance = review.get("stance", "neutral")
-        score = float(signal.get("score", 0))
         weight = float(signal.get("weight", 1.0))
 
         multiplier = STANCE_MULTIPLIER.get(stance)
         if multiplier == "hard_veto":
-            # veto 的 stock 应在 aggregate 入口就被 hard_veto 捕获
             skill_scores.append((0.0, weight))
             continue
 
-        adjusted_score = score * float(multiplier or 1.0)
-        skill_scores.append((adjusted_score, weight))
+        # 以 Agent 自身评分为主，stance 乘数做方向确认
+        agent_score = float(review.get("score", 50))
+        agent_confidence = float(review.get("confidence", 0.5))
+        # 低置信度时向中性 50 回归
+        regressed = 50 + (agent_score - 50) * agent_confidence
+        adjusted = regressed * float(multiplier or 1.0)
+        skill_scores.append((adjusted, weight * agent_confidence))
 
     if not skill_scores:
         return 50.0
@@ -377,8 +389,10 @@ def aggregate(
     if calibrated_weights:
         weights.update(calibrated_weights)
 
-    # 无 Agent 审查时重平衡：策略规则为主
-    if not has_agent_reviews:
+    # 有 Agent 审查时 skill_agent 主导，策略规则降为辅证
+    if has_agent_reviews:
+        weights.update(AGENT_PRESENT_WEIGHTS)
+    else:
         weights["skill_agent"] = 0.00
         weights["strategy_rule"] = 0.55
         weights["market"] = 0.20

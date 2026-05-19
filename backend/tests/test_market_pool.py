@@ -1,9 +1,9 @@
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from app.db.session import Base
+from app.db.session import Base, SessionLocal, engine
 from app.models.tables import DailyBar, DataSourceConfig, RawQuote, UnifiedQuote
 from app.services.data_sources import enabled_sources, get_local_pool_status, sync_data_source_configs
 from app.services import market_pool
@@ -34,9 +34,8 @@ class DummySettings:
 
 
 def _session() -> Session:
-    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
     Base.metadata.create_all(bind=engine)
-    return sessionmaker(bind=engine, autoflush=False, autocommit=False)()
+    return SessionLocal()
 
 
 def _quote(code: str, source: str, price: float, pct: float = 3.0) -> dict:

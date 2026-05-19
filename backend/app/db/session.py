@@ -1,7 +1,7 @@
 import logging
 from collections.abc import Generator
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import get_settings
@@ -15,33 +15,21 @@ class Base(DeclarativeBase):
 
 settings = get_settings()
 
-_connect_args = {}
-_engine_kwargs = {}
+if not settings.database_url.startswith("mysql"):
+    raise RuntimeError(
+        "ASHARE_DATABASE_URL 必须使用 MySQL 连接串。"
+    )
 
-if settings.database_url.startswith("mysql"):
-    _connect_args = {"charset": "utf8mb4", "connect_timeout": 10, "read_timeout": 30, "write_timeout": 30}
-    _engine_kwargs = {
-        "pool_size": 20,
-        "max_overflow": 15,
-        "pool_timeout": 30,
-        "pool_pre_ping": True,
-        "pool_recycle": 3600,
-    }
-elif settings.database_url.startswith("sqlite"):
-    _connect_args = {"check_same_thread": False, "timeout": 30}
-    _engine_kwargs = {"pool_size": 20, "max_overflow": 15, "pool_timeout": 30, "pool_pre_ping": True}
+_connect_args = {"charset": "utf8mb4", "connect_timeout": 10, "read_timeout": 900, "write_timeout": 900}
+_engine_kwargs = {
+    "pool_size": 20,
+    "max_overflow": 15,
+    "pool_timeout": 30,
+    "pool_pre_ping": True,
+    "pool_recycle": 600,  # Agent 审查期间 DB 空闲可达 250s+，600s 回收避免 MySQL 服务端 kill 连接
+}
 
 engine = create_engine(settings.database_url, connect_args=_connect_args, **_engine_kwargs)
-
-if settings.database_url.startswith("sqlite"):
-
-    @event.listens_for(engine, "connect")
-    def _set_sqlite_pragma(dbapi_connection, connection_record):
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA busy_timeout=30000")
-        cursor.execute("PRAGMA synchronous=NORMAL")
-        cursor.close()
 
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)

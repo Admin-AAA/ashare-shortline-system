@@ -9,13 +9,16 @@ Agno Agent 工具函数。
   - 不向 LLM 暴露 db Session 或 ORM 对象
   - 所有异常 catch 后返回 error dict，不 raise
   - 只做数据查询和简单统计，不做复杂特征计算
+  - 会话不可用时自动降级：直接用 SessionLocal() 查库，不返回致命错误
 """
 
+from contextlib import contextmanager
 from typing import Any
 
 from sqlalchemy import desc, func, select
 
 from app.agents.session_registry import AgentSessionRegistry
+from app.db.session import SessionLocal
 from app.models.tables import (
     DailyBar,
     DailyIndicator,
@@ -38,6 +41,29 @@ except ImportError:
 
 
 # ── 内部辅助函数 ──────────────────────────────────────────────────────
+
+@contextmanager
+def _get_db(session_id: str):
+    """获取 DB session。优先从 Agent 会话获取，不可用时直接创建。"""
+    ctx = AgentSessionRegistry.get(session_id)
+    if ctx is not None:
+        with ctx.session_factory() as db:
+            yield db, ctx
+    else:
+        db = SessionLocal()
+        try:
+            yield db, None
+        finally:
+            db.close()
+
+
+def _get_cache_or_none(session_id: str):
+    """获取 Agent 会话的缓存数据，不存在时返回 None。"""
+    ctx = AgentSessionRegistry.get(session_id)
+    if ctx is None:
+        return None
+    return ctx
+
 
 def _num(value: Any, default: float = 0.0) -> float:
     if value is None or value == "":
@@ -74,7 +100,17 @@ def query_market_snapshot(session_id: str) -> dict:
     try:
         ctx = AgentSessionRegistry.get(session_id)
         if ctx is None:
-            return {"error": "会话不存在或已过期", "session_id": session_id}
+            return {
+                "trade_date": "",
+                "sample_count": 0,
+                "up_count": 0,
+                "down_count": 0,
+                "limit_up_count": 0,
+                "limit_down_count": 0,
+                "main_industries": [],
+                "breadth": {"regime": "未知", "risk": "未知", "hot_theme": "未知"},
+                "_note": "Agent 会话缓存不可用，市场快照数据依赖 prompt 中的预计算摘要",
+            }
 
         snapshot = ctx.snapshot
         breadth = snapshot.get("breadth", {})
@@ -111,18 +147,16 @@ def query_stock_detail(code: str, session_id: str) -> dict:
     """
     try:
         ctx = AgentSessionRegistry.get(session_id)
-        if ctx is None:
-            return {"error": "会话不存在或已过期", "session_id": session_id}
 
-        # 缓存命中
-        if code in ctx.stocks_cache:
+        # 缓存命中（仅当会话可用时）
+        if ctx is not None and code in ctx.stocks_cache:
             cached = dict(ctx.stocks_cache[code])
-            # 去掉不可序列化的内部字段
             cached.pop("_bars", None)
             cached.pop("dsa_profile", None)
             return cached
 
-        with ctx.session_factory() as db:
+        with _get_db(session_id) as (db, ctx2):
+            ctx2 = ctx2 or ctx  # 优先用 with 返回的 ctx2，回退到外层 ctx
 
             # 查询最新一条 UnifiedQuote
             quote_row = db.scalar(
@@ -254,7 +288,7 @@ def query_stock_detail(code: str, session_id: str) -> dict:
                 result["main_net_flow"] = round(_num(main_net_flow), 3)
 
             # ── DSA 关键字段（从 stocks_cache 补充，防止 Agent 凭空推断 ──
-            stock_cached = ctx.stocks_cache.get(code) if ctx.stocks_cache else None
+            stock_cached = ctx.stocks_cache.get(code) if ctx is not None and ctx.stocks_cache else None
             if stock_cached:
                 for dsa_key in (
                     "support_ma5", "support_ma10", "dsa_support_score",
@@ -288,7 +322,18 @@ def query_skill_signals(code: str, skill_id: str, session_id: str) -> dict:
     try:
         ctx = AgentSessionRegistry.get(session_id)
         if ctx is None:
-            return {"error": "会话不存在或已过期", "session_id": session_id}
+            return {
+                "skill_id": skill_id,
+                "code": code,
+                "runtime": "session_unavailable",
+                "note": "Agent 会话缓存不可用；使用 prompt 预计算数据进行审查",
+                "phase": "",
+                "score": 0,
+                "setup_match": "",
+                "evidence": [],
+                "risks": [],
+                "score_cap": 100.0,
+            }
 
         # 检查该 Skill 是否存在，以及是否仅有 Agent 审查
         skill = next((s for s in ctx.skills if s.skill_id == skill_id), None)
@@ -356,13 +401,13 @@ def audit_data_quality(code: str, session_id: str) -> dict:
         session_id: Agent 会话 ID
     """
     try:
+        stock = None
         ctx = AgentSessionRegistry.get(session_id)
-        if ctx is None:
-            return {"error": "会话不存在或已过期", "session_id": session_id}
+        if ctx is not None:
+            stock = ctx.stocks_cache.get(code) if ctx.stocks_cache else None
 
-        # 尝试从 stocks_cache 获取已构建的股票特征
-        stock = ctx.stocks_cache.get(code) if ctx.stocks_cache else None
-        with ctx.session_factory() as db:
+        with _get_db(session_id) as (db, _ctx):
+            import json as _json
 
             # 查询 UnifiedQuote
             quote_row = db.scalar(
@@ -373,8 +418,6 @@ def audit_data_quality(code: str, session_id: str) -> dict:
             )
             if quote_row is None and stock is None:
                 return {"error": "未找到该股票数据", "code": code}
-
-            import json as _json
 
             quote_data = _json.loads(quote_row.quote_json) if quote_row and quote_row.quote_json else {}
 
@@ -475,11 +518,7 @@ def query_stock_history(code: str, days: int, session_id: str) -> dict:
         session_id: Agent 会话 ID
     """
     try:
-        ctx = AgentSessionRegistry.get(session_id)
-        if ctx is None:
-            return {"error": "会话不存在或已过期", "session_id": session_id}
-
-        with ctx.session_factory() as db:
+        with _get_db(session_id) as (db, _ctx):
             bars = (
                 db.scalars(
                     select(DailyBar)
@@ -530,11 +569,7 @@ def query_dragon_tiger(code: str, session_id: str) -> dict:
         session_id: Agent 会话 ID
     """
     try:
-        ctx = AgentSessionRegistry.get(session_id)
-        if ctx is None:
-            return {"error": "会话不存在或已过期", "session_id": session_id}
-
-        with ctx.session_factory() as db:
+        with _get_db(session_id) as (db, _ctx):
 
             # 查询最新 DragonTiger 标准化记录
             dt_row = db.scalar(
@@ -659,11 +694,7 @@ def query_industry_peers(code: str, session_id: str) -> dict:
         session_id: Agent 会话 ID
     """
     try:
-        ctx = AgentSessionRegistry.get(session_id)
-        if ctx is None:
-            return {"error": "会话不存在或已过期", "session_id": session_id}
-
-        with ctx.session_factory() as db:
+        with _get_db(session_id) as (db, _ctx):
 
             # 获取目标股票的最新 quote 和行业信息
             quote_row = db.scalar(

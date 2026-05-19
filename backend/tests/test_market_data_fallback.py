@@ -1,4 +1,4 @@
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 
 import pytest
 
@@ -320,19 +320,26 @@ def test_authenticity_treats_composite_scores_as_observed_when_inputs_are_real()
     assert enriched["data_authenticity"] >= 0.8
 
 
-def test_default_presets_do_not_overwrite_user_skill_selection(tmp_path, monkeypatch):
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import sessionmaker
-
-    from app.models.tables import Base, Preset, PresetSkill
+def test_default_presets_do_not_overwrite_user_skill_selection():
+    from app.db.session import SessionLocal
+    from app.models.tables import Preset, PresetSkill
     from app.services import workbench_service
 
-    db_path = tmp_path / "workbench.db"
-    engine = create_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine)
     db = SessionLocal()
+    original_commit = db.commit
+
+    def fake_commit(self):
+        self.flush()
+
     try:
+        db.commit = MethodType(fake_commit, db)
+        Preset.__table__.create(bind=db.bind, checkfirst=True)
+        PresetSkill.__table__.create(bind=db.bind, checkfirst=True)
+        preset_ids = [item["preset_id"] for item in workbench_service.DEFAULT_PRESETS]
+        db.query(PresetSkill).filter(PresetSkill.preset_id.in_(preset_ids)).delete(synchronize_session=False)
+        db.query(Preset).filter(Preset.preset_id.in_(preset_ids)).delete(synchronize_session=False)
+        db.flush()
+
         db.add(
             Preset(
                 preset_id="preset_formal_opening",
@@ -378,4 +385,7 @@ def test_default_presets_do_not_overwrite_user_skill_selection(tmp_path, monkeyp
             "daily-stock-analysis-skill",
         ]
     finally:
+        db.rollback()
+        db.commit = original_commit
+        db.close()
         db.close()

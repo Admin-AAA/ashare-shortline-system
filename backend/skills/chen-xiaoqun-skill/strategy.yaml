@@ -22,6 +22,30 @@ universe:
     - "announcement_negative_count > 0"
     - "is_st == true"
 
+prefilter:
+  market:
+    include:
+      - when: "turnover_rate >= 2"
+        reason: "turnover_too_low"
+      - when: "turnover_rate <= 10"
+        reason: "turnover_too_high"
+      - when: "max_dd20 >= -18"
+        reason: "drawdown_too_large"
+      - when: "upper_shadow_count20 <= 5"
+        reason: "upper_shadow_too_many"
+    include_any:
+      - when: "_is_main == true and breakout20 == 1"
+        reason: "requires_main_breakout"
+      - when: "_is_main == true and pct >= 1 and off_high_pct >= -6"
+        reason: "requires_main_strength"
+      - when: "industry_capacity_like_count >= 2 and pct >= 2 and amount_yi >= 4"
+        reason: "requires_sector_leadership"
+    exclude:
+      - when: "pos60 > 97 and dist60 > 30"
+        reason: "late_acceleration"
+      - when: "turnover_rate > 9 and pct < 0"
+        reason: "distribution_risk"
+
 phases:
   - name: 退潮
     when: "(dist20 < 0 and chg20 < 0) or max_dd20 < -15"

@@ -97,22 +97,21 @@ def get_local_pool_status(
     latest_quote_date_for_coverage = db.scalar(select(func.max(UnifiedQuote.trade_date)))
     coverage_trade_date = _coverage_reference_date(latest_quote_date_for_coverage, latest_allowed_bar_date)
 
-    # ── 快速近似计数（MySQL information_schema，O(1)；SQLite 回退到精确 COUNT）──
+    # ── 快速近似计数（MySQL information_schema，O(1)）──
     approx = _approx_table_counts(db, [
         "raw_quotes", "raw_daily_bars", "unified_quotes", "daily_bars", "daily_indicators",
         "limit_up_board", "concept_sector", "capital_flow", "dragon_tiger", "news_announcement",
     ])
-    _use_approx = bool(approx)  # SQLite 返回空字典 → 回退
-    raw_quote_count = approx.get("raw_quotes", 0) if _use_approx else _count(db, RawQuote)
-    raw_bar_count = approx.get("raw_daily_bars", 0) if _use_approx else _count_with_limit(db, RawDailyBar, RawDailyBar.trade_date <= latest_allowed_bar_date)
-    unified_quote_count = approx.get("unified_quotes", 0) if _use_approx else _count(db, UnifiedQuote)
-    daily_bar_row_count = approx.get("daily_bars", 0) if _use_approx else _count_with_limit(db, DailyBar, DailyBar.trade_date <= latest_allowed_bar_date)
-    daily_indicator_count = approx.get("daily_indicators", 0) if _use_approx else _count_with_limit(db, DailyIndicator, DailyIndicator.trade_date <= latest_allowed_bar_date)
-    limit_up_board_count = approx.get("limit_up_board", 0) if _use_approx else _count(db, LimitUpBoard)
-    concept_sector_count = approx.get("concept_sector", 0) if _use_approx else _count(db, ConceptSector)
-    capital_flow_count = approx.get("capital_flow", 0) if _use_approx else _count(db, CapitalFlow)
-    dragon_tiger_count = approx.get("dragon_tiger", 0) if _use_approx else _count(db, DragonTiger)
-    news_count = approx.get("news_announcement", 0) if _use_approx else _count(db, NewsAnnouncement)
+    raw_quote_count = approx.get("raw_quotes", 0)
+    raw_bar_count = approx.get("raw_daily_bars", 0)
+    unified_quote_count = approx.get("unified_quotes", 0)
+    daily_bar_row_count = approx.get("daily_bars", 0)
+    daily_indicator_count = approx.get("daily_indicators", 0)
+    limit_up_board_count = approx.get("limit_up_board", 0)
+    concept_sector_count = approx.get("concept_sector", 0)
+    capital_flow_count = approx.get("capital_flow", 0)
+    dragon_tiger_count = approx.get("dragon_tiger", 0)
+    news_count = approx.get("news_announcement", 0)
 
     # ── 必须精确的计数：active_unified_quote（用于覆盖率计算）──
     active_unified_quote_count = _count_with_limit(db, UnifiedQuote, UnifiedQuote.freshness_status != "inactive")
@@ -324,9 +323,7 @@ def _source_status(enabled: bool, health: DataSourceHealth | None) -> str:
 
 
 def _approx_table_counts(db: Session, table_names: list[str]) -> dict[str, int]:
-    """O(1) 近似行数，来自 information_schema（InnoDB 估算，显示用足够）。
-    SQLite 等不支持 information_schema 时返回空字典，由调用方回退到精确 COUNT。
-    """
+    """O(1) 近似行数，来自 information_schema（InnoDB 估算，显示用足够）。"""
     if not table_names:
         return {}
     try:

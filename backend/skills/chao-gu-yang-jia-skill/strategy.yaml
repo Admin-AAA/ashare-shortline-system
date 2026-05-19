@@ -21,6 +21,34 @@ universe:
     - "announcement_negative_count > 0"
     - "is_st == true"
 
+prefilter:
+  market:
+    include:
+      - when: "turnover_rate >= 1.5"
+        reason: "turnover_too_low"
+      - when: "turnover_rate <= 10"
+        reason: "turnover_too_high"
+      - when: "max_dd20 >= -18"
+        reason: "drawdown_too_large"
+      - when: "upper_shadow_count20 <= 5"
+        reason: "upper_shadow_too_many"
+      - when: "pos60 <= 96"
+        reason: "position_too_high"
+    include_any:
+      - when: "_is_main == true"
+        reason: "requires_main_theme"
+      - when: "industry_capacity_like_count >= 2"
+        reason: "requires_sector_breadth"
+      - when: "breakout20 == 1"
+        reason: "requires_breakout_or_mainline"
+      - when: "off_high_pct >= -8 and pct >= -2"
+        reason: "requires_tradeable_pullback"
+    exclude:
+      - when: "dist60 > 35 and pos60 > 96"
+        reason: "late_acceleration"
+      - when: "off_high_pct < -15 and pct < 0"
+        reason: "broken_pullback"
+
 phases:
   - name: 退潮
     when: "(dist20 < 0 and chg20 < 0) or max_dd20 < -15"
@@ -90,4 +118,3 @@ risk:
     - when: "free_mv_yi > 5000 and dist60 > 30"
       level: medium
       flag: 大容量趋势票高位加速
-

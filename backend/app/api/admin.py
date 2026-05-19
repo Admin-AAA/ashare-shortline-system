@@ -62,7 +62,11 @@ def create_task(payload: dict, db: Session = Depends(get_db)):
 
 @router.patch("/tasks/{task_id}")
 def update_task(task_id: str, payload: dict, db: Session = Depends(get_db)):
-    task = _upsert_task_from_payload(db, {**payload, "task_id": task_id})
+    existing = next((t for t in list_scheduled_tasks(db) if t["task_id"] == task_id), None)
+    if not existing:
+        raise HTTPException(status_code=404, detail="task not found")
+    merged = {**existing, **{k: v for k, v in payload.items() if v is not None}, "task_id": task_id}
+    task = _upsert_task_from_payload(db, merged)
     _reload_scheduler()
     return task
 

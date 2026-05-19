@@ -78,17 +78,6 @@ def active_alerts(db: Session) -> list[dict[str, Any]]:
             "message": "尚未执行过推荐运行",
         })
 
-    # 数据库大小检查
-    db_size_mb = _db_file_size_mb()
-    if db_size_mb and db_size_mb > 2000:
-        alerts.append({
-            "source": "system",
-            "source_type": "storage",
-            "status": "degraded",
-            "alert_level": "warning",
-            "message": f"SQLite 数据库大小 {db_size_mb:.0f} MB，建议定期清理旧数据",
-        })
-
     return alerts
 
 
@@ -222,17 +211,3 @@ def _source_alert_message(src: dict[str, Any]) -> str:
     if last_error:
         return f"{source} ({source_type}): {last_error[:100]}"
     return f"{source} ({source_type}) 状态异常"
-
-
-def _db_file_size_mb() -> float | None:
-    """获取 SQLite 数据库文件大小（MB）。"""
-    from app.core.config import get_settings
-    from pathlib import Path
-
-    settings = get_settings()
-    db_url = settings.database_url
-    if db_url.startswith("sqlite:///"):
-        path = Path(db_url.replace("sqlite:///", ""))
-        if path.exists():
-            return path.stat().st_size / (1024 * 1024)
-    return None

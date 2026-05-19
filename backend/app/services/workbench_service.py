@@ -16,6 +16,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 from sqlalchemy import func, select, text
+from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.orm import Session
 
 from app.agents.review_runner import run_skill_reviews
@@ -58,13 +59,16 @@ from app.services.market_pool import (
     refresh_dragon_tiger,
     refresh_news_for_codes,
 )
+from app.services.prefilter_service import apply_prefilters
 from app.services.research_context import build_research_contexts
 
 
 BOOTSTRAP_CACHE_TTL_SECONDS = 30.0
-RUN_HEARTBEAT_STALE_SECONDS = 300
+RUN_HEARTBEAT_STALE_SECONDS = 1200  # Agent 单次审查可达 250s+，心跳必须大于外层超时(900s)
 RUN_ACTIVE_STATUSES = {"queued", "running"}
 RUN_RESUMABLE_STATUSES = {"interrupted"}
+PROGRESS_COMMIT_INTERVAL_SECONDS = 10.0
+UPSERT_BATCH_SIZE = 1000
 
 # 断点阶段常量，按执行顺序排列
 CHECKPOINT_ORDER = [
@@ -139,6 +143,8 @@ DEFAULT_PRESETS = [
 
 _bootstrap_cache_lock = threading.Lock()
 _bootstrap_cache: dict[tuple[str, str], dict[str, Any]] = {}
+_progress_commit_state_lock = threading.Lock()
+_progress_commit_state: dict[str, dict[str, Any]] = {}
 _run_queue: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue()
 _run_queue_lock = threading.Lock()
 _run_queue_worker_started = False
@@ -766,6 +772,7 @@ def _mark_run_failed(db: Session, run_id: str, exc: Exception) -> None:
         run.progress_message = str(exc)
         db.commit()
         invalidate_bootstrap_cache()
+        _record_progress_commit(run)
     except Exception:
         db.rollback()
         logger.exception("failed to persist background run failure: %s", run_id)
@@ -803,8 +810,19 @@ def _update_run_progress(
         if status != "failed":
             run.error_message = None
     if commit:
-        db.commit()
-        invalidate_bootstrap_cache()
+        if _should_commit_progress(
+            run_id=run.run_id,
+            phase=run.progress_phase or phase,
+            status=run.status,
+            current=run.progress_current,
+            total=run.progress_total,
+            now=now,
+        ):
+            db.commit()
+            invalidate_bootstrap_cache()
+            _record_progress_commit(run)
+        else:
+            db.flush()
     else:
         db.flush()
     return run
@@ -827,6 +845,9 @@ def recover_interrupted_runs(db: Session) -> int:
     if recovered:
         db.commit()
         invalidate_bootstrap_cache()
+        for run in runs:
+            if run.status == "interrupted":
+                _record_progress_commit(run)
         logger.warning("marked %d stale recommendation runs as interrupted on startup", recovered)
     return recovered
 
@@ -839,6 +860,43 @@ def _save_checkpoint(db: Session, run_id: str, phase: str) -> None:
     run.checkpoint_phase = phase
     run.heartbeat_at = datetime.utcnow()
     db.commit()
+    _record_progress_commit(run)
+
+
+def _should_commit_progress(
+    run_id: str,
+    phase: str,
+    status: str,
+    current: int,
+    total: int,
+    now: datetime,
+) -> bool:
+    with _progress_commit_state_lock:
+        state = _progress_commit_state.get(run_id)
+    if state is None:
+        return True
+    if state.get("phase") != phase or state.get("status") != status:
+        return True
+    if total > 0 and current >= total:
+        return True
+    last_committed_at = state.get("committed_at")
+    if not isinstance(last_committed_at, datetime):
+        return True
+    return (now - last_committed_at).total_seconds() >= PROGRESS_COMMIT_INTERVAL_SECONDS
+
+
+def _record_progress_commit(run: RecommendationRun) -> None:
+    if not run.run_id:
+        return
+    with _progress_commit_state_lock:
+        if run.status in RUN_ACTIVE_STATUSES:
+            _progress_commit_state[run.run_id] = {
+                "phase": run.progress_phase,
+                "status": run.status,
+                "committed_at": datetime.utcnow(),
+            }
+        else:
+            _progress_commit_state.pop(run.run_id, None)
 
 
 def _phase_index(phase: str) -> int:
@@ -895,7 +953,10 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         skills = sync_skills(db)
         skill_map = {skill.skill_id: skill for skill in skills}
         params = _loads(run.params_json, {})
-        selected_skills = _loads(run.selected_skills_json, [])
+        selected_skill_rows = _loads(run.selected_skills_json, [])
+        selected_skills = _select_skills_for_run(db, skill_map, params.get("run_mode") or run.run_mode, selected_skill_rows)
+        if not selected_skills:
+            raise ValueError("恢复任务时没有可运行的 Skill，请检查 Skill 状态后重新发起运行")
         preset = db.get(Preset, run.preset_id) if run.preset_id else None
 
     data_source = _normalize_data_source(params.get("data_source"))
@@ -925,19 +986,38 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         status="running",
     )
     _persist_market(db, snapshot)
-    _persist_stocks_and_bars(db, stocks)
+    # 仅在实时行情模式下写回股票元数据；本地池模式数据本就从 DB 读出，写入为冗余操作，
+    # 且全市场扫描时 6000+ 行批量 INSERT 会在远程 MySQL 高负载下阻塞推荐管道。
+    if data_source == DATA_SOURCE_REALTIME:
+        _persist_stocks_and_bars(db, stocks, persist_bars=True)
+    else:
+        logger.info("skip stock/bar persistence for local-pool run %s; mode=%s stocks=%d", run_id, data_source, len(stocks))
     scoped_stocks = _apply_market_scope_to_stocks(db, stocks, params)
     if not scoped_stocks:
         raise ValueError("当前市场范围内没有可运行的股票，请调整预设范围后重试")
     snapshot.setdefault("breadth", {})["scoped_candidate_count"] = len(scoped_stocks)
+    min_prefilter_count = max(
+        int(params.get("output_count") or 0) * 8,
+        len(selected_skills) * 12,
+        24,
+    )
+    prefiltered_stocks, prefilter_audit = apply_prefilters(
+        scoped_stocks,
+        selected_skills,
+        min_candidate_count=min_prefilter_count,
+    )
+    if not prefiltered_stocks:
+        raise ValueError("前置预过滤后没有可运行的股票，请放宽候选条件后重试")
+    snapshot["breadth"]["prefilter_candidate_count"] = len(prefiltered_stocks)
+    snapshot["breadth"]["prefilter_audit"] = prefilter_audit
     _save_checkpoint(db, run_id, "scope_filter")
     _update_run_progress(
         db,
         existing_run_id,
         phase="scope_filter",
-        current=len(scoped_stocks),
+        current=len(prefiltered_stocks),
         total=len(stocks),
-        message=f"市场范围过滤完成，候选 {len(scoped_stocks)} 只",
+        message=f"市场范围与前置预过滤完成，候选 {len(prefiltered_stocks)} 只",
         status="running",
     )
 
@@ -950,10 +1030,10 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     }
     settings = get_settings()
     skip_aux_refresh = bool(params.get("skip_aux_refresh"))
-    aux_prefetch_count = min(len(scoped_stocks), max(int(params.get("output_count") or 0) * 4, 12), 36)
+    aux_prefetch_count = min(len(prefiltered_stocks), max(int(params.get("output_count") or 0) * 4, 12), 36)
     aux_prefetch_codes = [
         stock["code"]
-        for stock in sorted(scoped_stocks, key=lambda item: float(item.get("free_mv_yi") or 0), reverse=True)[:aux_prefetch_count]
+        for stock in sorted(prefiltered_stocks, key=lambda item: float(item.get("free_mv_yi") or 0), reverse=True)[:aux_prefetch_count]
     ]
     _update_run_progress(
         db,
@@ -1136,12 +1216,12 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         existing_run_id,
         phase="feature_build",
         current=0,
-        total=len(scoped_stocks),
-        message=f"构建 {len(scoped_stocks)} 只股票的特征与研究上下文",
+        total=len(prefiltered_stocks),
+        message=f"构建 {len(prefiltered_stocks)} 只股票的特征与研究上下文",
         status="running",
     )
     features = build_features(
-        scoped_stocks, snapshot, _load_calibrated_dsa_weights(db), db=db,
+        prefiltered_stocks, snapshot, _load_calibrated_dsa_weights(db), db=db,
         on_progress=lambda current, total: _update_run_progress(
             db, existing_run_id, phase="feature_build",
             current=current, total=total,
@@ -1185,7 +1265,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     db.commit()  # Persist immediately so the run record survives failures
     invalidate_bootstrap_cache()
 
-    agent_session_id = f"sess_{run_id[:12]}"
+    agent_session_id = f"sess_{run_id}"
     all_skill_objs = [s["skill"] for s in selected_skills]
 
     try:
@@ -1213,7 +1293,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                 default_multiple = 3 if params["run_mode"] == "experiment" else 8
                 default_min = 8 if params["run_mode"] == "experiment" else 30
                 skill_review_limit = min(max(int(params.get("output_count") or 0) * default_multiple, default_min), 60)
-        skill_review_concurrency = max(1, int(settings.market_skill_review_concurrency or 1))
+        skill_review_concurrency = max(1, int(params.get("agent_review_concurrency") or settings.market_skill_review_concurrency or 1))
         prelim_entries: list[dict[str, Any]] = []
         total_contexts = len(research_contexts)
         _update_run_progress(
@@ -1285,6 +1365,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             skill_review_limit=skill_review_limit,
             skill_review_concurrency=skill_review_concurrency,
             skill_demo_limited=skill_demo_limited,
+            prefilter_audit=prefilter_audit,
         )
         snapshot.setdefault("breadth", {})["recommendation_pipeline"] = pipeline_audit
         _save_checkpoint(db, run_id, "rule_scan")
@@ -1495,40 +1576,11 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         )
         pipeline_audit["skill_review_success_count"] = candidate_success_count
 
-        # 非 Skill 输入集仅作为补充（输出不足时填充），并在摘要中明确标注。
         if len(cards) < params["output_count"]:
             logger.info(
-                "Skill-reviewed pool yielded %d cards (need %d), adding explicit rule-only fallbacks",
+                "Skill-reviewed pool yielded %d cards (target %d) — 不补 rule-only fallback，以 Agent 审查结果为准",
                 len(cards), params["output_count"],
             )
-            # 为剩余非候选股票构造卡片
-            for entry in non_skill_entries:
-                card = _build_card(entry, [])
-                if card.get("final_score"):
-                    discount = 0.85
-                    card["final_score"] = round(float(card["final_score"]) * discount, 2)
-                    card["component_scores"] = {
-                        key: round(float(value) * discount, 2)
-                        for key, value in (card.get("component_scores") or {}).items()
-                    }
-                    card["component_scale"] = round(float(card.get("component_scale") or 1.0) * discount, 4)
-                    discipline = card.get("market_discipline")
-                    if isinstance(discipline, dict):
-                        discipline["action"] = "规则补充观察"
-                        discipline["max_position_pct"] = min(float(discipline.get("max_position_pct") or 0), 15.0)
-                        discipline.setdefault("risk_flags", []).append("规则补充票，等待深审或盘中确认")
-                        card["risk_flags"] = list(dict.fromkeys((card.get("risk_flags") or []) + discipline["risk_flags"]))
-                    if card.get("feature_snapshot"):
-                        card["feature_snapshot"]["component_scores"] = card.get("component_scores", {})
-                        card["feature_snapshot"]["market_discipline"] = card.get("market_discipline", {})
-                        card["feature_snapshot"]["component_scale"] = card.get("component_scale", 1.0)
-                card["agent_logs"] = []
-                if params["hide_recent_repeats"] and card["recent_repeat"]:
-                    continue
-                cards.append(card)
-                if len(cards) >= params["output_count"] * 2:
-                    break
-
         cards = apply_pool_rules(cards, params["output_count"])
         _save_checkpoint(db, run_id, "aggregate")
         _update_run_progress(
@@ -2610,16 +2662,36 @@ def _build_pipeline_audit(
     skill_demo_limited: bool,
     skill_agent_call_count: int = 0,
     skill_gate_audit: dict[str, Any] | None = None,
+    prefilter_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     breadth = snapshot.get("breadth", {}) or {}
     config = breadth.get("candidate_limit_config") or {}
     gate = skill_gate_audit or {}
+    prefilter = prefilter_audit or (breadth.get("prefilter_audit") or {})
     aux = breadth.get("auxiliary_data_audit") or {}
+    market_candidate_count = (
+        int(config["market_candidate_count"])
+        if "market_candidate_count" in config
+        else int(get_settings().market_candidate_count)
+    )
+    lookahead_multiplier = (
+        int(config["lookahead_multiplier"])
+        if "lookahead_multiplier" in config
+        else int(get_settings().market_candidate_lookahead_multiplier)
+    )
+    lookahead_count = (
+        int(config["lookahead_count"])
+        if "lookahead_count" in config
+        else prelim_count
+    )
     return {
         "unified_quote_total": int(breadth.get("unified_quote_total") or snapshot.get("sample_count") or total_contexts),
         "base_filter_eligible_count": int(breadth.get("base_filter_eligible_count") or total_contexts),
         "daily_kline_coverage_count": int(snapshot.get("sample_count") or total_contexts),
         "filtered_kline_coverage_count": total_contexts,
+        "scoped_candidate_count": int(breadth.get("scoped_candidate_count") or total_contexts),
+        "prefilter_candidate_count": int(prefilter.get("prefilter_candidate_count") or total_contexts),
+        "prefilter": prefilter,
         "actual_scan_count": prelim_count,
         "skill_input_count": skill_input_count,
         "skill_agent_call_count": skill_agent_call_count,
@@ -2628,9 +2700,9 @@ def _build_pipeline_audit(
         "skill_gate": gate,
         "skill_review_success_count": 0,
         "output_count": int(params.get("output_count") or 0),
-        "market_candidate_count": int(config.get("market_candidate_count") or get_settings().market_candidate_count),
-        "lookahead_multiplier": int(config.get("lookahead_multiplier") or get_settings().market_candidate_lookahead_multiplier),
-        "lookahead_count": int(config.get("lookahead_count") or prelim_count),
+        "market_candidate_count": market_candidate_count,
+        "lookahead_multiplier": lookahead_multiplier,
+        "lookahead_count": lookahead_count,
         "skill_review_limit": skill_review_limit,
         "skill_review_concurrency": skill_review_concurrency,
         "scan_limited": bool(config) and int(config.get("market_candidate_count") or 0) > 0,
@@ -2640,9 +2712,10 @@ def _build_pipeline_audit(
         "skip_reasons": {
             "kline": breadth.get("kline_skip_reasons") or {},
             "recent_repeat_filter_enabled": bool(params.get("hide_recent_repeats")),
+            "prefilter": "先做公共可交易过滤，再按每个 Skill 的 market prefilter 缩小候选池",
             "pool_rules": "按 final_score 降序取前 output_count 只",
             "skill_rule_gate": "全市场先跑 strategy.yaml 规则；只有通过规则门的股票-Skill 组合进入真实 Skill Agent 深审",
-            "rule_only_fallback": "仅当 Skill 审查后卡片不足 output_count 时使用",
+            "rule_only_fallback": "已禁用 — 仅输出 Agent 审查通过的股票，不足不补",
         },
     }
 
@@ -2670,6 +2743,8 @@ def _build_run_summary(
         "base_filter_eligible_count": pipeline.get("base_filter_eligible_count"),
         "daily_kline_coverage_count": pipeline.get("daily_kline_coverage_count"),
         "filtered_kline_coverage_count": pipeline.get("filtered_kline_coverage_count"),
+        "scoped_candidate_count": pipeline.get("scoped_candidate_count"),
+        "prefilter_candidate_count": pipeline.get("prefilter_candidate_count"),
         "actual_scan_count": pipeline.get("actual_scan_count"),
         "skill_input_count": pipeline.get("skill_input_count"),
         "skill_agent_call_count": pipeline.get("skill_agent_call_count"),
@@ -2813,43 +2888,121 @@ def _persist_market(db: Session, snapshot: dict[str, Any]) -> None:
     )
 
 
-def _persist_stocks_and_bars(db: Session, stocks: list[dict[str, Any]]) -> None:
-    seen: set[str] = set()
+def _persist_stocks_and_bars(
+    db: Session,
+    stocks: list[dict[str, Any]],
+    persist_bars: bool = True,
+) -> None:
+    seen_codes: set[str] = set()
+    seen_bars: set[tuple[str, str]] = set()
+    stock_rows: list[dict[str, Any]] = []
+    bar_rows: list[dict[str, Any]] = []
+    now = datetime.utcnow()
+
     for stock in stocks:
-        code = stock["code"]
-        if code in seen:
+        code = str(stock.get("code") or "").strip()
+        if not code or code in seen_codes:
             continue
-        seen.add(code)
-        existing = db.get(Stock, code)
-        if existing is None:
-            db.add(
-                Stock(
-                    code=code,
-                    name=stock["name"],
-                    exchange=stock.get("exchange"),
-                    industry=stock.get("industry"),
-                    is_st=bool(stock.get("is_st", False)),
-                )
-            )
-        else:
-            existing.name = stock["name"]
-            existing.exchange = stock.get("exchange")
-            existing.industry = stock.get("industry")
-            existing.is_st = bool(stock.get("is_st", False))
-            existing.updated_at = datetime.utcnow()
+        seen_codes.add(code)
+        stock_rows.append(
+            {
+                "code": code,
+                "name": str(stock.get("name") or code),
+                "exchange": stock.get("exchange"),
+                "industry": stock.get("industry"),
+                "is_st": bool(stock.get("is_st", False)),
+                "list_status": str(stock.get("list_status") or "listed"),
+                "updated_at": now,
+            }
+        )
+        if not persist_bars:
+            continue
         for bar in stock.get("_bars", []):
-            exists = db.scalar(select(DailyBar).where(DailyBar.code == bar["code"], DailyBar.trade_date == bar["trade_date"]))
-            if exists is None:
-                db.add(DailyBar(**bar))
-            else:
-                exists.open = float(bar["open"])
-                exists.high = float(bar["high"])
-                exists.low = float(bar["low"])
-                exists.close = float(bar["close"])
-                exists.volume = float(bar.get("volume") or 0)
-                exists.amount = float(bar.get("amount") or 0)
-                exists.pct_chg = float(bar.get("pct_chg") or 0)
-                exists.turnover_rate = float(bar.get("turnover_rate") or 0)
+            bar_code = str(bar.get("code") or code).strip()
+            trade_date = str(bar.get("trade_date") or "").strip()
+            if not bar_code or not trade_date:
+                continue
+            bar_key = (bar_code, trade_date)
+            if bar_key in seen_bars:
+                continue
+            seen_bars.add(bar_key)
+            bar_rows.append(
+                {
+                    "code": bar_code,
+                    "trade_date": trade_date,
+                    "open": float(bar.get("open") or 0),
+                    "high": float(bar.get("high") or 0),
+                    "low": float(bar.get("low") or 0),
+                    "close": float(bar.get("close") or 0),
+                    "volume": float(bar.get("volume") or 0),
+                    "amount": float(bar.get("amount") or 0),
+                    "pct_chg": float(bar.get("pct_chg") or 0),
+                    "turnover_rate": float(bar.get("turnover_rate") or 0),
+                    "ma5": _float_or_none(bar.get("ma5")),
+                    "ma10": _float_or_none(bar.get("ma10")),
+                    "ma20": _float_or_none(bar.get("ma20")),
+                    "ma60": _float_or_none(bar.get("ma60")),
+                    "volume_ratio_5d": _float_or_none(bar.get("volume_ratio_5d")),
+                }
+            )
+
+    _upsert_stock_rows(db, stock_rows)
+    if persist_bars:
+        _upsert_daily_bar_rows(db, bar_rows)
+
+
+def _upsert_stock_rows(db: Session, rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    for chunk in _chunked(rows, UPSERT_BATCH_SIZE):
+        stmt = mysql_insert(Stock).values(chunk)
+        db.execute(
+            stmt.on_duplicate_key_update(
+                name=stmt.inserted.name,
+                exchange=stmt.inserted.exchange,
+                industry=stmt.inserted.industry,
+                is_st=stmt.inserted.is_st,
+                list_status=stmt.inserted.list_status,
+                updated_at=stmt.inserted.updated_at,
+            )
+        )
+
+
+def _upsert_daily_bar_rows(db: Session, rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    for chunk in _chunked(rows, UPSERT_BATCH_SIZE):
+        stmt = mysql_insert(DailyBar).values(chunk)
+        db.execute(
+            stmt.on_duplicate_key_update(
+                open=stmt.inserted.open,
+                high=stmt.inserted.high,
+                low=stmt.inserted.low,
+                close=stmt.inserted.close,
+                volume=stmt.inserted.volume,
+                amount=stmt.inserted.amount,
+                pct_chg=stmt.inserted.pct_chg,
+                turnover_rate=stmt.inserted.turnover_rate,
+                ma5=stmt.inserted.ma5,
+                ma10=stmt.inserted.ma10,
+                ma20=stmt.inserted.ma20,
+                ma60=stmt.inserted.ma60,
+                volume_ratio_5d=stmt.inserted.volume_ratio_5d,
+            )
+        )
+
+
+def _chunked(rows: list[dict[str, Any]], chunk_size: int) -> list[list[dict[str, Any]]]:
+    return [rows[index : index + chunk_size] for index in range(0, len(rows), chunk_size)]
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value in {None, ""}:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _skill_version_id(skill: StrategySkill) -> str:

@@ -122,6 +122,50 @@ def _passes_universe(contract: dict[str, Any], context: dict[str, Any]) -> bool:
     return True
 
 
+def evaluate_skill_prefilter(
+    skill: StrategySkill,
+    stock: dict[str, Any],
+    stage: str = "market",
+) -> tuple[bool, str]:
+    contract = skill.contract or {}
+    context = dict(stock)
+    universe = contract.get("universe", {}) or {}
+    prefilter = ((contract.get("prefilter") or {}).get(stage) or {})
+
+    for rule in universe.get("include", []) or []:
+        if not evaluate(_rule_expr(rule), context):
+            return False, _rule_reason(rule, "universe_include")
+    for rule in universe.get("exclude", []) or []:
+        if evaluate(_rule_expr(rule), context):
+            return False, _rule_reason(rule, "universe_exclude")
+
+    for rule in prefilter.get("include", []) or []:
+        if not evaluate(_rule_expr(rule), context):
+            return False, _rule_reason(rule, "prefilter_include")
+
+    include_any = prefilter.get("include_any", []) or []
+    if include_any and not any(evaluate(_rule_expr(rule), context) for rule in include_any):
+        return False, "prefilter_include_any"
+
+    for rule in prefilter.get("exclude", []) or []:
+        if evaluate(_rule_expr(rule), context):
+            return False, _rule_reason(rule, "prefilter_exclude")
+
+    return True, "pass"
+
+
+def _rule_expr(rule: Any) -> str:
+    if isinstance(rule, dict):
+        return str(rule.get("when", "")).strip()
+    return str(rule).strip()
+
+
+def _rule_reason(rule: Any, fallback: str) -> str:
+    if isinstance(rule, dict):
+        return str(rule.get("reason") or rule.get("name") or fallback)
+    return fallback
+
+
 def _signal(
     skill: StrategySkill,
     score: float,

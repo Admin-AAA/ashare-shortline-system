@@ -66,12 +66,29 @@ def run_agent_skill(
         raise RuntimeError("未配置 ASHARE_AGENT_SKILL_API_KEY，无法执行真实 LLM Agent Skill。")
 
     # 生成会话 ID（若未提供）
-    if not session_id:
+    own_session = not bool(session_id)
+    if own_session:
         session_id = f"agent_skill_{uuid.uuid4().hex[:16]}"
 
-    invocation = build_agent_skill_invocation(skill, stock, snapshot, rule_signal, history, session_id)
-    review_raw = _run_llm_review(invocation)
-    review = normalize_agent_review(review_raw)
+    # 若是自生成 session，注册到全局注册表，让工具函数可以查库
+    if own_session:
+        from app.agents.session_registry import AgentSessionRegistry
+        from app.db.session import SessionLocal
+
+        AgentSessionRegistry.register(
+            session_id=session_id,
+            session_factory=lambda: SessionLocal(),
+            skills=[skill],
+            snapshot=snapshot,
+        )
+
+    try:
+        invocation = build_agent_skill_invocation(skill, stock, snapshot, rule_signal, history, session_id)
+        review_raw = _run_llm_review(invocation)
+        review = normalize_agent_review(review_raw)
+    finally:
+        if own_session:
+            AgentSessionRegistry.unregister(session_id)
 
     return {
         "skill_id": skill.skill_id,

@@ -115,8 +115,14 @@ def _eval(node: ast.AST, context: dict[str, Any]) -> Any:
             return any(values)
         raise UnsafeExpression("unsupported bool op")
 
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-        return not _eval(node.operand, context)
+    if isinstance(node, ast.UnaryOp):
+        if isinstance(node.op, ast.Not):
+            return not _eval(node.operand, context)
+        if isinstance(node.op, ast.USub):
+            return -_eval(node.operand, context)
+        if isinstance(node.op, ast.UAdd):
+            return +_eval(node.operand, context)
+        raise UnsafeExpression("unsupported unary op")
 
     if isinstance(node, ast.Compare):
         left = _eval(node.left, context)
