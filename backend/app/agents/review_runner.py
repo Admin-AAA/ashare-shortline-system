@@ -8,10 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.agents.session_registry import AgentSessionRegistry
-from app.agents.agno_skill_agent import (
-    create_skill_agent,
-    run_skill_agent,
-)
+from app.agents.agno_skill_agent import run_skill_agent_direct
 from app.agents.hallucination_check import verify_review_output
 from app.engine.skill_loader import StrategySkill
 
@@ -82,15 +79,12 @@ async def run_skill_reviews(
         try:
             rule_signal = rule_signals_by_skill.get(skill.skill_id)
 
-            agent = create_skill_agent(skill, session_id)
             review = await asyncio.wait_for(
-                run_skill_agent(
-                    agent=agent,
+                run_skill_agent_direct(
+                    skill=skill,
                     stock=stock,
                     snapshot=snapshot,
                     rule_signal=rule_signal,
-                    session_id=session_id,
-                    skill_id=skill.skill_id,
                 ),
                 timeout=SKILL_TIMEOUT_SECONDS,
             )

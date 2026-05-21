@@ -24,7 +24,7 @@ def _skill(skill_id: str = "test-skill") -> StrategySkill:
     )
 
 
-def test_run_skill_reviews_uses_agno_agent_and_primes_session(monkeypatch):
+def test_run_skill_reviews_uses_direct_path_and_primes_session(monkeypatch):
     skill = _skill()
     stock = {
         "code": "000001",
@@ -54,19 +54,10 @@ def test_run_skill_reviews_uses_agno_agent_and_primes_session(monkeypatch):
         snapshot=snapshot,
     )
 
-    created = []
+    direct_calls = []
 
-    def fake_create_skill_agent(skill_obj, session_id):
-        created.append((skill_obj.skill_id, session_id))
-        return {"skill_id": skill_obj.skill_id, "session_id": session_id}
-
-    async def fake_run_skill_agent(*, agent, stock, snapshot, rule_signal, session_id, skill_id):
-        ctx = AgentSessionRegistry.get(session_id)
-        assert ctx is not None
-        assert ctx.stocks_cache["000001"]["name"] == "平安银行"
-        assert ctx.strategy_signals_cache[f"{skill_id}:000001"]["score"] == 72.0
-        assert agent["skill_id"] == skill_id
-        assert rule_signal["phase"] == "发酵"
+    async def fake_run_skill_agent_direct(*, skill, stock, snapshot, rule_signal):
+        direct_calls.append((skill.skill_id, stock["code"], rule_signal["phase"] if rule_signal else None))
         return SkillReviewOutput(
             stance="support",
             score=78,
@@ -82,8 +73,7 @@ def test_run_skill_reviews_uses_agno_agent_and_primes_session(monkeypatch):
             next_day_plan=["竞价不强不做一致追高"],
         )
 
-    monkeypatch.setattr("app.agents.review_runner.create_skill_agent", fake_create_skill_agent)
-    monkeypatch.setattr("app.agents.review_runner.run_skill_agent", fake_run_skill_agent)
+    monkeypatch.setattr("app.agents.review_runner.run_skill_agent_direct", fake_run_skill_agent_direct)
 
     try:
         results = asyncio.run(
@@ -98,7 +88,7 @@ def test_run_skill_reviews_uses_agno_agent_and_primes_session(monkeypatch):
     finally:
         AgentSessionRegistry.unregister("sess_test_review_runner")
 
-    assert created == [(skill.skill_id, "sess_test_review_runner")]
+    assert direct_calls == [(skill.skill_id, "000001", "发酵")]
     assert len(results) == 1
     review = results[0]["review"]
     assert review["runtime"] == "agent_skill_agno"
