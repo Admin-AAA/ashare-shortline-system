@@ -4,7 +4,12 @@ from app.engine.evaluator import evaluate
 from app.engine.skill_loader import StrategySkill
 
 
-def run_strategy(skill: StrategySkill, stock: dict[str, Any], main_industries: list[str]) -> dict[str, Any]:
+def run_strategy(
+    skill: StrategySkill,
+    stock: dict[str, Any],
+    main_industries: list[str],
+    skip_universe_check: bool = False,
+) -> dict[str, Any]:
     contract = skill.contract or {}
     context = dict(stock)
     industry = stock.get("industry")
@@ -20,7 +25,7 @@ def run_strategy(skill: StrategySkill, stock: dict[str, Any], main_industries: l
         missing_fields=missing_fields,
     )
 
-    if not _passes_universe(contract, context):
+    if not skip_universe_check and not _passes_universe(contract, context):
         return _signal(skill, score=0, phase="排除", hard_veto=True, veto_reason="不在策略股票池", risk_flags=["不符合股票池"])
 
     phase = "未分类"

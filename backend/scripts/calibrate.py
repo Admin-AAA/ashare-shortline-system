@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -49,7 +49,7 @@ def print_comparison(title: str, default: dict[str, float], calibrated: dict[str
 
 def apply_to_db(db, agg_weights: dict[str, float], dsa_weights: dict[str, float]) -> None:
     """Write calibration results to CalibrationConfig table."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     all_weights = {**agg_weights, **dsa_weights}
     for key, value in all_weights.items():
         row = db.get(CalibrationConfig, key)

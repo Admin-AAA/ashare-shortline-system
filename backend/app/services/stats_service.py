@@ -17,6 +17,7 @@ from app.models.tables import (
     SkillRegistry,
     WatchItem,
 )
+from app.services.outcome_service import is_trade_executed, resolved_trade_return
 
 import logging
 logger = logging.getLogger(__name__)
@@ -61,14 +62,25 @@ def _get_overview_stats(db: Session, mode: str) -> dict[str, Any]:
     outcome_map: dict[str, Any] = {}
     if rec_ids:
         outcome_rows = list(db.execute(
-            select(RecommendationOutcome.recommendation_id, RecommendationOutcome.outcome_label, RecommendationOutcome.close_return, RecommendationOutcome.max_return, RecommendationOutcome.max_drawdown)
+            select(
+                RecommendationOutcome.recommendation_id,
+                RecommendationOutcome.outcome_label,
+                RecommendationOutcome.entry_triggered,
+                RecommendationOutcome.executed_return,
+                RecommendationOutcome.weighted_return,
+                RecommendationOutcome.close_return,
+                RecommendationOutcome.max_return,
+                RecommendationOutcome.max_drawdown,
+            )
             .where(RecommendationOutcome.recommendation_id.in_(rec_ids))
         ).all())
         outcome_map = {row.recommendation_id: row for row in outcome_rows}
 
     labeled = [row for row in outcome_rows if row.outcome_label != "pending"]
-    success_count = sum(1 for row in labeled if row.outcome_label == "success")
-    failed_count = sum(1 for row in labeled if row.outcome_label == "failed")
+    triggered = [row for row in labeled if is_trade_executed(row)]
+    success_count = sum(1 for row in triggered if row.outcome_label == "success")
+    failed_count = sum(1 for row in triggered if row.outcome_label == "failed")
+    missed_count = sum(1 for row in labeled if not is_trade_executed(row))
     reviewed_count = _reviewed_count(db, rec_ids)
     watched_count = _watched_count(db, run_ids)
 
@@ -77,13 +89,19 @@ def _get_overview_stats(db: Session, mode: str) -> dict[str, Any]:
         "run_count": len(runs),
         "recommendation_count": len(rec_rows),
         "labeled_count": len(labeled),
+        "triggered_count": len(triggered),
         "success_count": success_count,
         "failed_count": failed_count,
+        "missed_count": missed_count,
         "pending_count": max(0, len(rec_rows) - len(labeled)),
         "watch_count": watched_count,
         "reviewed_count": reviewed_count,
-        "hit_rate": round(success_count / len(labeled), 3) if labeled else 0.0,
-        "avg_return": _mean([row.close_return for row in labeled]),
+        "trigger_rate": round(len(triggered) / len(labeled), 3) if labeled else 0.0,
+        "hit_rate": round(success_count / len(triggered), 3) if triggered else 0.0,
+        "avg_return": _mean([resolved_trade_return(row) for row in triggered]),
+        "avg_executed_return": _mean([resolved_trade_return(row) for row in triggered]),
+        "avg_weighted_return": _mean([row.weighted_return for row in triggered]),
+        "avg_close_return": _mean([row.close_return for row in labeled]),
         "avg_max_return": _mean([row.max_return for row in labeled]),
         "avg_drawdown": _mean([row.max_drawdown for row in labeled]),
         "avg_score": _mean([row.final_score for row in rec_rows]),
@@ -126,7 +144,12 @@ def _get_skill_stats(db: Session, mode: str) -> list[dict[str, Any]]:
     outcome_map: dict[str, Any] = {}
     if rec_ids:
         outcome_rows = db.execute(
-            select(RecommendationOutcome.recommendation_id, RecommendationOutcome.outcome_label, RecommendationOutcome.close_return)
+            select(
+                RecommendationOutcome.recommendation_id,
+                RecommendationOutcome.outcome_label,
+                RecommendationOutcome.entry_triggered,
+                RecommendationOutcome.executed_return,
+            )
             .where(RecommendationOutcome.recommendation_id.in_(rec_ids))
         ).all()
         outcome_map = {row.recommendation_id: row for row in outcome_rows}
@@ -155,6 +178,7 @@ def _get_skill_stats(db: Session, mode: str) -> list[dict[str, Any]]:
                     "current_mode": reg.mode if reg else "unknown",
                     "sample_count": 0,
                     "labeled_count": 0,
+                    "triggered_count": 0,
                     "success_count": 0,
                     "avg_signal_score": 0.0,
                     "avg_final_score": 0.0,
@@ -177,15 +201,18 @@ def _get_skill_stats(db: Session, mode: str) -> list[dict[str, Any]]:
 
             if has_outcome:
                 row["labeled_count"] += 1
-                row["avg_return"] += float(outcome.close_return or 0)
-                if outcome.outcome_label == "success":
-                    row["success_count"] += 1
+                if is_trade_executed(outcome):
+                    row["triggered_count"] += 1
+                    row["avg_return"] += resolved_trade_return(outcome)
+                    if outcome.outcome_label == "success":
+                        row["success_count"] += 1
 
     t5 = time.perf_counter()
     result: list[dict[str, Any]] = []
     for row in buckets.values():
         sample_count = max(1, int(row["sample_count"]))
         labeled_count = int(row["labeled_count"])
+        triggered_count = int(row["triggered_count"])
         result.append(
             {
                 "skill_id": row["skill_id"],
@@ -194,11 +221,13 @@ def _get_skill_stats(db: Session, mode: str) -> list[dict[str, Any]]:
                 "sample_count": row["sample_count"],
                 "run_count": len(row["runs"]),
                 "labeled_count": labeled_count,
+                "triggered_count": triggered_count,
                 "success_count": row["success_count"],
-                "hit_rate": round(row["success_count"] / labeled_count, 3) if labeled_count else 0.0,
+                "trigger_rate": round(triggered_count / labeled_count, 3) if labeled_count else 0.0,
+                "hit_rate": round(row["success_count"] / triggered_count, 3) if triggered_count else 0.0,
                 "avg_signal_score": round(row["avg_signal_score"] / sample_count, 2),
                 "avg_final_score": round(row["avg_final_score"] / sample_count, 2),
-                "avg_return": round(row["avg_return"] / labeled_count, 2) if labeled_count else 0.0,
+                "avg_return": round(row["avg_return"] / triggered_count, 2) if triggered_count else 0.0,
                 "last_seen_at": row["last_seen_at"],
                 "top_market_regimes": _counter_rows(row["market_regimes"]),
                 "top_industries": _counter_rows(row["industries"]),
@@ -237,7 +266,12 @@ def _get_preset_stats(db: Session, mode: str) -> list[dict[str, Any]]:
     outcome_map: dict[str, Any] = {}
     if rec_ids:
         outcome_rows = db.execute(
-            select(RecommendationOutcome.recommendation_id, RecommendationOutcome.outcome_label, RecommendationOutcome.close_return)
+            select(
+                RecommendationOutcome.recommendation_id,
+                RecommendationOutcome.outcome_label,
+                RecommendationOutcome.entry_triggered,
+                RecommendationOutcome.executed_return,
+            )
             .where(RecommendationOutcome.recommendation_id.in_(rec_ids))
         ).all()
         outcome_map = {row.recommendation_id: row for row in outcome_rows}
@@ -254,6 +288,7 @@ def _get_preset_stats(db: Session, mode: str) -> list[dict[str, Any]]:
                 "run_count": 0,
                 "recommendation_count": 0,
                 "labeled_count": 0,
+                "triggered_count": 0,
                 "success_count": 0,
                 "avg_return": 0.0,
                 "avg_score": 0.0,
@@ -274,14 +309,17 @@ def _get_preset_stats(db: Session, mode: str) -> list[dict[str, Any]]:
             outcome = outcome_map.get(rec.recommendation_id)
             if outcome and outcome.outcome_label != "pending":
                 row["labeled_count"] += 1
-                row["avg_return"] += float(outcome.close_return or 0)
-                if outcome.outcome_label == "success":
-                    row["success_count"] += 1
+                if is_trade_executed(outcome):
+                    row["triggered_count"] += 1
+                    row["avg_return"] += resolved_trade_return(outcome)
+                    if outcome.outcome_label == "success":
+                        row["success_count"] += 1
 
     result: list[dict[str, Any]] = []
     for row in buckets.values():
         recommendation_count = max(1, int(row["recommendation_count"]))
         labeled_count = int(row["labeled_count"])
+        triggered_count = int(row["triggered_count"])
         result.append(
             {
                 "preset_id": row["preset_id"],
@@ -290,9 +328,11 @@ def _get_preset_stats(db: Session, mode: str) -> list[dict[str, Any]]:
                 "recommendation_count": row["recommendation_count"],
                 "skill_count": row["skill_count"],
                 "labeled_count": labeled_count,
+                "triggered_count": triggered_count,
                 "success_count": row["success_count"],
-                "hit_rate": round(row["success_count"] / labeled_count, 3) if labeled_count else 0.0,
-                "avg_return": round(row["avg_return"] / labeled_count, 2) if labeled_count else 0.0,
+                "trigger_rate": round(triggered_count / labeled_count, 3) if labeled_count else 0.0,
+                "hit_rate": round(row["success_count"] / triggered_count, 3) if triggered_count else 0.0,
+                "avg_return": round(row["avg_return"] / triggered_count, 2) if triggered_count else 0.0,
                 "avg_score": round(row["avg_score"] / recommendation_count, 2),
                 "last_run_at": row["last_run_at"],
             }
@@ -306,13 +346,19 @@ def _empty_overview(mode: str) -> dict[str, Any]:
         "run_count": 0,
         "recommendation_count": 0,
         "labeled_count": 0,
+        "triggered_count": 0,
         "success_count": 0,
         "failed_count": 0,
+        "missed_count": 0,
         "pending_count": 0,
         "watch_count": 0,
         "reviewed_count": 0,
         "hit_rate": 0.0,
+        "trigger_rate": 0.0,
         "avg_return": 0.0,
+        "avg_executed_return": 0.0,
+        "avg_weighted_return": 0.0,
+        "avg_close_return": 0.0,
         "avg_max_return": 0.0,
         "avg_drawdown": 0.0,
         "avg_score": 0.0,

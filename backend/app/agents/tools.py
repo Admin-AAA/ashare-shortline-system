@@ -20,13 +20,11 @@ from sqlalchemy import desc, func, select
 from app.agents.session_registry import AgentSessionRegistry
 from app.db.session import SessionLocal
 from app.models.tables import (
-    DailyBar,
-    DailyIndicator,
+    DailyKbar,
     DragonTiger,
     LimitUpBoard,
-    RawDragonTiger,
     Stock,
-    UnifiedQuote,
+    StockQuote,
 )
 
 
@@ -137,7 +135,7 @@ def query_stock_detail(code: str, session_id: str) -> dict:
     """查询个股全貌。
 
     从 stocks_cache 获取已构建的股票详情；若未命中则从本地数据库
-    （DailyBar + DailyIndicator + UnifiedQuote）查询并构建。
+    （DailyKbar + StockQuote）查询并构建。
 
     返回价格、技术指标、量能、风险、资金等结构化字段。
 
@@ -158,26 +156,34 @@ def query_stock_detail(code: str, session_id: str) -> dict:
         with _get_db(session_id) as (db, ctx2):
             ctx2 = ctx2 or ctx  # 优先用 with 返回的 ctx2，回退到外层 ctx
 
-            # 查询最新一条 UnifiedQuote
+            # 查询最新一条 StockQuote
             quote_row = db.scalar(
-                select(UnifiedQuote)
-                .where(UnifiedQuote.code == code)
-                .order_by(UnifiedQuote.trade_date.desc())
+                select(StockQuote)
+                .where(StockQuote.code == code)
+                .order_by(StockQuote.trade_date.desc())
                 .limit(1)
             )
             if quote_row is None:
                 return {"error": "未找到该股票数据", "code": code}
 
-            import json as _json
-
-            quote_data = _json.loads(quote_row.quote_json) if quote_row.quote_json else {}
+            quote_data = {
+                "code": quote_row.code,
+                "name": quote_row.name,
+                "price": float(quote_row.price or 0),
+                "pct": float(quote_row.pct or 0),
+                "turnover_rate": float(quote_row.turnover_rate or 0),
+                "amount_yi": float(quote_row.amount_yi or 0),
+                "free_mv_yi": float(quote_row.free_mv_yi or 0) if quote_row.free_mv_yi else None,
+                "pe_ttm": float(quote_row.pe_ttm) if quote_row.pe_ttm else None,
+                "industry": quote_row.industry,
+            }
 
             # 查询最近 60 条日 K
             bars = (
                 db.scalars(
-                    select(DailyBar)
-                    .where(DailyBar.code == code)
-                    .order_by(DailyBar.trade_date.desc())
+                    select(DailyKbar)
+                    .where(DailyKbar.code == code)
+                    .order_by(DailyKbar.trade_date.desc())
                     .limit(60)
                 )
                 .all()
@@ -187,15 +193,6 @@ def query_stock_detail(code: str, session_id: str) -> dict:
 
             # 按日期升序排列
             bars = list(reversed(bars))
-
-            # 查询最新 DailyIndicator
-            indicator_row = db.scalar(
-                select(DailyIndicator)
-                .where(DailyIndicator.code == code)
-                .order_by(DailyIndicator.trade_date.desc())
-                .limit(1)
-            )
-            indicator = indicator_row
 
             latest = bars[-1]
             closes = [float(bar.close) for bar in bars]
@@ -220,7 +217,7 @@ def query_stock_detail(code: str, session_id: str) -> dict:
 
             # 量能
             ma_vol20 = _ma(volumes, 20)
-            vol5_20 = float(latest.volume_ratio_5d) if latest.volume_ratio_5d is not None else (
+            vol5_20 = float(latest.vol_ratio_5) if latest.vol_ratio_5 is not None else (
                 _ma(volumes, 5) / ma_vol20 if ma_vol20 else 1.0
             )
 
@@ -232,8 +229,8 @@ def query_stock_detail(code: str, session_id: str) -> dict:
             off_high_pct = (price - max_high20) / max_high20 * 100 if max_high20 else 0.0
 
             max_dd20: float = 0.0
-            if indicator is not None and indicator.max_dd20 is not None:
-                max_dd20 = float(indicator.max_dd20)
+            if latest.max_dd20 is not None:
+                max_dd20 = float(latest.max_dd20)
             else:
                 peak = closes[-min(20, len(closes))]
                 for i in range(len(closes) - min(20, len(closes)) + 1, len(closes)):
@@ -242,8 +239,8 @@ def query_stock_detail(code: str, session_id: str) -> dict:
                     max_dd20 = min(max_dd20, dd)
 
             upper_shadow_count20: int = 0
-            if indicator is not None:
-                upper_shadow_count20 = int(indicator.upper_shadow_count20 or 0)
+            if latest.upper_shadow_count20 is not None:
+                upper_shadow_count20 = int(latest.upper_shadow_count20 or 0)
             else:
                 upper_shadow_count20 = _upper_shadow_count(bars[-20:])
 
@@ -409,17 +406,26 @@ def audit_data_quality(code: str, session_id: str) -> dict:
         with _get_db(session_id) as (db, _ctx):
             import json as _json
 
-            # 查询 UnifiedQuote
+            # 查询 StockQuote
             quote_row = db.scalar(
-                select(UnifiedQuote)
-                .where(UnifiedQuote.code == code)
-                .order_by(UnifiedQuote.trade_date.desc())
+                select(StockQuote)
+                .where(StockQuote.code == code)
+                .order_by(StockQuote.trade_date.desc())
                 .limit(1)
             )
             if quote_row is None and stock is None:
                 return {"error": "未找到该股票数据", "code": code}
 
-            quote_data = _json.loads(quote_row.quote_json) if quote_row and quote_row.quote_json else {}
+            quote_data = {
+                "code": quote_row.code,
+                "name": quote_row.name,
+                "price": float(quote_row.price or 0),
+                "pct": float(quote_row.pct or 0),
+                "pe_ttm": float(quote_row.pe_ttm) if quote_row.pe_ttm else None,
+                "industry": quote_row.industry,
+                "main_net_inflow_yi": None,
+                "free_mv_yi": float(quote_row.free_mv_yi or 0) if quote_row.free_mv_yi else None,
+            } if quote_row else {}
 
             # 统计特征来源
             missing_fields: list[str] = []
@@ -521,9 +527,9 @@ def query_stock_history(code: str, days: int, session_id: str) -> dict:
         with _get_db(session_id) as (db, _ctx):
             bars = (
                 db.scalars(
-                    select(DailyBar)
-                    .where(DailyBar.code == code)
-                    .order_by(DailyBar.trade_date.desc())
+                    select(DailyKbar)
+                    .where(DailyKbar.code == code)
+                    .order_by(DailyKbar.trade_date.desc())
                     .limit(max(1, min(days, 120)))
                 )
                 .all()
@@ -560,7 +566,7 @@ def query_dragon_tiger(code: str, session_id: str) -> dict:
     """查询个股最新龙虎榜数据。
 
     从 DragonTiger 标准化表获取最新交易日的龙虎榜上榜信息，
-    同时尝试从 RawDragonTiger 原始数据中提取详细的买卖席位列表。
+    从 DragonTiger 标准化表获取龙虎榜上榜信息及买卖席位。
 
     返回买入席位、卖出席位、净买入额、机构参与度、游资标记等。
 
@@ -590,43 +596,7 @@ def query_dragon_tiger(code: str, session_id: str) -> dict:
             buy_seats: list[dict] = []
             sell_seats: list[dict] = []
 
-            # 尝试从原始数据提取更详细的席位信息
-            raw_row = db.scalar(
-                select(RawDragonTiger)
-                .where(
-                    RawDragonTiger.code == code,
-                    RawDragonTiger.trade_date == dt_row.trade_date,
-                )
-                .limit(1)
-            )
-            if raw_row and raw_row.payload_json:
-                import json as _json
-
-                try:
-                    raw_data = _json.loads(raw_row.payload_json)
-                    # 东方财富格式：BUYER_TRADER_NAME1-N, BUYER_TRADER_AMT1-N
-                    for i in range(1, 6):
-                        seat_name = raw_data.get(f"BUYER_TRADER_NAME{i}") or raw_data.get(f"BUYER_TRADER_NAME_{i}") or ""
-                        seat_amt = raw_data.get(f"BUYER_TRADER_AMT{i}") or raw_data.get(f"BUYER_TRADER_AMT_{i}") or 0
-                        if seat_name and float(seat_amt) > 0:
-                            buy_seats.append({
-                                "rank": i,
-                                "name": str(seat_name),
-                                "amount_yi": round(float(seat_amt) / 1e8, 4),
-                            })
-                    for i in range(1, 6):
-                        seat_name = raw_data.get(f"SELLER_TRADER_NAME{i}") or raw_data.get(f"SELLER_TRADER_NAME_{i}") or ""
-                        seat_amt = raw_data.get(f"SELLER_TRADER_AMT{i}") or raw_data.get(f"SELLER_TRADER_AMT_{i}") or 0
-                        if seat_name and float(seat_amt) > 0:
-                            sell_seats.append({
-                                "rank": i,
-                                "name": str(seat_name),
-                                "amount_yi": round(float(seat_amt) / 1e8, 4),
-                            })
-                except Exception:
-                    pass
-
-            # 若从原始数据未解析出席位，用标准化表的 top_buy_broker / top_sell_broker 兜底
+            # 用标准化表的 top_buy_broker / top_sell_broker 获取席位信息
             if not buy_seats and dt_row.top_buy_broker:
                 buy_seats = [{"rank": 1, "name": dt_row.top_buy_broker, "amount_yi": buy_amount}]
             if not sell_seats and dt_row.top_sell_broker:
@@ -698,21 +668,18 @@ def query_industry_peers(code: str, session_id: str) -> dict:
 
             # 获取目标股票的最新 quote 和行业信息
             quote_row = db.scalar(
-                select(UnifiedQuote)
-                .where(UnifiedQuote.code == code)
-                .order_by(UnifiedQuote.trade_date.desc())
+                select(StockQuote)
+                .where(StockQuote.code == code)
+                .order_by(StockQuote.trade_date.desc())
                 .limit(1)
             )
             if quote_row is None:
                 return {"error": "未找到该股票数据", "code": code}
 
-            import json as _json
-
-            quote_data = _json.loads(quote_row.quote_json) if quote_row.quote_json else {}
             trade_date = quote_row.trade_date
 
-            # 行业来源：优先 quote_json，其次 Stock 表
-            industry = quote_data.get("industry") or ""
+            # 行业来源：优先 StockQuote，其次 Stock 表
+            industry = quote_row.industry or ""
             if (not industry or industry == "未分类"):
                 stock_row = db.scalar(select(Stock).where(Stock.code == code))
                 if stock_row and stock_row.industry:
@@ -720,13 +687,13 @@ def query_industry_peers(code: str, session_id: str) -> dict:
             if not industry or industry == "未分类":
                 return {"error": "该股票无行业分类信息", "code": code}
 
-            # 获取同行业所有股票的最新 UnifiedQuote
+            # 获取同行业所有股票的最新 StockQuote
             peer_quotes = (
                 db.execute(
-                    select(UnifiedQuote, Stock)
-                    .join(Stock, UnifiedQuote.code == Stock.code)
-                    .where(Stock.industry == industry, UnifiedQuote.code != code)
-                    .order_by(UnifiedQuote.trade_date.desc())
+                    select(StockQuote, Stock)
+                    .join(Stock, StockQuote.code == Stock.code)
+                    .where(Stock.industry == industry, StockQuote.code != code)
+                    .order_by(StockQuote.trade_date.desc())
                 )
                 .all()
             )
@@ -746,24 +713,23 @@ def query_industry_peers(code: str, session_id: str) -> dict:
                         peer_rows.append((quote, stock))
 
             # 解析目标股票自身数据
-            self_name = quote_data.get("name") or code
-            self_pct = _num(quote_data.get("pct"))
-            self_amount_yi = _num(quote_data.get("amount_yi"))
-            self_turnover = _num(quote_data.get("turnover_rate"))
-            self_free_mv_yi = _num(quote_data.get("free_mv_yi"))
+            self_name = quote_row.name or code
+            self_pct = _num(quote_row.pct)
+            self_amount_yi = _num(quote_row.amount_yi)
+            self_turnover = _num(quote_row.turnover_rate)
+            self_free_mv_yi = _num(quote_row.free_mv_yi)
 
             # 构建同业列表并排序
             peers: list[dict] = []
             all_pcts: list[float] = [self_pct]
             for quote, stock in peer_rows:
-                peer_data = _json.loads(quote.quote_json) if quote.quote_json else {}
-                peer_pct = _num(peer_data.get("pct"))
-                peer_amount = _num(peer_data.get("amount_yi"))
-                peer_turnover = _num(peer_data.get("turnover_rate"))
-                peer_mv = _num(peer_data.get("free_mv_yi"))
+                peer_pct = _num(quote.pct)
+                peer_amount = _num(quote.amount_yi)
+                peer_turnover = _num(quote.turnover_rate)
+                peer_mv = _num(quote.free_mv_yi)
                 peers.append({
                     "code": quote.code,
-                    "name": peer_data.get("name") or str(stock.name),
+                    "name": quote.name or str(stock.name),
                     "pct": round(peer_pct, 3),
                     "amount_yi": round(peer_amount, 3),
                     "turnover_rate": round(peer_turnover, 3),
@@ -845,10 +811,10 @@ def _upper_shadow_count(bars_20: list) -> int:
     """统计 20 日内上影线天数。"""
     count = 0
     for bar in bars_20:
-        high = float(getattr(bar, "high", bar["high"]) if isinstance(bar, DailyBar) else bar["high"])
-        close = float(getattr(bar, "close", bar["close"]) if isinstance(bar, DailyBar) else bar["close"])
-        open_ = float(getattr(bar, "open", bar["open"]) if isinstance(bar, DailyBar) else bar["open"])
-        low = float(getattr(bar, "low", bar["low"]) if isinstance(bar, DailyBar) else bar["low"])
+        high = float(getattr(bar, "high", bar["high"]) if isinstance(bar, DailyKbar) else bar["high"])
+        close = float(getattr(bar, "close", bar["close"]) if isinstance(bar, DailyKbar) else bar["close"])
+        open_ = float(getattr(bar, "open", bar["open"]) if isinstance(bar, DailyKbar) else bar["open"])
+        low = float(getattr(bar, "low", bar["low"]) if isinstance(bar, DailyKbar) else bar["low"])
         body = abs(close - open_)
         upper = high - max(close, open_)
         shadow_range = high - low
@@ -862,13 +828,11 @@ def _detect_missing(quote_data: dict, bars: list) -> list[str]:
     missing: list[str] = []
     if not quote_data.get("industry") or quote_data.get("industry") == "未分类":
         missing.append("industry")
-    if not quote_data.get("main_net_inflow_yi"):
-        missing.append("main_net_inflow")
     if not quote_data.get("pe_ttm"):
         missing.append("valuation")
     if not bars or len(bars) < 30:
         missing.append("kline_history")
+    missing.append("capital_flow")
     missing.append("news")
-    missing.append("announcements")
     missing.append("dragon_tiger")
     return sorted(missing)

@@ -60,7 +60,7 @@ async def run_skill_reviews(
     # 筛选有 SKILL.md 的已启用 Skill
     active_skills = [s for s in skills if s.enabled and s.skill_body.strip()]
 
-    SKILL_TIMEOUT_SECONDS = int(get_settings().agent_skill_timeout_seconds * 1.5)
+    SKILL_TIMEOUT_SECONDS = max(60, int(get_settings().agent_skill_timeout_seconds))
     _prime_agent_session_context(session_id, stock, rule_signals_by_skill)
 
     async def review_one(skill: StrategySkill, stagger_index: int = 0) -> dict[str, Any]:

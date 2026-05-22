@@ -7,6 +7,7 @@ from app.db.session import get_db
 from app.services.cost_service import (
     cost_summary,
     delete_scheduled_task,
+    list_scheduled_task_runs,
     list_scheduled_tasks,
     record_task_run,
     system_health,
@@ -32,6 +33,13 @@ def get_costs(days: int = 30, db: Session = Depends(get_db)):
 @router.get("/tasks")
 def get_tasks(db: Session = Depends(get_db)):
     return list_scheduled_tasks(db)
+
+
+@router.get("/task-runs")
+def get_task_runs(limit: int = 100, db: Session = Depends(get_db)):
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+    return list_scheduled_task_runs(db, limit=limit)
 
 
 @router.get("/source-health")

@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, select
@@ -16,11 +16,11 @@ from sqlalchemy.orm import Session
 from app.models.tables import (
     CapitalFlow,
     ConceptSector,
-    DailyBar,
+    DailyKbar,
     DragonTiger,
     RecommendationRun,
     SkillRegistry,
-    UnifiedQuote,
+    StockQuote,
 )
 
 
@@ -51,7 +51,7 @@ def active_alerts(db: Session) -> list[dict[str, Any]]:
             })
 
     # 系统级告警
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     # 最近一次推荐运行是否在 24 小时内
     latest_run = db.scalar(
@@ -86,16 +86,16 @@ def readiness_check(db: Session) -> dict[str, Any]:
     from app.core.config import get_settings
 
     settings = get_settings()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     today = now.strftime("%Y-%m-%d")
 
     checks = {}
 
     # 报价数据
-    quote_count = db.scalar(select(func.count()).select_from(UnifiedQuote)) or 0
+    quote_count = db.scalar(select(func.count()).select_from(StockQuote)) or 0
     recent_quotes = db.scalar(
-        select(func.count()).select_from(UnifiedQuote).where(
-            UnifiedQuote.updated_at >= now - timedelta(hours=24)
+        select(func.count()).select_from(StockQuote).where(
+            StockQuote.snapped_at >= now - timedelta(hours=24)
         )
     ) or 0
     checks["quote"] = {
@@ -106,10 +106,10 @@ def readiness_check(db: Session) -> dict[str, Any]:
     }
 
     # K线数据
-    bar_count = db.scalar(select(func.count()).select_from(DailyBar)) or 0
+    bar_count = db.scalar(select(func.count()).select_from(DailyKbar)) or 0
     today_bars = db.scalar(
-        select(func.count()).select_from(DailyBar).where(
-            DailyBar.trade_date >= today
+        select(func.count()).select_from(DailyKbar).where(
+            DailyKbar.trade_date >= today
         )
     ) or 0
     checks["daily_bar"] = {

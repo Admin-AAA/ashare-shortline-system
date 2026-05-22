@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, select, text
@@ -16,21 +16,13 @@ from app.models.tables import (
     CapitalFlow,
     ConceptSector,
     ConceptSectorStock,
-    DailyBar,
-    DailyIndicator,
+    DailyKbar,
     DataSourceConfig,
     DataSourceHealth,
     DragonTiger,
     LimitUpBoard,
     NewsAnnouncement,
-    RawCapitalFlow,
-    RawConceptSector,
-    RawDailyBar,
-    RawDragonTiger,
-    RawLimitUpBoard,
-    RawNewsAnnouncement,
-    RawQuote,
-    UnifiedQuote,
+    StockQuote,
 )
 from app.services.market_auxiliary import (
     _capital_flow_sources,
@@ -94,19 +86,19 @@ def get_local_pool_status(
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
     latest_allowed_bar_date = _latest_allowed_bar_date()
-    latest_quote_date_for_coverage = db.scalar(select(func.max(UnifiedQuote.trade_date)))
+    latest_quote_date_for_coverage = db.scalar(select(func.max(StockQuote.trade_date)))
     coverage_trade_date = _coverage_reference_date(latest_quote_date_for_coverage, latest_allowed_bar_date)
 
     # ── 快速近似计数（MySQL information_schema，O(1)）──
     approx = _approx_table_counts(db, [
-        "raw_quotes", "raw_daily_bars", "unified_quotes", "daily_bars", "daily_indicators",
+        "stock_quotes", "daily_kbars",
         "limit_up_board", "concept_sector", "capital_flow", "dragon_tiger", "news_announcement",
     ])
-    raw_quote_count = approx.get("raw_quotes", 0)
-    raw_bar_count = approx.get("raw_daily_bars", 0)
-    unified_quote_count = approx.get("unified_quotes", 0)
-    daily_bar_row_count = approx.get("daily_bars", 0)
-    daily_indicator_count = approx.get("daily_indicators", 0)
+    raw_quote_count = 0
+    raw_bar_count = 0
+    unified_quote_count = approx.get("stock_quotes", 0)
+    daily_bar_row_count = approx.get("daily_kbars", 0)
+    daily_indicator_count = 0
     limit_up_board_count = approx.get("limit_up_board", 0)
     concept_sector_count = approx.get("concept_sector", 0)
     capital_flow_count = approx.get("capital_flow", 0)
@@ -114,23 +106,23 @@ def get_local_pool_status(
     news_count = approx.get("news_announcement", 0)
 
     # ── 必须精确的计数：active_unified_quote（用于覆盖率计算）──
-    active_unified_quote_count = _count_with_limit(db, UnifiedQuote, UnifiedQuote.freshness_status != "inactive")
+    active_unified_quote_count = _count_with_limit(db, StockQuote, StockQuote.freshness_status != "inactive")
     bars_with_indicators = _count_with_limit(
-        db, DailyBar,
-        (DailyBar.trade_date <= latest_allowed_bar_date) & (DailyBar.ma5.isnot(None))
+        db, DailyKbar,
+        (DailyKbar.trade_date <= latest_allowed_bar_date) & (DailyKbar.ma5.isnot(None))
     )
-    indicator_coverage_pct = round(bars_with_indicators / daily_bar_row_count * 100, 1) if daily_bar_row_count else 0.0
+    indicator_coverage_pct = round(bars_with_indicators / max(1, daily_bar_row_count) * 100, 1) if daily_bar_row_count else 0.0
     t_counts = time.perf_counter()
 
     # ── 日期/时间聚合 ──
-    latest_unified = db.scalar(select(func.max(UnifiedQuote.fetched_at)))
-    latest_bar_date = db.scalar(select(func.max(DailyBar.trade_date)).where(DailyBar.trade_date <= latest_allowed_bar_date))
+    latest_unified = db.scalar(select(func.max(StockQuote.snapped_at)))
+    latest_bar_date = db.scalar(select(func.max(DailyKbar.trade_date)).where(DailyKbar.trade_date <= latest_allowed_bar_date))
     latest_quote_date = latest_quote_date_for_coverage
     t_dates = time.perf_counter()
 
-    # ── 一次性加载全部活跃 UnifiedQuote 行 + 日K汇总 ──
+    # ── 一次性加载全部活跃 StockQuote 行 + 日K汇总 ──
     all_quote_rows = db.scalars(
-        select(UnifiedQuote).where(UnifiedQuote.freshness_status != "inactive")
+        select(StockQuote).where(StockQuote.freshness_status != "inactive")
     ).all()
     active_unified_codes = [row.code for row in all_quote_rows]
     t_load_quotes = time.perf_counter()
@@ -142,12 +134,12 @@ def get_local_pool_status(
     active_daily_bar_code_count = full_market_daily_bar_code_count
     # daily_bar_code_count: 同上（含所有历史日期的 codes 数）；用近似值兜底
     daily_bar_code_count = db.scalar(
-        select(func.count(func.distinct(DailyBar.code)))
-        .where(DailyBar.trade_date <= latest_allowed_bar_date)
+        select(func.count(func.distinct(DailyKbar.code)))
+        .where(DailyKbar.trade_date <= latest_allowed_bar_date)
     ) or 0
     t_full_market_bars = time.perf_counter()
 
-    from app.services.market_pool import _loads, _apply_local_quote_metrics, local_pool_recommendation_readiness
+    from app.services.market_pool import _apply_local_quote_metrics, local_pool_recommendation_readiness
     from app.services.market_data import _candidate_filter_summary, _select_candidates
 
     all_quotes = _unified_rows_to_quotes(all_quote_rows, skip_metrics=True)
@@ -244,7 +236,7 @@ def set_data_source_enabled(
         return None
     row.enabled = enabled
     row.note = note
-    row.updated_at = datetime.utcnow()
+    row.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.commit()
     return next(
         (
@@ -294,7 +286,7 @@ def sync_data_source_configs(db: Session) -> None:
                     changed = True
                 elif row.priority != index:
                     row.priority = index
-                    row.updated_at = datetime.utcnow()
+                    row.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
                     changed = True
         if not changed:
             return
@@ -355,12 +347,12 @@ def _load_bar_summaries_for_codes(
         return {}
     rows = db.execute(
         select(
-            DailyBar.code,
+            DailyKbar.code,
             func.count().label("bar_count"),
-            func.max(DailyBar.trade_date).label("latest_trade_date"),
+            func.max(DailyKbar.trade_date).label("latest_trade_date"),
         )
-        .where(DailyBar.code.in_(codes), DailyBar.trade_date <= latest_allowed_bar_date)
-        .group_by(DailyBar.code)
+        .where(DailyKbar.code.in_(codes), DailyKbar.trade_date <= latest_allowed_bar_date)
+        .group_by(DailyKbar.code)
     ).all()
     return {
         row.code: {"bar_count": int(row.bar_count or 0), "latest_trade_date": str(row.latest_trade_date or "")}
@@ -410,12 +402,12 @@ def _coverage_reference_date(latest_quote_date: str | None, latest_allowed_bar_d
 def _raw_quote_source_rows(db: Session) -> list[dict[str, Any]]:
     rows = db.execute(
         select(
-            RawQuote.source,
+            StockQuote.source,
             func.count().label("row_count"),
-            func.count(func.distinct(RawQuote.code)).label("code_count"),
-            func.max(RawQuote.trade_date).label("latest_trade_date"),
-            func.max(RawQuote.fetched_at).label("latest_fetched_at"),
-        ).group_by(RawQuote.source)
+            func.count(func.distinct(StockQuote.code)).label("code_count"),
+            func.max(StockQuote.trade_date).label("latest_trade_date"),
+            func.max(StockQuote.snapped_at).label("latest_fetched_at"),
+        ).group_by(StockQuote.source)
     ).all()
     return [
         {
@@ -433,14 +425,14 @@ def _raw_bar_source_rows(db: Session) -> list[dict[str, Any]]:
     latest_allowed_bar_date = _latest_allowed_bar_date()
     rows = db.execute(
         select(
-            RawDailyBar.source,
+            DailyKbar.source,
             func.count().label("row_count"),
-            func.count(func.distinct(RawDailyBar.code)).label("code_count"),
-            func.max(RawDailyBar.trade_date).label("latest_trade_date"),
-            func.max(RawDailyBar.fetched_at).label("latest_fetched_at"),
+            func.count(func.distinct(DailyKbar.code)).label("code_count"),
+            func.max(DailyKbar.trade_date).label("latest_trade_date"),
+            func.max(DailyKbar.updated_at).label("latest_fetched_at"),
         )
-        .where(RawDailyBar.trade_date <= latest_allowed_bar_date)
-        .group_by(RawDailyBar.source)
+        .where(DailyKbar.trade_date <= latest_allowed_bar_date)
+        .group_by(DailyKbar.source)
     ).all()
     return [
         {
@@ -458,9 +450,9 @@ def _unified_quote_rows(db: Session, limit: int = 50, offset: int = 0) -> list[d
     from app.services.market_pool import _quote_metrics_from_bars
 
     rows = db.scalars(
-        select(UnifiedQuote)
-        .where(UnifiedQuote.freshness_status != "inactive")
-        .order_by(UnifiedQuote.quality_score.desc(), UnifiedQuote.fetched_at.desc())
+        select(StockQuote)
+        .where(StockQuote.freshness_status != "inactive")
+        .order_by(StockQuote.quality_score.desc(), StockQuote.snapped_at.desc())
         .offset(offset)
         .limit(limit)
     ).all()
@@ -476,14 +468,14 @@ def _daily_bar_rows(db: Session, limit: int = 50, offset: int = 0) -> list[dict[
     latest_allowed_bar_date = _latest_allowed_bar_date()
     rows = db.execute(
         select(
-            DailyBar.code,
+            DailyKbar.code,
             func.count().label("bar_count"),
-            func.min(DailyBar.trade_date).label("first_trade_date"),
-            func.max(DailyBar.trade_date).label("latest_trade_date"),
+            func.min(DailyKbar.trade_date).label("first_trade_date"),
+            func.max(DailyKbar.trade_date).label("latest_trade_date"),
         )
-        .where(DailyBar.trade_date <= latest_allowed_bar_date)
-        .group_by(DailyBar.code)
-        .order_by(func.max(DailyBar.trade_date).desc(), func.count().desc())
+        .where(DailyKbar.trade_date <= latest_allowed_bar_date)
+        .group_by(DailyKbar.code)
+        .order_by(func.max(DailyKbar.trade_date).desc(), func.count().desc())
         .offset(offset)
         .limit(limit)
     ).all()
@@ -498,30 +490,46 @@ def _daily_bar_rows(db: Session, limit: int = 50, offset: int = 0) -> list[dict[
     ]
 
 
-def _unified_quote_payload(db: Session, row: UnifiedQuote, precomputed_metrics: dict[str, float] | None = None) -> dict[str, Any]:
+def _unified_quote_payload(db: Session, row: StockQuote, precomputed_metrics: dict[str, float] | None = None) -> dict[str, Any]:
     from app.services.market_pool import _apply_local_quote_metrics, enrich_quote_with_local_metrics
 
-    quote = _loads(row.quote_json, {})
-    source_trace = _loads(row.source_trace_json, {})
-    if isinstance(quote, dict):
-        quote["source_trace"] = source_trace
-        if precomputed_metrics is not None:
-            _apply_local_quote_metrics(quote, precomputed_metrics)
-        else:
-            quote = enrich_quote_with_local_metrics(db, row.code, quote)
-        source_trace = quote.pop("source_trace", source_trace)
-    raw_sources = source_trace.get("raw_sources") or quote.get("raw_sources") or []
-    if isinstance(raw_sources, list) and raw_sources:
-        source_count = len({str(source) for source in raw_sources if source})
+    quote = {
+        "code": row.code,
+        "name": row.name,
+        "trade_date": row.trade_date,
+        "price": float(row.price or 0),
+        "pct": float(row.pct or 0),
+        "volume": float(row.volume or 0),
+        "amount_yi": float(row.amount_yi or 0),
+        "turnover_rate": float(row.turnover_rate or 0),
+        "pe_ttm": float(row.pe_ttm) if row.pe_ttm else None,
+        "total_mv_yi": float(row.total_mv_yi) if row.total_mv_yi else None,
+        "free_mv_yi": float(row.free_mv_yi) if row.free_mv_yi else None,
+        "chg60": float(row.chg60) if row.chg60 else None,
+        "high": float(row.high) if row.high else None,
+        "low": float(row.low) if row.low else None,
+        "open": float(row.open) if row.open else None,
+        "preclose": float(row.preclose) if row.preclose else None,
+        "industry": row.industry or "",
+        "source_count": row.source_count,
+        "quality_score": row.quality_score,
+        "freshness_status": row.freshness_status,
+        "fetched_at": row.snapped_at.isoformat() if row.snapped_at else None,
+        "raw_sources": [row.source] if row.source else [],
+        "conflicts": [],
+    }
+    source_trace = {"raw_sources": [row.source]} if row.source else {}
+    if precomputed_metrics is not None:
+        _apply_local_quote_metrics(quote, precomputed_metrics)
     else:
-        source_count = int(source_trace.get("source_count") or quote.get("source_count") or row.source_count or 0)
+        quote = enrich_quote_with_local_metrics(db, row.code, quote)
     return {
         "code": row.code,
         "trade_date": row.trade_date,
-        "source_count": source_count,
+        "source_count": row.source_count or 0,
         "quality_score": row.quality_score,
         "freshness_status": row.freshness_status,
-        "fetched_at": row.fetched_at.isoformat() if row.fetched_at else None,
+        "fetched_at": row.snapped_at.isoformat() if row.snapped_at else None,
         "quote": quote,
         "source_trace": source_trace,
     }
@@ -530,11 +538,11 @@ def _unified_quote_payload(db: Session, row: UnifiedQuote, precomputed_metrics: 
 def _raw_aux_source_rows(db: Session) -> list[dict[str, Any]]:
     """汇总所有辅助数据源的 original source breakdown。"""
     aux_models: dict[str, tuple[type, str]] = {
-        "limit_up": (RawLimitUpBoard, "limit_up"),
-        "concept_sector": (RawConceptSector, "concept_sector"),
-        "capital_flow": (RawCapitalFlow, "capital_flow"),
-        "dragon_tiger": (RawDragonTiger, "dragon_tiger"),
-        "news": (RawNewsAnnouncement, "news"),
+        "limit_up": (LimitUpBoard, "limit_up"),
+        "concept_sector": (ConceptSector, "concept_sector"),
+        "capital_flow": (CapitalFlow, "capital_flow"),
+        "dragon_tiger": (DragonTiger, "dragon_tiger"),
+        "news": (NewsAnnouncement, "news"),
     }
     rows: list[dict[str, Any]] = []
     for aux_type, (model, label) in aux_models.items():
@@ -542,7 +550,7 @@ def _raw_aux_source_rows(db: Session) -> list[dict[str, Any]]:
             select(
                 model.source,
                 func.count().label("row_count"),
-                func.max(model.fetched_at).label("latest_fetched_at"),
+                func.max(model.created_at).label("latest_fetched_at"),
             ).group_by(model.source)
         ).all():
             rows.append({
@@ -555,26 +563,40 @@ def _raw_aux_source_rows(db: Session) -> list[dict[str, Any]]:
 
 
 def _unified_rows_to_quotes(rows: list, skip_metrics: bool = False) -> list[dict[str, Any]]:
-    """从 UnifiedQuote ORM 行直接构建 quote 字典，避免重复查询。"""
+    """从 StockQuote ORM 行直接构建 quote 字典，避免重复查询。"""
     quotes = []
     for row in rows:
-        quote = _loads(row.quote_json, {})
-        if not quote:
-            continue
-        quote["trade_date"] = row.trade_date
-        quote["source_count"] = row.source_count
-        quote["quality_score"] = row.quality_score
-        quote["freshness_status"] = row.freshness_status
-        quote["fetched_at"] = row.fetched_at.isoformat()
-        quote["source_trace"] = _loads(row.source_trace_json, {})
-        quote["raw_sources"] = quote["source_trace"].get("raw_sources", [])
-        quote["conflicts"] = quote["source_trace"].get("conflicts", [])
+        quote = {
+            "code": row.code,
+            "name": row.name,
+            "trade_date": row.trade_date,
+            "price": float(row.price or 0),
+            "pct": float(row.pct or 0),
+            "volume": float(row.volume or 0),
+            "amount_yi": float(row.amount_yi or 0),
+            "turnover_rate": float(row.turnover_rate or 0),
+            "pe_ttm": float(row.pe_ttm) if row.pe_ttm else None,
+            "total_mv_yi": float(row.total_mv_yi) if row.total_mv_yi else None,
+            "free_mv_yi": float(row.free_mv_yi) if row.free_mv_yi else None,
+            "chg60": float(row.chg60) if row.chg60 else None,
+            "high": float(row.high) if row.high else None,
+            "low": float(row.low) if row.low else None,
+            "open": float(row.open) if row.open else None,
+            "preclose": float(row.preclose) if row.preclose else None,
+            "industry": row.industry or "",
+            "source_count": row.source_count,
+            "quality_score": row.quality_score,
+            "freshness_status": row.freshness_status,
+            "fetched_at": row.snapped_at.isoformat() if row.snapped_at else "",
+            "raw_sources": [row.source] if row.source else [],
+            "conflicts": [],
+        }
         quotes.append(quote)
     return quotes
 
 
 def _unified_quote_rows_from_rows(all_rows: list, limit: int = 50, offset: int = 0, db: Session = None) -> list[dict[str, Any]]:
-    """从预加载的 UnifiedQuote ORM 行构建分页的 quote 展示数据。"""
+    """从预加载的 StockQuote ORM 行构建分页的 quote 展示数据。"""
     from app.services.market_pool import _quote_metrics_from_bars, _apply_local_quote_metrics, enrich_quote_with_local_metrics
 
     # 按质量分数降序排序后分页
@@ -607,13 +629,3 @@ def _previous_weekday(day: date) -> date:
         current -= timedelta(days=1)
     return current
 
-
-def _loads(raw: str | None, default: Any) -> Any:
-    if not raw:
-        return default
-    try:
-        import json
-
-        return json.loads(raw)
-    except Exception:  # noqa: BLE001 - best effort dashboard payload
-        return default

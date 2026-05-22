@@ -320,9 +320,9 @@ def test_authenticity_treats_composite_scores_as_observed_when_inputs_are_real()
     assert enriched["data_authenticity"] >= 0.8
 
 
-def test_default_presets_do_not_overwrite_user_skill_selection():
+def test_default_presets_do_not_overwrite_user_skill_selection(clean_test_db):
     from app.db.session import SessionLocal
-    from app.models.tables import Preset, PresetSkill
+    from app.models.tables import Preset, PresetSkill, SkillRegistry
     from app.services import workbench_service
 
     db = SessionLocal()
@@ -334,10 +334,55 @@ def test_default_presets_do_not_overwrite_user_skill_selection():
     try:
         db.commit = MethodType(fake_commit, db)
         Preset.__table__.create(bind=db.bind, checkfirst=True)
+        SkillRegistry.__table__.create(bind=db.bind, checkfirst=True)
         PresetSkill.__table__.create(bind=db.bind, checkfirst=True)
         preset_ids = [item["preset_id"] for item in workbench_service.DEFAULT_PRESETS]
         db.query(PresetSkill).filter(PresetSkill.preset_id.in_(preset_ids)).delete(synchronize_session=False)
         db.query(Preset).filter(Preset.preset_id.in_(preset_ids)).delete(synchronize_session=False)
+        db.query(SkillRegistry).filter(
+            SkillRegistry.skill_id.in_(
+                ["chen-xiaoqun-skill", "chao-gu-yang-jia-skill", "daily-stock-analysis-skill"]
+            )
+        ).delete(synchronize_session=False)
+        db.flush()
+
+        db.add_all(
+            [
+                SkillRegistry(
+                    skill_id="chen-xiaoqun-skill",
+                    name="陈小群",
+                    source_type="local",
+                    installed_path="skills/chen-xiaoqun-skill",
+                    current_version="1.0.0",
+                    mode="formal",
+                    enabled=True,
+                    has_executable_contract=False,
+                    manifest_json="{}",
+                ),
+                SkillRegistry(
+                    skill_id="chao-gu-yang-jia-skill",
+                    name="炒股养家",
+                    source_type="local",
+                    installed_path="skills/chao-gu-yang-jia-skill",
+                    current_version="1.0.0",
+                    mode="formal",
+                    enabled=True,
+                    has_executable_contract=False,
+                    manifest_json="{}",
+                ),
+                SkillRegistry(
+                    skill_id="daily-stock-analysis-skill",
+                    name="DSA分析",
+                    source_type="local",
+                    installed_path="skills/daily-stock-analysis-skill",
+                    current_version="1.0.0",
+                    mode="formal",
+                    enabled=True,
+                    has_executable_contract=False,
+                    manifest_json="{}",
+                ),
+            ]
+        )
         db.flush()
 
         db.add(
@@ -387,5 +432,4 @@ def test_default_presets_do_not_overwrite_user_skill_selection():
     finally:
         db.rollback()
         db.commit = original_commit
-        db.close()
         db.close()

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.tables import ApiCallLog, RecommendationRun, ScheduledTask
+from app.models.tables import ApiCallLog, RecommendationRun, ScheduledTask, ScheduledTaskRun
 
 
 def record_api_call(
@@ -44,7 +45,7 @@ def record_api_call(
 
 def cost_summary(db: Session, days: int = 30) -> dict[str, Any]:
     """API 成本汇总。"""
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
     logs = db.scalars(
         select(ApiCallLog).where(ApiCallLog.created_at >= cutoff)
     ).all()
@@ -102,7 +103,7 @@ def cost_summary(db: Session, days: int = 30) -> dict[str, Any]:
 
 def system_health(db: Session) -> dict[str, Any]:
     """系统健康仪表盘数据。"""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     # 最近运行
     recent_runs = db.scalars(
@@ -165,6 +166,15 @@ def list_scheduled_tasks(db: Session) -> list[dict[str, Any]]:
     ]
 
 
+def list_scheduled_task_runs(db: Session, limit: int = 100) -> list[dict[str, Any]]:
+    runs = db.scalars(
+        select(ScheduledTaskRun)
+        .order_by(ScheduledTaskRun.started_at.desc())
+        .limit(limit)
+    ).all()
+    return [_serialize_task_run(run) for run in runs]
+
+
 def upsert_scheduled_task(
     db: Session,
     task_id: str,
@@ -184,7 +194,7 @@ def upsert_scheduled_task(
     task.cron_expression = cron_expression
     task.payload_json = json.dumps(payload or {}, ensure_ascii=False)
     task.enabled = enabled
-    task.updated_at = datetime.utcnow()
+    task.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.commit()
     return task
 
@@ -199,19 +209,123 @@ def delete_scheduled_task(db: Session, task_id: str) -> bool:
     return True
 
 
+def start_task_run(
+    db: Session,
+    task: ScheduledTask,
+    *,
+    trigger_source: str = "schedule",
+) -> ScheduledTaskRun:
+    """为自动任务创建一条执行历史。"""
+    task_run = ScheduledTaskRun(
+        task_run_id=f"taskrun_{uuid.uuid4().hex[:24]}",
+        task_id=task.task_id,
+        task_name=task.name,
+        task_type=task.task_type,
+        trigger_source=trigger_source,
+        started_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        status="running",
+        payload_json=task.payload_json or "{}",
+        result_json="{}",
+    )
+    db.add(task_run)
+    db.commit()
+    return task_run
+
+
+def finish_task_run(
+    db: Session,
+    task_run_id: str,
+    *,
+    status: str,
+    error: str | None = None,
+    summary: str | None = None,
+    result: dict[str, Any] | None = None,
+) -> None:
+    """结束自动任务执行历史，并回写任务最新状态。"""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    task_run = db.get(ScheduledTaskRun, task_run_id)
+    task_id = task_run.task_id if task_run is not None else None
+    if task_run is not None:
+        task_run.finished_at = now
+        task_run.status = status
+        task_run.summary = summary
+        task_run.error_message = error
+        task_run.result_json = json.dumps(result or {}, ensure_ascii=False)
+
+    task = db.get(ScheduledTask, task_id) if task_id else None
+    if task is not None:
+        task.last_run_at = now
+        task.last_status = status
+        task.last_error = error
+        task.updated_at = now
+    db.commit()
+
+
 def record_task_run(
     db: Session,
     task_id: str,
     status: str,
     error: str | None = None,
 ) -> None:
-    """记录调度任务执行结果。"""
+    """兼容旧调用：直接补记一条已结束的自动任务执行历史。"""
     task = db.get(ScheduledTask, task_id)
-    if task:
-        task.last_run_at = datetime.utcnow()
-        task.last_status = status
-        task.last_error = error
+    if not task:
+        return
+    started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    db.add(
+        ScheduledTaskRun(
+            task_run_id=f"taskrun_{uuid.uuid4().hex[:24]}",
+            task_id=task.task_id,
+            task_name=task.name,
+            task_type=task.task_type,
+            trigger_source="api",
+            started_at=started_at,
+            finished_at=started_at,
+            status=status,
+            error_message=error,
+            payload_json=task.payload_json or "{}",
+            result_json="{}",
+        )
+    )
+    task.last_run_at = started_at
+    task.last_status = status
+    task.last_error = error
+    task.updated_at = started_at
+    db.commit()
+
+
+def recover_scheduled_task_runs(db: Session) -> int:
+    """启动时恢复残留的自动任务运行状态。"""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    recovered = 0
+    stale_message = "服务启动时发现上次自动任务未正常结束，已标记为中断"
+
+    stale_tasks = db.scalars(select(ScheduledTask).where(ScheduledTask.is_running == True)).all()
+    for task in stale_tasks:
+        task.is_running = False
+        if task.last_status in {None, "running"}:
+            task.last_status = "interrupted"
+            task.last_error = stale_message
+            task.last_run_at = task.last_run_at or now
+        task.updated_at = now
+        recovered += 1
+
+    stale_runs = db.scalars(
+        select(ScheduledTaskRun).where(
+            ScheduledTaskRun.status == "running",
+            ScheduledTaskRun.finished_at.is_(None),
+        )
+    ).all()
+    for run in stale_runs:
+        run.status = "interrupted"
+        run.finished_at = now
+        if not run.error_message:
+            run.error_message = stale_message
+        recovered += 1
+
+    if recovered:
         db.commit()
+    return recovered
 
 
 def _loads(value: str | None, fallback: Any) -> Any:
@@ -234,3 +348,63 @@ def _daily_trigger_time(cron_expression: str | None) -> str | None:
         return f"{int(hour):02d}:{int(minute):02d}"
     except ValueError:
         return None
+
+
+def _serialize_task_run(run: ScheduledTaskRun) -> dict[str, Any]:
+    payload = _loads(run.payload_json, {})
+    result = _loads(run.result_json, {})
+    duration_seconds = None
+    if run.started_at and run.finished_at:
+        duration_seconds = max(0, int((run.finished_at - run.started_at).total_seconds()))
+    return {
+        "task_run_id": run.task_run_id,
+        "task_id": run.task_id,
+        "task_name": run.task_name,
+        "task_type": run.task_type,
+        "trigger_source": run.trigger_source,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "status": run.status,
+        "summary": run.summary,
+        "summary_text": _task_run_summary_text(run, result),
+        "error_message": run.error_message,
+        "duration_seconds": duration_seconds,
+        "payload": payload,
+        "result": result,
+        "related_run_id": result.get("related_run_id"),
+    }
+
+
+def _task_run_summary_text(run: ScheduledTaskRun, result: dict[str, Any]) -> str:
+    if run.summary:
+        return run.summary
+
+    if run.task_type == "recommendation_run":
+        parts: list[str] = []
+        related_run_id = str(result.get("related_run_id") or "").strip()
+        if related_run_id:
+            parts.append(f"关联 Run {related_run_id}")
+        if result.get("recommended_count") is not None:
+            parts.append(f"推荐 {int(result.get('recommended_count') or 0)} 条")
+        return "，".join(parts) if parts else "自动推荐任务"
+
+    backfill = result.get("backfill") if isinstance(result, dict) else None
+    if isinstance(backfill, dict) and backfill.get("processed") is not None:
+        return (
+            f"处理 {int(backfill.get('processed') or 0)}，"
+            f"入库 {int(backfill.get('persisted') or 0)}，"
+            f"短历史 {int(backfill.get('short_history') or 0)}，"
+            f"失败 {int(backfill.get('failed') or 0)}"
+        )
+
+    quotes = result.get("quotes") if isinstance(result, dict) else None
+    if isinstance(quotes, dict) and quotes.get("refreshed") is not None:
+        return f"行情池刷新 {int(quotes.get('refreshed') or 0)} 条"
+
+    stdout_tail = str(result.get("stdout_tail") or "").strip() if isinstance(result, dict) else ""
+    if stdout_tail:
+        lines = [line.strip() for line in stdout_tail.splitlines() if line.strip()]
+        if lines:
+            return lines[-1]
+
+    return "-"

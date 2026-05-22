@@ -12,14 +12,14 @@ import asyncio
 import json
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.db.session import SessionLocal
 from app.models.tables import ScheduledTask
-from app.services.cost_service import record_task_run
+from app.services.cost_service import finish_task_run, start_task_run
 
 logger = logging.getLogger("scheduler")
 
@@ -105,7 +105,7 @@ def _load_and_schedule() -> None:
         logger.exception("加载调度任务失败")
 
 
-def _execute_task(task_id: str, *, force: bool = False) -> None:
+def _execute_task(task_id: str, *, force: bool = False, trigger_source: str = "schedule") -> None:
     """执行单个调度任务（同步包装异步）。"""
     if _is_task_running(task_id):
         logger.warning("调度任务 %s 正在执行中，跳过重复触发", task_id)
@@ -115,6 +115,7 @@ def _execute_task(task_id: str, *, force: bool = False) -> None:
     _mark_running(task_id)
 
     db = SessionLocal()
+    task_run_id: str | None = None
     try:
         task = db.get(ScheduledTask, task_id)
         if not task or (not task.enabled and not force):
@@ -123,22 +124,36 @@ def _execute_task(task_id: str, *, force: bool = False) -> None:
 
         payload = json.loads(task.payload_json or "{}")
         task_type = task.task_type
+        task_run_id = start_task_run(db, task, trigger_source=trigger_source).task_run_id
 
         if task_type == "recommendation_run":
-            asyncio.run(_run_recommendation(db, payload))
+            result = asyncio.run(_run_recommendation(db, payload))
         elif task_type in ("data_sync", "pool_refresh", "data_backfill"):
-            _run_data_sync(db, payload)
+            result = _run_data_sync(db, payload, task_type=task_type)
         else:
-            logger.warning("未知调度任务类型: %s", task_type)
-            record_task_run(db, task_id, "failed", f"未知任务类型: {task_type}")
-            return
+            raise RuntimeError(f"未知任务类型: {task_type}")
 
-        record_task_run(db, task_id, "completed")
+        finish_task_run(
+            db,
+            task_run_id,
+            status="completed",
+            summary=str(result.get("summary_text") or ""),
+            result=result,
+        )
         logger.info("调度任务完成: %s", task_id)
     except Exception as e:
         logger.exception("调度任务失败: %s", task_id)
+        db.rollback()
         try:
-            record_task_run(db, task_id, "failed", str(e))
+            if task_run_id:
+                finish_task_run(
+                    db,
+                    task_run_id,
+                    status="failed",
+                    error=str(e),
+                    summary=str(e),
+                    result={"summary_text": str(e)},
+                )
         except Exception:
             pass
     finally:
@@ -146,29 +161,45 @@ def _execute_task(task_id: str, *, force: bool = False) -> None:
         _mark_done(task_id)
 
 
-def _run_data_sync(db, payload: dict) -> None:
+def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
     """统一数据同步：刷新报价池 + 回填日K线。"""
     from app.services.market_pool import refresh_quote_pool
     from app.services.workbench_service import invalidate_bootstrap_cache
 
-    sync_scope = payload.get("sync_scope", "all")
+    sync_scope = str(payload.get("sync_scope") or _default_sync_scope(task_type))
+    result: dict[str, object] = {"sync_scope": sync_scope}
+    summary_parts: list[str] = []
 
     # 1. 刷新行情池
     if sync_scope in ("quotes", "all"):
         quotes, meta = refresh_quote_pool(db)
         invalidate_bootstrap_cache()
         logger.info("行情池刷新: %d 条行情, %s", len(quotes), meta)
+        result["quotes"] = {"refreshed": len(quotes), "meta": meta}
+        summary_parts.append(f"行情池 {len(quotes)} 条")
 
     # 2. 回填日K线
     if sync_scope in ("daily_bars", "all"):
-        _run_backfill_script(payload)
+        backfill = _run_backfill_script(payload)
+        result["backfill"] = backfill
+        if backfill.get("processed") is not None:
+            summary_parts.append(
+                f"日K 处理 {int(backfill.get('processed') or 0)} / 失败 {int(backfill.get('failed') or 0)}"
+            )
+        else:
+            summary_parts.append("日K 回填完成")
 
     # 3. 回填辅助数据
     if sync_scope in ("auxiliary", "all"):
-        _run_auxiliary_script(payload)
+        auxiliary = _run_auxiliary_script(payload)
+        result["auxiliary"] = auxiliary
+        summary_parts.append("辅助数据完成")
+
+    result["summary_text"] = "；".join(summary_parts) if summary_parts else "自动任务执行完成"
+    return result
 
 
-def _run_backfill_script(payload: dict) -> None:
+def _run_backfill_script(payload: dict) -> dict:
     """执行日K线回填脚本。"""
     import subprocess
     import sys
@@ -187,19 +218,30 @@ def _run_backfill_script(payload: dict) -> None:
     ]
     if payload.get("days"):
         args.extend(["--days", str(payload["days"])])
+    if payload.get("min_bars"):
+        args.extend(["--min-bars", str(payload["min_bars"])])
+    if payload.get("limit"):
+        args.extend(["--limit", str(payload["limit"])])
+    if payload.get("offset"):
+        args.extend(["--offset", str(payload["offset"])])
+    if payload.get("commit_interval"):
+        args.extend(["--commit-interval", str(payload["commit_interval"])])
     if payload.get("rate_limit") is not None:
         args.extend(["--rate-limit", str(payload["rate_limit"])])
     if payload.get("force"):
         args.append("--force")
+    if payload.get("reset_progress"):
+        args.append("--reset-progress")
 
     timeout = get_settings().script_timeout_seconds or None
     result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(f"日K回填脚本失败: {result.stderr[:500]}")
     logger.info("backfill_daily_bars.py 完成:\n%s", result.stdout[-500:])
+    return _parse_backfill_stdout(result.stdout)
 
 
-def _run_auxiliary_script(payload: dict) -> None:
+def _run_auxiliary_script(payload: dict) -> dict:
     """执行辅助数据回填脚本。"""
     import subprocess
     import sys
@@ -221,23 +263,32 @@ def _run_auxiliary_script(payload: dict) -> None:
         args.append("--skip-capital-flows")
     if payload.get("skip_news"):
         args.append("--skip-news")
+    if payload.get("skip_tushare_aux"):
+        args.append("--skip-tushare-aux")
     if payload.get("flow_top_n"):
         args.extend(["--flow-top-n", str(payload["flow_top_n"])])
+    if payload.get("tushare_aux_top_n"):
+        args.extend(["--tushare-aux-top-n", str(payload["tushare_aux_top_n"])])
 
     timeout = get_settings().script_timeout_seconds or None
     result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(f"辅助数据回填脚本失败: {result.stderr[:500]}")
     logger.info("backfill_auxiliary_data.py 完成:\n%s", result.stdout[-500:])
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    return {
+        "stdout_tail": "\n".join(lines[-10:]),
+        "summary_text": lines[-1] if lines else "辅助数据回填完成",
+    }
 
 
-async def _run_recommendation(db, payload: dict) -> None:
+async def _run_recommendation(db, payload: dict) -> dict:
     """执行推荐流水线。"""
     from app.services.workbench_service import run_workbench
 
     run_payload = {
         "preset_id": payload.get("preset_id"),
-        "run_name": payload.get("run_name", f"定时推荐 {datetime.utcnow().strftime('%Y%m%d')}"),
+        "run_name": payload.get("run_name", f"定时推荐 {datetime.now(timezone.utc).replace(tzinfo=None).strftime('%Y%m%d')}"),
     }
     for key in (
         "run_mode",
@@ -251,11 +302,23 @@ async def _run_recommendation(db, payload: dict) -> None:
             run_payload[key] = payload.get(key)
     result = await run_workbench(db, run_payload)
     logger.info("定时推荐完成: %d 条", result.get("recommended_count", 0))
+    run = result.get("run") or {}
+    related_run_id = str(run.get("run_id") or "")
+    recommended_count = int(run.get("recommended_count") or result.get("recommended_count") or 0)
+    return {
+        "related_run_id": related_run_id,
+        "recommended_count": recommended_count,
+        "summary_text": (
+            f"关联 Run {related_run_id}，推荐 {recommended_count} 条"
+            if related_run_id
+            else f"自动推荐 {recommended_count} 条"
+        ),
+    }
 
 
 def run_task_now(task_id: str) -> None:
     """立即执行一个调度任务，用于页面上的手动触发。"""
-    _execute_task(task_id, force=True)
+    _execute_task(task_id, force=True, trigger_source="manual")
 
 
 def reload_tasks() -> int:
@@ -269,3 +332,69 @@ def reload_tasks() -> int:
     count = len(_scheduler.get_jobs())
     logger.info("调度任务已重新加载: %d 个", count)
     return count
+
+
+def _default_sync_scope(task_type: str) -> str:
+    if task_type == "data_backfill":
+        return "daily_bars"
+    if task_type == "pool_refresh":
+        return "quotes"
+    return "all"
+
+
+def _parse_backfill_stdout(stdout: str) -> dict:
+    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+    parsed_scope = _parse_stats_line(next((line for line in lines if line.startswith("scope=")), ""))
+    parsed_result = _parse_stats_line(next((line for line in reversed(lines) if line.startswith("processed=")), ""))
+    processed = _to_int(parsed_result.get("processed"))
+    persisted = _to_int(parsed_result.get("persisted"))
+    short_history = _to_int(parsed_result.get("short_history"))
+    failed = _to_int(parsed_result.get("failed"))
+    summary_text = (
+        f"处理 {processed}，入库 {persisted}，短历史 {short_history}，失败 {failed}"
+        if processed is not None
+        else (lines[-1] if lines else "日K回填完成")
+    )
+    return {
+        "scope": parsed_scope.get("scope"),
+        "universe": _to_int(parsed_scope.get("universe")),
+        "ready_or_progress": _to_int(parsed_scope.get("ready_or_progress")),
+        "pending": _to_int(parsed_scope.get("pending")),
+        "processed": processed,
+        "persisted": persisted,
+        "short_history": short_history,
+        "failed": failed,
+        "elapsed_seconds": _to_float(parsed_result.get("elapsed")),
+        "stdout_tail": "\n".join(lines[-10:]),
+        "summary_text": summary_text,
+    }
+
+
+def _parse_stats_line(line: str) -> dict[str, str]:
+    if not line:
+        return {}
+    parts: dict[str, str] = {}
+    for token in line.replace("|", " ").split():
+        if "=" not in token:
+            continue
+        key, value = token.split("=", 1)
+        parts[key.strip()] = value.strip()
+    return parts
+
+
+def _to_int(value: str | None) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(float(value))
+    except ValueError:
+        return None
+
+
+def _to_float(value: str | None) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value.rstrip("s"))
+    except ValueError:
+        return None

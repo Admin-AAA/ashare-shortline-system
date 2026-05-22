@@ -2,6 +2,7 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+from time import perf_counter
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -86,25 +87,48 @@ def on_startup() -> None:
     setup_logging()
     init_db()
     from app.db.session import SessionLocal
+    from app.services.cost_service import recover_scheduled_task_runs
     from app.services.workbench_service import recover_interrupted_runs
     db = SessionLocal()
     try:
         recover_interrupted_runs(db)
+        recover_scheduled_task_runs(db)
     finally:
         db.close()
     from app.services.scheduler_service import start_scheduler
     start_scheduler()
-    _warmup_pool_cache()
+    _warmup_initial_state()
+    _warmup_pool_cache(delay_seconds=15.0)
 
 
-def _warmup_pool_cache() -> None:
-    """后台预热数据池缓存，避免首个用户请求等待。"""
+def _warmup_initial_state() -> None:
+    """启动阶段同步预热首屏所需缓存，确保首访不走冷链路。"""
+    from app.db.session import SessionLocal
+    from app.services.workbench_service import get_initial_workbench_state
+
+    started_at = perf_counter()
+    db = SessionLocal()
+    try:
+        get_initial_workbench_state(db)
+        logger.info("首屏缓存预热完成 (%.0fms)", (perf_counter() - started_at) * 1000)
+    except Exception:
+        logger.exception("首屏缓存预热失败")
+    finally:
+        db.close()
+
+
+def _warmup_pool_cache(delay_seconds: float = 0.0) -> None:
+    """后台延后预热本地池状态，避免与首访关键链路抢占资源。"""
     import threading
     import time as _time
+
     def _warm():
+        if delay_seconds > 0:
+            _time.sleep(delay_seconds)
         from app.db.session import SessionLocal
         from app.services.data_sources import get_local_pool_status
         from app.api.data_sources import _pool_status_cache, _pool_status_lock, _POOL_CACHE_KEY
+
         db = SessionLocal()
         try:
             data = get_local_pool_status(db, unified_limit=50, unified_offset=0, bars_limit=50, bars_offset=0)

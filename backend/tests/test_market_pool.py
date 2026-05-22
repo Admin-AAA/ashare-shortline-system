@@ -1,10 +1,11 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.session import Base, SessionLocal, engine
-from app.models.tables import DailyBar, DataSourceConfig, RawQuote, UnifiedQuote
+from app.db.session import SessionLocal
+from app.models.tables import DailyKbar, DataSourceConfig, StockQuote
 from app.services.data_sources import enabled_sources, get_local_pool_status, sync_data_source_configs
 from app.services import market_pool
 
@@ -14,6 +15,7 @@ class DummySettings:
     market_scan_size = 60
     market_kline_days = 90
     market_candidate_count = 2
+    market_broad_recall_count = 8
     market_candidate_lookahead_multiplier = 2
     market_quote_cache_ttl_seconds = 90
     market_kline_cache_ttl_hours = 20
@@ -32,10 +34,13 @@ class DummySettings:
     thsdk_mac = ""
     tushare_token = ""
 
-
-def _session() -> Session:
-    Base.metadata.create_all(bind=engine)
-    return SessionLocal()
+@pytest.fixture
+def db(clean_test_db) -> Session:
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 def _quote(code: str, source: str, price: float, pct: float = 3.0) -> dict:
@@ -86,8 +91,7 @@ def _bars(code: str, days: int = 35, end: date | None = None) -> list[dict]:
     ]
 
 
-def test_refresh_quote_pool_persists_raw_and_unified_quotes(monkeypatch):
-    db = _session()
+def test_refresh_quote_pool_persists_raw_and_unified_quotes(db, monkeypatch):
     settings = DummySettings()
 
     def fake_fetch_quotes(source, _settings):
@@ -130,8 +134,7 @@ def test_quote_pool_records_conflicts_and_lowers_quality():
     assert merged["quality_score"] < 90
 
 
-def test_load_or_refresh_quotes_uses_fresh_cache(monkeypatch):
-    db = _session()
+def test_load_or_refresh_quotes_uses_fresh_cache(db, monkeypatch):
     settings = DummySettings()
     calls = {"fetch": 0}
 
@@ -150,8 +153,7 @@ def test_load_or_refresh_quotes_uses_fresh_cache(monkeypatch):
     assert calls["fetch"] == 3
 
 
-def test_cached_quotes_are_enriched_with_local_bar_metrics(monkeypatch):
-    db = _session()
+def test_cached_quotes_are_enriched_with_local_bar_metrics(db, monkeypatch):
     settings = DummySettings()
     market_pool._persist_unified_quotes(
         db,
@@ -171,7 +173,7 @@ def test_cached_quotes_are_enriched_with_local_bar_metrics(monkeypatch):
     for index in range(65):
         trade_date = date(2025, 12, 1) + timedelta(days=index)
         db.add(
-            DailyBar(
+            DailyKbar(
                 code="000001",
                 trade_date=trade_date.isoformat(),
                 open=10 + index * 0.1,
@@ -202,8 +204,7 @@ def test_cached_quotes_are_enriched_with_local_bar_metrics(monkeypatch):
     assert quotes[0]["source_trace"]["field_sources"]["ma5"] == ["daily_bars_cache"]
 
 
-def test_load_or_refresh_quotes_does_not_use_stale_cache_after_refresh_error(monkeypatch):
-    db = _session()
+def test_load_or_refresh_quotes_does_not_use_stale_cache_after_refresh_error(db, monkeypatch):
     settings = DummySettings()
     market_pool._persist_unified_quotes(
         db,
@@ -224,7 +225,7 @@ def test_load_or_refresh_quotes_does_not_use_stale_cache_after_refresh_error(mon
     )
     db.commit()
     for row in db.scalars(select(UnifiedQuote)).all():
-        row.fetched_at = datetime.utcnow() - timedelta(seconds=settings.market_quote_cache_ttl_seconds + 1)
+        row.fetched_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=settings.market_quote_cache_ttl_seconds + 1)
     db.commit()
 
     def fake_fetch_quotes(source, _settings):
@@ -240,8 +241,7 @@ def test_load_or_refresh_quotes_does_not_use_stale_cache_after_refresh_error(mon
         raise AssertionError("expected MarketDataError")
 
 
-def test_disabled_quote_source_is_not_called(monkeypatch):
-    db = _session()
+def test_disabled_quote_source_is_not_called(db, monkeypatch):
     settings = DummySettings()
     db.add(DataSourceConfig(source="eastmoney", source_type="quote", enabled=False, priority=0))
     db.add(DataSourceConfig(source="tencent", source_type="quote", enabled=True, priority=1))
@@ -262,8 +262,7 @@ def test_disabled_quote_source_is_not_called(monkeypatch):
     assert calls == ["tencent", "sina"]
 
 
-def test_all_quote_sources_disabled_raises_without_fetching(monkeypatch):
-    db = _session()
+def test_all_quote_sources_disabled_raises_without_fetching(db, monkeypatch):
     settings = DummySettings()
     for index, source in enumerate(["eastmoney", "tencent", "sina"]):
         db.add(DataSourceConfig(source=source, source_type="quote", enabled=False, priority=index))
@@ -282,8 +281,7 @@ def test_all_quote_sources_disabled_raises_without_fetching(monkeypatch):
         raise AssertionError("expected MarketDataError")
 
 
-def test_enabled_sources_respects_synced_config_without_extra_insert(monkeypatch):
-    db = _session()
+def test_enabled_sources_respects_synced_config_without_extra_insert(db, monkeypatch):
     settings = DummySettings()
     monkeypatch.setattr("app.services.data_sources.get_settings", lambda: settings)
 
@@ -303,8 +301,7 @@ def test_enabled_sources_respects_synced_config_without_extra_insert(monkeypatch
     assert count == 1
 
 
-def test_load_quotes_from_pool_never_fetches_external_sources(monkeypatch):
-    db = _session()
+def test_load_quotes_from_pool_never_fetches_external_sources(db, monkeypatch):
     settings = DummySettings()
 
     def fake_fetch_quotes(source, _settings):
@@ -320,8 +317,7 @@ def test_load_quotes_from_pool_never_fetches_external_sources(monkeypatch):
         raise AssertionError("expected MarketDataError")
 
 
-def test_local_only_skips_stale_bars_instead_of_running_with_them(monkeypatch):
-    db = _session()
+def test_local_only_skips_stale_bars_instead_of_running_with_them(db, monkeypatch):
     settings = DummySettings()
     settings.market_candidate_count = 1
     settings.market_candidate_lookahead_multiplier = 1
@@ -346,8 +342,7 @@ def test_local_only_skips_stale_bars_instead_of_running_with_them(monkeypatch):
         raise AssertionError("expected MarketDataError")
 
 
-def test_get_market_universe_local_pool_preferred_refreshes_when_pool_is_empty(monkeypatch):
-    db = _session()
+def test_get_market_universe_local_pool_preferred_refreshes_when_pool_is_empty(db, monkeypatch):
     settings = DummySettings()
     calls = {"quotes": 0, "kline": 0}
 
@@ -373,8 +368,41 @@ def test_get_market_universe_local_pool_preferred_refreshes_when_pool_is_empty(m
     assert snapshot["breadth"]["quote_pool_status"] == "refreshed"
 
 
-def test_local_pool_status_summarizes_unified_quotes_and_bars(monkeypatch):
-    db = _session()
+def test_market_snapshot_uses_full_eligible_universe_instead_of_top_300(db, monkeypatch):
+    settings = DummySettings()
+    settings.market_candidate_count = 0
+    quotes = []
+    for index in range(320):
+        pct = 5.0 if index < 300 else -4.5
+        industry = "软件服务" if index < 300 else "煤炭"
+        quote = {
+            **_quote(f"{index + 1:06d}", "eastmoney", 10.0 + index * 0.01, pct=pct),
+            "industry": industry,
+        }
+        quotes.append(
+            {
+                **quote,
+                "source_count": 1,
+                "raw_sources": ["eastmoney"],
+                "quality_score": 80.0,
+                "freshness_status": "fresh",
+                "source_trace": {"raw_sources": ["eastmoney"], "source_count": 1, "field_sources": {}},
+            }
+        )
+    market_pool._persist_unified_quotes(db, quotes)
+    db.commit()
+
+    monkeypatch.setattr(market_pool, "get_settings", lambda: settings)
+
+    snapshot = market_pool.get_market_snapshot_from_pool(db, refresh=False)
+
+    assert snapshot["sample_count"] == 320
+    assert snapshot["down_count"] == 20
+    assert snapshot["breadth"]["base_filter_eligible_count"] == 320
+    assert snapshot["breadth"]["actual_scan_count"] == 320
+
+
+def test_local_pool_status_summarizes_unified_quotes_and_bars(db, monkeypatch):
     settings = DummySettings()
 
     def fake_fetch_quotes(source, _settings):
@@ -385,7 +413,7 @@ def test_local_pool_status_summarizes_unified_quotes_and_bars(monkeypatch):
     monkeypatch.setattr(market_pool, "_fetch_quotes", fake_fetch_quotes)
     market_pool._refresh_quote_pool(db, settings, active_sources=["eastmoney", "tencent"])
     db.add(
-        DailyBar(
+        DailyKbar(
             code="000001",
             trade_date="2026-05-08",
             open=10,
@@ -410,8 +438,7 @@ def test_local_pool_status_summarizes_unified_quotes_and_bars(monkeypatch):
     assert status["daily_bars"][0]["code"] == "000001"
 
 
-def test_local_pool_status_reports_recommendation_readiness(monkeypatch):
-    db = _session()
+def test_local_pool_status_reports_recommendation_readiness(db, monkeypatch):
     settings = DummySettings()
 
     def fake_fetch_quotes(source, _settings):
@@ -441,8 +468,7 @@ def test_local_pool_status_reports_recommendation_readiness(monkeypatch):
     assert readiness["scan"]["skill_input_count"] == 2
 
 
-def test_local_pool_readiness_treats_zero_candidate_count_as_full_market(monkeypatch):
-    db = _session()
+def test_local_pool_readiness_treats_zero_candidate_count_as_full_market(db, monkeypatch):
     settings = DummySettings()
     settings.market_candidate_count = 0
 
@@ -495,8 +521,7 @@ def test_latest_allowed_bar_date_uses_previous_session_before_close(monkeypatch)
     assert market_pool._latest_allowed_bar_date() == "2026-05-12"
 
 
-def test_local_pool_status_reports_missing_kline_gap(monkeypatch):
-    db = _session()
+def test_local_pool_status_reports_missing_kline_gap(db, monkeypatch):
     settings = DummySettings()
 
     def fake_fetch_quotes(source, _settings):
@@ -517,8 +542,7 @@ def test_local_pool_status_reports_missing_kline_gap(monkeypatch):
     assert readiness["kline"]["examples"]
 
 
-def test_local_pool_status_separates_pool_coverage_from_demo_scan_limit(monkeypatch):
-    db = _session()
+def test_local_pool_status_separates_pool_coverage_from_demo_scan_limit(db, monkeypatch):
     settings = DummySettings()
     settings.market_candidate_count = 1
     settings.market_candidate_lookahead_multiplier = 1
@@ -554,8 +578,7 @@ def test_local_pool_status_separates_pool_coverage_from_demo_scan_limit(monkeypa
     assert status["recommendation_readiness"]["scan"]["demo_limited"] is True
 
 
-def test_local_pool_status_reports_short_history_separately(monkeypatch):
-    db = _session()
+def test_local_pool_status_reports_short_history_separately(db, monkeypatch):
     settings = DummySettings()
     settings.market_candidate_count = 0
     quotes = [_quote("000001", "eastmoney", 10.00), _quote("000002", "eastmoney", 20.00)]
@@ -591,8 +614,7 @@ def test_local_pool_status_reports_short_history_separately(monkeypatch):
     assert "短历史 1 只" in status["recommendation_readiness"]["messages"][1]
 
 
-def test_local_pool_status_counts_low_liquidity_as_available_universe(monkeypatch):
-    db = _session()
+def test_local_pool_status_counts_low_liquidity_as_available_universe(db, monkeypatch):
     settings = DummySettings()
     settings.market_candidate_count = 0
     quotes = [
@@ -630,8 +652,7 @@ def test_local_pool_status_counts_low_liquidity_as_available_universe(monkeypatc
     assert filter_summary["excluded_count"] == 0
 
 
-def test_local_pool_status_uses_quote_date_for_coverage_reference(monkeypatch):
-    db = _session()
+def test_local_pool_status_uses_quote_date_for_coverage_reference(db, monkeypatch):
     settings = DummySettings()
     settings.market_candidate_count = 0
     quote = _quote("000001", "eastmoney", 10.00)

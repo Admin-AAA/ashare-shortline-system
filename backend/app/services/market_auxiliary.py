@@ -77,6 +77,8 @@ def _news_sources(settings: Any) -> list[str]:
 # ── Dispatch ────────────────────────────────────────────────────────────
 
 def _fetch_limit_up_board(source: str, settings: Any) -> list[dict[str, Any]]:
+    if source == "tushare":
+        return _fetch_tushare_limit_up_board(settings)
     if source == "akshare":
         return _fetch_ak_limit_up_board(settings)
     if source == "eastmoney":
@@ -87,6 +89,8 @@ def _fetch_limit_up_board(source: str, settings: Any) -> list[dict[str, Any]]:
 
 
 def _fetch_concept_sectors(source: str, settings: Any) -> list[dict[str, Any]]:
+    if source == "tushare":
+        return _fetch_tushare_concept_sectors(settings)
     if source == "akshare":
         return _fetch_ak_concept_sectors(settings)
     if source == "eastmoney":
@@ -97,6 +101,8 @@ def _fetch_concept_sectors(source: str, settings: Any) -> list[dict[str, Any]]:
 
 
 def _fetch_capital_flow(source: str, code: str, settings: Any) -> dict[str, Any] | None:
+    if source == "tushare":
+        return _fetch_tushare_capital_flow(code, settings)
     if source == "akshare":
         return _fetch_ak_capital_flow(code, settings)
     if source == "eastmoney":
@@ -107,6 +113,8 @@ def _fetch_capital_flow(source: str, code: str, settings: Any) -> dict[str, Any]
 
 
 def _fetch_dragon_tiger(source: str, settings: Any) -> list[dict[str, Any]]:
+    if source == "tushare":
+        return _fetch_tushare_dragon_tiger(settings)
     if source == "akshare":
         return _fetch_ak_dragon_tiger(settings)
     if source == "eastmoney":
@@ -830,4 +838,139 @@ def _fetch_ak_news(code: str, settings: Any) -> list[dict[str, Any]]:
         return items
     except Exception as e:
         logger.debug("akshare新闻不可用 (%s): %s", code, e)
+        return []
+
+
+# ── Tushare 抓取函数（自建稳定服务器）────────────────────────────────────
+
+def _fetch_tushare_moneyflow(code: str, settings: Any) -> dict[str, Any] | None:
+    """通过自建 Tushare 服务器获取个股资金流向。"""
+    try:
+        from app.services.tushare_client import get_pro
+
+        pro = get_pro()
+        ts_code = f"{code}.{'SH' if code.startswith(('6', '9')) else 'SZ'}"
+        df = pro.moneyflow(ts_code=ts_code, limit=10)
+        if df is None or df.empty:
+            return None
+
+        df = df.sort_values("trade_date", ascending=False)
+        latest = df.iloc[0]
+        trade_date = str(latest.get("trade_date", ""))
+
+        cum_3d = 0.0
+        cum_5d = 0.0
+        cum_10d = 0.0
+        for i in range(min(len(df), 10)):
+            row = df.iloc[i]
+            net_mf = float(row.get("net_mf_amount") or 0)
+            if i < 3:
+                cum_3d += net_mf
+            if i < 5:
+                cum_5d += net_mf
+            cum_10d += net_mf
+
+        return {
+            "code": code,
+            "trade_date": trade_date,
+            "main_net_inflow_yi": round(float(latest.get("net_mf_amount") or 0) / 1e8, 4),
+            "super_large_net_inflow_yi": round(
+                float(latest.get("buy_elg_amount") or 0) / 1e8
+                - float(latest.get("sell_elg_amount") or 0) / 1e8,
+                4,
+            ),
+            "large_net_inflow_yi": round(
+                float(latest.get("buy_lg_amount") or 0) / 1e8
+                - float(latest.get("sell_lg_amount") or 0) / 1e8,
+                4,
+            ),
+            "medium_net_inflow_yi": round(
+                float(latest.get("buy_md_amount") or 0) / 1e8
+                - float(latest.get("sell_md_amount") or 0) / 1e8,
+                4,
+            ),
+            "small_net_inflow_yi": round(
+                float(latest.get("buy_sm_amount") or 0) / 1e8
+                - float(latest.get("sell_sm_amount") or 0) / 1e8,
+                4,
+            ),
+            "main_net_inflow_ratio": round(float(latest.get("net_mf_vol") or 0), 2),
+            "cumulative_inflow_3d_yi": round(cum_3d / 1e8, 4),
+            "cumulative_inflow_5d_yi": round(cum_5d / 1e8, 4),
+            "cumulative_inflow_10d_yi": round(cum_10d / 1e8, 4),
+        }
+    except Exception as e:
+        logger.debug("Tushare资金流向不可用 (%s): %s", code, e)
+        return None
+
+
+def _fetch_tushare_dragon_tiger(settings: Any) -> list[dict[str, Any]]:
+    """通过自建 Tushare 服务器获取龙虎榜数据。"""
+    try:
+        from app.services.tushare_client import get_pro
+
+        pro = get_pro()
+        trade_date = date.today().strftime("%Y%m%d")
+        df = pro.top_list(trade_date=trade_date)
+        if df is None or df.empty:
+            return []
+
+        result = []
+        for _, row in df.iterrows():
+            code = _normalize_code(str(row.get("ts_code", "")))
+            if not code or len(code) != 6:
+                continue
+            result.append({
+                "code": code,
+                "name": str(row.get("name", "")),
+                "trade_date": date.today().isoformat(),
+                "reason": str(row.get("reason", "")),
+                "buy_amount_yi": round(float(row.get("l_buy") or 0) / 1e8, 4)
+                if row.get("l_buy") is not None
+                else None,
+                "sell_amount_yi": round(float(row.get("l_sell") or 0) / 1e8, 4)
+                if row.get("l_sell") is not None
+                else None,
+                "net_amount_yi": round(float(row.get("net_amount") or 0) / 1e8, 4)
+                if row.get("net_amount") is not None
+                else None,
+                "buy_seat_count": 0,
+                "sell_seat_count": 0,
+                "institution_net_buy_yi": None,
+                "top_buy_broker": "",
+                "top_sell_broker": "",
+            })
+        return result
+    except Exception as e:
+        logger.warning("Tushare龙虎榜不可用: %s", e)
+        return []
+
+
+def _fetch_tushare_limit_up_board(settings: Any) -> list[dict[str, Any]]:
+    """通过自建 Tushare 服务器获取涨停板数据。"""
+    try:
+        from app.services.tushare_client import fetch_limit_up_board
+
+        rows = fetch_limit_up_board()
+        for row in rows:
+            row.setdefault("fd_amount_yi", float(row.pop("fd_amount", 0) or 0))
+        return rows
+    except Exception as e:
+        logger.warning("Tushare涨停板不可用: %s", e)
+        return []
+
+
+def _fetch_tushare_concept_sectors(settings: Any) -> list[dict[str, Any]]:
+    """通过自建 Tushare 服务器获取概念板块数据。"""
+    try:
+        from app.services.tushare_client import fetch_concept_sectors
+
+        rows = fetch_concept_sectors()
+        trade_date = date.today().isoformat()
+        for rank, row in enumerate(rows, 1):
+            row["trade_date"] = trade_date
+            row["heat_rank"] = rank
+        return rows
+    except Exception as e:
+        logger.warning("Tushare概念板块不可用: %s", e)
         return []

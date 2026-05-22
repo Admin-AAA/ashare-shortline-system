@@ -9,14 +9,14 @@
 
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 import urllib.request
 from pathlib import Path
 
 from sqlalchemy import select
 
 from app.db.session import SessionLocal
-from app.models.tables import UnifiedQuote
+from app.models.tables import StockQuote
 
 SINA_NODES_URL = (
     "http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php"
@@ -164,7 +164,7 @@ def update_database(code_to_industry: dict[str, str]) -> int:
     """
     session = SessionLocal()
     try:
-        rows = session.scalars(select(UnifiedQuote)).all()
+        rows = session.scalars(select(StockQuote)).all()
         db_codes = {row.code for row in rows if row.code}
         print(f"\nDatabase has {len(db_codes)} distinct stock codes")
 
@@ -176,7 +176,7 @@ def update_database(code_to_industry: dict[str, str]) -> int:
             print(f"Sample unmatched codes: {list(unmatched)[:20]}")
 
         updated = 0
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         for row in rows:
             industry = code_to_industry.get(row.code)
             if not industry:

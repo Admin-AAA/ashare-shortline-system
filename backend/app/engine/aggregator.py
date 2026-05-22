@@ -505,10 +505,14 @@ def aggregate(
 def apply_pool_rules(
     cards: list[dict[str, Any]],
     output_count: int,
+    min_score: float = 45.0,
 ) -> list[dict[str, Any]]:
     """Pool-level rules: 按 final_score 降序取前 output_count 只。
 
-    过滤明确回避（分数为 0 的卡片）。
+    质量门控：
+    - final_score <= 0 视为硬否决，直接过滤
+    - final_score < min_score 的不推荐（避免弱势市场强行凑数）
+    - 若合格数量不足 output_count，只输出合格的，宁可少推不推垃圾
     """
     ordered = sorted(
         cards,
@@ -519,6 +523,8 @@ def apply_pool_rules(
     for card in ordered:
         if float(card.get("final_score") or 0) <= 0:
             continue
+        if float(card.get("final_score") or 0) < min_score:
+            break  # 之后只会更低，直接停止
         result.append(card)
         if len(result) >= output_count:
             break
@@ -572,7 +578,16 @@ def _consensus_score(signals: list[dict[str, Any]]) -> float:
     positive = sum(1 for signal in signals if float(signal.get("score", 0)) >= 70)
     total = max(1, len(signals))
     if total == 1:
-        return 65.0
+        # 单 Skill 时用规则评分与 Agent 评分的调和均值，不再硬编码 65
+        signal = signals[0]
+        rule_score = float(signal.get("score", 50))
+        review = signal.get("agent_skill_review")
+        if isinstance(review, dict):
+            agent_score = float(review.get("score", rule_score))
+            agent_conf = float(review.get("confidence", 0.5))
+            _merged = rule_score * (1 - agent_conf) + agent_score * agent_conf
+            return round(min(100.0, max(0.0, _merged)), 2)
+        return round(rule_score, 2)
     ratio = positive / total
     return min(100.0, 40.0 + ratio * 60.0)
 

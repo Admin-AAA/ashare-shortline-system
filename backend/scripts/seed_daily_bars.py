@@ -1,7 +1,7 @@
 """
 一次性全量回填日K线脚本。
 
-遍历全A股，每只拉取最近 N 个交易日的日K线，写入 DailyBar 表并自动计算技术指标。
+遍历全A股，每只拉取最近 N 个交易日的日K线，写入 DailyKbar 表并自动计算技术指标。
 支持断点续传、速率控制、多源 fallback。
 
 Usage: python scripts/seed_daily_bars.py
@@ -20,7 +20,7 @@ from sqlalchemy import func, select
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal
-from app.models.tables import DailyBar, UnifiedQuote
+from app.models.tables import DailyKbar, StockQuote
 from app.services.market_data import (
     _fetch_akshare_kline,
     _fetch_baostock_kline,
@@ -119,7 +119,7 @@ def main() -> None:
         db_temp = SessionLocal()
         try:
             db_codes = db_temp.scalars(
-                select(UnifiedQuote.code).distinct().order_by(UnifiedQuote.code)
+                select(StockQuote.code).distinct().order_by(StockQuote.code)
             ).all()
             codes = [(str(c), "") for c in db_codes if c]
             print(f"  从本地数据库获取到 {len(codes)} 只")
@@ -153,7 +153,7 @@ def main() -> None:
 
             # 检查本地已有条数
             existing_count = db.scalar(
-                select(func.count()).select_from(DailyBar).where(DailyBar.code == code)
+                select(func.count()).select_from(DailyKbar).where(DailyKbar.code == code)
             ) or 0
             if existing_count >= seed_days * 0.8:
                 done_codes.add(code)
@@ -208,11 +208,11 @@ def main() -> None:
         print(f"  失败: {fail_count} 只")
 
         # 统计最终覆盖
-        code_count = db.scalar(select(func.count(func.distinct(DailyBar.code)))) or 0
-        bar_count = db.scalar(select(func.count()).select_from(DailyBar)) or 0
+        code_count = db.scalar(select(func.count(func.distinct(DailyKbar.code)))) or 0
+        bar_count = db.scalar(select(func.count()).select_from(DailyKbar)) or 0
         latest_bar = _latest_allowed_bar_date()
         print()
-        print(f"DailyBar 表现状:")
+        print(f"DailyKbar 表现状:")
         print(f"  去重代码数: {code_count}")
         print(f"  总行数: {bar_count}")
         print(f"  今日最新交易日: {latest_bar}")

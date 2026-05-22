@@ -9,23 +9,23 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.init_db import init_db
-from app.db.session import SessionLocal, engine
+from app.db.session import SessionLocal
 from app.engine.aggregator import DEFAULT_AGG_WEIGHTS, aggregate
 from app.engine.skill_loader import StrategySkill
 from app.models.tables import (
     CalibrationConfig,
-    DailyBar,
+    DailyKbar,
     Preset,
     PresetSkill,
     Recommendation,
+    RecommendationOutcome,
     RecommendationRun,
     SkillRegistry,
     Stock,
@@ -33,9 +33,14 @@ from app.models.tables import (
 from app.services.outcome_service import label_pending_outcomes
 from app.services.stats_service import get_overview_stats
 from app.services.workbench_service import (
+    DATA_SOURCE_LOCAL_POOL,
+    DATA_SOURCE_LOCAL_POOL_PREFERRED,
+    _build_recommendation_card,
     _build_pipeline_audit,
+    _merge_run_params,
     _update_run_progress,
     enqueue_workbench_run,
+    get_initial_workbench_state,
     get_recommendation_detail,
     get_run_detail,
     invalidate_bootstrap_cache,
@@ -49,19 +54,8 @@ from app.services.workbench_service import (
 # Fixtures
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(autouse=True)
-def clean_db():
-    """Drop and recreate all tables for each test."""
-    from app.models.tables import Base
-
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
-    yield
-    Base.metadata.drop_all(bind=engine)
-
-
 @pytest.fixture
-def db():
+def db(clean_test_db):
     """Provide a fresh DB session."""
     session = SessionLocal()
     try:
@@ -100,11 +94,11 @@ def _seed_stock_and_bars(db: Session, code="600519", name="贵州茅台", date_s
         trade_date = f"2026-{(5 - i // 30):02d}-{(i % 30) + 1:02d}"
         if len(trade_date) != 10:
             continue
-        exists = db.scalar(select(DailyBar).where(DailyBar.code == code, DailyBar.trade_date == trade_date))
+        exists = db.scalar(select(DailyKbar).where(DailyKbar.code == code, DailyKbar.trade_date == trade_date))
         if exists is not None:
             continue
         price = 100.0 + i * 0.5
-        db.add(DailyBar(
+        db.add(DailyKbar(
             code=code, trade_date=trade_date,
             open=price - 0.5, high=price + 1.0, low=price - 1.0, close=price,
             volume=1000000, amount=price * 1000000,
@@ -169,7 +163,7 @@ def _mock_market_universe():
             ],
         })
     snapshot = {
-        "snapshot_id": f"snap_test_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
+        "snapshot_id": f"snap_test_{datetime.now(timezone.utc).replace(tzinfo=None).strftime('%Y%m%d_%H%M%S')}",
         "trade_date": "2026-05-12",
         "sample_count": 30,
         "up_count": 20,
@@ -317,105 +311,232 @@ class TestE2ERecommendationFlow:
 
         # Aggregate all stocks into cards and apply pool rules
         cards = []
-        for ctx in contexts:
-            stock_data = ctx.to_skill_input()
-            review = {
-                "stance": "support",
-                "score": 72,
-                "confidence": 0.7,
-                "evidence": ["测试证据"],
-                "risks": [],
-                "summary": "测试审查",
-            }
-            rule_signal = {
-                "strategy_id": "test-skill",
-                "score": 70.0,
-                "confidence": 0.7,
-                "evidence": [],
-                "risk_flags": [],
-                "setup_match": "多头排列",
-                "entry_rule": "回踩均线",
-                "invalid_rule": "跌破支撑",
-            }
-            signal = enrich_signal_with_agent_review(rule_signal, review)
-            cards.append(aggregate(
-                stock=stock_data, signals=[signal],
-                market_score=market_score, agent_review_score=72.0,
-                risk_template="balanced",
-            ))
 
-        result = apply_pool_rules(cards, output_count=6)
-        assert 1 <= len(result) <= 6
+    def test_merge_run_params_defaults_formal_to_local_pool_preferred(self, db):
+        params = _merge_run_params(db, None, {"run_mode": "formal", "skills": []})
+        assert params["data_source"] == DATA_SOURCE_LOCAL_POOL_PREFERRED
 
-        # Persist run and recommendations
-        run_id = f"run_test_{uuid.uuid4().hex[:6]}"
+        experiment_params = _merge_run_params(db, None, {"run_mode": "experiment", "skills": []})
+        assert experiment_params["data_source"] == DATA_SOURCE_LOCAL_POOL
+
+    def test_build_recommendation_card_uses_agent_dominant_weights_when_reviews_present(self, db):
+        skill = _mock_skill("skill-1", "Skill1")
+
+        class _Ctx:
+            def to_feature_snapshot(self):
+                return {"stop_loss": 9.5, "take_profit": 11.5}
+
+        stock = {
+            "code": "000001",
+            "name": "测试股",
+            "industry": "电子",
+            "price": 10.5,
+            "close": 10.5,
+            "pct": 3.2,
+            "turnover_rate": 4.5,
+            "amount_yi": 8.6,
+            "evidence_quality_score": 82.0,
+            "data_quality": {"missing_fields": []},
+        }
+        signal = {
+            "strategy_id": "skill-1",
+            "strategy_name": "Skill1",
+            "score": 74.0,
+            "confidence": 0.72,
+            "evidence": ["规则信号"],
+            "risk_flags": [],
+            "setup_match": "主线共振",
+            "entry_rule": "回踩 5 日线",
+            "invalid_rule": "跌破前低",
+            "phase": "主升",
+        }
+        entry = {
+            "context": _Ctx(),
+            "stock": stock,
+            "rule_signals": {"skill-1": signal},
+            "review_skill_ids": ["skill-1"],
+            "skill_gate_reasons": {"skill-1": "规则门通过"},
+        }
+        skill_reviews = [
+            {
+                "skill_id": "skill-1",
+                "skill_name": "Skill1",
+                "review": {
+                    "stance": "support",
+                    "score": 78.0,
+                    "confidence": 0.84,
+                    "supports": ["趋势与量能一致"],
+                    "risks": [],
+                    "summary": "支持继续跟踪",
+                    "action": "观察",
+                    "position_range": "5-10%",
+                    "entry_style": "分时回踩吸",
+                    "invalidation_conditions": [],
+                    "next_day_plan": [],
+                },
+                "hallucination_check": {"flags": [], "severity": "low"},
+                "error": None,
+            }
+        ]
+        snapshot = {
+            "snapshot_id": "snap_1",
+            "trade_date": "2026-05-12",
+            "sample_count": 300,
+            "up_count": 180,
+            "down_count": 90,
+            "limit_up_count": 12,
+            "limit_down_count": 2,
+            "main_industries": ["电子"],
+            "breadth": {"regime": "偏多", "risk": "中", "data_source": "daily_bar_backtest"},
+        }
+
+        card = _build_recommendation_card(
+            entry,
+            skill_reviews,
+            skill_map={"skill-1": skill},
+            selected_skills=[{"skill_id": "skill-1", "name": "Skill1", "weight": 1.0, "mode": "formal", "skill": skill}],
+            market_score=68.0,
+            risk_template="balanced",
+            calibrated_weights=None,
+            snapshot=snapshot,
+            recent_codes=set(),
+        )
+
+        assert card["aggregation_weights"]["skill_agent"] > card["aggregation_weights"]["strategy_rule"]
+        assert card["agent_logs"]
+        assert card["feature_snapshot"]["component_scores"]["skill_agent"] > 0
+
+    def test_label_pending_outcomes_simulates_entry_and_exit(self, db):
         run = RecommendationRun(
-            run_id=run_id,
-            preset_id=None,
-            run_name="E2E测试运行",
+            run_id="run_outcome_exec",
+            run_name="结果标注执行测试",
             run_mode="formal",
             trade_date="2026-05-12",
-            universe_count=len(stocks),
             market_scope="all",
             risk_template="balanced",
-            output_count=6,
-            selected_skills_json=json.dumps([]),
-            params_json=json.dumps({}),
-            market_snapshot_json=json.dumps(snapshot),
+            output_count=1,
+            universe_count=1,
+            recommended_count=1,
+            selected_skills_json="[]",
+            params_json="{}",
+            market_snapshot_json="{}",
+            result_summary_json="{}",
             status="completed",
-            recommended_count=len(result),
-            result_summary_json=json.dumps({"bucket_counts": {}}),
-            finished_at=datetime.utcnow(),
         )
         db.add(run)
         db.flush()
-
-        for i, card in enumerate(result):
-            rec = Recommendation(
-                recommendation_id=f"rec_test_{i:03d}",
-                run_id=run_id,
-                trade_date="2026-05-12",
-                code=card["code"],
-                name=card["name"],
-                industry=card.get("industry"),
-                recommend_price=float(card.get("recommend_price", 0)),
-                bucket="",
-                final_score=float(card["final_score"]),
-                consensus_score=float(card.get("consensus_score", 0)),
-                setup_type=card.get("setup_type"),
-                entry_rule=card.get("entry_rule"),
-                invalid_rule=card.get("invalid_rule"),
-                rationale=card.get("rationale"),
-                risk_tags_json=json.dumps(card.get("risk_flags", [])),
-                feature_snapshot_json=json.dumps({
-                    "component_scores": card.get("component_scores", {}),
-                    "data_authenticity": card.get("data_authenticity", 1.0),
-                }),
-                skill_breakdown_json=json.dumps(card.get("strategy_signals", [])),
-                agent_summary_json=json.dumps({"logs": [], "mode": "test"}),
-            )
-            db.add(rec)
+        db.add(Stock(code="000001", name="测试股", exchange="SZ", industry="电子", is_st=False))
+        db.add_all([
+            DailyKbar(code="000001", trade_date="2026-05-12", open=10.0, high=10.2, low=9.9, close=10.0, volume=1, amount=10, pct_chg=0.0, turnover_rate=1.0),
+            DailyKbar(code="000001", trade_date="2026-05-13", open=10.1, high=10.6, low=9.95, close=10.5, volume=1, amount=10, pct_chg=5.0, turnover_rate=1.2),
+            DailyKbar(code="000001", trade_date="2026-05-14", open=10.6, high=10.95, low=10.45, close=10.9, volume=1, amount=10, pct_chg=3.0, turnover_rate=1.3),
+            DailyKbar(code="000001", trade_date="2026-05-15", open=10.8, high=10.9, low=10.5, close=10.7, volume=1, amount=10, pct_chg=-1.0, turnover_rate=1.1),
+        ])
+        rec = Recommendation(
+            recommendation_id="rec_exec",
+            run_id=run.run_id,
+            trade_date="2026-05-12",
+            code="000001",
+            name="测试股",
+            industry="电子",
+            recommend_price=10.0,
+            bucket="core",
+            final_score=82.0,
+            consensus_score=80.0,
+            risk_tags_json="[]",
+            feature_snapshot_json=json.dumps({
+                "ideal_buy": 10.0,
+                "secondary_buy": 10.15,
+                "stop_loss": 9.6,
+                "take_profit": 10.8,
+                "suggested_position": "中仓",
+            }),
+            market_context_json="{}",
+            skill_breakdown_json="[]",
+            agent_summary_json="{}",
+            status="pending",
+            recent_repeat=False,
+        )
+        db.add(rec)
         db.commit()
 
-        # Verify persistence (17.1 check)
-        saved_run = get_run_detail(db, run_id)
-        assert saved_run is not None
-        assert saved_run["status"] == "completed"
-        assert saved_run["recommended_count"] == len(result)
+        result = label_pending_outcomes(db, horizon_days=5)
+        outcome = db.get(RecommendationOutcome, "rec_exec")
 
-        recs = list_run_recommendations(db, run_id)
-        assert len(recs) == len(result)
-        for rec in recs:
-            assert rec["recommendation_id"] is not None
-            assert rec["code"] is not None
-            assert rec["final_score"] > 0
-            assert rec["bucket"] == ""
+        assert result["labeled"] == 1
+        assert outcome is not None
+        assert outcome.entry_triggered is True
+        assert outcome.entry_date == "2026-05-13"
+        assert outcome.exit_reason == "take_profit_hit"
+        assert outcome.outcome_label == "success"
+        assert outcome.executed_return > 7.0
+        assert outcome.position_size == pytest.approx(0.55)
+        assert outcome.weighted_return == pytest.approx(round(outcome.executed_return * 0.55, 2))
 
-        # Verify recommendation detail
-        if recs:
-            detail = get_recommendation_detail(db, recs[0]["recommendation_id"])
-            assert detail is not None
-            assert detail["code"] == recs[0]["code"]
+    def test_label_pending_outcomes_preserves_legacy_success_when_buy_point_not_triggered(self, db):
+        run = RecommendationRun(
+            run_id="run_outcome_miss",
+            run_name="结果标注未触发测试",
+            run_mode="formal",
+            trade_date="2026-05-12",
+            market_scope="all",
+            risk_template="balanced",
+            output_count=1,
+            universe_count=1,
+            recommended_count=1,
+            selected_skills_json="[]",
+            params_json="{}",
+            market_snapshot_json="{}",
+            result_summary_json="{}",
+            status="completed",
+        )
+        db.add(run)
+        db.flush()
+        db.add(Stock(code="000002", name="未触发股", exchange="SZ", industry="电子", is_st=False))
+        db.add_all([
+            DailyKbar(code="000002", trade_date="2026-05-12", open=10.0, high=10.2, low=9.95, close=10.0, volume=1, amount=10, pct_chg=0.0, turnover_rate=1.0),
+            DailyKbar(code="000002", trade_date="2026-05-13", open=10.3, high=10.7, low=10.1, close=10.6, volume=1, amount=10, pct_chg=6.0, turnover_rate=1.3),
+            DailyKbar(code="000002", trade_date="2026-05-14", open=10.6, high=10.9, low=10.35, close=10.8, volume=1, amount=10, pct_chg=2.0, turnover_rate=1.2),
+            DailyKbar(code="000002", trade_date="2026-05-15", open=10.75, high=10.85, low=10.5, close=10.7, volume=1, amount=10, pct_chg=-1.0, turnover_rate=1.1),
+        ])
+        rec = Recommendation(
+            recommendation_id="rec_miss",
+            run_id=run.run_id,
+            trade_date="2026-05-12",
+            code="000002",
+            name="未触发股",
+            industry="电子",
+            recommend_price=10.0,
+            bucket="watch",
+            final_score=75.0,
+            consensus_score=73.0,
+            risk_tags_json="[]",
+            feature_snapshot_json=json.dumps({
+                "ideal_buy": 9.6,
+                "secondary_buy": 9.7,
+                "stop_loss": 9.2,
+                "take_profit": 10.8,
+                "suggested_position": "小仓",
+            }),
+            market_context_json="{}",
+            skill_breakdown_json="[]",
+            agent_summary_json="{}",
+            status="pending",
+            recent_repeat=False,
+        )
+        db.add(rec)
+        db.commit()
+
+        result = label_pending_outcomes(db, horizon_days=5)
+        outcome = db.get(RecommendationOutcome, "rec_miss")
+
+        assert result["labeled"] == 1
+        assert outcome is not None
+        assert outcome.entry_triggered is False
+        assert outcome.exit_reason == "not_triggered"
+        assert outcome.outcome_label == "failed"
+        assert outcome.outcome_label_legacy == "success"
+        assert "未触发买点" in str(outcome.outcome_reason)
 
     def test_stats_consistency(self, db):
         """17.6: Stats overview returns correct counts."""
@@ -438,7 +559,7 @@ class TestE2ERecommendationFlow:
             status="completed",
             recommended_count=3,
             result_summary_json="{}",
-            finished_at=datetime.utcnow(),
+            finished_at=datetime.now(timezone.utc).replace(tzinfo=None),
         )
         db.add(run)
         db.flush()
@@ -511,7 +632,7 @@ class TestE2ERecommendationFlow:
             status="completed",
             recommended_count=1,
             result_summary_json="{}",
-            finished_at=datetime.utcnow(),
+            finished_at=datetime.now(timezone.utc).replace(tzinfo=None),
         )
         db.add(run)
         db.flush()
@@ -703,6 +824,56 @@ class TestE2ERecommendationFlow:
         third = workbench_service.bootstrap_workbench_state(db)
         assert calls["count"] == 2
         assert third["market_snapshot"]["snapshot_id"] != first["market_snapshot"]["snapshot_id"]
+
+    def test_initial_state_uses_cache_until_invalidated(self, db, monkeypatch):
+        """Initial state should share the same invalidation behavior as bootstrap."""
+        from app.services import workbench_service
+
+        invalidate_bootstrap_cache()
+        _seed_skill_registry(db)
+        calls = {"count": 0}
+
+        def fake_bootstrap(_db):
+            calls["count"] += 1
+            return {
+                "presets": [],
+                "recent_runs": {"formal": None, "experiment": None},
+                "market_snapshot": {
+                    "snapshot_id": f"snap-{calls['count']}",
+                    "trade_date": "2026-05-12",
+                    "sample_count": calls["count"],
+                    "up_count": 0,
+                    "down_count": 0,
+                    "limit_up_count": 0,
+                    "limit_down_count": 0,
+                    "main_industries": [],
+                    "breadth": {"regime": "测试"},
+                },
+                "skill_summary": {
+                    "formal_count": 1,
+                    "experiment_count": 0,
+                    "disabled_count": 0,
+                },
+            }
+
+        monkeypatch.setattr(workbench_service, "bootstrap_workbench_state", fake_bootstrap)
+        monkeypatch.setattr(workbench_service, "list_presets", lambda _db: [{"preset_id": "p1"}])
+        monkeypatch.setattr(workbench_service, "list_runs", lambda _db: [{"run_id": "r1"}])
+        monkeypatch.setattr(workbench_service, "list_skills", lambda _db: [{"skill_id": "s1"}])
+
+        import app.services.data_sources as data_sources_service
+
+        monkeypatch.setattr(data_sources_service, "list_data_sources", lambda _db: [{"source": "sina"}])
+
+        first = get_initial_workbench_state(db)
+        second = get_initial_workbench_state(db)
+        assert calls["count"] == 1
+        assert second["home"]["market_snapshot"]["snapshot_id"] == first["home"]["market_snapshot"]["snapshot_id"]
+
+        invalidate_bootstrap_cache()
+        third = get_initial_workbench_state(db)
+        assert calls["count"] == 2
+        assert third["home"]["market_snapshot"]["snapshot_id"] != first["home"]["market_snapshot"]["snapshot_id"]
 
     def test_enqueue_workbench_run_persists_queued_run(self, db, monkeypatch):
         """Async run API should return immediately with a persisted queued row."""

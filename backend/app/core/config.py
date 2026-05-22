@@ -9,12 +9,13 @@ class Settings(BaseSettings):
     app_name: str = "AShare Shortline System"
     database_url: str = "mysql+pymysql://aowang:1279990918@139.196.242.53:4407/ashare_workbench?charset=utf8mb4"
     data_provider: str = "multi"
-    tushare_token: str = ""
-    tushare_rate_limit_per_minute: int = 50
+    tushare_token: str = "f8b05f8ee54f468220f2569afe56b4c027f1d388d164899339d394ad"
+    tushare_rate_limit_per_minute: int = 0  # 0 = 不限速（自建服务器）
     quote_sources: str = "thsdk,eastmoney,akshare,tencent,sina"
-    kline_sources: str = "tickflow,tencent,tushare,thsdk,eastmoney,akshare"
+    kline_sources: str = "tushare,tencent,eastmoney,akshare"
     market_scan_size: int = 5200
-    market_candidate_count: int = 900  # 全市场候选上限；本地池模式 900 只比 300 只多约 1 分钟，不会触发 MySQL 写入瓶颈
+    market_candidate_count: int = 0  # 0 = 不在首段召回前硬截断，交给宽召回窗口与后续精排控制
+    market_broad_recall_count: int = 1800  # 两段召回第一段：从全可交易池宽召回，再进入后续规则门/深审
     market_candidate_lookahead_multiplier: int = 4
     market_skill_review_limit: int = 0  # 0 = Skill Agent 接收本次实际扫描的全部股票
     market_skill_review_concurrency: int = 10  # 默认 10 并发；运行时可通过 agent_review_concurrency 参数覆盖
@@ -26,7 +27,7 @@ class Settings(BaseSettings):
     market_kline_days: int = 90
     market_kline_seed_days: int = 250
     market_kline_incremental_buffer: int = 10
-    market_quote_cache_ttl_seconds: int = 28800
+    market_quote_cache_ttl_seconds: int = 300
     market_kline_cache_ttl_hours: int = 20
     market_pool_min_source_count: int = 2
     market_request_timeout_seconds: float = 10.0
@@ -39,7 +40,7 @@ class Settings(BaseSettings):
     agent_skill_api_key: str = ""
     agent_skill_base_url: str = "https://api.deepseek.com"
     agent_skill_model: str = "deepseek-v4-pro"
-    agent_skill_timeout_seconds: float = 600.0  # 实测单票单Skill审查约257s，600s给足安全余量（含工具调用多轮往返）
+    agent_skill_timeout_seconds: float = 300.0  # 正式链路默认按分钟级超时控制长尾，避免单Skill异常把整次推荐拖到 10+ 分钟
     agent_skill_prompt_char_limit: int = 22000
     agent_retry_count: int = 3
     agent_retry_backoff: float = 1.5
@@ -47,12 +48,12 @@ class Settings(BaseSettings):
     agent_temperature: float = 0.3
     agent_max_tokens: int = 4096
     agent_skill_weight: float = 0.50
-    # 辅助数据源（akshare 优先，eastmoney 备用）
-    limit_up_sources: str = "akshare,eastmoney"
-    concept_sector_sources: str = "akshare,eastmoney"
-    capital_flow_sources: str = "akshare,eastmoney"
-    dragon_tiger_sources: str = "akshare,eastmoney"
-    news_sources: str = "akshare,eastmoney"
+    # 辅助数据源（tushare 优先，eastmoney/akshare 备用）
+    limit_up_sources: str = "tushare,akshare,eastmoney"
+    concept_sector_sources: str = "tushare,akshare,eastmoney"
+    capital_flow_sources: str = "tushare,eastmoney"
+    dragon_tiger_sources: str = "tushare,eastmoney"
+    news_sources: str = "eastmoney,akshare"
     limit_up_cache_ttl_seconds: int = 3600
     concept_sector_cache_ttl_seconds: int = 3600
     capital_flow_cache_ttl_seconds: int = 7200

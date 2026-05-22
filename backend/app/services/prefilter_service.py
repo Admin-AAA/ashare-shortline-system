@@ -24,6 +24,7 @@ def apply_prefilters(
 
     per_skill: dict[str, dict[str, Any]] = {}
     union_codes: set[str] = set()
+    pass_skill_ids_by_code: dict[str, list[str]] = {}
 
     for selected in selected_skills:
         skill = selected["skill"]
@@ -39,6 +40,7 @@ def apply_prefilters(
                 code = str(stock.get("code") or "")
                 if code:
                     union_codes.add(code)
+                    pass_skill_ids_by_code.setdefault(code, []).append(skill_id)
                     if len(sample_codes) < 8:
                         sample_codes.append(code)
             else:
@@ -53,7 +55,14 @@ def apply_prefilters(
             "sample_codes": sample_codes,
         }
 
-    filtered = [stock for stock in common_filtered if str(stock.get("code") or "") in union_codes]
+    filtered = []
+    for stock in common_filtered:
+        code = str(stock.get("code") or "")
+        if code not in union_codes:
+            continue
+        stock["prefilter_skill_ids"] = sorted(pass_skill_ids_by_code.get(code, []))
+        stock["prefilter_source"] = "skill_pass"
+        filtered.append(stock)
     union_pass_count = len(filtered)
     fill_count = 0
     fallback_used = False
@@ -65,6 +74,8 @@ def apply_prefilters(
             code = str(stock.get("code") or "")
             if not code or code in chosen_codes:
                 continue
+            stock["prefilter_skill_ids"] = sorted(pass_skill_ids_by_code.get(code, []))
+            stock["prefilter_source"] = "fill"
             filtered.append(stock)
             chosen_codes.add(code)
             fill_count += 1
@@ -74,7 +85,12 @@ def apply_prefilters(
     if not filtered:
         source = common_filtered or ordered_stocks
         fallback_count = min(len(source), max(12, target_count or 12))
-        filtered = source[:fallback_count]
+        filtered = []
+        for stock in source[:fallback_count]:
+            code = str(stock.get("code") or "")
+            stock["prefilter_skill_ids"] = sorted(pass_skill_ids_by_code.get(code, []))
+            stock["prefilter_source"] = "fallback"
+            filtered.append(stock)
         fallback_used = True
 
     audit = {

@@ -8,7 +8,7 @@ import subprocess
 import threading
 import time
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 import asyncio
 from typing import Any
@@ -33,7 +33,7 @@ from app.models.tables import (
     CapitalFlow,
     ConceptSector,
     ConceptSectorStock,
-    DailyBar,
+    DailyKbar,
     DragonTiger,
     MarketSnapshot,
     NewsAnnouncement,
@@ -59,11 +59,18 @@ from app.services.market_pool import (
     refresh_dragon_tiger,
     refresh_news_for_codes,
 )
+from app.services.outcome_service import (
+    invalidate_outcome_metrics_cache,
+    is_trade_executed,
+    label_pending_outcomes as label_pending_outcomes_service,
+    resolved_trade_return,
+)
 from app.services.prefilter_service import apply_prefilters
 from app.services.research_context import build_research_contexts
 
 
 BOOTSTRAP_CACHE_TTL_SECONDS = 30.0
+INITIAL_STATE_CACHE_TTL_SECONDS = 30.0
 RUN_HEARTBEAT_STALE_SECONDS = 1200  # Agent 单次审查可达 250s+，心跳必须大于外层超时(900s)
 RUN_ACTIVE_STATUSES = {"queued", "running"}
 RUN_RESUMABLE_STATUSES = {"interrupted"}
@@ -141,8 +148,87 @@ DEFAULT_PRESETS = [
 ]
 
 
+def _default_data_source_for_run_mode(run_mode: Any) -> str:
+    return DATA_SOURCE_LOCAL_POOL_PREFERRED if str(run_mode or "formal") == "formal" else DATA_SOURCE_LOCAL_POOL
+
+
+def _select_aux_prefetch_codes(stocks: list[dict[str, Any]], count: int) -> list[str]:
+    if count <= 0 or not stocks:
+        return []
+
+    ordered = [item for item in stocks if str(item.get("code") or "")]
+    if count >= len(ordered):
+        return [str(item["code"]) for item in ordered]
+
+    def _num_field(item: dict[str, Any], field: str) -> float:
+        return float(item.get(field) or 0)
+
+    def _small_mid_cap_score(item: dict[str, Any]) -> tuple[float, float]:
+        free_mv = _num_field(item, "free_mv_yi")
+        if free_mv <= 0:
+            return (-1.0, _num_field(item, "amount_yi"))
+        if free_mv <= 300:
+            return (300.0 - free_mv, _num_field(item, "amount_yi"))
+        return (-free_mv, _num_field(item, "amount_yi"))
+
+    ranking_groups = [
+        sorted(ordered, key=lambda item: (_num_field(item, "amount_yi"), _num_field(item, "pct")), reverse=True),
+        sorted(ordered, key=lambda item: (_num_field(item, "turnover_rate"), _num_field(item, "pct")), reverse=True),
+        sorted(ordered, key=lambda item: (_num_field(item, "pct"), _num_field(item, "amount_yi")), reverse=True),
+        sorted(ordered, key=_small_mid_cap_score, reverse=True),
+    ]
+
+    industry_best: list[dict[str, Any]] = []
+    seen_industries: set[str] = set()
+    industry_quota = max(1, min(6, count // 3))
+    for item in ranking_groups[0]:
+        industry = str(item.get("industry") or "")
+        if not industry or industry == "未分类" or industry in seen_industries:
+            continue
+        seen_industries.add(industry)
+        industry_best.append(item)
+        if len(industry_best) >= industry_quota:
+            break
+
+    selected: list[str] = []
+    seen_codes: set[str] = set()
+
+    def _append(item: dict[str, Any]) -> None:
+        code = str(item.get("code") or "")
+        if not code or code in seen_codes:
+            return
+        seen_codes.add(code)
+        selected.append(code)
+
+    for item in industry_best:
+        _append(item)
+        if len(selected) >= count:
+            return selected
+
+    pointers = [0 for _ in ranking_groups]
+    while len(selected) < count:
+        progressed = False
+        for idx, group in enumerate(ranking_groups):
+            while pointers[idx] < len(group):
+                item = group[pointers[idx]]
+                pointers[idx] += 1
+                code = str(item.get("code") or "")
+                if not code or code in seen_codes:
+                    continue
+                _append(item)
+                progressed = True
+                break
+            if len(selected) >= count:
+                return selected
+        if not progressed:
+            break
+    return selected
+
+
 _bootstrap_cache_lock = threading.Lock()
 _bootstrap_cache: dict[tuple[str, str], dict[str, Any]] = {}
+_initial_state_cache_lock = threading.Lock()
+_initial_state_cache: dict[tuple[str, str], dict[str, Any]] = {}
 _progress_commit_state_lock = threading.Lock()
 _progress_commit_state: dict[str, dict[str, Any]] = {}
 _run_queue: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue()
@@ -200,6 +286,57 @@ def bootstrap_workbench_state(db: Session) -> dict[str, Any]:
 def invalidate_bootstrap_cache() -> None:
     with _bootstrap_cache_lock:
         _bootstrap_cache.clear()
+    with _initial_state_cache_lock:
+        _initial_state_cache.clear()
+
+
+def get_initial_workbench_state(db: Session) -> dict[str, Any]:
+    from app.services.cost_service import list_scheduled_task_runs
+
+    settings = get_settings()
+    cache_key = (settings.database_url, str(settings.skills_dir.resolve()))
+    now = time.monotonic()
+    with _initial_state_cache_lock:
+        cached = _initial_state_cache.get(cache_key)
+        if cached and (now - float(cached["ts"])) < INITIAL_STATE_CACHE_TTL_SECONDS:
+            return copy.deepcopy(cached["data"])
+
+    from app.services.data_sources import list_data_sources
+
+    t0 = time.perf_counter()
+    home_state = bootstrap_workbench_state(db)
+    t1 = time.perf_counter()
+    presets = list_presets(db)
+    t2 = time.perf_counter()
+    runs = list_runs(db)
+    t3 = time.perf_counter()
+    task_runs = list_scheduled_task_runs(db)
+    t35 = time.perf_counter()
+    skills = list_skills(db)
+    t4 = time.perf_counter()
+    data_sources = list_data_sources(db)
+    t5 = time.perf_counter()
+    payload = {
+        "home": home_state,
+        "presets": presets,
+        "runs": runs,
+        "task_runs": task_runs,
+        "skills": skills,
+        "data_sources": data_sources,
+    }
+    logger.info(
+        "initial_state timing: home=%.0fms presets=%.0fms runs=%.0fms task_runs=%.0fms skills=%.0fms data_sources=%.0fms total=%.0fms",
+        (t1 - t0) * 1000,
+        (t2 - t1) * 1000,
+        (t3 - t2) * 1000,
+        (t35 - t3) * 1000,
+        (t4 - t35) * 1000,
+        (t5 - t4) * 1000,
+        (t5 - t0) * 1000,
+    )
+    with _initial_state_cache_lock:
+        _initial_state_cache[cache_key] = {"ts": time.monotonic(), "data": copy.deepcopy(payload)}
+    return payload
 
 
 def enqueue_workbench_run(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
@@ -216,7 +353,7 @@ def enqueue_workbench_run(db: Session, payload: dict[str, Any]) -> dict[str, Any
         raise ValueError("没有可运行的 Skill，请检查预设配置或 Skill 状态")
 
     run_id = _new_run_id()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     run = RecommendationRun(
         run_id=run_id,
         preset_id=params.get("preset_id"),
@@ -381,39 +518,41 @@ def _sync_registry_row(
         registry.enabled = enabled
         changed = True
     if changed:
-        registry.updated_at = datetime.utcnow()
+        registry.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     return changed
 
 
 def list_skills(db: Session) -> list[dict[str, Any]]:
     sync_skills(db)
-    preset_rows = db.scalars(select(PresetSkill)).all()
+    preset_rows = db.execute(
+        select(PresetSkill.skill_id, Preset.name).join(Preset, Preset.preset_id == PresetSkill.preset_id)
+    ).all()
     preset_map: dict[str, list[str]] = {}
-    for row in preset_rows:
-        preset = db.get(Preset, row.preset_id)
-        if preset is None:
-            continue
-        preset_map.setdefault(row.skill_id, []).append(preset.name)
+    for skill_id, preset_name in preset_rows:
+        preset_map.setdefault(skill_id, []).append(preset_name)
     rows = db.scalars(select(SkillRegistry).order_by(SkillRegistry.skill_id.asc())).all()
-    return [
-        {
-            "skill_id": row.skill_id,
-            "name": row.name,
-            "source_type": row.source_type,
-            "source_url": row.source_url,
-            "installed_path": row.installed_path,
-            "current_version": row.current_version,
-            "mode": row.mode,
-            "enabled": row.enabled,
-            "has_executable_contract": row.has_executable_contract,
-            "has_agent_contract": bool(_loads(row.manifest_json, {}).get("_skill_md_available")),
-            "agent_runtime": _loads(row.manifest_json, {}).get("_skill_runtime", "unknown"),
-            "reference_count": len(_loads(row.manifest_json, {}).get("_skill_reference_files", [])),
-            "manifest": _loads(row.manifest_json, {}),
-            "assigned_presets": preset_map.get(row.skill_id, []),
-        }
-        for row in rows
-    ]
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        manifest = _loads(row.manifest_json, {})
+        items.append(
+            {
+                "skill_id": row.skill_id,
+                "name": row.name,
+                "source_type": row.source_type,
+                "source_url": row.source_url,
+                "installed_path": row.installed_path,
+                "current_version": row.current_version,
+                "mode": row.mode,
+                "enabled": row.enabled,
+                "has_executable_contract": row.has_executable_contract,
+                "has_agent_contract": bool(manifest.get("_skill_md_available")),
+                "agent_runtime": manifest.get("_skill_runtime", "unknown"),
+                "reference_count": len(manifest.get("_skill_reference_files", [])),
+                "manifest": manifest,
+                "assigned_presets": preset_map.get(row.skill_id, []),
+            }
+        )
+    return items
 
 
 def get_skill_detail(db: Session, skill_id: str) -> dict[str, Any] | None:
@@ -467,7 +606,7 @@ def set_skill_mode(db: Session, skill_id: str, mode: str) -> dict[str, Any] | No
     compatibility = _loads(row.compatibility_json, {})
     compatibility["mode_set_by_user"] = True
     row.compatibility_json = _dumps(compatibility)
-    row.updated_at = datetime.utcnow()
+    row.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.commit()
     invalidate_bootstrap_cache()
     return {"skill_id": row.skill_id, "mode": row.mode, "enabled": row.enabled}
@@ -545,24 +684,25 @@ def install_skill(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
 def list_presets(db: Session) -> list[dict[str, Any]]:
     sync_skills(db)
     presets = db.scalars(select(Preset).order_by(Preset.created_at.asc())).all()
-    return [_serialize_preset(db, preset) for preset in presets]
+    return _serialize_presets_batched(db, presets)
 
 
 def create_preset(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
     preset_id = str(payload.get("preset_id") or _slugify(payload.get("name") or f"preset-{uuid.uuid4().hex[:6]}"))
     if db.get(Preset, preset_id) is not None:
         preset_id = f"{preset_id}-{uuid.uuid4().hex[:4]}"
+    run_mode = str(payload.get("run_mode") or "formal")
     preset = Preset(
         preset_id=preset_id,
         name=str(payload.get("name") or "未命名预设"),
         description=payload.get("description"),
-        run_mode=str(payload.get("run_mode") or "formal"),
+        run_mode=run_mode,
         market_scope=str(payload.get("market_scope") or "all"),
         market_scope_value=payload.get("market_scope_value"),
         risk_template=str(payload.get("risk_template") or "balanced"),
         output_count=int(payload.get("output_count") or 6),
         bucket_limits_json="{}",
-        data_source=_normalize_data_source(payload.get("data_source")),
+        data_source=_normalize_data_source(payload.get("data_source") or _default_data_source_for_run_mode(run_mode)),
         hide_recent_repeats=bool(payload.get("hide_recent_repeats", True)),
         status=str(payload.get("status") or "active"),
     )
@@ -595,7 +735,7 @@ def update_preset(db: Session, preset_id: str, payload: dict[str, Any]) -> dict[
         preset.output_count = int(payload["output_count"])
     if "hide_recent_repeats" in payload:
         preset.hide_recent_repeats = bool(payload["hide_recent_repeats"])
-    preset.updated_at = datetime.utcnow()
+    preset.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     if "skills" in payload:
         _replace_preset_skills(db, preset.preset_id, payload["skills"] or [])
     db.commit()
@@ -619,7 +759,7 @@ def list_runs(db: Session, run_mode: str | None = None, limit: int = 100) -> lis
 
 def _auto_recover_stale_runs(db: Session, runs: list[RecommendationRun]) -> int:
     """自动将心跳超时的活跃运行标记为 interrupted。"""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     recovered = 0
     for run in runs:
         if run.status not in RUN_ACTIVE_STATUSES:
@@ -766,7 +906,7 @@ def _mark_run_failed(db: Session, run_id: str, exc: Exception) -> None:
             return
         run.status = "failed"
         run.error_message = str(exc)
-        run.finished_at = datetime.utcnow()
+        run.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
         run.heartbeat_at = run.finished_at
         run.progress_phase = "failed"
         run.progress_message = str(exc)
@@ -793,7 +933,7 @@ def _update_run_progress(
     run = db.get(RecommendationRun, run_id)
     if run is None:
         return None
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     run.heartbeat_at = now
     run.progress_phase = phase
     if current is not None:
@@ -829,7 +969,7 @@ def _update_run_progress(
 
 
 def recover_interrupted_runs(db: Session) -> int:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     runs = db.scalars(select(RecommendationRun).where(RecommendationRun.status.in_(tuple(RUN_ACTIVE_STATUSES)))).all()
     recovered = 0
     for run in runs:
@@ -858,7 +998,7 @@ def _save_checkpoint(db: Session, run_id: str, phase: str) -> None:
     if run is None:
         return
     run.checkpoint_phase = phase
-    run.heartbeat_at = datetime.utcnow()
+    run.heartbeat_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.commit()
     _record_progress_commit(run)
 
@@ -893,7 +1033,7 @@ def _record_progress_commit(run: RecommendationRun) -> None:
             _progress_commit_state[run.run_id] = {
                 "phase": run.progress_phase,
                 "status": run.status,
-                "committed_at": datetime.utcnow(),
+                "committed_at": datetime.now(timezone.utc).replace(tzinfo=None),
             }
         else:
             _progress_commit_state.pop(run.run_id, None)
@@ -1031,10 +1171,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     settings = get_settings()
     skip_aux_refresh = bool(params.get("skip_aux_refresh"))
     aux_prefetch_count = min(len(prefiltered_stocks), max(int(params.get("output_count") or 0) * 4, 12), 36)
-    aux_prefetch_codes = [
-        stock["code"]
-        for stock in sorted(prefiltered_stocks, key=lambda item: float(item.get("free_mv_yi") or 0), reverse=True)[:aux_prefetch_count]
-    ]
+    aux_prefetch_codes = _select_aux_prefetch_codes(prefiltered_stocks, aux_prefetch_count)
     _update_run_progress(
         db,
         existing_run_id,
@@ -1241,7 +1378,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     run.run_mode = params["run_mode"]
     run.trade_date = snapshot["trade_date"]
     if not run.started_at:
-        run.started_at = datetime.utcnow()
+        run.started_at = datetime.now(timezone.utc).replace(tzinfo=None)
     run.finished_at = None
     run.universe_count = len(research_contexts)
     run.recommended_count = 0
@@ -1255,7 +1392,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     run.result_summary_json = _dumps({})
     run.status = "running"
     run.error_message = None
-    run.heartbeat_at = datetime.utcnow()
+    run.heartbeat_at = datetime.now(timezone.utc).replace(tzinfo=None)
     run.progress_phase = "feature_build"
     run.progress_current = len(research_contexts)
     run.progress_total = len(research_contexts)
@@ -1283,16 +1420,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
 
         # ═══ 阶段一：策略规则全市场扫描（所有基础过滤合格股票，无 LLM） ═══
         settings = get_settings()
-        # disable_agent_review: 显式关闭 Agent 深审（回测/离线验收模式）
-        disable_agent_review = bool(params.get("disable_agent_review"))
-        if disable_agent_review:
-            skill_review_limit = 0
-        else:
-            skill_review_limit = int(params.get("agent_review_limit") or settings.market_skill_review_limit or 0)
-            if skill_review_limit <= 0:
-                default_multiple = 3 if params["run_mode"] == "experiment" else 8
-                default_min = 8 if params["run_mode"] == "experiment" else 30
-                skill_review_limit = min(max(int(params.get("output_count") or 0) * default_multiple, default_min), 60)
+        skill_review_limit = _resolve_skill_review_limit(params, settings)
         skill_review_concurrency = max(1, int(params.get("agent_review_concurrency") or settings.market_skill_review_concurrency or 1))
         prelim_entries: list[dict[str, Any]] = []
         total_contexts = len(research_contexts)
@@ -1310,10 +1438,20 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             if i % 50 == 0:
                 await asyncio.sleep(0)
             stock = context.to_skill_input()
+            prefilter_skill_ids = {
+                str(skill_id)
+                for skill_id in (stock.get("prefilter_skill_ids") or [])
+                if skill_id
+            }
+            prefilter_source = str(stock.get("prefilter_source") or "")
             rule_signals_by_skill: dict[str, Any] = {}
             for selected in selected_skills:
                 skill_obj = selected["skill"]
-                signal = run_strategy(skill_obj, stock, snapshot["main_industries"]) if skill_obj.executable else None
+                if prefilter_source == "skill_pass" and prefilter_skill_ids and skill_obj.skill_id not in prefilter_skill_ids:
+                    signal = None
+                else:
+                    skip_universe = prefilter_source == "skill_pass" and skill_obj.skill_id in prefilter_skill_ids
+                    signal = run_strategy(skill_obj, stock, snapshot["main_industries"], skip_universe_check=skip_universe) if skill_obj.executable else None
                 rule_signals_by_skill[skill_obj.skill_id] = signal
 
             prelim_entries.append(
@@ -1446,124 +1584,21 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             message="聚合 Skill 结论并生成候选卡片",
             status="running",
         )
-        def _build_card(entry, skill_reviews):
-            context = entry["context"]
-            stock = entry["stock"]
-            rule_signals_by_skill = entry["rule_signals"]
-            review_skill_ids = set(entry.get("review_skill_ids") or [])
-            signals = []
-            for review_result in skill_reviews:
-                skill_id = review_result["skill_id"]
-                review_data = review_result.get("review")
-                hc = review_result.get("hallucination_check")
-                rule_signal = rule_signals_by_skill.get(skill_id)
-
-                agent_review = {
-                    "stance": review_data.get("stance", "neutral"),
-                    "score_delta": review_data.get("score_delta", review_data.get("score", 50) - 50),
-                    "score": review_data.get("score", 50),
-                    "confidence": review_data.get("confidence", 0.5),
-                    "supports": review_data.get("supports") or review_data.get("evidence", []),
-                    "risks": review_data.get("risks", []),
-                    "summary": review_data.get("summary", ""),
-                    "market_regime_judgment": review_data.get("market_regime_judgment", ""),
-                    "action": review_data.get("action", "观察"),
-                    "position_range": review_data.get("position_range", "0-5%"),
-                    "entry_style": review_data.get("entry_style", ""),
-                    "invalidation_conditions": review_data.get("invalidation_conditions", []),
-                    "next_day_plan": review_data.get("next_day_plan", []),
-                    "runtime": review_data.get("runtime", "agent_skill_agno"),
-                } if review_data else {
-                    "stance": "neutral",
-                    "score_delta": 0,
-                    "score": 50,
-                    "confidence": 0.3,
-                    "supports": [],
-                    "risks": [str(review_result.get("error") or "Skill Agent 未返回有效审查，已按中性降级处理")],
-                    "summary": str(review_result.get("error") or "Skill Agent 未返回有效审查，已按中性降级处理"),
-                    "action": "不做",
-                    "position_range": "0%",
-                    "entry_style": "当前不设买点",
-                    "invalidation_conditions": [str(review_result.get("error") or "等待数据恢复后再观察")],
-                    "next_day_plan": ["等待更强主线或 Agent 审查恢复后再评估"],
-                    "runtime_note": "agent_review_failed",
-                }
-
-                if rule_signal is None:
-                    signal = agent_only_signal(skill_map[skill_id], stock, agent_review)
-                else:
-                    signal = enrich_signal_with_agent_review(rule_signal, agent_review)
-
-                if hc:
-                    signal["hallucination_flags"] = hc.get("flags", [])
-                    signal["hallucination_severity"] = hc.get("severity", "low")
-
-                for selected in selected_skills:
-                    if selected["skill_id"] == skill_id:
-                        signal["weight"] = selected["weight"]
-                        signal["skill_mode"] = selected["mode"]
-                        break
-                signals.append(signal)
-
-            for selected in selected_skills:
-                skill_id = selected["skill_id"]
-                if skill_id in review_skill_ids:
-                    continue
-                rule_signal = rule_signals_by_skill.get(skill_id)
-                if not rule_signal:
-                    continue
-                signal = dict(rule_signal)
-                signal["weight"] = selected["weight"]
-                signal["skill_mode"] = selected["mode"]
-                signal["runtime"] = signal.get("runtime") or "strategy_yaml_rule_only"
-                if not signal.get("hard_veto"):
-                    reason = ((entry.get("skill_gate_reasons") or {}).get(skill_id) or "规则门未进入 Agent 深审")
-                    signal["agent_review_skipped"] = {
-                        "reason": reason,
-                        "runtime_note": "skill_rule_gate_skipped",
-                    }
-                signals.append(signal)
-
-            valid_reviews = [r for r in skill_reviews if r.get("review") and not r.get("error")]
-            if valid_reviews:
-                scores_list = [r["review"]["score"] for r in valid_reviews]
-                confidences_list = [r["review"]["confidence"] for r in valid_reviews]
-                agent_review_score = sum(s * c for s, c in zip(scores_list, confidences_list)) / max(sum(confidences_list), 0.01)
-            else:
-                agent_review_score = 50.0
-
-            review_log = {
-                "agent_review_score": round(agent_review_score, 2),
-                "logs": [
-                    {"agent_name": f"Skill Agent · {r.get('skill_name', 'Unknown')}", "output": r.get("review") or {}}
-                    for r in skill_reviews if r.get("review")
-                ],
-            }
-
-            card = aggregate(
-                stock=stock,
-                signals=signals,
-                market_score=market_score,
-                agent_review_score=review_log["agent_review_score"],
-                risk_template=params["risk_template"],
-                calibrated_weights=calibrated_weights if calibrated_weights else None,
-                market_snapshot=snapshot,
-            )
-            card["feature_snapshot"] = context.to_feature_snapshot()
-            card["feature_snapshot"]["component_scores"] = card.get("component_scores", {})
-            card["feature_snapshot"]["data_authenticity"] = card.get("data_authenticity", 1.0)
-            card["stop_loss"] = card["feature_snapshot"].get("stop_loss")
-            card["take_profit"] = card["feature_snapshot"].get("take_profit")
-            card["market_snapshot"] = snapshot
-            card["agent_logs"] = review_log["logs"]
-            card["recent_repeat"] = stock["code"] in recent_codes
-            return card
-
         # 处理 Skill 输入集（有 Agent 审查）— 这些是主力推荐
         candidate_success_count = 0
         for entry in candidate_results:
             skill_reviews = entry.get("skill_reviews") or []
-            card = _build_card(entry, skill_reviews)
+            card = _build_recommendation_card(
+                entry,
+                skill_reviews,
+                skill_map=skill_map,
+                selected_skills=selected_skills,
+                market_score=market_score,
+                risk_template=params["risk_template"],
+                calibrated_weights=calibrated_weights,
+                snapshot=snapshot,
+                recent_codes=recent_codes,
+            )
             if card.get("agent_logs"):
                 candidate_success_count += 1
             if params["hide_recent_repeats"] and card["recent_repeat"]:
@@ -1575,12 +1610,34 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             candidate_success_count, len(candidate_results),
         )
         pipeline_audit["skill_review_success_count"] = candidate_success_count
-
-        if len(cards) < params["output_count"]:
-            logger.info(
-                "Skill-reviewed pool yielded %d cards (target %d) — 不补 rule-only fallback，以 Agent 审查结果为准",
-                len(cards), params["output_count"],
+        rule_only_fallback_count = 0
+        if len(cards) < params["output_count"] and non_skill_entries:
+            fallback_entries = sorted(
+                non_skill_entries,
+                key=lambda entry: float(entry.get("prelim_score") or 0),
+                reverse=True,
             )
+            for entry in fallback_entries:
+                card = _build_recommendation_card(
+                    entry,
+                    [],
+                    skill_map=skill_map,
+                    selected_skills=selected_skills,
+                    market_score=market_score,
+                    risk_template=params["risk_template"],
+                    calibrated_weights=calibrated_weights,
+                    snapshot=snapshot,
+                    recent_codes=recent_codes,
+                )
+                card["fallback_mode"] = "rule_only_fill"
+                card["risk_flags"] = list(dict.fromkeys(list(card.get("risk_flags", [])) + ["未进入Agent深审，按规则候补"]))
+                if params["hide_recent_repeats"] and card["recent_repeat"]:
+                    continue
+                cards.append(card)
+                rule_only_fallback_count += 1
+                if len(cards) >= params["output_count"]:
+                    break
+        pipeline_audit["rule_only_fallback_count"] = rule_only_fallback_count
         cards = apply_pool_rules(cards, params["output_count"])
         _save_checkpoint(db, run_id, "aggregate")
         _update_run_progress(
@@ -1660,7 +1717,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             )
 
         run.recommended_count = len(saved)
-        run.finished_at = datetime.utcnow()
+        run.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
         run.status = "completed"
         run.heartbeat_at = run.finished_at
         run.progress_phase = "completed"
@@ -1677,7 +1734,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     except Exception as exc:
         run.status = "failed"
         run.error_message = str(exc)
-        run.finished_at = datetime.utcnow()
+        run.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
         run.heartbeat_at = run.finished_at
         run.progress_phase = "failed"
         run.progress_message = str(exc)
@@ -1739,7 +1796,7 @@ def set_watch_status(db: Session, recommendation_id: str, watch_status: str, not
     else:
         item.watch_status = watch_status
         item.note = note
-        item.updated_at = datetime.utcnow()
+        item.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.commit()
     invalidate_bootstrap_cache()
     return {"recommendation_id": recommendation_id, "watch_status": watch_status, "note": note}
@@ -1763,7 +1820,7 @@ def save_review_note(db: Session, recommendation_id: str, payload: dict[str, Any
         note.user_label = payload.get("user_label")
         note.failure_reason = payload.get("failure_reason")
         note.review_text = payload.get("review_text")
-        note.updated_at = datetime.utcnow()
+        note.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.commit()
     invalidate_bootstrap_cache()
     return {
@@ -1786,64 +1843,17 @@ def label_outcome_manually(db: Session, recommendation_id: str, payload: dict[st
     outcome.outcome_reason = payload.get("outcome_reason")
     outcome.horizon_days = int(payload.get("horizon_days") or outcome.horizon_days or 5)
     outcome.label_source = "manual"
-    outcome.labeled_at = datetime.utcnow()
+    outcome.labeled_at = datetime.now(timezone.utc).replace(tzinfo=None)
     rec.status = outcome.outcome_label
     db.commit()
+    invalidate_outcome_metrics_cache()
     invalidate_bootstrap_cache()
     return _serialize_outcome(outcome)
 
 
 def label_pending_outcomes(db: Session, horizon_days: int = 5, run_mode: str | None = None) -> dict[str, Any]:
-    stmt = select(Recommendation).where(Recommendation.status == "pending")
-    if run_mode:
-        run_ids = [
-            run.run_id
-            for run in db.scalars(select(RecommendationRun).where(RecommendationRun.run_mode == run_mode)).all()
-        ]
-        if not run_ids:
-            return {"labeled": 0}
-        stmt = stmt.where(Recommendation.run_id.in_(run_ids))
-    recs = db.scalars(stmt).all()
-    labeled = 0
-    for rec in recs:
-        bars = db.scalars(
-            select(DailyBar)
-            .where(DailyBar.code == rec.code, DailyBar.trade_date >= rec.trade_date)
-            .order_by(DailyBar.trade_date.asc())
-            .limit(horizon_days + 1)
-        ).all()
-        if len(bars) < 2:
-            continue
-        entry_price = rec.recommend_price or bars[0].close
-        returns = [((bar.high - entry_price) / entry_price) * 100 for bar in bars[1:]]
-        close_return = ((bars[-1].close - entry_price) / entry_price) * 100
-        low_returns = [((bar.low - entry_price) / entry_price) * 100 for bar in bars[1:]]
-        max_return = max(returns) if returns else 0
-        min_return = min(low_returns) if low_returns else 0
-        hit_target = max_return >= 5
-        hit_invalid = min_return <= -4
-        label = "success" if hit_target and not hit_invalid else "failed"
-        outcome = db.get(RecommendationOutcome, rec.recommendation_id)
-        if outcome is None:
-            outcome = RecommendationOutcome(recommendation_id=rec.recommendation_id)
-            db.add(outcome)
-        outcome.horizon_days = horizon_days
-        outcome.entry_triggered = True
-        outcome.entry_date = bars[1].trade_date
-        outcome.entry_price = entry_price
-        outcome.max_return = round(max_return, 2)
-        outcome.min_return = round(min_return, 2)
-        outcome.close_return = round(close_return, 2)
-        outcome.max_drawdown = round(min_return, 2)
-        outcome.hit_target = hit_target
-        outcome.hit_invalid = hit_invalid
-        outcome.outcome_label = label
-        outcome.outcome_reason = "T+5 达标" if label == "success" else "未达成功标准或回撤过大"
-        outcome.label_source = "auto"
-        outcome.labeled_at = datetime.utcnow()
-        rec.status = label
-        labeled += 1
-    db.commit()
+    result = label_pending_outcomes_service(db, horizon_days=horizon_days, run_mode=run_mode)
+    labeled = int(result.get("labeled") or 0)
     if labeled:
         invalidate_bootstrap_cache()
     return {"labeled": labeled}
@@ -1870,15 +1880,61 @@ def _serialize_preset(db: Session, preset: Preset) -> dict[str, Any]:
                 "skill_id": row.skill_id,
                 "weight": row.weight,
                 "sort_order": row.sort_order,
-                "name": db.get(SkillRegistry, row.skill_id).name if db.get(SkillRegistry, row.skill_id) else row.skill_id,
+                "name": (registry.name if (registry := db.get(SkillRegistry, row.skill_id)) else row.skill_id),
             }
             for row in skills
         ],
     }
 
 
+def _serialize_presets_batched(db: Session, presets: list[Preset]) -> list[dict[str, Any]]:
+    if not presets:
+        return []
+    preset_ids = [preset.preset_id for preset in presets]
+    skill_rows = db.scalars(
+        select(PresetSkill)
+        .where(PresetSkill.preset_id.in_(preset_ids))
+        .order_by(PresetSkill.preset_id.asc(), PresetSkill.sort_order.asc())
+    ).all()
+    skill_ids = {row.skill_id for row in skill_rows}
+    skill_name_map = {}
+    if skill_ids:
+        skill_name_map = {
+            row.skill_id: row.name
+            for row in db.scalars(select(SkillRegistry).where(SkillRegistry.skill_id.in_(skill_ids))).all()
+        }
+    skills_by_preset: dict[str, list[dict[str, Any]]] = {}
+    for row in skill_rows:
+        skills_by_preset.setdefault(row.preset_id, []).append(
+            {
+                "skill_id": row.skill_id,
+                "weight": row.weight,
+                "sort_order": row.sort_order,
+                "name": skill_name_map.get(row.skill_id, row.skill_id),
+            }
+        )
+
+    return [
+        {
+            "preset_id": preset.preset_id,
+            "name": preset.name,
+            "description": preset.description,
+            "run_mode": preset.run_mode,
+            "market_scope": preset.market_scope,
+            "market_scope_value": preset.market_scope_value,
+            "risk_template": preset.risk_template,
+            "output_count": preset.output_count,
+            "data_source": preset.data_source,
+            "hide_recent_repeats": preset.hide_recent_repeats,
+            "status": preset.status,
+            "skills": skills_by_preset.get(preset.preset_id, []),
+        }
+        for preset in presets
+    ]
+
+
 def _new_run_id() -> str:
-    return f"run_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    return f"run_{datetime.now(timezone.utc).replace(tzinfo=None).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
 
 def _latest_trade_date(db: Session) -> str:
@@ -1933,9 +1989,14 @@ def _serialize_run_summaries_batched(db: Session, runs: list[RecommendationRun])
     for run in runs:
         preset = preset_map.get(run.preset_id) if run.preset_id else None
         run_recs = recs_by_run.get(run.run_id, [])
-        outcomes_labels = [outcome_map.get(rec.recommendation_id) for rec in run_recs]
-        success_count = sum(1 for label in outcomes_labels if label == "success")
-        hit_rate = round(success_count / len(outcomes_labels), 3) if outcomes_labels else 0.0
+        run_outcomes = [
+            outcome
+            for rec in run_recs
+            for outcome in [outcome_map.get(rec.recommendation_id)]
+            if outcome is not None and is_trade_executed(outcome)
+        ]
+        success_count = sum(1 for outcome in run_outcomes if outcome.outcome_label == "success")
+        hit_rate = round(success_count / len(run_outcomes), 3) if run_outcomes else 0.0
         results.append(_serialize_run_summary_from_cache(run, preset, hit_rate))
     return results
 
@@ -1944,7 +2005,7 @@ def _serialize_run_summary_from_cache(run: RecommendationRun, preset: Preset | N
     summary = _loads(run.result_summary_json, {})
     heartbeat_age_seconds = None
     if run.heartbeat_at:
-        heartbeat_age_seconds = max(0, int((datetime.utcnow() - run.heartbeat_at).total_seconds()))
+        heartbeat_age_seconds = max(0, int((datetime.now(timezone.utc).replace(tzinfo=None) - run.heartbeat_at).total_seconds()))
     progress_total = int(run.progress_total or 0)
     progress_current = int(run.progress_current or 0)
     progress_pct = round(min(1.0, progress_current / progress_total), 4) if progress_total > 0 else None
@@ -1996,11 +2057,12 @@ def _serialize_run_summary(db: Session, run: RecommendationRun) -> dict[str, Any
         if outcome_ids
         else []
     )
-    success_count = sum(1 for outcome in outcomes if outcome.outcome_label == "success")
-    hit_rate = round(success_count / len(outcomes), 3) if outcomes else 0.0
+    executed = [outcome for outcome in outcomes if is_trade_executed(outcome)]
+    success_count = sum(1 for outcome in executed if outcome.outcome_label == "success")
+    hit_rate = round(success_count / len(executed), 3) if executed else 0.0
     heartbeat_age_seconds = None
     if run.heartbeat_at:
-        heartbeat_age_seconds = max(0, int((datetime.utcnow() - run.heartbeat_at).total_seconds()))
+        heartbeat_age_seconds = max(0, int((datetime.now(timezone.utc).replace(tzinfo=None) - run.heartbeat_at).total_seconds()))
     progress_total = int(run.progress_total or 0)
     progress_current = int(run.progress_current or 0)
     progress_pct = round(min(1.0, progress_current / progress_total), 4) if progress_total > 0 else None
@@ -2139,6 +2201,148 @@ def _prelim_rule_score(stock: dict[str, Any], rule_signals_by_skill: dict[str, A
     if industry and industry != "未分类" and industry in (snapshot.get("main_industries") or []):
         prelim_score += 3.0
     return round(prelim_score, 2)
+
+
+def _resolve_skill_review_limit(params: dict[str, Any], settings: Any) -> int:
+    if bool(params.get("disable_agent_review")):
+        return 0
+    skill_review_limit = int(params.get("agent_review_limit") or settings.market_skill_review_limit or 0)
+    if skill_review_limit > 0:
+        return skill_review_limit
+    default_multiple = 3 if params.get("run_mode") == "experiment" else 6
+    default_min = 8 if params.get("run_mode") == "experiment" else 24
+    return min(max(int(params.get("output_count") or 0) * default_multiple, default_min), 60)
+
+
+def _build_recommendation_card(
+    entry: dict[str, Any],
+    skill_reviews: list[dict[str, Any]],
+    *,
+    skill_map: dict[str, StrategySkill],
+    selected_skills: list[dict[str, Any]],
+    market_score: float,
+    risk_template: str,
+    calibrated_weights: dict[str, float] | None,
+    snapshot: dict[str, Any],
+    recent_codes: set[str] | None = None,
+) -> dict[str, Any]:
+    context = entry.get("context")
+    stock = entry["stock"]
+    rule_signals_by_skill = entry["rule_signals"]
+    review_skill_ids = set(entry.get("review_skill_ids") or [])
+    selected_skill_lookup = {str(item["skill_id"]): item for item in selected_skills}
+    signals = []
+
+    for review_result in skill_reviews:
+        skill_id = str(review_result["skill_id"])
+        review_data = review_result.get("review")
+        hc = review_result.get("hallucination_check")
+        rule_signal = rule_signals_by_skill.get(skill_id)
+
+        agent_review = {
+            "stance": review_data.get("stance", "neutral"),
+            "score_delta": review_data.get("score_delta", review_data.get("score", 50) - 50),
+            "score": review_data.get("score", 50),
+            "confidence": review_data.get("confidence", 0.5),
+            "supports": review_data.get("supports") or review_data.get("evidence", []),
+            "risks": review_data.get("risks", []),
+            "summary": review_data.get("summary", ""),
+            "market_regime_judgment": review_data.get("market_regime_judgment", ""),
+            "action": review_data.get("action", "观察"),
+            "position_range": review_data.get("position_range", "0-5%"),
+            "entry_style": review_data.get("entry_style", ""),
+            "invalidation_conditions": review_data.get("invalidation_conditions", []),
+            "next_day_plan": review_data.get("next_day_plan", []),
+            "runtime": review_data.get("runtime", "agent_skill_agno"),
+        } if review_data else {
+            "stance": "neutral",
+            "score_delta": 0,
+            "score": 50,
+            "confidence": 0.3,
+            "supports": [],
+            "risks": [str(review_result.get("error") or "Skill Agent 未返回有效审查，已按中性降级处理")],
+            "summary": str(review_result.get("error") or "Skill Agent 未返回有效审查，已按中性降级处理"),
+            "action": "不做",
+            "position_range": "0%",
+            "entry_style": "当前不设买点",
+            "invalidation_conditions": [str(review_result.get("error") or "等待数据恢复后再观察")],
+            "next_day_plan": ["等待更强主线或 Agent 审查恢复后再评估"],
+            "runtime_note": "agent_review_failed",
+        }
+
+        if rule_signal is None:
+            skill_obj = skill_map.get(skill_id)
+            if skill_obj is None:
+                continue
+            signal = agent_only_signal(skill_obj, stock, agent_review)
+        else:
+            signal = enrich_signal_with_agent_review(rule_signal, agent_review)
+
+        if hc:
+            signal["hallucination_flags"] = hc.get("flags", [])
+            signal["hallucination_severity"] = hc.get("severity", "low")
+
+        selected = selected_skill_lookup.get(skill_id)
+        if selected is not None:
+            signal["weight"] = selected["weight"]
+            signal["skill_mode"] = selected["mode"]
+        signals.append(signal)
+
+    for selected in selected_skills:
+        skill_id = str(selected["skill_id"])
+        if skill_id in review_skill_ids:
+            continue
+        rule_signal = rule_signals_by_skill.get(skill_id)
+        if not rule_signal:
+            continue
+        signal = dict(rule_signal)
+        signal["weight"] = selected["weight"]
+        signal["skill_mode"] = selected["mode"]
+        signal["runtime"] = signal.get("runtime") or "strategy_yaml_rule_only"
+        if not signal.get("hard_veto"):
+            reason = ((entry.get("skill_gate_reasons") or {}).get(skill_id) or "规则门未进入 Agent 深审")
+            signal["agent_review_skipped"] = {
+                "reason": reason,
+                "runtime_note": "skill_rule_gate_skipped",
+            }
+        signals.append(signal)
+
+    valid_reviews = [r for r in skill_reviews if r.get("review") and not r.get("error")]
+    if valid_reviews:
+        scores_list = [r["review"]["score"] for r in valid_reviews]
+        confidences_list = [r["review"]["confidence"] for r in valid_reviews]
+        agent_review_score = sum(s * c for s, c in zip(scores_list, confidences_list)) / max(sum(confidences_list), 0.01)
+    else:
+        agent_review_score = 50.0
+
+    review_log = {
+        "agent_review_score": round(agent_review_score, 2),
+        "logs": [
+            {"agent_name": f"Skill Agent · {r.get('skill_name', 'Unknown')}", "output": r.get("review") or {}}
+            for r in skill_reviews
+            if r.get("review")
+        ],
+    }
+
+    card = aggregate(
+        stock=stock,
+        signals=signals,
+        market_score=market_score,
+        agent_review_score=review_log["agent_review_score"],
+        risk_template=risk_template,
+        calibrated_weights=calibrated_weights if calibrated_weights else None,
+        market_snapshot=snapshot,
+    )
+    feature_snapshot = context.to_feature_snapshot() if context is not None else dict(stock)
+    feature_snapshot["component_scores"] = card.get("component_scores", {})
+    feature_snapshot["data_authenticity"] = card.get("data_authenticity", 1.0)
+    card["feature_snapshot"] = feature_snapshot
+    card["stop_loss"] = card["feature_snapshot"].get("stop_loss")
+    card["take_profit"] = card["feature_snapshot"].get("take_profit")
+    card["market_snapshot"] = snapshot
+    card["agent_logs"] = review_log["logs"]
+    card["recent_repeat"] = stock["code"] in (recent_codes or set())
+    return card
 
 
 def _build_skill_rule_gate(
@@ -2386,13 +2590,26 @@ def _serialize_outcome(outcome: RecommendationOutcome | None) -> dict[str, Any] 
         "entry_triggered": outcome.entry_triggered,
         "entry_date": outcome.entry_date,
         "entry_price": outcome.entry_price,
+        "exit_date": outcome.exit_date,
+        "exit_price": outcome.exit_price,
+        "executed_return": outcome.executed_return,
+        "weighted_return": outcome.weighted_return,
+        "position_size": outcome.position_size,
+        "holding_days": outcome.holding_days,
+        "entry_slippage_bps": outcome.entry_slippage_bps,
+        "exit_slippage_bps": outcome.exit_slippage_bps,
+        "stop_loss_price": outcome.stop_loss_price,
+        "take_profit_price": outcome.take_profit_price,
+        "exit_reason": outcome.exit_reason,
         "max_return": outcome.max_return,
         "min_return": outcome.min_return,
         "close_return": outcome.close_return,
+        "achievable_return": outcome.achievable_return,
         "max_drawdown": outcome.max_drawdown,
         "hit_target": outcome.hit_target,
         "hit_invalid": outcome.hit_invalid,
         "outcome_label": outcome.outcome_label,
+        "outcome_label_legacy": outcome.outcome_label_legacy,
         "outcome_reason": outcome.outcome_reason,
         "label_source": outcome.label_source,
         "labeled_at": outcome.labeled_at.isoformat() if outcome.labeled_at else None,
@@ -2402,7 +2619,7 @@ def _serialize_outcome(outcome: RecommendationOutcome | None) -> dict[str, Any] 
 def _build_timeline(db: Session, rec: Recommendation) -> list[dict[str, Any]]:
     windows = [1, 3, 5, 10]
     bars = db.scalars(
-        select(DailyBar).where(DailyBar.code == rec.code, DailyBar.trade_date >= rec.trade_date).order_by(DailyBar.trade_date.asc()).limit(12)
+        select(DailyKbar).where(DailyKbar.code == rec.code, DailyKbar.trade_date >= rec.trade_date).order_by(DailyKbar.trade_date.asc()).limit(12)
     ).all()
     if len(bars) < 2:
         return []
@@ -2451,10 +2668,12 @@ def _merge_run_params(db: Session, preset: Preset | None, payload: dict[str, Any
     preset_data = _serialize_preset(db, preset) if preset else {}
     skills = payload.get("skills") or preset_data.get("skills") or []
     run_mode = str(payload.get("run_mode") or preset_data.get("run_mode") or "formal")
+    default_data_source = _default_data_source_for_run_mode(run_mode)
     if payload.get("single_skill_id"):
         single_weight = float(payload.get("single_skill_weight") or 1.0)
         skills = [{"skill_id": str(payload["single_skill_id"]), "weight": single_weight, "sort_order": 0}]
         run_mode = str(payload.get("run_mode") or "experiment")
+        default_data_source = _default_data_source_for_run_mode(run_mode)
     params = {
         "preset_id": preset_data.get("preset_id"),
         "run_name": str(payload.get("run_name") or preset_data.get("name") or "临时运行"),
@@ -2463,7 +2682,7 @@ def _merge_run_params(db: Session, preset: Preset | None, payload: dict[str, Any
         "market_scope_value": payload.get("market_scope_value", preset_data.get("market_scope_value")),
         "risk_template": str(payload.get("risk_template") or preset_data.get("risk_template") or "balanced"),
         "output_count": int(payload.get("output_count") or preset_data.get("output_count") or 6),
-        "data_source": _normalize_data_source(payload.get("data_source") or preset_data.get("data_source")),
+        "data_source": _normalize_data_source(payload.get("data_source") or preset_data.get("data_source") or default_data_source),
         "skip_aux_refresh": bool(
             payload.get("skip_aux_refresh")
             if "skip_aux_refresh" in payload
@@ -2623,7 +2842,7 @@ def _agent_history_context(db: Session, skill_id: str, stock: dict[str, Any]) ->
                 "final_score": rec.final_score,
                 "setup_type": rec.setup_type,
                 "outcome_label": outcome.outcome_label if outcome else rec.status,
-                "close_return": outcome.close_return if outcome else None,
+                "close_return": resolved_trade_return(outcome) if outcome else None,
                 "max_drawdown": outcome.max_drawdown if outcome else None,
             }
         )
@@ -2638,15 +2857,18 @@ def _agent_history_context(db: Session, skill_id: str, stock: dict[str, Any]) ->
         if db.get(RecommendationOutcome, rec.recommendation_id) is not None
     ]
     labeled = [outcome for outcome in outcomes if outcome and outcome.outcome_label != "pending"]
-    success = [outcome for outcome in labeled if outcome and outcome.outcome_label == "success"]
+    executed = [outcome for outcome in labeled if is_trade_executed(outcome)]
+    success = [outcome for outcome in executed if outcome and outcome.outcome_label == "success"]
     return {
         "same_stock_history": same_stock_history,
         "skill_recent_performance": {
             "sample_count": len(matched_recs),
             "labeled_count": len(labeled),
+            "triggered_count": len(executed),
             "success_count": len(success),
-            "hit_rate": round(len(success) / len(labeled), 3) if labeled else 0.0,
-            "avg_close_return": round(sum(outcome.close_return for outcome in labeled) / len(labeled), 2) if labeled else 0.0,
+            "trigger_rate": round(len(executed) / len(labeled), 3) if labeled else 0.0,
+            "hit_rate": round(len(success) / len(executed), 3) if executed else 0.0,
+            "avg_close_return": round(sum(resolved_trade_return(outcome) for outcome in executed) / len(executed), 2) if executed else 0.0,
         },
     }
 
@@ -2791,32 +3013,36 @@ def _ensure_default_presets(db: Session, skills: list[StrategySkill]) -> None:
     has_changes = False
     for item in DEFAULT_PRESETS:
         preset = db.get(Preset, item["preset_id"])
-        if preset is not None:
+        default_data_source = _default_data_source_for_run_mode(item["run_mode"])
+        if preset is None:
+            preset = Preset(
+                preset_id=item["preset_id"],
+                name=item["name"],
+                description=item["description"],
+                run_mode=item["run_mode"],
+                market_scope=item["market_scope"],
+                market_scope_value=item["market_scope_value"],
+                risk_template=item["risk_template"],
+                output_count=item["output_count"],
+                bucket_limits_json="{}",
+                data_source=default_data_source,
+                hide_recent_repeats=item["hide_recent_repeats"],
+                status="active",
+            )
+            db.add(preset)
+            db.flush()
+            desired_skills = [
+                {"skill_id": skill_id, "weight": weight, "sort_order": index}
+                for index, (skill_id, weight) in enumerate(item["skills"])
+                if skill_id in skill_ids
+            ]
+            _replace_preset_skills(db, item["preset_id"], desired_skills)
+            has_changes = True
             continue
 
-        preset = Preset(
-            preset_id=item["preset_id"],
-            name=item["name"],
-            description=item["description"],
-            run_mode=item["run_mode"],
-            market_scope=item["market_scope"],
-            market_scope_value=item["market_scope_value"],
-            risk_template=item["risk_template"],
-            output_count=item["output_count"],
-            bucket_limits_json="{}",
-            data_source=DATA_SOURCE_LOCAL_POOL,
-            hide_recent_repeats=item["hide_recent_repeats"],
-            status="active",
-        )
-        db.add(preset)
-        db.flush()
-        desired_skills = [
-            {"skill_id": skill_id, "weight": weight, "sort_order": index}
-            for index, (skill_id, weight) in enumerate(item["skills"])
-            if skill_id in skill_ids
-        ]
-        _replace_preset_skills(db, item["preset_id"], desired_skills)
-        has_changes = True
+        if preset.run_mode == "formal" and preset.data_source == DATA_SOURCE_LOCAL_POOL:
+            preset.data_source = default_data_source
+            has_changes = True
     if has_changes:
         db.commit()
 
@@ -2826,7 +3052,7 @@ def _skill_performance(db: Session, skill_id: str, run_mode: str) -> dict[str, A
         run.run_id for run in db.scalars(select(RecommendationRun).where(RecommendationRun.run_mode == run_mode)).all()
     ]
     if not run_ids:
-        return {"sample_count": 0, "hit_rate": 0.0, "avg_return": 0.0, "avg_score": 0.0, "failure_reasons": []}
+        return {"sample_count": 0, "triggered_count": 0, "trigger_rate": 0.0, "hit_rate": 0.0, "avg_return": 0.0, "avg_score": 0.0, "failure_reasons": []}
     recs = db.scalars(select(Recommendation).where(Recommendation.run_id.in_(run_ids))).all()
     matched: list[tuple[Recommendation, dict[str, Any]]] = []
     for rec in recs:
@@ -2834,7 +3060,7 @@ def _skill_performance(db: Session, skill_id: str, run_mode: str) -> dict[str, A
             if signal.get("strategy_id") == skill_id:
                 matched.append((rec, signal))
     if not matched:
-        return {"sample_count": 0, "hit_rate": 0.0, "avg_return": 0.0, "avg_score": 0.0, "failure_reasons": []}
+        return {"sample_count": 0, "triggered_count": 0, "trigger_rate": 0.0, "hit_rate": 0.0, "avg_return": 0.0, "avg_score": 0.0, "failure_reasons": []}
     outcomes = {
         item.recommendation_id: item
         for item in db.scalars(
@@ -2845,11 +3071,13 @@ def _skill_performance(db: Session, skill_id: str, run_mode: str) -> dict[str, A
     total_return = 0.0
     total_score = 0.0
     failures: dict[str, int] = {}
+    triggered_count = 0
     for rec, signal in matched:
         total_score += float(signal.get("score", 0))
         outcome = outcomes.get(rec.recommendation_id)
-        if outcome:
-            total_return += outcome.close_return
+        if outcome and is_trade_executed(outcome):
+            triggered_count += 1
+            total_return += resolved_trade_return(outcome)
             if outcome.outcome_label == "success":
                 success_count += 1
             else:
@@ -2858,8 +3086,10 @@ def _skill_performance(db: Session, skill_id: str, run_mode: str) -> dict[str, A
     sample_count = len(matched)
     return {
         "sample_count": sample_count,
-        "hit_rate": round(success_count / sample_count, 3) if sample_count else 0.0,
-        "avg_return": round(total_return / max(1, len(outcomes)), 2) if outcomes else 0.0,
+        "triggered_count": triggered_count,
+        "trigger_rate": round(triggered_count / sample_count, 3) if sample_count else 0.0,
+        "hit_rate": round(success_count / triggered_count, 3) if triggered_count else 0.0,
+        "avg_return": round(total_return / max(1, triggered_count), 2) if triggered_count else 0.0,
         "avg_score": round(total_score / sample_count, 2) if sample_count else 0.0,
         "failure_reasons": sorted(
             [{"reason": key, "count": count} for key, count in failures.items()],
@@ -2897,7 +3127,7 @@ def _persist_stocks_and_bars(
     seen_bars: set[tuple[str, str]] = set()
     stock_rows: list[dict[str, Any]] = []
     bar_rows: list[dict[str, Any]] = []
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     for stock in stocks:
         code = str(stock.get("code") or "").strip()
@@ -2942,7 +3172,7 @@ def _persist_stocks_and_bars(
                     "ma10": _float_or_none(bar.get("ma10")),
                     "ma20": _float_or_none(bar.get("ma20")),
                     "ma60": _float_or_none(bar.get("ma60")),
-                    "volume_ratio_5d": _float_or_none(bar.get("volume_ratio_5d")),
+                    "vol_ratio_5": _float_or_none(bar.get("vol_ratio_5")),
                 }
             )
 
@@ -2972,7 +3202,7 @@ def _upsert_daily_bar_rows(db: Session, rows: list[dict[str, Any]]) -> None:
     if not rows:
         return
     for chunk in _chunked(rows, UPSERT_BATCH_SIZE):
-        stmt = mysql_insert(DailyBar).values(chunk)
+        stmt = mysql_insert(DailyKbar).values(chunk)
         db.execute(
             stmt.on_duplicate_key_update(
                 open=stmt.inserted.open,
@@ -2987,7 +3217,7 @@ def _upsert_daily_bar_rows(db: Session, rows: list[dict[str, Any]]) -> None:
                 ma10=stmt.inserted.ma10,
                 ma20=stmt.inserted.ma20,
                 ma60=stmt.inserted.ma60,
-                volume_ratio_5d=stmt.inserted.volume_ratio_5d,
+                vol_ratio_5=stmt.inserted.vol_ratio_5,
             )
         )
 

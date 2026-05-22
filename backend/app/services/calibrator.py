@@ -70,7 +70,10 @@ def _load_labeled_samples(db: Session) -> list[dict[str, Any]]:
     stmt = (
         select(Recommendation, RecommendationOutcome)
         .join(RecommendationOutcome, Recommendation.recommendation_id == RecommendationOutcome.recommendation_id)
-        .where(RecommendationOutcome.outcome_label.in_(["success", "failed"]))
+        .where(
+            RecommendationOutcome.outcome_label.in_(["success", "failed"]),
+            RecommendationOutcome.entry_triggered.is_(True),
+        )
     )
     rows = db.execute(stmt).all()
     samples = []
@@ -88,7 +91,7 @@ def _load_labeled_samples(db: Session) -> list[dict[str, Any]]:
             "trade_date": rec.trade_date,
             "component_scores": component_scores,
             "label": 1 if outcome.outcome_label == "success" else 0,
-            "close_return": float(outcome.close_return or 0),
+            "close_return": float(outcome.executed_return if outcome.executed_return is not None else (outcome.close_return or 0)),
         })
     return samples
 
@@ -366,7 +369,10 @@ def calibrate_dsa_weights(db: Session) -> dict[str, Any]:
     stmt = (
         select(Recommendation, RecommendationOutcome)
         .join(RecommendationOutcome, Recommendation.recommendation_id == RecommendationOutcome.recommendation_id)
-        .where(RecommendationOutcome.outcome_label.in_(["success", "failed"]))
+        .where(
+            RecommendationOutcome.outcome_label.in_(["success", "failed"]),
+            RecommendationOutcome.entry_triggered.is_(True),
+        )
     )
     rows = db.execute(stmt).all()
 

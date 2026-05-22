@@ -1,4 +1,6 @@
 """Tests for signal aggregation, stance mapping, consensus, and scoring."""
+import pytest
+
 from app.engine.aggregator import (
     DEFAULT_AGG_WEIGHTS,
     STANCE_MULTIPLIER,
@@ -54,11 +56,11 @@ def test_default_weights_sum_to_one():
 
 def test_default_weights_match_aggregator_spec():
     assert DEFAULT_AGG_WEIGHTS == {
-        "skill_agent": 0.50,
-        "strategy_rule": 0.25,
+        "skill_agent": 0.55,
+        "strategy_rule": 0.15,
         "market": 0.10,
         "risk": 0.10,
-        "evidence": 0.05,
+        "evidence": 0.10,
     }
 
 
@@ -82,15 +84,15 @@ def test_stance_multiplier_values():
 def test_extract_skill_agent_score_weighted_average():
     signals = [_signal("support", 80), _signal("neutral", 60)]
     score = _extract_skill_agent_score(signals)
-    # support × 1.08 = 86.4, neutral × 0.85 = 51.0, average = 68.7
-    assert 65 < score < 72
+    # 先按 confidence 向 50 回归，再乘 stance 系数，并按 confidence 加权
+    assert score == pytest.approx(64.61, abs=0.01)
 
 
 def test_extract_skill_agent_score_veto_zero():
     signals = [_signal("support", 80), _signal("veto", 30)]
     score = _extract_skill_agent_score(signals)
-    # support × 1.08 = 86.4, veto = 0.0, average = 43.2
-    assert 40 < score < 47
+    # veto 以 0 分参与平均，并保留其原始权重，确保否决能显著压低综合分
+    assert score == pytest.approx(35.52, abs=0.01)
 
 
 def test_extract_skill_agent_score_empty_signals():
