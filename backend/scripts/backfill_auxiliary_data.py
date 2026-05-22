@@ -29,12 +29,16 @@ from sqlalchemy.orm import Session
 from app.db.session import SessionLocal, engine
 from app.core.config import get_settings
 from app.models.tables import (
-    UnifiedQuote,
+    StockQuote,
     ConceptSector,
     ConceptSectorStock,
     CapitalFlow,
     DragonTiger,
     NewsAnnouncement,
+    MarginData,
+    HkHolding,
+    HolderNumber,
+    StkLimit,
 )
 
 logging.basicConfig(
@@ -57,6 +61,24 @@ def _throttle():
     if elapsed < _MIN_INTERVAL:
         time.sleep(_MIN_INTERVAL - elapsed)
     _LAST_CALL = time.monotonic()
+
+
+def _safe_float(val) -> float | None:
+    """转 float，NaN/Inf 返回 None。"""
+    import math
+    try:
+        v = float(val or 0)
+    except (ValueError, TypeError):
+        return None
+    if math.isnan(v) or math.isinf(v):
+        return None
+    return v
+
+
+def _safe_yi(val) -> float | None:
+    """转 float 后转为亿单位，NaN/Inf 返回 None。"""
+    v = _safe_float(val)
+    return round(v / 1e8, 4) if v else None
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -110,13 +132,6 @@ def backfill_concept_sectors(db: Session) -> int:
             sector_code=sector_code,
             sector_name=sector_name,
             trade_date=trade_date,
-            pct_chg=0.0,
-            leading_code="",
-            leading_name="",
-            leading_pct=0.0,
-            total_amount_yi=0.0,
-            stock_count=0,
-            limit_up_count=0,
             heat_rank=rank,
         )
         db.add(sector)
@@ -149,9 +164,6 @@ def backfill_concept_sectors(db: Session) -> int:
                                 code=code,
                                 name=str(s_row.get("name", "") or s_row.get("名称", "")),
                                 trade_date=trade_date,
-                                pct_chg=0.0,
-                                market_cap_yi=0.0,
-                                is_leading=False,
                             ))
                             member_count += 1
                     total_stocks += member_count
@@ -178,74 +190,89 @@ def backfill_concept_sectors(db: Session) -> int:
 def backfill_dragon_tiger(db: Session, days_back: int = 30) -> int:
     """
     回填龙虎榜数据（默认最近30个交易日）。
-    使用 akshare (东方财富龙虎榜源)。
+    使用 Tushare top_list（自建服务器），eastmoney 备用。
     """
-    import akshare as ak
+    from app.services.tushare_client import get_pro
 
     logger.info("── 开始回填龙虎榜 (最近 %d 天) ──", days_back)
 
     end_date = date.today()
     total = 0
 
-    # 按天拉取（避免单次数据量过大）
     current = end_date - timedelta(days=days_back)
     while current <= end_date:
         date_str = current.strftime("%Y%m%d")
-        _throttle()
+        df = None
+
+        # 优先 Tushare
         try:
-            df = ak.stock_lhb_detail_em(start_date=date_str, end_date=date_str)
+            pro = get_pro()
+            df = pro.top_list(trade_date=date_str)
         except Exception as e:
-            logger.debug("龙虎榜 %s 拉取失败: %s", date_str, e)
-            current += timedelta(days=1)
-            continue
+            logger.debug("Tushare龙虎榜 %s 拉取失败: %s，回退eastmoney", date_str, e)
+
+        # 回退 eastmoney/akshare
+        if df is None or df.empty:
+            try:
+                import akshare as ak
+                _throttle()
+                df = ak.stock_lhb_detail_em(start_date=date_str, end_date=date_str)
+            except Exception as e:
+                logger.debug("akshare龙虎榜 %s 拉取失败: %s", date_str, e)
+                current += timedelta(days=1)
+                continue
 
         if df is None or df.empty:
             current += timedelta(days=1)
             continue
 
-        seen_today = set()  # 当日去重（同股同日多次上榜只保留第一条）
+        seen_today = set()
         day_count = 0
         for _, row in df.iterrows():
-            code = str(row.get("代码", ""))
+            # 兼容 Tushare 和 akshare 字段名
+            code = str(row.get("ts_code", "") or row.get("代码", ""))
+            if "." in code:
+                code = code.split(".")[0]
             if not code or len(code) != 6:
                 continue
 
-            trade_d = row.get("上榜日")
+            name = str(row.get("name", "") or row.get("名称", ""))
+            reason = str(row.get("reason", "") or row.get("上榜原因", ""))
+
+            trade_d = row.get("trade_date") or row.get("上榜日")
             if hasattr(trade_d, "strftime"):
                 trade_d = trade_d.strftime("%Y-%m-%d")
             else:
-                trade_d = str(trade_d)[:10]
+                trade_d = str(trade_d)[:10].replace("-", "")[:8]
+                if len(trade_d) == 8:
+                    trade_d = f"{trade_d[:4]}-{trade_d[4:6]}-{trade_d[6:8]}"
 
             dedup_key = (code, trade_d)
             if dedup_key in seen_today:
                 continue
             seen_today.add(dedup_key)
 
-            # 检查数据库是否已有
             existing = db.scalar(
                 select(func.count()).select_from(DragonTiger).where(
-                    and_(
-                        DragonTiger.code == code,
-                        DragonTiger.trade_date == trade_d,
-                    )
+                    and_(DragonTiger.code == code, DragonTiger.trade_date == trade_d)
                 )
             )
             if existing:
                 continue
 
+            # 从 Tushare 字段提取金额
+            buy_amt = float(row.get("l_buy", 0) or row.get("龙虎榜买入额", 0) or 0)
+            sell_amt = float(row.get("l_sell", 0) or row.get("龙虎榜卖出额", 0) or 0)
+            net_amt = float(row.get("net_amount", 0) or row.get("龙虎榜净买额", 0) or 0)
+
             db.add(DragonTiger(
                 code=code,
-                name=str(row.get("名称", "")),
+                name=name,
                 trade_date=trade_d,
-                reason=str(row.get("上榜原因", "")),
-                buy_amount_yi=round(float(row.get("龙虎榜买入额", 0) or 0) / 1e8, 4),
-                sell_amount_yi=round(float(row.get("龙虎榜卖出额", 0) or 0) / 1e8, 4),
-                net_amount_yi=round(float(row.get("龙虎榜净买额", 0) or 0) / 1e8, 4),
-                buy_seat_count=0,
-                sell_seat_count=0,
-                institution_net_buy_yi=0.0,
-                top_buy_broker="",
-                top_sell_broker="",
+                reason=reason,
+                buy_amount_yi=_safe_yi(buy_amt),
+                sell_amount_yi=_safe_yi(sell_amt),
+                net_amount_yi=_safe_yi(net_amt),
             ))
             day_count += 1
 
@@ -267,26 +294,17 @@ def backfill_dragon_tiger(db: Session, days_back: int = 30) -> int:
 def _get_top_n_codes_by_market_cap(db: Session, n: int = 500) -> list[str]:
     """按自由流通市值获取 Top N 股票代码。"""
     quotes = db.scalars(
-        select(UnifiedQuote).order_by(UnifiedQuote.id.desc()).limit(5200)
+        select(StockQuote).order_by(StockQuote.free_mv_yi.is_(None), StockQuote.free_mv_yi.desc()).limit(n)
     ).all()
-
-    import json
-    scored = []
-    for uq in quotes:
-        q = json.loads(uq.quote_json or "{}")
-        free_mv = float(q.get("free_mv_yi") or 0)
-        scored.append((uq.code, free_mv))
-
-    scored.sort(key=lambda x: x[1], reverse=True)
-    return [c for c, _ in scored[:n]]
+    return [q.code for q in quotes if q.code]
 
 
 def backfill_capital_flows(db: Session, top_n: int = 500) -> int:
     """
     回填资金流向数据（市值前 N 股票）。
-    使用 akshare。
+    使用 Tushare moneyflow（自建服务器），eastmoney 备用。
     """
-    import akshare as ak
+    from app.services.tushare_client import get_pro
 
     logger.info("── 开始回填资金流向 (Top %d 市值) ──", top_n)
 
@@ -301,13 +319,9 @@ def backfill_capital_flows(db: Session, top_n: int = 500) -> int:
     failed = 0
 
     for i, code in enumerate(codes):
-        # 检查是否已有今日数据
         existing = db.scalar(
             select(func.count()).select_from(CapitalFlow).where(
-                and_(
-                    CapitalFlow.code == code,
-                    CapitalFlow.trade_date == trade_date,
-                )
+                and_(CapitalFlow.code == code, CapitalFlow.trade_date == trade_date)
             )
         )
         if existing:
@@ -316,50 +330,105 @@ def backfill_capital_flows(db: Session, top_n: int = 500) -> int:
                 logger.info("  资金流向进度: %d/%d (跳过 %d)", i, len(codes), skipped)
             continue
 
-        market = "sh" if code.startswith(("6", "9")) else "sz"
-        _throttle()
+        flow_data = None
+
+        # 优先 Tushare
         try:
-            df = ak.stock_individual_fund_flow(stock=code, market=market)
+            pro = get_pro()
+            ts_code = f"{code}.{'SH' if code.startswith(('6', '9')) else 'SZ'}"
+            df = pro.moneyflow(ts_code=ts_code, limit=10)
+            if df is not None and not df.empty:
+                df = df.sort_values("trade_date", ascending=False)
+                latest = df.iloc[0]
+                cum_3d = cum_5d = cum_10d = 0.0
+                for j in range(min(len(df), 10)):
+                    row = df.iloc[j]
+                    net = float(row.get("net_mf_amount") or 0)
+                    if j < 3:
+                        cum_3d += net
+                    if j < 5:
+                        cum_5d += net
+                    cum_10d += net
+                flow_data = {
+                    "code": code,
+                    "trade_date": str(latest.get("trade_date", "")),
+                    "main_net_inflow_yi": round(float(latest.get("net_mf_amount") or 0) / 1e8, 4),
+                    "super_large_net_inflow_yi": round(
+                        float(latest.get("buy_elg_amount") or 0) / 1e8
+                        - float(latest.get("sell_elg_amount") or 0) / 1e8,
+                        4,
+                    ),
+                    "large_net_inflow_yi": round(
+                        float(latest.get("buy_lg_amount") or 0) / 1e8
+                        - float(latest.get("sell_lg_amount") or 0) / 1e8,
+                        4,
+                    ),
+                    "medium_net_inflow_yi": round(
+                        float(latest.get("buy_md_amount") or 0) / 1e8
+                        - float(latest.get("sell_md_amount") or 0) / 1e8,
+                        4,
+                    ),
+                    "small_net_inflow_yi": round(
+                        float(latest.get("buy_sm_amount") or 0) / 1e8
+                        - float(latest.get("sell_sm_amount") or 0) / 1e8,
+                        4,
+                    ),
+                    "main_net_inflow_ratio": round(float(latest.get("net_mf_vol") or 0), 2),
+                    "cumulative_inflow_3d_yi": round(cum_3d / 1e8, 4),
+                    "cumulative_inflow_5d_yi": round(cum_5d / 1e8, 4),
+                    "cumulative_inflow_10d_yi": round(cum_10d / 1e8, 4),
+                }
         except Exception as e:
-            logger.debug("资金流向 %s 拉取失败: %s", code, e)
+            logger.debug("Tushare资金流向 %s 失败: %s", code, e)
+
+        # 回退 eastmoney
+        if flow_data is None:
+            try:
+                from app.services.market_data import _http_get_json, _eastmoney_market_id
+                market_id = _eastmoney_market_id({"code": code})
+                secid = f"{market_id}.{code}"
+                url = (
+                    "https://push2.eastmoney.com/api/qt/stock/fflow/daykline/get"
+                    f"?secid={secid}&fields1=f1,f2,f3,f7"
+                    "&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62"
+                    "&lmt=10&klt=101"
+                )
+                data = _http_get_json(url, settings)
+                lines = data.get("data", {}).get("klines") or []
+                if lines:
+                    latest_parts = lines[0].split(",")
+                    cum_3d = cum_5d = cum_10d = 0.0
+                    for j, line in enumerate(lines):
+                        parts = line.split(",")
+                        net = float(parts[1] or 0)
+                        if j < 3:
+                            cum_3d += net
+                        if j < 5:
+                            cum_5d += net
+                        cum_10d += net
+                    total_amount = float(latest_parts[2] or 0)
+                    main_ratio = (float(latest_parts[1] or 0) / total_amount * 100) if total_amount else 0.0
+                    flow_data = {
+                        "code": code,
+                        "trade_date": latest_parts[0] if latest_parts[0] else trade_date,
+                        "main_net_inflow_yi": round(float(latest_parts[1] or 0) / 1e8, 4),
+                        "super_large_net_inflow_yi": round(float(latest_parts[3] or 0) / 1e8, 4),
+                        "large_net_inflow_yi": round(float(latest_parts[4] or 0) / 1e8, 4),
+                        "medium_net_inflow_yi": round(float(latest_parts[5] or 0) / 1e8, 4),
+                        "small_net_inflow_yi": round(float(latest_parts[6] or 0) / 1e8, 4),
+                        "main_net_inflow_ratio": round(main_ratio, 2),
+                        "cumulative_inflow_3d_yi": round(cum_3d / 1e8, 4),
+                        "cumulative_inflow_5d_yi": round(cum_5d / 1e8, 4),
+                        "cumulative_inflow_10d_yi": round(cum_10d / 1e8, 4),
+                    }
+            except Exception as e:
+                logger.debug("eastmoney资金流向 %s 失败: %s", code, e)
+
+        if flow_data is None:
             failed += 1
             continue
 
-        if df is None or df.empty:
-            failed += 1
-            continue
-
-        latest = df.iloc[0]
-        tdate = latest.get("日期", trade_date)
-        if hasattr(tdate, "strftime"):
-            tdate = tdate.strftime("%Y-%m-%d")
-        else:
-            tdate = str(tdate)[:10]
-
-        # 计算累计
-        cum_3d = cum_5d = cum_10d = 0.0
-        for j in range(min(len(df), 10)):
-            r = df.iloc[j]
-            net = float(r.get("主力净流入-净额", 0) or 0)
-            if j < 3:
-                cum_3d += net
-            if j < 5:
-                cum_5d += net
-            cum_10d += net
-
-        db.add(CapitalFlow(
-            code=code,
-            trade_date=tdate,
-            main_net_inflow_yi=round(float(latest.get("主力净流入-净额", 0) or 0) / 1e8, 4),
-            super_large_net_inflow_yi=round(float(latest.get("超大单净流入-净额", 0) or 0) / 1e8, 4),
-            large_net_inflow_yi=round(float(latest.get("大单净流入-净额", 0) or 0) / 1e8, 4),
-            medium_net_inflow_yi=round(float(latest.get("中单净流入-净额", 0) or 0) / 1e8, 4),
-            small_net_inflow_yi=round(float(latest.get("小单净流入-净额", 0) or 0) / 1e8, 4),
-            main_net_inflow_ratio=round(float(latest.get("主力净流入-净占比", 0) or 0), 2),
-            cumulative_inflow_3d_yi=round(cum_3d / 1e8, 4),
-            cumulative_inflow_5d_yi=round(cum_5d / 1e8, 4),
-            cumulative_inflow_10d_yi=round(cum_10d / 1e8, 4),
-        ))
+        db.add(CapitalFlow(**flow_data))
         total += 1
 
         if i % 50 == 0:
@@ -507,6 +576,127 @@ def backfill_news(db: Session, top_n: int = 500) -> int:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# Tushare 专属数据（融资融券 / 港股通持股 / 股东户数 / 涨跌停价）
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def backfill_margin(db: Session, codes: list[str], days: int = 5) -> int:
+    """回填融资融券数据（Tushare margin）。"""
+    from app.services.tushare_client import fetch_margin
+    from sqlalchemy.dialects.mysql import insert as mysql_insert
+
+    total = 0
+    for i, code in enumerate(codes):
+        try:
+            rows = fetch_margin(code, days=days)
+            if not rows:
+                continue
+            for row in rows:
+                row["code"] = code
+            stmt = mysql_insert(MarginData).values(rows)
+            db.execute(stmt.on_duplicate_key_update(
+                rzye=stmt.inserted.rzye,
+                rqye=stmt.inserted.rqye,
+                rzmre=stmt.inserted.rzmre,
+                rzche=stmt.inserted.rzche,
+                rzrqye=stmt.inserted.rzrqye,
+                created_at=datetime.now(),
+            ))
+            total += len(rows)
+        except Exception as e:
+            logger.debug("融资融券 %s 失败: %s", code, e)
+        if (i + 1) % 100 == 0:
+            db.commit()
+            logger.info("  融资融券进度: %d/%d (累计 %d 条)", i + 1, len(codes), total)
+    db.commit()
+    return total
+
+
+def backfill_hk_hold(db: Session, codes: list[str]) -> int:
+    """回填港股通持股数据（Tushare hk_hold）。"""
+    from app.services.tushare_client import fetch_hk_hold
+    from sqlalchemy.dialects.mysql import insert as mysql_insert
+
+    total = 0
+    for i, code in enumerate(codes):
+        try:
+            row = fetch_hk_hold(code)
+            if not row:
+                continue
+            stmt = mysql_insert(HkHolding).values([row])
+            db.execute(stmt.on_duplicate_key_update(
+                vol=stmt.inserted.vol,
+                ratio=stmt.inserted.ratio,
+                created_at=datetime.now(),
+            ))
+            total += 1
+        except Exception as e:
+            logger.debug("港股通持股 %s 失败: %s", code, e)
+        if (i + 1) % 200 == 0:
+            db.commit()
+            logger.info("  港股通持股进度: %d/%d (累计 %d 条)", i + 1, len(codes), total)
+    db.commit()
+    return total
+
+
+def backfill_holder_number(db: Session, codes: list[str]) -> int:
+    """回填股东户数数据（Tushare stk_holdernumber）。"""
+    from app.services.tushare_client import fetch_holder_number
+    from sqlalchemy.dialects.mysql import insert as mysql_insert
+
+    total = 0
+    for i, code in enumerate(codes):
+        try:
+            rows = fetch_holder_number(code, limit=4)
+            if not rows:
+                continue
+            for row in rows:
+                row["code"] = code
+            stmt = mysql_insert(HolderNumber).values(rows)
+            db.execute(stmt.on_duplicate_key_update(
+                holder_num=stmt.inserted.holder_num,
+                created_at=datetime.now(),
+            ))
+            total += len(rows)
+        except Exception as e:
+            logger.debug("股东户数 %s 失败: %s", code, e)
+        if (i + 1) % 100 == 0:
+            db.commit()
+            logger.info("  股东户数进度: %d/%d (累计 %d 条)", i + 1, len(codes), total)
+    db.commit()
+    return total
+
+
+def backfill_stk_limit(db: Session, codes: list[str]) -> int:
+    """回填涨跌停价格（Tushare stk_limit）。"""
+    from app.services.tushare_client import fetch_stk_limit
+    from sqlalchemy.dialects.mysql import insert as mysql_insert
+
+    total = 0
+    for i, code in enumerate(codes):
+        try:
+            rows = fetch_stk_limit(code, days=3)
+            if not rows:
+                continue
+            for row in rows:
+                row["code"] = code
+            stmt = mysql_insert(StkLimit).values(rows)
+            db.execute(stmt.on_duplicate_key_update(
+                up_limit=stmt.inserted.up_limit,
+                down_limit=stmt.inserted.down_limit,
+                created_at=datetime.now(),
+            ))
+            total += len(rows)
+        except Exception as e:
+            logger.debug("涨跌停价 %s 失败: %s", code, e)
+        if (i + 1) % 200 == 0:
+            db.commit()
+            logger.info("  涨跌停价进度: %d/%d (累计 %d 条)", i + 1, len(codes), total)
+    db.commit()
+    return total
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # 主入口
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -517,9 +707,12 @@ def main():
     parser.add_argument("--skip-dragon-tiger", action="store_true")
     parser.add_argument("--skip-capital-flows", action="store_true")
     parser.add_argument("--skip-news", action="store_true")
+    parser.add_argument("--skip-tushare-aux", action="store_true", help="跳过 Tushare 专属数据（融资融券/港股通/股东户数/涨跌停价）")
     parser.add_argument("--flow-top-n", type=int, default=500)
     parser.add_argument("--news-top-n", type=int, default=500)
     parser.add_argument("--dragon-tiger-days", type=int, default=30)
+    parser.add_argument("--tushare-aux-top-n", type=int, default=300, help="Tushare 辅助数据覆盖股票数")
+    parser.add_argument("--tushare-aux-days", type=int, default=5, help="融资融券回看天数")
     args = parser.parse_args()
 
     t0 = time.monotonic()
@@ -549,6 +742,25 @@ def main():
             logger.info("✓ 新闻公告: %d 条", n)
         else:
             logger.info("⊘ 跳过新闻")
+
+        if not args.skip_tushare_aux:
+            logger.info("── Tushare 专属辅助数据回填 ──")
+            top_codes = _get_top_n_codes_by_market_cap(db, n=args.tushare_aux_top_n)
+            logger.info("  目标股票数: %d", len(top_codes))
+
+            n = backfill_margin(db, top_codes, days=args.tushare_aux_days)
+            logger.info("✓ 融资融券: %d 条", n)
+
+            n = backfill_hk_hold(db, top_codes)
+            logger.info("✓ 港股通持股: %d 条", n)
+
+            n = backfill_holder_number(db, top_codes)
+            logger.info("✓ 股东户数: %d 条", n)
+
+            n = backfill_stk_limit(db, top_codes)
+            logger.info("✓ 涨跌停价: %d 条", n)
+        else:
+            logger.info("⊘ 跳过 Tushare 专属数据")
 
     finally:
         db.close()

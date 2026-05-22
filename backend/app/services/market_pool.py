@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-import json
 import logging
 import statistics
 import time
 from collections import Counter, defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 from sqlalchemy import func, select
+from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -18,30 +18,23 @@ from app.models.tables import (
     CapitalFlow,
     ConceptSector,
     ConceptSectorStock,
-    DailyBar,
-    DailyIndicator,
+    DailyKbar,
     DataSourceHealth,
     DragonTiger,
     LimitUpBoard,
     NewsAnnouncement,
-    RawCapitalFlow,
-    RawConceptSector,
-    RawDailyBar,
-    RawDragonTiger,
-    RawLimitUpBoard,
-    RawNewsAnnouncement,
-    RawQuote,
-    UnifiedQuote,
+    StockQuote,
 )
 from app.services.data_sources import enabled_sources
-from app.services.indicator_computer import compute_daily_bar_indicators, compute_daily_indicators
 from app.services.market_data import (
     MarketDataError,
     _apply_relative_features,
-    _breadth_from_counts,
+    _build_quote_snapshot,
     _build_snapshot,
     _build_stock_from_bars,
+    _candidate_recall_plan,
     _candidate_filter_summary,
+    _eligible_market_quotes,
     _fetch_kline,
     _fetch_quotes,
     _global_failed_kline_sources,
@@ -49,8 +42,7 @@ from app.services.market_data import (
     _latest_trade_date_from_quotes,
     _num,
     _quote_sources,
-    _select_candidates,
-    _top_industries_from_quotes,
+    _select_recall_candidates,
 )
 from app.services.market_auxiliary import (
     _capital_flow_sources,
@@ -89,20 +81,10 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[l
     settings = get_settings()
     quotes, quote_meta = _load_or_refresh_quotes(db, settings) if refresh else _load_quotes_from_pool(db, settings, skip_metrics=True)
     total_quote_count = len(quotes)
-    raw_target_count = int(settings.market_candidate_count)
-    full_market_mode = raw_target_count <= 0
-    if full_market_mode:
-        target_count = total_quote_count
-        lookahead_count = total_quote_count
-    else:
-        target_count = max(1, raw_target_count)
-        lookahead_count = min(
-            total_quote_count,
-            max(target_count, target_count * max(1, int(settings.market_candidate_lookahead_multiplier))),
-        )
-    all_candidates = _select_candidates(quotes, total_quote_count)
+    eligible_quotes = _eligible_market_quotes(quotes)
     filter_summary = _candidate_filter_summary(quotes)
-    candidates = all_candidates[:lookahead_count]
+    recall_plan = _candidate_recall_plan(total_quote_count, len(eligible_quotes), settings)
+    candidates = _select_recall_candidates(eligible_quotes, recall_plan["broad_recall_count"])
     if not candidates:
         raise MarketDataError("统一行情池没有可用候选股票，已停止运行。")
 
@@ -119,7 +101,7 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[l
         bars_batch = None
 
     for quote in candidates:
-        if len(stocks) >= target_count:
+        if len(stocks) >= recall_plan["scan_target_count"]:
             break
         if refresh:
             bars, kline_trace, errors = _load_or_refresh_bars(db, quote, settings, disabled_kline_sources)
@@ -167,6 +149,12 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[l
         detail = "; ".join(f"{code}: {' | '.join(errors[:2])}" for code, errors in list(kline_errors.items())[:8])
         raise MarketDataError(f"统一行情池无法取得候选日K，已停止运行。{detail}")
 
+    quote_snapshot = _build_quote_snapshot(
+        eligible_quotes,
+        data_source="local_unified_market_pool",
+        quote_source="unified_pool",
+        quote_errors=quote_meta.get("errors", []),
+    )
     _apply_relative_features(stocks)
     snapshot = _build_snapshot(
         stocks=stocks,
@@ -176,6 +164,7 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[l
         kline_usage=kline_usage,
         kline_errors=kline_errors,
         disabled_kline_sources=disabled_kline_sources,
+        quote_snapshot=quote_snapshot,
     )
     snapshot["breadth"].update(
         {
@@ -185,23 +174,26 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[l
             "quote_sources": quote_meta.get("sources", []),
             "quote_cache_age_seconds": quote_meta.get("cache_age_seconds"),
             "quote_pool_min_source_count": settings.market_pool_min_source_count,
-            "generated_at": datetime.utcnow().isoformat(),
-            "full_market_mode": full_market_mode,
+            "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+            "full_market_mode": recall_plan["full_market_mode"],
             "unified_quote_total": total_quote_count,
-            "base_filter_eligible_count": len(all_candidates),
+            "base_filter_eligible_count": len(eligible_quotes),
             "candidate_filter": filter_summary,
             "actual_scan_count": len(stocks),
             "kline_missing_count": len(kline_errors),
             "kline_skip_reasons": _summarize_kline_skip_reasons(kline_errors),
             "candidate_limit_config": {
-                "market_candidate_count": raw_target_count,
-                "lookahead_multiplier": int(settings.market_candidate_lookahead_multiplier),
-                "lookahead_count": lookahead_count,
-                "target_scan_count": target_count,
+                "market_candidate_count": recall_plan["explicit_scan_limit"],
+                "lookahead_multiplier": recall_plan["lookahead_multiplier"],
+                "lookahead_count": recall_plan["broad_recall_count"],
+                "target_scan_count": recall_plan["scan_target_count"],
+                "broad_recall_count": recall_plan["broad_recall_count"],
+                "broad_recall_limited": recall_plan["broad_recall_limited"],
+                "recall_strategy": "multi_bucket_quote_recall",
             },
         }
     )
-    snapshot["snapshot_id"] = f"snapshot_pool_{snapshot['trade_date']}_{datetime.utcnow().strftime('%H%M%S')}"
+    snapshot["snapshot_id"] = f"snapshot_pool_{snapshot['trade_date']}_{datetime.now(timezone.utc).replace(tzinfo=None).strftime('%H%M%S')}"
     return stocks, snapshot
 
 
@@ -209,21 +201,18 @@ def get_market_snapshot_from_pool(db: Session, refresh: bool = False) -> dict[st
     settings = get_settings()
     quotes, quote_meta = _load_or_refresh_quotes(db, settings) if refresh else _load_quotes_from_pool(db, settings, skip_metrics=True)
     total_quote_count = len(quotes)
-    eligible_quotes = _select_candidates(quotes, len(quotes))
+    eligible_quotes = _eligible_market_quotes(quotes)
     filter_summary = _candidate_filter_summary(quotes)
-    quotes = eligible_quotes[: min(settings.market_scan_size, 300)]
-    if not quotes:
+    if not eligible_quotes:
         raise MarketDataError("统一行情池没有可用市场快照。")
-    trade_date = _latest_trade_date_from_quotes(quotes)
-    up_count = sum(1 for item in quotes if item.get("pct", 0) > 0)
-    down_count = sum(1 for item in quotes if item.get("pct", 0) < 0)
-    limit_up_count = sum(1 for item in quotes if item.get("pct", 0) >= 9.8)
-    limit_down_count = sum(1 for item in quotes if item.get("pct", 0) <= -9.8)
-    industries = _top_industries_from_quotes(quotes)
-    breadth = _breadth_from_counts(len(quotes), up_count, down_count, limit_up_count, limit_down_count)
-    breadth.update(
+    snapshot = _build_quote_snapshot(
+        eligible_quotes,
+        data_source="local_unified_market_pool",
+        quote_source="unified_pool",
+        quote_errors=quote_meta.get("errors", []),
+    )
+    snapshot["breadth"].update(
         {
-            "data_source": "local_unified_market_pool",
             "quote_pool_status": quote_meta.get("status"),
             "quote_source_count": quote_meta.get("source_count"),
             "quote_sources": quote_meta.get("sources", []),
@@ -231,22 +220,12 @@ def get_market_snapshot_from_pool(db: Session, refresh: bool = False) -> dict[st
             "unified_quote_total": total_quote_count,
             "base_filter_eligible_count": len(eligible_quotes),
             "candidate_filter": filter_summary,
-            "actual_scan_count": len(quotes),
-            "generated_at": datetime.utcnow().isoformat(),
-            "hot_theme": " / ".join(industries[:2]) if industries else "未知",
+            "actual_scan_count": len(eligible_quotes),
+            "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         }
     )
-    return {
-        "snapshot_id": f"snapshot_pool_{trade_date}",
-        "trade_date": trade_date,
-        "sample_count": len(quotes),
-        "up_count": up_count,
-        "down_count": down_count,
-        "limit_up_count": limit_up_count,
-        "limit_down_count": limit_down_count,
-        "main_industries": industries,
-        "breadth": breadth,
-    }
+    snapshot["snapshot_id"] = f"snapshot_pool_{snapshot['trade_date']}"
+    return snapshot
 
 
 def refresh_quote_pool(db: Session) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -259,8 +238,7 @@ def local_pool_recommendation_readiness(
     cached_bar_summaries: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     settings = get_settings()
-    raw_target_count = int(settings.market_candidate_count)
-    full_market_mode = raw_target_count <= 0
+    configured_full_market_mode = int(getattr(settings, "market_candidate_count", 0) or 0) <= 0
     min_bar_count = 30
     messages: list[str] = []
     examples: list[dict[str, Any]] = []
@@ -271,8 +249,8 @@ def local_pool_recommendation_readiness(
             "status": "blocked",
             "can_run_local_recommendation": False,
             "has_missing_data": True,
-            "full_market_mode": full_market_mode,
-            "required_candidate_count": 0 if full_market_mode else max(1, raw_target_count),
+            "full_market_mode": configured_full_market_mode,
+            "required_candidate_count": 0,
             "quote": {
                 "available_count": 0,
                 "candidate_count": 0,
@@ -292,7 +270,7 @@ def local_pool_recommendation_readiness(
 
     quotes = cached_quotes if cached_quotes is not None else _load_cached_quotes(db, allowed_sources=set(active_sources), skip_metrics=True)
     quote_trade_dates = [str(item.get("trade_date") or "") for item in quotes if item.get("trade_date")]
-    all_candidates = _select_candidates(quotes, len(quotes)) if quotes else []
+    eligible_quotes = _eligible_market_quotes(quotes) if quotes else []
     filter_summary = _candidate_filter_summary(quotes) if quotes else {
         "total_count": 0,
         "base_eligible_count": 0,
@@ -302,17 +280,9 @@ def local_pool_recommendation_readiness(
         "exclusion_counts": {},
         "high_liquidity_threshold": {"amount_yi": 0.5, "turnover_rate": 0.1},
     }
-    if full_market_mode:
-        lookahead_count = len(quotes)
-        target_count = 0
-    else:
-        target_count = max(1, raw_target_count)
-        lookahead_count = min(
-            len(quotes),
-            target_count * max(1, int(settings.market_candidate_lookahead_multiplier)),
-        )
-    candidates = all_candidates[:lookahead_count]
-    effective_required_count = len(candidates) if full_market_mode else target_count
+    recall_plan = _candidate_recall_plan(len(quotes), len(eligible_quotes), settings)
+    candidates = _select_recall_candidates(eligible_quotes, recall_plan["broad_recall_count"])
+    effective_required_count = min(len(candidates), recall_plan["scan_target_count"])
 
     # Bar summaries：优先用传入缓存，避免重复 GROUP BY 查询
     candidate_codes = [str(item.get("code") or "") for item in candidates]
@@ -365,18 +335,28 @@ def local_pool_recommendation_readiness(
             continue
         ready_count += 1
 
-    can_run = (len(quotes) > 0 if full_market_mode else len(quotes) >= target_count) and ready_count > 0
+    can_run = (
+        len(quotes) > 0 if recall_plan["full_market_mode"] else len(quotes) >= recall_plan["scan_target_count"]
+    ) and ready_count > 0
     has_missing_data = (
         not candidates
         or ready_count < effective_required_count
-        or (not full_market_mode and (len(quotes) < target_count or len(candidates) < target_count))
+        or (
+            not recall_plan["full_market_mode"]
+            and (
+                len(quotes) < recall_plan["scan_target_count"]
+                or len(candidates) < recall_plan["scan_target_count"]
+            )
+        )
     )
-    if full_market_mode and not quotes:
+    if recall_plan["full_market_mode"] and not quotes:
         status = "blocked"
         messages.append("本地统一报价为空，全市场模式无法运行推荐。")
-    elif not full_market_mode and len(quotes) < target_count:
+    elif not recall_plan["full_market_mode"] and len(quotes) < recall_plan["scan_target_count"]:
         status = "blocked"
-        messages.append(f"本地统一报价不足，当前 {len(quotes)} 条，至少需要 {target_count} 条。")
+        messages.append(
+            f"本地统一报价不足，当前 {len(quotes)} 条，至少需要 {recall_plan['scan_target_count']} 条。"
+        )
     elif not candidates:
         status = "blocked"
         messages.append("本地报价存在，但没有股票通过候选过滤条件。")
@@ -385,19 +365,24 @@ def local_pool_recommendation_readiness(
         messages.append("候选股的本地日K全部缺失或未覆盖报价日期。")
     elif ready_count < effective_required_count:
         status = "warning"
-        if full_market_mode:
+        if recall_plan["full_market_mode"]:
             messages.append(
                 f"全市场模式可运行本地推荐，将扫描 {len(candidates)} 只候选；"
-                f"当前日K覆盖完整 {ready_count} 只，真实运行会跳过缺口股票。"
+                f"当前日K覆盖完整 {ready_count} 只，目标扫描 {recall_plan['scan_target_count']} 只。"
             )
         else:
-            messages.append(f"可运行本地推荐，但可用候选只有 {ready_count} 只，目标候选数为 {target_count}。")
+            messages.append(
+                f"可运行本地推荐，但宽召回 {len(candidates)} 只里只有 {ready_count} 只日K覆盖完整，"
+                f"目标扫描数为 {recall_plan['scan_target_count']}。"
+            )
     else:
         status = "ready"
-        if full_market_mode:
+        if recall_plan["full_market_mode"]:
             messages.append(f"全市场模式可直接运行推荐，{ready_count} / {len(candidates)} 只候选股报价与日K覆盖完整。")
         else:
-            messages.append(f"本地池可直接运行推荐，已有 {ready_count} 只候选股报价与日K覆盖完整。")
+            messages.append(
+                f"本地池可直接运行推荐，宽召回 {len(candidates)} 只中已有 {ready_count} 只候选股报价与日K覆盖完整。"
+            )
 
     if missing_count or stale_count:
         gap_parts = []
@@ -415,12 +400,12 @@ def local_pool_recommendation_readiness(
         "status": status,
         "can_run_local_recommendation": can_run,
         "has_missing_data": has_missing_data,
-        "full_market_mode": full_market_mode,
+        "full_market_mode": recall_plan["full_market_mode"],
         "required_candidate_count": effective_required_count,
         "quote": {
             "available_count": len(quotes),
             "candidate_count": len(candidates),
-            "base_filter_eligible_count": len(all_candidates),
+            "base_filter_eligible_count": len(eligible_quotes),
             "unified_quote_total": len(quotes),
             "filter_summary": filter_summary,
             "latest_trade_date": max(quote_trade_dates) if quote_trade_dates else None,
@@ -442,14 +427,16 @@ def local_pool_recommendation_readiness(
             "examples": examples,
         },
         "scan": {
-            "configured_candidate_count": raw_target_count,
-            "lookahead_multiplier": int(settings.market_candidate_lookahead_multiplier),
-            "lookahead_count": lookahead_count,
-            "actual_scan_count": ready_count,
-            "skill_input_count": ready_count,
-            "agent_review_input_count": ready_count,
-            "scan_limited": (not full_market_mode) and len(all_candidates) > lookahead_count,
-            "demo_limited": (not full_market_mode) and len(all_candidates) > lookahead_count,
+            "configured_candidate_count": recall_plan["explicit_scan_limit"],
+            "lookahead_multiplier": recall_plan["lookahead_multiplier"],
+            "lookahead_count": recall_plan["broad_recall_count"],
+            "actual_scan_count": min(ready_count, recall_plan["scan_target_count"]),
+            "skill_input_count": min(ready_count, recall_plan["scan_target_count"]),
+            "agent_review_input_count": min(ready_count, recall_plan["scan_target_count"]),
+            "scan_limited": recall_plan["broad_recall_limited"] or (
+                not recall_plan["full_market_mode"] and len(candidates) > recall_plan["scan_target_count"]
+            ),
+            "demo_limited": (not recall_plan["full_market_mode"]) and len(eligible_quotes) > recall_plan["scan_target_count"],
         },
         "messages": messages,
     }
@@ -506,7 +493,6 @@ def _refresh_quote_pool(
                 errors.append(f"{source}: empty result")
                 continue
             trade_date = _latest_trade_date_from_quotes(rows)
-            _persist_raw_quotes(db, source, trade_date, rows)
             _record_source_health(db, source, "quote", "success", latency_ms=latency_ms)
             for row in rows:
                 code = str(row.get("code") or "")
@@ -523,7 +509,7 @@ def _refresh_quote_pool(
 
     merged = [_merge_quote_rows(code, rows, sources, settings) for code, rows in grouped.items()]
     _enrich_industries(settings, merged)
-    _persist_unified_quotes(db, merged)
+    _persist_stock_quotes(db, merged)
     db.commit()
     return merged, _quote_meta("refreshed", merged, errors=errors)
 
@@ -534,31 +520,46 @@ def _load_cached_quotes(
     allowed_sources: set[str] | None = None,
     skip_metrics: bool = False,
 ) -> list[dict[str, Any]]:
-    cutoff = datetime.utcnow() - max_age if max_age is not None else None
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - max_age if max_age is not None else None
     stmt = (
-        select(UnifiedQuote)
-        .where(UnifiedQuote.freshness_status != "inactive")
-        .order_by(UnifiedQuote.quality_score.desc(), UnifiedQuote.fetched_at.desc())
+        select(StockQuote)
+        .where(StockQuote.freshness_status != "inactive")
+        .order_by(StockQuote.quality_score.desc(), StockQuote.snapped_at.desc())
     )
     if cutoff is not None:
-        stmt = stmt.where(UnifiedQuote.fetched_at >= cutoff)
+        stmt = stmt.where(StockQuote.snapped_at >= cutoff)
     rows = db.scalars(stmt).all()
     local_metrics = {} if skip_metrics else _quote_metrics_from_bars(db, [row.code for row in rows])
     quotes = []
     for row in rows:
-        quote = _loads(row.quote_json, {})
-        if not quote:
-            continue
-        quote["trade_date"] = row.trade_date
-        quote["source_count"] = row.source_count
-        quote["quality_score"] = row.quality_score
-        quote["freshness_status"] = row.freshness_status if cutoff is None or row.fetched_at >= cutoff else "stale_cache"
-        quote["fetched_at"] = row.fetched_at.isoformat()
-        quote["source_trace"] = _loads(row.source_trace_json, {})
+        quote = {
+            "code": row.code,
+            "name": row.name,
+            "trade_date": row.trade_date,
+            "price": float(row.price or 0),
+            "pct": float(row.pct or 0),
+            "volume": float(row.volume or 0),
+            "amount_yi": float(row.amount_yi or 0),
+            "turnover_rate": float(row.turnover_rate or 0),
+            "pe_ttm": float(row.pe_ttm or 0) if row.pe_ttm else None,
+            "total_mv_yi": float(row.total_mv_yi or 0) if row.total_mv_yi else None,
+            "free_mv_yi": float(row.free_mv_yi or 0) if row.free_mv_yi else None,
+            "chg60": float(row.chg60 or 0) if row.chg60 else None,
+            "high": float(row.high or 0) if row.high else None,
+            "low": float(row.low or 0) if row.low else None,
+            "open": float(row.open or 0) if row.open else None,
+            "preclose": float(row.preclose or 0) if row.preclose else None,
+            "industry": row.industry or "",
+            "source_count": row.source_count,
+            "quality_score": row.quality_score,
+            "freshness_status": row.freshness_status if cutoff is None or (row.snapped_at and row.snapped_at >= cutoff) else "stale_cache",
+            "fetched_at": row.snapped_at.isoformat() if row.snapped_at else "",
+            "raw_sources": [row.source] if row.source else [],
+            "conflicts": [],
+            "exchange": "SH" if (row.code or "").startswith(("6", "9")) else "SZ",
+        }
         if not skip_metrics:
             _apply_local_quote_metrics(quote, local_metrics.get(row.code, {}))
-        quote["raw_sources"] = quote["source_trace"].get("raw_sources", [])
-        quote["conflicts"] = quote["source_trace"].get("conflicts", [])
         if allowed_sources is not None and not set(quote["raw_sources"]).issubset(allowed_sources):
             continue
         quotes.append(quote)
@@ -578,12 +579,12 @@ def _quote_metrics_from_bars(db: Session, codes: list[str]) -> dict[str, dict[st
 
     latest_allowed_date = _latest_allowed_bar_date()
     rows = db.scalars(
-        select(DailyBar)
-        .where(DailyBar.code.in_(unique_codes), DailyBar.trade_date <= latest_allowed_date)
-        .order_by(DailyBar.code, DailyBar.trade_date.desc())
+        select(DailyKbar)
+        .where(DailyKbar.code.in_(unique_codes), DailyKbar.trade_date <= latest_allowed_date)
+        .order_by(DailyKbar.code, DailyKbar.trade_date.desc())
     ).all()
 
-    bars_by_code: dict[str, list[DailyBar]] = defaultdict(list)
+    bars_by_code: dict[str, list[DailyKbar]] = defaultdict(list)
     for row in rows:
         bars_by_code[row.code].append(row)
 
@@ -649,7 +650,7 @@ def _load_or_refresh_bars(
         return cached, {"selected_source": "daily_bars_cache", "freshness_status": "fresh_cache"}, []
     bars, source, errors = _refresh_bars_for_quote(db, quote, settings, disabled_sources)
     if bars:
-        _persist_normalized_bars(db, bars)
+        _persist_kbars(db, bars)
         db.commit()
         return bars, {"selected_source": source, "freshness_status": "refreshed"}, errors
     return [], {"selected_source": "", "freshness_status": "missing"}, errors
@@ -698,7 +699,6 @@ def _refresh_bars_for_quote(
                 _record_source_health(db, source, "kline", "empty", latency_ms=latency_ms)
                 errors.append(f"{source}: 日K不足30条")
                 continue
-            _persist_raw_bars(db, source, bars)
             _record_source_health(db, source, "kline", "success", latency_ms=latency_ms)
             return bars[-settings.market_kline_days :], source, errors
         except Exception as exc:  # noqa: BLE001 - returned as run evidence
@@ -718,7 +718,7 @@ def _incremental_kline_start(db: Session, code: str, settings: Any) -> str | Non
     无数据时返回 None（通知调用方按全量拉取）。
     """
     existing_max_date = db.scalar(
-        select(func.max(DailyBar.trade_date)).where(DailyBar.code == code)
+        select(func.max(DailyKbar.trade_date)).where(DailyKbar.code == code)
     )
     if not existing_max_date:
         return None
@@ -781,7 +781,7 @@ def _merge_quote_rows(
         "source": "unified_pool",
         "source_count": len({row.get("source") for row in ordered if row.get("source")}),
         "raw_sources": sorted({str(row.get("source")) for row in ordered if row.get("source")}),
-        "quote_time": datetime.utcnow().isoformat(),
+        "quote_time": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
     }
 
     conflicts: list[str] = []
@@ -815,7 +815,7 @@ def _merge_quote_rows(
         "source_count": source_count,
         "field_sources": field_sources,
         "conflicts": conflicts,
-        "merged_at": datetime.utcnow().isoformat(),
+        "merged_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
     }
     return result
 
@@ -863,244 +863,204 @@ def _merge_quality(
     return quality
 
 
-def _persist_raw_quotes(db: Session, source: str, trade_date: str, rows: list[dict[str, Any]]) -> None:
-    seen_batch: set[tuple] = set()
-    for row in rows:
-        code = str(row.get("code") or "")
-        if not code:
-            continue
-        key = (source, code, trade_date)
-        if key in seen_batch:
-            continue
-        seen_batch.add(key)
-        existing = db.scalar(
-            select(RawQuote).where(
-                RawQuote.source == source,
-                RawQuote.code == code,
-                RawQuote.trade_date == trade_date,
-            )
-        )
-        payload = _dumps(row)
-        quality = _dumps({"field_count": sum(1 for value in row.values() if value not in {None, "", 0})})
-        if existing is None:
-            db.add(RawQuote(source=source, code=code, trade_date=trade_date, payload_json=payload, quality_json=quality))
-        else:
-            existing.payload_json = payload
-            existing.quality_json = quality
-            existing.fetched_at = datetime.utcnow()
-
-
-def _persist_unified_quotes(db: Session, rows: list[dict[str, Any]]) -> None:
+def _persist_stock_quotes(db: Session, rows: list[dict[str, Any]]) -> None:
     trade_date = _latest_trade_date_from_quotes(rows)
     active_codes = {row["code"] for row in rows}
     seen_batch: set[tuple] = set()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     for row in rows:
         key = (row["code"], trade_date)
         if key in seen_batch:
             continue
         seen_batch.add(key)
-        existing = db.scalar(select(UnifiedQuote).where(UnifiedQuote.code == row["code"], UnifiedQuote.trade_date == trade_date))
-        quote_json = _dumps({key: value for key, value in row.items() if key not in {"source_trace", "conflicts"}})
-        trace_json = _dumps(row.get("source_trace", {}))
+        existing = db.scalar(
+            select(StockQuote).where(StockQuote.code == row["code"], StockQuote.trade_date == trade_date)
+        )
+        source = str(row.get("raw_sources", ["unknown"])[0]) if row.get("raw_sources") else "unknown"
         if existing is None:
-            db.add(
-                UnifiedQuote(
-                    code=row["code"],
-                    trade_date=trade_date,
-                    quote_json=quote_json,
-                    source_trace_json=trace_json,
-                    source_count=int(row.get("source_count") or 0),
-                    quality_score=float(row.get("quality_score") or 0),
-                    freshness_status=str(row.get("freshness_status") or "fresh"),
-                )
-            )
+            db.add(StockQuote(
+                code=row["code"],
+                trade_date=trade_date,
+                name=str(row.get("name") or ""),
+                price=float(row.get("price") or 0),
+                pct=float(row.get("pct") or 0),
+                volume=float(row.get("volume") or 0),
+                amount_yi=float(row.get("amount_yi") or 0),
+                turnover_rate=float(row.get("turnover_rate") or 0),
+                pe_ttm=float(row.get("pe_ttm")) if row.get("pe_ttm") is not None else None,
+                total_mv_yi=float(row.get("total_mv_yi")) if row.get("total_mv_yi") is not None else None,
+                free_mv_yi=float(row.get("free_mv_yi")) if row.get("free_mv_yi") is not None else None,
+                chg60=float(row.get("chg60")) if row.get("chg60") is not None else None,
+                high=float(row.get("high")) if row.get("high") is not None else None,
+                low=float(row.get("low")) if row.get("low") is not None else None,
+                open=float(row.get("open")) if row.get("open") is not None else None,
+                preclose=float(row.get("preclose")) if row.get("preclose") is not None else None,
+                industry=row.get("industry") or "",
+                source=source,
+                source_count=int(row.get("source_count") or 0),
+                quality_score=float(row.get("quality_score") or 0),
+                freshness_status=str(row.get("freshness_status") or "fresh"),
+                snapped_at=now,
+            ))
         else:
-            existing.quote_json = quote_json
-            existing.source_trace_json = trace_json
+            existing.name = str(row.get("name") or "")
+            existing.price = float(row.get("price") or 0)
+            existing.pct = float(row.get("pct") or 0)
+            existing.volume = float(row.get("volume") or 0)
+            existing.amount_yi = float(row.get("amount_yi") or 0)
+            existing.turnover_rate = float(row.get("turnover_rate") or 0)
+            existing.pe_ttm = float(row.get("pe_ttm")) if row.get("pe_ttm") is not None else None
+            existing.total_mv_yi = float(row.get("total_mv_yi")) if row.get("total_mv_yi") is not None else None
+            existing.free_mv_yi = float(row.get("free_mv_yi")) if row.get("free_mv_yi") is not None else None
+            existing.chg60 = float(row.get("chg60")) if row.get("chg60") is not None else None
+            existing.high = float(row.get("high")) if row.get("high") is not None else None
+            existing.low = float(row.get("low")) if row.get("low") is not None else None
+            existing.open = float(row.get("open")) if row.get("open") is not None else None
+            existing.preclose = float(row.get("preclose")) if row.get("preclose") is not None else None
+            existing.industry = row.get("industry") or ""
+            existing.source = source
             existing.source_count = int(row.get("source_count") or 0)
             existing.quality_score = float(row.get("quality_score") or 0)
             existing.freshness_status = str(row.get("freshness_status") or "fresh")
-            existing.fetched_at = datetime.utcnow()
-            existing.updated_at = datetime.utcnow()
+            existing.snapped_at = now
     if active_codes:
         inactive_rows = db.scalars(
-            select(UnifiedQuote).where(
-                UnifiedQuote.trade_date == trade_date,
-                UnifiedQuote.code.not_in(active_codes),
+            select(StockQuote).where(
+                StockQuote.trade_date == trade_date,
+                StockQuote.code.not_in(active_codes),
             )
         ).all()
         for row in inactive_rows:
             row.freshness_status = "inactive"
-            row.updated_at = datetime.utcnow()
 
 
-def _persist_raw_bars(db: Session, source: str, bars: list[dict[str, Any]]) -> None:
-    latest_allowed_date = _latest_allowed_bar_date()
-    seen_batch: set[tuple] = set()
-    for bar in bars:
-        if str(bar.get("trade_date") or "") > latest_allowed_date:
-            continue
-        key = (source, bar["code"], bar["trade_date"])
-        if key in seen_batch:
-            continue
-        seen_batch.add(key)
-        existing = db.scalar(
-            select(RawDailyBar).where(
-                RawDailyBar.source == source,
-                RawDailyBar.code == bar["code"],
-                RawDailyBar.trade_date == bar["trade_date"],
-            )
-        )
-        payload = _dumps(bar)
-        if existing is None:
-            db.add(RawDailyBar(source=source, code=bar["code"], trade_date=bar["trade_date"], payload_json=payload))
-        else:
-            existing.payload_json = payload
-            existing.fetched_at = datetime.utcnow()
-
-
-def _persist_normalized_bars(db: Session, bars: list[dict[str, Any]]) -> None:
+def _persist_kbars(db: Session, bars: list[dict[str, Any]]) -> None:
     if not bars:
         return
     latest_allowed_date = _latest_allowed_bar_date()
     code = str(bars[0].get("code") or "")
-    filtered = [bar for bar in bars if str(bar.get("trade_date") or "") <= latest_allowed_date]
     seen_batch: set[tuple] = set()
-    for bar in filtered:
-        key = (bar["code"], bar["trade_date"])
+    rows: list[dict[str, Any]] = []
+    for bar in bars:
+        trade_date = str(bar.get("trade_date") or "")
+        if trade_date > latest_allowed_date:
+            continue
+        key = (str(bar.get("code") or ""), trade_date)
         if key in seen_batch:
             continue
         seen_batch.add(key)
-        existing = db.scalar(select(DailyBar).where(DailyBar.code == bar["code"], DailyBar.trade_date == bar["trade_date"]))
-        if existing is None:
-            db.add(DailyBar(**bar))
-        else:
-            existing.open = float(bar["open"])
-            existing.high = float(bar["high"])
-            existing.low = float(bar["low"])
-            existing.close = float(bar["close"])
-            existing.volume = float(bar.get("volume") or 0)
-            existing.amount = float(bar.get("amount") or 0)
-            existing.pct_chg = float(bar.get("pct_chg") or 0)
-            existing.turnover_rate = float(bar.get("turnover_rate") or 0)
-
-    if not code or not filtered:
+        rows.append({
+            "code": code,
+            "trade_date": trade_date,
+            "open": float(bar.get("open") or 0),
+            "high": float(bar.get("high") or 0),
+            "low": float(bar.get("low") or 0),
+            "close": float(bar.get("close") or 0),
+            "volume": float(bar.get("volume") or 0),
+            "amount": float(bar.get("amount") or 0),
+            "pct_chg": float(bar.get("pct_chg") or 0),
+            "turnover_rate": float(bar.get("turnover_rate") or 0),
+            "macd_dif": bar.get("macd_dif"),
+            "macd_dea": bar.get("macd_dea"),
+            "macd_bar": bar.get("macd"),
+            "kdj_k": bar.get("kdj_k"),
+            "kdj_d": bar.get("kdj_d"),
+            "kdj_j": bar.get("kdj_j"),
+            "rsi_6": bar.get("rsi_6"),
+            "rsi_12": bar.get("rsi_12"),
+            "rsi_24": bar.get("rsi_24"),
+            "boll_upper": bar.get("boll_upper"),
+            "boll_mid": bar.get("boll_mid"),
+            "boll_lower": bar.get("boll_lower"),
+            "cci": bar.get("cci"),
+            "source": bar.get("source", "tushare"),
+        })
+    if not code or not rows:
         return
 
-    # Compute and persist indicators for this code's bars
-    sorted_bars = sorted(filtered, key=lambda b: b["trade_date"])
-    db.flush()
-
-    # Update DailyBar indicator columns
-    bar_indicators = compute_daily_bar_indicators(code, sorted_bars)
-    for bar in filtered:
-        trade_date = bar["trade_date"]
-        ind = bar_indicators.get(trade_date, {})
-        row = db.scalar(select(DailyBar).where(DailyBar.code == code, DailyBar.trade_date == trade_date))
-        if row is not None:
-            row.ma5 = ind.get("ma5")
-            row.ma10 = ind.get("ma10")
-            row.ma20 = ind.get("ma20")
-            row.ma60 = ind.get("ma60")
-            row.volume_ratio_5d = ind.get("volume_ratio_5d")
-
-    db.flush()
-
-    # Upsert DailyIndicator rows
-    daily_indicators = compute_daily_indicators(code, sorted_bars)
-    for bar in filtered:
-        trade_date = bar["trade_date"]
-        ind = daily_indicators.get(trade_date, {})
-        existing_ind = db.scalar(
-            select(DailyIndicator).where(
-                DailyIndicator.code == code, DailyIndicator.trade_date == trade_date
-            )
-        )
-        if existing_ind is None:
-            db.add(DailyIndicator(code=code, trade_date=trade_date, **ind))
-        else:
-            for key, value in ind.items():
-                setattr(existing_ind, key, value)
+    stmt = mysql_insert(DailyKbar).values(rows)
+    db.execute(stmt.on_duplicate_key_update(
+        open=stmt.inserted.open,
+        high=stmt.inserted.high,
+        low=stmt.inserted.low,
+        close=stmt.inserted.close,
+        volume=stmt.inserted.volume,
+        amount=stmt.inserted.amount,
+        pct_chg=stmt.inserted.pct_chg,
+        turnover_rate=stmt.inserted.turnover_rate,
+        macd_dif=stmt.inserted.macd_dif,
+        macd_dea=stmt.inserted.macd_dea,
+        macd_bar=stmt.inserted.macd_bar,
+        kdj_k=stmt.inserted.kdj_k,
+        kdj_d=stmt.inserted.kdj_d,
+        kdj_j=stmt.inserted.kdj_j,
+        rsi_6=stmt.inserted.rsi_6,
+        rsi_12=stmt.inserted.rsi_12,
+        rsi_24=stmt.inserted.rsi_24,
+        boll_upper=stmt.inserted.boll_upper,
+        boll_mid=stmt.inserted.boll_mid,
+        boll_lower=stmt.inserted.boll_lower,
+        cci=stmt.inserted.cci,
+    ))
 
 
 def _load_cached_bars_batch(
     db: Session, codes: list[str], limit: int
 ) -> dict[str, list[dict[str, Any]]]:
-    """批量加载日K + 指标，一次查询替代 N 次逐个查询。"""
+    """批量加载日K（DailyKbar 单表，无需 JOIN）。"""
     if not codes:
         return {}
     latest_allowed_date = _latest_allowed_bar_date()
 
-    # 1) 一次性加载所有候选 code 的日K（按 code + trade_date DESC 排序）
     all_rows = db.scalars(
-        select(DailyBar)
-        .where(DailyBar.code.in_(codes), DailyBar.trade_date <= latest_allowed_date)
-        .order_by(DailyBar.code, DailyBar.trade_date.desc())
+        select(DailyKbar)
+        .where(DailyKbar.code.in_(codes), DailyKbar.trade_date <= latest_allowed_date)
+        .order_by(DailyKbar.code, DailyKbar.trade_date.desc())
     ).all()
 
-    # 2) 按 code 分组，每个 code 只取最近 limit 条
     bars_by_code: dict[str, list] = defaultdict(list)
-    all_trade_dates: set[str] = set()
     for row in all_rows:
         if len(bars_by_code[row.code]) >= limit:
             continue
         bars_by_code[row.code].append(row)
-        all_trade_dates.add(row.trade_date)
 
-    # 3) 一次性加载所有指标
-    indicator_map: dict[tuple[str, str], Any] = {}
-    if all_trade_dates:
-        ind_rows = db.scalars(
-            select(DailyIndicator).where(
-                DailyIndicator.code.in_(codes),
-                DailyIndicator.trade_date.in_(all_trade_dates),
-            )
-        ).all()
-        indicator_map = {(ind.code, ind.trade_date): ind for ind in ind_rows}
-
-    # 4) 构建返回（按 trade_date 升序）
     result: dict[str, list[dict[str, Any]]] = {}
     for code in codes:
-        rows = bars_by_code.get(code, [])
-        if not rows:
-            result[code] = []
-            continue
-        rows_sorted = sorted(rows, key=lambda r: r.trade_date)
+        rows = sorted(bars_by_code.get(code, []), key=lambda r: r.trade_date)
         bars = []
-        for row in rows_sorted:
-            ind = indicator_map.get((row.code, row.trade_date))
+        for row in rows:
             bar = {
                 "code": row.code,
                 "trade_date": row.trade_date,
-                "open": row.open,
-                "high": row.high,
-                "low": row.low,
-                "close": row.close,
-                "volume": row.volume,
-                "amount": row.amount,
-                "pct_chg": row.pct_chg,
-                "turnover_rate": row.turnover_rate,
+                "open": float(row.open or 0),
+                "high": float(row.high or 0),
+                "low": float(row.low or 0),
+                "close": float(row.close or 0),
+                "volume": float(row.volume or 0),
+                "amount": float(row.amount or 0),
+                "pct_chg": float(row.pct_chg or 0),
+                "turnover_rate": float(row.turnover_rate or 0),
                 "ma5": row.ma5,
                 "ma10": row.ma10,
                 "ma20": row.ma20,
                 "ma60": row.ma60,
-                "volume_ratio_5d": row.volume_ratio_5d,
+                "volume_ratio_5d": row.vol_ratio_5,
                 "_indicator": {
-                    "rsi_6": ind.rsi_6 if ind else None,
-                    "rsi_12": ind.rsi_12 if ind else None,
-                    "rsi_24": ind.rsi_24 if ind else None,
-                    "macd_dif": ind.macd_dif if ind else None,
-                    "macd_dea": ind.macd_dea if ind else None,
-                    "macd_bar": ind.macd_bar if ind else None,
-                    "bias_ma5": ind.bias_ma5 if ind else None,
-                    "bias_ma10": ind.bias_ma10 if ind else None,
-                    "bias_ma20": ind.bias_ma20 if ind else None,
-                    "breakout20": ind.breakout20 if ind else None,
-                    "breakout60": ind.breakout60 if ind else None,
-                    "upper_shadow_count20": ind.upper_shadow_count20 if ind else None,
-                    "max_dd20": ind.max_dd20 if ind else None,
-                    "max_dd60": ind.max_dd60 if ind else None,
-                } if ind else {},
+                    "rsi_6": row.rsi_6,
+                    "rsi_12": row.rsi_12,
+                    "rsi_24": row.rsi_24,
+                    "macd_dif": row.macd_dif,
+                    "macd_dea": row.macd_dea,
+                    "macd_bar": row.macd_bar,
+                    "bias_ma5": row.bias_5,
+                    "bias_ma10": row.bias_10,
+                    "bias_ma20": row.bias_20,
+                    "breakout20": row.breakout20,
+                    "breakout60": row.breakout60,
+                    "upper_shadow_count20": row.upper_shadow_count20,
+                    "max_dd20": row.max_dd20,
+                    "max_dd60": row.max_dd60,
+                },
             }
             bars.append(bar)
         result[code] = bars
@@ -1110,64 +1070,47 @@ def _load_cached_bars_batch(
 def _load_cached_bars(db: Session, code: str, limit: int) -> list[dict[str, Any]]:
     latest_allowed_date = _latest_allowed_bar_date()
     rows = db.scalars(
-        select(DailyBar)
-        .where(DailyBar.code == code, DailyBar.trade_date <= latest_allowed_date)
-        .order_by(DailyBar.trade_date.desc())
+        select(DailyKbar)
+        .where(DailyKbar.code == code, DailyKbar.trade_date <= latest_allowed_date)
+        .order_by(DailyKbar.trade_date.desc())
         .limit(limit)
     ).all()
-
-    # Load DailyIndicator rows for this code (same date range)
-    trade_dates = [row.trade_date for row in rows]
-    if trade_dates:
-        indicator_rows = db.scalars(
-            select(DailyIndicator)
-            .where(
-                DailyIndicator.code == code,
-                DailyIndicator.trade_date.in_(trade_dates),
-            )
-        ).all()
-        indicator_map = {ind.trade_date: ind for ind in indicator_rows}
-    else:
-        indicator_map = {}
 
     result = []
     for row in reversed(rows):
         bar = {
             "code": row.code,
             "trade_date": row.trade_date,
-            "open": row.open,
-            "high": row.high,
-            "low": row.low,
-            "close": row.close,
-            "volume": row.volume,
-            "amount": row.amount,
-            "pct_chg": row.pct_chg,
-            "turnover_rate": row.turnover_rate,
+            "open": float(row.open or 0),
+            "high": float(row.high or 0),
+            "low": float(row.low or 0),
+            "close": float(row.close or 0),
+            "volume": float(row.volume or 0),
+            "amount": float(row.amount or 0),
+            "pct_chg": float(row.pct_chg or 0),
+            "turnover_rate": float(row.turnover_rate or 0),
             "ma5": row.ma5,
             "ma10": row.ma10,
             "ma20": row.ma20,
             "ma60": row.ma60,
-            "volume_ratio_5d": row.volume_ratio_5d,
+            "volume_ratio_5d": row.vol_ratio_5,
+            "_indicator": {
+                "rsi_6": row.rsi_6,
+                "rsi_12": row.rsi_12,
+                "rsi_24": row.rsi_24,
+                "macd_dif": row.macd_dif,
+                "macd_dea": row.macd_dea,
+                "macd_bar": row.macd_bar,
+                "bias_ma5": row.bias_5,
+                "bias_ma10": row.bias_10,
+                "bias_ma20": row.bias_20,
+                "breakout20": row.breakout20,
+                "breakout60": row.breakout60,
+                "upper_shadow_count20": row.upper_shadow_count20,
+                "max_dd20": row.max_dd20,
+                "max_dd60": row.max_dd60,
+            },
         }
-        # Attach DailyIndicator data if available
-        ind = indicator_map.get(row.trade_date)
-        if ind is not None:
-            bar["_indicator"] = {
-                "rsi_6": ind.rsi_6,
-                "rsi_12": ind.rsi_12,
-                "rsi_24": ind.rsi_24,
-                "macd_dif": ind.macd_dif,
-                "macd_dea": ind.macd_dea,
-                "macd_bar": ind.macd_bar,
-                "bias_ma5": ind.bias_ma5,
-                "bias_ma10": ind.bias_ma10,
-                "bias_ma20": ind.bias_ma20,
-                "breakout20": ind.breakout20,
-                "breakout60": ind.breakout60,
-                "upper_shadow_count20": ind.upper_shadow_count20,
-                "max_dd20": ind.max_dd20,
-                "max_dd60": ind.max_dd60,
-            }
         result.append(bar)
     return result
 
@@ -1180,7 +1123,7 @@ def _record_source_health(
     error: str | None = None,
     latency_ms: float = 0.0,
 ) -> None:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     latency = round(float(latency_ms), 2)
     row = db.get(DataSourceHealth, {"source": source, "source_type": source_type})
     if row is None:
@@ -1216,7 +1159,7 @@ def _quote_meta(status: str, quotes: list[dict[str, Any]], errors: list[str] | N
         for item in quotes
         if item.get("fetched_at") and "T" in str(item.get("fetched_at"))
     ]
-    newest = max(fetched_times) if fetched_times else datetime.utcnow()
+    newest = max(fetched_times) if fetched_times else datetime.now(timezone.utc).replace(tzinfo=None)
     sources = sorted({source for quote in quotes for source in quote.get("raw_sources", [])})
     source_counts = [int(quote.get("source_count") or 0) for quote in quotes]
     return {
@@ -1224,7 +1167,7 @@ def _quote_meta(status: str, quotes: list[dict[str, Any]], errors: list[str] | N
         "count": len(quotes),
         "sources": sources,
         "source_count": round(statistics.fmean(source_counts), 2) if source_counts else 0,
-        "cache_age_seconds": max(0, int((datetime.utcnow() - newest).total_seconds())),
+        "cache_age_seconds": max(0, int((datetime.now(timezone.utc).replace(tzinfo=None) - newest).total_seconds())),
         "errors": errors or [],
     }
 
@@ -1238,12 +1181,12 @@ def _load_cached_bars_summary(
     latest_allowed_date = _latest_allowed_bar_date()
     rows = db.execute(
         select(
-            DailyBar.code,
+            DailyKbar.code,
             func.count().label("bar_count"),
-            func.max(DailyBar.trade_date).label("latest_trade_date"),
+            func.max(DailyKbar.trade_date).label("latest_trade_date"),
         )
-        .where(DailyBar.code.in_(codes), DailyBar.trade_date <= latest_allowed_date)
-        .group_by(DailyBar.code)
+        .where(DailyKbar.code.in_(codes), DailyKbar.trade_date <= latest_allowed_date)
+        .group_by(DailyKbar.code)
     ).all()
     return {
         row.code: {
@@ -1309,19 +1252,6 @@ def _max_relative_deviation(values: list[float], center: float) -> float:
     return max(abs(value - center) / denominator for value in values)
 
 
-def _dumps(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, default=str)
-
-
-def _loads(raw: str | None, default: Any) -> Any:
-    if not raw:
-        return default
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return default
-
-
 # ── 辅助数据池：刷新入口 ───────────────────────────────────────────────
 
 def refresh_limit_up_board(db: Session) -> list[dict[str, Any]]:
@@ -1333,7 +1263,6 @@ def refresh_limit_up_board(db: Session) -> list[dict[str, Any]]:
     return _refresh_aux_data(
         db, "limit_up", sources, settings,
         fetcher=lambda source, _settings: _fetch_limit_up_board(source, _settings),
-        raw_persister=_persist_raw_limit_up_board,
         normalized_persister=_persist_normalized_limit_up_board,
     )
 
@@ -1347,7 +1276,6 @@ def refresh_concept_sectors(db: Session) -> list[dict[str, Any]]:
     result = _refresh_aux_data(
         db, "concept_sector", sources, settings,
         fetcher=lambda source, _settings: _fetch_concept_sectors(source, _settings),
-        raw_persister=_persist_raw_concept_sector,
         normalized_persister=_persist_normalized_concept_sector,
     )
     # 额外持久化热门板块的成分股（优先 akshare 同花顺源，东财源被封）
@@ -1383,7 +1311,6 @@ def refresh_dragon_tiger(db: Session) -> list[dict[str, Any]]:
     return _refresh_aux_data(
         db, "dragon_tiger", sources, settings,
         fetcher=lambda source, _settings: _fetch_dragon_tiger(source, _settings),
-        raw_persister=_persist_raw_dragon_tiger,
         normalized_persister=_persist_normalized_dragon_tiger,
     )
 
@@ -1402,7 +1329,6 @@ def refresh_capital_flows_for_codes(db: Session, codes: list[str]) -> dict[str, 
         try:
             data = _fetch_capital_flow(source, code, settings)
             if data:
-                _persist_raw_capital_flow(db, source, data)
                 _persist_normalized_capital_flow(db, data)
                 result[code] = data
         except Exception:
@@ -1425,7 +1351,6 @@ def refresh_news_for_codes(db: Session, codes: list[str]) -> dict[str, list[dict
         try:
             items = _fetch_news(source, code, settings)
             if items:
-                _persist_raw_news(db, source, items)
                 _persist_normalized_news(db, items)
                 result[code] = items
         except Exception:
@@ -1442,7 +1367,6 @@ def _refresh_aux_data(
     sources: list[str],
     settings: Any,
     fetcher: Any,
-    raw_persister: Any,
     normalized_persister: Any,
 ) -> list[dict[str, Any]]:
     if not sources:
@@ -1456,7 +1380,6 @@ def _refresh_aux_data(
             if not rows:
                 _record_source_health(db, source, source_type, "empty", latency_ms=latency_ms)
                 continue
-            raw_persister(db, source, rows)
             _record_source_health(db, source, source_type, "success", latency_ms=latency_ms)
             if all_rows:
                 all_rows.extend(rows)
@@ -1469,136 +1392,6 @@ def _refresh_aux_data(
         normalized_persister(db, all_rows)
         db.commit()
     return all_rows
-
-
-# ── 辅助数据池：原始数据持久化 ─────────────────────────────────────────
-
-def _persist_raw_limit_up_board(db: Session, source: str, rows: list[dict[str, Any]]) -> None:
-    seen_batch: set[tuple] = set()
-    for row in rows:
-        code = str(row.get("code") or "")
-        trade_date = str(row.get("trade_date") or "")
-        if not code or not trade_date:
-            continue
-        key = (source, code, trade_date)
-        if key in seen_batch:
-            continue
-        seen_batch.add(key)
-        existing = db.scalar(
-            select(RawLimitUpBoard).where(
-                RawLimitUpBoard.source == source,
-                RawLimitUpBoard.code == code,
-                RawLimitUpBoard.trade_date == trade_date,
-            )
-        )
-        payload = _dumps(row)
-        if existing is None:
-            db.add(RawLimitUpBoard(source=source, code=code, trade_date=trade_date, payload_json=payload))
-        else:
-            existing.payload_json = payload
-            existing.fetched_at = datetime.utcnow()
-
-
-def _persist_raw_concept_sector(db: Session, source: str, rows: list[dict[str, Any]]) -> None:
-    seen_batch: set[tuple] = set()
-    for row in rows:
-        sector_code = str(row.get("sector_code") or "")
-        trade_date = str(row.get("trade_date") or "")
-        if not sector_code or not trade_date:
-            continue
-        key = (source, sector_code, trade_date)
-        if key in seen_batch:
-            continue
-        seen_batch.add(key)
-        existing = db.scalar(
-            select(RawConceptSector).where(
-                RawConceptSector.source == source,
-                RawConceptSector.sector_code == sector_code,
-                RawConceptSector.trade_date == trade_date,
-            )
-        )
-        payload = _dumps(row)
-        if existing is None:
-            db.add(RawConceptSector(source=source, sector_code=sector_code, trade_date=trade_date, payload_json=payload))
-        else:
-            existing.payload_json = payload
-            existing.fetched_at = datetime.utcnow()
-
-
-def _persist_raw_capital_flow(db: Session, source: str, data: dict[str, Any]) -> None:
-    code = str(data.get("code") or "")
-    trade_date = str(data.get("trade_date") or "")
-    if not code or not trade_date:
-        return
-    existing = db.scalar(
-        select(RawCapitalFlow).where(
-            RawCapitalFlow.source == source,
-            RawCapitalFlow.code == code,
-            RawCapitalFlow.trade_date == trade_date,
-        )
-    )
-    payload = _dumps(data)
-    if existing is None:
-        db.add(RawCapitalFlow(source=source, code=code, trade_date=trade_date, payload_json=payload))
-    else:
-        existing.payload_json = payload
-        existing.fetched_at = datetime.utcnow()
-
-
-def _persist_raw_dragon_tiger(db: Session, source: str, rows: list[dict[str, Any]]) -> None:
-    seen_batch: set[tuple] = set()
-    for row in rows:
-        code = str(row.get("code") or "")
-        trade_date = str(row.get("trade_date") or "")
-        if not code or not trade_date:
-            continue
-        key = (source, code, trade_date)
-        if key in seen_batch:
-            continue
-        seen_batch.add(key)
-        existing = db.scalar(
-            select(RawDragonTiger).where(
-                RawDragonTiger.source == source,
-                RawDragonTiger.code == code,
-                RawDragonTiger.trade_date == trade_date,
-            )
-        )
-        payload = _dumps(row)
-        if existing is None:
-            db.add(RawDragonTiger(source=source, code=code, trade_date=trade_date, payload_json=payload))
-        else:
-            existing.payload_json = payload
-            existing.fetched_at = datetime.utcnow()
-
-
-def _persist_raw_news(db: Session, source: str, rows: list[dict[str, Any]]) -> None:
-    seen_batch: set[tuple] = set()
-    for row in rows:
-        article_id = str(row.get("article_id") or "")
-        if not article_id:
-            continue
-        key = (source, article_id)
-        if key in seen_batch:
-            continue
-        seen_batch.add(key)
-        existing = db.scalar(
-            select(RawNewsAnnouncement).where(
-                RawNewsAnnouncement.source == source,
-                RawNewsAnnouncement.article_id == article_id,
-            )
-        )
-        payload = _dumps(row)
-        if existing is None:
-            db.add(RawNewsAnnouncement(
-                source=source,
-                code=str(row.get("code") or ""),
-                article_id=article_id,
-                announce_date=str(row.get("announce_date") or ""),
-                payload_json=payload,
-            ))
-        else:
-            existing.payload_json = payload
-            existing.fetched_at = datetime.utcnow()
 
 
 # ── 辅助数据池：标准化数据持久化 ────────────────────────────────────────
@@ -1623,7 +1416,7 @@ def _persist_normalized_limit_up_board(db: Session, rows: list[dict[str, Any]]) 
             for key_name, value in row.items():
                 if hasattr(existing, key_name) and key_name not in {"id", "created_at"}:
                     setattr(existing, key_name, value)
-            existing.created_at = datetime.utcnow()
+            existing.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _persist_normalized_concept_sector(db: Session, rows: list[dict[str, Any]]) -> None:
@@ -1646,7 +1439,7 @@ def _persist_normalized_concept_sector(db: Session, rows: list[dict[str, Any]]) 
             for key_name, value in row.items():
                 if hasattr(existing, key_name) and key_name not in {"id", "created_at"}:
                     setattr(existing, key_name, value)
-            existing.created_at = datetime.utcnow()
+            existing.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _persist_concept_sector_stocks(db: Session, rows: list[dict[str, Any]]) -> None:
@@ -1674,7 +1467,7 @@ def _persist_concept_sector_stocks(db: Session, rows: list[dict[str, Any]]) -> N
             for key_name, value in row.items():
                 if hasattr(existing, key_name) and key_name not in {"id", "created_at"}:
                     setattr(existing, key_name, value)
-            existing.created_at = datetime.utcnow()
+            existing.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _persist_normalized_capital_flow(db: Session, data: dict[str, Any]) -> None:
@@ -1691,7 +1484,7 @@ def _persist_normalized_capital_flow(db: Session, data: dict[str, Any]) -> None:
         for key, value in data.items():
             if hasattr(existing, key) and key not in {"id", "created_at"}:
                 setattr(existing, key, value)
-        existing.created_at = datetime.utcnow()
+        existing.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _persist_normalized_dragon_tiger(db: Session, rows: list[dict[str, Any]]) -> None:
@@ -1714,7 +1507,7 @@ def _persist_normalized_dragon_tiger(db: Session, rows: list[dict[str, Any]]) ->
             for key_name, value in row.items():
                 if hasattr(existing, key_name) and key_name not in {"id", "created_at"}:
                     setattr(existing, key_name, value)
-            existing.created_at = datetime.utcnow()
+            existing.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _persist_normalized_news(db: Session, rows: list[dict[str, Any]]) -> None:
@@ -1742,14 +1535,14 @@ def _persist_normalized_news(db: Session, rows: list[dict[str, Any]]) -> None:
             for key_name, value in row_with_source.items():
                 if hasattr(existing, key_name) and key_name not in {"id", "created_at"}:
                     setattr(existing, key_name, value)
-            existing.created_at = datetime.utcnow()
+            existing.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 # ── 辅助数据池：缓存读取 ───────────────────────────────────────────────
 
 def _load_cached_limit_up_board(db: Session, max_age_seconds: int | None = None) -> list[dict[str, Any]]:
-    cutoff = datetime.utcnow() - timedelta(seconds=max_age_seconds) if max_age_seconds else None
-    stmt = select(LimitUpBoard).order_by(LimitUpBoard.consecutive_days.desc())
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=max_age_seconds) if max_age_seconds else None
+    stmt = select(LimitUpBoard).order_by(LimitUpBoard.limit_times.desc())
     if cutoff is not None:
         stmt = stmt.where(LimitUpBoard.created_at >= cutoff)
     rows = db.scalars(stmt).all()
@@ -1760,7 +1553,7 @@ def _load_cached_limit_up_board(db: Session, max_age_seconds: int | None = None)
 
 
 def _load_cached_concept_sectors(db: Session, max_age_seconds: int | None = None) -> list[dict[str, Any]]:
-    cutoff = datetime.utcnow() - timedelta(seconds=max_age_seconds) if max_age_seconds else None
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=max_age_seconds) if max_age_seconds else None
     stmt = select(ConceptSector).order_by(ConceptSector.heat_rank)
     if cutoff is not None:
         stmt = stmt.where(ConceptSector.created_at >= cutoff)
@@ -1774,7 +1567,7 @@ def _load_cached_concept_sectors(db: Session, max_age_seconds: int | None = None
 def _load_cached_capital_flows(
     db: Session, codes: list[str], max_age_seconds: int | None = None
 ) -> dict[str, dict[str, Any]]:
-    cutoff = datetime.utcnow() - timedelta(seconds=max_age_seconds) if max_age_seconds else None
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=max_age_seconds) if max_age_seconds else None
     stmt = select(CapitalFlow).where(CapitalFlow.code.in_(codes))
     if cutoff is not None:
         stmt = stmt.where(CapitalFlow.created_at >= cutoff)
@@ -1788,7 +1581,7 @@ def _load_cached_capital_flows(
 def _load_cached_dragon_tigers(
     db: Session, codes: list[str], max_age_seconds: int | None = None
 ) -> dict[str, dict[str, Any]]:
-    cutoff = datetime.utcnow() - timedelta(seconds=max_age_seconds) if max_age_seconds else None
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=max_age_seconds) if max_age_seconds else None
     stmt = select(DragonTiger).where(DragonTiger.code.in_(codes))
     if cutoff is not None:
         stmt = stmt.where(DragonTiger.created_at >= cutoff)
@@ -1802,7 +1595,7 @@ def _load_cached_dragon_tigers(
 def _load_cached_news(
     db: Session, codes: list[str], max_age_seconds: int | None = None
 ) -> dict[str, list[dict[str, Any]]]:
-    cutoff = datetime.utcnow() - timedelta(seconds=max_age_seconds) if max_age_seconds else None
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=max_age_seconds) if max_age_seconds else None
     stmt = select(NewsAnnouncement).where(NewsAnnouncement.code.in_(codes))
     if cutoff is not None:
         stmt = stmt.where(NewsAnnouncement.created_at >= cutoff)
