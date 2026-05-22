@@ -17,7 +17,7 @@ A 股短线推荐研究工作台，支持多数据源行情采集、多技能策
 | 层 | 技术 |
 |---|------|
 | 后端框架 | Python 3.12 + FastAPI |
-| 数据库 | SQLite（WAL 模式） + SQLAlchemy ORM |
+| 数据库 | MySQL + SQLAlchemy ORM |
 | 前端 | React 19 + TypeScript + Vite |
 | 图表 | ECharts 5 |
 | 状态管理 | Zustand 5 |
@@ -162,7 +162,7 @@ npm run dev
 
 系统内置本地统一行情池（`market_pool.py`），运行逻辑：
 
-1. **仅本地池**：选择 `local_pool` 时只从 SQLite 的 `UnifiedQuote` 和 `DailyBar` 读取，不自动请求外部行情源；本地报价或日K覆盖不足时直接停止
+1. **仅本地池**：选择 `local_pool` 时只从 MySQL 本地池的 `UnifiedQuote` 和 `DailyBar` 读取，不自动请求外部行情源；本地报价或日K覆盖不足时直接停止
 2. **本地池优先**：选择 `local_pool_preferred` 时先读本地池，本地池不足或日K未覆盖报价日期时才自动刷新外部源并写回本地池
 3. **仅实时数据源**：选择 `realtime` 时直接访问 THS/腾讯/东方财富等外部真实源，不依赖本地池缓存
 4. **显式补池**：本地数据池页面的“补齐本地池/拉取外部源”会主动刷新外部源；系统不会使用模拟数据
@@ -205,10 +205,10 @@ npm run dev
 
 | 环境变量 | 默认值 | 说明 |
 |---------|--------|------|
-| `ASHARE_DATABASE_URL` | `sqlite:///./ashare_workbench.db` | 数据库连接 |
+| `ASHARE_DATABASE_URL` | `mysql+pymysql://user:password@host:3306/ashare_workbench?charset=utf8mb4` | 数据库连接（仅支持 MySQL） |
 | `ASHARE_QUOTE_SOURCES` | `thsdk,eastmoney,akshare,tencent,sina` | 报价数据源优先级 |
 | `ASHARE_KLINE_SOURCES` | `tencent,thsdk,eastmoney,akshare` | K线数据源优先级 |
-| `ASHARE_MARKET_CANDIDATE_COUNT` | `0` | 候选股票数量上限；`0` 表示使用全部合格股票 |
+| `ASHARE_MARKET_CANDIDATE_COUNT` | `300` | 候选股票数量上限；`0` 表示使用全部合格股票 |
 | `ASHARE_MARKET_KLINE_DAYS` | `90` | K线数据天数 |
 | `ASHARE_MARKET_QUOTE_CACHE_TTL_SECONDS` | `28800` | 行情缓存有效期（秒），默认 8 小时 |
 | `ASHARE_MARKET_KLINE_CACHE_TTL_HOURS` | `20` | K线缓存有效期（小时） |
@@ -221,7 +221,8 @@ npm run dev
 | `ASHARE_AGENT_SKILL_API_KEY` | `""` | DeepSeek API Key，未配置会停止 Agent 运行 |
 | `ASHARE_AGENT_SKILL_BASE_URL` | `https://api.deepseek.com` | DeepSeek OpenAI 兼容 API 地址 |
 | `ASHARE_AGENT_SKILL_MODEL` | `deepseek-v4-pro` | LLM 模型 |
-| `ASHARE_AGENT_SKILL_TIMEOUT_SECONDS` | `20.0` | LLM 请求超时 |
+| `ASHARE_AGENT_SKILL_TIMEOUT_SECONDS` | `300.0` | Agno Skill Agent 单次审查超时（秒） |
+| `ASHARE_MARKET_SKILL_REVIEW_CONCURRENCY` | `2` | Agno Skill 深审候选并发数 |
 | `ASHARE_LOG_LEVEL` | `INFO` | 日志级别 |
 | `ASHARE_LOG_DIR` | `backend/logs/` | 日志目录 |
 

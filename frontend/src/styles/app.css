@@ -1616,6 +1616,23 @@ button:disabled {
   grid-template-columns: minmax(240px, 0.98fr) minmax(320px, 1.7fr);
 }
 
+.task-run-row {
+  cursor: default;
+}
+
+.task-run-row:hover {
+  transform: none;
+}
+
+.task-run-row:has(.active-run-summary) {
+  grid-template-columns: minmax(240px, 0.98fr) minmax(320px, 1.7fr);
+}
+
+.task-run-error {
+  grid-column: 1 / -1;
+  color: var(--danger);
+}
+
 .opportunity-row:hover,
 .opportunity-row.selected,
 .run-row:hover,

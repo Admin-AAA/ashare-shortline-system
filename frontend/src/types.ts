@@ -39,6 +39,24 @@ export type ScheduledTask = {
   updated_at?: string | null;
 };
 
+export type ScheduledTaskRun = {
+  task_run_id: string;
+  task_id: string;
+  task_name: string;
+  task_type: ScheduledTaskType;
+  trigger_source: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  status: string;
+  summary?: string | null;
+  summary_text: string;
+  error_message?: string | null;
+  duration_seconds?: number | null;
+  payload: Record<string, unknown>;
+  result: Record<string, unknown>;
+  related_run_id?: string | null;
+};
+
 export type ScheduledTaskPayload = {
   task_id: string;
   name: string;
@@ -168,6 +186,15 @@ export type HomeBootstrap = {
     experiment_count: number;
     disabled_count: number;
   };
+};
+
+export type HomeInitialState = {
+  home: HomeBootstrap;
+  presets: Preset[];
+  runs: RunSummary[];
+  task_runs: ScheduledTaskRun[];
+  skills: SkillSummary[];
+  data_sources: DataSourceHealthRow[];
 };
 
 export type MarketSnapshot = {
@@ -516,13 +543,26 @@ export type RecommendationOutcome = {
   entry_triggered: boolean;
   entry_date?: string | null;
   entry_price?: number | null;
+  exit_date?: string | null;
+  exit_price?: number | null;
+  executed_return?: number;
+  weighted_return?: number;
+  position_size?: number;
+  holding_days?: number;
+  entry_slippage_bps?: number;
+  exit_slippage_bps?: number;
+  stop_loss_price?: number | null;
+  take_profit_price?: number | null;
+  exit_reason?: string | null;
   max_return: number;
   min_return: number;
   close_return: number;
+  achievable_return?: number;
   max_drawdown: number;
   hit_target: boolean;
   hit_invalid: boolean;
   outcome_label: string;
+  outcome_label_legacy?: string;
   outcome_reason?: string | null;
   label_source: string;
   labeled_at?: string | null;
@@ -603,6 +643,8 @@ export type SkillReferenceFile = {
 
 export type SkillPerformance = {
   sample_count: number;
+  triggered_count?: number;
+  trigger_rate?: number;
   hit_rate: number;
   avg_return: number;
   avg_score: number;
@@ -634,13 +676,19 @@ export type StatsOverview = {
   run_count: number;
   recommendation_count: number;
   labeled_count: number;
+  triggered_count?: number;
   success_count: number;
   failed_count: number;
+  missed_count?: number;
   pending_count: number;
   watch_count: number;
   reviewed_count: number;
   hit_rate: number;
+  trigger_rate?: number;
   avg_return: number;
+  avg_executed_return?: number;
+  avg_weighted_return?: number;
+  avg_close_return?: number;
   avg_max_return: number;
   avg_drawdown: number;
   avg_score: number;
@@ -654,8 +702,10 @@ export type SkillStatsRow = {
   sample_count: number;
   run_count: number;
   labeled_count: number;
+  triggered_count?: number;
   success_count: number;
   hit_rate: number;
+  trigger_rate?: number;
   avg_signal_score: number;
   avg_final_score: number;
   avg_return: number;
@@ -692,8 +742,10 @@ export type PresetStatsRow = {
   recommendation_count: number;
   skill_count: number;
   labeled_count: number;
+  triggered_count?: number;
   success_count: number;
   hit_rate: number;
+  trigger_rate?: number;
   avg_return: number;
   avg_score: number;
   last_run_at?: string | null;

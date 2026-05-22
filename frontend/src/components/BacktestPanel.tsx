@@ -22,12 +22,18 @@ type BacktestResult = {
   aggregate_metrics?: {
     total_recommendations: number;
     labeled_count: number;
+    triggered_count: number;
+    trigger_rate: number;
     success_count: number;
     hit_rate: number;
+    avg_return: number;
+    avg_executed_return: number;
+    avg_weighted_return: number;
     avg_close_return: number;
     avg_max_return: number;
     avg_max_drawdown: number;
     avg_achievable_return: number;
+    avg_holding_days: number;
     profit_factor: number;
     win_loss_ratio: number;
   };
@@ -35,6 +41,8 @@ type BacktestResult = {
     by_skill: Array<{
       skill_id: string;
       recommendation_count: number;
+      triggered_count: number;
+      trigger_rate: number;
       success_count: number;
       hit_rate: number;
       avg_score: number;
@@ -42,12 +50,16 @@ type BacktestResult = {
     by_industry: Array<{
       industry: string;
       recommendation_count: number;
+      triggered_count: number;
+      trigger_rate: number;
       success_count: number;
       hit_rate: number;
     }>;
     by_score_range: Array<{
       range: string;
       recommendation_count: number;
+      triggered_count: number;
+      trigger_rate: number;
       success_count: number;
       hit_rate: number;
     }>;
@@ -179,10 +191,21 @@ export default memo(function BacktestPanel() {
                   <div className="bt-metric-card highlight">
                     <span>胜率</span>
                     <strong>{(result.aggregate_metrics.hit_rate * 100).toFixed(1)}%</strong>
-                    <small>{result.aggregate_metrics.success_count}/{result.aggregate_metrics.labeled_count} 笔</small>
+                    <small>{result.aggregate_metrics.success_count}/{result.aggregate_metrics.triggered_count} 笔已触发交易</small>
                   </div>
                   <div className="bt-metric-card">
-                    <span>平均收盘收益</span>
+                    <span>触发率</span>
+                    <strong>{(result.aggregate_metrics.trigger_rate * 100).toFixed(1)}%</strong>
+                    <small>{result.aggregate_metrics.triggered_count}/{result.aggregate_metrics.labeled_count} 条信号触发买点</small>
+                  </div>
+                  <div className="bt-metric-card">
+                    <span>平均执行收益</span>
+                    <strong className={result.aggregate_metrics.avg_executed_return >= 0 ? "positive" : "negative"}>
+                      {result.aggregate_metrics.avg_executed_return.toFixed(2)}%
+                    </strong>
+                  </div>
+                  <div className="bt-metric-card">
+                    <span>平均静态收盘收益</span>
                     <strong className={result.aggregate_metrics.avg_close_return >= 0 ? "positive" : "negative"}>
                       {result.aggregate_metrics.avg_close_return.toFixed(2)}%
                     </strong>
@@ -198,6 +221,10 @@ export default memo(function BacktestPanel() {
                   <div className="bt-metric-card">
                     <span>可达成收益</span>
                     <strong>{result.aggregate_metrics.avg_achievable_return.toFixed(2)}%</strong>
+                  </div>
+                  <div className="bt-metric-card">
+                    <span>平均持有天数</span>
+                    <strong>{result.aggregate_metrics.avg_holding_days.toFixed(1)}天</strong>
                   </div>
                   <div className="bt-metric-card">
                     <span>盈亏比</span>

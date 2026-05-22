@@ -7,10 +7,11 @@ import {
   X,
 } from "lucide-react";
 import { memo, useState } from "react";
-import type { RunSummary } from "../types";
+import type { RunSummary, ScheduledTaskRun } from "../types";
 
 type Props = {
   runs: RunSummary[];
+  taskRuns: ScheduledTaskRun[];
   runHistoryMode: RunHistoryMode;
   onModeChange: (mode: RunHistoryMode) => void;
   selectedRunId: string;
@@ -24,6 +25,7 @@ export type RunHistoryMode = "all" | "formal" | "experiment";
 
 export default memo(function RunHistoryPanel({
   runs,
+  taskRuns,
   runHistoryMode,
   onModeChange,
   selectedRunId,
@@ -150,6 +152,68 @@ export default memo(function RunHistoryPanel({
           </div>
         ) : (
           <EmptyHint text="暂无运行记录" />
+        )}
+      </section>
+
+      <section className="panel run-table-panel">
+        <PanelTitle title="自动任务执行记录" subtitle="展示调度任务每次执行结果" />
+        {taskRuns.length ? (
+          <div className="run-list" role="list">
+            {taskRuns.map((taskRun) => {
+              const isActive = taskRun.status === "running";
+              const isFailed = taskRun.status === "failed" || taskRun.status === "interrupted";
+              return (
+                <div key={taskRun.task_run_id} className="run-row task-run-row" role="listitem">
+                  <div className="run-main">
+                    <div className="run-title">
+                      <strong>{taskRun.task_name}</strong>
+                      <Tag text={taskRun.task_type} />
+                      <Tag text={taskRun.status} />
+                      <Tag text={taskRun.trigger_source} />
+                    </div>
+                    <div className="run-meta">
+                      <span>{formatDateTime(taskRun.started_at)}</span>
+                      <span>{taskRun.task_id}</span>
+                      <span>{taskRun.duration_seconds != null ? `${taskRun.duration_seconds} 秒` : "进行中"}</span>
+                    </div>
+                  </div>
+                  <div className="run-summary-line">
+                    <span>执行摘要</span>
+                    <strong>{taskRun.summary_text || "-"}</strong>
+                  </div>
+                  <div className="run-score">
+                    <span>来源</span>
+                    <strong>{displayText(taskRun.trigger_source)}</strong>
+                  </div>
+                  <div className="run-score">
+                    <span>关联 Run</span>
+                    <strong>{taskRun.related_run_id || "-"}</strong>
+                  </div>
+                  {isFailed ? (
+                    <div className="run-summary-line task-run-error">
+                      {taskRun.error_message || "执行失败"}
+                    </div>
+                  ) : null}
+                  {isActive ? (
+                    <div className="run-summary-line active-run-summary">
+                      <div className="run-progress compact">
+                        <div className="run-progress-head">
+                          <strong>{taskRun.summary_text || "任务执行中"}</strong>
+                          <span>运行中</span>
+                        </div>
+                        <div className="run-progress-meta">
+                          <span>{displayText(taskRun.status)}</span>
+                          <span>{formatDateTime(taskRun.started_at)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <EmptyHint text="暂无自动任务执行记录" />
         )}
       </section>
 
@@ -402,6 +466,10 @@ function displayText(key: string): string {
   const labels: Record<string, string> = {
     formal: "正式",
     experiment: "实验",
+    data_sync: "数据同步",
+    pool_refresh: "行情池刷新",
+    data_backfill: "数据回填",
+    recommendation_run: "自动推荐",
     local_pool: "仅本地池",
     local_pool_preferred: "本地池优先",
     realtime: "仅实时数据源",
@@ -410,6 +478,9 @@ function displayText(key: string): string {
     completed: "已完成",
     failed: "运行失败",
     interrupted: "已中断",
+    manual: "手动触发",
+    schedule: "定时触发",
+    api: "接口写入",
     stale: "疑似中断",
     prepare: "准备运行",
     starting: "启动中",
@@ -430,6 +501,13 @@ function displayTagText(text: string) {
   const labels: Record<string, string> = {
     formal: "正式",
     experiment: "实验",
+    data_sync: "数据同步",
+    pool_refresh: "行情池刷新",
+    data_backfill: "数据回填",
+    recommendation_run: "自动推荐",
+    manual: "手动触发",
+    schedule: "定时触发",
+    api: "接口写入",
     queued: "排队中",
     running: "运行中",
     completed: "已完成",
@@ -442,7 +520,7 @@ function displayTagText(text: string) {
 
 function toneForTag(text: string) {
   if (["formal", "completed"].includes(text)) return "positive";
-  if (["experiment", "queued", "running"].includes(text)) return "warning";
+  if (["experiment", "queued", "running", "manual"].includes(text)) return "warning";
   if (["failed", "interrupted", "stale"].includes(text)) return "danger";
   return "neutral";
 }
@@ -461,4 +539,17 @@ function formatDuration(seconds: number) {
   if (minutes < 60) return `${minutes} 分钟`;
   const hours = Math.floor(minutes / 60);
   return `${hours} 小时`;
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  const hour = `${date.getHours()}`.padStart(2, "0");
+  const minute = `${date.getMinutes()}`.padStart(2, "0");
+  const second = `${date.getSeconds()}`.padStart(2, "0");
+  return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
 }

@@ -64,8 +64,8 @@ flowchart LR
 
   market --> data_sources
 
-  subgraph db["SQLite 数据库"]
-    ashare["ashare.db / ashare_workbench.db"]
+  subgraph db["MySQL 数据库"]
+    ashare["ashare_workbench"]
     core_tables["stocks<br/>daily_bars<br/>market_snapshots"]
     skill_tables["skill_registry<br/>skill_versions<br/>strategy_versions<br/>presets<br/>preset_skills"]
     run_tables["recommendation_runs<br/>recommendations<br/>agent_decision_logs"]
@@ -97,7 +97,7 @@ sequenceDiagram
   participant AR as agent_skill_runner
   participant RG as research_graph
   participant AG as aggregator
-  participant DB as SQLite
+  participant DB as MySQL
 
   UI->>API: POST /api/runs
   API->>WB: run_workbench(payload)

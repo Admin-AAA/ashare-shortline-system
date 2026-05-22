@@ -1,5 +1,6 @@
 import type {
   HomeBootstrap,
+  HomeInitialState,
   Preset,
   PresetStatsRow,
   RecommendationCard,
@@ -12,6 +13,7 @@ import type {
   RunResult,
   RunSummary,
   ScheduledTask,
+  ScheduledTaskRun,
   ScheduledTaskPayload,
   SkillDetail,
   SkillMode,
@@ -130,6 +132,7 @@ export const api = {
   login: (password: string) => request<{ ok: boolean }>("/api/auth/login", json("POST", { password })),
 
   bootstrap: () => request<HomeBootstrap>("/api/home/bootstrap"),
+  initial: () => request<HomeInitialState>("/api/home/initial"),
 
   presets: () => request<Preset[]>("/api/presets"),
   createPreset: (payload: PresetPayload) =>
@@ -175,6 +178,7 @@ export const api = {
     request<DataSourceHealthRow>(`/api/data-sources/${sourceType}/${source}/enabled`, json("POST", { enabled })),
 
   scheduledTasks: () => request<ScheduledTask[]>("/api/admin/tasks"),
+  scheduledTaskRuns: (limit = 100) => request<ScheduledTaskRun[]>(`/api/admin/task-runs?limit=${limit}`),
   createScheduledTask: (payload: ScheduledTaskPayload) =>
     request<ScheduledTask>("/api/admin/tasks", json("POST", payload)),
   updateScheduledTask: (taskId: string, payload: ScheduledTaskPayload) =>

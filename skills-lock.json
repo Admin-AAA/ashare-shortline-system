@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "chen-xiaoqun-skill": {
+      "source": "sherjy/chen-xiaoqun-skill",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "e51626b5cf77a9c5b725b106ea0e3c0c67d437cfb472ee110ca4cac63f1c8f9a"
+    }
+  }
+}

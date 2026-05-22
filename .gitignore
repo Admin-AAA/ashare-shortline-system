@@ -4,6 +4,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 backend/ashare_workbench.db*
+backend/ashare.db
 backend/data/
 backend/data/*.db
 backend/.pytest_ashare_workbench.db

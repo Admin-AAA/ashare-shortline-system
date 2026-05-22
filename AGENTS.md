@@ -37,6 +37,17 @@
 - 当前这台机器已配置免密 SSH 别名：`ashare-server`；若别名失效，则直连 `root@139.196.242.53`。
 - 当前线上网页访问密码：`1279990918`。
 
+## 日志位置
+
+- 本地后端日志目录：`backend/logs/`
+- 本地后端应用日志：`backend/logs/app.log`
+- 本地后端访问日志：`backend/logs/access.log`
+- 云端后端日志目录：`/opt/ashare-shortline-system/backend/logs/`
+- 云端后端应用日志：`/opt/ashare-shortline-system/backend/logs/app.log`
+- 云端后端访问日志：`/opt/ashare-shortline-system/backend/logs/access.log`
+- 云端 systemd 服务日志：`journalctl -u ashare-backend`
+- 云端服务单元文件：`/etc/systemd/system/ashare-backend.service`
+
 凭据规则：
 
 - 用户明确允许记录的网页访问密码可以写入项目记忆文档。

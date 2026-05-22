@@ -45,6 +45,7 @@ import type {
   RunTarget,
   RunSummary,
   ScheduledTask,
+  ScheduledTaskRun,
   ScheduledTaskPayload,
   ScheduledTaskType,
   SkillDetail,
@@ -144,6 +145,7 @@ export default function App() {
   const [bootstrap, setBootstrap] = useState<HomeBootstrap | null>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [runs, setRuns] = useState<RunSummary[]>([]);
+  const [taskRuns, setTaskRuns] = useState<ScheduledTaskRun[]>([]);
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [dataSources, setDataSources] = useState<DataSourceHealthRow[]>([]);
   const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
@@ -279,6 +281,12 @@ export default function App() {
   }, [authenticated, section]);
 
   useEffect(() => {
+    if (authenticated && section === "runs") {
+      void loadScheduledTaskRuns();
+    }
+  }, [authenticated, section]);
+
+  useEffect(() => {
     if (authenticated && section === "localPool" && !localPool) {
       logger.info("state", "进入本地数据池页面，按需加载");
       void loadLocalPool();
@@ -319,6 +327,7 @@ export default function App() {
   }, [selectedRunId, visibleRuns]);
 
   useEffect(() => {
+    if (section !== "pool") return;
     if (selectedRunId === ALL_POOL_RUNS_VALUE) {
       logger.info("pool", "用户选择全部 Run，加载所有推荐数据（可能较慢）");
       void loadPoolRecommendations(ALL_POOL_RUNS_VALUE, visibleRuns);
@@ -327,25 +336,30 @@ export default function App() {
     if (!selectedRunId) return;
     if (!visibleRuns.some((run) => run.run_id === selectedRunId)) return;
     void loadPoolRecommendations(selectedRunId, visibleRuns);
-  }, [selectedRunId, visibleRuns]);
+  }, [section, selectedRunId, visibleRuns]);
 
   useEffect(() => {
+    if (!detailModalOpen) {
+      setRecommendationDetail(null);
+      return;
+    }
     if (!selectedRecommendationId) {
       setRecommendationDetail(null);
       return;
     }
     setRecommendationDetail(null);
     void loadRecommendationDetail(selectedRecommendationId);
-  }, [selectedRecommendationId]);
+  }, [detailModalOpen, selectedRecommendationId]);
 
   useEffect(() => {
+    if (section !== "skills") return;
     if (!selectedSkillId) {
       setSkillDetail(null);
       return;
     }
     setSkillDetail(null);
     void loadSkillDetail(selectedSkillId);
-  }, [selectedSkillId]);
+  }, [section, selectedSkillId]);
 
   useEffect(() => {
     if (!selectedPreset) return;
@@ -422,16 +436,12 @@ export default function App() {
     setLoading(true);
     setError("");
     try {
-      const [home, presetList, runList, skillList, sourceRows] = await Promise.all([
-        api.bootstrap(),
-        api.presets(),
-        api.runs(),
-        api.skills(),
-        api.dataSources(),
-      ]);
+      const initial = await api.initial();
+      const { home, presets: presetList, runs: runList, task_runs: taskRunList, skills: skillList, data_sources: sourceRows } = initial;
       setBootstrap(home);
       setPresets(presetList);
       setRuns(runList);
+      setTaskRuns(taskRunList);
       setSkills(skillList);
       setDataSources(sourceRows);
       setSelectedPresetId((current) => current || presetList[0]?.preset_id || "");
@@ -471,9 +481,7 @@ export default function App() {
 
   async function loadDataSources() {
     try {
-      const [rows, poolStatus] = await Promise.all([api.dataSources(), api.localPool()]);
-      setDataSources(rows);
-      setLocalPool(poolStatus);
+      setDataSources(await api.dataSources());
     } catch (err) {
       setError(messageFromError(err));
     }
@@ -482,6 +490,14 @@ export default function App() {
   async function loadScheduledTasks() {
     try {
       setScheduledTasks(await api.scheduledTasks());
+    } catch (err) {
+      setError(messageFromError(err));
+    }
+  }
+
+  async function loadScheduledTaskRuns() {
+    try {
+      setTaskRuns(await api.scheduledTaskRuns());
     } catch (err) {
       setError(messageFromError(err));
     }
@@ -718,18 +734,13 @@ export default function App() {
   async function refreshHomeData() {
     const perfMark = logger.perfMark("refreshHomeData");
     try {
-      const [home, presetList, runList, skillList, sourceRows] = await Promise.all([
-        api.bootstrap(),
-        api.presets(),
-        api.runs(),
-        api.skills(),
-        api.dataSources(),
-      ]);
-      setBootstrap(home);
-      setPresets(presetList);
-      setRuns(runList);
-      setSkills(skillList);
-      setDataSources(sourceRows);
+      const initial = await api.initial();
+      setBootstrap(initial.home);
+      setPresets(initial.presets);
+      setRuns(initial.runs);
+      setTaskRuns(initial.task_runs);
+      setSkills(initial.skills);
+      setDataSources(initial.data_sources);
       perfMark.end();
     } catch (err) {
       perfMark.end({ error: String(err) });
@@ -739,8 +750,9 @@ export default function App() {
 
   async function refreshRunsOnly() {
     try {
-      const runList = await api.runs();
+      const [runList, taskRunList] = await Promise.all([api.runs(), api.scheduledTaskRuns()]);
       setRuns(runList);
+      setTaskRuns(taskRunList);
     } catch (err) {
       logger.warn("state", "刷新运行列表失败", { error: String(err) });
     }
@@ -933,6 +945,7 @@ export default function App() {
     try {
       await api.setDataSourceEnabled(row.source_type, row.source, !row.enabled);
       await loadDataSources();
+      setLocalPool(null);
       setMessage(`${row.source} ${row.enabled ? "已关闭" : "已启用"}`);
     } catch (err) {
       setError(messageFromError(err));
@@ -1051,10 +1064,12 @@ export default function App() {
     try {
       await api.runScheduledTask(task.task_id);
       await bootstrapApp();
+      await loadScheduledTaskRuns();
       setMessage("任务已执行");
     } catch (err) {
       setError(messageFromError(err));
       await loadScheduledTasks();
+      await loadScheduledTaskRuns();
     }
   }
 
@@ -1425,6 +1440,7 @@ export default function App() {
         {section === "runs" && (
           <RunHistoryPanel
             runs={runs}
+            taskRuns={taskRuns}
             runHistoryMode={runHistoryMode}
             onModeChange={setRunHistoryMode}
             selectedRunId={selectedRunId}
