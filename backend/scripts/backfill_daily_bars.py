@@ -48,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--force", action="store_true", help="Refetch even when local bars are ready.")
     parser.add_argument("--reset-progress", action="store_true", help="Ignore previous progress file.")
     parser.add_argument("--codes", type=str, default="", help="Comma-separated codes to backfill (empty = all).")
+    parser.add_argument("--rate-limit", type=int, default=0, help="Max requests per minute (0 = unlimited).")
     return parser.parse_args()
 
 
@@ -161,6 +162,8 @@ def main() -> int:
 
             try:
                 bars = fetch_daily_kbars(code, days=args.days)
+                if args.rate_limit > 0:
+                    time.sleep(60.0 / args.rate_limit)
 
                 if not bars:
                     failed += 1
