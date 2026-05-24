@@ -1,6 +1,6 @@
 import { memo, useState, type MouseEvent } from "react";
 import { Target, AlertTriangle, ChevronDown, ChevronUp, Layers3, BrainCircuit, Trash2 } from "lucide-react";
-import type { RecommendationCard } from "../types";
+import type { RecommendationCard, SkillSignal } from "../types";
 import ScoreGauge from "./ScoreGauge";
 import AgentReviewPanel from "./AgentReviewPanel";
 
@@ -98,14 +98,14 @@ export default memo(function EnhancedRecommendationCard({ item, isSelected, onSe
       {item.risk_tags && item.risk_tags.length > 0 && (
         <div className="erc-risks">
           <AlertTriangle size={12} />
-          {item.risk_tags.slice(0, 3).map((tag, i) => (
+          {item.risk_tags.slice(0, 3).map((tag: string, i: number) => (
             <span key={i} className="risk-tag">{tag}</span>
           ))}
         </div>
       )}
       {item.info_tags && item.info_tags.length > 0 && (
         <div className="erc-infos">
-          {item.info_tags.slice(0, 2).map((tag, i) => (
+          {item.info_tags.slice(0, 2).map((tag: string, i: number) => (
             <span key={i} className="info-tag">{tag}</span>
           ))}
         </div>
@@ -128,7 +128,7 @@ export default memo(function EnhancedRecommendationCard({ item, isSelected, onSe
           data-card-interactive="true"
           onClick={(event) => event.stopPropagation()}
         >
-          {item.skill_breakdown.map((signal) => {
+          {item.skill_breakdown.map((signal: SkillSignal) => {
             const review = signal.agent_skill_review;
             if (!review) {
               return (
