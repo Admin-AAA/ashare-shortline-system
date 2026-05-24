@@ -11,6 +11,14 @@
 - 允许主动修改代码、调整模块边界、重排文件结构、改造数据流和内部契约，只要这样更符合系统长期架构。
 - 在任务执行中尽情发挥，尽可能充分分析、实现、验证；不要因为担心上下文或 token 消耗而刻意压缩必要工作。
 
+# 数据库设计规范
+
+- **整个系统不使用外键（Foreign Key）**。表间关联通过普通字符串列（如 `run_id`、`recommendation_id`）在应用层维护，数据库层不做外键约束。
+- 所有 K线/基本面/辅助数据优先使用 Tushare（自建服务器 `http://101.35.233.113:8020/`）。只有 Tushare 无法提供的数据才使用其他数据源：
+  - 实时行情快照 → eastmoney / tencent / thsdk / akshare
+  - 分钟K线 → 腾讯 ifzq.gtimg.cn（Tushare stk_mins 需特殊权限）
+  - 新闻公告 → eastmoney np-anotice API
+
 # Python 测试策略
 
 测试本项目 Python 代码时，优先使用项目自带的虚拟环境。

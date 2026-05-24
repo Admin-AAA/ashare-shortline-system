@@ -12,10 +12,10 @@ class Settings(BaseSettings):
     tushare_token: str = "f8b05f8ee54f468220f2569afe56b4c027f1d388d164899339d394ad"
     tushare_rate_limit_per_minute: int = 0  # 0 = 不限速（自建服务器）
     quote_sources: str = "thsdk,eastmoney,akshare,tencent,sina"
-    kline_sources: str = "tushare,tencent,eastmoney,akshare"
+    kline_sources: str = "tushare"
     market_scan_size: int = 5200
     market_candidate_count: int = 0  # 0 = 不在首段召回前硬截断，交给宽召回窗口与后续精排控制
-    market_broad_recall_count: int = 1800  # 两段召回第一段：从全可交易池宽召回，再进入后续规则门/深审
+    market_broad_recall_count: int = 400  # 两段召回第一段：从全可交易池宽召回，再进入后续规则门/深审
     market_candidate_lookahead_multiplier: int = 4
     market_skill_review_limit: int = 0  # 0 = Skill Agent 接收本次实际扫描的全部股票
     market_skill_review_concurrency: int = 10  # 默认 10 并发；运行时可通过 agent_review_concurrency 参数覆盖
@@ -49,11 +49,11 @@ class Settings(BaseSettings):
     agent_max_tokens: int = 4096
     agent_skill_weight: float = 0.50
     # 辅助数据源（tushare 优先，eastmoney/akshare 备用）
-    limit_up_sources: str = "tushare,akshare,eastmoney"
-    concept_sector_sources: str = "tushare,akshare,eastmoney"
-    capital_flow_sources: str = "tushare,eastmoney"
-    dragon_tiger_sources: str = "tushare,eastmoney"
-    news_sources: str = "eastmoney,akshare"
+    limit_up_sources: str = "tushare"
+    concept_sector_sources: str = "tushare"
+    capital_flow_sources: str = "tushare"
+    dragon_tiger_sources: str = "tushare"
+    news_sources: str = "eastmoney"
     limit_up_cache_ttl_seconds: int = 3600
     concept_sector_cache_ttl_seconds: int = 3600
     capital_flow_cache_ttl_seconds: int = 7200

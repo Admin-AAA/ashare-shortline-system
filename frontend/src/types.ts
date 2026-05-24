@@ -525,6 +525,7 @@ export type RecommendationCard = {
   invalid_rule?: string | null;
   rationale?: string | null;
   risk_tags: string[];
+  info_tags: string[];
   feature_snapshot: FeatureSnapshot;
   market_context: MarketSnapshot;
   skill_breakdown: SkillSignal[];

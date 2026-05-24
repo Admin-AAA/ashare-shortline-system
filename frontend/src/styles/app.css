@@ -2928,6 +2928,25 @@ pre {
   font-weight: 600;
 }
 
+.erc-infos {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 16px 0;
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+
+.info-tag {
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--muted-soft);
+  padding: 0 7px;
+  border-radius: 999px;
+  font-weight: 400;
+}
+
 .erc-expand-btn {
   display: flex;
   align-items: center;

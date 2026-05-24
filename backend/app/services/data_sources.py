@@ -546,13 +546,23 @@ def _raw_aux_source_rows(db: Session) -> list[dict[str, Any]]:
     }
     rows: list[dict[str, Any]] = []
     for aux_type, (model, label) in aux_models.items():
-        for row in db.execute(
-            select(
-                model.source,
+        source_col = getattr(model, "source", None)
+        if source_col is not None:
+            query = select(
+                source_col,
                 func.count().label("row_count"),
                 func.max(model.created_at).label("latest_fetched_at"),
-            ).group_by(model.source)
-        ).all():
+            ).group_by(source_col)
+        else:
+            count = db.scalar(select(func.count()).select_from(model))
+            rows.append({
+                "source": label,
+                "source_type": label,
+                "row_count": int(count or 0),
+                "latest_fetched_at": None,
+            })
+            continue
+        for row in db.execute(query).all():
             rows.append({
                 "source": row.source,
                 "source_type": label,

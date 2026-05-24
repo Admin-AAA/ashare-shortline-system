@@ -103,6 +103,13 @@ export default memo(function EnhancedRecommendationCard({ item, isSelected, onSe
           ))}
         </div>
       )}
+      {item.info_tags && item.info_tags.length > 0 && (
+        <div className="erc-infos">
+          {item.info_tags.slice(0, 2).map((tag, i) => (
+            <span key={i} className="info-tag">{tag}</span>
+          ))}
+        </div>
+      )}
 
       <button
         className="erc-expand-btn"

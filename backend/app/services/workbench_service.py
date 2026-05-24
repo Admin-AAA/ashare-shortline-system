@@ -1668,6 +1668,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                 invalid_rule=card.get("invalid_rule"),
                 rationale=card.get("rationale"),
                 risk_tags_json=_dumps(card.get("risk_flags", [])),
+                info_tags_json=_dumps(card.get("info_tags", [])),
                 recent_repeat=bool(card.get("recent_repeat")),
                 feature_snapshot_json=_dumps(
                     {
@@ -2142,6 +2143,7 @@ def _serialize_recommendation_cached(rec: Recommendation, watch: WatchItem | Non
         "invalid_rule": rec.invalid_rule,
         "rationale": rec.rationale,
         "risk_tags": _loads(rec.risk_tags_json, []),
+        "info_tags": _loads(rec.info_tags_json, []),
         "feature_snapshot": feature_snapshot,
         "market_context": market_context,
         "skill_breakdown": _loads(rec.skill_breakdown_json, []),
@@ -2179,6 +2181,7 @@ def _serialize_recommendation(db: Session, rec: Recommendation) -> dict[str, Any
         "invalid_rule": rec.invalid_rule,
         "rationale": rec.rationale,
         "risk_tags": _loads(rec.risk_tags_json, []),
+        "info_tags": _loads(rec.info_tags_json, []),
         "feature_snapshot": feature_snapshot,
         "market_context": market_context,
         "skill_breakdown": _loads(rec.skill_breakdown_json, []),

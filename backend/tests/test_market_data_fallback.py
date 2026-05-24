@@ -22,7 +22,7 @@ class DummySettings:
     market_kline_days = 90
     market_candidate_count = 60
     quote_sources = "thsdk,eastmoney"
-    kline_sources = "tencent,thsdk,baostock"
+    kline_sources = "tushare"
     data_provider = "multi"
     market_candidate_lookahead_multiplier = 4
     thsdk_batch_size = 600
@@ -75,8 +75,6 @@ def test_fetch_first_kline_falls_back_to_second_source(monkeypatch):
     def fake_fetch_kline(source, quote_arg, settings):
         calls.append(source)
         if source == "eastmoney":
-            raise RuntimeError("empty reply")
-        if source == "tencent":
             return [
                 {
                     "code": "000001",
@@ -96,12 +94,12 @@ def test_fetch_first_kline_falls_back_to_second_source(monkeypatch):
 
     monkeypatch.setattr(market_data, "_fetch_kline", fake_fetch_kline)
 
-    bars, source, errors = _fetch_first_kline(quote, ["eastmoney", "tencent", "baostock"], DummySettings())
+    bars, source, errors = _fetch_first_kline(quote, ["tushare", "eastmoney"], DummySettings())
 
-    assert source == "tencent"
+    assert source == "eastmoney"
     assert len(bars) == 30
-    assert calls == ["eastmoney", "tencent"]
-    assert errors == ["eastmoney: empty reply"]
+    assert calls == ["tushare", "eastmoney"]
+    assert errors == ["tushare: 日K不足30条"]
 
 
 def test_fetch_first_kline_raises_upstream_errors_to_caller(monkeypatch):
@@ -112,64 +110,55 @@ def test_fetch_first_kline_raises_upstream_errors_to_caller(monkeypatch):
 
     monkeypatch.setattr(market_data, "_fetch_kline", fake_fetch_kline)
 
-    bars, source, errors = _fetch_first_kline(quote, ["eastmoney", "tencent", "baostock"], DummySettings())
+    bars, source, errors = _fetch_first_kline(quote, ["tushare", "eastmoney"], DummySettings())
 
     assert bars == []
     assert source == ""
     assert errors == [
+        "tushare: tushare bad",
         "eastmoney: eastmoney bad",
-        "tencent: tencent bad",
-        "baostock: baostock bad",
     ]
 
 
-def test_fetch_first_kline_disables_global_baostock_login_failures(monkeypatch):
+def test_fetch_first_kline_skips_disabled_sources(monkeypatch):
     quote = {"code": "000001", "exchange": "SZ"}
-    disabled_sources = set()
+    disabled_sources = {"tushare"}
     calls = []
 
     def fake_fetch_kline(source, quote_arg, settings):
         calls.append(source)
-        if source == "baostock":
-            raise RuntimeError("baostock login failed: 网络接收错误")
+        if source == "eastmoney":
+            return [{"code": quote_arg["code"], "trade_date": "2026-05-20"} for _ in range(30)]
         return []
 
     monkeypatch.setattr(market_data, "_fetch_kline", fake_fetch_kline)
 
-    bars, source, errors = _fetch_first_kline(quote, ["baostock", "tencent"], DummySettings(), disabled_sources)
-    bars2, source2, errors2 = _fetch_first_kline(quote, ["baostock", "tencent"], DummySettings(), disabled_sources)
+    bars, source, errors = _fetch_first_kline(
+        quote, ["tushare", "eastmoney"], DummySettings(), disabled_sources
+    )
 
-    assert bars == []
-    assert source == ""
-    assert "baostock" in disabled_sources
-    assert errors[0] == "baostock: baostock login failed: 网络接收错误"
-    assert bars2 == []
-    assert source2 == ""
-    assert calls == ["baostock", "tencent", "tencent"]
-    assert errors2[0] == "baostock: 本次扫描已熔断，跳过"
+    assert source == "eastmoney"
+    assert len(bars) == 30
+    assert "tushare: 本次扫描已熔断，跳过" in errors
 
 
 def test_thsdk_and_thssdk_aliases_route_to_same_adapters(monkeypatch):
     quote = {"code": "000001", "exchange": "SZ"}
 
     monkeypatch.setattr(market_data, "_fetch_thsdk_quotes", lambda settings: [{"code": "000001"}])
-    monkeypatch.setattr(market_data, "_fetch_thsdk_kline", lambda quote_arg, settings: [{"code": quote_arg["code"]}])
 
     assert _fetch_quotes("thsdk", DummySettings()) == [{"code": "000001"}]
     assert _fetch_quotes("thssdk", DummySettings()) == [{"code": "000001"}]
-    assert _fetch_kline("thsdk", quote, DummySettings()) == [{"code": "000001"}]
-    assert _fetch_kline("thssdk", quote, DummySettings()) == [{"code": "000001"}]
 
 
-def test_data_provider_accepts_thsdk_aliases_and_baostock_kline_only():
+def test_data_provider_accepts_thsdk_aliases():
     settings = DummySettings()
     settings.data_provider = "thssdk"
     assert _quote_sources(settings) == ["thssdk"]
     assert _kline_sources(settings) == ["thssdk"]
 
-    settings.data_provider = "baostock"
-    assert _quote_sources(settings) == ["thsdk", "eastmoney"]
-    assert _kline_sources(settings) == ["baostock"]
+    settings.data_provider = "tushare"
+    assert _kline_sources(settings) == ["tushare"]
 
 
 def test_fetch_thsdk_quotes_merges_split_rows(monkeypatch):
@@ -233,39 +222,6 @@ def test_fetch_thsdk_quotes_merges_split_rows(monkeypatch):
     assert quotes[1]["main_net_inflow_yi"] == 0.12
 
 
-def test_fetch_thsdk_kline_maps_rows_and_computes_pct(monkeypatch):
-    class FakeTHS:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            return None
-
-        def klines(self, ths_code, count, adjust):
-            assert ths_code == "USZA300033"
-            assert count == 2
-            assert adjust == "forward"
-            return SimpleNamespace(
-                success=True,
-                data=[
-                    {"时间": "20260507", "开盘价": "10", "最高价": "11", "最低价": "9.8", "收盘价": "10.5", "成交量": "1000", "总金额": "1050000"},
-                    {"时间": "20260508", "开盘价": "10.6", "最高价": "12", "最低价": "10.5", "收盘价": "11.55", "成交量": "1200", "总金额": "1386000"},
-                ],
-            )
-
-    monkeypatch.setattr(market_data, "_thsdk_client", lambda settings: FakeTHS())
-    settings = DummySettings()
-    settings.market_kline_days = 2
-
-    bars = market_data._fetch_thsdk_kline({"code": "300033", "exchange": "SZ"}, settings)
-
-    assert bars[0]["trade_date"] == "2026-05-07"
-    assert bars[0]["close"] == 10.5
-    assert bars[0]["pct_chg"] == 0.0
-    assert bars[1]["trade_date"] == "2026-05-08"
-    assert bars[1]["pct_chg"] == pytest.approx(10.0)
-
-
 def test_small_market_sample_caps_final_score_honestly():
     stock = {
         "code": "000001",
@@ -286,7 +242,7 @@ def test_small_market_sample_caps_final_score_honestly():
     card = aggregate(stock, [signal], market_score=100, agent_review_score=100)
 
     assert card["final_score"] == 68.0
-    assert "市场样本仅6只，评分已按覆盖率降权" in card["risk_flags"]
+    assert "样本或证据覆盖不足，评分与 Agent 加分已降权" in card["info_tags"]
 
 def test_authenticity_treats_composite_scores_as_observed_when_inputs_are_real():
     from app.services.feature_builder import build_features

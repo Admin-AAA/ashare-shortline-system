@@ -305,18 +305,6 @@ def _fetch_kline(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> list[dict[str, Any]]:
-    if source == "tickflow":
-        return _fetch_tickflow_kline(quote, settings, start_date=start_date, end_date=end_date)
-    if source in {"thsdk", "thssdk"}:
-        return _fetch_thsdk_kline(quote, settings)
-    if source == "baostock":
-        return _fetch_baostock_kline(quote, settings, start_date=start_date, end_date=end_date)
-    if source == "eastmoney":
-        return _fetch_eastmoney_kline(quote, settings, start_date=start_date, end_date=end_date)
-    if source == "tencent":
-        return _fetch_tencent_kline(quote, settings)
-    if source == "akshare":
-        return _fetch_akshare_kline(quote, settings, start_date=start_date, end_date=end_date)
     if source == "tushare":
         return _fetch_tushare_kline(quote, settings, start_date=start_date, end_date=end_date)
     raise MarketDataError(f"未知日K源: {source}")
@@ -477,257 +465,6 @@ def _fetch_thsdk_quotes(settings: Any) -> list[dict[str, Any]]:
     if not quotes and batch_errors:
         raise MarketDataError("thsdk 行情查询失败：" + "；".join(batch_errors[:5]))
     return quotes[:scan_size]
-
-
-def _fetch_tickflow_kline(
-    quote: dict[str, Any],
-    settings: Any,
-    start_date: str | None = None,
-    end_date: str | None = None,
-) -> list[dict[str, Any]]:
-    """使用 TickFlow 免费 API 获取历史日K线。"""
-    exchange = str(quote.get("exchange", "")).upper()
-    code = str(quote.get("code", ""))
-    if exchange not in {"SH", "SZ", "BJ"}:
-        raise MarketDataError(f"tickflow 暂不支持交易所: {exchange}")
-    symbol = f"{code}.{exchange}"
-
-    try:
-        from tickflow import TickFlow
-    except ImportError as exc:
-        raise MarketDataError("未安装 tickflow，请先安装后端依赖。") from exc
-
-    client = TickFlow.free()
-    days = max(30, int(getattr(settings, "market_kline_days", 90)))
-
-    start_ms: int | None = None
-    if start_date:
-        start_ms = int(datetime.strptime(start_date, "%Y%m%d").timestamp() * 1000)
-    elif end_date:
-        start_ms = int(datetime.strptime(end_date, "%Y%m%d").timestamp() * 1000) - days * 86400000
-
-    count = min(10000, max(days * 4, 500)) if start_ms else days * 4
-
-    df = client.klines.get(
-        symbol,
-        period="1d",
-        count=count,
-        start_time=start_ms,
-        as_dataframe=True,
-    )
-    if df is None or df.empty:
-        raise MarketDataError(f"tickflow 返回空日K: {symbol}")
-
-    df = df.sort_values("trade_date")
-    bars: list[dict[str, Any]] = []
-    previous_close = 0.0
-    for _, row in df.iterrows():
-        close_val = float(row.get("close") or 0)
-        pct_chg = ((close_val - previous_close) / previous_close * 100) if previous_close else 0.0
-        bars.append(
-            {
-                "code": quote["code"],
-                "trade_date": str(row.get("trade_date") or ""),
-                "open": float(row.get("open") or 0),
-                "high": float(row.get("high") or 0),
-                "low": float(row.get("low") or 0),
-                "close": close_val,
-                "volume": float(row.get("volume") or 0),
-                "amount": float(row.get("amount") or 0),
-                "pct_chg": pct_chg,
-                "turnover_rate": 0.0,
-            }
-        )
-        previous_close = close_val
-
-    if bars:
-        bars[-1]["turnover_rate"] = float(quote.get("turnover_rate") or 0)
-    return bars[-days:]
-
-
-def _fetch_eastmoney_kline(
-    quote: dict[str, Any],
-    settings: Any,
-    start_date: str | None = None,
-    end_date: str | None = None,
-) -> list[dict[str, Any]]:
-    secid = f"{_eastmoney_market_id(quote['code'])}.{quote['code']}"
-    beg = start_date or (date.today() - timedelta(days=settings.market_kline_days * 3)).strftime("%Y%m%d")
-    end = end_date or "20500101"
-    lmt = settings.market_kline_days if start_date is None else max(settings.market_kline_days, 500)
-    url = (
-        "https://push2his.eastmoney.com/api/qt/stock/kline/get"
-        f"?secid={secid}&fields1=f1,f2,f3,f4,f5,f6"
-        "&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
-        f"&klt=101&fqt=1&beg={beg}&end={end}&lmt={lmt}"
-    )
-    data = _http_get_json(url, settings)
-    lines = data.get("data", {}).get("klines", []) or []
-    return [_bar_from_eastmoney_line(quote["code"], line) for line in lines]
-
-
-def _fetch_thsdk_kline(quote: dict[str, Any], settings: Any) -> list[dict[str, Any]]:
-    ths_code = _ths_code_from_quote_or_code(quote)
-    if not ths_code:
-        raise MarketDataError(f"thsdk 无法识别股票代码: {quote.get('code')}")
-
-    with _thsdk_client(settings) as ths:
-        response = ths.klines(ths_code, count=settings.market_kline_days, adjust="forward")
-    if not response:
-        raise MarketDataError(f"thsdk klines failed: {getattr(response, 'error', '')}")
-
-    bars: list[dict[str, Any]] = []
-    previous_close = 0.0
-    for row in _thsdk_rows(getattr(response, "data", None)):
-        bar = _bar_from_thsdk_row(_normalize_code(ths_code), row, previous_close)
-        bars.append(bar)
-        previous_close = _num(bar.get("close"), previous_close)
-    return bars[-settings.market_kline_days :]
-
-
-def _fetch_tencent_kline(quote: dict[str, Any], settings: Any) -> list[dict[str, Any]]:
-    symbol = f"{quote['exchange'].lower()}{quote['code']}"
-    url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,,,{settings.market_kline_days},qfq"
-    data = _http_get_json(url, settings)
-    item = data.get("data", {}).get(symbol, {})
-    rows = item.get("qfqday") or item.get("day") or []
-    bars: list[dict[str, Any]] = []
-    previous_close = 0.0
-    for row in rows:
-        trade_date, open_, close, high, low, volume = row[:6]
-        close_value = _num(close)
-        pct_chg = ((close_value - previous_close) / previous_close * 100) if previous_close else 0.0
-        bars.append(
-            {
-                "code": quote["code"],
-                "trade_date": str(trade_date),
-                "open": _num(open_),
-                "high": _num(high),
-                "low": _num(low),
-                "close": close_value,
-                "volume": _num(volume),
-                "amount": close_value * _num(volume) * 100,
-                "pct_chg": pct_chg,
-                "turnover_rate": 0.0,
-            }
-        )
-        previous_close = close_value
-    if bars:
-        bars[-1]["turnover_rate"] = float(quote.get("turnover_rate") or 0)
-    return bars
-
-
-def _fetch_akshare_kline(
-    quote: dict[str, Any],
-    settings: Any,
-    start_date: str | None = None,
-    end_date: str | None = None,
-) -> list[dict[str, Any]]:
-    try:
-        import akshare as ak
-    except ImportError as exc:
-        raise MarketDataError("未安装 akshare，请先安装后端依赖。") from exc
-    sd = start_date or (date.today() - timedelta(days=settings.market_kline_days * 3)).strftime("%Y%m%d")
-    ed = end_date or date.today().strftime("%Y%m%d")
-    exchange = str(quote.get("exchange", "")).lower()
-    symbol = f"{exchange}{quote['code']}"
-    adjust = "" if start_date else "qfq"
-    df = ak.stock_zh_a_hist_tx(symbol=symbol, start_date=sd, end_date=ed, adjust=adjust, timeout=15)
-    if df is None or df.empty:
-        raise MarketDataError(f"akshare_tx 返回空日K: {symbol}")
-    if start_date is None:
-        rows = df.tail(settings.market_kline_days).to_dict("records")
-    else:
-        rows = df.to_dict("records")
-    bars: list[dict[str, Any]] = []
-    previous_close = 0.0
-    for row in rows:
-        close_val = _num(row.get("close"))
-        pct_chg = ((close_val - previous_close) / previous_close * 100) if previous_close else 0.0
-        open_val = _num(row.get("open"))
-        high_val = _num(row.get("high"))
-        low_val = _num(row.get("low"))
-        amount_val = _num(row.get("amount"))
-        volume_val = amount_val / close_val / 100 if close_val else 0.0
-        bars.append(
-            {
-                "code": quote["code"],
-                "trade_date": str(row.get("date") or ""),
-                "open": open_val,
-                "high": high_val,
-                "low": low_val,
-                "close": close_val,
-                "volume": volume_val,
-                "amount": amount_val,
-                "pct_chg": pct_chg,
-                "turnover_rate": 0.0,
-            }
-        )
-        previous_close = close_val
-    if bars:
-        bars[-1]["turnover_rate"] = float(quote.get("turnover_rate") or 0)
-    return bars
-
-
-def _fetch_baostock_kline(
-    quote: dict[str, Any],
-    settings: Any,
-    start_date: str | None = None,
-    end_date: str | None = None,
-) -> list[dict[str, Any]]:
-    try:
-        import baostock as bs
-    except ImportError as exc:
-        raise MarketDataError("未安装 baostock，请先安装后端依赖。") from exc
-
-    exchange = quote["exchange"].lower()
-    if exchange not in {"sh", "sz", "bj"}:
-        raise MarketDataError(f"baostock 暂不支持交易所: {quote['exchange']}")
-    code = f"{exchange}.{quote['code']}"
-    if start_date:
-        sd = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:8]}"
-    else:
-        sd = (date.today() - timedelta(days=settings.market_kline_days * 3)).strftime("%Y-%m-%d")
-    if end_date:
-        ed = f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:8]}"
-    else:
-        ed = date.today().strftime("%Y-%m-%d")
-    login_result = bs.login()
-    if login_result.error_code != "0":
-        raise MarketDataError(f"baostock login failed: {login_result.error_msg}")
-    try:
-        rs = bs.query_history_k_data_plus(
-            code,
-            "date,open,high,low,close,volume,amount,pctChg,turn",
-            start_date=sd,
-            end_date=ed,
-            frequency="d",
-            adjustflag="2",
-        )
-        if rs.error_code != "0":
-            raise MarketDataError(f"baostock query failed: {rs.error_msg}")
-        rows: list[list[str]] = []
-        while rs.next():
-            rows.append(rs.get_row_data())
-    finally:
-        bs.logout()
-    if start_date is None:
-        rows = rows[-settings.market_kline_days :]
-    return [
-        {
-            "code": quote["code"],
-            "trade_date": str(row[0]),
-            "open": _num(row[1]),
-            "high": _num(row[2]),
-            "low": _num(row[3]),
-            "close": _num(row[4]),
-            "volume": _num(row[5]),
-            "amount": _num(row[6]),
-            "pct_chg": _num(row[7]),
-            "turnover_rate": _num(row[8]),
-        }
-        for row in rows
-    ]
 
 
 def _fetch_tushare_kline(
@@ -1324,22 +1061,6 @@ def _breadth_from_counts(
     }
 
 
-def _bar_from_eastmoney_line(code: str, line: str) -> dict[str, Any]:
-    parts = line.split(",")
-    return {
-        "code": code,
-        "trade_date": parts[0],
-        "open": _num(parts[1]),
-        "close": _num(parts[2]),
-        "high": _num(parts[3]),
-        "low": _num(parts[4]),
-        "volume": _num(parts[5]),
-        "amount": _num(parts[6]),
-        "pct_chg": _num(parts[8]),
-        "turnover_rate": _num(parts[10]) if len(parts) > 10 else 0.0,
-    }
-
-
 def _global_failed_kline_sources(errors: list[str]) -> set[str]:
     disabled: set[str] = set()
     for error in errors:
@@ -1367,11 +1088,6 @@ def _summarize_kline_skip_reasons(kline_errors: dict[str, list[str]]) -> dict[st
 
 
 def _is_global_kline_source_error(source: str, message: str) -> bool:
-    text = str(message)
-    if source == "baostock":
-        return "login failed" in text or "网络" in text or "Broken pipe" in text
-    if source in {"thsdk", "thssdk"}:
-        return "连接失败" in text or "TCP" in text
     return False
 
 
@@ -1394,26 +1110,6 @@ def _quote_from_thsdk_row(row: dict[str, Any]) -> dict[str, Any]:
         industry=_first_text(row, ("行业", "所属行业"), default="未分类"),
         source="thsdk",
     )
-
-
-def _bar_from_thsdk_row(code: str, row: dict[str, Any], previous_close: float = 0.0) -> dict[str, Any]:
-    trade_date = _thsdk_trade_date(row.get("时间") or row.get("日期") or row.get("date"))
-    close = _first_num(row, ("收盘价", "收盘", "close"))
-    pct_chg = _first_num(row, ("涨幅", "涨跌幅", "pct_chg"), default=None)
-    if pct_chg is None:
-        pct_chg = ((close - previous_close) / previous_close * 100) if previous_close else 0.0
-    return {
-        "code": code,
-        "trade_date": trade_date,
-        "open": _first_num(row, ("开盘价", "开盘", "open")),
-        "high": _first_num(row, ("最高价", "最高", "high")),
-        "low": _first_num(row, ("最低价", "最低", "low")),
-        "close": close,
-        "volume": _first_num(row, ("成交量", "总手", "volume")),
-        "amount": _first_num(row, ("总金额", "成交额", "amount")),
-        "pct_chg": pct_chg,
-        "turnover_rate": _first_num(row, ("换手率", "turnover_rate")),
-    }
 
 
 def _thsdk_client(settings: Any) -> Any:
@@ -1507,15 +1203,6 @@ def _first_num(row: dict[str, Any], keys: tuple[str, ...], default: float | None
     return default
 
 
-def _thsdk_trade_date(value: Any) -> str:
-    if isinstance(value, datetime):
-        return value.date().isoformat()
-    text = str(value or "")
-    if len(text) >= 10 and text[4] == "-" and text[7] == "-":
-        return text[:10]
-    return _format_yyyymmdd(text[:8]) if len(text) >= 8 else text
-
-
 def _batched(items: list[str], size: int) -> list[list[str]]:
     return [items[index : index + size] for index in range(0, len(items), size)]
 
@@ -1527,7 +1214,7 @@ def _quote_sources(settings: Any) -> list[str]:
 
 
 def _kline_sources(settings: Any) -> list[str]:
-    if settings.data_provider in {"eastmoney", "akshare", "tushare", "thsdk", "thssdk", "baostock"}:
+    if settings.data_provider in {"eastmoney", "akshare", "tushare", "thsdk", "thssdk"}:
         return [settings.data_provider]
     return _split_sources(settings.kline_sources)
 

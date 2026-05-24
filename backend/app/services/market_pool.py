@@ -1278,27 +1278,43 @@ def refresh_concept_sectors(db: Session) -> list[dict[str, Any]]:
         fetcher=lambda source, _settings: _fetch_concept_sectors(source, _settings),
         normalized_persister=_persist_normalized_concept_sector,
     )
-    # 额外持久化热门板块的成分股（优先 akshare 同花顺源，东财源被封）
-    from app.services.market_auxiliary import _fetch_ak_concept_sector_stocks, _fetch_eastmoney_concept_sector_stocks
+    # 额外持久化热门板块的成分股（Tushare）
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from app.services.tushare_client import fetch_concept_members
+
+    trade_date = result[0].get("trade_date") if result else date.today().isoformat()
+
+    # 检查当天是否已有成分股数据，有则跳过
+    existing_date = db.scalar(
+        select(func.max(ConceptSectorStock.trade_date))
+    )
+    if existing_date and str(existing_date) >= trade_date:
+        logger.info("概念板块成分股已覆盖 %s，跳过拉取", trade_date)
+        return result
+
     top_sectors = [s for s in result if s.get("heat_rank", 999) <= 60]
-    if top_sectors:
-        for sector in top_sectors:
-            sector_name = str(sector.get("sector_name") or "")
-            sector_code = str(sector.get("sector_code") or "")
-            stocks: list[dict[str, Any]] = []
-            if sector_name:
-                try:
-                    stocks = _fetch_ak_concept_sector_stocks(sector_name, settings)
-                except Exception:
-                    pass
-            if not stocks and sector_code:
-                try:
-                    stocks = _fetch_eastmoney_concept_sector_stocks(sector_code, settings)
-                except Exception:
-                    pass
-            if stocks:
-                _persist_concept_sector_stocks(db, stocks)
+    if not top_sectors:
+        return result
+
+    all_stocks: list[dict[str, Any]] = []
+    sector_codes = [str(s.get("sector_code") or "") for s in top_sectors]
+    sector_codes = [c for c in sector_codes if c]
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = {pool.submit(fetch_concept_members, sc, trade_date): sc for sc in sector_codes}
+        for future in as_completed(futures):
+            try:
+                stocks = future.result()
+                if stocks:
+                    all_stocks.extend(stocks)
+            except Exception:
+                pass
+
+    if all_stocks:
+        _persist_concept_sector_stocks(db, all_stocks)
         db.commit()
+        logger.info("概念板块成分股已持久化 %d 条，覆盖 %d 个板块", len(all_stocks), len(sector_codes))
     return result
 
 
@@ -1630,6 +1646,72 @@ def _load_concept_sectors_for_stocks(
 
 # ── 辅助数据：批量加载入口（供feature_builder使用） ────────────────────
 
+def _load_auction_for_stocks(db: Session, codes: list[str]) -> dict[str, dict[str, Any]]:
+    """加载当日集合竞价数据。"""
+    from app.models.tables import AuctionData
+    today = date.today().isoformat()
+    rows = db.scalars(
+        select(AuctionData).where(
+            AuctionData.code.in_(codes), AuctionData.trade_date == today
+        )
+    ).all()
+    return {
+        r.code: {c.name: getattr(r, c.name) for c in r.__table__.columns}
+        for r in rows
+    }
+
+
+def _load_pledge_for_stocks(db: Session, codes: list[str]) -> dict[str, dict[str, Any]]:
+    """加载最新股权质押统计。"""
+    from app.models.tables import PledgeStat
+    from sqlalchemy import and_
+    subq = (
+        select(PledgeStat.code, func.max(PledgeStat.end_date).label("max_ed"))
+        .where(PledgeStat.code.in_(codes))
+        .group_by(PledgeStat.code)
+        .subquery()
+    )
+    rows = db.scalars(
+        select(PledgeStat).join(
+            subq, and_(PledgeStat.code == subq.c.code, PledgeStat.end_date == subq.c.max_ed)
+        )
+    ).all()
+    return {
+        r.code: {c.name: getattr(r, c.name) for c in r.__table__.columns}
+        for r in rows
+    }
+
+
+def _load_broker_recs_for_stocks(db: Session, codes: list[str]) -> dict[str, int]:
+    """加载本月券商金股推荐次数。"""
+    from app.models.tables import BrokerRecommend
+    month = date.today().strftime("%Y%m")
+    rows = db.execute(
+        select(BrokerRecommend.code, func.count().label("cnt"))
+        .where(BrokerRecommend.code.in_(codes), BrokerRecommend.month == month)
+        .group_by(BrokerRecommend.code)
+    ).fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def _load_share_float_upcoming(db: Session, codes: list[str], days: int = 30) -> dict[str, list[dict[str, Any]]]:
+    """加载即将到来的限售解禁（未来N天）。"""
+    from app.models.tables import ShareFloat
+    today = date.today()
+    cutoff = (today + timedelta(days=days)).isoformat()
+    rows = db.scalars(
+        select(ShareFloat).where(
+            ShareFloat.code.in_(codes),
+            ShareFloat.float_date >= today.isoformat(),
+            ShareFloat.float_date <= cutoff,
+        )
+    ).all()
+    result: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for r in rows:
+        result[r.code].append({c.name: getattr(r, c.name) for c in r.__table__.columns})
+    return dict(result)
+
+
 def load_auxiliary_for_stocks(db: Session, codes: list[str]) -> dict[str, Any]:
     """批量加载所有辅助数据，返回按code索引的字典。"""
     settings = get_settings()
@@ -1639,4 +1721,8 @@ def load_auxiliary_for_stocks(db: Session, codes: list[str]) -> dict[str, Any]:
         "capital_flows": _load_cached_capital_flows(db, codes, max_age_seconds=settings.capital_flow_cache_ttl_seconds),
         "dragon_tigers": _load_cached_dragon_tigers(db, codes, max_age_seconds=settings.dragon_tiger_cache_ttl_seconds),
         "news": _load_cached_news(db, codes, max_age_seconds=settings.news_cache_ttl_seconds),
+        "auctions": _load_auction_for_stocks(db, codes),
+        "pledges": _load_pledge_for_stocks(db, codes),
+        "broker_recs": _load_broker_recs_for_stocks(db, codes),
+        "share_floats_upcoming": _load_share_float_upcoming(db, codes),
     }

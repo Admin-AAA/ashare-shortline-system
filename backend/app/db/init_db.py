@@ -20,7 +20,7 @@ def init_db() -> None:
 
 
 def _migrate_v2() -> None:
-    """删除废弃的旧表。"""
+    """删除废弃的旧表（已迁移完毕，仅删除残留旧表）。"""
     tables_to_drop = [
         "raw_quotes",
         "raw_daily_bars",
@@ -32,12 +32,6 @@ def _migrate_v2() -> None:
         "unified_quotes",
         "daily_bars",
         "daily_indicators",
-        "limit_up_board",     # 字段变更，需重建
-        "concept_sector",     # 字段变更，需重建
-        "concept_sector_stock",  # 字段变更，需重建
-        "capital_flow",       # 字段不变但重建以清理旧数据
-        "dragon_tiger",       # 同上
-        "stocks",             # 字段变更
     ]
     with engine.begin() as connection:
         inspector = inspect(connection)
@@ -93,6 +87,31 @@ def _ensure_indexes() -> None:
 
         if "stk_limits" in existing_tables:
             _ensure_index(connection, inspector, "stk_limits", "idx_sl_code_td", "code, trade_date")
+
+        if "minute_kbars" in existing_tables:
+            _ensure_index(connection, inspector, "minute_kbars", "idx_mk_code_time", "code, trade_time")
+            _ensure_index(connection, inspector, "minute_kbars", "idx_mk_td", "trade_date")
+
+        if "auction_data" in existing_tables:
+            _ensure_index(connection, inspector, "auction_data", "idx_auction_td", "trade_date")
+
+        if "broker_recommends" in existing_tables:
+            _ensure_index(connection, inspector, "broker_recommends", "idx_br_month", "month")
+
+        if "holder_trades" in existing_tables:
+            _ensure_index(connection, inspector, "holder_trades", "idx_ht_code_ann", "code, ann_date")
+
+        if "institutional_surveys" in existing_tables:
+            _ensure_index(connection, inspector, "institutional_surveys", "idx_is_code_sd", "code, surv_date")
+
+        if "share_floats" in existing_tables:
+            _ensure_index(connection, inspector, "share_floats", "idx_sf_code_fd", "code, float_date")
+
+        if "pledge_stats" in existing_tables:
+            _ensure_index(connection, inspector, "pledge_stats", "idx_ps_code_ed", "code, end_date")
+
+        if "repurchases" in existing_tables:
+            _ensure_index(connection, inspector, "repurchases", "idx_rep_code_ann", "code, ann_date")
 
         # 兼容旧表索引（如果用户之前没重建数据库）
         if "recommendation_runs" in existing_tables:

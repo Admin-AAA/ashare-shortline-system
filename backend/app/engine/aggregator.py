@@ -10,6 +10,52 @@ RISK_TEMPLATE_PENALTY = {
     "aggressive": 0.7,
 }
 
+# ── 风险分级：按严重程度差异化扣分 ──
+# high: 真实交易风险，需重点对待
+# medium: 市场环境/情绪类风险
+# info: 数据覆盖不足，仅展示不扣分
+RISK_SEVERITY_PENALTY = {"high": 8.0, "medium": 5.0, "info": 0.0}
+
+# 关键词 → 严重级别映射（越具体越靠前）
+_RISK_SEVERITY_RULES: list[tuple[list[str], str]] = [
+    # ── high: 交易面硬风险 ──
+    (["乖离率偏高", "获利回吐", "bias_ma"], "high"),
+    (["近期已有较大涨幅", "涨幅过大", "追高风险"], "high"),
+    (["爆量", "分歧", "高换手分歧"], "high"),
+    (["跌破关键支撑", "破位", "跌穿"], "high"),
+    (["主力资金净流入-", "主力资金大幅流出", "持续流出"], "high"),
+    (["盈亏比低于", "盈亏比不达标"], "high"),
+    (["股权质押比例", "质押风险"], "high"),
+    (["有限售股解禁", "解禁"], "high"),
+    (["硬风控否决", "Hard Veto"], "high"),
+    (["未进入 Skill Agent 深审", "仅按规则信号降权输出"], "info"),
+    # ── medium: 市场环境/情绪 ──
+    (["情绪高潮", "高潮阶段", "追高仓位降档"], "medium"),
+    (["市场弱势", "防守仓位", "情绪冰点", "跌停压力"], "medium"),
+    (["Skill 阶段判定矛盾", "立场多空矛盾"], "medium"),
+    (["Setup 仅部分 Skill 命中"], "medium"),
+    (["概念热度排名", "非绝对主线"], "medium"),
+    (["量能中性", "缺乏.*信号", "方向不明"], "medium"),
+    (["股价未站上MA", "短线支撑未确认"], "medium"),
+    (["市场快照缺失"], "medium"),
+    # ── info: 数据覆盖/完整性（不扣分） ──
+    (["样本或证据覆盖不足", "数据完整度", "证据质量不足"], "info"),
+    (["龙虎榜数据缺失", "新闻/公告未完整覆盖", "题材标签缺失", "多源报价存在冲突"], "info"),
+    (["样本仅", "评分已按覆盖率降权", "评分已降权"], "info"),
+    (["Agent 加分受限"], "info"),
+    (["数据为估计值", "可靠性稍低"], "info"),
+]
+
+
+def _risk_severity(flag: str) -> str:
+    """根据风险文本判断严重级别。"""
+    import re
+    for keywords, severity in _RISK_SEVERITY_RULES:
+        for kw in keywords:
+            if kw in flag or re.search(kw, flag):
+                return severity
+    return "medium"  # 默认中等
+
 # ---------------------------------------------------------------------------
 # 权重体系：Skill Agent 成为核心评分来源
 # ---------------------------------------------------------------------------
@@ -355,6 +401,7 @@ def aggregate(
             **_empty(stock, veto_reason or "硬风控否决"),
             "strategy_signals": signals,
             "risk_flags": _collect_risks(signals),
+            "info_tags": [],
             "consensus_score": 0.0,
         }
 
@@ -363,13 +410,22 @@ def aggregate(
     skill_agent_score = _extract_skill_agent_score(signals)
     # Strategy.yaml 规则辅助评分
     strategy_rule_score = _compute_strategy_rule_score(signals)
-    # 风险调整分：风险越多扣分越重，风险模板放大惩罚
-    risk_penalty = len(_collect_risks(signals)) * 5.0 * RISK_TEMPLATE_PENALTY.get(risk_template, 1.0)
+    # 风险调整分：按严重级别分级扣分，info 级不扣分
+    all_risks = _collect_risks(signals)
+    risk_penalty = sum(
+        RISK_SEVERITY_PENALTY.get(_risk_severity(r), 5.0) for r in all_risks
+    ) * RISK_TEMPLATE_PENALTY.get(risk_template, 1.0)
     risk_adjustment_score = max(0.0, 100.0 - min(45.0, risk_penalty))
     # 共识分（保留旧机制用于信息展示，但不再单独加权）
     consensus_score = _consensus_score(signals)
     # 证据质量
     evidence_quality_score = float(stock.get("evidence_quality_score") or 60.0)
+    # 券商金股共识加分
+    broker_recs = int(stock.get("broker_rec_count") or 0)
+    if broker_recs >= 3:
+        evidence_quality_score = min(100.0, evidence_quality_score + 8)
+    elif broker_recs >= 1:
+        evidence_quality_score = min(100.0, evidence_quality_score + 3)
     quality_cap = _quality_score_cap(stock)
 
     # --- 检测是否无 Agent 审查（回测/纯规则模式）---
@@ -454,9 +510,8 @@ def aggregate(
         for key, value in raw_component_scores.items()
     }
 
-    quality_risks = _quality_risks(stock, quality_cap)
+    quality_risks, quality_infos = _quality_risks(stock, quality_cap)
     conflict_risks = _detect_skill_conflicts(signals)
-    quality_risks = list(dict.fromkeys(quality_risks + conflict_risks))
 
     # --- 最佳信号 ---
     best_setup = max(signals, key=lambda signal: float(signal.get("score", 0)))
@@ -468,9 +523,22 @@ def aggregate(
         risk_template=risk_template,
         agent_review_count=agent_review_count,
     )
-    final_risk_flags = list(
-        dict.fromkeys(_collect_risks(signals) + quality_risks + market_discipline["risk_flags"])
-    )
+
+    # 将所有候选标记按严重级别分流：high/medium → risk_flags，info → info_tags
+    all_candidate_flags = list(dict.fromkeys(
+        _collect_risks(signals) + quality_risks + conflict_risks + market_discipline["risk_flags"] + quality_infos
+    ))
+    final_risk_flags: list[str] = []
+    info_tags: list[str] = []
+    for flag in all_candidate_flags:
+        sev = _risk_severity(flag)
+        if sev == "info":
+            info_tags.append(flag)
+        else:
+            final_risk_flags.append(flag)
+
+    # 去重合并 info_tags：语义相近的只保留一条
+    info_tags = _dedup_info_tags(info_tags)
 
     return {
         "code": stock["code"],
@@ -486,6 +554,7 @@ def aggregate(
         "invalid_rule": best_setup.get("invalid_rule") or "跌破关键支撑且收不回",
         "rationale": _rationale(signals),
         "risk_flags": final_risk_flags,
+        "info_tags": info_tags,
         "strategy_signals": signals,
         "component_scores": component_scores,
         "raw_component_scores": raw_component_scores,
@@ -554,6 +623,24 @@ def _empty(stock: dict[str, Any], reason: str) -> dict[str, Any]:
     }
 
 
+def _dedup_info_tags(tags: list[str]) -> list[str]:
+    """合并语义相近的 info_tags，避免重复提示。"""
+    if len(tags) <= 1:
+        return tags
+    result: list[str] = []
+    seen_groups: set[str] = set()
+    for tag in tags:
+        group = "coverage" if any(kw in tag for kw in ("样本", "评分已降权", "证据质量不足", "Agent 加分受限")) else tag
+        if group in seen_groups:
+            continue
+        seen_groups.add(group)
+        if group == "coverage":
+            result.append("样本或证据覆盖不足，评分与 Agent 加分已降权")
+        else:
+            result.append(tag)
+    return result
+
+
 def _collect_risks(signals: list[dict[str, Any]]) -> list[str]:
     risks: list[str] = []
     for signal in signals:
@@ -608,29 +695,56 @@ def _quality_score_cap(stock: dict[str, Any]) -> float:
         cap = min(cap, 76.0)
     if {"industry", "news", "announcements"}.issubset(missing_fields):
         cap = min(cap, 74.0)
+    # 新增数据质量评估
+    if float(stock.get("pledge_ratio") or 0) > 40:
+        cap = min(cap, 72.0)
+    if stock.get("has_upcoming_float") and float(stock.get("upcoming_float_ratio") or 0) > 5:
+        cap = min(cap, 76.0)
     return cap
 
 
-def _quality_risks(stock: dict[str, Any], quality_cap: float) -> list[str]:
+def _quality_risks(stock: dict[str, Any], quality_cap: float) -> tuple[list[str], list[str]]:
+    """返回 (risk_flags, info_tags)。数据覆盖类归入 info_tags，交易风险归入 risk_flags。"""
     risks: list[str] = []
+    infos: list[str] = []
+
     sample_count = int(stock.get("market_sample_count") or 0)
     if quality_cap < 100:
         if sample_count and sample_count < 100:
-            risks.append(f"市场样本仅{sample_count}只，评分已按覆盖率降权")
+            infos.append(f"市场样本仅{sample_count}只，评分已按覆盖率降权")
         else:
-            risks.append("证据质量不足，评分已降权")
+            infos.append("证据质量不足，评分已降权")
 
     data_quality = stock.get("data_quality") or {}
     missing_fields = set(data_quality.get("missing_fields") or [])
-    if {"news", "announcements"} & missing_fields:
-        risks.append("新闻/公告未完整覆盖，题材与黑天鹅风险需人工复核")
-    if "theme_tags" in missing_fields:
-        risks.append("题材标签缺失，主线识别置信度降低")
-    if "dragon_tiger" in missing_fields:
-        risks.append("龙虎榜数据缺失，游资合力证据不足")
+
+    # 合并多维度数据缺失为一条提示
+    data_gap_fields = missing_fields & {"news", "announcements", "theme_tags", "dragon_tiger", "auction"}
+    if len(data_gap_fields) >= 3:
+        infos.append("多维度数据缺失（公告/龙虎榜/题材等），置信度受影响")
+    elif len(data_gap_fields) >= 1:
+        label_map = {
+            "news": "新闻", "announcements": "公告", "theme_tags": "题材标签",
+            "dragon_tiger": "龙虎榜", "auction": "集合竞价",
+        }
+        names = [label_map.get(f, f) for f in sorted(data_gap_fields)]
+        infos.append(f"{'/'.join(names)}数据未覆盖，相关风险需人工复核")
+
     if "quote_conflict" in missing_fields:
-        risks.append("多源报价存在冲突，价格证据需复核")
-    return list(dict.fromkeys(risks))
+        infos.append("多源报价存在冲突，价格证据需复核")
+
+    # 交易面风险（不进 info，进 risk）
+    pledge_ratio = float(stock.get("pledge_ratio") or 0)
+    if pledge_ratio > 40:
+        risks.append(f"股权质押比例{pledge_ratio:.0f}%，大股东流动性风险较高")
+    elif pledge_ratio > 30:
+        risks.append(f"股权质押比例{pledge_ratio:.0f}%，需关注质押风险")
+    if stock.get("has_upcoming_float"):
+        float_ratio = float(stock.get("upcoming_float_ratio") or 0)
+        if float_ratio > 5:
+            risks.append(f"近期有限售股解禁（占总股本{float_ratio:.1f}%），短期抛压风险")
+
+    return list(dict.fromkeys(risks)), list(dict.fromkeys(infos))
 
 
 def _detect_skill_conflicts(signals: list[dict[str, Any]]) -> list[str]:

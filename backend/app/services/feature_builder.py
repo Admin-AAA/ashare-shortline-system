@@ -97,6 +97,10 @@ def _risk_score(stock: dict[str, Any]) -> float:
         score += 15
     if stock.get("dsa_macd_score", 15) == 0:
         score += 12
+    if stock.get("pledge_ratio", 0) > 30:
+        score += 15
+    if stock.get("has_upcoming_float"):
+        score += 10
     return min(score, 100.0)
 
 
@@ -733,20 +737,24 @@ _SCORED_FEATURES = {
 }
 
 
-def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot: dict[str, Any]) -> None:
+def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot: dict[str, Any], _aux_override: dict | None = None) -> None:
     """从本地辅助数据池加载真实数据，覆盖 SYNTHETIC 默认值。"""
     from app.services.market_pool import load_auxiliary_for_stocks
 
     codes = [s["code"] for s in stocks]
     if not codes:
         return
-    aux = load_auxiliary_for_stocks(db, codes)
+    aux = _aux_override if _aux_override is not None else load_auxiliary_for_stocks(db, codes)
 
     limit_up_map = aux.get("limit_up", {})
     concept_map = aux.get("concept_sectors", {})
     flow_map = aux.get("capital_flows", {})
     dt_map = aux.get("dragon_tigers", {})
     news_map = aux.get("news", {})
+    auction_map = aux.get("auctions", {})
+    pledge_map = aux.get("pledges", {})
+    broker_rec_map = aux.get("broker_recs", {})
+    float_upcoming_map = aux.get("share_floats_upcoming", {})
 
     for stock in stocks:
         code = stock["code"]
@@ -810,6 +818,40 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             stock["inflow_10d_yi"] = cf.get("cumulative_inflow_10d_yi", 0)
             stock["cumulative_inflow_3d_yi"] = cf.get("cumulative_inflow_3d_yi", 0)
             profile["main_net_inflow_yi"] = cf.get("main_net_inflow_yi", 0)
+
+        # ── 集合竞价特征 ──
+        auc = auction_map.get(code)
+        if auc:
+            stock["auction_volume_ratio"] = auc.get("volume_ratio", 1.0)
+            stock["auction_turnover_rate"] = auc.get("turnover_rate", 0)
+            stock["auction_price"] = auc.get("price", 0)
+            stock["auction_pre_close"] = auc.get("pre_close", 0)
+
+        # ── 股权质押风险 ──
+        pledge = pledge_map.get(code)
+        if pledge:
+            stock["pledge_ratio"] = pledge.get("pledge_ratio", 0)
+            stock["pledge_count"] = pledge.get("pledge_count", 0)
+        else:
+            stock["pledge_ratio"] = 0
+            stock["pledge_count"] = 0
+
+        # ── 券商金股共识 ──
+        stock["broker_rec_count"] = broker_rec_map.get(code, 0)
+
+        # ── 限售解禁风险 ──
+        floats = float_upcoming_map.get(code, [])
+        if floats:
+            stock["has_upcoming_float"] = True
+            stock["upcoming_float_days"] = min(
+                (f.get("float_date") for f in floats), default=""
+            )
+            stock["upcoming_float_ratio"] = sum(
+                f.get("float_ratio", 0) for f in floats
+            )
+        else:
+            stock["has_upcoming_float"] = False
+            stock["upcoming_float_ratio"] = 0
 
         stock["dsa_profile"] = profile
 

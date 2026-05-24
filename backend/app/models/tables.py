@@ -11,7 +11,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -91,6 +91,27 @@ class DailyKbar(Base):
 
     # CCI
     cci: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # 扩展因子（from stk_factor_pro）
+    adj_factor: Mapped[float | None] = mapped_column(Float, nullable=True)
+    asi: Mapped[float | None] = mapped_column(Float, nullable=True)
+    asit: Mapped[float | None] = mapped_column(Float, nullable=True)
+    atr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    bbi: Mapped[float | None] = mapped_column(Float, nullable=True)
+    brar_ar: Mapped[float | None] = mapped_column(Float, nullable=True)
+    brar_br: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dpo: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ema_12: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ema_50: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ma_volume_5: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ma_volume_10: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mtm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    obv: Mapped[float | None] = mapped_column(Float, nullable=True)
+    psy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    trix: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wr_6: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wr_10: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # 乖离率（本地计算）
     bias_5: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -255,7 +276,7 @@ class DragonTiger(Base):
 
 
 class NewsAnnouncement(Base):
-    """新闻公告。仍需 eastmoney/akshare（Tushare news 是全市场快讯，非个股维度）。"""
+    """新闻公告。数据来源：eastmoney np-anotice API。"""
     __tablename__ = "news_announcement"
     __table_args__ = (UniqueConstraint("source", "article_id", name="uq_news_announcement_src_aid"),)
 
@@ -269,6 +290,24 @@ class NewsAnnouncement(Base):
     category: Mapped[str | None] = mapped_column(String(40))
     sentiment: Mapped[str | None] = mapped_column(String(20))
     is_risk_warning: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class MinuteKbar(Base):
+    """1分钟K线。数据来源：eastmoney push2his API。"""
+    __tablename__ = "minute_kbars"
+    __table_args__ = (UniqueConstraint("code", "trade_time", name="uq_minute_kbar_code_time"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(6), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    trade_time: Mapped[str] = mapped_column(String(19))  # YYYY-MM-DD HH:MM:SS
+    open: Mapped[float] = mapped_column(Float, default=0)
+    high: Mapped[float] = mapped_column(Float, default=0)
+    low: Mapped[float] = mapped_column(Float, default=0)
+    close: Mapped[float] = mapped_column(Float, default=0)
+    volume: Mapped[float] = mapped_column(Float, default=0)
+    amount: Mapped[float] = mapped_column(Float, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -328,6 +367,112 @@ class StkLimit(Base):
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     up_limit: Mapped[float | None] = mapped_column(Float)
     down_limit: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class AuctionData(Base):
+    """集合竞价数据。数据来源：Tushare stk_auction。"""
+    __tablename__ = "auction_data"
+    __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_auction_data_code_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(6), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    vol: Mapped[float | None] = mapped_column(Float)
+    price: Mapped[float | None] = mapped_column(Float)
+    amount: Mapped[float | None] = mapped_column(Float)
+    pre_close: Mapped[float | None] = mapped_column(Float)
+    turnover_rate: Mapped[float | None] = mapped_column(Float)
+    volume_ratio: Mapped[float | None] = mapped_column(Float)
+    float_share: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class BrokerRecommend(Base):
+    """券商金股。数据来源：Tushare broker_recommend。"""
+    __tablename__ = "broker_recommends"
+    __table_args__ = (UniqueConstraint("code", "month", "broker", name="uq_broker_rec_code_month_broker"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(6), index=True)
+    name: Mapped[str | None] = mapped_column(String(80))
+    month: Mapped[str] = mapped_column(String(6), index=True)
+    broker: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class HolderTrade(Base):
+    """股东增减持。数据来源：Tushare stk_holdertrade。"""
+    __tablename__ = "holder_trades"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(6), index=True)
+    ann_date: Mapped[str] = mapped_column(String(10), index=True)
+    holder_name: Mapped[str | None] = mapped_column(String(120))
+    holder_type: Mapped[str | None] = mapped_column(String(40))
+    in_de: Mapped[str | None] = mapped_column(String(10))  # IN=增持, DE=减持
+    change_vol: Mapped[float | None] = mapped_column(Float)
+    change_ratio: Mapped[float | None] = mapped_column(Float)
+    after_ratio: Mapped[float | None] = mapped_column(Float)
+    avg_price: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class InstitutionalSurvey(Base):
+    """机构调研。数据来源：Tushare stk_surv。"""
+    __tablename__ = "institutional_surveys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(6), index=True)
+    name: Mapped[str | None] = mapped_column(String(80))
+    surv_date: Mapped[str] = mapped_column(String(10), index=True)
+    fund_visitors: Mapped[int | None] = mapped_column(Integer)
+    rece_org: Mapped[str | None] = mapped_column(String(120))
+    org_type: Mapped[str | None] = mapped_column(String(40))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ShareFloat(Base):
+    """限售解禁。数据来源：Tushare share_float。"""
+    __tablename__ = "share_floats"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(6), index=True)
+    ann_date: Mapped[str | None] = mapped_column(String(10))
+    float_date: Mapped[str] = mapped_column(String(10), index=True)
+    float_share: Mapped[float | None] = mapped_column(Float)
+    float_ratio: Mapped[float | None] = mapped_column(Float)
+    holder_name: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class PledgeStat(Base):
+    """股权质押统计。数据来源：Tushare pledge_stat。"""
+    __tablename__ = "pledge_stats"
+    __table_args__ = (UniqueConstraint("code", "end_date", name="uq_pledge_stats_code_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(6), index=True)
+    end_date: Mapped[str] = mapped_column(String(10), index=True)
+    pledge_count: Mapped[int | None] = mapped_column(Integer)
+    unrest_pledge: Mapped[float | None] = mapped_column(Float)
+    rest_pledge: Mapped[float | None] = mapped_column(Float)
+    pledge_ratio: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class Repurchase(Base):
+    """股票回购。数据来源：Tushare repurchase。"""
+    __tablename__ = "repurchases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(6), index=True)
+    ann_date: Mapped[str | None] = mapped_column(String(10))
+    end_date: Mapped[str | None] = mapped_column(String(10))
+    vol: Mapped[float | None] = mapped_column(Float)
+    amount: Mapped[float | None] = mapped_column(Float)
+    high_limit: Mapped[float | None] = mapped_column(Float)
+    low_limit: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -454,8 +599,8 @@ class PresetSkill(Base):
     __table_args__ = (UniqueConstraint("preset_id", "skill_id", name="uq_preset_skill"),)
 
     id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    preset_id: Mapped[str] = mapped_column(String(80), ForeignKey("presets.preset_id"), index=True)
-    skill_id: Mapped[str] = mapped_column(String(80), ForeignKey("skill_registry.skill_id"), index=True)
+    preset_id: Mapped[str] = mapped_column(String(80), index=True)
+    skill_id: Mapped[str] = mapped_column(String(80), index=True)
     weight: Mapped[float] = mapped_column(Float, default=1.0)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -465,7 +610,7 @@ class RecommendationRun(Base):
     __tablename__ = "recommendation_runs"
 
     run_id: Mapped[str] = mapped_column(String(60), primary_key=True)
-    preset_id: Mapped[str | None] = mapped_column(String(80), ForeignKey("presets.preset_id"), index=True)
+    preset_id: Mapped[str | None] = mapped_column(String(80), index=True)
     run_name: Mapped[str] = mapped_column(String(120), default="")
     run_mode: Mapped[str] = mapped_column(String(20), default="formal")
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
@@ -496,7 +641,7 @@ class Recommendation(Base):
     __tablename__ = "recommendations"
 
     recommendation_id: Mapped[str] = mapped_column(String(80), primary_key=True)
-    run_id: Mapped[str] = mapped_column(String(60), ForeignKey("recommendation_runs.run_id"), index=True)
+    run_id: Mapped[str] = mapped_column(String(60), index=True)
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     recommended_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     code: Mapped[str] = mapped_column(String(6), index=True)
@@ -511,6 +656,7 @@ class Recommendation(Base):
     invalid_rule: Mapped[str | None] = mapped_column(Text)
     rationale: Mapped[str | None] = mapped_column(Text)
     risk_tags_json: Mapped[str] = mapped_column(Text, default="[]")
+    info_tags_json: Mapped[str] = mapped_column(Text, default="[]")
     recent_repeat: Mapped[bool] = mapped_column(Boolean, default=False)
     feature_snapshot_json: Mapped[str] = mapped_column(Text, default="{}")
     market_context_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -522,7 +668,7 @@ class Recommendation(Base):
 class RecommendationOutcome(Base):
     __tablename__ = "recommendation_outcomes"
 
-    recommendation_id: Mapped[str] = mapped_column(String(80), ForeignKey("recommendations.recommendation_id"), primary_key=True)
+    recommendation_id: Mapped[str] = mapped_column(String(80), primary_key=True)
     horizon_days: Mapped[int] = mapped_column(Integer, default=5)
     entry_triggered: Mapped[bool] = mapped_column(Boolean, default=True)
     entry_date: Mapped[str | None] = mapped_column(String(10))
@@ -557,7 +703,7 @@ class ReviewNote(Base):
     __table_args__ = (UniqueConstraint("recommendation_id", name="uq_review_note_recommendation"),)
 
     note_id: Mapped[str] = mapped_column(String(80), primary_key=True)
-    recommendation_id: Mapped[str] = mapped_column(String(80), ForeignKey("recommendations.recommendation_id"), index=True)
+    recommendation_id: Mapped[str] = mapped_column(String(80), index=True)
     user_label: Mapped[str | None] = mapped_column(String(80))
     failure_reason: Mapped[str | None] = mapped_column(String(120))
     review_text: Mapped[str | None] = mapped_column(Text)
@@ -571,8 +717,8 @@ class WatchItem(Base):
 
     watch_id: Mapped[str] = mapped_column(String(80), primary_key=True)
     code: Mapped[str] = mapped_column(String(6), index=True)
-    source_run_id: Mapped[str] = mapped_column(String(60), ForeignKey("recommendation_runs.run_id"), index=True)
-    source_recommendation_id: Mapped[str] = mapped_column(String(80), ForeignKey("recommendations.recommendation_id"), index=True)
+    source_run_id: Mapped[str] = mapped_column(String(60), index=True)
+    source_recommendation_id: Mapped[str] = mapped_column(String(80), index=True)
     watch_status: Mapped[str] = mapped_column(String(20), default="watching")
     note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

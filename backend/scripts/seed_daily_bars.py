@@ -1,8 +1,7 @@
 """
-一次性全量回填日K线脚本。
-
-遍历全A股，每只拉取最近 N 个交易日的日K线，写入 DailyKbar 表并自动计算技术指标。
-支持断点续传、速率控制、多源 fallback。
+一次性全量回填日K线脚本（Tushare-only）。
+遍历全A股，每只拉取最近 N 个交易日的日K线（含技术指标和筹码分布），写入 DailyKbar 表。
+支持断点续传、速率控制。
 
 Usage: python scripts/seed_daily_bars.py
 """
@@ -21,19 +20,12 @@ from sqlalchemy import func, select
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.models.tables import DailyKbar, StockQuote
-from app.services.market_data import (
-    _fetch_akshare_kline,
-    _fetch_baostock_kline,
-    _fetch_eastmoney_kline,
-    _fetch_eastmoney_quotes,
-    _fetch_tencent_kline,
-    _exchange_from_code,
-)
+from app.services.tushare_client import fetch_daily_kbars, fetch_stock_list
 from app.services.market_pool import _latest_allowed_bar_date, _persist_normalized_bars
 
 COMMIT_INTERVAL = 50
-RATE_LIMIT_SECONDS = 0.35
-SEED_KLINE_COUNT = 400  # 腾讯API每次请求的K线条数（约覆盖250个交易日）
+RATE_LIMIT_SECONDS = 0.08
+SEED_KLINE_COUNT = 400
 PROGRESS_FILE = Path(__file__).resolve().parent / ".seed_daily_bars_progress.txt"
 
 
@@ -48,71 +40,24 @@ def save_progress(code: str) -> None:
         f.write(f"{code}\n")
 
 
-def fetch_bars(code: str, name: str, settings: object) -> list[dict]:
-    """拉取日K线，腾讯优先（最稳定），失败则 fallback 到其他源。"""
-    exchange = _exchange_from_code(code)
-    quote = {"code": code, "name": name, "exchange": exchange}
-
-    # 1. 腾讯 — 最可靠的免费源
-    try:
-        saved_days = settings.market_kline_days
-        settings.market_kline_days = SEED_KLINE_COUNT
-        bars = _fetch_tencent_kline(quote, settings)
-        settings.market_kline_days = saved_days
-        if len(bars) >= 30:
-            return bars
-    except Exception:
-        pass
-
-    # 2. 东方财富
-    try:
-        start_date = (date.today() - timedelta(days=int(SEED_KLINE_COUNT * 1.5))).strftime("%Y%m%d")
-        bars = _fetch_eastmoney_kline(quote, settings, start_date=start_date)
-        if len(bars) >= 30:
-            return bars
-    except Exception:
-        pass
-
-    # 3. Akshare
-    try:
-        start_date = (date.today() - timedelta(days=int(SEED_KLINE_COUNT * 1.5))).strftime("%Y%m%d")
-        bars = _fetch_akshare_kline(quote, settings, start_date=start_date)
-        if len(bars) >= 30:
-            return bars
-    except Exception:
-        pass
-
-    # 4. Baostock
-    try:
-        start_date = (date.today() - timedelta(days=int(SEED_KLINE_COUNT * 1.5))).strftime("%Y%m%d")
-        bars = _fetch_baostock_kline(quote, settings, start_date=start_date)
-        if len(bars) >= 30:
-            return bars
-    except Exception:
-        pass
-
-    return []
-
-
 def main() -> None:
     settings = get_settings()
     seed_days = getattr(settings, "market_kline_seed_days", 250)
 
     print(f"种子日K回填脚本启动")
     print(f"  交易日数目标: {seed_days} 天")
-    print(f"  每只拉取: {SEED_KLINE_COUNT} 条K线（腾讯优先）")
+    print(f"  每只拉取: {SEED_KLINE_COUNT} 条K线（Tushare）")
     print(f"  速率限制: {RATE_LIMIT_SECONDS}s / 只")
     print()
 
-    # 获取全A股代码列表 — 优先东财API，失败则用本地数据库
     codes: list[tuple[str, str]] = []
     print("正在获取股票代码列表...")
     try:
-        quotes = _fetch_eastmoney_quotes(settings)
-        codes = [(q["code"], q.get("name", "")) for q in quotes if q.get("code")]
-        print(f"  从东财API获取到 {len(codes)} 只")
+        stocks = fetch_stock_list()
+        codes = [(s["code"], s.get("name", "")) for s in stocks if s.get("code")]
+        print(f"  从Tushare获取到 {len(codes)} 只")
     except Exception as exc:
-        print(f"  东财API不可用: {exc}")
+        print(f"  Tushare不可用: {exc}")
 
     if not codes:
         print("  尝试从本地数据库获取...")
@@ -133,7 +78,6 @@ def main() -> None:
     print(f"获取到 {total} 只股票")
     print()
 
-    # 加载进度
     done_codes = load_progress()
     if done_codes:
         print(f"已从进度文件恢复: {len(done_codes)} 只已完成")
@@ -151,7 +95,6 @@ def main() -> None:
                 skip_count += 1
                 continue
 
-            # 检查本地已有条数
             existing_count = db.scalar(
                 select(func.count()).select_from(DailyKbar).where(DailyKbar.code == code)
             ) or 0
@@ -161,26 +104,26 @@ def main() -> None:
                 skip_count += 1
                 continue
 
-            # 拉取（腾讯优先，自动 fallback）
-            bars = fetch_bars(code, name, settings)
-            if not bars:
+            try:
+                bars = fetch_daily_kbars(code, days=SEED_KLINE_COUNT)
+            except Exception:
+                bars = []
+
+            if not bars or len(bars) < 30:
                 fail_count += 1
                 continue
 
-            # 持久化
             try:
                 _persist_normalized_bars(db, bars)
                 success_count += 1
-            except Exception as exc:
+            except Exception:
                 fail_count += 1
-                # 回滚失败的这只会话，继续下一只
                 db.rollback()
                 continue
 
             save_progress(code)
             done_codes.add(code)
 
-            # 每 COMMIT_INTERVAL 只提交一次
             if (idx + 1) % COMMIT_INTERVAL == 0:
                 db.commit()
                 elapsed = time.perf_counter() - start_time
@@ -194,10 +137,8 @@ def main() -> None:
                     f"{elapsed:.0f}s"
                 )
 
-            # 速率限制
             time.sleep(RATE_LIMIT_SECONDS)
 
-        # 最终提交
         db.commit()
         elapsed = time.perf_counter() - start_time
         print()
@@ -207,7 +148,6 @@ def main() -> None:
         print(f"  跳过: {skip_count} 只")
         print(f"  失败: {fail_count} 只")
 
-        # 统计最终覆盖
         code_count = db.scalar(select(func.count(func.distinct(DailyKbar.code)))) or 0
         bar_count = db.scalar(select(func.count()).select_from(DailyKbar)) or 0
         latest_bar = _latest_allowed_bar_date()

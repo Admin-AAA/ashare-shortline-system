@@ -381,49 +381,6 @@ def backfill_capital_flows(db: Session, top_n: int = 500) -> int:
         except Exception as e:
             logger.debug("Tushare资金流向 %s 失败: %s", code, e)
 
-        # 回退 eastmoney
-        if flow_data is None:
-            try:
-                from app.services.market_data import _http_get_json, _eastmoney_market_id
-                market_id = _eastmoney_market_id({"code": code})
-                secid = f"{market_id}.{code}"
-                url = (
-                    "https://push2.eastmoney.com/api/qt/stock/fflow/daykline/get"
-                    f"?secid={secid}&fields1=f1,f2,f3,f7"
-                    "&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62"
-                    "&lmt=10&klt=101"
-                )
-                data = _http_get_json(url, settings)
-                lines = data.get("data", {}).get("klines") or []
-                if lines:
-                    latest_parts = lines[0].split(",")
-                    cum_3d = cum_5d = cum_10d = 0.0
-                    for j, line in enumerate(lines):
-                        parts = line.split(",")
-                        net = float(parts[1] or 0)
-                        if j < 3:
-                            cum_3d += net
-                        if j < 5:
-                            cum_5d += net
-                        cum_10d += net
-                    total_amount = float(latest_parts[2] or 0)
-                    main_ratio = (float(latest_parts[1] or 0) / total_amount * 100) if total_amount else 0.0
-                    flow_data = {
-                        "code": code,
-                        "trade_date": latest_parts[0] if latest_parts[0] else trade_date,
-                        "main_net_inflow_yi": round(float(latest_parts[1] or 0) / 1e8, 4),
-                        "super_large_net_inflow_yi": round(float(latest_parts[3] or 0) / 1e8, 4),
-                        "large_net_inflow_yi": round(float(latest_parts[4] or 0) / 1e8, 4),
-                        "medium_net_inflow_yi": round(float(latest_parts[5] or 0) / 1e8, 4),
-                        "small_net_inflow_yi": round(float(latest_parts[6] or 0) / 1e8, 4),
-                        "main_net_inflow_ratio": round(main_ratio, 2),
-                        "cumulative_inflow_3d_yi": round(cum_3d / 1e8, 4),
-                        "cumulative_inflow_5d_yi": round(cum_5d / 1e8, 4),
-                        "cumulative_inflow_10d_yi": round(cum_10d / 1e8, 4),
-                    }
-            except Exception as e:
-                logger.debug("eastmoney资金流向 %s 失败: %s", code, e)
-
         if flow_data is None:
             failed += 1
             continue
@@ -697,6 +654,213 @@ def backfill_stk_limit(db: Session, codes: list[str]) -> int:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# Tushare 新增数据（集合竞价 / 券商金股 / 增减持 / 调研 / 解禁 / 质押 / 回购）
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def backfill_minute_kbars(db: Session, codes: list[str]) -> int:
+    """回填当日分钟K线（腾讯 ifzq API）。"""
+    from app.services.tushare_client import fetch_minute_kbars
+    from app.models.tables import MinuteKbar
+    from sqlalchemy.dialects.mysql import insert as mysql_insert
+
+    logger.info("── 开始回填分钟K线 ──")
+    total = 0
+    for i, code in enumerate(codes):
+        try:
+            bars = fetch_minute_kbars(code)
+            if bars:
+                stmt = mysql_insert(MinuteKbar).values(bars).prefix_with("IGNORE")
+                db.execute(stmt)
+                total += len(bars)
+        except Exception as e:
+            logger.debug("分钟K线 %s 失败: %s", code, e)
+        if (i + 1) % 100 == 0:
+            db.commit()
+            logger.info("  分钟K线进度: %d/%d (累计 %d 条)", i + 1, len(codes), total)
+    db.commit()
+    return total
+
+
+def backfill_auction(db: Session, codes: list[str]) -> int:
+    """回填集合竞价数据。"""
+    from app.services.tushare_client import fetch_auction
+    from app.models.tables import AuctionData
+
+    logger.info("── 开始回填集合竞价 ──")
+    total = 0
+    for i, code in enumerate(codes):
+        try:
+            row = fetch_auction(code)
+            if row:
+                existing = db.scalar(
+                    select(func.count()).select_from(AuctionData).where(
+                        and_(AuctionData.code == code, AuctionData.trade_date == row["trade_date"])
+                    )
+                )
+                if not existing:
+                    db.add(AuctionData(**row))
+                    db.flush()
+                    total += 1
+        except Exception as e:
+            logger.debug("集合竞价 %s 失败: %s", code, e)
+        if (i + 1) % 200 == 0:
+            db.commit()
+            logger.info("  集合竞价进度: %d/%d (累计 %d 条)", i + 1, len(codes), total)
+    db.commit()
+    return total
+
+
+def backfill_broker_recommend(db: Session, months: int = 3) -> int:
+    """回填券商金股。"""
+    from app.services.tushare_client import fetch_broker_recommend
+    from app.models.tables import BrokerRecommend
+
+    logger.info("── 开始回填券商金股 ──")
+    total = 0
+    today = date.today()
+    for m_offset in range(months):
+        m = (today.replace(day=1) - timedelta(days=m_offset * 31)).strftime("%Y%m")
+        try:
+            rows = fetch_broker_recommend(month=m)
+            for row in rows:
+                existing = db.scalar(
+                    select(func.count()).select_from(BrokerRecommend).where(
+                        and_(
+                            BrokerRecommend.code == row["code"],
+                            BrokerRecommend.month == row["month"],
+                            BrokerRecommend.broker == row["broker"],
+                        )
+                    )
+                )
+                if not existing:
+                    db.add(BrokerRecommend(**row))
+                    db.flush()
+                    total += 1
+        except Exception as e:
+            logger.debug("券商金股 %s 失败: %s", m, e)
+    db.commit()
+    return total
+
+
+def backfill_holder_trades(db: Session, codes: list[str]) -> int:
+    """回填股东增减持数据。"""
+    from app.services.tushare_client import fetch_holder_trade
+    from app.models.tables import HolderTrade
+
+    logger.info("── 开始回填增减持 ──")
+    total = 0
+    for i, code in enumerate(codes):
+        try:
+            rows = fetch_holder_trade(code)
+            for row in rows:
+                db.add(HolderTrade(**row))
+                total += 1
+        except Exception as e:
+            logger.debug("增减持 %s 失败: %s", code, e)
+        if (i + 1) % 100 == 0:
+            db.commit()
+            logger.info("  增减持进度: %d/%d (累计 %d 条)", i + 1, len(codes), total)
+    db.commit()
+    return total
+
+
+def backfill_surveys(db: Session, codes: list[str]) -> int:
+    """回填机构调研数据。"""
+    from app.services.tushare_client import fetch_survey
+    from app.models.tables import InstitutionalSurvey
+
+    logger.info("── 开始回填机构调研 ──")
+    total = 0
+    for i, code in enumerate(codes):
+        try:
+            rows = fetch_survey(code)
+            for row in rows:
+                db.add(InstitutionalSurvey(**row))
+                total += 1
+        except Exception as e:
+            logger.debug("机构调研 %s 失败: %s", code, e)
+        if (i + 1) % 100 == 0:
+            db.commit()
+            logger.info("  机构调研进度: %d/%d (累计 %d 条)", i + 1, len(codes), total)
+    db.commit()
+    return total
+
+
+def backfill_share_floats(db: Session, codes: list[str]) -> int:
+    """回填限售解禁数据。"""
+    from app.services.tushare_client import fetch_share_float
+    from app.models.tables import ShareFloat
+
+    logger.info("── 开始回填限售解禁 ──")
+    total = 0
+    for i, code in enumerate(codes):
+        try:
+            rows = fetch_share_float(code)
+            for row in rows:
+                db.add(ShareFloat(**row))
+                total += 1
+        except Exception as e:
+            logger.debug("限售解禁 %s 失败: %s", code, e)
+        if (i + 1) % 100 == 0:
+            db.commit()
+            logger.info("  限售解禁进度: %d/%d (累计 %d 条)", i + 1, len(codes), total)
+    db.commit()
+    return total
+
+
+def backfill_pledge_stats(db: Session, codes: list[str]) -> int:
+    """回填股权质押数据。"""
+    from app.services.tushare_client import fetch_pledge_stat
+    from app.models.tables import PledgeStat
+
+    logger.info("── 开始回填股权质押 ──")
+    total = 0
+    for i, code in enumerate(codes):
+        try:
+            row = fetch_pledge_stat(code)
+            if row:
+                existing = db.scalar(
+                    select(func.count()).select_from(PledgeStat).where(
+                        and_(PledgeStat.code == code, PledgeStat.end_date == row["end_date"])
+                    )
+                )
+                if not existing:
+                    db.add(PledgeStat(**row))
+                    db.flush()
+                    total += 1
+        except Exception as e:
+            logger.debug("股权质押 %s 失败: %s", code, e)
+        if (i + 1) % 200 == 0:
+            db.commit()
+            logger.info("  股权质押进度: %d/%d (累计 %d 条)", i + 1, len(codes), total)
+    db.commit()
+    return total
+
+
+def backfill_repurchases(db: Session, codes: list[str]) -> int:
+    """回填回购数据。"""
+    from app.services.tushare_client import fetch_repurchase
+    from app.models.tables import Repurchase
+
+    logger.info("── 开始回填回购 ──")
+    total = 0
+    for i, code in enumerate(codes):
+        try:
+            rows = fetch_repurchase(code)
+            for row in rows:
+                db.add(Repurchase(**row))
+                total += 1
+        except Exception as e:
+            logger.debug("回购 %s 失败: %s", code, e)
+        if (i + 1) % 100 == 0:
+            db.commit()
+            logger.info("  回购进度: %d/%d (累计 %d 条)", i + 1, len(codes), total)
+    db.commit()
+    return total
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # 主入口
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -708,6 +872,7 @@ def main():
     parser.add_argument("--skip-capital-flows", action="store_true")
     parser.add_argument("--skip-news", action="store_true")
     parser.add_argument("--skip-tushare-aux", action="store_true", help="跳过 Tushare 专属数据（融资融券/港股通/股东户数/涨跌停价）")
+    parser.add_argument("--skip-tushare-new", action="store_true", help="跳过 Tushare 新增数据（集合竞价/增减持/调研/解禁/质押/回购/券商金股）")
     parser.add_argument("--flow-top-n", type=int, default=500)
     parser.add_argument("--news-top-n", type=int, default=500)
     parser.add_argument("--dragon-tiger-days", type=int, default=30)
@@ -761,6 +926,37 @@ def main():
             logger.info("✓ 涨跌停价: %d 条", n)
         else:
             logger.info("⊘ 跳过 Tushare 专属数据")
+
+        if not args.skip_tushare_new:
+            logger.info("── Tushare 新增数据回填 ──")
+            top_codes = _get_top_n_codes_by_market_cap(db, n=args.tushare_aux_top_n)
+            logger.info("  目标股票数: %d", len(top_codes))
+
+            n = backfill_minute_kbars(db, top_codes)
+            logger.info("✓ 分钟K线: %d 条", n)
+
+            n = backfill_auction(db, top_codes)
+            logger.info("✓ 集合竞价: %d 条", n)
+
+            n = backfill_holder_trades(db, top_codes)
+            logger.info("✓ 增减持: %d 条", n)
+
+            n = backfill_surveys(db, top_codes)
+            logger.info("✓ 机构调研: %d 条", n)
+
+            n = backfill_share_floats(db, top_codes)
+            logger.info("✓ 限售解禁: %d 条", n)
+
+            n = backfill_pledge_stats(db, top_codes)
+            logger.info("✓ 股权质押: %d 条", n)
+
+            n = backfill_repurchases(db, top_codes)
+            logger.info("✓ 回购: %d 条", n)
+
+            n = backfill_broker_recommend(db, months=3)
+            logger.info("✓ 券商金股: %d 条", n)
+        else:
+            logger.info("⊘ 跳过 Tushare 新增数据")
 
     finally:
         db.close()

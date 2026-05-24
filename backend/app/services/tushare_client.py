@@ -16,26 +16,65 @@ import functools
 from datetime import date, timedelta
 from typing import Any
 
-import tushare as ts
+import pandas as pd
+import requests
 
 _TOKEN = "f8b05f8ee54f468220f2569afe56b4c027f1d388d164899339d394ad"
 _CUSTOM_URL = "http://101.35.233.113:8020/"
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 客户端
+# 客户端 — requests.Session 直连，杜绝 tushare 库的 TCP 悬挂问题
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+class _TushareSession:
+    """Tushare pro_api 兼容接口，底层用 requests.Session 池化连接。"""
+
+    def __init__(self, token: str, timeout: tuple[float, float] = (5, 10)):
+        self._token = token
+        self._url = _CUSTOM_URL
+        self._session = requests.Session()
+        self._timeout = timeout
+
+    def close(self) -> None:
+        self._session.close()
+
+    def __getattr__(self, api_name: str):
+        if api_name.startswith("_"):
+            raise AttributeError(api_name)
+
+        def caller(**params: Any) -> pd.DataFrame:
+            r = self._session.post(
+                f"{self._url}{api_name}",
+                json={
+                    "api_name": api_name,
+                    "token": self._token,
+                    "params": params,
+                    "fields": "",
+                },
+                timeout=self._timeout,
+            )
+            r.raise_for_status()
+            d = r.json()
+            if d.get("code") != 0:
+                msg = d.get("msg", "Unknown error")
+                raise RuntimeError(f"Tushare {api_name}: {msg}")
+            data = d.get("data")
+            if not data or "items" not in data or not data["items"]:
+                return pd.DataFrame()
+            return pd.DataFrame(data["items"], columns=data["fields"])
+
+        return caller
+
+
 @functools.lru_cache(maxsize=1)
-def get_pro() -> Any:
-    """获取 Tushare pro_api 实例（单例缓存）。"""
-    pro = ts.pro_api(_TOKEN)
-    pro._DataApi__http_url = _CUSTOM_URL
-    return pro
+def get_pro() -> _TushareSession:
+    """获取 Tushare 客户端实例（单例缓存，requests.Session 直连）。"""
+    return _TushareSession(_TOKEN, timeout=(5, 10))
 
 
 def clear_pro_cache() -> None:
-    """清除缓存的 pro_api 实例。"""
+    """清除缓存的客户端实例。"""
     get_pro.cache_clear()
 
 
@@ -108,11 +147,22 @@ def fetch_daily_kbars(
     except Exception:
         pass
 
+    # 5. stk_factor_pro — 扩展因子（ASI/ATR/BBI/DPO/OBV/PSY/VR/WR 等）
+    factor_pro_map: dict[str, dict] = {}
+    try:
+        fp = pro.stk_factor_pro(ts_code=tsc, start_date=sd, end_date=ed)
+        if fp is not None and not fp.empty:
+            for _, r in fp.iterrows():
+                factor_pro_map[str(r["trade_date"])] = dict(r)
+    except Exception:
+        pass
+
     bars: list[dict[str, Any]] = []
     for td, row in daily_rows.items():
         fac = factor_map.get(td, {})
         bas = basic_map.get(td, {})
         chp = chip_map.get(td, {})
+        fpr = factor_pro_map.get(td, {})
 
         bar: dict[str, Any] = {
             "code": code,
@@ -141,6 +191,26 @@ def fetch_daily_kbars(
             "boll_mid": _f(fac.get("boll_mid")),
             "boll_lower": _f(fac.get("boll_lower")),
             "cci": _f(fac.get("cci")),
+            # 扩展因子 (from stk_factor_pro)
+            "adj_factor": _f(fpr.get("adj_factor")),
+            "asi": _f(fpr.get("asi_bfq")),
+            "asit": _f(fpr.get("asit_bfq")),
+            "atr": _f(fpr.get("atr_bfq")),
+            "bbi": _f(fpr.get("bbi_bfq")),
+            "brar_ar": _f(fpr.get("brar_ar_bfq")),
+            "brar_br": _f(fpr.get("brar_br_bfq")),
+            "dpo": _f(fpr.get("dpo_bfq")),
+            "ema_12": _f(fpr.get("ema_12_bfq")),
+            "ema_50": _f(fpr.get("ema_50_bfq")),
+            "ma_volume_5": _f(fpr.get("ma_volume_5_bfq")),
+            "ma_volume_10": _f(fpr.get("ma_volume_10_bfq")),
+            "mtm": _f(fpr.get("mtm_bfq")),
+            "obv": _f(fpr.get("obv_bfq")),
+            "psy": _f(fpr.get("psy_bfq")),
+            "trix": _f(fpr.get("trix_bfq")),
+            "vr": _f(fpr.get("vr_bfq")),
+            "wr_6": _f(fpr.get("wr_6_bfq")),
+            "wr_10": _f(fpr.get("wr_10_bfq")),
             # 筹码分布 (from cyq_perf)
             "chip_cost_15": _f(chp.get("cost_15pct")),
             "chip_cost_50": _f(chp.get("cost_50pct")),
@@ -349,7 +419,7 @@ def fetch_concept_sectors() -> list[dict[str, Any]]:
     return result
 
 
-def fetch_concept_members(sector_code: str) -> list[dict[str, Any]]:
+def fetch_concept_members(sector_code: str, trade_date: str = "") -> list[dict[str, Any]]:
     """获取指定概念板块的成分股列表。"""
     pro = get_pro()
     try:
@@ -358,6 +428,14 @@ def fetch_concept_members(sector_code: str) -> list[dict[str, Any]]:
         return []
     if df is None or df.empty:
         return []
+    if not trade_date:
+        from datetime import date as _date, timedelta
+        td = _date.today()
+        if td.weekday() == 5:
+            td = td - timedelta(days=1)
+        elif td.weekday() == 6:
+            td = td - timedelta(days=2)
+        trade_date = td.isoformat()
     result = []
     for _, row in df.iterrows():
         code = str(row.get("con_code", "")).split(".")[0]
@@ -367,6 +445,7 @@ def fetch_concept_members(sector_code: str) -> list[dict[str, Any]]:
             "sector_code": sector_code,
             "code": code,
             "name": str(row.get("con_name", "")),
+            "trade_date": trade_date,
         })
     return result
 
@@ -479,6 +558,36 @@ def fetch_suspend(code: str) -> dict[str, Any] | None:
     }
 
 
+def fetch_top_inst(trade_date: str | None = None) -> list[dict[str, Any]]:
+    """获取龙虎榜机构席位交易明细（top_inst 接口）。"""
+    pro = get_pro()
+    td = trade_date or date.today().strftime("%Y%m%d")
+    try:
+        df = pro.top_inst(trade_date=td)
+    except Exception:
+        return []
+    if df is None or df.empty:
+        return []
+    result = []
+    for _, row in df.iterrows():
+        code = str(row.get("ts_code", "")).split(".")[0]
+        if len(code) != 6:
+            continue
+        result.append({
+            "code": code,
+            "trade_date": _fmt_date(str(row.get("trade_date", td))),
+            "institution": str(row.get("exalter", "")),
+            "side": str(row.get("side", "")),
+            "buy_amount_yi": round(_f(row.get("buy")) / 1e8, 4) if row.get("buy") is not None else 0.0,
+            "buy_rate": _f(row.get("buy_rate")),
+            "sell_amount_yi": round(_f(row.get("sell")) / 1e8, 4) if row.get("sell") is not None else 0.0,
+            "sell_rate": _f(row.get("sell_rate")),
+            "net_buy_yi": round(_f(row.get("net_buy")) / 1e8, 4) if row.get("net_buy") is not None else 0.0,
+            "reason": str(row.get("reason", "")),
+        })
+    return result
+
+
 def fetch_latest_trade_date() -> str:
     """获取最新交易日。"""
     pro = get_pro()
@@ -491,6 +600,330 @@ def fetch_latest_trade_date() -> str:
     except Exception:
         pass
     return today
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 集合竞价
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def fetch_auction(code: str, trade_date: str | None = None) -> dict[str, Any] | None:
+    """获取个股集合竞价数据。"""
+    pro = get_pro()
+    tsc = ts_code(code)
+    td = trade_date or date.today().strftime("%Y%m%d")
+    try:
+        df = pro.stk_auction(ts_code=tsc, trade_date=td)
+    except Exception:
+        return None
+    if df is None or df.empty:
+        return None
+    row = df.iloc[0]
+    return {
+        "code": code,
+        "trade_date": _fmt_date(str(row.get("trade_date", td))),
+        "vol": _f(row.get("vol")),
+        "price": _f(row.get("price")),
+        "amount": _f(row.get("amount")),
+        "pre_close": _f(row.get("pre_close")),
+        "turnover_rate": _f(row.get("turnover_rate")),
+        "volume_ratio": _f(row.get("volume_ratio")),
+        "float_share": _f(row.get("float_share")),
+    }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 量化因子
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def fetch_factor_pro(code: str, days: int = 90) -> list[dict[str, Any]]:
+    """获取个股量化因子（stk_factor_pro）。"""
+    pro = get_pro()
+    tsc = ts_code(code)
+    sd = (date.today() - timedelta(days=days * 3)).strftime("%Y%m%d")
+    ed = date.today().strftime("%Y%m%d")
+    try:
+        df = pro.stk_factor_pro(ts_code=tsc, start_date=sd, end_date=ed)
+    except Exception:
+        return []
+    if df is None or df.empty:
+        return []
+    df = df.sort_values("trade_date")
+    if days and len(df) > days:
+        df = df.tail(days)
+    result = []
+    for _, row in df.iterrows():
+        result.append({
+            "code": code,
+            "trade_date": _fmt_date(str(row.get("trade_date", ""))),
+            "adj_factor": _f(row.get("adj_factor")),
+            "asi": _f(row.get("asi_bfq")),
+            "asit": _f(row.get("asit_bfq")),
+            "atr": _f(row.get("atr_bfq")),
+            "bbi": _f(row.get("bbi_bfq")),
+            "bias_6": _f(row.get("bias_6_bfq")),
+            "bias_12": _f(row.get("bias_12_bfq")),
+            "bias_24": _f(row.get("bias_24_bfq")),
+            "brar_ar": _f(row.get("brar_ar_bfq")),
+            "brar_br": _f(row.get("brar_br_bfq")),
+            "dpo": _f(row.get("dpo_bfq")),
+            "ema_12": _f(row.get("ema_12_bfq")),
+            "ema_50": _f(row.get("ema_50_bfq")),
+            "kdj_k": _f(row.get("kdj_k_bfq")),
+            "kdj_d": _f(row.get("kdj_d_bfq")),
+            "kdj_j": _f(row.get("kdj_j_bfq")),
+            "ma_volume_5": _f(row.get("ma_volume_5_bfq")),
+            "ma_volume_10": _f(row.get("ma_volume_10_bfq")),
+            "macd_dif": _f(row.get("macd_dif_bfq")),
+            "macd_dea": _f(row.get("macd_dea_bfq")),
+            "macd": _f(row.get("macd_bfq")),
+            "mtm": _f(row.get("mtm_bfq")),
+            "obv": _f(row.get("obv_bfq")),
+            "psy": _f(row.get("psy_bfq")),
+            "rsi_6": _f(row.get("rsi_6_bfq")),
+            "rsi_12": _f(row.get("rsi_12_bfq")),
+            "rsi_24": _f(row.get("rsi_24_bfq")),
+            "boll_upper": _f(row.get("boll_upper_bfq")),
+            "boll_mid": _f(row.get("boll_mid_bfq")),
+            "boll_lower": _f(row.get("boll_lower_bfq")),
+            "trix": _f(row.get("trix_bfq")),
+            "vr": _f(row.get("vr_bfq")),
+            "wr_6": _f(row.get("wr_6_bfq")),
+            "wr_10": _f(row.get("wr_10_bfq")),
+        })
+    return result
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 增减持
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def fetch_holder_trade(code: str) -> list[dict[str, Any]]:
+    """获取股东增减持数据。"""
+    pro = get_pro()
+    tsc = ts_code(code)
+    try:
+        df = pro.stk_holdertrade(ts_code=tsc)
+    except Exception:
+        return []
+    if df is None or df.empty:
+        return []
+    result = []
+    for _, row in df.iterrows():
+        result.append({
+            "code": code,
+            "ann_date": _fmt_date(str(row.get("ann_date", ""))),
+            "holder_name": str(row.get("holder_name", "")),
+            "holder_type": str(row.get("holder_type", "")),
+            "in_de": str(row.get("in_de", "")),
+            "change_vol": _f(row.get("change_vol")),
+            "change_ratio": _f(row.get("change_ratio")),
+            "after_ratio": _f(row.get("after_ratio")),
+            "avg_price": _f(row.get("avg_price")),
+        })
+    return result
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 机构调研
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def fetch_survey(code: str) -> list[dict[str, Any]]:
+    """获取机构调研记录。"""
+    pro = get_pro()
+    tsc = ts_code(code)
+    try:
+        df = pro.stk_surv(ts_code=tsc)
+    except Exception:
+        return []
+    if df is None or df.empty:
+        return []
+    result = []
+    for _, row in df.iterrows():
+        result.append({
+            "code": code,
+            "name": str(row.get("name", "")),
+            "surv_date": _fmt_date(str(row.get("surv_date", ""))),
+            "fund_visitors": int(_f(row.get("fund_visitors"))),
+            "rece_org": str(row.get("rece_org", "")),
+            "org_type": str(row.get("org_type", "")),
+        })
+    return result
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 回购
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def fetch_repurchase(code: str) -> list[dict[str, Any]]:
+    """获取股票回购数据。"""
+    pro = get_pro()
+    tsc = ts_code(code)
+    try:
+        df = pro.repurchase(ts_code=tsc)
+    except Exception:
+        return []
+    if df is None or df.empty:
+        return []
+    result = []
+    for _, row in df.iterrows():
+        result.append({
+            "code": code,
+            "ann_date": _fmt_date(str(row.get("ann_date", ""))),
+            "end_date": _fmt_date(str(row.get("end_date", ""))),
+            "vol": _f(row.get("vol")),
+            "amount": _f(row.get("amount")),
+            "high_limit": _f(row.get("high_limit")),
+            "low_limit": _f(row.get("low_limit")),
+        })
+    return result
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 质押统计
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def fetch_pledge_stat(code: str) -> dict[str, Any] | None:
+    """获取股权质押统计。"""
+    pro = get_pro()
+    tsc = ts_code(code)
+    try:
+        df = pro.pledge_stat(ts_code=tsc)
+    except Exception:
+        return None
+    if df is None or df.empty:
+        return None
+    latest = df.sort_values("end_date").iloc[-1]
+    return {
+        "code": code,
+        "end_date": _fmt_date(str(latest.get("end_date", ""))),
+        "pledge_count": int(_f(latest.get("pledge_count"))),
+        "unrest_pledge": _f(latest.get("unrest_pledge")),
+        "rest_pledge": _f(latest.get("rest_pledge")),
+        "pledge_ratio": _f(latest.get("pledge_ratio")),
+    }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 限售解禁
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def fetch_share_float(code: str) -> list[dict[str, Any]]:
+    """获取限售股解禁数据。"""
+    pro = get_pro()
+    tsc = ts_code(code)
+    try:
+        df = pro.share_float(ts_code=tsc)
+    except Exception:
+        return []
+    if df is None or df.empty:
+        return []
+    result = []
+    for _, row in df.iterrows():
+        result.append({
+            "code": code,
+            "ann_date": _fmt_date(str(row.get("ann_date", ""))),
+            "float_date": _fmt_date(str(row.get("float_date", ""))),
+            "float_share": _f(row.get("float_share")),
+            "float_ratio": _f(row.get("float_ratio")),
+            "holder_name": str(row.get("holder_name", "")),
+        })
+    return result
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 券商金股
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def fetch_broker_recommend(month: str | None = None) -> list[dict[str, Any]]:
+    """获取券商金股推荐。"""
+    pro = get_pro()
+    m = month or date.today().strftime("%Y%m")
+    try:
+        df = pro.broker_recommend(month=m)
+    except Exception:
+        return []
+    if df is None or df.empty:
+        return []
+    result = []
+    for _, row in df.iterrows():
+        code = str(row.get("ts_code", "")).split(".")[0]
+        if len(code) != 6:
+            continue
+        result.append({
+            "code": code,
+            "name": str(row.get("name", "")),
+            "month": str(row.get("month", m)),
+            "broker": str(row.get("broker", "")),
+        })
+    return result
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 分钟K线（腾讯 ifzq API — Tushare stk_mins 需特殊权限）
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def fetch_minute_kbars(code: str, trade_date: str | None = None) -> list[dict[str, Any]]:
+    """获取个股1分钟K线数据（腾讯 ifzq.gtimg.cn）。"""
+    import httpx
+
+    market = "sh" if code.startswith(("6", "9")) else "sz"
+    td = trade_date or date.today().strftime("%Y-%m-%d")
+
+    url = f"https://ifzq.gtimg.cn/appstock/app/minute/query?_var=min_data&code={market}{code}"
+    try:
+        resp = httpx.get(url, timeout=10.0, headers={"Referer": "https://gu.qq.com/"})
+        resp.raise_for_status()
+        text = resp.text
+    except Exception:
+        return []
+
+    # 腾讯返回格式: min_data={...json...}
+    if not text.startswith("min_data="):
+        return []
+    try:
+        import json
+        data = json.loads(text[len("min_data="):])
+    except Exception:
+        return []
+
+    qt_key = f"{market}{code}"
+    minute_data = data.get("data", {}).get(qt_key, {}).get("data", {}).get("data")
+    if not minute_data:
+        return []
+
+    result = []
+    for line in minute_data:
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        time_str = parts[0]  # HHMM
+        price = float(parts[1])
+        vol = float(parts[2])
+        amount = float(parts[3]) if len(parts) >= 4 else 0.0
+        # 格式化时间为 HH:MM:SS
+        formatted_time = f"{time_str[:2]}:{time_str[2:]}:00"
+        trade_time = f"{td} {formatted_time}"
+        result.append({
+            "code": code,
+            "trade_date": td,
+            "trade_time": trade_time,
+            "open": price,
+            "close": price,
+            "high": price,
+            "low": price,
+            "volume": vol,
+            "amount": amount,
+        })
+    return result
 
 
 # ═════════════════════════════════════════════════════════════════════════════
