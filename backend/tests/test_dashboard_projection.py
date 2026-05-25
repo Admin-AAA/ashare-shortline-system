@@ -17,6 +17,7 @@ from app.schemas.dashboard import (
     SkillReviewSummary,
 )
 from app.api.dashboard import compose_overview
+from app.services.candidates.trace import candidate_trace_row
 from app.services.recommendations.projection import (
     build_cockpit_recommendation,
     build_market_temperature,
@@ -26,6 +27,7 @@ from app.services.recommendations.projection import (
     build_skill_reviews,
 )
 from app.services.recommendations.explanation import consensus_label
+from app.services.runs.progress import is_resumable_status, progress_pct
 
 
 def test_dashboard_overview_contract_accepts_cockpit_sections():
@@ -400,3 +402,23 @@ def test_compose_overview_builds_all_cockpit_sections():
     assert overview.market.trade_date == "2026-05-25"
     assert overview.current_run.status == "completed"
     assert overview.data_health["status"] == "ready"
+
+
+def test_progress_helpers_are_stable():
+    assert progress_pct(5, 10) == 50.0
+    assert progress_pct(0, 0) is None
+    assert is_resumable_status("interrupted") is True
+    assert is_resumable_status("completed") is False
+
+
+def test_candidate_trace_row_normalizes_metrics():
+    row = candidate_trace_row(
+        code="000001",
+        stage="skill_gate",
+        passed=True,
+        reason="规则通过",
+        metrics={"amount_yi": 8.2},
+    )
+
+    assert row["code"] == "000001"
+    assert row["metrics"]["amount_yi"] == 8.2

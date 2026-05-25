@@ -76,6 +76,7 @@ from app.services.outcome_service import (
 )
 from app.services.prefilter_service import apply_prefilters
 from app.services.research_context import build_research_contexts
+from app.services.runs.progress import progress_pct as compute_progress_pct
 
 
 BOOTSTRAP_CACHE_TTL_SECONDS = 30.0
@@ -2077,7 +2078,7 @@ def _serialize_run_summary_from_cache(run: RecommendationRun, preset: Preset | N
         heartbeat_age_seconds = max(0, int((datetime.now(timezone.utc).replace(tzinfo=None) - run.heartbeat_at).total_seconds()))
     progress_total = int(run.progress_total or 0)
     progress_current = int(run.progress_current or 0)
-    progress_pct = round(min(1.0, progress_current / progress_total), 4) if progress_total > 0 else None
+    progress_pct = compute_progress_pct(progress_current, progress_total)
     is_stale = (
         run.status in RUN_ACTIVE_STATUSES
         and heartbeat_age_seconds is not None
@@ -2134,7 +2135,7 @@ def _serialize_run_summary(db: Session, run: RecommendationRun) -> dict[str, Any
         heartbeat_age_seconds = max(0, int((datetime.now(timezone.utc).replace(tzinfo=None) - run.heartbeat_at).total_seconds()))
     progress_total = int(run.progress_total or 0)
     progress_current = int(run.progress_current or 0)
-    progress_pct = round(min(1.0, progress_current / progress_total), 4) if progress_total > 0 else None
+    progress_pct = compute_progress_pct(progress_current, progress_total)
     is_stale = (
         run.status in RUN_ACTIVE_STATUSES
         and heartbeat_age_seconds is not None
