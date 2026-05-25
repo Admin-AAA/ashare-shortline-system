@@ -4095,7 +4095,7 @@ def _ensure_default_presets(db: Session, skills: list[StrategySkill]) -> None:
     has_changes = False
     for item in DEFAULT_PRESETS:
         preset = db.get(Preset, item["preset_id"])
-        default_data_source = _default_data_source_for_run_mode(item["run_mode"])
+        configured_data_source = _normalize_data_source(item.get("data_source") or _default_data_source_for_run_mode(item["run_mode"]))
         if preset is None:
             preset = Preset(
                 preset_id=item["preset_id"],
@@ -4108,7 +4108,7 @@ def _ensure_default_presets(db: Session, skills: list[StrategySkill]) -> None:
                 score_line=item["score_line"],
                 output_count=item["output_count"],
                 bucket_limits_json="{}",
-                data_source=default_data_source,
+                data_source=configured_data_source,
                 hide_recent_repeats=item["hide_recent_repeats"],
                 status="active",
             )
@@ -4123,8 +4123,8 @@ def _ensure_default_presets(db: Session, skills: list[StrategySkill]) -> None:
             has_changes = True
             continue
 
-        if preset.run_mode == "formal" and preset.data_source == DATA_SOURCE_LOCAL_POOL:
-            preset.data_source = default_data_source
+        if not str(preset.data_source or "").strip():
+            preset.data_source = configured_data_source
             has_changes = True
         if float(preset.score_line or 0) <= 0:
             preset.score_line = float(item["score_line"])
