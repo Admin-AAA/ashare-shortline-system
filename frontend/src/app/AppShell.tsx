@@ -1,5 +1,6 @@
 import { RefreshCcw, SunMoon } from "lucide-react";
 import { useState } from "react";
+import ControlCenterPage from "../features/control/ControlCenterPage";
 import DashboardPage from "../features/dashboard/DashboardPage";
 import { useThemePreference } from "../shared/theme/useThemePreference";
 import { NAV_ITEMS, type CockpitSection } from "./nav";
@@ -24,6 +25,7 @@ export default function AppShell() {
             <button
               key={item.section}
               className={item.section === section ? "active" : ""}
+              aria-pressed={item.section === section}
               onClick={() => setSection(item.section)}
               type="button"
             >
@@ -50,7 +52,7 @@ export default function AppShell() {
             </button>
           </div>
         </header>
-        <DashboardPage compactMode={section === "dashboard" ? undefined : section} />
+        {section === "control" ? <ControlCenterPage /> : <DashboardPage section={section} />}
       </main>
     </div>
   );
