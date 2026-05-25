@@ -6,7 +6,7 @@ from typing import Any
 def summarize_alerts(alerts: list[dict[str, Any]]) -> dict[str, Any]:
     summary = {"high": 0, "medium": 0, "low": 0, "messages": []}
     for alert in alerts:
-        severity = str(alert.get("severity") or "low")
+        severity = str(alert.get("severity") or _severity_from_alert_level(alert.get("alert_level")) or "low")
         if severity not in {"high", "medium", "low"}:
             severity = "low"
         summary[severity] += 1
@@ -14,6 +14,16 @@ def summarize_alerts(alerts: list[dict[str, Any]]) -> dict[str, Any]:
         if message:
             summary["messages"].append(message)
     return summary
+
+
+def _severity_from_alert_level(level: Any) -> str | None:
+    if level == "critical":
+        return "high"
+    if level == "warning":
+        return "medium"
+    if level == "info":
+        return "low"
+    return None
 
 
 def summarize_tasks(tasks: list[dict[str, Any]]) -> dict[str, Any]:

@@ -16,7 +16,7 @@ from app.schemas.dashboard import (
     RunProgress,
     SkillReviewSummary,
 )
-from app.api.dashboard import compose_overview
+from app.api.dashboard import build_validation_summary, compose_overview, serialize_market_snapshot_row, serialize_run_progress_row
 from app.services.candidates.trace import candidate_trace_row
 from app.services.recommendations.projection import (
     build_cockpit_recommendation,
@@ -402,6 +402,52 @@ def test_compose_overview_builds_all_cockpit_sections():
     assert overview.market.trade_date == "2026-05-25"
     assert overview.current_run.status == "completed"
     assert overview.data_health["status"] == "ready"
+
+
+def test_dashboard_serializers_use_lightweight_rows():
+    market = serialize_market_snapshot_row(
+        SimpleNamespace(
+            trade_date="2026-05-25",
+            sample_count=100,
+            up_count=50,
+            down_count=40,
+            limit_up_count=5,
+            limit_down_count=1,
+            main_industries_json=json.dumps(["机器人"], ensure_ascii=False),
+            breadth_json=json.dumps({"market_regime": "active"}, ensure_ascii=False),
+        )
+    )
+    run = serialize_run_progress_row(
+        SimpleNamespace(
+            run_id="run-1",
+            status="running",
+            progress_phase="skill_review",
+            checkpoint_phase=None,
+            progress_current=2,
+            progress_total=4,
+            progress_message="审查中",
+            heartbeat_at=None,
+        )
+    )
+
+    assert market["main_industries"] == ["机器人"]
+    assert market["breadth"]["market_regime"] == "active"
+    assert run["progress_pct"] == 50.0
+
+
+def test_build_validation_summary_uses_cached_pool_messages():
+    validation = build_validation_summary(
+        {
+            "recommendation_readiness": {
+                "status": "blocked",
+                "messages": ["日K覆盖不足"],
+            }
+        }
+    )
+
+    assert validation["last_status"] == "blocked"
+    assert validation["alerts"]["medium"] == 1
+    assert validation["alerts"]["messages"] == ["日K覆盖不足"]
 
 
 def test_progress_helpers_are_stable():
