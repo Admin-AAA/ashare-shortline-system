@@ -161,6 +161,76 @@ export type RunSummary = {
   };
 };
 
+export type DataQualitySummary = {
+  quote_status: string;
+  quote_source_count: number;
+  kline_status: string;
+  kline_days: number;
+  auxiliary_coverage: number;
+  missing_fields: string[];
+};
+
+export type MarketTemperature = {
+  trade_date: string;
+  sample_count: number;
+  up_count: number;
+  down_count: number;
+  limit_up_count: number;
+  limit_down_count: number;
+  up_ratio: number;
+  heat_score: number;
+  regime: string;
+  main_industries: string[];
+};
+
+export type CockpitRecommendation = {
+  recommendation_id: string;
+  run_id: string;
+  trade_date: string;
+  code: string;
+  name: string;
+  industry?: string | null;
+  final_score: number;
+  score_gap?: number | null;
+  bucket: string;
+  setup_type?: string | null;
+  rationale: string;
+  risk_level: "low" | "medium" | "high" | "unknown";
+  risk_tags: string[];
+  info_tags: string[];
+  status: string;
+  watch_status: string;
+  consensus_label: string;
+  data_quality: DataQualitySummary;
+};
+
+export type RiskRadar = {
+  high: number;
+  medium: number;
+  info: number;
+  tags: string[];
+};
+
+export type RunProgress = {
+  run_id?: string | null;
+  status: string;
+  phase?: string | null;
+  progress_pct?: number | null;
+  message: string;
+  heartbeat_stale: boolean;
+  resumable: boolean;
+};
+
+export type DashboardOverview = {
+  market: MarketTemperature;
+  recommendations: CockpitRecommendation[];
+  risk_radar: RiskRadar;
+  current_run: RunProgress;
+  data_health: Record<string, unknown>;
+  task_health: Record<string, unknown>;
+  validation: Record<string, unknown>;
+};
+
 export type PoolRefreshResult = {
   refreshed: number;
   meta: {
