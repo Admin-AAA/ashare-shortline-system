@@ -1,3 +1,6 @@
+import json
+from types import SimpleNamespace
+
 import pytest
 from pydantic import ValidationError
 
@@ -12,6 +15,13 @@ from app.schemas.dashboard import (
     RiskRadar,
     RunProgress,
     SkillReviewSummary,
+)
+from app.services.recommendations.projection import (
+    build_cockpit_recommendation,
+    build_market_temperature,
+    build_recommendation_explanation,
+    build_risk_radar,
+    build_run_progress,
 )
 
 
@@ -184,3 +194,119 @@ def test_cockpit_recommendation_rejects_invalid_risk_level():
             name="平安银行",
             risk_level="extreme",
         )
+
+
+def test_build_market_temperature_calculates_heat_and_ratio():
+    snapshot = {
+        "trade_date": "2026-05-25",
+        "sample_count": 100,
+        "up_count": 62,
+        "down_count": 30,
+        "limit_up_count": 7,
+        "limit_down_count": 1,
+        "main_industries": ["机器人"],
+        "breadth": {"market_regime": "active"},
+    }
+
+    result = build_market_temperature(snapshot)
+
+    assert result.up_ratio == 0.62
+    assert result.heat_score > 60
+    assert result.regime == "active"
+
+
+def test_build_cockpit_recommendation_normalizes_json_fields():
+    rec = SimpleNamespace(
+        recommendation_id="rec-1",
+        run_id="run-1",
+        trade_date="2026-05-25",
+        code="000001",
+        name="平安银行",
+        industry="银行",
+        final_score=82.0,
+        setup_type="趋势突破",
+        rationale="规则和 Agent 共识支持。",
+        risk_tags_json=json.dumps(["短线放量"], ensure_ascii=False),
+        info_tags_json=json.dumps(["日K覆盖完整"], ensure_ascii=False),
+        status="pending",
+        recent_repeat=False,
+        feature_snapshot_json=json.dumps(
+            {
+                "score_line_meta": {"effective_score_line": 72.0},
+                "data_quality": {
+                    "quote_cache_status": "fresh",
+                    "quote_source_count": 2,
+                    "kline_cache_status": "covered",
+                    "kline_days": 90,
+                },
+            },
+            ensure_ascii=False,
+        ),
+        skill_breakdown_json=json.dumps(
+            [
+                {
+                    "strategy_id": "skill-a",
+                    "strategy_name": "Skill A",
+                    "score": 80,
+                    "agent_skill_review": {"stance": "support"},
+                }
+            ],
+            ensure_ascii=False,
+        ),
+    )
+    watch = SimpleNamespace(watch_status="watching")
+
+    result = build_cockpit_recommendation(rec, watch)
+
+    assert result.score_gap == 10.0
+    assert result.risk_level == "medium"
+    assert result.consensus_label == "一致"
+    assert result.data_quality.quote_source_count == 2
+
+
+def test_build_run_progress_marks_stale_and_resumable():
+    run = {
+        "run_id": "run-1",
+        "status": "interrupted",
+        "progress_phase": "skill_review",
+        "progress_pct": 45,
+        "progress_message": "审查中",
+        "is_stale": True,
+    }
+
+    result = build_run_progress(run)
+
+    assert result.status == "interrupted"
+    assert result.heartbeat_stale is True
+    assert result.resumable is True
+
+
+def test_build_risk_radar_counts_levels():
+    recs = [
+        CockpitRecommendation(
+            recommendation_id="r1",
+            run_id="run",
+            trade_date="2026-05-25",
+            code="000001",
+            name="A",
+            risk_level="high",
+            risk_tags=["高位加速"],
+            data_quality=DataQualitySummary(),
+        ),
+        CockpitRecommendation(
+            recommendation_id="r2",
+            run_id="run",
+            trade_date="2026-05-25",
+            code="000002",
+            name="B",
+            risk_level="medium",
+            risk_tags=["放量过快"],
+            data_quality=DataQualitySummary(),
+        ),
+    ]
+
+    radar = build_risk_radar(recs)
+
+    assert radar.high == 1
+    assert radar.medium == 1
+    assert radar.tags == ["高位加速", "放量过快"]
