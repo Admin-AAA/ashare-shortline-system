@@ -8,7 +8,9 @@ import { useDashboardViewModel } from "./hooks/useDashboardViewModel";
 import type { CockpitSection } from "../../app/nav";
 import type { CockpitRecommendation, DashboardOverview } from "../../types";
 
-export default function DashboardPage({ section }: { section: CockpitSection }) {
+type DashboardSection = Exclude<CockpitSection, "control">;
+
+export default function DashboardPage({ section }: { section: DashboardSection }) {
   const { data, loading, error, refresh } = useDashboardViewModel();
 
   if (loading) return <div className="cockpit-panel loading-state">正在加载驾驶舱数据</div>;

@@ -1,5 +1,6 @@
 import { RefreshCcw, SunMoon } from "lucide-react";
 import { useState } from "react";
+import ControlCenterPage from "../features/control/ControlCenterPage";
 import DashboardPage from "../features/dashboard/DashboardPage";
 import { useThemePreference } from "../shared/theme/useThemePreference";
 import { NAV_ITEMS, type CockpitSection } from "./nav";
@@ -51,7 +52,7 @@ export default function AppShell() {
             </button>
           </div>
         </header>
-        <DashboardPage section={section} />
+        {section === "control" ? <ControlCenterPage /> : <DashboardPage section={section} />}
       </main>
     </div>
   );
