@@ -28,7 +28,7 @@ def build_market_temperature(snapshot: dict[str, Any]) -> MarketTemperature:
     limit_down_count = int(_get(snapshot, "limit_down_count", 0) or 0)
     up_ratio = round(up_count / sample_count, 3) if sample_count else 0
     heat_score = round(
-        min(100, max(0, up_ratio * 100 + limit_up_count * 0.4 - limit_down_count * 0.8)),
+        min(100.0, max(0.0, up_ratio * 70 + limit_up_count * 0.4 - limit_down_count * 0.8)),
         2,
     )
     breadth = _get(snapshot, "breadth", {}) or {}

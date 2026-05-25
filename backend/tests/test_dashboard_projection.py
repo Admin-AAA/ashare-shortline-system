@@ -211,7 +211,7 @@ def test_build_market_temperature_calculates_heat_and_ratio():
     result = build_market_temperature(snapshot)
 
     assert result.up_ratio == 0.62
-    assert result.heat_score > 60
+    assert result.heat_score == 45.4
     assert result.regime == "active"
 
 
