@@ -1,12 +1,13 @@
 # AShare Shortline System
 
-A 股短线推荐研究工作台，支持多数据源行情采集、多技能策略打分、本地行情池缓存、结果回溯统计。
+A 股短线交易驾驶舱，支持多数据源行情采集、多技能策略打分、本地行情池缓存、可解释推荐、结果回溯统计。
 
 核心目标：
 - 用真实行情源生成候选与分数，正式推荐不使用样例数据
 - 用 Skill（技能）做结构化选股与风控，保留每次审查的来源和 hash
 - 每条推荐落库并自动回填结果
-- 前端支持今日机会池、历史推荐、单票复盘、Skill 中心、统计看板
+- 前端默认进入短线交易驾驶舱，聚合市场温度、主线强度、龙头候选、风险雷达、推荐运行、数据池健康、调度和复盘反馈。
+- 驾驶舱支持黑色/白色主题切换，主题选择保存在浏览器本地。
 - 内置技术评分层，覆盖趋势、乖离、量能、支撑、MACD、RSI 等指标
 - 统计按 Skill、行情状态、行业、买点拆分，便于实验、晋级和淘汰
 
@@ -77,11 +78,14 @@ ashare-shortline-system/
 │   └── logs/                   # 运行日志（自动创建，Git 忽略）
 ├── frontend/
 │   ├── src/
-│   │   ├── App.tsx             # 主应用（SPA 单文件）
+│   │   ├── App.tsx             # 主应用入口（AuthGate + AppShell）
+│   │   ├── app/                # 驾驶舱 shell、鉴权、导航
+│   │   ├── features/dashboard/ # 驾驶舱视图模型与业务模块
+│   │   ├── shared/theme/       # 主题初始化与持久化
 │   │   ├── main.tsx            # React 入口
 │   │   ├── types.ts            # TypeScript 类型
 │   │   ├── api/client.ts       # API 客户端
-│   │   └── styles/app.css      # 全局样式
+│   │   └── styles/             # tokenized cockpit styles
 │   ├── vite.config.ts
 │   └── package.json
 └── docs/
@@ -130,8 +134,8 @@ npm run dev
 ┌─────────────────────────────┐
 │  本地统一行情池 (market_pool)  │
 │  ┌─────────────────────────┐ │
-│  │ 行情缓存 (UnifiedQuote)  │ │  ← 8 小时 TTL，过期才刷新
-│  │ K线缓存 (DailyBar)      │ │  ← 20 小时 TTL
+│  │ 报价缓存 (StockQuote)   │ │  ← 8 小时 TTL，过期才刷新
+│  │ 日K缓存 (DailyKbar)     │ │  ← 20 小时 TTL
 │  └─────────────────────────┘ │
 └─────────────────────────────┘
     │
@@ -162,7 +166,7 @@ npm run dev
 
 系统内置本地统一行情池（`market_pool.py`），运行逻辑：
 
-1. **仅本地池**：选择 `local_pool` 时只从 MySQL 本地池的 `UnifiedQuote` 和 `DailyBar` 读取，不自动请求外部行情源；本地报价或日K覆盖不足时直接停止
+1. **仅本地池**：选择 `local_pool` 时只从 MySQL 本地池的 `StockQuote` / `stock_quotes` 和 `DailyKbar` / `daily_kbars` 读取，不自动请求外部行情源；本地报价或日K覆盖不足时直接停止
 2. **本地池优先**：选择 `local_pool_preferred` 时先读本地池，本地池不足或日K未覆盖报价日期时才自动刷新外部源并写回本地池
 3. **仅实时数据源**：选择 `realtime` 时直接访问 THS/腾讯/东方财富等外部真实源，不依赖本地池缓存
 4. **显式补池**：本地数据池页面的“补齐本地池/拉取外部源”会主动刷新外部源；系统不会使用模拟数据
@@ -172,6 +176,7 @@ npm run dev
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/health` | 健康检查 |
+| GET | `/api/dashboard/overview` | 驾驶舱首页聚合状态 |
 | GET | `/api/home/bootstrap` | 首页状态（行情快照 + 技能 + 最近运行） |
 | GET | `/api/presets` | 预设组合列表 |
 | POST | `/api/presets` | 创建预设 |

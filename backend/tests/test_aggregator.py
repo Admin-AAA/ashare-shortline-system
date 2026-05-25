@@ -301,7 +301,7 @@ def test_aggregate_records_missing_theme_and_news_risks():
 
     card = aggregate(stock, signals, market_score=70, agent_review_score=75)
 
-    assert "多维度数据缺失（公告/龙虎榜/题材等），置信度受影响" in card["risk_flags"]
+    assert "多维度数据缺失（公告/龙虎榜/题材等），置信度受影响" in card["info_tags"]
 
 
 def test_aggregate_consensus_tags_empty_when_no_skills():

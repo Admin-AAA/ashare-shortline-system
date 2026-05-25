@@ -26,6 +26,7 @@ import type {
   SetupStatsRow,
   StatsOverview
 } from "../types";
+import { createDashboardApi } from "./dashboard";
 import { logger } from "../utils/logger";
 
 type PresetPayload = Omit<Partial<Preset>, "skills"> & {
@@ -135,6 +136,7 @@ export function createPollController(): AbortController {
 export const api = {
   authStatus: () => request<AuthStatus>("/api/auth/status"),
   login: (password: string) => request<{ ok: boolean }>("/api/auth/login", json("POST", { password })),
+  dashboard: createDashboardApi(request),
 
   bootstrap: () => request<HomeBootstrap>("/api/home/bootstrap"),
   initial: () => request<HomeInitialState>("/api/home/initial"),

@@ -64,15 +64,45 @@ def local_pool(
     b_offset: int = 0,
     cache_ttl: int = 30,
 ):
+    return get_cached_local_pool_status(
+        db,
+        u_limit=u_limit,
+        u_offset=u_offset,
+        b_limit=b_limit,
+        b_offset=b_offset,
+        cache_ttl=cache_ttl,
+        include_paginated=True,
+    )
+
+
+def get_cached_local_pool_status(
+    db: Session,
+    *,
+    u_limit: int = 50,
+    u_offset: int = 0,
+    b_limit: int = 50,
+    b_offset: int = 0,
+    cache_ttl: int = 30,
+    include_paginated: bool = True,
+    cache_only: bool = False,
+) -> dict:
     now = time.monotonic()
     with _pool_status_lock:
         cached = _pool_status_cache.get(_POOL_CACHE_KEY)
-        if cached and (now - cached["ts"]) < cache_ttl:
+        if cached and ((now - cached["ts"]) < cache_ttl or cache_only):
             data = dict(cached["data"])
-            data["unified_quotes"], data["daily_bars"] = _load_paginated(
-                db, u_limit, u_offset, b_limit, b_offset, cached.get("_all_quote_rows")
-            )
+            if include_paginated:
+                data["unified_quotes"], data["daily_bars"] = _load_paginated(
+                    db, u_limit, u_offset, b_limit, b_offset, cached.get("_all_quote_rows")
+                )
+            else:
+                data["unified_quotes"] = []
+                data["daily_bars"] = []
+            data["cache_stale"] = bool((now - cached["ts"]) >= cache_ttl)
             return data
+
+    if cache_only:
+        return _unready_pool_status("数据池缓存尚未预热")
 
     try:
         data = get_local_pool_status(
@@ -84,6 +114,10 @@ def local_pool(
         )
         with _pool_status_lock:
             _pool_status_cache[_POOL_CACHE_KEY] = {"ts": time.monotonic(), "data": data}
+        if not include_paginated:
+            data = dict(data)
+            data["unified_quotes"] = []
+            data["daily_bars"] = []
         return data
     except Exception as exc:
         logger.exception("local pool status failed")

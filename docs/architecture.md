@@ -4,18 +4,21 @@
 
 ```mermaid
 flowchart LR
-  user["用户"] --> browser["浏览器<br/>React + Vite 工作台"]
+  user["用户"] --> browser["浏览器<br/>React + Vite 驾驶舱"]
 
   subgraph frontend["前端 frontend"]
-    app["App.tsx<br/>工作台/机会池/历史/Skill/统计"]
+    app["AppShell<br/>驾驶舱 shell / 主题 / 导航"]
+    dashboard_ui["DashboardPage<br/>市场温度/龙头候选/风险雷达"]
     client["api/client.ts<br/>统一 API 客户端"]
-    app --> client
+    app --> dashboard_ui
+    dashboard_ui --> client
   end
 
   browser --> app
   client --> api["FastAPI<br/>app/main.py"]
 
   subgraph backend["后端 backend"]
+    api --> dashboard["dashboard<br/>驾驶舱聚合状态"]
     api --> home["home<br/>启动态"]
     api --> presets["presets<br/>预设组合"]
     api --> runs["runs<br/>推荐运行"]
@@ -24,7 +27,8 @@ flowchart LR
     api --> stats_api["stats<br/>统计看板"]
     api --> outcomes_api["outcomes<br/>结果标注"]
 
-    home --> workbench["workbench_service<br/>工作台编排"]
+    dashboard --> projections["dashboard projections<br/>market / run / pool / risk"]
+    home --> workbench["workbench_service<br/>推荐编排"]
     presets --> workbench
     runs --> workbench
     recs --> workbench
@@ -40,6 +44,7 @@ flowchart LR
     workbench --> agent_skill["agent_skill_runner<br/>Skill Agent 审查"]
     workbench --> research_graph["research_graph<br/>多视角审查日志"]
     workbench --> aggregator["aggregator<br/>聚合评分/分桶/池规则"]
+    projections --> workbench
   end
 
   subgraph skills["本地 Skill 包 backend/skills"]
@@ -66,7 +71,7 @@ flowchart LR
 
   subgraph db["MySQL 数据库"]
     ashare["ashare_workbench"]
-    core_tables["stocks<br/>daily_bars<br/>market_snapshots"]
+    core_tables["stocks<br/>stock_quotes<br/>daily_kbars<br/>market_snapshots"]
     skill_tables["skill_registry<br/>skill_versions<br/>strategy_versions<br/>presets<br/>preset_skills"]
     run_tables["recommendation_runs<br/>recommendations<br/>agent_decision_logs"]
     review_tables["recommendation_outcomes<br/>review_notes<br/>watch_items<br/>backtest_runs"]
@@ -86,7 +91,7 @@ flowchart LR
 ```mermaid
 sequenceDiagram
   autonumber
-  participant UI as React 工作台
+  participant UI as React 驾驶舱
   participant API as FastAPI /api/runs
   participant WB as workbench_service
   participant MD as market_data
@@ -106,7 +111,7 @@ sequenceDiagram
   WB->>DB: 读取预设、Skill 权重、运行模式
   WB->>MD: get_market_universe()
   MD-->>WB: 候选股票 + 市场快照
-  WB->>DB: 保存 market_snapshots / stocks / daily_bars
+  WB->>DB: 保存 market_snapshots / stocks / stock_quotes / daily_kbars
   WB->>FB: build_features(stocks, snapshot)
   FB-->>WB: 技术指标、风险分、DSA 分数
   WB->>RC: build_research_contexts()
@@ -152,9 +157,9 @@ flowchart LR
     quote_router["多源报价采集<br/>并行拉取/失败留痕"]
     raw_quotes["分源原始报价<br/>raw_quotes"]
     merge_quotes["统一报价合成<br/>字段级中位数/冲突检测/质量分"]
-    unified_quotes["统一报价缓存<br/>unified_quotes"]
+    stock_quotes["统一报价缓存<br/>stock_quotes"]
     kline_router["日K缓存优先<br/>不足时逐源刷新"]
-    raw_bars["分源原始日K<br/>raw_daily_bars"]
+    daily_kbars["类型化日K缓存<br/>daily_kbars"]
     candidate_filter["候选过滤<br/>成交额、涨跌幅、ST、流动性等"]
     quality_gate["数据质量门禁<br/>新鲜度、源数量、冲突标记"]
     source_health["数据源健康度<br/>data_source_health"]
@@ -179,13 +184,13 @@ flowchart LR
   quote_router --> source_health
   source_config --> quote_router
   raw_quotes --> merge_quotes
-  merge_quotes --> unified_quotes
-  unified_quotes --> candidate_filter
+  merge_quotes --> stock_quotes
+  stock_quotes --> candidate_filter
   candidate_filter --> kline_router
-  kline_router --> raw_bars
+  kline_router --> daily_kbars
   kline_router --> source_health
   source_config --> kline_router
-  raw_bars --> quality_gate
+  daily_kbars --> quality_gate
   kline_router --> quality_gate
 
   subgraph pool["统一候选数据池"]
@@ -242,7 +247,29 @@ flowchart LR
   recs --> outcomes
 ```
 
-当前后端推荐主入口支持三档数据源模式：`local_pool` 仅读取本地 `unified_quotes` 和 `daily_bars`，本地覆盖不足时停止；`local_pool_preferred` 先读本地池，报价不足或日K未覆盖报价日期时刷新外部源并写回本地池；`realtime` 直接访问外部真实行情源。外部源返回的数据会先进入 `raw_quotes` / `raw_daily_bars` 留痕，再合成为统一数据池，并把源数量、字段冲突、缓存状态写进 `data_quality`，供后续 Skill 和聚合器降权使用。`data_source_health` 只记录事实健康度，`data_source_config` 控制报价源/日K源是否参与后续刷新；单个源失败或关闭不会阻塞整体，全部同类源关闭才会停止运行。
+当前后端推荐主入口支持三档数据源模式：`local_pool` 仅读取本地 `stock_quotes` 和 `daily_kbars`，本地覆盖不足时停止；`local_pool_preferred` 先读本地池，报价不足或日K未覆盖报价日期时刷新外部源并写回本地池；`realtime` 直接访问外部真实行情源。外部源返回的数据会先进入源级采集结果，再合成为类型化本地数据池，并把源数量、字段冲突、缓存状态写进 `data_quality`，供后续 Skill 和聚合器降权使用。`data_source_health` 只记录事实健康度，`data_source_config` 控制报价源/日K源是否参与后续刷新；单个源失败或关闭不会阻塞整体，全部同类源关闭才会停止运行。
+
+## 驾驶舱投影层
+
+```mermaid
+flowchart LR
+  db["MySQL<br/>market_snapshots / recommendation_runs / recommendations / stock_quotes / daily_kbars"]
+  dashboard_api["GET /api/dashboard/overview"]
+  market_projection["市场温度<br/>热度/涨跌/主线"]
+  rec_projection["龙头候选<br/>强度/理由/风险/数据质量"]
+  pool_projection["数据池健康<br/>缓存/覆盖/调度/验证"]
+  frontend_vm["useDashboardViewModel<br/>统一驾驶舱视图模型"]
+  shell["AppShell<br/>黑白主题/导航/状态区"]
+
+  db --> dashboard_api
+  dashboard_api --> market_projection
+  dashboard_api --> rec_projection
+  dashboard_api --> pool_projection
+  market_projection --> frontend_vm
+  rec_projection --> frontend_vm
+  pool_projection --> frontend_vm
+  frontend_vm --> shell
+```
 
 ## 数据闭环
 
@@ -263,7 +290,7 @@ flowchart TD
 
 ## 关键边界
 
-- 前端只负责工作台交互和结果展示，所有推荐逻辑都在后端。
+- 前端默认进入短线交易驾驶舱，只负责主题、视图模型、状态表达和结果展示，所有推荐逻辑都在后端。
 - `workbench_service` 是核心编排层，连接行情、特征、Skill、聚合、落库和复盘。
 - 行情层只使用真实数据源；推荐运行可选 `local_pool`、`local_pool_preferred`、`realtime` 三档，不使用模拟数据。
 - Skill 有两种执行面：`strategy.yaml` 负责可执行规则，`SKILL.md` 负责真实 LLM Agent 审查和解释；LLM 未配置或调用失败会停止运行。
