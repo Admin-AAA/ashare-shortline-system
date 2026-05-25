@@ -19,3 +19,4 @@ frontend/.vite/
 backend/logs/
 
 .claude/
+.worktrees/
