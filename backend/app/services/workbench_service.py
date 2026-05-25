@@ -113,6 +113,7 @@ DEFAULT_PRESETS = [
         "name": "正式盘前组合",
         "description": "盘前默认正式组合，强调主线、技术确认和风险平衡。",
         "run_mode": "formal",
+        "data_source": DATA_SOURCE_LOCAL_POOL,
         "market_scope": "all",
         "market_scope_value": None,
         "risk_template": "balanced",
