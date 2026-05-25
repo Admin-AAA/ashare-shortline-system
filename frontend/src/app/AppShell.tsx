@@ -24,6 +24,7 @@ export default function AppShell() {
             <button
               key={item.section}
               className={item.section === section ? "active" : ""}
+              aria-pressed={item.section === section}
               onClick={() => setSection(item.section)}
               type="button"
             >
@@ -50,7 +51,7 @@ export default function AppShell() {
             </button>
           </div>
         </header>
-        <DashboardPage compactMode={section === "dashboard" ? undefined : section} />
+        <DashboardPage section={section} />
       </main>
     </div>
   );
