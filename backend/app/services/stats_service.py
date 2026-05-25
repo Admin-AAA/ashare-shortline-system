@@ -18,6 +18,7 @@ from app.models.tables import (
     WatchItem,
 )
 from app.services.outcome_service import is_trade_executed, resolved_trade_return
+from app.services.outcome_service import is_outcome_labeled, normalized_outcome_label
 
 import logging
 logger = logging.getLogger(__name__)
@@ -76,11 +77,11 @@ def _get_overview_stats(db: Session, mode: str) -> dict[str, Any]:
         ).all())
         outcome_map = {row.recommendation_id: row for row in outcome_rows}
 
-    labeled = [row for row in outcome_rows if row.outcome_label != "pending"]
+    labeled = [row for row in outcome_rows if is_outcome_labeled(row)]
     triggered = [row for row in labeled if is_trade_executed(row)]
-    success_count = sum(1 for row in triggered if row.outcome_label == "success")
-    failed_count = sum(1 for row in triggered if row.outcome_label == "failed")
-    missed_count = sum(1 for row in labeled if not is_trade_executed(row))
+    success_count = sum(1 for row in outcome_rows if normalized_outcome_label(row) == "success")
+    failed_count = sum(1 for row in outcome_rows if normalized_outcome_label(row) == "failed")
+    missed_count = sum(1 for row in outcome_rows if normalized_outcome_label(row) == "missed")
     reviewed_count = _reviewed_count(db, rec_ids)
     watched_count = _watched_count(db, run_ids)
 
@@ -162,7 +163,7 @@ def _get_skill_stats(db: Session, mode: str) -> list[dict[str, Any]]:
     for rec in rec_rows:
         regime = run_regime_map.get(rec.run_id, "未知")
         outcome = outcome_map.get(rec.recommendation_id)
-        has_outcome = outcome is not None and outcome.outcome_label != "pending"
+        has_outcome = is_outcome_labeled(outcome)
         final_score = float(rec.final_score or 0)
         industry = str(rec.industry or "未分类")
         setup_type = str(rec.setup_type or "")
@@ -204,7 +205,7 @@ def _get_skill_stats(db: Session, mode: str) -> list[dict[str, Any]]:
                 if is_trade_executed(outcome):
                     row["triggered_count"] += 1
                     row["avg_return"] += resolved_trade_return(outcome)
-                    if outcome.outcome_label == "success":
+                    if normalized_outcome_label(outcome) == "success":
                         row["success_count"] += 1
 
     t5 = time.perf_counter()
@@ -222,6 +223,9 @@ def _get_skill_stats(db: Session, mode: str) -> list[dict[str, Any]]:
                 "run_count": len(row["runs"]),
                 "labeled_count": labeled_count,
                 "triggered_count": triggered_count,
+                "failed_count": max(0, triggered_count - row["success_count"]),
+                "missed_count": max(0, labeled_count - triggered_count),
+                "pending_count": max(0, row["sample_count"] - labeled_count),
                 "success_count": row["success_count"],
                 "trigger_rate": round(triggered_count / labeled_count, 3) if labeled_count else 0.0,
                 "hit_rate": round(row["success_count"] / triggered_count, 3) if triggered_count else 0.0,
@@ -307,12 +311,12 @@ def _get_preset_stats(db: Session, mode: str) -> list[dict[str, Any]]:
         row["avg_score"] += sum(float(rec.final_score or 0) for rec in run_recs)
         for rec in run_recs:
             outcome = outcome_map.get(rec.recommendation_id)
-            if outcome and outcome.outcome_label != "pending":
+            if is_outcome_labeled(outcome):
                 row["labeled_count"] += 1
                 if is_trade_executed(outcome):
                     row["triggered_count"] += 1
                     row["avg_return"] += resolved_trade_return(outcome)
-                    if outcome.outcome_label == "success":
+                    if normalized_outcome_label(outcome) == "success":
                         row["success_count"] += 1
 
     result: list[dict[str, Any]] = []
@@ -329,6 +333,9 @@ def _get_preset_stats(db: Session, mode: str) -> list[dict[str, Any]]:
                 "skill_count": row["skill_count"],
                 "labeled_count": labeled_count,
                 "triggered_count": triggered_count,
+                "failed_count": max(0, triggered_count - row["success_count"]),
+                "missed_count": max(0, labeled_count - triggered_count),
+                "pending_count": max(0, row["recommendation_count"] - labeled_count),
                 "success_count": row["success_count"],
                 "trigger_rate": round(triggered_count / labeled_count, 3) if labeled_count else 0.0,
                 "hit_rate": round(row["success_count"] / triggered_count, 3) if triggered_count else 0.0,

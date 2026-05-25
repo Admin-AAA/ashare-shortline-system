@@ -29,6 +29,8 @@ from sqlalchemy.orm import Session
 from app.db.session import SessionLocal, engine
 from app.core.config import get_settings
 from app.models.tables import (
+    DailyKbar,
+    MarketSnapshot,
     StockQuote,
     ConceptSector,
     ConceptSectorStock,
@@ -81,19 +83,72 @@ def _safe_yi(val) -> float | None:
     return round(v / 1e8, 4) if v else None
 
 
+def _normalize_trade_date(value) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if len(raw) >= 10 and raw[4] == "-" and raw[7] == "-":
+        return raw[:10]
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if len(digits) >= 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    return raw[:10]
+
+
+def _compact_trade_date(value) -> str:
+    return _normalize_trade_date(value).replace("-", "")
+
+
+def _resolve_snapshot_trade_date(db: Session, requested: str | None = None) -> str:
+    if requested:
+        return _normalize_trade_date(requested)
+
+    latest_snapshot = db.scalar(select(MarketSnapshot.trade_date).order_by(MarketSnapshot.trade_date.desc()).limit(1))
+    if latest_snapshot:
+        return _normalize_trade_date(latest_snapshot)
+
+    latest_quote = db.scalar(select(func.max(StockQuote.trade_date)))
+    if latest_quote:
+        return _normalize_trade_date(latest_quote)
+
+    latest_bar = db.scalar(select(func.max(DailyKbar.trade_date)))
+    if latest_bar:
+        return _normalize_trade_date(latest_bar)
+
+    return date.today().isoformat()
+
+
+def _parse_trade_day(value) -> date | None:
+    normalized = _normalize_trade_date(value)
+    if not normalized:
+        return None
+    try:
+        return date.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
+def _date_on_or_before(value, target_trade_date: str) -> bool:
+    day = _parse_trade_day(value)
+    if day is None:
+        return False
+    return day <= date.fromisoformat(target_trade_date)
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 概念板块
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-def backfill_concept_sectors(db: Session) -> int:
+def backfill_concept_sectors(db: Session, trade_date: str | None = None) -> int:
     """
     获取全量概念板块列表及其成分股。
     使用 akshare 同花顺源。
     """
     import akshare as ak
 
-    logger.info("── 开始回填概念板块 ──")
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
+    logger.info("── 开始回填概念板块 (%s) ──", target_trade_date)
 
     # 1. 获取概念板块列表
     _throttle()
@@ -107,7 +162,6 @@ def backfill_concept_sectors(db: Session) -> int:
         logger.warning("概念板块列表为空")
         return 0
 
-    trade_date = date.today().isoformat()
     total_sectors = 0
     total_stocks = 0
 
@@ -120,7 +174,7 @@ def backfill_concept_sectors(db: Session) -> int:
             select(func.count()).select_from(ConceptSector).where(
                 and_(
                     ConceptSector.sector_code == sector_code,
-                    ConceptSector.trade_date == trade_date,
+                    ConceptSector.trade_date == target_trade_date,
                 )
             )
         )
@@ -131,7 +185,7 @@ def backfill_concept_sectors(db: Session) -> int:
         sector = ConceptSector(
             sector_code=sector_code,
             sector_name=sector_name,
-            trade_date=trade_date,
+            trade_date=target_trade_date,
             heat_rank=rank,
         )
         db.add(sector)
@@ -154,7 +208,7 @@ def backfill_concept_sectors(db: Session) -> int:
                                 and_(
                                     ConceptSectorStock.sector_code == sector_code,
                                     ConceptSectorStock.code == code,
-                                    ConceptSectorStock.trade_date == trade_date,
+                                    ConceptSectorStock.trade_date == target_trade_date,
                                 )
                             )
                         )
@@ -163,7 +217,7 @@ def backfill_concept_sectors(db: Session) -> int:
                                 sector_code=sector_code,
                                 code=code,
                                 name=str(s_row.get("name", "") or s_row.get("名称", "")),
-                                trade_date=trade_date,
+                                trade_date=target_trade_date,
                             ))
                             member_count += 1
                     total_stocks += member_count
@@ -187,16 +241,17 @@ def backfill_concept_sectors(db: Session) -> int:
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-def backfill_dragon_tiger(db: Session, days_back: int = 30) -> int:
+def backfill_dragon_tiger(db: Session, days_back: int = 30, trade_date: str | None = None) -> int:
     """
     回填龙虎榜数据（默认最近30个交易日）。
     使用 Tushare top_list（自建服务器），eastmoney 备用。
     """
-    from app.services.tushare_client import get_pro
+    from app.services.tushare_client import fetch_moneyflow
 
-    logger.info("── 开始回填龙虎榜 (最近 %d 天) ──", days_back)
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
+    logger.info("── 开始回填龙虎榜 (截至 %s，回看 %d 天) ──", target_trade_date, days_back)
 
-    end_date = date.today()
+    end_date = date.fromisoformat(target_trade_date)
     total = 0
 
     current = end_date - timedelta(days=days_back)
@@ -291,29 +346,49 @@ def backfill_dragon_tiger(db: Session, days_back: int = 30) -> int:
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-def _get_top_n_codes_by_market_cap(db: Session, n: int = 500) -> list[str]:
+def _get_top_n_codes_by_market_cap(db: Session, n: int = 500, trade_date: str | None = None) -> list[str]:
     """按自由流通市值获取 Top N 股票代码。"""
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
     quotes = db.scalars(
-        select(StockQuote).order_by(StockQuote.free_mv_yi.is_(None), StockQuote.free_mv_yi.desc()).limit(n)
+        select(StockQuote)
+        .where(StockQuote.trade_date == target_trade_date)
+        .order_by(StockQuote.free_mv_yi.is_(None), StockQuote.free_mv_yi.desc())
+        .limit(n)
     ).all()
-    return [q.code for q in quotes if q.code]
+    if len(quotes) >= n:
+        return [q.code for q in quotes if q.code]
+
+    fallback_rows = db.scalars(
+        select(StockQuote)
+        .where(StockQuote.trade_date <= target_trade_date)
+        .order_by(StockQuote.trade_date.desc(), StockQuote.free_mv_yi.is_(None), StockQuote.free_mv_yi.desc())
+    ).all()
+    latest_by_code: dict[str, StockQuote] = {}
+    for row in fallback_rows:
+        if row.code and row.code not in latest_by_code:
+            latest_by_code[row.code] = row
+    ranked = sorted(
+        latest_by_code.values(),
+        key=lambda row: (row.free_mv_yi is None, -(float(row.free_mv_yi or 0))),
+    )
+    return [q.code for q in ranked[:n] if q.code]
 
 
-def backfill_capital_flows(db: Session, top_n: int = 500) -> int:
+def backfill_capital_flows(db: Session, top_n: int = 500, trade_date: str | None = None) -> int:
     """
     回填资金流向数据（市值前 N 股票）。
     使用 Tushare moneyflow（自建服务器），eastmoney 备用。
     """
     from app.services.tushare_client import get_pro
 
-    logger.info("── 开始回填资金流向 (Top %d 市值) ──", top_n)
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
+    logger.info("── 开始回填资金流向 (%s Top %d 市值) ──", target_trade_date, top_n)
 
-    codes = _get_top_n_codes_by_market_cap(db, top_n)
+    codes = _get_top_n_codes_by_market_cap(db, top_n, target_trade_date)
     if not codes:
         logger.warning("无法获取市值排行，跳过资金流向")
         return 0
 
-    trade_date = date.today().isoformat()
     total = 0
     skipped = 0
     failed = 0
@@ -321,7 +396,7 @@ def backfill_capital_flows(db: Session, top_n: int = 500) -> int:
     for i, code in enumerate(codes):
         existing = db.scalar(
             select(func.count()).select_from(CapitalFlow).where(
-                and_(CapitalFlow.code == code, CapitalFlow.trade_date == trade_date)
+                and_(CapitalFlow.code == code, CapitalFlow.trade_date == target_trade_date)
             )
         )
         if existing:
@@ -330,58 +405,13 @@ def backfill_capital_flows(db: Session, top_n: int = 500) -> int:
                 logger.info("  资金流向进度: %d/%d (跳过 %d)", i, len(codes), skipped)
             continue
 
-        flow_data = None
-
-        # 优先 Tushare
         try:
-            pro = get_pro()
-            ts_code = f"{code}.{'SH' if code.startswith(('6', '9')) else 'SZ'}"
-            df = pro.moneyflow(ts_code=ts_code, limit=10)
-            if df is not None and not df.empty:
-                df = df.sort_values("trade_date", ascending=False)
-                latest = df.iloc[0]
-                cum_3d = cum_5d = cum_10d = 0.0
-                for j in range(min(len(df), 10)):
-                    row = df.iloc[j]
-                    net = float(row.get("net_mf_amount") or 0)
-                    if j < 3:
-                        cum_3d += net
-                    if j < 5:
-                        cum_5d += net
-                    cum_10d += net
-                flow_data = {
-                    "code": code,
-                    "trade_date": str(latest.get("trade_date", "")),
-                    "main_net_inflow_yi": round(float(latest.get("net_mf_amount") or 0) / 1e8, 4),
-                    "super_large_net_inflow_yi": round(
-                        float(latest.get("buy_elg_amount") or 0) / 1e8
-                        - float(latest.get("sell_elg_amount") or 0) / 1e8,
-                        4,
-                    ),
-                    "large_net_inflow_yi": round(
-                        float(latest.get("buy_lg_amount") or 0) / 1e8
-                        - float(latest.get("sell_lg_amount") or 0) / 1e8,
-                        4,
-                    ),
-                    "medium_net_inflow_yi": round(
-                        float(latest.get("buy_md_amount") or 0) / 1e8
-                        - float(latest.get("sell_md_amount") or 0) / 1e8,
-                        4,
-                    ),
-                    "small_net_inflow_yi": round(
-                        float(latest.get("buy_sm_amount") or 0) / 1e8
-                        - float(latest.get("sell_sm_amount") or 0) / 1e8,
-                        4,
-                    ),
-                    "main_net_inflow_ratio": round(float(latest.get("net_mf_vol") or 0), 2),
-                    "cumulative_inflow_3d_yi": round(cum_3d / 1e8, 4),
-                    "cumulative_inflow_5d_yi": round(cum_5d / 1e8, 4),
-                    "cumulative_inflow_10d_yi": round(cum_10d / 1e8, 4),
-                }
+            flow_data = fetch_moneyflow(code, days=10, trade_date=target_trade_date)
         except Exception as e:
             logger.debug("Tushare资金流向 %s 失败: %s", code, e)
+            flow_data = None
 
-        if flow_data is None:
+        if flow_data is None or _normalize_trade_date(flow_data.get("trade_date")) != target_trade_date:
             failed += 1
             continue
 
@@ -403,16 +433,17 @@ def backfill_capital_flows(db: Session, top_n: int = 500) -> int:
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-def backfill_news(db: Session, top_n: int = 500) -> int:
+def backfill_news(db: Session, top_n: int = 500, trade_date: str | None = None) -> int:
     """
     回填公告和新闻数据（市值前 N 股票）。
     使用 eastmoney np-anotice API（已验证可用）。
     """
     from app.services.market_data import _http_get_json
 
-    logger.info("── 开始回填新闻公告 (Top %d 市值) ──", top_n)
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
+    logger.info("── 开始回填新闻公告 (%s Top %d 市值) ──", target_trade_date, top_n)
 
-    codes = _get_top_n_codes_by_market_cap(db, top_n)
+    codes = _get_top_n_codes_by_market_cap(db, top_n, target_trade_date)
     if not codes:
         logger.warning("无法获取市值排行，跳过新闻")
         return 0
@@ -502,6 +533,11 @@ def backfill_news(db: Session, top_n: int = 500) -> int:
             logger.debug("新闻 %s 失败: %s", code, e)
 
         # 写入数据库（检查 source + article_id 组合键）
+        items = [
+            {**item, "announce_date": _normalize_trade_date(item.get("announce_date"))}
+            for item in items
+            if _date_on_or_before(item.get("announce_date"), target_trade_date)
+        ]
         for item in items:
             existing = db.scalar(
                 select(func.count()).select_from(NewsAnnouncement).where(
@@ -537,19 +573,23 @@ def backfill_news(db: Session, top_n: int = 500) -> int:
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-def backfill_margin(db: Session, codes: list[str], days: int = 5) -> int:
+def backfill_margin(db: Session, codes: list[str], days: int = 5, trade_date: str | None = None) -> int:
     """回填融资融券数据（Tushare margin）。"""
     from app.services.tushare_client import fetch_margin
     from sqlalchemy.dialects.mysql import insert as mysql_insert
 
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
     total = 0
     for i, code in enumerate(codes):
         try:
-            rows = fetch_margin(code, days=days)
+            rows = fetch_margin(code, days=days, trade_date=target_trade_date)
             if not rows:
                 continue
+            rows = [row for row in rows if _date_on_or_before(row.get("trade_date"), target_trade_date)]
             for row in rows:
                 row["code"] = code
+            if not rows:
+                continue
             stmt = mysql_insert(MarginData).values(rows)
             db.execute(stmt.on_duplicate_key_update(
                 rzye=stmt.inserted.rzye,
@@ -569,16 +609,17 @@ def backfill_margin(db: Session, codes: list[str], days: int = 5) -> int:
     return total
 
 
-def backfill_hk_hold(db: Session, codes: list[str]) -> int:
+def backfill_hk_hold(db: Session, codes: list[str], trade_date: str | None = None) -> int:
     """回填港股通持股数据（Tushare hk_hold）。"""
     from app.services.tushare_client import fetch_hk_hold
     from sqlalchemy.dialects.mysql import insert as mysql_insert
 
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
     total = 0
     for i, code in enumerate(codes):
         try:
-            row = fetch_hk_hold(code)
-            if not row:
+            row = fetch_hk_hold(code, trade_date=target_trade_date)
+            if not row or not _date_on_or_before(row.get("trade_date"), target_trade_date):
                 continue
             stmt = mysql_insert(HkHolding).values([row])
             db.execute(stmt.on_duplicate_key_update(
@@ -596,19 +637,23 @@ def backfill_hk_hold(db: Session, codes: list[str]) -> int:
     return total
 
 
-def backfill_holder_number(db: Session, codes: list[str]) -> int:
+def backfill_holder_number(db: Session, codes: list[str], trade_date: str | None = None) -> int:
     """回填股东户数数据（Tushare stk_holdernumber）。"""
     from app.services.tushare_client import fetch_holder_number
     from sqlalchemy.dialects.mysql import insert as mysql_insert
 
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
     total = 0
     for i, code in enumerate(codes):
         try:
-            rows = fetch_holder_number(code, limit=4)
+            rows = fetch_holder_number(code, limit=4, trade_date=target_trade_date)
             if not rows:
                 continue
+            rows = [row for row in rows if _date_on_or_before(row.get("end_date"), target_trade_date)]
             for row in rows:
                 row["code"] = code
+            if not rows:
+                continue
             stmt = mysql_insert(HolderNumber).values(rows)
             db.execute(stmt.on_duplicate_key_update(
                 holder_num=stmt.inserted.holder_num,
@@ -624,19 +669,23 @@ def backfill_holder_number(db: Session, codes: list[str]) -> int:
     return total
 
 
-def backfill_stk_limit(db: Session, codes: list[str]) -> int:
+def backfill_stk_limit(db: Session, codes: list[str], trade_date: str | None = None) -> int:
     """回填涨跌停价格（Tushare stk_limit）。"""
     from app.services.tushare_client import fetch_stk_limit
     from sqlalchemy.dialects.mysql import insert as mysql_insert
 
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
     total = 0
     for i, code in enumerate(codes):
         try:
-            rows = fetch_stk_limit(code, days=3)
+            rows = fetch_stk_limit(code, days=3, trade_date=target_trade_date)
             if not rows:
                 continue
+            rows = [row for row in rows if _date_on_or_before(row.get("trade_date"), target_trade_date)]
             for row in rows:
                 row["code"] = code
+            if not rows:
+                continue
             stmt = mysql_insert(StkLimit).values(rows)
             db.execute(stmt.on_duplicate_key_update(
                 up_limit=stmt.inserted.up_limit,
@@ -658,17 +707,19 @@ def backfill_stk_limit(db: Session, codes: list[str]) -> int:
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-def backfill_minute_kbars(db: Session, codes: list[str]) -> int:
+def backfill_minute_kbars(db: Session, codes: list[str], trade_date: str | None = None) -> int:
     """回填当日分钟K线（腾讯 ifzq API）。"""
     from app.services.tushare_client import fetch_minute_kbars
     from app.models.tables import MinuteKbar
     from sqlalchemy.dialects.mysql import insert as mysql_insert
 
-    logger.info("── 开始回填分钟K线 ──")
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
+    logger.info("── 开始回填分钟K线 (%s) ──", target_trade_date)
     total = 0
     for i, code in enumerate(codes):
         try:
-            bars = fetch_minute_kbars(code)
+            bars = fetch_minute_kbars(code, trade_date=target_trade_date)
+            bars = [bar for bar in bars if _normalize_trade_date(bar.get("trade_date")) == target_trade_date]
             if bars:
                 stmt = mysql_insert(MinuteKbar).values(bars).prefix_with("IGNORE")
                 db.execute(stmt)
@@ -682,17 +733,18 @@ def backfill_minute_kbars(db: Session, codes: list[str]) -> int:
     return total
 
 
-def backfill_auction(db: Session, codes: list[str]) -> int:
+def backfill_auction(db: Session, codes: list[str], trade_date: str | None = None) -> int:
     """回填集合竞价数据。"""
     from app.services.tushare_client import fetch_auction
     from app.models.tables import AuctionData
 
-    logger.info("── 开始回填集合竞价 ──")
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
+    logger.info("── 开始回填集合竞价 (%s) ──", target_trade_date)
     total = 0
     for i, code in enumerate(codes):
         try:
-            row = fetch_auction(code)
-            if row:
+            row = fetch_auction(code, trade_date=target_trade_date)
+            if row and _normalize_trade_date(row.get("trade_date")) == target_trade_date:
                 existing = db.scalar(
                     select(func.count()).select_from(AuctionData).where(
                         and_(AuctionData.code == code, AuctionData.trade_date == row["trade_date"])
@@ -711,16 +763,16 @@ def backfill_auction(db: Session, codes: list[str]) -> int:
     return total
 
 
-def backfill_broker_recommend(db: Session, months: int = 3) -> int:
+def backfill_broker_recommend(db: Session, months: int = 3, trade_date: str | None = None) -> int:
     """回填券商金股。"""
     from app.services.tushare_client import fetch_broker_recommend
     from app.models.tables import BrokerRecommend
 
-    logger.info("── 开始回填券商金股 ──")
+    target_day = date.fromisoformat(_resolve_snapshot_trade_date(db, trade_date))
+    logger.info("── 开始回填券商金股 (截至 %s) ──", target_day.isoformat())
     total = 0
-    today = date.today()
     for m_offset in range(months):
-        m = (today.replace(day=1) - timedelta(days=m_offset * 31)).strftime("%Y%m")
+        m = (target_day.replace(day=1) - timedelta(days=m_offset * 31)).strftime("%Y%m")
         try:
             rows = fetch_broker_recommend(month=m)
             for row in rows:
@@ -743,16 +795,18 @@ def backfill_broker_recommend(db: Session, months: int = 3) -> int:
     return total
 
 
-def backfill_holder_trades(db: Session, codes: list[str]) -> int:
+def backfill_holder_trades(db: Session, codes: list[str], trade_date: str | None = None) -> int:
     """回填股东增减持数据。"""
     from app.services.tushare_client import fetch_holder_trade
     from app.models.tables import HolderTrade
 
-    logger.info("── 开始回填增减持 ──")
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
+    logger.info("── 开始回填增减持 (截至 %s) ──", target_trade_date)
     total = 0
     for i, code in enumerate(codes):
         try:
             rows = fetch_holder_trade(code)
+            rows = [row for row in rows if _date_on_or_before(row.get("ann_date"), target_trade_date)]
             for row in rows:
                 db.add(HolderTrade(**row))
                 total += 1
@@ -765,16 +819,18 @@ def backfill_holder_trades(db: Session, codes: list[str]) -> int:
     return total
 
 
-def backfill_surveys(db: Session, codes: list[str]) -> int:
+def backfill_surveys(db: Session, codes: list[str], trade_date: str | None = None) -> int:
     """回填机构调研数据。"""
     from app.services.tushare_client import fetch_survey
     from app.models.tables import InstitutionalSurvey
 
-    logger.info("── 开始回填机构调研 ──")
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
+    logger.info("── 开始回填机构调研 (截至 %s) ──", target_trade_date)
     total = 0
     for i, code in enumerate(codes):
         try:
             rows = fetch_survey(code)
+            rows = [row for row in rows if _date_on_or_before(row.get("surv_date"), target_trade_date)]
             for row in rows:
                 db.add(InstitutionalSurvey(**row))
                 total += 1
@@ -787,16 +843,21 @@ def backfill_surveys(db: Session, codes: list[str]) -> int:
     return total
 
 
-def backfill_share_floats(db: Session, codes: list[str]) -> int:
+def backfill_share_floats(db: Session, codes: list[str], trade_date: str | None = None) -> int:
     """回填限售解禁数据。"""
     from app.services.tushare_client import fetch_share_float
     from app.models.tables import ShareFloat
 
-    logger.info("── 开始回填限售解禁 ──")
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
+    logger.info("── 开始回填限售解禁 (截至 %s 可知) ──", target_trade_date)
     total = 0
     for i, code in enumerate(codes):
         try:
             rows = fetch_share_float(code)
+            rows = [
+                row for row in rows
+                if not row.get("ann_date") or _date_on_or_before(row.get("ann_date"), target_trade_date)
+            ]
             for row in rows:
                 db.add(ShareFloat(**row))
                 total += 1
@@ -809,17 +870,18 @@ def backfill_share_floats(db: Session, codes: list[str]) -> int:
     return total
 
 
-def backfill_pledge_stats(db: Session, codes: list[str]) -> int:
+def backfill_pledge_stats(db: Session, codes: list[str], trade_date: str | None = None) -> int:
     """回填股权质押数据。"""
     from app.services.tushare_client import fetch_pledge_stat
     from app.models.tables import PledgeStat
 
-    logger.info("── 开始回填股权质押 ──")
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
+    logger.info("── 开始回填股权质押 (截至 %s) ──", target_trade_date)
     total = 0
     for i, code in enumerate(codes):
         try:
             row = fetch_pledge_stat(code)
-            if row:
+            if row and _date_on_or_before(row.get("end_date"), target_trade_date):
                 existing = db.scalar(
                     select(func.count()).select_from(PledgeStat).where(
                         and_(PledgeStat.code == code, PledgeStat.end_date == row["end_date"])
@@ -838,16 +900,21 @@ def backfill_pledge_stats(db: Session, codes: list[str]) -> int:
     return total
 
 
-def backfill_repurchases(db: Session, codes: list[str]) -> int:
+def backfill_repurchases(db: Session, codes: list[str], trade_date: str | None = None) -> int:
     """回填回购数据。"""
     from app.services.tushare_client import fetch_repurchase
     from app.models.tables import Repurchase
 
-    logger.info("── 开始回填回购 ──")
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
+    logger.info("── 开始回填回购 (截至 %s) ──", target_trade_date)
     total = 0
     for i, code in enumerate(codes):
         try:
             rows = fetch_repurchase(code)
+            rows = [
+                row for row in rows
+                if not row.get("ann_date") or _date_on_or_before(row.get("ann_date"), target_trade_date)
+            ]
             for row in rows:
                 db.add(Repurchase(**row))
                 total += 1
@@ -878,82 +945,86 @@ def main():
     parser.add_argument("--dragon-tiger-days", type=int, default=30)
     parser.add_argument("--tushare-aux-top-n", type=int, default=300, help="Tushare 辅助数据覆盖股票数")
     parser.add_argument("--tushare-aux-days", type=int, default=5, help="融资融券回看天数")
+    parser.add_argument("--trade-date", default=None, help="快照交易日，YYYY-MM-DD 或 YYYYMMDD；为空则使用最新 market snapshot")
     args = parser.parse_args()
 
     t0 = time.monotonic()
     db = SessionLocal()
 
     try:
+        target_trade_date = _resolve_snapshot_trade_date(db, args.trade_date)
+        logger.info("辅助数据回填目标交易日: %s", target_trade_date)
+
         if not args.skip_concepts:
-            n = backfill_concept_sectors(db)
+            n = backfill_concept_sectors(db, trade_date=target_trade_date)
             logger.info("✓ 概念板块: %d 个板块", n)
         else:
             logger.info("⊘ 跳过概念板块")
 
         if not args.skip_dragon_tiger:
-            n = backfill_dragon_tiger(db, days_back=args.dragon_tiger_days)
+            n = backfill_dragon_tiger(db, days_back=args.dragon_tiger_days, trade_date=target_trade_date)
             logger.info("✓ 龙虎榜: %d 条", n)
         else:
             logger.info("⊘ 跳过龙虎榜")
 
         if not args.skip_capital_flows:
-            n = backfill_capital_flows(db, top_n=args.flow_top_n)
+            n = backfill_capital_flows(db, top_n=args.flow_top_n, trade_date=target_trade_date)
             logger.info("✓ 资金流向: %d 只股票", n)
         else:
             logger.info("⊘ 跳过资金流向")
 
         if not args.skip_news:
-            n = backfill_news(db, top_n=args.news_top_n)
+            n = backfill_news(db, top_n=args.news_top_n, trade_date=target_trade_date)
             logger.info("✓ 新闻公告: %d 条", n)
         else:
             logger.info("⊘ 跳过新闻")
 
         if not args.skip_tushare_aux:
             logger.info("── Tushare 专属辅助数据回填 ──")
-            top_codes = _get_top_n_codes_by_market_cap(db, n=args.tushare_aux_top_n)
+            top_codes = _get_top_n_codes_by_market_cap(db, n=args.tushare_aux_top_n, trade_date=target_trade_date)
             logger.info("  目标股票数: %d", len(top_codes))
 
-            n = backfill_margin(db, top_codes, days=args.tushare_aux_days)
+            n = backfill_margin(db, top_codes, days=args.tushare_aux_days, trade_date=target_trade_date)
             logger.info("✓ 融资融券: %d 条", n)
 
-            n = backfill_hk_hold(db, top_codes)
+            n = backfill_hk_hold(db, top_codes, trade_date=target_trade_date)
             logger.info("✓ 港股通持股: %d 条", n)
 
-            n = backfill_holder_number(db, top_codes)
+            n = backfill_holder_number(db, top_codes, trade_date=target_trade_date)
             logger.info("✓ 股东户数: %d 条", n)
 
-            n = backfill_stk_limit(db, top_codes)
+            n = backfill_stk_limit(db, top_codes, trade_date=target_trade_date)
             logger.info("✓ 涨跌停价: %d 条", n)
         else:
             logger.info("⊘ 跳过 Tushare 专属数据")
 
         if not args.skip_tushare_new:
             logger.info("── Tushare 新增数据回填 ──")
-            top_codes = _get_top_n_codes_by_market_cap(db, n=args.tushare_aux_top_n)
+            top_codes = _get_top_n_codes_by_market_cap(db, n=args.tushare_aux_top_n, trade_date=target_trade_date)
             logger.info("  目标股票数: %d", len(top_codes))
 
-            n = backfill_minute_kbars(db, top_codes)
+            n = backfill_minute_kbars(db, top_codes, trade_date=target_trade_date)
             logger.info("✓ 分钟K线: %d 条", n)
 
-            n = backfill_auction(db, top_codes)
+            n = backfill_auction(db, top_codes, trade_date=target_trade_date)
             logger.info("✓ 集合竞价: %d 条", n)
 
-            n = backfill_holder_trades(db, top_codes)
+            n = backfill_holder_trades(db, top_codes, trade_date=target_trade_date)
             logger.info("✓ 增减持: %d 条", n)
 
-            n = backfill_surveys(db, top_codes)
+            n = backfill_surveys(db, top_codes, trade_date=target_trade_date)
             logger.info("✓ 机构调研: %d 条", n)
 
-            n = backfill_share_floats(db, top_codes)
+            n = backfill_share_floats(db, top_codes, trade_date=target_trade_date)
             logger.info("✓ 限售解禁: %d 条", n)
 
-            n = backfill_pledge_stats(db, top_codes)
+            n = backfill_pledge_stats(db, top_codes, trade_date=target_trade_date)
             logger.info("✓ 股权质押: %d 条", n)
 
-            n = backfill_repurchases(db, top_codes)
+            n = backfill_repurchases(db, top_codes, trade_date=target_trade_date)
             logger.info("✓ 回购: %d 条", n)
 
-            n = backfill_broker_recommend(db, months=3)
+            n = backfill_broker_recommend(db, months=3, trade_date=target_trade_date)
             logger.info("✓ 券商金股: %d 条", n)
         else:
             logger.info("⊘ 跳过 Tushare 新增数据")

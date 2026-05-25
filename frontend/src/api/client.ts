@@ -2,14 +2,17 @@ import type {
   HomeBootstrap,
   HomeInitialState,
   Preset,
+  PrecisionAtKRow,
   PresetStatsRow,
   RecommendationCard,
   RecommendationDetail,
   RecommendationOutcome,
   DataSourceHealthRow,
+  ModelRoute,
   LocalPoolStatus,
   PoolRefreshResult,
   RunDetail,
+  RunFunnelAudit,
   RunResult,
   RunSummary,
   ScheduledTask,
@@ -19,6 +22,8 @@ import type {
   SkillMode,
   SkillStatsRow,
   SkillSummary,
+  ScoreLineStatsRow,
+  SetupStatsRow,
   StatsOverview
 } from "../types";
 import { logger } from "../utils/logger";
@@ -143,6 +148,7 @@ export const api = {
   runs: (runMode?: string) => request<RunSummary[]>(runMode ? `/api/runs?run_mode=${runMode}` : "/api/runs"),
   runDetail: (runId: string) => request<RunDetail>(`/api/runs/${runId}`),
   runRecommendations: (runId: string) => request<RecommendationCard[]>(`/api/runs/${runId}/recommendations`),
+  runFunnelAudit: (runId: string) => request<RunFunnelAudit>(`/api/runs/${runId}/funnel`),
   createRun: (payload: Record<string, unknown>) => requestWithTimeout<RunResult>("/api/runs", 300_000, json("POST", payload)),
 
   recommendationDetail: (id: string) => request<RecommendationDetail>(`/api/recommendations/${id}`),
@@ -176,6 +182,15 @@ export const api = {
   refreshLocalPool: () => requestWithTimeout<PoolRefreshResult>("/api/data-sources/pool/refresh", 300_000, json("POST")),
   setDataSourceEnabled: (sourceType: string, source: string, enabled: boolean) =>
     request<DataSourceHealthRow>(`/api/data-sources/${sourceType}/${source}/enabled`, json("POST", { enabled })),
+  modelRoutes: () => request<ModelRoute[]>("/api/admin/model-routes"),
+  createModelRoute: (payload: Record<string, unknown>) =>
+    request<ModelRoute>("/api/admin/model-routes", json("POST", payload)),
+  updateModelRoute: (routeId: string, payload: Record<string, unknown>) =>
+    request<ModelRoute>(`/api/admin/model-routes/${routeId}`, json("PATCH", payload)),
+  deleteModelRoute: (routeId: string) =>
+    request<{ deleted: string }>(`/api/admin/model-routes/${routeId}`, json("DELETE")),
+  reorderModelRoutes: (routeIds: string[]) =>
+    request<ModelRoute[]>("/api/admin/model-routes/reorder", json("POST", { route_ids: routeIds })),
 
   scheduledTasks: () => request<ScheduledTask[]>("/api/admin/tasks"),
   scheduledTaskRuns: (limit = 100) => request<ScheduledTaskRun[]>(`/api/admin/task-runs?limit=${limit}`),
@@ -202,5 +217,8 @@ export const api = {
 
   statsOverview: (mode: "formal" | "experiment") => request<StatsOverview>(`/api/stats/overview?mode=${mode}`),
   statsBySkill: (mode: "formal" | "experiment") => request<SkillStatsRow[]>(`/api/stats/by-skill?mode=${mode}`),
-  statsByPreset: (mode: "formal" | "experiment") => request<PresetStatsRow[]>(`/api/stats/by-preset?mode=${mode}`)
+  statsByPreset: (mode: "formal" | "experiment") => request<PresetStatsRow[]>(`/api/stats/by-preset?mode=${mode}`),
+  metricsBySetup: (mode: "formal" | "experiment") => request<SetupStatsRow[]>(`/api/metrics/by-setup?mode=${mode}`),
+  precisionAtK: (mode: "formal" | "experiment") => request<PrecisionAtKRow[]>(`/api/metrics/precision-at-k?mode=${mode}`),
+  metricsByScoreLine: (mode: "formal" | "experiment") => request<ScoreLineStatsRow[]>(`/api/metrics/by-score-line?mode=${mode}`)
 };

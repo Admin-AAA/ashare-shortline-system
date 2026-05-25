@@ -110,7 +110,7 @@ IMPUTED_WHEN_MISSING = {
     },
 }
 
-QUALITY_CRITICAL_MISSING = {"news", "announcements", "theme_tags"}
+QUALITY_CRITICAL_MISSING = {"news", "announcements", "theme_tags", "capital_flow", "dragon_tiger"}
 
 PRIVATE_KEYS_TO_DROP = {"_bars", "dsa_profile"}
 STRATEGY_PRIVATE_KEYS = {
@@ -174,6 +174,10 @@ def build_research_context(stock: dict[str, Any], snapshot: dict[str, Any]) -> R
         "strict_real_data": bool(data_quality.get("strict_real_data", stock.get("data_source") == "real_market")),
         "missing_fields": missing_fields,
         "field_quality": field_quality,
+        "fallback_fields": sorted(set(data_quality.get("fallback_fields") or [])),
+        "synthetic_fields": sorted(
+            field for field, row in field_quality.items() if row.get("status") in {"estimated", "fallback"}
+        ),
         "data_completeness_score": _data_completeness_score(missing_fields),
         "evidence_quality_score": _pool_adjusted_evidence_score(
             _evidence_quality_score(field_quality, missing_fields),
@@ -314,6 +318,8 @@ def _expanded_missing_fields(stock: dict[str, Any], data_quality: dict[str, Any]
         missing.add("announcements")
     if not stock.get("dragon_tiger_latest_date") and int(float(stock.get("dragon_tiger_recent_count") or 0)) == 0:
         missing.add("dragon_tiger")
+    if float(stock.get("main_net_inflow_yi") or 0) == 0 and "main_net_inflow_yi" not in (stock.get("_feature_tags") or {}):
+        missing.add("capital_flow")
     if not stock.get("theme_tags"):
         missing.add("theme_tags")
     return sorted(missing)
@@ -325,19 +331,36 @@ def _field_quality(
     missing_fields: list[str],
 ) -> dict[str, dict[str, Any]]:
     missing = set(missing_fields)
+    feature_tags = stock.get("_feature_tags") or {}
     quality: dict[str, dict[str, Any]] = {}
     for field in QUOTE_FIELDS:
-        quality[field] = _quality_row(
-            status="missing" if field in _fields_for_missing(missing) or _is_missing_value(stock.get(field)) else "observed",
-            source=source_trace.get("quote_source"),
-            confidence=0.0 if _is_missing_value(stock.get(field)) else 0.85,
-        )
+        tag = str(feature_tags.get(field) or "").upper()
+        if tag == "FALLBACK":
+            quality[field] = _quality_row("fallback", source_trace.get("quote_source"), 0.15)
+        else:
+            quality[field] = _quality_row(
+                status="missing" if field in _fields_for_missing(missing) or _is_missing_value(stock.get(field)) else "observed",
+                source=source_trace.get("quote_source"),
+                confidence=0.0 if _is_missing_value(stock.get(field)) else 0.9,
+            )
     for field in KLINE_DERIVED_FIELDS:
         if field in stock:
-            quality[field] = _quality_row("derived", source_trace.get("kline_source"), 0.9)
+            quality[field] = _quality_row("derived", source_trace.get("kline_source"), 0.78)
     for field in _fields_for_missing(missing):
         if field in stock:
-            quality[field] = _quality_row("imputed", source_trace.get("data_source"), 0.35)
+            quality[field] = _quality_row("fallback", source_trace.get("data_source"), 0.18)
+    for field, tag in feature_tags.items():
+        if field in quality:
+            continue
+        upper_tag = str(tag).upper()
+        if upper_tag == "DERIVED":
+            quality[field] = _quality_row("derived", source_trace.get("kline_source"), 0.72)
+        elif upper_tag in {"ESTIMATED", "SYNTHETIC"}:
+            quality[field] = _quality_row("estimated", source_trace.get("data_source"), 0.28)
+        elif upper_tag == "FALLBACK":
+            quality[field] = _quality_row("fallback", source_trace.get("data_source"), 0.12)
+        elif upper_tag == "OBSERVED":
+            quality[field] = _quality_row("observed", source_trace.get("quote_source"), 0.9)
     if "industry" in stock:
         quality["industry"] = _quality_row(
             "missing" if "industry" in missing else "observed",
@@ -365,16 +388,24 @@ def _quality_row(status: str, source: Any, confidence: float) -> dict[str, Any]:
 def _data_completeness_score(missing_fields: list[str]) -> float:
     penalty = 0.0
     for field in missing_fields:
-        penalty += 12.0 if field in QUALITY_CRITICAL_MISSING else 7.0
-    return round(max(0.0, 100.0 - penalty), 2)
+        penalty += 10.0 if field in QUALITY_CRITICAL_MISSING else 4.0
+    return round(max(25.0, 100.0 - penalty), 2)
 
 
 def _evidence_quality_score(field_quality: dict[str, dict[str, Any]], missing_fields: list[str]) -> float:
     if not field_quality:
         return _data_completeness_score(missing_fields)
     confidence = sum(float(row.get("confidence") or 0.0) for row in field_quality.values()) / len(field_quality)
+    status_penalty = 0.0
+    for row in field_quality.values():
+        status = str(row.get("status") or "")
+        if status == "fallback":
+            status_penalty += 0.01
+        elif status == "estimated":
+            status_penalty += 0.008
     completeness = _data_completeness_score(missing_fields) / 100
-    return round(max(0.0, min(100.0, (confidence * 0.55 + completeness * 0.45) * 100)), 2)
+    score = (confidence * 0.68 + completeness * 0.32) * 100 - status_penalty * 100
+    return round(max(0.0, min(100.0, score)), 2)
 
 
 def _pool_adjusted_evidence_score(base_score: float, data_quality: dict[str, Any]) -> float:
@@ -387,13 +418,20 @@ def _pool_adjusted_evidence_score(base_score: float, data_quality: dict[str, Any
     elif quote_sources >= 2:
         score += 3
     elif quote_sources == 1:
-        score -= 8
+        score -= 4
     if quote_quality:
-        score = score * 0.75 + quote_quality * 0.25
+        score = score * 0.85 + quote_quality * 0.15
     if conflicts:
         score -= min(18, len(conflicts) * 6)
     if data_quality.get("quote_cache_status") == "stale_cache":
         score -= 8
+    missing_fields = set(data_quality.get("missing_fields") or [])
+    if {"news", "announcements"} & missing_fields:
+        score -= 3
+    if "dragon_tiger" in missing_fields:
+        score -= 1.5
+    if "capital_flow" in missing_fields:
+        score -= 2
     return round(max(0.0, min(100.0, score)), 2)
 
 

@@ -86,6 +86,6 @@ def test_research_context_marks_missing_fact_domains_and_imputed_fields():
     assert "news" in quality["missing_fields"]
     assert "announcements" in quality["missing_fields"]
     assert "theme_tags" in quality["missing_fields"]
-    assert quality["field_quality"]["main_net_inflow_yi"]["status"] == "imputed"
+    assert quality["field_quality"]["main_net_inflow_yi"]["status"] == "fallback"
     assert quality["field_quality"]["industry"]["status"] == "missing"
     assert quality["data_completeness_score"] < 75

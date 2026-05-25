@@ -744,7 +744,8 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
     codes = [s["code"] for s in stocks]
     if not codes:
         return
-    aux = _aux_override if _aux_override is not None else load_auxiliary_for_stocks(db, codes)
+    trade_date = str(snapshot.get("trade_date") or "")
+    aux = _aux_override if _aux_override is not None else load_auxiliary_for_stocks(db, codes, trade_date=trade_date)
 
     limit_up_map = aux.get("limit_up", {})
     concept_map = aux.get("concept_sectors", {})
@@ -758,6 +759,9 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
 
     for stock in stocks:
         code = stock["code"]
+        data_quality = stock.setdefault("data_quality", {})
+        missing_fields = set(data_quality.get("missing_fields") or [])
+        fallback_fields = set(data_quality.get("fallback_fields") or [])
         profile = stock.get("dsa_profile", {})
         if not isinstance(profile, dict):
             profile = {}
@@ -780,6 +784,8 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             stock["dragon_tiger_recent_count"] = 1
             stock["dragon_tiger_latest_date"] = dt.get("trade_date")
             profile["dragon_tiger_net_amount_yi"] = dt.get("net_amount_yi", 0)
+        else:
+            missing_fields.add("dragon_tiger")
 
         # ── 新闻/公告特征 ──
         news_items = news_map.get(code, [])
@@ -793,6 +799,8 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             stock["positive_catalysts"] = [n["title"] for n in positive_items[:3]]
         if news_items:
             stock["latest_news"] = news_items[0].get("title", "")
+        else:
+            missing_fields.update({"news", "announcements"})
 
         # ── 概念板块特征 ──
         concepts = concept_map.get(code, [])
@@ -804,6 +812,10 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             # 行业作为概念板块降级方案
             stock["concept_sector_name"] = stock["industry"]
             stock["concept_sector_heat_rank"] = 50  # 中性热度
+            fallback_fields.update({"concept_sector_name", "concept_sector_heat_rank"})
+            missing_fields.add("theme_tags")
+        else:
+            missing_fields.add("theme_tags")
 
         # ── 资金流向细分 ──
         cf = flow_map.get(code)
@@ -818,6 +830,8 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             stock["inflow_10d_yi"] = cf.get("cumulative_inflow_10d_yi", 0)
             stock["cumulative_inflow_3d_yi"] = cf.get("cumulative_inflow_3d_yi", 0)
             profile["main_net_inflow_yi"] = cf.get("main_net_inflow_yi", 0)
+        else:
+            missing_fields.add("capital_flow")
 
         # ── 集合竞价特征 ──
         auc = auction_map.get(code)
@@ -854,6 +868,8 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             stock["upcoming_float_ratio"] = 0
 
         stock["dsa_profile"] = profile
+        data_quality["missing_fields"] = sorted(missing_fields)
+        data_quality["fallback_fields"] = sorted(fallback_fields)
 
     # ── 计算陈小群龙头战法专属信号 ──
     _compute_chen_xiaoqun_signals(stocks, snapshot, concept_map, flow_map, dt_map)
@@ -973,25 +989,37 @@ def _compute_chen_xiaoqun_signals(
 def _tag_features(item: dict[str, Any]) -> None:
     """Annotate every feature with its provenance tag."""
     tags: dict[str, str] = {}
+    data_quality = item.get("data_quality") or {}
+    fallback_fields = set(data_quality.get("fallback_fields") or [])
+    missing_fields = set(data_quality.get("missing_fields") or [])
     for key in item:
         if key.startswith("_"):
             continue
-        if key in _OBSERVED_FIELDS:
+        if key in fallback_fields:
+            tags[key] = "FALLBACK"
+        elif key in _OBSERVED_FIELDS:
             tags[key] = "OBSERVED"
         elif key in _DERIVED_SCORE_FIELDS:
-            tags[key] = "OBSERVED"
+            tags[key] = "DERIVED"
         elif key in _OBSERVABLE_FIELDS:
-            tags[key] = "OBSERVABLE"
+            tags[key] = "FALLBACK" if key in missing_fields else "OBSERVED"
         elif key in _SYNTHETIC_FIELDS:
-            tags[key] = "SYNTHETIC"
+            tags[key] = "ESTIMATED"
     item["_feature_tags"] = tags
 
 
 def _compute_authenticity(item: dict[str, Any]) -> float:
-    """Compute the ratio of observed features among scored features."""
+    """Compute authenticity with lower weight for derived and fallback features."""
     tags = item.get("_feature_tags", {})
     scored = [k for k in _SCORED_FEATURES if k in tags]
     if not scored:
         return 1.0
-    observed = sum(1 for k in scored if tags[k] == "OBSERVED")
-    return round(observed / len(scored), 4)
+    weights = {
+        "OBSERVED": 1.0,
+        "DERIVED": 0.72,
+        "ESTIMATED": 0.30,
+        "FALLBACK": 0.12,
+        "SYNTHETIC": 0.0,
+    }
+    total = sum(weights.get(tags[k], 0.0) for k in scored)
+    return round(total / len(scored), 4)

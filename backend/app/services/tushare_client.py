@@ -87,6 +87,22 @@ def ts_code(code: str) -> str:
     return f"{code}.SZ"
 
 
+def _normalize_trade_date(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if len(raw) >= 10 and raw[4] == "-" and raw[7] == "-":
+        return raw[:10]
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if len(digits) >= 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    return raw[:10]
+
+
+def _compact_trade_date(value: Any) -> str:
+    return _normalize_trade_date(value).replace("-", "")
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # K线 + 技术指标 + 筹码（一次拉取，合并返回）
 # ═════════════════════════════════════════════════════════════════════════════
@@ -268,15 +284,27 @@ def fetch_stock_industry_map() -> dict[str, str]:
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-def fetch_moneyflow(code: str, days: int = 10) -> dict[str, Any] | None:
+def fetch_moneyflow(code: str, days: int = 10, trade_date: str | None = None) -> dict[str, Any] | None:
     """获取个股资金流向（含累计数据）。"""
     pro = get_pro()
     tsc = ts_code(code)
-    df = pro.moneyflow(ts_code=tsc, limit=days)
+    target = _compact_trade_date(trade_date)
+    if target:
+        start = (date.fromisoformat(_normalize_trade_date(target)) - timedelta(days=max(days * 3, 30))).strftime("%Y%m%d")
+        try:
+            df = pro.moneyflow(ts_code=tsc, start_date=start, end_date=target)
+        except Exception:
+            df = pro.moneyflow(ts_code=tsc, trade_date=target)
+    else:
+        df = pro.moneyflow(ts_code=tsc, limit=days)
     if df is None or df.empty:
         return None
 
     df = df.sort_values("trade_date", ascending=False)
+    if target:
+        df = df[df["trade_date"].astype(str) <= target]
+        if df.empty or str(df.iloc[0].get("trade_date", "")) != target:
+            return None
     latest = df.iloc[0]
 
     cum_3d = cum_5d = cum_10d = 0.0
@@ -291,7 +319,7 @@ def fetch_moneyflow(code: str, days: int = 10) -> dict[str, Any] | None:
 
     return {
         "code": code,
-        "trade_date": str(latest.get("trade_date", "")),
+        "trade_date": _normalize_trade_date(latest.get("trade_date", target)),
         "main_net_inflow_yi": round(float(latest.get("net_mf_amount") or 0) / 1e8, 4),
         "super_large_net_inflow_yi": round(
             float(latest.get("buy_elg_amount") or 0) / 1e8
@@ -328,7 +356,7 @@ def fetch_moneyflow(code: str, days: int = 10) -> dict[str, Any] | None:
 def fetch_limit_up_board(trade_date: str | None = None) -> list[dict[str, Any]]:
     """获取涨停板榜单。trade_date 格式 YYYYMMDD，默认最新交易日。"""
     pro = get_pro()
-    td = trade_date or date.today().strftime("%Y%m%d")
+    td = _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
     result: list[dict[str, Any]] = []
     for limit_type in ("U", "D"):
         try:
@@ -368,7 +396,7 @@ def fetch_limit_up_board(trade_date: str | None = None) -> list[dict[str, Any]]:
 def fetch_dragon_tiger(trade_date: str | None = None) -> list[dict[str, Any]]:
     """获取龙虎榜数据。"""
     pro = get_pro()
-    td = trade_date or date.today().strftime("%Y%m%d")
+    td = _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
     try:
         df = pro.top_list(trade_date=td)
     except Exception:
@@ -455,21 +483,30 @@ def fetch_concept_members(sector_code: str, trade_date: str = "") -> list[dict[s
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-def fetch_margin(code: str, days: int = 5) -> list[dict[str, Any]]:
+def fetch_margin(code: str, days: int = 5, trade_date: str | None = None) -> list[dict[str, Any]]:
     """获取个股融资融券余额。"""
     pro = get_pro()
     tsc = ts_code(code)
+    target = _compact_trade_date(trade_date)
     try:
-        df = pro.margin(ts_code=tsc, limit=days)
+        if target:
+            start = (date.fromisoformat(_normalize_trade_date(target)) - timedelta(days=max(days * 3, 30))).strftime("%Y%m%d")
+            df = pro.margin(ts_code=tsc, start_date=start, end_date=target)
+        else:
+            df = pro.margin(ts_code=tsc, limit=days)
     except Exception:
         return []
     if df is None or df.empty:
         return []
+    if target:
+        df = df[df["trade_date"].astype(str) <= target]
+        if df.empty:
+            return []
     result = []
     for _, row in df.iterrows():
         result.append({
             "code": code,
-            "trade_date": str(row.get("trade_date", "")),
+            "trade_date": _normalize_trade_date(row.get("trade_date", target)),
             "rzye": _f(row.get("rzye")) / 1e8,  # 融资余额(亿)
             "rqye": _f(row.get("rqye")) / 1e8,  # 融券余额(亿)
             "rzmre": _f(row.get("rzmre")) / 1e8,  # 融资买入额(亿)
@@ -479,35 +516,53 @@ def fetch_margin(code: str, days: int = 5) -> list[dict[str, Any]]:
     return result
 
 
-def fetch_hk_hold(code: str) -> dict[str, Any] | None:
+def fetch_hk_hold(code: str, trade_date: str | None = None) -> dict[str, Any] | None:
     """获取港股通持股（最新一条）。"""
     pro = get_pro()
     tsc = ts_code(code)
+    target = _compact_trade_date(trade_date)
     try:
-        df = pro.hk_hold(ts_code=tsc, limit=1)
+        if target:
+            try:
+                df = pro.hk_hold(ts_code=tsc, trade_date=target)
+            except Exception:
+                df = pro.hk_hold(ts_code=tsc, limit=1)
+        else:
+            df = pro.hk_hold(ts_code=tsc, limit=1)
     except Exception:
         return None
     if df is None or df.empty:
         return None
+    if target:
+        df = df[df["trade_date"].astype(str) <= target]
+        if df.empty:
+            return None
+        df = df.sort_values("trade_date", ascending=False)
     row = df.iloc[0]
     return {
         "code": code,
-        "trade_date": str(row.get("trade_date", "")),
+        "trade_date": _normalize_trade_date(row.get("trade_date", target)),
         "vol": _f(row.get("vol")),  # 持股数量(股)
         "ratio": _f(row.get("ratio")),  # 持股比例(%)
     }
 
 
-def fetch_holder_number(code: str, limit: int = 5) -> list[dict[str, Any]]:
+def fetch_holder_number(code: str, limit: int = 5, trade_date: str | None = None) -> list[dict[str, Any]]:
     """获取股东人数变化。"""
     pro = get_pro()
     tsc = ts_code(code)
+    target = _compact_trade_date(trade_date)
     try:
-        df = pro.stk_holdernumber(ts_code=tsc, limit=limit)
+        if target:
+            df = pro.stk_holdernumber(ts_code=tsc, end_date=target, limit=limit)
+        else:
+            df = pro.stk_holdernumber(ts_code=tsc, limit=limit)
     except Exception:
         return []
     if df is None or df.empty:
         return []
+    if target:
+        df = df[df["end_date"].astype(str) <= target]
     result = []
     for _, row in df.iterrows():
         result.append({
@@ -518,21 +573,28 @@ def fetch_holder_number(code: str, limit: int = 5) -> list[dict[str, Any]]:
     return result
 
 
-def fetch_stk_limit(code: str, days: int = 5) -> list[dict[str, Any]]:
+def fetch_stk_limit(code: str, days: int = 5, trade_date: str | None = None) -> list[dict[str, Any]]:
     """获取每日涨跌停价格。"""
     pro = get_pro()
     tsc = ts_code(code)
+    target = _compact_trade_date(trade_date)
     try:
-        df = pro.stk_limit(ts_code=tsc, limit=days)
+        if target:
+            start = (date.fromisoformat(_normalize_trade_date(target)) - timedelta(days=max(days * 3, 30))).strftime("%Y%m%d")
+            df = pro.stk_limit(ts_code=tsc, start_date=start, end_date=target)
+        else:
+            df = pro.stk_limit(ts_code=tsc, limit=days)
     except Exception:
         return []
     if df is None or df.empty:
         return []
+    if target:
+        df = df[df["trade_date"].astype(str) <= target]
     result = []
     for _, row in df.iterrows():
         result.append({
             "code": code,
-            "trade_date": str(row.get("trade_date", "")),
+            "trade_date": _normalize_trade_date(row.get("trade_date", target)),
             "up_limit": _f(row.get("up_limit")),
             "down_limit": _f(row.get("down_limit")),
         })
@@ -561,7 +623,7 @@ def fetch_suspend(code: str) -> dict[str, Any] | None:
 def fetch_top_inst(trade_date: str | None = None) -> list[dict[str, Any]]:
     """获取龙虎榜机构席位交易明细（top_inst 接口）。"""
     pro = get_pro()
-    td = trade_date or date.today().strftime("%Y%m%d")
+    td = _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
     try:
         df = pro.top_inst(trade_date=td)
     except Exception:
@@ -611,7 +673,7 @@ def fetch_auction(code: str, trade_date: str | None = None) -> dict[str, Any] | 
     """获取个股集合竞价数据。"""
     pro = get_pro()
     tsc = ts_code(code)
-    td = trade_date or date.today().strftime("%Y%m%d")
+    td = _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
     try:
         df = pro.stk_auction(ts_code=tsc, trade_date=td)
     except Exception:
@@ -637,12 +699,14 @@ def fetch_auction(code: str, trade_date: str | None = None) -> dict[str, Any] | 
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-def fetch_factor_pro(code: str, days: int = 90) -> list[dict[str, Any]]:
+def fetch_factor_pro(code: str, days: int = 90, trade_date: str | None = None) -> list[dict[str, Any]]:
     """获取个股量化因子（stk_factor_pro）。"""
     pro = get_pro()
     tsc = ts_code(code)
-    sd = (date.today() - timedelta(days=days * 3)).strftime("%Y%m%d")
-    ed = date.today().strftime("%Y%m%d")
+    target = _normalize_trade_date(trade_date)
+    end_day = date.fromisoformat(target) if target else date.today()
+    sd = (end_day - timedelta(days=days * 3)).strftime("%Y%m%d")
+    ed = end_day.strftime("%Y%m%d")
     try:
         df = pro.stk_factor_pro(ts_code=tsc, start_date=sd, end_date=ed)
     except Exception:
@@ -876,7 +940,7 @@ def fetch_minute_kbars(code: str, trade_date: str | None = None) -> list[dict[st
     import httpx
 
     market = "sh" if code.startswith(("6", "9")) else "sz"
-    td = trade_date or date.today().strftime("%Y-%m-%d")
+    td = _normalize_trade_date(trade_date) or date.today().strftime("%Y-%m-%d")
 
     url = f"https://ifzq.gtimg.cn/appstock/app/minute/query?_var=min_data&code={market}{code}"
     try:

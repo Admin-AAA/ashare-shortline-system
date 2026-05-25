@@ -15,6 +15,7 @@ import {
   Flame,
   History,
   Layers3,
+  ListFilter,
   Loader2,
   NotebookPen,
   PauseCircle,
@@ -32,6 +33,7 @@ import { logger } from "./utils/logger";
 import type {
   HomeBootstrap,
   DataSourceHealthRow,
+  ModelRoute,
   MarketSnapshot,
   LocalPoolStatus,
   UnifiedQuotePoolRow,
@@ -39,6 +41,7 @@ import type {
   PresetDraft,
   PresetSkillDraft,
   PresetStatsRow,
+  PrecisionAtKRow,
   RecommendationCard,
   RecommendationDetail,
   RunMode,
@@ -52,16 +55,20 @@ import type {
   SkillMode,
   SkillStatsRow,
   SkillSummary,
+  ScoreLineStatsRow,
+  SetupStatsRow,
   StatsOverview,
 } from "./types";
 import SkillConfigPanel from "./components/SkillConfigPanel";
 import MarketSnapshotPanel from "./components/MarketSnapshot";
 import RecommendationList from "./components/RecommendationList";
 import DataSourcePanel from "./components/DataSourcePanel";
+import ModelRoutePanel from "./components/ModelRoutePanel";
 import RunHistoryPanel, { type RunHistoryMode } from "./components/RunHistoryPanel";
 import BacktestPanel from "./components/BacktestPanel";
+import RunFunnelAuditPanel from "./components/RunFunnelAuditPanel";
 
-type Section = "desk" | "pool" | "runs" | "automation" | "skills" | "sources" | "localPool" | "stats" | "backtest";
+type Section = "desk" | "pool" | "audit" | "runs" | "automation" | "skills" | "sources" | "localPool" | "stats" | "backtest";
 
 type ReviewDraft = {
   user_label: string;
@@ -99,7 +106,7 @@ const EMPTY_PRESET_DRAFT: PresetDraft = {
   market_scope: "all",
   market_scope_value: "",
   risk_template: "balanced",
-  output_count: 6,
+  score_line: 72,
   data_source: "local_pool",
   hide_recent_repeats: true,
 };
@@ -148,6 +155,7 @@ export default function App() {
   const [taskRuns, setTaskRuns] = useState<ScheduledTaskRun[]>([]);
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [dataSources, setDataSources] = useState<DataSourceHealthRow[]>([]);
+  const [modelRoutes, setModelRoutes] = useState<ModelRoute[]>([]);
   const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
   const [localPool, setLocalPool] = useState<LocalPoolStatus | null>(null);
   const [statsMode, setStatsMode] = useState<RunMode>("formal");
@@ -177,6 +185,9 @@ export default function App() {
   const [overview, setOverview] = useState<StatsOverview | null>(null);
   const [statsBySkill, setStatsBySkill] = useState<SkillStatsRow[]>([]);
   const [statsByPreset, setStatsByPreset] = useState<PresetStatsRow[]>([]);
+  const [statsBySetup, setStatsBySetup] = useState<SetupStatsRow[]>([]);
+  const [precisionAtKRows, setPrecisionAtKRows] = useState<PrecisionAtKRow[]>([]);
+  const [statsByScoreLine, setStatsByScoreLine] = useState<ScoreLineStatsRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [poolRefreshing, setPoolRefreshing] = useState(false);
   const [poolLoading, setPoolLoading] = useState(false);
@@ -277,6 +288,12 @@ export default function App() {
   useEffect(() => {
     if (authenticated && section === "automation") {
       void loadScheduledTasks();
+    }
+  }, [authenticated, section]);
+
+  useEffect(() => {
+    if (authenticated && section === "sources") {
+      void loadModelRoutes();
     }
   }, [authenticated, section]);
 
@@ -466,14 +483,20 @@ export default function App() {
 
   async function loadStats(mode: RunMode) {
     try {
-      const [overviewRow, bySkill, byPreset] = await Promise.all([
+      const [overviewRow, bySkill, byPreset, bySetup, precisionRows, scoreLineRows] = await Promise.all([
         api.statsOverview(mode),
         api.statsBySkill(mode),
         api.statsByPreset(mode),
+        api.metricsBySetup(mode),
+        api.precisionAtK(mode),
+        api.metricsByScoreLine(mode),
       ]);
       setOverview(overviewRow);
       setStatsBySkill(bySkill);
       setStatsByPreset(byPreset);
+      setStatsBySetup(bySetup);
+      setPrecisionAtKRows(precisionRows);
+      setStatsByScoreLine(scoreLineRows);
     } catch (err) {
       setError(messageFromError(err));
     }
@@ -482,6 +505,14 @@ export default function App() {
   async function loadDataSources() {
     try {
       setDataSources(await api.dataSources());
+    } catch (err) {
+      setError(messageFromError(err));
+    }
+  }
+
+  async function loadModelRoutes() {
+    try {
+      setModelRoutes(await api.modelRoutes());
     } catch (err) {
       setError(messageFromError(err));
     }
@@ -596,7 +627,7 @@ export default function App() {
       market_scope: preset.market_scope,
       market_scope_value: preset.market_scope_value ?? "",
       risk_template: preset.risk_template,
-      output_count: preset.output_count,
+      score_line: preset.score_line,
       data_source: (preset as any).data_source ?? "local_pool",
       hide_recent_repeats: preset.hide_recent_repeats,
     });
@@ -665,7 +696,7 @@ export default function App() {
         market_scope: presetDraft.market_scope,
         market_scope_value: presetDraft.market_scope_value.trim() || null,
         risk_template: presetDraft.risk_template,
-        output_count: presetDraft.output_count,
+        score_line: presetDraft.score_line,
         hide_recent_repeats: presetDraft.hide_recent_repeats,
         data_source: presetDraft.data_source,
         skills: presetSkillDrafts.map((item, index) => ({
@@ -712,7 +743,7 @@ export default function App() {
         market_scope: selectedPreset.market_scope,
         market_scope_value: selectedPreset.market_scope_value ?? null,
         risk_template: selectedPreset.risk_template,
-        output_count: selectedPreset.output_count,
+        score_line: selectedPreset.score_line,
         hide_recent_repeats: selectedPreset.hide_recent_repeats,
         data_source: (selectedPreset as any).data_source ?? "local_pool",
         skills: selectedPreset.skills.map((skill, index) => ({
@@ -949,6 +980,57 @@ export default function App() {
       setMessage(`${row.source} ${row.enabled ? "已关闭" : "已启用"}`);
     } catch (err) {
       setError(messageFromError(err));
+    }
+  }
+
+  async function createModelRoute(payload: Record<string, unknown>) {
+    try {
+      await api.createModelRoute(payload);
+      await loadModelRoutes();
+      setMessage("模型路由已创建");
+    } catch (err) {
+      setError(messageFromError(err));
+      throw err;
+    }
+  }
+
+  async function updateModelRoute(routeId: string, payload: Record<string, unknown>) {
+    try {
+      await api.updateModelRoute(routeId, payload);
+      await loadModelRoutes();
+      setMessage("模型路由已更新");
+    } catch (err) {
+      setError(messageFromError(err));
+      throw err;
+    }
+  }
+
+  async function deleteModelRoute(routeId: string) {
+    try {
+      await api.deleteModelRoute(routeId);
+      await loadModelRoutes();
+      setMessage("模型路由已删除");
+    } catch (err) {
+      setError(messageFromError(err));
+      throw err;
+    }
+  }
+
+  async function moveModelRoute(routeId: string, direction: "up" | "down") {
+    const currentIndex = modelRoutes.findIndex((item) => item.route_id === routeId);
+    if (currentIndex < 0) return;
+    const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= modelRoutes.length) return;
+    const ordered = [...modelRoutes];
+    const [moved] = ordered.splice(currentIndex, 1);
+    ordered.splice(targetIndex, 0, moved);
+    try {
+      const reordered = await api.reorderModelRoutes(ordered.map((item) => item.route_id));
+      setModelRoutes(reordered);
+      setMessage("模型优先级已更新");
+    } catch (err) {
+      setError(messageFromError(err));
+      throw err;
     }
   }
 
@@ -1225,6 +1307,7 @@ export default function App() {
         <nav className="nav-list">
           <NavButton active={section === "desk"} icon={<Play size={16} />} label="运行台" onClick={() => setSection("desk")} />
           <NavButton active={section === "pool"} icon={<Layers3 size={16} />} label="机会池" onClick={() => setSection("pool")} />
+          <NavButton active={section === "audit"} icon={<ListFilter size={16} />} label="过滤审计" onClick={() => setSection("audit")} />
           <NavButton active={section === "runs"} icon={<History size={16} />} label="运行记录" onClick={() => setSection("runs")} />
           <NavButton active={section === "automation"} icon={<Clock3 size={16} />} label="自动任务" onClick={() => setSection("automation")} />
           <NavButton active={section === "skills"} icon={<BrainCircuit size={16} />} label="Skill 工作室" onClick={() => setSection("skills")} />
@@ -1451,6 +1534,8 @@ export default function App() {
           />
         )}
 
+        {section === "audit" && <RunFunnelAuditPanel runs={runs} />}
+
         {section === "automation" && (
           <AutomationPage
             tasks={scheduledTasks}
@@ -1512,7 +1597,17 @@ export default function App() {
         )}
 
         {section === "sources" && (
-          <DataSourcePanel rows={dataSources} onRefresh={loadDataSources} onToggle={toggleDataSource} />
+          <div className="sources-stack">
+            <DataSourcePanel rows={dataSources} onRefresh={loadDataSources} onToggle={toggleDataSource} />
+            <ModelRoutePanel
+              routes={modelRoutes}
+              onRefresh={loadModelRoutes}
+              onCreate={createModelRoute}
+              onUpdate={updateModelRoute}
+              onDelete={deleteModelRoute}
+              onMove={moveModelRoute}
+            />
+          </div>
         )}
 
         {section === "localPool" && (
@@ -1560,6 +1655,18 @@ export default function App() {
               <PanelTitle title="按预设" subtitle="正式与实验严格分开" />
               <StatsTable rows={statsByPreset} nameKey="preset_name" subKey="preset_id" countKey="recommendation_count" />
             </section>
+            <section className="panel">
+              <PanelTitle title="按买点" subtitle="setup 统计口径统一" />
+              <StatsTable rows={statsBySetup} nameKey="setup_type" subKey="setup_type" countKey="sample_count" />
+            </section>
+            <section className="panel">
+              <PanelTitle title="Precision@K" subtitle="按运行内前 K 只统计" />
+              <PrecisionStatsTable rows={precisionAtKRows} />
+            </section>
+            <section className="panel">
+              <PanelTitle title="分数线效果" subtitle="触发率 / 命中率 / 收益 / 回撤" />
+              <ScoreLineStatsTable rows={statsByScoreLine} />
+            </section>
           </div>
           )
         )}
@@ -1573,6 +1680,7 @@ function titleFor(section: Section) {
   return {
     desk: "运行台",
     pool: "机会池",
+    audit: "过滤审计",
     runs: "运行记录",
     automation: "自动任务",
     skills: "Skill 工作室",
@@ -1587,6 +1695,7 @@ function subtitleFor(section: Section) {
   return {
     desk: "用预设组织一次运行，输出进入机会池。",
     pool: "按 Run、桶和 Skill 快速定位值得复盘的标的。",
+    audit: "逐票查看每一层过滤原因和分数分布。",
     runs: "回看每次运行的市场状态、命中率和输出质量。",
     automation: "让系统按用户选择的时间自动刷新数据或触发策略预设。",
     skills: "管理策略资产，控制正式、实验和停用状态。",
@@ -1769,7 +1878,7 @@ function PresetSummary({ preset }: { preset: Preset }) {
   return (
     <div className="summary-grid">
       <MiniStat label="模式" value={displayText(preset.run_mode)} />
-      <MiniStat label="输出" value={preset.output_count} />
+      <MiniStat label="分数线" value={preset.score_line.toFixed(1)} />
       <MiniStat label="风控" value={displayText(preset.risk_template)} />
       <MiniStat label="范围" value={displayText(preset.market_scope)} />
       <MiniStat label="重复票" value={preset.hide_recent_repeats ? "隐藏" : "展示"} />
@@ -2102,6 +2211,15 @@ function RecommendationPane({
   const riskFactors: string[] = Array.isArray(fs.risk_factors) ? fs.risk_factors : [];
   const supportLevels: number[] = Array.isArray(fs.support_levels) ? fs.support_levels : [];
   const resistLevels: number[] = Array.isArray(fs.resistance_levels) ? fs.resistance_levels : [];
+  const scoreBreakdown = item.score_breakdown ?? {};
+  const scoreLineMeta = item.score_line_meta ?? {};
+  const componentRows = [
+    { key: "skill_agent", label: "Agent" },
+    { key: "strategy_rule", label: "Rule" },
+    { key: "market", label: "Market" },
+    { key: "risk", label: "Risk" },
+    { key: "evidence", label: "Evidence" },
+  ] as const;
   const extraRisks: string[] = [];
   if (Number(fs.turnover_rate) >= 10) extraRisks.push(`换手率 ${Number(fs.turnover_rate).toFixed(1)}% 偏高`);
   if (Number(fs.upper_shadow_count20) >= 4) extraRisks.push(`连续上影线 ${fs.upper_shadow_count20} 天，抛压显现`);
@@ -2226,6 +2344,47 @@ function RecommendationPane({
         ) : null}
       </section>
 
+      <section className="detail-block">
+        <h3>分数组成</h3>
+        <div className="summary-grid">
+          <MiniStat label="最终分" value={item.final_score.toFixed(1)} />
+          <MiniStat label="分数线" value={(scoreLineMeta.effective_score_line ?? item.final_score).toFixed(1)} />
+          <MiniStat label="出票结果" value={scoreLineMeta.passed === false ? "未通过" : "通过"} />
+          <MiniStat label="市场调整" value={(scoreLineMeta.market_adjustment ?? 0).toFixed(1)} />
+          <MiniStat label="风控调整" value={(scoreLineMeta.risk_template_adjustment ?? 0).toFixed(1)} />
+          <MiniStat label="证据惩罚" value={(scoreLineMeta.evidence_adjustment ?? 0).toFixed(1)} />
+          <MiniStat label="质量上限" value={(scoreBreakdown.quality_cap ?? 0).toFixed(1)} />
+          <MiniStat label="共识加成" value={(scoreBreakdown.consensus_boost ?? 0).toFixed(2)} />
+        </div>
+        <div className="signal-list">
+          {componentRows.map((component) => {
+            const rawValue = Number(scoreBreakdown.raw_scores?.[component.key] ?? 0);
+            const weightedValue = Number(scoreBreakdown.weighted_scores?.[component.key] ?? 0);
+            const weightValue = Number(scoreBreakdown.weights?.[component.key] ?? 0);
+            return (
+              <div key={component.key} className="signal-card">
+                <div className="signal-head">
+                  <strong>{component.label}</strong>
+                  <span>{weightValue.toFixed(2)}</span>
+                </div>
+                <p>
+                  原始 {rawValue.toFixed(1)} · 加权 {weightedValue.toFixed(1)}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+        {scoreLineMeta.reasons?.length ? (
+          <div className="risk-chips">
+            {scoreLineMeta.reasons.map((reason) => (
+              <span key={reason} className="risk-chip warning">
+                {reason}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
       {(fs.trend_status || fs.macd_status || fs.rsi_12 != null) ? (
         <section className="detail-block tech-summary">
           <h3>技术指标</h3>
@@ -2333,8 +2492,7 @@ function RecommendationPane({
               { value: "pending", label: "待定" },
               { value: "success", label: "成功" },
               { value: "failed", label: "失败" },
-              { value: "not_triggered", label: "未触发" },
-              { value: "risk_hit", label: "风控触发" },
+              { value: "missed", label: "未触发" },
             ]}
             onChange={(value) => onOutcomeDraftChange({ ...outcomeDraft, outcome_label: value })}
           />
@@ -2479,6 +2637,7 @@ function displayText(key: string): string {
     pending: "待定",
     success: "成功",
     failed: "失败",
+    missed: "未触发",
     not_triggered: "未触发",
     risk_hit: "风控触发",
     queued: "排队中",
@@ -2525,6 +2684,7 @@ function displayTagText(text: string) {
     pending: "待验证",
     success: "成功",
     failed: "失败",
+    missed: "未触发",
     not_triggered: "未触发",
     risk_hit: "风控命中",
     queued: "排队中",
@@ -2548,7 +2708,7 @@ function toneForTag(text: string) {
   if (["experiment", "pending", "warning", "local_pool_preferred", "queued", "running"].includes(text)) return "warning";
   if (["degraded", "untested"].includes(text)) return "warning";
   if (["failed", "ignored", "risk_hit", "blocked", "interrupted", "stale"].includes(text)) return "danger";
-  if (["not_triggered", "realtime"].includes(text)) return "blue";
+  if (["missed", "not_triggered", "realtime"].includes(text)) return "blue";
   if (["disabled", "none", "inactive", "local_pool"].includes(text)) return "muted";
   return "neutral";
 }
@@ -3121,7 +3281,10 @@ function OverviewCards({ overview }: { overview: StatsOverview }) {
       <MiniStat label="运行数" value={overview.run_count} />
       <MiniStat label="推荐数" value={overview.recommendation_count} />
       <MiniStat label="已标注" value={overview.labeled_count} />
+      <MiniStat label="已触发" value={overview.triggered_count ?? 0} />
       <MiniStat label="成功数" value={overview.success_count} />
+      <MiniStat label="未触发" value={overview.missed_count ?? 0} />
+      <MiniStat label="待定" value={overview.pending_count} />
       <MiniStat label="命中率" value={`${(overview.hit_rate * 100).toFixed(1)}%`} />
       <MiniStat label="均收益" value={`${overview.avg_return.toFixed(2)}%`} />
       <MiniStat label="均回撤" value={`${overview.avg_drawdown.toFixed(2)}%`} />
@@ -3169,6 +3332,76 @@ function StatsTable({
               <td>
                 <ScenarioTags row={row} />
               </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function PrecisionStatsTable({ rows }: { rows: PrecisionAtKRow[] }) {
+  if (!rows.length) {
+    return <EmptyHint text="暂无 Precision@K 数据" />;
+  }
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>K</th>
+            <th>样本运行</th>
+            <th>已评估</th>
+            <th>命中</th>
+            <th>Precision</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.k}>
+              <td>{row.k}</td>
+              <td>{row.sample_runs}</td>
+              <td>{row.evaluated_count}</td>
+              <td>{row.success_count}</td>
+              <td>{`${(row.precision * 100).toFixed(1)}%`}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ScoreLineStatsTable({ rows }: { rows: ScoreLineStatsRow[] }) {
+  if (!rows.length) {
+    return <EmptyHint text="暂无分数线效果数据" />;
+  }
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>分数线</th>
+            <th>激活率</th>
+            <th>已标注</th>
+            <th>已触发</th>
+            <th>未触发</th>
+            <th>胜率</th>
+            <th>平均收益</th>
+            <th>平均回撤</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.score_line}>
+              <td>{row.score_line.toFixed(1)}</td>
+              <td>{`${(row.activation_rate * 100).toFixed(1)}%`}</td>
+              <td>{row.labeled_count}</td>
+              <td>{row.triggered_count}</td>
+              <td>{row.missed_count ?? Math.max(0, row.labeled_count - row.triggered_count)}</td>
+              <td>{`${(row.hit_rate * 100).toFixed(1)}%`}</td>
+              <td className={row.avg_return >= 0 ? "positive" : "negative"}>{row.avg_return.toFixed(2)}%</td>
+              <td className="negative">{row.avg_drawdown.toFixed(2)}%</td>
             </tr>
           ))}
         </tbody>

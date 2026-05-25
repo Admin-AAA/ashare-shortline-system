@@ -23,6 +23,28 @@ _RISK_SEVERITY_RULES: list[tuple[list[str], str]] = [
     (["近期已有较大涨幅", "涨幅过大", "追高风险"], "high"),
     (["爆量", "分歧", "高换手分歧"], "high"),
     (["跌破关键支撑", "破位", "跌穿"], "high"),
+    ([
+        "跟风补涨",
+        "跟风杂毛",
+        "非龙头股",
+        "非板块龙头",
+        "非短线情绪龙头",
+        "非绝对龙头",
+        "无连续涨停带动效应",
+        "非板块涨停核心",
+        "缺乏板块带动效应",
+        "无带队效应",
+        "跟风套利风险",
+        "纯技术面跟随",
+        "缺乏硬逻辑支撑",
+        "硬逻辑不足",
+        "股票非龙头",
+        "主线跟风",
+        "更可能属于跟风或趋势中军",
+        "板块带动效应存疑",
+        "不符合龙头战法的核心要求",
+        "不符合龙头战法核心要求",
+    ], "high"),
     (["主力资金净流入-", "主力资金大幅流出", "持续流出"], "high"),
     (["盈亏比低于", "盈亏比不达标"], "high"),
     (["股权质押比例", "质押风险"], "high"),
@@ -38,9 +60,11 @@ _RISK_SEVERITY_RULES: list[tuple[list[str], str]] = [
     (["量能中性", "缺乏.*信号", "方向不明"], "medium"),
     (["股价未站上MA", "短线支撑未确认"], "medium"),
     (["市场快照缺失"], "medium"),
+    (["数据缺失", "关键数据缺失", "数据完整性不足", "证据覆盖不足"], "info"),
+    (["Skill Agent 审查暂不可用", "Skill Agent 直接审查失败", "Agent 审查暂不可用"], "info"),
     # ── info: 数据覆盖/完整性（不扣分） ──
     (["样本或证据覆盖不足", "数据完整度", "证据质量不足"], "info"),
-    (["龙虎榜数据缺失", "新闻/公告未完整覆盖", "题材标签缺失", "多源报价存在冲突"], "info"),
+    (["龙虎榜数据缺失", "无龙虎榜数据", "新闻/公告未完整覆盖", "题材标签缺失", "多源报价存在冲突"], "info"),
     (["样本仅", "评分已按覆盖率降权", "评分已降权"], "info"),
     (["Agent 加分受限"], "info"),
     (["数据为估计值", "可靠性稍低"], "info"),
@@ -69,8 +93,8 @@ DEFAULT_AGG_WEIGHTS = {
 
 # 有 Agent 审查时的权重（strategy_rule 降为辅证，skill_agent 主导）
 AGENT_PRESENT_WEIGHTS = {
-    "skill_agent": 0.60,
-    "strategy_rule": 0.10,
+    "skill_agent": 0.55,
+    "strategy_rule": 0.15,
     "market": 0.10,
     "risk": 0.10,
     "evidence": 0.10,
@@ -159,6 +183,92 @@ def market_regime_weights(snapshot: dict[str, Any] | None = None) -> dict[str, f
 
     total = sum(weights.values())
     return {k: round(v / total, 4) for k, v in weights.items()}
+
+
+def resolve_score_line_context(
+    base_score_line: float,
+    market_snapshot: dict[str, Any] | None = None,
+    risk_template: str = "balanced",
+) -> dict[str, Any]:
+    base = float(base_score_line or 0)
+    market_base = _market_base(market_snapshot)
+    sentiment = _market_sentiment(market_snapshot)
+    market_adjustment = {
+        "强牛": -13.0,
+        "偏多": -6.0,
+        "震荡": 0.0,
+        "弱势": 5.0,
+    }.get(market_base, 0.0)
+    sentiment_adjustment = {
+        "高潮": -2.0,
+        "活跃": -1.0,
+        "平淡": 0.0,
+        "冰点": 3.0,
+    }.get(sentiment, 0.0)
+    risk_adjustment = {
+        "conservative": 2.0,
+        "balanced": 0.0,
+        "aggressive": -1.0,
+    }.get(str(risk_template or "balanced"), 0.0)
+    effective = round(max(35.0, min(95.0, base + market_adjustment + sentiment_adjustment + risk_adjustment)), 2)
+    return {
+        "base_score_line": round(base, 2),
+        "market_base": market_base,
+        "market_sentiment": sentiment,
+        "market_adjustment": round(market_adjustment + sentiment_adjustment, 2),
+        "risk_template_adjustment": round(risk_adjustment, 2),
+        "effective_score_line": effective,
+    }
+
+
+def _card_score_line_adjustment(card: dict[str, Any]) -> dict[str, Any]:
+    evidence_score = float(
+        card.get("raw_component_scores", {}).get("evidence")
+        or card.get("evidence_quality_score")
+        or 0.0
+    )
+    completeness = float(card.get("data_completeness_score") or 100.0)
+    authenticity = float(card.get("data_authenticity") or 1.0)
+    missing_fields = set((card.get("data_quality") or {}).get("missing_fields") or [])
+
+    evidence_adjustment = 0.0
+    reasons: list[str] = []
+    if evidence_score < 70:
+        evidence_adjustment += 0.15
+        reasons.append("evidence<70")
+    if evidence_score < 55:
+        evidence_adjustment += 0.2
+        reasons.append("evidence<55")
+    if completeness < 75:
+        evidence_adjustment += 0.15
+        reasons.append("completeness<75")
+    if completeness < 50:
+        evidence_adjustment += 0.2
+        reasons.append("completeness<50")
+    if authenticity < 0.75:
+        evidence_adjustment += 0.2
+        reasons.append("authenticity<0.75")
+    if authenticity < 0.55:
+        evidence_adjustment += 0.5
+        reasons.append("authenticity<0.55")
+    if {"news", "announcements", "dragon_tiger"} & missing_fields:
+        evidence_adjustment += 0.05
+        reasons.append("critical_aux_missing")
+    strategy_signals = card.get("strategy_signals") or []
+    if any(
+        isinstance(signal, dict)
+        and (
+            signal.get("runtime") == "agent_skill_fallback_prelim"
+            or signal.get("agent_review_unavailable")
+        )
+        for signal in strategy_signals
+    ):
+        evidence_adjustment += 8.5
+        reasons.append("agent_unavailable_fallback")
+    return {
+        "evidence_adjustment": round(evidence_adjustment if evidence_adjustment > 1.0 else min(0.75, evidence_adjustment), 2),
+        "reasons": reasons,
+    }
 
 
 def skill_disagreement_metrics(signals: list[dict[str, Any]]) -> dict[str, Any]:
@@ -442,8 +552,6 @@ def aggregate(
         weights = market_regime_weights(market_snapshot)
     else:
         weights = dict(DEFAULT_AGG_WEIGHTS)
-    if calibrated_weights:
-        weights.update(calibrated_weights)
 
     # 有 Agent 审查时 skill_agent 主导，策略规则降为辅证
     if has_agent_reviews:
@@ -455,6 +563,10 @@ def aggregate(
         weights["risk"] = 0.15
         weights["evidence"] = 0.10
 
+    # 校准权重必须最后覆盖，避免被默认模板反向冲掉
+    if calibrated_weights:
+        weights.update(calibrated_weights)
+
     # 归一化
     total_w = sum(weights.values())
     weights = {k: v / total_w for k, v in weights.items()}
@@ -465,6 +577,10 @@ def aggregate(
         "market": round(market_score, 2),
         "risk": round(risk_adjustment_score, 2),
         "evidence": round(evidence_quality_score, 2),
+    }
+    weighted_component_scores = {
+        key: round(weights.get(key, 0.0) * value, 2)
+        for key, value in raw_component_scores.items()
     }
 
     weighted_base_score = (
@@ -537,6 +653,7 @@ def aggregate(
         else:
             final_risk_flags.append(flag)
 
+    final_risk_flags = _dedup_risk_flags(final_risk_flags)
     # 去重合并 info_tags：语义相近的只保留一条
     info_tags = _dedup_info_tags(info_tags)
 
@@ -558,6 +675,18 @@ def aggregate(
         "strategy_signals": signals,
         "component_scores": component_scores,
         "raw_component_scores": raw_component_scores,
+        "weighted_component_scores": weighted_component_scores,
+        "score_breakdown": {
+            "raw_scores": raw_component_scores,
+            "weighted_scores": weighted_component_scores,
+            "weights": {key: round(value, 4) for key, value in weights.items()},
+            "consensus_boost": round(consensus_boost, 4),
+            "quality_cap": round(quality_cap, 2),
+            "final_score": round(final_score, 2),
+        },
+        "evidence_quality_score": round(evidence_quality_score, 2),
+        "data_completeness_score": float(stock.get("data_completeness_score") or 0.0),
+        "data_quality": data_quality,
         "data_authenticity": authenticity,
         "consensus_boost": round(consensus_boost, 4),
         "consensus_tags": consensus_tags,
@@ -573,16 +702,20 @@ def aggregate(
 
 def apply_pool_rules(
     cards: list[dict[str, Any]],
-    output_count: int,
+    output_count: int | None = None,
     min_score: float = 45.0,
+    *,
+    score_line: float | None = None,
+    market_snapshot: dict[str, Any] | None = None,
+    risk_template: str = "balanced",
+    display_limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Pool-level rules: 按 final_score 降序取前 output_count 只。
-
-    质量门控：
-    - final_score <= 0 视为硬否决，直接过滤
-    - final_score < min_score 的不推荐（避免弱势市场强行凑数）
-    - 若合格数量不足 output_count，只输出合格的，宁可少推不推垃圾
-    """
+    """按分数线过滤正式推荐，展示上限不参与核心选股决策。"""
+    score_line_context = resolve_score_line_context(
+        score_line if score_line is not None else min_score,
+        market_snapshot=market_snapshot,
+        risk_template=risk_template,
+    )
     ordered = sorted(
         cards,
         key=lambda card: float(card.get("final_score", 0)),
@@ -590,14 +723,28 @@ def apply_pool_rules(
     )
     result: list[dict[str, Any]] = []
     for card in ordered:
-        if float(card.get("final_score") or 0) <= 0:
+        final_score = float(card.get("final_score") or 0)
+        if final_score <= 0:
             continue
-        if float(card.get("final_score") or 0) < min_score:
-            break  # 之后只会更低，直接停止
+        card_adjustment = _card_score_line_adjustment(card)
+        effective_score_line = round(
+            score_line_context["effective_score_line"] + card_adjustment["evidence_adjustment"],
+            2,
+        )
+        card["score_line_meta"] = {
+            **score_line_context,
+            **card_adjustment,
+            "effective_score_line": effective_score_line,
+            "passed": final_score >= effective_score_line,
+        }
+        if final_score < effective_score_line:
+            continue
         result.append(card)
-        if len(result) >= output_count:
-            break
-    return result
+    if display_limit is None:
+        return result
+    if display_limit <= 0:
+        return result
+    return result[:display_limit]
 
 
 # ============================================================================
@@ -648,15 +795,59 @@ def _collect_risks(signals: list[dict[str, Any]]) -> list[str]:
     return list(dict.fromkeys(risks))
 
 
+def _dedup_risk_flags(tags: list[str]) -> list[str]:
+    """合并语义相近的风险标签，避免同一风险在一只票上重复刷屏。"""
+    if len(tags) <= 1:
+        return tags
+    result: list[str] = []
+    seen_groups: set[str] = set()
+    for tag in tags:
+        group = tag
+        if any(kw in tag for kw in ("情绪高潮", "高潮期", "退潮", "追高仓位降档")):
+            group = "market_heat"
+        elif any(kw in tag for kw in ("换手率", "流动性", "大资金进出")):
+            group = "liquidity"
+        elif any(kw in tag for kw in ("乖离", "偏离MA", "超买", "回踩", "均线")):
+            group = "trend_extension"
+        elif any(kw in tag for kw in ("龙虎榜", "主力资金", "资金流", "合力信号", "席位")):
+            group = "capital_flow"
+        elif any(kw in tag for kw in ("非龙头", "跟风", "杂毛", "带动效应", "龙头地位")):
+            group = "leader_quality"
+        elif any(kw in tag for kw in ("质押", "解禁", "硬风控否决")):
+            group = "structural_risk"
+        elif any(kw in tag for kw in ("阶段判定矛盾", "Setup 仅部分 Skill 命中", "立场多空矛盾")):
+            group = "model_conflict"
+        if group in seen_groups:
+            continue
+        seen_groups.add(group)
+        result.append(tag)
+    return result
+
+
 def _rationale(signals: list[dict[str, Any]]) -> str:
+    fallback_count = 0
+    normal_agent_count = 0
     evidence: list[str] = []
     for signal in signals:
         review = signal.get("agent_skill_review")
+        review_runtime = str(review.get("runtime") or "") if isinstance(review, dict) else ""
+        is_fallback = bool(signal.get("agent_review_unavailable")) or review_runtime == "agent_skill_fallback_prelim"
+        if is_fallback:
+            fallback_count += 1
+            continue
+        review = signal.get("agent_skill_review")
         if isinstance(review, dict):
+            normal_agent_count += 1
             summary = review.get("summary")
             if summary:
                 evidence.append(str(summary))
         evidence.extend(signal.get("evidence", []) or [])
+    if fallback_count and normal_agent_count == 0:
+        return "Skill Agent 暂不可用，本次仅按规则预审与市场数据降级输出，不提供语义审查摘要。请结合分数组成、规则命中和风险标签复核。"
+    if fallback_count:
+        prefix = "部分 Skill Agent 暂不可用，以下摘要仅包含仍可用的审查结论。"
+        detail = "；".join(list(dict.fromkeys(evidence))[:5])
+        return f"{prefix}{'；' + detail if detail else ''}"
     return "；".join(list(dict.fromkeys(evidence))[:5]) or "策略信号不足，维持观察。"
 
 

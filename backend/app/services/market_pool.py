@@ -22,6 +22,7 @@ from app.models.tables import (
     DataSourceHealth,
     DragonTiger,
     LimitUpBoard,
+    MarketSnapshot,
     NewsAnnouncement,
     StockQuote,
 )
@@ -75,6 +76,44 @@ NUMERIC_QUOTE_FIELDS = [
 STRICT_CONSENSUS_FIELDS = {"price": 0.018, "pct": 0.08}
 DERIVED_RETURN_FIELDS = {"chg60", "ytd_chg"}
 LOCAL_DAILY_BAR_FIELDS = DERIVED_RETURN_FIELDS | {"ma5", "ma10", "ma20"}
+
+
+def _normalize_trade_date(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if len(raw) >= 10 and raw[4] == "-" and raw[7] == "-":
+        return raw[:10]
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if len(digits) >= 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    return raw[:10]
+
+
+def _date_window_days(ttl_seconds: int | None, minimum_days: int = 1) -> int:
+    if not ttl_seconds:
+        return minimum_days
+    return max(minimum_days, int((int(ttl_seconds) + 86399) // 86400))
+
+
+def _resolve_snapshot_trade_date(db: Session, trade_date: str | None = None) -> str:
+    target = _normalize_trade_date(trade_date)
+    if target:
+        return target
+
+    latest_snapshot = db.scalar(select(MarketSnapshot.trade_date).order_by(MarketSnapshot.trade_date.desc()).limit(1))
+    if latest_snapshot:
+        return _normalize_trade_date(latest_snapshot)
+
+    latest_quote = db.scalar(select(func.max(StockQuote.trade_date)))
+    if latest_quote:
+        return _normalize_trade_date(latest_quote)
+
+    latest_bar = db.scalar(select(func.max(DailyKbar.trade_date)))
+    if latest_bar:
+        return _normalize_trade_date(latest_bar)
+
+    return date.today().isoformat()
 
 
 def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -1254,28 +1293,30 @@ def _max_relative_deviation(values: list[float], center: float) -> float:
 
 # ── 辅助数据池：刷新入口 ───────────────────────────────────────────────
 
-def refresh_limit_up_board(db: Session) -> list[dict[str, Any]]:
+def refresh_limit_up_board(db: Session, trade_date: str | None = None) -> list[dict[str, Any]]:
     """刷新涨停板数据。"""
     settings = get_settings()
     if not settings.enable_limit_up_fetch:
         return []
     sources = enabled_sources(db, "limit_up", _limit_up_sources(settings))
+    trade_date = _resolve_snapshot_trade_date(db, trade_date)
     return _refresh_aux_data(
         db, "limit_up", sources, settings,
-        fetcher=lambda source, _settings: _fetch_limit_up_board(source, _settings),
+        fetcher=lambda source, _settings: _fetch_limit_up_board(source, _settings, trade_date=trade_date),
         normalized_persister=_persist_normalized_limit_up_board,
     )
 
 
-def refresh_concept_sectors(db: Session) -> list[dict[str, Any]]:
+def refresh_concept_sectors(db: Session, trade_date: str | None = None) -> list[dict[str, Any]]:
     """刷新概念板块数据。"""
     settings = get_settings()
     if not settings.enable_concept_sector_fetch:
         return []
     sources = enabled_sources(db, "concept_sector", _concept_sector_sources(settings))
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
     result = _refresh_aux_data(
         db, "concept_sector", sources, settings,
-        fetcher=lambda source, _settings: _fetch_concept_sectors(source, _settings),
+        fetcher=lambda source, _settings: _fetch_concept_sectors(source, _settings, trade_date=target_trade_date),
         normalized_persister=_persist_normalized_concept_sector,
     )
     # 额外持久化热门板块的成分股（Tushare）
@@ -1283,14 +1324,14 @@ def refresh_concept_sectors(db: Session) -> list[dict[str, Any]]:
 
     from app.services.tushare_client import fetch_concept_members
 
-    trade_date = result[0].get("trade_date") if result else date.today().isoformat()
-
-    # 检查当天是否已有成分股数据，有则跳过
-    existing_date = db.scalar(
-        select(func.max(ConceptSectorStock.trade_date))
-    )
-    if existing_date and str(existing_date) >= trade_date:
-        logger.info("概念板块成分股已覆盖 %s，跳过拉取", trade_date)
+    # 检查快照交易日是否已有成分股数据，有则跳过
+    existing_count = db.scalar(
+        select(func.count()).select_from(ConceptSectorStock).where(
+            ConceptSectorStock.trade_date == target_trade_date
+        )
+    ) or 0
+    if existing_count > 0:
+        logger.info("概念板块成分股已覆盖 %s，跳过拉取", target_trade_date)
         return result
 
     top_sectors = [s for s in result if s.get("heat_rank", 999) <= 60]
@@ -1302,7 +1343,7 @@ def refresh_concept_sectors(db: Session) -> list[dict[str, Any]]:
     sector_codes = [c for c in sector_codes if c]
 
     with ThreadPoolExecutor(max_workers=6) as pool:
-        futures = {pool.submit(fetch_concept_members, sc, trade_date): sc for sc in sector_codes}
+        futures = {pool.submit(fetch_concept_members, sc, target_trade_date): sc for sc in sector_codes}
         for future in as_completed(futures):
             try:
                 stocks = future.result()
@@ -1318,20 +1359,25 @@ def refresh_concept_sectors(db: Session) -> list[dict[str, Any]]:
     return result
 
 
-def refresh_dragon_tiger(db: Session) -> list[dict[str, Any]]:
+def refresh_dragon_tiger(db: Session, trade_date: str | None = None) -> list[dict[str, Any]]:
     """刷新龙虎榜数据。"""
     settings = get_settings()
     if not settings.enable_dragon_tiger_fetch:
         return []
     sources = enabled_sources(db, "dragon_tiger", _dragon_tiger_sources(settings))
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
     return _refresh_aux_data(
         db, "dragon_tiger", sources, settings,
-        fetcher=lambda source, _settings: _fetch_dragon_tiger(source, _settings),
+        fetcher=lambda source, _settings: [
+            row
+            for row in _fetch_dragon_tiger(source, _settings, trade_date=target_trade_date)
+            if _normalize_trade_date(row.get("trade_date")) == target_trade_date
+        ],
         normalized_persister=_persist_normalized_dragon_tiger,
     )
 
 
-def refresh_capital_flows_for_codes(db: Session, codes: list[str]) -> dict[str, dict[str, Any]]:
+def refresh_capital_flows_for_codes(db: Session, codes: list[str], trade_date: str | None = None) -> dict[str, dict[str, Any]]:
     """按股刷新资金流向数据。"""
     settings = get_settings()
     if not settings.enable_capital_flow_fetch:
@@ -1341,10 +1387,14 @@ def refresh_capital_flows_for_codes(db: Session, codes: list[str]) -> dict[str, 
         return {}
     source = sources[0]
     result: dict[str, dict[str, Any]] = {}
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
     for code in codes:
         try:
-            data = _fetch_capital_flow(source, code, settings)
+            data = _fetch_capital_flow(source, code, settings, trade_date=target_trade_date)
             if data:
+                data["trade_date"] = _normalize_trade_date(data.get("trade_date"))
+                if target_trade_date and data["trade_date"] != target_trade_date:
+                    continue
                 _persist_normalized_capital_flow(db, data)
                 result[code] = data
         except Exception:
@@ -1353,7 +1403,7 @@ def refresh_capital_flows_for_codes(db: Session, codes: list[str]) -> dict[str, 
     return result
 
 
-def refresh_news_for_codes(db: Session, codes: list[str]) -> dict[str, list[dict[str, Any]]]:
+def refresh_news_for_codes(db: Session, codes: list[str], trade_date: str | None = None) -> dict[str, list[dict[str, Any]]]:
     """按股刷新新闻公告数据。"""
     settings = get_settings()
     if not settings.enable_news_fetch:
@@ -1363,12 +1413,28 @@ def refresh_news_for_codes(db: Session, codes: list[str]) -> dict[str, list[dict
         return {}
     source = sources[0]
     result: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
+    ttl_days = _date_window_days(settings.news_cache_ttl_seconds, minimum_days=2)
+    latest_allowed = date.fromisoformat(target_trade_date)
+    earliest_allowed = latest_allowed - timedelta(days=ttl_days)
     for code in codes:
         try:
-            items = _fetch_news(source, code, settings)
+            items = _fetch_news(source, code, settings, trade_date=target_trade_date)
             if items:
-                _persist_normalized_news(db, items)
-                result[code] = items
+                normalized_items = []
+                for item in items:
+                    announce_date = _normalize_trade_date(item.get("announce_date"))
+                    if target_trade_date:
+                        if not announce_date:
+                            continue
+                        announce_day = date.fromisoformat(announce_date)
+                        if announce_day > latest_allowed or announce_day < earliest_allowed:
+                            continue
+                    normalized_items.append({**item, "announce_date": announce_date})
+                if not normalized_items:
+                    continue
+                _persist_normalized_news(db, normalized_items)
+                result[code] = normalized_items
         except Exception:
             pass
     db.commit()
@@ -1488,7 +1554,7 @@ def _persist_concept_sector_stocks(db: Session, rows: list[dict[str, Any]]) -> N
 
 def _persist_normalized_capital_flow(db: Session, data: dict[str, Any]) -> None:
     code = str(data.get("code") or "")
-    trade_date = str(data.get("trade_date") or "")
+    trade_date = _normalize_trade_date(data.get("trade_date"))
     if not code or not trade_date:
         return
     existing = db.scalar(
@@ -1507,7 +1573,7 @@ def _persist_normalized_dragon_tiger(db: Session, rows: list[dict[str, Any]]) ->
     seen_batch: set[tuple] = set()
     for row in rows:
         code = str(row.get("code") or "")
-        trade_date = str(row.get("trade_date") or "")
+        trade_date = _normalize_trade_date(row.get("trade_date"))
         if not code or not trade_date:
             continue
         key = (code, trade_date)
@@ -1537,7 +1603,7 @@ def _persist_normalized_news(db: Session, rows: list[dict[str, Any]]) -> None:
         if key in seen_batch:
             continue
         seen_batch.add(key)
-        row_with_source = {**row, "source": source}
+        row_with_source = {**row, "source": source, "announce_date": _normalize_trade_date(row.get("announce_date"))}
         existing = db.scalar(
             select(NewsAnnouncement).where(NewsAnnouncement.source == source, NewsAnnouncement.article_id == article_id)
         )
@@ -1556,9 +1622,16 @@ def _persist_normalized_news(db: Session, rows: list[dict[str, Any]]) -> None:
 
 # ── 辅助数据池：缓存读取 ───────────────────────────────────────────────
 
-def _load_cached_limit_up_board(db: Session, max_age_seconds: int | None = None) -> list[dict[str, Any]]:
+def _load_cached_limit_up_board(
+    db: Session,
+    trade_date: str | None = None,
+    max_age_seconds: int | None = None,
+) -> list[dict[str, Any]]:
+    target_trade_date = _normalize_trade_date(trade_date)
     cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=max_age_seconds) if max_age_seconds else None
     stmt = select(LimitUpBoard).order_by(LimitUpBoard.limit_times.desc())
+    if target_trade_date:
+        stmt = stmt.where(LimitUpBoard.trade_date == target_trade_date)
     if cutoff is not None:
         stmt = stmt.where(LimitUpBoard.created_at >= cutoff)
     rows = db.scalars(stmt).all()
@@ -1568,9 +1641,16 @@ def _load_cached_limit_up_board(db: Session, max_age_seconds: int | None = None)
     ]
 
 
-def _load_cached_concept_sectors(db: Session, max_age_seconds: int | None = None) -> list[dict[str, Any]]:
+def _load_cached_concept_sectors(
+    db: Session,
+    trade_date: str | None = None,
+    max_age_seconds: int | None = None,
+) -> list[dict[str, Any]]:
+    target_trade_date = _normalize_trade_date(trade_date)
     cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=max_age_seconds) if max_age_seconds else None
     stmt = select(ConceptSector).order_by(ConceptSector.heat_rank)
+    if target_trade_date:
+        stmt = stmt.where(ConceptSector.trade_date == target_trade_date)
     if cutoff is not None:
         stmt = stmt.where(ConceptSector.created_at >= cutoff)
     rows = db.scalars(stmt).all()
@@ -1581,12 +1661,17 @@ def _load_cached_concept_sectors(db: Session, max_age_seconds: int | None = None
 
 
 def _load_cached_capital_flows(
-    db: Session, codes: list[str], max_age_seconds: int | None = None
+    db: Session,
+    codes: list[str],
+    trade_date: str | None = None,
+    max_age_seconds: int | None = None,
 ) -> dict[str, dict[str, Any]]:
-    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=max_age_seconds) if max_age_seconds else None
+    target_trade_date = _normalize_trade_date(trade_date)
     stmt = select(CapitalFlow).where(CapitalFlow.code.in_(codes))
-    if cutoff is not None:
-        stmt = stmt.where(CapitalFlow.created_at >= cutoff)
+    if target_trade_date:
+        stmt = stmt.where(CapitalFlow.trade_date == target_trade_date)
+    if max_age_seconds:
+        stmt = stmt.where(CapitalFlow.created_at >= datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=max_age_seconds))
     rows = db.scalars(stmt).all()
     return {
         r.code: {c.name: getattr(r, c.name) for c in r.__table__.columns}
@@ -1595,12 +1680,17 @@ def _load_cached_capital_flows(
 
 
 def _load_cached_dragon_tigers(
-    db: Session, codes: list[str], max_age_seconds: int | None = None
+    db: Session,
+    codes: list[str],
+    trade_date: str | None = None,
+    max_age_seconds: int | None = None,
 ) -> dict[str, dict[str, Any]]:
-    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=max_age_seconds) if max_age_seconds else None
+    target_trade_date = _normalize_trade_date(trade_date)
     stmt = select(DragonTiger).where(DragonTiger.code.in_(codes))
-    if cutoff is not None:
-        stmt = stmt.where(DragonTiger.created_at >= cutoff)
+    if target_trade_date:
+        stmt = stmt.where(DragonTiger.trade_date == target_trade_date)
+    if max_age_seconds:
+        stmt = stmt.where(DragonTiger.created_at >= datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=max_age_seconds))
     rows = db.scalars(stmt).all()
     return {
         r.code: {c.name: getattr(r, c.name) for c in r.__table__.columns}
@@ -1609,31 +1699,64 @@ def _load_cached_dragon_tigers(
 
 
 def _load_cached_news(
-    db: Session, codes: list[str], max_age_seconds: int | None = None
+    db: Session,
+    codes: list[str],
+    trade_date: str | None = None,
+    max_age_seconds: int | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=max_age_seconds) if max_age_seconds else None
+    target_trade_date = _normalize_trade_date(trade_date)
     stmt = select(NewsAnnouncement).where(NewsAnnouncement.code.in_(codes))
-    if cutoff is not None:
-        stmt = stmt.where(NewsAnnouncement.created_at >= cutoff)
+    if target_trade_date:
+        ttl_days = _date_window_days(max_age_seconds, minimum_days=2)
+        latest_allowed = date.fromisoformat(target_trade_date)
+        earliest_allowed = latest_allowed - timedelta(days=ttl_days)
+        stmt = stmt.where(
+            NewsAnnouncement.announce_date <= latest_allowed.isoformat(),
+            NewsAnnouncement.announce_date >= earliest_allowed.isoformat(),
+        )
+    if max_age_seconds:
+        stmt = stmt.where(NewsAnnouncement.created_at >= datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=max_age_seconds))
     rows = db.scalars(stmt).all()
     result: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for r in rows:
         result[r.code].append({c.name: getattr(r, c.name) for c in r.__table__.columns})
+    for code, items in result.items():
+        items.sort(key=lambda item: str(item.get("announce_date") or ""), reverse=True)
     return dict(result)
 
 
 def _load_concept_sectors_for_stocks(
-    db: Session, codes: list[str]
+    db: Session,
+    codes: list[str],
+    trade_date: str | None = None,
+    max_age_seconds: int | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """根据成分股表返回每只股票所属的概念板块。"""
-    rows = db.scalars(
-        select(ConceptSectorStock).where(ConceptSectorStock.code.in_(codes))
-    ).all()
+    target_trade_date = _normalize_trade_date(trade_date)
+    stmt = select(ConceptSectorStock).where(ConceptSectorStock.code.in_(codes))
+    if target_trade_date:
+        stmt = stmt.where(ConceptSectorStock.trade_date == target_trade_date)
+    cutoff = (
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=max_age_seconds)
+        if max_age_seconds
+        else None
+    )
+    if cutoff is not None:
+        stmt = stmt.where(ConceptSectorStock.created_at >= cutoff)
+    rows = db.scalars(stmt).all()
     sector_codes = {r.sector_code for r in rows}
     sectors = {
         s.sector_code: {c.name: getattr(s, c.name) for c in s.__table__.columns}
         for s in db.scalars(
-            select(ConceptSector).where(ConceptSector.sector_code.in_(sector_codes))
+            select(ConceptSector).where(
+                ConceptSector.sector_code.in_(sector_codes),
+                *((
+                    ConceptSector.trade_date == target_trade_date,
+                ) if target_trade_date else ()),
+                *((
+                    ConceptSector.created_at >= cutoff,
+                ) if cutoff is not None else ()),
+            )
         ).all()
     }
     result: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -1646,13 +1769,13 @@ def _load_concept_sectors_for_stocks(
 
 # ── 辅助数据：批量加载入口（供feature_builder使用） ────────────────────
 
-def _load_auction_for_stocks(db: Session, codes: list[str]) -> dict[str, dict[str, Any]]:
+def _load_auction_for_stocks(db: Session, codes: list[str], trade_date: str | None = None) -> dict[str, dict[str, Any]]:
     """加载当日集合竞价数据。"""
     from app.models.tables import AuctionData
-    today = date.today().isoformat()
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
     rows = db.scalars(
         select(AuctionData).where(
-            AuctionData.code.in_(codes), AuctionData.trade_date == today
+            AuctionData.code.in_(codes), AuctionData.trade_date == target_trade_date
         )
     ).all()
     return {
@@ -1682,10 +1805,11 @@ def _load_pledge_for_stocks(db: Session, codes: list[str]) -> dict[str, dict[str
     }
 
 
-def _load_broker_recs_for_stocks(db: Session, codes: list[str]) -> dict[str, int]:
+def _load_broker_recs_for_stocks(db: Session, codes: list[str], trade_date: str | None = None) -> dict[str, int]:
     """加载本月券商金股推荐次数。"""
     from app.models.tables import BrokerRecommend
-    month = date.today().strftime("%Y%m")
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
+    month = target_trade_date[:7].replace("-", "")
     rows = db.execute(
         select(BrokerRecommend.code, func.count().label("cnt"))
         .where(BrokerRecommend.code.in_(codes), BrokerRecommend.month == month)
@@ -1694,10 +1818,15 @@ def _load_broker_recs_for_stocks(db: Session, codes: list[str]) -> dict[str, int
     return {r[0]: r[1] for r in rows}
 
 
-def _load_share_float_upcoming(db: Session, codes: list[str], days: int = 30) -> dict[str, list[dict[str, Any]]]:
+def _load_share_float_upcoming(
+    db: Session,
+    codes: list[str],
+    trade_date: str | None = None,
+    days: int = 30,
+) -> dict[str, list[dict[str, Any]]]:
     """加载即将到来的限售解禁（未来N天）。"""
     from app.models.tables import ShareFloat
-    today = date.today()
+    today = date.fromisoformat(_resolve_snapshot_trade_date(db, trade_date))
     cutoff = (today + timedelta(days=days)).isoformat()
     rows = db.scalars(
         select(ShareFloat).where(
@@ -1712,17 +1841,30 @@ def _load_share_float_upcoming(db: Session, codes: list[str], days: int = 30) ->
     return dict(result)
 
 
-def load_auxiliary_for_stocks(db: Session, codes: list[str]) -> dict[str, Any]:
+def load_auxiliary_for_stocks(db: Session, codes: list[str], trade_date: str | None = None) -> dict[str, Any]:
     """批量加载所有辅助数据，返回按code索引的字典。"""
     settings = get_settings()
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
     return {
-        "limit_up": {r["code"]: r for r in _load_cached_limit_up_board(db, max_age_seconds=settings.limit_up_cache_ttl_seconds)},
-        "concept_sectors": _load_concept_sectors_for_stocks(db, codes),
-        "capital_flows": _load_cached_capital_flows(db, codes, max_age_seconds=settings.capital_flow_cache_ttl_seconds),
-        "dragon_tigers": _load_cached_dragon_tigers(db, codes, max_age_seconds=settings.dragon_tiger_cache_ttl_seconds),
-        "news": _load_cached_news(db, codes, max_age_seconds=settings.news_cache_ttl_seconds),
-        "auctions": _load_auction_for_stocks(db, codes),
+        "limit_up": {
+            r["code"]: r
+            for r in _load_cached_limit_up_board(
+                db,
+                trade_date=target_trade_date,
+                max_age_seconds=settings.limit_up_cache_ttl_seconds,
+            )
+        },
+        "concept_sectors": _load_concept_sectors_for_stocks(
+            db,
+            codes,
+            trade_date=target_trade_date,
+            max_age_seconds=settings.concept_sector_cache_ttl_seconds,
+        ),
+        "capital_flows": _load_cached_capital_flows(db, codes, trade_date=target_trade_date, max_age_seconds=settings.capital_flow_cache_ttl_seconds),
+        "dragon_tigers": _load_cached_dragon_tigers(db, codes, trade_date=target_trade_date, max_age_seconds=settings.dragon_tiger_cache_ttl_seconds),
+        "news": _load_cached_news(db, codes, trade_date=target_trade_date, max_age_seconds=settings.news_cache_ttl_seconds),
+        "auctions": _load_auction_for_stocks(db, codes, trade_date=target_trade_date),
         "pledges": _load_pledge_for_stocks(db, codes),
-        "broker_recs": _load_broker_recs_for_stocks(db, codes),
-        "share_floats_upcoming": _load_share_float_upcoming(db, codes),
+        "broker_recs": _load_broker_recs_for_stocks(db, codes, trade_date=target_trade_date),
+        "share_floats_upcoming": _load_share_float_upcoming(db, codes, trade_date=target_trade_date),
     }

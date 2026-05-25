@@ -5,7 +5,7 @@ from bisect import bisect_left
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun
@@ -16,6 +16,12 @@ EXIT_SLIPPAGE_BPS = 10.0
 SUCCESS_RETURN_PCT = 3.0
 DEFAULT_STOP_LOSS_PCT = -4.0
 DEFAULT_TAKE_PROFIT_PCT = 8.0
+
+OUTCOME_PENDING = "pending"
+OUTCOME_SUCCESS = "success"
+OUTCOME_FAILED = "failed"
+OUTCOME_MISSED = "missed"
+EXECUTED_OUTCOME_LABELS = {OUTCOME_SUCCESS, OUTCOME_FAILED}
 
 # 短时缓存
 _metrics_cache: dict[str, tuple[float, Any]] = {}
@@ -38,6 +44,30 @@ def _cached(key: str, factory):
 def invalidate_outcome_metrics_cache() -> None:
     with _metrics_cache_lock:
         _metrics_cache.clear()
+
+
+def normalized_outcome_label(outcome: RecommendationOutcome | Any | None) -> str:
+    if outcome is None:
+        return OUTCOME_PENDING
+    raw_label = str(getattr(outcome, "outcome_label", OUTCOME_PENDING) or OUTCOME_PENDING).lower()
+    if raw_label == OUTCOME_PENDING:
+        return OUTCOME_PENDING
+    if raw_label in {OUTCOME_MISSED, "not_triggered"}:
+        return OUTCOME_MISSED
+    if raw_label == "risk_hit":
+        return OUTCOME_FAILED
+    if str(getattr(outcome, "label_source", "") or "").lower() == "manual" and raw_label in {
+        OUTCOME_SUCCESS,
+        OUTCOME_FAILED,
+    }:
+        return raw_label
+    if not bool(getattr(outcome, "entry_triggered", False)):
+        return OUTCOME_MISSED
+    return OUTCOME_SUCCESS if raw_label == OUTCOME_SUCCESS else OUTCOME_FAILED
+
+
+def is_outcome_labeled(outcome: RecommendationOutcome | Any | None) -> bool:
+    return normalized_outcome_label(outcome) != OUTCOME_PENDING
 
 
 def is_trade_executed(outcome: RecommendationOutcome | Any | None) -> bool:
@@ -66,12 +96,25 @@ def label_pending_outcomes(
     - 执行收益（含双边滑点）
     - 持仓天数 / 仓位权重 / 退出原因
     """
-    stmt = select(Recommendation).where(Recommendation.status == "pending")
+    stmt = (
+        select(Recommendation)
+        .outerjoin(
+            RecommendationOutcome,
+            RecommendationOutcome.recommendation_id == Recommendation.recommendation_id,
+        )
+        .where(
+            or_(
+                RecommendationOutcome.recommendation_id.is_(None),
+                RecommendationOutcome.outcome_label == OUTCOME_PENDING,
+                Recommendation.status == OUTCOME_PENDING,
+            )
+        )
+    )
     if run_mode:
         stmt = stmt.join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id).where(
             RecommendationRun.run_mode == run_mode
         )
-    recs = db.scalars(stmt.order_by(Recommendation.trade_date.asc())).all()
+    recs = db.scalars(stmt.order_by(Recommendation.trade_date.asc())).unique().all()
     if not recs:
         return {"labeled": 0}
 
@@ -133,7 +176,7 @@ def label_pending_outcomes(
         outcome.outcome_reason = str(simulation["outcome_reason"])
         outcome.label_source = "auto"
         outcome.labeled_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        rec.status = outcome.outcome_label
+        rec.status = normalized_outcome_label(outcome)
         labeled += 1
 
     db.commit()
@@ -142,22 +185,22 @@ def label_pending_outcomes(
     return {"labeled": labeled}
 
 
-def overview_metrics(db: Session) -> dict[str, Any]:
-    return _cached("overview", lambda: _overview_metrics(db))
+def overview_metrics(db: Session, run_mode: str = "formal") -> dict[str, Any]:
+    return _cached(f"overview:{run_mode}", lambda: _overview_metrics(db, run_mode))
 
 
-def _overview_metrics(db: Session) -> dict[str, Any]:
-    total_recs = db.scalar(select(func.count()).select_from(Recommendation)) or 0
-    outcomes = db.scalars(select(RecommendationOutcome)).all()
+def _overview_metrics(db: Session, run_mode: str) -> dict[str, Any]:
+    rows = _scoped_recommendation_rows(db, run_mode)
+    total_recs = len(rows)
 
-    if not outcomes:
+    if not rows:
         return {
+            "mode": run_mode,
             "total_recommendations": total_recs,
             "labeled_count": 0,
             "triggered_count": 0,
             "trigger_rate": 0,
             "hit_rate": 0,
-            "legacy_hit_rate": 0,
             "avg_return": 0,
             "avg_executed_return": 0,
             "avg_weighted_return": 0,
@@ -166,56 +209,54 @@ def _overview_metrics(db: Session) -> dict[str, Any]:
             "avg_mfe": 0,
             "avg_mae": 0,
             "avg_holding_days": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "missed_count": 0,
+            "pending_count": 0,
         }
 
-    triggered = [o for o in outcomes if is_trade_executed(o)]
-    success_new = sum(1 for o in triggered if o.outcome_label == "success")
-    success_legacy = sum(1 for o in outcomes if o.outcome_label_legacy == "success")
-    n = len(outcomes)
+    labeled = [row for row in rows if normalized_outcome_label(row) != OUTCOME_PENDING]
+    triggered = [row for row in labeled if is_trade_executed(row)]
+    success_count = sum(1 for row in rows if normalized_outcome_label(row) == OUTCOME_SUCCESS)
+    failed_count = sum(1 for row in rows if normalized_outcome_label(row) == OUTCOME_FAILED)
+    missed_count = sum(1 for row in rows if normalized_outcome_label(row) == OUTCOME_MISSED)
+    n = len(labeled)
     executed_n = len(triggered)
 
     return {
+        "mode": run_mode,
         "total_recommendations": total_recs,
         "labeled_count": n,
         "triggered_count": executed_n,
         "trigger_rate": round(executed_n / n, 3) if n else 0.0,
-        "hit_rate": round(success_new / executed_n, 3) if executed_n else 0.0,
-        "legacy_hit_rate": round(success_legacy / n, 3) if n else 0.0,
+        "hit_rate": round(success_count / executed_n, 3) if executed_n else 0.0,
         "avg_return": round(sum(resolved_trade_return(o) for o in triggered) / executed_n, 2) if executed_n else 0.0,
         "avg_executed_return": round(sum(resolved_trade_return(o) for o in triggered) / executed_n, 2) if executed_n else 0.0,
         "avg_weighted_return": round(sum(float(o.weighted_return or 0) for o in triggered) / executed_n, 2) if executed_n else 0.0,
-        "avg_close_return": round(sum(float(o.close_return or 0) for o in outcomes) / n, 2) if n else 0.0,
-        "avg_achievable_return": round(sum(float(o.achievable_return or 0) for o in outcomes) / n, 2) if n else 0.0,
-        "avg_mfe": round(sum(float(o.max_return or 0) for o in outcomes) / n, 2) if n else 0.0,
-        "avg_mae": round(sum(float(o.min_return or 0) for o in outcomes) / n, 2) if n else 0.0,
+        "avg_close_return": round(sum(float(o.close_return or 0) for o in labeled) / n, 2) if n else 0.0,
+        "avg_achievable_return": round(sum(float(o.achievable_return or 0) for o in labeled) / n, 2) if n else 0.0,
+        "avg_mfe": round(sum(float(o.max_return or 0) for o in labeled) / n, 2) if n else 0.0,
+        "avg_mae": round(sum(float(o.min_return or 0) for o in labeled) / n, 2) if n else 0.0,
         "avg_holding_days": round(sum(float(o.holding_days or 0) for o in triggered) / executed_n, 2) if executed_n else 0.0,
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "missed_count": missed_count,
+        "pending_count": max(0, total_recs - n),
     }
 
 
-def metrics_by_strategy(db: Session) -> list[dict[str, Any]]:
-    return _cached("by_strategy", lambda: _metrics_by_strategy(db))
+def metrics_by_strategy(db: Session, run_mode: str = "formal") -> list[dict[str, Any]]:
+    return _cached(f"by_strategy:{run_mode}", lambda: _metrics_by_strategy(db, run_mode))
 
 
-def _metrics_by_strategy(db: Session) -> list[dict[str, Any]]:
-    rec_rows = db.execute(
-        select(Recommendation.recommendation_id, Recommendation.skill_breakdown_json)
-    ).all()
-
-    outcome_rows = db.execute(
-        select(
-            RecommendationOutcome.recommendation_id,
-            RecommendationOutcome.outcome_label,
-            RecommendationOutcome.entry_triggered,
-            RecommendationOutcome.executed_return,
-        )
-    ).all()
-    outcome_map = {row.recommendation_id: row for row in outcome_rows}
+def _metrics_by_strategy(db: Session, run_mode: str) -> list[dict[str, Any]]:
+    rows = _scoped_recommendation_rows(db, run_mode)
 
     buckets: dict[str, dict[str, Any]] = {}
-    for rec in rec_rows:
-        outcome = outcome_map.get(rec.recommendation_id)
-        executed = is_trade_executed(outcome)
-        trade_return = resolved_trade_return(outcome)
+    for rec in rows:
+        executed = is_trade_executed(rec)
+        trade_return = resolved_trade_return(rec)
+        label = normalized_outcome_label(rec)
         for signal in _loads(rec.skill_breakdown_json, []):
             sid = signal.get("strategy_id", "unknown")
             item = buckets.setdefault(
@@ -234,7 +275,7 @@ def _metrics_by_strategy(db: Session) -> list[dict[str, Any]]:
             if executed:
                 item["triggered_count"] += 1
                 item["avg_return"] += trade_return
-                if outcome and outcome.outcome_label == "success":
+                if label == OUTCOME_SUCCESS:
                     item["success_count"] += 1
 
     result = []
@@ -247,6 +288,187 @@ def _metrics_by_strategy(db: Session) -> list[dict[str, Any]]:
         item["avg_return"] = round(item["avg_return"] / triggered, 2) if triggered else 0.0
         result.append(item)
     return sorted(result, key=lambda x: (x["sample_count"], x["hit_rate"], x["avg_score"]), reverse=True)
+
+
+def metrics_by_setup(db: Session, run_mode: str = "formal") -> list[dict[str, Any]]:
+    return _cached(f"by_setup:{run_mode}", lambda: _metrics_by_setup(db, run_mode))
+
+
+def _metrics_by_setup(db: Session, run_mode: str) -> list[dict[str, Any]]:
+    rows = _scoped_recommendation_rows(db, run_mode)
+    buckets: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        setup = str(row.setup_type or "未命中买点")
+        item = buckets.setdefault(
+            setup,
+            {
+                "setup_type": setup,
+                "sample_count": 0,
+                "labeled_count": 0,
+                "triggered_count": 0,
+                "success_count": 0,
+                "avg_score": 0.0,
+                "avg_return": 0.0,
+                "avg_drawdown": 0.0,
+            },
+        )
+        item["sample_count"] += 1
+        item["avg_score"] += float(row.final_score or 0)
+        label = normalized_outcome_label(row)
+        if label != OUTCOME_PENDING:
+            item["labeled_count"] += 1
+            item["avg_drawdown"] += float(row.max_drawdown or 0)
+        if is_trade_executed(row):
+            item["triggered_count"] += 1
+            item["avg_return"] += resolved_trade_return(row)
+            if label == OUTCOME_SUCCESS:
+                item["success_count"] += 1
+
+    result = []
+    for item in buckets.values():
+        sample_count = max(1, int(item["sample_count"]))
+        labeled_count = int(item["labeled_count"])
+        triggered_count = int(item["triggered_count"])
+        missed_count = max(0, labeled_count - triggered_count)
+        result.append(
+            {
+                "setup_type": item["setup_type"],
+                "sample_count": item["sample_count"],
+                "labeled_count": labeled_count,
+                "triggered_count": triggered_count,
+                "missed_count": missed_count,
+                "success_count": item["success_count"],
+                "trigger_rate": round(triggered_count / labeled_count, 3) if labeled_count else 0.0,
+                "hit_rate": round(item["success_count"] / triggered_count, 3) if triggered_count else 0.0,
+                "avg_score": round(item["avg_score"] / sample_count, 2),
+                "avg_return": round(item["avg_return"] / triggered_count, 2) if triggered_count else 0.0,
+                "avg_drawdown": round(item["avg_drawdown"] / labeled_count, 2) if labeled_count else 0.0,
+            }
+        )
+    return sorted(result, key=lambda item: (item["sample_count"], item["hit_rate"], item["avg_score"]), reverse=True)
+
+
+def precision_at_k(
+    db: Session,
+    run_mode: str = "formal",
+    ks: tuple[int, ...] = (1, 3, 5, 10),
+) -> list[dict[str, Any]]:
+    return _cached(f"precision_at_k:{run_mode}:{','.join(str(k) for k in ks)}", lambda: _precision_at_k(db, run_mode, ks))
+
+
+def _precision_at_k(db: Session, run_mode: str, ks: tuple[int, ...]) -> list[dict[str, Any]]:
+    recs = db.execute(
+        select(
+            Recommendation.run_id,
+            Recommendation.recommendation_id,
+            Recommendation.final_score,
+            RecommendationOutcome.outcome_label,
+            RecommendationOutcome.entry_triggered,
+        )
+        .select_from(Recommendation)
+        .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
+        .outerjoin(RecommendationOutcome, RecommendationOutcome.recommendation_id == Recommendation.recommendation_id)
+        .where(RecommendationRun.run_mode == run_mode)
+        .order_by(Recommendation.run_id.asc(), Recommendation.final_score.desc(), Recommendation.recommendation_id.asc())
+    ).all()
+    by_run: dict[str, list[Any]] = {}
+    for row in recs:
+        by_run.setdefault(row.run_id, []).append(row)
+
+    result: list[dict[str, Any]] = []
+    for k in ks:
+        sample_runs = 0
+        evaluated_count = 0
+        success_count = 0
+        for rows in by_run.values():
+            top_rows = rows[:k]
+            labeled_rows = [row for row in top_rows if normalized_outcome_label(row) != OUTCOME_PENDING]
+            if not labeled_rows:
+                continue
+            sample_runs += 1
+            evaluated_count += len(labeled_rows)
+            success_count += sum(1 for row in labeled_rows if normalized_outcome_label(row) == OUTCOME_SUCCESS)
+        result.append(
+            {
+                "k": k,
+                "sample_runs": sample_runs,
+                "evaluated_count": evaluated_count,
+                "success_count": success_count,
+                "precision": round(success_count / evaluated_count, 3) if evaluated_count else 0.0,
+            }
+        )
+    return result
+
+
+def metrics_by_score_line(
+    db: Session,
+    run_mode: str = "formal",
+    score_lines: tuple[int, ...] = (55, 60, 65, 70, 75, 80),
+) -> list[dict[str, Any]]:
+    key = f"by_score_line:{run_mode}:{','.join(str(line) for line in score_lines)}"
+    return _cached(key, lambda: _metrics_by_score_line(db, run_mode, score_lines))
+
+
+def _metrics_by_score_line(db: Session, run_mode: str, score_lines: tuple[int, ...]) -> list[dict[str, Any]]:
+    rows = _scoped_recommendation_rows(db, run_mode)
+    if not rows:
+        return []
+    result: list[dict[str, Any]] = []
+    total_count = len(rows)
+    for score_line in score_lines:
+        selected = [row for row in rows if float(row.final_score or 0) >= score_line]
+        labeled = [row for row in selected if normalized_outcome_label(row) != OUTCOME_PENDING]
+        executed = [row for row in labeled if is_trade_executed(row)]
+        missed_count = max(0, len(labeled) - len(executed))
+        success_count = sum(1 for row in executed if normalized_outcome_label(row) == OUTCOME_SUCCESS)
+        result.append(
+            {
+                "score_line": float(score_line),
+                "sample_count": len(selected),
+                "activation_rate": round(len(selected) / total_count, 3) if total_count else 0.0,
+                "labeled_count": len(labeled),
+                "triggered_count": len(executed),
+                "missed_count": missed_count,
+                "success_count": success_count,
+                "trigger_rate": round(len(executed) / len(labeled), 3) if labeled else 0.0,
+                "hit_rate": round(success_count / len(executed), 3) if executed else 0.0,
+                "avg_return": round(sum(resolved_trade_return(row) for row in executed) / len(executed), 2) if executed else 0.0,
+                "avg_drawdown": round(sum(float(row.max_drawdown or 0) for row in labeled) / len(labeled), 2) if labeled else 0.0,
+                "avg_close_return": round(sum(float(row.close_return or 0) for row in labeled) / len(labeled), 2) if labeled else 0.0,
+            }
+        )
+    return result
+
+
+def _scoped_recommendation_rows(db: Session, run_mode: str) -> list[Any]:
+    return list(
+        db.execute(
+            select(
+                Recommendation.recommendation_id,
+                Recommendation.run_id,
+                Recommendation.final_score,
+                Recommendation.setup_type,
+                Recommendation.skill_breakdown_json,
+                Recommendation.trade_date,
+                Recommendation.market_context_json,
+                RecommendationOutcome.outcome_label,
+                RecommendationOutcome.entry_triggered,
+                RecommendationOutcome.executed_return,
+                RecommendationOutcome.weighted_return,
+                RecommendationOutcome.close_return,
+                RecommendationOutcome.achievable_return,
+                RecommendationOutcome.max_return,
+                RecommendationOutcome.min_return,
+                RecommendationOutcome.max_drawdown,
+                RecommendationOutcome.holding_days,
+            )
+            .select_from(Recommendation)
+            .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
+            .outerjoin(RecommendationOutcome, RecommendationOutcome.recommendation_id == Recommendation.recommendation_id)
+            .where(RecommendationRun.run_mode == run_mode)
+            .order_by(Recommendation.trade_date.asc(), Recommendation.final_score.desc(), Recommendation.recommendation_id.asc())
+        ).all()
+    )
 
 
 def _simulate_outcome(
@@ -290,7 +512,8 @@ def _simulate_outcome(
             "exit_reason": "not_triggered",
             "hit_target": False,
             "hit_invalid": False,
-            "outcome_label": "failed",
+            "outcome_label": OUTCOME_MISSED,
+            "outcome_label_legacy": OUTCOME_MISSED,
             "outcome_reason": "未触发买点，未建仓；静态窗口结果仅作旁路参考",
         }
 
@@ -309,7 +532,7 @@ def _simulate_outcome(
     weighted_return = round(executed_return * position_size, 2)
     hit_invalid = exit_reason.startswith("stop_loss")
     hit_target = exit_reason.startswith("take_profit") or executed_return >= SUCCESS_RETURN_PCT
-    outcome_label = "success" if (executed_return >= SUCCESS_RETURN_PCT and not hit_invalid) else "failed"
+    outcome_label = OUTCOME_SUCCESS if (executed_return >= SUCCESS_RETURN_PCT and not hit_invalid) else OUTCOME_FAILED
 
     return {
         **static_metrics,
@@ -348,7 +571,7 @@ def _static_window_metrics(
             "close_return": 0.0,
             "achievable_return": 0.0,
             "max_drawdown": 0.0,
-            "outcome_label_legacy": "failed",
+            "outcome_label_legacy": OUTCOME_MISSED,
         }
     baseline_entry = _as_float(rec.recommend_price) or _as_float(signal_bar.close if signal_bar else None) or _as_float(window[0].open) or _as_float(window[0].close)
     if baseline_entry <= 0:
@@ -359,7 +582,7 @@ def _static_window_metrics(
     max_return = max(returns) if returns else 0.0
     min_return = min(lows) if lows else 0.0
     achievable_return = (close_return + min(max_return, close_return * 1.5)) / 2.0
-    legacy_label = "success" if (max_return >= 5 and min_return > -4) else "failed"
+    legacy_label = OUTCOME_SUCCESS if (max_return >= 5 and min_return > -4) else OUTCOME_FAILED
     return {
         "max_return": round(max_return, 2),
         "min_return": round(min_return, 2),

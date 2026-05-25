@@ -155,11 +155,12 @@ export default memo(function SkillConfigPanel(props: Props) {
                 onChange={(value) => onPresetDraftChange({ risk_template: value })}
               />
               <NumberField
-                label="输出数量"
-                value={presetDraft.output_count}
-                min={1}
-                max={30}
-                onChange={(value) => onPresetDraftChange({ output_count: value })}
+                label="分数线"
+                value={presetDraft.score_line}
+                min={35}
+                max={95}
+                step={0.5}
+                onChange={(value) => onPresetDraftChange({ score_line: value })}
               />
               <ToggleField
                 label="隐藏近期重复票"

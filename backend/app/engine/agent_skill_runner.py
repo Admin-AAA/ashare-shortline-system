@@ -147,7 +147,10 @@ def enrich_signal_with_agent_review(signal: dict[str, Any], review: dict[str, An
     enriched["score"] = max(0.0, min(score_cap, float(enriched.get("score", 0)) + delta))
     enriched["confidence"] = max(float(enriched.get("confidence", 0)), float(review.get("confidence", 0)))
     enriched.setdefault("evidence", [])
-    enriched["evidence"] = list(enriched["evidence"]) + [str(review.get("summary", ""))]
+    review_runtime = str(review.get("runtime") or "")
+    summary = str(review.get("summary", "")).strip()
+    if summary and review_runtime != "agent_skill_fallback_prelim" and not bool(review.get("summary_is_warning")):
+        enriched["evidence"] = list(enriched["evidence"]) + [summary]
     enriched.setdefault("risk_flags", [])
     enriched["risk_flags"] = list(dict.fromkeys(list(enriched["risk_flags"]) + review.get("risks", [])))
     if review.get("stance") == "veto":

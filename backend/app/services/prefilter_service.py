@@ -14,9 +14,12 @@ def apply_prefilters(
     ordered_stocks = list(stocks)
     common_filtered: list[dict[str, Any]] = []
     common_exclusion_counts: Counter[str] = Counter()
+    common_reason_by_code: dict[str, str | None] = {}
 
     for stock in ordered_stocks:
+        code = str(stock.get("code") or "")
         reason = common_tradeability_exclusion_reason(stock)
+        common_reason_by_code[code] = reason
         if reason is not None:
             common_exclusion_counts[reason] += 1
             continue
@@ -25,6 +28,7 @@ def apply_prefilters(
     per_skill: dict[str, dict[str, Any]] = {}
     union_codes: set[str] = set()
     pass_skill_ids_by_code: dict[str, list[str]] = {}
+    skill_reason_by_code: dict[str, dict[str, str]] = {}
 
     for selected in selected_skills:
         skill = selected["skill"]
@@ -35,9 +39,10 @@ def apply_prefilters(
 
         for stock in common_filtered:
             passed, reason = evaluate_skill_prefilter(skill, stock, stage="market")
+            code = str(stock.get("code") or "")
+            skill_reason_by_code.setdefault(code, {})[skill_id] = "passed" if passed else str(reason or "filtered")
             if passed:
                 pass_count += 1
-                code = str(stock.get("code") or "")
                 if code:
                     union_codes.add(code)
                     pass_skill_ids_by_code.setdefault(code, []).append(skill_id)
@@ -93,6 +98,46 @@ def apply_prefilters(
             filtered.append(stock)
         fallback_used = True
 
+    filtered_code_set = {str(stock.get("code") or "") for stock in filtered}
+    rows: list[dict[str, Any]] = []
+    for stock in ordered_stocks:
+        code = str(stock.get("code") or "")
+        common_reason = common_reason_by_code.get(code)
+        common_pass = common_reason is None
+        skill_pass_ids = sorted(pass_skill_ids_by_code.get(code, []))
+        if not common_pass:
+            stage = "prefilter_common"
+            reason = common_reason or "common_prefilter_filtered"
+            passed = False
+        elif code in filtered_code_set:
+            source = str(stock.get("prefilter_source") or "skill_pass")
+            stage = "prefilter_pass"
+            reason = "技能预过滤命中" if source == "skill_pass" else f"{source} 补入候选"
+            passed = True
+        else:
+            stage = "prefilter_skill"
+            reason = "未命中任何 Skill 市场预过滤"
+            passed = False
+        rows.append(
+            {
+                "code": code,
+                "name": stock.get("name"),
+                "industry": stock.get("industry"),
+                "stage": stage,
+                "passed": passed,
+                "reason": reason,
+                "common_pass": common_pass,
+                "common_reason": common_reason,
+                "skill_pass_ids": skill_pass_ids,
+                "skill_reasons": skill_reason_by_code.get(code, {}),
+                "prefilter_source": stock.get("prefilter_source") if code in filtered_code_set else None,
+                "price": stock.get("price") or stock.get("close"),
+                "pct": stock.get("pct"),
+                "amount_yi": stock.get("amount_yi"),
+                "turnover_rate": stock.get("turnover_rate"),
+            }
+        )
+
     audit = {
         "mode": "common_tradeability_plus_skill_market_prefilter",
         "input_count": len(ordered_stocks),
@@ -115,6 +160,7 @@ def apply_prefilters(
         "fill_count": fill_count,
         "fallback_used": fallback_used,
         "selected_skill_count": len(selected_skills),
+        "rows": rows,
     }
     return filtered, audit
 

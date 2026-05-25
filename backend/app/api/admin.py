@@ -14,6 +14,13 @@ from app.services.cost_service import (
     upsert_scheduled_task,
 )
 from app.services.data_source_health import active_alerts, readiness_check
+from app.services.model_router_service import (
+    create_model_route,
+    delete_model_route,
+    list_model_routes,
+    reorder_model_routes,
+    update_model_route as update_model_route_service,
+)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -59,6 +66,39 @@ def get_alerts(db: Session = Depends(get_db)):
 def get_readiness(db: Session = Depends(get_db)):
     """系统就绪检查。"""
     return readiness_check(db)
+
+
+@router.get("/model-routes")
+def get_model_routes(db: Session = Depends(get_db)):
+    return list_model_routes(db)
+
+
+@router.post("/model-routes")
+def create_model_route_api(payload: dict, db: Session = Depends(get_db)):
+    return create_model_route(db, payload)
+
+
+@router.patch("/model-routes/{route_id}")
+def update_model_route_api(route_id: str, payload: dict, db: Session = Depends(get_db)):
+    route = update_model_route_service(db, route_id, payload)
+    if route is None:
+        raise HTTPException(status_code=404, detail="model route not found")
+    return route
+
+
+@router.delete("/model-routes/{route_id}")
+def delete_model_route_api(route_id: str, db: Session = Depends(get_db)):
+    if not delete_model_route(db, route_id):
+        raise HTTPException(status_code=404, detail="model route not found")
+    return {"deleted": route_id}
+
+
+@router.post("/model-routes/reorder")
+def reorder_model_routes_api(payload: dict, db: Session = Depends(get_db)):
+    route_ids = payload.get("route_ids")
+    if not isinstance(route_ids, list):
+        raise HTTPException(status_code=400, detail="route_ids must be a list")
+    return reorder_model_routes(db, [str(route_id) for route_id in route_ids if str(route_id).strip()])
 
 
 @router.post("/tasks")

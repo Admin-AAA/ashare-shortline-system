@@ -10,7 +10,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from app.core.config import get_settings
-from app.services.market_data import _normalize_code, _split_sources
+from app.services.market_data import _split_sources
 
 logger = logging.getLogger(__name__)
 
@@ -37,31 +37,47 @@ def _news_sources(settings: Any) -> list[str]:
 
 # ── Dispatch ────────────────────────────────────────────────────────────
 
-def _fetch_limit_up_board(source: str, settings: Any) -> list[dict[str, Any]]:
+def _normalize_trade_date(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if len(raw) >= 10 and raw[4] == "-" and raw[7] == "-":
+        return raw[:10]
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if len(digits) >= 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    return raw[:10]
+
+
+def _compact_trade_date(value: Any) -> str:
+    return _normalize_trade_date(value).replace("-", "")
+
+
+def _fetch_limit_up_board(source: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
     if source == "tushare":
-        return _fetch_tushare_limit_up_board(settings)
+        return _fetch_tushare_limit_up_board(settings, trade_date=trade_date)
     return []
 
 
-def _fetch_concept_sectors(source: str, settings: Any) -> list[dict[str, Any]]:
+def _fetch_concept_sectors(source: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
     if source == "tushare":
-        return _fetch_tushare_concept_sectors(settings)
+        return _fetch_tushare_concept_sectors(settings, trade_date=trade_date)
     return []
 
 
-def _fetch_capital_flow(source: str, code: str, settings: Any) -> dict[str, Any] | None:
+def _fetch_capital_flow(source: str, code: str, settings: Any, trade_date: str | None = None) -> dict[str, Any] | None:
     if source == "tushare":
-        return _fetch_tushare_moneyflow(code, settings)
+        return _fetch_tushare_moneyflow(code, settings, trade_date=trade_date)
     return None
 
 
-def _fetch_dragon_tiger(source: str, settings: Any) -> list[dict[str, Any]]:
+def _fetch_dragon_tiger(source: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
     if source == "tushare":
-        return _fetch_tushare_dragon_tiger(settings)
+        return _fetch_tushare_dragon_tiger(settings, trade_date=trade_date)
     return []
 
 
-def _fetch_news(source: str, code: str, settings: Any) -> list[dict[str, Any]]:
+def _fetch_news(source: str, code: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
     if source == "eastmoney":
         return _fetch_eastmoney_news(code, settings)
     return []
@@ -69,19 +85,32 @@ def _fetch_news(source: str, code: str, settings: Any) -> list[dict[str, Any]]:
 
 # ── Tushare 实现 ────────────────────────────────────────────────────────
 
-def _fetch_tushare_moneyflow(code: str, settings: Any) -> dict[str, Any] | None:
+def _fetch_tushare_moneyflow(code: str, settings: Any, trade_date: str | None = None) -> dict[str, Any] | None:
     try:
         from app.services.tushare_client import get_pro
 
         pro = get_pro()
         ts_code = f"{code}.{'SH' if code.startswith(('6', '9')) else 'SZ'}"
-        df = pro.moneyflow(ts_code=ts_code, limit=10)
+        target = _compact_trade_date(trade_date)
+        if target:
+            end_day = date.fromisoformat(_normalize_trade_date(target))
+            start = (end_day - timedelta(days=30)).strftime("%Y%m%d")
+            try:
+                df = pro.moneyflow(ts_code=ts_code, start_date=start, end_date=target)
+            except Exception:
+                df = pro.moneyflow(ts_code=ts_code, trade_date=target)
+        else:
+            df = pro.moneyflow(ts_code=ts_code, limit=10)
         if df is None or df.empty:
             return None
 
         df = df.sort_values("trade_date", ascending=False)
+        if target:
+            df = df[df["trade_date"].astype(str) <= target]
+            if df.empty or str(df.iloc[0].get("trade_date", "")) != target:
+                return None
         latest = df.iloc[0]
-        trade_date = str(latest.get("trade_date", ""))
+        row_trade_date = _normalize_trade_date(latest.get("trade_date", target))
 
         cum_3d = 0.0
         cum_5d = 0.0
@@ -97,7 +126,7 @@ def _fetch_tushare_moneyflow(code: str, settings: Any) -> dict[str, Any] | None:
 
         return {
             "code": code,
-            "trade_date": trade_date,
+            "trade_date": row_trade_date,
             "main_net_inflow_yi": round(float(latest.get("net_mf_amount") or 0) / 1e8, 4),
             "super_large_net_inflow_yi": round(
                 float(latest.get("buy_elg_amount") or 0) / 1e8
@@ -129,59 +158,21 @@ def _fetch_tushare_moneyflow(code: str, settings: Any) -> dict[str, Any] | None:
         return None
 
 
-def _fetch_tushare_dragon_tiger(settings: Any) -> list[dict[str, Any]]:
+def _fetch_tushare_dragon_tiger(settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
     try:
-        from app.services.tushare_client import get_pro
+        from app.services.tushare_client import fetch_dragon_tiger
 
-        pro = get_pro()
-        today = date.today()
-        # 周末/节假日回退到最近交易日
-        trade_date = today
-        if today.weekday() == 5:
-            trade_date = today - timedelta(days=1)
-        elif today.weekday() == 6:
-            trade_date = today - timedelta(days=2)
-        trade_date_str = trade_date.strftime("%Y%m%d")
-        df = pro.top_list(trade_date=trade_date_str)
-        if df is None or df.empty:
-            return []
-
-        result = []
-        for _, row in df.iterrows():
-            code = _normalize_code(str(row.get("ts_code", "")))
-            if not code or len(code) != 6:
-                continue
-            result.append({
-                "code": code,
-                "name": str(row.get("name", "")),
-                "trade_date": trade_date.isoformat(),
-                "reason": str(row.get("reason", "")),
-                "buy_amount_yi": round(float(row.get("l_buy") or 0) / 1e8, 4)
-                if row.get("l_buy") is not None
-                else None,
-                "sell_amount_yi": round(float(row.get("l_sell") or 0) / 1e8, 4)
-                if row.get("l_sell") is not None
-                else None,
-                "net_amount_yi": round(float(row.get("net_amount") or 0) / 1e8, 4)
-                if row.get("net_amount") is not None
-                else None,
-                "buy_seat_count": 0,
-                "sell_seat_count": 0,
-                "institution_net_buy_yi": None,
-                "top_buy_broker": "",
-                "top_sell_broker": "",
-            })
-        return result
+        return fetch_dragon_tiger(_compact_trade_date(trade_date) or None)
     except Exception as e:
         logger.warning("Tushare龙虎榜不可用: %s", e)
         return []
 
 
-def _fetch_tushare_limit_up_board(settings: Any) -> list[dict[str, Any]]:
+def _fetch_tushare_limit_up_board(settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
     try:
         from app.services.tushare_client import fetch_limit_up_board
 
-        rows = fetch_limit_up_board()
+        rows = fetch_limit_up_board(_compact_trade_date(trade_date) or None)
         for row in rows:
             row.setdefault("fd_amount_yi", float(row.pop("fd_amount", 0) or 0))
         return rows
@@ -190,19 +181,14 @@ def _fetch_tushare_limit_up_board(settings: Any) -> list[dict[str, Any]]:
         return []
 
 
-def _fetch_tushare_concept_sectors(settings: Any) -> list[dict[str, Any]]:
+def _fetch_tushare_concept_sectors(settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
     try:
-        from app.services.tushare_client import fetch_concept_sectors
+        from app.services.tushare_client import fetch_concept_sectors, fetch_latest_trade_date
 
         rows = fetch_concept_sectors()
-        today = date.today()
-        if today.weekday() == 5:
-            today = today - timedelta(days=1)
-        elif today.weekday() == 6:
-            today = today - timedelta(days=2)
-        trade_date = today.isoformat()
+        target_trade_date = _normalize_trade_date(trade_date) or _normalize_trade_date(fetch_latest_trade_date())
         for rank, row in enumerate(rows, 1):
-            row["trade_date"] = trade_date
+            row["trade_date"] = target_trade_date
             row["heat_rank"] = rank
         return rows
     except Exception as e:

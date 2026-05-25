@@ -41,13 +41,14 @@ from app.services.market_data import (
     _eligible_market_quotes,
     _select_recall_candidates,
 )
-from app.services.outcome_service import is_trade_executed, label_pending_outcomes, resolved_trade_return
+from app.services.outcome_service import is_trade_executed, label_pending_outcomes, normalized_outcome_label, resolved_trade_return
 from app.services.prefilter_service import apply_prefilters
 from app.services.research_context import build_research_contexts
 from app.services.workbench_service import (
     _build_recommendation_card,
     _build_skill_rule_gate,
     _prelim_rule_score,
+    _resolve_prefilter_target_count,
     _resolve_skill_review_limit,
 )
 
@@ -58,6 +59,7 @@ def run_backtest(
     end_date: str,
     run_mode: str = "experiment",
     horizon_days: int = 5,
+    score_line: float = 72.0,
 ) -> dict[str, Any]:
     """在历史日期区间上执行回测，数据完全来自本地 DailyKbar 池。"""
     settings = get_settings()
@@ -69,7 +71,13 @@ def run_backtest(
     for trade_date in dates:
         t0 = time.perf_counter()
         try:
-            date_result = _backtest_single_date(db, trade_date, run_mode, settings)
+            date_result = _backtest_single_date(
+                db,
+                trade_date,
+                run_mode,
+                settings,
+                score_line=score_line,
+            )
             date_result["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 1)
             results.append(date_result)
         except Exception as exc:
@@ -117,16 +125,50 @@ def _trading_dates_in_range(db: Session, start: str, end: str) -> list[str]:
     ).all()
     return [row.trade_date for row in rows if row.cnt >= 100]
 
-def _load_latest_unified_quote_map(db: Session, codes: list[str]) -> dict[str, dict[str, Any]]:
+def _load_latest_unified_quote_map(db: Session, codes: list[str], trade_date: str) -> dict[str, dict[str, Any]]:
     quote_map: dict[str, dict[str, Any]] = {}
     if not codes:
         return quote_map
-    latest_quotes = db.scalars(select(StockQuote).where(StockQuote.code.in_(codes))).all()
-    for row in latest_quotes:
-        try:
-            quote_map[row.code] = json.loads(row.quote_json or "{}")
-        except (json.JSONDecodeError, TypeError):
-            continue
+    latest_quotes = (
+        select(
+            StockQuote.code.label("code"),
+            StockQuote.trade_date.label("trade_date"),
+            StockQuote.name.label("name"),
+            StockQuote.industry.label("industry"),
+            StockQuote.price.label("price"),
+            StockQuote.pct.label("pct"),
+            StockQuote.volume.label("volume"),
+            StockQuote.amount_yi.label("amount_yi"),
+            StockQuote.turnover_rate.label("turnover_rate"),
+            StockQuote.pe_ttm.label("pe_ttm"),
+            StockQuote.total_mv_yi.label("total_mv_yi"),
+            StockQuote.free_mv_yi.label("free_mv_yi"),
+            StockQuote.chg60.label("chg60"),
+            func.row_number().over(
+                partition_by=StockQuote.code,
+                order_by=(StockQuote.trade_date.desc(), StockQuote.snapped_at.desc()),
+            ).label("rn"),
+        )
+        .where(StockQuote.code.in_(codes), StockQuote.trade_date <= trade_date)
+        .subquery()
+    )
+    rows = db.execute(select(latest_quotes).where(latest_quotes.c.rn == 1)).all()
+    for row in rows:
+        quote_map[str(row.code)] = {
+            "code": str(row.code),
+            "trade_date": str(row.trade_date or ""),
+            "name": str(row.name or row.code),
+            "industry": row.industry,
+            "price": float(row.price or 0),
+            "pct": float(row.pct or 0),
+            "volume": float(row.volume or 0),
+            "amount_yi": float(row.amount_yi or 0),
+            "turnover_rate": float(row.turnover_rate or 0),
+            "pe_ttm": float(row.pe_ttm or 0),
+            "total_mv_yi": float(row.total_mv_yi or 0),
+            "free_mv_yi": float(row.free_mv_yi or 0),
+            "chg60": float(row.chg60 or 0),
+        }
     return quote_map
 
 
@@ -173,170 +215,14 @@ def _historical_quotes_from_bars(
         )
     return quotes
 
-
-def _synthetic_agent_review(signal: dict[str, Any]) -> dict[str, Any]:
-    score = float(signal.get("score") or 50)
-    rule_confidence = float(signal.get("confidence") or 0.55)
-    setup_quality = float(signal.get("setup_quality") or 50)
-    score_cap = float(signal.get("score_cap") or 100)
-
-    # 置信度：结合规则置信度、setup 质量、评分上限来模拟真实 Agent 的置信度分布
-    # 真实 Agent 往往比规则引擎更保守（更低置信度），且与数据质量相关
-    base_confidence = rule_confidence * 0.82  # Agent 通常比纯规则更保守
-    if score_cap < 80:
-        base_confidence -= 0.08  # 数据覆盖不足时置信度下降
-    if setup_quality < 55:
-        base_confidence -= 0.10
-    elif setup_quality > 80:
-        base_confidence += 0.06
-    # 真实 Agent 在极端评分区间的置信度分布更宽
-    if score >= 80:
-        base_confidence = min(0.92, base_confidence + 0.05)
-    elif score < 45:
-        base_confidence = max(0.25, base_confidence - 0.03)
-    confidence = max(0.28, min(0.93, base_confidence))
-
-    # stance 判定：比纯规则更保守，真实 Agent 很少给 strong_support
-    if signal.get("hard_veto"):
-        stance = "veto"
-        score = min(score, 32.0)
-    elif score >= 85 and setup_quality >= 70:
-        stance = "strong_support"
-    elif score >= 72:
-        stance = "support"
-    elif score >= 58:
-        stance = "neutral_support"
-    elif score >= 42:
-        stance = "neutral"
-    else:
-        stance = "oppose"
-
-    strategy_name = str(signal.get("strategy_name") or "")
-    phase = str(signal.get("phase") or "")
-    setup_match = str(signal.get("setup_match") or "")
-    risk_flags = list(signal.get("risk_flags") or [])
-    evidence_items = list(signal.get("evidence") or [])
-
-    # 构建更真实的支持证据列表
-    supports: list[str] = []
-    if stance in {"strong_support", "support", "neutral_support"}:
-        if setup_match:
-            supports.append(f"买点信号: {setup_match}")
-        if phase and phase not in ("未分类", "排除"):
-            supports.append(f"阶段定性: {phase}")
-        # 选取 2-3 条正向证据
-        positive_evidence = [
-            e for e in evidence_items
-            if not any(kw in e for kw in ("风险", "不足", "缺失", "下降", "排除"))
-        ]
-        supports.extend(positive_evidence[:3])
-        if not supports:
-            supports.append(f"规则信号偏向正面（{strategy_name}）")
-
-    # 构建风险列表
-    risks = list(risk_flags)
-    negative_evidence = [
-        e for e in evidence_items
-        if any(kw in e for kw in ("风险", "不足", "缺失", "下降"))
-    ]
-    risks.extend(negative_evidence[:2])
-    if score_cap < 80:
-        risks.append(f"数据覆盖评分上限 {score_cap:.0f}，信号可靠性受限")
-    if not risks:
-        if stance in {"neutral", "oppose", "veto"}:
-            risks.append("信号强度不足以确认入场")
-        else:
-            risks.append("盘中需关注量能接力与主线持续性")
-
-    # 入场方式
-    entry_style = str(signal.get("entry_rule") or "")
-    if not entry_style and stance in {"strong_support", "support"}:
-        entry_style = "回踩均线低吸或分时承接确认后介入"
-
-    # 失效条件：不仅复制规则条件，还加入市场相关条件
-    invalidation: list[str] = []
-    raw_invalid = str(signal.get("invalid_rule") or "")
-    if raw_invalid:
-        invalidation.append(raw_invalid)
-    if stance not in {"veto", "oppose"}:
-        invalidation.append("次日竞价量能不足或低开超3%暂缓")
-        invalidation.append("所属板块强度转弱或主线切换时退出")
-
-    # 次日计划
-    next_day: list[str] = []
-    if stance in {"strong_support", "support"}:
-        next_day.append("竞价量能与板块强度确认后，按入场方式执行")
-        next_day.append("若高开超5%不追，等盘中回踩确认")
-    elif stance == "neutral_support":
-        next_day.append("观察竞价及开盘15分钟量价配合")
-        next_day.append("需更强主线共振信号方可入场")
-    else:
-        next_day.append("暂不参与，等待更明确的入场信号")
-        next_day.append("关注板块轮动节奏，若主线回归可重新评估")
-
-    summary_parts = []
-    if setup_match:
-        summary_parts.append(setup_match)
-    if phase and phase not in ("未分类", "排除"):
-        summary_parts.append(phase)
-    if not summary_parts:
-        summary_parts.append(strategy_name or "规则审查结论")
-    summary = "、".join(summary_parts)
-
-    return {
-        "stance": stance,
-        "score": round(score, 2),
-        "score_delta": round(score - 50.0, 2),
-        "confidence": round(confidence, 2),
-        "supports": supports,
-        "risks": risks,
-        "summary": f"历史规则合成审查：{summary}",
-        "market_regime_judgment": "历史回测环境，市场状态来自规则信号推断",
-        "action": _action_for_stance(stance),
-        "position_range": _position_for_stance(stance, score),
-        "entry_style": entry_style,
-        "invalidation_conditions": invalidation,
-        "next_day_plan": next_day,
-        "runtime": "backtest_synthetic_agent_review",
-    }
-
-
-def _action_for_stance(stance: str) -> str:
-    if stance == "strong_support":
-        return "确认后加仓"
-    elif stance == "support":
-        return "轻仓试错"
-    elif stance == "neutral_support":
-        return "观察"
-    elif stance == "neutral":
-        return "观察"
-    elif stance == "oppose":
-        return "不做"
-    else:
-        return "不做"
-
-
-def _position_for_stance(stance: str, score: float) -> str:
-    if stance == "strong_support":
-        return "15-30%"
-    elif stance == "support":
-        return "8-15%"
-    elif stance == "neutral_support":
-        return "3-8%"
-    elif score >= 38:
-        return "0-3%"
-    else:
-        return "0%"
-
-
 def _backtest_single_date(
     db: Session,
     trade_date: str,
     run_mode: str,
     settings: Any,
+    score_line: float,
 ) -> dict[str, Any]:
     """对单个历史日期运行推荐流水线（复用线上规则门与聚合语义）。"""
-    output_count = 20
     all_bars = db.scalars(select(DailyKbar).where(DailyKbar.trade_date == trade_date)).all()
     if len(all_bars) < 100:
         return {"trade_date": trade_date, "status": "skipped", "reason": f"该日期仅 {len(all_bars)} 条日K"}
@@ -348,7 +234,7 @@ def _backtest_single_date(
         for s in stock_rows
     }
     chg60_map = _compute_chg60_for_date(db, codes, trade_date)
-    quote_map = _load_latest_unified_quote_map(db, codes)
+    quote_map = _load_latest_unified_quote_map(db, codes, trade_date)
     historical_quotes = _historical_quotes_from_bars(all_bars, stocks_meta, trade_date, quote_map, chg60_map)
     eligible_quotes = _eligible_market_quotes(historical_quotes)
     if not eligible_quotes:
@@ -414,9 +300,10 @@ def _backtest_single_date(
 
     if not selected_skills:
         return {"trade_date": trade_date, "status": "skipped", "reason": "无可用的 Skill"}
-    selected_skill_names = {str(item["skill_id"]): str(item.get("name") or item["skill_id"]) for item in selected_skills}
-
-    min_prefilter_count = max(output_count * 8, len(selected_skills) * 12, 24)
+    min_prefilter_count = _resolve_prefilter_target_count(
+        {"run_mode": run_mode, "score_line": score_line},
+        selected_skill_count=len(selected_skills),
+    )
     prefiltered_stocks, _prefilter_audit = apply_prefilters(
         stocks,
         selected_skills,
@@ -459,9 +346,8 @@ def _backtest_single_date(
     prelim_entries.sort(key=lambda item: float(item.get("prelim_score") or 0), reverse=True)
     gate_result = _build_skill_rule_gate(prelim_entries, selected_skills, settings)
     skill_candidates = gate_result["skill_candidates"]
-    non_skill_entries = gate_result["non_skill_entries"]
     skill_review_limit = _resolve_skill_review_limit(
-        {"run_mode": run_mode, "output_count": output_count},
+        {"run_mode": run_mode, "score_line": score_line},
         settings,
     )
     if skill_review_limit > 0 and len(skill_candidates) > skill_review_limit:
@@ -469,23 +355,9 @@ def _backtest_single_date(
 
     recommendations: list[dict[str, Any]] = []
     for entry in skill_candidates:
-        skill_reviews = []
-        for skill_id in entry.get("review_skill_ids") or []:
-            signal = (entry.get("rule_signals") or {}).get(skill_id)
-            if not signal:
-                continue
-            skill_reviews.append(
-                {
-                    "skill_id": skill_id,
-                    "skill_name": selected_skill_names.get(skill_id, skill_id),
-                    "review": _synthetic_agent_review(signal),
-                    "hallucination_check": {"flags": [], "severity": "low"},
-                    "error": None,
-                }
-            )
         card = _build_recommendation_card(
             entry,
-            skill_reviews,
+            [],
             skill_map=skill_map,
             selected_skills=selected_skills,
             market_score=market_score,
@@ -494,37 +366,16 @@ def _backtest_single_date(
             snapshot=snapshot,
             recent_codes=set(),
         )
+        card["backtest_mode"] = "rule_only_no_synthetic_agent"
         card["trade_date"] = trade_date
         card["recommended_at"] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         recommendations.append(card)
-
-    if len(recommendations) < output_count and non_skill_entries:
-        fallback_entries = sorted(
-            non_skill_entries,
-            key=lambda entry: float(entry.get("prelim_score") or 0),
-            reverse=True,
-        )
-        for entry in fallback_entries:
-            card = _build_recommendation_card(
-                entry,
-                [],
-                skill_map=skill_map,
-                selected_skills=selected_skills,
-                market_score=market_score,
-                risk_template="balanced",
-                calibrated_weights=None,
-                snapshot=snapshot,
-                recent_codes=set(),
-            )
-            card["fallback_mode"] = "rule_only_fill"
-            card["risk_flags"] = list(dict.fromkeys(list(card.get("risk_flags", [])) + ["未进入Agent深审，按规则候补"]))
-            card["trade_date"] = trade_date
-            card["recommended_at"] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
-            recommendations.append(card)
-            if len(recommendations) >= output_count:
-                break
-
-    recommendations = apply_pool_rules(recommendations, output_count)
+    recommendations = apply_pool_rules(
+        recommendations,
+        score_line=score_line,
+        market_snapshot=snapshot,
+        risk_template="balanced",
+    )
 
     run_id = _persist_backtest_run(
         db,
@@ -533,6 +384,7 @@ def _backtest_single_date(
         len(research_contexts),
         len(recommendations),
         [selected["skill"] for selected in selected_skills],
+        score_line=score_line,
     )
     _persist_backtest_recommendations(db, run_id, recommendations, snapshot)
 
@@ -684,6 +536,7 @@ def _persist_backtest_run(
     universe_count: int,
     recommended_count: int,
     skills: list[Any],
+    score_line: float,
 ) -> str:
     run_id = f"bt_{trade_date}_{_uuid.uuid4().hex[:8]}"
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -696,14 +549,22 @@ def _persist_backtest_run(
         finished_at=now,
         market_scope="全市场",
         risk_template="balanced",
-        output_count=20,
+        score_line=score_line,
+        output_count=0,
         universe_count=universe_count,
         recommended_count=recommended_count,
         status="completed",
         selected_skills_json=json.dumps([s.skill_id for s in skills]),
-        params_json=json.dumps({"backtest": True, "trade_date": trade_date, "run_mode": run_mode}),
+        params_json=json.dumps(
+            {
+                "backtest": True,
+                "trade_date": trade_date,
+                "run_mode": run_mode,
+                "score_line": score_line,
+            }
+        ),
         market_snapshot_json="{}",
-        result_summary_json=json.dumps({"backtest": True}),
+        result_summary_json=json.dumps({"backtest": True, "score_line": score_line}),
     )
     db.add(run)
     db.commit()
@@ -772,7 +633,7 @@ def _backtest_breakdown(
     for rec in recs:
         signals = json.loads(rec.skill_breakdown_json or "[]")
         outcome = outcomes.get(rec.recommendation_id)
-        is_success = outcome is not None and outcome.outcome_label == "success"
+        is_success = outcome is not None and normalized_outcome_label(outcome) == "success"
         is_triggered = is_trade_executed(outcome)
         for signal in signals:
             sid = signal.get("strategy_id", "unknown")
@@ -797,15 +658,36 @@ def _backtest_breakdown(
             "avg_score": round(sum(stats["scores"]) / max(1, len(stats["scores"])), 2),
         })
 
+    setup_stats: dict[str, dict[str, Any]] = defaultdict(lambda: {"count": 0, "triggered": 0, "missed": 0, "success": 0, "returns": []})
+    regime_stats: dict[str, dict[str, Any]] = defaultdict(lambda: {"count": 0, "triggered": 0, "missed": 0, "success": 0, "returns": []})
     industry_stats: dict[str, dict[str, Any]] = defaultdict(lambda: {"count": 0, "triggered": 0, "success": 0})
     for rec in recs:
         industry = rec.industry or "未分类"
         outcome = outcomes.get(rec.recommendation_id)
+        feature_snapshot = json.loads(rec.feature_snapshot_json or "{}")
+        setup = str(rec.setup_type or "未命中买点")
+        regime = str(
+            feature_snapshot.get("market_regime")
+            or (feature_snapshot.get("market_discipline") or {}).get("market_regime")
+            or "未知"
+        )
         industry_stats[industry]["count"] += 1
+        setup_stats[setup]["count"] += 1
+        regime_stats[regime]["count"] += 1
         if is_trade_executed(outcome):
             industry_stats[industry]["triggered"] += 1
-        if outcome is not None and outcome.outcome_label == "success":
+            setup_stats[setup]["triggered"] += 1
+            regime_stats[regime]["triggered"] += 1
+            ret = resolved_trade_return(outcome)
+            setup_stats[setup]["returns"].append(ret)
+            regime_stats[regime]["returns"].append(ret)
+        elif outcome is not None:
+            setup_stats[setup]["missed"] += 1
+            regime_stats[regime]["missed"] += 1
+        if outcome is not None and normalized_outcome_label(outcome) == "success":
             industry_stats[industry]["success"] += 1
+            setup_stats[setup]["success"] += 1
+            regime_stats[regime]["success"] += 1
 
     by_industry = []
     for ind, stats in sorted(industry_stats.items(), key=lambda x: x[1]["count"], reverse=True):
@@ -818,6 +700,38 @@ def _backtest_breakdown(
             "success_count": stats["success"],
             "trigger_rate": round(triggered / max(1, n), 3),
             "hit_rate": round(stats["success"] / max(1, triggered), 3) if triggered else 0.0,
+        })
+
+    by_setup = []
+    for setup, stats in sorted(setup_stats.items(), key=lambda x: x[1]["count"], reverse=True):
+        n = stats["count"]
+        triggered = stats["triggered"]
+        returns = stats["returns"]
+        by_setup.append({
+            "setup_type": setup,
+            "recommendation_count": n,
+            "triggered_count": triggered,
+            "missed_count": stats["missed"],
+            "success_count": stats["success"],
+            "trigger_rate": round(triggered / max(1, n), 3),
+            "hit_rate": round(stats["success"] / max(1, triggered), 3) if triggered else 0.0,
+            "avg_return": round(sum(returns) / max(1, len(returns)), 2) if returns else 0.0,
+        })
+
+    by_market_regime = []
+    for regime, stats in sorted(regime_stats.items(), key=lambda x: x[1]["count"], reverse=True):
+        n = stats["count"]
+        triggered = stats["triggered"]
+        returns = stats["returns"]
+        by_market_regime.append({
+            "market_regime": regime,
+            "recommendation_count": n,
+            "triggered_count": triggered,
+            "missed_count": stats["missed"],
+            "success_count": stats["success"],
+            "trigger_rate": round(triggered / max(1, n), 3),
+            "hit_rate": round(stats["success"] / max(1, triggered), 3) if triggered else 0.0,
+            "avg_return": round(sum(returns) / max(1, len(returns)), 2) if returns else 0.0,
         })
 
     score_range_stats: dict[str, dict[str, Any]] = defaultdict(lambda: {"count": 0, "triggered": 0, "success": 0})
@@ -834,7 +748,7 @@ def _backtest_breakdown(
         score_range_stats[rng]["count"] += 1
         if is_trade_executed(outcome):
             score_range_stats[rng]["triggered"] += 1
-        if outcome is not None and outcome.outcome_label == "success":
+        if outcome is not None and normalized_outcome_label(outcome) == "success":
             score_range_stats[rng]["success"] += 1
 
     by_score_range = []
@@ -853,10 +767,47 @@ def _backtest_breakdown(
             "hit_rate": round(stats["success"] / max(1, triggered), 3) if triggered else 0.0,
         })
 
+    by_score_line = []
+    total_recs = len(recs)
+    for score_line in [55, 60, 65, 70, 75, 80]:
+        selected = [rec for rec in recs if float(rec.final_score or 0) >= score_line]
+        labeled = [rec for rec in selected if normalized_outcome_label(outcomes.get(rec.recommendation_id)) != "pending"]
+        executed = [rec for rec in labeled if is_trade_executed(outcomes.get(rec.recommendation_id))]
+        missed = max(0, len(labeled) - len(executed))
+        success_count = sum(
+            1 for rec in executed if normalized_outcome_label(outcomes.get(rec.recommendation_id)) == "success"
+        )
+        by_score_line.append({
+            "score_line": float(score_line),
+            "sample_count": len(selected),
+            "activation_rate": round(len(selected) / max(1, total_recs), 3) if total_recs else 0.0,
+            "labeled_count": len(labeled),
+            "triggered_count": len(executed),
+            "missed_count": missed,
+            "success_count": success_count,
+            "trigger_rate": round(len(executed) / max(1, len(labeled)), 3) if labeled else 0.0,
+            "hit_rate": round(success_count / max(1, len(executed)), 3) if executed else 0.0,
+            "avg_return": round(
+                sum(resolved_trade_return(outcomes.get(rec.recommendation_id)) for rec in executed) / max(1, len(executed)),
+                2,
+            ) if executed else 0.0,
+            "avg_drawdown": round(
+                sum(float(outcomes.get(rec.recommendation_id).max_drawdown or 0) for rec in labeled if outcomes.get(rec.recommendation_id)) / max(1, len(labeled)),
+                2,
+            ) if labeled else 0.0,
+            "avg_close_return": round(
+                sum(float(outcomes.get(rec.recommendation_id).close_return or 0) for rec in labeled if outcomes.get(rec.recommendation_id)) / max(1, len(labeled)),
+                2,
+            ) if labeled else 0.0,
+        })
+
     return {
         "by_skill": by_skill,
+        "by_setup": by_setup,
         "by_industry": by_industry,
+        "by_market_regime": by_market_regime,
         "by_score_range": by_score_range,
+        "by_score_line": by_score_line,
     }
 
 
@@ -888,7 +839,7 @@ def _backtest_aggregate_metrics(
     n = len(outcomes)
     triggered = [o for o in outcomes if is_trade_executed(o)]
     executed_n = len(triggered)
-    success_count = sum(1 for o in triggered if o.outcome_label == "success")
+    success_count = sum(1 for o in triggered if normalized_outcome_label(o) == "success")
     returns = [resolved_trade_return(o) for o in triggered]
     weighted_returns = [float(o.weighted_return or 0) for o in triggered]
     max_returns = [o.max_return or 0 for o in outcomes]
@@ -923,6 +874,6 @@ def _profit_factor(outcomes: list[RecommendationOutcome]) -> float:
 
 
 def _win_loss_ratio(outcomes: list[RecommendationOutcome]) -> float:
-    wins = sum(1 for o in outcomes if is_trade_executed(o) and o.outcome_label == "success")
-    losses = sum(1 for o in outcomes if is_trade_executed(o) and o.outcome_label == "failed")
+    wins = sum(1 for o in outcomes if is_trade_executed(o) and normalized_outcome_label(o) == "success")
+    losses = sum(1 for o in outcomes if is_trade_executed(o) and normalized_outcome_label(o) == "failed")
     return round(wins / max(losses, 1), 2)

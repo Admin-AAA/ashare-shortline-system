@@ -8,6 +8,7 @@ import subprocess
 import threading
 import time
 import uuid
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 import asyncio
@@ -24,7 +25,12 @@ from app.agents.session_registry import AgentSessionRegistry
 from app.db.session import SessionLocal
 from app.core.config import get_settings
 from app.engine.agent_skill_runner import agent_only_signal, enrich_signal_with_agent_review
-from app.engine.aggregator import aggregate, apply_pool_rules, market_regime_weights
+from app.engine.aggregator import (
+    aggregate,
+    apply_pool_rules,
+    market_regime_weights,
+    resolve_score_line_context,
+)
 from app.engine.skill_loader import StrategySkill, load_skills, validate_skill
 from app.engine.strategy_runner import run_strategy
 from app.models.tables import (
@@ -48,6 +54,7 @@ from app.models.tables import (
     Stock,
     StrategyVersion,
     WatchItem,
+    StockQuote,
 )
 from app.services.feature_builder import build_features, market_regime_score
 from app.services.market_data import MarketDataError, get_market_universe
@@ -61,8 +68,10 @@ from app.services.market_pool import (
 )
 from app.services.outcome_service import (
     invalidate_outcome_metrics_cache,
+    is_outcome_labeled,
     is_trade_executed,
     label_pending_outcomes as label_pending_outcomes_service,
+    normalized_outcome_label,
     resolved_trade_return,
 )
 from app.services.prefilter_service import apply_prefilters
@@ -107,6 +116,7 @@ DEFAULT_PRESETS = [
         "market_scope": "all",
         "market_scope_value": None,
         "risk_template": "balanced",
+        "score_line": 72.0,
         "output_count": 6,
         "hide_recent_repeats": True,
         "skills": [
@@ -123,6 +133,7 @@ DEFAULT_PRESETS = [
         "market_scope": "all",
         "market_scope_value": None,
         "risk_template": "aggressive",
+        "score_line": 70.0,
         "output_count": 5,
         "hide_recent_repeats": True,
         "skills": [
@@ -139,6 +150,7 @@ DEFAULT_PRESETS = [
         "market_scope": "all",
         "market_scope_value": None,
         "risk_template": "balanced",
+        "score_line": 68.0,
         "output_count": 6,
         "hide_recent_repeats": False,
         "skills": [
@@ -231,6 +243,8 @@ _initial_state_cache_lock = threading.Lock()
 _initial_state_cache: dict[tuple[str, str], dict[str, Any]] = {}
 _progress_commit_state_lock = threading.Lock()
 _progress_commit_state: dict[str, dict[str, Any]] = {}
+_outcome_backfill_lock = threading.Lock()
+_outcome_backfill_ts = 0.0
 _run_queue: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue()
 _run_queue_lock = threading.Lock()
 _run_queue_worker_started = False
@@ -244,6 +258,8 @@ def bootstrap_workbench_state(db: Session) -> dict[str, Any]:
         cached = _bootstrap_cache.get(cache_key)
         if cached and (now - float(cached["ts"])) < BOOTSTRAP_CACHE_TTL_SECONDS:
             return copy.deepcopy(cached["data"])
+
+    _auto_backfill_outcomes(db)
 
     t0 = time.perf_counter()
     sync_skills(db)
@@ -290,6 +306,19 @@ def invalidate_bootstrap_cache() -> None:
         _initial_state_cache.clear()
 
 
+def _auto_backfill_outcomes(db: Session, horizon_days: int = 5, min_interval_seconds: float = 600.0) -> None:
+    global _outcome_backfill_ts
+    now = time.monotonic()
+    with _outcome_backfill_lock:
+        if (now - _outcome_backfill_ts) < min_interval_seconds:
+            return
+        _outcome_backfill_ts = now
+    try:
+        label_pending_outcomes_service(db, horizon_days=horizon_days)
+    except Exception:
+        logger.exception("automatic outcome backfill failed")
+
+
 def get_initial_workbench_state(db: Session) -> dict[str, Any]:
     from app.services.cost_service import list_scheduled_task_runs
 
@@ -302,6 +331,8 @@ def get_initial_workbench_state(db: Session) -> dict[str, Any]:
             return copy.deepcopy(cached["data"])
 
     from app.services.data_sources import list_data_sources
+
+    _auto_backfill_outcomes(db)
 
     t0 = time.perf_counter()
     home_state = bootstrap_workbench_state(db)
@@ -700,6 +731,7 @@ def create_preset(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
         market_scope=str(payload.get("market_scope") or "all"),
         market_scope_value=payload.get("market_scope_value"),
         risk_template=str(payload.get("risk_template") or "balanced"),
+        score_line=float(payload.get("score_line") or 72.0),
         output_count=int(payload.get("output_count") or 6),
         bucket_limits_json="{}",
         data_source=_normalize_data_source(payload.get("data_source") or _default_data_source_for_run_mode(run_mode)),
@@ -725,6 +757,7 @@ def update_preset(db: Session, preset_id: str, payload: dict[str, Any]) -> dict[
         "market_scope",
         "market_scope_value",
         "risk_template",
+        "score_line",
         "data_source",
         "status",
     ]:
@@ -787,6 +820,8 @@ def get_run_detail(db: Session, run_id: str) -> dict[str, Any] | None:
         return None
     data = _serialize_run_summary(db, run)
     data["params"] = _loads(run.params_json, {})
+    if isinstance(data["params"], dict):
+        data["params"].pop("output_count", None)
     data["market_snapshot"] = _loads(run.market_snapshot_json, {})
     data["result_summary"] = _loads(run.result_summary_json, {})
     data["pipeline_audit"] = (
@@ -1136,11 +1171,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     if not scoped_stocks:
         raise ValueError("当前市场范围内没有可运行的股票，请调整预设范围后重试")
     snapshot.setdefault("breadth", {})["scoped_candidate_count"] = len(scoped_stocks)
-    min_prefilter_count = max(
-        int(params.get("output_count") or 0) * 8,
-        len(selected_skills) * 12,
-        24,
-    )
+    min_prefilter_count = _resolve_prefilter_target_count(params, selected_skill_count=len(selected_skills))
     prefiltered_stocks, prefilter_audit = apply_prefilters(
         scoped_stocks,
         selected_skills,
@@ -1149,7 +1180,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     if not prefiltered_stocks:
         raise ValueError("前置预过滤后没有可运行的股票，请放宽候选条件后重试")
     snapshot["breadth"]["prefilter_candidate_count"] = len(prefiltered_stocks)
-    snapshot["breadth"]["prefilter_audit"] = prefilter_audit
+    snapshot["breadth"]["prefilter_audit"] = _strip_audit_rows(prefilter_audit)
     _save_checkpoint(db, run_id, "scope_filter")
     _update_run_progress(
         db,
@@ -1170,7 +1201,11 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     }
     settings = get_settings()
     skip_aux_refresh = bool(params.get("skip_aux_refresh"))
-    aux_prefetch_count = min(len(prefiltered_stocks), max(int(params.get("output_count") or 0) * 4, 12), 36)
+    aux_prefetch_count = min(
+        len(prefiltered_stocks),
+        max(18, min_prefilter_count // 2),
+        48,
+    )
     aux_prefetch_codes = _select_aux_prefetch_codes(prefiltered_stocks, aux_prefetch_count)
     _update_run_progress(
         db,
@@ -1199,7 +1234,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         else:
             t0 = time.perf_counter()
             try:
-                sectors = refresh_concept_sectors(db)
+                sectors = refresh_concept_sectors(db, trade_date=snapshot["trade_date"])
                 aux_audit["concept_sectors"] = {
                     "status": "success",
                     "count": len(sectors),
@@ -1237,7 +1272,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         else:
             t0 = time.perf_counter()
             try:
-                dt_rows = refresh_dragon_tiger(db)
+                dt_rows = refresh_dragon_tiger(db, trade_date=snapshot["trade_date"])
                 aux_audit["dragon_tiger"] = {
                     "status": "success",
                     "count": len(dt_rows),
@@ -1271,7 +1306,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         if stale_capital_flow_codes:
             t0 = time.perf_counter()
             try:
-                cf_result = refresh_capital_flows_for_codes(db, stale_capital_flow_codes)
+                cf_result = refresh_capital_flows_for_codes(db, stale_capital_flow_codes, trade_date=snapshot["trade_date"])
                 aux_audit["capital_flows"] = {
                     "status": "success",
                     "count": len(cf_result),
@@ -1313,7 +1348,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         if stale_news_codes:
             t0 = time.perf_counter()
             try:
-                news_result = refresh_news_for_codes(db, stale_news_codes)
+                news_result = refresh_news_for_codes(db, stale_news_codes, trade_date=snapshot["trade_date"])
                 aux_audit["news"] = {
                     "status": "success",
                     "count": len(news_result),
@@ -1385,6 +1420,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     run.market_scope = params["market_scope"]
     run.market_scope_value = params.get("market_scope_value")
     run.risk_template = params["risk_template"]
+    run.score_line = float(params["score_line"])
     run.output_count = params["output_count"]
     run.selected_skills_json = _dumps(_selected_skill_rows(selected_skills))
     run.params_json = _dumps(params)
@@ -1420,7 +1456,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
 
         # ═══ 阶段一：策略规则全市场扫描（所有基础过滤合格股票，无 LLM） ═══
         settings = get_settings()
-        skill_review_limit = _resolve_skill_review_limit(params, settings)
+        skill_review_limit = _resolve_skill_review_limit(params, settings, selected_skill_count=len(selected_skills))
         skill_review_concurrency = max(1, int(params.get("agent_review_concurrency") or settings.market_skill_review_concurrency or 1))
         prelim_entries: list[dict[str, Any]] = []
         total_contexts = len(research_contexts)
@@ -1505,7 +1541,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             skill_demo_limited=skill_demo_limited,
             prefilter_audit=prefilter_audit,
         )
-        snapshot.setdefault("breadth", {})["recommendation_pipeline"] = pipeline_audit
+        snapshot.setdefault("breadth", {})["recommendation_pipeline"] = _strip_audit_rows(pipeline_audit)
         _save_checkpoint(db, run_id, "rule_scan")
         _update_run_progress(
             db,
@@ -1610,35 +1646,21 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             candidate_success_count, len(candidate_results),
         )
         pipeline_audit["skill_review_success_count"] = candidate_success_count
-        rule_only_fallback_count = 0
-        if len(cards) < params["output_count"] and non_skill_entries:
-            fallback_entries = sorted(
-                non_skill_entries,
-                key=lambda entry: float(entry.get("prelim_score") or 0),
-                reverse=True,
-            )
-            for entry in fallback_entries:
-                card = _build_recommendation_card(
-                    entry,
-                    [],
-                    skill_map=skill_map,
-                    selected_skills=selected_skills,
-                    market_score=market_score,
-                    risk_template=params["risk_template"],
-                    calibrated_weights=calibrated_weights,
-                    snapshot=snapshot,
-                    recent_codes=recent_codes,
-                )
-                card["fallback_mode"] = "rule_only_fill"
-                card["risk_flags"] = list(dict.fromkeys(list(card.get("risk_flags", [])) + ["未进入Agent深审，按规则候补"]))
-                if params["hide_recent_repeats"] and card["recent_repeat"]:
-                    continue
-                cards.append(card)
-                rule_only_fallback_count += 1
-                if len(cards) >= params["output_count"]:
-                    break
-        pipeline_audit["rule_only_fallback_count"] = rule_only_fallback_count
-        cards = apply_pool_rules(cards, params["output_count"])
+        pipeline_audit["rule_only_fallback_count"] = 0
+        scored_cards = list(cards)
+        cards = apply_pool_rules(
+            scored_cards,
+            score_line=float(params["score_line"]),
+            market_snapshot=snapshot,
+            risk_template=params["risk_template"],
+        )
+        pipeline_audit["filter_audit"] = _build_filter_audit(
+            prefilter_audit=prefilter_audit,
+            skill_gate_audit=skill_gate_audit,
+            scored_cards=scored_cards,
+            recommended_cards=cards,
+            pipeline=pipeline_audit,
+        )
         _save_checkpoint(db, run_id, "aggregate")
         _update_run_progress(
             db,
@@ -1679,6 +1701,9 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                         "market_discipline": card.get("market_discipline", {}),
                         "aggregation_weights": card.get("aggregation_weights", {}),
                         "raw_component_scores": card.get("raw_component_scores", {}),
+                        "weighted_component_scores": card.get("weighted_component_scores", {}),
+                        "score_breakdown": card.get("score_breakdown", {}),
+                        "score_line_meta": card.get("score_line_meta", {}),
                         "component_scale": card.get("component_scale", 1.0),
                         "consensus_boost": card.get("consensus_boost", 1.0),
                     }
@@ -1725,7 +1750,8 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         run.progress_current = len(saved)
         run.progress_total = len(saved)
         run.progress_message = "运行完成"
-        run.result_summary_json = _dumps(_build_run_summary(cards, saved, snapshot, pipeline_audit))
+        run.filter_audit_json = _dumps(pipeline_audit.get("filter_audit") or {})
+        run.result_summary_json = _dumps(_build_run_summary(cards, saved, snapshot, _strip_audit_rows(pipeline_audit)))
         db.commit()
         invalidate_bootstrap_cache()
         return {
@@ -1771,6 +1797,33 @@ def get_recommendation_detail(db: Session, recommendation_id: str) -> dict[str, 
         }
     data["history"] = _historical_recommendations(db, rec.code, rec.recommendation_id)
     return data
+
+
+def get_run_filter_audit(db: Session, run_id: str) -> dict[str, Any] | None:
+    run = db.get(RecommendationRun, run_id)
+    if run is None:
+        return None
+    summary = _loads(run.result_summary_json, {})
+    snapshot = _loads(run.market_snapshot_json, {})
+    pipeline = (
+        summary.get("pipeline")
+        or ((snapshot.get("breadth") or {}).get("recommendation_pipeline") if snapshot else {})
+        or {}
+    )
+    audit = _loads(getattr(run, "filter_audit_json", "") or "{}", {})
+    if not audit:
+        audit = pipeline.get("filter_audit") if isinstance(pipeline, dict) else None
+    if not audit:
+        audit = _fallback_filter_audit(summary, pipeline if isinstance(pipeline, dict) else {}, run.recommended_count)
+    audit = _upgrade_filter_audit(audit or {})
+    return {
+        "run": _serialize_run_summary(db, run),
+        "stage_summary": audit.get("stage_summary", []),
+        "distributions": audit.get("distributions", {}),
+        "reason_counts": audit.get("reason_counts", {}),
+        "rows": audit.get("rows", []),
+        "empty_reason": audit.get("empty_reason"),
+    }
 
 
 def set_watch_status(db: Session, recommendation_id: str, watch_status: str, note: str | None = None) -> dict[str, Any] | None:
@@ -1840,12 +1893,18 @@ def label_outcome_manually(db: Session, recommendation_id: str, payload: dict[st
     if outcome is None:
         outcome = RecommendationOutcome(recommendation_id=recommendation_id)
         db.add(outcome)
-    outcome.outcome_label = str(payload.get("outcome_label") or "pending")
+    outcome_label = str(payload.get("outcome_label") or "pending").lower()
+    if outcome_label == "not_triggered":
+        outcome_label = "missed"
+    if outcome_label == "risk_hit":
+        outcome_label = "failed"
+    outcome.outcome_label = outcome_label
+    outcome.entry_triggered = outcome_label in {"success", "failed"}
     outcome.outcome_reason = payload.get("outcome_reason")
     outcome.horizon_days = int(payload.get("horizon_days") or outcome.horizon_days or 5)
     outcome.label_source = "manual"
     outcome.labeled_at = datetime.now(timezone.utc).replace(tzinfo=None)
-    rec.status = outcome.outcome_label
+    rec.status = normalized_outcome_label(outcome)
     db.commit()
     invalidate_outcome_metrics_cache()
     invalidate_bootstrap_cache()
@@ -1872,7 +1931,7 @@ def _serialize_preset(db: Session, preset: Preset) -> dict[str, Any]:
         "market_scope": preset.market_scope,
         "market_scope_value": preset.market_scope_value,
         "risk_template": preset.risk_template,
-        "output_count": preset.output_count,
+        "score_line": preset.score_line,
         "data_source": preset.data_source,
         "hide_recent_repeats": preset.hide_recent_repeats,
         "status": preset.status,
@@ -1924,7 +1983,7 @@ def _serialize_presets_batched(db: Session, presets: list[Preset]) -> list[dict[
             "market_scope": preset.market_scope,
             "market_scope_value": preset.market_scope_value,
             "risk_template": preset.risk_template,
-            "output_count": preset.output_count,
+            "score_line": preset.score_line,
             "data_source": preset.data_source,
             "hide_recent_repeats": preset.hide_recent_repeats,
             "status": preset.status,
@@ -1939,8 +1998,16 @@ def _new_run_id() -> str:
 
 
 def _latest_trade_date(db: Session) -> str:
-    latest = db.scalar(select(MarketSnapshot.trade_date).order_by(MarketSnapshot.created_at.desc()).limit(1))
-    return latest or date.today().isoformat()
+    latest = db.scalar(select(MarketSnapshot.trade_date).order_by(MarketSnapshot.trade_date.desc()).limit(1))
+    if latest:
+        return str(latest)
+    latest_quote = db.scalar(select(StockQuote.trade_date).order_by(StockQuote.trade_date.desc()).limit(1))
+    if latest_quote:
+        return str(latest_quote)
+    latest_bar = db.scalar(select(DailyKbar.trade_date).order_by(DailyKbar.trade_date.desc()).limit(1))
+    if latest_bar:
+        return str(latest_bar)
+    return date.today().isoformat()
 
 
 def _selected_skill_rows(selected_skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1978,13 +2045,13 @@ def _serialize_run_summaries_batched(db: Session, runs: list[RecommendationRun])
 
     # 批量加载所有 Outcome
     all_rec_ids = [rec.recommendation_id for rec in all_recs]
-    outcome_map: dict[str, str] = {}  # recommendation_id → outcome_label
+    outcome_map: dict[str, RecommendationOutcome] = {}
     if all_rec_ids:
         all_outcomes = db.scalars(
             select(RecommendationOutcome).where(RecommendationOutcome.recommendation_id.in_(all_rec_ids))
         ).all()
         for o in all_outcomes:
-            outcome_map[o.recommendation_id] = o.outcome_label
+            outcome_map[o.recommendation_id] = o
 
     results = []
     for run in runs:
@@ -1996,7 +2063,7 @@ def _serialize_run_summaries_batched(db: Session, runs: list[RecommendationRun])
             for outcome in [outcome_map.get(rec.recommendation_id)]
             if outcome is not None and is_trade_executed(outcome)
         ]
-        success_count = sum(1 for outcome in run_outcomes if outcome.outcome_label == "success")
+        success_count = sum(1 for outcome in run_outcomes if normalized_outcome_label(outcome) == "success")
         hit_rate = round(success_count / len(run_outcomes), 3) if run_outcomes else 0.0
         results.append(_serialize_run_summary_from_cache(run, preset, hit_rate))
     return results
@@ -2027,7 +2094,7 @@ def _serialize_run_summary_from_cache(run: RecommendationRun, preset: Preset | N
         "market_scope": run.market_scope,
         "market_scope_value": run.market_scope_value,
         "risk_template": run.risk_template,
-        "output_count": run.output_count,
+        "score_line": run.score_line,
         "universe_count": run.universe_count,
         "recommended_count": run.recommended_count,
         "status": run.status,
@@ -2059,7 +2126,7 @@ def _serialize_run_summary(db: Session, run: RecommendationRun) -> dict[str, Any
         else []
     )
     executed = [outcome for outcome in outcomes if is_trade_executed(outcome)]
-    success_count = sum(1 for outcome in executed if outcome.outcome_label == "success")
+    success_count = sum(1 for outcome in executed if normalized_outcome_label(outcome) == "success")
     hit_rate = round(success_count / len(executed), 3) if executed else 0.0
     heartbeat_age_seconds = None
     if run.heartbeat_at:
@@ -2084,7 +2151,7 @@ def _serialize_run_summary(db: Session, run: RecommendationRun) -> dict[str, Any
         "market_scope": run.market_scope,
         "market_scope_value": run.market_scope_value,
         "risk_template": run.risk_template,
-        "output_count": run.output_count,
+        "score_line": run.score_line,
         "universe_count": run.universe_count,
         "recommended_count": run.recommended_count,
         "status": run.status,
@@ -2148,6 +2215,8 @@ def _serialize_recommendation_cached(rec: Recommendation, watch: WatchItem | Non
         "market_context": market_context,
         "skill_breakdown": _loads(rec.skill_breakdown_json, []),
         "agent_logs": (_loads(rec.agent_summary_json, {}) or {}).get("logs", []),
+        "score_breakdown": feature_snapshot.get("score_breakdown", {}),
+        "score_line_meta": feature_snapshot.get("score_line_meta", {}),
         "status": rec.status,
         "recent_repeat": rec.recent_repeat,
         "watch_status": watch.watch_status if watch else "none",
@@ -2186,6 +2255,8 @@ def _serialize_recommendation(db: Session, rec: Recommendation) -> dict[str, Any
         "market_context": market_context,
         "skill_breakdown": _loads(rec.skill_breakdown_json, []),
         "agent_logs": (_loads(rec.agent_summary_json, {}) or {}).get("logs", []),
+        "score_breakdown": feature_snapshot.get("score_breakdown", {}),
+        "score_line_meta": feature_snapshot.get("score_line_meta", {}),
         "status": rec.status,
         "recent_repeat": rec.recent_repeat,
         "watch_status": watch.watch_status if watch else "none",
@@ -2206,15 +2277,30 @@ def _prelim_rule_score(stock: dict[str, Any], rule_signals_by_skill: dict[str, A
     return round(prelim_score, 2)
 
 
-def _resolve_skill_review_limit(params: dict[str, Any], settings: Any) -> int:
+def _resolve_prefilter_target_count(params: dict[str, Any], selected_skill_count: int) -> int:
+    score_line = float(params.get("score_line") or 72.0)
+    base = 36 if str(params.get("run_mode") or "formal") == "formal" else 24
+    if score_line < 70:
+        base += 12
+    elif score_line >= 78:
+        base -= 6
+    return max(base, selected_skill_count * 12, 24)
+
+
+def _resolve_skill_review_limit(params: dict[str, Any], settings: Any, selected_skill_count: int = 1) -> int:
     if bool(params.get("disable_agent_review")):
         return 0
     skill_review_limit = int(params.get("agent_review_limit") or settings.market_skill_review_limit or 0)
     if skill_review_limit > 0:
         return skill_review_limit
-    default_multiple = 3 if params.get("run_mode") == "experiment" else 6
-    default_min = 8 if params.get("run_mode") == "experiment" else 24
-    return min(max(int(params.get("output_count") or 0) * default_multiple, default_min), 60)
+    score_line = float(params.get("score_line") or 72.0)
+    base = 14 if params.get("run_mode") == "experiment" else 28
+    if score_line < 70:
+        base += 10
+    elif score_line >= 78:
+        base -= 6
+    base = max(base, selected_skill_count * 8)
+    return min(max(base, 8), 60)
 
 
 def _build_recommendation_card(
@@ -2241,6 +2327,35 @@ def _build_recommendation_card(
         review_data = review_result.get("review")
         hc = review_result.get("hallucination_check")
         rule_signal = rule_signals_by_skill.get(skill_id)
+        is_agent_fallback = False
+
+        if review_data is None and rule_signal is not None:
+            is_agent_fallback = True
+            prelim_score = float(entry.get("prelim_score") or rule_signal.get("score") or 50.0)
+            fallback_review = {
+                "stance": "support" if prelim_score >= 72 else "neutral_support" if prelim_score >= 60 else "neutral",
+                "score_delta": round(max(-18.0, min(16.0, prelim_score - 50.0)), 2),
+                "score": round(prelim_score, 2),
+                "confidence": 0.35 if prelim_score >= 70 else 0.25,
+                "supports": [f"规则预审分 {prelim_score:.1f}"],
+                "risks": [str(review_result.get("error") or "Skill Agent 暂不可用，已降级为规则预审")],
+                "summary": "Skill Agent 暂不可用，本次仅保留规则预审结果",
+                "market_regime_judgment": "规则预审降级模式",
+                "action": "观察" if prelim_score < 72 else "轻仓试错",
+                "position_range": "0-5%" if prelim_score < 72 else "5-15%",
+                "entry_style": "先看承接与分歧修复",
+                "invalidation_conditions": [
+                    "若规则预审未能转强，继续观察",
+                    "若主线和承接没有改善，撤回降级推荐",
+                ],
+                "next_day_plan": [
+                    "等待 Agent 恢复后重新复核",
+                    "仅在主线继续强化时跟踪承接变化",
+                ],
+                "summary_is_warning": True,
+                "runtime": "agent_skill_fallback_prelim",
+            }
+            review_data = fallback_review
 
         agent_review = {
             "stance": review_data.get("stance", "neutral"),
@@ -2280,6 +2395,13 @@ def _build_recommendation_card(
             signal = agent_only_signal(skill_obj, stock, agent_review)
         else:
             signal = enrich_signal_with_agent_review(rule_signal, agent_review)
+
+        if is_agent_fallback:
+            signal["runtime"] = "strategy_yaml_rule_only_agent_unavailable"
+            signal["agent_review_unavailable"] = {
+                "reason": str(review_result.get("error") or "Skill Agent 暂不可用"),
+                "runtime_note": "agent_review_unavailable",
+            }
 
         if hc:
             signal["hallucination_flags"] = hc.get("flags", [])
@@ -2521,6 +2643,7 @@ def _build_skill_rule_gate(
         for entry in prelim_entries
         if str(entry["stock"].get("code") or "") not in {item["stock"].get("code") for item in skill_candidates}
     ]
+    audit_rows = _build_skill_gate_rows(by_code, selected_ids, min_score)
     audit = {
         "mode": "rule_gate_dynamic_tiered",
         "min_score": min_score,
@@ -2532,12 +2655,80 @@ def _build_skill_rule_gate(
         "skill_gate_candidate_count": len(skill_candidates),
         "skill_agent_call_count": len(selected_pairs),
         "per_skill": per_skill_audit,
+        "rows": audit_rows,
+        "reason_counts": dict(Counter(row["reason_key"] for row in audit_rows if not row.get("passed"))),
     }
     return {
         "skill_candidates": skill_candidates,
         "non_skill_entries": non_skill_entries,
         "audit": audit,
     }
+
+
+def _build_skill_gate_rows(
+    by_code: dict[str, dict[str, Any]],
+    selected_ids: list[str],
+    min_score: float,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for code, entry in by_code.items():
+        stock = entry.get("stock") or {}
+        rule_signals = entry.get("rule_signals") or {}
+        gate_scores = {sid: float(score) for sid, score in (entry.get("skill_gate_scores") or {}).items()}
+        gate_reasons = dict(entry.get("skill_gate_reasons") or {})
+        review_skill_ids = [str(item) for item in (entry.get("review_skill_ids") or [])]
+        best_skill_id = None
+        best_gate_score = None
+        if gate_scores:
+            best_skill_id, best_gate_score = max(gate_scores.items(), key=lambda item: float(item[1]))
+
+        if review_skill_ids:
+            reason_key = "gate_pass"
+            reason = gate_reasons.get(review_skill_ids[0]) or "规则门通过，进入 Skill 深审"
+            passed = True
+        else:
+            present_signals = [rule_signals.get(skill_id) for skill_id in selected_ids if rule_signals.get(skill_id)]
+            hard_veto_reasons = [
+                str(signal.get("veto_reason") or "规则硬否决")
+                for signal in present_signals
+                if signal and signal.get("hard_veto")
+            ]
+            if not present_signals:
+                reason_key = "no_rule_signal"
+                reason = "无可用规则信号"
+            elif best_gate_score is not None and best_gate_score >= min_score:
+                reason_key = "gate_capacity"
+                reason = "规则门分合格，但未进入本次 Skill 深审容量"
+            elif hard_veto_reasons and len(hard_veto_reasons) >= len(present_signals):
+                reason_key = "hard_veto"
+                reason = "；".join(sorted(set(hard_veto_reasons))[:3])
+            elif best_skill_id and best_skill_id in gate_reasons:
+                reason_key = "low_gate_score"
+                reason = gate_reasons[best_skill_id]
+            else:
+                reason_key = "low_gate_score"
+                reason = f"规则门分低于 {round(min_score, 2)}"
+            passed = False
+
+        rows.append(
+            {
+                "code": code,
+                "name": stock.get("name"),
+                "industry": stock.get("industry"),
+                "stage": "skill_gate",
+                "passed": passed,
+                "reason_key": reason_key,
+                "reason": reason,
+                "prelim_score": float(entry.get("prelim_score") or 0),
+                "best_skill_id": best_skill_id,
+                "best_gate_score": best_gate_score,
+                "gate_scores": gate_scores,
+                "gate_reasons": gate_reasons,
+                "review_skill_ids": review_skill_ids,
+                "quality_tier": entry.get("skill_quality_tier") or {},
+            }
+        )
+    return rows
 
 
 def _skill_gate_score(signal: dict[str, Any], entry: dict[str, Any]) -> float:
@@ -2582,12 +2773,28 @@ def _finalize_skill_gate_audit(
         for skill_id in entry.get("review_skill_ids") or []:
             if skill_id in per_skill:
                 per_skill[skill_id]["llm_reviewed"] += 1
+    selected_codes = {str((entry.get("stock") or {}).get("code") or "") for entry in skill_candidates}
+    rows = list(finalized.get("rows") or [])
+    if rows:
+        reason_counts: Counter[str] = Counter()
+        for row in rows:
+            code = str(row.get("code") or "")
+            review_selected = code in selected_codes
+            row["review_selected"] = review_selected
+            if row.get("passed") and not review_selected:
+                row["review_limit_reason"] = "规则门通过，但被本次 Agent 深审上限截断"
+                reason_counts["review_limit"] += 1
+            elif not row.get("passed"):
+                reason_counts[str(row.get("reason_key") or "filtered")] += 1
+        finalized["rows"] = rows
+        finalized["reason_counts"] = dict(reason_counts)
     return finalized
 
 
 def _serialize_outcome(outcome: RecommendationOutcome | None) -> dict[str, Any] | None:
     if outcome is None:
         return None
+    normalized_label = normalized_outcome_label(outcome)
     return {
         "horizon_days": outcome.horizon_days,
         "entry_triggered": outcome.entry_triggered,
@@ -2611,7 +2818,8 @@ def _serialize_outcome(outcome: RecommendationOutcome | None) -> dict[str, Any] 
         "max_drawdown": outcome.max_drawdown,
         "hit_target": outcome.hit_target,
         "hit_invalid": outcome.hit_invalid,
-        "outcome_label": outcome.outcome_label,
+        "outcome_label": normalized_label,
+        "outcome_label_raw": outcome.outcome_label,
         "outcome_label_legacy": outcome.outcome_label_legacy,
         "outcome_reason": outcome.outcome_reason,
         "label_source": outcome.label_source,
@@ -2684,6 +2892,7 @@ def _merge_run_params(db: Session, preset: Preset | None, payload: dict[str, Any
         "market_scope": str(payload.get("market_scope") or preset_data.get("market_scope") or "all"),
         "market_scope_value": payload.get("market_scope_value", preset_data.get("market_scope_value")),
         "risk_template": str(payload.get("risk_template") or preset_data.get("risk_template") or "balanced"),
+        "score_line": float(payload.get("score_line") or preset_data.get("score_line") or 72.0),
         "output_count": int(payload.get("output_count") or preset_data.get("output_count") or 6),
         "data_source": _normalize_data_source(payload.get("data_source") or preset_data.get("data_source") or default_data_source),
         "skip_aux_refresh": bool(
@@ -2760,9 +2969,11 @@ def _apply_market_scope(db: Session, features: list[dict[str, Any]], params: dic
 
 
 def _has_fresh_concept_sector_cache(db: Session, trade_date: str, freshness_seconds: int) -> bool:
+    cutoff = _freshness_cutoff(freshness_seconds)
     sector_count = db.scalar(
         select(func.count()).select_from(ConceptSector).where(
             ConceptSector.trade_date == trade_date,
+            ConceptSector.created_at >= cutoff,
         )
     ) or 0
     return sector_count > 0
@@ -2772,6 +2983,7 @@ def _has_fresh_dragon_tiger_cache(db: Session, trade_date: str, freshness_second
     count = db.scalar(
         select(func.count()).select_from(DragonTiger).where(
             DragonTiger.trade_date == trade_date,
+            DragonTiger.created_at >= _freshness_cutoff(freshness_seconds),
         )
     ) or 0
     return count > 0
@@ -2791,6 +3003,7 @@ def _stale_capital_flow_codes(
             select(CapitalFlow.code).where(
                 CapitalFlow.code.in_(codes),
                 CapitalFlow.trade_date == trade_date,
+                CapitalFlow.created_at >= _freshness_cutoff(freshness_seconds),
             ).distinct()
         ).all()
     }
@@ -2805,16 +3018,26 @@ def _stale_news_codes(
 ) -> list[str]:
     if not codes:
         return []
+    latest_allowed = date.fromisoformat(trade_date)
+    ttl_days = max(2, int((int(freshness_seconds or 0) + 86399) // 86400)) if freshness_seconds else 2
+    earliest_allowed = (latest_allowed - timedelta(days=ttl_days)).isoformat()
     fresh_codes = {
         code
         for code, in db.execute(
             select(NewsAnnouncement.code).where(
                 NewsAnnouncement.code.in_(codes),
-                NewsAnnouncement.announce_date == trade_date,
+                NewsAnnouncement.announce_date <= latest_allowed.isoformat(),
+                NewsAnnouncement.announce_date >= earliest_allowed,
+                NewsAnnouncement.created_at >= _freshness_cutoff(freshness_seconds),
             ).distinct()
         ).all()
     }
     return [code for code in codes if code not in fresh_codes]
+
+
+def _freshness_cutoff(freshness_seconds: int) -> datetime:
+    ttl = max(0, int(freshness_seconds or 0))
+    return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=ttl)
 
 
 def _recent_recommended_codes(db: Session, trade_date: str) -> set[str]:
@@ -2844,7 +3067,7 @@ def _agent_history_context(db: Session, skill_id: str, stock: dict[str, Any]) ->
                 "bucket": "",
                 "final_score": rec.final_score,
                 "setup_type": rec.setup_type,
-                "outcome_label": outcome.outcome_label if outcome else rec.status,
+                "outcome_label": normalized_outcome_label(outcome) if outcome else rec.status,
                 "close_return": resolved_trade_return(outcome) if outcome else None,
                 "max_drawdown": outcome.max_drawdown if outcome else None,
             }
@@ -2859,9 +3082,9 @@ def _agent_history_context(db: Session, skill_id: str, stock: dict[str, Any]) ->
         for rec in matched_recs
         if db.get(RecommendationOutcome, rec.recommendation_id) is not None
     ]
-    labeled = [outcome for outcome in outcomes if outcome and outcome.outcome_label != "pending"]
+    labeled = [outcome for outcome in outcomes if is_outcome_labeled(outcome)]
     executed = [outcome for outcome in labeled if is_trade_executed(outcome)]
-    success = [outcome for outcome in executed if outcome and outcome.outcome_label == "success"]
+    success = [outcome for outcome in executed if normalized_outcome_label(outcome) == "success"]
     return {
         "same_stock_history": same_stock_history,
         "skill_recent_performance": {
@@ -2894,6 +3117,11 @@ def _build_pipeline_audit(
     gate = skill_gate_audit or {}
     prefilter = prefilter_audit or (breadth.get("prefilter_audit") or {})
     aux = breadth.get("auxiliary_data_audit") or {}
+    score_line_context = resolve_score_line_context(
+        float(params.get("score_line") or 72.0),
+        market_snapshot=snapshot,
+        risk_template=str(params.get("risk_template") or "balanced"),
+    )
     market_candidate_count = (
         int(config["market_candidate_count"])
         if "market_candidate_count" in config
@@ -2924,6 +3152,7 @@ def _build_pipeline_audit(
         "skill_gate_candidate_count": int(gate.get("skill_gate_candidate_count") or skill_input_count),
         "skill_gate": gate,
         "skill_review_success_count": 0,
+        "score_line": score_line_context,
         "output_count": int(params.get("output_count") or 0),
         "market_candidate_count": market_candidate_count,
         "lookahead_multiplier": lookahead_multiplier,
@@ -2938,11 +3167,851 @@ def _build_pipeline_audit(
             "kline": breadth.get("kline_skip_reasons") or {},
             "recent_repeat_filter_enabled": bool(params.get("hide_recent_repeats")),
             "prefilter": "先做公共可交易过滤，再按每个 Skill 的 market prefilter 缩小候选池",
-            "pool_rules": "按 final_score 降序取前 output_count 只",
+            "pool_rules": "按 final_score 与动态 score_line 决定是否出票，展示上限不参与核心决策",
             "skill_rule_gate": "全市场先跑 strategy.yaml 规则；只有通过规则门的股票-Skill 组合进入真实 Skill Agent 深审",
-            "rule_only_fallback": "已禁用 — 仅输出 Agent 审查通过的股票，不足不补",
+            "rule_only_fallback": "已禁用 — 不再为凑数量补规则候补票",
         },
     }
+
+
+def _strip_audit_rows(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _strip_audit_rows(item)
+            for key, item in value.items()
+            if key != "rows"
+        }
+    if isinstance(value, list):
+        return [_strip_audit_rows(item) for item in value]
+    return value
+
+
+def _build_filter_audit(
+    *,
+    prefilter_audit: dict[str, Any] | None,
+    skill_gate_audit: dict[str, Any] | None,
+    scored_cards: list[dict[str, Any]],
+    recommended_cards: list[dict[str, Any]],
+    pipeline: dict[str, Any],
+) -> dict[str, Any]:
+    rows_by_code: dict[str, dict[str, Any]] = {}
+
+    for item in (prefilter_audit or {}).get("rows") or []:
+        code = str(item.get("code") or "")
+        if not code:
+            continue
+        passed = bool(item.get("passed"))
+        common_pass = bool(item.get("common_pass", passed))
+        row = {
+            "code": code,
+            "name": item.get("name"),
+            "industry": item.get("industry"),
+            "price": item.get("price"),
+            "pct": item.get("pct"),
+            "amount_yi": item.get("amount_yi"),
+            "turnover_rate": item.get("turnover_rate"),
+            "final_stage": "prefilter_pass" if passed else str(item.get("stage") or "prefilter"),
+            "final_status": "active" if passed else "filtered",
+            "final_reason": item.get("reason") or ("预过滤通过" if passed else "预过滤未通过"),
+            "prefilter": item,
+            "trace": [],
+        }
+        _append_trace_step(
+            row,
+            "prefilter_common",
+            common_pass,
+            item.get("common_reason") or ("公共可交易过滤通过" if common_pass else "公共可交易过滤未通过"),
+            amount_yi=item.get("amount_yi"),
+            turnover_rate=item.get("turnover_rate"),
+            pct=item.get("pct"),
+        )
+        if common_pass:
+            _append_trace_step(
+                row,
+                "prefilter_pass" if passed else "prefilter_skill",
+                passed,
+                item.get("reason") or ("技能预过滤命中" if passed else "未命中任何 Skill 市场预过滤"),
+                skill_pass_ids=item.get("skill_pass_ids") or [],
+                prefilter_source=item.get("prefilter_source"),
+            )
+        rows_by_code[code] = row
+
+    for item in (skill_gate_audit or {}).get("rows") or []:
+        code = str(item.get("code") or "")
+        if not code:
+            continue
+        row = rows_by_code.setdefault(
+            code,
+            {
+                "code": code,
+                "name": item.get("name"),
+                "industry": item.get("industry"),
+                "final_stage": "rule_scan",
+                "final_status": "active",
+                "final_reason": "进入规则扫描",
+            },
+        )
+        if not row.get("trace"):
+            row["trace"] = []
+            _append_trace_step(row, "prefilter_pass", True, "进入规则扫描")
+        row["name"] = row.get("name") or item.get("name")
+        row["industry"] = row.get("industry") or item.get("industry")
+        row["rule_gate"] = item
+        if not item.get("passed"):
+            _append_trace_step(
+                row,
+                "skill_gate",
+                False,
+                item.get("reason") or "规则门未通过",
+                best_skill_id=item.get("best_skill_id"),
+                best_gate_score=item.get("best_gate_score"),
+                prelim_score=item.get("prelim_score"),
+            )
+            row["final_stage"] = "skill_gate"
+            row["final_status"] = "filtered"
+            row["final_reason"] = item.get("reason") or "规则门未通过"
+        elif not item.get("review_selected", True):
+            _append_trace_step(
+                row,
+                "skill_gate",
+                True,
+                item.get("reason") or "规则门通过",
+                best_skill_id=item.get("best_skill_id"),
+                best_gate_score=item.get("best_gate_score"),
+                prelim_score=item.get("prelim_score"),
+            )
+            _append_trace_step(
+                row,
+                "skill_review_limit",
+                False,
+                item.get("review_limit_reason") or "规则门通过，但未进入本次深审容量",
+                review_skill_ids=item.get("review_skill_ids") or [],
+            )
+            row["final_stage"] = "skill_review_limit"
+            row["final_status"] = "filtered"
+            row["final_reason"] = item.get("review_limit_reason") or "规则门通过，但未进入本次深审容量"
+        elif row.get("final_status") != "filtered":
+            _append_trace_step(
+                row,
+                "skill_gate",
+                True,
+                item.get("reason") or "规则门通过，进入 Skill 深审",
+                best_skill_id=item.get("best_skill_id"),
+                best_gate_score=item.get("best_gate_score"),
+                prelim_score=item.get("prelim_score"),
+            )
+            _append_trace_step(
+                row,
+                "skill_review",
+                True,
+                "进入 Skill 深审",
+                review_skill_ids=item.get("review_skill_ids") or [],
+            )
+            row["final_stage"] = "skill_review"
+            row["final_status"] = "active"
+            row["final_reason"] = "进入 Skill 深审"
+
+    recommended_codes = {str(card.get("code") or "") for card in recommended_cards}
+    score_rows: list[dict[str, Any]] = []
+    for card in scored_cards:
+        code = str(card.get("code") or "")
+        if not code:
+            continue
+        score_line_meta = card.get("score_line_meta") or {}
+        final_score = float(card.get("final_score") or 0)
+        effective_line = float(score_line_meta.get("effective_score_line") or 0)
+        passed = code in recommended_codes or bool(score_line_meta.get("passed"))
+        score_gap = round(final_score - effective_line, 2) if effective_line else None
+        score_reason = "达到正式分数线" if passed else f"最终分 {round(final_score, 2)} 低于有效线 {round(effective_line, 2)}"
+        score_row = {
+            "code": code,
+            "final_score": round(final_score, 2),
+            "effective_score_line": round(effective_line, 2),
+            "score_gap": score_gap,
+            "passed": passed,
+            "reason": score_reason,
+            "evidence_quality_score": float(card.get("evidence_quality_score") or 0),
+            "data_completeness_score": float(card.get("data_completeness_score") or 0),
+            "score_breakdown": card.get("score_breakdown") or {},
+            "score_line_meta": score_line_meta,
+            "risk_tags": card.get("risk_flags") or card.get("risk_tags") or [],
+            "info_tags": card.get("info_tags") or [],
+            "setup_type": card.get("setup_type"),
+            "data_authenticity": float(card.get("data_authenticity") or 0),
+            "data_quality": card.get("data_quality") or {},
+            "raw_component_scores": card.get("raw_component_scores") or (card.get("score_breakdown") or {}).get("raw_scores") or {},
+            "weighted_component_scores": card.get("weighted_component_scores") or (card.get("score_breakdown") or {}).get("weighted_scores") or {},
+            "aggregation_weights": card.get("aggregation_weights") or (card.get("score_breakdown") or {}).get("weights") or {},
+            "component_scale": card.get("component_scale"),
+            "consensus_boost": card.get("consensus_boost") or (card.get("score_breakdown") or {}).get("consensus_boost"),
+            "consensus_tags": card.get("consensus_tags") or [],
+            "quality_cap": (card.get("score_breakdown") or {}).get("quality_cap"),
+            "market_regime": card.get("market_regime"),
+            "market_discipline": card.get("market_discipline") or {},
+            "skill_disagreement": card.get("skill_disagreement") or {},
+            "strategy_signal_count": len(card.get("strategy_signals") or []),
+        }
+        score_rows.append(score_row)
+        row = rows_by_code.setdefault(
+            code,
+            {
+                "code": code,
+                "name": card.get("name"),
+                "industry": card.get("industry"),
+                "trace": [],
+            },
+        )
+        if not row.get("trace"):
+            _append_trace_step(row, "prefilter_pass", True, "进入聚合评分")
+            _append_trace_step(row, "skill_review", True, "进入聚合评分")
+        row["name"] = row.get("name") or card.get("name")
+        row["industry"] = row.get("industry") or card.get("industry")
+        row["score_line"] = score_row
+        _append_trace_step(
+            row,
+            "score_line",
+            passed,
+            score_reason,
+            final_score=round(final_score, 2),
+            effective_score_line=round(effective_line, 2),
+            score_gap=score_gap,
+            evidence_adjustment=score_line_meta.get("evidence_adjustment"),
+            adjustment_reasons=score_line_meta.get("reasons") or [],
+        )
+        if passed:
+            row["final_stage"] = "recommended"
+            row["final_status"] = "recommended"
+            row["final_reason"] = score_reason
+        else:
+            row["final_stage"] = "score_line"
+            row["final_status"] = "filtered"
+            row["final_reason"] = score_reason
+
+    rows = list(rows_by_code.values())
+    for row in rows:
+        row["trace_summary"] = _trace_summary(row.get("trace") or [])
+    rows.sort(
+        key=lambda row: (
+            _filter_stage_order(str(row.get("final_stage") or "")),
+            -float(((row.get("score_line") or {}).get("final_score") or 0)),
+            str(row.get("code") or ""),
+        )
+    )
+
+    reason_counts: dict[str, dict[str, int]] = {}
+    for row in rows:
+        stage = str(row.get("final_stage") or "unknown")
+        reason = str(row.get("final_reason") or "-")
+        reason_counts.setdefault(stage, {})
+        reason_counts[stage][reason] = reason_counts[stage].get(reason, 0) + 1
+
+    distributions = _build_filter_distributions(
+        rows=rows,
+        scored_cards=scored_cards,
+        recommended_cards=recommended_cards,
+        score_rows=score_rows,
+    )
+
+    stage_summary = _build_filter_stage_summary(
+        pipeline=pipeline,
+        prefilter_audit=prefilter_audit or {},
+        skill_gate_audit=skill_gate_audit or {},
+        scored_count=len(scored_cards),
+        recommended_count=len(recommended_cards),
+        reason_counts=reason_counts,
+    )
+    return {
+        "stage_summary": stage_summary,
+        "distributions": distributions,
+        "reason_counts": reason_counts,
+        "rows": rows,
+    }
+
+
+def _filter_stage_order(stage: str) -> int:
+    order = {
+        "prefilter_common": 10,
+        "prefilter_skill": 20,
+        "skill_gate": 30,
+        "skill_review_limit": 40,
+        "score_line": 50,
+        "recommended": 60,
+        "prefilter_pass": 70,
+        "skill_review": 80,
+    }
+    return order.get(stage, 99)
+
+
+def _append_trace_step(row: dict[str, Any], stage: str, passed: bool, reason: Any, **detail: Any) -> None:
+    trace = row.setdefault("trace", [])
+    step: dict[str, Any] = {
+        "stage": stage,
+        "label": _filter_stage_label(stage),
+        "passed": bool(passed),
+        "reason": str(reason or ("通过" if passed else "未通过")),
+    }
+    for key, value in detail.items():
+        if value is None or value == "":
+            continue
+        step[key] = value
+    trace.append(step)
+
+
+def _filter_stage_label(stage: str) -> str:
+    labels = {
+        "prefilter_common": "公共预过滤",
+        "prefilter_skill": "Skill 预过滤",
+        "prefilter_pass": "预过滤通过",
+        "skill_gate": "规则门",
+        "skill_review_limit": "深审容量",
+        "skill_review": "Skill 深审",
+        "score_line": "分数线",
+        "recommended": "正式推荐",
+    }
+    return labels.get(stage, stage)
+
+
+def _trace_summary(trace: list[dict[str, Any]]) -> str:
+    if not trace:
+        return ""
+    fragments = []
+    for item in trace:
+        label = item.get("label") or _filter_stage_label(str(item.get("stage") or ""))
+        marker = "过" if item.get("passed") else "止"
+        fragments.append(f"{label}:{marker}")
+        if item.get("passed") is False:
+            break
+    return " -> ".join(fragments)
+
+
+def _upgrade_filter_audit(audit: dict[str, Any]) -> dict[str, Any]:
+    """补齐旧 Run 的逐票路径和完整分布，避免只能重跑后才能审计。"""
+    if not isinstance(audit, dict):
+        return {}
+    rows = audit.get("rows") or []
+    if not isinstance(rows, list):
+        return audit
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if not row.get("trace"):
+            row["trace"] = _trace_from_audit_row(row)
+        row["trace_summary"] = row.get("trace_summary") or _trace_summary(row.get("trace") or [])
+
+    distributions = audit.get("distributions") or {}
+    if rows and not {"final_stage", "data_completeness_all", "score_line_adjustment_reason"}.issubset(set(distributions.keys())):
+        scored_cards: list[dict[str, Any]] = []
+        recommended_cards: list[dict[str, Any]] = []
+        score_rows: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("score_line"), dict):
+                continue
+            score_row = dict(row.get("score_line") or {})
+            card = _score_card_from_audit_row(row, score_row)
+            score_rows.append(score_row)
+            scored_cards.append(card)
+            if row.get("final_status") == "recommended" or score_row.get("passed"):
+                recommended_cards.append(card)
+        upgraded_distributions = _build_filter_distributions(
+            rows=[row for row in rows if isinstance(row, dict)],
+            scored_cards=scored_cards,
+            recommended_cards=recommended_cards,
+            score_rows=score_rows,
+        )
+        audit["distributions"] = {**distributions, **upgraded_distributions}
+    return audit
+
+
+def _trace_from_audit_row(row: dict[str, Any]) -> list[dict[str, Any]]:
+    traced: dict[str, Any] = {"trace": []}
+    prefilter = row.get("prefilter") if isinstance(row.get("prefilter"), dict) else {}
+    rule_gate = row.get("rule_gate") if isinstance(row.get("rule_gate"), dict) else {}
+    score_line = row.get("score_line") if isinstance(row.get("score_line"), dict) else {}
+
+    if prefilter:
+        common_pass = bool(prefilter.get("common_pass", row.get("final_stage") != "prefilter_common"))
+        _append_trace_step(
+            traced,
+            "prefilter_common",
+            common_pass,
+            prefilter.get("common_reason") or ("公共可交易过滤通过" if common_pass else row.get("final_reason")),
+            amount_yi=prefilter.get("amount_yi"),
+            turnover_rate=prefilter.get("turnover_rate"),
+            pct=prefilter.get("pct"),
+        )
+        if common_pass:
+            prefilter_pass = bool(prefilter.get("passed", row.get("final_stage") not in {"prefilter_skill", "prefilter_common"}))
+            _append_trace_step(
+                traced,
+                "prefilter_pass" if prefilter_pass else "prefilter_skill",
+                prefilter_pass,
+                prefilter.get("reason") or ("技能预过滤命中" if prefilter_pass else row.get("final_reason")),
+                skill_pass_ids=prefilter.get("skill_pass_ids") or [],
+                prefilter_source=prefilter.get("prefilter_source"),
+            )
+
+    if rule_gate:
+        gate_pass = bool(rule_gate.get("passed"))
+        _append_trace_step(
+            traced,
+            "skill_gate",
+            gate_pass,
+            rule_gate.get("reason") or ("规则门通过" if gate_pass else row.get("final_reason")),
+            best_skill_id=rule_gate.get("best_skill_id"),
+            best_gate_score=rule_gate.get("best_gate_score"),
+            prelim_score=rule_gate.get("prelim_score"),
+        )
+        if gate_pass and rule_gate.get("review_selected") is False:
+            _append_trace_step(
+                traced,
+                "skill_review_limit",
+                False,
+                rule_gate.get("review_limit_reason") or row.get("final_reason") or "规则门通过，但未进入本次深审容量",
+                review_skill_ids=rule_gate.get("review_skill_ids") or [],
+            )
+        elif gate_pass:
+            _append_trace_step(
+                traced,
+                "skill_review",
+                True,
+                "进入 Skill 深审",
+                review_skill_ids=rule_gate.get("review_skill_ids") or [],
+            )
+
+    if score_line:
+        final_score = score_line.get("final_score")
+        effective_line = score_line.get("effective_score_line")
+        try:
+            gap = round(float(final_score or 0) - float(effective_line or 0), 2) if effective_line is not None else score_line.get("score_gap")
+        except (TypeError, ValueError):
+            gap = score_line.get("score_gap")
+        meta = score_line.get("score_line_meta") or {}
+        _append_trace_step(
+            traced,
+            "score_line",
+            bool(score_line.get("passed") or row.get("final_status") == "recommended"),
+            score_line.get("reason") or row.get("final_reason") or "分数线判断",
+            final_score=final_score,
+            effective_score_line=effective_line,
+            score_gap=gap,
+            evidence_adjustment=meta.get("evidence_adjustment") if isinstance(meta, dict) else None,
+            adjustment_reasons=(meta.get("reasons") if isinstance(meta, dict) else None) or [],
+        )
+
+    if not traced["trace"]:
+        _append_trace_step(
+            traced,
+            str(row.get("final_stage") or "unknown"),
+            row.get("final_status") != "filtered",
+            row.get("final_reason") or "无路径明细",
+        )
+    return traced["trace"]
+
+
+def _score_card_from_audit_row(row: dict[str, Any], score_row: dict[str, Any]) -> dict[str, Any]:
+    breakdown = score_row.get("score_breakdown") if isinstance(score_row.get("score_breakdown"), dict) else {}
+    raw_scores = score_row.get("raw_component_scores") or breakdown.get("raw_scores") or {}
+    weighted_scores = score_row.get("weighted_component_scores") or breakdown.get("weighted_scores") or {}
+    weights = score_row.get("aggregation_weights") or breakdown.get("weights") or {}
+    return {
+        **score_row,
+        "code": row.get("code"),
+        "name": row.get("name"),
+        "industry": row.get("industry"),
+        "final_score": score_row.get("final_score"),
+        "evidence_quality_score": score_row.get("evidence_quality_score"),
+        "data_completeness_score": score_row.get("data_completeness_score"),
+        "data_authenticity": score_row.get("data_authenticity"),
+        "data_quality": score_row.get("data_quality") or {},
+        "score_breakdown": breakdown,
+        "raw_component_scores": raw_scores,
+        "weighted_component_scores": weighted_scores,
+        "aggregation_weights": weights,
+        "risk_flags": score_row.get("risk_tags") or [],
+        "info_tags": score_row.get("info_tags") or [],
+        "score_line_meta": score_row.get("score_line_meta") or {},
+        "market_regime": score_row.get("market_regime"),
+        "setup_type": score_row.get("setup_type"),
+    }
+
+
+def _build_filter_stage_summary(
+    *,
+    pipeline: dict[str, Any],
+    prefilter_audit: dict[str, Any],
+    skill_gate_audit: dict[str, Any],
+    scored_count: int,
+    recommended_count: int,
+    reason_counts: dict[str, dict[str, int]],
+) -> list[dict[str, Any]]:
+    unified = int(pipeline.get("unified_quote_total") or 0)
+    base = int(pipeline.get("base_filter_eligible_count") or 0)
+    scoped = int(pipeline.get("scoped_candidate_count") or prefilter_audit.get("input_count") or 0)
+    prefilter_pass = int(pipeline.get("prefilter_candidate_count") or prefilter_audit.get("prefilter_candidate_count") or 0)
+    actual_scan = int(pipeline.get("actual_scan_count") or prefilter_pass)
+    skill_input = int(pipeline.get("skill_input_count") or 0)
+    reviewed_success = int(pipeline.get("skill_review_success_count") or 0)
+    return [
+        {
+            "stage": "market_universe",
+            "label": "全市场 -> 基础合格",
+            "input_count": unified,
+            "pass_count": base,
+            "filtered_count": max(0, unified - base),
+            "reason_counts": pipeline.get("skip_reasons", {}).get("base_filter", {}),
+        },
+        {
+            "stage": "scope_recall",
+            "label": "基础合格 -> 范围候选",
+            "input_count": base,
+            "pass_count": scoped,
+            "filtered_count": max(0, base - scoped),
+            "reason_counts": {},
+        },
+        {
+            "stage": "prefilter",
+            "label": "范围候选 -> 预过滤",
+            "input_count": int(prefilter_audit.get("input_count") or scoped),
+            "pass_count": prefilter_pass,
+            "filtered_count": max(0, int(prefilter_audit.get("input_count") or scoped) - prefilter_pass),
+            "reason_counts": _merge_reason_counts(
+                reason_counts.get("prefilter_common") or {},
+                reason_counts.get("prefilter_skill") or {},
+            ),
+        },
+        {
+            "stage": "skill_gate",
+            "label": "规则扫描 -> Skill 深审",
+            "input_count": actual_scan,
+            "pass_count": skill_input,
+            "filtered_count": max(0, actual_scan - skill_input),
+            "reason_counts": skill_gate_audit.get("reason_counts") or reason_counts.get("skill_gate") or {},
+        },
+        {
+            "stage": "skill_review",
+            "label": "Skill 深审 -> 可聚合",
+            "input_count": skill_input,
+            "pass_count": scored_count,
+            "filtered_count": max(0, skill_input - scored_count),
+            "reason_counts": {"agent_review_failed": max(0, skill_input - reviewed_success)} if skill_input > reviewed_success else {},
+        },
+        {
+            "stage": "score_line",
+            "label": "最终分 -> 正式出票",
+            "input_count": scored_count,
+            "pass_count": recommended_count,
+            "filtered_count": max(0, scored_count - recommended_count),
+            "reason_counts": reason_counts.get("score_line") or {},
+        },
+    ]
+
+
+def _build_filter_distributions(
+    *,
+    rows: list[dict[str, Any]],
+    scored_cards: list[dict[str, Any]],
+    recommended_cards: list[dict[str, Any]],
+    score_rows: list[dict[str, Any]],
+) -> dict[str, dict[str, int]]:
+    recommended_codes = {str(card.get("code") or "") for card in recommended_cards}
+    filtered_scored_cards = [card for card in scored_cards if str(card.get("code") or "") not in recommended_codes]
+    rule_gate_rows = [row.get("rule_gate") or {} for row in rows if row.get("rule_gate")]
+
+    distributions: dict[str, dict[str, int]] = {
+        "final_stage": _categorical_distribution([row.get("final_stage") for row in rows]),
+        "final_status": _categorical_distribution([row.get("final_status") for row in rows]),
+        "industry": _categorical_distribution([row.get("industry") for row in rows], limit=12),
+        "prefilter_stage": _categorical_distribution([(row.get("prefilter") or {}).get("stage") for row in rows if row.get("prefilter")]),
+        "prefilter_source": _categorical_distribution([(row.get("prefilter") or {}).get("prefilter_source") for row in rows if row.get("prefilter")]),
+        "skill_gate_result": _categorical_distribution(_skill_gate_result(row) for row in rule_gate_rows),
+        "skill_gate_reason": _categorical_distribution(_skill_gate_reason_bucket(row) for row in rule_gate_rows),
+        "score_line_result": _categorical_distribution(["通过" if row.get("passed") else "未通过" for row in score_rows]),
+        "score_line_adjustment_reason": _list_distribution(
+            (row.get("score_line_meta") or {}).get("reasons") or ["无附加证据惩罚"] for row in score_rows
+        ),
+        "setup_type": _categorical_distribution([row.get("setup_type") or "未分类" for row in score_rows]),
+        "market_regime": _categorical_distribution([row.get("market_regime") for row in score_rows], limit=10),
+        "prelim_score": _numeric_distribution(
+            _numeric_values(rule_gate_rows, "prelim_score"),
+            buckets=[0, 50, 60, 70, 80, 90],
+        ),
+        "best_gate_score": _numeric_distribution(
+            _numeric_values(rule_gate_rows, "best_gate_score"),
+            buckets=[0, 58, 70, 80, 90],
+        ),
+        "final_score_all": _score_distribution(scored_cards),
+        "final_score_filtered": _score_distribution(filtered_scored_cards),
+        "final_score_recommended": _score_distribution(recommended_cards),
+        "effective_score_line": _numeric_distribution(
+            _numeric_values(score_rows, "effective_score_line"),
+            buckets=[0, 60, 70, 75, 80, 85, 90],
+        ),
+        "score_gap": _score_gap_distribution(score_rows),
+        "evidence_quality_all": _quality_distribution(scored_cards),
+        "data_completeness_all": _numeric_distribution(
+            _numeric_values(score_rows, "data_completeness_score"),
+            buckets=[0, 50, 65, 75, 90, 100],
+        ),
+        "data_authenticity_all": _numeric_distribution(
+            _numeric_values(score_rows, "data_authenticity"),
+            buckets=[0, 0.5, 0.75, 0.9, 1.0],
+        ),
+        "quality_cap": _numeric_distribution(
+            _numeric_values(score_rows, "quality_cap"),
+            buckets=[0, 60, 70, 80, 90, 100],
+        ),
+        "consensus_boost": _numeric_distribution(
+            _numeric_values(score_rows, "consensus_boost"),
+            buckets=[0, 0.8, 0.95, 1.0, 1.05, 1.15],
+        ),
+        "score_line_adjustment": _numeric_distribution(
+            [float((row.get("score_line_meta") or {}).get("evidence_adjustment") or 0) for row in score_rows],
+            buckets=[0, 2, 4, 6, 8, 10, 14],
+        ),
+        "risk_tag_count": _count_distribution(len(row.get("risk_tags") or []) for row in score_rows),
+        "info_tag_count": _count_distribution(len(row.get("info_tags") or []) for row in score_rows),
+        "risk_tags": _list_distribution(row.get("risk_tags") or [] for row in score_rows),
+        "info_tags": _list_distribution(row.get("info_tags") or [] for row in score_rows),
+        "missing_fields": _list_distribution((row.get("data_quality") or {}).get("missing_fields") or [] for row in score_rows),
+        "data_source_breakdown": _source_breakdown_distribution(score_rows),
+        "pct": _numeric_distribution(_numeric_values(rows, "pct"), buckets=[-20, -10, -5, 0, 3, 7, 10, 20]),
+        "amount_yi": _numeric_distribution(_numeric_values(rows, "amount_yi"), buckets=[0, 1.5, 3, 5, 10, 20, 50]),
+        "turnover_rate": _numeric_distribution(_numeric_values(rows, "turnover_rate"), buckets=[0, 1, 3, 6, 10, 12, 20]),
+    }
+
+    for component in ("skill_agent", "strategy_rule", "market", "risk", "evidence"):
+        distributions[f"raw_{component}"] = _component_distribution(
+            score_rows,
+            "raw_component_scores",
+            component,
+            buckets=[0, 20, 40, 60, 80, 100],
+        )
+        distributions[f"weighted_{component}"] = _component_distribution(
+            score_rows,
+            "weighted_component_scores",
+            component,
+            buckets=[0, 5, 10, 20, 35, 50],
+        )
+    return {key: value for key, value in distributions.items() if value}
+
+
+def _skill_gate_result(row: dict[str, Any]) -> str:
+    if not row.get("passed"):
+        return "规则门未通过"
+    if row.get("review_selected") is False:
+        return "通过但容量截断"
+    return "进入深审"
+
+
+def _skill_gate_reason_bucket(row: dict[str, Any]) -> str:
+    if row.get("review_selected") is False:
+        return "review_limit"
+    return str(row.get("reason_key") or ("gate_pass" if row.get("passed") else "filtered"))
+
+
+def _categorical_distribution(values: Any, limit: int = 12) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for value in values:
+        if value is None or value == "":
+            continue
+        counter[str(value)] += 1
+    if not counter:
+        return {}
+    items = sorted(counter.items(), key=lambda item: (-item[1], item[0]))
+    if limit and len(items) > limit:
+        head = items[:limit]
+        tail_count = sum(count for _, count in items[limit:])
+        items = head + [("其他", tail_count)]
+    return {key: int(count) for key, count in items if count > 0}
+
+
+def _list_distribution(values: Any, limit: int = 12) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for value in values:
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                if item is None or item == "":
+                    continue
+                counter[str(item)] += 1
+        elif value is not None and value != "":
+            counter[str(value)] += 1
+    if not counter:
+        return {}
+    items = sorted(counter.items(), key=lambda item: (-item[1], item[0]))
+    if limit and len(items) > limit:
+        head = items[:limit]
+        tail_count = sum(count for _, count in items[limit:])
+        items = head + [("其他", tail_count)]
+    return {key: int(count) for key, count in items if count > 0}
+
+
+def _count_distribution(values: Any) -> dict[str, int]:
+    counter: Counter[str] = Counter(str(int(value or 0)) for value in values)
+    return {key: int(counter[key]) for key in sorted(counter, key=lambda item: int(item))}
+
+
+def _numeric_values(rows: list[dict[str, Any]], key: str) -> list[float]:
+    values: list[float] = []
+    for row in rows:
+        value = row.get(key)
+        if value is None or value == "":
+            continue
+        try:
+            values.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    return values
+
+
+def _component_distribution(
+    rows: list[dict[str, Any]],
+    source_key: str,
+    component: str,
+    buckets: list[float],
+) -> dict[str, int]:
+    values: list[float] = []
+    for row in rows:
+        scores = row.get(source_key) or {}
+        value = scores.get(component) if isinstance(scores, dict) else None
+        if value is None:
+            continue
+        try:
+            values.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    return _numeric_distribution(values, buckets) if values else {}
+
+
+def _source_breakdown_distribution(rows: list[dict[str, Any]], limit: int = 12) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for row in rows:
+        source_breakdown = (row.get("data_quality") or {}).get("source_breakdown") or {}
+        if not isinstance(source_breakdown, dict):
+            continue
+        for source, count in source_breakdown.items():
+            try:
+                counter[str(source)] += int(float(count or 0))
+            except (TypeError, ValueError):
+                continue
+    if not counter:
+        return {}
+    items = sorted(counter.items(), key=lambda item: (-item[1], item[0]))
+    if limit and len(items) > limit:
+        head = items[:limit]
+        tail_count = sum(count for _, count in items[limit:])
+        items = head + [("其他", tail_count)]
+    return {key: int(count) for key, count in items if count > 0}
+
+
+def _numeric_distribution(values: list[float], buckets: list[float]) -> dict[str, int]:
+    if not buckets or not values:
+        return {}
+    ordered = sorted(float(item) for item in buckets)
+    result: dict[str, int] = {}
+    for index, lower in enumerate(ordered):
+        if index + 1 < len(ordered):
+            upper = ordered[index + 1]
+            label = f"{lower:g}-{upper:g}"
+            result[label] = sum(1 for value in values if lower <= value < upper)
+        else:
+            label = f"{lower:g}+"
+            result[label] = sum(1 for value in values if value >= lower)
+    return result
+
+
+def _merge_reason_counts(*items: dict[str, int]) -> dict[str, int]:
+    merged: Counter[str] = Counter()
+    for item in items:
+        merged.update({str(key): int(value or 0) for key, value in item.items()})
+    return dict(merged)
+
+
+def _score_gap_distribution(rows: list[dict[str, Any]]) -> dict[str, int]:
+    buckets = {">=5": 0, "0-5": 0, "-5-0": 0, "-10--5": 0, "<-10": 0, "unknown": 0}
+    for row in rows:
+        gap = row.get("score_gap")
+        if gap is None:
+            buckets["unknown"] += 1
+        elif float(gap) >= 5:
+            buckets[">=5"] += 1
+        elif float(gap) >= 0:
+            buckets["0-5"] += 1
+        elif float(gap) >= -5:
+            buckets["-5-0"] += 1
+        elif float(gap) >= -10:
+            buckets["-10--5"] += 1
+        else:
+            buckets["<-10"] += 1
+    return buckets
+
+
+def _fallback_filter_audit(summary: dict[str, Any], pipeline: dict[str, Any], recommended_count: int) -> dict[str, Any]:
+    stage_summary = _build_filter_stage_summary(
+        pipeline=pipeline,
+        prefilter_audit=pipeline.get("prefilter") or {},
+        skill_gate_audit=pipeline.get("skill_gate") or {},
+        scored_count=int(pipeline.get("skill_input_count") or 0),
+        recommended_count=int(recommended_count or len(summary.get("top_codes") or [])),
+        reason_counts={},
+    )
+    return {
+        "stage_summary": stage_summary,
+        "distributions": {
+            "final_score_recommended": summary.get("score_distribution") or {},
+            "evidence_quality_recommended": summary.get("quality_distribution") or {},
+        },
+        "reason_counts": {},
+        "rows": [],
+        "empty_reason": "该 Run 创建于候选级过滤审计上线前，请重新运行以查看逐票过滤路径。",
+    }
+
+
+def _score_distribution(cards: list[dict[str, Any]]) -> dict[str, int]:
+    buckets = {"80+": 0, "70-79": 0, "60-69": 0, "50-59": 0, "<50": 0}
+    for card in cards:
+        score = float(card.get("final_score") or 0)
+        if score >= 80:
+            buckets["80+"] += 1
+        elif score >= 70:
+            buckets["70-79"] += 1
+        elif score >= 60:
+            buckets["60-69"] += 1
+        elif score >= 50:
+            buckets["50-59"] += 1
+        else:
+            buckets["<50"] += 1
+    return buckets
+
+
+def _quality_distribution(cards: list[dict[str, Any]]) -> dict[str, int]:
+    buckets = {"80+": 0, "65-79": 0, "50-64": 0, "<50": 0}
+    for card in cards:
+        score = float(card.get("evidence_quality_score") or 0)
+        if score >= 80:
+            buckets["80+"] += 1
+        elif score >= 65:
+            buckets["65-79"] += 1
+        elif score >= 50:
+            buckets["50-64"] += 1
+        else:
+            buckets["<50"] += 1
+    return buckets
+
+
+def _coverage_heatmap(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    counts: dict[str, int] = {}
+    total = max(1, len(cards))
+    for card in cards:
+        for field in set((card.get("data_quality") or {}).get("missing_fields") or []):
+            counts[field] = counts.get(field, 0) + 1
+    return [
+        {
+            "field": field,
+            "missing_count": count,
+            "missing_rate": round(count / total, 3),
+        }
+        for field, count in sorted(counts.items(), key=lambda item: item[1], reverse=True)
+    ]
 
 
 def _build_run_summary(
@@ -2953,6 +4022,8 @@ def _build_run_summary(
 ) -> dict[str, Any]:
     breadth = snapshot.get("breadth", {}) or {}
     pipeline = pipeline_audit or breadth.get("recommendation_pipeline") or {}
+    score_line = pipeline.get("score_line") or {}
+    filter_distributions = ((pipeline.get("filter_audit") or {}).get("distributions") or {}) if isinstance(pipeline, dict) else {}
     return {
         "top_codes": [rec.code for rec in saved[:5]],
         "avg_score": round(sum(rec.final_score for rec in saved) / len(saved), 2) if saved else 0.0,
@@ -2964,6 +4035,13 @@ def _build_run_summary(
         "main_industries": snapshot.get("main_industries", []),
         "auxiliary_data": breadth.get("auxiliary_data_audit"),
         "pipeline": pipeline,
+        "score_line": score_line,
+        "score_distribution": _score_distribution(cards),
+        "quality_distribution": _quality_distribution(cards),
+        "candidate_score_distribution": filter_distributions.get("final_score_all") or _score_distribution(cards),
+        "candidate_quality_distribution": filter_distributions.get("evidence_quality_all") or _quality_distribution(cards),
+        "score_gap_distribution": filter_distributions.get("score_gap") or {},
+        "coverage_heatmap": _coverage_heatmap(cards),
         "unified_quote_total": pipeline.get("unified_quote_total"),
         "base_filter_eligible_count": pipeline.get("base_filter_eligible_count"),
         "daily_kline_coverage_count": pipeline.get("daily_kline_coverage_count"),
@@ -3026,6 +4104,7 @@ def _ensure_default_presets(db: Session, skills: list[StrategySkill]) -> None:
                 market_scope=item["market_scope"],
                 market_scope_value=item["market_scope_value"],
                 risk_template=item["risk_template"],
+                score_line=item["score_line"],
                 output_count=item["output_count"],
                 bucket_limits_json="{}",
                 data_source=default_data_source,
@@ -3045,6 +4124,9 @@ def _ensure_default_presets(db: Session, skills: list[StrategySkill]) -> None:
 
         if preset.run_mode == "formal" and preset.data_source == DATA_SOURCE_LOCAL_POOL:
             preset.data_source = default_data_source
+            has_changes = True
+        if float(preset.score_line or 0) <= 0:
+            preset.score_line = float(item["score_line"])
             has_changes = True
     if has_changes:
         db.commit()
@@ -3081,7 +4163,7 @@ def _skill_performance(db: Session, skill_id: str, run_mode: str) -> dict[str, A
         if outcome and is_trade_executed(outcome):
             triggered_count += 1
             total_return += resolved_trade_return(outcome)
-            if outcome.outcome_label == "success":
+            if normalized_outcome_label(outcome) == "success":
                 success_count += 1
             else:
                 key = outcome.outcome_reason or "未达标"

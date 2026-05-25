@@ -17,7 +17,7 @@ export type Preset = {
   market_scope: string;
   market_scope_value?: string | null;
   risk_template: string;
-  output_count: number;
+  score_line: number;
   data_source: string;
   hide_recent_repeats: boolean;
   status: string;
@@ -79,7 +79,7 @@ export type RunSummary = {
   market_scope: string;
   market_scope_value?: string | null;
   risk_template: string;
-  output_count: number;
+  score_line: number;
   universe_count: number;
   recommended_count: number;
   status: string;
@@ -127,7 +127,6 @@ export type RunSummary = {
       skill_agent_call_count?: number;
       skill_rule_candidate_count?: number;
       skill_gate_candidate_count?: number;
-      output_count?: number;
       market_candidate_count?: number;
       lookahead_multiplier?: number;
       lookahead_count?: number;
@@ -228,6 +227,23 @@ export type DataSourceHealthRow = {
   last_failure_at?: string | null;
   last_error?: string | null;
   status: DataSourceStatus;
+  updated_at?: string | null;
+};
+
+export type ModelRoute = {
+  route_id: string;
+  name: string;
+  provider: string;
+  base_url: string;
+  model: string;
+  priority: number;
+  enabled: boolean;
+  uses_default_key: boolean;
+  default_key_available: boolean;
+  has_api_key: boolean;
+  key_source: string;
+  api_key_masked: string;
+  created_at?: string | null;
   updated_at?: string | null;
 };
 
@@ -529,6 +545,25 @@ export type RecommendationCard = {
   feature_snapshot: FeatureSnapshot;
   market_context: MarketSnapshot;
   skill_breakdown: SkillSignal[];
+  score_breakdown?: {
+    raw_scores?: Record<string, number>;
+    weighted_scores?: Record<string, number>;
+    weights?: Record<string, number>;
+    consensus_boost?: number;
+    quality_cap?: number;
+    final_score?: number;
+  };
+  score_line_meta?: {
+    base_score_line?: number;
+    market_base?: string;
+    market_sentiment?: string;
+    market_adjustment?: number;
+    risk_template_adjustment?: number;
+    evidence_adjustment?: number;
+    effective_score_line?: number;
+    passed?: boolean;
+    reasons?: string[];
+  };
   status: string;
   recent_repeat: boolean;
   watch_status: string;
@@ -563,6 +598,7 @@ export type RecommendationOutcome = {
   hit_target: boolean;
   hit_invalid: boolean;
   outcome_label: string;
+  outcome_label_raw?: string | null;
   outcome_label_legacy?: string;
   outcome_reason?: string | null;
   label_source: string;
@@ -611,6 +647,101 @@ export type RunResult = {
   run: RunSummary;
   recommendations: RecommendationCard[];
   queued?: boolean;
+};
+
+export type FunnelStageSummary = {
+  stage: string;
+  label: string;
+  input_count: number;
+  pass_count: number;
+  filtered_count: number;
+  reason_counts?: Record<string, number>;
+};
+
+export type FunnelTraceStep = {
+  stage: string;
+  label?: string;
+  passed: boolean;
+  reason?: string;
+  final_score?: number;
+  effective_score_line?: number;
+  score_gap?: number | null;
+  evidence_adjustment?: number;
+  adjustment_reasons?: string[];
+  best_skill_id?: string | null;
+  best_gate_score?: number | null;
+  prelim_score?: number | null;
+  review_skill_ids?: string[];
+  skill_pass_ids?: string[];
+  prefilter_source?: string | null;
+  amount_yi?: number | null;
+  turnover_rate?: number | null;
+  pct?: number | null;
+};
+
+export type FunnelAuditRow = {
+  code: string;
+  name?: string | null;
+  industry?: string | null;
+  price?: number | null;
+  pct?: number | null;
+  amount_yi?: number | null;
+  turnover_rate?: number | null;
+  final_stage: string;
+  final_status: string;
+  final_reason: string;
+  trace?: FunnelTraceStep[];
+  trace_summary?: string;
+  prefilter?: Record<string, unknown>;
+  rule_gate?: {
+    passed?: boolean;
+    reason?: string;
+    reason_key?: string;
+    prelim_score?: number;
+    best_skill_id?: string | null;
+    best_gate_score?: number | null;
+    review_selected?: boolean;
+    review_skill_ids?: string[];
+    gate_scores?: Record<string, number>;
+    gate_reasons?: Record<string, string>;
+    quality_tier?: Record<string, string>;
+  };
+  score_line?: {
+    final_score?: number;
+    effective_score_line?: number;
+    score_gap?: number | null;
+    passed?: boolean;
+    reason?: string;
+    evidence_quality_score?: number;
+    data_completeness_score?: number;
+    score_breakdown?: Record<string, unknown>;
+    score_line_meta?: Record<string, unknown>;
+    risk_tags?: string[];
+    info_tags?: string[];
+    setup_type?: string | null;
+    data_authenticity?: number;
+    data_quality?: Record<string, unknown>;
+    raw_component_scores?: Record<string, number>;
+    weighted_component_scores?: Record<string, number>;
+    aggregation_weights?: Record<string, number>;
+    component_scale?: number;
+    consensus_boost?: number;
+    consensus_tags?: string[];
+    quality_cap?: number;
+    market_regime?: string | null;
+    market_discipline?: Record<string, unknown>;
+    skill_disagreement?: Record<string, unknown>;
+    strategy_signal_count?: number;
+  };
+};
+
+export type RunFunnelAudit = {
+  run: RunSummary;
+  stage_summary: FunnelStageSummary[];
+  distributions: Record<string, Record<string, number>>;
+  reason_counts: Record<string, Record<string, number>>;
+  rows: FunnelAuditRow[];
+  empty_reason?: string | null;
 };
 
 export type RunDetail = RunSummary & {
@@ -704,6 +835,9 @@ export type SkillStatsRow = {
   run_count: number;
   labeled_count: number;
   triggered_count?: number;
+  failed_count?: number;
+  missed_count?: number;
+  pending_count?: number;
   success_count: number;
   hit_rate: number;
   trigger_rate?: number;
@@ -725,7 +859,7 @@ export type PresetDraft = {
   market_scope: string;
   market_scope_value: string;
   risk_template: string;
-  output_count: number;
+  score_line: number;
   data_source: string;
   hide_recent_repeats: boolean;
 };
@@ -744,10 +878,50 @@ export type PresetStatsRow = {
   skill_count: number;
   labeled_count: number;
   triggered_count?: number;
+  failed_count?: number;
+  missed_count?: number;
+  pending_count?: number;
   success_count: number;
   hit_rate: number;
   trigger_rate?: number;
   avg_return: number;
   avg_score: number;
   last_run_at?: string | null;
+};
+
+export type SetupStatsRow = {
+  setup_type: string;
+  sample_count: number;
+  labeled_count?: number;
+  triggered_count?: number;
+  missed_count?: number;
+  success_count: number;
+  hit_rate: number;
+  trigger_rate?: number;
+  avg_score: number;
+  avg_return: number;
+  avg_drawdown?: number;
+};
+
+export type PrecisionAtKRow = {
+  k: number;
+  sample_runs: number;
+  evaluated_count: number;
+  success_count: number;
+  precision: number;
+};
+
+export type ScoreLineStatsRow = {
+  score_line: number;
+  sample_count: number;
+  activation_rate: number;
+  labeled_count: number;
+  triggered_count: number;
+  missed_count?: number;
+  success_count: number;
+  trigger_rate: number;
+  hit_rate: number;
+  avg_return: number;
+  avg_drawdown: number;
+  avg_close_return: number;
 };

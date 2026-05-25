@@ -76,6 +76,9 @@ def _ensure_indexes() -> None:
         if "news_announcement" in existing_tables:
             _ensure_index(connection, inspector, "news_announcement", "idx_na_code_date", "code, announce_date")
 
+        if "model_route_config" in existing_tables:
+            _ensure_index(connection, inspector, "model_route_config", "idx_mrc_enabled_priority", "enabled, priority")
+
         if "margin_data" in existing_tables:
             _ensure_index(connection, inspector, "margin_data", "idx_margin_td", "trade_date")
 
@@ -116,6 +119,7 @@ def _ensure_indexes() -> None:
         # 兼容旧表索引（如果用户之前没重建数据库）
         if "recommendation_runs" in existing_tables:
             run_cols = {c["name"] for c in inspector.get_columns("recommendation_runs")}
+            _ensure_column(connection, run_cols, "recommendation_runs", "score_line", "FLOAT NOT NULL DEFAULT 72")
             _ensure_column(connection, run_cols, "recommendation_runs", "heartbeat_at", "DATETIME")
             _ensure_column(connection, run_cols, "recommendation_runs", "progress_phase", "VARCHAR(80)")
             _ensure_column(connection, run_cols, "recommendation_runs", "progress_current", "INTEGER NOT NULL DEFAULT 0")
@@ -123,6 +127,9 @@ def _ensure_indexes() -> None:
             _ensure_column(connection, run_cols, "recommendation_runs", "progress_message", "TEXT")
             _ensure_column(connection, run_cols, "recommendation_runs", "interrupted_at", "DATETIME")
             _ensure_column(connection, run_cols, "recommendation_runs", "checkpoint_phase", "VARCHAR(80)")
+            _ensure_column(connection, run_cols, "recommendation_runs", "filter_audit_json", "LONGTEXT")
+            _ensure_index(connection, inspector, "recommendation_runs", "idx_runs_mode_trade_date", "run_mode, trade_date")
+            _ensure_index(connection, inspector, "recommendation_runs", "idx_runs_status_started", "status, started_at")
 
         if "scheduled_task_runs" in existing_tables:
             tr_cols = {c["name"] for c in inspector.get_columns("scheduled_task_runs")}
@@ -132,7 +139,17 @@ def _ensure_indexes() -> None:
 
         if "presets" in existing_tables:
             p_cols = {c["name"] for c in inspector.get_columns("presets")}
+            _ensure_column(connection, p_cols, "presets", "score_line", "FLOAT NOT NULL DEFAULT 72")
             _ensure_column(connection, p_cols, "presets", "data_source", "VARCHAR(20) NOT NULL DEFAULT 'local_pool'")
+
+        if "recommendations" in existing_tables:
+            _ensure_index(connection, inspector, "recommendations", "idx_recs_run_score", "run_id, final_score")
+            _ensure_index(connection, inspector, "recommendations", "idx_recs_trade_score", "trade_date, final_score")
+            _ensure_index(connection, inspector, "recommendations", "idx_recs_code_trade", "code, trade_date")
+
+        if "recommendation_outcomes" in existing_tables:
+            _ensure_index(connection, inspector, "recommendation_outcomes", "idx_outcomes_label", "outcome_label")
+            _ensure_index(connection, inspector, "recommendation_outcomes", "idx_outcomes_entry_label", "entry_triggered, outcome_label")
 
         if "recommendation_outcomes" in existing_tables:
             o_cols = {c["name"] for c in inspector.get_columns("recommendation_outcomes")}

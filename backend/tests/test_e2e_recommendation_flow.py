@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,7 +21,12 @@ from app.engine.aggregator import DEFAULT_AGG_WEIGHTS, aggregate
 from app.engine.skill_loader import StrategySkill
 from app.models.tables import (
     CalibrationConfig,
+    CapitalFlow,
+    ConceptSector,
     DailyKbar,
+    DragonTiger,
+    MarketSnapshot,
+    NewsAnnouncement,
     Preset,
     PresetSkill,
     Recommendation,
@@ -30,14 +35,19 @@ from app.models.tables import (
     SkillRegistry,
     Stock,
 )
-from app.services.outcome_service import label_pending_outcomes
+from app.services.outcome_service import label_pending_outcomes, metrics_by_score_line, metrics_by_setup, precision_at_k
 from app.services.stats_service import get_overview_stats
 from app.services.workbench_service import (
     DATA_SOURCE_LOCAL_POOL,
     DATA_SOURCE_LOCAL_POOL_PREFERRED,
     _build_recommendation_card,
     _build_pipeline_audit,
+    _has_fresh_concept_sector_cache,
+    _has_fresh_dragon_tiger_cache,
+    _latest_trade_date,
     _merge_run_params,
+    _stale_capital_flow_codes,
+    _stale_news_codes,
     _update_run_progress,
     enqueue_workbench_run,
     get_initial_workbench_state,
@@ -615,6 +625,152 @@ class TestE2ERecommendationFlow:
         # hit_rate = success / (success + failed) = 2/3 ≈ 0.667
         assert abs(stats["hit_rate"] - 0.667) < 0.01
 
+    def test_metrics_helpers_respect_mode_and_thresholds(self, db):
+        suffix = uuid.uuid4().hex[:8]
+        formal_mode = f"formal_{suffix}"
+        experiment_mode = f"experiment_{suffix}"
+        run_formal_id = f"run_metrics_formal_{suffix}"
+        run_experiment_id = f"run_metrics_experiment_{suffix}"
+        rec_ids = [f"rec_metrics_{index:03d}_{suffix}" for index in range(1, 5)]
+        try:
+            run_formal = RecommendationRun(
+                run_id=run_formal_id,
+                run_name="正式统计测试",
+                run_mode=formal_mode,
+                trade_date="2026-05-12",
+                universe_count=10,
+                market_scope="all",
+                risk_template="balanced",
+                score_line=72.0,
+                output_count=3,
+                selected_skills_json="[]",
+                params_json="{}",
+                market_snapshot_json="{}",
+                status="completed",
+                recommended_count=3,
+                result_summary_json="{}",
+                finished_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            )
+            run_experiment = RecommendationRun(
+                run_id=run_experiment_id,
+                run_name="实验统计测试",
+                run_mode=experiment_mode,
+                trade_date="2026-05-12",
+                universe_count=10,
+                market_scope="all",
+                risk_template="balanced",
+                score_line=80.0,
+                output_count=2,
+                selected_skills_json="[]",
+                params_json="{}",
+                market_snapshot_json="{}",
+                status="completed",
+                recommended_count=1,
+                result_summary_json="{}",
+                finished_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            )
+            db.add_all([run_formal, run_experiment])
+            db.flush()
+
+            recs = [
+                Recommendation(
+                    recommendation_id=rec_ids[0],
+                    run_id=run_formal_id,
+                    trade_date="2026-05-12",
+                    code="600519",
+                    name="测试A",
+                    bucket="",
+                    final_score=88.0,
+                    setup_type="突破",
+                    recommend_price=100.0,
+                    status="pending",
+                    skill_breakdown_json="[]",
+                    feature_snapshot_json=json.dumps({"market_regime": "偏多·活跃"}),
+                    agent_summary_json="{}",
+                ),
+                Recommendation(
+                    recommendation_id=rec_ids[1],
+                    run_id=run_formal_id,
+                    trade_date="2026-05-12",
+                    code="000001",
+                    name="测试B",
+                    bucket="",
+                    final_score=76.0,
+                    setup_type="突破",
+                    recommend_price=20.0,
+                    status="pending",
+                    skill_breakdown_json="[]",
+                    feature_snapshot_json=json.dumps({"market_discipline": {"market_regime": "偏多·活跃"}}),
+                    agent_summary_json="{}",
+                ),
+                Recommendation(
+                    recommendation_id=rec_ids[2],
+                    run_id=run_formal_id,
+                    trade_date="2026-05-12",
+                    code="600036",
+                    name="测试C",
+                    bucket="",
+                    final_score=69.0,
+                    setup_type="回踩",
+                    recommend_price=30.0,
+                    status="pending",
+                    skill_breakdown_json="[]",
+                    feature_snapshot_json=json.dumps({"market_regime": "弱势·冰点"}),
+                    agent_summary_json="{}",
+                ),
+                Recommendation(
+                    recommendation_id=rec_ids[3],
+                    run_id=run_experiment_id,
+                    trade_date="2026-05-12",
+                    code="601318",
+                    name="实验票",
+                    bucket="",
+                    final_score=99.0,
+                    setup_type="突破",
+                    recommend_price=40.0,
+                    status="pending",
+                    skill_breakdown_json="[]",
+                    feature_snapshot_json=json.dumps({"market_regime": "强牛·高潮"}),
+                    agent_summary_json="{}",
+                ),
+            ]
+            db.add_all(recs)
+            db.flush()
+
+            outcomes = [
+                RecommendationOutcome(recommendation_id=rec_ids[0], outcome_label="success", entry_triggered=True, label_source="manual"),
+                RecommendationOutcome(recommendation_id=rec_ids[1], outcome_label="failed", entry_triggered=True, label_source="manual"),
+                RecommendationOutcome(recommendation_id=rec_ids[2], outcome_label="missed", entry_triggered=False, label_source="manual"),
+                RecommendationOutcome(recommendation_id=rec_ids[3], outcome_label="success", entry_triggered=True, label_source="manual"),
+            ]
+            db.add_all(outcomes)
+            db.flush()
+
+            setup_rows = metrics_by_setup(db, formal_mode)
+            assert len(setup_rows) == 2
+            assert next(row for row in setup_rows if row["setup_type"] == "突破")["sample_count"] == 2
+            assert next(row for row in setup_rows if row["setup_type"] == "突破")["hit_rate"] == 0.5
+            pullback_row = next(row for row in setup_rows if row["setup_type"] == "回踩")
+            assert pullback_row["trigger_rate"] == 0.0
+            assert pullback_row["missed_count"] == 1
+
+            p_at_k = precision_at_k(db, formal_mode, ks=(1, 2, 3))
+            assert [row["k"] for row in p_at_k] == [1, 2, 3]
+            assert p_at_k[0]["precision"] == 1.0
+            assert p_at_k[1]["precision"] == 0.5
+            assert p_at_k[2]["precision"] == round(1 / 3, 3)
+
+            score_rows = metrics_by_score_line(db, formal_mode, score_lines=(60, 70, 80))
+            assert [row["score_line"] for row in score_rows] == [60.0, 70.0, 80.0]
+            assert score_rows[0]["sample_count"] == 3
+            assert score_rows[0]["missed_count"] == 1
+            assert score_rows[1]["sample_count"] == 2
+            assert score_rows[2]["sample_count"] == 1
+            assert score_rows[2]["hit_rate"] == 1.0
+            assert all(row["sample_count"] < 4 for row in score_rows)
+        finally:
+            db.rollback()
+
     def test_component_scores_match_aggregator_dimensions(self, db):
         """Verify feature_snapshot_json.component_scores keys match aggregator DIMENSIONS."""
         run = RecommendationRun(
@@ -665,6 +821,39 @@ class TestE2ERecommendationFlow:
         expected_keys = set(DEFAULT_AGG_WEIGHTS.keys())
         actual_keys = set(cs.keys())
         assert actual_keys == expected_keys, f"Component keys mismatch: {actual_keys} != {expected_keys}"
+
+    def test_trade_date_and_aux_cache_freshness_respect_trade_date_and_ttl(self, db):
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        stale = now - timedelta(hours=3)
+        fresh_code = f"{(uuid.uuid4().int % 900000) + 100000:06d}"
+        stale_code = f"{(uuid.uuid4().int % 900000) + 100000:06d}"
+
+        try:
+            db.add_all(
+                [
+                    MarketSnapshot(snapshot_id=f"snap_old_{uuid.uuid4().hex[:6]}", trade_date="2026-05-11", created_at=now),
+                    MarketSnapshot(snapshot_id=f"snap_new_{uuid.uuid4().hex[:6]}", trade_date="2026-05-12", created_at=stale),
+                    ConceptSector(sector_code=f"BK{uuid.uuid4().hex[:6]}", trade_date="2026-05-12", sector_name="测试概念", created_at=now),
+                    ConceptSector(sector_code=f"BK{uuid.uuid4().hex[:6]}", trade_date="2026-05-13", sector_name="旧TTL概念", created_at=stale),
+                    DragonTiger(code=fresh_code, trade_date="2026-05-12", name="新鲜样本", created_at=now),
+                    DragonTiger(code=stale_code, trade_date="2026-05-13", name="过期样本", created_at=stale),
+                    CapitalFlow(code=fresh_code, trade_date="2026-05-12", main_net_inflow_yi=1.2, created_at=now),
+                    CapitalFlow(code=stale_code, trade_date="2026-05-12", main_net_inflow_yi=0.8, created_at=stale),
+                    NewsAnnouncement(source="eastmoney", article_id=f"news_{uuid.uuid4().hex[:6]}", code=fresh_code, announce_date="2026-05-12", title="测试新闻", created_at=now),
+                    NewsAnnouncement(source="eastmoney", article_id=f"news_{uuid.uuid4().hex[:6]}", code=stale_code, announce_date="2026-05-12", title="旧TTL新闻", created_at=stale),
+                ]
+            )
+            db.flush()
+
+            assert _latest_trade_date(db) >= "2026-05-12"
+            assert _has_fresh_concept_sector_cache(db, "2026-05-12", 3600) is True
+            assert _has_fresh_concept_sector_cache(db, "2026-05-13", 3600) is False
+            assert _has_fresh_dragon_tiger_cache(db, "2026-05-12", 3600) is True
+            assert _has_fresh_dragon_tiger_cache(db, "2026-05-13", 3600) is False
+            assert _stale_capital_flow_codes(db, [fresh_code, stale_code], "2026-05-12", 3600) == [stale_code]
+            assert _stale_news_codes(db, [fresh_code, stale_code], "2026-05-12", 3600) == [stale_code]
+        finally:
+            db.rollback()
 
     def test_calibrated_weights_flow(self, db):
         """Verify calibrated weights stored in CalibrationConfig are loaded correctly."""

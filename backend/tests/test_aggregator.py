@@ -46,6 +46,21 @@ def _signal(stance="support", score=75.0, review_score=None, hard_veto=False):
     return base
 
 
+def _card(code: str, final_score: float):
+    return {
+        "code": code,
+        "final_score": final_score,
+        "evidence_quality_score": 92.0,
+        "data_completeness_score": 100.0,
+        "data_authenticity": 1.0,
+        "data_quality": {"missing_fields": []},
+    }
+
+
+def _neutral_snapshot():
+    return {"sample_count": 100, "up_count": 45, "limit_up_count": 1, "limit_down_count": 0}
+
+
 # ---------------------------------------------------------------------------
 # DEFAULT_AGG_WEIGHTS
 # ---------------------------------------------------------------------------
@@ -286,9 +301,7 @@ def test_aggregate_records_missing_theme_and_news_risks():
 
     card = aggregate(stock, signals, market_score=70, agent_review_score=75)
 
-    assert "题材标签缺失，主线识别置信度降低" in card["risk_flags"]
-    assert "新闻/公告未完整覆盖，题材与黑天鹅风险需人工复核" in card["risk_flags"]
-    assert "龙虎榜数据缺失，游资合力证据不足" in card["risk_flags"]
+    assert "多维度数据缺失（公告/龙虎榜/题材等），置信度受影响" in card["risk_flags"]
 
 
 def test_aggregate_consensus_tags_empty_when_no_skills():
@@ -309,26 +322,45 @@ def test_aggregate_consensus_tags_empty_when_no_skills():
 # apply_pool_rules
 # ---------------------------------------------------------------------------
 
-def test_apply_pool_rules_output_count_limit():
+def test_apply_pool_rules_output_count_no_longer_decides_recommendations():
     cards = [
-        {"code": c, "final_score": s}
+        _card(c, s)
         for c, s in [
             ("A", 70), ("B", 65), ("C", 60), ("D", 55), ("E", 50), ("F", 45), ("G", 40),
         ]
     ]
-    result = apply_pool_rules(cards, output_count=3)
-    assert len(result) == 3
-    # Should be top 3 by score
-    assert result[0]["code"] == "A"
+    result = apply_pool_rules(cards, output_count=3, score_line=50, market_snapshot=_neutral_snapshot())
+    assert [card["code"] for card in result] == ["A", "B", "C", "D", "E"]
+
+
+def test_apply_pool_rules_score_line_and_display_limit_are_separate():
+    cards = [
+        _card(c, s)
+        for c, s in [("A", 82), ("B", 76), ("C", 72), ("D", 68)]
+    ]
+    full = apply_pool_rules(cards, score_line=72, market_snapshot=_neutral_snapshot())
+    display = apply_pool_rules(cards, score_line=72, market_snapshot=_neutral_snapshot(), display_limit=2)
+
+    assert [card["code"] for card in full] == ["A", "B", "C"]
+    assert [card["code"] for card in display] == ["A", "B"]
+    assert all(card["score_line_meta"]["passed"] for card in full)
+
+
+def test_apply_pool_rules_dynamic_weak_market_line_allows_empty_pool():
+    cards = [_card("A", 73)]
+    snapshot = {"sample_count": 100, "up_count": 20, "down_count": 80, "limit_up_count": 0, "limit_down_count": 8}
+    result = apply_pool_rules(cards, score_line=72, market_snapshot=snapshot)
+
+    assert result == []
 
 
 def test_apply_pool_rules_sorted_by_score():
     cards = [
-        {"code": "C", "final_score": 60},
-        {"code": "A", "final_score": 95},
-        {"code": "B", "final_score": 80},
+        _card("C", 75),
+        _card("A", 95),
+        _card("B", 80),
     ]
-    result = apply_pool_rules(cards, output_count=10)
+    result = apply_pool_rules(cards, output_count=10, score_line=70, market_snapshot=_neutral_snapshot())
     assert result[0]["code"] == "A"
     assert result[1]["code"] == "B"
     assert result[2]["code"] == "C"
@@ -340,7 +372,7 @@ def test_apply_pool_rules_filters_explicit_avoid_cards():
         {"code": "B", "final_score": 62},
     ]
 
-    result = apply_pool_rules(cards, output_count=3)
+    result = apply_pool_rules(cards, output_count=3, score_line=45, market_snapshot=_neutral_snapshot())
 
     assert [card["code"] for card in result] == ["B"]
 

@@ -32,6 +32,7 @@ from app.agents.tools import (
     query_stock_detail,
     query_stock_history,
 )
+from app.services.model_router_service import get_active_model_routes
 
 
 # ── 结构化输出模型 ────────────────────────────────────────────────────
@@ -73,6 +74,71 @@ def drain_api_costs() -> list[dict[str, Any]]:
     costs = _pending_api_costs[:]
     _pending_api_costs = []
     return costs
+
+
+_ROUTE_FAILOVER_ERROR_MARKERS = (
+    "insufficient balance",
+    "insufficient_balance",
+    "quota exceeded",
+    "invalid api key",
+    "incorrect api key",
+    "authentication",
+    "unauthorized",
+    "forbidden",
+    "rate limit",
+    "too many requests",
+    "model not found",
+    "no such model",
+    "does not exist",
+    "断路器熔断",
+)
+
+
+def _route_endpoint(route) -> str:
+    base_url = str(route.base_url or "").rstrip("/")
+    return f"{base_url} [{route.name}/{route.route_id}]"
+
+
+def _route_error_status(exc: Exception) -> str:
+    status_code = getattr(exc, "status_code", None)
+    text = str(exc).lower()
+    if status_code == 402 or "insufficient balance" in text or "quota exceeded" in text:
+        return "insufficient_balance"
+    if status_code in {401, 403} or any(marker in text for marker in ("invalid api key", "incorrect api key", "authentication", "unauthorized", "forbidden")):
+        return "auth_error"
+    if status_code == 429 or any(marker in text for marker in ("rate limit", "too many requests")):
+        return "rate_limited"
+    if status_code == 404 or any(marker in text for marker in ("model not found", "no such model", "does not exist")):
+        return "model_unavailable"
+    if "断路器熔断" in text:
+        return "circuit_open"
+    return "error"
+
+
+def _should_failover_immediately(exc: Exception) -> bool:
+    text = str(exc).lower()
+    status_code = getattr(exc, "status_code", None)
+    return status_code in {401, 402, 403, 404, 429} or any(marker in text for marker in _ROUTE_FAILOVER_ERROR_MARKERS)
+
+
+def _append_api_cost(
+    *,
+    route,
+    prompt_chars: int,
+    completion_chars: int,
+    latency_ms: float,
+    status: str,
+    error_message: str | None = None,
+) -> None:
+    _pending_api_costs.append({
+        "model": route.model,
+        "endpoint": _route_endpoint(route),
+        "prompt_chars": prompt_chars,
+        "completion_chars": completion_chars,
+        "latency_ms": round(latency_ms, 1),
+        "status": status,
+        "error_message": error_message,
+    })
 
 
 _ACTION_ALIASES = {
@@ -641,68 +707,99 @@ async def run_skill_agent_direct(
     from openai import AsyncOpenAI
 
     settings = get_settings()
-    model_id = settings.agent_model
-
-    # 熔断器检查：连续失败过多则直接拒绝，避免雪崩
-    check_circuit(model_id)
+    routes = get_active_model_routes()
+    if not routes:
+        raise RuntimeError("Skill Agent 未配置可用模型路由，请先在数据源页配置模型与 Key")
 
     user_prompt = _build_direct_prompt(stock, snapshot, rule_signal, skill)
     system_prompt = _build_direct_system(skill)
+    prompt_chars = len(system_prompt) + len(user_prompt)
+    max_retries = settings.agent_retry_count
+    backoff = settings.agent_retry_backoff
+    route_errors: list[str] = []
 
-    async with AsyncOpenAI(
-        api_key=settings.agent_skill_api_key,
-        base_url=settings.agent_skill_base_url,
-        timeout=settings.agent_skill_timeout_seconds * 3,
-    ) as client:
-        max_retries = settings.agent_retry_count
-        backoff = settings.agent_retry_backoff
+    for route in routes:
+        route_key = route.circuit_key
+        try:
+            check_circuit(route_key)
+        except Exception as exc:
+            error_message = f"{route.name} ({route.model}) 熔断: {exc}"
+            _append_api_cost(
+                route=route,
+                prompt_chars=prompt_chars,
+                completion_chars=0,
+                latency_ms=0,
+                status="circuit_open",
+                error_message=error_message,
+            )
+            route_errors.append(error_message)
+            continue
 
         last_error = ""
-        for attempt in range(max_retries + 1):
-            t0 = asyncio.get_event_loop().time()
-            try:
-                resp = await client.chat.completions.create(
-                    model=model_id,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    temperature=settings.agent_temperature,
-                    max_tokens=settings.agent_max_tokens,
-                    response_format={"type": "json_object"},
-                )
-                elapsed_ms = (asyncio.get_event_loop().time() - t0) * 1000
-                content = resp.choices[0].message.content or ""
-                parsed = json.loads(content)
-                result = _parse_to_output(parsed)
-                _pending_api_costs.append({
-                    "model": model_id,
-                    "endpoint": settings.agent_skill_base_url,
-                    "prompt_chars": len(system_prompt) + len(user_prompt),
-                    "completion_chars": len(content),
-                    "latency_ms": round(elapsed_ms, 1),
-                    "status": "success",
-                })
-                record_result(model_id, success=True)
-                return result
-            except Exception as e:
-                last_error = str(e)
-                if attempt < max_retries:
-                    await asyncio.sleep(backoff ** attempt)
-                continue
+        last_status = "error"
+        last_latency_ms = 0.0
 
-    # 最后尝试也失败了，记录错误成本和熔断器状态
-    record_result(model_id, success=False)
-    _pending_api_costs.append({
-        "model": model_id,
-        "endpoint": settings.agent_skill_base_url,
-        "prompt_chars": len(system_prompt) + len(user_prompt),
-        "completion_chars": 0,
-        "latency_ms": 0,
-        "status": "error",
-        "error_message": last_error,
-    })
-    raise RuntimeError(f"Skill Agent 直接审查失败 (已重试 {max_retries} 次): {last_error}")
+        async with AsyncOpenAI(
+            api_key=route.api_key,
+            base_url=route.base_url,
+            timeout=settings.agent_skill_timeout_seconds * 3,
+        ) as client:
+            for attempt in range(max_retries + 1):
+                t0 = asyncio.get_event_loop().time()
+                try:
+                    resp = await client.chat.completions.create(
+                        model=route.model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        temperature=settings.agent_temperature,
+                        max_tokens=settings.agent_max_tokens,
+                        response_format={"type": "json_object"},
+                    )
+                    elapsed_ms = (asyncio.get_event_loop().time() - t0) * 1000
+                    content = resp.choices[0].message.content or ""
+                    parsed = json.loads(content)
+                    result = _parse_to_output(parsed)
+                    _append_api_cost(
+                        route=route,
+                        prompt_chars=prompt_chars,
+                        completion_chars=len(content),
+                        latency_ms=elapsed_ms,
+                        status="success",
+                    )
+                    record_result(route_key, success=True)
+                    return result
+                except Exception as exc:
+                    last_latency_ms = (asyncio.get_event_loop().time() - t0) * 1000
+                    last_error = str(exc)
+                    last_status = _route_error_status(exc)
+                    if _should_failover_immediately(exc):
+                        break
+                    if attempt < max_retries:
+                        await asyncio.sleep(backoff ** attempt)
+                        continue
+                    break
+
+        record_result(route_key, success=False)
+        error_message = (
+            f"{route.name} ({route.model}) 失败: {last_error}"
+            if last_error
+            else f"{route.name} ({route.model}) 未返回结果"
+        )
+        _append_api_cost(
+            route=route,
+            prompt_chars=prompt_chars,
+            completion_chars=0,
+            latency_ms=last_latency_ms,
+            status=last_status,
+            error_message=error_message,
+        )
+        route_errors.append(error_message)
+
+    tried_count = len(routes)
+    tail = " | ".join(route_errors[-3:]) if route_errors else "无可用错误详情"
+    raise RuntimeError(f"Skill Agent 直接审查失败：已尝试 {tried_count} 个模型路由；{tail}")
 
 
 def _build_direct_system(skill: StrategySkill) -> str:

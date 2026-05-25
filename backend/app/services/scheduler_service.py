@@ -176,6 +176,9 @@ def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
         invalidate_bootstrap_cache()
         logger.info("行情池刷新: %d 条行情, %s", len(quotes), meta)
         result["quotes"] = {"refreshed": len(quotes), "meta": meta}
+        quote_trade_dates = [str(row.get("trade_date") or "") for row in quotes if row.get("trade_date")]
+        if quote_trade_dates:
+            result["trade_date"] = max(quote_trade_dates)
         summary_parts.append(f"行情池 {len(quotes)} 条")
 
     # 2. 回填日K线
@@ -191,7 +194,10 @@ def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
 
     # 3. 回填辅助数据
     if sync_scope in ("auxiliary", "all"):
-        auxiliary = _run_auxiliary_script(payload)
+        auxiliary_payload = dict(payload)
+        if result.get("trade_date") and not auxiliary_payload.get("trade_date"):
+            auxiliary_payload["trade_date"] = result["trade_date"]
+        auxiliary = _run_auxiliary_script(auxiliary_payload)
         result["auxiliary"] = auxiliary
         summary_parts.append("辅助数据完成")
 
@@ -269,6 +275,8 @@ def _run_auxiliary_script(payload: dict) -> dict:
         args.extend(["--flow-top-n", str(payload["flow_top_n"])])
     if payload.get("tushare_aux_top_n"):
         args.extend(["--tushare-aux-top-n", str(payload["tushare_aux_top_n"])])
+    if payload.get("trade_date"):
+        args.extend(["--trade-date", str(payload["trade_date"])])
 
     timeout = get_settings().script_timeout_seconds or None
     result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
@@ -294,6 +302,7 @@ async def _run_recommendation(db, payload: dict) -> dict:
         "run_mode",
         "data_source",
         "risk_template",
+        "score_line",
         "output_count",
         "selected_skill_ids",
         "skip_aux_refresh",

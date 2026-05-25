@@ -9,6 +9,7 @@ from app.services.workbench_service import (
     delete_run,
     enqueue_workbench_run,
     get_run_detail,
+    get_run_filter_audit,
     list_run_recommendations,
     list_runs,
     run_workbench,
@@ -61,9 +62,9 @@ def create_backtest(payload: dict, db: Session = Depends(get_db)):
     horizon_days = int(payload.get("horizon_days", 5))
     if horizon_days < 1 or horizon_days > 20:
         raise HTTPException(status_code=400, detail="horizon_days must be between 1 and 20")
-
+    score_line = float(payload.get("score_line", 72.0))
     try:
-        return run_backtest(db, start_date, end_date, run_mode, horizon_days)
+        return run_backtest(db, start_date, end_date, run_mode, horizon_days, score_line)
     except Exception as exc:
         logger.exception("backtest failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -123,3 +124,11 @@ def recommendations(run_id: str, db: Session = Depends(get_db)):
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
     return list_run_recommendations(db, run_id)
+
+
+@router.get("/{run_id}/funnel")
+def funnel(run_id: str, db: Session = Depends(get_db)):
+    audit = get_run_filter_audit(db, run_id)
+    if audit is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return audit

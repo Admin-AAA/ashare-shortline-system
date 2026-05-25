@@ -12,6 +12,7 @@
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, UniqueConstraint
+from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -585,6 +586,7 @@ class Preset(Base):
     market_scope: Mapped[str] = mapped_column(String(30), default="all")
     market_scope_value: Mapped[str | None] = mapped_column(String(120))
     risk_template: Mapped[str] = mapped_column(String(20), default="balanced")
+    score_line: Mapped[float] = mapped_column(Float, default=72.0)
     output_count: Mapped[int] = mapped_column(Integer, default=6)
     bucket_limits_json: Mapped[str] = mapped_column(Text, default="{}")
     data_source: Mapped[str] = mapped_column(String(20), default="local_pool")
@@ -621,11 +623,13 @@ class RecommendationRun(Base):
     market_scope: Mapped[str] = mapped_column(String(30), default="all")
     market_scope_value: Mapped[str | None] = mapped_column(String(120))
     risk_template: Mapped[str] = mapped_column(String(20), default="balanced")
+    score_line: Mapped[float] = mapped_column(Float, default=72.0)
     output_count: Mapped[int] = mapped_column(Integer, default=6)
     selected_skills_json: Mapped[str] = mapped_column(Text, default="[]")
     params_json: Mapped[str] = mapped_column(Text, default="{}")
     market_snapshot_json: Mapped[str] = mapped_column(Text, default="{}")
     result_summary_json: Mapped[str] = mapped_column(Text, default="{}")
+    filter_audit_json: Mapped[str] = mapped_column(LONGTEXT, default="{}")
     status: Mapped[str] = mapped_column(String(30), default="running")
     error_message: Mapped[str | None] = mapped_column(Text)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -753,6 +757,21 @@ class CalibrationConfig(Base):
 
     key: Mapped[str] = mapped_column(String(80), primary_key=True)
     value: Mapped[float] = mapped_column(Float, default=0.0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ModelRouteConfig(Base):
+    __tablename__ = "model_route_config"
+
+    route_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    provider: Mapped[str] = mapped_column(String(40), default="openai_compatible")
+    base_url: Mapped[str] = mapped_column(String(200), default="")
+    model: Mapped[str] = mapped_column(String(120))
+    api_key: Mapped[str | None] = mapped_column(Text)
+    priority: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

@@ -47,6 +47,16 @@ type BacktestResult = {
       hit_rate: number;
       avg_score: number;
     }>;
+    by_setup: Array<{
+      setup_type: string;
+      recommendation_count: number;
+      triggered_count: number;
+      missed_count?: number;
+      success_count: number;
+      trigger_rate: number;
+      hit_rate: number;
+      avg_return: number;
+    }>;
     by_industry: Array<{
       industry: string;
       recommendation_count: number;
@@ -54,6 +64,16 @@ type BacktestResult = {
       trigger_rate: number;
       success_count: number;
       hit_rate: number;
+    }>;
+    by_market_regime: Array<{
+      market_regime: string;
+      recommendation_count: number;
+      triggered_count: number;
+      missed_count?: number;
+      success_count: number;
+      trigger_rate: number;
+      hit_rate: number;
+      avg_return: number;
     }>;
     by_score_range: Array<{
       range: string;
@@ -63,6 +83,19 @@ type BacktestResult = {
       success_count: number;
       hit_rate: number;
     }>;
+    by_score_line: Array<{
+      score_line: number;
+      sample_count: number;
+      activation_rate: number;
+      labeled_count: number;
+      triggered_count: number;
+      success_count: number;
+      trigger_rate: number;
+      hit_rate: number;
+      avg_return: number;
+      avg_drawdown: number;
+      avg_close_return: number;
+    }>;
   };
 };
 
@@ -71,6 +104,7 @@ export default memo(function BacktestPanel() {
   const [endDate, setEndDate] = useState("2026-05-13");
   const [runMode, setRunMode] = useState("experiment");
   const [horizonDays, setHorizonDays] = useState(5);
+  const [scoreLine, setScoreLine] = useState(72);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -88,6 +122,7 @@ export default memo(function BacktestPanel() {
           end_date: endDate,
           run_mode: runMode,
           horizon_days: horizonDays,
+          score_line: scoreLine,
         }),
       });
       if (!resp.ok) {
@@ -137,6 +172,17 @@ export default memo(function BacktestPanel() {
               max={20}
               value={horizonDays}
               onChange={(e) => setHorizonDays(Number(e.target.value))}
+            />
+          </div>
+          <div className="bt-field">
+            <label>分数线</label>
+            <input
+              type="number"
+              min={35}
+              max={95}
+              step={0.5}
+              value={scoreLine}
+              onChange={(e) => setScoreLine(Number(e.target.value))}
             />
           </div>
           <button className="btn primary" onClick={runBacktest} disabled={running}>
@@ -253,11 +299,36 @@ export default memo(function BacktestPanel() {
                   { key: "success_count", label: "成功" },
                   { key: "hit_rate", label: "胜率", format: (v: number) => `${(v * 100).toFixed(1)}%` },
                 ]} />
+                <BreakdownTable title="按买点分组" data={result.breakdown.by_setup} columns={[
+                  { key: "setup_type", label: "Setup" },
+                  { key: "recommendation_count", label: "推荐数" },
+                  { key: "success_count", label: "成功" },
+                  { key: "missed_count", label: "未触发" },
+                  { key: "hit_rate", label: "胜率", format: (v: number) => `${(v * 100).toFixed(1)}%` },
+                  { key: "avg_return", label: "均收益", format: (v: number) => `${v.toFixed(2)}%` },
+                ]} />
+                <BreakdownTable title="按市场环境分组" data={result.breakdown.by_market_regime} columns={[
+                  { key: "market_regime", label: "环境" },
+                  { key: "recommendation_count", label: "推荐数" },
+                  { key: "success_count", label: "成功" },
+                  { key: "missed_count", label: "未触发" },
+                  { key: "hit_rate", label: "胜率", format: (v: number) => `${(v * 100).toFixed(1)}%` },
+                  { key: "avg_return", label: "均收益", format: (v: number) => `${v.toFixed(2)}%` },
+                ]} />
                 <BreakdownTable title="按分数段分组" data={result.breakdown.by_score_range} columns={[
                   { key: "range", label: "分数段" },
                   { key: "recommendation_count", label: "推荐数" },
                   { key: "success_count", label: "成功" },
                   { key: "hit_rate", label: "胜率", format: (v: number) => `${(v * 100).toFixed(1)}%` },
+                ]} />
+                <BreakdownTable title="按分数线分组" data={result.breakdown.by_score_line} columns={[
+                  { key: "score_line", label: "分线", format: (v: number) => v.toFixed(1) },
+                  { key: "sample_count", label: "样本" },
+                  { key: "activation_rate", label: "激活率", format: (v: number) => `${(v * 100).toFixed(1)}%` },
+                  { key: "triggered_count", label: "已触发" },
+                  { key: "hit_rate", label: "胜率", format: (v: number) => `${(v * 100).toFixed(1)}%` },
+                  { key: "avg_return", label: "均收益", format: (v: number) => `${v.toFixed(2)}%` },
+                  { key: "avg_drawdown", label: "均回撤", format: (v: number) => `${v.toFixed(2)}%` },
                 ]} />
               </div>
             )}
