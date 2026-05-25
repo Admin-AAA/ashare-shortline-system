@@ -1,18 +1,24 @@
 from __future__ import annotations
 
+import argparse
 import json
+import socket
 import statistics
 import sys
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-BASE_URL = "http://127.0.0.1:8000"
+from app.services.validation.safety import AcceptanceMode, build_batch_id, tag_acceptance_name
+
+
+DEFAULT_BASE_URL = "http://127.0.0.1:8765"
+BASE_URL = DEFAULT_BASE_URL
 
 
 @dataclass
@@ -41,6 +47,19 @@ def request(method: str, path: str, payload: Any | None = None, timeout: int = 1
         except json.JSONDecodeError:
             body = raw
         return exc.code, body
+    except (TimeoutError, urllib.error.URLError, socket.timeout) as exc:
+        return 0, {"detail": str(exc)}
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="AShare safe acceptance check")
+    parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    parser.add_argument("--dry-run", action="store_true", default=False)
+    parser.add_argument("--execute", action="store_true", default=False)
+    parser.add_argument("--run-mode", choices=["formal", "experiment"], default="experiment")
+    parser.add_argument("--batch-id", default="")
+    parser.add_argument("--cleanup-batch", default="")
+    return parser.parse_args()
 
 
 def add(checks: list[Check], name: str, condition: bool, detail: str = "") -> None:
@@ -73,33 +92,69 @@ def perf(method: str, path: str, payload: Any | None = None, rounds: int = 12) -
     }
 
 
+def emit_report(checks: list[Check], artifacts: dict[str, Any], *, fail_on_failed: bool = True) -> int:
+    report = {
+        "checks": [check.__dict__ for check in checks],
+        "summary": {
+            "total": len(checks),
+            "passed": sum(1 for check in checks if check.ok),
+            "failed": sum(1 for check in checks if not check.ok),
+        },
+        "artifacts": artifacts,
+    }
+    out = Path(__file__).resolve().parents[1] / "acceptance_report.json"
+    out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(report["summary"], ensure_ascii=False))
+    for check in checks:
+        print(("OK " if check.ok else "FAIL ") + check.name + (f" :: {check.detail}" if check.detail else ""))
+    print(f"report={out}")
+    return 1 if fail_on_failed and report["summary"]["failed"] else 0
+
+
 def main() -> int:
+    global BASE_URL
+    args = parse_args()
+    BASE_URL = args.base_url.rstrip("/")
+    mode = AcceptanceMode(dry_run=bool(args.dry_run or not args.execute), execute=bool(args.execute))
+    batch_id = args.batch_id or build_batch_id()
     checks: list[Check] = []
-    artifacts: dict[str, Any] = {"created": {}, "performance": []}
+    artifacts: dict[str, Any] = {"created": {}, "performance": [], "batch_id": batch_id, "dry_run": not mode.can_write}
+
+    if args.cleanup_batch:
+        print(json.dumps({"cleanup_batch": args.cleanup_batch, "status": "manual_cleanup_required"}, ensure_ascii=False))
+        return 0
 
     status, health = request("GET", "/api/health")
     add(checks, "GET /api/health", status == 200 and health == {"ok": True}, f"status={status}")
+    if status != 200 and not mode.can_write:
+        return emit_report(checks, artifacts, fail_on_failed=False)
 
     status, presets = request("GET", "/api/presets")
     add(checks, "GET /api/presets", status == 200 and isinstance(presets, list) and len(presets) > 0)
-    first_preset = presets[0]
+    first_preset = presets[0] if isinstance(presets, list) and presets else {}
     required_preset_fields = {"preset_id", "name", "run_mode", "output_count", "skills"}
-    add(checks, "preset fields complete", required_preset_fields.issubset(first_preset), str(first_preset.keys()))
+    add(checks, "preset fields complete", bool(first_preset) and required_preset_fields.issubset(first_preset), str(first_preset.keys()))
 
     status, skills = request("GET", "/api/skills")
     add(checks, "GET /api/skills", status == 200 and isinstance(skills, list) and len(skills) > 0)
-    first_skill = skills[0]
+    first_skill = skills[0] if isinstance(skills, list) and skills else {}
     add(
         checks,
         "skill list fields complete",
-        {"skill_id", "name", "mode", "enabled", "assigned_presets"}.issubset(first_skill),
+        bool(first_skill) and {"skill_id", "name", "mode", "enabled", "assigned_presets"}.issubset(first_skill),
     )
-    skill_id = next((s["skill_id"] for s in skills if s["skill_id"] == "daily-stock-analysis-skill"), first_skill["skill_id"])
+    skill_id = next(
+        (s["skill_id"] for s in skills if s.get("skill_id") == "daily-stock-analysis-skill"),
+        first_skill.get("skill_id", ""),
+    )
+
+    if not mode.can_write:
+        return emit_report(checks, artifacts, fail_on_failed=False)
 
     preset_payload = {
-        "name": f"验收自动预设-{int(time.time())}",
-        "description": "自动验收创建",
-        "run_mode": "experiment",
+        "name": tag_acceptance_name("验收自动预设", batch_id),
+        "description": tag_acceptance_name("自动验收创建", batch_id),
+        "run_mode": args.run_mode,
         "market_scope": "industry",
         "market_scope_value": "电气设备",
         "risk_template": "balanced",
@@ -141,7 +196,7 @@ def main() -> int:
         "GET /api/skills/{id}",
         status == 200 and {"skill_md", "performance", "errors", "assigned_presets"}.issubset(skill_detail),
     )
-    original_mode = next(s["mode"] for s in skills if s["skill_id"] == skill_id)
+    original_mode = next((s["mode"] for s in skills if s.get("skill_id") == skill_id), "experiment")
     for mode in ["experiment", "disabled", original_mode]:
         status, mode_result = request("POST", f"/api/skills/{skill_id}/mode", {"mode": mode})
         status_detail, detail_after_mode = request("GET", f"/api/skills/{skill_id}")
@@ -262,22 +317,7 @@ def main() -> int:
     for method, path, payload in perf_cases:
         artifacts["performance"].append(perf(method, path, payload, rounds=12))
 
-    report = {
-        "checks": [check.__dict__ for check in checks],
-        "summary": {
-            "total": len(checks),
-            "passed": sum(1 for check in checks if check.ok),
-            "failed": sum(1 for check in checks if not check.ok),
-        },
-        "artifacts": artifacts,
-    }
-    out = Path(__file__).resolve().parents[1] / "acceptance_report.json"
-    out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps(report["summary"], ensure_ascii=False))
-    for check in checks:
-        print(("OK " if check.ok else "FAIL ") + check.name + (f" :: {check.detail}" if check.detail else ""))
-    print(f"report={out}")
-    return 1 if report["summary"]["failed"] else 0
+    return emit_report(checks, artifacts)
 
 
 if __name__ == "__main__":

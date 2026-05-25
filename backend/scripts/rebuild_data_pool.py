@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-数据池重建脚本 — 清空 → CSV导入 → Tushare补齐 → 辅助数据回填。
+数据池重建脚本 — CSV导入 → Tushare补齐 → 辅助数据回填。
 
 用法:
-    python scripts/rebuild_data_pool.py [--skip-csv] [--skip-tushare-kbars]
+    python scripts/rebuild_data_pool.py [--dangerously-clear-data-pool]
+                                        [--skip-csv] [--skip-tushare-kbars]
                                         [--skip-aux] [--csv-dir PATH]
                                         [--tushare-top-n 5200]
 """
@@ -42,6 +43,7 @@ from app.services.tushare_client import (
     fetch_auction, fetch_broker_recommend, fetch_holder_trade,
     fetch_survey, fetch_repurchase, fetch_pledge_stat, fetch_share_float,
 )
+from app.services.validation.safety import assert_destructive_allowed
 
 logging.basicConfig(
     level=logging.INFO,
@@ -559,7 +561,7 @@ def backfill_aux_all(db: Session, top_n: int = 300) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="数据池重建")
-    parser.add_argument("--skip-clear", action="store_true")
+    parser.add_argument("--dangerously-clear-data-pool", action="store_true", help="显式清空数据池表后再重建")
     parser.add_argument("--skip-csv", action="store_true")
     parser.add_argument("--skip-tushare-kbars", action="store_true")
     parser.add_argument("--skip-aux", action="store_true")
@@ -572,8 +574,11 @@ def main():
     db = SessionLocal()
 
     try:
-        if not args.skip_clear:
+        if args.dangerously_clear_data_pool:
+            assert_destructive_allowed(database_url=settings.database_url, requested=True)
             clear_all_tables(db)
+        else:
+            logger.info("跳过清空数据池；如需清空请显式传 --dangerously-clear-data-pool")
 
         if not args.skip_csv:
             n_stocks, n_kbars = import_csv_files(db, args.csv_dir)
