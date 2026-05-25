@@ -22,7 +22,9 @@ from app.services.recommendations.projection import (
     build_recommendation_explanation,
     build_risk_radar,
     build_run_progress,
+    build_skill_reviews,
 )
+from app.services.recommendations.explanation import consensus_label
 
 
 def test_dashboard_overview_contract_accepts_cockpit_sections():
@@ -310,3 +312,66 @@ def test_build_risk_radar_counts_levels():
     assert radar.high == 1
     assert radar.medium == 1
     assert radar.tags == ["高位加速", "放量过快"]
+
+
+def test_build_skill_reviews_prefers_agent_review_score():
+    reviews = build_skill_reviews(
+        [
+            {
+                "strategy_id": "skill-a",
+                "strategy_name": "Skill A",
+                "score": 60,
+                "agent_skill_review": {
+                    "score": 88,
+                    "confidence": 0.9,
+                    "stance": "strong_support",
+                    "supports": ["主线加强"],
+                },
+            }
+        ]
+    )
+
+    assert reviews[0].score == 88
+    assert reviews[0].stance == "strong_support"
+    assert reviews[0].supports == ["主线加强"]
+
+
+def test_build_recommendation_explanation_uses_rec_trade_rules_and_feature_prices():
+    rec = SimpleNamespace(
+        recommendation_id="rec-1",
+        code="000001",
+        entry_rule="回踩不破 5 日线",
+        invalid_rule="跌破 10 日线",
+        feature_snapshot_json=json.dumps({"stop_loss": 9.8, "take_profit": 12.5}, ensure_ascii=False),
+        skill_breakdown_json="[]",
+    )
+
+    explanation = build_recommendation_explanation(rec)
+
+    assert explanation.trade_plan == {
+        "entry_rule": "回踩不破 5 日线",
+        "invalid_rule": "跌破 10 日线",
+        "stop_loss": 9.8,
+        "take_profit": 12.5,
+    }
+
+
+def test_consensus_label_detects_support_family_conflict():
+    assert (
+        consensus_label(
+            [
+                {"agent_skill_review": {"stance": "strong_support"}},
+                {"agent_skill_review": {"stance": "veto"}},
+            ]
+        )
+        == "多空冲突"
+    )
+    assert (
+        consensus_label(
+            [
+                {"agent_skill_review": {"stance": "neutral_support"}},
+                {"agent_skill_review": {"stance": "oppose"}},
+            ]
+        )
+        == "多空冲突"
+    )

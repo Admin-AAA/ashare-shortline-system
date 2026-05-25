@@ -93,7 +93,7 @@ def build_skill_reviews(skill_breakdown: list[dict[str, Any]]) -> list[SkillRevi
                 skill_id=_get(row, "strategy_id", "") or _get(row, "skill_id", "") or "",
                 skill_name=_get(row, "strategy_name", "") or _get(row, "skill_name", "") or "",
                 stance=_get(review, "stance", "unknown") or "unknown",
-                score=float(_get(row, "score", 0.0) or _get(review, "score", 0.0) or 0.0),
+                score=float(_get(review, "score", _get(row, "score", 0.0)) or 0.0),
                 confidence=float(_get(review, "confidence", 0.0) or 0.0),
                 supports=list(supports or []),
                 risks=list(_get(review, "risks", []) or []),
@@ -125,11 +125,15 @@ def build_recommendation_explanation(
         )
         for row in trace_rows or []
     ]
-    trade_plan = {
-        key: _get(feature_snapshot, key)
-        for key in ("entry_rule", "invalid_rule", "stop_loss", "take_profit")
-        if _get(feature_snapshot, key) is not None
-    }
+    trade_plan = {}
+    for key in ("entry_rule", "invalid_rule"):
+        value = _get(rec, key)
+        if value is not None:
+            trade_plan[key] = value
+    for key in ("stop_loss", "take_profit"):
+        value = _get(feature_snapshot, key)
+        if value is not None:
+            trade_plan[key] = value
 
     return RecommendationExplanation(
         recommendation_id=_get(rec, "recommendation_id", ""),

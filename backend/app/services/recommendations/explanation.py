@@ -44,8 +44,10 @@ def consensus_label(skill_breakdown: list[dict[str, Any]]) -> str:
     if not stances:
         return "未知"
 
+    has_support = any("support" in stance for stance in stances)
+    has_oppose = any(stance in {"oppose", "veto"} for stance in stances)
     stance_set = set(stances)
-    if "support" in stance_set and ({"oppose", "veto"} & stance_set):
+    if has_support and has_oppose:
         return "多空冲突"
     if len(stance_set) == 1:
         return "一致"
