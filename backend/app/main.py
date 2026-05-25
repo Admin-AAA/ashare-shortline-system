@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import admin, data_sources, frontend_logs, home, metrics, outcomes, presets, recommendations, runs, skills, stats
+from app.api import admin, dashboard, data_sources, frontend_logs, home, metrics, outcomes, presets, recommendations, runs, skills, stats
 from app.core.config import get_settings
 from app.core.logger import setup_logging
 from app.db.init_db import init_db
@@ -185,6 +185,7 @@ def auth_logout():
 
 
 app.include_router(recommendations.router)
+app.include_router(dashboard.router)
 app.include_router(data_sources.router)
 app.include_router(home.router)
 app.include_router(presets.router)

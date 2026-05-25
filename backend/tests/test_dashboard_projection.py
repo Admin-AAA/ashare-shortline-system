@@ -16,6 +16,7 @@ from app.schemas.dashboard import (
     RunProgress,
     SkillReviewSummary,
 )
+from app.api.dashboard import compose_overview
 from app.services.recommendations.projection import (
     build_cockpit_recommendation,
     build_market_temperature,
@@ -375,3 +376,27 @@ def test_consensus_label_detects_support_family_conflict():
         )
         == "多空冲突"
     )
+
+
+def test_compose_overview_builds_all_cockpit_sections():
+    overview = compose_overview(
+        market_snapshot={
+            "trade_date": "2026-05-25",
+            "sample_count": 100,
+            "up_count": 50,
+            "down_count": 40,
+            "limit_up_count": 5,
+            "limit_down_count": 1,
+            "main_industries": ["机器人"],
+            "breadth": {"market_regime": "active"},
+        },
+        recent_run={"run_id": "run-1", "status": "completed", "progress_pct": 100},
+        recommendations=[],
+        data_health={"status": "ready"},
+        task_health={"running_count": 0},
+        validation={"last_status": "not_run"},
+    )
+
+    assert overview.market.trade_date == "2026-05-25"
+    assert overview.current_run.status == "completed"
+    assert overview.data_health["status"] == "ready"
