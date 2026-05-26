@@ -22,7 +22,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 from typing import Any
 
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import Session
 
 sys.path.insert(0, ".")
@@ -39,7 +39,7 @@ END_DATE = "2026-05-25"
 BUY_COST_RATIO = 0.0013
 SELL_COST_RATIO = 0.0018
 
-# 退潮期强平前，最多跟踪多少个交易日后仍无机会就退出
+# 退潮期强平前，最多跟踪多少个交易日
 MAX_HOLDING_DAYS = 20
 
 # 候选池预过滤参数
@@ -100,6 +100,26 @@ def main() -> None:
 
 
 def _run_backtest(db: Session) -> dict[str, Any]:
+    """默认参数回测（兼容旧调用）。"""
+    return _run_backtest_with_params(db)
+
+
+def _run_backtest_with_params(
+    db: Session,
+    *,
+    start_date: str = START_DATE,
+    end_date: str = END_DATE,
+    max_holding_days: int = 0,        # 0=不限制
+    min_pct: float = MIN_PCT,
+    max_pct: float = MAX_PCT,
+    min_amount_yi: float = MIN_AMOUNT_YI,
+    max_turnover: float = MAX_TURNOVER,
+    min_turnover: float = MIN_TURNOVER,
+    initial_capital: float = INITIAL_CAPITAL,
+    buy_cost_ratio: float = BUY_COST_RATIO,
+    sell_cost_ratio: float = SELL_COST_RATIO,
+) -> dict[str, Any]:
+    """参数化回测（供网格扫描调用）。"""
     from app.db.session import Base
     from app.models.tables import DailyKbar, LimitUpBoard, Stock
 
@@ -109,8 +129,8 @@ def _run_backtest(db: Session) -> dict[str, Any]:
             select(DailyKbar.trade_date)
             .distinct()
             .where(
-                DailyKbar.trade_date >= START_DATE,
-                DailyKbar.trade_date <= END_DATE,
+                DailyKbar.trade_date >= start_date,
+                DailyKbar.trade_date <= end_date,
             )
             .order_by(DailyKbar.trade_date.asc())
         ).all()
@@ -166,6 +186,18 @@ def _run_backtest(db: Session) -> dict[str, Any]:
     for td, rows in limit_up_by_date.items():
         limit_up_codes_by_date[td] = {str(r.code) for r in rows if r.limit_type == "U"}
 
+    # 退潮预警：预计算每个交易日的前日数据
+    prev_limit_up_map: dict[str, int] = {}
+    prev_height_map: dict[str, int] = {}
+    for i, td in enumerate(trade_dates):
+        if i == 0:
+            prev_limit_up_map[td] = 0
+            prev_height_map[td] = 0
+        else:
+            prev_td = trade_dates[i - 1]
+            prev_limit_up_map[td] = _count_limit_up_for_date(db, prev_td)
+            prev_height_map[td] = _max_limit_up_consecutive_for_date(db, prev_td)
+
     # 预加载龙虎榜
     dt_map = load_dragon_tiger_map(db, trade_dates[0], trade_dates[-1])
     dt_trade_dates = set(dt_map.keys())
@@ -177,7 +209,10 @@ def _run_backtest(db: Session) -> dict[str, Any]:
         logger.info("龙虎榜数据覆盖 %d/%d 个交易日", len(overlap_dates), len(trade_dates))
 
     # ── 3. 回测主循环 ──
-    from app.services.chen_xiaoqun_service import EmotionCycle, detect_emotion_cycle, get_position_pct
+    from app.services.chen_xiaoqun_service import (
+        EmotionCycle, detect_emotion_cycle, get_position_pct,
+        get_cycle_entry_requirements, is_pre_retreat_warning,
+    )
 
     global _open_filter_stats
     _open_filter_stats = {"before": 0, "after": 0}
@@ -186,7 +221,7 @@ def _run_backtest(db: Session) -> dict[str, Any]:
     cycle_distribution: dict[str, int] = {"启动": 0, "发酵": 0, "高潮": 0, "退潮": 0}
     stop_loss_stats: dict[str, int] = {"stop_loss": 0, "half": 0, "exit": 0, "hold": 0}
     active_positions: dict[str, dict[str, Any]] = {}  # code -> position info
-    balance = INITIAL_CAPITAL         # 当前总权益
+    balance = initial_capital         # 当前总权益
     portfolio_values = [1.0]          # 归一化净值序列（从 1.0 开始）
 
     date_set = set(trade_dates)
@@ -206,7 +241,17 @@ def _run_backtest(db: Session) -> dict[str, Any]:
 
         cycle_distribution[cycle.value] += 1
 
-        # ── 3b. 获取龙头候选 ──
+        # ── 退潮预警：在非退潮日提前减仓 ──
+        pre_retreat = False
+        if cycle != EmotionCycle.RETREAT:
+            pre_retreat = is_pre_retreat_warning(
+                db, td,
+                prev_limit_up=prev_limit_up_map.get(td, 0),
+                prev_height=prev_height_map.get(td, 0),
+            )
+
+        # ── 3b. 获取龙头候选（带周期感知入口要求）──
+        entry_req = get_cycle_entry_requirements(cycle)
         leader_candidates = _find_leader_candidates(
             db=db,
             trade_date=td,
@@ -215,6 +260,7 @@ def _run_backtest(db: Session) -> dict[str, Any]:
             dt_map=dt_map.get(td),
             bar_map=bar_map,
             next_td=next_td,
+            entry_req=entry_req,
         )
 
         # ── 3c. 退潮期不开新仓 ──
@@ -231,7 +277,7 @@ def _run_backtest(db: Session) -> dict[str, Any]:
                     exit_reason="退潮期强制平仓",
                 )
                 balance += pnl
-            portfolio_values.append(balance / INITIAL_CAPITAL)
+            portfolio_values.append(balance / initial_capital)
             continue
 
         # ── 3d. 管理已有持仓（止损检查）──
@@ -245,14 +291,26 @@ def _run_backtest(db: Session) -> dict[str, Any]:
             trade_dates=trade_dates,
             current_idx=idx,
             stop_loss_stats=stop_loss_stats,
+            max_holding_days=max_holding_days,
         )
         balance += pnl_closed
 
-        # ── 3e. 开新仓 ──
+        # ── 3e. 开新仓（周期感知：按入口要求过滤）──
         position_pct = get_position_pct(cycle)
 
-        # 过滤出龙头候选
+        # 退潮预警时减半仓位
+        if pre_retreat and cycle != EmotionCycle.RETREAT:
+            position_pct *= 0.5
+
+        # 过滤出龙头候选，并按 cycle 入口要求二次过滤
         candidates = [c for c in leader_candidates if c.get("_is_leader_candidate")]
+
+        # 如果设置了最大候选数限制，按 desc 排序后取前 N
+        max_candidates = entry_req.get("max_candidates", 999)
+        if max_candidates > 0 and len(candidates) > max_candidates:
+            # 按 amount_yi 降序取前 N（流动性优先）
+            candidates.sort(key=lambda c: c.get("amount_yi", 0), reverse=True)
+            candidates = candidates[:max_candidates]
 
         if candidates and position_pct > 0:
             # 等分仓位
@@ -294,10 +352,10 @@ def _run_backtest(db: Session) -> dict[str, Any]:
                 }
                 active_positions[code] = position
 
-        portfolio_values.append(balance / INITIAL_CAPITAL)
+        portfolio_values.append(balance / initial_capital)
 
     # ── 4. 计算指标 ──
-    return _output_results(trades, cycle_distribution, stop_loss_stats, trade_dates, portfolio_values, INITIAL_CAPITAL)
+    return _output_results(trades, cycle_distribution, stop_loss_stats, trade_dates, portfolio_values, initial_capital)
 
 
 def _find_leader_candidates(
@@ -308,6 +366,7 @@ def _find_leader_candidates(
     dt_map: dict[str, dict] | None = None,
     bar_map: dict[tuple[str, str], DailyKbar] | None = None,
     next_td: str | None = None,
+    entry_req: dict | None = None,
 ) -> list[dict[str, Any]]:
     """从当日日K线中筛选龙头候选（模拟 _compute_chen_xiaoqun_signals 逻辑）。
 
@@ -315,7 +374,11 @@ def _find_leader_candidates(
 
     Args:
         dt_map: 当日龙虎榜数据 {code: {net_amount_yi, ...}}, None 表示无数据
+        entry_req: 周期感知入口要求，由 get_cycle_entry_requirements 返回
     """
+    if entry_req is None:
+        entry_req = {}
+
     candidates = []
     for bar in bars:
         code = str(bar.code)
@@ -363,6 +426,29 @@ def _find_leader_candidates(
         # 龙虎榜增强：上榜且净买入的候选优先确认
         if dt_boost and is_leader:
             is_leader = True
+
+        # ── 周期感知二次过滤 ──
+        # 按 entry_req 提高候选门槛，不同周期对质量要求不同
+        min_pct_req = entry_req.get("min_pct", 0)
+        if min_pct_req > 0 and pct_val < min_pct_req:
+            is_leader = False
+
+        min_amt_req = entry_req.get("min_amount_yi", 0)
+        if min_amt_req > 0 and amount_yi < min_amt_req:
+            is_leader = False
+
+        max_turn_req = entry_req.get("max_turnover", 0)
+        if max_turn_req > 0 and turnover > max_turn_req:
+            is_leader = False
+
+        min_turn_req = entry_req.get("min_turnover", 0)
+        if min_turn_req > 0 and turnover < min_turn_req:
+            is_leader = False
+
+        # 发酵期特殊要求：必须有龙虎榜净买入确认
+        if entry_req.get("require_dt_net_buying") and is_leader:
+            if not dt_boost:
+                is_leader = False
 
         candidate = {
             "code": code,
@@ -426,6 +512,7 @@ def _manage_positions(
     trade_dates: list[str],
     current_idx: int,
     stop_loss_stats: dict[str, int],
+    max_holding_days: int = 20,
 ) -> float:
     """检查并处理所有活跃持仓的止损条件。返回该日止盈止损平仓盈亏总额。"""
     from app.services.chen_xiaoqun_service import apply_stop_loss
@@ -439,6 +526,18 @@ def _manage_positions(
         current_price = _num(bar.close)
         days_held = pos.get("day_held", 0) + 1
         pos["day_held"] = days_held
+
+        # 隔夜持仓天数上限检查
+        if max_holding_days > 0 and days_held >= max_holding_days:
+            exit_date = _next_trade_date(trade_dates, current_idx)
+            if exit_date and exit_date in trade_dates_set:
+                pnl = _close_position(
+                    db=db, pos=pos, trades=trades, active_positions=active_positions,
+                    bar_map=bar_map, exit_date=exit_date,
+                    exit_reason=f"持仓{max_holding_days}天上限",
+                )
+                total_pnl += pnl
+            continue
 
         stop_check = apply_stop_loss(
             trade=pos,
@@ -642,6 +741,24 @@ def _num(value: Any, default: float = 0.0) -> float:
         return float(value) if value is not None else default
     except (TypeError, ValueError):
         return float(default)
+
+
+def _count_limit_up_for_date(db: Session, trade_date: str) -> int:
+    """统计指定日期涨停家数（供退潮预警使用）。"""
+    from app.models.tables import LimitUpBoard
+    return db.scalar(
+        select(func.count(func.distinct(LimitUpBoard.code)))
+        .where(LimitUpBoard.trade_date == trade_date, LimitUpBoard.limit_type == "U")
+    ) or 0
+
+
+def _max_limit_up_consecutive_for_date(db: Session, trade_date: str) -> int:
+    """获取指定日期最大连板高度（供退潮预警使用）。"""
+    from app.models.tables import LimitUpBoard
+    return db.scalar(
+        select(func.max(LimitUpBoard.limit_times))
+        .where(LimitUpBoard.trade_date == trade_date, LimitUpBoard.limit_type == "U")
+    ) or 0
 
 
 if __name__ == "__main__":

@@ -109,11 +109,118 @@ def get_position_pct(cycle: EmotionCycle) -> float:
     """
     mapping = {
         EmotionCycle.STARTUP: 0.15,
-        EmotionCycle.FERMENT: 0.40,
+        EmotionCycle.FERMENT: 0.30,   # 发酵期降低仓位，配合过滤提质量（原0.40→0.30）
         EmotionCycle.CLIMAX: 0.60,
         EmotionCycle.RETREAT: 0.0,
     }
     return mapping.get(cycle, 0.0)
+
+
+def get_cycle_entry_requirements(cycle: EmotionCycle) -> dict:
+    """返回当前情绪周期下的入场过滤阈值。
+
+    不同周期阶段对候选股的质量要求不同：
+      - 启动期：中等要求，允许试错
+      - 发酵期：严格要求，仅取高确定性候选（历史胜率仅25%，必须提门槛）
+      - 高潮期：宽松要求，充分参与
+      - 退潮期：禁止开仓
+
+    Returns:
+        dict with keys:
+          min_amount_yi: 最小成交额（亿）
+          min_pct: 最小涨幅（%）
+          max_turnover: 最大换手率（%）
+          min_turnover: 最小换手率（%）
+          require_dt_net_buying: 是否要求龙虎榜净买入
+          max_candidates: 最大候选股数量
+    """
+    requirements = {
+        EmotionCycle.STARTUP: {
+            "min_amount_yi": 0.0,   # 启动期不额外限制，基准已足够
+            "min_pct": 0.0,
+            "max_turnover": 999.0,
+            "min_turnover": 0.0,
+            "require_dt_net_buying": False,
+            "max_candidates": 999,
+        },
+        EmotionCycle.FERMENT: {
+            "min_amount_yi": 3.0,   # 发酵期适度提高质量门槛（全球MIN_AMOUNT_YI=2.0）
+            "min_pct": 4.0,         # 涨幅要求略高于全球MIN_PCT=3.0
+            "max_turnover": 20.0,
+            "min_turnover": 1.5,
+            "require_dt_net_buying": False,
+            "max_candidates": 8,
+        },
+        EmotionCycle.CLIMAX: {
+            "min_amount_yi": 0.0,   # 高潮期与基准一致
+            "min_pct": 0.0,
+            "max_turnover": 999.0,
+            "min_turnover": 0.0,
+            "require_dt_net_buying": False,
+            "max_candidates": 999,
+        },
+        EmotionCycle.RETREAT: {
+            "min_amount_yi": 999.0,
+            "min_pct": 99.0,
+            "max_turnover": 0.0,
+            "min_turnover": 100.0,
+            "require_dt_net_buying": False,
+            "max_candidates": 0,
+        },
+    }
+    return requirements.get(cycle, requirements[EmotionCycle.STARTUP])
+
+
+# ── 退潮预警阈值 ──
+_PRE_RETREAT_LIMIT_DOWN_BUMP = 12     # 跌停从低位跃升至>=12 → 预警（通常P25=3,P50=8,>12是P75附近）
+_PRE_RETREAT_HEIGHT_DROP = 2          # 连板高度较前一日下降>=2 → 预警
+_PRE_RETREAT_LIMIT_UP_SHRINK_PCT = 0.40  # 涨停数较前一日萎缩>=40% → 预警
+
+
+def is_pre_retreat_warning(
+    db: Session,
+    snapshot_date: str,
+    prev_limit_up: int,
+    prev_height: int,
+) -> bool:
+    """检测退潮前预警信号。
+
+    当市场从高潮/启动快速恶化时，提前发出预警，让系统提前减仓。
+    条件（任一触发即为预警）：
+      1. 跌停数从前一日的低位跃升 >= PRE_RETREAT_LIMIT_DOWN_BUMP
+      2. 连板高度较前一日下降 >= PRE_RETREAT_HEIGHT_DROP
+      3. 涨停数较前一日萎缩 >= PRE_RETREAT_LIMIT_UP_SHRINK_PCT
+
+    Args:
+        db: 数据库会话
+        snapshot_date: 当前交易日
+        prev_limit_up: 前一交易日的涨停数
+        prev_height: 前一交易日的连板高度
+
+    Returns:
+        True 表示检测到退潮预警信号
+    """
+    limit_up = _count_limit_up(db, snapshot_date)
+    limit_down = _count_limit_down(db, snapshot_date)
+    height = _max_limit_up_consecutive(db, snapshot_date)
+
+    # 信号1: 跌停数跃升
+    prev_limit_down = _count_limit_down_of_prev_date(db, snapshot_date)
+    if prev_limit_down is not None and limit_down >= _PRE_RETREAT_LIMIT_DOWN_BUMP + prev_limit_down:
+        logger.debug("退潮预警: 跌停 %d 前日 %d, 跃升 >= %d", limit_down, prev_limit_down, _PRE_RETREAT_LIMIT_DOWN_BUMP)
+        return True
+
+    # 信号2: 连板高度骤降
+    if prev_height > 0 and height < prev_height - _PRE_RETREAT_HEIGHT_DROP:
+        logger.debug("退潮预警: 高度 %d 前日 %d, 下降 >= %d", height, prev_height, _PRE_RETREAT_HEIGHT_DROP)
+        return True
+
+    # 信号3: 涨停数大幅萎缩
+    if prev_limit_up > 0 and limit_up < prev_limit_up * _PRE_RETREAT_LIMIT_UP_SHRINK_PCT:
+        logger.debug("退潮预警: 涨停 %d 前日 %d, 萎缩 >= %.0f%%", limit_up, prev_limit_up, _PRE_RETREAT_LIMIT_UP_SHRINK_PCT * 100)
+        return True
+
+    return False
 
 
 def apply_stop_loss(
@@ -301,3 +408,11 @@ def _prev_trade_date(db: Session, trade_date: str) -> str | None:
         .limit(1)
     ).scalar()
     return str(row) if row else None
+
+
+def _count_limit_down_of_prev_date(db: Session, trade_date: str) -> int | None:
+    """获取前一交易日跌停数。"""
+    prev = _prev_trade_date(db, trade_date)
+    if prev is None:
+        return None
+    return _count_limit_down(db, prev)
