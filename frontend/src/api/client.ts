@@ -1,6 +1,7 @@
 import type {
   HomeBootstrap,
   HomeInitialState,
+  MetricsOverview,
   Preset,
   PrecisionAtKRow,
   PresetStatsRow,
@@ -200,6 +201,9 @@ export const api = {
   deleteRecommendation: (id: string) => request<{ deleted: string }>(`/api/recommendations/${id}`, json("DELETE")),
   deletePreset: (id: string) => request<{ deleted: string }>(`/api/presets/${id}`, json("DELETE")),
 
+  metricsOverview: (mode: "formal" | "experiment") => request<MetricsOverview>(`/api/metrics/overview?mode=${mode}`),
+  dataHealth: () => request<Record<string, unknown>>("/api/admin/data-health"),
+  temporalConsistency: (runMode?: string) => request<Record<string, unknown>>(`/api/admin/temporal-consistency${runMode ? `?run_mode=${runMode}` : ""}`),
   statsOverview: (mode: "formal" | "experiment") => request<StatsOverview>(`/api/stats/overview?mode=${mode}`),
   statsBySkill: (mode: "formal" | "experiment") => request<SkillStatsRow[]>(`/api/stats/by-skill?mode=${mode}`),
   statsByPreset: (mode: "formal" | "experiment") => request<PresetStatsRow[]>(`/api/stats/by-preset?mode=${mode}`),

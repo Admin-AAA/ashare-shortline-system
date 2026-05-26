@@ -12,11 +12,14 @@
 from __future__ import annotations
 
 import json
-import uuid as _uuid
+import logging
 import time
+import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -26,6 +29,7 @@ from app.engine.aggregator import apply_pool_rules
 from app.engine.skill_loader import load_skills
 from app.engine.strategy_runner import run_strategy
 from app.models.tables import (
+    BacktestRun,
     DailyKbar,
     Recommendation,
     RecommendationOutcome,
@@ -39,9 +43,15 @@ from app.services.market_data import (
     _build_stock_from_bars,
     _candidate_recall_plan,
     _eligible_market_quotes,
+    _exchange_from_code,
     _select_recall_candidates,
 )
 from app.services.outcome_service import is_trade_executed, label_pending_outcomes, normalized_outcome_label, resolved_trade_return
+from app.services.temporal_consistency import check_run_temporal_consistency, check_backtest_temporal_consistency
+from app.services.evaluation_metrics import (
+    compute_full_metrics,
+    _empty_metrics as _backtest_empty_metrics,
+)
 from app.services.prefilter_service import apply_prefilters
 from app.services.research_context import build_research_contexts
 from app.services.workbench_service import (
@@ -60,8 +70,12 @@ def run_backtest(
     run_mode: str = "experiment",
     horizon_days: int = 5,
     score_line: float = 72.0,
+    skill_id: str | None = None,
 ) -> dict[str, Any]:
     """在历史日期区间上执行回测，数据完全来自本地 DailyKbar 池。"""
+    if skill_id is None:
+        skill_id = "_general_"
+
     settings = get_settings()
     dates = _trading_dates_in_range(db, start_date, end_date)
     if not dates:
@@ -90,8 +104,14 @@ def run_backtest(
 
     labeled = label_pending_outcomes(db, horizon_days=horizon_days)
 
+    # ── 自动时态一致性检查 ──
+    temporal_check = _run_backtest_temporal_check(db, results, run_mode)
+
     success_dates = [r for r in results if r.get("status") == "ok"]
     failed_dates = [r for r in results if r.get("status") != "ok"]
+
+    # 构建交易明细（用于复盘）
+    trade_details = _build_trade_detail_list(db, start_date, end_date, run_mode)
 
     summary = {
         "status": "completed",
@@ -101,6 +121,9 @@ def run_backtest(
         "total_recommendations": sum(r.get("recommendation_count", 0) for r in success_dates),
         "total_elapsed_ms": round(sum(r.get("elapsed_ms", 0) for r in results), 1),
         "labeled_count": labeled.get("labeled", 0),
+        "temporal_consistency": temporal_check,
+        "trade_detail_count": len(trade_details),
+        "trade_details": trade_details,
         "results": results,
     }
 
@@ -108,7 +131,26 @@ def run_backtest(
         summary["breakdown"] = _backtest_breakdown(db, start_date, end_date, run_mode)
         summary["aggregate_metrics"] = _backtest_aggregate_metrics(db, start_date, end_date, run_mode)
 
+    _save_backtest_summary(db, skill_id, start_date, end_date, summary)
     return summary
+
+
+def _save_backtest_summary(
+    db: Session, skill_id: str, start_date: str, end_date: str, result: dict[str, Any]
+) -> str:
+    """将回测汇总结果写入 backtest_runs 表。"""
+    backtest_id = f"bt_{skill_id[:20]}_{uuid.uuid4().hex[:10]}"
+    row = BacktestRun(
+        backtest_id=backtest_id,
+        skill_id=skill_id,
+        date_from=start_date,
+        date_to=end_date,
+        status="completed",
+        result_json=json.dumps(result, ensure_ascii=False),
+    )
+    db.add(row)
+    db.commit()
+    return backtest_id
 
 
 def _trading_dates_in_range(db: Session, start: str, end: str) -> list[str]:
@@ -195,7 +237,7 @@ def _historical_quotes_from_bars(
             {
                 "code": code,
                 "name": meta.get("name", code),
-                "exchange": meta.get("exchange", ""),
+                "exchange": _exchange_from_code(code),
                 "industry": meta.get("industry") or quote_meta.get("industry") or "未分类",
                 "is_st": meta.get("is_st", False),
                 "price": float(bar.close or 0),
@@ -230,7 +272,7 @@ def _backtest_single_date(
     codes = [bar.code for bar in all_bars]
     stock_rows = db.scalars(select(Stock).where(Stock.code.in_(codes))).all()
     stocks_meta: dict[str, dict[str, Any]] = {
-        s.code: {"name": s.name, "industry": s.industry, "is_st": s.is_st, "exchange": s.exchange}
+        s.code: {"name": s.name, "industry": s.industry, "is_st": s.is_st, "market": s.market}
         for s in stock_rows
     }
     chg60_map = _compute_chg60_for_date(db, codes, trade_date)
@@ -466,7 +508,7 @@ def _load_bars_history_for_date(
             "ma10": bar.ma10,
             "ma20": bar.ma20,
             "ma60": bar.ma60,
-            "volume_ratio_5d": bar.volume_ratio_5d,
+            "volume_ratio_5d": bar.vol_ratio_5,
         })
 
     # 截取最近120条
@@ -538,7 +580,7 @@ def _persist_backtest_run(
     skills: list[Any],
     score_line: float,
 ) -> str:
-    run_id = f"bt_{trade_date}_{_uuid.uuid4().hex[:8]}"
+    run_id = f"bt_{trade_date}_{uuid.uuid4().hex[:8]}"
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     run = RecommendationRun(
         run_id=run_id,
@@ -580,7 +622,7 @@ def _persist_backtest_recommendations(
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     for card in cards:
         rec = Recommendation(
-            recommendation_id=f"btrec_{_uuid.uuid4().hex[:12]}",
+            recommendation_id=f"btrec_{uuid.uuid4().hex[:12]}",
             run_id=run_id,
             trade_date=card.get("trade_date", ""),
             recommended_at=now,
@@ -612,7 +654,9 @@ def _backtest_breakdown(
 ) -> dict[str, Any]:
     """按 Skill / 行业 / 分数段 分组统计。"""
     recs = db.scalars(
-        select(Recommendation).join(RecommendationRun).where(
+        select(Recommendation)
+        .join(RecommendationRun, Recommendation.run_id == RecommendationRun.run_id)
+        .where(
             RecommendationRun.trade_date >= start_date,
             RecommendationRun.trade_date <= end_date,
             RecommendationRun.run_mode == run_mode,
@@ -811,12 +855,26 @@ def _backtest_breakdown(
     }
 
 
-def _backtest_aggregate_metrics(
+def _build_trade_detail_list(
     db: Session, start_date: str, end_date: str, run_mode: str
-) -> dict[str, Any]:
-    """回测汇总指标。"""
+) -> list[dict[str, Any]]:
+    """构建每笔交易的明细记录，用于复盘分析。
+
+    对每笔已执行交易输出：
+    - 推荐日期 / 标的代码 / 标的名称
+    - 入场日期 / 入场价格 / 出场日期 / 出场价格
+    - 净收益 / 毛收益 / 基准收益
+    - 触发条件（setup_type / entry_rule / exit_reason）
+    - 误判原因（仅亏损交易）
+    - 持仓天数
+
+    Returns:
+        list[dict]: 每笔交易的明细字典
+    """
     recs = db.scalars(
-        select(Recommendation).join(RecommendationRun).where(
+        select(Recommendation)
+        .join(RecommendationRun, Recommendation.run_id == RecommendationRun.run_id)
+        .where(
             RecommendationRun.trade_date >= start_date,
             RecommendationRun.trade_date <= end_date,
             RecommendationRun.run_mode == run_mode,
@@ -825,55 +883,645 @@ def _backtest_aggregate_metrics(
 
     rec_ids = [r.recommendation_id for r in recs]
     if not rec_ids:
-        return {"total_recommendations": 0, "labeled_count": 0, "triggered_count": 0, "trigger_rate": 0.0, "hit_rate": 0.0}
+        return []
 
-    outcomes = db.scalars(
+    outcomes_list = db.scalars(
         select(RecommendationOutcome).where(
             RecommendationOutcome.recommendation_id.in_(rec_ids)
         )
     ).all()
+    outcome_map = {o.recommendation_id: o for o in outcomes_list}
 
-    if not outcomes:
-        return {"total_recommendations": len(recs), "labeled_count": 0, "triggered_count": 0, "trigger_rate": 0.0, "hit_rate": 0.0}
+    # 第一遍：收集日期用于基准查询
+    all_dates: set[str] = set()
+    trade_records: list[tuple[Recommendation, RecommendationOutcome]] = []
 
-    n = len(outcomes)
-    triggered = [o for o in outcomes if is_trade_executed(o)]
-    executed_n = len(triggered)
-    success_count = sum(1 for o in triggered if normalized_outcome_label(o) == "success")
-    returns = [resolved_trade_return(o) for o in triggered]
-    weighted_returns = [float(o.weighted_return or 0) for o in triggered]
-    max_returns = [o.max_return or 0 for o in outcomes]
-    drawdowns = [o.max_drawdown or 0 for o in outcomes]
-    achievable = [o.achievable_return or 0 for o in outcomes]
-    holding_days = [float(o.holding_days or 0) for o in triggered]
+    for rec in recs:
+        outcome = outcome_map.get(rec.recommendation_id)
+        if outcome is None:
+            continue
+        if not is_trade_executed(outcome):
+            continue
+        entry_date = outcome.entry_date or rec.trade_date
+        exit_date = outcome.exit_date or rec.trade_date
+        all_dates.add(entry_date)
+        all_dates.add(exit_date)
+        trade_records.append((rec, outcome))
+
+    if not trade_records:
+        return []
+
+    # 批量查询基准指数收盘价
+    from app.services.benchmark_service import compute_benchmark_return, get_benchmark_close_map
+    close_map = get_benchmark_close_map(db, list(all_dates))
+
+    # 第二遍：构建明细记录
+    details: list[dict[str, Any]] = []
+    for rec, outcome in trade_records:
+        executed_return = resolved_trade_return(outcome)
+        entry_date = outcome.entry_date or rec.trade_date
+        exit_date = outcome.exit_date or rec.trade_date
+        benchmark_ret = compute_benchmark_return(close_map, entry_date, exit_date)
+
+        # 从 feature_snapshot 提取信号特征摘要
+        feature_snapshot = json.loads(rec.feature_snapshot_json or "{}")
+        signal_features = {
+            "market_regime": str(feature_snapshot.get("market_regime", "")),
+            "trend_status": str(feature_snapshot.get("trend_status", "")),
+            "volume_ratio_5d": feature_snapshot.get("volume_ratio_5d"),
+            "ma_alignment": str(feature_snapshot.get("ma_alignment", "")),
+            "buy_signal": str(feature_snapshot.get("buy_signal", "")),
+        }
+
+        details.append({
+            # 推荐标识
+            "recommendation_id": rec.recommendation_id,
+            "trade_date": str(rec.trade_date),
+            "code": str(rec.code),
+            "name": str(rec.name),
+            "industry": str(rec.industry or "未分类"),
+            # 入场信息
+            "entry_date": entry_date,
+            "entry_price": float(outcome.entry_price or 0),
+            # 出场信息
+            "exit_date": exit_date,
+            "exit_price": float(outcome.exit_price or 0),
+            # 收益指标
+            "net_return_pct": float(executed_return),
+            "gross_return_pct": float(outcome.close_return or 0),
+            "achievable_return_pct": float(outcome.achievable_return or 0),
+            "benchmark_return_pct": benchmark_ret,
+            # 风险指标
+            "morning_drawdown_pct": float(outcome.max_drawdown or 0),
+            "holding_days": float(outcome.holding_days or 1),
+            # 触发条件
+            "setup_type": str(rec.setup_type or ""),
+            "entry_rule": str(rec.entry_rule or ""),
+            "exit_reason": str(outcome.exit_reason or ""),
+            "final_score": float(rec.final_score or 0),
+            # 结果判定
+            "accurate": bool(executed_return > 0),
+            "false_positive_reason": outcome.outcome_reason if executed_return <= 0 else None,
+            # 信号特征摘要
+            "signal_features": signal_features,
+            "resolved": True,
+        })
+
+    return details
+
+
+def _backtest_aggregate_metrics(
+    db: Session, start_date: str, end_date: str, run_mode: str
+) -> dict[str, Any]:
+    """回测汇总指标 — 通过共享的 evaluation_metrics 计算完整 9-KPI。"""
+    trades = _build_trade_detail_list(db, start_date, end_date, run_mode)
+    if not trades:
+        return _backtest_empty_metrics()
+
+    # 转成 compute_full_metrics 兼容格式
+    metric_trades = [
+        {
+            "net_return_pct": t["net_return_pct"],
+            "gross_return_pct": t["gross_return_pct"],
+            "achievable_return_pct": t["achievable_return_pct"],
+            "morning_drawdown_pct": t["morning_drawdown_pct"],
+            "holding_days": t["holding_days"],
+            "benchmark_return_pct": t["benchmark_return_pct"],
+            "accurate": t["accurate"],
+            "trade_date": t["trade_date"],
+            "code": t["code"],
+            "name": t["name"],
+            "false_positive_reason": t["false_positive_reason"],
+            "resolved": True,
+        }
+        for t in trades
+    ]
+
+    return compute_full_metrics(metric_trades)
+
+
+def _run_backtest_temporal_check(
+    db: Session,
+    results: list[dict[str, Any]],
+    run_mode: str,
+) -> dict[str, Any]:
+    """对回测结果做自动时态一致性检查。
+
+    检查维度：
+    1. 所有成功日期的推荐记录是否存在对应日K线数据
+    2. Outcome 标注的 entry_date >= trade_date
+    3. Outcome 标注的 exit_date > entry_date（无穿越）
+
+    Returns:
+        dict with status, violation_count, warnings, errors, summary
+    """
+    from app.models.tables import RecommendationRun
+
+    run_ids = [
+        r.get("run_id")
+        for r in results
+        if r.get("status") == "ok" and r.get("run_id")
+    ]
+    if not run_ids:
+        return {
+            "status": "skipped",
+            "message": "无可检查的回测运行记录",
+            "violation_count": 0,
+        }
+
+    violations: list[dict[str, Any]] = []
+    for run_id in run_ids:
+        check_result = check_run_temporal_consistency(
+            db, run_id=run_id, run_mode=run_mode
+        )
+        if check_result.get("status") == "completed":
+            v = check_result.get("violations", [])
+            violations.extend(v)
+
+    # 同时跑 backtest 专用检查
+    bt_result = check_backtest_temporal_consistency(db)
+    if bt_result.get("status") == "completed":
+        violations.extend(bt_result.get("violations", []))
+
+    error_count = sum(1 for v in violations if v.get("severity") == "error")
+    warning_count = sum(1 for v in violations if v.get("severity") == "warning")
 
     return {
-        "total_recommendations": len(recs),
-        "labeled_count": n,
-        "triggered_count": executed_n,
-        "trigger_rate": round(executed_n / max(1, n), 3),
-        "success_count": success_count,
-        "hit_rate": round(success_count / max(1, executed_n), 3) if executed_n else 0.0,
-        "avg_return": round(sum(returns) / max(1, executed_n), 2) if executed_n else 0.0,
-        "avg_executed_return": round(sum(returns) / max(1, executed_n), 2) if executed_n else 0.0,
-        "avg_weighted_return": round(sum(weighted_returns) / max(1, executed_n), 2) if executed_n else 0.0,
-        "avg_close_return": round(sum(float(o.close_return or 0) for o in outcomes) / max(1, n), 2),
-        "avg_max_return": round(sum(max_returns) / max(1, n), 2),
-        "avg_max_drawdown": round(sum(drawdowns) / max(1, n), 2),
-        "avg_achievable_return": round(sum(achievable) / max(1, n), 2),
-        "avg_holding_days": round(sum(holding_days) / max(1, executed_n), 2) if executed_n else 0.0,
-        "profit_factor": _profit_factor(outcomes),
-        "win_loss_ratio": _win_loss_ratio(outcomes),
+        "status": "completed",
+        "violation_count": len(violations),
+        "error_count": error_count,
+        "warning_count": warning_count,
+        "passed": error_count == 0,
+        "summary": {
+            "total": len(violations),
+            "errors": error_count,
+            "warnings": warning_count,
+        },
+        "violations": violations[:20],  # 最多返回20条
     }
 
 
-def _profit_factor(outcomes: list[RecommendationOutcome]) -> float:
-    gross_profit = sum(resolved_trade_return(o) for o in outcomes if is_trade_executed(o) and resolved_trade_return(o) > 0)
-    gross_loss = abs(sum(resolved_trade_return(o) for o in outcomes if is_trade_executed(o) and resolved_trade_return(o) < 0))
-    return round(gross_profit / max(gross_loss, 0.01), 2)
+def _build_time_split_analysis(
+    trades: list[dict[str, Any]],
+    all_dates: list[str],
+    train_ratio: float = 0.6,
+) -> dict[str, Any]:
+    """严格时间切分验证（固定比例 train/test split by date）。
+
+    与 expanding window walk-forward 互补：
+    - walk-forward 测试多个时间窗口的稳定性
+    - time-split 给出单一训练集/测试集的清晰对比
+
+    Args:
+        trades: 已执行的交易记录列表
+        all_dates: 回测区间内所有交易日（已排序）
+        train_ratio: 训练集占比（默认 0.6）
+
+    Returns:
+        dict with train/test date ranges, trade counts, and 9-KPI metrics
+    """
+    if len(trades) < 3 or len(all_dates) < 5:
+        return {
+            "eligible": False,
+            "message": f"交易笔数或交易日数不足 (trades={len(trades)}, dates={len(all_dates)})",
+            "train_metrics": _backtest_empty_metrics(),
+            "test_metrics": _backtest_empty_metrics(),
+        }
+
+    # 按日期排序切割
+    split_index = max(1, int(len(all_dates) * train_ratio))
+    if split_index >= len(all_dates):
+        split_index = max(1, len(all_dates) - 1)
+
+    train_date_set = set(all_dates[:split_index])
+    test_date_set = set(all_dates[split_index:])
+
+    train_trades = [t for t in trades if t["trade_date"] in train_date_set]
+    test_trades = [t for t in trades if t["trade_date"] in test_date_set]
+
+    train_metrics = compute_full_metrics(train_trades) if train_trades else _backtest_empty_metrics()
+    test_metrics = compute_full_metrics(test_trades) if test_trades else _backtest_empty_metrics()
+
+    return {
+        "eligible": True,
+        "train_ratio": train_ratio,
+        "train_date_range": {
+            "start": all_dates[0],
+            "end": all_dates[split_index - 1],
+        },
+        "test_date_range": {
+            "start": all_dates[split_index],
+            "end": all_dates[-1],
+        },
+        "train_trade_count": len(train_trades),
+        "test_trade_count": len(test_trades),
+        "train_metrics": {
+            "trade_count": train_metrics.get("trade_count", 0),
+            "recommendation_accuracy": train_metrics.get("recommendation_accuracy", 0),
+            "average_net_return": train_metrics.get("average_net_return", 0),
+            "max_drawdown": train_metrics.get("max_drawdown", 0),
+            "profit_loss_ratio": train_metrics.get("profit_loss_ratio", 0),
+            "sample_confidence": train_metrics.get("sample_confidence", "low"),
+        },
+        "test_metrics": {
+            "trade_count": test_metrics.get("trade_count", 0),
+            "recommendation_accuracy": test_metrics.get("recommendation_accuracy", 0),
+            "average_net_return": test_metrics.get("average_net_return", 0),
+            "max_drawdown": test_metrics.get("max_drawdown", 0),
+            "profit_loss_ratio": test_metrics.get("profit_loss_ratio", 0),
+            "sample_confidence": test_metrics.get("sample_confidence", "low"),
+        },
+        "train_vs_test": {
+            "accuracy_diff": round(
+                train_metrics.get("recommendation_accuracy", 0)
+                - test_metrics.get("recommendation_accuracy", 0), 3
+            ),
+            "return_diff": round(
+                train_metrics.get("average_net_return", 0)
+                - test_metrics.get("average_net_return", 0), 3
+            ),
+        },
+    }
 
 
-def _win_loss_ratio(outcomes: list[RecommendationOutcome]) -> float:
-    wins = sum(1 for o in outcomes if is_trade_executed(o) and normalized_outcome_label(o) == "success")
-    losses = sum(1 for o in outcomes if is_trade_executed(o) and normalized_outcome_label(o) == "failed")
-    return round(wins / max(losses, 1), 2)
+def run_backtest_comparison(
+    db: Session,
+    start_date: str,
+    end_date: str,
+    run_mode: str = "experiment",
+    horizon_days: int = 5,
+    baseline_score_line: float = 72.0,
+    candidate_score_line: float = 65.0,
+    skill_id: str | None = None,
+) -> dict[str, Any]:
+    """执行 baseline vs candidate 双版本回测比较。
+
+    工作流：
+    1. 用 baseline_score_line 跑一次回测（基线版）
+    2. 用 candidate_score_line 跑一次回测（候选版，更宽松的评分线）
+    3. 对两个版本分别计算 9-KPI 指标
+    4. 执行滚动样本外验证（walk-forward）
+    5. 自动选择更优版本
+
+    Args:
+        db: 数据库会话
+        start_date: 起始日期
+        end_date: 结束日期
+        run_mode: formal | experiment
+        horizon_days: 持仓天数
+        baseline_score_line: 基线版评分线（默认 72，更严格）
+        candidate_score_line: 候选版评分线（默认 65，更宽松）
+        skill_id: 指定 Skill ID
+
+    Returns:
+        dict 包含 baseline/candidate 的完整对比结果
+    """
+    from app.services.evaluation_metrics import compute_full_metrics
+
+    if skill_id is None:
+        skill_id = "_general_"
+
+    started_at = time.perf_counter()
+
+    # ── 1. 跑两个版本 ──
+    baseline_label = f"基线版 (score_line={baseline_score_line})"
+    candidate_label = f"候选版 (score_line={candidate_score_line})"
+
+    logger.info("回测比较开始: baseline=%.1f candidate=%.1f", baseline_score_line, candidate_score_line)
+
+    baseline_result = run_backtest(
+        db, start_date, end_date, run_mode, horizon_days,
+        score_line=baseline_score_line, skill_id=skill_id,
+    )
+    candidate_result = run_backtest(
+        db, start_date, end_date, run_mode, horizon_days,
+        score_line=candidate_score_line, skill_id=skill_id,
+    )
+
+    # ── 2. 提取 trade 数据用于比较 ──
+    def _extract_trades(result: dict[str, Any]) -> list[dict[str, Any]]:
+        """从回测结果中提取已执行的交易记录。"""
+        if result.get("status") != "completed":
+            return []
+        agg = result.get("aggregate_metrics")
+        if not agg:
+            return []
+        # aggregate_metrics 已经是 compute_full_metrics 的输出
+        # 我们需要更详细的 trade 数据，从 results 中的 run_ids 获取
+        return _load_backtest_trades(db, result, start_date, end_date, run_mode)
+
+    baseline_trades = _extract_trades(baseline_result)
+    candidate_trades = _extract_trades(candidate_result)
+
+    # ── 3. 构建 walk_forward 分析 ──
+    dates = _trading_dates_in_range(db, start_date, end_date)
+    walk_baseline = _build_backtest_walk_forward(dates, baseline_trades)
+    walk_candidate = _build_backtest_walk_forward(dates, candidate_trades)
+
+    # ── 3.5 严格时间切分验证（与 walk-forward 互补） ──
+    time_split_baseline = _build_time_split_analysis(baseline_trades, dates, train_ratio=0.6)
+    time_split_candidate = _build_time_split_analysis(candidate_trades, dates, train_ratio=0.6)
+
+    # ── 4. 决策：选择更优版本 ──
+    selected_variant, adoption_reason = _choose_backtest_variant(
+        baseline_result, candidate_result,
+        walk_baseline, walk_candidate,
+    )
+
+    selected_result = baseline_result if selected_variant == "baseline" else candidate_result
+
+    summary = {
+        "status": "completed",
+        "strategy_id": skill_id,
+        "strategy_name": f"通用回测比较 ({skill_id})",
+        "strategy_window": {"start_date": start_date, "end_date": end_date},
+        "dates_scanned": len(dates),
+        "dates_succeeded": selected_result.get("dates_succeeded", 0),
+        "dates_failed": selected_result.get("dates_failed", 0),
+        "total_recommendations": selected_result.get("total_recommendations", 0),
+        "total_elapsed_ms": int((time.perf_counter() - started_at) * 1000),
+        "labeled_count": selected_result.get("labeled_count", 0),
+        "baseline": {
+            "label": baseline_label,
+            "score_line": baseline_score_line,
+            "status": baseline_result.get("status"),
+            "total_recommendations": baseline_result.get("total_recommendations", 0),
+            "dates_succeeded": baseline_result.get("dates_succeeded", 0),
+            "aggregate_metrics": baseline_result.get("aggregate_metrics"),
+            "walk_forward": walk_baseline,
+            "time_split": time_split_baseline,
+        },
+        "candidate": {
+            "label": candidate_label,
+            "score_line": candidate_score_line,
+            "status": candidate_result.get("status"),
+            "total_recommendations": candidate_result.get("total_recommendations", 0),
+            "dates_succeeded": candidate_result.get("dates_succeeded", 0),
+            "aggregate_metrics": candidate_result.get("aggregate_metrics"),
+            "walk_forward": walk_candidate,
+            "time_split": time_split_candidate,
+        },
+        "comparison": {
+            "baseline_label": baseline_label,
+            "candidate_label": candidate_label,
+            "selected_variant": selected_variant,
+            "selected_variant_label": candidate_label if selected_variant == "candidate" else baseline_label,
+            "adoption_reason": adoption_reason,
+            "hypothesis": "降低评分线可以增加候选数量，但可能降低命中率。通过 walk-forward 验证评估 trade-off。",
+        },
+        "results": selected_result.get("results", []),
+        "temporal_consistency": selected_result.get("temporal_consistency"),
+    }
+
+    # 保存
+    _save_backtest_summary(db, f"{skill_id}_comparison", start_date, end_date, summary)
+    logger.info(
+        "回测比较完成: selected=%s baseline_recs=%d candidate_recs=%d elapsed=%dms",
+        selected_variant,
+        baseline_result.get("total_recommendations", 0),
+        candidate_result.get("total_recommendations", 0),
+        summary["total_elapsed_ms"],
+    )
+    return summary
+
+
+def _load_backtest_trades(
+    db: Session,
+    result: dict[str, Any],
+    start_date: str,
+    end_date: str,
+    run_mode: str,
+) -> list[dict[str, Any]]:
+    """从回测结果中加载交易记录（用于 walk_forward 分析）。"""
+    from app.models.tables import Recommendation, RecommendationOutcome, RecommendationRun
+    from app.services.outcome_service import (
+        is_trade_executed,
+        normalized_outcome_label,
+        resolved_trade_return,
+    )
+    from app.services.benchmark_service import compute_benchmark_return, get_benchmark_close_map
+
+    recs = db.scalars(
+        select(Recommendation)
+        .join(RecommendationRun, Recommendation.run_id == RecommendationRun.run_id)
+        .where(
+            RecommendationRun.trade_date >= start_date,
+            RecommendationRun.trade_date <= end_date,
+            RecommendationRun.run_mode == run_mode,
+        )
+    ).all()
+
+    rec_ids = [r.recommendation_id for r in recs]
+    if not rec_ids:
+        return []
+
+    outcomes_list = db.scalars(
+        select(RecommendationOutcome).where(
+            RecommendationOutcome.recommendation_id.in_(rec_ids)
+        )
+    ).all()
+    outcome_map = {o.recommendation_id: o for o in outcomes_list}
+
+    # 收集日期
+    all_dates: set[str] = set()
+    trades: list[dict[str, Any]] = []
+    for rec in recs:
+        outcome = outcome_map.get(rec.recommendation_id)
+        if outcome is None or not is_trade_executed(outcome):
+            continue
+        entry_date = outcome.entry_date or rec.trade_date
+        exit_date = outcome.exit_date or rec.trade_date
+        all_dates.add(entry_date)
+        all_dates.add(exit_date)
+
+    close_map = get_benchmark_close_map(db, list(all_dates)) if all_dates else {}
+
+    for rec in recs:
+        outcome = outcome_map.get(rec.recommendation_id)
+        if outcome is None or not is_trade_executed(outcome):
+            continue
+        executed_return = resolved_trade_return(outcome)
+        entry_date = outcome.entry_date or rec.trade_date
+        exit_date = outcome.exit_date or rec.trade_date
+        benchmark_ret = compute_benchmark_return(close_map, entry_date, exit_date)
+
+        trades.append({
+            "trade_date": str(rec.trade_date),
+            "code": str(rec.code),
+            "name": str(rec.name or rec.code),
+            "net_return_pct": float(executed_return),
+            "gross_return_pct": float(outcome.close_return or 0),
+            "achievable_return_pct": float(outcome.achievable_return or 0),
+            "morning_drawdown_pct": float(outcome.max_drawdown or 0),
+            "holding_days": float(outcome.holding_days or 1),
+            "benchmark_return_pct": benchmark_ret,
+            "accurate": bool(executed_return > 0),
+            "false_positive_reason": outcome.outcome_reason if executed_return <= 0 else None,
+            "resolved": True,
+        })
+
+    return trades
+
+
+def _build_backtest_walk_forward(
+    signal_dates: list[str],
+    trades: list[dict[str, Any]],
+    min_train_dates: int = 2,
+) -> dict[str, Any]:
+    """为回测交易构建 expanding window walk-forward 验证。
+
+    与 overnight_holding_service._build_walk_forward_analysis 逻辑一致。
+    """
+    if len(trades) < min_train_dates:
+        return {
+            "eligible": False,
+            "message": f"交易笔数不足 ({len(trades)} < {min_train_dates})",
+            "window_count": 0,
+            "test_aggregate": {},
+        }
+
+    # 按日期排序
+    date_order = sorted(set(t["trade_date"] for t in trades))
+    if len(date_order) < min_train_dates + 1:
+        return {
+            "eligible": False,
+            "message": f"交易日期数不足 ({len(date_order)} < {min_train_dates + 1})",
+            "window_count": 0,
+            "test_aggregate": {},
+        }
+
+    windows = []
+    for i in range(min_train_dates, len(date_order)):
+        train_end = date_order[i - 1]
+        test_start = date_order[i]
+        test_end = date_order[-1]
+
+        train_trades = [t for t in trades if t["trade_date"] <= train_end]
+        test_trades = [t for t in trades if t["trade_date"] >= test_start]
+
+        if len(test_trades) < 1:
+            continue
+
+        train_metrics = compute_full_metrics(train_trades) if train_trades else {}
+        test_metrics = compute_full_metrics(test_trades) if test_trades else {}
+
+        windows.append({
+            "train_end": train_end,
+            "test_start": test_start,
+            "test_end": test_end,
+            "train_count": len(train_trades),
+            "test_count": len(test_trades),
+            "train_accuracy": train_metrics.get("recommendation_accuracy", 0),
+            "test_accuracy": test_metrics.get("recommendation_accuracy", 0),
+            "train_avg_return": train_metrics.get("average_net_return", 0),
+            "test_avg_return": test_metrics.get("average_net_return", 0),
+            "train_drawdown": train_metrics.get("max_drawdown", 0),
+            "test_drawdown": test_metrics.get("max_drawdown", 0),
+        })
+
+    if not windows:
+        return {
+            "eligible": False,
+            "message": "无法构建任何验证窗口",
+            "window_count": 0,
+            "test_aggregate": {},
+        }
+
+    # 聚合所有测试集
+    all_test_trades = [t for t in trades if t["trade_date"] >= date_order[min_train_dates - 1]]
+    test_aggregate = compute_full_metrics(all_test_trades) if all_test_trades else {}
+
+    return {
+        "eligible": True,
+        "min_train_dates": min_train_dates,
+        "date_count": len(date_order),
+        "window_count": len(windows),
+        "windows": windows,
+        "test_aggregate": {
+            "trade_count": test_aggregate.get("trade_count", 0),
+            "recommendation_accuracy": test_aggregate.get("recommendation_accuracy", 0),
+            "average_net_return": test_aggregate.get("average_net_return", 0),
+            "max_drawdown": test_aggregate.get("max_drawdown", 0),
+            "profit_loss_ratio": test_aggregate.get("profit_loss_ratio", 0),
+            "sample_confidence": test_aggregate.get("sample_confidence", "low"),
+        },
+        "notes": [f"滚动验证按最少 {min_train_dates} 个训练信号日构建 expanding windows。"],
+    }
+
+
+def _choose_backtest_variant(
+    baseline_result: dict[str, Any],
+    candidate_result: dict[str, Any],
+    walk_baseline: dict[str, Any],
+    walk_candidate: dict[str, Any],
+) -> tuple[str, str]:
+    """选择更优的回测版本。
+
+    决策层次（与 overnight_holding_service._choose_variant 一致）：
+    1. 优先 walk_forward 测试集结果（样本外）
+    2. 其次全量指标
+    3. 置信度调整
+    """
+    # 检查状态
+    baseline_ok = baseline_result.get("status") == "completed"
+    candidate_ok = candidate_result.get("status") == "completed"
+    if not baseline_ok and not candidate_ok:
+        return "baseline", "两个版本均未完成，默认选 baseline"
+    if not candidate_ok:
+        return "baseline", "候选版未完成，选基线版"
+    if not baseline_ok:
+        return "candidate", "基线版未完成，选候选版"
+
+    baseline_metrics = baseline_result.get("aggregate_metrics") or {}
+    candidate_metrics = candidate_result.get("aggregate_metrics") or {}
+
+    bt_count = baseline_metrics.get("trade_count", 0)
+    cd_count = candidate_metrics.get("trade_count", 0)
+
+    # 优先使用 walk_forward
+    wf_baseline = walk_baseline.get("test_aggregate") or {}
+    wf_candidate = walk_candidate.get("test_aggregate") or {}
+
+    wf_base_acc = wf_baseline.get("recommendation_accuracy", 0)
+    wf_cand_acc = wf_candidate.get("recommendation_accuracy", 0)
+    wf_base_count = wf_baseline.get("trade_count", 0)
+    wf_cand_count = wf_candidate.get("trade_count", 0)
+
+    use_walk_forward = walk_baseline.get("eligible") and walk_candidate.get("eligible") \
+                       and wf_base_count >= 3 and wf_cand_count >= 3
+
+    if use_walk_forward:
+        if wf_cand_acc > wf_base_acc + 0.03:
+            return "candidate", (
+                f"滚动样本外验证: 候选版准确率 {wf_cand_acc:.1%} > 基线版 {wf_base_acc:.1%}"
+                f"（样本: 候选{wf_cand_count}笔 vs 基线{wf_base_count}笔）"
+            )
+        if wf_base_acc > wf_cand_acc + 0.03:
+            return "baseline", (
+                f"滚动样本外验证: 基线版准确率 {wf_base_acc:.1%} > 候选版 {wf_cand_acc:.1%}"
+                f"（样本: 基线{wf_base_count}笔 vs 候选{wf_cand_count}笔）"
+            )
+
+    # 回退到全量指标
+    base_acc = baseline_metrics.get("recommendation_accuracy", 0)
+    cand_acc = candidate_metrics.get("recommendation_accuracy", 0)
+    base_avg = baseline_metrics.get("average_net_return", 0)
+    cand_avg = candidate_metrics.get("average_net_return", 0)
+
+    if cand_acc > base_acc + 0.02 and cand_avg >= base_avg - 0.3:
+        return "candidate", (
+            f"全量指标: 候选版准确率 {cand_acc:.1%} > 基线版 {base_acc:.1%}"
+            f"（收益 {cand_avg:.2f}% vs {base_avg:.2f}%）"
+        )
+    if base_acc > cand_acc + 0.02 or base_avg > cand_avg + 0.5:
+        return "baseline", (
+            f"全量指标: 基线版更优"
+            f"（准确率 {base_acc:.1%} vs {cand_acc:.1%}, 收益 {base_avg:.2f}% vs {cand_avg:.2f}%）"
+        )
+
+    # 平局时看交易量
+    if cd_count >= bt_count * 1.5 and cand_acc >= base_acc - 0.03:
+        return "candidate", (
+            f"候选版提供更多候选 ({cd_count} vs {bt_count})，准确率不显著低于基线版"
+        )
+    return "baseline", "基线版与候选版差异不显著，默认选基线版"

@@ -13,6 +13,7 @@ from app.services.cost_service import (
     system_health,
     upsert_scheduled_task,
 )
+from app.services.data_health_service import diagnose_all
 from app.services.data_source_health import active_alerts, readiness_check
 from app.services.model_router_service import (
     create_model_route,
@@ -66,6 +67,29 @@ def get_alerts(db: Session = Depends(get_db)):
 def get_readiness(db: Session = Depends(get_db)):
     """系统就绪检查。"""
     return readiness_check(db)
+
+
+@router.get("/data-health")
+def get_data_health(db: Session = Depends(get_db)):
+    """数据质量诊断：各表覆盖情况、滞后天数、健康评分、问题列表。"""
+    return diagnose_all(db)
+
+
+@router.get("/temporal-consistency")
+def get_temporal_consistency(
+    run_mode: str = "formal",
+    db: Session = Depends(get_db),
+):
+    """时态一致性检查：验证推荐/回测数据没有时间穿越问题。
+
+    检查维度：
+    - 推荐日期 vs 日K线是否存在
+    - 特征快照是否引用未来日期
+    - Outcome 标注日期 vs 推荐日期（入场必须在推荐日之后）
+    - 已通过 backtest_runs 中所有回测的时态验证
+    """
+    from app.services.temporal_consistency import check_run_temporal_consistency
+    return check_run_temporal_consistency(db, run_mode=run_mode)
 
 
 @router.get("/model-routes")

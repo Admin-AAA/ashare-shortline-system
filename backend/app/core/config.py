@@ -8,10 +8,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "AShare Shortline System"
     database_url: str = "mysql+pymysql://aowang:1279990918@139.196.242.53:4407/ashare_workbench?charset=utf8mb4"
-    data_provider: str = "multi"
+    data_provider: str = "tushare"
     tushare_token: str = "f8b05f8ee54f468220f2569afe56b4c027f1d388d164899339d394ad"
     tushare_rate_limit_per_minute: int = 0  # 0 = 不限速（自建服务器）
-    quote_sources: str = "thsdk,eastmoney,akshare,tencent,sina"
+    quote_sources: str = "tushare"
     kline_sources: str = "tushare"
     market_scan_size: int = 5200
     market_candidate_count: int = 0  # 0 = 不在首段召回前硬截断，交给宽召回窗口与后续精排控制
@@ -32,10 +32,6 @@ class Settings(BaseSettings):
     market_pool_min_source_count: int = 2
     market_request_timeout_seconds: float = 10.0
     script_timeout_seconds: int = 7200  # subprocess 调用回填脚本的超时；0 表示不限时
-    thsdk_batch_size: int = 600
-    thsdk_username: str = ""
-    thsdk_password: str = ""
-    thsdk_mac: str = ""
     agent_skill_runtime: str = "llm"
     agent_skill_api_key: str = ""
     agent_skill_base_url: str = "https://api.deepseek.com"
@@ -53,7 +49,7 @@ class Settings(BaseSettings):
     concept_sector_sources: str = "tushare"
     capital_flow_sources: str = "tushare"
     dragon_tiger_sources: str = "tushare"
-    news_sources: str = "eastmoney"
+    news_sources: str = ""
     limit_up_cache_ttl_seconds: int = 3600
     concept_sector_cache_ttl_seconds: int = 3600
     capital_flow_cache_ttl_seconds: int = 7200

@@ -1,18 +1,41 @@
+import { useEffect, useState } from "react";
 import BacktestPanel from "../../components/BacktestPanel";
+import BacktestEvaluationPanel from "./components/BacktestEvaluationPanel";
+import DataHealthDetailPanel from "./components/DataHealthDetailPanel";
 import DataHealthPanel from "./components/DataHealthPanel";
 import DragonCandidatesPanel from "./components/DragonCandidatesPanel";
 import MarketTemperaturePanel from "./components/MarketTemperaturePanel";
+import MetricsPanel from "./components/MetricsPanel";
 import RiskRadarPanel from "./components/RiskRadarPanel";
 import RunStatusPanel from "./components/RunStatusPanel";
+import TemporalConsistencyPanel from "./components/TemporalConsistencyPanel";
 import ValidationPanel from "./components/ValidationPanel";
 import { useDashboardViewModel } from "./hooks/useDashboardViewModel";
+import { api } from "../../api/client";
 import type { CockpitSection } from "../../app/nav";
-import type { CockpitRecommendation, DashboardOverview } from "../../types";
+import type { CockpitRecommendation, DashboardOverview, MetricsOverview } from "../../types";
 
 type DashboardSection = Exclude<CockpitSection, "control">;
 
 export default function DashboardPage({ section }: { section: DashboardSection }) {
   const { data, loading, error, refresh } = useDashboardViewModel();
+  const [metrics, setMetrics] = useState<MetricsOverview | null>(null);
+  const [metricsLoading, setMetricsLoading] = useState(false);
+  const [metricsError, setMetricsError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setMetricsLoading(true);
+    setMetricsError("");
+    api.metricsOverview("formal").then((m) => {
+      if (!cancelled) setMetrics(m);
+    }).catch((err) => {
+      if (!cancelled) setMetricsError(err.message);
+    }).finally(() => {
+      if (!cancelled) setMetricsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   if (loading) return <div className="cockpit-panel loading-state">正在加载驾驶舱数据</div>;
   if (error) {
@@ -35,6 +58,7 @@ export default function DashboardPage({ section }: { section: DashboardSection }
   return (
     <div className="dashboard-grid">
       <MarketTemperaturePanel market={data.market} />
+      <MetricsPanel metrics={metrics ?? ({} as MetricsOverview)} loading={metricsLoading} />
       <DragonCandidatesPanel items={data.recommendations} />
       <div className="side-stack">
         <RiskRadarPanel radar={data.risk_radar} />
@@ -136,6 +160,10 @@ function DataWorkspace({ data }: { data: DashboardOverview }) {
           </div>
         </section>
       </div>
+      <div className="focus-grid">
+        <DataHealthDetailPanel />
+        <TemporalConsistencyPanel />
+      </div>
       <StatusStream title="数据池消息" items={messages} empty="暂无数据池消息" />
       <StatusStream title="缺口样例" items={examples} empty="暂无缺口样例" />
     </div>
@@ -209,7 +237,9 @@ function ValidationWorkspace({ data }: { data: DashboardOverview }) {
         </section>
       </div>
       <StatusStream title="验证消息" items={alerts?.messages ?? []} empty="暂无验证消息" />
+      <TemporalConsistencyPanel />
       <BacktestPanel />
+      <BacktestEvaluationPanel />
     </div>
   );
 }

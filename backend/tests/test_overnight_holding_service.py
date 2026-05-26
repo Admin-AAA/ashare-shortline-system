@@ -6,6 +6,7 @@ from app.db.session import SessionLocal
 from app.models.tables import DailyKbar, Stock
 from app.services.overnight_holding_service import (
     BASELINE_VARIANT,
+    CANDIDATE_VARIANT,
     _benchmark_required_dates,
     _choose_variant,
     _build_data_coverage,
@@ -161,9 +162,48 @@ def test_locate_entry_signal_uses_tail_window_vwap_rules():
     )
 
     assert signal is not None
-    assert signal["entry_time"] == "2026-05-20 14:31:00"
+    assert signal["entry_time"] == "2026-05-20 14:30:00"
     assert signal["conditions"]["above_vwap_ratio"] == pytest.approx(1.0, abs=0.001)
-    assert signal["conditions"]["tail_vwap_gap_bps"] == pytest.approx(79.0, abs=1.0)
+    # 计算：尾段首分钟累积VWAP≈10.196，low=10.25，(10.25/10.196-1)*10000≈53bp
+    assert signal["conditions"]["tail_vwap_gap_bps"] == pytest.approx(53.0, abs=5.0)
+
+
+def test_locate_entry_signal_regression_new_high_tracking():
+    """回归验证：修复后盘中新高追踪不再被尾盘起始边界截断。
+
+    旧 bug：idx < tail_start_index 的 continue 跳过导致全天未记录新高，
+    last_new_high_index 为 None，全天信号被跳过，交易数从9→1。
+    """
+    candidate = {
+        "code": "001234", "name": "测试", "industry": "银行",
+        "trade_date": "2026-05-20", "avg_prev5_volume": 5000.0,
+        "prev_close": 10.0, "turnover_rate": 6.0, "total_mv_yi": 120.0,
+        "recent_limit_up_count": 0, "daily_volume": 6000.0,
+    }
+    # 构造：09:35创全天新高(10.60)，14:30满足VWAP条件且pct=5%在范围内
+    # 旧代码因last_new_high_index为None→跳过全天信号
+    minutes = [
+        {"trade_time": "2026-05-20 09:35:00", "close": 10.40, "high": 10.60, "low": 10.35, "volume": 2000, "amount": 2080000},
+        {"trade_time": "2026-05-20 14:30:00", "close": 10.50, "high": 10.52, "low": 10.48, "volume": 3000, "amount": 3150000},
+        {"trade_time": "2026-05-20 14:31:00", "close": 10.52, "high": 10.53, "low": 10.50, "volume": 2000, "amount": 2104000},
+    ]
+    benchmark_minutes = [
+        {"trade_time": "2026-05-20 09:35:00", "close": 100.0, "pre_close": 100.0},
+        {"trade_time": "2026-05-20 14:30:00", "close": 100.5, "pre_close": 100.0},
+    ]
+
+    signal = _locate_entry_signal(
+        candidate=candidate,
+        minutes=minutes,
+        benchmark_minutes=benchmark_minutes,
+        variant=BASELINE_VARIANT,
+    )
+
+    assert signal is not None, "修复后盘中新高应被正确追踪，信号不丢失"
+    assert signal["entry_time"] == "2026-05-20 14:30:00"
+    # tail_new_high_retest_minutes = idx(14:30) - last_new_high_index(09:35) = 1 - 0 = 1
+    assert signal["conditions"]["tail_new_high_retest_minutes"] == 1
+    assert signal["conditions"]["above_vwap_ratio"] == 1.0
 
 
 def test_build_data_coverage_summarizes_minute_gaps():
@@ -268,6 +308,7 @@ def test_build_walk_forward_analysis_expands_all_eligible_windows():
 def test_choose_variant_prefers_walk_forward_metrics_over_single_split():
     comparisons = {
         "baseline": {
+            "variant": BASELINE_VARIANT,
             "split_metrics": {
                 "test": {
                     "trade_count": 2,
@@ -286,6 +327,7 @@ def test_choose_variant_prefers_walk_forward_metrics_over_single_split():
             },
         },
         "candidate": {
+            "variant": CANDIDATE_VARIANT,
             "split_metrics": {
                 "test": {
                     "trade_count": 2,
@@ -315,6 +357,7 @@ def test_choose_variant_prefers_walk_forward_metrics_over_single_split():
 def test_choose_variant_falls_back_to_single_split_when_walk_forward_has_no_comparable_trades():
     comparisons = {
         "baseline": {
+            "variant": BASELINE_VARIANT,
             "split_metrics": {
                 "test": {
                     "trade_count": 3,
@@ -333,6 +376,7 @@ def test_choose_variant_falls_back_to_single_split_when_walk_forward_has_no_comp
             },
         },
         "candidate": {
+            "variant": CANDIDATE_VARIANT,
             "split_metrics": {
                 "test": {
                     "trade_count": 3,

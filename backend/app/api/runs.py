@@ -36,6 +36,43 @@ async def create_run(payload: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.post("/backtest/comparison")
+def create_backtest_comparison(payload: dict, db: Session = Depends(get_db)):
+    """执行 baseline vs candidate 双版本回测对比（含 walk-forward + time-split）。
+
+    请求体:
+        start_date: str
+        end_date: str
+        run_mode: str (默认 experiment)
+        horizon_days: int (默认 5)
+        baseline_score_line: float (默认 72.0)
+        candidate_score_line: float (默认 65.0)
+    """
+    from app.services.backtest_service import run_backtest_comparison
+
+    start_date = payload.get("start_date")
+    end_date = payload.get("end_date")
+    if not start_date or not end_date:
+        raise HTTPException(status_code=400, detail="start_date and end_date are required")
+    if start_date > end_date:
+        raise HTTPException(status_code=400, detail="start_date must be <= end_date")
+    run_mode = payload.get("run_mode", "experiment")
+    if run_mode not in {"formal", "experiment"}:
+        raise HTTPException(status_code=400, detail="run_mode must be formal or experiment")
+    horizon_days = int(payload.get("horizon_days", 5))
+    baseline_score_line = float(payload.get("baseline_score_line", 72.0))
+    candidate_score_line = float(payload.get("candidate_score_line", 65.0))
+    try:
+        return run_backtest_comparison(
+            db, start_date, end_date, run_mode, horizon_days,
+            baseline_score_line=baseline_score_line,
+            candidate_score_line=candidate_score_line,
+        )
+    except Exception as exc:
+        logger.exception("backtest comparison failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.post("/backtest")
 def create_backtest(payload: dict, db: Session = Depends(get_db)):
     """在历史日期区间上执行回测。
@@ -66,10 +103,13 @@ def create_backtest(payload: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="horizon_days must be between 1 and 20")
     score_line = float(payload.get("score_line", 72.0))
     strategy_id = str(payload.get("strategy_id") or "").strip()
+    skill_id = str(payload.get("skill_id") or "").strip() or None
     try:
         if strategy_id == OVERNIGHT_STRATEGY_ID:
             return run_overnight_holding_backtest(db, start_date, end_date)
-        return run_backtest(db, start_date, end_date, run_mode, horizon_days, score_line)
+        return run_backtest(
+            db, start_date, end_date, run_mode, horizon_days, score_line, skill_id=skill_id,
+        )
     except Exception as exc:
         logger.exception("backtest failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc

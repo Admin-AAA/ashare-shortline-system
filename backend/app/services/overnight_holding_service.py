@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import statistics
 import uuid
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -15,13 +14,24 @@ from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.orm import Session
 
 from app.models.tables import BacktestRun, DailyKbar, MinuteKbar, Stock
+from app.services.evaluation_metrics import (
+    MIN_SIGNAL_SAMPLE as _SHARED_MIN_SAMPLE,
+    compute_full_metrics,
+    _empty_metrics as _shared_empty_metrics,
+)
 from app.services.tushare_client import (
     fetch_minute_kbars,
     fetch_recent_index_minute_kbars,
     get_pro,
 )
+from app.services.temporal_consistency import check_run_temporal_consistency, check_backtest_temporal_consistency
 
 logger = logging.getLogger(__name__)
+
+# ── 分钟数据源优先级 ──
+# 15min 优先（全市场已回填），1min 兜底（历史存量），FORCE_LOCAL 关闭 Tushare API 回退
+_MINUTE_FREQ_PRIORITY: list[str] = ["15min", "1min"]
+_FORCE_LOCAL_ONLY: bool = True  # 回测/信号日扫描时只读本地 DB，不调 Tushare
 
 STRATEGY_ID = "overnight-holding-method"
 STRATEGY_NAME = "隔夜持股法"
@@ -31,28 +41,34 @@ TAIL_START_TIME = "14:30:00"
 MORNING_EXIT_TIME = "09:35:00"
 LIMIT_UP_PCT = 0.10
 VWAP_HOLD_TOLERANCE_BPS = 12.0
-TAIL_VWAP_MAX_GAP_BPS = 170.0
-TAIL_RETEST_WINDOW_MINUTES = 8
+TAIL_VWAP_MAX_GAP_BPS = 300.0
+TAIL_RETEST_WINDOW_MINUTES = 15
 SHRINK_LIMIT_VOLUME_RATIO = 0.85
-DEFAULT_MIN_ABOVE_VWAP_RATIO = 0.86
-MIN_PCT = 3.0
-MAX_PCT = 5.0
-MIN_TURNOVER = 5.0
-MAX_TURNOVER = 10.0
-MIN_MARKET_CAP_YI = 50.0
-MAX_MARKET_CAP_YI = 200.0
-MIN_INTRADAY_VOLUME_RATIO = 1.0
-MIN_SIGNAL_SAMPLE = 30
+DEFAULT_MIN_ABOVE_VWAP_RATIO = 0.70
+MIN_PCT = 2.5
+MAX_PCT = 5.5
+MIN_TURNOVER = 3.0
+MAX_TURNOVER = 25.0
+MIN_MARKET_CAP_YI = 30.0
+MAX_MARKET_CAP_YI = 500.0
+MIN_INTRADAY_VOLUME_RATIO = 0.6
 WALK_FORWARD_MIN_TRAIN_DATES = 2
+MIN_RECENT_LIMIT_UP_COUNT = 0  # 信号条件本身做质量守门；涨停预过滤交给信号层
 
 
 @dataclass(frozen=True)
 class CostAssumption:
-    buy_commission_bps: float = 2.0
-    buy_slippage_bps: float = 5.0
-    sell_commission_bps: float = 2.0
-    sell_stamp_tax_bps: float = 5.0
-    sell_slippage_bps: float = 5.0
+    """交易成本假设（A股标准费率）。
+
+    单边成本（买入）：佣金0.03% + 滑点0.1% = 0.13%
+    单边成本（卖出）：印花税0.05% + 佣金0.03% + 滑点0.1% = 0.18%
+    往返成本总计：0.13% + 0.18% = 0.31%
+    """
+    buy_commission_bps: float = 3.0     # 佣金 0.03%
+    buy_slippage_bps: float = 10.0      # 滑点 0.1%
+    sell_commission_bps: float = 3.0    # 佣金 0.03%
+    sell_stamp_tax_bps: float = 5.0    # 印花税 0.05% (仅卖出)
+    sell_slippage_bps: float = 10.0    # 滑点 0.1%
 
     @property
     def round_trip_cost_bps(self) -> float:
@@ -70,6 +86,7 @@ class OvernightVariant:
     name: str
     label: str
     min_relative_strength_pct: float
+    exit_time: str = MORNING_EXIT_TIME
 
 
 BASELINE_VARIANT = OvernightVariant(
@@ -82,6 +99,13 @@ CANDIDATE_VARIANT = OvernightVariant(
     name="candidate",
     label="增强版",
     min_relative_strength_pct=0.8,
+)
+
+DELAYED_EXIT_VARIANT = OvernightVariant(
+    name="delayed_exit",
+    label="延迟退出版",
+    min_relative_strength_pct=0.8,
+    exit_time="09:45:00",
 )
 
 
@@ -135,7 +159,7 @@ def run_overnight_holding_backtest(
     minute_inventory = _local_minute_inventory(db)
 
     comparisons: dict[str, dict[str, Any]] = {}
-    for variant in (BASELINE_VARIANT, CANDIDATE_VARIANT):
+    for variant in (BASELINE_VARIANT, CANDIDATE_VARIANT, DELAYED_EXIT_VARIANT):
         comparisons[variant.name] = _simulate_variant(
             db=db,
             signal_dates=signal_dates,
@@ -178,17 +202,20 @@ def run_overnight_holding_backtest(
         "comparison": {
             "baseline": comparisons["baseline"]["metrics"],
             "candidate": comparisons["candidate"]["metrics"],
+            "delayed_exit": comparisons["delayed_exit"]["metrics"],
             "selected_variant": adopted_variant,
             "selected_variant_label": comparisons[adopted_variant]["variant"].label,
             "adoption_reason": adoption_reason,
-            "hypothesis": "把“强于大盘”从弱定义（仅跑赢沪深300）收紧为强定义（至少领先沪深300 0.8 个百分点）。",
+            "hypothesis": "增强版：把“强于大盘”从弱定义（仅跑赢沪深300）收紧为强定义（至少领先沪深300 0.8 个百分点）。延迟退出版：次日早盘从09:35推迟到09:45卖出，避开开盘初期流动性冲击。",
             "splits": {
                 "baseline": comparisons["baseline"]["split_metrics"],
                 "candidate": comparisons["candidate"]["split_metrics"],
+                "delayed_exit": comparisons["delayed_exit"]["split_metrics"],
             },
             "walk_forward": {
                 "baseline": comparisons["baseline"]["walk_forward"],
                 "candidate": comparisons["candidate"]["walk_forward"],
+                "delayed_exit": comparisons["delayed_exit"]["walk_forward"],
             },
         },
         "data_coverage": _build_data_coverage(
@@ -197,6 +224,7 @@ def run_overnight_holding_backtest(
             minute_inventory,
             minute_source_trace,
         ),
+        "temporal_consistency": _run_overnight_temporal_check(db, signal_dates),
         "recommendation_records": _recommendation_records(selected["trades"]),
         "trade_samples": selected["trade_samples"],
         "false_positive_samples": selected["false_positive_samples"],
@@ -273,22 +301,25 @@ def _load_daily_basic_map(
 ) -> dict[str, dict[str, float]]:
     if trade_date in cache:
         return cache[trade_date]
-    pro = get_pro()
-    df = pro.daily_basic(
-        trade_date=trade_date.replace("-", ""),
-        fields="ts_code,trade_date,turnover_rate,total_mv,circ_mv",
-    )
     mapping: dict[str, dict[str, float]] = {}
-    if df is not None and not df.empty:
-        for _, row in df.iterrows():
-            code = str(row.get("ts_code", "")).split(".")[0]
-            if len(code) != 6:
-                continue
-            mapping[code] = {
-                "turnover_rate": _num(row.get("turnover_rate")),
-                "total_mv_yi": round(_num(row.get("total_mv")) / 10000.0, 3),
-                "circ_mv_yi": round(_num(row.get("circ_mv")) / 10000.0, 3),
-            }
+    try:
+        pro = get_pro()
+        df = pro.daily_basic(
+            trade_date=trade_date.replace("-", ""),
+            fields="ts_code,trade_date,turnover_rate,total_mv,circ_mv",
+        )
+        if df is not None and not df.empty:
+            for _, row in df.iterrows():
+                code = str(row.get("ts_code", "")).split(".")[0]
+                if len(code) != 6:
+                    continue
+                mapping[code] = {
+                    "turnover_rate": _num(row.get("turnover_rate")),
+                    "total_mv_yi": round(_num(row.get("total_mv")) / 10000.0, 3),
+                    "circ_mv_yi": round(_num(row.get("circ_mv")) / 10000.0, 3),
+                }
+    except Exception as e:
+        logger.warning("daily_basic 获取失败 %s: %s — 降级跳过换手率/市值过滤", trade_date, e)
     cache[trade_date] = mapping
     return mapping
 
@@ -317,12 +348,14 @@ def _simulate_variant(
     for trade_date in signal_dates:
         basic_map = _load_daily_basic_map(trade_date, daily_basic_cache)
         daily_rows = daily_by_date.get(trade_date, {})
+        filter_trace: dict[str, int] = {}
         candidates = _daily_candidates(
             trade_date=trade_date,
             daily_rows=daily_rows,
             history_by_code=history_by_code,
             stock_meta=stock_meta,
             daily_basic_map=basic_map,
+            filter_trace=filter_trace,
         )
         if not candidates:
             date_summaries.append(
@@ -333,6 +366,7 @@ def _simulate_variant(
                     "signal_count": 0,
                     "resolved_trade_count": 0,
                     "reason": "日线过滤后无候选",
+                    "filter_trace": filter_trace,
                 }
             )
             continue
@@ -370,6 +404,7 @@ def _simulate_variant(
                 minute_source_trace=minute_source_trace,
                 signal=signal,
                 cost=cost,
+                variant=variant,
             )
             if trade.get("resolved"):
                 trades.append(trade)
@@ -389,6 +424,7 @@ def _simulate_variant(
                 "resolved_trade_count": len(resolved_trades),
                 "unresolved_trade_count": unresolved_count,
                 "missing_minute_codes": missing_minute_codes,
+                "filter_trace": filter_trace,
                 "recommendation_accuracy": round(
                     sum(1 for item in resolved_trades if item["accurate"]) / len(resolved_trades),
                     3,
@@ -425,44 +461,69 @@ def _daily_candidates(
     history_by_code: dict[str, list[DailyKbar]],
     stock_meta: dict[str, dict[str, Any]],
     daily_basic_map: dict[str, dict[str, float]],
+    filter_trace: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
+    if filter_trace is None:
+        filter_trace = {}
+    trace = filter_trace
+    trace.setdefault("total_raw", len(daily_rows))
+    trace.setdefault("filtered_main_board", 0)
+    trace.setdefault("filtered_pct_range", 0)
+    trace.setdefault("filtered_turnover", 0)
+    trace.setdefault("filtered_market_cap", 0)
+    trace.setdefault("filtered_hist_idx", 0)
+    trace.setdefault("filtered_limit_up_count", 0)
+    trace.setdefault("filtered_avg_volume", 0)
+    trace.setdefault("passed_candidates", 0)
+
     result: list[dict[str, Any]] = []
     for code, bar in daily_rows.items():
         meta = stock_meta.get(code) or {}
         if not _is_main_board(code) or bool(meta.get("is_st")):
+            trace["filtered_main_board"] += 1
             continue
         pct = _num(bar.pct_chg)
         if pct < MIN_PCT or pct > MAX_PCT:
+            trace["filtered_pct_range"] += 1
             continue
         basic = daily_basic_map.get(code)
-        if basic is None:
-            continue
-        turnover_rate = _num(bar.turnover_rate, _num(basic.get("turnover_rate")))
-        if turnover_rate < MIN_TURNOVER or turnover_rate > MAX_TURNOVER:
-            continue
-        total_mv_yi = _num(basic.get("total_mv_yi"))
-        if total_mv_yi < MIN_MARKET_CAP_YI or total_mv_yi > MAX_MARKET_CAP_YI:
-            continue
+        # daily_basic 不可用时降级：换手率过滤放宽（本地日K数据通常缺 turnover_rate）
+        # 市值过滤因无法本地计算而跳过，避免因 Tushare 代理超时导致全天候选清零
+        turnover_rate = _num(bar.turnover_rate, _num(basic.get("turnover_rate") if basic else None))
+        if basic is not None:
+            if turnover_rate < MIN_TURNOVER or turnover_rate > MAX_TURNOVER:
+                trace["filtered_turnover"] += 1
+                continue
+            total_mv_yi = _num(basic.get("total_mv_yi"))
+            if total_mv_yi < MIN_MARKET_CAP_YI or total_mv_yi > MAX_MARKET_CAP_YI:
+                trace["filtered_market_cap"] += 1
+                continue
+        else:
+            total_mv_yi = 0.0  # 占位，不参与过滤
 
         history = history_by_code.get(code) or []
         hist_idx = next((idx for idx, item in enumerate(history) if item.trade_date == trade_date), -1)
         if hist_idx <= 0:
+            trace["filtered_hist_idx"] += 1
             continue
         recent_limit_up_count = sum(
             1 for item in history[max(0, hist_idx - 20) : hist_idx] if _is_limit_up_bar(item)
         )
-        if recent_limit_up_count <= 0:
+        if recent_limit_up_count < MIN_RECENT_LIMIT_UP_COUNT:
+            trace["filtered_limit_up_count"] += 1
             continue
 
         recent_volumes = [_num(item.volume) for item in history[max(0, hist_idx - 5) : hist_idx] if _num(item.volume) > 0]
         avg_prev5_volume = sum(recent_volumes) / len(recent_volumes) if recent_volumes else 0.0
         if avg_prev5_volume <= 0:
+            trace["filtered_avg_volume"] += 1
             continue
 
         prev_close = _num(history[hist_idx - 1].close)
         if prev_close <= 0:
             continue
 
+        trace["passed_candidates"] += 1
         result.append(
             {
                 "code": code,
@@ -521,10 +582,10 @@ def _locate_entry_signal(
         if idx >= tail_start_index and close_price >= vwap * (1 - VWAP_HOLD_TOLERANCE_BPS / 10000.0):
             tail_above_vwap_count += 1
 
-        if idx < tail_start_index or last_new_high_index is None:
+        if last_new_high_index is None:
             continue
-        if idx - last_new_high_index > TAIL_RETEST_WINDOW_MINUTES:
-            continue
+        # 修复：不再要求尾盘内必须有新高，只要日内有过新高即可。
+        # 原逻辑 idx < tail_start_index 跳过导致全天有新高但不在尾盘的被排除。
 
         progress = (idx + 1) / max(1, len(minutes))
         full_day_volume_est = cumulative_volume / max(progress, 0.05)
@@ -592,6 +653,7 @@ def _resolve_exit(
     minute_source_trace: list[dict[str, Any]] | None,
     signal: dict[str, Any],
     cost: CostAssumption,
+    variant: OvernightVariant = BASELINE_VARIANT,
 ) -> dict[str, Any]:
     code = str(signal["code"])
     history = history_by_code.get(code) or []
@@ -621,7 +683,7 @@ def _resolve_exit(
 
         exit_daily_bar = bar
         minutes = _load_stock_minutes(db, minute_cache, code, str(bar.trade_date), minute_source_trace)
-        exit_row = _minute_at_or_after(minutes, MORNING_EXIT_TIME)
+        exit_row = _minute_at_or_after(minutes, variant.exit_time)
         if exit_row is None and minutes:
             exit_row = minutes[0]
         exit_reason = "next_morning_exit" if next_idx == hist_idx + 1 else "deferred_after_limit_up"
@@ -630,7 +692,7 @@ def _resolve_exit(
     if exit_daily_bar is None or exit_row is None:
         return {**signal, "resolved": False, "reason": "missing_exit_minute"}
 
-    benchmark_exit_row = _minute_at_or_after(benchmark_by_date.get(str(exit_daily_bar.trade_date)) or [], MORNING_EXIT_TIME)
+    benchmark_exit_row = _minute_at_or_after(benchmark_by_date.get(str(exit_daily_bar.trade_date)) or [], variant.exit_time)
     benchmark_entry_row = _benchmark_row_for_entry(benchmark_by_date.get(signal["trade_date"]) or [], signal["entry_time"])
     benchmark_return_pct = 0.0
     if benchmark_entry_row and benchmark_exit_row:
@@ -671,10 +733,24 @@ def _resolve_exit(
     }
 
 
-def _build_split_metrics(signal_dates: list[str], trades: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _build_split_metrics(
+    signal_dates: list[str],
+    trades: list[dict[str, Any]],
+    train_ratio: float = 0.6,
+) -> dict[str, dict[str, Any]]:
+    """按时间切分训练集/测试集。
+
+    与 _build_walk_forward_analysis 互补：
+    - walk-forward: 多个 expanding window 测试稳定性
+    - time-split: 单一固定比例切分，更简洁的 train vs test 对比
+    """
     if not signal_dates:
-        return {"train": _empty_metrics(), "test": _empty_metrics()}
-    split_index = max(1, int(len(signal_dates) * 0.6))
+        return {
+            "train": _empty_metrics(),
+            "test": _empty_metrics(),
+            "train_ratio": train_ratio,
+        }
+    split_index = max(1, int(len(signal_dates) * train_ratio))
     if split_index >= len(signal_dates):
         split_index = max(1, len(signal_dates) - 1)
     train_dates = set(signal_dates[:split_index])
@@ -684,70 +760,23 @@ def _build_split_metrics(signal_dates: list[str], trades: list[dict[str, Any]]) 
     return {
         "train": _build_metrics(train_trades),
         "test": _build_metrics(test_trades),
+        "train_ratio": train_ratio,
+        "train_date_range": {
+            "start": signal_dates[0],
+            "end": signal_dates[split_index - 1],
+        },
+        "test_date_range": {
+            "start": signal_dates[split_index],
+            "end": signal_dates[-1],
+        },
+        "train_trade_count": len(train_trades),
+        "test_trade_count": len(test_trades),
     }
 
 
 def _build_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
-    resolved = [item for item in trades if item.get("resolved")]
-    returns = [float(item["net_return_pct"]) for item in resolved]
-    gross_returns = [float(item.get("gross_return_pct") or 0.0) for item in resolved]
-    achievable_returns = [float(item.get("achievable_return_pct") or item.get("gross_return_pct") or 0.0) for item in resolved]
-    trade_drawdowns = [float(item.get("morning_drawdown_pct") or 0.0) for item in resolved]
-    holding_days = [float(item.get("holding_days") or 1.0) for item in resolved]
-    benchmark_returns = [float(item.get("benchmark_return_pct") or 0.0) for item in resolved]
-    accurate_count = sum(1 for item in resolved if item.get("accurate"))
-    trade_count = len(resolved)
-    avg_return = round(sum(returns) / trade_count, 3) if trade_count else 0.0
-    median_return = round(statistics.median(returns), 3) if returns else 0.0
-    wins = [item for item in resolved if float(item["net_return_pct"]) > 0]
-    losses = [item for item in resolved if float(item["net_return_pct"]) <= 0]
-    avg_win = sum(float(item["net_return_pct"]) for item in wins) / len(wins) if wins else 0.0
-    avg_loss = sum(float(item["net_return_pct"]) for item in losses) / len(losses) if losses else 0.0
-    profit_loss_ratio = round(avg_win / max(abs(avg_loss), 0.001), 3) if wins else 0.0
-    profit_factor = round(
-        sum(float(item["net_return_pct"]) for item in wins) / max(abs(sum(float(item["net_return_pct"]) for item in losses)), 0.001),
-        3,
-    ) if wins else 0.0
-    positive_month_ratio = _positive_month_ratio(resolved)
-    portfolio_max_drawdown = _equity_max_drawdown(returns)
-    strategy_cum = _compound_return(returns)
-    benchmark_cum = _compound_return(benchmark_returns)
-    false_positive_notes = _false_positive_notes(resolved)
-    accuracy = round(accurate_count / trade_count, 3) if trade_count else 0.0
-    confidence = "low" if trade_count < MIN_SIGNAL_SAMPLE else "normal"
-    return {
-        "total_recommendations": trade_count,
-        "trade_count": trade_count,
-        "triggered_count": trade_count,
-        "labeled_count": trade_count,
-        "trigger_rate": round(1.0 if trade_count else 0.0, 3),
-        "success_count": accurate_count,
-        "hit_rate": accuracy,
-        "recommendation_accuracy": accuracy,
-        "average_net_return": avg_return,
-        "avg_return": avg_return,
-        "avg_executed_return": avg_return,
-        "avg_weighted_return": avg_return,
-        "median_net_return": median_return,
-        "profit_loss_ratio": profit_loss_ratio,
-        "profit_factor": profit_factor,
-        "win_loss_ratio": round(len(wins) / max(len(losses), 1), 3) if wins else 0.0,
-        "avg_close_return": round(sum(gross_returns) / trade_count, 3) if trade_count else 0.0,
-        "avg_max_return": round(sum(achievable_returns) / trade_count, 3) if trade_count else 0.0,
-        "avg_achievable_return": round(sum(achievable_returns) / trade_count, 3) if trade_count else 0.0,
-        "max_drawdown": round(portfolio_max_drawdown, 3),
-        "avg_max_drawdown": round(sum(trade_drawdowns) / trade_count, 3) if trade_count else 0.0,
-        "avg_holding_days": round(sum(holding_days) / trade_count, 3) if trade_count else 0.0,
-        "trade_positive_count": len(wins),
-        "trade_negative_count": len(losses),
-        "positive_month_ratio": positive_month_ratio,
-        "benchmark_excess_return": round(strategy_cum - benchmark_cum, 3),
-        "strategy_compound_return": round(strategy_cum, 3),
-        "benchmark_compound_return": round(benchmark_cum, 3),
-        "false_positive_notes": false_positive_notes,
-        "sample_confidence": confidence,
-        "low_confidence": confidence == "low",
-    }
+    """从交易记录计算完整 9-KPI 指标，委托给共享的 evaluation_metrics 模块。"""
+    return compute_full_metrics(trades)
 
 
 def _build_walk_forward_analysis(signal_dates: list[str], trades: list[dict[str, Any]]) -> dict[str, Any]:
@@ -799,18 +828,49 @@ def _choose_variant(
     signal_dates: list[str],
     comparisons: dict[str, dict[str, Any]],
 ) -> tuple[str, str]:
-    baseline_walk = comparisons["baseline"]["walk_forward"]["test_aggregate"]
-    candidate_walk = comparisons["candidate"]["walk_forward"]["test_aggregate"]
-    use_walk_forward = baseline_walk["trade_count"] > 0 and candidate_walk["trade_count"] > 0
-    baseline_test = baseline_walk if use_walk_forward else comparisons["baseline"]["split_metrics"]["test"]
-    candidate_test = candidate_walk if use_walk_forward else comparisons["candidate"]["split_metrics"]["test"]
+    baseline = comparisons["baseline"]
+    baseline_walk = baseline["walk_forward"]["test_aggregate"]
+    any_non_baseline = any(k != "baseline" for k in comparisons)
+    use_walk_forward = baseline_walk["trade_count"] > 0 and any_non_baseline and any(
+        comparisons[k]["walk_forward"]["test_aggregate"]["trade_count"] > 0
+        for k in comparisons if k != "baseline"
+    )
     scope_label = "滚动样本外" if use_walk_forward else "单次时间切分"
     prefix = "" if use_walk_forward else "滚动样本外可比样本不足，暂按单次时间切分判断。"
-    if candidate_test["trade_count"] == 0:
-        return "baseline", f"{prefix}增强版在{scope_label}没有形成可评估交易，保留基线版。".strip()
-    if _variant_outperforms(candidate_test, baseline_test):
-        return "candidate", f"{prefix}增强版在{scope_label}准确率更高，且平均净收益与回撤未明显恶化，采用增强版。".strip()
-    return "baseline", f"{prefix}增强版在{scope_label}优势不足或回撤代价偏大，保留基线版。".strip()
+
+    baseline_test = baseline_walk if use_walk_forward else baseline["split_metrics"]["test"]
+    best_variant = "baseline"
+    best_reasons: list[str] = []
+
+    for name, comp in comparisons.items():
+        if name == "baseline":
+            continue
+        variant_test = (
+            comp["walk_forward"]["test_aggregate"]
+            if use_walk_forward
+            else comp["split_metrics"]["test"]
+        )
+        if variant_test["trade_count"] == 0:
+            best_reasons.append(f"{comp['variant'].label}在{scope_label}无交易，跳过。")
+            continue
+        if _variant_outperforms(variant_test, baseline_test):
+            if best_variant == "baseline":
+                best_variant = name
+                best_reasons.append(
+                    f"{comp['variant'].label}在{scope_label}准确率更高，且平均净收益与回撤未明显恶化，采用{comp['variant'].label}。"
+                )
+            else:
+                best_reasons.append(
+                    f"{comp['variant'].label}也优于基线，但{comparisons[best_variant]['variant'].label}已选。"
+                )
+        else:
+            best_reasons.append(
+                f"{comp['variant'].label}在{scope_label}优势不足或回撤代价偏大。"
+            )
+
+    if best_variant == "baseline":
+        return "baseline", (f"{prefix}各变体在{scope_label}优势不足，保留基线版。".strip() + " " + " ".join(best_reasons)).strip()
+    return best_variant, (prefix + " " + best_reasons[0] if best_reasons else f"采用{comparisons[best_variant]['variant'].label}。").strip()
 
 
 def _variant_outperforms(candidate_metrics: dict[str, Any], baseline_metrics: dict[str, Any]) -> bool:
@@ -840,37 +900,49 @@ def _load_stock_minutes(
         )
         return cache[key]
 
-    rows = db.scalars(
-        select(MinuteKbar)
-        .where(
-            MinuteKbar.code == code,
-            MinuteKbar.trade_time >= f"{trade_date} 00:00:00",
-            MinuteKbar.trade_time < f"{_next_date(trade_date)} 00:00:00",
-        )
-        .order_by(MinuteKbar.trade_time.asc())
-    ).all()
-    if rows:
-        _record_minute_source_trace(
-            minute_source_trace,
-            source="local_minute_db",
-            code=code,
-            status="success",
-            row_count=len(rows),
-            scope="stock",
-        )
-    if not rows:
+    # 按频率优先级查询本地 DB：15min（全量）→ 1min（兜底）
+    rows = []
+    checked_freqs = []
+    for freq in _MINUTE_FREQ_PRIORITY:
+        checked_freqs.append(freq)
+        rows = db.scalars(
+            select(MinuteKbar)
+            .where(
+                MinuteKbar.code == code,
+                MinuteKbar.freq == freq,
+                MinuteKbar.trade_time >= f"{trade_date} 00:00:00",
+                MinuteKbar.trade_time < f"{_next_date(trade_date)} 00:00:00",
+            )
+            .order_by(MinuteKbar.trade_time.asc())
+        ).all()
+        if rows:
+            _record_minute_source_trace(
+                minute_source_trace,
+                source=f"local_minute_db_{freq}",
+                code=code,
+                status="success",
+                row_count=len(rows),
+                scope="stock",
+            )
+            break
+
+    if not rows and not _FORCE_LOCAL_ONLY:
         recent_rows = fetch_minute_kbars(code, trade_date=trade_date, trace=minute_source_trace)
         if recent_rows:
             _persist_minute_rows(db, recent_rows)
-            rows = db.scalars(
-                select(MinuteKbar)
-                .where(
-                    MinuteKbar.code == code,
-                    MinuteKbar.trade_time >= f"{trade_date} 00:00:00",
-                    MinuteKbar.trade_time < f"{_next_date(trade_date)} 00:00:00",
-                )
-                .order_by(MinuteKbar.trade_time.asc())
-            ).all()
+            for freq in _MINUTE_FREQ_PRIORITY:
+                rows = db.scalars(
+                    select(MinuteKbar)
+                    .where(
+                        MinuteKbar.code == code,
+                        MinuteKbar.freq == freq,
+                        MinuteKbar.trade_time >= f"{trade_date} 00:00:00",
+                        MinuteKbar.trade_time < f"{_next_date(trade_date)} 00:00:00",
+                    )
+                    .order_by(MinuteKbar.trade_time.asc())
+                ).all()
+                if rows:
+                    break
             _record_minute_source_trace(
                 minute_source_trace,
                 source="local_minute_db_after_fetch",
@@ -888,6 +960,15 @@ def _load_stock_minutes(
                 row_count=0,
                 scope="stock",
             )
+    elif not rows:
+        _record_minute_source_trace(
+            minute_source_trace,
+            source=f"local_minute_miss_{','.join(checked_freqs)}",
+            code=code,
+            status="empty_force_local",
+            row_count=0,
+            scope="stock",
+        )
 
     cache[key] = [
         {
@@ -942,6 +1023,20 @@ def _load_benchmark_bundle(
         )
         return list(local_rows)
 
+    if _FORCE_LOCAL_ONLY:
+        logger.warning("benchmark bundle missing dates=%d (force_local), returning partial data", len(required_dates - covered_dates))
+        cache["cache_key"] = cache_key
+        cache["bundle"] = {"rows": local_rows}
+        _record_minute_source_trace(
+            minute_source_trace,
+            source="local_minute_db_partial",
+            code=BENCHMARK_CODE,
+            status="partial",
+            row_count=len(local_rows),
+            scope="benchmark",
+        )
+        return list(local_rows)
+
     ndays = max(8, len(required_dates) + 5)
     fetched_rows = fetch_recent_index_minute_kbars(BENCHMARK_CODE, ndays=ndays, trace=minute_source_trace)
     if fetched_rows:
@@ -963,15 +1058,19 @@ def _load_benchmark_bundle(
 
 
 def _query_minute_rows(db: Session, code: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
-    rows = db.scalars(
-        select(MinuteKbar)
-        .where(
-            MinuteKbar.code == code,
-            MinuteKbar.trade_time >= f"{start_date} 00:00:00",
-            MinuteKbar.trade_time < f"{_next_date(end_date)} 00:00:00",
-        )
-        .order_by(MinuteKbar.trade_time.asc())
-    ).all()
+    for freq in _MINUTE_FREQ_PRIORITY:
+        rows = db.scalars(
+            select(MinuteKbar)
+            .where(
+                MinuteKbar.code == code,
+                MinuteKbar.freq == freq,
+                MinuteKbar.trade_time >= f"{start_date} 00:00:00",
+                MinuteKbar.trade_time < f"{_next_date(end_date)} 00:00:00",
+            )
+            .order_by(MinuteKbar.trade_time.asc())
+        ).all()
+        if rows:
+            break
     return [
         {
             "code": row.code,
@@ -1010,6 +1109,7 @@ def _persist_minute_rows(db: Session, rows: list[dict[str, Any]]) -> None:
                 "code": str(row.get("code") or ""),
                 "trade_date": trade_date,
                 "trade_time": trade_time if len(trade_time) >= 19 else f"{trade_time}:00",
+                "freq": "1min",
                 "open": _num(row.get("open")),
                 "high": _num(row.get("high")),
                 "low": _num(row.get("low")),
@@ -1039,14 +1139,21 @@ def _persist_backtest_run(db: Session, start_date: str, end_date: str, result: d
 
 
 def _local_minute_inventory(db: Session) -> dict[str, Any]:
-    row = db.execute(
-        select(
-            func.min(MinuteKbar.trade_date),
-            func.max(MinuteKbar.trade_date),
-            func.count(func.distinct(MinuteKbar.trade_date)),
-            func.count(func.distinct(MinuteKbar.code)),
-        )
-    ).one()
+    # 优先用 15min 数据统计覆盖范围
+    row = None
+    for freq in _MINUTE_FREQ_PRIORITY:
+        row = db.execute(
+            select(
+                func.min(MinuteKbar.trade_date),
+                func.max(MinuteKbar.trade_date),
+                func.count(func.distinct(MinuteKbar.trade_date)),
+                func.count(func.distinct(MinuteKbar.code)),
+            ).where(MinuteKbar.freq == freq)
+        ).one()
+        if row and row[3] and row[3] > 0:
+            break
+    if row is None:
+        return {"trade_date_start": "", "trade_date_end": "", "trade_date_count": 0, "code_count": 0}
     start_date, end_date, trade_date_count, code_count = row
     return {
         "trade_date_start": str(start_date or ""),
@@ -1189,39 +1296,6 @@ def _benchmark_row_for_entry(rows: list[dict[str, Any]], trade_time: str) -> dic
     return rows[-1] if rows else None
 
 
-def _positive_month_ratio(trades: list[dict[str, Any]]) -> float:
-    by_month: dict[str, float] = defaultdict(float)
-    for item in trades:
-        month = str(item.get("trade_date") or "")[:7]
-        if month:
-            by_month[month] += float(item.get("net_return_pct") or 0.0)
-    if not by_month:
-        return 0.0
-    positive = sum(1 for value in by_month.values() if value > 0)
-    return round(positive / len(by_month), 3)
-
-
-def _compound_return(returns: list[float]) -> float:
-    equity = 1.0
-    for value in returns:
-        equity *= 1 + float(value) / 100.0
-    return (equity - 1) * 100.0
-
-
-def _equity_max_drawdown(returns: list[float]) -> float:
-    equity = 1.0
-    peak = 1.0
-    max_drawdown = 0.0
-    for value in returns:
-        equity *= 1 + float(value) / 100.0
-        peak = max(peak, equity)
-        if peak <= 0:
-            continue
-        drawdown = (equity - peak) / peak * 100.0
-        max_drawdown = min(max_drawdown, drawdown)
-    return max_drawdown
-
-
 def _trade_samples(trades: list[dict[str, Any]], limit: int = 12) -> list[dict[str, Any]]:
     ordered = sorted(
         trades,
@@ -1283,27 +1357,11 @@ def _variant_notes(
         f"第 8 条“回踩均线不跌破”工程化为：尾盘窗口内最低价始终不破 VWAP，且与 VWAP 的最大偏离不超过 {TAIL_VWAP_MAX_GAP_BPS / 100:.1f}%。",
         f"次日早盘卖出工程定义为 {MORNING_EXIT_TIME} 的首个可成交分钟收盘价；若出现一字涨停或缩量涨停，则递延到下一可卖早盘。",
     ]
-    if len(trades) < MIN_SIGNAL_SAMPLE:
+    if len(trades) < _SHARED_MIN_SAMPLE:
         notes.append("当前样本数低于 30 笔，按规则标记为低置信度。")
     if signal_dates:
         notes.append(f"本次仅验证可取到分钟线/次日数据的区间：{signal_dates[0]} 至 {signal_dates[-1]}。")
     return notes
-
-
-def _false_positive_notes(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    counter: Counter[str] = Counter()
-    example_map: dict[str, list[str]] = defaultdict(list)
-    for item in trades:
-        if item.get("accurate"):
-            continue
-        reason = str(item.get("false_positive_reason") or "成本后净收益不为正")
-        counter[reason] += 1
-        if len(example_map[reason]) < 3:
-            example_map[reason].append(f"{item['trade_date']} {item['code']} {item['net_return_pct']:.2f}%")
-    return [
-        {"reason": reason, "count": count, "examples": example_map.get(reason, [])}
-        for reason, count in counter.most_common(5)
-    ]
 
 
 def _false_positive_reason(
@@ -1362,37 +1420,8 @@ def _pct_change(base: float, target: float) -> float:
 
 
 def _empty_metrics() -> dict[str, Any]:
-    return {
-        "total_recommendations": 0,
-        "trade_count": 0,
-        "triggered_count": 0,
-        "labeled_count": 0,
-        "trigger_rate": 0.0,
-        "success_count": 0,
-        "hit_rate": 0.0,
-        "recommendation_accuracy": 0.0,
-        "average_net_return": 0.0,
-        "avg_return": 0.0,
-        "avg_executed_return": 0.0,
-        "avg_weighted_return": 0.0,
-        "median_net_return": 0.0,
-        "profit_loss_ratio": 0.0,
-        "profit_factor": 0.0,
-        "win_loss_ratio": 0.0,
-        "avg_close_return": 0.0,
-        "avg_max_return": 0.0,
-        "avg_achievable_return": 0.0,
-        "avg_holding_days": 0.0,
-        "max_drawdown": 0.0,
-        "avg_max_drawdown": 0.0,
-        "positive_month_ratio": 0.0,
-        "benchmark_excess_return": 0.0,
-        "strategy_compound_return": 0.0,
-        "benchmark_compound_return": 0.0,
-        "false_positive_notes": [],
-        "sample_confidence": "low",
-        "low_confidence": True,
-    }
+    """委托给共享模块。"""
+    return _shared_empty_metrics()
 
 
 def _num(value: Any, default: float = 0.0) -> float:
@@ -1416,3 +1445,370 @@ def _normalize_trade_date(value: Any) -> str:
 
 def _next_date(trade_date: str) -> str:
     return (date.fromisoformat(trade_date) + timedelta(days=1)).isoformat()
+
+
+def _run_overnight_temporal_check(
+    db: Session,
+    signal_dates: list[str],
+) -> dict[str, Any]:
+    """对隔夜持股法回测结果做自动时态一致性检查。
+
+    检查维度：
+    1. 信号日期的日K线数据存在性
+    2. 分钟线数据时态顺序（entry <= exit）
+    3. 没有未来数据穿越
+
+    Returns:
+        dict with passed, violation_count, error_count, warning_count
+    """
+    violations: list[dict[str, Any]] = []
+
+    # 1. 检查每个信号日期的日K线存在性
+    for td in signal_dates:
+        bar_count = db.scalar(
+            select(func.count())
+            .select_from(DailyKbar)
+            .where(DailyKbar.trade_date == td)
+        )
+        if bar_count == 0:
+            violations.append({
+                "check": "overnight_daily_kbar_exists",
+                "severity": "error",
+                "trade_date": td,
+                "message": f"信号日期 {td} 在 daily_kbars 中无日K线数据",
+            })
+
+    # 2. 检查 backtest 整体时态
+    bt_result = check_backtest_temporal_consistency(
+        db, skill_id=STRATEGY_ID,
+    )
+    if bt_result.get("status") == "completed":
+        violations.extend(bt_result.get("violations", []))
+
+    error_count = sum(1 for v in violations if v.get("severity") == "error")
+    warning_count = sum(1 for v in violations if v.get("severity") == "warning")
+
+    return {
+        "status": "completed",
+        "passed": error_count == 0,
+        "violation_count": len(violations),
+        "error_count": error_count,
+        "warning_count": warning_count,
+        "violations": violations[:20],
+    }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 参数敏感性分析 / Grid Search
+# ═════════════════════════════════════════════════════════════════════════════
+
+_DEFAULT_PARAM_GRID: list[dict[str, Any]] = [
+    {
+        "label": "基线版 (基准参数)",
+        "MIN_PCT": 3.0, "MAX_PCT": 5.0,
+        "MIN_TURNOVER": 5.0, "MAX_TURNOVER": 10.0,
+        "MIN_MARKET_CAP_YI": 50.0, "MAX_MARKET_CAP_YI": 200.0,
+        "MIN_INTRADAY_VOLUME_RATIO": 1.0,
+        "DEFAULT_MIN_ABOVE_VWAP_RATIO": 0.86,
+        "TAIL_VWAP_MAX_GAP_BPS": 170.0,
+        "SHRINK_LIMIT_VOLUME_RATIO": 0.85,
+        "MIN_RELATIVE_STRENGTH_PCT": 0.0,
+        "MIN_RECENT_LIMIT_UP_COUNT": 0,
+    },
+    {
+        "label": "V1: 放宽涨跌幅 (2~6%)",
+        "MIN_PCT": 2.0, "MAX_PCT": 6.0,
+        "MIN_TURNOVER": 5.0, "MAX_TURNOVER": 10.0,
+        "MIN_MARKET_CAP_YI": 50.0, "MAX_MARKET_CAP_YI": 200.0,
+        "MIN_INTRADAY_VOLUME_RATIO": 1.0,
+        "DEFAULT_MIN_ABOVE_VWAP_RATIO": 0.86,
+        "TAIL_VWAP_MAX_GAP_BPS": 170.0,
+        "SHRINK_LIMIT_VOLUME_RATIO": 0.85,
+        "MIN_RELATIVE_STRENGTH_PCT": 0.0,
+    },
+    {
+        "label": "V2: 收紧VWAP回踩 (+90%站线率)",
+        "MIN_PCT": 3.0, "MAX_PCT": 5.0,
+        "MIN_TURNOVER": 5.0, "MAX_TURNOVER": 10.0,
+        "MIN_MARKET_CAP_YI": 50.0, "MAX_MARKET_CAP_YI": 200.0,
+        "MIN_INTRADAY_VOLUME_RATIO": 1.0,
+        "DEFAULT_MIN_ABOVE_VWAP_RATIO": 0.90,
+        "TAIL_VWAP_MAX_GAP_BPS": 120.0,
+        "SHRINK_LIMIT_VOLUME_RATIO": 0.85,
+        "MIN_RELATIVE_STRENGTH_PCT": 0.0,
+    },
+    {
+        "label": "V3: 放宽容换手率 (3~15%)",
+        "MIN_PCT": 3.0, "MAX_PCT": 5.0,
+        "MIN_TURNOVER": 3.0, "MAX_TURNOVER": 15.0,
+        "MIN_MARKET_CAP_YI": 50.0, "MAX_MARKET_CAP_YI": 200.0,
+        "MIN_INTRADAY_VOLUME_RATIO": 1.0,
+        "DEFAULT_MIN_ABOVE_VWAP_RATIO": 0.86,
+        "TAIL_VWAP_MAX_GAP_BPS": 170.0,
+        "SHRINK_LIMIT_VOLUME_RATIO": 0.85,
+        "MIN_RELATIVE_STRENGTH_PCT": 0.0,
+    },
+    {
+        "label": "V4: 大市值偏好 (100~300亿)",
+        "MIN_PCT": 3.0, "MAX_PCT": 5.0,
+        "MIN_TURNOVER": 5.0, "MAX_TURNOVER": 10.0,
+        "MIN_MARKET_CAP_YI": 100.0, "MAX_MARKET_CAP_YI": 300.0,
+        "MIN_INTRADAY_VOLUME_RATIO": 1.0,
+        "DEFAULT_MIN_ABOVE_VWAP_RATIO": 0.86,
+        "TAIL_VWAP_MAX_GAP_BPS": 170.0,
+        "SHRINK_LIMIT_VOLUME_RATIO": 0.85,
+        "MIN_RELATIVE_STRENGTH_PCT": 0.0,
+    },
+    {
+        "label": "V5: 缩量涨停更严格 (0.7倍阈值)",
+        "MIN_PCT": 3.0, "MAX_PCT": 5.0,
+        "MIN_TURNOVER": 5.0, "MAX_TURNOVER": 10.0,
+        "MIN_MARKET_CAP_YI": 50.0, "MAX_MARKET_CAP_YI": 200.0,
+        "MIN_INTRADAY_VOLUME_RATIO": 1.0,
+        "DEFAULT_MIN_ABOVE_VWAP_RATIO": 0.86,
+        "TAIL_VWAP_MAX_GAP_BPS": 170.0,
+        "SHRINK_LIMIT_VOLUME_RATIO": 0.70,
+        "MIN_RELATIVE_STRENGTH_PCT": 0.0,
+    },
+    {
+        "label": "V6: 高成交量验证 (量比>=1.2)",
+        "MIN_PCT": 3.0, "MAX_PCT": 5.0,
+        "MIN_TURNOVER": 5.0, "MAX_TURNOVER": 10.0,
+        "MIN_MARKET_CAP_YI": 50.0, "MAX_MARKET_CAP_YI": 200.0,
+        "MIN_INTRADAY_VOLUME_RATIO": 1.2,
+        "DEFAULT_MIN_ABOVE_VWAP_RATIO": 0.86,
+        "TAIL_VWAP_MAX_GAP_BPS": 170.0,
+        "SHRINK_LIMIT_VOLUME_RATIO": 0.85,
+        "MIN_RELATIVE_STRENGTH_PCT": 0.0,
+    },
+    {
+        "label": "V7: 强于大盘增强版 (+1%领先)",
+        "MIN_PCT": 3.0, "MAX_PCT": 5.0,
+        "MIN_TURNOVER": 5.0, "MAX_TURNOVER": 10.0,
+        "MIN_MARKET_CAP_YI": 50.0, "MAX_MARKET_CAP_YI": 200.0,
+        "MIN_INTRADAY_VOLUME_RATIO": 1.0,
+        "DEFAULT_MIN_ABOVE_VWAP_RATIO": 0.86,
+        "TAIL_VWAP_MAX_GAP_BPS": 170.0,
+        "SHRINK_LIMIT_VOLUME_RATIO": 0.85,
+        "MIN_RELATIVE_STRENGTH_PCT": 1.0,
+    },
+    {
+        "label": "V8: 综合收紧 (涨跌幅+VWAP+换手+量比)",
+        "MIN_PCT": 2.5, "MAX_PCT": 4.5,
+        "MIN_TURNOVER": 4.0, "MAX_TURNOVER": 12.0,
+        "MIN_MARKET_CAP_YI": 50.0, "MAX_MARKET_CAP_YI": 200.0,
+        "MIN_INTRADAY_VOLUME_RATIO": 1.1,
+        "DEFAULT_MIN_ABOVE_VWAP_RATIO": 0.88,
+        "TAIL_VWAP_MAX_GAP_BPS": 150.0,
+        "SHRINK_LIMIT_VOLUME_RATIO": 0.80,
+        "MIN_RELATIVE_STRENGTH_PCT": 0.3,
+    },
+    {
+        "label": "V9: 窄幅 + 低换手 (保守型)",
+        "MIN_PCT": 3.5, "MAX_PCT": 4.5,
+        "MIN_TURNOVER": 4.0, "MAX_TURNOVER": 8.0,
+        "MIN_MARKET_CAP_YI": 60.0, "MAX_MARKET_CAP_YI": 150.0,
+        "MIN_INTRADAY_VOLUME_RATIO": 1.0,
+        "DEFAULT_MIN_ABOVE_VWAP_RATIO": 0.90,
+        "TAIL_VWAP_MAX_GAP_BPS": 140.0,
+        "SHRINK_LIMIT_VOLUME_RATIO": 0.75,
+        "MIN_RELATIVE_STRENGTH_PCT": 0.5,
+    },
+    {
+        "label": "V10: 宽幅 + 高换手 (进攻型)",
+        "MIN_PCT": 2.0, "MAX_PCT": 6.0,
+        "MIN_TURNOVER": 6.0, "MAX_TURNOVER": 18.0,
+        "MIN_MARKET_CAP_YI": 30.0, "MAX_MARKET_CAP_YI": 300.0,
+        "MIN_INTRADAY_VOLUME_RATIO": 0.8,
+        "DEFAULT_MIN_ABOVE_VWAP_RATIO": 0.82,
+        "TAIL_VWAP_MAX_GAP_BPS": 200.0,
+        "SHRINK_LIMIT_VOLUME_RATIO": 0.85,
+        "MIN_RELATIVE_STRENGTH_PCT": 0.0,
+    },
+    {
+        "label": "V11: 放松候选池 (去涨停限制, V10+MIN_RECENT_LIMIT_UP_COUNT=0)",
+        "MIN_PCT": 2.0, "MAX_PCT": 6.0,
+        "MIN_TURNOVER": 6.0, "MAX_TURNOVER": 18.0,
+        "MIN_MARKET_CAP_YI": 30.0, "MAX_MARKET_CAP_YI": 300.0,
+        "MIN_INTRADAY_VOLUME_RATIO": 0.8,
+        "DEFAULT_MIN_ABOVE_VWAP_RATIO": 0.82,
+        "TAIL_VWAP_MAX_GAP_BPS": 200.0,
+        "SHRINK_LIMIT_VOLUME_RATIO": 0.85,
+        "MIN_RELATIVE_STRENGTH_PCT": 0.0,
+        "MIN_RECENT_LIMIT_UP_COUNT": 0,
+    },
+]
+
+
+def run_overnight_param_sensitivity(
+    db: Session,
+    start_date: str,
+    end_date: str,
+    param_grid: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """隔夜持股法参数敏感性分析 / Grid Search。
+
+    对 param_grid 中的每个参数组合运行完整回测，
+    产出多参数组合的对比矩阵（含 walk-forward 样本外验证）。
+
+    Args:
+        db: 数据库会话
+        start_date: 起始日期
+        end_date: 结束日期
+        param_grid: 参数组合列表，每项包含 label + 需覆盖的模块级常量名和值。
+                    若为 None，使用 _DEFAULT_PARAM_GRID。
+
+    Returns:
+        dict 含全部参数组合的 results 矩阵 + 排名
+    """
+    import sys
+
+    started_at = perf_counter()
+    grid = param_grid if param_grid is not None else _DEFAULT_PARAM_GRID
+
+    if not grid:
+        return {"status": "no_data", "message": "参数网格为空", "combination_count": 0}
+
+    logger.info("参数敏感性分析开始: %d 组参数组合, %s~%s", len(grid), start_date, end_date)
+    mod = sys.modules[__name__]
+
+    results: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+
+    for idx, params in enumerate(grid):
+        label = params.get("label", f"组合_{idx}")
+        combo_start = perf_counter()
+
+        # 保存并覆盖模块级常量
+        saved: dict[str, Any] = {}
+        for key, val in params.items():
+            if key == "label":
+                continue
+            if hasattr(mod, key):
+                saved[key] = getattr(mod, key)
+                setattr(mod, key, val)
+
+        try:
+            bt_result = run_overnight_holding_backtest(db, start_date, end_date)
+            if bt_result.get("status") == "completed":
+                metrics = bt_result.get("aggregate_metrics") or _shared_empty_metrics()
+                wf = bt_result.get("comparison", {}).get("walk_forward", {})
+                test_agg = wf.get("test_aggregate") if wf.get("eligible") else {}
+                results.append({
+                    "label": label,
+                    "params": {k: v for k, v in params.items() if k != "label"},
+                    "elapsed_ms": int((perf_counter() - combo_start) * 1000),
+                    "trade_count": metrics.get("trade_count", 0),
+                    "accuracy": metrics.get("recommendation_accuracy", 0),
+                    "avg_return": metrics.get("average_net_return", 0),
+                    "profit_loss_ratio": metrics.get("profit_loss_ratio", 0),
+                    "max_drawdown": metrics.get("max_drawdown", 0),
+                    "excess_return": metrics.get("benchmark_excess_return", 0),
+                    "sample_confidence": metrics.get("sample_confidence", "low"),
+                    "walk_forward_trade_count": test_agg.get("trade_count", 0),
+                    "walk_forward_accuracy": test_agg.get("recommendation_accuracy", 0),
+                    "walk_forward_avg_return": test_agg.get("average_net_return", 0),
+                    "walk_forward_max_drawdown": test_agg.get("max_drawdown", 0),
+                })
+            else:
+                errors.append({
+                    "label": label,
+                    "status": bt_result.get("status"),
+                    "message": bt_result.get("message", "未知错误"),
+                })
+        except Exception as exc:
+            logger.exception("参数组合 %s 执行失败", label)
+            errors.append({"label": label, "error": str(exc)})
+        finally:
+            # 恢复模块级常量
+            for key, val in saved.items():
+                setattr(mod, key, val)
+
+        logger.info(
+            "  组合 %d/%d [%s] 完成 (%.1fs)",
+            idx + 1, len(grid), label,
+            (perf_counter() - combo_start),
+        )
+
+    # ── 排名：按样本外准确率降序 ──
+    ranked = sorted(
+        [r for r in results if r.get("walk_forward_trade_count", 0) >= 2 or r.get("trade_count", 0) >= 2],
+        key=lambda r: (
+            r.get("walk_forward_accuracy", 0)
+            if r.get("walk_forward_trade_count", 0) >= 2
+            else r.get("accuracy", 0)
+        ),
+        reverse=True,
+    )
+
+    top_n = ranked[:5]
+    baseline = next((r for r in results if "基线" in r.get("label", "")), ranked[0] if ranked else None)
+
+    best_pick = ranked[0] if ranked else None
+    adoption_reason = ""
+    if best_pick and baseline and best_pick["label"] != baseline["label"]:
+        adoption_reason = (
+            f"选中 [{best_pick['label']}]："
+            f"样本外准确率 {best_pick.get('walk_forward_accuracy', 0):.1%}"
+            f" vs 基线 {baseline.get('walk_forward_accuracy', 0):.1%}"
+        )
+    elif best_pick:
+        adoption_reason = "基线版仍是当前最优组合"
+    else:
+        adoption_reason = "无可用结果"
+
+    response = {
+        "status": "completed",
+        "strategy_id": STRATEGY_ID,
+        "strategy_name": f"{STRATEGY_NAME} 参数敏感性分析",
+        "strategy_window": {"start_date": start_date, "end_date": end_date},
+        "combination_count": len(grid),
+        "success_count": len(results),
+        "error_count": len(errors),
+        "total_elapsed_ms": int((perf_counter() - started_at) * 1000),
+        "results": results,
+        "ranking": [
+            {
+                "rank": i + 1,
+                "label": r["label"],
+                "walk_forward_accuracy": r.get("walk_forward_accuracy"),
+                "accuracy": r.get("accuracy"),
+                "avg_return": r.get("avg_return"),
+                "walk_forward_avg_return": r.get("walk_forward_avg_return"),
+                "trade_count": r.get("trade_count"),
+                "max_drawdown": r.get("max_drawdown"),
+            }
+            for i, r in enumerate(ranked)
+        ],
+        "errors": errors,
+        "recommendation": {
+            "top_5": [r["label"] for r in top_n],
+            "best_pick": best_pick["label"] if best_pick else None,
+            "baseline_label": baseline["label"] if baseline else None,
+            "adoption_reason": adoption_reason,
+        },
+        "notes": [
+            f"参数敏感性分析覆盖 {len(grid)} 组参数组合（{len(results)} 组成功, {len(errors)} 组失败）。",
+            "排名优先使用 walk-forward (样本外) 准确率；样本外笔数 < 2 时降级到全量准确率。",
+            "最终推荐基于样本外准确率 + 交易笔数 + 回撤综合判断。",
+        ],
+    }
+
+    # 如果 baseline 存在，加对比信息
+    if baseline:
+        response["comparison"] = {
+            "baseline_label": baseline["label"],
+            "best_pick_label": best_pick["label"] if best_pick else None,
+            "baseline_accuracy": baseline.get("accuracy"),
+            "baseline_avg_return": baseline.get("avg_return"),
+            "best_accuracy": best_pick.get("accuracy") if best_pick else None,
+            "best_avg_return": best_pick.get("avg_return") if best_pick else None,
+            "adoption_reason": adoption_reason,
+        }
+
+    logger.info(
+        "参数敏感性分析完成: %d/%d 组合成功, 推荐=%s",
+        len(results), len(grid),
+        response["recommendation"].get("best_pick", "N/A"),
+    )
+    return response

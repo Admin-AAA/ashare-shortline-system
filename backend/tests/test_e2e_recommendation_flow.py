@@ -839,8 +839,8 @@ class TestE2ERecommendationFlow:
                     DragonTiger(code=stale_code, trade_date="2026-05-13", name="过期样本", created_at=stale),
                     CapitalFlow(code=fresh_code, trade_date="2026-05-12", main_net_inflow_yi=1.2, created_at=now),
                     CapitalFlow(code=stale_code, trade_date="2026-05-12", main_net_inflow_yi=0.8, created_at=stale),
-                    NewsAnnouncement(source="eastmoney", article_id=f"news_{uuid.uuid4().hex[:6]}", code=fresh_code, announce_date="2026-05-12", title="测试新闻", created_at=now),
-                    NewsAnnouncement(source="eastmoney", article_id=f"news_{uuid.uuid4().hex[:6]}", code=stale_code, announce_date="2026-05-12", title="旧TTL新闻", created_at=stale),
+                    NewsAnnouncement(source="tushare", article_id=f"news_{uuid.uuid4().hex[:6]}", code=fresh_code, announce_date="2026-05-12", title="测试新闻", created_at=now),
+                    NewsAnnouncement(source="tushare", article_id=f"news_{uuid.uuid4().hex[:6]}", code=stale_code, announce_date="2026-05-12", title="旧TTL新闻", created_at=stale),
                 ]
             )
             db.flush()

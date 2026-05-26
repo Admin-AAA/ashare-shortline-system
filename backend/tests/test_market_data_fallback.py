@@ -21,85 +21,39 @@ class DummySettings:
     market_scan_size = 60
     market_kline_days = 90
     market_candidate_count = 60
-    quote_sources = "thsdk,eastmoney"
+    quote_sources = "tushare"
     kline_sources = "tushare"
-    data_provider = "multi"
+    data_provider = "tushare"
     market_candidate_lookahead_multiplier = 4
-    thsdk_batch_size = 600
-    thsdk_username = ""
-    thsdk_password = ""
-    thsdk_mac = ""
 
 
-def test_fetch_first_quotes_falls_back_to_second_source(monkeypatch):
-    calls = []
-
-    def fake_fetch_quotes(source, settings):
-        calls.append(source)
-        if source == "eastmoney":
-            raise RuntimeError("eastmoney down")
-        if source == "sina":
-            return [{"code": "000001", "name": "平安银行"}]
-        return []
-
-    monkeypatch.setattr(market_data, "_fetch_quotes", fake_fetch_quotes)
-
-    source, quotes, errors = _fetch_first_quotes(["eastmoney", "sina", "tencent"], DummySettings())
-
-    assert source == "sina"
-    assert quotes == [{"code": "000001", "name": "平安银行"}]
-    assert calls == ["eastmoney", "sina"]
-    assert errors == ["eastmoney: eastmoney down"]
-
-
-def test_fetch_first_quotes_raises_when_all_sources_fail(monkeypatch):
+def test_fetch_first_quotes_raises_when_tushare_fails(monkeypatch):
     def fake_fetch_quotes(source, settings):
         raise RuntimeError(f"{source} down")
 
     monkeypatch.setattr(market_data, "_fetch_quotes", fake_fetch_quotes)
 
     with pytest.raises(MarketDataError) as exc:
-        _fetch_first_quotes(["eastmoney", "sina", "tencent"], DummySettings())
+        _fetch_first_quotes(["tushare"], DummySettings())
 
     message = str(exc.value)
     assert "真实行情快照获取失败" in message
-    assert "eastmoney: eastmoney down" in message
-    assert "sina: sina down" in message
-    assert "tencent: tencent down" in message
+    assert "tushare down" in message
 
 
-def test_fetch_first_kline_falls_back_to_second_source(monkeypatch):
+def test_fetch_first_kline_falls_back_when_tushare_returns_too_few(monkeypatch):
     quote = {"code": "000001", "exchange": "SZ"}
-    calls = []
 
     def fake_fetch_kline(source, quote_arg, settings):
-        calls.append(source)
-        if source == "eastmoney":
-            return [
-                {
-                    "code": "000001",
-                    "trade_date": f"2026-01-{day:02d}",
-                    "open": 10.0,
-                    "high": 10.5,
-                    "low": 9.9,
-                    "close": 10.1,
-                    "volume": 1000,
-                    "amount": 10000,
-                    "pct_chg": 1.0,
-                    "turnover_rate": 1.0,
-                }
-                for day in range(1, 31)
-            ]
         return []
 
     monkeypatch.setattr(market_data, "_fetch_kline", fake_fetch_kline)
 
-    bars, source, errors = _fetch_first_kline(quote, ["tushare", "eastmoney"], DummySettings())
+    bars, source, errors = _fetch_first_kline(quote, ["tushare"], DummySettings())
 
-    assert source == "eastmoney"
-    assert len(bars) == 30
-    assert calls == ["tushare", "eastmoney"]
-    assert errors == ["tushare: 日K不足30条"]
+    assert bars == []
+    assert source == ""
+    assert "日K不足30条" in " ".join(errors)
 
 
 def test_fetch_first_kline_raises_upstream_errors_to_caller(monkeypatch):
@@ -110,116 +64,11 @@ def test_fetch_first_kline_raises_upstream_errors_to_caller(monkeypatch):
 
     monkeypatch.setattr(market_data, "_fetch_kline", fake_fetch_kline)
 
-    bars, source, errors = _fetch_first_kline(quote, ["tushare", "eastmoney"], DummySettings())
+    bars, source, errors = _fetch_first_kline(quote, ["tushare"], DummySettings())
 
     assert bars == []
     assert source == ""
-    assert errors == [
-        "tushare: tushare bad",
-        "eastmoney: eastmoney bad",
-    ]
-
-
-def test_fetch_first_kline_skips_disabled_sources(monkeypatch):
-    quote = {"code": "000001", "exchange": "SZ"}
-    disabled_sources = {"tushare"}
-    calls = []
-
-    def fake_fetch_kline(source, quote_arg, settings):
-        calls.append(source)
-        if source == "eastmoney":
-            return [{"code": quote_arg["code"], "trade_date": "2026-05-20"} for _ in range(30)]
-        return []
-
-    monkeypatch.setattr(market_data, "_fetch_kline", fake_fetch_kline)
-
-    bars, source, errors = _fetch_first_kline(
-        quote, ["tushare", "eastmoney"], DummySettings(), disabled_sources
-    )
-
-    assert source == "eastmoney"
-    assert len(bars) == 30
-    assert "tushare: 本次扫描已熔断，跳过" in errors
-
-
-def test_thsdk_and_thssdk_aliases_route_to_same_adapters(monkeypatch):
-    quote = {"code": "000001", "exchange": "SZ"}
-
-    monkeypatch.setattr(market_data, "_fetch_thsdk_quotes", lambda settings: [{"code": "000001"}])
-
-    assert _fetch_quotes("thsdk", DummySettings()) == [{"code": "000001"}]
-    assert _fetch_quotes("thssdk", DummySettings()) == [{"code": "000001"}]
-
-
-def test_data_provider_accepts_thsdk_aliases():
-    settings = DummySettings()
-    settings.data_provider = "thssdk"
-    assert _quote_sources(settings) == ["thssdk"]
-    assert _kline_sources(settings) == ["thssdk"]
-
-    settings.data_provider = "tushare"
-    assert _kline_sources(settings) == ["tushare"]
-
-
-def test_fetch_thsdk_quotes_merges_split_rows(monkeypatch):
-    class FakeTHS:
-        def __init__(self, ops):
-            self.ops = ops
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            return None
-
-        def stock_cn_lists(self):
-            return SimpleNamespace(
-                success=True,
-                data=[
-                    {"THSCODE": "USZA000001", "名称": "平安银行"},
-                    {"THSCODE": "USHA600000", "名称": "浦发银行"},
-                ],
-            )
-
-        def market_data_cn(self, batch, query_key="汇总"):
-            assert query_key == "汇总"
-            if batch == ["USZA000001"]:
-                return SimpleNamespace(
-                    success=True,
-                    data=[
-                        {"代码": "USZA000001", "价格": "10.50", "涨幅": "1.2", "总金额": "300000000"},
-                        {"代码": "USZA000001", "换手率": "2.5", "总市值": "200000000000", "流通市值": "180000000000"},
-                    ],
-                )
-            return SimpleNamespace(
-                success=True,
-                data=[
-                    {
-                        "代码": "USHA600000",
-                        "价格": "9.50",
-                        "涨幅": "-0.4",
-                        "总金额": "210000000",
-                        "换手率": "1.1",
-                        "市盈率TTM": "6.8",
-                        "主力净流入": "12000000",
-                    }
-                ],
-            )
-
-    monkeypatch.setattr(market_data, "_thsdk_client", lambda settings: FakeTHS({}))
-    settings = DummySettings()
-    settings.market_scan_size = 2
-    settings.thsdk_batch_size = 1
-
-    quotes = market_data._fetch_thsdk_quotes(settings)
-
-    assert [quote["code"] for quote in quotes] == ["000001", "600000"]
-    assert quotes[0]["name"] == "平安银行"
-    assert quotes[0]["price"] == 10.5
-    assert quotes[0]["amount_yi"] == 3.0
-    assert quotes[0]["turnover_rate"] == 2.5
-    assert quotes[0]["source"] == "thsdk"
-    assert quotes[1]["main_net_inflow_yi"] == 0.12
+    assert "tushare: tushare bad" in errors
 
 
 def test_small_market_sample_caps_final_score_honestly():

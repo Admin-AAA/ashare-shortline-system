@@ -38,7 +38,6 @@ from app.services.market_data import (
     _eligible_market_quotes,
     _fetch_kline,
     _fetch_quotes,
-    _global_failed_kline_sources,
     _kline_sources,
     _latest_trade_date_from_quotes,
     _num,
@@ -53,7 +52,6 @@ from app.services.market_auxiliary import (
     _fetch_concept_sectors,
     _fetch_dragon_tiger,
     _fetch_limit_up_board,
-    _fetch_news,
     _limit_up_sources,
     _news_sources,
 )
@@ -130,7 +128,6 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[l
     stocks: list[dict[str, Any]] = []
     kline_errors: dict[str, list[str]] = {}
     kline_usage: Counter[str] = Counter()
-    disabled_kline_sources: set[str] = set()
 
     # ── 批量预加载日K（非刷新模式），避免 N 次逐个查询 ──
     candidate_codes = [quote["code"] for quote in candidates]
@@ -143,7 +140,7 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[l
         if len(stocks) >= recall_plan["scan_target_count"]:
             break
         if refresh:
-            bars, kline_trace, errors = _load_or_refresh_bars(db, quote, settings, disabled_kline_sources)
+            bars, kline_trace, errors = _load_or_refresh_bars(db, quote, settings)
         else:
             cached = bars_batch.get(quote["code"], []) if bars_batch else []
             if len(cached) < 30:
@@ -156,7 +153,6 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[l
                 ]
             else:
                 bars, kline_trace, errors = cached, {"selected_source": "daily_bars_cache", "freshness_status": "local_pool_readonly"}, []
-        disabled_kline_sources.update(_global_failed_kline_sources(errors))
         if errors:
             kline_errors[quote["code"]] = errors
             continue
@@ -682,12 +678,11 @@ def _load_or_refresh_bars(
     db: Session,
     quote: dict[str, Any],
     settings: Any,
-    disabled_sources: set[str],
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[str]]:
     cached = _load_cached_bars(db, quote["code"], settings.market_kline_days)
     if len(cached) >= 30 and _bars_cover_quote_date(cached, quote):
         return cached, {"selected_source": "daily_bars_cache", "freshness_status": "fresh_cache"}, []
-    bars, source, errors = _refresh_bars_for_quote(db, quote, settings, disabled_sources)
+    bars, source, errors = _refresh_bars_for_quote(db, quote, settings)
     if bars:
         _persist_kbars(db, bars)
         db.commit()
@@ -716,7 +711,6 @@ def _refresh_bars_for_quote(
     db: Session,
     quote: dict[str, Any],
     settings: Any,
-    disabled_sources: set[str],
 ) -> tuple[list[dict[str, Any]], str, list[str]]:
     errors: list[str] = []
     sources = enabled_sources(db, "kline", _kline_sources(settings))
@@ -727,9 +721,6 @@ def _refresh_bars_for_quote(
     start_date = _incremental_kline_start(db, quote["code"], settings)
 
     for source in sources:
-        if source in disabled_sources:
-            errors.append(f"{source}: 本次扫描已熔断，跳过")
-            continue
         start = time.perf_counter()
         try:
             bars = _fetch_kline(source, quote, settings, start_date=start_date)
@@ -745,8 +736,6 @@ def _refresh_bars_for_quote(
             message = f"{source}: {exc}"
             errors.append(message)
             _record_source_health(db, source, "kline", "failure", error=str(exc), latency_ms=latency_ms)
-            if source in _global_failed_kline_sources([message]):
-                disabled_sources.add(source)
     return [], "", errors
 
 
@@ -1419,7 +1408,7 @@ def refresh_news_for_codes(db: Session, codes: list[str], trade_date: str | None
     earliest_allowed = latest_allowed - timedelta(days=ttl_days)
     for code in codes:
         try:
-            items = _fetch_news(source, code, settings, trade_date=target_trade_date)
+            items: list[dict[str, Any]] = []
             if items:
                 normalized_items = []
                 for item in items:

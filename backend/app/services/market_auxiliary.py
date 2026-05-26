@@ -32,7 +32,7 @@ def _dragon_tiger_sources(settings: Any) -> list[str]:
 
 
 def _news_sources(settings: Any) -> list[str]:
-    return _split_sources(settings.news_sources)
+    return []
 
 
 # ── Dispatch ────────────────────────────────────────────────────────────
@@ -74,12 +74,6 @@ def _fetch_capital_flow(source: str, code: str, settings: Any, trade_date: str |
 def _fetch_dragon_tiger(source: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
     if source == "tushare":
         return _fetch_tushare_dragon_tiger(settings, trade_date=trade_date)
-    return []
-
-
-def _fetch_news(source: str, code: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
-    if source == "eastmoney":
-        return _fetch_eastmoney_news(code, settings)
     return []
 
 
@@ -196,83 +190,3 @@ def _fetch_tushare_concept_sectors(settings: Any, trade_date: str | None = None)
         return []
 
 
-# ── 东方财富新闻 ──────────────────────────────────────────────────────
-
-
-def _fetch_eastmoney_news(code: str, settings: Any) -> list[dict[str, Any]]:
-    """东方财富个股公告+新闻。"""
-    from app.services.market_data import _http_get_json
-
-    items: list[dict[str, Any]] = []
-
-    # 公告
-    try:
-        ann_url = (
-            "https://np-anotice-stock.eastmoney.com/api/security/ann"
-            f"?page_size=15&page_index=1&ann_type=A"
-            f"&stock_list={code}"
-            "&column=NOTICE_COLUMN"
-        )
-        ann_data = _http_get_json(ann_url, settings)
-        ann_rows = ann_data.get("data", {}).get("list") or []
-        for row in ann_rows:
-            title = str(row.get("title_ch", ""))
-            is_risk = any(
-                kw in title
-                for kw in ["风险", "警示", "退市", "ST", "处罚", "监管", "立案", "亏损", "减持", "问询", "通报"]
-            )
-            items.append({
-                "source": "eastmoney",
-                "article_id": str(row.get("notice_id", "")),
-                "code": code,
-                "announce_date": str(row.get("notice_date", ""))[:10],
-                "title": title,
-                "summary": str(row.get("summary", "")),
-                "category": "announcement",
-                "sentiment": "negative" if is_risk else "neutral",
-                "is_risk_warning": is_risk,
-            })
-    except Exception:
-        pass
-
-    # 新闻
-    try:
-        news_url = (
-            "https://np-anotice-stock.eastmoney.com/api/security/notify"
-            f"?page_size=15&page_index=1"
-            f"&stock_list={code}"
-            "&column=NOTICE_COLUMN"
-        )
-        news_data = _http_get_json(news_url, settings)
-        news_rows = news_data.get("data", {}).get("list") or []
-        for row in news_rows:
-            title = str(row.get("title_ch", ""))
-            is_negative = any(
-                kw in title
-                for kw in ["风险", "亏损", "下滑", "减持", "处罚", "跌停", "爆雷", "问询"]
-            )
-            is_positive = any(
-                kw in title
-                for kw in ["增长", "预增", "利好", "突破", "签约", "中标", "回购", "增持", "分红"]
-            )
-            if is_negative:
-                sentiment = "negative"
-            elif is_positive:
-                sentiment = "positive"
-            else:
-                sentiment = "neutral"
-            items.append({
-                "source": "eastmoney",
-                "article_id": str(row.get("notice_id", "")),
-                "code": code,
-                "announce_date": str(row.get("notice_date", ""))[:10],
-                "title": title,
-                "summary": str(row.get("summary", "")),
-                "category": "news",
-                "sentiment": sentiment,
-                "is_risk_warning": is_negative,
-            })
-    except Exception:
-        pass
-
-    return items

@@ -19,19 +19,15 @@ class DummySettings:
     market_candidate_lookahead_multiplier = 2
     market_quote_cache_ttl_seconds = 90
     market_kline_cache_ttl_hours = 20
-    market_pool_min_source_count = 2
-    quote_sources = "eastmoney,tencent,sina"
-    kline_sources = "tencent"
-    limit_up_sources = "eastmoney"
-    concept_sector_sources = "eastmoney"
-    capital_flow_sources = "eastmoney"
-    dragon_tiger_sources = "eastmoney"
-    news_sources = "eastmoney"
-    data_provider = "multi"
-    thsdk_batch_size = 600
-    thsdk_username = ""
-    thsdk_password = ""
-    thsdk_mac = ""
+    market_pool_min_source_count = 1
+    quote_sources = "tushare"
+    kline_sources = "tushare"
+    limit_up_sources = "tushare"
+    concept_sector_sources = "tushare"
+    capital_flow_sources = "tushare"
+    dragon_tiger_sources = "tushare"
+    news_sources = ""
+    data_provider = "tushare"
     tushare_token = ""
 
 @pytest.fixture
@@ -95,11 +91,7 @@ def test_refresh_quote_pool_persists_raw_and_unified_quotes(db, monkeypatch):
     settings = DummySettings()
 
     def fake_fetch_quotes(source, _settings):
-        if source == "eastmoney":
-            return [_quote("000001", source, 10.00), _quote("000002", source, 20.00)]
-        if source == "tencent":
-            return [_quote("000001", source, 10.02), _quote("000002", source, 19.98)]
-        return []
+        return [_quote("000001", source, 10.00), _quote("000002", source, 20.00)]
 
     monkeypatch.setattr(market_pool, "get_settings", lambda: settings)
     monkeypatch.setattr(market_pool, "_fetch_quotes", fake_fetch_quotes)
@@ -108,30 +100,27 @@ def test_refresh_quote_pool_persists_raw_and_unified_quotes(db, monkeypatch):
 
     assert meta["status"] == "refreshed"
     assert len(quotes) == 2
-    assert {quote["source_count"] for quote in quotes} == {2}
-    assert db.scalar(select(RawQuote).where(RawQuote.source == "eastmoney", RawQuote.code == "000001")) is not None
+    assert {quote["source_count"] for quote in quotes} == {1}
+    assert db.scalar(select(RawQuote).where(RawQuote.source == "tushare", RawQuote.code == "000001")) is not None
     unified = db.scalar(select(UnifiedQuote).where(UnifiedQuote.code == "000001"))
     assert unified is not None
-    assert unified.source_count == 2
+    assert unified.source_count == 1
     assert unified.quality_score > 80
 
 
-def test_quote_pool_records_conflicts_and_lowers_quality():
+def test_quote_pool_records_no_conflicts_with_single_source():
     settings = DummySettings()
 
     merged = market_pool._merge_quote_rows(
         "000001",
-        [
-            _quote("000001", "eastmoney", 10.00, pct=3.0),
-            _quote("000001", "tencent", 11.00, pct=9.0),
-        ],
-        ["eastmoney", "tencent"],
+        [_quote("000001", "tushare", 10.00, pct=3.0)],
+        ["tushare"],
         settings,
     )
 
-    assert merged["source_count"] == 2
-    assert merged["conflicts"]
-    assert merged["quality_score"] < 90
+    assert merged["source_count"] == 1
+    assert not merged["conflicts"]
+    assert merged["quality_score"] >= 90
 
 
 def test_load_or_refresh_quotes_uses_fresh_cache(db, monkeypatch):
@@ -150,7 +139,7 @@ def test_load_or_refresh_quotes_uses_fresh_cache(db, monkeypatch):
     assert first_meta["status"] == "refreshed"
     assert second_meta["status"] == "fresh_cache"
     assert len(first) == len(second) == 2
-    assert calls["fetch"] == 3
+    assert calls["fetch"] == 1
 
 
 def test_cached_quotes_are_enriched_with_local_bar_metrics(db, monkeypatch):
@@ -159,14 +148,14 @@ def test_cached_quotes_are_enriched_with_local_bar_metrics(db, monkeypatch):
         db,
         [
             {
-                **_quote("000001", "eastmoney", 16.0),
+                **_quote("000001", "tushare", 16.0),
                 "source_count": 1,
-                "raw_sources": ["eastmoney"],
+                "raw_sources": ["tushare"],
                 "quality_score": 80.0,
                 "freshness_status": "fresh",
                 "chg60": 0.0,
                 "ytd_chg": 0.0,
-                "source_trace": {"raw_sources": ["eastmoney"], "source_count": 1, "field_sources": {}},
+                "source_trace": {"raw_sources": ["tushare"], "source_count": 1, "field_sources": {}},
             }
         ],
     )
@@ -211,14 +200,14 @@ def test_load_or_refresh_quotes_does_not_use_stale_cache_after_refresh_error(db,
         [
             market_pool._merge_quote_rows(
                 "000001",
-                [_quote("000001", "eastmoney", 10.00), _quote("000001", "tencent", 10.01)],
-                ["eastmoney", "tencent"],
+                [_quote("000001", "tushare", 10.00)],
+                ["tushare"],
                 settings,
             ),
             market_pool._merge_quote_rows(
                 "000002",
-                [_quote("000002", "eastmoney", 20.00), _quote("000002", "tencent", 20.01)],
-                ["eastmoney", "tencent"],
+                [_quote("000002", "tushare", 20.00)],
+                ["tushare"],
                 settings,
             ),
         ],
@@ -243,9 +232,7 @@ def test_load_or_refresh_quotes_does_not_use_stale_cache_after_refresh_error(db,
 
 def test_disabled_quote_source_is_not_called(db, monkeypatch):
     settings = DummySettings()
-    db.add(DataSourceConfig(source="eastmoney", source_type="quote", enabled=False, priority=0))
-    db.add(DataSourceConfig(source="tencent", source_type="quote", enabled=True, priority=1))
-    db.add(DataSourceConfig(source="sina", source_type="quote", enabled=True, priority=2))
+    db.add(DataSourceConfig(source="tushare", source_type="quote", enabled=False, priority=0))
     db.commit()
     calls = []
 
@@ -257,14 +244,14 @@ def test_disabled_quote_source_is_not_called(db, monkeypatch):
 
     quotes, meta = market_pool._load_or_refresh_quotes(db, settings)
 
-    assert len(quotes) == 2
-    assert meta["sources"] == ["sina", "tencent"]
-    assert calls == ["tencent", "sina"]
+    assert len(quotes) == 0
+    assert meta["sources"] == []
+    assert calls == []
 
 
 def test_all_quote_sources_disabled_raises_without_fetching(db, monkeypatch):
     settings = DummySettings()
-    for index, source in enumerate(["eastmoney", "tencent", "sina"]):
+    for index, source in enumerate(["tushare"]):
         db.add(DataSourceConfig(source=source, source_type="quote", enabled=False, priority=index))
     db.commit()
 
@@ -286,18 +273,18 @@ def test_enabled_sources_respects_synced_config_without_extra_insert(db, monkeyp
     monkeypatch.setattr("app.services.data_sources.get_settings", lambda: settings)
 
     sync_data_source_configs(db)
-    row = db.get(DataSourceConfig, {"source": "eastmoney", "source_type": "quote"})
+    row = db.get(DataSourceConfig, {"source": "tushare", "source_type": "quote"})
     assert row is not None
     row.enabled = False
     db.commit()
 
-    active = enabled_sources(db, "quote", ["eastmoney", "tencent", "sina"])
+    active = enabled_sources(db, "quote", ["tushare"])
     count = db.query(DataSourceConfig).filter(
-        DataSourceConfig.source == "eastmoney",
+        DataSourceConfig.source == "tushare",
         DataSourceConfig.source_type == "quote",
     ).count()
 
-    assert active == ["tencent", "sina"]
+    assert active == []
     assert count == 1
 
 
@@ -324,8 +311,8 @@ def test_local_only_skips_stale_bars_instead_of_running_with_them(db, monkeypatc
 
     merged = market_pool._merge_quote_rows(
         "000001",
-        [_quote("000001", "eastmoney", 10.00), _quote("000001", "tencent", 10.01)],
-        ["eastmoney", "tencent"],
+        [_quote("000001", "tushare", 10.00)],
+        ["tushare"],
         settings,
     )
     market_pool._persist_unified_quotes(db, [merged])
@@ -348,9 +335,7 @@ def test_get_market_universe_local_pool_preferred_refreshes_when_pool_is_empty(d
 
     def fake_fetch_quotes(source, _settings):
         calls["quotes"] += 1
-        if source in {"eastmoney", "tencent"}:
-            return [_quote("000001", source, 10.00), _quote("000002", source, 20.00)]
-        return []
+        return [_quote("000001", source, 10.00), _quote("000002", source, 20.00)]
 
     def fake_fetch_kline(_source, quote, _settings, **__):
         calls["kline"] += 1
@@ -363,7 +348,7 @@ def test_get_market_universe_local_pool_preferred_refreshes_when_pool_is_empty(d
     stocks, snapshot = market_pool.get_market_universe_from_pool(db, refresh=True)
 
     assert len(stocks) == 2
-    assert calls["quotes"] == 3
+    assert calls["quotes"] == 1
     assert calls["kline"] == 2
     assert snapshot["breadth"]["quote_pool_status"] == "refreshed"
 
@@ -376,17 +361,17 @@ def test_market_snapshot_uses_full_eligible_universe_instead_of_top_300(db, monk
         pct = 5.0 if index < 300 else -4.5
         industry = "软件服务" if index < 300 else "煤炭"
         quote = {
-            **_quote(f"{index + 1:06d}", "eastmoney", 10.0 + index * 0.01, pct=pct),
+            **_quote(f"{index + 1:06d}", "tushare", 10.0 + index * 0.01, pct=pct),
             "industry": industry,
         }
         quotes.append(
             {
                 **quote,
                 "source_count": 1,
-                "raw_sources": ["eastmoney"],
+                "raw_sources": ["tushare"],
                 "quality_score": 80.0,
                 "freshness_status": "fresh",
-                "source_trace": {"raw_sources": ["eastmoney"], "source_count": 1, "field_sources": {}},
+                "source_trace": {"raw_sources": ["tushare"], "source_count": 1, "field_sources": {}},
             }
         )
     market_pool._persist_unified_quotes(db, quotes)
@@ -406,12 +391,12 @@ def test_local_pool_status_summarizes_unified_quotes_and_bars(db, monkeypatch):
     settings = DummySettings()
 
     def fake_fetch_quotes(source, _settings):
-        if source in {"eastmoney", "tencent"}:
+        if source in {"tushare"}:
             return [_quote("000001", source, 10.00), _quote("000002", source, 20.00)]
         return []
 
     monkeypatch.setattr(market_pool, "_fetch_quotes", fake_fetch_quotes)
-    market_pool._refresh_quote_pool(db, settings, active_sources=["eastmoney", "tencent"])
+    market_pool._refresh_quote_pool(db, settings, active_sources=["tushare"])
     db.add(
         DailyKbar(
             code="000001",
@@ -433,8 +418,8 @@ def test_local_pool_status_summarizes_unified_quotes_and_bars(db, monkeypatch):
     assert status["summary"]["raw_quote_count"] == 4
     assert status["summary"]["active_unified_quote_count"] == 2
     assert status["summary"]["daily_bar_count"] == 1
-    assert {row["source"] for row in status["quote_sources"]} == {"eastmoney", "tencent"}
-    assert status["unified_quotes"][0]["source_count"] == 2
+    assert {row["source"] for row in status["quote_sources"]} == {"tushare"}
+    assert status["unified_quotes"][0]["source_count"] == 1
     assert status["daily_bars"][0]["code"] == "000001"
 
 
@@ -442,13 +427,13 @@ def test_local_pool_status_reports_recommendation_readiness(db, monkeypatch):
     settings = DummySettings()
 
     def fake_fetch_quotes(source, _settings):
-        if source in {"eastmoney", "tencent"}:
+        if source in {"tushare"}:
             return [_quote("000001", source, 10.00), _quote("000002", source, 20.00)]
         return []
 
     monkeypatch.setattr(market_pool, "get_settings", lambda: settings)
     monkeypatch.setattr(market_pool, "_fetch_quotes", fake_fetch_quotes)
-    market_pool._refresh_quote_pool(db, settings, active_sources=["eastmoney", "tencent"])
+    market_pool._refresh_quote_pool(db, settings, active_sources=["tushare"])
     market_pool._persist_normalized_bars(db, _bars("000001", days=35))
     market_pool._persist_normalized_bars(db, _bars("000002", days=35))
     db.commit()
@@ -472,17 +457,17 @@ def test_local_pool_readiness_treats_zero_candidate_count_as_full_market(db, mon
     settings = DummySettings()
     settings.market_candidate_count = 0
 
-    quotes = [_quote("000001", "eastmoney", 10.00), _quote("000002", "eastmoney", 20.00), _quote("000003", "eastmoney", 30.00)]
+    quotes = [_quote("000001", "tushare", 10.00), _quote("000002", "tushare", 20.00), _quote("000003", "tushare", 30.00)]
     market_pool._persist_unified_quotes(
         db,
         [
             {
                 **quote,
                 "source_count": 1,
-                "raw_sources": ["eastmoney"],
+                "raw_sources": ["tushare"],
                 "quality_score": 80.0,
                 "freshness_status": "fresh",
-                "source_trace": {"raw_sources": ["eastmoney"], "source_count": 1, "field_sources": {}},
+                "source_trace": {"raw_sources": ["tushare"], "source_count": 1, "field_sources": {}},
             }
             for quote in quotes
         ],
@@ -525,13 +510,13 @@ def test_local_pool_status_reports_missing_kline_gap(db, monkeypatch):
     settings = DummySettings()
 
     def fake_fetch_quotes(source, _settings):
-        if source in {"eastmoney", "tencent"}:
+        if source in {"tushare"}:
             return [_quote("000001", source, 10.00), _quote("000002", source, 20.00)]
         return []
 
     monkeypatch.setattr(market_pool, "get_settings", lambda: settings)
     monkeypatch.setattr(market_pool, "_fetch_quotes", fake_fetch_quotes)
-    market_pool._refresh_quote_pool(db, settings, active_sources=["eastmoney", "tencent"])
+    market_pool._refresh_quote_pool(db, settings, active_sources=["tushare"])
 
     status = get_local_pool_status(db)
     readiness = status["recommendation_readiness"]
@@ -546,17 +531,17 @@ def test_local_pool_status_separates_pool_coverage_from_demo_scan_limit(db, monk
     settings = DummySettings()
     settings.market_candidate_count = 1
     settings.market_candidate_lookahead_multiplier = 1
-    quotes = [_quote("000001", "eastmoney", 10.00), _quote("000002", "eastmoney", 20.00), _quote("000003", "eastmoney", 30.00)]
+    quotes = [_quote("000001", "tushare", 10.00), _quote("000002", "tushare", 20.00), _quote("000003", "tushare", 30.00)]
     market_pool._persist_unified_quotes(
         db,
         [
             {
                 **quote,
                 "source_count": 1,
-                "raw_sources": ["eastmoney"],
+                "raw_sources": ["tushare"],
                 "quality_score": 80.0,
                 "freshness_status": "fresh",
-                "source_trace": {"raw_sources": ["eastmoney"], "source_count": 1, "field_sources": {}},
+                "source_trace": {"raw_sources": ["tushare"], "source_count": 1, "field_sources": {}},
             }
             for quote in quotes
         ],
@@ -581,17 +566,17 @@ def test_local_pool_status_separates_pool_coverage_from_demo_scan_limit(db, monk
 def test_local_pool_status_reports_short_history_separately(db, monkeypatch):
     settings = DummySettings()
     settings.market_candidate_count = 0
-    quotes = [_quote("000001", "eastmoney", 10.00), _quote("000002", "eastmoney", 20.00)]
+    quotes = [_quote("000001", "tushare", 10.00), _quote("000002", "tushare", 20.00)]
     market_pool._persist_unified_quotes(
         db,
         [
             {
                 **quote,
                 "source_count": 1,
-                "raw_sources": ["eastmoney"],
+                "raw_sources": ["tushare"],
                 "quality_score": 80.0,
                 "freshness_status": "fresh",
-                "source_trace": {"raw_sources": ["eastmoney"], "source_count": 1, "field_sources": {}},
+                "source_trace": {"raw_sources": ["tushare"], "source_count": 1, "field_sources": {}},
             }
             for quote in quotes
         ],
@@ -618,8 +603,8 @@ def test_local_pool_status_counts_low_liquidity_as_available_universe(db, monkey
     settings = DummySettings()
     settings.market_candidate_count = 0
     quotes = [
-        _quote("000001", "eastmoney", 10.00),
-        _low_liquidity_quote("000002", "eastmoney", 20.00),
+        _quote("000001", "tushare", 10.00),
+        _low_liquidity_quote("000002", "tushare", 20.00),
     ]
     market_pool._persist_unified_quotes(
         db,
@@ -627,10 +612,10 @@ def test_local_pool_status_counts_low_liquidity_as_available_universe(db, monkey
             {
                 **quote,
                 "source_count": 1,
-                "raw_sources": ["eastmoney"],
+                "raw_sources": ["tushare"],
                 "quality_score": 80.0,
                 "freshness_status": "fresh",
-                "source_trace": {"raw_sources": ["eastmoney"], "source_count": 1, "field_sources": {}},
+                "source_trace": {"raw_sources": ["tushare"], "source_count": 1, "field_sources": {}},
             }
             for quote in quotes
         ],
@@ -655,7 +640,7 @@ def test_local_pool_status_counts_low_liquidity_as_available_universe(db, monkey
 def test_local_pool_status_uses_quote_date_for_coverage_reference(db, monkeypatch):
     settings = DummySettings()
     settings.market_candidate_count = 0
-    quote = _quote("000001", "eastmoney", 10.00)
+    quote = _quote("000001", "tushare", 10.00)
     market_pool._persist_unified_quotes(
         db,
         [
@@ -663,10 +648,10 @@ def test_local_pool_status_uses_quote_date_for_coverage_reference(db, monkeypatc
                 **quote,
                 "trade_date": "2026-05-13",
                 "source_count": 1,
-                "raw_sources": ["eastmoney"],
+                "raw_sources": ["tushare"],
                 "quality_score": 80.0,
                 "freshness_status": "fresh",
-                "source_trace": {"raw_sources": ["eastmoney"], "source_count": 1, "field_sources": {}},
+                "source_trace": {"raw_sources": ["tushare"], "source_count": 1, "field_sources": {}},
             }
         ],
     )

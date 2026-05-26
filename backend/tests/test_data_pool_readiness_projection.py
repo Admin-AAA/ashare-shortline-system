@@ -97,7 +97,7 @@ def test_summarize_tasks_counts_running_and_failures():
 def test_cached_local_pool_status_reuses_heavy_status(monkeypatch):
     calls = []
 
-    def fake_pool_status(db, unified_limit, unified_offset, bars_limit, bars_offset):
+    def fake_pool_status(db, unified_limit, unified_offset, bars_limit, bars_offset, **kwargs):
         calls.append((unified_limit, unified_offset, bars_limit, bars_offset))
         return {
             "summary": {"unified_quote_count": 10},
@@ -145,7 +145,7 @@ def test_cached_local_pool_status_cache_only_can_use_stale_cache(monkeypatch):
     monkeypatch.setattr(data_sources_api, "get_local_pool_status", fake_pool_status)
     with data_sources_api._pool_status_lock:
         data_sources_api._pool_status_cache.clear()
-        data_sources_api._pool_status_cache[data_sources_api._POOL_CACHE_KEY] = {
+        data_sources_api._pool_status_cache[data_sources_api._POOL_CACHE_KEY + ":full"] = {
             "ts": 0.0,
             "data": {
                 "summary": {"unified_quote_count": 10},

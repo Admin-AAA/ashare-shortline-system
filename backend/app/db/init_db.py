@@ -9,12 +9,13 @@
 
 from sqlalchemy import inspect, text
 
-from app.db.session import Base, engine
+from app.db.session import Base, engine, _is_sqlite
 from app.models import tables  # noqa: F401
 
 
 def init_db() -> None:
-    _migrate_v2()
+    if not _is_sqlite:
+        _migrate_v2()
     Base.metadata.create_all(bind=engine)
     _ensure_indexes()
 
@@ -92,7 +93,7 @@ def _ensure_indexes() -> None:
             _ensure_index(connection, inspector, "stk_limits", "idx_sl_code_td", "code, trade_date")
 
         if "minute_kbars" in existing_tables:
-            _ensure_index(connection, inspector, "minute_kbars", "idx_mk_code_time", "code, trade_time")
+            _migrate_minute_kbars(connection, inspector)
             _ensure_index(connection, inspector, "minute_kbars", "idx_mk_td", "trade_date")
 
         if "auction_data" in existing_tables:
@@ -174,10 +175,55 @@ def _ensure_indexes() -> None:
 def _ensure_index(connection, inspector, table: str, index_name: str, columns: str) -> None:
     existing = {idx["name"] for idx in inspector.get_indexes(table)}
     if index_name not in existing:
-        connection.execute(text(f"CREATE INDEX {index_name} ON {table}({columns})"))
+        try:
+            connection.execute(text(f"CREATE INDEX {index_name} ON {table}({columns})"))
+        except Exception:
+            pass  # 兼容旧表缺失列的场景
 
 
 def _ensure_column(connection, existing_columns: set[str], table: str, column: str, definition: str) -> None:
     if column not in existing_columns:
-        connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {definition}"))
-        existing_columns.add(column)
+        try:
+            connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {definition}"))
+            existing_columns.add(column)
+        except Exception:
+            pass  # 兼容 SQLite / 旧表场景
+
+
+def _migrate_minute_kbars(connection, inspector=None) -> None:
+    """迁移 minute_kbars 表：加 freq 列 + 更新唯一约束。"""
+    from sqlalchemy import inspect as _fresh_inspect
+
+    _inspector = _fresh_inspect(connection)
+    cols = {c["name"] for c in _inspector.get_columns("minute_kbars")}
+
+    # 1. 加 freq 列
+    if "freq" not in cols:
+        try:
+            connection.execute(text(
+                "ALTER TABLE minute_kbars ADD COLUMN freq VARCHAR(5) DEFAULT '1min'"
+            ))
+        except Exception:
+            pass  # 兼容 SQLite / 已存在列场景
+        # ALTER TABLE 后需重新 inspect（Inspector 会缓存列信息）
+        _inspector = _fresh_inspect(connection)
+        cols = {c["name"] for c in _inspector.get_columns("minute_kbars")}
+
+    # 2. 删除旧唯一约束（MySQL 以索引形式存在）
+    old_uniq = "uq_minute_kbar_code_time"
+    existing_idxs = {idx["name"] for idx in _inspector.get_indexes("minute_kbars")}
+    if old_uniq in existing_idxs:
+        try:
+            connection.execute(text(f"ALTER TABLE minute_kbars DROP INDEX {old_uniq}"))
+        except Exception:
+            pass  # SQLite 可能不支持
+
+    # 3. 创建新唯一约束
+    new_uniq = "uq_minute_kbar_code_freq_time"
+    if new_uniq not in existing_idxs:
+        try:
+            connection.execute(text(
+                f"CREATE UNIQUE INDEX {new_uniq} ON minute_kbars(code, freq, trade_time)"
+            ))
+        except Exception:
+            pass

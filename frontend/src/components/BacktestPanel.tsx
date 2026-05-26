@@ -558,6 +558,22 @@ export default memo(function BacktestPanel() {
                       {result.aggregate_metrics.benchmark_excess_return != null ? `${result.aggregate_metrics.benchmark_excess_return.toFixed(2)}%` : result.aggregate_metrics.win_loss_ratio}
                     </strong>
                   </div>
+                  {hasNumber(result.aggregate_metrics.positive_month_ratio) && (
+                    <div className="bt-metric-card">
+                      <span>月度胜率</span>
+                      <strong className={result.aggregate_metrics.positive_month_ratio >= 0.5 ? "positive" : "negative"}>
+                        {(result.aggregate_metrics.positive_month_ratio * 100).toFixed(0)}%
+                      </strong>
+                    </div>
+                  )}
+                  {hasNumber(result.aggregate_metrics.strategy_compound_return) && (
+                    <div className="bt-metric-card">
+                      <span>策略复利</span>
+                      <strong className={result.aggregate_metrics.strategy_compound_return >= 0 ? "positive" : "negative"}>
+                        {result.aggregate_metrics.strategy_compound_return.toFixed(2)}%
+                      </strong>
+                    </div>
+                  )}
                 </div>
                 {result.aggregate_metrics.low_confidence ? (
                   <div className="bt-error">
@@ -565,6 +581,25 @@ export default memo(function BacktestPanel() {
                     样本数低于 30 笔，当前结论为低置信度
                   </div>
                 ) : null}
+                {result.aggregate_metrics.false_positive_notes?.length > 0 && (
+                  <details className="bt-false-positive-details">
+                    <summary style={{ cursor: "pointer", marginTop: "0.5rem", fontSize: "0.85rem", color: "var(--text-muted)" }}>
+                      误判归因 ({result.aggregate_metrics.false_positive_notes.length} 类)
+                    </summary>
+                    <ul style={{ marginTop: "0.3rem", fontSize: "0.8rem", paddingLeft: "1rem" }}>
+                      {result.aggregate_metrics.false_positive_notes.map((fp: any, i: number) => (
+                        <li key={i}>
+                          <strong>{fp.reason}</strong>: {fp.count} 笔
+                          {fp.examples?.length > 0 && (
+                            <span style={{ color: "var(--text-muted)", marginLeft: "0.5rem" }}>
+                              ({fp.examples.join(", ")})
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
               </div>
             )}
 

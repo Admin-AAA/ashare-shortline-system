@@ -9,20 +9,12 @@ from collections import deque
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-import httpx
-
 from app.core.config import get_settings
 
 
 class MarketDataError(RuntimeError):
     pass
 
-
-HTTP_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-    "Referer": "https://quote.eastmoney.com/",
-}
 
 _TUSHARE_CALL_TIMES: deque[float] = deque()
 _TUSHARE_RATE_LOCK = threading.Lock()
@@ -43,12 +35,10 @@ def get_market_universe() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     stocks: list[dict[str, Any]] = []
     kline_errors: dict[str, list[str]] = {}
     kline_usage: Counter[str] = Counter()
-    disabled_kline_sources: set[str] = set()
     for quote in candidates:
         if len(stocks) >= recall_plan["scan_target_count"]:
             break
-        bars, source, errors = _fetch_first_kline(quote, kline_sources, settings, disabled_kline_sources)
-        disabled_kline_sources.update(_global_failed_kline_sources(errors))
+        bars, source, errors = _fetch_first_kline(quote, kline_sources, settings)
         if not bars:
             kline_errors[quote["code"]] = errors
             continue
@@ -74,7 +64,6 @@ def get_market_universe() -> tuple[list[dict[str, Any]], dict[str, Any]]:
         kline_sources=kline_sources,
         kline_usage=kline_usage,
         kline_errors=kline_errors,
-        disabled_kline_sources=disabled_kline_sources,
         quote_snapshot=quote_snapshot,
     )
     snapshot.setdefault("breadth", {}).update(
@@ -125,29 +114,23 @@ def get_market_snapshot() -> dict[str, Any]:
 
 
 def _fetch_first_quotes(sources: list[str], settings: Any) -> tuple[str, list[dict[str, Any]], list[str]]:
-    errors: list[str] = []
-    for source in sources:
-        try:
-            quotes = _fetch_quotes(source, settings)
-            if quotes:
-                return source, quotes, errors
-            errors.append(f"{source}: empty result")
-        except Exception as exc:  # noqa: BLE001 - returned to the local operator as run evidence
-            errors.append(f"{source}: {exc}")
-    raise MarketDataError("真实行情快照获取失败，已停止运行。" + ("；".join(errors) if errors else ""))
+    try:
+        quotes = _fetch_quotes("tushare", settings)
+        if quotes:
+            return "tushare", quotes, []
+    except Exception as exc:  # noqa: BLE001 - returned to the local operator as run evidence
+        raise MarketDataError("真实行情快照获取失败，已停止运行。" + str(exc)) from exc
+    raise MarketDataError("真实行情快照获取失败，已停止运行。Tushare 返回空。")
 
 
 def _fetch_first_candidate_quotes(sources: list[str], settings: Any) -> tuple[str, list[dict[str, Any]], list[str]]:
-    errors: list[str] = []
-    for source in sources:
-        try:
-            quotes = _fetch_quotes(source, settings)
-            if _eligible_market_quotes(quotes):
-                return source, quotes, errors
-            errors.append(f"{source}: {len(quotes)} quotes but 0 tradeable quotes after filters")
-        except Exception as exc:  # noqa: BLE001 - returned to the local operator as run evidence
-            errors.append(f"{source}: {exc}")
-    raise MarketDataError("真实行情候选池获取失败，已停止运行。" + ("；".join(errors) if errors else ""))
+    try:
+        quotes = _fetch_quotes("tushare", settings)
+        if _eligible_market_quotes(quotes):
+            return "tushare", quotes, []
+    except Exception as exc:  # noqa: BLE001 - returned to the local operator as run evidence
+        raise MarketDataError("真实行情候选池获取失败，已停止运行。" + str(exc)) from exc
+    raise MarketDataError("真实行情候选池获取失败，已停止运行。Tushare 返回空。")
 
 
 def _eligible_market_quotes(quotes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -264,35 +247,17 @@ def _fetch_first_kline(
     disabled_sources: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], str, list[str]]:
     errors: list[str] = []
-    disabled_sources = disabled_sources if disabled_sources is not None else set()
-    for source in sources:
-        if source in disabled_sources:
-            errors.append(f"{source}: 本次扫描已熔断，跳过")
-            continue
-        try:
-            bars = _fetch_kline(source, quote, settings)
-            if len(bars) >= 30:
-                return bars, source, errors
-            errors.append(f"{source}: 日K不足30条")
-        except Exception as exc:  # noqa: BLE001 - returned to the local operator as run evidence
-            message = f"{source}: {exc}"
-            errors.append(message)
-            if _is_global_kline_source_error(source, str(exc)):
-                disabled_sources.add(source)
+    try:
+        bars = _fetch_kline("tushare", quote, settings)
+        if len(bars) >= 30:
+            return bars, "tushare", errors
+        errors.append("tushare: 日K不足30条")
+    except Exception as exc:  # noqa: BLE001 - returned to the local operator as run evidence
+        errors.append(f"tushare: {exc}")
     return [], "", errors
 
 
 def _fetch_quotes(source: str, settings: Any) -> list[dict[str, Any]]:
-    if source in {"thsdk", "thssdk"}:
-        return _fetch_thsdk_quotes(settings)
-    if source == "sina":
-        return _fetch_sina_quotes(settings)
-    if source == "tencent":
-        return _fetch_tencent_quotes(settings)
-    if source == "eastmoney":
-        return _fetch_eastmoney_quotes(settings)
-    if source == "akshare":
-        return _fetch_akshare_quotes(settings)
     if source == "tushare":
         return _fetch_tushare_quotes(settings)
     raise MarketDataError(f"未知行情源: {source}")
@@ -305,166 +270,115 @@ def _fetch_kline(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> list[dict[str, Any]]:
-    if source == "tushare":
-        return _fetch_tushare_kline(quote, settings, start_date=start_date, end_date=end_date)
-    raise MarketDataError(f"未知日K源: {source}")
+    return _fetch_tushare_kline(quote, settings, start_date=start_date, end_date=end_date)
 
 
-def _fetch_eastmoney_quotes(settings: Any) -> list[dict[str, Any]]:
-    fields = "f2,f3,f5,f6,f8,f9,f12,f14,f20,f21,f24,f25,f62,f100"
-    rows: list[dict[str, Any]] = []
-    page_size = min(100, max(50, int(getattr(settings, "market_scan_size", 100))))
-    max_pages = max(1, math.ceil(max(1, int(getattr(settings, "market_scan_size", page_size))) / page_size))
-    for page in range(1, max_pages + 1):
-        url = (
-            "https://push2.eastmoney.com/api/qt/clist/get"
-            f"?pn={page}&pz={page_size}&po=1&np=1&fltt=2&invt=2"
-            "&fid=f6&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23"
-            f"&fields={fields}"
-        )
-        data = _http_get_json(url, settings)
-        page_rows = data.get("data", {}).get("diff", []) or []
-        if not page_rows:
-            break
-        rows.extend(page_rows)
-        total = int(_num(data.get("data", {}).get("total"), 0))
-        if total and len(rows) >= min(total, int(getattr(settings, "market_scan_size", total))):
-            break
-    rows = rows[: int(getattr(settings, "market_scan_size", len(rows)))]
-    return [
-        _quote(
-            code=str(row.get("f12") or ""),
-            name=str(row.get("f14") or ""),
-            price=_num(row.get("f2")),
-            pct=_num(row.get("f3")),
-            volume=_num(row.get("f5")),
-            amount_yi=_num(row.get("f6")) / 100000000,
-            turnover_rate=_num(row.get("f8")),
-            pe_ttm=_num(row.get("f9")),
-            total_mv_yi=_num(row.get("f20")) / 100000000,
-            free_mv_yi=_num(row.get("f21")) / 100000000,
-            chg60=_num(row.get("f24")),
-            ytd_chg=_num(row.get("f25")),
-            main_net_inflow_yi=_num(row.get("f62")) / 100000000,
-            industry=str(row.get("f100") or "未分类"),
-            source="eastmoney",
-        )
-        for row in rows
-    ]
 
 
-def _fetch_akshare_quotes(settings: Any) -> list[dict[str, Any]]:
-    try:
-        import akshare as ak
-    except ImportError as exc:
-        raise MarketDataError("未安装 akshare，请先安装后端依赖。") from exc
-    df = ak.stock_zh_a_spot_em()
-    rows = df.to_dict("records")
-    return [
-        _quote(
-            code=str(row.get("代码") or ""),
-            name=str(row.get("名称") or ""),
-            price=_num(row.get("最新价")),
-            pct=_num(row.get("涨跌幅")),
-            volume=_num(row.get("成交量")),
-            amount_yi=_num(row.get("成交额")) / 100000000,
-            turnover_rate=_num(row.get("换手率")),
-            pe_ttm=_num(row.get("市盈率-动态")),
-            total_mv_yi=_num(row.get("总市值")) / 100000000,
-            free_mv_yi=_num(row.get("流通市值")) / 100000000,
-            chg60=_num(row.get("60日涨跌幅")),
-            ytd_chg=_num(row.get("年初至今涨跌幅")),
-            main_net_inflow_yi=0,
-            industry=str(row.get("行业") or "未分类"),
-            source="akshare",
-        )
-        for row in rows
-    ][: settings.market_scan_size]
 
 
-def _fetch_sina_quotes(settings: Any) -> list[dict[str, Any]]:
-    codes = _default_quote_code_list(settings.market_scan_size)
-    rows: list[dict[str, Any]] = []
-    batch_size = 120
-    for start in range(0, len(codes), batch_size):
-        batch = codes[start : start + batch_size]
-        if not batch:
-            continue
-        url = f"https://hq.sinajs.cn/list={','.join(batch)}"
-        text = _http_get_text(url, settings, headers={"Referer": "https://finance.sina.com.cn"}, encoding="gbk")
-        rows.extend(_parse_sina_quotes(text))
-    return rows
-
-
-def _fetch_tencent_quotes(settings: Any) -> list[dict[str, Any]]:
-    codes = _default_quote_code_list(settings.market_scan_size)
-    rows: list[dict[str, Any]] = []
-    batch_size = 120
-    for start in range(0, len(codes), batch_size):
-        batch = codes[start : start + batch_size]
-        if not batch:
-            continue
-        url = f"https://qt.gtimg.cn/q={','.join(batch)}"
-        text = _http_get_text(url, settings, headers={"Referer": "https://gu.qq.com"}, encoding="gbk")
-        rows.extend(_parse_tencent_quotes(text))
-    return rows
 
 
 def _fetch_tushare_quotes(settings: Any) -> list[dict[str, Any]]:
-    raise MarketDataError("Tushare 免费 token 仅接入非复权日线，不作为报价源。")
+    """使用 Tushare 获取 A 股行情快照。通过 stock_basic + daily 组合。"""
+    from app.services.tushare_client import get_pro, ts_code
+
+    _throttle_tushare(settings)
+    pro = get_pro()
+
+    # 获取全部上市股票列表
+    basic = pro.stock_basic(exchange="", list_status="L", fields="symbol,name,industry,market")
+    if basic is None or basic.empty:
+        raise MarketDataError("Tushare stock_basic 返回空，无法构建行情池。")
+
+    # 获取最近交易日
+    today_str = date.today().strftime("%Y%m%d")
+    start_str = (date.today() - timedelta(days=14)).strftime("%Y%m%d")
+    cal = pro.trade_cal(exchange="SSE", start_date=start_str, end_date=today_str, is_open="1")
+    if cal is None or cal.empty:
+        raise MarketDataError("Tushare 未返回交易日历。")
+    latest_trade_date = str(cal.sort_values("cal_date").iloc[-1]["cal_date"])
+
+    # 批量获取 daily + daily_basic
+    stocks_list: list[dict[str, Any]] = []
+    for _, row in basic.iterrows():
+        symbol = str(row.get("symbol") or "")
+        name = str(row.get("name") or "")
+        industry = str(row.get("industry") or "未分类")
+        market = str(row.get("market") or "").upper()
+        exchange = "SH" if market == "主板" else "SZ"
+        if symbol.startswith(("8", "4")):
+            exchange = "BJ"
+        stocks_list.append({"code": symbol, "name": name, "industry": industry, "exchange": exchange})
+
+    # 分批发 daily 查询（Tushare 有频率限制但自建服务器不限）
+    codes_chunks = [stocks_list[i:i+200] for i in range(0, len(stocks_list), 200)]
+    ts_code_to_stock: dict[str, dict[str, Any]] = {}
+    for chunk in codes_chunks:
+        for s in chunk:
+            tsc = ts_code(s["code"])
+            ts_code_to_stock[tsc] = s
+
+    for chunk in codes_chunks:
+        tscs = [ts_code(s["code"]) for s in chunk]
+        for tsc in tscs:
+            try:
+                df = pro.daily(ts_code=tsc, start_date=latest_trade_date, end_date=latest_trade_date)
+                if df is not None and not df.empty:
+                    row = df.iloc[0]
+                    s = ts_code_to_stock[tsc]
+                    s["price"] = float(row.get("close", 0))
+                    s["pct"] = float(row.get("pct_chg", 0))
+                    s["volume"] = float(row.get("vol", 0))
+                    s["amount_yi"] = float(row.get("amount", 0)) * 1000 / 100000000
+                    s["turnover_rate"] = 0.0
+                    s["pe_ttm"] = 0.0
+                    s["total_mv_yi"] = 0.0
+                    s["free_mv_yi"] = 0.0
+                    s["chg60"] = 0.0
+                    s["ytd_chg"] = 0.0
+                    s["main_net_inflow_yi"] = 0.0
+            except Exception:
+                pass
+
+    # 尝试用 daily_basic 补充换手率等信息
+    for tsc, s in ts_code_to_stock.items():
+        try:
+            basic_df = pro.daily_basic(ts_code=tsc, start_date=latest_trade_date, end_date=latest_trade_date)
+            if basic_df is not None and not basic_df.empty:
+                row = basic_df.iloc[0]
+                s["turnover_rate"] = float(row.get("turnover_rate", 0))
+                s["pe_ttm"] = float(row.get("pe_ttm", 0))
+                s["total_mv_yi"] = float(row.get("total_mv", 0)) / 100000000
+                s["free_mv_yi"] = float(row.get("circ_mv", 0)) / 100000000
+        except Exception:
+            pass
+
+    quotes = [
+        _quote(
+            code=s["code"],
+            name=s["name"],
+            price=s.get("price", 0.0),
+            pct=s.get("pct", 0.0),
+            volume=s.get("volume", 0),
+            amount_yi=s.get("amount_yi", 0.0),
+            turnover_rate=s.get("turnover_rate", 0.0),
+            pe_ttm=s.get("pe_ttm", 0.0),
+            total_mv_yi=s.get("total_mv_yi", 0.0),
+            free_mv_yi=s.get("free_mv_yi", 0.0),
+            chg60=s.get("chg60", 0.0),
+            ytd_chg=s.get("ytd_chg", 0.0),
+            main_net_inflow_yi=s.get("main_net_inflow_yi", 0.0),
+            industry=s["industry"],
+            source="tushare",
+        )
+        for s in stocks_list
+        if s.get("price", 0) > 0 and s["code"]
+    ]
+
+    return quotes[: getattr(settings, "market_scan_size", len(quotes))]
 
 
-def _fetch_thsdk_quotes(settings: Any) -> list[dict[str, Any]]:
-    rows_by_code: dict[str, dict[str, Any]] = {}
-    list_response = None
-    batch_errors: list[str] = []
-    batch_size = max(1, int(getattr(settings, "thsdk_batch_size", 600) or 600))
-    scan_size = max(1, int(getattr(settings, "market_scan_size", 5200) or 5200))
-
-    with _thsdk_client(settings) as ths:
-        list_response = ths.stock_cn_lists()
-        if not list_response:
-            raise MarketDataError(f"thsdk stock_cn_lists failed: {getattr(list_response, 'error', '')}")
-
-        listed_rows = _thsdk_rows(getattr(list_response, "data", None))
-        ths_codes = []
-        name_by_code: dict[str, str] = {}
-        for row in listed_rows:
-            ths_code = _ths_code_from_row(row)
-            code = _normalize_code(ths_code)
-            if not ths_code or _ths_market_prefix(ths_code) not in {"USHA", "USZA", "USTM"} or not code:
-                continue
-            ths_codes.append(ths_code)
-            name_by_code[code] = _first_text(row, ("名称", "证券简称", "股票简称", "name", "Name"))
-            if len(ths_codes) >= scan_size:
-                break
-
-        by_market: dict[str, list[str]] = defaultdict(list)
-        for ths_code in ths_codes:
-            by_market[_ths_market_prefix(ths_code)].append(ths_code)
-
-        for market, market_codes in by_market.items():
-            for batch in _batched(market_codes, batch_size):
-                try:
-                    time.sleep(0.03)
-                    response = ths.market_data_cn(batch, query_key="汇总")
-                    if not response:
-                        batch_errors.append(f"{market}: {getattr(response, 'error', '') or 'empty response'}")
-                        continue
-                    for row in _thsdk_rows(getattr(response, "data", None)):
-                        ths_code = _ths_code_from_row(row, default_market=market)
-                        code = _normalize_code(ths_code)
-                        if not code:
-                            continue
-                        merged = rows_by_code.setdefault(code, {"代码": ths_code, "名称": name_by_code.get(code, "")})
-                        _merge_non_empty(merged, row)
-                except Exception as exc:  # noqa: BLE001 - surfaced to caller if the source is unusable
-                    batch_errors.append(f"{market}: {exc}")
-
-    quotes = [_quote_from_thsdk_row(row) for row in rows_by_code.values()]
-    if not quotes and batch_errors:
-        raise MarketDataError("thsdk 行情查询失败：" + "；".join(batch_errors[:5]))
-    return quotes[:scan_size]
 
 
 def _fetch_tushare_kline(
@@ -712,6 +626,14 @@ def _candidate_trend_score(chg60: float) -> float:
     return max(-4.0, 8.6 - (chg60 - 50.0) * 0.28)
 
 
+def _quote_sources(settings: Any) -> list[str]:
+    return ["tushare"]
+
+
+def _kline_sources(settings: Any) -> list[str]:
+    return ["tushare"]
+
+
 def _build_stock_from_bars(
     quote: dict[str, Any],
     bars: list[dict[str, Any]],
@@ -955,7 +877,6 @@ def _build_snapshot(
     kline_sources: list[str],
     kline_usage: Counter[str],
     kline_errors: dict[str, list[str]],
-    disabled_kline_sources: set[str] | None = None,
     quote_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if quote_snapshot is not None:
@@ -984,7 +905,6 @@ def _build_snapshot(
             "quote_source": quote_source,
             "kline_sources": dict(kline_usage),
             "configured_kline_sources": kline_sources,
-            "disabled_kline_sources": sorted(disabled_kline_sources or []),
             "quote_errors": quote_errors,
             "kline_error_count": len(kline_errors),
             "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
@@ -1061,16 +981,6 @@ def _breadth_from_counts(
     }
 
 
-def _global_failed_kline_sources(errors: list[str]) -> set[str]:
-    disabled: set[str] = set()
-    for error in errors:
-        source, _sep, message = error.partition(":")
-        source = source.strip()
-        if source and _is_global_kline_source_error(source, message):
-            disabled.add(source)
-    return disabled
-
-
 def _summarize_kline_skip_reasons(kline_errors: dict[str, list[str]]) -> dict[str, int]:
     summary: Counter[str] = Counter()
     for errors in kline_errors.values():
@@ -1085,138 +995,6 @@ def _summarize_kline_skip_reasons(kline_errors: dict[str, list[str]]) -> dict[st
         else:
             summary[first.split(":", 1)[0] or "其他"] += 1
     return dict(summary)
-
-
-def _is_global_kline_source_error(source: str, message: str) -> bool:
-    return False
-
-
-def _quote_from_thsdk_row(row: dict[str, Any]) -> dict[str, Any]:
-    code = _normalize_code(_ths_code_from_row(row))
-    return _quote(
-        code=code,
-        name=_first_text(row, ("名称", "证券简称", "股票简称", "name", "Name")),
-        price=_first_num(row, ("价格", "最新价", "现价", "收盘价")),
-        pct=_first_num(row, ("涨幅", "涨跌幅")),
-        volume=_first_num(row, ("成交量", "总手")),
-        amount_yi=_first_num(row, ("总金额", "成交额")) / 100000000,
-        turnover_rate=_first_num(row, ("换手率",)),
-        pe_ttm=_first_num(row, ("市盈率TTM", "市盈率(TTM)", "动态市盈率")),
-        total_mv_yi=_first_num(row, ("总市值",)) / 100000000,
-        free_mv_yi=_first_num(row, ("流通市值",)) / 100000000,
-        chg60=0.0,
-        ytd_chg=0.0,
-        main_net_inflow_yi=_first_num(row, ("主力净流入",)) / 100000000,
-        industry=_first_text(row, ("行业", "所属行业"), default="未分类"),
-        source="thsdk",
-    )
-
-
-def _thsdk_client(settings: Any) -> Any:
-    try:
-        from thsdk import THS
-    except ImportError as exc:
-        raise MarketDataError("未安装 thsdk，请先安装后端依赖。") from exc
-    return THS(_thsdk_ops(settings))
-
-
-def _thsdk_ops(settings: Any) -> dict[str, Any]:
-    username = str(getattr(settings, "thsdk_username", "") or "")
-    password = str(getattr(settings, "thsdk_password", "") or "")
-    mac = str(getattr(settings, "thsdk_mac", "") or "")
-    if not username or not password:
-        return {}
-    ops = {"username": username, "password": password}
-    if mac:
-        ops["mac"] = mac
-    return ops
-
-
-def _thsdk_rows(data: Any) -> list[dict[str, Any]]:
-    if data is None:
-        return []
-    if isinstance(data, dict):
-        return [data]
-    if isinstance(data, list):
-        return [item for item in data if isinstance(item, dict)]
-    return []
-
-
-def _ths_code_from_quote_or_code(value: Any) -> str:
-    if isinstance(value, dict):
-        raw = str(value.get("ths_code") or value.get("代码") or value.get("code") or "")
-        exchange = str(value.get("exchange") or "").upper()
-    else:
-        raw = str(value or "")
-        exchange = ""
-    text = raw.strip().upper()
-    if len(text) >= 10 and text[:4] in {"USHA", "USZA", "USTM"}:
-        return text[:10]
-    code = _normalize_code(text)
-    if not exchange:
-        exchange = _exchange_from_code(code)
-    market = {"SH": "USHA", "SZ": "USZA", "BJ": "USTM"}.get(exchange)
-    return f"{market}{code}" if market and code else ""
-
-
-def _ths_code_from_row(row: dict[str, Any], default_market: str = "") -> str:
-    for key in ("THSCODE", "ths_code", "代码"):
-        raw = str(row.get(key) or "").strip().upper()
-        if len(raw) >= 10 and raw[:4] in {"USHA", "USZA", "USTM"}:
-            return raw[:10]
-        code = _normalize_code(raw)
-        if code and default_market:
-            return f"{default_market}{code}"
-    market = str(row.get("MarketDisplay") or row.get("市场") or default_market or "").strip().upper()
-    code = _normalize_code(row.get("Code") or row.get("证券代码") or row.get("股票代码") or row.get("代码") or "")
-    if market in {"USHA", "USZA", "USTM"} and code:
-        return f"{market}{code}"
-    if code:
-        return _ths_code_from_quote_or_code(code)
-    return ""
-
-
-def _ths_market_prefix(ths_code: str) -> str:
-    return str(ths_code or "").strip().upper()[:4]
-
-
-def _merge_non_empty(target: dict[str, Any], source: dict[str, Any]) -> None:
-    for key, value in source.items():
-        if value is None or value == "":
-            continue
-        target[key] = value
-
-
-def _first_text(row: dict[str, Any], keys: tuple[str, ...], default: str = "") -> str:
-    for key in keys:
-        value = row.get(key)
-        if value is not None and str(value).strip():
-            return str(value).strip()
-    return default
-
-
-def _first_num(row: dict[str, Any], keys: tuple[str, ...], default: float | None = 0.0) -> float | None:
-    for key in keys:
-        value = row.get(key)
-        if value is not None and value != "":
-            return _num(value)
-    return default
-
-
-def _batched(items: list[str], size: int) -> list[list[str]]:
-    return [items[index : index + size] for index in range(0, len(items), size)]
-
-
-def _quote_sources(settings: Any) -> list[str]:
-    if settings.data_provider in {"eastmoney", "akshare", "thsdk", "thssdk"}:
-        return [settings.data_provider]
-    return [source for source in _split_sources(settings.quote_sources) if source != "tushare"]
-
-
-def _kline_sources(settings: Any) -> list[str]:
-    if settings.data_provider in {"eastmoney", "akshare", "tushare", "thsdk", "thssdk"}:
-        return [settings.data_provider]
-    return _split_sources(settings.kline_sources)
 
 
 def _split_sources(raw: str) -> list[str]:
@@ -1240,158 +1018,13 @@ def _throttle_tushare(settings: Any) -> None:
         _TUSHARE_CALL_TIMES.append(now)
 
 
-def _http_get_text(
-    url: str,
-    settings: Any,
-    headers: dict[str, str] | None = None,
-    encoding: str | None = None,
-) -> str:
-    last_error: Exception | None = None
-    merged_headers = dict(HTTP_HEADERS)
-    if headers:
-        merged_headers.update(headers)
-    for _attempt in range(3):
-        try:
-            with httpx.Client(timeout=settings.market_request_timeout_seconds, headers=merged_headers, follow_redirects=True) as client:
-                response = client.get(url)
-                response.raise_for_status()
-                if encoding:
-                    response.encoding = encoding
-                return response.text
-        except Exception as exc:  # noqa: BLE001 - surfaced in MarketDataError after retries
-            last_error = exc
-    raise MarketDataError(str(last_error) if last_error else "HTTP 文本请求失败")
-
-
-def _default_quote_code_list(limit: int) -> list[str]:
-    base_codes = [
-        "sh600519", "sz000858", "sz300750", "sh601318", "sh600036", "sh600030", "sh601127", "sz002594",
-        "sh600309", "sz000333", "sh603259", "sh688041", "sz002475", "sh601899", "sz300059", "sh601688",
-        "sh600887", "sz000001", "sz300308", "sh601012", "sz002230", "sh600276", "sh601166", "sh600406",
-        "sh600941", "sh601398", "sh600031", "sh601888", "sz000725", "sh600760", "sz300274", "sz002371",
-        "sh688111", "sh600050", "sh601857", "sh600036", "sh600000", "sz000063", "sz300502", "sh601919",
-        "sh603986", "sz000568", "sh600585", "sh601601", "sz002463", "sh600584", "sz300760", "sh600690",
-        "sz000977", "sh601628", "sz300124", "sh601600", "sh600438", "sz000538", "sh601111", "sh600809",
-        "sz002714", "sh601318", "sh600660", "sz002415", "sh601899", "sh600111", "sh688981", "sz300015",
-    ]
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for code in base_codes:
-        if code not in seen:
-            seen.add(code)
-            deduped.append(code)
-        if len(deduped) >= limit:
-            break
-    return deduped[:limit]
-
-
-def _parse_sina_quotes(text: str) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for raw in text.splitlines():
-        raw = raw.strip()
-        if not raw or '="' not in raw:
-            continue
-        prefix, payload = raw.split('="', 1)
-        payload = payload.rstrip('";')
-        symbol = prefix.split('hq_str_', 1)[-1]
-        parts = payload.split(',')
-        if len(parts) < 10 or not parts[0].strip():
-            continue
-        code = ''.join(ch for ch in symbol if ch.isdigit())[-6:]
-        if not code:
-            continue
-        open_price = _num(parts[1])
-        prev_close = _num(parts[2])
-        price = _num(parts[3])
-        high = _num(parts[4])
-        low = _num(parts[5])
-        volume_shares = _num(parts[8])
-        amount = _num(parts[9])
-        pct = ((price - prev_close) / prev_close * 100) if prev_close else 0.0
-        rows.append(
-            _quote(
-                code=code,
-                name=parts[0].strip(),
-                price=price or prev_close or open_price,
-                pct=pct,
-                volume=volume_shares / 100,
-                amount_yi=amount / 100000000,
-                turnover_rate=0.0,
-                pe_ttm=0.0,
-                total_mv_yi=0.0,
-                free_mv_yi=0.0,
-                chg60=0.0,
-                ytd_chg=0.0,
-                main_net_inflow_yi=0.0,
-                industry="未分类",
-                source="sina",
-            )
-        )
-    return rows
-
-
-def _parse_tencent_quotes(text: str) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for raw in text.split(';'):
-        raw = raw.strip()
-        if not raw or '="' not in raw:
-            continue
-        prefix, payload = raw.split('="', 1)
-        payload = payload.rstrip('";')
-        symbol = prefix.split('_', 1)[-1]
-        parts = payload.split('~')
-        if len(parts) < 46 or not parts[1].strip():
-            continue
-        code = ''.join(ch for ch in symbol if ch.isdigit())[-6:]
-        if not code:
-            continue
-        price = _num(parts[3])
-        prev_close = _num(parts[4])
-        volume_lot = _num(parts[36])
-        amount_wan = _num(parts[37])
-        turnover_rate = _num(parts[38])
-        pe_ttm = _num(parts[39])
-        total_mv_yi = _num(parts[45]) / 100
-        free_mv_yi = _num(parts[44]) / 100
-        pct = ((price - prev_close) / prev_close * 100) if prev_close else _num(parts[32])
-        rows.append(
-            _quote(
-                code=code,
-                name=parts[1].strip(),
-                price=price,
-                pct=pct,
-                volume=volume_lot * 100,
-                amount_yi=amount_wan / 10000,
-                turnover_rate=turnover_rate,
-                pe_ttm=pe_ttm,
-                total_mv_yi=total_mv_yi,
-                free_mv_yi=free_mv_yi,
-                chg60=0.0,
-                ytd_chg=0.0,
-                main_net_inflow_yi=0.0,
-                industry="未分类",
-                source="tencent",
-            )
-        )
-    return rows
-
-
-def _http_get_json(url: str, settings: Any) -> dict[str, Any]:
-    last_error: Exception | None = None
-    for _attempt in range(3):
-        try:
-            with httpx.Client(timeout=settings.market_request_timeout_seconds, headers=HTTP_HEADERS, follow_redirects=True) as client:
-                response = client.get(url)
-                response.raise_for_status()
-                return response.json()
-        except Exception as exc:  # noqa: BLE001 - surfaced in MarketDataError after retries
-            last_error = exc
-    raise MarketDataError(str(last_error) if last_error else "HTTP 请求失败")
-
-
 def _is_supported_a_share(item: dict[str, Any]) -> bool:
     code = str(item.get("code") or "")
-    return len(code) == 6 and code[0] in {"0", "2", "3", "6", "8", "4"} and item.get("exchange") in {"SH", "SZ", "BJ"}
+    if not (len(code) == 6 and code[0] in {"0", "2", "3", "6", "8", "4"}):
+        return False
+    # stock_quotes 表可能没有 exchange 字段，从 code 前缀推断
+    exchange = item.get("exchange") or _exchange_from_code(code)
+    return exchange in {"SH", "SZ", "BJ"}
 
 
 def _normalize_code(code: str) -> str:
@@ -1405,14 +1038,6 @@ def _exchange_from_code(code: str) -> str:
     if code.startswith(("8", "4")):
         return "BJ"
     return "SZ"
-
-
-def _eastmoney_market_id(code: str) -> int:
-    if _exchange_from_code(code) == "SH":
-        return 1
-    if _exchange_from_code(code) == "BJ":
-        return 0
-    return 0
 
 
 def _latest_trade_date_from_quotes(quotes: list[dict[str, Any]]) -> str:

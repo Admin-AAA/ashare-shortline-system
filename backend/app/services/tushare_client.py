@@ -19,7 +19,6 @@ from typing import Any
 
 import pandas as pd
 import requests
-from curl_cffi import requests as curl_requests
 
 _TOKEN = "f8b05f8ee54f468220f2569afe56b4c027f1d388d164899339d394ad"
 _CUSTOM_URL = "http://101.35.233.113:8020/"
@@ -72,7 +71,9 @@ class _TushareSession:
 @functools.lru_cache(maxsize=1)
 def get_pro() -> _TushareSession:
     """获取 Tushare 客户端实例（单例缓存，requests.Session 直连）。"""
-    return _TushareSession(_TOKEN, timeout=(5, 10))
+    pro = _TushareSession(_TOKEN, timeout=(5, 10))
+    pro._DataApi__http_url = _CUSTOM_URL
+    return pro
 
 
 def clear_pro_cache() -> None:
@@ -667,6 +668,59 @@ def fetch_latest_trade_date() -> str:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# 指数日线（用于回测基准对比）
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def fetch_index_daily(
+    ts_code: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """获取指数日线行情。
+
+    Parameters
+    ----------
+    ts_code : str, optional
+        Tushare 指数代码（如 "000300.SH"）。默认沪深300。
+    start_date, end_date : str, optional
+        YYYYMMDD 格式。未指定则查最近 60 个自然日。
+
+    Returns
+    -------
+    list[dict] 每行含 ts_code, trade_date, open, high, low, close, pct_chg, volume
+    """
+    pro = get_pro()
+    target = ts_code or "000300.SH"
+    sd = start_date or (date.today() - timedelta(days=90)).strftime("%Y%m%d")
+    ed = end_date or date.today().strftime("%Y%m%d")
+    try:
+        df = pro.index_daily(ts_code=target, start_date=sd, end_date=ed)
+    except Exception:
+        return []
+    if df is None or df.empty:
+        return []
+    result: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        trade_date_raw = str(row.get("trade_date") or "")
+        if len(trade_date_raw) == 8:
+            trade_date = f"{trade_date_raw[:4]}-{trade_date_raw[4:6]}-{trade_date_raw[6:]}"
+        else:
+            trade_date = trade_date_raw
+        result.append({
+            "ts_code": str(row.get("ts_code") or target),
+            "trade_date": trade_date,
+            "close": _f(row.get("close")),
+            "pct_chg": _f(row.get("pct_chg")),
+            "open": _f(row.get("open")),
+            "high": _f(row.get("high")),
+            "low": _f(row.get("low")),
+            "volume": _f(row.get("volume")),
+        })
+    return result
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # 集合竞价
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -933,7 +987,7 @@ def fetch_broker_recommend(month: str | None = None) -> list[dict[str, Any]]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 分钟K线（Tushare stk_mins 优先，权限不足时自动回退）
+# 分钟K线（Tushare stk_mins）
 # ═════════════════════════════════════════════════════════════════════════════
 
 
@@ -945,7 +999,7 @@ def fetch_minute_kbars(
     trade_date: str | None = None,
     trace: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """获取个股 1 分钟 K 线。优先 Tushare stk_mins，权限不足时回退备用源。"""
+    """获取个股 1 分钟 K 线。仅使用 Tushare stk_mins。"""
     target_trade_date = _normalize_trade_date(trade_date)
     if target_trade_date:
         rows = _fetch_tushare_minute_kbars(
@@ -954,14 +1008,7 @@ def fetch_minute_kbars(
             end_time=f"{target_trade_date} 15:30:00",
             trace=trace,
         )
-        exact_rows = [row for row in rows if row["trade_date"] == target_trade_date]
-        if exact_rows:
-            return exact_rows
-        fallback_rows = _fetch_fallback_recent_minute_kbars(code, ndays=5, trace=trace)
-        exact_rows = [row for row in fallback_rows if row["trade_date"] == target_trade_date]
-        if exact_rows:
-            return exact_rows
-        return []
+        return [row for row in rows if row["trade_date"] == target_trade_date]
 
     rows = fetch_recent_minute_kbars(code, trace=trace)
     latest_trade_date = max((row["trade_date"] for row in rows), default="")
@@ -973,7 +1020,7 @@ def fetch_recent_minute_kbars(
     ndays: int = 5,
     trace: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """获取个股近 N 个交易日的 1 分钟数据。"""
+    """获取个股近 N 个交易日的 1 分钟数据。仅使用 Tushare stk_mins。"""
     end_day = date.today()
     start_day = end_day - timedelta(days=max(10, int(ndays or 5) * 3))
     tushare_rows = _fetch_tushare_minute_kbars(
@@ -984,19 +1031,7 @@ def fetch_recent_minute_kbars(
     )
     if tushare_rows:
         return _trim_recent_trade_dates(tushare_rows, ndays)
-    return _fetch_fallback_recent_minute_kbars(code, ndays=ndays, trace=trace)
-
-
-def _fetch_fallback_recent_minute_kbars(
-    code: str,
-    *,
-    ndays: int,
-    trace: list[dict[str, Any]] | None = None,
-) -> list[dict[str, Any]]:
-    market_code = 1 if code.startswith(("6", "9")) else 0
-    primary_rows = _fetch_eastmoney_trends(secid=f"{market_code}.{code}", code=code, ndays=ndays, trace=trace)
-    fallback_rows = _fetch_sina_minute_kbars(code, trace=trace)
-    return _select_recent_minute_rows(primary_rows, fallback_rows, ndays=ndays)
+    return []
 
 
 def fetch_recent_index_minute_kbars(
@@ -1004,7 +1039,7 @@ def fetch_recent_index_minute_kbars(
     ndays: int = 5,
     trace: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """获取指数近 N 个交易日的 1 分钟数据。"""
+    """获取指数近 N 个交易日的 1 分钟数据。仅使用 Tushare stk_mins。"""
     end_day = date.today()
     start_day = end_day - timedelta(days=max(10, int(ndays or 5) * 3))
     tushare_rows = _fetch_tushare_minute_kbars(
@@ -1016,19 +1051,7 @@ def fetch_recent_index_minute_kbars(
     )
     if tushare_rows:
         return _trim_recent_trade_dates(tushare_rows, ndays)
-    return _fetch_fallback_recent_index_minute_kbars(index_code, ndays=ndays, trace=trace)
-
-
-def _fetch_fallback_recent_index_minute_kbars(
-    index_code: str,
-    *,
-    ndays: int,
-    trace: list[dict[str, Any]] | None = None,
-) -> list[dict[str, Any]]:
-    market_code = 1 if index_code.startswith("0") else 0
-    primary_rows = _fetch_eastmoney_trends(secid=f"{market_code}.{index_code}", code=index_code, ndays=ndays, trace=trace)
-    fallback_rows = _fetch_sina_index_minute_kbars(index_code, trace=trace)
-    return _select_recent_minute_rows(primary_rows, fallback_rows, ndays=ndays)
+    return []
 
 
 def _fetch_tushare_minute_kbars(
@@ -1114,219 +1137,6 @@ def _fetch_tushare_minute_kbars(
         row_count=len(rows),
     )
     return rows
-
-
-def _fetch_eastmoney_trends(
-    secid: str,
-    code: str,
-    ndays: int = 5,
-    trace: list[dict[str, Any]] | None = None,
-) -> list[dict[str, Any]]:
-    url = "https://push2his.eastmoney.com/api/qt/stock/trends2/get"
-    params = {
-        "fields1": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13",
-        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
-        "ut": "7eea3edcaed734bea9cbfc24409ed989",
-        "ndays": str(max(1, int(ndays or 5))),
-        "iscr": "0",
-        "secid": secid,
-    }
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": "https://quote.eastmoney.com/",
-    }
-    try:
-        resp = curl_requests.get(
-            url,
-            params=params,
-            headers=headers,
-            timeout=20,
-            impersonate="chrome",
-        )
-        resp.raise_for_status()
-        payload = resp.json()
-    except Exception as exc:
-        _record_minute_source_trace(trace, source="eastmoney_trends", code=code, status="error", row_count=0, reason=str(exc))
-        return []
-
-    trend_rows = (((payload or {}).get("data") or {}).get("trends") or [])
-    if not trend_rows:
-        _record_minute_source_trace(trace, source="eastmoney_trends", code=code, status="empty", row_count=0)
-        return []
-
-    raw_rows: list[dict[str, Any]] = []
-    last_close_by_date: dict[str, float] = {}
-
-    for line in trend_rows:
-        parts = str(line).split(",")
-        if len(parts) < 7:
-            continue
-        dt_raw = str(parts[0]).strip()
-        trade_date = _normalize_trade_date(dt_raw)
-        if not trade_date:
-            continue
-        trade_time = dt_raw if len(dt_raw) >= 19 else f"{dt_raw}:00"
-        close_price = _f(parts[2])
-        high_price = _f(parts[3], close_price)
-        low_price = _f(parts[4], close_price)
-        volume = _f(parts[5])
-        amount = _f(parts[6])
-        avg_price = _f(parts[7], close_price) if len(parts) >= 8 else close_price
-
-        open_price = last_close_by_date.get(trade_date, close_price)
-        if open_price <= 0:
-            open_price = close_price or avg_price
-
-        raw_rows.append(
-            {
-                "code": code,
-                "trade_date": trade_date,
-                "trade_time": trade_time,
-                "open": round(open_price, 3),
-                "close": round(close_price, 3),
-                "high": round(max(high_price, close_price, open_price), 3),
-                "low": round(min(v for v in (low_price, close_price, open_price) if v > 0) if any(v > 0 for v in (low_price, close_price, open_price)) else close_price, 3),
-                "volume": volume,
-                "amount": amount,
-                "avg_price": round(avg_price, 3),
-            }
-        )
-        if close_price > 0:
-            last_close_by_date[trade_date] = close_price
-
-    grouped_dates = sorted({str(row["trade_date"]) for row in raw_rows})
-    prev_close_map: dict[str, float] = {}
-    for index, trade_date in enumerate(grouped_dates):
-        if index == 0:
-            first_row = next((row for row in raw_rows if row["trade_date"] == trade_date), None)
-            prev_close_map[trade_date] = _f((first_row or {}).get("close"))
-            continue
-        previous_date = grouped_dates[index - 1]
-        last_close = next(
-            (row["close"] for row in reversed(raw_rows) if row["trade_date"] == previous_date),
-            0.0,
-        )
-        prev_close_map[trade_date] = _f(last_close)
-
-    result: list[dict[str, Any]] = []
-    for row in raw_rows:
-        result.append(
-            {
-                **row,
-                "pre_close": round(prev_close_map.get(str(row["trade_date"]), _f(row.get("close"))), 3),
-            }
-        )
-    _record_minute_source_trace(trace, source="eastmoney_trends", code=code, status="success", row_count=len(result))
-    return result
-
-
-def _fetch_sina_minute_kbars(code: str, trace: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-    return _fetch_sina_minute_series(_sina_symbol(code), trace=trace)
-
-
-def _fetch_sina_index_minute_kbars(index_code: str, trace: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-    return _fetch_sina_minute_series(_sina_symbol(index_code, is_index=True), trace=trace)
-
-
-def _sina_symbol(code: str, *, is_index: bool = False) -> str:
-    if is_index:
-        return f"{'sz' if code.startswith('399') else 'sh'}{code}"
-    return f"{'sh' if code.startswith(('6', '9')) else 'sz'}{code}"
-
-
-def _fetch_sina_minute_series(symbol: str, trace: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-    url = "https://quotes.sina.cn/cn/api/jsonp_v2.php/=/CN_MarketDataService.getKLineData"
-    params = {
-        "symbol": symbol,
-        "scale": "1",
-        "ma": "no",
-        "datalen": "1970",
-    }
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": "https://finance.sina.com.cn/",
-    }
-    try:
-        resp = requests.get(url, params=params, headers=headers, timeout=15)
-        resp.raise_for_status()
-        payload = _parse_sina_jsonp(resp.text)
-    except Exception as exc:
-        _record_minute_source_trace(trace, source="sina_minute", code=symbol[-6:], status="error", row_count=0, reason=str(exc))
-        return []
-    if not payload:
-        _record_minute_source_trace(trace, source="sina_minute", code=symbol[-6:], status="empty", row_count=0)
-        return []
-
-    rows: list[dict[str, Any]] = []
-    for item in payload:
-        dt_raw = str(item.get("day") or "").strip()
-        trade_date = _normalize_trade_date(dt_raw)
-        if not trade_date:
-            continue
-        close_price = _f(item.get("close"))
-        open_price = _f(item.get("open"), close_price)
-        high_price = _f(item.get("high"), max(open_price, close_price))
-        low_price = _f(item.get("low"), min(open_price, close_price))
-        rows.append(
-            {
-                "code": symbol[-6:],
-                "trade_date": trade_date,
-                "trade_time": dt_raw if len(dt_raw) >= 19 else f"{dt_raw}:00",
-                "open": round(open_price, 3),
-                "close": round(close_price, 3),
-                "high": round(max(high_price, open_price, close_price), 3),
-                "low": round(min(v for v in (low_price, open_price, close_price) if v > 0) if any(v > 0 for v in (low_price, open_price, close_price)) else close_price, 3),
-                "volume": _f(item.get("volume")),
-                "amount": _f(item.get("amount")),
-            }
-        )
-    rows = _attach_pre_close(rows)
-    _record_minute_source_trace(trace, source="sina_minute", code=symbol[-6:], status="success", row_count=len(rows))
-    return rows
-
-
-def _parse_sina_jsonp(text: str) -> list[dict[str, Any]]:
-    if "=(" not in text or ");" not in text:
-        return []
-    try:
-        payload = json.loads(text.split("=(", 1)[1].rsplit(");", 1)[0])
-    except Exception:
-        return []
-    return payload if isinstance(payload, list) else []
-
-
-def _attach_pre_close(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if not rows:
-        return []
-    ordered = sorted(rows, key=lambda item: str(item["trade_time"]))
-    grouped_dates = sorted({str(row["trade_date"]) for row in ordered})
-    prev_close_map: dict[str, float] = {}
-    for index, trade_date in enumerate(grouped_dates):
-        if index == 0:
-            first_row = next((row for row in ordered if row["trade_date"] == trade_date), None)
-            prev_close_map[trade_date] = _f((first_row or {}).get("close"))
-            continue
-        previous_date = grouped_dates[index - 1]
-        last_close = next(
-            (row["close"] for row in reversed(ordered) if row["trade_date"] == previous_date),
-            0.0,
-        )
-        prev_close_map[trade_date] = _f(last_close)
-    return [
-        {
-            **row,
-            "pre_close": round(prev_close_map.get(str(row["trade_date"]), _f(row.get("close"))), 3),
-        }
-        for row in ordered
-    ]
-
-
-def _select_recent_minute_rows(
-    *row_groups: list[dict[str, Any]],
-    ndays: int,
-) -> list[dict[str, Any]]:
-    rows = max(row_groups, key=lambda group: len(_trade_dates(group)), default=[])
-    return _trim_recent_trade_dates(rows, ndays)
 
 
 def _record_minute_source_trace(

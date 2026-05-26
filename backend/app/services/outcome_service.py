@@ -9,6 +9,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun
+from app.services.evaluation_metrics import compute_full_metrics as _compute_full_metrics
 
 ENTRY_LOOKAHEAD_DAYS = 2
 ENTRY_SLIPPAGE_BPS = 10.0
@@ -16,6 +17,8 @@ EXIT_SLIPPAGE_BPS = 10.0
 SUCCESS_RETURN_PCT = 3.0
 DEFAULT_STOP_LOSS_PCT = -4.0
 DEFAULT_TAKE_PROFIT_PCT = 8.0
+MAX_STOP_LOSS_PCT = -8.0       # 止损最宽（-8%），防止 feature_builder 设置过宽的止损
+MAX_TAKE_PROFIT_PCT = 15.0     # 止盈上限（+15%），防止 feature_builder 设置过高的止盈
 
 OUTCOME_PENDING = "pending"
 OUTCOME_SUCCESS = "success"
@@ -193,28 +196,6 @@ def _overview_metrics(db: Session, run_mode: str) -> dict[str, Any]:
     rows = _scoped_recommendation_rows(db, run_mode)
     total_recs = len(rows)
 
-    if not rows:
-        return {
-            "mode": run_mode,
-            "total_recommendations": total_recs,
-            "labeled_count": 0,
-            "triggered_count": 0,
-            "trigger_rate": 0,
-            "hit_rate": 0,
-            "avg_return": 0,
-            "avg_executed_return": 0,
-            "avg_weighted_return": 0,
-            "avg_close_return": 0,
-            "avg_achievable_return": 0,
-            "avg_mfe": 0,
-            "avg_mae": 0,
-            "avg_holding_days": 0,
-            "success_count": 0,
-            "failed_count": 0,
-            "missed_count": 0,
-            "pending_count": 0,
-        }
-
     labeled = [row for row in rows if normalized_outcome_label(row) != OUTCOME_PENDING]
     triggered = [row for row in labeled if is_trade_executed(row)]
     success_count = sum(1 for row in rows if normalized_outcome_label(row) == OUTCOME_SUCCESS)
@@ -223,25 +204,105 @@ def _overview_metrics(db: Session, run_mode: str) -> dict[str, Any]:
     n = len(labeled)
     executed_n = len(triggered)
 
+    if not triggered:
+        return {
+            "mode": run_mode,
+            "total_recommendations": total_recs,
+            "labeled_count": n,
+            "triggered_count": 0,
+            "trigger_rate": 0.0,
+            "missed_count": missed_count,
+            "pending_count": max(0, total_recs - n),
+            "success_count": 0,
+            "failed_count": 0,
+            "hit_rate": 0.0,
+            "avg_return": 0.0,
+            "avg_executed_return": 0.0,
+            "avg_weighted_return": 0.0,
+            "avg_close_return": 0.0,
+            "avg_mfe": 0.0,
+            "avg_mae": 0.0,
+            "avg_holding_days": 0.0,
+            "recommendation_accuracy": 0.0,
+            "average_net_return": 0.0,
+            "median_net_return": 0.0,
+            "profit_loss_ratio": 0.0,
+            "max_drawdown": 0.0,
+            "positive_month_ratio": 0.0,
+            "benchmark_excess_return": 0.0,
+            "sample_confidence": "low",
+            "false_positive_notes": [],
+            "strategy_compound_return": 0.0,
+            "benchmark_compound_return": 0.0,
+        }
+
+    # ── 收集交易日期 → 批量查询基准指数 ──
+    all_dates: set[str] = set()
+    trade_date_pairs: list[tuple[str, str]] = []
+    for row in triggered:
+        entry_date = str(getattr(row, "entry_date", "") or getattr(row, "trade_date", ""))
+        exit_date = str(getattr(row, "exit_date", "") or getattr(row, "trade_date", ""))
+        all_dates.add(entry_date)
+        all_dates.add(exit_date)
+        trade_date_pairs.append((entry_date, exit_date))
+
+    from app.services.benchmark_service import compute_benchmark_return as _bench_return
+    from app.services.benchmark_service import get_benchmark_close_map as _get_close_map
+    close_map = _get_close_map(db, list(all_dates))
+
+    # ── 构建交易记录 → 统一指标引擎 ──
+    trades: list[dict[str, Any]] = []
+    for i, row in enumerate(triggered):
+        executed_return = resolved_trade_return(row)
+        entry_date, exit_date = trade_date_pairs[i]
+        benchmark_ret = _bench_return(close_map, entry_date, exit_date)
+        trades.append({
+            "net_return_pct": float(executed_return),
+            "gross_return_pct": float(getattr(row, "close_return", 0) or 0),
+            "achievable_return_pct": float(getattr(row, "achievable_return", 0) or 0),
+            "morning_drawdown_pct": float(getattr(row, "max_drawdown", 0) or 0),
+            "holding_days": float(getattr(row, "holding_days", 1) or 1),
+            "benchmark_return_pct": benchmark_ret,
+            "accurate": bool(executed_return > 0),
+            "trade_date": str(getattr(row, "trade_date", "")),
+            "code": getattr(row, "code", ""),
+            "name": getattr(row, "name", ""),
+            "false_positive_reason": getattr(row, "outcome_reason", None) if executed_return <= 0 else None,
+            "resolved": True,
+        })
+
+    full_metrics = _compute_full_metrics(trades) if trades else {}
+
     return {
         "mode": run_mode,
         "total_recommendations": total_recs,
         "labeled_count": n,
         "triggered_count": executed_n,
         "trigger_rate": round(executed_n / n, 3) if n else 0.0,
-        "hit_rate": round(success_count / executed_n, 3) if executed_n else 0.0,
-        "avg_return": round(sum(resolved_trade_return(o) for o in triggered) / executed_n, 2) if executed_n else 0.0,
-        "avg_executed_return": round(sum(resolved_trade_return(o) for o in triggered) / executed_n, 2) if executed_n else 0.0,
-        "avg_weighted_return": round(sum(float(o.weighted_return or 0) for o in triggered) / executed_n, 2) if executed_n else 0.0,
-        "avg_close_return": round(sum(float(o.close_return or 0) for o in labeled) / n, 2) if n else 0.0,
-        "avg_achievable_return": round(sum(float(o.achievable_return or 0) for o in labeled) / n, 2) if n else 0.0,
-        "avg_mfe": round(sum(float(o.max_return or 0) for o in labeled) / n, 2) if n else 0.0,
-        "avg_mae": round(sum(float(o.min_return or 0) for o in labeled) / n, 2) if n else 0.0,
-        "avg_holding_days": round(sum(float(o.holding_days or 0) for o in triggered) / executed_n, 2) if executed_n else 0.0,
-        "success_count": success_count,
-        "failed_count": failed_count,
         "missed_count": missed_count,
         "pending_count": max(0, total_recs - n),
+        "success_count": success_count,
+        "failed_count": failed_count,
+        # 9-KPI 来自统一指标引擎
+        "hit_rate": full_metrics.get("hit_rate", 0.0),
+        "avg_return": full_metrics.get("avg_return", 0.0),
+        "avg_executed_return": full_metrics.get("avg_executed_return", 0.0),
+        "avg_weighted_return": full_metrics.get("avg_weighted_return", 0.0),
+        "avg_close_return": full_metrics.get("avg_close_return", 0.0),
+        "avg_mfe": full_metrics.get("avg_max_return", 0.0),
+        "avg_mae": full_metrics.get("avg_max_drawdown", 0.0),
+        "avg_holding_days": full_metrics.get("avg_holding_days", 0.0),
+        "recommendation_accuracy": full_metrics.get("recommendation_accuracy", 0.0),
+        "average_net_return": full_metrics.get("average_net_return", 0.0),
+        "median_net_return": full_metrics.get("median_net_return", 0.0),
+        "profit_loss_ratio": full_metrics.get("profit_loss_ratio", 0.0),
+        "max_drawdown": full_metrics.get("max_drawdown", 0.0),
+        "positive_month_ratio": full_metrics.get("positive_month_ratio", 0.0),
+        "benchmark_excess_return": full_metrics.get("benchmark_excess_return", 0.0),
+        "sample_confidence": full_metrics.get("sample_confidence", "low"),
+        "false_positive_notes": full_metrics.get("false_positive_notes", []),
+        "strategy_compound_return": full_metrics.get("strategy_compound_return", 0.0),
+        "benchmark_compound_return": full_metrics.get("benchmark_compound_return", 0.0),
     }
 
 
@@ -446,6 +507,8 @@ def _scoped_recommendation_rows(db: Session, run_mode: str) -> list[Any]:
             select(
                 Recommendation.recommendation_id,
                 Recommendation.run_id,
+                Recommendation.code,
+                Recommendation.name,
                 Recommendation.final_score,
                 Recommendation.setup_type,
                 Recommendation.skill_breakdown_json,
@@ -461,6 +524,9 @@ def _scoped_recommendation_rows(db: Session, run_mode: str) -> list[Any]:
                 RecommendationOutcome.min_return,
                 RecommendationOutcome.max_drawdown,
                 RecommendationOutcome.holding_days,
+                RecommendationOutcome.outcome_reason,
+                RecommendationOutcome.entry_date,
+                RecommendationOutcome.exit_date,
             )
             .select_from(Recommendation)
             .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
@@ -650,23 +716,35 @@ def _resolve_exit(
 
 
 def _resolve_stop_loss_price(raw_entry_price: float | None, feature_snapshot: dict[str, Any]) -> float:
+    """解析止损价，加入归一化逻辑防止过紧的止损。
+
+    止损价必须在 [min_stop, max_stop] 范围内：
+    - max_stop = entry * (1 + DEFAULT_STOP_LOSS_PCT/100) = 默认 -4%（最紧）
+    - min_stop = entry * (1 + MIN_STOP_LOSS_PCT/100) = 最小 -8%（最宽）
+    """
     raw_stop = _as_float(feature_snapshot.get("stop_loss"))
     if raw_entry_price is None or raw_entry_price <= 0:
         return round(raw_stop, 2) if raw_stop > 0 else 0.0
-    fallback = raw_entry_price * (1 + DEFAULT_STOP_LOSS_PCT / 100.0)
+    max_stop = raw_entry_price * (1 + DEFAULT_STOP_LOSS_PCT / 100.0)
     if raw_stop <= 0 or raw_stop >= raw_entry_price:
-        return fallback
-    return raw_stop
+        return round(max_stop, 2)
+    min_stop = raw_entry_price * (1 + MAX_STOP_LOSS_PCT / 100.0)
+    normalized = min(raw_stop, max_stop)   # 不紧于 -4%
+    normalized = max(normalized, min_stop) # 不宽于 -8%
+    return round(normalized, 2)
 
 
 def _resolve_take_profit_price(raw_entry_price: float | None, feature_snapshot: dict[str, Any]) -> float:
+    """解析止盈价，加入上限归一化防止过高的止盈目标。"""
     raw_target = _as_float(feature_snapshot.get("take_profit"))
     if raw_entry_price is None or raw_entry_price <= 0:
         return round(raw_target, 2) if raw_target > 0 else 0.0
     fallback = raw_entry_price * (1 + DEFAULT_TAKE_PROFIT_PCT / 100.0)
     if raw_target <= raw_entry_price:
-        return fallback
-    return raw_target
+        return round(fallback, 2)
+    max_tp = raw_entry_price * (1 + MAX_TAKE_PROFIT_PCT / 100.0)
+    normalized = min(raw_target, max_tp)
+    return round(normalized, 2)
 
 
 def _resolve_position_size(feature_snapshot: dict[str, Any]) -> float:

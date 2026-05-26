@@ -995,3 +995,40 @@ export type ScoreLineStatsRow = {
   avg_drawdown: number;
   avg_close_return: number;
 };
+
+/** 9-KPI 评估指标（来自 /api/metrics/overview） */
+export type MetricsOverview = {
+  mode: "formal" | "experiment";
+  total_recommendations: number;
+  labeled_count: number;
+  triggered_count: number;
+  trigger_rate: number;
+  missed_count: number;
+  pending_count: number;
+  success_count: number;
+  failed_count: number;
+  hit_rate: number;
+  avg_return: number;
+  avg_executed_return: number;
+  avg_weighted_return: number;
+  avg_close_return: number;
+  avg_mfe: number;
+  avg_mae: number;
+  avg_holding_days: number;
+  /** 9-KPI 标准字段 */
+  recommendation_accuracy: number;
+  average_net_return: number;
+  median_net_return: number;
+  profit_loss_ratio: number;
+  max_drawdown: number;
+  positive_month_ratio: number;
+  benchmark_excess_return: number;
+  sample_confidence: "low" | "normal";
+  strategy_compound_return: number;
+  benchmark_compound_return: number;
+  false_positive_notes: Array<{
+    reason: string;
+    count: number;
+    examples: string[];
+  }>;
+};

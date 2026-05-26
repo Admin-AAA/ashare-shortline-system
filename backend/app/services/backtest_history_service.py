@@ -37,6 +37,10 @@ def _serialize_backtest_run(row: BacktestRun, *, include_result: bool) -> dict[s
     coverage = _dict(result.get("data_coverage"))
     comparison = _dict(result.get("comparison"))
     minute_diag = _dict(coverage.get("minute_source_diagnostics"))
+
+    # 时态一致性检查摘要
+    temporal = _dict(result.get("temporal_consistency") or coverage.get("temporal_consistency"))
+    
     payload: dict[str, Any] = {
         "backtest_id": row.backtest_id,
         "skill_id": row.skill_id,
@@ -57,6 +61,12 @@ def _serialize_backtest_run(row: BacktestRun, *, include_result: bool) -> dict[s
             "tushare_stk_mins_status": minute_diag.get("tushare_stk_mins_status", "not_attempted"),
             "tushare_permission_denied": bool(minute_diag.get("tushare_permission_denied")),
             "fallback_used": bool(minute_diag.get("fallback_used")),
+            "temporal_consistency": {
+                "passed": temporal.get("passed", True),
+                "violation_count": temporal.get("violation_count", 0),
+                "error_count": temporal.get("error_count", 0),
+                "warning_count": temporal.get("warning_count", 0),
+            },
         },
     }
     if include_result:

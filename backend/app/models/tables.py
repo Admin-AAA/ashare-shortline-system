@@ -12,7 +12,7 @@
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, UniqueConstraint
-from sqlalchemy.dialects.mysql import LONGTEXT
+from sqlalchemy.dialects.mysql import LONGTEXT, MEDIUMTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -202,7 +202,7 @@ class LimitUpBoard(Base):
     first_time: Mapped[str | None] = mapped_column(String(8))
     last_time: Mapped[str | None] = mapped_column(String(8))
     open_times: Mapped[int] = mapped_column(Integer, default=0)
-    up_stat: Mapped[str | None] = mapped_column(String(4))
+    up_stat: Mapped[str | None] = mapped_column(String(8))
     limit_amount_yi: Mapped[float | None] = mapped_column(Float)
     turnover_ratio: Mapped[float | None] = mapped_column(Float)
     fd_amount_yi: Mapped[float | None] = mapped_column(Float)
@@ -295,12 +295,13 @@ class NewsAnnouncement(Base):
 
 
 class MinuteKbar(Base):
-    """1分钟K线。数据来源：eastmoney push2his API。"""
+    """分钟K线（1min/5min/15min/30min/60min）。数据来源：eastmoney push2his API。"""
     __tablename__ = "minute_kbars"
-    __table_args__ = (UniqueConstraint("code", "trade_time", name="uq_minute_kbar_code_time"),)
+    __table_args__ = (UniqueConstraint("code", "freq", "trade_time", name="uq_minute_kbar_code_freq_time"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(6), index=True)
+    freq: Mapped[str] = mapped_column(String(5), default="1min")
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     trade_time: Mapped[str] = mapped_column(String(19))  # YYYY-MM-DD HH:MM:SS
     open: Mapped[float] = mapped_column(Float, default=0)
@@ -315,6 +316,26 @@ class MinuteKbar(Base):
 # ═════════════════════════════════════════════════════════════════════════════
 # 新增数据表（Tushare 特有数据）
 # ═════════════════════════════════════════════════════════════════════════════
+
+
+class IndexDaily(Base):
+    """指数日线行情。数据来源：Tushare index_daily。
+
+    用于回测基准对比（沪深300 / 中证500 等）。
+    """
+    __tablename__ = "index_daily"
+    __table_args__ = (UniqueConstraint("ts_code", "trade_date", name="uq_index_daily_code_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts_code: Mapped[str] = mapped_column(String(20), index=True)  # e.g. "000300.SH"
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    close: Mapped[float] = mapped_column(Float, default=0)
+    pct_chg: Mapped[float] = mapped_column(Float, default=0)      # 涨跌幅(%)
+    open: Mapped[float] = mapped_column(Float, default=0)
+    high: Mapped[float] = mapped_column(Float, default=0)
+    low: Mapped[float] = mapped_column(Float, default=0)
+    volume: Mapped[float] = mapped_column(Float, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class MarginData(Base):
@@ -748,7 +769,7 @@ class BacktestRun(Base):
     date_from: Mapped[str] = mapped_column(String(10))
     date_to: Mapped[str] = mapped_column(String(10))
     status: Mapped[str] = mapped_column(String(30), default="completed")
-    result_json: Mapped[str] = mapped_column(Text, default="{}")
+    result_json: Mapped[str] = mapped_column(MEDIUMTEXT, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -822,5 +843,5 @@ class ScheduledTaskRun(Base):
     status: Mapped[str] = mapped_column(String(30), default="running")
     summary: Mapped[str | None] = mapped_column(Text)
     error_message: Mapped[str | None] = mapped_column(Text)
-    payload_json: Mapped[str] = mapped_column(Text, default="{}")
-    result_json: Mapped[str] = mapped_column(Text, default="{}")
+    payload_json: Mapped[str] = mapped_column(MEDIUMTEXT, default="{}")
+    result_json: Mapped[str] = mapped_column(MEDIUMTEXT, default="{}")

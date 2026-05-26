@@ -583,8 +583,9 @@ def _validate_rr_ratio(item: dict[str, Any], price: float) -> None:
 
     短线交易中，盈亏比 < 1:1 需要极高的胜率才能盈利。
     当检测到倒挂时：
-      - 若 MA10 偏离过大（乖离 > 10%），收紧止损至 MA5 附近
-      - 否则适当提高止盈目标
+      - 优先提高止盈目标使 R:R >= 1:1
+      - 若 MA10 乖离过大（> 10%），则要求 1.5:1 止损止盈比（股票已超买，波动更大）
+      - 永不收紧止损让止损变得更脆弱
     """
     stop_loss = _num(item.get("stop_loss"))
     take_profit = _num(item.get("take_profit"))
@@ -592,18 +593,13 @@ def _validate_rr_ratio(item: dict[str, Any], price: float) -> None:
         return
     risk_pct = abs(price - stop_loss) / price * 100
     reward_pct = abs(take_profit - price) / price * 100
+    bias_ma10 = _num(item.get("bias_ma10"))
+    min_rr = 1.5 if bias_ma10 > 10 else 1.0
     rr_ratio = reward_pct / max(risk_pct, 0.01)
-    if rr_ratio < 1.0:
-        bias_ma10 = _num(item.get("bias_ma10"))
-        if bias_ma10 > 10:
-            # 乖离过大时止损太远，收紧止损至 MA5 下方 3%
-            ma5 = _num(item.get("ma5"))
-            new_stop = round(max(ma5 * 0.97, price * 0.88), 2)
-            item["stop_loss"] = new_stop
-        else:
-            # 乖离尚可时提高止盈使 R:R >= 1:1
-            new_tp = round(price * (1 + risk_pct / 100), 2)
-            item["take_profit"] = new_tp
+    if rr_ratio < min_rr:
+        # 仅提高止盈使 R:R 达标，不收紧止损
+        new_tp = round(price * (1 + risk_pct * min_rr / 100.0), 2)
+        item["take_profit"] = new_tp
 
 
 def _default_bias_ma5(item: dict[str, Any]) -> float:

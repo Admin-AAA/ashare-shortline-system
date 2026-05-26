@@ -7,15 +7,12 @@ PyYAML==6.0.3
 APScheduler==3.11.2
 python-multipart==0.0.28
 httpx==0.28.1
-akshare==1.18.60
 tushare==1.4.29
 pandas==2.2.3
 pytest==9.0.3
 baostock==0.9.1
-thsdk==1.7.18
 agno>=2.6.0
 openai>=1.68.0
 tickflow
 PyMySQL>=1.1.0
 cryptography>=42.0.0
-curl_cffi==0.15.0
