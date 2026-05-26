@@ -130,6 +130,7 @@ def overview(db: Session = Depends(get_db)) -> DashboardOverview:
             b_limit=20,
             b_offset=0,
             include_paginated=False,
+            include_details=False,
             cache_only=True,
         )
         return compose_overview(

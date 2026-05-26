@@ -1,3 +1,4 @@
+import BacktestPanel from "../../components/BacktestPanel";
 import DataHealthPanel from "./components/DataHealthPanel";
 import DragonCandidatesPanel from "./components/DragonCandidatesPanel";
 import MarketTemperaturePanel from "./components/MarketTemperaturePanel";
@@ -208,6 +209,7 @@ function ValidationWorkspace({ data }: { data: DashboardOverview }) {
         </section>
       </div>
       <StatusStream title="验证消息" items={alerts?.messages ?? []} empty="暂无验证消息" />
+      <BacktestPanel />
     </div>
   );
 }

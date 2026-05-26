@@ -42,6 +42,7 @@ ALLOWED_NAMES = {
     "inflow_10d_yi",
     "intelligence_score",
     "is_limit_up",
+    "limit_up_days20",
     "is_st",
     "ma5",
     "ma10",

@@ -1,0 +1,358 @@
+from __future__ import annotations
+
+import pytest
+
+from app.db.session import SessionLocal
+from app.models.tables import DailyKbar, Stock
+from app.services.overnight_holding_service import (
+    BASELINE_VARIANT,
+    _benchmark_required_dates,
+    _choose_variant,
+    _build_data_coverage,
+    _build_walk_forward_analysis,
+    _locate_entry_signal,
+    run_overnight_holding_backtest,
+)
+
+
+@pytest.fixture
+def db(clean_test_db):
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+def _seed_stock(db):
+    db.add(Stock(code="001234", name="隔夜样本", industry="银行", is_st=False))
+    bars = [
+        ("2026-05-12", 10.0, 10.1, 9.9, 10.0, 1000, 10000, 0.0, 6.0),
+        ("2026-05-13", 10.0, 10.1, 9.9, 10.0, 1000, 10000, 0.0, 6.0),
+        ("2026-05-14", 10.0, 10.1, 9.9, 10.0, 1000, 10000, 0.0, 6.0),
+        ("2026-05-15", 10.0, 11.0, 9.9, 11.0, 1000, 10000, 10.0, 6.0),
+        ("2026-05-16", 11.0, 11.1, 10.9, 11.0, 1000, 10000, 0.0, 6.0),
+        ("2026-05-19", 11.0, 11.5, 10.9, 11.4, 1000, 10000, 4.0, 6.0),
+        ("2026-05-20", 11.4, 11.6, 11.2, 11.5, 1000, 10000, 3.5, 6.0),
+        ("2026-05-21", 11.5, 11.8, 11.3, 11.9, 1000, 10000, 4.0, 6.0),
+        ("2026-05-22", 11.9, 12.0, 11.0, 11.2, 1000, 10000, -5.9, 6.0),
+    ]
+    for trade_date, open_p, high_p, low_p, close_p, volume, amount, pct, turnover in bars:
+        db.add(
+            DailyKbar(
+                code="001234",
+                trade_date=trade_date,
+                open=open_p,
+                high=high_p,
+                low=low_p,
+                close=close_p,
+                volume=volume,
+                amount=amount,
+                pct_chg=pct,
+                turnover_rate=turnover,
+            )
+        )
+    db.commit()
+
+
+def test_run_overnight_holding_backtest_computes_accuracy(monkeypatch, db):
+    _seed_stock(db)
+
+    minute_map = {
+        ("001234", "2026-05-19"): [
+            {"trade_time": "2026-05-19 14:29:00", "close": 11.30, "high": 11.30, "low": 11.28, "volume": 100, "amount": 1130},
+            {"trade_time": "2026-05-19 14:30:00", "close": 11.38, "high": 11.39, "low": 11.36, "volume": 100, "amount": 1138},
+            {"trade_time": "2026-05-19 14:31:00", "close": 11.37, "high": 11.38, "low": 11.35, "volume": 100, "amount": 1137},
+        ],
+        ("001234", "2026-05-20"): [
+            {"trade_time": "2026-05-20 09:35:00", "close": 11.58, "high": 11.60, "low": 11.52, "volume": 100, "amount": 1158},
+            {"trade_time": "2026-05-20 14:29:00", "close": 11.48, "high": 11.48, "low": 11.45, "volume": 100, "amount": 1148},
+            {"trade_time": "2026-05-20 14:30:00", "close": 11.55, "high": 11.56, "low": 11.52, "volume": 100, "amount": 1155},
+            {"trade_time": "2026-05-20 14:31:00", "close": 11.54, "high": 11.55, "low": 11.52, "volume": 100, "amount": 1154},
+        ],
+        ("001234", "2026-05-21"): [
+            {"trade_time": "2026-05-21 09:35:00", "close": 11.40, "high": 11.45, "low": 11.38, "volume": 100, "amount": 1140},
+            {"trade_time": "2026-05-21 14:29:00", "close": 11.78, "high": 11.78, "low": 11.75, "volume": 100, "amount": 1178},
+            {"trade_time": "2026-05-21 14:30:00", "close": 11.90, "high": 11.92, "low": 11.88, "volume": 100, "amount": 1190},
+            {"trade_time": "2026-05-21 14:31:00", "close": 11.89, "high": 11.90, "low": 11.87, "volume": 100, "amount": 1189},
+        ],
+        ("001234", "2026-05-22"): [
+            {"trade_time": "2026-05-22 09:35:00", "close": 11.18, "high": 11.20, "low": 11.15, "volume": 100, "amount": 1118},
+        ],
+    }
+    benchmark_bundle = [
+        {"trade_date": "2026-05-19", "trade_time": "2026-05-19 14:29:00", "close": 100.8, "pre_close": 100.0},
+        {"trade_date": "2026-05-19", "trade_time": "2026-05-19 14:30:00", "close": 100.9, "pre_close": 100.0},
+        {"trade_date": "2026-05-19", "trade_time": "2026-05-19 14:31:00", "close": 100.9, "pre_close": 100.0},
+        {"trade_date": "2026-05-20", "trade_time": "2026-05-20 09:35:00", "close": 101.1, "pre_close": 101.0},
+        {"trade_date": "2026-05-20", "trade_time": "2026-05-20 14:29:00", "close": 101.2, "pre_close": 101.0},
+        {"trade_date": "2026-05-20", "trade_time": "2026-05-20 14:30:00", "close": 101.2, "pre_close": 101.0},
+        {"trade_date": "2026-05-20", "trade_time": "2026-05-20 14:31:00", "close": 101.2, "pre_close": 101.0},
+        {"trade_date": "2026-05-21", "trade_time": "2026-05-21 09:35:00", "close": 101.0, "pre_close": 101.2},
+        {"trade_date": "2026-05-21", "trade_time": "2026-05-21 14:29:00", "close": 101.3, "pre_close": 101.2},
+        {"trade_date": "2026-05-21", "trade_time": "2026-05-21 14:30:00", "close": 101.3, "pre_close": 101.2},
+        {"trade_date": "2026-05-21", "trade_time": "2026-05-21 14:31:00", "close": 101.3, "pre_close": 101.2},
+        {"trade_date": "2026-05-22", "trade_time": "2026-05-22 09:35:00", "close": 100.6, "pre_close": 101.3},
+    ]
+
+    monkeypatch.setattr(
+        "app.services.overnight_holding_service._load_daily_basic_map",
+        lambda trade_date, cache: {"001234": {"turnover_rate": 6.0, "total_mv_yi": 120.0, "circ_mv_yi": 110.0}},
+    )
+    monkeypatch.setattr(
+        "app.services.overnight_holding_service._load_stock_minutes",
+        lambda db, cache, code, trade_date, minute_source_trace=None: minute_map.get((code, trade_date), []),
+    )
+    monkeypatch.setattr(
+        "app.services.overnight_holding_service._load_benchmark_bundle",
+        lambda db, cache, signal_dates=None, date_lookup=None, minute_source_trace=None: benchmark_bundle,
+    )
+    monkeypatch.setattr(
+        "app.services.overnight_holding_service._persist_backtest_run",
+        lambda db, start_date, end_date, result: None,
+    )
+
+    result = run_overnight_holding_backtest(db, "2026-05-19", "2026-05-21")
+
+    assert result["status"] == "completed"
+    assert result["strategy_id"] == "overnight-holding-method"
+    assert result["aggregate_metrics"]["trade_count"] == 3
+    assert result["aggregate_metrics"]["recommendation_accuracy"] == pytest.approx(0.667, abs=0.001)
+    assert result["aggregate_metrics"]["average_net_return"] != 0
+    assert result["comparison"]["selected_variant"] in {"baseline", "candidate"}
+    assert len(result["false_positive_samples"]) == 1
+
+
+def test_locate_entry_signal_uses_tail_window_vwap_rules():
+    candidate = {
+        "code": "001234",
+        "name": "隔夜样本",
+        "industry": "银行",
+        "trade_date": "2026-05-20",
+        "avg_prev5_volume": 2000.0,
+        "prev_close": 10.0,
+        "turnover_rate": 6.0,
+        "total_mv_yi": 120.0,
+        "recent_limit_up_count": 1,
+        "daily_volume": 2600.0,
+    }
+    minutes = [
+        {"trade_time": "2026-05-20 09:30:00", "close": 10.00, "high": 10.01, "low": 9.99, "volume": 100, "amount": 100000},
+        {"trade_time": "2026-05-20 09:31:00", "close": 9.90, "high": 9.91, "low": 9.88, "volume": 100, "amount": 99000},
+        {"trade_time": "2026-05-20 09:32:00", "close": 9.85, "high": 9.86, "low": 9.83, "volume": 100, "amount": 98500},
+        {"trade_time": "2026-05-20 14:30:00", "close": 10.28, "high": 10.29, "low": 10.25, "volume": 1000, "amount": 1028000},
+        {"trade_time": "2026-05-20 14:31:00", "close": 10.34, "high": 10.36, "low": 10.34, "volume": 1000, "amount": 1034000},
+        {"trade_time": "2026-05-20 14:32:00", "close": 10.33, "high": 10.34, "low": 10.30, "volume": 1000, "amount": 1033000},
+    ]
+    benchmark_minutes = [
+        {"trade_time": "2026-05-20 09:30:00", "close": 100.0, "pre_close": 100.0},
+        {"trade_time": "2026-05-20 09:31:00", "close": 99.9, "pre_close": 100.0},
+        {"trade_time": "2026-05-20 09:32:00", "close": 99.8, "pre_close": 100.0},
+        {"trade_time": "2026-05-20 14:30:00", "close": 100.7, "pre_close": 100.0},
+        {"trade_time": "2026-05-20 14:31:00", "close": 100.8, "pre_close": 100.0},
+        {"trade_time": "2026-05-20 14:32:00", "close": 100.8, "pre_close": 100.0},
+    ]
+
+    signal = _locate_entry_signal(
+        candidate=candidate,
+        minutes=minutes,
+        benchmark_minutes=benchmark_minutes,
+        variant=BASELINE_VARIANT,
+    )
+
+    assert signal is not None
+    assert signal["entry_time"] == "2026-05-20 14:31:00"
+    assert signal["conditions"]["above_vwap_ratio"] == pytest.approx(1.0, abs=0.001)
+    assert signal["conditions"]["tail_vwap_gap_bps"] == pytest.approx(79.0, abs=1.0)
+
+
+def test_build_data_coverage_summarizes_minute_gaps():
+    result = _build_data_coverage(
+        ["2026-05-19", "2026-05-20"],
+        [
+            {
+                "trade_date": "2026-05-19",
+                "candidate_count": 3,
+                "minute_ready_candidate_count": 1,
+                "benchmark_minute_covered": True,
+                "missing_minute_codes": ["000001", "000002"],
+            },
+            {
+                "trade_date": "2026-05-20",
+                "candidate_count": 2,
+                "minute_ready_candidate_count": 2,
+                "benchmark_minute_covered": False,
+                "missing_minute_codes": [],
+            },
+        ],
+        {
+            "trade_date_start": "2026-05-19",
+            "trade_date_end": "2026-05-25",
+            "trade_date_count": 6,
+            "code_count": 319,
+        },
+        [
+            {"source": "local_minute_db", "scope": "stock", "code": "000003", "status": "success", "row_count": 240},
+            {"source": "tushare_stk_mins", "scope": "stock", "code": "000001", "status": "permission_denied", "row_count": 0, "reason": "没有该接口权限"},
+            {"source": "sina_minute", "scope": "stock", "code": "000001", "status": "success", "row_count": 240},
+        ],
+    )
+
+    assert result["candidate_count"] == 5
+    assert result["minute_ready_candidate_count"] == 3
+    assert result["minute_missing_candidate_count"] == 2
+    assert result["candidate_minute_coverage_rate"] == pytest.approx(0.6, abs=0.001)
+    assert result["benchmark_minute_coverage_rate"] == pytest.approx(0.5, abs=0.001)
+    assert result["missing_minute_examples"] == ["2026-05-19 000001", "2026-05-19 000002"]
+    assert result["minute_source_diagnostics"]["tushare_permission_denied"] is True
+    assert result["minute_source_diagnostics"]["fallback_used"] is True
+    assert "sina_minute" in result["minute_source_diagnostics"]["successful_sources"]
+
+
+def test_build_walk_forward_analysis_uses_time_order_windows():
+    trades = [
+        {"trade_date": "2026-05-19", "code": "000001", "resolved": True, "accurate": True, "net_return_pct": 1.2, "benchmark_return_pct": 0.4},
+        {"trade_date": "2026-05-20", "code": "000002", "resolved": True, "accurate": False, "net_return_pct": -0.5, "benchmark_return_pct": -0.1},
+        {"trade_date": "2026-05-21", "code": "000003", "resolved": True, "accurate": True, "net_return_pct": 0.8, "benchmark_return_pct": 0.2},
+    ]
+
+    result = _build_walk_forward_analysis(
+        ["2026-05-19", "2026-05-20", "2026-05-21"],
+        trades,
+    )
+
+    assert result["eligible"] is True
+    assert result["window_count"] == 1
+    assert result["windows"][0]["train_end"] == "2026-05-20"
+    assert result["windows"][0]["test_start"] == "2026-05-21"
+    assert result["test_aggregate"]["trade_count"] == 1
+    assert result["test_aggregate"]["recommendation_accuracy"] == pytest.approx(1.0, abs=0.001)
+
+
+def test_benchmark_required_dates_include_signal_and_next_exit_dates():
+    result = _benchmark_required_dates(
+        ["2026-05-19", "2026-05-20"],
+        ["2026-05-16", "2026-05-19", "2026-05-20", "2026-05-21"],
+    )
+
+    assert result == {"2026-05-19", "2026-05-20", "2026-05-21"}
+
+
+def test_build_walk_forward_analysis_expands_all_eligible_windows():
+    signal_dates = [
+        "2026-05-14",
+        "2026-05-15",
+        "2026-05-18",
+        "2026-05-19",
+        "2026-05-20",
+        "2026-05-21",
+    ]
+    trades = [
+        {"trade_date": "2026-05-18", "code": "000001", "resolved": True, "accurate": False, "net_return_pct": -0.3, "benchmark_return_pct": -0.1},
+        {"trade_date": "2026-05-20", "code": "000002", "resolved": True, "accurate": True, "net_return_pct": 0.4, "benchmark_return_pct": 0.1},
+        {"trade_date": "2026-05-20", "code": "000003", "resolved": True, "accurate": True, "net_return_pct": 0.2, "benchmark_return_pct": 0.0},
+        {"trade_date": "2026-05-21", "code": "000004", "resolved": True, "accurate": False, "net_return_pct": -0.1, "benchmark_return_pct": -0.2},
+    ]
+
+    result = _build_walk_forward_analysis(signal_dates, trades)
+
+    assert result["eligible"] is True
+    assert result["min_train_dates"] == 2
+    assert result["window_count"] == 4
+    assert [item["test_start"] for item in result["windows"]] == signal_dates[2:]
+    assert result["test_aggregate"]["trade_count"] == 4
+    assert result["test_aggregate"]["recommendation_accuracy"] == pytest.approx(0.5, abs=0.001)
+    assert result["notes"][0] == "滚动验证按最少 2 个训练信号日构建 expanding windows。"
+
+
+def test_choose_variant_prefers_walk_forward_metrics_over_single_split():
+    comparisons = {
+        "baseline": {
+            "split_metrics": {
+                "test": {
+                    "trade_count": 2,
+                    "recommendation_accuracy": 0.50,
+                    "average_net_return": 0.10,
+                    "max_drawdown": -0.40,
+                }
+            },
+            "walk_forward": {
+                "test_aggregate": {
+                    "trade_count": 3,
+                    "recommendation_accuracy": 0.60,
+                    "average_net_return": 0.18,
+                    "max_drawdown": -0.35,
+                }
+            },
+        },
+        "candidate": {
+            "split_metrics": {
+                "test": {
+                    "trade_count": 2,
+                    "recommendation_accuracy": 0.80,
+                    "average_net_return": 0.25,
+                    "max_drawdown": -0.30,
+                }
+            },
+            "walk_forward": {
+                "test_aggregate": {
+                    "trade_count": 3,
+                    "recommendation_accuracy": 0.55,
+                    "average_net_return": 0.12,
+                    "max_drawdown": -0.90,
+                }
+            },
+        },
+    }
+
+    selected, reason = _choose_variant([], comparisons)
+
+    assert selected == "baseline"
+    assert "滚动样本外" in reason
+    assert "单次时间切分" not in reason
+
+
+def test_choose_variant_falls_back_to_single_split_when_walk_forward_has_no_comparable_trades():
+    comparisons = {
+        "baseline": {
+            "split_metrics": {
+                "test": {
+                    "trade_count": 3,
+                    "recommendation_accuracy": 0.40,
+                    "average_net_return": 0.05,
+                    "max_drawdown": -0.60,
+                }
+            },
+            "walk_forward": {
+                "test_aggregate": {
+                    "trade_count": 0,
+                    "recommendation_accuracy": 0.0,
+                    "average_net_return": 0.0,
+                    "max_drawdown": 0.0,
+                }
+            },
+        },
+        "candidate": {
+            "split_metrics": {
+                "test": {
+                    "trade_count": 3,
+                    "recommendation_accuracy": 0.70,
+                    "average_net_return": 0.12,
+                    "max_drawdown": -0.40,
+                }
+            },
+            "walk_forward": {
+                "test_aggregate": {
+                    "trade_count": 0,
+                    "recommendation_accuracy": 0.0,
+                    "average_net_return": 0.0,
+                    "max_drawdown": 0.0,
+                }
+            },
+        },
+    }
+
+    selected, reason = _choose_variant([], comparisons)
+
+    assert selected == "candidate"
+    assert "单次时间切分" in reason

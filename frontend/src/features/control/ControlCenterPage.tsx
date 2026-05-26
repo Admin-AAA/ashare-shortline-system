@@ -25,6 +25,7 @@ import type {
   ScheduledTaskPayload,
   ScheduledTaskRun,
   ScheduledTaskType,
+  SkillSummary,
 } from "../../types";
 
 type TaskDraft = {
@@ -46,6 +47,35 @@ type RouteDraft = {
   clear_api_key: boolean;
 };
 
+type PresetDraft = {
+  name: string;
+  description: string;
+  run_mode: Preset["run_mode"];
+  market_scope: string;
+  market_scope_value: string;
+  risk_template: string;
+  score_line: number;
+  data_source: ManualRunDataSource;
+  hide_recent_repeats: boolean;
+};
+
+type PresetSkillDraft = {
+  skill_id: string;
+  weight: number;
+  sort_order: number;
+};
+
+type SectionLoadState = {
+  presets: boolean;
+  skills: boolean;
+  tasks: boolean;
+  taskRuns: boolean;
+  modelRoutes: boolean;
+  pool: boolean;
+};
+
+type ManualRunDataSource = "local_pool" | "local_pool_preferred" | "realtime";
+
 const EMPTY_TASK_DRAFT: TaskDraft = {
   task_id: "",
   name: "",
@@ -65,25 +95,51 @@ const EMPTY_ROUTE_DRAFT: RouteDraft = {
   clear_api_key: false,
 };
 
+const EMPTY_PRESET_DRAFT: PresetDraft = {
+  name: "",
+  description: "",
+  run_mode: "formal",
+  market_scope: "all",
+  market_scope_value: "",
+  risk_template: "balanced",
+  score_line: 72,
+  data_source: "local_pool",
+  hide_recent_repeats: true,
+};
+
 const TERMINAL_RUN_STATUS = new Set(["completed", "failed", "interrupted", "cancelled"]);
+const INITIAL_SECTION_LOADING: SectionLoadState = {
+  presets: true,
+  skills: true,
+  tasks: true,
+  taskRuns: true,
+  modelRoutes: true,
+  pool: true,
+};
 
 export default function ControlCenterPage() {
   const [presets, setPresets] = useState<Preset[]>([]);
+  const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
   const [taskRuns, setTaskRuns] = useState<ScheduledTaskRun[]>([]);
   const [modelRoutes, setModelRoutes] = useState<ModelRoute[]>([]);
   const [pool, setPool] = useState<LocalPoolStatus | null>(null);
   const [selectedPresetId, setSelectedPresetId] = useState("");
+  const [selectedRunDataSource, setSelectedRunDataSource] = useState<ManualRunDataSource>("local_pool");
   const [latestRun, setLatestRun] = useState<RunSummary | null>(null);
   const [taskDraft, setTaskDraft] = useState<TaskDraft>(EMPTY_TASK_DRAFT);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [routeDraft, setRouteDraft] = useState<RouteDraft>(EMPTY_ROUTE_DRAFT);
   const [editingRouteId, setEditingRouteId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [presetDraft, setPresetDraft] = useState<PresetDraft>(EMPTY_PRESET_DRAFT);
+  const [presetSkillDrafts, setPresetSkillDrafts] = useState<PresetSkillDraft[]>([]);
+  const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
+  const [sectionLoading, setSectionLoading] = useState<SectionLoadState>(INITIAL_SECTION_LOADING);
   const [running, setRunning] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [savingTask, setSavingTask] = useState(false);
   const [savingRoute, setSavingRoute] = useState(false);
+  const [savingPreset, setSavingPreset] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -96,31 +152,89 @@ export default function ControlCenterPage() {
   const currentTask = tasks.find((task) => task.task_id === editingTaskId) ?? null;
   const currentRoute = modelRoutes.find((route) => route.route_id === editingRouteId) ?? null;
   const readiness = pool?.recommendation_readiness;
+  const isRefreshingState = Object.values(sectionLoading).some(Boolean);
 
   const loadControlState = useCallback(async () => {
     setError("");
-    try {
-      const [presetRows, taskRows, taskRunRows, routeRows, poolStatus] = await Promise.all([
-        api.presets(),
-        api.scheduledTasks(),
-        api.scheduledTaskRuns(30),
-        api.modelRoutes(),
-        api.localPool({ u_limit: 5, b_limit: 5 }),
-      ]);
-      setPresets(presetRows);
-      setTasks(taskRows);
-      setTaskRuns(taskRunRows);
-      setModelRoutes(routeRows);
-      setPool(poolStatus);
-      setSelectedPresetId((current) => current || presetRows[0]?.preset_id || "");
-      setTaskDraft((current) => ({
-        ...current,
-        preset_id: current.preset_id || presetRows[0]?.preset_id || "",
-      }));
-    } catch (err) {
-      setError(messageFromError(err));
-    } finally {
-      setLoading(false);
+    setSectionLoading(INITIAL_SECTION_LOADING);
+
+    const errors: string[] = [];
+    const finishSection = (section: keyof SectionLoadState) => {
+      setSectionLoading((current) => ({ ...current, [section]: false }));
+    };
+    const captureError = (label: string, err: unknown) => {
+      errors.push(`${label}加载失败：${messageFromError(err)}`);
+    };
+
+    await Promise.all([
+      (async () => {
+        try {
+          const presetRows = await api.presets();
+          setPresets(presetRows);
+          setSelectedPresetId((current) => current || presetRows[0]?.preset_id || "");
+          setSelectedRunDataSource((current) => (current || (presetRows[0]?.data_source as ManualRunDataSource) || "local_pool"));
+          setPresetDraft((current) => current.name ? current : buildPresetDraft(null, presetRows.length));
+          setPresetSkillDrafts((current) => current);
+          setTaskDraft((current) => ({
+            ...current,
+            preset_id: current.preset_id || presetRows[0]?.preset_id || "",
+          }));
+        } catch (err) {
+          captureError("预设", err);
+        } finally {
+          finishSection("presets");
+        }
+      })(),
+      (async () => {
+        try {
+          const skillRows = await api.skills();
+          setSkills(skillRows.filter((skill) => skill.enabled));
+        } catch (err) {
+          captureError("策略", err);
+        } finally {
+          finishSection("skills");
+        }
+      })(),
+      (async () => {
+        try {
+          setTasks(await api.scheduledTasks());
+        } catch (err) {
+          captureError("自动任务", err);
+        } finally {
+          finishSection("tasks");
+        }
+      })(),
+      (async () => {
+        try {
+          setTaskRuns(await api.scheduledTaskRuns(30));
+        } catch (err) {
+          captureError("任务运行记录", err);
+        } finally {
+          finishSection("taskRuns");
+        }
+      })(),
+      (async () => {
+        try {
+          setModelRoutes(await api.modelRoutes());
+        } catch (err) {
+          captureError("模型路由", err);
+        } finally {
+          finishSection("modelRoutes");
+        }
+      })(),
+      (async () => {
+        try {
+          setPool(await api.localPool({ u_limit: 5, b_limit: 5, include_details: false }));
+        } catch (err) {
+          captureError("本地数据池", err);
+        } finally {
+          finishSection("pool");
+        }
+      })(),
+    ]);
+
+    if (errors.length) {
+      setError(errors.join("；"));
     }
   }, []);
 
@@ -140,6 +254,7 @@ export default function ControlCenterPage() {
       const result = await api.createRun({
         preset_id: selectedPreset.preset_id,
         run_name: `${selectedPreset.name} · 手动推荐`,
+        data_source: selectedRunDataSource,
         async: true,
       });
       setLatestRun(result.run);
@@ -174,7 +289,7 @@ export default function ControlCenterPage() {
     setMessage("");
     try {
       const result = await api.refreshLocalPool();
-      const poolStatus = await api.localPool({ u_limit: 5, b_limit: 5 });
+      const poolStatus = await api.localPool({ u_limit: 5, b_limit: 5, include_details: false });
       setPool(poolStatus);
       setMessage(`数据池刷新完成：${result.refreshed} 条报价`);
     } catch (err) {
@@ -271,9 +386,151 @@ export default function ControlCenterPage() {
   }
 
   async function reloadTasks() {
-    const [taskRows, taskRunRows] = await Promise.all([api.scheduledTasks(), api.scheduledTaskRuns(30)]);
-    setTasks(taskRows);
-    setTaskRuns(taskRunRows);
+    const [taskRows, taskRunRows] = await Promise.allSettled([api.scheduledTasks(), api.scheduledTaskRuns(30)]);
+    const errors: string[] = [];
+    if (taskRows.status === "fulfilled") {
+      setTasks(taskRows.value);
+    } else {
+      errors.push(`自动任务刷新失败：${messageFromError(taskRows.reason)}`);
+    }
+    if (taskRunRows.status === "fulfilled") {
+      setTaskRuns(taskRunRows.value);
+    } else {
+      errors.push(`任务运行记录刷新失败：${messageFromError(taskRunRows.reason)}`);
+    }
+    if (errors.length) {
+      setError(errors.join("；"));
+    }
+  }
+
+  function startBlankPreset() {
+    setEditingPresetId(null);
+    setPresetDraft(buildPresetDraft(null, presets.length));
+    setPresetSkillDrafts([]);
+  }
+
+  function resetPresetDraft() {
+    if (editingPresetId) {
+      const editingPreset = presets.find((preset) => preset.preset_id === editingPresetId) ?? null;
+      setPresetDraft(buildPresetDraft(editingPreset, presets.length));
+      setPresetSkillDrafts(buildPresetSkillDrafts(editingPreset));
+      return;
+    }
+    startBlankPreset();
+  }
+
+  function editPreset(preset: Preset) {
+    setEditingPresetId(preset.preset_id);
+    setSelectedPresetId(preset.preset_id);
+    setSelectedRunDataSource(normalizeManualRunDataSource(preset.data_source));
+    setPresetDraft(buildPresetDraft(preset, presets.length));
+    setPresetSkillDrafts(buildPresetSkillDrafts(preset));
+  }
+
+  async function deletePreset(preset: Preset) {
+    if (!window.confirm(`确定删除预设“${preset.name}”？`)) return;
+    setError("");
+    setMessage("");
+    try {
+      await api.deletePreset(preset.preset_id);
+      const presetRows = await api.presets();
+      const fallbackPreset = presetRows[0] ?? null;
+      setPresets(presetRows);
+      if (editingPresetId === preset.preset_id) {
+        setEditingPresetId(null);
+        setPresetDraft(buildPresetDraft(null, presetRows.length));
+        setPresetSkillDrafts([]);
+      }
+      if (selectedPresetId === preset.preset_id) {
+        setSelectedPresetId(fallbackPreset?.preset_id ?? "");
+        setSelectedRunDataSource(normalizeManualRunDataSource(fallbackPreset?.data_source));
+      }
+      setTaskDraft((current) => (
+        current.preset_id === preset.preset_id
+          ? { ...current, preset_id: fallbackPreset?.preset_id ?? "" }
+          : current
+      ));
+      setMessage(`预设已删除：${preset.name}`);
+    } catch (err) {
+      setError(messageFromError(err));
+    }
+  }
+
+  async function savePreset() {
+    if (!presetDraft.name.trim()) {
+      setError("请填写预设名称");
+      return;
+    }
+    if (!presetSkillDrafts.length) {
+      setError("至少选择一个策略后才能保存预设");
+      return;
+    }
+    setSavingPreset(true);
+    setError("");
+    setMessage("");
+    try {
+      const payload: Record<string, unknown> = {
+        name: presetDraft.name.trim(),
+        description: presetDraft.description.trim() || null,
+        run_mode: presetDraft.run_mode,
+        market_scope: presetDraft.market_scope,
+        market_scope_value: presetDraft.market_scope_value.trim() || null,
+        risk_template: presetDraft.risk_template,
+        score_line: presetDraft.score_line,
+        data_source: presetDraft.data_source,
+        hide_recent_repeats: presetDraft.hide_recent_repeats,
+        skills: normalizePresetSkillDrafts(presetSkillDrafts).map((skill) => ({
+          skill_id: skill.skill_id,
+          weight: skill.weight,
+          sort_order: skill.sort_order,
+        })),
+      };
+      const saved = editingPresetId
+        ? await api.updatePreset(editingPresetId, payload)
+        : await api.createPreset(payload);
+      const presetRows = await api.presets();
+      setPresets(presetRows);
+      setSelectedPresetId(saved.preset_id);
+      setSelectedRunDataSource(normalizeManualRunDataSource(saved.data_source));
+      setEditingPresetId(saved.preset_id);
+      setTaskDraft((current) => (
+        current.preset_id
+          ? current
+          : { ...current, preset_id: saved.preset_id }
+      ));
+      setPresetDraft(buildPresetDraft(saved, presetRows.length));
+      setPresetSkillDrafts(buildPresetSkillDrafts(saved));
+      setMessage(editingPresetId ? `预设已更新：${saved.name}` : `预设已创建：${saved.name}`);
+    } catch (err) {
+      setError(messageFromError(err));
+    } finally {
+      setSavingPreset(false);
+    }
+  }
+
+  function togglePresetSkill(skill: SkillSummary) {
+    setPresetSkillDrafts((current) => {
+      const exists = current.some((item) => item.skill_id === skill.skill_id);
+      if (exists) {
+        return normalizePresetSkillDrafts(current.filter((item) => item.skill_id !== skill.skill_id));
+      }
+      return normalizePresetSkillDrafts([
+        ...current,
+        {
+          skill_id: skill.skill_id,
+          weight: 1,
+          sort_order: current.length + 1,
+        },
+      ]);
+    });
+  }
+
+  function updatePresetSkillWeight(skillId: string, weight: number) {
+    setPresetSkillDrafts((current) => normalizePresetSkillDrafts(current.map((item) => (
+      item.skill_id === skillId
+        ? { ...item, weight: Number.isFinite(weight) && weight > 0 ? weight : item.weight }
+        : item
+    ))));
   }
 
   function startCreateRoute() {
@@ -369,7 +626,11 @@ export default function ControlCenterPage() {
     setModelRoutes(await api.reorderModelRoutes(ordered.map((route) => route.route_id)));
   }
 
-  if (loading) return <div className="cockpit-panel loading-state">正在加载控制中心</div>;
+  function handlePresetChange(presetId: string) {
+    setSelectedPresetId(presetId);
+    const nextPreset = presets.find((preset) => preset.preset_id === presetId);
+    setSelectedRunDataSource((nextPreset?.data_source as ManualRunDataSource) || "local_pool");
+  }
 
   return (
     <div className="workspace-grid control-center">
@@ -379,9 +640,9 @@ export default function ControlCenterPage() {
           <h2>推荐、数据、调度与模型门禁</h2>
           <p>把影响短线推荐链路的操作集中在同一个驾驶舱入口，避免靠命令行触发关键流程。</p>
         </div>
-        <button className="control-button" type="button" onClick={() => void loadControlState()}>
-          <RefreshCcw size={15} />
-          刷新状态
+        <button className="control-button" type="button" onClick={() => void loadControlState()} disabled={isRefreshingState}>
+          {isRefreshingState ? <Loader2 size={15} className="spin" /> : <RefreshCcw size={15} />}
+          {isRefreshingState ? "刷新中" : "刷新状态"}
         </button>
       </section>
 
@@ -405,7 +666,11 @@ export default function ControlCenterPage() {
           <div className="control-form">
             <label className="control-field">
               <span>运行预设</span>
-              <select value={selectedPreset?.preset_id ?? ""} onChange={(event) => setSelectedPresetId(event.target.value)}>
+              <select
+                value={selectedPreset?.preset_id ?? ""}
+                onChange={(event) => handlePresetChange(event.target.value)}
+                disabled={sectionLoading.presets}
+              >
                 {presets.map((preset) => (
                   <option key={preset.preset_id} value={preset.preset_id}>
                     {preset.name} · {labelText(preset.run_mode)}
@@ -413,11 +678,24 @@ export default function ControlCenterPage() {
                 ))}
               </select>
             </label>
+            <label className="control-field">
+              <span>数据源</span>
+              <select
+                value={selectedRunDataSource}
+                onChange={(event) => setSelectedRunDataSource(event.target.value as ManualRunDataSource)}
+                disabled={!selectedPreset}
+              >
+                <option value="local_pool">仅本地池</option>
+                <option value="local_pool_preferred">本地池优先</option>
+                <option value="realtime">实时数据</option>
+              </select>
+            </label>
+            {sectionLoading.presets ? <div className="control-empty">预设加载中</div> : null}
             {selectedPreset ? (
               <div className="mini-table">
                 <span>模式<strong>{labelText(selectedPreset.run_mode)}</strong></span>
                 <span>分数线<strong>{selectedPreset.score_line.toFixed(1)}</strong></span>
-                <span>数据源<strong>{labelText(selectedPreset.data_source)}</strong></span>
+                <span>数据源<strong>{labelText(selectedRunDataSource)}</strong></span>
                 <span>Skill<strong>{selectedPreset.skills.length}</strong></span>
               </div>
             ) : null}
@@ -442,9 +720,210 @@ export default function ControlCenterPage() {
             {syncing ? "同步中" : "刷新本地数据池"}
           </button>
           <div className="alert-stream">
-            {(readiness?.messages?.length ? readiness.messages : ["暂无数据池消息"]).slice(0, 5).map((item) => (
+            {(sectionLoading.pool
+              ? ["本地数据池加载中"]
+              : readiness?.messages?.length
+                ? readiness.messages
+                : ["暂无数据池消息"]
+            ).slice(0, 5).map((item) => (
               <span key={item}>{item}</span>
             ))}
+          </div>
+        </section>
+      </div>
+
+      <div className="control-grid wide-left">
+        <section className="cockpit-panel control-panel">
+          <PanelHeader
+            kicker="Preset"
+            title="预设管理"
+            action={
+              <button className="control-button subtle" type="button" onClick={startBlankPreset}>
+                <Plus size={14} />
+                空白新增
+              </button>
+            }
+          />
+          <div className="task-list">
+            {presets.length ? presets.map((preset) => (
+              <article key={preset.preset_id} className={`control-row ${selectedPreset?.preset_id === preset.preset_id ? "active" : ""}`}>
+                <button type="button" className="row-main-button" onClick={() => handlePresetChange(preset.preset_id)}>
+                  <strong>{preset.name}</strong>
+                  <span>{labelText(preset.run_mode)} · {describePresetScope(preset)} · {labelText(preset.data_source)}</span>
+                  <small>{preset.description || `分数线 ${preset.score_line.toFixed(1)} · ${preset.skills.length} 个 Skill`}</small>
+                </button>
+                <div className="row-actions">
+                  <button type="button" className="icon-button" title="编辑" onClick={() => editPreset(preset)}>
+                    <SquarePen size={14} />
+                  </button>
+                  <button type="button" className="icon-button danger" title="删除" onClick={() => void deletePreset(preset)}>
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </article>
+            )) : <div className="control-empty">{sectionLoading.presets ? "预设加载中" : "暂无预设"}</div>}
+          </div>
+          <div className="control-note">
+            <span>这里现在支持空白新增、编辑和删除。新增时记得至少勾一个策略，建完才能直接运行。</span>
+          </div>
+        </section>
+
+        <section className="cockpit-panel control-panel">
+          <PanelHeader
+            kicker="Create"
+            title={editingPresetId ? "编辑预设" : "新增预设"}
+            action={
+              <button className="control-button subtle" type="button" onClick={editingPresetId ? startBlankPreset : resetPresetDraft}>
+                {editingPresetId ? <Plus size={14} /> : <X size={14} />}
+                {editingPresetId ? "新建" : "重置"}
+              </button>
+            }
+          />
+          <div className="control-form">
+            <label className="control-field">
+              <span>预设名称</span>
+              <input
+                value={presetDraft.name}
+                placeholder="比如：隔夜持股法 - 实盘观察"
+                onChange={(event) => setPresetDraft((current) => ({ ...current, name: event.target.value }))}
+              />
+            </label>
+            <label className="control-field">
+              <span>描述</span>
+              <input
+                value={presetDraft.description}
+                placeholder="写给自己看的备注"
+                onChange={(event) => setPresetDraft((current) => ({ ...current, description: event.target.value }))}
+              />
+            </label>
+            <label className="control-field">
+              <span>运行模式</span>
+              <select
+                value={presetDraft.run_mode}
+                onChange={(event) => setPresetDraft((current) => ({ ...current, run_mode: event.target.value as Preset["run_mode"] }))}
+              >
+                <option value="formal">正式</option>
+                <option value="experiment">实验</option>
+              </select>
+            </label>
+            <label className="control-field">
+              <span>市场范围</span>
+              <select
+                value={presetDraft.market_scope}
+                onChange={(event) => setPresetDraft((current) => ({ ...current, market_scope: event.target.value }))}
+              >
+                <option value="all">全市场</option>
+                <option value="watchlist">自选股</option>
+                <option value="industry">行业</option>
+              </select>
+            </label>
+            <label className="control-field">
+              <span>范围值</span>
+              <input
+                value={presetDraft.market_scope_value}
+                placeholder={presetDraft.market_scope === "industry" ? "例如：电气设备" : presetDraft.market_scope === "watchlist" ? "例如：观察池A" : "全市场可留空"}
+                onChange={(event) => setPresetDraft((current) => ({ ...current, market_scope_value: event.target.value }))}
+              />
+            </label>
+            <label className="control-field">
+              <span>风控模板</span>
+              <select
+                value={presetDraft.risk_template}
+                onChange={(event) => setPresetDraft((current) => ({ ...current, risk_template: event.target.value }))}
+              >
+                <option value="conservative">保守</option>
+                <option value="balanced">均衡</option>
+                <option value="aggressive">激进</option>
+              </select>
+            </label>
+            <label className="control-field">
+              <span>分数线</span>
+              <input
+                type="number"
+                min={35}
+                max={95}
+                step={0.5}
+                value={presetDraft.score_line}
+                onChange={(event) => {
+                  const nextValue = Number(event.target.value);
+                  setPresetDraft((current) => ({
+                    ...current,
+                    score_line: Number.isFinite(nextValue) ? nextValue : current.score_line,
+                  }));
+                }}
+              />
+            </label>
+            <label className="control-field">
+              <span>数据源</span>
+              <select
+                value={presetDraft.data_source}
+                onChange={(event) => setPresetDraft((current) => ({ ...current, data_source: event.target.value as ManualRunDataSource }))}
+              >
+                <option value="local_pool">仅本地池</option>
+                <option value="local_pool_preferred">本地池优先</option>
+                <option value="realtime">实时数据</option>
+              </select>
+            </label>
+            <label className="control-toggle">
+              <span>隐藏近期重复票</span>
+              <button type="button" className={presetDraft.hide_recent_repeats ? "on" : ""} onClick={() => setPresetDraft((current) => ({ ...current, hide_recent_repeats: !current.hide_recent_repeats }))}>
+                {presetDraft.hide_recent_repeats ? "ON" : "OFF"}
+              </button>
+            </label>
+            <div className="control-form">
+              <div className="panel-kicker">策略组合</div>
+              {sectionLoading.skills ? <div className="control-empty">策略列表加载中</div> : null}
+              {!sectionLoading.skills ? (
+                skills.length ? (
+                  <div className="task-list">
+                    {skills.map((skill) => {
+                      const selected = presetSkillDrafts.find((item) => item.skill_id === skill.skill_id) ?? null;
+                      return (
+                        <article key={skill.skill_id} className={`control-row ${selected ? "active" : ""}`}>
+                          <div className="row-main-button">
+                            <strong>{skill.name}</strong>
+                            <span>{skill.skill_id} · {labelText(skill.mode)}</span>
+                          </div>
+                          <div className="row-actions">
+                            {selected ? (
+                              <input
+                                className="preset-weight-input"
+                                type="number"
+                                min={0.1}
+                                max={5}
+                                step={0.05}
+                                value={selected.weight}
+                                onChange={(event) => updatePresetSkillWeight(skill.skill_id, Number(event.target.value))}
+                              />
+                            ) : null}
+                            <button className={`control-button ${selected ? "primary" : "subtle"}`} type="button" onClick={() => togglePresetSkill(skill)}>
+                              {selected ? "移除" : "加入"}
+                            </button>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="control-empty">暂无可用策略</div>
+                )
+              ) : null}
+            </div>
+            <div className="mini-table">
+              <span>状态<strong>{editingPresetId ? "编辑中" : "新增中"}</strong></span>
+              <span>已选策略<strong>{presetSkillDrafts.length}</strong></span>
+              <span>模式<strong>{labelText(presetDraft.run_mode)}</strong></span>
+              <span>数据源<strong>{labelText(presetDraft.data_source)}</strong></span>
+            </div>
+            {editingPresetId ? (
+              <div className="control-note">
+                <span>当前是编辑模式，参数和策略组合都可以一起改。</span>
+              </div>
+            ) : null}
+            <button className="control-button primary wide" type="button" onClick={() => void savePreset()} disabled={savingPreset || sectionLoading.skills}>
+              {savingPreset ? <Loader2 size={15} className="spin" /> : <Save size={15} />}
+              {savingPreset ? "保存中" : editingPresetId ? "保存修改" : "创建预设"}
+            </button>
           </div>
         </section>
       </div>
@@ -481,9 +960,9 @@ export default function ControlCenterPage() {
                   </button>
                 </div>
               </article>
-            )) : <div className="control-empty">暂无自动任务</div>}
+            )) : <div className="control-empty">{sectionLoading.tasks ? "自动任务加载中" : "暂无自动任务"}</div>}
           </div>
-          <TaskRunStrip rows={taskRuns} />
+          <TaskRunStrip rows={taskRuns} loading={sectionLoading.taskRuns} />
         </section>
 
         <section className="cockpit-panel control-panel">
@@ -509,7 +988,11 @@ export default function ControlCenterPage() {
             {taskDraft.task_type === "recommendation_run" ? (
               <label className="control-field">
                 <span>推荐预设</span>
-                <select value={taskDraft.preset_id} onChange={(event) => setTaskDraft((current) => ({ ...current, preset_id: event.target.value }))}>
+                <select
+                  value={taskDraft.preset_id}
+                  onChange={(event) => setTaskDraft((current) => ({ ...current, preset_id: event.target.value }))}
+                  disabled={sectionLoading.presets}
+                >
                   <option value="">请选择预设</option>
                   {presets.map((preset) => (
                     <option key={preset.preset_id} value={preset.preset_id}>
@@ -570,7 +1053,7 @@ export default function ControlCenterPage() {
                   </button>
                 </div>
               </article>
-            )) : <div className="control-empty">暂无模型路由</div>}
+            )) : <div className="control-empty">{sectionLoading.modelRoutes ? "模型路由加载中" : "暂无模型路由"}</div>}
           </div>
         </section>
 
@@ -669,16 +1152,17 @@ function RunStatusCard({ run }: { run: RunSummary }) {
   );
 }
 
-function TaskRunStrip({ rows }: { rows: ScheduledTaskRun[] }) {
+function TaskRunStrip({ rows, loading }: { rows: ScheduledTaskRun[]; loading: boolean }) {
   return (
     <div className="task-run-strip">
+      {loading ? <span>任务执行记录加载中</span> : null}
       {rows.slice(0, 4).map((row) => (
         <span key={row.task_run_id}>
           <strong>{row.task_name}</strong>
           {taskLabel(row.task_type)} · {row.status}
         </span>
       ))}
-      {!rows.length ? <span>暂无任务执行记录</span> : null}
+      {!loading && !rows.length ? <span>暂无任务执行记录</span> : null}
     </div>
   );
 }
@@ -745,6 +1229,56 @@ function routeKeyLabel(route: ModelRoute) {
   return "未配置 Key";
 }
 
+function buildPresetDraft(sourcePreset: Preset | null, presetCount: number): PresetDraft {
+  if (!sourcePreset) {
+    return {
+      ...EMPTY_PRESET_DRAFT,
+      name: `预设 ${presetCount + 1}`,
+    };
+  }
+  return {
+    name: sourcePreset.name,
+    description: sourcePreset.description ?? "",
+    run_mode: sourcePreset.run_mode,
+    market_scope: sourcePreset.market_scope,
+    market_scope_value: sourcePreset.market_scope_value ?? "",
+    risk_template: sourcePreset.risk_template,
+    score_line: sourcePreset.score_line,
+    data_source: normalizeManualRunDataSource(sourcePreset.data_source),
+    hide_recent_repeats: sourcePreset.hide_recent_repeats,
+  };
+}
+
+function buildPresetSkillDrafts(sourcePreset: Preset | null): PresetSkillDraft[] {
+  if (!sourcePreset) return [];
+  return normalizePresetSkillDrafts(sourcePreset.skills.map((skill, index) => ({
+    skill_id: skill.skill_id,
+    weight: skill.weight,
+    sort_order: Number.isFinite(skill.sort_order) ? skill.sort_order : index + 1,
+  })));
+}
+
+function normalizePresetSkillDrafts(rows: PresetSkillDraft[]): PresetSkillDraft[] {
+  return rows
+    .filter((row) => Boolean(row.skill_id))
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map((row, index) => ({
+      ...row,
+      weight: Number.isFinite(row.weight) && row.weight > 0 ? row.weight : 1,
+      sort_order: index + 1,
+    }));
+}
+
+function normalizeManualRunDataSource(value: string | null | undefined): ManualRunDataSource {
+  if (value === "local_pool_preferred" || value === "realtime") return value;
+  return "local_pool";
+}
+
+function describePresetScope(preset: Preset) {
+  const scopeLabel = labelText(preset.market_scope);
+  return preset.market_scope_value ? `${scopeLabel} · ${preset.market_scope_value}` : scopeLabel;
+}
+
 function progressPercent(run: RunSummary) {
   if (typeof run.progress_pct === "number") {
     return Math.max(0, Math.min(100, run.progress_pct * 100));
@@ -757,6 +1291,12 @@ function labelText(value: string) {
   const labels: Record<string, string> = {
     formal: "正式",
     experiment: "实验",
+    all: "全市场",
+    watchlist: "自选股",
+    industry: "行业",
+    conservative: "保守",
+    balanced: "均衡",
+    aggressive: "激进",
     local_pool: "仅本地池",
     local_pool_preferred: "本地池优先",
     realtime: "实时数据",

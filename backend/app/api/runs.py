@@ -47,6 +47,8 @@ def create_backtest(payload: dict, db: Session = Depends(get_db)):
         horizon_days: int # 持仓天数（默认 5）
     """
     from app.services.backtest_service import run_backtest
+    from app.services.overnight_holding_service import STRATEGY_ID as OVERNIGHT_STRATEGY_ID
+    from app.services.overnight_holding_service import run_overnight_holding_backtest
 
     start_date = payload.get("start_date")
     end_date = payload.get("end_date")
@@ -63,11 +65,35 @@ def create_backtest(payload: dict, db: Session = Depends(get_db)):
     if horizon_days < 1 or horizon_days > 20:
         raise HTTPException(status_code=400, detail="horizon_days must be between 1 and 20")
     score_line = float(payload.get("score_line", 72.0))
+    strategy_id = str(payload.get("strategy_id") or "").strip()
     try:
+        if strategy_id == OVERNIGHT_STRATEGY_ID:
+            return run_overnight_holding_backtest(db, start_date, end_date)
         return run_backtest(db, start_date, end_date, run_mode, horizon_days, score_line)
     except Exception as exc:
         logger.exception("backtest failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/backtests")
+def get_backtests(
+    skill_id: str | None = Query(default=None),
+    limit: int = Query(default=30, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    from app.services.backtest_history_service import list_backtest_runs
+
+    return list_backtest_runs(db, skill_id=skill_id, limit=limit)
+
+
+@router.get("/backtests/{backtest_id}")
+def backtest_detail(backtest_id: str, db: Session = Depends(get_db)):
+    from app.services.backtest_history_service import get_backtest_run
+
+    run = get_backtest_run(db, backtest_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="backtest not found")
+    return run
 
 
 @router.get("")

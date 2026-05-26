@@ -40,51 +40,20 @@ export type AuthStatus = {
 
 const LONG_REQUEST_THRESHOLD_MS = 3000;
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+type RequestOptions = {
+  timeoutMs?: number;
+};
+
+async function request<T>(path: string, init?: RequestInit, options?: RequestOptions): Promise<T> {
   const method = init?.method ?? "GET";
+  const timeoutMs = options?.timeoutMs;
+  const controller = timeoutMs ? new AbortController() : null;
+  const timer = controller ? window.setTimeout(() => controller.abort(), timeoutMs) : null;
   const start = performance.now();
   try {
     const res = await fetch(path, {
       headers: { "Content-Type": "application/json" },
-      ...init
-    });
-    const duration = Math.round(performance.now() - start);
-    logger.api(method, path, duration, res.status);
-    if (duration > LONG_REQUEST_THRESHOLD_MS) {
-      logger.warn("api", `慢请求: ${method} ${path}`, { duration, status: res.status });
-    }
-    if (!res.ok) {
-      const text = await res.text();
-      if (res.status === 401) {
-        throw new Error("UNAUTHORIZED");
-      }
-      throw new Error(text || `Request failed: ${res.status}`);
-    }
-    return (await res.json()) as T;
-  } catch (err) {
-    const duration = Math.round(performance.now() - start);
-    if ((err as Error).message === "UNAUTHORIZED") throw err;
-    logger.error("api", `${method} ${path} failed`, { duration, error: String(err) });
-    throw err;
-  }
-}
-
-function json(method: string, body?: unknown): RequestInit {
-  return {
-    method,
-    body: body === undefined ? undefined : JSON.stringify(body)
-  };
-}
-
-async function requestWithTimeout<T>(path: string, timeoutMs: number, init?: RequestInit): Promise<T> {
-  const method = init?.method ?? "POST";
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const start = performance.now();
-  try {
-    const res = await fetch(path, {
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
+      signal: controller?.signal,
       ...init
     });
     const duration = Math.round(performance.now() - start);
@@ -106,13 +75,25 @@ async function requestWithTimeout<T>(path: string, timeoutMs: number, init?: Req
       logger.warn("api", `${method} ${path} 超时 (${timeoutMs}ms)`, { duration });
       throw new Error("请求超时，请检查网络后刷新重试");
     }
-    if ((err as Error).message !== "UNAUTHORIZED") {
-      logger.error("api", `${method} ${path} failed`, { duration, error: String(err) });
-    }
+    if ((err as Error).message === "UNAUTHORIZED") throw err;
+    logger.error("api", `${method} ${path} failed`, { duration, error: String(err) });
     throw err;
   } finally {
-    clearTimeout(timer);
+    if (timer !== null) {
+      clearTimeout(timer);
+    }
   }
+}
+
+function json(method: string, body?: unknown): RequestInit {
+  return {
+    method,
+    body: body === undefined ? undefined : JSON.stringify(body)
+  };
+}
+
+async function requestWithTimeout<T>(path: string, timeoutMs: number, init?: RequestInit): Promise<T> {
+  return request<T>(path, init, { timeoutMs });
 }
 
 /** 当前活跃的轮询 AbortController，用于取消 */
@@ -141,7 +122,7 @@ export const api = {
   bootstrap: () => request<HomeBootstrap>("/api/home/bootstrap"),
   initial: () => request<HomeInitialState>("/api/home/initial"),
 
-  presets: () => request<Preset[]>("/api/presets"),
+  presets: () => request<Preset[]>("/api/presets", undefined, { timeoutMs: 12_000 }),
   createPreset: (payload: PresetPayload) =>
     request<Preset>("/api/presets", json("POST", payload)),
   updatePreset: (presetId: string, payload: PresetPayload) =>
@@ -172,19 +153,20 @@ export const api = {
   },
 
   dataSources: () => request<DataSourceHealthRow[]>("/api/data-sources"),
-  localPool: (params?: { u_limit?: number; u_offset?: number; b_limit?: number; b_offset?: number }) => {
+  localPool: (params?: { u_limit?: number; u_offset?: number; b_limit?: number; b_offset?: number; include_details?: boolean }) => {
     const qs = new URLSearchParams();
     if (params?.u_limit !== undefined) qs.set("u_limit", String(params.u_limit));
     if (params?.u_offset !== undefined) qs.set("u_offset", String(params.u_offset));
     if (params?.b_limit !== undefined) qs.set("b_limit", String(params.b_limit));
     if (params?.b_offset !== undefined) qs.set("b_offset", String(params.b_offset));
+    if (params?.include_details !== undefined) qs.set("include_details", String(params.include_details));
     const query = qs.toString();
-    return request<LocalPoolStatus>(`/api/data-sources/pool${query ? `?${query}` : ""}`);
+    return request<LocalPoolStatus>(`/api/data-sources/pool${query ? `?${query}` : ""}`, undefined, { timeoutMs: 15_000 });
   },
   refreshLocalPool: () => requestWithTimeout<PoolRefreshResult>("/api/data-sources/pool/refresh", 300_000, json("POST")),
   setDataSourceEnabled: (sourceType: string, source: string, enabled: boolean) =>
     request<DataSourceHealthRow>(`/api/data-sources/${sourceType}/${source}/enabled`, json("POST", { enabled })),
-  modelRoutes: () => request<ModelRoute[]>("/api/admin/model-routes"),
+  modelRoutes: () => request<ModelRoute[]>("/api/admin/model-routes", undefined, { timeoutMs: 12_000 }),
   createModelRoute: (payload: Record<string, unknown>) =>
     request<ModelRoute>("/api/admin/model-routes", json("POST", payload)),
   updateModelRoute: (routeId: string, payload: Record<string, unknown>) =>
@@ -194,8 +176,9 @@ export const api = {
   reorderModelRoutes: (routeIds: string[]) =>
     request<ModelRoute[]>("/api/admin/model-routes/reorder", json("POST", { route_ids: routeIds })),
 
-  scheduledTasks: () => request<ScheduledTask[]>("/api/admin/tasks"),
-  scheduledTaskRuns: (limit = 100) => request<ScheduledTaskRun[]>(`/api/admin/task-runs?limit=${limit}`),
+  scheduledTasks: () => request<ScheduledTask[]>("/api/admin/tasks", undefined, { timeoutMs: 12_000 }),
+  scheduledTaskRuns: (limit = 100) =>
+    request<ScheduledTaskRun[]>(`/api/admin/task-runs?limit=${limit}`, undefined, { timeoutMs: 12_000 }),
   createScheduledTask: (payload: ScheduledTaskPayload) =>
     request<ScheduledTask>("/api/admin/tasks", json("POST", payload)),
   updateScheduledTask: (taskId: string, payload: ScheduledTaskPayload) =>

@@ -101,13 +101,27 @@ def test_fetch_minute_kbars_parses_tencent_response(monkeypatch):
     from app.services.tushare_client import fetch_minute_kbars
 
     class FakeResponse:
-        text = 'min_data={"code":0,"msg":"","data":{"sz000001":{"data":{"data":["0930 10.70 6616 7079120.00","0931 10.66 60046 64093840.00"]}}}}'
         status_code = 200
 
         def raise_for_status(self):
             pass
 
-    monkeypatch.setattr("httpx.get", lambda url, timeout, headers: FakeResponse())
+        def json(self):
+            return {
+                "data": {
+                    "trends": [
+                        "2026-05-22 09:30,0.00,10.70,10.70,10.70,6616,7079120.00,10.700",
+                        "2026-05-22 09:31,0.00,10.66,10.68,10.66,60046,64093840.00,10.680",
+                    ]
+                }
+            }
+
+    monkeypatch.setattr("app.services.tushare_client._fetch_tushare_minute_kbars", lambda *args, **kwargs: [])
+    monkeypatch.setattr("app.services.tushare_client.curl_requests.get", lambda *args, **kwargs: FakeResponse())
+    monkeypatch.setattr(
+        "app.services.tushare_client.requests.get",
+        lambda *args, **kwargs: (_ for _ in ()).throw(Exception("no fallback")),
+    )
     bars = fetch_minute_kbars("000001")
     assert len(bars) == 2
     assert bars[0]["code"] == "000001"
@@ -120,13 +134,26 @@ def test_fetch_minute_kbars_sh_stock(monkeypatch):
     from app.services.tushare_client import fetch_minute_kbars
 
     class FakeResponse:
-        text = 'min_data={"code":0,"msg":"","data":{"sh600000":{"data":{"data":["0930 8.88 1716 1523808.00"]}}}}'
         status_code = 200
 
         def raise_for_status(self):
             pass
 
-    monkeypatch.setattr("httpx.get", lambda url, timeout, headers: FakeResponse())
+        def json(self):
+            return {
+                "data": {
+                    "trends": [
+                        "2026-05-22 09:30,0.00,8.88,8.88,8.88,1716,1523808.00,8.880"
+                    ]
+                }
+            }
+
+    monkeypatch.setattr("app.services.tushare_client._fetch_tushare_minute_kbars", lambda *args, **kwargs: [])
+    monkeypatch.setattr("app.services.tushare_client.curl_requests.get", lambda *args, **kwargs: FakeResponse())
+    monkeypatch.setattr(
+        "app.services.tushare_client.requests.get",
+        lambda *args, **kwargs: (_ for _ in ()).throw(Exception("no fallback")),
+    )
     bars = fetch_minute_kbars("600000")
     assert len(bars) == 1
     assert bars[0]["code"] == "600000"
@@ -136,9 +163,224 @@ def test_fetch_minute_kbars_sh_stock(monkeypatch):
 def test_fetch_minute_kbars_handles_errors(monkeypatch):
     from app.services.tushare_client import fetch_minute_kbars
 
-    monkeypatch.setattr("httpx.get", lambda url, timeout, headers: (_ for _ in ()).throw(Exception("network error")))
+    monkeypatch.setattr("app.services.tushare_client._fetch_tushare_minute_kbars", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        "app.services.tushare_client.curl_requests.get",
+        lambda *args, **kwargs: (_ for _ in ()).throw(Exception("network error")),
+    )
+    monkeypatch.setattr(
+        "app.services.tushare_client.requests.get",
+        lambda *args, **kwargs: (_ for _ in ()).throw(Exception("network error")),
+    )
     bars = fetch_minute_kbars("000001")
     assert bars == []
+
+
+def test_fetch_minute_kbars_filters_exact_trade_date(monkeypatch):
+    from app.services.tushare_client import fetch_minute_kbars
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "data": {
+                    "trends": [
+                        "2026-05-21 14:30,0.00,10.50,10.51,10.49,1000,1050000.00,10.500",
+                        "2026-05-22 14:30,0.00,10.80,10.81,10.79,1200,1296000.00,10.800",
+                    ]
+                }
+            }
+
+    monkeypatch.setattr("app.services.tushare_client._fetch_tushare_minute_kbars", lambda *args, **kwargs: [])
+    monkeypatch.setattr("app.services.tushare_client.curl_requests.get", lambda *args, **kwargs: FakeResponse())
+    monkeypatch.setattr(
+        "app.services.tushare_client.requests.get",
+        lambda *args, **kwargs: (_ for _ in ()).throw(Exception("no fallback")),
+    )
+    bars = fetch_minute_kbars("000001", trade_date="2026-05-22")
+    assert len(bars) == 1
+    assert bars[0]["trade_date"] == "2026-05-22"
+
+
+def test_fetch_recent_minute_kbars_falls_back_to_sina(monkeypatch):
+    from app.services.tushare_client import fetch_recent_minute_kbars
+
+    class EmptyEastmoneyResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": {"trends": []}}
+
+    class FakeSinaResponse:
+        status_code = 200
+        text = (
+            'jsonp=([{"day":"2026-05-21 14:59:00","open":"10.10","high":"10.11","low":"10.09","close":"10.10","volume":"100","amount":"101000"},'
+            '{"day":"2026-05-22 09:30:00","open":"10.20","high":"10.21","low":"10.19","close":"10.20","volume":"200","amount":"204000"}]);'
+        )
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr("app.services.tushare_client._fetch_tushare_minute_kbars", lambda *args, **kwargs: [])
+    monkeypatch.setattr("app.services.tushare_client.curl_requests.get", lambda *args, **kwargs: EmptyEastmoneyResponse())
+    monkeypatch.setattr("app.services.tushare_client.requests.get", lambda *args, **kwargs: FakeSinaResponse())
+
+    bars = fetch_recent_minute_kbars("000001", ndays=2)
+
+    assert len(bars) == 2
+    assert bars[0]["trade_date"] == "2026-05-21"
+    assert bars[-1]["trade_date"] == "2026-05-22"
+    assert bars[-1]["pre_close"] == 10.10
+
+
+def test_fetch_recent_index_minute_kbars_falls_back_to_sina(monkeypatch):
+    from app.services.tushare_client import fetch_recent_index_minute_kbars
+
+    class EmptyEastmoneyResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": {"trends": []}}
+
+    class FakeSinaResponse:
+        status_code = 200
+        text = (
+            'jsonp=([{"day":"2026-05-21 14:59:00","open":"4000.10","high":"4001.11","low":"3999.09","close":"4000.10","volume":"100","amount":"101000"},'
+            '{"day":"2026-05-22 09:30:00","open":"4010.20","high":"4011.21","low":"4009.19","close":"4010.20","volume":"200","amount":"204000"}]);'
+        )
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr("app.services.tushare_client._fetch_tushare_minute_kbars", lambda *args, **kwargs: [])
+    monkeypatch.setattr("app.services.tushare_client.curl_requests.get", lambda *args, **kwargs: EmptyEastmoneyResponse())
+    monkeypatch.setattr("app.services.tushare_client.requests.get", lambda *args, **kwargs: FakeSinaResponse())
+
+    bars = fetch_recent_index_minute_kbars("000300", ndays=2)
+
+    assert len(bars) == 2
+    assert bars[0]["code"] == "000300"
+    assert bars[-1]["pre_close"] == 4000.10
+
+
+def test_fetch_minute_kbars_prefers_tushare_stk_mins(monkeypatch):
+    from app.services.tushare_client import fetch_minute_kbars
+
+    def fake_tushare(code, *, start_time, end_time, trace=None):
+        if trace is not None:
+            trace.append({"source": "tushare_stk_mins", "code": code, "status": "success", "row_count": 1})
+        return [
+            {
+                "code": code,
+                "trade_date": "2026-05-22",
+                "trade_time": "2026-05-22 09:30:00",
+                "open": 10.7,
+                "high": 10.7,
+                "low": 10.7,
+                "close": 10.7,
+                "volume": 100.0,
+                "amount": 107000.0,
+            }
+        ]
+
+    monkeypatch.setattr("app.services.tushare_client._fetch_tushare_minute_kbars", fake_tushare)
+    monkeypatch.setattr(
+        "app.services.tushare_client.curl_requests.get",
+        lambda *args, **kwargs: (_ for _ in ()).throw(Exception("should not fallback")),
+    )
+
+    trace: list[dict] = []
+    bars = fetch_minute_kbars("000001", trade_date="2026-05-22", trace=trace)
+
+    assert len(bars) == 1
+    assert bars[0]["trade_date"] == "2026-05-22"
+    assert trace[0]["source"] == "tushare_stk_mins"
+
+
+def test_fetch_recent_minute_kbars_uses_tushare_without_fallback(monkeypatch):
+    from app.services.tushare_client import fetch_recent_minute_kbars
+
+    def fake_tushare(code, *, start_time, end_time, trace=None):
+        if trace is not None:
+            trace.append({"source": "tushare_stk_mins", "code": code, "status": "success", "row_count": 1})
+        return [
+            {
+                "code": code,
+                "trade_date": "2026-05-22",
+                "trade_time": "2026-05-22 09:30:00",
+                "open": 10.7,
+                "high": 10.7,
+                "low": 10.7,
+                "close": 10.7,
+                "volume": 100.0,
+                "amount": 107000.0,
+            }
+        ]
+
+    monkeypatch.setattr("app.services.tushare_client._fetch_tushare_minute_kbars", fake_tushare)
+    monkeypatch.setattr(
+        "app.services.tushare_client.curl_requests.get",
+        lambda *args, **kwargs: (_ for _ in ()).throw(Exception("should not fallback")),
+    )
+    monkeypatch.setattr(
+        "app.services.tushare_client.requests.get",
+        lambda *args, **kwargs: (_ for _ in ()).throw(Exception("should not fallback")),
+    )
+
+    trace: list[dict] = []
+    bars = fetch_recent_minute_kbars("000001", ndays=1, trace=trace)
+
+    assert len(bars) == 1
+    assert bars[0]["trade_date"] == "2026-05-22"
+    assert [item["source"] for item in trace] == ["tushare_stk_mins"]
+
+
+def test_fetch_recent_minute_kbars_records_tushare_permission_fallback(monkeypatch):
+    from app.services import tushare_client
+    from app.services.tushare_client import fetch_recent_minute_kbars
+
+    tushare_client._TUSHARE_STK_MINS_PERMISSION_DENIED_REASON = None
+
+    class FakePro:
+        def stk_mins(self, **kwargs):
+            raise RuntimeError("Tushare stk_mins: 您没有该接口权限")
+
+    class EmptyEastmoneyResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": {"trends": []}}
+
+    class FakeSinaResponse:
+        status_code = 200
+        text = 'jsonp=([{"day":"2026-05-22 09:30:00","open":"10.20","high":"10.21","low":"10.19","close":"10.20","volume":"200","amount":"204000"}]);'
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr("app.services.tushare_client.get_pro", lambda: FakePro())
+    monkeypatch.setattr("app.services.tushare_client.curl_requests.get", lambda *args, **kwargs: EmptyEastmoneyResponse())
+    monkeypatch.setattr("app.services.tushare_client.requests.get", lambda *args, **kwargs: FakeSinaResponse())
+
+    trace: list[dict] = []
+    bars = fetch_recent_minute_kbars("000001", ndays=1, trace=trace)
+
+    assert len(bars) == 1
+    assert any(item["source"] == "tushare_stk_mins" and item["status"] == "permission_denied" for item in trace)
+    assert any(item["source"] == "sina_minute" and item["status"] == "success" for item in trace)
 
 
 # ═══════════════════════════════════════════════════════════════════

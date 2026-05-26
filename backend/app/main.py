@@ -127,13 +127,20 @@ def _warmup_pool_cache(delay_seconds: float = 0.0) -> None:
             _time.sleep(delay_seconds)
         from app.db.session import SessionLocal
         from app.services.data_sources import get_local_pool_status
-        from app.api.data_sources import _pool_status_cache, _pool_status_lock, _POOL_CACHE_KEY
+        from app.api.data_sources import _pool_cache_key, _pool_status_cache, _pool_status_lock
 
         db = SessionLocal()
         try:
-            data = get_local_pool_status(db, unified_limit=50, unified_offset=0, bars_limit=50, bars_offset=0)
+            data = get_local_pool_status(
+                db,
+                unified_limit=0,
+                unified_offset=0,
+                bars_limit=0,
+                bars_offset=0,
+                include_details=False,
+            )
             with _pool_status_lock:
-                _pool_status_cache[_POOL_CACHE_KEY] = {"ts": _time.monotonic(), "data": data}
+                _pool_status_cache[_pool_cache_key(include_details=False)] = {"ts": _time.monotonic(), "data": data}
             logger.info("数据池缓存预热完成")
         except Exception:
             logger.exception("数据池缓存预热失败")

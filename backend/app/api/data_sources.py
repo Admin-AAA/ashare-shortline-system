@@ -63,7 +63,9 @@ def local_pool(
     b_limit: int = 50,
     b_offset: int = 0,
     cache_ttl: int = 30,
+    include_details: bool = True,
 ):
+    include_paginated = include_details
     return get_cached_local_pool_status(
         db,
         u_limit=u_limit,
@@ -71,7 +73,8 @@ def local_pool(
         b_limit=b_limit,
         b_offset=b_offset,
         cache_ttl=cache_ttl,
-        include_paginated=True,
+        include_paginated=include_paginated,
+        include_details=include_details,
     )
 
 
@@ -84,11 +87,13 @@ def get_cached_local_pool_status(
     b_offset: int = 0,
     cache_ttl: int = 30,
     include_paginated: bool = True,
+    include_details: bool = True,
     cache_only: bool = False,
 ) -> dict:
     now = time.monotonic()
+    cache_key = _pool_cache_key(include_details)
     with _pool_status_lock:
-        cached = _pool_status_cache.get(_POOL_CACHE_KEY)
+        cached = _pool_status_cache.get(cache_key)
         if cached and ((now - cached["ts"]) < cache_ttl or cache_only):
             data = dict(cached["data"])
             if include_paginated:
@@ -111,9 +116,10 @@ def get_cached_local_pool_status(
             unified_offset=u_offset,
             bars_limit=b_limit,
             bars_offset=b_offset,
+            include_details=include_details,
         )
         with _pool_status_lock:
-            _pool_status_cache[_POOL_CACHE_KEY] = {"ts": time.monotonic(), "data": data}
+            _pool_status_cache[cache_key] = {"ts": time.monotonic(), "data": data}
         if not include_paginated:
             data = dict(data)
             data["unified_quotes"] = []
@@ -132,6 +138,10 @@ def _load_paginated(db, u_limit, u_offset, b_limit, b_offset, _cached_rows=None)
         unified = _unified_quote_rows(db, limit=u_limit, offset=u_offset)
     bars = _daily_bar_rows(db, limit=b_limit, offset=b_offset)
     return unified, bars
+
+
+def _pool_cache_key(include_details: bool) -> str:
+    return f"{_POOL_CACHE_KEY}:{'full' if include_details else 'summary'}"
 
 
 @router.post("/pool/refresh")

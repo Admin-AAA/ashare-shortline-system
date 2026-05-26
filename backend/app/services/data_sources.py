@@ -83,6 +83,7 @@ def get_local_pool_status(
     unified_offset: int = 0,
     bars_limit: int = 50,
     bars_offset: int = 0,
+    include_details: bool = True,
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
     latest_allowed_bar_date = _latest_allowed_bar_date()
@@ -105,13 +106,6 @@ def get_local_pool_status(
     dragon_tiger_count = approx.get("dragon_tiger", 0)
     news_count = approx.get("news_announcement", 0)
 
-    # ── 必须精确的计数：active_unified_quote（用于覆盖率计算）──
-    active_unified_quote_count = _count_with_limit(db, StockQuote, StockQuote.freshness_status != "inactive")
-    bars_with_indicators = _count_with_limit(
-        db, DailyKbar,
-        (DailyKbar.trade_date <= latest_allowed_bar_date) & (DailyKbar.ma5.isnot(None))
-    )
-    indicator_coverage_pct = round(bars_with_indicators / max(1, daily_bar_row_count) * 100, 1) if daily_bar_row_count else 0.0
     t_counts = time.perf_counter()
 
     # ── 日期/时间聚合 ──
@@ -120,42 +114,50 @@ def get_local_pool_status(
     latest_quote_date = latest_quote_date_for_coverage
     t_dates = time.perf_counter()
 
-    # ── 一次性加载全部活跃 StockQuote 行 + 日K汇总 ──
+    # ── 一次性加载全部活跃 StockQuote 行 ──
     all_quote_rows = db.scalars(
         select(StockQuote).where(StockQuote.freshness_status != "inactive")
     ).all()
-    active_unified_codes = [row.code for row in all_quote_rows]
+    active_unified_quote_count = len(all_quote_rows)
     t_load_quotes = time.perf_counter()
 
-    # 一次性 GROUP BY 查询，供 daily_bar 计数 + readiness + eligible 三处复用
-    bar_summaries = _load_bar_summaries_for_codes(db, active_unified_codes, coverage_trade_date) if active_unified_codes else {}
-    full_market_daily_bar_code_count = len(bar_summaries)
-    # active_daily_bar_code_count: 只计交易日 = coverage_trade_date 有 bar 的 code
-    active_daily_bar_code_count = full_market_daily_bar_code_count
-    # daily_bar_code_count: 同上（含所有历史日期的 codes 数）；用近似值兜底
+    # 只取 distinct code 总量，避免为全市场每只股票都做一次汇总
     daily_bar_code_count = db.scalar(
         select(func.count(func.distinct(DailyKbar.code)))
         .where(DailyKbar.trade_date <= latest_allowed_bar_date)
     ) or 0
-    t_full_market_bars = time.perf_counter()
+    full_market_daily_bar_code_count = int(daily_bar_code_count)
+    active_daily_bar_code_count = full_market_daily_bar_code_count
+    daily_indicator_count = 0
+    indicator_coverage_pct = 0.0
+    t_distinct_bars = time.perf_counter()
 
     from app.services.market_pool import _apply_local_quote_metrics, local_pool_recommendation_readiness
     from app.services.market_data import _candidate_filter_summary, _select_candidates
 
     all_quotes = _unified_rows_to_quotes(all_quote_rows, skip_metrics=True)
+    eligible_quotes = _select_candidates(all_quotes, len(all_quotes)) if all_quotes else []
+    eligible_codes = [str(item.get("code") or "") for item in eligible_quotes if item.get("code")]
+    candidate_filter = _candidate_filter_summary(all_quotes)
     t_quotes_to_dicts = time.perf_counter()
 
-    # readiness 复用已缓存的 bar_summaries
+    # 只为真正可能进入推荐链路的股票加载日K汇总，复用给 readiness 与 eligible stats
+    eligible_bar_summaries = (
+        _load_bar_summaries_for_codes(db, eligible_codes, coverage_trade_date)
+        if eligible_codes
+        else {}
+    )
+    t_eligible_bars = time.perf_counter()
+
     readiness = local_pool_recommendation_readiness(
-        db, cached_quotes=all_quotes, cached_bar_summaries=bar_summaries,
+        db,
+        cached_quotes=all_quotes,
+        cached_bar_summaries=eligible_bar_summaries,
     )
     t_readiness = time.perf_counter()
 
-    eligible_quotes = _select_candidates(all_quotes, len(all_quotes)) if all_quotes else []
-    eligible_codes = [str(item.get("code") or "") for item in eligible_quotes if item.get("code")]
-    eligible_bar_stats = _eligible_stats_from_summaries(eligible_codes, bar_summaries, coverage_trade_date)
+    eligible_bar_stats = _eligible_stats_from_summaries(eligible_codes, eligible_bar_summaries, coverage_trade_date)
     base_filter_count = len(eligible_codes)
-    candidate_filter = _candidate_filter_summary(all_quotes)
     daily_bar_coverage_rate = (
         round(full_market_daily_bar_code_count / active_unified_quote_count * 100, 1)
         if active_unified_quote_count
@@ -163,19 +165,24 @@ def get_local_pool_status(
     )
     t_eligible = time.perf_counter()
 
-    paged_quotes = _unified_quote_rows_from_rows(all_quote_rows, limit=unified_limit, offset=unified_offset, db=db)
+    paged_quotes = (
+        _unified_quote_rows_from_rows(all_quote_rows, limit=unified_limit, offset=unified_offset, db=db)
+        if include_details
+        else []
+    )
     t_paged = time.perf_counter()
-    paged_bars = _daily_bar_rows(db, limit=bars_limit, offset=bars_offset)
+    paged_bars = _daily_bar_rows(db, limit=bars_limit, offset=bars_offset) if include_details else []
     t_paged_bars = time.perf_counter()
 
     t_aux = t_eligible  # 辅助计数已前移到 approx 阶段
 
     logger.info(
-        "get_local_pool_status timing: counts=%.0fms dates=%.0fms load_quotes=%.0fms full_market_bars=%.0fms quotes_to_dicts=%.0fms readiness=%.0fms eligible=%.0fms aux=%.0fms paged=%.0fms paged_bars=%.0fms total=%.0fms",
+        "get_local_pool_status timing: counts=%.0fms dates=%.0fms load_quotes=%.0fms distinct_bars=%.0fms quotes_to_dicts=%.0fms eligible_bars=%.0fms readiness=%.0fms eligible=%.0fms aux=%.0fms paged=%.0fms paged_bars=%.0fms total=%.0fms",
         (t_counts - t0) * 1000, (t_dates - t_counts) * 1000, (t_load_quotes - t_dates) * 1000,
-        (t_full_market_bars - t_load_quotes) * 1000, (t_quotes_to_dicts - t_full_market_bars) * 1000,
-        (t_readiness - t_quotes_to_dicts) * 1000, (t_eligible - t_readiness) * 1000,
-        (t_aux - t_eligible) * 1000, (t_paged - t_aux) * 1000, (t_paged_bars - t_paged) * 1000,
+        (t_distinct_bars - t_load_quotes) * 1000, (t_quotes_to_dicts - t_distinct_bars) * 1000,
+        (t_eligible_bars - t_quotes_to_dicts) * 1000, (t_readiness - t_eligible_bars) * 1000,
+        (t_eligible - t_readiness) * 1000, (t_aux - t_eligible) * 1000,
+        (t_paged - t_aux) * 1000, (t_paged_bars - t_paged) * 1000,
         (t_paged_bars - t0) * 1000,
     )
 
@@ -211,9 +218,9 @@ def get_local_pool_status(
             "dragon_tiger_count": dragon_tiger_count,
             "news_count": news_count,
         },
-        "quote_sources": _raw_quote_source_rows(db),
-        "kline_sources": _raw_bar_source_rows(db),
-        "auxiliary_sources": _raw_aux_source_rows(db),
+        "quote_sources": _raw_quote_source_rows(db) if include_details else [],
+        "kline_sources": _raw_bar_source_rows(db) if include_details else [],
+        "auxiliary_sources": _raw_aux_source_rows(db) if include_details else [],
         "recommendation_readiness": readiness,
         "unified_quotes": paged_quotes,
         "unified_quotes_total": unified_quote_count,
@@ -638,4 +645,3 @@ def _previous_weekday(day: date) -> date:
     while current.weekday() >= 5:
         current -= timedelta(days=1)
     return current
-

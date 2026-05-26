@@ -20,3 +20,4 @@ backend/logs/
 
 .claude/
 .worktrees/
+.idea/

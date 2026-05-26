@@ -1,0 +1,56 @@
+id: overnight-holding-method
+name: 隔夜持股法
+enabled: true
+
+meta:
+  author: system
+  style: overnight-shortline
+  version: 0.1.0
+  holding_days: [1]
+
+contract:
+  type: strategy
+  executable: false
+  schema_version: 1
+
+universe:
+  include:
+    - "pct >= 3"
+    - "pct <= 5"
+    - "turnover_rate >= 5"
+    - "turnover_rate <= 10"
+  exclude:
+    - "is_st == true"
+
+prefilter:
+  market:
+    include:
+      - when: "limit_up_days20 >= 1"
+        reason: "requires_recent_limit_up"
+      - when: "turnover_rate >= 5"
+        reason: "turnover_too_low"
+      - when: "turnover_rate <= 10"
+        reason: "turnover_too_high"
+
+phases:
+  - name: 尾盘观察
+    when: "pct >= 3 and pct <= 5"
+    score_cap: 100
+    hard_veto: false
+
+setups:
+  - name: 隔夜尾盘确认
+    when: "pct >= 3 and pct <= 5 and turnover_rate >= 5 and turnover_rate <= 10"
+    score_delta: 10
+    entry_rule: "14:30 后新高回踩分时均线不破再介入"
+    invalid_rule: "回踩跌破分时均线或次日早盘承接弱"
+
+scoring:
+  base: 0
+  rules: []
+
+risk:
+  rules:
+    - when: "pct > 5"
+      level: high
+      flag: 涨幅超出隔夜策略区间
