@@ -5,6 +5,7 @@ import {
   RefreshCcw,
 } from "lucide-react";
 import type { DataSourceHealthRow } from "../types";
+import { businessStatusLabel } from "../utils/display";
 
 type Props = {
   rows: DataSourceHealthRow[];
@@ -149,7 +150,7 @@ function displayText(key: string): string {
     degraded: "降级",
     untested: "未测试",
   };
-  return labels[key] ?? key;
+  return labels[key] ?? businessStatusLabel(key);
 }
 
 function displayTagText(text: string) {
@@ -158,7 +159,7 @@ function displayTagText(text: string) {
     degraded: "降级",
     untested: "未测试",
   };
-  return displayText(text) || labels[text] || text;
+  return displayText(text) || labels[text] || businessStatusLabel(text);
 }
 
 function toneForTag(text: string) {

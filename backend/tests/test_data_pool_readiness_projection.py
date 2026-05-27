@@ -10,6 +10,9 @@ def test_summarize_pool_status_reports_ready_counts():
         "eligible_quote_count": 2600,
         "daily_bar_coverage_rate": 0.92,
         "eligible_daily_bar_coverage_rate": 0.96,
+        "daily_bar_missing_count": 120,
+        "daily_bar_stale_count": 12,
+        "daily_bar_short_history_count": 35,
         "recommendation_readiness": {
             "status": "ready",
             "can_run_local_recommendation": True,
@@ -24,6 +27,9 @@ def test_summarize_pool_status_reports_ready_counts():
     assert summary["eligible_quote_count"] == 2600
     assert summary["can_run_local_recommendation"] is True
     assert summary["bar_coverage_pct"] == 92.0
+    assert summary["missing_bar_count"] == 120
+    assert summary["stale_bar_count"] == 12
+    assert summary["short_history_count"] == 35
 
 
 def test_summarize_pool_status_accepts_local_pool_api_shape():
@@ -65,6 +71,41 @@ def test_summarize_pool_status_keeps_percent_values_from_local_pool_api():
 
     assert summary["bar_coverage_pct"] == 75.5
     assert summary["eligible_bar_coverage_pct"] == 88.25
+
+
+def test_summarize_pool_status_preserves_structured_gap_examples():
+    status = {
+        "summary": {
+            "unified_quote_count": 4300,
+            "active_unified_quote_count": 4100,
+            "eligible_quote_count": 2600,
+            "daily_bar_coverage_rate": 0.75,
+            "eligible_daily_bar_coverage_rate": 0.82,
+        },
+        "recommendation_readiness": {
+            "status": "warning",
+            "can_run_local_recommendation": True,
+            "messages": ["当前存在数据缺口：短历史 1 只。"],
+            "kline": {
+                "examples": [
+                    {
+                        "code": "000001",
+                        "name": "平安银行",
+                        "reason": "本地日K不足30条",
+                        "bar_count": 12,
+                        "latest_bar_date": "2026-05-20",
+                        "quote_date": "2026-05-22",
+                    }
+                ],
+            },
+        },
+    }
+
+    summary = summarize_pool_status(status)
+
+    assert summary["examples"] == status["recommendation_readiness"]["kline"]["examples"]
+    assert summary["examples"][0]["code"] == "000001"
+    assert summary["examples"][0]["reason"] == "本地日K不足30条"
 
 
 def test_summarize_alerts_groups_severity():

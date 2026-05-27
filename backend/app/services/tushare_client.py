@@ -1054,6 +1054,30 @@ def fetch_recent_index_minute_kbars(
     return []
 
 
+def fetch_index_minute_kbars(
+    index_code: str,
+    start_date: str,
+    end_date: str,
+    trace: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """按日期区间获取指数 1 分钟 K 线。仅使用 Tushare stk_mins。"""
+    start_day = _normalize_trade_date(start_date)
+    end_day = _normalize_trade_date(end_date)
+    if not start_day or not end_day:
+        return []
+    rows = _fetch_tushare_minute_kbars(
+        index_code,
+        start_time=f"{start_day} 09:00:00",
+        end_time=f"{end_day} 15:30:00",
+        trace=trace,
+        is_index=True,
+    )
+    return [
+        row for row in rows
+        if start_day <= row.get("trade_date", "") <= end_day
+    ]
+
+
 def _fetch_tushare_minute_kbars(
     code: str,
     *,

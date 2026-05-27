@@ -14,12 +14,14 @@ from app.services.cost_service import (
     upsert_scheduled_task,
 )
 from app.services.data_health_service import diagnose_all
+from app.services.data_gap_remediation_service import remediate_data_health_gaps
 from app.services.data_source_health import active_alerts, readiness_check
 from app.services.model_router_service import (
     create_model_route,
     delete_model_route,
     list_model_routes,
     reorder_model_routes,
+    test_model_route as test_model_route_service,
     update_model_route as update_model_route_service,
 )
 
@@ -44,10 +46,14 @@ def get_tasks(db: Session = Depends(get_db)):
 
 
 @router.get("/task-runs")
-def get_task_runs(limit: int = 100, db: Session = Depends(get_db)):
+def get_task_runs(
+    limit: int = 100,
+    task_id: str | None = None,
+    db: Session = Depends(get_db),
+):
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
-    return list_scheduled_task_runs(db, limit=limit)
+    return list_scheduled_task_runs(db, limit=limit, task_id=task_id)
 
 
 @router.get("/source-health")
@@ -75,6 +81,36 @@ def get_data_health(db: Session = Depends(get_db)):
     return diagnose_all(db)
 
 
+@router.post("/data-health/remediate")
+def remediate_data_health(payload: dict | None = None, db: Session = Depends(get_db)):
+    payload = payload or {}
+    result = remediate_data_health_gaps(
+        db,
+        target_tables=payload.get("target_tables"),
+        dry_run=bool(payload.get("dry_run", False)),
+        capital_flow_code_limit=int(payload.get("capital_flow_code_limit", 200)),
+    )
+    if not bool(payload.get("dry_run", False)):
+        record_task_run(
+            db,
+            "manual_data_health_remediation",
+            result.get("status", "unknown"),
+            summary=None,
+            trigger_source="manual",
+            task_name="手动数据补数",
+            task_type="data_backfill",
+            payload={
+                "target_tables": payload.get("target_tables") or ["index_daily", "limit_up_board", "capital_flow", "concept_sector"],
+                "capital_flow_code_limit": int(payload.get("capital_flow_code_limit", 200)),
+            },
+            result={
+                **result,
+                "remediation_type": "data_health",
+            },
+        )
+    return result
+
+
 @router.get("/temporal-consistency")
 def get_temporal_consistency(
     run_mode: str = "formal",
@@ -100,6 +136,11 @@ def get_model_routes(db: Session = Depends(get_db)):
 @router.post("/model-routes")
 def create_model_route_api(payload: dict, db: Session = Depends(get_db)):
     return create_model_route(db, payload)
+
+
+@router.post("/model-routes/test")
+async def test_model_route_api(payload: dict, db: Session = Depends(get_db)):
+    return await test_model_route_service(db, payload)
 
 
 @router.patch("/model-routes/{route_id}")
@@ -204,8 +245,6 @@ def _upsert_task_from_payload(db: Session, payload: dict) -> dict:
         enabled=enabled,
     )
     return next(item for item in list_scheduled_tasks(db) if item["task_id"] == task.task_id)
-
-
 def _daily_cron(trigger_time: str) -> str:
     try:
         hour, minute = [int(part) for part in trigger_time.split(":", 1)]

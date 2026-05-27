@@ -42,7 +42,7 @@ elif today.weekday() == 6:
     last_trade_date = today - timedelta(days=2)
 else:
     last_trade_date = today
-trade_date_str = last_trade_date.strftime("%Y%m%d")
+trade_date_str = last_trade_date.strftime("%Y-%m-%d")
 print(f"最近交易日: {last_trade_date} ({trade_date_str})")
 
 # ── 热门股票池 ──

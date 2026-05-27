@@ -86,6 +86,11 @@ def resolved_trade_return(outcome: RecommendationOutcome | Any | None) -> float:
     return float(getattr(outcome, "close_return", 0.0) or 0.0)
 
 
+def is_accurate_recommendation(outcome: RecommendationOutcome | Any | None) -> bool:
+    """严格准确推荐口径：真实成交，且扣费滑点后净收益为正。"""
+    return bool(is_trade_executed(outcome) and resolved_trade_return(outcome) > 0)
+
+
 def label_pending_outcomes(
     db: Session,
     horizon_days: int = 5,
@@ -198,86 +203,83 @@ def _overview_metrics(db: Session, run_mode: str) -> dict[str, Any]:
 
     labeled = [row for row in rows if normalized_outcome_label(row) != OUTCOME_PENDING]
     triggered = [row for row in labeled if is_trade_executed(row)]
-    success_count = sum(1 for row in rows if normalized_outcome_label(row) == OUTCOME_SUCCESS)
-    failed_count = sum(1 for row in rows if normalized_outcome_label(row) == OUTCOME_FAILED)
-    missed_count = sum(1 for row in rows if normalized_outcome_label(row) == OUTCOME_MISSED)
+    success_count = sum(1 for row in labeled if is_accurate_recommendation(row))
+    failed_count = sum(1 for row in triggered if not is_accurate_recommendation(row))
+    missed_count = max(0, len(labeled) - len(triggered))
     n = len(labeled)
     executed_n = len(triggered)
 
-    if not triggered:
+    if not labeled:
+        empty_metrics = _compute_full_metrics([])
         return {
+            **empty_metrics,
             "mode": run_mode,
             "total_recommendations": total_recs,
-            "labeled_count": n,
+            "labeled_count": 0,
             "triggered_count": 0,
-            "trigger_rate": 0.0,
+            "executed_trade_count": 0,
+            "unexecuted_count": 0,
             "missed_count": missed_count,
             "pending_count": max(0, total_recs - n),
             "success_count": 0,
             "failed_count": 0,
-            "hit_rate": 0.0,
-            "avg_return": 0.0,
-            "avg_executed_return": 0.0,
-            "avg_weighted_return": 0.0,
-            "avg_close_return": 0.0,
-            "avg_mfe": 0.0,
-            "avg_mae": 0.0,
-            "avg_holding_days": 0.0,
-            "recommendation_accuracy": 0.0,
-            "average_net_return": 0.0,
-            "median_net_return": 0.0,
-            "profit_loss_ratio": 0.0,
-            "max_drawdown": 0.0,
-            "positive_month_ratio": 0.0,
-            "benchmark_excess_return": 0.0,
-            "sample_confidence": "low",
-            "false_positive_notes": [],
-            "strategy_compound_return": 0.0,
-            "benchmark_compound_return": 0.0,
         }
 
     # ── 收集交易日期 → 批量查询基准指数 ──
     all_dates: set[str] = set()
-    trade_date_pairs: list[tuple[str, str]] = []
     for row in triggered:
         entry_date = str(getattr(row, "entry_date", "") or getattr(row, "trade_date", ""))
         exit_date = str(getattr(row, "exit_date", "") or getattr(row, "trade_date", ""))
         all_dates.add(entry_date)
         all_dates.add(exit_date)
-        trade_date_pairs.append((entry_date, exit_date))
 
     from app.services.benchmark_service import compute_benchmark_return as _bench_return
     from app.services.benchmark_service import get_benchmark_close_map as _get_close_map
     close_map = _get_close_map(db, list(all_dates))
 
-    # ── 构建交易记录 → 统一指标引擎 ──
-    trades: list[dict[str, Any]] = []
-    for i, row in enumerate(triggered):
-        executed_return = resolved_trade_return(row)
-        entry_date, exit_date = trade_date_pairs[i]
-        benchmark_ret = _bench_return(close_map, entry_date, exit_date)
-        trades.append({
+    # ── 构建推荐级记录 → 统一指标引擎 ──
+    metric_records: list[dict[str, Any]] = []
+    for row in labeled:
+        executed = is_trade_executed(row)
+        executed_return = resolved_trade_return(row) if executed else 0.0
+        benchmark_ret = 0.0
+        if executed:
+            entry_date = str(getattr(row, "entry_date", "") or getattr(row, "trade_date", ""))
+            exit_date = str(getattr(row, "exit_date", "") or getattr(row, "trade_date", ""))
+            benchmark_ret = _bench_return(close_map, entry_date, exit_date)
+        accurate = bool(executed and executed_return > 0)
+        false_positive_reason = (
+            getattr(row, "outcome_reason", None)
+            if not accurate
+            else None
+        )
+        if false_positive_reason is None and not executed:
+            false_positive_reason = "未触发买点或不可真实成交"
+        metric_records.append({
             "net_return_pct": float(executed_return),
             "gross_return_pct": float(getattr(row, "close_return", 0) or 0),
             "achievable_return_pct": float(getattr(row, "achievable_return", 0) or 0),
             "morning_drawdown_pct": float(getattr(row, "max_drawdown", 0) or 0),
-            "holding_days": float(getattr(row, "holding_days", 1) or 1),
+            "holding_days": float(getattr(row, "holding_days", 0 if not executed else 1) or 0),
             "benchmark_return_pct": benchmark_ret,
-            "accurate": bool(executed_return > 0),
+            "accurate": accurate,
+            "executed": executed,
             "trade_date": str(getattr(row, "trade_date", "")),
             "code": getattr(row, "code", ""),
             "name": getattr(row, "name", ""),
-            "false_positive_reason": getattr(row, "outcome_reason", None) if executed_return <= 0 else None,
+            "false_positive_reason": false_positive_reason,
             "resolved": True,
         })
 
-    full_metrics = _compute_full_metrics(trades) if trades else {}
+    full_metrics = _compute_full_metrics(metric_records)
 
     return {
         "mode": run_mode,
         "total_recommendations": total_recs,
         "labeled_count": n,
         "triggered_count": executed_n,
+        "executed_trade_count": executed_n,
+        "unexecuted_count": max(0, n - executed_n),
         "trigger_rate": round(executed_n / n, 3) if n else 0.0,
         "missed_count": missed_count,
         "pending_count": max(0, total_recs - n),
@@ -301,8 +303,13 @@ def _overview_metrics(db: Session, run_mode: str) -> dict[str, Any]:
         "benchmark_excess_return": full_metrics.get("benchmark_excess_return", 0.0),
         "sample_confidence": full_metrics.get("sample_confidence", "low"),
         "false_positive_notes": full_metrics.get("false_positive_notes", []),
+        "false_positive_category_counts": full_metrics.get("false_positive_category_counts", []),
         "strategy_compound_return": full_metrics.get("strategy_compound_return", 0.0),
         "benchmark_compound_return": full_metrics.get("benchmark_compound_return", 0.0),
+        "trade_accuracy": full_metrics.get("trade_accuracy", 0.0),
+        "accuracy_numerator": full_metrics.get("accuracy_numerator", 0),
+        "accuracy_denominator": full_metrics.get("accuracy_denominator", n),
+        "accuracy_basis": full_metrics.get("accuracy_basis", "labeled_recommendations"),
     }
 
 
@@ -317,7 +324,6 @@ def _metrics_by_strategy(db: Session, run_mode: str) -> list[dict[str, Any]]:
     for rec in rows:
         executed = is_trade_executed(rec)
         trade_return = resolved_trade_return(rec)
-        label = normalized_outcome_label(rec)
         for signal in _loads(rec.skill_breakdown_json, []):
             sid = signal.get("strategy_id", "unknown")
             item = buckets.setdefault(
@@ -336,7 +342,7 @@ def _metrics_by_strategy(db: Session, run_mode: str) -> list[dict[str, Any]]:
             if executed:
                 item["triggered_count"] += 1
                 item["avg_return"] += trade_return
-                if label == OUTCOME_SUCCESS:
+                if is_accurate_recommendation(rec):
                     item["success_count"] += 1
 
     result = []
@@ -382,7 +388,7 @@ def _metrics_by_setup(db: Session, run_mode: str) -> list[dict[str, Any]]:
         if is_trade_executed(row):
             item["triggered_count"] += 1
             item["avg_return"] += resolved_trade_return(row)
-            if label == OUTCOME_SUCCESS:
+            if is_accurate_recommendation(row):
                 item["success_count"] += 1
 
     result = []
@@ -425,6 +431,8 @@ def _precision_at_k(db: Session, run_mode: str, ks: tuple[int, ...]) -> list[dic
             Recommendation.final_score,
             RecommendationOutcome.outcome_label,
             RecommendationOutcome.entry_triggered,
+            RecommendationOutcome.executed_return,
+            RecommendationOutcome.close_return,
         )
         .select_from(Recommendation)
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
@@ -448,7 +456,7 @@ def _precision_at_k(db: Session, run_mode: str, ks: tuple[int, ...]) -> list[dic
                 continue
             sample_runs += 1
             evaluated_count += len(labeled_rows)
-            success_count += sum(1 for row in labeled_rows if normalized_outcome_label(row) == OUTCOME_SUCCESS)
+            success_count += sum(1 for row in labeled_rows if is_accurate_recommendation(row))
         result.append(
             {
                 "k": k,
@@ -481,7 +489,7 @@ def _metrics_by_score_line(db: Session, run_mode: str, score_lines: tuple[int, .
         labeled = [row for row in selected if normalized_outcome_label(row) != OUTCOME_PENDING]
         executed = [row for row in labeled if is_trade_executed(row)]
         missed_count = max(0, len(labeled) - len(executed))
-        success_count = sum(1 for row in executed if normalized_outcome_label(row) == OUTCOME_SUCCESS)
+        success_count = sum(1 for row in executed if is_accurate_recommendation(row))
         result.append(
             {
                 "score_line": float(score_line),
@@ -559,7 +567,7 @@ def _simulate_outcome(
     entry_result = _resolve_entry(rec, feature_snapshot, future_bars, horizon_days)
     position_size = _resolve_position_size(feature_snapshot)
 
-    if entry_result is None:
+    if not entry_result.get("triggered"):
         return {
             **static_metrics,
             "entry_triggered": False,
@@ -580,10 +588,12 @@ def _simulate_outcome(
             "hit_invalid": False,
             "outcome_label": OUTCOME_MISSED,
             "outcome_label_legacy": OUTCOME_MISSED,
-            "outcome_reason": "未触发买点，未建仓；静态窗口结果仅作旁路参考",
+            "outcome_reason": f"{entry_result.get('reason') or '未触发买点，未建仓'}；静态窗口结果仅作旁路参考",
         }
 
-    entry_index, raw_entry_price, entry_date = entry_result
+    entry_index = int(entry_result["bar_index"])
+    raw_entry_price = float(entry_result["price"])
+    entry_date = str(entry_result["date"])
     executed_entry_price = round(raw_entry_price * (1 + ENTRY_SLIPPAGE_BPS / 10000.0), 4)
     stop_loss_price = _resolve_stop_loss_price(raw_entry_price, feature_snapshot)
     take_profit_price = _resolve_take_profit_price(raw_entry_price, feature_snapshot)
@@ -592,7 +602,12 @@ def _simulate_outcome(
     if not holding_bars:
         return None
 
-    exit_price, exit_date, exit_reason = _resolve_exit(holding_bars, stop_loss_price, take_profit_price)
+    exit_price, exit_date, exit_reason = _resolve_exit(
+        holding_bars,
+        stop_loss_price,
+        take_profit_price,
+        code=str(rec.code),
+    )
     executed_exit_price = round(exit_price * (1 - EXIT_SLIPPAGE_BPS / 10000.0), 4)
     executed_return = round(((executed_exit_price - executed_entry_price) / executed_entry_price) * 100, 2)
     weighted_return = round(executed_return * position_size, 2)
@@ -664,7 +679,7 @@ def _resolve_entry(
     feature_snapshot: dict[str, Any],
     future_bars: list[DailyKbar],
     horizon_days: int,
-) -> tuple[int, float, str] | None:
+) -> dict[str, Any]:
     entry_targets = [
         value for value in (
             _as_float(feature_snapshot.get("ideal_buy")),
@@ -673,29 +688,64 @@ def _resolve_entry(
         if value > 0
     ]
     entry_window = future_bars[: max(1, min(ENTRY_LOOKAHEAD_DAYS, horizon_days, len(future_bars)))]
+    blocked_reasons: list[str] = []
     for bar_index, bar in enumerate(entry_window):
         low = _as_float(bar.low)
         bar_open = _as_float(bar.open)
         for target in entry_targets:
             if low <= target:
-                return bar_index, min(bar_open, target) if bar_open > 0 else target, str(bar.trade_date)
+                block_reason = _entry_execution_block_reason(str(rec.code), bar)
+                if block_reason:
+                    blocked_reasons.append(block_reason)
+                    continue
+                return {
+                    "triggered": True,
+                    "bar_index": bar_index,
+                    "price": min(bar_open, target) if bar_open > 0 else target,
+                    "date": str(bar.trade_date),
+                    "reason": "buy_target_touched",
+                }
 
     if entry_targets:
-        return None
+        return {
+            "triggered": False,
+            "reason": _entry_not_triggered_reason(blocked_reasons, has_targets=True),
+        }
 
-    first_bar = future_bars[0]
-    raw_entry_price = _as_float(first_bar.open) or _as_float(first_bar.close)
-    if raw_entry_price <= 0:
-        return None
-    return 0, raw_entry_price, str(first_bar.trade_date)
+    for bar_index, bar in enumerate(entry_window):
+        block_reason = _entry_execution_block_reason(str(rec.code), bar)
+        if block_reason:
+            blocked_reasons.append(block_reason)
+            continue
+        raw_entry_price = _as_float(bar.open) or _as_float(bar.close)
+        if raw_entry_price <= 0:
+            blocked_reasons.append("入场日价格无效，无法真实成交")
+            continue
+        return {
+            "triggered": True,
+            "bar_index": bar_index,
+            "price": raw_entry_price,
+            "date": str(bar.trade_date),
+            "reason": "next_open_entry",
+        }
+    return {
+        "triggered": False,
+        "reason": _entry_not_triggered_reason(blocked_reasons, has_targets=False),
+    }
 
 
 def _resolve_exit(
     holding_bars: list[DailyKbar],
     stop_loss_price: float,
     take_profit_price: float,
+    *,
+    code: str = "",
 ) -> tuple[float, str, str]:
+    locked_limit_down_bars = 0
     for bar in holding_bars:
+        if _exit_execution_block_reason(code, bar):
+            locked_limit_down_bars += 1
+            continue
         bar_open = _as_float(bar.open)
         high = _as_float(bar.high)
         low = _as_float(bar.low)
@@ -712,6 +762,10 @@ def _resolve_exit(
             return take_profit_price, str(bar.trade_date), "take_profit_hit"
 
     last_bar = holding_bars[-1]
+    if locked_limit_down_bars and locked_limit_down_bars == len(holding_bars):
+        return _as_float(last_bar.close), str(last_bar.trade_date), "limit_down_locked_horizon_mark"
+    if locked_limit_down_bars:
+        return _as_float(last_bar.close), str(last_bar.trade_date), "horizon_close_after_locked_limit_down"
     return _as_float(last_bar.close), str(last_bar.trade_date), "horizon_close"
 
 
@@ -760,6 +814,85 @@ def _resolve_position_size(feature_snapshot: dict[str, Any]) -> float:
     return 1.0
 
 
+def _entry_execution_block_reason(code: str, bar: DailyKbar) -> str | None:
+    if _has_no_liquidity(bar):
+        return "入场日无成交量或价格无效，无法真实成交"
+    if _is_one_word_limit_up(code, bar):
+        return "入场日一字涨停，按真实成交约束视为买不进"
+    return None
+
+
+def _exit_execution_block_reason(code: str, bar: DailyKbar) -> str | None:
+    if _has_no_liquidity(bar):
+        return "出场日无成交量或价格无效，无法真实卖出"
+    if _is_one_word_limit_down(code, bar):
+        return "出场日一字跌停，按真实成交约束视为卖不出"
+    return None
+
+
+def _entry_not_triggered_reason(blocked_reasons: list[str], *, has_targets: bool) -> str:
+    if blocked_reasons:
+        unique = list(dict.fromkeys(blocked_reasons))
+        return "；".join(unique[:2])
+    return "未触发目标买点，未建仓" if has_targets else "观察窗口内无可执行入场日"
+
+
+def _has_no_liquidity(bar: DailyKbar) -> bool:
+    volume = _as_float(getattr(bar, "volume", 0))
+    amount = _as_float(getattr(bar, "amount", 0))
+    close = _as_float(getattr(bar, "close", 0))
+    open_price = _as_float(getattr(bar, "open", 0))
+    return volume <= 0 or amount <= 0 or close <= 0 or open_price <= 0
+
+
+def _is_one_word_limit_up(code: str, bar: DailyKbar) -> bool:
+    prev_close = _previous_close(bar)
+    if prev_close <= 0:
+        return False
+    up_limit = _limit_price(prev_close, _limit_pct(code), up=True)
+    return (
+        _as_float(bar.open) >= up_limit * 0.995
+        and _as_float(bar.low) >= up_limit * 0.995
+        and _as_float(bar.high) >= up_limit * 0.995
+        and _as_float(bar.close) >= up_limit * 0.995
+    )
+
+
+def _is_one_word_limit_down(code: str, bar: DailyKbar) -> bool:
+    prev_close = _previous_close(bar)
+    if prev_close <= 0:
+        return False
+    down_limit = _limit_price(prev_close, _limit_pct(code), up=False)
+    return (
+        _as_float(bar.open) <= down_limit * 1.005
+        and _as_float(bar.high) <= down_limit * 1.005
+        and _as_float(bar.low) <= down_limit * 1.005
+        and _as_float(bar.close) <= down_limit * 1.005
+    )
+
+
+def _previous_close(bar: DailyKbar) -> float:
+    pct_chg = _as_float(getattr(bar, "pct_chg", 0))
+    close = _as_float(getattr(bar, "close", 0))
+    if close <= 0 or pct_chg <= -99.0:
+        return 0.0
+    return close / (1 + pct_chg / 100.0)
+
+
+def _limit_pct(code: str) -> float:
+    normalized = str(code or "")
+    if normalized.startswith(("300", "301", "688")):
+        return 20.0
+    if normalized.startswith(("8", "4")):
+        return 30.0
+    return 10.0
+
+
+def _limit_price(prev_close: float, pct: float, *, up: bool) -> float:
+    multiplier = 1 + pct / 100.0 if up else 1 - pct / 100.0
+    return round(prev_close * multiplier, 2)
+
+
 def _build_outcome_reason(exit_reason: str, executed_return: float, close_return: float) -> str:
     label = {
         "stop_loss_gap": "开盘跳空止损",
@@ -768,6 +901,8 @@ def _build_outcome_reason(exit_reason: str, executed_return: float, close_return
         "stop_loss_hit": "盘中触发止损",
         "take_profit_hit": "盘中触发止盈",
         "horizon_close": "持有到观察期结束",
+        "limit_down_locked_horizon_mark": "观察期内一字跌停或无流动性，按期末价格保守标记",
+        "horizon_close_after_locked_limit_down": "出现一字跌停或无流动性后递延至观察期末",
     }.get(exit_reason, exit_reason)
     return f"{label}；执行收益 {executed_return:.2f}%；静态收盘收益 {close_return:.2f}%"
 

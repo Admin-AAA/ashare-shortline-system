@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "tsc && vite build",
+    "build": "npm run check:display-semantics && tsc && vite build",
+    "check:display-semantics": "node scripts/check-display-semantics.mjs",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {

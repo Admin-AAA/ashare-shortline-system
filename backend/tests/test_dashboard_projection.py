@@ -17,6 +17,7 @@ from app.schemas.dashboard import (
     SkillReviewSummary,
 )
 from app.api.dashboard import build_validation_summary, compose_overview, serialize_market_snapshot_row, serialize_run_progress_row
+from app.services.dashboard_quality_service import build_quality_scorecard
 from app.services.candidates.trace import candidate_trace_row
 from app.services.recommendations.projection import (
     build_cockpit_recommendation,
@@ -86,6 +87,7 @@ def test_dashboard_overview_contract_accepts_cockpit_sections():
         data_health={"status": "ready"},
         task_health={"running_count": 0},
         validation={"last_status": "not_run"},
+        quality_scorecard={"overall_score": 80},
     )
 
     assert overview.market.heat_score == 74.2
@@ -397,11 +399,13 @@ def test_compose_overview_builds_all_cockpit_sections():
         data_health={"status": "ready"},
         task_health={"running_count": 0},
         validation={"last_status": "not_run"},
+        quality_scorecard={"overall_score": 72, "overall_status": "warning"},
     )
 
     assert overview.market.trade_date == "2026-05-25"
     assert overview.current_run.status == "completed"
     assert overview.data_health["status"] == "ready"
+    assert overview.quality_scorecard["overall_score"] == 72
 
 
 def test_dashboard_serializers_use_lightweight_rows():
@@ -442,12 +446,152 @@ def test_build_validation_summary_uses_cached_pool_messages():
                 "status": "blocked",
                 "messages": ["日K覆盖不足"],
             }
-        }
+        },
+        quality_scorecard={
+            "overall_score": 68,
+            "overall_status": "warning",
+            "highlights": ["最近验证仍主要依赖全量指标。"],
+            "dimensions": {
+                "validation": {"score": 61, "status": "warning"},
+                "execution": {"score": 92, "status": "healthy"},
+            },
+        },
     )
 
     assert validation["last_status"] == "blocked"
     assert validation["alerts"]["medium"] == 1
     assert validation["alerts"]["messages"] == ["日K覆盖不足"]
+    assert validation["quality_gate"]["overall_score"] == 68
+    assert validation["quality_gate"]["validation_score"] == 61
+
+
+def test_build_quality_scorecard_combines_data_validation_execution_research():
+    scorecard = build_quality_scorecard(
+        data_health={
+            "eligible_bar_coverage_pct": 98,
+            "missing_bar_count": 0,
+            "stale_bar_count": 0,
+            "short_history_count": 2,
+            "can_run_local_recommendation": True,
+        },
+        task_health={"failed_count": 0, "running_count": 0},
+        current_run={"status": "completed", "is_stale": False},
+        latest_backtest={
+            "status": "completed",
+            "decision_scope": "walk_forward",
+            "decision_scope_label": "滚动样本外验证",
+            "metrics": {"trade_count": 36, "sample_confidence": "normal"},
+            "data_coverage": {
+                "candidate_minute_coverage_rate": 1.0,
+                "benchmark_minute_coverage_rate": 1.0,
+                "temporal_consistency": {"passed": True},
+            },
+        },
+        recent_task_runs=[{"status": "completed"} for _ in range(4)],
+        research_metrics={
+            "total_recommendations": 80,
+            "labeled_count": 42,
+            "review_note_count": 18,
+            "latest_trade_date": "2026-05-25",
+        },
+    )
+
+    assert scorecard["overall_score"] >= 80
+    assert scorecard["dimensions"]["validation"]["status"] == "healthy"
+    assert scorecard["dimensions"]["research"]["metrics"]["labeled_count"] == 42
+
+
+def test_build_quality_scorecard_penalizes_unprofitable_validation():
+    scorecard = build_quality_scorecard(
+        data_health={
+            "eligible_bar_coverage_pct": 99,
+            "missing_bar_count": 0,
+            "stale_bar_count": 0,
+            "short_history_count": 0,
+            "can_run_local_recommendation": True,
+        },
+        task_health={"failed_count": 0, "running_count": 0},
+        current_run={"status": "completed", "is_stale": False},
+        latest_backtest={
+            "status": "completed",
+            "decision_scope": "walk_forward",
+            "decision_scope_label": "滚动样本外验证",
+            "metrics": {
+                "trade_count": 34,
+                "sample_confidence": "normal",
+                "recommendation_accuracy": 0.47,
+                "average_net_return": -0.12,
+                "max_drawdown": -5.6,
+                "benchmark_excess_return": -1.3,
+            },
+            "data_coverage": {
+                "candidate_minute_coverage_rate": 1.0,
+                "benchmark_minute_coverage_rate": 1.0,
+                "temporal_consistency": {"passed": True},
+            },
+        },
+        recent_task_runs=[{"status": "completed"} for _ in range(4)],
+        research_metrics={
+            "total_recommendations": 80,
+            "labeled_count": 42,
+            "review_note_count": 18,
+            "latest_trade_date": "2026-05-25",
+        },
+    )
+
+    validation = scorecard["dimensions"]["validation"]
+    assert validation["status"] != "healthy"
+    assert validation["metrics"]["recommendation_accuracy"] == 0.47
+    assert any("扣费后不占优" in item for item in validation["highlights"])
+
+
+def test_build_quality_scorecard_penalizes_low_executability_even_when_accuracy_ok():
+    scorecard = build_quality_scorecard(
+        data_health={
+            "eligible_bar_coverage_pct": 99,
+            "missing_bar_count": 0,
+            "stale_bar_count": 0,
+            "short_history_count": 0,
+            "can_run_local_recommendation": True,
+        },
+        task_health={"failed_count": 0, "running_count": 0},
+        current_run={"status": "completed", "is_stale": False},
+        latest_backtest={
+            "status": "completed",
+            "decision_scope": "walk_forward",
+            "decision_scope_label": "滚动样本外验证",
+            "metrics": {
+                "trade_count": 40,
+                "accuracy_denominator": 40,
+                "executed_trade_count": 22,
+                "unexecuted_count": 18,
+                "sample_confidence": "normal",
+                "recommendation_accuracy": 0.55,
+                "trade_accuracy": 0.45,
+                "average_net_return": 0.22,
+                "max_drawdown": -1.2,
+                "benchmark_excess_return": 0.3,
+            },
+            "data_coverage": {
+                "candidate_minute_coverage_rate": 1.0,
+                "benchmark_minute_coverage_rate": 1.0,
+                "temporal_consistency": {"passed": True},
+            },
+        },
+        recent_task_runs=[{"status": "completed"} for _ in range(4)],
+        research_metrics={
+            "total_recommendations": 80,
+            "labeled_count": 42,
+            "review_note_count": 18,
+            "latest_trade_date": "2026-05-25",
+        },
+    )
+
+    validation = scorecard["dimensions"]["validation"]
+    assert validation["status"] != "healthy"
+    assert validation["metrics"]["trade_accuracy"] == 0.45
+    assert validation["metrics"]["execution_rate"] == 0.55
+    assert any("可成交率" in item for item in validation["highlights"])
 
 
 def test_progress_helpers_are_stable():

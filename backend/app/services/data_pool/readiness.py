@@ -25,6 +25,9 @@ def summarize_pool_status(status: dict[str, Any]) -> dict[str, Any]:
         "eligible_quote_count": int(summary.get("eligible_quote_count") or 0),
         "bar_coverage_pct": _pct(summary.get("daily_bar_coverage_rate")),
         "eligible_bar_coverage_pct": _pct(summary.get("eligible_daily_bar_coverage_rate")),
+        "missing_bar_count": int(summary.get("daily_bar_missing_count") or 0),
+        "stale_bar_count": int(summary.get("daily_bar_stale_count") or 0),
+        "short_history_count": int(summary.get("daily_bar_short_history_count") or 0),
         "messages": [str(item) for item in readiness.get("messages") or []],
         "examples": list(kline.get("examples") or []),
     }

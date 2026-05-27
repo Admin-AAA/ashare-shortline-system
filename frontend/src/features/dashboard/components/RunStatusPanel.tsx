@@ -1,8 +1,10 @@
 import { Activity, RotateCcw } from "lucide-react";
 import type { RunProgress } from "../../../types";
+import { runStatusCopy } from "../../../utils/display";
 
 export default function RunStatusPanel({ run }: { run: RunProgress }) {
   const pct = run.progress_pct == null ? 0 : Math.max(0, Math.min(100, run.progress_pct));
+  const copy = runStatusCopy(run);
   return (
     <section className="cockpit-panel">
       <div className="panel-header">
@@ -13,8 +15,8 @@ export default function RunStatusPanel({ run }: { run: RunProgress }) {
         {run.resumable ? <RotateCcw size={18} /> : <Activity size={18} />}
       </div>
       <div className="run-status-line">
-        <strong>{run.status}</strong>
-        <span>{run.phase || "idle"}</span>
+        <strong>{copy.status}</strong>
+        <span>{copy.phase}</span>
       </div>
       <div className="progress-track" aria-label="运行进度">
         <span style={{ width: `${pct}%` }} />

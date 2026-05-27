@@ -57,6 +57,7 @@ from app.models.tables import (
     StockQuote,
 )
 from app.services.feature_builder import build_features, market_regime_score
+from app.services.failure_attribution import classify_false_positive
 from app.services.market_data import MarketDataError, get_market_universe
 from app.services.market_pool import (
     get_market_snapshot_from_pool,
@@ -68,6 +69,7 @@ from app.services.market_pool import (
 )
 from app.services.outcome_service import (
     invalidate_outcome_metrics_cache,
+    is_accurate_recommendation,
     is_outcome_labeled,
     is_trade_executed,
     label_pending_outcomes as label_pending_outcomes_service,
@@ -893,6 +895,58 @@ def list_run_recommendations(db: Session, run_id: str) -> list[dict[str, Any]]:
         select(Recommendation).where(Recommendation.run_id == run_id).order_by(Recommendation.final_score.desc())
     ).all()
     return _serialize_recommendations_batched(db, recs)
+
+
+def get_run_replay_analysis(db: Session, run_id: str) -> dict[str, Any] | None:
+    run = db.get(RecommendationRun, run_id)
+    if run is None:
+        return None
+
+    recs = db.scalars(
+        select(Recommendation)
+        .where(Recommendation.run_id == run_id)
+        .order_by(Recommendation.trade_date.desc(), Recommendation.final_score.desc())
+    ).all()
+    if not recs:
+        return {
+            "run": _serialize_run_summary(db, run),
+            "rows": [],
+            "summary": _summarize_replay_analysis_rows([]),
+        }
+
+    rec_ids = [rec.recommendation_id for rec in recs]
+    outcome_map = {
+        item.recommendation_id: item
+        for item in db.scalars(
+            select(RecommendationOutcome).where(RecommendationOutcome.recommendation_id.in_(rec_ids))
+        ).all()
+    }
+    review_map = {
+        item.recommendation_id: item
+        for item in db.scalars(
+            select(ReviewNote).where(ReviewNote.recommendation_id.in_(rec_ids))
+        ).all()
+    }
+
+    rows: list[dict[str, Any]] = []
+    for rec in recs:
+        detail = _serialize_recommendation_cached(rec, None)
+        detail["outcome"] = _serialize_outcome(outcome_map.get(rec.recommendation_id))
+        review = review_map.get(rec.recommendation_id)
+        if review is not None:
+            detail["review_note"] = {
+                "user_label": review.user_label,
+                "failure_reason": review.failure_reason,
+                "review_text": review.review_text,
+                "updated_at": review.updated_at.isoformat() if review.updated_at else None,
+            }
+        rows.append(_build_replay_analysis_row(detail))
+
+    return {
+        "run": _serialize_run_summary(db, run),
+        "rows": rows,
+        "summary": _summarize_replay_analysis_rows(rows),
+    }
 
 
 def _enqueue_background_run(run_id: str, payload: dict[str, Any]) -> None:
@@ -1798,6 +1852,7 @@ def get_recommendation_detail(db: Session, recommendation_id: str) -> dict[str, 
             "updated_at": review.updated_at.isoformat(),
         }
     data["history"] = _historical_recommendations(db, rec.code, rec.recommendation_id)
+    data["replay_summary"] = _build_replay_summary(data)
     return data
 
 
@@ -2065,7 +2120,7 @@ def _serialize_run_summaries_batched(db: Session, runs: list[RecommendationRun])
             for outcome in [outcome_map.get(rec.recommendation_id)]
             if outcome is not None and is_trade_executed(outcome)
         ]
-        success_count = sum(1 for outcome in run_outcomes if normalized_outcome_label(outcome) == "success")
+        success_count = sum(1 for outcome in run_outcomes if is_accurate_recommendation(outcome))
         hit_rate = round(success_count / len(run_outcomes), 3) if run_outcomes else 0.0
         results.append(_serialize_run_summary_from_cache(run, preset, hit_rate))
     return results
@@ -2128,7 +2183,7 @@ def _serialize_run_summary(db: Session, run: RecommendationRun) -> dict[str, Any
         else []
     )
     executed = [outcome for outcome in outcomes if is_trade_executed(outcome)]
-    success_count = sum(1 for outcome in executed if normalized_outcome_label(outcome) == "success")
+    success_count = sum(1 for outcome in executed if is_accurate_recommendation(outcome))
     hit_rate = round(success_count / len(executed), 3) if executed else 0.0
     heartbeat_age_seconds = None
     if run.heartbeat_at:
@@ -2829,6 +2884,219 @@ def _serialize_outcome(outcome: RecommendationOutcome | None) -> dict[str, Any] 
     }
 
 
+def _build_replay_summary(detail: dict[str, Any]) -> dict[str, Any]:
+    outcome = detail.get("outcome") or {}
+    review_note = detail.get("review_note") or {}
+    feature_snapshot = detail.get("feature_snapshot") or {}
+    score_line_meta = detail.get("score_line_meta") or feature_snapshot.get("score_line_meta") or {}
+    signal_features = feature_snapshot if isinstance(feature_snapshot, dict) else {}
+
+    recommend_time = (
+        detail.get("recommended_at")
+        or detail.get("trade_date")
+        or ""
+    )
+    entry_time = outcome.get("entry_date") or None
+    exit_time = outcome.get("exit_date") or None
+    net_return_pct = outcome.get("executed_return")
+    if net_return_pct is None:
+        net_return_pct = outcome.get("close_return")
+
+    trigger_conditions: list[str] = []
+    for value in (
+        detail.get("entry_rule"),
+        detail.get("setup_type"),
+        detail.get("buy_signal"),
+    ):
+        text = str(value or "").strip()
+        if text and text not in trigger_conditions:
+            trigger_conditions.append(text)
+
+    adjustment_reasons = score_line_meta.get("reasons")
+    if isinstance(adjustment_reasons, list):
+        for item in adjustment_reasons:
+            text = str(item or "").strip()
+            if text and text not in trigger_conditions:
+                trigger_conditions.append(text)
+
+    failure_reason = (
+        review_note.get("failure_reason")
+        or outcome.get("outcome_reason")
+        or None
+    )
+    is_false_positive = bool(
+        failure_reason
+        or str(review_note.get("user_label") or "") == "false_positive"
+        or (net_return_pct is not None and float(net_return_pct or 0) <= 0)
+    )
+    attribution = (
+        classify_false_positive(
+            reason=failure_reason or outcome.get("outcome_reason"),
+            executed=bool(entry_time or outcome.get("entry_price") is not None),
+            outcome_label=outcome.get("outcome_label"),
+            exit_reason=outcome.get("exit_reason"),
+            user_label=review_note.get("user_label"),
+            net_return_pct=float(net_return_pct or 0) if net_return_pct is not None else None,
+        )
+        if is_false_positive
+        else {"category": None, "category_label": None, "stage": None}
+    )
+
+    return {
+        "recommend_time": recommend_time,
+        "symbol": detail.get("code"),
+        "name": detail.get("name"),
+        "entry_time": entry_time,
+        "entry_price": outcome.get("entry_price") if outcome.get("entry_price") is not None else detail.get("recommend_price"),
+        "exit_time": exit_time,
+        "exit_price": outcome.get("exit_price"),
+        "net_return_pct": net_return_pct,
+        "trigger_conditions": trigger_conditions,
+        "false_positive_reason": failure_reason if is_false_positive else None,
+        "false_positive_category": attribution["category"],
+        "false_positive_category_label": attribution["category_label"],
+        "false_positive_stage": attribution["stage"],
+        "review_failure_reason": review_note.get("failure_reason"),
+        "user_label": review_note.get("user_label"),
+        "outcome_label": outcome.get("outcome_label"),
+        "outcome_reason": outcome.get("outcome_reason"),
+        "exit_reason": outcome.get("exit_reason"),
+        "holding_days": outcome.get("holding_days"),
+        "effective_score_line": score_line_meta.get("effective_score_line"),
+        "final_score": detail.get("final_score"),
+        "signal_features": {
+            key: signal_features.get(key)
+            for key in ("market_regime", "trend_status", "volume_ratio_5d", "turnover_rate", "concept_sector_name")
+            if key in signal_features
+        },
+    }
+
+
+def _build_replay_analysis_row(detail: dict[str, Any]) -> dict[str, Any]:
+    replay = _build_replay_summary(detail)
+    net_return = replay.get("net_return_pct")
+    net_return_value = float(net_return) if net_return is not None else None
+    outcome_label = str(replay.get("outcome_label") or "")
+    user_label = str(replay.get("user_label") or "")
+    false_positive_reason = str(
+        replay.get("review_failure_reason")
+        or replay.get("false_positive_reason")
+        or replay.get("outcome_reason")
+        or ""
+    ).strip()
+    is_false_positive = bool(
+        false_positive_reason
+        or user_label == "false_positive"
+        or outcome_label in {"failed", "invalid"}
+        or (net_return_value is not None and net_return_value <= 0)
+    )
+    attribution = (
+        classify_false_positive(
+            reason=false_positive_reason or replay.get("outcome_reason"),
+            executed=net_return_value is not None,
+            outcome_label=outcome_label,
+            exit_reason=replay.get("exit_reason"),
+            user_label=user_label,
+            net_return_pct=net_return_value,
+        )
+        if is_false_positive
+        else {"category": None, "category_label": None, "stage": None}
+    )
+    trigger_conditions = list(replay.get("trigger_conditions") or [])
+    signal_features = replay.get("signal_features") if isinstance(replay.get("signal_features"), dict) else {}
+    return {
+        "recommendation_id": detail.get("recommendation_id"),
+        "run_id": detail.get("run_id"),
+        "trade_date": detail.get("trade_date"),
+        "recommend_time": replay.get("recommend_time"),
+        "symbol": replay.get("symbol"),
+        "name": replay.get("name"),
+        "entry_time": replay.get("entry_time"),
+        "entry_price": replay.get("entry_price"),
+        "exit_time": replay.get("exit_time"),
+        "exit_price": replay.get("exit_price"),
+        "net_return_pct": net_return_value,
+        "holding_days": replay.get("holding_days"),
+        "outcome_label": outcome_label or None,
+        "user_label": user_label or None,
+        "is_false_positive": is_false_positive,
+        "false_positive_reason": false_positive_reason or None,
+        "false_positive_category": attribution["category"],
+        "false_positive_category_label": attribution["category_label"],
+        "false_positive_stage": attribution["stage"],
+        "review_failure_reason": replay.get("review_failure_reason"),
+        "outcome_reason": replay.get("outcome_reason"),
+        "exit_reason": replay.get("exit_reason"),
+        "trigger_conditions": trigger_conditions,
+        "trigger_condition_text": " | ".join(trigger_conditions),
+        "effective_score_line": replay.get("effective_score_line"),
+        "final_score": replay.get("final_score"),
+        "market_regime": signal_features.get("market_regime"),
+        "trend_status": signal_features.get("trend_status"),
+        "concept_sector_name": signal_features.get("concept_sector_name"),
+        "signal_features": signal_features,
+    }
+
+
+def _summarize_replay_analysis_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    false_positive_rows = [row for row in rows if row.get("is_false_positive")]
+    reason_counts: Counter[str] = Counter(
+        str(row.get("false_positive_reason") or "未归因")
+        for row in false_positive_rows
+    )
+    category_counts: Counter[tuple[str, str, str]] = Counter(
+        (
+            str(row.get("false_positive_category") or "unknown"),
+            str(row.get("false_positive_category_label") or "未归因"),
+            str(row.get("false_positive_stage") or "other"),
+        )
+        for row in false_positive_rows
+    )
+    stage_counts: Counter[str] = Counter(
+        str(row.get("false_positive_stage") or "other")
+        for row in false_positive_rows
+    )
+    label_counts: Counter[str] = Counter(
+        str(row.get("user_label") or row.get("outcome_label") or "unlabeled")
+        for row in rows
+    )
+    market_regime_counts: Counter[str] = Counter(
+        str(row.get("market_regime") or "unknown")
+        for row in rows
+    )
+    average_net_return = round(
+        sum(float(row.get("net_return_pct") or 0) for row in rows if row.get("net_return_pct") is not None) / len(rows),
+        3,
+    ) if rows else 0.0
+    false_positive_rate = round(len(false_positive_rows) / len(rows), 3) if rows else 0.0
+    return {
+        "total_count": len(rows),
+        "false_positive_count": len(false_positive_rows),
+        "false_positive_rate": false_positive_rate,
+        "average_net_return": average_net_return,
+        "reason_counts": [
+            {"reason": reason, "count": count}
+            for reason, count in reason_counts.most_common()
+        ],
+        "category_counts": [
+            {"category": category, "category_label": label, "stage": stage, "count": count}
+            for (category, label, stage), count in category_counts.most_common()
+        ],
+        "stage_counts": [
+            {"stage": stage, "count": count}
+            for stage, count in stage_counts.most_common()
+        ],
+        "label_counts": [
+            {"label": label, "count": count}
+            for label, count in label_counts.most_common()
+        ],
+        "market_regime_counts": [
+            {"market_regime": regime, "count": count}
+            for regime, count in market_regime_counts.most_common()
+        ],
+    }
+
+
 def _build_timeline(db: Session, rec: Recommendation) -> list[dict[str, Any]]:
     windows = [1, 3, 5, 10]
     bars = db.scalars(
@@ -3086,7 +3354,7 @@ def _agent_history_context(db: Session, skill_id: str, stock: dict[str, Any]) ->
     ]
     labeled = [outcome for outcome in outcomes if is_outcome_labeled(outcome)]
     executed = [outcome for outcome in labeled if is_trade_executed(outcome)]
-    success = [outcome for outcome in executed if normalized_outcome_label(outcome) == "success"]
+    success = [outcome for outcome in executed if is_accurate_recommendation(outcome)]
     return {
         "same_stock_history": same_stock_history,
         "skill_recent_performance": {
@@ -4165,7 +4433,7 @@ def _skill_performance(db: Session, skill_id: str, run_mode: str) -> dict[str, A
         if outcome and is_trade_executed(outcome):
             triggered_count += 1
             total_return += resolved_trade_return(outcome)
-            if normalized_outcome_label(outcome) == "success":
+            if is_accurate_recommendation(outcome):
                 success_count += 1
             else:
                 key = outcome.outcome_reason or "未达标"

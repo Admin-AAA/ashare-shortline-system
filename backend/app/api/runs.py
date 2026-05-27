@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.services.cost_service import record_task_run
 from app.services.market_data import MarketDataError
 from app.services.workbench_service import (
     delete_run,
@@ -86,6 +87,7 @@ def create_backtest(payload: dict, db: Session = Depends(get_db)):
     from app.services.backtest_service import run_backtest
     from app.services.overnight_holding_service import STRATEGY_ID as OVERNIGHT_STRATEGY_ID
     from app.services.overnight_holding_service import run_overnight_holding_backtest
+    from app.services.overnight_holding_service import preview_minute_gap_remediation, remediate_minute_gaps
 
     start_date = payload.get("start_date")
     end_date = payload.get("end_date")
@@ -106,6 +108,29 @@ def create_backtest(payload: dict, db: Session = Depends(get_db)):
     skill_id = str(payload.get("skill_id") or "").strip() or None
     try:
         if strategy_id == OVERNIGHT_STRATEGY_ID:
+            action = str(payload.get("action") or "").strip()
+            if action == "preview_minute_gate":
+                return preview_minute_gap_remediation(db, start_date, end_date)
+            if action == "remediate_minute_gaps":
+                result = remediate_minute_gaps(db, start_date, end_date)
+                record_task_run(
+                    db,
+                    "manual_minute_gap_remediation",
+                    result.get("status", "unknown"),
+                    trigger_source="manual",
+                    task_name="手动分钟补数",
+                    task_type="data_backfill",
+                    payload={
+                        "strategy_id": strategy_id,
+                        "start_date": start_date,
+                        "end_date": end_date,
+                    },
+                    result={
+                        **result,
+                        "remediation_type": "minute_gap",
+                    },
+                )
+                return result
             return run_overnight_holding_backtest(db, start_date, end_date)
         return run_backtest(
             db, start_date, end_date, run_mode, horizon_days, score_line, skill_id=skill_id,
@@ -124,6 +149,17 @@ def get_backtests(
     from app.services.backtest_history_service import list_backtest_runs
 
     return list_backtest_runs(db, skill_id=skill_id, limit=limit)
+
+
+@router.get("/backtests/version-matrix")
+def get_backtest_version_matrix(
+    skill_id: str | None = Query(default=None),
+    limit: int = Query(default=40, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    from app.services.backtest_history_service import get_backtest_version_matrix
+
+    return get_backtest_version_matrix(db, skill_id=skill_id, limit=limit)
 
 
 @router.get("/backtests/{backtest_id}")

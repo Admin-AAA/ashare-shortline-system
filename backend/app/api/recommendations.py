@@ -2,9 +2,23 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.services.workbench_service import delete_recommendation, get_recommendation_detail, save_review_note, set_watch_status
+from app.services.workbench_service import (
+    delete_recommendation,
+    get_recommendation_detail,
+    get_run_replay_analysis,
+    save_review_note,
+    set_watch_status,
+)
 
 router = APIRouter(prefix="/api/recommendations", tags=["recommendations"])
+
+
+@router.get("/runs/{run_id}/replay-analysis")
+def replay_analysis(run_id: str, db: Session = Depends(get_db)):
+    result = get_run_replay_analysis(db, run_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return result
 
 
 @router.get("/{recommendation_id}")

@@ -45,7 +45,7 @@ def _migrate_v2() -> None:
 
 def _ensure_indexes() -> None:
     """创建新表的性能索引。"""
-    with engine.begin() as connection:
+    with engine.connect() as connection:
         inspector = inspect(connection)
         existing_tables = set(inspector.get_table_names())
 
@@ -94,7 +94,9 @@ def _ensure_indexes() -> None:
 
         if "minute_kbars" in existing_tables:
             _migrate_minute_kbars(connection, inspector)
+            _commit_best_effort(connection)
             _ensure_index(connection, inspector, "minute_kbars", "idx_mk_td", "trade_date")
+            _ensure_index(connection, inspector, "minute_kbars", "idx_mk_td_code", "trade_date, code")
 
         if "auction_data" in existing_tables:
             _ensure_index(connection, inspector, "auction_data", "idx_auction_td", "trade_date")
@@ -173,11 +175,17 @@ def _ensure_indexes() -> None:
 
 
 def _ensure_index(connection, inspector, table: str, index_name: str, columns: str) -> None:
-    existing = {idx["name"] for idx in inspector.get_indexes(table)}
+    try:
+        existing = {idx["name"] for idx in inspector.get_indexes(table)}
+    except Exception:
+        _rollback_best_effort(connection)
+        return
     if index_name not in existing:
         try:
             connection.execute(text(f"CREATE INDEX {index_name} ON {table}({columns})"))
+            connection.commit()
         except Exception:
+            _rollback_best_effort(connection)
             pass  # 兼容旧表缺失列的场景
 
 
@@ -185,9 +193,25 @@ def _ensure_column(connection, existing_columns: set[str], table: str, column: s
     if column not in existing_columns:
         try:
             connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {definition}"))
+            connection.commit()
             existing_columns.add(column)
         except Exception:
+            _rollback_best_effort(connection)
             pass  # 兼容 SQLite / 旧表场景
+
+
+def _rollback_best_effort(connection) -> None:
+    try:
+        connection.rollback()
+    except Exception:
+        pass
+
+
+def _commit_best_effort(connection) -> None:
+    try:
+        connection.commit()
+    except Exception:
+        _rollback_best_effort(connection)
 
 
 def _migrate_minute_kbars(connection, inspector=None) -> None:
@@ -204,6 +228,7 @@ def _migrate_minute_kbars(connection, inspector=None) -> None:
                 "ALTER TABLE minute_kbars ADD COLUMN freq VARCHAR(5) DEFAULT '1min'"
             ))
         except Exception:
+            _rollback_best_effort(connection)
             pass  # 兼容 SQLite / 已存在列场景
         # ALTER TABLE 后需重新 inspect（Inspector 会缓存列信息）
         _inspector = _fresh_inspect(connection)
@@ -216,6 +241,7 @@ def _migrate_minute_kbars(connection, inspector=None) -> None:
         try:
             connection.execute(text(f"ALTER TABLE minute_kbars DROP INDEX {old_uniq}"))
         except Exception:
+            _rollback_best_effort(connection)
             pass  # SQLite 可能不支持
 
     # 3. 创建新唯一约束
@@ -226,4 +252,5 @@ def _migrate_minute_kbars(connection, inspector=None) -> None:
                 f"CREATE UNIQUE INDEX {new_uniq} ON minute_kbars(code, freq, trade_time)"
             ))
         except Exception:
+            _rollback_best_effort(connection)
             pass

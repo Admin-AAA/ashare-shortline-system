@@ -23,7 +23,7 @@ if _is_sqlite:
     _engine_kwargs = {"poolclass": None, "connect_args": _connect_args}
     engine = create_engine(settings.database_url, **_engine_kwargs)
 else:
-    _connect_args = {"charset": "utf8mb4", "connect_timeout": 10, "read_timeout": 900, "write_timeout": 900}
+    _connect_args = {"charset": "utf8mb4", "connect_timeout": 10, "read_timeout": 60, "write_timeout": 60}
     _engine_kwargs = {
         "pool_size": 20,
         "max_overflow": 15,

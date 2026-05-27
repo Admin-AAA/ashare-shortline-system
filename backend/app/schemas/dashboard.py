@@ -108,3 +108,4 @@ class DashboardOverview(BaseModel):
     data_health: dict[str, Any] = Field(default_factory=dict)
     task_health: dict[str, Any] = Field(default_factory=dict)
     validation: dict[str, Any] = Field(default_factory=dict)
+    quality_scorecard: dict[str, Any] = Field(default_factory=dict)

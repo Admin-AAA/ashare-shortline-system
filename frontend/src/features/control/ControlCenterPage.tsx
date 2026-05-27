@@ -11,14 +11,17 @@ import {
   RefreshCcw,
   Save,
   SquarePen,
+  TestTube2,
   Trash2,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "../../api/client";
+import { businessStatusLabel, readinessCopy } from "../../utils/display";
 import type {
   LocalPoolStatus,
   ModelRoute,
+  ModelRouteTestResult,
   Preset,
   RunSummary,
   ScheduledTask,
@@ -139,6 +142,8 @@ export default function ControlCenterPage() {
   const [syncing, setSyncing] = useState(false);
   const [savingTask, setSavingTask] = useState(false);
   const [savingRoute, setSavingRoute] = useState(false);
+  const [testingRoute, setTestingRoute] = useState(false);
+  const [routeTestResult, setRouteTestResult] = useState<ModelRouteTestResult | null>(null);
   const [savingPreset, setSavingPreset] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -152,6 +157,7 @@ export default function ControlCenterPage() {
   const currentTask = tasks.find((task) => task.task_id === editingTaskId) ?? null;
   const currentRoute = modelRoutes.find((route) => route.route_id === editingRouteId) ?? null;
   const readiness = pool?.recommendation_readiness;
+  const poolReadinessCopy = readinessCopy(readiness?.can_run_local_recommendation, readiness?.status);
   const isRefreshingState = Object.values(sectionLoading).some(Boolean);
 
   const loadControlState = useCallback(async () => {
@@ -276,7 +282,7 @@ export default function ControlCenterPage() {
       const run = await api.runDetail(runId);
       setLatestRun(run);
       if (TERMINAL_RUN_STATUS.has(run.status)) {
-        setMessage(run.status === "completed" ? `推荐完成：输出 ${run.recommended_count} 只` : `推荐结束：${run.status}`);
+        setMessage(run.status === "completed" ? `推荐完成：输出 ${run.recommended_count} 只` : `推荐结束：${businessStatusLabel(run.status)}`);
         return;
       }
     }
@@ -535,6 +541,7 @@ export default function ControlCenterPage() {
 
   function startCreateRoute() {
     setEditingRouteId(null);
+    setRouteTestResult(null);
     setRouteDraft({
       ...EMPTY_ROUTE_DRAFT,
       name: `模型路由 ${modelRoutes.length + 1}`,
@@ -545,6 +552,7 @@ export default function ControlCenterPage() {
 
   function editRoute(route: ModelRoute) {
     setEditingRouteId(route.route_id);
+    setRouteTestResult(null);
     setRouteDraft({
       name: route.name,
       provider: route.provider || "openai_compatible",
@@ -558,6 +566,7 @@ export default function ControlCenterPage() {
 
   function resetRouteDraft() {
     setEditingRouteId(null);
+    setRouteTestResult(null);
     setRouteDraft(EMPTY_ROUTE_DRAFT);
   }
 
@@ -569,6 +578,7 @@ export default function ControlCenterPage() {
     setSavingRoute(true);
     setError("");
     setMessage("");
+    setRouteTestResult(null);
     try {
       const payload: Record<string, unknown> = {
         name: routeDraft.name.trim() || "未命名模型路由",
@@ -601,6 +611,39 @@ export default function ControlCenterPage() {
       setMessage(`${route.name} ${route.enabled ? "已停用" : "已启用"}`);
     } catch (err) {
       setError(messageFromError(err));
+    }
+  }
+
+  async function testRoute() {
+    if (!routeDraft.base_url.trim() || !routeDraft.model.trim()) {
+      setError("模型路由需要接口地址和模型名");
+      return;
+    }
+    setTestingRoute(true);
+    setError("");
+    setMessage("");
+    setRouteTestResult(null);
+    try {
+      const payload: Record<string, unknown> = {
+        route_id: editingRouteId ?? undefined,
+        name: routeDraft.name.trim() || currentRoute?.name || "未命名模型路由",
+        provider: routeDraft.provider || "openai_compatible",
+        base_url: routeDraft.base_url.trim(),
+        model: routeDraft.model.trim(),
+        clear_api_key: routeDraft.clear_api_key,
+      };
+      if (routeDraft.api_key.trim()) payload.api_key = routeDraft.api_key.trim();
+      const result = await api.testModelRoute(payload);
+      if (result.ok) {
+        const latency = typeof result.latency_ms === "number" ? `（${result.latency_ms}ms）` : "";
+        setRouteTestResult({ ...result, message: `${result.message}${latency}` });
+        return;
+      }
+      setRouteTestResult(result);
+    } catch (err) {
+      setRouteTestResult({ ok: false, message: messageFromError(err) });
+    } finally {
+      setTestingRoute(false);
     }
   }
 
@@ -655,8 +698,8 @@ export default function ControlCenterPage() {
         <SummaryTile label="启用任务" value={activeTasks} note={`${tasks.length} 个任务`} />
         <SummaryTile
           label="本地池"
-          value={readiness?.can_run_local_recommendation ? "READY" : "CHECK"}
-          note={readiness?.status ?? "unknown"}
+          value={poolReadinessCopy.value}
+          note={poolReadinessCopy.note}
         />
       </div>
 
@@ -1071,30 +1114,48 @@ export default function ControlCenterPage() {
           <div className="control-form">
             <label className="control-field">
               <span>名称</span>
-              <input value={routeDraft.name} onChange={(event) => setRouteDraft((current) => ({ ...current, name: event.target.value }))} />
+              <input value={routeDraft.name} onChange={(event) => {
+                setRouteTestResult(null);
+                setRouteDraft((current) => ({ ...current, name: event.target.value }));
+              }} />
             </label>
             <label className="control-field">
               <span>接口地址</span>
-              <input value={routeDraft.base_url} placeholder="https://api.deepseek.com" onChange={(event) => setRouteDraft((current) => ({ ...current, base_url: event.target.value }))} />
+              <input value={routeDraft.base_url} placeholder="https://api.deepseek.com" onChange={(event) => {
+                setRouteTestResult(null);
+                setRouteDraft((current) => ({ ...current, base_url: event.target.value }));
+              }} />
             </label>
             <label className="control-field">
               <span>模型名</span>
-              <input value={routeDraft.model} placeholder="deepseek-chat" onChange={(event) => setRouteDraft((current) => ({ ...current, model: event.target.value }))} />
+              <input value={routeDraft.model} placeholder="deepseek-chat" onChange={(event) => {
+                setRouteTestResult(null);
+                setRouteDraft((current) => ({ ...current, model: event.target.value }));
+              }} />
             </label>
             <label className="control-field">
               <span>{editingRouteId ? "新 API Key" : "API Key"}</span>
-              <input type="password" value={routeDraft.api_key} placeholder={editingRouteId ? "留空表示不改" : "未填则走系统默认 Key"} onChange={(event) => setRouteDraft((current) => ({ ...current, api_key: event.target.value }))} />
+              <input type="password" value={routeDraft.api_key} placeholder={editingRouteId ? "留空表示不改" : "未填则走系统默认 Key"} onChange={(event) => {
+                setRouteTestResult(null);
+                setRouteDraft((current) => ({ ...current, api_key: event.target.value }));
+              }} />
             </label>
             <label className="control-toggle">
               <span>启用路由</span>
-              <button type="button" className={routeDraft.enabled ? "on" : ""} onClick={() => setRouteDraft((current) => ({ ...current, enabled: !current.enabled }))}>
+              <button type="button" className={routeDraft.enabled ? "on" : ""} onClick={() => {
+                setRouteTestResult(null);
+                setRouteDraft((current) => ({ ...current, enabled: !current.enabled }));
+              }}>
                 {routeDraft.enabled ? "ON" : "OFF"}
               </button>
             </label>
             {editingRouteId ? (
               <label className="control-toggle">
                 <span>清空自定义 Key</span>
-                <button type="button" className={routeDraft.clear_api_key ? "on" : ""} onClick={() => setRouteDraft((current) => ({ ...current, clear_api_key: !current.clear_api_key }))}>
+                <button type="button" className={routeDraft.clear_api_key ? "on" : ""} onClick={() => {
+                  setRouteTestResult(null);
+                  setRouteDraft((current) => ({ ...current, clear_api_key: !current.clear_api_key }));
+                }}>
                   {routeDraft.clear_api_key ? "ON" : "OFF"}
                 </button>
               </label>
@@ -1103,10 +1164,21 @@ export default function ControlCenterPage() {
               <KeyRound size={14} />
               <span>{currentRoute ? `当前状态：${routeKeyLabel(currentRoute)}` : "未填写 API Key 时，会尝试使用系统默认 Key。"}</span>
             </div>
-            <button className="control-button primary wide" type="button" onClick={() => void saveRoute()} disabled={savingRoute}>
-              {savingRoute ? <Loader2 size={15} className="spin" /> : <CheckCircle2 size={15} />}
-              保存模型路由
-            </button>
+            <div className="control-actions">
+              <button className="control-button wide" type="button" onClick={() => void testRoute()} disabled={testingRoute || savingRoute}>
+                {testingRoute ? <Loader2 size={15} className="spin" /> : <TestTube2 size={15} />}
+                测试连接
+              </button>
+              <button className="control-button primary wide" type="button" onClick={() => void saveRoute()} disabled={savingRoute || testingRoute}>
+                {savingRoute ? <Loader2 size={15} className="spin" /> : <CheckCircle2 size={15} />}
+                保存模型路由
+              </button>
+            </div>
+            {routeTestResult ? (
+              <div className={`control-note route-test-feedback ${routeTestResult.ok ? "positive" : "danger"}`}>
+                <span><strong>{routeTestResult.ok ? "测试通过" : summarizeRouteTestFailure(routeTestResult.message)}</strong>{routeTestResult.message}</span>
+              </div>
+            ) : null}
           </div>
         </section>
       </div>
@@ -1142,7 +1214,7 @@ function RunStatusCard({ run }: { run: RunSummary }) {
     <div className="run-status-card">
       <div>
         <strong>{run.run_name}</strong>
-        <span>{run.status} · {run.trade_date}</span>
+        <span>{businessStatusLabel(run.status)} · {run.trade_date}</span>
       </div>
       <div className="progress-track" aria-label="运行进度">
         <i style={{ width: `${pct}%` }} />
@@ -1159,7 +1231,7 @@ function TaskRunStrip({ rows, loading }: { rows: ScheduledTaskRun[]; loading: bo
       {rows.slice(0, 4).map((row) => (
         <span key={row.task_run_id}>
           <strong>{row.task_name}</strong>
-          {taskLabel(row.task_type)} · {row.status}
+          {taskLabel(row.task_type)} · {businessStatusLabel(row.status)}
         </span>
       ))}
       {!loading && !rows.length ? <span>暂无任务执行记录</span> : null}
@@ -1227,6 +1299,14 @@ function routeKeyLabel(route: ModelRoute) {
   if (route.key_source === "custom") return route.api_key_masked || "自定义 Key";
   if (route.has_api_key) return route.api_key_masked || "可用 Key";
   return "未配置 Key";
+}
+
+function summarizeRouteTestFailure(message: string) {
+  const text = message.toLowerCase();
+  if (text.includes("余额不足") || text.includes("额度已用完") || text.includes("insufficient balance")) return "余额不足：";
+  if (text.includes("api key") || text.includes("无权限") || text.includes("401") || text.includes("403")) return "鉴权失败：";
+  if (text.includes("模型") && text.includes("不可用")) return "模型不可用：";
+  return "测试失败：";
 }
 
 function buildPresetDraft(sourcePreset: Preset | null, presetCount: number): PresetDraft {
@@ -1301,7 +1381,7 @@ function labelText(value: string) {
     local_pool_preferred: "本地池优先",
     realtime: "实时数据",
   };
-  return labels[value] ?? value;
+  return labels[value] ?? businessStatusLabel(value);
 }
 
 function messageFromError(err: unknown) {

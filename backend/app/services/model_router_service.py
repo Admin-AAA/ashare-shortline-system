@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import json
+import time
 import uuid
 
 from sqlalchemy import select
@@ -110,6 +112,89 @@ def reorder_model_routes(db: Session, route_ids: list[str]) -> list[dict]:
     return [_serialize_route(row, get_settings()) for row in merged]
 
 
+async def test_model_route(db: Session, payload: dict) -> dict:
+    settings = get_settings()
+    try:
+        route = _resolve_route_for_test(db, payload, settings)
+    except LookupError as exc:
+        return {"ok": False, "message": str(exc)}
+
+    if not route.api_key:
+        return {
+            "ok": False,
+            "route_id": route.route_id,
+            "route_name": route.name,
+            "model": route.model,
+            "base_url": route.base_url,
+            "key_source": "missing",
+            "message": "未配置可用 API Key，请先填写自定义 Key 或配置系统默认 Key",
+        }
+    if route.provider != "openai_compatible":
+        return {
+            "ok": False,
+            "route_id": route.route_id,
+            "route_name": route.name,
+            "model": route.model,
+            "base_url": route.base_url,
+            "key_source": route.key_source,
+            "message": f"暂不支持测试 provider={route.provider}，目前仅支持 OpenAI 兼容路由",
+        }
+
+    from openai import AsyncOpenAI
+
+    timeout_seconds = max(5.0, min(float(settings.agent_skill_timeout_seconds or 30.0), 30.0))
+    started_at = time.perf_counter()
+    try:
+        async with AsyncOpenAI(
+            api_key=route.api_key,
+            base_url=route.base_url,
+            timeout=timeout_seconds,
+        ) as client:
+            response = await client.chat.completions.create(
+                model=route.model,
+                messages=[
+                    {"role": "system", "content": "你是模型连通性测试助手，只返回 JSON。"},
+                    {"role": "user", "content": '请返回 {"ok": true, "message": "pong"}'},
+                ],
+                temperature=0,
+                max_tokens=32,
+                response_format={"type": "json_object"},
+            )
+        latency_ms = round((time.perf_counter() - started_at) * 1000)
+        content = str(response.choices[0].message.content or "").strip()
+        if not content:
+            return {
+                "ok": False,
+                "route_id": route.route_id,
+                "route_name": route.name,
+                "model": route.model,
+                "base_url": route.base_url,
+                "key_source": route.key_source,
+                "message": f"{route.name} 返回内容为空，请检查模型响应格式",
+            }
+        json.loads(content)
+        return {
+            "ok": True,
+            "route_id": route.route_id,
+            "route_name": route.name,
+            "model": route.model,
+            "base_url": route.base_url,
+            "key_source": route.key_source,
+            "latency_ms": latency_ms,
+            "message": f"{route.name} 测试成功，模型 {route.model} 可用",
+        }
+    except Exception as exc:  # noqa: BLE001 - surface upstream connectivity errors to UI
+        return {
+            "ok": False,
+            "route_id": route.route_id,
+            "route_name": route.name,
+            "model": route.model,
+            "base_url": route.base_url,
+            "key_source": route.key_source,
+            "message": _format_test_route_error(route.name, route.model, exc),
+        }
+
+
 def get_active_model_routes() -> list[ResolvedModelRoute]:
     settings = get_settings()
     with SessionLocal() as db:
@@ -204,6 +289,61 @@ def _apply_route_payload(route: ModelRouteConfig, payload: dict, *, creating: bo
             api_key = str(payload.get("api_key") or "").strip()
             if api_key:
                 route.api_key = api_key
+
+
+def _resolve_route_for_test(db: Session, payload: dict, settings) -> ResolvedModelRoute:
+    route_id = str(payload.get("route_id") or "").strip()
+    existing = db.get(ModelRouteConfig, route_id) if route_id else None
+    if route_id and existing is None:
+        raise LookupError("模型路由不存在，请先刷新列表后重试")
+
+    provider = str(payload.get("provider") or (existing.provider if existing else "") or "openai_compatible").strip() or "openai_compatible"
+    base_url = str(payload.get("base_url") or (existing.base_url if existing else "") or settings.agent_skill_base_url).strip()
+    model = str(payload.get("model") or (existing.model if existing else "") or settings.agent_model).strip() or settings.agent_model
+    name = str(payload.get("name") or (existing.name if existing else "") or f"模型 {model}").strip() or f"模型 {model}"
+    api_key, key_source = _resolve_test_api_key(existing, payload, settings)
+
+    return ResolvedModelRoute(
+        route_id=route_id or "draft_route_test",
+        name=name,
+        provider=provider,
+        base_url=base_url,
+        model=model,
+        api_key=api_key,
+        priority=int(existing.priority if existing and existing.priority else 1),
+        key_source=key_source,
+    )
+
+
+def _resolve_test_api_key(route: ModelRouteConfig | None, payload: dict, settings) -> tuple[str, str]:
+    env_api_key = str(settings.agent_skill_api_key or "").strip()
+    draft_api_key = str(payload.get("api_key") or "").strip() if "api_key" in payload else ""
+    stored_api_key = str(route.api_key or "").strip() if route else ""
+
+    if payload.get("clear_api_key"):
+        return env_api_key, "env_default" if env_api_key else "missing"
+    if draft_api_key:
+        return draft_api_key, "custom"
+    if stored_api_key:
+        return stored_api_key, "custom"
+    if env_api_key:
+        return env_api_key, "env_default"
+    return "", "missing"
+
+
+def _format_test_route_error(route_name: str, model: str, exc: Exception) -> str:
+    text = str(exc).strip()
+    lowered = text.lower()
+
+    if "insufficient balance" in lowered or "error code: 402" in lowered:
+        return f"{route_name} 测试失败：接口已连通，但账号余额不足或额度已用完"
+    if any(marker in lowered for marker in ("invalid api key", "incorrect api key", "authentication", "unauthorized", "forbidden", "error code: 401", "error code: 403")):
+        return f"{route_name} 测试失败：接口已连通，但 API Key 无效、已失效或无权限"
+    if "model" in lowered and any(marker in lowered for marker in ("not found", "does not exist", "unsupported")):
+        return f"{route_name} 测试失败：接口已连通，但模型 {model} 不可用"
+    if text:
+        return f"{route_name} 测试失败：{text}"
+    return f"{route_name} 测试失败：未知错误"
 
 
 def _serialize_route(route: ModelRouteConfig, settings) -> dict:

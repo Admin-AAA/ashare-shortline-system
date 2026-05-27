@@ -12,6 +12,7 @@ from app.db.session import get_db
 from app.models.tables import MarketSnapshot, RecommendationRun
 from app.schemas.dashboard import DashboardOverview
 from app.services.cost_service import list_scheduled_tasks
+from app.services.dashboard_quality_service import build_dashboard_quality_scorecard
 from app.services.data_pool.health_projection import summarize_alerts, summarize_tasks
 from app.services.data_pool.readiness import summarize_pool_status
 from app.services.recommendations.projection import (
@@ -36,6 +37,7 @@ def compose_overview(
     data_health: dict[str, Any],
     task_health: dict[str, Any],
     validation: dict[str, Any],
+    quality_scorecard: dict[str, Any],
 ) -> DashboardOverview:
     cards = [
         item if hasattr(item, "risk_level") else build_cockpit_recommendation(item)
@@ -49,6 +51,7 @@ def compose_overview(
         data_health=data_health,
         task_health=task_health,
         validation=validation,
+        quality_scorecard=quality_scorecard,
     )
 
 
@@ -90,14 +93,41 @@ def serialize_run_progress_row(row: Any | None) -> dict[str, Any] | None:
     }
 
 
-def build_validation_summary(pool_status: dict[str, Any]) -> dict[str, Any]:
+def build_validation_summary(
+    pool_status: dict[str, Any],
+    *,
+    quality_scorecard: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     readiness = pool_status.get("recommendation_readiness") if isinstance(pool_status.get("recommendation_readiness"), dict) else {}
     status = str(readiness.get("status") or "unknown")
     messages = [str(item) for item in readiness.get("messages") or []]
     alerts = summarize_alerts(
         [{"severity": "medium", "message": message} for message in messages]
     )
-    return {"last_status": status, "alerts": alerts}
+    validation_dimension = (
+        ((quality_scorecard or {}).get("dimensions") or {}).get("validation")
+        if isinstance((quality_scorecard or {}).get("dimensions"), dict)
+        else {}
+    )
+    execution_dimension = (
+        ((quality_scorecard or {}).get("dimensions") or {}).get("execution")
+        if isinstance((quality_scorecard or {}).get("dimensions"), dict)
+        else {}
+    )
+    scorecard_highlights = [str(item) for item in ((quality_scorecard or {}).get("highlights") or [])][:4]
+    return {
+        "last_status": status,
+        "alerts": alerts,
+        "quality_gate": {
+            "overall_score": (quality_scorecard or {}).get("overall_score"),
+            "overall_status": (quality_scorecard or {}).get("overall_status"),
+            "validation_score": validation_dimension.get("score") if isinstance(validation_dimension, dict) else None,
+            "validation_status": validation_dimension.get("status") if isinstance(validation_dimension, dict) else None,
+            "execution_score": execution_dimension.get("score") if isinstance(execution_dimension, dict) else None,
+            "execution_status": execution_dimension.get("status") if isinstance(execution_dimension, dict) else None,
+            "highlights": scorecard_highlights,
+        },
+    }
 
 
 def _loads(raw: Any, default: Any) -> Any:
@@ -133,13 +163,22 @@ def overview(db: Session = Depends(get_db)) -> DashboardOverview:
             include_details=False,
             cache_only=True,
         )
+        data_health = summarize_pool_status(pool_status)
+        task_health = summarize_tasks(list_scheduled_tasks(db))
+        quality_scorecard = build_dashboard_quality_scorecard(
+            db,
+            data_health=data_health,
+            task_health=task_health,
+            current_run=recent_run,
+        )
         return compose_overview(
             market_snapshot=serialize_market_snapshot_row(market_row),
             recent_run=recent_run,
             recommendations=run_recommendations,
-            data_health=summarize_pool_status(pool_status),
-            task_health=summarize_tasks(list_scheduled_tasks(db)),
-            validation=build_validation_summary(pool_status),
+            data_health=data_health,
+            task_health=task_health,
+            validation=(validation := build_validation_summary(pool_status, quality_scorecard=quality_scorecard)),
+            quality_scorecard=quality_scorecard,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

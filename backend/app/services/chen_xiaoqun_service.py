@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 _MIN_LIMIT_DOWN_FOR_RETREAT = 50         # 跌停 >= 50 → 退潮（P90=35，50以上仅极端行情）
 _MAX_HEIGHT_FOR_RETREAT = 2              # 连板高度 <= 2 → 退潮
 _MIN_HEIGHT_FOR_STARTUP = 3              # 连板高度 >= 3 → 启动
-_MIN_LIMIT_UP_FOR_FERMENT = 5            # 涨停 >= 5 → 发酵候选（连续达标）
+_MIN_LIMIT_UP_FOR_FERMENT = 8            # 涨停 >= 8 → 发酵候选（原5，提高门槛减少假阳性）
 _MIN_PROMOTION_RATE_FOR_FERMENT = 0.18   # 晋级率 > 18% → 发酵确认。
                                          #   原 40% 在实际数据中最大值仅 32%，从未触发。
                                          #   均值 17%、P50=16%、P75=20%，18% 为合理分界。
@@ -109,7 +109,7 @@ def get_position_pct(cycle: EmotionCycle) -> float:
     """
     mapping = {
         EmotionCycle.STARTUP: 0.15,
-        EmotionCycle.FERMENT: 0.30,   # 发酵期降低仓位，配合过滤提质量（原0.40→0.30）
+        EmotionCycle.FERMENT: 0.15,   # 发酵期保守仓位（25%胜率→降至15%，原0.30）
         EmotionCycle.CLIMAX: 0.60,
         EmotionCycle.RETREAT: 0.0,
     }
@@ -144,12 +144,12 @@ def get_cycle_entry_requirements(cycle: EmotionCycle) -> dict:
             "max_candidates": 999,
         },
         EmotionCycle.FERMENT: {
-            "min_amount_yi": 3.0,   # 发酵期适度提高质量门槛（全球MIN_AMOUNT_YI=2.0）
-            "min_pct": 4.0,         # 涨幅要求略高于全球MIN_PCT=3.0
+            "min_amount_yi": 5.0,   # 发酵期提高质量门槛（原3.0，25%胜率太低→收紧）
+            "min_pct": 5.0,         # 涨幅要求提高（原4.0）
             "max_turnover": 20.0,
             "min_turnover": 1.5,
             "require_dt_net_buying": False,
-            "max_candidates": 8,
+            "max_candidates": 4,    # 减少候选数，只取最优质（原8）
         },
         EmotionCycle.CLIMAX: {
             "min_amount_yi": 0.0,   # 高潮期与基准一致

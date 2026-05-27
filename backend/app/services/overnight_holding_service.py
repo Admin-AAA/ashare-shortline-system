@@ -20,6 +20,7 @@ from app.services.evaluation_metrics import (
     _empty_metrics as _shared_empty_metrics,
 )
 from app.services.tushare_client import (
+    fetch_index_minute_kbars,
     fetch_minute_kbars,
     fetch_recent_index_minute_kbars,
     get_pro,
@@ -32,6 +33,8 @@ logger = logging.getLogger(__name__)
 # 15min 优先（全市场已回填），1min 兜底（历史存量），FORCE_LOCAL 关闭 Tushare API 回退
 _MINUTE_FREQ_PRIORITY: list[str] = ["15min", "1min"]
 _FORCE_LOCAL_ONLY: bool = True  # 回测/信号日扫描时只读本地 DB，不调 Tushare
+MINUTE_GATE_MIN_COVERAGE_RATE = 0.8
+MINUTE_GATE_MIN_READY_CANDIDATES = 10
 
 STRATEGY_ID = "overnight-holding-method"
 STRATEGY_NAME = "隔夜持股法"
@@ -41,7 +44,7 @@ TAIL_START_TIME = "14:30:00"
 MORNING_EXIT_TIME = "09:35:00"
 LIMIT_UP_PCT = 0.10
 VWAP_HOLD_TOLERANCE_BPS = 12.0
-TAIL_VWAP_MAX_GAP_BPS = 300.0
+TAIL_VWAP_MAX_GAP_BPS = 500.0
 TAIL_RETEST_WINDOW_MINUTES = 15
 SHRINK_LIMIT_VOLUME_RATIO = 0.85
 DEFAULT_MIN_ABOVE_VWAP_RATIO = 0.70
@@ -87,6 +90,8 @@ class OvernightVariant:
     label: str
     min_relative_strength_pct: float
     exit_time: str = MORNING_EXIT_TIME
+    min_pct: float = MIN_PCT
+    max_pct: float = MAX_PCT
 
 
 BASELINE_VARIANT = OvernightVariant(
@@ -106,6 +111,14 @@ DELAYED_EXIT_VARIANT = OvernightVariant(
     label="延迟退出版",
     min_relative_strength_pct=0.8,
     exit_time="09:45:00",
+)
+
+RELAXED_PCT_VARIANT = OvernightVariant(
+    name="relaxed_pct",
+    label="放宽版",
+    min_relative_strength_pct=0.0,
+    min_pct=2.0,
+    max_pct=7.0,
 )
 
 
@@ -157,9 +170,52 @@ def run_overnight_holding_backtest(
     benchmark_cache: dict[str, dict[str, Any]] = {}
     minute_source_trace: list[dict[str, Any]] = []
     minute_inventory = _local_minute_inventory(db)
+    gate = _evaluate_preflight_minute_gate(
+        db=db,
+        signal_dates=signal_dates,
+        date_lookup=date_lookup,
+        daily_by_date=daily_by_date,
+        history_by_code=history_by_code,
+        stock_meta=stock_meta,
+        daily_basic_cache=daily_basic_cache,
+        minute_cache=minute_cache,
+        benchmark_cache=benchmark_cache,
+        minute_source_trace=minute_source_trace,
+    )
+    if not gate["passed"]:
+        blocked_response = {
+            "strategy_id": STRATEGY_ID,
+            "strategy_name": STRATEGY_NAME,
+            "status": "insufficient_minute_coverage",
+            "strategy_window": {"start_date": start, "end_date": end},
+            "dates_scanned": len(signal_dates),
+            "dates_succeeded": 0,
+            "dates_failed": len(signal_dates),
+            "total_recommendations": 0,
+            "total_elapsed_ms": int((perf_counter() - started_at) * 1000),
+            "labeled_count": 0,
+            "aggregate_metrics": _empty_metrics(),
+            "results": gate["date_summaries"],
+            "data_coverage": _build_data_coverage(
+                signal_dates,
+                gate["date_summaries"],
+                minute_inventory,
+                minute_source_trace,
+            ),
+            "minute_gate": gate,
+            "recommendation_records": [],
+            "trade_samples": [],
+            "false_positive_samples": [],
+            "notes": [
+                "分钟线先验覆盖不足，已阻止本次隔夜回测，避免基于残缺样本输出结论。",
+                *gate["notes"],
+            ],
+        }
+        _persist_backtest_run(db, start, end, blocked_response, status="insufficient_minute_coverage")
+        return blocked_response
 
     comparisons: dict[str, dict[str, Any]] = {}
-    for variant in (BASELINE_VARIANT, CANDIDATE_VARIANT, DELAYED_EXIT_VARIANT):
+    for variant in (BASELINE_VARIANT, CANDIDATE_VARIANT, DELAYED_EXIT_VARIANT, RELAXED_PCT_VARIANT):
         comparisons[variant.name] = _simulate_variant(
             db=db,
             signal_dates=signal_dates,
@@ -203,19 +259,22 @@ def run_overnight_holding_backtest(
             "baseline": comparisons["baseline"]["metrics"],
             "candidate": comparisons["candidate"]["metrics"],
             "delayed_exit": comparisons["delayed_exit"]["metrics"],
+            "relaxed_pct": comparisons["relaxed_pct"]["metrics"],
             "selected_variant": adopted_variant,
             "selected_variant_label": comparisons[adopted_variant]["variant"].label,
             "adoption_reason": adoption_reason,
-            "hypothesis": "增强版：把“强于大盘”从弱定义（仅跑赢沪深300）收紧为强定义（至少领先沪深300 0.8 个百分点）。延迟退出版：次日早盘从09:35推迟到09:45卖出，避开开盘初期流动性冲击。",
+            "hypothesis": "增强版：把\"强于大盘\"从弱定义（仅跑赢沪深300）收紧为强定义（至少领先沪深300 0.8 个百分点）。延迟退出版：次日早盘从09:35推迟到09:45卖出，避开开盘初期流动性冲击。放宽版：daily pct范围从[2.5%,5.5%]扩至[2.0%,7.0%]，VWAP回踩容差从300bps扩至500bps。",
             "splits": {
                 "baseline": comparisons["baseline"]["split_metrics"],
                 "candidate": comparisons["candidate"]["split_metrics"],
                 "delayed_exit": comparisons["delayed_exit"]["split_metrics"],
+                "relaxed_pct": comparisons["relaxed_pct"]["split_metrics"],
             },
             "walk_forward": {
                 "baseline": comparisons["baseline"]["walk_forward"],
                 "candidate": comparisons["candidate"]["walk_forward"],
                 "delayed_exit": comparisons["delayed_exit"]["walk_forward"],
+                "relaxed_pct": comparisons["relaxed_pct"]["walk_forward"],
             },
         },
         "data_coverage": _build_data_coverage(
@@ -224,6 +283,7 @@ def run_overnight_holding_backtest(
             minute_inventory,
             minute_source_trace,
         ),
+        "minute_gate": gate,
         "temporal_consistency": _run_overnight_temporal_check(db, signal_dates),
         "recommendation_records": _recommendation_records(selected["trades"]),
         "trade_samples": selected["trade_samples"],
@@ -260,6 +320,173 @@ def _signal_trade_dates(db: Session, start_date: str, end_date: str) -> tuple[li
             continue
         signal_dates.append(trade_date)
     return signal_dates, rows
+
+
+def preview_minute_gap_remediation(
+    db: Session,
+    start_date: str,
+    end_date: str,
+) -> dict[str, Any]:
+    start = _normalize_trade_date(start_date)
+    end = _normalize_trade_date(end_date)
+    if not start or not end:
+        raise ValueError("start_date and end_date are required")
+    if start > end:
+        raise ValueError("start_date must be <= end_date")
+
+    signal_dates, date_lookup = _signal_trade_dates(db, start, end)
+    if not signal_dates:
+        return {
+            "status": "no_data",
+            "strategy_window": {"start_date": start, "end_date": end},
+            "minute_gate": {
+                "passed": False,
+                "reason": "区间内没有可用于隔夜策略验证的交易日。",
+                "notes": ["至少需要存在可入场日及其后续交易日。"],
+            },
+            "data_coverage": _build_data_coverage([], [], _local_minute_inventory(db), []),
+        }
+
+    window_start = date_lookup[max(0, date_lookup.index(signal_dates[0]) - 25)]
+    window_end = date_lookup[min(len(date_lookup) - 1, date_lookup.index(signal_dates[-1]) + 5)]
+    daily_by_date, history_by_code = _load_daily_window(db, window_start, window_end)
+    stock_meta = _load_stock_meta(db, history_by_code.keys())
+    daily_basic_cache: dict[str, dict[str, dict[str, float]]] = {}
+    minute_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    benchmark_cache: dict[str, dict[str, Any]] = {}
+    minute_source_trace: list[dict[str, Any]] = []
+    gate = _evaluate_preflight_minute_gate(
+        db=db,
+        signal_dates=signal_dates,
+        date_lookup=date_lookup,
+        daily_by_date=daily_by_date,
+        history_by_code=history_by_code,
+        stock_meta=stock_meta,
+        daily_basic_cache=daily_basic_cache,
+        minute_cache=minute_cache,
+        benchmark_cache=benchmark_cache,
+        minute_source_trace=minute_source_trace,
+    )
+    return {
+        "status": "ready" if gate["passed"] else "insufficient_minute_coverage",
+        "strategy_window": {"start_date": start, "end_date": end},
+        "minute_gate": gate,
+        "data_coverage": _build_data_coverage(
+            signal_dates,
+            gate["date_summaries"],
+            _local_minute_inventory(db),
+            minute_source_trace,
+        ),
+    }
+
+
+def remediate_minute_gaps(
+    db: Session,
+    start_date: str,
+    end_date: str,
+) -> dict[str, Any]:
+    before = preview_minute_gap_remediation(db, start_date, end_date)
+    gate_before = before["minute_gate"]
+    if gate_before.get("passed"):
+        return {
+            "status": "already_ready",
+            "before": before,
+            "after": before,
+            "actions": [],
+            "comparison": _compare_minute_gap_remediation(before, before),
+        }
+
+    actions = _execute_minute_gap_remediation(
+        db,
+        gate_before,
+    )
+    after = preview_minute_gap_remediation(db, start_date, end_date)
+    return {
+        "status": "completed" if actions else "no_action",
+        "before": before,
+        "after": after,
+        "actions": actions,
+        "comparison": _compare_minute_gap_remediation(before, after),
+    }
+
+
+def _compare_minute_gap_remediation(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    before_gate = before.get("minute_gate") if isinstance(before.get("minute_gate"), dict) else {}
+    after_gate = after.get("minute_gate") if isinstance(after.get("minute_gate"), dict) else {}
+    before_coverage = before.get("data_coverage") if isinstance(before.get("data_coverage"), dict) else {}
+    after_coverage = after.get("data_coverage") if isinstance(after.get("data_coverage"), dict) else {}
+
+    before_missing_pairs = _minute_gate_missing_pair_count(before_gate)
+    after_missing_pairs = _minute_gate_missing_pair_count(after_gate)
+    resolved_missing_pairs = max(0, before_missing_pairs - after_missing_pairs)
+
+    before_pair_sample = _minute_gate_missing_pair_keys(before_gate)
+    after_pair_sample = _minute_gate_missing_pair_keys(after_gate)
+    sample_unresolved_pairs = before_pair_sample & after_pair_sample
+    sample_resolved_pairs = before_pair_sample - after_pair_sample
+
+    before_benchmark_missing = _minute_gate_benchmark_missing_dates(before_gate)
+    after_benchmark_missing = _minute_gate_benchmark_missing_dates(after_gate)
+    benchmark_resolved = before_benchmark_missing - after_benchmark_missing
+    benchmark_unresolved = before_benchmark_missing & after_benchmark_missing
+
+    target_units = before_missing_pairs + len(before_benchmark_missing)
+    resolved_units = resolved_missing_pairs + len(benchmark_resolved)
+    unresolved_units = after_missing_pairs + len(benchmark_unresolved)
+
+    return {
+        "candidate_coverage_rate_delta": round(
+            float(after_coverage.get("candidate_minute_coverage_rate", 0) or 0)
+            - float(before_coverage.get("candidate_minute_coverage_rate", 0) or 0),
+            3,
+        ),
+        "benchmark_coverage_rate_delta": round(
+            float(after_coverage.get("benchmark_minute_coverage_rate", 0) or 0)
+            - float(before_coverage.get("benchmark_minute_coverage_rate", 0) or 0),
+            3,
+        ),
+        "gate_passed_before": bool(before_gate.get("passed")),
+        "gate_passed_after": bool(after_gate.get("passed")),
+        "target_missing_pair_count": before_missing_pairs,
+        "sampled_missing_pair_count": len(before_pair_sample),
+        "resolved_missing_pair_count": resolved_missing_pairs,
+        "unresolved_missing_pair_count": after_missing_pairs,
+        "sample_resolved_missing_pair_count": len(sample_resolved_pairs),
+        "sample_unresolved_missing_pair_count": len(sample_unresolved_pairs),
+        "benchmark_target_missing_date_count": len(before_benchmark_missing),
+        "benchmark_resolved_missing_date_count": len(benchmark_resolved),
+        "benchmark_unresolved_missing_date_count": len(benchmark_unresolved),
+        "target_missing_unit_count": target_units,
+        "resolved_missing_unit_count": resolved_units,
+        "unresolved_missing_unit_count": unresolved_units,
+        "remediation_coverage_rate": round(resolved_units / target_units, 3) if target_units else 1.0,
+    }
+
+
+def _minute_gate_missing_pair_count(gate: dict[str, Any]) -> int:
+    if gate.get("missing_pair_count") is not None:
+        return max(0, int(gate.get("missing_pair_count") or 0))
+    candidate_count = gate.get("candidate_count")
+    ready_count = gate.get("minute_ready_candidate_count")
+    if candidate_count is not None and ready_count is not None:
+        return max(0, int(candidate_count or 0) - int(ready_count or 0))
+    return len(gate.get("missing_pairs") or [])
+
+
+def _minute_gate_missing_pair_keys(gate: dict[str, Any]) -> set[tuple[str, str]]:
+    keys: set[tuple[str, str]] = set()
+    for item in gate.get("missing_pairs") or []:
+        if not isinstance(item, dict):
+            continue
+        trade_date = str(item.get("trade_date") or "").strip()
+        code = str(item.get("code") or "").strip()
+        if trade_date and code:
+            keys.add((trade_date, code))
+    return keys
+
+
+def _minute_gate_benchmark_missing_dates(gate: dict[str, Any]) -> set[str]:
+    return {str(item) for item in gate.get("benchmark_missing_dates") or [] if str(item or "").strip()}
 
 
 def _load_daily_window(
@@ -324,6 +551,163 @@ def _load_daily_basic_map(
     return mapping
 
 
+def _evaluate_preflight_minute_gate(
+    *,
+    db: Session,
+    signal_dates: list[str],
+    date_lookup: list[str],
+    daily_by_date: dict[str, dict[str, DailyKbar]],
+    history_by_code: dict[str, list[DailyKbar]],
+    stock_meta: dict[str, dict[str, Any]],
+    daily_basic_cache: dict[str, dict[str, dict[str, float]]],
+    minute_cache: dict[tuple[str, str], list[dict[str, Any]]],
+    benchmark_cache: dict[str, dict[str, Any]],
+    minute_source_trace: list[dict[str, Any]],
+) -> dict[str, Any]:
+    benchmark_required_dates = sorted(_benchmark_required_dates(signal_dates, date_lookup))
+    benchmark_bundle = _load_benchmark_bundle(db, benchmark_cache, signal_dates, date_lookup, minute_source_trace)
+    benchmark_by_date = _group_minutes_by_date(benchmark_bundle)
+    benchmark_missing_dates = [
+        trade_date for trade_date in benchmark_required_dates
+        if not benchmark_by_date.get(trade_date)
+    ]
+
+    total_candidates = 0
+    minute_ready_candidates = 0
+    per_date_missing_codes: dict[str, list[str]] = {}
+    date_summaries: list[dict[str, Any]] = []
+    missing_pairs: list[dict[str, str]] = []
+
+    for trade_date in signal_dates:
+        basic_map = _load_daily_basic_map(trade_date, daily_basic_cache)
+        filter_trace: dict[str, int] = {}
+        candidates = _daily_candidates(
+            trade_date=trade_date,
+            daily_rows=daily_by_date.get(trade_date, {}),
+            history_by_code=history_by_code,
+            stock_meta=stock_meta,
+            daily_basic_map=basic_map,
+            filter_trace=filter_trace,
+            variant=BASELINE_VARIANT,
+        )
+        total_candidates += len(candidates)
+        missing_codes: list[str] = []
+        missing_count = 0
+        for candidate in candidates:
+            code = candidate["code"]
+            minutes = _load_stock_minutes(db, minute_cache, code, trade_date, minute_source_trace)
+            if minutes:
+                minute_ready_candidates += 1
+                continue
+            missing_count += 1
+            if len(missing_codes) < 8:
+                missing_codes.append(code)
+            if len(missing_pairs) < 50:
+                missing_pairs.append({"trade_date": trade_date, "code": code})
+        if missing_codes:
+            per_date_missing_codes[trade_date] = missing_codes
+        date_summaries.append(
+            {
+                "trade_date": trade_date,
+                "status": "precheck",
+                "candidate_count": len(candidates),
+                "minute_ready_candidate_count": max(0, len(candidates) - missing_count),
+                "minute_missing_candidate_count": missing_count,
+                "benchmark_minute_covered": bool(benchmark_by_date.get(trade_date)),
+                "missing_minute_codes": missing_codes,
+                "filter_trace": filter_trace,
+            }
+        )
+
+    coverage_rate = round(minute_ready_candidates / total_candidates, 3) if total_candidates else 0.0
+    benchmark_coverage_rate = round(
+        (len(benchmark_required_dates) - len(benchmark_missing_dates)) / len(benchmark_required_dates),
+        3,
+    ) if benchmark_required_dates else 0.0
+
+    reasons: list[str] = []
+    if benchmark_missing_dates:
+        reasons.append(f"基准指数分钟线缺失 {len(benchmark_missing_dates)} 个必要交易日。")
+    if total_candidates and coverage_rate < MINUTE_GATE_MIN_COVERAGE_RATE:
+        reasons.append(
+            f"候选池分钟线覆盖率仅 {coverage_rate:.1%}，低于 {MINUTE_GATE_MIN_COVERAGE_RATE:.0%} 门槛。"
+        )
+    if total_candidates and minute_ready_candidates < MINUTE_GATE_MIN_READY_CANDIDATES:
+        reasons.append(
+            f"分钟线可验证候选仅 {minute_ready_candidates} 笔，低于 {MINUTE_GATE_MIN_READY_CANDIDATES} 笔最低样本要求。"
+        )
+    if total_candidates == 0:
+        reasons.append("日线预筛后没有候选池，无法形成分钟线门禁判断。")
+
+    passed = total_candidates > 0 and not reasons
+    notes = [
+        f"先验扫描到 {total_candidates} 个候选，分钟线就绪 {minute_ready_candidates} 个，覆盖率 {coverage_rate:.1%}。",
+        f"基准分钟线必要日期 {len(benchmark_required_dates)} 个，已覆盖 {len(benchmark_required_dates) - len(benchmark_missing_dates)} 个，覆盖率 {benchmark_coverage_rate:.1%}。",
+    ]
+    if missing_pairs:
+        notes.append(
+            "样例缺口: " + ", ".join(f"{item['trade_date']} {item['code']}" for item in missing_pairs[:6])
+        )
+
+    return {
+        "passed": passed,
+        "reason": "分钟线覆盖满足先验门禁。" if passed else "；".join(reasons),
+        "coverage_rate": coverage_rate,
+        "benchmark_coverage_rate": benchmark_coverage_rate,
+        "candidate_count": total_candidates,
+        "minute_ready_candidate_count": minute_ready_candidates,
+        "missing_pair_count": max(0, total_candidates - minute_ready_candidates),
+        "missing_pair_sample_count": len(missing_pairs),
+        "benchmark_required_dates": benchmark_required_dates,
+        "benchmark_missing_dates": benchmark_missing_dates,
+        "missing_pairs": missing_pairs,
+        "missing_codes_by_date": per_date_missing_codes,
+        "date_summaries": date_summaries,
+        "notes": notes,
+    }
+
+
+def _execute_minute_gap_remediation(
+    db: Session,
+    gate: dict[str, Any],
+) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    missing_pairs = gate.get("missing_pairs") or []
+    if missing_pairs:
+        by_date: dict[str, list[str]] = defaultdict(list)
+        for item in missing_pairs:
+            trade_date = str(item.get("trade_date") or "")
+            code = str(item.get("code") or "")
+            if trade_date and code and code not in by_date[trade_date]:
+                by_date[trade_date].append(code)
+        for trade_date, codes in by_date.items():
+            fetched = _backfill_stock_minutes_for_date(db, codes, trade_date)
+            actions.append(
+                {
+                    "scope": "stock",
+                    "trade_date": trade_date,
+                    "requested_code_count": len(codes),
+                    "row_count": fetched,
+                    "status": "completed" if fetched else "empty",
+                }
+            )
+
+    benchmark_missing_dates = sorted(set(gate.get("benchmark_missing_dates") or []))
+    if benchmark_missing_dates:
+        fetched = _backfill_benchmark_minutes(db, benchmark_missing_dates)
+        actions.append(
+            {
+                "scope": "benchmark",
+                "trade_date_start": benchmark_missing_dates[0],
+                "trade_date_end": benchmark_missing_dates[-1],
+                "requested_date_count": len(benchmark_missing_dates),
+                "row_count": fetched,
+                "status": "completed" if fetched else "empty",
+            }
+        )
+    return actions
+
+
 def _simulate_variant(
     *,
     db: Session,
@@ -356,6 +740,7 @@ def _simulate_variant(
             stock_meta=stock_meta,
             daily_basic_map=basic_map,
             filter_trace=filter_trace,
+            variant=variant,
         )
         if not candidates:
             date_summaries.append(
@@ -374,6 +759,7 @@ def _simulate_variant(
         signals: list[dict[str, Any]] = []
         minute_ready_candidate_count = 0
         missing_minute_codes: list[str] = []
+        condition_failures: dict[str, int] = {}
         benchmark_minutes = benchmark_by_date.get(trade_date) or []
         for candidate in candidates:
             code = candidate["code"]
@@ -383,14 +769,30 @@ def _simulate_variant(
                     missing_minute_codes.append(code)
                 continue
             minute_ready_candidate_count += 1
+            condition_failures["_candidates_scanned"] = condition_failures.get("_candidates_scanned", 0) + 1
             signal = _locate_entry_signal(
                 candidate=candidate,
                 minutes=minutes,
                 benchmark_minutes=benchmark_minutes,
                 variant=variant,
+                condition_failures=condition_failures,
             )
             if signal is not None:
                 signals.append(signal)
+
+        if condition_failures:
+            total_bars = condition_failures.pop("_bars_checked", 0)
+            scanned = condition_failures.pop("_candidates_scanned", 0)
+            sigs = condition_failures.pop("_signals_found", 0)
+            sorted_fails = sorted(
+                [(k, v) for k, v in condition_failures.items()],
+                key=lambda x: -x[1],
+            )
+            logger.info(
+                "diag variant=%s date=%s candidates_scanned=%d bars_checked=%d signals=%d fail_rank=%s",
+                variant.name, trade_date, scanned, total_bars, sigs,
+                dict(sorted_fails),
+            )
 
         resolved_trades: list[dict[str, Any]] = []
         unresolved_count = 0
@@ -462,6 +864,7 @@ def _daily_candidates(
     stock_meta: dict[str, dict[str, Any]],
     daily_basic_map: dict[str, dict[str, float]],
     filter_trace: dict[str, int] | None = None,
+    variant: OvernightVariant | None = None,
 ) -> list[dict[str, Any]]:
     if filter_trace is None:
         filter_trace = {}
@@ -476,6 +879,9 @@ def _daily_candidates(
     trace.setdefault("filtered_avg_volume", 0)
     trace.setdefault("passed_candidates", 0)
 
+    _min_pct = variant.min_pct if variant is not None else MIN_PCT
+    _max_pct = variant.max_pct if variant is not None else MAX_PCT
+
     result: list[dict[str, Any]] = []
     for code, bar in daily_rows.items():
         meta = stock_meta.get(code) or {}
@@ -483,7 +889,7 @@ def _daily_candidates(
             trace["filtered_main_board"] += 1
             continue
         pct = _num(bar.pct_chg)
-        if pct < MIN_PCT or pct > MAX_PCT:
+        if pct < _min_pct or pct > _max_pct:
             trace["filtered_pct_range"] += 1
             continue
         basic = daily_basic_map.get(code)
@@ -550,6 +956,7 @@ def _locate_entry_signal(
     minutes: list[dict[str, Any]],
     benchmark_minutes: list[dict[str, Any]],
     variant: OvernightVariant,
+    condition_failures: dict[str, int] | None = None,
 ) -> dict[str, Any] | None:
     if not minutes or not benchmark_minutes:
         return None
@@ -603,17 +1010,30 @@ def _locate_entry_signal(
         hold_ok = low_price >= vwap * (1 - VWAP_HOLD_TOLERANCE_BPS / 10000.0)
         tail_vwap_gap_bps = ((low_price / vwap) - 1.0) * 10000.0 if vwap > 0 else 0.0
         retest_ok = tail_vwap_gap_bps <= TAIL_VWAP_MAX_GAP_BPS
-        if intraday_pct < MIN_PCT or intraday_pct > MAX_PCT:
+        if condition_failures is not None:
+            condition_failures["_bars_checked"] = condition_failures.get("_bars_checked", 0) + 1
+        if intraday_pct < variant.min_pct or intraday_pct > variant.max_pct:
+            if condition_failures is not None: condition_failures["pct_out_of_range"] = condition_failures.get("pct_out_of_range", 0) + 1
             continue
         if intraday_volume_ratio < MIN_INTRADAY_VOLUME_RATIO:
+            if condition_failures is not None: condition_failures["volume_ratio_too_low"] = condition_failures.get("volume_ratio_too_low", 0) + 1
             continue
         if relative_strength < variant.min_relative_strength_pct:
+            if condition_failures is not None: condition_failures["relative_strength_too_low"] = condition_failures.get("relative_strength_too_low", 0) + 1
             continue
         if above_vwap_ratio < DEFAULT_MIN_ABOVE_VWAP_RATIO:
+            if condition_failures is not None and idx >= tail_start_index:
+                condition_failures["above_vwap_ratio_too_low"] = condition_failures.get("above_vwap_ratio_too_low", 0) + 1
             continue
         if not hold_ok or not retest_ok or close_price < vwap:
+            if condition_failures is not None and idx >= tail_start_index:
+                if not hold_ok: condition_failures["hold_ok_failed"] = condition_failures.get("hold_ok_failed", 0) + 1
+                if not retest_ok: condition_failures["retest_ok_failed"] = condition_failures.get("retest_ok_failed", 0) + 1
+                if close_price < vwap: condition_failures["close_below_vwap"] = condition_failures.get("close_below_vwap", 0) + 1
             continue
 
+        if condition_failures is not None:
+            condition_failures["_signals_found"] = condition_failures.get("_signals_found", 0) + 1
         return {
             "code": candidate["code"],
             "name": candidate["name"],
@@ -1125,13 +1545,52 @@ def _persist_minute_rows(db: Session, rows: list[dict[str, Any]]) -> None:
     db.commit()
 
 
-def _persist_backtest_run(db: Session, start_date: str, end_date: str, result: dict[str, Any]) -> None:
+def _backfill_stock_minutes_for_date(
+    db: Session,
+    codes: list[str],
+    trade_date: str,
+) -> int:
+    total_rows = 0
+    for code in codes:
+        rows = fetch_minute_kbars(code, trade_date=trade_date) or []
+        rows = [row for row in rows if _normalize_trade_date(row.get("trade_date")) == trade_date]
+        if not rows:
+            continue
+        _persist_minute_rows(db, rows)
+        total_rows += len(rows)
+    return total_rows
+
+
+def _backfill_benchmark_minutes(db: Session, required_dates: list[str]) -> int:
+    if not required_dates:
+        return 0
+    start_date = min(required_dates)
+    end_date = max(required_dates)
+    rows = fetch_index_minute_kbars(BENCHMARK_CODE, start_date, end_date) or []
+    rows = [
+        row for row in rows
+        if _normalize_trade_date(row.get("trade_date")) in set(required_dates)
+    ]
+    if not rows:
+        return 0
+    _persist_minute_rows(db, rows)
+    return len(rows)
+
+
+def _persist_backtest_run(
+    db: Session,
+    start_date: str,
+    end_date: str,
+    result: dict[str, Any],
+    *,
+    status: str = "completed",
+) -> None:
     row = BacktestRun(
         backtest_id=f"bt_{STRATEGY_ID}_{uuid.uuid4().hex[:10]}",
         skill_id=STRATEGY_ID,
         date_from=start_date,
         date_to=end_date,
-        status="completed",
+        status=status,
         result_json=json.dumps(result, ensure_ascii=False),
     )
     db.add(row)
@@ -1139,27 +1598,60 @@ def _persist_backtest_run(db: Session, start_date: str, end_date: str, result: d
 
 
 def _local_minute_inventory(db: Session) -> dict[str, Any]:
-    # 优先用 15min 数据统计覆盖范围
-    row = None
-    for freq in _MINUTE_FREQ_PRIORITY:
-        row = db.execute(
+    try:
+        raw_start_date, raw_end_date, trade_date_count = db.execute(
             select(
                 func.min(MinuteKbar.trade_date),
                 func.max(MinuteKbar.trade_date),
                 func.count(func.distinct(MinuteKbar.trade_date)),
-                func.count(func.distinct(MinuteKbar.code)),
-            ).where(MinuteKbar.freq == freq)
+            )
         ).one()
-        if row and row[3] and row[3] > 0:
-            break
-    if row is None:
-        return {"trade_date_start": "", "trade_date_end": "", "trade_date_count": 0, "code_count": 0}
-    start_date, end_date, trade_date_count, code_count = row
+        start_date = _normalize_trade_date(raw_start_date)
+        end_date = _normalize_trade_date(raw_end_date)
+        if not start_date or not end_date:
+            return _empty_minute_inventory()
+
+        latest_raw_trade_dates = sorted({end_date, end_date.replace("-", "")})
+        code_count = 0
+        latest_code_bucket = (
+            select(MinuteKbar.code)
+            .where(MinuteKbar.trade_date.in_(latest_raw_trade_dates))
+            .group_by(MinuteKbar.code)
+            .subquery()
+        )
+        code_count = db.scalar(select(func.count()).select_from(latest_code_bucket)) or 0
+
+        return {
+            "trade_date_start": start_date,
+            "trade_date_end": end_date,
+            "trade_date_count": int(trade_date_count or 0),
+            "code_count": int(code_count or 0),
+            "code_count_scope": "latest_trade_date",
+            "trade_date_count_scope": "db_raw_trade_dates_indexed",
+            "inventory_status": "ok",
+        }
+    except Exception as exc:
+        logger.warning("local minute inventory unavailable: %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return {
+            **_empty_minute_inventory(),
+            "inventory_status": "unavailable",
+            "inventory_error": type(exc).__name__,
+        }
+
+
+def _empty_minute_inventory() -> dict[str, Any]:
     return {
-        "trade_date_start": str(start_date or ""),
-        "trade_date_end": str(end_date or ""),
-        "trade_date_count": int(trade_date_count or 0),
-        "code_count": int(code_count or 0),
+        "trade_date_start": "",
+        "trade_date_end": "",
+        "trade_date_count": 0,
+        "code_count": 0,
+        "code_count_scope": "latest_trade_date",
+        "trade_date_count_scope": "db_raw_trade_dates_indexed",
+        "inventory_status": "empty",
     }
 
 

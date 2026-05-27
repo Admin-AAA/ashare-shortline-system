@@ -13,6 +13,8 @@
   --warning: #f4b85e;
   --positive: #3ddc97;
   --negative: #ff6b6b;
+  --market-up: #ff6b6b;
+  --market-down: #3ddc97;
   --blue: #60a5fa;
   --shadow-panel: 0 18px 60px rgba(0, 0, 0, 0.24);
 }
@@ -32,6 +34,8 @@
   --warning: #a66b00;
   --positive: #087f5b;
   --negative: #c93636;
+  --market-up: #c93636;
+  --market-down: #087f5b;
   --blue: #2563eb;
   --shadow-panel: 0 10px 32px rgba(25, 43, 56, 0.08);
 }

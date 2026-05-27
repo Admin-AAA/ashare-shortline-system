@@ -110,7 +110,7 @@ def test_run_overnight_holding_backtest_computes_accuracy(monkeypatch, db):
     )
     monkeypatch.setattr(
         "app.services.overnight_holding_service._persist_backtest_run",
-        lambda db, start_date, end_date, result: None,
+        lambda db, start_date, end_date, result, status="completed": None,
     )
 
     result = run_overnight_holding_backtest(db, "2026-05-19", "2026-05-21")
@@ -120,7 +120,7 @@ def test_run_overnight_holding_backtest_computes_accuracy(monkeypatch, db):
     assert result["aggregate_metrics"]["trade_count"] == 3
     assert result["aggregate_metrics"]["recommendation_accuracy"] == pytest.approx(0.667, abs=0.001)
     assert result["aggregate_metrics"]["average_net_return"] != 0
-    assert result["comparison"]["selected_variant"] in {"baseline", "candidate"}
+    assert result["comparison"]["selected_variant"] in {"baseline", "candidate", "relaxed_pct"}
     assert len(result["false_positive_samples"]) == 1
 
 

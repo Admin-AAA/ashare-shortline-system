@@ -86,7 +86,17 @@ def load_dragon_tiger_map(db: Session, start_date: str, end_date: str) -> dict[s
 
 
 def main() -> None:
+    import argparse
     import os
+
+    parser = argparse.ArgumentParser(description="陈小群龙头战法回测")
+    parser.add_argument("--mode", choices=["single", "rolling"], default="single", help="回测模式")
+    parser.add_argument("--train-days", type=int, default=30, help="滚动窗口预热天数")
+    parser.add_argument("--test-days", type=int, default=20, help="滚动窗口评测天数")
+    parser.add_argument("--step", type=int, default=10, help="滚动窗口滑动步长")
+    parser.add_argument("--start-date", default=START_DATE, help="回测起始日期")
+    parser.add_argument("--end-date", default=END_DATE, help="回测结束日期")
+    args = parser.parse_args()
 
     from app.models.tables import DailyKbar
 
@@ -94,7 +104,17 @@ def main() -> None:
     engine = create_engine(db_url, connect_args={"charset": "utf8mb4"}, pool_pre_ping=True)
 
     with Session(engine) as db:
-        _run_backtest(db)
+        if args.mode == "single":
+            _run_backtest(db)
+        elif args.mode == "rolling":
+            rolling_window_backtest(
+                db,
+                train_days=args.train_days,
+                test_days=args.test_days,
+                step=args.step,
+                start_date=args.start_date,
+                end_date=args.end_date,
+            )
 
     engine.dispose()
 
@@ -118,6 +138,7 @@ def _run_backtest_with_params(
     initial_capital: float = INITIAL_CAPITAL,
     buy_cost_ratio: float = BUY_COST_RATIO,
     sell_cost_ratio: float = SELL_COST_RATIO,
+    quiet: bool = False,
 ) -> dict[str, Any]:
     """参数化回测（供网格扫描调用）。"""
     from app.db.session import Base
@@ -355,6 +376,9 @@ def _run_backtest_with_params(
         portfolio_values.append(balance / initial_capital)
 
     # ── 4. 计算指标 ──
+    if quiet:
+        metrics = _compute_metrics(trades, portfolio_values, initial_capital)
+        return (metrics, trades, portfolio_values, trade_dates)
     return _output_results(trades, cycle_distribution, stop_loss_stats, trade_dates, portfolio_values, initial_capital)
 
 
@@ -630,12 +654,20 @@ def _output_results(
     portfolio_values: list[float],
     initial_capital: float,
 ) -> dict[str, Any]:
-    """输出回测结果。"""
+    """输出回测结果（兼容旧调用）。"""
+    metrics = _compute_metrics(trades, portfolio_values, initial_capital)
+    _print_results(trades, metrics, cycle_distribution, stop_loss_stats, trade_dates, portfolio_values, initial_capital)
+    return metrics
+
+
+def _compute_metrics(
+    trades: list[dict[str, Any]],
+    portfolio_values: list[float],
+    initial_capital: float,
+) -> dict[str, Any]:
+    """计算回测指标（不打印）。"""
     total_trades = len(trades)
     if total_trades == 0:
-        print("\n========== 陈小群龙头战法回测结果 ==========")
-        print("  无交易产生")
-        print("  情绪周期分布:", dict(cycle_distribution))
         return {
             "total_trades": 0,
             "accuracy": 0.0,
@@ -646,26 +678,15 @@ def _output_results(
             "cumulative_return": 0.0,
             "open_filter_before": _open_filter_stats.get("before", 0),
             "open_filter_after": _open_filter_stats.get("after", 0),
+            "sample_confidence": "low",
         }
 
     from app.services.evaluation_metrics import compute_full_metrics
 
-    metrics = compute_full_metrics(trades)
+    full = compute_full_metrics(trades)
     accurate_count = sum(1 for t in trades if t.get("accurate", False))
     accuracy = accurate_count / total_trades * 100
 
-    # 按情绪周期拆分
-    by_cycle: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for t in trades:
-        by_cycle[t.get("cycle", "未知")].append(t)
-
-    # 按止损类型统计
-    total_stop_triggers = sum(1 for t in trades if not t.get("accurate", False))
-    stop_loss_triggered = sum(1 for t in trades if "止损" in t.get("exit_reason", "")
-                              or "跌" in t.get("exit_reason", "")
-                              or "放量" in t.get("exit_reason", ""))
-
-    # 从净值序列计算组合级指标
     cumulative_return = (portfolio_values[-1] - 1) * 100.0 if portfolio_values else 0.0
 
     peak = 1.0
@@ -676,6 +697,41 @@ def _output_results(
         if peak > 0:
             dd = (peak - v) / peak * 100.0
             max_dd = max(max_dd, dd)
+
+    return {
+        "total_trades": total_trades,
+        "accuracy": accuracy,
+        "average_net_return": full.get("average_net_return", 0),
+        "median_net_return": full.get("median_net_return", 0),
+        "profit_loss_ratio": full.get("profit_loss_ratio", 0),
+        "max_dd": max_dd,
+        "cumulative_return": cumulative_return,
+        "open_filter_before": _open_filter_stats.get("before", 0),
+        "open_filter_after": _open_filter_stats.get("after", 0),
+        "sample_confidence": full.get("sample_confidence", "low"),
+    }
+
+
+def _print_results(
+    trades: list[dict[str, Any]],
+    metrics: dict[str, Any],
+    cycle_distribution: dict[str, int],
+    stop_loss_stats: dict[str, int],
+    trade_dates: list[str],
+    portfolio_values: list[float],
+    initial_capital: float,
+) -> None:
+    """打印回测结果。"""
+    total_trades = len(trades)
+    if total_trades == 0:
+        print("\n========== 陈小群龙头战法回测结果 ==========")
+        print("  无交易产生")
+        print("  情绪周期分布:", dict(cycle_distribution))
+        return
+
+    accuracy = metrics["accuracy"]
+    cumulative_return = metrics["cumulative_return"]
+    max_dd = metrics["max_dd"]
 
     print("\n========== 陈小群龙头战法回测结果 ==========")
     print(f"  回测区间: {trade_dates[0]} ~ {trade_dates[-1]}")
@@ -694,6 +750,10 @@ def _output_results(
     for phase, count in sorted(cycle_distribution.items()):
         pct = count / max(1, len(trade_dates)) * 100
         print(f"  {phase}: {count} 天 ({pct:.1f}%)")
+
+    by_cycle: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for t in trades:
+        by_cycle[t.get("cycle", "未知")].append(t)
 
     print("\n--- 分周期表现 ---")
     for phase in ["启动", "发酵", "高潮", "退潮"]:
@@ -715,18 +775,6 @@ def _output_results(
     for t in trades[-10:]:
         print(f"  {t['entry_date']} {t['code']} {t.get('name','')}: 持仓{t['holding_days']}天 "
               f"收益{t['net_return_pct']:.2f}% {'✓' if t['accurate'] else '✗'} [{t.get('exit_reason','')}]")
-
-    return {
-        "total_trades": total_trades,
-        "accuracy": accuracy,
-        "average_net_return": metrics.get("average_net_return", 0),
-        "median_net_return": metrics.get("median_net_return", 0),
-        "profit_loss_ratio": metrics.get("profit_loss_ratio", 0),
-        "max_dd": max_dd,
-        "cumulative_return": cumulative_return,
-        "open_filter_before": _open_filter_stats.get("before", 0),
-        "open_filter_after": _open_filter_stats.get("after", 0),
-    }
 
 
 def _next_trade_date(trade_dates: list[str], current_idx: int) -> str | None:
@@ -759,6 +807,218 @@ def _max_limit_up_consecutive_for_date(db: Session, trade_date: str) -> int:
         select(func.max(LimitUpBoard.limit_times))
         .where(LimitUpBoard.trade_date == trade_date, LimitUpBoard.limit_type == "U")
     ) or 0
+
+
+def rolling_window_backtest(
+    db: Session,
+    *,
+    train_days: int = 30,
+    test_days: int = 20,
+    step: int = 10,
+    start_date: str = START_DATE,
+    end_date: str = END_DATE,
+    **kwargs: Any,
+) -> None:
+    """滚动窗口验证，评估策略在不同时间段的稳定性。
+
+    每个窗口包含 train_days 天预热 + test_days 天评测，
+    只使用评测期间的回测指标进行汇总，对抗过拟合。
+
+    Args:
+        train_days: 预热天数（不计入评估）
+        test_days: 评估天数
+        step: 窗口滑动步长
+        start_date: 全量区间起始
+        end_date: 全量区间结束
+        **kwargs: 传递给 _run_backtest_with_params 的固定参数
+    """
+    from app.models.tables import DailyKbar
+
+    # 获取全量交易日历
+    all_dates = list(
+        db.scalars(
+            select(DailyKbar.trade_date)
+            .distinct()
+            .where(DailyKbar.trade_date >= start_date, DailyKbar.trade_date <= end_date)
+            .order_by(DailyKbar.trade_date.asc())
+        ).all()
+    )
+    str_dates = [str(d) for d in all_dates]
+    total_days = len(str_dates)
+
+    if total_days < train_days + test_days:
+        logger.error("全量交易日(%d)不足 train_days(%d)+test_days(%d)=%d",
+                     total_days, train_days, test_days, train_days + test_days)
+        return
+
+    logger.info("滚动窗口验证: %s ~ %s, %d个交易日, train=%d, test=%d, step=%d",
+                str_dates[0], str_dates[-1], total_days, train_days, test_days, step)
+
+    rows: list[dict[str, Any]] = []
+    max_start = total_days - train_days - test_days
+
+    for i in range(0, max_start + 1, step):
+        win_start = str_dates[i]
+        win_end = str_dates[i + train_days + test_days - 1]
+        eval_start = str_dates[i + train_days]
+        eval_end = str_dates[i + train_days + test_days - 1]
+        win_num = i // step + 1
+
+        result = _run_backtest_with_params(
+            db,
+            start_date=win_start,
+            end_date=win_end,
+            quiet=True,
+            **kwargs,
+        )
+
+        if result is None:
+            continue
+        metrics, all_trades, portfolio_values, w_trade_dates = result
+
+        # 筛选评测区间内的交易
+        eval_trades = [t for t in all_trades if eval_start <= t["entry_date"] <= eval_end]
+        n_eval_trades = len(eval_trades)
+
+        # 从净值序列中截取评测区间
+        # portfolio_values[0]=1.0, portfolio_values[train_days]=预热结束净值
+        if len(portfolio_values) > train_days:
+            eval_pv = portfolio_values[train_days:]
+        else:
+            eval_pv = [1.0]
+
+        # 累计收益（相对评测期起点）
+        eval_cum_ret = (eval_pv[-1] / eval_pv[0] - 1) * 100.0 if eval_pv[0] > 0 else 0.0
+
+        # 评测期最大回撤
+        peak = eval_pv[0]
+        eval_max_dd = 0.0
+        for v in eval_pv:
+            if v > peak:
+                peak = v
+            if peak > 0:
+                dd = (peak - v) / peak * 100.0
+                eval_max_dd = max(eval_max_dd, dd)
+
+        # 交易级指标
+        if n_eval_trades > 0:
+            eval_win_rate = sum(1 for t in eval_trades if t.get("accurate", False)) / n_eval_trades * 100
+            eval_avg_ret = sum(t.get("net_return_pct", 0) for t in eval_trades) / n_eval_trades
+
+            wins = [t for t in eval_trades if t.get("net_return_pct", 0) > 0]
+            losses = [t for t in eval_trades if t.get("net_return_pct", 0) <= 0]
+            avg_win = sum(t["net_return_pct"] for t in wins) / len(wins) if wins else 0
+            avg_loss = abs(sum(t["net_return_pct"] for t in losses) / len(losses)) if losses else 1
+            pl_ratio = avg_win / avg_loss if avg_loss > 0 else 0.0
+        else:
+            eval_win_rate = 0.0
+            eval_avg_ret = 0.0
+            pl_ratio = 0.0
+
+        row = {
+            "win": win_num,
+            "eval_start": eval_start,
+            "eval_end": eval_end,
+            "trades": n_eval_trades,
+            "win_rate": eval_win_rate,
+            "avg_ret": eval_avg_ret,
+            "cum_ret": eval_cum_ret,
+            "max_dd": eval_max_dd,
+            "pl_ratio": pl_ratio,
+        }
+        rows.append(row)
+
+        logger.info("窗口 %2d: %s~%s  %3d笔 胜率%5.1f%% 累计%6.2f%%",
+                    win_num, eval_start[5:], eval_end[5:], n_eval_trades, eval_win_rate, eval_cum_ret)
+
+    if not rows:
+        logger.warning("滚动窗口验证：无有效窗口")
+        return
+
+    _print_rolling_summary(rows, start_date, end_date, total_days, train_days, test_days, step)
+
+
+def _print_rolling_summary(
+    rows: list[dict[str, Any]],
+    start_date: str,
+    end_date: str,
+    total_days: int,
+    train_days: int,
+    test_days: int,
+    step: int,
+) -> None:
+    """打印滚动窗口验证汇总表。"""
+    import statistics
+
+    print("\n" + "=" * 95)
+    print("  滚动窗口验证结果")
+    print("=" * 95)
+    print(f"  全量区间: {start_date} ~ {end_date} ({total_days}个交易日)")
+    print(f"  窗口配置: train={train_days}, test={test_days}, step={step}")
+    print(f"  有效窗口: {len(rows)}")
+    print()
+
+    # 表头
+    fields = [
+        ("窗口", 4, ">4"),
+        ("评测区间", 22, "<22"),
+        ("交易数", 6, ">5"),
+        ("胜率", 7, ">6"),
+        ("平均收益", 9, ">8"),
+        ("累计收益", 9, ">8"),
+        ("最大回撤", 9, ">8"),
+        ("盈亏比", 7, ">6"),
+    ]
+    header_parts = []
+    for name, width, align in fields:
+        header_parts.append(f"{name:{align}}")
+    header = " | ".join(header_parts)
+    sep = "-" * 95
+    print(header)
+    print(sep)
+
+    for r in rows:
+        print(
+            f" {r['win']:>4} | "
+            f"{r['eval_start'][5:]}~{r['eval_end'][5:]:<15} | "
+            f"{r['trades']:>5} | "
+            f"{r['win_rate']:>5.1f}% | "
+            f"{r['avg_ret']:>7.2f}% | "
+            f"{r['cum_ret']:>7.2f}% | "
+            f"{r['max_dd']:>7.2f}% | "
+            f"{r['pl_ratio']:>5.2f}"
+        )
+
+    # 汇总统计
+    print()
+    stats_label = f"  汇总统计 {'-' * 76}"
+    print(stats_label)
+
+    keys_meta = [
+        ("trades", "交易数", ">5", ".1f", "{}"),
+        ("win_rate", "胜率", ">6", ".1f", "{}%"),
+        ("avg_ret", "平均收益", ">8", ".2f", "{}%"),
+        ("cum_ret", "累计收益", ">8", ".2f", "{}%"),
+        ("max_dd", "最大回撤", ">8", ".2f", "{}%"),
+        ("pl_ratio", "盈亏比", ">6", ".2f", "{}"),
+    ]
+
+    # 缺省值：当只有 1 个窗口时不计算标准差
+    has_multiple = len(rows) > 1
+
+    for label, fn in [
+        ("平均值", statistics.mean),
+        ("标准差", statistics.stdev if has_multiple else lambda xs: 0.0),
+        ("最小值", min),
+        ("最大值", max),
+    ]:
+        parts = [f" {label:>4} | {'':22} | "]
+        for key, _, width, fmt, template in keys_meta:
+            val = fn([r[key] for r in rows])
+            parts.append(f"{template.format(f'{val:{fmt}}'):{width}}")
+        print(" | ".join(parts).rstrip())
+
+    print("=" * 95)
 
 
 if __name__ == "__main__":

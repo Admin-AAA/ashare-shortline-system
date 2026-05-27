@@ -166,11 +166,17 @@ def list_scheduled_tasks(db: Session) -> list[dict[str, Any]]:
     ]
 
 
-def list_scheduled_task_runs(db: Session, limit: int = 100) -> list[dict[str, Any]]:
+def list_scheduled_task_runs(
+    db: Session,
+    limit: int = 100,
+    *,
+    task_id: str | None = None,
+) -> list[dict[str, Any]]:
+    stmt = select(ScheduledTaskRun)
+    if task_id:
+        stmt = stmt.where(ScheduledTaskRun.task_id == task_id)
     runs = db.scalars(
-        select(ScheduledTaskRun)
-        .order_by(ScheduledTaskRun.started_at.desc())
-        .limit(limit)
+        stmt.order_by(ScheduledTaskRun.started_at.desc()).limit(limit)
     ).all()
     return [_serialize_task_run(run) for run in runs]
 
@@ -266,31 +272,41 @@ def record_task_run(
     task_id: str,
     status: str,
     error: str | None = None,
+    *,
+    summary: str | None = None,
+    trigger_source: str = "api",
+    result: dict[str, Any] | None = None,
+    task_name: str | None = None,
+    task_type: str | None = None,
+    payload: dict[str, Any] | None = None,
 ) -> None:
     """兼容旧调用：直接补记一条已结束的自动任务执行历史。"""
     task = db.get(ScheduledTask, task_id)
-    if not task:
+    if not task and not (task_name and task_type):
         return
     started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    payload_json = json.dumps(payload or {}, ensure_ascii=False)
     db.add(
         ScheduledTaskRun(
             task_run_id=f"taskrun_{uuid.uuid4().hex[:24]}",
-            task_id=task.task_id,
-            task_name=task.name,
-            task_type=task.task_type,
-            trigger_source="api",
+            task_id=task.task_id if task else task_id,
+            task_name=task.name if task else str(task_name or task_id),
+            task_type=task.task_type if task else str(task_type or "data_backfill"),
+            trigger_source=trigger_source,
             started_at=started_at,
             finished_at=started_at,
             status=status,
+            summary=summary,
             error_message=error,
-            payload_json=task.payload_json or "{}",
-            result_json="{}",
+            payload_json=task.payload_json if task else payload_json,
+            result_json=json.dumps(result or {}, ensure_ascii=False),
         )
     )
-    task.last_run_at = started_at
-    task.last_status = status
-    task.last_error = error
-    task.updated_at = started_at
+    if task is not None:
+        task.last_run_at = started_at
+        task.last_status = status
+        task.last_error = error
+        task.updated_at = started_at
     db.commit()
 
 
@@ -378,6 +394,35 @@ def _serialize_task_run(run: ScheduledTaskRun) -> dict[str, Any]:
 def _task_run_summary_text(run: ScheduledTaskRun, result: dict[str, Any]) -> str:
     if run.summary:
         return run.summary
+
+    remediation_type = str(result.get("remediation_type") or "").strip() if isinstance(result, dict) else ""
+    if remediation_type == "data_health":
+        comparison = result.get("comparison") if isinstance(result, dict) else None
+        actions = result.get("actions") if isinstance(result, dict) else None
+        if isinstance(comparison, dict):
+            issue_delta = int(comparison.get("issue_count_delta") or 0)
+            score_delta = float(comparison.get("score_delta") or 0)
+            action_count = len(actions) if isinstance(actions, list) else 0
+            score_prefix = f"{score_delta:+.0f}" if float(score_delta).is_integer() else f"{score_delta:+.1f}"
+            return f"数据补数 {action_count} 项，问题数 {issue_delta:+d}，评分 {score_prefix}"
+        return "数据健康补数"
+
+    if remediation_type == "minute_gap":
+        comparison = result.get("comparison") if isinstance(result, dict) else None
+        actions = result.get("actions") if isinstance(result, dict) else None
+        if isinstance(comparison, dict):
+            cand_delta = float(comparison.get("candidate_coverage_rate_delta") or 0)
+            bench_delta = float(comparison.get("benchmark_coverage_rate_delta") or 0)
+            remediation_rate = float(comparison.get("remediation_coverage_rate") or 0)
+            unresolved = int(comparison.get("unresolved_missing_unit_count") or 0)
+            gate_after = "通过" if comparison.get("gate_passed_after") else "未通过"
+            action_count = len(actions) if isinstance(actions, list) else 0
+            return (
+                f"分钟补数 {action_count} 步，候选覆盖 {cand_delta:+.1%}，"
+                f"基准覆盖 {bench_delta:+.1%}，修复率 {remediation_rate:.1%}，"
+                f"仍缺 {unresolved}，门禁{gate_after}"
+            )
+        return "分钟缺口补数"
 
     if run.task_type == "recommendation_run":
         parts: list[str] = []

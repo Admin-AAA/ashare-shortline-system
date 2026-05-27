@@ -24,8 +24,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("backfill_limit_up")
 
 BATCH_SIZE = 500
-START_DATE = "20240101"
-END_DATE = "20260322"
+START_DATE = "2024-01-01"
+END_DATE = "2026-03-22"
 
 DB_URL = "mysql+pymysql://aowang:1279990918@139.196.242.53:4407/ashare_workbench?charset=utf8mb4"
 

@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.tables import Recommendation, RecommendationOutcome
-from app.services.outcome_service import normalized_outcome_label
+from app.services.outcome_service import is_accurate_recommendation
 
 
 DEFAULT_AGG_WEIGHTS = {
@@ -91,7 +91,7 @@ def _load_labeled_samples(db: Session) -> list[dict[str, Any]]:
             "code": rec.code,
             "trade_date": rec.trade_date,
             "component_scores": component_scores,
-            "label": 1 if normalized_outcome_label(outcome) == "success" else 0,
+            "label": 1 if is_accurate_recommendation(outcome) else 0,
             "close_return": float(outcome.executed_return if outcome.executed_return is not None else (outcome.close_return or 0)),
         })
     return samples
@@ -391,7 +391,7 @@ def calibrate_dsa_weights(db: Session) -> dict[str, Any]:
                 dsa_data[key].append(float(snapshot[key]))
                 has_dsa = True
         if has_dsa:
-            labels.append(1 if normalized_outcome_label(outcome) == "success" else 0)
+            labels.append(1 if is_accurate_recommendation(outcome) else 0)
         else:
             for key in DSA_SCORE_KEYS:
                 if dsa_data[key]:

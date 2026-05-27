@@ -2,15 +2,20 @@ import type {
   HomeBootstrap,
   HomeInitialState,
   MetricsOverview,
+  MinutePrepResult,
   Preset,
   PrecisionAtKRow,
   PresetStatsRow,
+  DataHealthDiagnostic,
+  DataHealthRemediationResult,
   RecommendationCard,
   RecommendationDetail,
   RecommendationOutcome,
-  DataSourceHealthRow,
-  ModelRoute,
-  LocalPoolStatus,
+  ReplayAnalysisResult,
+    DataSourceHealthRow,
+    ModelRoute,
+    ModelRouteTestResult,
+    LocalPoolStatus,
   PoolRefreshResult,
   RunDetail,
   RunFunnelAudit,
@@ -136,6 +141,7 @@ export const api = {
   createRun: (payload: Record<string, unknown>) => requestWithTimeout<RunResult>("/api/runs", 300_000, json("POST", payload)),
 
   recommendationDetail: (id: string) => request<RecommendationDetail>(`/api/recommendations/${id}`),
+  replayAnalysis: (runId: string) => request<ReplayAnalysisResult>(`/api/recommendations/runs/${runId}/replay-analysis`),
   watchRecommendation: (id: string, payload: { watch_status?: string; note?: string | null }) =>
     request<{ recommendation_id: string; watch_status: string; note?: string | null }>(`/api/recommendations/${id}/watch`, json("POST", payload)),
   ignoreRecommendation: (id: string, payload?: { note?: string | null }) =>
@@ -170,6 +176,8 @@ export const api = {
   modelRoutes: () => request<ModelRoute[]>("/api/admin/model-routes", undefined, { timeoutMs: 12_000 }),
   createModelRoute: (payload: Record<string, unknown>) =>
     request<ModelRoute>("/api/admin/model-routes", json("POST", payload)),
+  testModelRoute: (payload: Record<string, unknown>) =>
+    request<ModelRouteTestResult>("/api/admin/model-routes/test", json("POST", payload), { timeoutMs: 35_000 }),
   updateModelRoute: (routeId: string, payload: Record<string, unknown>) =>
     request<ModelRoute>(`/api/admin/model-routes/${routeId}`, json("PATCH", payload)),
   deleteModelRoute: (routeId: string) =>
@@ -178,8 +186,12 @@ export const api = {
     request<ModelRoute[]>("/api/admin/model-routes/reorder", json("POST", { route_ids: routeIds })),
 
   scheduledTasks: () => request<ScheduledTask[]>("/api/admin/tasks", undefined, { timeoutMs: 12_000 }),
-  scheduledTaskRuns: (limit = 100) =>
-    request<ScheduledTaskRun[]>(`/api/admin/task-runs?limit=${limit}`, undefined, { timeoutMs: 12_000 }),
+  scheduledTaskRuns: (limit = 100, taskId?: string) =>
+    request<ScheduledTaskRun[]>(
+      `/api/admin/task-runs?limit=${limit}${taskId ? `&task_id=${encodeURIComponent(taskId)}` : ""}`,
+      undefined,
+      { timeoutMs: 12_000 },
+    ),
   createScheduledTask: (payload: ScheduledTaskPayload) =>
     request<ScheduledTask>("/api/admin/tasks", json("POST", payload)),
   updateScheduledTask: (taskId: string, payload: ScheduledTaskPayload) =>
@@ -201,9 +213,15 @@ export const api = {
   deleteRecommendation: (id: string) => request<{ deleted: string }>(`/api/recommendations/${id}`, json("DELETE")),
   deletePreset: (id: string) => request<{ deleted: string }>(`/api/presets/${id}`, json("DELETE")),
 
-  metricsOverview: (mode: "formal" | "experiment") => request<MetricsOverview>(`/api/metrics/overview?mode=${mode}`),
-  dataHealth: () => request<Record<string, unknown>>("/api/admin/data-health"),
+  metricsOverview: (mode: "formal" | "experiment") => request<MetricsOverview>(`/api/metrics/overview?mode=${mode}`, undefined, { timeoutMs: 30_000 }),
+  dataHealth: () => request<DataHealthDiagnostic>("/api/admin/data-health"),
+  remediateDataHealth: (payload?: { target_tables?: string[]; dry_run?: boolean; capital_flow_code_limit?: number }) =>
+    request<DataHealthRemediationResult>("/api/admin/data-health/remediate", json("POST", payload ?? {}), { timeoutMs: 120_000 }),
   temporalConsistency: (runMode?: string) => request<Record<string, unknown>>(`/api/admin/temporal-consistency${runMode ? `?run_mode=${runMode}` : ""}`),
+  previewMinuteGate: (payload: { start_date: string; end_date: string; strategy_id: string }) =>
+    request<MinutePrepResult>("/api/runs/backtest", json("POST", { ...payload, action: "preview_minute_gate" }), { timeoutMs: 120_000 }),
+  remediateMinuteGaps: (payload: { start_date: string; end_date: string; strategy_id: string }) =>
+    request<MinutePrepResult>("/api/runs/backtest", json("POST", { ...payload, action: "remediate_minute_gaps" }), { timeoutMs: 120_000 }),
   statsOverview: (mode: "formal" | "experiment") => request<StatsOverview>(`/api/stats/overview?mode=${mode}`),
   statsBySkill: (mode: "formal" | "experiment") => request<SkillStatsRow[]>(`/api/stats/by-skill?mode=${mode}`),
   statsByPreset: (mode: "formal" | "experiment") => request<PresetStatsRow[]>(`/api/stats/by-preset?mode=${mode}`),

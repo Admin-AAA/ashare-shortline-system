@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -116,6 +117,111 @@ class TestComputeFullMetrics:
         assert len(fp_notes) == 1
         assert fp_notes[0]["reason"] == "开盘走弱"
         assert fp_notes[0]["count"] == 5
+        assert fp_notes[0]["category"] == "weak_followthrough"
+        assert result["false_positive_category_counts"][0]["category"] == "weak_followthrough"
+
+    def test_unexecuted_recommendations_count_in_accuracy_denominator(self):
+        trades = [
+            {
+                "net_return_pct": 3.0,
+                "gross_return_pct": 3.2,
+                "accurate": True,
+                "executed": True,
+                "trade_date": "2026-05-20",
+                "code": "000001",
+                "name": "赢家",
+                "resolved": True,
+            },
+            {
+                "net_return_pct": -1.0,
+                "gross_return_pct": -0.8,
+                "accurate": False,
+                "executed": True,
+                "trade_date": "2026-05-21",
+                "code": "000002",
+                "name": "亏损",
+                "false_positive_reason": "成本后净收益不为正",
+                "resolved": True,
+            },
+            {
+                "net_return_pct": 0.0,
+                "gross_return_pct": 1.5,
+                "accurate": False,
+                "executed": False,
+                "trade_date": "2026-05-22",
+                "code": "000003",
+                "name": "未成交",
+                "false_positive_reason": "未触发买点或不可真实成交",
+                "resolved": True,
+            },
+        ]
+
+        result = compute_full_metrics(trades)
+
+        assert result["trade_count"] == 3
+        assert result["triggered_count"] == 2
+        assert result["unexecuted_count"] == 1
+        assert result["recommendation_accuracy"] == pytest.approx(1 / 3, abs=0.001)
+        assert result["trade_accuracy"] == pytest.approx(0.5, abs=0.001)
+        assert result["trigger_rate"] == pytest.approx(2 / 3, abs=0.001)
+        assert result["accuracy_numerator"] == 1
+        assert result["accuracy_denominator"] == 3
+        assert result["false_positive_notes"][0]["count"] == 1
+        assert {item["category"] for item in result["false_positive_category_counts"]} >= {
+            "cost_drag",
+            "entry_not_triggered",
+        }
+
+    def test_positive_return_does_not_count_when_signal_was_not_true_at_time(self):
+        trades = [
+            {
+                "net_return_pct": 2.4,
+                "gross_return_pct": 2.6,
+                "accurate": True,
+                "executed": True,
+                "signal_valid": False,
+                "trade_date": "2026-05-20",
+                "code": "000001",
+                "name": "信号失真",
+                "resolved": True,
+            },
+            {
+                "net_return_pct": 1.1,
+                "gross_return_pct": 1.2,
+                "accurate": True,
+                "executed": True,
+                "signal_valid": True,
+                "trade_date": "2026-05-21",
+                "code": "000002",
+                "name": "真实信号",
+                "resolved": True,
+            },
+        ]
+
+        result = compute_full_metrics(trades)
+
+        assert result["accuracy_numerator"] == 1
+        assert result["accuracy_denominator"] == 2
+        assert result["recommendation_accuracy"] == 0.5
+        assert result["false_positive_notes"][0]["reason"] == "信号当时真实不成立"
+        assert result["false_positive_notes"][0]["category"] == "signal_invalid"
+        assert result["false_positive_notes"][0]["category_label"] == "信号当时不成立"
+
+    def test_metrics_sort_trades_by_trade_date_before_drawdown(self):
+        trades = [
+            {"trade_date": "2026-01-02", "code": "000002", "net_return_pct": -20.0, "benchmark_return_pct": 0, "accurate": False, "resolved": True},
+            {"trade_date": "2026-01-01", "code": "000001", "net_return_pct": 30.0, "benchmark_return_pct": 0, "accurate": True, "resolved": True},
+            {"trade_date": "2026-01-04", "code": "000004", "net_return_pct": 15.0, "benchmark_return_pct": 0, "accurate": True, "resolved": True},
+            {"trade_date": "2026-01-03", "code": "000003", "net_return_pct": -20.0, "benchmark_return_pct": 0, "accurate": False, "resolved": True},
+        ]
+        chronological = sorted(trades, key=lambda item: item["trade_date"])
+
+        shuffled_metrics = compute_full_metrics(trades)
+        chronological_metrics = compute_full_metrics(chronological)
+
+        assert shuffled_metrics["max_drawdown"] == -36.0
+        assert shuffled_metrics["max_drawdown"] == chronological_metrics["max_drawdown"]
+        assert shuffled_metrics["recommendation_accuracy"] == chronological_metrics["recommendation_accuracy"]
 
     def test_30_trades_is_normal_confidence(self):
         """trade_count >= 30 → normal confidence。"""
@@ -200,12 +306,21 @@ class TestHelperFunctions:
         assert len(notes) == 2
         assert notes[0]["reason"] == "开盘走弱"
         assert notes[0]["count"] == 2
+        assert notes[0]["category"] == "weak_followthrough"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 测试 3: 从 ORM → TradeRecord 转换 + persistence
 # ═════════════════════════════════════════════════════════════════════════════
 
+@pytest.mark.skipif(
+    not (
+        (os.environ.get("ASHARE_TEST_DATABASE_URL") or os.environ.get("ASHARE_DATABASE_URL") or "")
+        .strip()
+        .startswith("mysql")
+    ),
+    reason="需要 MySQL 测试库连接",
+)
 class TestBackendIntegration:
     """需要数据库（test env 中的 MySQL 测试库）。"""
 

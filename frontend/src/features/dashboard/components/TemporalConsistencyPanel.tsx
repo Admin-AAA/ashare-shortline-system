@@ -91,26 +91,33 @@ export default function TemporalConsistencyPanel() {
                     <small>点击展开</small>
                   </summary>
                   <div className="fp-list">
-                    {violations.slice(0, 30).map((v, i) => (
-                      <div
-                        key={i}
-                        className="fp-item"
-                        style={{
-                          borderColor: v.severity === "error"
-                            ? "color-mix(in srgb, var(--danger) 42%, var(--line))"
-                            : undefined
-                        }}
-                      >
-                        <strong style={{
-                          color: v.severity === "error" ? "var(--danger)" : "var(--warning)"
-                        }}>
-                          {v.severity === "error" ? "🔴" : "🟡"} {v.check as string}
-                        </strong>
-                        <span>{v.message as string}</span>
-                        {v.code && <span>股票: {v.code as string}</span>}
-                        {v.trade_date && <span>日期: {v.trade_date as string}</span>}
-                      </div>
-                    ))}
+                    {violations.slice(0, 30).map((v, i) => {
+                      const severity = String(v.severity || "");
+                      const check = String(v.check || "");
+                      const message = String(v.message || "");
+                      const code = v.code ? String(v.code) : "";
+                      const tradeDate = v.trade_date ? String(v.trade_date) : "";
+                      return (
+                        <div
+                          key={i}
+                          className="fp-item"
+                          style={{
+                            borderColor: severity === "error"
+                              ? "color-mix(in srgb, var(--danger) 42%, var(--line))"
+                              : undefined
+                          }}
+                        >
+                          <strong style={{
+                            color: severity === "error" ? "var(--danger)" : "var(--warning)"
+                          }}>
+                            {severity === "error" ? "🔴" : "🟡"} {check}
+                          </strong>
+                          <span>{message}</span>
+                          {code && <span>股票: {code}</span>}
+                          {tradeDate && <span>日期: {tradeDate}</span>}
+                        </div>
+                      );
+                    })}
                   </div>
                 </details>
               )}

@@ -17,7 +17,7 @@ from app.models.tables import (
     SkillRegistry,
     WatchItem,
 )
-from app.services.outcome_service import is_trade_executed, resolved_trade_return
+from app.services.outcome_service import is_accurate_recommendation, is_trade_executed, resolved_trade_return
 from app.services.outcome_service import is_outcome_labeled, normalized_outcome_label
 
 import logging
@@ -79,9 +79,9 @@ def _get_overview_stats(db: Session, mode: str) -> dict[str, Any]:
 
     labeled = [row for row in outcome_rows if is_outcome_labeled(row)]
     triggered = [row for row in labeled if is_trade_executed(row)]
-    success_count = sum(1 for row in outcome_rows if normalized_outcome_label(row) == "success")
-    failed_count = sum(1 for row in outcome_rows if normalized_outcome_label(row) == "failed")
-    missed_count = sum(1 for row in outcome_rows if normalized_outcome_label(row) == "missed")
+    success_count = sum(1 for row in labeled if is_accurate_recommendation(row))
+    failed_count = sum(1 for row in triggered if not is_accurate_recommendation(row))
+    missed_count = max(0, len(labeled) - len(triggered))
     reviewed_count = _reviewed_count(db, rec_ids)
     watched_count = _watched_count(db, run_ids)
 
@@ -205,7 +205,7 @@ def _get_skill_stats(db: Session, mode: str) -> list[dict[str, Any]]:
                 if is_trade_executed(outcome):
                     row["triggered_count"] += 1
                     row["avg_return"] += resolved_trade_return(outcome)
-                    if normalized_outcome_label(outcome) == "success":
+                    if is_accurate_recommendation(outcome):
                         row["success_count"] += 1
 
     t5 = time.perf_counter()
@@ -316,7 +316,7 @@ def _get_preset_stats(db: Session, mode: str) -> list[dict[str, Any]]:
                 if is_trade_executed(outcome):
                     row["triggered_count"] += 1
                     row["avg_return"] += resolved_trade_return(outcome)
-                    if normalized_outcome_label(outcome) == "success":
+                    if is_accurate_recommendation(outcome):
                         row["success_count"] += 1
 
     result: list[dict[str, Any]] = []

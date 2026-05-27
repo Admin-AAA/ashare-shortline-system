@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Play, TrendingUp } from "lucide-react";
 import { api } from "../../../api/client";
 import type { MetricsOverview } from "../../../types";
+import { aShareDirectionClass, businessStatusLabel } from "../../../utils/display";
 
 type BacktestResult = {
   status: string;
@@ -28,6 +29,13 @@ type ComparisonResult = {
     selected_variant: string;
     selected_variant_label?: string;
     adoption_reason: string;
+    decision_scope?: string;
+    decision_scope_label?: string;
+    guardrail_notes?: string[];
+    decision_metrics?: {
+      baseline?: Record<string, unknown>;
+      candidate?: Record<string, unknown>;
+    };
   };
 };
 
@@ -100,7 +108,7 @@ export default function BacktestEvaluationPanel() {
 
       {result && result.status !== "completed" && (
         <div className="bt-error" style={{ marginTop: 12 }}>
-          回测未完成: {result.status}
+          回测未完成: {businessStatusLabel(result.status)}
         </div>
       )}
     </section>
@@ -124,6 +132,18 @@ function ComparisonResultView({ result }: { result: ComparisonResult }) {
         <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
           {result.comparison.adoption_reason}
         </div>
+        {result.comparison.decision_scope_label ? (
+          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+            决策作用域: {result.comparison.decision_scope_label}
+          </div>
+        ) : null}
+        {result.comparison.guardrail_notes?.length ? (
+          <ul style={{ margin: "6px 0 0 16px", color: "var(--muted)", fontSize: 12 }}>
+            {result.comparison.guardrail_notes.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        ) : null}
       </div>
 
       {/* 双版本对比 */}
@@ -164,11 +184,12 @@ function VariantSide({
       ) : (
         <>
           <div className="bt-metrics-grid" style={{ marginTop: 8 }}>
-            <MetricCell label="准确率" value={`${(metrics.recommendation_accuracy * 100).toFixed(1)}%`} />
-            <MetricCell label="平均收益" value={`${metrics.average_net_return.toFixed(2)}%`} positive={metrics.average_net_return >= 0} />
+            <MetricCell label="推荐准确率" value={`${(metrics.recommendation_accuracy * 100).toFixed(1)}%`} />
+            <MetricCell label="成交后胜率" value={`${(Number(metrics.trade_accuracy ?? metrics.hit_rate ?? 0) * 100).toFixed(1)}%`} />
+            <MetricCell label="平均收益" value={`${metrics.average_net_return.toFixed(2)}%`} valueClass={aShareDirectionClass(metrics.average_net_return)} />
             <MetricCell label="盈亏比" value={metrics.profit_loss_ratio.toFixed(2)} positive={metrics.profit_loss_ratio >= 1.5} />
             <MetricCell label="最大回撤" value={`${metrics.max_drawdown.toFixed(2)}%`} positive={metrics.max_drawdown >= -10} />
-            <MetricCell label="超额收益" value={`${metrics.benchmark_excess_return.toFixed(2)}%`} positive={metrics.benchmark_excess_return >= 0} />
+            <MetricCell label="超额收益" value={`${metrics.benchmark_excess_return.toFixed(2)}%`} valueClass={aShareDirectionClass(metrics.benchmark_excess_return)} />
             <MetricCell label="持仓" value={`${metrics.avg_holding_days.toFixed(1)}天`} />
           </div>
 
@@ -178,8 +199,8 @@ function VariantSide({
               <summary>样本外验证 (walk-forward, {wf.window_count} 窗口)</summary>
               <div className="eval-detail-content">
                 <div className="eval-score-grid">
-                  <ScoreCell label="测试集准确率" value={`${(Number(wf.test_aggregate.recommendation_accuracy ?? 0) * 100).toFixed(1)}%`} />
-                  <ScoreCell label="测试集收益" value={`${Number(wf.test_aggregate.average_net_return ?? 0).toFixed(2)}%`} />
+                  <ScoreCell label="测试推荐准确率" value={`${(Number(wf.test_aggregate.recommendation_accuracy ?? 0) * 100).toFixed(1)}%`} />
+                  <ScoreCell label="测试集收益" value={`${Number(wf.test_aggregate.average_net_return ?? 0).toFixed(2)}%`} valueClass={aShareDirectionClass(wf.test_aggregate.average_net_return)} />
                   <ScoreCell label="测试集回撤" value={`${Number(wf.test_aggregate.max_drawdown ?? 0).toFixed(2)}%`} />
                   <ScoreCell label="测试集盈亏比" value={Number(wf.test_aggregate.profit_loss_ratio ?? 0).toFixed(2)} />
                   <ScoreCell label="测试笔数" value={String(wf.test_aggregate.trade_count ?? 0)} />
@@ -194,10 +215,10 @@ function VariantSide({
               <summary>时间切分验证 (train/test split)</summary>
               <div className="eval-detail-content">
                 <div className="eval-score-grid">
-                  <ScoreCell label="训练准确率" value={`${(Number(ts.train_metrics.recommendation_accuracy ?? 0) * 100).toFixed(1)}%`} />
-                  <ScoreCell label="测试准确率" value={`${(Number(ts.test_metrics.recommendation_accuracy ?? 0) * 100).toFixed(1)}%`} />
-                  <ScoreCell label="训练收益" value={`${Number(ts.train_metrics.average_net_return ?? 0).toFixed(2)}%`} />
-                  <ScoreCell label="测试收益" value={`${Number(ts.test_metrics.average_net_return ?? 0).toFixed(2)}%`} />
+                  <ScoreCell label="训练推荐准确率" value={`${(Number(ts.train_metrics.recommendation_accuracy ?? 0) * 100).toFixed(1)}%`} />
+                  <ScoreCell label="测试推荐准确率" value={`${(Number(ts.test_metrics.recommendation_accuracy ?? 0) * 100).toFixed(1)}%`} />
+                  <ScoreCell label="训练收益" value={`${Number(ts.train_metrics.average_net_return ?? 0).toFixed(2)}%`} valueClass={aShareDirectionClass(ts.train_metrics.average_net_return)} />
+                  <ScoreCell label="测试收益" value={`${Number(ts.test_metrics.average_net_return ?? 0).toFixed(2)}%`} valueClass={aShareDirectionClass(ts.test_metrics.average_net_return)} />
                 </div>
               </div>
             </details>
@@ -208,19 +229,19 @@ function VariantSide({
   );
 }
 
-function MetricCell({ label, value, positive }: { label: string; value: string; positive?: boolean }) {
+function MetricCell({ label, value, positive, valueClass }: { label: string; value: string; positive?: boolean; valueClass?: string }) {
   return (
     <div className="bt-metric-card">
       <span>{label}</span>
-      <strong className={positive === undefined ? "" : positive ? "positive" : "negative"}>{value}</strong>
+      <strong className={valueClass ?? (positive === undefined ? "" : positive ? "positive" : "negative")}>{value}</strong>
     </div>
   );
 }
 
-function ScoreCell({ label, value }: { label: string; value: string }) {
+function ScoreCell({ label, value, valueClass }: { label: string; value: string; valueClass?: string }) {
   return (
     <div className="eval-score-cell">
-      <strong>{value}</strong>
+      <strong className={valueClass}>{value}</strong>
       <span>{label}</span>
     </div>
   );

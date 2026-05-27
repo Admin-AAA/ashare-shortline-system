@@ -81,7 +81,7 @@ class TestDetectEmotionCycle:
         assert result == EmotionCycle.CLIMAX
 
     def test_ferment(self):
-        """发酵：涨停 >= 5 且 晋级率 > 18% 且 梯队完整。"""
+        """发酵：涨停 >= 8 且 晋级率 > 18% 且 梯队完整。"""
         db = _make_mock_db()
         # _count_limit_up → 8, _count_limit_down → 3 (lub) / 2 (kbar), _max_height → 4,
         # promotion yesterday_limit_up → 8, tier_2_count → 10, tier_3_count → 5
@@ -119,8 +119,8 @@ class TestGetPositionPct:
     def test_startup_15pct(self):
         assert get_position_pct(EmotionCycle.STARTUP) == 0.15
 
-    def test_ferment_40pct(self):
-        assert get_position_pct(EmotionCycle.FERMENT) == 0.40
+    def test_ferment_pct(self):
+        assert get_position_pct(EmotionCycle.FERMENT) == 0.15
 
     def test_climax_60pct(self):
         assert get_position_pct(EmotionCycle.CLIMAX) == 0.60

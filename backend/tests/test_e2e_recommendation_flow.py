@@ -603,8 +603,10 @@ class TestE2ERecommendationFlow:
             outcome = RecommendationOutcome(
                 recommendation_id=f"rec_stats_{i:03d}",
                 horizon_days=5,
+                entry_triggered=True,
                 outcome_label="success" if i < 2 else "failed",
-                close_return=5.0 if i < 2 else -3.0,
+                executed_return=[5.0, -0.2, -3.0][i],
+                close_return=[5.0, 1.0, -3.0][i],
                 max_return=8.0 if i < 2 else 1.0,
                 min_return=-2.0 if i < 2 else -5.0,
                 label_source="manual",
@@ -618,12 +620,12 @@ class TestE2ERecommendationFlow:
         assert stats is not None
         assert stats["run_count"] == 1
         assert stats["recommendation_count"] == 3
-        assert stats["success_count"] == 2
-        assert stats["failed_count"] == 1
+        assert stats["success_count"] == 1
+        assert stats["failed_count"] == 2
         assert stats["pending_count"] == 0
         assert stats["success_count"] + stats["failed_count"] + stats["pending_count"] == stats["recommendation_count"]
-        # hit_rate = success / (success + failed) = 2/3 ≈ 0.667
-        assert abs(stats["hit_rate"] - 0.667) < 0.01
+        # hit_rate 使用严格准确口径：真实成交且扣费滑点后净收益 > 0。
+        assert abs(stats["hit_rate"] - 0.333) < 0.01
 
     def test_metrics_helpers_respect_mode_and_thresholds(self, db):
         suffix = uuid.uuid4().hex[:8]
@@ -738,10 +740,10 @@ class TestE2ERecommendationFlow:
             db.flush()
 
             outcomes = [
-                RecommendationOutcome(recommendation_id=rec_ids[0], outcome_label="success", entry_triggered=True, label_source="manual"),
-                RecommendationOutcome(recommendation_id=rec_ids[1], outcome_label="failed", entry_triggered=True, label_source="manual"),
-                RecommendationOutcome(recommendation_id=rec_ids[2], outcome_label="missed", entry_triggered=False, label_source="manual"),
-                RecommendationOutcome(recommendation_id=rec_ids[3], outcome_label="success", entry_triggered=True, label_source="manual"),
+                RecommendationOutcome(recommendation_id=rec_ids[0], outcome_label="success", entry_triggered=True, executed_return=2.0, label_source="manual"),
+                RecommendationOutcome(recommendation_id=rec_ids[1], outcome_label="success", entry_triggered=True, executed_return=-0.2, label_source="manual"),
+                RecommendationOutcome(recommendation_id=rec_ids[2], outcome_label="missed", entry_triggered=False, executed_return=0.0, label_source="manual"),
+                RecommendationOutcome(recommendation_id=rec_ids[3], outcome_label="success", entry_triggered=True, executed_return=1.0, label_source="manual"),
             ]
             db.add_all(outcomes)
             db.flush()
@@ -821,6 +823,105 @@ class TestE2ERecommendationFlow:
         expected_keys = set(DEFAULT_AGG_WEIGHTS.keys())
         actual_keys = set(cs.keys())
         assert actual_keys == expected_keys, f"Component keys mismatch: {actual_keys} != {expected_keys}"
+
+    def test_recommendation_detail_builds_replay_summary(self, db):
+        run = RecommendationRun(
+            run_id=f"run_replay_{uuid.uuid4().hex[:6]}",
+            run_name="复盘详情测试",
+            run_mode="formal",
+            trade_date="2026-05-12",
+            universe_count=10,
+            market_scope="all",
+            risk_template="balanced",
+            output_count=3,
+            selected_skills_json="[]",
+            params_json="{}",
+            market_snapshot_json="{}",
+            status="completed",
+            recommended_count=1,
+            result_summary_json="{}",
+            finished_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        )
+        db.add(run)
+        db.flush()
+
+        rec = Recommendation(
+            recommendation_id="rec_replay_001",
+            run_id=run.run_id,
+            trade_date="2026-05-12",
+            code="600519",
+            name="贵州茅台",
+            bucket="容量核心",
+            final_score=82.0,
+            recommend_price=100.0,
+            entry_rule="回踩不破 5 日线",
+            setup_type="趋势突破",
+            status="failed",
+            skill_breakdown_json="[]",
+            feature_snapshot_json=json.dumps(
+                {
+                    "market_regime": "active",
+                    "trend_status": "up",
+                    "volume_ratio_5d": 1.5,
+                    "score_line_meta": {
+                        "effective_score_line": 72.0,
+                        "reasons": ["市场加分 +2", "证据加分 +1"],
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            agent_summary_json="{}",
+        )
+        outcome = RecommendationOutcome(
+            recommendation_id="rec_replay_001",
+            horizon_days=5,
+            entry_triggered=True,
+            entry_date="2026-05-13",
+            entry_price=100.2,
+            exit_date="2026-05-16",
+            exit_price=97.8,
+            executed_return=-2.4,
+            close_return=-2.1,
+            weighted_return=-2.4,
+            holding_days=3,
+            exit_reason="stop_loss",
+            max_return=1.2,
+            min_return=-3.0,
+            max_drawdown=-3.4,
+            hit_target=False,
+            hit_invalid=True,
+            outcome_label="failed",
+            outcome_reason="次日承接不足，跌破止损",
+            label_source="auto",
+        )
+        review = ReviewNote(
+            note_id=f"note_replay_{uuid.uuid4().hex[:6]}",
+            recommendation_id="rec_replay_001",
+            user_label="false_positive",
+            failure_reason="竞价后承接转弱",
+            review_text="开盘后强转弱，不适合追。",
+        )
+        db.add_all([rec, outcome, review])
+        db.commit()
+
+        detail = get_recommendation_detail(db, "rec_replay_001")
+        replay = detail["replay_summary"]
+
+        assert replay["recommend_time"]
+        assert replay["symbol"] == "600519"
+        assert replay["name"] == "贵州茅台"
+        assert replay["entry_time"] == "2026-05-13"
+        assert replay["exit_time"] == "2026-05-16"
+        assert replay["entry_price"] == 100.2
+        assert replay["exit_price"] == 97.8
+        assert replay["net_return_pct"] == -2.4
+        assert replay["false_positive_reason"] == "竞价后承接转弱"
+        assert replay["review_failure_reason"] == "竞价后承接转弱"
+        assert replay["outcome_reason"] == "次日承接不足，跌破止损"
+        assert replay["trigger_conditions"][0] == "回踩不破 5 日线"
+        assert "趋势突破" in replay["trigger_conditions"]
+        assert replay["effective_score_line"] == 72.0
+        assert replay["signal_features"]["market_regime"] == "active"
 
     def test_trade_date_and_aux_cache_freshness_respect_trade_date_and_ttl(self, db):
         now = datetime.now(timezone.utc).replace(tzinfo=None)

@@ -1,0 +1,182 @@
+import type { DashboardOverview, DashboardDataHealth, RunProgress } from "../types";
+
+export type Tone = "positive" | "warning" | "danger" | "neutral";
+
+const STATUS_LABELS: Record<string, string> = {
+  READY: "本地池可推荐",
+  CHECK: "数据需检查",
+  unknown: "状态待确认",
+  idle: "暂无运行",
+  ready: "可运行",
+  warning: "可运行但置信度低",
+  risk: "存在风险，需复核",
+  blocked: "数据不足，暂停推荐",
+  completed: "已完成",
+  failed: "运行失败，可补数后重试",
+  error: "运行出错，可查看原因后重试",
+  cancelled: "已取消",
+  skipped: "已跳过",
+  precheck: "先验检查",
+  queued: "排队中",
+  running: "运行中",
+  interrupted: "已中断，可从断点继续",
+  stale: "疑似中断，建议恢复或重跑",
+  no_data: "暂无样本",
+  no_action: "无需处理",
+  already_ready: "已满足门禁",
+  partial_failed: "部分失败，可重试缺口",
+  healthy: "健康",
+  degraded: "降级可用",
+  untested: "未验证",
+  unavailable: "暂不可用",
+  permission_denied: "权限不足，已走备用源",
+  not_attempted: "未调用，已有本地数据",
+  local_minute_db: "本地分钟库",
+  local_minute_db_15min: "本地15分钟库",
+  local_minute_db_1min: "本地1分钟库",
+  empty: "暂无数据",
+  ok: "正常",
+  normal: "正常",
+  low: "低置信度",
+  high: "高风险",
+  medium: "中等风险",
+  formal: "正式",
+  experiment: "实验",
+  all: "全市场",
+  watchlist: "自选股",
+  industry: "行业",
+  conservative: "保守",
+  balanced: "均衡",
+  aggressive: "激进",
+  local_pool: "仅本地池",
+  local_pool_preferred: "本地池优先",
+  realtime: "实时数据",
+  data_sync: "数据同步",
+  pool_refresh: "行情池刷新",
+  data_backfill: "数据回填",
+  recommendation_run: "股票推荐",
+  manual: "手动触发",
+  schedule: "定时触发",
+  api: "接口写入",
+  prepare: "准备运行",
+  starting: "启动中",
+  market_data: "市场数据",
+  scope_filter: "范围过滤",
+  auxiliary_data: "辅助数据",
+  feature_build: "特征构建",
+  rule_scan: "规则扫描",
+  skill_gate: "规则门",
+  skill_review: "Skill 深审",
+  aggregate: "聚合",
+  persist: "保存结果",
+  aggregate_metrics: "聚合指标",
+  insufficient_minute_coverage: "分钟线不足，暂停回测",
+};
+
+export function businessStatusLabel(value: unknown, fallback = "状态待确认") {
+  const raw = String(value ?? "").trim();
+  if (!raw) return fallback;
+  return STATUS_LABELS[raw] ?? STATUS_LABELS[raw.toLowerCase()] ?? raw;
+}
+
+export function statusTone(value: unknown): Tone {
+  const key = String(value ?? "").trim().toLowerCase();
+  if (["ready", "completed", "healthy", "ok", "normal", "formal"].includes(key)) return "positive";
+  if (["failed", "error", "interrupted", "stale", "blocked", "unavailable", "high"].includes(key)) return "danger";
+  if (["warning", "risk", "queued", "running", "experiment", "manual", "schedule", "low", "degraded", "untested"].includes(key)) return "warning";
+  return "neutral";
+}
+
+export function readinessCopy(canRun: unknown, status?: unknown) {
+  const ready = String(canRun ?? false) === "true";
+  const rawStatus = String(status ?? "").trim().toLowerCase();
+  if (ready && rawStatus === "warning") {
+    return { value: "可运行", note: "可运行但置信度低，建议先看缺口样例" };
+  }
+  if (ready) {
+    return { value: "可运行", note: "本地池满足推荐前置条件" };
+  }
+  if (rawStatus === "blocked") {
+    return { value: "暂停推荐", note: "数据不足，先补齐日K/报价后再运行" };
+  }
+  return { value: "需检查", note: businessStatusLabel(status, "数据状态待确认") };
+}
+
+export function aShareDirectionClass(value: unknown) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n === 0) return "market-flat";
+  return n > 0 ? "market-up" : "market-down";
+}
+
+export function aShareUpClass() {
+  return "market-up";
+}
+
+export function aShareDownClass() {
+  return "market-down";
+}
+
+export function candidateEmptyState(data: DashboardOverview) {
+  const run = data.current_run;
+  const health = data.data_health;
+  if (data.recommendations.length > 0) {
+    return null;
+  }
+  if (run.status === "failed" || run.status === "interrupted" || run.heartbeat_stale) {
+    const failureDetail = run.message
+      ? `${run.message}。当前 0 只不能视为市场无机会。`
+      : "运行未完整结束，当前 0 只不能视为市场无机会。";
+    return {
+      title: "本次推荐没有可用候选",
+      reason: businessStatusLabel(run.status),
+      detail: failureDetail,
+    };
+  }
+  if (!health.can_run_local_recommendation || health.status === "blocked") {
+    return {
+      title: "数据不足，暂停推荐",
+      reason: readinessCopy(false, health.status).note,
+      detail: summarizeDataHealthGaps(health),
+    };
+  }
+  if (!run.run_id || run.status === "idle") {
+    return {
+      title: "还没有完成推荐运行",
+      reason: "当前没有可复盘的最新运行。",
+      detail: "先在控制中心触发一次推荐，系统会给出候选或筛空原因。",
+    };
+  }
+  if (run.status === "queued" || run.status === "running") {
+    return {
+      title: "推荐仍在运行",
+      reason: businessStatusLabel(run.status),
+      detail: run.message || "候选池还在生成，暂不能把 0 只解读成无机会。",
+    };
+  }
+  return {
+    title: "当前没有达标龙头候选",
+    reason: "数据可用且运行已结束，但候选没有通过强度、风险或共识门槛。",
+    detail: "这是一个有效的短线结论：今天先不强行出手，等待主线或承接更清晰。",
+  };
+}
+
+function summarizeDataHealthGaps(health: DashboardDataHealth) {
+  const missing = Number(health.missing_bar_count || 0);
+  const shortHistory = Number(health.short_history_count || 0);
+  const coverage = health.eligible_bar_coverage_pct ?? health.bar_coverage_pct;
+  const parts = [
+    missing > 0 ? `缺日K ${missing} 只` : "",
+    shortHistory > 0 ? `短历史 ${shortHistory} 只` : "",
+    coverage !== undefined && coverage !== null ? `合格日K覆盖 ${coverage}%` : "",
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "数据池未达到本地推荐门槛。";
+}
+
+export function runStatusCopy(run: RunProgress) {
+  if (!run.run_id) return { status: "暂无运行", phase: "等待触发" };
+  if (run.heartbeat_stale) return { status: "疑似中断", phase: "心跳过期，建议恢复或重跑" };
+  return {
+    status: businessStatusLabel(run.status),
+    phase: businessStatusLabel(run.phase || "idle"),
+  };
+}

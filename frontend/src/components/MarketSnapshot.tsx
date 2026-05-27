@@ -1,5 +1,6 @@
 import { memo } from "react";
 import type { MarketSnapshot } from "../types";
+import { businessStatusLabel } from "../utils/display";
 
 type Props = {
   snapshot: MarketSnapshot;
@@ -10,7 +11,7 @@ export default memo(function MarketSnapshotPanel({ snapshot }: Props) {
   return (
     <div className="market-snapshot-panel">
       <div className="market-snapshot-grid">
-        <MiniStatCell label="数据" value={String(breadth.data_source ?? "unknown")} />
+        <MiniStatCell label="数据" value={businessStatusLabel(breadth.data_source, "状态待确认")} />
         <MiniStatCell label="报价源" value={String(breadth.quote_source ?? "-")} />
         <MiniStatCell label="上涨" value={snapshot.up_count} />
         <MiniStatCell label="下跌" value={snapshot.down_count} />

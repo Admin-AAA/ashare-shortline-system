@@ -221,14 +221,326 @@ export type RunProgress = {
   resumable: boolean;
 };
 
+export type DashboardDataHealth = {
+  status: string;
+  can_run_local_recommendation: boolean;
+  quote_total: number;
+  active_quote_count: number;
+  eligible_quote_count: number;
+  bar_coverage_pct: number;
+  eligible_bar_coverage_pct: number;
+  missing_bar_count: number;
+  stale_bar_count: number;
+  short_history_count: number;
+  messages: string[];
+  examples: DashboardDataHealthExample[];
+};
+
+export type DashboardDataHealthExample =
+  | string
+  | {
+      code?: string | null;
+      name?: string | null;
+      reason?: string | null;
+      bar_count?: number | null;
+      latest_bar_date?: string | null;
+      quote_date?: string | null;
+    };
+
+export type TaskHealthSummary = {
+  enabled_count?: number;
+  running_count: number;
+  failed_count: number;
+  last_errors?: string[];
+};
+
+export type QualityScorecardDimension = {
+  label: string;
+  score: number;
+  status: string;
+  highlights: string[];
+  metrics: Record<string, unknown>;
+};
+
+export type QualityScorecard = {
+  overall_score: number;
+  overall_status: string;
+  highlights: string[];
+  dimensions: Record<string, QualityScorecardDimension>;
+};
+
+export type ValidationSummary = {
+  last_status: string;
+  alerts: {
+    high?: number;
+    medium?: number;
+    low?: number;
+    messages?: string[];
+  };
+  quality_gate?: {
+    overall_score?: number;
+    overall_status?: string;
+    validation_score?: number;
+    validation_status?: string;
+    execution_score?: number;
+    execution_status?: string;
+    highlights?: string[];
+  };
+};
+
 export type DashboardOverview = {
   market: MarketTemperature;
   recommendations: CockpitRecommendation[];
   risk_radar: RiskRadar;
   current_run: RunProgress;
-  data_health: Record<string, unknown>;
-  task_health: Record<string, unknown>;
-  validation: Record<string, unknown>;
+  data_health: DashboardDataHealth;
+  task_health: TaskHealthSummary;
+  validation: ValidationSummary;
+  quality_scorecard: QualityScorecard;
+};
+
+export type DataHealthTableDiagnostic = {
+  label?: string;
+  table?: string;
+  total_rows?: number;
+  min_date?: string | null;
+  max_date?: string | null;
+  critical?: boolean;
+  error?: string | null;
+};
+
+export type RecentTradeCoverageTable = {
+  label?: string;
+  critical?: boolean;
+  covered_count?: number;
+  expected_count?: number;
+  coverage_rate?: number;
+  missing_dates?: string[];
+};
+
+export type DataHealthDiagnostic = {
+  score?: number;
+  reference_trade_date?: string | null;
+  reference_trade_date_source?: string | null;
+  reference_trade_date_note?: string | null;
+  tables?: Record<string, DataHealthTableDiagnostic>;
+  lag_days?: Record<string, number>;
+  issues?: Array<{ severity: string; message: string }>;
+  recommendation_summary?: {
+    total?: number;
+    by_run_id?: Record<string, number>;
+    latest_trade_date?: string | null;
+    labeled_count?: number;
+  };
+  recent_trade_day_coverage?: {
+    window?: number;
+    trade_days?: string[];
+    summary?: {
+      max_missing_days?: number;
+      high_impact_tables?: string[];
+      warning_tables?: string[];
+    };
+    tables?: Record<string, RecentTradeCoverageTable>;
+  };
+};
+
+export type DataHealthRemediationSnapshot = {
+  score?: number;
+  issue_count?: number;
+  recent_summary?: {
+    max_missing_days?: number;
+    high_impact_tables?: string[];
+    warning_tables?: string[];
+  };
+};
+
+export type DataHealthRemediationAction = {
+  table?: string;
+  scope?: string;
+  trade_date?: string;
+  trade_date_start?: string;
+  trade_date_end?: string;
+  status?: string;
+  row_count?: number;
+  requested_code_count?: number;
+  requested_date_count?: number;
+  error?: string;
+  error_type?: string;
+  rollback_hint?: string;
+};
+
+export type DataHealthRemediationOperationLog = {
+  table?: string;
+  status?: string;
+  target?: string;
+  row_count?: number;
+  rollback_hint?: string;
+  error?: string;
+  error_type?: string;
+};
+
+export type DataHealthRollbackGuidance = {
+  mode?: string;
+  message?: string;
+  keys?: string[];
+};
+
+export type DataHealthRemediationTableDelta = {
+  before_lag_days?: number | null;
+  after_lag_days?: number | null;
+  lag_days_delta?: number | null;
+  before_missing_days?: number;
+  after_missing_days?: number;
+  target_missing_day_count?: number;
+  resolved_missing_day_count?: number;
+  unresolved_missing_day_count?: number;
+  remediation_coverage_rate?: number;
+  before_missing_dates?: string[];
+  after_missing_dates?: string[];
+  resolved_missing_dates?: string[];
+  unresolved_missing_dates?: string[];
+};
+
+export type DataHealthRemediationResult = {
+  status: string;
+  before?: DataHealthRemediationSnapshot;
+  after?: DataHealthRemediationSnapshot;
+  actions?: DataHealthRemediationAction[];
+  operation_log?: DataHealthRemediationOperationLog[];
+  rollback_guidance?: DataHealthRollbackGuidance;
+  action_summary?: {
+    planned_count?: number;
+    completed_count?: number;
+    empty_count?: number;
+    skipped_count?: number;
+    failed_count?: number;
+  };
+  comparison?: {
+    issue_count_delta?: number;
+    score_delta?: number;
+    max_missing_days_delta?: number;
+    target_missing_day_count?: number;
+    resolved_missing_day_count?: number;
+    unresolved_missing_day_count?: number;
+    remediation_coverage_rate?: number;
+    tables_fully_remediated?: string[];
+    tables_still_missing?: string[];
+    table_deltas?: Record<string, DataHealthRemediationTableDelta>;
+  };
+  remaining_issues?: Array<{ severity: string; message: string }>;
+};
+
+export type MinuteGateDateSummary = {
+  trade_date: string;
+  status: string;
+  candidate_count?: number;
+  minute_ready_candidate_count?: number;
+  minute_missing_candidate_count?: number;
+  benchmark_minute_covered?: boolean;
+  missing_minute_codes?: string[];
+};
+
+export type MinuteGateSummary = {
+  passed: boolean;
+  reason: string;
+  coverage_rate?: number;
+  benchmark_coverage_rate?: number;
+  candidate_count?: number;
+  minute_ready_candidate_count?: number;
+  missing_pair_count?: number;
+  missing_pair_sample_count?: number;
+  benchmark_required_dates?: string[];
+  benchmark_missing_dates?: string[];
+  missing_pairs?: Array<{ trade_date: string; code: string }>;
+  missing_codes_by_date?: Record<string, string[]>;
+  date_summaries?: MinuteGateDateSummary[];
+  notes?: string[];
+};
+
+export type MinuteCoverageSummary = {
+  signal_date_count?: number;
+  candidate_count?: number;
+  minute_ready_candidate_count?: number;
+  minute_missing_candidate_count?: number;
+  candidate_minute_coverage_rate?: number;
+  benchmark_minute_covered_dates?: number;
+  benchmark_minute_coverage_rate?: number;
+  missing_minute_examples?: string[];
+  local_minute_inventory?: {
+    trade_date_start?: string;
+    trade_date_end?: string;
+    trade_date_count?: number;
+    code_count?: number;
+    code_count_scope?: string;
+    trade_date_count_scope?: string;
+    inventory_status?: string;
+    inventory_error?: string;
+  };
+  minute_source_diagnostics?: {
+    attempt_count?: number;
+    by_source?: Array<{
+      source: string;
+      status: string;
+      scope?: string;
+      attempt_count?: number;
+      row_count?: number;
+      example_reason?: string;
+    }>;
+    successful_sources?: string[];
+    fallback_used?: boolean;
+    tushare_stk_mins_status?: string;
+    tushare_permission_denied?: boolean;
+    samples?: Array<{
+      source: string;
+      status: string;
+      code?: string;
+      reason?: string;
+    }>;
+  };
+};
+
+export type MinuteRemediationAction = {
+  table?: string;
+  scope?: string;
+  trade_date?: string;
+  trade_date_start?: string;
+  trade_date_end?: string;
+  requested_code_count?: number;
+  requested_date_count?: number;
+  row_count?: number;
+  status?: string;
+};
+
+export type MinutePrepResult = {
+  status: string;
+  strategy_window?: {
+    start_date: string;
+    end_date: string;
+  };
+  minute_gate?: MinuteGateSummary;
+  data_coverage?: MinuteCoverageSummary;
+  before?: MinutePrepResult;
+  after?: MinutePrepResult;
+  actions?: MinuteRemediationAction[];
+  comparison?: {
+    candidate_coverage_rate_delta?: number;
+    benchmark_coverage_rate_delta?: number;
+    gate_passed_before?: boolean;
+    gate_passed_after?: boolean;
+    target_missing_pair_count?: number;
+    sampled_missing_pair_count?: number;
+    resolved_missing_pair_count?: number;
+    unresolved_missing_pair_count?: number;
+    sample_resolved_missing_pair_count?: number;
+    sample_unresolved_missing_pair_count?: number;
+    benchmark_target_missing_date_count?: number;
+    benchmark_resolved_missing_date_count?: number;
+    benchmark_unresolved_missing_date_count?: number;
+    target_missing_unit_count?: number;
+    resolved_missing_unit_count?: number;
+    unresolved_missing_unit_count?: number;
+    remediation_coverage_rate?: number;
+  };
 };
 
 export type PoolRefreshResult = {
@@ -315,6 +627,17 @@ export type ModelRoute = {
   api_key_masked: string;
   created_at?: string | null;
   updated_at?: string | null;
+};
+
+export type ModelRouteTestResult = {
+  ok: boolean;
+  route_id?: string;
+  route_name?: string;
+  model?: string;
+  base_url?: string;
+  key_source?: string;
+  latency_ms?: number;
+  message: string;
 };
 
 export type PoolSourceSummary = {
@@ -711,6 +1034,81 @@ export type RecommendationDetail = RecommendationCard & {
   agent_logs: AgentLog[];
   review_note?: ReviewNote;
   history: RecommendationHistoryRow[];
+  replay_summary?: {
+    recommend_time?: string | null;
+    symbol?: string | null;
+    name?: string | null;
+    entry_time?: string | null;
+    entry_price?: number | null;
+    exit_time?: string | null;
+    exit_price?: number | null;
+    net_return_pct?: number | null;
+    trigger_conditions?: string[];
+    false_positive_reason?: string | null;
+    false_positive_category?: string | null;
+    false_positive_category_label?: string | null;
+    false_positive_stage?: string | null;
+    review_failure_reason?: string | null;
+    user_label?: string | null;
+    outcome_label?: string | null;
+    outcome_reason?: string | null;
+    exit_reason?: string | null;
+    holding_days?: number | null;
+    effective_score_line?: number | null;
+    final_score?: number | null;
+    signal_features?: Record<string, unknown>;
+  };
+};
+
+export type ReplayAnalysisRow = {
+  recommendation_id: string;
+  run_id: string;
+  trade_date: string;
+  recommend_time?: string | null;
+  symbol?: string | null;
+  name?: string | null;
+  entry_time?: string | null;
+  entry_price?: number | null;
+  exit_time?: string | null;
+  exit_price?: number | null;
+  net_return_pct?: number | null;
+  holding_days?: number | null;
+  outcome_label?: string | null;
+  user_label?: string | null;
+  is_false_positive: boolean;
+  false_positive_reason?: string | null;
+  false_positive_category?: string | null;
+  false_positive_category_label?: string | null;
+  false_positive_stage?: string | null;
+  review_failure_reason?: string | null;
+  outcome_reason?: string | null;
+  exit_reason?: string | null;
+  trigger_conditions?: string[];
+  trigger_condition_text?: string;
+  effective_score_line?: number | null;
+  final_score?: number | null;
+  market_regime?: string | null;
+  trend_status?: string | null;
+  concept_sector_name?: string | null;
+  signal_features?: Record<string, unknown>;
+};
+
+export type ReplayAnalysisSummary = {
+  total_count: number;
+  false_positive_count: number;
+  false_positive_rate: number;
+  average_net_return: number;
+  reason_counts: Array<{ reason: string; count: number }>;
+  category_counts: Array<{ category: string; category_label: string; stage: string; count: number }>;
+  stage_counts: Array<{ stage: string; count: number }>;
+  label_counts: Array<{ label: string; count: number }>;
+  market_regime_counts: Array<{ market_regime: string; count: number }>;
+};
+
+export type ReplayAnalysisResult = {
+  run: RunSummary | null;
+  rows: ReplayAnalysisRow[];
+  summary: ReplayAnalysisSummary;
 };
 
 export type RunResult = {
@@ -1002,14 +1400,21 @@ export type MetricsOverview = {
   total_recommendations: number;
   labeled_count: number;
   triggered_count: number;
+  executed_trade_count: number;
+  unexecuted_count: number;
   trigger_rate: number;
   missed_count: number;
   pending_count: number;
   success_count: number;
   failed_count: number;
+  accuracy_numerator: number;
+  accuracy_denominator: number;
+  trade_accuracy: number;
+  accuracy_basis: string;
   hit_rate: number;
   avg_return: number;
   avg_executed_return: number;
+  average_executed_return: number;
   avg_weighted_return: number;
   avg_close_return: number;
   avg_mfe: number;
@@ -1026,9 +1431,19 @@ export type MetricsOverview = {
   sample_confidence: "low" | "normal";
   strategy_compound_return: number;
   benchmark_compound_return: number;
+  flat_count: number;
   false_positive_notes: Array<{
     reason: string;
     count: number;
     examples: string[];
+    category?: string;
+    category_label?: string;
+    stage?: string;
+  }>;
+  false_positive_category_counts: Array<{
+    category: string;
+    category_label: string;
+    stage: string;
+    count: number;
   }>;
 };

@@ -26,6 +26,8 @@ import statistics
 from collections import Counter, defaultdict
 from typing import Any, Protocol
 
+from app.services.failure_attribution import classify_false_positive
+
 # ── 常量 ───────────────────────────────────────────────────────────────────
 
 MIN_SIGNAL_SAMPLE = 30
@@ -76,24 +78,35 @@ def compute_full_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
 
     if not resolved:
         return _empty_metrics()
+    chronological = _sort_trades_chronologically(resolved)
 
     # ── 基础字段 ──
-    returns = [float(item.get("net_return_pct", 0)) for item in resolved]
-    gross_returns = [float(item.get("gross_return_pct", 0)) for item in resolved]
-    achievable_returns = [float(item.get("achievable_return_pct", 0) or item.get("gross_return_pct", 0)) for item in resolved]
-    trade_drawdowns = [float(item.get("morning_drawdown_pct", 0)) for item in resolved]
-    holding = [float(item.get("holding_days", 1)) for item in resolved]
-    benchmark_returns = [float(item.get("benchmark_return_pct", 0)) for item in resolved]
-    accurate_count = sum(1 for item in resolved if item.get("accurate", False))
+    executed = [item for item in chronological if _is_executed_record(item)]
+    returns = [float(item.get("net_return_pct", 0)) for item in chronological]
+    executed_returns = [float(item.get("net_return_pct", 0)) for item in executed]
+    gross_returns = [float(item.get("gross_return_pct", 0)) for item in chronological]
+    achievable_returns = [float(item.get("achievable_return_pct", 0) or item.get("gross_return_pct", 0)) for item in chronological]
+    trade_drawdowns = [float(item.get("morning_drawdown_pct", 0)) for item in chronological]
+    holding = [float(item.get("holding_days", 1)) for item in chronological]
+    benchmark_returns = [float(item.get("benchmark_return_pct", 0)) for item in chronological]
+    accurate_count = sum(
+        1
+        for item in chronological
+        if _is_accurate_record(item)
+    )
     trade_count = len(resolved)
+    executed_count = len(executed)
+    missed_count = max(0, trade_count - executed_count)
 
     # ── 收益统计 ──
     avg_return = round(sum(returns) / trade_count, 3) if trade_count else 0.0
     median_return = round(statistics.median(returns), 3) if returns else 0.0
+    avg_executed_return = round(sum(executed_returns) / executed_count, 3) if executed_count else 0.0
 
     # ── 盈亏分离 ──
     wins = [r for r in returns if r > 0]
-    losses = [r for r in returns if r <= 0]
+    losses = [r for r in returns if r < 0]
+    flat = [r for r in returns if r == 0]
     avg_win = sum(wins) / len(wins) if wins else 0.0
     avg_loss = sum(losses) / len(losses) if losses else 0.0
     profit_loss_ratio = round(avg_win / max(abs(avg_loss), 0.001), 3) if wins else 0.0
@@ -102,11 +115,11 @@ def compute_full_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
     ) if wins else 0.0
 
     # ── 月度/回撤/基准 ──
-    month_ratio = _positive_month_ratio(resolved)
+    month_ratio = _positive_month_ratio(chronological)
 
     # 大量交易（>200笔）按日分组，等权计算组合净值曲线，避免天文数字
     if trade_count > MAX_PORTFOLIO_TRADES_FOR_SEQUENTIAL:
-        daily_returns, daily_bench_returns = _grouped_portfolio_returns(resolved)
+        daily_returns, daily_bench_returns = _grouped_portfolio_returns(chronological)
         portfolio_dd = _equity_max_drawdown(daily_returns)
         strategy_cum = _compound_return(daily_returns)
         benchmark_cum = _compound_return(daily_bench_returns) if daily_bench_returns else 0.0
@@ -117,6 +130,7 @@ def compute_full_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
 
     # ── 置信度 ──
     accuracy = round(accurate_count / trade_count, 3) if trade_count else 0.0
+    trade_accuracy = round(accurate_count / executed_count, 3) if executed_count else 0.0
     confidence = _sample_confidence(trade_count)
 
     return {
@@ -133,13 +147,20 @@ def compute_full_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
 
         # 兼容字段（向下兼容已有消费方）
         "total_recommendations": trade_count,
-        "triggered_count": trade_count,
+        "triggered_count": executed_count,
+        "executed_trade_count": executed_count,
+        "unexecuted_count": missed_count,
+        "missed_count": missed_count,
         "labeled_count": trade_count,
-        "trigger_rate": round(1.0 if trade_count else 0.0, 3),
+        "trigger_rate": round(executed_count / trade_count, 3) if trade_count else 0.0,
         "success_count": accurate_count,
-        "hit_rate": accuracy,
+        "accuracy_numerator": accurate_count,
+        "accuracy_denominator": trade_count,
+        "hit_rate": trade_accuracy,
+        "trade_accuracy": trade_accuracy,
         "avg_return": avg_return,
-        "avg_executed_return": avg_return,
+        "avg_executed_return": avg_executed_return,
+        "average_executed_return": avg_executed_return,
         "avg_weighted_return": avg_return,
         "avg_close_return": round(sum(gross_returns) / trade_count, 3) if trade_count else 0.0,
         "avg_max_return": round(sum(achievable_returns) / trade_count, 3) if trade_count else 0.0,
@@ -152,8 +173,11 @@ def compute_full_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
         "win_loss_ratio": round(len(wins) / max(len(losses), 1), 3) if wins else 0.0,
         "strategy_compound_return": round(strategy_cum, 3),
         "benchmark_compound_return": round(benchmark_cum, 3),
-        "false_positive_notes": _false_positive_notes(resolved),
+        "false_positive_notes": _false_positive_notes(chronological),
+        "false_positive_category_counts": _false_positive_category_counts(chronological),
         "low_confidence": confidence == "low",
+        "accuracy_basis": "labeled_recommendations",
+        "flat_count": len(flat),
     }
 
 
@@ -170,12 +194,19 @@ def _empty_metrics() -> dict[str, Any]:
         "sample_confidence": "low",
         "total_recommendations": 0,
         "triggered_count": 0,
+        "executed_trade_count": 0,
+        "unexecuted_count": 0,
+        "missed_count": 0,
         "labeled_count": 0,
         "trigger_rate": 0.0,
         "success_count": 0,
+        "accuracy_numerator": 0,
+        "accuracy_denominator": 0,
         "hit_rate": 0.0,
+        "trade_accuracy": 0.0,
         "avg_return": 0.0,
         "avg_executed_return": 0.0,
+        "average_executed_return": 0.0,
         "avg_weighted_return": 0.0,
         "avg_close_return": 0.0,
         "avg_max_return": 0.0,
@@ -189,7 +220,10 @@ def _empty_metrics() -> dict[str, Any]:
         "strategy_compound_return": 0.0,
         "benchmark_compound_return": 0.0,
         "false_positive_notes": [],
+        "false_positive_category_counts": [],
         "low_confidence": True,
+        "accuracy_basis": "labeled_recommendations",
+        "flat_count": 0,
     }
 
 
@@ -209,6 +243,26 @@ def _positive_month_ratio(trades: list[dict[str, Any]]) -> float:
     return round(positive / len(by_month), 3)
 
 
+def _sort_trades_chronologically(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        item
+        for _index, item in sorted(
+            enumerate(trades),
+            key=lambda pair: (
+                _date_sort_value(pair[1]),
+                str(pair[1].get("entry_date") or ""),
+                str(pair[1].get("recommendation_id") or pair[1].get("code") or ""),
+                pair[0],
+            ),
+        )
+    ]
+
+
+def _date_sort_value(item: dict[str, Any]) -> str:
+    value = str(item.get("trade_date") or item.get("signal_date") or item.get("entry_date") or "")
+    return value if value else "9999-99-99"
+
+
 def _grouped_portfolio_returns(trades: list[dict[str, Any]]) -> tuple[list[float], list[float]]:
     """将大量交易按交易日等权分组，返回每日组合收益率序列。
 
@@ -223,8 +277,9 @@ def _grouped_portfolio_returns(trades: list[dict[str, Any]]) -> tuple[list[float
             by_date[date].append(float(item.get("net_return_pct", 0)))
             bench_by_date[date].append(float(item.get("benchmark_return_pct", 0)))
 
-    daily_returns = [sum(vs) / len(vs) for vs in by_date.values()]
-    daily_bench_returns = [sum(vs) / len(vs) for vs in bench_by_date.values()]
+    sorted_dates = sorted(by_date)
+    daily_returns = [sum(by_date[date]) / len(by_date[date]) for date in sorted_dates]
+    daily_bench_returns = [sum(bench_by_date[date]) / len(bench_by_date[date]) for date in sorted_dates]
     return daily_returns, daily_bench_returns
 
 
@@ -255,10 +310,19 @@ def _false_positive_notes(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """聚合误判原因统计。"""
     counter: Counter[str] = Counter()
     example_map: dict[str, list[str]] = defaultdict(list)
+    attribution_map: dict[str, dict[str, str]] = {}
     for item in trades:
-        if item.get("accurate", False):
+        if _is_accurate_record(item):
             continue
-        reason = str(item.get("false_positive_reason") or "") or "成本后净收益不为正"
+        reason = _false_positive_reason_for_item(item)
+        attribution_map[reason] = classify_false_positive(
+            reason=reason,
+            executed=_is_executed_record(item),
+            outcome_label=item.get("outcome_label"),
+            exit_reason=item.get("exit_reason"),
+            user_label=item.get("user_label"),
+            net_return_pct=float(item.get("net_return_pct", 0)),
+        )
         counter[reason] += 1
         if len(example_map[reason]) < 3:
             date = item.get("trade_date", "?")
@@ -266,9 +330,89 @@ def _false_positive_notes(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
             ret = item.get("net_return_pct", 0)
             example_map[reason].append(f"{date} {code} {ret:.2f}%")
     return [
-        {"reason": reason, "count": count, "examples": example_map.get(reason, [])}
+        {
+            "reason": reason,
+            "count": count,
+            "examples": example_map.get(reason, []),
+            **attribution_map.get(reason, classify_false_positive(reason=reason)),
+        }
         for reason, count in counter.most_common(5)
     ]
+
+
+def _false_positive_category_counts(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    counter: Counter[tuple[str, str, str]] = Counter()
+    for item in trades:
+        if _is_accurate_record(item):
+            continue
+        reason = _false_positive_reason_for_item(item)
+        attribution = classify_false_positive(
+            reason=reason,
+            executed=_is_executed_record(item),
+            outcome_label=item.get("outcome_label"),
+            exit_reason=item.get("exit_reason"),
+            user_label=item.get("user_label"),
+            net_return_pct=float(item.get("net_return_pct", 0)),
+        )
+        counter[(attribution["category"], attribution["category_label"], attribution["stage"])] += 1
+    return [
+        {
+            "category": category,
+            "category_label": label,
+            "stage": stage,
+            "count": count,
+        }
+        for (category, label, stage), count in counter.most_common(5)
+    ]
+
+
+def _is_executed_record(item: dict[str, Any]) -> bool:
+    return _boolish(item.get("executed", item.get("entry_triggered", True)), True)
+
+
+def _is_valid_signal_record(item: dict[str, Any]) -> bool:
+    for key in (
+        "signal_valid",
+        "signal_true_at_time",
+        "signal_valid_at_recommend_time",
+        "setup_valid",
+    ):
+        if key in item:
+            return _boolish(item.get(key), True)
+    return True
+
+
+def _is_accurate_record(item: dict[str, Any]) -> bool:
+    return (
+        _is_valid_signal_record(item)
+        and _is_executed_record(item)
+        and _boolish(item.get("accurate", float(item.get("net_return_pct", 0)) > 0), True)
+        and float(item.get("net_return_pct", 0)) > 0
+    )
+
+
+def _false_positive_reason_for_item(item: dict[str, Any]) -> str:
+    explicit = str(item.get("false_positive_reason") or "").strip()
+    if explicit:
+        return explicit
+    if not _is_valid_signal_record(item):
+        return "信号当时真实不成立"
+    if not _is_executed_record(item):
+        return "未触发买点或不可真实成交"
+    return "成本后净收益不为正"
+
+
+def _boolish(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"false", "0", "no", "n", "off"}:
+        return False
+    if text in {"true", "1", "yes", "y", "on"}:
+        return True
+    return bool(value)
 
 
 def _sample_confidence(trade_count: int) -> str:

@@ -1,12 +1,24 @@
 import { ArrowUpRight, BadgeAlert, Database } from "lucide-react";
 import type { CockpitRecommendation } from "../../../types";
 
+type EmptyState = {
+  title: string;
+  reason: string;
+  detail: string;
+};
+
 function riskText(level: CockpitRecommendation["risk_level"]) {
-  const labels = { low: "低风险", medium: "中风险", high: "高风险", unknown: "未知" };
+  const labels = { low: "低风险", medium: "中风险", high: "高风险", unknown: "风险待确认" };
   return labels[level];
 }
 
-export default function DragonCandidatesPanel({ items }: { items: CockpitRecommendation[] }) {
+export default function DragonCandidatesPanel({
+  items,
+  emptyState,
+}: {
+  items: CockpitRecommendation[];
+  emptyState?: EmptyState | null;
+}) {
   return (
     <section className="cockpit-panel dragon-candidates">
       <div className="panel-header">
@@ -38,7 +50,13 @@ export default function DragonCandidatesPanel({ items }: { items: CockpitRecomme
               </div>
             </div>
           </article>
-        )) : <div className="empty-state">暂无推荐结果</div>}
+        )) : (
+          <div className="candidate-empty">
+            <strong>{emptyState?.title ?? "当前没有达标龙头候选"}</strong>
+            <span>{emptyState?.reason ?? "缺少运行归因，不能直接视为市场无机会。"}</span>
+            <p>{emptyState?.detail ?? "请检查最近一次运行状态、数据池门禁和筛选条件。"}</p>
+          </div>
+        )}
       </div>
     </section>
   );
