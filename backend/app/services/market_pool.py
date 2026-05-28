@@ -9,7 +9,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.orm import Session
 
@@ -52,6 +52,7 @@ from app.services.market_auxiliary import (
     _fetch_concept_sectors,
     _fetch_dragon_tiger,
     _fetch_limit_up_board,
+    _fetch_news,
     _limit_up_sources,
     _news_sources,
 )
@@ -69,6 +70,10 @@ NUMERIC_QUOTE_FIELDS = [
     "chg60",
     "ytd_chg",
     "main_net_inflow_yi",
+    "high",
+    "low",
+    "open",
+    "preclose",
 ]
 
 STRICT_CONSENSUS_FIELDS = {"price": 0.018, "pct": 0.08}
@@ -86,6 +91,15 @@ def _normalize_trade_date(value: Any) -> str:
     if len(digits) >= 8:
         return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
     return raw[:10]
+
+
+def _compact_trade_date(value: Any) -> str:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    return digits[:8] if len(digits) >= 8 else digits
+
+
+def _daily_kbar_trade_date_expr():
+    return func.replace(DailyKbar.trade_date, "-", "")
 
 
 def _date_window_days(ttl_seconds: int | None, minimum_days: int = 1) -> int:
@@ -107,7 +121,7 @@ def _resolve_snapshot_trade_date(db: Session, trade_date: str | None = None) -> 
     if latest_quote:
         return _normalize_trade_date(latest_quote)
 
-    latest_bar = db.scalar(select(func.max(DailyKbar.trade_date)))
+    latest_bar = db.scalar(select(func.max(_daily_kbar_trade_date_expr())))
     if latest_bar:
         return _normalize_trade_date(latest_bar)
 
@@ -121,16 +135,40 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[l
     eligible_quotes = _eligible_market_quotes(quotes)
     filter_summary = _candidate_filter_summary(quotes)
     recall_plan = _candidate_recall_plan(total_quote_count, len(eligible_quotes), settings)
-    candidates = _select_recall_candidates(eligible_quotes, recall_plan["broad_recall_count"])
+    execution_recall_count = _execution_recall_count(recall_plan, len(eligible_quotes))
+    candidates = _select_recall_candidates(eligible_quotes, execution_recall_count)
     if not candidates:
         raise MarketDataError("统一行情池没有可用候选股票，已停止运行。")
+
+    candidate_codes = [quote["code"] for quote in candidates]
+    latest_quote_trade_date = _latest_trade_date_from_quotes(candidates)
+    latest_allowed_bar_date = _latest_allowed_bar_date()
+    latest_backfill_count = 0
+    if refresh and candidate_codes and latest_quote_trade_date:
+        backfill_target_trade_date = min(latest_quote_trade_date, latest_allowed_bar_date)
+        bar_summaries = _load_cached_bars_summary(db, candidate_codes, 30)
+        missing_latest_trade_date_quotes = []
+        for quote in candidates:
+            code = str(quote.get("code") or "")
+            quote_trade_date = _normalize_trade_date(quote.get("trade_date"))
+            if not code or quote_trade_date != backfill_target_trade_date:
+                continue
+            latest_bar_date = _normalize_trade_date(bar_summaries.get(code, {}).get("latest_trade_date"))
+            if latest_bar_date < backfill_target_trade_date:
+                missing_latest_trade_date_quotes.append(quote)
+        if missing_latest_trade_date_quotes:
+            latest_backfill_count = _backfill_latest_trade_date_bars(
+                db,
+                missing_latest_trade_date_quotes,
+                settings,
+                backfill_target_trade_date,
+            )
 
     stocks: list[dict[str, Any]] = []
     kline_errors: dict[str, list[str]] = {}
     kline_usage: Counter[str] = Counter()
 
     # ── 批量预加载日K（非刷新模式），避免 N 次逐个查询 ──
-    candidate_codes = [quote["code"] for quote in candidates]
     if not refresh:
         bars_batch = _load_cached_bars_batch(db, candidate_codes, settings.market_kline_days)
     else:
@@ -198,7 +236,6 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[l
         kline_sources=_kline_sources(settings),
         kline_usage=kline_usage,
         kline_errors=kline_errors,
-        disabled_kline_sources=disabled_kline_sources,
         quote_snapshot=quote_snapshot,
     )
     snapshot["breadth"].update(
@@ -222,10 +259,14 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[l
                 "lookahead_multiplier": recall_plan["lookahead_multiplier"],
                 "lookahead_count": recall_plan["broad_recall_count"],
                 "target_scan_count": recall_plan["scan_target_count"],
-                "broad_recall_count": recall_plan["broad_recall_count"],
-                "broad_recall_limited": recall_plan["broad_recall_limited"],
+                "broad_recall_count": execution_recall_count,
+                "configured_broad_recall_count": recall_plan["broad_recall_count"],
+                "broad_recall_limited": execution_recall_count < len(eligible_quotes),
                 "recall_strategy": "multi_bucket_quote_recall",
             },
+            "latest_quote_trade_date": latest_quote_trade_date,
+            "latest_allowed_bar_date": latest_allowed_bar_date,
+            "latest_trade_date_backfill_count": latest_backfill_count,
         }
     )
     snapshot["snapshot_id"] = f"snapshot_pool_{snapshot['trade_date']}_{datetime.now(timezone.utc).replace(tzinfo=None).strftime('%H%M%S')}"
@@ -279,7 +320,17 @@ def local_pool_recommendation_readiness(
     examples: list[dict[str, Any]] = []
 
     active_sources = enabled_sources(db, "quote", _quote_sources(settings))
-    if not active_sources:
+    quotes = (
+        cached_quotes
+        if cached_quotes is not None
+        else _load_cached_quotes(
+            db,
+            allowed_sources=set(active_sources) if active_sources else None,
+            skip_metrics=True,
+        )
+    )
+    using_cache_without_active_sources = not active_sources and bool(quotes)
+    if not active_sources and not quotes:
         return {
             "status": "blocked",
             "can_run_local_recommendation": False,
@@ -303,7 +354,6 @@ def local_pool_recommendation_readiness(
             "messages": ["所有报价数据源都已关闭，本地池无法确认可用报价。"],
         }
 
-    quotes = cached_quotes if cached_quotes is not None else _load_cached_quotes(db, allowed_sources=set(active_sources), skip_metrics=True)
     quote_trade_dates = [str(item.get("trade_date") or "") for item in quotes if item.get("trade_date")]
     eligible_quotes = _eligible_market_quotes(quotes) if quotes else []
     filter_summary = _candidate_filter_summary(quotes) if quotes else {
@@ -316,7 +366,8 @@ def local_pool_recommendation_readiness(
         "high_liquidity_threshold": {"amount_yi": 0.5, "turnover_rate": 0.1},
     }
     recall_plan = _candidate_recall_plan(len(quotes), len(eligible_quotes), settings)
-    candidates = _select_recall_candidates(eligible_quotes, recall_plan["broad_recall_count"])
+    execution_recall_count = _execution_recall_count(recall_plan, len(eligible_quotes))
+    candidates = _select_recall_candidates(eligible_quotes, execution_recall_count)
     effective_required_count = min(len(candidates), recall_plan["scan_target_count"])
 
     # Bar summaries：优先用传入缓存，避免重复 GROUP BY 查询
@@ -418,6 +469,8 @@ def local_pool_recommendation_readiness(
             messages.append(
                 f"本地池可直接运行推荐，宽召回 {len(candidates)} 只中已有 {ready_count} 只候选股报价与日K覆盖完整。"
             )
+    if using_cache_without_active_sources:
+        messages.append("报价源开关当前全部关闭，本地池将仅基于已落库缓存运行；如需刷新行情请重新启用报价源。")
 
     if missing_count or stale_count:
         gap_parts = []
@@ -445,6 +498,7 @@ def local_pool_recommendation_readiness(
             "filter_summary": filter_summary,
             "latest_trade_date": max(quote_trade_dates) if quote_trade_dates else None,
             "active_sources": active_sources,
+            "using_cache_without_active_sources": using_cache_without_active_sources,
         },
         "kline": {
             "checked_count": checked_count,
@@ -465,10 +519,11 @@ def local_pool_recommendation_readiness(
             "configured_candidate_count": recall_plan["explicit_scan_limit"],
             "lookahead_multiplier": recall_plan["lookahead_multiplier"],
             "lookahead_count": recall_plan["broad_recall_count"],
+            "data_coverage_lookahead_count": execution_recall_count,
             "actual_scan_count": min(ready_count, recall_plan["scan_target_count"]),
             "skill_input_count": min(ready_count, recall_plan["scan_target_count"]),
             "agent_review_input_count": min(ready_count, recall_plan["scan_target_count"]),
-            "scan_limited": recall_plan["broad_recall_limited"] or (
+            "scan_limited": execution_recall_count < len(eligible_quotes) or (
                 not recall_plan["full_market_mode"] and len(candidates) > recall_plan["scan_target_count"]
             ),
             "demo_limited": (not recall_plan["full_market_mode"]) and len(eligible_quotes) > recall_plan["scan_target_count"],
@@ -477,25 +532,46 @@ def local_pool_recommendation_readiness(
     }
 
 
+def _execution_recall_count(recall_plan: dict[str, Any], eligible_count: int) -> int:
+    broad_count = max(0, int(recall_plan.get("broad_recall_count") or 0))
+    if not bool(recall_plan.get("full_market_mode")) or not bool(recall_plan.get("broad_recall_limited")):
+        return min(eligible_count, broad_count)
+    target_count = max(1, int(recall_plan.get("scan_target_count") or broad_count or 1))
+    return min(eligible_count, max(broad_count, target_count * 3))
+
+
 def _load_quotes_from_pool(db: Session, settings: Any, skip_metrics: bool = False) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     active_sources = enabled_sources(db, "quote", _quote_sources(settings))
-    if not active_sources:
-        raise MarketDataError("所有报价数据源都已关闭，请至少启用一个报价源。")
-    quotes = _load_cached_quotes(db, allowed_sources=set(active_sources), skip_metrics=skip_metrics)
+    quotes = _load_cached_quotes(
+        db,
+        allowed_sources=set(active_sources) if active_sources else None,
+        skip_metrics=skip_metrics,
+    )
+    if not active_sources and not quotes:
+        raise MarketDataError("所有报价数据源都已关闭，且本地数据池没有可用缓存。请至少启用一个报价源。")
     required_count = max(0, int(settings.market_candidate_count))
     if required_count > 0 and len(quotes) < required_count:
         raise MarketDataError(
             f"本地数据池可用报价不足，当前 {len(quotes)} 条，至少需要 {required_count} 条。"
             "请先显式刷新本地数据池，或切换为实时数据。"
         )
-    return quotes, _quote_meta("local_pool_readonly", quotes)
+    status = "local_pool_readonly" if active_sources else "local_pool_readonly_source_disabled"
+    errors = [] if active_sources else ["所有报价数据源关闭，当前仅使用本地缓存。"]
+    return quotes, _quote_meta(status, quotes, errors=errors)
 
 
 def _load_or_refresh_quotes(db: Session, settings: Any) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     configured_sources = _quote_sources(settings)
     active_sources = enabled_sources(db, "quote", configured_sources)
     if not active_sources:
-        raise MarketDataError("所有报价数据源都已关闭，请至少启用一个报价源。")
+        cached = _load_cached_quotes(db)
+        if cached:
+            return cached, _quote_meta(
+                "local_pool_readonly_source_disabled",
+                cached,
+                errors=["所有报价数据源关闭，无法刷新行情；当前仅使用本地缓存。"],
+            )
+        raise MarketDataError("所有报价数据源都已关闭，且本地数据池没有可用缓存。请至少启用一个报价源。")
     allowed_sources = set(active_sources)
     cached = _load_cached_quotes(
         db,
@@ -556,14 +632,18 @@ def _load_cached_quotes(
     skip_metrics: bool = False,
 ) -> list[dict[str, Any]]:
     cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - max_age if max_age is not None else None
+    latest_allowed_date = _latest_allowed_bar_date()
     stmt = (
         select(StockQuote)
-        .where(StockQuote.freshness_status != "inactive")
+        .where(
+            StockQuote.freshness_status != "inactive",
+            StockQuote.trade_date <= latest_allowed_date,
+        )
         .order_by(StockQuote.quality_score.desc(), StockQuote.snapped_at.desc())
     )
     if cutoff is not None:
         stmt = stmt.where(StockQuote.snapped_at >= cutoff)
-    rows = db.scalars(stmt).all()
+    rows = _dedupe_latest_quote_rows(db.scalars(stmt).all())
     local_metrics = {} if skip_metrics else _quote_metrics_from_bars(db, [row.code for row in rows])
     quotes = []
     for row in rows:
@@ -601,6 +681,34 @@ def _load_cached_quotes(
     return quotes
 
 
+def _dedupe_latest_quote_rows(rows: list[Any]) -> list[Any]:
+    latest_by_code: dict[str, Any] = {}
+    for row in rows:
+        code = str(getattr(row, "code", "") or "")
+        if not code:
+            continue
+        current = latest_by_code.get(code)
+        if current is None or _quote_row_recency_key(row) > _quote_row_recency_key(current):
+            latest_by_code[code] = row
+    return sorted(
+        latest_by_code.values(),
+        key=lambda row: (
+            float(getattr(row, "quality_score", 0) or 0),
+            str(getattr(row, "snapped_at", "") or ""),
+            _normalize_trade_date(getattr(row, "trade_date", None)),
+        ),
+        reverse=True,
+    )
+
+
+def _quote_row_recency_key(row: Any) -> tuple[str, str, float]:
+    return (
+        _normalize_trade_date(getattr(row, "trade_date", None)),
+        str(getattr(row, "snapped_at", "") or ""),
+        float(getattr(row, "quality_score", 0) or 0),
+    )
+
+
 def enrich_quote_with_local_metrics(db: Session, code: str, quote: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(quote)
     _apply_local_quote_metrics(enriched, _quote_metrics_from_bars(db, [code]).get(code, {}))
@@ -613,10 +721,11 @@ def _quote_metrics_from_bars(db: Session, codes: list[str]) -> dict[str, dict[st
         return {}
 
     latest_allowed_date = _latest_allowed_bar_date()
+    latest_allowed_compact = _compact_trade_date(latest_allowed_date)
     rows = db.scalars(
         select(DailyKbar)
-        .where(DailyKbar.code.in_(unique_codes), DailyKbar.trade_date <= latest_allowed_date)
-        .order_by(DailyKbar.code, DailyKbar.trade_date.desc())
+        .where(DailyKbar.code.in_(unique_codes), _daily_kbar_trade_date_expr() <= latest_allowed_compact)
+        .order_by(DailyKbar.code, _daily_kbar_trade_date_expr().desc())
     ).all()
 
     bars_by_code: dict[str, list[DailyKbar]] = defaultdict(list)
@@ -624,7 +733,7 @@ def _quote_metrics_from_bars(db: Session, codes: list[str]) -> dict[str, dict[st
         bars_by_code[row.code].append(row)
 
     result: dict[str, dict[str, float]] = {}
-    year_start = date.fromisoformat(latest_allowed_date).replace(month=1, day=1).isoformat()
+    year_start = _compact_trade_date(date.fromisoformat(latest_allowed_date).replace(month=1, day=1).isoformat())
     for code, bars in bars_by_code.items():
         if not bars:
             continue
@@ -644,7 +753,7 @@ def _quote_metrics_from_bars(db: Session, codes: list[str]) -> dict[str, dict[st
             if base_close:
                 values["chg60"] = round((latest_close - base_close) / base_close * 100, 4)
 
-        ytd_base = next((bar for bar in bars if str(bar.trade_date) < year_start), None)
+        ytd_base = next((bar for bar in bars if _compact_trade_date(bar.trade_date) < year_start), None)
         if ytd_base is not None:
             base_close = float(ytd_base.close or 0)
             if base_close:
@@ -686,8 +795,14 @@ def _load_or_refresh_bars(
     if bars:
         _persist_kbars(db, bars)
         db.commit()
-        return bars, {"selected_source": source, "freshness_status": "refreshed"}, errors
-    return [], {"selected_source": "", "freshness_status": "missing"}, errors
+        merged = _load_cached_bars(db, quote["code"], settings.market_kline_days)
+        if len(merged) >= 30 and _bars_cover_quote_date(merged, quote):
+            return merged, {"selected_source": source, "freshness_status": "refreshed"}, errors
+        if len(merged) < 30:
+            errors.append(f"{source}: 合并后日K不足30条，仅 {len(merged)} 条")
+        elif not _bars_cover_quote_date(merged, quote):
+            errors.append(f"{source}: 合并后日K未覆盖报价日期")
+    return [], {"selected_source": source or "", "freshness_status": "missing"}, errors
 
 
 def _load_bars_from_pool(
@@ -719,18 +834,19 @@ def _refresh_bars_for_quote(
 
     # 增量拉取：查本地已存数据的最新日期，只拉缺失的天数
     start_date = _incremental_kline_start(db, quote["code"], settings)
+    incremental_mode = start_date is not None
 
     for source in sources:
         start = time.perf_counter()
         try:
             bars = _fetch_kline(source, quote, settings, start_date=start_date)
             latency_ms = (time.perf_counter() - start) * 1000
-            if len(bars) < 30:
+            if len(bars) < 30 and not incremental_mode:
                 _record_source_health(db, source, "kline", "empty", latency_ms=latency_ms)
                 errors.append(f"{source}: 日K不足30条")
                 continue
             _record_source_health(db, source, "kline", "success", latency_ms=latency_ms)
-            return bars[-settings.market_kline_days :], source, errors
+            return bars[-settings.market_kline_days :] if not incremental_mode else bars, source, errors
         except Exception as exc:  # noqa: BLE001 - returned as run evidence
             latency_ms = (time.perf_counter() - start) * 1000
             message = f"{source}: {exc}"
@@ -745,14 +861,16 @@ def _incremental_kline_start(db: Session, code: str, settings: Any) -> str | Non
     已有数据时，从最新日期 - buffer 天开始拉取（覆盖可能的复权修正）。
     无数据时返回 None（通知调用方按全量拉取）。
     """
-    existing_max_date = db.scalar(
-        select(func.max(DailyKbar.trade_date)).where(DailyKbar.code == code)
-    )
+    existing_count, existing_max_date = db.execute(
+        select(func.count(), func.max(_daily_kbar_trade_date_expr())).where(DailyKbar.code == code)
+    ).one()
+    if int(existing_count or 0) < 30:
+        return None
     if not existing_max_date:
         return None
     buffer_days = getattr(settings, "market_kline_incremental_buffer", 10)
     try:
-        latest = datetime.strptime(existing_max_date, "%Y-%m-%d").date()
+        latest = datetime.strptime(_normalize_trade_date(existing_max_date), "%Y-%m-%d").date()
         start = latest - timedelta(days=buffer_days)
         return start.strftime("%Y%m%d")
     except ValueError:
@@ -774,6 +892,102 @@ def _readiness_example(
         "latest_bar_date": latest_bar_date,
         "quote_date": quote_date,
     }
+
+
+def _backfill_latest_trade_date_bars(
+    db: Session,
+    quotes: list[dict[str, Any]],
+    settings: Any,
+    target_trade_date: str,
+) -> int:
+    from app.services.indicator_computer import compute_daily_bar_indicators, compute_daily_indicators
+
+    target_iso = _normalize_trade_date(target_trade_date)
+    target_compact = _compact_trade_date(target_trade_date)
+    if not target_iso or not target_compact or not quotes:
+        return 0
+
+    quote_bars_by_code: dict[str, dict[str, Any]] = {}
+    for item in quotes:
+        code = str(item.get("code") or "")
+        quote_trade_date = _normalize_trade_date(item.get("trade_date"))
+        price = _num(item.get("price"))
+        if not code or quote_trade_date != target_iso or price <= 0:
+            continue
+
+        open_price = _num(item.get("open"))
+        if open_price <= 0:
+            open_price = price
+        high_price = _num(item.get("high"))
+        if high_price <= 0:
+            high_price = max(open_price, price)
+        low_price = _num(item.get("low"))
+        if low_price <= 0:
+            low_price = min(open_price, price)
+
+        quote_bars_by_code[code] = {
+            "code": code,
+            "trade_date": target_iso,
+            "open": max(open_price, 0.0),
+            "high": max(high_price, open_price, price),
+            "low": min(low_price, open_price, price),
+            "close": price,
+            "volume": _num(item.get("volume")),
+            "amount": _num(item.get("amount_yi")) * 100000000,
+            "pct_chg": _num(item.get("pct")),
+            "turnover_rate": _num(item.get("turnover_rate")),
+            "source": "tushare",
+        }
+
+    codes = sorted(quote_bars_by_code)
+    if not codes:
+        return 0
+
+    historical = db.scalars(
+        select(DailyKbar)
+        .where(
+            DailyKbar.code.in_(codes),
+            _daily_kbar_trade_date_expr() < target_compact,
+        )
+        .order_by(DailyKbar.code, _daily_kbar_trade_date_expr().asc())
+    ).all()
+
+    hist_by_code: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in historical:
+        hist_by_code[row.code].append(
+            {
+                "code": row.code,
+                "trade_date": _normalize_trade_date(row.trade_date),
+                "open": float(row.open or 0),
+                "high": float(row.high or 0),
+                "low": float(row.low or 0),
+                "close": float(row.close or 0),
+                "volume": float(row.volume or 0),
+                "amount": float(row.amount or 0),
+                "pct_chg": float(row.pct_chg or 0),
+                "turnover_rate": float(row.turnover_rate or 0),
+            }
+        )
+
+    enriched_bars: list[dict[str, Any]] = []
+    for code in codes:
+        bar = quote_bars_by_code[code]
+        code = bar["code"]
+        combined = list(hist_by_code.get(code, []))
+        combined.append(dict(bar))
+        bar_indicators = compute_daily_bar_indicators(code, combined)
+        daily_indicators = compute_daily_indicators(code, combined)
+        enriched = dict(bar)
+        enriched.update(bar_indicators.get(target_iso, {}))
+        indicator_row = daily_indicators.get(target_iso, {})
+        enriched.update(indicator_row)
+        if "macd_bar" in indicator_row:
+            enriched["macd_bar"] = indicator_row.get("macd_bar")
+        enriched_bars.append(enriched)
+
+    _persist_kbars(db, enriched_bars)
+    db.commit()
+    return len(enriched_bars)
 
 
 def _summarize_kline_skip_reasons(kline_errors: dict[str, list[str]]) -> dict[str, int]:
@@ -806,6 +1020,7 @@ def _merge_quote_rows(
         "exchange": base.get("exchange"),
         "industry": _first_non_empty(ordered, "industry", skip_values={"未分类"}) or "未分类",
         "is_st": any(bool(row.get("is_st")) for row in ordered),
+        "trade_date": _latest_trade_date_from_quotes(ordered),
         "source": "unified_pool",
         "source_count": len({row.get("source") for row in ordered if row.get("source")}),
         "raw_sources": sorted({str(row.get("source")) for row in ordered if row.get("source")}),
@@ -892,88 +1107,106 @@ def _merge_quality(
 
 
 def _persist_stock_quotes(db: Session, rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+
     trade_date = _latest_trade_date_from_quotes(rows)
     active_codes = {row["code"] for row in rows}
     seen_batch: set[tuple] = set()
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    payload: list[dict[str, Any]] = []
     for row in rows:
         key = (row["code"], trade_date)
         if key in seen_batch:
             continue
         seen_batch.add(key)
-        existing = db.scalar(
-            select(StockQuote).where(StockQuote.code == row["code"], StockQuote.trade_date == trade_date)
-        )
         source = str(row.get("raw_sources", ["unknown"])[0]) if row.get("raw_sources") else "unknown"
-        if existing is None:
-            db.add(StockQuote(
-                code=row["code"],
-                trade_date=trade_date,
-                name=str(row.get("name") or ""),
-                price=float(row.get("price") or 0),
-                pct=float(row.get("pct") or 0),
-                volume=float(row.get("volume") or 0),
-                amount_yi=float(row.get("amount_yi") or 0),
-                turnover_rate=float(row.get("turnover_rate") or 0),
-                pe_ttm=float(row.get("pe_ttm")) if row.get("pe_ttm") is not None else None,
-                total_mv_yi=float(row.get("total_mv_yi")) if row.get("total_mv_yi") is not None else None,
-                free_mv_yi=float(row.get("free_mv_yi")) if row.get("free_mv_yi") is not None else None,
-                chg60=float(row.get("chg60")) if row.get("chg60") is not None else None,
-                high=float(row.get("high")) if row.get("high") is not None else None,
-                low=float(row.get("low")) if row.get("low") is not None else None,
-                open=float(row.get("open")) if row.get("open") is not None else None,
-                preclose=float(row.get("preclose")) if row.get("preclose") is not None else None,
-                industry=row.get("industry") or "",
-                source=source,
-                source_count=int(row.get("source_count") or 0),
-                quality_score=float(row.get("quality_score") or 0),
-                freshness_status=str(row.get("freshness_status") or "fresh"),
-                snapped_at=now,
-            ))
-        else:
-            existing.name = str(row.get("name") or "")
-            existing.price = float(row.get("price") or 0)
-            existing.pct = float(row.get("pct") or 0)
-            existing.volume = float(row.get("volume") or 0)
-            existing.amount_yi = float(row.get("amount_yi") or 0)
-            existing.turnover_rate = float(row.get("turnover_rate") or 0)
-            existing.pe_ttm = float(row.get("pe_ttm")) if row.get("pe_ttm") is not None else None
-            existing.total_mv_yi = float(row.get("total_mv_yi")) if row.get("total_mv_yi") is not None else None
-            existing.free_mv_yi = float(row.get("free_mv_yi")) if row.get("free_mv_yi") is not None else None
-            existing.chg60 = float(row.get("chg60")) if row.get("chg60") is not None else None
-            existing.high = float(row.get("high")) if row.get("high") is not None else None
-            existing.low = float(row.get("low")) if row.get("low") is not None else None
-            existing.open = float(row.get("open")) if row.get("open") is not None else None
-            existing.preclose = float(row.get("preclose")) if row.get("preclose") is not None else None
-            existing.industry = row.get("industry") or ""
-            existing.source = source
-            existing.source_count = int(row.get("source_count") or 0)
-            existing.quality_score = float(row.get("quality_score") or 0)
-            existing.freshness_status = str(row.get("freshness_status") or "fresh")
-            existing.snapped_at = now
-    if active_codes:
-        inactive_rows = db.scalars(
-            select(StockQuote).where(
-                StockQuote.trade_date == trade_date,
-                StockQuote.code.not_in(active_codes),
+        payload.append(
+            {
+                "code": row["code"],
+                "trade_date": trade_date,
+                "name": str(row.get("name") or ""),
+                "price": float(row.get("price") or 0),
+                "pct": float(row.get("pct") or 0),
+                "volume": float(row.get("volume") or 0),
+                "amount_yi": float(row.get("amount_yi") or 0),
+                "turnover_rate": float(row.get("turnover_rate") or 0),
+                "pe_ttm": float(row.get("pe_ttm")) if row.get("pe_ttm") is not None else None,
+                "total_mv_yi": float(row.get("total_mv_yi")) if row.get("total_mv_yi") is not None else None,
+                "free_mv_yi": float(row.get("free_mv_yi")) if row.get("free_mv_yi") is not None else None,
+                "chg60": float(row.get("chg60")) if row.get("chg60") is not None else None,
+                "high": float(row.get("high")) if row.get("high") is not None else None,
+                "low": float(row.get("low")) if row.get("low") is not None else None,
+                "open": float(row.get("open")) if row.get("open") is not None else None,
+                "preclose": float(row.get("preclose")) if row.get("preclose") is not None else None,
+                "industry": row.get("industry") or "",
+                "source": source,
+                "source_count": int(row.get("source_count") or 0),
+                "quality_score": float(row.get("quality_score") or 0),
+                "freshness_status": str(row.get("freshness_status") or "fresh"),
+                "snapped_at": now,
+            }
+        )
+    if payload:
+        stmt = mysql_insert(StockQuote).values(payload)
+        db.execute(
+            stmt.on_duplicate_key_update(
+                name=stmt.inserted.name,
+                price=stmt.inserted.price,
+                pct=stmt.inserted.pct,
+                volume=stmt.inserted.volume,
+                amount_yi=stmt.inserted.amount_yi,
+                turnover_rate=stmt.inserted.turnover_rate,
+                pe_ttm=stmt.inserted.pe_ttm,
+                total_mv_yi=stmt.inserted.total_mv_yi,
+                free_mv_yi=stmt.inserted.free_mv_yi,
+                chg60=stmt.inserted.chg60,
+                high=stmt.inserted.high,
+                low=stmt.inserted.low,
+                open=stmt.inserted.open,
+                preclose=stmt.inserted.preclose,
+                industry=stmt.inserted.industry,
+                source=stmt.inserted.source,
+                source_count=stmt.inserted.source_count,
+                quality_score=stmt.inserted.quality_score,
+                freshness_status=stmt.inserted.freshness_status,
+                snapped_at=stmt.inserted.snapped_at,
             )
-        ).all()
-        for row in inactive_rows:
-            row.freshness_status = "inactive"
+        )
+    if active_codes:
+        db.execute(
+            update(StockQuote)
+            .where(
+                StockQuote.code.in_(active_codes),
+                StockQuote.trade_date != trade_date,
+                StockQuote.freshness_status != "inactive",
+            )
+            .values(freshness_status="inactive")
+        )
+        db.execute(
+            update(StockQuote)
+            .where(
+                StockQuote.code.not_in(active_codes),
+                StockQuote.freshness_status != "inactive",
+            )
+            .values(freshness_status="inactive")
+        )
 
 
 def _persist_kbars(db: Session, bars: list[dict[str, Any]]) -> None:
     if not bars:
         return
     latest_allowed_date = _latest_allowed_bar_date()
-    code = str(bars[0].get("code") or "")
     seen_batch: set[tuple] = set()
     rows: list[dict[str, Any]] = []
     for bar in bars:
-        trade_date = str(bar.get("trade_date") or "")
+        code = str(bar.get("code") or "")
+        trade_date = _normalize_trade_date(bar.get("trade_date"))
+        if not code or not trade_date:
+            continue
         if trade_date > latest_allowed_date:
             continue
-        key = (str(bar.get("code") or ""), trade_date)
+        key = (code, trade_date)
         if key in seen_batch:
             continue
         seen_batch.add(key)
@@ -988,22 +1221,37 @@ def _persist_kbars(db: Session, bars: list[dict[str, Any]]) -> None:
             "amount": float(bar.get("amount") or 0),
             "pct_chg": float(bar.get("pct_chg") or 0),
             "turnover_rate": float(bar.get("turnover_rate") or 0),
-            "macd_dif": bar.get("macd_dif"),
-            "macd_dea": bar.get("macd_dea"),
-            "macd_bar": bar.get("macd"),
-            "kdj_k": bar.get("kdj_k"),
-            "kdj_d": bar.get("kdj_d"),
-            "kdj_j": bar.get("kdj_j"),
-            "rsi_6": bar.get("rsi_6"),
-            "rsi_12": bar.get("rsi_12"),
-            "rsi_24": bar.get("rsi_24"),
-            "boll_upper": bar.get("boll_upper"),
-            "boll_mid": bar.get("boll_mid"),
-            "boll_lower": bar.get("boll_lower"),
-            "cci": bar.get("cci"),
+            "ma5": _float_or_none(bar.get("ma5")),
+            "ma10": _float_or_none(bar.get("ma10")),
+            "ma20": _float_or_none(bar.get("ma20")),
+            "ma60": _float_or_none(bar.get("ma60")),
+            "ma250": _float_or_none(bar.get("ma250")),
+            "macd_dif": _float_or_none(bar.get("macd_dif")),
+            "macd_dea": _float_or_none(bar.get("macd_dea")),
+            "macd_bar": _float_or_none(bar.get("macd_bar", bar.get("macd"))),
+            "kdj_k": _float_or_none(bar.get("kdj_k")),
+            "kdj_d": _float_or_none(bar.get("kdj_d")),
+            "kdj_j": _float_or_none(bar.get("kdj_j")),
+            "rsi_6": _float_or_none(bar.get("rsi_6")),
+            "rsi_12": _float_or_none(bar.get("rsi_12")),
+            "rsi_24": _float_or_none(bar.get("rsi_24")),
+            "boll_upper": _float_or_none(bar.get("boll_upper")),
+            "boll_mid": _float_or_none(bar.get("boll_mid")),
+            "boll_lower": _float_or_none(bar.get("boll_lower")),
+            "cci": _float_or_none(bar.get("cci")),
+            "bias_5": _float_or_none(bar.get("bias_ma5", bar.get("bias_5"))),
+            "bias_10": _float_or_none(bar.get("bias_ma10", bar.get("bias_10"))),
+            "bias_20": _float_or_none(bar.get("bias_ma20", bar.get("bias_20"))),
+            "vol_ratio_5": _float_or_none(bar.get("volume_ratio_5d", bar.get("vol_ratio_5"))),
+            "vol_ratio_20": _float_or_none(bar.get("vol_ratio_20")),
+            "breakout20": int(bar.get("breakout20") or 0),
+            "breakout60": int(bar.get("breakout60") or 0),
+            "max_dd20": _float_or_none(bar.get("max_dd20")),
+            "max_dd60": _float_or_none(bar.get("max_dd60")),
+            "upper_shadow_count20": int(bar.get("upper_shadow_count20") or 0),
             "source": bar.get("source", "tushare"),
         })
-    if not code or not rows:
+    if not rows:
         return
 
     stmt = mysql_insert(DailyKbar).values(rows)
@@ -1016,6 +1264,11 @@ def _persist_kbars(db: Session, bars: list[dict[str, Any]]) -> None:
         amount=stmt.inserted.amount,
         pct_chg=stmt.inserted.pct_chg,
         turnover_rate=stmt.inserted.turnover_rate,
+        ma5=stmt.inserted.ma5,
+        ma10=stmt.inserted.ma10,
+        ma20=stmt.inserted.ma20,
+        ma60=stmt.inserted.ma60,
+        ma250=stmt.inserted.ma250,
         macd_dif=stmt.inserted.macd_dif,
         macd_dea=stmt.inserted.macd_dea,
         macd_bar=stmt.inserted.macd_bar,
@@ -1029,6 +1282,16 @@ def _persist_kbars(db: Session, bars: list[dict[str, Any]]) -> None:
         boll_mid=stmt.inserted.boll_mid,
         boll_lower=stmt.inserted.boll_lower,
         cci=stmt.inserted.cci,
+        bias_5=stmt.inserted.bias_5,
+        bias_10=stmt.inserted.bias_10,
+        bias_20=stmt.inserted.bias_20,
+        vol_ratio_5=stmt.inserted.vol_ratio_5,
+        vol_ratio_20=stmt.inserted.vol_ratio_20,
+        breakout20=stmt.inserted.breakout20,
+        breakout60=stmt.inserted.breakout60,
+        max_dd20=stmt.inserted.max_dd20,
+        max_dd60=stmt.inserted.max_dd60,
+        upper_shadow_count20=stmt.inserted.upper_shadow_count20,
     ))
 
 
@@ -1039,11 +1302,12 @@ def _load_cached_bars_batch(
     if not codes:
         return {}
     latest_allowed_date = _latest_allowed_bar_date()
+    latest_allowed_compact = _compact_trade_date(latest_allowed_date)
 
     all_rows = db.scalars(
         select(DailyKbar)
-        .where(DailyKbar.code.in_(codes), DailyKbar.trade_date <= latest_allowed_date)
-        .order_by(DailyKbar.code, DailyKbar.trade_date.desc())
+        .where(DailyKbar.code.in_(codes), _daily_kbar_trade_date_expr() <= latest_allowed_compact)
+        .order_by(DailyKbar.code, _daily_kbar_trade_date_expr().desc())
     ).all()
 
     bars_by_code: dict[str, list] = defaultdict(list)
@@ -1059,7 +1323,7 @@ def _load_cached_bars_batch(
         for row in rows:
             bar = {
                 "code": row.code,
-                "trade_date": row.trade_date,
+                "trade_date": _normalize_trade_date(row.trade_date),
                 "open": float(row.open or 0),
                 "high": float(row.high or 0),
                 "low": float(row.low or 0),
@@ -1097,10 +1361,11 @@ def _load_cached_bars_batch(
 
 def _load_cached_bars(db: Session, code: str, limit: int) -> list[dict[str, Any]]:
     latest_allowed_date = _latest_allowed_bar_date()
+    latest_allowed_compact = _compact_trade_date(latest_allowed_date)
     rows = db.scalars(
         select(DailyKbar)
-        .where(DailyKbar.code == code, DailyKbar.trade_date <= latest_allowed_date)
-        .order_by(DailyKbar.trade_date.desc())
+        .where(DailyKbar.code == code, _daily_kbar_trade_date_expr() <= latest_allowed_compact)
+        .order_by(_daily_kbar_trade_date_expr().desc())
         .limit(limit)
     ).all()
 
@@ -1108,7 +1373,7 @@ def _load_cached_bars(db: Session, code: str, limit: int) -> list[dict[str, Any]
     for row in reversed(rows):
         bar = {
             "code": row.code,
-            "trade_date": row.trade_date,
+            "trade_date": _normalize_trade_date(row.trade_date),
             "open": float(row.open or 0),
             "high": float(row.high or 0),
             "low": float(row.low or 0),
@@ -1207,19 +1472,20 @@ def _load_cached_bars_summary(
     if not codes:
         return {}
     latest_allowed_date = _latest_allowed_bar_date()
+    latest_allowed_compact = _compact_trade_date(latest_allowed_date)
     rows = db.execute(
         select(
             DailyKbar.code,
             func.count().label("bar_count"),
-            func.max(DailyKbar.trade_date).label("latest_trade_date"),
+            func.max(_daily_kbar_trade_date_expr()).label("latest_trade_date"),
         )
-        .where(DailyKbar.code.in_(codes), DailyKbar.trade_date <= latest_allowed_date)
+        .where(DailyKbar.code.in_(codes), _daily_kbar_trade_date_expr() <= latest_allowed_compact)
         .group_by(DailyKbar.code)
     ).all()
     return {
         row.code: {
             "bar_count": int(row.bar_count or 0),
-            "latest_trade_date": row.latest_trade_date,
+            "latest_trade_date": _normalize_trade_date(row.latest_trade_date),
         }
         for row in rows
     }
@@ -1229,7 +1495,7 @@ def _bars_cover_quote_date(bars: list[dict[str, Any]], quote: dict[str, Any]) ->
     quote_date = str(quote.get("trade_date") or date.today().isoformat())
     quote_date = min(quote_date, _latest_allowed_bar_date())
     quote_date = _latest_allowed_bar_date(date.fromisoformat(quote_date))
-    latest = max(str(bar.get("trade_date") or "") for bar in bars)
+    latest = max(_normalize_trade_date(bar.get("trade_date")) for bar in bars)
     return latest >= quote_date
 
 
@@ -1273,6 +1539,15 @@ def _robust_median(values: list[float]) -> float:
     if not values:
         return 0.0
     return float(statistics.median(values))
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value in {None, "", "-"}:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _max_relative_deviation(values: list[float], center: float) -> float:
@@ -1392,23 +1667,31 @@ def refresh_capital_flows_for_codes(db: Session, codes: list[str], trade_date: s
     return result
 
 
-def refresh_news_for_codes(db: Session, codes: list[str], trade_date: str | None = None) -> dict[str, list[dict[str, Any]]]:
+class NewsRefreshResult(dict[str, list[dict[str, Any]]]):
+    def __init__(self, rows: dict[str, list[dict[str, Any]]], checked_codes: list[str]) -> None:
+        super().__init__(rows)
+        self.checked_codes = checked_codes
+
+
+def refresh_news_for_codes(db: Session, codes: list[str], trade_date: str | None = None) -> NewsRefreshResult:
     """按股刷新新闻公告数据。"""
     settings = get_settings()
     if not settings.enable_news_fetch:
-        return {}
+        return NewsRefreshResult({}, [])
     sources = enabled_sources(db, "news", _news_sources(settings))
     if not sources:
-        return {}
+        return NewsRefreshResult({}, [])
     source = sources[0]
     result: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    checked_codes: list[str] = []
     target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
     ttl_days = _date_window_days(settings.news_cache_ttl_seconds, minimum_days=2)
     latest_allowed = date.fromisoformat(target_trade_date)
     earliest_allowed = latest_allowed - timedelta(days=ttl_days)
     for code in codes:
         try:
-            items: list[dict[str, Any]] = []
+            items = _fetch_news(source, code, settings, trade_date=target_trade_date)
+            checked_codes.append(code)
             if items:
                 normalized_items = []
                 for item in items:
@@ -1427,7 +1710,7 @@ def refresh_news_for_codes(db: Session, codes: list[str], trade_date: str | None
         except Exception:
             pass
     db.commit()
-    return dict(result)
+    return NewsRefreshResult(dict(result), checked_codes)
 
 
 # ── 辅助数据池：通用刷新模式 ───────────────────────────────────────────
@@ -1832,28 +2115,82 @@ def _load_share_float_upcoming(
 
 def load_auxiliary_for_stocks(db: Session, codes: list[str], trade_date: str | None = None) -> dict[str, Any]:
     """批量加载所有辅助数据，返回按code索引的字典。"""
-    settings = get_settings()
     target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
-    return {
-        "limit_up": {
-            r["code"]: r
-            for r in _load_cached_limit_up_board(
-                db,
-                trade_date=target_trade_date,
-                max_age_seconds=settings.limit_up_cache_ttl_seconds,
-            )
-        },
-        "concept_sectors": _load_concept_sectors_for_stocks(
+    limit_up = {
+        r["code"]: r
+        for r in _load_cached_limit_up_board(
             db,
-            codes,
             trade_date=target_trade_date,
-            max_age_seconds=settings.concept_sector_cache_ttl_seconds,
-        ),
-        "capital_flows": _load_cached_capital_flows(db, codes, trade_date=target_trade_date, max_age_seconds=settings.capital_flow_cache_ttl_seconds),
-        "dragon_tigers": _load_cached_dragon_tigers(db, codes, trade_date=target_trade_date, max_age_seconds=settings.dragon_tiger_cache_ttl_seconds),
-        "news": _load_cached_news(db, codes, trade_date=target_trade_date, max_age_seconds=settings.news_cache_ttl_seconds),
+        )
+    }
+    concept_sectors = _load_concept_sectors_for_stocks(
+        db,
+        codes,
+        trade_date=target_trade_date,
+    )
+    capital_flows = _load_cached_capital_flows(
+        db,
+        codes,
+        trade_date=target_trade_date,
+    )
+    dragon_tigers = _load_cached_dragon_tigers(
+        db,
+        codes,
+        trade_date=target_trade_date,
+    )
+    news = _load_cached_news(
+        db,
+        codes,
+        trade_date=target_trade_date,
+    )
+    return {
+        "limit_up": limit_up,
+        "concept_sectors": concept_sectors,
+        "capital_flows": capital_flows,
+        "dragon_tigers": dragon_tigers,
+        "news": news,
         "auctions": _load_auction_for_stocks(db, codes, trade_date=target_trade_date),
         "pledges": _load_pledge_for_stocks(db, codes),
         "broker_recs": _load_broker_recs_for_stocks(db, codes, trade_date=target_trade_date),
         "share_floats_upcoming": _load_share_float_upcoming(db, codes, trade_date=target_trade_date),
+        "coverage": _auxiliary_coverage_for_stocks(
+            db,
+            codes,
+            target_trade_date,
+            concept_sectors=concept_sectors,
+            capital_flows=capital_flows,
+            dragon_tigers=dragon_tigers,
+            news=news,
+        ),
+    }
+
+
+def _auxiliary_coverage_for_stocks(
+    db: Session,
+    codes: list[str],
+    target_trade_date: str,
+    *,
+    concept_sectors: dict[str, list[dict[str, Any]]],
+    capital_flows: dict[str, dict[str, Any]],
+    dragon_tigers: dict[str, dict[str, Any]],
+    news: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    """记录辅助数据覆盖语义，区分“已查为空”和“未覆盖”。"""
+    dt_stmt = select(func.count()).select_from(DragonTiger).where(DragonTiger.trade_date == target_trade_date)
+    dragon_tiger_count = int(db.scalar(dt_stmt) or 0)
+
+    concept_stmt = select(func.count()).select_from(ConceptSector).where(ConceptSector.trade_date == target_trade_date)
+    member_stmt = select(func.count()).select_from(ConceptSectorStock).where(ConceptSectorStock.trade_date == target_trade_date)
+
+    return {
+        "trade_date": target_trade_date,
+        "dragon_tiger_trade_date_covered": dragon_tiger_count > 0,
+        "dragon_tiger_trade_date_count": dragon_tiger_count,
+        "dragon_tiger_codes": sorted(dragon_tigers),
+        "concept_sector_trade_date_covered": int(db.scalar(concept_stmt) or 0) > 0,
+        "concept_member_trade_date_covered": int(db.scalar(member_stmt) or 0) > 0,
+        "concept_sector_codes": sorted(concept_sectors),
+        "capital_flow_checked_codes": sorted(capital_flows),
+        "news_codes_with_items": sorted(news),
+        "requested_codes": sorted({str(code) for code in codes if code}),
     }

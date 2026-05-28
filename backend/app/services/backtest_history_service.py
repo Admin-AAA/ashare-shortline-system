@@ -127,24 +127,33 @@ def _serialize_backtest_run(row: BacktestRun, *, include_result: bool) -> dict[s
 
 
 def _compact_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
-    keys = [
-        "trade_count",
-        "recommendation_accuracy",
-        "accuracy_numerator",
-        "accuracy_denominator",
-        "trade_accuracy",
-        "executed_trade_count",
-        "unexecuted_count",
-        "average_net_return",
-        "average_executed_return",
-        "median_net_return",
-        "profit_loss_ratio",
-        "max_drawdown",
-        "positive_month_ratio",
-        "benchmark_excess_return",
-        "sample_confidence",
-    ]
-    return {key: metrics.get(key, 0 if key != "sample_confidence" else "low") for key in keys}
+    trade_count = _metric_int(metrics, "trade_count", "labeled_count")
+    executed_trade_count = _metric_int(metrics, "executed_trade_count", "triggered_count")
+    accuracy_denominator = _metric_int(metrics, "accuracy_denominator", "labeled_count")
+    if accuracy_denominator <= 0:
+        accuracy_denominator = trade_count
+    unexecuted_count = _metric_int(metrics, "unexecuted_count", "missed_count")
+    if unexecuted_count <= 0 and accuracy_denominator and executed_trade_count:
+        unexecuted_count = max(0, accuracy_denominator - executed_trade_count)
+    return {
+        "trade_count": trade_count,
+        "recommendation_accuracy": _metric_float(metrics, "recommendation_accuracy", "hit_rate"),
+        "accuracy_numerator": _metric_int(metrics, "accuracy_numerator", "success_count"),
+        "accuracy_denominator": accuracy_denominator,
+        "trade_accuracy": _metric_float(metrics, "trade_accuracy", "hit_rate"),
+        "executed_trade_count": executed_trade_count,
+        "unexecuted_count": unexecuted_count,
+        "average_net_return": _metric_float(metrics, "average_net_return", "avg_return"),
+        "average_executed_return": _metric_float(metrics, "average_executed_return", "avg_executed_return"),
+        "median_net_return": _float_value(metrics.get("median_net_return")),
+        "profit_loss_ratio": _metric_float(metrics, "profit_loss_ratio", "profit_factor"),
+        "max_drawdown": _float_value(metrics.get("max_drawdown")),
+        "positive_month_ratio": _float_value(metrics.get("positive_month_ratio")),
+        "benchmark_excess_return": _float_value(metrics.get("benchmark_excess_return")),
+        "sample_confidence": str(metrics.get("sample_confidence") or "low"),
+        "accuracy_policy": _dict(metrics.get("accuracy_policy")),
+        "accuracy_gate_summary": _dict(metrics.get("accuracy_gate_summary")),
+    }
 
 
 def _serialize_version_matrix_row(

@@ -1,6 +1,6 @@
 import { memo } from "react";
 import type { MarketSnapshot } from "../types";
-import { businessStatusLabel } from "../utils/display";
+import { aShareDownClass, aShareUpClass, businessStatusLabel } from "../utils/display";
 
 type Props = {
   snapshot: MarketSnapshot;
@@ -13,10 +13,10 @@ export default memo(function MarketSnapshotPanel({ snapshot }: Props) {
       <div className="market-snapshot-grid">
         <MiniStatCell label="数据" value={businessStatusLabel(breadth.data_source, "状态待确认")} />
         <MiniStatCell label="报价源" value={String(breadth.quote_source ?? "-")} />
-        <MiniStatCell label="上涨" value={snapshot.up_count} />
-        <MiniStatCell label="下跌" value={snapshot.down_count} />
-        <MiniStatCell label="涨停" value={snapshot.limit_up_count} />
-        <MiniStatCell label="跌停" value={snapshot.limit_down_count} />
+        <MiniStatCell label="上涨" value={snapshot.up_count} valueClass={aShareUpClass()} />
+        <MiniStatCell label="下跌" value={snapshot.down_count} valueClass={aShareDownClass()} />
+        <MiniStatCell label="涨停" value={snapshot.limit_up_count} valueClass={aShareUpClass()} />
+        <MiniStatCell label="跌停" value={snapshot.limit_down_count} valueClass={aShareDownClass()} />
         <MiniStatCell label="主线" value={snapshot.main_industries.slice(0, 2).join(" / ")} />
         <div className="summary-block wide">
           <span>市场结论</span>
@@ -27,11 +27,11 @@ export default memo(function MarketSnapshotPanel({ snapshot }: Props) {
   );
 });
 
-function MiniStatCell({ label, value }: { label: string; value: string | number }) {
+function MiniStatCell({ label, value, valueClass }: { label: string; value: string | number; valueClass?: string }) {
   return (
     <div className="mini-stat">
       <span>{label}</span>
-      <strong>{value}</strong>
+      <strong className={valueClass}>{value}</strong>
     </div>
   );
 }

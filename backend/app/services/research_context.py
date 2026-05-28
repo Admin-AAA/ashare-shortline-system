@@ -217,6 +217,13 @@ def build_research_context(stock: dict[str, Any], snapshot: dict[str, Any]) -> R
     }
     events = {
         "limit_up_days20": stock.get("limit_up_days20", 0),
+        "is_limit_up": stock.get("is_limit_up", False),
+        "limit_up_consecutive_days": stock.get("limit_up_consecutive_days", 0),
+        "limit_up_first_time": stock.get("limit_up_first_time"),
+        "limit_up_last_time": stock.get("limit_up_last_time"),
+        "limit_up_open_times": stock.get("limit_up_open_times"),
+        "limit_up_fd_amount_yi": stock.get("limit_up_fd_amount_yi"),
+        "limit_up_turnover_ratio": stock.get("limit_up_turnover_ratio"),
         "announcement_negative_count": stock.get("announcement_negative_count", 0),
         "news_risk_count": stock.get("news_risk_count", 0),
         "dragon_tiger_is_on_list": stock.get("dragon_tiger_is_on_list", False),
@@ -310,17 +317,41 @@ def _source_trace(stock: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, 
 
 def _expanded_missing_fields(stock: dict[str, Any], data_quality: dict[str, Any]) -> list[str]:
     missing = set(data_quality.get("missing_fields") or [])
+    if data_quality.get("news_checked_empty"):
+        missing.discard("news")
+    if data_quality.get("announcements_checked_empty"):
+        missing.discard("announcements")
+    if data_quality.get("dragon_tiger_checked_empty"):
+        missing.discard("dragon_tiger")
+    if data_quality.get("capital_flow_checked"):
+        missing.discard("capital_flow")
+        missing.discard("main_net_inflow")
+    if data_quality.get("theme_tags_fallback_from_industry"):
+        missing.discard("theme_tags")
     if not stock.get("industry") or stock.get("industry") == "未分类":
         missing.add("industry")
-    if _looks_unavailable(stock.get("latest_news")):
+    if _looks_unavailable(stock.get("latest_news")) and not data_quality.get("news_checked_empty"):
         missing.add("news")
-    if not stock.get("risk_alerts") and int(float(stock.get("announcement_negative_count") or 0)) == 0:
+    if (
+        not stock.get("risk_alerts")
+        and int(float(stock.get("announcement_negative_count") or 0)) == 0
+        and not data_quality.get("announcements_checked")
+        and not data_quality.get("announcements_checked_empty")
+    ):
         missing.add("announcements")
-    if not stock.get("dragon_tiger_latest_date") and int(float(stock.get("dragon_tiger_recent_count") or 0)) == 0:
+    if (
+        not stock.get("dragon_tiger_latest_date")
+        and int(float(stock.get("dragon_tiger_recent_count") or 0)) == 0
+        and not data_quality.get("dragon_tiger_checked_empty")
+    ):
         missing.add("dragon_tiger")
-    if float(stock.get("main_net_inflow_yi") or 0) == 0 and "main_net_inflow_yi" not in (stock.get("_feature_tags") or {}):
+    if (
+        float(stock.get("main_net_inflow_yi") or 0) == 0
+        and "main_net_inflow_yi" not in (stock.get("_feature_tags") or {})
+        and not data_quality.get("capital_flow_checked")
+    ):
         missing.add("capital_flow")
-    if not stock.get("theme_tags"):
+    if not stock.get("theme_tags") and not data_quality.get("theme_tags_fallback_from_industry"):
         missing.add("theme_tags")
     return sorted(missing)
 

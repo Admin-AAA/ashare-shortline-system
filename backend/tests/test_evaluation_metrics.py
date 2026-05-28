@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -207,6 +206,116 @@ class TestComputeFullMetrics:
         assert result["false_positive_notes"][0]["category"] == "signal_invalid"
         assert result["false_positive_notes"][0]["category_label"] == "信号当时不成立"
 
+    def test_accuracy_policy_audit_breaks_down_required_gates(self):
+        trades = [
+            {
+                "net_return_pct": 2.0,
+                "gross_return_pct": 2.2,
+                "accurate": True,
+                "executed": True,
+                "signal_valid": True,
+                "trade_date": "2026-05-20",
+                "code": "000001",
+                "resolved": True,
+            },
+            {
+                "net_return_pct": 1.5,
+                "gross_return_pct": 1.7,
+                "accurate": True,
+                "executed": True,
+                "signal_valid": False,
+                "trade_date": "2026-05-21",
+                "code": "000002",
+                "resolved": True,
+            },
+            {
+                "net_return_pct": 0.0,
+                "gross_return_pct": 1.0,
+                "accurate": False,
+                "executed": False,
+                "signal_valid": True,
+                "trade_date": "2026-05-22",
+                "code": "000003",
+                "resolved": True,
+            },
+            {
+                "net_return_pct": -0.4,
+                "gross_return_pct": -0.2,
+                "accurate": False,
+                "executed": True,
+                "signal_valid": True,
+                "trade_date": "2026-05-23",
+                "code": "000004",
+                "resolved": True,
+            },
+        ]
+
+        result = compute_full_metrics(trades)
+        policy = result["accuracy_policy"]
+
+        assert result["recommendation_accuracy"] == 0.25
+        assert policy["required_conditions"] == [
+            "signal_valid_at_recommend_time",
+            "executed_trade",
+            "net_return_after_cost_gt_0",
+        ]
+        assert policy["matches_reported_accuracy"] is True
+        assert policy["gate_counts"] == {
+            "total_recommendations": 4,
+            "signal_valid_count": 3,
+            "signal_invalid_count": 1,
+            "executable_count": 2,
+            "unexecutable_count": 1,
+            "net_positive_count": 1,
+            "net_non_positive_count": 1,
+            "manual_override_count": 0,
+        }
+        assert result["accuracy_gate_summary"] == policy["gate_counts"]
+        assert {item["gate"] for item in policy["failure_breakdown"]} == {
+            "signal_valid",
+            "executed_trade",
+            "net_return_positive",
+        }
+        assert policy["funnel"][-1] == {
+            "stage": "accurate_recommendations",
+            "label": "准确推荐",
+            "count": 1,
+            "failed_count": 3,
+            "pass_rate": 0.25,
+        }
+
+    def test_accuracy_policy_exposes_manual_accuracy_label_override(self):
+        trades = [
+            {
+                "net_return_pct": 1.0,
+                "accurate": True,
+                "executed": True,
+                "signal_valid": True,
+                "trade_date": "2026-05-20",
+                "code": "000001",
+                "resolved": True,
+            },
+            {
+                "net_return_pct": 1.3,
+                "accurate": False,
+                "executed": True,
+                "signal_valid": True,
+                "trade_date": "2026-05-21",
+                "code": "000002",
+                "resolved": True,
+            },
+        ]
+
+        policy = compute_full_metrics(trades)["accuracy_policy"]
+
+        assert policy["accurate_count"] == 1
+        assert policy["strict_three_gate_accurate_count"] == 2
+        assert policy["matches_reported_accuracy"] is False
+        assert policy["gate_counts"]["manual_override_count"] == 1
+        assert policy["failure_breakdown"] == [
+            {"gate": "explicit_accuracy_label", "label": "显式准确标记为否", "count": 1}
+        ]
+
     def test_metrics_sort_trades_by_trade_date_before_drawdown(self):
         trades = [
             {"trade_date": "2026-01-02", "code": "000002", "net_return_pct": -20.0, "benchmark_return_pct": 0, "accurate": False, "resolved": True},
@@ -313,16 +422,8 @@ class TestHelperFunctions:
 # 测试 3: 从 ORM → TradeRecord 转换 + persistence
 # ═════════════════════════════════════════════════════════════════════════════
 
-@pytest.mark.skipif(
-    not (
-        (os.environ.get("ASHARE_TEST_DATABASE_URL") or os.environ.get("ASHARE_DATABASE_URL") or "")
-        .strip()
-        .startswith("mysql")
-    ),
-    reason="需要 MySQL 测试库连接",
-)
 class TestBackendIntegration:
-    """需要数据库（test env 中的 MySQL 测试库）。"""
+    """直接使用当前 demo 生产 MySQL 验证持久化链路。"""
 
     @pytest.fixture(autouse=True)
     def setup_db(self, db: Any):

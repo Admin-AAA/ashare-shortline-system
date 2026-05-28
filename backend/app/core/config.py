@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     concept_sector_sources: str = "tushare"
     capital_flow_sources: str = "tushare"
     dragon_tiger_sources: str = "tushare"
-    news_sources: str = "eastmoney"
+    news_sources: str = ""
     limit_up_cache_ttl_seconds: int = 3600
     concept_sector_cache_ttl_seconds: int = 3600
     capital_flow_cache_ttl_seconds: int = 7200

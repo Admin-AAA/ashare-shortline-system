@@ -9,7 +9,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import distinct, func, select
+from sqlalchemy import distinct, func, select, text
 from sqlalchemy.orm import Session
 
 from app.models.tables import (
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 _TABLE_DEFS: list[dict[str, Any]] = [
     {"key": "daily_kbar",       "label": "日K线",       "table": DailyKbar,       "date_col": "trade_date", "critical": True,  "expect_recent_coverage": True},
     {"key": "stock_quote",      "label": "实时快照",     "table": StockQuote,      "date_col": "trade_date", "critical": False, "expect_recent_coverage": False, "lag_alert_after_days": 1},
-    {"key": "minute_kbar",      "label": "分钟K线",     "table": MinuteKbar,      "date_col": "trade_date", "critical": False, "expect_recent_coverage": True},
+    {"key": "minute_kbar",      "label": "分钟K线",     "table": MinuteKbar,      "date_col": "trade_date", "critical": False, "expect_recent_coverage": True, "estimated_row_count": True, "fast_date_bounds": True},
     {"key": "index_daily",      "label": "指数日线",     "table": IndexDaily,      "date_col": "trade_date", "critical": True,  "expect_recent_coverage": True},
     {"key": "limit_up_board",   "label": "涨停板",       "table": LimitUpBoard,    "date_col": "trade_date", "critical": True,  "expect_recent_coverage": True},
     {"key": "dragon_tiger",     "label": "龙虎榜",       "table": DragonTiger,     "date_col": "trade_date", "critical": False, "expect_recent_coverage": False},
@@ -48,6 +48,7 @@ _TUSHARE_TABLES = {"daily_kbar", "stock_quote", "minute_kbar", "index_daily", "l
 _RECENT_REFERENCE_WINDOW = 10
 _RECENT_WARN_MISSING_DAYS = 2
 _RECENT_HIGH_MISSING_DAYS = 4
+_MIN_RECENT_DAILY_KBAR_CODES = 3000
 
 
 def diagnose_all(db: Session) -> dict[str, Any]:
@@ -103,24 +104,25 @@ def _table_stats(db: Session) -> dict[str, Any]:
         label = tdef["label"]
 
         try:
-            total = db.scalar(select(func.count()).select_from(tbl)) or 0
+            total, total_estimated = _table_row_count(db, tbl, prefer_estimate=bool(tdef.get("estimated_row_count")))
 
             min_date = None
             max_date = None
             if dc and hasattr(tbl, dc):
                 col = getattr(tbl, dc)
-                min_date = _fmt_date(db.scalar(select(func.min(col))))
-                max_date = _fmt_date(db.scalar(select(func.max(col))))
+                min_date, max_date = _fast_date_bounds(db, col) if tdef.get("fast_date_bounds") else _date_bounds(db, col)
 
             result[key] = {
                 "label": label,
                 "table": tbl.__tablename__,
                 "total_rows": total,
+                "total_rows_estimated": total_estimated,
                 "min_date": min_date,
                 "max_date": max_date,
                 "critical": tdef["critical"],
             }
         except Exception as e:
+            _rollback_session_safely(db)
             logger.warning("诊断 %s 失败: %s", key, e)
             result[key] = {"label": label, "table": tbl.__tablename__, "error": str(e)}
 
@@ -167,10 +169,10 @@ def _resolve_reference_trade_date(db: Session) -> dict[str, str | None]:
 
 def _infer_local_reference_trade_date(db: Session) -> str | None:
     candidates = [
-        db.scalar(select(func.max(DailyKbar.trade_date))),
-        db.scalar(select(func.max(LimitUpBoard.trade_date))),
-        db.scalar(select(func.max(StockQuote.trade_date))),
-        db.scalar(select(func.max(Recommendation.trade_date))),
+        _date_bounds(db, DailyKbar.trade_date)[1],
+        _date_bounds(db, LimitUpBoard.trade_date)[1],
+        _date_bounds(db, StockQuote.trade_date)[1],
+        _date_bounds(db, Recommendation.trade_date)[1],
     ]
     normalized = [_fmt_date(item) for item in candidates if item]
     return max(normalized) if normalized else None
@@ -194,13 +196,24 @@ def _recent_trade_day_coverage(
             },
         }
 
-    trade_days = db.scalars(
-        select(distinct(DailyKbar.trade_date))
-        .where(DailyKbar.trade_date <= reference_trade_date)
-        .order_by(DailyKbar.trade_date.desc())
-        .limit(window)
-    ).all()
-    ordered_days = sorted(str(day) for day in trade_days)
+    try:
+        trade_days = _recent_daily_trade_days(db, reference_trade_date, window)
+    except Exception as exc:
+        _rollback_session_safely(db)
+        logger.warning("最近交易日列表诊断失败: %s", exc)
+        return {
+            "window": window,
+            "reference_trade_date": reference_trade_date,
+            "trade_days": [],
+            "tables": {},
+            "summary": {
+                "max_missing_days": 0,
+                "high_impact_tables": [],
+                "warning_tables": [],
+                "error": str(exc),
+            },
+        }
+    ordered_days = sorted(trade_days)
     if not ordered_days:
         return {
             "window": window,
@@ -224,13 +237,25 @@ def _recent_trade_day_coverage(
         if not date_col or not tdef.get("expect_recent_coverage") or not hasattr(tbl, date_col):
             continue
         col = getattr(tbl, date_col)
-        present_rows = db.scalars(
-            select(distinct(col))
-            .where(col.in_(ordered_days))
-            .order_by(col.asc())
-        ).all()
-        present = sorted(str(item) for item in present_rows if item)
-        missing = [day for day in ordered_days if day not in present]
+        try:
+            present = _present_dates(db, col, ordered_days)
+            missing = [day for day in ordered_days if day not in present]
+            incomplete_dates = _incomplete_daily_kbar_dates(db, ordered_days) if tdef["key"] == "daily_kbar" else []
+        except Exception as exc:
+            _rollback_session_safely(db)
+            logger.warning("最近交易日覆盖诊断 %s 失败: %s", tdef["key"], exc)
+            coverage_tables[tdef["key"]] = {
+                "label": tdef["label"],
+                "critical": tdef["critical"],
+                "covered_count": 0,
+                "expected_count": len(ordered_days),
+                "coverage_rate": 0.0,
+                "present_dates": [],
+                "missing_dates": [],
+                "incomplete_dates": [],
+                "error": str(exc),
+            }
+            continue
         covered_count = len(present)
         coverage_rate = round(covered_count / len(ordered_days), 3) if ordered_days else 0.0
         coverage_tables[tdef["key"]] = {
@@ -241,11 +266,13 @@ def _recent_trade_day_coverage(
             "coverage_rate": coverage_rate,
             "present_dates": present,
             "missing_dates": missing,
+            "incomplete_dates": incomplete_dates,
         }
-        max_missing_days = max(max_missing_days, len(missing))
-        if tdef["critical"] and len(missing) >= _RECENT_HIGH_MISSING_DAYS:
+        gap_count = len(set(missing + incomplete_dates))
+        max_missing_days = max(max_missing_days, gap_count)
+        if tdef["critical"] and gap_count >= _RECENT_HIGH_MISSING_DAYS:
             high_impact_tables.append(tdef["key"])
-        elif len(missing) >= _RECENT_WARN_MISSING_DAYS:
+        elif gap_count >= _RECENT_WARN_MISSING_DAYS:
             warning_tables.append(tdef["key"])
 
     return {
@@ -289,13 +316,13 @@ def _compute_health_score(
 
     recent_tables = recent_coverage.get("tables") or {}
     for key, coverage in recent_tables.items():
-        missing_count = len(coverage.get("missing_dates") or [])
-        if missing_count == 0:
+        gap_count = _coverage_gap_count(coverage)
+        if gap_count == 0:
             continue
         if coverage.get("critical"):
-            score -= min(15, missing_count * 3)
+            score -= min(15, gap_count * 3)
         else:
-            score -= min(6, missing_count)
+            score -= min(6, gap_count)
 
     # 扣分：outcome 没有标注
     outc = table_stats.get("outcome", {})
@@ -360,16 +387,22 @@ def _find_issues(
     recent_tables = recent_coverage.get("tables") or {}
     for key, coverage in recent_tables.items():
         missing_dates = coverage.get("missing_dates") or []
-        if not missing_dates:
+        incomplete_dates = coverage.get("incomplete_dates") or []
+        gap_dates = sorted(set([*missing_dates, *incomplete_dates]))
+        if not gap_dates:
             continue
         label = coverage.get("label") or key
-        severity = "high" if coverage.get("critical") and len(missing_dates) >= _RECENT_HIGH_MISSING_DAYS else "medium"
+        severity = "high" if coverage.get("critical") and len(gap_dates) >= _RECENT_HIGH_MISSING_DAYS else "medium"
+        parts = []
+        if missing_dates:
+            parts.append(f"缺失 {len(missing_dates)} 天: {', '.join(missing_dates[:4])}" + (" ..." if len(missing_dates) > 4 else ""))
+        if incomplete_dates:
+            parts.append(f"不完整 {len(incomplete_dates)} 天: {', '.join(incomplete_dates[:4])}" + (" ..." if len(incomplete_dates) > 4 else ""))
         issues.append({
             "severity": severity,
             "message": (
-                f"{label} 最近 {recent_coverage.get('window', _RECENT_REFERENCE_WINDOW)} 个交易日缺失 "
-                f"{len(missing_dates)} 天: {', '.join(missing_dates[:4])}"
-                + (" ..." if len(missing_dates) > 4 else "")
+                f"{label} 最近 {recent_coverage.get('window', _RECENT_REFERENCE_WINDOW)} 个交易日"
+                f"{'，'.join(parts)}"
             ),
         })
 
@@ -411,8 +444,11 @@ def _fmt_date(val: Any) -> str | None:
     if isinstance(val, (date, datetime)):
         return val.isoformat()
     s = str(val).strip()
-    if len(s) >= 10:
+    if len(s) >= 10 and s[4] == "-" and s[7] == "-":
         return s[:10]
+    digits = "".join(ch for ch in s if ch.isdigit())
+    if len(digits) >= 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
     return s if s else None
 
 
@@ -423,3 +459,111 @@ def _date_diff(d1: str, d2: str) -> int:
         return (a - b).days
     except Exception:
         return 999
+
+
+def _compact_date(value: Any) -> str:
+    normalized = _fmt_date(value) or ""
+    return normalized.replace("-", "")
+
+
+def _date_variants(value: Any) -> list[str]:
+    normalized = _fmt_date(value)
+    if not normalized:
+        return []
+    return sorted({normalized, normalized.replace("-", "")})
+
+
+def _table_row_count(db: Session, tbl: Any, *, prefer_estimate: bool = False) -> tuple[int, bool]:
+    if prefer_estimate:
+        estimated = _estimated_table_rows(db, tbl.__tablename__)
+        if estimated is not None:
+            return estimated, True
+    return int(db.scalar(select(func.count()).select_from(tbl)) or 0), False
+
+
+def _estimated_table_rows(db: Session, table_name: str) -> int | None:
+    try:
+        bind = db.get_bind()
+        dialect_name = bind.dialect.name if bind is not None else ""
+    except Exception:
+        dialect_name = ""
+    if dialect_name not in {"mysql", "mariadb"}:
+        return None
+    try:
+        row = db.execute(
+            text(
+                "SELECT TABLE_ROWS "
+                "FROM INFORMATION_SCHEMA.TABLES "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table_name"
+            ),
+            {"table_name": table_name},
+        ).first()
+        if row and row[0] is not None:
+            return int(row[0])
+    except Exception:
+        _rollback_session_safely(db)
+    return None
+
+
+def _date_bounds(db: Session, col: Any) -> tuple[str | None, str | None]:
+    normalized_col = func.replace(col, "-", "")
+    min_date, max_date = db.execute(
+        select(func.min(normalized_col), func.max(normalized_col)).where(col.is_not(None))
+    ).one()
+    return _fmt_date(min_date), _fmt_date(max_date)
+
+
+def _fast_date_bounds(db: Session, col: Any) -> tuple[str | None, str | None]:
+    min_date = db.scalar(select(col).where(col.is_not(None)).order_by(col.asc()).limit(1))
+    max_date = db.scalar(select(col).where(col.is_not(None)).order_by(col.desc()).limit(1))
+    return _fmt_date(min_date), _fmt_date(max_date)
+
+
+def _recent_daily_trade_days(db: Session, reference_trade_date: str, window: int) -> list[str]:
+    reference_compact = _compact_date(reference_trade_date)
+    normalized_col = func.replace(DailyKbar.trade_date, "-", "")
+    rows = db.scalars(
+        select(distinct(normalized_col))
+        .where(DailyKbar.trade_date.is_not(None), normalized_col <= reference_compact)
+        .order_by(normalized_col.desc())
+        .limit(max(1, window))
+    ).all()
+    normalized = [_fmt_date(item) for item in rows if _fmt_date(item)]
+    return list(reversed(normalized[:window]))
+
+
+def _present_dates(db: Session, col: Any, ordered_days: list[str]) -> list[str]:
+    ordered_set = set(ordered_days)
+    target_values = sorted({variant for day in ordered_days for variant in _date_variants(day)})
+    if not target_values:
+        return []
+    rows = db.scalars(select(distinct(col)).where(col.in_(target_values))).all()
+    return sorted({_fmt_date(item) for item in rows if _fmt_date(item) in ordered_set})
+
+
+def _incomplete_daily_kbar_dates(db: Session, ordered_days: list[str]) -> list[str]:
+    if not ordered_days:
+        return []
+    counts: dict[str, int] = {}
+    target_values = sorted({variant for day in ordered_days for variant in _date_variants(day)})
+    rows = db.execute(
+        select(DailyKbar.trade_date, func.count(distinct(DailyKbar.code)))
+        .where(DailyKbar.trade_date.in_(target_values))
+        .group_by(DailyKbar.trade_date)
+    ).all()
+    for trade_date, count in rows:
+        normalized = _fmt_date(trade_date)
+        if normalized in ordered_days:
+            counts[normalized] = counts.get(normalized, 0) + int(count or 0)
+    return [day for day in ordered_days if 0 < counts.get(day, 0) < _MIN_RECENT_DAILY_KBAR_CODES]
+
+
+def _coverage_gap_count(coverage: dict[str, Any]) -> int:
+    return len(set((coverage.get("missing_dates") or []) + (coverage.get("incomplete_dates") or [])))
+
+
+def _rollback_session_safely(db: Session) -> None:
+    try:
+        db.rollback()
+    except Exception:
+        pass

@@ -752,6 +752,15 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
     pledge_map = aux.get("pledges", {})
     broker_rec_map = aux.get("broker_recs", {})
     float_upcoming_map = aux.get("share_floats_upcoming", {})
+    coverage = aux.get("coverage", {}) or {}
+    audit = (snapshot.get("breadth") or {}).get("auxiliary_data_audit") or {}
+    checked_news_codes = _checked_codes_from_audit(audit.get("news"))
+    checked_capital_flow_codes = _checked_codes_from_audit(audit.get("capital_flows"))
+    dragon_tiger_covered = _dragon_tiger_trade_date_covered(
+        coverage,
+        audit.get("dragon_tiger"),
+        trade_date,
+    )
 
     for stock in stocks:
         code = stock["code"]
@@ -767,11 +776,19 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
         if lu:
             stock["is_limit_up"] = True
             stock["limit_up_consecutive_days"] = lu.get("consecutive_days", 1)
-            stock["limit_up_seal_time"] = lu.get("limit_up_time")
+            stock["limit_up_seal_time"] = lu.get("limit_up_time") or lu.get("first_time")
+            stock["limit_up_first_time"] = lu.get("first_time")
+            stock["limit_up_last_time"] = lu.get("last_time")
+            stock["limit_up_open_times"] = int(lu.get("open_times") or 0)
+            stock["limit_up_up_stat"] = lu.get("up_stat")
+            stock["limit_up_limit_amount_yi"] = lu.get("limit_amount_yi")
+            stock["limit_up_fd_amount_yi"] = lu.get("fd_amount_yi")
+            stock["limit_up_turnover_ratio"] = lu.get("turnover_ratio")
             stock["limit_up_reason"] = lu.get("limit_up_reason")
         else:
             stock["is_limit_up"] = False
             stock["limit_up_consecutive_days"] = 0
+            stock["limit_up_open_times"] = 0
 
         # ── 龙虎榜特征 ──
         dt = dt_map.get(code)
@@ -780,8 +797,17 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             stock["dragon_tiger_recent_count"] = 1
             stock["dragon_tiger_latest_date"] = dt.get("trade_date")
             profile["dragon_tiger_net_amount_yi"] = dt.get("net_amount_yi", 0)
+            missing_fields.discard("dragon_tiger")
+            data_quality["dragon_tiger_checked_trade_date"] = dt.get("trade_date") or trade_date
         else:
-            missing_fields.add("dragon_tiger")
+            stock["dragon_tiger_is_on_list"] = False
+            stock["dragon_tiger_recent_count"] = 0
+            if dragon_tiger_covered:
+                missing_fields.discard("dragon_tiger")
+                data_quality["dragon_tiger_checked_empty"] = True
+                data_quality["dragon_tiger_checked_trade_date"] = trade_date
+            else:
+                missing_fields.add("dragon_tiger")
 
         # ── 新闻/公告特征 ──
         news_items = news_map.get(code, [])
@@ -795,21 +821,41 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             stock["positive_catalysts"] = [n["title"] for n in positive_items[:3]]
         if news_items:
             stock["latest_news"] = news_items[0].get("title", "")
+            missing_fields.discard("news")
+            missing_fields.discard("announcements")
+            data_quality["news_checked"] = True
+            data_quality["announcements_checked"] = True
         else:
-            missing_fields.update({"news", "announcements"})
+            if code in checked_news_codes:
+                missing_fields.discard("news")
+                missing_fields.discard("announcements")
+                data_quality["news_checked_empty"] = True
+                data_quality["announcements_checked_empty"] = True
+            else:
+                missing_fields.update({"news", "announcements"})
 
         # ── 概念板块特征 ──
         concepts = concept_map.get(code, [])
         if concepts:
             best = min(concepts, key=lambda c: c.get("heat_rank", 999))
+            theme_tags = [
+                str(c.get("sector_name") or "").strip()
+                for c in sorted(concepts, key=lambda c: c.get("heat_rank", 999))[:5]
+                if str(c.get("sector_name") or "").strip()
+            ]
             stock["concept_sector_name"] = best.get("sector_name")
             stock["concept_sector_heat_rank"] = best.get("heat_rank", 0)
+            stock["theme_tags"] = theme_tags
+            missing_fields.discard("theme_tags")
+            data_quality["theme_tags_checked"] = True
         elif stock.get("industry") and stock.get("industry") != "未分类":
             # 行业作为概念板块降级方案
             stock["concept_sector_name"] = stock["industry"]
             stock["concept_sector_heat_rank"] = 50  # 中性热度
-            fallback_fields.update({"concept_sector_name", "concept_sector_heat_rank"})
-            missing_fields.add("theme_tags")
+            stock["theme_tags"] = [stock["industry"]]
+            fallback_fields.update({"concept_sector_name", "concept_sector_heat_rank", "theme_tags"})
+            missing_fields.discard("theme_tags")
+            data_quality["theme_tags_fallback_from_industry"] = True
         else:
             missing_fields.add("theme_tags")
 
@@ -826,7 +872,12 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             stock["inflow_10d_yi"] = cf.get("cumulative_inflow_10d_yi", 0)
             stock["cumulative_inflow_3d_yi"] = cf.get("cumulative_inflow_3d_yi", 0)
             profile["main_net_inflow_yi"] = cf.get("main_net_inflow_yi", 0)
+            missing_fields.discard("capital_flow")
+            missing_fields.discard("main_net_inflow")
+            data_quality["capital_flow_checked"] = True
         else:
+            if code in checked_capital_flow_codes:
+                data_quality["capital_flow_checked_empty"] = True
             missing_fields.add("capital_flow")
 
         # ── 集合竞价特征 ──
@@ -869,6 +920,29 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
 
     # ── 计算陈小群龙头战法专属信号 ──
     _compute_chen_xiaoqun_signals(stocks, snapshot, concept_map, flow_map, dt_map)
+
+
+def _checked_codes_from_audit(audit_row: Any) -> set[str]:
+    if not isinstance(audit_row, dict):
+        return set()
+    status = str(audit_row.get("status") or "")
+    if status not in {"success", "cached"}:
+        return set()
+    return {str(code) for code in (audit_row.get("checked_codes") or []) if code}
+
+
+def _dragon_tiger_trade_date_covered(
+    coverage: dict[str, Any],
+    audit_row: Any,
+    trade_date: str,
+) -> bool:
+    if bool(coverage.get("dragon_tiger_trade_date_covered")):
+        return True
+    if not isinstance(audit_row, dict):
+        return False
+    status = str(audit_row.get("status") or "")
+    covered_trade_date = str(audit_row.get("covered_trade_date") or "")
+    return status in {"success", "cached"} and covered_trade_date == trade_date
 
 
 def _compute_chen_xiaoqun_signals(
@@ -996,12 +1070,22 @@ def _tag_features(item: dict[str, Any]) -> None:
         elif key in _OBSERVED_FIELDS:
             tags[key] = "OBSERVED"
         elif key in _DERIVED_SCORE_FIELDS:
-            tags[key] = "DERIVED"
+            tags[key] = _derived_score_tag(data_quality)
         elif key in _OBSERVABLE_FIELDS:
             tags[key] = "FALLBACK" if key in missing_fields else "OBSERVED"
         elif key in _SYNTHETIC_FIELDS:
             tags[key] = "ESTIMATED"
     item["_feature_tags"] = tags
+
+
+def _derived_score_tag(data_quality: dict[str, Any]) -> str:
+    if (
+        bool(data_quality.get("strict_real_data"))
+        and not data_quality.get("missing_fields")
+        and not data_quality.get("fallback_fields")
+    ):
+        return "OBSERVED"
+    return "DERIVED"
 
 
 def _compute_authenticity(item: dict[str, Any]) -> float:

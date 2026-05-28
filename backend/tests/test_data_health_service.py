@@ -2,12 +2,18 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.db.session import Base
+from app.models.tables import CapitalFlow, DailyKbar, IndexDaily, LimitUpBoard, Recommendation, StockQuote
 from app.services.data_health_service import (
     _TABLE_DEFS,
     _compute_health_score,
     _find_issues,
     _recent_trade_day_coverage,
     _resolve_reference_trade_date,
+    _table_stats,
 )
 
 
@@ -42,6 +48,62 @@ def test_recent_trade_day_coverage_reports_missing_dates():
     assert daily["missing_dates"] == ["2026-05-22", "2026-05-26"]
     assert daily["coverage_rate"] == 0.6
     assert "daily_kbar" in result["summary"]["warning_tables"]
+
+
+def test_data_health_normalizes_mixed_trade_dates_and_flags_incomplete_daily_kbar():
+    engine = create_engine("sqlite:///:memory:")
+    tables = [
+        DailyKbar.__table__,
+        IndexDaily.__table__,
+        LimitUpBoard.__table__,
+        CapitalFlow.__table__,
+        StockQuote.__table__,
+        Recommendation.__table__,
+    ]
+    Base.metadata.create_all(engine, tables=tables)
+    Session = sessionmaker(bind=engine)
+    db = Session()
+    try:
+        for day in ["20260523", "2026-05-24", "20260525", "2026-05-26"]:
+            db.add(DailyKbar(code="000001", trade_date=day, open=1, high=1, low=1, close=1))
+            db.add(IndexDaily(ts_code="000001.SH", trade_date=day, close=1))
+        for idx in range(5):
+            db.add(DailyKbar(code=f"30{idx:04d}", trade_date="2026-05-27", open=1, high=1, low=1, close=1))
+        db.add(LimitUpBoard(code="000001", trade_date="20260526", name="样本"))
+        db.add(CapitalFlow(code="000001", trade_date="20260526"))
+        db.commit()
+
+        stats = _table_stats(db)
+        coverage = _recent_trade_day_coverage(db, "2026-05-27", window=5)
+
+        assert stats["daily_kbar"]["max_date"] == "2026-05-27"
+        assert stats["index_daily"]["max_date"] == "2026-05-26"
+        assert coverage["trade_days"] == [
+            "2026-05-23",
+            "2026-05-24",
+            "2026-05-25",
+            "2026-05-26",
+            "2026-05-27",
+        ]
+        assert coverage["tables"]["daily_kbar"]["missing_dates"] == []
+        assert coverage["tables"]["daily_kbar"]["incomplete_dates"] == [
+            "2026-05-23",
+            "2026-05-24",
+            "2026-05-25",
+            "2026-05-26",
+            "2026-05-27",
+        ]
+        assert coverage["tables"]["index_daily"]["missing_dates"] == ["2026-05-27"]
+        assert coverage["tables"]["limit_up_board"]["present_dates"] == ["2026-05-26"]
+        assert coverage["tables"]["limit_up_board"]["missing_dates"] == [
+            "2026-05-23",
+            "2026-05-24",
+            "2026-05-25",
+            "2026-05-27",
+        ]
+        assert "daily_kbar" in coverage["summary"]["high_impact_tables"]
+    finally:
+        db.close()
 
 
 def test_compute_health_score_penalizes_recent_critical_gaps():

@@ -18,6 +18,12 @@ export default function QualityScorecardPanel({ scorecard }: { scorecard: Qualit
   const rows = Object.entries(dimensions);
   const validation = dimensions.validation;
   const validationMetrics = validation?.metrics ?? {};
+  const gateSummary = asRecord(validationMetrics.accuracy_gate_summary);
+  const failureBreakdown = Array.isArray(validationMetrics.accuracy_failure_breakdown)
+    ? validationMetrics.accuracy_failure_breakdown.slice(0, 3)
+    : [];
+  const accuracyNumerator = validationMetrics.accuracy_numerator ?? validationMetrics.success_count ?? "-";
+  const accuracyDenominator = validationMetrics.accuracy_denominator ?? validationMetrics.trade_count ?? "-";
   return (
     <section className="cockpit-panel">
       <div className="panel-header">
@@ -41,19 +47,54 @@ export default function QualityScorecardPanel({ scorecard }: { scorecard: Qualit
         ))}
       </div>
       {validation ? (
-        <div className="metric-grid" style={{ marginTop: 12 }}>
-          <span>验证范围<strong>{textValue(validationMetrics.decision_scope_label ?? validationMetrics.decision_scope)}</strong></span>
-          <span>样本<strong>{textValue(validationMetrics.trade_count)}</strong></span>
-          <span>准确率<strong>{percentText(validationMetrics.recommendation_accuracy)}</strong></span>
-          <span>成交胜率<strong>{percentText(validationMetrics.trade_accuracy)}</strong></span>
-          <span>可成交率<strong>{percentText(validationMetrics.execution_rate)}</strong></span>
-          <span>均净收益<strong className={aShareDirectionClass(validationMetrics.average_net_return)}>{pctText(validationMetrics.average_net_return)}</strong></span>
-          <span>最大回撤<strong className="negative">{pctText(validationMetrics.max_drawdown)}</strong></span>
-          <span>超额收益<strong className={aShareDirectionClass(validationMetrics.benchmark_excess_return)}>{pctText(validationMetrics.benchmark_excess_return)}</strong></span>
-        </div>
+        <>
+          <div className="metric-grid" style={{ marginTop: 12 }}>
+            <span>验证范围<strong>{textValue(validationMetrics.decision_scope_label ?? validationMetrics.decision_scope)}</strong></span>
+            <span>样本<strong>{textValue(validationMetrics.trade_count)}</strong></span>
+            <span>准确推荐<strong>{textValue(accuracyNumerator)}/{textValue(accuracyDenominator)}</strong></span>
+            <span>准确率<strong>{percentText(validationMetrics.recommendation_accuracy)}</strong></span>
+            <span>成交胜率<strong>{percentText(validationMetrics.trade_accuracy)}</strong></span>
+            <span>可成交率<strong>{percentText(validationMetrics.execution_rate)}</strong></span>
+            <span>未成交<strong>{textValue(validationMetrics.unexecuted_count)}</strong></span>
+            <span>置信度<strong>{businessStatusLabel(validationMetrics.sample_confidence, "低置信度")}</strong></span>
+            <span>均净收益<strong className={aShareDirectionClass(validationMetrics.average_net_return)}>{pctText(validationMetrics.average_net_return)}</strong></span>
+            <span>最大回撤<strong className={aShareDirectionClass(validationMetrics.max_drawdown)}>{pctText(validationMetrics.max_drawdown)}</strong></span>
+            <span>超额收益<strong className={aShareDirectionClass(validationMetrics.benchmark_excess_return)}>{pctText(validationMetrics.benchmark_excess_return)}</strong></span>
+          </div>
+          {Object.keys(gateSummary).length > 0 ? (
+            <div className="sub-metrics-group" style={{ marginTop: 10 }}>
+              <span className="group-label">严格准确率闸门</span>
+              <div className="sub-metrics-row">
+                <span>信号失效 <strong>{textValue(gateSummary.signal_invalid_count, "0")}</strong></span>
+                <span>不可成交 <strong>{textValue(gateSummary.unexecutable_count, "0")}</strong></span>
+                <span>净收益不为正 <strong>{textValue(gateSummary.net_non_positive_count, "0")}</strong></span>
+                <span>通过净收益 <strong>{textValue(gateSummary.net_positive_count, "0")}</strong></span>
+              </div>
+            </div>
+          ) : null}
+          {failureBreakdown.length > 0 ? (
+            <div className="sub-metrics-group" style={{ marginTop: 10 }}>
+              <span className="group-label">准确率失败归因</span>
+              <div className="sub-metrics-row">
+                {failureBreakdown.map((item) => {
+                  const row = asRecord(item);
+                  return (
+                    <span key={`${textValue(row.gate)}-${textValue(row.label)}`}>
+                      {textValue(row.label)} <strong>{textValue(row.count)}</strong>
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+        </>
       ) : null}
     </section>
   );
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 function percentText(value: unknown) {

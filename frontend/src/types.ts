@@ -347,6 +347,11 @@ export type DataHealthDiagnostic = {
 export type DataHealthRemediationSnapshot = {
   score?: number;
   issue_count?: number;
+  diagnosis_failed?: boolean;
+  diagnosis_skipped?: boolean;
+  diagnosis_stage?: string;
+  error_type?: string;
+  error?: string;
   recent_summary?: {
     max_missing_days?: number;
     high_impact_tables?: string[];
@@ -416,6 +421,11 @@ export type DataHealthRemediationResult = {
     failed_count?: number;
   };
   comparison?: {
+    status?: string;
+    reason?: string;
+    message?: string;
+    error_type?: string;
+    error?: string;
     issue_count_delta?: number;
     score_delta?: number;
     max_missing_days_delta?: number;
@@ -953,9 +963,29 @@ export type RecommendationCard = {
     market_adjustment?: number;
     risk_template_adjustment?: number;
     evidence_adjustment?: number;
+    execution_adjustment?: number;
+    execution_status?: string;
+    execution_blocked?: boolean;
+    block_reason?: string | null;
     effective_score_line?: number;
     passed?: boolean;
     reasons?: string[];
+  };
+  execution_viability?: {
+    status?: "tradable" | "risky" | "blocked" | string;
+    label?: string;
+    block_reason?: string | null;
+    risk_flags?: string[];
+    score_line_adjustment?: number;
+    details?: {
+      is_limit_up?: boolean;
+      open_times?: number;
+      first_time?: string | null;
+      last_time?: string | null;
+      fd_amount_yi?: number;
+      turnover_ratio?: number;
+      [key: string]: unknown;
+    };
   };
   status: string;
   recent_repeat: boolean;
@@ -1357,6 +1387,21 @@ export type PresetStatsRow = {
   last_run_at?: string | null;
 };
 
+export type EvaluationKpiFields = {
+  trade_count?: number;
+  recommendation_accuracy?: number;
+  average_net_return?: number;
+  median_net_return?: number;
+  profit_loss_ratio?: number;
+  max_drawdown?: number;
+  positive_month_ratio?: number;
+  benchmark_excess_return?: number;
+  sample_confidence?: "low" | "normal" | string;
+  accuracy_numerator?: number;
+  accuracy_denominator?: number;
+  accuracy_basis?: string;
+};
+
 export type SetupStatsRow = {
   setup_type: string;
   sample_count: number;
@@ -1369,7 +1414,7 @@ export type SetupStatsRow = {
   avg_score: number;
   avg_return: number;
   avg_drawdown?: number;
-};
+} & EvaluationKpiFields;
 
 export type PrecisionAtKRow = {
   k: number;
@@ -1392,6 +1437,42 @@ export type ScoreLineStatsRow = {
   avg_return: number;
   avg_drawdown: number;
   avg_close_return: number;
+} & EvaluationKpiFields;
+
+export type AccuracyGateSummary = {
+  total_recommendations: number;
+  signal_valid_count: number;
+  signal_invalid_count: number;
+  executable_count: number;
+  unexecutable_count: number;
+  net_positive_count: number;
+  net_non_positive_count: number;
+  manual_override_count: number;
+};
+
+export type AccuracyPolicyAudit = {
+  definition: string;
+  required_conditions: string[];
+  denominator: number;
+  accurate_count: number;
+  strict_three_gate_accurate_count: number;
+  reported_accuracy: number;
+  strict_three_gate_accuracy: number;
+  matches_reported_accuracy: boolean;
+  sample_confidence: "low" | "normal";
+  gate_counts: AccuracyGateSummary;
+  funnel: Array<{
+    stage: string;
+    label: string;
+    count: number;
+    failed_count: number;
+    pass_rate: number;
+  }>;
+  failure_breakdown: Array<{
+    gate: string;
+    label: string;
+    count: number;
+  }>;
 };
 
 /** 9-KPI 评估指标（来自 /api/metrics/overview） */
@@ -1446,4 +1527,6 @@ export type MetricsOverview = {
     stage: string;
     count: number;
   }>;
+  accuracy_gate_summary: AccuracyGateSummary;
+  accuracy_policy: AccuracyPolicyAudit;
 };

@@ -61,7 +61,7 @@ export default function DataHealthDetailPanel() {
     try {
       const result = await api.remediateDataHealth({
         dry_run: dryRun,
-        target_tables: ["index_daily", "limit_up_board", "capital_flow", "concept_sector"],
+        post_diagnosis: dryRun,
       });
       setRepairResult(result);
       if (!dryRun) {
@@ -89,6 +89,7 @@ export default function DataHealthDetailPanel() {
   const referenceTradeDate = textValue(data?.reference_trade_date, "未知");
   const referenceSource = businessStatusLabel(data?.reference_trade_date_source, "状态待确认");
   const referenceNote = textValue(data?.reference_trade_date_note, "");
+  const repairComparisonSkipped = repairResult?.comparison?.status === "skipped";
 
   return (
     <section className="cockpit-panel">
@@ -302,10 +303,25 @@ export default function DataHealthDetailPanel() {
                     <span>评分 <strong>{textValue(repairResult.before?.score, "-")} → {textValue(repairResult.after?.score, "-")}</strong></span>
                     <span>最大缺失 <strong>{textValue(repairResult.before?.recent_summary?.max_missing_days, "-")} → {textValue(repairResult.after?.recent_summary?.max_missing_days, "-")}</strong></span>
                     <span>失败动作 <strong>{textValue(repairResult.action_summary?.failed_count, "0")}</strong></span>
-                    <span>目标缺口修复 <strong>{textValue(repairResult.comparison?.resolved_missing_day_count, "0")}/{textValue(repairResult.comparison?.target_missing_day_count, "0")}</strong></span>
-                    <span>修复率 <strong>{percentValue(repairResult.comparison?.remediation_coverage_rate)}</strong></span>
+                    {!repairComparisonSkipped && (
+                      <>
+                        <span>目标缺口修复 <strong>{textValue(repairResult.comparison?.resolved_missing_day_count, "0")}/{textValue(repairResult.comparison?.target_missing_day_count, "0")}</strong></span>
+                        <span>修复率 <strong>{percentValue(repairResult.comparison?.remediation_coverage_rate)}</strong></span>
+                      </>
+                    )}
                   </div>
                 </div>
+                {repairComparisonSkipped && (
+                  <div className="sub-metrics-group">
+                    <span className="group-label">诊断状态</span>
+                    <div className="sub-metrics-row">
+                      <span>{textValue(repairResult.comparison?.message ?? repairResult.comparison?.reason, "已跳过完整诊断")}</span>
+                      {repairResult.comparison?.error ? (
+                        <span>错误: {textValue(repairResult.comparison.error_type, "Error")} · {repairResult.comparison.error}</span>
+                      ) : null}
+                    </div>
+                  </div>
+                )}
                 {(repairResult.comparison?.tables_still_missing?.length ?? 0) > 0 && (
                   <div className="sub-metrics-group">
                     <span className="group-label">仍有缺口</span>

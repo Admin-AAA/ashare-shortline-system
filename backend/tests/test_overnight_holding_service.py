@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-import pytest
+import uuid
 
-from app.db.session import SessionLocal
+import pytest
+from sqlalchemy import select
+
 from app.models.tables import DailyKbar, Stock
+from app.services import market_pool
 from app.services.overnight_holding_service import (
     BASELINE_VARIANT,
     CANDIDATE_VARIANT,
@@ -16,17 +19,19 @@ from app.services.overnight_holding_service import (
 )
 
 
-@pytest.fixture
-def db(clean_test_db):
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
+def _unique_main_board_code(db) -> str:
+    base = uuid.uuid4().int % 1000
+    for offset in range(1000):
+        code = f"003{(base + offset) % 1000:03d}"
+        stock_exists = db.scalar(select(Stock.code).where(Stock.code == code).limit(1))
+        bar_exists = db.scalar(select(DailyKbar.code).where(DailyKbar.code == code).limit(1))
+        if not stock_exists and not bar_exists:
+            return code
+    raise AssertionError("无法找到未占用的隔夜回测 demo 股票代码")
 
 
-def _seed_stock(db):
-    db.add(Stock(code="001234", name="隔夜样本", industry="银行", is_st=False))
+def _seed_stock(db, code: str):
+    db.merge(Stock(code=code, name="隔夜样本", market="主板", industry="银行", is_st=False))
     bars = [
         ("2026-05-12", 10.0, 10.1, 9.9, 10.0, 1000, 10000, 0.0, 6.0),
         ("2026-05-13", 10.0, 10.1, 9.9, 10.0, 1000, 10000, 0.0, 6.0),
@@ -38,47 +43,74 @@ def _seed_stock(db):
         ("2026-05-21", 11.5, 11.8, 11.3, 11.9, 1000, 10000, 4.0, 6.0),
         ("2026-05-22", 11.9, 12.0, 11.0, 11.2, 1000, 10000, -5.9, 6.0),
     ]
-    for trade_date, open_p, high_p, low_p, close_p, volume, amount, pct, turnover in bars:
-        db.add(
-            DailyKbar(
-                code="001234",
-                trade_date=trade_date,
-                open=open_p,
-                high=high_p,
-                low=low_p,
-                close=close_p,
-                volume=volume,
-                amount=amount,
-                pct_chg=pct,
-                turnover_rate=turnover,
-            )
-        )
+    market_pool._persist_kbars(
+        db,
+        [
+            {
+                "code": code,
+                "trade_date": trade_date,
+                "open": open_p,
+                "high": high_p,
+                "low": low_p,
+                "close": close_p,
+                "volume": volume,
+                "amount": amount,
+                "pct_chg": pct,
+                "turnover_rate": turnover,
+            }
+            for trade_date, open_p, high_p, low_p, close_p, volume, amount, pct, turnover in bars
+        ],
+    )
     db.commit()
 
 
+def _load_seeded_window(db, code: str, start_date: str, end_date: str):
+    rows = db.scalars(
+        select(DailyKbar)
+        .where(DailyKbar.code == code, DailyKbar.trade_date >= start_date, DailyKbar.trade_date <= end_date)
+        .order_by(DailyKbar.trade_date.asc())
+    ).all()
+    return (
+        {str(row.trade_date): {code: row} for row in rows},
+        {code: list(rows)},
+    )
+
+
+def _minute(trade_time: str, close: float, high: float, low: float, volume: float = 1000) -> dict:
+    return {
+        "trade_time": trade_time,
+        "close": close,
+        "high": high,
+        "low": low,
+        "volume": volume,
+        "amount": close * volume * 100,
+    }
+
+
 def test_run_overnight_holding_backtest_computes_accuracy(monkeypatch, db):
-    _seed_stock(db)
+    code = _unique_main_board_code(db)
+    _seed_stock(db, code)
 
     minute_map = {
-        ("001234", "2026-05-19"): [
-            {"trade_time": "2026-05-19 14:29:00", "close": 11.30, "high": 11.30, "low": 11.28, "volume": 100, "amount": 1130},
-            {"trade_time": "2026-05-19 14:30:00", "close": 11.38, "high": 11.39, "low": 11.36, "volume": 100, "amount": 1138},
-            {"trade_time": "2026-05-19 14:31:00", "close": 11.37, "high": 11.38, "low": 11.35, "volume": 100, "amount": 1137},
+        (code, "2026-05-19"): [
+            _minute("2026-05-19 14:29:00", 11.30, 11.30, 11.28),
+            _minute("2026-05-19 14:30:00", 11.38, 11.39, 11.36),
+            _minute("2026-05-19 14:31:00", 11.37, 11.38, 11.35),
         ],
-        ("001234", "2026-05-20"): [
-            {"trade_time": "2026-05-20 09:35:00", "close": 11.58, "high": 11.60, "low": 11.52, "volume": 100, "amount": 1158},
-            {"trade_time": "2026-05-20 14:29:00", "close": 11.48, "high": 11.48, "low": 11.45, "volume": 100, "amount": 1148},
-            {"trade_time": "2026-05-20 14:30:00", "close": 11.55, "high": 11.56, "low": 11.52, "volume": 100, "amount": 1155},
-            {"trade_time": "2026-05-20 14:31:00", "close": 11.54, "high": 11.55, "low": 11.52, "volume": 100, "amount": 1154},
+        (code, "2026-05-20"): [
+            _minute("2026-05-20 09:35:00", 11.58, 11.60, 11.52),
+            _minute("2026-05-20 14:29:00", 11.70, 11.71, 11.68),
+            _minute("2026-05-20 14:30:00", 11.75, 11.76, 11.73),
+            _minute("2026-05-20 14:31:00", 11.74, 11.75, 11.72),
         ],
-        ("001234", "2026-05-21"): [
-            {"trade_time": "2026-05-21 09:35:00", "close": 11.40, "high": 11.45, "low": 11.38, "volume": 100, "amount": 1140},
-            {"trade_time": "2026-05-21 14:29:00", "close": 11.78, "high": 11.78, "low": 11.75, "volume": 100, "amount": 1178},
-            {"trade_time": "2026-05-21 14:30:00", "close": 11.90, "high": 11.92, "low": 11.88, "volume": 100, "amount": 1190},
-            {"trade_time": "2026-05-21 14:31:00", "close": 11.89, "high": 11.90, "low": 11.87, "volume": 100, "amount": 1189},
+        (code, "2026-05-21"): [
+            _minute("2026-05-21 09:35:00", 11.88, 11.90, 11.86),
+            _minute("2026-05-21 14:29:00", 11.78, 11.78, 11.75),
+            _minute("2026-05-21 14:30:00", 11.90, 11.92, 11.88),
+            _minute("2026-05-21 14:31:00", 11.89, 11.90, 11.87),
         ],
-        ("001234", "2026-05-22"): [
-            {"trade_time": "2026-05-22 09:35:00", "close": 11.18, "high": 11.20, "low": 11.15, "volume": 100, "amount": 1118},
+        (code, "2026-05-22"): [
+            _minute("2026-05-22 09:35:00", 11.18, 11.20, 11.15),
         ],
     }
     benchmark_bundle = [
@@ -98,8 +130,32 @@ def test_run_overnight_holding_backtest_computes_accuracy(monkeypatch, db):
 
     monkeypatch.setattr(
         "app.services.overnight_holding_service._load_daily_basic_map",
-        lambda trade_date, cache: {"001234": {"turnover_rate": 6.0, "total_mv_yi": 120.0, "circ_mv_yi": 110.0}},
+        lambda trade_date, cache: {code: {"turnover_rate": 6.0, "total_mv_yi": 120.0, "circ_mv_yi": 110.0}},
     )
+    date_lookup = [
+        "2026-05-12",
+        "2026-05-13",
+        "2026-05-14",
+        "2026-05-15",
+        "2026-05-16",
+        "2026-05-19",
+        "2026-05-20",
+        "2026-05-21",
+        "2026-05-22",
+    ]
+    monkeypatch.setattr(
+        "app.services.overnight_holding_service._signal_trade_dates",
+        lambda db, start_date, end_date: (["2026-05-19", "2026-05-20", "2026-05-21"], date_lookup),
+    )
+    monkeypatch.setattr(
+        "app.services.overnight_holding_service._load_daily_window",
+        lambda db, start_date, end_date: _load_seeded_window(db, code, start_date, end_date),
+    )
+    monkeypatch.setattr(
+        "app.services.overnight_holding_service._load_stock_meta",
+        lambda db, codes: {code: {"name": "隔夜样本", "industry": "银行", "is_st": False}},
+    )
+    monkeypatch.setattr("app.services.overnight_holding_service.MINUTE_GATE_MIN_READY_CANDIDATES", 1)
     monkeypatch.setattr(
         "app.services.overnight_holding_service._load_stock_minutes",
         lambda db, cache, code, trade_date, minute_source_trace=None: minute_map.get((code, trade_date), []),
@@ -111,6 +167,10 @@ def test_run_overnight_holding_backtest_computes_accuracy(monkeypatch, db):
     monkeypatch.setattr(
         "app.services.overnight_holding_service._persist_backtest_run",
         lambda db, start_date, end_date, result, status="completed": None,
+    )
+    monkeypatch.setattr(
+        "app.services.overnight_holding_service._run_overnight_temporal_check",
+        lambda db, signal_dates: {"status": "completed", "passed": True, "violation_count": 0, "error_count": 0, "warning_count": 0},
     )
 
     result = run_overnight_holding_backtest(db, "2026-05-19", "2026-05-21")

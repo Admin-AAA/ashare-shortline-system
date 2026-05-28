@@ -400,9 +400,16 @@ def _task_run_summary_text(run: ScheduledTaskRun, result: dict[str, Any]) -> str
         comparison = result.get("comparison") if isinstance(result, dict) else None
         actions = result.get("actions") if isinstance(result, dict) else None
         if isinstance(comparison, dict):
+            action_count = len(actions) if isinstance(actions, list) else 0
+            if comparison.get("status") == "skipped":
+                reason = str(comparison.get("reason") or "").strip()
+                if reason == "pre_diagnosis_failed":
+                    return "数据补数未执行，前置诊断失败"
+                if reason == "post_diagnosis_failed":
+                    return f"数据补数 {action_count} 项，后置诊断失败待复核"
+                return f"数据补数 {action_count} 项，已跳过后置诊断"
             issue_delta = int(comparison.get("issue_count_delta") or 0)
             score_delta = float(comparison.get("score_delta") or 0)
-            action_count = len(actions) if isinstance(actions, list) else 0
             score_prefix = f"{score_delta:+.0f}" if float(score_delta).is_integer() else f"{score_delta:+.1f}"
             return f"数据补数 {action_count} 项，问题数 {issue_delta:+d}，评分 {score_prefix}"
         return "数据健康补数"

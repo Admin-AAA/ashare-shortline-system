@@ -29,7 +29,50 @@ def test_serialize_backtest_run_summarizes_metrics_and_data_source():
             "max_drawdown": 0.0,
             "positive_month_ratio": 1.0,
             "benchmark_excess_return": -1.298,
-            "sample_confidence": "low"
+            "sample_confidence": "low",
+            "accuracy_gate_summary": {
+              "total_recommendations": 2,
+              "signal_valid_count": 2,
+              "signal_invalid_count": 0,
+              "executable_count": 2,
+              "unexecutable_count": 0,
+              "net_positive_count": 2,
+              "net_non_positive_count": 0,
+              "manual_override_count": 0
+            },
+            "accuracy_policy": {
+              "definition": "recommendation_accuracy = accurate_recommendations / total_recommendations",
+              "required_conditions": [
+                "signal_valid_at_recommend_time",
+                "executed_trade",
+                "net_return_after_cost_gt_0"
+              ],
+              "denominator": 2,
+              "accurate_count": 2,
+              "strict_three_gate_accurate_count": 2,
+              "reported_accuracy": 1.0,
+              "strict_three_gate_accuracy": 1.0,
+              "matches_reported_accuracy": true,
+              "sample_confidence": "low",
+              "gate_counts": {
+                "total_recommendations": 2,
+                "signal_valid_count": 2,
+                "signal_invalid_count": 0,
+                "executable_count": 2,
+                "unexecutable_count": 0,
+                "net_positive_count": 2,
+                "net_non_positive_count": 0,
+                "manual_override_count": 0
+              },
+              "funnel": [
+                {"stage": "total_recommendations", "label": "总推荐", "count": 2, "failed_count": 0, "pass_rate": 1.0},
+                {"stage": "signal_valid", "label": "信号当时真实成立", "count": 2, "failed_count": 0, "pass_rate": 1.0},
+                {"stage": "executed_trade", "label": "可真实成交", "count": 2, "failed_count": 0, "pass_rate": 1.0},
+                {"stage": "net_return_positive", "label": "扣费滑点后净收益 > 0", "count": 2, "failed_count": 0, "pass_rate": 1.0},
+                {"stage": "accurate_recommendations", "label": "准确推荐", "count": 2, "failed_count": 0, "pass_rate": 1.0}
+              ],
+              "failure_breakdown": []
+            }
           },
           "comparison": {
             "selected_variant": "baseline",
@@ -85,6 +128,8 @@ def test_serialize_backtest_run_summarizes_metrics_and_data_source():
     assert summary["metrics"]["unexecuted_count"] == 0
     assert summary["metrics"]["average_net_return"] == 0.314
     assert summary["metrics"]["average_executed_return"] == 0.314
+    assert summary["metrics"]["accuracy_gate_summary"]["signal_invalid_count"] == 0
+    assert summary["metrics"]["accuracy_policy"]["matches_reported_accuracy"] is True
     assert summary["selected_variant"] == "baseline"
     assert summary["decision_scope"] == "walk_forward"
     assert summary["decision_scope_label"] == "滚动样本外验证"
@@ -114,6 +159,45 @@ def test_serialize_backtest_run_includes_full_result_for_detail():
 
     assert detail["metrics"]["trade_count"] == 1
     assert detail["result"]["status"] == "completed"
+
+
+def test_serialize_backtest_run_backfills_legacy_execution_metrics():
+    row = BacktestRun(
+        backtest_id="bt_legacy_001",
+        skill_id="overnight-holding-method",
+        date_from="2026-05-14",
+        date_to="2026-05-22",
+        status="completed",
+        result_json="""{
+          "aggregate_metrics": {
+            "trade_count": 3,
+            "recommendation_accuracy": 0.667,
+            "triggered_count": 3,
+            "labeled_count": 3,
+            "success_count": 2,
+            "hit_rate": 0.667,
+            "avg_return": 1.747,
+            "avg_executed_return": 1.747,
+            "profit_factor": 6.206,
+            "max_drawdown": -1.007,
+            "positive_month_ratio": 1.0,
+            "benchmark_excess_return": 5.124,
+            "sample_confidence": "low"
+          }
+        }""",
+    )
+
+    detail = _serialize_backtest_run(row, include_result=False)
+
+    assert detail["metrics"]["trade_count"] == 3
+    assert detail["metrics"]["accuracy_numerator"] == 2
+    assert detail["metrics"]["accuracy_denominator"] == 3
+    assert detail["metrics"]["trade_accuracy"] == 0.667
+    assert detail["metrics"]["executed_trade_count"] == 3
+    assert detail["metrics"]["unexecuted_count"] == 0
+    assert detail["metrics"]["average_net_return"] == 1.747
+    assert detail["metrics"]["average_executed_return"] == 1.747
+    assert detail["metrics"]["profit_loss_ratio"] == 6.206
 
 
 def test_get_backtest_version_matrix_extracts_baseline_candidate_deltas():

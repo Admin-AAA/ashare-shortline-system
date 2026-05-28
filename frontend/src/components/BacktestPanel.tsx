@@ -2,7 +2,7 @@ import { memo, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { Eye, History, Loader2, Play, RefreshCw, TrendingUp, AlertTriangle } from "lucide-react";
 import { api } from "../api/client";
-import type { MinutePrepResult, ScheduledTaskRun } from "../types";
+import type { AccuracyGateSummary, AccuracyPolicyAudit, MinutePrepResult, ScheduledTaskRun } from "../types";
 import { aShareDirectionClass, businessStatusLabel } from "../utils/display";
 
 type BacktestResult = {
@@ -65,6 +65,8 @@ type BacktestResult = {
     sample_confidence?: string;
     low_confidence?: boolean;
     flat_count?: number;
+    accuracy_policy?: AccuracyPolicyAudit;
+    accuracy_gate_summary?: AccuracyGateSummary;
     false_positive_notes?: Array<{
       reason: string;
       count: number;
@@ -101,8 +103,14 @@ type BacktestResult = {
     trade_date: string;
     code: string;
     name: string;
+    entry_time?: string;
+    exit_time?: string;
     net_return_pct: number;
     false_positive_reason: string;
+    signal_valid_at_recommend_time?: boolean;
+    executed?: boolean;
+    net_return_positive?: boolean;
+    accuracy_failure_label?: string | null;
   }>;
   recommendation_records?: Array<{
     trade_date: string;
@@ -118,6 +126,10 @@ type BacktestResult = {
     net_return_pct: number;
     benchmark_return_pct?: number;
     accurate: boolean;
+    signal_valid_at_recommend_time?: boolean;
+    executed?: boolean;
+    net_return_positive?: boolean;
+    accuracy_failure_label?: string | null;
     exit_reason: string;
     false_positive_reason?: string | null;
   }>;
@@ -253,6 +265,8 @@ type BacktestHistoryItem = {
     max_drawdown?: number;
     benchmark_excess_return?: number;
     sample_confidence?: string;
+    accuracy_policy?: AccuracyPolicyAudit;
+    accuracy_gate_summary?: AccuracyGateSummary;
   };
   data_coverage?: {
     candidate_minute_coverage_rate?: number;
@@ -662,7 +676,7 @@ export default memo(function BacktestPanel() {
             { key: "trade_accuracy", label: "成交胜率", format: percent },
             { key: "unexecuted_count", label: "未成交" },
             { key: "average_net_return", label: "均净收益", format: marketPct },
-            { key: "max_drawdown", label: "回撤", format: pct },
+            { key: "max_drawdown", label: "回撤", format: marketPct },
             { key: "sample_confidence", label: "置信度" },
             { key: "decision_scope", label: "决策范围" },
             { key: "validation_scope", label: "验证摘要" },
@@ -732,9 +746,9 @@ export default memo(function BacktestPanel() {
             { key: "baseline_return", label: "基线净收益", format: marketNullablePct },
             { key: "candidate_return", label: "候选净收益", format: marketNullablePct },
             { key: "return_delta", label: "净收益Δ", format: marketSignedPct },
-            { key: "baseline_drawdown", label: "基线回撤", format: nullablePct },
-            { key: "candidate_drawdown", label: "候选回撤", format: nullablePct },
-            { key: "drawdown_delta", label: "回撤Δ", format: signedPct },
+            { key: "baseline_drawdown", label: "基线回撤", format: marketNullablePct },
+            { key: "candidate_drawdown", label: "候选回撤", format: marketNullablePct },
+            { key: "drawdown_delta", label: "回撤Δ", format: marketSignedPct },
             { key: "confidence_pair", label: "置信度" },
             { key: "fallback_reason", label: "回退原因" },
             { key: "guardrails", label: "护栏备注" },
@@ -911,7 +925,9 @@ export default memo(function BacktestPanel() {
                   )}
                   <div className="bt-metric-card">
                     <span>平均最大回撤</span>
-                    <strong className="negative">{result.aggregate_metrics.avg_max_drawdown.toFixed(2)}%</strong>
+                    <strong className={aShareDirectionClass(result.aggregate_metrics.avg_max_drawdown)}>
+                      {result.aggregate_metrics.avg_max_drawdown.toFixed(2)}%
+                    </strong>
                   </div>
                   {hasNumber(result.aggregate_metrics.avg_achievable_return) && (
                     <div className="bt-metric-card">
@@ -960,6 +976,12 @@ export default memo(function BacktestPanel() {
                     样本数低于 30 笔，当前结论为低置信度
                   </div>
                 ) : null}
+                {result.aggregate_metrics.accuracy_policy && !result.aggregate_metrics.accuracy_policy.matches_reported_accuracy ? (
+                  <div className="bt-error">
+                    <AlertTriangle size={14} />
+                    显式准确标记与三道硬条件不一致，需复核 {result.aggregate_metrics.accuracy_gate_summary?.manual_override_count ?? 0} 条推荐
+                  </div>
+                ) : null}
                 {(result.aggregate_metrics.false_positive_notes?.length ?? 0) > 0 && (
                   <details className="bt-false-positive-details">
                     <summary style={{ cursor: "pointer", marginTop: "0.5rem", fontSize: "0.85rem", color: "var(--text-muted)" }}>
@@ -982,6 +1004,23 @@ export default memo(function BacktestPanel() {
               </div>
             )}
 
+            {result.aggregate_metrics?.accuracy_policy?.funnel?.length ? (
+              <div className="bt-breakdown">
+                <BreakdownTable title="准确率审计漏斗" data={result.aggregate_metrics.accuracy_policy.funnel} columns={[
+                  { key: "label", label: "阶段" },
+                  { key: "count", label: "通过数" },
+                  { key: "failed_count", label: "卡住数" },
+                  { key: "pass_rate", label: "通过率", format: percent },
+                ]} />
+                {(result.aggregate_metrics.accuracy_policy.failure_breakdown?.length ?? 0) > 0 ? (
+                  <BreakdownTable title="准确率失败归因" data={result.aggregate_metrics.accuracy_policy.failure_breakdown} columns={[
+                    { key: "label", label: "原因" },
+                    { key: "count", label: "次数" },
+                  ]} />
+                ) : null}
+              </div>
+            ) : null}
+
             {result.comparison ? (
               <div className="bt-breakdown">
                 <BreakdownTable title="基线 vs 增强" data={[
@@ -993,7 +1032,7 @@ export default memo(function BacktestPanel() {
                   { key: "recommendation_accuracy", label: "推荐准确率", format: percent },
                   { key: "average_net_return", label: "均净收益", format: marketPct },
                   { key: "median_net_return", label: "中位数", format: marketPct },
-                  { key: "max_drawdown", label: "回撤", format: pct },
+                  { key: "max_drawdown", label: "回撤", format: marketPct },
                   { key: "benchmark_excess_return", label: "超额", format: marketPct },
                 ]} />
                 <div className="bt-error">
@@ -1018,11 +1057,11 @@ export default memo(function BacktestPanel() {
                     { key: "scope", label: "决策范围" },
                     { key: "baseline_accuracy", label: "基线推荐准确率", format: nullablePercent },
                     { key: "baseline_return", label: "基线净收益", format: marketNullablePct },
-                    { key: "baseline_drawdown", label: "基线回撤", format: nullablePct },
+                    { key: "baseline_drawdown", label: "基线回撤", format: marketNullablePct },
                     { key: "baseline_confidence", label: "基线置信度" },
                     { key: "candidate_accuracy", label: "候选推荐准确率", format: nullablePercent },
                     { key: "candidate_return", label: "候选净收益", format: marketNullablePct },
-                    { key: "candidate_drawdown", label: "候选回撤", format: nullablePct },
+                    { key: "candidate_drawdown", label: "候选回撤", format: marketNullablePct },
                     { key: "candidate_confidence", label: "候选置信度" },
                     { key: "notes", label: "护栏说明" },
                   ]} />
@@ -1056,7 +1095,7 @@ export default memo(function BacktestPanel() {
                     { key: "trade_count", label: "样本外推荐" },
                     { key: "recommendation_accuracy", label: "推荐准确率", format: percent },
                     { key: "average_net_return", label: "均净收益", format: marketPct },
-                    { key: "max_drawdown", label: "回撤", format: pct },
+                    { key: "max_drawdown", label: "回撤", format: marketPct },
                     { key: "sample_confidence", label: "置信度" },
                   ]} />
                 ) : null}
@@ -1073,7 +1112,7 @@ export default memo(function BacktestPanel() {
                     { key: "trade_count", label: "样本外推荐" },
                     { key: "recommendation_accuracy", label: "推荐准确率", format: percent },
                     { key: "average_net_return", label: "均净收益", format: marketPct },
-                    { key: "max_drawdown", label: "回撤", format: pct },
+                    { key: "max_drawdown", label: "回撤", format: marketPct },
                     { key: "sample_confidence", label: "置信度" },
                   ]} />
                 ) : null}
@@ -1208,6 +1247,10 @@ export default memo(function BacktestPanel() {
                   { key: "exit_price", label: "卖出价", format: priceText },
                   { key: "net_return_pct", label: "净收益", format: marketPct },
                   { key: "accurate", label: "准确", format: yesNo },
+                  { key: "signal_valid_at_recommend_time", label: "信号成立", format: nullableYesNo },
+                  { key: "executed", label: "可成交", format: nullableYesNo },
+                  { key: "net_return_positive", label: "净收益为正", format: nullableYesNo },
+                  { key: "accuracy_failure_label", label: "失败关口" },
                   { key: "exit_reason", label: "卖出逻辑" },
                 ]} />
               </div>
@@ -1219,7 +1262,10 @@ export default memo(function BacktestPanel() {
                   { key: "trade_date", label: "信号日" },
                   { key: "code", label: "代码" },
                   { key: "name", label: "名称" },
+                  { key: "entry_time", label: "买入时间", format: timeText },
+                  { key: "exit_time", label: "卖出时间", format: timeText },
                   { key: "net_return_pct", label: "净收益", format: marketPct },
+                  { key: "accuracy_failure_label", label: "失败关口" },
                   { key: "false_positive_reason", label: "原因" },
                 ]} />
               </div>
@@ -1277,7 +1323,7 @@ export default memo(function BacktestPanel() {
                   { key: "triggered_count", label: "已触发" },
                   { key: "hit_rate", label: "胜率", format: (v: number) => `${(v * 100).toFixed(1)}%` },
                   { key: "avg_return", label: "均收益", format: marketPct },
-                  { key: "avg_drawdown", label: "均回撤", format: (v: number) => `${v.toFixed(2)}%` },
+                  { key: "avg_drawdown", label: "均回撤", format: marketPct },
                 ]} />
               </div>
             )}

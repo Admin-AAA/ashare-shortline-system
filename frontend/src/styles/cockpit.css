@@ -1451,6 +1451,25 @@ button:disabled { cursor: not-allowed; opacity: 0.58; }
   font-size: 11px;
 }
 
+.erc-execution {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+  padding: 2px 7px;
+  font-size: 12px;
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  white-space: nowrap;
+}
+
+.erc-execution-blocked {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
 @media (max-width: 1220px) {
   .dashboard-grid,
   .dashboard-grid.compact,

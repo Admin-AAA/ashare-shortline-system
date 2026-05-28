@@ -57,6 +57,7 @@ from app.services.temporal_consistency import check_run_temporal_consistency, ch
 from app.services.evaluation_metrics import (
     compute_full_metrics,
     _empty_metrics as _backtest_empty_metrics,
+    _accuracy_failure_gate,
 )
 from app.services.prefilter_service import apply_prefilters
 from app.services.research_context import build_research_contexts
@@ -143,6 +144,8 @@ def run_backtest(
         "temporal_consistency": temporal_check,
         "trade_detail_count": len(trade_details),
         "trade_details": trade_details,
+        "recommendation_records": _backtest_recommendation_records(trade_details),
+        "false_positive_samples": _backtest_false_positive_samples(trade_details),
         "results": results,
     }
 
@@ -640,6 +643,14 @@ def _persist_backtest_recommendations(
 ) -> None:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     for card in cards:
+        feature_snapshot = {
+            **(card.get("feature_snapshot", {}) or {}),
+            "recommend_price": card.get("recommend_price"),
+            "stop_loss": card.get("stop_loss"),
+            "take_profit": card.get("take_profit"),
+            "score_line_meta": card.get("score_line_meta", {}),
+            "execution_viability": card.get("execution_viability", {}),
+        }
         rec = Recommendation(
             recommendation_id=f"btrec_{uuid.uuid4().hex[:12]}",
             run_id=run_id,
@@ -657,7 +668,7 @@ def _persist_backtest_recommendations(
             invalid_rule=card.get("invalid_rule"),
             rationale=card.get("rationale"),
             risk_tags_json=json.dumps(card.get("risk_flags", [])),
-            feature_snapshot_json=json.dumps(card.get("feature_snapshot", {})),
+            feature_snapshot_json=json.dumps(feature_snapshot, ensure_ascii=False),
             market_context_json=json.dumps(snapshot),
             skill_breakdown_json=json.dumps(card.get("strategy_signals", [])),
             agent_summary_json="{}",
@@ -970,6 +981,7 @@ def _build_trade_detail_list(
             "ma_alignment": str(feature_snapshot.get("ma_alignment", "")),
             "buy_signal": str(feature_snapshot.get("buy_signal", "")),
         }
+        signal_valid = not _outcome_bool_flag(getattr(outcome, "hit_invalid", False))
 
         details.append({
             # 推荐标识
@@ -999,6 +1011,9 @@ def _build_trade_detail_list(
             "final_score": float(rec.final_score or 0),
             # 结果判定
             "accurate": bool(executed_return > 0),
+            "signal_valid_at_recommend_time": signal_valid,
+            "executed": True,
+            "net_return_positive": bool(executed_return > 0),
             "false_positive_reason": outcome.outcome_reason if executed_return <= 0 else None,
             # 信号特征摘要
             "signal_features": signal_features,
@@ -1072,6 +1087,7 @@ def _build_backtest_metric_records(
         false_positive_reason = outcome.outcome_reason if not accurate else None
         if false_positive_reason is None and not executed:
             false_positive_reason = "未触发买点或不可真实成交"
+        signal_valid = not _outcome_bool_flag(getattr(outcome, "hit_invalid", False))
         records.append(
             {
                 "recommendation_id": str(rec.recommendation_id),
@@ -1085,7 +1101,9 @@ def _build_backtest_metric_records(
                 "holding_days": float((outcome.holding_days or 0) if not executed else (outcome.holding_days or 1)),
                 "benchmark_return_pct": benchmark_ret,
                 "accurate": accurate,
+                "signal_valid_at_recommend_time": signal_valid,
                 "executed": executed,
+                "net_return_positive": bool(executed and executed_return > 0),
                 "false_positive_reason": false_positive_reason,
                 "resolved": True,
             }
@@ -1106,6 +1124,75 @@ def _backtest_aggregate_metrics(
     if not metric_records:
         return _backtest_empty_metrics()
     return compute_full_metrics(metric_records)
+
+
+def _backtest_recommendation_records(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ordered = sorted(
+        trades,
+        key=lambda item: (item.get("trade_date", ""), item.get("entry_date", ""), item.get("code", "")),
+    )
+    return [
+        {
+            "trade_date": item.get("trade_date"),
+            "code": item.get("code"),
+            "name": item.get("name"),
+            "recommendation_time": item.get("trade_date"),
+            "entry_time": item.get("entry_date"),
+            "entry_price": item.get("entry_price"),
+            "exit_date": item.get("exit_date"),
+            "exit_time": item.get("exit_date"),
+            "exit_price": item.get("exit_price"),
+            "net_return_pct": item.get("net_return_pct"),
+            "gross_return_pct": item.get("gross_return_pct"),
+            "benchmark_return_pct": item.get("benchmark_return_pct"),
+            "accurate": item.get("accurate"),
+            "signal_valid_at_recommend_time": item.get("signal_valid_at_recommend_time", True),
+            "executed": item.get("executed", True),
+            "net_return_positive": item.get("net_return_positive", False),
+            "accuracy_failure_label": _accuracy_failure_label(item),
+            "exit_reason": item.get("exit_reason"),
+            "false_positive_reason": item.get("false_positive_reason"),
+        }
+        for item in ordered
+    ]
+
+
+def _backtest_false_positive_samples(trades: list[dict[str, Any]], limit: int = 8) -> list[dict[str, Any]]:
+    losers = [item for item in trades if item.get("resolved") and not item.get("accurate")]
+    losers.sort(key=lambda item: float(item.get("net_return_pct") or 0.0))
+    return [
+        {
+            "trade_date": item.get("trade_date"),
+            "code": item.get("code"),
+            "name": item.get("name"),
+            "entry_time": item.get("entry_date"),
+            "exit_time": item.get("exit_date"),
+            "net_return_pct": item.get("net_return_pct"),
+            "false_positive_reason": item.get("false_positive_reason"),
+            "signal_valid_at_recommend_time": item.get("signal_valid_at_recommend_time", True),
+            "executed": item.get("executed", True),
+            "net_return_positive": item.get("net_return_positive", False),
+            "accuracy_failure_label": _accuracy_failure_label(item),
+        }
+        for item in losers[:limit]
+    ]
+
+
+def _accuracy_failure_label(item: dict[str, Any]) -> str | None:
+    if item.get("accurate"):
+        return None
+    _gate, label = _accuracy_failure_gate(item)
+    return label
+
+
+def _outcome_bool_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return False
 
 
 def _run_ids_from_results(results: list[dict[str, Any]]) -> set[str]:

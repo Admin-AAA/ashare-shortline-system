@@ -14,7 +14,11 @@ from app.services.cost_service import (
     upsert_scheduled_task,
 )
 from app.services.data_health_service import diagnose_all
-from app.services.data_gap_remediation_service import remediate_data_health_gaps
+from app.services.data_gap_remediation_service import (
+    DEFAULT_DAILY_KBAR_CODE_LIMIT,
+    DEFAULT_REMEDIABLE_TABLES,
+    remediate_data_health_gaps,
+)
 from app.services.data_source_health import active_alerts, readiness_check
 from app.services.model_router_service import (
     create_model_route,
@@ -89,6 +93,8 @@ def remediate_data_health(payload: dict | None = None, db: Session = Depends(get
         target_tables=payload.get("target_tables"),
         dry_run=bool(payload.get("dry_run", False)),
         capital_flow_code_limit=int(payload.get("capital_flow_code_limit", 200)),
+        daily_kbar_code_limit=int(payload.get("daily_kbar_code_limit", DEFAULT_DAILY_KBAR_CODE_LIMIT)),
+        post_diagnosis=bool(payload.get("post_diagnosis", True)),
     )
     if not bool(payload.get("dry_run", False)):
         record_task_run(
@@ -100,8 +106,10 @@ def remediate_data_health(payload: dict | None = None, db: Session = Depends(get
             task_name="手动数据补数",
             task_type="data_backfill",
             payload={
-                "target_tables": payload.get("target_tables") or ["index_daily", "limit_up_board", "capital_flow", "concept_sector"],
+                "target_tables": payload.get("target_tables") or list(DEFAULT_REMEDIABLE_TABLES),
                 "capital_flow_code_limit": int(payload.get("capital_flow_code_limit", 200)),
+                "daily_kbar_code_limit": int(payload.get("daily_kbar_code_limit", DEFAULT_DAILY_KBAR_CODE_LIMIT)),
+                "post_diagnosis": bool(payload.get("post_diagnosis", True)),
             },
             result={
                 **result,

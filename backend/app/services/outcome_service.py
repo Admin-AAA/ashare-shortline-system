@@ -10,6 +10,13 @@ from sqlalchemy.orm import Session
 
 from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun
 from app.services.evaluation_metrics import compute_full_metrics as _compute_full_metrics
+from app.services.execution_constraints import (
+    entry_execution_block_reason_from_bar,
+    exit_execution_block_reason_from_bar,
+    is_one_word_limit_down_bar,
+    is_one_word_limit_up_bar,
+    no_liquidity_reason_from_bar,
+)
 
 ENTRY_LOOKAHEAD_DAYS = 2
 ENTRY_SLIPPAGE_BPS = 10.0
@@ -304,6 +311,8 @@ def _overview_metrics(db: Session, run_mode: str) -> dict[str, Any]:
         "sample_confidence": full_metrics.get("sample_confidence", "low"),
         "false_positive_notes": full_metrics.get("false_positive_notes", []),
         "false_positive_category_counts": full_metrics.get("false_positive_category_counts", []),
+        "accuracy_policy": full_metrics.get("accuracy_policy", {}),
+        "accuracy_gate_summary": full_metrics.get("accuracy_gate_summary", {}),
         "strategy_compound_return": full_metrics.get("strategy_compound_return", 0.0),
         "benchmark_compound_return": full_metrics.get("benchmark_compound_return", 0.0),
         "trade_accuracy": full_metrics.get("trade_accuracy", 0.0),
@@ -319,11 +328,10 @@ def metrics_by_strategy(db: Session, run_mode: str = "formal") -> list[dict[str,
 
 def _metrics_by_strategy(db: Session, run_mode: str) -> list[dict[str, Any]]:
     rows = _scoped_recommendation_rows(db, run_mode)
+    benchmark_by_rec = _benchmark_returns_by_recommendation(db, rows)
 
     buckets: dict[str, dict[str, Any]] = {}
     for rec in rows:
-        executed = is_trade_executed(rec)
-        trade_return = resolved_trade_return(rec)
         for signal in _loads(rec.skill_breakdown_json, []):
             sid = signal.get("strategy_id", "unknown")
             item = buckets.setdefault(
@@ -331,29 +339,32 @@ def _metrics_by_strategy(db: Session, run_mode: str) -> list[dict[str, Any]]:
                 {
                     "strategy_id": sid,
                     "sample_count": 0,
-                    "triggered_count": 0,
-                    "success_count": 0,
                     "avg_score": 0.0,
-                    "avg_return": 0.0,
+                    "rows": [],
                 },
             )
             item["sample_count"] += 1
             item["avg_score"] += float(signal.get("score", 0))
-            if executed:
-                item["triggered_count"] += 1
-                item["avg_return"] += trade_return
-                if is_accurate_recommendation(rec):
-                    item["success_count"] += 1
+            item["rows"].append(rec)
 
     result = []
     for item in buckets.values():
         count = max(1, item["sample_count"])
-        triggered = int(item["triggered_count"])
-        item["hit_rate"] = round(item["success_count"] / triggered, 3) if triggered else 0.0
-        item["trigger_rate"] = round(triggered / count, 3)
-        item["avg_score"] = round(item["avg_score"] / count, 2)
-        item["avg_return"] = round(item["avg_return"] / triggered, 2) if triggered else 0.0
-        result.append(item)
+        metric_rows = _metric_records_from_rows(item["rows"], benchmark_by_rec)
+        metrics = _compute_full_metrics(metric_rows)
+        result.append({
+            "strategy_id": item["strategy_id"],
+            "sample_count": item["sample_count"],
+            "labeled_count": metrics["trade_count"],
+            "triggered_count": metrics["executed_trade_count"],
+            "missed_count": metrics["unexecuted_count"],
+            "success_count": metrics["success_count"],
+            "trigger_rate": metrics["trigger_rate"],
+            "hit_rate": metrics["trade_accuracy"],
+            "avg_score": round(item["avg_score"] / count, 2),
+            "avg_return": metrics["average_executed_return"],
+            **_group_metric_fields(metrics),
+        })
     return sorted(result, key=lambda x: (x["sample_count"], x["hit_rate"], x["avg_score"]), reverse=True)
 
 
@@ -363,6 +374,7 @@ def metrics_by_setup(db: Session, run_mode: str = "formal") -> list[dict[str, An
 
 def _metrics_by_setup(db: Session, run_mode: str) -> list[dict[str, Any]]:
     rows = _scoped_recommendation_rows(db, run_mode)
+    benchmark_by_rec = _benchmark_returns_by_recommendation(db, rows)
     buckets: dict[str, dict[str, Any]] = {}
     for row in rows:
         setup = str(row.setup_type or "未命中买点")
@@ -371,45 +383,33 @@ def _metrics_by_setup(db: Session, run_mode: str) -> list[dict[str, Any]]:
             {
                 "setup_type": setup,
                 "sample_count": 0,
-                "labeled_count": 0,
-                "triggered_count": 0,
-                "success_count": 0,
                 "avg_score": 0.0,
-                "avg_return": 0.0,
-                "avg_drawdown": 0.0,
+                "rows": [],
             },
         )
         item["sample_count"] += 1
         item["avg_score"] += float(row.final_score or 0)
-        label = normalized_outcome_label(row)
-        if label != OUTCOME_PENDING:
-            item["labeled_count"] += 1
-            item["avg_drawdown"] += float(row.max_drawdown or 0)
-        if is_trade_executed(row):
-            item["triggered_count"] += 1
-            item["avg_return"] += resolved_trade_return(row)
-            if is_accurate_recommendation(row):
-                item["success_count"] += 1
+        item["rows"].append(row)
 
     result = []
     for item in buckets.values():
         sample_count = max(1, int(item["sample_count"]))
-        labeled_count = int(item["labeled_count"])
-        triggered_count = int(item["triggered_count"])
-        missed_count = max(0, labeled_count - triggered_count)
+        metric_rows = _metric_records_from_rows(item["rows"], benchmark_by_rec)
+        metrics = _compute_full_metrics(metric_rows)
         result.append(
             {
                 "setup_type": item["setup_type"],
                 "sample_count": item["sample_count"],
-                "labeled_count": labeled_count,
-                "triggered_count": triggered_count,
-                "missed_count": missed_count,
-                "success_count": item["success_count"],
-                "trigger_rate": round(triggered_count / labeled_count, 3) if labeled_count else 0.0,
-                "hit_rate": round(item["success_count"] / triggered_count, 3) if triggered_count else 0.0,
+                "labeled_count": metrics["trade_count"],
+                "triggered_count": metrics["executed_trade_count"],
+                "missed_count": metrics["unexecuted_count"],
+                "success_count": metrics["success_count"],
+                "trigger_rate": metrics["trigger_rate"],
+                "hit_rate": metrics["trade_accuracy"],
                 "avg_score": round(item["avg_score"] / sample_count, 2),
-                "avg_return": round(item["avg_return"] / triggered_count, 2) if triggered_count else 0.0,
-                "avg_drawdown": round(item["avg_drawdown"] / labeled_count, 2) if labeled_count else 0.0,
+                "avg_return": metrics["average_executed_return"],
+                "avg_drawdown": metrics["avg_max_drawdown"],
+                **_group_metric_fields(metrics),
             }
         )
     return sorted(result, key=lambda item: (item["sample_count"], item["hit_rate"], item["avg_score"]), reverse=True)
@@ -482,31 +482,110 @@ def _metrics_by_score_line(db: Session, run_mode: str, score_lines: tuple[int, .
     rows = _scoped_recommendation_rows(db, run_mode)
     if not rows:
         return []
+    benchmark_by_rec = _benchmark_returns_by_recommendation(db, rows)
     result: list[dict[str, Any]] = []
     total_count = len(rows)
     for score_line in score_lines:
         selected = [row for row in rows if float(row.final_score or 0) >= score_line]
-        labeled = [row for row in selected if normalized_outcome_label(row) != OUTCOME_PENDING]
-        executed = [row for row in labeled if is_trade_executed(row)]
-        missed_count = max(0, len(labeled) - len(executed))
-        success_count = sum(1 for row in executed if is_accurate_recommendation(row))
+        metrics = _compute_full_metrics(_metric_records_from_rows(selected, benchmark_by_rec))
         result.append(
             {
                 "score_line": float(score_line),
                 "sample_count": len(selected),
                 "activation_rate": round(len(selected) / total_count, 3) if total_count else 0.0,
-                "labeled_count": len(labeled),
-                "triggered_count": len(executed),
-                "missed_count": missed_count,
-                "success_count": success_count,
-                "trigger_rate": round(len(executed) / len(labeled), 3) if labeled else 0.0,
-                "hit_rate": round(success_count / len(executed), 3) if executed else 0.0,
-                "avg_return": round(sum(resolved_trade_return(row) for row in executed) / len(executed), 2) if executed else 0.0,
-                "avg_drawdown": round(sum(float(row.max_drawdown or 0) for row in labeled) / len(labeled), 2) if labeled else 0.0,
-                "avg_close_return": round(sum(float(row.close_return or 0) for row in labeled) / len(labeled), 2) if labeled else 0.0,
+                "labeled_count": metrics["trade_count"],
+                "triggered_count": metrics["executed_trade_count"],
+                "missed_count": metrics["unexecuted_count"],
+                "success_count": metrics["success_count"],
+                "trigger_rate": metrics["trigger_rate"],
+                "hit_rate": metrics["trade_accuracy"],
+                "avg_return": metrics["average_executed_return"],
+                "avg_drawdown": metrics["avg_max_drawdown"],
+                "avg_close_return": metrics["avg_close_return"],
+                **_group_metric_fields(metrics),
             }
         )
     return result
+
+
+def _metric_records_from_rows(
+    rows: list[Any],
+    benchmark_by_recommendation: dict[str, float] | None = None,
+) -> list[dict[str, Any]]:
+    benchmark_by_recommendation = benchmark_by_recommendation or {}
+    return [
+        _metric_record_from_row(
+            row,
+            benchmark_by_recommendation.get(str(getattr(row, "recommendation_id", "") or ""), 0.0),
+        )
+        for row in rows
+        if normalized_outcome_label(row) != OUTCOME_PENDING
+    ]
+
+
+def _metric_record_from_row(row: Any, benchmark_return_pct: float = 0.0) -> dict[str, Any]:
+    executed = is_trade_executed(row)
+    executed_return = resolved_trade_return(row) if executed else 0.0
+    accurate = bool(executed and executed_return > 0)
+    false_positive_reason = getattr(row, "outcome_reason", None) if not accurate else None
+    if false_positive_reason is None and not executed:
+        false_positive_reason = "未触发买点或不可真实成交"
+    return {
+        "net_return_pct": float(executed_return),
+        "gross_return_pct": float(getattr(row, "close_return", 0) or 0),
+        "achievable_return_pct": float(getattr(row, "achievable_return", 0) or 0),
+        "morning_drawdown_pct": float(getattr(row, "max_drawdown", 0) or 0),
+        "holding_days": float(getattr(row, "holding_days", 0 if not executed else 1) or 0),
+        "benchmark_return_pct": float(benchmark_return_pct or 0.0),
+        "accurate": accurate,
+        "executed": executed,
+        "trade_date": str(getattr(row, "trade_date", "")),
+        "code": getattr(row, "code", ""),
+        "name": getattr(row, "name", ""),
+        "false_positive_reason": false_positive_reason,
+        "resolved": True,
+    }
+
+
+def _benchmark_returns_by_recommendation(db: Session, rows: list[Any]) -> dict[str, float]:
+    all_dates: set[str] = set()
+    executable_rows = []
+    for row in rows:
+        if normalized_outcome_label(row) == OUTCOME_PENDING or not is_trade_executed(row):
+            continue
+        entry_date = str(getattr(row, "entry_date", "") or getattr(row, "trade_date", ""))
+        exit_date = str(getattr(row, "exit_date", "") or getattr(row, "trade_date", ""))
+        all_dates.add(entry_date)
+        all_dates.add(exit_date)
+        executable_rows.append((row, entry_date, exit_date))
+    if not executable_rows:
+        return {}
+
+    from app.services.benchmark_service import compute_benchmark_return as _bench_return
+    from app.services.benchmark_service import get_benchmark_close_map as _get_close_map
+
+    close_map = _get_close_map(db, list(all_dates))
+    return {
+        str(getattr(row, "recommendation_id", "") or ""): _bench_return(close_map, entry_date, exit_date)
+        for row, entry_date, exit_date in executable_rows
+    }
+
+
+def _group_metric_fields(metrics: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "trade_count": metrics["trade_count"],
+        "recommendation_accuracy": metrics["recommendation_accuracy"],
+        "average_net_return": metrics["average_net_return"],
+        "median_net_return": metrics["median_net_return"],
+        "profit_loss_ratio": metrics["profit_loss_ratio"],
+        "max_drawdown": metrics["max_drawdown"],
+        "positive_month_ratio": metrics["positive_month_ratio"],
+        "benchmark_excess_return": metrics["benchmark_excess_return"],
+        "sample_confidence": metrics["sample_confidence"],
+        "accuracy_numerator": metrics["accuracy_numerator"],
+        "accuracy_denominator": metrics["accuracy_denominator"],
+        "accuracy_basis": metrics["accuracy_basis"],
+    }
 
 
 def _scoped_recommendation_rows(db: Session, run_mode: str) -> list[Any]:
@@ -563,6 +642,31 @@ def _simulate_outcome(
 
     feature_snapshot = _loads(getattr(rec, "feature_snapshot_json", None), {})
     static_metrics = _static_window_metrics(rec, signal_bar, future_bars, horizon_days)
+
+    recommendation_block_reason = _recommendation_execution_block_reason(feature_snapshot)
+    if recommendation_block_reason:
+        return {
+            **static_metrics,
+            "entry_triggered": False,
+            "entry_date": None,
+            "entry_price": None,
+            "exit_date": None,
+            "exit_price": None,
+            "executed_return": 0.0,
+            "weighted_return": 0.0,
+            "position_size": _resolve_position_size(feature_snapshot),
+            "holding_days": 0,
+            "entry_slippage_bps": ENTRY_SLIPPAGE_BPS,
+            "exit_slippage_bps": EXIT_SLIPPAGE_BPS,
+            "stop_loss_price": _resolve_stop_loss_price(None, feature_snapshot),
+            "take_profit_price": _resolve_take_profit_price(None, feature_snapshot),
+            "exit_reason": "recommendation_execution_blocked",
+            "hit_target": False,
+            "hit_invalid": False,
+            "outcome_label": OUTCOME_MISSED,
+            "outcome_label_legacy": OUTCOME_MISSED,
+            "outcome_reason": f"{recommendation_block_reason}；推荐时已判定不可真实成交，静态窗口结果仅作旁路参考",
+        }
 
     entry_result = _resolve_entry(rec, feature_snapshot, future_bars, horizon_days)
     position_size = _resolve_position_size(feature_snapshot)
@@ -815,19 +919,24 @@ def _resolve_position_size(feature_snapshot: dict[str, Any]) -> float:
 
 
 def _entry_execution_block_reason(code: str, bar: DailyKbar) -> str | None:
-    if _has_no_liquidity(bar):
-        return "入场日无成交量或价格无效，无法真实成交"
-    if _is_one_word_limit_up(code, bar):
-        return "入场日一字涨停，按真实成交约束视为买不进"
-    return None
+    return entry_execution_block_reason_from_bar(code, bar)
 
 
 def _exit_execution_block_reason(code: str, bar: DailyKbar) -> str | None:
-    if _has_no_liquidity(bar):
-        return "出场日无成交量或价格无效，无法真实卖出"
-    if _is_one_word_limit_down(code, bar):
-        return "出场日一字跌停，按真实成交约束视为卖不出"
-    return None
+    return exit_execution_block_reason_from_bar(code, bar)
+
+
+def _recommendation_execution_block_reason(feature_snapshot: dict[str, Any]) -> str | None:
+    execution_viability = feature_snapshot.get("execution_viability")
+    if not isinstance(execution_viability, dict):
+        return None
+    if str(execution_viability.get("status") or "").lower() != "blocked":
+        return None
+    return str(
+        execution_viability.get("block_reason")
+        or execution_viability.get("label")
+        or "推荐时执行可成交性判定为不可成交"
+    )
 
 
 def _entry_not_triggered_reason(blocked_reasons: list[str], *, has_targets: bool) -> str:
@@ -838,59 +947,15 @@ def _entry_not_triggered_reason(blocked_reasons: list[str], *, has_targets: bool
 
 
 def _has_no_liquidity(bar: DailyKbar) -> bool:
-    volume = _as_float(getattr(bar, "volume", 0))
-    amount = _as_float(getattr(bar, "amount", 0))
-    close = _as_float(getattr(bar, "close", 0))
-    open_price = _as_float(getattr(bar, "open", 0))
-    return volume <= 0 or amount <= 0 or close <= 0 or open_price <= 0
+    return no_liquidity_reason_from_bar(bar, side="entry") is not None
 
 
 def _is_one_word_limit_up(code: str, bar: DailyKbar) -> bool:
-    prev_close = _previous_close(bar)
-    if prev_close <= 0:
-        return False
-    up_limit = _limit_price(prev_close, _limit_pct(code), up=True)
-    return (
-        _as_float(bar.open) >= up_limit * 0.995
-        and _as_float(bar.low) >= up_limit * 0.995
-        and _as_float(bar.high) >= up_limit * 0.995
-        and _as_float(bar.close) >= up_limit * 0.995
-    )
+    return is_one_word_limit_up_bar(code, bar)
 
 
 def _is_one_word_limit_down(code: str, bar: DailyKbar) -> bool:
-    prev_close = _previous_close(bar)
-    if prev_close <= 0:
-        return False
-    down_limit = _limit_price(prev_close, _limit_pct(code), up=False)
-    return (
-        _as_float(bar.open) <= down_limit * 1.005
-        and _as_float(bar.high) <= down_limit * 1.005
-        and _as_float(bar.low) <= down_limit * 1.005
-        and _as_float(bar.close) <= down_limit * 1.005
-    )
-
-
-def _previous_close(bar: DailyKbar) -> float:
-    pct_chg = _as_float(getattr(bar, "pct_chg", 0))
-    close = _as_float(getattr(bar, "close", 0))
-    if close <= 0 or pct_chg <= -99.0:
-        return 0.0
-    return close / (1 + pct_chg / 100.0)
-
-
-def _limit_pct(code: str) -> float:
-    normalized = str(code or "")
-    if normalized.startswith(("300", "301", "688")):
-        return 20.0
-    if normalized.startswith(("8", "4")):
-        return 30.0
-    return 10.0
-
-
-def _limit_price(prev_close: float, pct: float, *, up: bool) -> float:
-    multiplier = 1 + pct / 100.0 if up else 1 - pct / 100.0
-    return round(prev_close * multiplier, 2)
+    return is_one_word_limit_down_bar(code, bar)
 
 
 def _build_outcome_reason(exit_reason: str, executed_return: float, close_return: float) -> str:

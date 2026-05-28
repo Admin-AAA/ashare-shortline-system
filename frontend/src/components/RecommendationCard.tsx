@@ -1,5 +1,5 @@
 import { memo, useState, type MouseEvent } from "react";
-import { Target, AlertTriangle, ChevronDown, ChevronUp, Layers3, BrainCircuit, Trash2 } from "lucide-react";
+import { Target, AlertTriangle, ChevronDown, ChevronUp, Layers3, BrainCircuit, Trash2, ShieldAlert } from "lucide-react";
 import type { RecommendationCard, SkillSignal } from "../types";
 import ScoreGauge from "./ScoreGauge";
 import AgentReviewPanel from "./AgentReviewPanel";
@@ -29,6 +29,13 @@ function scoreBorderColor(score: number): string {
 export default memo(function EnhancedRecommendationCard({ item, isSelected, onSelect, onWatch, onDelete }: Props) {
   const [expanded, setExpanded] = useState(false);
   const borderColor = scoreBorderColor(item.final_score);
+  const execution = item.execution_viability;
+  const showExecution = execution?.status && execution.status !== "tradable";
+  const executionTitle = [
+    execution?.block_reason,
+    execution?.details?.open_times != null ? `开板 ${execution.details.open_times} 次` : null,
+    execution?.details?.fd_amount_yi != null ? `封单 ${Number(execution.details.fd_amount_yi).toFixed(2)} 亿` : null,
+  ].filter(Boolean).join(" · ");
 
   function handleCardClick(event: MouseEvent<HTMLDivElement>) {
     if ((event.target as HTMLElement).closest("button, a, [data-card-interactive='true']")) {
@@ -84,6 +91,12 @@ export default memo(function EnhancedRecommendationCard({ item, isSelected, onSe
             {item.setup_type && <span className="erc-setup">{item.setup_type}</span>}
             {item.market_regime && (
               <span className="erc-market-regime">{item.market_regime}</span>
+            )}
+            {showExecution && (
+              <span className={`erc-execution erc-execution-${execution.status}`} title={executionTitle || execution.label}>
+                <ShieldAlert size={12} />
+                {execution.label || "执行风险"}
+              </span>
             )}
           </div>
           {item.skill_disagreement && item.skill_disagreement.disagreement_level !== "一致" && (

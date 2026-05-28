@@ -23,6 +23,17 @@ export default function MetricsPanel({ metrics, loading }: Props) {
   const tradeAccuracy = metrics.trade_accuracy ?? metrics.hit_rate ?? 0;
   const executedCount = metrics.executed_trade_count ?? metrics.triggered_count ?? 0;
   const unexecutedCount = metrics.unexecuted_count ?? metrics.missed_count ?? 0;
+  const accuracyGateSummary = metrics.accuracy_gate_summary ?? {
+    total_recommendations: 0,
+    signal_valid_count: 0,
+    signal_invalid_count: 0,
+    executable_count: 0,
+    unexecutable_count: 0,
+    net_positive_count: 0,
+    net_non_positive_count: 0,
+    manual_override_count: 0,
+  };
+  const accuracyFailureBreakdown = metrics.accuracy_policy?.failure_breakdown ?? [];
 
   return (
     <section className="cockpit-panel metrics-panel">
@@ -74,6 +85,7 @@ export default function MetricsPanel({ metrics, loading }: Props) {
               fmt="pct100"
               icon={AlertTriangle}
               positive={metrics.max_drawdown >= -10}
+              valueClass={aShareDirectionClass(metrics.max_drawdown)}
             />
             <KpiCard
               label="月度正收益比"
@@ -103,6 +115,17 @@ export default function MetricsPanel({ metrics, loading }: Props) {
               </div>
             </div>
             <div className="sub-metrics-group">
+              <span className="group-label">三道闸门</span>
+              <div className="sub-metrics-row">
+                <span>信号失效 <strong>{accuracyGateSummary.signal_invalid_count}</strong></span>
+                <span>不可成交 <strong>{accuracyGateSummary.unexecutable_count}</strong></span>
+                <span>净收益不为正 <strong>{accuracyGateSummary.net_non_positive_count}</strong></span>
+                {accuracyGateSummary.manual_override_count > 0 ? (
+                  <span>人工改写 <strong>{accuracyGateSummary.manual_override_count}</strong></span>
+                ) : null}
+              </div>
+            </div>
+            <div className="sub-metrics-group">
               <span className="group-label">收益细节</span>
               <div className="sub-metrics-row">
                 <span>中位数收益 <strong className={aShareDirectionClass(metrics.median_net_return)}>{metrics.median_net_return.toFixed(2)}%</strong></span>
@@ -118,6 +141,18 @@ export default function MetricsPanel({ metrics, loading }: Props) {
                 <span>平均持仓 <strong>{metrics.avg_holding_days.toFixed(1)}天</strong></span>
               </div>
             </div>
+            {accuracyFailureBreakdown.length > 0 && (
+              <div className="sub-metrics-group">
+                <span className="group-label">准确率失败归因</span>
+                <div className="sub-metrics-row">
+                  {accuracyFailureBreakdown.slice(0, 3).map((item) => (
+                    <span key={`${item.gate}-${item.label}`}>
+                      {item.label} <strong>{item.count}</strong>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* 误判原因 */}

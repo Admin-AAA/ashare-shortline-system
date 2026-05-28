@@ -377,6 +377,58 @@ def test_apply_pool_rules_filters_explicit_avoid_cards():
     assert [card["code"] for card in result] == ["B"]
 
 
+def test_apply_pool_rules_blocks_one_word_limit_up_as_unexecutable():
+    card = {
+        **_card("000001", 96),
+        "open": 11.0,
+        "high": 11.0,
+        "low": 11.0,
+        "close": 11.0,
+        "pct": 10.0,
+        "volume": 10000,
+        "amount_yi": 2.0,
+        "is_limit_up": True,
+        "limit_up_open_times": 0,
+    }
+
+    result = apply_pool_rules([card], score_line=70, market_snapshot=_neutral_snapshot())
+
+    assert result == []
+    assert card["execution_viability"]["status"] == "blocked"
+    assert card["score_line_meta"]["execution_blocked"] is True
+    assert "一字涨停" in card["score_line_meta"]["block_reason"]
+    assert any("一字涨停" in flag for flag in card["risk_flags"])
+
+
+def test_apply_pool_rules_marks_opened_limit_up_as_execution_risk():
+    card = {
+        **_card("601126", 95),
+        "open": 10.2,
+        "high": 11.0,
+        "low": 10.1,
+        "close": 11.0,
+        "pct": 10.0,
+        "volume": 10000,
+        "amount_yi": 8.0,
+        "is_limit_up": True,
+        "limit_up_first_time": "100643",
+        "limit_up_last_time": "135555",
+        "limit_up_open_times": 17,
+        "limit_up_fd_amount_yi": 0.318156,
+        "limit_up_turnover_ratio": 5.29,
+    }
+
+    result = apply_pool_rules([card], score_line=70, market_snapshot=_neutral_snapshot())
+
+    assert [item["code"] for item in result] == ["601126"]
+    assert card["execution_viability"]["status"] == "risky"
+    assert card["execution_viability"]["details"]["open_times"] == 17
+    assert card["score_line_meta"]["execution_adjustment"] == 6.5
+    assert card["score_line_meta"]["passed"] is True
+    assert any("涨停排队" in flag for flag in card["risk_flags"])
+    assert any("封板反复" in flag for flag in card["risk_flags"])
+
+
 # ---------------------------------------------------------------------------
 # risk template penalty
 # ---------------------------------------------------------------------------

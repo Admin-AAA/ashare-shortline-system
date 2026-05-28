@@ -39,6 +39,13 @@ DEFAULT_BENCHMARK_NAME = "沪深300"
 MAX_PORTFOLIO_TRADES_FOR_SEQUENTIAL = 200
 """超过此笔数时，顺序投资组合计算不再有意义（回测序列过长），改用等权分组法。"""
 
+ACCURACY_REQUIRED_CONDITIONS = (
+    "signal_valid_at_recommend_time",
+    "executed_trade",
+    "net_return_after_cost_gt_0",
+)
+"""推荐准确率的三道硬条件。"""
+
 
 # ── TradeRecord 协议 ──────────────────────────────────────────────────────
 
@@ -132,6 +139,7 @@ def compute_full_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
     accuracy = round(accurate_count / trade_count, 3) if trade_count else 0.0
     trade_accuracy = round(accurate_count / executed_count, 3) if executed_count else 0.0
     confidence = _sample_confidence(trade_count)
+    accuracy_policy = _accuracy_policy_audit(chronological)
 
     return {
         # 9-KPI 标准字段
@@ -175,6 +183,8 @@ def compute_full_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
         "benchmark_compound_return": round(benchmark_cum, 3),
         "false_positive_notes": _false_positive_notes(chronological),
         "false_positive_category_counts": _false_positive_category_counts(chronological),
+        "accuracy_policy": accuracy_policy,
+        "accuracy_gate_summary": accuracy_policy["gate_counts"],
         "low_confidence": confidence == "low",
         "accuracy_basis": "labeled_recommendations",
         "flat_count": len(flat),
@@ -221,6 +231,8 @@ def _empty_metrics() -> dict[str, Any]:
         "benchmark_compound_return": 0.0,
         "false_positive_notes": [],
         "false_positive_category_counts": [],
+        "accuracy_policy": _empty_accuracy_policy(),
+        "accuracy_gate_summary": _empty_accuracy_policy()["gate_counts"],
         "low_confidence": True,
         "accuracy_basis": "labeled_recommendations",
         "flat_count": 0,
@@ -364,6 +376,121 @@ def _false_positive_category_counts(trades: list[dict[str, Any]]) -> list[dict[s
         }
         for (category, label, stage), count in counter.most_common(5)
     ]
+
+
+def _accuracy_policy_audit(trades: list[dict[str, Any]]) -> dict[str, Any]:
+    trade_count = len(trades)
+    if not trade_count:
+        return _empty_accuracy_policy()
+
+    signal_valid_records = [item for item in trades if _is_valid_signal_record(item)]
+    signal_valid_count = len(signal_valid_records)
+    signal_invalid_count = trade_count - signal_valid_count
+
+    executable_records = [item for item in signal_valid_records if _is_executed_record(item)]
+    executable_count = len(executable_records)
+    unexecutable_count = signal_valid_count - executable_count
+
+    net_positive_records = [
+        item for item in executable_records if float(item.get("net_return_pct", 0)) > 0
+    ]
+    net_positive_count = len(net_positive_records)
+    net_non_positive_count = executable_count - net_positive_count
+
+    accurate_count = sum(1 for item in trades if _is_accurate_record(item))
+    manual_override_count = max(0, net_positive_count - accurate_count)
+
+    failure_counter: Counter[tuple[str, str]] = Counter()
+    for item in trades:
+        if _is_accurate_record(item):
+            continue
+        gate, label = _accuracy_failure_gate(item)
+        failure_counter[(gate, label)] += 1
+
+    return {
+        "definition": "recommendation_accuracy = accurate_recommendations / total_recommendations",
+        "required_conditions": list(ACCURACY_REQUIRED_CONDITIONS),
+        "denominator": trade_count,
+        "accurate_count": accurate_count,
+        "strict_three_gate_accurate_count": net_positive_count,
+        "reported_accuracy": round(accurate_count / trade_count, 3),
+        "strict_three_gate_accuracy": round(net_positive_count / trade_count, 3),
+        "matches_reported_accuracy": accurate_count == net_positive_count,
+        "sample_confidence": _sample_confidence(trade_count),
+        "gate_counts": {
+            "total_recommendations": trade_count,
+            "signal_valid_count": signal_valid_count,
+            "signal_invalid_count": signal_invalid_count,
+            "executable_count": executable_count,
+            "unexecutable_count": unexecutable_count,
+            "net_positive_count": net_positive_count,
+            "net_non_positive_count": net_non_positive_count,
+            "manual_override_count": manual_override_count,
+        },
+        "funnel": [
+            _funnel_row("total_recommendations", "总推荐", trade_count, 0, trade_count),
+            _funnel_row("signal_valid", "信号当时真实成立", signal_valid_count, signal_invalid_count, trade_count),
+            _funnel_row("executed_trade", "可真实成交", executable_count, unexecutable_count, signal_valid_count),
+            _funnel_row("net_return_positive", "扣费滑点后净收益 > 0", net_positive_count, net_non_positive_count, executable_count),
+            _funnel_row("accurate_recommendations", "准确推荐", accurate_count, trade_count - accurate_count, trade_count),
+        ],
+        "failure_breakdown": [
+            {"gate": gate, "label": label, "count": count}
+            for (gate, label), count in failure_counter.most_common()
+        ],
+    }
+
+
+def _empty_accuracy_policy() -> dict[str, Any]:
+    return {
+        "definition": "recommendation_accuracy = accurate_recommendations / total_recommendations",
+        "required_conditions": list(ACCURACY_REQUIRED_CONDITIONS),
+        "denominator": 0,
+        "accurate_count": 0,
+        "strict_three_gate_accurate_count": 0,
+        "reported_accuracy": 0.0,
+        "strict_three_gate_accuracy": 0.0,
+        "matches_reported_accuracy": True,
+        "sample_confidence": "low",
+        "gate_counts": {
+            "total_recommendations": 0,
+            "signal_valid_count": 0,
+            "signal_invalid_count": 0,
+            "executable_count": 0,
+            "unexecutable_count": 0,
+            "net_positive_count": 0,
+            "net_non_positive_count": 0,
+            "manual_override_count": 0,
+        },
+        "funnel": [
+            _funnel_row("total_recommendations", "总推荐", 0, 0, 0),
+            _funnel_row("signal_valid", "信号当时真实成立", 0, 0, 0),
+            _funnel_row("executed_trade", "可真实成交", 0, 0, 0),
+            _funnel_row("net_return_positive", "扣费滑点后净收益 > 0", 0, 0, 0),
+            _funnel_row("accurate_recommendations", "准确推荐", 0, 0, 0),
+        ],
+        "failure_breakdown": [],
+    }
+
+
+def _funnel_row(stage: str, label: str, count: int, failed_count: int, denominator: int) -> dict[str, Any]:
+    return {
+        "stage": stage,
+        "label": label,
+        "count": count,
+        "failed_count": failed_count,
+        "pass_rate": round(count / denominator, 3) if denominator else 0.0,
+    }
+
+
+def _accuracy_failure_gate(item: dict[str, Any]) -> tuple[str, str]:
+    if not _is_valid_signal_record(item):
+        return "signal_valid", "信号当时真实不成立"
+    if not _is_executed_record(item):
+        return "executed_trade", "未触发买点或不可真实成交"
+    if float(item.get("net_return_pct", 0)) <= 0:
+        return "net_return_positive", "成本后净收益不为正"
+    return "explicit_accuracy_label", "显式准确标记为否"
 
 
 def _is_executed_record(item: dict[str, Any]) -> bool:

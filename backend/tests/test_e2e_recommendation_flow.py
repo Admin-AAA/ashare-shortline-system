@@ -7,6 +7,7 @@ All external data sources and LLM calls are mocked for deterministic verificatio
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -16,7 +17,6 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.session import SessionLocal
 from app.engine.aggregator import DEFAULT_AGG_WEIGHTS, aggregate
 from app.engine.skill_loader import StrategySkill
 from app.models.tables import (
@@ -32,6 +32,7 @@ from app.models.tables import (
     Recommendation,
     RecommendationOutcome,
     RecommendationRun,
+    ReviewNote,
     SkillRegistry,
     Stock,
 )
@@ -46,6 +47,7 @@ from app.services.workbench_service import (
     _has_fresh_dragon_tiger_cache,
     _latest_trade_date,
     _merge_run_params,
+    _resolve_aux_prefetch_count,
     _stale_capital_flow_codes,
     _stale_news_codes,
     _update_run_progress,
@@ -57,21 +59,8 @@ from app.services.workbench_service import (
     list_run_recommendations,
     list_runs,
     recover_interrupted_runs,
+    run_workbench,
 )
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-@pytest.fixture
-def db(clean_test_db):
-    """Provide a fresh DB session."""
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
 
 
 def _seed_skill_registry(db: Session):
@@ -99,7 +88,7 @@ def _seed_skill_registry(db: Session):
 def _seed_stock_and_bars(db: Session, code="600519", name="贵州茅台", date_str="2026-05-12"):
     """Seed a stock and 60 daily bars."""
     if not db.get(Stock, code):
-        db.add(Stock(code=code, name=name, exchange="SH", industry="白酒", is_st=False))
+        db.add(Stock(code=code, name=name, market="主板", industry="白酒", is_st=False))
     for i in range(60, 0, -1):
         trade_date = f"2026-{(5 - i // 30):02d}-{(i % 30) + 1:02d}"
         if len(trade_date) != 10:
@@ -186,6 +175,10 @@ def _mock_market_universe():
     return stocks, snapshot
 
 
+def _unique_stock_code(prefix: str = "98") -> str:
+    return f"{prefix}{uuid.uuid4().int % 10000:04d}"
+
+
 def _mock_skill_reviews(stock, skills, snapshot, rule_signals_by_skill, session_id):
     """Mock async skill reviews — return deterministic results."""
     results = []
@@ -256,8 +249,15 @@ class TestE2ERecommendationFlow:
         # Seed stock records for the mock universe
         for s in stocks:
             if not db.get(Stock, s["code"]):
-                db.add(Stock(code=s["code"], name=s["name"], exchange=s.get("exchange"),
-                            industry=s.get("industry"), is_st=False))
+                db.add(
+                    Stock(
+                        code=s["code"],
+                        name=s["name"],
+                        market=s.get("exchange"),
+                        industry=s.get("industry"),
+                        is_st=False,
+                    )
+                )
         db.commit()
 
         # Build features
@@ -322,14 +322,53 @@ class TestE2ERecommendationFlow:
         # Aggregate all stocks into cards and apply pool rules
         cards = []
 
-    def test_merge_run_params_defaults_formal_to_local_pool_preferred(self, db):
-        params = _merge_run_params(db, None, {"run_mode": "formal", "skills": []})
+    def test_merge_run_params_defaults_formal_to_local_pool_preferred(self):
+        params = _merge_run_params(None, None, {"run_mode": "formal", "skills": []})
         assert params["data_source"] == DATA_SOURCE_LOCAL_POOL_PREFERRED
 
-        experiment_params = _merge_run_params(db, None, {"run_mode": "experiment", "skills": []})
+        experiment_params = _merge_run_params(None, None, {"run_mode": "experiment", "skills": []})
         assert experiment_params["data_source"] == DATA_SOURCE_LOCAL_POOL
 
-    def test_build_recommendation_card_uses_agent_dominant_weights_when_reviews_present(self, db):
+    def test_merge_run_params_preserves_fast_run_review_controls(self):
+        params = _merge_run_params(
+            None,
+            None,
+            {
+                "run_mode": "formal",
+                "skills": [],
+                "disable_agent_review": True,
+                "agent_review_limit": 3,
+                "agent_review_concurrency": 2,
+                "skip_aux_refresh": True,
+            },
+        )
+
+        assert params["disable_agent_review"] is True
+        assert params["agent_review_limit"] == 3
+        assert params["agent_review_concurrency"] == 2
+        assert params["skip_aux_refresh"] is True
+
+    def test_formal_auxiliary_refresh_covers_all_prefiltered_candidates(self):
+        count = _resolve_aux_prefetch_count(
+            63,
+            48,
+            run_mode="formal",
+            skip_aux_refresh=False,
+        )
+
+        assert count == 63
+
+    def test_fast_run_auxiliary_refresh_remains_capped(self):
+        count = _resolve_aux_prefetch_count(
+            63,
+            48,
+            run_mode="formal",
+            skip_aux_refresh=True,
+        )
+
+        assert count == 24
+
+    def test_build_recommendation_card_uses_agent_dominant_weights_when_reviews_present(self):
         skill = _mock_skill("skill-1", "Skill1")
 
         class _Ctx:
@@ -417,10 +456,15 @@ class TestE2ERecommendationFlow:
         assert card["feature_snapshot"]["component_scores"]["skill_agent"] > 0
 
     def test_label_pending_outcomes_simulates_entry_and_exit(self, db):
+        suffix = uuid.uuid4().hex[:8]
+        run_mode = f"fexec_{suffix}"
+        run_id = f"run_outcome_exec_{suffix}"
+        rec_id = f"rec_exec_{suffix}"
+        code = _unique_stock_code()
         run = RecommendationRun(
-            run_id="run_outcome_exec",
+            run_id=run_id,
             run_name="结果标注执行测试",
-            run_mode="formal",
+            run_mode=run_mode,
             trade_date="2026-05-12",
             market_scope="all",
             risk_template="balanced",
@@ -435,18 +479,18 @@ class TestE2ERecommendationFlow:
         )
         db.add(run)
         db.flush()
-        db.add(Stock(code="000001", name="测试股", exchange="SZ", industry="电子", is_st=False))
+        db.add(Stock(code=code, name="测试股", market="创业板", industry="电子", is_st=False))
         db.add_all([
-            DailyKbar(code="000001", trade_date="2026-05-12", open=10.0, high=10.2, low=9.9, close=10.0, volume=1, amount=10, pct_chg=0.0, turnover_rate=1.0),
-            DailyKbar(code="000001", trade_date="2026-05-13", open=10.1, high=10.6, low=9.95, close=10.5, volume=1, amount=10, pct_chg=5.0, turnover_rate=1.2),
-            DailyKbar(code="000001", trade_date="2026-05-14", open=10.6, high=10.95, low=10.45, close=10.9, volume=1, amount=10, pct_chg=3.0, turnover_rate=1.3),
-            DailyKbar(code="000001", trade_date="2026-05-15", open=10.8, high=10.9, low=10.5, close=10.7, volume=1, amount=10, pct_chg=-1.0, turnover_rate=1.1),
+            DailyKbar(code=code, trade_date="2026-05-12", open=10.0, high=10.2, low=9.9, close=10.0, volume=1, amount=10, pct_chg=0.0, turnover_rate=1.0),
+            DailyKbar(code=code, trade_date="2026-05-13", open=10.1, high=10.6, low=9.95, close=10.5, volume=1, amount=10, pct_chg=5.0, turnover_rate=1.2),
+            DailyKbar(code=code, trade_date="2026-05-14", open=10.6, high=10.95, low=10.45, close=10.9, volume=1, amount=10, pct_chg=3.0, turnover_rate=1.3),
+            DailyKbar(code=code, trade_date="2026-05-15", open=10.8, high=10.9, low=10.5, close=10.7, volume=1, amount=10, pct_chg=-1.0, turnover_rate=1.1),
         ])
         rec = Recommendation(
-            recommendation_id="rec_exec",
+            recommendation_id=rec_id,
             run_id=run.run_id,
             trade_date="2026-05-12",
-            code="000001",
+            code=code,
             name="测试股",
             industry="电子",
             recommend_price=10.0,
@@ -470,8 +514,8 @@ class TestE2ERecommendationFlow:
         db.add(rec)
         db.commit()
 
-        result = label_pending_outcomes(db, horizon_days=5)
-        outcome = db.get(RecommendationOutcome, "rec_exec")
+        result = label_pending_outcomes(db, horizon_days=5, run_mode=run_mode)
+        outcome = db.get(RecommendationOutcome, rec_id)
 
         assert result["labeled"] == 1
         assert outcome is not None
@@ -483,11 +527,16 @@ class TestE2ERecommendationFlow:
         assert outcome.position_size == pytest.approx(0.55)
         assert outcome.weighted_return == pytest.approx(round(outcome.executed_return * 0.55, 2))
 
-    def test_label_pending_outcomes_preserves_legacy_success_when_buy_point_not_triggered(self, db):
+    def test_label_pending_outcomes_marks_untriggered_buy_point_as_missed(self, db):
+        suffix = uuid.uuid4().hex[:8]
+        run_mode = f"fmiss_{suffix}"
+        run_id = f"run_outcome_miss_{suffix}"
+        rec_id = f"rec_miss_{suffix}"
+        code = _unique_stock_code()
         run = RecommendationRun(
-            run_id="run_outcome_miss",
+            run_id=run_id,
             run_name="结果标注未触发测试",
-            run_mode="formal",
+            run_mode=run_mode,
             trade_date="2026-05-12",
             market_scope="all",
             risk_template="balanced",
@@ -502,18 +551,18 @@ class TestE2ERecommendationFlow:
         )
         db.add(run)
         db.flush()
-        db.add(Stock(code="000002", name="未触发股", exchange="SZ", industry="电子", is_st=False))
+        db.add(Stock(code=code, name="未触发股", market="创业板", industry="电子", is_st=False))
         db.add_all([
-            DailyKbar(code="000002", trade_date="2026-05-12", open=10.0, high=10.2, low=9.95, close=10.0, volume=1, amount=10, pct_chg=0.0, turnover_rate=1.0),
-            DailyKbar(code="000002", trade_date="2026-05-13", open=10.3, high=10.7, low=10.1, close=10.6, volume=1, amount=10, pct_chg=6.0, turnover_rate=1.3),
-            DailyKbar(code="000002", trade_date="2026-05-14", open=10.6, high=10.9, low=10.35, close=10.8, volume=1, amount=10, pct_chg=2.0, turnover_rate=1.2),
-            DailyKbar(code="000002", trade_date="2026-05-15", open=10.75, high=10.85, low=10.5, close=10.7, volume=1, amount=10, pct_chg=-1.0, turnover_rate=1.1),
+            DailyKbar(code=code, trade_date="2026-05-12", open=10.0, high=10.2, low=9.95, close=10.0, volume=1, amount=10, pct_chg=0.0, turnover_rate=1.0),
+            DailyKbar(code=code, trade_date="2026-05-13", open=10.3, high=10.7, low=10.1, close=10.6, volume=1, amount=10, pct_chg=6.0, turnover_rate=1.3),
+            DailyKbar(code=code, trade_date="2026-05-14", open=10.6, high=10.9, low=10.35, close=10.8, volume=1, amount=10, pct_chg=2.0, turnover_rate=1.2),
+            DailyKbar(code=code, trade_date="2026-05-15", open=10.75, high=10.85, low=10.5, close=10.7, volume=1, amount=10, pct_chg=-1.0, turnover_rate=1.1),
         ])
         rec = Recommendation(
-            recommendation_id="rec_miss",
+            recommendation_id=rec_id,
             run_id=run.run_id,
             trade_date="2026-05-12",
-            code="000002",
+            code=code,
             name="未触发股",
             industry="电子",
             recommend_price=10.0,
@@ -537,23 +586,26 @@ class TestE2ERecommendationFlow:
         db.add(rec)
         db.commit()
 
-        result = label_pending_outcomes(db, horizon_days=5)
-        outcome = db.get(RecommendationOutcome, "rec_miss")
+        result = label_pending_outcomes(db, horizon_days=5, run_mode=run_mode)
+        outcome = db.get(RecommendationOutcome, rec_id)
 
         assert result["labeled"] == 1
         assert outcome is not None
         assert outcome.entry_triggered is False
         assert outcome.exit_reason == "not_triggered"
-        assert outcome.outcome_label == "failed"
-        assert outcome.outcome_label_legacy == "success"
-        assert "未触发买点" in str(outcome.outcome_reason)
+        assert outcome.outcome_label == "missed"
+        assert outcome.outcome_label_legacy == "missed"
+        assert "未触发" in str(outcome.outcome_reason)
+        assert "买点" in str(outcome.outcome_reason)
 
-    def test_stats_consistency(self, db):
+    def test_stats_consistency(self, db, monkeypatch):
         """17.6: Stats overview returns correct counts."""
         _seed_skill_registry(db)
 
         # Create a run with recommendations
-        run_id = f"run_stats_{uuid.uuid4().hex[:6]}"
+        suffix = uuid.uuid4().hex[:8]
+        run_id = f"run_stats_{suffix}"
+        rec_ids = [f"rec_stats_{i:03d}_{suffix}" for i in range(3)]
         run = RecommendationRun(
             run_id=run_id,
             run_name="统计测试",
@@ -577,7 +629,7 @@ class TestE2ERecommendationFlow:
         codes = ["600519", "000001", "600036"]
         for i, code in enumerate(codes):
             rec = Recommendation(
-                recommendation_id=f"rec_stats_{i:03d}",
+                recommendation_id=rec_ids[i],
                 run_id=run_id,
                 trade_date="2026-05-12",
                 code=code,
@@ -601,7 +653,7 @@ class TestE2ERecommendationFlow:
 
         for i, code in enumerate(codes):
             outcome = RecommendationOutcome(
-                recommendation_id=f"rec_stats_{i:03d}",
+                recommendation_id=rec_ids[i],
                 horizon_days=5,
                 entry_triggered=True,
                 outcome_label="success" if i < 2 else "failed",
@@ -613,9 +665,13 @@ class TestE2ERecommendationFlow:
             )
             db.add(outcome)
             # Update recommendation status to match
-            db.get(Recommendation, f"rec_stats_{i:03d}").status = "success" if i < 2 else "failed"
+            db.get(Recommendation, rec_ids[i]).status = "success" if i < 2 else "failed"
         db.commit()
 
+        import app.services.stats_service as stats_service
+
+        monkeypatch.setattr(stats_service, "_runs_for_mode", lambda _db, mode: [run] if mode == "formal" else [])
+        stats_service._stats_cache.clear()
         stats = get_overview_stats(db, "formal")
         assert stats is not None
         assert stats["run_count"] == 1
@@ -775,6 +831,7 @@ class TestE2ERecommendationFlow:
 
     def test_component_scores_match_aggregator_dimensions(self, db):
         """Verify feature_snapshot_json.component_scores keys match aggregator DIMENSIONS."""
+        rec_id = f"rec_dims_{uuid.uuid4().hex[:8]}"
         run = RecommendationRun(
             run_id=f"run_dims_{uuid.uuid4().hex[:6]}",
             run_name="维度测试",
@@ -796,7 +853,7 @@ class TestE2ERecommendationFlow:
         db.flush()
 
         rec = Recommendation(
-            recommendation_id="rec_dims_001",
+            recommendation_id=rec_id,
             run_id=run.run_id,
             trade_date="2026-05-12",
             code="600519",
@@ -818,13 +875,14 @@ class TestE2ERecommendationFlow:
         db.add(rec)
         db.commit()
 
-        detail = get_recommendation_detail(db, "rec_dims_001")
+        detail = get_recommendation_detail(db, rec_id)
         cs = detail["feature_snapshot"].get("component_scores", {})
         expected_keys = set(DEFAULT_AGG_WEIGHTS.keys())
         actual_keys = set(cs.keys())
         assert actual_keys == expected_keys, f"Component keys mismatch: {actual_keys} != {expected_keys}"
 
     def test_recommendation_detail_builds_replay_summary(self, db):
+        rec_id = f"rec_replay_{uuid.uuid4().hex[:8]}"
         run = RecommendationRun(
             run_id=f"run_replay_{uuid.uuid4().hex[:6]}",
             run_name="复盘详情测试",
@@ -846,7 +904,7 @@ class TestE2ERecommendationFlow:
         db.flush()
 
         rec = Recommendation(
-            recommendation_id="rec_replay_001",
+            recommendation_id=rec_id,
             run_id=run.run_id,
             trade_date="2026-05-12",
             code="600519",
@@ -873,7 +931,7 @@ class TestE2ERecommendationFlow:
             agent_summary_json="{}",
         )
         outcome = RecommendationOutcome(
-            recommendation_id="rec_replay_001",
+            recommendation_id=rec_id,
             horizon_days=5,
             entry_triggered=True,
             entry_date="2026-05-13",
@@ -896,7 +954,7 @@ class TestE2ERecommendationFlow:
         )
         review = ReviewNote(
             note_id=f"note_replay_{uuid.uuid4().hex[:6]}",
-            recommendation_id="rec_replay_001",
+            recommendation_id=rec_id,
             user_label="false_positive",
             failure_reason="竞价后承接转弱",
             review_text="开盘后强转弱，不适合追。",
@@ -904,7 +962,7 @@ class TestE2ERecommendationFlow:
         db.add_all([rec, outcome, review])
         db.commit()
 
-        detail = get_recommendation_detail(db, "rec_replay_001")
+        detail = get_recommendation_detail(db, rec_id)
         replay = detail["replay_summary"]
 
         assert replay["recommend_time"]
@@ -1068,13 +1126,28 @@ class TestE2ERecommendationFlow:
         assert audit["scan_limited"] is False
         assert audit["skill_limited"] is True
 
-    def test_bootstrap_handles_empty_pool(self, db):
+    def test_bootstrap_handles_empty_pool(self, db, monkeypatch):
         """17.1: bootstrap should not crash when the market pool is empty."""
-        from app.services.workbench_service import bootstrap_workbench_state
+        from app.services import workbench_service
 
         invalidate_bootstrap_cache()
         _seed_skill_registry(db)
-        state = bootstrap_workbench_state(db)
+        monkeypatch.setattr(
+            workbench_service,
+            "get_market_snapshot_from_pool",
+            lambda _db: {
+                "snapshot_id": "empty-pool",
+                "trade_date": None,
+                "sample_count": 0,
+                "up_count": 0,
+                "down_count": 0,
+                "limit_up_count": 0,
+                "limit_down_count": 0,
+                "main_industries": [],
+                "breadth": {"regime": "未知"},
+            },
+        )
+        state = workbench_service.bootstrap_workbench_state(db)
         # Should return a valid state with empty market snapshot
         assert state["presets"] is not None
         assert state["market_snapshot"] is not None
@@ -1203,9 +1276,51 @@ class TestE2ERecommendationFlow:
         assert result["run"]["progress_phase"] == "queued"
         assert queued and queued[0][0] == run_id
 
+    def test_sync_run_market_failure_persists_failed_run(self, db, monkeypatch):
+        """Synchronous runs should be visible and failed if market loading fails early."""
+        from app.services import workbench_service
+
+        run_name = f"同步失败测试-{uuid.uuid4().hex[:8]}"
+        _seed_skill_registry(db)
+        skill = _mock_skill("daily-stock-analysis-skill", "DSA分析")
+        monkeypatch.setattr(workbench_service, "sync_skills", lambda _db: [skill])
+
+        def fail_market(_db, refresh=False):
+            raise RuntimeError("market pool timeout")
+
+        monkeypatch.setattr(workbench_service, "get_market_universe_from_pool", fail_market)
+
+        persisted = None
+        try:
+            with pytest.raises(RuntimeError, match="market pool timeout"):
+                asyncio.run(
+                    run_workbench(
+                        db,
+                        {
+                            "run_mode": "experiment",
+                            "run_name": run_name,
+                            "single_skill_id": "daily-stock-analysis-skill",
+                            "single_skill_weight": 1,
+                            "data_source": DATA_SOURCE_LOCAL_POOL,
+                        },
+                    )
+                )
+
+            persisted = db.scalar(select(RecommendationRun).where(RecommendationRun.run_name == run_name))
+            assert persisted is not None
+            assert persisted.status == "failed"
+            assert persisted.progress_phase == "failed"
+            assert persisted.error_message == "market pool timeout"
+            assert persisted.heartbeat_at is not None
+        finally:
+            if persisted is not None:
+                db.delete(persisted)
+                db.commit()
+
     def test_update_run_progress_records_heartbeat_and_counts(self, db):
+        run_id = f"run_progress_{uuid.uuid4().hex[:8]}"
         run = RecommendationRun(
-            run_id="run_progress",
+            run_id=run_id,
             run_name="进度测试",
             run_mode="experiment",
             trade_date="2026-05-12",
@@ -1220,7 +1335,7 @@ class TestE2ERecommendationFlow:
 
         updated = _update_run_progress(
             db,
-            "run_progress",
+            run_id,
             phase="rule_scan",
             current=42,
             total=100,
@@ -1229,7 +1344,7 @@ class TestE2ERecommendationFlow:
         )
 
         assert updated is not None
-        persisted = db.get(RecommendationRun, "run_progress")
+        persisted = db.get(RecommendationRun, run_id)
         assert persisted.status == "running"
         assert persisted.heartbeat_at is not None
         assert persisted.progress_phase == "rule_scan"
@@ -1238,7 +1353,13 @@ class TestE2ERecommendationFlow:
         assert persisted.progress_message == "规则扫描 42/100"
 
     def test_recover_interrupted_runs_marks_active_runs(self, db):
-        for run_id, status in [("run_queued", "queued"), ("run_running", "running"), ("run_done", "completed")]:
+        suffix = uuid.uuid4().hex[:8]
+        run_ids = {
+            "queued": f"run_queued_{suffix}",
+            "running": f"run_running_{suffix}",
+            "completed": f"run_done_{suffix}",
+        }
+        for status, run_id in run_ids.items():
             db.add(
                 RecommendationRun(
                     run_id=run_id,
@@ -1254,14 +1375,14 @@ class TestE2ERecommendationFlow:
             )
         db.commit()
 
-        recovered = recover_interrupted_runs(db)
+        recovered = recover_interrupted_runs(db, run_ids=[run_ids["queued"], run_ids["running"], run_ids["completed"]])
 
         assert recovered == 2
-        assert db.get(RecommendationRun, "run_queued").status == "interrupted"
-        assert db.get(RecommendationRun, "run_running").status == "interrupted"
-        assert db.get(RecommendationRun, "run_done").status == "completed"
-        assert db.get(RecommendationRun, "run_running").interrupted_at is not None
-        assert "重新发起运行" in db.get(RecommendationRun, "run_running").error_message
+        assert db.get(RecommendationRun, run_ids["queued"]).status == "interrupted"
+        assert db.get(RecommendationRun, run_ids["running"]).status == "interrupted"
+        assert db.get(RecommendationRun, run_ids["completed"]).status == "completed"
+        assert db.get(RecommendationRun, run_ids["running"]).interrupted_at is not None
+        assert "重新发起运行" in db.get(RecommendationRun, run_ids["running"]).error_message
 
     def test_aggregate_scoring_determinism(self):
         """Verify aggregate produces deterministic output for same inputs."""

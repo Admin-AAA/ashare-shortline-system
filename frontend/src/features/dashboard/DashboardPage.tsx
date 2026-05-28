@@ -4,6 +4,7 @@ import BacktestEvaluationPanel from "./components/BacktestEvaluationPanel";
 import DataHealthDetailPanel from "./components/DataHealthDetailPanel";
 import DataHealthPanel from "./components/DataHealthPanel";
 import DragonCandidatesPanel from "./components/DragonCandidatesPanel";
+import EvaluationBreakdownPanel from "./components/EvaluationBreakdownPanel";
 import MarketTemperaturePanel from "./components/MarketTemperaturePanel";
 import MetricsPanel from "./components/MetricsPanel";
 import QualityScorecardPanel from "./components/QualityScorecardPanel";
@@ -565,6 +566,7 @@ function ValidationWorkspace({ data }: { data: DashboardOverview }) {
       </div>
       <StatusStream title="验证消息" items={alerts?.messages ?? []} empty="暂无验证消息" />
       <TemporalConsistencyPanel />
+      <EvaluationBreakdownPanel />
       <BacktestPanel />
       <BacktestEvaluationPanel />
     </div>

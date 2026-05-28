@@ -169,6 +169,11 @@ function VariantSide({
   const metrics = result.aggregate_metrics;
   const wf = result.walk_forward;
   const ts = result.time_split;
+  const gateSummary = metrics?.accuracy_gate_summary;
+  const failureBreakdown = metrics?.accuracy_policy?.failure_breakdown ?? [];
+  const accuracyNumerator = metrics?.accuracy_numerator ?? metrics?.success_count ?? 0;
+  const accuracyDenominator = metrics?.accuracy_denominator ?? metrics?.labeled_count ?? 0;
+  const unexecutedCount = metrics?.unexecuted_count ?? metrics?.missed_count ?? 0;
 
   return (
     <div className={`eval-side ${selected ? "selected" : ""}`}>
@@ -186,12 +191,38 @@ function VariantSide({
           <div className="bt-metrics-grid" style={{ marginTop: 8 }}>
             <MetricCell label="推荐准确率" value={`${(metrics.recommendation_accuracy * 100).toFixed(1)}%`} />
             <MetricCell label="成交后胜率" value={`${(Number(metrics.trade_accuracy ?? metrics.hit_rate ?? 0) * 100).toFixed(1)}%`} />
+            <MetricCell label="准确推荐" value={`${accuracyNumerator}/${accuracyDenominator}`} />
+            <MetricCell label="未成交" value={String(unexecutedCount)} />
+            <MetricCell label="置信度" value={businessStatusLabel(metrics.sample_confidence, "低置信度")} />
             <MetricCell label="平均收益" value={`${metrics.average_net_return.toFixed(2)}%`} valueClass={aShareDirectionClass(metrics.average_net_return)} />
             <MetricCell label="盈亏比" value={metrics.profit_loss_ratio.toFixed(2)} positive={metrics.profit_loss_ratio >= 1.5} />
-            <MetricCell label="最大回撤" value={`${metrics.max_drawdown.toFixed(2)}%`} positive={metrics.max_drawdown >= -10} />
+            <MetricCell label="最大回撤" value={`${metrics.max_drawdown.toFixed(2)}%`} valueClass={aShareDirectionClass(metrics.max_drawdown)} />
             <MetricCell label="超额收益" value={`${metrics.benchmark_excess_return.toFixed(2)}%`} valueClass={aShareDirectionClass(metrics.benchmark_excess_return)} />
             <MetricCell label="持仓" value={`${metrics.avg_holding_days.toFixed(1)}天`} />
           </div>
+          {gateSummary ? (
+            <div className="sub-metrics-group" style={{ marginTop: 10 }}>
+              <span className="group-label">严格准确率闸门</span>
+              <div className="sub-metrics-row">
+                <span>信号失效 <strong>{gateSummary.signal_invalid_count}</strong></span>
+                <span>不可成交 <strong>{gateSummary.unexecutable_count}</strong></span>
+                <span>净收益不为正 <strong>{gateSummary.net_non_positive_count}</strong></span>
+                <span>通过净收益 <strong>{gateSummary.net_positive_count}</strong></span>
+              </div>
+            </div>
+          ) : null}
+          {failureBreakdown.length > 0 ? (
+            <div className="sub-metrics-group" style={{ marginTop: 10 }}>
+              <span className="group-label">准确率失败归因</span>
+              <div className="sub-metrics-row">
+                {failureBreakdown.slice(0, 3).map((item) => (
+                  <span key={`${item.gate}-${item.label}`}>
+                    {item.label} <strong>{item.count}</strong>
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           {/* Walk-forward 摘要 */}
           {wf?.eligible && wf.test_aggregate && (
@@ -201,7 +232,7 @@ function VariantSide({
                 <div className="eval-score-grid">
                   <ScoreCell label="测试推荐准确率" value={`${(Number(wf.test_aggregate.recommendation_accuracy ?? 0) * 100).toFixed(1)}%`} />
                   <ScoreCell label="测试集收益" value={`${Number(wf.test_aggregate.average_net_return ?? 0).toFixed(2)}%`} valueClass={aShareDirectionClass(wf.test_aggregate.average_net_return)} />
-                  <ScoreCell label="测试集回撤" value={`${Number(wf.test_aggregate.max_drawdown ?? 0).toFixed(2)}%`} />
+                  <ScoreCell label="测试集回撤" value={`${Number(wf.test_aggregate.max_drawdown ?? 0).toFixed(2)}%`} valueClass={aShareDirectionClass(wf.test_aggregate.max_drawdown)} />
                   <ScoreCell label="测试集盈亏比" value={Number(wf.test_aggregate.profit_loss_ratio ?? 0).toFixed(2)} />
                   <ScoreCell label="测试笔数" value={String(wf.test_aggregate.trade_count ?? 0)} />
                 </div>

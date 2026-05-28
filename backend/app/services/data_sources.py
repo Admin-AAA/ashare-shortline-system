@@ -34,6 +34,27 @@ from app.services.market_auxiliary import (
 from app.services.market_data import _kline_sources, _quote_sources
 
 
+def _compact_trade_date(value: Any) -> str:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    return digits[:8] if len(digits) >= 8 else digits
+
+
+def _normalize_trade_date(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if len(raw) >= 10 and raw[4] == "-" and raw[7] == "-":
+        return raw[:10]
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if len(digits) >= 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    return raw[:10]
+
+
+def _daily_kbar_trade_date_expr():
+    return func.replace(DailyKbar.trade_date, "-", "")
+
+
 def list_data_sources(db: Session) -> list[dict[str, Any]]:
     sync_data_source_configs(db)
     configs = {
@@ -110,7 +131,10 @@ def get_local_pool_status(
 
     # ── 日期/时间聚合 ──
     latest_unified = db.scalar(select(func.max(StockQuote.snapped_at)))
-    latest_bar_date = db.scalar(select(func.max(DailyKbar.trade_date)).where(DailyKbar.trade_date <= latest_allowed_bar_date))
+    latest_allowed_compact = _compact_trade_date(latest_allowed_bar_date)
+    latest_bar_date = db.scalar(
+        select(func.max(_daily_kbar_trade_date_expr())).where(_daily_kbar_trade_date_expr() <= latest_allowed_compact)
+    )
     latest_quote_date = latest_quote_date_for_coverage
     t_dates = time.perf_counter()
 
@@ -118,13 +142,15 @@ def get_local_pool_status(
     all_quote_rows = db.scalars(
         select(StockQuote).where(StockQuote.freshness_status != "inactive")
     ).all()
-    active_unified_quote_count = len(all_quote_rows)
+    from app.services.market_pool import _dedupe_latest_quote_rows
+    current_quote_rows = _dedupe_latest_quote_rows(all_quote_rows)
+    active_unified_quote_count = len(current_quote_rows)
     t_load_quotes = time.perf_counter()
 
     # 只取 distinct code 总量，避免为全市场每只股票都做一次汇总
     daily_bar_code_count = db.scalar(
         select(func.count(func.distinct(DailyKbar.code)))
-        .where(DailyKbar.trade_date <= latest_allowed_bar_date)
+        .where(_daily_kbar_trade_date_expr() <= latest_allowed_compact)
     ) or 0
     full_market_daily_bar_code_count = int(daily_bar_code_count)
     active_daily_bar_code_count = full_market_daily_bar_code_count
@@ -135,7 +161,7 @@ def get_local_pool_status(
     from app.services.market_pool import _apply_local_quote_metrics, local_pool_recommendation_readiness
     from app.services.market_data import _candidate_filter_summary, _select_candidates
 
-    all_quotes = _unified_rows_to_quotes(all_quote_rows, skip_metrics=True)
+    all_quotes = _unified_rows_to_quotes(current_quote_rows, skip_metrics=True)
     eligible_quotes = _select_candidates(all_quotes, len(all_quotes)) if all_quotes else []
     eligible_codes = [str(item.get("code") or "") for item in eligible_quotes if item.get("code")]
     candidate_filter = _candidate_filter_summary(all_quotes)
@@ -166,7 +192,7 @@ def get_local_pool_status(
     t_eligible = time.perf_counter()
 
     paged_quotes = (
-        _unified_quote_rows_from_rows(all_quote_rows, limit=unified_limit, offset=unified_offset, db=db)
+        _unified_quote_rows_from_rows(current_quote_rows, limit=unified_limit, offset=unified_offset, db=db)
         if include_details
         else []
     )
@@ -356,13 +382,13 @@ def _load_bar_summaries_for_codes(
         select(
             DailyKbar.code,
             func.count().label("bar_count"),
-            func.max(DailyKbar.trade_date).label("latest_trade_date"),
+            func.max(_daily_kbar_trade_date_expr()).label("latest_trade_date"),
         )
-        .where(DailyKbar.code.in_(codes), DailyKbar.trade_date <= latest_allowed_bar_date)
+        .where(DailyKbar.code.in_(codes), _daily_kbar_trade_date_expr() <= _compact_trade_date(latest_allowed_bar_date))
         .group_by(DailyKbar.code)
     ).all()
     return {
-        row.code: {"bar_count": int(row.bar_count or 0), "latest_trade_date": str(row.latest_trade_date or "")}
+        row.code: {"bar_count": int(row.bar_count or 0), "latest_trade_date": _normalize_trade_date(row.latest_trade_date)}
         for row in rows
     }
 
@@ -435,10 +461,10 @@ def _raw_bar_source_rows(db: Session) -> list[dict[str, Any]]:
             DailyKbar.source,
             func.count().label("row_count"),
             func.count(func.distinct(DailyKbar.code)).label("code_count"),
-            func.max(DailyKbar.trade_date).label("latest_trade_date"),
+            func.max(_daily_kbar_trade_date_expr()).label("latest_trade_date"),
             func.max(DailyKbar.updated_at).label("latest_fetched_at"),
         )
-        .where(DailyKbar.trade_date <= latest_allowed_bar_date)
+        .where(_daily_kbar_trade_date_expr() <= _compact_trade_date(latest_allowed_bar_date))
         .group_by(DailyKbar.source)
     ).all()
     return [
@@ -446,7 +472,7 @@ def _raw_bar_source_rows(db: Session) -> list[dict[str, Any]]:
             "source": row.source,
             "row_count": int(row.row_count or 0),
             "code_count": int(row.code_count or 0),
-            "latest_trade_date": row.latest_trade_date,
+            "latest_trade_date": _normalize_trade_date(row.latest_trade_date),
             "latest_fetched_at": row.latest_fetched_at.isoformat() if row.latest_fetched_at else None,
         }
         for row in rows
@@ -454,15 +480,14 @@ def _raw_bar_source_rows(db: Session) -> list[dict[str, Any]]:
 
 
 def _unified_quote_rows(db: Session, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
-    from app.services.market_pool import _quote_metrics_from_bars
+    from app.services.market_pool import _dedupe_latest_quote_rows, _quote_metrics_from_bars
 
     rows = db.scalars(
         select(StockQuote)
         .where(StockQuote.freshness_status != "inactive")
-        .order_by(StockQuote.quality_score.desc(), StockQuote.snapped_at.desc())
-        .offset(offset)
-        .limit(limit)
+        .order_by(StockQuote.trade_date.desc(), StockQuote.snapped_at.desc(), StockQuote.quality_score.desc())
     ).all()
+    rows = _dedupe_latest_quote_rows(rows)[offset:offset + limit]
     codes = [row.code for row in rows]
     local_metrics = _quote_metrics_from_bars(db, codes) if codes else {}
     return [
@@ -477,12 +502,12 @@ def _daily_bar_rows(db: Session, limit: int = 50, offset: int = 0) -> list[dict[
         select(
             DailyKbar.code,
             func.count().label("bar_count"),
-            func.min(DailyKbar.trade_date).label("first_trade_date"),
-            func.max(DailyKbar.trade_date).label("latest_trade_date"),
+            func.min(_daily_kbar_trade_date_expr()).label("first_trade_date"),
+            func.max(_daily_kbar_trade_date_expr()).label("latest_trade_date"),
         )
-        .where(DailyKbar.trade_date <= latest_allowed_bar_date)
+        .where(_daily_kbar_trade_date_expr() <= _compact_trade_date(latest_allowed_bar_date))
         .group_by(DailyKbar.code)
-        .order_by(func.max(DailyKbar.trade_date).desc(), func.count().desc())
+        .order_by(func.max(_daily_kbar_trade_date_expr()).desc(), func.count().desc())
         .offset(offset)
         .limit(limit)
     ).all()
@@ -490,8 +515,8 @@ def _daily_bar_rows(db: Session, limit: int = 50, offset: int = 0) -> list[dict[
         {
             "code": row.code,
             "bar_count": int(row.bar_count or 0),
-            "first_trade_date": row.first_trade_date,
-            "latest_trade_date": row.latest_trade_date,
+            "first_trade_date": _normalize_trade_date(row.first_trade_date),
+            "latest_trade_date": _normalize_trade_date(row.latest_trade_date),
         }
         for row in rows
     ]

@@ -3,6 +3,10 @@ from typing import Any
 # 保持旧接口兼容：从 agent_skill_runner 导入 enrich_signal_with_agent_review
 # 调用方可以通过此模块直接访问该函数
 from app.engine.agent_skill_runner import enrich_signal_with_agent_review  # noqa: F401
+from app.services.execution_constraints import (
+    entry_no_liquidity_reason_from_card as _entry_no_liquidity_reason,
+    is_one_word_limit_up_card as _is_one_word_limit_up_card,
+)
 
 RISK_TEMPLATE_PENALTY = {
     "conservative": 1.4,
@@ -50,6 +54,8 @@ _RISK_SEVERITY_RULES: list[tuple[list[str], str]] = [
     (["股权质押比例", "质押风险"], "high"),
     (["有限售股解禁", "解禁"], "high"),
     (["硬风控否决", "Hard Veto"], "high"),
+    (["入场不可成交", "无法真实成交", "无成交量", "一字涨停"], "high"),
+    (["涨停排队", "封板反复", "封单金额", "尾盘封板"], "high"),
     (["未进入 Skill Agent 深审", "仅按规则信号降权输出"], "info"),
     # ── medium: 市场环境/情绪 ──
     (["情绪高潮", "高潮阶段", "追高仓位降档"], "medium"),
@@ -268,6 +274,93 @@ def _card_score_line_adjustment(card: dict[str, Any]) -> dict[str, Any]:
     return {
         "evidence_adjustment": round(evidence_adjustment if evidence_adjustment > 1.0 else min(0.75, evidence_adjustment), 2),
         "reasons": reasons,
+    }
+
+
+def _execution_viability(card: dict[str, Any]) -> dict[str, Any]:
+    details = {
+        "is_limit_up": bool(card.get("is_limit_up")),
+        "open_times": int(_float(card.get("limit_up_open_times"), 0)),
+        "first_time": card.get("limit_up_first_time") or card.get("limit_up_seal_time"),
+        "last_time": card.get("limit_up_last_time"),
+        "fd_amount_yi": _float(card.get("limit_up_fd_amount_yi"), 0.0),
+        "turnover_ratio": _float(card.get("limit_up_turnover_ratio"), 0.0),
+    }
+    no_liquidity_reason = _entry_no_liquidity_reason(card)
+    if no_liquidity_reason:
+        return _execution_viability_result(
+            "blocked",
+            "入场不可成交",
+            no_liquidity_reason,
+            [no_liquidity_reason],
+            99.0,
+            details,
+        )
+    if _is_one_word_limit_up_card(card):
+        reason = "入场日一字涨停，按真实成交约束视为买不进"
+        return _execution_viability_result(
+            "blocked",
+            "入场不可成交",
+            reason,
+            [reason],
+            99.0,
+            details,
+        )
+    if not bool(card.get("is_limit_up")):
+        return _execution_viability_result(
+            "tradable",
+            "可按普通成交约束观察",
+            None,
+            [],
+            0.0,
+            details,
+        )
+
+    open_times = details["open_times"]
+    fd_amount_yi = details["fd_amount_yi"]
+    last_time = _time_int(details["last_time"])
+    adjustment = 3.0
+    risks = ["当日已涨停，入场存在涨停排队与滑点风险"]
+    if open_times >= 10:
+        adjustment += 2.0
+        risks.append(f"涨停封板反复打开 {open_times} 次，分歧较大")
+    elif open_times > 0:
+        adjustment += 1.0
+        risks.append(f"涨停盘中打开 {open_times} 次，需确认承接")
+    else:
+        adjustment += 2.0
+        risks.append("涨停未记录开板，需确认不是一字排队")
+    if 0 < fd_amount_yi < 0.5:
+        adjustment += 1.5
+        risks.append(f"封单金额仅 {fd_amount_yi:.2f} 亿，封板承接偏弱")
+    if last_time and last_time >= 143000:
+        adjustment += 1.5
+        risks.append("尾盘封板，次日分歧风险较高")
+    return _execution_viability_result(
+        "risky",
+        "涨停执行风险",
+        None,
+        list(dict.fromkeys(risks)),
+        min(adjustment, 8.0),
+        details,
+    )
+
+
+def _execution_viability_result(
+    status: str,
+    label: str,
+    block_reason: str | None,
+    risk_flags: list[str],
+    score_line_adjustment: float,
+    details: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "label": label,
+        "block_reason": block_reason,
+        "risk_flags": risk_flags,
+        "score_line_adjustment": round(score_line_adjustment, 2),
+        "details": details,
     }
 
 
@@ -697,6 +790,20 @@ def aggregate(
         "market_regime": _market_regime_label(market_snapshot),
         "skill_disagreement": skill_disagreement_metrics(signals),
         "market_discipline": market_discipline,
+        "open": stock.get("open"),
+        "high": stock.get("high"),
+        "low": stock.get("low"),
+        "close": stock.get("close"),
+        "pct": stock.get("pct"),
+        "volume": stock.get("volume"),
+        "amount_yi": stock.get("amount_yi"),
+        "is_limit_up": bool(stock.get("is_limit_up")),
+        "limit_up_first_time": stock.get("limit_up_first_time"),
+        "limit_up_seal_time": stock.get("limit_up_seal_time"),
+        "limit_up_last_time": stock.get("limit_up_last_time"),
+        "limit_up_open_times": stock.get("limit_up_open_times"),
+        "limit_up_fd_amount_yi": stock.get("limit_up_fd_amount_yi"),
+        "limit_up_turnover_ratio": stock.get("limit_up_turnover_ratio"),
     }
 
 
@@ -727,16 +834,30 @@ def apply_pool_rules(
         if final_score <= 0:
             continue
         card_adjustment = _card_score_line_adjustment(card)
+        execution_viability = _execution_viability(card)
         effective_score_line = round(
-            score_line_context["effective_score_line"] + card_adjustment["evidence_adjustment"],
+            score_line_context["effective_score_line"]
+            + card_adjustment["evidence_adjustment"]
+            + execution_viability["score_line_adjustment"],
             2,
         )
         card["score_line_meta"] = {
             **score_line_context,
             **card_adjustment,
+            "execution_adjustment": execution_viability["score_line_adjustment"],
+            "execution_status": execution_viability["status"],
+            "execution_blocked": execution_viability["status"] == "blocked",
+            "block_reason": execution_viability["block_reason"],
             "effective_score_line": effective_score_line,
-            "passed": final_score >= effective_score_line,
+            "passed": final_score >= effective_score_line and execution_viability["status"] != "blocked",
         }
+        if execution_viability["risk_flags"]:
+            card["risk_flags"] = _dedup_risk_flags(
+                list(card.get("risk_flags") or []) + execution_viability["risk_flags"]
+            )
+        card["execution_viability"] = execution_viability
+        if execution_viability["status"] == "blocked":
+            continue
         if final_score < effective_score_line:
             continue
         result.append(card)
@@ -1130,3 +1251,10 @@ def _float(value: Any, default: float = 0.0) -> float:
         return float(value if value is not None else default)
     except (TypeError, ValueError):
         return default
+
+
+def _time_int(value: Any) -> int:
+    raw = "".join(ch for ch in str(value or "") if ch.isdigit())
+    if not raw:
+        return 0
+    return int(raw[:6].ljust(6, "0"))

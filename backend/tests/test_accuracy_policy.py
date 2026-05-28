@@ -4,6 +4,9 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from app.services.outcome_service import (
+    _metrics_by_score_line,
+    _metrics_by_setup,
+    _metrics_by_strategy,
     _overview_metrics,
     _precision_at_k,
     is_accurate_recommendation,
@@ -25,6 +28,8 @@ def _row(
     entry_triggered: bool,
     executed_return: float,
     score: float = 80.0,
+    setup_type: str = "突破",
+    skill_breakdown_json: str = "[]",
 ) -> SimpleNamespace:
     return SimpleNamespace(
         recommendation_id=rec_id,
@@ -32,8 +37,8 @@ def _row(
         code=rec_id[-6:].rjust(6, "0"),
         name=rec_id,
         final_score=score,
-        setup_type="突破",
-        skill_breakdown_json="[]",
+        setup_type=setup_type,
+        skill_breakdown_json=skill_breakdown_json,
         trade_date="2026-05-12",
         market_context_json="{}",
         outcome_label=outcome_label,
@@ -84,6 +89,20 @@ def test_overview_metrics_do_not_trust_success_label_when_net_return_is_negative
     assert metrics["recommendation_accuracy"] == 0.333
     assert metrics["trade_accuracy"] == 0.333
     assert metrics["accuracy_basis"] == "labeled_recommendations"
+    assert metrics["accuracy_gate_summary"] == {
+        "total_recommendations": 3,
+        "signal_valid_count": 3,
+        "signal_invalid_count": 0,
+        "executable_count": 3,
+        "unexecutable_count": 0,
+        "net_positive_count": 1,
+        "net_non_positive_count": 2,
+        "manual_override_count": 0,
+    }
+    assert metrics["accuracy_policy"]["matches_reported_accuracy"] is True
+    assert metrics["accuracy_policy"]["failure_breakdown"] == [
+        {"gate": "net_return_positive", "label": "成本后净收益不为正", "count": 2}
+    ]
 
 
 def test_precision_at_k_uses_strict_accuracy_policy():
@@ -100,3 +119,71 @@ def test_precision_at_k_uses_strict_accuracy_policy():
     assert result[0]["precision"] == 1.0
     assert result[1]["precision"] == 0.5
     assert result[2]["precision"] == 0.333
+
+
+def test_grouped_setup_metrics_include_recommendation_accuracy_denominator(monkeypatch):
+    rows = [
+        _row(rec_id="rec_win", outcome_label="success", entry_triggered=True, executed_return=2.0),
+        _row(rec_id="rec_loss", outcome_label="failed", entry_triggered=True, executed_return=-1.0),
+        _row(rec_id="rec_missed", outcome_label="missed", entry_triggered=False, executed_return=0.0),
+    ]
+    monkeypatch.setattr("app.services.benchmark_service.get_benchmark_close_map", lambda _db, _dates: {})
+    monkeypatch.setattr("app.services.benchmark_service.compute_benchmark_return", lambda _close_map, _entry, _exit: 0.0)
+    monkeypatch.setattr("app.services.outcome_service._scoped_recommendation_rows", lambda _db, _mode: rows)
+
+    result = _metrics_by_setup(MagicMock(), "formal")
+
+    assert len(result) == 1
+    row = result[0]
+    assert row["labeled_count"] == 3
+    assert row["triggered_count"] == 2
+    assert row["missed_count"] == 1
+    assert row["hit_rate"] == 0.5
+    assert row["recommendation_accuracy"] == 0.333
+    assert row["accuracy_denominator"] == 3
+    assert row["average_net_return"] == round((2.0 - 1.0 + 0.0) / 3, 3)
+    assert row["sample_confidence"] == "low"
+
+
+def test_score_line_metrics_expose_9kpi_for_each_threshold(monkeypatch):
+    rows = [
+        _row(rec_id="rec_win", outcome_label="success", entry_triggered=True, executed_return=2.0, score=90),
+        _row(rec_id="rec_loss", outcome_label="failed", entry_triggered=True, executed_return=-1.0, score=75),
+        _row(rec_id="rec_missed", outcome_label="missed", entry_triggered=False, executed_return=0.0, score=65),
+    ]
+    monkeypatch.setattr("app.services.benchmark_service.get_benchmark_close_map", lambda _db, _dates: {})
+    monkeypatch.setattr("app.services.benchmark_service.compute_benchmark_return", lambda _close_map, _entry, _exit: 0.0)
+    monkeypatch.setattr("app.services.outcome_service._scoped_recommendation_rows", lambda _db, _mode: rows)
+
+    result = _metrics_by_score_line(MagicMock(), "formal", (60, 80))
+
+    low, high = result
+    assert low["sample_count"] == 3
+    assert low["recommendation_accuracy"] == 0.333
+    assert low["accuracy_denominator"] == 3
+    assert low["sample_confidence"] == "low"
+    assert high["sample_count"] == 1
+    assert high["recommendation_accuracy"] == 1.0
+    assert high["accuracy_denominator"] == 1
+
+
+def test_strategy_metrics_expose_9kpi_not_only_trade_hit_rate(monkeypatch):
+    skill_json = '[{"strategy_id": "chen-xiaoqun-skill", "score": 80}]'
+    rows = [
+        _row(rec_id="rec_win", outcome_label="success", entry_triggered=True, executed_return=2.0, skill_breakdown_json=skill_json),
+        _row(rec_id="rec_loss", outcome_label="failed", entry_triggered=True, executed_return=-1.0, skill_breakdown_json=skill_json),
+        _row(rec_id="rec_missed", outcome_label="missed", entry_triggered=False, executed_return=0.0, skill_breakdown_json=skill_json),
+    ]
+    monkeypatch.setattr("app.services.benchmark_service.get_benchmark_close_map", lambda _db, _dates: {})
+    monkeypatch.setattr("app.services.benchmark_service.compute_benchmark_return", lambda _close_map, _entry, _exit: 0.0)
+    monkeypatch.setattr("app.services.outcome_service._scoped_recommendation_rows", lambda _db, _mode: rows)
+
+    result = _metrics_by_strategy(MagicMock(), "formal")
+
+    assert len(result) == 1
+    row = result[0]
+    assert row["strategy_id"] == "chen-xiaoqun-skill"
+    assert row["hit_rate"] == 0.5
+    assert row["recommendation_accuracy"] == 0.333
+    assert row["accuracy_denominator"] == 3
+    assert row["sample_confidence"] == "low"

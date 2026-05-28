@@ -359,3 +359,156 @@ def test_auxiliary_values_are_not_overwritten_by_dsa_defaults():
     assert enriched["latest_news"] == "真实公告标题"
     assert enriched["dragon_tiger_is_on_list"] is True
     assert enriched["dragon_tiger_recent_count"] == 1
+
+
+def test_auxiliary_enrichment_carries_limit_up_execution_fields():
+    from app.services.feature_builder import _enrich_with_auxiliary_data
+
+    stock = _stock(code="601126", name="四方股份")
+    aux = {
+        "limit_up": {
+            "601126": {
+                "consecutive_days": 1,
+                "first_time": "100643",
+                "last_time": "135555",
+                "open_times": 17,
+                "up_stat": "1/1",
+                "limit_amount_yi": 1.2,
+                "fd_amount_yi": 0.318156,
+                "turnover_ratio": 5.29,
+            }
+        },
+        "concept_sectors": {},
+        "capital_flows": {},
+        "dragon_tigers": {},
+        "news": {},
+        "auctions": {},
+        "pledges": {},
+        "broker_recs": {},
+        "share_floats_upcoming": {},
+        "coverage": {},
+    }
+
+    _enrich_with_auxiliary_data([stock], None, _snapshot(), _aux_override=aux)
+
+    assert stock["is_limit_up"] is True
+    assert stock["limit_up_first_time"] == "100643"
+    assert stock["limit_up_last_time"] == "135555"
+    assert stock["limit_up_open_times"] == 17
+    assert stock["limit_up_up_stat"] == "1/1"
+    assert stock["limit_up_limit_amount_yi"] == 1.2
+    assert stock["limit_up_fd_amount_yi"] == 0.318156
+    assert stock["limit_up_turnover_ratio"] == 5.29
+
+
+def test_auxiliary_enrichment_marks_checked_empty_as_covered():
+    from app.services.feature_builder import _enrich_with_auxiliary_data
+
+    stock = _stock(
+        code="000001",
+        name="平安银行",
+        industry="银行",
+        data_quality={
+            "missing_fields": [
+                "announcements",
+                "capital_flow",
+                "dragon_tiger",
+                "main_net_inflow",
+                "news",
+                "theme_tags",
+            ]
+        },
+    )
+    aux = {
+        "limit_up": {},
+        "concept_sectors": {},
+        "capital_flows": {
+            "000001": {
+                "main_net_inflow_yi": 0.12,
+                "super_large_net_inflow_yi": 0.08,
+                "large_net_inflow_yi": 0.04,
+                "medium_net_inflow_yi": -0.01,
+                "small_net_inflow_yi": -0.03,
+                "main_net_inflow_ratio": 1.8,
+                "cumulative_inflow_3d_yi": 0.2,
+                "cumulative_inflow_5d_yi": 0.35,
+                "cumulative_inflow_10d_yi": 0.5,
+            }
+        },
+        "dragon_tigers": {},
+        "news": {},
+        "auctions": {},
+        "pledges": {},
+        "broker_recs": {},
+        "share_floats_upcoming": {},
+        "coverage": {
+            "dragon_tiger_trade_date_covered": True,
+            "dragon_tiger_trade_date_count": 80,
+        },
+    }
+    snapshot = _snapshot(
+        trade_date="2026-05-12",
+        breadth={
+            "auxiliary_data_audit": {
+                "capital_flows": {"status": "cached", "checked_codes": ["000001"]},
+                "news": {"status": "success", "checked_codes": ["000001"]},
+                "dragon_tiger": {
+                    "status": "cached",
+                    "covered_trade_date": "2026-05-12",
+                },
+            }
+        },
+    )
+
+    _enrich_with_auxiliary_data([stock], None, snapshot, _aux_override=aux)
+
+    missing = set(stock["data_quality"]["missing_fields"])
+    assert "capital_flow" not in missing
+    assert "main_net_inflow" not in missing
+    assert "dragon_tiger" not in missing
+    assert "news" not in missing
+    assert "announcements" not in missing
+    assert "theme_tags" not in missing
+    assert stock["dragon_tiger_is_on_list"] is False
+    assert stock["dragon_tiger_recent_count"] == 0
+    assert stock["data_quality"]["dragon_tiger_checked_empty"] is True
+    assert stock["data_quality"]["news_checked_empty"] is True
+    assert stock["data_quality"]["announcements_checked_empty"] is True
+    assert stock["data_quality"]["capital_flow_checked"] is True
+    assert stock["data_quality"]["theme_tags_fallback_from_industry"] is True
+    assert stock["concept_sector_name"] == "银行"
+    assert stock["theme_tags"] == ["银行"]
+
+
+def test_auxiliary_enrichment_populates_theme_tags_from_concepts():
+    from app.services.feature_builder import _enrich_with_auxiliary_data
+
+    stock = _stock(
+        code="000001",
+        industry="银行",
+        data_quality={"missing_fields": ["theme_tags"]},
+    )
+    aux = {
+        "limit_up": {},
+        "concept_sectors": {
+            "000001": [
+                {"sector_name": "跨境支付", "heat_rank": 3},
+                {"sector_name": "金融科技", "heat_rank": 1},
+            ]
+        },
+        "capital_flows": {},
+        "dragon_tigers": {},
+        "news": {},
+        "auctions": {},
+        "pledges": {},
+        "broker_recs": {},
+        "share_floats_upcoming": {},
+        "coverage": {},
+    }
+
+    _enrich_with_auxiliary_data([stock], None, _snapshot(), _aux_override=aux)
+
+    assert stock["concept_sector_name"] == "金融科技"
+    assert stock["theme_tags"] == ["金融科技", "跨境支付"]
+    assert "theme_tags" not in stock["data_quality"]["missing_fields"]
+    assert stock["data_quality"]["theme_tags_checked"] is True

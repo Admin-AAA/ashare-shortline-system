@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -20,7 +21,8 @@ _FULL_FIELDS = {
     "net_return_pct", "gross_return_pct", "achievable_return_pct",
     "benchmark_return_pct", "morning_drawdown_pct", "holding_days",
     "setup_type", "entry_rule", "exit_reason", "final_score",
-    "accurate", "false_positive_reason", "signal_features", "resolved",
+    "accurate", "signal_valid_at_recommend_time", "executed", "net_return_positive",
+    "false_positive_reason", "signal_features", "resolved",
 }
 
 
@@ -120,6 +122,9 @@ def test_build_trade_detail_fields_complete():
     assert detail["setup_type"] == "尾盘买入"
     assert detail["exit_reason"] == "next_morning_exit"
     assert detail["accurate"] is True
+    assert detail["signal_valid_at_recommend_time"] is True
+    assert detail["executed"] is True
+    assert detail["net_return_positive"] is True
     assert detail["false_positive_reason"] is None
     assert detail["resolved"] is True
 
@@ -177,6 +182,115 @@ def test_build_trade_detail_false_positive_trade():
     assert len(details) == 1
     detail = details[0]
     assert detail["accurate"] is False
+    assert detail["signal_valid_at_recommend_time"] is True
+    assert detail["executed"] is True
+    assert detail["net_return_positive"] is False
     assert detail["false_positive_reason"] == "次日开盘承接偏弱，隔夜溢价被回吐"
     assert detail["net_return_pct"] == -1.2
     assert detail["signal_features"]["market_regime"] == "震荡"
+
+
+def test_persist_backtest_recommendations_keeps_execution_viability_snapshot():
+    from app.services.backtest_service import _persist_backtest_recommendations
+
+    db = MagicMock()
+    card = {
+        "code": "000001",
+        "name": "测试股份",
+        "trade_date": "2026-05-18",
+        "recommend_price": 11.0,
+        "stop_loss": 10.4,
+        "take_profit": 12.2,
+        "final_score": 88.0,
+        "consensus_score": 82.0,
+        "feature_snapshot": {"market_regime": "偏多·活跃"},
+        "score_line_meta": {"execution_blocked": True},
+        "execution_viability": {
+            "status": "blocked",
+            "label": "入场不可成交",
+            "block_reason": "入场日一字涨停，按真实成交约束视为买不进",
+        },
+    }
+
+    _persist_backtest_recommendations(db, "bt_execution_snapshot", [card], {"trade_date": "2026-05-18"})
+
+    saved = db.add.call_args.args[0]
+    snapshot = json.loads(saved.feature_snapshot_json)
+    assert snapshot["market_regime"] == "偏多·活跃"
+    assert snapshot["recommend_price"] == 11.0
+    assert snapshot["score_line_meta"]["execution_blocked"] is True
+    assert snapshot["execution_viability"]["status"] == "blocked"
+    assert "一字涨停" in snapshot["execution_viability"]["block_reason"]
+
+
+def test_backtest_recommendation_records_expose_accuracy_gates():
+    from app.services.backtest_service import _backtest_false_positive_samples, _backtest_recommendation_records
+
+    trades = [
+        {
+            "trade_date": "2026-05-18",
+            "code": "000001",
+            "name": "赢家",
+            "entry_date": "2026-05-19",
+            "entry_price": 10.0,
+            "exit_date": "2026-05-20",
+            "exit_price": 10.5,
+            "net_return_pct": 5.0,
+            "gross_return_pct": 5.2,
+            "benchmark_return_pct": 1.0,
+            "accurate": True,
+            "signal_valid_at_recommend_time": True,
+            "executed": True,
+            "net_return_positive": True,
+            "exit_reason": "take_profit",
+            "false_positive_reason": None,
+            "resolved": True,
+        },
+        {
+            "trade_date": "2026-05-18",
+            "code": "000002",
+            "name": "未成交",
+            "entry_date": "2026-05-19",
+            "entry_price": 10.0,
+            "exit_date": "2026-05-20",
+            "exit_price": 10.0,
+            "net_return_pct": 0.0,
+            "gross_return_pct": 0.3,
+            "benchmark_return_pct": 0.2,
+            "accurate": False,
+            "signal_valid_at_recommend_time": True,
+            "executed": False,
+            "net_return_positive": False,
+            "exit_reason": "missed_entry",
+            "false_positive_reason": "未触发买点或不可真实成交",
+            "resolved": True,
+        },
+        {
+            "trade_date": "2026-05-18",
+            "code": "000003",
+            "name": "信号失效",
+            "entry_date": "2026-05-19",
+            "entry_price": 10.0,
+            "exit_date": "2026-05-20",
+            "exit_price": 9.8,
+            "net_return_pct": -2.0,
+            "gross_return_pct": -1.6,
+            "benchmark_return_pct": 0.0,
+            "accurate": False,
+            "signal_valid_at_recommend_time": False,
+            "executed": True,
+            "net_return_positive": False,
+            "exit_reason": "stop_loss",
+            "false_positive_reason": "开盘即失效",
+            "resolved": True,
+        },
+    ]
+
+    records = _backtest_recommendation_records(trades)
+    failures = _backtest_false_positive_samples(trades)
+
+    assert records[0]["accuracy_failure_label"] is None
+    assert records[1]["accuracy_failure_label"] == "未触发买点或不可真实成交"
+    assert records[2]["accuracy_failure_label"] == "信号当时真实不成立"
+    assert failures[0]["code"] == "000003"
+    assert failures[0]["accuracy_failure_label"] == "信号当时真实不成立"

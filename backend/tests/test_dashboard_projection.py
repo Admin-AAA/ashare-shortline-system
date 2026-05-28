@@ -17,7 +17,7 @@ from app.schemas.dashboard import (
     SkillReviewSummary,
 )
 from app.api.dashboard import build_validation_summary, compose_overview, serialize_market_snapshot_row, serialize_run_progress_row
-from app.services.dashboard_quality_service import build_quality_scorecard
+from app.services.dashboard_quality_service import build_quality_scorecard, _pick_latest_backtest
 from app.services.candidates.trace import candidate_trace_row
 from app.services.recommendations.projection import (
     build_cockpit_recommendation,
@@ -571,6 +571,22 @@ def test_build_quality_scorecard_penalizes_low_executability_even_when_accuracy_
                 "average_net_return": 0.22,
                 "max_drawdown": -1.2,
                 "benchmark_excess_return": 0.3,
+                "accuracy_gate_summary": {
+                    "total_recommendations": 40,
+                    "signal_valid_count": 39,
+                    "signal_invalid_count": 1,
+                    "executable_count": 22,
+                    "unexecutable_count": 18,
+                    "net_positive_count": 12,
+                    "net_non_positive_count": 10,
+                    "manual_override_count": 0,
+                },
+                "accuracy_policy": {
+                    "failure_breakdown": [
+                        {"gate": "executed_trade", "label": "不可真实成交", "count": 18},
+                        {"gate": "net_return_positive", "label": "成本后净收益不为正", "count": 10},
+                    ],
+                },
             },
             "data_coverage": {
                 "candidate_minute_coverage_rate": 1.0,
@@ -591,7 +607,142 @@ def test_build_quality_scorecard_penalizes_low_executability_even_when_accuracy_
     assert validation["status"] != "healthy"
     assert validation["metrics"]["trade_accuracy"] == 0.45
     assert validation["metrics"]["execution_rate"] == 0.55
+    assert validation["metrics"]["accuracy_gate_summary"]["unexecutable_count"] == 18
+    assert validation["metrics"]["accuracy_failure_breakdown"][0]["label"] == "不可真实成交"
     assert any("可成交率" in item for item in validation["highlights"])
+    assert any("不可真实成交" in item for item in validation["highlights"])
+
+
+def test_pick_latest_backtest_prefers_latest_usable_validation_sample():
+    rows = [
+        {
+            "backtest_id": "bt_blocked",
+            "status": "insufficient_minute_coverage",
+            "metrics": {"trade_count": 0, "accuracy_denominator": 0},
+        },
+        {
+            "backtest_id": "bt_usable",
+            "status": "completed",
+            "decision_scope": "aggregate",
+            "metrics": {"trade_count": 3, "accuracy_denominator": 3, "recommendation_accuracy": 0.667},
+        },
+        {
+            "backtest_id": "bt_older",
+            "status": "completed",
+            "metrics": {"trade_count": 9, "accuracy_denominator": 9, "recommendation_accuracy": 0.556},
+        },
+    ]
+
+    picked = _pick_latest_backtest(rows)
+
+    assert picked["backtest_id"] == "bt_usable"
+    assert picked["_latest_attempt_status"] == "insufficient_minute_coverage"
+
+
+def test_build_quality_scorecard_falls_back_to_latest_usable_backtest_after_blocked_attempt():
+    latest_backtest = _pick_latest_backtest(
+        [
+            {
+                "backtest_id": "bt_blocked",
+                "status": "insufficient_minute_coverage",
+                "metrics": {"trade_count": 0, "accuracy_denominator": 0},
+                "data_coverage": {
+                    "candidate_minute_coverage_rate": 0.93,
+                    "benchmark_minute_coverage_rate": 1.0,
+                    "temporal_consistency": {"passed": True},
+                },
+            },
+            {
+                "backtest_id": "bt_usable",
+                "status": "completed",
+                "metrics": {
+                    "trade_count": 3,
+                    "accuracy_denominator": 3,
+                    "executed_trade_count": 3,
+                    "trade_accuracy": 0.667,
+                    "recommendation_accuracy": 0.667,
+                    "average_net_return": 1.747,
+                    "max_drawdown": -1.007,
+                    "benchmark_excess_return": 5.124,
+                    "sample_confidence": "low",
+                },
+                "data_coverage": {
+                    "candidate_minute_coverage_rate": 0.885,
+                    "benchmark_minute_coverage_rate": 1.0,
+                    "temporal_consistency": {"passed": True},
+                },
+            },
+        ]
+    )
+
+    scorecard = build_quality_scorecard(
+        data_health={
+            "eligible_bar_coverage_pct": 99,
+            "missing_bar_count": 0,
+            "stale_bar_count": 0,
+            "short_history_count": 0,
+            "can_run_local_recommendation": True,
+        },
+        task_health={"failed_count": 0, "running_count": 0},
+        current_run={"status": "completed", "is_stale": False},
+        latest_backtest=latest_backtest,
+        recent_task_runs=[{"status": "completed"} for _ in range(4)],
+        research_metrics={
+            "total_recommendations": 80,
+            "labeled_count": 42,
+            "review_note_count": 18,
+            "latest_trade_date": "2026-05-25",
+        },
+    )
+
+    validation = scorecard["dimensions"]["validation"]
+    assert validation["metrics"]["latest_backtest_status"] == "completed"
+    assert validation["metrics"]["latest_attempt_status"] == "insufficient_minute_coverage"
+    assert validation["metrics"]["trade_count"] == 3
+    assert validation["metrics"]["trade_accuracy"] == 0.667
+    assert validation["metrics"]["execution_rate"] == 1.0
+    assert validation["metrics"]["decision_scope_label"] == "全量指标"
+    assert any("回退至最近可用回测" in item for item in validation["highlights"])
+
+
+def test_build_quality_scorecard_derives_accuracy_gate_summary_for_legacy_metrics():
+    scorecard = build_quality_scorecard(
+        data_health={
+            "eligible_bar_coverage_pct": 99,
+            "missing_bar_count": 0,
+            "stale_bar_count": 0,
+            "short_history_count": 0,
+            "can_run_local_recommendation": True,
+        },
+        task_health={"failed_count": 0, "running_count": 0},
+        current_run={"status": "completed", "is_stale": False},
+        latest_backtest={
+            "status": "completed",
+            "decision_scope": "aggregate",
+            "metrics": {
+                "trade_count": 3,
+                "accuracy_denominator": 3,
+                "executed_trade_count": 3,
+                "trade_accuracy": 0.667,
+                "recommendation_accuracy": 0.667,
+                "average_net_return": 1.2,
+                "max_drawdown": -0.5,
+                "benchmark_excess_return": 0.2,
+                "sample_confidence": "low",
+            },
+            "data_coverage": {"temporal_consistency": {"passed": True}},
+        },
+        recent_task_runs=[{"status": "completed"}],
+        research_metrics={"total_recommendations": 3, "labeled_count": 3, "review_note_count": 0},
+    )
+
+    metrics = scorecard["dimensions"]["validation"]["metrics"]
+    gate = metrics["accuracy_gate_summary"]
+    assert metrics["accuracy_numerator"] == 2
+    assert gate["total_recommendations"] == 3
+    assert gate["executable_count"] == 3
+    assert gate["net_positive_count"] == 2
+    assert gate["net_non_positive_count"] == 1
 
 
 def test_progress_helpers_are_stable():

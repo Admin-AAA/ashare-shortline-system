@@ -241,6 +241,22 @@ def _select_aux_prefetch_codes(stocks: list[dict[str, Any]], count: int) -> list
     return selected
 
 
+def _resolve_aux_prefetch_count(
+    prefiltered_count: int,
+    min_prefilter_count: int,
+    *,
+    run_mode: str,
+    skip_aux_refresh: bool,
+) -> int:
+    if prefiltered_count <= 0:
+        return 0
+    if skip_aux_refresh:
+        return min(prefiltered_count, max(18, min_prefilter_count // 2), 48)
+    if run_mode == "formal":
+        return prefiltered_count
+    return min(prefiltered_count, max(18, min_prefilter_count // 2), 48)
+
+
 _bootstrap_cache_lock = threading.Lock()
 _bootstrap_cache: dict[tuple[str, str], dict[str, Any]] = {}
 _initial_state_cache_lock = threading.Lock()
@@ -1059,9 +1075,12 @@ def _update_run_progress(
     return run
 
 
-def recover_interrupted_runs(db: Session) -> int:
+def recover_interrupted_runs(db: Session, run_ids: list[str] | None = None) -> int:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    runs = db.scalars(select(RecommendationRun).where(RecommendationRun.status.in_(tuple(RUN_ACTIVE_STATUSES)))).all()
+    stmt = select(RecommendationRun).where(RecommendationRun.status.in_(tuple(RUN_ACTIVE_STATUSES)))
+    if run_ids is not None:
+        stmt = stmt.where(RecommendationRun.run_id.in_(run_ids))
+    runs = db.scalars(stmt).all()
     recovered = 0
     for run in runs:
         run.status = "interrupted"
@@ -1138,6 +1157,52 @@ def _phase_index(phase: str) -> int:
         return -1
 
 
+def _persist_run_start(
+    db: Session,
+    run_id: str,
+    params: dict[str, Any],
+    selected_skills: list[dict[str, Any]],
+    *,
+    phase: str = "prepare",
+    message: str = "同步 Skill 与运行参数完成，准备拉取市场数据",
+) -> RecommendationRun:
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    run = db.get(RecommendationRun, run_id)
+    if run is None:
+        run = RecommendationRun(run_id=run_id, started_at=now)
+        db.add(run)
+    run.preset_id = params.get("preset_id")
+    run.run_name = params["run_name"]
+    run.run_mode = params["run_mode"]
+    run.trade_date = run.trade_date or _latest_trade_date(db)
+    run.finished_at = None
+    run.universe_count = 0
+    run.recommended_count = 0
+    run.market_scope = params["market_scope"]
+    run.market_scope_value = params.get("market_scope_value")
+    run.risk_template = params["risk_template"]
+    run.score_line = float(params["score_line"])
+    run.output_count = params["output_count"]
+    run.selected_skills_json = _dumps(_selected_skill_rows(selected_skills))
+    run.params_json = _dumps(params)
+    run.market_snapshot_json = run.market_snapshot_json or _dumps({})
+    run.result_summary_json = _dumps({"agent_runtime": "starting"})
+    run.filter_audit_json = run.filter_audit_json or _dumps({})
+    run.status = "running"
+    run.error_message = None
+    run.heartbeat_at = now
+    run.progress_phase = phase
+    run.progress_current = 0
+    run.progress_total = 0
+    run.progress_message = message
+    run.interrupted_at = None
+    run.checkpoint_phase = phase
+    db.commit()
+    invalidate_bootstrap_cache()
+    _record_progress_commit(run)
+    return run
+
+
 async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: str | None = None) -> dict[str, Any]:
     run_id = existing_run_id or _new_run_id()
     is_resume = bool(existing_run_id)
@@ -1177,6 +1242,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         selected_skills = _select_skills_for_run(db, skill_map, params["run_mode"], params["skills"])
         if not selected_skills:
             raise ValueError("没有可运行的 Skill，请检查预设配置或 Skill 状态")
+        run = _persist_run_start(db, run_id, params, selected_skills)
         _save_checkpoint(db, run_id, "prepare")
     else:
         # 从已有 Run 重建状态
@@ -1193,23 +1259,27 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     data_source = _normalize_data_source(params.get("data_source"))
     _update_run_progress(
         db,
-        existing_run_id,
+        run_id,
         phase="market_data",
         current=0,
         total=0,
         message="拉取并校验市场股票池",
         status="running",
     )
-    if data_source == DATA_SOURCE_REALTIME:
-        stocks, snapshot = get_market_universe()
-    elif data_source == DATA_SOURCE_LOCAL_POOL_PREFERRED:
-        stocks, snapshot = get_market_universe_from_pool(db, refresh=True)
-    else:
-        stocks, snapshot = get_market_universe_from_pool(db, refresh=False)
+    try:
+        if data_source == DATA_SOURCE_REALTIME:
+            stocks, snapshot = get_market_universe()
+        elif data_source == DATA_SOURCE_LOCAL_POOL_PREFERRED:
+            stocks, snapshot = get_market_universe_from_pool(db, refresh=True)
+        else:
+            stocks, snapshot = get_market_universe_from_pool(db, refresh=False)
+    except Exception as exc:
+        _mark_run_failed(db, run_id, exc)
+        raise
     snapshot.setdefault("breadth", {})["run_data_source_mode"] = data_source
     _update_run_progress(
         db,
-        existing_run_id,
+        run_id,
         phase="market_data",
         current=len(stocks),
         total=len(stocks),
@@ -1240,7 +1310,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     _save_checkpoint(db, run_id, "scope_filter")
     _update_run_progress(
         db,
-        existing_run_id,
+        run_id,
         phase="scope_filter",
         current=len(prefiltered_stocks),
         total=len(stocks),
@@ -1257,15 +1327,16 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     }
     settings = get_settings()
     skip_aux_refresh = bool(params.get("skip_aux_refresh"))
-    aux_prefetch_count = min(
+    aux_prefetch_count = _resolve_aux_prefetch_count(
         len(prefiltered_stocks),
-        max(18, min_prefilter_count // 2),
-        48,
+        min_prefilter_count,
+        run_mode=str(params.get("run_mode") or "formal"),
+        skip_aux_refresh=skip_aux_refresh,
     )
     aux_prefetch_codes = _select_aux_prefetch_codes(prefiltered_stocks, aux_prefetch_count)
     _update_run_progress(
         db,
-        existing_run_id,
+        run_id,
         phase="auxiliary_data",
         current=0,
         total=4,
@@ -1306,7 +1377,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                 }
     _update_run_progress(
         db,
-        existing_run_id,
+        run_id,
         phase="auxiliary_data",
         current=1,
         total=4,
@@ -1321,9 +1392,11 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                 "count": int(
                     db.scalar(
                         select(func.count()).select_from(DragonTiger).where(DragonTiger.trade_date == snapshot["trade_date"])
-                    ) or 0
+                    )
+                    or 0
                 ),
                 "elapsed_ms": 0,
+                "covered_trade_date": snapshot["trade_date"],
             }
         else:
             t0 = time.perf_counter()
@@ -1333,6 +1406,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                     "status": "success",
                     "count": len(dt_rows),
                     "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
+                    "covered_trade_date": snapshot["trade_date"],
                 }
             except Exception as exc:
                 db.rollback()
@@ -1344,7 +1418,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                 }
     _update_run_progress(
         db,
-        existing_run_id,
+        run_id,
         phase="auxiliary_data",
         current=2,
         total=4,
@@ -1367,6 +1441,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                     "status": "success",
                     "count": len(cf_result),
                     "requested_count": len(stale_capital_flow_codes),
+                    "checked_codes": aux_prefetch_codes,
                     "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
                 }
             except Exception as exc:
@@ -1383,11 +1458,12 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                 "status": "cached",
                 "count": len(aux_prefetch_codes),
                 "requested_count": 0,
+                "checked_codes": aux_prefetch_codes,
                 "elapsed_ms": 0,
             }
     _update_run_progress(
         db,
-        existing_run_id,
+        run_id,
         phase="auxiliary_data",
         current=3,
         total=4,
@@ -1405,10 +1481,17 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             t0 = time.perf_counter()
             try:
                 news_result = refresh_news_for_codes(db, stale_news_codes, trade_date=snapshot["trade_date"])
+                checked_codes = sorted(
+                    {
+                        *[code for code in aux_prefetch_codes if code not in set(stale_news_codes)],
+                        *list(getattr(news_result, "checked_codes", [])),
+                    }
+                )
                 aux_audit["news"] = {
                     "status": "success",
                     "count": len(news_result),
                     "requested_count": len(stale_news_codes),
+                    "checked_codes": checked_codes,
                     "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
                 }
             except Exception as exc:
@@ -1425,11 +1508,12 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                 "status": "cached",
                 "count": len(aux_prefetch_codes),
                 "requested_count": 0,
+                "checked_codes": aux_prefetch_codes,
                 "elapsed_ms": 0,
             }
     _update_run_progress(
         db,
-        existing_run_id,
+        run_id,
         phase="auxiliary_data",
         current=4,
         total=4,
@@ -1441,7 +1525,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
 
     _update_run_progress(
         db,
-        existing_run_id,
+        run_id,
         phase="feature_build",
         current=0,
         total=len(prefiltered_stocks),
@@ -1451,7 +1535,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     features = build_features(
         prefiltered_stocks, snapshot, _load_calibrated_dsa_weights(db), db=db,
         on_progress=lambda current, total: _update_run_progress(
-            db, existing_run_id, phase="feature_build",
+            db, run_id, phase="feature_build",
             current=current, total=total,
             message=f"构建特征 {current}/{total}",
             status="running",
@@ -1460,7 +1544,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     research_contexts = build_research_contexts(features, snapshot)
     _save_checkpoint(db, run_id, "feature_build")
 
-    run = db.get(RecommendationRun, run_id) if existing_run_id else None
+    run = db.get(RecommendationRun, run_id)
     if run is None:
         run = RecommendationRun(run_id=run_id)
         db.add(run)
@@ -1512,6 +1596,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
 
         # ═══ 阶段一：策略规则全市场扫描（所有基础过滤合格股票，无 LLM） ═══
         settings = get_settings()
+        agent_review_disabled = bool(params.get("disable_agent_review"))
         skill_review_limit = _resolve_skill_review_limit(params, settings, selected_skill_count=len(selected_skills))
         skill_review_concurrency = max(1, int(params.get("agent_review_concurrency") or settings.market_skill_review_concurrency or 1))
         prelim_entries: list[dict[str, Any]] = []
@@ -1582,7 +1667,16 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             skill_candidates,
             explicit_review_limit_skipped=explicit_review_limit_skipped,
         )
-        skill_agent_call_count = sum(len(entry.get("review_skill_ids") or []) for entry in skill_candidates)
+        if agent_review_disabled:
+            skill_gate_audit["agent_review_disabled"] = True
+            skill_gate_audit["skill_agent_call_count"] = 0
+            for stats in (skill_gate_audit.get("per_skill") or {}).values():
+                stats["llm_reviewed"] = 0
+        skill_agent_call_count = (
+            0
+            if agent_review_disabled
+            else sum(len(entry.get("review_skill_ids") or []) for entry in skill_candidates)
+        )
 
         pipeline_audit = _build_pipeline_audit(
             snapshot=snapshot,
@@ -1597,6 +1691,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             skill_demo_limited=skill_demo_limited,
             prefilter_audit=prefilter_audit,
         )
+        pipeline_audit["agent_review_disabled"] = agent_review_disabled
         snapshot.setdefault("breadth", {})["recommendation_pipeline"] = _strip_audit_rows(pipeline_audit)
         _save_checkpoint(db, run_id, "rule_scan")
         _update_run_progress(
@@ -1605,7 +1700,11 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             phase="skill_gate",
             current=len(skill_candidates),
             total=len(prelim_entries),
-            message=f"规则门完成，进入 Skill 深审 {len(skill_candidates)} 只",
+            message=(
+                f"规则门完成，Agent 深审已禁用，进入规则聚合 {len(skill_candidates)} 只"
+                if agent_review_disabled
+                else f"规则门完成，进入 Skill 深审 {len(skill_candidates)} 只"
+            ),
             status="running",
         )
 
@@ -1640,12 +1739,26 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             db,
             run_id,
             phase="skill_review",
-            current=0,
+            current=review_total if agent_review_disabled else 0,
             total=review_total,
-            message=f"Skill 深审启动：{review_total} 只，最多并发 {skill_review_concurrency}",
+            message=(
+                f"Skill 深审已按参数禁用，使用规则预审聚合 {review_total} 只"
+                if agent_review_disabled
+                else f"Skill 深审启动：{review_total} 只，最多并发 {skill_review_concurrency}"
+            ),
             status="running",
         )
-        if skill_candidates:
+        if agent_review_disabled:
+            candidate_results = [
+                {
+                    **entry,
+                    "review_skill_ids": [],
+                    "agent_review_disabled": True,
+                    "skill_reviews": [],
+                }
+                for entry in skill_candidates
+            ]
+        elif skill_candidates:
             tasks = [asyncio.create_task(_process_candidate(entry)) for entry in skill_candidates]
             for i, task in enumerate(asyncio.as_completed(tasks), start=1):
                 candidate_results.append(await task)
@@ -1760,6 +1873,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                         "weighted_component_scores": card.get("weighted_component_scores", {}),
                         "score_breakdown": card.get("score_breakdown", {}),
                         "score_line_meta": card.get("score_line_meta", {}),
+                        "execution_viability": card.get("execution_viability", {}),
                         "component_scale": card.get("component_scale", 1.0),
                         "consensus_boost": card.get("consensus_boost", 1.0),
                     }
@@ -2274,6 +2388,7 @@ def _serialize_recommendation_cached(rec: Recommendation, watch: WatchItem | Non
         "agent_logs": (_loads(rec.agent_summary_json, {}) or {}).get("logs", []),
         "score_breakdown": feature_snapshot.get("score_breakdown", {}),
         "score_line_meta": feature_snapshot.get("score_line_meta", {}),
+        "execution_viability": feature_snapshot.get("execution_viability", {}),
         "status": rec.status,
         "recent_repeat": rec.recent_repeat,
         "watch_status": watch.watch_status if watch else "none",
@@ -2314,6 +2429,7 @@ def _serialize_recommendation(db: Session, rec: Recommendation) -> dict[str, Any
         "agent_logs": (_loads(rec.agent_summary_json, {}) or {}).get("logs", []),
         "score_breakdown": feature_snapshot.get("score_breakdown", {}),
         "score_line_meta": feature_snapshot.get("score_line_meta", {}),
+        "execution_viability": feature_snapshot.get("execution_viability", {}),
         "status": rec.status,
         "recent_repeat": rec.recent_repeat,
         "watch_status": watch.watch_status if watch else "none",
@@ -3170,7 +3286,9 @@ def _merge_run_params(db: Session, preset: Preset | None, payload: dict[str, Any
             if "skip_aux_refresh" in payload
             else run_mode == "experiment"
         ),
+        "disable_agent_review": bool(payload.get("disable_agent_review", False)),
         "agent_review_limit": int(payload.get("agent_review_limit") or 0),
+        "agent_review_concurrency": int(payload.get("agent_review_concurrency") or 0),
         "hide_recent_repeats": bool(
             payload.get("hide_recent_repeats")
             if "hide_recent_repeats" in payload
@@ -3588,11 +3706,15 @@ def _build_filter_audit(
         if not code:
             continue
         score_line_meta = card.get("score_line_meta") or {}
+        execution_viability = card.get("execution_viability") or {}
         final_score = float(card.get("final_score") or 0)
         effective_line = float(score_line_meta.get("effective_score_line") or 0)
         passed = code in recommended_codes or bool(score_line_meta.get("passed"))
         score_gap = round(final_score - effective_line, 2) if effective_line else None
-        score_reason = "达到正式分数线" if passed else f"最终分 {round(final_score, 2)} 低于有效线 {round(effective_line, 2)}"
+        if bool(score_line_meta.get("execution_blocked")):
+            score_reason = str(score_line_meta.get("block_reason") or "入场不可成交，未纳入正式推荐")
+        else:
+            score_reason = "达到正式分数线" if passed else f"最终分 {round(final_score, 2)} 低于有效线 {round(effective_line, 2)}"
         score_row = {
             "code": code,
             "final_score": round(final_score, 2),
@@ -3618,6 +3740,7 @@ def _build_filter_audit(
             "quality_cap": (card.get("score_breakdown") or {}).get("quality_cap"),
             "market_regime": card.get("market_regime"),
             "market_discipline": card.get("market_discipline") or {},
+            "execution_viability": execution_viability,
             "skill_disagreement": card.get("skill_disagreement") or {},
             "strategy_signal_count": len(card.get("strategy_signals") or []),
         }
@@ -3646,6 +3769,8 @@ def _build_filter_audit(
             effective_score_line=round(effective_line, 2),
             score_gap=score_gap,
             evidence_adjustment=score_line_meta.get("evidence_adjustment"),
+            execution_adjustment=score_line_meta.get("execution_adjustment"),
+            execution_status=score_line_meta.get("execution_status"),
             adjustment_reasons=score_line_meta.get("reasons") or [],
         )
         if passed:
@@ -3900,6 +4025,7 @@ def _score_card_from_audit_row(row: dict[str, Any], score_row: dict[str, Any]) -
         "risk_flags": score_row.get("risk_tags") or [],
         "info_tags": score_row.get("info_tags") or [],
         "score_line_meta": score_row.get("score_line_meta") or {},
+        "execution_viability": score_row.get("execution_viability") or {},
         "market_regime": score_row.get("market_regime"),
         "setup_type": score_row.get("setup_type"),
     }
@@ -3996,6 +4122,9 @@ def _build_filter_distributions(
         "skill_gate_result": _categorical_distribution(_skill_gate_result(row) for row in rule_gate_rows),
         "skill_gate_reason": _categorical_distribution(_skill_gate_reason_bucket(row) for row in rule_gate_rows),
         "score_line_result": _categorical_distribution(["通过" if row.get("passed") else "未通过" for row in score_rows]),
+        "execution_status": _categorical_distribution(
+            ((row.get("execution_viability") or {}).get("status") or "unknown") for row in score_rows
+        ),
         "score_line_adjustment_reason": _list_distribution(
             (row.get("score_line_meta") or {}).get("reasons") or ["无附加证据惩罚"] for row in score_rows
         ),
@@ -4036,6 +4165,10 @@ def _build_filter_distributions(
         ),
         "score_line_adjustment": _numeric_distribution(
             [float((row.get("score_line_meta") or {}).get("evidence_adjustment") or 0) for row in score_rows],
+            buckets=[0, 2, 4, 6, 8, 10, 14],
+        ),
+        "execution_adjustment": _numeric_distribution(
+            [float((row.get("score_line_meta") or {}).get("execution_adjustment") or 0) for row in score_rows],
             buckets=[0, 2, 4, 6, 8, 10, 14],
         ),
         "risk_tag_count": _count_distribution(len(row.get("risk_tags") or []) for row in score_rows),

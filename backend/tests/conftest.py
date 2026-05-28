@@ -4,38 +4,28 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.orm import close_all_sessions
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import close_all_sessions, sessionmaker
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-TEST_DB_URL = (os.environ.get("ASHARE_TEST_DATABASE_URL") or os.environ.get("ASHARE_DATABASE_URL") or "").strip()
+from app.core.config import Settings
+
+
+TEST_DB_URL = (
+    os.environ.get("ASHARE_DATABASE_URL")
+    or Settings().database_url
+).strip()
 _HAS_TEST_DB = bool(TEST_DB_URL and TEST_DB_URL.startswith("mysql"))
-_SAFE_MODE = os.environ.get("ASHARE_TEST_SAFE_MODE", "").lower() in ("1", "true", "yes")
+_MYSQL_LOCK_NAME = "ashare_pytest_db_lock"
+_MYSQL_LOCK_WAIT_SECONDS = int(os.environ.get("ASHARE_PYTEST_DB_LOCK_SECONDS", "5"))
 
 if _HAS_TEST_DB:
     os.environ["ASHARE_DATABASE_URL"] = TEST_DB_URL
-    from app.db.init_db import init_db
-    from app.db.session import Base, engine
-
-
-def _truncate_all_tables() -> None:
-    close_all_sessions()
-    engine.dispose()
-    with engine.connect() as connection:
-        connection.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
-        try:
-            for table in reversed(Base.metadata.sorted_tables):
-                connection.execute(text(f"TRUNCATE TABLE `{table.name}`"))
-        finally:
-            try:
-                connection.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
-                connection.commit()
-            except Exception:
-                connection.rollback()
-                raise
+    from app.db.session import engine
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -44,40 +34,74 @@ def _exclusive_test_db_lock():
         yield
         return
     lock_connection = engine.connect()
-    acquired = lock_connection.scalar(text("SELECT GET_LOCK('ashare_pytest_db_lock', 120)"))
-    if acquired != 1:
+    try:
+        acquired = lock_connection.scalar(
+            text("SELECT GET_LOCK(:lock_name, :wait_seconds)"),
+            {"lock_name": _MYSQL_LOCK_NAME, "wait_seconds": _MYSQL_LOCK_WAIT_SECONDS},
+        )
+    except SQLAlchemyError as exc:
         lock_connection.close()
-        raise RuntimeError("无法获取 MySQL 测试库独占锁，请确认没有其他 pytest 进程在使用同一测试库。")
+        raise RuntimeError(
+            "无法获取 MySQL 测试锁；生产库测试需要串行执行。"
+            f"lock={_MYSQL_LOCK_NAME}"
+        ) from exc
+    if acquired != 1:
+        holder = lock_connection.scalar(
+            text("SELECT IS_USED_LOCK(:lock_name)"),
+            {"lock_name": _MYSQL_LOCK_NAME},
+        )
+        lock_connection.close()
+        raise RuntimeError(
+            "无法获取 MySQL 测试锁，请确认没有其他 pytest 进程正在使用同一生产库。"
+            f"lock={_MYSQL_LOCK_NAME}, holder_connection_id={holder or 'unknown'}"
+        )
     try:
         yield
     finally:
         try:
-            lock_connection.execute(text("SELECT RELEASE_LOCK('ashare_pytest_db_lock')"))
+            try:
+                lock_connection.execute(
+                    text("SELECT RELEASE_LOCK(:lock_name)"),
+                    {"lock_name": _MYSQL_LOCK_NAME},
+                )
+            except Exception:
+                # MySQL 会在连接断开时自动释放 GET_LOCK；生产库长连接空闲超时不应反向污染测试结果。
+                pass
         finally:
             lock_connection.close()
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _init_test_schema(_exclusive_test_db_lock):
-    if not _HAS_TEST_DB:
-        yield
-        return
     close_all_sessions()
-    engine.dispose()
-    if not _SAFE_MODE:
-        Base.metadata.drop_all(bind=engine, checkfirst=True)
-    init_db()
     yield
     close_all_sessions()
-    engine.dispose()
+    if _HAS_TEST_DB:
+        engine.dispose()
 
 
 @pytest.fixture
-def clean_test_db(_init_test_schema):
+def production_mysql(_init_test_schema):
     if not _HAS_TEST_DB:
-        raise RuntimeError("clean_test_db 需要 ASHARE_TEST_DATABASE_URL 指向 MySQL 测试库")
-    if not _SAFE_MODE:
-        _truncate_all_tables()
+        raise RuntimeError("production_mysql 需要可用 MySQL 连接；demo 阶段默认直接使用生产库")
     yield
-    if not _SAFE_MODE:
-        _truncate_all_tables()
+
+
+@pytest.fixture
+def db(production_mysql):
+    connection = engine.connect()
+    transaction = connection.begin()
+    TestingSessionLocal = sessionmaker(
+        bind=connection,
+        autoflush=False,
+        autocommit=False,
+        join_transaction_mode="create_savepoint",
+    )
+    session = TestingSessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
+        if transaction.is_active:
+            transaction.rollback()
+        connection.close()

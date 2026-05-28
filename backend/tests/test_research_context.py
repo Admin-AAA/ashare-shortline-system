@@ -89,3 +89,60 @@ def test_research_context_marks_missing_fact_domains_and_imputed_fields():
     assert quality["field_quality"]["main_net_inflow_yi"]["status"] == "fallback"
     assert quality["field_quality"]["industry"]["status"] == "missing"
     assert quality["data_completeness_score"] < 75
+
+
+def test_research_context_respects_checked_empty_auxiliary_quality_flags():
+    stock = {
+        "code": "000001",
+        "name": "平安银行",
+        "exchange": "SZ",
+        "industry": "银行",
+        "price": 10.5,
+        "pct": 1.2,
+        "amount_yi": 30.0,
+        "turnover_rate": 2.0,
+        "main_net_inflow_yi": 0.0,
+        "quote_source": "tushare",
+        "kline_source": "tushare",
+        "latest_trade_date": "2026-05-12",
+        "data_source": "real_market",
+        "announcement_negative_count": 0,
+        "dragon_tiger_is_on_list": False,
+        "dragon_tiger_recent_count": 0,
+        "theme_tags": [],
+        "_feature_tags": {"main_net_inflow_yi": "OBSERVED"},
+        "data_quality": {
+            "strict_real_data": True,
+            "kline_days": 90,
+            "missing_fields": [
+                "announcements",
+                "capital_flow",
+                "dragon_tiger",
+                "main_net_inflow",
+                "news",
+                "theme_tags",
+            ],
+            "announcements_checked_empty": True,
+            "capital_flow_checked": True,
+            "dragon_tiger_checked_empty": True,
+            "news_checked_empty": True,
+            "theme_tags_fallback_from_industry": True,
+        },
+    }
+    snapshot = {
+        "snapshot_id": "snapshot_test",
+        "trade_date": "2026-05-12",
+        "main_industries": ["银行"],
+        "breadth": {"data_source": "real_market", "regime": "震荡", "risk": "中"},
+    }
+
+    context = build_research_context(stock, snapshot)
+    quality = context.to_skill_input()["data_quality"]
+
+    assert "announcements" not in quality["missing_fields"]
+    assert "capital_flow" not in quality["missing_fields"]
+    assert "dragon_tiger" not in quality["missing_fields"]
+    assert "main_net_inflow" not in quality["missing_fields"]
+    assert "news" not in quality["missing_fields"]
+    assert "theme_tags" not in quality["missing_fields"]
+    assert quality["data_completeness_score"] == 100.0

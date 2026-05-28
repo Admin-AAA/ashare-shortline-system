@@ -1,5 +1,7 @@
+from datetime import datetime
 from types import MethodType, SimpleNamespace
 
+import pandas as pd
 import pytest
 
 from app.engine.aggregator import aggregate
@@ -71,6 +73,260 @@ def test_fetch_first_kline_raises_upstream_errors_to_caller(monkeypatch):
     assert "tushare: tushare bad" in errors
 
 
+def test_fetch_tushare_quotes_uses_batch_quote_api(monkeypatch):
+    class FakePro:
+        def stock_basic(self, **kwargs):
+            return pd.DataFrame(
+                [
+                    {"symbol": "000001", "name": "平安银行", "industry": "银行", "market": "主板"},
+                    {"symbol": "600000", "name": "浦发银行", "industry": "银行", "market": "主板"},
+                ]
+            )
+
+        def trade_cal(self, **kwargs):
+            return pd.DataFrame([{"cal_date": "20260526"}, {"cal_date": "20260527"}])
+
+        def bak_daily(self, **kwargs):
+            assert kwargs["trade_date"] == "20260527"
+            return pd.DataFrame(
+                [
+                    {
+                        "ts_code": "000001.SZ",
+                        "trade_date": "20260527",
+                        "close": 10.5,
+                        "pct_change": 1.2,
+                        "vol": 123456,
+                        "amount": 456789,
+                        "turn_over": 4.6,
+                        "pe": 8.2,
+                        "float_mv": 12000000000,
+                        "total_mv": 18000000000,
+                    },
+                    {
+                        "ts_code": "600000.SH",
+                        "trade_date": "20260527",
+                        "close": 12.3,
+                        "pct_change": -0.8,
+                        "vol": 654321,
+                        "amount": 987654,
+                        "turn_over": 3.1,
+                        "pe": 6.5,
+                        "float_mv": 22000000000,
+                        "total_mv": 32000000000,
+                    },
+                ]
+            )
+
+        def daily(self, **kwargs):
+            raise AssertionError("batch bak_daily 已成功时不应回退到 daily")
+
+        def daily_basic(self, **kwargs):
+            raise RuntimeError("daily_basic rate limited")
+
+    monkeypatch.setattr("app.services.tushare_client.get_pro", lambda: FakePro())
+    monkeypatch.setattr(market_data, "_load_local_stock_basics", lambda: [])
+    monkeypatch.setattr(market_data, "_throttle_tushare", lambda _settings: None)
+
+    quotes = market_data._fetch_tushare_quotes(DummySettings())
+
+    assert len(quotes) == 2
+    first = next(item for item in quotes if item["code"] == "000001")
+    assert first["trade_date"] == "2026-05-27"
+    assert first["turnover_rate"] == 4.6
+    assert first["pe_ttm"] == 8.2
+    assert first["free_mv_yi"] == 120.0
+    assert first["total_mv_yi"] == 180.0
+    assert first["amount_yi"] > 0
+
+
+def test_fetch_tushare_quotes_prefers_local_stock_basics(monkeypatch):
+    class FakePro:
+        def stock_basic(self, **kwargs):
+            raise AssertionError("已有本地 stocks 时不应再请求 stock_basic")
+
+        def trade_cal(self, **kwargs):
+            return pd.DataFrame([{"cal_date": "20260526"}, {"cal_date": "20260527"}])
+
+        def bak_daily(self, **kwargs):
+            assert kwargs["trade_date"] == "20260527"
+            return pd.DataFrame(
+                [
+                    {
+                        "ts_code": "000001.SZ",
+                        "trade_date": "20260527",
+                        "close": 10.5,
+                        "pct_change": 1.2,
+                        "vol": 123456,
+                        "amount": 456789,
+                        "turn_over": 4.6,
+                        "pe": 8.2,
+                        "float_mv": 12000000000,
+                        "total_mv": 18000000000,
+                    }
+                ]
+            )
+
+        def daily(self, **kwargs):
+            raise AssertionError("batch bak_daily 已成功时不应回退到 daily")
+
+        def daily_basic(self, **kwargs):
+            return pd.DataFrame(
+                [
+                    {
+                        "ts_code": "000001.SZ",
+                        "trade_date": "20260527",
+                        "turnover_rate": 4.8,
+                        "pe_ttm": 8.0,
+                        "total_mv": 18100000000,
+                        "circ_mv": 12100000000,
+                    }
+                ]
+            )
+
+    monkeypatch.setattr("app.services.tushare_client.get_pro", lambda: FakePro())
+    monkeypatch.setattr(
+        market_data,
+        "_load_local_stock_basics",
+        lambda: [
+            {
+                "symbol": "000001",
+                "name": "平安银行",
+                "industry": "银行",
+                "market": "主板",
+                "list_date": "1991-04-03",
+                "is_st": False,
+            }
+        ],
+    )
+    monkeypatch.setattr(market_data, "_throttle_tushare", lambda _settings: None)
+
+    quotes = market_data._fetch_tushare_quotes(DummySettings())
+
+    assert len(quotes) == 1
+    first = quotes[0]
+    assert first["code"] == "000001"
+    assert first["name"] == "平安银行"
+    assert first["industry"] == "银行"
+    assert first["trade_date"] == "2026-05-27"
+    assert first["turnover_rate"] == 4.6
+    assert first["exchange"] == "SZ"
+
+
+def test_fetch_tushare_quotes_falls_back_from_empty_latest_trade_date(monkeypatch):
+    class FakePro:
+        def stock_basic(self, **kwargs):
+            raise AssertionError("已有本地 stocks 时不应再请求 stock_basic")
+
+        def trade_cal(self, **kwargs):
+            return pd.DataFrame([{"cal_date": "20260526"}, {"cal_date": "20260527"}, {"cal_date": "20260528"}])
+
+        def bak_daily(self, **kwargs):
+            if kwargs["trade_date"] == "20260528":
+                return pd.DataFrame([])
+            if kwargs["trade_date"] == "20260527":
+                return pd.DataFrame(
+                    [
+                        {
+                            "ts_code": "000001.SZ",
+                            "trade_date": "20260527",
+                            "close": 10.5,
+                            "pct_change": 1.2,
+                            "vol": 123456,
+                            "amount": 456789,
+                            "turn_over": 4.6,
+                            "pe": 8.2,
+                            "float_mv": 12000000000,
+                            "total_mv": 18000000000,
+                        }
+                    ]
+                )
+            raise AssertionError(f"unexpected trade_date: {kwargs['trade_date']}")
+
+        def daily(self, **kwargs):
+            raise AssertionError("bak_daily 已成功回退时不应改走 daily")
+
+        def daily_basic(self, **kwargs):
+            assert kwargs["trade_date"] == "20260527"
+            return pd.DataFrame(
+                [
+                    {
+                        "ts_code": "000001.SZ",
+                        "trade_date": "20260527",
+                        "turnover_rate": 4.8,
+                        "pe_ttm": 8.0,
+                        "total_mv": 18100000000,
+                        "circ_mv": 12100000000,
+                    }
+                ]
+            )
+
+    monkeypatch.setattr("app.services.tushare_client.get_pro", lambda: FakePro())
+    monkeypatch.setattr(
+        market_data,
+        "_load_local_stock_basics",
+        lambda: [
+            {
+                "symbol": "000001",
+                "name": "平安银行",
+                "industry": "银行",
+                "market": "主板",
+                "list_date": "1991-04-03",
+                "is_st": False,
+            }
+        ],
+    )
+    monkeypatch.setattr(market_data, "_throttle_tushare", lambda _settings: None)
+
+    quotes = market_data._fetch_tushare_quotes(DummySettings())
+
+    assert len(quotes) == 1
+    assert quotes[0]["trade_date"] == "2026-05-27"
+
+
+def test_recent_open_trade_dates_excludes_unclosed_current_session(monkeypatch):
+    class FakeDateTime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 5, 28, 9, 30)
+
+    class FakePro:
+        def trade_cal(self, **kwargs):
+            return pd.DataFrame(
+                [
+                    {"cal_date": "20260526"},
+                    {"cal_date": "20260527"},
+                    {"cal_date": "20260528"},
+                ]
+            )
+
+    monkeypatch.setattr(market_data, "datetime", FakeDateTime)
+    monkeypatch.setattr("app.services.tushare_client.get_pro", lambda: FakePro())
+    monkeypatch.setattr(market_data, "_throttle_tushare", lambda _settings: None)
+
+    assert market_data._recent_open_trade_dates(DummySettings()) == ["20260526", "20260527"]
+
+
+def test_call_tushare_with_retry_retries_rate_limit(monkeypatch):
+    calls = {"count": 0}
+    sleeps: list[float] = []
+
+    class FakePro:
+        def daily(self, **kwargs):
+            calls["count"] += 1
+            if calls["count"] < 3:
+                raise RuntimeError("Tushare daily: 您请求速度过快")
+            return "ok"
+
+    monkeypatch.setattr(market_data.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(market_data, "_throttle_tushare", lambda _settings: None)
+
+    result = market_data._call_tushare_with_retry(FakePro(), DummySettings(), "daily", trade_date="20260526")
+
+    assert result == "ok"
+    assert calls["count"] == 3
+    assert sleeps == [1.5, 3.0]
+
+
 def test_small_market_sample_caps_final_score_honestly():
     stock = {
         "code": "000001",
@@ -125,7 +381,7 @@ def test_authenticity_treats_composite_scores_as_observed_when_inputs_are_real()
     assert enriched["data_authenticity"] >= 0.8
 
 
-def test_default_presets_do_not_overwrite_user_skill_selection(clean_test_db):
+def test_default_presets_do_not_overwrite_user_skill_selection(production_mysql):
     from app.db.session import SessionLocal
     from app.models.tables import Preset, PresetSkill, SkillRegistry
     from app.services import workbench_service

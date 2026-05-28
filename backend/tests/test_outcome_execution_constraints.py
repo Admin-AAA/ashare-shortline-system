@@ -1,7 +1,8 @@
+import json
 from types import SimpleNamespace
 
 from app.models.tables import DailyKbar
-from app.services.outcome_service import _resolve_entry, _resolve_exit
+from app.services.outcome_service import _resolve_entry, _resolve_exit, _simulate_outcome
 
 
 def _bar(
@@ -103,6 +104,63 @@ def test_resolve_entry_defers_blocked_limit_up_to_next_executable_bar():
     assert result["triggered"] is True
     assert result["date"] == "2026-05-14"
     assert result["price"] == 10.9
+
+
+def test_simulate_outcome_respects_recommendation_time_execution_block():
+    rec = SimpleNamespace(
+        code="000001",
+        trade_date="2026-05-12",
+        recommend_price=11.0,
+        feature_snapshot_json=json.dumps(
+            {
+                "ideal_buy": 11.0,
+                "execution_viability": {
+                    "status": "blocked",
+                    "label": "入场不可成交",
+                    "block_reason": "入场日一字涨停，按真实成交约束视为买不进",
+                },
+            },
+            ensure_ascii=False,
+        ),
+    )
+    executable_pullback = _bar(
+        trade_date="2026-05-13",
+        open=10.9,
+        high=11.2,
+        low=10.8,
+        close=11.0,
+        pct_chg=0.0,
+    )
+
+    blocked = _simulate_outcome(
+        rec,
+        [executable_pullback],
+        ["2026-05-13"],
+        horizon_days=3,
+    )
+
+    assert blocked is not None
+    assert blocked["entry_triggered"] is False
+    assert blocked["exit_reason"] == "recommendation_execution_blocked"
+    assert blocked["executed_return"] == 0.0
+    assert "推荐时已判定不可真实成交" in blocked["outcome_reason"]
+
+    rec_without_block = SimpleNamespace(
+        code="000001",
+        trade_date="2026-05-12",
+        recommend_price=11.0,
+        feature_snapshot_json=json.dumps({"ideal_buy": 11.0}, ensure_ascii=False),
+    )
+    executable = _simulate_outcome(
+        rec_without_block,
+        [executable_pullback],
+        ["2026-05-13"],
+        horizon_days=3,
+    )
+
+    assert executable is not None
+    assert executable["entry_triggered"] is True
+    assert executable["entry_date"] == "2026-05-13"
 
 
 def test_resolve_exit_marks_fully_locked_limit_down_horizon():

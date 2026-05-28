@@ -113,6 +113,7 @@ def _score_validation_quality(latest_backtest: dict[str, Any] | None) -> dict[st
     score = 52.0
     highlights: list[str] = []
     status = str(latest_backtest.get("status") or "unknown")
+    latest_attempt_status = str(latest_backtest.get("_latest_attempt_status") or status)
     metrics = latest_backtest.get("metrics") if isinstance(latest_backtest.get("metrics"), dict) else {}
     trade_count = int(metrics.get("trade_count") or 0)
     has_execution_metrics = any(
@@ -132,13 +133,32 @@ def _score_validation_quality(latest_backtest: dict[str, Any] | None) -> dict[st
     average_net_return = _optional_float(metrics, "average_net_return")
     max_drawdown = _optional_float(metrics, "max_drawdown")
     benchmark_excess_return = _optional_float(metrics, "benchmark_excess_return")
+    accuracy_numerator = int(metrics.get("accuracy_numerator") or metrics.get("success_count") or 0)
+    if accuracy_numerator <= 0 and recommendation_accuracy is not None and accuracy_denominator:
+        accuracy_numerator = int(round(recommendation_accuracy * accuracy_denominator))
+    accuracy_gate_summary = metrics.get("accuracy_gate_summary") if isinstance(metrics.get("accuracy_gate_summary"), dict) else {}
+    if not accuracy_gate_summary:
+        accuracy_gate_summary = _derive_accuracy_gate_summary(
+            accuracy_denominator=accuracy_denominator,
+            executed_trade_count=executed_trade_count,
+            accurate_count=accuracy_numerator,
+        )
+    accuracy_policy = metrics.get("accuracy_policy") if isinstance(metrics.get("accuracy_policy"), dict) else {}
+    failure_breakdown = (
+        accuracy_policy.get("failure_breakdown")
+        if isinstance(accuracy_policy.get("failure_breakdown"), list)
+        else []
+    )
     scope = str(latest_backtest.get("decision_scope") or "aggregate")
-    scope_label = str(latest_backtest.get("decision_scope_label") or scope)
+    scope_label = _validation_scope_label(latest_backtest.get("decision_scope_label"), scope)
     temporal = ((latest_backtest.get("data_coverage") or {}).get("temporal_consistency") or {}) if isinstance(latest_backtest.get("data_coverage"), dict) else {}
     candidate_coverage = float(((latest_backtest.get("data_coverage") or {}).get("candidate_minute_coverage_rate") or 0)) if isinstance(latest_backtest.get("data_coverage"), dict) else 0.0
     benchmark_coverage = float(((latest_backtest.get("data_coverage") or {}).get("benchmark_minute_coverage_rate") or 0)) if isinstance(latest_backtest.get("data_coverage"), dict) else 0.0
 
-    if status == "completed":
+    if latest_attempt_status == "insufficient_minute_coverage" and status != "insufficient_minute_coverage":
+        score -= 6
+        highlights.append("最近一次回测被分钟线门禁拦截，以下验证指标回退至最近可用回测。")
+    elif status == "completed":
         score += 8
     elif status == "insufficient_minute_coverage":
         score -= 20
@@ -209,6 +229,18 @@ def _score_validation_quality(latest_backtest: dict[str, Any] | None) -> dict[st
             highlights.append(f"最近可成交率仅 {execution_rate:.1%}，未成交/未触发 {unexecuted_count} 条。")
         elif execution_rate >= 0.9:
             score += 4
+    if accuracy_gate_summary:
+        signal_invalid_count = int(accuracy_gate_summary.get("signal_invalid_count") or 0)
+        unexecutable_count = int(accuracy_gate_summary.get("unexecutable_count") or 0)
+        net_non_positive_count = int(accuracy_gate_summary.get("net_non_positive_count") or 0)
+        if signal_invalid_count:
+            score -= min(10, signal_invalid_count * 2)
+            highlights.append(f"严格准确率闸门发现 {signal_invalid_count} 条信号当时失效。")
+        if unexecutable_count:
+            score -= min(14, unexecutable_count * 3)
+            highlights.append(f"严格准确率闸门发现 {unexecutable_count} 条不可真实成交。")
+        if net_non_positive_count and recommendation_accuracy is not None and recommendation_accuracy < 0.6:
+            score -= min(10, net_non_positive_count * 1.5)
 
     if average_net_return is None:
         score -= 5
@@ -246,10 +278,12 @@ def _score_validation_quality(latest_backtest: dict[str, Any] | None) -> dict[st
         highlights=highlights or ["最近回测验证链路稳定。"],
         metrics={
             "latest_backtest_status": status,
+            "latest_attempt_status": latest_attempt_status,
             "decision_scope": scope,
             "decision_scope_label": scope_label,
             "trade_count": trade_count,
             "accuracy_denominator": accuracy_denominator,
+            "accuracy_numerator": accuracy_numerator,
             "executed_trade_count": executed_trade_count,
             "unexecuted_count": unexecuted_count,
             "recommendation_accuracy": recommendation_accuracy,
@@ -259,6 +293,8 @@ def _score_validation_quality(latest_backtest: dict[str, Any] | None) -> dict[st
             "max_drawdown": max_drawdown,
             "benchmark_excess_return": benchmark_excess_return,
             "sample_confidence": confidence,
+            "accuracy_gate_summary": accuracy_gate_summary,
+            "accuracy_failure_breakdown": failure_breakdown,
             "temporal_passed": bool(temporal.get("passed", True)),
             "candidate_minute_coverage_rate": round(candidate_coverage, 3),
             "benchmark_minute_coverage_rate": round(benchmark_coverage, 3),
@@ -374,7 +410,58 @@ def _status_from_score(score: float) -> str:
 
 
 def _pick_latest_backtest(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
-    return rows[0] if rows else None
+    if not rows:
+        return None
+    latest = rows[0]
+    for row in rows:
+        if _has_validation_sample(row):
+            if row is latest:
+                return row
+            selected = dict(row)
+            selected["_latest_attempt_status"] = latest.get("status")
+            selected["_latest_attempt_backtest_id"] = latest.get("backtest_id")
+            return selected
+    return latest
+
+
+def _has_validation_sample(row: dict[str, Any]) -> bool:
+    metrics = row.get("metrics") if isinstance(row.get("metrics"), dict) else {}
+    trade_count = int(metrics.get("trade_count") or 0)
+    accuracy_denominator = int(metrics.get("accuracy_denominator") or 0)
+    return max(trade_count, accuracy_denominator) > 0
+
+
+def _derive_accuracy_gate_summary(
+    *,
+    accuracy_denominator: int,
+    executed_trade_count: int,
+    accurate_count: int,
+) -> dict[str, int]:
+    if accuracy_denominator <= 0:
+        return {}
+    executable_count = max(0, min(executed_trade_count, accuracy_denominator))
+    net_positive_count = max(0, min(accurate_count, executable_count))
+    return {
+        "total_recommendations": accuracy_denominator,
+        "signal_valid_count": accuracy_denominator,
+        "signal_invalid_count": 0,
+        "executable_count": executable_count,
+        "unexecutable_count": max(0, accuracy_denominator - executable_count),
+        "net_positive_count": net_positive_count,
+        "net_non_positive_count": max(0, executable_count - net_positive_count),
+        "manual_override_count": 0,
+    }
+
+
+def _validation_scope_label(raw_label: Any, scope: str) -> str:
+    if raw_label:
+        return str(raw_label)
+    mapping = {
+        "walk_forward": "滚动样本外验证",
+        "time_split": "时间切分测试集",
+        "aggregate": "全量指标",
+    }
+    return mapping.get(scope, scope)
 
 
 def _research_metrics(db: Session) -> dict[str, Any]:

@@ -273,6 +273,111 @@ def _fetch_kline(
     return _fetch_tushare_kline(quote, settings, start_date=start_date, end_date=end_date)
 
 
+def _load_local_stock_basics() -> list[dict[str, Any]]:
+    try:
+        from sqlalchemy import select
+
+        from app.db.session import SessionLocal
+        from app.models.tables import Stock
+    except Exception:
+        return []
+
+    industry_cache = _load_industry_cache()
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            select(
+                Stock.code,
+                Stock.name,
+                Stock.industry,
+                Stock.market,
+                Stock.list_date,
+                Stock.is_st,
+            )
+        ).all()
+    except Exception:
+        db.close()
+        return []
+    db.close()
+
+    stocks: list[dict[str, Any]] = []
+    for code, name, industry, market, list_date, is_st in rows:
+        symbol = _normalize_code(code)
+        if not symbol:
+            continue
+        stocks.append(
+            {
+                "symbol": symbol,
+                "name": str(name or "").strip() or symbol,
+                "industry": str(industry or industry_cache.get(symbol) or "").strip() or "未分类",
+                "market": str(market or "").strip(),
+                "list_date": _format_yyyymmdd(list_date) if list_date else "",
+                "is_st": bool(is_st),
+            }
+        )
+    return stocks
+
+
+def _fetch_stock_basics(pro: Any, settings: Any) -> list[dict[str, Any]]:
+    local_rows = _load_local_stock_basics()
+    if local_rows:
+        return local_rows
+
+    basic = _call_tushare_with_retry(
+        pro,
+        settings,
+        "stock_basic",
+        exchange="",
+        list_status="L",
+        fields="symbol,name,industry,market,list_date",
+    )
+    if basic is None or basic.empty:
+        return []
+
+    industry_cache = _load_industry_cache()
+    stocks: list[dict[str, Any]] = []
+    for _, row in basic.iterrows():
+        symbol = _normalize_code(str(row.get("symbol") or ""))
+        if not symbol:
+            continue
+        stocks.append(
+            {
+                "symbol": symbol,
+                "name": str(row.get("name") or "").strip() or symbol,
+                "industry": str(row.get("industry") or industry_cache.get(symbol) or "").strip() or "未分类",
+                "market": str(row.get("market") or "").strip(),
+                "list_date": _format_yyyymmdd(row.get("list_date")) if row.get("list_date") else "",
+                "is_st": False,
+            }
+        )
+    return stocks
+
+
+def _recent_open_trade_dates(settings: Any) -> list[str]:
+    from app.services.tushare_client import get_pro
+
+    pro = get_pro()
+    today_str = date.today().strftime("%Y%m%d")
+    start_str = (date.today() - timedelta(days=14)).strftime("%Y%m%d")
+    cal = _call_tushare_with_retry(
+        pro,
+        settings,
+        "trade_cal",
+        exchange="SSE",
+        start_date=start_str,
+        end_date=today_str,
+        is_open="1",
+    )
+    if cal is None or cal.empty:
+        raise MarketDataError("Tushare 未返回交易日历。")
+    latest_allowed = _latest_allowed_bar_date().replace("-", "")
+    return [
+        str(value)
+        for value in cal.sort_values("cal_date")["cal_date"].astype(str).tolist()
+        if str(value) <= latest_allowed
+    ]
+
+
 
 
 
@@ -280,84 +385,113 @@ def _fetch_kline(
 
 
 def _fetch_tushare_quotes(settings: Any) -> list[dict[str, Any]]:
-    """使用 Tushare 获取 A 股行情快照。通过 stock_basic + daily 组合。"""
-    from app.services.tushare_client import get_pro, ts_code
+    """使用 Tushare 获取 A 股行情快照，优先按交易日批量拉取。"""
+    from app.services.tushare_client import get_pro
 
-    _throttle_tushare(settings)
     pro = get_pro()
 
-    # 获取全部上市股票列表
-    basic = pro.stock_basic(exchange="", list_status="L", fields="symbol,name,industry,market")
-    if basic is None or basic.empty:
-        raise MarketDataError("Tushare stock_basic 返回空，无法构建行情池。")
+    stock_basics = _fetch_stock_basics(pro, settings)
+    if not stock_basics:
+        raise MarketDataError("本地 stocks 表与 Tushare stock_basic 都不可用，无法构建行情池。")
 
-    # 获取最近交易日
-    today_str = date.today().strftime("%Y%m%d")
-    start_str = (date.today() - timedelta(days=14)).strftime("%Y%m%d")
-    cal = pro.trade_cal(exchange="SSE", start_date=start_str, end_date=today_str, is_open="1")
-    if cal is None or cal.empty:
-        raise MarketDataError("Tushare 未返回交易日历。")
-    latest_trade_date = str(cal.sort_values("cal_date").iloc[-1]["cal_date"])
-
-    # 批量获取 daily + daily_basic
-    stocks_list: list[dict[str, Any]] = []
-    for _, row in basic.iterrows():
-        symbol = str(row.get("symbol") or "")
-        name = str(row.get("name") or "")
-        industry = str(row.get("industry") or "未分类")
-        market = str(row.get("market") or "").upper()
-        exchange = "SH" if market == "主板" else "SZ"
-        if symbol.startswith(("8", "4")):
-            exchange = "BJ"
-        stocks_list.append({"code": symbol, "name": name, "industry": industry, "exchange": exchange})
-
-    # 分批发 daily 查询（Tushare 有频率限制但自建服务器不限）
-    codes_chunks = [stocks_list[i:i+200] for i in range(0, len(stocks_list), 200)]
-    ts_code_to_stock: dict[str, dict[str, Any]] = {}
-    for chunk in codes_chunks:
-        for s in chunk:
-            tsc = ts_code(s["code"])
-            ts_code_to_stock[tsc] = s
-
-    for chunk in codes_chunks:
-        tscs = [ts_code(s["code"]) for s in chunk]
-        for tsc in tscs:
+    # 先批量拉全市场行情，避免逐股票高频调用触发限速。
+    batch_quotes = None
+    selected_trade_date = ""
+    batch_quote_errors: list[str] = []
+    recent_trade_dates = _recent_open_trade_dates(settings)
+    for trade_date in reversed(recent_trade_dates[-5:]):
+        for api_name in ("bak_daily", "daily"):
             try:
-                df = pro.daily(ts_code=tsc, start_date=latest_trade_date, end_date=latest_trade_date)
-                if df is not None and not df.empty:
-                    row = df.iloc[0]
-                    s = ts_code_to_stock[tsc]
-                    s["price"] = float(row.get("close", 0))
-                    s["pct"] = float(row.get("pct_chg", 0))
-                    s["volume"] = float(row.get("vol", 0))
-                    s["amount_yi"] = float(row.get("amount", 0)) * 1000 / 100000000
-                    s["turnover_rate"] = 0.0
-                    s["pe_ttm"] = 0.0
-                    s["total_mv_yi"] = 0.0
-                    s["free_mv_yi"] = 0.0
-                    s["chg60"] = 0.0
-                    s["ytd_chg"] = 0.0
-                    s["main_net_inflow_yi"] = 0.0
-            except Exception:
-                pass
+                candidate = _call_tushare_with_retry(pro, settings, api_name, trade_date=trade_date)
+                if candidate is not None and not candidate.empty:
+                    batch_quotes = candidate
+                    selected_trade_date = trade_date
+                    break
+                batch_quote_errors.append(f"{trade_date}:{api_name}: empty")
+            except Exception as exc:  # noqa: BLE001 - accumulate evidence for fallback
+                batch_quote_errors.append(f"{trade_date}:{api_name}: {exc}")
+        if batch_quotes is not None and not batch_quotes.empty:
+            break
+    if batch_quotes is None or batch_quotes.empty:
+        detail = "；".join(batch_quote_errors) if batch_quote_errors else "batch quote empty"
+        raise MarketDataError(f"Tushare 批量行情拉取失败: {detail}")
 
-    # 尝试用 daily_basic 补充换手率等信息
-    for tsc, s in ts_code_to_stock.items():
-        try:
-            basic_df = pro.daily_basic(ts_code=tsc, start_date=latest_trade_date, end_date=latest_trade_date)
-            if basic_df is not None and not basic_df.empty:
-                row = basic_df.iloc[0]
-                s["turnover_rate"] = float(row.get("turnover_rate", 0))
-                s["pe_ttm"] = float(row.get("pe_ttm", 0))
-                s["total_mv_yi"] = float(row.get("total_mv", 0)) / 100000000
-                s["free_mv_yi"] = float(row.get("circ_mv", 0)) / 100000000
-        except Exception:
-            pass
+    batch_quote_map: dict[str, dict[str, Any]] = {}
+    for _, row in batch_quotes.iterrows():
+        code = _normalize_code(str(row.get("ts_code") or row.get("code") or "").split(".")[0])
+        if code:
+            batch_quote_map[code] = dict(row)
+
+    daily_basic_map: dict[str, dict[str, Any]] = {}
+    try:
+        daily_basic = _call_tushare_with_retry(
+            pro,
+            settings,
+            "daily_basic",
+            trade_date=selected_trade_date,
+            fields="ts_code,trade_date,turnover_rate,pe_ttm,total_mv,circ_mv",
+        )
+        if daily_basic is not None and not daily_basic.empty:
+            for _, row in daily_basic.iterrows():
+                code = _normalize_code(str(row.get("ts_code") or "").split(".")[0])
+                if code:
+                    daily_basic_map[code] = dict(row)
+    except Exception:
+        daily_basic_map = {}
+
+    stocks_list: list[dict[str, Any]] = []
+    quote_trade_date = _format_yyyymmdd(selected_trade_date)
+    for row in stock_basics:
+        symbol = _normalize_code(str(row.get("symbol") or ""))
+        if not symbol:
+            continue
+        quote_row = batch_quote_map.get(symbol, {})
+        basic_row = daily_basic_map.get(symbol, {})
+        name = str(row.get("name") or quote_row.get("name") or symbol).strip() or symbol
+        industry = str(row.get("industry") or quote_row.get("industry") or "未分类").strip() or "未分类"
+        exchange = _exchange_from_code(symbol)
+        pct = _num(quote_row.get("pct_chg"), _num(quote_row.get("pct_change")))
+        price = _num(quote_row.get("close"))
+        amount_yi = _num(quote_row.get("amount")) * 1000 / 100000000
+        turnover_rate = _num(quote_row.get("turn_over"), _num(basic_row.get("turnover_rate")))
+        pe_ttm = _num(quote_row.get("pe"), _num(basic_row.get("pe_ttm")))
+        total_mv_yi = _market_value_yi(
+            quote_row.get("total_mv"),
+            fallback=basic_row.get("total_mv"),
+        )
+        free_mv_yi = _market_value_yi(
+            quote_row.get("float_mv"),
+            fallback=basic_row.get("circ_mv"),
+        )
+        stocks_list.append({
+            "code": symbol,
+            "name": name,
+            "industry": industry,
+            "exchange": exchange,
+            "trade_date": quote_trade_date,
+            "price": price,
+            "pct": pct,
+            "volume": _num(quote_row.get("vol"), _num(quote_row.get("volume"))),
+            "amount_yi": amount_yi,
+            "turnover_rate": turnover_rate,
+            "pe_ttm": pe_ttm,
+            "total_mv_yi": total_mv_yi,
+            "free_mv_yi": free_mv_yi,
+            "high": _num(quote_row.get("high")),
+            "low": _num(quote_row.get("low")),
+            "open": _num(quote_row.get("open")),
+            "preclose": _num(quote_row.get("pre_close"), _num(quote_row.get("preclose"))),
+            "chg60": 0.0,
+            "ytd_chg": 0.0,
+            "main_net_inflow_yi": 0.0,
+            "is_st": bool(row.get("is_st")),
+        })
 
     quotes = [
         _quote(
             code=s["code"],
             name=s["name"],
+            trade_date=s["trade_date"],
             price=s.get("price", 0.0),
             pct=s.get("pct", 0.0),
             volume=s.get("volume", 0),
@@ -366,10 +500,15 @@ def _fetch_tushare_quotes(settings: Any) -> list[dict[str, Any]]:
             pe_ttm=s.get("pe_ttm", 0.0),
             total_mv_yi=s.get("total_mv_yi", 0.0),
             free_mv_yi=s.get("free_mv_yi", 0.0),
+            high=s.get("high"),
+            low=s.get("low"),
+            open=s.get("open"),
+            preclose=s.get("preclose"),
             chg60=s.get("chg60", 0.0),
             ytd_chg=s.get("ytd_chg", 0.0),
             main_net_inflow_yi=s.get("main_net_inflow_yi", 0.0),
             industry=s["industry"],
+            is_st=s.get("is_st", False),
             source="tushare",
         )
         for s in stocks_list
@@ -377,6 +516,23 @@ def _fetch_tushare_quotes(settings: Any) -> list[dict[str, Any]]:
     ]
 
     return quotes[: getattr(settings, "market_scan_size", len(quotes))]
+
+
+def _call_tushare_with_retry(pro: Any, settings: Any, api_name: str, **params: Any):
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        _throttle_tushare(settings)
+        try:
+            return getattr(pro, api_name)(**params)
+        except Exception as exc:  # noqa: BLE001 - preserve provider message for caller
+            last_exc = exc
+            message = str(exc)
+            if "请求速度过快" not in message or attempt == 2:
+                break
+            time.sleep(1.5 * (attempt + 1))
+    if last_exc is not None:
+        raise last_exc
+    raise MarketDataError(f"Tushare {api_name} 调用失败")
 
 
 
@@ -506,7 +662,9 @@ def _quote(**kwargs: Any) -> dict[str, Any]:
         **kwargs,
         "code": code,
         "exchange": _exchange_from_code(code),
-        "is_st": "ST" in str(kwargs.get("name", "")).upper() or "退" in str(kwargs.get("name", "")),
+        "is_st": bool(kwargs.get("is_st"))
+        or "ST" in str(kwargs.get("name", "")).upper()
+        or "退" in str(kwargs.get("name", "")),
         "quote_time": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
     }
 
@@ -1056,12 +1214,23 @@ def _latest_trade_date_from_quotes(quotes: list[dict[str, Any]]) -> str:
 
 
 def _latest_allowed_bar_date(today: date | None = None) -> str:
-    today = today or date.today()
+    if today is None:
+        now = datetime.now()
+        today = now.date()
+        if today.weekday() < 5 and now.hour < 16:
+            today = _previous_weekday(today)
     if today.weekday() == 5:
         return (today - timedelta(days=1)).isoformat()
     if today.weekday() == 6:
         return (today - timedelta(days=2)).isoformat()
     return today.isoformat()
+
+
+def _previous_weekday(day: date) -> date:
+    current = day - timedelta(days=1)
+    while current.weekday() >= 5:
+        current -= timedelta(days=1)
+    return current
 
 
 def _latest_tushare_trade_date(pro: Any) -> str:
@@ -1199,3 +1368,20 @@ def _num(value: Any, default: float = 0.0) -> float:
     if math.isnan(number) or math.isinf(number):
         return float(default)
     return number
+
+
+def _market_value_yi(value: Any, fallback: Any = None) -> float:
+    """Normalize Tushare market value fields to 亿元.
+
+    `bak_daily.total_mv/float_mv` is observed as 亿元 in current batch quote
+    data, while `daily_basic.total_mv/circ_mv` is documented as 万元.
+    Some tests and fallback rows may still provide yuan-level large numbers,
+    so large primary values are treated as yuan and converted defensively.
+    """
+    primary = _num(value)
+    if primary > 0:
+        return round(primary / 100000000, 4) if primary >= 1000000 else round(primary, 4)
+    secondary = _num(fallback)
+    if secondary > 0:
+        return round(secondary / 10000, 4)
+    return 0.0

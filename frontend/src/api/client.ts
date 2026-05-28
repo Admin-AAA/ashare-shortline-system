@@ -215,7 +215,13 @@ export const api = {
 
   metricsOverview: (mode: "formal" | "experiment") => request<MetricsOverview>(`/api/metrics/overview?mode=${mode}`, undefined, { timeoutMs: 30_000 }),
   dataHealth: () => request<DataHealthDiagnostic>("/api/admin/data-health"),
-  remediateDataHealth: (payload?: { target_tables?: string[]; dry_run?: boolean; capital_flow_code_limit?: number }) =>
+  remediateDataHealth: (payload?: {
+    target_tables?: string[];
+    dry_run?: boolean;
+    capital_flow_code_limit?: number;
+    daily_kbar_code_limit?: number;
+    post_diagnosis?: boolean;
+  }) =>
     request<DataHealthRemediationResult>("/api/admin/data-health/remediate", json("POST", payload ?? {}), { timeoutMs: 120_000 }),
   temporalConsistency: (runMode?: string) => request<Record<string, unknown>>(`/api/admin/temporal-consistency${runMode ? `?run_mode=${runMode}` : ""}`),
   previewMinuteGate: (payload: { start_date: string; end_date: string; strategy_id: string }) =>

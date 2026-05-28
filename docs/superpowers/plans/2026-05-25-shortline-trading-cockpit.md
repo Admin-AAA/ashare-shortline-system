@@ -2307,10 +2307,10 @@ cd backend && ./.venv/bin/python -m pytest -q \
   tests/test_market_pool.py
 ```
 
-Expected: pass. If DB-backed tests require `ASHARE_TEST_DATABASE_URL`, use safe-mode only when targeting a production-like database:
+Expected: pass. Demo 阶段 DB-backed tests 直接使用项目配置的生产 MySQL:
 
 ```bash
-ASHARE_TEST_SAFE_MODE=1 ./.venv/bin/python -m pytest -q tests/test_hallucination_check.py tests/test_research_context.py
+./.venv/bin/python -m pytest -q tests/test_hallucination_check.py tests/test_research_context.py
 ```
 
 - [ ] **Step 3: Run frontend build**

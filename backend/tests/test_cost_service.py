@@ -30,6 +30,75 @@ def test_task_run_summary_text_for_data_health_remediation():
     assert summary == "数据补数 2 项，问题数 -3，评分 +11"
 
 
+def test_task_run_summary_text_for_data_health_skipped_post_diagnosis():
+    run = ScheduledTaskRun(
+        task_run_id="taskrun_manual_data_health",
+        task_id="manual_data_health_remediation",
+        task_name="手动数据补数",
+        task_type="data_backfill",
+        trigger_source="manual",
+        started_at=datetime(2026, 5, 27, 10, 0),
+        status="completed",
+        payload_json="{}",
+        result_json="{}",
+    )
+    result = {
+        "remediation_type": "data_health",
+        "actions": [{"table": "daily_kbar"}, {"table": "index_daily"}],
+        "comparison": {"status": "skipped", "reason": "post_diagnosis=false"},
+    }
+
+    summary = _task_run_summary_text(run, result)
+
+    assert summary == "数据补数 2 项，已跳过后置诊断"
+
+
+def test_task_run_summary_text_for_data_health_pre_diagnosis_failed():
+    run = ScheduledTaskRun(
+        task_run_id="taskrun_manual_data_health",
+        task_id="manual_data_health_remediation",
+        task_name="手动数据补数",
+        task_type="data_backfill",
+        trigger_source="manual",
+        started_at=datetime(2026, 5, 27, 10, 0),
+        status="diagnosis_failed",
+        payload_json="{}",
+        result_json="{}",
+    )
+    result = {
+        "remediation_type": "data_health",
+        "actions": [],
+        "comparison": {"status": "skipped", "reason": "pre_diagnosis_failed"},
+    }
+
+    summary = _task_run_summary_text(run, result)
+
+    assert summary == "数据补数未执行，前置诊断失败"
+
+
+def test_task_run_summary_text_for_data_health_post_diagnosis_failed():
+    run = ScheduledTaskRun(
+        task_run_id="taskrun_manual_data_health",
+        task_id="manual_data_health_remediation",
+        task_name="手动数据补数",
+        task_type="data_backfill",
+        trigger_source="manual",
+        started_at=datetime(2026, 5, 27, 10, 0),
+        status="completed_post_diagnosis_failed",
+        payload_json="{}",
+        result_json="{}",
+    )
+    result = {
+        "remediation_type": "data_health",
+        "actions": [{"table": "daily_kbar"}, {"table": "index_daily"}],
+        "comparison": {"status": "skipped", "reason": "post_diagnosis_failed"},
+    }
+
+    summary = _task_run_summary_text(run, result)
+
+    assert summary == "数据补数 2 项，后置诊断失败待复核"
+
+
 def test_task_run_summary_text_for_minute_gap_remediation():
     run = ScheduledTaskRun(
         task_run_id="taskrun_manual_minute_gap",
