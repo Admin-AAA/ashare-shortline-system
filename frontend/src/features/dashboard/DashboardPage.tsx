@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { Loader2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import BacktestPanel from "../../components/BacktestPanel";
 import BacktestEvaluationPanel from "./components/BacktestEvaluationPanel";
 import DataHealthDetailPanel from "./components/DataHealthDetailPanel";
@@ -19,8 +20,13 @@ import {
   aShareDirectionClass,
   businessStatusLabel,
   candidateEmptyState,
+  outcomeStatusLabel,
   readinessCopy,
+  recommendationStatusLabel,
+  riskLevelLabel,
+  runStatusLabel,
   runStatusCopy,
+  watchStatusLabel,
 } from "../../utils/display";
 import type {
   CockpitRecommendation,
@@ -34,37 +40,50 @@ import type {
 
 type DashboardSection = Exclude<CockpitSection, "control">;
 
-export default function DashboardPage({ section }: { section: DashboardSection }) {
-  const { data, loading, error, refresh } = useDashboardViewModel();
+export default function DashboardPage({ section, refreshSignal = 0 }: { section: DashboardSection; refreshSignal?: number }) {
+  const { data, loading, error, refresh } = useDashboardViewModel(refreshSignal);
   const [metrics, setMetrics] = useState<MetricsOverview | null>(null);
   const [metricsLoading, setMetricsLoading] = useState(false);
   const [metricsError, setMetricsError] = useState("");
+  const [slowLoading, setSlowLoading] = useState(false);
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
     setMetricsLoading(true);
     setMetricsError("");
-    api.metricsOverview("formal").then((m) => {
-      if (!cancelled) setMetrics(m);
+    api.metricsOverview("formal", { signal: controller.signal }).then((m) => {
+      if (!controller.signal.aborted) setMetrics(m);
     }).catch((err) => {
-      if (!cancelled) setMetricsError(err.message);
+      if (!controller.signal.aborted && !isAbortError(err)) setMetricsError(err.message);
     }).finally(() => {
-      if (!cancelled) setMetricsLoading(false);
+      if (!controller.signal.aborted) setMetricsLoading(false);
     });
-    return () => { cancelled = true; };
+    return () => controller.abort();
   }, []);
 
-  if (loading) return <div className="cockpit-panel loading-state">正在加载驾驶舱数据</div>;
+  useEffect(() => {
+    if (!loading) {
+      setSlowLoading(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setSlowLoading(true), 2500);
+    return () => window.clearTimeout(timer);
+  }, [loading]);
+
+  if (loading) return <DashboardLoadingState slow={slowLoading} />;
   if (error) {
     return (
       <div className="cockpit-panel error-state">
         <strong>驾驶舱加载失败</strong>
         <span>{error}</span>
-        <button type="button" onClick={refresh}>重试</button>
+        <div className="state-actions">
+          <button type="button" onClick={() => void refresh()}>重试</button>
+          <button type="button" onClick={goToControlCenter}>去控制中心</button>
+        </div>
       </div>
     );
   }
-  if (!data) return <div className="cockpit-panel">暂无驾驶舱数据</div>;
+  if (!data) return <DashboardEmptyState onRetry={() => void refresh()} />;
 
   if (section === "run") return <RunWorkspace data={data} />;
   if (section === "pool") return <CandidateWorkspace data={data} />;
@@ -74,13 +93,17 @@ export default function DashboardPage({ section }: { section: DashboardSection }
 
   return (
     <div className="dashboard-grid">
-      <MarketTemperaturePanel market={data.market} />
-      <MetricsPanel metrics={metrics ?? ({} as MetricsOverview)} loading={metricsLoading} />
-      <DragonCandidatesPanel items={data.recommendations} emptyState={candidateEmptyState(data)} />
-      <div className="side-stack">
+      <div className="dashboard-column">
+        <MarketTemperaturePanel market={data.market} />
         <QualityScorecardPanel scorecard={data.quality_scorecard} />
         <RiskRadarPanel radar={data.risk_radar} />
+      </div>
+      <div className="dashboard-column">
+        <MetricsPanel metrics={metrics ?? ({} as MetricsOverview)} loading={metricsLoading} />
         <RunStatusPanel run={data.current_run} />
+      </div>
+      <div className="dashboard-column">
+        <DragonCandidatesPanel items={data.recommendations} emptyState={candidateEmptyState(data)} />
         <DataHealthPanel dataHealth={data.data_health} taskHealth={data.task_health} />
         <ValidationPanel validation={data.validation} />
       </div>
@@ -88,14 +111,54 @@ export default function DashboardPage({ section }: { section: DashboardSection }
   );
 }
 
+function DashboardLoadingState({ slow }: { slow: boolean }) {
+  return (
+    <div className="cockpit-panel loading-state enhanced">
+      <div className="loading-title">
+        <Loader2 className="spin" size={18} />
+        <strong>正在加载驾驶舱数据</strong>
+      </div>
+      <p>{slow ? "后端正在整理行情、评估和数据池状态，当前请求还在继续。" : "正在连接后端并读取市场温度、候选解释和数据健康。"}</p>
+      <div className="loading-skeleton-grid" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </div>
+      <small>{slow ? "如果长时间停留在这里，可以点击顶部刷新或进入控制中心查看数据池状态。" : "通常几秒内完成，慢查询会在页面上持续显示状态。"}</small>
+    </div>
+  );
+}
+
+function DashboardEmptyState({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="cockpit-panel empty-state enhanced">
+      <strong>暂无驾驶舱数据</strong>
+      <span>页面已正常渲染，但后端没有返回可展示的驾驶舱快照。</span>
+      <div className="state-actions">
+        <button type="button" onClick={onRetry}>重新加载</button>
+        <button type="button" onClick={goToControlCenter}>去控制中心检查</button>
+      </div>
+    </div>
+  );
+}
+
+function isAbortError(err: unknown) {
+  return err instanceof Error && err.name === "AbortError";
+}
+
+function goToControlCenter() {
+  window.dispatchEvent(new CustomEvent("ashare:navigate", { detail: { section: "control" } }));
+}
+
 function RunWorkspace({ data }: { data: DashboardOverview }) {
   const runCopy = runStatusCopy(data.current_run);
   const stages = [
-    ["prepare", "数据池准备", "本地池、行情源和交易日对齐"],
-    ["candidate", "候选过滤", "流动性、主线、风险门槛"],
-    ["skill_review", "Skill 审查", "规则分 + Agent 解释"],
-    ["persist", "聚合落库", "分桶、排序、复盘闭环"],
+    { key: "prepare", label: "数据池准备", note: "本地池、行情源和交易日对齐", phases: ["prepare", "starting", "market_data", "auxiliary_data"] },
+    { key: "candidate", label: "候选过滤", note: "流动性、主线、风险门槛", phases: ["candidate", "scope_filter", "feature_build", "rule_scan"] },
+    { key: "skill_review", label: "Skill 审查", note: "规则分 + Agent 解释", phases: ["skill_gate", "skill_review"] },
+    { key: "persist", label: "聚合落库", note: "分桶、排序、复盘闭环", phases: ["aggregate", "aggregate_metrics", "persist", "completed"] },
   ];
+  const stageStates = resolveRunStageStates(data.current_run.status, data.current_run.phase, stages.map((stage) => stage.phases));
   return (
     <div className="workspace-grid">
       <section className="section-hero">
@@ -116,10 +179,11 @@ function RunWorkspace({ data }: { data: DashboardOverview }) {
             </div>
           </div>
           <div className="timeline-list">
-            {stages.map(([phase, label, note]) => (
-              <span key={phase} className={data.current_run.phase === phase ? "active" : ""}>
-                <strong>{label}</strong>
-                <small>{note}</small>
+            {stages.map((stage, index) => (
+              <span key={stage.key} className={stageStates[index].className}>
+                <strong>{stage.label}</strong>
+                <small>{stage.note}</small>
+                <em>{stageStates[index].label}</em>
               </span>
             ))}
           </div>
@@ -130,8 +194,35 @@ function RunWorkspace({ data }: { data: DashboardOverview }) {
   );
 }
 
+function resolveRunStageStates(status: unknown, phase: unknown, stagePhases: string[][]) {
+  const statusKey = String(status ?? "").toLowerCase();
+  const phaseKey = String(phase ?? "").toLowerCase();
+  const completed = statusKey === "completed" || phaseKey === "completed";
+  const failed = statusKey === "failed" || statusKey === "error" || statusKey === "interrupted";
+  const activeIndex = stagePhases.findIndex((phases) => phases.includes(phaseKey));
+
+  return stagePhases.map((_, index) => {
+    if (completed) {
+      return { className: `done ${index === stagePhases.length - 1 ? "active" : ""}`.trim(), label: "已完成" };
+    }
+    if (activeIndex === -1) {
+      return { className: "", label: index === 0 ? "等待状态同步" : "待执行" };
+    }
+    if (index < activeIndex) return { className: "done", label: "已完成" };
+    if (index === activeIndex) return { className: failed ? "active danger" : "active", label: failed ? "中断于此" : "当前阶段" };
+    return { className: "", label: "待执行" };
+  });
+}
+
 function CandidateWorkspace({ data }: { data: DashboardOverview }) {
   const empty = candidateEmptyState(data);
+  const openReplay = (recommendationId: string) => {
+    window.sessionStorage.setItem("ashare:pendingReplayId", recommendationId);
+    window.dispatchEvent(new CustomEvent("ashare:navigate", { detail: { section: "history", recommendationId } }));
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent("ashare:select-replay", { detail: { recommendationId } }));
+    }, 120);
+  };
   return (
     <div className="workspace-grid">
       <section className="section-hero">
@@ -143,8 +234,10 @@ function CandidateWorkspace({ data }: { data: DashboardOverview }) {
         <strong>{data.recommendations.length} 只</strong>
       </section>
       <DragonCandidatesPanel items={data.recommendations} emptyState={empty} />
-      <div className="explain-grid">
-        {data.recommendations.map((item) => <ExplanationCard key={item.recommendation_id} item={item} />)}
+      <div className={`explain-grid ${data.recommendations.length <= 1 ? "single" : ""}`}>
+        {data.recommendations.map((item) => (
+          <ExplanationCard key={item.recommendation_id} item={item} onOpenReplay={openReplay} />
+        ))}
       </div>
     </div>
   );
@@ -154,6 +247,14 @@ function DataWorkspace({ data }: { data: DashboardOverview }) {
   const messages = stringList(data.data_health.messages);
   const examples = stringList(data.data_health.examples);
   const readiness = readinessCopy(data.data_health.can_run_local_recommendation, data.data_health.status);
+  const checkedCandidates = Number(data.data_health.checked_candidate_count ?? 0);
+  const readyCandidates = Number(data.data_health.ready_candidate_count ?? 0);
+  const exampleLimit = Math.max(1, Number(data.data_health.example_limit ?? 8));
+  const exampleTotal = Number(data.data_health.example_count ?? examples.length);
+  const visibleExampleCount = Math.min(examples.length, exampleLimit);
+  const scopeNote = data.data_health.scope_note
+    || "概览只展示缺口样例；刷新本地数据池会全量检查候选池并补齐可处理日K缺口。";
+  const exampleNote = `当前展示 ${visibleExampleCount}/${exampleTotal || visibleExampleCount} 条缺口样例；样例不是补齐上限。`;
   return (
     <div className="workspace-grid">
       <section className="section-hero">
@@ -164,30 +265,41 @@ function DataWorkspace({ data }: { data: DashboardOverview }) {
         </div>
         <strong>{businessStatusLabel(data.data_health.status)}</strong>
       </section>
-      <div className="focus-grid">
-        <DataHealthPanel dataHealth={data.data_health} taskHealth={data.task_health} />
-        <section className="cockpit-panel">
-          <div className="panel-header">
-            <div>
-              <div className="panel-kicker">Coverage</div>
-              <h2>池覆盖细节</h2>
-            </div>
+      <div className="data-workspace-layout">
+        <div className="data-main-stack">
+          <div className="focus-grid data-summary-grid">
+            <DataHealthPanel dataHealth={data.data_health} taskHealth={data.task_health} />
+            <section className="cockpit-panel">
+              <div className="panel-header">
+                <div>
+                  <div className="panel-kicker">Coverage</div>
+                  <h2>池覆盖细节</h2>
+                </div>
+              </div>
+              <div className="metric-grid">
+                <span>活跃报价<strong>{textValue(data.data_health.active_quote_count)}</strong></span>
+                <span>日K覆盖<strong>{textValue(data.data_health.bar_coverage_pct)}%</strong></span>
+                <span>合格日K<strong>{textValue(data.data_health.eligible_bar_coverage_pct)}%</strong></span>
+                <span>本地推荐<strong>{readiness.value}</strong></span>
+                <span>候选检查<strong>{checkedCandidates}</strong></span>
+                <span>覆盖完整<strong>{readyCandidates}</strong></span>
+                <span>样例展示<strong>{visibleExampleCount}/{exampleTotal || visibleExampleCount}</strong></span>
+              </div>
+              <p>{readiness.note}</p>
+              <div className="data-scope-note">
+                <span>{scopeNote}</span>
+                <span>{exampleNote}</span>
+              </div>
+            </section>
           </div>
-          <div className="metric-grid">
-            <span>活跃报价<strong>{textValue(data.data_health.active_quote_count)}</strong></span>
-            <span>日K覆盖<strong>{textValue(data.data_health.bar_coverage_pct)}%</strong></span>
-            <span>合格日K<strong>{textValue(data.data_health.eligible_bar_coverage_pct)}%</strong></span>
-            <span>本地推荐<strong>{readiness.value}</strong></span>
-          </div>
-          <p>{readiness.note}</p>
-        </section>
+          <DataHealthDetailPanel />
+        </div>
+        <aside className="data-side-stack">
+          <TemporalConsistencyPanel />
+          <StatusStream title="数据池消息" items={messages} empty="暂无数据池消息" />
+          <StatusStream title="缺口样例" items={examples} empty="暂无缺口样例" note={exampleNote} />
+        </aside>
       </div>
-      <div className="focus-grid">
-        <DataHealthDetailPanel />
-        <TemporalConsistencyPanel />
-      </div>
-      <StatusStream title="数据池消息" items={messages} empty="暂无数据池消息" />
-      <StatusStream title="缺口样例" items={examples} empty="暂无缺口样例" />
     </div>
   );
 }
@@ -198,15 +310,42 @@ function ReviewWorkspace({ data }: { data: DashboardOverview }) {
   const [analysis, setAnalysis] = useState<ReplayAnalysisResult | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState("");
+  const [reviewMessage, setReviewMessage] = useState("");
   const [filterFalsePositive, setFilterFalsePositive] = useState(false);
   const [reasonFilter, setReasonFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const bridgeReplayIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const nextId = data.recommendations[0]?.recommendation_id ?? "";
     setSelectedId((current) => current || nextId);
+  }, [data.recommendations]);
+
+  useEffect(() => {
+    const pendingId = window.sessionStorage.getItem("ashare:pendingReplayId");
+    if (!pendingId) return;
+    const item = data.recommendations.find((candidate) => candidate.recommendation_id === pendingId);
+    if (!item) return;
+    window.sessionStorage.removeItem("ashare:pendingReplayId");
+    bridgeReplayIdRef.current = pendingId;
+    setSelectedId(pendingId);
+    setReviewMessage(`已从候选解释进入复盘：${item.name} · ${item.code}`);
+  }, [data.recommendations]);
+
+  useEffect(() => {
+    function handleSelectFromPool(event: Event) {
+      const recommendationId = (event as CustomEvent<{ recommendationId?: string }>).detail?.recommendationId;
+      if (recommendationId && data.recommendations.some((item) => item.recommendation_id === recommendationId)) {
+        bridgeReplayIdRef.current = recommendationId;
+        setSelectedId(recommendationId);
+        const item = data.recommendations.find((candidate) => candidate.recommendation_id === recommendationId);
+        setReviewMessage(item ? `已从候选解释进入复盘：${item.name} · ${item.code}` : "已从候选解释进入复盘");
+      }
+    }
+    window.addEventListener("ashare:select-replay", handleSelectFromPool);
+    return () => window.removeEventListener("ashare:select-replay", handleSelectFromPool);
   }, [data.recommendations]);
 
   useEffect(() => {
@@ -219,12 +358,20 @@ function ReviewWorkspace({ data }: { data: DashboardOverview }) {
     setError("");
     api.recommendationDetail(selectedId)
       .then((payload) => {
-        if (!cancelled) setDetail(payload);
+        if (!cancelled) {
+          setDetail(payload);
+          if (bridgeReplayIdRef.current === payload.recommendation_id) {
+            setReviewMessage(`已从候选解释进入复盘并加载详情：${payload.name} · ${payload.code}`);
+          } else {
+            setReviewMessage(`复盘详情已加载：${payload.name} · ${payload.code}`);
+          }
+        }
       })
       .catch((err) => {
         if (!cancelled) {
           setDetail(null);
           setError(err instanceof Error ? err.message : "推荐详情加载失败");
+          setReviewMessage("");
         }
       })
       .finally(() => {
@@ -246,12 +393,19 @@ function ReviewWorkspace({ data }: { data: DashboardOverview }) {
     setAnalysisError("");
     api.replayAnalysis(runId)
       .then((payload) => {
-        if (!cancelled) setAnalysis(payload);
+        if (!cancelled) {
+          setAnalysis(payload);
+          setReviewMessage((current) => {
+            if (current.startsWith("已从候选解释进入复盘")) return current;
+            return `复盘分析已加载：${payload.summary.total_count} 条样本，误判率 ${(payload.summary.false_positive_rate * 100).toFixed(1)}%`;
+          });
+        }
       })
       .catch((err) => {
         if (!cancelled) {
           setAnalysis(null);
           setAnalysisError(err instanceof Error ? err.message : "复盘分析加载失败");
+          setReviewMessage("");
         }
       })
       .finally(() => {
@@ -261,6 +415,14 @@ function ReviewWorkspace({ data }: { data: DashboardOverview }) {
       cancelled = true;
     };
   }, [detail?.run?.run_id]);
+
+  const selectedRecommendation = data.recommendations.find((item) => item.recommendation_id === selectedId) ?? data.recommendations[0] ?? null;
+
+  const handleSelectRecommendation = (item: CockpitRecommendation) => {
+    bridgeReplayIdRef.current = null;
+    setSelectedId(item.recommendation_id);
+    setReviewMessage(`已切换复盘样本：${item.name} · ${item.code}`);
+  };
 
   return (
     <div className="workspace-grid">
@@ -272,40 +434,15 @@ function ReviewWorkspace({ data }: { data: DashboardOverview }) {
         </div>
         <strong>{data.market.trade_date || "-"}</strong>
       </section>
-      <div className="focus-grid">
-        <div className="review-list">
-          {data.recommendations.length ? data.recommendations.map((item) => (
-            <button
-              key={item.recommendation_id}
-              type="button"
-              className="cockpit-panel review-row"
-              style={{
-                textAlign: "left",
-                borderColor: item.recommendation_id === selectedId
-                  ? "color-mix(in srgb, var(--accent) 42%, var(--line))"
-                  : undefined,
-              }}
-              onClick={() => setSelectedId(item.recommendation_id)}
-            >
-              <div>
-                <strong>{item.name}</strong>
-                <span>{item.code} · {item.setup_type || "未识别买点"}</span>
-              </div>
-              <div>
-                <span>观察状态</span>
-                <strong>{businessStatusLabel(item.watch_status)}</strong>
-              </div>
-              <div>
-                <span>推荐状态</span>
-                <strong>{businessStatusLabel(item.status)}</strong>
-              </div>
-              <div>
-                <span>强度</span>
-                <strong>{item.final_score.toFixed(1)}</strong>
-              </div>
-            </button>
-          )) : <div className="cockpit-panel empty-state">暂无可复盘推荐</div>}
+      {reviewMessage ? (
+        <div className="review-feedback" role="status" aria-live="polite">
+          {reviewMessage}
         </div>
+      ) : null}
+      <div className="review-workspace-layout">
+        <aside className="review-side-stack">
+          <ReviewQueueSummary items={data.recommendations} selected={selectedRecommendation} />
+        </aside>
         <ReviewDetailPanel
           detail={detail}
           loading={loading}
@@ -319,9 +456,89 @@ function ReviewWorkspace({ data }: { data: DashboardOverview }) {
           onToggleFalsePositive={() => setFilterFalsePositive((value) => !value)}
           onReasonFilterChange={setReasonFilter}
           onCategoryFilterChange={setCategoryFilter}
+          onFeedback={setReviewMessage}
         />
+        <aside className="review-side-stack">
+          <div className="review-list">
+            {data.recommendations.length ? data.recommendations.map((item) => (
+              <button
+                key={item.recommendation_id}
+                type="button"
+                className={`cockpit-panel review-row ${item.recommendation_id === selectedId ? "active" : ""}`}
+                onClick={() => handleSelectRecommendation(item)}
+              >
+                <div>
+                  <strong>{item.name}</strong>
+                  <span>{item.code} · {item.setup_type || "未识别买点"}</span>
+                </div>
+                <div>
+                  <span>观察状态</span>
+                  <strong>{watchStatusLabel(item.watch_status)}</strong>
+                </div>
+                <div>
+                  <span>推荐状态</span>
+                  <strong>{recommendationStatusLabel(item.status)}</strong>
+                </div>
+                <div>
+                  <span>强度</span>
+                  <strong>{item.final_score.toFixed(1)}</strong>
+                </div>
+              </button>
+            )) : <div className="cockpit-panel empty-state">暂无可复盘推荐</div>}
+          </div>
+        </aside>
       </div>
     </div>
+  );
+}
+
+function ReviewQueueSummary({
+  items,
+  selected,
+}: {
+  items: CockpitRecommendation[];
+  selected: CockpitRecommendation | null;
+}) {
+  const total = items.length;
+  const pendingCount = items.filter((item) => String(item.status ?? "").toLowerCase() === "pending").length;
+  const watchedCount = items.filter((item) => {
+    const status = String(item.watch_status ?? "").toLowerCase();
+    return status && status !== "none";
+  }).length;
+  const scores = items.map((item) => item.final_score).filter((value) => Number.isFinite(value));
+  const averageScore = scores.length ? scores.reduce((sum, value) => sum + value, 0) / scores.length : null;
+  const maxScore = scores.length ? Math.max(...scores) : null;
+  const minScore = scores.length ? Math.min(...scores) : null;
+  const nextAction = selected
+    ? selected.watch_status && selected.watch_status !== "none"
+      ? "继续补充 outcome、退出原因和人工复盘"
+      : "先标记观察状态，再补充后续 outcome"
+    : "等待下一次推荐运行产出样本";
+
+  return (
+    <section className="cockpit-panel review-summary-card">
+      <div className="panel-header">
+        <div>
+          <div className="panel-kicker">Queue</div>
+          <h2>复盘队列概览</h2>
+        </div>
+      </div>
+      <div className="review-summary-grid">
+        <span>样本<strong>{total}</strong></span>
+        <span>待处理<strong>{pendingCount}</strong></span>
+        <span>已观察<strong>{watchedCount}</strong></span>
+        <span>均分<strong>{averageScore == null ? "-" : averageScore.toFixed(1)}</strong></span>
+      </div>
+      <div className="review-summary-note">
+        <strong>{selected ? `${selected.name} · ${selected.code}` : "暂无选中样本"}</strong>
+        <span>{selected ? `${recommendationStatusLabel(selected.status)} · ${watchStatusLabel(selected.watch_status)} · 强度 ${selected.final_score.toFixed(1)}` : "暂无可复盘推荐"}</span>
+      </div>
+      <div className="review-summary-note">
+        <strong>强度区间</strong>
+        <span>{maxScore == null || minScore == null ? "-" : `${minScore.toFixed(1)} - ${maxScore.toFixed(1)}`}</span>
+      </div>
+      <div className="review-summary-next">{nextAction}</div>
+    </section>
   );
 }
 
@@ -338,6 +555,7 @@ function ReviewDetailPanel({
   onToggleFalsePositive,
   onReasonFilterChange,
   onCategoryFilterChange,
+  onFeedback,
 }: {
   detail: RecommendationDetail | null;
   loading: boolean;
@@ -351,6 +569,7 @@ function ReviewDetailPanel({
   onToggleFalsePositive: () => void;
   onReasonFilterChange: (value: string) => void;
   onCategoryFilterChange: (value: string) => void;
+  onFeedback: (value: string) => void;
 }) {
   if (loading) {
     return <section className="cockpit-panel loading-state">正在加载推荐复盘详情</section>;
@@ -379,9 +598,44 @@ function ReviewDetailPanel({
   const reasonOptions = ["all", ...new Set((analysis?.summary.reason_counts ?? []).map((item) => item.reason))];
   const categoryOptions = ["all", ...new Set((analysis?.summary.category_counts ?? []).map((item) => item.category))];
   const categoryLabels = new Map((analysis?.summary.category_counts ?? []).map((item) => [item.category, item.category_label]));
+  const buildFilterMessage = (nextFalsePositive = filterFalsePositive, nextReason = reasonFilter, nextCategory = categoryFilter) => {
+    const nextRows = allRows.filter((row) => {
+      if (nextFalsePositive && !row.is_false_positive) return false;
+      if (nextReason !== "all" && (row.false_positive_reason ?? "未归因") !== nextReason) return false;
+      if (nextCategory !== "all" && (row.false_positive_category ?? "unknown") !== nextCategory) return false;
+      return true;
+    });
+    const activeFilters = [
+      nextFalsePositive ? "仅看误判" : "",
+      nextReason !== "all" ? `原因：${nextReason}` : "",
+      nextCategory !== "all" ? `类别：${categoryLabels.get(nextCategory) ?? nextCategory}` : "",
+    ].filter(Boolean);
+    return `当前筛选 ${nextRows.length}/${allRows.length} 条${activeFilters.length ? ` · ${activeFilters.join(" · ")}` : " · 全部样本"}`;
+  };
+  const handleToggleFalsePositive = () => {
+    const nextValue = !filterFalsePositive;
+    onToggleFalsePositive();
+    onFeedback(buildFilterMessage(nextValue, reasonFilter, categoryFilter));
+  };
+  const handleReasonFilterChange = (value: string) => {
+    onReasonFilterChange(value);
+    onFeedback(buildFilterMessage(filterFalsePositive, value, categoryFilter));
+  };
+  const handleCategoryFilterChange = (value: string) => {
+    onCategoryFilterChange(value);
+    onFeedback(buildFilterMessage(filterFalsePositive, reasonFilter, value));
+  };
+  const handleExportRows = () => {
+    if (!filteredRows.length) {
+      onFeedback("当前筛选为空，未生成导出文件");
+      return;
+    }
+    exportReplayRows(filteredRows);
+    onFeedback(`已导出当前筛选：${filteredRows.length} 条`);
+  };
 
   return (
-    <section className="cockpit-panel">
+    <section className="cockpit-panel review-detail-panel">
       <div className="panel-header">
         <div>
           <div className="panel-kicker">Replay</div>
@@ -410,7 +664,7 @@ function ReviewDetailPanel({
         <div className="sub-metrics-group">
           <span className="group-label">误判/退出</span>
           <div className="sub-metrics-row">
-            <span>Outcome <strong>{textValue(replay.outcome_label, "-")}</strong></span>
+            <span>Outcome <strong>{outcomeStatusLabel(replay.outcome_label, "-")}</strong></span>
             <span>退出原因 <strong>{textValue(replay.exit_reason, "-")}</strong></span>
             <span>归因类别 <strong>{textValue(replay.false_positive_category_label, "-")}</strong></span>
             <span>误判原因 <strong>{textValue(replay.false_positive_reason, "-")}</strong></span>
@@ -457,24 +711,24 @@ function ReviewDetailPanel({
             <div className="sub-metrics-group">
               <span className="group-label">筛选</span>
               <div className="sub-metrics-row">
-                <button type="button" className="btn" onClick={onToggleFalsePositive}>
+                <button type="button" className="btn" onClick={handleToggleFalsePositive}>
                   {filterFalsePositive ? "仅看误判中" : "切到仅看误判"}
                 </button>
-                <select value={reasonFilter} onChange={(event) => onReasonFilterChange(event.target.value)}>
+                <select value={reasonFilter} onChange={(event) => handleReasonFilterChange(event.target.value)}>
                   {reasonOptions.map((item) => (
                     <option key={item} value={item}>
                       {item === "all" ? "全部原因" : item}
                     </option>
                   ))}
                 </select>
-                <select value={categoryFilter} onChange={(event) => onCategoryFilterChange(event.target.value)}>
+                <select value={categoryFilter} onChange={(event) => handleCategoryFilterChange(event.target.value)}>
                   {categoryOptions.map((item) => (
                     <option key={item} value={item}>
                       {item === "all" ? "全部类别" : categoryLabels.get(item) ?? item}
                     </option>
                   ))}
                 </select>
-                <button type="button" className="btn" onClick={() => exportReplayRows(filteredRows)}>
+                <button type="button" className="btn" onClick={handleExportRows}>
                   导出当前筛选
                 </button>
               </div>
@@ -495,7 +749,7 @@ function ReviewDetailPanel({
             </div>
           </div>
           <div className="bt-breakdown-table" style={{ marginTop: 16 }}>
-            <h4>复盘样本</h4>
+            <h4>复盘样本 <small>当前筛选 {filteredRows.length} 条，导出会包含这一批完整结果</small></h4>
             <table>
               <thead>
                 <tr>
@@ -510,14 +764,14 @@ function ReviewDetailPanel({
                 </tr>
               </thead>
               <tbody>
-                {filteredRows.slice(0, 20).map((row) => (
+                {filteredRows.map((row) => (
                   <tr key={row.recommendation_id}>
                     <td>{row.trade_date}</td>
                     <td>{row.name || row.symbol}</td>
                     <td className={aShareDirectionClass(row.net_return_pct)}>
                       {row.net_return_pct == null ? "-" : `${row.net_return_pct.toFixed(2)}%`}
                     </td>
-                    <td>{textValue(row.outcome_label, "-")}</td>
+                    <td>{outcomeStatusLabel(row.outcome_label, "-")}</td>
                     <td>{textValue(row.false_positive_category_label, "-")}</td>
                     <td>{textValue(row.false_positive_reason, "-")}</td>
                     <td>{textValue(row.trigger_condition_text, "-")}</td>
@@ -545,35 +799,47 @@ function ValidationWorkspace({ data }: { data: DashboardOverview }) {
         </div>
         <strong>{businessStatusLabel(data.validation.last_status)}</strong>
       </section>
-      <div className="focus-grid">
-        <QualityScorecardPanel scorecard={data.quality_scorecard} />
-        <ValidationPanel validation={data.validation} />
-        <section className="cockpit-panel">
-          <div className="panel-header">
-            <div>
-              <div className="panel-kicker">Gate</div>
-              <h2>门禁摘要</h2>
+      <div className="validation-workspace-layout">
+        <div className="validation-main-stack">
+          <QualityScorecardPanel scorecard={data.quality_scorecard} />
+          <EvaluationBreakdownPanel />
+        </div>
+        <div className="validation-main-stack">
+          <BacktestPanel />
+        </div>
+        <aside className="validation-side-stack">
+          <section className="cockpit-panel validation-gate-card">
+            <div className="panel-header">
+              <div>
+                <div className="panel-kicker">Gate</div>
+                <h2>门禁摘要</h2>
+              </div>
             </div>
-          </div>
-          <div className="metric-grid">
-            <span>高风险<strong className="negative">{alerts?.high ?? 0}</strong></span>
-            <span>中风险<strong>{alerts?.medium ?? 0}</strong></span>
-            <span>低风险<strong>{alerts?.low ?? 0}</strong></span>
-            <span>运行状态<strong>{businessStatusLabel(data.current_run.status)}</strong></span>
-            <span>系统总分<strong>{textValue(data.quality_scorecard.overall_score, "-")}</strong></span>
-          </div>
-        </section>
+            <div className="metric-grid">
+              <span>高风险<strong className="negative">{alerts?.high ?? 0}</strong></span>
+              <span>中风险<strong>{alerts?.medium ?? 0}</strong></span>
+              <span>低风险<strong>{alerts?.low ?? 0}</strong></span>
+              <span>运行状态<strong>{runStatusLabel(data.current_run.status)}</strong></span>
+              <span>系统总分<strong>{textValue(data.quality_scorecard.overall_score, "-")}</strong></span>
+            </div>
+          </section>
+          <ValidationPanel validation={data.validation} />
+          <StatusStream title="验证消息" items={alerts?.messages ?? []} empty="暂无验证消息" />
+          <TemporalConsistencyPanel />
+          <BacktestEvaluationPanel />
+        </aside>
       </div>
-      <StatusStream title="验证消息" items={alerts?.messages ?? []} empty="暂无验证消息" />
-      <TemporalConsistencyPanel />
-      <EvaluationBreakdownPanel />
-      <BacktestPanel />
-      <BacktestEvaluationPanel />
     </div>
   );
 }
 
-function ExplanationCard({ item }: { item: CockpitRecommendation }) {
+function ExplanationCard({
+  item,
+  onOpenReplay,
+}: {
+  item: CockpitRecommendation;
+  onOpenReplay: (recommendationId: string) => void;
+}) {
   return (
     <article className={`cockpit-panel explanation-card risk-${item.risk_level}`}>
       <div className="candidate-main">
@@ -585,16 +851,29 @@ function ExplanationCard({ item }: { item: CockpitRecommendation }) {
       </div>
       <p>{item.rationale || "暂无解释"}</p>
       <div className="mini-table">
-        <span>风险<strong>{businessStatusLabel(item.risk_level)}</strong></span>
+        <span>风险<strong>{riskLevelLabel(item.risk_level)}</strong></span>
         <span>共识<strong>{item.consensus_label}</strong></span>
-        <span>报价源<strong>{item.data_quality.quote_source_count}</strong></span>
+        <span title={quoteSourceTitle(item.data_quality.quote_source_count)}>报价源<strong>{quoteSourceText(item.data_quality.quote_source_count)}</strong></span>
         <span>日K<strong>{businessStatusLabel(item.data_quality.kline_status)}</strong></span>
+      </div>
+      <div className="candidate-card-actions">
+        <button type="button" className="btn primary" onClick={() => onOpenReplay(item.recommendation_id)}>
+          进入复盘
+        </button>
       </div>
     </article>
   );
 }
 
-function StatusStream({ title, items, empty }: { title: string; items: string[]; empty: string }) {
+function quoteSourceText(count: number) {
+  return count > 0 ? String(count) : "待标注";
+}
+
+function quoteSourceTitle(count: number) {
+  return count > 0 ? `当前候选记录包含 ${count} 个报价源` : "当前候选记录未携带单票数据源明细";
+}
+
+function StatusStream({ title, items, empty, note }: { title: string; items: string[]; empty: string; note?: string }) {
   return (
     <section className="cockpit-panel">
       <div className="panel-header">
@@ -604,8 +883,9 @@ function StatusStream({ title, items, empty }: { title: string; items: string[];
         </div>
       </div>
       <div className="alert-stream">
-        {items.length ? items.slice(0, 8).map((item) => <span key={item}>{item}</span>) : <span>{empty}</span>}
+        {items.length ? items.slice(0, 8).map((item, index) => <span key={`${title}-${index}-${item}`}>{item}</span>) : <span>{empty}</span>}
       </div>
+      {note ? <p className="stream-note">{note}</p> : null}
     </section>
   );
 }

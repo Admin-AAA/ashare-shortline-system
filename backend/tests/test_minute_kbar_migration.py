@@ -135,3 +135,76 @@ def test_migrate_minute_kbars_idempotent():
         # 确认 freq 列仍然存在且只有一个
         cols = {c["name"] for c in inspector.get_columns("minute_kbars")}
         assert "freq" in cols, "第二次迁移后 freq 列应仍然存在"
+
+
+def test_ensure_column_type_upgrades_recommendation_feature_snapshot_to_longtext():
+    """已有库若仍是 TEXT，应能升级推荐特征快照字段容量。"""
+    from app.db.init_db import _ensure_column_type
+
+    class TextType:
+        pass
+
+    executed: list[str] = []
+
+    class Connection:
+        dialect = type("Dialect", (), {"name": "mysql"})()
+
+        def execute(self, statement):
+            executed.append(str(statement))
+
+        def commit(self):
+            executed.append("COMMIT")
+
+    class Inspector:
+        def get_columns(self, table):
+            assert table == "recommendations"
+            return [{"name": "feature_snapshot_json", "type": TextType()}]
+
+    _ensure_column_type(
+        Connection(),
+        Inspector(),
+        "recommendations",
+        "feature_snapshot_json",
+        "LONGTEXT NOT NULL",
+        expected_type_names={"LONGTEXT"},
+    )
+
+    assert executed == [
+        "ALTER TABLE recommendations MODIFY COLUMN feature_snapshot_json LONGTEXT NOT NULL",
+        "COMMIT",
+    ]
+
+
+def test_ensure_column_type_keeps_existing_longtext_unchanged():
+    """字段已经是 LONGTEXT 时，启动修补应保持幂等。"""
+    from app.db.init_db import _ensure_column_type
+
+    class LONGTEXT:
+        pass
+
+    executed: list[str] = []
+
+    class Connection:
+        dialect = type("Dialect", (), {"name": "mysql"})()
+
+        def execute(self, statement):
+            executed.append(str(statement))
+
+        def commit(self):
+            executed.append("COMMIT")
+
+    class Inspector:
+        def get_columns(self, table):
+            assert table == "recommendations"
+            return [{"name": "feature_snapshot_json", "type": LONGTEXT()}]
+
+    _ensure_column_type(
+        Connection(),
+        Inspector(),
+        "recommendations",
+        "feature_snapshot_json",
+        "LONGTEXT NOT NULL",
+        expected_type_names={"LONGTEXT"},
+    )
+
+    assert executed == []

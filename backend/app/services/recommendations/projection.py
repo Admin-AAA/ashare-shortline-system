@@ -156,6 +156,7 @@ def build_run_progress(run: Any) -> RunProgress:
         phase=_get(run, "progress_phase") or _get(run, "checkpoint_phase"),
         progress_pct=_get(run, "progress_pct"),
         message=_get(run, "progress_message", "") or "",
+        error_message=_get(run, "error_message"),
         heartbeat_stale=bool(_get(run, "is_stale", False)),
         resumable=status in {"interrupted", "failed"},
     )

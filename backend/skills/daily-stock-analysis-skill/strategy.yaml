@@ -8,6 +8,16 @@ meta:
   style: technical-score
   version: 0.1.0
   holding_days: [1, 3, 5]
+  default_preset_groups:
+    formal_opening:
+      weight: 1.15
+      sort_order: 30
+    formal_trend_core:
+      weight: 0.95
+      sort_order: 30
+    experiment_single_factor:
+      weight: 1.0
+      sort_order: 10
 
 contract:
   type: strategy

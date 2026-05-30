@@ -43,15 +43,21 @@ class DummySettings:
     concept_sector_sources = "tushare"
     capital_flow_sources = "tushare"
     dragon_tiger_sources = "tushare"
-    news_sources = ""
+    news_sources = "tushare,eastmoney"
     data_provider = "tushare"
     tushare_token = ""
 
 
 class NewsSettings:
     enable_news_fetch = True
-    news_sources = "eastmoney"
+    news_sources = "tushare,eastmoney"
     news_cache_ttl_seconds = 172800
+
+
+class ConceptSettings:
+    enable_concept_sector_fetch = True
+    concept_sector_sources = "tushare"
+    concept_member_fetch_timeout_seconds = 1.0
 
 
 def _quote(code: str, source: str, price: float, pct: float = 3.0) -> dict:
@@ -175,24 +181,25 @@ def test_refresh_news_for_codes_fetches_and_filters_items(monkeypatch):
 
     def fake_fetch_news(source, code, _settings, trade_date=None):
         calls.append((source, code, trade_date))
+        suffix = "ann" if source == "tushare" else "news"
         return [
             {
                 "source": source,
-                "article_id": f"{code}_recent",
+                "article_id": f"{code}_{suffix}",
                 "code": code,
-                "announce_date": "2026-05-27",
-                "title": "业绩预增公告",
-                "category": "announcement",
+                "announce_date": "2026-05-23" if source == "tushare" else "2026-05-27",
+                "title": "业绩预增公告" if source == "tushare" else "签约项目新闻",
+                "category": "announcement" if source == "tushare" else "news",
                 "sentiment": "positive",
                 "is_risk_warning": False,
             },
             {
                 "source": source,
-                "article_id": f"{code}_future",
+                "article_id": f"{code}_{suffix}_future",
                 "code": code,
                 "announce_date": "2026-05-28",
                 "title": "未来公告",
-                "category": "announcement",
+                "category": "announcement" if source == "tushare" else "news",
                 "sentiment": "neutral",
                 "is_risk_warning": False,
             },
@@ -206,16 +213,41 @@ def test_refresh_news_for_codes_fetches_and_filters_items(monkeypatch):
     result = market_pool.refresh_news_for_codes(db, ["000001", "000002"], trade_date="2026-05-27")
 
     assert calls == [
+        ("tushare", "000001", "2026-05-27"),
         ("eastmoney", "000001", "2026-05-27"),
+        ("tushare", "000002", "2026-05-27"),
         ("eastmoney", "000002", "2026-05-27"),
     ]
     assert set(result) == {"000001", "000002"}
     assert result.checked_codes == ["000001", "000002"]
-    assert all(len(items) == 1 for items in result.values())
-    assert {row["article_id"] for batch in persisted for row in batch} == {"000001_recent", "000002_recent"}
+    assert all(len(items) == 2 for items in result.values())
+    assert {row["article_id"] for batch in persisted for row in batch} == {
+        "000001_ann",
+        "000001_news",
+        "000002_ann",
+        "000002_news",
+    }
 
 
 def test_refresh_news_for_codes_tracks_checked_codes_without_failed_codes(monkeypatch):
+    db = SimpleNamespace(commit=lambda: None)
+
+    def fake_fetch_news(source, code, _settings, trade_date=None):
+        if source == "tushare":
+            raise RuntimeError("source timeout")
+        return []
+
+    monkeypatch.setattr(market_pool, "get_settings", lambda: NewsSettings())
+    monkeypatch.setattr(market_pool, "enabled_sources", lambda _db, _source_type, sources: sources)
+    monkeypatch.setattr(market_pool, "_fetch_news", fake_fetch_news)
+
+    result = market_pool.refresh_news_for_codes(db, ["000001", "000002"], trade_date="2026-05-27")
+
+    assert result == {}
+    assert result.checked_codes == ["000001", "000002"]
+
+
+def test_refresh_news_for_codes_excludes_code_when_all_sources_fail(monkeypatch):
     db = SimpleNamespace(commit=lambda: None)
 
     def fake_fetch_news(source, code, _settings, trade_date=None):
@@ -231,6 +263,55 @@ def test_refresh_news_for_codes_tracks_checked_codes_without_failed_codes(monkey
 
     assert result == {}
     assert result.checked_codes == ["000001"]
+
+
+def test_refresh_concept_sectors_times_out_member_fetch(monkeypatch):
+    class FakeFuture:
+        def cancel(self):
+            return True
+
+    class FakePool:
+        def __init__(self, max_workers):
+            self.max_workers = max_workers
+            self.shutdown_args = None
+
+        def submit(self, *_args, **_kwargs):
+            return FakeFuture()
+
+        def shutdown(self, **kwargs):
+            self.shutdown_args = kwargs
+
+    fake_pool = FakePool(max_workers=6)
+    persisted: list[list[dict]] = []
+    logs: list[tuple[str, float, int, int]] = []
+    db = SimpleNamespace(
+        scalar=lambda *_args, **_kwargs: 0,
+        commit=lambda: None,
+    )
+
+    def fake_as_completed(_futures, timeout=None):
+        raise TimeoutError()
+
+    monkeypatch.setattr(market_pool, "get_settings", lambda: ConceptSettings())
+    monkeypatch.setattr(market_pool, "enabled_sources", lambda _db, _source_type, sources: sources)
+    monkeypatch.setattr(
+        market_pool,
+        "_refresh_aux_data",
+        lambda *_args, **_kwargs: [
+            {"sector_code": "885001", "sector_name": "机器人", "heat_rank": 1, "trade_date": "2026-05-27"}
+        ],
+    )
+    monkeypatch.setattr(market_pool, "ThreadPoolExecutor", lambda max_workers: fake_pool)
+    monkeypatch.setattr(market_pool, "as_completed", fake_as_completed)
+    monkeypatch.setattr(market_pool, "_persist_concept_sector_stocks", lambda _db, rows: persisted.append(rows))
+    monkeypatch.setattr(market_pool.logger, "warning", lambda msg, *args: logs.append((msg, *args)))
+
+    rows = market_pool.refresh_concept_sectors(db, trade_date="2026-05-27")
+
+    assert rows[0]["sector_code"] == "885001"
+    assert persisted == []
+    assert fake_pool.shutdown_args == {"wait": False, "cancel_futures": True}
+    assert logs and "概念板块成分股拉取超过" in logs[0][0]
 
 
 def test_load_auxiliary_for_stocks_uses_same_trade_date_rows_after_ttl(monkeypatch):
@@ -400,14 +481,23 @@ def test_persist_stock_quotes_uses_bulk_upsert_and_batch_inactivation():
                 "quality_score": 90.0,
                 "freshness_status": "fresh",
             },
+            {
+                **_quote("000003", "tushare", 30.0),
+                "trade_date": "2026-05-27",
+                "raw_sources": ["tushare"],
+                "source_count": 1,
+                "quality_score": 92.0,
+                "freshness_status": "fresh",
+            },
         ],
+        batch_size=2,
     )
 
     assert len(executed) == 3
     rendered = [str(stmt) for stmt in executed]
-    assert "INSERT INTO stock_quotes" in rendered[0]
-    assert rendered[1].startswith("UPDATE stock_quotes")
-    assert rendered[2].startswith("UPDATE stock_quotes")
+    assert rendered[0].startswith("UPDATE stock_quotes")
+    assert "INSERT INTO stock_quotes" in rendered[1]
+    assert "INSERT INTO stock_quotes" in rendered[2]
 
 
 def test_persist_stock_quotes_inactivates_stale_active_codes_from_prior_refresh(db):
@@ -1186,6 +1276,36 @@ def test_local_pool_status_reports_short_history_separately(db, monkeypatch):
     assert readiness["kline"]["missing_count"] == 0
     assert readiness["kline"]["short_history_count"] == 1
     assert "短历史 1 只" in readiness["messages"][1]
+
+
+def test_local_pool_status_treats_new_listing_short_history_as_maturity_risk(db, monkeypatch):
+    settings = DummySettings()
+    settings.market_candidate_count = 0
+    codes = _codes(2)
+    quotes = [_quote(codes[0], "tushare", 10.00), _quote(codes[1], "tushare", 20.00)]
+
+    readiness = _readiness(
+        db,
+        monkeypatch,
+        settings,
+        quotes,
+        {
+            codes[0]: {"bar_count": 35, "latest_trade_date": "2026-05-27"},
+            codes[1]: {
+                "bar_count": 22,
+                "latest_trade_date": "2026-05-27",
+                "first_trade_date": "2026-04-24",
+                "list_date": "2026-04-24",
+            },
+        },
+    )
+
+    assert readiness["status"] == "warning"
+    assert readiness["kline"]["ready_count"] == 1
+    assert readiness["kline"]["short_history_count"] == 1
+    assert readiness["kline"]["immature_history_count"] == 1
+    assert "当前存在数据缺口：短历史" not in " ".join(readiness["messages"])
+    assert "上市未满30根日K" in " ".join(readiness["messages"])
 
 
 def test_local_pool_status_counts_low_liquidity_as_available_universe(db, monkeypatch):

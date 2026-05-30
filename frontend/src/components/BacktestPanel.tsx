@@ -2,12 +2,14 @@ import { memo, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { Eye, History, Loader2, Play, RefreshCw, TrendingUp, AlertTriangle } from "lucide-react";
 import { api } from "../api/client";
-import type { AccuracyGateSummary, AccuracyPolicyAudit, MinutePrepResult, ScheduledTaskRun } from "../types";
+import type { AccuracyGateSummary, AccuracyPolicyAudit, MinutePrepResult, ScheduledTaskRun, SkillSummary } from "../types";
 import { aShareDirectionClass, businessStatusLabel } from "../utils/display";
 
 type BacktestResult = {
   strategy_id?: string;
   strategy_name?: string;
+  action?: string;
+  minute_gate?: MinutePrepResult["minute_gate"];
   status: string;
   dates_scanned: number;
   dates_succeeded: number;
@@ -233,6 +235,8 @@ type BacktestResult = {
   };
 };
 
+type MinuteAction = "preview" | "remediate" | null;
+
 type BacktestHistoryItem = {
   backtest_id: string;
   skill_id: string;
@@ -388,35 +392,62 @@ type ValidationProfile = {
 };
 
 export default memo(function BacktestPanel() {
-  const [strategyId, setStrategyId] = useState("overnight-holding-method");
+  const [strategyId, setStrategyId] = useState("");
   const [startDate, setStartDate] = useState("2026-05-19");
   const [endDate, setEndDate] = useState("2026-05-22");
   const [runMode, setRunMode] = useState("experiment");
   const [horizonDays, setHorizonDays] = useState(5);
   const [scoreLine, setScoreLine] = useState(72);
+  const [skills, setSkills] = useState<SkillSummary[]>([]);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [skillsError, setSkillsError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState("");
   const [minutePrep, setMinutePrep] = useState<MinutePrepResult | null>(null);
-  const [minuteLoading, setMinuteLoading] = useState(false);
+  const [minuteAction, setMinuteAction] = useState<MinuteAction>(null);
   const [minuteRepairRuns, setMinuteRepairRuns] = useState<ScheduledTaskRun[]>([]);
   const [history, setHistory] = useState<BacktestHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [selectedBacktestId, setSelectedBacktestId] = useState<string | null>(null);
+  const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
   const [versionMatrix, setVersionMatrix] = useState<BacktestVersionMatrixItem[]>([]);
   const [versionMatrixLoading, setVersionMatrixLoading] = useState(false);
   const [versionMatrixError, setVersionMatrixError] = useState<string | null>(null);
+  const backtestableSkills = skills.filter((skill) => skill.enabled && skill.has_executable_contract);
+  const selectedSkill = backtestableSkills.find((skill) => skill.skill_id === strategyId);
+  const backtestActions = selectedSkill?.backtest_adapter_actions ?? [];
+  const supportsMinutePreview = backtestActions.includes("preview_minute_gate");
+  const supportsMinuteRemediation = backtestActions.includes("remediate_minute_gaps");
+  const minuteLoading = minuteAction !== null;
 
   useEffect(() => {
+    loadSkills();
     loadBacktestHistory();
     loadVersionMatrix();
     loadMinuteRepairRuns();
   }, []);
 
-  async function loadBacktestHistory() {
+  async function loadSkills() {
+    setSkillsLoading(true);
+    setSkillsError(null);
+    try {
+      const data = await api.skills();
+      setSkills(data);
+    } catch (e: any) {
+      setSkillsError(e.message || "读取策略列表失败");
+      setSkills([]);
+    } finally {
+      setSkillsLoading(false);
+    }
+  }
+
+  async function loadBacktestHistory(showFeedback = false) {
     setHistoryLoading(true);
     setHistoryError(null);
+    if (showFeedback) setActionMessage("正在刷新历史回测...");
     try {
       const resp = await fetch("/api/runs/backtests?limit=12");
       if (!resp.ok) {
@@ -425,16 +456,19 @@ export default memo(function BacktestPanel() {
       }
       const data: BacktestHistoryItem[] = await resp.json();
       setHistory(data);
+      if (showFeedback) setActionMessage(`历史回测已刷新：${data.length} 条`);
     } catch (e: any) {
       setHistoryError(e.message || "读取历史回测失败");
+      if (showFeedback) setActionMessage("");
     } finally {
       setHistoryLoading(false);
     }
   }
 
-  async function loadVersionMatrix() {
+  async function loadVersionMatrix(showFeedback = false) {
     setVersionMatrixLoading(true);
     setVersionMatrixError(null);
+    if (showFeedback) setActionMessage("正在刷新版本矩阵...");
     try {
       const resp = await fetch("/api/runs/backtests/version-matrix?limit=12");
       if (!resp.ok) {
@@ -443,8 +477,10 @@ export default memo(function BacktestPanel() {
       }
       const data: BacktestVersionMatrixItem[] = await resp.json();
       setVersionMatrix(data);
+      if (showFeedback) setActionMessage(`版本矩阵已刷新：${data.length} 条`);
     } catch (e: any) {
       setVersionMatrixError(e.message || "读取版本矩阵失败");
+      if (showFeedback) setActionMessage("");
     } finally {
       setVersionMatrixLoading(false);
     }
@@ -460,8 +496,9 @@ export default memo(function BacktestPanel() {
   }
 
   async function loadBacktestDetail(backtestId: string) {
-    setRunning(true);
+    setDetailLoadingId(backtestId);
     setError(null);
+    setActionMessage("正在读取历史回测...");
     try {
       const resp = await fetch(`/api/runs/backtests/${backtestId}`);
       if (!resp.ok) {
@@ -476,19 +513,20 @@ export default memo(function BacktestPanel() {
       setSelectedBacktestId(backtestId);
       setStartDate(data.date_from);
       setEndDate(data.date_to);
-      if (data.skill_id === "overnight-holding-method") {
-        setStrategyId(data.skill_id);
-      }
+      setStrategyId(data.skill_id || "");
+      setActionMessage(`已读取历史回测：${data.strategy_name} · ${data.date_from} ~ ${data.date_to}`);
     } catch (e: any) {
       setError(e.message || "读取回测详情失败");
+      setActionMessage("");
     } finally {
-      setRunning(false);
+      setDetailLoadingId(null);
     }
   }
 
   async function runBacktest() {
     setRunning(true);
     setError(null);
+    setActionMessage("正在运行回测...");
     setResult(null);
     try {
       const resp = await fetch("/api/runs/backtest", {
@@ -512,16 +550,24 @@ export default memo(function BacktestPanel() {
       setSelectedBacktestId(null);
       loadBacktestHistory();
       loadVersionMatrix();
+      if (data.status === "insufficient_minute_coverage") {
+        setMinutePrep(data as unknown as MinutePrepResult);
+        setActionMessage(`回测暂停：${data.minute_gate?.reason ?? "分钟线覆盖不足，先做分钟预检或补数"}`);
+      } else {
+        setActionMessage(`回测完成：${data.total_recommendations} 条推荐，${data.labeled_count} 条已标注`);
+      }
     } catch (e: any) {
       setError(e.message || "未知错误");
+      setActionMessage("");
     } finally {
       setRunning(false);
     }
   }
 
   async function previewMinuteGate() {
-    setMinuteLoading(true);
+    setMinuteAction("preview");
     setError(null);
+    setActionMessage("正在预检分钟数据...");
     try {
       const data = await api.previewMinuteGate({
         start_date: startDate,
@@ -529,16 +575,19 @@ export default memo(function BacktestPanel() {
         strategy_id: strategyId,
       });
       setMinutePrep(data);
+      setActionMessage(minutePrepSummary(data, "分钟预检完成"));
     } catch (e: any) {
       setError(e.message || "分钟预检失败");
+      setActionMessage("");
     } finally {
-      setMinuteLoading(false);
+      setMinuteAction(null);
     }
   }
 
   async function remediateMinuteGaps() {
-    setMinuteLoading(true);
+    setMinuteAction("remediate");
     setError(null);
+    setActionMessage("正在修复分钟缺口...");
     try {
       const data = await api.remediateMinuteGaps({
         start_date: startDate,
@@ -547,10 +596,12 @@ export default memo(function BacktestPanel() {
       });
       setMinutePrep(data);
       await loadMinuteRepairRuns();
+      setActionMessage(minuteRemediationSummary(data));
     } catch (e: any) {
       setError(e.message || "分钟补数失败");
+      setActionMessage("");
     } finally {
-      setMinuteLoading(false);
+      setMinuteAction(null);
     }
   }
 
@@ -567,10 +618,19 @@ export default memo(function BacktestPanel() {
         <div className="backtest-controls">
           <div className="bt-field">
             <label>策略</label>
-            <select value={strategyId} onChange={(e) => setStrategyId(e.target.value)}>
-              <option value="overnight-holding-method">隔夜持股法</option>
+            <select value={strategyId} onChange={(e) => {
+              setStrategyId(e.target.value);
+              setMinutePrep(null);
+            }}>
               <option value="">通用推荐流水线</option>
+              {backtestableSkills.map((skill) => (
+                <option key={skill.skill_id} value={skill.skill_id}>
+                  {skill.name}
+                </option>
+              ))}
             </select>
+            {skillsLoading ? <small>读取策略列表...</small> : null}
+            {skillsError ? <small className="negative">{skillsError}</small> : null}
           </div>
           <div className="bt-field">
             <label>起始日期</label>
@@ -616,27 +676,36 @@ export default memo(function BacktestPanel() {
             {running ? <Loader2 size={14} className="spin" /> : <Play size={14} />}
             {running ? "回测中..." : "开始回测"}
           </button>
-          {strategyId === "overnight-holding-method" ? (
+          {supportsMinutePreview || supportsMinuteRemediation ? (
             <>
-              <button className="btn" onClick={previewMinuteGate} disabled={minuteLoading}>
-                {minuteLoading ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
-                分钟预检
-              </button>
-              <button className="btn" onClick={remediateMinuteGaps} disabled={minuteLoading}>
-                {minuteLoading ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
-                修复分钟缺口
-              </button>
+              {supportsMinutePreview ? (
+                <button className="btn" onClick={previewMinuteGate} disabled={minuteLoading || running}>
+                  {minuteAction === "preview" ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+                  {minuteAction === "preview" ? "预检中..." : "分钟预检"}
+                </button>
+              ) : null}
+              {supportsMinuteRemediation ? (
+                <button className="btn" onClick={remediateMinuteGaps} disabled={minuteLoading || running}>
+                  {minuteAction === "remediate" ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+                  {minuteAction === "remediate" ? "补数中..." : "修复分钟缺口"}
+                </button>
+              ) : null}
             </>
           ) : null}
-          <button className="btn" onClick={loadBacktestHistory} disabled={historyLoading}>
+          <button className="btn" onClick={() => void loadBacktestHistory(true)} disabled={historyLoading}>
             {historyLoading ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
             刷新历史
           </button>
-          <button className="btn" onClick={loadVersionMatrix} disabled={versionMatrixLoading}>
+          <button className="btn" onClick={() => void loadVersionMatrix(true)} disabled={versionMatrixLoading}>
             {versionMatrixLoading ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
             刷新矩阵
           </button>
         </div>
+        {actionMessage ? (
+          <div className="run-action-feedback positive backtest-action-feedback" role="status" aria-live="polite">
+            {actionMessage}
+          </div>
+        ) : null}
 
         <div className="bt-breakdown">
           <div className="bt-history-title">
@@ -665,7 +734,7 @@ export default memo(function BacktestPanel() {
             source_status: item.data_coverage?.tushare_permission_denied
               ? "Tushare无权限/备用源"
               : item.data_coverage?.tushare_stk_mins_status ?? "-",
-            active: selectedBacktestId === item.backtest_id ? "当前" : "",
+            active: detailLoadingId === item.backtest_id ? "读取中" : selectedBacktestId === item.backtest_id ? "当前" : "",
           }))} columns={[
             { key: "created", label: "时间" },
             { key: "strategy_name", label: "策略" },
@@ -685,8 +754,15 @@ export default memo(function BacktestPanel() {
             { key: "source_status", label: "数据源" },
             { key: "active", label: "状态" },
             { key: "backtest_id", label: "操作", format: (id: string) => (
-              <button className="icon-button" onClick={() => loadBacktestDetail(id)} disabled={running} title="查看历史回测">
-                <Eye size={14} />
+              <button
+                className="icon-button table-action-button"
+                onClick={() => loadBacktestDetail(id)}
+                disabled={running || detailLoadingId === id}
+                title="查看历史回测"
+                aria-label="查看历史回测"
+              >
+                {detailLoadingId === id ? <Loader2 size={14} className="spin" /> : <Eye size={14} />}
+                <span>{selectedBacktestId === id ? "当前" : detailLoadingId === id ? "读取中" : "查看"}</span>
               </button>
             ) },
           ]} />
@@ -766,21 +842,45 @@ export default memo(function BacktestPanel() {
             <BreakdownTable title="分钟门禁准备" data={[
               {
                 status: businessStatusLabel(minutePrep.status ?? "-"),
-                candidate_coverage: `${Number((minutePrep.data_coverage ?? {}).minute_ready_candidate_count ?? 0)}/${Number((minutePrep.data_coverage ?? {}).candidate_count ?? 0)}`,
-                candidate_rate: (minutePrep.data_coverage ?? {}).candidate_minute_coverage_rate ?? null,
-                benchmark_rate: (minutePrep.data_coverage ?? {}).benchmark_minute_coverage_rate ?? null,
-                gate_reason: (minutePrep.minute_gate ?? {}).reason ?? "-",
+                window: rangeText(minutePrep.strategy_window?.start_date, minutePrep.strategy_window?.end_date),
+                candidate_coverage: minuteCoverageText(minutePrep),
+                candidate_missing: minuteCoverage(minutePrep)?.minute_missing_candidate_count ?? minuteGate(minutePrep)?.missing_pair_count ?? 0,
+                benchmark_missing: (minuteGate(minutePrep)?.benchmark_missing_dates ?? []).length,
+                candidate_rate: minuteCoverage(minutePrep)?.candidate_minute_coverage_rate ?? minuteGate(minutePrep)?.coverage_rate ?? null,
+                benchmark_rate: minuteCoverage(minutePrep)?.benchmark_minute_coverage_rate ?? minuteGate(minutePrep)?.benchmark_coverage_rate ?? null,
+                gate_passed: minuteGate(minutePrep)?.passed ?? null,
+                gate_reason: minuteGate(minutePrep)?.reason ?? "-",
               },
             ]} columns={[
               { key: "status", label: "状态" },
+              { key: "window", label: "区间" },
               { key: "candidate_coverage", label: "候选覆盖" },
+              { key: "candidate_missing", label: "候选缺口" },
+              { key: "benchmark_missing", label: "基准缺口" },
               { key: "candidate_rate", label: "候选覆盖率", format: nullablePercent },
               { key: "benchmark_rate", label: "基准覆盖率", format: nullablePercent },
+              { key: "gate_passed", label: "门禁", format: nullableYesNo },
               { key: "gate_reason", label: "门禁判断" },
             ]} />
-            {(minutePrep.minute_gate?.notes ?? []).length ? (
-              <BreakdownTable title="门禁说明" data={(minutePrep.minute_gate?.notes ?? []).map((note: string) => ({ note }))} columns={[
+            {(minuteGate(minutePrep)?.notes ?? []).length ? (
+              <BreakdownTable title="门禁说明" data={(minuteGate(minutePrep)?.notes ?? []).map((note: string) => ({ note }))} columns={[
                 { key: "note", label: "说明" },
+              ]} />
+            ) : null}
+            {(minuteGate(minutePrep)?.date_summaries ?? []).length ? (
+              <BreakdownTable title="逐日分钟预检" data={(minuteGate(minutePrep)?.date_summaries ?? []).map((item) => ({
+                ...item,
+                status: businessStatusLabel(item.status),
+                candidate_coverage: `${item.minute_ready_candidate_count ?? 0}/${item.candidate_count ?? 0}`,
+                benchmark_minute_covered: item.benchmark_minute_covered ?? null,
+                missing_minute_codes: (item.missing_minute_codes ?? []).join(" / ") || "-",
+              }))} columns={[
+                { key: "trade_date", label: "交易日" },
+                { key: "status", label: "状态" },
+                { key: "candidate_coverage", label: "候选覆盖" },
+                { key: "minute_missing_candidate_count", label: "候选缺口" },
+                { key: "benchmark_minute_covered", label: "基准分钟", format: nullableYesNo },
+                { key: "missing_minute_codes", label: "缺口样例" },
               ]} />
             ) : null}
             {(minutePrep.actions ?? []).length ? (
@@ -976,10 +1076,10 @@ export default memo(function BacktestPanel() {
                     样本数低于 30 笔，当前结论为低置信度
                   </div>
                 ) : null}
-                {result.aggregate_metrics.accuracy_policy && !result.aggregate_metrics.accuracy_policy.matches_reported_accuracy ? (
+                {(result.aggregate_metrics.accuracy_gate_summary?.legacy_accuracy_label_mismatch_count ?? 0) > 0 ? (
                   <div className="bt-error">
                     <AlertTriangle size={14} />
-                    显式准确标记与三道硬条件不一致，需复核 {result.aggregate_metrics.accuracy_gate_summary?.manual_override_count ?? 0} 条推荐
+                    历史准确标签与三道硬条件不一致，已按硬条件计算核心准确率，需复核 {result.aggregate_metrics.accuracy_gate_summary?.legacy_accuracy_label_mismatch_count ?? 0} 条
                   </div>
                 ) : null}
                 {(result.aggregate_metrics.false_positive_notes?.length ?? 0) > 0 && (
@@ -1473,6 +1573,10 @@ function selectedTimeSplit(comparison: BacktestResult["comparison"]) {
 }
 
 function percent(v: number) {
+  return v == null ? "-" : `${(Number(v) * 100).toFixed(1)}%`;
+}
+
+function formatPercent(v: number | null | undefined) {
   return v == null ? "-" : `${(Number(v) * 100).toFixed(1)}%`;
 }
 

@@ -683,7 +683,7 @@ class Recommendation(Base):
     risk_tags_json: Mapped[str] = mapped_column(Text, default="[]")
     info_tags_json: Mapped[str] = mapped_column(Text, default="[]")
     recent_repeat: Mapped[bool] = mapped_column(Boolean, default=False)
-    feature_snapshot_json: Mapped[str] = mapped_column(Text, default="{}")
+    feature_snapshot_json: Mapped[str] = mapped_column(LONGTEXT().with_variant(Text(), "sqlite"), default="{}")
     market_context_json: Mapped[str] = mapped_column(Text, default="{}")
     skill_breakdown_json: Mapped[str] = mapped_column(Text, default="[]")
     agent_summary_json: Mapped[str] = mapped_column(Text, default="{}")

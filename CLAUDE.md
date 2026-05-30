@@ -9,55 +9,70 @@
 - 缺什么数据就补什么数据；本地数据池按增量方式维护，可以为完成系统目标主动补充、更新、校验本地数据。
 - 代码结构不合理时可以直接重构，不需要为了保留旧实现而绕路。
 - 允许主动修改代码、调整模块边界、重排文件结构、改造数据流和内部契约，只要这样更符合系统长期架构。
-- 在任务执行中尽情发挥，尽可能充分分析、实现、验证；不要因为担心上下文或 token 消耗而刻意压缩必要工作。
 
-# 数据库设计规范
+# 架构原则
 
-- **整个系统不使用外键（Foreign Key）**。表间关联通过普通字符串列（如 `run_id`、`recommendation_id`）在应用层维护，数据库层不做外键约束。
-- 所有 K线/基本面/辅助数据优先使用 Tushare（自建服务器 `http://101.35.233.113:8020/`）。只有 Tushare 无法提供的数据才使用其他数据源：
-  - 实时行情快照 → eastmoney / tencent / thsdk / akshare
-  - 分钟K线 → 先尝试 Tushare `stk_mins`；若当前 token / 当前自建服务无该接口权限，再回退腾讯 / 其他备用源
-  - 新闻公告 → eastmoney np-anotice API
+**策略优先架构：** 推荐管线的过滤逻辑应由各策略（strategy.yaml）自主定义，不由全局一刀切控制。
 
-# Python 测试策略
+- 全局只保留 ST/停牌/无数据 等硬性不可交易过滤
+- 成交额/换手率/回撤等阈值由各策略的 `universe.include/exclude` 定义
+- 宽召回 (`market_broad_recall_count`) 设为 6000，让全部可交易股票进入策略层
+- AST 规则表达式已缓存（`evaluator.py`），避免重复解析
 
-测试本项目 Python 代码时，优先使用项目自带的虚拟环境。
+# 数据库策略
 
-- 优先使用项目内已配置的虚拟环境。
-- 仅在项目未提供可用虚拟环境时才回退到全局 Python 或其他环境。
+**本地 MySQL 为主，云端为只读副本。**
+
+- 本地 Homebrew MySQL 9.6 @ 127.0.0.1:3306，库 `ashare_workbench`
+- 用户名/密码：`aowang` / `1279990918`
+- 云端 MySQL (139.196.242.53:4407) 仅作 Web 展示查询
+- 数据同步、推荐管道的重读写操作全部在本地执行
+- 云端 1GB 服务器不承载推荐管道（会 OOM）
+
+# 前端体验
+
+- 不考虑移动端兼容，优先覆盖桌面端和平板/窄桌面宽度
+- 默认黑色主题，用户切换后保存到本地
+- 宽屏下主内容吃满可用空间，驾驶舱首页保持 3 栏布局
+- 普通操作不做弹窗确认，用按钮 loading / 状态条 / 摘要反馈
+
+# 数据同步策略
+
+**批量优先，逐股票调用只用于必须的场景。**
+
+- 日K OHLCV：`pro.daily(trade_date=)` 一次拉全市场 5500+ 只
+- 技术指标：`pro.stk_factor(trade_date=)` 一次拉全市场
+- 筹码分布：`pro.cyq_perf(trade_date=)` 一次拉全市场
+- 本地指标（MA/量比/乖离/突破/回撤）：`backfill_indicators.py` 批量计算
+- 逐股票调用只在必须时（如 ths_member）使用，且需限速 `--rate-limit 3`
+- Tushare 自建服务器 `http://101.35.233.113:8020/` 约每 150 次 API 调用触发限速
+
+# 数据源策略
+
+- K线/基本面/辅助数据优先使用 Tushare
+- 概念成分股：Tushare `ths_member`（akshare 有 py_mini_racer 兼容问题）
+- 新闻公告：Tushare `anns_d` + eastmoney `np-anotice` 双源
+- 筹码分布：Tushare `cyq_perf`（若接口不可用则标记"数据源不可用"）
 
 # 部署同步策略
 
-后续对当前系统做代码或配置改动时，如果需要推送到 GitHub，也必须同步上传并部署到云端 Ubuntu 服务器。
+云端部署目标：
+- 服务器：`139.196.242.53`，SSH 别名：`ashare-server`
+- 项目目录：`/opt/ashare-shortline-system`
+- 对外地址：`http://139.196.242.53:18000`
+- 后端：`ashare-backend` (systemd)
+- 部署：`scp` 推送 → `systemctl restart ashare-backend` → `curl` 验证
 
-固定部署目标：
+# Python 测试
 
-- 服务器：`139.196.242.53`
-- SSH 用户：`root`
-- 云端项目目录：`/opt/ashare-shortline-system`
-- 对外访问地址：`http://139.196.242.53:18000`
-- 后端服务：`ashare-backend`
-- Web 入口：`nginx`
-- 部署时同步当前工作区产物到服务器，重启后端服务与 Web 入口，并验证公网地址可访问。
+优先使用项目虚拟环境 `.venv`。允许直接使用生产 MySQL 做验证测试，禁止清库/删表/重建等不可恢复操作。
 
-当前环境备注（可能随时间变化）：
+# 日志位置
 
-- 当前这台机器已配置免密 SSH 别名：`ashare-server`；若别名失效，则直连 `root@139.196.242.53`。
-- 当前线上网页访问密码：`1279990918`。
+- 本地：`backend/logs/app.log`、`backend/logs/access.log`
+- 云端：`journalctl -u ashare-backend`
 
-## 日志位置
+# 凭据规则
 
-- 本地后端日志目录：`backend/logs/`
-- 本地后端应用日志：`backend/logs/app.log`
-- 本地后端访问日志：`backend/logs/access.log`
-- 云端后端日志目录：`/opt/ashare-shortline-system/backend/logs/`
-- 云端后端应用日志：`/opt/ashare-shortline-system/backend/logs/app.log`
-- 云端后端访问日志：`/opt/ashare-shortline-system/backend/logs/access.log`
-- 云端 systemd 服务日志：`journalctl -u ashare-backend`
-- 云端服务单元文件：`/etc/systemd/system/ashare-backend.service`
-
-凭据规则：
-
-- 用户明确允许记录的网页访问密码可以写入项目记忆文档。
-- 不要把服务器登录密码、API Key、数据库密码等敏感信息写入 GitHub 跟踪文件。
-- 需要连接服务器时，优先使用本机已配置的免密 SSH；若不可用，再从用户提供的信息或安全环境中获取凭据。
+- 不要把服务器密码、API Key、数据库密码写入 Git 跟踪文件
+- .env 文件不上传 GitHub

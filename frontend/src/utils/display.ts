@@ -12,7 +12,9 @@ const STATUS_LABELS: Record<string, string> = {
   risk: "存在风险，需复核",
   blocked: "数据不足，暂停推荐",
   completed: "已完成",
-  failed: "运行失败，可补数后重试",
+  failed: "失败",
+  run_failed: "运行失败",
+  outcome_failed: "复盘失败/止损触发",
   error: "运行出错，可查看原因后重试",
   cancelled: "已取消",
   skipped: "已跳过",
@@ -42,6 +44,13 @@ const STATUS_LABELS: Record<string, string> = {
   medium: "中等风险",
   formal: "正式",
   experiment: "实验",
+  none: "未关注",
+  pending: "待复盘",
+  watching: "已关注",
+  ignored: "已忽略",
+  missed: "未触发",
+  success: "复盘成功",
+  invalid: "信号失效",
   all: "全市场",
   watchlist: "自选股",
   industry: "行业",
@@ -77,6 +86,42 @@ export function businessStatusLabel(value: unknown, fallback = "状态待确认"
   const raw = String(value ?? "").trim();
   if (!raw) return fallback;
   return STATUS_LABELS[raw] ?? STATUS_LABELS[raw.toLowerCase()] ?? raw;
+}
+
+export function riskLevelLabel(value: unknown) {
+  const key = String(value ?? "").trim().toLowerCase();
+  const labels: Record<string, string> = {
+    low: "低风险",
+    medium: "中风险",
+    high: "高风险",
+    unknown: "风险待确认",
+  };
+  return labels[key] ?? businessStatusLabel(value);
+}
+
+export function runStatusLabel(value: unknown, fallback = "状态待确认") {
+  const key = String(value ?? "").trim().toLowerCase();
+  if (key === "failed") return STATUS_LABELS.run_failed;
+  return businessStatusLabel(value, fallback);
+}
+
+export function recommendationStatusLabel(value: unknown, fallback = "状态待确认") {
+  const key = String(value ?? "").trim().toLowerCase();
+  if (key === "failed") return STATUS_LABELS.outcome_failed;
+  if (key === "none") return STATUS_LABELS.none;
+  return businessStatusLabel(value, fallback);
+}
+
+export function watchStatusLabel(value: unknown, fallback = "未关注") {
+  const key = String(value ?? "").trim().toLowerCase();
+  if (!key || key === "none") return STATUS_LABELS.none;
+  return businessStatusLabel(value, fallback);
+}
+
+export function outcomeStatusLabel(value: unknown, fallback = "-") {
+  const key = String(value ?? "").trim().toLowerCase();
+  if (key === "failed") return STATUS_LABELS.outcome_failed;
+  return businessStatusLabel(value, fallback);
 }
 
 export function statusTone(value: unknown): Tone {
@@ -123,12 +168,14 @@ export function candidateEmptyState(data: DashboardOverview) {
     return null;
   }
   if (run.status === "failed" || run.status === "interrupted" || run.heartbeat_stale) {
-    const failureDetail = run.message
-      ? `${run.message}。当前 0 只不能视为市场无机会。`
+    const failureMessage = run.error_message || run.message;
+    const normalizedFailureMessage = failureMessage.replace(/[。.!！?？]+$/, "");
+    const failureDetail = failureMessage
+      ? `${normalizedFailureMessage}。当前 0 只不能视为市场无机会。`
       : "运行未完整结束，当前 0 只不能视为市场无机会。";
     return {
       title: "本次推荐没有可用候选",
-      reason: businessStatusLabel(run.status),
+      reason: runStatusLabel(run.status),
       detail: failureDetail,
     };
   }
@@ -149,7 +196,7 @@ export function candidateEmptyState(data: DashboardOverview) {
   if (run.status === "queued" || run.status === "running") {
     return {
       title: "推荐仍在运行",
-      reason: businessStatusLabel(run.status),
+      reason: runStatusLabel(run.status),
       detail: run.message || "候选池还在生成，暂不能把 0 只解读成无机会。",
     };
   }
@@ -163,10 +210,12 @@ export function candidateEmptyState(data: DashboardOverview) {
 function summarizeDataHealthGaps(health: DashboardDataHealth) {
   const missing = Number(health.missing_bar_count || 0);
   const shortHistory = Number(health.short_history_count || 0);
+  const immatureHistory = Number(health.immature_history_count || 0);
   const coverage = health.eligible_bar_coverage_pct ?? health.bar_coverage_pct;
   const parts = [
     missing > 0 ? `缺日K ${missing} 只` : "",
-    shortHistory > 0 ? `短历史 ${shortHistory} 只` : "",
+    shortHistory > 0 ? `可补短历史 ${shortHistory} 只` : "",
+    immatureHistory > 0 ? `上市未满30根 ${immatureHistory} 只` : "",
     coverage !== undefined && coverage !== null ? `合格日K覆盖 ${coverage}%` : "",
   ].filter(Boolean);
   return parts.length ? parts.join(" · ") : "数据池未达到本地推荐门槛。";
@@ -176,7 +225,7 @@ export function runStatusCopy(run: RunProgress) {
   if (!run.run_id) return { status: "暂无运行", phase: "等待触发" };
   if (run.heartbeat_stale) return { status: "疑似中断", phase: "心跳过期，建议恢复或重跑" };
   return {
-    status: businessStatusLabel(run.status),
+    status: runStatusLabel(run.status),
     phase: businessStatusLabel(run.phase || "idle"),
   };
 }

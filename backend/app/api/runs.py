@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.services.cost_service import record_task_run
+from app.engine.strategy_backtest_adapter import run_strategy_backtest_adapter
 from app.services.market_data import MarketDataError
 from app.services.workbench_service import (
     delete_run,
@@ -85,9 +85,6 @@ def create_backtest(payload: dict, db: Session = Depends(get_db)):
         horizon_days: int # 持仓天数（默认 5）
     """
     from app.services.backtest_service import run_backtest
-    from app.services.overnight_holding_service import STRATEGY_ID as OVERNIGHT_STRATEGY_ID
-    from app.services.overnight_holding_service import run_overnight_holding_backtest
-    from app.services.overnight_holding_service import preview_minute_gap_remediation, remediate_minute_gaps
 
     start_date = payload.get("start_date")
     end_date = payload.get("end_date")
@@ -107,34 +104,30 @@ def create_backtest(payload: dict, db: Session = Depends(get_db)):
     strategy_id = str(payload.get("strategy_id") or "").strip()
     skill_id = str(payload.get("skill_id") or "").strip() or None
     try:
-        if strategy_id == OVERNIGHT_STRATEGY_ID:
-            action = str(payload.get("action") or "").strip()
-            if action == "preview_minute_gate":
-                return preview_minute_gap_remediation(db, start_date, end_date)
-            if action == "remediate_minute_gaps":
-                result = remediate_minute_gaps(db, start_date, end_date)
-                record_task_run(
-                    db,
-                    "manual_minute_gap_remediation",
-                    result.get("status", "unknown"),
-                    trigger_source="manual",
-                    task_name="手动分钟补数",
-                    task_type="data_backfill",
-                    payload={
-                        "strategy_id": strategy_id,
-                        "start_date": start_date,
-                        "end_date": end_date,
-                    },
-                    result={
-                        **result,
-                        "remediation_type": "minute_gap",
-                    },
-                )
-                return result
-            return run_overnight_holding_backtest(db, start_date, end_date)
-        return run_backtest(
-            db, start_date, end_date, run_mode, horizon_days, score_line, skill_id=skill_id,
+        action = str(payload.get("action") or "").strip()
+        adapter_result = run_strategy_backtest_adapter(
+            db,
+            strategy_id=strategy_id,
+            action=action,
+            start_date=start_date,
+            end_date=end_date,
         )
+        if adapter_result is not None:
+            return adapter_result
+        if action:
+            raise ValueError(f"strategy backtest action not configured: {strategy_id or 'default'}.{action}")
+        return run_backtest(
+            db,
+            start_date,
+            end_date,
+            run_mode,
+            horizon_days,
+            score_line,
+            skill_id=skill_id or strategy_id or None,
+        )
+    except ValueError as exc:
+        logger.exception("backtest request rejected")
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("backtest failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc

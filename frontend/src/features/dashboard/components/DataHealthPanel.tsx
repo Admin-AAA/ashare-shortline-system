@@ -15,6 +15,7 @@ export default function DataHealthPanel({
   taskHealth: TaskHealthSummary;
 }) {
   const readiness = readinessCopy(dataHealth.can_run_local_recommendation, dataHealth.status);
+  const immatureHistory = Number(dataHealth.immature_history_count || 0);
   return (
     <section className="cockpit-panel">
       <div className="panel-header">
@@ -30,7 +31,8 @@ export default function DataHealthPanel({
         <span>可选<strong>{textValue(dataHealth.eligible_quote_count)}</strong></span>
         <span>日K覆盖<strong>{textValue(dataHealth.bar_coverage_pct)}%</strong></span>
         <span>缺失日K<strong className={Number(dataHealth.missing_bar_count || 0) > 0 ? "negative" : undefined}>{textValue(dataHealth.missing_bar_count)}</strong></span>
-        <span>短历史<strong className={Number(dataHealth.short_history_count || 0) > 0 ? "negative" : undefined}>{textValue(dataHealth.short_history_count)}</strong></span>
+        <span>可补短史<strong className={Number(dataHealth.short_history_count || 0) > 0 ? "negative" : undefined}>{textValue(dataHealth.short_history_count)}</strong></span>
+        <span>新股短史<strong>{textValue(immatureHistory)}</strong></span>
         <span>任务运行<strong>{textValue(taskHealth.running_count)}</strong></span>
         <span>任务失败<strong className={Number(taskHealth.failed_count || 0) > 0 ? "negative" : undefined}>{textValue(taskHealth.failed_count)}</strong></span>
       </div>

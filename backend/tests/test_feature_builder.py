@@ -1,10 +1,8 @@
-"""Tests for DSA scoring, risk scoring, buy signals, and authenticity."""
+"""Tests for DSA scoring, risk scoring, shared factors, and authenticity."""
 from app.services.feature_builder import (
     TREND_SCORE_MAP,
     VOLUME_SCORE_MAP,
     MACD_SCORE_MAP,
-    _apply_buy_signal,
-    _apply_dsa_scores,
     _bias_score,
     _compute_authenticity,
     _risk_score,
@@ -13,6 +11,7 @@ from app.services.feature_builder import (
     build_features,
     market_regime_score,
 )
+from app.services.shortline_factors import SHORTLINE_FACTOR_SPECS
 
 
 # ---------------------------------------------------------------------------
@@ -203,51 +202,112 @@ def test_risk_score_macd_weak():
 
 
 # ---------------------------------------------------------------------------
-# Buy signal
+# Shared shortline factors
 # ---------------------------------------------------------------------------
 
-def test_buy_signal_strong_buy():
-    item = _stock(price=100, dist20=6, breakout20=True, chg20=15, pct=2.0, vol5_20=1.8)
-    item["dsa_profile"] = {"bias_ma5": 1.0, "bias_ma10": 3.0, "bias_ma20": 6.0,
-                           "ma5": 99, "ma10": 97, "ma20": 94,
-                           "volume_ratio_5d": 1.8}
-    features = build_features([item], _snapshot())
-    stock = features[0]
-    assert stock["buy_signal"] in {"强烈买入", "买入", "持有", "观望", "卖出", "强烈卖出"}
-    assert isinstance(stock["ideal_buy"], float)
-    assert isinstance(stock["stop_loss"], float)
-    assert isinstance(stock["take_profit"], float)
-    assert stock["stop_loss"] < stock["recommend_price"] < stock["take_profit"] if hasattr(stock, "recommend_price") else True
+def test_shared_shortline_factor_specs_are_explainable():
+    for spec in SHORTLINE_FACTOR_SPECS.values():
+        assert spec["fields"]
+        assert spec["logic"]
+        assert spec["data_sources"]
+        assert spec["degradation"]
 
 
-def test_buy_signal_reasons():
-    item = _stock(price=100, dist20=6, breakout20=True, chg20=15, pct=2.0, vol5_20=1.8)
-    item["dsa_profile"] = {"bias_ma5": 1.0, "bias_ma10": 3.0, "bias_ma20": 6.0,
-                           "ma5": 99, "ma10": 97, "ma20": 94,
-                           "volume_ratio_5d": 1.8}
-    features = build_features([item], _snapshot())
-    stock = features[0]
-    if stock["dsa_signal_score"] >= 70:
-        assert len(stock["signal_reasons"]) > 0
+def test_feature_builder_does_not_emit_buy_decision_fields():
+    stock = build_features([_stock()], _snapshot())[0]
+
+    assert "buy_signal" not in stock
+    assert "signal_reasons" not in stock
+    assert "risk_factors" not in stock
+    assert "suggested_position" not in stock
+    assert "operation_advice" not in stock
 
 
-def test_buy_signal_risk_factors():
-    item = _stock(price=100, dist20=6, pct=2.0, vol5_20=1.0, bias_ma5=6.0, news_risk_count=1)
-    item["dsa_profile"] = {"bias_ma5": 6.0}
-    features = build_features([item], _snapshot())
-    stock = features[0]
-    if stock["bias_ma5"] > 5:
-        assert any("MA5" in r for r in stock["risk_factors"])
+def test_limit_up_overheat_factor_has_spec_and_degrades_from_snapshot():
+    stock = _stock(
+        is_limit_up=True,
+        limit_up_consecutive_days=5,
+        limit_up_open_times=9,
+        pct=10.0,
+        pos60=98,
+        dist60=42,
+    )
+
+    enriched = build_features([stock], _snapshot(sample_count=300, limit_up_count=28, limit_down_count=8))[0]
+    spec = enriched["shortline_factor_explanations"]["limit_up_overheat"]
+
+    assert enriched["limit_up_overheat_score"] >= 70
+    assert enriched["limit_up_overheat_level"] == "高"
+    assert spec["fields"] == SHORTLINE_FACTOR_SPECS["limit_up_overheat"]["fields"]
+    assert spec["data_sources"]
+    assert spec["degradation"]
 
 
-def test_buy_signal_suggested_position():
-    item = _stock(price=100, dist20=6, breakout20=True, chg20=15, pct=2.0, vol5_20=1.8)
-    item["dsa_profile"] = {"bias_ma5": 1.0, "bias_ma10": 3.0, "bias_ma20": 6.0,
-                           "ma5": 99, "ma10": 97, "ma20": 94,
-                           "volume_ratio_5d": 1.8}
-    features = build_features([item], _snapshot())
-    stock = features[0]
-    assert stock["suggested_position"] in {"中仓", "小仓", "观察仓"}
+def test_sector_ladder_factor_uses_shared_sector_pool_once():
+    stocks = [
+        _stock(code="000001", industry="机器人", is_limit_up=True, limit_up_consecutive_days=1, pct=10),
+        _stock(code="000002", industry="机器人", is_limit_up=True, limit_up_consecutive_days=2, pct=10),
+        _stock(code="000003", industry="机器人", is_limit_up=True, limit_up_consecutive_days=4, pct=10),
+        _stock(code="000004", industry="机器人", pct=4),
+    ]
+
+    enriched = build_features(stocks, _snapshot(main_industries=["机器人"]))[0]
+    spec = enriched["shortline_factor_explanations"]["sector_ladder"]
+
+    assert enriched["sector_ladder_completeness_score"] >= 75
+    assert enriched["sector_ladder_level"] == "完整"
+    assert enriched["sector_ladder_limit_up_count"] == 3
+    assert enriched["sector_ladder_height"] == 4
+    assert spec["logic"]
+    assert spec["degradation"]
+
+
+def test_capital_resonance_factor_marks_source_and_fallback():
+    with_flow = _stock(
+        main_net_inflow_yi=2.2,
+        main_net_inflow_ratio=9.5,
+        super_large_net_inflow_yi=0.8,
+        large_net_inflow_yi=0.4,
+        small_net_inflow_yi=-0.5,
+        sector_fund_rank=3,
+        data_quality={"capital_flow_checked": True, "missing_fields": []},
+    )
+    fallback = _stock(
+        code="000002",
+        pct=3.5,
+        vol5_20=1.8,
+        amount_yi=6,
+        data_quality={"missing_fields": ["capital_flow"]},
+    )
+
+    enriched = build_features([with_flow, fallback], _snapshot())
+
+    assert enriched[0]["capital_resonance_signal"] == "主力共振"
+    assert enriched[0]["capital_resonance_source"] == "capital_flow"
+    assert enriched[1]["capital_resonance_source"] == "price_volume_fallback"
+    assert enriched[1]["shortline_factor_explanations"]["capital_resonance"]["source"] == "price_volume_fallback"
+
+
+def test_twenty_cm_risk_gate_identifies_high_volatility_board():
+    stock = _stock(
+        code="300001",
+        market="创业板",
+        pct=16,
+        is_limit_up=True,
+        turnover_rate=22,
+        amount_yi=2.0,
+        pos60=98,
+        dist60=38,
+    )
+
+    enriched = build_features([stock], _snapshot())[0]
+    spec = enriched["shortline_factor_explanations"]["twenty_cm_risk"]
+
+    assert enriched["is_20cm_stock"] is True
+    assert enriched["twenty_cm_risk_gate"] == "block"
+    assert enriched["twenty_cm_risk_score"] >= 70
+    assert "创业板" in enriched["twenty_cm_risk_reason"]
+    assert spec["data_sources"]
 
 
 # ---------------------------------------------------------------------------
@@ -311,30 +371,47 @@ def test_build_features_with_snapshot():
     for stock in result:
         assert "dsa_signal_score" in stock
         assert "risk_score" in stock
-        assert "buy_signal" in stock
+        assert "shortline_factor_explanations" in stock
+        assert "limit_up_overheat_score" in stock
+        assert "sector_ladder_completeness_score" in stock
+        assert "capital_resonance_score" in stock
+        assert "twenty_cm_risk_gate" in stock
         assert "_feature_tags" in stock
         assert "data_authenticity" in stock
 
 
 def test_shortline_enhancement_fields_survive_without_auxiliary_db():
-    stock = _stock(
-        code="002897",
-        name="意华股份",
-        industry="电子",
-        pct=6.2,
-        amount_yi=9.0,
-        turnover_rate=5.5,
-        free_mv_yi=90.0,
-        chg20=18.0,
-        breakout20=True,
-        vol5_20=1.8,
-    )
-    enriched = build_features([stock], _snapshot(main_industries=["电子"], limit_up_count=28))[0]
+    stocks = [
+        _stock(
+            code="002897",
+            name="意华股份",
+            industry="电子",
+            pct=6.2,
+            amount_yi=9.0,
+            turnover_rate=5.5,
+            free_mv_yi=90.0,
+            chg20=18.0,
+            breakout20=True,
+            vol5_20=1.8,
+            main_net_inflow_yi=1.8,
+            main_net_inflow_ratio=9.0,
+            super_large_net_inflow_yi=0.6,
+            large_net_inflow_yi=0.3,
+            small_net_inflow_yi=-0.4,
+            sector_fund_rank=4,
+            data_quality={"capital_flow_checked": True, "missing_fields": []},
+        ),
+        _stock(code="002001", industry="电子", is_limit_up=True, limit_up_consecutive_days=1, pct=10),
+        _stock(code="002002", industry="电子", is_limit_up=True, limit_up_consecutive_days=2, pct=10),
+        _stock(code="002003", industry="电子", is_limit_up=True, limit_up_consecutive_days=4, pct=10),
+    ]
+    enriched = build_features(stocks, _snapshot(main_industries=["电子"], limit_up_count=28))[0]
 
-    assert enriched["_is_main"] is True
-    assert enriched["_is_leader_candidate"] is True
-    assert enriched["_consensus_signal"] == "主力吸筹"
-    assert enriched["_sentiment_phase"] == "高潮"
+    assert enriched["is_main_theme"] is True
+    assert enriched["is_shortline_leader_candidate"] is True
+    assert enriched["sector_ladder_completeness_score"] >= 75
+    assert enriched["capital_resonance_signal"] == "主力共振"
+    assert enriched["market_sentiment_phase"] == "高潮"
 
 
 def test_auxiliary_values_are_not_overwritten_by_dsa_defaults():

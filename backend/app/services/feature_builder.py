@@ -1,6 +1,8 @@
 from collections.abc import Callable
 from typing import Any
 
+from app.services.shortline_factors import apply_shared_shortline_factors
+
 
 TREND_SCORE_MAP = {
     "强势多头": 30,
@@ -42,7 +44,7 @@ def build_features(
     enriched = []
     for stock in stocks:
         item = dict(stock)
-        item["_is_main"] = item.get("industry") in main_industries and item.get("industry") != "未分类"
+        item["is_main_theme"] = item.get("industry") in main_industries and item.get("industry") != "未分类"
         item["market_sample_count"] = int(snapshot.get("sample_count") or 0)
         item["market_regime"] = snapshot.get("breadth", {}).get("regime", "未知")
         enriched.append(item)
@@ -51,13 +53,15 @@ def build_features(
     if db is not None:
         _enrich_with_auxiliary_data(enriched, db, snapshot)
 
-    total = len(enriched)
-    for i, item in enumerate(enriched, start=1):
+    for item in enriched:
         profile = dict(item.pop("dsa_profile", {}) or {})
         _apply_dsa_context(item, profile, dsa_weights)
+
+    apply_shared_shortline_factors(enriched, snapshot)
+
+    total = len(enriched)
+    for i, item in enumerate(enriched, start=1):
         item["risk_score"] = _risk_score(item)
-        if db is None:
-            _compute_chen_xiaoqun_signals([item], snapshot, {}, {}, {})
         _tag_features(item)
         item["data_authenticity"] = _compute_authenticity(item)
         if on_progress and (i == 1 or i % 50 == 0 or i == total):
@@ -179,7 +183,6 @@ def _apply_dsa_context(item: dict[str, Any], profile: dict[str, Any], dsa_weight
 
     _apply_context_blocks(item, profile)
     _apply_dsa_scores(item, dsa_weights)
-    _apply_buy_signal(item)
 
 
 def _apply_context_blocks(item: dict[str, Any], profile: dict[str, Any]) -> None:
@@ -198,26 +201,26 @@ def _apply_context_blocks(item: dict[str, Any], profile: dict[str, Any]) -> None
         profile.get("inflow_10d_yi", item.get("inflow_10d_yi")),
         item["main_net_inflow_yi"] if strict_real else round(item["main_net_inflow_yi"] * 3.4, 2),
     )
-    item["sector_fund_rank"] = int(_num(profile.get("sector_fund_rank", item.get("sector_fund_rank")), 99 if strict_real else 5 if item.get("_is_main") else 26))
+    item["sector_fund_rank"] = int(_num(profile.get("sector_fund_rank", item.get("sector_fund_rank")), 99 if strict_real else 5 if item.get("is_main_theme") else 26))
     item["capital_flow_score"] = _capital_flow_score(item)
 
     item["profit_ratio"] = _num(profile.get("profit_ratio", item.get("profit_ratio")), 50.0 if strict_real else _default_profit_ratio(item))
     item["avg_cost"] = _num(profile.get("avg_cost", item.get("avg_cost")), round(_num(item.get("price")) * 0.94, 2))
     item["cost_90_low"] = _num(profile.get("cost_90_low", item.get("cost_90_low")), round(item["avg_cost"] * 0.92, 2))
     item["cost_90_high"] = _num(profile.get("cost_90_high", item.get("cost_90_high")), round(item["avg_cost"] * 1.08, 2))
-    item["concentration_90"] = _num(profile.get("concentration_90", item.get("concentration_90")), 13.5 if item.get("_is_main") else 22.0)
+    item["concentration_90"] = _num(profile.get("concentration_90", item.get("concentration_90")), 13.5 if item.get("is_main_theme") else 22.0)
     item["cost_70_low"] = _num(profile.get("cost_70_low", item.get("cost_70_low")), round(item["avg_cost"] * 0.96, 2))
     item["cost_70_high"] = _num(profile.get("cost_70_high", item.get("cost_70_high")), round(item["avg_cost"] * 1.04, 2))
-    item["concentration_70"] = _num(profile.get("concentration_70", item.get("concentration_70")), 8.5 if item.get("_is_main") else 15.0)
+    item["concentration_70"] = _num(profile.get("concentration_70", item.get("concentration_70")), 8.5 if item.get("is_main_theme") else 15.0)
     item["chip_concentration"] = item["concentration_90"]
     item["chip_health"] = str(profile.get("chip_health") or _chip_health(item))
     item["chip_health_score"] = _chip_health_score(item)
 
-    item["revenue_yoy"] = _num(profile.get("revenue_yoy", item.get("revenue_yoy")), 0.0 if strict_real else 12.0 if item.get("_is_main") else 3.0)
-    item["net_profit_yoy"] = _num(profile.get("net_profit_yoy", item.get("net_profit_yoy")), 0.0 if strict_real else 10.0 if item.get("_is_main") else -2.0)
+    item["revenue_yoy"] = _num(profile.get("revenue_yoy", item.get("revenue_yoy")), 0.0 if strict_real else 12.0 if item.get("is_main_theme") else 3.0)
+    item["net_profit_yoy"] = _num(profile.get("net_profit_yoy", item.get("net_profit_yoy")), 0.0 if strict_real else 10.0 if item.get("is_main_theme") else -2.0)
     item["roe"] = _num(profile.get("roe", item.get("roe")), 0.0 if strict_real else 11.5)
     item["gross_margin"] = _num(profile.get("gross_margin", item.get("gross_margin")), 0.0 if strict_real else 28.0)
-    item["pe_ttm"] = _num(profile.get("pe_ttm", item.get("pe_ttm")), 0.0 if strict_real else 32.0 if item.get("_is_main") else 26.0)
+    item["pe_ttm"] = _num(profile.get("pe_ttm", item.get("pe_ttm")), 0.0 if strict_real else 32.0 if item.get("is_main_theme") else 26.0)
     item["earnings_outlook"] = str(profile.get("earnings_outlook") or ("未接入真实财务增强数据" if strict_real else "暂无重大负面业绩信号"))
     item["fundamental_score"] = _fundamental_score(item)
     item["institution_holding_change"] = _num(profile.get("institution_holding_change", item.get("institution_holding_change")), 0.0)
@@ -314,57 +317,6 @@ def _apply_momentum_decay(stock_data: dict, dsa_signal_score: float) -> float:
         score *= 0.85
 
     return round(score, 2)
-
-
-def _apply_buy_signal(item: dict[str, Any]) -> None:
-    score = _num(item.get("dsa_signal_score"))
-    risk_factors: list[str] = []
-    reasons: list[str] = []
-    if item.get("trend_status") in {"强势多头", "多头排列"}:
-        reasons.append("均线多头")
-    if item.get("support_ma5") or item.get("support_ma10"):
-        reasons.append("靠近均线支撑")
-    if item.get("volume_shrink_pullback"):
-        reasons.append("缩量回踩")
-    if item.get("volume_breakout_signal"):
-        reasons.append("放量突破")
-    if item.get("capital_flow_score", 0) >= 70:
-        reasons.append("资金确认")
-    if item.get("news_risk_count", 0) > 0:
-        risk_factors.append("存在新闻/公告风险")
-    if item.get("bias_ma5", 0) > 5:
-        risk_factors.append("偏离 MA5 过远")
-    if item.get("rsi_12", 0) > 70:
-        risk_factors.append("RSI 超买")
-    if item.get("dsa_macd_score", 0) == 0:
-        risk_factors.append("MACD 转弱")
-
-    if score >= 82 and not risk_factors:
-        signal = "强烈买入"
-    elif score >= 70:
-        signal = "买入"
-    elif score >= 58:
-        signal = "持有"
-    elif score >= 45:
-        signal = "观望"
-    elif score >= 30:
-        signal = "卖出"
-    else:
-        signal = "强烈卖出"
-    item["buy_signal"] = signal
-    item["signal_reasons"] = reasons
-    item["risk_factors"] = risk_factors
-    item["ideal_buy"] = round(_num(item.get("ma5")) * 1.002, 2)
-    item["secondary_buy"] = round(_num(item.get("ma10")) * 1.003, 2)
-    price = _num(item.get("price"))
-    ma10 = _num(item.get("ma10"))
-    item["stop_loss"] = round(min(ma10, price) * 0.965, 2)
-    item["take_profit"] = round(price * 1.08, 2)
-    # ── 止损止盈比校验：防止倒挂 ──
-    _validate_rr_ratio(item, price)
-    item["suggested_position"] = "中仓" if score >= 78 else "小仓" if score >= 65 else "观察仓"
-    item["operation_advice"] = _operation_advice(signal, item)
-    item["confidence_level"] = "高" if score >= 78 and not risk_factors else "中" if score >= 60 else "低"
 
 
 def _trend_state(ma5: float, ma10: float, ma20: float, item: dict[str, Any]) -> tuple[str, str, float]:
@@ -561,45 +513,11 @@ def _intelligence_score(item: dict[str, Any]) -> float:
 def _sentiment_summary(item: dict[str, Any]) -> str:
     if item.get("news_risk_count", 0) > 0:
         return "存在风险情报，需降低信号权重"
-    if item.get("positive_catalyst_count", 0) > 0 and item.get("_is_main"):
+    if item.get("positive_catalyst_count", 0) > 0 and item.get("is_main_theme"):
         return "主线题材叠加正向催化"
-    if item.get("_is_main"):
+    if item.get("is_main_theme"):
         return "处于主线行业，情绪承接较好"
     return "非主线方向，情绪确认不足"
-
-
-def _operation_advice(signal: str, item: dict[str, Any]) -> str:
-    if signal in {"强烈买入", "买入"}:
-        return f"优先等待 {item.get('ideal_buy')} 附近承接确认，破 {item.get('stop_loss')} 降低假设权重。"
-    if signal == "持有":
-        return "已有仓位可跟踪，新增仓位等待更清晰的回踩或突破。"
-    if signal == "观望":
-        return "证据不足，等趋势、量能或情报继续确认。"
-    return "短线胜率不足，先排除。"
-
-
-def _validate_rr_ratio(item: dict[str, Any], price: float) -> None:
-    """校验止损止盈比，倒挂时自动调整。
-
-    短线交易中，盈亏比 < 1:1 需要极高的胜率才能盈利。
-    当检测到倒挂时：
-      - 优先提高止盈目标使 R:R >= 1:1
-      - 若 MA10 乖离过大（> 10%），则要求 1.5:1 止损止盈比（股票已超买，波动更大）
-      - 永不收紧止损让止损变得更脆弱
-    """
-    stop_loss = _num(item.get("stop_loss"))
-    take_profit = _num(item.get("take_profit"))
-    if price <= 0 or stop_loss <= 0 or take_profit <= price:
-        return
-    risk_pct = abs(price - stop_loss) / price * 100
-    reward_pct = abs(take_profit - price) / price * 100
-    bias_ma10 = _num(item.get("bias_ma10"))
-    min_rr = 1.5 if bias_ma10 > 10 else 1.0
-    rr_ratio = reward_pct / max(risk_pct, 0.01)
-    if rr_ratio < min_rr:
-        # 仅提高止盈使 R:R 达标，不收紧止损
-        new_tp = round(price * (1 + risk_pct * min_rr / 100.0), 2)
-        item["take_profit"] = new_tp
 
 
 def _default_bias_ma5(item: dict[str, Any]) -> float:
@@ -618,7 +536,7 @@ def _default_bias_ma5(item: dict[str, Any]) -> float:
 
 def _default_main_inflow(item: dict[str, Any]) -> float:
     direction = 1 if _num(item.get("pct")) > 0 else -0.5
-    main_bonus = 1.2 if item.get("_is_main") else 0.4
+    main_bonus = 1.2 if item.get("is_main_theme") else 0.4
     return round(_num(item.get("amount_yi")) * 0.05 * direction * main_bonus, 2)
 
 
@@ -687,13 +605,25 @@ _OBSERVABLE_FIELDS = {
 # Now including fields from auxiliary data sources (limit_up, dragon_tiger, news, capital_flow)
 _OBSERVABLE_FIELDS.update({
     "dragon_tiger_is_on_list", "dragon_tiger_recent_count", "dragon_tiger_latest_date",
+    "dragon_tiger_buy_amount_yi", "dragon_tiger_sell_amount_yi", "dragon_tiger_net_amount_yi",
+    "dragon_tiger_buy_seat_count", "dragon_tiger_institution_net_buy_yi",
     "news_risk_count", "positive_catalyst_count",
     "risk_alerts", "positive_catalysts", "latest_news",
     "inflow_5d_yi", "inflow_10d_yi",
     "is_limit_up", "limit_up_consecutive_days", "limit_up_seal_time", "limit_up_reason",
+    "limit_up_first_time", "limit_up_last_time", "limit_up_open_times",
+    "limit_up_up_stat", "limit_up_limit_amount_yi", "limit_up_fd_amount_yi",
+    "limit_up_turnover_ratio",
     "concept_sector_name", "concept_sector_heat_rank",
     "super_large_net_inflow_yi", "large_net_inflow_yi", "medium_net_inflow_yi", "small_net_inflow_yi",
     "main_net_inflow_ratio", "cumulative_inflow_3d_yi",
+    "is_main_theme", "market_sentiment_phase",
+    "limit_up_overheat_level", "sector_ladder_level",
+    "sector_ladder_limit_up_count", "sector_ladder_height",
+    "capital_resonance_signal", "capital_resonance_source",
+    "is_20cm_stock", "twenty_cm_risk_gate", "twenty_cm_risk_reason",
+    "is_shortline_leader_candidate", "dragon_tiger_buy_dispersion",
+    "dragon_tiger_inst_buy_ratio", "shortline_factor_explanations",
 })
 
 # Fields that are always synthetically estimated (no real data source)
@@ -718,9 +648,12 @@ _DERIVED_SCORE_FIELDS = {
     "dsa_trend_score", "dsa_bias_score", "dsa_volume_score",
     "dsa_support_score", "dsa_macd_score", "dsa_rsi_score",
     "chip_health_score", "dsa_signal_score", "risk_score",
+    "limit_up_overheat_score", "sector_ladder_completeness_score",
+    "capital_resonance_score", "twenty_cm_risk_score",
+    "shortline_leader_score",
 }
 
-# Features that participate directly in scoring (DSA + risk + buy signal inputs)
+# Features that participate directly in scoring (DSA + risk + shared strategy factors)
 _SCORED_FEATURES = {
     "trend_status", "bias_ma5", "volume_status",
     "support_ma5", "support_ma10", "macd_status", "rsi_12",
@@ -730,6 +663,9 @@ _SCORED_FEATURES = {
     "dsa_support_score", "dsa_macd_score", "dsa_rsi_score",
     "capital_flow_score", "fundamental_score", "intelligence_score",
     "chip_health_score", "dsa_signal_score", "risk_score",
+    "limit_up_overheat_score", "sector_ladder_completeness_score",
+    "capital_resonance_score", "twenty_cm_risk_score",
+    "shortline_leader_score",
 }
 
 
@@ -796,7 +732,9 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             stock["dragon_tiger_is_on_list"] = True
             stock["dragon_tiger_recent_count"] = 1
             stock["dragon_tiger_latest_date"] = dt.get("trade_date")
-            profile["dragon_tiger_net_amount_yi"] = dt.get("net_amount_yi", 0)
+            stock["dragon_tiger_buy_amount_yi"] = dt.get("buy_amount_yi", 0)
+            stock["dragon_tiger_sell_amount_yi"] = dt.get("sell_amount_yi", 0)
+            stock["dragon_tiger_net_amount_yi"] = dt.get("net_amount_yi", 0)
             missing_fields.discard("dragon_tiger")
             data_quality["dragon_tiger_checked_trade_date"] = dt.get("trade_date") or trade_date
         else:
@@ -877,8 +815,11 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             data_quality["capital_flow_checked"] = True
         else:
             if code in checked_capital_flow_codes:
+                missing_fields.discard("capital_flow")
+                missing_fields.discard("main_net_inflow")
                 data_quality["capital_flow_checked_empty"] = True
-            missing_fields.add("capital_flow")
+            else:
+                missing_fields.add("capital_flow")
 
         # ── 集合竞价特征 ──
         auc = auction_map.get(code)
@@ -918,10 +859,6 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
         data_quality["missing_fields"] = sorted(missing_fields)
         data_quality["fallback_fields"] = sorted(fallback_fields)
 
-    # ── 计算陈小群龙头战法专属信号 ──
-    _compute_chen_xiaoqun_signals(stocks, snapshot, concept_map, flow_map, dt_map)
-
-
 def _checked_codes_from_audit(audit_row: Any) -> set[str]:
     if not isinstance(audit_row, dict):
         return set()
@@ -943,117 +880,6 @@ def _dragon_tiger_trade_date_covered(
     status = str(audit_row.get("status") or "")
     covered_trade_date = str(audit_row.get("covered_trade_date") or "")
     return status in {"success", "cached"} and covered_trade_date == trade_date
-
-
-def _compute_chen_xiaoqun_signals(
-    stocks: list[dict[str, Any]],
-    snapshot: dict[str, Any],
-    concept_map: dict[str, list[dict[str, Any]]],
-    flow_map: dict[str, dict[str, Any]],
-    dt_map: dict[str, dict[str, Any]],
-) -> None:
-    """计算陈小群龙头战法所需的增强信号。
-
-    当辅助数据（概念板块、资金流、龙虎榜）不可用时，使用价格/成交量
-    推断回退逻辑，确保回测和实时模式都能产生有区分度的信号。
-    """
-    from app.engine.aggregator import _market_sentiment as unified_sentiment
-
-    concept_available = bool(concept_map)
-    flow_available = bool(flow_map)
-    dt_available = bool(dt_map)
-
-    # ── _sentiment_phase（市场情绪阶段）── 使用统一判断函数
-    sentiment_phase = unified_sentiment(snapshot)
-
-    # 统计用于回退推断的 top 行业
-    main_industries = set(snapshot.get("main_industries", []))
-
-    for stock in stocks:
-        code = stock["code"]
-        pct_val = _num(stock.get("pct"))
-        turnover = _num(stock.get("turnover_rate"))
-        free_mv = _num(stock.get("free_mv_yi"))
-        amount_yi = _num(stock.get("amount_yi"))
-        chg20 = _num(stock.get("chg20"))
-        primary_excess20 = _num(stock.get("primary_excess20"))
-        vol5_20 = _num(stock.get("vol5_20"))
-
-        # ── _is_leader_candidate（龙头候选识别）──
-        is_limit_up = bool(stock.get("is_limit_up"))
-        sector_heat = stock.get("concept_sector_heat_rank", 999)
-
-        leader_from_concept = (
-            is_limit_up
-            or (pct_val > 5 and sector_heat <= 5 and 3 <= turnover <= 8 and free_mv >= 20)
-        )
-
-        # 回退推断：无概念板块数据时用价量特征识别龙头
-        leader_from_price = (
-            pct_val > 5 and amount_yi >= 5 and 2 <= turnover <= 10
-            and free_mv >= 15 and chg20 > 5
-        )
-        leader_breakout = (
-            bool(stock.get("breakout20"))
-            and pct_val > 3 and amount_yi >= 4 and 3 <= turnover <= 10
-        )
-
-        if concept_available:
-            is_leader = leader_from_concept
-        else:
-            is_leader = leader_from_concept or leader_from_price or leader_breakout
-
-        stock["_is_leader_candidate"] = is_leader
-
-        # ── _consensus_signal（主力共识信号）──
-        super_large = _num(stock.get("super_large_net_inflow_yi"))
-        large = _num(stock.get("large_net_inflow_yi"))
-        small = _num(stock.get("small_net_inflow_yi"))
-        main_inflow = _num(stock.get("main_net_inflow_yi"))
-
-        if flow_available:
-            if super_large > 0 and small < 0:
-                consensus = "主力吸筹"
-            elif super_large > small and main_inflow > 0:
-                consensus = "机构共识"
-            elif small > super_large and small > 0 and main_inflow < 0:
-                consensus = "散户主导"
-            else:
-                consensus = "中性"
-        else:
-            # 回退推断：从价量关系推断主力行为
-            if pct_val > 3 and vol5_20 > 1.5 and amount_yi >= 5 and turnover > 2:
-                consensus = "主力吸筹"
-            elif pct_val > 1 and vol5_20 > 1.2 and amount_yi >= 3:
-                consensus = "机构共识"
-            elif pct_val < -3 and vol5_20 < 0.8 and turnover < 2:
-                consensus = "散户主导"
-            else:
-                consensus = "中性"
-
-        stock["_consensus_signal"] = consensus
-
-        # ── _dragon_tiger_dispersion（龙虎榜买榜分散度）──
-        dt = dt_map.get(code, {}) if dt_available else {}
-        if dt:
-            buy_seats = int(dt.get("buy_seat_count") or 0)
-            inst_net = _num(dt.get("institution_net_buy_yi"))
-            net_amt = _num(dt.get("net_amount_yi"))
-            if buy_seats <= 2:
-                stock["_dragon_tiger_dispersion"] = "集中"
-            elif buy_seats <= 5:
-                stock["_dragon_tiger_dispersion"] = "一般"
-            else:
-                stock["_dragon_tiger_dispersion"] = "分散"
-            stock["_dragon_tiger_inst_ratio"] = (
-                round(inst_net / abs(net_amt), 2) if net_amt != 0 else 0.0
-            )
-        else:
-            stock["_dragon_tiger_dispersion"] = "未上榜"
-            stock["_dragon_tiger_inst_ratio"] = 0.0
-
-        # 市场情绪阶段
-        stock["_sentiment_phase"] = sentiment_phase
 
 
 def _tag_features(item: dict[str, Any]) -> None:

@@ -979,7 +979,8 @@ def _build_trade_detail_list(
             "trend_status": str(feature_snapshot.get("trend_status", "")),
             "volume_ratio_5d": feature_snapshot.get("volume_ratio_5d"),
             "ma_alignment": str(feature_snapshot.get("ma_alignment", "")),
-            "buy_signal": str(feature_snapshot.get("buy_signal", "")),
+            "setup_type": str(feature_snapshot.get("setup_type") or rec.setup_type or ""),
+            "entry_rule": str(feature_snapshot.get("entry_rule") or rec.entry_rule or ""),
         }
         signal_valid = not _outcome_bool_flag(getattr(outcome, "hit_invalid", False))
 

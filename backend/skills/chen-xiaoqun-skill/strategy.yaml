@@ -8,6 +8,14 @@ meta:
   style: shortline
   version: 0.2.0
   holding_days: [1, 3, 5]
+  strategy_independence: 0.75
+  default_preset_groups:
+    formal_opening:
+      weight: 1.05
+      sort_order: 10
+    formal_trend_core:
+      weight: 1.15
+      sort_order: 10
 
 contract:
   type: strategy
@@ -34,9 +42,9 @@ prefilter:
       - when: "upper_shadow_count20 <= 5"
         reason: "upper_shadow_too_many"
     include_any:
-      - when: "_is_main == true and breakout20 == 1"
+      - when: "is_main_theme == true and breakout20 == 1"
         reason: "requires_main_breakout"
-      - when: "_is_main == true and pct >= 1 and off_high_pct >= -6"
+      - when: "is_main_theme == true and pct >= 1 and off_high_pct >= -6"
         reason: "requires_main_strength"
       - when: "industry_capacity_like_count >= 2 and pct >= 2 and amount_yi >= 4"
         reason: "requires_sector_leadership"
@@ -66,7 +74,7 @@ phases:
     risk_flags: ["注意换手确认"]
 
   - name: 高潮期
-    when: "_sentiment_phase == '高潮'"
+    when: "market_sentiment_phase == '高潮'"
     score_cap: 95
     hard_veto: false
     risk_flags: ["高潮期注意分歧"]
@@ -90,7 +98,7 @@ setups:
     invalid_rule: "失守分歧日低点"
 
   - name: 龙头启动
-    when: "_is_leader_candidate == true and breakout20 == true and turnover_rate >= 2 and turnover_rate <= 10"
+    when: "is_shortline_leader_candidate == true and breakout20 == true and turnover_rate >= 2 and turnover_rate <= 10"
     score_delta: 12
     entry_rule: "龙头候选放量突破，关注板块联动"
     invalid_rule: "板块退潮或龙头炸板"
@@ -99,10 +107,10 @@ scoring:
   base: 40
   rules:
     # ── 主线与行业 ──
-    - when: "_is_main == true"
+    - when: "is_main_theme == true"
       delta: 18
       reason: 主线行业
-    - when: "_is_main == false"
+    - when: "is_main_theme == false"
       delta: -15
       reason: 非主线降权
     - when: "primary_excess20 > 15"
@@ -121,33 +129,33 @@ scoring:
     - when: "turnover_rate >= 6 and turnover_rate <= 8"
       delta: 4
       reason: 换手适中
-    - when: "turnover_rate >= 8 and turnover_rate <= 10 and _is_leader_candidate == true"
+    - when: "turnover_rate >= 8 and turnover_rate <= 10 and is_shortline_leader_candidate == true"
       delta: 3
       reason: 龙头可接受偏高换手
     - when: "turnover_rate < 1.5"
       delta: -6
       reason: 换手过低，关注度不足
-    - when: "turnover_rate > 10 and _is_leader_candidate == false"
+    - when: "turnover_rate > 10 and is_shortline_leader_candidate == false"
       delta: -8
       reason: 非龙头高换手疑为主力出货
     # ── 龙头识别 (放大) ──
-    - when: "_is_leader_candidate == true"
+    - when: "is_shortline_leader_candidate == true"
       delta: 16
       reason: 龙头候选
-    - when: "_is_leader_candidate == true and is_limit_up == true"
+    - when: "is_shortline_leader_candidate == true and is_limit_up == true"
       delta: 8
       reason: 涨停龙头确认
-    - when: "_is_leader_candidate == true and _is_main == true"
+    - when: "is_shortline_leader_candidate == true and is_main_theme == true"
       delta: 6
       reason: 主线龙头共振
     # ── 主力共识 (放大) ──
-    - when: "_consensus_signal == '主力吸筹'"
+    - when: "capital_resonance_signal == '主力共振'"
       delta: 12
       reason: 超大单净流入+散户净流出
-    - when: "_consensus_signal == '机构共识'"
+    - when: "capital_resonance_signal == '资金配合'"
       delta: 8
       reason: 主力与超大单共振流入
-    - when: "_consensus_signal == '散户主导'"
+    - when: "capital_resonance_signal == '资金背离'"
       delta: -12
       reason: 散户主导，缺乏主力共识
     - when: "main_net_inflow_yi > 0.5"
@@ -157,28 +165,34 @@ scoring:
       delta: 4
       reason: 主力净流入占比超8%
     # ── 龙虎榜买榜质量 ──
-    - when: "dragon_tiger_is_on_list == true and _dragon_tiger_dispersion == '集中'"
+    - when: "dragon_tiger_is_on_list == true and dragon_tiger_buy_dispersion == '集中'"
       delta: 8
       reason: 龙虎榜买榜集中
-    - when: "dragon_tiger_is_on_list == true and _dragon_tiger_dispersion == '分散'"
+    - when: "dragon_tiger_is_on_list == true and dragon_tiger_buy_dispersion == '分散'"
       delta: -6
       reason: 龙虎榜买榜分散，主力分歧
-    - when: "dragon_tiger_is_on_list == true and _dragon_tiger_inst_ratio >= 0.5"
+    - when: "dragon_tiger_is_on_list == true and dragon_tiger_inst_buy_ratio >= 0.5"
       delta: 6
       reason: 机构净买入占比过半
-    - when: "dragon_tiger_is_on_list == true and _dragon_tiger_inst_ratio >= 0.7"
+    - when: "dragon_tiger_is_on_list == true and dragon_tiger_inst_buy_ratio >= 0.7"
       delta: 4
       reason: 机构净买入高度集中
     # ── 市场情绪 (分层) ──
-    - when: "_sentiment_phase == '高潮'"
+    - when: "market_sentiment_phase == '高潮'"
       delta: 6
       reason: 市场情绪高潮
-    - when: "_sentiment_phase == '活跃'"
+    - when: "market_sentiment_phase == '活跃'"
       delta: 3
       reason: 市场情绪活跃
-    - when: "_sentiment_phase == '冰点'"
+    - when: "market_sentiment_phase == '冰点'"
       delta: -10
       reason: 市场情绪冰点，降权
+    - when: "limit_up_overheat_score >= 70"
+      delta: -8
+      reason: 涨停情绪过热，降低追高分
+    - when: "twenty_cm_risk_gate == 'block'"
+      delta: -15
+      reason: 20cm 风险闸门阻断
     # ── 价格位置 (新增) ──
     - when: "pos20 > 90"
       delta: -5
@@ -205,12 +219,18 @@ risk:
     - when: "turnover_rate > 12"
       level: high
       flag: 高换手风险
-    - when: "_consensus_signal == '散户主导'"
+    - when: "capital_resonance_signal == '资金背离'"
       level: medium
       flag: 散户主导无主力共识
-    - when: "dragon_tiger_is_on_list == true and _dragon_tiger_dispersion == '分散'"
+    - when: "dragon_tiger_is_on_list == true and dragon_tiger_buy_dispersion == '分散'"
       level: medium
       flag: 龙虎榜买榜分散
-    - when: "_sentiment_phase == '冰点' and _is_leader_candidate == false"
+    - when: "market_sentiment_phase == '冰点' and is_shortline_leader_candidate == false"
       level: high
       flag: 冰点期非龙头不参与
+    - when: "limit_up_overheat_score >= 70"
+      level: medium
+      flag: 涨停过热，追高仓位降档
+    - when: "twenty_cm_risk_gate == 'block'"
+      level: high
+      flag: 20cm 风险闸门阻断

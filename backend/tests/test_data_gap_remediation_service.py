@@ -1,18 +1,24 @@
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.session import Base
-from app.models.tables import DailyKbar, StockQuote
+from app.models.tables import Recommendation, RecommendationRun, DailyKbar, StockQuote
 from app.services.data_gap_remediation_service import (
     DEFAULT_DAILY_KBAR_CODE_LIMIT,
     _backfill_daily_kbar_date,
     _daily_kbar_target_codes,
+    _is_natural_short_history,
+    _local_pool_gap_comparison,
     _upsert_daily_kbar_payload,
     remediate_data_health_gaps,
+    remediate_recommendation_run_auxiliary_data,
+    sync_local_pool_kline_gaps,
 )
 
 
@@ -121,6 +127,173 @@ def test_remediate_data_health_gaps_executes_targeted_plan(monkeypatch):
     assert actions["limit_up_board"]["row_count"] == 1
     assert actions["capital_flow"]["requested_code_count"] == 3
     assert actions["concept_sector"]["row_count"] == 1
+
+
+def test_sync_local_pool_kline_gaps_reports_unlimited_scope(monkeypatch):
+    db = MagicMock()
+    gaps = [
+        {"code": "000001", "name": "样本1", "reason": "missing", "bar_count": 0, "quote_date": "2026-05-28"},
+        {"code": "000002", "name": "样本2", "reason": "missing", "bar_count": 0, "quote_date": "2026-05-28"},
+    ]
+    counts = {
+        "candidate_count": 2,
+        "checked_count": 2,
+        "ready_count": 0,
+        "missing_count": 2,
+        "short_history_count": 0,
+        "immature_history_count": 0,
+        "stale_count": 0,
+        "gap_count": 2,
+        "latest_allowed_bar_date": "2026-05-28",
+    }
+
+    monkeypatch.setattr(
+        "app.services.data_gap_remediation_service._local_pool_kline_gap_state",
+        lambda _db, min_bars: {"counts": counts, "gaps": gaps},
+    )
+
+    result = sync_local_pool_kline_gaps(db, code_limit=0, dry_run=True)
+
+    assert result["code_limit"] == 0
+    assert result["effective_code_limit"] == 2
+    assert result["target_count"] == 2
+
+
+def test_remediate_recommendation_run_auxiliary_data_updates_candidate_snapshot(db, monkeypatch):
+    unique_id = uuid4().hex[:12]
+    run_id = f"run_aux_{unique_id}"
+    recommendation_id = f"rec_aux_{unique_id}"
+    run = RecommendationRun(
+        run_id=run_id,
+        run_name="辅助证据补齐测试",
+        run_mode="experiment",
+        trade_date="2026-05-27",
+        universe_count=1,
+        recommended_count=1,
+        market_scope="all",
+        risk_template="balanced",
+        output_count=1,
+        selected_skills_json="[]",
+        params_json="{}",
+        market_snapshot_json=json.dumps({"trade_date": "2026-05-27", "breadth": {"data_source": "local_pool"}}),
+        result_summary_json="{}",
+        filter_audit_json="{}",
+        status="completed",
+    )
+    feature_snapshot = {
+        "code": "000001",
+        "name": "平安银行",
+        "industry": "银行",
+        "price": 10,
+        "pct": 2.0,
+        "amount_yi": 8.0,
+        "turnover_rate": 3.0,
+        "free_mv_yi": 100.0,
+        "total_mv_yi": 200.0,
+        "pe_ttm": 8.0,
+        "latest_trade_date": "2026-05-27",
+        "data_source": "real_market",
+        "data_quality": {
+            "strict_real_data": True,
+            "kline_days": 90,
+            "missing_fields": ["announcements", "capital_flow", "dragon_tiger", "main_net_inflow", "news"],
+            "quote_source": "unified_pool",
+            "quote_source_count": 1,
+            "quote_quality_score": 100,
+            "bars_source": "daily_bars_cache",
+        },
+        "data_completeness_score": 56.0,
+        "evidence_quality_score": 31.0,
+    }
+    db.add(run)
+    db.add(
+        Recommendation(
+            recommendation_id=recommendation_id,
+            run_id=run.run_id,
+            trade_date=run.trade_date,
+            code="000001",
+            name="平安银行",
+            industry="银行",
+            recommend_price=10,
+            bucket="",
+            final_score=58.0,
+            consensus_score=50.0,
+            setup_type="多头顺势",
+            risk_tags_json="[]",
+            info_tags_json=json.dumps(["多维度数据缺失（公告/龙虎榜/题材等），置信度受影响"]),
+            feature_snapshot_json=json.dumps(feature_snapshot),
+            market_context_json="{}",
+            skill_breakdown_json="[]",
+            agent_summary_json="{}",
+            status="pending",
+        )
+    )
+    db.commit()
+
+    monkeypatch.setattr(
+        "app.services.data_gap_remediation_service.refresh_capital_flows_for_codes",
+        lambda _db, codes, trade_date=None: {
+            code: {
+                "trade_date": trade_date,
+                "main_net_inflow_yi": 1.2,
+                "super_large_net_inflow_yi": 0.5,
+                "large_net_inflow_yi": 0.7,
+            }
+            for code in codes
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.data_gap_remediation_service.refresh_dragon_tiger",
+        lambda _db, trade_date=None: [{"trade_date": trade_date, "code": "000001"}],
+    )
+    monkeypatch.setattr(
+        "app.services.data_gap_remediation_service.refresh_news_for_codes",
+        lambda _db, codes, trade_date=None: {
+            code: [{"announce_date": trade_date, "title": "订单增长", "sentiment": "positive"}]
+            for code in codes
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.data_gap_remediation_service.refresh_concept_sectors",
+        lambda _db, trade_date=None: [{"trade_date": trade_date, "sector_code": "BK001", "sector_name": "金融科技", "heat_rank": 3}],
+    )
+    monkeypatch.setattr(
+        "app.services.data_gap_remediation_service.load_auxiliary_for_stocks",
+        lambda _db, codes, trade_date=None: {
+            "limit_up": {},
+            "concept_sectors": {"000001": [{"sector_name": "金融科技", "heat_rank": 3}]},
+            "capital_flows": {"000001": {"main_net_inflow_yi": 1.2, "super_large_net_inflow_yi": 0.5, "large_net_inflow_yi": 0.7}},
+            "dragon_tigers": {"000001": {"trade_date": trade_date, "buy_amount_yi": 2.0, "sell_amount_yi": 1.0, "net_amount_yi": 1.0}},
+            "news": {"000001": [{"announce_date": trade_date, "title": "订单增长", "sentiment": "positive"}]},
+            "auctions": {},
+            "pledges": {},
+            "broker_recs": {},
+            "share_floats_upcoming": {},
+            "coverage": {"dragon_tiger_trade_date_covered": True, "dragon_tiger_trade_date_count": 1},
+        },
+    )
+
+    dry_run = remediate_recommendation_run_auxiliary_data(db, run.run_id, dry_run=True)
+    assert dry_run["status"] == "planned"
+    rec = db.get(Recommendation, recommendation_id)
+    assert "capital_flow" in json.loads(rec.feature_snapshot_json)["data_quality"]["missing_fields"]
+
+    result = remediate_recommendation_run_auxiliary_data(db, run.run_id)
+
+    rec = db.get(Recommendation, recommendation_id)
+    updated = json.loads(rec.feature_snapshot_json)
+    assert result["status"] == "completed"
+    assert result["comparison"]["resolved_missing_field_count"] >= 4
+    assert result["comparison"]["average_data_completeness_score_delta"] > 0
+    assert "capital_flow" not in updated["data_quality"]["missing_fields"]
+    assert "news" not in updated["data_quality"]["missing_fields"]
+    assert updated["main_net_inflow_yi"] == 1.2
+    assert updated["latest_news"] == "订单增长"
+    run_snapshot = json.loads(db.get(RecommendationRun, run_id).market_snapshot_json)
+    audit = run_snapshot["breadth"]["auxiliary_data_audit"]
+    assert audit["capital_flows"]["requested_count"] == 1
+    assert audit["capital_flows"]["count"] == 1
+    assert audit["news"]["count"] == 1
 
 
 def test_remediate_data_health_gaps_dry_run_only_returns_plan(monkeypatch):
@@ -631,3 +804,96 @@ def test_default_remediation_plan_covers_full_recommendation_data_dependencies(m
     assert actions["news"]["requested_code_count"] == 2
     assert actions["news"]["row_count"] == 2
     assert actions["news"]["rollback_hint"].startswith("按 news_announcement.announce_date")
+
+
+def test_local_pool_gap_comparison_reports_candidate_coverage_lift():
+    result = _local_pool_gap_comparison(
+        before_counts={
+            "candidate_count": 10,
+            "ready_count": 6,
+            "gap_count": 4,
+        },
+        after_counts={
+            "candidate_count": 10,
+            "ready_count": 9,
+            "gap_count": 1,
+        },
+        target_count=4,
+        succeeded_count=3,
+        unresolved_count=1,
+        failed_count=0,
+    )
+
+    assert result == {
+        "before_candidate_count": 10,
+        "after_candidate_count": 10,
+        "before_ready_count": 6,
+        "after_ready_count": 9,
+        "ready_count_delta": 3,
+        "before_gap_count": 4,
+        "after_gap_count": 1,
+        "gap_count_delta": -3,
+        "target_gap_count": 4,
+        "resolved_target_count": 3,
+        "unresolved_target_count": 1,
+        "failed_target_count": 0,
+        "candidate_coverage_rate_before": 0.6,
+        "candidate_coverage_rate_after": 0.9,
+        "candidate_coverage_rate_delta": 0.3,
+        "remediation_coverage_rate": 0.75,
+    }
+
+
+def test_local_pool_gap_comparison_marks_no_gap_as_fully_covered():
+    result = _local_pool_gap_comparison(
+        before_counts={"candidate_count": 5, "ready_count": 5, "gap_count": 0},
+        after_counts={"candidate_count": 5, "ready_count": 5, "gap_count": 0},
+        target_count=0,
+        succeeded_count=0,
+        unresolved_count=0,
+        failed_count=0,
+    )
+
+    assert result["candidate_coverage_rate_before"] == 1.0
+    assert result["candidate_coverage_rate_after"] == 1.0
+    assert result["candidate_coverage_rate_delta"] == 0.0
+    assert result["remediation_coverage_rate"] == 1.0
+
+
+def test_local_pool_gap_comparison_uses_actual_gap_delta_for_resolution():
+    result = _local_pool_gap_comparison(
+        before_counts={"candidate_count": 1200, "ready_count": 0, "gap_count": 1199},
+        after_counts={"candidate_count": 1200, "ready_count": 280, "gap_count": 918},
+        target_count=1199,
+        succeeded_count=280,
+        unresolved_count=1,
+        failed_count=0,
+    )
+
+    assert result["resolved_target_count"] == 281
+    assert result["unresolved_target_count"] == 918
+    assert result["remediation_coverage_rate"] == 0.234
+
+
+def test_natural_short_history_requires_latest_bar_and_listing_start():
+    assert _is_natural_short_history(
+        bar_count=22,
+        latest_bar_date="2026-05-28",
+        quote_date="2026-05-28",
+        first_bar_date="2026-04-24",
+        list_date="2026-04-24",
+    )
+    assert not _is_natural_short_history(
+        bar_count=22,
+        latest_bar_date="2026-05-20",
+        quote_date="2026-05-28",
+        first_bar_date="2026-04-24",
+        list_date="2026-04-24",
+    )
+    assert not _is_natural_short_history(
+        bar_count=22,
+        latest_bar_date="2026-05-28",
+        quote_date="2026-05-28",
+        first_bar_date="2026-05-01",
+        list_date="2026-04-24",
+    )

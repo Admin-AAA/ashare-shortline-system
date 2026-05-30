@@ -1,6 +1,7 @@
 :root {
   --radius-sm: 6px;
   --radius-md: 8px;
+  --sidebar-width: 168px;
   --font-ui: Inter, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
   --motion-fast: 160ms ease;
 }

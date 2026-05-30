@@ -108,9 +108,6 @@ def get_local_pool_status(
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
     latest_allowed_bar_date = _latest_allowed_bar_date()
-    latest_quote_date_for_coverage = db.scalar(select(func.max(StockQuote.trade_date)))
-    coverage_trade_date = _coverage_reference_date(latest_quote_date_for_coverage, latest_allowed_bar_date)
-
     # ── 快速近似计数（MySQL information_schema，O(1)）──
     approx = _approx_table_counts(db, [
         "stock_quotes", "daily_kbars",
@@ -135,7 +132,6 @@ def get_local_pool_status(
     latest_bar_date = db.scalar(
         select(func.max(_daily_kbar_trade_date_expr())).where(_daily_kbar_trade_date_expr() <= latest_allowed_compact)
     )
-    latest_quote_date = latest_quote_date_for_coverage
     t_dates = time.perf_counter()
 
     # ── 一次性加载全部活跃 StockQuote 行 ──
@@ -145,6 +141,11 @@ def get_local_pool_status(
     from app.services.market_pool import _dedupe_latest_quote_rows
     current_quote_rows = _dedupe_latest_quote_rows(all_quote_rows)
     active_unified_quote_count = len(current_quote_rows)
+    latest_quote_date = max(
+        (_normalize_trade_date(row.trade_date) for row in current_quote_rows if row.trade_date),
+        default=None,
+    )
+    coverage_trade_date = _coverage_reference_date(latest_quote_date, latest_allowed_bar_date)
     t_load_quotes = time.perf_counter()
 
     # 只取 distinct code 总量，避免为全市场每只股票都做一次汇总
@@ -158,18 +159,36 @@ def get_local_pool_status(
     indicator_coverage_pct = 0.0
     t_distinct_bars = time.perf_counter()
 
-    from app.services.market_pool import _apply_local_quote_metrics, local_pool_recommendation_readiness
-    from app.services.market_data import _candidate_filter_summary, _select_candidates
+    from app.services.market_pool import (
+        _candidate_recall_plan,
+        _eligible_market_quotes,
+        _execution_recall_count,
+        _load_cached_bars_summary,
+        _load_cached_quotes,
+        _quote_sources as _pool_quote_sources,
+        _select_recall_candidates,
+        local_pool_recommendation_readiness,
+    )
+    from app.services.market_data import _candidate_filter_summary
 
-    all_quotes = _unified_rows_to_quotes(current_quote_rows, skip_metrics=True)
-    eligible_quotes = _select_candidates(all_quotes, len(all_quotes)) if all_quotes else []
-    eligible_codes = [str(item.get("code") or "") for item in eligible_quotes if item.get("code")]
+    settings = get_settings()
+    active_sources = enabled_sources(db, "quote", _pool_quote_sources(settings))
+    all_quotes = _load_cached_quotes(
+        db,
+        allowed_sources=set(active_sources) if active_sources else None,
+        skip_metrics=True,
+    )
+    eligible_quotes = _eligible_market_quotes(all_quotes) if all_quotes else []
+    recall_plan = _candidate_recall_plan(len(all_quotes), len(eligible_quotes), settings)
+    execution_recall_count = _execution_recall_count(recall_plan, len(eligible_quotes))
+    candidate_quotes = _select_recall_candidates(eligible_quotes, execution_recall_count)
+    eligible_codes = [str(item.get("code") or "") for item in candidate_quotes if item.get("code")]
     candidate_filter = _candidate_filter_summary(all_quotes)
     t_quotes_to_dicts = time.perf_counter()
 
     # 只为真正可能进入推荐链路的股票加载日K汇总，复用给 readiness 与 eligible stats
     eligible_bar_summaries = (
-        _load_bar_summaries_for_codes(db, eligible_codes, coverage_trade_date)
+        _load_cached_bars_summary(db, eligible_codes, 30)
         if eligible_codes
         else {}
     )
@@ -212,6 +231,11 @@ def get_local_pool_status(
         (t_paged_bars - t0) * 1000,
     )
 
+    kline_readiness = readiness.get("kline") if isinstance(readiness.get("kline"), dict) else {}
+    immature_history_count = int(kline_readiness.get("immature_history_count") or 0)
+    raw_short_history_count = int(eligible_bar_stats["short_history_count"] or 0)
+    remediable_short_history_count = max(0, raw_short_history_count - immature_history_count)
+
     result = {
         "summary": {
             "raw_quote_count": raw_quote_count,
@@ -228,7 +252,9 @@ def get_local_pool_status(
             "eligible_daily_bar_coverage_rate": eligible_bar_stats["coverage_rate"],
             "daily_bar_missing_count": eligible_bar_stats["missing_count"],
             "daily_bar_stale_count": eligible_bar_stats["stale_count"],
-            "daily_bar_short_history_count": eligible_bar_stats["short_history_count"],
+            "daily_bar_short_history_count": remediable_short_history_count,
+            "daily_bar_immature_history_count": immature_history_count,
+            "daily_bar_total_short_history_count": raw_short_history_count,
             "actual_recommend_scan_count": int((readiness.get("scan") or {}).get("actual_scan_count") or 0),
             "skill_input_count": int((readiness.get("scan") or {}).get("skill_input_count") or 0),
             "daily_bar_row_count": daily_bar_row_count,

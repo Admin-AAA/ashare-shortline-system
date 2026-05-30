@@ -54,6 +54,8 @@ export default memo(function ModelRoutePanel({
   const [editingRouteId, setEditingRouteId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [saving, setSaving] = useState(false);
+  const [pendingDeleteRouteId, setPendingDeleteRouteId] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState("");
 
   const enabledCount = useMemo(() => routes.filter((item) => item.enabled).length, [routes]);
   const customKeyCount = useMemo(() => routes.filter((item) => item.key_source === "custom").length, [routes]);
@@ -61,11 +63,14 @@ export default memo(function ModelRoutePanel({
   const editingRoute = routes.find((item) => item.route_id === editingRouteId) ?? null;
 
   function resetDraft() {
+    setFeedback("");
     setEditingRouteId(null);
     setDraft(EMPTY_DRAFT);
   }
 
   function startCreate() {
+    setFeedback("");
+    setPendingDeleteRouteId(null);
     setEditingRouteId(null);
     setDraft({
       ...EMPTY_DRAFT,
@@ -76,6 +81,8 @@ export default memo(function ModelRoutePanel({
   }
 
   function startEdit(route: ModelRoute) {
+    setFeedback("");
+    setPendingDeleteRouteId(null);
     setEditingRouteId(route.route_id);
     setDraft({
       name: route.name,
@@ -107,15 +114,23 @@ export default memo(function ModelRoutePanel({
         await onCreate(payload);
       }
       resetDraft();
+      setPendingDeleteRouteId(null);
+      setFeedback(editingRouteId ? "模型路由已保存" : "模型路由已创建");
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleDelete(routeId: string) {
-    if (!window.confirm("确定删除这条模型路由？")) return;
-    await onDelete(routeId);
-    if (editingRouteId === routeId) {
+  async function handleDelete(route: ModelRoute) {
+    if (pendingDeleteRouteId !== route.route_id) {
+      setPendingDeleteRouteId(route.route_id);
+      setFeedback(`再点删除：模型路由 ${route.name}。`);
+      return;
+    }
+    await onDelete(route.route_id);
+    setPendingDeleteRouteId(null);
+    setFeedback(`模型路由已删除：${route.name}`);
+    if (editingRouteId === route.route_id) {
       resetDraft();
     }
   }
@@ -145,6 +160,8 @@ export default memo(function ModelRoutePanel({
         <MiniStat label="自定义 Key" value={customKeyCount} />
         <MiniStat label="总路由" value={routes.length} />
       </div>
+
+      {feedback ? <div className="control-banner warning" role="status" aria-live="polite">{feedback}</div> : null}
 
       <div className="model-route-list">
         {routes.map((route, index) => (
@@ -185,9 +202,9 @@ export default memo(function ModelRoutePanel({
                 {route.enabled ? <PauseCircle size={14} /> : <Play size={14} />}
                 {route.enabled ? "停用" : "启用"}
               </button>
-              <button className="ghost-btn danger" onClick={() => void handleDelete(route.route_id)}>
+              <button className={`ghost-btn danger ${pendingDeleteRouteId === route.route_id ? "armed" : ""}`} onClick={() => void handleDelete(route)}>
                 <Trash2 size={14} />
-                删除
+                {pendingDeleteRouteId === route.route_id ? "再点删除" : "删除"}
               </button>
             </div>
           </div>

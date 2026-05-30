@@ -292,9 +292,18 @@ def query_stock_detail(code: str, session_id: str) -> dict:
                     "trend_status", "ma_alignment",
                     "macd_status", "macd_signal",
                     "rsi_status", "rsi_signal",
-                    "buy_signal", "bias_ma5", "bias_ma10", "bias_ma20",
+                    "bias_ma5", "bias_ma10", "bias_ma20",
                     "volume_breakout_signal", "volume_shrink_pullback",
                     "pos20", "pos60", "pos120",
+                    "is_main_theme", "is_shortline_leader_candidate", "shortline_leader_score",
+                    "market_sentiment_phase",
+                    "limit_up_overheat_score", "limit_up_overheat_level",
+                    "sector_ladder_completeness_score", "sector_ladder_level",
+                    "sector_ladder_limit_up_count", "sector_ladder_height",
+                    "capital_resonance_score", "capital_resonance_signal", "capital_resonance_source",
+                    "is_20cm_stock", "twenty_cm_risk_score", "twenty_cm_risk_gate", "twenty_cm_risk_reason",
+                    "dragon_tiger_buy_dispersion", "dragon_tiger_inst_buy_ratio",
+                    "shortline_factor_explanations",
                 ):
                     if dsa_key in stock_cached:
                         result[dsa_key] = stock_cached[dsa_key]

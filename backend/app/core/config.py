@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     kline_sources: str = "tushare"
     market_scan_size: int = 5200
     market_candidate_count: int = 0  # 0 = 不在首段召回前硬截断，交给宽召回窗口与后续精排控制
-    market_broad_recall_count: int = 400  # 两段召回第一段：从全可交易池宽召回，再进入后续规则门/深审
+    market_broad_recall_count: int = 6000  # 两段召回第一段：让全部可交易股票进入策略层，由各策略 universe 规则自行筛选
     market_candidate_lookahead_multiplier: int = 4
     market_skill_review_limit: int = 0  # 0 = Skill Agent 接收本次实际扫描的全部股票
     market_skill_review_concurrency: int = 10  # 默认 10 并发；运行时可通过 agent_review_concurrency 参数覆盖
@@ -49,12 +49,14 @@ class Settings(BaseSettings):
     concept_sector_sources: str = "tushare"
     capital_flow_sources: str = "tushare"
     dragon_tiger_sources: str = "tushare"
-    news_sources: str = ""
+    news_sources: str = "tushare,eastmoney"
     limit_up_cache_ttl_seconds: int = 3600
     concept_sector_cache_ttl_seconds: int = 3600
     capital_flow_cache_ttl_seconds: int = 7200
     dragon_tiger_cache_ttl_seconds: int = 3600
     news_cache_ttl_seconds: int = 7200
+    auxiliary_prefetch_max_codes: int = 120
+    concept_member_fetch_timeout_seconds: float = 30.0
     enable_limit_up_fetch: bool = True
     enable_concept_sector_fetch: bool = True
     enable_capital_flow_fetch: bool = True

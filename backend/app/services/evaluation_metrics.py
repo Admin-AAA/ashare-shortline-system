@@ -398,7 +398,11 @@ def _accuracy_policy_audit(trades: list[dict[str, Any]]) -> dict[str, Any]:
     net_non_positive_count = executable_count - net_positive_count
 
     accurate_count = sum(1 for item in trades if _is_accurate_record(item))
-    manual_override_count = max(0, net_positive_count - accurate_count)
+    legacy_label_mismatch_count = sum(
+        1
+        for item in trades
+        if "accurate" in item and _boolish(item.get("accurate"), False) != _is_accurate_record(item)
+    )
 
     failure_counter: Counter[tuple[str, str]] = Counter()
     for item in trades:
@@ -425,7 +429,8 @@ def _accuracy_policy_audit(trades: list[dict[str, Any]]) -> dict[str, Any]:
             "unexecutable_count": unexecutable_count,
             "net_positive_count": net_positive_count,
             "net_non_positive_count": net_non_positive_count,
-            "manual_override_count": manual_override_count,
+            "manual_override_count": legacy_label_mismatch_count,
+            "legacy_accuracy_label_mismatch_count": legacy_label_mismatch_count,
         },
         "funnel": [
             _funnel_row("total_recommendations", "总推荐", trade_count, 0, trade_count),
@@ -461,6 +466,7 @@ def _empty_accuracy_policy() -> dict[str, Any]:
             "net_positive_count": 0,
             "net_non_positive_count": 0,
             "manual_override_count": 0,
+            "legacy_accuracy_label_mismatch_count": 0,
         },
         "funnel": [
             _funnel_row("total_recommendations", "总推荐", 0, 0, 0),
@@ -513,7 +519,6 @@ def _is_accurate_record(item: dict[str, Any]) -> bool:
     return (
         _is_valid_signal_record(item)
         and _is_executed_record(item)
-        and _boolish(item.get("accurate", float(item.get("net_return_pct", 0)) > 0), True)
         and float(item.get("net_return_pct", 0)) > 0
     )
 

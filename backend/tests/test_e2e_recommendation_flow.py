@@ -56,6 +56,7 @@ from app.services.workbench_service import (
     get_recommendation_detail,
     get_run_detail,
     invalidate_bootstrap_cache,
+    list_presets,
     list_run_recommendations,
     list_runs,
     recover_interrupted_runs,
@@ -177,6 +178,30 @@ def _mock_market_universe():
 
 def _unique_stock_code(prefix: str = "98") -> str:
     return f"{prefix}{uuid.uuid4().int % 10000:04d}"
+
+
+def test_list_presets_exposes_output_count(db: Session):
+    db.add(
+        Preset(
+            preset_id="preset_output_count_contract",
+            name="输出数量契约测试",
+            run_mode="formal",
+            market_scope="all",
+            risk_template="balanced",
+            score_line=72.0,
+            output_count=4,
+            bucket_limits_json="{}",
+            data_source=DATA_SOURCE_LOCAL_POOL_PREFERRED,
+            hide_recent_repeats=True,
+            status="active",
+        )
+    )
+    db.commit()
+
+    presets = list_presets(db)
+    item = next(preset for preset in presets if preset["preset_id"] == "preset_output_count_contract")
+
+    assert item["output_count"] == 4
 
 
 def _mock_skill_reviews(stock, skills, snapshot, rule_signals_by_skill, session_id):
@@ -329,7 +354,7 @@ class TestE2ERecommendationFlow:
         experiment_params = _merge_run_params(None, None, {"run_mode": "experiment", "skills": []})
         assert experiment_params["data_source"] == DATA_SOURCE_LOCAL_POOL
 
-    def test_merge_run_params_preserves_fast_run_review_controls(self):
+    def test_merge_run_params_keeps_formal_auxiliary_refresh_enabled(self):
         params = _merge_run_params(
             None,
             None,
@@ -346,17 +371,37 @@ class TestE2ERecommendationFlow:
         assert params["disable_agent_review"] is True
         assert params["agent_review_limit"] == 3
         assert params["agent_review_concurrency"] == 2
+        assert params["skip_aux_refresh"] is False
+
+    def test_merge_run_params_preserves_experiment_fast_run_controls(self):
+        params = _merge_run_params(
+            None,
+            None,
+            {
+                "run_mode": "experiment",
+                "skills": [],
+                "disable_agent_review": True,
+                "agent_review_limit": 3,
+                "agent_review_concurrency": 2,
+                "skip_aux_refresh": True,
+            },
+        )
+
+        assert params["disable_agent_review"] is True
+        assert params["agent_review_limit"] == 3
+        assert params["agent_review_concurrency"] == 2
         assert params["skip_aux_refresh"] is True
 
-    def test_formal_auxiliary_refresh_covers_all_prefiltered_candidates(self):
+    def test_formal_auxiliary_refresh_uses_bounded_precision_window(self):
         count = _resolve_aux_prefetch_count(
-            63,
+            200,
             48,
             run_mode="formal",
             skip_aux_refresh=False,
+            max_codes=120,
         )
 
-        assert count == 63
+        assert count == 120
 
     def test_fast_run_auxiliary_refresh_remains_capped(self):
         count = _resolve_aux_prefetch_count(
@@ -364,6 +409,7 @@ class TestE2ERecommendationFlow:
             48,
             run_mode="formal",
             skip_aux_refresh=True,
+            max_codes=120,
         )
 
         assert count == 24
@@ -503,7 +549,7 @@ class TestE2ERecommendationFlow:
                 "secondary_buy": 10.15,
                 "stop_loss": 9.6,
                 "take_profit": 10.8,
-                "suggested_position": "中仓",
+                "market_discipline": {"position_label": "中仓", "max_position_pct": 55},
             }),
             market_context_json="{}",
             skill_breakdown_json="[]",
@@ -575,7 +621,7 @@ class TestE2ERecommendationFlow:
                 "secondary_buy": 9.7,
                 "stop_loss": 9.2,
                 "take_profit": 10.8,
-                "suggested_position": "小仓",
+                "market_discipline": {"position_label": "小仓", "max_position_pct": 35},
             }),
             market_context_json="{}",
             skill_breakdown_json="[]",

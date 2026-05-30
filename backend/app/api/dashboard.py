@@ -27,6 +27,11 @@ from app.services.workbench_service import list_run_recommendations
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 RUN_ACTIVE_STATUSES = {"queued", "running"}
 RUN_HEARTBEAT_STALE_SECONDS = 1200
+DASHBOARD_POOL_PREVIEW_LIMIT = 0
+DASHBOARD_POOL_SCOPE_NOTE = (
+    "驾驶舱概览使用汇总模式打开，不拉取分页明细；缺口样例只用于定位问题。"
+    "刷新本地数据池会全量检查候选池，并补齐可处理的日K缺口。"
+)
 
 
 def compose_overview(
@@ -85,6 +90,7 @@ def serialize_run_progress_row(row: Any | None) -> dict[str, Any] | None:
         "checkpoint_phase": getattr(row, "checkpoint_phase", None),
         "progress_pct": progress_pct(getattr(row, "progress_current", 0), getattr(row, "progress_total", 0)),
         "progress_message": getattr(row, "progress_message", None) or "",
+        "error_message": getattr(row, "error_message", None),
         "is_stale": (
             status in RUN_ACTIVE_STATUSES
             and heartbeat_age_seconds is not None
@@ -143,26 +149,16 @@ def _loads(raw: Any, default: Any) -> Any:
 
 @router.get("/overview", response_model=DashboardOverview)
 def overview(db: Session = Depends(get_db)) -> DashboardOverview:
-    from app.api.data_sources import get_cached_local_pool_status
-
     try:
         market_row = db.scalar(select(MarketSnapshot).order_by(MarketSnapshot.created_at.desc()).limit(1))
-        recent_run_row = db.scalar(select(RecommendationRun).order_by(RecommendationRun.started_at.desc()).limit(1))
+        recent_run_row = _select_dashboard_run(db)
         recent_run = serialize_run_progress_row(recent_run_row)
+        recommendation_run_row = _select_dashboard_recommendation_run(db)
         run_recommendations = []
-        if recent_run_row is not None:
-            run_recommendations = list_run_recommendations(db, str(recent_run_row.run_id))[:12]
+        if recommendation_run_row is not None:
+            run_recommendations = list_run_recommendations(db, str(recommendation_run_row.run_id))[:12]
 
-        pool_status = get_cached_local_pool_status(
-            db,
-            u_limit=20,
-            u_offset=0,
-            b_limit=20,
-            b_offset=0,
-            include_paginated=False,
-            include_details=False,
-            cache_only=True,
-        )
+        pool_status = load_dashboard_pool_status(db)
         data_health = summarize_pool_status(pool_status)
         task_health = summarize_tasks(list_scheduled_tasks(db))
         quality_scorecard = build_dashboard_quality_scorecard(
@@ -182,3 +178,78 @@ def overview(db: Session = Depends(get_db)) -> DashboardOverview:
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+def _select_dashboard_run(db: Session) -> RecommendationRun | None:
+    return db.scalar(
+        select(RecommendationRun)
+        .where(RecommendationRun.run_mode == "formal")
+        .order_by(RecommendationRun.started_at.desc())
+        .limit(1)
+    )
+
+
+def _select_dashboard_recommendation_run(db: Session) -> RecommendationRun | None:
+    latest_trade_date = _latest_dashboard_trade_date(db)
+    if not latest_trade_date:
+        return None
+    return db.scalar(
+        select(RecommendationRun)
+        .where(
+            RecommendationRun.run_mode == "formal",
+            RecommendationRun.status == "completed",
+            RecommendationRun.trade_date == latest_trade_date,
+        )
+        .order_by(RecommendationRun.finished_at.desc(), RecommendationRun.started_at.desc())
+        .limit(1)
+    )
+
+
+def _latest_dashboard_trade_date(db: Session) -> str | None:
+    return db.scalar(
+        select(RecommendationRun.trade_date)
+        .where(RecommendationRun.run_mode == "formal", RecommendationRun.status == "completed")
+        .order_by(RecommendationRun.trade_date.desc())
+        .limit(1)
+    )
+
+
+def load_dashboard_pool_status(db: Session) -> dict[str, Any]:
+    from app.api.data_sources import get_cached_local_pool_status
+
+    pool_status = get_cached_local_pool_status(
+        db,
+        u_limit=DASHBOARD_POOL_PREVIEW_LIMIT,
+        u_offset=0,
+        b_limit=DASHBOARD_POOL_PREVIEW_LIMIT,
+        b_offset=0,
+        include_paginated=False,
+        include_details=False,
+        cache_only=True,
+    )
+    if _is_unready_pool_cache(pool_status):
+        pool_status = get_cached_local_pool_status(
+            db,
+            u_limit=DASHBOARD_POOL_PREVIEW_LIMIT,
+            u_offset=0,
+            b_limit=DASHBOARD_POOL_PREVIEW_LIMIT,
+            b_offset=0,
+            include_paginated=False,
+            include_details=False,
+            cache_only=False,
+        )
+    pool_status["overview_scope_note"] = DASHBOARD_POOL_SCOPE_NOTE
+    return pool_status
+
+
+def _is_unready_pool_cache(pool_status: dict[str, Any]) -> bool:
+    readiness = pool_status.get("recommendation_readiness")
+    if not isinstance(readiness, dict):
+        return True
+    messages = " ".join(str(item) for item in readiness.get("messages") or [])
+    summary = pool_status.get("summary") if isinstance(pool_status.get("summary"), dict) else {}
+    return (
+        "缓存尚未预热" in messages
+        and int(summary.get("active_unified_quote_count") or 0) == 0
+        and int(summary.get("eligible_quote_count") or 0) == 0
+    )

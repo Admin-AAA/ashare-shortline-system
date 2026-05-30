@@ -436,7 +436,7 @@ def backfill_capital_flows(db: Session, top_n: int = 500, trade_date: str | None
 def backfill_news(db: Session, top_n: int = 500, trade_date: str | None = None) -> int:
     """
     回填公告和新闻数据（市值前 N 股票）。
-    使用 eastmoney np-anotice API（已验证可用）。
+    优先使用 Tushare anns_d（自建服务器），失败时回退 eastmoney np-anotice API。
     """
     from app.services.market_data import _http_get_json
 
@@ -448,7 +448,49 @@ def backfill_news(db: Session, top_n: int = 500, trade_date: str | None = None) 
         logger.warning("无法获取市值排行，跳过新闻")
         return 0
 
-    total = 0
+    # 尝试 Tushare 公告接口（批量）
+    tushare_ann_count = 0
+    try:
+        from scripts.tushare_init import get_pro
+        pro = get_pro()
+        td_compact = target_trade_date.replace("-", "")
+        df = pro.anns_d(trade_date=td_compact)
+        if df is not None and not df.empty:
+            for _, row in df.iterrows():
+                code = str(row.get("ts_code", "")).split(".")[0]
+                if not code or len(code) != 6 or code not in codes:
+                    continue
+                title = str(row.get("title", ""))
+                is_risk = any(
+                    kw in title
+                    for kw in ["风险", "警示", "退市", "ST", "处罚", "监管", "立案", "亏损", "减持", "问询", "通报"]
+                )
+                article_id = f"tushare_ann_{code}_{td_compact}_{hash(title) & 0x7FFFFFFF}"
+                existing = db.scalar(
+                    select(func.count()).select_from(NewsAnnouncement).where(
+                        and_(NewsAnnouncement.source == "tushare", NewsAnnouncement.article_id == article_id)
+                    )
+                )
+                if not existing:
+                    db.add(NewsAnnouncement(
+                        source="tushare",
+                        article_id=article_id,
+                        code=code,
+                        announce_date=target_trade_date,
+                        title=title,
+                        summary=str(row.get("desc", ""))[:500],
+                        category="announcement",
+                        sentiment="negative" if is_risk else "neutral",
+                        is_risk_warning=is_risk,
+                    ))
+                    tushare_ann_count += 1
+            db.commit()
+            logger.info("  Tushare 公告: %d 条", tushare_ann_count)
+    except Exception as e:
+        logger.debug("Tushare anns_d 不可用: %s，回退 eastmoney", e)
+
+    # eastmoney 作为备用/补充
+    total = tushare_ann_count
     fallback_counter = 0
 
     for i, code in enumerate(codes):

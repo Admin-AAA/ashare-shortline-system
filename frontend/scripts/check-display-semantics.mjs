@@ -40,7 +40,10 @@ try {
 
   assert(display.businessStatusLabel("READY") === "本地池可推荐", "READY 不能裸露在中文界面");
   assert(display.businessStatusLabel("CHECK") === "数据需检查", "CHECK 不能裸露在中文界面");
-  assert(display.businessStatusLabel("failed") === "运行失败，可补数后重试", "failed 不能裸露在中文界面");
+  assert(display.businessStatusLabel("failed") === "失败", "failed 不能裸露在中文界面");
+  assert(display.runStatusLabel("failed") === "运行失败", "运行状态 failed 必须显示运行失败");
+  assert(display.outcomeStatusLabel("failed") === "复盘失败/止损触发", "复盘状态 failed 必须显示复盘失败/止损触发");
+  assert(display.watchStatusLabel("none") === "未关注", "观察状态 none 必须显示未关注");
   assert(display.businessStatusLabel("risk") === "存在风险，需复核", "risk 不能裸露在中文界面");
   assert(
     display.businessStatusLabel("insufficient_minute_coverage") === "分钟线不足，暂停回测",
@@ -66,7 +69,7 @@ try {
     },
   });
   assert(failedEmpty.title === "本次推荐没有可用候选", "失败空状态标题必须解释 0 只候选");
-  assert(failedEmpty.reason === "运行失败，可补数后重试", "失败空状态必须用业务语言");
+  assert(failedEmpty.reason === "运行失败", "失败空状态必须用运行状态业务语言");
   assert(failedEmpty.detail.includes("当前 0 只不能视为市场无机会"), "失败空状态必须避免误读为无机会");
 
   const marketHtml = renderToStaticMarkup(

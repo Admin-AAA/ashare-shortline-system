@@ -7,10 +7,27 @@ meta:
   style: overnight-shortline
   version: 0.1.0
   holding_days: [1]
+  strategy_independence: 0.9
+  backtest_adapter:
+    module: app.services.overnight_holding_service
+    default_action: run
+    actions:
+      run:
+        function: run_overnight_holding_backtest
+      preview_minute_gate:
+        function: preview_minute_gap_remediation
+      remediate_minute_gaps:
+        function: remediate_minute_gaps
+        task_run:
+          task_id: manual_minute_gap_remediation
+          task_name: 手动分钟补数
+          task_type: data_backfill
+          result_extra:
+            remediation_type: minute_gap
 
 contract:
   type: strategy
-  executable: false
+  executable: true
   schema_version: 1
 
 universe:
@@ -19,6 +36,7 @@ universe:
     - "pct <= 5"
     - "turnover_rate >= 5"
     - "turnover_rate <= 10"
+    - "twenty_cm_risk_gate != 'block'"
   exclude:
     - "is_st == true"
 
@@ -27,10 +45,14 @@ prefilter:
     include:
       - when: "limit_up_days20 >= 1"
         reason: "requires_recent_limit_up"
+      - when: "capital_resonance_score >= 45"
+        reason: "requires_capital_resonance"
       - when: "turnover_rate >= 5"
         reason: "turnover_too_low"
       - when: "turnover_rate <= 10"
         reason: "turnover_too_high"
+      - when: "limit_up_overheat_score < 70"
+        reason: "overheat_too_high"
 
 phases:
   - name: 尾盘观察
@@ -40,17 +62,35 @@ phases:
 
 setups:
   - name: 隔夜尾盘确认
-    when: "pct >= 3 and pct <= 5 and turnover_rate >= 5 and turnover_rate <= 10"
+    when: "pct >= 3 and pct <= 5 and turnover_rate >= 5 and turnover_rate <= 10 and capital_resonance_score >= 45"
     score_delta: 10
     entry_rule: "14:30 后新高回踩分时均线不破再介入"
     invalid_rule: "回踩跌破分时均线或次日早盘承接弱"
 
 scoring:
-  base: 0
-  rules: []
+  base: 45
+  rules:
+    - when: "capital_resonance_score >= 60"
+      delta: 10
+      reason: 尾盘资金承接较强
+    - when: "sector_ladder_completeness_score >= 50"
+      delta: 6
+      reason: 板块梯队有承接
+    - when: "limit_up_overheat_score < 45"
+      delta: 6
+      reason: 涨停情绪未明显过热
+    - when: "twenty_cm_risk_gate == 'caution'"
+      delta: -8
+      reason: 20cm 隔夜波动需降权
 
 risk:
   rules:
     - when: "pct > 5"
       level: high
       flag: 涨幅超出隔夜策略区间
+    - when: "limit_up_overheat_score >= 70"
+      level: high
+      flag: 涨停过热，不做隔夜追高
+    - when: "twenty_cm_risk_gate == 'block'"
+      level: high
+      flag: 20cm 风险闸门阻断隔夜

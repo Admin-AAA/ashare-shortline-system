@@ -217,6 +217,7 @@ export type RunProgress = {
   phase?: string | null;
   progress_pct?: number | null;
   message: string;
+  error_message?: string | null;
   heartbeat_stale: boolean;
   resumable: boolean;
 };
@@ -227,11 +228,18 @@ export type DashboardDataHealth = {
   quote_total: number;
   active_quote_count: number;
   eligible_quote_count: number;
+  checked_candidate_count?: number;
+  ready_candidate_count?: number;
+  example_count?: number;
+  example_limit?: number;
+  scope_note?: string;
   bar_coverage_pct: number;
   eligible_bar_coverage_pct: number;
   missing_bar_count: number;
   stale_bar_count: number;
   short_history_count: number;
+  immature_history_count?: number;
+  total_short_history_count?: number;
   messages: string[];
   examples: DashboardDataHealthExample[];
 };
@@ -369,6 +377,7 @@ export type DataHealthRemediationAction = {
   row_count?: number;
   requested_code_count?: number;
   requested_date_count?: number;
+  code_limit?: number;
   error?: string;
   error_type?: string;
   rollback_hint?: string;
@@ -523,6 +532,9 @@ export type MinuteRemediationAction = {
 
 export type MinutePrepResult = {
   status: string;
+  strategy_id?: string;
+  action?: string;
+  strategy_name?: string;
   strategy_window?: {
     start_date: string;
     end_date: string;
@@ -563,6 +575,74 @@ export type PoolRefreshResult = {
     cache_age_seconds: number;
     errors: string[];
   };
+};
+
+export type LocalPoolKlineGapCounts = {
+  candidate_count: number;
+  checked_count: number;
+  ready_count: number;
+  missing_count: number;
+  short_history_count: number;
+  immature_history_count?: number;
+  stale_count: number;
+  gap_count: number;
+  latest_allowed_bar_date?: string | null;
+};
+
+export type LocalPoolKlineGapOperation = {
+  code?: string | null;
+  name?: string | null;
+  reason?: string | null;
+  status?: string | null;
+  row_count?: number;
+  bar_count_before?: number;
+  latest_bar_date_before?: string | null;
+  latest_trade_date?: string | null;
+  quote_date?: string | null;
+  error?: string | null;
+  error_type?: string | null;
+};
+
+export type LocalPoolGapSyncResult = {
+  status: string;
+  dry_run: boolean;
+  days: number;
+  min_bars: number;
+  code_limit: number;
+  effective_code_limit?: number;
+  target_count: number;
+  processed_count: number;
+  succeeded_count: number;
+  unresolved_count: number;
+  failed_count: number;
+  row_count: number;
+  before: LocalPoolKlineGapCounts;
+  after: LocalPoolKlineGapCounts;
+  comparison?: {
+    before_candidate_count?: number;
+    after_candidate_count?: number;
+    before_ready_count?: number;
+    after_ready_count?: number;
+    ready_count_delta?: number;
+    before_gap_count?: number;
+    after_gap_count?: number;
+    gap_count_delta?: number;
+    target_gap_count?: number;
+    resolved_target_count?: number;
+    unresolved_target_count?: number;
+    failed_target_count?: number;
+    candidate_coverage_rate_before?: number;
+    candidate_coverage_rate_after?: number;
+    candidate_coverage_rate_delta?: number;
+    remediation_coverage_rate?: number;
+  };
+  sync_summary?: {
+    total_log_count?: number;
+    visible_log_count?: number;
+    status_counts?: Record<string, number>;
+    failure_reasons?: Array<{ error_type?: string; message?: string; count?: number }>;
+  };
+  operation_log?: LocalPoolKlineGapOperation[];
 };
 
 export type HomeBootstrap = {
@@ -703,11 +783,14 @@ export type LocalPoolReadiness = {
     ready_count: number;
     missing_count: number;
     short_history_count?: number;
+    immature_history_count?: number;
     stale_count: number;
     min_bars: number;
     coverage_count?: number;
     coverage_rate?: number;
     latest_trade_date?: string | null;
+    example_count?: number;
+    example_limit?: number;
     examples: Array<{
       code?: string | null;
       name?: string | null;
@@ -747,6 +830,8 @@ export type LocalPoolStatus = {
     daily_bar_missing_count?: number;
     daily_bar_stale_count?: number;
     daily_bar_short_history_count?: number;
+    daily_bar_immature_history_count?: number;
+    daily_bar_total_short_history_count?: number;
     actual_recommend_scan_count?: number;
     skill_input_count?: number;
     daily_bar_row_count?: number;
@@ -1260,6 +1345,8 @@ export type SkillSummary = {
   has_executable_contract: boolean;
   has_agent_contract?: boolean;
   agent_runtime?: string;
+  has_backtest_adapter?: boolean;
+  backtest_adapter_actions?: string[];
   reference_count?: number;
   manifest: Record<string, unknown>;
   assigned_presets: string[];
@@ -1290,6 +1377,8 @@ export type SkillDetail = {
   has_executable_contract: boolean;
   has_agent_contract?: boolean;
   agent_runtime?: string;
+  has_backtest_adapter?: boolean;
+  backtest_adapter_actions?: string[];
   reference_files?: SkillReferenceFile[];
   manifest: Record<string, unknown>;
   skill_md: string;
@@ -1400,6 +1489,22 @@ export type EvaluationKpiFields = {
   accuracy_numerator?: number;
   accuracy_denominator?: number;
   accuracy_basis?: string;
+  horizon_metrics?: Record<string, EvaluationHorizonMetrics>;
+};
+
+export type EvaluationHorizonMetrics = {
+  horizon_days: number;
+  sample_count: number;
+  triggered_count: number;
+  success_count: number;
+  recommendation_accuracy: number;
+  hit_rate: number;
+  average_net_return: number;
+  average_executed_return: number;
+  max_drawdown: number;
+  sample_confidence?: "low" | "normal" | string;
+  accuracy_numerator?: number;
+  accuracy_denominator?: number;
 };
 
 export type SetupStatsRow = {
@@ -1414,6 +1519,21 @@ export type SetupStatsRow = {
   avg_score: number;
   avg_return: number;
   avg_drawdown?: number;
+} & EvaluationKpiFields;
+
+export type StrategyStatsRow = {
+  strategy_id: string;
+  strategy_name?: string | null;
+  current_mode?: string;
+  sample_count: number;
+  labeled_count?: number;
+  triggered_count?: number;
+  missed_count?: number;
+  success_count: number;
+  hit_rate: number;
+  trigger_rate?: number;
+  avg_score: number;
+  avg_return: number;
 } & EvaluationKpiFields;
 
 export type PrecisionAtKRow = {
@@ -1448,6 +1568,7 @@ export type AccuracyGateSummary = {
   net_positive_count: number;
   net_non_positive_count: number;
   manual_override_count: number;
+  legacy_accuracy_label_mismatch_count?: number;
 };
 
 export type AccuracyPolicyAudit = {

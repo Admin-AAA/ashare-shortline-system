@@ -146,6 +146,14 @@ def _ensure_indexes() -> None:
             _ensure_column(connection, p_cols, "presets", "data_source", "VARCHAR(20) NOT NULL DEFAULT 'local_pool'")
 
         if "recommendations" in existing_tables:
+            _ensure_column_type(
+                connection,
+                inspector,
+                "recommendations",
+                "feature_snapshot_json",
+                "LONGTEXT NOT NULL",
+                expected_type_names={"LONGTEXT"},
+            )
             _ensure_index(connection, inspector, "recommendations", "idx_recs_run_score", "run_id, final_score")
             _ensure_index(connection, inspector, "recommendations", "idx_recs_trade_score", "trade_date, final_score")
             _ensure_index(connection, inspector, "recommendations", "idx_recs_code_trade", "code, trade_date")
@@ -198,6 +206,35 @@ def _ensure_column(connection, existing_columns: set[str], table: str, column: s
         except Exception:
             _rollback_best_effort(connection)
             pass  # 兼容 SQLite / 旧表场景
+
+
+def _ensure_column_type(
+    connection,
+    inspector,
+    table: str,
+    column: str,
+    definition: str,
+    *,
+    expected_type_names: set[str],
+) -> None:
+    if connection.dialect.name != "mysql":
+        return
+    try:
+        columns = {item["name"]: item for item in inspector.get_columns(table)}
+        current = columns.get(column)
+    except Exception:
+        _rollback_best_effort(connection)
+        return
+    if current is None:
+        return
+    current_type = type(current["type"]).__name__.upper()
+    if current_type in expected_type_names:
+        return
+    try:
+        connection.execute(text(f"ALTER TABLE {table} MODIFY COLUMN {column} {definition}"))
+        connection.commit()
+    except Exception:
+        _rollback_best_effort(connection)
 
 
 def _rollback_best_effort(connection) -> None:

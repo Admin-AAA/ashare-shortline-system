@@ -78,6 +78,7 @@ class RunProgress(BaseModel):
     phase: str | None = None
     progress_pct: float | None = None
     message: str = ""
+    error_message: str | None = None
     heartbeat_stale: bool = False
     resumable: bool = False
 

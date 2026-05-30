@@ -71,6 +71,7 @@ def _score_data_quality(data_health: dict[str, Any]) -> dict[str, Any]:
     missing_bar_count = int(data_health.get("missing_bar_count") or 0)
     stale_bar_count = int(data_health.get("stale_bar_count") or 0)
     short_history_count = int(data_health.get("short_history_count") or 0)
+    immature_history_count = int(data_health.get("immature_history_count") or 0)
     can_run = bool(data_health.get("can_run_local_recommendation"))
 
     if not can_run:
@@ -86,6 +87,9 @@ def _score_data_quality(data_health: dict[str, Any]) -> dict[str, Any]:
         score -= min(12, stale_bar_count * 2)
     if short_history_count > 0:
         score -= min(10, short_history_count * 1.2)
+    if immature_history_count > 0:
+        score -= min(4, immature_history_count * 0.4)
+        highlights.append(f"另有 {immature_history_count} 只候选上市未满30根日K，按成熟度风险观察。")
 
     return _dimension_payload(
         label="数据质量",
@@ -96,6 +100,7 @@ def _score_data_quality(data_health: dict[str, Any]) -> dict[str, Any]:
             "missing_bar_count": missing_bar_count,
             "stale_bar_count": stale_bar_count,
             "short_history_count": short_history_count,
+            "immature_history_count": immature_history_count,
             "can_run_local_recommendation": can_run,
         },
     )

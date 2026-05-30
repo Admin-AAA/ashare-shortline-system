@@ -283,6 +283,192 @@ def test_fetch_tushare_quotes_falls_back_from_empty_latest_trade_date(monkeypatc
     assert quotes[0]["trade_date"] == "2026-05-27"
 
 
+def test_fetch_tushare_quotes_skips_incomplete_latest_snapshot(monkeypatch):
+    symbols = [f"000{i:03d}" for i in range(1, 26)]
+    api_calls: list[tuple[str, str]] = []
+
+    def quote_rows(trade_date: str, *, amount: float, turnover: float) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "ts_code": f"{symbol}.SZ",
+                    "trade_date": trade_date,
+                    "close": 10.5,
+                    "pct_change": 1.2,
+                    "vol": 123456,
+                    "amount": amount,
+                    "turn_over": turnover,
+                    "pe": 8.2,
+                    "float_mv": 12000000000,
+                    "total_mv": 18000000000,
+                }
+                for symbol in symbols
+            ]
+        )
+
+    class FakePro:
+        def stock_basic(self, **kwargs):
+            raise AssertionError("已有本地 stocks 时不应再请求 stock_basic")
+
+        def trade_cal(self, **kwargs):
+            return pd.DataFrame([{"cal_date": "20260527"}, {"cal_date": "20260528"}])
+
+        def bak_daily(self, **kwargs):
+            trade_date = kwargs["trade_date"]
+            api_calls.append(("bak_daily", trade_date))
+            if trade_date == "20260528":
+                return quote_rows(trade_date, amount=0, turnover=0)
+            if trade_date == "20260527":
+                return quote_rows(trade_date, amount=456789, turnover=4.6)
+            raise AssertionError(f"unexpected trade_date: {trade_date}")
+
+        def daily(self, **kwargs):
+            trade_date = kwargs["trade_date"]
+            api_calls.append(("daily", trade_date))
+            if trade_date == "20260528":
+                return quote_rows(trade_date, amount=0, turnover=0)
+            raise AssertionError(f"unexpected daily fallback: {trade_date}")
+
+        def daily_basic(self, **kwargs):
+            assert kwargs["trade_date"] == "20260527"
+            return pd.DataFrame(
+                [
+                    {
+                        "ts_code": f"{symbol}.SZ",
+                        "trade_date": "20260527",
+                        "turnover_rate": 4.8,
+                        "pe_ttm": 8.0,
+                        "total_mv": 18100000000,
+                        "circ_mv": 12100000000,
+                    }
+                    for symbol in symbols
+                ]
+            )
+
+    monkeypatch.setattr("app.services.tushare_client.get_pro", lambda: FakePro())
+    monkeypatch.setattr(
+        market_data,
+        "_load_local_stock_basics",
+        lambda: [
+            {
+                "symbol": symbol,
+                "name": f"测试{symbol}",
+                "industry": "软件服务",
+                "market": "主板",
+                "list_date": "1991-04-03",
+                "is_st": False,
+            }
+            for symbol in symbols
+        ],
+    )
+    monkeypatch.setattr(market_data, "_throttle_tushare", lambda _settings: None)
+
+    quotes = market_data._fetch_tushare_quotes(DummySettings())
+
+    assert {quote["trade_date"] for quote in quotes} == {"2026-05-27"}
+    assert len(quotes) == len(symbols)
+    assert ("bak_daily", "20260528") in api_calls
+    assert ("daily", "20260528") in api_calls
+    assert ("bak_daily", "20260527") in api_calls
+
+
+def test_fetch_tushare_quotes_requires_daily_basic_for_daily_fallback(monkeypatch):
+    symbols = [f"000{i:03d}" for i in range(1, 26)]
+    api_calls: list[tuple[str, str]] = []
+
+    def quote_rows(trade_date: str, *, amount: float, turnover: float | None = None) -> pd.DataFrame:
+        rows = []
+        for symbol in symbols:
+            row = {
+                "ts_code": f"{symbol}.SZ",
+                "trade_date": trade_date,
+                "close": 10.5,
+                "pct_change": 1.2,
+                "vol": 123456,
+                "amount": amount,
+                "pe": 8.2,
+                "float_mv": 12000000000,
+                "total_mv": 18000000000,
+            }
+            if turnover is not None:
+                row["turn_over"] = turnover
+            rows.append(row)
+        return pd.DataFrame(rows)
+
+    def daily_basic_rows(trade_date: str, *, turnover: float) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "ts_code": f"{symbol}.SZ",
+                    "trade_date": trade_date,
+                    "turnover_rate": turnover,
+                    "pe_ttm": 8.0,
+                    "total_mv": 18100000000,
+                    "circ_mv": 12100000000,
+                }
+                for symbol in symbols
+            ]
+        )
+
+    class FakePro:
+        def stock_basic(self, **kwargs):
+            raise AssertionError("已有本地 stocks 时不应再请求 stock_basic")
+
+        def trade_cal(self, **kwargs):
+            return pd.DataFrame([{"cal_date": "20260527"}, {"cal_date": "20260528"}])
+
+        def bak_daily(self, **kwargs):
+            trade_date = kwargs["trade_date"]
+            api_calls.append(("bak_daily", trade_date))
+            if trade_date == "20260528":
+                return pd.DataFrame([])
+            if trade_date == "20260527":
+                return quote_rows(trade_date, amount=456789, turnover=4.6)
+            raise AssertionError(f"unexpected trade_date: {trade_date}")
+
+        def daily(self, **kwargs):
+            trade_date = kwargs["trade_date"]
+            api_calls.append(("daily", trade_date))
+            if trade_date == "20260528":
+                return quote_rows(trade_date, amount=456789)
+            raise AssertionError(f"unexpected daily fallback: {trade_date}")
+
+        def daily_basic(self, **kwargs):
+            trade_date = kwargs["trade_date"]
+            api_calls.append(("daily_basic", trade_date))
+            if trade_date == "20260528":
+                return pd.DataFrame([])
+            if trade_date == "20260527":
+                return daily_basic_rows(trade_date, turnover=4.8)
+            raise AssertionError(f"unexpected daily_basic date: {trade_date}")
+
+    monkeypatch.setattr("app.services.tushare_client.get_pro", lambda: FakePro())
+    monkeypatch.setattr(
+        market_data,
+        "_load_local_stock_basics",
+        lambda: [
+            {
+                "symbol": symbol,
+                "name": f"测试{symbol}",
+                "industry": "软件服务",
+                "market": "主板",
+                "list_date": "1991-04-03",
+                "is_st": False,
+            }
+            for symbol in symbols
+        ],
+    )
+    monkeypatch.setattr(market_data, "_throttle_tushare", lambda _settings: None)
+
+    quotes = market_data._fetch_tushare_quotes(DummySettings())
+
+    assert {quote["trade_date"] for quote in quotes} == {"2026-05-27"}
+    assert len(quotes) == len(symbols)
+    assert ("daily", "20260528") in api_calls
+    assert ("daily_basic", "20260528") in api_calls
+    assert ("bak_daily", "20260527") in api_calls
+
+
 def test_recent_open_trade_dates_excludes_unclosed_current_session(monkeypatch):
     class FakeDateTime(datetime):
         @classmethod
@@ -472,10 +658,38 @@ def test_default_presets_do_not_overwrite_user_skill_selection(production_mysql)
         db.commit()
 
         class Skill:
-            def __init__(self, skill_id):
+            def __init__(self, skill_id, groups):
                 self.skill_id = skill_id
+                self.contract = {"meta": {"default_preset_groups": groups}}
 
-        skills = [Skill("chen-xiaoqun-skill"), Skill("chao-gu-yang-jia-skill"), Skill("daily-stock-analysis-skill")]
+        skills = [
+            Skill(
+                "chen-xiaoqun-skill",
+                {
+                    "formal_opening": {"weight": 1.05, "sort_order": 10},
+                    "formal_trend_core": {"weight": 1.15, "sort_order": 10},
+                },
+            ),
+            Skill(
+                "chao-gu-yang-jia-skill",
+                {
+                    "formal_opening": {"weight": 1.0, "sort_order": 20},
+                    "formal_trend_core": {"weight": 1.05, "sort_order": 20},
+                },
+            ),
+            Skill(
+                "daily-stock-analysis-skill",
+                {
+                    "formal_opening": {"weight": 1.15, "sort_order": 30},
+                    "formal_trend_core": {"weight": 0.95, "sort_order": 30},
+                    "experiment_single_factor": {"weight": 1.0, "sort_order": 10},
+                },
+            ),
+            Skill(
+                "metadata-declared-trend-skill",
+                {"formal_trend_core": {"weight": 0.88, "sort_order": 25}},
+            ),
+        ]
         workbench_service._ensure_default_presets(db, skills)
 
         rows = db.query(PresetSkill).filter(PresetSkill.preset_id == "preset_formal_opening").order_by(PresetSkill.sort_order).all()
@@ -488,8 +702,10 @@ def test_default_presets_do_not_overwrite_user_skill_selection(production_mysql)
         assert [row.skill_id for row in created_rows] == [
             "chen-xiaoqun-skill",
             "chao-gu-yang-jia-skill",
+            "metadata-declared-trend-skill",
             "daily-stock-analysis-skill",
         ]
+        assert [row.weight for row in created_rows] == [1.15, 1.05, 0.88, 0.95]
     finally:
         db.rollback()
         db.commit = original_commit

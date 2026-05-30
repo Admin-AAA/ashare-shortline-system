@@ -29,6 +29,7 @@ from app.engine.aggregator import (
     aggregate,
     apply_pool_rules,
     market_regime_weights,
+    resolve_display_limit,
     resolve_score_line_context,
 )
 from app.engine.skill_loader import StrategySkill, load_skills, validate_skill
@@ -123,11 +124,7 @@ DEFAULT_PRESETS = [
         "score_line": 72.0,
         "output_count": 6,
         "hide_recent_repeats": True,
-        "skills": [
-            ("chen-xiaoqun-skill", 1.05),
-            ("chao-gu-yang-jia-skill", 1.0),
-            ("daily-stock-analysis-skill", 1.15),
-        ],
+        "skill_groups": ["formal_opening"],
     },
     {
         "preset_id": "preset_formal_trend_core",
@@ -140,11 +137,7 @@ DEFAULT_PRESETS = [
         "score_line": 70.0,
         "output_count": 5,
         "hide_recent_repeats": True,
-        "skills": [
-            ("chen-xiaoqun-skill", 1.15),
-            ("chao-gu-yang-jia-skill", 1.05),
-            ("daily-stock-analysis-skill", 0.95),
-        ],
+        "skill_groups": ["formal_trend_core"],
     },
     {
         "preset_id": "preset_experiment_dsa",
@@ -157,9 +150,7 @@ DEFAULT_PRESETS = [
         "score_line": 68.0,
         "output_count": 6,
         "hide_recent_repeats": False,
-        "skills": [
-            ("daily-stock-analysis-skill", 1.0),
-        ],
+        "skill_groups": ["experiment_single_factor"],
     },
 ]
 
@@ -247,14 +238,16 @@ def _resolve_aux_prefetch_count(
     *,
     run_mode: str,
     skip_aux_refresh: bool,
+    max_codes: int | None = None,
 ) -> int:
     if prefiltered_count <= 0:
         return 0
+    bounded_max = max(1, int(max_codes or get_settings().auxiliary_prefetch_max_codes or 120))
     if skip_aux_refresh:
-        return min(prefiltered_count, max(18, min_prefilter_count // 2), 48)
+        return min(prefiltered_count, max(18, min_prefilter_count // 2), 48, bounded_max)
     if run_mode == "formal":
-        return prefiltered_count
-    return min(prefiltered_count, max(18, min_prefilter_count // 2), 48)
+        return min(prefiltered_count, max(min_prefilter_count, bounded_max), bounded_max)
+    return min(prefiltered_count, max(18, min_prefilter_count // 2), 48, bounded_max)
 
 
 _bootstrap_cache_lock = threading.Lock()
@@ -470,6 +463,7 @@ def sync_skills(db: Session) -> list[StrategySkill]:
             manifest_data["_skill_frontmatter"] = _json_safe(skill.skill_frontmatter)
             manifest_data["_skill_reference_files"] = _json_safe(skill.reference_files)
             manifest_data["_skill_runtime"] = "dual" if skill.contract is not None and skill.agent_enabled else "agent" if skill.agent_enabled else "rule"
+            manifest_data["_strategy_backtest_adapter"] = _strategy_backtest_adapter_manifest(skill)
             manifest_json = json.dumps(manifest_data, ensure_ascii=False)
             default_mode = _default_skill_mode(skill)
             if registry is None:
@@ -573,6 +567,19 @@ def _sync_registry_row(
     return changed
 
 
+def _strategy_backtest_adapter_manifest(skill: StrategySkill) -> dict[str, Any] | None:
+    adapter = ((skill.contract or {}).get("meta") or {}).get("backtest_adapter")
+    if not isinstance(adapter, dict):
+        return None
+    actions = adapter.get("actions") or {}
+    if not isinstance(actions, dict):
+        actions = {}
+    return {
+        "default_action": str(adapter.get("default_action") or "run"),
+        "actions": sorted(str(action) for action in actions if str(action).strip()),
+    }
+
+
 def list_skills(db: Session) -> list[dict[str, Any]]:
     sync_skills(db)
     preset_rows = db.execute(
@@ -598,6 +605,8 @@ def list_skills(db: Session) -> list[dict[str, Any]]:
                 "has_executable_contract": row.has_executable_contract,
                 "has_agent_contract": bool(manifest.get("_skill_md_available")),
                 "agent_runtime": manifest.get("_skill_runtime", "unknown"),
+                "has_backtest_adapter": bool(manifest.get("_strategy_backtest_adapter")),
+                "backtest_adapter_actions": (manifest.get("_strategy_backtest_adapter") or {}).get("actions", []),
                 "reference_count": len(manifest.get("_skill_reference_files", [])),
                 "manifest": manifest,
                 "assigned_presets": preset_map.get(row.skill_id, []),
@@ -627,6 +636,8 @@ def get_skill_detail(db: Session, skill_id: str) -> dict[str, Any] | None:
         for preset_id in {row.preset_id for row in db.scalars(select(PresetSkill).where(PresetSkill.skill_id == skill_id)).all()}
         if db.get(Preset, preset_id) is not None
     ]
+    manifest = _loads(row.manifest_json, {})
+    adapter_manifest = manifest.get("_strategy_backtest_adapter") or {}
     return {
         "skill_id": row.skill_id,
         "name": row.name,
@@ -635,9 +646,11 @@ def get_skill_detail(db: Session, skill_id: str) -> dict[str, Any] | None:
         "current_version": row.current_version,
         "has_executable_contract": row.has_executable_contract,
         "has_agent_contract": bool(skill_md.strip()),
-        "agent_runtime": _loads(row.manifest_json, {}).get("_skill_runtime", "unknown"),
-        "reference_files": _loads(row.manifest_json, {}).get("_skill_reference_files", []),
-        "manifest": _loads(row.manifest_json, {}),
+        "agent_runtime": manifest.get("_skill_runtime", "unknown"),
+        "has_backtest_adapter": bool(adapter_manifest),
+        "backtest_adapter_actions": adapter_manifest.get("actions", []),
+        "reference_files": manifest.get("_skill_reference_files", []),
+        "manifest": manifest,
         "skill_md": skill_md,
         "errors": errors,
         "assigned_presets": assigned_presets,
@@ -1332,6 +1345,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         min_prefilter_count,
         run_mode=str(params.get("run_mode") or "formal"),
         skip_aux_refresh=skip_aux_refresh,
+        max_codes=settings.auxiliary_prefetch_max_codes,
     )
     aux_prefetch_codes = _select_aux_prefetch_codes(prefiltered_stocks, aux_prefetch_count)
     _update_run_progress(
@@ -1819,6 +1833,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         scored_cards = list(cards)
         cards = apply_pool_rules(
             scored_cards,
+            output_count=int(params["output_count"]),
             score_line=float(params["score_line"]),
             market_snapshot=snapshot,
             risk_template=params["risk_template"],
@@ -2103,6 +2118,7 @@ def _serialize_preset(db: Session, preset: Preset) -> dict[str, Any]:
         "market_scope_value": preset.market_scope_value,
         "risk_template": preset.risk_template,
         "score_line": preset.score_line,
+        "output_count": preset.output_count,
         "data_source": preset.data_source,
         "hide_recent_repeats": preset.hide_recent_repeats,
         "status": preset.status,
@@ -2155,6 +2171,7 @@ def _serialize_presets_batched(db: Session, presets: list[Preset]) -> list[dict[
             "market_scope_value": preset.market_scope_value,
             "risk_template": preset.risk_template,
             "score_line": preset.score_line,
+            "output_count": preset.output_count,
             "data_source": preset.data_source,
             "hide_recent_repeats": preset.hide_recent_repeats,
             "status": preset.status,
@@ -3022,7 +3039,8 @@ def _build_replay_summary(detail: dict[str, Any]) -> dict[str, Any]:
     for value in (
         detail.get("entry_rule"),
         detail.get("setup_type"),
-        detail.get("buy_signal"),
+        signal_features.get("entry_rule"),
+        signal_features.get("setup_type"),
     ):
         text = str(value or "").strip()
         if text and text not in trigger_conditions:
@@ -3271,6 +3289,13 @@ def _merge_run_params(db: Session, preset: Preset | None, payload: dict[str, Any
         skills = [{"skill_id": str(payload["single_skill_id"]), "weight": single_weight, "sort_order": 0}]
         run_mode = str(payload.get("run_mode") or "experiment")
         default_data_source = _default_data_source_for_run_mode(run_mode)
+    skip_aux_refresh = bool(
+        payload.get("skip_aux_refresh")
+        if "skip_aux_refresh" in payload
+        else run_mode == "experiment"
+    )
+    if run_mode == "formal":
+        skip_aux_refresh = False
     params = {
         "preset_id": preset_data.get("preset_id"),
         "run_name": str(payload.get("run_name") or preset_data.get("name") or "临时运行"),
@@ -3281,11 +3306,7 @@ def _merge_run_params(db: Session, preset: Preset | None, payload: dict[str, Any
         "score_line": float(payload.get("score_line") or preset_data.get("score_line") or 72.0),
         "output_count": int(payload.get("output_count") or preset_data.get("output_count") or 6),
         "data_source": _normalize_data_source(payload.get("data_source") or preset_data.get("data_source") or default_data_source),
-        "skip_aux_refresh": bool(
-            payload.get("skip_aux_refresh")
-            if "skip_aux_refresh" in payload
-            else run_mode == "experiment"
-        ),
+        "skip_aux_refresh": skip_aux_refresh,
         "disable_agent_review": bool(payload.get("disable_agent_review", False)),
         "agent_review_limit": int(payload.get("agent_review_limit") or 0),
         "agent_review_concurrency": int(payload.get("agent_review_concurrency") or 0),
@@ -3510,6 +3531,7 @@ def _build_pipeline_audit(
         market_snapshot=snapshot,
         risk_template=str(params.get("risk_template") or "balanced"),
     )
+    display_limit = resolve_display_limit(int(params.get("output_count") or 0), snapshot)
     market_candidate_count = (
         int(config["market_candidate_count"])
         if "market_candidate_count" in config
@@ -3542,6 +3564,7 @@ def _build_pipeline_audit(
         "skill_review_success_count": 0,
         "score_line": score_line_context,
         "output_count": int(params.get("output_count") or 0),
+        "effective_output_count": display_limit,
         "market_candidate_count": market_candidate_count,
         "lookahead_multiplier": lookahead_multiplier,
         "lookahead_count": lookahead_count,
@@ -4493,7 +4516,6 @@ def _write_install_manifest(target: Path, skill_id: str, source: str) -> None:
 
 
 def _ensure_default_presets(db: Session, skills: list[StrategySkill]) -> None:
-    skill_ids = {skill.skill_id for skill in skills}
     has_changes = False
     for item in DEFAULT_PRESETS:
         preset = db.get(Preset, item["preset_id"])
@@ -4516,11 +4538,7 @@ def _ensure_default_presets(db: Session, skills: list[StrategySkill]) -> None:
             )
             db.add(preset)
             db.flush()
-            desired_skills = [
-                {"skill_id": skill_id, "weight": weight, "sort_order": index}
-                for index, (skill_id, weight) in enumerate(item["skills"])
-                if skill_id in skill_ids
-            ]
+            desired_skills = _default_preset_skill_rows(item, skills)
             _replace_preset_skills(db, item["preset_id"], desired_skills)
             has_changes = True
             continue
@@ -4533,6 +4551,36 @@ def _ensure_default_presets(db: Session, skills: list[StrategySkill]) -> None:
             has_changes = True
     if has_changes:
         db.commit()
+
+
+def _default_preset_skill_rows(preset_config: dict[str, Any], skills: list[StrategySkill]) -> list[dict[str, Any]]:
+    groups = {str(group) for group in preset_config.get("skill_groups", []) if str(group).strip()}
+    if not groups:
+        return []
+    rows: list[dict[str, Any]] = []
+    for skill in skills:
+        meta = (skill.contract or {}).get("meta") or {}
+        group_config = meta.get("default_preset_groups") or {}
+        if not isinstance(group_config, dict):
+            continue
+        for group in groups:
+            if group not in group_config:
+                continue
+            spec = group_config[group]
+            if isinstance(spec, dict):
+                weight = float(spec.get("weight") or 1.0)
+                sort_order = int(spec.get("sort_order") or len(rows))
+            elif isinstance(spec, (int, float)):
+                weight = float(spec)
+                sort_order = len(rows)
+            elif spec is True:
+                weight = float((skill.contract or {}).get("weight") or 1.0)
+                sort_order = len(rows)
+            else:
+                continue
+            rows.append({"skill_id": skill.skill_id, "weight": weight, "sort_order": sort_order})
+            break
+    return sorted(rows, key=lambda row: (int(row.get("sort_order") or 0), str(row.get("skill_id") or "")))
 
 
 def _skill_performance(db: Session, skill_id: str, run_mode: str) -> dict[str, Any]:

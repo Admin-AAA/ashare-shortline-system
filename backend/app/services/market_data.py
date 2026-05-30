@@ -378,6 +378,89 @@ def _recent_open_trade_dates(settings: Any) -> list[str]:
     ]
 
 
+def _batch_quote_tradeable_count(
+    batch_quotes: Any,
+    stock_basics: list[dict[str, Any]],
+    *,
+    require_turnover: bool,
+    daily_basic_map: dict[str, dict[str, Any]] | None = None,
+) -> int:
+    if batch_quotes is None or batch_quotes.empty:
+        return 0
+
+    basics_by_code = {
+        _normalize_code(str(row.get("symbol") or "")): row
+        for row in stock_basics
+        if _normalize_code(str(row.get("symbol") or ""))
+    }
+    count = 0
+    for _, row in batch_quotes.iterrows():
+        code = _normalize_code(str(row.get("ts_code") or row.get("code") or "").split(".")[0])
+        if not code:
+            continue
+        basic = basics_by_code.get(code, {})
+        if not _is_supported_a_share({"code": code, "exchange": _exchange_from_code(code)}):
+            continue
+        name = str(basic.get("name") or row.get("name") or "")
+        if bool(basic.get("is_st")) or "ST" in name.upper() or "退" in name:
+            continue
+        price = _num(row.get("close"))
+        amount_yi = _num(row.get("amount")) * 1000 / 100000000
+        basic_row = (daily_basic_map or {}).get(code, {})
+        turnover_rate = _num(
+            row.get("turn_over"),
+            _num(row.get("turnover_rate"), _num(basic_row.get("turnover_rate"))),
+        )
+        has_turnover = turnover_rate > 0 or not require_turnover
+        if price > 1 and amount_yi > 0 and has_turnover:
+            count += 1
+    return count
+
+
+def _min_complete_batch_quote_count(stock_count: int) -> int:
+    if stock_count < 20:
+        return 1
+    return max(20, min(300, int(stock_count * 0.05)))
+
+
+def _is_complete_batch_quote_snapshot(
+    batch_quotes: Any,
+    stock_basics: list[dict[str, Any]],
+    *,
+    require_turnover: bool,
+    daily_basic_map: dict[str, dict[str, Any]] | None = None,
+) -> tuple[bool, int, int]:
+    tradeable_count = _batch_quote_tradeable_count(
+        batch_quotes,
+        stock_basics,
+        require_turnover=require_turnover,
+        daily_basic_map=daily_basic_map,
+    )
+    min_tradeable_count = _min_complete_batch_quote_count(len(stock_basics))
+    return tradeable_count >= min_tradeable_count, tradeable_count, min_tradeable_count
+
+
+def _load_tushare_daily_basic_map(pro: Any, settings: Any, trade_date: str) -> dict[str, dict[str, Any]]:
+    try:
+        daily_basic = _call_tushare_with_retry(
+            pro,
+            settings,
+            "daily_basic",
+            trade_date=trade_date,
+            fields="ts_code,trade_date,turnover_rate,pe_ttm,total_mv,circ_mv",
+        )
+        if daily_basic is None or daily_basic.empty:
+            return {}
+        result: dict[str, dict[str, Any]] = {}
+        for _, row in daily_basic.iterrows():
+            code = _normalize_code(str(row.get("ts_code") or "").split(".")[0])
+            if code:
+                result[code] = dict(row)
+        return result
+    except Exception:
+        return {}
+
+
 
 
 
@@ -397,6 +480,7 @@ def _fetch_tushare_quotes(settings: Any) -> list[dict[str, Any]]:
     # 先批量拉全市场行情，避免逐股票高频调用触发限速。
     batch_quotes = None
     selected_trade_date = ""
+    selected_daily_basic_map: dict[str, dict[str, Any]] | None = None
     batch_quote_errors: list[str] = []
     recent_trade_dates = _recent_open_trade_dates(settings)
     for trade_date in reversed(recent_trade_dates[-5:]):
@@ -404,8 +488,26 @@ def _fetch_tushare_quotes(settings: Any) -> list[dict[str, Any]]:
             try:
                 candidate = _call_tushare_with_retry(pro, settings, api_name, trade_date=trade_date)
                 if candidate is not None and not candidate.empty:
+                    candidate_daily_basic_map = (
+                        _load_tushare_daily_basic_map(pro, settings, trade_date)
+                        if api_name == "daily"
+                        else None
+                    )
+                    is_complete, tradeable_count, min_tradeable_count = _is_complete_batch_quote_snapshot(
+                        candidate,
+                        stock_basics,
+                        require_turnover=True,
+                        daily_basic_map=candidate_daily_basic_map,
+                    )
+                    if not is_complete:
+                        batch_quote_errors.append(
+                            f"{trade_date}:{api_name}: incomplete snapshot "
+                            f"({tradeable_count}/{min_tradeable_count} tradeable)"
+                        )
+                        continue
                     batch_quotes = candidate
                     selected_trade_date = trade_date
+                    selected_daily_basic_map = candidate_daily_basic_map
                     break
                 batch_quote_errors.append(f"{trade_date}:{api_name}: empty")
             except Exception as exc:  # noqa: BLE001 - accumulate evidence for fallback
@@ -422,22 +524,11 @@ def _fetch_tushare_quotes(settings: Any) -> list[dict[str, Any]]:
         if code:
             batch_quote_map[code] = dict(row)
 
-    daily_basic_map: dict[str, dict[str, Any]] = {}
-    try:
-        daily_basic = _call_tushare_with_retry(
-            pro,
-            settings,
-            "daily_basic",
-            trade_date=selected_trade_date,
-            fields="ts_code,trade_date,turnover_rate,pe_ttm,total_mv,circ_mv",
-        )
-        if daily_basic is not None and not daily_basic.empty:
-            for _, row in daily_basic.iterrows():
-                code = _normalize_code(str(row.get("ts_code") or "").split(".")[0])
-                if code:
-                    daily_basic_map[code] = dict(row)
-    except Exception:
-        daily_basic_map = {}
+    daily_basic_map = (
+        selected_daily_basic_map
+        if selected_daily_basic_map is not None
+        else _load_tushare_daily_basic_map(pro, settings, selected_trade_date)
+    )
 
     stocks_list: list[dict[str, Any]] = []
     quote_trade_date = _format_yyyymmdd(selected_trade_date)
@@ -986,9 +1077,9 @@ def _apply_relative_features(stocks: list[dict[str, Any]]) -> None:
         stock["primary_excess60"] = round(float(stock.get("chg60") or 0) - market_chg60, 3)
         stock["industry_capacity_like_count"] = sum(1 for peer in peers if float(peer.get("amount_yi") or 0) >= 3)
         stock["industry_positive_excess20_count"] = sum(1 for peer in peers if float(peer.get("chg20") or 0) > market_chg20)
-        stock["_is_main"] = stock.get("industry") in main_industries and stock.get("industry") != "未分类"
+        stock["is_main_theme"] = stock.get("industry") in main_industries and stock.get("industry") != "未分类"
         profile = dict(stock.get("dsa_profile") or {})
-        if stock["_is_main"]:
+        if stock["is_main_theme"]:
             profile["sector_fund_rank"] = min(8, profile.get("sector_fund_rank", 99))
         stock["dsa_profile"] = profile
 

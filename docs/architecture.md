@@ -139,6 +139,46 @@ sequenceDiagram
   API-->>UI: 推荐结果
 ```
 
+## 共享因子层、策略层与聚合风控层边界
+
+当前推荐引擎按三层职责拆分，核心目标是让可回测、可解释的事实只计算一次，让不同短线策略只表达自己的取舍，让最终风险控制集中在聚合层完成。
+
+### 共享因子层
+
+涉及文件：`backend/app/services/feature_builder.py`、`backend/app/services/shortline_factors.py`。
+
+- `feature_builder` 负责把报价、日 K、辅助数据池和市场快照合成为稳定特征输入。
+- `shortline_factors` 负责计算共享短线增强因子，包括涨停过热、板块梯队完整度、资金共振、20cm 风险闸门。
+- 每个共享因子必须声明字段名、计算逻辑、数据来源、缺失数据降级策略，并由测试覆盖。
+- 共享因子层只输出可观察或可回测字段，不输出 `buy_signal`、`suggested_position`、`operation_advice` 等买卖判断。
+- 数据源默认优先 Tushare 和本地数据池；缺失时只能退化到可回测的行情、量价或代码板块信息，并在解释字段中保留降级说明。
+
+### 策略插件层
+
+涉及文件：`backend/skills/*/strategy.yaml`、`backend/app/engine/skill_loader.py`、`backend/app/engine/strategy_runner.py`。
+
+- `strategy.yaml` 是策略合同，表达股票池、预过滤、阶段、买点、评分、风险规则。
+- `skill_loader` 只负责发现和加载插件目录，不内置陈小群、炒股养家、隔夜持股法等具体策略身份。
+- `strategy_runner` 只按 YAML 合同对共享字段求值，返回策略信号、证据、风险、买点和策略独立度。
+- 陈小群龙头战法、炒股养家大局观、隔夜持股法是普通策略插件样例：它们可以选择同一批共享因子，但权重、阈值和风险解释必须各自写在 YAML 中。
+- 新策略接入应通过新增插件目录和 `strategy.yaml` 完成；核心引擎不应为了某个策略 ID 新增分支。
+
+### 聚合风控层
+
+涉及文件：`backend/app/engine/aggregator.py`。
+
+- `aggregator` 负责合并多个策略信号、市场状态、证据质量、Agent 审查和共享因子风险。
+- 仓位纪律、最终降档、阻断和解释性输出集中在聚合层处理。
+- 聚合结果必须保留 `strategy_signals`、`shortline_factors`、`shortline_factor_explanations`、`score_breakdown`，让前端和复盘能解释“哪个策略支持、哪个因子扣分、聚合为什么降档”。
+
+### 策略专属回测适配
+
+涉及文件：`backend/app/engine/strategy_backtest_adapter.py`、`backend/app/api/runs.py`。
+
+- 通用回测仍由 `backtest_service.run_backtest` 执行。
+- 如果某个策略有专属回测或数据补齐动作，应在该策略的 `strategy.yaml` 中声明 `meta.backtest_adapter`。
+- `/api/runs/backtest` 只读取策略元数据并分发适配器；核心 API 不直接判断具体策略 ID。
+
 ## 后端推荐架构
 
 ```mermaid

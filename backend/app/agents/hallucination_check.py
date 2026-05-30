@@ -202,7 +202,7 @@ def _build_traceable_set(stock: dict[str, Any], snapshot: dict[str, Any] | None 
                 if float(v).is_integer():
                     values.add(str(int(float(v))))
 
-    for key in ["trend_status", "ma_alignment", "macd_status", "rsi_status", "rsi_signal", "buy_signal"]:
+    for key in ["trend_status", "ma_alignment", "macd_status", "rsi_status", "rsi_signal"]:
         _add(stock.get(key))
 
     # ── 市场快照数据（Agent 引用的涨跌停数字来源）──

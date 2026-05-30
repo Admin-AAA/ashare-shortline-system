@@ -8,6 +8,14 @@ meta:
   style: shortline
   version: 0.1.0
   holding_days: [1, 3, 5]
+  strategy_independence: 0.75
+  default_preset_groups:
+    formal_opening:
+      weight: 1.0
+      sort_order: 20
+    formal_trend_core:
+      weight: 1.05
+      sort_order: 20
 
 contract:
   type: strategy
@@ -35,10 +43,12 @@ prefilter:
       - when: "pos60 <= 96"
         reason: "position_too_high"
     include_any:
-      - when: "_is_main == true"
+      - when: "is_main_theme == true"
         reason: "requires_main_theme"
       - when: "industry_capacity_like_count >= 2"
         reason: "requires_sector_breadth"
+      - when: "sector_ladder_completeness_score >= 50"
+        reason: "requires_sector_ladder"
       - when: "breakout20 == 1"
         reason: "requires_breakout_or_mainline"
       - when: "off_high_pct >= -8 and pct >= -2"
@@ -57,7 +67,7 @@ phases:
     risk_flags: ["退潮不交易"]
 
   - name: 非主线加速
-    when: "dist60 > 30 and pos60 > 90 and _is_main == false"
+    when: "dist60 > 30 and pos60 > 90 and is_main_theme == false"
     score_cap: 20
     hard_veto: true
     risk_flags: ["非主线加速不参与"]
@@ -80,13 +90,13 @@ phases:
 
 setups:
   - name: 分歧低吸
-    when: "_is_main == true and off_high_pct < -3 and pct < 0"
+    when: "is_main_theme == true and off_high_pct < -3 and pct < 0"
     score_delta: 12
     entry_rule: "主线龙头回踩MA5/MA10止跌后重新走强"
     invalid_rule: "板块走弱或跌破分歧低点"
 
   - name: 平台突破
-    when: "_is_main == true and breakout20 == true and industry_capacity_like_count >= 2"
+    when: "is_main_theme == true and breakout20 == true and sector_ladder_completeness_score >= 50"
     score_delta: 10
     entry_rule: "放量突破平台，同行业至少2只同步走强"
     invalid_rule: "突破失败且跌回平台"
@@ -94,21 +104,33 @@ setups:
 scoring:
   base: 50
   rules:
-    - when: "_is_main == true"
+    - when: "is_main_theme == true"
       delta: 12
       reason: 主流行业
+    - when: "sector_ladder_completeness_score >= 75"
+      delta: 12
+      reason: 板块梯队完整
+    - when: "sector_ladder_completeness_score >= 50"
+      delta: 6
+      reason: 板块梯队展开
+    - when: "capital_resonance_score >= 70"
+      delta: 8
+      reason: 资金与板块共振
     - when: "industry_capacity_like_count >= 3"
       delta: 10
       reason: 板块容量合力
     - when: "primary_excess20 > 8"
       delta: 8
       reason: 个股超额收益占优
-    - when: "_is_main == false"
+    - when: "is_main_theme == false"
       delta: -15
       reason: 非主流行业降权
-    - when: "industry_capacity_like_count <= 1 and _is_main == false"
+    - when: "industry_capacity_like_count <= 1 and is_main_theme == false"
       delta: -20
       reason: 非主线孤票回避
+    - when: "limit_up_overheat_score >= 70"
+      delta: -6
+      reason: 涨停情绪过热，买机会不买一致
 
 risk:
   rules:
@@ -118,3 +140,9 @@ risk:
     - when: "free_mv_yi > 5000 and dist60 > 30"
       level: medium
       flag: 大容量趋势票高位加速
+    - when: "sector_ladder_completeness_score < 25 and is_main_theme == false"
+      level: medium
+      flag: 非主流且板块梯队不完整
+    - when: "limit_up_overheat_score >= 70"
+      level: medium
+      flag: 情绪一致过热，注意反向博弈风险

@@ -7,19 +7,24 @@ export default function TemporalConsistencyPanel() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const fetchTemporal = async () => {
+  const fetchTemporal = async (signal?: AbortSignal) => {
     setLoading(true);
     setError("");
     try {
-      setData(await api.temporalConsistency("formal"));
+      setData(await api.temporalConsistency("formal", { signal }));
     } catch (err) {
+      if (isAbortError(err)) return;
       setError(err instanceof Error ? err.message : "时态一致性检查失败");
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   };
 
-  useEffect(() => { fetchTemporal(); }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchTemporal(controller.signal);
+    return () => controller.abort();
+  }, []);
 
   const summary = data?.check_summary as Record<string, number> | undefined;
   const violations = data?.violations as Array<Record<string, unknown>> | undefined;
@@ -41,7 +46,7 @@ export default function TemporalConsistencyPanel() {
       </div>
 
       <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
-        <button className="btn" onClick={fetchTemporal} disabled={loading}>
+        <button className="btn" onClick={() => void fetchTemporal()} disabled={loading}>
           <RefreshCw size={14} />
           检查
         </button>
@@ -133,4 +138,8 @@ export default function TemporalConsistencyPanel() {
       )}
     </section>
   );
+}
+
+function isAbortError(err: unknown) {
+  return err instanceof Error && err.name === "AbortError";
 }

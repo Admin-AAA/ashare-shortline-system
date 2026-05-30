@@ -339,7 +339,7 @@ def _compact_stock(stock: dict[str, Any]) -> dict[str, Any]:
     """精简股票字段，只传关键信息给 Agent。
 
     关键补充：DSA 评分字段（support_ma5/support_ma10/dsa_support_score/
-    trend_status/ma_alignment/macd_status/rsi_status/buy_signal）必须传入，
+    trend_status/ma_alignment/macd_status/rsi_status）与共享短线因子必须传入，
     防止 Agent 在没有数据情况下凭空推断"MA5支撑确认"等结论。
     """
     keys = [
@@ -352,8 +352,15 @@ def _compact_stock(stock: dict[str, Any]) -> dict[str, Any]:
         "industry_capacity_like_count", "industry_positive_excess20_count",
         "data_source", "quote_source", "kline_source",
         "latest_trade_date", "data_quality",
-        "_is_main", "_is_leader_candidate", "_sentiment_phase",
-        "_consensus_signal", "_dragon_tiger_dispersion", "_dragon_tiger_inst_ratio",
+        "is_main_theme", "is_shortline_leader_candidate", "shortline_leader_score",
+        "market_sentiment_phase",
+        "limit_up_overheat_score", "limit_up_overheat_level",
+        "sector_ladder_completeness_score", "sector_ladder_level",
+        "sector_ladder_limit_up_count", "sector_ladder_height",
+        "capital_resonance_score", "capital_resonance_signal", "capital_resonance_source",
+        "is_20cm_stock", "twenty_cm_risk_score", "twenty_cm_risk_gate", "twenty_cm_risk_reason",
+        "dragon_tiger_buy_dispersion", "dragon_tiger_inst_buy_ratio",
+        "shortline_factor_explanations",
         "is_limit_up", "concept_sector_name", "concept_sector_heat_rank",
         "dragon_tiger_is_on_list", "dragon_tiger_recent_count",
         "main_net_inflow_yi", "main_net_inflow_ratio",
@@ -367,7 +374,7 @@ def _compact_stock(stock: dict[str, Any]) -> dict[str, Any]:
         "macd_status", "macd_signal",
         "macd_dif", "macd_dea", "macd_bar",
         "rsi_6", "rsi_12", "rsi_24", "rsi_status", "rsi_signal",
-        "buy_signal", "bias_ma5", "bias_ma10", "bias_ma20",
+        "bias_ma5", "bias_ma10", "bias_ma20",
         "volume_status", "volume_trend", "volume_ratio_5d",
         "volume_ratio_vs_5d", "volume_ratio_vs_20d",
         "volume_breakout_signal", "volume_shrink_pullback",

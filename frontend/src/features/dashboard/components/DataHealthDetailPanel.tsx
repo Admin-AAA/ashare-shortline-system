@@ -14,6 +14,9 @@ import type {
   ScheduledTaskRun,
 } from "../../../types";
 
+const DATA_HEALTH_DAILY_KBAR_CODE_LIMIT = 6000;
+const DATA_HEALTH_AUXILIARY_CODE_LIMIT = 200;
+
 function textValue(value: unknown, fallback = "0") {
   if (value === null || value === undefined || value === "") return fallback;
   return String(value);
@@ -24,23 +27,31 @@ function percentValue(value: unknown, fallback = "-") {
   return `${(value * 100).toFixed(0)}%`;
 }
 
+function isAbortError(err: unknown) {
+  return err instanceof Error && err.name === "AbortError";
+}
+
 export default function DataHealthDetailPanel() {
   const [data, setData] = useState<DataHealthDiagnostic | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
   const [repairing, setRepairing] = useState(false);
   const [repairResult, setRepairResult] = useState<DataHealthRemediationResult | null>(null);
   const [repairRuns, setRepairRuns] = useState<ScheduledTaskRun[]>([]);
 
-  const fetchHealth = async () => {
+  const fetchHealth = async (signal?: AbortSignal) => {
     setLoading(true);
     setError("");
+    setMessage("");
     try {
-      setData(await api.dataHealth());
+      setData(await api.dataHealth({ signal }));
+      setMessage("数据质量诊断已刷新");
     } catch (err) {
+      if (isAbortError(err)) return;
       setError(err instanceof Error ? err.message : "数据健康诊断失败");
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   };
 
@@ -52,15 +63,22 @@ export default function DataHealthDetailPanel() {
     }
   };
 
-  useEffect(() => { fetchHealth(); }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchHealth(controller.signal);
+    return () => controller.abort();
+  }, []);
   useEffect(() => { fetchRepairRuns(); }, []);
 
   const runRepair = async (dryRun: boolean) => {
     setRepairing(true);
     setError("");
+    setMessage(dryRun ? "正在预演补数计划..." : "正在执行补数，完成后会自动刷新诊断结果...");
     try {
       const result = await api.remediateDataHealth({
         dry_run: dryRun,
+        daily_kbar_code_limit: DATA_HEALTH_DAILY_KBAR_CODE_LIMIT,
+        capital_flow_code_limit: DATA_HEALTH_AUXILIARY_CODE_LIMIT,
         post_diagnosis: dryRun,
       });
       setRepairResult(result);
@@ -68,6 +86,7 @@ export default function DataHealthDetailPanel() {
         await fetchHealth();
         await fetchRepairRuns();
       }
+      setMessage(dryRun ? "预演补数完成，未写入数据" : "补数任务已执行，诊断结果已刷新");
     } catch (err) {
       setError(err instanceof Error ? err.message : "自动补数执行失败");
     } finally {
@@ -90,6 +109,11 @@ export default function DataHealthDetailPanel() {
   const referenceSource = businessStatusLabel(data?.reference_trade_date_source, "状态待确认");
   const referenceNote = textValue(data?.reference_trade_date_note, "");
   const repairComparisonSkipped = repairResult?.comparison?.status === "skipped";
+  const repairTableDeltas = repairResult?.comparison?.table_deltas
+    ? Object.entries(repairResult.comparison.table_deltas)
+    : [];
+  const repairActions = (repairResult?.actions ?? []) as DataHealthRemediationAction[];
+  const repairScope = summarizeRepairScope(repairActions);
 
   return (
     <section className="cockpit-panel">
@@ -102,7 +126,7 @@ export default function DataHealthDetailPanel() {
       </div>
 
       <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
-        <button className="btn" onClick={fetchHealth} disabled={loading}>
+        <button className="btn" onClick={() => void fetchHealth()} disabled={loading}>
           <RefreshCw size={14} />
           刷新
         </button>
@@ -112,13 +136,29 @@ export default function DataHealthDetailPanel() {
         </button>
         <button className="btn primary" onClick={() => runRepair(false)} disabled={repairing}>
           <RefreshCw size={14} />
-          执行补数
+          {repairing ? "补数处理中" : "执行补数"}
         </button>
         {loading && <span style={{ color: "var(--muted)", fontSize: 12 }}>诊断中...</span>}
         {repairing && <span style={{ color: "var(--muted)", fontSize: 12 }}>补数处理中...</span>}
       </div>
+      <div className="control-note">
+        <Activity size={15} />
+        <span>
+          预演补数只生成计划不写库；执行补数按表和交易日增量写入。日K按全量候选池检查，侧栏只展示少量缺口样例，不代表补齐上限；资金/新闻辅助默认最多 {DATA_HEALTH_AUXILIARY_CODE_LIMIT} 只。下方会展示本次实际目标、写入结果和剩余缺口。
+        </span>
+      </div>
 
       {error && <div className="bt-error" style={{ marginTop: 12 }}>{error}</div>}
+      {message && (
+        <div
+          className="control-banner positive"
+          style={{ marginTop: 12 }}
+          role="status"
+          aria-live="polite"
+        >
+          {message}
+        </div>
+      )}
 
       {data && !loading && (
         <>
@@ -297,12 +337,20 @@ export default function DataHealthDetailPanel() {
               <summary>自动补数结果 <small>{businessStatusLabel(repairResult.status, "-")}</small></summary>
               <div className="sub-metrics">
                 <div className="sub-metrics-group">
+                  <span className="group-label">本次补数范围</span>
+                  <div className="sub-metrics-row">
+                    <span>动作 <strong>{textValue(repairResult.action_summary?.planned_count, "0")}</strong></span>
+                    <span>本次实际目标 <strong>{repairScope.targetCodes || "-"}</strong></span>
+                    <span>写入行 <strong>{textValue(repairScope.rowCount, "0")}</strong></span>
+                    <span>失败动作 <strong>{textValue(repairResult.action_summary?.failed_count, "0")}</strong></span>
+                  </div>
+                </div>
+                <div className="sub-metrics-group">
                   <span className="group-label">前后对比</span>
                   <div className="sub-metrics-row">
                     <span>问题数 <strong>{textValue(repairResult.before?.issue_count, "-")} → {textValue(repairResult.after?.issue_count, "-")}</strong></span>
                     <span>评分 <strong>{textValue(repairResult.before?.score, "-")} → {textValue(repairResult.after?.score, "-")}</strong></span>
                     <span>最大缺失 <strong>{textValue(repairResult.before?.recent_summary?.max_missing_days, "-")} → {textValue(repairResult.after?.recent_summary?.max_missing_days, "-")}</strong></span>
-                    <span>失败动作 <strong>{textValue(repairResult.action_summary?.failed_count, "0")}</strong></span>
                     {!repairComparisonSkipped && (
                       <>
                         <span>目标缺口修复 <strong>{textValue(repairResult.comparison?.resolved_missing_day_count, "0")}/{textValue(repairResult.comparison?.target_missing_day_count, "0")}</strong></span>
@@ -330,47 +378,58 @@ export default function DataHealthDetailPanel() {
                     </div>
                   </div>
                 )}
-                {repairResult.rollback_guidance?.message && (
-                  <div className="sub-metrics-group">
-                    <span className="group-label">回滚说明</span>
-                    <div className="sub-metrics-row">
+              </div>
+              {repairTableDeltas.length > 0 && (
+                <details className="fp-details nested">
+                  <summary>表级变化 <small>{repairTableDeltas.length} 项</small></summary>
+                  <div className="fp-list">
+                    {repairTableDeltas.map(([table, item]) => {
+                      const delta = item as DataHealthRemediationTableDelta;
+                      return (
+                        <div key={table} className="fp-item">
+                          <strong>{table}</strong>
+                          <span>
+                            缺口 {textValue(delta.before_missing_days, "0")} → {textValue(delta.after_missing_days, "0")} · 修复率 {percentValue(delta.remediation_coverage_rate)}
+                          </span>
+                          {(delta.unresolved_missing_dates?.length ?? 0) > 0 ? (
+                            <span>未修复: {delta.unresolved_missing_dates?.join(", ")}</span>
+                          ) : (delta.resolved_missing_dates?.length ?? 0) > 0 ? (
+                            <span>已修复: {delta.resolved_missing_dates?.join(", ")}</span>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </details>
+              )}
+              {repairActions.length > 0 && (
+                <details className="fp-details nested">
+                  <summary>执行动作 <small>{repairActions.length} 项</small></summary>
+                  <div className="fp-list">
+                    {repairActions.map((item, index) => (
+                      <div key={`${String(item.table ?? item.scope ?? "action")}-${index}`} className="fp-item">
+                        <strong>{textValue(item.table ?? item.scope, "action")}</strong>
+                        <span>状态: {businessStatusLabel(item.status, "-")}</span>
+                        <span>交易日: {textValue(item.trade_date ?? item.trade_date_start, "-")}</span>
+                        {formatActionCodeTarget(item) ? <span>{formatActionCodeTarget(item)}</span> : null}
+                        <span>产出: {textValue(item.row_count, "0")} 行</span>
+                        {item.error ? <span>错误: {textValue(item.error_type, "Error")} · {item.error}</span> : null}
+                        {item.rollback_hint ? <span>回滚: {item.rollback_hint}</span> : null}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+              {repairResult.rollback_guidance?.message && (
+                <details className="fp-details nested">
+                  <summary>回滚说明 <small>{businessStatusLabel(repairResult.rollback_guidance.mode, "-")}</small></summary>
+                  <div className="fp-list">
+                    <div className="fp-item">
                       <span>{repairResult.rollback_guidance.message}</span>
                     </div>
                   </div>
-                )}
-              </div>
-              {repairResult.comparison?.table_deltas && (
-                <div className="fp-list" style={{ marginTop: 12 }}>
-                  {Object.entries(repairResult.comparison.table_deltas).map(([table, item]) => {
-                    const delta = item as DataHealthRemediationTableDelta;
-                    return (
-                      <div key={table} className="fp-item">
-                        <strong>{table}</strong>
-                        <span>
-                          缺口 {textValue(delta.before_missing_days, "0")} → {textValue(delta.after_missing_days, "0")} · 修复率 {percentValue(delta.remediation_coverage_rate)}
-                        </span>
-                        {(delta.unresolved_missing_dates?.length ?? 0) > 0 ? (
-                          <span>未修复: {delta.unresolved_missing_dates?.join(", ")}</span>
-                        ) : (delta.resolved_missing_dates?.length ?? 0) > 0 ? (
-                          <span>已修复: {delta.resolved_missing_dates?.join(", ")}</span>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
+                </details>
               )}
-              <div className="fp-list">
-                {((repairResult.actions ?? []) as DataHealthRemediationAction[]).map((item, index) => (
-                  <div key={`${String(item.table ?? item.scope ?? "action")}-${index}`} className="fp-item">
-                    <strong>{textValue(item.table ?? item.scope, "action")}</strong>
-                    <span>状态: {businessStatusLabel(item.status, "-")}</span>
-                    <span>交易日: {textValue(item.trade_date ?? item.trade_date_start, "-")}</span>
-                    <span>产出: {textValue(item.row_count, "0")} 行</span>
-                    {item.rollback_hint ? <span>回滚: {item.rollback_hint}</span> : null}
-                    {item.error ? <span>错误: {textValue(item.error_type, "Error")} · {item.error}</span> : null}
-                  </div>
-                ))}
-              </div>
             </details>
           )}
 
@@ -408,4 +467,26 @@ export default function DataHealthDetailPanel() {
 function formatDateTime(value?: string | null) {
   if (!value) return "-";
   return String(value).replace("T", " ").slice(0, 16);
+}
+
+function formatActionCodeTarget(item: DataHealthRemediationAction) {
+  const requested = Number(item.requested_code_count ?? 0);
+  if (requested > 0) return `本次目标代码: ${requested}`;
+  const limit = Number(item.code_limit ?? 0);
+  if (limit > 0) return `本次检查上限: ${limit}`;
+  return "";
+}
+
+function summarizeRepairScope(actions: DataHealthRemediationAction[]) {
+  return actions.reduce(
+    (summary, action) => {
+      summary.rowCount += Number(action.row_count ?? 0);
+      const requested = Number(action.requested_code_count ?? 0);
+      if (requested > 0) {
+        summary.targetCodes += requested;
+      }
+      return summary;
+    },
+    { targetCodes: 0, rowCount: 0 },
+  );
 }

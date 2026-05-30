@@ -385,11 +385,18 @@ def remediate_minute_gaps(
     start_date: str,
     end_date: str,
 ) -> dict[str, Any]:
+    start = _normalize_trade_date(start_date)
+    end = _normalize_trade_date(end_date)
     before = preview_minute_gap_remediation(db, start_date, end_date)
     gate_before = before["minute_gate"]
     if gate_before.get("passed"):
         return {
             "status": "already_ready",
+            "strategy_id": STRATEGY_ID,
+            "strategy_name": STRATEGY_NAME,
+            "strategy_window": {"start_date": start, "end_date": end},
+            "minute_gate": before.get("minute_gate"),
+            "data_coverage": before.get("data_coverage"),
             "before": before,
             "after": before,
             "actions": [],
@@ -401,12 +408,18 @@ def remediate_minute_gaps(
         gate_before,
     )
     after = preview_minute_gap_remediation(db, start_date, end_date)
+    comparison = _compare_minute_gap_remediation(before, after)
     return {
         "status": "completed" if actions else "no_action",
+        "strategy_id": STRATEGY_ID,
+        "strategy_name": STRATEGY_NAME,
+        "strategy_window": {"start_date": start, "end_date": end},
+        "minute_gate": after.get("minute_gate"),
+        "data_coverage": after.get("data_coverage"),
         "before": before,
         "after": after,
         "actions": actions,
-        "comparison": _compare_minute_gap_remediation(before, after),
+        "comparison": comparison,
     }
 
 

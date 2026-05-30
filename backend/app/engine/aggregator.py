@@ -54,11 +54,12 @@ _RISK_SEVERITY_RULES: list[tuple[list[str], str]] = [
     (["股权质押比例", "质押风险"], "high"),
     (["有限售股解禁", "解禁"], "high"),
     (["硬风控否决", "Hard Veto"], "high"),
+    (["20cm 风险闸门", "20cm 隔夜波动"], "high"),
     (["入场不可成交", "无法真实成交", "无成交量", "一字涨停"], "high"),
     (["涨停排队", "封板反复", "封单金额", "尾盘封板"], "high"),
     (["未进入 Skill Agent 深审", "仅按规则信号降权输出"], "info"),
     # ── medium: 市场环境/情绪 ──
-    (["情绪高潮", "高潮阶段", "追高仓位降档"], "medium"),
+    (["情绪高潮", "高潮阶段", "追高仓位降档", "涨停过热"], "medium"),
     (["市场弱势", "防守仓位", "情绪冰点", "跌停压力"], "medium"),
     (["Skill 阶段判定矛盾", "立场多空矛盾"], "medium"),
     (["Setup 仅部分 Skill 命中"], "medium"),
@@ -105,15 +106,6 @@ AGENT_PRESENT_WEIGHTS = {
     "risk": 0.10,
     "evidence": 0.10,
 }
-
-# 技能独立性权重 —— 当多个技能使用相同数据源/方法论时降低共识加成
-# 值越低表示技能越独立（越不容易放大同一噪音）
-SKILL_INDEPENDENCE: dict[str, float] = {
-    "chen-xiaoqun-skill": 0.75,
-    "chao-gu-yang-jia-skill": 0.75,
-    "daily-stock-analysis-skill": 0.85,
-}
-
 
 def _market_sentiment(snapshot: dict[str, Any] | None) -> str:
     """统一的市场情绪判断，全系统唯一入口。"""
@@ -200,16 +192,16 @@ def resolve_score_line_context(
     market_base = _market_base(market_snapshot)
     sentiment = _market_sentiment(market_snapshot)
     market_adjustment = {
-        "强牛": -13.0,
-        "偏多": -6.0,
+        "强牛": 1.0,
+        "偏多": 0.0,
         "震荡": 0.0,
-        "弱势": 5.0,
+        "弱势": 2.0,
     }.get(market_base, 0.0)
     sentiment_adjustment = {
-        "高潮": -2.0,
-        "活跃": -1.0,
+        "高潮": 5.0,
+        "活跃": 1.0,
         "平淡": 0.0,
-        "冰点": 3.0,
+        "冰点": -3.0 if market_base == "弱势" else 0.0,
     }.get(sentiment, 0.0)
     risk_adjustment = {
         "conservative": 2.0,
@@ -225,6 +217,24 @@ def resolve_score_line_context(
         "risk_template_adjustment": round(risk_adjustment, 2),
         "effective_score_line": effective,
     }
+
+
+def resolve_display_limit(
+    output_count: int | None,
+    market_snapshot: dict[str, Any] | None = None,
+) -> int | None:
+    if output_count is None:
+        return None
+    count = int(output_count or 0)
+    if count <= 0:
+        return None
+    market_base = _market_base(market_snapshot)
+    sentiment = _market_sentiment(market_snapshot)
+    if sentiment == "高潮":
+        return max(1, min(count, int((count + 1) // 2)))
+    if market_base == "弱势" and sentiment == "冰点":
+        return min(count, 2)
+    return None
 
 
 def _card_score_line_adjustment(card: dict[str, Any]) -> dict[str, Any]:
@@ -473,17 +483,16 @@ def _skill_independence_factor(signals: list[dict[str, Any]]) -> float:
     当多个技能依赖相同数据源/方法论时，高分一致性加成应衰减，
     避免同一技术特征被重复计数放大噪音。
     """
-    skill_ids = [
-        s.get("strategy_id", s.get("strategy_name", ""))
-        for s in signals
-    ]
+    skill_ids = [s.get("strategy_id", s.get("strategy_name", "")) for s in signals]
     if len(set(skill_ids)) < 2:
         return 1.0
-    # 取所有技能独立性的均值作为衰减系数
-    indeps = [SKILL_INDEPENDENCE.get(sid, 0.85) for sid in skill_ids if sid in SKILL_INDEPENDENCE]
-    if not indeps:
-        return 0.85
-    return sum(indeps) / len(indeps)
+    indeps: list[float] = []
+    for signal in signals:
+        try:
+            indeps.append(max(0.0, min(1.0, float(signal.get("strategy_independence", 0.85)))))
+        except (TypeError, ValueError):
+            indeps.append(0.85)
+    return sum(indeps) / max(1, len(indeps))
 
 
 def _consensus_boost(
@@ -614,7 +623,8 @@ def aggregate(
     # Strategy.yaml 规则辅助评分
     strategy_rule_score = _compute_strategy_rule_score(signals)
     # 风险调整分：按严重级别分级扣分，info 级不扣分
-    all_risks = _collect_risks(signals)
+    shortline_factor_risks = _shortline_factor_risks(stock)
+    all_risks = _collect_risks(signals) + shortline_factor_risks
     risk_penalty = sum(
         RISK_SEVERITY_PENALTY.get(_risk_severity(r), 5.0) for r in all_risks
     ) * RISK_TEMPLATE_PENALTY.get(risk_template, 1.0)
@@ -735,7 +745,7 @@ def aggregate(
 
     # 将所有候选标记按严重级别分流：high/medium → risk_flags，info → info_tags
     all_candidate_flags = list(dict.fromkeys(
-        _collect_risks(signals) + quality_risks + conflict_risks + market_discipline["risk_flags"] + quality_infos
+        all_risks + quality_risks + conflict_risks + market_discipline["risk_flags"] + quality_infos
     ))
     final_risk_flags: list[str] = []
     info_tags: list[str] = []
@@ -765,6 +775,8 @@ def aggregate(
         "rationale": _rationale(signals),
         "risk_flags": final_risk_flags,
         "info_tags": info_tags,
+        "shortline_factors": _shortline_factor_summary(stock),
+        "shortline_factor_explanations": stock.get("shortline_factor_explanations") or {},
         "strategy_signals": signals,
         "component_scores": component_scores,
         "raw_component_scores": raw_component_scores,
@@ -818,6 +830,8 @@ def apply_pool_rules(
     display_limit: int | None = None,
 ) -> list[dict[str, Any]]:
     """按分数线过滤正式推荐，展示上限不参与核心选股决策。"""
+    if display_limit is None and output_count is not None:
+        display_limit = resolve_display_limit(output_count, market_snapshot)
     score_line_context = resolve_score_line_context(
         score_line if score_line is not None else min_score,
         market_snapshot=market_snapshot,
@@ -1104,6 +1118,43 @@ def _detect_skill_conflicts(signals: list[dict[str, Any]]) -> list[str]:
     return risks
 
 
+def _shortline_factor_summary(stock: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "limit_up_overheat": {
+            "score": stock.get("limit_up_overheat_score"),
+            "level": stock.get("limit_up_overheat_level"),
+        },
+        "sector_ladder": {
+            "score": stock.get("sector_ladder_completeness_score"),
+            "level": stock.get("sector_ladder_level"),
+            "limit_up_count": stock.get("sector_ladder_limit_up_count"),
+            "height": stock.get("sector_ladder_height"),
+        },
+        "capital_resonance": {
+            "score": stock.get("capital_resonance_score"),
+            "signal": stock.get("capital_resonance_signal"),
+            "source": stock.get("capital_resonance_source"),
+        },
+        "twenty_cm_risk": {
+            "is_20cm_stock": bool(stock.get("is_20cm_stock")),
+            "score": stock.get("twenty_cm_risk_score"),
+            "gate": stock.get("twenty_cm_risk_gate"),
+            "reason": stock.get("twenty_cm_risk_reason"),
+        },
+    }
+
+
+def _shortline_factor_risks(stock: dict[str, Any]) -> list[str]:
+    risks: list[str] = []
+    if _float(stock.get("limit_up_overheat_score")) >= 70:
+        risks.append("涨停过热，聚合风控降档")
+    if stock.get("twenty_cm_risk_gate") == "block":
+        risks.append("20cm 风险闸门阻断")
+    elif stock.get("twenty_cm_risk_gate") == "caution":
+        risks.append("20cm 风险闸门提示")
+    return risks
+
+
 def _stance_summary(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """提取所有 Skill Agent 的 stance 摘要。"""
     summary = []
@@ -1162,10 +1213,12 @@ def _market_discipline(
 
     if "冰点" in label:
         market_position_cap = min(market_position_cap, 0.20)
-        risk_flags.append("情绪冰点，非主线非龙头不放大仓位")
+        regime_note = "冰点试错区间"
+        risk_flags.append("情绪冰点，仅允许小仓试错主线龙头")
     if "高潮" in label:
-        market_position_cap = min(market_position_cap, 0.65)
-        risk_flags.append("情绪高潮，追高仓位降档")
+        market_position_cap = min(market_position_cap, 0.20)
+        regime_note = "高潮收缩区间"
+        risk_flags.append("情绪高潮，提高门槛并减少输出，追高只允许轻仓")
     if limit_down >= max(5, limit_up):
         market_position_cap = min(market_position_cap, 0.20)
         risk_flags.append("跌停压力不低于涨停，先控制回撤")

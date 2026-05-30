@@ -17,8 +17,9 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "../../api/client";
-import { businessStatusLabel, readinessCopy } from "../../utils/display";
+import { businessStatusLabel, readinessCopy, runStatusLabel } from "../../utils/display";
 import type {
+  LocalPoolGapSyncResult,
   LocalPoolStatus,
   ModelRoute,
   ModelRouteTestResult,
@@ -111,6 +112,9 @@ const EMPTY_PRESET_DRAFT: PresetDraft = {
 };
 
 const TERMINAL_RUN_STATUS = new Set(["completed", "failed", "interrupted", "cancelled"]);
+const LOCAL_POOL_GAP_SYNC_CODE_LIMIT = 0;
+const LOCAL_POOL_GAP_SYNC_DAYS = 90;
+const LOCAL_POOL_GAP_SYNC_MIN_BARS = 30;
 const INITIAL_SECTION_LOADING: SectionLoadState = {
   presets: true,
   skills: true,
@@ -120,7 +124,7 @@ const INITIAL_SECTION_LOADING: SectionLoadState = {
   pool: true,
 };
 
-export default function ControlCenterPage() {
+export default function ControlCenterPage({ refreshSignal = 0 }: { refreshSignal?: number }) {
   const [presets, setPresets] = useState<Preset[]>([]);
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
@@ -145,6 +149,8 @@ export default function ControlCenterPage() {
   const [testingRoute, setTestingRoute] = useState(false);
   const [routeTestResult, setRouteTestResult] = useState<ModelRouteTestResult | null>(null);
   const [savingPreset, setSavingPreset] = useState(false);
+  const [pendingDangerAction, setPendingDangerAction] = useState<string | null>(null);
+  const [sectionErrors, setSectionErrors] = useState<Partial<Record<keyof SectionLoadState, string>>>({});
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -160,16 +166,32 @@ export default function ControlCenterPage() {
   const poolReadinessCopy = readinessCopy(readiness?.can_run_local_recommendation, readiness?.status);
   const isRefreshingState = Object.values(sectionLoading).some(Boolean);
 
-  const loadControlState = useCallback(async () => {
+  function requireInlineDeleteGuard(actionKey: string) {
+    if (pendingDangerAction === actionKey) {
+      setPendingDangerAction(null);
+      return true;
+    }
+    setPendingDangerAction(actionKey);
     setError("");
+    setMessage("");
+    return false;
+  }
+
+  const loadControlState = useCallback(async (showSuccess = false) => {
+    setError("");
+    if (showSuccess) setMessage("");
+    setSectionErrors({});
     setSectionLoading(INITIAL_SECTION_LOADING);
 
     const errors: string[] = [];
+    const nextSectionErrors: Partial<Record<keyof SectionLoadState, string>> = {};
     const finishSection = (section: keyof SectionLoadState) => {
       setSectionLoading((current) => ({ ...current, [section]: false }));
     };
-    const captureError = (label: string, err: unknown) => {
-      errors.push(`${label}加载失败：${messageFromError(err)}`);
+    const captureError = (section: keyof SectionLoadState, label: string, err: unknown) => {
+      const message = `${label}加载失败：${messageFromError(err)}`;
+      nextSectionErrors[section] = message;
+      errors.push(message);
     };
 
     await Promise.all([
@@ -186,7 +208,7 @@ export default function ControlCenterPage() {
             preset_id: current.preset_id || presetRows[0]?.preset_id || "",
           }));
         } catch (err) {
-          captureError("预设", err);
+          captureError("presets", "预设", err);
         } finally {
           finishSection("presets");
         }
@@ -196,7 +218,7 @@ export default function ControlCenterPage() {
           const skillRows = await api.skills();
           setSkills(skillRows.filter((skill) => skill.enabled));
         } catch (err) {
-          captureError("策略", err);
+          captureError("skills", "策略", err);
         } finally {
           finishSection("skills");
         }
@@ -205,7 +227,7 @@ export default function ControlCenterPage() {
         try {
           setTasks(await api.scheduledTasks());
         } catch (err) {
-          captureError("自动任务", err);
+          captureError("tasks", "自动任务", err);
         } finally {
           finishSection("tasks");
         }
@@ -214,7 +236,7 @@ export default function ControlCenterPage() {
         try {
           setTaskRuns(await api.scheduledTaskRuns(30));
         } catch (err) {
-          captureError("任务运行记录", err);
+          captureError("taskRuns", "任务运行记录", err);
         } finally {
           finishSection("taskRuns");
         }
@@ -223,7 +245,7 @@ export default function ControlCenterPage() {
         try {
           setModelRoutes(await api.modelRoutes());
         } catch (err) {
-          captureError("模型路由", err);
+          captureError("modelRoutes", "模型路由", err);
         } finally {
           finishSection("modelRoutes");
         }
@@ -232,30 +254,34 @@ export default function ControlCenterPage() {
         try {
           setPool(await api.localPool({ u_limit: 5, b_limit: 5, include_details: false }));
         } catch (err) {
-          captureError("本地数据池", err);
+          captureError("pool", "本地数据池", err);
         } finally {
           finishSection("pool");
         }
       })(),
     ]);
+    setSectionErrors(nextSectionErrors);
 
     if (errors.length) {
       setError(errors.join("；"));
+    } else if (showSuccess) {
+      setMessage("控制中心状态已刷新");
     }
   }, []);
 
   useEffect(() => {
-    void loadControlState();
-  }, [loadControlState]);
+    void loadControlState(refreshSignal > 0);
+  }, [loadControlState, refreshSignal]);
 
   async function runSelectedPreset() {
     if (!selectedPreset) {
       setError("请先选择一个推荐预设");
+      setMessage("");
       return;
     }
     setRunning(true);
     setError("");
-    setMessage("");
+    setMessage(`正在触发推荐运行：${selectedPreset.name}...`);
     try {
       const result = await api.createRun({
         preset_id: selectedPreset.preset_id,
@@ -282,7 +308,14 @@ export default function ControlCenterPage() {
       const run = await api.runDetail(runId);
       setLatestRun(run);
       if (TERMINAL_RUN_STATUS.has(run.status)) {
-        setMessage(run.status === "completed" ? `推荐完成：输出 ${run.recommended_count} 只` : `推荐结束：${businessStatusLabel(run.status)}`);
+        if (run.status === "completed") {
+          setMessage(`推荐完成：输出 ${run.recommended_count} 只`);
+          setError("");
+        } else {
+          const reason = run.error_message || run.progress_message || "请到运行页查看详情，并选择断点继续或重跑。";
+          setError(`推荐${runStatusLabel(run.status)}：${reason}`);
+          setMessage("");
+        }
         return;
       }
     }
@@ -294,10 +327,32 @@ export default function ControlCenterPage() {
     setError("");
     setMessage("");
     try {
-      const result = await api.refreshLocalPool();
+      setMessage("正在刷新统一报价池...");
+      const quoteResult = await api.refreshLocalPool();
+
+      setMessage(`报价池已刷新 ${quoteResult.refreshed} 条；正在全量检查候选池日K缺口...`);
+      let gapSyncResult: LocalPoolGapSyncResult | null = null;
+      try {
+        gapSyncResult = await api.syncLocalPoolGaps({
+          code_limit: LOCAL_POOL_GAP_SYNC_CODE_LIMIT,
+          days: LOCAL_POOL_GAP_SYNC_DAYS,
+          min_bars: LOCAL_POOL_GAP_SYNC_MIN_BARS,
+          dry_run: false,
+        });
+      } catch (syncError) {
+        const poolStatus = await api.localPool({ u_limit: 5, b_limit: 5, include_details: false });
+        setPool(poolStatus);
+        setError(
+          `报价池已刷新 ${quoteResult.refreshed} 条，但候选股日K缺口同步失败：${messageFromError(syncError)}；`
+          + `当前剩余缺口：${localPoolGapSummary(poolStatus)}`,
+        );
+        return;
+      }
+
+      setMessage(localPoolSyncSummary(quoteResult.refreshed, gapSyncResult));
       const poolStatus = await api.localPool({ u_limit: 5, b_limit: 5, include_details: false });
       setPool(poolStatus);
-      setMessage(`数据池刷新完成：${result.refreshed} 条报价`);
+      setMessage(localPoolSyncSummary(quoteResult.refreshed, gapSyncResult, poolStatus));
     } catch (err) {
       setError(messageFromError(err));
     } finally {
@@ -306,6 +361,7 @@ export default function ControlCenterPage() {
   }
 
   function editTask(task: ScheduledTask) {
+    setError("");
     setEditingTaskId(task.task_id);
     setTaskDraft({
       task_id: task.task_id,
@@ -315,16 +371,20 @@ export default function ControlCenterPage() {
       preset_id: String(task.payload?.preset_id ?? selectedPresetId),
       enabled: task.enabled,
     });
+    setMessage(`已载入任务：${task.name}`);
   }
 
   function resetTaskDraft() {
+    setError("");
     setEditingTaskId(null);
     setTaskDraft({ ...EMPTY_TASK_DRAFT, preset_id: selectedPresetId || presets[0]?.preset_id || "" });
+    setMessage("已切换到新建任务");
   }
 
   async function saveTask() {
     if (taskDraft.task_type === "recommendation_run" && !taskDraft.preset_id && taskDraft.enabled) {
       setError("推荐任务需要选择预设");
+      setMessage("");
       return;
     }
     setSavingTask(true);
@@ -358,6 +418,7 @@ export default function ControlCenterPage() {
 
   async function toggleTask(task: ScheduledTask) {
     setError("");
+    setMessage(`正在${task.enabled ? "停用" : "启用"}自动任务：${task.name}...`);
     try {
       await api.updateScheduledTask(task.task_id, { ...taskToPayload(task), enabled: !task.enabled });
       setMessage(`${task.name} ${task.enabled ? "已停用" : "已启用"}`);
@@ -369,6 +430,7 @@ export default function ControlCenterPage() {
 
   async function runTaskNow(task: ScheduledTask) {
     setError("");
+    setMessage(`正在立即执行自动任务：${task.name}...`);
     try {
       await api.runScheduledTask(task.task_id);
       setMessage(`${task.name} 已立即执行`);
@@ -379,8 +441,9 @@ export default function ControlCenterPage() {
   }
 
   async function deleteTask(taskId: string) {
-    if (!window.confirm("确定删除这个自动任务？")) return;
+    if (!requireInlineDeleteGuard(`task:${taskId}`)) return;
     setError("");
+    setMessage("");
     try {
       await api.deleteScheduledTask(taskId);
       if (editingTaskId === taskId) resetTaskDraft();
@@ -410,31 +473,37 @@ export default function ControlCenterPage() {
   }
 
   function startBlankPreset() {
+    setError("");
     setEditingPresetId(null);
     setPresetDraft(buildPresetDraft(null, presets.length));
     setPresetSkillDrafts([]);
+    setMessage("已切换到空白新增预设");
   }
 
   function resetPresetDraft() {
+    setError("");
     if (editingPresetId) {
       const editingPreset = presets.find((preset) => preset.preset_id === editingPresetId) ?? null;
       setPresetDraft(buildPresetDraft(editingPreset, presets.length));
       setPresetSkillDrafts(buildPresetSkillDrafts(editingPreset));
+      setMessage(editingPreset ? `已恢复编辑草稿：${editingPreset.name}` : "已恢复编辑草稿");
       return;
     }
     startBlankPreset();
   }
 
   function editPreset(preset: Preset) {
+    setError("");
     setEditingPresetId(preset.preset_id);
     setSelectedPresetId(preset.preset_id);
     setSelectedRunDataSource(normalizeManualRunDataSource(preset.data_source));
     setPresetDraft(buildPresetDraft(preset, presets.length));
     setPresetSkillDrafts(buildPresetSkillDrafts(preset));
+    setMessage(`已载入预设：${preset.name}`);
   }
 
   async function deletePreset(preset: Preset) {
-    if (!window.confirm(`确定删除预设“${preset.name}”？`)) return;
+    if (!requireInlineDeleteGuard(`preset:${preset.preset_id}`)) return;
     setError("");
     setMessage("");
     try {
@@ -465,10 +534,12 @@ export default function ControlCenterPage() {
   async function savePreset() {
     if (!presetDraft.name.trim()) {
       setError("请填写预设名称");
+      setMessage("");
       return;
     }
     if (!presetSkillDrafts.length) {
       setError("至少选择一个策略后才能保存预设");
+      setMessage("");
       return;
     }
     setSavingPreset(true);
@@ -515,6 +586,8 @@ export default function ControlCenterPage() {
   }
 
   function togglePresetSkill(skill: SkillSummary) {
+    setError("");
+    const selected = presetSkillDrafts.some((item) => item.skill_id === skill.skill_id);
     setPresetSkillDrafts((current) => {
       const exists = current.some((item) => item.skill_id === skill.skill_id);
       if (exists) {
@@ -529,6 +602,7 @@ export default function ControlCenterPage() {
         },
       ]);
     });
+    setMessage(selected ? `已移除策略：${skill.name}` : `已加入策略：${skill.name}`);
   }
 
   function updatePresetSkillWeight(skillId: string, weight: number) {
@@ -540,6 +614,7 @@ export default function ControlCenterPage() {
   }
 
   function startCreateRoute() {
+    setError("");
     setEditingRouteId(null);
     setRouteTestResult(null);
     setRouteDraft({
@@ -548,9 +623,11 @@ export default function ControlCenterPage() {
       base_url: modelRoutes[0]?.base_url ?? "https://api.deepseek.com",
       model: modelRoutes[0]?.model ?? "deepseek-chat",
     });
+    setMessage("已切换到新增模型路由");
   }
 
   function editRoute(route: ModelRoute) {
+    setError("");
     setEditingRouteId(route.route_id);
     setRouteTestResult(null);
     setRouteDraft({
@@ -562,17 +639,21 @@ export default function ControlCenterPage() {
       enabled: route.enabled,
       clear_api_key: false,
     });
+    setMessage(`已载入模型路由：${route.name}`);
   }
 
   function resetRouteDraft() {
+    setError("");
     setEditingRouteId(null);
     setRouteTestResult(null);
     setRouteDraft(EMPTY_ROUTE_DRAFT);
+    setMessage("模型路由表单已清空");
   }
 
   async function saveRoute() {
     if (!routeDraft.base_url.trim() || !routeDraft.model.trim()) {
       setError("模型路由需要接口地址和模型名");
+      setMessage("");
       return;
     }
     setSavingRoute(true);
@@ -605,6 +686,7 @@ export default function ControlCenterPage() {
 
   async function toggleRoute(route: ModelRoute) {
     setError("");
+    setMessage(`正在${route.enabled ? "停用" : "启用"}模型路由：${route.name}...`);
     try {
       await api.updateModelRoute(route.route_id, { enabled: !route.enabled });
       setModelRoutes(await api.modelRoutes());
@@ -617,6 +699,7 @@ export default function ControlCenterPage() {
   async function testRoute() {
     if (!routeDraft.base_url.trim() || !routeDraft.model.trim()) {
       setError("模型路由需要接口地址和模型名");
+      setMessage("");
       return;
     }
     setTestingRoute(true);
@@ -648,8 +731,9 @@ export default function ControlCenterPage() {
   }
 
   async function deleteRoute(routeId: string) {
-    if (!window.confirm("确定删除这条模型路由？")) return;
+    if (!requireInlineDeleteGuard(`route:${routeId}`)) return;
     setError("");
+    setMessage("");
     try {
       await api.deleteModelRoute(routeId);
       if (editingRouteId === routeId) resetRouteDraft();
@@ -666,13 +750,22 @@ export default function ControlCenterPage() {
     if (currentIndex < 0 || nextIndex < 0 || nextIndex >= modelRoutes.length) return;
     const ordered = [...modelRoutes];
     [ordered[currentIndex], ordered[nextIndex]] = [ordered[nextIndex], ordered[currentIndex]];
-    setModelRoutes(await api.reorderModelRoutes(ordered.map((route) => route.route_id)));
+    setError("");
+    setMessage("");
+    try {
+      setModelRoutes(await api.reorderModelRoutes(ordered.map((route) => route.route_id)));
+      setMessage("模型路由顺序已更新");
+    } catch (err) {
+      setError(messageFromError(err));
+    }
   }
 
   function handlePresetChange(presetId: string) {
+    setError("");
     setSelectedPresetId(presetId);
     const nextPreset = presets.find((preset) => preset.preset_id === presetId);
     setSelectedRunDataSource((nextPreset?.data_source as ManualRunDataSource) || "local_pool");
+    setMessage(nextPreset ? `已选择预设：${nextPreset.name}` : "已清空预设选择");
   }
 
   return (
@@ -683,14 +776,14 @@ export default function ControlCenterPage() {
           <h2>推荐、数据、调度与模型门禁</h2>
           <p>把影响短线推荐链路的操作集中在同一个驾驶舱入口，避免靠命令行触发关键流程。</p>
         </div>
-        <button className="control-button" type="button" onClick={() => void loadControlState()} disabled={isRefreshingState}>
+        <button className="control-button" type="button" onClick={() => void loadControlState(true)} disabled={isRefreshingState}>
           {isRefreshingState ? <Loader2 size={15} className="spin" /> : <RefreshCcw size={15} />}
           {isRefreshingState ? "刷新中" : "刷新状态"}
         </button>
       </section>
 
-      {error ? <div className="control-banner danger">{error}</div> : null}
-      {message ? <div className="control-banner positive">{message}</div> : null}
+      {error ? <ControlBanner tone="danger" message={error} /> : null}
+      {message ? <ControlBanner tone={controlMessageTone(message)} message={message} /> : null}
 
       <div className="control-summary">
         <SummaryTile label="预设" value={presets.length} note={selectedPreset?.name ?? "未选择"} />
@@ -725,7 +818,11 @@ export default function ControlCenterPage() {
               <span>数据源</span>
               <select
                 value={selectedRunDataSource}
-                onChange={(event) => setSelectedRunDataSource(event.target.value as ManualRunDataSource)}
+                onChange={(event) => {
+                  setError("");
+                  setSelectedRunDataSource(event.target.value as ManualRunDataSource);
+                  setMessage(`运行数据源已切换为：${labelText(event.target.value)}`);
+                }}
                 disabled={!selectedPreset}
               >
                 <option value="local_pool">仅本地池</option>
@@ -758,6 +855,10 @@ export default function ControlCenterPage() {
             <span>Skill 输入<strong>{pool?.summary.skill_input_count ?? 0}</strong></span>
             <span>覆盖日期<strong>{pool?.summary.coverage_trade_date ?? "-"}</strong></span>
           </div>
+          <div className="control-note">
+            <DatabaseZap size={15} />
+            <span>刷新会先更新统一报价池，再全量检查候选池并补齐可处理的日K缺口；下方只显示状态预览，不限制实际补齐范围。</span>
+          </div>
           <button className="control-button primary wide" type="button" onClick={() => void refreshLocalPool()} disabled={syncing}>
             {syncing ? <Loader2 size={15} className="spin" /> : <DatabaseZap size={15} />}
             {syncing ? "同步中" : "刷新本地数据池"}
@@ -788,7 +889,11 @@ export default function ControlCenterPage() {
             }
           />
           <div className="task-list">
-            {presets.length ? presets.map((preset) => (
+            {sectionErrors.presets ? (
+              <div className="control-empty danger">{sectionErrors.presets}，请点击刷新状态重试。</div>
+            ) : presets.length ? presets.map((preset) => {
+              const deleteArmed = pendingDangerAction === `preset:${preset.preset_id}`;
+              return (
               <article key={preset.preset_id} className={`control-row ${selectedPreset?.preset_id === preset.preset_id ? "active" : ""}`}>
                 <button type="button" className="row-main-button" onClick={() => handlePresetChange(preset.preset_id)}>
                   <strong>{preset.name}</strong>
@@ -799,12 +904,24 @@ export default function ControlCenterPage() {
                   <button type="button" className="icon-button" title="编辑" onClick={() => editPreset(preset)}>
                     <SquarePen size={14} />
                   </button>
-                  <button type="button" className="icon-button danger" title="删除" onClick={() => void deletePreset(preset)}>
+                  <button
+                    type="button"
+                    className={`icon-button danger ${deleteArmed ? "armed" : ""}`}
+                    title={deleteArmed ? "再点删除" : "删除"}
+                    aria-label={deleteArmed ? "再点删除预设" : "删除预设"}
+                    onClick={() => void deletePreset(preset)}
+                  >
                     <Trash2 size={14} />
                   </button>
                 </div>
+                {deleteArmed ? (
+                  <div className="row-danger-hint" role="status" aria-live="polite">
+                    再点删除：预设 {preset.name}。
+                  </div>
+                ) : null}
               </article>
-            )) : <div className="control-empty">{sectionLoading.presets ? "预设加载中" : "暂无预设"}</div>}
+              );
+            }) : <div className="control-empty">{sectionLoading.presets ? "预设加载中" : "暂无预设"}</div>}
           </div>
           <div className="control-note">
             <span>这里现在支持空白新增、编辑和删除。新增时记得至少勾一个策略，建完才能直接运行。</span>
@@ -909,14 +1026,24 @@ export default function ControlCenterPage() {
             </label>
             <label className="control-toggle">
               <span>隐藏近期重复票</span>
-              <button type="button" className={presetDraft.hide_recent_repeats ? "on" : ""} onClick={() => setPresetDraft((current) => ({ ...current, hide_recent_repeats: !current.hide_recent_repeats }))}>
+              <button type="button" className={presetDraft.hide_recent_repeats ? "on" : ""} onClick={() => {
+                setError("");
+                setPresetDraft((current) => {
+                  const next = !current.hide_recent_repeats;
+                  setMessage(next ? "已开启隐藏近期重复票" : "已关闭隐藏近期重复票");
+                  return { ...current, hide_recent_repeats: next };
+                });
+              }}>
                 {presetDraft.hide_recent_repeats ? "ON" : "OFF"}
               </button>
             </label>
             <div className="control-form">
               <div className="panel-kicker">策略组合</div>
               {sectionLoading.skills ? <div className="control-empty">策略列表加载中</div> : null}
-              {!sectionLoading.skills ? (
+              {sectionErrors.skills ? (
+                <div className="control-empty danger">{sectionErrors.skills}，请点击刷新状态重试。</div>
+              ) : null}
+              {!sectionLoading.skills && !sectionErrors.skills ? (
                 skills.length ? (
                   <div className="task-list">
                     {skills.map((skill) => {
@@ -984,7 +1111,11 @@ export default function ControlCenterPage() {
             }
           />
           <div className="task-list">
-            {tasks.length ? tasks.map((task) => (
+            {sectionErrors.tasks ? (
+              <div className="control-empty danger">{sectionErrors.tasks}，请点击刷新状态重试。</div>
+            ) : tasks.length ? tasks.map((task) => {
+              const deleteArmed = pendingDangerAction === `task:${task.task_id}`;
+              return (
               <article key={task.task_id} className={`control-row ${editingTaskId === task.task_id ? "active" : ""}`}>
                 <button type="button" className="row-main-button" onClick={() => editTask(task)}>
                   <strong>{task.name}</strong>
@@ -998,12 +1129,24 @@ export default function ControlCenterPage() {
                   <button type="button" className="icon-button" title={task.enabled ? "停用" : "启用"} onClick={() => void toggleTask(task)}>
                     <PauseCircle size={14} />
                   </button>
-                  <button type="button" className="icon-button danger" title="删除" onClick={() => void deleteTask(task.task_id)}>
+                  <button
+                    type="button"
+                    className={`icon-button danger ${deleteArmed ? "armed" : ""}`}
+                    title={deleteArmed ? "再点删除" : "删除"}
+                    aria-label={deleteArmed ? "再点删除自动任务" : "删除自动任务"}
+                    onClick={() => void deleteTask(task.task_id)}
+                  >
                     <Trash2 size={14} />
                   </button>
                 </div>
+                {deleteArmed ? (
+                  <div className="row-danger-hint" role="status" aria-live="polite">
+                    再点删除：自动任务 {task.name}。
+                  </div>
+                ) : null}
               </article>
-            )) : <div className="control-empty">{sectionLoading.tasks ? "自动任务加载中" : "暂无自动任务"}</div>}
+              );
+            }) : <div className="control-empty">{sectionLoading.tasks ? "自动任务加载中" : "暂无自动任务"}</div>}
           </div>
           <TaskRunStrip rows={taskRuns} loading={sectionLoading.taskRuns} />
         </section>
@@ -1047,7 +1190,14 @@ export default function ControlCenterPage() {
             ) : null}
             <label className="control-toggle">
               <span>启用任务</span>
-              <button type="button" className={taskDraft.enabled ? "on" : ""} onClick={() => setTaskDraft((current) => ({ ...current, enabled: !current.enabled }))}>
+              <button type="button" className={taskDraft.enabled ? "on" : ""} onClick={() => {
+                setError("");
+                setTaskDraft((current) => {
+                  const next = !current.enabled;
+                  setMessage(next ? "新任务将启用" : "新任务将保存为停用");
+                  return { ...current, enabled: next };
+                });
+              }}>
                 {taskDraft.enabled ? "ON" : "OFF"}
               </button>
             </label>
@@ -1072,7 +1222,11 @@ export default function ControlCenterPage() {
             }
           />
           <div className="task-list">
-            {modelRoutes.length ? modelRoutes.map((route, index) => (
+            {sectionErrors.modelRoutes ? (
+              <div className="control-empty danger">{sectionErrors.modelRoutes}，请点击刷新状态重试。</div>
+            ) : modelRoutes.length ? modelRoutes.map((route, index) => {
+              const deleteArmed = pendingDangerAction === `route:${route.route_id}`;
+              return (
               <article key={route.route_id} className={`control-row ${editingRouteId === route.route_id ? "active" : ""}`}>
                 <button type="button" className="row-main-button" onClick={() => editRoute(route)}>
                   <strong>{route.name}</strong>
@@ -1091,12 +1245,24 @@ export default function ControlCenterPage() {
                   <button type="button" className="icon-button" title={route.enabled ? "停用" : "启用"} onClick={() => void toggleRoute(route)}>
                     <PauseCircle size={14} />
                   </button>
-                  <button type="button" className="icon-button danger" title="删除" onClick={() => void deleteRoute(route.route_id)}>
+                  <button
+                    type="button"
+                    className={`icon-button danger ${deleteArmed ? "armed" : ""}`}
+                    title={deleteArmed ? "再点删除" : "删除"}
+                    aria-label={deleteArmed ? "再点删除模型路由" : "删除模型路由"}
+                    onClick={() => void deleteRoute(route.route_id)}
+                  >
                     <Trash2 size={14} />
                   </button>
                 </div>
+                {deleteArmed ? (
+                  <div className="row-danger-hint" role="status" aria-live="polite">
+                    再点删除：模型路由 {route.name}。
+                  </div>
+                ) : null}
               </article>
-            )) : <div className="control-empty">{sectionLoading.modelRoutes ? "模型路由加载中" : "暂无模型路由"}</div>}
+              );
+            }) : <div className="control-empty">{sectionLoading.modelRoutes ? "模型路由加载中" : "暂无模型路由"}</div>}
           </div>
         </section>
 
@@ -1143,8 +1309,13 @@ export default function ControlCenterPage() {
             <label className="control-toggle">
               <span>启用路由</span>
               <button type="button" className={routeDraft.enabled ? "on" : ""} onClick={() => {
+                setError("");
                 setRouteTestResult(null);
-                setRouteDraft((current) => ({ ...current, enabled: !current.enabled }));
+                setRouteDraft((current) => {
+                  const next = !current.enabled;
+                  setMessage(next ? "模型路由草稿将启用" : "模型路由草稿将停用");
+                  return { ...current, enabled: next };
+                });
               }}>
                 {routeDraft.enabled ? "ON" : "OFF"}
               </button>
@@ -1153,8 +1324,13 @@ export default function ControlCenterPage() {
               <label className="control-toggle">
                 <span>清空自定义 Key</span>
                 <button type="button" className={routeDraft.clear_api_key ? "on" : ""} onClick={() => {
+                  setError("");
                   setRouteTestResult(null);
-                  setRouteDraft((current) => ({ ...current, clear_api_key: !current.clear_api_key }));
+                  setRouteDraft((current) => {
+                    const next = !current.clear_api_key;
+                    setMessage(next ? "保存时会清空自定义 Key" : "已取消清空自定义 Key");
+                    return { ...current, clear_api_key: next };
+                  });
                 }}>
                   {routeDraft.clear_api_key ? "ON" : "OFF"}
                 </button>
@@ -1208,18 +1384,149 @@ function SummaryTile({ label, value, note }: { label: string; value: string | nu
   );
 }
 
+function ControlBanner({ tone, message }: { tone: "positive" | "warning" | "danger"; message: string }) {
+  const parts = message.split("；").map((item) => item.trim()).filter(Boolean);
+  if (parts.length <= 1) {
+    return <div className={`control-banner ${tone}`} role={tone === "danger" ? "alert" : "status"} aria-live="polite">{message}</div>;
+  }
+  const visibleParts = parts.slice(0, 4);
+  const hiddenCount = parts.length - visibleParts.length;
+  const title = tone === "danger" ? `${parts.length} 个区域加载失败，页面保留可操作表单` : parts[0];
+  return (
+    <div className={`control-banner ${tone} compact`} role={tone === "danger" ? "alert" : "status"} aria-live="polite">
+      <strong>{title}</strong>
+      <div>
+        {visibleParts.slice(tone === "danger" ? 0 : 1).map((item) => <span key={item}>{item}</span>)}
+        {hiddenCount > 0 ? <span>{tone === "danger" ? `另有 ${hiddenCount} 项失败，可刷新状态重试` : `另有 ${hiddenCount} 条状态详情`}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+function controlMessageTone(message: string): "positive" | "warning" {
+  if (
+    message.includes("部分同步完成")
+  ) {
+    return "warning";
+  }
+  return "positive";
+}
+
+function localPoolSyncSummary(
+  refreshedQuotes: number,
+  gapSync: LocalPoolGapSyncResult,
+  poolStatus?: LocalPoolStatus,
+) {
+  const planned = gapSync.target_count ?? 0;
+  const processed = gapSync.processed_count ?? 0;
+  const completed = gapSync.succeeded_count ?? 0;
+  const unresolved = gapSync.unresolved_count ?? 0;
+  const failed = gapSync.failed_count ?? 0;
+  const rows = gapSync.row_count ?? 0;
+  const remaining = poolStatus ? localPoolGapSummary(poolStatus) : formatGapCounts(gapSync.after);
+  const comparison = gapSync.comparison;
+  const checked = gapSync.before?.checked_count ?? comparison?.before_candidate_count ?? 0;
+  const candidateCount = gapSync.before?.candidate_count ?? comparison?.before_candidate_count ?? checked;
+  const resolved = comparison?.resolved_target_count ?? Math.max(0, (gapSync.before?.gap_count ?? 0) - (gapSync.after?.gap_count ?? 0));
+  const remainingGaps = comparison?.unresolved_target_count ?? gapSync.after?.gap_count ?? 0;
+  const requestedCodeLimit = gapSync.code_limit ?? 0;
+  const scopeText = requestedCodeLimit > 0
+    ? `前 ${requestedCodeLimit} 只缺口目标`
+    : "全量候选池";
+  const hasRemainingGaps = (gapSync.after?.gap_count ?? 0) > 0 || unresolved > 0 || failed > 0;
+  const parts = [
+    `数据池${hasRemainingGaps ? "部分同步完成" : "同步完成"}：报价 ${refreshedQuotes} 条`,
+    `同步范围：${scopeText}，已检查候选 ${checked}/${candidateCount} 只，可补日K缺口目标 ${planned} 只`,
+    `候选股日K缺口 ${formatGapCounts(gapSync.before)} → ${formatGapCounts(gapSync.after)}`,
+    `当前可补缺口已按本次范围处理：已处理 ${processed} 只，请求成功 ${completed} 只，实际修复 ${resolved} 只，剩余缺口 ${remainingGaps} 只，写入 ${rows} 行`,
+  ];
+  if (comparison) {
+    parts.push(
+      `候选覆盖率 ${formatRatioPercent(comparison.candidate_coverage_rate_before)} → ${formatRatioPercent(comparison.candidate_coverage_rate_after)}，修复率 ${formatRatioPercent(comparison.remediation_coverage_rate)}`,
+    );
+  }
+  if (failed > 0) parts.push(`失败 ${failed} 只：${localPoolFailureSummary(gapSync)}`);
+  parts.push(`当前剩余缺口：${remaining}`);
+  return parts.join("；");
+}
+
+function localPoolFailureSummary(gapSync: LocalPoolGapSyncResult) {
+  const reasons = gapSync.sync_summary?.failure_reasons ?? [];
+  if (reasons.length === 0) return "暂无失败原因明细，请稍后重试或查看后端日志";
+  return reasons
+    .map((item) => {
+      const count = Number(item.count ?? 0);
+      const type = item.error_type ? `${item.error_type}: ` : "";
+      const message = item.message || "未知错误";
+      return `${count} 只 ${type}${message}`;
+    })
+    .join("；");
+}
+
+function formatGapCounts(counts?: LocalPoolGapSyncResult["before"]) {
+  if (!counts) return "缺口未知";
+  const total = Number(counts.gap_count ?? 0);
+  const immatureHistory = Number(counts.immature_history_count ?? 0);
+  if (total <= 0) {
+    return immatureHistory > 0 ? `暂无可补缺口，短历史风险 ${immatureHistory} 只` : "暂无缺口";
+  }
+  const remediableShortHistory = Math.max(0, Number(counts.short_history_count ?? 0) - immatureHistory);
+  const parts = [
+    gapText("日K缺失", counts.missing_count),
+    gapText("短历史", remediableShortHistory),
+    gapText("日K过期", counts.stale_count),
+    gapText("短历史风险", immatureHistory),
+  ].filter(Boolean);
+  return parts.length ? parts.join("，") : `缺口 ${total} 只`;
+}
+
+function localPoolGapSummary(poolStatus: LocalPoolStatus) {
+  const kline = poolStatus.recommendation_readiness?.kline;
+  if (kline) {
+    const immatureHistory = Number(kline.immature_history_count ?? 0);
+    const remediableShortHistory = Math.max(0, Number(kline.short_history_count ?? 0) - immatureHistory);
+    const candidateGaps = [
+      gapText("日K缺失", kline.missing_count),
+      gapText("短历史", remediableShortHistory),
+      gapText("日K过期", kline.stale_count),
+    ].filter(Boolean);
+    const risk = gapText("短历史风险", immatureHistory);
+    if (candidateGaps.length) return [...candidateGaps, risk].filter(Boolean).join("，");
+    return risk ? `暂无可补候选日K缺口，${risk}` : "暂无候选日K缺口";
+  }
+
+  const summary = poolStatus.summary;
+  const gaps = [
+    gapText("日K缺失", summary.daily_bar_missing_count),
+    gapText("短历史", summary.daily_bar_short_history_count),
+    gapText("日K过期", summary.daily_bar_stale_count),
+  ].filter(Boolean);
+  return gaps.length ? gaps.join("，") : "暂无候选日K缺口";
+}
+
+function gapText(label: string, value?: number) {
+  const count = Number(value ?? 0);
+  return count > 0 ? `${label} ${count} 只` : "";
+}
+
+function formatRatioPercent(value?: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+  return `${(value * 100).toFixed(1)}%`;
+}
+
 function RunStatusCard({ run }: { run: RunSummary }) {
   const pct = progressPercent(run);
+  const message = run.error_message || run.progress_message || `推荐 ${run.recommended_count} / 股票池 ${run.universe_count}`;
   return (
     <div className="run-status-card">
       <div>
         <strong>{run.run_name}</strong>
-        <span>{businessStatusLabel(run.status)} · {run.trade_date}</span>
+        <span>{runStatusLabel(run.status)} · {run.trade_date}</span>
       </div>
       <div className="progress-track" aria-label="运行进度">
         <i style={{ width: `${pct}%` }} />
       </div>
-      <small>{run.progress_message || `推荐 ${run.recommended_count} / 股票池 ${run.universe_count}`}</small>
+      <small>{message}</small>
     </div>
   );
 }

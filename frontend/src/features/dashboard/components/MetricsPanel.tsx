@@ -33,6 +33,8 @@ export default function MetricsPanel({ metrics, loading }: Props) {
     net_non_positive_count: 0,
     manual_override_count: 0,
   };
+  const legacyAccuracyLabelMismatchCount =
+    accuracyGateSummary.legacy_accuracy_label_mismatch_count ?? accuracyGateSummary.manual_override_count ?? 0;
   const accuracyFailureBreakdown = metrics.accuracy_policy?.failure_breakdown ?? [];
 
   return (
@@ -120,8 +122,8 @@ export default function MetricsPanel({ metrics, loading }: Props) {
                 <span>信号失效 <strong>{accuracyGateSummary.signal_invalid_count}</strong></span>
                 <span>不可成交 <strong>{accuracyGateSummary.unexecutable_count}</strong></span>
                 <span>净收益不为正 <strong>{accuracyGateSummary.net_non_positive_count}</strong></span>
-                {accuracyGateSummary.manual_override_count > 0 ? (
-                  <span>人工改写 <strong>{accuracyGateSummary.manual_override_count}</strong></span>
+                {legacyAccuracyLabelMismatchCount > 0 ? (
+                  <span>旧标签冲突 <strong>{legacyAccuracyLabelMismatchCount}</strong></span>
                 ) : null}
               </div>
             </div>
@@ -163,8 +165,8 @@ export default function MetricsPanel({ metrics, loading }: Props) {
                 <small>点击展开</small>
               </summary>
               <div className="fp-list">
-                {metrics.false_positive_notes.map((fp) => (
-                  <div key={fp.reason} className="fp-item">
+                {metrics.false_positive_notes.map((fp, index) => (
+                  <div key={`${fp.reason}-${fp.category_label ?? "uncategorized"}-${index}`} className="fp-item">
                     <strong>{fp.reason}</strong>
                     <span>
                       {fp.category_label ? `${fp.category_label} · ` : ""}
@@ -172,8 +174,8 @@ export default function MetricsPanel({ metrics, loading }: Props) {
                     </span>
                     {fp.examples.length > 0 && (
                       <div className="fp-examples">
-                        {fp.examples.map((ex) => (
-                          <code key={ex}>{ex}</code>
+                        {fp.examples.map((ex, exampleIndex) => (
+                          <code key={`${fp.reason}-${ex}-${exampleIndex}`}>{ex}</code>
                         ))}
                       </div>
                     )}

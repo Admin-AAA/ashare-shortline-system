@@ -166,7 +166,7 @@ export function startLongTaskMonitor(thresholdMs = 100) {
           attribution: (entry as any).attribution?.[0]?.name ?? "unknown",
         });
         if (duration > 500) {
-          logger.error("longtask", `严重卡顿! 主线程阻塞 ${duration}ms`, {
+          logger.warn("longtask", `严重卡顿! 主线程阻塞 ${duration}ms`, {
             recentLogs: logger.exportRecent(20),
           });
         }

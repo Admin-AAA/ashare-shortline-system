@@ -1,16 +1,17 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { BarChart3, RefreshCw } from "lucide-react";
 import { api } from "../../../api/client";
-import type { ScoreLineStatsRow, SetupStatsRow } from "../../../types";
+import type { ScoreLineStatsRow, SetupStatsRow, StrategyStatsRow } from "../../../types";
 import { aShareDirectionClass, businessStatusLabel } from "../../../utils/display";
 
 type BreakdownData = {
+  strategyRows: StrategyStatsRow[];
   setupRows: SetupStatsRow[];
   scoreLineRows: ScoreLineStatsRow[];
 };
 
 export default function EvaluationBreakdownPanel() {
-  const [data, setData] = useState<BreakdownData>({ setupRows: [], scoreLineRows: [] });
+  const [data, setData] = useState<BreakdownData>({ strategyRows: [], setupRows: [], scoreLineRows: [] });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -18,11 +19,13 @@ export default function EvaluationBreakdownPanel() {
     setLoading(true);
     setError("");
     try {
-      const [setupRows, scoreLineRows] = await Promise.all([
+      const [strategyRows, setupRows, scoreLineRows] = await Promise.all([
+        api.metricsByStrategy("formal"),
         api.metricsBySetup("formal"),
         api.metricsByScoreLine("formal"),
       ]);
       setData({
+        strategyRows: strategyRows.slice().sort(byRecommendationAccuracy),
         setupRows: setupRows.slice().sort(byRecommendationAccuracy),
         scoreLineRows: scoreLineRows.slice().sort((a, b) => b.score_line - a.score_line),
       });
@@ -57,7 +60,27 @@ export default function EvaluationBreakdownPanel() {
 
       {error ? <div className="bt-error" style={{ marginTop: 12 }}>{error}</div> : null}
 
-      <div className="focus-grid" style={{ marginTop: 12 }}>
+      <div style={{ marginTop: 12 }}>
+        <BreakdownTable
+          title="按策略/Skill"
+          empty="暂无策略评估样本"
+          rows={data.strategyRows}
+          columns={[
+            { key: "strategy_name", label: "策略", render: strategyCell },
+            { key: "recommendation_accuracy", label: "推荐准确率", render: accuracyCell },
+            { key: "hit_rate", label: "成交后胜率", render: (row) => pct(row.hit_rate) },
+            { key: "average_net_return", label: "平均净收益", render: returnCell },
+            { key: "horizon_3", label: "3天", render: (row) => horizonCell(row, "3") },
+            { key: "horizon_5", label: "5天", render: (row) => horizonCell(row, "5") },
+            { key: "horizon_10", label: "10天", render: (row) => horizonCell(row, "10") },
+            { key: "profit_loss_ratio", label: "盈亏比", render: (row) => num(row.profit_loss_ratio) },
+            { key: "max_drawdown", label: "最大回撤", render: drawdownCell },
+            { key: "sample_confidence", label: "置信度", render: confidenceCell },
+          ]}
+        />
+      </div>
+
+      <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
         <BreakdownTable
           title="按买点"
           empty="暂无买点评估样本"
@@ -67,6 +90,9 @@ export default function EvaluationBreakdownPanel() {
             { key: "recommendation_accuracy", label: "推荐准确率", render: accuracyCell },
             { key: "hit_rate", label: "成交后胜率", render: (row) => pct(row.hit_rate) },
             { key: "average_net_return", label: "平均净收益", render: returnCell },
+            { key: "horizon_3", label: "3天", render: (row) => horizonCell(row, "3") },
+            { key: "horizon_5", label: "5天", render: (row) => horizonCell(row, "5") },
+            { key: "horizon_10", label: "10天", render: (row) => horizonCell(row, "10") },
             { key: "profit_loss_ratio", label: "盈亏比", render: (row) => num(row.profit_loss_ratio) },
             { key: "max_drawdown", label: "最大回撤", render: drawdownCell },
             { key: "sample_confidence", label: "置信度", render: confidenceCell },
@@ -81,6 +107,9 @@ export default function EvaluationBreakdownPanel() {
             { key: "recommendation_accuracy", label: "推荐准确率", render: accuracyCell },
             { key: "hit_rate", label: "成交后胜率", render: (row) => pct(row.hit_rate) },
             { key: "average_net_return", label: "平均净收益", render: returnCell },
+            { key: "horizon_3", label: "3天", render: (row) => horizonCell(row, "3") },
+            { key: "horizon_5", label: "5天", render: (row) => horizonCell(row, "5") },
+            { key: "horizon_10", label: "10天", render: (row) => horizonCell(row, "10") },
             { key: "profit_loss_ratio", label: "盈亏比", render: (row) => num(row.profit_loss_ratio) },
             { key: "max_drawdown", label: "最大回撤", render: drawdownCell },
             { key: "sample_confidence", label: "置信度", render: confidenceCell },
@@ -91,7 +120,7 @@ export default function EvaluationBreakdownPanel() {
   );
 }
 
-type BreakdownRow = SetupStatsRow | ScoreLineStatsRow;
+type BreakdownRow = StrategyStatsRow | SetupStatsRow | ScoreLineStatsRow;
 
 type BreakdownColumn = {
   key: string;
@@ -135,8 +164,19 @@ function BreakdownTable({
   );
 }
 
-function byRecommendationAccuracy(a: SetupStatsRow, b: SetupStatsRow) {
+function byRecommendationAccuracy(a: BreakdownRow, b: BreakdownRow) {
   return Number(b.recommendation_accuracy ?? 0) - Number(a.recommendation_accuracy ?? 0);
+}
+
+function strategyCell(row: BreakdownRow) {
+  if (!("strategy_id" in row)) return "-";
+  const name = row.strategy_name || row.strategy_id;
+  return (
+    <span>
+      <strong>{name}</strong>
+      <small style={{ display: "block", color: "var(--muted)" }}>{row.strategy_id}</small>
+    </span>
+  );
 }
 
 function accuracyCell(row: BreakdownRow) {
@@ -154,6 +194,19 @@ function returnCell(row: BreakdownRow) {
   return <strong className={aShareDirectionClass(row.average_net_return)}>{pct100(row.average_net_return)}</strong>;
 }
 
+function horizonCell(row: BreakdownRow, horizonDays: "3" | "5" | "10") {
+  const metrics = row.horizon_metrics?.[horizonDays];
+  if (!metrics || metrics.sample_count === 0) return "-";
+  return (
+    <span>
+      <strong>{pct(metrics.hit_rate)}</strong>
+      <small style={{ display: "block", color: "var(--muted)" }}>
+        {pct100(metrics.average_net_return)} · {metrics.accuracy_numerator ?? metrics.success_count}/{metrics.accuracy_denominator ?? metrics.sample_count}
+      </small>
+    </span>
+  );
+}
+
 function drawdownCell(row: BreakdownRow) {
   return <strong className={aShareDirectionClass(row.max_drawdown)}>{pct100(row.max_drawdown)}</strong>;
 }
@@ -163,6 +216,7 @@ function confidenceCell(row: BreakdownRow) {
 }
 
 function rowKey(row: BreakdownRow, index: number) {
+  if ("strategy_id" in row) return `${row.strategy_id}-${index}`;
   if ("setup_type" in row) return `${row.setup_type}-${index}`;
   return `${row.score_line}-${index}`;
 }

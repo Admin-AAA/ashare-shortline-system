@@ -13,6 +13,8 @@ def test_summarize_pool_status_reports_ready_counts():
         "daily_bar_missing_count": 120,
         "daily_bar_stale_count": 12,
         "daily_bar_short_history_count": 35,
+        "daily_bar_immature_history_count": 4,
+        "daily_bar_total_short_history_count": 39,
         "recommendation_readiness": {
             "status": "ready",
             "can_run_local_recommendation": True,
@@ -30,6 +32,36 @@ def test_summarize_pool_status_reports_ready_counts():
     assert summary["missing_bar_count"] == 120
     assert summary["stale_bar_count"] == 12
     assert summary["short_history_count"] == 35
+    assert summary["immature_history_count"] == 4
+    assert summary["total_short_history_count"] == 39
+
+
+def test_summarize_pool_status_projects_immature_history_from_readiness():
+    status = {
+        "summary": {
+            "unified_quote_count": 4300,
+            "active_unified_quote_count": 4100,
+            "eligible_quote_count": 2600,
+            "daily_bar_coverage_rate": 0.96,
+            "eligible_daily_bar_coverage_rate": 1.0,
+            "daily_bar_short_history_count": 0,
+        },
+        "recommendation_readiness": {
+            "status": "warning",
+            "can_run_local_recommendation": True,
+            "kline": {
+                "short_history_count": 1,
+                "immature_history_count": 1,
+                "examples": [{"code": "688808", "reason": "上市未满30根日K"}],
+            },
+        },
+    }
+
+    summary = summarize_pool_status(status)
+
+    assert summary["short_history_count"] == 0
+    assert summary["immature_history_count"] == 1
+    assert summary["examples"][0]["code"] == "688808"
 
 
 def test_summarize_pool_status_accepts_local_pool_api_shape():

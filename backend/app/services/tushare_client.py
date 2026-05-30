@@ -243,6 +243,45 @@ def fetch_daily_kbars(
     return bars
 
 
+def fetch_basic_daily_kbars(
+    code: str,
+    days: int = 90,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """获取一只股票的基础日K，用于交互式快速补齐本地池历史缺口。"""
+    pro = get_pro()
+    tsc = ts_code(code)
+    sd = start_date or (date.today() - timedelta(days=days * 3)).strftime("%Y%m%d")
+    ed = end_date or date.today().strftime("%Y%m%d")
+
+    daily = pro.daily(ts_code=tsc, start_date=sd, end_date=ed)
+    if daily is None or daily.empty:
+        return []
+    daily = daily.sort_values("trade_date")
+    if start_date is None:
+        daily = daily.tail(days)
+
+    bars: list[dict[str, Any]] = []
+    for _, row in daily.iterrows():
+        bars.append(
+            {
+                "code": code,
+                "trade_date": _fmt_date(str(row.get("trade_date") or "")),
+                "open": _f(row.get("open")),
+                "high": _f(row.get("high")),
+                "low": _f(row.get("low")),
+                "close": _f(row.get("close")),
+                "volume": _f(row.get("vol")),
+                "amount": _f(row.get("amount")) * 1000,
+                "pct_chg": _f(row.get("pct_chg")),
+                "turnover_rate": 0.0,
+                "source": "tushare",
+            }
+        )
+    return bars
+
+
 def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
     """按单个交易日批量获取全市场日K，用于数据缺口修复。"""
     target = _compact_trade_date(trade_date)
@@ -1286,6 +1325,32 @@ def _trim_recent_trade_dates(rows: list[dict[str, Any]], ndays: int) -> list[dic
     recent_dates = _trade_dates(rows)[-max(1, int(ndays or 1)) :]
     recent_set = set(recent_dates)
     return [row for row in rows if str(row.get("trade_date") or "") in recent_set]
+
+
+def _attach_pre_close(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    ordered = sorted(rows, key=lambda item: str(item["trade_time"]))
+    grouped_dates = sorted({str(row["trade_date"]) for row in ordered})
+    prev_close_map: dict[str, float] = {}
+    for index, trade_date in enumerate(grouped_dates):
+        if index == 0:
+            first_row = next((row for row in ordered if row["trade_date"] == trade_date), None)
+            prev_close_map[trade_date] = _f((first_row or {}).get("close"))
+            continue
+        previous_date = grouped_dates[index - 1]
+        last_close = next(
+            (row["close"] for row in reversed(ordered) if row["trade_date"] == previous_date),
+            0.0,
+        )
+        prev_close_map[trade_date] = _f(last_close)
+    return [
+        {
+            **row,
+            "pre_close": round(prev_close_map.get(str(row["trade_date"]), _f(row.get("close"))), 3),
+        }
+        for row in ordered
+    ]
 
 
 # ═════════════════════════════════════════════════════════════════════════════

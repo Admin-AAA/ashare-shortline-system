@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
+from hashlib import sha1
 from typing import Any
 
 from app.core.config import get_settings
@@ -78,6 +79,8 @@ def _fetch_dragon_tiger(source: str, settings: Any, trade_date: str | None = Non
 
 
 def _fetch_news(source: str, code: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
+    if source == "tushare":
+        return _fetch_tushare_news(code, settings, trade_date=trade_date)
     if source == "eastmoney":
         return _fetch_eastmoney_news(code, settings)
     return []
@@ -194,6 +197,70 @@ def _fetch_tushare_concept_sectors(settings: Any, trade_date: str | None = None)
     except Exception as e:
         logger.warning("Tushare概念板块不可用: %s", e)
         return []
+
+
+def _fetch_tushare_news(code: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
+    """Tushare 个股公告。news 公共新闻不按股票代码稳定映射，正式链路先接 anns_d。"""
+    try:
+        from app.services.tushare_client import get_pro, ts_code
+
+        pro = get_pro()
+        compact_target = _compact_trade_date(trade_date)
+        fields = "ts_code,ann_date,title,url"
+        kwargs: dict[str, Any] = {"ts_code": ts_code(code), "fields": fields}
+        if compact_target:
+            kwargs["start_date"] = (
+                date.fromisoformat(_normalize_trade_date(compact_target)) - timedelta(days=7)
+            ).strftime("%Y%m%d")
+            kwargs["end_date"] = compact_target
+        else:
+            kwargs["limit"] = 30
+        df = pro.anns_d(**kwargs)
+    except Exception as e:
+        logger.debug("Tushare公告不可用 (%s): %s", code, e)
+        return []
+    if df is None or df.empty:
+        return []
+
+    items: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        row_code = str(row.get("ts_code") or "").split(".")[0]
+        if row_code and row_code != code:
+            continue
+        announce_date = _normalize_trade_date(row.get("ann_date"))
+        title = str(row.get("title") or "").strip()
+        if not announce_date or not title:
+            continue
+        url = str(row.get("url") or "").strip()
+        is_risk = _contains_any(title, ["风险", "警示", "退市", "ST", "处罚", "监管", "立案", "亏损", "减持", "问询", "通报", "冻结"])
+        is_positive = _contains_any(title, ["增长", "预增", "扭亏", "中标", "签约", "回购", "增持", "分红", "重组", "获批"])
+        if is_risk:
+            sentiment = "negative"
+        elif is_positive:
+            sentiment = "positive"
+        else:
+            sentiment = "neutral"
+        items.append({
+            "source": "tushare",
+            "article_id": _stable_article_id("tushare", code, announce_date, title, url),
+            "code": code,
+            "announce_date": announce_date,
+            "title": title,
+            "summary": url,
+            "category": "announcement",
+            "sentiment": sentiment,
+            "is_risk_warning": is_risk,
+        })
+    return items
+
+
+def _contains_any(text: str, keywords: list[str]) -> bool:
+    return any(keyword in text for keyword in keywords)
+
+
+def _stable_article_id(source: str, code: str, announce_date: str, title: str, url: str) -> str:
+    raw = "|".join([source, code, announce_date, title, url])
+    return sha1(raw.encode("utf-8")).hexdigest()[:40]
 
 
 # ── 东方财富新闻 ──────────────────────────────────────────────────────

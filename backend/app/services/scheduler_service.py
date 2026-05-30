@@ -218,10 +218,7 @@ def _run_backfill_script(payload: dict) -> dict:
     if not script.exists():
         raise RuntimeError(f"回填脚本不存在: {script}")
 
-    args = [
-        sys.executable, str(script),
-        "--scope", payload.get("scope", "eligible"),
-    ]
+    args = [sys.executable, str(script)]
     if payload.get("days"):
         args.extend(["--days", str(payload["days"])])
     if payload.get("min_bars"):

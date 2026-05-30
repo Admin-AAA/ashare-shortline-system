@@ -19,8 +19,12 @@ ALLOWED_NAMES = {
     "chg60",
     "chip_concentration",
     "chip_health_score",
+    "capital_resonance_score",
+    "capital_resonance_signal",
     "dragon_tiger_recent_count",
     "dragon_tiger_is_on_list",
+    "dragon_tiger_buy_dispersion",
+    "dragon_tiger_inst_buy_ratio",
     "dist20",
     "dist60",
     "dsa_bias_score",
@@ -41,8 +45,14 @@ ALLOWED_NAMES = {
     "inflow_5d_yi",
     "inflow_10d_yi",
     "intelligence_score",
+    "is_20cm_stock",
     "is_limit_up",
+    "is_main_theme",
+    "is_shortline_leader_candidate",
     "limit_up_days20",
+    "limit_up_overheat_level",
+    "limit_up_overheat_score",
+    "market_sentiment_phase",
     "is_st",
     "ma5",
     "ma10",
@@ -71,20 +81,25 @@ ALLOWED_NAMES = {
     "rsi_12",
     "rsi_24",
     "sector_fund_rank",
+    "sector_ladder_completeness_score",
+    "sector_ladder_height",
+    "sector_ladder_level",
+    "sector_ladder_limit_up_count",
+    "shortline_leader_score",
     "support_ma5",
     "support_ma10",
+    "twenty_cm_risk_gate",
+    "twenty_cm_risk_score",
     "turnover_rate",
     "upper_shadow_count20",
     "vol5_20",
     "volume_breakout_signal",
     "volume_shrink_pullback",
-    "_consensus_signal",
-    "_dragon_tiger_dispersion",
-    "_dragon_tiger_inst_ratio",
-    "_is_leader_candidate",
-    "_is_main",
-    "_sentiment_phase",
 }
+
+
+# AST 缓存：规则表达式不随股票变化，解析一次即可复用
+_ast_cache: dict[str, ast.AST] = {}
 
 
 def evaluate(expression: str, context: dict[str, Any]) -> bool:
@@ -98,7 +113,10 @@ def evaluate(expression: str, context: dict[str, Any]) -> bool:
         .replace(" FALSE", " false")
     )
     try:
-        node = ast.parse(normalized, mode="eval")
+        node = _ast_cache.get(normalized)
+        if node is None:
+            node = ast.parse(normalized, mode="eval")
+            _ast_cache[normalized] = node
         return bool(_eval(node.body, context))
     except UnsafeExpression:
         return False

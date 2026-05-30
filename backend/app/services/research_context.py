@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# 股票名称内存缓存：避免在 build_research_context 中重复查询 stocks 表
+_stock_name_cache: dict[str, str] = {}
 
 
 CONTEXT_SCHEMA_VERSION = "research_context.v1"
@@ -113,14 +119,6 @@ IMPUTED_WHEN_MISSING = {
 QUALITY_CRITICAL_MISSING = {"news", "announcements", "theme_tags", "capital_flow", "dragon_tiger"}
 
 PRIVATE_KEYS_TO_DROP = {"_bars", "dsa_profile"}
-STRATEGY_PRIVATE_KEYS = {
-    "_consensus_signal",
-    "_dragon_tiger_dispersion",
-    "_dragon_tiger_inst_ratio",
-    "_is_leader_candidate",
-    "_is_main",
-    "_sentiment_phase",
-}
 
 
 @dataclass(frozen=True)
@@ -163,6 +161,37 @@ def build_research_contexts(stocks: list[dict[str, Any]], snapshot: dict[str, An
     return [build_research_context(stock, snapshot) for stock in stocks]
 
 
+def _resolve_stock_name_from_db(code: str) -> str | None:
+    """从 stocks 表查询股票名称，若查询不到则返回 None。
+
+    使用模块级缓存避免对同一 code 重复查询。
+    """
+    if code in _stock_name_cache:
+        return _stock_name_cache[code] if _stock_name_cache[code] else None
+    try:
+        from app.db.session import SessionLocal
+        from app.models.tables import Stock
+    except ImportError:
+        logger.debug("无法导入 DB 模块，跳过 stocks 表名称查询")
+        return None
+    session = SessionLocal()
+    try:
+        stock_row = session.query(Stock).filter(Stock.code == code).first()
+        if stock_row and stock_row.name:
+            name = str(stock_row.name).strip()
+            _stock_name_cache[code] = name
+            return name
+        else:
+            _stock_name_cache[code] = ""
+            return None
+    except Exception:
+        logger.debug("查询 stocks 表名称失败 code=%s", code, exc_info=True)
+        _stock_name_cache[code] = ""
+        return None
+    finally:
+        session.close()
+
+
 def build_research_context(stock: dict[str, Any], snapshot: dict[str, Any]) -> ResearchContext:
     data_quality = dict(stock.get("data_quality") or {})
     source_trace = _source_trace(stock, snapshot)
@@ -184,9 +213,16 @@ def build_research_context(stock: dict[str, Any], snapshot: dict[str, Any]) -> R
             data_quality,
         ),
     }
+    # ── 股票名称补全：若 name 缺失或 fallback 回了 code 本身，尝试从 stocks 表查询 ──
+    stock_code = str(stock.get("code") or "")
+    stock_name = str(stock.get("name") or "").strip()
+    if not stock_name or stock_name == stock_code:
+        resolved = _resolve_stock_name_from_db(stock_code)
+        if resolved:
+            stock_name = resolved
     security = {
-        "code": stock.get("code"),
-        "name": stock.get("name"),
+        "code": stock_code,
+        "name": stock_name or stock_code,
         "exchange": stock.get("exchange"),
         "is_st": bool(stock.get("is_st", False)),
         "list_status": stock.get("list_status", "listed"),
@@ -211,10 +247,47 @@ def build_research_context(stock: dict[str, Any], snapshot: dict[str, Any]) -> R
     }
     themes = {
         "industry": stock.get("industry") or "unknown",
-        "is_main": bool(stock.get("_is_main")),
+        "is_main_theme": bool(stock.get("is_main_theme")),
         "main_industries": snapshot.get("main_industries", []),
         "theme_tags": list(stock.get("theme_tags") or []),
     }
+    # ── 数据状态展示：区分「已检查但未上榜/无数据」vs「未检查」，供推荐解释渲染 ──
+    _dt_check_status: str
+    if stock.get("dragon_tiger_is_on_list"):
+        _dt_check_status = "on_list"
+    elif data_quality.get("dragon_tiger_checked_empty"):
+        _dt_check_status = "checked_empty"
+    else:
+        _dt_check_status = "unchecked"
+
+    _news_check_status: str
+    if stock.get("news_risk_count", 0) > 0 or stock.get("positive_catalyst_count", 0) > 0 or (
+        stock.get("latest_news") and not _looks_unavailable(stock.get("latest_news"))
+    ):
+        _news_check_status = "has_data"
+    elif data_quality.get("news_checked_empty"):
+        _news_check_status = "checked_empty"
+    elif data_quality.get("news_checked"):
+        _news_check_status = "has_data"
+    else:
+        _news_check_status = "unchecked"
+
+    _announcements_check_status: str
+    if data_quality.get("announcements_checked"):
+        _announcements_check_status = "has_data" if (stock.get("announcement_negative_count") or 0) > 0 else "checked_empty"
+    elif data_quality.get("announcements_checked_empty"):
+        _announcements_check_status = "checked_empty"
+    else:
+        _announcements_check_status = "unchecked"
+
+    _capital_flow_check_status: str
+    if data_quality.get("capital_flow_checked"):
+        _capital_flow_check_status = "has_data"
+    elif data_quality.get("capital_flow_checked_empty"):
+        _capital_flow_check_status = "checked_empty"
+    else:
+        _capital_flow_check_status = "unchecked"
+
     events = {
         "limit_up_days20": stock.get("limit_up_days20", 0),
         "is_limit_up": stock.get("is_limit_up", False),
@@ -229,6 +302,11 @@ def build_research_context(stock: dict[str, Any], snapshot: dict[str, Any]) -> R
         "dragon_tiger_is_on_list": stock.get("dragon_tiger_is_on_list", False),
         "dragon_tiger_recent_count": stock.get("dragon_tiger_recent_count", 0),
         "latest_news": stock.get("latest_news"),
+        # 数据检查状态：供推荐解释区分「已检查但无数据」与「未检查」
+        "dragon_tiger_check_status": _dt_check_status,
+        "news_check_status": _news_check_status,
+        "announcements_check_status": _announcements_check_status,
+        "capital_flow_check_status": _capital_flow_check_status,
     }
     market = {
         "snapshot_id": snapshot.get("snapshot_id"),
@@ -262,7 +340,7 @@ def _legacy_skill_stock(
     legacy = {
         key: value
         for key, value in stock.items()
-        if key not in PRIVATE_KEYS_TO_DROP and (not key.startswith("_") or key in STRATEGY_PRIVATE_KEYS)
+        if key not in PRIVATE_KEYS_TO_DROP and not key.startswith("_")
     }
     legacy["data_quality"] = quality
     legacy["source_trace"] = source_trace
@@ -279,7 +357,7 @@ def _context_features(stock: dict[str, Any]) -> dict[str, Any]:
         key: value
         for key, value in stock.items()
         if key not in PRIVATE_KEYS_TO_DROP
-        and (not key.startswith("_") or key in STRATEGY_PRIVATE_KEYS)
+        and not key.startswith("_")
         and key
         not in {
             "code",
@@ -326,6 +404,9 @@ def _expanded_missing_fields(stock: dict[str, Any], data_quality: dict[str, Any]
     if data_quality.get("capital_flow_checked"):
         missing.discard("capital_flow")
         missing.discard("main_net_inflow")
+    if data_quality.get("capital_flow_checked_empty"):
+        missing.discard("capital_flow")
+        missing.discard("main_net_inflow")
     if data_quality.get("theme_tags_fallback_from_industry"):
         missing.discard("theme_tags")
     if not stock.get("industry") or stock.get("industry") == "未分类":
@@ -349,6 +430,7 @@ def _expanded_missing_fields(stock: dict[str, Any], data_quality: dict[str, Any]
         float(stock.get("main_net_inflow_yi") or 0) == 0
         and "main_net_inflow_yi" not in (stock.get("_feature_tags") or {})
         and not data_quality.get("capital_flow_checked")
+        and not data_quality.get("capital_flow_checked_empty")
     ):
         missing.add("capital_flow")
     if not stock.get("theme_tags") and not data_quality.get("theme_tags_fallback_from_industry"):

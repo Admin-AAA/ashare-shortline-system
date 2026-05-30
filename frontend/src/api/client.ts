@@ -12,10 +12,11 @@ import type {
   RecommendationDetail,
   RecommendationOutcome,
   ReplayAnalysisResult,
-    DataSourceHealthRow,
-    ModelRoute,
-    ModelRouteTestResult,
-    LocalPoolStatus,
+  DataSourceHealthRow,
+  ModelRoute,
+  ModelRouteTestResult,
+  LocalPoolGapSyncResult,
+  LocalPoolStatus,
   PoolRefreshResult,
   RunDetail,
   RunFunnelAudit,
@@ -30,6 +31,7 @@ import type {
   SkillSummary,
   ScoreLineStatsRow,
   SetupStatsRow,
+  StrategyStatsRow,
   StatsOverview
 } from "../types";
 import { createDashboardApi } from "./dashboard";
@@ -45,16 +47,39 @@ export type AuthStatus = {
 };
 
 const LONG_REQUEST_THRESHOLD_MS = 3000;
+const CONTROL_CONFIG_TIMEOUT_MS = 30_000;
 
 type RequestOptions = {
   timeoutMs?: number;
+  signal?: AbortSignal;
 };
+
+const USER_ERROR_PATTERNS: Array<[RegExp, string]> = [
+  [/lost connection to mysql server|pymysql\\.err\\.operationalerror|sqlalchemy\\.exc\\.operationalerror/i, "数据服务连接超时，请稍后重试；如果持续出现，请到控制中心查看数据池和服务状态。"],
+  [/request failed:\\s*500|internal server error/i, "后端服务暂时不可用，请重试或到控制中心查看状态。"],
+  [/failed to fetch|networkerror/i, "网络连接失败，请确认后端服务正在运行后重试。"],
+];
+
+let pageUnloading = false;
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => { pageUnloading = true; });
+  window.addEventListener("beforeunload", () => { pageUnloading = true; });
+}
 
 async function request<T>(path: string, init?: RequestInit, options?: RequestOptions): Promise<T> {
   const method = init?.method ?? "GET";
   const timeoutMs = options?.timeoutMs;
-  const controller = timeoutMs ? new AbortController() : null;
-  const timer = controller ? window.setTimeout(() => controller.abort(), timeoutMs) : null;
+  const externalSignal = options?.signal;
+  const controller = timeoutMs || externalSignal ? new AbortController() : null;
+  const abortFromExternalSignal = () => controller?.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      controller?.abort();
+    } else {
+      externalSignal.addEventListener("abort", abortFromExternalSignal, { once: true });
+    }
+  }
+  const timer = timeoutMs ? window.setTimeout(() => controller?.abort(), timeoutMs) : null;
   const start = performance.now();
   try {
     const res = await fetch(path, {
@@ -72,23 +97,51 @@ async function request<T>(path: string, init?: RequestInit, options?: RequestOpt
       if (res.status === 401) {
         throw new Error("UNAUTHORIZED");
       }
-      throw new Error(text || `Request failed: ${res.status}`);
+      throw new Error(userFacingErrorMessage(text || `Request failed: ${res.status}`, res.status));
     }
     return (await res.json()) as T;
   } catch (err) {
     const duration = Math.round(performance.now() - start);
-    if ((err as Error).name === "AbortError") {
+    if ((err as Error).name === "AbortError" || externalSignal?.aborted || isPageUnloadFetchAbort(err)) {
+      if (externalSignal?.aborted || isPageUnloadFetchAbort(err)) {
+        logger.info("api", `${method} ${path} 已取消`, { duration });
+        throw abortError();
+      }
       logger.warn("api", `${method} ${path} 超时 (${timeoutMs}ms)`, { duration });
       throw new Error("请求超时，请检查网络后刷新重试");
     }
     if ((err as Error).message === "UNAUTHORIZED") throw err;
     logger.error("api", `${method} ${path} failed`, { duration, error: String(err) });
-    throw err;
+    throw new Error(userFacingErrorMessage(err));
   } finally {
     if (timer !== null) {
       clearTimeout(timer);
     }
+    externalSignal?.removeEventListener("abort", abortFromExternalSignal);
   }
+}
+
+function abortError() {
+  const err = new Error("请求已取消");
+  err.name = "AbortError";
+  return err;
+}
+
+function isPageUnloadFetchAbort(err: unknown) {
+  if (!pageUnloading) return false;
+  const raw = err instanceof Error ? err.message : String(err ?? "");
+  return /failed to fetch|networkerror|load failed/i.test(raw);
+}
+
+function userFacingErrorMessage(err: unknown, status?: number) {
+  const raw = err instanceof Error ? err.message : String(err ?? "");
+  for (const [pattern, message] of USER_ERROR_PATTERNS) {
+    if (pattern.test(raw)) return message;
+  }
+  if (status === 500) return "后端服务暂时不可用，请重试或到控制中心查看状态。";
+  if (status === 404) return "请求的数据不存在或接口尚未启用。";
+  if (status === 403) return "当前没有权限执行这个操作。";
+  return raw || "操作失败，请稍后重试。";
 }
 
 function json(method: string, body?: unknown): RequestInit {
@@ -128,7 +181,7 @@ export const api = {
   bootstrap: () => request<HomeBootstrap>("/api/home/bootstrap"),
   initial: () => request<HomeInitialState>("/api/home/initial"),
 
-  presets: () => request<Preset[]>("/api/presets", undefined, { timeoutMs: 12_000 }),
+  presets: () => request<Preset[]>("/api/presets", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   createPreset: (payload: PresetPayload) =>
     request<Preset>("/api/presets", json("POST", payload)),
   updatePreset: (presetId: string, payload: PresetPayload) =>
@@ -168,12 +221,14 @@ export const api = {
     if (params?.b_offset !== undefined) qs.set("b_offset", String(params.b_offset));
     if (params?.include_details !== undefined) qs.set("include_details", String(params.include_details));
     const query = qs.toString();
-    return request<LocalPoolStatus>(`/api/data-sources/pool${query ? `?${query}` : ""}`, undefined, { timeoutMs: 15_000 });
+    return request<LocalPoolStatus>(`/api/data-sources/pool${query ? `?${query}` : ""}`, undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS });
   },
   refreshLocalPool: () => requestWithTimeout<PoolRefreshResult>("/api/data-sources/pool/refresh", 300_000, json("POST")),
+  syncLocalPoolGaps: (payload?: { code_limit?: number; days?: number; min_bars?: number; dry_run?: boolean }) =>
+    requestWithTimeout<LocalPoolGapSyncResult>("/api/data-sources/pool/sync-gaps", 300_000, json("POST", payload ?? {})),
   setDataSourceEnabled: (sourceType: string, source: string, enabled: boolean) =>
     request<DataSourceHealthRow>(`/api/data-sources/${sourceType}/${source}/enabled`, json("POST", { enabled })),
-  modelRoutes: () => request<ModelRoute[]>("/api/admin/model-routes", undefined, { timeoutMs: 12_000 }),
+  modelRoutes: () => request<ModelRoute[]>("/api/admin/model-routes", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   createModelRoute: (payload: Record<string, unknown>) =>
     request<ModelRoute>("/api/admin/model-routes", json("POST", payload)),
   testModelRoute: (payload: Record<string, unknown>) =>
@@ -185,12 +240,12 @@ export const api = {
   reorderModelRoutes: (routeIds: string[]) =>
     request<ModelRoute[]>("/api/admin/model-routes/reorder", json("POST", { route_ids: routeIds })),
 
-  scheduledTasks: () => request<ScheduledTask[]>("/api/admin/tasks", undefined, { timeoutMs: 12_000 }),
+  scheduledTasks: () => request<ScheduledTask[]>("/api/admin/tasks", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   scheduledTaskRuns: (limit = 100, taskId?: string) =>
     request<ScheduledTaskRun[]>(
       `/api/admin/task-runs?limit=${limit}${taskId ? `&task_id=${encodeURIComponent(taskId)}` : ""}`,
       undefined,
-      { timeoutMs: 12_000 },
+      { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS },
     ),
   createScheduledTask: (payload: ScheduledTaskPayload) =>
     request<ScheduledTask>("/api/admin/tasks", json("POST", payload)),
@@ -201,7 +256,7 @@ export const api = {
   runScheduledTask: (taskId: string) =>
     request<{ ok: boolean }>(`/api/admin/tasks/${taskId}/run`, json("POST")),
 
-  skills: () => request<SkillSummary[]>("/api/skills"),
+  skills: () => request<SkillSummary[]>("/api/skills", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   installSkill: (payload: { source: string; skill_id?: string }) =>
     request<SkillDetail>("/api/skills/install", json("POST", payload)),
   skillDetail: (id: string) => request<SkillDetail>(`/api/skills/${id}`),
@@ -213,8 +268,12 @@ export const api = {
   deleteRecommendation: (id: string) => request<{ deleted: string }>(`/api/recommendations/${id}`, json("DELETE")),
   deletePreset: (id: string) => request<{ deleted: string }>(`/api/presets/${id}`, json("DELETE")),
 
-  metricsOverview: (mode: "formal" | "experiment") => request<MetricsOverview>(`/api/metrics/overview?mode=${mode}`, undefined, { timeoutMs: 30_000 }),
-  dataHealth: () => request<DataHealthDiagnostic>("/api/admin/data-health"),
+  metricsOverview: (mode: "formal" | "experiment", options?: RequestOptions) =>
+    request<MetricsOverview>(`/api/metrics/overview?mode=${mode}`, undefined, {
+      timeoutMs: options?.timeoutMs ?? 30_000,
+      signal: options?.signal,
+    }),
+  dataHealth: (options?: RequestOptions) => request<DataHealthDiagnostic>("/api/admin/data-health", undefined, options),
   remediateDataHealth: (payload?: {
     target_tables?: string[];
     dry_run?: boolean;
@@ -222,8 +281,9 @@ export const api = {
     daily_kbar_code_limit?: number;
     post_diagnosis?: boolean;
   }) =>
-    request<DataHealthRemediationResult>("/api/admin/data-health/remediate", json("POST", payload ?? {}), { timeoutMs: 120_000 }),
-  temporalConsistency: (runMode?: string) => request<Record<string, unknown>>(`/api/admin/temporal-consistency${runMode ? `?run_mode=${runMode}` : ""}`),
+    request<DataHealthRemediationResult>("/api/admin/data-health/remediate", json("POST", payload ?? {}), { timeoutMs: 300_000 }),
+  temporalConsistency: (runMode?: string, options?: RequestOptions) =>
+    request<Record<string, unknown>>(`/api/admin/temporal-consistency${runMode ? `?run_mode=${runMode}` : ""}`, undefined, options),
   previewMinuteGate: (payload: { start_date: string; end_date: string; strategy_id: string }) =>
     request<MinutePrepResult>("/api/runs/backtest", json("POST", { ...payload, action: "preview_minute_gate" }), { timeoutMs: 120_000 }),
   remediateMinuteGaps: (payload: { start_date: string; end_date: string; strategy_id: string }) =>
@@ -231,6 +291,7 @@ export const api = {
   statsOverview: (mode: "formal" | "experiment") => request<StatsOverview>(`/api/stats/overview?mode=${mode}`),
   statsBySkill: (mode: "formal" | "experiment") => request<SkillStatsRow[]>(`/api/stats/by-skill?mode=${mode}`),
   statsByPreset: (mode: "formal" | "experiment") => request<PresetStatsRow[]>(`/api/stats/by-preset?mode=${mode}`),
+  metricsByStrategy: (mode: "formal" | "experiment") => request<StrategyStatsRow[]>(`/api/metrics/by-strategy?mode=${mode}`),
   metricsBySetup: (mode: "formal" | "experiment") => request<SetupStatsRow[]>(`/api/metrics/by-setup?mode=${mode}`),
   precisionAtK: (mode: "formal" | "experiment") => request<PrecisionAtKRow[]>(`/api/metrics/precision-at-k?mode=${mode}`),
   metricsByScoreLine: (mode: "formal" | "experiment") => request<ScoreLineStatsRow[]>(`/api/metrics/by-score-line?mode=${mode}`)

@@ -29,6 +29,7 @@ _AUTH_PROTECTED_PATHS = {
 }
 
 app = FastAPI(title="AShare Shortline System")
+_startup_db_error: str | None = None
 
 app.add_middleware(
     CORSMiddleware,
@@ -84,8 +85,15 @@ async def catch_unhandled_exceptions(request: Request, call_next):
 
 @app.on_event("startup")
 def on_startup() -> None:
+    global _startup_db_error
     setup_logging()
-    init_db()
+    try:
+        init_db()
+    except Exception as exc:  # noqa: BLE001 - keep the frontend reachable during DB outages
+        _startup_db_error = str(exc)
+        logger.exception("数据库初始化失败，后端以降级模式启动")
+        return
+    _startup_db_error = None
     from app.db.session import SessionLocal
     from app.services.cost_service import recover_scheduled_task_runs
     from app.services.workbench_service import recover_interrupted_runs
@@ -157,7 +165,7 @@ def on_shutdown() -> None:
 
 @app.get("/api/health")
 def health():
-    return {"ok": True}
+    return {"ok": True, "database": "degraded" if _startup_db_error else "ok"}
 
 
 @app.get("/api/auth/status")

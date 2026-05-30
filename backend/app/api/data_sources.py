@@ -7,6 +7,10 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.services.data_sources import get_local_pool_status, list_data_sources, set_data_source_enabled
+from app.services.data_gap_remediation_service import (
+    remediate_recommendation_run_auxiliary_data,
+    sync_local_pool_kline_gaps,
+)
 from app.services.workbench_service import invalidate_bootstrap_cache
 from app.services.market_pool import (
     refresh_capital_flows_for_codes,
@@ -103,6 +107,12 @@ def get_cached_local_pool_status(
             else:
                 data["unified_quotes"] = []
                 data["daily_bars"] = []
+                data["pagination_preview"] = {
+                    "enabled": False,
+                    "requested_unified_limit": int(u_limit or 0),
+                    "requested_bars_limit": int(b_limit or 0),
+                    "note": "summary-only cache hit; pagination limits are preview hints only and do not cap pool refresh or gap remediation.",
+                }
             data["cache_stale"] = bool((now - cached["ts"]) >= cache_ttl)
             return data
 
@@ -124,6 +134,12 @@ def get_cached_local_pool_status(
             data = dict(data)
             data["unified_quotes"] = []
             data["daily_bars"] = []
+            data["pagination_preview"] = {
+                "enabled": False,
+                "requested_unified_limit": int(u_limit or 0),
+                "requested_bars_limit": int(b_limit or 0),
+                "note": "summary-only request; pagination limits are preview hints only and do not cap pool refresh or gap remediation.",
+            }
         return data
     except Exception as exc:
         logger.exception("local pool status failed")
@@ -153,6 +169,38 @@ def refresh_pool(db: Session = Depends(get_db)):
     return {"refreshed": len(quotes), "meta": meta}
 
 
+@router.post("/pool/sync-gaps")
+def sync_pool_gaps(payload: dict | None = None, db: Session = Depends(get_db)):
+    payload = payload or {}
+    result = sync_local_pool_kline_gaps(
+        db,
+        code_limit=int(payload.get("code_limit", 0)),
+        days=int(payload.get("days", 90)),
+        min_bars=int(payload.get("min_bars", 30)),
+        dry_run=bool(payload.get("dry_run", False)),
+    )
+    if not bool(payload.get("dry_run", False)):
+        with _pool_status_lock:
+            _pool_status_cache.clear()
+        invalidate_bootstrap_cache()
+    return result
+
+
+@router.post("/recommendation-runs/{run_id}/sync-auxiliary")
+def sync_recommendation_run_auxiliary(run_id: str, payload: dict | None = None, db: Session = Depends(get_db)):
+    payload = payload or {}
+    result = remediate_recommendation_run_auxiliary_data(
+        db,
+        run_id,
+        target_tables=payload.get("target_tables"),
+        code_limit=int(payload.get("code_limit", 0)),
+        dry_run=bool(payload.get("dry_run", False)),
+    )
+    if not bool(payload.get("dry_run", False)):
+        invalidate_bootstrap_cache()
+    return result
+
+
 def _unready_pool_status(message: str) -> dict:
     return {
         "summary": {
@@ -179,6 +227,8 @@ def _unready_pool_status(message: str) -> dict:
             "daily_bar_missing_count": 0,
             "daily_bar_stale_count": 0,
             "daily_bar_short_history_count": 0,
+            "daily_bar_immature_history_count": 0,
+            "daily_bar_total_short_history_count": 0,
             "actual_recommend_scan_count": 0,
             "skill_input_count": 0,
             "daily_bar_row_count": 0,
@@ -225,6 +275,7 @@ def _unready_pool_status(message: str) -> dict:
                 "ready_count": 0,
                 "missing_count": 0,
                 "short_history_count": 0,
+                "immature_history_count": 0,
                 "stale_count": 0,
                 "min_bars": 30,
                 "coverage_count": 0,

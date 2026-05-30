@@ -1,23 +1,37 @@
 from __future__ import annotations
 
-from collections import OrderedDict
+import json
+from collections import Counter, OrderedDict
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.orm import Session
 
-from app.models.tables import DailyKbar, IndexDaily, LimitUpBoard, StockQuote
+from app.core.config import get_settings
+from app.models.tables import DailyKbar, IndexDaily, LimitUpBoard, Recommendation, RecommendationRun, Stock, StockQuote
 from app.services.data_health_service import diagnose_all
+from app.services.feature_builder import _compute_authenticity, _enrich_with_auxiliary_data, _tag_features
 from app.services.market_pool import (
+    _candidate_recall_plan,
+    _eligible_market_quotes,
+    _execution_recall_count,
+    _latest_allowed_bar_date as _pool_latest_allowed_bar_date,
+    _load_cached_bars_summary,
+    _load_cached_quotes,
+    _quote_sources,
+    _select_recall_candidates,
+    load_auxiliary_for_stocks,
     refresh_capital_flows_for_codes,
     refresh_concept_sectors,
     refresh_dragon_tiger,
     refresh_limit_up_board,
     refresh_news_for_codes,
 )
-from app.services.tushare_client import fetch_daily_kbars_for_trade_date, fetch_index_daily
+from app.services.research_context import build_research_context
+from app.services.data_sources import enabled_sources
+from app.services.tushare_client import fetch_basic_daily_kbars, fetch_daily_kbars_for_trade_date, fetch_index_daily
 
 DEFAULT_REMEDIABLE_TABLES = (
     "daily_kbar",
@@ -38,6 +52,18 @@ DEFAULT_INDEX_TS_CODES = (
 )
 _DAILY_KBAR_UPSERT_BATCH_SIZE = 200
 DEFAULT_DAILY_KBAR_CODE_LIMIT = 6000
+DEFAULT_LOCAL_POOL_GAP_CODE_LIMIT = 0
+DEFAULT_LOCAL_POOL_GAP_DAYS = 90
+DEFAULT_LOCAL_POOL_MIN_BARS = 30
+AUXILIARY_GAP_FIELDS = {
+    "announcements",
+    "capital_flow",
+    "dragon_tiger",
+    "main_net_inflow",
+    "news",
+    "theme_tags",
+}
+AUXILIARY_REMEDIABLE_TABLES = {"capital_flow", "concept_sector", "dragon_tiger", "news"}
 
 
 def remediate_data_health_gaps(
@@ -131,6 +157,238 @@ def remediate_data_health_gaps(
     }
 
 
+def sync_local_pool_kline_gaps(
+    db: Session,
+    *,
+    code_limit: int = DEFAULT_LOCAL_POOL_GAP_CODE_LIMIT,
+    days: int = DEFAULT_LOCAL_POOL_GAP_DAYS,
+    min_bars: int = DEFAULT_LOCAL_POOL_MIN_BARS,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Backfill daily K-line history for local-pool candidates with readiness gaps."""
+    fetch_days = max(min_bars, int(days or DEFAULT_LOCAL_POOL_GAP_DAYS))
+    required_bars = max(1, int(min_bars or DEFAULT_LOCAL_POOL_MIN_BARS))
+    before_state = _local_pool_kline_gap_state(db, min_bars=required_bars)
+    requested_limit = int(code_limit if code_limit is not None else DEFAULT_LOCAL_POOL_GAP_CODE_LIMIT)
+    effective_limit = len(before_state["gaps"]) if requested_limit <= 0 else max(1, requested_limit)
+    targets = before_state["gaps"][:effective_limit]
+
+    if dry_run or not targets:
+        operation_log = [
+            {**_public_gap_item(item), "status": "planned", "row_count": 0}
+            for item in targets
+        ]
+        comparison = _local_pool_gap_comparison(
+            before_counts=before_state["counts"],
+            after_counts=before_state["counts"],
+            target_count=len(targets),
+            succeeded_count=0,
+            unresolved_count=0,
+            failed_count=0,
+        )
+        return {
+            "status": "planned" if targets else "no_gap",
+            "dry_run": dry_run,
+            "days": fetch_days,
+            "min_bars": required_bars,
+            "code_limit": requested_limit,
+            "effective_code_limit": effective_limit,
+            "target_count": len(targets),
+            "processed_count": 0,
+            "succeeded_count": 0,
+            "unresolved_count": 0,
+            "failed_count": 0,
+            "row_count": 0,
+            "before": before_state["counts"],
+            "after": before_state["counts"],
+            "comparison": comparison,
+            "sync_summary": _local_pool_operation_summary(operation_log),
+            "operation_log": operation_log,
+        }
+
+    latest_allowed = _pool_latest_allowed_bar_date()
+    latest_allowed_compact = latest_allowed.replace("-", "")
+    operation_log: list[dict[str, Any]] = []
+    payload: list[dict[str, Any]] = []
+
+    for item in targets:
+        code = str(item.get("code") or "").strip()
+        if not code:
+            continue
+        try:
+            rows = fetch_basic_daily_kbars(code, days=fetch_days, end_date=latest_allowed_compact)
+            normalized_rows = [
+                {**row, "code": code, "trade_date": _normalize_trade_date(row.get("trade_date"))}
+                for row in rows
+                if _normalize_trade_date(row.get("trade_date"))
+                and _normalize_trade_date(row.get("trade_date")) <= latest_allowed
+            ]
+            latest_row_date = max((str(row.get("trade_date") or "") for row in normalized_rows), default=None)
+            status = _kline_fetch_status(
+                row_count=len(normalized_rows),
+                latest_trade_date=latest_row_date,
+                quote_date=str(item.get("quote_date") or ""),
+                min_bars=required_bars,
+            )
+            payload.extend(_daily_kbar_payload(row) for row in normalized_rows)
+            operation_log.append(
+                {
+                    **_public_gap_item(item),
+                    "status": status,
+                    "row_count": len(normalized_rows),
+                    "latest_trade_date": latest_row_date,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - keep one bad code from aborting the batch
+            db.rollback()
+            operation_log.append(
+                {
+                    **_public_gap_item(item),
+                    "status": "failed",
+                    "row_count": 0,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                }
+            )
+
+    if payload:
+        _insert_daily_kbar_payload_ignore(db, payload)
+
+    after_state = _local_pool_kline_gap_state(db, min_bars=required_bars)
+    failed_count = sum(1 for item in operation_log if item.get("status") == "failed")
+    succeeded_count = sum(1 for item in operation_log if item.get("status") == "completed")
+    unresolved_count = sum(1 for item in operation_log if item.get("status") in {"empty", "short_history", "stale"})
+    return {
+        "status": _local_pool_sync_status(
+            target_count=len(targets),
+            failed_count=failed_count,
+            unresolved_count=unresolved_count,
+        ),
+        "dry_run": False,
+        "days": fetch_days,
+        "min_bars": required_bars,
+        "code_limit": requested_limit,
+        "effective_code_limit": effective_limit,
+        "target_count": len(targets),
+        "processed_count": len(operation_log),
+        "succeeded_count": succeeded_count,
+        "unresolved_count": unresolved_count,
+        "failed_count": failed_count,
+        "row_count": len(payload),
+        "before": before_state["counts"],
+        "after": after_state["counts"],
+        "comparison": _local_pool_gap_comparison(
+            before_counts=before_state["counts"],
+            after_counts=after_state["counts"],
+            target_count=len(targets),
+            succeeded_count=succeeded_count,
+            unresolved_count=unresolved_count,
+            failed_count=failed_count,
+        ),
+        "sync_summary": _local_pool_operation_summary(operation_log),
+        "operation_log": operation_log[:50],
+    }
+
+
+def _local_pool_operation_summary(operation_log: list[dict[str, Any]]) -> dict[str, Any]:
+    status_counts = Counter(str(item.get("status") or "unknown") for item in operation_log)
+    failure_counts: Counter[tuple[str, str]] = Counter()
+    for item in operation_log:
+        if item.get("status") != "failed":
+            continue
+        error_type = str(item.get("error_type") or "Error")
+        message = _compact_error_message(item.get("error"))
+        failure_counts[(error_type, message)] += 1
+
+    return {
+        "total_log_count": len(operation_log),
+        "visible_log_count": min(len(operation_log), 50),
+        "status_counts": dict(status_counts),
+        "failure_reasons": [
+            {"error_type": error_type, "message": message, "count": count}
+            for (error_type, message), count in failure_counts.most_common(3)
+        ],
+    }
+
+
+def _compact_error_message(value: Any) -> str:
+    raw = str(value or "").strip().replace("\n", " ")
+    if len(raw) <= 140:
+        return raw
+    return f"{raw[:137]}..."
+
+
+def remediate_recommendation_run_auxiliary_data(
+    db: Session,
+    run_id: str,
+    *,
+    target_tables: list[str] | None = None,
+    code_limit: int = 0,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Backfill auxiliary evidence for already-generated recommendations in one run."""
+    run = db.get(RecommendationRun, run_id)
+    if run is None:
+        return {"status": "run_not_found", "run_id": run_id}
+
+    recs = db.scalars(
+        select(Recommendation)
+        .where(Recommendation.run_id == run_id)
+        .order_by(Recommendation.final_score.desc(), Recommendation.recommended_at.asc())
+    ).all()
+    requested_tables = _normalize_auxiliary_target_tables(target_tables)
+    if code_limit and int(code_limit) > 0:
+        recs = recs[: max(1, int(code_limit))]
+    codes = [str(rec.code or "").strip() for rec in recs if str(rec.code or "").strip()]
+    before = _recommendation_auxiliary_snapshot(recs)
+    actions = _build_recommendation_auxiliary_actions(
+        before=before,
+        codes=codes,
+        trade_date=str(run.trade_date or ""),
+        requested_tables=requested_tables,
+    )
+    if dry_run or not actions:
+        return {
+            "status": "planned" if actions else "no_auxiliary_gap",
+            "dry_run": dry_run,
+            "run_id": run_id,
+            "trade_date": run.trade_date,
+            "requested_tables": requested_tables,
+            "target_recommendation_count": len(recs),
+            "target_code_count": len(codes),
+            "before": before,
+            "after": before,
+            "comparison": _compare_recommendation_auxiliary_snapshots(before, before),
+            "actions": [_mark_planned(item) for item in actions],
+            "action_summary": _auxiliary_action_summary([_mark_planned(item) for item in actions]),
+        }
+
+    executed_actions = [_execute_recommendation_auxiliary_action_safely(db, item) for item in actions]
+    snapshot = _loads_json(run.market_snapshot_json, {})
+    snapshot.setdefault("trade_date", run.trade_date)
+    snapshot.setdefault("breadth", {})["auxiliary_data_audit"] = _actions_to_auxiliary_audit(executed_actions, codes)
+    run.market_snapshot_json = _dumps_json(snapshot)
+    aux = load_auxiliary_for_stocks(db, codes, trade_date=run.trade_date) if codes else {}
+    _rewrite_recommendation_auxiliary_snapshots(recs, snapshot=snapshot, aux=aux)
+    db.commit()
+
+    after = _recommendation_auxiliary_snapshot(recs)
+    return {
+        "status": "completed" if not any(item.get("status") == "failed" for item in executed_actions) else "partial_failed",
+        "dry_run": False,
+        "run_id": run_id,
+        "trade_date": run.trade_date,
+        "requested_tables": requested_tables,
+        "target_recommendation_count": len(recs),
+        "target_code_count": len(codes),
+        "before": before,
+        "after": after,
+        "comparison": _compare_recommendation_auxiliary_snapshots(before, after),
+        "actions": executed_actions,
+        "action_summary": _auxiliary_action_summary(executed_actions),
+    }
+
+
 def _normalize_target_tables(target_tables: list[str] | None) -> list[str]:
     if not target_tables:
         return list(DEFAULT_REMEDIABLE_TABLES)
@@ -140,6 +398,474 @@ def _normalize_target_tables(target_tables: list[str] | None) -> list[str]:
         if key and key in DEFAULT_REMEDIABLE_TABLES and key not in normalized:
             normalized.append(key)
     return normalized or list(DEFAULT_REMEDIABLE_TABLES)
+
+
+def _normalize_auxiliary_target_tables(target_tables: list[str] | None) -> list[str]:
+    if not target_tables:
+        return sorted(AUXILIARY_REMEDIABLE_TABLES)
+    normalized = []
+    for item in target_tables:
+        key = str(item or "").strip()
+        if key in AUXILIARY_REMEDIABLE_TABLES and key not in normalized:
+            normalized.append(key)
+    return normalized or sorted(AUXILIARY_REMEDIABLE_TABLES)
+
+
+def _recommendation_auxiliary_snapshot(recs: list[Recommendation]) -> dict[str, Any]:
+    field_counter: Counter[str] = Counter()
+    records: list[dict[str, Any]] = []
+    completeness_scores: list[float] = []
+    evidence_scores: list[float] = []
+    for rec in recs:
+        feature_snapshot = _loads_json(rec.feature_snapshot_json, {})
+        quality = feature_snapshot.get("data_quality") if isinstance(feature_snapshot.get("data_quality"), dict) else {}
+        missing_fields = sorted(str(item) for item in quality.get("missing_fields") or [] if str(item or "").strip())
+        field_counter.update(missing_fields)
+        completeness = _optional_float(feature_snapshot.get("data_completeness_score") or quality.get("data_completeness_score"))
+        evidence = _optional_float(feature_snapshot.get("evidence_quality_score") or quality.get("evidence_quality_score"))
+        if completeness is not None:
+            completeness_scores.append(completeness)
+        if evidence is not None:
+            evidence_scores.append(evidence)
+        records.append(
+            {
+                "recommendation_id": rec.recommendation_id,
+                "code": rec.code,
+                "name": rec.name,
+                "missing_fields": missing_fields,
+                "auxiliary_missing_fields": sorted(set(missing_fields) & AUXILIARY_GAP_FIELDS),
+                "data_completeness_score": completeness,
+                "evidence_quality_score": evidence,
+            }
+        )
+    auxiliary_missing_total = sum(
+        count for field, count in field_counter.items() if field in AUXILIARY_GAP_FIELDS
+    )
+    return {
+        "recommendation_count": len(recs),
+        "missing_field_total": sum(field_counter.values()),
+        "auxiliary_missing_field_total": auxiliary_missing_total,
+        "missing_field_counts": dict(sorted(field_counter.items())),
+        "average_data_completeness_score": _average(completeness_scores),
+        "average_evidence_quality_score": _average(evidence_scores),
+        "examples": [row for row in records if row["auxiliary_missing_fields"]][:8],
+    }
+
+
+def _build_recommendation_auxiliary_actions(
+    *,
+    before: dict[str, Any],
+    codes: list[str],
+    trade_date: str,
+    requested_tables: list[str],
+) -> list[dict[str, Any]]:
+    missing_counts = before.get("missing_field_counts") if isinstance(before.get("missing_field_counts"), dict) else {}
+    actions: list[dict[str, Any]] = []
+    if "capital_flow" in requested_tables and (
+        int(missing_counts.get("capital_flow") or 0) or int(missing_counts.get("main_net_inflow") or 0)
+    ):
+        actions.append({"table": "capital_flow", "trade_date": trade_date, "codes": codes})
+    if "concept_sector" in requested_tables and int(missing_counts.get("theme_tags") or 0):
+        actions.append({"table": "concept_sector", "trade_date": trade_date})
+    if "dragon_tiger" in requested_tables and int(missing_counts.get("dragon_tiger") or 0):
+        actions.append({"table": "dragon_tiger", "trade_date": trade_date})
+    if "news" in requested_tables and (
+        int(missing_counts.get("news") or 0) or int(missing_counts.get("announcements") or 0)
+    ):
+        actions.append({"table": "news", "trade_date": trade_date, "codes": codes})
+    return actions
+
+
+def _execute_recommendation_auxiliary_action_safely(db: Session, item: dict[str, Any]) -> dict[str, Any]:
+    try:
+        table = item["table"]
+        if table == "capital_flow":
+            codes = item.get("codes") or []
+            rows = refresh_capital_flows_for_codes(db, codes, trade_date=item["trade_date"])
+            return {
+                **item,
+                "status": "completed" if rows else "empty",
+                "row_count": len(rows),
+                "requested_code_count": len(codes),
+                "checked_codes": codes,
+            }
+        if table == "concept_sector":
+            rows = refresh_concept_sectors(db, trade_date=item["trade_date"])
+            return {**item, "status": "completed" if rows else "empty", "row_count": len(rows)}
+        if table == "dragon_tiger":
+            rows = refresh_dragon_tiger(db, trade_date=item["trade_date"])
+            return {
+                **item,
+                "status": "completed" if rows else "empty",
+                "row_count": len(rows),
+                "covered_trade_date": item["trade_date"],
+            }
+        if table == "news":
+            codes = item.get("codes") or []
+            rows = refresh_news_for_codes(db, codes, trade_date=item["trade_date"])
+            checked_codes = list(getattr(rows, "checked_codes", codes))
+            return {
+                **item,
+                "status": "completed" if rows else "empty",
+                "row_count": sum(len(values) for values in rows.values()),
+                "requested_code_count": len(codes),
+                "checked_codes": checked_codes,
+            }
+    except Exception as exc:
+        db.rollback()
+        return {**item, "status": "failed", "row_count": 0, "error": str(exc), "error_type": type(exc).__name__}
+    return {**item, "status": "skipped", "row_count": 0, "reason": "unsupported_table"}
+
+
+def _actions_to_auxiliary_audit(actions: list[dict[str, Any]], codes: list[str]) -> dict[str, Any]:
+    action_by_table = {str(item.get("table")): item for item in actions}
+    return {
+        "concept_sectors": _auxiliary_audit_row(action_by_table.get("concept_sector"), default_checked_codes=[]),
+        "dragon_tiger": _auxiliary_audit_row(action_by_table.get("dragon_tiger"), default_checked_codes=[]),
+        "capital_flows": _auxiliary_audit_row(action_by_table.get("capital_flow"), default_checked_codes=codes),
+        "news": _auxiliary_audit_row(action_by_table.get("news"), default_checked_codes=codes),
+    }
+
+
+def _auxiliary_audit_row(action: dict[str, Any] | None, *, default_checked_codes: list[str]) -> dict[str, Any]:
+    if not action:
+        return {"status": "skipped", "count": 0, "elapsed_ms": 0}
+    status = str(action.get("status") or "unknown")
+    audit_status = "success" if status in {"completed", "empty"} else status
+    row = {
+        "status": audit_status,
+        "count": int(action.get("row_count") or 0),
+        "requested_count": int(action.get("requested_code_count") or 0),
+        "checked_codes": list(action.get("checked_codes") or default_checked_codes),
+        "elapsed_ms": 0,
+    }
+    if action.get("covered_trade_date"):
+        row["covered_trade_date"] = action.get("covered_trade_date")
+    if action.get("error"):
+        row["error"] = action.get("error")
+    return row
+
+
+def _rewrite_recommendation_auxiliary_snapshots(
+    recs: list[Recommendation],
+    *,
+    snapshot: dict[str, Any],
+    aux: dict[str, Any],
+) -> None:
+    for rec in recs:
+        feature_snapshot = _loads_json(rec.feature_snapshot_json, {})
+        feature_snapshot.setdefault("code", rec.code)
+        feature_snapshot.setdefault("name", rec.name)
+        feature_snapshot.setdefault("industry", rec.industry)
+        _enrich_with_auxiliary_data([feature_snapshot], None, snapshot, _aux_override=aux)
+        _tag_features(feature_snapshot)
+        feature_snapshot["data_authenticity"] = _compute_authenticity(feature_snapshot)
+        context = build_research_context(feature_snapshot, snapshot)
+        updated_snapshot = context.to_feature_snapshot()
+        rec.feature_snapshot_json = _dumps_json(updated_snapshot)
+        quality = updated_snapshot.get("data_quality") if isinstance(updated_snapshot.get("data_quality"), dict) else {}
+        rec.info_tags_json = _dumps_json(
+            _updated_auxiliary_info_tags(
+                _loads_json(rec.info_tags_json, []),
+                missing_fields=set(quality.get("missing_fields") or []),
+                data_completeness_score=float(updated_snapshot.get("data_completeness_score") or 0),
+                evidence_quality_score=float(updated_snapshot.get("evidence_quality_score") or 0),
+            )
+        )
+
+
+def _updated_auxiliary_info_tags(
+    tags: list[Any],
+    *,
+    missing_fields: set[str],
+    data_completeness_score: float,
+    evidence_quality_score: float,
+) -> list[str]:
+    normalized = [str(tag) for tag in tags if str(tag or "").strip()]
+    result: list[str] = []
+    for tag in normalized:
+        if "多维度数据缺失" in tag and not (missing_fields & {"announcements", "dragon_tiger", "news", "theme_tags"}):
+            continue
+        if "样本或证据覆盖不足" in tag and data_completeness_score >= 75 and evidence_quality_score >= 50:
+            continue
+        result.append(tag)
+    return result
+
+
+def _compare_recommendation_auxiliary_snapshots(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    before_counts = before.get("missing_field_counts") if isinstance(before.get("missing_field_counts"), dict) else {}
+    after_counts = after.get("missing_field_counts") if isinstance(after.get("missing_field_counts"), dict) else {}
+    resolved_by_field = {
+        field: max(0, int(before_counts.get(field) or 0) - int(after_counts.get(field) or 0))
+        for field in sorted(set(before_counts) | set(after_counts))
+    }
+    return {
+        "missing_field_total_delta": int(after.get("missing_field_total") or 0) - int(before.get("missing_field_total") or 0),
+        "auxiliary_missing_field_total_delta": int(after.get("auxiliary_missing_field_total") or 0)
+        - int(before.get("auxiliary_missing_field_total") or 0),
+        "resolved_missing_field_count": sum(resolved_by_field.values()),
+        "resolved_by_field": {field: count for field, count in resolved_by_field.items() if count},
+        "average_data_completeness_score_delta": round(
+            float(after.get("average_data_completeness_score") or 0)
+            - float(before.get("average_data_completeness_score") or 0),
+            3,
+        ),
+        "average_evidence_quality_score_delta": round(
+            float(after.get("average_evidence_quality_score") or 0)
+            - float(before.get("average_evidence_quality_score") or 0),
+            3,
+        ),
+    }
+
+
+def _auxiliary_action_summary(actions: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        "planned_count": len(actions),
+        "completed_count": sum(1 for item in actions if item.get("status") == "completed"),
+        "empty_count": sum(1 for item in actions if item.get("status") == "empty"),
+        "failed_count": sum(1 for item in actions if item.get("status") == "failed"),
+        "row_count": sum(int(item.get("row_count") or 0) for item in actions),
+    }
+
+
+def _loads_json(raw: Any, default: Any) -> Any:
+    if raw is None:
+        return default
+    if isinstance(raw, (dict, list)):
+        return raw
+    try:
+        return json.loads(str(raw))
+    except Exception:
+        return default
+
+
+def _dumps_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _average(values: list[float]) -> float | None:
+    return round(sum(values) / len(values), 3) if values else None
+
+
+
+def _local_pool_kline_gap_state(db: Session, *, min_bars: int) -> dict[str, Any]:
+    settings = get_settings()
+    active_sources = enabled_sources(db, "quote", _quote_sources(settings))
+    quotes = _load_cached_quotes(
+        db,
+        allowed_sources=set(active_sources) if active_sources else None,
+        skip_metrics=True,
+    )
+    eligible_quotes = _eligible_market_quotes(quotes) if quotes else []
+    recall_plan = _candidate_recall_plan(len(quotes), len(eligible_quotes), settings)
+    execution_recall_count = _execution_recall_count(recall_plan, len(eligible_quotes))
+    candidates = _select_recall_candidates(eligible_quotes, execution_recall_count)
+    candidate_codes = [str(item.get("code") or "").strip() for item in candidates if str(item.get("code") or "").strip()]
+    bar_summaries = _load_cached_bars_summary(db, candidate_codes, min_bars) if candidate_codes else {}
+    maturity_map = _load_history_maturity_map(db, candidate_codes) if candidate_codes else {}
+    latest_allowed = _pool_latest_allowed_bar_date()
+
+    counts = {
+        "candidate_count": len(candidates),
+        "checked_count": 0,
+        "ready_count": 0,
+        "missing_count": 0,
+        "short_history_count": 0,
+        "immature_history_count": 0,
+        "stale_count": 0,
+        "gap_count": 0,
+        "latest_allowed_bar_date": latest_allowed,
+    }
+    gaps: list[dict[str, Any]] = []
+    for quote in candidates:
+        code = str(quote.get("code") or "").strip()
+        if not code:
+            continue
+        counts["checked_count"] += 1
+        summary = bar_summaries.get(code, {})
+        bar_count = int(summary.get("bar_count") or 0)
+        latest_bar_date = _normalize_trade_date(summary.get("latest_trade_date"))
+        quote_date = _candidate_quote_date(quote, latest_allowed)
+        reason = ""
+        if bar_count <= 0:
+            reason = "missing"
+            counts["missing_count"] += 1
+        elif bar_count < min_bars:
+            counts["short_history_count"] += 1
+            maturity = maturity_map.get(code, {})
+            if _is_natural_short_history(
+                bar_count=bar_count,
+                latest_bar_date=latest_bar_date,
+                quote_date=quote_date,
+                first_bar_date=_normalize_trade_date(maturity.get("first_bar_date")),
+                list_date=_normalize_trade_date(maturity.get("list_date")),
+            ):
+                counts["immature_history_count"] += 1
+                continue
+            else:
+                reason = "short_history"
+        elif not latest_bar_date or latest_bar_date < quote_date:
+            reason = "stale"
+            counts["stale_count"] += 1
+
+        if reason:
+            gaps.append(
+                {
+                    "code": code,
+                    "name": quote.get("name"),
+                    "reason": reason,
+                    "bar_count": bar_count,
+                    "latest_bar_date": latest_bar_date or None,
+                    "quote_date": quote_date,
+                    "amount_yi": quote.get("amount_yi"),
+                }
+            )
+        else:
+            counts["ready_count"] += 1
+
+    counts["gap_count"] = len(gaps)
+    return {"counts": counts, "gaps": gaps}
+
+
+def _load_history_maturity_map(db: Session, codes: list[str]) -> dict[str, dict[str, str | None]]:
+    normalized_codes = [str(code or "").strip() for code in codes if str(code or "").strip()]
+    if not normalized_codes:
+        return {}
+    result: dict[str, dict[str, str | None]] = {}
+    first_bar_rows = db.execute(
+        select(
+            DailyKbar.code.label("code"),
+            func.min(DailyKbar.trade_date).label("first_bar_date"),
+        )
+        .where(DailyKbar.code.in_(normalized_codes))
+        .group_by(DailyKbar.code)
+    ).all()
+    for row in first_bar_rows:
+        result[str(row.code)] = {
+            "first_bar_date": _normalize_trade_date(row.first_bar_date),
+            "list_date": None,
+        }
+    stock_rows = db.execute(
+        select(Stock.code, Stock.list_date).where(Stock.code.in_(normalized_codes))
+    ).all()
+    for row in stock_rows:
+        item = result.setdefault(str(row.code), {"first_bar_date": None, "list_date": None})
+        item["list_date"] = _normalize_trade_date(row.list_date)
+    return result
+
+
+def _is_natural_short_history(
+    *,
+    bar_count: int,
+    latest_bar_date: str | None,
+    quote_date: str,
+    first_bar_date: str | None,
+    list_date: str | None,
+) -> bool:
+    return bool(
+        0 < int(bar_count or 0)
+        and latest_bar_date
+        and quote_date
+        and latest_bar_date >= quote_date
+        and first_bar_date
+        and list_date
+        and first_bar_date <= list_date
+    )
+
+
+def _candidate_quote_date(quote: dict[str, Any], latest_allowed: str) -> str:
+    raw = _normalize_trade_date(quote.get("trade_date")) or latest_allowed
+    target = min(raw, latest_allowed)
+    try:
+        return _pool_latest_allowed_bar_date(date.fromisoformat(target))
+    except ValueError:
+        return latest_allowed
+
+
+def _public_gap_item(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "code": item.get("code"),
+        "name": item.get("name"),
+        "reason": item.get("reason"),
+        "bar_count_before": item.get("bar_count"),
+        "latest_bar_date_before": item.get("latest_bar_date"),
+        "quote_date": item.get("quote_date"),
+    }
+
+
+def _kline_fetch_status(*, row_count: int, latest_trade_date: str | None, quote_date: str, min_bars: int) -> str:
+    if row_count <= 0:
+        return "empty"
+    if row_count < min_bars:
+        return "short_history"
+    if latest_trade_date and quote_date and latest_trade_date < quote_date:
+        return "stale"
+    return "completed"
+
+
+def _local_pool_sync_status(*, target_count: int, failed_count: int, unresolved_count: int) -> str:
+    if target_count <= 0:
+        return "no_gap"
+    if failed_count and failed_count >= target_count:
+        return "failed"
+    if failed_count or unresolved_count:
+        return "partial_completed"
+    return "completed"
+
+
+def _local_pool_gap_comparison(
+    *,
+    before_counts: dict[str, Any],
+    after_counts: dict[str, Any],
+    target_count: int,
+    succeeded_count: int,
+    unresolved_count: int,
+    failed_count: int,
+) -> dict[str, Any]:
+    before_candidate_count = int(before_counts.get("candidate_count") or 0)
+    after_candidate_count = int(after_counts.get("candidate_count") or before_candidate_count)
+    before_ready_count = int(before_counts.get("ready_count") or 0)
+    after_ready_count = int(after_counts.get("ready_count") or 0)
+    before_gap_count = int(before_counts.get("gap_count") or 0)
+    after_gap_count = int(after_counts.get("gap_count") or 0)
+    resolved_gap_count = max(0, before_gap_count - after_gap_count)
+    target_total = max(0, int(target_count or 0))
+    return {
+        "before_candidate_count": before_candidate_count,
+        "after_candidate_count": after_candidate_count,
+        "before_ready_count": before_ready_count,
+        "after_ready_count": after_ready_count,
+        "ready_count_delta": after_ready_count - before_ready_count,
+        "before_gap_count": before_gap_count,
+        "after_gap_count": after_gap_count,
+        "gap_count_delta": after_gap_count - before_gap_count,
+        "target_gap_count": target_total,
+        "resolved_target_count": resolved_gap_count,
+        "unresolved_target_count": max(0, after_gap_count),
+        "failed_target_count": max(0, int(failed_count or 0)),
+        "candidate_coverage_rate_before": round(before_ready_count / before_candidate_count, 3)
+        if before_candidate_count
+        else 0.0,
+        "candidate_coverage_rate_after": round(after_ready_count / after_candidate_count, 3)
+        if after_candidate_count
+        else 0.0,
+        "candidate_coverage_rate_delta": round(
+            (
+                (after_ready_count / after_candidate_count)
+                if after_candidate_count
+                else 0.0
+            )
+            - (
+                (before_ready_count / before_candidate_count)
+                if before_candidate_count
+                else 0.0
+            ),
+            3,
+        ),
+        "remediation_coverage_rate": round(resolved_gap_count / target_total, 3)
+        if target_total
+        else 1.0,
+    }
 
 
 def _build_remediation_plan(
@@ -237,6 +963,8 @@ def _build_remediation_plan(
 def _mark_planned(item: dict[str, Any]) -> dict[str, Any]:
     action = dict(item)
     action["status"] = "planned"
+    if "requested_code_count" not in action and isinstance(action.get("codes"), list):
+        action["requested_code_count"] = len(action["codes"])
     return action
 
 
@@ -602,6 +1330,21 @@ def _upsert_daily_kbar_payload(
             source=stmt.inserted.source,
             updated_at=stmt.inserted.updated_at,
         ))
+    db.commit()
+
+
+def _insert_daily_kbar_payload_ignore(
+    db: Session,
+    payload: list[dict[str, Any]],
+    *,
+    batch_size: int = _DAILY_KBAR_UPSERT_BATCH_SIZE,
+) -> None:
+    if not payload:
+        return
+    size = max(1, int(batch_size or _DAILY_KBAR_UPSERT_BATCH_SIZE))
+    for start in range(0, len(payload), size):
+        chunk = payload[start:start + size]
+        db.execute(mysql_insert(DailyKbar).values(chunk).prefix_with("IGNORE"))
     db.commit()
 
 

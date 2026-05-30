@@ -13,7 +13,10 @@ def run_strategy(
     contract = skill.contract or {}
     context = dict(stock)
     industry = stock.get("industry")
-    context["_is_main"] = industry in set(main_industries) and industry != "未分类"
+    context["is_main_theme"] = bool(
+        stock.get("is_main_theme")
+        or (industry in set(main_industries) and industry != "未分类")
+    )
     data_quality = dict(stock.get("data_quality") or {})
     missing_fields = set(data_quality.get("missing_fields") or [])
     data_completeness = float(stock.get("data_completeness_score") or data_quality.get("data_completeness_score") or 100.0)
@@ -190,6 +193,7 @@ def _signal(
         "strategy_id": skill.skill_id,
         "strategy_name": skill.name,
         "version_id": f"{skill.skill_id}:{skill.version}:{skill.contract_hash[:8] if skill.contract_hash else 'none'}",
+        "strategy_independence": _strategy_independence(skill),
         "phase": phase,
         "score": round(score, 2),
         "score_cap": round(score_cap, 2),
@@ -203,6 +207,14 @@ def _signal(
         "risk_flags": risk_flags or [],
         "evidence": evidence or [],
     }
+
+
+def _strategy_independence(skill: StrategySkill) -> float:
+    meta = (getattr(skill, "contract", None) or {}).get("meta") or {}
+    try:
+        return max(0.0, min(1.0, float(meta.get("strategy_independence", 0.85))))
+    except (TypeError, ValueError):
+        return 0.85
 
 
 def _evidence_score_cap(

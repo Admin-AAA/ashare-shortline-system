@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun
+from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun, SkillRegistry
 from app.services.evaluation_metrics import compute_full_metrics as _compute_full_metrics
 from app.services.execution_constraints import (
     entry_execution_block_reason_from_bar,
@@ -19,6 +19,7 @@ from app.services.execution_constraints import (
 )
 
 ENTRY_LOOKAHEAD_DAYS = 2
+BREAKDOWN_HORIZON_DAYS = (3, 5, 10)
 ENTRY_SLIPPAGE_BPS = 10.0
 EXIT_SLIPPAGE_BPS = 10.0
 SUCCESS_RETURN_PCT = 3.0
@@ -329,15 +330,20 @@ def metrics_by_strategy(db: Session, run_mode: str = "formal") -> list[dict[str,
 def _metrics_by_strategy(db: Session, run_mode: str) -> list[dict[str, Any]]:
     rows = _scoped_recommendation_rows(db, run_mode)
     benchmark_by_rec = _benchmark_returns_by_recommendation(db, rows)
+    horizon_records = _horizon_metric_records_by_recommendation(db, rows)
+    registry = {row.skill_id: row for row in db.scalars(select(SkillRegistry)).all()}
 
     buckets: dict[str, dict[str, Any]] = {}
     for rec in rows:
         for signal in _loads(rec.skill_breakdown_json, []):
-            sid = signal.get("strategy_id", "unknown")
+            sid = str(signal.get("strategy_id") or "unknown")
+            skill = registry.get(sid)
             item = buckets.setdefault(
                 sid,
                 {
                     "strategy_id": sid,
+                    "strategy_name": skill.name if skill else sid,
+                    "current_mode": skill.mode if skill else "unknown",
                     "sample_count": 0,
                     "avg_score": 0.0,
                     "rows": [],
@@ -354,6 +360,8 @@ def _metrics_by_strategy(db: Session, run_mode: str) -> list[dict[str, Any]]:
         metrics = _compute_full_metrics(metric_rows)
         result.append({
             "strategy_id": item["strategy_id"],
+            "strategy_name": item["strategy_name"],
+            "current_mode": item["current_mode"],
             "sample_count": item["sample_count"],
             "labeled_count": metrics["trade_count"],
             "triggered_count": metrics["executed_trade_count"],
@@ -363,6 +371,7 @@ def _metrics_by_strategy(db: Session, run_mode: str) -> list[dict[str, Any]]:
             "hit_rate": metrics["trade_accuracy"],
             "avg_score": round(item["avg_score"] / count, 2),
             "avg_return": metrics["average_executed_return"],
+            "horizon_metrics": _horizon_metrics_for_rows(item["rows"], horizon_records),
             **_group_metric_fields(metrics),
         })
     return sorted(result, key=lambda x: (x["sample_count"], x["hit_rate"], x["avg_score"]), reverse=True)
@@ -375,6 +384,7 @@ def metrics_by_setup(db: Session, run_mode: str = "formal") -> list[dict[str, An
 def _metrics_by_setup(db: Session, run_mode: str) -> list[dict[str, Any]]:
     rows = _scoped_recommendation_rows(db, run_mode)
     benchmark_by_rec = _benchmark_returns_by_recommendation(db, rows)
+    horizon_records = _horizon_metric_records_by_recommendation(db, rows)
     buckets: dict[str, dict[str, Any]] = {}
     for row in rows:
         setup = str(row.setup_type or "未命中买点")
@@ -409,6 +419,7 @@ def _metrics_by_setup(db: Session, run_mode: str) -> list[dict[str, Any]]:
                 "avg_score": round(item["avg_score"] / sample_count, 2),
                 "avg_return": metrics["average_executed_return"],
                 "avg_drawdown": metrics["avg_max_drawdown"],
+                "horizon_metrics": _horizon_metrics_for_rows(item["rows"], horizon_records),
                 **_group_metric_fields(metrics),
             }
         )
@@ -483,6 +494,7 @@ def _metrics_by_score_line(db: Session, run_mode: str, score_lines: tuple[int, .
     if not rows:
         return []
     benchmark_by_rec = _benchmark_returns_by_recommendation(db, rows)
+    horizon_records = _horizon_metric_records_by_recommendation(db, rows)
     result: list[dict[str, Any]] = []
     total_count = len(rows)
     for score_line in score_lines:
@@ -502,6 +514,7 @@ def _metrics_by_score_line(db: Session, run_mode: str, score_lines: tuple[int, .
                 "avg_return": metrics["average_executed_return"],
                 "avg_drawdown": metrics["avg_max_drawdown"],
                 "avg_close_return": metrics["avg_close_return"],
+                "horizon_metrics": _horizon_metrics_for_rows(selected, horizon_records),
                 **_group_metric_fields(metrics),
             }
         )
@@ -545,6 +558,108 @@ def _metric_record_from_row(row: Any, benchmark_return_pct: float = 0.0) -> dict
         "false_positive_reason": false_positive_reason,
         "resolved": True,
     }
+
+
+def _horizon_metric_records_by_recommendation(db: Session, rows: list[Any]) -> dict[str, dict[int, dict[str, Any]]]:
+    labeled_rows = [
+        row
+        for row in rows
+        if normalized_outcome_label(row) != OUTCOME_PENDING
+    ]
+    if not labeled_rows:
+        return {}
+    if not all(hasattr(row, "recommend_price") and hasattr(row, "feature_snapshot_json") for row in labeled_rows):
+        return {}
+
+    codes = sorted({str(getattr(row, "code", "")) for row in labeled_rows if getattr(row, "code", None)})
+    trade_dates = [str(getattr(row, "trade_date", "")) for row in labeled_rows if getattr(row, "trade_date", None)]
+    if not codes or not trade_dates:
+        return {}
+
+    bars = db.scalars(
+        select(DailyKbar)
+        .where(DailyKbar.code.in_(codes), DailyKbar.trade_date >= min(trade_dates))
+        .order_by(DailyKbar.code.asc(), DailyKbar.trade_date.asc())
+    ).all()
+
+    bars_by_code: dict[str, list[DailyKbar]] = {}
+    dates_by_code: dict[str, list[str]] = {}
+    for bar in bars:
+        code = str(bar.code)
+        bars_by_code.setdefault(code, []).append(bar)
+        dates_by_code.setdefault(code, []).append(str(bar.trade_date))
+
+    records: dict[str, dict[int, dict[str, Any]]] = {}
+    for row in labeled_rows:
+        rec_id = str(getattr(row, "recommendation_id", "") or "")
+        code = str(getattr(row, "code", "") or "")
+        if not rec_id or code not in bars_by_code:
+            continue
+        for horizon_days in BREAKDOWN_HORIZON_DAYS:
+            simulation = _simulate_outcome(
+                row,
+                bars_by_code.get(code, []),
+                dates_by_code.get(code, []),
+                horizon_days=horizon_days,
+            )
+            if simulation is None:
+                continue
+            records.setdefault(rec_id, {})[horizon_days] = _metric_record_from_simulation(row, simulation)
+    return records
+
+
+def _metric_record_from_simulation(row: Any, simulation: dict[str, Any]) -> dict[str, Any]:
+    executed = bool(simulation.get("entry_triggered"))
+    executed_return = float(simulation.get("executed_return", 0.0) or 0.0) if executed else 0.0
+    accurate = bool(executed and executed_return > 0)
+    false_positive_reason = None if accurate else simulation.get("outcome_reason")
+    if false_positive_reason is None and not executed:
+        false_positive_reason = "未触发买点或不可真实成交"
+    return {
+        "net_return_pct": executed_return,
+        "gross_return_pct": float(simulation.get("close_return", 0.0) or 0.0),
+        "achievable_return_pct": float(simulation.get("achievable_return", 0.0) or 0.0),
+        "morning_drawdown_pct": float(simulation.get("max_drawdown", 0.0) or 0.0),
+        "holding_days": float(simulation.get("holding_days", 0 if not executed else 1) or 0),
+        "benchmark_return_pct": 0.0,
+        "accurate": accurate,
+        "executed": executed,
+        "trade_date": str(getattr(row, "trade_date", "")),
+        "code": getattr(row, "code", ""),
+        "name": getattr(row, "name", ""),
+        "false_positive_reason": false_positive_reason,
+        "resolved": True,
+    }
+
+
+def _horizon_metrics_for_rows(
+    rows: list[Any],
+    horizon_records: dict[str, dict[int, dict[str, Any]]],
+) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for horizon_days in BREAKDOWN_HORIZON_DAYS:
+        records = [
+            record
+            for row in rows
+            for record in [horizon_records.get(str(getattr(row, "recommendation_id", "") or ""), {}).get(horizon_days)]
+            if record is not None
+        ]
+        metrics = _compute_full_metrics(records)
+        result[str(horizon_days)] = {
+            "horizon_days": horizon_days,
+            "sample_count": metrics["trade_count"],
+            "triggered_count": metrics["executed_trade_count"],
+            "success_count": metrics["success_count"],
+            "recommendation_accuracy": metrics["recommendation_accuracy"],
+            "hit_rate": metrics["trade_accuracy"],
+            "average_net_return": metrics["average_net_return"],
+            "average_executed_return": metrics["average_executed_return"],
+            "max_drawdown": metrics["max_drawdown"],
+            "sample_confidence": metrics["sample_confidence"],
+            "accuracy_numerator": metrics["accuracy_numerator"],
+            "accuracy_denominator": metrics["accuracy_denominator"],
+        }
+    return result
 
 
 def _benchmark_returns_by_recommendation(db: Session, rows: list[Any]) -> dict[str, float]:
@@ -596,8 +711,10 @@ def _scoped_recommendation_rows(db: Session, run_mode: str) -> list[Any]:
                 Recommendation.run_id,
                 Recommendation.code,
                 Recommendation.name,
+                Recommendation.recommend_price,
                 Recommendation.final_score,
                 Recommendation.setup_type,
+                Recommendation.feature_snapshot_json,
                 Recommendation.skill_breakdown_json,
                 Recommendation.trade_date,
                 Recommendation.market_context_json,
@@ -906,7 +1023,17 @@ def _resolve_take_profit_price(raw_entry_price: float | None, feature_snapshot: 
 
 
 def _resolve_position_size(feature_snapshot: dict[str, Any]) -> float:
-    label = str(feature_snapshot.get("suggested_position") or "")
+    discipline = feature_snapshot.get("market_discipline")
+    if isinstance(discipline, dict):
+        max_position_pct = _as_float(discipline.get("max_position_pct"))
+        if max_position_pct > 0:
+            return round(min(max_position_pct / 100.0, 1.0), 4)
+        label = str(discipline.get("position_label") or "")
+    else:
+        max_position_pct = _as_float(feature_snapshot.get("max_position_pct"))
+        if max_position_pct > 0:
+            return round(min(max_position_pct / 100.0, 1.0), 4)
+        label = str(feature_snapshot.get("position_label") or "")
     if "大仓" in label:
         return 0.75
     if "中仓" in label:

@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 
 
@@ -9,7 +10,7 @@ class DummySettings:
     market_request_timeout_seconds = 5
     market_scan_size = 60
     market_kline_days = 90
-    news_sources = ""
+    news_sources = "tushare,eastmoney"
     limit_up_cache_ttl_seconds = 3600
     concept_sector_cache_ttl_seconds = 3600
     capital_flow_cache_ttl_seconds = 7200
@@ -25,11 +26,50 @@ class DummySettings:
 # ═══════════════════════════════════════════════════════════════════
 
 
-def test_news_sources_returns_empty():
+def test_news_sources_prefers_tushare_with_eastmoney_fallback():
     from app.services.market_auxiliary import _news_sources
 
     sources = _news_sources(DummySettings())
-    assert sources == []
+    assert sources == ["tushare", "eastmoney"]
+
+
+def test_fetch_tushare_news_maps_announcements(monkeypatch):
+    from app.services.market_auxiliary import _fetch_news
+
+    class FakePro:
+        def anns_d(self, **kwargs):
+            assert kwargs["ts_code"] == "002475.SZ"
+            assert kwargs["start_date"] == "20260522"
+            assert kwargs["end_date"] == "20260529"
+            return pd.DataFrame(
+                [
+                    {
+                        "ts_code": "002475.SZ",
+                        "ann_date": "20260529",
+                        "title": "立讯精密：2026年度业绩预增公告",
+                        "url": "https://example.test/ann/1.pdf",
+                    },
+                    {
+                        "ts_code": "000001.SZ",
+                        "ann_date": "20260529",
+                        "title": "其他股票公告",
+                        "url": "https://example.test/ann/2.pdf",
+                    },
+                ]
+            )
+
+    monkeypatch.setattr("app.services.tushare_client.get_pro", lambda: FakePro())
+
+    rows = _fetch_news("tushare", "002475", DummySettings(), trade_date="2026-05-29")
+
+    assert len(rows) == 1
+    assert rows[0]["source"] == "tushare"
+    assert rows[0]["code"] == "002475"
+    assert rows[0]["announce_date"] == "2026-05-29"
+    assert rows[0]["category"] == "announcement"
+    assert rows[0]["sentiment"] == "positive"
+    assert rows[0]["is_risk_warning"] is False
+    assert rows[0]["article_id"]
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -337,8 +377,8 @@ def test_risk_score_includes_pledge_and_float():
     assert score >= 25  # 15 (pledge) + 10 (float)
 
 
-def test_news_sources_empty_by_default():
+def test_news_sources_enabled_by_default():
     from app.core.config import Settings
 
     s = Settings()
-    assert s.news_sources == ""
+    assert s.news_sources == "tushare,eastmoney"

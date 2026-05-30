@@ -8,6 +8,7 @@ from app.engine.aggregator import (
     _extract_skill_agent_score,
     aggregate,
     apply_pool_rules,
+    resolve_score_line_context,
 )
 from app.engine.agent_skill_runner import enrich_signal_with_agent_review
 
@@ -58,7 +59,7 @@ def _card(code: str, final_score: float):
 
 
 def _neutral_snapshot():
-    return {"sample_count": 100, "up_count": 45, "limit_up_count": 1, "limit_down_count": 0}
+    return {"sample_count": 100, "up_count": 45, "limit_up_count": 0, "limit_down_count": 0}
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +293,32 @@ def test_aggregate_market_discipline_caps_position_in_weak_market():
     assert "跌停压力不低于涨停，先控制回撤" in card["risk_flags"]
 
 
+def test_aggregate_market_discipline_caps_climax_to_light_position():
+    stock = _stock(
+        price=100.0,
+        stop_loss=96.0,
+        take_profit=112.0,
+        evidence_quality_score=92.0,
+        data_authenticity=1.0,
+        risk_score=0.0,
+    )
+    signals = [_signal("strong_support", 95), _signal("support", 90)]
+    snapshot = {
+        "sample_count": 300,
+        "up_count": 230,
+        "limit_up_count": 18,
+        "limit_down_count": 0,
+    }
+
+    card = aggregate(stock, signals, market_score=86, agent_review_score=92, market_snapshot=snapshot)
+    discipline = card["market_discipline"]
+
+    assert discipline["market_regime"] == "强牛·高潮"
+    assert discipline["max_position_pct"] <= 25
+    assert discipline["action"] == "轻仓试错"
+    assert "情绪高潮，提高门槛并减少输出，追高只允许轻仓" in card["risk_flags"]
+
+
 def test_aggregate_records_missing_theme_and_news_risks():
     stock = _stock(
         evidence_quality_score=90,
@@ -316,6 +343,44 @@ def test_aggregate_consensus_tags_empty_when_no_skills():
     }]
     card = aggregate(stock, signals, market_score=70, agent_review_score=70)
     assert isinstance(card.get("consensus_tags"), list)
+
+
+def test_aggregate_exposes_shared_shortline_factors_and_factor_risks():
+    stock = _stock(
+        limit_up_overheat_score=82.0,
+        limit_up_overheat_level="高",
+        sector_ladder_completeness_score=78.0,
+        sector_ladder_level="完整",
+        sector_ladder_limit_up_count=4,
+        sector_ladder_height=3,
+        capital_resonance_score=76.0,
+        capital_resonance_signal="主力共振",
+        capital_resonance_source="capital_flow",
+        is_20cm_stock=True,
+        twenty_cm_risk_score=86.0,
+        twenty_cm_risk_gate="block",
+        twenty_cm_risk_reason="创业板 20cm 标的；换手过高",
+        shortline_factor_explanations={
+            "twenty_cm_risk": {
+                "fields": ["is_20cm_stock", "twenty_cm_risk_score", "twenty_cm_risk_gate"],
+                "logic": "识别 20cm 标的并按波动、换手、流动性给闸门",
+                "data_sources": ["证券代码/交易所/市场板块", "行情快照"],
+                "degradation": "缺少市场板块时用代码前缀推断",
+                "score": 86.0,
+                "value": "block",
+            }
+        },
+    )
+    card = aggregate(stock, [_signal("support", 82)], market_score=70, agent_review_score=78)
+
+    factors = card["shortline_factors"]
+    assert factors["limit_up_overheat"]["level"] == "高"
+    assert factors["sector_ladder"]["height"] == 3
+    assert factors["capital_resonance"]["source"] == "capital_flow"
+    assert factors["twenty_cm_risk"]["gate"] == "block"
+    assert card["shortline_factor_explanations"]["twenty_cm_risk"]["degradation"]
+    assert "20cm 风险闸门阻断" in card["risk_flags"]
+    assert "涨停过热，聚合风控降档" in card["risk_flags"]
 
 
 # ---------------------------------------------------------------------------
@@ -346,8 +411,39 @@ def test_apply_pool_rules_score_line_and_display_limit_are_separate():
     assert all(card["score_line_meta"]["passed"] for card in full)
 
 
+def test_score_line_context_raises_threshold_in_climax_market():
+    snapshot = {"sample_count": 100, "up_count": 72, "limit_up_count": 5, "limit_down_count": 0}
+
+    context = resolve_score_line_context(72, snapshot)
+
+    assert context["market_base"] == "强牛"
+    assert context["market_sentiment"] == "高潮"
+    assert context["effective_score_line"] > 72
+
+
+def test_apply_pool_rules_reduces_output_in_climax_market():
+    cards = [_card(code, score) for code, score in [("A", 90), ("B", 88), ("C", 86), ("D", 84), ("E", 82), ("F", 80)]]
+    snapshot = {"sample_count": 100, "up_count": 72, "limit_up_count": 5, "limit_down_count": 0}
+
+    result = apply_pool_rules(cards, output_count=6, score_line=72, market_snapshot=snapshot)
+
+    assert [card["code"] for card in result] == ["A", "B", "C"]
+    assert all(card["score_line_meta"]["effective_score_line"] > 72 for card in result)
+
+
+def test_apply_pool_rules_allows_only_small_trial_in_weak_ice_point():
+    cards = [_card(code, score) for code, score in [("A", 72), ("B", 70), ("C", 68)]]
+    snapshot = {"sample_count": 100, "up_count": 20, "down_count": 80, "limit_up_count": 0, "limit_down_count": 8}
+
+    result = apply_pool_rules(cards, output_count=6, score_line=72, market_snapshot=snapshot)
+
+    assert [card["code"] for card in result] == ["A"]
+    assert result[0]["score_line_meta"]["market_base"] == "弱势"
+    assert result[0]["score_line_meta"]["market_sentiment"] == "冰点"
+
+
 def test_apply_pool_rules_dynamic_weak_market_line_allows_empty_pool():
-    cards = [_card("A", 73)]
+    cards = [_card("A", 70)]
     snapshot = {"sample_count": 100, "up_count": 20, "down_count": 80, "limit_up_count": 0, "limit_down_count": 8}
     result = apply_pool_rules(cards, score_line=72, market_snapshot=snapshot)
 

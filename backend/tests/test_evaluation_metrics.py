@@ -268,7 +268,8 @@ class TestComputeFullMetrics:
             "unexecutable_count": 1,
             "net_positive_count": 1,
             "net_non_positive_count": 1,
-            "manual_override_count": 0,
+            "manual_override_count": 1,
+            "legacy_accuracy_label_mismatch_count": 1,
         }
         assert result["accuracy_gate_summary"] == policy["gate_counts"]
         assert {item["gate"] for item in policy["failure_breakdown"]} == {
@@ -284,7 +285,7 @@ class TestComputeFullMetrics:
             "pass_rate": 0.25,
         }
 
-    def test_accuracy_policy_exposes_manual_accuracy_label_override(self):
+    def test_accuracy_policy_ignores_legacy_accurate_label_for_core_kpi(self):
         trades = [
             {
                 "net_return_pct": 1.0,
@@ -306,15 +307,17 @@ class TestComputeFullMetrics:
             },
         ]
 
-        policy = compute_full_metrics(trades)["accuracy_policy"]
+        result = compute_full_metrics(trades)
+        policy = result["accuracy_policy"]
 
-        assert policy["accurate_count"] == 1
+        assert result["recommendation_accuracy"] == 1.0
+        assert result["accuracy_numerator"] == 2
+        assert policy["accurate_count"] == 2
         assert policy["strict_three_gate_accurate_count"] == 2
-        assert policy["matches_reported_accuracy"] is False
+        assert policy["matches_reported_accuracy"] is True
         assert policy["gate_counts"]["manual_override_count"] == 1
-        assert policy["failure_breakdown"] == [
-            {"gate": "explicit_accuracy_label", "label": "显式准确标记为否", "count": 1}
-        ]
+        assert policy["gate_counts"]["legacy_accuracy_label_mismatch_count"] == 1
+        assert policy["failure_breakdown"] == []
 
     def test_metrics_sort_trades_by_trade_date_before_drawdown(self):
         trades = [

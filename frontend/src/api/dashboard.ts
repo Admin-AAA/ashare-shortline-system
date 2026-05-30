@@ -1,11 +1,22 @@
 import type { DashboardOverview } from "../types";
 
-export type DashboardApi = {
-  overview: () => Promise<DashboardOverview>;
+type DashboardRequestOptions = {
+  timeoutMs?: number;
+  signal?: AbortSignal;
 };
 
-export function createDashboardApi(request: <T>(path: string, init?: RequestInit) => Promise<T>): DashboardApi {
+export type DashboardApi = {
+  overview: (options?: DashboardRequestOptions) => Promise<DashboardOverview>;
+};
+
+export function createDashboardApi(
+  request: <T>(path: string, init?: RequestInit, options?: DashboardRequestOptions) => Promise<T>,
+): DashboardApi {
   return {
-    overview: () => request<DashboardOverview>("/api/dashboard/overview"),
+    overview: (options) =>
+      request<DashboardOverview>("/api/dashboard/overview", undefined, {
+        timeoutMs: options?.timeoutMs ?? 30_000,
+        signal: options?.signal,
+      }),
   };
 }

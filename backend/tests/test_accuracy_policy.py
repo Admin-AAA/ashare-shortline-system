@@ -98,6 +98,7 @@ def test_overview_metrics_do_not_trust_success_label_when_net_return_is_negative
         "net_positive_count": 1,
         "net_non_positive_count": 2,
         "manual_override_count": 0,
+        "legacy_accuracy_label_mismatch_count": 0,
     }
     assert metrics["accuracy_policy"]["matches_reported_accuracy"] is True
     assert metrics["accuracy_policy"]["failure_breakdown"] == [

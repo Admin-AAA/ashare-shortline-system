@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -16,7 +17,16 @@ from app.schemas.dashboard import (
     RunProgress,
     SkillReviewSummary,
 )
-from app.api.dashboard import build_validation_summary, compose_overview, serialize_market_snapshot_row, serialize_run_progress_row
+from app.api.dashboard import (
+    DASHBOARD_POOL_SCOPE_NOTE,
+    _select_dashboard_recommendation_run,
+    _select_dashboard_run,
+    build_validation_summary,
+    compose_overview,
+    load_dashboard_pool_status,
+    serialize_market_snapshot_row,
+    serialize_run_progress_row,
+)
 from app.services.dashboard_quality_service import build_quality_scorecard, _pick_latest_backtest
 from app.services.candidates.trace import candidate_trace_row
 from app.services.recommendations.projection import (
@@ -189,6 +199,110 @@ def test_dashboard_overview_contract_defaults_sections():
     assert overview.risk_radar.info == 0
     assert overview.current_run.status == "idle"
     assert overview.current_run.heartbeat_stale is False
+
+
+def test_dashboard_run_selector_uses_latest_formal_run(db):
+    older_formal = SimpleNamespace(
+        run_id="dash_formal_old",
+        run_name="旧正式推荐",
+        run_mode="formal",
+        trade_date="2099-05-26",
+        started_at=datetime(2099, 5, 26, 9, 30),
+        finished_at=datetime(2099, 5, 26, 9, 45),
+        universe_count=0,
+        recommended_count=0,
+        market_scope="all",
+        risk_template="balanced",
+        score_line=72.0,
+        output_count=6,
+        selected_skills_json="[]",
+        params_json="{}",
+        market_snapshot_json="{}",
+        result_summary_json="{}",
+        filter_audit_json="{}",
+        status="completed",
+    )
+    latest_formal = SimpleNamespace(
+        **{**older_formal.__dict__, "run_id": "dash_formal_latest", "started_at": datetime(2099, 5, 27, 9, 30)}
+    )
+    latest_experiment = SimpleNamespace(
+        **{
+            **older_formal.__dict__,
+            "run_id": "dash_experiment_latest",
+            "run_mode": "experiment",
+            "started_at": datetime(2099, 5, 28, 9, 30),
+        }
+    )
+
+    from app.models.tables import RecommendationRun
+
+    db.add_all([RecommendationRun(**older_formal.__dict__), RecommendationRun(**latest_formal.__dict__), RecommendationRun(**latest_experiment.__dict__)])
+    db.commit()
+
+    selected = _select_dashboard_run(db)
+
+    assert selected is not None
+    assert selected.run_id == "dash_formal_latest"
+
+
+def test_dashboard_recommendations_use_latest_completed_formal_trade_date(db):
+    from app.models.tables import RecommendationRun
+
+    formal_base = {
+        "run_name": "首页推荐选择",
+        "run_mode": "formal",
+        "universe_count": 0,
+        "recommended_count": 0,
+        "market_scope": "all",
+        "risk_template": "balanced",
+        "score_line": 72.0,
+        "output_count": 6,
+        "selected_skills_json": "[]",
+        "params_json": "{}",
+        "market_snapshot_json": "{}",
+        "result_summary_json": "{}",
+        "filter_audit_json": "{}",
+    }
+    db.add_all([
+        RecommendationRun(
+            **formal_base,
+            run_id="dash_rec_old_completed",
+            trade_date="2099-05-27",
+            status="completed",
+            started_at=datetime(2099, 5, 27, 9, 30),
+            finished_at=datetime(2099, 5, 27, 9, 45),
+        ),
+        RecommendationRun(
+            **formal_base,
+            run_id="dash_rec_latest_failed",
+            trade_date="2099-05-28",
+            status="failed",
+            started_at=datetime(2099, 5, 28, 9, 30),
+            finished_at=datetime(2099, 5, 28, 9, 45),
+        ),
+        RecommendationRun(
+            **{**formal_base, "run_mode": "experiment"},
+            run_id="dash_rec_latest_completed_exp",
+            trade_date="2099-05-28",
+            status="completed",
+            started_at=datetime(2099, 5, 28, 10, 30),
+            finished_at=datetime(2099, 5, 28, 10, 45),
+        ),
+        RecommendationRun(
+            **formal_base,
+            run_id="dash_rec_latest_completed_formal",
+            trade_date="2099-05-28",
+            status="completed",
+            started_at=datetime(2099, 5, 28, 11, 30),
+            finished_at=datetime(2099, 5, 28, 11, 45),
+        ),
+    ])
+    db.commit()
+
+    selected = _select_dashboard_recommendation_run(db)
+
+    assert selected is not None
+    assert selected.run_id == "dash_rec_latest_completed_formal"
 
 
 def test_cockpit_recommendation_rejects_invalid_risk_level():
@@ -463,6 +577,66 @@ def test_build_validation_summary_uses_cached_pool_messages():
     assert validation["alerts"]["messages"] == ["日K覆盖不足"]
     assert validation["quality_gate"]["overall_score"] == 68
     assert validation["quality_gate"]["validation_score"] == 61
+
+
+def test_load_dashboard_pool_status_uses_summary_mode_without_preview_limit(monkeypatch):
+    from app.api import data_sources as data_sources_api
+
+    calls = []
+
+    def fake_cached_pool_status(db, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("cache_only"):
+            return {
+                "summary": {"active_unified_quote_count": 0, "eligible_quote_count": 0},
+                "recommendation_readiness": {
+                    "status": "blocked",
+                    "can_run_local_recommendation": False,
+                    "messages": ["数据池缓存尚未预热"],
+                },
+            }
+        return {
+            "summary": {"active_unified_quote_count": 1200, "eligible_quote_count": 1091},
+            "recommendation_readiness": {
+                "status": "ready",
+                "can_run_local_recommendation": True,
+                "messages": ["本地池可运行"],
+                "kline": {
+                    "checked_count": 1200,
+                    "ready_count": 1091,
+                    "example_count": 8,
+                    "example_limit": 8,
+                    "examples": [],
+                },
+            },
+        }
+
+    monkeypatch.setattr(data_sources_api, "get_cached_local_pool_status", fake_cached_pool_status)
+
+    status = load_dashboard_pool_status(None)
+
+    assert status["overview_scope_note"] == DASHBOARD_POOL_SCOPE_NOTE
+    assert status["recommendation_readiness"]["kline"]["checked_count"] == 1200
+    assert calls == [
+        {
+            "u_limit": 0,
+            "u_offset": 0,
+            "b_limit": 0,
+            "b_offset": 0,
+            "include_paginated": False,
+            "include_details": False,
+            "cache_only": True,
+        },
+        {
+            "u_limit": 0,
+            "u_offset": 0,
+            "b_limit": 0,
+            "b_offset": 0,
+            "include_paginated": False,
+            "include_details": False,
+            "cache_only": False,
+        },
+    ]
 
 
 def test_build_quality_scorecard_combines_data_validation_execution_research():
@@ -743,6 +917,46 @@ def test_build_quality_scorecard_derives_accuracy_gate_summary_for_legacy_metric
     assert gate["executable_count"] == 3
     assert gate["net_positive_count"] == 2
     assert gate["net_non_positive_count"] == 1
+
+
+def test_build_quality_scorecard_separates_immature_history_from_remediable_gaps():
+    common_kwargs = {
+        "task_health": {"failed_count": 0, "running_count": 0},
+        "current_run": {"status": "completed", "is_stale": False},
+        "latest_backtest": None,
+        "recent_task_runs": [{"status": "completed"}],
+        "research_metrics": {"total_recommendations": 0},
+    }
+
+    remediable = build_quality_scorecard(
+        data_health={
+            "eligible_bar_coverage_pct": 99,
+            "missing_bar_count": 0,
+            "stale_bar_count": 0,
+            "short_history_count": 10,
+            "immature_history_count": 0,
+            "can_run_local_recommendation": True,
+        },
+        **common_kwargs,
+    )
+    immature = build_quality_scorecard(
+        data_health={
+            "eligible_bar_coverage_pct": 99,
+            "missing_bar_count": 0,
+            "stale_bar_count": 0,
+            "short_history_count": 0,
+            "immature_history_count": 10,
+            "can_run_local_recommendation": True,
+        },
+        **common_kwargs,
+    )
+
+    remediable_data = remediable["dimensions"]["data"]
+    immature_data = immature["dimensions"]["data"]
+    assert remediable_data["score"] == 90.0
+    assert immature_data["score"] == 96.0
+    assert immature_data["metrics"]["immature_history_count"] == 10
+    assert any("上市未满30根日K" in item for item in immature_data["highlights"])
 
 
 def test_progress_helpers_are_stable():

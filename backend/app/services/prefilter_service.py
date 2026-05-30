@@ -12,18 +12,13 @@ def apply_prefilters(
     min_candidate_count: int = 24,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     ordered_stocks = list(stocks)
-    common_filtered: list[dict[str, Any]] = []
+
+    # 策略优先架构：不再使用全局一刀切预过滤。
+    # 每个策略通过 strategy.yaml 的 universe.include/exclude 规则自主定义候选范围。
+    # common_tradeability_exclusion_reason 保留为可选参考函数，策略可在 universe 中引用。
+    common_filtered: list[dict[str, Any]] = ordered_stocks
     common_exclusion_counts: Counter[str] = Counter()
     common_reason_by_code: dict[str, str | None] = {}
-
-    for stock in ordered_stocks:
-        code = str(stock.get("code") or "")
-        reason = common_tradeability_exclusion_reason(stock)
-        common_reason_by_code[code] = reason
-        if reason is not None:
-            common_exclusion_counts[reason] += 1
-            continue
-        common_filtered.append(stock)
 
     per_skill: dict[str, dict[str, Any]] = {}
     union_codes: set[str] = set()
@@ -139,20 +134,13 @@ def apply_prefilters(
         )
 
     audit = {
-        "mode": "common_tradeability_plus_skill_market_prefilter",
+        "mode": "skill_driven_universe_prefilter",
         "input_count": len(ordered_stocks),
         "common": {
             "pass_count": len(common_filtered),
-            "excluded_count": max(0, len(ordered_stocks) - len(common_filtered)),
-            "exclusion_counts": dict(common_exclusion_counts),
-            "thresholds": {
-                "amount_yi_min": 1.5,
-                "turnover_rate_min": 1.0,
-                "turnover_rate_max": 12.0,
-                "late_acceleration_pos60": 96.0,
-                "late_acceleration_dist60": 35.0,
-                "max_drawdown20_min": -18.0,
-            },
+            "excluded_count": 0,
+            "exclusion_counts": {},
+            "note": "全局预过滤已移除；各策略通过 strategy.yaml universe 规则自主筛选",
         },
         "per_skill": per_skill,
         "union_pass_count": union_pass_count,

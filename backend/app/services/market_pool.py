@@ -4,6 +4,7 @@ import logging
 import statistics
 import time
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -24,6 +25,7 @@ from app.models.tables import (
     LimitUpBoard,
     MarketSnapshot,
     NewsAnnouncement,
+    Stock,
     StockQuote,
 )
 from app.services.data_sources import enabled_sources
@@ -79,6 +81,7 @@ NUMERIC_QUOTE_FIELDS = [
 STRICT_CONSENSUS_FIELDS = {"price": 0.018, "pct": 0.08}
 DERIVED_RETURN_FIELDS = {"chg60", "ytd_chg"}
 LOCAL_DAILY_BAR_FIELDS = DERIVED_RETURN_FIELDS | {"ma5", "ma10", "ma20"}
+STOCK_QUOTE_UPSERT_BATCH_SIZE = 500
 
 
 def _normalize_trade_date(value: Any) -> str:
@@ -380,26 +383,39 @@ def local_pool_recommendation_readiness(
     ready_count = 0
     missing_count = 0
     short_history_count = 0
+    immature_history_count = 0
     stale_count = 0
     checked_count = 0
+    maturity_map = _load_history_maturity_map(db, candidate_codes) if candidate_codes else {}
     for quote in candidates:
         checked_count += 1
         code = str(quote.get("code") or "")
         summary = bar_summaries.get(code, {})
-        bar_count = summary.get("bar_count", 0)
-        latest_bar_date = summary.get("latest_trade_date")
+        bar_count = int(summary.get("bar_count") or 0)
+        latest_bar_date = _normalize_trade_date(summary.get("latest_trade_date"))
         quote_date = min(str(quote.get("trade_date") or date.today().isoformat()), _latest_allowed_bar_date())
         quote_date = _latest_allowed_bar_date(date.fromisoformat(quote_date))
+        natural_short_history = False
         if bar_count < min_bar_count:
             if bar_count <= 0:
                 missing_count += 1
             else:
                 short_history_count += 1
+                maturity = maturity_map.get(code, {})
+                natural_short_history = _is_natural_short_history(
+                    bar_count=bar_count,
+                    latest_bar_date=latest_bar_date,
+                    quote_date=quote_date,
+                    first_bar_date=_normalize_trade_date(summary.get("first_trade_date") or maturity.get("first_bar_date")),
+                    list_date=_normalize_trade_date(summary.get("list_date") or maturity.get("list_date")),
+                )
+                if natural_short_history:
+                    immature_history_count += 1
             if len(examples) < 8:
                 examples.append(
                     _readiness_example(
                         quote,
-                        "本地日K不足30条",
+                        "上市未满30根日K" if natural_short_history else "本地日K不足30条",
                         bar_count,
                         latest_bar_date,
                         quote_date,
@@ -476,13 +492,16 @@ def local_pool_recommendation_readiness(
         gap_parts = []
         if missing_count:
             gap_parts.append(f"日K缺失 {missing_count} 只")
-        if short_history_count:
-            gap_parts.append(f"短历史 {short_history_count} 只")
+        remediable_short_history = max(0, short_history_count - immature_history_count)
+        if remediable_short_history:
+            gap_parts.append(f"短历史 {remediable_short_history} 只")
         if stale_count:
             gap_parts.append(f"日K过期 {stale_count} 只")
         messages.append(f"当前存在数据缺口：{'，'.join(gap_parts)}。")
-    elif short_history_count:
-        messages.append(f"当前存在数据缺口：短历史 {short_history_count} 只。")
+    elif short_history_count > immature_history_count:
+        messages.append(f"当前存在数据缺口：短历史 {short_history_count - immature_history_count} 只。")
+    if immature_history_count:
+        messages.append(f"另有 {immature_history_count} 只候选属于上市未满30根日K，按成熟度风险处理。")
 
     return {
         "status": status,
@@ -505,6 +524,7 @@ def local_pool_recommendation_readiness(
             "ready_count": ready_count,
             "missing_count": missing_count,
             "short_history_count": short_history_count,
+            "immature_history_count": immature_history_count,
             "stale_count": stale_count,
             "min_bars": min_bar_count,
             "coverage_count": ready_count,
@@ -513,6 +533,8 @@ def local_pool_recommendation_readiness(
                 [str(summary.get("latest_trade_date") or "") for summary in bar_summaries.values() if summary.get("latest_trade_date")],
                 default=None,
             ),
+            "example_count": len(examples),
+            "example_limit": 8,
             "examples": examples,
         },
         "scan": {
@@ -1106,12 +1128,16 @@ def _merge_quality(
     return quality
 
 
-def _persist_stock_quotes(db: Session, rows: list[dict[str, Any]]) -> None:
+def _persist_stock_quotes(
+    db: Session,
+    rows: list[dict[str, Any]],
+    *,
+    batch_size: int = STOCK_QUOTE_UPSERT_BATCH_SIZE,
+) -> None:
     if not rows:
         return
 
     trade_date = _latest_trade_date_from_quotes(rows)
-    active_codes = {row["code"] for row in rows}
     seen_batch: set[tuple] = set()
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     payload: list[dict[str, Any]] = []
@@ -1148,49 +1174,39 @@ def _persist_stock_quotes(db: Session, rows: list[dict[str, Any]]) -> None:
             }
         )
     if payload:
-        stmt = mysql_insert(StockQuote).values(payload)
-        db.execute(
-            stmt.on_duplicate_key_update(
-                name=stmt.inserted.name,
-                price=stmt.inserted.price,
-                pct=stmt.inserted.pct,
-                volume=stmt.inserted.volume,
-                amount_yi=stmt.inserted.amount_yi,
-                turnover_rate=stmt.inserted.turnover_rate,
-                pe_ttm=stmt.inserted.pe_ttm,
-                total_mv_yi=stmt.inserted.total_mv_yi,
-                free_mv_yi=stmt.inserted.free_mv_yi,
-                chg60=stmt.inserted.chg60,
-                high=stmt.inserted.high,
-                low=stmt.inserted.low,
-                open=stmt.inserted.open,
-                preclose=stmt.inserted.preclose,
-                industry=stmt.inserted.industry,
-                source=stmt.inserted.source,
-                source_count=stmt.inserted.source_count,
-                quality_score=stmt.inserted.quality_score,
-                freshness_status=stmt.inserted.freshness_status,
-                snapped_at=stmt.inserted.snapped_at,
-            )
-        )
-    if active_codes:
         db.execute(
             update(StockQuote)
-            .where(
-                StockQuote.code.in_(active_codes),
-                StockQuote.trade_date != trade_date,
-                StockQuote.freshness_status != "inactive",
-            )
+            .where(StockQuote.freshness_status != "inactive")
             .values(freshness_status="inactive")
         )
-        db.execute(
-            update(StockQuote)
-            .where(
-                StockQuote.code.not_in(active_codes),
-                StockQuote.freshness_status != "inactive",
+        size = max(1, int(batch_size or STOCK_QUOTE_UPSERT_BATCH_SIZE))
+        for start in range(0, len(payload), size):
+            chunk = payload[start:start + size]
+            stmt = mysql_insert(StockQuote).values(chunk)
+            db.execute(
+                stmt.on_duplicate_key_update(
+                    name=stmt.inserted.name,
+                    price=stmt.inserted.price,
+                    pct=stmt.inserted.pct,
+                    volume=stmt.inserted.volume,
+                    amount_yi=stmt.inserted.amount_yi,
+                    turnover_rate=stmt.inserted.turnover_rate,
+                    pe_ttm=stmt.inserted.pe_ttm,
+                    total_mv_yi=stmt.inserted.total_mv_yi,
+                    free_mv_yi=stmt.inserted.free_mv_yi,
+                    chg60=stmt.inserted.chg60,
+                    high=stmt.inserted.high,
+                    low=stmt.inserted.low,
+                    open=stmt.inserted.open,
+                    preclose=stmt.inserted.preclose,
+                    industry=stmt.inserted.industry,
+                    source=stmt.inserted.source,
+                    source_count=stmt.inserted.source_count,
+                    quality_score=stmt.inserted.quality_score,
+                    freshness_status=stmt.inserted.freshness_status,
+                    snapped_at=stmt.inserted.snapped_at,
+                )
             )
-            .values(freshness_status="inactive")
-        )
 
 
 def _persist_kbars(db: Session, bars: list[dict[str, Any]]) -> None:
@@ -1491,6 +1507,52 @@ def _load_cached_bars_summary(
     }
 
 
+def _load_history_maturity_map(db: Session, codes: list[str]) -> dict[str, dict[str, str | None]]:
+    normalized_codes = [str(code or "").strip() for code in codes if str(code or "").strip()]
+    if not normalized_codes:
+        return {}
+    result: dict[str, dict[str, str | None]] = {}
+    first_bar_rows = db.execute(
+        select(
+            DailyKbar.code.label("code"),
+            func.min(DailyKbar.trade_date).label("first_bar_date"),
+        )
+        .where(DailyKbar.code.in_(normalized_codes))
+        .group_by(DailyKbar.code)
+    ).all()
+    for row in first_bar_rows:
+        result[str(row.code)] = {
+            "first_bar_date": _normalize_trade_date(row.first_bar_date),
+            "list_date": None,
+        }
+    stock_rows = db.execute(
+        select(Stock.code, Stock.list_date).where(Stock.code.in_(normalized_codes))
+    ).all()
+    for row in stock_rows:
+        item = result.setdefault(str(row.code), {"first_bar_date": None, "list_date": None})
+        item["list_date"] = _normalize_trade_date(row.list_date)
+    return result
+
+
+def _is_natural_short_history(
+    *,
+    bar_count: int,
+    latest_bar_date: str | None,
+    quote_date: str,
+    first_bar_date: str | None,
+    list_date: str | None,
+) -> bool:
+    return bool(
+        0 < int(bar_count or 0)
+        and latest_bar_date
+        and quote_date
+        and latest_bar_date >= quote_date
+        and first_bar_date
+        and list_date
+        and first_bar_date <= list_date
+    )
+
+
 def _bars_cover_quote_date(bars: list[dict[str, Any]], quote: dict[str, Any]) -> bool:
     quote_date = str(quote.get("trade_date") or date.today().isoformat())
     quote_date = min(quote_date, _latest_allowed_bar_date())
@@ -1584,8 +1646,6 @@ def refresh_concept_sectors(db: Session, trade_date: str | None = None) -> list[
         normalized_persister=_persist_normalized_concept_sector,
     )
     # 额外持久化热门板块的成分股（Tushare）
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
     from app.services.tushare_client import fetch_concept_members
 
     # 检查快照交易日是否已有成分股数据，有则跳过
@@ -1606,15 +1666,31 @@ def refresh_concept_sectors(db: Session, trade_date: str | None = None) -> list[
     sector_codes = [str(s.get("sector_code") or "") for s in top_sectors]
     sector_codes = [c for c in sector_codes if c]
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        futures = {pool.submit(fetch_concept_members, sc, target_trade_date): sc for sc in sector_codes}
-        for future in as_completed(futures):
+    timeout_seconds = max(1.0, float(getattr(settings, "concept_member_fetch_timeout_seconds", 30.0) or 30.0))
+    pool = ThreadPoolExecutor(max_workers=6)
+    futures = {pool.submit(fetch_concept_members, sc, target_trade_date): sc for sc in sector_codes}
+    processed: set[Any] = set()
+    try:
+        for future in as_completed(futures, timeout=timeout_seconds):
+            processed.add(future)
             try:
                 stocks = future.result()
                 if stocks:
                     all_stocks.extend(stocks)
             except Exception:
                 pass
+    except TimeoutError:
+        logger.warning(
+            "概念板块成分股拉取超过 %.1fs，已降级使用已完成结果：%d/%d 个板块",
+            timeout_seconds,
+            len(processed),
+            len(futures),
+        )
+    finally:
+        for future in futures:
+            if future not in processed:
+                future.cancel()
+        pool.shutdown(wait=False, cancel_futures=True)
 
     if all_stocks:
         _persist_concept_sector_stocks(db, all_stocks)
@@ -1681,19 +1757,23 @@ def refresh_news_for_codes(db: Session, codes: list[str], trade_date: str | None
     sources = enabled_sources(db, "news", _news_sources(settings))
     if not sources:
         return NewsRefreshResult({}, [])
-    source = sources[0]
     result: dict[str, list[dict[str, Any]]] = defaultdict(list)
     checked_codes: list[str] = []
     target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
-    ttl_days = _date_window_days(settings.news_cache_ttl_seconds, minimum_days=2)
+    ttl_days = _date_window_days(settings.news_cache_ttl_seconds, minimum_days=7)
     latest_allowed = date.fromisoformat(target_trade_date)
     earliest_allowed = latest_allowed - timedelta(days=ttl_days)
     for code in codes:
+        code_checked = False
+        seen_articles: set[tuple[str, str]] = set()
         try:
-            items = _fetch_news(source, code, settings, trade_date=target_trade_date)
-            checked_codes.append(code)
-            if items:
-                normalized_items = []
+            normalized_items = []
+            for source in sources:
+                try:
+                    items = _fetch_news(source, code, settings, trade_date=target_trade_date)
+                    code_checked = True
+                except Exception:
+                    continue
                 for item in items:
                     announce_date = _normalize_trade_date(item.get("announce_date"))
                     if target_trade_date:
@@ -1702,11 +1782,20 @@ def refresh_news_for_codes(db: Session, codes: list[str], trade_date: str | None
                         announce_day = date.fromisoformat(announce_date)
                         if announce_day > latest_allowed or announce_day < earliest_allowed:
                             continue
-                    normalized_items.append({**item, "announce_date": announce_date})
-                if not normalized_items:
-                    continue
-                _persist_normalized_news(db, normalized_items)
-                result[code] = normalized_items
+                    article_key = (
+                        str(item.get("source") or source or "unknown"),
+                        str(item.get("article_id") or ""),
+                    )
+                    if not article_key[1] or article_key in seen_articles:
+                        continue
+                    seen_articles.add(article_key)
+                    normalized_items.append({**item, "source": article_key[0], "announce_date": announce_date})
+            if code_checked:
+                checked_codes.append(code)
+            if not normalized_items:
+                continue
+            _persist_normalized_news(db, normalized_items)
+            result[code] = normalized_items
         except Exception:
             pass
     db.commit()

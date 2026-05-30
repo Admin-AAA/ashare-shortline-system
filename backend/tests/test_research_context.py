@@ -20,12 +20,29 @@ def test_research_context_projects_skill_input_without_raw_transport_fields():
         "data_quality": {"strict_real_data": True, "kline_days": 90, "missing_fields": []},
         "_bars": [{"code": "000001", "trade_date": "2026-05-08", "close": 10.5}],
         "dsa_profile": {"ma5": 10.0},
-        "_is_main": True,
-        "_is_leader_candidate": True,
-        "_sentiment_phase": "活跃",
-        "_consensus_signal": "主力吸筹",
-        "_dragon_tiger_dispersion": "集中",
-        "_dragon_tiger_inst_ratio": 0.66,
+        "is_main_theme": True,
+        "is_shortline_leader_candidate": True,
+        "shortline_leader_score": 82.0,
+        "market_sentiment_phase": "活跃",
+        "capital_resonance_score": 78.0,
+        "capital_resonance_signal": "主力共振",
+        "capital_resonance_source": "capital_flow",
+        "dragon_tiger_buy_dispersion": "集中",
+        "dragon_tiger_inst_buy_ratio": 0.66,
+        "limit_up_overheat_score": 24.0,
+        "limit_up_overheat_level": "低",
+        "sector_ladder_completeness_score": 76.0,
+        "sector_ladder_level": "完整",
+        "twenty_cm_risk_gate": "pass",
+        "shortline_factor_explanations": {
+            "capital_resonance": {
+                "fields": ["capital_resonance_score", "capital_resonance_signal"],
+                "logic": "资金流共振",
+                "data_sources": ["Tushare/本地资金流池"],
+                "degradation": "缺少资金流时回退到价量",
+                "source": "capital_flow",
+            }
+        },
     }
     snapshot = {
         "snapshot_id": "snapshot_test",
@@ -40,12 +57,18 @@ def test_research_context_projects_skill_input_without_raw_transport_fields():
     assert skill_input["research_context_version"] == "research_context.v1"
     assert "_bars" not in skill_input
     assert "dsa_profile" not in skill_input
-    assert skill_input["_is_main"] is True
-    assert skill_input["_is_leader_candidate"] is True
-    assert skill_input["_sentiment_phase"] == "活跃"
-    assert skill_input["_consensus_signal"] == "主力吸筹"
-    assert skill_input["_dragon_tiger_dispersion"] == "集中"
-    assert skill_input["_dragon_tiger_inst_ratio"] == 0.66
+    assert "_is_main" not in skill_input
+    assert "_is_leader_candidate" not in skill_input
+    assert "_sentiment_phase" not in skill_input
+    assert "_consensus_signal" not in skill_input
+    assert skill_input["is_main_theme"] is True
+    assert skill_input["is_shortline_leader_candidate"] is True
+    assert skill_input["market_sentiment_phase"] == "活跃"
+    assert skill_input["capital_resonance_signal"] == "主力共振"
+    assert skill_input["dragon_tiger_buy_dispersion"] == "集中"
+    assert skill_input["dragon_tiger_inst_buy_ratio"] == 0.66
+    assert skill_input["shortline_factor_explanations"]["capital_resonance"]["source"] == "capital_flow"
+    assert context.to_dict()["themes"]["is_main_theme"] is True
     assert skill_input["source_trace"]["quote_source"] == "sina"
     assert skill_input["source_trace"]["kline_source"] == "tencent"
     assert "research_context" in context.to_feature_snapshot()
