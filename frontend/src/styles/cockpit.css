@@ -935,6 +935,13 @@ select option {
   gap: 12px;
 }
 
+.explanation-card-header {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 12px;
+  align-items: flex-start;
+}
+
 .candidate-card-actions {
   display: flex;
   justify-content: flex-end;
@@ -949,7 +956,7 @@ select option {
   align-items: start;
 }
 
-.explain-grid.single .candidate-main {
+.explain-grid.single .explanation-card-header {
   grid-column: 1 / -1;
 }
 
@@ -966,10 +973,18 @@ select option {
 .explanation-card.risk-medium { border-color: color-mix(in srgb, var(--warning) 45%, var(--line)); }
 .explanation-card.risk-low { border-color: color-mix(in srgb, var(--positive) 35%, var(--line)); }
 
+.explanation-empty {
+  margin-top: 0;
+}
+
 .mini-table {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
+}
+
+.explanation-card .mini-table {
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
 }
 
 .mini-table span {

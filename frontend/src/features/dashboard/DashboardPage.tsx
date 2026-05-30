@@ -216,6 +216,11 @@ function resolveRunStageStates(status: unknown, phase: unknown, stagePhases: str
 
 function CandidateWorkspace({ data }: { data: DashboardOverview }) {
   const empty = candidateEmptyState(data);
+  const emptyState = empty ?? {
+    title: "当前没有达标龙头候选",
+    reason: "缺少运行归因，不能直接视为市场无机会。",
+    detail: "请检查最近一次运行状态、数据池门禁和筛选条件。",
+  };
   const openReplay = (recommendationId: string) => {
     window.sessionStorage.setItem("ashare:pendingReplayId", recommendationId);
     window.dispatchEvent(new CustomEvent("ashare:navigate", { detail: { section: "history", recommendationId } }));
@@ -233,12 +238,26 @@ function CandidateWorkspace({ data }: { data: DashboardOverview }) {
         </div>
         <strong>{data.recommendations.length} 只</strong>
       </section>
-      <DragonCandidatesPanel items={data.recommendations} emptyState={empty} />
-      <div className={`explain-grid ${data.recommendations.length <= 1 ? "single" : ""}`}>
-        {data.recommendations.map((item) => (
-          <ExplanationCard key={item.recommendation_id} item={item} onOpenReplay={openReplay} />
-        ))}
-      </div>
+      {data.recommendations.length ? (
+        <div className={`explain-grid ${data.recommendations.length <= 1 ? "single" : ""}`}>
+          {data.recommendations.map((item, index) => (
+            <ExplanationCard key={item.recommendation_id} item={item} rank={index + 1} onOpenReplay={openReplay} />
+          ))}
+        </div>
+      ) : (
+        <div className="candidate-empty explanation-empty">
+          <strong>{emptyState.title}</strong>
+          <span>{emptyState.reason}</span>
+          <p>{emptyState.detail}</p>
+          <button
+            className="btn primary candidate-empty-action"
+            type="button"
+            onClick={goToControlCenter}
+          >
+            去控制中心处理
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -835,22 +854,29 @@ function ValidationWorkspace({ data }: { data: DashboardOverview }) {
 
 function ExplanationCard({
   item,
+  rank,
   onOpenReplay,
 }: {
   item: CockpitRecommendation;
+  rank: number;
   onOpenReplay: (recommendationId: string) => void;
 }) {
   return (
     <article className={`cockpit-panel explanation-card risk-${item.risk_level}`}>
-      <div className="candidate-main">
-        <div>
-          <strong>{item.name}</strong>
-          <span>{item.code} · {item.industry || "未分类"}</span>
+      <div className="explanation-card-header">
+        <div className="candidate-rank">{String(rank).padStart(2, "0")}</div>
+        <div className="candidate-main">
+          <div>
+            <strong>{item.name}</strong>
+            <span>{item.code} · {item.industry || "未分类"}</span>
+          </div>
+          <div className="score-pill">{item.final_score.toFixed(1)}</div>
         </div>
-        <div className="score-pill">{item.final_score.toFixed(1)}</div>
       </div>
       <p>{item.rationale || "暂无解释"}</p>
       <div className="mini-table">
+        <span>买点<strong>{item.setup_type || "未识别买点"}</strong></span>
+        <span>Gap<strong>{item.score_gap == null ? "-" : item.score_gap.toFixed(1)}</strong></span>
         <span>风险<strong>{riskLevelLabel(item.risk_level)}</strong></span>
         <span>共识<strong>{item.consensus_label}</strong></span>
         <span title={quoteSourceTitle(item.data_quality.quote_source_count)}>报价源<strong>{quoteSourceText(item.data_quality.quote_source_count)}</strong></span>
