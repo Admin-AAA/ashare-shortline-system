@@ -61,6 +61,8 @@ prefilter:
         reason: "broken_trend"
       - when: "pos20 < 50"
         reason: "low_pos20_weakness"
+      - when: "avg_cost > 200"
+        reason: "high_avg_cost_overhang"
 
 phases:
   - name: 风险否决
