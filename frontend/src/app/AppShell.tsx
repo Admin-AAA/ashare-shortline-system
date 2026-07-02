@@ -1,5 +1,6 @@
 import { RefreshCcw, SunMoon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ErrorBoundary } from "../components/ErrorBoundary";
 import ControlCenterPage from "../features/control/ControlCenterPage";
 import DashboardPage from "../features/dashboard/DashboardPage";
 import PresetMatrixPage from "../features/matrix/PresetMatrixPage";
@@ -125,6 +126,7 @@ export default function AppShell() {
             </button>
           </div>
         </header>
+        <ErrorBoundary>
         {section === "control" ? (
           <ControlCenterPage refreshSignal={refreshSignal} />
         ) : section === "matrix" ? (
@@ -134,6 +136,7 @@ export default function AppShell() {
         ) : (
           <DashboardPage section={section} refreshSignal={refreshSignal} />
         )}
+        </ErrorBoundary>
       </main>
     </div>
   );
