@@ -66,7 +66,7 @@
 stance: strong_support | support | neutral_support | neutral | oppose | veto
 score: 0-100（与规则评分对齐，审查后可微调 ±5 分，不要大幅偏离）
 confidence: 0.0-1.0（数据充分度 + 判断确定性）
-supports: ["支撑证据1", "支撑证据2", ...]（最多 6 条，每条引用具体数据）
+evidence: ["支撑证据1", "支撑证据2", ...]（最多 6 条，每条引用具体数据）
 risks: ["风险1", "风险2", ...]（最多 6 条）
 summary: "一句中文结论"
 market_regime_judgment: "对当前市场状态的判断"
