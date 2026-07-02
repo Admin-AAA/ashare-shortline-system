@@ -151,10 +151,10 @@ export default function AppShell() {
             type="button"
             className={`test-trigger ${activeGroup === "test" ? "active" : ""}`}
             onClick={() => setTestDrawerOpen(true)}
-            title="测试窗口：驾驶舱 / 运行 / 验收 / 控制"
+            title="配置窗口：驾驶舱 / 运行 / 验收 / 控制"
           >
             <FlaskConical size={15} />
-            <span>测试窗口</span>
+            <span>配置窗口</span>
           </button>
           <button
             type="button"
@@ -223,11 +223,11 @@ export default function AppShell() {
             className="cosmic-drawer"
             onClick={(event) => event.stopPropagation()}
             role="dialog"
-            aria-label="测试窗口"
+            aria-label="配置窗口"
           >
             <div className="drawer-head">
               <div>
-                <strong>测试窗口</strong>
+                <strong>配置窗口</strong>
                 <span>驾驶舱 / 运行 / 验收 / 控制</span>
               </div>
               <button

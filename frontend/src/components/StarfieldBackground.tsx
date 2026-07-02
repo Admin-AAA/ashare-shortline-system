@@ -5,20 +5,22 @@ type Theme = "dark" | "light";
 
 const PALETTE = {
   dark: {
-    fog: 0x05070d,
-    grid: 0x2a4a7a,
-    gridOpacity: 0.38,
-    particle: 0x6ab4ff,
-    particleOpacity: 0.85,
-    particleSize: 0.18,
+    fog: 0x0a0a1e,
+    grid: 0x6a9fff,
+    gridOpacity: 0.55,
+    particleA: 0x4a5fff, // 靛蓝
+    particleB: 0x5fffd4, // 青绿
+    particleOpacity: 1.0,
+    particleSize: 0.28,
   },
   light: {
-    fog: 0xe8e4dc,
-    grid: 0x9a8e7a,
+    fog: 0xdcd4c4,
+    grid: 0x4a7a8a,
     gridOpacity: 0.5,
-    particle: 0x8a7a5a,
+    particleA: 0x3a5a8a,
+    particleB: 0x4a8a7a,
     particleOpacity: 0.7,
-    particleSize: 0.16,
+    particleSize: 0.18,
   },
 } as const;
 
@@ -27,12 +29,15 @@ function currentTheme(): Theme {
 }
 
 /**
- * 纵深远眺背景。
- * - 场景雾：near=0.028(暗) / 0.015(亮)，far=1000，近乎从镜头前即刻起雾，极缓淡出至无限远。
- * - 两块 200×200 线框网格沿 Z 轴以 time×9 速度循环滚动（25 单位循环）。
- * - 宽场相机：FOV=75°，z=20 居中后拉，略抬高俯视，容纳 90 单位纵深粒子场与网格。
- * - 500 粒子随机分布在 90×22×90 立体空间，逐粒子雾化 + sizeAttenuation，近大远小、近实远虚。
- * 观感：站在无限延伸的发光网格平面之上，粒子如星尘飘浮，远方隐入雾中。
+ * 数字海洋背景。
+ * - 发光网格平面 200×200，48×48 细分，顶点 z 起伏形成波浪
+ *   两层交错波峰 + 横向次波，从远方（y=-100）向近前（y=100）推进
+ * - 500 粒子从底部（y=-10）向上飘浮到顶部（y=8），到顶重置回底部
+ *   颜色在靛蓝 #4a5fff 与青绿 #5fffd4 之间按 y 高度过渡
+ * - 场景雾：near=0.028(暗)/0.015(亮)，far=1000，远方隐入雾中
+ * - 宽场相机 FOV=75°，z=20 居中后拉，呼吸式左右摆动 + 上下起伏
+ * - 背景底色与极光晕由 CSS 渲染（见 cosmic.css 的 .starfield-bg）
+ * - canvas 用 mix-blend-mode 与背景融合，暗色 screen / 亮色 multiply
  */
 export default function StarfieldBackground() {
   const mountRef = useRef<HTMLDivElement | null>(null);
@@ -50,7 +55,7 @@ export default function StarfieldBackground() {
       1000,
     );
     camera.position.set(0, 5, 20);
-    camera.lookAt(0, 2, -30);
+    camera.lookAt(0, 0, -30);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -58,44 +63,67 @@ export default function StarfieldBackground() {
     renderer.setClearColor(0x000000, 0);
     mount.appendChild(renderer.domElement);
 
-    const fog = new THREE.Fog(0x05070d, 0.028, 1000);
+    const fog = new THREE.Fog(0x0a0a1e, 0.028, 1000);
     scene.fog = fog;
 
-    const makeGrid = (zOffset: number) => {
-      const geo = new THREE.PlaneGeometry(200, 200, 50, 50);
-      const mat = new THREE.MeshBasicMaterial({
-        color: 0x2a4a7a,
-        wireframe: true,
-        transparent: true,
-        opacity: 0.38,
-        fog: true,
-      });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.rotation.x = -Math.PI / 2;
-      mesh.position.set(0, 0, zOffset);
-      return mesh;
-    };
-    const grid1 = makeGrid(0);
-    const grid2 = makeGrid(-25);
-    scene.add(grid1, grid2);
+    // ── 发光网格：48×48 密度 ──
+    const gridGeo = new THREE.PlaneGeometry(200, 200, 48, 48);
+    const gridMat = new THREE.MeshBasicMaterial({
+      color: 0x4a6fff,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.42,
+      fog: true,
+    });
+    const grid = new THREE.Mesh(gridGeo, gridMat);
+    grid.rotation.x = -Math.PI / 2;
+    grid.position.set(0, 0, -20);
+    scene.add(grid);
 
+    const positions = gridGeo.attributes.position;
+    const basePositions = new Float32Array(positions.array.length);
+    basePositions.set(positions.array as Float32Array);
+
+    // ── 粒子：500 颗光尘向上飘浮 ──
     const particleCount = 500;
-    const positions = new Float32Array(particleCount * 3);
+    const particlePositions = new Float32Array(particleCount * 3);
+    const particleColors = new Float32Array(particleCount * 3);
+    const particleSpeeds = new Float32Array(particleCount);
+    const particleWobble = new Float32Array(particleCount * 2); // phase, amp
+
+    const colorA = new THREE.Color(PALETTE.dark.particleA);
+    const colorB = new THREE.Color(PALETTE.dark.particleB);
+    const tmpColor = new THREE.Color();
+
+    const initParticle = (i: number) => {
+      particlePositions[i * 3] = (Math.random() - 0.5) * 80;
+      particlePositions[i * 3 + 1] = -10 + Math.random() * 18;
+      particlePositions[i * 3 + 2] = (Math.random() - 0.5) * 80;
+      particleSpeeds[i] = 0.01 + Math.random() * 0.035;
+      particleWobble[i * 2] = Math.random() * Math.PI * 2;
+      particleWobble[i * 2 + 1] = 0.2 + Math.random() * 0.5;
+    };
+
     for (let i = 0; i < particleCount; i++) {
-      positions[i * 3] = (Math.random() - 0.5) * 90;
-      positions[i * 3 + 1] = (Math.random() - 0.5) * 22;
-      positions[i * 3 + 2] = (Math.random() - 0.5) * 90;
+      initParticle(i);
+      const yNorm = (particlePositions[i * 3 + 1] + 10) / 18;
+      tmpColor.copy(colorA).lerp(colorB, Math.max(0, Math.min(1, yNorm)));
+      particleColors[i * 3] = tmpColor.r;
+      particleColors[i * 3 + 1] = tmpColor.g;
+      particleColors[i * 3 + 2] = tmpColor.b;
     }
     const particleGeo = new THREE.BufferGeometry();
-    particleGeo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    particleGeo.setAttribute("position", new THREE.BufferAttribute(particlePositions, 3));
+    particleGeo.setAttribute("color", new THREE.BufferAttribute(particleColors, 3));
     const particleMat = new THREE.PointsMaterial({
-      color: 0x6ab4ff,
-      size: 0.18,
+      size: PALETTE.dark.particleSize,
       sizeAttenuation: true,
       transparent: true,
-      opacity: 0.85,
+      opacity: PALETTE.dark.particleOpacity,
+      vertexColors: true,
       fog: true,
       depthWrite: false,
+      blending: THREE.AdditiveBlending,
     });
     const particles = new THREE.Points(particleGeo, particleMat);
     scene.add(particles);
@@ -105,15 +133,20 @@ export default function StarfieldBackground() {
       fog.color.setHex(c.fog);
       fog.near = theme === "dark" ? 0.028 : 0.015;
       fog.far = 1000;
-      const g1Mat = grid1.material as THREE.MeshBasicMaterial;
-      const g2Mat = grid2.material as THREE.MeshBasicMaterial;
-      g1Mat.color.setHex(c.grid);
-      g1Mat.opacity = c.gridOpacity;
-      g2Mat.color.setHex(c.grid);
-      g2Mat.opacity = c.gridOpacity;
-      particleMat.color.setHex(c.particle);
+      gridMat.color.setHex(c.grid);
+      gridMat.opacity = c.gridOpacity;
       particleMat.opacity = c.particleOpacity;
       particleMat.size = c.particleSize;
+      colorA.setHex(c.particleA);
+      colorB.setHex(c.particleB);
+      for (let i = 0; i < particleCount; i++) {
+        const yNorm = (particlePositions[i * 3 + 1] + 10) / 18;
+        tmpColor.copy(colorA).lerp(colorB, Math.max(0, Math.min(1, yNorm)));
+        particleColors[i * 3] = tmpColor.r;
+        particleColors[i * 3 + 1] = tmpColor.g;
+        particleColors[i * 3 + 2] = tmpColor.b;
+      }
+      particleGeo.attributes.color.needsUpdate = true;
     };
     applyTheme(currentTheme());
 
@@ -121,10 +154,44 @@ export default function StarfieldBackground() {
     let raf = 0;
     const animate = () => {
       const t = clock.getElapsedTime();
-      const off = (t * 9) % 25;
-      grid1.position.z = off;
-      grid2.position.z = off - 25;
-      particles.rotation.y = t * 0.015;
+
+      // ── 网格波浪：从远方推向近前，两层交错 + 横向次波 ──
+      const posArr = positions.array as Float32Array;
+      for (let i = 0; i < posArr.length; i += 3) {
+        const x = basePositions[i];
+        const y = basePositions[i + 1];
+        // 波浪沿原 y 轴推进（rotate 后即沿世界 z 朝相机方向）
+        const wave1 = Math.sin(y * 0.08 + t * 1.4) * 2.2;
+        const wave2 = Math.sin(y * 0.14 + t * 1.0 + 1.6) * 1.1;
+        const wave3 = Math.sin(x * 0.05 + t * 0.55) * 0.5;
+        posArr[i + 2] = wave1 + wave2 + wave3;
+      }
+      positions.needsUpdate = true;
+
+      // ── 粒子上升 + 横向漂移 + 颜色渐变 ──
+      const pArr = particleGeo.attributes.position.array as Float32Array;
+      for (let i = 0; i < particleCount; i++) {
+        pArr[i * 3 + 1] += particleSpeeds[i];
+        // 横向轻微摆动
+        pArr[i * 3] += Math.sin(t * 0.6 + particleWobble[i * 2]) * particleWobble[i * 2 + 1] * 0.01;
+        if (pArr[i * 3 + 1] > 8) {
+          initParticle(i);
+          pArr[i * 3 + 1] = -10;
+        }
+        const yNorm = (pArr[i * 3 + 1] + 10) / 18;
+        tmpColor.copy(colorA).lerp(colorB, Math.max(0, Math.min(1, yNorm)));
+        particleColors[i * 3] = tmpColor.r;
+        particleColors[i * 3 + 1] = tmpColor.g;
+        particleColors[i * 3 + 2] = tmpColor.b;
+      }
+      particleGeo.attributes.position.needsUpdate = true;
+      particleGeo.attributes.color.needsUpdate = true;
+
+      // ── 相机呼吸：左右摆动 + 上下起伏 ──
+      camera.position.x = Math.sin(t * 0.08) * 2.2;
+      camera.position.y = 5 + Math.sin(t * 0.12) * 0.4;
+      camera.lookAt(0, 0, -30);
+
       renderer.render(scene, camera);
       raf = requestAnimationFrame(animate);
     };
@@ -150,10 +217,8 @@ export default function StarfieldBackground() {
       cancelAnimationFrame(raf);
       resizeObserver.disconnect();
       themeObserver.disconnect();
-      grid1.geometry.dispose();
-      (grid1.material as THREE.Material).dispose();
-      grid2.geometry.dispose();
-      (grid2.material as THREE.Material).dispose();
+      gridGeo.dispose();
+      gridMat.dispose();
       particleGeo.dispose();
       particleMat.dispose();
       renderer.dispose();

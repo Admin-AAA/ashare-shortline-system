@@ -3,9 +3,19 @@
    覆盖 cockpit.css 的 shell 层；组件内部样式沿用半透明 token
    ═══════════════════════════════════════════════════════════════ */
 
-/* ── 底色：与场景雾色融合，避免 3D 加载前白屏 ── */
-[data-theme="dark"] body { background: #05070d; }
-[data-theme="light"] body { background: #e8e4dc; }
+/* ── 底色：紫蓝→青绿渐变 + 两道极光晕（底部 + 左上角）── */
+[data-theme="dark"] body {
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 110%, rgba(95, 255, 212, 0.32), transparent 55%),
+    radial-gradient(ellipse 70% 60% at 10% 15%, rgba(120, 130, 255, 0.30), transparent 55%),
+    linear-gradient(to top, #1a1a4a 0%, #0e1a3e 35%, #0a1f3a 60%, #0a2832 85%, #0a2e30 100%);
+}
+[data-theme="light"] body {
+  background:
+    radial-gradient(ellipse 70% 50% at 50% 105%, rgba(95, 200, 180, 0.28), transparent 60%),
+    radial-gradient(ellipse 55% 45% at 12% 18%, rgba(130, 145, 220, 0.22), transparent 60%),
+    linear-gradient(to top, #d8d2e8 0%, #d2dae4 35%, #c8d8d8 65%, #c2d8d0 100%);
+}
 
 /* ── 半透明玻璃 token（cosmic-shell 作用域内覆盖 themes.css）── */
 .cosmic-shell {
@@ -37,6 +47,10 @@
   width: 100% !important;
   height: 100% !important;
 }
+/* 暗色：screen 让发光网格在极光晕处更亮，在暗处隐没 */
+[data-theme="dark"] .starfield-bg canvas { mix-blend-mode: screen; }
+/* 亮色：multiply 让网格从浅色底中生长出来 */
+[data-theme="light"] .starfield-bg canvas { mix-blend-mode: multiply; }
 
 /* ── Shell 容器 ── */
 .cosmic-shell {
