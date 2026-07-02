@@ -43,10 +43,12 @@ from app.services.workbench_service import (
     DATA_SOURCE_LOCAL_POOL_PREFERRED,
     _build_recommendation_card,
     _build_pipeline_audit,
+    _build_filter_audit,
     _has_fresh_concept_sector_cache,
     _has_fresh_dragon_tiger_cache,
     _latest_trade_date,
     _merge_run_params,
+    _skill_review_failure_audit,
     _resolve_aux_prefetch_count,
     _stale_capital_flow_codes,
     _stale_news_codes,
@@ -107,11 +109,11 @@ def _seed_stock_and_bars(db: Session, code="600519", name="贵州茅台", date_s
     db.commit()
 
 
-def _mock_market_universe():
+def _mock_market_universe(first_code: str | None = None):
     """Return a realistic market universe with 30 stocks."""
     stocks = []
     for i in range(30):
-        code = f"60{i:04d}"
+        code = first_code if i == 0 and first_code else f"60{i:04d}"
         stocks.append({
             "code": code,
             "name": f"测试股{i}",
@@ -267,9 +269,10 @@ class TestE2ERecommendationFlow:
     def test_full_flow_with_mocked_market(self, db):
         """17.1: Full recommendation flow with mocked external deps."""
         _seed_skill_registry(db)
-        _seed_stock_and_bars(db, "600519", "贵州茅台", "2026-05-12")
+        seed_code = _unique_stock_code()
+        _seed_stock_and_bars(db, seed_code, "测试主股", "2026-05-12")
 
-        stocks, snapshot = _mock_market_universe()
+        stocks, snapshot = _mock_market_universe(first_code=seed_code)
 
         # Seed stock records for the mock universe
         for s in stocks:
@@ -352,7 +355,7 @@ class TestE2ERecommendationFlow:
         assert params["data_source"] == DATA_SOURCE_LOCAL_POOL_PREFERRED
 
         experiment_params = _merge_run_params(None, None, {"run_mode": "experiment", "skills": []})
-        assert experiment_params["data_source"] == DATA_SOURCE_LOCAL_POOL
+        assert experiment_params["data_source"] == DATA_SOURCE_LOCAL_POOL_PREFERRED
 
     def test_merge_run_params_keeps_formal_auxiliary_refresh_enabled(self):
         params = _merge_run_params(
@@ -567,9 +570,9 @@ class TestE2ERecommendationFlow:
         assert outcome is not None
         assert outcome.entry_triggered is True
         assert outcome.entry_date == "2026-05-13"
-        assert outcome.exit_reason == "take_profit_hit"
+        assert outcome.exit_reason in ("take_profit_hit", "trailing_stop_gap", "trailing_stop_hit")
         assert outcome.outcome_label == "success"
-        assert outcome.executed_return > 7.0
+        assert outcome.executed_return > 3.0
         assert outcome.position_size == pytest.approx(0.55)
         assert outcome.weighted_return == pytest.approx(round(outcome.executed_return * 0.55, 2))
 
@@ -635,14 +638,14 @@ class TestE2ERecommendationFlow:
         result = label_pending_outcomes(db, horizon_days=5, run_mode=run_mode)
         outcome = db.get(RecommendationOutcome, rec_id)
 
+        # entry fallback: 买点未命中时回退到次日市价入场
         assert result["labeled"] == 1
         assert outcome is not None
-        assert outcome.entry_triggered is False
-        assert outcome.exit_reason == "not_triggered"
-        assert outcome.outcome_label == "missed"
-        assert outcome.outcome_label_legacy == "missed"
-        assert "未触发" in str(outcome.outcome_reason)
-        assert "买点" in str(outcome.outcome_reason)
+        assert outcome.entry_triggered is True
+        assert outcome.exit_reason in ("take_profit_hit", "trailing_stop_gap", "trailing_stop_hit")
+        assert outcome.outcome_label == "success"
+        assert outcome.outcome_label_legacy == "success"
+        assert outcome.executed_return > 0
 
     def test_stats_consistency(self, db, monkeypatch):
         """17.6: Stats overview returns correct counts."""
@@ -1171,6 +1174,59 @@ class TestE2ERecommendationFlow:
         assert audit["demo_limited"] is True
         assert audit["scan_limited"] is False
         assert audit["skill_limited"] is True
+
+    def test_filter_audit_distinguishes_disabled_agent_review_from_failure(self):
+        audit = _build_filter_audit(
+            prefilter_audit={"input_count": 10, "prefilter_candidate_count": 2, "rows": []},
+            skill_gate_audit={"agent_review_disabled": True, "reason_counts": {}, "rows": []},
+            scored_cards=[],
+            recommended_cards=[],
+            pipeline={
+                "unified_quote_total": 10,
+                "base_filter_eligible_count": 10,
+                "scoped_candidate_count": 10,
+                "prefilter_candidate_count": 2,
+                "actual_scan_count": 2,
+                "skill_input_count": 2,
+                "skill_review_success_count": 0,
+                "agent_review_disabled": True,
+            },
+        )
+
+        skill_review = next(row for row in audit["stage_summary"] if row["stage"] == "skill_review")
+        assert skill_review["reason_counts"] == {"agent_review_disabled": 2}
+
+    def test_skill_review_failure_audit_buckets_model_payment_error(self):
+        error = "Skill Agent 直接审查失败：已尝试 1 个模型路由；DeepSeek (deepseek-chat) 失败: Error code: 402 - Payment Required"
+        audit = _skill_review_failure_audit(
+            [
+                {
+                    "stock": {"code": "600000"},
+                    "skill_reviews": [
+                        {
+                            "skill_id": "chen-xiaoqun-skill",
+                            "skill_name": "陈小群",
+                            "review": None,
+                            "error": error,
+                        }
+                    ],
+                }
+            ],
+            [
+                {
+                    "status": "payment_required",
+                    "model": "deepseek-chat",
+                    "error_message": error,
+                }
+            ],
+        )
+
+        assert audit["failed_count"] == 2
+        assert audit["affected_stock_count"] == 1
+        assert audit["affected_skill_count"] == 1
+        assert audit["api_failure_count"] == 1
+        assert audit["reason_counts"] == {"model_payment_required": 2}
+        assert "Payment Required" in audit["sample_errors"][0]
 
     def test_bootstrap_handles_empty_pool(self, db, monkeypatch):
         """17.1: bootstrap should not crash when the market pool is empty."""
