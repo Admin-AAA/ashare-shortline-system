@@ -130,6 +130,9 @@ scoring:
     - when: "intelligence_score >= 66"
       delta: 3
       reason: 情报环境较优
+    - when: "avg_cost >= 80 and avg_cost <= 200"
+      delta: 5
+      reason: 筹码成本适中（80-200 元区间 71% 胜率，+2.7% 均收益，机构偏好中高价成长股）
     - when: "fundamental_score >= 68"
       delta: 2
       reason: 基本面拖累较小
