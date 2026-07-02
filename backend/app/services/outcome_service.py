@@ -757,6 +757,83 @@ def cost_adjusted_metrics(db: Session, run_mode: str = "formal") -> dict[str, An
     }
 
 
+def filter_effectiveness(
+    db: Session,
+    run_mode: str = "formal",
+) -> dict[str, Any]:
+    """三规则过滤效果分析：pos20<50、avg_cost>200、结构性强势×support_ma5。
+
+    返回被过滤 vs 保留交易的 WR/avg/笔数，用于监控过滤策略效果。
+    """
+    import json as _json
+
+    stmt = (
+        select(Recommendation, RecommendationOutcome)
+        .join(RecommendationOutcome, RecommendationOutcome.recommendation_id == Recommendation.recommendation_id)
+        .where(
+            RecommendationOutcome.entry_triggered == True,
+            RecommendationOutcome.outcome_label.in_([OUTCOME_SUCCESS, OUTCOME_FAILED]),
+        )
+    )
+    if run_mode:
+        stmt = stmt.join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id).where(
+            RecommendationRun.run_mode == run_mode
+        )
+    rows = db.execute(stmt).all()
+    if not rows:
+        return {"count": 0, "error": "no executed trades"}
+
+    kept = []
+    filtered_by_rule: dict[str, list[float]] = {"pos20_low": [], "avg_cost_high": [], "regime_ma5": []}
+
+    for rec, outcome in rows:
+        snap = _json.loads(rec.feature_snapshot_json) if rec.feature_snapshot_json else {}
+        ret = float(outcome.executed_return or 0)
+        pos20 = snap.get("pos20")
+        avg_cost = snap.get("avg_cost")
+        regime = snap.get("market_regime", "")
+        ma5 = snap.get("support_ma5")
+
+        if pos20 is not None and float(pos20) < 50:
+            filtered_by_rule["pos20_low"].append(ret)
+            continue
+        if avg_cost is not None and float(avg_cost) > 200:
+            filtered_by_rule["avg_cost_high"].append(ret)
+            continue
+        if regime == "结构性强势" and ma5:
+            filtered_by_rule["regime_ma5"].append(ret)
+            continue
+        kept.append(ret)
+
+    total = len(kept) + sum(len(v) for v in filtered_by_rule.values())
+    n_kept = len(kept)
+    net_kept = [r - _ADDITIONAL_COST_PCT for r in kept]
+    net_wins_kept = sum(1 for r in net_kept if r > 0)
+    net_avg_kept = sum(net_kept) / n_kept if n_kept else 0
+    net_profit = sum(r for r in net_kept if r > 0)
+    net_loss = abs(sum(r for r in net_kept if r < 0))
+
+    return {
+        "count": total,
+        "filtered_count": total - n_kept,
+        "filter_rate_pct": round((total - n_kept) / total * 100, 1) if total else 0,
+        "kept": {
+            "count": n_kept,
+            "net_win_rate": round(net_wins_kept / n_kept * 100, 1) if n_kept else 0,
+            "net_avg_return": round(net_avg_kept, 2),
+            "net_profit_factor": round(net_profit / net_loss, 2) if net_loss > 0 else 999.0,
+        },
+        "filtered_by_rule": {
+            name: {
+                "count": len(rets),
+                "win_rate": round(sum(1 for r in rets if r > 0) / len(rets) * 100, 1) if rets else 0,
+                "avg_return": round(sum(rets) / len(rets), 2) if rets else 0,
+            }
+            for name, rets in filtered_by_rule.items()
+        },
+    }
+
+
 def precision_at_k(
     db: Session,
     run_mode: str = "formal",

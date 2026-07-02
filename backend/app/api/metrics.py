@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.services.outcome_service import (
+    filter_effectiveness,
     metrics_by_score_line,
     metrics_by_setup,
     metrics_by_strategy,
@@ -42,3 +43,8 @@ def metric_precision_at_k(mode: str = Query(default="formal"), db: Session = Dep
 @router.get("/by-score-line")
 def by_score_line(mode: str = Query(default="formal"), db: Session = Depends(get_db)):
     return metrics_by_score_line(db, _checked_mode(mode))
+
+
+@router.get("/filter-effectiveness")
+def metric_filter_effectiveness(mode: str = Query(default="formal"), db: Session = Depends(get_db)):
+    return filter_effectiveness(db, _checked_mode(mode))
