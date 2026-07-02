@@ -124,6 +124,9 @@ scoring:
     - when: "pos20 >= 80 and pos20 <= 95"
       delta: 5
       reason: 强势未过热（pos20 80-95 区间 67.4% 胜率，+4.36% 均收益）
+    - when: "dist60 < 0"
+      delta: 5
+      reason: 价格低于 60 日均线（回调充分：87 笔 77.0% 胜率，+3.98% 均收益，与 pos20 零重叠）
     - when: "bias_ma5 >= 0 and bias_ma5 <= 3"
       delta: 4
       reason: 温和上行（bias_ma5 0-3 区间 64.7% 胜率，+3.36% 均收益）
@@ -169,3 +172,7 @@ risk:
       level: medium
       flag: 位置过热（pos20>95 仅 25% 胜率，-2.32% 均收益）
       score_delta: -8
+    - when: "chip_concentration > 18 and chip_concentration <= 30"
+      level: medium
+      flag: 筹码集中风险（CC 18-30 仅 45.6% WR，集中持仓抛售压力大）
+      score_delta: -5
