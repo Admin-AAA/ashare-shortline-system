@@ -1,8 +1,43 @@
 :root {
+  /* ── Radius ── */
   --radius-sm: 6px;
   --radius-md: 8px;
+  --radius-lg: 12px;
+
+  /* ── Layout ── */
   --sidebar-width: 168px;
+  --topbar-height: 64px;
+
+  /* ── Spacing scale (8px base) ── */
+  --space-1: 4px;   /* micro: icon insets, tag padding */
+  --space-2: 8px;   /* tight: inline gaps, button padding */
+  --space-3: 12px;  /* default small: field gaps, list rows */
+  --space-4: 16px;  /* default: grid gaps, card padding */
+  --space-5: 24px;  /* loose: panel padding, section gaps */
+  --space-6: 32px;  /* panel padding (breathing room) */
+  --space-7: 48px;  /* large whitespace */
+  --space-8: 64px;  /* extra-large whitespace */
+
+  /* ── Typography ── */
   --font-ui: Inter, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
-  --font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", "Fira Code", Menlo, monospace;
+  --font-mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --leading-loose: 1.7;
+
+  /* ── Motion ── */
   --motion-fast: 160ms ease;
+  --motion-normal: 240ms ease;
+
+  /* ── Borders ── */
+  --border-hairline: 1px solid var(--line);
 }

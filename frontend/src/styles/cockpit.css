@@ -66,10 +66,10 @@ select option {
   height: 100vh;
   border-right: 1px solid var(--line);
   background: var(--surface);
-  padding: 16px 10px;
+  padding: var(--space-5) var(--space-3);
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--space-4);
   min-width: 0;
 }
 
@@ -136,16 +136,16 @@ select option {
 .cockpit-main {
   width: 100%;
   min-width: 0;
-  padding: 18px 18px 18px 16px;
+  padding: var(--space-5);
 }
 
 .cockpit-topbar {
-  min-height: 62px;
+  min-height: var(--topbar-height);
   display: flex;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--space-4);
   align-items: center;
-  margin-bottom: 16px;
+  margin-bottom: var(--space-5);
 }
 
 .cockpit-topbar h1 {
@@ -170,7 +170,7 @@ select option {
 .dashboard-grid {
   display: grid;
   grid-template-columns: minmax(260px, 0.9fr) minmax(340px, 1.18fr) minmax(250px, 0.92fr);
-  gap: 14px;
+  gap: var(--space-4);
   align-items: start;
   width: 100%;
 }
@@ -182,14 +182,14 @@ select option {
 .side-stack,
 .dashboard-column {
   display: grid;
-  gap: 14px;
+  gap: var(--space-4);
   align-content: start;
   min-width: 0;
 }
 
 .workspace-grid {
   display: grid;
-  gap: 14px;
+  gap: var(--space-4);
 }
 
 .section-hero {
@@ -197,10 +197,10 @@ select option {
   border-radius: var(--radius-md);
   background: var(--surface);
   box-shadow: var(--shadow-panel);
-  padding: 18px;
+  padding: var(--space-5);
   display: flex;
   justify-content: space-between;
-  gap: 18px;
+  gap: var(--space-5);
   align-items: flex-end;
   min-width: 0;
 }
@@ -253,27 +253,27 @@ select option {
 .focus-grid {
   display: grid;
   grid-template-columns: minmax(280px, 0.82fr) minmax(360px, 1fr);
-  gap: 14px;
+  gap: var(--space-4);
   align-items: start;
 }
 
 .data-workspace-layout {
   display: grid;
   grid-template-columns: minmax(620px, 1.35fr) minmax(360px, 0.65fr);
-  gap: 14px;
+  gap: var(--space-4);
   align-items: start;
 }
 
 .data-main-stack,
 .data-side-stack {
   display: grid;
-  gap: 14px;
+  gap: var(--space-4);
   min-width: 0;
 }
 
 .data-side-stack {
   position: sticky;
-  top: 14px;
+  top: var(--space-4);
 }
 
 .data-summary-grid {
@@ -283,7 +283,7 @@ select option {
 .review-workspace-layout {
   display: grid;
   grid-template-columns: minmax(250px, 0.6fr) minmax(560px, 1.3fr) minmax(300px, 0.74fr);
-  gap: 14px;
+  gap: var(--space-4);
   align-items: start;
 }
 
@@ -291,20 +291,20 @@ select option {
 .validation-main-stack,
 .validation-side-stack {
   display: grid;
-  gap: 14px;
+  gap: var(--space-4);
   min-width: 0;
 }
 
 .review-side-stack,
 .validation-side-stack {
   position: sticky;
-  top: 14px;
+  top: var(--space-4);
 }
 
 .validation-workspace-layout {
   display: grid;
   grid-template-columns: minmax(280px, 0.72fr) minmax(0, 1.32fr) minmax(300px, 0.66fr);
-  gap: 14px;
+  gap: var(--space-4);
   align-items: start;
 }
 
@@ -333,13 +333,13 @@ select option {
   border-radius: var(--radius-md);
   background: var(--surface);
   box-shadow: var(--shadow-panel);
-  padding: 16px;
+  padding: var(--space-5);
   min-width: 0;
 }
 
 .backtest-panel .panel {
   display: grid;
-  gap: 14px;
+  gap: var(--space-4);
 }
 
 .backtest-controls {
