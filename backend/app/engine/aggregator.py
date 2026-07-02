@@ -933,7 +933,12 @@ def apply_pool_rules(
         result.append(card)
 
     # 动态降线：无候选过线时，以 top_score - 0.5 为软下界，避免零推荐
-    if not result and ordered and top_final_score > 0:
+    # 高潮/强牛阶段禁用降线：回测验证高潮阶段降线导致 7 笔 0% WR 交易（6/9 偏多·高潮）
+    # 高潮阶段宁可零推荐也不降线，避免追高陷阱
+    _ctx_base = score_line_context.get("market_base")
+    _ctx_sentiment = score_line_context.get("market_sentiment")
+    _disable_soft_floor = _ctx_sentiment == "高潮" or _ctx_base == "强牛"
+    if not result and ordered and top_final_score > 0 and not _disable_soft_floor:
         soft_floor = round(top_final_score - 1.0, 2)
         base_floor = round(score_line_context["base_score_line"] - 8.0, 2)
         dynamic_line = max(soft_floor, base_floor, 35.0)
