@@ -276,18 +276,17 @@ def _build_user_prompt(
     history: dict[str, Any] | None,
     skill_id: str,
 ) -> str:
-    """构建 User Prompt。"""
+    """构建 User Prompt。
+
+    前缀布局优化：稳定的 market snapshot + rule signal 放最前面，
+    变化的 stock 数据放最后。LLM prompt cache 前缀匹配生效。
+    """
     parts: list[str] = []
 
-    # 股票事实
-    parts.append("# 候选股票\n")
-    parts.append(json.dumps(_compact_stock(stock), ensure_ascii=False, indent=2))
-
-    # 市场快照
-    parts.append("\n\n# 市场快照\n")
+    # ── 稳定前缀（同一 run 内共享）──
+    parts.append("# 市场快照\n")
     parts.append(json.dumps(_compact_snapshot(snapshot), ensure_ascii=False, indent=2))
 
-    # 策略规则信号
     parts.append("\n\n# strategy.yaml 规则信号\n")
     if rule_signal:
         parts.append(json.dumps(_compact_signal(rule_signal), ensure_ascii=False, indent=2))
@@ -303,7 +302,7 @@ def _build_user_prompt(
 
     parts.append(f"""
 
-请严格按 SKILL.md 方法论审查以上股票。
+请严格按 SKILL.md 方法论审查以下股票。
 
 先按下面的顺序调用 Tool，再给出结构化审查结果：
 
@@ -314,6 +313,11 @@ def _build_user_prompt(
 5. 若前面仍不足，再补 `query_stock_history("{code}", 30)`、`query_industry_peers("{code}")`、`query_dragon_tiger("{code}")`
 
 不要跳过前四步；不要只根据 prompt 里的摘要直接下结论。
+
+---
+
+# 候选股票数据（以下内容因股票不同而变化）
+{json.dumps(_compact_stock(stock), ensure_ascii=False, indent=2)}
 
 输出 JSON 格式:
 {{
@@ -573,6 +577,11 @@ def _extract_json(text: str) -> dict:
         except json.JSONDecodeError:
             pass
 
+    # Markdown 格式 fallback：SKILL.md 指示 LLM 输出 ## stance: 看多 格式
+    parsed = _parse_markdown_output(text)
+    if parsed:
+        return parsed
+
     raise ValueError(f"无法从 Agent 响应中提取 JSON: {text[:200]}...")
 
 
@@ -586,6 +595,51 @@ def _string_list(value: Any, limit: int = 8) -> list[str]:
     else:
         items = [value]
     return [str(item).strip() for item in items if str(item).strip()][:limit]
+
+
+def _parse_markdown_output(text: str) -> dict | None:
+    """从 markdown 格式的 Agent 响应中提取结构化数据。
+
+    支持 SKILL.md 指示的格式：## stance: 看多 / ## score: 75
+    """
+    result: dict[str, Any] = {}
+
+    # 提取 ## key: value 或 ## key：value 模式（值不含列表项前缀 - ）
+    for match in re.finditer(r"##\s*(\w+)\s*[：:]\s*(.+?)(?:\n|$)", text):
+        key = match.group(1).strip().lower()
+        value = match.group(2).strip()
+        if key in ("stance", "score", "confidence", "summary", "action",
+                    "position_range", "entry_style", "market_regime_judgment"):
+            # 对 summary 类字段，去掉列表前缀
+            if key == "summary":
+                value = re.sub(r"^-\s*", "", value)
+            result[key] = value
+        elif key in ("evidence", "risks", "invalidation_conditions", "next_day_plan"):
+            # 提取列表项：包括 header 同行的列表项和后续列表项
+            section_start = match.start(2)  # 从 value 开始位置
+            section_end = text.find("\n##", match.end())
+            if section_end < 0:
+                section_end = len(text)
+            section = text[section_start:section_end]
+            items = [item.strip() for item in re.findall(r"[-*]\s*(.+)", section)]
+            result[key] = items
+
+    if not result:
+        return None
+
+    # 类型转换
+    if "score" in result:
+        try:
+            result["score"] = int(result["score"])
+        except (ValueError, TypeError):
+            result["score"] = 50
+    if "confidence" in result:
+        try:
+            result["confidence"] = float(result["confidence"])
+        except (ValueError, TypeError):
+            result["confidence"] = 0.5
+
+    return result
 
 
 def _normalize_action(raw_action: Any, stance: str, score: int, confidence: float) -> str:
@@ -840,13 +894,16 @@ def _build_direct_prompt(
     rule_signal: dict[str, Any] | None,
     skill: StrategySkill,
 ) -> str:
-    """构建一次性审查 Prompt（包含所有数据，无需工具查询）。"""
+    """构建一次性审查 Prompt（包含所有数据，无需工具查询）。
+
+    前缀布局优化：稳定的 market snapshot + rule signal + 审查指引放在最前面，
+    变化的 stock 数据放在最后。LLM API prompt cache 是前缀匹配——
+    同一 skill + 同一次 run 内，前 ~1.5K chars 可命中缓存，只变化尾部 stock 数据。
+    """
     parts = []
 
-    parts.append("# 候选股票数据\n")
-    parts.append(json.dumps(_compact_stock(stock), ensure_ascii=False, indent=2))
-
-    parts.append("\n\n# 市场快照\n")
+    # ── 稳定前缀（同一 run 内所有股票共享，prompt cache 命中关键）──
+    parts.append("# 市场快照\n")
     parts.append(json.dumps(_compact_snapshot(snapshot), ensure_ascii=False, indent=2))
 
     parts.append("\n\n# strategy.yaml 规则评分\n")
@@ -857,11 +914,19 @@ def _build_direct_prompt(
 
     parts.append(f"""
 
-请严格按 {skill.name} 方法论审查以上股票。市场数据、股票特征、规则评分均已提供——不需要额外查询。
+请严格按 {skill.name} 方法论审查以下股票。市场数据、规则评分均已提供——不需要额外查询。
 所有趋势、均线、MACD、RSI、量能、乖离、支撑描述都必须落到候选股票数据中的字段和值。
-如果字段存在，例如 rsi_12、macd_dif、ma5，不要写“未提供”“只能推断”。
+如果字段存在，例如 rsi_12、macd_dif、ma5，不要写"未提供""只能推断"。
 
 直接输出 JSON 审查结果（不要 markdown 包裹）：
 {{"stance": "...", "score": 75, "confidence": 0.8, "evidence": [...], "risks": [...], "summary": "...", "market_regime_judgment": "...", "action": "轻仓试错", "position_range": "5-15%", "entry_style": "分歧低吸", "invalidation_conditions": [...], "next_day_plan": [...]}}
+
+---
+
+# 候选股票数据（以下内容因股票不同而变化）
 """)
+
+    # ── 变化后缀（每只股票不同，放在最后以保持前缀缓存）──
+    parts.append(json.dumps(_compact_stock(stock), ensure_ascii=False, indent=2))
+
     return "\n\n".join(parts)
