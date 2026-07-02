@@ -1553,3 +1553,20 @@ class TestAlphaDecayDetection:
         # With no data, should return error
         assert result.get("error") or isinstance(result.get("factors"), list)
 
+    def test_alpha_decay_includes_absolute_win_rates(self, db):
+        """因子报告应包含绝对胜率（early_true_wr/recent_true_wr），不仅 win_edge 差值。
+        参考 breakout20 第 10 轮教训：单独衰减但组合条件下仍有效的因子不应误判移除。"""
+        from app.services.outcome_service import alpha_decay_detection
+        result = alpha_decay_detection(db, run_mode="formal")
+        factors = result.get("factors", [])
+        if not factors:
+            return  # 无数据时跳过
+        for f in factors:
+            assert "early_true_wr" in f, f"missing early_true_wr for {f['factor']}"
+            assert "recent_true_wr" in f, f"missing recent_true_wr for {f['factor']}"
+            assert "early_false_wr" in f, f"missing early_false_wr for {f['factor']}"
+            assert "recent_false_wr" in f, f"missing recent_false_wr for {f['factor']}"
+        # status 应包含组合保护状态
+        statuses = {f["status"] for f in factors}
+        assert statuses.issubset({"noise", "decaying", "decaying_but_usable", "improving", "stable"})
+

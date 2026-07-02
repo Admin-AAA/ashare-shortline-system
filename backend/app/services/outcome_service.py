@@ -630,23 +630,29 @@ def alpha_decay_detection(db: Session, run_mode: str = "formal") -> dict[str, An
         decay_pct = (delta / abs(r_early) * 100) if abs(r_early) > 0.001 else 0.0
 
         # 胜率优势（更稳健的指标，不受极端值影响）
-        def _win_edge(binary: list[int], returns: list[float]) -> tuple[float, int, int]:
+        def _win_edge(binary: list[int], returns: list[float]) -> tuple[float, int, int, float, float]:
             true_wins = sum(1 for b, r in zip(binary, returns) if b == 1 and r > 0)
             true_total = sum(1 for b in binary if b == 1)
             false_wins = sum(1 for b, r in zip(binary, returns) if b == 0 and r > 0)
             false_total = sum(1 for b in binary if b == 0)
             wr_true = true_wins / true_total * 100 if true_total else 0
             wr_false = false_wins / false_total * 100 if false_total else 0
-            return wr_true - wr_false, true_total, false_total
+            return wr_true - wr_false, true_total, false_total, wr_true, wr_false
 
-        early_edge, early_bt, early_nobt = _win_edge(eb, er)
-        recent_edge, recent_bt, recent_nobt = _win_edge(rb, rr)
+        early_edge, early_bt, early_nobt, early_wr_true, early_wr_false = _win_edge(eb, er)
+        recent_edge, recent_bt, recent_nobt, recent_wr_true, recent_wr_false = _win_edge(rb, rr)
 
         # 综合判断：point-biserial 和胜率优势双重验证
         if abs(r_early) < 0.02 and abs(r_recent) < 0.02:
             status = "noise"
         elif decay_pct < -30 and recent_edge < early_edge - 5:
-            status = "decaying"
+            # 组合保护：即使 win_edge 衰减，若因子=True 的近期绝对胜率仍 >= 55%
+            # （接近整体胜率 ~56%），说明因子单独仍有用，不应直接移除。
+            # 参考 breakout20 第 10 轮教训：单独衰减 ≠ 因子无用，组合条件下可能仍有效。
+            if recent_wr_true >= 55.0:
+                status = "decaying_but_usable"
+            else:
+                status = "decaying"
         elif decay_pct > 30 and recent_edge > early_edge + 5:
             status = "improving"
         else:
@@ -663,6 +669,10 @@ def alpha_decay_detection(db: Session, run_mode: str = "formal") -> dict[str, An
             "recent_n": len(rb),
             "early_win_edge": round(early_edge, 1),
             "recent_win_edge": round(recent_edge, 1),
+            "early_true_wr": round(early_wr_true, 1),
+            "recent_true_wr": round(recent_wr_true, 1),
+            "early_false_wr": round(early_wr_false, 1),
+            "recent_false_wr": round(recent_wr_false, 1),
             "early_true_n": early_bt,
             "recent_true_n": recent_bt,
         })
