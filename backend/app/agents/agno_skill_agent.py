@@ -130,11 +130,17 @@ def _append_api_cost(
     status: str,
     error_message: str | None = None,
 ) -> None:
+    # 估算 token 数：中文约 1.5-2 字符/token，英文约 4 字符/token
+    # 混合文本取中间值 1.8 字符/token
+    prompt_tokens_est = int(prompt_chars / 1.8)
+    completion_tokens_est = int(completion_chars / 1.8)
     _pending_api_costs.append({
         "model": route.model,
         "endpoint": _route_endpoint(route),
         "prompt_chars": prompt_chars,
         "completion_chars": completion_chars,
+        "prompt_tokens_est": prompt_tokens_est,
+        "completion_tokens_est": completion_tokens_est,
         "latency_ms": round(latency_ms, 1),
         "status": status,
         "error_message": error_message,
