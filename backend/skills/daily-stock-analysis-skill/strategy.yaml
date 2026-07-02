@@ -117,6 +117,12 @@ scoring:
       delta: 4
       reason: 资金确认
     # chip_health_score >= 72 已移除：86.8%命中+r=-0.145负预测力（均值回归信号）
+    - when: "pos20 >= 80 and pos20 <= 95"
+      delta: 5
+      reason: 强势未过热（pos20 80-95 区间 67.4% 胜率，+4.36% 均收益）
+    - when: "bias_ma5 >= 0 and bias_ma5 <= 3"
+      delta: 4
+      reason: 温和上行（bias_ma5 0-3 区间 64.7% 胜率，+3.36% 均收益）
     - when: "intelligence_score >= 66"
       delta: 3
       reason: 情报环境较优
@@ -148,4 +154,8 @@ risk:
     - when: "price > 300"
       level: medium
       flag: 高价股风险
+      score_delta: -8
+    - when: "pos20 > 95"
+      level: medium
+      flag: 位置过热（pos20>95 仅 25% 胜率，-2.32% 均收益）
       score_delta: -8
