@@ -35,6 +35,8 @@ export default memo(function EnhancedRecommendationCard({ item, isSelected, onSe
     onSelect(item.recommendation_id);
   }
 
+  const sectorPenalty = Number(item.feature_snapshot?.sector_diversity_penalty ?? 0);
+
   function toggleAgentReview(event: MouseEvent<HTMLButtonElement>) {
     event.preventDefault();
     event.stopPropagation();
@@ -63,6 +65,17 @@ export default memo(function EnhancedRecommendationCard({ item, isSelected, onSe
             >
               <AlertTriangle size={11} />
               降级输出
+            </span>
+          )}
+          {sectorPenalty > 0 && (
+            <span
+              className="erc-sector-penalty"
+              title={`板块去重惩罚 -${sectorPenalty} 分：同行业推荐过多，控制集中度`}
+              role="status"
+              aria-label="板块去重惩罚"
+            >
+              <Layers3 size={11} />
+              -{sectorPenalty}
             </span>
           )}
         </div>
