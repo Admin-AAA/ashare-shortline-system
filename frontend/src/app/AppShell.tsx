@@ -40,6 +40,7 @@ export default function AppShell() {
   const [refreshSignal, setRefreshSignal] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [testDrawerOpen, setTestDrawerOpen] = useState(false);
+  const [themeTransitioning, setThemeTransitioning] = useState(false);
   const mainRef = useRef<HTMLElement | null>(null);
   const { theme, toggleTheme } = useThemePreference();
   const activeGroup = groupOfSection(section);
@@ -101,22 +102,40 @@ export default function AppShell() {
   }, [resetMainScroll, section]);
 
   const refreshCurrentView = useCallback(() => {
+    if (refreshing) return;
     setRefreshing(true);
     setRefreshSignal((value) => value + 1);
     window.setTimeout(() => setRefreshing(false), 1100);
-  }, []);
+  }, [refreshing]);
 
   useEffect(() => {
     window.addEventListener("ashare:refresh-current-view", refreshCurrentView);
     return () => window.removeEventListener("ashare:refresh-current-view", refreshCurrentView);
   }, [refreshCurrentView]);
 
+  const handleToggleTheme = useCallback(() => {
+    setThemeTransitioning(true);
+    toggleTheme();
+    window.setTimeout(() => setThemeTransitioning(false), 360);
+  }, [toggleTheme]);
+
+  useEffect(() => {
+    if (!testDrawerOpen) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setTestDrawerOpen(false);
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [testDrawerOpen]);
+
   const activeItem = NAV_ITEMS.find((item) => item.section === section) ?? NAV_ITEMS[0];
   const activeGroupDef = NAV_GROUPS.find((g) => g.key === activeGroup);
   const testGroupDef = NAV_GROUPS.find((g) => g.key === "test");
 
   return (
-    <div className="cosmic-shell" data-active-group={activeGroup}>
+    <div className={`cosmic-shell ${themeTransitioning ? "theme-transitioning" : ""}`} data-active-group={activeGroup}>
       <StarfieldBackground />
 
       <header className="cosmic-topbar">
@@ -167,7 +186,7 @@ export default function AppShell() {
             <RefreshCcw size={15} className={refreshing ? "spin" : ""} />
             <span>{refreshing ? "刷新中" : "刷新"}</span>
           </button>
-          <button type="button" onClick={toggleTheme} title="切换主题">
+          <button type="button" onClick={handleToggleTheme} title="切换主题">
             <SunMoon size={15} />
             <span>{theme === "dark" ? "深色" : "浅色"}</span>
           </button>

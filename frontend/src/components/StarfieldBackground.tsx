@@ -5,23 +5,23 @@ type Theme = "dark" | "light";
 
 const PALETTE = {
   dark: {
-    fog: 0x0a0a1e,
+    fog: 0x050816,
     fogDensity: 0.032,
-    grid: 0x5fffd4,
+    grid: 0x2dd4bf,
     gridOpacity: 0.18,
-    particleStart: 0x4a5fff,
-    particleEnd: 0x5fffd4,
+    particleStart: 0x60a5fa,
+    particleEnd: 0x2dd4bf,
     particleOpacity: 0.75,
     particleSize: 0.20,
   },
   light: {
-    fog: 0xeedfff,
+    fog: 0xeef2ff,
     fogDensity: 0.015,
-    grid: 0x6361f1,
-    gridOpacity: 0.12,
-    particleStart: 0x6361f1,
-    particleEnd: 0x06b6d4,
-    particleOpacity: 0.45,
+    grid: 0x3b82f6,
+    gridOpacity: 0.10,
+    particleStart: 0x3b82f6,
+    particleEnd: 0x0d9488,
+    particleOpacity: 0.42,
     particleSize: 0.18,
   },
 } as const;

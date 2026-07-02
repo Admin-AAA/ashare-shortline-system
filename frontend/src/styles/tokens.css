@@ -3,12 +3,15 @@
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 999px;
 
   /* ── Layout ── */
   --sidebar-width: 168px;
   --topbar-height: 64px;
+  --content-max-width: 1480px;
 
-  /* ── Spacing scale (8px base) ── */
+  /* ── Spacing scale (4pt base) ── */
   --space-1: 4px;   /* micro: icon insets, tag padding */
   --space-2: 8px;   /* tight: inline gaps, button padding */
   --space-3: 12px;  /* default small: field gaps, list rows */
@@ -17,11 +20,13 @@
   --space-6: 32px;  /* panel padding (breathing room) */
   --space-7: 48px;  /* large whitespace */
   --space-8: 64px;  /* extra-large whitespace */
+  --space-9: 96px;  /* hero whitespace */
 
   /* ── Typography ── */
   --font-ui: Inter, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
   --font-mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
 
+  --text-2xs: 10px;
   --text-xs: 11px;
   --text-sm: 12px;
   --text-base: 13px;
@@ -29,15 +34,52 @@
   --text-lg: 16px;
   --text-xl: 20px;
   --text-2xl: 24px;
+  --text-3xl: 32px;
+  --text-4xl: 44px;
 
   --leading-tight: 1.25;
   --leading-normal: 1.5;
   --leading-loose: 1.7;
 
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --weight-extrabold: 800;
+
   /* ── Motion ── */
-  --motion-fast: 160ms ease;
-  --motion-normal: 240ms ease;
+  --motion-instant: 100ms cubic-bezier(0.25, 1, 0.5, 1);
+  --motion-fast: 160ms cubic-bezier(0.25, 1, 0.5, 1);
+  --motion-normal: 240ms cubic-bezier(0.25, 1, 0.5, 1);
+  --motion-slow: 360ms cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
 
   /* ── Borders ── */
   --border-hairline: 1px solid var(--line);
+  --border-soft: 1px solid var(--line-strong);
+
+  /* ── Z-index scale ── */
+  --z-base: 0;
+  --z-sticky: 10;
+  --z-dropdown: 20;
+  --z-drawer-backdrop: 40;
+  --z-drawer: 50;
+  --z-toast: 60;
+
+  /* ── Shadows ── */
+  --shadow-sm: 0 1px 2px rgb(15 23 42 / 0.04);
+  --shadow-md: 0 4px 16px rgb(15 23 42 / 0.06);
+  --shadow-lg: 0 12px 40px rgb(15 23 42 / 0.10);
+  --shadow-glow: 0 0 24px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+/* Respect reduced motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-instant: 0.01ms;
+    --motion-fast: 0.01ms;
+    --motion-normal: 0.01ms;
+    --motion-slow: 0.01ms;
+  }
 }

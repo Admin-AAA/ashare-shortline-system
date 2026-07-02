@@ -1,49 +1,41 @@
 /* ═══════════════════════════════════════════════════════════════
-   COSMIC THEME — 纵深远眺 · 玻璃质感 · 大留白
-   覆盖 cockpit.css 的 shell 层；组件内部样式沿用半透明 token
+   COSMIC THEME — 极地海洋 · 克制专业 · 大留白
+   覆盖 cockpit.css 的 shell 层；组件内部样式沿用玻璃 token
+   设计目标：
+   - 浅色模式彻底消除米黄/暖灰，与动态背景冷色调融合
+   - 深色模式保持深海极光氛围
+   - 所有元素统一玻璃质感，强调色仅用于关键动作与状态
    ═══════════════════════════════════════════════════════════════ */
 
-/* ── 底色：深紫蓝 → 幽青绿，像深海由近及远的渐变；两道极光晕从底部和左上方晕染开来 ── */
+/* ── 底色：深海 → 极浅雾蓝，与动态网格同色系 ── */
 [data-theme="dark"] body {
   background:
-    radial-gradient(ellipse 80% 55% at 50% 100%, rgba(95, 255, 212, 0.28), transparent 55%),
-    radial-gradient(ellipse 60% 50% at 10% 15%, rgba(99, 102, 241, 0.24), transparent 55%),
-    linear-gradient(to top, #081a20 0%, #081528 30%, #080d1f 62%, #0a0816 100%);
+    radial-gradient(ellipse 80% 55% at 50% 100%, rgba(45, 212, 191, 0.22), transparent 55%),
+    radial-gradient(ellipse 60% 50% at 10% 15%, rgba(96, 165, 250, 0.18), transparent 55%),
+    linear-gradient(to top, #071018 0%, #081528 30%, #080d1f 62%, #050816 100%);
 }
 [data-theme="light"] body {
   background:
-    radial-gradient(ellipse 60% 50% at 50% 100%, rgba(99, 102, 241, 0.10), transparent),
-    radial-gradient(ellipse 30% 40% at 20% 30%, rgba(20, 184, 166, 0.08), transparent),
-    linear-gradient(135deg, #f8fbff 0%, #eef2ff 52%, #f0fdfa 100%);
+    radial-gradient(ellipse 60% 50% at 50% 100%, rgba(37, 99, 235, 0.08), transparent),
+    radial-gradient(ellipse 30% 40% at 20% 30%, rgba(13, 148, 136, 0.06), transparent),
+    linear-gradient(135deg, #f8fbff 0%, #f1f5f9 52%, #f0fdfa 100%);
 }
 
 /* ── 半透明玻璃 token（cosmic-shell 作用域内覆盖 themes.css）── */
 .cosmic-shell {
-  --surface: rgba(10, 15, 28, 0.58);
-  --surface-soft: rgba(12, 18, 34, 0.44);
-  --surface-strong: rgba(16, 26, 46, 0.72);
-  --line: rgba(95, 255, 212, 0.14);
-  --line-strong: rgba(95, 255, 212, 0.32);
-  --shadow-panel: 0 18px 60px rgba(0, 0, 0, 0.40);
-  --accent: #5fffd4;
-  --accent-strong: #a7ffeb;
-}
-[data-theme="light"] .cosmic-shell {
-  --surface: rgba(255, 255, 255, 0.62);
-  --surface-soft: rgba(245, 242, 235, 0.50);
-  --surface-strong: rgba(230, 237, 241, 0.74);
-  --line: rgba(138, 122, 90, 0.20);
-  --line-strong: rgba(138, 122, 90, 0.36);
-  --shadow-panel: 0 12px 40px rgba(25, 43, 56, 0.10);
-  --accent: #0d9488;
-  --accent-strong: #14b8a6;
+  --surface: var(--glass-surface);
+  --surface-soft: var(--glass-surface-soft);
+  --surface-strong: var(--glass-surface-strong);
+  --line: var(--glass-border);
+  --line-strong: var(--glass-border-strong);
+  --shadow-panel: var(--shadow-lg);
 }
 
 /* ── 3D 背景层 ── */
 .starfield-bg {
   position: fixed;
   inset: 0;
-  z-index: 0;
+  z-index: var(--z-base);
   pointer-events: none;
 }
 .starfield-bg canvas {
@@ -66,30 +58,35 @@
   color: var(--ink);
 }
 
-/* ── 顶栏 ── */
+/* ── 顶栏：悬浮玻璃，与背景同冷调 ── */
 .cosmic-topbar {
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: var(--z-sticky);
   display: flex;
   align-items: center;
   gap: var(--space-6);
-  padding: var(--space-5) var(--space-7);
-  background: rgba(6, 8, 18, 0.60);
+  padding: var(--space-4) var(--space-7);
+  min-height: var(--topbar-height);
+  background: var(--glass-surface);
   backdrop-filter: blur(24px) saturate(140%);
   -webkit-backdrop-filter: blur(24px) saturate(140%);
-  border-bottom: 1px solid var(--line);
+  border-bottom: var(--border-hairline);
+  transition: background var(--motion-slow), border-color var(--motion-slow);
 }
-[data-theme="light"] .cosmic-topbar { background: rgba(245, 242, 235, 0.65); }
+[data-theme="dark"] .cosmic-topbar { background: rgba(8, 12, 20, 0.60); }
+[data-theme="light"] .cosmic-topbar { background: rgba(248, 251, 255, 0.72); }
 
 .cosmic-brand { display: flex; align-items: center; gap: var(--space-3); flex-shrink: 0; }
 .cosmic-brand .brand-mark {
   width: 38px; height: 38px; border-radius: 11px;
   display: grid; place-items: center;
-  background: linear-gradient(135deg, rgba(106, 180, 255, 0.92), rgba(45, 212, 191, 0.62));
-  color: #05070d; font-weight: 700; font-size: 16px;
-  box-shadow: 0 6px 24px rgba(106, 180, 255, 0.28);
+  background: linear-gradient(135deg, rgba(96, 165, 250, 0.92), rgba(45, 212, 191, 0.62));
+  color: #05070d; font-weight: var(--weight-bold); font-size: 16px;
+  box-shadow: 0 6px 24px rgba(96, 165, 250, 0.28);
+  transition: box-shadow var(--motion-fast), transform var(--motion-fast);
 }
+.cosmic-brand:hover .brand-mark { box-shadow: 0 0 18px rgba(96, 165, 250, 0.45); transform: translateY(-1px); }
 .cosmic-brand .brand-text { display: flex; flex-direction: column; line-height: 1.25; }
 .cosmic-brand .brand-text strong { font-size: 15px; letter-spacing: 0.02em; }
 .cosmic-brand .brand-text span { font-size: 11px; color: var(--muted); letter-spacing: 0.08em; }
@@ -107,14 +104,14 @@
   transition: all var(--motion-fast);
   min-width: 128px;
 }
-.cosmic-mainnav button .mainnav-label { font-size: 14px; font-weight: 600; letter-spacing: 0.02em; }
+.cosmic-mainnav button .mainnav-label { font-size: 14px; font-weight: var(--weight-semibold); letter-spacing: 0.02em; }
 .cosmic-mainnav button .mainnav-hint { font-size: 10px; letter-spacing: 0.06em; opacity: 0.72; }
-.cosmic-mainnav button:hover { color: var(--ink); background: var(--surface-soft); }
+.cosmic-mainnav button:hover { color: var(--ink); background: var(--surface-soft); border-color: var(--line); }
 .cosmic-mainnav button.active {
   color: var(--ink);
   background: var(--surface);
   border-color: var(--line-strong);
-  box-shadow: 0 4px 18px rgba(106, 180, 255, 0.10);
+  box-shadow: 0 4px 18px rgba(96, 165, 250, 0.10);
 }
 
 /* ── 操作区 ── */
@@ -122,7 +119,7 @@
 .cosmic-actions button {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 8px 14px;
-  border: 1px solid var(--line);
+  border: var(--border-hairline);
   border-radius: var(--radius-md);
   background: var(--surface-soft);
   color: var(--ink);
@@ -140,24 +137,26 @@
 .cosmic-actions .spin { animation: cosmicSpin 1s linear infinite; }
 @keyframes cosmicSpin { to { transform: rotate(360deg); } }
 
-/* ── 子导航 ── */
+/* ── 子导航：更克制，不抢夺注意力 ── */
 .cosmic-subnav {
   position: sticky;
-  top: 76px;
+  top: var(--topbar-height);
   z-index: 9;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-5);
-  padding: var(--space-4) var(--space-7);
-  background: rgba(8, 12, 20, 0.38);
+  padding: var(--space-3) var(--space-7);
+  background: var(--glass-surface-soft);
   backdrop-filter: blur(18px) saturate(130%);
   -webkit-backdrop-filter: blur(18px) saturate(130%);
-  border-bottom: 1px solid var(--line);
+  border-bottom: var(--border-hairline);
+  transition: background var(--motion-slow), border-color var(--motion-slow);
 }
-[data-theme="light"] .cosmic-subnav { background: rgba(245, 242, 235, 0.48); }
+[data-theme="dark"] .cosmic-subnav { background: rgba(8, 12, 20, 0.38); }
+[data-theme="light"] .cosmic-subnav { background: rgba(248, 251, 255, 0.52); }
 .subnav-title { display: flex; flex-direction: column; line-height: 1.35; min-width: 0; }
-.subnav-title strong { font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.78; }
+.subnav-title strong { font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.78; color: var(--muted); }
 .subnav-title span { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .subnav-items { display: flex; gap: var(--space-2); flex-shrink: 0; }
 .subnav-items button {
@@ -171,18 +170,19 @@
   cursor: pointer;
   transition: all var(--motion-fast);
 }
-.subnav-items button:hover { color: var(--ink); background: var(--surface-soft); }
+.subnav-items button:hover { color: var(--ink); background: var(--surface-soft); border-color: var(--line); }
 .subnav-items button.active {
-  color: var(--ink);
+  color: var(--accent);
   background: var(--surface);
-  border-color: var(--line-strong);
+  border-color: var(--accent);
+  font-weight: var(--weight-semibold);
 }
 
 /* ── 主内容：大留白 + 居中限宽 ── */
 .cosmic-main {
   flex: 1;
   padding: var(--space-7) var(--space-8);
-  max-width: 1480px;
+  max-width: var(--content-max-width);
   width: 100%;
   margin: 0 auto;
   position: relative;
@@ -191,15 +191,17 @@
 
 /* ── 统一内容卡片：淡玻璃边界，让每页都有容器感 ── */
 .cosmic-content-card {
-  background: rgba(8, 12, 20, 0.18);
+  background: var(--glass-surface-soft);
   backdrop-filter: blur(14px) saturate(120%);
   -webkit-backdrop-filter: blur(14px) saturate(120%);
-  border: 1px solid var(--line);
+  border: var(--border-hairline);
   border-radius: var(--radius-lg);
   padding: var(--space-6);
   min-height: calc(100vh - 240px);
   box-shadow: var(--shadow-panel);
+  transition: background var(--motion-slow), border-color var(--motion-slow);
 }
+[data-theme="dark"] .cosmic-content-card { background: rgba(8, 12, 20, 0.18); }
 [data-theme="light"] .cosmic-content-card { background: rgba(255, 255, 255, 0.18); }
 
 /* ── 首页：空白、居中、大留白 ── */
@@ -216,7 +218,7 @@
 }
 .cosmic-home .home-title {
   margin: 0;
-  font-size: 44px;
+  font-size: var(--text-4xl);
   font-weight: 300;
   letter-spacing: 0.12em;
   color: var(--ink);
@@ -240,22 +242,23 @@
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-5) var(--space-6);
-  background: rgba(8, 12, 20, 0.22);
+  background: var(--glass-surface-soft);
   backdrop-filter: blur(14px) saturate(120%);
   -webkit-backdrop-filter: blur(14px) saturate(120%);
-  border: 1px solid var(--line);
+  border: var(--border-hairline);
   border-radius: var(--radius-lg);
   cursor: pointer;
-  transition: border-color var(--motion-normal), transform var(--motion-normal), background var(--motion-normal);
+  transition: border-color var(--motion-normal), transform var(--motion-normal), background var(--motion-normal), box-shadow var(--motion-normal);
 }
 .cosmic-home .home-entry:hover {
   border-color: var(--line-strong);
   transform: translateY(-2px);
-  background: rgba(8, 12, 20, 0.32);
+  background: var(--glass-surface-strong);
+  box-shadow: var(--shadow-md);
 }
 .cosmic-home .home-entry .entry-label {
   font-size: 18px;
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   letter-spacing: 0.08em;
   color: var(--ink);
 }
@@ -264,7 +267,9 @@
   letter-spacing: 0.14em;
   color: var(--muted);
 }
+[data-theme="dark"] .cosmic-home .home-entry { background: rgba(8, 12, 20, 0.22); }
 [data-theme="light"] .cosmic-home .home-entry { background: rgba(255, 255, 255, 0.30); }
+[data-theme="dark"] .cosmic-home .home-entry:hover { background: rgba(8, 12, 20, 0.32); }
 [data-theme="light"] .cosmic-home .home-entry:hover { background: rgba(255, 255, 255, 0.42); }
 
 /* home 时不显示子导航 */
@@ -281,7 +286,6 @@
   gap: var(--space-3);
   text-align: left;
 }
-.cosmic-brand:hover .brand-mark { box-shadow: 0 0 18px rgba(106, 180, 255, 0.45); }
 
 /* ── 玻璃化容器：所有用 surface 的卡片加 blur ── */
 .cosmic-shell .section-hero,
@@ -297,7 +301,7 @@
 .cosmic-drawer-overlay {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: var(--z-drawer-backdrop);
   background: rgba(0, 0, 0, 0.45);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
@@ -309,27 +313,28 @@
   width: 384px;
   max-width: 90vw;
   height: 100%;
-  background: rgba(10, 15, 22, 0.86);
+  background: var(--glass-surface-strong);
   backdrop-filter: blur(28px) saturate(140%);
   -webkit-backdrop-filter: blur(28px) saturate(140%);
-  border-left: 1px solid var(--line-strong);
+  border-left: var(--border-hairline);
   display: flex;
   flex-direction: column;
   animation: cosmicSlide 240ms ease;
 }
-[data-theme="light"] .cosmic-drawer { background: rgba(250, 248, 243, 0.92); }
+[data-theme="dark"] .cosmic-drawer { background: rgba(10, 15, 22, 0.86); }
+[data-theme="light"] .cosmic-drawer { background: rgba(250, 251, 253, 0.92); }
 .drawer-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: var(--space-5);
-  border-bottom: 1px solid var(--line);
+  border-bottom: var(--border-hairline);
 }
 .drawer-head strong { font-size: 15px; display: block; }
 .drawer-head span { font-size: 11px; color: var(--muted); }
 .drawer-close {
   background: transparent;
-  border: 1px solid var(--line);
+  border: var(--border-hairline);
   border-radius: 8px;
   width: 34px;
   height: 34px;
@@ -361,7 +366,7 @@
   transition: all var(--motion-fast);
 }
 .drawer-nav button:hover { background: var(--surface-soft); border-color: var(--line); }
-.drawer-nav button.active { background: var(--surface); border-color: var(--accent); }
+.drawer-nav button.active { background: var(--surface); border-color: var(--accent); color: var(--accent); }
 .drawer-item-text { display: flex; flex-direction: column; line-height: 1.35; }
 .drawer-item-text strong { font-size: 13px; }
 .drawer-item-text span { font-size: 11px; color: var(--muted); }
@@ -371,13 +376,13 @@
 .cosmic-shell .cockpit-nav button,
 .cosmic-shell .topbar-actions button,
 .cosmic-shell .error-state button {
-  border: 1px solid var(--line);
+  border: var(--border-hairline);
   border-radius: var(--radius-md);
   background: var(--surface-soft);
   color: var(--ink);
   min-height: 38px;
   padding: 8px 14px;
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   transition: all var(--motion-fast);
   box-shadow: none;
 }
@@ -396,7 +401,7 @@
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--accent);
-  font-weight: 700;
+  font-weight: var(--weight-bold);
   box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .cosmic-shell .btn.primary:hover,
@@ -416,7 +421,7 @@
 .cosmic-shell input,
 .cosmic-shell select,
 .cosmic-shell textarea {
-  border: 1px solid var(--line);
+  border: var(--border-hairline);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--surface-soft) 80%, transparent);
   color: var(--ink);
@@ -442,7 +447,7 @@
 .cosmic-shell .control-button,
 .cosmic-shell .control-button.primary,
 .cosmic-shell .control-button.subtle {
-  border: 1px solid var(--line);
+  border: var(--border-hairline);
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--ink);
@@ -453,7 +458,7 @@
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--accent);
-  font-weight: 700;
+  font-weight: var(--weight-bold);
   box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .cosmic-shell .control-button.primary:hover,
@@ -499,6 +504,7 @@
   .cosmic-mainnav button { flex: 1; min-width: 0; }
   .cosmic-subnav { top: auto; position: relative; flex-direction: column; align-items: flex-start; }
   .cosmic-main { padding: var(--space-5) var(--space-4); }
+  .cosmic-home .home-entries { grid-template-columns: 1fr; }
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -512,17 +518,19 @@
 
 /* ── 搜索栏：大留白玻璃卡片 ── */
 .sm-searchbar {
-  background: rgba(8, 12, 20, 0.22);
+  background: var(--glass-surface-soft);
   backdrop-filter: blur(20px) saturate(135%);
   -webkit-backdrop-filter: blur(20px) saturate(135%);
-  border: 1px solid var(--line);
+  border: var(--border-hairline);
   border-radius: var(--radius-lg);
   padding: var(--space-5) var(--space-6);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
   margin-bottom: var(--space-5);
+  transition: background var(--motion-slow), border-color var(--motion-slow);
 }
+[data-theme="dark"] .sm-searchbar { background: rgba(8, 12, 20, 0.22); }
 [data-theme="light"] .sm-searchbar { background: rgba(255, 255, 255, 0.30); }
 
 .sm-searchbar-main,
@@ -570,17 +578,16 @@
 .sm-input {
   width: 100%;
   padding: 10px 14px;
-  background: rgba(0, 0, 0, 0.18);
-  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-soft) 70%, transparent);
+  border: var(--border-hairline);
   border-radius: var(--radius-md);
   color: var(--ink);
   font-size: var(--text-md);
   font-family: var(--font-mono);
   letter-spacing: 0.04em;
-  transition: border-color var(--motion-fast), background var(--motion-fast);
+  transition: border-color var(--motion-fast), background var(--motion-fast), box-shadow var(--motion-fast);
   outline: none;
 }
-[data-theme="light"] .sm-input { background: rgba(255, 255, 255, 0.5); }
 .sm-input-wrap .sm-input { padding-left: 36px; }
 .sm-input::placeholder {
   color: var(--muted);
@@ -588,10 +595,10 @@
   opacity: 0.7;
 }
 .sm-input:focus {
-  border-color: var(--line-strong);
-  background: rgba(0, 0, 0, 0.30);
+  border-color: var(--accent);
+  background: var(--surface);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
 }
-[data-theme="light"] .sm-input:focus { background: rgba(255, 255, 255, 0.7); }
 .sm-input-date { width: 170px; }
 
 /* ── 按钮 ── */
@@ -600,30 +607,32 @@
   align-items: center;
   gap: var(--space-2);
   padding: 10px 20px;
-  border: 1px solid var(--line-strong);
+  border: var(--border-soft);
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--ink);
   font-size: var(--text-md);
   letter-spacing: 0.05em;
   cursor: pointer;
-  transition: background var(--motion-fast), border-color var(--motion-fast), transform var(--motion-fast);
+  transition: background var(--motion-fast), border-color var(--motion-fast), transform var(--motion-fast), box-shadow var(--motion-fast);
   height: 38px;
 }
 .sm-btn:hover:not(:disabled) {
   transform: translateY(-1px);
+  border-color: var(--line-strong);
+  background: var(--surface-soft);
 }
 .sm-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
 .sm-btn-primary {
-  background: linear-gradient(135deg, rgba(106, 159, 255, 0.35), rgba(95, 255, 212, 0.25));
-  border-color: rgba(106, 159, 255, 0.55);
+  background: linear-gradient(135deg, rgba(96, 165, 250, 0.35), rgba(45, 212, 191, 0.25));
+  border-color: rgba(96, 165, 250, 0.55);
   color: var(--ink);
 }
 .sm-btn-primary:hover:not(:disabled) {
-  background: linear-gradient(135deg, rgba(106, 159, 255, 0.5), rgba(95, 255, 212, 0.35));
+  background: linear-gradient(135deg, rgba(96, 165, 250, 0.5), rgba(45, 212, 191, 0.35));
 }
 .sm-btn-secondary {
   background: rgba(124, 58, 237, 0.18);
@@ -643,11 +652,11 @@
   cursor: pointer;
   padding: 8px 12px;
   border-radius: var(--radius-md);
-  border: 1px solid var(--line);
-  transition: color var(--motion-fast), border-color var(--motion-fast);
+  border: var(--border-hairline);
+  transition: color var(--motion-fast), border-color var(--motion-fast), background var(--motion-fast);
   height: 38px;
 }
-.sm-llm-toggle:hover { color: var(--ink); border-color: var(--line-strong); }
+.sm-llm-toggle:hover { color: var(--ink); border-color: var(--line-strong); background: var(--surface-soft); }
 .sm-llm-toggle input { accent-color: var(--line-strong); }
 
 /* ── 错误提示 ── */
@@ -656,10 +665,11 @@
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
-  background: rgba(220, 38, 38, 0.12);
-  border: 1px solid rgba(220, 38, 38, 0.35);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border: var(--border-hairline);
+  border-color: color-mix(in srgb, var(--danger) 32%, var(--line));
   border-radius: var(--radius-md);
-  color: #fca5a5;
+  color: var(--danger);
   font-size: var(--text-sm);
   margin-bottom: var(--space-4);
 }
@@ -669,7 +679,7 @@
   display: flex;
   gap: var(--space-1);
   margin-bottom: var(--space-4);
-  border-bottom: 1px solid var(--line);
+  border-bottom: var(--border-hairline);
 }
 .sm-tabs button {
   padding: var(--space-3) var(--space-5);
@@ -685,9 +695,9 @@
 }
 .sm-tabs button:hover:not(:disabled) { color: var(--ink); }
 .sm-tabs button.active {
-  color: var(--ink);
-  border-bottom-color: var(--line-strong);
-  font-weight: 500;
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: var(--weight-medium);
 }
 .sm-tabs button:disabled { opacity: 0.35; cursor: not-allowed; }
 

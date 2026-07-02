@@ -1,41 +1,143 @@
+/* ═══════════════════════════════════════════════════════════════
+   THEME SYSTEM — 极地海洋 · 克制专业
+   基于单一强调色（极光青绿）的冷暖双主题系统
+   所有中性色均带有细微冷色倾向，确保浅色模式不发黄
+   ═══════════════════════════════════════════════════════════════ */
+
 :root[data-theme="dark"] {
-  --canvas: #070b0f;
-  --surface: #0e151b;
-  --surface-soft: #131d25;
-  --surface-strong: #17232c;
-  --line: #26323c;
-  --line-strong: #39505d;
-  --ink: #eef6f8;
-  --muted: #8fa1ad;
+  /* 画布：深海极暗，非纯黑 */
+  --canvas: #020617;
+  --canvas-soft: #0b1221;
+
+  /* 表面：上浮的卡片/面板，由暗到亮代表海拔升高 */
+  --surface: #0f172a;
+  --surface-soft: #1e293b;
+  --surface-strong: #334155;
+  --surface-elevated: #1e293b;
+
+  /* 线条：冷灰蓝，保持克制 */
+  --line: #1e293b;
+  --line-strong: #334155;
+  --line-subtle: #0f172a;
+
+  /* 文字 */
+  --ink: #f8fafc;
+  --ink-secondary: #e2e8f0;
+  --muted: #94a3b8;
+  --muted-strong: #64748b;
+
+  /* 强调：极光青绿，仅在关键处使用 */
   --accent: #2dd4bf;
   --accent-strong: #5eead4;
-  --danger: #f97373;
-  --warning: #f4b85e;
-  --positive: #3ddc97;
-  --negative: #ff6b6b;
-  --market-up: #ff6b6b;
-  --market-down: #3ddc97;
+  --accent-soft: #115e59;
+  --accent-glow: rgba(45, 212, 191, 0.20);
+
+  /* 语义：金融市场标准色 */
+  --danger: #f87171;
+  --danger-soft: #7f1d1d;
+  --warning: #fbbf24;
+  --warning-soft: #78350f;
+  --positive: #4ade80;
+  --positive-soft: #14532d;
+  --negative: #f87171;
+  --negative-soft: #7f1d1d;
+  --info: #60a5fa;
+  --info-soft: #1e3a8a;
+
+  /* A股市场色：涨红跌绿 */
+  --market-up: #f87171;
+  --market-down: #4ade80;
+  --market-flat: #94a3b8;
+
+  /* 品牌蓝：辅助信息链接 */
   --blue: #60a5fa;
-  --shadow-panel: 0 18px 60px rgba(0, 0, 0, 0.24);
+  --blue-soft: #1e3a8a;
+
+  /* 阴影：深色模式用浅色表面代替阴影制造层次 */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.20);
+  --shadow-md: 0 4px 16px rgb(0 0 0 / 0.28);
+  --shadow-lg: 0 12px 40px rgb(0 0 0 / 0.36);
+  --shadow-glow: 0 0 24px color-mix(in srgb, var(--accent) 16%, transparent);
+
+  /* 玻璃 */
+  --glass-surface: rgba(15, 23, 42, 0.72);
+  --glass-surface-soft: rgba(30, 41, 59, 0.56);
+  --glass-surface-strong: rgba(51, 65, 85, 0.72);
+  --glass-border: rgba(148, 163, 184, 0.16);
+  --glass-border-strong: rgba(148, 163, 184, 0.32);
 }
 
 :root[data-theme="light"] {
-  --canvas: #f4f7f9;
+  /* 画布：极地雾蓝，冷色不发黄 */
+  --canvas: #f1f5f9;
+  --canvas-soft: #e2e8f0;
+
+  /* 表面：白色至浅灰，海拔越高越亮 */
   --surface: #ffffff;
-  --surface-soft: #eef3f6;
-  --surface-strong: #e6edf1;
-  --line: #d8e1e7;
-  --line-strong: #b7c8d2;
-  --ink: #11181c;
-  --muted: #667782;
-  --accent: #087f7a;
-  --accent-strong: #0f766e;
-  --danger: #c93636;
-  --warning: #a66b00;
-  --positive: #087f5b;
-  --negative: #c93636;
-  --market-up: #c93636;
-  --market-down: #087f5b;
+  --surface-soft: #f8fafc;
+  --surface-strong: #f1f5f9;
+  --surface-elevated: #ffffff;
+
+  /* 线条：冷灰，柔和不刺眼 */
+  --line: #e2e8f0;
+  --line-strong: #cbd5e1;
+  --line-subtle: #f1f5f9;
+
+  /* 文字 */
+  --ink: #0f172a;
+  --ink-secondary: #334155;
+  --muted: #64748b;
+  --muted-strong: #94a3b8;
+
+  /* 强调：深海青绿，比深色模式更沉稳 */
+  --accent: #0d9488;
+  --accent-strong: #14b8a6;
+  --accent-soft: #ccfbf1;
+  --accent-glow: rgba(13, 148, 136, 0.14);
+
+  /* 语义 */
+  --danger: #dc2626;
+  --danger-soft: #fee2e2;
+  --warning: #d97706;
+  --warning-soft: #fef3c7;
+  --positive: #16a34a;
+  --positive-soft: #dcfce7;
+  --negative: #dc2626;
+  --negative-soft: #fee2e2;
+  --info: #2563eb;
+  --info-soft: #dbeafe;
+
+  /* A股：涨红跌绿 */
+  --market-up: #ef4444;
+  --market-down: #22c55e;
+  --market-flat: #94a3b8;
+
   --blue: #2563eb;
-  --shadow-panel: 0 10px 32px rgba(25, 43, 56, 0.08);
+  --blue-soft: #dbeafe;
+
+  /* 阴影：浅色模式用柔和投影 */
+  --shadow-sm: 0 1px 2px rgb(15 23 42 / 0.04);
+  --shadow-md: 0 4px 16px rgb(15 23 42 / 0.06);
+  --shadow-lg: 0 12px 40px rgb(15 23 42 / 0.10);
+  --shadow-glow: 0 0 24px color-mix(in srgb, var(--accent) 14%, transparent);
+
+  /* 玻璃：与背景同冷的半透明色，彻底消除米黄条 */
+  --glass-surface: rgba(255, 255, 255, 0.76);
+  --glass-surface-soft: rgba(248, 250, 252, 0.62);
+  --glass-surface-strong: rgba(241, 245, 249, 0.82);
+  --glass-border: rgba(100, 116, 139, 0.14);
+  --glass-border-strong: rgba(100, 116, 139, 0.26);
+}
+
+/* 主题切换平滑过渡 */
+html {
+  transition: color var(--motion-slow), background-color var(--motion-slow);
+}
+
+*,
+*::before,
+*::after {
+  transition-property: background-color, border-color, color, fill, stroke, box-shadow;
+  transition-duration: var(--motion-fast);
+  transition-timing-function: var(--ease-out-quart);
 }
