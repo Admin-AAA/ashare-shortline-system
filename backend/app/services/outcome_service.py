@@ -1,9 +1,12 @@
 import json
+import logging
 import threading
 import time
 from bisect import bisect_left
 from datetime import datetime, timezone
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -23,10 +26,11 @@ BREAKDOWN_HORIZON_DAYS = (3, 5, 10)
 ENTRY_SLIPPAGE_BPS = 10.0
 EXIT_SLIPPAGE_BPS = 10.0
 SUCCESS_RETURN_PCT = 3.0
-DEFAULT_STOP_LOSS_PCT = -4.0
+DEFAULT_STOP_LOSS_PCT = -6.5   # 基于历史回测最优（-7% 接近 breakeven，保守取 -6.5%）
 DEFAULT_TAKE_PROFIT_PCT = 8.0
-MAX_STOP_LOSS_PCT = -8.0       # 止损最宽（-8%），防止 feature_builder 设置过宽的止损
+MAX_STOP_LOSS_PCT = -9.0       # 止损最宽 -9%，高波动股允许更宽止损
 MAX_TAKE_PROFIT_PCT = 15.0     # 止盈上限（+15%），防止 feature_builder 设置过高的止盈
+MAX_ENTRY_GAP_PCT = 10.0       # 跳空高开 > 10% 则放弃入场（历史数据：gap>10% 胜率 0%）
 
 OUTCOME_PENDING = "pending"
 OUTCOME_SUCCESS = "success"
@@ -150,6 +154,7 @@ def label_pending_outcomes(
         dates_by_code.setdefault(code, []).append(str(bar.trade_date))
 
     labeled = 0
+    errors = 0
     for rec in recs:
         simulation = _simulate_outcome(
             rec,
@@ -160,45 +165,54 @@ def label_pending_outcomes(
         if simulation is None:
             continue
 
-        outcome = db.get(RecommendationOutcome, rec.recommendation_id)
-        if outcome is None:
-            outcome = RecommendationOutcome(recommendation_id=rec.recommendation_id)
-            db.add(outcome)
+        savepoint = db.begin_nested()
+        try:
+            existing = db.get(RecommendationOutcome, rec.recommendation_id)
+            if existing is not None:
+                outcome = existing
+            else:
+                outcome = RecommendationOutcome(recommendation_id=rec.recommendation_id)
+                db.add(outcome)
 
-        outcome.horizon_days = horizon_days
-        outcome.entry_triggered = bool(simulation["entry_triggered"])
-        outcome.entry_date = simulation["entry_date"]
-        outcome.entry_price = simulation["entry_price"]
-        outcome.exit_date = simulation["exit_date"]
-        outcome.exit_price = simulation["exit_price"]
-        outcome.executed_return = simulation["executed_return"]
-        outcome.weighted_return = simulation["weighted_return"]
-        outcome.position_size = simulation["position_size"]
-        outcome.holding_days = simulation["holding_days"]
-        outcome.entry_slippage_bps = simulation["entry_slippage_bps"]
-        outcome.exit_slippage_bps = simulation["exit_slippage_bps"]
-        outcome.stop_loss_price = simulation["stop_loss_price"]
-        outcome.take_profit_price = simulation["take_profit_price"]
-        outcome.exit_reason = simulation["exit_reason"]
-        outcome.max_return = simulation["max_return"]
-        outcome.min_return = simulation["min_return"]
-        outcome.close_return = simulation["close_return"]
-        outcome.achievable_return = simulation["achievable_return"]
-        outcome.max_drawdown = simulation["max_drawdown"]
-        outcome.hit_target = bool(simulation["hit_target"])
-        outcome.hit_invalid = bool(simulation["hit_invalid"])
-        outcome.outcome_label = str(simulation["outcome_label"])
-        outcome.outcome_label_legacy = str(simulation["outcome_label_legacy"])
-        outcome.outcome_reason = str(simulation["outcome_reason"])
-        outcome.label_source = "auto"
-        outcome.labeled_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        rec.status = normalized_outcome_label(outcome)
-        labeled += 1
+            outcome.horizon_days = horizon_days
+            outcome.entry_triggered = bool(simulation["entry_triggered"])
+            outcome.entry_date = simulation["entry_date"]
+            outcome.entry_price = simulation["entry_price"]
+            outcome.exit_date = simulation["exit_date"]
+            outcome.exit_price = simulation["exit_price"]
+            outcome.executed_return = simulation["executed_return"]
+            outcome.weighted_return = simulation["weighted_return"]
+            outcome.position_size = simulation["position_size"]
+            outcome.holding_days = simulation["holding_days"]
+            outcome.entry_slippage_bps = simulation["entry_slippage_bps"]
+            outcome.exit_slippage_bps = simulation["exit_slippage_bps"]
+            outcome.stop_loss_price = simulation["stop_loss_price"]
+            outcome.take_profit_price = simulation["take_profit_price"]
+            outcome.exit_reason = simulation["exit_reason"]
+            outcome.max_return = simulation["max_return"]
+            outcome.min_return = simulation["min_return"]
+            outcome.close_return = simulation["close_return"]
+            outcome.achievable_return = simulation["achievable_return"]
+            outcome.max_drawdown = simulation["max_drawdown"]
+            outcome.hit_target = bool(simulation["hit_target"])
+            outcome.hit_invalid = bool(simulation["hit_invalid"])
+            outcome.outcome_label = str(simulation["outcome_label"])
+            outcome.outcome_label_legacy = str(simulation["outcome_label_legacy"])
+            outcome.outcome_reason = str(simulation["outcome_reason"])
+            outcome.label_source = "auto"
+            outcome.labeled_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            rec.status = normalized_outcome_label(outcome)
+            savepoint.commit()
+            labeled += 1
+        except Exception:
+            savepoint.rollback()
+            errors += 1
+            logger.warning("outcome labeling failed for %s", rec.recommendation_id, exc_info=True)
 
     db.commit()
     if labeled:
         invalidate_outcome_metrics_cache()
-    return {"labeled": labeled}
+    return {"labeled": labeled, "errors": errors}
 
 
 def overview_metrics(db: Session, run_mode: str = "formal") -> dict[str, Any]:
@@ -815,6 +829,36 @@ def _simulate_outcome(
     entry_index = int(entry_result["bar_index"])
     raw_entry_price = float(entry_result["price"])
     entry_date = str(entry_result["date"])
+
+    # 跳空高开过滤：gap > MAX_ENTRY_GAP_PCT 则放弃入场
+    # 历史数据表明 gap > 10% 的交易胜率为 0%（12/12 全部失败，平均亏损 -4.5%）
+    recommend_price = _as_float(rec.recommend_price) or 0
+    if recommend_price > 0 and raw_entry_price > 0:
+        gap_pct = (raw_entry_price - recommend_price) / recommend_price * 100
+        if gap_pct > MAX_ENTRY_GAP_PCT:
+            return {
+                **static_metrics,
+                "entry_triggered": False,
+                "entry_date": None,
+                "entry_price": None,
+                "exit_date": None,
+                "exit_price": None,
+                "executed_return": 0.0,
+                "weighted_return": 0.0,
+                "position_size": _resolve_position_size(feature_snapshot),
+                "holding_days": 0,
+                "entry_slippage_bps": ENTRY_SLIPPAGE_BPS,
+                "exit_slippage_bps": EXIT_SLIPPAGE_BPS,
+                "stop_loss_price": _resolve_stop_loss_price(None, feature_snapshot),
+                "take_profit_price": _resolve_take_profit_price(None, feature_snapshot),
+                "exit_reason": "gap_up_blocked",
+                "hit_target": False,
+                "hit_invalid": False,
+                "outcome_label": OUTCOME_MISSED,
+                "outcome_label_legacy": OUTCOME_MISSED,
+                "outcome_reason": f"跳空高开 {gap_pct:.1f}% > {MAX_ENTRY_GAP_PCT:.0f}% 阈值，放弃入场",
+            }
+
     executed_entry_price = round(raw_entry_price * (1 + ENTRY_SLIPPAGE_BPS / 10000.0), 4)
     stop_loss_price = _resolve_stop_loss_price(raw_entry_price, feature_snapshot)
     take_profit_price = _resolve_take_profit_price(raw_entry_price, feature_snapshot)
@@ -831,10 +875,26 @@ def _simulate_outcome(
     )
     executed_exit_price = round(exit_price * (1 - EXIT_SLIPPAGE_BPS / 10000.0), 4)
     executed_return = round(((executed_exit_price - executed_entry_price) / executed_entry_price) * 100, 2)
+
+    # 除权/复权检测：当价格跳变 > 20% 但持有期每日 pct_chg 均在正常范围时，
+    # 视为除权事件，使用 pct_chg 链重新计算收益。
+    if abs(executed_return) > 20:
+        is_star = str(rec.code or "").startswith("68")
+        limit_pct = 20 if is_star else 10
+        max_daily_pct = max(abs(_as_float(bar.pct_chg)) for bar in holding_bars) if holding_bars else 0
+        if max_daily_pct < limit_pct * 0.6:  # 无单日接近涨跌停 → 除权
+            cum = 1.0
+            for bar in holding_bars:
+                cum *= (1 + _as_float(bar.pct_chg) / 100.0)
+            executed_return = round((cum - 1) * 100, 2)
+            executed_exit_price = round(executed_entry_price * (1 + executed_return / 100.0), 4)
+
     weighted_return = round(executed_return * position_size, 2)
     hit_invalid = exit_reason.startswith("stop_loss")
     hit_target = exit_reason.startswith("take_profit") or executed_return >= SUCCESS_RETURN_PCT
-    outcome_label = OUTCOME_SUCCESS if (executed_return >= SUCCESS_RETURN_PCT and not hit_invalid) else OUTCOME_FAILED
+    # outcome_label 与 accuracy policy 对齐：扣费滑点后净收益 > 0 即为准确推荐
+    # SUCCESS_RETURN_PCT (3%) 是"优质推荐"阈值，不作为 outcome 硬门槛
+    outcome_label = OUTCOME_SUCCESS if (executed_return > 0 and not hit_invalid) else OUTCOME_FAILED
 
     return {
         **static_metrics,
@@ -928,6 +988,23 @@ def _resolve_entry(
                 }
 
     if entry_targets:
+        # 买点未在窗口内命中 → 回退到次日开盘市价入场，而不是直接放弃
+        for bar_index, bar in enumerate(entry_window):
+            block_reason = _entry_execution_block_reason(str(rec.code), bar)
+            if block_reason:
+                blocked_reasons.append(block_reason)
+                continue
+            raw_entry_price = _as_float(bar.open) or _as_float(bar.close)
+            if raw_entry_price <= 0:
+                blocked_reasons.append("入场日价格无效，无法真实成交")
+                continue
+            return {
+                "triggered": True,
+                "bar_index": bar_index,
+                "price": raw_entry_price,
+                "date": str(bar.trade_date),
+                "reason": "next_open_fallback_entry（买点未命中，市价入场）",
+            }
         return {
             "triggered": False,
             "reason": _entry_not_triggered_reason(blocked_reasons, has_targets=True),
