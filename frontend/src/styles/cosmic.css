@@ -81,12 +81,12 @@
 .cosmic-brand .brand-mark {
   width: 38px; height: 38px; border-radius: 11px;
   display: grid; place-items: center;
-  background: var(--accent-gradient);
+  background: linear-gradient(135deg, #3b82f6, #0d9488);
   color: #f8fafc; font-weight: var(--weight-bold); font-size: 16px;
-  box-shadow: 0 6px 24px rgba(59, 130, 246, 0.28);
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.18);
   transition: box-shadow var(--motion-fast), transform var(--motion-fast);
 }
-.cosmic-brand:hover .brand-mark { box-shadow: 0 0 18px rgba(59, 130, 246, 0.45); transform: translateY(-1px); }
+.cosmic-brand:hover .brand-mark { box-shadow: 0 0 12px rgba(59, 130, 246, 0.25); transform: translateY(-1px); }
 .cosmic-brand .brand-text { display: flex; flex-direction: column; line-height: 1.25; }
 .cosmic-brand .brand-text strong { font-size: 15px; letter-spacing: 0.02em; }
 .cosmic-brand .brand-text span { font-size: 11px; color: var(--muted); letter-spacing: 0.08em; }
@@ -394,26 +394,33 @@
   background: var(--surface);
   color: var(--ink);
 }
-/* 主按钮：品牌蓝渐变，与左上角 logo 同系 */
+/* 主按钮：小清新，细线描边 + 极浅蓝底 + 深蓝文字 */
 .cosmic-shell .btn.primary,
 .cosmic-shell .topbar-actions .primary,
 .cosmic-shell .action.primary,
 .cosmic-shell .cockpit-nav button.primary,
 .cosmic-shell .control-button.primary {
-  border: none;
-  background: var(--accent-gradient);
-  color: #f8fafc;
-  font-weight: var(--weight-bold);
-  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.22);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  border: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-soft));
+  color: var(--accent-strong);
+  font-weight: var(--weight-medium);
+  box-shadow: var(--shadow-sm);
+  text-shadow: none;
 }
 .cosmic-shell .btn.primary:hover,
 .cosmic-shell .topbar-actions .primary:hover,
 .cosmic-shell .action.primary:hover,
 .cosmic-shell .cockpit-nav button.primary:hover,
 .cosmic-shell .control-button.primary:hover {
-  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.32);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-soft));
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line-strong));
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 10%, transparent);
   transform: translateY(-1px);
+}
+.cosmic-shell .btn.primary:active,
+.cosmic-shell .control-button.primary:active {
+  transform: translateY(0);
+  box-shadow: var(--shadow-sm);
 }
 .cosmic-shell .btn.primary:disabled,
 .cosmic-shell .topbar-actions .primary:disabled,
@@ -605,16 +612,16 @@
   cursor: not-allowed;
 }
 .sm-btn-primary {
-  background: var(--accent-gradient);
-  border: none;
-  color: #f8fafc;
-  font-weight: var(--weight-bold);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
-  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.22);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-soft));
+  border: 1px solid var(--line-strong);
+  color: var(--accent-strong);
+  font-weight: var(--weight-medium);
+  box-shadow: var(--shadow-sm);
 }
 .sm-btn-primary:hover:not(:disabled) {
-  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.32);
-  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-soft));
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line-strong));
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 .sm-btn-secondary {
   background: rgba(124, 58, 237, 0.18);
