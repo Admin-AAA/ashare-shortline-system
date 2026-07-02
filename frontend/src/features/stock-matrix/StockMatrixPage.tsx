@@ -97,123 +97,108 @@ export default function StockMatrixPage({ refreshSignal = 0 }: { refreshSignal?:
   }, [code, startDate, endDate]);
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
-      <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 20, display: "flex", alignItems: "center", gap: 8 }}>
-        <Search size={22} /> 个股矩阵分析
-      </h1>
+    <div className="stock-matrix-page">
+      {/* ── 主搜索栏：玻璃卡片 ── */}
+      <section className="sm-searchbar">
+        <div className="sm-searchbar-main">
+          <label className="sm-field sm-field-code">
+            <span>股票代码</span>
+            <div className="sm-input-wrap">
+              <Search size={15} className="sm-input-icon" />
+              <input
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && code.trim()) runAnalysis(); }}
+                placeholder="000001"
+                className="sm-input"
+                autoFocus
+              />
+            </div>
+          </label>
 
-      {/* ── 输入表单 ── */}
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 20 }}>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <span style={{ fontSize: 12, color: "#6b7280" }}>股票代码</span>
-          <input
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            placeholder="000001"
-            style={{ padding: "6px 10px", border: "1px solid #d1d5db", borderRadius: 6, width: 120 }}
-          />
-        </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <span style={{ fontSize: 12, color: "#6b7280" }}>分析日期</span>
-          <input
-            value={tradeDate}
-            onChange={(e) => setTradeDate(e.target.value)}
-            placeholder="2026-07-01"
-            style={{ padding: "6px 10px", border: "1px solid #d1d5db", borderRadius: 6, width: 130 }}
-          />
-        </label>
-        <button
-          onClick={runAnalysis}
-          disabled={loading || !code.trim()}
-          style={{
-            padding: "6px 16px",
-            background: "#2563eb",
-            color: "white",
-            borderRadius: 6,
-            border: "none",
-            cursor: loading ? "wait" : "pointer",
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-          }}
-        >
-          {loading ? <Loader2 size={14} className="animate-spin" /> : <BarChart3 size={14} />}
-          分析
-        </button>
+          <label className="sm-field">
+            <span>分析日期</span>
+            <input
+              value={tradeDate}
+              onChange={(e) => setTradeDate(e.target.value)}
+              placeholder="留空 = 最新交易日"
+              className="sm-input sm-input-date"
+            />
+          </label>
 
-        <div style={{ width: 1, height: 32, background: "#e5e7eb", margin: "0 4px" }} />
+          <button
+            onClick={runAnalysis}
+            disabled={loading || !code.trim()}
+            className="sm-btn sm-btn-primary"
+            title="运行矩阵分析（回车也可触发）"
+          >
+            {loading && tab === "analysis" ? <Loader2 size={15} className="spin" /> : <BarChart3 size={15} />}
+            <span>分析</span>
+          </button>
 
-        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <span style={{ fontSize: 12, color: "#6b7280" }}>回测起始</span>
-          <input
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            placeholder="2026-06-01"
-            style={{ padding: "6px 10px", border: "1px solid #d1d5db", borderRadius: 6, width: 130 }}
-          />
-        </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <span style={{ fontSize: 12, color: "#6b7280" }}>回测结束</span>
-          <input
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-            placeholder="2026-07-01"
-            style={{ padding: "6px 10px", border: "1px solid #d1d5db", borderRadius: 6, width: 130 }}
-          />
-        </label>
-        <button
-          onClick={runBacktest}
-          disabled={loading || !code.trim() || !startDate || !endDate}
-          style={{
-            padding: "6px 16px",
-            background: "#7c3aed",
-            color: "white",
-            borderRadius: 6,
-            border: "none",
-            cursor: loading ? "wait" : "pointer",
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-          }}
-        >
-          {loading ? <Loader2 size={14} className="animate-spin" /> : <BarChart3 size={14} />}
-          回测
-        </button>
+          <label className="sm-llm-toggle" title="开启大模型审查（消耗 API 额度）">
+            <input type="checkbox" checked={includeLlm} onChange={(e) => setIncludeLlm(e.target.checked)} />
+            <BrainCircuit size={14} />
+            <span>LLM</span>
+          </label>
+        </div>
 
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
-          <input type="checkbox" checked={includeLlm} onChange={(e) => setIncludeLlm(e.target.checked)} />
-          <BrainCircuit size={14} />
-          LLM 分析
-        </label>
-      </div>
+        <div className="sm-searchbar-divider" />
+
+        <div className="sm-searchbar-backtest">
+          <label className="sm-field">
+            <span>回测起始</span>
+            <input
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              placeholder="2026-06-01"
+              className="sm-input sm-input-date"
+            />
+          </label>
+          <label className="sm-field">
+            <span>回测结束</span>
+            <input
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              placeholder="2026-07-01"
+              className="sm-input sm-input-date"
+            />
+          </label>
+          <button
+            onClick={runBacktest}
+            disabled={loading || !code.trim() || !startDate || !endDate}
+            className="sm-btn sm-btn-secondary"
+          >
+            {loading && tab === "backtest" ? <Loader2 size={15} className="spin" /> : <BarChart3 size={15} />}
+            <span>回测</span>
+          </button>
+        </div>
+      </section>
 
       {error && (
-        <div style={{ padding: 12, background: "#fee2e2", color: "#991b1b", borderRadius: 8, marginBottom: 16, fontSize: 13 }}>
-          {error}
+        <div className="sm-error">
+          <AlertTriangle size={14} />
+          <span>{error}</span>
         </div>
       )}
 
       {/* ── Tab 切换 ── */}
       {(analysis || backtest) && (
-        <div style={{ display: "flex", gap: 0, marginBottom: 16 }}>
-          {["analysis", "backtest"].map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t as "analysis" | "backtest")}
-              style={{
-                padding: "8px 20px",
-                background: tab === t ? "#1e40af" : "#f3f4f6",
-                color: tab === t ? "white" : "#374151",
-                border: "none",
-                borderRadius: tab === t ? "8px 8px 0 0" : "8px 8px 0 0",
-                cursor: "pointer",
-                fontSize: 13,
-                fontWeight: tab === t ? 600 : 400,
-              }}
-            >
-              {t === "analysis" ? "矩阵分析" : "历史回测"}
-            </button>
-          ))}
+        <div className="sm-tabs">
+          <button
+            onClick={() => setTab("analysis")}
+            className={tab === "analysis" ? "active" : ""}
+            disabled={!analysis}
+          >
+            矩阵分析
+          </button>
+          <button
+            onClick={() => setTab("backtest")}
+            className={tab === "backtest" ? "active" : ""}
+            disabled={!backtest}
+          >
+            历史回测
+          </button>
         </div>
       )}
 

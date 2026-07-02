@@ -376,3 +376,201 @@
   .cosmic-subnav { top: auto; position: relative; flex-direction: column; align-items: flex-start; }
   .cosmic-main { padding: var(--space-5) var(--space-4); }
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   个股矩阵页：搜索栏 + 表单控件
+   ═══════════════════════════════════════════════════════════════ */
+.stock-matrix-page {
+  padding: 0;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+/* ── 搜索栏：大留白玻璃卡片 ── */
+.sm-searchbar {
+  background: rgba(8, 12, 20, 0.22);
+  backdrop-filter: blur(20px) saturate(135%);
+  -webkit-backdrop-filter: blur(20px) saturate(135%);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+[data-theme="light"] .sm-searchbar { background: rgba(255, 255, 255, 0.30); }
+
+.sm-searchbar-main,
+.sm-searchbar-backtest {
+  display: flex;
+  gap: var(--space-4);
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.sm-searchbar-divider {
+  height: 1px;
+  background: var(--line);
+  margin: 0;
+}
+
+/* ── 字段 ── */
+.sm-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+.sm-field-code { flex: 1; min-width: 220px; }
+.sm-field > span {
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  text-transform: uppercase;
+  padding-left: 2px;
+}
+
+/* ── 输入框 ── */
+.sm-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.sm-input-icon {
+  position: absolute;
+  left: 12px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.sm-input {
+  width: 100%;
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+  font-size: var(--text-md);
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  transition: border-color var(--motion-fast), background var(--motion-fast);
+  outline: none;
+}
+[data-theme="light"] .sm-input { background: rgba(255, 255, 255, 0.5); }
+.sm-input-wrap .sm-input { padding-left: 36px; }
+.sm-input::placeholder {
+  color: var(--muted);
+  font-family: var(--font-ui);
+  opacity: 0.7;
+}
+.sm-input:focus {
+  border-color: var(--line-strong);
+  background: rgba(0, 0, 0, 0.30);
+}
+[data-theme="light"] .sm-input:focus { background: rgba(255, 255, 255, 0.7); }
+.sm-input-date { width: 170px; }
+
+/* ── 按钮 ── */
+.sm-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 10px 20px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--text-md);
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: background var(--motion-fast), border-color var(--motion-fast), transform var(--motion-fast);
+  height: 38px;
+}
+.sm-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+.sm-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.sm-btn-primary {
+  background: linear-gradient(135deg, rgba(106, 159, 255, 0.35), rgba(95, 255, 212, 0.25));
+  border-color: rgba(106, 159, 255, 0.55);
+  color: var(--ink);
+}
+.sm-btn-primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(106, 159, 255, 0.5), rgba(95, 255, 212, 0.35));
+}
+.sm-btn-secondary {
+  background: rgba(124, 58, 237, 0.18);
+  border-color: rgba(124, 58, 237, 0.4);
+}
+.sm-btn-secondary:hover:not(:disabled) {
+  background: rgba(124, 58, 237, 0.30);
+}
+
+/* ── LLM toggle ── */
+.sm-llm-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--muted);
+  cursor: pointer;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  transition: color var(--motion-fast), border-color var(--motion-fast);
+  height: 38px;
+}
+.sm-llm-toggle:hover { color: var(--ink); border-color: var(--line-strong); }
+.sm-llm-toggle input { accent-color: var(--line-strong); }
+
+/* ── 错误提示 ── */
+.sm-error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: rgba(220, 38, 38, 0.12);
+  border: 1px solid rgba(220, 38, 38, 0.35);
+  border-radius: var(--radius-md);
+  color: #fca5a5;
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-4);
+}
+
+/* ── Tabs ── */
+.sm-tabs {
+  display: flex;
+  gap: var(--space-1);
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--line);
+}
+.sm-tabs button {
+  padding: var(--space-3) var(--space-5);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-size: var(--text-md);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: color var(--motion-fast), border-color var(--motion-fast);
+  margin-bottom: -1px;
+}
+.sm-tabs button:hover:not(:disabled) { color: var(--ink); }
+.sm-tabs button.active {
+  color: var(--ink);
+  border-bottom-color: var(--line-strong);
+  font-weight: 500;
+}
+.sm-tabs button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* ── 响应式 ── */
+@media (max-width: 880px) {
+  .sm-searchbar-main,
+  .sm-searchbar-backtest { flex-direction: column; align-items: stretch; }
+  .sm-field-code { min-width: 0; }
+  .sm-input-date { width: 100%; }
+}
