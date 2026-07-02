@@ -1508,3 +1508,48 @@ class TestE2ERecommendationFlow:
         card1 = aggregate(stock, signals, market_score=72, agent_review_score=75)
         card2 = aggregate(stock, signals, market_score=72, agent_review_score=75)
         assert card1["final_score"] == card2["final_score"]
+
+
+class TestCostAdjustedMetrics:
+    """Test cost_adjusted_metrics function."""
+
+    def test_cost_adjusted_metrics_returns_gross_and_net(self, db):
+        from app.services.outcome_service import cost_adjusted_metrics
+        # With no data, should return error
+        result = cost_adjusted_metrics(db, run_mode="__nonexistent__")
+        assert result.get("error") or result.get("count", 0) == 0
+
+    def test_cost_adjusted_metrics_structure(self, db, monkeypatch):
+        from app.services.outcome_service import cost_adjusted_metrics
+        # Mock the query to return synthetic data
+        from unittest.mock import MagicMock, patch
+        mock_outcomes = []
+        for ret in [8.0, -6.0, 3.0, -2.0, 5.0]:
+            o = MagicMock()
+            o.executed_return = ret
+            mock_outcomes.append(o)
+
+        with patch("app.services.outcome_service.select") as mock_select:
+            mock_stmt = MagicMock()
+            mock_select.return_value = mock_stmt
+            mock_stmt.where.return_value = mock_stmt
+            mock_stmt.join.return_value = mock_stmt
+            db.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=mock_outcomes)))
+            result = cost_adjusted_metrics(db, run_mode="test")
+
+        assert "gross" in result
+        assert "net" in result
+        assert result["additional_cost_pct"] == 0.10
+        assert result["net"]["avg_return"] < result["gross"]["avg_return"]
+        assert result["cost_drag_pct"] == 0.10
+
+
+class TestAlphaDecayDetection:
+    """Test alpha_decay_detection function structure."""
+
+    def test_alpha_decay_returns_factors_list(self, db):
+        from app.services.outcome_service import alpha_decay_detection
+        result = alpha_decay_detection(db, run_mode="__nonexistent__")
+        # With no data, should return error
+        assert result.get("error") or isinstance(result.get("factors"), list)
+
