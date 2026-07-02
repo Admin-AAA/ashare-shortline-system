@@ -15,6 +15,7 @@ import json
 import logging
 import time
 import uuid
+from bisect import bisect_left
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
@@ -59,6 +60,12 @@ from app.services.evaluation_metrics import (
     _empty_metrics as _backtest_empty_metrics,
     _accuracy_failure_gate,
 )
+from app.services.backtest_validation import (
+    _build_backtest_validation_profile,
+    _build_backtest_walk_forward,
+    _build_time_split_analysis,
+    _choose_backtest_variant,
+)
 from app.services.prefilter_service import apply_prefilters
 from app.services.research_context import build_research_contexts
 from app.services.workbench_service import (
@@ -69,17 +76,6 @@ from app.services.workbench_service import (
     _resolve_skill_review_limit,
 )
 
-DECISION_MIN_COMPARABLE_TRADES = 5
-DECISION_LOW_CONFIDENCE_TRADES = 30
-DECISION_STRONG_ACC_EDGE = 0.05
-DECISION_NORMAL_ACC_EDGE = 0.03
-DECISION_STRONG_RETURN_EDGE = 0.5
-DECISION_NORMAL_RETURN_BUFFER = -0.2
-DECISION_LOW_CONFIDENCE_RETURN_BUFFER = -0.05
-DECISION_NORMAL_DRAWDOWN_TOLERANCE = 1.0
-DECISION_LOW_CONFIDENCE_DRAWDOWN_TOLERANCE = 0.5
-DECISION_DRAWDOWN_BLOCK = 2.5
-
 
 def run_backtest(
     db: Session,
@@ -89,8 +85,13 @@ def run_backtest(
     horizon_days: int = 5,
     score_line: float = 72.0,
     skill_id: str | None = None,
+    target_codes: list[str] | None = None,
 ) -> dict[str, Any]:
-    """在历史日期区间上执行回测，数据完全来自本地 DailyKbar 池。"""
+    """在历史日期区间上执行回测，数据完全来自本地 DailyKbar 池。
+
+    Args:
+        target_codes: 限定只分析指定股票列表（单股回测模式）。None = 全市场。
+    """
     if skill_id is None:
         skill_id = "_general_"
 
@@ -109,6 +110,7 @@ def run_backtest(
                 run_mode,
                 settings,
                 score_line=score_line,
+                target_codes=target_codes,
             )
             date_result["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 1)
             results.append(date_result)
@@ -152,6 +154,7 @@ def run_backtest(
     if summary["total_recommendations"] > 0:
         summary["breakdown"] = _backtest_breakdown(db, start_date, end_date, run_mode, run_ids=run_ids)
         summary["aggregate_metrics"] = _backtest_aggregate_metrics(db, start_date, end_date, run_mode, run_ids=run_ids)
+        summary["horizon_return_matrix"] = _backtest_horizon_return_matrix(db, start_date, end_date, run_mode, run_ids=run_ids)
 
     _save_backtest_summary(db, skill_id, start_date, end_date, summary)
     return summary
@@ -285,11 +288,19 @@ def _backtest_single_date(
     run_mode: str,
     settings: Any,
     score_line: float,
+    target_codes: list[str] | None = None,
 ) -> dict[str, Any]:
     """对单个历史日期运行推荐流水线（复用线上规则门与聚合语义）。"""
     all_bars = db.scalars(select(DailyKbar).where(DailyKbar.trade_date == trade_date)).all()
-    if len(all_bars) < 100:
+    if len(all_bars) < 100 and not target_codes:
         return {"trade_date": trade_date, "status": "skipped", "reason": f"该日期仅 {len(all_bars)} 条日K"}
+
+    # 单股回测模式：过滤到目标股票
+    if target_codes:
+        code_set = set(target_codes)
+        all_bars = [bar for bar in all_bars if bar.code in code_set]
+        if not all_bars:
+            return {"trade_date": trade_date, "status": "skipped", "reason": f"目标股票在 {trade_date} 无数据"}
 
     codes = [bar.code for bar in all_bars]
     stock_rows = db.scalars(select(Stock).where(Stock.code.in_(codes))).all()
@@ -531,6 +542,31 @@ def _load_bars_history_for_date(
             "ma20": bar.ma20,
             "ma60": bar.ma60,
             "volume_ratio_5d": bar.vol_ratio_5,
+            # 与实盘一致：传入 DailyKbar 中的真实指标，避免 chg20 近似
+            "_indicator": {
+                "rsi_6": bar.rsi_6,
+                "rsi_12": bar.rsi_12,
+                "rsi_24": bar.rsi_24,
+                "macd_dif": bar.macd_dif,
+                "macd_dea": bar.macd_dea,
+                "macd_bar": bar.macd_bar,
+                "bias_ma5": bar.bias_5,
+                "bias_ma10": bar.bias_10,
+                "bias_ma20": bar.bias_20,
+                "breakout20": bar.breakout20,
+                "breakout60": bar.breakout60,
+                "upper_shadow_count20": bar.upper_shadow_count20,
+                "max_dd20": bar.max_dd20,
+                "max_dd60": bar.max_dd60,
+            },
+            # 筹码分布（Tushare 真实数据）
+            "chip_winner_rate": bar.chip_winner_rate,
+            "chip_weight_avg": bar.chip_weight_avg,
+            "chip_cost_15": bar.chip_cost_15,
+            "chip_cost_50": bar.chip_cost_50,
+            "chip_cost_85": bar.chip_cost_85,
+            "holder_pct": bar.holder_pct,
+            "profit_efficiency": bar.profit_efficiency,
         })
 
     # 截取最近120条
@@ -650,6 +686,7 @@ def _persist_backtest_recommendations(
             "take_profit": card.get("take_profit"),
             "score_line_meta": card.get("score_line_meta", {}),
             "execution_viability": card.get("execution_viability", {}),
+            "final_score": card.get("final_score", 0),
         }
         rec = Recommendation(
             recommendation_id=f"btrec_{uuid.uuid4().hex[:12]}",
@@ -893,6 +930,149 @@ def _backtest_breakdown(
         "by_score_range": by_score_range,
         "by_score_line": by_score_line,
     }
+
+
+def _backtest_horizon_return_matrix(
+    db: Session,
+    start_date: str,
+    end_date: str,
+    run_mode: str,
+    run_ids: set[str] | None = None,
+    horizons: tuple[int, ...] = (1, 3, 5, 10, 20, 30),
+) -> list[dict[str, Any]]:
+    if run_ids is not None and not run_ids:
+        return []
+    stmt = (
+        select(Recommendation)
+        .join(RecommendationRun, Recommendation.run_id == RecommendationRun.run_id)
+        .where(
+            RecommendationRun.trade_date >= start_date,
+            RecommendationRun.trade_date <= end_date,
+            RecommendationRun.run_mode == run_mode,
+        )
+    )
+    if run_ids is not None:
+        stmt = stmt.where(Recommendation.run_id.in_(list(run_ids)))
+    recs = db.scalars(stmt).all()
+    if not recs:
+        return []
+
+    codes = sorted({str(rec.code) for rec in recs if rec.code})
+    min_trade_date = min(str(rec.trade_date) for rec in recs)
+    bars = db.scalars(
+        select(DailyKbar)
+        .where(DailyKbar.code.in_(codes), DailyKbar.trade_date >= min_trade_date)
+        .order_by(DailyKbar.code.asc(), DailyKbar.trade_date.asc())
+    ).all()
+    bars_by_code: dict[str, list[DailyKbar]] = defaultdict(list)
+    dates_by_code: dict[str, list[str]] = defaultdict(list)
+    for bar in bars:
+        code = str(bar.code)
+        bars_by_code[code].append(bar)
+        dates_by_code[code].append(str(bar.trade_date))
+
+    rows: dict[str, dict[str, Any]] = {}
+    for rec in recs:
+        code = str(rec.code or "")
+        trade_date = str(rec.trade_date or "")
+        if not code or not trade_date:
+            continue
+        rec_bars = bars_by_code.get(code, [])
+        rec_dates = dates_by_code.get(code, [])
+        if not rec_bars or not rec_dates:
+            continue
+        entry_price = _horizon_entry_price(rec, rec_bars, rec_dates)
+        if entry_price <= 0:
+            continue
+        for strategy_id, strategy_name in _strategy_names_from_recommendation(rec):
+            row = rows.setdefault(
+                strategy_id,
+                {
+                    "strategy_id": strategy_id,
+                    "strategy_name": strategy_name,
+                    "recommendation_count": 0,
+                    "horizons": {str(horizon): {"sample_count": 0, "average_return_pct": None} for horizon in horizons},
+                    "_returns": {horizon: [] for horizon in horizons},
+                },
+            )
+            row["recommendation_count"] += 1
+            for horizon in horizons:
+                close_price = _future_close_after_trading_days(rec_bars, rec_dates, trade_date, horizon)
+                if close_price is None:
+                    continue
+                row["_returns"][horizon].append(round((close_price / entry_price - 1.0) * 100.0, 3))
+
+    matrix: list[dict[str, Any]] = []
+    for row in rows.values():
+        returns_by_horizon = row.pop("_returns")
+        for horizon in horizons:
+            values = returns_by_horizon[horizon]
+            row["horizons"][str(horizon)] = {
+                "sample_count": len(values),
+                "average_return_pct": round(sum(values) / len(values), 3) if values else None,
+            }
+        matrix.append(row)
+    matrix.sort(key=lambda item: (-int(item.get("recommendation_count") or 0), str(item.get("strategy_name") or "")))
+    return matrix
+
+
+def _horizon_entry_price(rec: Recommendation, bars: list[DailyKbar], dates: list[str]) -> float:
+    recommend_price = float(rec.recommend_price or 0)
+    if recommend_price > 0:
+        return recommend_price
+    idx = _bar_index_at_or_after(dates, str(rec.trade_date or ""))
+    if idx is None:
+        return 0.0
+    return float(bars[idx].close or 0)
+
+
+def _future_close_after_trading_days(
+    bars: list[DailyKbar],
+    dates: list[str],
+    trade_date: str,
+    horizon: int,
+) -> float | None:
+    start_idx = _bar_index_at_or_after(dates, trade_date)
+    if start_idx is None:
+        return None
+    target_idx = start_idx + horizon
+    if target_idx >= len(bars):
+        return None
+    close_price = float(bars[target_idx].close or 0)
+    return close_price if close_price > 0 else None
+
+
+def _bar_index_at_or_after(dates: list[str], trade_date: str) -> int | None:
+    idx = bisect_left(dates, trade_date)
+    return idx if idx < len(dates) else None
+
+
+def _strategy_names_from_recommendation(rec: Recommendation) -> list[tuple[str, str]]:
+    try:
+        signals = json.loads(rec.skill_breakdown_json or "[]")
+    except Exception:
+        signals = []
+    names: list[tuple[str, str]] = []
+    if isinstance(signals, list):
+        for signal in signals:
+            if not isinstance(signal, dict):
+                continue
+            strategy_id = str(signal.get("strategy_id") or signal.get("skill_id") or "").strip()
+            if not strategy_id:
+                continue
+            strategy_name = str(signal.get("strategy_name") or signal.get("skill_name") or strategy_id).strip()
+            names.append((strategy_id, strategy_name))
+    if not names:
+        setup_type = str(rec.setup_type or "未命名策略")
+        names.append((setup_type, setup_type))
+    seen: set[str] = set()
+    unique: list[tuple[str, str]] = []
+    for strategy_id, strategy_name in names:
+        if strategy_id in seen:
+            continue
+        seen.add(strategy_id)
+        unique.append((strategy_id, strategy_name))
+    return unique
 
 
 def _build_trade_detail_list(
@@ -1265,75 +1445,6 @@ def _run_backtest_temporal_check(
     }
 
 
-def _build_time_split_analysis(
-    trades: list[dict[str, Any]],
-    all_dates: list[str],
-    train_ratio: float = 0.6,
-) -> dict[str, Any]:
-    """严格时间切分验证（固定比例 train/test split by date）。
-
-    与 expanding window walk-forward 互补：
-    - walk-forward 测试多个时间窗口的稳定性
-    - time-split 给出单一训练集/测试集的清晰对比
-
-    Args:
-        trades: 已执行的交易记录列表
-        all_dates: 回测区间内所有交易日（已排序）
-        train_ratio: 训练集占比（默认 0.6）
-
-    Returns:
-        dict with train/test date ranges, trade counts, and 9-KPI metrics
-    """
-    if len(trades) < 3 or len(all_dates) < 5:
-        return {
-            "eligible": False,
-            "message": f"交易笔数或交易日数不足 (trades={len(trades)}, dates={len(all_dates)})",
-            "train_metrics": _backtest_empty_metrics(),
-            "test_metrics": _backtest_empty_metrics(),
-        }
-
-    # 按日期排序切割
-    split_index = max(1, int(len(all_dates) * train_ratio))
-    if split_index >= len(all_dates):
-        split_index = max(1, len(all_dates) - 1)
-
-    train_date_set = set(all_dates[:split_index])
-    test_date_set = set(all_dates[split_index:])
-
-    train_trades = [t for t in trades if t["trade_date"] in train_date_set]
-    test_trades = [t for t in trades if t["trade_date"] in test_date_set]
-
-    train_metrics = compute_full_metrics(train_trades) if train_trades else _backtest_empty_metrics()
-    test_metrics = compute_full_metrics(test_trades) if test_trades else _backtest_empty_metrics()
-
-    return {
-        "eligible": True,
-        "train_ratio": train_ratio,
-        "train_date_range": {
-            "start": all_dates[0],
-            "end": all_dates[split_index - 1],
-        },
-        "test_date_range": {
-            "start": all_dates[split_index],
-            "end": all_dates[-1],
-        },
-        "train_trade_count": len(train_trades),
-        "test_trade_count": len(test_trades),
-        "train_metrics": _validation_metric_view(train_metrics),
-        "test_metrics": _validation_metric_view(test_metrics),
-        "train_vs_test": {
-            "accuracy_diff": round(
-                train_metrics.get("recommendation_accuracy", 0)
-                - test_metrics.get("recommendation_accuracy", 0), 3
-            ),
-            "return_diff": round(
-                train_metrics.get("average_net_return", 0)
-                - test_metrics.get("average_net_return", 0), 3
-            ),
-        },
-    }
-
-
 def run_backtest_comparison(
     db: Session,
     start_date: str,
@@ -1518,443 +1629,3 @@ def _load_backtest_trades(
         run_mode,
         run_ids=run_ids,
     )
-
-
-def _build_backtest_walk_forward(
-    signal_dates: list[str],
-    trades: list[dict[str, Any]],
-    min_train_dates: int = 2,
-) -> dict[str, Any]:
-    """为回测交易构建 expanding window walk-forward 验证。
-
-    与 overnight_holding_service._build_walk_forward_analysis 逻辑一致。
-    """
-    if len(trades) < min_train_dates:
-        return {
-            "eligible": False,
-            "message": f"交易笔数不足 ({len(trades)} < {min_train_dates})",
-            "window_count": 0,
-            "test_aggregate": {},
-        }
-
-    # 按日期排序
-    date_order = sorted(set(t["trade_date"] for t in trades))
-    if len(date_order) < min_train_dates + 1:
-        return {
-            "eligible": False,
-            "message": f"交易日期数不足 ({len(date_order)} < {min_train_dates + 1})",
-            "window_count": 0,
-            "test_aggregate": {},
-        }
-
-    windows = []
-    for i in range(min_train_dates, len(date_order)):
-        train_end = date_order[i - 1]
-        test_start = date_order[i]
-        test_end = date_order[-1]
-
-        train_trades = [t for t in trades if t["trade_date"] <= train_end]
-        test_trades = [t for t in trades if t["trade_date"] >= test_start]
-
-        if len(test_trades) < 1:
-            continue
-
-        train_metrics = compute_full_metrics(train_trades) if train_trades else {}
-        test_metrics = compute_full_metrics(test_trades) if test_trades else {}
-
-        windows.append({
-            "train_end": train_end,
-            "test_start": test_start,
-            "test_end": test_end,
-            "train_count": len(train_trades),
-            "test_count": len(test_trades),
-            "train_accuracy": train_metrics.get("recommendation_accuracy", 0),
-            "test_accuracy": test_metrics.get("recommendation_accuracy", 0),
-            "train_avg_return": train_metrics.get("average_net_return", 0),
-            "test_avg_return": test_metrics.get("average_net_return", 0),
-            "train_drawdown": train_metrics.get("max_drawdown", 0),
-            "test_drawdown": test_metrics.get("max_drawdown", 0),
-        })
-
-    if not windows:
-        return {
-            "eligible": False,
-            "message": "无法构建任何验证窗口",
-            "window_count": 0,
-            "test_aggregate": {},
-        }
-
-    # 聚合所有测试集
-    all_test_trades = [t for t in trades if t["trade_date"] >= date_order[min_train_dates - 1]]
-    test_aggregate = compute_full_metrics(all_test_trades) if all_test_trades else {}
-
-    return {
-        "eligible": True,
-        "min_train_dates": min_train_dates,
-        "date_count": len(date_order),
-        "window_count": len(windows),
-        "windows": windows,
-        "test_aggregate": _validation_metric_view(test_aggregate),
-        "notes": [f"滚动验证按最少 {min_train_dates} 个训练信号日构建 expanding windows。"],
-    }
-
-
-def _validation_metric_view(metrics: dict[str, Any]) -> dict[str, Any]:
-    """保留验证摘要需要的严格推荐口径字段。"""
-    return {
-        "trade_count": int(metrics.get("trade_count", 0) or 0),
-        "recommendation_accuracy": float(metrics.get("recommendation_accuracy", 0) or 0),
-        "accuracy_numerator": int(metrics.get("accuracy_numerator", 0) or 0),
-        "accuracy_denominator": int(metrics.get("accuracy_denominator", metrics.get("trade_count", 0)) or 0),
-        "trade_accuracy": float(metrics.get("trade_accuracy", metrics.get("hit_rate", 0)) or 0),
-        "executed_trade_count": int(metrics.get("executed_trade_count", metrics.get("triggered_count", 0)) or 0),
-        "unexecuted_count": int(metrics.get("unexecuted_count", metrics.get("missed_count", 0)) or 0),
-        "trigger_rate": float(metrics.get("trigger_rate", 0) or 0),
-        "average_net_return": float(metrics.get("average_net_return", 0) or 0),
-        "average_executed_return": float(
-            metrics.get("average_executed_return", metrics.get("avg_executed_return", 0)) or 0
-        ),
-        "max_drawdown": float(metrics.get("max_drawdown", 0) or 0),
-        "profit_loss_ratio": float(metrics.get("profit_loss_ratio", 0) or 0),
-        "sample_confidence": str(metrics.get("sample_confidence", "low") or "low"),
-        "accuracy_basis": str(metrics.get("accuracy_basis", "labeled_recommendations") or "labeled_recommendations"),
-    }
-
-
-def _choose_backtest_variant(
-    baseline_result: dict[str, Any],
-    candidate_result: dict[str, Any],
-    walk_baseline: dict[str, Any],
-    walk_candidate: dict[str, Any],
-    time_split_baseline: dict[str, Any],
-    time_split_candidate: dict[str, Any],
-) -> tuple[str, str, dict[str, Any]]:
-    """选择更优的回测版本。
-
-    决策层次（与 overnight_holding_service._choose_variant 一致）：
-    1. 优先 walk_forward 测试集结果（样本外）
-    2. 样本外不足时回退到 time-split 测试集
-    3. 最后才看全量指标
-    4. trade_count < 30 视为低置信度，需要更强优势
-    5. 若回撤显著恶化，则不能仅凭更高收益/准确率默认采用
-    """
-    # 检查状态
-    baseline_ok = baseline_result.get("status") == "completed"
-    candidate_ok = candidate_result.get("status") == "completed"
-    if not baseline_ok and not candidate_ok:
-        return "baseline", "两个版本均未完成，默认选 baseline", _decision_context(
-            scope="aggregate",
-            scope_label="全量指标",
-            baseline_metrics={},
-            candidate_metrics={},
-            guardrail_notes=["两个版本均未完成，无法形成有效对比。"],
-        )
-    if not candidate_ok:
-        return "baseline", "候选版未完成，选基线版", _decision_context(
-            scope="aggregate",
-            scope_label="全量指标",
-            baseline_metrics=_decision_metric_view(baseline_result.get("aggregate_metrics") or {}),
-            candidate_metrics={},
-            guardrail_notes=["候选版未完成，仅保留基线结果。"],
-        )
-    if not baseline_ok:
-        return "candidate", "基线版未完成，选候选版", _decision_context(
-            scope="aggregate",
-            scope_label="全量指标",
-            baseline_metrics={},
-            candidate_metrics=_decision_metric_view(candidate_result.get("aggregate_metrics") or {}),
-            guardrail_notes=["基线版未完成，仅保留候选结果。"],
-        )
-
-    baseline_metrics = baseline_result.get("aggregate_metrics") or {}
-    candidate_metrics = candidate_result.get("aggregate_metrics") or {}
-    scope = _pick_decision_scope(
-        walk_baseline,
-        walk_candidate,
-        time_split_baseline,
-        time_split_candidate,
-        baseline_metrics,
-        candidate_metrics,
-    )
-    base_view = scope["baseline_metrics"]
-    cand_view = scope["candidate_metrics"]
-    guardrail_notes = list(scope["guardrail_notes"])
-
-    low_confidence = _is_low_confidence(base_view) or _is_low_confidence(cand_view)
-    if low_confidence:
-        guardrail_notes.append("当前对比样本低于 30 笔，按低置信度标准处理。")
-
-    drawdown_worse_by = _drawdown_worse_by(base_view, cand_view)
-    acc_edge = cand_view["recommendation_accuracy"] - base_view["recommendation_accuracy"]
-    return_edge = cand_view["average_net_return"] - base_view["average_net_return"]
-    trade_edge = cand_view["trade_count"] - base_view["trade_count"]
-
-    if drawdown_worse_by >= DECISION_DRAWDOWN_BLOCK and (
-        acc_edge < DECISION_STRONG_ACC_EDGE or return_edge < DECISION_STRONG_RETURN_EDGE
-    ):
-        reason = (
-            f"{scope['scope_label']}: 候选版回撤较基线恶化 {drawdown_worse_by:.2f}pct，"
-            f"准确率/收益优势不足以覆盖风险，保留基线版。"
-        )
-        guardrail_notes.append("命中回撤护栏，禁止仅凭轻微优势切换到候选版。")
-        return "baseline", reason, _decision_context(
-            scope=scope["scope"],
-            scope_label=scope["scope_label"],
-            baseline_metrics=base_view,
-            candidate_metrics=cand_view,
-            guardrail_notes=guardrail_notes,
-        )
-
-    acc_threshold = DECISION_STRONG_ACC_EDGE if low_confidence else DECISION_NORMAL_ACC_EDGE
-    return_buffer = (
-        DECISION_LOW_CONFIDENCE_RETURN_BUFFER
-        if low_confidence
-        else DECISION_NORMAL_RETURN_BUFFER
-    )
-    drawdown_tolerance = (
-        DECISION_LOW_CONFIDENCE_DRAWDOWN_TOLERANCE
-        if low_confidence
-        else DECISION_NORMAL_DRAWDOWN_TOLERANCE
-    )
-
-    if (
-        acc_edge >= acc_threshold
-        and return_edge >= return_buffer
-        and drawdown_worse_by <= drawdown_tolerance
-    ):
-        reason = (
-            f"{scope['scope_label']}: 候选版准确率 {cand_view['recommendation_accuracy']:.1%} "
-            f"> 基线版 {base_view['recommendation_accuracy']:.1%}，"
-            f"且收益/回撤未明显恶化。"
-        )
-        return "candidate", reason, _decision_context(
-            scope=scope["scope"],
-            scope_label=scope["scope_label"],
-            baseline_metrics=base_view,
-            candidate_metrics=cand_view,
-            guardrail_notes=guardrail_notes,
-        )
-
-    if (
-        return_edge >= DECISION_STRONG_RETURN_EDGE
-        and acc_edge >= -0.01
-        and drawdown_worse_by <= DECISION_LOW_CONFIDENCE_DRAWDOWN_TOLERANCE
-    ):
-        reason = (
-            f"{scope['scope_label']}: 候选版平均净收益 {cand_view['average_net_return']:.2f}% "
-            f"> 基线版 {base_view['average_net_return']:.2f}%，"
-            f"准确率未明显变差。"
-        )
-        return "candidate", reason, _decision_context(
-            scope=scope["scope"],
-            scope_label=scope["scope_label"],
-            baseline_metrics=base_view,
-            candidate_metrics=cand_view,
-            guardrail_notes=guardrail_notes,
-        )
-
-    if base_view["recommendation_accuracy"] >= cand_view["recommendation_accuracy"] + 0.02:
-        reason = (
-            f"{scope['scope_label']}: 基线版准确率 {base_view['recommendation_accuracy']:.1%} "
-            f"> 候选版 {cand_view['recommendation_accuracy']:.1%}，保留基线版。"
-        )
-        return "baseline", reason, _decision_context(
-            scope=scope["scope"],
-            scope_label=scope["scope_label"],
-            baseline_metrics=base_view,
-            candidate_metrics=cand_view,
-            guardrail_notes=guardrail_notes,
-        )
-
-    if (
-        scope["scope"] == "aggregate"
-        and trade_edge > 0
-        and cand_view["trade_count"] >= max(1, int(base_view["trade_count"] * 1.5))
-        and acc_edge >= -0.02
-        and drawdown_worse_by <= DECISION_LOW_CONFIDENCE_DRAWDOWN_TOLERANCE
-    ):
-        reason = (
-            f"全量指标: 候选版样本 {cand_view['trade_count']} > 基线版 {base_view['trade_count']}，"
-            "准确率基本持平，扩大覆盖后仍可接受。"
-        )
-        guardrail_notes.append("由于样本外可比交易不足，本次仅按全量指标做保守放宽。")
-        return "candidate", reason, _decision_context(
-            scope=scope["scope"],
-            scope_label=scope["scope_label"],
-            baseline_metrics=base_view,
-            candidate_metrics=cand_view,
-            guardrail_notes=guardrail_notes,
-        )
-
-    reason = f"{scope['scope_label']}: 候选版优势不足或风险代价偏大，保留基线版。"
-    return "baseline", reason, _decision_context(
-        scope=scope["scope"],
-        scope_label=scope["scope_label"],
-        baseline_metrics=base_view,
-        candidate_metrics=cand_view,
-        guardrail_notes=guardrail_notes,
-    )
-
-
-def _pick_decision_scope(
-    walk_baseline: dict[str, Any],
-    walk_candidate: dict[str, Any],
-    time_split_baseline: dict[str, Any],
-    time_split_candidate: dict[str, Any],
-    baseline_metrics: dict[str, Any],
-    candidate_metrics: dict[str, Any],
-) -> dict[str, Any]:
-    wf_base = _decision_metric_view(walk_baseline.get("test_aggregate") or {})
-    wf_cand = _decision_metric_view(walk_candidate.get("test_aggregate") or {})
-    if (
-        walk_baseline.get("eligible")
-        and walk_candidate.get("eligible")
-        and wf_base["trade_count"] >= DECISION_MIN_COMPARABLE_TRADES
-        and wf_cand["trade_count"] >= DECISION_MIN_COMPARABLE_TRADES
-    ):
-        return {
-            "scope": "walk_forward",
-            "scope_label": "滚动样本外验证",
-            "baseline_metrics": wf_base,
-            "candidate_metrics": wf_cand,
-            "guardrail_notes": [],
-        }
-
-    ts_base = _decision_metric_view((time_split_baseline or {}).get("test_metrics") or {})
-    ts_cand = _decision_metric_view((time_split_candidate or {}).get("test_metrics") or {})
-    if (
-        time_split_baseline.get("eligible")
-        and time_split_candidate.get("eligible")
-        and ts_base["trade_count"] >= DECISION_MIN_COMPARABLE_TRADES
-        and ts_cand["trade_count"] >= DECISION_MIN_COMPARABLE_TRADES
-    ):
-        return {
-            "scope": "time_split",
-            "scope_label": "时间切分测试集",
-            "baseline_metrics": ts_base,
-            "candidate_metrics": ts_cand,
-            "guardrail_notes": ["滚动样本外可比交易不足，已回退到 time-split 测试集。"],
-        }
-
-    return {
-        "scope": "aggregate",
-        "scope_label": "全量指标",
-        "baseline_metrics": _decision_metric_view(baseline_metrics),
-        "candidate_metrics": _decision_metric_view(candidate_metrics),
-        "guardrail_notes": ["样本外与时间切分测试样本不足，最终按全量指标保守判断。"],
-    }
-
-
-def _decision_metric_view(metrics: dict[str, Any]) -> dict[str, Any]:
-    return _validation_metric_view(metrics)
-
-
-def _is_low_confidence(metrics: dict[str, Any]) -> bool:
-    return (
-        int(metrics.get("trade_count", 0) or 0) < DECISION_LOW_CONFIDENCE_TRADES
-        or str(metrics.get("sample_confidence", "low") or "low") == "low"
-    )
-
-
-def _drawdown_worse_by(
-    baseline_metrics: dict[str, Any],
-    candidate_metrics: dict[str, Any],
-) -> float:
-    base_drawdown = abs(float(baseline_metrics.get("max_drawdown", 0) or 0))
-    cand_drawdown = abs(float(candidate_metrics.get("max_drawdown", 0) or 0))
-    return round(max(0.0, cand_drawdown - base_drawdown), 3)
-
-
-def _decision_context(
-    *,
-    scope: str,
-    scope_label: str,
-    baseline_metrics: dict[str, Any],
-    candidate_metrics: dict[str, Any],
-    guardrail_notes: list[str],
-) -> dict[str, Any]:
-    return {
-        "scope": scope,
-        "scope_label": scope_label,
-        "baseline_metrics": baseline_metrics,
-        "candidate_metrics": candidate_metrics,
-        "guardrail_notes": guardrail_notes,
-    }
-
-
-def _build_backtest_validation_profile(
-    *,
-    decision_context: dict[str, Any],
-    walk_baseline: dict[str, Any],
-    walk_candidate: dict[str, Any],
-    time_split_baseline: dict[str, Any],
-    time_split_candidate: dict[str, Any],
-    baseline_metrics: dict[str, Any],
-    candidate_metrics: dict[str, Any],
-) -> dict[str, Any]:
-    return {
-        "primary_scope": decision_context["scope"],
-        "primary_scope_label": decision_context["scope_label"],
-        "fallback_reason": _validation_fallback_reason(decision_context["scope"]),
-        "primary_samples": {
-            "baseline_trade_count": int(decision_context["baseline_metrics"].get("trade_count", 0) or 0),
-            "candidate_trade_count": int(decision_context["candidate_metrics"].get("trade_count", 0) or 0),
-            "baseline_confidence": str(decision_context["baseline_metrics"].get("sample_confidence", "low") or "low"),
-            "candidate_confidence": str(decision_context["candidate_metrics"].get("sample_confidence", "low") or "low"),
-        },
-        "walk_forward": {
-            "baseline": _compact_walk_forward_validation(walk_baseline),
-            "candidate": _compact_walk_forward_validation(walk_candidate),
-        },
-        "time_split": {
-            "baseline": _compact_time_split_validation(time_split_baseline),
-            "candidate": _compact_time_split_validation(time_split_candidate),
-        },
-        "aggregate": {
-            "baseline": _decision_metric_view(baseline_metrics),
-            "candidate": _decision_metric_view(candidate_metrics),
-        },
-    }
-
-
-def _compact_walk_forward_validation(result: dict[str, Any]) -> dict[str, Any]:
-    aggregate = _validation_metric_view((result or {}).get("test_aggregate") or {})
-    notes = list((result or {}).get("notes") or [])
-    message = (result or {}).get("message")
-    if message:
-        notes.append(str(message))
-    return {
-        "eligible": bool((result or {}).get("eligible")),
-        "window_count": int((result or {}).get("window_count", 0) or 0),
-        "date_count": int((result or {}).get("date_count", 0) or 0),
-        **aggregate,
-        "notes": notes,
-    }
-
-
-def _compact_time_split_validation(result: dict[str, Any]) -> dict[str, Any]:
-    result = result or {}
-    train_metrics = _decision_metric_view(result.get("train_metrics") or {})
-    test_metrics = _decision_metric_view(result.get("test_metrics") or {})
-    notes: list[str] = []
-    message = result.get("message")
-    if message:
-        notes.append(str(message))
-    return {
-        "eligible": bool(result.get("eligible")),
-        "train_trade_count": int(result.get("train_trade_count", 0) or 0),
-        "test_trade_count": int(result.get("test_trade_count", 0) or 0),
-        "train_date_range": result.get("train_date_range") or {},
-        "test_date_range": result.get("test_date_range") or {},
-        "train_metrics": train_metrics,
-        "test_metrics": test_metrics,
-        "notes": notes,
-    }
-
-
-def _validation_fallback_reason(scope: str) -> str | None:
-    if scope == "time_split":
-        return "滚动样本外可比交易不足，已回退到 time-split 测试集。"
-    if scope == "aggregate":
-        return "样本外与时间切分测试样本不足，最终按全量指标保守判断。"
-    return None
