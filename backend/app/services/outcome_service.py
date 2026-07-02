@@ -1207,7 +1207,9 @@ def _simulate_outcome(
     hit_target = exit_reason.startswith("take_profit") or executed_return >= SUCCESS_RETURN_PCT
     # outcome_label 与 accuracy policy 对齐：扣费滑点后净收益 > 0 即为准确推荐
     # SUCCESS_RETURN_PCT (3%) 是"优质推荐"阈值，不作为 outcome 硬门槛
-    outcome_label = OUTCOME_SUCCESS if (executed_return > 0 and not hit_invalid) else OUTCOME_FAILED
+    # executed_return 已含滑点但未扣佣金+印花税（_ADDITIONAL_COST_PCT=0.10%），
+    # 阈值必须覆盖这部分成本，否则 0~0.10% 的微利交易被标 success 但实际亏损
+    outcome_label = OUTCOME_SUCCESS if (executed_return > _ADDITIONAL_COST_PCT and not hit_invalid) else OUTCOME_FAILED
 
     return {
         **static_metrics,
