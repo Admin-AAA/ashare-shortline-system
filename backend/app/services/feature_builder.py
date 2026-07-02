@@ -248,9 +248,7 @@ def _apply_context_blocks(item: dict[str, Any], profile: dict[str, Any]) -> None
 
     item["volume_breakout_signal"] = _bool(
         profile.get("volume_breakout_signal"),
-        # alpha decay: breakout20 r=+0.09→-0.24（-364%），不再用作正面信号
-        # 改用动量+量价条件替代
-        _num(item.get("chg20")) > 5 and item["volume_ratio_5d"] >= 1.1 and _num(item.get("pct")) > 0,
+        bool(item.get("breakout20")) and item["volume_ratio_5d"] >= 1.1 and _num(item.get("pct")) > 0,
     )
     item["volume_shrink_pullback"] = _bool(
         profile.get("volume_shrink_pullback"),
@@ -365,9 +363,7 @@ def _volume_pattern(item: dict[str, Any]) -> str:
 
 
 def _macd_status(item: dict[str, Any]) -> str:
-    # alpha decay: breakout20 r=+0.09→-0.24，不再用作 MACD 状态判断
-    # 改用动量和趋势效率判断
-    if _num(item.get("chg20")) > 8 and _num(item.get("eff20")) >= 0.5:
+    if bool(item.get("breakout20")) and _num(item.get("chg20")) > 12 and _num(item.get("pct")) > 0:
         return "零轴上金叉"
     if _num(item.get("chg20")) > 8 and _num(item.get("eff20")) > 0.45:
         return "多头"

@@ -602,11 +602,25 @@ def alpha_decay_detection(db: Session, run_mode: str = "formal") -> dict[str, An
         delta = r_recent - r_early
         decay_pct = (delta / abs(r_early) * 100) if abs(r_early) > 0.001 else 0.0
 
+        # 胜率优势（更稳健的指标，不受极端值影响）
+        def _win_edge(binary: list[int], returns: list[float]) -> tuple[float, int, int]:
+            true_wins = sum(1 for b, r in zip(binary, returns) if b == 1 and r > 0)
+            true_total = sum(1 for b in binary if b == 1)
+            false_wins = sum(1 for b, r in zip(binary, returns) if b == 0 and r > 0)
+            false_total = sum(1 for b in binary if b == 0)
+            wr_true = true_wins / true_total * 100 if true_total else 0
+            wr_false = false_wins / false_total * 100 if false_total else 0
+            return wr_true - wr_false, true_total, false_total
+
+        early_edge, early_bt, early_nobt = _win_edge(eb, er)
+        recent_edge, recent_bt, recent_nobt = _win_edge(rb, rr)
+
+        # 综合判断：point-biserial 和胜率优势双重验证
         if abs(r_early) < 0.02 and abs(r_recent) < 0.02:
             status = "noise"
-        elif decay_pct < -30:
+        elif decay_pct < -30 and recent_edge < early_edge - 5:
             status = "decaying"
-        elif decay_pct > 30:
+        elif decay_pct > 30 and recent_edge > early_edge + 5:
             status = "improving"
         else:
             status = "stable"
@@ -620,6 +634,10 @@ def alpha_decay_detection(db: Session, run_mode: str = "formal") -> dict[str, An
             "status": status,
             "early_n": len(eb),
             "recent_n": len(rb),
+            "early_win_edge": round(early_edge, 1),
+            "recent_win_edge": round(recent_edge, 1),
+            "early_true_n": early_bt,
+            "recent_true_n": recent_bt,
         })
 
     factors_result.sort(key=lambda x: abs(x["delta"]), reverse=True)
@@ -628,6 +646,72 @@ def alpha_decay_detection(db: Session, run_mode: str = "formal") -> dict[str, An
         "early_period": f"{early_rows[0][0].trade_date} to {early_rows[-1][0].trade_date}",
         "recent_period": f"{recent_rows[0][0].trade_date} to {recent_rows[-1][0].trade_date}",
         "factors": factors_result,
+    }
+
+
+# A 股短线真实交易成本（在 slippage 之外的额外成本）
+_COMMISSION_RATE_PCT = 0.05   # 佣金万 2.5 双边
+_STAMP_TAX_RATE_PCT = 0.05    # 印花税卖出
+_ADDITIONAL_COST_PCT = _COMMISSION_RATE_PCT + _STAMP_TAX_RATE_PCT
+
+
+def cost_adjusted_metrics(db: Session, run_mode: str = "formal") -> dict[str, Any]:
+    """扣除佣金+印花税后的真实表现指标。
+
+    注意：executed_return 已包含 entry/exit slippage（各 10bps），
+    此函数额外扣除佣金（万 2.5 双边）和印花税（0.05% 卖出）。
+    """
+    stmt = select(RecommendationOutcome).where(
+        RecommendationOutcome.entry_triggered == True,  # noqa: E712
+        RecommendationOutcome.outcome_label.in_([OUTCOME_SUCCESS, OUTCOME_FAILED]),
+    )
+    if run_mode:
+        stmt = stmt.join(RecommendationRun, RecommendationRun.run_id == RecommendationOutcome.recommendation_id).where(
+            RecommendationRun.run_mode == run_mode
+        )
+    outcomes = db.scalars(stmt).all()
+    if not outcomes:
+        return {"error": "no executed trades", "count": 0}
+
+    import math
+
+    gross_returns = [float(o.executed_return or 0) for o in outcomes]
+    net_returns = [r - _ADDITIONAL_COST_PCT for r in gross_returns]
+    n = len(gross_returns)
+
+    gross_wins = sum(1 for r in gross_returns if r > 0)
+    net_wins = sum(1 for r in net_returns if r > 0)
+
+    gross_avg = sum(gross_returns) / n
+    net_avg = sum(net_returns) / n
+
+    gross_profit = sum(r for r in gross_returns if r > 0)
+    gross_loss = abs(sum(r for r in gross_returns if r < 0))
+    gross_pf = round(gross_profit / gross_loss, 2) if gross_loss > 0 else 999.0
+
+    net_profit = sum(r for r in net_returns if r > 0)
+    net_loss = abs(sum(r for r in net_returns if r < 0))
+    net_pf = round(net_profit / net_loss, 2) if net_loss > 0 else 999.0
+
+    gross_sd = math.sqrt(sum((r - gross_avg) ** 2 for r in gross_returns) / n)
+    net_sd = math.sqrt(sum((r - net_avg) ** 2 for r in net_returns) / n)
+
+    return {
+        "count": n,
+        "additional_cost_pct": _ADDITIONAL_COST_PCT,
+        "gross": {
+            "win_rate": round(gross_wins / n * 100, 1),
+            "avg_return": round(gross_avg, 2),
+            "profit_factor": gross_pf,
+            "sharpe_per_trade": round(gross_avg / gross_sd, 3) if gross_sd > 0 else 0,
+        },
+        "net": {
+            "win_rate": round(net_wins / n * 100, 1),
+            "avg_return": round(net_avg, 2),
+            "profit_factor": net_pf,
+            "sharpe_per_trade": round(net_avg / net_sd, 3) if net_sd > 0 else 0,
+        },
+        "cost_drag_pct": round(gross_avg - net_avg, 2),
     }
 
 

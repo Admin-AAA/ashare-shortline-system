@@ -1168,7 +1168,7 @@ def _build_stock_from_bars(
         "support_ma10": support_ma10,
         "rsi_12": round(rsi12, 3),
         "volume_shrink_pullback": vol5_20 <= 0.85 and (support_ma5 or support_ma10) and quote.get("pct", 0) <= 1,
-        "volume_breakout_signal": vol5_20 >= 1.15 and chg20 > 5 and quote.get("pct", 0) > 0,
+        "volume_breakout_signal": vol5_20 >= 1.15 and price >= previous_high20 * 0.995 and quote.get("pct", 0) > 0,
         "upper_shadow_count20": upper_shadow_count20,
         "max_dd20": round(max_dd20, 3),
         "max_dd60": round(max_dd60, 3),
@@ -1243,7 +1243,7 @@ def _build_stock_from_bars(
             "latest_news": "未接入实时新闻源",
             "sentiment_summary": "仅基于真实行情和日K计算，新闻/公告需人工复核",
             "volume_shrink_pullback": vol5_20 <= 0.85 and (support_ma5 or support_ma10) and quote.get("pct", 0) <= 1,
-            "volume_breakout_signal": vol5_20 >= 1.15 and chg20 > 5 and quote.get("pct", 0) > 0,
+            "volume_breakout_signal": vol5_20 >= 1.15 and price >= previous_high20 * 0.995 and quote.get("pct", 0) > 0,
         },
         # ── 顶层交易字段：供 feature_snapshot / outcome_service 直接读取 ──
         "ideal_buy": round(max(ma10, ma20, price * 0.985), 2),
