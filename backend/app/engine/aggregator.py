@@ -955,7 +955,8 @@ def apply_pool_rules(
 # 内部辅助函数
 # ============================================================================
 
-_SECTOR_DIVERSITY_PENALTY = {1: 0.0, 2: 5.0}  # 第 N 只同行业股票的分数惩罚（第3只起扣10分）
+_SECTOR_DIVERSITY_PENALTY = {1: 0.0, 2: 5.0}  # 第 N 只同行业股票的分数惩罚
+_SECTOR_DIVERSITY_PENALTY_DEFAULT = 10.0         # 第 3 只起的默认惩罚
 
 
 def _apply_sector_diversity(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -971,7 +972,7 @@ def _apply_sector_diversity(cards: list[dict[str, Any]]) -> list[dict[str, Any]]
             continue
         count = industry_count.get(industry, 0) + 1
         industry_count[industry] = count
-        penalty = _SECTOR_DIVERSITY_PENALTY.get(count, 6.0)
+        penalty = _SECTOR_DIVERSITY_PENALTY.get(count, _SECTOR_DIVERSITY_PENALTY_DEFAULT)
         if penalty > 0:
             card["sector_diversity_penalty"] = penalty
             card["final_score"] = round(float(card.get("final_score") or 0) - penalty, 2)
