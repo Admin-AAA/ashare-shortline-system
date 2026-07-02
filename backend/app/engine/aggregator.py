@@ -939,15 +939,16 @@ _SECTOR_DIVERSITY_PENALTY = {1: 0.0, 2: 5.0}  # 第 N 只同行业股票的分�
 
 
 def _apply_sector_diversity(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """板块去重：同行业第二只推荐扣 3 分，第三只起扣 6 分。
+    """板块去重：同行业第二只推荐扣 5 分，第三只起扣 10 分。
 
     因果机制：同行业股票高度相关，集中持有没有分散效果。
-    惩罚幅度设计：3 分约等于一个中等信号的贡献，足以在分数接近时重排，
-    但不会让低分行业的推荐超过高分集中行业的首选。
+    跳过未知行业（无 industry 字段的卡片不参与去重）。
     """
     industry_count: dict[str, int] = {}
     for card in cards:
-        industry = str(card.get("industry") or "unknown")
+        industry = str(card.get("industry") or "")
+        if not industry or industry == "unknown":
+            continue
         count = industry_count.get(industry, 0) + 1
         industry_count[industry] = count
         penalty = _SECTOR_DIVERSITY_PENALTY.get(count, 6.0)
