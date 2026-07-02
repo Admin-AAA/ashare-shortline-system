@@ -31,6 +31,8 @@ DEFAULT_TAKE_PROFIT_PCT = 8.0
 MAX_STOP_LOSS_PCT = -9.0       # 止损最宽 -9%，高波动股允许更宽止损
 MAX_TAKE_PROFIT_PCT = 15.0     # 止盈上限（+15%），防止 feature_builder 设置过高的止盈
 MAX_ENTRY_GAP_PCT = 10.0       # 跳空高开 > 10% 则放弃入场（历史数据：gap>10% 胜率 0%）
+TRAILING_ACTIVATE_PCT = 4.0    # 移动止盈激活阈值：利润达 +4% 时启动
+TRAILING_CALLBACK_PCT = 1.5    # 移动止盈回撤阈值：从峰值回撤 1.5% 时退出
 
 OUTCOME_PENDING = "pending"
 OUTCOME_SUCCESS = "success"
