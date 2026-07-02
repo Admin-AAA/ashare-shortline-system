@@ -248,7 +248,9 @@ def _apply_context_blocks(item: dict[str, Any], profile: dict[str, Any]) -> None
 
     item["volume_breakout_signal"] = _bool(
         profile.get("volume_breakout_signal"),
-        bool(item.get("breakout20")) and item["volume_ratio_5d"] >= 1.1 and _num(item.get("pct")) > 0,
+        # alpha decay: breakout20 r=+0.09→-0.24（-364%），不再用作正面信号
+        # 改用动量+量价条件替代
+        _num(item.get("chg20")) > 5 and item["volume_ratio_5d"] >= 1.1 and _num(item.get("pct")) > 0,
     )
     item["volume_shrink_pullback"] = _bool(
         profile.get("volume_shrink_pullback"),
@@ -363,7 +365,9 @@ def _volume_pattern(item: dict[str, Any]) -> str:
 
 
 def _macd_status(item: dict[str, Any]) -> str:
-    if bool(item.get("breakout20")) and _num(item.get("chg20")) > 12 and _num(item.get("pct")) > 0:
+    # alpha decay: breakout20 r=+0.09→-0.24，不再用作 MACD 状态判断
+    # 改用动量和趋势效率判断
+    if _num(item.get("chg20")) > 8 and _num(item.get("eff20")) >= 0.5:
         return "零轴上金叉"
     if _num(item.get("chg20")) > 8 and _num(item.get("eff20")) > 0.45:
         return "多头"
@@ -586,7 +590,7 @@ _OBSERVED_FIELDS = {
     "rsi_6", "rsi_12", "rsi_24", "rsi_status", "rsi_signal",
     "macd_dif", "macd_dea", "macd_bar", "macd_status", "macd_signal",
     "trend_status", "ma_alignment", "trend_strength",
-    "yesterday_high", "yesterday_low", "high_20d", "low_20d", "off_high_pct",
+    "yesterday_high", "yesterday_low", "high_20d", "low_20d", "off_high_pct", "off_high60_pct",
     "limit_up_days20", "is_st",
     "support_ma5", "support_ma10",
     "support_levels", "resistance_levels", "resistance_distance_pct",
@@ -609,6 +613,7 @@ _OBSERVABLE_FIELDS.update({
     "dragon_tiger_buy_seat_count", "dragon_tiger_institution_net_buy_yi",
     "news_risk_count", "positive_catalyst_count",
     "risk_alerts", "positive_catalysts", "latest_news",
+    "announcement_negative_count",
     "inflow_5d_yi", "inflow_10d_yi",
     "is_limit_up", "limit_up_consecutive_days", "limit_up_seal_time", "limit_up_reason",
     "limit_up_first_time", "limit_up_last_time", "limit_up_open_times",
@@ -625,6 +630,34 @@ _OBSERVABLE_FIELDS.update({
     "is_shortline_leader_candidate", "dragon_tiger_buy_dispersion",
     "dragon_tiger_inst_buy_ratio", "shortline_factor_explanations",
 })
+
+# 辅助字段 → 数据源类别映射。missing_fields 用类别名（news/announcements/dragon_tiger/...），
+# 而 _tag_features 按字段名匹配，两者命名空间不一致会导致辅助字段永远被标 OBSERVED，
+# 使 data_authenticity 高估、真实性折扣不触发。这里补上映射让辅助字段正确识别缺失。
+_FIELD_TO_MISSING_CATEGORY: dict[str, str] = {}
+for _f in (
+    "news_risk_count", "positive_catalyst_count", "risk_alerts", "positive_catalysts",
+    "latest_news", "announcement_negative_count",
+):
+    _FIELD_TO_MISSING_CATEGORY[_f] = "news"  # news 与 announcements 同源拉取，缺一即都缺
+for _f in (
+    "dragon_tiger_is_on_list", "dragon_tiger_recent_count", "dragon_tiger_latest_date",
+    "dragon_tiger_buy_amount_yi", "dragon_tiger_sell_amount_yi", "dragon_tiger_net_amount_yi",
+    "dragon_tiger_buy_seat_count", "dragon_tiger_institution_net_buy_yi",
+    "dragon_tiger_buy_dispersion", "dragon_tiger_inst_buy_ratio",
+):
+    _FIELD_TO_MISSING_CATEGORY[_f] = "dragon_tiger"
+for _f in (
+    "concept_sector_name", "concept_sector_heat_rank", "is_main_theme",
+    "sector_ladder_level", "sector_ladder_limit_up_count", "sector_ladder_height",
+):
+    _FIELD_TO_MISSING_CATEGORY[_f] = "theme_tags"
+for _f in (
+    "main_net_inflow_yi", "inflow_5d_yi", "inflow_10d_yi",
+    "super_large_net_inflow_yi", "large_net_inflow_yi", "medium_net_inflow_yi",
+    "small_net_inflow_yi", "main_net_inflow_ratio", "cumulative_inflow_3d_yi",
+):
+    _FIELD_TO_MISSING_CATEGORY[_f] = "capital_flow"
 
 # Fields that are always synthetically estimated (no real data source)
 _SYNTHETIC_FIELDS = {
@@ -658,7 +691,11 @@ _SCORED_FEATURES = {
     "trend_status", "bias_ma5", "volume_status",
     "support_ma5", "support_ma10", "macd_status", "rsi_12",
     "announcement_negative_count", "news_risk_count",
-    "turnover_rate", "upper_shadow_count20", "max_dd20",
+    "turnover_rate", "upper_shadow_count20", "max_dd20", "off_high_pct", "off_high60_pct",
+    "volume_shrink_pullback", "volume_breakout_signal",
+    "limit_up_consecutive_days", "limit_up_open_times",
+    "limit_up_fd_amount_yi", "limit_up_turnover_ratio",
+    "primary_excess20", "primary_excess60", "industry_positive_excess20_count",
     "dsa_trend_score", "dsa_bias_score", "dsa_volume_score",
     "dsa_support_score", "dsa_macd_score", "dsa_rsi_score",
     "capital_flow_score", "fundamental_score", "intelligence_score",
@@ -898,7 +935,12 @@ def _tag_features(item: dict[str, Any]) -> None:
         elif key in _DERIVED_SCORE_FIELDS:
             tags[key] = _derived_score_tag(data_quality)
         elif key in _OBSERVABLE_FIELDS:
-            tags[key] = "FALLBACK" if key in missing_fields else "OBSERVED"
+            # 辅助字段：先看显式 fallback_fields，再看对应数据源类别是否缺失
+            category = _FIELD_TO_MISSING_CATEGORY.get(key)
+            if category and category in missing_fields:
+                tags[key] = "FALLBACK"
+            else:
+                tags[key] = "OBSERVED"
         elif key in _SYNTHETIC_FIELDS:
             tags[key] = "ESTIMATED"
     item["_feature_tags"] = tags
