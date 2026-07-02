@@ -686,6 +686,7 @@ def _persist_backtest_recommendations(
             "take_profit": card.get("take_profit"),
             "score_line_meta": card.get("score_line_meta", {}),
             "execution_viability": card.get("execution_viability", {}),
+            "sector_diversity_penalty": card.get("sector_diversity_penalty", 0),
             "final_score": card.get("final_score", 0),
         }
         rec = Recommendation(
