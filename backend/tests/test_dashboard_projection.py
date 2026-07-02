@@ -19,6 +19,7 @@ from app.schemas.dashboard import (
 )
 from app.api.dashboard import (
     DASHBOARD_POOL_SCOPE_NOTE,
+    _select_dashboard_market_snapshot,
     _select_dashboard_recommendation_run,
     _select_dashboard_run,
     build_validation_summary,
@@ -305,6 +306,57 @@ def test_dashboard_recommendations_use_latest_completed_formal_trade_date(db):
     assert selected.run_id == "dash_rec_latest_completed_formal"
 
 
+def test_dashboard_market_snapshot_prefers_newer_local_quote_pool(db, monkeypatch):
+    from app.models.tables import MarketSnapshot, StockQuote
+
+    db.add(
+        MarketSnapshot(
+            snapshot_id="dash_market_stale_snapshot",
+            trade_date="2099-05-27",
+            sample_count=100,
+            up_count=40,
+            down_count=50,
+            limit_up_count=2,
+            limit_down_count=1,
+            main_industries_json="[]",
+            breadth_json="{}",
+            created_at=datetime(2099, 5, 27, 16, 0),
+        )
+    )
+    db.add(
+        StockQuote(
+            code="999001",
+            trade_date="2099-05-28",
+            name="测试行情",
+            source="test",
+            price=1,
+            pct=1,
+            amount_yi=10,
+            turnover_rate=1,
+        )
+    )
+    db.commit()
+
+    monkeypatch.setattr(
+        "app.services.market_pool.get_market_snapshot_from_pool",
+        lambda _db, refresh=False: {
+            "trade_date": "2099-05-28",
+            "sample_count": 1,
+            "up_count": 1,
+            "down_count": 0,
+            "limit_up_count": 0,
+            "limit_down_count": 0,
+            "main_industries": ["测试"],
+            "breadth": {"market_regime": "active"},
+        },
+    )
+
+    snapshot = _select_dashboard_market_snapshot(db)
+
+    assert snapshot["trade_date"] == "2099-05-28"
+    assert snapshot["sample_count"] == 1
+
+
 def test_cockpit_recommendation_rejects_invalid_risk_level():
     with pytest.raises(ValidationError):
         CockpitRecommendation(
@@ -334,6 +386,25 @@ def test_build_market_temperature_calculates_heat_and_ratio():
     assert result.up_ratio == 0.62
     assert result.heat_score == 45.4
     assert result.regime == "active"
+
+
+def test_build_market_temperature_keeps_negative_heat_score():
+    snapshot = {
+        "trade_date": "2026-05-29",
+        "sample_count": 4944,
+        "up_count": 1352,
+        "down_count": 3532,
+        "limit_up_count": 61,
+        "limit_down_count": 134,
+        "main_industries": ["元器件", "半导体", "通信设备"],
+        "breadth": {"regime": "弱势"},
+    }
+
+    result = build_market_temperature(snapshot)
+
+    assert result.up_ratio == 0.273
+    assert result.heat_score == -63.69
+    assert result.regime == "弱势"
 
 
 def test_build_cockpit_recommendation_normalizes_json_fields():
@@ -383,6 +454,49 @@ def test_build_cockpit_recommendation_normalizes_json_fields():
     assert result.risk_level == "medium"
     assert result.consensus_label == "一致"
     assert result.data_quality.quote_source_count == 2
+
+
+def test_build_cockpit_recommendation_preserves_serialized_recommendation_fields():
+    rec = {
+        "recommendation_id": "rec-serialized",
+        "run_id": "run-1",
+        "trade_date": "2026-06-03",
+        "code": "601869",
+        "name": "长飞光纤",
+        "industry": "通信设备",
+        "final_score": 74.4,
+        "setup_type": "分歧转一致",
+        "rationale": "规则预审与市场数据支持。",
+        "risk_tags": ["短线放量"],
+        "info_tags": ["日K覆盖完整"],
+        "status": "pending",
+        "watch_status": "watching",
+        "preset_name": "陈小群",
+        "feature_snapshot": {
+            "score_line_meta": {"effective_score_line": 72.0},
+            "data_quality": {
+                "quote_cache_status": "fresh",
+                "quote_source_count": 1,
+                "kline_cache_status": "local_pool_readonly",
+                "kline_days": 90,
+            },
+        },
+        "skill_breakdown": [
+            {
+                "strategy_id": "chen-xiaoqun-skill",
+                "strategy_name": "陈小群龙头战法",
+                "agent_skill_review": {"stance": "support"},
+            }
+        ],
+    }
+
+    result = build_cockpit_recommendation(rec)
+
+    assert result.score_gap == 2.4
+    assert result.watch_status == "watching"
+    assert result.consensus_label == "一致"
+    assert result.data_quality.quote_source_count == 1
+    assert result.data_quality.quote_status == "fresh"
 
 
 def test_build_run_progress_marks_stale_and_resumable():
@@ -586,15 +700,6 @@ def test_load_dashboard_pool_status_uses_summary_mode_without_preview_limit(monk
 
     def fake_cached_pool_status(db, **kwargs):
         calls.append(kwargs)
-        if kwargs.get("cache_only"):
-            return {
-                "summary": {"active_unified_quote_count": 0, "eligible_quote_count": 0},
-                "recommendation_readiness": {
-                    "status": "blocked",
-                    "can_run_local_recommendation": False,
-                    "messages": ["数据池缓存尚未预热"],
-                },
-            }
         return {
             "summary": {"active_unified_quote_count": 1200, "eligible_quote_count": 1091},
             "recommendation_readiness": {
@@ -626,15 +731,6 @@ def test_load_dashboard_pool_status_uses_summary_mode_without_preview_limit(monk
             "include_paginated": False,
             "include_details": False,
             "cache_only": True,
-        },
-        {
-            "u_limit": 0,
-            "u_offset": 0,
-            "b_limit": 0,
-            "b_offset": 0,
-            "include_paginated": False,
-            "include_details": False,
-            "cache_only": False,
         },
     ]
 

@@ -5,11 +5,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models.tables import MarketSnapshot, RecommendationRun
+from app.models.tables import MarketSnapshot, RecommendationRun, StockQuote
 from app.schemas.dashboard import DashboardOverview
 from app.services.cost_service import list_scheduled_tasks
 from app.services.dashboard_quality_service import build_dashboard_quality_scorecard
@@ -73,6 +73,21 @@ def serialize_market_snapshot_row(row: Any | None) -> dict[str, Any]:
         "main_industries": _loads(getattr(row, "main_industries_json", "[]"), []),
         "breadth": _loads(getattr(row, "breadth_json", "{}"), {}),
     }
+
+
+def _select_dashboard_market_snapshot(db: Session) -> dict[str, Any]:
+    row = db.scalar(select(MarketSnapshot).order_by(MarketSnapshot.created_at.desc()).limit(1))
+    persisted_snapshot = serialize_market_snapshot_row(row)
+    latest_quote_trade_date = _latest_stock_quote_trade_date(db)
+    persisted_trade_date = _normalize_trade_date(persisted_snapshot.get("trade_date"))
+    if latest_quote_trade_date and latest_quote_trade_date > persisted_trade_date:
+        try:
+            from app.services.market_pool import get_market_snapshot_from_pool
+
+            return get_market_snapshot_from_pool(db, refresh=False)
+        except Exception:
+            return persisted_snapshot
+    return persisted_snapshot
 
 
 def serialize_run_progress_row(row: Any | None) -> dict[str, Any] | None:
@@ -147,10 +162,30 @@ def _loads(raw: Any, default: Any) -> Any:
         return default
 
 
+def _latest_stock_quote_trade_date(db: Session) -> str:
+    latest = db.scalar(
+        select(func.max(func.replace(StockQuote.trade_date, "-", ""))).where(
+            StockQuote.trade_date.is_not(None),
+            StockQuote.freshness_status != "inactive",
+        )
+    )
+    return _normalize_trade_date(latest)
+
+
+def _normalize_trade_date(value: Any) -> str:
+    raw = str(value or "").strip()
+    if len(raw) >= 10 and raw[4] == "-" and raw[7] == "-":
+        return raw[:10]
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if len(digits) >= 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    return ""
+
+
 @router.get("/overview", response_model=DashboardOverview)
 def overview(db: Session = Depends(get_db)) -> DashboardOverview:
     try:
-        market_row = db.scalar(select(MarketSnapshot).order_by(MarketSnapshot.created_at.desc()).limit(1))
+        market_snapshot = _select_dashboard_market_snapshot(db)
         recent_run_row = _select_dashboard_run(db)
         recent_run = serialize_run_progress_row(recent_run_row)
         recommendation_run_row = _select_dashboard_recommendation_run(db)
@@ -168,7 +203,7 @@ def overview(db: Session = Depends(get_db)) -> DashboardOverview:
             current_run=recent_run,
         )
         return compose_overview(
-            market_snapshot=serialize_market_snapshot_row(market_row),
+            market_snapshot=market_snapshot,
             recent_run=recent_run,
             recommendations=run_recommendations,
             data_health=data_health,
@@ -217,6 +252,8 @@ def _latest_dashboard_trade_date(db: Session) -> str | None:
 def load_dashboard_pool_status(db: Session) -> dict[str, Any]:
     from app.api.data_sources import get_cached_local_pool_status
 
+    # Dashboard overview: use cache only to avoid 800ms DB scan on every request.
+    # Cache is refreshed by scheduler every 5 minutes.
     pool_status = get_cached_local_pool_status(
         db,
         u_limit=DASHBOARD_POOL_PREVIEW_LIMIT,
@@ -228,6 +265,7 @@ def load_dashboard_pool_status(db: Session) -> dict[str, Any]:
         cache_only=True,
     )
     if _is_unready_pool_cache(pool_status):
+        # First-ever request: cache is empty, fall back to full load
         pool_status = get_cached_local_pool_status(
             db,
             u_limit=DASHBOARD_POOL_PREVIEW_LIMIT,
