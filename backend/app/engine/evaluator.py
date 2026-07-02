@@ -59,6 +59,7 @@ ALLOWED_NAMES = {
     "limit_up_open_times",
     "limit_up_turnover_ratio",
     "market_sentiment_phase",
+    "market_regime",
     "is_st",
     "ma5",
     "ma10",

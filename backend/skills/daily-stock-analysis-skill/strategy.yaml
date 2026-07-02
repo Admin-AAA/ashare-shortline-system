@@ -175,6 +175,10 @@ risk:
       level: medium
       flag: 位置过热（pos20>95 仅 25% 胜率，-2.32% 均收益）
       score_delta: -8
+    - when: "market_regime == '震荡' and avg_cost >= 50 and avg_cost < 100"
+      level: medium
+      flag: 震荡期中价股风险（avg_cost 50-100 WR=41.2% vs 非震荡 75.6%）
+      score_delta: -6
     - when: "amount_yi >= 30 and amount_yi < 60"
       level: medium
       flag: 成交额过大盘（30-60 亿区间 35.5% 胜率，-1.32% 均收益，机构博弈激烈）
