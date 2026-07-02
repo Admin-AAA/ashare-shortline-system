@@ -99,8 +99,12 @@ def resolved_trade_return(outcome: RecommendationOutcome | Any | None) -> float:
 
 
 def is_accurate_recommendation(outcome: RecommendationOutcome | Any | None) -> bool:
-    """严格准确推荐口径：真实成交，且扣费滑点后净收益为正。"""
-    return bool(is_trade_executed(outcome) and resolved_trade_return(outcome) > 0)
+    """严格准确推荐口径：真实成交，且扣费后净收益为正。
+
+    executed_return 已含滑点但未扣佣金+印花税（_ADDITIONAL_COST_PCT=0.10%），
+    阈值必须覆盖这部分成本，与 outcome_label 判定保持一致。
+    """
+    return bool(is_trade_executed(outcome) and resolved_trade_return(outcome) > _ADDITIONAL_COST_PCT)
 
 
 def label_pending_outcomes(
