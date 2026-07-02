@@ -11,5 +11,15 @@ export default defineConfig({
     proxy: {
       "/api": apiProxyTarget
     }
-  }
+  },
+  build: {
+    chunkSizeWarningLimit: 400,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          "vendor-react": ["react", "react-dom"],
+        },
+      },
+    },
+  },
 });

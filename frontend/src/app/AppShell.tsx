@@ -1,7 +1,6 @@
 import { FlaskConical, RefreshCcw, SunMoon, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ErrorBoundary } from "../components/ErrorBoundary";
-import StarfieldBackground from "../components/StarfieldBackground";
 import ControlCenterPage from "../features/control/ControlCenterPage";
 import DashboardPage from "../features/dashboard/DashboardPage";
 import PresetMatrixPage from "../features/matrix/PresetMatrixPage";
@@ -136,7 +135,6 @@ export default function AppShell() {
 
   return (
     <div className={`cosmic-shell ${themeTransitioning ? "theme-transitioning" : ""}`} data-active-group={activeGroup}>
-      <StarfieldBackground />
 
       <header className="cosmic-topbar">
         <button
