@@ -6,22 +6,23 @@ Tushare 稳定数据源客户端。
     pro = get_pro()
     df = pro.daily(ts_code="000001.SZ", limit=5)
 
-自建服务器：http://101.35.233.113:8020/
-不限速，提供完整 EOD 数据。
+代理服务器：https://fastapic.stockai888.top/
+兼容 Tushare pro_api HTTP 协议（POST JSON: api_name/token/params/fields）。
 """
 
 from __future__ import annotations
 
 import functools
 import json
+import time
 from datetime import date, timedelta
 from typing import Any
 
 import pandas as pd
 import requests
 
-_TOKEN = "f8b05f8ee54f468220f2569afe56b4c027f1d388d164899339d394ad"
-_CUSTOM_URL = "http://101.35.233.113:8020/"
+_TOKEN = "eqyrJ71eIKjLoM12OeDLQOwRMUTuETs2ItnXAJitOhjTE8sLIjm8UuihObjXEs3zOFDKUI1PMrTmMp1yO9Tjl19"
+_CUSTOM_URL = "https://fastapic.stockai888.top/"
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 客户端 — requests.Session 直连，杜绝 tushare 库的 TCP 悬挂问题
@@ -31,7 +32,7 @@ _CUSTOM_URL = "http://101.35.233.113:8020/"
 class _TushareSession:
     """Tushare pro_api 兼容接口，底层用 requests.Session 池化连接。"""
 
-    def __init__(self, token: str, timeout: tuple[float, float] = (5, 10)):
+    def __init__(self, token: str, timeout: tuple[float, float] = (5, 120)):
         self._token = token
         self._url = _CUSTOM_URL
         self._session = requests.Session()
@@ -71,7 +72,7 @@ class _TushareSession:
 @functools.lru_cache(maxsize=1)
 def get_pro() -> _TushareSession:
     """获取 Tushare 客户端实例（单例缓存，requests.Session 直连）。"""
-    pro = _TushareSession(_TOKEN, timeout=(5, 10))
+    pro = _TushareSession(_TOKEN, timeout=(5, 120))
     pro._DataApi__http_url = _CUSTOM_URL
     return pro
 
@@ -479,7 +480,10 @@ def fetch_limit_up_board(trade_date: str | None = None) -> list[dict[str, Any]]:
     pro = get_pro()
     td = _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
     result: list[dict[str, Any]] = []
+    errors: list[str] = []
     for limit_type in ("U", "D"):
+        if result:  # 非首次调用加间隔，避免连续请求触发 429
+            time.sleep(0.5)
         try:
             df = pro.limit_list_d(trade_date=td, limit_type=limit_type)
             if df is None or df.empty:
@@ -504,8 +508,10 @@ def fetch_limit_up_board(trade_date: str | None = None) -> list[dict[str, Any]]:
                     "fd_amount": _f(row.get("fd_amount")) / 1e8 if row.get("fd_amount") is not None else 0.0,
                     "industry": str(row.get("industry", "")),
                 })
-        except Exception:
-            pass
+        except Exception as exc:
+            errors.append(f"{limit_type}: {type(exc).__name__}: {exc}")
+    if errors:
+        raise RuntimeError(f"limit_list_d({td}) failed: {'; '.join(errors)}")
     return result
 
 
