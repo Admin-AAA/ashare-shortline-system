@@ -110,6 +110,17 @@ AGENT_PRESENT_WEIGHTS = {
     "evidence": 0.10,
 }
 
+# --- 市场阶段阈值（涨停率 / 上涨比） ---
+# 基于历史数据回测：高潮胜率 62.2% vs 活跃 55.1%（Δ=+7.2pp, t=3.17）
+SENTIMENT_LIMIT_UP_RATE_HOT = 0.012    # 涨停率 > 1.2% → 高潮
+SENTIMENT_LIMIT_UP_RATE_ACTIVE = 0.005  # 涨停率 > 0.5% → 活跃
+SENTIMENT_LIMIT_UP_RATE_FLAT = 0.001    # 涨停率 >= 0.1% → 平淡
+SENTIMENT_LIMIT_DOWN_RATIO = 3          # 涨停/跌停比 > 3:1 才确认高潮
+BASE_UP_RATIO_BULL = 0.65               # 上涨比 >= 65% → 强牛
+BASE_UP_RATIO_BULLISH = 0.50            # 上涨比 >= 50% → 偏多
+BASE_UP_RATIO_RANGE = 0.35              # 上涨比 >= 35% → 震荡
+
+
 def _market_sentiment(snapshot: dict[str, Any] | None) -> str:
     """统一的市场情绪判断，全系统唯一入口。"""
     if not snapshot:
@@ -120,11 +131,13 @@ def _market_sentiment(snapshot: dict[str, Any] | None) -> str:
     # 用涨停率而非绝对数，适配不同市场规模
     lu_rate = limit_up / sample
     ld_rate = limit_down / sample
-    if lu_rate > 0.012 and (ld_rate == 0 or lu_rate / max(ld_rate, 0.0001) > 3):
+    if lu_rate > SENTIMENT_LIMIT_UP_RATE_HOT and (
+        ld_rate == 0 or lu_rate / max(ld_rate, 0.0001) > SENTIMENT_LIMIT_DOWN_RATIO
+    ):
         return "高潮"
-    if lu_rate > 0.005:
+    if lu_rate > SENTIMENT_LIMIT_UP_RATE_ACTIVE:
         return "活跃"
-    if lu_rate >= 0.001:
+    if lu_rate >= SENTIMENT_LIMIT_UP_RATE_FLAT:
         return "平淡"
     return "冰点"
 
@@ -135,11 +148,11 @@ def _market_base(snapshot: dict[str, Any] | None) -> str:
         return "震荡"
     sample = max(1, int(snapshot.get("sample_count") or 1))
     up_ratio = float(snapshot.get("up_count") or 0) / sample
-    if up_ratio >= 0.65:
+    if up_ratio >= BASE_UP_RATIO_BULL:
         return "强牛"
-    if up_ratio >= 0.50:
+    if up_ratio >= BASE_UP_RATIO_BULLISH:
         return "偏多"
-    if up_ratio >= 0.35:
+    if up_ratio >= BASE_UP_RATIO_RANGE:
         return "震荡"
     return "弱势"
 
