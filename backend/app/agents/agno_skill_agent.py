@@ -645,23 +645,31 @@ def _parse_markdown_output(text: str) -> dict | None:
 def _normalize_action(raw_action: Any, stance: str, score: int, confidence: float) -> str:
     text = str(raw_action or "").strip()
     if text in _ACTION_ALIASES:
-        return _ACTION_ALIASES[text]
-    if "加仓" in text or "确认" in text:
-        return "确认后加仓"
-    if "轻仓" in text or "试错" in text:
-        return "轻仓试错"
-    if "观察" in text or "观望" in text:
-        return "观察"
-    if "不做" in text or "回避" in text or "规避" in text:
-        return "不做"
+        action = _ACTION_ALIASES[text]
+    elif "加仓" in text or "确认" in text:
+        action = "确认后加仓"
+    elif "轻仓" in text or "试错" in text:
+        action = "轻仓试错"
+    elif "观察" in text or "观望" in text:
+        action = "观察"
+    elif "不做" in text or "回避" in text or "规避" in text:
+        action = "不做"
+    # fallback by stance
+    elif stance == "strong_support" and score >= 80 and confidence >= 0.7:
+        action = "确认后加仓"
+    elif stance in {"support", "neutral_support"} and score >= 60:
+        action = "轻仓试错"
+    elif stance in {"oppose", "veto"} or score <= 40:
+        action = "不做"
+    else:
+        action = "观察"
 
-    if stance == "strong_support" and score >= 80 and confidence >= 0.7:
-        return "确认后加仓"
-    if stance in {"support", "neutral_support"} and score >= 60:
-        return "轻仓试错"
-    if stance in {"oppose", "veto"} or score <= 40:
-        return "不做"
-    return "观察"
+    # stance 一致性校验：neutral/oppose/veto 不应有进攻性行动
+    if stance == "neutral" and action in ("确认后加仓", "轻仓试错"):
+        action = "观察"
+    if stance in ("oppose", "veto") and action != "不做":
+        action = "不做"
+    return action
 
 
 def _default_position_range(action: str, score: int, confidence: float) -> str:
@@ -719,8 +727,9 @@ def _parse_to_output(raw: dict) -> SkillReviewOutput:
     confidence = float(raw.get("confidence", 0.5))
     confidence = max(0.0, min(1.0, confidence))
 
-    evidence = _string_list(raw.get("evidence"), limit=8)
-    risks = _string_list(raw.get("risks"), limit=8)
+    # 兼容 LLM 自然输出 "supports" 和标准字段名 "evidence"
+    evidence = _string_list(raw.get("evidence") or raw.get("supports"), limit=8)
+    risks = _string_list(raw.get("risks") or raw.get("risk_flags"), limit=8)
     regime = str(raw.get("market_regime_judgment", "")).strip()
     if not regime:
         # 兼容旧字段名

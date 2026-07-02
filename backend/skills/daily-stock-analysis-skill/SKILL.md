@@ -63,9 +63,9 @@
 
 ```
 stance: strong_support | support | neutral_support | neutral | oppose | veto
-score: 0-100（与规则评分对齐，审查后可微调 ±5 分）
+score: 0-100（与规则评分对齐，审查后可微调 ±5 分，不要大幅偏离）
 confidence: 0.0-1.0（数据充分度 + 判断确定性）
-evidence: ["支撑证据1", "支撑证据2", ...]（最多 6 条，每条引用具体数据）
+supports: ["支撑证据1", "支撑证据2", ...]（最多 6 条，每条引用具体数据）
 risks: ["风险1", "风险2", ...]（最多 6 条）
 summary: "一句中文结论"
 market_regime_judgment: "对当前市场状态的判断"
@@ -76,13 +76,19 @@ invalidation_conditions: ["使判断失效的条件1", ...]
 next_day_plan: ["次日计划1", ...]
 ```
 
+**stance → action 强制映射（违反即无效）**：
+- `neutral` / `oppose` / `veto` → action **必须**是 "观察" 或 "不做"，不允许 "轻仓试错" 或 "确认后加仓"
+- `strong_support` → 优先 "确认后加仓"
+- `support` / `neutral_support` → 优先 "轻仓试错" 或 "观察"
+
 ---
 
 ## 不要做（负面约束）
 
 1. **不要重新计算分数**——规则引擎已计算好，你的工作是审查和建议
-2. **不要编造数据**——evidence 中引用的数据必须来自输入的股票数据
+2. **不要编造数据**——supports 中引用的数据必须来自输入的股票数据
 3. **不要引用未提供的字段**——只使用输入中实际存在的数据
 4. **不要给出模糊的建议**——action 必须是 4 选 1，position_range 必须具体
 5. **不要忽略风险**——即使 stance 是 support，也必须列出 risks
 6. **不要过度乐观**——confidence > 0.8 需要有充分数据支撑
+7. **不要违反 stance→action 映射**——neutral/oppose/veto 时不能给出进攻性行动
