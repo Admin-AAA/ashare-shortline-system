@@ -273,13 +273,18 @@ def _apply_dsa_scores(item: dict[str, Any], dsa_weights: dict[str, float] | None
     w_macd = w.get("dsa_w_macd", 1.0)
     w_rsi = w.get("dsa_w_rsi", 1.0)
 
+    # 归一化权重：确保加权和仍在 0-100 范围内
+    # 各维度满分：trend=30, bias=20, volume=15, support=10, macd=15, rsi=10
+    max_possible = (30 * w_trend + 20 * w_bias + 15 * w_volume + 10 * w_support + 15 * w_macd + 10 * w_rsi)
+    norm = 100.0 / max_possible if max_possible > 0 else 1.0
+
     item["dsa_signal_score"] = int(
-        item["dsa_trend_score"] * w_trend
+        (item["dsa_trend_score"] * w_trend
         + item["dsa_bias_score"] * w_bias
         + item["dsa_volume_score"] * w_volume
         + item["dsa_support_score"] * w_support
         + item["dsa_macd_score"] * w_macd
-        + item["dsa_rsi_score"] * w_rsi
+        + item["dsa_rsi_score"] * w_rsi) * norm
     )
 
     # 动量衰减：防止追高（滞后指标优化）
