@@ -3,5 +3,6 @@
   --radius-md: 8px;
   --sidebar-width: 168px;
   --font-ui: Inter, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", "Fira Code", Menlo, monospace;
   --motion-fast: 160ms ease;
 }
