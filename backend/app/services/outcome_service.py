@@ -31,8 +31,6 @@ DEFAULT_TAKE_PROFIT_PCT = 8.0
 MAX_STOP_LOSS_PCT = -9.0       # 止损最宽 -9%，高波动股允许更宽止损
 MAX_TAKE_PROFIT_PCT = 15.0     # 止盈上限（+15%），防止 feature_builder 设置过高的止盈
 MAX_ENTRY_GAP_PCT = 10.0       # 跳空高开 > 10% 则放弃入场（历史数据：gap>10% 胜率 0%）
-TRAILING_ACTIVATE_PCT = 4.0    # 移动止盈激活阈值：利润达 +4% 时启动（原 5.0，过高导致多数交易未激活）
-TRAILING_CALLBACK_PCT = 1.5    # 移动止盈回撤阈值：从峰值回撤 1.5% 时退出（原 3.0，过宽导致利润回吐）
 
 OUTCOME_PENDING = "pending"
 OUTCOME_SUCCESS = "success"
@@ -1000,7 +998,10 @@ def _simulate_outcome(
         "hit_target": hit_target,
         "hit_invalid": hit_invalid,
         "outcome_label": outcome_label,
-        "outcome_reason": _build_outcome_reason(exit_reason, executed_return, static_metrics["close_return"]),
+        "outcome_reason": _build_outcome_reason(
+            exit_reason, executed_return, static_metrics["close_return"],
+            max_return=static_metrics.get("max_return"), max_drawdown=static_metrics.get("max_drawdown"),
+        ),
     }
 
 
@@ -1125,18 +1126,20 @@ def _resolve_exit(
     entry_price: float = 0.0,
     code: str = "",
 ) -> tuple[float, str, str]:
+    """模拟退出逻辑：固定止损/止盈优先，无移动止盈（日线级别无法准确执行）。
+
+    注：entry_price 参数保留供未来使用，当前不参与退出判断。
+    日线级别无法确定 bar 内 open/high/low 的时间顺序，
+    移动止盈会产生大量假信号（回测验证：56 笔改善 vs 116 笔恶化，净效果 -286%）。
+    """
     locked_limit_down_bars = 0
-    peak_high_pct = 0.0  # 跟踪持有期内最高盈利幅度（%）
-    trailing_stop_price = 0.0  # 移动止盈触发价
-    for bar_idx, bar in enumerate(holding_bars):
+    for bar in holding_bars:
         if _exit_execution_block_reason(code, bar):
             locked_limit_down_bars += 1
             continue
         bar_open = _as_float(bar.open)
         high = _as_float(bar.high)
         low = _as_float(bar.low)
-
-        # --- 1. 固定止损/止盈（优先级最高）---
         if bar_open > 0 and low > 0:
             if bar_open <= stop_loss_price:
                 return bar_open, str(bar.trade_date), "stop_loss_gap"
@@ -1148,20 +1151,6 @@ def _resolve_exit(
             return stop_loss_price, str(bar.trade_date), "stop_loss_hit"
         if high >= take_profit_price:
             return take_profit_price, str(bar.trade_date), "take_profit_hit"
-
-        # --- 2. 移动止盈（trailing profit lock）---
-        # 仅在固定 SL/TP 均未触发时检查
-        # 从第二根 bar 开始检查退出（当日 bar 的 open→high 时间序不可知）
-        if entry_price > 0 and high > 0:
-            bar_high_pct = (high - entry_price) / entry_price * 100
-            if bar_high_pct > peak_high_pct:
-                peak_high_pct = bar_high_pct
-            if bar_idx > 0 and peak_high_pct >= TRAILING_ACTIVATE_PCT:
-                trailing_stop_price = entry_price * (1 + (peak_high_pct - TRAILING_CALLBACK_PCT) / 100.0)
-                if bar_open > 0 and bar_open < trailing_stop_price:
-                    return bar_open, str(bar.trade_date), "trailing_stop_gap"
-                if low > 0 and low <= trailing_stop_price:
-                    return trailing_stop_price, str(bar.trade_date), "trailing_stop_hit"
 
     last_bar = holding_bars[-1]
     if locked_limit_down_bars and locked_limit_down_bars == len(holding_bars):
@@ -1266,20 +1255,30 @@ def _is_one_word_limit_down(code: str, bar: DailyKbar) -> bool:
     return is_one_word_limit_down_bar(code, bar)
 
 
-def _build_outcome_reason(exit_reason: str, executed_return: float, close_return: float) -> str:
+def _build_outcome_reason(
+    exit_reason: str,
+    executed_return: float,
+    close_return: float,
+    *,
+    max_return: float | None = None,
+    max_drawdown: float | None = None,
+) -> str:
     label = {
         "stop_loss_gap": "开盘跳空止损",
         "take_profit_gap": "开盘跳空止盈",
         "stop_loss_intraday_both_hit": "同日同时触发止盈止损，按保守止损处理",
         "stop_loss_hit": "盘中触发止损",
         "take_profit_hit": "盘中触发止盈",
-        "trailing_stop_hit": "移动止盈锁定利润",
-        "trailing_stop_gap": "跳空回撤移动止盈",
         "horizon_close": "持有到观察期结束",
         "limit_down_locked_horizon_mark": "观察期内一字跌停或无流动性，按期末价格保守标记",
         "horizon_close_after_locked_limit_down": "出现一字跌停或无流动性后递延至观察期末",
     }.get(exit_reason, exit_reason)
-    return f"{label}；执行收益 {executed_return:.2f}%；静态收盘收益 {close_return:.2f}%"
+    parts = [label, f"执行收益 {executed_return:.2f}%", f"静态收盘收益 {close_return:.2f}%"]
+    if max_return is not None and max_return > 3:
+        parts.append(f"持有期最高浮盈 {max_return:.1f}%")
+    if max_drawdown is not None and max_drawdown < -3:
+        parts.append(f"最大回撤 {max_drawdown:.1f}%")
+    return "；".join(parts)
 
 
 def _as_float(value: Any) -> float:
