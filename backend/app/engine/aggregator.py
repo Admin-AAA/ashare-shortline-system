@@ -197,6 +197,10 @@ def market_regime_weights(
     if sentiment == "高潮":
         weights["skill_agent"] = min(0.58, weights["skill_agent"] + 0.03)
         weights["risk"] = max(0.03, weights["risk"] - 0.02)
+    elif sentiment == "活跃":
+        # 活跃阶段止损率 34%（vs 高潮 21%），提高风控权重
+        weights["risk"] = min(0.18, weights["risk"] + 0.03)
+        weights["strategy_rule"] = min(0.35, weights["strategy_rule"] + 0.02)
     elif sentiment == "冰点":
         weights["skill_agent"] = max(0.35, weights["skill_agent"] - 0.05)
         weights["risk"] = min(0.18, weights["risk"] + 0.05)
@@ -225,7 +229,7 @@ def resolve_score_line_context(
     _climax_extra = 8.0 if market_base in ("强牛", "偏多") else 0.0
     sentiment_adjustment = {
         "高潮": 5.0 + _climax_extra,
-        "活跃": 1.0,
+        "活跃": 3.0,  # 活跃阶段止损率 34%，提高门槛减少低质量入场
         "平淡": 0.0,
         "冰点": -3.0 if market_base == "弱势" else 0.0,
     }.get(sentiment, 0.0)
