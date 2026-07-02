@@ -26,19 +26,20 @@
   --muted: #94a3b8;
   --muted-strong: #64748b;
 
-  /* 强调：极光青绿，仅在关键处使用 */
-  --accent: #2dd4bf;
-  --accent-strong: #5eead4;
-  --accent-soft: #115e59;
-  --accent-glow: rgba(45, 212, 191, 0.20);
+  /* 强调：品牌蓝，与左上角 logo 同系 */
+  --accent: #60a5fa;
+  --accent-strong: #93c5fd;
+  --accent-soft: #1e3a8a;
+  --accent-glow: rgba(96, 165, 250, 0.20);
+  --accent-gradient: linear-gradient(135deg, #60a5fa 0%, #2dd4bf 100%);
 
-  /* 语义：金融市场标准色 */
+  /* 语义 */
   --danger: #f87171;
   --danger-soft: #7f1d1d;
   --warning: #fbbf24;
   --warning-soft: #78350f;
-  --positive: #4ade80;
-  --positive-soft: #14532d;
+  --positive: #60a5fa;
+  --positive-soft: #1e3a8a;
   --negative: #f87171;
   --negative-soft: #7f1d1d;
   --info: #60a5fa;
@@ -89,19 +90,20 @@
   --muted: #64748b;
   --muted-strong: #94a3b8;
 
-  /* 强调：深海青绿，比深色模式更沉稳 */
-  --accent: #0d9488;
-  --accent-strong: #14b8a6;
-  --accent-soft: #ccfbf1;
-  --accent-glow: rgba(13, 148, 136, 0.14);
+  /* 强调：品牌蓝，与左上角 logo 同系 */
+  --accent: #3b82f6;
+  --accent-strong: #2563eb;
+  --accent-soft: #dbeafe;
+  --accent-glow: rgba(59, 130, 246, 0.20);
+  --accent-gradient: linear-gradient(135deg, #3b82f6 0%, #0d9488 100%);
 
   /* 语义 */
   --danger: #dc2626;
   --danger-soft: #fee2e2;
   --warning: #d97706;
   --warning-soft: #fef3c7;
-  --positive: #16a34a;
-  --positive-soft: #dcfce7;
+  --positive: #2563eb;
+  --positive-soft: #dbeafe;
   --negative: #dc2626;
   --negative-soft: #fee2e2;
   --info: #2563eb;
