@@ -106,7 +106,7 @@ def on_startup() -> None:
     from app.services.scheduler_service import start_scheduler
     start_scheduler()
     _warmup_initial_state()
-    _warmup_pool_cache(delay_seconds=15.0)
+    _warmup_pool_cache(delay_seconds=2.0)
 
 
 def _warmup_initial_state() -> None:
