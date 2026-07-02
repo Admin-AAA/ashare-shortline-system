@@ -98,6 +98,9 @@ DEFAULT_AGG_WEIGHTS = {
     "evidence": 0.10,
 }
 
+AGG_WEIGHT_KEYS = list(DEFAULT_AGG_WEIGHTS.keys())
+COMPONENT_KEYS = list(DEFAULT_AGG_WEIGHTS.keys())
+
 # 有 Agent 审查时的权重（strategy_rule 降为辅证，skill_agent 主导）
 AGENT_PRESENT_WEIGHTS = {
     "skill_agent": 0.55,
@@ -843,10 +846,13 @@ def apply_pool_rules(
         reverse=True,
     )
     result: list[dict[str, Any]] = []
+    top_final_score = 0.0
     for card in ordered:
         final_score = float(card.get("final_score") or 0)
         if final_score <= 0:
             continue
+        if final_score > top_final_score:
+            top_final_score = final_score
         card_adjustment = _card_score_line_adjustment(card)
         execution_viability = _execution_viability(card)
         effective_score_line = round(
@@ -875,16 +881,65 @@ def apply_pool_rules(
         if final_score < effective_score_line:
             continue
         result.append(card)
+
+    # 动态降线：无候选过线时，以 top_score - 0.5 为软下界，避免零推荐
+    if not result and ordered and top_final_score > 0:
+        soft_floor = round(top_final_score - 1.0, 2)
+        base_floor = round(score_line_context["base_score_line"] - 8.0, 2)
+        dynamic_line = max(soft_floor, base_floor, 35.0)
+        # top_score 距有效线 20 分以内启用降线（防止质量过差时强行出票）
+        gap = score_line_context["effective_score_line"] - top_final_score
+        if 0 < gap <= 20.0:
+            score_line_context["dynamic_soft_floor_applied"] = True
+            score_line_context["dynamic_soft_floor"] = dynamic_line
+            score_line_context["soft_floor_gap"] = round(gap, 2)
+            for card in ordered:
+                final_score = float(card.get("final_score") or 0)
+                if final_score <= 0:
+                    continue
+                sm = card.get("score_line_meta", {})
+                ev = card.get("execution_viability", {})
+                if ev.get("status") == "blocked":
+                    continue
+                old_effective = sm.get("effective_score_line", 99)
+                new_effective = min(old_effective, dynamic_line)
+                sm["effective_score_line"] = new_effective
+                sm["dynamic_soft_floor_applied"] = True
+                sm["passed"] = final_score >= new_effective
+                if final_score >= new_effective:
+                    result.append(card)
     if display_limit is None:
         return result
     if display_limit <= 0:
         return result
-    return result[:display_limit]
+    return _apply_sector_diversity(result)[:display_limit]
 
 
 # ============================================================================
 # 内部辅助函数
 # ============================================================================
+
+_SECTOR_DIVERSITY_PENALTY = {1: 0.0, 2: 3.0}  # 第 N 只同行业股票的分数惩罚
+
+
+def _apply_sector_diversity(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """板块去重：同行业第二只推荐扣 3 分，第三只起扣 6 分。
+
+    因果机制：同行业股票高度相关，集中持有没有分散效果。
+    惩罚幅度设计：3 分约等于一个中等信号的贡献，足以在分数接近时重排，
+    但不会让低分行业的推荐超过高分集中行业的首选。
+    """
+    industry_count: dict[str, int] = {}
+    for card in cards:
+        industry = str(card.get("industry") or "unknown")
+        count = industry_count.get(industry, 0) + 1
+        industry_count[industry] = count
+        penalty = _SECTOR_DIVERSITY_PENALTY.get(count, 6.0)
+        if penalty > 0:
+            card["sector_diversity_penalty"] = penalty
+            card["final_score"] = round(float(card.get("final_score") or 0) - penalty, 2)
+    return sorted(cards, key=lambda c: float(c.get("final_score", 0)), reverse=True)
+
 
 def _empty(stock: dict[str, Any], reason: str) -> dict[str, Any]:
     return {
