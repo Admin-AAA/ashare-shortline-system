@@ -440,6 +440,88 @@ def _metrics_by_setup(db: Session, run_mode: str) -> list[dict[str, Any]]:
     return sorted(result, key=lambda item: (item["sample_count"], item["hit_rate"], item["avg_score"]), reverse=True)
 
 
+def failure_attribution(db: Session, run_mode: str = "formal") -> dict[str, Any]:
+    """失败归因分析：按退出原因分组统计失败模式。
+
+    返回：
+    - failure_modes: 每种退出原因的胜/败统计
+    - gap_up_impact: 跳空高开过滤的理论影响
+    - stop_loss_quality: 止损执行质量（止损后是否真的避免了更大亏损）
+    """
+    stmt = (
+        select(RecommendationOutcome, Recommendation)
+        .join(Recommendation, RecommendationOutcome.recommendation_id == Recommendation.recommendation_id)
+        .where(RecommendationOutcome.entry_triggered == True)  # noqa: E712
+    )
+    if run_mode:
+        stmt = stmt.join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id).where(
+            RecommendationRun.run_mode == run_mode
+        )
+    rows = db.execute(stmt).all()
+
+    # Failure modes by exit_reason
+    modes: dict[str, dict[str, Any]] = {}
+    for outcome, rec in rows:
+        reason = str(outcome.exit_reason or "unknown")
+        bucket = modes.setdefault(reason, {"exit_reason": reason, "success": 0, "failed": 0, "total_return": 0.0, "total_mdd": 0.0, "count": 0})
+        bucket["count"] += 1
+        bucket["total_return"] += float(outcome.executed_return or 0)
+        bucket["total_mdd"] += float(outcome.max_drawdown or 0)
+        if str(outcome.outcome_label) == "success":
+            bucket["success"] += 1
+        else:
+            bucket["failed"] += 1
+
+    failure_modes = []
+    for bucket in sorted(modes.values(), key=lambda b: b["count"], reverse=True):
+        n = bucket["count"]
+        failure_modes.append({
+            "exit_reason": bucket["exit_reason"],
+            "count": n,
+            "success_count": bucket["success"],
+            "failed_count": bucket["failed"],
+            "win_rate": round(bucket["success"] / n * 100, 1) if n else 0,
+            "avg_return": round(bucket["total_return"] / n, 2) if n else 0,
+            "avg_max_drawdown": round(bucket["total_mdd"] / n, 2) if n else 0,
+        })
+
+    # Gap-up filter impact
+    gap_threshold = 10.0
+    gap_total = 0
+    gap_filtered = 0
+    gap_filtered_failures = 0
+    for outcome, rec in rows:
+        rec_price = _as_float(rec.recommend_price)
+        entry_price = _as_float(outcome.entry_price)
+        if rec_price > 0 and entry_price > 0:
+            gap = (entry_price - rec_price) / rec_price * 100
+            if gap > gap_threshold:
+                gap_total += 1
+                gap_filtered_failures += 1 if str(outcome.outcome_label) == "failed" else 0
+        gap_filtered += 1 if gap > gap_threshold else 0
+
+    # Stop-loss quality: did stop-loss prevent bigger losses?
+    sl_trades = [(o, r) for o, r in rows if str(o.exit_reason or "").startswith("stop_loss")]
+    sl_would_have_won = sum(1 for o, _ in sl_trades if _as_float(o.close_return) > 0)
+    sl_total = len(sl_trades)
+
+    return {
+        "total_executed": len(rows),
+        "failure_modes": failure_modes,
+        "gap_up_filter": {
+            "threshold_pct": gap_threshold,
+            "would_filter": gap_filtered,
+            "would_filter_failures": gap_filtered_failures,
+            "would_filter_successes": gap_filtered - gap_filtered_failures,
+        },
+        "stop_loss_quality": {
+            "total_stop_loss": sl_total,
+            "would_have_won_if_held": sl_would_have_won,
+            "stop_loss_saved_ratio": round((sl_total - sl_would_have_won) / sl_total * 100, 1) if sl_total else 0,
+        },
+    }
+
+
 def precision_at_k(
     db: Session,
     run_mode: str = "formal",
