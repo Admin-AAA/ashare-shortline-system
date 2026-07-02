@@ -1,6 +1,6 @@
 export type RunMode = "formal" | "experiment";
 export type SkillMode = "formal" | "experiment" | "disabled";
-export type ScheduledTaskType = "data_sync" | "recommendation_run" | "pool_refresh" | "data_backfill";
+export type ScheduledTaskType = "data_sync" | "recommendation_run" | "preset_matrix_run" | "pool_refresh" | "data_backfill";
 
 export type PresetSkill = {
   skill_id: string;
@@ -105,6 +105,9 @@ export type RunSummary = {
     quote_source?: string;
     kline_sources?: Record<string, number>;
     agent_runtime?: string;
+    matrix_batch_id?: string;
+    matrix_batch_name?: string;
+    matrix_run?: boolean;
     main_industries?: string[];
     unified_quote_total?: number;
     base_filter_eligible_count?: number;
@@ -1030,6 +1033,7 @@ export type RecommendationCard = {
   rationale?: string | null;
   risk_tags: string[];
   info_tags: string[];
+  degraded_reason?: string | null;
   feature_snapshot: FeatureSnapshot;
   market_context: MarketSnapshot;
   skill_breakdown: SkillSignal[];
@@ -1650,4 +1654,104 @@ export type MetricsOverview = {
   }>;
   accuracy_gate_summary: AccuracyGateSummary;
   accuracy_policy: AccuracyPolicyAudit;
+};
+
+// ── 单股票矩阵分析 ──
+
+export type SkillMatrixRow = {
+  skill_id: string;
+  skill_name: string;
+  rule_score: number;
+  rule_phase: string;
+  rule_evidence: string[];
+  rule_risk_flags: string[];
+  hard_veto: boolean;
+  veto_reason: string;
+  setup_match: string;
+  entry_rule: string;
+  invalid_rule: string;
+  llm_review?: {
+    stance: string;
+    score: number;
+    score_delta: number;
+    confidence: number;
+    supports: string[];
+    risks: string[];
+    summary: string;
+    action: string;
+    position_range: string;
+    hallucination_check?: { severity: string; flags: string[] };
+    error?: string;
+    status?: string;
+  } | null;
+};
+
+export type StockMatrixAnalysisResult = {
+  status: string;
+  code: string;
+  name: string;
+  trade_date: string;
+  price: number;
+  dsa_profile: Record<string, unknown>;
+  skill_results: SkillMatrixRow[];
+  aggregated: {
+    final_score: number;
+    consensus_score: number;
+    component_scores: Record<string, number>;
+    risk_flags: string[];
+    consensus_tags: string[];
+    skill_disagreement: { disagreement_level: string; score_variance: number; stance_conflict: string };
+    stance_summary: Array<{ skill_name: string; stance: string; score: number; confidence: number }>;
+  };
+  elapsed_ms: number;
+  message?: string;
+};
+
+export type SkillBacktestTrade = {
+  trade_date: string;
+  entry_date: string;
+  entry_price: number;
+  exit_date: string;
+  exit_price: number;
+  net_return: number;
+  exit_reason: string;
+  max_return: number;
+  max_drawdown: number;
+};
+
+export type SkillBacktestPerformance = {
+  skill_id: string;
+  skill_name: string;
+  signal_count: number;
+  triggered_count: number;
+  win_count: number;
+  loss_count: number;
+  win_rate: number;
+  avg_return: number;
+  avg_win: number;
+  avg_loss: number;
+  profit_factor: number;
+  max_drawdown: number;
+  trades: SkillBacktestTrade[];
+};
+
+export type StockMatrixBacktestResult = {
+  status: string;
+  code: string;
+  name: string;
+  start_date: string;
+  end_date: string;
+  dates_scanned: number;
+  horizon_days: number;
+  per_skill_performance: SkillBacktestPerformance[];
+  aggregate_metrics: {
+    total_signals: number;
+    total_trades: number;
+    overall_win_rate: number;
+    overall_avg_return: number;
+    best_skill_id: string;
+    worst_skill_id: string;
+  };
+  elapsed_ms: number;
+  message?: string;
 };

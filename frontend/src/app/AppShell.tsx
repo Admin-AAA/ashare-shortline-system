@@ -2,6 +2,8 @@ import { RefreshCcw, SunMoon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import ControlCenterPage from "../features/control/ControlCenterPage";
 import DashboardPage from "../features/dashboard/DashboardPage";
+import PresetMatrixPage from "../features/matrix/PresetMatrixPage";
+import StockMatrixPage from "../features/stock-matrix/StockMatrixPage";
 import { useThemePreference } from "../shared/theme/useThemePreference";
 import { NAV_ITEMS, type CockpitSection } from "./nav";
 
@@ -11,7 +13,10 @@ const SECTION_PATHS: Record<CockpitSection, string> = {
   pool: "/pool",
   data: "/data",
   history: "/history",
+  backtest: "/backtest",
   validation: "/validation",
+  matrix: "/matrix",
+  "stock-matrix": "/stock-matrix",
   control: "/control",
 };
 
@@ -122,6 +127,10 @@ export default function AppShell() {
         </header>
         {section === "control" ? (
           <ControlCenterPage refreshSignal={refreshSignal} />
+        ) : section === "matrix" ? (
+          <PresetMatrixPage refreshSignal={refreshSignal} />
+        ) : section === "stock-matrix" ? (
+          <StockMatrixPage refreshSignal={refreshSignal} />
         ) : (
           <DashboardPage section={section} refreshSignal={refreshSignal} />
         )}

@@ -211,3 +211,5 @@ app.include_router(metrics.router)
 app.include_router(outcomes.router)
 app.include_router(admin.router)
 app.include_router(frontend_logs.router)
+from app.api.stock_matrix import router as stock_matrix_router
+app.include_router(stock_matrix_router)
