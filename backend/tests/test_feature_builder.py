@@ -65,26 +65,32 @@ def _snapshot(**kwargs):
 
 def test_market_regime_score_bullish():
     snap = _snapshot(up_count=200, sample_count=300)
-    # up_ratio = 200/300 ≈ 0.67 → >= 0.65 → 82.0
-    assert market_regime_score(snap) == 82.0
+    # up_ratio = 200/300 ≈ 0.67 → >= 0.65 → 强牛不友好 → 32.0
+    assert market_regime_score(snap) == 32.0
 
 
 def test_market_regime_score_neutral():
     snap = _snapshot(up_count=150, sample_count=300)
-    # up_ratio = 0.5 → >= 0.5 → 72.0
-    assert market_regime_score(snap) == 72.0
+    # up_ratio = 0.5 → 0.50-0.65 偏多不友好 → 42.0
+    assert market_regime_score(snap) == 42.0
 
 
 def test_market_regime_score_bearish():
     snap = _snapshot(up_count=30, sample_count=300)
-    # up_ratio = 0.1 → < 0.35 → 42.0
-    assert market_regime_score(snap) == 42.0
+    # up_ratio = 0.1 → < 0.35 弱势友好 → 82.0
+    assert market_regime_score(snap) == 82.0
 
 
 def test_market_regime_score_small_sample():
     snap = _snapshot(sample_count=15)
     score = market_regime_score(snap)
     assert score < 55.0
+
+
+def test_market_regime_score_range_friendly():
+    # 0.35-0.50 震荡市场友好 → 72.0
+    snap = _snapshot(up_count=120, sample_count=300)  # up_ratio = 0.4
+    assert market_regime_score(snap) == 72.0
 
 
 # ---------------------------------------------------------------------------
