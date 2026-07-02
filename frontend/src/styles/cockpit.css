@@ -2239,17 +2239,17 @@ select option {
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: 12px;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
 }
 
 .kpi-card {
   border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--surface-soft);
-  padding: 10px;
+  padding: var(--space-3) var(--space-4);
   display: grid;
-  gap: 2px;
+  gap: var(--space-1);
   min-width: 0;
 }
 
@@ -2257,17 +2257,22 @@ select option {
   color: var(--muted);
 }
 
-.kpi-card.positive svg { color: var(--positive); }
-.kpi-card.negative svg { color: var(--negative); }
+/* A股惯例：盈利红色（涨），亏损绿色（跌） */
+.kpi-card.positive svg { color: var(--market-up); }
+.kpi-card.negative svg { color: var(--market-down); }
 
 .kpi-value {
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 800;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
   overflow-wrap: anywhere;
 }
+
+/* 覆盖全局 .positive/.negative 的蓝色，使用 A 股涨红跌绿 */
+.kpi-card .kpi-value.positive { color: var(--market-up) !important; }
+.kpi-card .kpi-value.negative { color: var(--market-down) !important; }
 
 .kpi-label {
   color: var(--muted);
