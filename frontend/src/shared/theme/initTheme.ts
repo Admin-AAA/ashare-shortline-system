@@ -5,7 +5,7 @@ export const THEME_STORAGE_KEY = "ashare-theme";
 export function resolveInitialTheme(): ThemePreference {
   const stored = localStorage.getItem(THEME_STORAGE_KEY);
   if (stored === "dark" || stored === "light") return stored;
-  return "dark";
+  return "light";
 }
 
 export function applyTheme(theme: ThemePreference) {

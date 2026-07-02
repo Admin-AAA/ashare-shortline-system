@@ -25,6 +25,8 @@
   --line: rgba(95, 255, 212, 0.14);
   --line-strong: rgba(95, 255, 212, 0.32);
   --shadow-panel: 0 18px 60px rgba(0, 0, 0, 0.40);
+  --accent: #5fffd4;
+  --accent-strong: #a7ffeb;
 }
 [data-theme="light"] .cosmic-shell {
   --surface: rgba(255, 255, 255, 0.62);
@@ -33,6 +35,8 @@
   --line: rgba(138, 122, 90, 0.20);
   --line-strong: rgba(138, 122, 90, 0.36);
   --shadow-panel: 0 12px 40px rgba(25, 43, 56, 0.10);
+  --accent: #0d9488;
+  --accent-strong: #14b8a6;
 }
 
 /* ── 3D 背景层 ── */
@@ -361,6 +365,126 @@
 .drawer-item-text { display: flex; flex-direction: column; line-height: 1.35; }
 .drawer-item-text strong { font-size: 13px; }
 .drawer-item-text span { font-size: 11px; color: var(--muted); }
+
+/* ── 统一按钮/输入框：玻璃质感，不要消费级实心按钮 ── */
+.cosmic-shell .btn,
+.cosmic-shell .cockpit-nav button,
+.cosmic-shell .topbar-actions button,
+.cosmic-shell .error-state button {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+  color: var(--ink);
+  min-height: 38px;
+  padding: 8px 14px;
+  font-weight: 500;
+  transition: all var(--motion-fast);
+  box-shadow: none;
+}
+.cosmic-shell .btn:hover,
+.cosmic-shell .cockpit-nav button:hover,
+.cosmic-shell .topbar-actions button:hover,
+.cosmic-shell .error-state button:hover {
+  border-color: var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+}
+.cosmic-shell .btn.primary,
+.cosmic-shell .topbar-actions .primary,
+.cosmic-shell .action.primary,
+.cosmic-shell .cockpit-nav button.primary {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-weight: 700;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.cosmic-shell .btn.primary:hover,
+.cosmic-shell .topbar-actions .primary:hover,
+.cosmic-shell .action.primary:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.cosmic-shell .btn:disabled,
+.cosmic-shell .cockpit-nav button:disabled,
+.cosmic-shell .topbar-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* 输入框统一玻璃 */
+.cosmic-shell input,
+.cosmic-shell select,
+.cosmic-shell textarea {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface-soft) 80%, transparent);
+  color: var(--ink);
+  padding: 8px 12px;
+  transition: border-color var(--motion-fast), background var(--motion-fast), box-shadow var(--motion-fast);
+}
+.cosmic-shell input:focus,
+.cosmic-shell select:focus,
+.cosmic-shell textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--surface);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.cosmic-shell select option {
+  background: var(--surface-strong);
+  color: var(--ink);
+}
+
+/* 副动作/幽灵按钮 */
+.cosmic-shell .ghost-btn,
+.cosmic-shell .icon-button,
+.cosmic-shell .control-button,
+.cosmic-shell .control-button.primary,
+.cosmic-shell .control-button.subtle {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--ink);
+  transition: all var(--motion-fast);
+  box-shadow: none;
+}
+.cosmic-shell .control-button.primary {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-weight: 700;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.cosmic-shell .control-button.primary:hover,
+.cosmic-shell .btn.primary:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.cosmic-shell .ghost-btn:hover,
+.cosmic-shell .icon-button:hover,
+.cosmic-shell .control-button:hover,
+.cosmic-shell .control-button.subtle:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-soft);
+}
+.cosmic-shell .ghost-btn.danger,
+.cosmic-shell .icon-button.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+.cosmic-shell .ghost-btn.danger:hover,
+.cosmic-shell .icon-button.danger:hover {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+.cosmic-shell .ghost-btn.danger.armed,
+.cosmic-shell .icon-button.danger.armed {
+  border-color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--warning);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--warning) 10%, transparent);
+}
 
 @keyframes cosmicFade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes cosmicSlide { from { transform: translateX(40px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
