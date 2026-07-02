@@ -455,6 +455,33 @@ def test_apply_pool_rules_dynamic_weak_market_line_passes_top_candidate():
     assert result[0]["code"] == "A"
 
 
+def test_apply_pool_rules_structural_strength_ma5_penalty():
+    """结构性强势阶段 × support_ma5=True 提高 effective_score_line 6 分。
+    数据依据：近期该阶段 support_ma5=True WR=39.1% vs False=60.5%，t=-2.15（显著）。
+    因果：强势市应追强，有 MA 支撑=已回落均线=追弱，应额外惩罚。"""
+    cards = [
+        {**_card("A", 75), "support_ma5": True},
+        {**_card("B", 75), "support_ma5": False},
+    ]
+    # 结构性强势 regime（来自 market_data.py regime 字段）
+    snapshot = {
+        "sample_count": 100, "up_count": 58, "down_count": 42,
+        "limit_up_count": 1, "limit_down_count": 0,
+        "market_regime": "结构性强势",
+    }
+    result = apply_pool_rules(cards, score_line=70, market_snapshot=snapshot)
+    by_code = {c["code"]: c for c in result}
+    # A 有 support_ma5 惩罚 +6，B 无
+    if "A" in by_code:
+        assert by_code["A"]["score_line_meta"]["regime_support_ma5_penalty"] == 6.0
+    if "B" in by_code:
+        assert by_code["B"]["score_line_meta"]["regime_support_ma5_penalty"] == 0.0
+    # B 的 effective_score_line 严格低于 A
+    if "A" in by_code and "B" in by_code:
+        assert by_code["A"]["score_line_meta"]["effective_score_line"] > by_code["B"]["score_line_meta"]["effective_score_line"]
+        assert by_code["A"]["score_line_meta"]["effective_score_line"] - by_code["B"]["score_line_meta"]["effective_score_line"] == 6.0
+
+
 def test_apply_pool_rules_sorted_by_score():
     cards = [
         _card("C", 75),

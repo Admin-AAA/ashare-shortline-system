@@ -844,6 +844,9 @@ def aggregate(
         "limit_up_open_times": stock.get("limit_up_open_times"),
         "limit_up_fd_amount_yi": stock.get("limit_up_fd_amount_yi"),
         "limit_up_turnover_ratio": stock.get("limit_up_turnover_ratio"),
+        # MA 支撑信号（用于 apply_pool_rules 中的市场阶段×信号交叉调整）
+        "support_ma5": bool(stock.get("support_ma5")),
+        "support_ma10": bool(stock.get("support_ma10")),
     }
 
 
@@ -896,6 +899,17 @@ def apply_pool_rules(
             + execution_viability["score_line_adjustment"],
             2,
         )
+        # 结构性强势阶段 × support_ma5 交叉惩罚：
+        # 数据验证：近期结构性强势 support_ma5=True WR=39.1%（n=46, t=-2.15）
+        # vs support_ma5=False WR=60.5%（n=38），差距 -21pp
+        # 因果机制：强势市追强不追弱，有 MA 支撑意味着已回落均线（追弱）
+        # regime 来自 market_data.py 的 regime 字段（结构性强势/强势/震荡/弱势），
+        # 写入 snapshot 后被持久化到 feature_snapshot_json.market_regime
+        _snapshot_regime = (market_snapshot or {}).get("market_regime") or (market_snapshot or {}).get("regime") or ""
+        if _snapshot_regime == "结构性强势" and card.get("support_ma5"):
+            # 提高门槛 6 分（约等于 21pp 胜率差距对应的合理惩罚）
+            effective_score_line = round(effective_score_line + 6.0, 2)
+            card["_regime_support_ma5_penalty"] = 6.0
         card["score_line_meta"] = {
             **score_line_context,
             **card_adjustment,
@@ -903,6 +917,7 @@ def apply_pool_rules(
             "execution_status": execution_viability["status"],
             "execution_blocked": execution_viability["status"] == "blocked",
             "block_reason": execution_viability["block_reason"],
+            "regime_support_ma5_penalty": card.get("_regime_support_ma5_penalty", 0.0),
             "effective_score_line": effective_score_line,
             "passed": final_score >= effective_score_line and execution_viability["status"] != "blocked",
         }
