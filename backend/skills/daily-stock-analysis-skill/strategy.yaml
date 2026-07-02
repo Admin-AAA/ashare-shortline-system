@@ -59,6 +59,8 @@ prefilter:
         reason: "overheated_extension"
       - when: "off_high_pct < -18 and pct < 0"
         reason: "broken_trend"
+      - when: "pos20 < 50"
+        reason: "low_pos20_weakness"
 
 phases:
   - name: 风险否决

@@ -58,6 +58,8 @@ prefilter:
         reason: "late_acceleration"
       - when: "off_high_pct < -15 and pct < 0"
         reason: "broken_pullback"
+      - when: "pos20 < 50"
+        reason: "low_pos20_weakness"
 
 phases:
   - name: 退潮
