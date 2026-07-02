@@ -51,9 +51,6 @@ def _normalize_trade_date(value: Any) -> str:
     return raw[:10]
 
 
-def _daily_kbar_trade_date_expr():
-    return func.replace(DailyKbar.trade_date, "-", "")
-
 
 def list_data_sources(db: Session) -> list[dict[str, Any]]:
     sync_data_source_configs(db)
@@ -76,6 +73,8 @@ def list_data_sources(db: Session) -> list[dict[str, Any]]:
         failure_count = int(health_row.failure_count or 0) if health_row else 0
         empty_count = int(health_row.empty_count or 0) if health_row else 0
         total = success_count + failure_count + empty_count
+        # success_rate 只算 success / (success + failure)，empty 是正常返回不计入分母
+        effective_total = success_count + failure_count
         rows.append(
             {
                 "source": source,
@@ -86,7 +85,7 @@ def list_data_sources(db: Session) -> list[dict[str, Any]]:
                 "success_count": success_count,
                 "failure_count": failure_count,
                 "empty_count": empty_count,
-                "success_rate": round(success_count / total, 3) if total else None,
+                "success_rate": round(success_count / effective_total, 3) if effective_total else None,
                 "latency_ms": health_row.latency_ms if health_row else None,
                 "last_success_at": health_row.last_success_at.isoformat() if health_row and health_row.last_success_at else None,
                 "last_failure_at": health_row.last_failure_at.isoformat() if health_row and health_row.last_failure_at else None,
@@ -128,9 +127,8 @@ def get_local_pool_status(
 
     # ── 日期/时间聚合 ──
     latest_unified = db.scalar(select(func.max(StockQuote.snapped_at)))
-    latest_allowed_compact = _compact_trade_date(latest_allowed_bar_date)
     latest_bar_date = db.scalar(
-        select(func.max(_daily_kbar_trade_date_expr())).where(_daily_kbar_trade_date_expr() <= latest_allowed_compact)
+        select(func.max(DailyKbar.trade_date)).where(DailyKbar.trade_date <= latest_allowed_bar_date)
     )
     t_dates = time.perf_counter()
 
@@ -145,14 +143,11 @@ def get_local_pool_status(
         (_normalize_trade_date(row.trade_date) for row in current_quote_rows if row.trade_date),
         default=None,
     )
-    coverage_trade_date = _coverage_reference_date(latest_quote_date, latest_allowed_bar_date)
     t_load_quotes = time.perf_counter()
 
-    # 只取 distinct code 总量，避免为全市场每只股票都做一次汇总
-    daily_bar_code_count = db.scalar(
-        select(func.count(func.distinct(DailyKbar.code)))
-        .where(_daily_kbar_trade_date_expr() <= latest_allowed_compact)
-    ) or 0
+    # 从已加载的 current_quote_rows 直接计算 distinct code 数量，避免 daily_kbars 全表扫描
+    # count(distinct DailyKbar.code) 需 347ms（128万行），用 stock_quotes 代替只需内存计算
+    daily_bar_code_count = len({row.code for row in current_quote_rows})
     full_market_daily_bar_code_count = int(daily_bar_code_count)
     active_daily_bar_code_count = full_market_daily_bar_code_count
     daily_indicator_count = 0
@@ -166,6 +161,7 @@ def get_local_pool_status(
         _load_cached_bars_summary,
         _load_cached_quotes,
         _quote_sources as _pool_quote_sources,
+        _required_bar_date_for_quote,
         _select_recall_candidates,
         local_pool_recommendation_readiness,
     )
@@ -179,6 +175,11 @@ def get_local_pool_status(
         skip_metrics=True,
     )
     eligible_quotes = _eligible_market_quotes(all_quotes) if all_quotes else []
+    coverage_trade_date = (
+        _required_bar_date_for_quote({"trade_date": latest_quote_date})
+        if latest_quote_date
+        else latest_allowed_bar_date
+    )
     recall_plan = _candidate_recall_plan(len(all_quotes), len(eligible_quotes), settings)
     execution_recall_count = _execution_recall_count(recall_plan, len(eligible_quotes))
     candidate_quotes = _select_recall_candidates(eligible_quotes, execution_recall_count)
@@ -368,7 +369,9 @@ def _source_status(enabled: bool, health: DataSourceHealth | None) -> str:
         not health.last_failure_at or health.last_success_at >= health.last_failure_at
     ):
         return "healthy"
-    if int(health.failure_count or 0) or int(health.empty_count or 0):
+    # 只有 failure_count（真正的 API 错误）才标 degraded，
+    # empty_count 是正常返回（股票无龙虎榜/无涨停等），不触发 degraded。
+    if int(health.failure_count or 0):
         return "degraded"
     return "untested"
 
@@ -408,9 +411,9 @@ def _load_bar_summaries_for_codes(
         select(
             DailyKbar.code,
             func.count().label("bar_count"),
-            func.max(_daily_kbar_trade_date_expr()).label("latest_trade_date"),
+            func.max(DailyKbar.trade_date).label("latest_trade_date"),
         )
-        .where(DailyKbar.code.in_(codes), _daily_kbar_trade_date_expr() <= _compact_trade_date(latest_allowed_bar_date))
+        .where(DailyKbar.code.in_(codes), DailyKbar.trade_date <= latest_allowed_bar_date)
         .group_by(DailyKbar.code)
     ).all()
     return {
@@ -455,7 +458,9 @@ def _coverage_reference_date(latest_quote_date: str | None, latest_allowed_bar_d
     quote_date = str(latest_quote_date)[:10]
     if not quote_date:
         return latest_allowed_bar_date
-    return min(quote_date, latest_allowed_bar_date)
+    from app.services.market_pool import _required_bar_date_for_quote
+
+    return _required_bar_date_for_quote({"trade_date": quote_date})
 
 
 def _raw_quote_source_rows(db: Session) -> list[dict[str, Any]]:
@@ -487,10 +492,10 @@ def _raw_bar_source_rows(db: Session) -> list[dict[str, Any]]:
             DailyKbar.source,
             func.count().label("row_count"),
             func.count(func.distinct(DailyKbar.code)).label("code_count"),
-            func.max(_daily_kbar_trade_date_expr()).label("latest_trade_date"),
+            func.max(DailyKbar.trade_date).label("latest_trade_date"),
             func.max(DailyKbar.updated_at).label("latest_fetched_at"),
         )
-        .where(_daily_kbar_trade_date_expr() <= _compact_trade_date(latest_allowed_bar_date))
+        .where(DailyKbar.trade_date <= latest_allowed_bar_date)
         .group_by(DailyKbar.source)
     ).all()
     return [
@@ -528,12 +533,12 @@ def _daily_bar_rows(db: Session, limit: int = 50, offset: int = 0) -> list[dict[
         select(
             DailyKbar.code,
             func.count().label("bar_count"),
-            func.min(_daily_kbar_trade_date_expr()).label("first_trade_date"),
-            func.max(_daily_kbar_trade_date_expr()).label("latest_trade_date"),
+            func.min(DailyKbar.trade_date).label("first_trade_date"),
+            func.max(DailyKbar.trade_date).label("latest_trade_date"),
         )
-        .where(_daily_kbar_trade_date_expr() <= _compact_trade_date(latest_allowed_bar_date))
+        .where(DailyKbar.trade_date <= latest_allowed_bar_date)
         .group_by(DailyKbar.code)
-        .order_by(func.max(_daily_kbar_trade_date_expr()).desc(), func.count().desc())
+        .order_by(func.max(DailyKbar.trade_date).desc(), func.count().desc())
         .offset(offset)
         .limit(limit)
     ).all()
