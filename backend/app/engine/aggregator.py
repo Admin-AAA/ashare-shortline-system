@@ -219,7 +219,7 @@ def resolve_score_line_context(
     market_base = _market_base(market_snapshot)
     sentiment = _market_sentiment(market_snapshot)
     market_adjustment = {
-        "强牛": 1.0,
+        "强牛": 3.0,  # 回测：多头顺势|强势 WR 仅 25%（追高风险），提高门槛过滤追高交易
         "偏多": 0.0,
         "震荡": 0.0,
         "弱势": 2.0,

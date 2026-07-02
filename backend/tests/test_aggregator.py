@@ -427,7 +427,9 @@ def test_apply_pool_rules_reduces_output_in_climax_market():
 
     result = apply_pool_rules(cards, output_count=6, score_line=72, market_snapshot=snapshot)
 
-    assert [card["code"] for card in result] == ["A", "B", "C"]
+    # 强牛·高潮：market_adjustment(强牛)=3.0 + sentiment(高潮)=5.0+8.0=13 → effective=88
+    # A(90)、B(88) 通过，C(86) 被过滤
+    assert [card["code"] for card in result] == ["A", "B"]
     assert all(card["score_line_meta"]["effective_score_line"] > 72 for card in result)
 
 
@@ -442,12 +444,15 @@ def test_apply_pool_rules_allows_only_small_trial_in_weak_ice_point():
     assert result[0]["score_line_meta"]["market_sentiment"] == "冰点"
 
 
-def test_apply_pool_rules_dynamic_weak_market_line_allows_empty_pool():
+def test_apply_pool_rules_dynamic_weak_market_line_passes_top_candidate():
+    """弱市+冰点时动态降线应放行接近有效线的顶部候选。"""
     cards = [_card("A", 70)]
     snapshot = {"sample_count": 100, "up_count": 20, "down_count": 80, "limit_up_count": 0, "limit_down_count": 8}
     result = apply_pool_rules(cards, score_line=72, market_snapshot=snapshot)
 
-    assert result == []
+    # 动态降线：effective=71 (72+2-3), gap=1, dynamic_line=69, card(70) 应通过
+    assert len(result) == 1
+    assert result[0]["code"] == "A"
 
 
 def test_apply_pool_rules_sorted_by_score():
