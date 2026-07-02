@@ -27,7 +27,7 @@ ENTRY_SLIPPAGE_BPS = 10.0
 EXIT_SLIPPAGE_BPS = 10.0
 SUCCESS_RETURN_PCT = 3.0
 DEFAULT_STOP_LOSS_PCT = -6.5   # 基于历史回测最优（-7% 接近 breakeven，保守取 -6.5%）
-DEFAULT_TAKE_PROFIT_PCT = 8.0
+DEFAULT_TAKE_PROFIT_PCT = 6.5  # 回测：horizon_close 92%曾盈利但回吐；TP=6.5% 模拟WR从50.8%→65.8%（+15pp）
 MAX_STOP_LOSS_PCT = -9.0       # 止损最宽 -9%，高波动股允许更宽止损
 MAX_TAKE_PROFIT_PCT = 15.0     # 止盈上限（+15%），防止 feature_builder 设置过高的止盈
 MAX_ENTRY_GAP_PCT = 10.0       # 跳空高开 > 10% 则放弃入场（历史数据：gap>10% 胜率 0%）
