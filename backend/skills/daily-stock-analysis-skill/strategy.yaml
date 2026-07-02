@@ -97,7 +97,7 @@ setups:
 
   - name: 多头顺势
     when: "dsa_trend_score >= 26 and dsa_bias_score >= 14 and dsa_macd_score >= 8"
-    score_delta: 4
+    score_delta: 0  # 回测：多头顺势 504 笔 WR=55.0% vs 无 setup 845 笔 WR=58.1%，setup 有害
     entry_rule: "多头趋势内优先等回踩而不是追高"
     invalid_rule: "趋势走平且 MACD 转弱"
 
