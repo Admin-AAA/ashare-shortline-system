@@ -1,11 +1,13 @@
 import { FlaskConical, RefreshCcw, SunMoon, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { ErrorBoundary } from "../components/ErrorBoundary";
-import ControlCenterPage from "../features/control/ControlCenterPage";
-import DashboardPage from "../features/dashboard/DashboardPage";
-import PresetMatrixPage from "../features/matrix/PresetMatrixPage";
-import StockMatrixPage from "../features/stock-matrix/StockMatrixPage";
 import { useThemePreference } from "../shared/theme/useThemePreference";
+
+// 路由级 lazy load：首屏只加载当前 section，主 bundle 不再包含全部页面
+const ControlCenterPage = lazy(() => import("../features/control/ControlCenterPage"));
+const DashboardPage = lazy(() => import("../features/dashboard/DashboardPage"));
+const PresetMatrixPage = lazy(() => import("../features/matrix/PresetMatrixPage"));
+const StockMatrixPage = lazy(() => import("../features/stock-matrix/StockMatrixPage"));
 import {
   groupOfSection,
   NAV_GROUPS,
@@ -247,15 +249,17 @@ export default function AppShell() {
         ) : (
           <section className="cosmic-content-card">
             <ErrorBoundary>
-              {section === "control" ? (
-                <ControlCenterPage refreshSignal={refreshSignal} />
-              ) : section === "matrix" ? (
-                <PresetMatrixPage refreshSignal={refreshSignal} />
-              ) : section === "stock-matrix" ? (
-                <StockMatrixPage refreshSignal={refreshSignal} />
-              ) : (
-                <DashboardPage section={section} refreshSignal={refreshSignal} />
-              )}
+              <Suspense fallback={<div className="route-skeleton" aria-busy="true" />}>
+                {section === "control" ? (
+                  <ControlCenterPage refreshSignal={refreshSignal} />
+                ) : section === "matrix" ? (
+                  <PresetMatrixPage refreshSignal={refreshSignal} />
+                ) : section === "stock-matrix" ? (
+                  <StockMatrixPage refreshSignal={refreshSignal} />
+                ) : (
+                  <DashboardPage section={section} refreshSignal={refreshSignal} />
+                )}
+              </Suspense>
             </ErrorBoundary>
           </section>
         )}
