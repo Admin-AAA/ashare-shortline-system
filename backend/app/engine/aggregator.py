@@ -229,7 +229,7 @@ def resolve_score_line_context(
     _climax_extra = 8.0 if market_base in ("强牛", "偏多") else 0.0
     sentiment_adjustment = {
         "高潮": 5.0 + _climax_extra,
-        "活跃": 3.0,  # 活跃阶段止损率 34%，提高门槛减少低质量入场
+        "活跃": 5.0,  # 活跃阶段止损率 39%（RSI>60仅51.7%WR），进一步提高门槛
         "平淡": 0.0,
         "冰点": -3.0 if market_base == "弱势" else 0.0,
     }.get(sentiment, 0.0)
