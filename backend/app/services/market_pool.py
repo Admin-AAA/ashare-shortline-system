@@ -762,7 +762,8 @@ def _quote_metrics_from_bars(db: Session, codes: list[str]) -> dict[str, dict[st
 
     latest_allowed_date = _latest_allowed_bar_date()
     year_start = date.fromisoformat(latest_allowed_date).replace(month=1, day=1).isoformat()
-    # 只查询需要的列（避免加载整行 ORM 对象节省内存）
+    # 只查询需要的列 + 限制日期范围（避免加载全年数据，只需最近 ~150 交易日）
+    cutoff_date = (date.fromisoformat(latest_allowed_date) - timedelta(days=220)).isoformat()
     stmt = (
         select(
             DailyKbar.code,
@@ -774,6 +775,7 @@ def _quote_metrics_from_bars(db: Session, codes: list[str]) -> dict[str, dict[st
         )
         .where(
             DailyKbar.code.in_(unique_codes),
+            DailyKbar.trade_date >= cutoff_date,
             DailyKbar.trade_date <= latest_allowed_date,
         )
         .order_by(DailyKbar.code, DailyKbar.trade_date.desc())
