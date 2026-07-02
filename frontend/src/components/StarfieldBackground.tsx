@@ -5,14 +5,14 @@ type Theme = "dark" | "light";
 
 const PALETTE = {
   dark: {
-    fog: 0x09090b,
-    fogDensity: 0.028,
-    grid: 0x14b0f6,
-    gridOpacity: 0.22,
-    particleStart: 0x14b0f6,
-    particleEnd: 0x3b82f6,
-    particleOpacity: 0.65,
-    particleSize: 0.18,
+    fog: 0x0a0a1e,
+    fogDensity: 0.032,
+    grid: 0x5fffd4,
+    gridOpacity: 0.18,
+    particleStart: 0x4a5fff,
+    particleEnd: 0x5fffd4,
+    particleOpacity: 0.75,
+    particleSize: 0.20,
   },
   light: {
     fog: 0xeedfff,
