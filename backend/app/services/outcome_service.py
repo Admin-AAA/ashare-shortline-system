@@ -31,8 +31,6 @@ DEFAULT_TAKE_PROFIT_PCT = 8.0
 MAX_STOP_LOSS_PCT = -9.0       # 止损最宽 -9%，高波动股允许更宽止损
 MAX_TAKE_PROFIT_PCT = 15.0     # 止盈上限（+15%），防止 feature_builder 设置过高的止盈
 MAX_ENTRY_GAP_PCT = 10.0       # 跳空高开 > 10% 则放弃入场（历史数据：gap>10% 胜率 0%）
-TRAILING_ACTIVATE_PCT = 4.0    # 移动止盈激活阈值：利润达 +4% 时启动
-TRAILING_CALLBACK_PCT = 1.5    # 移动止盈回撤阈值：从峰值回撤 1.5% 时退出
 
 OUTCOME_PENDING = "pending"
 OUTCOME_SUCCESS = "success"
@@ -1176,7 +1174,6 @@ def _simulate_outcome(
         holding_bars,
         stop_loss_price,
         take_profit_price,
-        entry_price=raw_entry_price,
         code=str(rec.code),
     )
     executed_exit_price = round(exit_price * (1 - EXIT_SLIPPAGE_BPS / 10000.0), 4)
@@ -1346,12 +1343,10 @@ def _resolve_exit(
     stop_loss_price: float,
     take_profit_price: float,
     *,
-    entry_price: float = 0.0,
     code: str = "",
 ) -> tuple[float, str, str]:
-    """模拟退出逻辑：固定止损/止盈优先，无移动止盈（日线级别无法准确执行）。
+    """模拟退出逻辑：固定止损/止盈优先。
 
-    注：entry_price 参数保留供未来使用，当前不参与退出判断。
     日线级别无法确定 bar 内 open/high/low 的时间顺序，
     移动止盈会产生大量假信号（回测验证：56 笔改善 vs 116 笔恶化，净效果 -286%）。
     """
