@@ -422,13 +422,13 @@ def test_score_line_context_raises_threshold_in_climax_market():
 
 
 def test_apply_pool_rules_reduces_output_in_climax_market():
-    cards = [_card(code, score) for code, score in [("A", 90), ("B", 88), ("C", 86), ("D", 84), ("E", 82), ("F", 80)]]
+    cards = [_card(code, score) for code, score in [("A", 95), ("B", 92), ("C", 86), ("D", 84), ("E", 82), ("F", 80)]]
     snapshot = {"sample_count": 100, "up_count": 72, "limit_up_count": 5, "limit_down_count": 0}
 
     result = apply_pool_rules(cards, output_count=6, score_line=72, market_snapshot=snapshot)
 
-    # 强牛·高潮：market_adjustment(强牛)=3.0 + sentiment(高潮)=5.0+8.0=13 → effective=88
-    # A(90)、B(88) 通过，C(86) 被过滤
+    # 强牛·高潮：market_adjustment(强牛)=6.0 + sentiment(高潮)=5.0+8.0=19 → effective=91
+    # A(95)、B(92) 通过，C(86) 被过滤
     assert [card["code"] for card in result] == ["A", "B"]
     assert all(card["score_line_meta"]["effective_score_line"] > 72 for card in result)
 
