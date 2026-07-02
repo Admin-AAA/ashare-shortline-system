@@ -80,7 +80,7 @@ def main() -> None:
             print(f"  WARNING: {agg_result['error']}")
         else:
             print(f"  Default      -> train composite: {agg_result.get('default_train_composite_score', 'N/A')}, test composite: {agg_result.get('default_test_composite_score', 'N/A')}, test AUC: {agg_result.get('default_test_roc_auc', 'N/A')}")
-            print(f"  Calibrated   -> train composite: {agg_result['train_composite_score']}, test composite: {agg_result['test_composite_score']}, test AUC: {agg_result['test_roc_auc']}")
+            print(f"  Calibrated   -> train AUC: {agg_result.get('train_roc_auc', 'N/A')}, test composite: {agg_result.get('test_composite_score', 'N/A')}, test AUC: {agg_result.get('test_roc_auc', 'N/A')}")
 
         print_comparison(
             "Aggregation Weights",
