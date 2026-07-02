@@ -67,10 +67,10 @@ export default function StarfieldBackground() {
     const fog = new THREE.Fog(0x070a18, 15, 320);
     scene.fog = fog;
 
-    // ── 发光网格：长走廊形，48×140 细分 ──
-    // PlaneGeometry(w, h, segW, segH) 默认在 xy 平面，旋转 -PI/2 后
-    // 原 y 轴 → 世界 z 轴，所以 segH 对应纵深方向
-    const gridGeo = new THREE.PlaneGeometry(280, 700, 48, 140);
+    // ── 发光网格：只铺在相机前方，不延伸到身后 ──
+    // 相机在 z=35，网格近端 z=20（前方15单位），远端 z=-650
+    // 中心 z = (20 + -650)/2 = -315，纵深长度 = 670
+    const gridGeo = new THREE.PlaneGeometry(280, 670, 48, 140);
     const gridMat = new THREE.MeshBasicMaterial({
       color: 0x5a8fff,
       wireframe: true,
@@ -80,7 +80,7 @@ export default function StarfieldBackground() {
     });
     const grid = new THREE.Mesh(gridGeo, gridMat);
     grid.rotation.x = -Math.PI / 2;
-    grid.position.set(0, 0, -300); // 中心在 z=-300，覆盖 z=+50 到 z=-650
+    grid.position.set(0, 0, -315);
     scene.add(grid);
 
     const positions = gridGeo.attributes.position;
@@ -101,7 +101,7 @@ export default function StarfieldBackground() {
     const initParticle = (i: number) => {
       particlePositions[i * 3] = (Math.random() - 0.5) * 200;       // x: -100~100
       particlePositions[i * 3 + 1] = Math.random() * 14;             // y: 0~14
-      particlePositions[i * 3 + 2] = -20 - Math.random() * 400;      // z: -20~-420
+      particlePositions[i * 3 + 2] = 15 - Math.random() * 400;       // z: 15~-385（只在相机前方）
       particleSpeeds[i] = 0.008 + Math.random() * 0.025;
       particleWobble[i * 2] = Math.random() * Math.PI * 2;
       particleWobble[i * 2 + 1] = 0.3 + Math.random() * 0.6;
