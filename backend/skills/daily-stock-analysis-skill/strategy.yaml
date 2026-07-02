@@ -177,8 +177,8 @@ risk:
       score_delta: -8
     - when: "amount_yi >= 30 and amount_yi < 60"
       level: medium
-      flag: 成交额过大盘（30-60 亿区间 47.3% 胜率，机构博弈激烈）
-      score_delta: -4
+      flag: 成交额过大盘（30-60 亿区间 35.5% 胜率，-1.32% 均收益，机构博弈激烈）
+      score_delta: -8
     - when: "chip_concentration > 18 and chip_concentration <= 30"
       level: medium
       flag: 筹码集中风险（CC 18-30 仅 45.6% WR，集中持仓抛售压力大）
