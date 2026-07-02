@@ -144,12 +144,19 @@ def _market_base(snapshot: dict[str, Any] | None) -> str:
     return "弱势"
 
 
-def market_regime_weights(snapshot: dict[str, Any] | None = None) -> dict[str, float]:
-    """根据市场阶段动态调整聚合权重。"""
-    if not snapshot:
-        return dict(DEFAULT_AGG_WEIGHTS)
+def market_regime_weights(
+    snapshot: dict[str, Any] | None = None,
+    calibrated: dict[str, float] | None = None,
+) -> dict[str, float]:
+    """根据市场阶段动态调整聚合权重。
 
-    weights = dict(DEFAULT_AGG_WEIGHTS)
+    使用校准权重（如果提供）作为基础，而非固定的默认权重。
+    这确保校准的 risk=43% 等权重在阶段调整中生效。
+    """
+    if not snapshot:
+        return dict(calibrated or DEFAULT_AGG_WEIGHTS)
+
+    weights = dict(calibrated or DEFAULT_AGG_WEIGHTS)
     base = _market_base(snapshot)
     sentiment = _market_sentiment(snapshot)
 
@@ -653,11 +660,11 @@ def aggregate(
         if isinstance(s.get("agent_skill_review"), dict)
     )
 
-    # --- 加权聚合（动态权重 + 校准权重覆盖） ---
+    # --- 加权聚合（校准权重为基底 + 阶段动态调整） ---
     if market_snapshot:
-        weights = market_regime_weights(market_snapshot)
+        weights = market_regime_weights(market_snapshot, calibrated=calibrated_weights)
     else:
-        weights = dict(DEFAULT_AGG_WEIGHTS)
+        weights = dict(calibrated_weights or DEFAULT_AGG_WEIGHTS)
 
     # 有 Agent 审查时 skill_agent 主导，策略规则降为辅证
     if has_agent_reviews:
@@ -669,9 +676,7 @@ def aggregate(
         weights["risk"] = 0.15
         weights["evidence"] = 0.10
 
-    # 校准权重必须最后覆盖，避免被默认模板反向冲掉
-    if calibrated_weights:
-        weights.update(calibrated_weights)
+    # 校准权重已作为基底传入 market_regime_weights，不再二次覆盖
 
     # 归一化
     total_w = sum(weights.values())
@@ -845,9 +850,19 @@ def apply_pool_rules(
         key=lambda card: float(card.get("final_score", 0)),
         reverse=True,
     )
+    # 代码去重：同一只股票只保留最高分的推荐
+    seen_codes: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for card in ordered:
+        code = str(card.get("code") or "")
+        if code and code in seen_codes:
+            continue
+        if code:
+            seen_codes.add(code)
+        deduped.append(card)
     result: list[dict[str, Any]] = []
     top_final_score = 0.0
-    for card in ordered:
+    for card in deduped:
         final_score = float(card.get("final_score") or 0)
         if final_score <= 0:
             continue
@@ -908,18 +923,19 @@ def apply_pool_rules(
                 sm["passed"] = final_score >= new_effective
                 if final_score >= new_effective:
                     result.append(card)
+    result = _apply_sector_diversity(result)
     if display_limit is None:
         return result
     if display_limit <= 0:
         return result
-    return _apply_sector_diversity(result)[:display_limit]
+    return result[:display_limit]
 
 
 # ============================================================================
 # 内部辅助函数
 # ============================================================================
 
-_SECTOR_DIVERSITY_PENALTY = {1: 0.0, 2: 3.0}  # 第 N 只同行业股票的分数惩罚
+_SECTOR_DIVERSITY_PENALTY = {1: 0.0, 2: 5.0}  # 第 N 只同行业股票的分数惩罚（第3只起扣10分）
 
 
 def _apply_sector_diversity(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
