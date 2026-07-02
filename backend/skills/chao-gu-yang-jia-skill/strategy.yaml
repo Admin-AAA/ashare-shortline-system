@@ -97,7 +97,7 @@ setups:
 
   - name: 平台突破
     when: "is_main_theme == true and breakout20 == true and sector_ladder_completeness_score >= 50"
-    score_delta: 10
+    score_delta: 5  # alpha decay: breakout20 decaying, reduced from 10
     entry_rule: "放量突破平台，同行业至少2只同步走强"
     invalid_rule: "突破失败且跌回平台"
 

@@ -1,0 +1,191 @@
+id: sector-relative-strength-leader
+name: 主线相对强度龙头
+enabled: true
+weight: 1.0
+
+meta:
+  author: system
+  style: sector-relative-strength
+  version: 0.1.0
+  holding_days: [2, 3, 5]
+  strategy_independence: 0.8
+  default_preset_groups:
+    experiment_sector_relative_strength:
+      weight: 1.0
+      sort_order: 10
+
+contract:
+  type: strategy
+  executable: true
+  schema_version: 1
+
+universe:
+  include:
+    - "amount_yi >= 3"
+    - "free_mv_yi >= 20"
+    - "turnover_rate >= 1.2"
+    - "turnover_rate <= 12"
+    - "primary_excess20 >= 3"
+    - "max_dd20 >= -18"
+    - "twenty_cm_risk_gate != 'block'"
+  exclude:
+    - "is_st == true"
+    - "announcement_negative_count > 0"
+    - "news_risk_count > 1"
+
+prefilter:
+  market:
+    include:
+      - when: "upper_shadow_count20 <= 5"
+        reason: "upper_shadow_too_many"
+      - when: "off_high_pct >= -12"
+        reason: "relative_strength_broken"
+      - when: "industry_capacity_like_count >= 2"
+        reason: "sector_capacity_too_low"
+      - when: "industry_positive_excess20_count >= 2"
+        reason: "sector_not_diffused"
+    include_any:
+      - when: "is_main_theme == true and sector_ladder_completeness_score >= 50"
+        reason: "requires_main_sector_ladder"
+      - when: "is_main_theme == true and primary_excess20 >= 8"
+        reason: "requires_main_relative_strength"
+      - when: "sector_ladder_completeness_score >= 75 and shortline_leader_score >= 68"
+        reason: "requires_leader_ladder"
+    exclude:
+      - when: "is_main_theme == false and sector_ladder_completeness_score < 50"
+        reason: "non_main_isolated"
+      - when: "limit_up_overheat_score >= 78 and pos60 > 95"
+        reason: "late_emotion_overheat"
+      - when: "primary_excess20 < 0"
+        reason: "relative_strength_lost"
+
+phases:
+  - name: 非主线孤票回避
+    when: "is_main_theme == false and sector_ladder_completeness_score < 50"
+    score_cap: 28
+    hard_veto: true
+    risk_flags: ["非主线且无板块梯队，不做孤票"]
+
+  - name: 主线退潮回避
+    when: "market_sentiment_phase == '冰点' and sector_ladder_completeness_score < 50"
+    score_cap: 35
+    hard_veto: true
+    risk_flags: ["主线环境退潮"]
+
+  - name: 主线强度确认
+    when: "is_main_theme == true and sector_ladder_completeness_score >= 50 and primary_excess20 >= 5"
+    score_cap: 94
+    hard_veto: false
+
+  - name: 板块梯队龙头
+    when: "sector_ladder_completeness_score >= 75 and shortline_leader_score >= 68"
+    score_cap: 92
+    hard_veto: false
+
+  - name: 相对强度观察
+    when: "is_main_theme == true and primary_excess20 >= 8 and off_high_pct >= -8"
+    score_cap: 86
+    hard_veto: false
+
+setups:
+  - name: 主线龙头突破
+    when: "is_main_theme == true and breakout20 == true and primary_excess20 >= 8 and sector_ladder_completeness_score >= 50"
+    score_delta: 5  # alpha decay: breakout20 + is_main_theme both decaying, reduced from 11
+    entry_rule: "主线板块梯队确认后，龙头放量突破平台再跟随"
+    invalid_rule: "跌回突破平台且板块梯队同步走弱"
+
+  - name: 主线强势回踩
+    when: "is_main_theme == true and off_high_pct >= -6 and support_ma5 == true and capital_resonance_score >= 60"
+    score_delta: 8
+    entry_rule: "主线强势股回踩 MA5 不破，等待重新转强"
+    invalid_rule: "跌破 MA10 或相对强度转弱"
+
+  - name: 板块梯队扩散
+    when: "sector_ladder_completeness_score >= 75 and industry_positive_excess20_count >= 3 and shortline_leader_score >= 68"
+    score_delta: 9
+    entry_rule: "板块梯队完整且强势股扩散，选择容量龙头低吸或突破确认"
+    invalid_rule: "高标负反馈或板块强度快速退潮"
+
+  - name: 主线强度观察
+    when: "is_main_theme == true and primary_excess20 >= 8 and off_high_pct >= -8 and capital_resonance_score >= 60"
+    score_delta: 2
+    entry_rule: "主线相对强度仍在，等待平台突破或回踩 MA5 不破后再参与"
+    invalid_rule: "相对强度跌破、资金转背离或板块梯队退潮"
+
+  - name: 主线相对强度观察
+    when: "is_main_theme == true and primary_excess20 >= 5 and off_high_pct >= -12 and max_dd20 >= -18 and capital_resonance_score >= 55"
+    score_delta: 0
+    entry_rule: "仅保留观察，等待重新突破平台、收回 MA5/MA10 或板块梯队继续加强"
+    invalid_rule: "跌离 20 日高点超过 12%、20 日回撤扩大或资金共振转弱"
+
+scoring:
+  base: 40
+  rules:
+    - when: "is_main_theme == true"
+      delta: 14
+      reason: 当前主线
+    - when: "sector_ladder_completeness_score >= 75"
+      delta: 12
+      reason: 板块梯队完整
+    - when: "sector_ladder_completeness_score >= 50"
+      delta: 7
+      reason: 板块梯队展开
+    - when: "primary_excess20 >= 15"
+      delta: 10
+      reason: 个股20日超额收益强
+    - when: "primary_excess20 >= 8"
+      delta: 6
+      reason: 个股20日超额收益占优
+    - when: "primary_excess60 >= 10"
+      delta: 5
+      reason: 60日相对强度延续
+    - when: "industry_positive_excess20_count >= 3"
+      delta: 7
+      reason: 行业内强势扩散
+    - when: "industry_capacity_like_count >= 4"
+      delta: 6
+      reason: 板块容量充足
+    - when: "shortline_leader_score >= 75"
+      delta: 8
+      reason: 龙头候选分高
+    - when: "capital_resonance_score >= 70"
+      delta: 8
+      reason: 资金共振强
+    - when: "breakout20 == true"
+      delta: 5
+      reason: 平台突破确认
+    - when: "pos120 >= 75"
+      delta: 4
+      reason: 中期强势区
+    - when: "limit_up_overheat_score >= 70"
+      delta: -7
+      reason: 情绪过热降权
+    - when: "upper_shadow_count20 >= 4"
+      delta: -5
+      reason: 上影线压力偏多
+    - when: "turnover_rate > 10 and capital_resonance_score < 60"
+      delta: -8
+      reason: 高换手但资金承接不足
+
+risk:
+  rules:
+    - when: "is_main_theme == false"
+      level: medium
+      flag: 非主线方向，降低仓位
+      score_delta: -8
+    - when: "sector_ladder_completeness_score < 50"
+      level: medium
+      flag: 板块梯队不足
+      score_delta: -6
+    - when: "primary_excess20 < 5"
+      level: medium
+      flag: 相对强度不足
+      score_delta: -5
+    - when: "twenty_cm_risk_gate == 'caution'"
+      level: medium
+      flag: 20cm 主线票需降低仓位
+      score_delta: -5
+    - when: "limit_up_overheat_score >= 75"
+      level: medium
+      flag: 主线情绪过热，注意分歧
+      score_delta: -6

@@ -87,7 +87,7 @@ phases:
 setups:
   - name: 分歧转一致
     when: "breakout20 == true and turnover_rate >= 3 and turnover_rate <= 8 and upper_shadow_count20 <= 3"
-    score_delta: 14
+    score_delta: 7  # alpha decay: breakout20 r=+0.07→-0.20, reduced from 14
     entry_rule: "放量突破昨日高点或20日平台，且不冲高回落"
     invalid_rule: "跌回突破平台并收不回"
 
@@ -99,7 +99,7 @@ setups:
 
   - name: 龙头启动
     when: "is_shortline_leader_candidate == true and breakout20 == true and turnover_rate >= 2 and turnover_rate <= 10"
-    score_delta: 12
+    score_delta: 5  # alpha decay: breakout20 + leader both decaying, reduced from 12
     entry_rule: "龙头候选放量突破，关注板块联动"
     invalid_rule: "板块退潮或龙头炸板"
 

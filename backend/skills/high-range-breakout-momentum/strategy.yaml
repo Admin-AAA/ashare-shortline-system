@@ -1,0 +1,194 @@
+id: high-range-breakout-momentum
+name: 阶段新高放量突破
+enabled: true
+weight: 1.0
+
+meta:
+  author: system
+  style: shortline-momentum
+  version: 0.1.0
+  holding_days: [1, 3, 5]
+  strategy_independence: 0.82
+  default_preset_groups:
+    experiment_high_range_breakout:
+      weight: 1.0
+      sort_order: 10
+
+contract:
+  type: strategy
+  executable: true
+  schema_version: 1
+
+universe:
+  include:
+    - "amount_yi >= 3"
+    - "free_mv_yi >= 20"
+    - "turnover_rate >= 1.5"
+    - "turnover_rate <= 12"
+    - "max_dd20 >= -18"
+    - "pos120 >= 65"
+    - "off_high60_pct >= -8"
+  exclude:
+    - "is_st == true"
+    - "announcement_negative_count > 0"
+    - "news_risk_count > 1"
+    - "twenty_cm_risk_gate == 'block'"
+
+prefilter:
+  market:
+    include:
+      - when: "amount_yi >= 3"
+        reason: "amount_too_low"
+      - when: "turnover_rate >= 1.5"
+        reason: "turnover_too_low"
+      - when: "turnover_rate <= 12"
+        reason: "turnover_too_high"
+      - when: "vol5_20 >= 1.05"
+        reason: "volume_confirmation_missing"
+      - when: "max_dd20 >= -18"
+        reason: "drawdown_too_large"
+      - when: "upper_shadow_count20 <= 5"
+        reason: "upper_shadow_too_many"
+    include_any:
+      - when: "breakout60 == true and pos120 >= 70 and off_high60_pct >= -2"
+        reason: "requires_60d_breakout"
+      - when: "breakout20 == true and pos120 >= 80 and chg20 >= 8"
+        reason: "requires_high_range_breakout"
+    exclude:
+      - when: "pct >= 9.5 and is_limit_up == false"
+        reason: "intraday_spike_without_board"
+      - when: "pos60 > 97 and dist60 > 35"
+        reason: "late_acceleration"
+      - when: "off_high60_pct < -8 and breakout60 == false"
+        reason: "failed_near_high"
+      - when: "limit_up_overheat_score >= 75"
+        reason: "limit_up_overheat"
+
+phases:
+  - name: 破位回避
+    when: "max_dd20 < -18 or (off_high60_pct < -8 and breakout60 == false)"
+    score_cap: 30
+    hard_veto: true
+    risk_flags: ["阶段高点失效，不做突破接力"]
+
+  - name: 加速末期
+    when: "pos60 > 97 and dist60 > 35 and chg20 > 35"
+    score_cap: 55
+    hard_veto: false
+    risk_flags: ["60日极高位加速，防止追高接盘"]
+
+  - name: 阶段新高确认
+    when: "breakout60 == true and pos120 >= 70 and vol5_20 >= 1.15"
+    score_cap: 94
+    hard_veto: false
+
+  - name: 平台突破确认
+    when: "breakout20 == true and pos120 >= 80 and vol5_20 >= 1.2"
+    score_cap: 90
+    hard_veto: false
+
+  - name: 阶段高点蓄势
+    when: "pos60 >= 85 and off_high60_pct >= -6 and vol5_20 >= 1.15 and pct > 0"
+    score_cap: 82
+    hard_veto: false
+    risk_flags: ["接近阶段高点但未实际突破，需等待承接确认"]
+
+setups:
+  - name: 60日新高放量突破
+    when: "breakout60 == true and pos120 >= 70 and vol5_20 >= 1.15 and pct >= 1.5 and pct <= 7"
+    score_delta: 6  # alpha decay: breakout60 r=+0.06→-0.20, reduced from 12
+    entry_rule: "放量突破60日平台后，回踩不跌回突破位再跟随"
+    invalid_rule: "跌回60日突破平台或失守MA10后不能收回"
+
+  - name: 20日平台突破接力
+    when: "breakout20 == true and pos120 >= 80 and chg20 >= 8 and vol5_20 >= 1.2 and turnover_rate >= 2"
+    score_delta: 4  # alpha decay: breakout20 decaying, reduced from 8
+    entry_rule: "20日平台放量突破且处于120日高位区，等待盘中承接确认"
+    invalid_rule: "突破日长上影或次日缩量跌回平台"
+
+  - name: 阶段高点蓄势观察
+    when: "breakout60 == false and pos60 >= 85 and off_high60_pct >= -6 and vol5_20 >= 1.15 and pct > 0 and support_ma5 == true"
+    score_delta: 4
+    entry_rule: "接近60日高点且温和放量，等待放量越过前高或回踩MA5不破后再参与"
+    invalid_rule: "跌离60日高点超过8%或放量跌破MA5"
+
+scoring:
+  base: 42
+  rules:
+    - when: "breakout60 == true"
+      delta: 16
+      reason: 60日新高突破
+    - when: "breakout20 == true"
+      delta: 8
+      reason: 20日平台突破
+    - when: "pos120 >= 85"
+      delta: 8
+      reason: 120日高位强势区
+    - when: "pos120 >= 70"
+      delta: 4
+      reason: 接近阶段高点
+    - when: "vol5_20 >= 1.5 and pct > 0"
+      delta: 8
+      reason: 放量上涨确认
+    - when: "vol5_20 >= 1.15 and vol5_20 < 1.5"
+      delta: 5
+      reason: 温和放量
+    - when: "turnover_rate >= 3 and turnover_rate <= 8"
+      delta: 6
+      reason: 换手适中
+    - when: "pct >= 1.5 and pct <= 5"
+      delta: 5
+      reason: 温和突破区间
+    - when: "is_main_theme == true"
+      delta: 7
+      reason: 主线方向共振
+    - when: "sector_ladder_completeness_score >= 50"
+      delta: 5
+      reason: 板块梯队配合
+    - when: "capital_resonance_score >= 60"
+      delta: 5
+      reason: 资金共振确认
+    - when: "primary_excess20 > 8"
+      delta: 5
+      reason: 20日超额收益占优
+    - when: "chg20 > 35"
+      delta: -8
+      reason: 20日涨幅过快
+    - when: "dist60 > 35"
+      delta: -6
+      reason: 偏离60日线过大
+    - when: "upper_shadow_count20 >= 4"
+      delta: -5
+      reason: 近期上影线偏多
+    - when: "limit_up_overheat_score >= 70"
+      delta: -8
+      reason: 涨停情绪过热
+    - when: "is_main_theme == false and sector_ladder_completeness_score < 50"
+      delta: -8
+      reason: 非主线孤立突破降权
+
+risk:
+  rules:
+    - when: "turnover_rate > 10"
+      level: medium
+      flag: 高换手突破，注意分歧放大
+      score_delta: -4
+    - when: "pct > 7"
+      level: high
+      flag: 日内涨幅过大，避免追高
+      score_delta: -8
+    - when: "upper_shadow_count20 >= 5"
+      level: medium
+      flag: 近期上影线过多，突破质量下降
+      score_delta: -5
+    - when: "limit_up_overheat_score >= 70"
+      level: medium
+      flag: 涨停情绪过热，降低接力仓位
+    - when: "twenty_cm_risk_gate == 'caution'"
+      level: medium
+      flag: 20cm 波动需降仓
+      score_delta: -6
+    - when: "news_risk_count > 0"
+      level: high
+      flag: 新闻风险未完全排除
+      score_delta: -10
