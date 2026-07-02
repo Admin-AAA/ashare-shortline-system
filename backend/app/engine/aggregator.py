@@ -1260,6 +1260,15 @@ def _shortline_factor_risks(stock: dict[str, Any]) -> list[str]:
         risks.append("20cm 风险闸门阻断")
     elif stock.get("twenty_cm_risk_gate") == "caution":
         risks.append("20cm 风险闸门提示")
+    # 筹码套牢盘风险（avg_cost ratio < 0.95 → 0% 历史胜率）
+    price = _float(stock.get("price") or stock.get("close"))
+    avg_cost = _float(stock.get("avg_cost"))
+    if price > 0 and avg_cost > 0:
+        cost_ratio = price / avg_cost
+        if cost_ratio < 0.90:
+            risks.append("深度套牢盘，获利回吐压力极大")
+        elif cost_ratio < 0.95:
+            risks.append("浅度套牢盘，解套抛压上升")
     return risks
 
 
