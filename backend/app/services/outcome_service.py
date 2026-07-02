@@ -666,7 +666,8 @@ def cost_adjusted_metrics(db: Session, run_mode: str = "formal") -> dict[str, An
         RecommendationOutcome.outcome_label.in_([OUTCOME_SUCCESS, OUTCOME_FAILED]),
     )
     if run_mode:
-        stmt = stmt.join(RecommendationRun, RecommendationRun.run_id == RecommendationOutcome.recommendation_id).where(
+        stmt = stmt.join(Recommendation, Recommendation.recommendation_id == RecommendationOutcome.recommendation_id)
+        stmt = stmt.join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id).where(
             RecommendationRun.run_mode == run_mode
         )
     outcomes = db.scalars(stmt).all()
