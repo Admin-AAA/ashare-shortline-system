@@ -5,7 +5,7 @@
 为 backtest_service / outcome_service 提供标准化的指标计算入口。
 
 指标定义：
-  recommendation_accuracy — 净收益 > 0 的推荐数 / 总推荐数
+  recommendation_accuracy — 扣费后净收益 > 0 的推荐数 / 总推荐数
   average_net_return     — 平均每笔净收益（扣除滑点/费用）
   median_net_return      — 中位数净收益
   profit_loss_ratio      — 平均盈利 / 平均亏损的绝对值
@@ -23,6 +23,10 @@
 from __future__ import annotations
 
 import statistics
+
+# 扣费后净收益阈值：executed_return 含滑点但未扣佣金+印花税（0.10%）
+# 与 outcome_service._ADDITIONAL_COST_PCT 保持一致
+_ACCURACY_COST_THRESHOLD = 0.10
 from collections import Counter, defaultdict
 from typing import Any, Protocol
 
@@ -516,10 +520,12 @@ def _is_valid_signal_record(item: dict[str, Any]) -> bool:
 
 
 def _is_accurate_record(item: dict[str, Any]) -> bool:
+    # 与 outcome_service.is_accurate_recommendation 保持一致：
+    # executed_return 含滑点但未扣佣金+印花税（0.10%），阈值 >0.10% 才算扣费后真盈利
     return (
         _is_valid_signal_record(item)
         and _is_executed_record(item)
-        and float(item.get("net_return_pct", 0)) > 0
+        and float(item.get("net_return_pct", 0)) > _ACCURACY_COST_THRESHOLD
     )
 
 
