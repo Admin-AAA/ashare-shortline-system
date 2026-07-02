@@ -18,10 +18,17 @@ def _tradeable_stock(**overrides):
         "turnover_rate": 6.0,
         "pct": 3.0,
         "limit_up_days20": 1,
+        "chg20": 12.0,
+        "pos20": 72.0,
         "chg60": 18.0,
         "pos60": 72.0,
+        "pos120": 72.0,
+        "off_high60_pct": -2.0,
+        "vol5_20": 1.2,
         "dist60": 8.0,
+        "dist20": 4.0,
         "off_high_pct": -4.0,
+        "breakout60": True,
         "upper_shadow_count20": 2,
         "max_dd20": -8.0,
         "breakout20": 1,
@@ -45,6 +52,25 @@ def _tradeable_stock(**overrides):
     return stock
 
 
+def _positive_stock_for_skill(skill_id: str):
+    """每个 skill 的正向 stock（满足其 universe.include 的最小字段集）。"""
+    if skill_id == "limit-up-reseal-relay":
+        return _tradeable_stock(
+            is_limit_up=True,
+            limit_up_consecutive_days=1,
+            limit_up_fd_amount_yi=0.5,
+            limit_up_open_times=1,
+            pct=9.8,
+        )
+    if skill_id == "high-range-breakout-momentum":
+        return _tradeable_stock(pos120=82.0, off_high60_pct=-1.0, vol5_20=1.25, breakout60=True)
+    if skill_id == "sector-relative-strength-leader":
+        return _tradeable_stock(primary_excess20=10.0, industry_positive_excess20_count=3)
+    if skill_id == "trend-pullback-continuation":
+        return _tradeable_stock(dsa_trend_score=22.0, volume_shrink_pullback=True, support_ma5=True, vol5_20=0.9)
+    return _tradeable_stock()
+
+
 def test_common_tradeability_prefilter_rejects_low_amount():
     reason = common_tradeability_exclusion_reason(_tradeable_stock(amount_yi=0.8))
     assert reason == "low_amount"
@@ -57,7 +83,8 @@ def test_common_tradeability_prefilter_rejects_late_acceleration():
 
 def test_skill_market_prefilters_accept_tradeable_mainline_stock():
     for selected in _selected_skills():
-        passed, reason = evaluate_skill_prefilter(selected["skill"], _tradeable_stock(), stage="market")
+        stock = _positive_stock_for_skill(selected["skill_id"])
+        passed, reason = evaluate_skill_prefilter(selected["skill"], stock, stage="market")
         assert passed is True, (selected["skill_id"], reason)
 
 
@@ -71,6 +98,11 @@ def test_apply_prefilters_keeps_union_and_fills_if_needed():
             industry_capacity_like_count=0,
             sector_ladder_completeness_score=0.0,
             breakout20=0,
+            breakout60=False,
+            pos120=40.0,
+            off_high60_pct=-15.0,
+            vol5_20=0.5,
+            primary_excess20=0.0,
             support_ma5=False,
             support_ma10=False,
             pct=1.0,
