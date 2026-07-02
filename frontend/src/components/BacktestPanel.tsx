@@ -1,396 +1,52 @@
 import { memo, useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { Eye, History, Loader2, Play, RefreshCw, TrendingUp, AlertTriangle } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, Eye, History, Loader2, Play, RefreshCw, Search, TrendingUp, X } from "lucide-react";
 import { api } from "../api/client";
-import type { AccuracyGateSummary, AccuracyPolicyAudit, MinutePrepResult, ScheduledTaskRun, SkillSummary } from "../types";
+import type {
+  MinutePrepResult,
+  ScheduledTaskRun,
+  SkillSummary,
+} from "../types";
 import { aShareDirectionClass, businessStatusLabel } from "../utils/display";
-
-type BacktestResult = {
-  strategy_id?: string;
-  strategy_name?: string;
-  action?: string;
-  minute_gate?: MinutePrepResult["minute_gate"];
-  status: string;
-  dates_scanned: number;
-  dates_succeeded: number;
-  dates_failed: number;
-  total_recommendations: number;
-  total_elapsed_ms?: number;
-  labeled_count: number;
-  results: Array<{
-    trade_date: string;
-    status: string;
-    candidate_count?: number;
-    recommendation_count?: number;
-    skill_count?: number;
-    elapsed_ms?: number;
-    reason?: string;
-    error?: string;
-    signal_count?: number;
-    resolved_trade_count?: number;
-    recommendation_accuracy?: number;
-    average_net_return?: number;
-  }>;
-  aggregate_metrics?: {
-    total_recommendations: number;
-    labeled_count: number;
-    triggered_count: number;
-    executed_trade_count?: number;
-    unexecuted_count?: number;
-    trigger_rate?: number;
-    success_count: number;
-    accuracy_numerator?: number;
-    accuracy_denominator?: number;
-    trade_accuracy?: number;
-    accuracy_basis?: string;
-    hit_rate: number;
-    recommendation_accuracy?: number;
-    avg_return: number;
-    avg_executed_return: number;
-    average_executed_return?: number;
-    average_net_return?: number;
-    median_net_return?: number;
-    avg_weighted_return?: number;
-    avg_close_return?: number;
-    avg_max_return?: number;
-    avg_max_drawdown: number;
-    max_drawdown?: number;
-    avg_achievable_return?: number;
-    avg_holding_days?: number;
-    profit_factor?: number;
-    profit_loss_ratio?: number;
-    win_loss_ratio?: number;
-    trade_count?: number;
-    strategy_compound_return?: number;
-    positive_month_ratio?: number;
-    benchmark_excess_return?: number;
-    sample_confidence?: string;
-    low_confidence?: boolean;
-    flat_count?: number;
-    accuracy_policy?: AccuracyPolicyAudit;
-    accuracy_gate_summary?: AccuracyGateSummary;
-    false_positive_notes?: Array<{
-      reason: string;
-      count: number;
-      examples?: string[];
-      category?: string;
-      category_label?: string;
-      stage?: string;
-    }>;
-  };
-  comparison?: {
-    selected_variant: string;
-    selected_variant_label: string;
-    adoption_reason: string;
-    decision_scope?: string;
-    decision_scope_label?: string;
-    guardrail_notes?: string[];
-    decision_metrics?: {
-      baseline?: BacktestResult["aggregate_metrics"];
-      candidate?: BacktestResult["aggregate_metrics"];
-    };
-    baseline: BacktestResult["aggregate_metrics"];
-    candidate: BacktestResult["aggregate_metrics"];
-    walk_forward?: {
-      baseline?: WalkForwardAnalysis;
-      candidate?: WalkForwardAnalysis;
-    };
-    time_split?: {
-      baseline?: TimeSplitAnalysis;
-      candidate?: TimeSplitAnalysis;
-    };
-    validation_profile?: ValidationProfile;
-  };
-  false_positive_samples?: Array<{
-    trade_date: string;
-    code: string;
-    name: string;
-    entry_time?: string;
-    exit_time?: string;
-    net_return_pct: number;
-    false_positive_reason: string;
-    signal_valid_at_recommend_time?: boolean;
-    executed?: boolean;
-    net_return_positive?: boolean;
-    accuracy_failure_label?: string | null;
-  }>;
-  recommendation_records?: Array<{
-    trade_date: string;
-    code: string;
-    name: string;
-    recommendation_time: string;
-    entry_time: string;
-    entry_price: number;
-    exit_date: string;
-    exit_time: string;
-    exit_price: number;
-    gross_return_pct: number;
-    net_return_pct: number;
-    benchmark_return_pct?: number;
-    accurate: boolean;
-    signal_valid_at_recommend_time?: boolean;
-    executed?: boolean;
-    net_return_positive?: boolean;
-    accuracy_failure_label?: string | null;
-    exit_reason: string;
-    false_positive_reason?: string | null;
-  }>;
-	  data_coverage?: {
-	    signal_date_count: number;
-	    candidate_count: number;
-	    minute_ready_candidate_count: number;
-	    minute_missing_candidate_count: number;
-    candidate_minute_coverage_rate: number;
-    benchmark_minute_covered_dates: number;
-    benchmark_minute_coverage_rate: number;
-    missing_minute_examples: string[];
-    local_minute_inventory: {
-      trade_date_start?: string;
-      trade_date_end?: string;
-	      trade_date_count?: number;
-	      code_count?: number;
-	    };
-	    minute_source_diagnostics?: {
-	      attempt_count: number;
-	      by_source: Array<{
-	        source: string;
-	        status: string;
-	        scope?: string;
-	        attempt_count: number;
-	        row_count: number;
-	        example_reason?: string;
-	      }>;
-	      successful_sources: string[];
-	      fallback_used: boolean;
-	      tushare_stk_mins_status: string;
-	      tushare_permission_denied: boolean;
-	      samples?: Array<{
-	        source: string;
-	        status: string;
-	        code?: string;
-	        reason?: string;
-	      }>;
-	    };
-	  };
-  notes?: string[];
-  breakdown?: {
-    by_skill: Array<{
-      skill_id: string;
-      recommendation_count: number;
-      triggered_count: number;
-      trigger_rate: number;
-      success_count: number;
-      hit_rate: number;
-      avg_score: number;
-    }>;
-    by_setup: Array<{
-      setup_type: string;
-      recommendation_count: number;
-      triggered_count: number;
-      missed_count?: number;
-      success_count: number;
-      trigger_rate: number;
-      hit_rate: number;
-      avg_return: number;
-    }>;
-    by_industry: Array<{
-      industry: string;
-      recommendation_count: number;
-      triggered_count: number;
-      trigger_rate: number;
-      success_count: number;
-      hit_rate: number;
-    }>;
-    by_market_regime: Array<{
-      market_regime: string;
-      recommendation_count: number;
-      triggered_count: number;
-      missed_count?: number;
-      success_count: number;
-      trigger_rate: number;
-      hit_rate: number;
-      avg_return: number;
-    }>;
-    by_score_range: Array<{
-      range: string;
-      recommendation_count: number;
-      triggered_count: number;
-      trigger_rate: number;
-      success_count: number;
-      hit_rate: number;
-    }>;
-    by_score_line: Array<{
-      score_line: number;
-      sample_count: number;
-      activation_rate: number;
-      labeled_count: number;
-      triggered_count: number;
-      success_count: number;
-      trigger_rate: number;
-      hit_rate: number;
-      avg_return: number;
-      avg_drawdown: number;
-      avg_close_return: number;
-    }>;
-  };
-};
-
-type MinuteAction = "preview" | "remediate" | null;
-
-type BacktestHistoryItem = {
-  backtest_id: string;
-  skill_id: string;
-  strategy_name: string;
-  date_from: string;
-  date_to: string;
-  status: string;
-  created_at?: string | null;
-  selected_variant?: string | null;
-  selected_variant_label?: string | null;
-  adoption_reason?: string | null;
-  decision_scope?: string | null;
-  decision_scope_label?: string | null;
-  guardrail_notes?: string[];
-  decision_metrics?: {
-    baseline?: BacktestResult["aggregate_metrics"];
-    candidate?: BacktestResult["aggregate_metrics"];
-  };
-  validation_profile?: ValidationProfile;
-  metrics: {
-    trade_count?: number;
-    recommendation_accuracy?: number;
-    accuracy_numerator?: number;
-    accuracy_denominator?: number;
-    trade_accuracy?: number;
-    executed_trade_count?: number;
-    unexecuted_count?: number;
-    average_net_return?: number;
-    average_executed_return?: number;
-    max_drawdown?: number;
-    benchmark_excess_return?: number;
-    sample_confidence?: string;
-    accuracy_policy?: AccuracyPolicyAudit;
-    accuracy_gate_summary?: AccuracyGateSummary;
-  };
-  data_coverage?: {
-    candidate_minute_coverage_rate?: number;
-    benchmark_minute_coverage_rate?: number;
-    tushare_stk_mins_status?: string;
-    tushare_permission_denied?: boolean;
-    fallback_used?: boolean;
-  };
-  result?: BacktestResult;
-};
-
-type BacktestVersionMatrixItem = {
-  backtest_id: string;
-  skill_id: string;
-  strategy_name: string;
-  date_from: string;
-  date_to: string;
-  created_at?: string | null;
-  selected_variant?: string | null;
-  selected_variant_label?: string | null;
-  decision_scope?: string | null;
-  decision_scope_label?: string | null;
-  baseline_label?: string | null;
-  candidate_label?: string | null;
-  baseline_accuracy?: number;
-  candidate_accuracy?: number;
-  accuracy_delta?: number;
-  baseline_accuracy_denominator?: number;
-  candidate_accuracy_denominator?: number;
-  baseline_trade_accuracy?: number;
-  candidate_trade_accuracy?: number;
-  trade_accuracy_delta?: number;
-  baseline_executed_trade_count?: number;
-  candidate_executed_trade_count?: number;
-  baseline_unexecuted_count?: number;
-  candidate_unexecuted_count?: number;
-  baseline_return?: number;
-  candidate_return?: number;
-  return_delta?: number;
-  baseline_drawdown?: number;
-  candidate_drawdown?: number;
-  drawdown_delta?: number;
-  baseline_confidence?: string;
-  candidate_confidence?: string;
-  validation_profile?: {
-    primary_scope?: string | null;
-    primary_scope_label?: string | null;
-    fallback_reason?: string | null;
-  };
-  guardrail_notes?: string[];
-  adoption_reason?: string | null;
-};
-
-type WalkForwardAnalysis = {
-  eligible: boolean;
-  window_count: number;
-  min_train_dates: number;
-  test_aggregate: BacktestResult["aggregate_metrics"];
-  windows: Array<{
-    train_start: string;
-    train_end: string;
-    test_start: string;
-    test_end: string;
-    train: BacktestResult["aggregate_metrics"];
-    test: BacktestResult["aggregate_metrics"];
-  }>;
-  notes?: string[];
-};
-
-type TimeSplitAnalysis = {
-  eligible: boolean;
-  train_trade_count?: number;
-  test_trade_count?: number;
-  train_date_range?: { start?: string; end?: string };
-  test_date_range?: { start?: string; end?: string };
-  train_metrics: BacktestResult["aggregate_metrics"];
-  test_metrics: BacktestResult["aggregate_metrics"];
-  train_vs_test?: {
-    accuracy_diff?: number;
-    return_diff?: number;
-  };
-  notes?: string[];
-};
-
-type ValidationSnapshot = {
-  eligible?: boolean;
-  window_count?: number;
-  date_count?: number;
-  trade_count?: number;
-  recommendation_accuracy?: number;
-  average_net_return?: number;
-  max_drawdown?: number;
-  sample_confidence?: string;
-  notes?: string[];
-};
-
-type ValidationProfile = {
-  primary_scope?: string | null;
-  primary_scope_label?: string | null;
-  fallback_reason?: string | null;
-  primary_samples?: {
-    baseline_trade_count?: number;
-    candidate_trade_count?: number;
-    baseline_confidence?: string;
-    candidate_confidence?: string;
-  };
-  walk_forward?: {
-    baseline?: ValidationSnapshot;
-    candidate?: ValidationSnapshot;
-  };
-  time_split?: {
-    baseline?: TimeSplitAnalysis;
-    candidate?: TimeSplitAnalysis;
-  };
-  aggregate?: {
-    baseline?: BacktestResult["aggregate_metrics"];
-    candidate?: BacktestResult["aggregate_metrics"];
-  };
-};
-
+import type {
+  BacktestHistoryItem,
+  BacktestHistoryPage,
+  BacktestResult,
+  BacktestVersionMatrixItem,
+  MinuteAction,
+} from "./backtestTypes";
+import {
+  formatDateTime,
+  hasNumber,
+  horizonReturnRows,
+  marketNullablePct,
+  marketPct,
+  marketSignedPct,
+  minuteCoverage,
+  minuteCoverageText,
+  minuteGate,
+  minutePrepSummary,
+  minuteRemediationSummary,
+  nullablePercent,
+  nullableSignedPercent,
+  nullableYesNo,
+  percent,
+  priceText,
+  rangeText,
+  resolveAccuracyDenominator,
+  resolveAccuracyNumerator,
+  resolveAverageExecutedReturn,
+  resolveExecutedCount,
+  resolveProfitMetric,
+  resolveRecommendationAccuracy,
+  resolveTradeAccuracy,
+  resolveTriggerRate,
+  selectedTimeSplit,
+  selectedWalkForward,
+  signedPercent,
+  timeText,
+  yesNo,
+} from "./backtestFormat";
 export default memo(function BacktestPanel() {
   const [strategyId, setStrategyId] = useState("");
   const [startDate, setStartDate] = useState("2026-05-19");
@@ -411,6 +67,17 @@ export default memo(function BacktestPanel() {
   const [history, setHistory] = useState<BacktestHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyPageSize, setHistoryPageSize] = useState(12);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyTotalPages, setHistoryTotalPages] = useState(1);
+  const [historyHasPrev, setHistoryHasPrev] = useState(false);
+  const [historyHasNext, setHistoryHasNext] = useState(false);
+  const [historySkillId, setHistorySkillId] = useState("");
+  const [historyStatus, setHistoryStatus] = useState("");
+  const [historyDateFrom, setHistoryDateFrom] = useState("");
+  const [historyDateTo, setHistoryDateTo] = useState("");
+  const [historyQuery, setHistoryQuery] = useState("");
   const [selectedBacktestId, setSelectedBacktestId] = useState<string | null>(null);
   const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
   const [versionMatrix, setVersionMatrix] = useState<BacktestVersionMatrixItem[]>([]);
@@ -444,19 +111,51 @@ export default memo(function BacktestPanel() {
     }
   }
 
-  async function loadBacktestHistory(showFeedback = false) {
+  async function loadBacktestHistory(
+    showFeedback = false,
+    pageOverride?: number,
+    overrides?: Partial<{
+      pageSize: number;
+      skillId: string;
+      status: string;
+      dateFrom: string;
+      dateTo: string;
+      query: string;
+    }>,
+  ) {
     setHistoryLoading(true);
     setHistoryError(null);
     if (showFeedback) setActionMessage("正在刷新历史回测...");
     try {
-      const resp = await fetch("/api/runs/backtests?limit=12");
+      const nextPage = pageOverride ?? historyPage;
+      const nextPageSize = overrides?.pageSize ?? historyPageSize;
+      const nextSkillId = overrides?.skillId ?? historySkillId;
+      const nextStatus = overrides?.status ?? historyStatus;
+      const nextDateFrom = overrides?.dateFrom ?? historyDateFrom;
+      const nextDateTo = overrides?.dateTo ?? historyDateTo;
+      const nextQuery = overrides?.query ?? historyQuery;
+      const params = new URLSearchParams({
+        page: String(nextPage),
+        page_size: String(nextPageSize),
+      });
+      if (nextSkillId) params.set("skill_id", nextSkillId);
+      if (nextStatus) params.set("status", nextStatus);
+      if (nextDateFrom) params.set("date_from", nextDateFrom);
+      if (nextDateTo) params.set("date_to", nextDateTo);
+      if (nextQuery.trim()) params.set("query", nextQuery.trim());
+      const resp = await fetch(`/api/runs/backtests?${params.toString()}`);
       if (!resp.ok) {
         const err = await resp.json();
         throw new Error(err.detail || "读取历史回测失败");
       }
-      const data: BacktestHistoryItem[] = await resp.json();
-      setHistory(data);
-      if (showFeedback) setActionMessage(`历史回测已刷新：${data.length} 条`);
+      const data: BacktestHistoryPage = await resp.json();
+      setHistory(data.items);
+      setHistoryPage(data.page);
+      setHistoryTotal(data.total);
+      setHistoryTotalPages(data.total_pages);
+      setHistoryHasPrev(data.has_prev);
+      setHistoryHasNext(data.has_next);
+      if (showFeedback) setActionMessage(`历史回测已刷新：第 ${data.page}/${data.total_pages} 页，共 ${data.total} 条`);
     } catch (e: any) {
       setHistoryError(e.message || "读取历史回测失败");
       if (showFeedback) setActionMessage("");
@@ -548,7 +247,7 @@ export default memo(function BacktestPanel() {
       const data: BacktestResult = await resp.json();
       setResult(data);
       setSelectedBacktestId(null);
-      loadBacktestHistory();
+      loadBacktestHistory(false, 1);
       loadVersionMatrix();
       if (data.status === "insufficient_minute_coverage") {
         setMinutePrep(data as unknown as MinutePrepResult);
@@ -562,6 +261,25 @@ export default memo(function BacktestPanel() {
     } finally {
       setRunning(false);
     }
+  }
+
+  function applyHistoryFilters() {
+    void loadBacktestHistory(true, 1);
+  }
+
+  function resetHistoryFilters() {
+    setHistorySkillId("");
+    setHistoryStatus("");
+    setHistoryDateFrom("");
+    setHistoryDateTo("");
+    setHistoryQuery("");
+    void loadBacktestHistory(true, 1, {
+      skillId: "",
+      status: "",
+      dateFrom: "",
+      dateTo: "",
+      query: "",
+    });
   }
 
   async function previewMinuteGate() {
@@ -715,6 +433,73 @@ export default memo(function BacktestPanel() {
             </h3>
             {historyError ? <span className="negative">{historyError}</span> : null}
           </div>
+          <div className="bt-history-filters">
+            <div className="bt-field">
+              <label>策略筛选</label>
+              <select value={historySkillId} onChange={(e) => setHistorySkillId(e.target.value)}>
+                <option value="">全部策略</option>
+                <option value="_general_">通用推荐流水线</option>
+                {backtestableSkills.map((skill) => (
+                  <option key={skill.skill_id} value={skill.skill_id}>
+                    {skill.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="bt-field">
+              <label>状态</label>
+              <select value={historyStatus} onChange={(e) => setHistoryStatus(e.target.value)}>
+                <option value="">全部状态</option>
+                <option value="completed">已完成</option>
+                <option value="failed">失败</option>
+                <option value="insufficient_minute_coverage">分钟线不足</option>
+                <option value="no_data">暂无样本</option>
+              </select>
+            </div>
+            <div className="bt-field">
+              <label>回测开始</label>
+              <input type="date" value={historyDateFrom} onChange={(e) => setHistoryDateFrom(e.target.value)} />
+            </div>
+            <div className="bt-field">
+              <label>回测结束</label>
+              <input type="date" value={historyDateTo} onChange={(e) => setHistoryDateTo(e.target.value)} />
+            </div>
+            <div className="bt-field bt-history-query">
+              <label>关键词</label>
+              <input
+                value={historyQuery}
+                onChange={(e) => setHistoryQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") applyHistoryFilters();
+                }}
+                placeholder="策略名 / ID / 状态"
+              />
+            </div>
+            <div className="bt-field bt-page-size">
+              <label>每页</label>
+              <select
+                value={historyPageSize}
+                onChange={(e) => {
+                  const nextPageSize = Number(e.target.value);
+                  setHistoryPageSize(nextPageSize);
+                  void loadBacktestHistory(true, 1, { pageSize: nextPageSize });
+                }}
+              >
+                <option value={12}>12</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
+            <button className="btn primary" onClick={applyHistoryFilters} disabled={historyLoading}>
+              {historyLoading ? <Loader2 size={14} className="spin" /> : <Search size={14} />}
+              筛选
+            </button>
+            <button className="btn" onClick={resetHistoryFilters} disabled={historyLoading}>
+              <X size={14} />
+              清空
+            </button>
+          </div>
           <BreakdownTable title="历史结果" data={history.map((item) => ({
             ...item,
             window: `${item.date_from} ~ ${item.date_to}`,
@@ -766,6 +551,27 @@ export default memo(function BacktestPanel() {
               </button>
             ) },
           ]} />
+          <div className="bt-pagination">
+            <span>第 {historyPage}/{historyTotalPages} 页 · 共 {historyTotal} 条</span>
+            <div>
+              <button
+                className="btn"
+                onClick={() => void loadBacktestHistory(true, Math.max(1, historyPage - 1))}
+                disabled={historyLoading || !historyHasPrev}
+              >
+                <ChevronLeft size={14} />
+                上一页
+              </button>
+              <button
+                className="btn"
+                onClick={() => void loadBacktestHistory(true, historyPage + 1)}
+                disabled={historyLoading || !historyHasNext}
+              >
+                下一页
+                <ChevronRight size={14} />
+              </button>
+            </div>
+          </div>
           {historyLoading && !history.length ? (
             <div className="bt-error">
               <Loader2 size={14} className="spin" />
@@ -1260,6 +1066,27 @@ export default memo(function BacktestPanel() {
                   { key: "count", label: "次数" },
                   { key: "examples", label: "样例", format: (v: string[]) => (v ?? []).join(" / ") },
                 ]} />
+	              </div>
+	            ) : null}
+
+            {result.horizon_return_matrix?.length ? (
+              <div className="bt-breakdown">
+                <BreakdownTable title="策略未来交易日收益率" data={horizonReturnRows(result.horizon_return_matrix)} columns={[
+                  { key: "strategy_name", label: "策略名称" },
+                  { key: "recommendation_count", label: "推荐数" },
+                  { key: "h1", label: "1天后", format: marketNullablePct },
+                  { key: "n1", label: "样本" },
+                  { key: "h3", label: "3天后", format: marketNullablePct },
+                  { key: "n3", label: "样本" },
+                  { key: "h5", label: "5天后", format: marketNullablePct },
+                  { key: "n5", label: "样本" },
+                  { key: "h10", label: "10天后", format: marketNullablePct },
+                  { key: "n10", label: "样本" },
+                  { key: "h20", label: "20天后", format: marketNullablePct },
+                  { key: "n20", label: "样本" },
+                  { key: "h30", label: "30天后", format: marketNullablePct },
+                  { key: "n30", label: "样本" },
+                ]} />
               </div>
             ) : null}
 
@@ -1294,46 +1121,46 @@ export default memo(function BacktestPanel() {
                   { key: "value", label: "数值" },
                   { key: "detail", label: "说明" },
                 ]} />
-	                {result.data_coverage.missing_minute_examples.length ? (
-	                  <BreakdownTable title="分钟线缺口样例" data={result.data_coverage.missing_minute_examples.map((item) => ({ item }))} columns={[
-	                    { key: "item", label: "样例" },
-	                  ]} />
-	                ) : null}
-	                {result.data_coverage.minute_source_diagnostics ? (
-	                  <>
-	                    <BreakdownTable title="分钟源诊断" data={[
-	                      {
-	                        name: "Tushare stk_mins",
-	                        value: businessStatusLabel(result.data_coverage.minute_source_diagnostics.tushare_stk_mins_status),
-	                        detail: result.data_coverage.minute_source_diagnostics.tushare_permission_denied ? "权限不足，已走备用源" : "优先源",
-	                      },
-	                      {
-	                        name: "备用源",
-	                        value: yesNo(result.data_coverage.minute_source_diagnostics.fallback_used),
-	                        detail: result.data_coverage.minute_source_diagnostics.successful_sources.join(" / ") || "-",
-	                      },
-	                      {
-	                        name: "尝试次数",
-	                        value: String(result.data_coverage.minute_source_diagnostics.attempt_count ?? 0),
-	                        detail: `${result.data_coverage.minute_source_diagnostics.by_source.length} 类来源状态`,
-	                      },
-	                    ]} columns={[
-	                      { key: "name", label: "项目" },
-	                      { key: "value", label: "状态" },
-	                      { key: "detail", label: "说明" },
-	                    ]} />
-	                    <BreakdownTable title="分钟源尝试明细" data={result.data_coverage.minute_source_diagnostics.by_source} columns={[
-	                      { key: "source", label: "来源" },
-                  { key: "status", label: "状态", format: businessStatusLabel },
-	                      { key: "scope", label: "范围" },
-	                      { key: "attempt_count", label: "次数" },
-	                      { key: "row_count", label: "行数" },
-	                      { key: "example_reason", label: "原因" },
-	                    ]} />
-	                  </>
-	                ) : null}
-	              </div>
-	            ) : null}
+                {result.data_coverage.missing_minute_examples.length ? (
+                  <BreakdownTable title="分钟线缺口样例" data={result.data_coverage.missing_minute_examples.map((item) => ({ item }))} columns={[
+                    { key: "item", label: "样例" },
+                  ]} />
+                ) : null}
+                {result.data_coverage.minute_source_diagnostics ? (
+                  <>
+                    <BreakdownTable title="分钟源诊断" data={[
+                      {
+                        name: "Tushare stk_mins",
+                        value: businessStatusLabel(result.data_coverage.minute_source_diagnostics.tushare_stk_mins_status),
+                        detail: result.data_coverage.minute_source_diagnostics.tushare_permission_denied ? "权限不足，已走备用源" : "优先源",
+                      },
+                      {
+                        name: "备用源",
+                        value: yesNo(result.data_coverage.minute_source_diagnostics.fallback_used),
+                        detail: result.data_coverage.minute_source_diagnostics.successful_sources.join(" / ") || "-",
+                      },
+                      {
+                        name: "尝试次数",
+                        value: String(result.data_coverage.minute_source_diagnostics.attempt_count ?? 0),
+                        detail: `${result.data_coverage.minute_source_diagnostics.by_source.length} 类来源状态`,
+                      },
+                    ]} columns={[
+                      { key: "name", label: "项目" },
+                      { key: "value", label: "状态" },
+                      { key: "detail", label: "说明" },
+                    ]} />
+                    <BreakdownTable title="分钟源尝试明细" data={result.data_coverage.minute_source_diagnostics.by_source} columns={[
+                      { key: "source", label: "来源" },
+                      { key: "status", label: "状态", format: businessStatusLabel },
+                      { key: "scope", label: "范围" },
+                      { key: "attempt_count", label: "次数" },
+                      { key: "row_count", label: "行数" },
+                      { key: "example_reason", label: "原因" },
+                    ]} />
+                  </>
+                ) : null}
+              </div>
+            ) : null}
 
             {result.recommendation_records?.length ? (
               <div className="bt-breakdown">
@@ -1506,148 +1333,3 @@ function BreakdownTable({
   );
 }
 
-function hasNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
-function resolveTriggerRate(metrics: BacktestResult["aggregate_metrics"]) {
-  if (!metrics) return 0;
-  if (hasNumber(metrics.trigger_rate)) return metrics.trigger_rate;
-  if (!metrics.labeled_count) return 0;
-  return metrics.triggered_count / metrics.labeled_count;
-}
-
-function resolveRecommendationAccuracy(metrics: BacktestResult["aggregate_metrics"]) {
-  if (!metrics) return 0;
-  if (hasNumber(metrics.recommendation_accuracy)) return metrics.recommendation_accuracy;
-  return metrics.hit_rate ?? 0;
-}
-
-function resolveTradeAccuracy(metrics: BacktestResult["aggregate_metrics"]) {
-  if (!metrics) return 0;
-  if (hasNumber(metrics.trade_accuracy)) return metrics.trade_accuracy;
-  return metrics.hit_rate ?? 0;
-}
-
-function resolveAccuracyNumerator(metrics: BacktestResult["aggregate_metrics"]) {
-  if (!metrics) return 0;
-  return metrics.accuracy_numerator ?? metrics.success_count ?? 0;
-}
-
-function resolveAccuracyDenominator(metrics: BacktestResult["aggregate_metrics"]) {
-  if (!metrics) return 0;
-  return metrics.accuracy_denominator ?? metrics.labeled_count ?? metrics.triggered_count ?? 0;
-}
-
-function resolveExecutedCount(metrics: BacktestResult["aggregate_metrics"]) {
-  if (!metrics) return 0;
-  return metrics.executed_trade_count ?? metrics.triggered_count ?? 0;
-}
-
-function resolveAverageExecutedReturn(metrics: BacktestResult["aggregate_metrics"]) {
-  if (!metrics) return 0;
-  if (hasNumber(metrics.average_executed_return)) return metrics.average_executed_return;
-  if (hasNumber(metrics.avg_executed_return)) return metrics.avg_executed_return;
-  return metrics.average_net_return ?? 0;
-}
-
-function resolveProfitMetric(metrics: BacktestResult["aggregate_metrics"]) {
-  if (!metrics) return 0;
-  if (hasNumber(metrics.profit_loss_ratio)) return metrics.profit_loss_ratio;
-  if (hasNumber(metrics.profit_factor)) return metrics.profit_factor;
-  return 0;
-}
-
-function selectedWalkForward(comparison: BacktestResult["comparison"]) {
-  if (!comparison?.walk_forward) return null;
-  return comparison.selected_variant === "candidate"
-    ? comparison.walk_forward.candidate ?? null
-    : comparison.walk_forward.baseline ?? null;
-}
-
-function selectedTimeSplit(comparison: BacktestResult["comparison"]) {
-  if (!comparison?.time_split) return null;
-  return comparison.selected_variant === "candidate"
-    ? comparison.time_split.candidate ?? null
-    : comparison.time_split.baseline ?? null;
-}
-
-function percent(v: number) {
-  return v == null ? "-" : `${(Number(v) * 100).toFixed(1)}%`;
-}
-
-function formatPercent(v: number | null | undefined) {
-  return v == null ? "-" : `${(Number(v) * 100).toFixed(1)}%`;
-}
-
-function pct(v: number) {
-  return v == null ? "-" : `${Number(v).toFixed(2)}%`;
-}
-
-function marketPct(v: number | null) {
-  if (v == null) return "-";
-  return <span className={aShareDirectionClass(v)}>{pct(v)}</span>;
-}
-
-function nullablePercent(v: number | null) {
-  return v == null ? "-" : percent(v);
-}
-
-function nullablePct(v: number | null) {
-  return v == null ? "-" : pct(v);
-}
-
-function marketNullablePct(v: number | null) {
-  return v == null ? "-" : marketPct(v);
-}
-
-function signedPercent(v: number | null) {
-  if (v == null) return "-";
-  const sign = v > 0 ? "+" : "";
-  return `${sign}${(Number(v) * 100).toFixed(1)}%`;
-}
-
-function signedPct(v: number | null) {
-  if (v == null) return "-";
-  const sign = v > 0 ? "+" : "";
-  return `${sign}${Number(v).toFixed(2)}%`;
-}
-
-function marketSignedPct(v: number | null) {
-  if (v == null) return "-";
-  return <span className={aShareDirectionClass(v)}>{signedPct(v)}</span>;
-}
-
-function nullableSignedPercent(v: number | null) {
-  if (v == null) return "-";
-  return signedPercent(v);
-}
-
-function priceText(v: number) {
-  return v == null ? "-" : Number(v).toFixed(2);
-}
-
-function timeText(v: string) {
-  if (!v) return "-";
-  return String(v).slice(0, 16).replace("T", " ");
-}
-
-function yesNo(v: boolean) {
-  return v ? "是" : "否";
-}
-
-function nullableYesNo(v: boolean | null) {
-  if (v == null) return "-";
-  return yesNo(v);
-}
-
-function rangeText(start?: string, end?: string) {
-  if (!start && !end) return "-";
-  if (start && end) return `${start} ~ ${end}`;
-  return start || end || "-";
-}
-
-function formatDateTime(v?: string | null) {
-  if (!v) return "-";
-  return String(v).replace("T", " ").slice(0, 16);
-}
