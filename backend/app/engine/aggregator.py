@@ -224,9 +224,9 @@ def resolve_score_line_context(
         "震荡": 0.0,
         "弱势": 2.0,
     }.get(market_base, 0.0)
-    # 高潮阶段分数线调整：强牛/偏多·高潮是确定性亏损（历史 45%/33% 胜率，负收益），需大幅提高门槛
-    # 弱势·高潮实际上是反转信号（77.8% 胜率），保持 +5
-    _climax_extra = 8.0 if market_base in ("强牛", "偏多") else 0.0
+    # 高潮阶段分数线调整：强牛/偏多/震荡·高潮胜率 < 50%（43-47%），需提高门槛
+    # 弱势·高潮是反转信号（75.9% 胜率），保持 +5
+    _climax_extra = 8.0 if market_base in ("强牛", "偏多", "震荡") else 0.0
     sentiment_adjustment = {
         "高潮": 5.0 + _climax_extra,
         "活跃": 3.0,  # 回测验证：+5.0 导致更多低质量交易（124笔 vs 111笔），WR 下降 4.5pp
