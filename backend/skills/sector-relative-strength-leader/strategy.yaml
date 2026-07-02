@@ -96,7 +96,7 @@ setups:
 
   - name: 主线强势回踩
     when: "is_main_theme == true and off_high_pct >= -6 and support_ma5 == true and capital_resonance_score >= 60"
-    score_delta: 8
+    score_delta: 0  # 回测：8 笔 WR 12.5% avg -3.99%，高位回踩易见顶，归零观察（样本小不转负）
     entry_rule: "主线强势股回踩 MA5 不破，等待重新转强"
     invalid_rule: "跌破 MA10 或相对强度转弱"
 
