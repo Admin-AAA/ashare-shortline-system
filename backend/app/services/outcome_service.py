@@ -534,6 +534,9 @@ _ALPHA_DECAY_FACTORS = [
     "support_ma10",
     "is_shortline_leader_candidate",
     "is_20cm_stock",
+    # 非技术因子（负预测力：均值回归信号）
+    "chip_health_score_high",  # chip_health_score >= 72
+    "capital_flow_score_high",  # capital_flow_score >= 72
 ]
 
 

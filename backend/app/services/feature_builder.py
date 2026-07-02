@@ -101,6 +101,15 @@ def _risk_score(stock: dict[str, Any]) -> float:
         score += 15
     if stock.get("dsa_macd_score", 15) == 0:
         score += 12
+    # 筹码套牢盘风险：价格低于平均成本时抛压大，胜率从 61% 降至 45%
+    price = _num(stock.get("price") or stock.get("close"))
+    avg_cost = _num(stock.get("avg_cost"))
+    if price > 0 and avg_cost > 0:
+        cost_ratio = price / avg_cost
+        if cost_ratio < 0.95:
+            score += 20  # 深度套牢，强抛压
+        elif cost_ratio < 1.00:
+            score += 10  # 浅套牢，解套抛压
     if stock.get("pledge_ratio", 0) > 30:
         score += 15
     if stock.get("has_upcoming_float"):

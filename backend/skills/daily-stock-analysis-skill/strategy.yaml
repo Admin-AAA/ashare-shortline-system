@@ -141,3 +141,7 @@ risk:
       level: medium
       flag: 获利盘过高
       score_delta: -6
+    - when: "price > 300"
+      level: medium
+      flag: 高价股风险
+      score_delta: -8
