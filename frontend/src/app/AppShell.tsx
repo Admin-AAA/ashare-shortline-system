@@ -16,7 +16,8 @@ import {
 } from "./nav";
 
 const SECTION_PATHS: Record<CockpitSection, string> = {
-  dashboard: "/",
+  home: "/",
+  dashboard: "/dashboard",
   run: "/run",
   pool: "/pool",
   data: "/data",
@@ -31,15 +32,11 @@ const SECTION_PATHS: Record<CockpitSection, string> = {
 function sectionFromPath(pathname: string): CockpitSection {
   const normalized = pathname.replace(/\/+$/, "") || "/";
   const match = NAV_ITEMS.find((item) => SECTION_PATHS[item.section] === normalized);
-  return match?.section ?? "stock-matrix";
+  return match?.section ?? "home";
 }
 
 export default function AppShell() {
-  const [section, setSection] = useState<CockpitSection>(() => {
-    const initial = sectionFromPath(window.location.pathname);
-    // 默认落到"矩阵推荐"组，而非旧的驾驶舱首页
-    return groupOfSection(initial) === "test" ? "stock-matrix" : initial;
-  });
+  const [section, setSection] = useState<CockpitSection>(() => sectionFromPath(window.location.pathname));
   const [refreshSignal, setRefreshSignal] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [testDrawerOpen, setTestDrawerOpen] = useState(false);
@@ -123,13 +120,18 @@ export default function AppShell() {
       <StarfieldBackground />
 
       <header className="cosmic-topbar">
-        <div className="cosmic-brand">
+        <button
+          type="button"
+          className="cosmic-brand"
+          onClick={() => navigateToSection("home")}
+          title="回到首页"
+        >
           <div className="brand-mark">A</div>
           <div className="brand-text">
             <strong>短线交易驾驶舱</strong>
             <span>Live Decision System</span>
           </div>
-        </div>
+        </button>
 
         <nav className="cosmic-mainnav" aria-label="主导航">
           {NAV_GROUPS.filter((g) => g.key !== "test").map((g) => (
@@ -172,45 +174,74 @@ export default function AppShell() {
         </div>
       </header>
 
-      <div className="cosmic-subnav" aria-label="子导航">
-        <div className="subnav-title">
-          <strong>{activeGroupDef?.label}</strong>
-          <span>{activeItem.label} · {activeItem.subtitle}</span>
+      {section !== "home" && (
+        <div className="cosmic-subnav" aria-label="子导航">
+          <div className="subnav-title">
+            <strong>{activeGroupDef?.label}</strong>
+            <span>{activeItem.label} · {activeItem.subtitle}</span>
+          </div>
+          <div className="subnav-items">
+            {activeGroupDef?.sections.map((s) => {
+              const item = NAV_ITEMS.find((n) => n.section === s);
+              if (!item) return null;
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  className={section === s ? "active" : ""}
+                  aria-pressed={section === s}
+                  onClick={() => navigateToSection(s)}
+                >
+                  {item.icon}
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
-        <div className="subnav-items">
-          {activeGroupDef?.sections.map((s) => {
-            const item = NAV_ITEMS.find((n) => n.section === s);
-            if (!item) return null;
-            return (
-              <button
-                key={s}
-                type="button"
-                className={section === s ? "active" : ""}
-                aria-pressed={section === s}
-                onClick={() => navigateToSection(s)}
-              >
-                {item.icon}
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      )}
 
       <main className="cosmic-main" ref={mainRef}>
-        <section className="cosmic-content-card">
-          <ErrorBoundary>
-            {section === "control" ? (
-              <ControlCenterPage refreshSignal={refreshSignal} />
-            ) : section === "matrix" ? (
-              <PresetMatrixPage refreshSignal={refreshSignal} />
-            ) : section === "stock-matrix" ? (
-              <StockMatrixPage refreshSignal={refreshSignal} />
-            ) : (
-              <DashboardPage section={section} refreshSignal={refreshSignal} />
-            )}
-          </ErrorBoundary>
-        </section>
+        {section === "home" ? (
+          <section className="cosmic-home">
+            <div className="home-inner">
+              <h1 className="home-title">短线交易驾驶舱</h1>
+              <p className="home-subtitle">于数据海洋之上，凝视纵深，捕捉信号。</p>
+              <div className="home-entries">
+                <button
+                  type="button"
+                  className="home-entry"
+                  onClick={() => goToGroup("matrix")}
+                >
+                  <span className="entry-label">矩阵推荐</span>
+                  <span className="entry-hint">单条 · 全市场</span>
+                </button>
+                <button
+                  type="button"
+                  className="home-entry"
+                  onClick={() => goToGroup("strategy")}
+                >
+                  <span className="entry-label">策略</span>
+                  <span className="entry-hint">回测 · 复盘 · 健康 · 解释</span>
+                </button>
+              </div>
+            </div>
+          </section>
+        ) : (
+          <section className="cosmic-content-card">
+            <ErrorBoundary>
+              {section === "control" ? (
+                <ControlCenterPage refreshSignal={refreshSignal} />
+              ) : section === "matrix" ? (
+                <PresetMatrixPage refreshSignal={refreshSignal} />
+              ) : section === "stock-matrix" ? (
+                <StockMatrixPage refreshSignal={refreshSignal} />
+              ) : (
+                <DashboardPage section={section} refreshSignal={refreshSignal} />
+              )}
+            </ErrorBoundary>
+          </section>
+        )}
       </main>
 
       {testDrawerOpen && testGroupDef ? (

@@ -198,6 +198,87 @@
 }
 [data-theme="light"] .cosmic-content-card { background: rgba(255, 255, 255, 0.18); }
 
+/* ── 首页：空白、居中、大留白 ── */
+.cosmic-home {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - 120px);
+  padding: var(--space-8) var(--space-8);
+}
+.cosmic-home .home-inner {
+  text-align: center;
+  max-width: 640px;
+}
+.cosmic-home .home-title {
+  margin: 0;
+  font-size: 44px;
+  font-weight: 300;
+  letter-spacing: 0.12em;
+  color: var(--ink);
+  line-height: 1.2;
+}
+.cosmic-home .home-subtitle {
+  margin: var(--space-4) 0 0;
+  font-size: 14px;
+  letter-spacing: 0.18em;
+  color: var(--muted);
+  font-weight: 300;
+}
+.cosmic-home .home-entries {
+  margin-top: var(--space-7);
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-5);
+}
+.cosmic-home .home-entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-5) var(--space-6);
+  background: rgba(8, 12, 20, 0.22);
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: border-color var(--motion-normal), transform var(--motion-normal), background var(--motion-normal);
+}
+.cosmic-home .home-entry:hover {
+  border-color: var(--line-strong);
+  transform: translateY(-2px);
+  background: rgba(8, 12, 20, 0.32);
+}
+.cosmic-home .home-entry .entry-label {
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  color: var(--ink);
+}
+.cosmic-home .home-entry .entry-hint {
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+[data-theme="light"] .cosmic-home .home-entry { background: rgba(255, 255, 255, 0.30); }
+[data-theme="light"] .cosmic-home .home-entry:hover { background: rgba(255, 255, 255, 0.42); }
+
+/* home 时不显示子导航 */
+.cosmic-shell[data-active-group="home"] .cosmic-subnav { display: none; }
+
+/* 品牌按钮化 */
+.cosmic-brand {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  text-align: left;
+}
+.cosmic-brand:hover .brand-mark { box-shadow: 0 0 18px rgba(106, 180, 255, 0.45); }
+
 /* ── 玻璃化容器：所有用 surface 的卡片加 blur ── */
 .cosmic-shell .section-hero,
 .cosmic-shell .cockpit-panel,
