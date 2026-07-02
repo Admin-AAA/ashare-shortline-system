@@ -1475,8 +1475,8 @@ def _resolve_stop_loss_price(raw_entry_price: float | None, feature_snapshot: di
     """解析止损价，加入归一化逻辑防止过紧的止损。
 
     止损价必须在 [min_stop, max_stop] 范围内：
-    - max_stop = entry * (1 + DEFAULT_STOP_LOSS_PCT/100) = 默认 -4%（最紧）
-    - min_stop = entry * (1 + MIN_STOP_LOSS_PCT/100) = 最小 -8%（最宽）
+    - max_stop = entry * (1 + DEFAULT_STOP_LOSS_PCT/100) = 最紧 -6.5%
+    - min_stop = entry * (1 + MAX_STOP_LOSS_PCT/100) = 最宽 -9%
     """
     raw_stop = _as_float(feature_snapshot.get("stop_loss"))
     if raw_entry_price is None or raw_entry_price <= 0:
@@ -1485,8 +1485,8 @@ def _resolve_stop_loss_price(raw_entry_price: float | None, feature_snapshot: di
     if raw_stop <= 0 or raw_stop >= raw_entry_price:
         return round(max_stop, 2)
     min_stop = raw_entry_price * (1 + MAX_STOP_LOSS_PCT / 100.0)
-    normalized = min(raw_stop, max_stop)   # 不紧于 -4%
-    normalized = max(normalized, min_stop) # 不宽于 -8%
+    normalized = min(raw_stop, max_stop)   # 不紧于 -6.5%
+    normalized = max(normalized, min_stop) # 不宽于 -9%
     return round(normalized, 2)
 
 
