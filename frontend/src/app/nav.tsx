@@ -22,3 +22,40 @@ export const NAV_ITEMS: NavItem[] = [
   { section: "stock-matrix", label: "个股矩阵", subtitle: "全技能分析 / 历史回测 / LLM 审查", icon: <Search size={17} /> },
   { section: "control", label: "控制中心", subtitle: "预设 / 自动任务 / 模型", icon: <Settings2 size={17} /> },
 ];
+
+export type NavGroupKey = "matrix" | "strategy" | "test";
+
+export type NavGroup = {
+  key: NavGroupKey;
+  label: string;
+  hint: string;
+  sections: CockpitSection[];
+};
+
+export const NAV_GROUPS: NavGroup[] = [
+  {
+    key: "matrix",
+    label: "矩阵推荐",
+    hint: "单条 · 全市场",
+    sections: ["stock-matrix", "matrix"],
+  },
+  {
+    key: "strategy",
+    label: "策略",
+    hint: "回测 · 复盘 · 健康 · 解释",
+    sections: ["backtest", "history", "data", "pool"],
+  },
+  {
+    key: "test",
+    label: "测试窗口",
+    hint: "驾驶舱 / 运行 / 验收 / 控制",
+    sections: ["dashboard", "run", "validation", "control"],
+  },
+];
+
+export function groupOfSection(section: CockpitSection): NavGroupKey {
+  for (const g of NAV_GROUPS) {
+    if (g.sections.includes(section)) return g.key;
+  }
+  return "matrix";
+}

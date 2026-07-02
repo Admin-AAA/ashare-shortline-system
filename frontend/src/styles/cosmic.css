@@ -1,0 +1,283 @@
+/* ═══════════════════════════════════════════════════════════════
+   COSMIC THEME — 纵深远眺 · 玻璃质感 · 大留白
+   覆盖 cockpit.css 的 shell 层；组件内部样式沿用半透明 token
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 底色：与场景雾色融合，避免 3D 加载前白屏 ── */
+[data-theme="dark"] body { background: #05070d; }
+[data-theme="light"] body { background: #e8e4dc; }
+
+/* ── 半透明玻璃 token（cosmic-shell 作用域内覆盖 themes.css）── */
+.cosmic-shell {
+  --surface: rgba(14, 21, 27, 0.55);
+  --surface-soft: rgba(19, 29, 37, 0.40);
+  --surface-strong: rgba(23, 35, 44, 0.70);
+  --line: rgba(106, 180, 255, 0.14);
+  --line-strong: rgba(106, 180, 255, 0.30);
+  --shadow-panel: 0 18px 60px rgba(0, 0, 0, 0.40);
+}
+[data-theme="light"] .cosmic-shell {
+  --surface: rgba(255, 255, 255, 0.62);
+  --surface-soft: rgba(245, 242, 235, 0.50);
+  --surface-strong: rgba(230, 237, 241, 0.74);
+  --line: rgba(138, 122, 90, 0.20);
+  --line-strong: rgba(138, 122, 90, 0.36);
+  --shadow-panel: 0 12px 40px rgba(25, 43, 56, 0.10);
+}
+
+/* ── 3D 背景层 ── */
+.starfield-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.starfield-bg canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* ── Shell 容器 ── */
+.cosmic-shell {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  color: var(--ink);
+}
+
+/* ── 顶栏 ── */
+.cosmic-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-5) var(--space-7);
+  background: rgba(8, 12, 20, 0.55);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  border-bottom: 1px solid var(--line);
+}
+[data-theme="light"] .cosmic-topbar { background: rgba(245, 242, 235, 0.65); }
+
+.cosmic-brand { display: flex; align-items: center; gap: var(--space-3); flex-shrink: 0; }
+.cosmic-brand .brand-mark {
+  width: 38px; height: 38px; border-radius: 11px;
+  display: grid; place-items: center;
+  background: linear-gradient(135deg, rgba(106, 180, 255, 0.92), rgba(45, 212, 191, 0.62));
+  color: #05070d; font-weight: 700; font-size: 16px;
+  box-shadow: 0 6px 24px rgba(106, 180, 255, 0.28);
+}
+.cosmic-brand .brand-text { display: flex; flex-direction: column; line-height: 1.25; }
+.cosmic-brand .brand-text strong { font-size: 15px; letter-spacing: 0.02em; }
+.cosmic-brand .brand-text span { font-size: 11px; color: var(--muted); letter-spacing: 0.08em; }
+
+/* ── 主导航（矩阵推荐 / 策略）── */
+.cosmic-mainnav { display: flex; gap: var(--space-2); }
+.cosmic-mainnav button {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all var(--motion-fast);
+  min-width: 128px;
+}
+.cosmic-mainnav button .mainnav-label { font-size: 14px; font-weight: 600; letter-spacing: 0.02em; }
+.cosmic-mainnav button .mainnav-hint { font-size: 10px; letter-spacing: 0.06em; opacity: 0.72; }
+.cosmic-mainnav button:hover { color: var(--ink); background: var(--surface-soft); }
+.cosmic-mainnav button.active {
+  color: var(--ink);
+  background: var(--surface);
+  border-color: var(--line-strong);
+  box-shadow: 0 4px 18px rgba(106, 180, 255, 0.10);
+}
+
+/* ── 操作区 ── */
+.cosmic-actions { display: flex; gap: var(--space-2); margin-left: auto; }
+.cosmic-actions button {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+  color: var(--ink);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--motion-fast);
+}
+.cosmic-actions button:hover { border-color: var(--line-strong); background: var(--surface); }
+.cosmic-actions button.test-trigger.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 4px 18px rgba(45, 212, 191, 0.15);
+}
+.cosmic-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+.cosmic-actions .spin { animation: cosmicSpin 1s linear infinite; }
+@keyframes cosmicSpin { to { transform: rotate(360deg); } }
+
+/* ── 子导航 ── */
+.cosmic-subnav {
+  position: sticky;
+  top: 76px;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+  padding: var(--space-4) var(--space-7);
+  background: rgba(8, 12, 20, 0.38);
+  backdrop-filter: blur(18px) saturate(130%);
+  -webkit-backdrop-filter: blur(18px) saturate(130%);
+  border-bottom: 1px solid var(--line);
+}
+[data-theme="light"] .cosmic-subnav { background: rgba(245, 242, 235, 0.48); }
+.subnav-title { display: flex; flex-direction: column; line-height: 1.35; min-width: 0; }
+.subnav-title strong { font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.78; }
+.subnav-title span { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.subnav-items { display: flex; gap: var(--space-2); flex-shrink: 0; }
+.subnav-items button {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 16px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--motion-fast);
+}
+.subnav-items button:hover { color: var(--ink); background: var(--surface-soft); }
+.subnav-items button.active {
+  color: var(--ink);
+  background: var(--surface);
+  border-color: var(--line-strong);
+}
+
+/* ── 主内容：大留白 + 居中限宽 ── */
+.cosmic-main {
+  flex: 1;
+  padding: var(--space-7) var(--space-8);
+  max-width: 1480px;
+  width: 100%;
+  margin: 0 auto;
+  position: relative;
+  z-index: 1;
+}
+
+/* ── 统一内容卡片：淡玻璃边界，让每页都有容器感 ── */
+.cosmic-content-card {
+  background: rgba(8, 12, 20, 0.18);
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  min-height: calc(100vh - 240px);
+  box-shadow: var(--shadow-panel);
+}
+[data-theme="light"] .cosmic-content-card { background: rgba(255, 255, 255, 0.18); }
+
+/* ── 玻璃化容器：所有用 surface 的卡片加 blur ── */
+.cosmic-shell .section-hero,
+.cosmic-shell .cockpit-panel,
+.cosmic-shell [class*="panel"]:not(button):not(input):not(select):not(textarea),
+.cosmic-shell [class*="card"]:not(button),
+.cosmic-shell [class*="hero"]:not(button) {
+  backdrop-filter: blur(20px) saturate(135%);
+  -webkit-backdrop-filter: blur(20px) saturate(135%);
+}
+
+/* ── 测试抽屉 ── */
+.cosmic-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex;
+  justify-content: flex-end;
+  animation: cosmicFade 200ms ease;
+}
+.cosmic-drawer {
+  width: 384px;
+  max-width: 90vw;
+  height: 100%;
+  background: rgba(10, 15, 22, 0.86);
+  backdrop-filter: blur(28px) saturate(140%);
+  -webkit-backdrop-filter: blur(28px) saturate(140%);
+  border-left: 1px solid var(--line-strong);
+  display: flex;
+  flex-direction: column;
+  animation: cosmicSlide 240ms ease;
+}
+[data-theme="light"] .cosmic-drawer { background: rgba(250, 248, 243, 0.92); }
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-5);
+  border-bottom: 1px solid var(--line);
+}
+.drawer-head strong { font-size: 15px; display: block; }
+.drawer-head span { font-size: 11px; color: var(--muted); }
+.drawer-close {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  color: var(--ink);
+  transition: all var(--motion-fast);
+}
+.drawer-close:hover { background: var(--surface-soft); border-color: var(--line-strong); }
+.drawer-nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  overflow-y: auto;
+}
+.drawer-nav button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  transition: all var(--motion-fast);
+}
+.drawer-nav button:hover { background: var(--surface-soft); border-color: var(--line); }
+.drawer-nav button.active { background: var(--surface); border-color: var(--accent); }
+.drawer-item-text { display: flex; flex-direction: column; line-height: 1.35; }
+.drawer-item-text strong { font-size: 13px; }
+.drawer-item-text span { font-size: 11px; color: var(--muted); }
+
+@keyframes cosmicFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes cosmicSlide { from { transform: translateX(40px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* ── 响应式 ── */
+@media (max-width: 1100px) {
+  .cosmic-main { padding: var(--space-6) var(--space-6); }
+}
+@media (max-width: 880px) {
+  .cosmic-topbar { flex-wrap: wrap; padding: var(--space-4); gap: var(--space-3); }
+  .cosmic-mainnav { order: 3; width: 100%; }
+  .cosmic-mainnav button { flex: 1; min-width: 0; }
+  .cosmic-subnav { top: auto; position: relative; flex-direction: column; align-items: flex-start; }
+  .cosmic-main { padding: var(--space-5) var(--space-4); }
+}
