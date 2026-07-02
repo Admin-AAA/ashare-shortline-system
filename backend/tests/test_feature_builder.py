@@ -177,6 +177,23 @@ def test_dsa_momentum_decay():
     assert features_decay[0]["dsa_signal_score"] < features_no_decay[0]["dsa_signal_score"]
 
 
+def test_pos20_bias_ma5_scoring_rules():
+    """Test that pos20 80-95 and bias_ma5 0-3 rules boost score."""
+    # Stock with pos20=85 (80-95 range) and bias_ma5=2 (0-3 range)
+    item_good = _stock(price=100, dist20=6, pct=2.0, vol5_20=1.0,
+                        pos20=85, bias_ma5=2.0, avg_cost=120)
+    item_good["dsa_profile"] = {"bias_ma5": 2.0, "bias_ma10": 4.0, "bias_ma20": 7.0,
+                                 "ma5": 98, "ma10": 96, "ma20": 93}
+    # Stock with pos20=50 (not in 80-95) and bias_ma5=8 (not in 0-3)
+    item_bad = _stock(price=100, dist20=6, pct=2.0, vol5_20=1.0,
+                       pos20=50, bias_ma5=8.0, avg_cost=120)
+    item_bad["dsa_profile"] = {"bias_ma5": 8.0, "bias_ma10": 5.0, "bias_ma20": 7.0,
+                                "ma5": 92, "ma10": 95, "ma20": 93}
+    features_good = build_features([item_good], _snapshot())
+    features_bad = build_features([item_bad], _snapshot())
+    assert features_good[0]["dsa_signal_score"] > features_bad[0]["dsa_signal_score"]
+
+
 # ---------------------------------------------------------------------------
 # Risk scoring
 # ---------------------------------------------------------------------------
