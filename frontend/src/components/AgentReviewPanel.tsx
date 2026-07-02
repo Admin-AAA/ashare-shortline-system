@@ -1,5 +1,6 @@
 import { memo } from "react";
 import { BrainCircuit, ShieldAlert, TrendingUp, Target, AlertTriangle, CheckCircle, BarChart3 } from "lucide-react";
+import { scoreColor as scoreColorFor } from "../utils/display";
 
 type AgentReview = {
   stance?: string;
@@ -41,7 +42,7 @@ export default memo(function AgentReviewPanel({ review, skillName }: Props) {
   const config = STANCE_CONFIG[stance] ?? STANCE_CONFIG.neutral;
   const score = review.score ?? 50;
   const confidence = (review.confidence ?? 0.5) * 100;
-  const scoreColor = score >= 72 ? "#1a6b4a" : score >= 50 ? "#b8860b" : "#c0392b";
+  const scoreColor = scoreColorFor(score);
   const planCards = [
     review.action ? { label: "动作", value: review.action } : null,
     review.position_range ? { label: "仓位", value: review.position_range } : null,

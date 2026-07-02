@@ -3,6 +3,7 @@ import { Target, AlertTriangle, ChevronDown, ChevronUp, Layers3, BrainCircuit, T
 import type { RecommendationCard, SkillSignal } from "../types";
 import ScoreGauge from "./ScoreGauge";
 import AgentReviewPanel from "./AgentReviewPanel";
+import { scoreColor } from "../utils/display";
 
 type Props = {
   item: RecommendationCard;
@@ -12,23 +13,9 @@ type Props = {
   onDelete: (id: string) => void;
 };
 
-const SCORE_COLORS: Record<string, string> = {
-  "80": "#1a6b4a",
-  "64": "#2d8a56",
-  "50": "#b8860b",
-  "0": "#c0392b",
-};
-
-function scoreBorderColor(score: number): string {
-  if (score >= 80) return SCORE_COLORS["80"];
-  if (score >= 64) return SCORE_COLORS["64"];
-  if (score >= 50) return SCORE_COLORS["50"];
-  return SCORE_COLORS["0"];
-}
-
 export default memo(function EnhancedRecommendationCard({ item, isSelected, onSelect, onWatch, onDelete }: Props) {
   const [expanded, setExpanded] = useState(false);
-  const borderColor = scoreBorderColor(item.final_score);
+  const borderColor = scoreColor(item.final_score);
   const execution = item.execution_viability;
   const showExecution = execution?.status && execution.status !== "tradable";
   const executionTitle = [
@@ -36,6 +23,10 @@ export default memo(function EnhancedRecommendationCard({ item, isSelected, onSe
     execution?.details?.open_times != null ? `开板 ${execution.details.open_times} 次` : null,
     execution?.details?.fd_amount_yi != null ? `封单 ${Number(execution.details.fd_amount_yi).toFixed(2)} 亿` : null,
   ].filter(Boolean).join(" · ");
+  const degraded = !!item.degraded_reason;
+  const degradedTitle = item.degraded_reason
+    ? `本次推荐为降级输出：${item.degraded_reason}。仅按规则预审，缺失语义审查，请结合分数组成与风险标签谨慎复核。`
+    : "";
 
   function handleCardClick(event: MouseEvent<HTMLDivElement>) {
     if ((event.target as HTMLElement).closest("button, a, [data-card-interactive='true']")) {
@@ -62,6 +53,17 @@ export default memo(function EnhancedRecommendationCard({ item, isSelected, onSe
           <span className="erc-name">{item.name}</span>
           {item.industry && item.industry !== "未分类" && (
             <span className="erc-industry">{item.industry}</span>
+          )}
+          {degraded && (
+            <span
+              className="erc-degraded-badge"
+              title={degradedTitle}
+              role="status"
+              aria-label="降级输出"
+            >
+              <AlertTriangle size={11} />
+              降级输出
+            </span>
           )}
         </div>
         <div className="erc-actions" onClick={(e) => e.stopPropagation()}>
@@ -111,14 +113,14 @@ export default memo(function EnhancedRecommendationCard({ item, isSelected, onSe
       {item.risk_tags && item.risk_tags.length > 0 && (
         <div className="erc-risks">
           <AlertTriangle size={12} />
-          {item.risk_tags.slice(0, 3).map((tag: string, i: number) => (
+          {(degraded ? item.risk_tags : item.risk_tags.slice(0, 3)).map((tag: string, i: number) => (
             <span key={i} className="risk-tag">{tag}</span>
           ))}
         </div>
       )}
       {item.info_tags && item.info_tags.length > 0 && (
         <div className="erc-infos">
-          {item.info_tags.slice(0, 2).map((tag: string, i: number) => (
+          {(degraded ? item.info_tags : item.info_tags.slice(0, 2)).map((tag: string, i: number) => (
             <span key={i} className="info-tag">{tag}</span>
           ))}
         </div>

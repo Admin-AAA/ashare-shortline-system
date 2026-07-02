@@ -2,6 +2,8 @@ import type { DashboardOverview, DashboardDataHealth, RunProgress } from "../typ
 
 export type Tone = "positive" | "warning" | "danger" | "neutral";
 
+const API_DISPLAY_TIME_ZONE = "Asia/Shanghai";
+
 const STATUS_LABELS: Record<string, string> = {
   READY: "本地池可推荐",
   CHECK: "数据需检查",
@@ -25,6 +27,7 @@ const STATUS_LABELS: Record<string, string> = {
   stale: "疑似中断，建议恢复或重跑",
   no_data: "暂无样本",
   no_action: "无需处理",
+  partial_completed: "部分完成，需复核",
   already_ready: "已满足门禁",
   partial_failed: "部分失败，可重试缺口",
   healthy: "健康",
@@ -64,6 +67,7 @@ const STATUS_LABELS: Record<string, string> = {
   pool_refresh: "行情池刷新",
   data_backfill: "数据回填",
   recommendation_run: "股票推荐",
+  preset_matrix_run: "预设矩阵",
   manual: "手动触发",
   schedule: "定时触发",
   api: "接口写入",
@@ -124,11 +128,41 @@ export function outcomeStatusLabel(value: unknown, fallback = "-") {
   return businessStatusLabel(value, fallback);
 }
 
+export function parseApiDateTime(value?: string | null) {
+  if (!value) return null;
+  const raw = value.trim();
+  if (!raw) return null;
+  const hasTimezone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(raw);
+  const isNaiveDateTime = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(raw);
+  const normalized = isNaiveDateTime && !hasTimezone ? `${raw.replace(" ", "T")}Z` : raw;
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+export function apiTimestamp(value?: string | null) {
+  return parseApiDateTime(value)?.getTime() ?? 0;
+}
+
+export function formatApiDateTime(
+  value?: string | null,
+  options?: Intl.DateTimeFormatOptions,
+  fallback = "-",
+) {
+  if (!value) return fallback;
+  const parsed = parseApiDateTime(value);
+  if (!parsed) return value;
+  return parsed.toLocaleString("zh-CN", {
+    hour12: false,
+    timeZone: API_DISPLAY_TIME_ZONE,
+    ...options,
+  });
+}
+
 export function statusTone(value: unknown): Tone {
   const key = String(value ?? "").trim().toLowerCase();
   if (["ready", "completed", "healthy", "ok", "normal", "formal"].includes(key)) return "positive";
   if (["failed", "error", "interrupted", "stale", "blocked", "unavailable", "high"].includes(key)) return "danger";
-  if (["warning", "risk", "queued", "running", "experiment", "manual", "schedule", "low", "degraded", "untested"].includes(key)) return "warning";
+  if (["warning", "risk", "queued", "running", "experiment", "manual", "schedule", "low", "degraded", "untested", "partial_completed"].includes(key)) return "warning";
   return "neutral";
 }
 
@@ -161,6 +195,16 @@ export function aShareDownClass() {
   return "market-down";
 }
 
+// 统一的分数配色：全系统唯一入口（替代 4 处分裂的实现）
+// 阈值依据：>=72 强势绿、>=50 中性金、>=30 警告橙、<30 危险红
+// 颜色饱和度低，长时间盯盘不累（A 股交易驾驶舱审美标准）
+export function scoreColor(score: number): string {
+  if (score >= 72) return "#1a6b4a";
+  if (score >= 50) return "#b8860b";
+  if (score >= 30) return "#e67e22";
+  return "#c0392b";
+}
+
 export function candidateEmptyState(data: DashboardOverview) {
   const run = data.current_run;
   const health = data.data_health;
@@ -190,7 +234,7 @@ export function candidateEmptyState(data: DashboardOverview) {
     return {
       title: "还没有完成推荐运行",
       reason: "当前没有可复盘的最新运行。",
-      detail: "先在控制中心触发一次推荐，系统会给出候选或筛空原因。",
+      detail: "先到推荐运行页触发一次推荐，系统会给出候选或筛空原因。",
     };
   }
   if (run.status === "queued" || run.status === "running") {

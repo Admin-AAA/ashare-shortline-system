@@ -1,5 +1,6 @@
 // 纯 SVG 仪表盘，替代 echarts（-400KB bundle）
 // 原 echarts 版消耗约 400KB 打包体积，等效功能用 SVG arc 实现
+import { scoreColor } from "../utils/display";
 
 type Props = {
   score: number;
@@ -12,15 +13,6 @@ type Props = {
 function polarToXY(cx: number, cy: number, r: number, angleDeg: number) {
   const rad = (angleDeg - 90) * (Math.PI / 180);
   return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
-}
-
-function scoreColor(score: number): string {
-  if (score >= 84) return "#145a3c";
-  if (score >= 72) return "#1a6b4a";
-  if (score >= 50) return "#2d8a56";
-  if (score >= 30) return "#b8860b";
-  if (score >= 15) return "#e67e22";
-  return "#c0392b";
 }
 
 export default function ScoreGauge({ score, size = 120, showLabel = true }: Props) {

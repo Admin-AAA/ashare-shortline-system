@@ -14,6 +14,7 @@ import {
   Shield,
 } from "lucide-react";
 import { stockMatrixApi } from "../../api/stockMatrix";
+import { scoreColor } from "../../utils/display";
 import type {
   StockMatrixAnalysisResult,
   StockMatrixBacktestResult,
@@ -30,13 +31,6 @@ const STANCE_CONFIG: Record<string, { label: string; color: string; bg: string }
   oppose: { label: "看空", color: "#dc2626", bg: "#fee2e2" },
   veto: { label: "否决", color: "#991b1b", bg: "#fecaca" },
 };
-
-function scoreColor(score: number): string {
-  if (score >= 70) return "#16a34a";
-  if (score >= 50) return "#ca8a04";
-  if (score >= 30) return "#ea580c";
-  return "#dc2626";
-}
 
 function pct(val: number, digits = 2): string {
   return `${val >= 0 ? "+" : ""}${val.toFixed(digits)}%`;
