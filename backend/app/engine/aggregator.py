@@ -220,8 +220,11 @@ def resolve_score_line_context(
         "震荡": 0.0,
         "弱势": 2.0,
     }.get(market_base, 0.0)
+    # 高潮阶段分数线调整：强牛/偏多·高潮是确定性亏损（历史 45%/33% 胜率，负收益），需大幅提高门槛
+    # 弱势·高潮实际上是反转信号（77.8% 胜率），保持 +5
+    _climax_extra = 8.0 if market_base in ("强牛", "偏多") else 0.0
     sentiment_adjustment = {
-        "高潮": 5.0,
+        "高潮": 5.0 + _climax_extra,
         "活跃": 1.0,
         "平淡": 0.0,
         "冰点": -3.0 if market_base == "弱势" else 0.0,
