@@ -136,6 +136,9 @@ scoring:
     - when: "fundamental_score >= 68"
       delta: 2
       reason: 基本面拖累较小
+    - when: "chip_concentration > 0 and chip_concentration <= 18"
+      delta: 4
+      reason: 筹码分散（低集中度 WR=59.4% vs 高集中度 51.1%，r=-0.008 与 pos20 独立）
     - when: "dsa_bias_score <= 4"
       delta: -8
       reason: 偏离均线过远
