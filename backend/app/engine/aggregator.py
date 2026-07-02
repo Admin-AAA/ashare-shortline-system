@@ -977,26 +977,33 @@ def apply_pool_rules(
 
 _SECTOR_DIVERSITY_PENALTY = {1: 0.0, 2: 5.0}  # 第 N 只同行业股票的分数惩罚
 _SECTOR_DIVERSITY_PENALTY_DEFAULT = 10.0         # 第 3 只起的默认惩罚
+_MAX_PER_INDUSTRY = 3                             # 单一行业最多推荐 3 只（硬性上限）
 
 
 def _apply_sector_diversity(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """板块去重：同行业第二只推荐扣 5 分，第三只起扣 10 分。
+    """板块去重：同行业第二只推荐扣 5 分，第三只起扣 10 分，第四只起硬性剔除。
 
     因果机制：同行业股票高度相关，集中持有没有分散效果。
     跳过未知行业（无 industry 字段的卡片不参与去重）。
     """
     industry_count: dict[str, int] = {}
+    capped: list[dict[str, Any]] = []
     for card in cards:
         industry = str(card.get("industry") or "")
         if not industry or industry == "unknown":
+            capped.append(card)
             continue
         count = industry_count.get(industry, 0) + 1
         industry_count[industry] = count
+        if count > _MAX_PER_INDUSTRY:
+            # 第四只起硬性剔除，避免单一行业过度集中
+            continue
         penalty = _SECTOR_DIVERSITY_PENALTY.get(count, _SECTOR_DIVERSITY_PENALTY_DEFAULT)
         if penalty > 0:
             card["sector_diversity_penalty"] = penalty
             card["final_score"] = round(float(card.get("final_score") or 0) - penalty, 2)
-    return sorted(cards, key=lambda c: float(c.get("final_score", 0)), reverse=True)
+        capped.append(card)
+    return sorted(capped, key=lambda c: float(c.get("final_score", 0)), reverse=True)
 
 
 def _empty(stock: dict[str, Any], reason: str) -> dict[str, Any]:
