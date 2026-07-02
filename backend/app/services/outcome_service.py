@@ -524,6 +524,113 @@ def failure_attribution(db: Session, run_mode: str = "formal") -> dict[str, Any]
     }
 
 
+_ALPHA_DECAY_FACTORS = [
+    "is_main_theme",
+    "breakout60",
+    "capital_resonance_signal",
+    "volume_breakout_signal",
+    "breakout20",
+    "support_ma5",
+    "support_ma10",
+    "is_shortline_leader_candidate",
+    "is_20cm_stock",
+]
+
+
+def alpha_decay_detection(db: Session, run_mode: str = "formal") -> dict[str, Any]:
+    """Alpha 衰减检测：对比近期 vs 早期各因子的 point-biserial 相关系数。
+
+    如果因子的预测力在下降（衰减 > 30%），标记为"衰减中"。
+    第一性原理：市场会学习并套利掉公开因子，alpha 必然衰减。
+    """
+    import math
+
+    stmt = (
+        select(Recommendation, RecommendationOutcome)
+        .join(RecommendationOutcome, RecommendationOutcome.recommendation_id == Recommendation.recommendation_id)
+        .where(
+            RecommendationOutcome.entry_triggered == True,  # noqa: E712
+            RecommendationOutcome.outcome_label.in_([OUTCOME_SUCCESS, OUTCOME_FAILED]),
+        )
+        .order_by(Recommendation.trade_date.asc())
+    )
+    if run_mode:
+        stmt = stmt.join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id).where(
+            RecommendationRun.run_mode == run_mode
+        )
+    rows = db.execute(stmt).all()
+    if len(rows) < 20:
+        return {"factors": [], "error": "insufficient samples", "total": len(rows)}
+
+    mid = len(rows) // 2
+    early_rows = rows[:mid]
+    recent_rows = rows[mid:]
+
+    def _pbr(binary_vals: list[int], ret_vals: list[float]) -> float:
+        g0 = [r for b, r in zip(binary_vals, ret_vals) if b == 0]
+        g1 = [r for b, r in zip(binary_vals, ret_vals) if b == 1]
+        if len(g0) < 5 or len(g1) < 5:
+            return 0.0
+        n = len(binary_vals)
+        n0, n1 = len(g0), len(g1)
+        m0 = sum(g0) / n0
+        m1 = sum(g1) / n1
+        all_r = ret_vals
+        mean = sum(all_r) / n
+        ss = sum((v - mean) ** 2 for v in all_r)
+        sd = math.sqrt(ss / n) if ss > 0 else 0
+        if sd == 0:
+            return 0.0
+        return (m1 - m0) / sd * math.sqrt(n0 * n1 / (n * n))
+
+    def _extract_factor(row_pairs: list, factor: str) -> tuple[list[int], list[float]]:
+        binary, returns = [], []
+        for rec, outcome in row_pairs:
+            snapshot = _loads(getattr(rec, "feature_snapshot_json", None), {})
+            val = snapshot.get(factor)
+            if val is not None:
+                binary.append(1 if val else 0)
+                returns.append(float(getattr(outcome, "executed_return", 0) or 0))
+        return binary, returns
+
+    factors_result = []
+    for factor in _ALPHA_DECAY_FACTORS:
+        eb, er = _extract_factor(early_rows, factor)
+        rb, rr = _extract_factor(recent_rows, factor)
+        r_early = _pbr(eb, er)
+        r_recent = _pbr(rb, rr)
+        delta = r_recent - r_early
+        decay_pct = (delta / abs(r_early) * 100) if abs(r_early) > 0.001 else 0.0
+
+        if abs(r_early) < 0.02 and abs(r_recent) < 0.02:
+            status = "noise"
+        elif decay_pct < -30:
+            status = "decaying"
+        elif decay_pct > 30:
+            status = "improving"
+        else:
+            status = "stable"
+
+        factors_result.append({
+            "factor": factor,
+            "early_r": round(r_early, 4),
+            "recent_r": round(r_recent, 4),
+            "delta": round(delta, 4),
+            "decay_pct": round(decay_pct, 1),
+            "status": status,
+            "early_n": len(eb),
+            "recent_n": len(rb),
+        })
+
+    factors_result.sort(key=lambda x: abs(x["delta"]), reverse=True)
+    return {
+        "total": len(rows),
+        "early_period": f"{early_rows[0][0].trade_date} to {early_rows[-1][0].trade_date}",
+        "recent_period": f"{recent_rows[0][0].trade_date} to {recent_rows[-1][0].trade_date}",
+        "factors": factors_result,
+    }
+
+
 def precision_at_k(
     db: Session,
     run_mode: str = "formal",
