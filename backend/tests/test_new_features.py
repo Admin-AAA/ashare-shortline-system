@@ -382,3 +382,29 @@ def test_news_sources_enabled_by_default():
 
     s = Settings()
     assert s.news_sources == "tushare,eastmoney"
+
+
+def test_filter_effectiveness_returns_structure(db):
+    """filter_effectiveness 应返回正确的结构：count/filtered_count/kept/filters。"""
+    from app.services.outcome_service import filter_effectiveness
+
+    result = filter_effectiveness(db, run_mode="formal")
+    # 无数据时应返回 error 或正确结构
+    if "error" in result:
+        assert result["count"] == 0
+        return
+    assert "count" in result
+    assert "filtered_count" in result
+    assert "filter_rate_pct" in result
+    assert "kept" in result
+    assert "filtered_by_rule" in result
+    # kept 结构验证
+    assert "count" in result["kept"]
+    assert "net_win_rate" in result["kept"]
+    assert "net_avg_return" in result["kept"]
+    assert "net_profit_factor" in result["kept"]
+    # filtered_by_rule 结构验证
+    for rule_name, rule_data in result["filtered_by_rule"].items():
+        assert "count" in rule_data
+        assert "win_rate" in rule_data
+        assert "avg_return" in rule_data
