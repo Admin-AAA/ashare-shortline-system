@@ -126,7 +126,7 @@ def test_dsa_volume_score_surge_up():
 
 def test_dsa_macd_score_golden_cross():
     item = _stock(price=100, breakout20=True, chg20=15, pct=2.0)
-    item["dsa_profile"] = {}
+    item["dsa_profile"] = {"macd_status": "零轴上金叉", "macd_dif": 0.5, "macd_dea": 0.3, "macd_bar": 0.4}
     features = build_features([item], _snapshot())
     stock = features[0]
     assert stock["macd_status"] == "零轴上金叉"

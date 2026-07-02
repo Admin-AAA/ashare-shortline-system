@@ -160,7 +160,7 @@ def _apply_dsa_context(item: dict[str, Any], profile: dict[str, Any], dsa_weight
     item["avg_down_day_volume"] = _num(profile.get("avg_down_day_volume"), round(_num(item.get("amount_yi")) * 0.39, 2))
     item["high_volume_days"] = int(_num(profile.get("high_volume_days"), 1 if volume_ratio_20d > 1.5 else 0))
     item["volume_price_corr"] = _num(profile.get("volume_price_corr"), 0.35 if _num(item.get("pct")) > 0 else -0.15)
-    item["volume_pattern"] = str(profile.get("volume_pattern") or _volume_pattern(item))
+    item["volume_pattern"] = str(profile.get("volume_pattern", "中性"))
 
     support_ma5 = _bool(profile.get("support_ma5"), abs(item["bias_ma5"]) <= 2 and price >= ma5)
     support_ma10 = _bool(profile.get("support_ma10"), abs(item["bias_ma10"]) <= 2.5 and price >= ma10)
@@ -173,22 +173,22 @@ def _apply_dsa_context(item: dict[str, Any], profile: dict[str, Any], dsa_weight
     nearest_resistance = min([_num(v) for v in item["resistance_levels"] if _num(v) > price] or [price])
     item["resistance_distance_pct"] = round((nearest_resistance - price) / price * 100, 2) if price else 0.0
 
-    macd_status = str(profile.get("macd_status") or _macd_status(item))
-    macd_dif = _num(profile.get("macd_dif"), round(_num(item.get("chg20")) / 20, 4))
-    macd_dea = _num(profile.get("macd_dea"), round(macd_dif * 0.82, 4))
-    macd_bar = _num(profile.get("macd_bar"), round((macd_dif - macd_dea) * 2, 4))
+    macd_status = str(profile.get("macd_status", "未知"))
+    macd_dif = _num(profile.get("macd_dif"))
+    macd_dea = _num(profile.get("macd_dea"))
+    macd_bar = _num(profile.get("macd_bar"))
     item["macd_status"] = macd_status
     item["macd_dif"] = macd_dif
     item["macd_dea"] = macd_dea
     item["macd_bar"] = macd_bar
-    item["macd_signal"] = str(profile.get("macd_signal") or _macd_signal(macd_status))
+    item["macd_signal"] = str(profile.get("macd_signal", ""))
 
-    rsi_12 = _num(profile.get("rsi_12"), _estimate_rsi(item))
+    rsi_12 = _num(profile.get("rsi_12"), 50.0)
     item["rsi_6"] = _num(profile.get("rsi_6"), min(95, max(8, rsi_12 + 4)))
     item["rsi_12"] = rsi_12
     item["rsi_24"] = _num(profile.get("rsi_24"), min(90, max(12, rsi_12 - 3)))
-    item["rsi_status"] = str(profile.get("rsi_status") or _rsi_status(rsi_12))
-    item["rsi_signal"] = str(profile.get("rsi_signal") or _rsi_signal(item["rsi_status"]))
+    item["rsi_status"] = str(profile.get("rsi_status", "未知"))
+    item["rsi_signal"] = str(profile.get("rsi_signal", ""))
 
     _apply_context_blocks(item, profile)
     _apply_dsa_scores(item, dsa_weights)
@@ -360,71 +360,6 @@ def _volume_state(volume_ratio: float, pct: float) -> tuple[str, str]:
             return "缩量上涨", "缩量上涨，上攻动能不足"
         return "缩量回调", "缩量回调，洗盘特征较好"
     return "量能正常", "量能正常"
-
-
-def _volume_pattern(item: dict[str, Any]) -> str:
-    up_vol = _num(item.get("avg_up_day_volume"))
-    down_vol = _num(item.get("avg_down_day_volume"))
-    if up_vol > down_vol * 1.3:
-        return "量价配合良好"
-    if down_vol > up_vol * 1.3:
-        return "量价背离"
-    if _num(item.get("volume_ratio_5d")) > 1.5:
-        return "近期明显放量"
-    if _num(item.get("volume_ratio_5d")) < 0.7:
-        return "近期明显缩量"
-    return "量价关系中性"
-
-
-def _macd_status(item: dict[str, Any]) -> str:
-    if bool(item.get("breakout20")) and _num(item.get("chg20")) > 12 and _num(item.get("pct")) > 0:
-        return "零轴上金叉"
-    if _num(item.get("chg20")) > 8 and _num(item.get("eff20")) > 0.45:
-        return "多头"
-    if _num(item.get("chg20")) > 0:
-        return "金叉"
-    if _num(item.get("chg20")) < -5:
-        return "空头"
-    return "下穿零轴" if _num(item.get("pct")) < 0 else "上穿零轴"
-
-
-def _macd_signal(status: str) -> str:
-    return {
-        "零轴上金叉": "零轴上金叉，趋势确认较强",
-        "金叉": "金叉，趋势向上",
-        "上穿零轴": "DIF 上穿零轴，趋势转强",
-        "多头": "MACD 多头区域",
-        "空头": "MACD 空头区域",
-        "下穿零轴": "DIF 下穿零轴，趋势转弱",
-        "死叉": "死叉，趋势向下",
-    }.get(status, "MACD 中性")
-
-
-def _estimate_rsi(item: dict[str, Any]) -> float:
-    base = 50 + _num(item.get("chg20")) * 0.45 + (_num(item.get("pos20")) - 50) * 0.18
-    return round(min(86, max(18, base)), 2)
-
-
-def _rsi_status(rsi: float) -> str:
-    if rsi > 70:
-        return "超买"
-    if rsi >= 50:
-        return "强势买入"
-    if rsi >= 40:
-        return "中性"
-    if rsi >= 30:
-        return "弱势"
-    return "超卖"
-
-
-def _rsi_signal(status: str) -> str:
-    return {
-        "超买": "RSI 超买，追高胜率下降",
-        "强势买入": "RSI 处于强势区但未过热",
-        "中性": "RSI 中性",
-        "弱势": "RSI 偏弱",
-        "超卖": "RSI 超卖，关注修复但需趋势确认",
-    }.get(status, "RSI 中性")
 
 
 def _bias_score(bias_ma5: float) -> int:
