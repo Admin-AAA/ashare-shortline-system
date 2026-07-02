@@ -507,6 +507,31 @@ def failure_attribution(db: Session, run_mode: str = "formal") -> dict[str, Any]
     sl_would_have_won = sum(1 for o, _ in sl_trades if _as_float(o.close_return) > 0)
     sl_total = len(sl_trades)
 
+    # Industry risk: which industries have systematically poor performance?
+    industry_data: dict[str, dict[str, Any]] = {}
+    for outcome, rec in rows:
+        snapshot = _loads(getattr(rec, "feature_snapshot_json", None), {})
+        industry = str(snapshot.get("industry") or "unknown")
+        bucket = industry_data.setdefault(industry, {"n": 0, "wins": 0, "total_return": 0.0})
+        bucket["n"] += 1
+        bucket["total_return"] += float(outcome.executed_return or 0)
+        if str(outcome.outcome_label) == "success":
+            bucket["wins"] += 1
+
+    industry_risk = []
+    for ind, d in sorted(industry_data.items(), key=lambda x: x[1]["n"], reverse=True):
+        if d["n"] < 5:
+            continue
+        win_rate = round(d["wins"] / d["n"] * 100, 1)
+        avg_ret = round(d["total_return"] / d["n"], 2)
+        industry_risk.append({
+            "industry": ind,
+            "count": d["n"],
+            "win_rate": win_rate,
+            "avg_return": avg_ret,
+            "risk_level": "high" if win_rate < 50 else ("medium" if win_rate < 58 else "low"),
+        })
+
     return {
         "total_executed": len(rows),
         "failure_modes": failure_modes,
@@ -521,6 +546,7 @@ def failure_attribution(db: Session, run_mode: str = "formal") -> dict[str, Any]
             "would_have_won_if_held": sl_would_have_won,
             "stop_loss_saved_ratio": round((sl_total - sl_would_have_won) / sl_total * 100, 1) if sl_total else 0,
         },
+        "industry_risk": industry_risk,
     }
 
 
