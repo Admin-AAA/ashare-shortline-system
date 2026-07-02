@@ -46,6 +46,10 @@ prefilter:
     include_any:
       - when: "breakout20 == 1"
         reason: "requires_breakout_or_support"
+      - when: "support_ma5 == true"
+        reason: "requires_breakout_or_support"
+      - when: "support_ma10 == true"
+        reason: "requires_breakout_or_support"
       - when: "off_high_pct >= -10 and pct >= -2"
         reason: "requires_tradeable_position"
     exclude:
@@ -76,14 +80,14 @@ phases:
 
 setups:
   - name: 缩量回踩
-    when: "volume_shrink_pullback == true and bias_ma5 >= -5 and bias_ma5 <= 1 and dsa_signal_score >= 68"
-    score_delta: 4  # alpha decay: support_ma5/10 反转为负相关，改用 bias_ma5 区间
-    entry_rule: "缩量回踩 MA5 附近止跌后再确认承接"
+    when: "volume_shrink_pullback == true and (support_ma5 == true or support_ma10 == true) and dsa_signal_score >= 68"
+    score_delta: 6
+    entry_rule: "缩量回踩 MA5/MA10 附近止跌后再确认承接"
     invalid_rule: "跌破均线支撑且收不回"
 
   - name: 放量突破
     when: "volume_breakout_signal == true and resistance_distance_pct <= 2.5 and dsa_signal_score >= 65"
-    score_delta: 0  # alpha decay: volume_breakout_signal 反转为负相关(r=-0.17)，归零
+    score_delta: 2  # alpha decay: volume_breakout_signal reduced from 5
     entry_rule: "放量突破近端压力位后跟随"
     invalid_rule: "突破失败，重新跌回压力位下方"
 
