@@ -10,6 +10,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.core.config import get_settings
+from app.services.outcome_service import DEFAULT_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT
 
 
 class MarketDataError(RuntimeError):
@@ -35,12 +36,36 @@ def get_market_universe() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     stocks: list[dict[str, Any]] = []
     kline_errors: dict[str, list[str]] = {}
     kline_usage: Counter[str] = Counter()
+
+    # 优先从本地 daily_kbars 批量加载K线（避免逐股票 Tushare 调用导致 10+ 分钟延迟）
+    candidate_codes = [q["code"] for q in candidates[: recall_plan["scan_target_count"]]]
+    cached_bars_map: dict[str, list[dict[str, Any]]] = {}
+    try:
+        from app.db.session import SessionLocal
+        from app.services.market_pool import _load_cached_bars_batch
+        db = SessionLocal()
+        try:
+            cached_bars_map = _load_cached_bars_batch(db, candidate_codes, settings.market_kline_days)
+        finally:
+            db.close()
+    except Exception:
+        pass
+
     for quote in candidates:
         if len(stocks) >= recall_plan["scan_target_count"]:
             break
+        code = str(quote["code"])
+        # 使用本地缓存的K线
+        cached = cached_bars_map.get(code, [])
+        if cached and len(cached) >= 30:
+            stock = _build_stock_from_bars(quote, cached, quote_source=quote_source, kline_source="local_pool")
+            stocks.append(stock)
+            kline_usage["local_pool"] += 1
+            continue
+        # 缓存不足时回退到 Tushare 逐股票拉取
         bars, source, errors = _fetch_first_kline(quote, kline_sources, settings)
         if not bars:
-            kline_errors[quote["code"]] = errors
+            kline_errors[code] = errors
             continue
         stock = _build_stock_from_bars(quote, bars, quote_source=quote_source, kline_source=source)
         stocks.append(stock)
@@ -246,13 +271,14 @@ def _fetch_first_kline(
     settings: Any,
     disabled_sources: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], str, list[str]]:
+    """获取单只股票的日K线（local-pool 优先，Tushare 兜底）。"""
     errors: list[str] = []
     try:
         bars = _fetch_kline("tushare", quote, settings)
         if len(bars) >= 30:
             return bars, "tushare", errors
         errors.append("tushare: 日K不足30条")
-    except Exception as exc:  # noqa: BLE001 - returned to the local operator as run evidence
+    except Exception as exc:
         errors.append(f"tushare: {exc}")
     return [], "", errors
 
@@ -353,7 +379,7 @@ def _fetch_stock_basics(pro: Any, settings: Any) -> list[dict[str, Any]]:
     return stocks
 
 
-def _recent_open_trade_dates(settings: Any) -> list[str]:
+def _recent_open_trade_dates(settings: Any, *, allow_current_session: bool = False) -> list[str]:
     from app.services.tushare_client import get_pro
 
     pro = get_pro()
@@ -370,7 +396,9 @@ def _recent_open_trade_dates(settings: Any) -> list[str]:
     )
     if cal is None or cal.empty:
         raise MarketDataError("Tushare 未返回交易日历。")
-    latest_allowed = _latest_allowed_bar_date().replace("-", "")
+    latest_allowed = (
+        _latest_allowed_quote_date() if allow_current_session else _latest_allowed_bar_date()
+    ).replace("-", "")
     return [
         str(value)
         for value in cal.sort_values("cal_date")["cal_date"].astype(str).tolist()
@@ -461,6 +489,101 @@ def _load_tushare_daily_basic_map(pro: Any, settings: Any, trade_date: str) -> d
         return {}
 
 
+def _fetch_tushare_realtime_frame(ts_codes: list[str], settings: Any):
+    import tushare as ts
+
+    _throttle_tushare(settings)
+    return ts.realtime_quote(ts_code=",".join(ts_codes))
+
+
+def _fetch_tushare_realtime_quotes(
+    stock_basics: list[dict[str, Any]],
+    pro: Any,
+    settings: Any,
+    closed_trade_date: str,
+) -> list[dict[str, Any]]:
+    ts_codes = [
+        f"{code}.{_exchange_from_code(code)}"
+        for code in (_normalize_code(str(row.get("symbol") or "")) for row in stock_basics)
+        if code
+    ]
+    if not ts_codes:
+        return []
+
+    realtime_map: dict[str, dict[str, Any]] = {}
+    chunk_size = 800
+    for start in range(0, len(ts_codes), chunk_size):
+        frame = _fetch_tushare_realtime_frame(ts_codes[start:start + chunk_size], settings)
+        if frame is None or frame.empty:
+            continue
+        for _, row in frame.iterrows():
+            item = dict(row)
+            code = _normalize_code(str(_row_value(item, "TS_CODE", "ts_code", "code") or "").split(".")[0])
+            if code:
+                realtime_map[code] = item
+
+    if not realtime_map:
+        return []
+
+    daily_basic_map = _load_tushare_daily_basic_map(pro, settings, closed_trade_date.replace("-", ""))
+    quotes: list[dict[str, Any]] = []
+    for stock in stock_basics:
+        symbol = _normalize_code(str(stock.get("symbol") or ""))
+        if not symbol:
+            continue
+        quote_row = realtime_map.get(symbol)
+        if not quote_row:
+            continue
+        basic_row = daily_basic_map.get(symbol, {})
+        trade_date = _format_yyyymmdd(_row_value(quote_row, "DATE", "date"))
+        price = _num(_row_value(quote_row, "PRICE", "price"))
+        preclose = _num(_row_value(quote_row, "PRE_CLOSE", "pre_close", "preclose"))
+        amount_yi = _num(_row_value(quote_row, "AMOUNT", "amount")) / 100000000
+        free_mv_yi = _market_value_yi(None, fallback=basic_row.get("circ_mv"))
+        total_mv_yi = _market_value_yi(None, fallback=basic_row.get("total_mv"))
+        turnover_rate = round(amount_yi / free_mv_yi * 100, 4) if free_mv_yi > 0 else _num(basic_row.get("turnover_rate"))
+        pct = round((price - preclose) / preclose * 100, 4) if price > 0 and preclose > 0 else 0.0
+        quotes.append(
+            _quote(
+                code=symbol,
+                name=str(stock.get("name") or _row_value(quote_row, "NAME", "name") or symbol).strip() or symbol,
+                trade_date=trade_date,
+                price=price,
+                pct=pct,
+                volume=_num(_row_value(quote_row, "VOLUME", "volume", "volumn")),
+                amount_yi=amount_yi,
+                turnover_rate=turnover_rate,
+                pe_ttm=_num(basic_row.get("pe_ttm")),
+                total_mv_yi=total_mv_yi,
+                free_mv_yi=free_mv_yi,
+                high=_num(_row_value(quote_row, "HIGH", "high")),
+                low=_num(_row_value(quote_row, "LOW", "low")),
+                open=_num(_row_value(quote_row, "OPEN", "open")),
+                preclose=preclose,
+                chg60=0.0,
+                ytd_chg=0.0,
+                main_net_inflow_yi=0.0,
+                industry=str(stock.get("industry") or "未分类").strip() or "未分类",
+                is_st=bool(stock.get("is_st")),
+                source="tushare",
+            )
+        )
+    return [quote for quote in quotes if quote.get("price", 0) > 0 and quote.get("trade_date")]
+
+
+def _row_value(row: dict[str, Any], *names: str) -> Any:
+    for name in names:
+        if name in row:
+            return row.get(name)
+    return None
+
+
+def _quote_list_is_complete(quotes: list[dict[str, Any]], stock_count: int) -> tuple[bool, int, int]:
+    tradeable_count = sum(1 for quote in quotes if _candidate_exclusion_reason(quote) is None)
+    min_tradeable_count = _min_complete_batch_quote_count(stock_count)
+    return tradeable_count >= min_tradeable_count, tradeable_count, min_tradeable_count
+
+
 
 
 
@@ -468,7 +591,7 @@ def _load_tushare_daily_basic_map(pro: Any, settings: Any, trade_date: str) -> d
 
 
 def _fetch_tushare_quotes(settings: Any) -> list[dict[str, Any]]:
-    """使用 Tushare 获取 A 股行情快照，优先按交易日批量拉取。"""
+    """使用 Tushare 获取 A 股行情快照，盘中优先实时行情，收盘后回退日线批量。"""
     from app.services.tushare_client import get_pro
 
     pro = get_pro()
@@ -477,11 +600,40 @@ def _fetch_tushare_quotes(settings: Any) -> list[dict[str, Any]]:
     if not stock_basics:
         raise MarketDataError("本地 stocks 表与 Tushare stock_basic 都不可用，无法构建行情池。")
 
-    # 先批量拉全市场行情，避免逐股票高频调用触发限速。
+    recent_trade_dates = _recent_open_trade_dates(settings, allow_current_session=True)
+    latest_open_trade_date = recent_trade_dates[-1] if recent_trade_dates else ""
+    latest_quote_trade_date = _latest_allowed_quote_date().replace("-", "")
+    latest_closed_trade_date = _latest_allowed_bar_date().replace("-", "")
+    realtime_error = ""
+    if latest_open_trade_date and latest_open_trade_date == latest_quote_trade_date:
+        realtime_basic_trade_date = (
+            recent_trade_dates[-2]
+            if len(recent_trade_dates) >= 2
+            else latest_closed_trade_date
+        )
+        try:
+            realtime_quotes = _fetch_tushare_realtime_quotes(
+                stock_basics,
+                pro,
+                settings,
+                _format_yyyymmdd(realtime_basic_trade_date),
+            )
+            realtime_trade_date = _latest_trade_date_from_quotes(realtime_quotes).replace("-", "")
+            is_complete, tradeable_count, min_tradeable_count = _quote_list_is_complete(realtime_quotes, len(stock_basics))
+            if realtime_trade_date == latest_open_trade_date and is_complete:
+                return realtime_quotes[: getattr(settings, "market_scan_size", len(realtime_quotes))]
+            realtime_error = (
+                f"realtime_quote:{latest_open_trade_date}: incomplete snapshot "
+                f"({tradeable_count}/{min_tradeable_count} tradeable, latest={realtime_trade_date or 'none'})"
+            )
+        except Exception as exc:  # noqa: BLE001 - fallback to daily batch with evidence
+            realtime_error = f"realtime_quote:{latest_open_trade_date}: {exc}"
+
+    # 再批量拉全市场日线行情，避免逐股票高频调用触发限速。
     batch_quotes = None
     selected_trade_date = ""
     selected_daily_basic_map: dict[str, dict[str, Any]] | None = None
-    batch_quote_errors: list[str] = []
+    batch_quote_errors: list[str] = [realtime_error] if realtime_error else []
     recent_trade_dates = _recent_open_trade_dates(settings)
     for trade_date in reversed(recent_trade_dates[-5:]):
         for api_name in ("bak_daily", "daily"):
@@ -939,21 +1091,37 @@ def _build_stock_from_bars(
 
     # RSI — prefer cached
     rsi12 = latest_indicator.get("rsi_12") if latest_indicator.get("rsi_12") is not None else _rsi(closes, 12)
+    rsi6 = latest_indicator.get("rsi_6") if latest_indicator.get("rsi_6") is not None else _rsi(closes, 6)
+    rsi24 = latest_indicator.get("rsi_24") if latest_indicator.get("rsi_24") is not None else _rsi(closes, 24)
 
     # MACD — prefer cached
     cached_dif = latest_indicator.get("macd_dif")
     cached_dea = latest_indicator.get("macd_dea")
     if cached_dif is not None and cached_dea is not None:
-        if cached_dif > 0 and cached_dif > cached_dea:
+        macd_dif_val = float(cached_dif)
+        macd_dea_val = float(cached_dea)
+        macd_bar_val = round((macd_dif_val - macd_dea_val) * 2, 4)
+        if macd_dif_val > 0 and macd_dif_val > macd_dea_val:
             macd_status = "零轴上金叉"
-        elif cached_dif > cached_dea:
+        elif macd_dif_val > macd_dea_val:
             macd_status = "金叉"
-        elif cached_dif < 0 and cached_dif < cached_dea:
+        elif macd_dif_val < 0 and macd_dif_val < macd_dea_val:
             macd_status = "空头"
         else:
-            macd_status = "多头" if cached_dif > 0 else "下穿零轴"
+            macd_status = "多头" if macd_dif_val > 0 else "下穿零轴"
     else:
-        macd_status = _macd_status(closes)
+        dif, dea = _macd(closes)
+        macd_dif_val = round(dif, 4)
+        macd_dea_val = round(dea, 4)
+        macd_bar_val = round((macd_dif_val - macd_dea_val) * 2, 4)
+        if macd_dif_val > 0 and macd_dif_val > macd_dea_val:
+            macd_status = "零轴上金叉"
+        elif macd_dif_val > macd_dea_val:
+            macd_status = "金叉"
+        elif macd_dif_val < 0 and macd_dif_val < macd_dea_val:
+            macd_status = "空头"
+        else:
+            macd_status = "多头" if macd_dif_val > 0 else "下穿零轴"
 
     # Breakout — prefer cached
     breakout20 = latest_indicator.get("breakout20")
@@ -1041,14 +1209,34 @@ def _build_stock_from_bars(
             "support_ma5": support_ma5,
             "support_ma10": support_ma10,
             "macd_status": macd_status,
+            "macd_dif": macd_dif_val,
+            "macd_dea": macd_dea_val,
+            "macd_bar": macd_bar_val,
+            "rsi_6": rsi6,
             "rsi_12": rsi12,
+            "rsi_24": rsi24,
             "main_net_inflow_yi": _num(quote.get("main_net_inflow_yi")),
             "inflow_5d_yi": _num(quote.get("main_net_inflow_yi")),
             "inflow_10d_yi": _num(quote.get("main_net_inflow_yi")),
             "sector_fund_rank": 99,
-            "profit_ratio": 50,
-            "concentration_90": 18,
-            "chip_health": "未接入真实筹码分布，按中性处理",
+            # 筹码数据：从 daily_kbars 获取真实 Tushare 筹码分布，缺失时用中性估算
+            "profit_ratio": _num(latest.get("chip_winner_rate"), 50),
+            "avg_cost": _num(latest.get("chip_weight_avg"), round(price * 0.94, 2)),
+            "cost_90_low": _num(latest.get("chip_cost_15"), round(price * 0.92, 2)),
+            "cost_90_high": _num(latest.get("chip_cost_85"), round(price * 1.08, 2)),
+            "cost_70_low": _num(latest.get("chip_cost_15"), round(price * 0.96, 2)),
+            "cost_70_high": _num(latest.get("chip_cost_85"), round(price * 1.04, 2)),
+            "concentration_90": _num(
+                round((_num(latest.get("chip_cost_85")) - _num(latest.get("chip_cost_15"))) / price * 100, 1)
+                if latest.get("chip_cost_85") and latest.get("chip_cost_15") else None,
+                18,
+            ),
+            "concentration_70": _num(
+                round((_num(latest.get("chip_cost_85")) - _num(latest.get("chip_cost_15"))) / price * 70, 1)
+                if latest.get("chip_cost_85") and latest.get("chip_cost_15") else None,
+                12,
+            ),
+            "chip_health": "真实筹码分布" if latest.get("chip_weight_avg") else "未接入真实筹码分布，按中性处理",
             "pe_ttm": _num(quote.get("pe_ttm")),
             "positive_catalysts": [],
             "risk_alerts": [],
@@ -1057,6 +1245,12 @@ def _build_stock_from_bars(
             "volume_shrink_pullback": vol5_20 <= 0.85 and (support_ma5 or support_ma10) and quote.get("pct", 0) <= 1,
             "volume_breakout_signal": vol5_20 >= 1.15 and price >= previous_high20 * 0.995 and quote.get("pct", 0) > 0,
         },
+        # ── 顶层交易字段：供 feature_snapshot / outcome_service 直接读取 ──
+        "ideal_buy": round(max(ma10, ma20, price * 0.985), 2),
+        "secondary_buy": round(max(ma20, price * 0.97), 2),
+        "buy_signal": "持有" if support_ma5 else "观望",
+        "stop_loss": round(max(ma20 * 0.95, price * (1 + DEFAULT_STOP_LOSS_PCT / 100.0)), 2),
+        "take_profit": round(price * (1 + DEFAULT_TAKE_PROFIT_PCT / 100.0), 2),
     }
     return stock
 
@@ -1317,6 +1511,15 @@ def _latest_allowed_bar_date(today: date | None = None) -> str:
     return today.isoformat()
 
 
+def _latest_allowed_quote_date(today: date | None = None) -> str:
+    today = today or datetime.now().date()
+    if today.weekday() == 5:
+        return (today - timedelta(days=1)).isoformat()
+    if today.weekday() == 6:
+        return (today - timedelta(days=2)).isoformat()
+    return today.isoformat()
+
+
 def _previous_weekday(day: date) -> date:
     current = day - timedelta(days=1)
     while current.weekday() >= 5:
@@ -1424,14 +1627,24 @@ def _macd_status(values: list[float]) -> str:
 
 
 def _macd(values: list[float]) -> tuple[float, float]:
-    ema12 = _ema(values, 12)
-    ema26 = _ema(values, 26)
+    if len(values) < 26:
+        ema12 = _ema(values, 12)
+        ema26 = _ema(values, 26)
+        return ema12 - ema26, 0.0
+    alpha12 = 2 / 13
+    alpha26 = 2 / 27
+    alpha9 = 2 / 10
+    ema12 = values[0]
+    ema26 = values[0]
     dif_series: list[float] = []
-    for index in range(len(values)):
-        subset = values[: index + 1]
-        dif_series.append(_ema(subset, 12) - _ema(subset, 26))
-    dif = ema12 - ema26
-    dea = _ema(dif_series, 9)
+    for value in values:
+        ema12 = alpha12 * value + (1 - alpha12) * ema12
+        ema26 = alpha26 * value + (1 - alpha26) * ema26
+        dif_series.append(ema12 - ema26)
+    dif = dif_series[-1]
+    dea = dif_series[0]
+    for d in dif_series[1:]:
+        dea = alpha9 * d + (1 - alpha9) * dea
     return dif, dea
 
 
