@@ -1755,3 +1755,21 @@ export type StockMatrixBacktestResult = {
   elapsed_ms: number;
   message?: string;
 };
+
+// 三规则过滤效果监控
+export type FilterEffectiveness = {
+  count: number;
+  filtered_count: number;
+  filter_rate_pct: number;
+  kept: {
+    count: number;
+    net_win_rate: number;
+    net_avg_return: number;
+    net_profit_factor: number;
+  };
+  filtered_by_rule: Record<string, {
+    count: number;
+    win_rate: number;
+    avg_return: number;
+  }>;
+};

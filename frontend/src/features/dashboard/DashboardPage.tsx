@@ -1,4 +1,4 @@
-import { Loader2 } from "lucide-react";
+import { AlertTriangle, BarChart3, DatabaseZap, History, Loader2, Play, RefreshCcw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import BacktestPanel from "../../components/BacktestPanel";
 import BacktestEvaluationPanel from "./components/BacktestEvaluationPanel";
@@ -8,6 +8,7 @@ import DragonCandidatesPanel from "./components/DragonCandidatesPanel";
 import EvaluationBreakdownPanel from "./components/EvaluationBreakdownPanel";
 import MarketTemperaturePanel from "./components/MarketTemperaturePanel";
 import MetricsPanel from "./components/MetricsPanel";
+import FilterEffectivenessPanel from "./components/FilterEffectivenessPanel";
 import QualityScorecardPanel from "./components/QualityScorecardPanel";
 import RiskRadarPanel from "./components/RiskRadarPanel";
 import RunStatusPanel from "./components/RunStatusPanel";
@@ -30,15 +31,22 @@ import {
 } from "../../utils/display";
 import type {
   CockpitRecommendation,
+  DashboardDataHealthExample,
   DashboardOverview,
+  DashboardDataHealth,
   MetricsOverview,
   RecommendationDetail,
   ReplayAnalysisResult,
   ReplayAnalysisRow,
-  DashboardDataHealthExample,
+  Preset,
+  RunDetail,
+  RunSummary,
 } from "../../types";
 
-type DashboardSection = Exclude<CockpitSection, "control">;
+type ManualRunDataSource = "local_pool" | "local_pool_preferred" | "realtime";
+const DEFAULT_RECOMMENDATION_DATA_SOURCE: ManualRunDataSource = "local_pool_preferred";
+
+type DashboardSection = Exclude<CockpitSection, "control" | "matrix">;
 
 export default function DashboardPage({ section, refreshSignal = 0 }: { section: DashboardSection; refreshSignal?: number }) {
   const { data, loading, error, refresh } = useDashboardViewModel(refreshSignal);
@@ -89,24 +97,67 @@ export default function DashboardPage({ section, refreshSignal = 0 }: { section:
   if (section === "pool") return <CandidateWorkspace data={data} />;
   if (section === "data") return <DataWorkspace data={data} />;
   if (section === "history") return <ReviewWorkspace data={data} />;
+  if (section === "backtest") return <BacktestWorkspace />;
   if (section === "validation") return <ValidationWorkspace data={data} />;
 
   return (
     <div className="dashboard-grid">
+      <DataHealthBanner dataHealth={data.data_health} />
       <div className="dashboard-column">
         <MarketTemperaturePanel market={data.market} />
         <QualityScorecardPanel scorecard={data.quality_scorecard} />
+        <FilterEffectivenessPanel />
         <RiskRadarPanel radar={data.risk_radar} />
       </div>
       <div className="dashboard-column">
         <MetricsPanel metrics={metrics ?? ({} as MetricsOverview)} loading={metricsLoading} />
-        <RunStatusPanel run={data.current_run} />
+        <RunStatusPanel run={data.current_run} mode="control" />
       </div>
       <div className="dashboard-column">
         <DragonCandidatesPanel items={data.recommendations} emptyState={candidateEmptyState(data)} />
         <DataHealthPanel dataHealth={data.data_health} taskHealth={data.task_health} />
         <ValidationPanel validation={data.validation} />
       </div>
+    </div>
+  );
+}
+
+function DataHealthBanner({ dataHealth }: { dataHealth: DashboardDataHealth }) {
+  const canRun = !!dataHealth.can_run_local_recommendation;
+  const status = String(dataHealth.status ?? "").toLowerCase();
+  // healthy/ok 且可运行 → 不显示；其余状态在顶部提示用户本次推荐可能受影响
+  if (canRun && (status === "healthy" || status === "ok")) return null;
+  const note = readinessCopy(dataHealth.can_run_local_recommendation, dataHealth.status).note;
+  const blocked = !canRun && status === "blocked";
+  return (
+    <div
+      className={`control-banner ${blocked ? "danger" : "warning"}`}
+      role="status"
+      aria-live="polite"
+      style={{ gridColumn: "1 / -1" }}
+    >
+      <AlertTriangle size={14} />
+      <span>
+        {blocked ? "数据不足，推荐已暂停" : "数据源降级，推荐结果可能受影响"}：{note}
+      </span>
+    </div>
+  );
+}
+
+function BacktestWorkspace() {
+  return (
+    <div className="workspace-grid">
+      <section className="section-hero">
+        <div>
+          <span>回测</span>
+          <h2>策略回测与收益矩阵</h2>
+          <p>按策略聚合历史回测、未来交易日收益率、分钟门禁和版本比较。</p>
+        </div>
+        <div className="section-hero-actions">
+          <strong>Backtest</strong>
+        </div>
+      </section>
+      <BacktestPanel />
     </div>
   );
 }
@@ -150,15 +201,105 @@ function goToControlCenter() {
   window.dispatchEvent(new CustomEvent("ashare:navigate", { detail: { section: "control" } }));
 }
 
+function goToRunWorkspace() {
+  window.dispatchEvent(new CustomEvent("ashare:navigate", { detail: { section: "run" } }));
+}
+
 function RunWorkspace({ data }: { data: DashboardOverview }) {
+  const [runDetail, setRunDetail] = useState<RunDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState("");
+  const [presets, setPresets] = useState<Preset[]>([]);
+  const [presetsLoading, setPresetsLoading] = useState(false);
+  const [selectedPresetId, setSelectedPresetId] = useState("");
+  const [selectedRunDataSource, setSelectedRunDataSource] = useState<ManualRunDataSource>(DEFAULT_RECOMMENDATION_DATA_SOURCE);
+  const [manualRun, setManualRun] = useState<RunSummary | null>(null);
+  const [running, setRunning] = useState(false);
+  const [runActionMessage, setRunActionMessage] = useState("");
+  const [runActionError, setRunActionError] = useState("");
   const runCopy = runStatusCopy(data.current_run);
-  const stages = [
-    { key: "prepare", label: "数据池准备", note: "本地池、行情源和交易日对齐", phases: ["prepare", "starting", "market_data", "auxiliary_data"] },
-    { key: "candidate", label: "候选过滤", note: "流动性、主线、风险门槛", phases: ["candidate", "scope_filter", "feature_build", "rule_scan"] },
-    { key: "skill_review", label: "Skill 审查", note: "规则分 + Agent 解释", phases: ["skill_gate", "skill_review"] },
-    { key: "persist", label: "聚合落库", note: "分桶、排序、复盘闭环", phases: ["aggregate", "aggregate_metrics", "persist", "completed"] },
-  ];
-  const stageStates = resolveRunStageStates(data.current_run.status, data.current_run.phase, stages.map((stage) => stage.phases));
+  const stages = buildRunTimelineStages(runDetail);
+  const stageStates = resolveRunStageStates(
+    runDetail?.status ?? data.current_run.status,
+    data.current_run.phase ?? runDetail?.progress_phase,
+    stages.map((stage) => stage.phases),
+  );
+  const pipeline = asRecord(asRecord(runDetail?.result_summary).pipeline);
+  const selectedPreset = presets.find((preset) => preset.preset_id === selectedPresetId) ?? presets[0] ?? null;
+
+  useEffect(() => {
+    let cancelled = false;
+    setPresetsLoading(true);
+    api.presets()
+      .then((rows) => {
+        if (cancelled) return;
+        setPresets(rows);
+        setSelectedPresetId((current) => current || rows[0]?.preset_id || "");
+        setSelectedRunDataSource((current) => normalizeManualRunDataSource(current || rows[0]?.data_source));
+      })
+      .catch((err) => {
+        if (!cancelled) setRunActionError(err instanceof Error ? err.message : "预设加载失败");
+      })
+      .finally(() => {
+        if (!cancelled) setPresetsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const runId = data.current_run.run_id;
+    if (!runId) {
+      setRunDetail(null);
+      setDetailLoading(false);
+      setDetailError("");
+      return;
+    }
+    let cancelled = false;
+    setDetailLoading(true);
+    setDetailError("");
+    api.runDetail(runId)
+      .then((detail) => {
+        if (!cancelled) setRunDetail(detail);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setRunDetail(null);
+          setDetailError(err instanceof Error ? err.message : "运行详情加载失败");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [data.current_run.run_id]);
+
+  async function startManualRun() {
+    if (!selectedPreset || running) return;
+    setRunning(true);
+    setRunActionMessage(`正在触发推荐运行：${selectedPreset.name}...`);
+    setRunActionError("");
+    try {
+      const result = await api.createRun({
+        preset_id: selectedPreset.preset_id,
+        run_name: `${selectedPreset.name} · 手动推荐`,
+        data_source: selectedRunDataSource,
+        async: true,
+      });
+      setManualRun(result.run);
+      setRunActionMessage(`推荐已触发：${result.run.run_id}`);
+      window.dispatchEvent(new CustomEvent("ashare:refresh-current-view"));
+    } catch (err) {
+      setRunActionError(err instanceof Error ? err.message : String(err));
+      setRunActionMessage("");
+    } finally {
+      setRunning(false);
+    }
+  }
+
   return (
     <div className="workspace-grid">
       <section className="section-hero">
@@ -167,29 +308,267 @@ function RunWorkspace({ data }: { data: DashboardOverview }) {
           <h2>运行编排</h2>
           <p>围绕当前 run 的阶段、心跳、可恢复性和候选产出建立运行视角。</p>
         </div>
-        <strong>{runCopy.status}</strong>
+        <div className="section-hero-actions">
+          <strong>{runCopy.status}</strong>
+          <div className="hero-action-row">
+            <button type="button" className="control-button subtle" onClick={() => window.dispatchEvent(new CustomEvent("ashare:navigate", { detail: { section: "pool" } }))}>
+              <BarChart3 size={15} />
+              查看候选
+            </button>
+            <button type="button" className="control-button subtle" onClick={() => window.dispatchEvent(new CustomEvent("ashare:navigate", { detail: { section: "history" } }))}>
+              <History size={15} />
+              查看复盘
+            </button>
+          </div>
+        </div>
+      </section>
+      <section className="cockpit-panel manual-run-panel">
+        <div className="panel-header">
+          <div>
+            <div className="panel-kicker">推荐执行</div>
+            <h2>手动运行推荐</h2>
+          </div>
+          <button className="control-button subtle" type="button" onClick={() => window.dispatchEvent(new CustomEvent("ashare:refresh-current-view"))}>
+            <RefreshCcw size={15} />
+            刷新状态
+          </button>
+        </div>
+        <div className="manual-run-grid">
+          <label className="control-field">
+            <span>运行预设</span>
+            <select
+              value={selectedPreset?.preset_id ?? ""}
+              onChange={(event) => {
+                setSelectedPresetId(event.target.value);
+                const nextPreset = presets.find((preset) => preset.preset_id === event.target.value);
+                setSelectedRunDataSource(normalizeManualRunDataSource(nextPreset?.data_source));
+              }}
+              disabled={presetsLoading}
+            >
+              {presets.map((preset) => (
+                <option key={preset.preset_id} value={preset.preset_id}>
+                  {preset.name} · {dashboardLabelText(preset.run_mode)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="control-field">
+            <span>数据源</span>
+            <select
+              value={selectedRunDataSource}
+              onChange={(event) => setSelectedRunDataSource(event.target.value as ManualRunDataSource)}
+              disabled={!selectedPreset}
+            >
+              <option value="local_pool">仅本地池</option>
+              <option value="local_pool_preferred">本地池优先</option>
+              <option value="realtime">实时数据</option>
+            </select>
+          </label>
+          <button className="control-button primary wide" type="button" onClick={() => void startManualRun()} disabled={running || !selectedPreset}>
+            {running ? <Loader2 size={15} className="spin" /> : <Play size={15} />}
+            {running ? "提交中" : "立即运行推荐"}
+          </button>
+        </div>
+        {presetsLoading ? <div className="control-empty">预设加载中</div> : null}
+        {selectedPreset ? (
+          <div className="mini-table">
+            <span>模式<strong>{dashboardLabelText(selectedPreset.run_mode)}</strong></span>
+            <span>分数线<strong>{selectedPreset.score_line.toFixed(1)}</strong></span>
+            <span>数据源<strong>{dashboardLabelText(selectedRunDataSource)}</strong></span>
+            <span>Skill<strong>{selectedPreset.skills.length}</strong></span>
+          </div>
+        ) : null}
+        {manualRun ? <RunStatusCard run={manualRun} /> : null}
+      </section>
+      {runActionMessage ? <div className="run-action-feedback positive" role="status" aria-live="polite">{runActionMessage}</div> : null}
+      {runActionError ? <div className="run-action-feedback danger" role="alert">{runActionError}</div> : null}
+      <section className="cockpit-panel run-timeline-panel">
+        <div className="panel-header">
+          <div>
+            <div className="panel-kicker">运行时间线</div>
+            <h2>Run Timeline</h2>
+          </div>
+          <span className={`status-badge ${runStatusBadgeTone(runDetail?.status ?? data.current_run.status)}`}>
+            {detailLoading ? "同步中" : runCopy.status}
+          </span>
+        </div>
+        <div className="run-timeline-meta">
+          <span>运行名<strong>{runDetail?.run_name ?? data.current_run.run_id ?? "暂无运行"}</strong></span>
+          <span>预设<strong>{runDetail?.preset_name ?? "待同步"}</strong></span>
+          <span>交易日<strong>{runDetail?.trade_date ?? data.market.trade_date ?? "-"}</strong></span>
+          <span>Run ID<strong>{data.current_run.run_id ?? "-"}</strong></span>
+        </div>
+        {detailError ? <div className="run-action-feedback danger" role="alert">{detailError}</div> : null}
+        <div className="timeline-list run-timeline-list">
+          {stages.map((stage, index) => (
+            <article key={stage.key} className={stageStates[index].className}>
+              <strong>{stage.label}</strong>
+              <small>{stage.note}</small>
+              {stage.metric ? <b className="timeline-metric">{stage.metric}</b> : null}
+              <em>{stageStates[index].label}</em>
+            </article>
+          ))}
+        </div>
       </section>
       <div className="focus-grid">
-        <RunStatusPanel run={data.current_run} />
-        <section className="cockpit-panel">
+        <RunStatusPanel run={data.current_run} mode="control" />
+        <section className="cockpit-panel run-output-panel">
           <div className="panel-header">
             <div>
-              <div className="panel-kicker">Pipeline</div>
-              <h2>阶段轨迹</h2>
+              <div className="panel-kicker">本次产出</div>
+              <h2>运行结果摘要</h2>
             </div>
           </div>
-          <div className="timeline-list">
-            {stages.map((stage, index) => (
-              <span key={stage.key} className={stageStates[index].className}>
-                <strong>{stage.label}</strong>
-                <small>{stage.note}</small>
-                <em>{stageStates[index].label}</em>
-              </span>
-            ))}
+          <div className="metric-grid">
+            <span>股票池<strong>{formatRunNumber(runDetail?.universe_count)}</strong></span>
+            <span>推荐输出<strong>{formatRunNumber(runDetail?.recommended_count)}</strong></span>
+            <span>实际扫描<strong>{formatRunNumber(pipeline.actual_scan_count)}</strong></span>
+            <span>Skill 输入<strong>{formatRunNumber(pipeline.skill_input_count)}</strong></span>
+            <span>Agent 调用<strong>{formatRunNumber(pipeline.skill_agent_call_count)}</strong></span>
+            <span>审查通过<strong>{formatRunNumber(pipeline.skill_review_success_count)}</strong></span>
+          </div>
+          <div className="data-scope-note">
+            <span>{runDetail?.progress_message || data.current_run.message || "暂无运行消息"}</span>
+            <span>数据源：{dashboardLabelText(asRecord(runDetail?.result_summary).data_source_mode ?? asRecord(runDetail?.result_summary).data_source ?? "-")}</span>
           </div>
         </section>
       </div>
       <DragonCandidatesPanel items={data.recommendations.slice(0, 6)} emptyState={candidateEmptyState(data)} />
+    </div>
+  );
+}
+
+function buildRunTimelineStages(detail: RunDetail | null) {
+  const summary = asRecord(detail?.result_summary);
+  const pipeline = asRecord(summary.pipeline);
+  return [
+    {
+      key: "prepare",
+      label: "数据池准备",
+      note: "本地池、行情源和交易日对齐",
+      metric: joinRunMetrics([
+        ["统一报价", pipeline.unified_quote_total],
+        ["日K覆盖", pipeline.daily_kline_coverage_count],
+      ]),
+      phases: ["prepare", "starting", "market_data", "auxiliary_data"],
+    },
+    {
+      key: "candidate",
+      label: "候选过滤",
+      note: "流动性、主线、风险门槛",
+      metric: joinRunMetrics([
+        ["实际扫描", pipeline.actual_scan_count],
+        ["Skill 输入", pipeline.skill_input_count],
+      ]),
+      phases: ["candidate", "scope_filter", "feature_build", "rule_scan"],
+    },
+    {
+      key: "skill_review",
+      label: "Skill 审查",
+      note: "规则分、门禁和 Agent 解释",
+      metric: joinRunMetrics([
+        ["门禁候选", pipeline.skill_gate_candidate_count],
+        ["Agent 调用", pipeline.skill_agent_call_count],
+        ["通过", pipeline.skill_review_success_count],
+      ]),
+      phases: ["skill_gate", "skill_review"],
+    },
+    {
+      key: "persist",
+      label: "聚合落库",
+      note: "分桶、排序、结果持久化与 AI 复盘可读",
+      metric: joinRunMetrics([
+        ["推荐", detail?.recommended_count],
+        ["均分", summary.avg_score],
+      ]),
+      phases: ["aggregate", "aggregate_metrics", "persist", "completed"],
+    },
+  ];
+}
+
+function joinRunMetrics(items: Array<[string, unknown]>) {
+  return items
+    .map(([label, value]) => {
+      const formatted = formatRunNumber(value);
+      return formatted === "-" ? "" : `${label} ${formatted}`;
+    })
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function formatRunNumber(value: unknown) {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return "-";
+  return Math.abs(numberValue) >= 100 || Number.isInteger(numberValue)
+    ? numberValue.toFixed(0)
+    : numberValue.toFixed(1);
+}
+
+function runStatusBadgeTone(status: unknown) {
+  const statusKey = String(status ?? "").toLowerCase();
+  if (statusKey === "completed") return "positive";
+  if (statusKey === "failed" || statusKey === "interrupted" || statusKey === "cancelled") return "danger";
+  if (statusKey === "running" || statusKey === "queued") return "warning";
+  return "";
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function dashboardLabelText(value: unknown) {
+  const key = String(value ?? "");
+  const labels: Record<string, string> = {
+    formal: "正式",
+    experiment: "实验",
+    all: "全市场",
+    watchlist: "自选股",
+    industry: "行业",
+    conservative: "保守",
+    balanced: "均衡",
+    aggressive: "激进",
+    local_pool: "仅本地池",
+    local_pool_preferred: "本地池优先",
+    realtime: "实时数据",
+  };
+  return labels[key] ?? businessStatusLabel(key, key || "-");
+}
+
+function normalizeManualRunDataSource(value: string | null | undefined): ManualRunDataSource {
+  if (value === "local_pool_preferred" || value === "realtime") return value;
+  return DEFAULT_RECOMMENDATION_DATA_SOURCE;
+}
+
+function RunStatusCard({ run }: { run: RunSummary }) {
+  const pct = run.progress_pct == null
+    ? run.status === "completed" ? 100 : 0
+    : Math.max(0, Math.min(100, run.progress_pct > 1 ? run.progress_pct : run.progress_pct * 100));
+  const completed = run.status === "completed";
+  const message = run.error_message || run.progress_message || `推荐 ${run.recommended_count} / 股票池 ${run.universe_count}`;
+  return (
+    <div className="run-status-card">
+      <div>
+        <strong>{run.run_name}</strong>
+        <span>{runStatusLabel(run.status)} · {run.trade_date}</span>
+      </div>
+      <div className="progress-track" aria-label="运行进度">
+        <i style={{ width: `${pct}%` }} />
+      </div>
+      <small>{message}</small>
+      <div className="run-card-actions">
+        <button type="button" className="control-button subtle" onClick={() => window.dispatchEvent(new CustomEvent("ashare:navigate", { detail: { section: "run" } }))}>
+          <Play size={14} />
+          查看运行
+        </button>
+        <button type="button" className="control-button subtle" onClick={() => window.dispatchEvent(new CustomEvent("ashare:navigate", { detail: { section: "pool" } }))} disabled={!completed}>
+          <BarChart3 size={14} />
+          候选解释
+        </button>
+        <button type="button" className="control-button subtle" onClick={() => window.dispatchEvent(new CustomEvent("ashare:navigate", { detail: { section: "history" } }))} disabled={!completed}>
+          <History size={14} />
+          复盘结果
+        </button>
+      </div>
     </div>
   );
 }
@@ -252,9 +631,9 @@ function CandidateWorkspace({ data }: { data: DashboardOverview }) {
           <button
             className="btn primary candidate-empty-action"
             type="button"
-            onClick={goToControlCenter}
+            onClick={() => window.dispatchEvent(new CustomEvent("ashare:navigate", { detail: { section: "run" } }))}
           >
-            去控制中心处理
+            去推荐运行
           </button>
         </div>
       )}
@@ -263,6 +642,9 @@ function CandidateWorkspace({ data }: { data: DashboardOverview }) {
 }
 
 function DataWorkspace({ data }: { data: DashboardOverview }) {
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState("");
+  const [syncError, setSyncError] = useState("");
   const messages = stringList(data.data_health.messages);
   const examples = stringList(data.data_health.examples);
   const readiness = readinessCopy(data.data_health.can_run_local_recommendation, data.data_health.status);
@@ -274,6 +656,30 @@ function DataWorkspace({ data }: { data: DashboardOverview }) {
   const scopeNote = data.data_health.scope_note
     || "概览只展示缺口样例；刷新本地数据池会全量检查候选池并补齐可处理日K缺口。";
   const exampleNote = `当前展示 ${visibleExampleCount}/${exampleTotal || visibleExampleCount} 条缺口样例；样例不是补齐上限。`;
+
+  async function refreshLocalPool() {
+    setSyncing(true);
+    setSyncMessage("正在刷新统一报价池...");
+    setSyncError("");
+    try {
+      const quoteResult = await api.refreshLocalPool();
+      setSyncMessage(`报价池已刷新 ${quoteResult.refreshed} 条；正在检查候选池日K缺口...`);
+      const gapSyncResult = await api.syncLocalPoolGaps({
+        code_limit: 0,
+        days: 90,
+        min_bars: 30,
+        dry_run: false,
+      });
+      setSyncMessage(dataHealthSyncSummary(quoteResult.refreshed, gapSyncResult));
+      window.dispatchEvent(new CustomEvent("ashare:refresh-current-view"));
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : "数据同步失败");
+      setSyncMessage("");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   return (
     <div className="workspace-grid">
       <section className="section-hero">
@@ -286,6 +692,30 @@ function DataWorkspace({ data }: { data: DashboardOverview }) {
       </section>
       <div className="data-workspace-layout">
         <div className="data-main-stack">
+          <section className="cockpit-panel data-sync-panel">
+            <div className="panel-header">
+              <div>
+                <div className="panel-kicker">数据执行</div>
+                <h2>本地数据同步</h2>
+              </div>
+              <button className="control-button primary" type="button" onClick={() => void refreshLocalPool()} disabled={syncing}>
+                {syncing ? <Loader2 size={15} className="spin" /> : <DatabaseZap size={15} />}
+                {syncing ? "同步中" : "刷新本地数据池"}
+              </button>
+            </div>
+            <div className="metric-grid">
+              <span>活跃报价<strong>{textValue(data.data_health.active_quote_count)}</strong></span>
+              <span>合格日K<strong>{textValue(data.data_health.eligible_quote_count)}</strong></span>
+              <span>候选检查<strong>{checkedCandidates}</strong></span>
+              <span>覆盖完整<strong>{readyCandidates}</strong></span>
+            </div>
+            <div className="control-note">
+              <DatabaseZap size={15} />
+              <span>刷新会先更新统一报价池，再全量检查候选池并补齐可处理的日K缺口；样例展示不限制实际补齐范围。</span>
+            </div>
+            {syncMessage ? <div className="run-action-feedback positive" role="status" aria-live="polite">{syncMessage}</div> : null}
+            {syncError ? <div className="run-action-feedback danger" role="alert">{syncError}</div> : null}
+          </section>
           <div className="focus-grid data-summary-grid">
             <DataHealthPanel dataHealth={data.data_health} taskHealth={data.task_health} />
             <section className="cockpit-panel">
@@ -321,6 +751,14 @@ function DataWorkspace({ data }: { data: DashboardOverview }) {
       </div>
     </div>
   );
+}
+
+function dataHealthSyncSummary(refreshedQuotes: number, gapSync: { target_count?: number; processed_count?: number; succeeded_count?: number; unresolved_count?: number; failed_count?: number; row_count?: number; after?: { gap_count?: number } }) {
+  const failed = Number(gapSync.failed_count ?? 0);
+  const unresolved = Number(gapSync.unresolved_count ?? 0);
+  const remaining = Number(gapSync.after?.gap_count ?? 0);
+  const status = failed > 0 || unresolved > 0 || remaining > 0 ? "部分同步完成" : "同步完成";
+  return `${status}：报价 ${refreshedQuotes} 条，目标 ${gapSync.target_count ?? 0} 只，已处理 ${gapSync.processed_count ?? 0} 只，成功 ${gapSync.succeeded_count ?? 0} 只，写入 ${gapSync.row_count ?? 0} 行，剩余缺口 ${remaining} 只`;
 }
 
 function ReviewWorkspace({ data }: { data: DashboardOverview }) {
@@ -448,8 +886,8 @@ function ReviewWorkspace({ data }: { data: DashboardOverview }) {
       <section className="section-hero">
         <div>
           <span>复盘结果</span>
-          <h2>结果反馈闭环</h2>
-          <p>从当前推荐出发，聚焦观察状态、复盘入口和后续结果标注，保持策略可学习。</p>
+          <h2>AI 复盘结果</h2>
+          <p>从当前推荐出发，聚合 outcome、误判归因和运行级复盘分析，保持策略可学习。</p>
         </div>
         <strong>{data.market.trade_date || "-"}</strong>
       </section>
@@ -503,7 +941,20 @@ function ReviewWorkspace({ data }: { data: DashboardOverview }) {
                   <strong>{item.final_score.toFixed(1)}</strong>
                 </div>
               </button>
-            )) : <div className="cockpit-panel empty-state">暂无可复盘推荐</div>}
+            )) : (
+              <div className="cockpit-panel empty-state actionable">
+                <strong>暂无可复盘推荐</strong>
+                <span>当前没有候选样本可加载复盘详情。</span>
+                <div className="state-actions">
+                  <button type="button" onClick={() => window.dispatchEvent(new CustomEvent("ashare:navigate", { detail: { section: "pool" } }))}>
+                    查看候选解释
+                  </button>
+                  <button type="button" onClick={goToRunWorkspace}>
+                    运行推荐
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </aside>
       </div>
@@ -530,8 +981,8 @@ function ReviewQueueSummary({
   const minScore = scores.length ? Math.min(...scores) : null;
   const nextAction = selected
     ? selected.watch_status && selected.watch_status !== "none"
-      ? "继续补充 outcome、退出原因和人工复盘"
-      : "先标记观察状态，再补充后续 outcome"
+      ? "查看 AI 复盘归因和 outcome 结果"
+      : "等待后续 outcome 后再看 AI 复盘"
     : "等待下一次推荐运行产出样本";
 
   return (
@@ -602,7 +1053,20 @@ function ReviewDetailPanel({
     );
   }
   if (!detail) {
-    return <section className="cockpit-panel empty-state">选择一条推荐查看复盘详情</section>;
+    return (
+      <section className="cockpit-panel empty-state actionable">
+        <strong>选择一条推荐查看复盘详情</strong>
+        <span>如果当前队列为空，可以先回到候选解释或推荐运行页产出新推荐。</span>
+        <div className="state-actions">
+          <button type="button" onClick={() => window.dispatchEvent(new CustomEvent("ashare:navigate", { detail: { section: "pool" } }))}>
+            查看候选解释
+          </button>
+          <button type="button" onClick={goToRunWorkspace}>
+            运行推荐
+          </button>
+        </div>
+      </section>
+    );
   }
 
   const replay = detail.replay_summary ?? {};
@@ -696,7 +1160,7 @@ function ReviewDetailPanel({
           <span>{textValue(replay.outcome_reason, "暂无")}</span>
         </div>
         <div className="fp-item">
-          <strong>人工复盘</strong>
+          <strong>AI 复盘结论</strong>
           <span>{textValue(replay.review_failure_reason, detail.review_note?.review_text || "暂无")}</span>
         </div>
         <div className="fp-item">
@@ -822,9 +1286,6 @@ function ValidationWorkspace({ data }: { data: DashboardOverview }) {
         <div className="validation-main-stack">
           <QualityScorecardPanel scorecard={data.quality_scorecard} />
           <EvaluationBreakdownPanel />
-        </div>
-        <div className="validation-main-stack">
-          <BacktestPanel />
         </div>
         <aside className="validation-side-stack">
           <section className="cockpit-panel validation-gate-card">

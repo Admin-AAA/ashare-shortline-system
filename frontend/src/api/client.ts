@@ -1,4 +1,5 @@
 import type {
+  FilterEffectiveness,
   HomeBootstrap,
   HomeInitialState,
   MetricsOverview,
@@ -187,11 +188,20 @@ export const api = {
   updatePreset: (presetId: string, payload: PresetPayload) =>
     request<Preset>(`/api/presets/${presetId}`, json("PATCH", payload)),
 
-  runs: (runMode?: string) => request<RunSummary[]>(runMode ? `/api/runs?run_mode=${runMode}` : "/api/runs"),
+  runs: (runMode?: string, limit?: number) => {
+    const params = new URLSearchParams();
+    if (runMode) params.set("run_mode", runMode);
+    if (limit) params.set("limit", String(limit));
+    const qs = params.toString();
+    return request<RunSummary[]>(`/api/runs${qs ? `?${qs}` : ""}`);
+  },
   runDetail: (runId: string) => request<RunDetail>(`/api/runs/${runId}`),
   runRecommendations: (runId: string) => request<RecommendationCard[]>(`/api/runs/${runId}/recommendations`),
   runFunnelAudit: (runId: string) => request<RunFunnelAudit>(`/api/runs/${runId}/funnel`),
   createRun: (payload: Record<string, unknown>) => requestWithTimeout<RunResult>("/api/runs", 300_000, json("POST", payload)),
+  startMatrixRun: (payload?: Record<string, unknown>) =>
+    request<{ started: boolean; task_run: ScheduledTaskRun | null }>("/api/runs/matrix", json("POST", payload ?? {})),
+  matrixRunStatus: () => request<{ task_run: ScheduledTaskRun | null }>("/api/runs/matrix/status"),
 
   recommendationDetail: (id: string) => request<RecommendationDetail>(`/api/recommendations/${id}`),
   replayAnalysis: (runId: string) => request<ReplayAnalysisResult>(`/api/recommendations/runs/${runId}/replay-analysis`),
@@ -261,7 +271,18 @@ export const api = {
     request<SkillDetail>("/api/skills/install", json("POST", payload)),
   skillDetail: (id: string) => request<SkillDetail>(`/api/skills/${id}`),
   setSkillMode: (id: string, mode: SkillMode) => request<{ skill_id: string; mode: SkillMode; enabled: boolean }>(`/api/skills/${id}/mode`, json("POST", { mode })),
-  backtestSkill: (id: string) => request<{ skill_id: string; status: string; sample_count: number; hit_rate: number; avg_return: number; errors: string[] }>(`/api/skills/${id}/backtest`, json("POST")),
+  skillPerformanceSummary: (id: string) =>
+    request<{
+      skill_id: string;
+      status: string;
+      summary_type: string;
+      source: string;
+      runs_backtest: boolean;
+      sample_count: number;
+      hit_rate: number;
+      avg_return: number;
+      errors: string[];
+    }>(`/api/skills/${id}/performance-summary`),
 
   resumeRun: (id: string) => requestWithTimeout<RunResult>(`/api/runs/${id}/resume`, 300_000, json("POST")),
   deleteRun: (id: string) => request<{ deleted: string }>(`/api/runs/${id}`, json("DELETE")),
@@ -273,8 +294,13 @@ export const api = {
       timeoutMs: options?.timeoutMs ?? 30_000,
       signal: options?.signal,
     }),
+  filterEffectiveness: (mode: "formal" | "experiment", options?: RequestOptions) =>
+    request<FilterEffectiveness>(`/api/metrics/filter-effectiveness?mode=${mode}`, undefined, {
+      timeoutMs: options?.timeoutMs ?? 15_000,
+      signal: options?.signal,
+    }),
   dataHealth: (options?: RequestOptions) => request<DataHealthDiagnostic>("/api/admin/data-health", undefined, options),
-  remediateDataHealth: (payload?: {
+  previewDataHealthRemediation: (payload?: {
     target_tables?: string[];
     dry_run?: boolean;
     capital_flow_code_limit?: number;
@@ -282,6 +308,16 @@ export const api = {
     post_diagnosis?: boolean;
   }) =>
     request<DataHealthRemediationResult>("/api/admin/data-health/remediate", json("POST", payload ?? {}), { timeoutMs: 300_000 }),
+  startDataHealthRemediation: (payload?: {
+    target_tables?: string[];
+    capital_flow_code_limit?: number;
+    daily_kbar_code_limit?: number;
+    minute_kbar_code_limit?: number;
+    post_diagnosis?: boolean;
+  }) =>
+    request<{ started: boolean; task_run: ScheduledTaskRun | null }>("/api/admin/data-health/remediate", json("POST", payload ?? {})),
+  dataHealthRemediationStatus: () =>
+    request<{ task_run: ScheduledTaskRun | null }>("/api/admin/data-health/remediate/status"),
   temporalConsistency: (runMode?: string, options?: RequestOptions) =>
     request<Record<string, unknown>>(`/api/admin/temporal-consistency${runMode ? `?run_mode=${runMode}` : ""}`, undefined, options),
   previewMinuteGate: (payload: { start_date: string; end_date: string; strategy_id: string }) =>
