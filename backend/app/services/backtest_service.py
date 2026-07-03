@@ -22,7 +22,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -678,6 +678,21 @@ def _persist_backtest_recommendations(
     snapshot: dict[str, Any],
 ) -> None:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    # 清理同 trade_date 的旧 backtest 推荐与 outcome，避免跨 run 累积污染统计
+    # 只清理 btrec_（回测推荐），不影响实盘 rec_
+    _trade_dates = {str(card.get("trade_date", "")) for card in cards if card.get("trade_date")}
+    if _trade_dates:
+        old_recs = db.scalars(
+            select(Recommendation).where(
+                Recommendation.recommendation_id.like("btrec_%"),
+                Recommendation.trade_date.in_(_trade_dates),
+            )
+        ).all()
+        old_ids = [r.recommendation_id for r in old_recs]
+        if old_ids:
+            db.execute(delete(RecommendationOutcome).where(RecommendationOutcome.recommendation_id.in_(old_ids)))
+            db.execute(delete(Recommendation).where(Recommendation.recommendation_id.in_(old_ids)))
+            db.flush()
     for card in cards:
         feature_snapshot = {
             **(card.get("feature_snapshot", {}) or {}),
