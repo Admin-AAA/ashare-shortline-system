@@ -24,6 +24,8 @@
 | `oppose` | 不推荐 | 30-44 | 技术面偏空，至少两个维度差 |
 | `veto` | 否决 | < 30 | 触发否决条件，不参与 |
 
+**重要：stance 必须与 score 区间匹配。** 当 score >= 55 但你判断有风险时，用 `neutral_support`（观望倾向积极）或 `oppose`（明确不推荐）——**不要用 `neutral`**。`neutral` 仅用于 score 45-54、方向真正不明的场景。实盘数据显示 score 58-78 给 neutral 的推荐 WR 仅 14.6%，是亏损信号。
+
 ---
 
 ## 审查要点
@@ -94,3 +96,4 @@ next_day_plan: ["次日计划1", ...]
 6. **不要过度乐观**——confidence > 0.8 需要有充分数据支撑
 7. **不要违反 stance→action 映射**——neutral/oppose/veto 时不能给出进攻性行动
 8. **不要忽略 pos20 数值**——如果 pos20 > 95，必须在 risks 中明确引用"pos20=XX，过热风险"；如果 pos20 80-95，必须在 supports 中引用"pos20=XX，强势未过热"
+9. **score >= 55 时不要给 neutral stance**——neutral 仅用于 score 45-54。score 高但判断有风险时用 neutral_support 或 oppose
