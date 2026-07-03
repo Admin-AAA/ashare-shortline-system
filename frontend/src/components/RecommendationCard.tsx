@@ -116,6 +116,16 @@ export default memo(function EnhancedRecommendationCard({ item, isSelected, onSe
             <span className="erc-price">{(item.recommend_price ?? 0).toFixed(2)}</span>
             {item.stop_loss != null ? <span>止损 {(item.stop_loss ?? 0).toFixed(2)}</span> : null}
             {item.take_profit != null ? <span>止盈 {(item.take_profit ?? 0).toFixed(2)}</span> : null}
+            {fs.pos20 != null && (
+              <span className={`erc-factor erc-pos20 ${Number(fs.pos20) > 95 ? "erc-factor-warn" : ""}`} title="20日内位置（>95 过热）">
+                P{Number(fs.pos20).toFixed(0)}
+              </span>
+            )}
+            {fs.dsa_trend_score != null && (
+              <span className={`erc-factor erc-trend ${Number(fs.dsa_trend_score) < 18 ? "erc-factor-warn" : ""}`} title="DSA趋势分（<18 不足）">
+                T{Number(fs.dsa_trend_score).toFixed(0)}
+              </span>
+            )}
             <span className="erc-skill-count">
               <BrainCircuit size={12} />
               {item.skill_breakdown?.length ?? 0} Skills

@@ -2540,6 +2540,22 @@ select option {
   font-size: 11px;
 }
 
+.erc-factor {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--muted);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  white-space: nowrap;
+}
+
+.erc-factor-warn {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  font-weight: 600;
+}
+
 .erc-execution {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
