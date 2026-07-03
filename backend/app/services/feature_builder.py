@@ -382,16 +382,25 @@ def _volume_state(volume_ratio: float, pct: float) -> tuple[str, str]:
 
 
 def _bias_score(bias_ma5: float) -> int:
-    if -2 <= bias_ma5 <= 1.5:
+    # 数据驱动重写（2026-07-04 去重 282 笔实盘验证）：
+    # bias_ma5 越高 → 强势股 → 胜率越高（趋势跟踪市场，强者恒强）
+    #   bias > 5:  WR=77.8-100% (avg +1.91~+6.95%) → 20 分
+    #   3 < bias <= 5: WR=66.7% (avg +3.21%) → 18 分
+    #   1.5 < bias <= 3: WR=59.0% (avg +1.45%) → 14 分
+    #   -2 <= bias <= 1.5: WR=49.4% (avg +0.79%) → 10 分（平庸区间，原错误给 20 分）
+    #   -7 <= bias < -2: WR=38.5-47.1% → 6 分
+    #   bias < -7: 弱势 → 4 分
+    # 旧逻辑错误：把高 bias 当超买惩罚（bias>8 给 2 分），实际 WR=100%
+    if bias_ma5 > 5:
         return 20
-    if -4 <= bias_ma5 < -2 or 1.5 < bias_ma5 <= 3:
-        return 16
-    if 3 < bias_ma5 <= 5:
+    if bias_ma5 > 3:
+        return 18
+    if bias_ma5 > 1.5:
+        return 14
+    if bias_ma5 >= -2:
         return 10
-    if -7 <= bias_ma5 < -4:
-        return 8
-    if bias_ma5 > 8:
-        return 2
+    if bias_ma5 >= -7:
+        return 6
     return 4
 
 

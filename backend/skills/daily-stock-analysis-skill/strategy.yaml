@@ -72,10 +72,10 @@ phases:
     risk_flags: ["重大风险情报或趋势破坏"]
 
   - name: 过热观察
-    when: "dsa_bias_score <= 4 and rsi_12 > 70"
+    when: "dsa_bias_score >= 20 and rsi_12 > 70"
     score_cap: 68
     hard_veto: false
-    risk_flags: ["偏离均线过远，进入过热观察区"]
+    risk_flags: ["高乖离+RSI超买，警惕短线回撤（bias_ma5>5% 强势但 RSI>70 短期过热）"]
 
   - name: 趋势不足
     when: "dsa_trend_score < 18"
@@ -156,9 +156,9 @@ scoring:
       delta: 4
       reason: "换手率适中（5-10%: 61.5% WR, +2.78% 均收益，797 笔验证）"
     # chip_concentration 4-10 重复规则已移除（上方 delta 6 已覆盖，此条 delta 4 永不触发）
-    - when: "dsa_bias_score <= 2"
+    - when: "dsa_bias_score <= 6"
       delta: -8
-      reason: 极端乖离（bias_ma5>5% 仅 dsa_bias_score=2，原 <=4 误罚 bias_ma5 3-5% 区间 75% WR）
+      reason: 严重弱势乖离（bias_ma5 < -2%，实盘 WR=47.1%/38.5%，应扣分；原 <=2 误罚 bias>5% 强势股 WR=77.8-100%）
 
 risk:
   rules:
