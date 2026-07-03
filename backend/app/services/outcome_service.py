@@ -1624,6 +1624,16 @@ def _build_outcome_reason(
     parts = [label, f"执行收益 {executed_return:.2f}%", f"静态收盘收益 {close_return:.2f}%"]
     if max_return is not None and max_return > 3:
         parts.append(f"持有期最高浮盈 {max_return:.1f}%")
+    # 利润回吐标记：horizon_close 且峰值>=5% 但最终收益 < 峰值-3%
+    # 诊断价值：识别 trailing stop 潜力交易（T2 第69轮发现 76 笔 horizon_close 峰值 7.76% 但收益仅 0.88%）
+    if (
+        exit_reason == "horizon_close"
+        and max_return is not None
+        and max_return >= 5.0
+        and executed_return < max_return - 3.0
+    ):
+        giveback = max_return - executed_return
+        parts.append(f"利润回吐 {giveback:.1f}%（trailing stop 潜力）")
     if max_drawdown is not None and max_drawdown < -3:
         parts.append(f"最大回撤 {max_drawdown:.1f}%")
     return "；".join(parts)
