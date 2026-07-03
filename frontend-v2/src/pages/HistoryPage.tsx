@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
 import { History } from "lucide-react";
 import { api } from "../api/client";
 import type { RunSummary } from "../types";
 import { PageSkeleton, ErrorPage, EmptyState } from "../components/StateViews";
 import { useUrlRoute } from "../app/useUrlRoute";
+import { useApi } from "../app/useApi";
 
 /**
  * 复盘页 —— 推荐历史记录（按 run 倒序）
@@ -12,23 +12,7 @@ import { useUrlRoute } from "../app/useUrlRoute";
  */
 export function HistoryPage() {
   const { navigate } = useUrlRoute();
-  const [runs, setRuns] = useState<RunSummary[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setLoading(true);
-    setError("");
-    api
-      .runs(undefined, 50)
-      .then((list) => setRuns(list))
-      .catch((err) => {
-        if (err.name !== "AbortError") setError(err.message || "加载失败");
-      })
-      .finally(() => setLoading(false));
-    return () => controller.abort();
-  }, []);
+  const { data: runs, loading, error } = useApi<RunSummary[]>(() => api.runs(undefined, 50), []);
 
   if (loading) return <PageSkeleton title="复盘" hint="加载历史运行" rowCount={8} />;
   if (error) return <ErrorPage title="历史加载失败" message={error} />;

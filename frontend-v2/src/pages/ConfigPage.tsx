@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
 import { Settings2, TrendingUp } from "lucide-react";
 import { api } from "../api/client";
 import type { SkillSummary } from "../types";
 import { PageSkeleton, ErrorPage, EmptyState } from "../components/StateViews";
+import { useApi } from "../app/useApi";
 
 /**
  * 配置页 —— 策略清单 + 各策略历史表现
@@ -16,41 +16,30 @@ type SkillPerf = {
   avg_return: number;
 };
 
-export function ConfigPage() {
-  const [skills, setSkills] = useState<SkillSummary[] | null>(null);
-  const [perfs, setPerfs] = useState<Record<string, SkillPerf>>({});
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+type SkillsData = { skills: SkillSummary[]; perfs: Record<string, SkillPerf> };
 
-  useEffect(() => {
-    const controller = new AbortController();
-    setLoading(true);
-    setError("");
-    api
-      .skills()
-      .then(async (list) => {
-        setSkills(list);
-        // 并发拉每个策略的绩效
-        const entries = await Promise.all(
-          list.map(async (s) => {
-            try {
-              const p = await api.skillPerformanceSummary(s.skill_id);
-              return [s.skill_id, p] as const;
-            } catch {
-              return [s.skill_id, { skill_id: s.skill_id, sample_count: 0, hit_rate: 0, avg_return: 0 }] as const;
-            }
-          }),
-        );
-        const map: Record<string, SkillPerf> = {};
-        for (const [id, p] of entries) map[id] = p;
-        setPerfs(map);
-      })
-      .catch((err) => {
-        if (err.name !== "AbortError") setError(err.message || "加载失败");
-      })
-      .finally(() => setLoading(false));
-    return () => controller.abort();
-  }, []);
+async function fetchSkillsData(): Promise<SkillsData> {
+  const skills = await api.skills();
+  // 并发拉每个策略的绩效
+  const entries = await Promise.all(
+    skills.map(async (s) => {
+      try {
+        const p = await api.skillPerformanceSummary(s.skill_id);
+        return [s.skill_id, p] as const;
+      } catch {
+        return [s.skill_id, { skill_id: s.skill_id, sample_count: 0, hit_rate: 0, avg_return: 0 }] as const;
+      }
+    }),
+  );
+  const perfs: Record<string, SkillPerf> = {};
+  for (const [id, p] of entries) perfs[id] = p;
+  return { skills, perfs };
+}
+
+export function ConfigPage() {
+  const { data, loading, error } = useApi<SkillsData>(fetchSkillsData, []);
+  const skills = data?.skills ?? null;
+  const perfs = data?.perfs ?? {};
 
   if (loading) return <PageSkeleton title="策略配置" hint="加载策略清单与历史表现" rowCount={6} />;
   if (error) return <ErrorPage title="策略加载失败" message={error} />;

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -13,6 +13,7 @@ import { api } from "../api/client";
 import type { CockpitRecommendation } from "../types";
 import { EmptyState, ErrorPage } from "../components/StateViews";
 import { useUrlRoute } from "../app/useUrlRoute";
+import { useApi } from "../app/useApi";
 import { queryParam } from "../app/nav";
 
 /**
@@ -28,30 +29,18 @@ export function PoolPage() {
   const { navigate, navigateSection } = useUrlRoute();
   const runId = queryParam("run_id");
 
-  const [items, setItems] = useState<CockpitRecommendation[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<{ risk?: RiskLevel; q: string }>({ q: "" });
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setLoading(true);
-    setError("");
-    // 若有 run_id 则加载该 run 的候选，否则加载最新候选
-    // runRecommendations 返回 RecommendationCard[]（含 risk_level 等扩展字段，后端实际返回），
-    // dashboard.overview 返回 CockpitRecommendation[]；统一按 CockpitRecommendation 消费
-    const fetcher: Promise<CockpitRecommendation[]> = runId
-      ? api.runRecommendations(runId).then((list) => list as unknown as CockpitRecommendation[])
-      : api.dashboard.overview({ signal: controller.signal }).then((d) => d.recommendations);
-    fetcher
-      .then((list) => setItems(list))
-      .catch((err) => {
-        if (err.name !== "AbortError") setError(err.message || "加载失败");
-      })
-      .finally(() => setLoading(false));
-    return () => controller.abort();
-  }, [runId]);
+  // 若有 run_id 则加载该 run 的候选，否则加载最新候选
+  // runRecommendations 返回 RecommendationCard[]（含 risk_level 等扩展字段，后端实际返回），
+  // dashboard.overview 返回 CockpitRecommendation[]；统一按 CockpitRecommendation 消费
+  const { data: items, loading, error } = useApi<CockpitRecommendation[]>(
+    (signal) =>
+      runId
+        ? api.runRecommendations(runId).then((list) => list as unknown as CockpitRecommendation[])
+        : api.dashboard.overview({ signal }).then((d) => d.recommendations),
+    [runId],
+  );
 
   const filtered = useMemo(() => {
     if (!items) return [];
