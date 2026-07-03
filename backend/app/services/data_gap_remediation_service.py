@@ -10,7 +10,7 @@ from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models.tables import DailyKbar, IndexDaily, LimitUpBoard, Recommendation, RecommendationRun, Stock, StockQuote
+from app.models.tables import DailyKbar, IndexDaily, LimitUpBoard, MinuteKbar, Recommendation, RecommendationRun, Stock, StockQuote
 from app.services.data_health_service import diagnose_all
 from app.services.feature_builder import _compute_authenticity, _enrich_with_auxiliary_data, _tag_features
 from app.services.market_pool import (
@@ -21,6 +21,7 @@ from app.services.market_pool import (
     _load_cached_bars_summary,
     _load_cached_quotes,
     _quote_sources,
+    _required_bar_date_for_quote as _pool_required_bar_date_for_quote,
     _select_recall_candidates,
     load_auxiliary_for_stocks,
     refresh_capital_flows_for_codes,
@@ -31,10 +32,12 @@ from app.services.market_pool import (
 )
 from app.services.research_context import build_research_context
 from app.services.data_sources import enabled_sources
-from app.services.tushare_client import fetch_basic_daily_kbars, fetch_daily_kbars_for_trade_date, fetch_index_daily
+from app.services.remediation import transaction as remediation_transaction
+from app.services.tushare_client import fetch_basic_daily_kbars, fetch_daily_kbars_for_trade_date, fetch_index_daily, fetch_minute_kbars
 
 DEFAULT_REMEDIABLE_TABLES = (
     "daily_kbar",
+    "minute_kbar",
     "index_daily",
     "limit_up_board",
     "capital_flow",
@@ -73,6 +76,7 @@ def remediate_data_health_gaps(
     dry_run: bool = False,
     capital_flow_code_limit: int = 200,
     daily_kbar_code_limit: int = DEFAULT_DAILY_KBAR_CODE_LIMIT,
+    minute_kbar_code_limit: int = 300,
     post_diagnosis: bool = True,
 ) -> dict[str, Any]:
     requested_tables = _normalize_target_tables(target_tables)
@@ -92,6 +96,7 @@ def remediate_data_health_gaps(
         requested_tables=requested_tables,
         capital_flow_code_limit=capital_flow_code_limit,
         daily_kbar_code_limit=daily_kbar_code_limit,
+        minute_kbar_code_limit=minute_kbar_code_limit,
     )
 
     actions = [_with_rollback_hint(_mark_planned(item)) for item in plan]
@@ -144,13 +149,7 @@ def remediate_data_health_gaps(
         "after": after_snapshot,
         "actions": actions,
         "operation_log": _operation_log(actions),
-        "action_summary": {
-            "planned_count": len(plan),
-            "completed_count": sum(1 for item in actions if item.get("status") == "completed"),
-            "empty_count": sum(1 for item in actions if item.get("status") == "empty"),
-            "skipped_count": sum(1 for item in actions if item.get("status") == "skipped"),
-            "failed_count": failed_count,
-        },
+        "action_summary": remediation_transaction.action_summary(plan, actions),
         "comparison": comparison,
         "rollback_guidance": _rollback_guidance(dry_run=dry_run, actions=actions),
         "remaining_issues": remaining_issues,
@@ -206,6 +205,10 @@ def sync_local_pool_kline_gaps(
             "operation_log": operation_log,
         }
 
+    batch_result = _sync_same_day_stale_kline_gaps(db, before_state, targets, requested_limit, fetch_days, required_bars)
+    if batch_result is not None:
+        return batch_result
+
     latest_allowed = _pool_latest_allowed_bar_date()
     latest_allowed_compact = latest_allowed.replace("-", "")
     operation_log: list[dict[str, Any]] = []
@@ -253,6 +256,7 @@ def sync_local_pool_kline_gaps(
 
     if payload:
         _insert_daily_kbar_payload_ignore(db, payload)
+        _backfill_missing_indicators(db)
 
     after_state = _local_pool_kline_gap_state(db, min_bars=required_bars)
     failed_count = sum(1 for item in operation_log if item.get("status") == "failed")
@@ -287,6 +291,95 @@ def sync_local_pool_kline_gaps(
         ),
         "sync_summary": _local_pool_operation_summary(operation_log),
         "operation_log": operation_log[:50],
+    }
+
+
+def _sync_same_day_stale_kline_gaps(
+    db: Session,
+    before_state: dict[str, Any],
+    targets: list[dict[str, Any]],
+    requested_limit: int,
+    fetch_days: int,
+    required_bars: int,
+) -> dict[str, Any] | None:
+    """Use one Tushare trade-date batch fetch when many candidates are stale on the same date."""
+    if not targets:
+        return None
+    quote_dates = {
+        _normalize_trade_date(item.get("quote_date"))
+        for item in targets
+        if _normalize_trade_date(item.get("quote_date"))
+    }
+    reasons = {str(item.get("reason") or "") for item in targets}
+    if len(quote_dates) != 1 or not reasons <= {"stale", "missing"}:
+        return None
+
+    trade_date = next(iter(quote_dates))
+    target_codes = [str(item.get("code") or "").strip() for item in targets if str(item.get("code") or "").strip()]
+    try:
+        result = _backfill_daily_kbar_date(db, trade_date, target_codes)
+        operation_log = [
+            {
+                "table": "daily_kbar",
+                "trade_date": trade_date,
+                "status": "completed" if result.get("row_count") else "empty",
+                "row_count": int(result.get("row_count") or 0),
+                "provider_row_count": int(result.get("provider_row_count") or 0),
+                "requested_code_count": len(target_codes),
+                "target_hit_count": int(result.get("target_hit_count") or 0),
+                "missing_code_count": int(result.get("missing_code_count") or 0),
+                "missing_codes": result.get("missing_codes") or [],
+                "mode": "trade_date_batch",
+            }
+        ]
+    except Exception as exc:  # noqa: BLE001 - keep API response structured for operators
+        db.rollback()
+        operation_log = [
+            {
+                "table": "daily_kbar",
+                "trade_date": trade_date,
+                "status": "failed",
+                "row_count": 0,
+                "requested_code_count": len(target_codes),
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+                "mode": "trade_date_batch",
+            }
+        ]
+
+    after_state = _local_pool_kline_gap_state(db, min_bars=required_bars)
+    failed_count = sum(1 for item in operation_log if item.get("status") == "failed")
+    succeeded_count = int(operation_log[0].get("target_hit_count") or 0) if not failed_count else 0
+    unresolved_count = max(0, len(targets) - succeeded_count - failed_count)
+    return {
+        "status": _local_pool_sync_status(
+            target_count=len(targets),
+            failed_count=failed_count,
+            unresolved_count=unresolved_count,
+        ),
+        "dry_run": False,
+        "days": fetch_days,
+        "min_bars": required_bars,
+        "code_limit": requested_limit,
+        "effective_code_limit": len(targets) if requested_limit <= 0 else max(1, requested_limit),
+        "target_count": len(targets),
+        "processed_count": len(targets),
+        "succeeded_count": succeeded_count,
+        "unresolved_count": unresolved_count,
+        "failed_count": failed_count,
+        "row_count": sum(int(item.get("row_count") or 0) for item in operation_log),
+        "before": before_state["counts"],
+        "after": after_state["counts"],
+        "comparison": _local_pool_gap_comparison(
+            before_counts=before_state["counts"],
+            after_counts=after_state["counts"],
+            target_count=len(targets),
+            succeeded_count=succeeded_count,
+            unresolved_count=unresolved_count,
+            failed_count=failed_count,
+        ),
+        "sync_summary": _local_pool_operation_summary(operation_log),
+        "operation_log": operation_log,
     }
 
 
@@ -775,9 +868,8 @@ def _is_natural_short_history(
 
 def _candidate_quote_date(quote: dict[str, Any], latest_allowed: str) -> str:
     raw = _normalize_trade_date(quote.get("trade_date")) or latest_allowed
-    target = min(raw, latest_allowed)
     try:
-        return _pool_latest_allowed_bar_date(date.fromisoformat(target))
+        return _pool_required_bar_date_for_quote({"trade_date": raw})
     except ValueError:
         return latest_allowed
 
@@ -875,6 +967,7 @@ def _build_remediation_plan(
     requested_tables: list[str],
     capital_flow_code_limit: int,
     daily_kbar_code_limit: int,
+    minute_kbar_code_limit: int,
 ) -> list[dict[str, Any]]:
     recent_tables = ((diagnosis.get("recent_trade_day_coverage") or {}).get("tables") or {})
     lag_days = diagnosis.get("lag_days") or {}
@@ -883,7 +976,12 @@ def _build_remediation_plan(
     max_closed_trade_date = _latest_allowed_bar_date()
 
     if "daily_kbar" in requested_tables:
-        target_dates = _gap_dates(recent_tables.get("daily_kbar") or {}, include_incomplete=True)
+        target_dates = _target_dates_with_closed_reference_gap(
+            _gap_dates(recent_tables.get("daily_kbar") or {}, include_incomplete=True),
+            lag_days=lag_days,
+            table_key="daily_kbar",
+            reference_trade_date=reference_trade_date,
+        )
         target_dates = _closed_target_dates(target_dates, reference_trade_date, max_closed_trade_date)
         for trade_date in target_dates:
             codes = _daily_kbar_target_codes(db, trade_date, limit=daily_kbar_code_limit)
@@ -896,10 +994,36 @@ def _build_remediation_plan(
                 }
             )
 
+    if "minute_kbar" in requested_tables:
+        target_dates = _target_dates_with_closed_reference_gap(
+            (recent_tables.get("minute_kbar") or {}).get("missing_dates") or [],
+            lag_days=lag_days,
+            table_key="minute_kbar",
+            reference_trade_date=reference_trade_date,
+        )
+        missing_dates = _closed_target_dates(
+            target_dates,
+            reference_trade_date,
+            max_closed_trade_date,
+        )
+        for trade_date in missing_dates:
+            codes = _minute_kbar_target_codes(db, trade_date, limit=minute_kbar_code_limit)
+            plan.append(
+                {
+                    "table": "minute_kbar",
+                    "trade_date": trade_date,
+                    "codes": codes,
+                    "code_limit": minute_kbar_code_limit,
+                }
+            )
+
     if "index_daily" in requested_tables:
-        missing_dates = list((recent_tables.get("index_daily") or {}).get("missing_dates") or [])
-        if reference_trade_date and lag_days.get("index_daily", 0) > 0 and reference_trade_date not in missing_dates:
-            missing_dates.append(reference_trade_date)
+        missing_dates = _target_dates_with_closed_reference_gap(
+            (recent_tables.get("index_daily") or {}).get("missing_dates") or [],
+            lag_days=lag_days,
+            table_key="index_daily",
+            reference_trade_date=reference_trade_date,
+        )
         missing_dates = _closed_target_dates(missing_dates, reference_trade_date, max_closed_trade_date)
         if missing_dates:
             plan.append(
@@ -911,8 +1035,14 @@ def _build_remediation_plan(
             )
 
     if "limit_up_board" in requested_tables:
-        missing_dates = _closed_target_dates(
+        target_dates = _target_dates_with_closed_reference_gap(
             (recent_tables.get("limit_up_board") or {}).get("missing_dates") or [],
+            lag_days=lag_days,
+            table_key="limit_up_board",
+            reference_trade_date=reference_trade_date,
+        )
+        missing_dates = _closed_target_dates(
+            target_dates,
             reference_trade_date,
             max_closed_trade_date,
         )
@@ -920,8 +1050,14 @@ def _build_remediation_plan(
             plan.append({"table": "limit_up_board", "trade_date": trade_date})
 
     if "capital_flow" in requested_tables:
-        missing_dates = _closed_target_dates(
+        target_dates = _target_dates_with_closed_reference_gap(
             (recent_tables.get("capital_flow") or {}).get("missing_dates") or [],
+            lag_days=lag_days,
+            table_key="capital_flow",
+            reference_trade_date=reference_trade_date,
+        )
+        missing_dates = _closed_target_dates(
+            target_dates,
             reference_trade_date,
             max_closed_trade_date,
         )
@@ -974,91 +1110,23 @@ def _with_rollback_hint(action: dict[str, Any]) -> dict[str, Any]:
 
 
 def _operation_log(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for item in actions:
-        row = {
-            "table": item.get("table") or item.get("scope") or "unknown",
-            "status": item.get("status"),
-            "target": _action_target_label(item),
-            "row_count": int(item.get("row_count") or 0),
-            "rollback_hint": item.get("rollback_hint"),
-        }
-        if item.get("error"):
-            row["error"] = item.get("error")
-            row["error_type"] = item.get("error_type")
-        rows.append(row)
-    return rows
+    return remediation_transaction.operation_log(actions)
 
 
 def _action_target_label(item: dict[str, Any]) -> str:
-    dates = [str(date) for date in item.get("target_dates") or [] if str(date or "").strip()]
-    if dates:
-        return ", ".join(dates)
-    trade_date = str(item.get("trade_date") or "").strip()
-    if trade_date:
-        return trade_date
-    start = str(item.get("trade_date_start") or "").strip()
-    end = str(item.get("trade_date_end") or "").strip()
-    if start and end:
-        return f"{start} ~ {end}"
-    return "-"
+    return remediation_transaction.action_target_label(item)
 
 
 def _rollback_hint(item: dict[str, Any]) -> str:
-    table = str(item.get("table") or "").strip()
-    target = _action_target_label(item)
-    if table == "daily_kbar":
-        codes = [str(code) for code in item.get("codes") or [] if str(code or "").strip()]
-        code_scope = f"且 code 限定在本次 {len(codes)} 个目标代码内" if codes else "并核对本次目标代码"
-        return f"按 daily_kbars.trade_date = {target} {code_scope}删除本次写入行，再重新诊断。"
-    if table == "index_daily":
-        return f"按 index_daily.ts_code + trade_date 精确删除本次目标日期（{target}）写入行，再重新诊断。"
-    if table == "limit_up_board":
-        return f"按 limit_up_board.trade_date = {target} 删除本次写入行，再重新诊断。"
-    if table == "capital_flow":
-        codes = [str(code) for code in item.get("codes") or [] if str(code or "").strip()]
-        code_scope = f"且 code 限定在本次 {len(codes)} 个目标代码内" if codes else "并核对本次目标代码"
-        return f"按 capital_flow.trade_date = {target} {code_scope}删除本次写入行，再重新诊断。"
-    if table == "concept_sector":
-        return f"按 concept_sector / concept_sector_stock 的 trade_date = {target} 删除本次写入行，再重新诊断。"
-    if table == "dragon_tiger":
-        return f"按 dragon_tiger.trade_date = {target} 删除本次写入行，再重新诊断。"
-    if table == "news":
-        codes = [str(code) for code in item.get("codes") or [] if str(code or "").strip()]
-        code_scope = f"且 code 限定在本次 {len(codes)} 个目标代码内" if codes else "并核对本次目标代码"
-        return f"按 news_announcement.announce_date 覆盖窗口且 {code_scope}删除本次写入行，再重新诊断。"
-    return ""
+    return remediation_transaction.rollback_hint(item)
 
 
 def _rollback_guidance(*, dry_run: bool, actions: list[dict[str, Any]]) -> dict[str, Any]:
-    if dry_run:
-        return {
-            "mode": "no_write",
-            "message": "本次为预演，未写入数据库，无需回滚。",
-            "keys": [],
-        }
-    keys = sorted(
-        {
-            f"{item.get('table') or item.get('scope')}: {_action_target_label(item)}"
-            for item in actions
-            if item.get("table") or item.get("scope")
-        }
-    )
-    return {
-        "mode": "delete_by_operation_log",
-        "message": "本次补数为按表、日期和目标代码的增量写入；如需撤回，请按操作日志中的表名、日期和代码范围精确删除本次写入行，再重新运行数据健康诊断。",
-        "keys": keys,
-    }
+    return remediation_transaction.rollback_guidance(dry_run=dry_run, actions=actions)
 
 
 def _remediation_status(*, dry_run: bool, actions: list[dict[str, Any]], failed_count: int) -> str:
-    if dry_run:
-        return "dry_run"
-    if not actions:
-        return "no_action"
-    if failed_count:
-        return "partial_failed"
-    return "completed"
+    return remediation_transaction.remediation_status(dry_run=dry_run, actions=actions, failed_count=failed_count)
 
 
 def _diagnosis_failed_remediation_result(
@@ -1151,6 +1219,22 @@ def _execute_plan_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
                 "row_count": 0,
             }
         result = _backfill_daily_kbar_date(db, item["trade_date"], codes)
+        return {
+            **item,
+            "status": "completed" if result.get("row_count") else "empty",
+            **result,
+            "requested_code_count": len(codes),
+        }
+    if table == "minute_kbar":
+        codes = item.get("codes") or []
+        if not codes:
+            return {
+                **item,
+                "status": "skipped",
+                "reason": "目标交易日缺少活跃股票样本，未执行分钟K线补数。",
+                "row_count": 0,
+            }
+        result = _backfill_minute_kbar_date(db, item["trade_date"], codes)
         return {
             **item,
             "status": "completed" if result.get("row_count") else "empty",
@@ -1415,12 +1499,95 @@ def _daily_kbar_payload(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+
+def _backfill_missing_indicators(db: Session, lookback_days: int = 14) -> None:
+    """补齐近期缺失的技术指标（MACD/RSI/Bias 等）。
+
+    当 stk_factor API 未被调用或返回空数据时，DailyKbar 中的指标字段为 0。
+    本函数从历史 K 线本地计算缺失指标并 upsert 回数据库。
+    """
+    from collections import defaultdict
+    from datetime import date, timedelta
+
+    from sqlalchemy import select, text
+
+    from app.models.tables import DailyKbar
+    from app.services.indicator_computer import compute_daily_bar_indicators, compute_daily_indicators
+    from app.services.market_pool import _persist_kbars
+
+    cutoff = (date.today() - timedelta(days=lookback_days)).isoformat()
+    # 找出近期指标缺失的日期（macd_dif 全为 0 且记录数 > 100）
+    gap_dates = db.execute(text(
+        "SELECT trade_date FROM daily_kbars "
+        "WHERE trade_date >= :cutoff "
+        "GROUP BY trade_date "
+        "HAVING SUM(CASE WHEN macd_dif IS NOT NULL AND macd_dif != 0 THEN 1 ELSE 0 END) = 0 "
+        "AND COUNT(*) > 100 "
+        "ORDER BY trade_date"
+    ), {"cutoff": cutoff}).scalars().all()
+
+    if not gap_dates:
+        return
+
+    for target_date in gap_dates:
+        codes = db.execute(text(
+            "SELECT DISTINCT code FROM daily_kbars WHERE trade_date = :td"
+        ), {"td": target_date}).scalars().all()
+        if not codes:
+            continue
+
+        all_rows = db.scalars(
+            select(DailyKbar)
+            .where(DailyKbar.code.in_(codes), DailyKbar.trade_date <= target_date)
+            .order_by(DailyKbar.code, DailyKbar.trade_date.asc())
+        ).all()
+
+        bars_by_code: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in all_rows:
+            bars_by_code[row.code].append({
+                "code": row.code,
+                "trade_date": str(row.trade_date),
+                "open": float(row.open or 0),
+                "high": float(row.high or 0),
+                "low": float(row.low or 0),
+                "close": float(row.close or 0),
+                "volume": float(row.volume or 0),
+                "amount": float(row.amount or 0),
+                "pct_chg": float(row.pct_chg or 0),
+                "turnover_rate": float(row.turnover_rate or 0),
+            })
+
+        enriched: list[dict[str, Any]] = []
+        for code, bars in bars_by_code.items():
+            bars = bars[-60:]
+            if len(bars) < 5:
+                continue
+            bar_ind = compute_daily_bar_indicators(code, bars)
+            daily_ind = compute_daily_indicators(code, bars)
+            merged = {**bar_ind.get(target_date, {}), **daily_ind.get(target_date, {})}
+            if merged:
+                target_bar = next((b for b in bars if b["trade_date"] == target_date), None)
+                if target_bar:
+                    enriched.append({**target_bar, **merged})
+
+        if enriched:
+            _persist_kbars(db, enriched)
+            db.commit()
+            logger.info("补齐 %s 指标: %d/%d codes", target_date, len(enriched), len(codes))
+
+
 def _backfill_index_daily_dates(
     db: Session,
     target_dates: list[str],
     ts_codes: list[str],
 ) -> dict[str, Any]:
-    normalized_dates = sorted(set(str(date) for date in target_dates if str(date or "").strip()))
+    normalized_dates = sorted(
+        {
+            normalized
+            for date in target_dates
+            if (normalized := _normalize_trade_date(date))
+        }
+    )
     if not normalized_dates or not ts_codes:
         return {"row_count": 0, "requested_date_count": len(normalized_dates), "requested_ts_code_count": len(ts_codes)}
 
@@ -1457,8 +1624,114 @@ def _backfill_index_daily_dates(
     }
 
 
+def _backfill_minute_kbar_date(db: Session, trade_date: str, codes: list[str]) -> dict[str, Any]:
+    target = _normalize_trade_date(trade_date)
+    target_codes = [str(code or "").strip() for code in codes if str(code or "").strip()]
+    if not target or not target_codes:
+        return {"row_count": 0, "requested_code_count": len(target_codes), "target_hit_count": 0}
+
+    payload: list[dict[str, Any]] = []
+    provider_row_count = 0
+    failed_codes: list[str] = []
+    for code in target_codes:
+        try:
+            rows = fetch_minute_kbars(code, trade_date=target) or []
+        except Exception:
+            rows = []
+            failed_codes.append(code)
+        provider_row_count += len(rows)
+        for row in rows:
+            trade_date_value = _normalize_trade_date(row.get("trade_date"))
+            if trade_date_value != target:
+                continue
+            trade_time = str(row.get("trade_time") or "").strip()
+            if not trade_time:
+                continue
+            payload.append(
+                {
+                    "code": code,
+                    "freq": str(row.get("freq") or "1min"),
+                    "trade_date": trade_date_value,
+                    "trade_time": trade_time,
+                    "open": _float(row.get("open")),
+                    "high": _float(row.get("high")),
+                    "low": _float(row.get("low")),
+                    "close": _float(row.get("close")),
+                    "volume": _float(row.get("volume")),
+                    "amount": _float(row.get("amount")),
+                }
+            )
+
+    if payload:
+        stmt = mysql_insert(MinuteKbar).values(payload)
+        db.execute(stmt.on_duplicate_key_update(
+            open=stmt.inserted.open,
+            high=stmt.inserted.high,
+            low=stmt.inserted.low,
+            close=stmt.inserted.close,
+            volume=stmt.inserted.volume,
+            amount=stmt.inserted.amount,
+        ))
+        db.commit()
+
+    hit_codes = {row["code"] for row in payload}
+    missing_codes = [code for code in target_codes if code not in hit_codes]
+    return {
+        "row_count": len(payload),
+        "provider_row_count": provider_row_count,
+        "requested_code_count": len(target_codes),
+        "target_hit_count": len(hit_codes),
+        "missing_code_count": len(missing_codes),
+        "missing_codes": missing_codes[:10],
+        "failed_code_count": len(failed_codes),
+        "failed_codes": failed_codes[:10],
+    }
+
+
 def _capital_flow_target_codes(db: Session, trade_date: str, *, limit: int) -> list[str]:
     return _auxiliary_target_codes(db, trade_date, limit=limit)
+
+
+def _minute_kbar_target_codes(db: Session, trade_date: str, *, limit: int) -> list[str]:
+    target = _normalize_trade_date(trade_date)
+    if not target:
+        return []
+    target_variants = _trade_date_variants(target)
+    existing_codes = {
+        str(code or "").strip()
+        for code in db.scalars(select(MinuteKbar.code).where(MinuteKbar.trade_date.in_(target_variants))).all()
+        if str(code or "").strip()
+    }
+    ordered_codes = OrderedDict()
+
+    active_codes = db.scalars(
+        select(DailyKbar.code)
+        .where(DailyKbar.trade_date.in_(target_variants))
+        .order_by(DailyKbar.amount.desc(), DailyKbar.code.asc())
+        .limit(max(limit * 4, limit))
+    ).all()
+    for code in active_codes:
+        normalized = str(code or "").strip()
+        if normalized and normalized not in existing_codes:
+            ordered_codes[normalized] = True
+        if len(ordered_codes) >= limit:
+            break
+
+    if len(ordered_codes) < limit:
+        quote_codes = db.scalars(
+            select(StockQuote.code)
+            .where(StockQuote.trade_date.in_(target_variants))
+            .order_by(StockQuote.amount_yi.desc(), StockQuote.code.asc())
+            .limit(max(limit * 4, limit))
+        ).all()
+        for code in quote_codes:
+            normalized = str(code or "").strip()
+            if normalized and normalized not in existing_codes:
+                ordered_codes[normalized] = True
+            if len(ordered_codes) >= limit:
+                break
+
+    return list(ordered_codes.keys())[: max(1, limit)]
 
 
 def _daily_kbar_target_codes(db: Session, trade_date: str, *, limit: int) -> list[str]:
@@ -1466,11 +1739,6 @@ def _daily_kbar_target_codes(db: Session, trade_date: str, *, limit: int) -> lis
     if not target:
         return []
     target_variants = _trade_date_variants(target)
-    existing_codes = {
-        str(code or "").strip()
-        for code in db.scalars(select(DailyKbar.code).where(DailyKbar.trade_date.in_(target_variants))).all()
-        if str(code or "").strip()
-    }
     ordered_codes = OrderedDict()
     quote_codes = db.scalars(
         select(StockQuote.code)
@@ -1480,7 +1748,7 @@ def _daily_kbar_target_codes(db: Session, trade_date: str, *, limit: int) -> lis
     ).all()
     for code in quote_codes:
         normalized = str(code or "").strip()
-        if normalized and normalized not in existing_codes:
+        if normalized:
             ordered_codes[normalized] = True
 
     if len(ordered_codes) < limit:
@@ -1492,7 +1760,7 @@ def _daily_kbar_target_codes(db: Session, trade_date: str, *, limit: int) -> lis
         ).all()
         for code in recent_codes:
             normalized = str(code or "").strip()
-            if normalized and normalized not in existing_codes:
+            if normalized:
                 ordered_codes[normalized] = True
             if len(ordered_codes) >= limit:
                 break
@@ -1554,6 +1822,19 @@ def _gap_dates(coverage: dict[str, Any], *, include_incomplete: bool = False) ->
     if include_incomplete:
         dates.extend(coverage.get("incomplete_dates") or [])
     return sorted(set(_normalize_trade_date(date) for date in dates if _normalize_trade_date(date)))
+
+
+def _target_dates_with_closed_reference_gap(
+    dates: list[str],
+    *,
+    lag_days: dict[str, Any],
+    table_key: str,
+    reference_trade_date: str,
+) -> list[str]:
+    target_dates = [_normalize_trade_date(date) for date in dates if _normalize_trade_date(date)]
+    if reference_trade_date and int(lag_days.get(table_key) or 0) > 0:
+        target_dates.append(reference_trade_date)
+    return sorted(set(target_dates))
 
 
 def _closed_target_dates(dates: list[str], reference_trade_date: str, max_closed_trade_date: str) -> list[str]:

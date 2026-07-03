@@ -45,7 +45,7 @@
 - 筹码分布：`pro.cyq_perf(trade_date=)` 一次拉全市场
 - 本地指标（MA/量比/乖离/突破/回撤）：`backfill_indicators.py` 批量计算
 - 逐股票调用只在必须时（如 ths_member）使用，且需限速 `--rate-limit 3`
-- Tushare 自建服务器 `http://101.35.233.113:8020/` 约每 150 次 API 调用触发限速
+- Tushare 代理服务器 `https://fastapic.stockai888.top/`，不限速；全市场 `stock_basic` 查询延迟波动较大（2~50s），客户端读超时已设为 120s
 
 # 数据源策略
 

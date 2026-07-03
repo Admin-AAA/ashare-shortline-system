@@ -12,6 +12,8 @@ from sqlalchemy import inspect, text
 from app.db.session import Base, engine, _is_sqlite
 from app.models import tables  # noqa: F401
 
+DEFAULT_RECOMMENDATION_DATA_SOURCE = "local_pool_preferred"
+
 
 def init_db() -> None:
     if not _is_sqlite:
@@ -143,7 +145,14 @@ def _ensure_indexes() -> None:
         if "presets" in existing_tables:
             p_cols = {c["name"] for c in inspector.get_columns("presets")}
             _ensure_column(connection, p_cols, "presets", "score_line", "FLOAT NOT NULL DEFAULT 72")
-            _ensure_column(connection, p_cols, "presets", "data_source", "VARCHAR(20) NOT NULL DEFAULT 'local_pool'")
+            _ensure_column(
+                connection,
+                p_cols,
+                "presets",
+                "data_source",
+                f"VARCHAR(20) NOT NULL DEFAULT '{DEFAULT_RECOMMENDATION_DATA_SOURCE}'",
+            )
+            _ensure_column_default(connection, "presets", "data_source", DEFAULT_RECOMMENDATION_DATA_SOURCE)
 
         if "recommendations" in existing_tables:
             _ensure_column_type(
@@ -206,6 +215,16 @@ def _ensure_column(connection, existing_columns: set[str], table: str, column: s
         except Exception:
             _rollback_best_effort(connection)
             pass  # 兼容 SQLite / 旧表场景
+
+
+def _ensure_column_default(connection, table: str, column: str, default_value: str) -> None:
+    if connection.dialect.name != "mysql":
+        return
+    try:
+        connection.execute(text(f"ALTER TABLE {table} ALTER COLUMN {column} SET DEFAULT :default_value"), {"default_value": default_value})
+        connection.commit()
+    except Exception:
+        _rollback_best_effort(connection)
 
 
 def _ensure_column_type(

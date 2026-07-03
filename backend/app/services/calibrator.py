@@ -7,17 +7,10 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.engine.aggregator import AGG_WEIGHT_KEYS, COMPONENT_KEYS, DEFAULT_AGG_WEIGHTS
 from app.models.tables import Recommendation, RecommendationOutcome
 from app.services.outcome_service import is_accurate_recommendation
 
-
-DEFAULT_AGG_WEIGHTS = {
-    "skill_agent": 0.50,
-    "strategy_rule": 0.25,
-    "market": 0.10,
-    "risk": 0.10,
-    "evidence": 0.05,
-}
 
 DEFAULT_DSA_WEIGHTS = {
     "dsa_w_trend": 1.0,
@@ -27,16 +20,6 @@ DEFAULT_DSA_WEIGHTS = {
     "dsa_w_macd": 1.0,
     "dsa_w_rsi": 1.0,
 }
-
-AGG_WEIGHT_KEYS = [
-    "skill_agent",
-    "strategy_rule",
-    "market",
-    "risk",
-    "evidence",
-]
-
-COMPONENT_KEYS = ["skill_agent", "strategy_rule", "market", "risk", "evidence"]
 
 DSA_WEIGHT_KEYS = [
     "dsa_w_trend",
@@ -299,7 +282,7 @@ def calibrate_aggregation_weights(db: Session, steps: int = 5) -> dict[str, Any]
         weight_grid = _generate_weight_grid(n_components, steps=steps)
         search_method = "grid"
 
-    best_composite = -1.0
+    best_auc = 0.0
     best_weights = list(DEFAULT_AGG_WEIGHTS.values())
 
     for weights in weight_grid:
@@ -307,9 +290,9 @@ def calibrate_aggregation_weights(db: Session, steps: int = 5) -> dict[str, Any]
             sum(w * train_matrix[i][j] for j, w in enumerate(weights))
             for i in range(n_train)
         ]
-        train_composite = _composite_score(train_scores, train_labels, train_close_returns)
-        if train_composite > best_composite:
-            best_composite = train_composite
+        train_auc = _roc_auc(train_scores, train_labels)
+        if train_auc > best_auc:
+            best_auc = train_auc
             best_weights = weights
 
     optimal = {key: round(w, 4) for key, w in zip(AGG_WEIGHT_KEYS, best_weights)}
@@ -329,7 +312,7 @@ def calibrate_aggregation_weights(db: Session, steps: int = 5) -> dict[str, Any]
 
     return {
         "optimal_weights": optimal,
-        "train_composite_score": round(best_composite, 4),
+        "train_roc_auc": round(best_auc, 4),
         "test_composite_score": test_optimal_composite,
         "test_roc_auc": test_optimal_auc,
         "train_sample_count": n_train,
@@ -489,16 +472,16 @@ def walk_forward_calibrate(db: Session, n_windows: int = 3) -> dict[str, Any]:
         else:
             weight_grid = _generate_weight_grid(n_components)
 
-        best_composite = -1.0
+        best_auc = 0.0
         best_weights = list(DEFAULT_AGG_WEIGHTS.values())
         for weights in weight_grid:
             train_scores = [
                 sum(w * train_matrix[i][j] for j, w in enumerate(weights))
                 for i in range(len(train))
             ]
-            train_composite = _composite_score(train_scores, train_labels, train_returns)
-            if train_composite > best_composite:
-                best_composite = train_composite
+            train_auc = _roc_auc(train_scores, train_labels)
+            if train_auc > best_auc:
+                best_auc = train_auc
                 best_weights = weights
 
         optimal_w = {key: round(w, 4) for key, w in zip(AGG_WEIGHT_KEYS, best_weights)}

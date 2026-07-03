@@ -161,6 +161,110 @@ def _fetch_tushare_moneyflow(code: str, settings: Any, trade_date: str | None = 
         return None
 
 
+def _fetch_tushare_moneyflow_batch(
+    codes: list[str], settings: Any, trade_date: str | None = None
+) -> dict[str, dict[str, Any]]:
+    """批量获取资金流向：按日期拉取全市场，过滤目标股票。
+
+    比逐股票调用快 ~12x（120 只股票：120 次 API → ~10 次批量 API）。
+    每个日期一次 API 调用获取全市场数据，然后过滤目标 codes。
+    累积流入需要 10 天窗口数据。
+    """
+    try:
+        import pandas as pd
+        from app.services.tushare_client import get_pro
+
+        pro = get_pro()
+        target = _compact_trade_date(trade_date)
+        if not target:
+            return {}
+        end_day = date.fromisoformat(_normalize_trade_date(target))
+        code_set = set(codes)
+        ts_code_map = {
+            code: f"{code}.{'SH' if code.startswith(('6', '9')) else 'SZ'}"
+            for code in codes
+        }
+        ts_code_set = set(ts_code_map.values())
+
+        # 拉取 10 天窗口的数据（用于计算累积流入）
+        day_frames: list[pd.DataFrame] = []
+        for offset in range(10):
+            d = (end_day - timedelta(days=offset)).strftime("%Y%m%d")
+            try:
+                df = pro.moneyflow(trade_date=d)
+                if df is not None and not df.empty:
+                    df = df[df["ts_code"].isin(ts_code_set)]
+                    if not df.empty:
+                        day_frames.append(df)
+            except Exception:
+                continue
+
+        if not day_frames:
+            return {}
+
+        combined = pd.concat(day_frames, ignore_index=True)
+        combined["trade_date"] = combined["trade_date"].astype(str)
+
+        result: dict[str, dict[str, Any]] = {}
+        for code in codes:
+            ts_code = ts_code_map[code]
+            stock_df = combined[combined["ts_code"] == ts_code].sort_values(
+                "trade_date", ascending=False
+            )
+            if stock_df.empty:
+                continue
+            latest = stock_df.iloc[0]
+            row_trade_date = _normalize_trade_date(latest.get("trade_date", target))
+            if row_trade_date != _normalize_trade_date(target):
+                continue
+
+            cum_3d = 0.0
+            cum_5d = 0.0
+            cum_10d = 0.0
+            for i in range(min(len(stock_df), 10)):
+                row = stock_df.iloc[i]
+                net_mf = float(row.get("net_mf_amount") or 0)
+                if i < 3:
+                    cum_3d += net_mf
+                if i < 5:
+                    cum_5d += net_mf
+                cum_10d += net_mf
+
+            result[code] = {
+                "code": code,
+                "trade_date": row_trade_date,
+                "main_net_inflow_yi": round(float(latest.get("net_mf_amount") or 0) / 1e8, 4),
+                "super_large_net_inflow_yi": round(
+                    float(latest.get("buy_elg_amount") or 0) / 1e8
+                    - float(latest.get("sell_elg_amount") or 0) / 1e8,
+                    4,
+                ),
+                "large_net_inflow_yi": round(
+                    float(latest.get("buy_lg_amount") or 0) / 1e8
+                    - float(latest.get("sell_lg_amount") or 0) / 1e8,
+                    4,
+                ),
+                "medium_net_inflow_yi": round(
+                    float(latest.get("buy_md_amount") or 0) / 1e8
+                    - float(latest.get("sell_md_amount") or 0) / 1e8,
+                    4,
+                ),
+                "small_net_inflow_yi": round(
+                    float(latest.get("buy_sm_amount") or 0) / 1e8
+                    - float(latest.get("sell_sm_amount") or 0) / 1e8,
+                    4,
+                ),
+                "main_net_inflow_ratio": round(float(latest.get("net_mf_vol") or 0), 2),
+                "cumulative_inflow_3d_yi": round(cum_3d / 1e8, 4),
+                "cumulative_inflow_5d_yi": round(cum_5d / 1e8, 4),
+                "cumulative_inflow_10d_yi": round(cum_10d / 1e8, 4),
+            }
+        return result
+    except Exception as e:
+        logger.debug("Tushare批量资金流向不可用: %s", e)
+        return {}
+
+
 def _fetch_tushare_dragon_tiger(settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
     try:
         from app.services.tushare_client import fetch_dragon_tiger

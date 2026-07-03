@@ -5,12 +5,15 @@ from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
+
 class Settings(BaseSettings):
     app_name: str = "AShare Shortline System"
-    database_url: str = "mysql+pymysql://aowang:1279990918@139.196.242.53:4407/ashare_workbench?charset=utf8mb4"
+    database_url: str = "mysql+pymysql://aowang:1279990918@127.0.0.1:3306/ashare_workbench?charset=utf8mb4"
     data_provider: str = "tushare"
-    tushare_token: str = "f8b05f8ee54f468220f2569afe56b4c027f1d388d164899339d394ad"
-    tushare_rate_limit_per_minute: int = 0  # 0 = 不限速（自建服务器）
+    tushare_token: str = "eqyrJ71eIKjLoM12OeDLQOwRMUTuETs2ItnXAJitOhjTE8sLIjm8UuihObjXEs3zOFDKUI1PMrTmMp1yO9Tjl19"
+    tushare_rate_limit_per_minute: int = 0  # 0 = 不限速（代理服务器）
     quote_sources: str = "tushare"
     kline_sources: str = "tushare"
     market_scan_size: int = 5200
@@ -70,7 +73,7 @@ class Settings(BaseSettings):
     access_cookie_name: str = "ashare_access"
     access_session_days: int = 7
 
-    model_config = SettingsConfigDict(env_prefix="ASHARE_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="ASHARE_", env_file=str(BACKEND_ENV_FILE), extra="ignore")
 
     @model_validator(mode="after")
     def _validate_critical_config(self):

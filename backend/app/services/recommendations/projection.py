@@ -27,10 +27,7 @@ def build_market_temperature(snapshot: dict[str, Any]) -> MarketTemperature:
     limit_up_count = int(_get(snapshot, "limit_up_count", 0) or 0)
     limit_down_count = int(_get(snapshot, "limit_down_count", 0) or 0)
     up_ratio = round(up_count / sample_count, 3) if sample_count else 0
-    heat_score = round(
-        min(100.0, max(0.0, up_ratio * 70 + limit_up_count * 0.4 - limit_down_count * 0.8)),
-        2,
-    )
+    heat_score = round(min(100.0, up_ratio * 70 + limit_up_count * 0.4 - limit_down_count * 0.8), 2)
     breadth = _get(snapshot, "breadth", {}) or {}
 
     return MarketTemperature(
@@ -42,22 +39,25 @@ def build_market_temperature(snapshot: dict[str, Any]) -> MarketTemperature:
         limit_down_count=limit_down_count,
         up_ratio=up_ratio,
         heat_score=heat_score,
-        regime=_get(breadth, "market_regime") or _get(breadth, "market_sentiment") or "unknown",
+        regime=_get(breadth, "market_regime") or _get(breadth, "market_sentiment") or _get(breadth, "regime") or "unknown",
         main_industries=list(_get(snapshot, "main_industries", []) or []),
     )
 
 
 def build_cockpit_recommendation(rec: Any, watch: Any = None) -> CockpitRecommendation:
-    feature_snapshot = loads_json(_get(rec, "feature_snapshot_json"), {})
-    skill_breakdown = loads_json(_get(rec, "skill_breakdown_json"), [])
-    risk_tags = loads_json(_get(rec, "risk_tags_json"), [])
-    info_tags = loads_json(_get(rec, "info_tags_json"), [])
+    feature_snapshot = _loads_recommendation_field(rec, "feature_snapshot_json", "feature_snapshot", {})
+    skill_breakdown = _loads_recommendation_field(rec, "skill_breakdown_json", "skill_breakdown", [])
+    risk_tags = _loads_recommendation_field(rec, "risk_tags_json", "risk_tags", [])
+    info_tags = _loads_recommendation_field(rec, "info_tags_json", "info_tags", [])
     final_score = float(_get(rec, "final_score", 0.0) or 0.0)
     score_line_meta = _get(feature_snapshot, "score_line_meta", {}) or {}
     effective_score_line = _get(score_line_meta, "effective_score_line")
     score_gap = None
     if effective_score_line is not None:
         score_gap = round(final_score - float(effective_score_line), 3)
+    watch_status = _get(rec, "watch_status", "none")
+    if watch:
+        watch_status = _get(watch, "watch_status", watch_status)
 
     return CockpitRecommendation(
         recommendation_id=_get(rec, "recommendation_id", ""),
@@ -75,9 +75,17 @@ def build_cockpit_recommendation(rec: Any, watch: Any = None) -> CockpitRecommen
         risk_tags=list(risk_tags or []),
         info_tags=list(info_tags or []),
         status=_get(rec, "status", "pending") or "pending",
-        watch_status=_get(watch, "watch_status", "none") if watch else "none",
+        watch_status=watch_status,
         consensus_label=consensus_label(skill_breakdown),
         data_quality=DataQualitySummary(**data_quality_summary(feature_snapshot)),
+        preset_name=_get(rec, "preset_name"),
+        preset_id=_get(rec, "preset_id"),
+        run_name=_get(rec, "run_name"),
+        ideal_buy=_as_float_or_none(feature_snapshot.get("ideal_buy")),
+        secondary_buy=_as_float_or_none(feature_snapshot.get("secondary_buy")),
+        stop_loss=_as_float_or_none(feature_snapshot.get("stop_loss")),
+        take_profit=_as_float_or_none(feature_snapshot.get("take_profit")),
+        degraded_reason=_detect_degradation(info_tags, _get(rec, "rationale", "") or ""),
     )
 
 
@@ -108,11 +116,12 @@ def build_recommendation_explanation(
     trace_rows: list[Any] | None = None,
     watch: Any = None,
 ) -> RecommendationExplanation:
-    feature_snapshot = loads_json(_get(rec, "feature_snapshot_json"), {})
-    skill_breakdown = loads_json(_get(rec, "skill_breakdown_json"), [])
+    feature_snapshot = _loads_recommendation_field(rec, "feature_snapshot_json", "feature_snapshot", {})
+    skill_breakdown = _loads_recommendation_field(rec, "skill_breakdown_json", "skill_breakdown", [])
     score_breakdown = (
         _get(feature_snapshot, "component_scores")
         or _get(feature_snapshot, "score_breakdown")
+        or _get(rec, "score_breakdown")
         or {}
     )
     pipeline_trace = [
@@ -187,3 +196,42 @@ def _get(value: Any, key: str, default: Any = None) -> Any:
     if isinstance(value, dict):
         return value.get(key, default)
     return getattr(value, key, default)
+
+
+def _loads_recommendation_field(rec: Any, json_key: str, serialized_key: str, default: Any) -> Any:
+    raw_json = _get(rec, json_key)
+    if raw_json is not None:
+        loaded = loads_json(raw_json, None)
+        if loaded is not None:
+            return loaded
+    return loads_json(_get(rec, serialized_key), default)
+
+
+def _as_float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+# 降级信号关键词。后端 aggregator 在 Skill Agent 失败/数据缺失时会把标记写进
+# info_tags 和 rationale，但前端把它们和普通标签混排，用户难以一眼识别。
+# 这里提取出明确的降级原因，供卡片头部显示醒目徽章。
+_DEGRADATION_MARKERS: tuple[str, ...] = (
+    "Skill Agent 暂不可用",
+    "降级输出",
+    "评分与 Agent 加分已降权",
+    "Skill Agent 直接审查失败",
+    "规则预审与市场数据降级输出",
+)
+
+
+def _detect_degradation(info_tags: list[str] | None, rationale: str) -> str | None:
+    """从 info_tags / rationale 识别降级原因，返回首个匹配的标记，否则 None。"""
+    haystack = " | ".join(str(t) for t in (info_tags or []))
+    for marker in _DEGRADATION_MARKERS:
+        if marker in haystack or marker in (rationale or ""):
+            return marker
+    return None

@@ -110,7 +110,10 @@ def _table_stats(db: Session) -> dict[str, Any]:
             max_date = None
             if dc and hasattr(tbl, dc):
                 col = getattr(tbl, dc)
-                min_date, max_date = _fast_date_bounds(db, col) if tdef.get("fast_date_bounds") else _date_bounds(db, col)
+                if tbl is StockQuote:
+                    min_date, max_date = _active_stock_quote_date_bounds(db)
+                else:
+                    min_date, max_date = _fast_date_bounds(db, col) if tdef.get("fast_date_bounds") else _date_bounds(db, col)
 
             result[key] = {
                 "label": label,
@@ -171,11 +174,26 @@ def _infer_local_reference_trade_date(db: Session) -> str | None:
     candidates = [
         _date_bounds(db, DailyKbar.trade_date)[1],
         _date_bounds(db, LimitUpBoard.trade_date)[1],
-        _date_bounds(db, StockQuote.trade_date)[1],
+        _active_stock_quote_max_date(db),
         _date_bounds(db, Recommendation.trade_date)[1],
     ]
     normalized = [_fmt_date(item) for item in candidates if item]
     return max(normalized) if normalized else None
+
+
+def _active_stock_quote_max_date(db: Session) -> str | None:
+    return _active_stock_quote_date_bounds(db)[1]
+
+
+def _active_stock_quote_date_bounds(db: Session) -> tuple[str | None, str | None]:
+    normalized_col = func.replace(StockQuote.trade_date, "-", "")
+    min_date, max_date = db.execute(
+        select(func.min(normalized_col), func.max(normalized_col)).where(
+            StockQuote.trade_date.is_not(None),
+            StockQuote.freshness_status != "inactive",
+        )
+    ).one()
+    return _fmt_date(min_date), _fmt_date(max_date)
 
 
 def _recent_trade_day_coverage(
@@ -241,6 +259,13 @@ def _recent_trade_day_coverage(
             present = _present_dates(db, col, ordered_days)
             missing = [day for day in ordered_days if day not in present]
             incomplete_dates = _incomplete_daily_kbar_dates(db, ordered_days) if tdef["key"] == "daily_kbar" else []
+            tolerated_gap_dates = _realtime_tolerated_gap_dates(
+                missing_dates=missing,
+                incomplete_dates=incomplete_dates,
+                reference_trade_date=reference_trade_date,
+            )
+            effective_missing_dates = [day for day in missing if day not in tolerated_gap_dates]
+            effective_incomplete_dates = [day for day in incomplete_dates if day not in tolerated_gap_dates]
         except Exception as exc:
             _rollback_session_safely(db)
             logger.warning("最近交易日覆盖诊断 %s 失败: %s", tdef["key"], exc)
@@ -253,11 +278,16 @@ def _recent_trade_day_coverage(
                 "present_dates": [],
                 "missing_dates": [],
                 "incomplete_dates": [],
+                "effective_missing_dates": [],
+                "effective_incomplete_dates": [],
+                "tolerated_gap_dates": [],
+                "effective_gap_count": 0,
                 "error": str(exc),
             }
             continue
         covered_count = len(present)
         coverage_rate = round(covered_count / len(ordered_days), 3) if ordered_days else 0.0
+        effective_gap_count = len(set(effective_missing_dates + effective_incomplete_dates))
         coverage_tables[tdef["key"]] = {
             "label": tdef["label"],
             "critical": tdef["critical"],
@@ -267,8 +297,12 @@ def _recent_trade_day_coverage(
             "present_dates": present,
             "missing_dates": missing,
             "incomplete_dates": incomplete_dates,
+            "effective_missing_dates": effective_missing_dates,
+            "effective_incomplete_dates": effective_incomplete_dates,
+            "tolerated_gap_dates": sorted(tolerated_gap_dates),
+            "effective_gap_count": effective_gap_count,
         }
-        gap_count = len(set(missing + incomplete_dates))
+        gap_count = effective_gap_count
         max_missing_days = max(max_missing_days, gap_count)
         if tdef["critical"] and gap_count >= _RECENT_HIGH_MISSING_DAYS:
             high_impact_tables.append(tdef["key"])
@@ -307,8 +341,14 @@ def _compute_health_score(
         if info.get("error"):
             score -= 10
 
-    # 扣分：滞后
+    # 扣分：滞后。保持与 issue 规则一致，非关键且未配置滞后告警的表不因新旧节奏不同扣分。
+    table_defs_by_key = {item["key"]: item for item in _TABLE_DEFS}
     for key, lag in lag_days.items():
+        info = table_stats.get(key, {})
+        tdef = table_defs_by_key.get(key, {})
+        should_penalize = bool(info.get("critical")) or tdef.get("lag_alert_after_days") is not None
+        if not should_penalize:
+            continue
         if lag > 5:
             score -= 10
         elif lag > 2:
@@ -316,7 +356,7 @@ def _compute_health_score(
 
     recent_tables = recent_coverage.get("tables") or {}
     for key, coverage in recent_tables.items():
-        gap_count = _coverage_gap_count(coverage)
+        gap_count = _coverage_gap_count(coverage, reference_trade_date)
         if gap_count == 0:
             continue
         if coverage.get("critical"):
@@ -386,8 +426,7 @@ def _find_issues(
 
     recent_tables = recent_coverage.get("tables") or {}
     for key, coverage in recent_tables.items():
-        missing_dates = coverage.get("missing_dates") or []
-        incomplete_dates = coverage.get("incomplete_dates") or []
+        missing_dates, incomplete_dates = _effective_coverage_dates(coverage, reference_trade_date)
         gap_dates = sorted(set([*missing_dates, *incomplete_dates]))
         if not gap_dates:
             continue
@@ -514,8 +553,10 @@ def _date_bounds(db: Session, col: Any) -> tuple[str | None, str | None]:
 
 
 def _fast_date_bounds(db: Session, col: Any) -> tuple[str | None, str | None]:
-    min_date = db.scalar(select(col).where(col.is_not(None)).order_by(col.asc()).limit(1))
-    max_date = db.scalar(select(col).where(col.is_not(None)).order_by(col.desc()).limit(1))
+    normalized_col = func.replace(col, "-", "")
+    min_date, max_date = db.execute(
+        select(func.min(normalized_col), func.max(normalized_col)).where(col.is_not(None))
+    ).one()
     return _fmt_date(min_date), _fmt_date(max_date)
 
 
@@ -558,8 +599,47 @@ def _incomplete_daily_kbar_dates(db: Session, ordered_days: list[str]) -> list[s
     return [day for day in ordered_days if 0 < counts.get(day, 0) < _MIN_RECENT_DAILY_KBAR_CODES]
 
 
-def _coverage_gap_count(coverage: dict[str, Any]) -> int:
-    return len(set((coverage.get("missing_dates") or []) + (coverage.get("incomplete_dates") or [])))
+def _coverage_gap_count(coverage: dict[str, Any], reference_trade_date: str | None = None) -> int:
+    if "effective_gap_count" in coverage:
+        try:
+            return int(coverage.get("effective_gap_count") or 0)
+        except (TypeError, ValueError):
+            return 0
+    missing_dates, incomplete_dates = _effective_coverage_dates(coverage, reference_trade_date)
+    return len(set(missing_dates + incomplete_dates))
+
+
+def _effective_coverage_dates(
+    coverage: dict[str, Any],
+    reference_trade_date: str | None,
+) -> tuple[list[str], list[str]]:
+    if "effective_missing_dates" in coverage or "effective_incomplete_dates" in coverage:
+        return list(coverage.get("effective_missing_dates") or []), list(coverage.get("effective_incomplete_dates") or [])
+
+    missing_dates = list(coverage.get("missing_dates") or [])
+    incomplete_dates = list(coverage.get("incomplete_dates") or [])
+    tolerated = _realtime_tolerated_gap_dates(
+        missing_dates=missing_dates,
+        incomplete_dates=incomplete_dates,
+        reference_trade_date=reference_trade_date,
+    )
+    return (
+        [day for day in missing_dates if day not in tolerated],
+        [day for day in incomplete_dates if day not in tolerated],
+    )
+
+
+def _realtime_tolerated_gap_dates(
+    *,
+    missing_dates: list[str],
+    incomplete_dates: list[str],
+    reference_trade_date: str | None,
+) -> set[str]:
+    reference = _fmt_date(reference_trade_date)
+    if not reference:
+        return set()
+    gap_dates = {_fmt_date(day) for day in [*missing_dates, *incomplete_dates]}
+    return {reference} if reference in gap_dates else set()
 
 
 def _rollback_session_safely(db: Session) -> None:

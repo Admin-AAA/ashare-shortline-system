@@ -573,9 +573,10 @@ def _summarize_violations(
 ) -> dict[str, Any]:
     errors = [v for v in violations if v.get("severity") == "error"]
     warnings = [v for v in violations if v.get("severity") == "warning"]
+    total_checks = total_recs * 4  # 4 checks per recommendation
     return {
-        "total": len(violations),
-        "passed": max(0, total_recs * 4 - len(violations)),
+        "total": total_checks,
+        "passed": max(0, total_checks - len(violations)),
         "warnings": len(warnings),
         "failed": len(errors),
     }

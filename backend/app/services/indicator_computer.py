@@ -34,14 +34,24 @@ def _rsi(values: list[float], window: int) -> float:
 
 
 def _macd(values: list[float]) -> tuple[float, float]:
-    ema12 = _ema(values, 12)
-    ema26 = _ema(values, 26)
+    if len(values) < 26:
+        ema12 = _ema(values, 12)
+        ema26 = _ema(values, 26)
+        return ema12 - ema26, 0.0
+    alpha12 = 2 / 13
+    alpha26 = 2 / 27
+    alpha9 = 2 / 10
+    ema12 = values[0]
+    ema26 = values[0]
     dif_series: list[float] = []
-    for index in range(len(values)):
-        subset = values[: index + 1]
-        dif_series.append(_ema(subset, 12) - _ema(subset, 26))
-    dif = ema12 - ema26
-    dea = _ema(dif_series, 9)
+    for value in values:
+        ema12 = alpha12 * value + (1 - alpha12) * ema12
+        ema26 = alpha26 * value + (1 - alpha26) * ema26
+        dif_series.append(ema12 - ema26)
+    dif = dif_series[-1]
+    dea = dif_series[0]
+    for d in dif_series[1:]:
+        dea = alpha9 * d + (1 - alpha9) * dea
     return dif, dea
 
 
@@ -106,12 +116,21 @@ def compute_daily_indicators(code: str, bars: list[dict[str, Any]]) -> dict[str,
     closes: list[float] = []
     highs: list[float] = []
 
+    # 增量 MACD 状态（避免每 bar 重算 O(n²)）
+    alpha12 = 2 / 13
+    alpha26 = 2 / 27
+    alpha9 = 2 / 10
+    ema12 = 0.0
+    ema26 = 0.0
+    dea = 0.0
+    macd_initialized = False
+
     for index, bar in enumerate(bars):
-        closes.append(float(bar.get("close") or 0))
+        close = float(bar.get("close") or 0)
+        closes.append(close)
         highs.append(float(bar.get("high") or 0))
 
         trade_date = str(bar["trade_date"])
-        close = closes[-1]
 
         # MA values (reuse from closes)
         ma5 = _ma(closes, 5)
@@ -123,12 +142,29 @@ def compute_daily_indicators(code: str, bars: list[dict[str, Any]]) -> dict[str,
         rsi_12 = _rsi(closes, 12)
         rsi_24 = _rsi(closes, 24)
 
-        # MACD
+        # MACD — 增量计算（O(1) per bar，总计 O(n)）
+        dif: float | None = None
+        dea_out: float | None = None
+        macd_bar: float | None = None
         if len(closes) >= 35:
-            dif, dea = _macd(closes)
+            if not macd_initialized:
+                # 一次性初始化：处理前 34 个 close，得到 ema/dea 状态
+                ema12 = closes[0]
+                ema26 = closes[0]
+                dea = 0.0
+                for c in closes[:-1]:
+                    ema12 = alpha12 * c + (1 - alpha12) * ema12
+                    ema26 = alpha26 * c + (1 - alpha26) * ema26
+                    dif_prev = ema12 - ema26
+                    dea = alpha9 * dif_prev + (1 - alpha9) * dea
+                macd_initialized = True
+            # 当前 bar 增量更新
+            ema12 = alpha12 * close + (1 - alpha12) * ema12
+            ema26 = alpha26 * close + (1 - alpha26) * ema26
+            dif = ema12 - ema26
+            dea = alpha9 * dif + (1 - alpha9) * dea
+            dea_out = dea
             macd_bar = (dif - dea) * 2
-        else:
-            dif, dea, macd_bar = None, None, None
 
         # Bias
         bias_ma5 = round(_bias(close, ma5), 3)
@@ -163,7 +199,7 @@ def compute_daily_indicators(code: str, bars: list[dict[str, Any]]) -> dict[str,
             "rsi_12": rsi_12,
             "rsi_24": rsi_24,
             "macd_dif": round(dif, 4) if dif is not None else None,
-            "macd_dea": round(dea, 4) if dea is not None else None,
+            "macd_dea": round(dea_out, 4) if dea_out is not None else None,
             "macd_bar": round(macd_bar, 4) if macd_bar is not None else None,
             "bias_ma5": bias_ma5,
             "bias_ma10": bias_ma10,

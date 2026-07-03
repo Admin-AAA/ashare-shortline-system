@@ -23,13 +23,13 @@ if _is_sqlite:
     _engine_kwargs = {"poolclass": None, "connect_args": _connect_args}
     engine = create_engine(settings.database_url, **_engine_kwargs)
 else:
-    _connect_args = {"charset": "utf8mb4", "connect_timeout": 10, "read_timeout": 60, "write_timeout": 60}
+    _connect_args = {"charset": "utf8mb4", "connect_timeout": 10, "read_timeout": 300, "write_timeout": 120}
     _engine_kwargs = {
         "pool_size": 20,
         "max_overflow": 15,
         "pool_timeout": 30,
         "pool_pre_ping": True,
-        "pool_recycle": 600,
+        "pool_recycle": 3600,  # 1小时回收，避免长查询期间连接过期
     }
     engine = create_engine(settings.database_url, connect_args=_connect_args, **_engine_kwargs)
 

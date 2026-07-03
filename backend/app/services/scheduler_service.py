@@ -2,8 +2,9 @@
 
 在 FastAPI 启动时创建 BackgroundScheduler，从数据库加载已启用的任务。
 支持任务类型:
-  - data_sync: 同步行情数据（刷新报价池 + 回填日K线 + 辅助数据）
+  - data_sync: 同步行情数据（刷新报价池 + 按日批量日K + 健康补数 + 辅助数据）
   - recommendation_run: 执行推荐流水线
+  - preset_matrix_run: 盘后批量执行全部启用预设，用于预设矩阵对比
 """
 
 from __future__ import annotations
@@ -16,16 +17,21 @@ from datetime import datetime, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from sqlalchemy import select
 
 from app.db.session import SessionLocal
-from app.models.tables import ScheduledTask
-from app.services.cost_service import finish_task_run, start_task_run
+from app.models.tables import Preset, ScheduledTask, ScheduledTaskRun
+from app.services.cost_service import finish_task_run, serialize_scheduled_task_run, start_task_run
 
 logger = logging.getLogger("scheduler")
 
 _scheduler: BackgroundScheduler | None = None
 _running_lock = threading.Lock()
 _running_tasks: set[str] = set()
+TASK_TYPE_PRESET_MATRIX_RUN = "preset_matrix_run"
+MANUAL_PRESET_MATRIX_TASK_ID = "manual_preset_matrix_run"
+MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID = "manual_data_health_remediation"
+DEFAULT_RECOMMENDATION_DATA_SOURCE = "local_pool_preferred"
 
 
 def _is_task_running(task_id: str) -> bool:
@@ -55,6 +61,24 @@ def _set_db_running(task_id: str, running: bool) -> None:
         db.close()
     except Exception:
         logger.exception("更新 is_running 失败: %s", task_id)
+
+
+def _mark_running_memory(task_id: str) -> None:
+    with _running_lock:
+        _running_tasks.add(task_id)
+
+
+def _try_mark_running_memory(task_id: str) -> bool:
+    with _running_lock:
+        if task_id in _running_tasks:
+            return False
+        _running_tasks.add(task_id)
+        return True
+
+
+def _mark_done_memory(task_id: str) -> None:
+    with _running_lock:
+        _running_tasks.discard(task_id)
 
 
 def start_scheduler() -> BackgroundScheduler:
@@ -128,6 +152,8 @@ def _execute_task(task_id: str, *, force: bool = False, trigger_source: str = "s
 
         if task_type == "recommendation_run":
             result = asyncio.run(_run_recommendation(db, payload))
+        elif task_type == TASK_TYPE_PRESET_MATRIX_RUN:
+            result = asyncio.run(_run_preset_matrix(db, payload, task_run_id=task_run_id))
         elif task_type in ("data_sync", "pool_refresh", "data_backfill"):
             result = _run_data_sync(db, payload, task_type=task_type)
         else:
@@ -136,7 +162,7 @@ def _execute_task(task_id: str, *, force: bool = False, trigger_source: str = "s
         finish_task_run(
             db,
             task_run_id,
-            status="completed",
+            status=_task_result_status(result),
             summary=str(result.get("summary_text") or ""),
             result=result,
         )
@@ -161,48 +187,440 @@ def _execute_task(task_id: str, *, force: bool = False, trigger_source: str = "s
         _mark_done(task_id)
 
 
+def start_preset_matrix_now(payload: dict | None = None) -> dict:
+    """异步启动一次手工预设矩阵批次，立即返回任务运行状态。"""
+    if not _try_mark_running_memory(MANUAL_PRESET_MATRIX_TASK_ID):
+        running = get_latest_preset_matrix_task_run()
+        if running and running.get("status") == "running":
+            return {"started": False, "task_run": running}
+        raise RuntimeError("预设矩阵正在执行中，请等待当前批次完成")
+
+    run_payload = _default_matrix_payload(payload or {})
+    db = SessionLocal()
+    task_run_id: str | None = None
+    try:
+        existing_running = _latest_running_preset_matrix_task_run(db)
+        if existing_running is not None:
+            _mark_done_memory(MANUAL_PRESET_MATRIX_TASK_ID)
+            return {"started": False, "task_run": serialize_scheduled_task_run(existing_running)}
+
+        task = _manual_preset_matrix_task(run_payload)
+        task_run = start_task_run(db, task, trigger_source="manual")
+        task_run_id = task_run.task_run_id
+    except Exception:
+        _mark_done_memory(MANUAL_PRESET_MATRIX_TASK_ID)
+        raise
+    finally:
+        db.close()
+
+    thread = threading.Thread(
+        target=_execute_manual_preset_matrix,
+        args=[task_run_id, run_payload],
+        name=f"preset-matrix-{task_run_id}",
+        daemon=True,
+    )
+    thread.start()
+    latest = get_latest_preset_matrix_task_run()
+    return {"started": True, "task_run": latest}
+
+
+def get_latest_preset_matrix_task_run() -> dict | None:
+    db = SessionLocal()
+    try:
+        run = db.scalars(
+            select(ScheduledTaskRun)
+            .where(ScheduledTaskRun.task_type == TASK_TYPE_PRESET_MATRIX_RUN)
+            .order_by(ScheduledTaskRun.started_at.desc())
+            .limit(1)
+        ).first()
+        return serialize_scheduled_task_run(run) if run is not None else None
+    finally:
+        db.close()
+
+
+def _latest_running_preset_matrix_task_run(db) -> ScheduledTaskRun | None:
+    return db.scalars(
+        select(ScheduledTaskRun)
+        .where(
+            ScheduledTaskRun.task_type == TASK_TYPE_PRESET_MATRIX_RUN,
+            ScheduledTaskRun.status == "running",
+            ScheduledTaskRun.finished_at.is_(None),
+        )
+        .order_by(ScheduledTaskRun.started_at.desc())
+        .limit(1)
+    ).first()
+
+
+def _execute_manual_preset_matrix(task_run_id: str, payload: dict) -> None:
+    db = SessionLocal()
+    try:
+        result = asyncio.run(_run_preset_matrix(db, payload, task_run_id=task_run_id))
+        finish_task_run(
+            db,
+            task_run_id,
+            status=_task_result_status(result),
+            summary=str(result.get("summary_text") or ""),
+            result=result,
+        )
+    except Exception as exc:
+        logger.exception("手工预设矩阵运行失败")
+        db.rollback()
+        try:
+            finish_task_run(
+                db,
+                task_run_id,
+                status="failed",
+                error=str(exc),
+                summary=str(exc),
+                result={"summary_text": str(exc)},
+            )
+        except Exception:
+            logger.exception("手工预设矩阵失败状态写入失败")
+    finally:
+        db.close()
+        _mark_done_memory(MANUAL_PRESET_MATRIX_TASK_ID)
+
+
+def start_data_health_remediation_now(payload: dict | None = None) -> dict:
+    """异步启动一次手工数据健康补数，立即返回任务运行状态。"""
+    if not _try_mark_running_memory(MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID):
+        running = get_latest_data_health_remediation_task_run()
+        if running and running.get("status") == "running":
+            return {"started": False, "task_run": running}
+        raise RuntimeError("数据补数正在执行中，请等待当前批次完成")
+
+    run_payload = _default_data_health_remediation_payload(payload or {})
+    db = SessionLocal()
+    task_run_id: str | None = None
+    try:
+        existing_running = _latest_running_task_run(db, MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID)
+        if existing_running is not None:
+            _mark_done_memory(MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID)
+            return {"started": False, "task_run": serialize_scheduled_task_run(existing_running)}
+
+        task = _manual_data_health_remediation_task(run_payload)
+        task_run = start_task_run(db, task, trigger_source="manual")
+        task_run_id = task_run.task_run_id
+    except Exception:
+        _mark_done_memory(MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID)
+        raise
+    finally:
+        db.close()
+
+    thread = threading.Thread(
+        target=_execute_manual_data_health_remediation,
+        args=[task_run_id, run_payload],
+        name=f"data-health-remediation-{task_run_id}",
+        daemon=True,
+    )
+    thread.start()
+    latest = get_latest_data_health_remediation_task_run()
+    return {"started": True, "task_run": latest}
+
+
+def get_latest_data_health_remediation_task_run() -> dict | None:
+    db = SessionLocal()
+    try:
+        run = db.scalars(
+            select(ScheduledTaskRun)
+            .where(ScheduledTaskRun.task_id == MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID)
+            .order_by(ScheduledTaskRun.started_at.desc())
+            .limit(1)
+        ).first()
+        return serialize_scheduled_task_run(run) if run is not None else None
+    finally:
+        db.close()
+
+
+def _latest_running_task_run(db, task_id: str) -> ScheduledTaskRun | None:
+    return db.scalars(
+        select(ScheduledTaskRun)
+        .where(
+            ScheduledTaskRun.task_id == task_id,
+            ScheduledTaskRun.status == "running",
+            ScheduledTaskRun.finished_at.is_(None),
+        )
+        .order_by(ScheduledTaskRun.started_at.desc())
+        .limit(1)
+    ).first()
+
+
+def _execute_manual_data_health_remediation(task_run_id: str, payload: dict) -> None:
+    db = SessionLocal()
+    try:
+        result = _run_manual_data_health_remediation(db, payload)
+        finish_task_run(
+            db,
+            task_run_id,
+            status=_task_result_status(result),
+            summary=str(result.get("summary_text") or ""),
+            result=result,
+        )
+    except Exception as exc:
+        logger.exception("手工数据健康补数失败")
+        db.rollback()
+        try:
+            finish_task_run(
+                db,
+                task_run_id,
+                status="failed",
+                error=str(exc),
+                summary=str(exc),
+                result={"summary_text": str(exc), "remediation_type": "data_health"},
+            )
+        except Exception:
+            logger.exception("手工数据健康补数失败状态写入失败")
+    finally:
+        db.close()
+        _mark_done_memory(MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID)
+
+
+def _run_manual_data_health_remediation(db, payload: dict) -> dict:
+    from app.services.data_gap_remediation_service import (
+        DEFAULT_DAILY_KBAR_CODE_LIMIT,
+        DEFAULT_REMEDIABLE_TABLES,
+        remediate_data_health_gaps,
+    )
+
+    target_tables = payload.get("target_tables")
+    result = remediate_data_health_gaps(
+        db,
+        target_tables=list(target_tables) if target_tables is not None else None,
+        dry_run=False,
+        capital_flow_code_limit=int(payload.get("capital_flow_code_limit", 200)),
+        daily_kbar_code_limit=int(payload.get("daily_kbar_code_limit", DEFAULT_DAILY_KBAR_CODE_LIMIT)),
+        minute_kbar_code_limit=int(payload.get("minute_kbar_code_limit", 300)),
+        post_diagnosis=bool(payload.get("post_diagnosis", True)),
+    )
+    return {
+        **result,
+        "summary_text": _data_health_remediation_summary(result),
+        "remediation_type": "data_health",
+        "target_tables": target_tables or list(DEFAULT_REMEDIABLE_TABLES),
+    }
+
+
+def _manual_data_health_remediation_task(payload: dict) -> ScheduledTask:
+    task = ScheduledTask(task_id=MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID)
+    task.name = "手动数据补数"
+    task.task_type = "data_backfill"
+    task.cron_expression = "0 0 * * *"
+    task.payload_json = json.dumps(payload, ensure_ascii=False)
+    task.enabled = False
+    task.is_running = True
+    return task
+
+
+def _default_data_health_remediation_payload(payload: dict) -> dict:
+    from app.services.data_gap_remediation_service import DEFAULT_DAILY_KBAR_CODE_LIMIT, DEFAULT_REMEDIABLE_TABLES
+
+    return {
+        "target_tables": payload.get("target_tables") or list(DEFAULT_REMEDIABLE_TABLES),
+        "capital_flow_code_limit": int(payload.get("capital_flow_code_limit", 200)),
+        "daily_kbar_code_limit": int(payload.get("daily_kbar_code_limit", DEFAULT_DAILY_KBAR_CODE_LIMIT)),
+        "minute_kbar_code_limit": int(payload.get("minute_kbar_code_limit", 300)),
+        "post_diagnosis": bool(payload.get("post_diagnosis", True)),
+    }
+
+
+def _data_health_remediation_summary(result: dict) -> str:
+    actions = result.get("actions") if isinstance(result, dict) else None
+    action_count = len(actions) if isinstance(actions, list) else 0
+    summary = result.get("action_summary") or {} if isinstance(result, dict) else {}
+    failed_count = int(summary.get("failed_count") or 0)
+    empty_count = int(summary.get("empty_count") or 0)
+    comparison = result.get("comparison") if isinstance(result, dict) else None
+    empty_suffix = f"，空结果待重试 {empty_count}" if empty_count else ""
+    if isinstance(comparison, dict) and comparison.get("status") != "skipped":
+        resolved = int(comparison.get("resolved_missing_day_count") or 0)
+        target = int(comparison.get("target_missing_day_count") or 0)
+        unresolved = int(comparison.get("unresolved_missing_day_count") or 0)
+        unresolved_suffix = f"，仍缺 {unresolved}" if unresolved else ""
+        return f"数据补数完成 {action_count} 项，修复缺口 {resolved}/{target}{unresolved_suffix}，失败 {failed_count}{empty_suffix}"
+    return f"数据补数完成 {action_count} 项，失败 {failed_count}{empty_suffix}"
+
+
+def _manual_preset_matrix_task(payload: dict) -> ScheduledTask:
+    task = ScheduledTask(task_id=MANUAL_PRESET_MATRIX_TASK_ID)
+    task.name = str(payload.get("matrix_batch_name") or payload.get("run_name_prefix") or "手工预设矩阵")
+    task.task_type = TASK_TYPE_PRESET_MATRIX_RUN
+    task.cron_expression = "0 0 * * *"
+    task.payload_json = json.dumps(payload, ensure_ascii=False)
+    task.enabled = False
+    task.is_running = True
+    return task
+
+
+def _default_matrix_payload(payload: dict) -> dict:
+    result = {
+        "matrix_batch_name": str(payload.get("matrix_batch_name") or "手工预设矩阵"),
+        "run_name_prefix": str(payload.get("run_name_prefix") or payload.get("matrix_batch_name") or "手工预设矩阵"),
+        "data_source": payload.get("data_source") or DEFAULT_RECOMMENDATION_DATA_SOURCE,
+    }
+    for key, value in payload.items():
+        if key not in result:
+            result[key] = value
+    return result
+
+
 def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
-    """统一数据同步：刷新报价池 + 回填日K线。"""
+    """统一数据同步入口，按 sync_scope 执行可恢复的小阶段。"""
+    from app.api.data_sources import invalidate_pool_status_cache
     from app.services.market_pool import refresh_quote_pool
-    from app.services.workbench_service import invalidate_bootstrap_cache
 
     sync_scope = str(payload.get("sync_scope") or _default_sync_scope(task_type))
-    result: dict[str, object] = {"sync_scope": sync_scope}
+    result: dict[str, object] = {"sync_scope": sync_scope, "steps": []}
     summary_parts: list[str] = []
 
     # 1. 刷新行情池
     if sync_scope in ("quotes", "all"):
         quotes, meta = refresh_quote_pool(db)
-        invalidate_bootstrap_cache()
+        invalidate_pool_status_cache()
         logger.info("行情池刷新: %d 条行情, %s", len(quotes), meta)
         result["quotes"] = {"refreshed": len(quotes), "meta": meta}
         quote_trade_dates = [str(row.get("trade_date") or "") for row in quotes if row.get("trade_date")]
         if quote_trade_dates:
             result["trade_date"] = max(quote_trade_dates)
         summary_parts.append(f"行情池 {len(quotes)} 条")
+        result["steps"].append({"name": "quotes", "status": "completed", "row_count": len(quotes)})
 
-    # 2. 回填日K线
+    # 2. 按交易日批量回填日K，避免逐股票脚本在全市场 force 模式下长时间超时。
     if sync_scope in ("daily_bars", "all"):
-        backfill = _run_backfill_script(payload)
-        result["backfill"] = backfill
-        if backfill.get("processed") is not None:
-            summary_parts.append(
-                f"日K 处理 {int(backfill.get('processed') or 0)} / 失败 {int(backfill.get('failed') or 0)}"
-            )
-        else:
-            summary_parts.append("日K 回填完成")
+        daily_kbar_batch = _run_daily_kbar_batch(payload)
+        invalidate_pool_status_cache()
+        result["daily_kbar_batch"] = daily_kbar_batch
+        summary_parts.append(_sync_step_summary("日K按日批量补数", daily_kbar_batch))
+        result["steps"].append({"name": "daily_kbar_batch", "status": daily_kbar_batch.get("status")})
 
-    # 3. 回填辅助数据
+    # 3. 健康补数
+    if sync_scope in ("health_remediation", "all") and not bool(payload.get("skip_health_remediation")):
+        health_remediation = _run_data_health_remediation(payload)
+        invalidate_pool_status_cache()
+        result["health_remediation"] = health_remediation
+        summary_parts.append(_sync_step_summary("健康补数完成", health_remediation))
+        result["steps"].append({"name": "health_remediation", "status": health_remediation.get("status")})
+
+    # 4. 回填辅助数据
     if sync_scope in ("auxiliary", "all"):
         auxiliary_payload = dict(payload)
         if result.get("trade_date") and not auxiliary_payload.get("trade_date"):
             auxiliary_payload["trade_date"] = result["trade_date"]
-        auxiliary = _run_auxiliary_script(auxiliary_payload)
+        auxiliary = _run_auxiliary_remediation(auxiliary_payload)
+        invalidate_pool_status_cache()
         result["auxiliary"] = auxiliary
-        summary_parts.append("辅助数据完成")
+        summary_parts.append(_sync_step_summary("辅助数据补数完成", auxiliary))
+        result["steps"].append({"name": "auxiliary", "status": auxiliary.get("status")})
 
+    result["status"] = _task_result_status(result)
     result["summary_text"] = "；".join(summary_parts) if summary_parts else "自动任务执行完成"
     return result
+
+
+def _task_result_status(result: dict | None) -> str:
+    if not isinstance(result, dict):
+        return "completed"
+    status = str(result.get("status") or "").strip()
+    if status == "completed_post_diagnosis_failed":
+        return "partial_completed"
+    if status in {"failed", "partial_failed", "partial_completed", "diagnosis_failed", "post_diagnosis_failed"}:
+        return status
+    step_statuses = [
+        str(step.get("status") or "").strip()
+        for step in (result.get("steps") or [])
+        if isinstance(step, dict)
+    ]
+    if any(status == "failed" for status in step_statuses):
+        return "failed"
+    if any(status in {"partial_failed", "diagnosis_failed", "post_diagnosis_failed"} for status in step_statuses):
+        return "partial_failed"
+    if any(status in {"partial_completed", "completed_post_diagnosis_failed"} for status in step_statuses):
+        return "partial_completed"
+    if any(_action_summary_count(result.get(key), "empty_count") for key in ("daily_kbar_batch", "health_remediation", "auxiliary")):
+        return "partial_completed"
+    return "completed"
+
+
+def _sync_step_summary(label: str, result: dict) -> str:
+    summary = result.get("action_summary") or {}
+    completed = int(summary.get("completed_count") or 0)
+    failed = int(summary.get("failed_count") or 0)
+    empty = int(summary.get("empty_count") or 0)
+    skipped = int(summary.get("skipped_count") or 0)
+    parts = [f"{label} {completed}"]
+    if empty:
+        parts.append(f"空结果待重试 {empty}")
+    if skipped:
+        parts.append(f"跳过 {skipped}")
+    parts.append(f"失败 {failed}")
+    return " / ".join(parts)
+
+
+def _action_summary_count(result: object, key: str) -> int:
+    if not isinstance(result, dict):
+        return 0
+    summary = result.get("action_summary")
+    if not isinstance(summary, dict):
+        return 0
+    return int(summary.get(key) or 0)
+
+
+def _run_daily_kbar_batch(payload: dict) -> dict:
+    from app.services.data_gap_remediation_service import (
+        DEFAULT_DAILY_KBAR_CODE_LIMIT,
+        remediate_data_health_gaps,
+    )
+
+    db = SessionLocal()
+    try:
+        return remediate_data_health_gaps(
+            db,
+            target_tables=["daily_kbar"],
+            daily_kbar_code_limit=int(payload.get("health_daily_kbar_code_limit") or DEFAULT_DAILY_KBAR_CODE_LIMIT),
+            post_diagnosis=bool(payload.get("health_post_diagnosis", True)),
+        )
+    finally:
+        db.close()
+
+
+def _run_data_health_remediation(payload: dict) -> dict:
+    from app.services.data_gap_remediation_service import (
+        DEFAULT_DAILY_KBAR_CODE_LIMIT,
+        remediate_data_health_gaps,
+    )
+
+    target_tables = payload.get("health_remediation_tables")
+    if target_tables is None:
+        target_tables = ["daily_kbar", "minute_kbar", "index_daily", "limit_up_board", "capital_flow"]
+    db = SessionLocal()
+    try:
+        return remediate_data_health_gaps(
+            db,
+            target_tables=list(target_tables),
+            capital_flow_code_limit=int(payload.get("health_capital_flow_code_limit") or payload.get("flow_top_n") or 300),
+            daily_kbar_code_limit=int(payload.get("health_daily_kbar_code_limit") or DEFAULT_DAILY_KBAR_CODE_LIMIT),
+            minute_kbar_code_limit=int(payload.get("health_minute_kbar_code_limit") or payload.get("tushare_aux_top_n") or 300),
+            post_diagnosis=bool(payload.get("health_post_diagnosis", True)),
+        )
+    finally:
+        db.close()
+
+
+def _run_auxiliary_remediation(payload: dict) -> dict:
+    from app.services.data_gap_remediation_service import remediate_data_health_gaps
+
+    target_tables = payload.get("auxiliary_remediation_tables")
+    if target_tables is None:
+        target_tables = ["limit_up_board", "concept_sector", "dragon_tiger", "news", "capital_flow"]
+    db = SessionLocal()
+    try:
+        return remediate_data_health_gaps(
+            db,
+            target_tables=list(target_tables),
+            capital_flow_code_limit=int(payload.get("auxiliary_capital_flow_code_limit") or payload.get("flow_top_n") or 300),
+            post_diagnosis=bool(payload.get("auxiliary_post_diagnosis", True)),
+        )
+    finally:
+        db.close()
 
 
 def _run_backfill_script(payload: dict) -> dict:
@@ -318,6 +736,125 @@ async def _run_recommendation(db, payload: dict) -> dict:
             f"关联 Run {related_run_id}，推荐 {recommended_count} 条"
             if related_run_id
             else f"自动推荐 {recommended_count} 条"
+        ),
+    }
+
+
+def _update_matrix_progress(db, task_run_id: str, summary: str) -> None:
+    """更新矩阵任务的阶段进度摘要，供前端轮询显示。
+
+    单独 commit 避免长事务占着连接；失败只记日志，不中断矩阵运行。
+    """
+    try:
+        run = db.get(ScheduledTaskRun, task_run_id)
+        if run is None or run.status != "running":
+            return
+        run.summary = summary[:500]
+        run.finished_at = run.finished_at  # 触发 ORM 脏标记
+        db.commit()
+    except Exception:
+        logger.exception("更新矩阵进度失败: %s", task_run_id)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
+async def _run_preset_matrix(db, payload: dict, task_run_id: str | None = None) -> dict:
+    """串行执行全部启用预设，并给每个推荐 Run 写入同一个矩阵批次标签。
+
+    若提供 task_run_id，会在每个预设开始时更新 ScheduledTaskRun.summary，
+    供前端矩阵页轮询显示阶段进度（已完成 N/M 预设: 当前预设名）。
+    """
+    from app.services.workbench_service import run_workbench
+
+    presets = db.scalars(
+        select(Preset)
+        .where(Preset.status == "active")
+        .order_by(Preset.created_at.asc(), Preset.name.asc())
+    ).all()
+    matrix_batch_id = str(
+        payload.get("matrix_batch_id")
+        or f"matrix_{datetime.now(timezone.utc).replace(tzinfo=None).strftime('%Y%m%d_%H%M%S')}"
+    )
+    matrix_batch_name = str(payload.get("matrix_batch_name") or "盘后预设矩阵")
+    run_name_prefix = str(payload.get("run_name_prefix") or matrix_batch_name)
+    data_source = payload.get("data_source") or DEFAULT_RECOMMENDATION_DATA_SOURCE
+    stop_on_error = bool(payload.get("stop_on_error", False))
+
+    total = len(presets)
+    rows: list[dict[str, object]] = []
+    recommended_total = 0
+    for index, preset in enumerate(presets, start=1):
+        if task_run_id:
+            _update_matrix_progress(
+                db,
+                task_run_id,
+                summary=f"执行预设 {index}/{total}: {preset.name}（已完成 {index - 1}/{total}）",
+            )
+        run_payload = {
+            "preset_id": preset.preset_id,
+            "run_name": f"{run_name_prefix} · {preset.name}",
+            "data_source": data_source,
+            "matrix_batch_id": matrix_batch_id,
+            "matrix_batch_name": matrix_batch_name,
+            "matrix_run": True,
+        }
+        for key in (
+            "run_mode",
+            "risk_template",
+            "score_line",
+            "output_count",
+            "selected_skill_ids",
+            "skip_aux_refresh",
+            "disable_agent_review",
+            "agent_review_limit",
+            "agent_review_concurrency",
+        ):
+            if key in payload:
+                run_payload[key] = payload.get(key)
+        try:
+            result = await run_workbench(db, run_payload)
+            run = result.get("run") or {}
+            recommended_count = int(run.get("recommended_count") or 0)
+            recommended_total += recommended_count
+            rows.append(
+                {
+                    "preset_id": preset.preset_id,
+                    "preset_name": preset.name,
+                    "run_id": str(run.get("run_id") or ""),
+                    "status": "completed",
+                    "recommended_count": recommended_count,
+                }
+            )
+        except Exception as exc:
+            logger.exception("预设矩阵批次 %s 运行失败: %s", matrix_batch_id, preset.preset_id)
+            db.rollback()
+            rows.append(
+                {
+                    "preset_id": preset.preset_id,
+                    "preset_name": preset.name,
+                    "status": "failed",
+                    "error": str(exc),
+                }
+            )
+            if stop_on_error:
+                break
+
+    completed_count = sum(1 for row in rows if row.get("status") == "completed")
+    failed_count = sum(1 for row in rows if row.get("status") == "failed")
+    return {
+        "matrix_batch_id": matrix_batch_id,
+        "matrix_batch_name": matrix_batch_name,
+        "preset_count": len(presets),
+        "run_count": len(rows),
+        "completed_count": completed_count,
+        "failed_count": failed_count,
+        "recommended_count": recommended_total,
+        "runs": rows,
+        "summary_text": (
+            f"矩阵批次 {completed_count}/{len(presets)} 个预设完成，"
+            f"失败 {failed_count} 个，推荐合计 {recommended_total} 条"
         ),
     }
 

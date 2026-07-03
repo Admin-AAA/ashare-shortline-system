@@ -93,6 +93,46 @@ ashare-shortline-system/
 
 ## 快速开始
 
+### Hermes/自动化 CLI
+
+项目根目录提供 `./ashare`，输出统一为 JSON，便于 Hermes 直接调用：
+
+```bash
+./ashare presets --active-only --pretty                 # 查看可执行预设
+./ashare execute-preset <preset_id> --wait --pretty     # 同步执行预设
+./ashare runs --limit 10 --pretty                       # 查看最近运行
+./ashare run <run_id> --pretty                          # 查看运行详情
+./ashare recommendations <run_id> --limit 20 --pretty   # 查看候选/推荐
+./ashare explain <recommendation_id> --pretty           # 解释单条推荐
+./ashare funnel <run_id> --code 000001 --pretty         # 查看过滤漏斗/候选轨迹
+./ashare watch <recommendation_id> --status watching    # 关注/忽略/取消关注
+./ashare review <recommendation_id> --text "复盘备注"   # 写入复盘
+./ashare data-sources --pretty                          # 查看数据源健康状态
+./ashare pool-status --summary-only --pretty            # 查看本地行情池完整性
+./ashare refresh-pool --pretty                          # 刷新报价池
+./ashare sync-pool-gaps --dry-run --pretty              # 补齐本地池日K缺口
+./ashare sync-run-aux <run_id> --dry-run --pretty       # 补齐某次运行辅助数据
+./ashare data-health --pretty                           # 查看数据完整性/健康评分
+./ashare alerts --pretty                                # 查看数据源与系统告警
+./ashare readiness --pretty                             # 查看系统就绪检查
+./ashare matrix-run --table --pretty                    # 一次执行全部启用预设并返回矩阵表格
+./ashare matrix-run --async-job --table --pretty        # 后台执行长耗时矩阵任务，立即返回 job_id
+./ashare matrix-status <job_id> --table --pretty        # 查询异步矩阵任务状态/结果
+./ashare matrix-wait <job_id> --timeout 1800 --pretty   # 等待异步矩阵任务完成
+./ashare matrix-result --table --pretty                 # 查看最近一次推荐矩阵表格
+```
+
+全局命令安装：
+
+```bash
+mkdir -p ~/.local/bin
+ln -sf /Users/wangao/Desktop/ashare-shortline-system/ashare ~/.local/bin/ashare
+```
+
+只要 `~/.local/bin` 在 PATH 里，就可以直接运行 `ashare`。
+
+底层入口是 `backend/scripts/ashare_cli.py`，直接复用后端服务和本地 MySQL，不依赖前端页面。
+
 ### 一键启动
 
 ```bash
@@ -109,6 +149,83 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8765
+```
+
+### 本地后端常驻服务（launchd）
+
+本机通过用户级 LaunchAgent 常驻运行后端，确保 FastAPI 启动时内置的 APScheduler 能按数据库中的 `ScheduledTask` 自动触发盘后任务。当前已安装：
+
+```bash
+~/Library/LaunchAgents/com.wangao.ashare-backend.plist
+```
+
+核心启动方式不是直接执行 Desktop 目录下的 shell 脚本，而是让 launchd 调用系统 Python，再用 `--app-dir` 指向项目后端：
+
+```bash
+/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12 \
+  -m uvicorn app.main:app \
+  --app-dir /Users/wangao/Desktop/ashare-shortline-system/backend \
+  --host 127.0.0.1 \
+  --port 8765
+```
+
+plist 里设置了：
+
+```xml
+<key>RunAtLoad</key><true/>
+<key>KeepAlive</key><true/>
+<key>PYTHONPATH</key>
+<string>/Users/wangao/Desktop/ashare-shortline-system/backend:/Users/wangao/Desktop/ashare-shortline-system/backend/.venv/lib/python3.12/site-packages</string>
+```
+
+这样做是为了避开 macOS TCC 权限限制：LaunchAgent 直接执行 `~/Desktop/.../*.sh` 时可能失败并报 `Operation not permitted`，即使命令在交互式终端里可运行。
+
+常用运维命令：
+
+```bash
+launchctl print gui/$(id -u)/com.wangao.ashare-backend
+launchctl kickstart -k gui/$(id -u)/com.wangao.ashare-backend
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.wangao.ashare-backend.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.wangao.ashare-backend.plist
+curl -sS http://127.0.0.1:8765/api/health
+```
+
+日志位置：
+
+```bash
+~/Library/Logs/ashare-backend.out.log
+~/Library/Logs/ashare-backend.err.log
+```
+
+代码更新说明：后端进程不会自动热更新；修改 Python 后端代码或依赖后，需要执行 `launchctl kickstart -k gui/$(id -u)/com.wangao.ashare-backend` 重启常驻服务。`ashare` CLI 每次单独启动 Python 进程，通常会直接使用最新代码。
+
+本机还安装了定时重启兜底任务：
+
+```bash
+~/Library/LaunchAgents/com.wangao.ashare-backend-restart.plist
+```
+
+触发时间：周一至周五 **08:50** 和 **15:55**，执行：
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.wangao.ashare-backend
+curl -sS --max-time 10 http://127.0.0.1:8765/api/health
+```
+
+用途：让盘前和盘后任务尽量使用最近代码，并在重启后做健康检查。注意它不是“代码文件变更监听”，而是固定时间重启；临时改代码后若要马上生效，仍应手动 kickstart。
+
+定时重启任务运维：
+
+```bash
+launchctl print gui/$(id -u)/com.wangao.ashare-backend-restart
+launchctl kickstart -k gui/$(id -u)/com.wangao.ashare-backend-restart
+```
+
+日志：
+
+```bash
+~/Library/Logs/ashare-backend-restart.out.log
+~/Library/Logs/ashare-backend-restart.err.log
 ```
 
 前端：

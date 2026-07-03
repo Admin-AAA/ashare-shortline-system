@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.tables import BacktestRun
@@ -16,10 +16,81 @@ def list_backtest_runs(
     skill_id: str | None = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
-    stmt = select(BacktestRun).order_by(BacktestRun.created_at.desc()).limit(limit)
+    page = list_backtest_runs_page(db, skill_id=skill_id, page=1, page_size=limit)
+    return list(page["items"])
+
+
+def list_backtest_runs_page(
+    db: Session,
+    *,
+    skill_id: str | None = None,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    query: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
+) -> dict[str, Any]:
+    page = max(1, int(page or 1))
+    page_size = min(200, max(1, int(page_size or 50)))
+    filters = _backtest_history_filters(
+        skill_id=skill_id,
+        status=status,
+        date_from=date_from,
+        date_to=date_to,
+        query=query,
+    )
+    offset = (page - 1) * page_size
+    total_stmt = select(func.count()).select_from(BacktestRun)
+    stmt = select(BacktestRun)
+    if filters:
+        total_stmt = total_stmt.where(*filters)
+        stmt = stmt.where(*filters)
+    total = int(db.scalar(total_stmt) or 0)
+    rows = db.scalars(
+        stmt.order_by(BacktestRun.created_at.desc())
+        .offset(offset)
+        .limit(page_size)
+    ).all()
+    items = [_serialize_backtest_run(row, include_result=False) for row in rows]
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    return {
+        "items": items,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "total_pages": total_pages,
+        "has_prev": page > 1,
+        "has_next": offset + len(items) < total,
+    }
+
+
+def _backtest_history_filters(
+    *,
+    skill_id: str | None = None,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    query: str | None = None,
+) -> list[Any]:
+    filters: list[Any] = []
     if skill_id:
-        stmt = select(BacktestRun).where(BacktestRun.skill_id == skill_id).order_by(BacktestRun.created_at.desc()).limit(limit)
-    return [_serialize_backtest_run(row, include_result=False) for row in db.scalars(stmt).all()]
+        filters.append(BacktestRun.skill_id == skill_id)
+    if status:
+        filters.append(BacktestRun.status == status)
+    if date_from:
+        filters.append(BacktestRun.date_to >= date_from)
+    if date_to:
+        filters.append(BacktestRun.date_from <= date_to)
+    if query:
+        like = f"%{query}%"
+        filters.append(or_(
+            BacktestRun.backtest_id.ilike(like),
+            BacktestRun.skill_id.ilike(like),
+            BacktestRun.status.ilike(like),
+            BacktestRun.result_json.ilike(like),
+        ))
+    return filters
 
 
 def get_backtest_version_matrix(
@@ -34,10 +105,9 @@ def get_backtest_version_matrix(
     rows = db.scalars(stmt).all()
     matrix: list[dict[str, Any]] = []
     for row in rows:
-        result = _loads(row.result_json, {})
-        if not isinstance(result, dict):
-            continue
-        comparison = _dict(result.get("comparison"))
+        projection = _backtest_result_projection(row)
+        result = projection["result"]
+        comparison = projection["comparison"]
         if not comparison:
             continue
         baseline_metrics = _dict((comparison.get("decision_metrics") or {}).get("baseline")) or _dict(comparison.get("baseline"))
@@ -56,17 +126,23 @@ def get_backtest_run(db: Session, backtest_id: str) -> dict[str, Any] | None:
 
 
 def _serialize_backtest_run(row: BacktestRun, *, include_result: bool) -> dict[str, Any]:
-    result = _loads(row.result_json, {})
-    if not isinstance(result, dict):
-        result = {}
-    metrics = _dict(result.get("aggregate_metrics"))
-    coverage = _dict(result.get("data_coverage"))
-    comparison = _dict(result.get("comparison"))
+    projection = _backtest_result_projection(row)
+    result = projection["result"]
+    coverage = projection["data_coverage"]
+    comparison = projection["comparison"]
     validation_profile = _dict(comparison.get("validation_profile"))
-    minute_diag = _dict(coverage.get("minute_source_diagnostics"))
 
     # 时态一致性检查摘要
     temporal = _dict(result.get("temporal_consistency") or coverage.get("temporal_consistency"))
+    compact_data_coverage = {
+        **projection["compact_data_coverage"],
+        "temporal_consistency": {
+            "passed": temporal.get("passed", True),
+            "violation_count": temporal.get("violation_count", 0),
+            "error_count": temporal.get("error_count", 0),
+            "warning_count": temporal.get("warning_count", 0),
+        },
+    }
     
     payload: dict[str, Any] = {
         "backtest_id": row.backtest_id,
@@ -86,6 +162,13 @@ def _serialize_backtest_run(row: BacktestRun, *, include_result: bool) -> dict[s
             "baseline": _dict((comparison.get("decision_metrics") or {}).get("baseline")),
             "candidate": _dict((comparison.get("decision_metrics") or {}).get("candidate")),
         },
+        "projection": {
+            "schema_version": projection["schema_version"],
+            "strategy_name": projection["strategy_name"],
+            "metrics": projection["compact_metrics"],
+            "data_coverage": compact_data_coverage,
+            "comparison": projection["compact_comparison"],
+        },
         "validation_profile": {
             "primary_scope": validation_profile.get("primary_scope"),
             "primary_scope_label": validation_profile.get("primary_scope_label"),
@@ -104,26 +187,35 @@ def _serialize_backtest_run(row: BacktestRun, *, include_result: bool) -> dict[s
                 "candidate": _dict(_dict(validation_profile.get("aggregate")).get("candidate")),
             },
         },
-        "metrics": _compact_metrics(metrics),
-        "data_coverage": {
-            "signal_date_count": coverage.get("signal_date_count", 0),
-            "candidate_count": coverage.get("candidate_count", 0),
-            "candidate_minute_coverage_rate": coverage.get("candidate_minute_coverage_rate", 0),
-            "benchmark_minute_coverage_rate": coverage.get("benchmark_minute_coverage_rate", 0),
-            "tushare_stk_mins_status": minute_diag.get("tushare_stk_mins_status", "not_attempted"),
-            "tushare_permission_denied": bool(minute_diag.get("tushare_permission_denied")),
-            "fallback_used": bool(minute_diag.get("fallback_used")),
-            "temporal_consistency": {
-                "passed": temporal.get("passed", True),
-                "violation_count": temporal.get("violation_count", 0),
-                "error_count": temporal.get("error_count", 0),
-                "warning_count": temporal.get("warning_count", 0),
-            },
-        },
+        "metrics": projection["compact_metrics"],
+        "data_coverage": compact_data_coverage,
     }
     if include_result:
         payload["result"] = result
     return payload
+
+
+def _backtest_result_projection(row: BacktestRun) -> dict[str, Any]:
+    result = _loads(row.result_json, {})
+    if not isinstance(result, dict):
+        result = {}
+    metrics = _dict(result.get("aggregate_metrics"))
+    coverage = _dict(result.get("data_coverage"))
+    comparison = _dict(result.get("comparison"))
+    compact_metrics = _compact_metrics(metrics)
+    compact_data_coverage = _compact_data_coverage(coverage)
+    compact_comparison = _compact_comparison(comparison)
+    return {
+        "schema_version": 1,
+        "result": result,
+        "strategy_name": str(result.get("strategy_name") or row.skill_id),
+        "metrics": metrics,
+        "compact_metrics": compact_metrics,
+        "data_coverage": coverage,
+        "compact_data_coverage": compact_data_coverage,
+        "comparison": comparison,
+        "compact_comparison": compact_comparison,
+    }
 
 
 def _compact_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
@@ -153,6 +245,42 @@ def _compact_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
         "sample_confidence": str(metrics.get("sample_confidence") or "low"),
         "accuracy_policy": _dict(metrics.get("accuracy_policy")),
         "accuracy_gate_summary": _dict(metrics.get("accuracy_gate_summary")),
+    }
+
+
+def _compact_data_coverage(coverage: dict[str, Any]) -> dict[str, Any]:
+    minute_diag = _dict(coverage.get("minute_source_diagnostics"))
+    temporal = _dict(coverage.get("temporal_consistency"))
+    return {
+        "signal_date_count": coverage.get("signal_date_count", 0),
+        "candidate_count": coverage.get("candidate_count", 0),
+        "candidate_minute_coverage_rate": coverage.get("candidate_minute_coverage_rate", 0),
+        "benchmark_minute_coverage_rate": coverage.get("benchmark_minute_coverage_rate", 0),
+        "tushare_stk_mins_status": minute_diag.get("tushare_stk_mins_status", "not_attempted"),
+        "tushare_permission_denied": bool(minute_diag.get("tushare_permission_denied")),
+        "fallback_used": bool(minute_diag.get("fallback_used")),
+        "temporal_consistency": {
+            "passed": temporal.get("passed", True),
+            "violation_count": temporal.get("violation_count", 0),
+            "error_count": temporal.get("error_count", 0),
+            "warning_count": temporal.get("warning_count", 0),
+        },
+    }
+
+
+def _compact_comparison(comparison: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "selected_variant": comparison.get("selected_variant"),
+        "selected_variant_label": comparison.get("selected_variant_label"),
+        "adoption_reason": comparison.get("adoption_reason"),
+        "decision_scope": comparison.get("decision_scope"),
+        "decision_scope_label": comparison.get("decision_scope_label"),
+        "guardrail_notes": list(comparison.get("guardrail_notes") or []),
+        "decision_metrics": {
+            "baseline": _dict((comparison.get("decision_metrics") or {}).get("baseline")),
+            "candidate": _dict((comparison.get("decision_metrics") or {}).get("candidate")),
+        },
+        "validation_profile": _dict(comparison.get("validation_profile")),
     }
 
 
