@@ -16,7 +16,6 @@ from app.services.cost_service import (
 from app.services.data_health_service import diagnose_all
 from app.services.data_gap_remediation_service import (
     DEFAULT_DAILY_KBAR_CODE_LIMIT,
-    DEFAULT_REMEDIABLE_TABLES,
     remediate_data_health_gaps,
 )
 from app.services.data_source_health import active_alerts, readiness_check
@@ -88,35 +87,28 @@ def get_data_health(db: Session = Depends(get_db)):
 @router.post("/data-health/remediate")
 def remediate_data_health(payload: dict | None = None, db: Session = Depends(get_db)):
     payload = payload or {}
+    if not bool(payload.get("dry_run", False)):
+        from app.services.scheduler_service import start_data_health_remediation_now
+
+        return start_data_health_remediation_now(payload)
+
     result = remediate_data_health_gaps(
         db,
         target_tables=payload.get("target_tables"),
-        dry_run=bool(payload.get("dry_run", False)),
+        dry_run=True,
         capital_flow_code_limit=int(payload.get("capital_flow_code_limit", 200)),
         daily_kbar_code_limit=int(payload.get("daily_kbar_code_limit", DEFAULT_DAILY_KBAR_CODE_LIMIT)),
+        minute_kbar_code_limit=int(payload.get("minute_kbar_code_limit", 300)),
         post_diagnosis=bool(payload.get("post_diagnosis", True)),
     )
-    if not bool(payload.get("dry_run", False)):
-        record_task_run(
-            db,
-            "manual_data_health_remediation",
-            result.get("status", "unknown"),
-            summary=None,
-            trigger_source="manual",
-            task_name="手动数据补数",
-            task_type="data_backfill",
-            payload={
-                "target_tables": payload.get("target_tables") or list(DEFAULT_REMEDIABLE_TABLES),
-                "capital_flow_code_limit": int(payload.get("capital_flow_code_limit", 200)),
-                "daily_kbar_code_limit": int(payload.get("daily_kbar_code_limit", DEFAULT_DAILY_KBAR_CODE_LIMIT)),
-                "post_diagnosis": bool(payload.get("post_diagnosis", True)),
-            },
-            result={
-                **result,
-                "remediation_type": "data_health",
-            },
-        )
     return result
+
+
+@router.get("/data-health/remediate/status")
+def get_data_health_remediation_status():
+    from app.services.scheduler_service import get_latest_data_health_remediation_task_run
+
+    return {"task_run": get_latest_data_health_remediation_task_run()}
 
 
 @router.get("/temporal-consistency")
@@ -130,10 +122,14 @@ def get_temporal_consistency(
     - 推荐日期 vs 日K线是否存在
     - 特征快照是否引用未来日期
     - Outcome 标注日期 vs 推荐日期（入场必须在推荐日之后）
-    - 已通过 backtest_runs 中所有回测的时态验证
     """
     from app.services.temporal_consistency import check_run_temporal_consistency
-    return check_run_temporal_consistency(db, run_mode=run_mode)
+    from app.services.outcome_service import _cached as outcome_cached
+
+    cache_key = f"temporal_consistency:{run_mode}"
+    def _compute():
+        return check_run_temporal_consistency(db, run_mode=run_mode)
+    return outcome_cached(cache_key, _compute)
 
 
 @router.get("/model-routes")
@@ -229,7 +225,7 @@ def _upsert_task_from_payload(db: Session, payload: dict) -> dict:
         raise HTTPException(status_code=400, detail="task_id is required")
 
     task_type = str(payload.get("task_type") or "").strip()
-    if task_type not in {"data_sync", "recommendation_run", "pool_refresh", "data_backfill"}:
+    if task_type not in {"data_sync", "recommendation_run", "preset_matrix_run", "pool_refresh", "data_backfill"}:
         raise HTTPException(status_code=400, detail="task_type is invalid")
 
     payload_data = dict(payload.get("payload") or {})
