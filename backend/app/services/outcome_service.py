@@ -41,7 +41,7 @@ EXECUTED_OUTCOME_LABELS = {OUTCOME_SUCCESS, OUTCOME_FAILED}
 # 短时缓存
 _metrics_cache: dict[str, tuple[float, Any]] = {}
 _metrics_cache_lock = threading.Lock()
-_METRICS_CACHE_TTL = 5.0
+_METRICS_CACHE_TTL = 30.0  # 指标缓存 30 秒（原 5 秒过短，冷启动 350ms 频繁触发）
 
 
 def _cached(key: str, factory):
