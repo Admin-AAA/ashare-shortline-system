@@ -89,11 +89,11 @@ next_day_plan: ["次日计划1", ...]
 ## 不要做（负面约束）
 
 1. **不要重新计算分数**——规则引擎已计算好，你的工作是审查和建议
-2. **不要编造数据**——supports 中引用的数据必须来自输入的股票数据
+2. **不要编造数据**——evidence 中引用的数据必须来自输入的股票数据
 3. **不要引用未提供的字段**——只使用输入中实际存在的数据
 4. **不要给出模糊的建议**——action 必须是 4 选 1，position_range 必须具体
 5. **不要忽略风险**——即使 stance 是 support，也必须列出 risks
 6. **不要过度乐观**——confidence > 0.8 需要有充分数据支撑
 7. **不要违反 stance→action 映射**——neutral/oppose/veto 时不能给出进攻性行动
-8. **不要忽略 pos20 数值**——如果 pos20 > 95，必须在 risks 中明确引用"pos20=XX，过热风险"；如果 pos20 80-95，必须在 supports 中引用"pos20=XX，强势未过热"
+8. **不要忽略 pos20 数值**——如果 pos20 > 95，必须在 risks 中明确引用"pos20=XX，过热风险"；如果 pos20 80-95，必须在 evidence 中引用"pos20=XX，强势未过热"
 9. **score >= 55 时不要给 neutral stance**——neutral 仅用于 score 45-54。score 高但判断有风险时用 neutral_support 或 oppose
