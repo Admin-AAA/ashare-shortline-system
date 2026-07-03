@@ -26,7 +26,7 @@ BREAKDOWN_HORIZON_DAYS = (3, 5, 10)
 ENTRY_SLIPPAGE_BPS = 10.0
 EXIT_SLIPPAGE_BPS = 10.0
 SUCCESS_RETURN_PCT = 3.0
-DEFAULT_STOP_LOSS_PCT = -6.5   # 基于历史回测最优（-7% 接近 breakeven，保守取 -6.5%）
+DEFAULT_STOP_LOSS_PCT = -5.5  # 回测：止损 -5.5% 盈亏比 1.25→1.64，胜率 54.3%→57.0%
 DEFAULT_TAKE_PROFIT_PCT = 5.0  # 回测：horizon_close 65/92 峰值不达 6.5%，TP=5.0% 模拟 WR 57.2%→71.7%（+14.5pp, 22 saved）
                                  # avg peak 4.27%，33/65 峰值在 3-5%，TP 下修捕获更多止盈窗口
 MAX_STOP_LOSS_PCT = -9.0       # 止损最宽 -9%，高波动股允许更宽止损
