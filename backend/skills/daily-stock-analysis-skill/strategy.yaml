@@ -77,6 +77,12 @@ phases:
     hard_veto: false
     risk_flags: ["偏离均线过远，进入过热观察区"]
 
+  - name: 趋势不足
+    when: "dsa_trend_score < 18"
+    score_cap: 50  # late 期 dsa_trend_score<18 40 笔 WR 22.5%，cap 50 低于 score_line 72，相当于过滤
+    hard_veto: false
+    risk_flags: ["趋势分不足，alpha 衰减后低 WR"]
+
   - name: 趋势跟踪
     when: "dsa_trend_score >= 18"
     score_cap: 100
