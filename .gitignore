@@ -23,3 +23,8 @@ backend/logs/
 .worktrees/
 .idea/
 output/
+.workbuddy/
+overview.md
+test.py
+package-lock.json
+package.json
