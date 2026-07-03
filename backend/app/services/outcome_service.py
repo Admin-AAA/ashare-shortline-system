@@ -971,6 +971,27 @@ def _metric_record_from_row(row: Any, benchmark_return_pct: float = 0.0) -> dict
 
 
 def _horizon_metric_records_by_recommendation(db: Session, rows: list[Any]) -> dict[str, dict[int, dict[str, Any]]]:
+    # 跨 metrics 端点共享缓存：by_score_line/by_strategy/by_setup/overview 各自调用此函数，
+    # 冷启动时重复模拟 4 次（每次 ~526ms）。用 run_mode + 行数 + 最新 trade_date 做指纹缓存。
+    # 30 秒 TTL 与 metrics 缓存一致，label_pending 后会 invalidate。
+    run_mode = _infer_run_mode_from_rows(rows)
+    latest_td = max((str(getattr(r, "trade_date", "") or "") for r in rows), default="")
+    cache_key = f"horizon_records:{run_mode}:{len(rows)}:{latest_td}"
+    return _cached(cache_key, lambda: _compute_horizon_metric_records(db, rows))
+
+
+def _infer_run_mode_from_rows(rows: list[Any]) -> str:
+    """从 rows 的 run_id 推断 run_mode（用于缓存 key）。"""
+    for row in rows:
+        run_id = str(getattr(row, "run_id", "") or "")
+        if run_id.startswith("bt_"):
+            return "backtest"
+        if run_id.startswith("run_"):
+            return "formal"
+    return "unknown"
+
+
+def _compute_horizon_metric_records(db: Session, rows: list[Any]) -> dict[str, dict[int, dict[str, Any]]]:
     labeled_rows = [
         row
         for row in rows
