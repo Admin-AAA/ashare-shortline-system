@@ -462,7 +462,7 @@ STANCE_MULTIPLIER = {
     "strong_support": 1.15,
     "support": 1.08,       # 与 strong_support 拉开差距，更精确区分支持力度
     "neutral_support": 1.0,
-    "neutral": 0.85,
+    "neutral": 0.6,        # 实测 neutral 41 笔 WR 14.6% avg -3.18%，与 oppose 等同
     "oppose": 0.6,
     "veto": "hard_veto",  # 硬否决，不参与分数计算
 }

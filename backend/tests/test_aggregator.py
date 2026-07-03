@@ -88,7 +88,7 @@ def test_stance_multiplier_values():
     assert STANCE_MULTIPLIER["strong_support"] == 1.15
     assert STANCE_MULTIPLIER["support"] == 1.08
     assert STANCE_MULTIPLIER["neutral_support"] == 1.0
-    assert STANCE_MULTIPLIER["neutral"] == 0.85
+    assert STANCE_MULTIPLIER["neutral"] == 0.6
     assert STANCE_MULTIPLIER["oppose"] == 0.6
     assert STANCE_MULTIPLIER["veto"] == "hard_veto"
 
@@ -101,7 +101,8 @@ def test_extract_skill_agent_score_weighted_average():
     signals = [_signal("support", 80), _signal("neutral", 60)]
     score = _extract_skill_agent_score(signals)
     # 先按 confidence 向 50 回归，再乘 stance 系数，并按 confidence 加权
-    assert score == pytest.approx(64.61, abs=0.01)
+    # neutral multiplier 0.85→0.6 后期望值从 64.61 → 57.36
+    assert score == pytest.approx(57.36, abs=0.01)
 
 
 def test_extract_skill_agent_score_veto_zero():
