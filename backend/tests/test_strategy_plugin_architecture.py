@@ -9,7 +9,11 @@ from app.services.workbench_service import _default_preset_skill_rows, _strategy
 SHORTLINE_SKILL_IDS = {
     "chen-xiaoqun-skill",
     "chao-gu-yang-jia-skill",
+    "high-range-breakout-momentum",
+    "limit-up-reseal-relay",
     "overnight-holding-method",
+    "sector-relative-strength-leader",
+    "trend-pullback-continuation",
 }
 
 
@@ -36,15 +40,22 @@ def _stock(code: str, **overrides):
         "dist60": 12.0,
         "pos20": 60.0,
         "pos60": 72.0,
+        "pos120": 82.0,
         "eff20": 0.55,
         "breakout20": True,
+        "breakout60": True,
         "primary_excess20": 12.0,
         "off_high_pct": -4.0,
+        "off_high60_pct": -1.0,
         "vol5_20": 1.4,
         "max_dd20": -8.0,
         "upper_shadow_count20": 2,
         "industry_capacity_like_count": 3,
         "limit_up_days20": 1,
+        "limit_up_consecutive_days": 1,
+        "limit_up_open_times": 3,
+        "limit_up_fd_amount_yi": 0.6,
+        "limit_up_turnover_ratio": 4.5,
         "main_net_inflow_yi": 2.2,
         "main_net_inflow_ratio": 9.5,
         "super_large_net_inflow_yi": 0.8,
@@ -92,16 +103,55 @@ def _shared_factor_stock():
     return build_features(stocks, _snapshot())[0]
 
 
+def _shared_factor_stocks():
+    stocks = [
+        _stock("002001"),
+        _stock("002002", is_limit_up=True, limit_up_consecutive_days=1, pct=10.0),
+        _stock("002003", is_limit_up=True, limit_up_consecutive_days=2, pct=10.0),
+        _stock("002004", is_limit_up=True, limit_up_consecutive_days=4, pct=10.0),
+    ]
+    return build_features(stocks, _snapshot())
+
+
 def test_shared_shortline_factors_enter_real_strategy_inputs():
-    stock = _shared_factor_stock()
+    stocks = _shared_factor_stocks()
+    stock = stocks[0]
+    limit_up_stock = stocks[1]
+    pullback_stock = build_features(
+        [
+            _stock(
+                "002005",
+                pct=0.2,
+                dist20=12.0,
+                vol5_20=0.75,
+                dsa_profile={
+                    "ma5": 10.0,
+                    "ma10": 9.8,
+                    "ma20": 9.5,
+                    "ma60": 9.0,
+                    "macd_status": "多头",
+                    "rsi_12": 58.0,
+                },
+            )
+        ],
+        _snapshot(),
+    )[0]
     skills = _skills_by_id()
     missing = SHORTLINE_SKILL_IDS - set(skills)
     assert not missing
 
     signals = {
         skill_id: run_strategy(skills[skill_id], stock, ["机器人"])
-        for skill_id in SHORTLINE_SKILL_IDS
+        for skill_id in {
+            "chen-xiaoqun-skill",
+            "chao-gu-yang-jia-skill",
+            "high-range-breakout-momentum",
+            "overnight-holding-method",
+            "sector-relative-strength-leader",
+        }
     }
+    signals["limit-up-reseal-relay"] = run_strategy(skills["limit-up-reseal-relay"], limit_up_stock, ["机器人"])
+    signals["trend-pullback-continuation"] = run_strategy(skills["trend-pullback-continuation"], pullback_stock, ["机器人"])
 
     assert "buy_signal" not in stock
     assert stock["is_main_theme"] is True
@@ -112,6 +162,10 @@ def test_shared_shortline_factors_enter_real_strategy_inputs():
     chen_evidence = "；".join(signals["chen-xiaoqun-skill"]["evidence"])
     yangjia_evidence = "；".join(signals["chao-gu-yang-jia-skill"]["evidence"])
     overnight_evidence = "；".join(signals["overnight-holding-method"]["evidence"])
+    breakout_evidence = "；".join(signals["high-range-breakout-momentum"]["evidence"])
+    limit_up_evidence = "；".join(signals["limit-up-reseal-relay"]["evidence"])
+    pullback_evidence = "；".join(signals["trend-pullback-continuation"]["evidence"])
+    sector_evidence = "；".join(signals["sector-relative-strength-leader"]["evidence"])
 
     assert "龙头候选" in chen_evidence
     assert "主线龙头共振" in chen_evidence
@@ -119,11 +173,31 @@ def test_shared_shortline_factors_enter_real_strategy_inputs():
     assert "板块容量合力" in yangjia_evidence
     assert "尾盘资金承接较强" in overnight_evidence
     assert "隔夜尾盘确认" in overnight_evidence
+    assert "60日新高突破" in breakout_evidence
+    assert "阶段新高确认" in breakout_evidence
+    assert "分歧回封质量较好" in limit_up_evidence
+    assert "分歧回封接力" in limit_up_evidence
+    assert "资金承接未弱化" in pullback_evidence
+    assert "强趋势轻分歧" in pullback_evidence
+    assert "个股20日超额收益占优" in sector_evidence
+    assert "主线龙头突破" in sector_evidence
 
     setup_matches = {signal["setup_match"] for signal in signals.values()}
-    assert setup_matches == {"分歧转一致", "平台突破", "隔夜尾盘确认"}
+    assert setup_matches == {
+        "分歧转一致",
+        "平台突破",
+        "隔夜尾盘确认",
+        "60日新高放量突破",
+        "分歧回封接力",
+        "强趋势轻分歧",
+        "主线龙头突破",
+    }
     assert len({signal["score"] for signal in signals.values()}) > 1
     assert signals["overnight-holding-method"]["strategy_independence"] == 0.9
+    assert signals["limit-up-reseal-relay"]["strategy_independence"] == 0.88
+    assert signals["trend-pullback-continuation"]["strategy_independence"] == 0.78
+    assert signals["sector-relative-strength-leader"]["strategy_independence"] == 0.8
+    assert signals["high-range-breakout-momentum"]["strategy_independence"] == 0.82
     assert signals["chen-xiaoqun-skill"]["strategy_independence"] == 0.75
 
 
@@ -131,7 +205,11 @@ def test_strategies_use_shared_factors_with_different_contract_boundaries():
     skills = _skills_by_id()
     chen = str(skills["chen-xiaoqun-skill"].contract)
     yangjia = str(skills["chao-gu-yang-jia-skill"].contract)
+    breakout = str(skills["high-range-breakout-momentum"].contract)
+    limit_up = str(skills["limit-up-reseal-relay"].contract)
     overnight = str(skills["overnight-holding-method"].contract)
+    pullback = str(skills["trend-pullback-continuation"].contract)
+    sector = str(skills["sector-relative-strength-leader"].contract)
 
     assert "is_shortline_leader_candidate" in chen
     assert "dragon_tiger_buy_dispersion" in chen
@@ -139,6 +217,39 @@ def test_strategies_use_shared_factors_with_different_contract_boundaries():
     assert "capital_resonance_score" in yangjia
     assert "twenty_cm_risk_gate != 'block'" in overnight
     assert "capital_resonance_score >= 45" in overnight
+    assert "experiment_high_range_breakout" in breakout
+    assert "off_high60_pct" in breakout
+    assert "experiment_limit_up_reseal_relay" in limit_up
+    assert "limit_up_fd_amount_yi" in limit_up
+    assert "experiment_trend_pullback" in pullback
+    assert "volume_shrink_pullback" in pullback
+    assert "experiment_sector_relative_strength" in sector
+    assert "industry_positive_excess20_count" in sector
+
+
+def test_sector_relative_strength_observation_setup_does_not_boost_score():
+    skills = _skills_by_id()
+    stock = _shared_factor_stock()
+    stock.update(
+        {
+            "breakout20": False,
+            "support_ma5": False,
+            "primary_excess20": 6.0,
+            "primary_excess60": 8.0,
+            "off_high_pct": -10.0,
+            "max_dd20": -16.0,
+            "capital_resonance_score": 56.0,
+            "sector_ladder_completeness_score": 55.0,
+            "industry_positive_excess20_count": 2,
+        }
+    )
+
+    signal = run_strategy(skills["sector-relative-strength-leader"], stock, ["机器人"])
+
+    assert signal["setup_match"] == "主线相对强度观察"
+    assert signal["entry_rule"] == "仅保留观察，等待重新突破平台、收回 MA5/MA10 或板块梯队继续加强"
+    assert signal["setup_quality"] == 60.0
+    assert "买点命中: 主线相对强度观察" in signal["evidence"]
 
 
 def test_strategy_backtest_adapter_metadata_comes_from_strategy_contract():
@@ -239,3 +350,65 @@ risk:
         list(skills.values()),
     )
     assert rows == [{"skill_id": "generic-momentum", "weight": 0.77, "sort_order": 5}]
+
+
+def test_high_range_breakout_default_single_strategy_preset():
+    skills = _skills_by_id()
+
+    rows = _default_preset_skill_rows(
+        {"skill_groups": ["experiment_high_range_breakout"]},
+        list(skills.values()),
+    )
+
+    assert rows == [{"skill_id": "high-range-breakout-momentum", "weight": 1.0, "sort_order": 10}]
+
+
+def test_new_default_single_strategy_presets():
+    skills = _skills_by_id()
+    cases = {
+        "experiment_limit_up_reseal_relay": "limit-up-reseal-relay",
+        "experiment_trend_pullback": "trend-pullback-continuation",
+        "experiment_sector_relative_strength": "sector-relative-strength-leader",
+    }
+
+    for group, skill_id in cases.items():
+        rows = _default_preset_skill_rows(
+            {"skill_groups": [group]},
+            list(skills.values()),
+        )
+
+        assert rows == [{"skill_id": skill_id, "weight": 1.0, "sort_order": 10}]
+
+
+def test_dsa_oscillation_mid_price_risk_rule():
+    """震荡期 + avg_cost 50-100 应触发风险扣分。
+    数据依据：震荡期 avg_cost 50-100 WR=42.1% vs 震荡期其他 47.7%，
+    Walk-forward 近期 30.8%（信号增强）"""
+    skills = _skills_by_id()
+    stock = _stock("600519")
+    # 满足基础入选条件
+    stock.update({
+        "amount_yi": 8.0, "turnover_rate": 5.0,
+        "breakout20": 1, "off_high_pct": -5.0, "pct": 1.0,
+        "pos20": 75.0, "pos60": 70.0, "dist60": 8.0,
+        "rsi_12": 55.0, "max_dd20": -8.0, "upper_shadow_count20": 2,
+        "support_ma5": True,
+        "avg_cost": 70.0,  # 50-100 区间
+        "market_regime": "震荡",
+        "dsa_trend_score": 20, "dsa_bias_score": 10, "dsa_macd_score": 6,
+        "dsa_signal_score": 80, "volume_shrink_pullback": True,
+        "bias_ma5": 1.5,
+    })
+    signal = run_strategy(skills["daily-stock-analysis-skill"], stock, ["测试"])
+
+    # 应有震荡期中价股风险 flag
+    risk_flags = signal.get("risk_flags") or []
+    has_oscillation_risk = any("震荡期" in flag and "中价股" in flag for flag in risk_flags)
+    assert has_oscillation_risk, f"震荡期中价股风险未触发: {risk_flags}"
+
+    # 非震荡期不应触发
+    stock["market_regime"] = "强势"
+    signal2 = run_strategy(skills["daily-stock-analysis-skill"], stock, ["测试"])
+    risk_flags2 = signal2.get("risk_flags") or []
+    has_oscillation_risk2 = any("震荡期" in flag and "中价股" in flag for flag in risk_flags2)
+    assert not has_oscillation_risk2, f"非震荡期不应触发: {risk_flags2}"
