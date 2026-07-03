@@ -899,17 +899,28 @@ def apply_pool_rules(
             + execution_viability["score_line_adjustment"],
             2,
         )
-        # 结构性强势阶段 × support_ma5 交叉惩罚：
-        # 数据验证：近期结构性强势 support_ma5=True WR=39.1%（n=46, t=-2.15）
+        # 结构性强势/强势阶段 × 非强势入场信号 交叉惩罚：
+        # 实盘去重数据（90 笔）：强势WR=14.3%(21笔)，结构性强势WR=21.4%(14笔)，弱势WR=77.4%(53笔)
         # vs support_ma5=False WR=60.5%（n=38），差距 -21pp
         # 因果机制：强势市追强不追弱，有 MA 支撑意味着已回落均线（追弱）
+        # 扩大惩罚范围：从"结构性强势"扩展到"强势" + support_ma5（新增强势交叉调整）
         # regime 来自 market_data.py 的 regime 字段（结构性强势/强势/震荡/弱势），
         # 写入 snapshot 后被持久化到 feature_snapshot_json.market_regime
-        _snapshot_regime = (market_snapshot or {}).get("market_regime") or (market_snapshot or {}).get("regime") or ""
-        if _snapshot_regime == "结构性强势" and card.get("support_ma5"):
+        _snapshot_regime = (
+            (market_snapshot or {}).get("market_regime")
+            or (market_snapshot or {}).get("regime")
+            or ((market_snapshot or {}).get("breadth") or {}).get("regime")
+            or ""
+        )
+        if _snapshot_regime in ("结构性强势", "强势") and card.get("support_ma5"):
             # 提高门槛 6 分（约等于 21pp 胜率差距对应的合理惩罚）
             effective_score_line = round(effective_score_line + 6.0, 2)
             card["_regime_support_ma5_penalty"] = 6.0
+        # 强势/结构性强势阶段全局门槛：实盘 WR < 25%，比弱势高 53pp
+        # 在已有 score_line 调整基础上额外 +4 分（约等于 WR 差距 50pp 的 8% 门槛提升）
+        if _snapshot_regime in ("结构性强势", "强势"):
+            effective_score_line = round(effective_score_line + 4.0, 2)
+            card["_regime_strong_penalty"] = 4.0
         card["score_line_meta"] = {
             **score_line_context,
             **card_adjustment,
