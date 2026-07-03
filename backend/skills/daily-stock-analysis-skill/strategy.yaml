@@ -131,9 +131,9 @@ scoring:
     - when: "dist60 < 0"
       delta: 5
       reason: 价格低于 60 日均线（回调充分：87 笔 77.0% 胜率，+3.98% 均收益，与 pos20 零重叠）
-    - when: "bias_ma5 >= 0 and bias_ma5 <= 3"
+    - when: "bias_ma5 >= 1 and bias_ma5 <= 3"
       delta: 4
-      reason: 温和上行（bias_ma5 0-3 区间 64.7% 胜率，+3.36% 均收益）
+      reason: 温和上行（bias_ma5 1-3 区间，去重实盘验证；0~1 仅 WR=29.2% 假突破多，排除）
     # intelligence_score >= 66 已移除：strict_real 模式下分数被 cap 到 50，规则从未触发（0/1585）
     - when: "avg_cost >= 80 and avg_cost <= 200"
       delta: 5
