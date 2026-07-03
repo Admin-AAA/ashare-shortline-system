@@ -412,3 +412,57 @@ def test_dsa_oscillation_mid_price_risk_rule():
     risk_flags2 = signal2.get("risk_flags") or []
     has_oscillation_risk2 = any("震荡期" in flag and "中价股" in flag for flag in risk_flags2)
     assert not has_oscillation_risk2, f"非震荡期不应触发: {risk_flags2}"
+
+
+def test_dsa_resistance_too_far_risk_rule():
+    """resistance_distance_pct > 10 应触发风险扣分，≤ 10 不应触发。
+    数据依据：resist 10-15 WR=42.8% avg=-0.41%（PF=0.91 负收益）"""
+    skills = _skills_by_id()
+    stock = _stock("600519")
+    stock.update({
+        "amount_yi": 8.0, "turnover_rate": 6.0,
+        "breakout20": 1, "off_high_pct": -5.0, "pct": 1.0,
+        "pos20": 75.0, "pos60": 70.0, "dist60": 8.0,
+        "rsi_12": 55.0, "max_dd20": -8.0, "upper_shadow_count20": 2,
+        "support_ma5": True, "avg_cost": 15.0,
+        "resistance_distance_pct": 15.0,  # > 10，触发风险
+        "dsa_trend_score": 20, "dsa_bias_score": 10, "dsa_macd_score": 6,
+    })
+    signal = run_strategy(skills["daily-stock-analysis-skill"], stock, ["测试"])
+    risk_flags = signal.get("risk_flags") or []
+    has_resist_risk = any("远离阻力位" in flag for flag in risk_flags)
+    assert has_resist_risk, f"远离阻力位风险未触发（resist=15%）: {risk_flags}"
+
+    # ≤ 10 不应触发
+    stock["resistance_distance_pct"] = 8.0
+    signal2 = run_strategy(skills["daily-stock-analysis-skill"], stock, ["测试"])
+    risk_flags2 = signal2.get("risk_flags") or []
+    has_resist_risk2 = any("远离阻力位" in flag for flag in risk_flags2)
+    assert not has_resist_risk2, f"≤10% 不应触发: {risk_flags2}"
+
+
+def test_dsa_turnover_too_low_risk_rule():
+    """turnover 1-3% 应触发换手率过低风险，≥5 不触发。
+    数据依据：turnover 1-3 WR=38.7% avg=-0.46%（PF=0.86 负收益）"""
+    skills = _skills_by_id()
+    stock = _stock("600519")
+    stock.update({
+        "amount_yi": 8.0, "turnover_rate": 2.0,  # 1-3%，触发
+        "breakout20": 1, "off_high_pct": -5.0, "pct": 1.0,
+        "pos20": 75.0, "pos60": 70.0, "dist60": 8.0,
+        "rsi_12": 55.0, "max_dd20": -8.0, "upper_shadow_count20": 2,
+        "support_ma5": True, "avg_cost": 15.0,
+        "resistance_distance_pct": 5.0,
+        "dsa_trend_score": 20, "dsa_bias_score": 10, "dsa_macd_score": 6,
+    })
+    signal = run_strategy(skills["daily-stock-analysis-skill"], stock, ["测试"])
+    risk_flags = signal.get("risk_flags") or []
+    has_low_turnover = any("换手率过低" in flag for flag in risk_flags)
+    assert has_low_turnover, f"换手率过低风险未触发（turnover=2%）: {risk_flags}"
+
+    # ≥ 5 不应触发
+    stock["turnover_rate"] = 6.0
+    signal2 = run_strategy(skills["daily-stock-analysis-skill"], stock, ["测试"])
+    risk_flags2 = signal2.get("risk_flags") or []
+    has_low_turnover2 = any("换手率过低" in flag for flag in risk_flags2)
+    assert not has_low_turnover2, f"≥5% 不应触发: {risk_flags2}"
