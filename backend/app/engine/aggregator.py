@@ -998,7 +998,9 @@ def apply_pool_rules(
 
 _SECTOR_DIVERSITY_PENALTY = {1: 0.0, 2: 5.0}  # 第 N 只同行业股票的分数惩罚
 _SECTOR_DIVERSITY_PENALTY_DEFAULT = 10.0         # 第 3 只起的默认惩罚
-_MAX_PER_INDUSTRY = 3                             # 单一行业最多推荐 3 只（硬性上限）
+_MAX_PER_INDUSTRY = 5                             # 单一行业最多推荐 5 只（硬性上限）
+# 数据驱动（T5 第79轮反事实验证）：MAX=3 剔除的第4只同行业股 WR=100% avg+5.24%（误杀）
+# 放宽到 5：保留 WR 57.6% avg+0.27%（vs MAX=3 的 56.5%/+0.12%），净收益 +2.56%→+26.03%
 
 
 def _apply_sector_diversity(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
