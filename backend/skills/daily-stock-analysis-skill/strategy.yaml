@@ -91,7 +91,7 @@ setups:
 
   - name: 放量突破
     when: "volume_breakout_signal == true and resistance_distance_pct <= 2.5 and dsa_signal_score >= 80"
-    score_delta: 2  # alpha decay: volume_breakout_signal reduced from 5
+    score_delta: 0  # 回测：放量突破 16 笔 WR=37.5% vs 无 setup 56.2%，setup 有害
     entry_rule: "放量突破近端压力位后跟随"
     invalid_rule: "突破失败，重新跌回压力位下方"
 
