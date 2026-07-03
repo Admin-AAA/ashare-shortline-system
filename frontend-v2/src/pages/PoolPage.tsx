@@ -39,8 +39,10 @@ export function PoolPage() {
     setLoading(true);
     setError("");
     // 若有 run_id 则加载该 run 的候选，否则加载最新候选
-    const fetcher = runId
-      ? api.runRecommendations(runId)
+    // runRecommendations 返回 RecommendationCard[]（含 risk_level 等扩展字段，后端实际返回），
+    // dashboard.overview 返回 CockpitRecommendation[]；统一按 CockpitRecommendation 消费
+    const fetcher: Promise<CockpitRecommendation[]> = runId
+      ? api.runRecommendations(runId).then((list) => list as unknown as CockpitRecommendation[])
       : api.dashboard.overview({ signal: controller.signal }).then((d) => d.recommendations);
     fetcher
       .then((list) => setItems(list))
