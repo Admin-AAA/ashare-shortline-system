@@ -17,6 +17,7 @@ from app.models.tables import (
     SkillRegistry,
     WatchItem,
 )
+from app.services.evaluation_metrics import compute_full_metrics
 from app.services.outcome_service import is_accurate_recommendation, is_trade_executed, resolved_trade_return
 from app.services.outcome_service import is_outcome_labeled, normalized_outcome_label
 
@@ -28,7 +29,7 @@ VALID_RUN_MODES = {"formal", "experiment"}
 # 短时缓存：stats 数据变更频率低（仅在创建新 run 后变化），5 秒 TTL 足够
 _stats_cache: dict[str, tuple[float, Any]] = {}
 _stats_cache_lock = threading.Lock()
-_STATS_CACHE_TTL = 5.0
+_STATS_CACHE_TTL = 30.0
 
 
 def _cached(key: str, factory):
@@ -85,6 +86,24 @@ def _get_overview_stats(db: Session, mode: str) -> dict[str, Any]:
     reviewed_count = _reviewed_count(db, rec_ids)
     watched_count = _watched_count(db, run_ids)
 
+    # 构建 TradeRecord 列表用于 9-KPI 计算
+    trade_records = []
+    for row in triggered:
+        exec_ret = resolved_trade_return(row)
+        trade_records.append({
+            "resolved": True,
+            "net_return_pct": exec_ret,
+            "gross_return_pct": float(row.max_return or 0),
+            "achievable_return_pct": float(row.close_return or 0),
+            "morning_drawdown_pct": float(row.max_drawdown or 0),
+            "holding_days": 5,
+            "benchmark_return_pct": 0.0,
+            "accurate": exec_ret > 0,
+            "trade_date": "",
+            "code": "",
+        })
+    full_metrics = compute_full_metrics(trade_records) if trade_records else {}
+
     return {
         "mode": mode,
         "run_count": len(runs),
@@ -107,6 +126,16 @@ def _get_overview_stats(db: Session, mode: str) -> dict[str, Any]:
         "avg_drawdown": _mean([row.max_drawdown for row in labeled]),
         "avg_score": _mean([row.final_score for row in rec_rows]),
         "latest_run_at": runs[0].finished_at.isoformat() if runs and runs[0].finished_at else None,
+        # ── 9-KPI 评估指标 ──
+        "recommendation_accuracy": full_metrics.get("recommendation_accuracy", 0.0),
+        "average_net_return": full_metrics.get("average_net_return", 0.0),
+        "median_net_return": full_metrics.get("median_net_return", 0.0),
+        "profit_loss_ratio": full_metrics.get("profit_loss_ratio", 0.0),
+        "max_drawdown": full_metrics.get("max_drawdown", 0.0),
+        "positive_month_ratio": full_metrics.get("positive_month_ratio", 0.0),
+        "benchmark_excess_return": full_metrics.get("benchmark_excess_return", 0.0),
+        "sample_confidence": full_metrics.get("sample_confidence", "low"),
+        "false_positive_notes": full_metrics.get("false_positive_notes", []),
     }
 
 
