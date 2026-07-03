@@ -55,6 +55,7 @@ _RISK_SEVERITY_RULES: list[tuple[list[str], str]] = [
     (["有限售股解禁", "解禁"], "high"),
     (["硬风控否决", "Hard Veto"], "high"),
     (["20cm 风险闸门", "20cm 隔夜波动"], "high"),
+    (["科创板20cm涨跌停"], "medium"),
     (["入场不可成交", "无法真实成交", "无成交量", "一字涨停"], "high"),
     (["涨停排队", "封板反复", "封单金额", "尾盘封板"], "high"),
     (["未进入 Skill Agent 深审", "仅按规则信号降权输出"], "info"),
@@ -1296,6 +1297,9 @@ def _shortline_factor_risks(stock: dict[str, Any]) -> list[str]:
         risks.append("20cm 风险闸门阻断")
     elif stock.get("twenty_cm_risk_gate") == "caution":
         risks.append("20cm 风险闸门提示")
+    # 科创板额外风险：20% 涨跌停 → 跳空缺口风险远大于主板
+    if bool(stock.get("is_kcb")):
+        risks.append("科创板20cm涨跌停，跳空缺口风险更高")
     # 筹码套牢盘风险（avg_cost ratio < 0.95 → 0% 历史胜率）
     price = _float(stock.get("price") or stock.get("close"))
     avg_cost = _float(stock.get("avg_cost"))
