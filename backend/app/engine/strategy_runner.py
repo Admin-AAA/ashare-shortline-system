@@ -127,6 +127,12 @@ def _passes_universe(contract: dict[str, Any], context: dict[str, Any]) -> bool:
     for expr in universe.get("exclude", []) or []:
         if evaluate(str(expr), context):
             return False
+    # prefilter.market.exclude 总是执行（即使 skip_universe_check=True）
+    # 回测与实盘一致性：avg_cost>200 等硬过滤规则不应被跳过
+    market_prefilter = (contract.get("prefilter") or {}).get("market") or {}
+    for rule in market_prefilter.get("exclude", []) or []:
+        if evaluate(_rule_expr(rule), context):
+            return False
     return True
 
 
