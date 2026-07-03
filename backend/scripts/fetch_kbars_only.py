@@ -12,8 +12,8 @@ import requests
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", stream=sys.stdout)
 logger = logging.getLogger("fill")
 
-TUSHARE_URL = "http://101.35.233.113:8020"
-TUSHARE_TOKEN = "f8b05f8ee54f468220f2569afe56b4c027f1d388d164899339d394ad"
+TUSHARE_URL = "https://fastapic.stockai888.top"
+TUSHARE_TOKEN = "eqyrJ71eIKjLoM12OeDLQOwRMUTuETs2ItnXAJitOhjTE8sLIjm8UuihObjXEs3zOFDKUI1PMrTmMp1yO9Tjl19"
 OUT_DIR = Path("/tmp/ashare_kbars_batches")
 BATCH_SIZE = 200
 SLEEP_BETWEEN = 0.8  # 每只股票间隔

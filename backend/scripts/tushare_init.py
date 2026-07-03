@@ -11,8 +11,8 @@ Tushare 统一初始化模块 — 所有脚本引用此文件。
 import os
 import tushare as ts
 
-TUSHARE_TOKEN = "f8b05f8ee54f468220f2569afe56b4c027f1d388d164899339d394ad"
-TUSHARE_PROXY = "http://101.35.233.113:8020/"
+TUSHARE_TOKEN = "eqyrJ71eIKjLoM12OeDLQOwRMUTuETs2ItnXAJitOhjTE8sLIjm8UuihObjXEs3zOFDKUI1PMrTmMp1yO9Tjl19"
+TUSHARE_PROXY = "https://fastapic.stockai888.top/"
 
 
 def get_pro():

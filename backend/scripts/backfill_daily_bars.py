@@ -1,5 +1,5 @@
 """
-日K线回填脚本 v2 — 使用 Tushare 自建服务器为主要数据源。
+日K线回填脚本 v2 — 使用 Tushare 代理服务器为主要数据源。
 
 fetch_daily_kbars 合并 daily + daily_basic + stk_factor + cyq_perf，
 一次调用获取 OHLCV + 技术指标 + 筹码分布，直接写入 daily_kbars。

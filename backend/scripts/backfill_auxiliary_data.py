@@ -244,7 +244,7 @@ def backfill_concept_sectors(db: Session, trade_date: str | None = None) -> int:
 def backfill_dragon_tiger(db: Session, days_back: int = 30, trade_date: str | None = None) -> int:
     """
     回填龙虎榜数据（默认最近30个交易日）。
-    使用 Tushare top_list（自建服务器），eastmoney 备用。
+    使用 Tushare top_list（代理服务器），eastmoney 备用。
     """
     from app.services.tushare_client import fetch_moneyflow
 
@@ -377,7 +377,7 @@ def _get_top_n_codes_by_market_cap(db: Session, n: int = 500, trade_date: str | 
 def backfill_capital_flows(db: Session, top_n: int = 500, trade_date: str | None = None) -> int:
     """
     回填资金流向数据（市值前 N 股票）。
-    使用 Tushare moneyflow（自建服务器），eastmoney 备用。
+    使用 Tushare moneyflow（代理服务器），eastmoney 备用。
     """
     from app.services.tushare_client import get_pro
 
@@ -436,9 +436,26 @@ def backfill_capital_flows(db: Session, top_n: int = 500, trade_date: str | None
 def backfill_news(db: Session, top_n: int = 500, trade_date: str | None = None) -> int:
     """
     回填公告和新闻数据（市值前 N 股票）。
-    优先使用 Tushare anns_d（自建服务器），失败时回退 eastmoney np-anotice API。
+    优先使用 Tushare anns_d（代理服务器），失败时回退 eastmoney np-anotice API。
     """
-    from app.services.market_data import _http_get_json
+
+    def _http_get_json(url: str, _settings: Any = None) -> dict[str, Any]:
+        import httpx
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Referer": "https://quote.eastmoney.com/",
+        }
+        for attempt in range(3):
+            try:
+                with httpx.Client(timeout=15.0, headers=headers, follow_redirects=True) as client:
+                    response = client.get(url)
+                    response.raise_for_status()
+                    return response.json()
+            except Exception:
+                if attempt == 2:
+                    raise
+                time.sleep(1.0)
+        return {}
 
     target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
     logger.info("── 开始回填新闻公告 (%s Top %d 市值) ──", target_trade_date, top_n)

@@ -71,7 +71,10 @@ def main():
         for code in top_codes:
             for td in missing:
                 try:
-                    bars = fetch_minute_kbars(code, freq=args.freq, trade_date=td)
+                    if args.freq != "1min":
+                        print(f"  {code} {td}: 当前 fetch_minute_kbars 仅支持 1min，跳过 {args.freq}")
+                        continue
+                    bars = fetch_minute_kbars(code, trade_date=td)
                     if not bars:
                         continue
                     from sqlalchemy.dialects.mysql import insert as mysql_insert

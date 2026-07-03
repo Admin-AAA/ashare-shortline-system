@@ -18,8 +18,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("fill_kbars")
 
-TUSHARE_URL = "http://101.35.233.113:8020"
-TUSHARE_TOKEN = "f8b05f8ee54f468220f2569afe56b4c027f1d388d164899339d394ad"
+TUSHARE_URL = "https://fastapic.stockai888.top"
+TUSHARE_TOKEN = "eqyrJ71eIKjLoM12OeDLQOwRMUTuETs2ItnXAJitOhjTE8sLIjm8UuihObjXEs3zOFDKUI1PMrTmMp1yO9Tjl19"
 TUSHARE_TIMEOUT = 15
 
 DB_CONFIG = {
