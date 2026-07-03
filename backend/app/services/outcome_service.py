@@ -1284,38 +1284,33 @@ def _simulate_outcome(
     executed_exit_price = round(exit_price * (1 - EXIT_SLIPPAGE_BPS / 10000.0), 4)
     executed_return = round(((executed_exit_price - executed_entry_price) / executed_entry_price) * 100, 2)
 
-    # 除权/复权检测：当价格跳变 > 20% 但持有期每日 pct_chg 均在正常范围时，
-    # 视为除权事件，使用 pct_chg 链重新计算收益。
-    # 修复：pct_chg 字段在某些 label 时点可能未除权（raw 值，如 -32%），
-    # 导致 max_daily_pct >= limit*0.6，除权检测失败（如 688012 7月1日 labeled 的 -32.64% 行）。
-    # 增加价格跳变一致性检测：对相邻 bar 比较 open(t)/close(t-1) 与 pct_chg(t)，
-    # 若两者差异 > 20pp，pct_chg 字段不可信，用价格链重算。
-    if abs(executed_return) > 20:
-        is_star = str(rec.code or "").startswith("68")
-        limit_pct = 20 if is_star else 10
-        max_daily_pct = max(abs(_as_float(bar.pct_chg)) for bar in holding_bars) if holding_bars else 0
-        # 价格跳变 vs pct_chg 一致性检测：任何一天 pct_chg 字段与实际价格跳变矛盾 → 数据不可信
-        pct_chg_unreliable = False
-        for i in range(1, len(holding_bars)):
-            prev_close = _as_float(holding_bars[i - 1].close)
-            cur_open = _as_float(holding_bars[i].open)
-            cur_pct = _as_float(holding_bars[i].pct_chg)
-            if prev_close > 0 and cur_open > 0:
-                price_jump = (cur_open / prev_close - 1) * 100
-                # 价格跳变 > 20% 但 pct_chg 字段 < limit*0.6 → pct_chg 已除权但价格序列有跳变（除权日）
-                # 或价格跳变正常但 pct_chg > 20% → pct_chg 字段未除权（数据错误）
-                if abs(price_jump) > 20 and abs(cur_pct) < limit_pct * 0.6:
-                    pct_chg_unreliable = True
-                    break
-                if abs(cur_pct) > 20 and abs(price_jump) < limit_pct * 0.6:
-                    pct_chg_unreliable = True
-                    break
-        if max_daily_pct < limit_pct * 0.6 or pct_chg_unreliable:  # 除权或 pct_chg 不可信 → 用链重算
-            cum = 1.0
-            for bar in holding_bars:
-                cum *= (1 + _as_float(bar.pct_chg) / 100.0)
-            executed_return = round((cum - 1) * 100, 2)
-            executed_exit_price = round(executed_entry_price * (1 + executed_return / 100.0), 4)
+    # 除权/复权检测：当 holding_bars 中存在除权日（open/prev_close 跳变 > 20% 但 pct_chg 在正常范围），
+    # 用 pct_chg 链重新计算收益。除权日的价格跳变是除权调整，不是真实暴跌。
+    # 不依赖 abs(executed_return) > 20 门槛——STOP_LOSS_GAP_CAP 可能已把 return cap 到 -15%，
+    # 但除权日的虚假跳空仍需修正（如 688012 2026-05-29 除权：raw -32% → 真实 -5.47%）。
+    is_star = str(rec.code or "").startswith("68")
+    limit_pct = 20 if is_star else 10
+    has_ex_right_day = False
+    pct_chg_unreliable = False
+    for i in range(1, len(holding_bars)):
+        prev_close = _as_float(holding_bars[i - 1].close)
+        cur_open = _as_float(holding_bars[i].open)
+        cur_pct = _as_float(holding_bars[i].pct_chg)
+        if prev_close > 0 and cur_open > 0:
+            price_jump = (cur_open / prev_close - 1) * 100
+            # 价格跳变 > 20% 但 pct_chg 字段 < limit*0.6 → 除权日（pct_chg 已调整，价格序列有跳变）
+            if abs(price_jump) > 20 and abs(cur_pct) < limit_pct * 0.6:
+                has_ex_right_day = True
+            # 价格跳变正常但 pct_chg > 20% → pct_chg 字段未除权（数据错误）
+            if abs(cur_pct) > 20 and abs(price_jump) < limit_pct * 0.6:
+                pct_chg_unreliable = True
+    max_daily_pct = max(abs(_as_float(bar.pct_chg)) for bar in holding_bars) if holding_bars else 0
+    if has_ex_right_day or pct_chg_unreliable or (abs(executed_return) > 20 and max_daily_pct < limit_pct * 0.6):
+        cum = 1.0
+        for bar in holding_bars:
+            cum *= (1 + _as_float(bar.pct_chg) / 100.0)
+        executed_return = round((cum - 1) * 100, 2)
+        executed_exit_price = round(executed_entry_price * (1 + executed_return / 100.0), 4)
 
     weighted_return = round(executed_return * position_size, 2)
     hit_invalid = exit_reason.startswith("stop_loss")
