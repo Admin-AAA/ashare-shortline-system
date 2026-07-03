@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 560" role="img" width="100%">
+  <title>AShare 优化后用户流程</title>
+  <desc>主导航直接展示洞察、执行、分析、系统四个分组，所有核心模块平铺可见，跨页跳转使用 URL 参数。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+
+  <!-- 标题 -->
+  <text x="340" y="26" text-anchor="middle" font-size="15" font-weight="500" fill="#26215c">优化后用户流程</text>
+  <text x="340" y="46" text-anchor="middle" font-size="12" fill="#5f5e5a">核心模块平铺可见，URL 参数承载跨页状态，支持深链接</text>
+
+  <!-- 顶部栏 -->
+  <g>
+    <rect x="40" y="70" width="600" height="44" rx="10" fill="#f3f4f6" stroke="#b4b2a9" stroke-width="0.5"/>
+    <text x="60" y="86" font-size="12" font-weight="500" fill="#2c2c2a">品牌</text>
+    <text x="120" y="86" font-size="12" font-weight="500" fill="#3b6d11">洞察</text>
+    <text x="180" y="86" font-size="12" font-weight="500" fill="#2c2c2a">执行</text>
+    <text x="240" y="86" font-size="12" font-weight="500" fill="#2c2c2a">分析</text>
+    <text x="300" y="86" font-size="12" font-weight="500" fill="#2c2c2a">系统</text>
+    <text x="500" y="86" font-size="12" font-weight="500" fill="#2c2c2a">运行推荐</text>
+    <text x="580" y="86" font-size="12" fill="#2c2c2a">通知</text>
+  </g>
+
+  <!-- 分组卡片 -->
+  <g>
+    <rect x="40" y="140" width="130" height="120" rx="10" fill="#e1f5ee" stroke="#1d9e75" stroke-width="0.5"/>
+    <text x="105" y="164" text-anchor="middle" font-size="14" font-weight="500" fill="#04342c">洞察</text>
+    <text x="105" y="190" text-anchor="middle" font-size="12" fill="#085041">驾驶舱</text>
+    <text x="105" y="212" text-anchor="middle" font-size="11" fill="#5f5e5a">市场温度 / 风险雷达</text>
+  </g>
+
+  <g>
+    <rect x="195" y="140" width="130" height="120" rx="10" fill="#e6f1fb" stroke="#378add" stroke-width="0.5"/>
+    <text x="260" y="164" text-anchor="middle" font-size="14" font-weight="500" fill="#042c53">执行</text>
+    <text x="260" y="190" text-anchor="middle" font-size="12" fill="#0c447c">推荐运行</text>
+    <text x="260" y="210" text-anchor="middle" font-size="12" fill="#0c447c">候选解释</text>
+    <text x="260" y="230" text-anchor="middle" font-size="12" fill="#0c447c">复盘结果</text>
+  </g>
+
+  <g>
+    <rect x="350" y="140" width="130" height="120" rx="10" fill="#faece7" stroke="#d85a30" stroke-width="0.5"/>
+    <text x="415" y="164" text-anchor="middle" font-size="14" font-weight="500" fill="#4a1b0c">分析</text>
+    <text x="415" y="190" text-anchor="middle" font-size="12" fill="#712b13">预设矩阵</text>
+    <text x="415" y="210" text-anchor="middle" font-size="12" fill="#712b13">个股矩阵</text>
+    <text x="415" y="230" text-anchor="middle" font-size="12" fill="#712b13">回测</text>
+  </g>
+
+  <g>
+    <rect x="505" y="140" width="135" height="120" rx="10" fill="#eeedfe" stroke="#534ab7" stroke-width="0.5"/>
+    <text x="572" y="164" text-anchor="middle" font-size="14" font-weight="500" fill="#26215c">系统</text>
+    <text x="572" y="190" text-anchor="middle" font-size="12" fill="#3c3489">数据健康</text>
+    <text x="572" y="210" text-anchor="middle" font-size="12" fill="#3c3489">验收安全</text>
+    <text x="572" y="230" text-anchor="middle" font-size="12" fill="#3c3489">控制中心</text>
+  </g>
+
+  <line x1="105" y1="260" x2="105" y2="300" stroke="#888780" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="260" y1="260" x2="260" y2="300" stroke="#888780" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="415" y1="260" x2="415" y2="300" stroke="#888780" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="572" y1="260" x2="572" y2="300" stroke="#888780" stroke-width="1" marker-end="url(#arrow)"/>
+
+  <!-- 主要任务流 -->
+  <g>
+    <rect x="55" y="300" width="100" height="36" rx="6" fill="#ffffff" stroke="#b4b2a9" stroke-width="0.5"/>
+    <text x="105" y="318" text-anchor="middle" font-size="12" fill="#2c2c2a" dominant-baseline="central">查看市场状态</text>
+  </g>
+  <g>
+    <rect x="210" y="300" width="100" height="36" rx="6" fill="#ffffff" stroke="#b4b2a9" stroke-width="0.5"/>
+    <text x="260" y="318" text-anchor="middle" font-size="12" fill="#2c2c2a" dominant-baseline="central">执行推荐扫描</text>
+  </g>
+  <g>
+    <rect x="365" y="300" width="100" height="36" rx="6" fill="#ffffff" stroke="#b4b2a9" stroke-width="0.5"/>
+    <text x="415" y="318" text-anchor="middle" font-size="12" fill="#2c2c2a" dominant-baseline="central">对比分析</text>
+  </g>
+  <g>
+    <rect x="520" y="300" width="100" height="36" rx="6" fill="#ffffff" stroke="#b4b2a9" stroke-width="0.5"/>
+    <text x="570" y="318" text-anchor="middle" font-size="12" fill="#2c2c2a" dominant-baseline="central">配置与维护</text>
+  </g>
+
+  <!-- 执行流程细节 -->
+  <g>
+    <rect x="90" y="380" width="120" height="40" rx="8" fill="#e6f1fb" stroke="#378add" stroke-width="0.5"/>
+    <text x="150" y="400" text-anchor="middle" font-size="12" font-weight="500" fill="#042c53" dominant-baseline="central">推荐运行</text>
+  </g>
+  <g>
+    <rect x="250" y="380" width="120" height="40" rx="8" fill="#e6f1fb" stroke="#378add" stroke-width="0.5"/>
+    <text x="310" y="400" text-anchor="middle" font-size="12" font-weight="500" fill="#042c53" dominant-baseline="central">候选解释</text>
+  </g>
+  <g>
+    <rect x="410" y="380" width="120" height="40" rx="8" fill="#e6f1fb" stroke="#378add" stroke-width="0.5"/>
+    <text x="470" y="400" text-anchor="middle" font-size="12" font-weight="500" fill="#042c53" dominant-baseline="central">复盘结果</text>
+  </g>
+
+  <line x1="260" y1="336" x2="150" y2="380" stroke="#378add" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="210" y1="400" x2="250" y2="400" stroke="#378add" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="370" y1="400" x2="410" y2="400" stroke="#378add" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- URL 参数说明 -->
+  <text x="150" y="445" text-anchor="middle" font-size="11" fill="#5f5e5a">/run?run_id=xxx</text>
+  <text x="310" y="445" text-anchor="middle" font-size="11" fill="#5f5e5a">/pool?run_id=xxx</text>
+  <text x="470" y="445" text-anchor="middle" font-size="11" fill="#5f5e5a">/history?recommendation_id=xxx</text>
+
+  <!-- 收益说明 -->
+  <g transform="translate(40, 475)">
+    <rect x="0" y="0" width="600" height="60" rx="10" fill="#eaf3de" stroke="#639922" stroke-width="0.5"/>
+    <text x="12" y="24" font-size="13" font-weight="500" fill="#173404">优化收益</text>
+    <text x="12" y="44" font-size="11" fill="#27500a">所有核心模块一步触达 · 跨页状态可深链接分享 · 页面职责单一 · 全局快捷操作降低任务步数</text>
+  </g>
+</svg>

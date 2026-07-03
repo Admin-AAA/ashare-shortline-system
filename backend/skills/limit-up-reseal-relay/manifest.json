@@ -1,0 +1,8 @@
+{
+  "id": "limit-up-reseal-relay",
+  "name": "涨停回封接力",
+  "version": "0.1.0",
+  "enabled": true,
+  "source_type": "local",
+  "description": "基于涨停开板回封质量的短线接力预设，要求封单、换手、板块梯队和情绪不过热，并过滤一字板与高分歧风险。"
+}

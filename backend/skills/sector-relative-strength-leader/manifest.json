@@ -1,0 +1,8 @@
+{
+  "id": "sector-relative-strength-leader",
+  "name": "主线相对强度龙头",
+  "version": "0.1.0",
+  "enabled": true,
+  "source_type": "local",
+  "description": "基于行业动量、板块梯队和个股相对强度的短线龙头预设，要求主线确认、资金扩散和个股超额收益。"
+}

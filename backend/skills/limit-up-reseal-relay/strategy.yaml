@@ -1,0 +1,175 @@
+id: limit-up-reseal-relay
+name: 涨停回封接力
+enabled: true
+weight: 1.0
+
+meta:
+  author: system
+  style: limit-up-relay
+  version: 0.1.0
+  holding_days: [1, 2]
+  strategy_independence: 0.88
+  default_preset_groups:
+    experiment_limit_up_reseal_relay:
+      weight: 1.0
+      sort_order: 10
+
+contract:
+  type: strategy
+  executable: true
+  schema_version: 1
+
+universe:
+  include:
+    - "amount_yi >= 3"
+    - "turnover_rate >= 3"
+    - "turnover_rate <= 12"
+    - "is_limit_up == true"
+    - "limit_up_days20 >= 1"
+    - "twenty_cm_risk_gate != 'block'"
+  exclude:
+    - "is_st == true"
+    - "announcement_negative_count > 0"
+    - "news_risk_count > 0"
+    - "limit_up_overheat_score >= 82"
+
+prefilter:
+  market:
+    include:
+      - when: "pct >= 9.5"
+        reason: "requires_limit_up_strength"
+      - when: "limit_up_consecutive_days <= 3"
+        reason: "board_height_too_high"
+      - when: "limit_up_fd_amount_yi >= 0.12"
+        reason: "seal_amount_too_low"
+      - when: "sector_ladder_completeness_score >= 35"
+        reason: "sector_ladder_missing"
+      - when: "capital_resonance_score >= 45"
+        reason: "capital_resonance_missing"
+    include_any:
+      - when: "limit_up_open_times >= 1 and limit_up_open_times <= 8"
+        reason: "requires_reseal_window"
+      - when: "limit_up_consecutive_days == 1 and sector_ladder_completeness_score >= 50"
+        reason: "requires_first_board_sector_support"
+    exclude:
+      - when: "limit_up_open_times == 0 and limit_up_fd_amount_yi < 0.5"
+        reason: "one_word_or_weak_seal"
+      - when: "limit_up_open_times > 10"
+        reason: "reseal_too_unstable"
+      - when: "turnover_rate > 10 and capital_resonance_score < 60"
+        reason: "high_turnover_without_capital"
+      - when: "limit_up_overheat_score >= 75 and limit_up_consecutive_days >= 3"
+        reason: "late_emotion_overheat"
+
+phases:
+  - name: 情绪退潮回避
+    when: "market_sentiment_phase == '冰点' or limit_up_overheat_score >= 82"
+    score_cap: 35
+    hard_veto: true
+    risk_flags: ["涨停接力环境不佳"]
+
+  - name: 高标末端
+    when: "limit_up_consecutive_days >= 4 or (limit_up_overheat_score >= 75 and sector_ladder_height >= 4)"
+    score_cap: 50
+    hard_veto: false
+    risk_flags: ["高标接力进入末端，默认不追"]
+
+  - name: 回封确认
+    when: "is_limit_up == true and limit_up_open_times >= 1 and limit_up_open_times <= 8 and limit_up_fd_amount_yi >= 0.15"
+    score_cap: 92
+    hard_veto: false
+
+  - name: 首板强封
+    when: "limit_up_consecutive_days <= 1 and limit_up_fd_amount_yi >= 0.5 and sector_ladder_completeness_score >= 50"
+    score_cap: 88
+    hard_veto: false
+
+setups:
+  - name: 分歧回封接力
+    when: "limit_up_open_times >= 1 and limit_up_open_times <= 8 and limit_up_fd_amount_yi >= 0.15 and turnover_rate >= 4 and turnover_rate <= 10"
+    score_delta: 12
+    entry_rule: "涨停开板后快速回封，次日竞价或早盘承接不弱再参与"
+    invalid_rule: "再次炸板不能回封，或次日低开低走跌破分时均线"
+
+  - name: 首板强封观察
+    when: "limit_up_consecutive_days <= 1 and limit_up_fd_amount_yi >= 0.5 and sector_ladder_completeness_score >= 50"
+    score_delta: 8
+    entry_rule: "首板封单较强且板块有梯队，次日弱分歧转强再跟随"
+    invalid_rule: "板块梯队断层或次日竞价明显低于预期"
+
+  - name: 二板换手确认
+    when: "limit_up_consecutive_days == 2 and turnover_rate >= 5 and turnover_rate <= 10 and capital_resonance_score >= 60"
+    score_delta: 10
+    entry_rule: "二板换手充分且资金承接较强，等待分歧回封确认"
+    invalid_rule: "高开快速砸盘且无法回封"
+
+scoring:
+  base: 38
+  rules:
+    - when: "limit_up_consecutive_days <= 1"
+      delta: 10
+      reason: 首板风险收益较均衡
+    - when: "limit_up_consecutive_days == 2"
+      delta: 7
+      reason: 二板接力确认
+    - when: "limit_up_consecutive_days >= 3"
+      delta: -8
+      reason: 连板高度提升，追高降权
+    - when: "limit_up_fd_amount_yi >= 0.8"
+      delta: 10
+      reason: 封单承接强
+    - when: "limit_up_fd_amount_yi >= 0.3 and limit_up_fd_amount_yi < 0.8"
+      delta: 6
+      reason: 封单承接尚可
+    - when: "limit_up_open_times >= 1 and limit_up_open_times <= 5"
+      delta: 8
+      reason: 分歧回封质量较好
+    - when: "limit_up_open_times >= 6 and limit_up_open_times <= 8"
+      delta: 3
+      reason: 回封分歧偏大
+    - when: "sector_ladder_completeness_score >= 75"
+      delta: 10
+      reason: 板块梯队完整
+    - when: "sector_ladder_completeness_score >= 50"
+      delta: 5
+      reason: 板块梯队展开
+    - when: "capital_resonance_score >= 70"
+      delta: 8
+      reason: 资金承接强
+    - when: "is_main_theme == true"
+      delta: 7
+      reason: 主线题材涨停
+    - when: "dragon_tiger_is_on_list == true and dragon_tiger_buy_dispersion == '集中'"
+      delta: 5
+      reason: 龙虎榜买榜集中
+    - when: "turnover_rate > 10"
+      delta: -7
+      reason: 换手过高
+    - when: "limit_up_open_times > 8"
+      delta: -10
+      reason: 炸板次数过多
+    - when: "limit_up_overheat_score >= 70"
+      delta: -8
+      reason: 涨停情绪过热
+
+risk:
+  rules:
+    - when: "limit_up_open_times == 0"
+      level: medium
+      flag: 一字或近似一字，真实可参与性不足
+      score_delta: -8
+    - when: "limit_up_fd_amount_yi < 0.15"
+      level: high
+      flag: 封单偏弱，回封质量不足
+      score_delta: -12
+    - when: "limit_up_open_times > 8"
+      level: high
+      flag: 炸板次数过多，分歧失控
+      score_delta: -12
+    - when: "twenty_cm_risk_gate == 'caution'"
+      level: medium
+      flag: 20cm 涨停接力需降仓
+      score_delta: -6
+    - when: "limit_up_overheat_score >= 70"
+      level: medium
+      flag: 涨停情绪偏热，避免盲目接力

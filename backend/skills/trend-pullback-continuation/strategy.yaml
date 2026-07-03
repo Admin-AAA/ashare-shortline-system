@@ -1,0 +1,179 @@
+id: trend-pullback-continuation
+name: 强趋势缩量回踩
+enabled: true
+weight: 1.0
+
+meta:
+  author: system
+  style: trend-pullback
+  version: 0.1.0
+  holding_days: [2, 3, 5]
+  strategy_independence: 0.78
+  default_preset_groups:
+    experiment_trend_pullback:
+      weight: 1.0
+      sort_order: 10
+
+contract:
+  type: strategy
+  executable: true
+  schema_version: 1
+
+universe:
+  include:
+    - "amount_yi >= 2.5"
+    - "turnover_rate >= 1"
+    - "turnover_rate <= 8"
+    - "chg20 >= 3"
+    - "pos60 >= 55"
+    - "off_high_pct >= -10"
+    - "twenty_cm_risk_gate != 'block'"
+  exclude:
+    - "is_st == true"
+    - "announcement_negative_count > 0"
+    - "news_risk_count > 1"
+
+prefilter:
+  market:
+    include:
+      - when: "max_dd20 >= -14"
+        reason: "drawdown_too_large"
+      - when: "upper_shadow_count20 <= 5"
+        reason: "upper_shadow_too_many"
+      - when: "dsa_trend_score >= 18"
+        reason: "trend_not_strong_enough"
+      - when: "vol5_20 <= 1.05"
+        reason: "pullback_volume_not_shrink"
+    include_any:
+      - when: "volume_shrink_pullback == true and support_ma5 == true"
+        reason: "requires_ma5_shrink_pullback"
+      - when: "volume_shrink_pullback == true and support_ma10 == true"
+        reason: "requires_ma10_shrink_pullback"
+      - when: "pct >= -1.5 and pct <= 1 and support_ma5 == true and vol5_20 <= 0.9"
+        reason: "requires_near_ma_support"
+    exclude:
+      - when: "dist20 > 18 and rsi_12 > 72"
+        reason: "overheated_not_pullback"
+      - when: "off_high_pct < -10 and pct < 0"
+        reason: "trend_broken"
+      - when: "vol5_20 >= 1.5 and pct < 0"
+        reason: "volume_down_not_pullback"
+      - when: "limit_up_overheat_score >= 78"
+        reason: "emotion_overheat"
+
+phases:
+  - name: 破位回避
+    when: "max_dd20 < -14 or (off_high_pct < -10 and pct < 0) or dsa_trend_score < 18"
+    score_cap: 32
+    hard_veto: true
+    risk_flags: ["趋势支撑破坏，不做回踩低吸"]
+
+  - name: 过热等待
+    when: "dist20 > 18 and rsi_12 > 72"
+    score_cap: 55
+    hard_veto: false
+    risk_flags: ["趋势过热，等待更充分回踩"]
+
+  - name: 缩量回踩确认
+    when: "volume_shrink_pullback == true and (support_ma5 == true or support_ma10 == true) and dsa_trend_score >= 18"
+    score_cap: 90
+    hard_veto: false
+
+  - name: 趋势内轻回踩
+    when: "pct >= -1.5 and pct <= 1 and support_ma5 == true and vol5_20 <= 0.9"
+    score_cap: 84
+    hard_veto: false
+
+setups:
+  - name: MA5缩量低吸
+    when: "volume_shrink_pullback == true and support_ma5 == true and dsa_trend_score >= 18 and pct <= 1"
+    score_delta: 10
+    entry_rule: "缩量回踩 MA5 不破，次日重新转强或盘中收回均线后参与"
+    invalid_rule: "放量跌破 MA5 且不能快速收回"
+
+  - name: MA10趋势回踩
+    when: "volume_shrink_pullback == true and support_ma10 == true and dsa_trend_score >= 26 and max_dd20 >= -10"
+    score_delta: 8
+    entry_rule: "强趋势回踩 MA10 获得承接，等待止跌阳线确认"
+    invalid_rule: "跌破 MA10 后继续放量走弱"
+
+  - name: 强趋势轻分歧
+    when: "ma5 > ma10 and ma10 > ma20 and dist20 > 10 and eff20 > 0.5 and pct >= -1.5 and pct <= 0.8 and vol5_20 <= 0.9 and support_ma5 == true"
+    score_delta: 7
+    entry_rule: "强趋势轻分歧日不追，尾盘或次日确认承接"
+    invalid_rule: "轻分歧演变为放量下跌"
+
+  - name: 趋势支撑观察
+    when: "ma5 > ma10 and ma10 > ma20 and support_ma5 == true and off_high_pct >= -8 and capital_resonance_score >= 60"
+    score_delta: 2
+    entry_rule: "多头趋势仍在且 MA5 支撑有效，等待缩量回踩或重新放量转强"
+    invalid_rule: "跌破 MA10 或放量跌破 MA5 后不能收回"
+
+scoring:
+  base: 42
+  rules:
+    - when: "ma5 > ma10 and ma10 > ma20 and dist20 > 10 and eff20 > 0.5"
+      delta: 10
+      reason: 强势多头结构
+    - when: "ma5 > ma10 and ma10 > ma20"
+      delta: 7
+      reason: 多头排列
+    - when: "dsa_trend_score >= 26"
+      delta: 8
+      reason: 趋势评分高
+    - when: "dsa_support_score >= 10"
+      delta: 7
+      reason: MA5/MA10 双支撑
+    - when: "dsa_macd_score >= 8"
+      delta: 6
+      reason: MACD 多头
+    - when: "volume_shrink_pullback == true"
+      delta: 8
+      reason: 缩量回踩
+    - when: "support_ma5 == true"
+      delta: 5
+      reason: MA5 支撑有效
+    - when: "support_ma10 == true"
+      delta: 4
+      reason: MA10 支撑有效
+    - when: "capital_resonance_score >= 60"
+      delta: 6
+      reason: 资金承接未弱化
+    - when: "is_main_theme == true"
+      delta: 5
+      reason: 主线趋势内回踩
+    - when: "off_high_pct >= -5"
+      delta: 4
+      reason: 距高点不远
+    - when: "vol5_20 < 0.65"
+      delta: -4
+      reason: 量能过度萎缩，弹性不足
+    - when: "rsi_12 > 72"
+      delta: -6
+      reason: RSI 过热
+    - when: "upper_shadow_count20 >= 4"
+      delta: -5
+      reason: 上影线压力偏多
+
+risk:
+  rules:
+    - when: "max_dd20 < -12"
+      level: medium
+      flag: 趋势回撤偏大
+      score_delta: -6
+    - when: "vol5_20 >= 1.3 and pct < 0"
+      level: high
+      flag: 放量下跌，不是健康回踩
+      score_delta: -12
+    - when: "dsa_macd_score <= 2"
+      level: high
+      flag: MACD 转弱
+      score_delta: -10
+    - when: "twenty_cm_risk_gate == 'caution'"
+      level: medium
+      flag: 20cm 趋势票回踩需降仓
+      score_delta: -5
+    - when: "news_risk_count > 0"
+      level: high
+      flag: 新闻风险未完全排除
+      score_delta: -10

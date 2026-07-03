@@ -1,0 +1,8 @@
+{
+  "id": "high-range-breakout-momentum",
+  "name": "阶段新高放量突破",
+  "version": "0.1.0",
+  "enabled": true,
+  "source_type": "local",
+  "description": "基于阶段高点锚定的短线动量预设，要求60日/20日突破、量能确认、流动性充足，并过滤过热与破位风险。"
+}

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  TARGET="$(readlink "$SOURCE")"
+  if [[ "$TARGET" != /* ]]; then
+    SOURCE="$DIR/$TARGET"
+  else
+    SOURCE="$TARGET"
+  fi
+done
+DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+ROOT="$(cd "$DIR" && pwd)"
+PY="$ROOT/backend/.venv/bin/python"
+if [[ ! -x "$PY" ]]; then
+  PY="python3"
+fi
+cd "$ROOT/backend"
+exec "$PY" scripts/ashare_cli.py "$@"

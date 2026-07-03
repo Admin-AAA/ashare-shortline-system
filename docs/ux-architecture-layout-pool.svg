@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 520" role="img" width="100%">
+  <title>候选解释页布局优化建议</title>
+  <desc>采用 master-detail 模式：左侧候选列表支持排序筛选，右侧展示个股解释详情，复盘入口内嵌。</desc>
+  <defs>
+    <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+      <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#f1efe8" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+
+  <rect width="680" height="520" fill="url(#grid)"/>
+
+  <!-- 标题 -->
+  <text x="340" y="26" text-anchor="middle" font-size="15" font-weight="500" fill="#26215c">候选解释页布局优化建议</text>
+  <text x="340" y="44" text-anchor="middle" font-size="12" fill="#5f5e5a">Master-Detail 模式：列表筛选 + 详情侧栏 + 一键复盘</text>
+
+  <!-- 顶部栏占位 -->
+  <rect x="40" y="60" width="600" height="34" rx="6" fill="#f3f4f6" stroke="#b4b2a9" stroke-width="0.5"/>
+  <text x="60" y="80" font-size="11" fill="#5f5e5a">品牌 · 洞察 · 执行 · 分析 · 系统 · 运行推荐 · 通知</text>
+
+  <!-- 筛选器 -->
+  <rect x="40" y="108" width="600" height="44" rx="8" fill="#ffffff" stroke="#d3d1c7" stroke-width="0.5"/>
+  <text x="60" y="134" font-size="12" font-weight="500" fill="#2c2c2a">筛选：</text>
+  <rect x="110" y="116" width="90" height="28" rx="6" fill="#f3f4f6" stroke="#b4b2a9" stroke-width="0.5"/>
+  <text x="155" y="132" text-anchor="middle" font-size="11" fill="#2c2c2a">买点 ▼</text>
+  <rect x="210" y="116" width="90" height="28" rx="6" fill="#f3f4f6" stroke="#b4b2a9" stroke-width="0.5"/>
+  <text x="255" y="132" text-anchor="middle" font-size="11" fill="#2c2c2a">风险 ▼</text>
+  <rect x="310" y="116" width="90" height="28" rx="6" fill="#f3f4f6" stroke="#b4b2a9" stroke-width="0.5"/>
+  <text x="355" y="132" text-anchor="middle" font-size="11" fill="#2c2c2a">分数 ▼</text>
+  <text x="580" y="134" text-anchor="end" font-size="11" fill="#378add">排序：分数从高到低</text>
+
+  <!-- 左侧列表 -->
+  <rect x="40" y="164" width="260" height="280" rx="8" fill="#ffffff" stroke="#d3d1c7" stroke-width="0.5"/>
+  <text x="60" y="188" font-size="13" font-weight="500" fill="#2c2c2a">候选列表</text>
+  <text x="280" y="188" text-anchor="end" font-size="11" fill="#5f5e5a">12 只</text>
+
+  <rect x="52" y="202" width="236" height="48" rx="6" fill="#e6f1fb" stroke="#378add" stroke-width="1"/>
+  <text x="64" y="222" font-size="12" font-weight="500" fill="#042c53">1 · 000001 · 平安银行</text>
+  <text x="64" y="240" font-size="11" fill="#0c447c">85.4 · 突破买点 · 中风险</text>
+
+  <rect x="52" y="256" width="236" height="48" rx="6" fill="#f9fafb" stroke="#d3d1c7" stroke-width="0.5"/>
+  <text x="64" y="276" font-size="12" font-weight="500" fill="#2c2c2a">2 · 000002 · 万科A</text>
+  <text x="64" y="294" font-size="11" fill="#5f5e5a">82.1 · 回踩买点 · 低风险</text>
+
+  <rect x="52" y="310" width="236" height="48" rx="6" fill="#f9fafb" stroke="#d3d1c7" stroke-width="0.5"/>
+  <text x="64" y="330" font-size="12" font-weight="500" fill="#2c2c2a">3 · 000003 · 国农科技</text>
+  <text x="64" y="348" font-size="11" fill="#5f5e5a">79.6 · 放量买点 · 中风险</text>
+
+  <rect x="52" y="364" width="236" height="48" rx="6" fill="#f9fafb" stroke="#d3d1c7" stroke-width="0.5"/>
+  <text x="64" y="384" font-size="12" font-weight="500" fill="#2c2c2a">4 · 000004 · 国新健康</text>
+  <text x="64" y="402" font-size="11" fill="#5f5e5a">76.3 · 突破买点 · 高风险</text>
+
+  <!-- 右侧详情 -->
+  <rect x="316" y="164" width="324" height="280" rx="8" fill="#ffffff" stroke="#d3d1c7" stroke-width="0.5"/>
+  <text x="336" y="188" font-size="13" font-weight="500" fill="#2c2c2a">个股解释详情</text>
+
+  <rect x="336" y="202" width="284" height="56" rx="6" fill="#f3f4f6" stroke="#d3d1c7" stroke-width="0.5"/>
+  <text x="350" y="224" font-size="13" font-weight="500" fill="#2c2c2a">000001 平安银行</text>
+  <text x="350" y="244" font-size="11" fill="#5f5e5a">行业：银行 · 价格：¥10.24 · 涨跌幅：+1.82%</text>
+
+  <text x="336" y="280" font-size="12" font-weight="500" fill="#2c2c2a">推荐理由</text>
+  <text x="336" y="300" font-size="11" fill="#5f5e5a">量价齐升突破前期平台，MACD 金叉，RSI 处于强势区间...</text>
+
+  <text x="336" y="330" font-size="12" font-weight="500" fill="#2c2c2a">风险点</text>
+  <text x="336" y="350" font-size="11" fill="#5f5e5a">板块轮动较快，上方存在年线压力，需关注大盘情绪。</text>
+
+  <text x="336" y="380" font-size="12" font-weight="500" fill="#2c2c2a">共识与数据质量</text>
+  <text x="336" y="400" font-size="11" fill="#5f5e5a">共识：看多 · 报价源：5 · 日K：完整</text>
+
+  <rect x="336" y="420" width="140" height="36" rx="6" fill="#378add" stroke="#378add" stroke-width="0.5"/>
+  <text x="406" y="440" text-anchor="middle" font-size="12" font-weight="500" fill="#ffffff">进入复盘</text>
+  <text x="490" y="440" font-size="11" fill="#5f5e5a">→ /history?recommendation_id=xxx</text>
+
+  <!-- 底部说明 -->
+  <text x="40" y="470" font-size="11" font-weight="500" fill="#26215c">设计要点</text>
+  <text x="40" y="490" font-size="11" fill="#5f5e5a">1. 左侧列表支持排序/筛选，提高扫读效率；2. 右侧详情直接展示，无需跳转；3. 复盘入口内嵌，URL 直接切换。</text>
+</svg>

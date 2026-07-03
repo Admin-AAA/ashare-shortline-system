@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 480" role="img" width="100%">
+  <title>驾驶舱布局优化建议</title>
+  <desc>采用 F 型布局：顶部数据健康横幅，左侧市场温度与风险雷达，中间龙头候选列表，底部辅助指标与系统健康。</desc>
+  <defs>
+    <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+      <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#f1efe8" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+
+  <rect width="680" height="480" fill="url(#grid)"/>
+
+  <!-- 标题 -->
+  <text x="340" y="26" text-anchor="middle" font-size="15" font-weight="500" fill="#26215c">驾驶舱布局优化建议</text>
+  <text x="340" y="44" text-anchor="middle" font-size="12" fill="#5f5e5a">F 型布局：先总览，再分区，突出核心决策信息</text>
+
+  <!-- 顶部栏占位 -->
+  <rect x="40" y="60" width="600" height="34" rx="6" fill="#f3f4f6" stroke="#b4b2a9" stroke-width="0.5"/>
+  <text x="60" y="80" font-size="11" fill="#5f5e5a">品牌 · 洞察 · 执行 · 分析 · 系统 · 运行推荐 · 通知</text>
+
+  <!-- 数据健康横幅 -->
+  <rect x="40" y="106" width="600" height="34" rx="6" fill="#faeeda" stroke="#ef9f27" stroke-width="0.5"/>
+  <text x="60" y="126" font-size="12" fill="#854f0b">数据健康提示：数据源降级，推荐结果可能受影响 · 补齐数据池</text>
+
+  <!-- 左侧：市场温度 + 风险雷达 -->
+  <rect x="40" y="152" width="180" height="140" rx="8" fill="#ffffff" stroke="#d3d1c7" stroke-width="0.5"/>
+  <text x="130" y="176" text-anchor="middle" font-size="13" font-weight="500" fill="#2c2c2a">市场温度</text>
+  <text x="130" y="200" text-anchor="middle" font-size="11" fill="#5f5e5a">涨跌家数 / 涨跌停</text>
+  <text x="130" y="220" text-anchor="middle" font-size="11" fill="#5f5e5a">主线强度 / 量能</text>
+  <text x="130" y="240" text-anchor="middle" font-size="11" fill="#5f5e5a">情绪周期</text>
+
+  <rect x="40" y="304" width="180" height="120" rx="8" fill="#ffffff" stroke="#d3d1c7" stroke-width="0.5"/>
+  <text x="130" y="328" text-anchor="middle" font-size="13" font-weight="500" fill="#2c2c2a">风险雷达</text>
+  <text x="130" y="352" text-anchor="middle" font-size="11" fill="#5f5e5a">高 / 中 / 低风险项</text>
+  <text x="130" y="372" text-anchor="middle" font-size="11" fill="#5f5e5a">验证摘要</text>
+  <text x="130" y="392" text-anchor="middle" font-size="11" fill="#5f5e5a">数据池门禁</text>
+
+  <!-- 中间：龙头候选 -->
+  <rect x="236" y="152" width="404" height="272" rx="8" fill="#ffffff" stroke="#d3d1c7" stroke-width="0.5"/>
+  <text x="438" y="176" text-anchor="middle" font-size="13" font-weight="500" fill="#2c2c2a">龙头候选</text>
+  <text x="438" y="196" text-anchor="middle" font-size="11" fill="#5f5e5a">按最终分排序，卡片展示强度 / 买点 / 风险 / 共识</text>
+  <rect x="256" y="214" width="364" height="60" rx="6" fill="#f9fafb" stroke="#d3d1c7" stroke-width="0.5"/>
+  <text x="270" y="236" font-size="11" fill="#2c2c2a">候选 1 · 代码 · 分数 · 买点 · [进入复盘]</text>
+  <text x="270" y="254" font-size="10" fill="#5f5e5a">推荐理由一句话摘要...</text>
+  <rect x="256" y="286" width="364" height="60" rx="6" fill="#f9fafb" stroke="#d3d1c7" stroke-width="0.5"/>
+  <text x="270" y="308" font-size="11" fill="#2c2c2a">候选 2 · 代码 · 分数 · 买点 · [进入复盘]</text>
+  <text x="270" y="326" font-size="10" fill="#5f5e5a">推荐理由一句话摘要...</text>
+  <rect x="256" y="358" width="364" height="50" rx="6" fill="#f9fafb" stroke="#d3d1c7" stroke-width="0.5"/>
+  <text x="270" y="380" font-size="11" fill="#2c2c2a">候选 3 · 代码 · 分数 · 买点 · [进入复盘]</text>
+  <text x="270" y="398" font-size="10" fill="#5f5e5a">推荐理由一句话摘要...</text>
+
+  <!-- 底部：指标卡片与运行状态 -->
+  <rect x="40" y="440" width="140" height="28" rx="6" fill="#e6f1fb" stroke="#378add" stroke-width="0.5"/>
+  <text x="110" y="458" text-anchor="middle" font-size="11" fill="#042c53">运行状态</text>
+  <rect x="192" y="440" width="140" height="28" rx="6" fill="#e1f5ee" stroke="#1d9e75" stroke-width="0.5"/>
+  <text x="262" y="458" text-anchor="middle" font-size="11" fill="#04342c">质量评分</text>
+  <rect x="344" y="440" width="140" height="28" rx="6" fill="#eeedfe" stroke="#534ab7" stroke-width="0.5"/>
+  <text x="414" y="458" text-anchor="middle" font-size="11" fill="#26215c">指标概览</text>
+  <rect x="496" y="440" width="144" height="28" rx="6" fill="#faece7" stroke="#d85a30" stroke-width="0.5"/>
+  <text x="568" y="458" text-anchor="middle" font-size="11" fill="#4a1b0c">任务调度</text>
+</svg>
