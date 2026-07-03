@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from typing import Any
@@ -179,7 +180,7 @@ def analyze_stock_matrix(
 
     elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
 
-    return {
+    result = {
         "status": "ok",
         "code": code,
         "name": stock.name,
@@ -205,6 +206,26 @@ def analyze_stock_matrix(
         },
         "elapsed_ms": elapsed_ms,
     }
+
+    # 写入历史记录（不阻塞主流程，失败仅记日志）
+    try:
+        from app.models.tables import StockMatrixHistory
+        final_score = float(aggregated.get("final_score", 0) or 0)
+        db.add(StockMatrixHistory(
+            code=code,
+            trade_date=trade_date,
+            analysis_type="analysis",
+            final_score=final_score,
+            skill_count=len(skill_results),
+            result_json=json.dumps(result, ensure_ascii=False, default=str),
+            elapsed_ms=elapsed_ms,
+        ))
+        db.commit()
+    except Exception as hist_exc:
+        logger.warning("写入 stock_matrix_history 失败: %s", hist_exc)
+        db.rollback()
+
+    return result
 
 
 async def _run_reviews(

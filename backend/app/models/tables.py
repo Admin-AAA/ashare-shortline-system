@@ -610,7 +610,7 @@ class Preset(Base):
     score_line: Mapped[float] = mapped_column(Float, default=72.0)
     output_count: Mapped[int] = mapped_column(Integer, default=6)
     bucket_limits_json: Mapped[str] = mapped_column(Text, default="{}")
-    data_source: Mapped[str] = mapped_column(String(20), default="local_pool")
+    data_source: Mapped[str] = mapped_column(String(20), default="local_pool_preferred")
     hide_recent_repeats: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[str] = mapped_column(String(20), default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -845,3 +845,20 @@ class ScheduledTaskRun(Base):
     error_message: Mapped[str | None] = mapped_column(Text)
     payload_json: Mapped[str] = mapped_column(MEDIUMTEXT, default="{}")
     result_json: Mapped[str] = mapped_column(MEDIUMTEXT, default="{}")
+
+
+class StockMatrixHistory(Base):
+    """个股矩阵分析历史记录。每次分析/回测结果落表，支持分页查询历史。"""
+    __tablename__ = "stock_matrix_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(20), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10))
+    analysis_type: Mapped[str] = mapped_column(String(20), default="analysis")  # analysis | backtest
+    final_score: Mapped[float | None] = mapped_column(Float)
+    win_rate_est: Mapped[float | None] = mapped_column(Float)
+    avg_return_est: Mapped[float | None] = mapped_column(Float)
+    skill_count: Mapped[int] = mapped_column(Integer, default=0)
+    result_json: Mapped[str] = mapped_column(MEDIUMTEXT, default="{}")
+    elapsed_ms: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

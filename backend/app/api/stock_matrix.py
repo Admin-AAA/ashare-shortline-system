@@ -2,10 +2,12 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select, func, desc
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.models.tables import StockMatrixHistory
 
 logger = logging.getLogger(__name__)
 
@@ -80,3 +82,54 @@ def stock_matrix_backtest(payload: dict, db: Session = Depends(get_db)):
     except Exception as exc:
         logger.exception("stock matrix backtest failed for %s", code)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/history")
+def stock_matrix_history(
+    code: str = Query(..., description="股票代码"),
+    page: int = Query(1, ge=1, description="页码，从 1 开始"),
+    page_size: int = Query(10, ge=1, le=50, description="每页条数"),
+    db: Session = Depends(get_db),
+):
+    """查询单股票矩阵分析历史记录（分页）。"""
+    code = code.strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="code is required")
+
+    total = db.scalar(
+        select(func.count()).select_from(StockMatrixHistory)
+        .where(StockMatrixHistory.code == code)
+    ) or 0
+
+    offset = (page - 1) * page_size
+    rows = db.scalars(
+        select(StockMatrixHistory)
+        .where(StockMatrixHistory.code == code)
+        .order_by(desc(StockMatrixHistory.created_at))
+        .offset(offset)
+        .limit(page_size)
+    ).all()
+
+    items = [
+        {
+            "id": row.id,
+            "code": row.code,
+            "trade_date": row.trade_date,
+            "analysis_type": row.analysis_type,
+            "final_score": row.final_score,
+            "win_rate_est": row.win_rate_est,
+            "avg_return_est": row.avg_return_est,
+            "skill_count": row.skill_count,
+            "elapsed_ms": row.elapsed_ms,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+        for row in rows
+    ]
+
+    return {
+        "code": code,
+        "page": page,
+        "page_size": page_size,
+        "total": int(total),
+        "items": items,
+    }

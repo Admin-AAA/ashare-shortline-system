@@ -1,4 +1,4 @@
-import type { StockMatrixAnalysisResult, StockMatrixBacktestResult } from "../types";
+import type { StockMatrixAnalysisResult, StockMatrixBacktestResult, StockMatrixHistoryResult } from "../types";
 
 const BASE = "";
 
@@ -49,5 +49,12 @@ export const stockMatrixApi = {
       "/api/stock-matrix/backtest",
       json("POST", payload),
       120_000,
+    ),
+
+  history: (code: string, page: number = 1, pageSize: number = 10) =>
+    request<StockMatrixHistoryResult>(
+      `/api/stock-matrix/history?code=${encodeURIComponent(code)}&page=${page}&page_size=${pageSize}`,
+      { method: "GET" },
+      15_000,
     ),
 };

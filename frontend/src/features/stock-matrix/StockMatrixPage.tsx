@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Loader2,
   Search,
@@ -18,6 +18,7 @@ import { scoreColor } from "../../utils/display";
 import type {
   StockMatrixAnalysisResult,
   StockMatrixBacktestResult,
+  StockMatrixHistoryResult,
   SkillMatrixRow,
   SkillBacktestPerformance,
 } from "../../types";
@@ -205,7 +206,116 @@ export default function StockMatrixPage({ refreshSignal = 0 }: { refreshSignal?:
       {tab === "backtest" && backtest && backtest.status === "completed" && (
         <BacktestResult data={backtest} />
       )}
+
+      {/* ── 历史记录列表 ── */}
+      {code.trim() && <HistoryList code={code.trim()} refreshSignal={refreshSignal} />}
     </div>
+  );
+}
+
+// ── 历史记录列表 + 分页 ──
+function HistoryList({ code, refreshSignal }: { code: string; refreshSignal: number }) {
+  const [page, setPage] = useState(1);
+  const [data, setData] = useState<StockMatrixHistoryResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const pageSize = 10;
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const result = await stockMatrixApi.history(code, page, pageSize);
+      setData(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [code, page]);
+
+  useEffect(() => {
+    void load();
+  }, [load, refreshSignal]);
+
+  // code 变化时重置到第 1 页
+  useEffect(() => {
+    setPage(1);
+  }, [code]);
+
+  const totalPages = data ? Math.max(1, Math.ceil(data.total / pageSize)) : 1;
+  const items = data?.items ?? [];
+
+  return (
+    <section className="sm-history">
+      <div className="sm-history-header">
+        <h3>历史记录</h3>
+        <span className="sm-history-count">
+          {data ? `共 ${data.total} 条` : ""}
+        </span>
+      </div>
+
+      {loading && <div className="sm-history-loading">加载中…</div>}
+      {error && <div className="sm-history-error">{error}</div>}
+      {!loading && !error && items.length === 0 && (
+        <div className="sm-history-empty">暂无历史记录，运行分析后会自动保存</div>
+      )}
+
+      {items.length > 0 && (
+        <>
+          <div className="sm-history-table">
+            <div className="sm-history-row sm-history-row-head">
+              <span>时间</span>
+              <span>类型</span>
+              <span>分析日</span>
+              <span>分数</span>
+              <span>skill 数</span>
+              <span>耗时</span>
+            </div>
+            {items.map((item) => (
+              <div key={item.id} className="sm-history-row">
+                <span className="sm-history-time">
+                  {item.created_at ? new Date(item.created_at).toLocaleString("zh-CN", { hour12: false }) : "-"}
+                </span>
+                <span className={`sm-history-type ${item.analysis_type}`}>
+                  {item.analysis_type === "backtest" ? "回测" : "分析"}
+                </span>
+                <span className="sm-history-date">{item.trade_date || "-"}</span>
+                <span className="sm-history-score" style={{ color: scoreColor(item.final_score ?? 0) }}>
+                  {item.final_score != null ? item.final_score.toFixed(1) : "-"}
+                </span>
+                <span className="sm-history-skills">{item.skill_count}</span>
+                <span className="sm-history-elapsed">
+                  {item.elapsed_ms != null ? `${Math.round(item.elapsed_ms)}ms` : "-"}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {totalPages > 1 && (
+            <div className="sm-history-pager">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1 || loading}
+              >
+                上一页
+              </button>
+              <span className="sm-history-page-info">
+                {page} / {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages || loading}
+              >
+                下一页
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 

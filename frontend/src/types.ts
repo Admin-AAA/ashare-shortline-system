@@ -1773,3 +1773,24 @@ export type FilterEffectiveness = {
     avg_return: number;
   }>;
 };
+
+export type StockMatrixHistoryItem = {
+  id: number;
+  code: string;
+  trade_date: string;
+  analysis_type: string;
+  final_score: number | null;
+  win_rate_est: number | null;
+  avg_return_est: number | null;
+  skill_count: number;
+  elapsed_ms: number | null;
+  created_at: string | null;
+};
+
+export type StockMatrixHistoryResult = {
+  code: string;
+  page: number;
+  page_size: number;
+  total: number;
+  items: StockMatrixHistoryItem[];
+};
