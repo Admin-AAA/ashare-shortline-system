@@ -152,9 +152,9 @@ scoring:
       delta: 4
       reason: "换手率适中（5-10%: 61.5% WR, +2.78% 均收益，797 笔验证）"
     # chip_concentration 4-10 重复规则已移除（上方 delta 6 已覆盖，此条 delta 4 永不触发）
-    - when: "dsa_bias_score <= 4"
+    - when: "dsa_bias_score <= 2"
       delta: -8
-      reason: 偏离均线过远
+      reason: 极端乖离（bias_ma5>5% 仅 dsa_bias_score=2，原 <=4 误罚 bias_ma5 3-5% 区间 75% WR）
 
 risk:
   rules:
