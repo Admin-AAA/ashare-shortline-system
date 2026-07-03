@@ -147,8 +147,9 @@ def test_dsa_macd_score_golden_cross():
 
 
 def test_dsa_rsi_score():
+    # 数据驱动（T3 第78轮）：rsi[40,50) 提分到 10（被推荐后 WR=100%）
     assert _rsi_score(55) == 8   # [50,70]
-    assert _rsi_score(45) == 5   # [40,50)
+    assert _rsi_score(45) == 10  # [40,50) 提分（原 5）：被推荐后 WR=100%
     assert _rsi_score(25) == 10  # < 30
     assert _rsi_score(75) == 0   # > 70
 

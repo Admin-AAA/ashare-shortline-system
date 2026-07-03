@@ -407,12 +407,18 @@ def _bias_score(bias_ma5: float) -> int:
 
 
 def _rsi_score(rsi: float) -> int:
+    # 数据驱动（2026-07-04 去重 282 笔 + 反事实验证 T3 第78轮）：
+    # rsi[40,50) 温和偏强，被推荐后 WR=100%（9笔 avg+6.70%）→ 提分到 10
+    # rsi<30 超卖，整体 WR=40% 但被推荐后 WR=75%（推荐线已筛选）→ 保持 10
+    # rsi[50,70] 中性偏强，整体 WR=54.2% → 保持 8
+    # rsi>70 超买，被推荐后 WR=25% avg-0.88% → 0 分（确实差）
+    # 反事实验证：rsi[40,50) 提分净 +4.24%（0 移除，纯增量）
     if rsi < 30:
         return 10
+    if 40 <= rsi < 50:
+        return 10  # 提分（原 5）：被推荐后 WR=100%
     if 50 <= rsi <= 70:
         return 8
-    if 40 <= rsi < 50:
-        return 5
     if 30 <= rsi < 40:
         return 3
     return 0
