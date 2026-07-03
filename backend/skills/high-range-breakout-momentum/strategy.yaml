@@ -10,6 +10,12 @@ meta:
   holding_days: [1, 3, 5]
   strategy_independence: 0.82
   default_preset_groups:
+    formal_opening:
+      weight: 0.95
+      sort_order: 40
+    formal_trend_core:
+      weight: 1.05
+      sort_order: 40
     experiment_high_range_breakout:
       weight: 1.0
       sort_order: 10

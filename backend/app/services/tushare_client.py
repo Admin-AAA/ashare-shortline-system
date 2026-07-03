@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import functools
 import json
+import threading
 import time
+from collections import deque
 from datetime import date, timedelta
 from typing import Any
 
@@ -23,6 +25,33 @@ import requests
 
 _TOKEN = "eqyrJ71eIKjLoM12OeDLQOwRMUTuETs2ItnXAJitOhjTE8sLIjm8UuihObjXEs3zOFDKUI1PMrTmMp1yO9Tjl19"
 _CUSTOM_URL = "https://fastapic.stockai888.top/"
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 全局令牌桶限速器（代理服务器每分钟100次上限）
+# ═════════════════════════════════════════════════════════════════════════════
+
+_RATE_LIMIT_LOCK = threading.Lock()
+_RATE_TIMESTAMPS: deque[float] = deque()
+_RATE_LIMIT_PER_MINUTE = 90  # 留 10 次 buffer，避免边界 429
+
+
+def _rate_limit_wait() -> None:
+    """令牌桶：确保最近 60s 内请求数不超过 _RATE_LIMIT_PER_MINUTE。"""
+    with _RATE_LIMIT_LOCK:
+        now = time.monotonic()
+        # 清理 60s 前的时间戳
+        while _RATE_TIMESTAMPS and _RATE_TIMESTAMPS[0] < now - 60:
+            _RATE_TIMESTAMPS.popleft()
+        if len(_RATE_TIMESTAMPS) >= _RATE_LIMIT_PER_MINUTE:
+            # 需要等到最老的时间戳过期
+            wait = _RATE_TIMESTAMPS[0] + 60 - now + 0.1
+            if wait > 0:
+                time.sleep(wait)
+                now = time.monotonic()
+                while _RATE_TIMESTAMPS and _RATE_TIMESTAMPS[0] < now - 60:
+                    _RATE_TIMESTAMPS.popleft()
+        _RATE_TIMESTAMPS.append(now)
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 客户端 — requests.Session 直连，杜绝 tushare 库的 TCP 悬挂问题
@@ -46,6 +75,7 @@ class _TushareSession:
             raise AttributeError(api_name)
 
         def caller(**params: Any) -> pd.DataFrame:
+            _rate_limit_wait()
             r = self._session.post(
                 f"{self._url}{api_name}",
                 json={
@@ -482,8 +512,6 @@ def fetch_limit_up_board(trade_date: str | None = None) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     errors: list[str] = []
     for limit_type in ("U", "D"):
-        if result:  # 非首次调用加间隔，避免连续请求触发 429
-            time.sleep(0.5)
         try:
             df = pro.limit_list_d(trade_date=td, limit_type=limit_type)
             if df is None or df.empty:
@@ -1357,6 +1385,137 @@ def _attach_pre_close(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         }
         for row in ordered
     ]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 融资融券明细（全市场批量）
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def fetch_margin_detail_batch(trade_date: str | None = None) -> list[dict[str, Any]]:
+    """按交易日批量获取全市场融资融券明细（margin_detail 接口）。
+
+    比逐股 margin 更高效，一次拉 4000+ 条，适合日常同步。
+    """
+    pro = get_pro()
+    td = _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
+    try:
+        df = pro.margin_detail(trade_date=td)
+    except Exception:
+        return []
+    if df is None or df.empty:
+        return []
+    result = []
+    for _, row in df.iterrows():
+        code = str(row.get("ts_code", "")).split(".")[0]
+        if len(code) != 6:
+            continue
+        result.append({
+            "code": code,
+            "trade_date": _fmt_date(str(row.get("trade_date", td))),
+            "rzye": _f(row.get("rzye")) / 1e8,         # 融资余额(亿)
+            "rqye": _f(row.get("rqye")) / 1e8,         # 融券余额(亿)
+            "rzmre": _f(row.get("rzmre")) / 1e8,        # 融资买入额(亿)
+            "rzche": _f(row.get("rzche")) / 1e8,        # 融资偿还额(亿)
+            "rzrqye": _f(row.get("rzrqye")) / 1e8,      # 融资融券余额(亿)
+            "rqyl": _f(row.get("rqyl")),                 # 融券余量(股)
+            "rqmcl": _f(row.get("rqmcl")),               # 融券卖出量(股)
+            "rzrqye_md": _f(row.get("rzrqye")) / 1e8,   # 融资融券余额(亿,同字段)
+        })
+    return result
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 大宗交易
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def fetch_block_trade(trade_date: str | None = None) -> list[dict[str, Any]]:
+    """获取大宗交易数据。折价率=机构态度，大宗交易量=大资金动向。"""
+    pro = get_pro()
+    td = _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
+    try:
+        df = pro.block_trade(trade_date=td)
+    except Exception:
+        return []
+    if df is None or df.empty:
+        return []
+    result = []
+    for _, row in df.iterrows():
+        code = str(row.get("ts_code", "")).split(".")[0]
+        if len(code) != 6:
+            continue
+        price = _f(row.get("price"))
+        vol = _f(row.get("vol"))
+        amount = _f(row.get("amount"))
+        result.append({
+            "code": code,
+            "trade_date": _fmt_date(str(row.get("trade_date", td))),
+            "price": price,
+            "vol": vol,                     # 成交量(股)
+            "amount": amount,               # 成交额(元)
+            "amount_yi": amount / 1e8,       # 成交额(亿)
+            "buyer": str(row.get("buyer", "")),
+            "seller": str(row.get("seller", "")),
+        })
+    return result
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 北向资金
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def fetch_hsgt_flow(trade_date: str | None = None) -> dict[str, Any] | None:
+    """获取沪深港通资金流向（全市场汇总，1条/天）。"""
+    pro = get_pro()
+    td = _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
+    try:
+        df = pro.moneyflow_hsgt(trade_date=td)
+    except Exception:
+        return None
+    if df is None or df.empty:
+        return None
+    row = df.iloc[0]
+    return {
+        "trade_date": _fmt_date(str(row.get("trade_date", td))),
+        "north_money": _f(row.get("north_money")) / 1e4,  # 北向资金(亿)
+        "south_money": _f(row.get("south_money")) / 1e4,  # 南向资金(亿)
+        "hgt": _f(row.get("hgt")),                        # 沪股通(万元)
+        "sgt": _f(row.get("sgt")),                        # 深股通(万元)
+        "ggt_ss": _f(row.get("ggt_ss")),                  # 港股通(沪)(万元)
+        "ggt_sz": _f(row.get("ggt_sz")),                  # 港股通(深)(万元)
+    }
+
+
+def fetch_hsgt_top10(trade_date: str | None = None) -> list[dict[str, Any]]:
+    """获取北向持股 TOP10。"""
+    pro = get_pro()
+    td = _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
+    try:
+        df = pro.hsgt_top10(trade_date=td)
+    except Exception:
+        return []
+    if df is None or df.empty:
+        return []
+    result = []
+    for _, row in df.iterrows():
+        code = str(row.get("ts_code", "")).split(".")[0]
+        if len(code) != 6:
+            continue
+        result.append({
+            "code": code,
+            "trade_date": _fmt_date(str(row.get("trade_date", td))),
+            "name": str(row.get("name", "")),
+            "close": _f(row.get("close")),
+            "change": _f(row.get("change")),
+            "rank": int(_f(row.get("rank"))),
+            "market_type": str(row.get("market_type", "")),
+            "amount": _f(row.get("amount")),           # 持股数量(股)
+            "net_amount": _f(row.get("net_amount")),   # 持股变化(股)
+            "buy": _f(row.get("buy")),                 # 买入(股)
+        })
+    return result
 
 
 # ═════════════════════════════════════════════════════════════════════════════

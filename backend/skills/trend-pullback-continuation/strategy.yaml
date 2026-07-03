@@ -10,6 +10,12 @@ meta:
   holding_days: [2, 3, 5]
   strategy_independence: 0.78
   default_preset_groups:
+    formal_opening:
+      weight: 0.90
+      sort_order: 70
+    formal_trend_core:
+      weight: 1.05
+      sort_order: 70
     experiment_trend_pullback:
       weight: 1.0
       sort_order: 10

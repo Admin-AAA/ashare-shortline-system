@@ -354,6 +354,71 @@ class MarginData(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class MarginDetail(Base):
+    """融资融券明细（全市场批量）。数据来源：Tushare margin_detail。"""
+    __tablename__ = "margin_detail"
+    __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_margin_detail_code_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(6), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    rzye: Mapped[float | None] = mapped_column(Float)        # 融资余额(亿)
+    rqye: Mapped[float | None] = mapped_column(Float)        # 融券余额(亿)
+    rzmre: Mapped[float | None] = mapped_column(Float)       # 融资买入额(亿)
+    rzche: Mapped[float | None] = mapped_column(Float)       # 融资偿还额(亿)
+    rzrqye: Mapped[float | None] = mapped_column(Float)      # 融资融券余额(亿)
+    rqyl: Mapped[float | None] = mapped_column(Float)        # 融券余量(股)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class BlockTrade(Base):
+    """大宗交易。数据来源：Tushare block_trade。"""
+    __tablename__ = "block_trades"
+    __table_args__ = (UniqueConstraint("code", "trade_date", "buyer", name="uq_block_trade_code_date_buyer"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(6), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    price: Mapped[float | None] = mapped_column(Float)       # 成交价
+    vol: Mapped[float | None] = mapped_column(Float)          # 成交量(股)
+    amount_yi: Mapped[float | None] = mapped_column(Float)    # 成交额(亿)
+    buyer: Mapped[str | None] = mapped_column(String(100))    # 买方营业部
+    seller: Mapped[str | None] = mapped_column(String(100))   # 卖方营业部
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class HsgtFlow(Base):
+    """沪深港通资金流向（全市场汇总）。数据来源：Tushare moneyflow_hsgt。"""
+    __tablename__ = "hsgt_flows"
+    __table_args__ = (UniqueConstraint("trade_date", name="uq_hsgt_flows_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    north_money: Mapped[float | None] = mapped_column(Float)  # 北向资金(亿)
+    south_money: Mapped[float | None] = mapped_column(Float)  # 南向资金(亿)
+    hgt: Mapped[float | None] = mapped_column(Float)          # 沪股通(万元)
+    sgt: Mapped[float | None] = mapped_column(Float)          # 深股通(万元)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class HsgtTop10(Base):
+    """北向持股TOP10。数据来源：Tushare hsgt_top10。"""
+    __tablename__ = "hsgt_top10"
+    __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_hsgt_top10_code_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(6), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    name: Mapped[str | None] = mapped_column(String(20))
+    close: Mapped[float | None] = mapped_column(Float)
+    change_pct: Mapped[float | None] = mapped_column(Float)
+    rank: Mapped[int | None] = mapped_column(Integer)
+    amount: Mapped[float | None] = mapped_column(Float)       # 持股数量(股)
+    net_amount: Mapped[float | None] = mapped_column(Float)   # 持股变化(股)
+    buy: Mapped[float | None] = mapped_column(Float)          # 买入(股)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class HkHolding(Base):
     """港股通持股。数据来源：Tushare hk_hold。"""
     __tablename__ = "hk_holdings"

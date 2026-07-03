@@ -16,13 +16,17 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.tables import (
+    BlockTrade,
     CapitalFlow,
     ConceptSector,
     ConceptSectorStock,
     DailyKbar,
     DataSourceHealth,
     DragonTiger,
+    HsgtFlow,
+    HsgtTop10,
     LimitUpBoard,
+    MarginDetail,
     MarketSnapshot,
     NewsAnnouncement,
     Stock,
@@ -2345,3 +2349,190 @@ def _auxiliary_coverage_for_stocks(
         "news_codes_with_items": sorted(news),
         "requested_codes": sorted({str(code) for code in codes if code}),
     }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 融资融券明细（全市场批量同步）
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def refresh_margin_detail(db: Session, trade_date: str | None = None) -> int:
+    """批量同步全市场融资融券明细。返回入库条数。"""
+    from app.services.tushare_client import fetch_margin_detail_batch
+    rows = fetch_margin_detail_batch(trade_date=trade_date)
+    if not rows:
+        return 0
+    _persist_margin_detail(db, rows)
+    return len(rows)
+
+
+def _persist_margin_detail(db: Session, rows: list[dict[str, Any]]) -> None:
+    """持久化融资融券明细（upsert by code+trade_date）。"""
+    for row in rows:
+        existing = db.scalar(
+            select(MarginDetail).where(
+                MarginDetail.code == row["code"],
+                MarginDetail.trade_date == row["trade_date"],
+            )
+        )
+        if existing:
+            existing.rzye = row.get("rzye")
+            existing.rqye = row.get("rqye")
+            existing.rzmre = row.get("rzmre")
+            existing.rzche = row.get("rzche")
+            existing.rzrqye = row.get("rzrqye")
+            existing.rqyl = row.get("rqyl")
+        else:
+            db.add(MarginDetail(**{k: v for k, v in row.items() if k in MarginDetail.__mapper__.columns.keys()}))
+    db.commit()
+
+
+def _load_margin_detail_for_stocks(
+    db: Session, codes: list[str], trade_date: str | None = None
+) -> dict[str, dict[str, Any]]:
+    """加载指定股票的融资融券明细。"""
+    stmt = select(MarginDetail).where(
+        MarginDetail.code.in_(codes),
+        MarginDetail.trade_date == trade_date,
+    )
+    rows = db.scalars(stmt).all()
+    return {r.code: {"rzye": r.rzye, "rqye": r.rqye, "rzmre": r.rzmre, "rzche": r.rzche, "rzrqye": r.rzrqye} for r in rows}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 大宗交易
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def refresh_block_trade(db: Session, trade_date: str | None = None) -> int:
+    """同步大宗交易数据。返回入库条数。"""
+    from app.services.tushare_client import fetch_block_trade
+    rows = fetch_block_trade(trade_date=trade_date)
+    if not rows:
+        return 0
+    _persist_block_trade(db, rows)
+    return len(rows)
+
+
+def _persist_block_trade(db: Session, rows: list[dict[str, Any]]) -> None:
+    """持久化大宗交易。"""
+    for row in rows:
+        # 同一股票同一天可能有多笔大宗交易，按 buyer 区分
+        existing = db.scalar(
+            select(BlockTrade).where(
+                BlockTrade.code == row["code"],
+                BlockTrade.trade_date == row["trade_date"],
+                BlockTrade.buyer == row.get("buyer", ""),
+            )
+        )
+        if existing:
+            existing.price = row.get("price")
+            existing.vol = row.get("vol")
+            existing.amount_yi = row.get("amount_yi")
+            existing.seller = row.get("seller")
+        else:
+            db.add(BlockTrade(**{k: v for k, v in row.items() if k in BlockTrade.__mapper__.columns.keys()}))
+    db.commit()
+
+
+def _load_block_trade_for_stocks(
+    db: Session, codes: list[str], trade_date: str | None = None
+) -> dict[str, list[dict[str, Any]]]:
+    """加载指定股票的大宗交易。"""
+    stmt = select(BlockTrade).where(
+        BlockTrade.code.in_(codes),
+        BlockTrade.trade_date == trade_date,
+    )
+    rows = db.scalars(stmt).all()
+    result: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        result.setdefault(r.code, []).append({
+            "price": r.price,
+            "vol": r.vol,
+            "amount_yi": r.amount_yi,
+            "buyer": r.buyer,
+            "seller": r.seller,
+        })
+    return result
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 北向资金
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def refresh_hsgt_flow(db: Session, trade_date: str | None = None) -> dict[str, Any] | None:
+    """同步沪深港通资金流向。返回入库数据。"""
+    from app.services.tushare_client import fetch_hsgt_flow
+    data = fetch_hsgt_flow(trade_date=trade_date)
+    if not data:
+        return None
+    _persist_hsgt_flow(db, data)
+    return data
+
+
+def _persist_hsgt_flow(db: Session, data: dict[str, Any]) -> None:
+    """持久化北向资金流向。"""
+    existing = db.scalar(
+        select(HsgtFlow).where(HsgtFlow.trade_date == data["trade_date"])
+    )
+    if existing:
+        existing.north_money = data.get("north_money")
+        existing.south_money = data.get("south_money")
+        existing.hgt = data.get("hgt")
+        existing.sgt = data.get("sgt")
+    else:
+        db.add(HsgtFlow(**{k: v for k, v in data.items() if k in HsgtFlow.__mapper__.columns.keys()}))
+    db.commit()
+
+
+def refresh_hsgt_top10(db: Session, trade_date: str | None = None) -> int:
+    """同步北向持股TOP10。返回入库条数。"""
+    from app.services.tushare_client import fetch_hsgt_top10
+    rows = fetch_hsgt_top10(trade_date=trade_date)
+    if not rows:
+        return 0
+    _persist_hsgt_top10(db, rows)
+    return len(rows)
+
+
+def _persist_hsgt_top10(db: Session, rows: list[dict[str, Any]]) -> None:
+    """持久化北向持股TOP10。"""
+    for row in rows:
+        existing = db.scalar(
+            select(HsgtTop10).where(
+                HsgtTop10.code == row["code"],
+                HsgtTop10.trade_date == row["trade_date"],
+            )
+        )
+        if existing:
+            existing.name = row.get("name")
+            existing.close = row.get("close")
+            existing.change_pct = row.get("change")
+            existing.rank = row.get("rank")
+            existing.amount = row.get("amount")
+            existing.net_amount = row.get("net_amount")
+            existing.buy = row.get("buy")
+        else:
+            db.add(HsgtTop10(**{k: v for k, v in row.items() if k in HsgtTop10.__mapper__.columns.keys()}))
+    db.commit()
+
+
+def _load_hsgt_top10_for_stocks(
+    db: Session, codes: list[str], trade_date: str | None = None
+) -> dict[str, dict[str, Any]]:
+    """加载指定股票的北向持股数据。"""
+    stmt = select(HsgtTop10).where(
+        HsgtTop10.code.in_(codes),
+        HsgtTop10.trade_date == trade_date,
+    )
+    rows = db.scalars(stmt).all()
+    return {r.code: {"rank": r.rank, "amount": r.amount, "net_amount": r.net_amount, "buy": r.buy} for r in rows}
+
+
+def _load_hsgt_flow(db: Session, trade_date: str | None = None) -> dict[str, Any] | None:
+    """加载北向资金流向。"""
+    row = db.scalar(select(HsgtFlow).where(HsgtFlow.trade_date == trade_date))
+    if not row:
+        return None
+    return {"north_money": row.north_money, "south_money": row.south_money, "hgt": row.hgt, "sgt": row.sgt}

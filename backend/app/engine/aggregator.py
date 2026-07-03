@@ -916,11 +916,20 @@ def apply_pool_rules(
             # 提高门槛 6 分（约等于 21pp 胜率差距对应的合理惩罚）
             effective_score_line = round(effective_score_line + 6.0, 2)
             card["_regime_support_ma5_penalty"] = 6.0
-        # 强势/结构性强势阶段全局门槛：实盘 WR < 25%，比弱势高 53pp
-        # 在已有 score_line 调整基础上额外 +4 分（约等于 WR 差距 50pp 的 8% 门槛提升）
-        if _snapshot_regime in ("结构性强势", "强势"):
+        # 结构性强势/强势阶段全局门槛：实盘去重 90 笔验证
+        # 强势 WR=14.3%(21笔,avg=-2.23%)，结构性强势 WR=28.6%(14笔,avg=-2.15%)
+        # 第一性原理：强势阶段已涨完，次日均值回归；任何分数都难盈利
+        # 数据验证门槛效果（默认 score_line=72）：
+        #   - 结构性强势 +4→76：14 笔全过滤，0 误伤（最高 74.5<76）✅
+        #   - 强势 +4→76：放过 1 笔(score=77.5, 仍亏 -6.68%)，需更激进
+        #   - 强势 +8→80：过滤全部 21 笔，净省 -6.68% 亏损
+        # 两阶段因果机制不同：结构性强势主线品种仍有筛选价值，强势普涨追高必亏
+        if _snapshot_regime == "结构性强势":
             effective_score_line = round(effective_score_line + 4.0, 2)
             card["_regime_strong_penalty"] = 4.0
+        elif _snapshot_regime == "强势":
+            effective_score_line = round(effective_score_line + 8.0, 2)
+            card["_regime_strong_penalty"] = 8.0
         card["score_line_meta"] = {
             **score_line_context,
             **card_adjustment,
