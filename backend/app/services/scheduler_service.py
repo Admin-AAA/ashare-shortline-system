@@ -613,12 +613,41 @@ def _run_auxiliary_remediation(payload: dict) -> dict:
         target_tables = ["limit_up_board", "concept_sector", "dragon_tiger", "news", "capital_flow"]
     db = SessionLocal()
     try:
-        return remediate_data_health_gaps(
+        result = remediate_data_health_gaps(
             db,
             target_tables=list(target_tables),
             capital_flow_code_limit=int(payload.get("auxiliary_capital_flow_code_limit") or payload.get("flow_top_n") or 300),
             post_diagnosis=bool(payload.get("auxiliary_post_diagnosis", True)),
         )
+
+        # 新增批量接口同步（全市场，1次API调用/接口）
+        trade_date = payload.get("trade_date") or result.get("trade_date")
+        if trade_date:
+            from app.services.market_pool import (
+                refresh_margin_detail,
+                refresh_block_trade,
+                refresh_hsgt_flow,
+                refresh_hsgt_top10,
+            )
+            batch_results = {}
+            for name, func in [
+                ("margin_detail", lambda: refresh_margin_detail(db, trade_date=trade_date)),
+                ("block_trade", lambda: refresh_block_trade(db, trade_date=trade_date)),
+                ("hsgt_flow", lambda: refresh_hsgt_flow(db, trade_date=trade_date)),
+                ("hsgt_top10", lambda: refresh_hsgt_top10(db, trade_date=trade_date)),
+            ]:
+                try:
+                    count_or_data = func()
+                    batch_results[name] = {
+                        "status": "success",
+                        "count": count_or_data if isinstance(count_or_data, int) else (1 if count_or_data else 0),
+                    }
+                except Exception as exc:
+                    db.rollback()
+                    batch_results[name] = {"status": "failed", "error": str(exc)[:200]}
+            result["batch_sync"] = batch_results
+
+        return result
     finally:
         db.close()
 
