@@ -145,6 +145,12 @@ scoring:
     - when: "chip_concentration > 4 and chip_concentration <= 10"
       delta: 6
       reason: "筹码分散优势（CC 5-10: 70.8% WR, +5.37% 均收益，弱势·冰点主力阶段 106 笔验证）"
+    - when: "resistance_distance_pct >= 0 and resistance_distance_pct <= 3"
+      delta: 6
+      reason: "贴近阻力位突破前夜（0-3%: 87.5% WR, +7.52% 均收益，56 笔验证）"
+    - when: "turnover_rate >= 5 and turnover_rate <= 10"
+      delta: 4
+      reason: "换手率适中（5-10%: 61.5% WR, +2.78% 均收益，797 笔验证）"
     - when: "dsa_bias_score <= 4"
       delta: -8
       reason: 偏离均线过远
@@ -187,3 +193,11 @@ risk:
       level: medium
       flag: 筹码集中风险（CC 18-30 仅 45.6% WR，集中持仓抛售压力大）
       score_delta: -5
+    - when: "resistance_distance_pct > 10"
+      level: medium
+      flag: "远离阻力位（>10%: 43.6% WR, -0.26% 均收益，211 笔验证）"
+      score_delta: -5
+    - when: "turnover_rate >= 1 and turnover_rate < 3"
+      level: medium
+      flag: "换手率过低（1-3%: 38.7% WR, -0.36% 均收益，186 笔验证）"
+      score_delta: -4
