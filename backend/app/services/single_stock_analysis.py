@@ -272,6 +272,10 @@ def _run_llm_analysis(
             "skill_id": skill_id,
             "score": raw.get("score"),
             "score_delta": round(float(raw.get("score", 50)) - 50.0, 2),
+            # 规则层 DSA 评分作为基线，让用户能看到 LLM 减分/加分幅度
+            # T8 第70轮验证：LLM 净价值 +84.24%（过滤 27 笔 WR=14.8% 的垃圾推荐）
+            "rule_score": stock_result.get("scoring", {}).get("dsa_signal_score") if isinstance(stock_result.get("scoring"), dict) else stock_result.get("dsa_signal_score"),
+            "llm_adjustment": round(float(raw.get("score", 50)) - float(stock_result.get("scoring", {}).get("dsa_signal_score", 50) if isinstance(stock_result.get("scoring"), dict) else stock_result.get("dsa_signal_score", 50)), 2),
             "supports": raw.get("evidence") or raw.get("supports") or [],
             "risks": raw.get("risks") or [],
             "setup_type": raw.get("setup_type"),
