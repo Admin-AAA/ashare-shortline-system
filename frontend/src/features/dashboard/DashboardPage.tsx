@@ -8,7 +8,6 @@ import DragonCandidatesPanel from "./components/DragonCandidatesPanel";
 import EvaluationBreakdownPanel from "./components/EvaluationBreakdownPanel";
 import MarketTemperaturePanel from "./components/MarketTemperaturePanel";
 import MetricsPanel from "./components/MetricsPanel";
-import FilterEffectivenessPanel from "./components/FilterEffectivenessPanel";
 import QualityScorecardPanel from "./components/QualityScorecardPanel";
 import RiskRadarPanel from "./components/RiskRadarPanel";
 import RunStatusPanel from "./components/RunStatusPanel";
@@ -106,7 +105,7 @@ export default function DashboardPage({ section, refreshSignal = 0 }: { section:
       <div className="dashboard-column">
         <MarketTemperaturePanel market={data.market} />
         <QualityScorecardPanel scorecard={data.quality_scorecard} />
-        <FilterEffectivenessPanel />
+        {/* FilterEffectivenessPanel removed: API endpoint returns 404, panel never renders data */}
         <RiskRadarPanel radar={data.risk_radar} />
       </div>
       <div className="dashboard-column">
@@ -744,7 +743,7 @@ function DataWorkspace({ data }: { data: DashboardOverview }) {
           <DataHealthDetailPanel />
         </div>
         <aside className="data-side-stack">
-          <TemporalConsistencyPanel />
+          {/* TemporalConsistencyPanel removed: duplicate mount in ValidationWorkspace; redundant on data page */}
           <StatusStream title="数据池消息" items={messages} empty="暂无数据池消息" />
           <StatusStream title="缺口样例" items={examples} empty="暂无缺口样例" note={exampleNote} />
         </aside>

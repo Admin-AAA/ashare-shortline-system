@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 520">
+  <defs>
+    <style>
+      .card { fill:#fff; stroke:#e2e8f0; stroke-width:1.5; rx:10 }
+      .card-blue { fill:#eff6ff; stroke:#3b82f6; stroke-width:2 }
+      .card-green { fill:#f0fdf4; stroke:#22c55e; stroke-width:2 }
+      .card-gray { fill:#f8fafc; stroke:#94a3b8; stroke-width:2 }
+      .card-orange { fill:#fff7ed; stroke:#f97316; stroke-width:2 }
+      .tag { fill:#3b82f6; color:#fff; font-size:11px; font-weight:600 }
+      .arrow { stroke:#94a3b8; stroke-width:2; fill:none; marker-end:url(#arrowhead) }
+      .label { font-size:11px; fill:#475569; font-family:Inter,sans-serif }
+      .title { font-size:15px; font-weight:700; fill:#1e293b; font-family:Inter,sans-serif }
+      .section-title { font-size:12px; font-weight:700; fill:#1e293b; font-family:Inter,sans-serif }
+      .body { font-size:12px; fill:#334155; font-family:Inter,sans-serif }
+      .small { font-size:10px; fill:#64748b; font-family:Inter,sans-serif }
+      .divider { stroke:#e2e8f0; stroke-width:1 }
+    </style>
+    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#94a3b8"/>
+    </marker>
+  </defs>
+
+  <!-- Header -->
+  <rect x="0" y="0" width="680" height="44" fill="#f8fafc" rx="10 10 0 0"/>
+  <text x="340" y="28" text-anchor="middle" class="title">测试窗口功能重新分类</text>
+
+  <!-- 当前：测试窗口抽屉 -->
+  <text x="40" y="72" class="section-title">▌ 现状：测试窗口抽屉（4项全部隐藏）</text>
+  <rect x="40" y="82" width="260" height="80" class="card"/>
+  <text x="60" y="106" class="body">🔧 驾驶舱 (dashboard)</text>
+  <text x="60" y="126" class="small">感知：测试工具 ｜ 频率：最高频</text>
+  <text x="60" y="148" fill="#dc2626" font-size="11px" font-weight="600">→ 应提升为首页，非测试功能</text>
+
+  <rect x="40" y="176" width="260" height="80" class="card"/>
+  <text x="60" y="200" class="body">🚀 推荐运行 (run)</text>
+  <text x="60" y="220" class="small">感知：调试触发 ｜ 频率：高频</text>
+  <text x="60" y="242" fill="#dc2626" font-size="11px" font-weight="600">→ 应前置到驾驶舱主CTA</text>
+
+  <rect x="40" y="270" width="260" height="80" class="card"/>
+  <text x="60" y="294" class="body">🛡️ 验收安全 (validation)</text>
+  <text x="60" y="314" class="small">感知：门禁检查 ｜ 频率：中低频</text>
+  <text x="60" y="336" fill="#16a34a" font-size="11px" font-weight="600">→ 应内化，后台自动执行</text>
+
+  <rect x="40" y="364" width="260" height="80" class="card"/>
+  <text x="60" y="388" class="body">⚙️ 控制中心 (control)</text>
+  <text x="60" y="408" class="small">感知：系统配置 ｜ 频率：低频</text>
+  <text x="60" y="430" fill="#ea580c" font-size="11px" font-weight="600">→ 应归为独立配置区</text>
+
+  <!-- 箭头：现状 → 优化 -->
+  <line x1="320" y1="210" x2="370" y2="210" class="arrow"/>
+
+  <!-- 优化后：四层导航 -->
+  <text x="400" y="72" class="section-title">▌ 优化后：按心智模型重新归位</text>
+
+  <!-- 洞察/驾驶舱 -->
+  <rect x="400" y="82" width="240" height="68" class="card-blue"/>
+  <text x="420" y="106" class="body" fill="#1d4ed8">📊 洞察 · 驾驶舱</text>
+  <text x="420" y="126" class="small" fill="#3b82f6">市场温度 · 龙头候选 · 系统状态</text>
+  <text x="420" y="146" class="small" fill="#16a34a" font-weight="600">✅ 原测试窗口 → 提升</text>
+
+  <!-- 执行/推荐运行 -->
+  <rect x="400" y="160" width="240" height="90" class="card-blue"/>
+  <text x="420" y="184" class="body" fill="#1d4ed8">⚡ 执行 · 推荐运行</text>
+  <text x="420" y="204" class="small" fill="#3b82f6">一键运行 → 运行详情</text>
+  <text x="420" y="222" class="small" fill="#3b82f6">→ 候选解释 → 复盘</text>
+  <text x="420" y="242" class="small" fill="#16a34a" font-weight="600">✅ 驾驶舱主CTA触发</text>
+
+  <!-- 系统/内化能力 -->
+  <rect x="400" y="260" width="240" height="90" class="card-green"/>
+  <text x="420" y="284" class="body" fill="#15803d">🛡️ 系统内化（后台自动）</text>
+  <text x="420" y="304" class="small" fill="#22c55e">验收安全：运行前自动dry-run</text>
+  <text x="420" y="322" class="small" fill="#22c55e">数据健康：运行前自动检查</text>
+  <text x="420" y="342" class="small" fill="#22c55e">模型路由：异常时才提示用户</text>
+
+  <!-- 系统/配置 -->
+  <rect x="400" y="360" width="240" height="84" class="card-orange"/>
+  <text x="420" y="384" class="body" fill="#c2410c">🔧 系统 · 配置</text>
+  <text x="420" y="404" class="small" fill="#f97316">控制中心：预设 · 任务 · 模型</text>
+  <text x="420" y="422" class="small" fill="#f97316">数据健康：详细诊断页（低频）</text>
+  <text x="420" y="440" class="small" fill="#16a34a" font-weight="600">✅ 低频入口独立收敛</text>
+
+  <!-- 底部说明 -->
+  <rect x="40" y="460" width="600" height="48" fill="#f8fafc" rx="8" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="60" y="482" class="small" fill="#475569">核心原则：用户不需要感知「验收 / 数据检查 / 模型切换」——这些由系统后台保证。</text>
+  <text x="60" y="500" class="small" fill="#475569">用户只关心：「今日有没有好候选」「上次成功率怎么样」「怎么调整策略」。</text>
+</svg>

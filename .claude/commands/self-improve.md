@@ -44,6 +44,62 @@
 
 ---
 
+## 北极星指标（所有优化的终极目标）
+
+系统存在的唯一意义：**让用户用的推荐能稳定赚钱**。一切优化都应指向这个目标。偏离北极星的改动（哪怕技术上漂亮）是浪费。
+
+### 量化目标（2026-07 基线 → 目标）
+
+| 指标 | 当前基线 | 目标 | 缺口 | 攻击优先级 |
+|------|---------|------|------|-----------|
+| **胜率** | 56.8% | 62% | -5.2% | 🔴 高 |
+| **盈亏比** | 1.36 | 1.8 | -0.44 | 🔴 高 |
+| **最大单笔亏损** | -32.64% | -10% | +22.64% | 🔴 高 |
+| **策略调用覆盖** | 3/8 | 8/8 | -5 | 🔴 高 |
+| Sharpe | 0.33 | 0.5 | -0.17 | 🟡 中 |
+| 平均收益 | +1.96% | +3% | -1.04% | 🟡 中 |
+| **策略清单页** | 无 | 有 | — | 🟢 用户可见 |
+| **推荐历史记录页** | 无 | 有 | — | 🟢 用户可见 |
+| Dashboard 延迟 | 550ms | <300ms | -250ms | ⚪ 低 |
+
+### 攻击原则
+
+1. **优先攻红色缺口**：胜率、盈亏比、最大亏损、策略覆盖——这四个是赚钱的核心
+2. **最大亏损 -32.64% 是耻辱**：一笔交易亏 32% 说明风控完全失效。所有优化里，控制尾部风险 > 提升胜率
+3. **5 个策略没被调用是最大的浪费**：注册了不用，等于没写。T1 必须先修这个
+4. **用户可见功能不能为零**：策略清单页、历史记录页是基本款，必须补上
+5. **不为了好看的数据优化**：Sharpe 0.33→0.5 如果靠过拟合达成，不如不做。所有指标提升必须通过样本外验证
+
+### 每轮自检（选任务前必做）
+
+读日志最后一条的指标，对比北极星：
+```bash
+# 快速读当前指标
+cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && python3 -c "
+from app.db.session import SessionLocal
+from sqlalchemy import text
+db = SessionLocal()
+r = db.execute(text('SELECT COUNT(*), SUM(CASE WHEN outcome_label=\"success\" THEN 1 ELSE 0 END) FROM recommendation_outcomes WHERE outcome_label IN (\"success\",\"failed\")')).fetchone()
+print(f'胜率: {round(r[1]*100/r[0],1)}% ({r[1]}/{r[0]})')
+r = db.execute(text('SELECT ROUND(AVG(CASE WHEN executed_return>0 THEN executed_return END),2), ROUND(AVG(CASE WHEN executed_return<0 THEN ABS(executed_return) END),2) FROM recommendation_outcomes WHERE outcome_label IN (\"success\",\"failed\")')).fetchone()
+print(f'盈亏比: {round(r[0]/r[1],2) if r[1] else 0} (win={r[0]}% loss={r[1]}%)')
+r = db.execute(text('SELECT ROUND(MIN(executed_return),2) FROM recommendation_outcomes WHERE outcome_label IN (\"success\",\"failed\")')).fetchone()
+print(f'最大亏损: {r[0]}%')
+"
+```
+
+选任务时，**优先选能攻击最大缺口的任务**：
+- 胜率/盈亏比缺口大 → T3（准确度）或 T1（新策略）
+- 最大亏损缺口大 → T3（风控参数）或 T5（一致性）
+- 策略覆盖缺口大 → T1（策略注册修复）
+- 用户可见功能缺 → T7（新增功能）
+
+### 达成目标的奖励
+
+当某个指标达到目标值，在日志里标记 ✅ 并把优先级降到 ⚪，把火力转移到下一个最大缺口。全部达标时，系统进入"维护模式"——只做 T11（提示词优化）和防御性 T5（一致性），不再主动改策略。
+
+---
+
 ## 选择本轮任务
 
 ### 多实例并发规则
