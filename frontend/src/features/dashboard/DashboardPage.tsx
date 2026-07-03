@@ -105,7 +105,6 @@ export default function DashboardPage({ section, refreshSignal = 0 }: { section:
       <div className="dashboard-column">
         <MarketTemperaturePanel market={data.market} />
         <QualityScorecardPanel scorecard={data.quality_scorecard} />
-        {/* FilterEffectivenessPanel removed: API endpoint returns 404, panel never renders data */}
         <RiskRadarPanel radar={data.risk_radar} />
       </div>
       <div className="dashboard-column">

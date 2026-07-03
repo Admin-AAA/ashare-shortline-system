@@ -2308,6 +2308,10 @@ def load_auxiliary_for_stocks(db: Session, codes: list[str], trade_date: str | N
         "pledges": _load_pledge_for_stocks(db, codes),
         "broker_recs": _load_broker_recs_for_stocks(db, codes, trade_date=target_trade_date),
         "share_floats_upcoming": _load_share_float_upcoming(db, codes, trade_date=target_trade_date),
+        "margin_details": _load_margin_detail_for_stocks(db, codes, trade_date=target_trade_date),
+        "block_trades": _load_block_trade_for_stocks(db, codes, trade_date=target_trade_date),
+        "hsgt_top10": _load_hsgt_top10_for_stocks(db, codes, trade_date=target_trade_date),
+        "hsgt_flow": _load_hsgt_flow(db, trade_date=target_trade_date),
         "coverage": _auxiliary_coverage_for_stocks(
             db,
             codes,

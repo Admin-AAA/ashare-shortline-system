@@ -686,6 +686,10 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
     pledge_map = aux.get("pledges", {})
     broker_rec_map = aux.get("broker_recs", {})
     float_upcoming_map = aux.get("share_floats_upcoming", {})
+    margin_detail_map = aux.get("margin_details", {})
+    block_trade_map = aux.get("block_trades", {})
+    hsgt_top10_map = aux.get("hsgt_top10", {})
+    hsgt_flow_data = aux.get("hsgt_flow")
     coverage = aux.get("coverage", {}) or {}
     audit = (snapshot.get("breadth") or {}).get("auxiliary_data_audit") or {}
     checked_news_codes = _checked_codes_from_audit(audit.get("news"))
@@ -852,6 +856,46 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
         else:
             stock["has_upcoming_float"] = False
             stock["upcoming_float_ratio"] = 0
+
+        # ── 融资融券特征 ──
+        md = margin_detail_map.get(code)
+        if md:
+            stock["margin_rzye"] = md.get("rzye", 0)          # 融资余额(亿)
+            stock["margin_rzmre"] = md.get("rzmre", 0)         # 融资买入额(亿)
+            stock["margin_rzche"] = md.get("rzche", 0)         # 融资偿还额(亿)
+            stock["margin_rzrqye"] = md.get("rzrqye", 0)       # 融资融券余额(亿)
+            # 融资净买入 = 买入 - 偿还
+            stock["margin_net_buy_yi"] = round((md.get("rzmre", 0) or 0) - (md.get("rzche", 0) or 0), 4)
+        else:
+            stock["margin_rzye"] = 0
+            stock["margin_rzmre"] = 0
+            stock["margin_rzche"] = 0
+            stock["margin_rzrqye"] = 0
+            stock["margin_net_buy_yi"] = 0
+
+        # ── 大宗交易特征 ──
+        bt_list = block_trade_map.get(code, [])
+        if bt_list:
+            stock["block_trade_count"] = len(bt_list)
+            stock["block_trade_total_yi"] = round(sum(b.get("amount_yi", 0) or 0 for b in bt_list), 4)
+        else:
+            stock["block_trade_count"] = 0
+            stock["block_trade_total_yi"] = 0
+
+        # ── 北向持股特征 ──
+        hsgt = hsgt_top10_map.get(code)
+        if hsgt:
+            stock["hsgt_rank"] = hsgt.get("rank", 0)
+            stock["hsgt_net_buy"] = hsgt.get("buy", 0)        # 买入量(股)
+        else:
+            stock["hsgt_rank"] = 0
+            stock["hsgt_net_buy"] = 0
+
+        # ── 北向资金整体流向（市场级） ──
+        if hsgt_flow_data:
+            stock["north_money_yi"] = hsgt_flow_data.get("north_money", 0)
+        else:
+            stock["north_money_yi"] = 0
 
         stock["dsa_profile"] = profile
         data_quality["missing_fields"] = sorted(missing_fields)

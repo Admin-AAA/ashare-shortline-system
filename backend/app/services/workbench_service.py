@@ -64,9 +64,13 @@ from app.services.market_data import MarketDataError, get_market_universe
 from app.services.market_pool import (
     get_market_snapshot_from_pool,
     get_market_universe_from_pool,
+    refresh_block_trade,
     refresh_capital_flows_for_codes,
     refresh_concept_sectors,
     refresh_dragon_tiger,
+    refresh_hsgt_flow,
+    refresh_hsgt_top10,
+    refresh_margin_detail,
     refresh_news_for_codes,
 )
 from app.services.outcome_service import (
@@ -1598,6 +1602,83 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                 "checked_codes": aux_prefetch_codes,
                 "elapsed_ms": 0,
             }
+    # ── 新增批量接口同步（融资融券/大宗交易/北向资金） ──
+    if not skip_aux_refresh:
+        # 融资融券明细（全市场批量，1次API调用）
+        t0 = time.perf_counter()
+        try:
+            md_count = refresh_margin_detail(db, trade_date=snapshot["trade_date"])
+            aux_audit["margin_detail"] = {
+                "status": "success",
+                "count": md_count,
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
+            }
+        except Exception as exc:
+            db.rollback()
+            aux_audit["margin_detail"] = {
+                "status": "failed",
+                "count": 0,
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
+                "error": str(exc),
+            }
+
+        # 大宗交易（全市场批量，1次API调用）
+        t0 = time.perf_counter()
+        try:
+            bt_count = refresh_block_trade(db, trade_date=snapshot["trade_date"])
+            aux_audit["block_trade"] = {
+                "status": "success",
+                "count": bt_count,
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
+            }
+        except Exception as exc:
+            db.rollback()
+            aux_audit["block_trade"] = {
+                "status": "failed",
+                "count": 0,
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
+                "error": str(exc),
+            }
+
+        # 北向资金流向（全市场汇总，1条/天）
+        t0 = time.perf_counter()
+        try:
+            hf = refresh_hsgt_flow(db, trade_date=snapshot["trade_date"])
+            aux_audit["hsgt_flow"] = {
+                "status": "success",
+                "count": 1 if hf else 0,
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
+            }
+        except Exception as exc:
+            db.rollback()
+            aux_audit["hsgt_flow"] = {
+                "status": "failed",
+                "count": 0,
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
+                "error": str(exc),
+            }
+
+        # 北向持股TOP10
+        t0 = time.perf_counter()
+        try:
+            top10_count = refresh_hsgt_top10(db, trade_date=snapshot["trade_date"])
+            aux_audit["hsgt_top10"] = {
+                "status": "success",
+                "count": top10_count,
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
+            }
+        except Exception as exc:
+            db.rollback()
+            aux_audit["hsgt_top10"] = {
+                "status": "failed",
+                "count": 0,
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
+                "error": str(exc),
+            }
+    else:
+        for key in ("margin_detail", "block_trade", "hsgt_flow", "hsgt_top10"):
+            aux_audit[key] = {"status": "skipped_fast_run", "count": 0, "elapsed_ms": 0}
+
     _update_run_progress(
         db,
         run_id,
