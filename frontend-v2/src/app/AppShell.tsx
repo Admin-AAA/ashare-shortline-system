@@ -9,6 +9,7 @@ const HomePage = lazy(() => import("../pages/HomePage").then((m) => ({ default: 
 const PoolPage = lazy(() => import("../pages/PoolPage").then((m) => ({ default: m.PoolPage })));
 const HistoryPage = lazy(() => import("../pages/HistoryPage").then((m) => ({ default: m.HistoryPage })));
 const MatrixPage = lazy(() => import("../pages/MatrixPage").then((m) => ({ default: m.MatrixPage })));
+const MetricsPage = lazy(() => import("../pages/MetricsPage").then((m) => ({ default: m.MetricsPage })));
 const ConfigPage = lazy(() => import("../pages/ConfigPage").then((m) => ({ default: m.ConfigPage })));
 const RunDetailPage = lazy(() => import("../pages/RunDetailPage").then((m) => ({ default: m.RunDetailPage })));
 
@@ -22,6 +23,8 @@ function SectionView({ section }: { section: Section }) {
       return <HistoryPage />;
     case "matrix":
       return <MatrixPage />;
+    case "metrics":
+      return <MetricsPage />;
     case "config":
       return <ConfigPage />;
   }

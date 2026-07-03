@@ -4,16 +4,18 @@ import {
   Compass,
   History,
   LayoutGrid,
+  LineChart,
   type LucideIcon,
   Settings2,
 } from "lucide-react";
 
-/** 频率驱动的五入口导航 — 见 UX-architecture-full-report.md §5.2 */
+/** 频率驱动的六入口导航 — 见 UX-architecture-full-report.md §5.2 */
 export type Section =
   | "dashboard" // 🏠 驾驶舱（首页）
   | "pool" // 🎯 候选池
   | "history" // 📊 复盘
   | "matrix" // 📈 矩阵
+  | "metrics" // 📐 指标分析
   | "config"; // ⚙️ 配置
 
 export type NavItem = {
@@ -27,6 +29,7 @@ export const NAV_ITEMS: NavItem[] = [
   { section: "pool", label: "候选池", icon: BarChart3 },
   { section: "history", label: "复盘", icon: History },
   { section: "matrix", label: "矩阵", icon: LayoutGrid },
+  { section: "metrics", label: "指标", icon: LineChart },
   { section: "config", label: "配置", icon: Settings2 },
 ];
 
@@ -44,6 +47,7 @@ export const SECTION_PATHS: Record<Section, string> = {
   pool: "/pool",
   history: "/history",
   matrix: "/matrix",
+  metrics: "/metrics",
   config: "/config",
 };
 
