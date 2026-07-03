@@ -117,9 +117,7 @@ scoring:
     - field: dsa_rsi_score
       reason: RSI 分
   rules:
-    - when: "capital_flow_score >= 72"
-      delta: 4
-      reason: 资金确认
+    # capital_flow_score >= 72 已移除：strict_real 模式下分数被 cap 到 55，规则从未触发（0/1585）
     # chip_health_score >= 72 已移除：86.8%命中+r=-0.145负预测力（均值回归信号）
     - when: "pos20 >= 80 and pos20 <= 95"
       delta: 5
@@ -130,18 +128,14 @@ scoring:
     - when: "bias_ma5 >= 0 and bias_ma5 <= 3"
       delta: 4
       reason: 温和上行（bias_ma5 0-3 区间 64.7% 胜率，+3.36% 均收益）
-    - when: "intelligence_score >= 66"
-      delta: 3
-      reason: 情报环境较优
+    # intelligence_score >= 66 已移除：strict_real 模式下分数被 cap 到 50，规则从未触发（0/1585）
     - when: "avg_cost >= 80 and avg_cost <= 200"
       delta: 5
       reason: 筹码成本适中（80-200 元区间 71% 胜率，+2.7% 均收益，机构偏好中高价成长股）
     - when: "amount_yi < 5"
       delta: 4
       reason: 小成交额（<5 亿 65.1% 胜率，+2.92% 均收益，与 avg_cost 独立）
-    - when: "fundamental_score >= 68"
-      delta: 2
-      reason: 基本面拖累较小
+    # fundamental_score >= 68 已移除：strict_real 模式下分数被 cap 到 50，规则从未触发（0/1585）
     - when: "chip_concentration > 4 and chip_concentration <= 10"
       delta: 6
       reason: "筹码分散优势（CC 5-10: 70.8% WR, +5.37% 均收益，弱势·冰点主力阶段 106 笔验证）"
