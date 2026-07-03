@@ -173,9 +173,9 @@ risk:
       flag: 高价股风险
       score_delta: -8
     - when: "pos20 > 95"
-      level: medium
-      flag: 位置过热（pos20>95 仅 25% 胜率，-2.32% 均收益）
-      score_delta: -8
+      level: high
+      flag: 位置过热（pos20>95 alpha 衰减：late 期 13 笔 WR 15.4%，-8→-16 加重）
+      score_delta: -16
     - when: "market_regime == '震荡' and avg_cost >= 50 and avg_cost < 100"
       level: medium
       flag: 震荡期中价股风险（avg_cost 50-100 WR=41.2% vs 非震荡 75.6%）
