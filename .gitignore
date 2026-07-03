@@ -19,7 +19,8 @@ frontend/.vite/
 .env
 backend/logs/
 
-.claude/
+.claude/*
+!.claude/commands/
 .worktrees/
 .idea/
 output/
