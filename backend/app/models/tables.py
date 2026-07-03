@@ -374,16 +374,15 @@ class MarginDetail(Base):
 class BlockTrade(Base):
     """大宗交易。数据来源：Tushare block_trade。"""
     __tablename__ = "block_trades"
-    __table_args__ = (UniqueConstraint("code", "trade_date", "buyer", name="uq_block_trade_code_date_buyer"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(6), index=True)
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     price: Mapped[float | None] = mapped_column(Float)       # 成交价
-    vol: Mapped[float | None] = mapped_column(Float)          # 成交量(股)
+    vol: Mapped[float | None] = mapped_column(Float)          # 成交量(万股)
     amount_yi: Mapped[float | None] = mapped_column(Float)    # 成交额(亿)
-    buyer: Mapped[str | None] = mapped_column(String(100))    # 买方营业部
-    seller: Mapped[str | None] = mapped_column(String(100))   # 卖方营业部
+    buyer: Mapped[str | None] = mapped_column(String(200))    # 买方营业部
+    seller: Mapped[str | None] = mapped_column(String(200))   # 卖方营业部
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

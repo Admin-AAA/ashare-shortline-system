@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import {
   Activity,
   AlertTriangle,
-  CheckCircle2,
   ChevronRight,
   Flame,
   PlayCircle,

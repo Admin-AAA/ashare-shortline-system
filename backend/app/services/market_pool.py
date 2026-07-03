@@ -2415,23 +2415,18 @@ def refresh_block_trade(db: Session, trade_date: str | None = None) -> int:
 
 
 def _persist_block_trade(db: Session, rows: list[dict[str, Any]]) -> None:
-    """持久化大宗交易。"""
+    """持久化大宗交易（先删后插，避免重复）。"""
+    if not rows:
+        return
+    trade_dates = {r["trade_date"] for r in rows}
+    for td in trade_dates:
+        codes = {r["code"] for r in rows if r["trade_date"] == td}
+        db.execute(BlockTrade.__table__.delete().where(
+            BlockTrade.trade_date == td,
+            BlockTrade.code.in_(codes),
+        ))
     for row in rows:
-        # 同一股票同一天可能有多笔大宗交易，按 buyer 区分
-        existing = db.scalar(
-            select(BlockTrade).where(
-                BlockTrade.code == row["code"],
-                BlockTrade.trade_date == row["trade_date"],
-                BlockTrade.buyer == row.get("buyer", ""),
-            )
-        )
-        if existing:
-            existing.price = row.get("price")
-            existing.vol = row.get("vol")
-            existing.amount_yi = row.get("amount_yi")
-            existing.seller = row.get("seller")
-        else:
-            db.add(BlockTrade(**{k: v for k, v in row.items() if k in BlockTrade.__mapper__.columns.keys()}))
+        db.add(BlockTrade(**{k: v for k, v in row.items() if k in BlockTrade.__mapper__.columns.keys()}))
     db.commit()
 
 

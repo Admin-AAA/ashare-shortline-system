@@ -1452,9 +1452,9 @@ def fetch_block_trade(trade_date: str | None = None) -> list[dict[str, Any]]:
             "code": code,
             "trade_date": _fmt_date(str(row.get("trade_date", td))),
             "price": price,
-            "vol": vol,                     # 成交量(股)
-            "amount": amount,               # 成交额(元)
-            "amount_yi": amount / 1e8,       # 成交额(亿)
+            "vol": vol,                     # 成交量(万股)
+            "amount": amount,               # 成交额(万元)
+            "amount_yi": amount / 1e4,       # 成交额(亿)
             "buyer": str(row.get("buyer", "")),
             "seller": str(row.get("seller", "")),
         })
