@@ -1001,6 +1001,10 @@ def _apply_sector_diversity(cards: list[dict[str, Any]]) -> list[dict[str, Any]]
         penalty = _SECTOR_DIVERSITY_PENALTY.get(count, _SECTOR_DIVERSITY_PENALTY_DEFAULT)
         if penalty > 0:
             card["sector_diversity_penalty"] = penalty
+            # 同步到 feature_snapshot，避免持久化路径变更时丢失（card 顶层与 snapshot 双写）
+            fs = card.get("feature_snapshot")
+            if isinstance(fs, dict):
+                fs["sector_diversity_penalty"] = penalty
             card["final_score"] = round(float(card.get("final_score") or 0) - penalty, 2)
         capped.append(card)
     return sorted(capped, key=lambda c: float(c.get("final_score", 0)), reverse=True)
