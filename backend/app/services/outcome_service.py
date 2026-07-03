@@ -1113,7 +1113,7 @@ def _group_metric_fields(metrics: dict[str, Any]) -> dict[str, Any]:
 
 
 def _scoped_recommendation_rows(db: Session, run_mode: str) -> list[Any]:
-    return list(
+    rows = list(
         db.execute(
             select(
                 Recommendation.recommendation_id,
@@ -1148,6 +1148,17 @@ def _scoped_recommendation_rows(db: Session, run_mode: str) -> list[Any]:
             .order_by(Recommendation.trade_date.asc(), Recommendation.final_score.desc(), Recommendation.recommendation_id.asc())
         ).all()
     )
+    # 按 (trade_date, code) 去重，保留 final_score 最高的行
+    # 原因：回测 DB 累积多个 bt_ run 产生同一股票同日的重复记录
+    seen: set[tuple] = set()
+    deduped: list[Any] = []
+    for row in rows:
+        key = (row[9], row[2])  # (trade_date, code)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    return deduped
 
 
 def _simulate_outcome(
