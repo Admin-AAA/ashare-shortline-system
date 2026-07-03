@@ -147,7 +147,11 @@ scoring:
       reason: "筹码分散优势（CC 5-10: 70.8% WR, +5.37% 均收益，弱势·冰点主力阶段 106 笔验证）"
     - when: "resistance_distance_pct >= 0 and resistance_distance_pct <= 3"
       delta: 6
-      reason: "贴近阻力位突破前夜（0-3%: 87.5% WR, +7.52% 均收益，56 笔验证）"
+      reason: "贴近阻力位突破前夜（0-3%: 87.5% WR, +7.42% 均收益，56 笔验证）"
+    - when: "resistance_distance_pct > 10"
+      level: medium
+      flag: "远离阻力位（>10%: 43.6% WR, -0.26% 均收益，211 笔验证）"
+      score_delta: -5
     - when: "turnover_rate >= 5 and turnover_rate <= 10"
       delta: 4
       reason: "换手率适中（5-10%: 61.5% WR, +2.78% 均收益，797 笔验证）"
