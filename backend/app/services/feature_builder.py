@@ -61,6 +61,9 @@ def build_features(
 
     total = len(enriched)
     for i, item in enumerate(enriched, start=1):
+        # 科创板标识（688/689 开头，20% 涨跌停，跳空缺口风险更高）
+        code = str(item.get("code") or "")
+        item["is_kcb"] = code.startswith(("688", "689"))
         item["risk_score"] = _risk_score(item)
         _tag_features(item)
         item["data_authenticity"] = _compute_authenticity(item)

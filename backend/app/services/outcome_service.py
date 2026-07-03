@@ -31,6 +31,7 @@ DEFAULT_TAKE_PROFIT_PCT = 5.0  # 回测：horizon_close 65/92 峰值不达 6.5%�
                                  # avg peak 4.27%，33/65 峰值在 3-5%，TP 下修捕获更多止盈窗口
 MAX_STOP_LOSS_PCT = -9.0       # 止损最宽 -9%，高波动股允许更宽止损
 MAX_TAKE_PROFIT_PCT = 15.0     # 止盈上限（+15%），防止 feature_builder 设置过高的止盈
+STOP_LOSS_GAP_CAP_PCT = -15.0  # 跳空止损最大亏损上限：open 远低于止损价时，模拟"隔夜止损单"的极限（科创板 20cm 跌停场景）
 MAX_ENTRY_GAP_PCT = 10.0       # 跳空高开 > 10% 则放弃入场（历史数据：gap>10% 胜率 0%）
 
 OUTCOME_PENDING = "pending"
@@ -1278,6 +1279,7 @@ def _simulate_outcome(
         stop_loss_price,
         take_profit_price,
         code=str(rec.code),
+        entry_price=executed_entry_price,
     )
     executed_exit_price = round(exit_price * (1 - EXIT_SLIPPAGE_BPS / 10000.0), 4)
     executed_return = round(((executed_exit_price - executed_entry_price) / executed_entry_price) * 100, 2)
@@ -1449,6 +1451,7 @@ def _resolve_exit(
     take_profit_price: float,
     *,
     code: str = "",
+    entry_price: float = 0.0,
 ) -> tuple[float, str, str]:
     """模拟退出逻辑：固定止损/止盈优先。
 
@@ -1465,7 +1468,13 @@ def _resolve_exit(
         low = _as_float(bar.low)
         if bar_open > 0 and low > 0:
             if bar_open <= stop_loss_price:
-                return bar_open, str(bar.trade_date), "stop_loss_gap"
+                # 跳空止损：open 已远低于止损价，cap 最大亏损防止极端值（如连续跌停）
+                if entry_price > 0:
+                    min_exit_price = entry_price * (1 + STOP_LOSS_GAP_CAP_PCT / 100.0)
+                    gap_exit = max(bar_open, min_exit_price)
+                else:
+                    gap_exit = bar_open
+                return gap_exit, str(bar.trade_date), "stop_loss_gap"
             if bar_open >= take_profit_price:
                 return bar_open, str(bar.trade_date), "take_profit_gap"
         if low <= stop_loss_price and high >= take_profit_price:
