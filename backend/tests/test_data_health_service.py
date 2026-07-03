@@ -124,6 +124,58 @@ def test_compute_health_score_penalizes_recent_critical_gaps():
     assert score == 90
 
 
+def test_compute_health_score_tolerates_reference_day_realtime_gap():
+    table_stats = {
+        "daily_kbar": {"critical": True, "total_rows": 100, "label": "日K线", "max_date": "2026-05-26"},
+        "index_daily": {"critical": True, "total_rows": 100, "label": "指数日线", "max_date": "2026-05-26"},
+        "recommendation": {"critical": True, "total_rows": 10},
+        "outcome": {"critical": True, "total_rows": 8},
+    }
+    recent_coverage = {
+        "window": 5,
+        "tables": {
+            "daily_kbar": {"label": "日K线", "critical": True, "missing_dates": ["2026-05-27"]},
+            "index_daily": {"label": "指数日线", "critical": True, "missing_dates": ["2026-05-27"]},
+        },
+    }
+
+    score = _compute_health_score(table_stats, {"daily_kbar": 1, "index_daily": 1}, "2026-05-27", recent_coverage)
+    issues = _find_issues(
+        table_stats,
+        {"daily_kbar": 1, "index_daily": 1},
+        "2026-05-27",
+        recent_coverage,
+        {"source": "tushare", "note": "参考交易日来自 Tushare 交易日历。"},
+    )
+
+    assert score == 100
+    assert not issues
+
+
+def test_recent_trade_day_coverage_marks_reference_day_gap_as_tolerated():
+    db = MagicMock()
+    trade_days = ["2026-05-23", "2026-05-24", "2026-05-25", "2026-05-26", "2026-05-27"]
+    day_rows = MagicMock()
+    day_rows.all.return_value = trade_days
+    present_rows = MagicMock()
+    present_rows.all.return_value = trade_days
+    db.scalars.side_effect = [day_rows] + [present_rows] * 8
+
+    with patch(
+        "app.services.data_health_service._incomplete_daily_kbar_dates",
+        return_value=["2026-05-27"],
+    ):
+        result = _recent_trade_day_coverage(db, "2026-05-27", window=5)
+
+    daily = result["tables"]["daily_kbar"]
+    assert daily["incomplete_dates"] == ["2026-05-27"]
+    assert daily["tolerated_gap_dates"] == ["2026-05-27"]
+    assert daily["effective_gap_count"] == 0
+    assert result["summary"]["max_missing_days"] == 0
+    assert result["summary"]["high_impact_tables"] == []
+    assert result["summary"]["warning_tables"] == []
+
+
 def test_find_issues_includes_reference_fallback_and_recent_gap_messages():
     table_stats = {
         "daily_kbar": {"label": "日K线", "critical": True, "total_rows": 100, "max_date": "2026-05-25"},
@@ -151,5 +203,5 @@ def test_find_issues_includes_reference_fallback_and_recent_gap_messages():
 
     messages = [item["message"] for item in issues]
     assert any("回退到本地关键表最新交易日" in msg for msg in messages)
-    assert any("最近 5 个交易日缺失 4 天" in msg for msg in messages)
+    assert any("最近 5 个交易日缺失 3 天" in msg for msg in messages)
     assert any("实时快照 未覆盖参考交易日" in msg for msg in messages)

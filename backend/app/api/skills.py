@@ -10,6 +10,7 @@ from app.services.workbench_service import (
     install_skill as install_skill_service,
     list_skills as list_skills_service,
     set_skill_mode as set_skill_mode_service,
+    skill_performance_summary as skill_performance_summary_service,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,16 @@ def set_mode(skill_id: str, payload: dict, db: Session = Depends(get_db)):
 
 @router.post("/{skill_id}/backtest")
 def backtest(skill_id: str, db: Session = Depends(get_db)):
+    """兼容旧入口：只返回已有推荐表现摘要，不执行真实回测。"""
     result = backtest_skill_service(db, skill_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="skill not found")
+    return result
+
+
+@router.get("/{skill_id}/performance-summary")
+def performance_summary(skill_id: str, db: Session = Depends(get_db)):
+    result = skill_performance_summary_service(db, skill_id)
     if result is None:
         raise HTTPException(status_code=404, detail="skill not found")
     return result

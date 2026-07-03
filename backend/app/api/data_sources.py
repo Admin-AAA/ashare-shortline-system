@@ -66,7 +66,7 @@ def local_pool(
     u_offset: int = 0,
     b_limit: int = 50,
     b_offset: int = 0,
-    cache_ttl: int = 30,
+    cache_ttl: int = 300,
     include_details: bool = True,
 ):
     include_paginated = include_details
@@ -89,7 +89,7 @@ def get_cached_local_pool_status(
     u_offset: int = 0,
     b_limit: int = 50,
     b_offset: int = 0,
-    cache_ttl: int = 30,
+    cache_ttl: int = 300,
     include_paginated: bool = True,
     include_details: bool = True,
     cache_only: bool = False,
@@ -160,12 +160,16 @@ def _pool_cache_key(include_details: bool) -> str:
     return f"{_POOL_CACHE_KEY}:{'full' if include_details else 'summary'}"
 
 
-@router.post("/pool/refresh")
-def refresh_pool(db: Session = Depends(get_db)):
-    quotes, meta = refresh_quote_pool(db)
+def invalidate_pool_status_cache() -> None:
     with _pool_status_lock:
         _pool_status_cache.clear()
     invalidate_bootstrap_cache()
+
+
+@router.post("/pool/refresh")
+def refresh_pool(db: Session = Depends(get_db)):
+    quotes, meta = refresh_quote_pool(db)
+    invalidate_pool_status_cache()
     return {"refreshed": len(quotes), "meta": meta}
 
 
@@ -180,9 +184,7 @@ def sync_pool_gaps(payload: dict | None = None, db: Session = Depends(get_db)):
         dry_run=bool(payload.get("dry_run", False)),
     )
     if not bool(payload.get("dry_run", False)):
-        with _pool_status_lock:
-            _pool_status_cache.clear()
-        invalidate_bootstrap_cache()
+        invalidate_pool_status_cache()
     return result
 
 

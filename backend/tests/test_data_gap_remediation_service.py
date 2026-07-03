@@ -12,6 +12,9 @@ from app.models.tables import Recommendation, RecommendationRun, DailyKbar, Stoc
 from app.services.data_gap_remediation_service import (
     DEFAULT_DAILY_KBAR_CODE_LIMIT,
     _backfill_daily_kbar_date,
+    _backfill_index_daily_dates,
+    _backfill_minute_kbar_date,
+    _candidate_quote_date,
     _daily_kbar_target_codes,
     _is_natural_short_history,
     _local_pool_gap_comparison,
@@ -20,6 +23,7 @@ from app.services.data_gap_remediation_service import (
     remediate_recommendation_run_auxiliary_data,
     sync_local_pool_kline_gaps,
 )
+from scripts.backfill_latest_days import get_missing_trade_dates
 
 
 def test_remediate_data_health_gaps_executes_targeted_plan(monkeypatch):
@@ -129,6 +133,108 @@ def test_remediate_data_health_gaps_executes_targeted_plan(monkeypatch):
     assert actions["concept_sector"]["row_count"] == 1
 
 
+def test_remediate_data_health_gaps_targets_closed_reference_trade_date_when_lagged(monkeypatch):
+    db = MagicMock()
+
+    before = {
+        "score": 100,
+        "reference_trade_date": "2026-06-10",
+        "reference_trade_date_source": "tushare",
+        "issues": [],
+        "lag_days": {
+            "daily_kbar": 1,
+            "minute_kbar": 1,
+            "index_daily": 1,
+            "limit_up_board": 1,
+            "capital_flow": 1,
+        },
+        "tables": {
+            "daily_kbar": {"max_date": "2026-06-09"},
+            "minute_kbar": {"max_date": "2026-06-09"},
+            "index_daily": {"max_date": "2026-06-09"},
+            "limit_up_board": {"max_date": "2026-06-09"},
+            "capital_flow": {"max_date": "2026-06-09"},
+        },
+        "recent_trade_day_coverage": {
+            "summary": {"max_missing_days": 0, "high_impact_tables": [], "warning_tables": []},
+            "tables": {
+                "daily_kbar": {"missing_dates": [], "incomplete_dates": []},
+                "minute_kbar": {"missing_dates": []},
+                "index_daily": {"missing_dates": []},
+                "limit_up_board": {"missing_dates": []},
+                "capital_flow": {"missing_dates": []},
+            },
+        },
+    }
+    after = {
+        **before,
+        "lag_days": {
+            "daily_kbar": 0,
+            "minute_kbar": 0,
+            "index_daily": 0,
+            "limit_up_board": 0,
+            "capital_flow": 0,
+        },
+        "tables": {
+            "daily_kbar": {"max_date": "2026-06-10"},
+            "minute_kbar": {"max_date": "2026-06-10"},
+            "index_daily": {"max_date": "2026-06-10"},
+            "limit_up_board": {"max_date": "2026-06-10"},
+            "capital_flow": {"max_date": "2026-06-10"},
+        },
+    }
+
+    diagnosis_calls = [before, after]
+    monkeypatch.setattr(
+        "app.services.data_gap_remediation_service.diagnose_all",
+        lambda _db: diagnosis_calls.pop(0),
+    )
+    monkeypatch.setattr("app.services.data_gap_remediation_service._latest_allowed_bar_date", lambda: "2026-06-10")
+    monkeypatch.setattr("app.services.data_gap_remediation_service._daily_kbar_target_codes", lambda _db, trade_date, limit: ["000001"])
+    monkeypatch.setattr("app.services.data_gap_remediation_service._minute_kbar_target_codes", lambda _db, trade_date, limit: ["000001"])
+    monkeypatch.setattr("app.services.data_gap_remediation_service._capital_flow_target_codes", lambda _db, trade_date, limit: ["000001"])
+    monkeypatch.setattr("app.services.data_gap_remediation_service._index_ts_codes", lambda _db: ["000001.SH"])
+    monkeypatch.setattr(
+        "app.services.data_gap_remediation_service._backfill_daily_kbar_date",
+        lambda _db, trade_date, codes: {"row_count": len(codes), "trade_date": trade_date},
+    )
+    monkeypatch.setattr(
+        "app.services.data_gap_remediation_service._backfill_minute_kbar_date",
+        lambda _db, trade_date, codes: {"row_count": len(codes), "trade_date": trade_date},
+    )
+    monkeypatch.setattr(
+        "app.services.data_gap_remediation_service._backfill_index_daily_dates",
+        lambda _db, target_dates, ts_codes: {"row_count": len(target_dates) * len(ts_codes), "target_dates": target_dates},
+    )
+    monkeypatch.setattr(
+        "app.services.data_gap_remediation_service.refresh_limit_up_board",
+        lambda _db, trade_date=None: [{"trade_date": trade_date, "code": "000001"}],
+    )
+    monkeypatch.setattr(
+        "app.services.data_gap_remediation_service.refresh_capital_flows_for_codes",
+        lambda _db, codes, trade_date=None: {code: {"trade_date": trade_date} for code in codes},
+    )
+
+    result = remediate_data_health_gaps(
+        db,
+        target_tables=["daily_kbar", "minute_kbar", "index_daily", "limit_up_board", "capital_flow"],
+    )
+
+    actions = result["actions"]
+    assert [item["table"] for item in actions] == [
+        "daily_kbar",
+        "minute_kbar",
+        "index_daily",
+        "limit_up_board",
+        "capital_flow",
+    ]
+    assert actions[0]["trade_date"] == "2026-06-10"
+    assert actions[1]["trade_date"] == "2026-06-10"
+    assert actions[2]["target_dates"] == ["2026-06-10"]
+    assert actions[3]["trade_date"] == "2026-06-10"
+    assert actions[4]["trade_date"] == "2026-06-10"
+
+
 def test_sync_local_pool_kline_gaps_reports_unlimited_scope(monkeypatch):
     db = MagicMock()
     gaps = [
@@ -157,6 +263,118 @@ def test_sync_local_pool_kline_gaps_reports_unlimited_scope(monkeypatch):
     assert result["code_limit"] == 0
     assert result["effective_code_limit"] == 2
     assert result["target_count"] == 2
+
+
+def test_candidate_quote_date_allows_current_realtime_quote_bar_gap(monkeypatch):
+    monkeypatch.setattr("app.services.market_pool._latest_allowed_quote_date", lambda today=None: "2026-06-10")
+
+    quote_date = _candidate_quote_date({"trade_date": "2026-06-10"}, "2026-06-10")
+
+    assert quote_date == "2026-06-09"
+
+
+def test_sync_local_pool_kline_gaps_batches_same_day_stale_targets(monkeypatch):
+    db = MagicMock()
+    gaps = [
+        {"code": "000001", "name": "样本1", "reason": "stale", "bar_count": 90, "latest_bar_date": "2026-05-29", "quote_date": "2026-06-02"},
+        {"code": "000002", "name": "样本2", "reason": "stale", "bar_count": 90, "latest_bar_date": "2026-05-29", "quote_date": "2026-06-02"},
+    ]
+    before_counts = {
+        "candidate_count": 2,
+        "checked_count": 2,
+        "ready_count": 0,
+        "missing_count": 0,
+        "short_history_count": 0,
+        "immature_history_count": 0,
+        "stale_count": 2,
+        "gap_count": 2,
+        "latest_allowed_bar_date": "2026-06-03",
+    }
+    after_counts = {**before_counts, "ready_count": 2, "stale_count": 0, "gap_count": 0}
+
+    states = [
+        {"counts": before_counts, "gaps": gaps},
+        {"counts": after_counts, "gaps": []},
+    ]
+    monkeypatch.setattr(
+        "app.services.data_gap_remediation_service._local_pool_kline_gap_state",
+        lambda _db, min_bars: states.pop(0),
+    )
+    monkeypatch.setattr(
+        "app.services.data_gap_remediation_service._backfill_daily_kbar_date",
+        lambda _db, trade_date, codes: {
+            "row_count": 2,
+            "provider_row_count": 5200,
+            "requested_code_count": len(codes),
+            "target_hit_count": 2,
+            "missing_code_count": 0,
+            "missing_codes": [],
+        },
+    )
+    fallback_fetch = MagicMock()
+    monkeypatch.setattr(
+        "app.services.data_gap_remediation_service.fetch_basic_daily_kbars",
+        fallback_fetch,
+    )
+
+    result = sync_local_pool_kline_gaps(db, code_limit=0, dry_run=False)
+
+    assert result["status"] == "completed"
+    assert result["row_count"] == 2
+    assert result["succeeded_count"] == 2
+    assert result["operation_log"] == [
+        {
+            "table": "daily_kbar",
+            "trade_date": "2026-06-02",
+            "status": "completed",
+            "row_count": 2,
+            "provider_row_count": 5200,
+            "requested_code_count": 2,
+            "target_hit_count": 2,
+            "missing_code_count": 0,
+            "missing_codes": [],
+            "mode": "trade_date_batch",
+        }
+    ]
+    fallback_fetch.assert_not_called()
+
+
+def test_backfill_latest_days_detects_incomplete_latest_trade_date(monkeypatch):
+    class _Result:
+        def __init__(self, *, scalar_value=None, rows=None):
+            self._scalar_value = scalar_value
+            self._rows = rows or []
+
+        def scalar(self):
+            return self._scalar_value
+
+        def all(self):
+            return self._rows
+
+    class _Row:
+        def __init__(self, trade_date):
+            self.trade_date = trade_date
+
+    class _TradeCal:
+        empty = False
+
+        def iterrows(self):
+            yield 0, {"cal_date": "20260602"}
+
+    class _Pro:
+        def trade_cal(self, **_kwargs):
+            return _TradeCal()
+
+    db = MagicMock()
+    db.execute.side_effect = [
+        _Result(scalar_value="2026-06-02"),
+        _Result(rows=[_Row("2026-06-02")]),
+    ]
+    monkeypatch.setattr("app.services.tushare_client.fetch_latest_trade_date", lambda: "20260602")
+    monkeypatch.setattr("app.services.tushare_client.get_pro", lambda: _Pro())
+    monkeypatch.setattr("scripts.backfill_latest_days._incomplete_daily_kbar_dates", lambda _db, days: ["2026-06-02"])
+
+    assert get_missing_trade_dates(db) == ["2026-06-02"]
 
 
 def test_remediate_recommendation_run_auxiliary_data_updates_candidate_snapshot(db, monkeypatch):
@@ -625,7 +843,45 @@ def test_remediate_data_health_gaps_continues_after_single_action_failure(monkey
     db.rollback.assert_called_once()
 
 
-def test_daily_kbar_target_codes_excludes_existing_compact_trade_date():
+def test_remediate_data_health_gaps_marks_empty_required_action_partial(monkeypatch):
+    db = MagicMock()
+    before = {
+        "score": 94,
+        "reference_trade_date": "2026-06-12",
+        "reference_trade_date_source": "tushare",
+        "issues": [{"severity": "medium", "message": "涨停板缺失"}],
+        "lag_days": {"limit_up_board": 2},
+        "tables": {"limit_up_board": {"max_date": "2026-06-10"}},
+        "recent_trade_day_coverage": {
+            "summary": {"max_missing_days": 1, "high_impact_tables": [], "warning_tables": ["limit_up_board"]},
+            "tables": {"limit_up_board": {"missing_dates": ["2026-06-11"]}},
+        },
+    }
+    after = {
+        **before,
+        "issues": [{"severity": "medium", "message": "涨停板仍缺失"}],
+        "recent_trade_day_coverage": {
+            "summary": {"max_missing_days": 1, "high_impact_tables": [], "warning_tables": ["limit_up_board"]},
+            "tables": {"limit_up_board": {"missing_dates": ["2026-06-11"]}},
+        },
+    }
+    diagnosis_calls = [before, after]
+
+    monkeypatch.setattr("app.services.data_gap_remediation_service.diagnose_all", lambda _db: diagnosis_calls.pop(0))
+    monkeypatch.setattr("app.services.data_gap_remediation_service._latest_allowed_bar_date", lambda: "2026-06-11")
+    monkeypatch.setattr("app.services.data_gap_remediation_service.refresh_limit_up_board", lambda _db, trade_date=None: [])
+
+    result = remediate_data_health_gaps(db, target_tables=["limit_up_board"])
+
+    assert result["status"] == "partial_completed"
+    assert result["action_summary"]["empty_count"] == 1
+    assert result["action_summary"]["failed_count"] == 0
+    assert result["actions"][0]["status"] == "empty"
+    assert result["comparison"]["tables_still_missing"] == ["limit_up_board"]
+    assert result["comparison"]["table_deltas"]["limit_up_board"]["unresolved_missing_dates"] == ["2026-06-11"]
+
+
+def test_daily_kbar_target_codes_includes_quote_date_codes_for_full_refresh():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine, tables=[DailyKbar.__table__, StockQuote.__table__])
     Session = sessionmaker(bind=engine)
@@ -641,9 +897,9 @@ def test_daily_kbar_target_codes_excludes_existing_compact_trade_date():
         )
         db.commit()
 
-        codes = _daily_kbar_target_codes(db, "2026-05-27", limit=2)
+        codes = _daily_kbar_target_codes(db, "2026-05-27", limit=3)
 
-        assert codes == ["000003", "000002"]
+        assert codes == ["000003", "000001", "000002"]
     finally:
         db.close()
 
@@ -678,6 +934,133 @@ def test_backfill_daily_kbar_date_uses_trade_date_batch_fetch(monkeypatch):
     db.commit.assert_called_once()
 
 
+def test_backfill_index_daily_dates_normalizes_target_dates(monkeypatch):
+    db = MagicMock()
+
+    def _fake_fetch(ts_code, start_date=None, end_date=None):
+        assert ts_code == "000300.SH"
+        assert start_date == "20260601"
+        assert end_date == "20260604"
+        return [
+            {"ts_code": ts_code, "trade_date": "20260601", "open": 1, "high": 2, "low": 1, "close": 2},
+            {"ts_code": ts_code, "trade_date": "2026-06-04", "open": 3, "high": 4, "low": 3, "close": 4},
+            {"ts_code": ts_code, "trade_date": "20260605", "open": 5, "high": 6, "low": 5, "close": 6},
+        ]
+
+    monkeypatch.setattr("app.services.data_gap_remediation_service.fetch_index_daily", _fake_fetch)
+
+    result = _backfill_index_daily_dates(db, ["20260601", "2026-06-04"], ["000300.SH"])
+
+    assert result["row_count"] == 2
+    assert result["requested_date_count"] == 2
+    assert result["requested_ts_code_count"] == 1
+    db.execute.assert_called_once()
+    db.commit.assert_called_once()
+
+
+def test_remediate_data_health_gaps_executes_minute_kbar_plan(monkeypatch):
+    db = MagicMock()
+    before = {
+        "score": 72,
+        "reference_trade_date": "2026-05-28",
+        "reference_trade_date_source": "tushare",
+        "issues": [{"severity": "medium", "message": "分钟K线缺口"}],
+        "lag_days": {},
+        "tables": {"minute_kbar": {"max_date": "2026-05-26"}},
+        "recent_trade_day_coverage": {
+            "summary": {"max_missing_days": 1, "high_impact_tables": [], "warning_tables": ["minute_kbar"]},
+            "tables": {"minute_kbar": {"missing_dates": ["2026-05-27"]}},
+        },
+    }
+    after = {
+        **before,
+        "score": 80,
+        "issues": [],
+        "tables": {"minute_kbar": {"max_date": "2026-05-27"}},
+        "recent_trade_day_coverage": {
+            "summary": {"max_missing_days": 0, "high_impact_tables": [], "warning_tables": []},
+            "tables": {"minute_kbar": {"missing_dates": []}},
+        },
+    }
+    diagnosis_calls = [before, after]
+    seen_limits = []
+
+    monkeypatch.setattr("app.services.data_gap_remediation_service.diagnose_all", lambda _db: diagnosis_calls.pop(0))
+    monkeypatch.setattr("app.services.data_gap_remediation_service._latest_allowed_bar_date", lambda: "2026-05-27")
+    monkeypatch.setattr(
+        "app.services.data_gap_remediation_service._minute_kbar_target_codes",
+        lambda _db, trade_date, limit: seen_limits.append((trade_date, limit)) or ["000001", "000002"],
+    )
+    monkeypatch.setattr(
+        "app.services.data_gap_remediation_service._backfill_minute_kbar_date",
+        lambda _db, trade_date, codes: {
+            "row_count": len(codes) * 240,
+            "provider_row_count": len(codes) * 240,
+            "requested_code_count": len(codes),
+            "target_hit_count": len(codes),
+            "missing_code_count": 0,
+            "missing_codes": [],
+            "failed_code_count": 0,
+            "failed_codes": [],
+        },
+    )
+
+    result = remediate_data_health_gaps(
+        db,
+        target_tables=["minute_kbar"],
+        minute_kbar_code_limit=2,
+    )
+
+    assert seen_limits == [("2026-05-27", 2)]
+    assert result["status"] == "completed"
+    assert result["comparison"]["tables_fully_remediated"] == ["minute_kbar"]
+    assert result["comparison"]["table_deltas"]["minute_kbar"]["resolved_missing_dates"] == ["2026-05-27"]
+    action = result["actions"][0]
+    assert action["table"] == "minute_kbar"
+    assert action["row_count"] == 480
+    assert action["requested_code_count"] == 2
+    assert action["rollback_hint"].startswith("按 minute_kbars.trade_date")
+
+
+def test_backfill_minute_kbar_date_filters_target_date_and_upserts(monkeypatch):
+    db = MagicMock()
+
+    def _fake_fetch(code, trade_date=None):
+        return [
+            {
+                "trade_date": trade_date,
+                "trade_time": f"{trade_date} 09:31:00",
+                "open": 1,
+                "high": 2,
+                "low": 1,
+                "close": 2,
+                "volume": 100,
+                "amount": 200,
+            },
+            {
+                "trade_date": "2026-05-26",
+                "trade_time": "2026-05-26 09:31:00",
+                "open": 1,
+                "high": 2,
+                "low": 1,
+                "close": 2,
+                "volume": 100,
+                "amount": 200,
+            },
+        ] if code == "000001" else []
+
+    monkeypatch.setattr("app.services.data_gap_remediation_service.fetch_minute_kbars", _fake_fetch)
+
+    result = _backfill_minute_kbar_date(db, "2026-05-27", ["000001", "000002"])
+
+    assert result["row_count"] == 1
+    assert result["provider_row_count"] == 2
+    assert result["target_hit_count"] == 1
+    assert result["missing_codes"] == ["000002"]
+    db.execute.assert_called_once()
+    db.commit.assert_called_once()
+
+
 def test_upsert_daily_kbar_payload_splits_large_batches():
     db = MagicMock()
     payload = [
@@ -702,6 +1085,7 @@ def test_default_remediation_plan_covers_full_recommendation_data_dependencies(m
         "lag_days": {"index_daily": 1, "concept_sector": 1, "dragon_tiger": 1, "news": 1},
         "tables": {
             "daily_kbar": {"max_date": "2026-05-27"},
+            "minute_kbar": {"max_date": "2026-05-26"},
             "index_daily": {"max_date": "2026-05-26"},
             "limit_up_board": {"max_date": "2026-05-26"},
             "capital_flow": {"max_date": "2026-05-26"},
@@ -713,6 +1097,7 @@ def test_default_remediation_plan_covers_full_recommendation_data_dependencies(m
             "summary": {"max_missing_days": 1, "high_impact_tables": [], "warning_tables": ["index_daily", "limit_up_board", "capital_flow"]},
             "tables": {
                 "daily_kbar": {"missing_dates": [], "incomplete_dates": ["2026-05-27"]},
+                "minute_kbar": {"missing_dates": ["2026-05-27"]},
                 "index_daily": {"missing_dates": ["2026-05-27"]},
                 "limit_up_board": {"missing_dates": ["2026-05-27"]},
                 "capital_flow": {"missing_dates": ["2026-05-27"]},
@@ -727,6 +1112,7 @@ def test_default_remediation_plan_covers_full_recommendation_data_dependencies(m
         "lag_days": {"index_daily": 0, "concept_sector": 0, "dragon_tiger": 0, "news": 0},
         "tables": {
             "daily_kbar": {"max_date": "2026-05-27"},
+            "minute_kbar": {"max_date": "2026-05-27"},
             "index_daily": {"max_date": "2026-05-27"},
             "limit_up_board": {"max_date": "2026-05-27"},
             "capital_flow": {"max_date": "2026-05-27"},
@@ -738,6 +1124,7 @@ def test_default_remediation_plan_covers_full_recommendation_data_dependencies(m
             "summary": {"max_missing_days": 0, "high_impact_tables": [], "warning_tables": []},
             "tables": {
                 "daily_kbar": {"missing_dates": [], "incomplete_dates": []},
+                "minute_kbar": {"missing_dates": []},
                 "index_daily": {"missing_dates": []},
                 "limit_up_board": {"missing_dates": []},
                 "capital_flow": {"missing_dates": []},
@@ -753,10 +1140,21 @@ def test_default_remediation_plan_covers_full_recommendation_data_dependencies(m
     monkeypatch.setattr("app.services.data_gap_remediation_service._index_ts_codes", lambda _db: ["000300.SH"])
     monkeypatch.setattr("app.services.data_gap_remediation_service._latest_allowed_bar_date", lambda: "2026-05-27")
     monkeypatch.setattr("app.services.data_gap_remediation_service._daily_kbar_target_codes", lambda _db, trade_date, limit: ["000001", "000002"])
+    monkeypatch.setattr("app.services.data_gap_remediation_service._minute_kbar_target_codes", lambda _db, trade_date, limit: ["000001", "000002"])
     monkeypatch.setattr(
         "app.services.data_gap_remediation_service._backfill_daily_kbar_date",
         lambda _db, trade_date, codes: {
             "row_count": len(codes),
+            "requested_code_count": len(codes),
+            "target_hit_count": len(codes),
+            "failed_code_count": 0,
+            "failed_codes": [],
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.data_gap_remediation_service._backfill_minute_kbar_date",
+        lambda _db, trade_date, codes: {
+            "row_count": len(codes) * 240,
             "requested_code_count": len(codes),
             "target_hit_count": len(codes),
             "failed_code_count": 0,
@@ -783,6 +1181,7 @@ def test_default_remediation_plan_covers_full_recommendation_data_dependencies(m
 
     assert result["requested_tables"] == [
         "daily_kbar",
+        "minute_kbar",
         "index_daily",
         "limit_up_board",
         "capital_flow",
@@ -793,13 +1192,16 @@ def test_default_remediation_plan_covers_full_recommendation_data_dependencies(m
     assert {item["table"] for item in result["actions"]} == set(result["requested_tables"])
     assert result["comparison"]["score_delta"] == 29
     assert result["comparison"]["table_deltas"]["daily_kbar"]["resolved_incomplete_dates"] == ["2026-05-27"]
+    assert result["comparison"]["table_deltas"]["minute_kbar"]["resolved_missing_dates"] == ["2026-05-27"]
     assert result["comparison"]["table_deltas"]["dragon_tiger"]["lag_days_delta"] == -1
     assert result["comparison"]["table_deltas"]["news"]["lag_days_delta"] == -1
-    assert result["action_summary"]["completed_count"] == 7
+    assert result["action_summary"]["completed_count"] == 8
 
     actions = {item["table"]: item for item in result["actions"]}
     assert actions["daily_kbar"]["target_hit_count"] == 2
     assert actions["daily_kbar"]["rollback_hint"].startswith("按 daily_kbars.trade_date")
+    assert actions["minute_kbar"]["requested_code_count"] == 2
+    assert actions["minute_kbar"]["rollback_hint"].startswith("按 minute_kbars.trade_date")
     assert actions["dragon_tiger"]["row_count"] == 1
     assert actions["news"]["requested_code_count"] == 2
     assert actions["news"]["row_count"] == 2

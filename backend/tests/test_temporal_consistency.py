@@ -46,8 +46,8 @@ class TestDateDetection:
 class TestSummary:
     def test_summarize_no_violations(self):
         s = _summarize_violations([], 10)
-        assert s["total"] == 0
-        assert s["passed"] == 40  # 10 recs * 4 checks
+        assert s["total"] == 40  # 10 recs * 4 checks
+        assert s["passed"] == 40
         assert s["warnings"] == 0
         assert s["failed"] == 0
 
@@ -58,7 +58,7 @@ class TestSummary:
             {"severity": "error", "message": "test3"},
         ]
         s = _summarize_violations(violations, 5)
-        assert s["total"] == 3
+        assert s["total"] == 20  # 5 recs * 4 checks
         assert s["failed"] == 2
         assert s["warnings"] == 1
 

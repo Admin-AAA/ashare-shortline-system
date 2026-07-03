@@ -25,6 +25,7 @@ from app.services.data_sources import (
     sync_data_source_configs,
 )
 from app.services import market_pool
+from app.services import market_pool_adapters
 
 
 class DummySettings:
@@ -263,6 +264,25 @@ def test_refresh_news_for_codes_excludes_code_when_all_sources_fail(monkeypatch)
 
     assert result == {}
     assert result.checked_codes == ["000001"]
+
+
+def test_auxiliary_adapters_forward_trade_date(monkeypatch):
+    calls: list[tuple[str, str]] = []
+
+    def fake_limit(source, _settings, trade_date=None):
+        calls.append(("limit", trade_date))
+        return [{"source": source, "trade_date": trade_date}]
+
+    def fake_concept(source, _settings, trade_date=None):
+        calls.append(("concept", trade_date))
+        return [{"source": source, "trade_date": trade_date}]
+
+    monkeypatch.setattr(market_pool_adapters, "_fetch_limit_up_board", fake_limit)
+    monkeypatch.setattr(market_pool_adapters, "_fetch_concept_sectors", fake_concept)
+
+    assert market_pool_adapters.fetch_limit_up_board_rows("tushare", object(), trade_date="2026-06-04")[0]["trade_date"] == "2026-06-04"
+    assert market_pool_adapters.fetch_concept_sector_rows("tushare", object(), trade_date="2026-06-04")[0]["trade_date"] == "2026-06-04"
+    assert calls == [("limit", "2026-06-04"), ("concept", "2026-06-04")]
 
 
 def test_refresh_concept_sectors_times_out_member_fetch(monkeypatch):
@@ -545,6 +565,37 @@ def test_persist_stock_quotes_inactivates_stale_active_codes_from_prior_refresh(
     assert new_row.freshness_status == "fresh"
 
 
+def test_load_cached_quotes_allows_realtime_quote_date_before_bar_close(db, monkeypatch):
+    code = _codes(1, prefix="91")[0]
+    db.add(
+        StockQuote(
+            code=code,
+            trade_date="2026-06-10",
+            name=f"测试{code}",
+            price=10.0,
+            pct=2.0,
+            volume=1000000,
+            amount_yi=5.0,
+            turnover_rate=3.0,
+            industry="软件服务",
+            source="tushare",
+            source_count=1,
+            quality_score=90.0,
+            freshness_status="fresh",
+            snapped_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        )
+    )
+    db.flush()
+    monkeypatch.setattr(market_pool, "_latest_allowed_bar_date", lambda today=None: "2026-06-09")
+    monkeypatch.setattr(market_pool, "_latest_allowed_quote_date", lambda today=None: "2026-06-10")
+
+    quotes = market_pool._load_cached_quotes(db, skip_metrics=True)
+
+    loaded = [quote for quote in quotes if quote["code"] == code]
+    assert loaded
+    assert loaded[0]["trade_date"] == "2026-06-10"
+
+
 def test_load_or_refresh_quotes_uses_fresh_cache(db, monkeypatch):
     settings = DummySettings()
     codes = _codes(2)
@@ -555,6 +606,7 @@ def test_load_or_refresh_quotes_uses_fresh_cache(db, monkeypatch):
         return [_quote(codes[0], source, 10.00), _quote(codes[1], source, 20.00)]
 
     monkeypatch.setattr(market_pool, "_fetch_quotes", fake_fetch_quotes)
+    monkeypatch.setattr(market_pool, "_latest_allowed_quote_date", lambda today=None: "2026-05-27")
 
     first, first_meta = market_pool._load_or_refresh_quotes(db, settings)
     second, second_meta = market_pool._load_or_refresh_quotes(db, settings)
@@ -563,6 +615,40 @@ def test_load_or_refresh_quotes_uses_fresh_cache(db, monkeypatch):
     assert second_meta["status"] == "fresh_cache"
     assert len(first) == len(second) == 2
     assert calls["fetch"] == 1
+
+
+def test_load_or_refresh_quotes_refreshes_when_cached_trade_date_lags(db, monkeypatch):
+    settings = DummySettings()
+    stale_code, fresh_code = _codes(2)
+    _persist_quotes(
+        db,
+        [
+            {
+                **_quote(stale_code, "tushare", 10.0),
+                "trade_date": "2026-06-09",
+                "raw_sources": ["tushare"],
+                "source_count": 1,
+                "quality_score": 90.0,
+                "freshness_status": "fresh",
+            }
+        ],
+        trade_date="2026-06-09",
+    )
+    db.flush()
+    calls = {"fetch": 0}
+
+    def fake_fetch_quotes(source, _settings):
+        calls["fetch"] += 1
+        return [{**_quote(fresh_code, source, 20.0), "trade_date": "2026-06-10"}]
+
+    monkeypatch.setattr(market_pool, "_fetch_quotes", fake_fetch_quotes)
+    monkeypatch.setattr(market_pool, "_latest_allowed_quote_date", lambda today=None: "2026-06-10")
+
+    quotes, meta = market_pool._load_or_refresh_quotes(db, settings)
+
+    assert meta["status"] == "refreshed"
+    assert calls["fetch"] == 1
+    assert {quote["trade_date"] for quote in quotes} == {"2026-06-10"}
 
 
 def test_get_market_universe_from_pool_backfills_latest_quote_trade_date_when_refreshing(monkeypatch):
@@ -649,6 +735,93 @@ def test_get_market_universe_from_pool_backfills_latest_quote_trade_date_when_re
     assert backfill_calls == [(1, "2026-05-27")]
     assert snapshot["breadth"]["latest_trade_date_backfill_count"] == 1
     assert snapshot["breadth"]["latest_quote_trade_date"] == "2026-05-27"
+
+
+def test_get_market_universe_does_not_backfill_current_realtime_quote_date(monkeypatch):
+    settings = DummySettings()
+    db = SimpleNamespace()
+    quotes = [
+        {
+            **_quote("000001", "tushare", 10.0),
+            "trade_date": "2026-06-10",
+            "raw_sources": ["tushare"],
+            "source_count": 1,
+            "quality_score": 90.0,
+            "freshness_status": "fresh",
+        }
+    ]
+    backfill_calls = []
+
+    monkeypatch.setattr(market_pool, "get_settings", lambda: settings)
+    monkeypatch.setattr(market_pool, "_load_or_refresh_quotes", lambda _db, _settings: (quotes, {"status": "refreshed", "errors": []}))
+    monkeypatch.setattr(market_pool, "_eligible_market_quotes", lambda rows: rows)
+    monkeypatch.setattr(market_pool, "_candidate_filter_summary", lambda rows: {"total_count": len(rows)})
+    monkeypatch.setattr(market_pool, "_candidate_recall_plan", lambda total, eligible, _settings: {
+        "full_market_mode": True,
+        "explicit_scan_limit": 0,
+        "lookahead_multiplier": 4,
+        "broad_recall_count": eligible,
+        "scan_target_count": eligible,
+        "broad_recall_limited": False,
+    })
+    monkeypatch.setattr(market_pool, "_select_recall_candidates", lambda rows, _count: rows)
+    monkeypatch.setattr(market_pool, "_latest_allowed_quote_date", lambda today=None: "2026-06-10")
+    monkeypatch.setattr(market_pool, "_latest_allowed_bar_date", lambda today=None: today.isoformat() if today else "2026-06-10")
+    monkeypatch.setattr(
+        market_pool,
+        "_load_cached_bars_summary",
+        lambda _db, _codes, _min_bar_count: {
+            "000001": {"bar_count": 35, "latest_trade_date": "2026-06-09"}
+        },
+    )
+    monkeypatch.setattr(
+        market_pool,
+        "_backfill_latest_trade_date_bars",
+        lambda _db, candidates, _settings, target_trade_date: backfill_calls.append((len(candidates), target_trade_date)) or 1,
+    )
+    monkeypatch.setattr(
+        market_pool,
+        "_load_or_refresh_bars",
+        lambda _db, quote, _settings: (_bars(quote["code"], 35, end=date(2026, 6, 9)), {"selected_source": "daily_bars_cache", "freshness_status": "fresh_cache"}, []),
+    )
+    monkeypatch.setattr(
+        market_pool,
+        "_build_quote_snapshot",
+        lambda *_args, **_kwargs: {
+            "snapshot_id": "snapshot_test",
+            "trade_date": "2026-06-10",
+            "sample_count": 1,
+            "up_count": 1,
+            "down_count": 0,
+            "limit_up_count": 0,
+            "limit_down_count": 0,
+            "main_industries": ["软件服务"],
+            "breadth": {},
+        },
+    )
+    monkeypatch.setattr(
+        market_pool,
+        "_build_snapshot",
+        lambda **kwargs: {
+            "snapshot_id": "snapshot_test",
+            "trade_date": "2026-06-10",
+            "sample_count": len(kwargs["stocks"]),
+            "up_count": 1,
+            "down_count": 0,
+            "limit_up_count": 0,
+            "limit_down_count": 0,
+            "main_industries": ["软件服务"],
+            "breadth": {},
+        },
+    )
+    monkeypatch.setattr(market_pool, "_apply_relative_features", lambda _stocks: None)
+
+    stocks, snapshot = market_pool.get_market_universe_from_pool(db, refresh=True)
+
+    assert len(stocks) == 1
+    assert backfill_calls == []
+    assert snapshot["breadth"]["latest_trade_date_backfill_count"] == 0
+    assert snapshot["breadth"]["latest_quote_trade_date"] == "2026-06-10"
 
 
 def test_backfill_latest_trade_date_bars_builds_from_quotes_without_tushare(monkeypatch):
@@ -1035,6 +1208,36 @@ def test_local_only_skips_stale_bars_instead_of_running_with_them(db, monkeypatc
         raise AssertionError("expected MarketDataError")
 
 
+def test_current_realtime_quote_accepts_previous_trade_day_bars(monkeypatch):
+    quote = {**_quote("000001", "tushare", 10.00), "trade_date": "2026-06-10"}
+    bars = _bars("000001", days=35, end=date(2026, 6, 9))
+
+    monkeypatch.setattr(market_pool, "_latest_allowed_quote_date", lambda today=None: "2026-06-10")
+
+    assert market_pool._required_bar_date_for_quote(quote) == "2026-06-09"
+    assert market_pool._bars_cover_quote_date(bars, quote) is True
+
+
+def test_readiness_treats_current_realtime_quote_one_bar_day_gap_as_ready(db, monkeypatch):
+    settings = DummySettings()
+    codes = _codes(2)
+    quotes = [
+        {**_quote(codes[0], "tushare", 10.00), "trade_date": "2026-06-10"},
+        {**_quote(codes[1], "tushare", 20.00), "trade_date": "2026-06-10"},
+    ]
+    summaries = _bar_summaries(codes, latest_trade_date="2026-06-09")
+
+    monkeypatch.setattr(market_pool, "_latest_allowed_quote_date", lambda today=None: "2026-06-10")
+
+    readiness = _readiness(db, monkeypatch, settings, quotes, summaries)
+
+    assert readiness["status"] == "ready"
+    assert readiness["can_run_local_recommendation"] is True
+    assert readiness["has_missing_data"] is False
+    assert readiness["kline"]["ready_count"] == 2
+    assert readiness["kline"]["stale_count"] == 0
+
+
 def test_get_market_universe_local_pool_preferred_refreshes_when_pool_is_empty(db, monkeypatch):
     settings = DummySettings()
     codes = _codes(2)
@@ -1328,6 +1531,8 @@ def test_local_pool_status_counts_low_liquidity_as_available_universe(db, monkey
     assert filter_summary["excluded_count"] == 0
 
 
-def test_local_pool_status_uses_quote_date_for_coverage_reference():
+def test_local_pool_status_uses_quote_date_for_coverage_reference(monkeypatch):
     assert _coverage_reference_date("2026-05-13", "2026-05-15") == "2026-05-13"
     assert _coverage_reference_date(None, "2026-05-15") == "2026-05-15"
+    monkeypatch.setattr(market_pool, "_latest_allowed_quote_date", lambda today=None: "2026-06-10")
+    assert _coverage_reference_date("2026-06-10", "2026-06-10") == "2026-06-09"

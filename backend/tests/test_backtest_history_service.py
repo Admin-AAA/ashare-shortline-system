@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from app.models.tables import BacktestRun
-from app.services.backtest_history_service import _serialize_backtest_run, get_backtest_version_matrix
+from app.services.backtest_history_service import _serialize_backtest_run, get_backtest_version_matrix, list_backtest_runs_page
 
 
 def test_serialize_backtest_run_summarizes_metrics_and_data_source():
@@ -130,6 +130,10 @@ def test_serialize_backtest_run_summarizes_metrics_and_data_source():
     assert summary["metrics"]["average_executed_return"] == 0.314
     assert summary["metrics"]["accuracy_gate_summary"]["signal_invalid_count"] == 0
     assert summary["metrics"]["accuracy_policy"]["matches_reported_accuracy"] is True
+    assert summary["projection"]["schema_version"] == 1
+    assert summary["projection"]["metrics"]["trade_count"] == 2
+    assert summary["projection"]["comparison"]["decision_scope"] == "walk_forward"
+    assert summary["projection"]["data_coverage"]["candidate_minute_coverage_rate"] == 1.0
     assert summary["selected_variant"] == "baseline"
     assert summary["decision_scope"] == "walk_forward"
     assert summary["decision_scope_label"] == "滚动样本外验证"
@@ -261,3 +265,61 @@ def test_get_backtest_version_matrix_extracts_baseline_candidate_deltas():
     assert item["drawdown_delta"] == -2.6
     assert item["validation_profile"]["primary_scope"] == "walk_forward"
     assert item["guardrail_notes"] == ["命中回撤护栏"]
+
+
+def test_list_backtest_runs_page_filters_and_paginates():
+    class _FakeScalarResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def all(self):
+            return self._rows[:1]
+
+    class _FakeDb:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def scalar(self, stmt):
+            return 2
+
+        def scalars(self, stmt):
+            return _FakeScalarResult(self._rows)
+
+    rows = [
+        BacktestRun(
+            backtest_id="bt_a",
+            skill_id="overnight-holding-method",
+            date_from="2026-05-01",
+            date_to="2026-05-31",
+            status="completed",
+            created_at=datetime(2026, 6, 1, 10, 30),
+            result_json='{"strategy_name":"隔夜持股法"}',
+        ),
+        BacktestRun(
+            backtest_id="bt_b",
+            skill_id="limit-up-reseal-relay",
+            date_from="2026-05-01",
+            date_to="2026-05-31",
+            status="failed",
+            created_at=datetime(2026, 6, 1, 9, 30),
+            result_json='{"strategy_name":"涨停回封接力"}',
+        ),
+    ]
+
+    page = list_backtest_runs_page(
+        _FakeDb(rows),
+        skill_id="overnight-holding-method",
+        status="completed",
+        date_from="2026-05-01",
+        date_to="2026-05-31",
+        query="隔夜",
+        page=1,
+        page_size=1,
+    )
+
+    assert page["page"] == 1
+    assert page["page_size"] == 1
+    assert page["total"] == 2
+    assert page["total_pages"] == 2
+    assert page["has_next"] is True
+    assert page["items"][0]["backtest_id"] == "bt_a"

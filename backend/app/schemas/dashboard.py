@@ -63,6 +63,14 @@ class CockpitRecommendation(BaseModel):
     watch_status: str = "none"
     consensus_label: str = "未知"
     data_quality: DataQualitySummary = Field(default_factory=DataQualitySummary)
+    preset_name: str | None = None
+    preset_id: str | None = None
+    run_name: str | None = None
+    ideal_buy: float | None = None
+    secondary_buy: float | None = None
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    degraded_reason: str | None = None
 
 
 class RiskRadar(BaseModel):

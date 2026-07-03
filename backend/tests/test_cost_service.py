@@ -126,3 +126,27 @@ def test_task_run_summary_text_for_minute_gap_remediation():
     summary = _task_run_summary_text(run, result)
 
     assert summary == "分钟补数 1 步，候选覆盖 +65.0%，基准覆盖 +50.0%，修复率 60.0%，仍缺 2，门禁通过"
+
+
+def test_task_run_summary_text_for_preset_matrix_run():
+    run = ScheduledTaskRun(
+        task_run_id="taskrun_matrix",
+        task_id="daily_preset_matrix",
+        task_name="盘后预设矩阵",
+        task_type="preset_matrix_run",
+        trigger_source="schedule",
+        started_at=datetime(2026, 6, 4, 15, 30),
+        status="completed",
+        payload_json="{}",
+        result_json="{}",
+    )
+    result = {
+        "preset_count": 4,
+        "completed_count": 3,
+        "failed_count": 1,
+        "recommended_count": 9,
+    }
+
+    summary = _task_run_summary_text(run, result)
+
+    assert summary == "预设矩阵 3/4 完成，失败 1，推荐 9 条"

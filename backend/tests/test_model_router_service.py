@@ -33,6 +33,38 @@ def _route(**kwargs):
     return types.SimpleNamespace(**data)
 
 
+class FakeScalarResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def all(self):
+        return self._rows
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+
+class FakeActiveRouteDB:
+    def __init__(self, rows):
+        self.rows = rows
+        self.committed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def scalars(self, stmt):
+        return FakeScalarResult([row for row in self.rows if row.enabled])
+
+    def commit(self):
+        self.committed = True
+
+    def flush(self):
+        pass
+
+
 def test_model_route_uses_stored_key_when_editing_without_new_key(monkeypatch):
     db = FakeDB({"route_saved": _route()})
     monkeypatch.setattr(model_router_service, "get_settings", lambda: DummySettings())
@@ -91,3 +123,36 @@ def test_model_route_returns_error_when_no_api_key_available(monkeypatch):
     assert result["ok"] is False
     assert "未配置可用 API Key" in result["message"]
     assert result["key_source"] == "missing"
+
+
+def test_active_model_routes_skip_disabled_default_route(monkeypatch):
+    rows = [
+        _route(
+            route_id="route_primary",
+            name="jucode",
+            base_url="https://cf.jucode.top/v1",
+            model="gpt-5.5",
+            api_key="custom-key",
+            priority=1,
+            enabled=True,
+        ),
+        _route(
+            route_id="route_env_default",
+            name="默认模型 deepseek-v4-pro",
+            model="deepseek-v4-pro",
+            api_key="",
+            priority=2,
+            enabled=False,
+        ),
+    ]
+    fake_db = FakeActiveRouteDB(rows)
+
+    monkeypatch.setattr(model_router_service, "get_settings", lambda: DummySettings())
+    monkeypatch.setattr(model_router_service, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(model_router_service, "_ensure_default_route", lambda db: None)
+
+    active = model_router_service.get_active_model_routes()
+
+    assert [route.route_id for route in active] == ["route_primary"]
+    assert active[0].model == "gpt-5.5"
+    assert active[0].key_source == "custom"

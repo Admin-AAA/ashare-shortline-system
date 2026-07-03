@@ -37,6 +37,26 @@ async def create_run(payload: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.post("/matrix")
+def create_matrix_run(payload: dict | None = None):
+    try:
+        from app.services.scheduler_service import start_preset_matrix_now
+
+        return start_preset_matrix_now(payload or {})
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("create matrix run failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/matrix/status")
+def matrix_run_status():
+    from app.services.scheduler_service import get_latest_preset_matrix_task_run
+
+    return {"task_run": get_latest_preset_matrix_task_run()}
+
+
 @router.post("/backtest/comparison")
 def create_backtest_comparison(payload: dict, db: Session = Depends(get_db)):
     """执行 baseline vs candidate 双版本回测对比（含 walk-forward + time-split）。
@@ -74,6 +94,33 @@ def create_backtest_comparison(payload: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.post("/analyze-stock")
+def analyze_single_stock(payload: dict, db: Session = Depends(get_db)):
+    """单股票分析：加载历史K线 → 构建特征 → 计算 DSA 评分 → 可选触发 LLM agent。
+
+    请求体:
+        code: str           # 股票代码（必填）
+        trade_date: str     # 分析日期 YYYY-MM-DD（默认最近交易日）
+        include_llm: bool   # 是否触发 LLM skill agent 分析（默认 False，会消耗 LLM 额度）
+        skill_id: str       # 指定 skill（默认 daily-stock-analysis-skill）
+    """
+    from app.services.single_stock_analysis import analyze_stock
+
+    code = str(payload.get("code") or "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="code is required")
+
+    trade_date = str(payload.get("trade_date") or "").strip() or None
+    include_llm = bool(payload.get("include_llm", False))
+    skill_id = str(payload.get("skill_id") or "daily-stock-analysis-skill").strip()
+
+    try:
+        return analyze_stock(db, code, trade_date=trade_date, include_llm=include_llm, skill_id=skill_id)
+    except Exception as exc:
+        logger.exception("single stock analysis failed for %s", code)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.post("/backtest")
 def create_backtest(payload: dict, db: Session = Depends(get_db)):
     """在历史日期区间上执行回测。
@@ -103,6 +150,7 @@ def create_backtest(payload: dict, db: Session = Depends(get_db)):
     score_line = float(payload.get("score_line", 72.0))
     strategy_id = str(payload.get("strategy_id") or "").strip()
     skill_id = str(payload.get("skill_id") or "").strip() or None
+    target_codes = payload.get("target_codes")  # 单股回测：["000001", "600000"]
     try:
         action = str(payload.get("action") or "").strip()
         adapter_result = run_strategy_backtest_adapter(
@@ -124,6 +172,7 @@ def create_backtest(payload: dict, db: Session = Depends(get_db)):
             horizon_days,
             score_line,
             skill_id=skill_id or strategy_id or None,
+            target_codes=target_codes if target_codes else None,
         )
     except ValueError as exc:
         logger.exception("backtest request rejected")
@@ -137,11 +186,28 @@ def create_backtest(payload: dict, db: Session = Depends(get_db)):
 def get_backtests(
     skill_id: str | None = Query(default=None),
     limit: int = Query(default=30, ge=1, le=200),
+    page: int = Query(default=1, ge=1),
+    page_size: int | None = Query(default=None, ge=1, le=200),
+    status: str | None = Query(default=None),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    query: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    from app.services.backtest_history_service import list_backtest_runs
+    from app.services.backtest_history_service import list_backtest_runs_page
 
-    return list_backtest_runs(db, skill_id=skill_id, limit=limit)
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=400, detail="date_from must be <= date_to")
+    return list_backtest_runs_page(
+        db,
+        skill_id=skill_id,
+        status=status,
+        date_from=date_from,
+        date_to=date_to,
+        query=query,
+        page=page,
+        page_size=page_size or limit,
+    )
 
 
 @router.get("/backtests/version-matrix")

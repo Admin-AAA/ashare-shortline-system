@@ -294,3 +294,59 @@ def test_backtest_recommendation_records_expose_accuracy_gates():
     assert records[2]["accuracy_failure_label"] == "信号当时真实不成立"
     assert failures[0]["code"] == "000003"
     assert failures[0]["accuracy_failure_label"] == "信号当时真实不成立"
+
+
+def test_backtest_horizon_return_matrix_groups_by_strategy_and_trading_day():
+    from app.services.backtest_service import _backtest_horizon_return_matrix
+
+    def bar(code: str, trade_date: str, close: float):
+        item = MagicMock()
+        item.code = code
+        item.trade_date = trade_date
+        item.close = close
+        return item
+
+    rec_1 = _mock_rec("000001", "2026-05-18", "rec_1", "run_1")
+    rec_1.recommend_price = 10.0
+    rec_1.skill_breakdown_json = json.dumps([
+        {"strategy_id": "dragon", "strategy_name": "龙头策略"},
+    ])
+    rec_2 = _mock_rec("000002", "2026-05-18", "rec_2", "run_1")
+    rec_2.recommend_price = 20.0
+    rec_2.skill_breakdown_json = json.dumps([
+        {"strategy_id": "dragon", "strategy_name": "龙头策略"},
+        {"strategy_id": "relay", "strategy_name": "接力策略"},
+    ])
+    bars = [
+        bar("000001", "2026-05-18", 10.0),
+        bar("000001", "2026-05-19", 11.0),
+        bar("000001", "2026-05-20", 12.0),
+        bar("000001", "2026-05-21", 13.0),
+        bar("000002", "2026-05-18", 20.0),
+        bar("000002", "2026-05-19", 18.0),
+        bar("000002", "2026-05-20", 22.0),
+        bar("000002", "2026-05-21", 24.0),
+    ]
+    db = MagicMock()
+    db.scalars.side_effect = [
+        _make_scalars_result([rec_1, rec_2]),
+        _make_scalars_result(bars),
+    ]
+
+    matrix = _backtest_horizon_return_matrix(
+        db,
+        "2026-05-18",
+        "2026-05-21",
+        "experiment",
+        run_ids={"run_1"},
+        horizons=(1, 3),
+    )
+
+    by_strategy = {row["strategy_id"]: row for row in matrix}
+    assert by_strategy["dragon"]["strategy_name"] == "龙头策略"
+    assert by_strategy["dragon"]["recommendation_count"] == 2
+    assert by_strategy["dragon"]["horizons"]["1"]["sample_count"] == 2
+    assert by_strategy["dragon"]["horizons"]["1"]["average_return_pct"] == pytest.approx(0.0)
+    assert by_strategy["dragon"]["horizons"]["3"]["average_return_pct"] == pytest.approx(25.0)
+    assert by_strategy["relay"]["recommendation_count"] == 1
+    assert by_strategy["relay"]["horizons"]["1"]["average_return_pct"] == pytest.approx(-10.0)
