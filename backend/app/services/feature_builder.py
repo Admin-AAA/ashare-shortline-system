@@ -382,25 +382,27 @@ def _volume_state(volume_ratio: float, pct: float) -> tuple[str, str]:
 
 
 def _bias_score(bias_ma5: float) -> int:
-    # 数据驱动重写（2026-07-04 去重 282 笔实盘验证）：
-    # bias_ma5 越高 → 强势股 → 胜率越高（趋势跟踪市场，强者恒强）
-    #   bias > 5:  WR=77.8-100% (avg +1.91~+6.95%) → 20 分
-    #   3 < bias <= 5: WR=66.7% (avg +3.21%) → 18 分
-    #   1.5 < bias <= 3: WR=59.0% (avg +1.45%) → 14 分
-    #   -2 <= bias <= 1.5: WR=49.4% (avg +0.79%) → 10 分（平庸区间，原错误给 20 分）
-    #   -7 <= bias < -2: WR=38.5-47.1% → 6 分
+    # 数据驱动（2026-07-04 去重 282 笔 + 反事实验证 T2 第77轮）：
+    # 高 bias = 强势股 = 强者恒强（趋势跟踪市场），应高分
+    #   bias > 5:  WR=77.8-100% → 20 分
+    #   3 < bias <= 5: WR=66.7% → 18 分
+    #   1.5 < bias <= 3: WR=59.0% → 16 分
+    #   -2 <= bias <= 1.5: 整体 WR=49.4%，但被推荐后 WR=63.3%（安全区间）→ 20 分（保持旧值，反事实验证降分误杀盈利股）
+    #   -7 <= bias < -2: WR=38.5-47.1% → 8 分
     #   bias < -7: 弱势 → 4 分
-    # 旧逻辑错误：把高 bias 当超买惩罚（bias>8 给 2 分），实际 WR=100%
+    # 旧逻辑错误：高 bias>8 给 2 分（实际 WR=100%）；新逻辑修正高 bias 加分
+    # 反事实验证（T2 第77轮）：对 bias[-2,1.5] 降分会移除 30+ 笔 WR=63.3% 的盈利推荐（净 -39%），
+    #   保持 20 分避免误杀；只对高 bias 加分
     if bias_ma5 > 5:
         return 20
     if bias_ma5 > 3:
         return 18
     if bias_ma5 > 1.5:
-        return 14
+        return 16
     if bias_ma5 >= -2:
-        return 10
+        return 20  # 保持旧值：被推荐后 WR=63.3%，降分误杀
     if bias_ma5 >= -7:
-        return 6
+        return 8
     return 4
 
 

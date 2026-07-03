@@ -109,22 +109,22 @@ def test_dsa_trend_score_bullish():
 
 
 def test_dsa_bias_score_optimal():
-    # 数据驱动重写（2026-07-04）：bias 越高 → 强势股 → 胜率越高
+    # 数据驱动（2026-07-04 + 反事实验证 T2 第77轮）：
     # bias > 5: WR=77.8-100% → 20 分
     # 3 < bias <= 5: WR=66.7% → 18 分
-    # 1.5 < bias <= 3: WR=59.0% → 14 分
-    # -2 <= bias <= 1.5: WR=49.4% → 10 分（平庸区间，原错误给 20）
+    # 1.5 < bias <= 3: WR=59.0% → 16 分
+    # -2 <= bias <= 1.5: 被推荐后 WR=63.3%（安全区间）→ 20 分（保持旧值，降分误杀盈利股）
     assert _bias_score(6.0) == 20  # bias > 5 强势
     assert _bias_score(4.0) == 18  # 3 < bias <= 5
-    assert _bias_score(2.0) == 14  # 1.5 < bias <= 3
-    assert _bias_score(0.0) == 10  # -2 <= bias <= 1.5（平庸）
-    assert _bias_score(-1.0) == 10
+    assert _bias_score(2.0) == 16  # 1.5 < bias <= 3
+    assert _bias_score(0.0) == 20  # -2 <= bias <= 1.5（被推荐后 WR=63.3%，保持20分）
+    assert _bias_score(-1.0) == 20
 
 
 def test_dsa_bias_score_far():
     # 旧逻辑错误：bias>8 给 2 分（实际 WR=100%）；新逻辑给 20 分
     assert _bias_score(9.0) == 20  # bias > 5 强势股
-    assert _bias_score(-6.0) == 6  # -7 <= bias < -2 弱势
+    assert _bias_score(-6.0) == 8  # -7 <= bias < -2 弱势
 
 
 def test_dsa_volume_score_surge_up():
