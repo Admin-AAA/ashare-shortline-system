@@ -25,8 +25,15 @@ def record_api_call(
     latency_ms: float = 0,
     status: str = "success",
     error_message: str | None = None,
+    # 估算字段（agno_skill_agent 会传，但 ApiCallLog 表不存储，仅用于运行时汇总）
+    prompt_tokens_est: int | None = None,
+    completion_tokens_est: int | None = None,
 ) -> ApiCallLog:
-    """记录一次 LLM API 调用。"""
+    """记录一次 LLM API 调用。
+
+    prompt_tokens_est / completion_tokens_est 是调用方估算的 token 数，
+    ApiCallLog 表只存字符数，token 估算仅用于内存中的成本汇总（drain_api_costs）。
+    """
     log = ApiCallLog(
         run_id=run_id,
         skill_id=skill_id,
@@ -179,6 +186,10 @@ def list_scheduled_task_runs(
         stmt.order_by(ScheduledTaskRun.started_at.desc()).limit(limit)
     ).all()
     return [_serialize_task_run(run) for run in runs]
+
+
+def serialize_scheduled_task_run(run: ScheduledTaskRun) -> dict[str, Any]:
+    return _serialize_task_run(run)
 
 
 def upsert_scheduled_task(
@@ -439,6 +450,13 @@ def _task_run_summary_text(run: ScheduledTaskRun, result: dict[str, Any]) -> str
         if result.get("recommended_count") is not None:
             parts.append(f"推荐 {int(result.get('recommended_count') or 0)} 条")
         return "，".join(parts) if parts else "自动推荐任务"
+
+    if run.task_type == "preset_matrix_run":
+        completed = int(result.get("completed_count") or 0)
+        total = int(result.get("preset_count") or result.get("run_count") or 0)
+        failed = int(result.get("failed_count") or 0)
+        recommended = int(result.get("recommended_count") or 0)
+        return f"预设矩阵 {completed}/{total} 完成，失败 {failed}，推荐 {recommended} 条"
 
     backfill = result.get("backfill") if isinstance(result, dict) else None
     if isinstance(backfill, dict) and backfill.get("processed") is not None:
