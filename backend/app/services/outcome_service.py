@@ -1286,11 +1286,31 @@ def _simulate_outcome(
 
     # 除权/复权检测：当价格跳变 > 20% 但持有期每日 pct_chg 均在正常范围时，
     # 视为除权事件，使用 pct_chg 链重新计算收益。
+    # 修复：pct_chg 字段在某些 label 时点可能未除权（raw 值，如 -32%），
+    # 导致 max_daily_pct >= limit*0.6，除权检测失败（如 688012 7月1日 labeled 的 -32.64% 行）。
+    # 增加价格跳变一致性检测：对相邻 bar 比较 open(t)/close(t-1) 与 pct_chg(t)，
+    # 若两者差异 > 20pp，pct_chg 字段不可信，用价格链重算。
     if abs(executed_return) > 20:
         is_star = str(rec.code or "").startswith("68")
         limit_pct = 20 if is_star else 10
         max_daily_pct = max(abs(_as_float(bar.pct_chg)) for bar in holding_bars) if holding_bars else 0
-        if max_daily_pct < limit_pct * 0.6:  # 无单日接近涨跌停 → 除权
+        # 价格跳变 vs pct_chg 一致性检测：任何一天 pct_chg 字段与实际价格跳变矛盾 → 数据不可信
+        pct_chg_unreliable = False
+        for i in range(1, len(holding_bars)):
+            prev_close = _as_float(holding_bars[i - 1].close)
+            cur_open = _as_float(holding_bars[i].open)
+            cur_pct = _as_float(holding_bars[i].pct_chg)
+            if prev_close > 0 and cur_open > 0:
+                price_jump = (cur_open / prev_close - 1) * 100
+                # 价格跳变 > 20% 但 pct_chg 字段 < limit*0.6 → pct_chg 已除权但价格序列有跳变（除权日）
+                # 或价格跳变正常但 pct_chg > 20% → pct_chg 字段未除权（数据错误）
+                if abs(price_jump) > 20 and abs(cur_pct) < limit_pct * 0.6:
+                    pct_chg_unreliable = True
+                    break
+                if abs(cur_pct) > 20 and abs(price_jump) < limit_pct * 0.6:
+                    pct_chg_unreliable = True
+                    break
+        if max_daily_pct < limit_pct * 0.6 or pct_chg_unreliable:  # 除权或 pct_chg 不可信 → 用链重算
             cum = 1.0
             for bar in holding_bars:
                 cum *= (1 + _as_float(bar.pct_chg) / 100.0)
@@ -1460,6 +1480,7 @@ def _resolve_exit(
     """
     locked_limit_down_bars = 0
     for bar in holding_bars:
+        # 先检查 block reason（无流动性/一字跌停等），被 block 的 bar 跳过
         if _exit_execution_block_reason(code, bar):
             locked_limit_down_bars += 1
             continue
