@@ -212,6 +212,101 @@ def test_fetch_tushare_quotes_prefers_local_stock_basics(monkeypatch):
     assert first["exchange"] == "SZ"
 
 
+def test_fetch_tushare_quotes_prefers_realtime_current_session(monkeypatch):
+    class FakePro:
+        def stock_basic(self, **kwargs):
+            raise AssertionError("已有本地 stocks 时不应再请求 stock_basic")
+
+        def trade_cal(self, **kwargs):
+            return pd.DataFrame([{"cal_date": "20260609"}, {"cal_date": "20260610"}])
+
+        def daily_basic(self, **kwargs):
+            assert kwargs["trade_date"] == "20260609"
+            return pd.DataFrame(
+                [
+                    {
+                        "ts_code": "000001.SZ",
+                        "trade_date": "20260609",
+                        "turnover_rate": 4.8,
+                        "pe_ttm": 8.0,
+                        "total_mv": 18000000,
+                        "circ_mv": 100000,
+                    },
+                    {
+                        "ts_code": "600000.SH",
+                        "trade_date": "20260609",
+                        "turnover_rate": 3.1,
+                        "pe_ttm": 6.5,
+                        "total_mv": 32000000,
+                        "circ_mv": 200000,
+                    },
+                ]
+            )
+
+        def bak_daily(self, **kwargs):
+            raise AssertionError("实时行情完整时不应回退到 bak_daily")
+
+        def daily(self, **kwargs):
+            raise AssertionError("实时行情完整时不应回退到 daily")
+
+    class FakeDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 6, 10, 14, 30)
+
+    def fake_realtime_frame(ts_codes, _settings):
+        assert ts_codes == ["000001.SZ", "600000.SH"]
+        return pd.DataFrame(
+            [
+                {
+                    "NAME": "平安银行",
+                    "TS_CODE": "000001.SZ",
+                    "DATE": "20260610",
+                    "OPEN": 11.0,
+                    "PRE_CLOSE": 10.0,
+                    "PRICE": 11.2,
+                    "HIGH": 11.3,
+                    "LOW": 10.9,
+                    "VOLUME": 1000000,
+                    "AMOUNT": 50000000,
+                },
+                {
+                    "NAME": "浦发银行",
+                    "TS_CODE": "600000.SH",
+                    "DATE": "20260610",
+                    "OPEN": 9.0,
+                    "PRE_CLOSE": 9.0,
+                    "PRICE": 9.2,
+                    "HIGH": 9.3,
+                    "LOW": 8.9,
+                    "VOLUME": 2000000,
+                    "AMOUNT": 80000000,
+                },
+            ]
+        )
+
+    monkeypatch.setattr("app.services.tushare_client.get_pro", lambda: FakePro())
+    monkeypatch.setattr(market_data, "datetime", FakeDateTime)
+    monkeypatch.setattr(
+        market_data,
+        "_load_local_stock_basics",
+        lambda: [
+            {"symbol": "000001", "name": "平安银行", "industry": "银行", "market": "主板", "is_st": False},
+            {"symbol": "600000", "name": "浦发银行", "industry": "银行", "market": "主板", "is_st": False},
+        ],
+    )
+    monkeypatch.setattr(market_data, "_fetch_tushare_realtime_frame", fake_realtime_frame)
+    monkeypatch.setattr(market_data, "_throttle_tushare", lambda _settings: None)
+
+    quotes = market_data._fetch_tushare_quotes(DummySettings())
+
+    assert {quote["trade_date"] for quote in quotes} == {"2026-06-10"}
+    assert {quote["code"] for quote in quotes} == {"000001", "600000"}
+    first = next(quote for quote in quotes if quote["code"] == "000001")
+    assert first["pct"] == 12.0
+    assert first["turnover_rate"] == 5.0
+
+
 def test_fetch_tushare_quotes_falls_back_from_empty_latest_trade_date(monkeypatch):
     class FakePro:
         def stock_basic(self, **kwargs):
@@ -567,6 +662,34 @@ def test_authenticity_treats_composite_scores_as_observed_when_inputs_are_real()
     assert enriched["data_authenticity"] >= 0.8
 
 
+def test_data_availability_flags_mark_missing_context_data():
+    """strict_real + missing_fields 时，has_real_* 标记应为 False。
+    避免把 strict_real 模式下的默认值（0/99/false）误解为真实数据。"""
+    from app.services.feature_builder import build_features
+
+    stock = {
+        "code": "000001", "name": "测试", "industry": "银行",
+        "price": 10.0, "pct": 1.2, "amount_yi": 12.0, "turnover_rate": 3.0,
+        "free_mv_yi": 500.0, "total_mv_yi": 1000.0,
+        "chg20": 12.0, "chg60": 18.0, "dist20": 3.0, "dist60": 6.0,
+        "vol5_20": 1.2, "upper_shadow_count20": 1, "max_dd20": -4.0,
+        "data_source": "real_market",
+        "data_quality": {"strict_real_data": True, "missing_fields": ["main_net_inflow", "valuation", "news"]},
+    }
+    snapshot = {"sample_count": 5000, "main_industries": ["银行"], "breadth": {"regime": "温和"}}
+    enriched = build_features([stock], snapshot)[0]
+    assert enriched["has_real_capital_flow"] is False
+    assert enriched["has_real_valuation"] is False
+    assert enriched["has_real_news"] is False
+
+    # 数据完整时标记为 True
+    stock["data_quality"]["missing_fields"] = []
+    enriched2 = build_features([stock], snapshot)[0]
+    assert enriched2["has_real_capital_flow"] is True
+    assert enriched2["has_real_valuation"] is True
+    assert enriched2["has_real_news"] is True
+
+
 def test_default_presets_do_not_overwrite_user_skill_selection(production_mysql):
     from app.db.session import SessionLocal
     from app.models.tables import Preset, PresetSkill, SkillRegistry
@@ -647,6 +770,20 @@ def test_default_presets_do_not_overwrite_user_skill_selection(production_mysql)
             )
         )
         db.add(
+            Preset(
+                preset_id="preset_experiment_dsa",
+                name="DSA 单 Skill 实验",
+                run_mode="experiment",
+                market_scope="all",
+                risk_template="balanced",
+                output_count=6,
+                bucket_limits_json='{}',
+                data_source="local_pool",
+                hide_recent_repeats=False,
+                status="active",
+            )
+        )
+        db.add(
             PresetSkill(
                 id="preset_formal_opening:chen-xiaoqun-skill",
                 preset_id="preset_formal_opening",
@@ -706,6 +843,13 @@ def test_default_presets_do_not_overwrite_user_skill_selection(production_mysql)
             "daily-stock-analysis-skill",
         ]
         assert [row.weight for row in created_rows] == [1.15, 1.05, 0.88, 0.95]
+
+        empty_existing = db.get(Preset, "preset_experiment_dsa")
+        assert empty_existing is not None
+        empty_rows = db.query(PresetSkill).filter(PresetSkill.preset_id == "preset_experiment_dsa").all()
+        assert [(row.skill_id, row.weight, row.sort_order) for row in empty_rows] == [
+            ("daily-stock-analysis-skill", 1.0, 10)
+        ]
     finally:
         db.rollback()
         db.commit = original_commit

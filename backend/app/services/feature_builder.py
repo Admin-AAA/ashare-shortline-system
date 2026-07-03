@@ -209,6 +209,11 @@ def _apply_context_blocks(item: dict[str, Any], profile: dict[str, Any]) -> None
     gaps = set((item.get("data_quality") or {}).get("missing_fields", []))
     strict_real = item.get("data_source") == "real_market"
 
+    # 数据可用性标记：避免把 strict_real 模式下的默认值误解为真实 0
+    item["has_real_capital_flow"] = strict_real and "main_net_inflow" not in gaps
+    item["has_real_valuation"] = strict_real and "valuation" not in gaps
+    item["has_real_news"] = strict_real and "news" not in gaps
+
     item["main_net_inflow_yi"] = _num(
         profile.get("main_net_inflow_yi", item.get("main_net_inflow_yi")),
         0.0 if strict_real else _default_main_inflow(item),
