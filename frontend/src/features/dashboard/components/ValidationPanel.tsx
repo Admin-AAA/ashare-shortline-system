@@ -12,7 +12,7 @@ export default function ValidationPanel({ validation }: { validation: Validation
       <div className="panel-header">
         <div>
           <div className="panel-kicker">验证与门禁</div>
-          <h2>Safety Gate</h2>
+          <h2>安全门禁</h2>
         </div>
         <ShieldCheck size={19} />
       </div>

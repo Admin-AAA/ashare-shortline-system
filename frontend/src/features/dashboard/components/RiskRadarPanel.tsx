@@ -7,7 +7,7 @@ export default function RiskRadarPanel({ radar }: { radar: RiskRadar }) {
       <div className="panel-header">
         <div>
           <div className="panel-kicker">风险雷达</div>
-          <h2>Risk Radar</h2>
+          <h2>风险雷达</h2>
         </div>
         <Radar size={19} />
       </div>

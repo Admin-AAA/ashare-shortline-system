@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { BarChart3, RefreshCw } from "lucide-react";
+import { BarChart3, History, Play, RefreshCw } from "lucide-react";
 import { api } from "../../../api/client";
 import type { ScoreLineStatsRow, SetupStatsRow, StrategyStatsRow } from "../../../types";
 import { aShareDirectionClass, businessStatusLabel } from "../../../utils/display";
@@ -143,7 +143,20 @@ function BreakdownTable({
     <div className="bt-breakdown-table">
       <h4>{title}</h4>
       {rows.length === 0 ? (
-        <div className="empty-state">{empty}</div>
+        <div className="empty-state actionable">
+          <strong>{empty}</strong>
+          <span>分组指标需要推荐样本、outcome 和 AI 复盘结果，先产出推荐，再查看复盘口径。</span>
+          <div className="state-actions">
+            <button type="button" onClick={() => navigateToSection("run")}>
+              <Play size={14} />
+              运行推荐
+            </button>
+            <button type="button" onClick={() => navigateToSection("history")}>
+              <History size={14} />
+              查看 AI 复盘
+            </button>
+          </div>
+        </div>
       ) : (
         <table>
           <thead>
@@ -162,6 +175,10 @@ function BreakdownTable({
       )}
     </div>
   );
+}
+
+function navigateToSection(section: "run" | "history") {
+  window.dispatchEvent(new CustomEvent("ashare:navigate", { detail: { section } }));
 }
 
 function byRecommendationAccuracy(a: BreakdownRow, b: BreakdownRow) {

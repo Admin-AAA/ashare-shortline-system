@@ -1,10 +1,15 @@
-import { Activity, AlertTriangle, ArrowRight, BarChart3, History, Loader2, RotateCcw } from "lucide-react";
+import { Activity, AlertTriangle, BarChart3, History, Loader2, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../../api/client";
 import type { RunProgress } from "../../../types";
 import { runStatusCopy } from "../../../utils/display";
 
-export default function RunStatusPanel({ run }: { run: RunProgress }) {
+type Props = {
+  run: RunProgress;
+  mode?: "status" | "control";
+};
+
+export default function RunStatusPanel({ run, mode = "status" }: Props) {
   const pct = run.progress_pct == null ? 0 : Math.max(0, Math.min(100, run.progress_pct));
   const copy = runStatusCopy(run);
   const [resuming, setResuming] = useState(false);
@@ -13,6 +18,7 @@ export default function RunStatusPanel({ run }: { run: RunProgress }) {
   const isProblem = run.heartbeat_stale || run.status === "failed" || run.status === "interrupted";
   const isBusy = run.status === "queued" || run.status === "running";
   const isCompleted = run.status === "completed";
+  const canResumeHere = mode === "control";
   const panelTone = isProblem ? "danger" : isBusy ? "warning" : "";
   const detailMessage = run.error_message || run.message || (run.run_id ? "运行状态正常" : "暂无运行");
 
@@ -33,12 +39,6 @@ export default function RunStatusPanel({ run }: { run: RunProgress }) {
     }
   }
 
-  function goToControlCenter() {
-    setActionError("");
-    setActionMessage("已切换到控制中心，可重新发起推荐。");
-    window.dispatchEvent(new CustomEvent("ashare:navigate", { detail: { section: "control" } }));
-  }
-
   function goToSection(section: "pool" | "history", label: string) {
     setActionError("");
     setActionMessage(`正在打开${label}...`);
@@ -50,7 +50,7 @@ export default function RunStatusPanel({ run }: { run: RunProgress }) {
       <div className="panel-header">
         <div>
           <div className="panel-kicker">推荐运行状态</div>
-          <h2>Run Control</h2>
+          <h2>{mode === "control" ? "运行控制" : "运行状态"}</h2>
         </div>
         {isProblem ? <AlertTriangle size={18} /> : run.resumable ? <RotateCcw size={18} /> : <Activity size={18} />}
       </div>
@@ -72,21 +72,17 @@ export default function RunStatusPanel({ run }: { run: RunProgress }) {
         {run.heartbeat_stale ? <span className="status-badge danger">心跳过期</span> : <span className="status-badge">心跳正常</span>}
         {run.resumable ? <span className="status-badge warning">可恢复</span> : <span className="status-badge">不可恢复</span>}
       </div>
-      {isProblem || run.resumable ? (
+      {canResumeHere && (isProblem || run.resumable) ? (
         <div className="run-actions" aria-label="运行恢复操作">
           <button type="button" className="control-button primary" onClick={() => void resumeRun()} disabled={!run.run_id || !run.resumable || resuming}>
             {resuming ? <Loader2 size={15} className="spin" /> : <RotateCcw size={15} />}
             {resuming ? "提交中" : "从断点继续"}
           </button>
-          <button type="button" className="control-button subtle" onClick={goToControlCenter}>
-            <ArrowRight size={15} />
-            去控制中心重跑
-          </button>
         </div>
       ) : null}
       {isCompleted ? (
         <div className="run-actions" aria-label="运行完成后的下一步">
-          <button type="button" className="control-button primary" onClick={() => goToSection("pool", "候选解释")}>
+          <button type="button" className="control-button subtle" onClick={() => goToSection("pool", "候选解释")}>
             <BarChart3 size={15} />
             查看候选解释
           </button>

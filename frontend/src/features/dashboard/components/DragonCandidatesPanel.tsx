@@ -54,9 +54,9 @@ export default function DragonCandidatesPanel({
             <button
               className="btn primary candidate-empty-action"
               type="button"
-              onClick={() => window.dispatchEvent(new CustomEvent("ashare:navigate", { detail: { section: "control" } }))}
+              onClick={() => window.dispatchEvent(new CustomEvent("ashare:navigate", { detail: { section: "run" } }))}
             >
-              去控制中心处理
+              去推荐运行
             </button>
           </div>
         )}

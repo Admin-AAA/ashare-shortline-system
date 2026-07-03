@@ -1,4 +1,4 @@
-import { TrendingUp, TrendingDown, AlertTriangle, BarChart3 } from "lucide-react";
+import { TrendingUp, TrendingDown, AlertTriangle, BarChart3, History, Play } from "lucide-react";
 import type { MetricsOverview } from "../../../types";
 import { aShareDirectionClass } from "../../../utils/display";
 
@@ -54,7 +54,20 @@ export default function MetricsPanel({ metrics, loading }: Props) {
       </div>
 
       {!hasData ? (
-        <div className="empty-state">暂无评估数据，请先运行推荐后标注结果</div>
+        <div className="empty-state actionable">
+          <strong>暂无评估数据</strong>
+          <span>需要先产出推荐样本，再生成 outcome 与 AI 复盘结果，9-KPI 才有可计算口径。</span>
+          <div className="state-actions">
+            <button type="button" onClick={() => navigateToSection("run")}>
+              <Play size={14} />
+              运行推荐
+            </button>
+            <button type="button" onClick={() => navigateToSection("history")}>
+              <History size={14} />
+              查看 AI 复盘
+            </button>
+          </div>
+        </div>
       ) : (
         <>
           {/* KPI 核心指标网格 */}
@@ -200,6 +213,10 @@ export default function MetricsPanel({ metrics, loading }: Props) {
       )}
     </section>
   );
+}
+
+function navigateToSection(section: "run" | "history") {
+  window.dispatchEvent(new CustomEvent("ashare:navigate", { detail: { section } }));
 }
 
 function KpiCard({

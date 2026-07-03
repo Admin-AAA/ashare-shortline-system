@@ -8,7 +8,7 @@ export default function MarketTemperaturePanel({ market }: { market: MarketTempe
       <div className="panel-header">
         <div>
           <div className="panel-kicker">今日市场温度</div>
-          <h2>Market Heat</h2>
+          <h2>市场温度</h2>
         </div>
         <Flame size={20} />
       </div>

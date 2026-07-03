@@ -29,7 +29,7 @@ export default function QualityScorecardPanel({ scorecard }: { scorecard: Qualit
       <div className="panel-header">
         <div>
           <div className="panel-kicker">系统质量</div>
-          <h2>Quality Scorecard</h2>
+          <h2>质量评分</h2>
         </div>
         <Gauge size={19} />
       </div>

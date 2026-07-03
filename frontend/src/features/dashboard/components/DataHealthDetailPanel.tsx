@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Activity, RefreshCw } from "lucide-react";
 import { api } from "../../../api/client";
-import { businessStatusLabel } from "../../../utils/display";
+import { businessStatusLabel, formatApiDateTime } from "../../../utils/display";
 import type {
   DataHealthDiagnostic,
   DataHealthRemediationAction,
@@ -36,61 +36,111 @@ export default function DataHealthDetailPanel() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  const [repairing, setRepairing] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const [startingRepair, setStartingRepair] = useState(false);
+  const [repairTaskRun, setRepairTaskRun] = useState<ScheduledTaskRun | null>(null);
   const [repairResult, setRepairResult] = useState<DataHealthRemediationResult | null>(null);
   const [repairRuns, setRepairRuns] = useState<ScheduledTaskRun[]>([]);
 
-  const fetchHealth = async (signal?: AbortSignal) => {
+  const fetchHealth = useCallback(async (signal?: AbortSignal, options?: { showMessage?: boolean }) => {
     setLoading(true);
     setError("");
-    setMessage("");
+    if (options?.showMessage !== false) setMessage("");
     try {
       setData(await api.dataHealth({ signal }));
-      setMessage("数据质量诊断已刷新");
+      if (options?.showMessage !== false) setMessage("数据质量诊断已刷新");
     } catch (err) {
       if (isAbortError(err)) return;
       setError(err instanceof Error ? err.message : "数据健康诊断失败");
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  };
+  }, []);
 
-  const fetchRepairRuns = async () => {
+  const fetchRepairRuns = useCallback(async () => {
     try {
       setRepairRuns(await api.scheduledTaskRuns(6, "manual_data_health_remediation"));
     } catch {
       setRepairRuns([]);
     }
-  };
+  }, []);
+
+  const fetchRepairStatus = useCallback(async () => {
+    const status = await api.dataHealthRemediationStatus();
+    setRepairTaskRun(status.task_run);
+    return status.task_run;
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
     fetchHealth(controller.signal);
     return () => controller.abort();
-  }, []);
-  useEffect(() => { fetchRepairRuns(); }, []);
+  }, [fetchHealth]);
+  useEffect(() => {
+    void fetchRepairRuns();
+    void fetchRepairStatus();
+  }, [fetchRepairRuns, fetchRepairStatus]);
+
+  const repairRunning = repairTaskRun?.status === "running";
+  const repairing = startingRepair || repairRunning;
+  const actionBusy = previewing || repairing;
+
+  useEffect(() => {
+    if (!repairRunning) return;
+    const poll = async () => {
+      try {
+        const taskRun = await fetchRepairStatus();
+        if (taskRun?.status === "running") return;
+        await fetchRepairRuns();
+        if (taskRun?.status === "completed" || taskRun?.status === "partial_completed") {
+          const result = taskRun.result as DataHealthRemediationResult;
+          if (result?.status) setRepairResult(result);
+          await fetchHealth(undefined, { showMessage: false });
+          setMessage(taskRun.status === "partial_completed" ? "补数任务部分完成，诊断结果已刷新" : "补数任务完成，诊断结果已刷新");
+        } else if (taskRun) {
+          setError(taskRun.error_message || "补数任务结束，请查看最近补数记录");
+          setMessage("");
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "补数任务状态刷新失败");
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => { void poll(); }, 4000);
+    return () => window.clearInterval(timer);
+  }, [fetchHealth, fetchRepairRuns, fetchRepairStatus, repairRunning]);
 
   const runRepair = async (dryRun: boolean) => {
-    setRepairing(true);
     setError("");
-    setMessage(dryRun ? "正在预演补数计划..." : "正在执行补数，完成后会自动刷新诊断结果...");
+    setMessage(dryRun ? "正在预演补数计划..." : "正在提交补数任务...");
     try {
-      const result = await api.remediateDataHealth({
-        dry_run: dryRun,
+      if (dryRun) {
+        setPreviewing(true);
+        const result = await api.previewDataHealthRemediation({
+          dry_run: true,
+          daily_kbar_code_limit: DATA_HEALTH_DAILY_KBAR_CODE_LIMIT,
+          capital_flow_code_limit: DATA_HEALTH_AUXILIARY_CODE_LIMIT,
+          post_diagnosis: true,
+        });
+        setRepairResult(result);
+        setMessage("预演补数完成，未写入数据");
+        return;
+      }
+      if (repairing) return;
+      setStartingRepair(true);
+      const result = await api.startDataHealthRemediation({
         daily_kbar_code_limit: DATA_HEALTH_DAILY_KBAR_CODE_LIMIT,
         capital_flow_code_limit: DATA_HEALTH_AUXILIARY_CODE_LIMIT,
-        post_diagnosis: dryRun,
+        post_diagnosis: true,
       });
-      setRepairResult(result);
-      if (!dryRun) {
-        await fetchHealth();
-        await fetchRepairRuns();
-      }
-      setMessage(dryRun ? "预演补数完成，未写入数据" : "补数任务已执行，诊断结果已刷新");
+      setRepairTaskRun(result.task_run);
+      await fetchRepairRuns();
+      setMessage(result.started ? "补数任务已开始执行" : "已有补数任务正在执行");
     } catch (err) {
       setError(err instanceof Error ? err.message : "自动补数执行失败");
     } finally {
-      setRepairing(false);
+      setPreviewing(false);
+      setStartingRepair(false);
     }
   };
 
@@ -126,20 +176,20 @@ export default function DataHealthDetailPanel() {
       </div>
 
       <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
-        <button className="btn" onClick={() => void fetchHealth()} disabled={loading}>
-          <RefreshCw size={14} />
+        <button className="btn" onClick={() => void fetchHealth()} disabled={loading || repairing}>
+          <RefreshCw size={14} className={loading ? "spin" : undefined} />
           刷新
         </button>
-        <button className="btn" onClick={() => runRepair(true)} disabled={repairing}>
-          <RefreshCw size={14} />
-          预演补数
+        <button className="btn" onClick={() => runRepair(true)} disabled={actionBusy}>
+          <RefreshCw size={14} className={previewing ? "spin" : undefined} />
+          {previewing ? "预演中" : "预演补数"}
         </button>
-        <button className="btn primary" onClick={() => runRepair(false)} disabled={repairing}>
-          <RefreshCw size={14} />
-          {repairing ? "补数处理中" : "执行补数"}
+        <button className="btn primary" onClick={() => runRepair(false)} disabled={actionBusy}>
+          <RefreshCw size={14} className={repairing ? "spin" : undefined} />
+          {repairing ? "补数执行中" : "执行补数"}
         </button>
         {loading && <span style={{ color: "var(--muted)", fontSize: 12 }}>诊断中...</span>}
-        {repairing && <span style={{ color: "var(--muted)", fontSize: 12 }}>补数处理中...</span>}
+        {repairing && <span style={{ color: "var(--muted)", fontSize: 12 }}>补数执行中...</span>}
       </div>
       <div className="control-note">
         <Activity size={15} />
@@ -151,12 +201,29 @@ export default function DataHealthDetailPanel() {
       {error && <div className="bt-error" style={{ marginTop: 12 }}>{error}</div>}
       {message && (
         <div
-          className="control-banner positive"
+          className={`control-banner ${repairing ? "warning" : "positive"}`}
           style={{ marginTop: 12 }}
           role="status"
           aria-live="polite"
         >
           {message}
+        </div>
+      )}
+      {repairTaskRun && (
+        <div
+          className={`control-banner compact ${repairTaskRun.status === "failed" || repairTaskRun.status === "partial_failed" ? "danger" : repairTaskRun.status === "running" || repairTaskRun.status === "partial_completed" ? "warning" : "positive"}`}
+          style={{ marginTop: 12 }}
+          role="status"
+          aria-live="polite"
+        >
+          <div>
+            <strong>{repairTaskRun.task_name}</strong>
+            <span>{repairTaskRun.status === "running" ? "执行中，完成后自动刷新诊断" : repairTaskRun.summary_text}</span>
+            <div className="progress-track" aria-label="补数进度">
+              <i style={{ width: `${repairTaskProgress(repairTaskRun, startingRepair)}%` }} />
+            </div>
+          </div>
+          <span>{formatDateTime(repairTaskRun.started_at)}{repairTaskRun.duration_seconds ? ` · ${repairTaskRun.duration_seconds}s` : ""}</span>
         </div>
       )}
 
@@ -465,8 +532,21 @@ export default function DataHealthDetailPanel() {
 }
 
 function formatDateTime(value?: string | null) {
-  if (!value) return "-";
-  return String(value).replace("T", " ").slice(0, 16);
+  return formatApiDateTime(value, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function repairTaskProgress(taskRun: ScheduledTaskRun, starting: boolean) {
+  if (starting) return 12;
+  if (taskRun.status === "running") return 55;
+  if (taskRun.status === "completed" || taskRun.status === "partial_completed") return 100;
+  if (taskRun.status === "failed" || taskRun.status === "partial_failed") return 100;
+  return 30;
 }
 
 function formatActionCodeTarget(item: DataHealthRemediationAction) {

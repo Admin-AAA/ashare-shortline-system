@@ -21,7 +21,7 @@ export default function DataHealthPanel({
       <div className="panel-header">
         <div>
           <div className="panel-kicker">数据池与调度</div>
-          <h2>Data Health</h2>
+          <h2>数据健康</h2>
         </div>
         <DatabaseZap size={19} />
       </div>

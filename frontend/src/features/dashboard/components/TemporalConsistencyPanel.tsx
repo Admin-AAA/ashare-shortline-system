@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ShieldAlert, RefreshCw } from "lucide-react";
+import { BarChart3, Play, ShieldAlert, RefreshCw } from "lucide-react";
 import { api } from "../../../api/client";
 
 export default function TemporalConsistencyPanel() {
@@ -58,7 +58,20 @@ export default function TemporalConsistencyPanel() {
       {data && !loading && (
         <>
           {status === "no_data" ? (
-            <div className="bt-error" style={{ marginTop: 12 }}>暂无推荐数据可检查</div>
+            <div className="empty-state actionable" style={{ marginTop: 12 }}>
+              <strong>暂无推荐数据可检查</strong>
+              <span>时态一致性需要基于推荐样本检查，先运行推荐或查看候选是否已产出。</span>
+              <div className="state-actions">
+                <button type="button" onClick={() => navigateToSection("run")}>
+                  <Play size={14} />
+                  运行推荐
+                </button>
+                <button type="button" onClick={() => navigateToSection("pool")}>
+                  <BarChart3 size={14} />
+                  查看候选
+                </button>
+              </div>
+            </div>
           ) : (
             <>
               {/* 汇总 */}
@@ -138,6 +151,10 @@ export default function TemporalConsistencyPanel() {
       )}
     </section>
   );
+}
+
+function navigateToSection(section: "run" | "pool") {
+  window.dispatchEvent(new CustomEvent("ashare:navigate", { detail: { section } }));
 }
 
 function isAbortError(err: unknown) {
