@@ -108,7 +108,7 @@ setups:
 
   - name: 主线强度观察
     when: "is_main_theme == true and primary_excess20 >= 8 and off_high_pct >= -8 and capital_resonance_score >= 60"
-    score_delta: 2
+    score_delta: -2  # 回测：6 笔 WR 16.7% avg -3.61%，主线高位易见顶，改为惩罚
     entry_rule: "主线相对强度仍在，等待平台突破或回踩 MA5 不破后再参与"
     invalid_rule: "相对强度跌破、资金转背离或板块梯队退潮"
 
