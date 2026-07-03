@@ -1,5 +1,5 @@
 import { memo, useState, type MouseEvent } from "react";
-import { Target, AlertTriangle, ChevronDown, ChevronUp, Layers3, BrainCircuit, Trash2, ShieldAlert } from "lucide-react";
+import { Target, AlertTriangle, ChevronDown, ChevronUp, Layers3, BrainCircuit, Trash2, ShieldAlert, Database } from "lucide-react";
 import type { RecommendationCard, SkillSignal } from "../types";
 import ScoreGauge from "./ScoreGauge";
 import AgentReviewPanel from "./AgentReviewPanel";
@@ -36,6 +36,12 @@ export default memo(function EnhancedRecommendationCard({ item, isSelected, onSe
   }
 
   const sectorPenalty = Number(item.feature_snapshot?.sector_diversity_penalty ?? 0);
+  const fs = item.feature_snapshot ?? {};
+  const missingContext = [
+    fs.has_real_capital_flow === false && "资金",
+    fs.has_real_valuation === false && "估值",
+    fs.has_real_news === false && "情报",
+  ].filter(Boolean) as string[];
 
   function toggleAgentReview(event: MouseEvent<HTMLButtonElement>) {
     event.preventDefault();
@@ -76,6 +82,17 @@ export default memo(function EnhancedRecommendationCard({ item, isSelected, onSe
             >
               <Layers3 size={11} />
               -{sectorPenalty}
+            </span>
+          )}
+          {missingContext.length > 0 && (
+            <span
+              className="erc-data-missing"
+              title={`以下数据为默认值，未接入真实数据源：${missingContext.join("、")}`}
+              role="status"
+              aria-label="数据缺失"
+            >
+              <Database size={11} />
+              {missingContext.join("·")}
             </span>
           )}
         </div>
