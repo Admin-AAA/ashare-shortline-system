@@ -196,3 +196,7 @@ risk:
       level: medium
       flag: "换手率过低（1-3%: 38.7% WR, -0.36% 均收益，186 笔验证）"
       score_delta: -4
+    - when: "amount_yi >= 80"
+      level: high
+      flag: "超大成交额风险（>80 亿: 30.0% WR, -1.02% 均收益，机构博弈激烈/流动性陷阱）"
+      score_delta: -10
