@@ -1540,3 +1540,40 @@ def test_local_pool_status_uses_quote_date_for_coverage_reference(monkeypatch):
     assert _coverage_reference_date(None, "2026-05-15") == "2026-05-15"
     monkeypatch.setattr(market_pool, "_latest_allowed_quote_date", lambda today=None: "2026-06-10")
     assert _coverage_reference_date("2026-06-10", "2026-06-10") == "2026-06-09"
+
+
+def test_inject_limit_up_flags_marks_limit_up_stocks(db, monkeypatch):
+    """inject_limit_up_flags 应给涨停股注入 is_limit_up=True + 连板/封单字段，非涨停股保持 False。
+
+    回归保护：limit-up-reseal-relay 的 universe 依赖 is_limit_up，prefilter 阶段
+    缺此字段会导致策略 0 产出（第 87-94 轮修复的根因链）。
+    """
+    fake_rows = [
+        {"code": "601689", "name": "招商银行", "trade_date": "2026-07-03",
+         "limit_times": 2, "open_times": 1, "fd_amount_yi": 0.85,
+         "limit_amount_yi": 1.2, "turnover_ratio": 5.5, "limit_type": "U"},
+    ]
+    monkeypatch.setattr(market_pool, "_load_cached_limit_up_board", lambda db, trade_date=None: fake_rows)
+
+    stocks = [
+        {"code": "601689", "name": "招商银行"},
+        {"code": "000001", "name": "平安银行"},
+    ]
+    hit = market_pool.inject_limit_up_flags(db, stocks, trade_date="2026-07-03")
+
+    assert hit == 1
+    # 涨停股字段注入
+    assert stocks[0]["is_limit_up"] is True
+    assert stocks[0]["limit_up_consecutive_days"] == 2  # limit_times → consecutive_days
+    assert stocks[0]["limit_up_open_times"] == 1
+    assert stocks[0]["limit_up_fd_amount_yi"] == 0.85
+    assert stocks[0]["limit_up_days20"] == 1  # 涨停股默认至少 1
+    assert stocks[0]["twenty_cm_risk_gate"] == "pass"  # 默认 pass，feature_builder 会重算
+    # 非涨停股保持默认
+    assert stocks[1]["is_limit_up"] is False
+    assert stocks[1]["limit_up_consecutive_days"] == 0
+
+
+def test_inject_limit_up_flags_empty_stocks_returns_zero(db):
+    """空 stocks 列表应返回 0，不报错。"""
+    assert market_pool.inject_limit_up_flags(db, [], trade_date="2026-07-03") == 0
