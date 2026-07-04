@@ -208,6 +208,14 @@ def _apply_twenty_cm_risk_factor(stock: dict[str, Any]) -> None:
 
 
 def _apply_leader_factor(stock: dict[str, Any]) -> None:
+    # 龙头候选评分：度量"龙头属性"（主线/板块阶梯/资金共振/涨停/突破），用于选股逻辑，非胜率预测。
+    # 权重设计基于因果（主力资金行为），非 point-biserial 优化。
+    # 诊断（第99轮 T3，148 笔去重样本）：
+    #   - shortline_leader_score 对胜率 point-biserial=0.046（无预测力）
+    #   - capital_resonance/sector_ladder 占 52% 权重但分桶胜率无单调关系（CR: 0→63.6%/1-50→70.5%/>=50→66.7%）
+    #   - 阈值 68 未作为硬门槛（133/148 笔 leader_score<60 仍被推荐，胜率 69.9%）
+    # 结论：权重调整对胜率影响有限，胜率主要由 trailing stop + 策略 universe 决定。
+    # 调整权重前必须回测验证（见 alpha-decay-false-positive 教训），避免破坏选股逻辑。
     score = 0.0
     score += 24.0 if stock.get("is_main_theme") else 0.0
     score += min(28.0, _num(stock.get("sector_ladder_completeness_score")) * 0.28)
