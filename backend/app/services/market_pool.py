@@ -2057,6 +2057,8 @@ def _load_cached_limit_up_board(
     target_trade_date = _normalize_trade_date(trade_date)
     cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=max_age_seconds) if max_age_seconds else None
     stmt = select(LimitUpBoard).order_by(LimitUpBoard.limit_times.desc())
+    # limit_type='U' 涨停 / 'D' 跌停；涨停策略只关心涨停，排除跌停股被误标 is_limit_up
+    stmt = stmt.where(LimitUpBoard.limit_type == "U")
     if target_trade_date:
         stmt = stmt.where(LimitUpBoard.trade_date == target_trade_date)
     if cutoff is not None:
@@ -2322,6 +2324,42 @@ def load_auxiliary_for_stocks(db: Session, codes: list[str], trade_date: str | N
             news=news,
         ),
     }
+
+
+def inject_limit_up_flags(db: Session, stocks: list[dict[str, Any]], trade_date: str | None = None) -> int:
+    """prefilter 前给 stocks 注入涨停板基础字段（is_limit_up / limit_up_consecutive_days 等）。
+
+    涨停是已发生的客观事实，本地 limit_up_board 表已持久化。limit-up-reseal-relay 等
+    策略的 universe 依赖这些字段，但 feature_builder 在 prefilter 之后才运行，导致
+    prefilter 阶段 is_limit_up 全部缺失 → 策略 universe 永远 0 命中。本函数轻量注入
+    （单表查询，~133 行），让 prefilter 能正确识别涨停股。
+    返回命中的涨停股数量。
+    """
+    if not stocks:
+        return 0
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
+    rows = _load_cached_limit_up_board(db, trade_date=target_trade_date)
+    lu_map: dict[str, dict[str, Any]] = {r["code"]: r for r in rows}
+    hit = 0
+    for stock in stocks:
+        code = str(stock.get("code") or "")
+        lu = lu_map.get(code)
+        if lu:
+            hit += 1
+            stock["is_limit_up"] = True
+            stock["limit_up_consecutive_days"] = int(lu.get("limit_times") or 1)
+            stock["limit_up_open_times"] = int(lu.get("open_times") or 0)
+            stock["limit_up_fd_amount_yi"] = float(lu.get("fd_amount_yi") or 0.0)
+            stock["limit_up_limit_amount_yi"] = float(lu.get("limit_amount_yi") or 0.0)
+            stock["limit_up_turnover_ratio"] = float(lu.get("turnover_ratio") or 0.0)
+            # 涨停股必然 limit_up_days20>=1；twenty_cm_risk_gate 默认 pass（feature_builder 会重算覆盖）
+            stock.setdefault("limit_up_days20", 1)
+            stock.setdefault("twenty_cm_risk_gate", "pass")
+        else:
+            stock.setdefault("is_limit_up", False)
+            stock.setdefault("limit_up_consecutive_days", 0)
+            stock.setdefault("limit_up_open_times", 0)
+    return hit
 
 
 def _auxiliary_coverage_for_stocks(
