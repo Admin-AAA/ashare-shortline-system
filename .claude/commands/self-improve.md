@@ -156,42 +156,17 @@ print(f'最大亏损: {r[0]}%')
 
 ### 多实例并发规则
 
-你可能和其他 Claude 实例同时运行此命令。规则：
-- **共享**：`self-improve-log.md`（教训库、最优指标、状态表）——所有实例共同读写
-- **独立**：轮次计数、任务选择——每个实例自主决定，不依赖全局轮次
-- **实例标识**：每轮开始时生成实例 ID，用 shell 命令 `echo "I$$$(date +%s)$$RANDOM" | tail -c 8`（PID + unix秒 + 随机数，8 字符内），写入日志标注，如 `## [A3f2] 2026-07-02 第 N 轮`
-- **不冲突**：不同实例优先选不同任务——读日志最后 5 条看其他实例最近做了什么，避开；如果撞了，随机等 30-120 秒再选（退避）
-- **Git commit**：message 中包含实例标识；git 操作前必须用 flock 锁定 `.git-self-improve.lock`，避免 index 冲突
-- **文件锁**：写日志/状态表前 `flock` 锁定文件，避免多实例同时写入导致内容损坏
+你可能和其他 Claude 实例同时运行。规则：
+- **共享**：`self-improve-log.md`（教训库、指标、状态表）所有实例共同读写
+- **独立**：轮次计数、任务选择——每个实例自主决定
+- **实例标识**：`echo "I$$$(date +%s)$$RANDOM" | tail -c 8`（PID+秒+随机，8 字符内），写入日志标注
+- **不冲突**：读日志最后 5 条 + `git log --oneline -5`，避开其他实例刚做的任务；撞了随机等 30-120 秒
+- **Git**：commit message 含实例标识；多实例并发时用 `.git-self-improve.lock` 锁避免 index 冲突（macOS 无 flock，串行 commit 即可）
 
-**心跳机制（判断实例死活，决定续跑权）：**
-
-每个实例启动时，在 `~/.claude/projects/-Users-wangao/memory/.self-improve-heartbeat.txt` 写入自己的状态：
-```
-{实例ID}|{开始时间戳}|{当前任务}|{进行中}|{最近心跳时间戳}
-```
-
-执行中每完成一个子步骤，更新心跳时间戳（用 `date +%s`）。
-
-续跑判断看心跳：
-- **心跳 < 5 分钟** → 实例还活着，**不抢**，选别的任务
-- **心跳 > 5 分钟** → 实例已死（崩溃/卡住），**接管**续跑它的工作
-- **心跳文件不存在** → 没有进行中的实例，正常选新任务
-
-**文件锁模板（写日志/状态表/git 操作通用）：**
-
-注意：flock 的 `200>file` 语法在 zsh 下会报错，必须用 `bash -c` 包裹：
-```bash
-bash -c '(flock -x 200 && cat >> 目标文件 <<"EOF"
-追加内容
-EOF
-) 200>~/.claude/projects/-Users-wangao/memory/.self-improve.lock'
-```
-
-**git 操作锁（避免 index 冲突）：**
-```bash
-bash -c '(flock -x 200 && git add -A && git commit -m "...") 200>~/Desktop/ashare-shortline-system/.git-self-improve.lock'
-```
+**心跳机制（判断实例死活）：** 每个实例在 `~/.claude/projects/-Users-wangao/memory/.self-improve-heartbeat.txt` 写 `{实例ID}|{开始时间戳}|{当前任务}|{状态}|{最近心跳时间戳}`，执行中每完成一个子步骤更新。续跑判断（阈值 10 分钟——长任务可能 5+ 分钟无心跳但仍在跑）：
+- `进行中` 且 `< 10 分钟` → 实例还活着，**不抢**，选别的任务
+- `进行中` 且 `> 10 分钟` → 实例已死，**接管**续跑
+- `已完成`/无心跳 → 正常选新任务
 
 ### 完成度追踪
 
@@ -439,52 +414,29 @@ LLM agent 的输出质量直接取决于 SKILL.md 的写法。这是 prompt engi
 
 ### 0. 续跑检测（每轮最先做，优先级最高）
 
-cron 可能在一轮没跑完时触发下一轮。先检查是否有未完成的工作要续跑，**用心跳判断实例死活**：
+cron 可能在一轮没跑完时触发下一轮。**用心跳判断实例死活**（阈值 10 分钟——长任务如前端 build/回测可能 5+ 分钟无心跳但仍在跑）：
 
 ```bash
-# 1. 生成实例 ID（PID + unix秒 + 随机数，8 字符内）
 INSTANCE_ID=$(echo "I$$$(date +%s)$$RANDOM" | tail -c 8)
-echo "实例 ID: $INSTANCE_ID"
 NOW_TS=$(date +%s)
-
-# 2. 读心跳文件
 HB_FILE=~/.claude/projects/-Users-wangao/memory/.self-improve-heartbeat.txt
 if [ -f "$HB_FILE" ]; then
   HB_CONTENT=$(cat "$HB_FILE")
-  HB_ID=$(echo "$HB_CONTENT" | cut -d'|' -f1)
-  HB_TASK=$(echo "$HB_CONTENT" | cut -d'|' -f3)
-  HB_STATUS=$(echo "$HB_CONTENT" | cut -d'|' -f4)
   HB_TIME=$(echo "$HB_CONTENT" | cut -d'|' -f5)
   AGE=$((NOW_TS - HB_TIME))
-  echo "心跳: 实例=$HB_ID 任务=$HB_TASK 状态=$HB_STATUS ${AGE}秒前"
-else
-  echo "无心跳文件，没有进行中的实例"
-  HB_STATUS="无"
+  echo "心跳: $HB_CONTENT | ${AGE}秒前"
 fi
-
-# 3. 检查 git 工作树
-cd ~/Desktop/ashare-shortline-system && git status --short
-
-# 4. 读日志最后一条
+cd ~/Desktop/ashare-shortline-system && git status --short | grep -v "dist/"
 tail -30 ~/.claude/projects/-Users-wangao/memory/self-improve-log.md
 ```
 
 **决策树（基于心跳时间，不绑实例 ID）：**
-- 心跳 `状态=进行中` 且 `AGE < 300秒`（5分钟）→ **原实例还活着，不抢**：
-  - 选别的任务（按避让规则，避开心跳里的任务）
-  - 不续跑，不动 git 工作树
-- 心跳 `状态=进行中` 且 `AGE >= 300秒` → **原实例已死（崩溃/卡住），接管**：
-  1. 读日志里上一轮的 `**计划**` 和 `**调研结论**`（落盘的思考）
-  2. 用新实例 ID，日志标注"接管自 [{原实例ID}]"
-  3. 把心跳文件改成自己的 ID
-  4. 接着计划做：git 已改动的步骤跳过，没完成的接着做
-- 心跳 `状态=已完成` 或 `状态=无` → **正常选新任务**
-- 心跳 `状态=中断` → 检查 git status：
-  - 有未提交改动且能跑通测试 → commit 收尾，标记已完成，再选新任务
-  - 改动半成品跑不通测试 → `git stash` 保存，日志记录"中断已 stash"，再选新任务
-- 日志最后一条无 status 字段（旧条目）→ 当作已完成，正常选新任务
+- `状态=进行中` 且 `AGE < 600秒`（10分钟）→ **原实例还活着，不抢**：选别的任务（避开心跳里的任务），不动 git 工作树
+- `状态=进行中` 且 `AGE >= 600秒` → **原实例已死，接管**：读日志上一轮的 `**计划**`+`**调研结论**`，用新实例 ID（标注"接管自 [{原ID}]"），把心跳改成自己 ID，接着计划做（git 已改的步骤跳过）
+- `状态=已完成`/`状态=无`/无心跳 → **正常选新任务**
+- `状态=中断` → 有未提交改动且测试通过则 commit 收尾；半成品跑不通则 `git stash`
 
-**关键原则：不丢失上一轮的任何工作，也不抢活着的实例的工作。** 续跑权由心跳时间决定——活着的实例（<5分钟）不被抢，死掉的实例（>5分钟）被新进程接管。续跑时第一步把上一轮的 `**计划**` 和 `**调研结论**` 读进上下文，这是上一轮思考的存档点。
+**关键原则：不丢失上一轮工作，也不抢活着的实例。** 续跑时第一步把上一轮的 `**计划**`+`**调研结论**` 读进上下文。
 
 ### 1. 状态检查（每轮必做）
 ```bash
@@ -528,102 +480,61 @@ cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && pyt
 - **LLM 层验证（每 N 轮做一次，N≥3）**：触发 1-3 只股票的 skill agent 分析，检查 LLM 输出是否正常、评分是否合理、token 消耗是否可控。记录到日志中（包括 token 消耗量）
 
 ### 5. Git 提交（每轮必做，多实例加锁）
-每轮改动验证通过后，**必须**提交到 git 留痕。多实例下 git 操作必须加锁，避免 index 冲突：
+每轮改动验证通过后**必须**提交。多实例下 git 操作必须加锁（macOS 无 flock，用 `bash -c` 包裹）：
 
 ```bash
-cd ~/Desktop/ashare-shortline-system
-(flock -x 200 && \
-  git add -A && \
-  git commit -m "self-improve [{实例ID}]: T{编号} {简短描述}
+cd ~/Desktop/ashare-shortline-system && git add -A && git commit -m "self-improve [{实例ID}]: T{编号} {简短描述}
 
 - 具体改动 1
-- 验证: pytest X passed
-
-Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
-) 200>~/Desktop/ashare-shortline-system/.git-self-improve.lock
-```
-
-提交信息格式：
-```
-self-improve [{实例ID}]: T{编号} {简短描述}
-
-- 具体改动 1
-- 具体改动 2
 - 验证: pytest X passed / 回测胜率 X% / 性能 Xms→Yms
 
-Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
-规则：
-- 一个任务类型一个 commit，不要把多个 T 混在一起
-- 如果本轮改了多个文件但属于同一任务，一个 commit 即可
-- 如果改动跨任务，拆成多个 commit
-- 不提交 .env、logs/、node_modules/、.venv/ 等敏感/生成文件
-- 提交前 `git status` 确认没有意外文件
-- **git 操作必须用 flock 锁 `.git-self-improve.lock`**，避免多实例同时 commit 导致 index 损坏
+规则：一个任务类型一个 commit（跨任务拆多个）；不提交 .env/logs/node_modules/.venv；提交前 `git status` 确认无意外文件；多实例并发时用 `.git-self-improve.lock` 锁避免 index 冲突。
 
 ### 6. 记录（分三步，防崩溃丢上下文 + 心跳防抢）
 
-**第 1 步：任务开始时立即写"进行中"占位条目 + 初始化心跳**（选完任务后、动手前就写）
-
-写日志（flock 锁定）：
+**第 1 步：任务开始时写"进行中"占位条目 + 初始化心跳**（选完任务、动手前）：
 ```bash
-(flock -x 200 && cat >> ~/.claude/projects/-Users-wangao/memory/self-improve-log.md <<'EOF'
+# 日志（macOS 无 flock，直接追加；多实例并发用 python 写避免损坏）
+python3 -c "
+p='/Users/wangao/.claude/projects/-Users-wangao/memory/self-improve-log.md'
+open(p,'a').write('''
 
 ## [{实例ID}] YYYY-MM-DD HH:MM 第 N 轮
 
 **状态**: 进行中
-**任务类型**: T4 性能优化
-**计划**:
-- 要改什么文件、改什么逻辑
-- 预期效果
-**调研结论**:
-- 边调研边把关键发现写在这里（不要只存在 context 里）
-EOF
-) 200>~/.claude/projects/-Users-wangao/memory/.self-improve.lock
+**任务类型**: T{编号} {简短描述}
+**计划**: - 要改什么、预期效果
+**调研结论**: - 边调研边写关键发现
+''')
+"
+# 心跳（告知其他实例"我在跑这个"）
+NOW_TS=$(date +%s)
+echo "{实例ID}|{开始时间戳}|T{编号}|进行中|$NOW_TS" > ~/.claude/projects/-Users-wangao/memory/.self-improve-heartbeat.txt
 ```
 
-写心跳文件（告知其他实例"我在跑这个任务"）：
+**第 2 步：执行中定期更新心跳**（每改完文件/跑完测试/回测后）：
 ```bash
 NOW_TS=$(date +%s)
-echo "{实例ID}|{开始时间戳}|T4 性能优化|进行中|$NOW_TS" > ~/.claude/projects/-Users-wangao/memory/.self-improve-heartbeat.txt
-```
-
-**第 2 步：执行中定期更新心跳**（每完成一个子步骤就更新）
-
-```bash
-NOW_TS=$(date +%s)
-# 读出现有心跳，只更新时间戳字段
 sed -i '' "s/|进行中|[0-9]*$/|进行中|$NOW_TS/" ~/.claude/projects/-Users-wangao/memory/.self-improve-heartbeat.txt
 ```
 
-更新频率：每改完一个文件、跑完一次测试、跑完一次回测后更新。心跳新鲜 = 实例还活着 = 别人不会抢。
-
-**第 3 步：任务完成后更新日志为"已完成" + 心跳标记完成**（验证通过、commit 之后）
-
-把日志里那条的 `**状态**: 进行中` 改成：
+**第 3 步：任务完成后更新日志"已完成" + 心跳标记完成**（验证通过、commit 后）：
+把日志里那条的 `状态: 进行中` 改为 `状态: 已完成`，并追加：
 ```
-**状态**: 已完成
-**具体改动**:
-- 实际改了什么
-**验证结果**:
-- pytest X passed / 回测胜率 X% / 性能 Xms→Yms
+**具体改动**: - 实际改了什么
+**验证结果**: pytest X passed / 回测胜率 X%
 **Git**: commit {hash} — T{编号} {简短描述}
 **下一步**: next_focus = T{下一个编号}
 ```
-
-心跳文件标记完成：
 ```bash
 NOW_TS=$(date +%s)
 echo "{实例ID}|{开始时间戳}|T{编号}|已完成|$NOW_TS" > ~/.claude/projects/-Users-wangao/memory/.self-improve-heartbeat.txt
 ```
 
-**为什么要三步：**
-- 第 1 步写"进行中"+心跳 → 其他实例知道有活着的实例，不抢
-- 第 2 步更新心跳 → 证明自己还活着（崩溃后心跳不再更新，>5分钟被判定死亡）
-- 第 3 步标记完成 → 释放续跑权，其他实例可以正常选新任务
-
-如果 context 超限崩溃：心跳停在崩溃时刻，>5 分钟后新实例判定已死，接管工作。崩溃时的中间状态（计划+调研结论）都落盘在日志里。
+**为什么要三步：** 第 1 步声明进行中（别人不抢）→ 第 2 步更新心跳（证明还活着，崩溃后 >10 分钟被判定死亡）→ 第 3 步标记完成（释放续跑权）。崩溃时中间状态（计划+调研结论）都落盘在日志里。
 
 ---
 
