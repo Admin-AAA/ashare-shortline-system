@@ -10,6 +10,7 @@ from app.schemas.dashboard import (
     RecommendationExplanation,
     RiskRadar,
     RunProgress,
+    SkillBreakdownItem,
     SkillReviewSummary,
 )
 from app.services.recommendations.explanation import (
@@ -42,6 +43,27 @@ def build_market_temperature(snapshot: dict[str, Any]) -> MarketTemperature:
         regime=_get(breadth, "market_regime") or _get(breadth, "market_sentiment") or _get(breadth, "regime") or "unknown",
         main_industries=list(_get(snapshot, "main_industries", []) or []),
     )
+
+
+def _build_skill_breakdown_items(skill_breakdown: list[dict[str, Any]]) -> list[SkillBreakdownItem]:
+    """从 skill_breakdown_json 提取精简展示项（strategy_name/score/phase/setup_match/evidence）。"""
+    items: list[SkillBreakdownItem] = []
+    for row in skill_breakdown or []:
+        if not isinstance(row, dict):
+            continue
+        items.append(
+            SkillBreakdownItem(
+                strategy_name=str(row.get("strategy_name") or row.get("strategy_id") or ""),
+                score=float(row.get("score") or 0.0),
+                phase=str(row.get("phase") or ""),
+                setup_match=str(row.get("setup_match") or ""),
+                confidence=float(row.get("confidence") or 0.0),
+                evidence=list(row.get("evidence") or []),
+                hard_veto=bool(row.get("hard_veto")),
+                veto_reason=str(row.get("veto_reason") or ""),
+            )
+        )
+    return items
 
 
 def build_cockpit_recommendation(rec: Any, watch: Any = None) -> CockpitRecommendation:
@@ -91,6 +113,7 @@ def build_cockpit_recommendation(rec: Any, watch: Any = None) -> CockpitRecommen
         invalid_rule=_get(rec, "invalid_rule"),
         degraded_reason=_detect_degradation(info_tags, _get(rec, "rationale", "") or ""),
         market_context=market_context,
+        skill_breakdown=_build_skill_breakdown_items(skill_breakdown),
     )
 
 

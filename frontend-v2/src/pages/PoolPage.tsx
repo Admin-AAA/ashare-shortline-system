@@ -309,6 +309,28 @@ function ExpandedRow({
             </div>
           );
         })()}
+        {item.skill_breakdown && item.skill_breakdown.length > 0 && (
+          <div style={{ marginBottom: "var(--space-3)", fontSize: "var(--text-xs)", lineHeight: 1.6 }}>
+            <div className="panel__kicker" style={{ marginBottom: "var(--space-1)" }}>评分分解</div>
+            {item.skill_breakdown.map((sk, i) => (
+              <div key={i} style={{ marginBottom: "var(--space-1)", color: "var(--ink-secondary)" }}>
+                <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, color: "var(--accent-strong)" }}>
+                  {sk.score.toFixed(0)}
+                </span>
+                <span style={{ color: "var(--text-muted)" }}> · {sk.strategy_name}</span>
+                {sk.phase && <span style={{ color: "var(--text-muted)" }}> · {sk.phase}</span>}
+                {sk.hard_veto && (
+                  <span style={{ color: "var(--market-up)" }}> · 否决（{sk.veto_reason || "硬风控"}）</span>
+                )}
+                {sk.evidence.length > 0 && (
+                  <div style={{ color: "var(--text-muted)", marginTop: 2 }}>
+                    {sk.evidence.slice(0, 4).join(" / ")}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
         {(item.entry_rule || item.invalid_rule) && (
           <div style={{ marginBottom: "var(--space-3)", fontSize: "var(--text-xs)", lineHeight: 1.6 }}>
             {item.entry_rule && (

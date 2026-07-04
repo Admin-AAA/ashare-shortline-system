@@ -217,6 +217,18 @@ export type CockpitRecommendation = {
     main_industries?: string[];
     breadth?: Record<string, unknown>;
   };
+  skill_breakdown?: SkillBreakdownItem[];
+};
+
+export type SkillBreakdownItem = {
+  strategy_name: string;
+  score: number;
+  phase: string;
+  setup_match: string;
+  confidence: number;
+  evidence: string[];
+  hard_veto: boolean;
+  veto_reason: string;
 };
 
 export type RiskRadar = {

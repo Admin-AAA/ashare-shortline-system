@@ -12,6 +12,18 @@ class DataQualitySummary(BaseModel):
     missing_fields: list[str] = Field(default_factory=list)
 
 
+class SkillBreakdownItem(BaseModel):
+    """精简的 skill 评分分解项，用于推荐卡片展示（用户看分数怎么来的）."""
+    strategy_name: str = ""
+    score: float = 0.0
+    phase: str = ""
+    setup_match: str = ""
+    confidence: float = 0.0
+    evidence: list[str] = Field(default_factory=list)
+    hard_veto: bool = False
+    veto_reason: str = ""
+
+
 class SkillReviewSummary(BaseModel):
     skill_id: str
     skill_name: str
@@ -75,6 +87,7 @@ class CockpitRecommendation(BaseModel):
     invalid_rule: str | None = None
     degraded_reason: str | None = None
     market_context: dict[str, Any] = Field(default_factory=dict)
+    skill_breakdown: list[SkillBreakdownItem] = Field(default_factory=list)
 
 
 class RiskRadar(BaseModel):
