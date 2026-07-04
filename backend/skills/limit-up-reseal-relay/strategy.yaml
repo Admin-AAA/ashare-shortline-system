@@ -27,7 +27,7 @@ contract:
 
 universe:
   include:
-    - "amount_yi >= 2"
+    - "amount_yi >= 3"
     - "turnover_rate >= 3"
     - "turnover_rate <= 12"
     - "is_limit_up == true"
