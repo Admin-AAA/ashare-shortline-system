@@ -137,6 +137,11 @@ def test_fetch_tushare_quotes_uses_batch_quote_api(monkeypatch):
     assert first["free_mv_yi"] == 120.0
     assert first["total_mv_yi"] == 180.0
     assert first["amount_yi"] > 0
+    # bak_daily amount 单位是万元，转亿元应 *10000/1e8（不是 *1000/1e8 少算 10 倍）
+    # 456789 万元 = 4.56789e9 元 = 45.6789 亿；旧 bug 会得 4.56789 亿（少算 10 倍）
+    assert abs(first["amount_yi"] - 45.6789) < 1e-4, (
+        f"bak_daily amount 单位转换错误: {first['amount_yi']}（应 45.6789 亿，万元×10000/1e8）"
+    )
 
 
 def test_fetch_tushare_quotes_prefers_local_stock_basics(monkeypatch):
