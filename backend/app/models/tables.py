@@ -701,7 +701,7 @@ class RecommendationRun(Base):
     run_name: Mapped[str] = mapped_column(String(120), default="")
     run_mode: Mapped[str] = mapped_column(String(20), default="formal")
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
     universe_count: Mapped[int] = mapped_column(Integer, default=0)
     recommended_count: Mapped[int] = mapped_column(Integer, default=0)
