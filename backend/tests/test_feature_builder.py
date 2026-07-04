@@ -146,6 +146,16 @@ def test_dsa_macd_score_golden_cross():
     assert stock["dsa_macd_score"] == 15
 
 
+def test_dsa_macd_score_data_driven():
+    # 数据驱动（T3 第80轮）：多头/下穿零轴被推荐后 WR 高，提分；空头 WR=0% 降分
+    assert MACD_SCORE_MAP["零轴上金叉"] == 15
+    assert MACD_SCORE_MAP["金叉"] == 12
+    assert MACD_SCORE_MAP["多头"] == 12  # 提分（原8）：被推荐后 WR=100%
+    assert MACD_SCORE_MAP["下穿零轴"] == 5  # 提分（原0）：被推荐后 WR=75%
+    assert MACD_SCORE_MAP["空头"] == 0  # 降分（原2）：WR=0%
+    assert MACD_SCORE_MAP["死叉"] == 0
+
+
 def test_dsa_rsi_score():
     # 数据驱动（T3 第78轮）：rsi[40,50) 提分到 10（被推荐后 WR=100%）
     assert _rsi_score(55) == 8   # [50,70]
