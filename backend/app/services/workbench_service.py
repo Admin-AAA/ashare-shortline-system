@@ -16,7 +16,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.orm import Session
 
@@ -64,6 +64,7 @@ from app.services.market_data import MarketDataError, get_market_universe
 from app.services.market_pool import (
     get_market_snapshot_from_pool,
     get_market_universe_from_pool,
+    inject_limit_up_flags,
     refresh_block_trade,
     refresh_capital_flows_for_codes,
     refresh_concept_sectors,
@@ -1003,6 +1004,70 @@ def list_run_recommendations(db: Session, run_id: str) -> list[dict[str, Any]]:
     return _serialize_recommendations_batched(db, recs)
 
 
+def list_recommendation_history(
+    db: Session,
+    *,
+    run_mode: str = "formal",
+    code: str | None = None,
+    label: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """跨 run 推荐历史（带 outcome），支持分页 + 筛选。
+
+    填补北极星"推荐历史记录页"缺口：用户可查看所有推荐过的股票及其实际表现。
+    按 (trade_date, code) 去重，保留 final_score 最高的（回测 DB 累积重复 run）。
+    """
+    # 基础查询：推荐 + run + outcome，过滤 run_mode
+    stmt = (
+        select(Recommendation, RecommendationOutcome)
+        .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
+        .outerjoin(
+            RecommendationOutcome,
+            RecommendationOutcome.recommendation_id == Recommendation.recommendation_id,
+        )
+        .where(RecommendationRun.run_mode == run_mode)
+    )
+    if code:
+        stmt = stmt.where(Recommendation.code == code)
+    if label:
+        # label 筛选：success/failed/missed/pending
+        if label == "pending":
+            stmt = stmt.where(
+                or_(
+                    RecommendationOutcome.outcome_label.is_(None),
+                    RecommendationOutcome.outcome_label == "pending",
+                )
+            )
+        else:
+            stmt = stmt.where(RecommendationOutcome.outcome_label == label)
+
+    # 按 trade_date DESC, final_score DESC 排序后去重（保留每组 (trade_date, code) 第一条 = 最高分）
+    stmt = stmt.order_by(Recommendation.trade_date.desc(), Recommendation.final_score.desc())
+    rows = db.execute(stmt).all()
+
+    seen: set[tuple[str, str]] = set()
+    deduped_recs: list[Recommendation] = []
+    outcome_map: dict[str, RecommendationOutcome] = {}
+    for rec, outcome in rows:
+        key = (str(rec.trade_date), str(rec.code))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped_recs.append(rec)
+        if outcome is not None:
+            outcome_map[rec.recommendation_id] = outcome
+
+    total = len(deduped_recs)
+    page = deduped_recs[offset : offset + limit]
+    items = _serialize_recommendations_batched(db, page)
+    for item in items:
+        rec_id = item.get("recommendation_id")
+        item["outcome"] = _serialize_outcome(outcome_map.get(rec_id)) if rec_id else None
+
+    return {"items": items, "total": total, "offset": offset, "limit": limit, "run_mode": run_mode}
+
+
 def get_run_replay_analysis(db: Session, run_id: str) -> dict[str, Any] | None:
     run = db.get(RecommendationRun, run_id)
     if run is None:
@@ -1387,6 +1452,10 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     if not scoped_stocks:
         raise ValueError("当前市场范围内没有可运行的股票，请调整预设范围后重试")
     snapshot.setdefault("breadth", {})["scoped_candidate_count"] = len(scoped_stocks)
+    # prefilter 前注入涨停板字段（涨停是客观事实，limit-up-reseal-relay 的 universe 依赖此字段）
+    lu_hit = inject_limit_up_flags(db, scoped_stocks, trade_date=str(snapshot.get("trade_date") or ""))
+    if lu_hit:
+        logger.info("prefilter 前注入涨停标记: %d 只 (run=%s)", lu_hit, run_id)
     min_prefilter_count = _resolve_prefilter_target_count(params, selected_skill_count=len(selected_skills))
     prefiltered_stocks, prefilter_audit = apply_prefilters(
         scoped_stocks,

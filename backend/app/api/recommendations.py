@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -6,11 +6,34 @@ from app.services.workbench_service import (
     delete_recommendation,
     get_recommendation_detail,
     get_run_replay_analysis,
+    list_recommendation_history,
     save_review_note,
     set_watch_status,
 )
 
 router = APIRouter(prefix="/api/recommendations", tags=["recommendations"])
+
+
+@router.get("/history")
+def history(
+    run_mode: str = Query(default="formal"),
+    code: str | None = Query(default=None),
+    label: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """跨 run 推荐历史（带 outcome），支持分页 + 筛选。
+
+    填补推荐历史记录页缺口：用户查看所有推荐过的股票及其实际表现。
+    """
+    if run_mode not in {"formal", "experiment"}:
+        raise HTTPException(status_code=400, detail="run_mode must be formal or experiment")
+    if label is not None and label not in {"success", "failed", "missed", "pending"}:
+        raise HTTPException(status_code=400, detail="label must be success/failed/missed/pending")
+    return list_recommendation_history(
+        db, run_mode=run_mode, code=code, label=label, limit=limit, offset=offset
+    )
 
 
 @router.get("/runs/{run_id}/replay-analysis")

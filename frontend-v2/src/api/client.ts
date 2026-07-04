@@ -11,6 +11,7 @@ import type {
   DataHealthRemediationResult,
   RecommendationCard,
   RecommendationDetail,
+  RecommendationHistoryResponse,
   RecommendationOutcome,
   ReplayAnalysisResult,
   DataSourceHealthRow,
@@ -204,6 +205,21 @@ export const api = {
   matrixRunStatus: () => request<{ task_run: ScheduledTaskRun | null }>("/api/runs/matrix/status"),
 
   recommendationDetail: (id: string) => request<RecommendationDetail>(`/api/recommendations/${id}`),
+  recommendationHistory: (query?: {
+    run_mode?: string;
+    code?: string;
+    label?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const params = new URLSearchParams();
+    params.set("run_mode", query?.run_mode ?? "formal");
+    if (query?.code) params.set("code", query.code);
+    if (query?.label) params.set("label", query.label);
+    if (query?.limit) params.set("limit", String(query.limit));
+    if (query?.offset) params.set("offset", String(query.offset));
+    return request<RecommendationHistoryResponse>(`/api/recommendations/history?${params.toString()}`);
+  },
   replayAnalysis: (runId: string) => request<ReplayAnalysisResult>(`/api/recommendations/runs/${runId}/replay-analysis`),
   watchRecommendation: (id: string, payload: { watch_status?: string; note?: string | null }) =>
     request<{ recommendation_id: string; watch_status: string; note?: string | null }>(`/api/recommendations/${id}/watch`, json("POST", payload)),

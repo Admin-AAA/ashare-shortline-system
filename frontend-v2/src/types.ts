@@ -1146,6 +1146,22 @@ export type RecommendationHistoryRow = {
   status: string;
 };
 
+export type RecommendationHistoryResponse = {
+  items: (RecommendationCard & { outcome: RecommendationOutcome | null })[];
+  total: number;
+  offset: number;
+  limit: number;
+  run_mode: string;
+};
+
+export type RecommendationHistoryQuery = {
+  run_mode?: string;
+  code?: string;
+  label?: "success" | "failed" | "missed" | "pending";
+  limit?: number;
+  offset?: number;
+};
+
 export type RecommendationDetail = RecommendationCard & {
   run: RunSummary | null;
   outcome: RecommendationOutcome | null;
