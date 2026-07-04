@@ -214,6 +214,10 @@ def _apply_leader_factor(stock: dict[str, Any]) -> None:
     score += min(24.0, _num(stock.get("capital_resonance_score")) * 0.24)
     score += 16.0 if bool(stock.get("is_limit_up")) or _num(stock.get("pct")) >= 5 else 0.0
     score += 8.0 if bool(stock.get("breakout20")) else 0.0
+    # breakout60 加入评分（T3 第82轮）：近期预测力增强（+0.023→+0.190），
+    # 6-7月 breakout60=True WR=85.7% avg+5.20%（vs False 54.3%）
+    # 反事实验证：加 8 分新增 41 笔推荐 WR=58.5% 净=+46.57%（0 移除，纯增量）
+    score += 8.0 if bool(stock.get("breakout60")) else 0.0
     score = round(min(100.0, score), 2)
     stock["shortline_leader_score"] = score
     stock["is_shortline_leader_candidate"] = score >= 68
