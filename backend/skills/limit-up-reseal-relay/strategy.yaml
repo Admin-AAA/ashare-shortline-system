@@ -27,7 +27,7 @@ contract:
 
 universe:
   include:
-    - "amount_yi >= 3"
+    - "amount_yi >= 2"
     - "turnover_rate >= 3"
     - "turnover_rate <= 12"
     - "is_limit_up == true"
@@ -48,10 +48,7 @@ prefilter:
         reason: "board_height_too_high"
       - when: "limit_up_fd_amount_yi >= 0.12"
         reason: "seal_amount_too_low"
-      - when: "sector_ladder_completeness_score >= 35"
-        reason: "sector_ladder_missing"
-      - when: "capital_resonance_score >= 45"
-        reason: "capital_resonance_missing"
+      # sector_ladder_completeness_score / capital_resonance_score 移到 scoring 加分（prefilter 阶段无此字段，硬门槛导致 0 产出）
     include_any:
       - when: "limit_up_open_times >= 1 and limit_up_open_times <= 8"
         reason: "requires_reseal_window"
