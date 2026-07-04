@@ -526,7 +526,7 @@ def fetch_limit_up_board(trade_date: str | None = None) -> list[dict[str, Any]]:
                     "trade_date": _fmt_date(str(row.get("trade_date", td))),
                     "pct_chg": _f(row.get("pct_chg")),
                     "limit_times": int(row.get("limit_times") or 0),
-                    "limit_type": str(row.get("limit", "")),
+                    "limit_type": limit_type,  # 循环已按 U/D 调 API，直接用循环变量（row.get("limit") 字段名不可靠）
                     "first_time": str(row.get("first_time", "")),
                     "last_time": str(row.get("last_time", "")),
                     "open_times": int(row.get("open_times") or 0),
