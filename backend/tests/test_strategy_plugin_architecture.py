@@ -466,3 +466,57 @@ def test_dsa_turnover_too_low_risk_rule():
     risk_flags2 = signal2.get("risk_flags") or []
     has_low_turnover2 = any("换手率过低" in flag for flag in risk_flags2)
     assert not has_low_turnover2, f"≥5% 不应触发: {risk_flags2}"
+
+
+def test_high_range_require_setup_and_observation_hard_veto():
+    """回归测试：high-range-breakout-momentum 的 require_setup + 阶段高点蓄势观察 hard_veto。
+
+    防止未来误删这两个保护：
+    - require_setup: setup 未命中时 hard_veto（突破接力必须有明确入场 setup）
+    - 阶段高点蓄势观察 hard_veto: "观察"语义=不确定，不该入场
+
+    历史 23 笔 high-range 推荐全部是 null setup 或观察类（WR 30.4%），
+    改动后应全部 hard_veto（回放验证 23/23 否决）。
+    """
+    skills = _skills_by_id()
+    skill = skills["high-range-breakout-momentum"]
+
+    # 1. null setup: breakout60=true 但 setup 量价条件不满足（pct>7, vol5_20<1.15）
+    null_setup_stock = _stock(
+        "000001",
+        breakout60=True, breakout20=True,
+        pos60=90, pos120=85, off_high60_pct=-3,
+        vol5_20=1.05,  # < 1.15 不满足 60日 setup
+        pct=8.0,  # > 7 不满足 60日 setup
+        chg20=5.0,  # < 8 不满足 20日 setup
+        support_ma5=True, turnover_rate=3.0,
+        max_dd20=-5, dist60=10,
+    )
+    signal = run_strategy(skill, null_setup_stock, ["半导体"], skip_universe_check=True)
+    assert signal["hard_veto"] is True, f"null setup 应 hard_veto: {signal}"
+    assert "require_setup" in signal["veto_reason"] or "未命中" in signal["veto_reason"]
+
+    # 2. 阶段高点蓄势观察: breakout60=false, pos60>=85, off_high60_pct>=-6
+    observation_stock = _stock(
+        "000002",
+        breakout60=False, breakout20=False,
+        pos60=90, pos120=85, off_high60_pct=-3,
+        vol5_20=1.3, pct=2.0, support_ma5=True,
+    )
+    signal2 = run_strategy(skill, observation_stock, ["半导体"], skip_universe_check=True)
+    assert signal2["hard_veto"] is True, f"阶段高点蓄势观察应 hard_veto: {signal2}"
+    assert "观察类 setup" in signal2["veto_reason"]
+
+    # 3. 真突破 setup 应放行（60日新高放量突破）
+    true_breakout_stock = _stock(
+        "000003",
+        breakout60=True,
+        pos60=85, pos120=75, off_high60_pct=-2,
+        vol5_20=1.2,  # >= 1.15
+        pct=3.0,  # 1.5 <= pct <= 7
+        support_ma5=True, turnover_rate=3.0,
+        max_dd20=-5, dist60=10,
+    )
+    signal3 = run_strategy(skill, true_breakout_stock, ["半导体"], skip_universe_check=True)
+    assert signal3["hard_veto"] is False, f"真突破应放行: {signal3}"
+    assert signal3["setup_match"] == "60日新高放量突破"
