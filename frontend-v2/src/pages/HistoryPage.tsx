@@ -53,7 +53,7 @@ export function HistoryPage() {
       <div className="panel__header">
         <span className="panel__kicker">复盘</span>
         <h2 className="panel__title">推荐历史</h2>
-        <span style={{ marginLeft: "auto", color: "var(--muted)", fontSize: 13 }}>
+        <span style={{ marginLeft: "auto", color: "var(--muted)", fontSize: "var(--text-base)" }}>
           共 {total} 笔 · 当前 {page * pageSize + 1}-{Math.min((page + 1) * pageSize, total)}
         </span>
       </div>
@@ -69,7 +69,7 @@ export function HistoryPage() {
           borderBottom: "1px solid var(--border)",
         }}
       >
-        <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: 13 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-base)" }}>
           <span style={{ color: "var(--muted)" }}>口径</span>
           <select
             value={runMode}
@@ -83,7 +83,7 @@ export function HistoryPage() {
             <option value="experiment">experiment</option>
           </select>
         </label>
-        <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: 13 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-base)" }}>
           <span style={{ color: "var(--muted)" }}>结果</span>
           <select
             value={label}
@@ -100,7 +100,7 @@ export function HistoryPage() {
             <option value="pending">待标注</option>
           </select>
         </label>
-        <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: 13 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-base)" }}>
           <span style={{ color: "var(--muted)" }}>代码</span>
           <input
             value={codeInput}
@@ -114,7 +114,7 @@ export function HistoryPage() {
           <Search size={13} /> 查询
         </button>
         {hasOutcome && (
-          <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--muted)" }}>
+          <span style={{ marginLeft: "auto", fontSize: "var(--text-sm)", color: "var(--muted)" }}>
             本页胜率 {winCount}/{items.length} = {((winCount / items.length) * 100).toFixed(1)}%
           </span>
         )}
@@ -160,12 +160,12 @@ export function HistoryPage() {
                   >
                     <td style={tdStyle}>{it.trade_date}</td>
                     <td style={{ ...tdStyle, fontFamily: "var(--font-mono)" }}>
-                      {it.code} <span style={{ color: "var(--muted)", fontSize: 12 }}>{it.name}</span>
+                      {it.code} <span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }}>{it.name}</span>
                     </td>
                     <td style={{ ...tdStyle, textAlign: "right", fontFamily: "var(--font-mono)" }}>
                       {it.final_score.toFixed(1)}
                     </td>
-                    <td style={{ ...tdStyle, color: "var(--muted)", fontSize: 12 }}>
+                    <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>
                       {it.setup_type || "—"}
                     </td>
                     <td style={{ ...tdStyle, color: labelColor, fontWeight: 600 }}>
@@ -181,10 +181,10 @@ export function HistoryPage() {
                     >
                       {ret == null ? "—" : `${ret >= 0 ? "+" : ""}${ret.toFixed(2)}%`}
                     </td>
-                    <td style={{ ...tdStyle, color: "var(--muted)", fontSize: 12 }}>
+                    <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>
                       {o?.exit_reason ?? "—"}
                     </td>
-                    <td style={{ ...tdStyle, color: "var(--muted)", fontSize: 12 }}>
+                    <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>
                       {o?.holding_days != null ? `${o.holding_days}d` : "—"}
                     </td>
                   </tr>
@@ -206,7 +206,7 @@ export function HistoryPage() {
             <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0} style={pageBtnStyle(page === 0)}>
               上一页
             </button>
-            <span style={{ fontSize: 13, color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
+            <span style={{ fontSize: "var(--text-base)", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
               {page + 1} / {totalPages}
             </span>
             <button
@@ -229,7 +229,7 @@ const selectStyle: React.CSSProperties = {
   border: "1px solid var(--border)",
   borderRadius: 6,
   padding: "6px 10px",
-  fontSize: 13,
+  fontSize: "var(--text-base)",
 };
 
 const btnStyle: React.CSSProperties = {
@@ -241,14 +241,14 @@ const btnStyle: React.CSSProperties = {
   border: "none",
   borderRadius: 6,
   padding: "6px 12px",
-  fontSize: 13,
+  fontSize: "var(--text-base)",
   cursor: "pointer",
 };
 
 const tableStyle: React.CSSProperties = {
   width: "100%",
   borderCollapse: "collapse",
-  fontSize: 13,
+  fontSize: "var(--text-base)",
 };
 
 const thStyle: React.CSSProperties = {
@@ -256,7 +256,7 @@ const thStyle: React.CSSProperties = {
   padding: "var(--space-2) var(--space-3)",
   color: "var(--muted)",
   fontWeight: 500,
-  fontSize: 12,
+  fontSize: "var(--text-sm)",
   borderBottom: "1px solid var(--border)",
 };
 
@@ -275,7 +275,7 @@ const pageBtnStyle = (disabled: boolean): React.CSSProperties => ({
   border: "1px solid var(--border)",
   borderRadius: 6,
   padding: "6px 12px",
-  fontSize: 13,
+  fontSize: "var(--text-base)",
   cursor: disabled ? "default" : "pointer",
   opacity: disabled ? 0.5 : 1,
 });
