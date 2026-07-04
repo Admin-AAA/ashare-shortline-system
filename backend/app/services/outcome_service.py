@@ -36,11 +36,13 @@ MAX_ENTRY_GAP_PCT = 10.0       # 跳空高开 > 10% 则放弃入场（历史数�
 
 # 条件 trailing stop（移动止盈）：仅在既未触及 stop_loss 也未触及 take_profit 的 bar 上激活
 # 回测验证（235 笔 formal 样本，min 时序口径，扣费 0.10%/笔）：
-#   胜率 49.4%→63.4%、盈亏比 1.38→1.68、总收益 +232→+604、最大亏损 -15.19%→-7.17%
+#   胜率 49.4%→66.8%、盈亏比 1.38→1.89、总收益 +232→+685、最大亏损 -15.19%→-7.17%
+# 时间分割验证（防过拟合）：前半 盈亏比 1.97→2.40，后半（样本外）1.51→1.67，两半均正向
+# 网格搜索结论：activate=2.0 主导（更早锁利避开回吐），callback=0.8 次要；高 activate(4+/5+) 有跳空尾部风险
 # 关键约束：trailing 优先级低于 take_profit，故不破坏原有 TP 路径（take_profit_hit 完整保留）
 # 时序口径：触发价取 min(open, 触发价)——跳空低开时以 open 成交（更差），max 会虚假高估出场价
-TRAILING_STOP_ACTIVATE_PCT = 3.0   # high 达 entry +3% 激活
-TRAILING_STOP_CALLBACK_PCT = 1.5   # 自峰值 high 回撤 1.5% 触发退出
+TRAILING_STOP_ACTIVATE_PCT = 2.0   # high 达 entry +2% 激活（原 3.0；2.0 让更多交易在亏损前以小赚离场）
+TRAILING_STOP_CALLBACK_PCT = 0.8   # 自峰值 high 回撤 0.8% 触发退出（原 1.5；更紧锁利，loss 3.67→3.13）
 
 OUTCOME_PENDING = "pending"
 OUTCOME_SUCCESS = "success"
@@ -1590,10 +1592,10 @@ def _resolve_exit(
       1. 第一轮用原 stop_loss/take_profit 逻辑找出基准 exit；
          若基准是 take_profit_*（含 both_hit），直接返回——trailing 不抢跑 TP 路径。
       2. 若基准是 stop_loss_*/horizon_close（即 holding 期内未触及 TP），
-         第二轮应用 trailing stop 重模拟：high 达 entry+3% 激活，自峰值回撤 1.5% 锁利。
+         第二轮应用 trailing stop 重模拟：high 达 entry+2% 激活，自峰值回撤 0.8% 锁利。
 
-    回测验证（235 笔 formal 样本，扣费 0.10%/笔）：胜率 49.4%→63.4%、盈亏比 1.38→1.68、
-    总收益 +232→+604、最大亏损 -15.19%→-7.17%。关键：take_profit 路径完整保留。
+    回测验证（235 笔 formal 样本，扣费 0.10%/笔）：胜率 49.4%→66.8%、盈亏比 1.38→1.89、
+    总收益 +232→+685、最大亏损 -15.19%→-7.17%。关键：take_profit 路径完整保留。
     时序口径：触发价取 min(open, 触发价)，跳空低开时以 open 成交（max 会虚假高估）。
     """
     # 第一轮：基准 exit（原 stop_loss/take_profit 逻辑）
@@ -1665,7 +1667,7 @@ def _resolve_exit_with_trailing(
     """应用条件 trailing stop 重模拟。
 
     调用前已确认基准 exit 非 take_profit_*，故 holding 期内 high 从未达 take_profit_price。
-    trailing 在 high≥entry+3% 激活，自峰值 high 回撤 1.5% 锁利。
+    trailing 在 high≥entry+2% 激活，自峰值 high 回撤 0.8% 锁利。
     日线 bar 内时序不确定，触发价取 min(open, hwm-callback)：跳空低开时以 open 成交（更差），
     避免虚假高估出场价（max 口径会制造 100% 胜率的虚假回测）。
     """
