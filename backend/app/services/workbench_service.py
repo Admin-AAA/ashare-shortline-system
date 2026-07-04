@@ -1017,50 +1017,70 @@ def list_recommendation_history(
 
     填补北极星"推荐历史记录页"缺口：用户可查看所有推荐过的股票及其实际表现。
     按 (trade_date, code) 去重，保留 final_score 最高的（回测 DB 累积重复 run）。
+
+    性能：先只取 recommendation_id + trade_date + code + final_score（轻量列，不取整行），
+    Python 去重后切片分页，再只对 50 个 id 批量取详情。避免查全部 1584 行整行 + outcome。
     """
-    # 基础查询：推荐 + run + outcome，过滤 run_mode
-    stmt = (
-        select(Recommendation, RecommendationOutcome)
-        .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
-        .outerjoin(
-            RecommendationOutcome,
-            RecommendationOutcome.recommendation_id == Recommendation.recommendation_id,
+    # 第 1 步：轻量查询——只取去重所需列（不取 feature_snapshot_json 等大字段）
+    id_stmt = (
+        select(
+            Recommendation.recommendation_id,
+            Recommendation.trade_date,
+            Recommendation.code,
+            Recommendation.final_score,
         )
+        .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
         .where(RecommendationRun.run_mode == run_mode)
+        .order_by(Recommendation.trade_date.desc(), Recommendation.final_score.desc())
     )
     if code:
-        stmt = stmt.where(Recommendation.code == code)
+        id_stmt = id_stmt.where(Recommendation.code == code)
     if label:
-        # label 筛选：success/failed/missed/pending
         if label == "pending":
-            stmt = stmt.where(
+            id_stmt = id_stmt.outerjoin(
+                RecommendationOutcome,
+                RecommendationOutcome.recommendation_id == Recommendation.recommendation_id,
+            ).where(
                 or_(
                     RecommendationOutcome.outcome_label.is_(None),
                     RecommendationOutcome.outcome_label == "pending",
                 )
             )
         else:
-            stmt = stmt.where(RecommendationOutcome.outcome_label == label)
+            id_stmt = id_stmt.join(
+                RecommendationOutcome,
+                RecommendationOutcome.recommendation_id == Recommendation.recommendation_id,
+            ).where(RecommendationOutcome.outcome_label == label)
 
-    # 按 trade_date DESC, final_score DESC 排序后去重（保留每组 (trade_date, code) 第一条 = 最高分）
-    stmt = stmt.order_by(Recommendation.trade_date.desc(), Recommendation.final_score.desc())
-    rows = db.execute(stmt).all()
+    id_rows = db.execute(id_stmt).all()
 
     seen: set[tuple[str, str]] = set()
-    deduped_recs: list[Recommendation] = []
-    outcome_map: dict[str, RecommendationOutcome] = {}
-    for rec, outcome in rows:
-        key = (str(rec.trade_date), str(rec.code))
+    deduped_ids: list[str] = []
+    for rec_id, td, c, _score in id_rows:
+        key = (str(td), str(c))
         if key in seen:
             continue
         seen.add(key)
-        deduped_recs.append(rec)
-        if outcome is not None:
-            outcome_map[rec.recommendation_id] = outcome
+        deduped_ids.append(rec_id)
 
-    total = len(deduped_recs)
-    page = deduped_recs[offset : offset + limit]
-    items = _serialize_recommendations_batched(db, page)
+    total = len(deduped_ids)
+    page_ids = deduped_ids[offset : offset + limit]
+    if not page_ids:
+        return {"items": [], "total": total, "offset": offset, "limit": limit, "run_mode": run_mode}
+
+    # 第 2 步：只对分页的 id 批量取详情（推荐 + outcome）
+    page_recs = db.scalars(
+        select(Recommendation).where(Recommendation.recommendation_id.in_(page_ids))
+    ).all()
+    rec_by_id = {r.recommendation_id: r for r in page_recs}
+    page_outcomes = db.scalars(
+        select(RecommendationOutcome).where(RecommendationOutcome.recommendation_id.in_(page_ids))
+    ).all()
+    outcome_map = {o.recommendation_id: o for o in page_outcomes}
+
+    # 按去重后的 id 顺序排序（保证 trade_date DESC, final_score DESC）
+    ordered_recs = [rec_by_id[rid] for rid in page_ids if rid in rec_by_id]
+    items = _serialize_recommendations_batched(db, ordered_recs)
     for item in items:
         rec_id = item.get("recommendation_id")
         item["outcome"] = _serialize_outcome(outcome_map.get(rec_id)) if rec_id else None
