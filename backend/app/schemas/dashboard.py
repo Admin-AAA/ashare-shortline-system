@@ -70,6 +70,9 @@ class CockpitRecommendation(BaseModel):
     secondary_buy: float | None = None
     stop_loss: float | None = None
     take_profit: float | None = None
+    recommend_price: float | None = None
+    entry_rule: str | None = None
+    invalid_rule: str | None = None
     degraded_reason: str | None = None
 
 

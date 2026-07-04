@@ -205,6 +205,14 @@ export type CockpitRecommendation = {
   watch_status: string;
   consensus_label: string;
   data_quality: DataQualitySummary;
+  ideal_buy?: number | null;
+  secondary_buy?: number | null;
+  stop_loss?: number | null;
+  take_profit?: number | null;
+  recommend_price?: number | null;
+  entry_rule?: string | null;
+  invalid_rule?: string | null;
+  degraded_reason?: string | null;
 };
 
 export type RiskRadar = {

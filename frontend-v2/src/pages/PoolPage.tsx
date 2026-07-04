@@ -237,6 +237,8 @@ function ExpandedRow({
   onViewHistory: () => void;
 }) {
   const confidence = deriveConfidence(item);
+  const hasTradeParams =
+    item.recommend_price != null || item.stop_loss != null || item.take_profit != null;
   return (
     <div
       style={{
@@ -248,12 +250,50 @@ function ExpandedRow({
         gap: "var(--space-4)",
       }}
     >
-      {/* 左：买点原因 / 风险提示 */}
+      {/* 左：交易参数 + 买点原因 / 风险提示 */}
       <div>
+        {hasTradeParams && (
+          <div style={{ marginBottom: "var(--space-3)" }}>
+            <div className="panel__kicker" style={{ marginBottom: "var(--space-2)" }}>交易参数</div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(3, 1fr)",
+                gap: "var(--space-2)",
+              }}
+            >
+              <TradeMetric label="推荐价" value={item.recommend_price} />
+              <TradeMetric label="止损" value={item.stop_loss} tone="down" />
+              <TradeMetric label="止盈" value={item.take_profit} tone="up" />
+            </div>
+            {(item.ideal_buy != null || item.secondary_buy != null) && (
+              <div style={{ marginTop: "var(--space-2)", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+                理想买点 {item.ideal_buy != null ? item.ideal_buy.toFixed(2) : "—"}
+                {item.secondary_buy != null ? ` · 次选 ${item.secondary_buy.toFixed(2)}` : ""}
+              </div>
+            )}
+          </div>
+        )}
         <div className="panel__kicker" style={{ marginBottom: "var(--space-2)" }}>买点原因</div>
         <p style={{ margin: 0, marginBottom: "var(--space-3)", color: "var(--ink-secondary)", fontSize: "var(--text-sm)", lineHeight: 1.6 }}>
           {item.rationale || "—"}
         </p>
+        {(item.entry_rule || item.invalid_rule) && (
+          <div style={{ marginBottom: "var(--space-3)", fontSize: "var(--text-xs)", lineHeight: 1.6 }}>
+            {item.entry_rule && (
+              <div style={{ marginBottom: "var(--space-1)" }}>
+                <span style={{ color: "var(--text-muted)" }}>入场规则 · </span>
+                <span style={{ color: "var(--ink-secondary)" }}>{item.entry_rule}</span>
+              </div>
+            )}
+            {item.invalid_rule && (
+              <div>
+                <span style={{ color: "var(--text-muted)" }}>失效规则 · </span>
+                <span style={{ color: "var(--ink-secondary)" }}>{item.invalid_rule}</span>
+              </div>
+            )}
+          </div>
+        )}
         <div className="panel__kicker" style={{ marginBottom: "var(--space-2)" }}>风险标签</div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-1)" }}>
           {item.risk_tags.length === 0 ? (
@@ -359,6 +399,41 @@ function ConfidenceMeter({ confidence }: { confidence: Confidence }) {
             transition: "width var(--motion-normal)",
           }}
         />
+      </div>
+    </div>
+  );
+}
+
+/** 交易参数指标块 —— 推荐价/止损/止盈等关键价格一屏可见 */
+function TradeMetric({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number | null | undefined;
+  tone?: "up" | "down";
+}) {
+  const color =
+    value == null
+      ? "var(--text-muted)"
+      : tone === "up"
+        ? "var(--market-up)"
+        : tone === "down"
+          ? "var(--market-down)"
+          : "var(--ink)";
+  return (
+    <div
+      style={{
+        background: "var(--surface)",
+        border: "1px solid var(--line)",
+        borderRadius: "var(--radius-sm, 6px)",
+        padding: "var(--space-2) var(--space-3)",
+      }}
+    >
+      <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginBottom: 2 }}>{label}</div>
+      <div style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 15, fontWeight: 600, color }}>
+        {value != null ? value.toFixed(2) : "—"}
       </div>
     </div>
   );

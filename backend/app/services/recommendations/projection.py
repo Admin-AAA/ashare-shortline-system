@@ -85,6 +85,9 @@ def build_cockpit_recommendation(rec: Any, watch: Any = None) -> CockpitRecommen
         secondary_buy=_as_float_or_none(feature_snapshot.get("secondary_buy")),
         stop_loss=_as_float_or_none(feature_snapshot.get("stop_loss")),
         take_profit=_as_float_or_none(feature_snapshot.get("take_profit")),
+        recommend_price=_as_float_or_none(_get(rec, "recommend_price")),
+        entry_rule=_get(rec, "entry_rule"),
+        invalid_rule=_get(rec, "invalid_rule"),
         degraded_reason=_detect_degradation(info_tags, _get(rec, "rationale", "") or ""),
     )
 
