@@ -117,6 +117,61 @@ def is_accurate_recommendation(outcome: RecommendationOutcome | Any | None) -> b
     return bool(is_trade_executed(outcome) and resolved_trade_return(outcome) > _ADDITIONAL_COST_PCT)
 
 
+def _apply_outcome_simulation(
+    db: Session,
+    rec: Recommendation,
+    simulation: dict[str, Any],
+    horizon_days: int,
+    label_source: str = "auto",
+) -> bool:
+    """把 _simulate_outcome 结果写入 RecommendationOutcome（已存在则 update）。
+    返回 True 表示成功，False 表示出错（已 rollback savepoint）。
+    """
+    savepoint = db.begin_nested()
+    try:
+        existing = db.get(RecommendationOutcome, rec.recommendation_id)
+        if existing is not None:
+            outcome = existing
+        else:
+            outcome = RecommendationOutcome(recommendation_id=rec.recommendation_id)
+            db.add(outcome)
+
+        outcome.horizon_days = horizon_days
+        outcome.entry_triggered = bool(simulation["entry_triggered"])
+        outcome.entry_date = simulation["entry_date"]
+        outcome.entry_price = simulation["entry_price"]
+        outcome.exit_date = simulation["exit_date"]
+        outcome.exit_price = simulation["exit_price"]
+        outcome.executed_return = simulation["executed_return"]
+        outcome.weighted_return = simulation["weighted_return"]
+        outcome.position_size = simulation["position_size"]
+        outcome.holding_days = simulation["holding_days"]
+        outcome.entry_slippage_bps = simulation["entry_slippage_bps"]
+        outcome.exit_slippage_bps = simulation["exit_slippage_bps"]
+        outcome.stop_loss_price = simulation["stop_loss_price"]
+        outcome.take_profit_price = simulation["take_profit_price"]
+        outcome.exit_reason = simulation["exit_reason"]
+        outcome.max_return = simulation["max_return"]
+        outcome.min_return = simulation["min_return"]
+        outcome.close_return = simulation["close_return"]
+        outcome.achievable_return = simulation["achievable_return"]
+        outcome.max_drawdown = simulation["max_drawdown"]
+        outcome.hit_target = bool(simulation["hit_target"])
+        outcome.hit_invalid = bool(simulation["hit_invalid"])
+        outcome.outcome_label = str(simulation["outcome_label"])
+        outcome.outcome_label_legacy = str(simulation["outcome_label_legacy"])
+        outcome.outcome_reason = str(simulation["outcome_reason"])
+        outcome.label_source = label_source
+        outcome.labeled_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        rec.status = normalized_outcome_label(outcome)
+        savepoint.commit()
+        return True
+    except Exception:
+        savepoint.rollback()
+        logger.warning("outcome labeling failed for %s", rec.recommendation_id, exc_info=True)
+        return False
+
+
 def label_pending_outcomes(
     db: Session,
     horizon_days: int = 5,
@@ -152,21 +207,7 @@ def label_pending_outcomes(
     if not recs:
         return {"labeled": 0}
 
-    codes = sorted({str(rec.code) for rec in recs})
-    min_trade_date = min(str(rec.trade_date) for rec in recs)
-    bars = db.scalars(
-        select(DailyKbar)
-        .where(DailyKbar.code.in_(codes), DailyKbar.trade_date >= min_trade_date)
-        .order_by(DailyKbar.code.asc(), DailyKbar.trade_date.asc())
-    ).all()
-
-    bars_by_code: dict[str, list[DailyKbar]] = {}
-    dates_by_code: dict[str, list[str]] = {}
-    for bar in bars:
-        code = str(bar.code)
-        bars_by_code.setdefault(code, []).append(bar)
-        dates_by_code.setdefault(code, []).append(str(bar.trade_date))
-
+    bars_by_code, dates_by_code = _load_outcome_bars(db, recs)
     labeled = 0
     errors = 0
     for rec in recs:
@@ -178,55 +219,101 @@ def label_pending_outcomes(
         )
         if simulation is None:
             continue
-
-        savepoint = db.begin_nested()
-        try:
-            existing = db.get(RecommendationOutcome, rec.recommendation_id)
-            if existing is not None:
-                outcome = existing
-            else:
-                outcome = RecommendationOutcome(recommendation_id=rec.recommendation_id)
-                db.add(outcome)
-
-            outcome.horizon_days = horizon_days
-            outcome.entry_triggered = bool(simulation["entry_triggered"])
-            outcome.entry_date = simulation["entry_date"]
-            outcome.entry_price = simulation["entry_price"]
-            outcome.exit_date = simulation["exit_date"]
-            outcome.exit_price = simulation["exit_price"]
-            outcome.executed_return = simulation["executed_return"]
-            outcome.weighted_return = simulation["weighted_return"]
-            outcome.position_size = simulation["position_size"]
-            outcome.holding_days = simulation["holding_days"]
-            outcome.entry_slippage_bps = simulation["entry_slippage_bps"]
-            outcome.exit_slippage_bps = simulation["exit_slippage_bps"]
-            outcome.stop_loss_price = simulation["stop_loss_price"]
-            outcome.take_profit_price = simulation["take_profit_price"]
-            outcome.exit_reason = simulation["exit_reason"]
-            outcome.max_return = simulation["max_return"]
-            outcome.min_return = simulation["min_return"]
-            outcome.close_return = simulation["close_return"]
-            outcome.achievable_return = simulation["achievable_return"]
-            outcome.max_drawdown = simulation["max_drawdown"]
-            outcome.hit_target = bool(simulation["hit_target"])
-            outcome.hit_invalid = bool(simulation["hit_invalid"])
-            outcome.outcome_label = str(simulation["outcome_label"])
-            outcome.outcome_label_legacy = str(simulation["outcome_label_legacy"])
-            outcome.outcome_reason = str(simulation["outcome_reason"])
-            outcome.label_source = "auto"
-            outcome.labeled_at = datetime.now(timezone.utc).replace(tzinfo=None)
-            rec.status = normalized_outcome_label(outcome)
-            savepoint.commit()
+        if _apply_outcome_simulation(db, rec, simulation, horizon_days, label_source="auto"):
             labeled += 1
-        except Exception:
-            savepoint.rollback()
+        else:
             errors += 1
-            logger.warning("outcome labeling failed for %s", rec.recommendation_id, exc_info=True)
 
     db.commit()
     if labeled:
         invalidate_outcome_metrics_cache()
     return {"labeled": labeled, "errors": errors}
+
+
+def _load_outcome_bars(
+    db: Session,
+    recs: list[Recommendation],
+) -> tuple[dict[str, list[DailyKbar]], dict[str, list[str]]]:
+    """批量加载 recs 涉及股票的日K（从最早 trade_date 起），返回 (bars_by_code, dates_by_code)。"""
+    codes = sorted({str(rec.code) for rec in recs})
+    min_trade_date = min(str(rec.trade_date) for rec in recs)
+    bars = db.scalars(
+        select(DailyKbar)
+        .where(DailyKbar.code.in_(codes), DailyKbar.trade_date >= min_trade_date)
+        .order_by(DailyKbar.code.asc(), DailyKbar.trade_date.asc())
+    ).all()
+    bars_by_code: dict[str, list[DailyKbar]] = {}
+    dates_by_code: dict[str, list[str]] = {}
+    for bar in bars:
+        code = str(bar.code)
+        bars_by_code.setdefault(code, []).append(bar)
+        dates_by_code.setdefault(code, []).append(str(bar.trade_date))
+    return bars_by_code, dates_by_code
+
+
+def recompute_stale_outcomes(
+    db: Session,
+    horizon_days: int = 5,
+    run_mode: str | None = None,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """重算所有已标注 outcome（simulation 逻辑变更后的数据一致性维护）。
+
+    与 label_pending_outcomes 的区别：前者只处理 pending，本函数重算所有已标注的
+    success/failed/missed outcome。用于 _resolve_exit / _simulate_outcome 逻辑变更后
+    让历史 outcome 反映新逻辑（如 trailing stop 上线后让 exit_reason/executed_return 刷新）。
+
+    label_source 标记为 "recompute" 以区分自动 backfill。
+    """
+    stmt = (
+        select(Recommendation)
+        .join(
+            RecommendationOutcome,
+            RecommendationOutcome.recommendation_id == Recommendation.recommendation_id,
+        )
+        .where(RecommendationOutcome.outcome_label.in_(EXECUTED_OUTCOME_LABELS | {OUTCOME_MISSED}))
+    )
+    if run_mode:
+        stmt = stmt.join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id).where(
+            RecommendationRun.run_mode == run_mode
+        )
+    stmt = stmt.order_by(Recommendation.trade_date.asc())
+    if limit:
+        stmt = stmt.limit(limit)
+    recs = db.scalars(stmt).unique().all()
+    if not recs:
+        return {"recomputed": 0, "errors": 0}
+
+    bars_by_code, dates_by_code = _load_outcome_bars(db, recs)
+    recomputed = 0
+    errors = 0
+    flipped: dict[str, int] = {}
+    for rec in recs:
+        before_label = None
+        existing = db.get(RecommendationOutcome, rec.recommendation_id)
+        if existing is not None:
+            before_label = str(existing.outcome_label)
+        simulation = _simulate_outcome(
+            rec,
+            bars_by_code.get(str(rec.code), []),
+            dates_by_code.get(str(rec.code), []),
+            horizon_days=horizon_days,
+        )
+        if simulation is None:
+            continue
+        if _apply_outcome_simulation(db, rec, simulation, horizon_days, label_source="recompute"):
+            after_label = str(simulation["outcome_label"])
+            if before_label and before_label != after_label:
+                key = f"{before_label}->{after_label}"
+                flipped[key] = flipped.get(key, 0) + 1
+            recomputed += 1
+        else:
+            errors += 1
+
+    db.commit()
+    if recomputed:
+        invalidate_outcome_metrics_cache()
+    return {"recomputed": recomputed, "errors": errors, "flipped": flipped}
 
 
 def overview_metrics(db: Session, run_mode: str = "formal") -> dict[str, Any]:
