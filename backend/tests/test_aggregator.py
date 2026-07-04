@@ -576,3 +576,53 @@ def test_risk_template_conservative_penalty():
     card_aggressive = aggregate(stock, signals, market_score=70, agent_review_score=70, risk_template="aggressive")
     # conservative should have lower score due to higher risk penalty
     assert card_conservative["final_score"] <= card_aggressive["final_score"]
+
+
+def test_apply_sector_diversity_penalizes_same_industry():
+    """回归测试：板块去重惩罚——同行业第2只扣5、第3+只扣10、第6只硬剔。
+
+    防止未来误删 _apply_sector_diversity 或改坏常量。
+    因果机制：同行业股票高度相关，集中持有没有分散效果。
+    """
+    from app.engine.aggregator import _apply_sector_diversity, _MAX_PER_INDUSTRY
+
+    # 6 笔元器件 + 1 笔半导体
+    cards = [
+        {"code": f"00{i}", "industry": "元器件", "final_score": 85.0 - i * 2, "feature_snapshot": {}}
+        for i in range(1, 7)  # 6 笔元器件
+    ]
+    cards.append({"code": "007", "industry": "半导体", "final_score": 70.0, "feature_snapshot": {}})
+
+    result = _apply_sector_diversity(cards)
+
+    # 第 6 只元器件应被硬剔（_MAX_PER_INDUSTRY=5，count>5 剔除）
+    yuanjian = [c for c in result if c["industry"] == "元器件"]
+    assert len(yuanjian) == _MAX_PER_INDUSTRY, f"元器件应保留 {_MAX_PER_INDUSTRY} 只（第6只硬剔），实际 {len(yuanjian)}"
+
+    # 半导体第1只无 penalty
+    semiconductor = [c for c in result if c["industry"] == "半导体"][0]
+    assert semiconductor.get("sector_diversity_penalty", 0) == 0
+
+    # 元器件第1只无 penalty，第2只扣5，第3+只扣10
+    yuanjian_sorted = sorted(yuanjian, key=lambda c: -c["final_score"])
+    # 按 penalty 分组验证
+    penalties = sorted(c.get("sector_diversity_penalty", 0) for c in yuanjian)
+    assert penalties == [0, 5, 10, 10, 10], f"penalty 应为 [0,5,10,10,10]，实际 {penalties}"
+
+    # feature_snapshot 双写
+    assert yuanjian_sorted[1]["feature_snapshot"]["sector_diversity_penalty"] == 5
+
+
+def test_apply_sector_diversity_skips_unknown_industry():
+    """无 industry 的卡片不参与去重，直接保留无 penalty。"""
+    from app.engine.aggregator import _apply_sector_diversity
+
+    cards = [
+        {"code": "001", "industry": "", "final_score": 80.0, "feature_snapshot": {}},
+        {"code": "002", "industry": "unknown", "final_score": 75.0, "feature_snapshot": {}},
+        {"code": "003", "industry": "半导体", "final_score": 70.0, "feature_snapshot": {}},
+    ]
+    result = _apply_sector_diversity(cards)
+    assert len(result) == 3
+    for c in result:
+        assert c.get("sector_diversity_penalty", 0) == 0
