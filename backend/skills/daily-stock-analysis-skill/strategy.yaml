@@ -90,6 +90,10 @@ phases:
 
 setups:
   - name: 缩量回踩
+    # Alpha 衰减警告（T1 第81轮检测）：
+    # support_ma5 信号翻转——5月 True WR=59.6%（正预测），6-7月 True WR=41.4%（负预测）
+    # 近期市场偏好"无 MA5 支撑的超跌股"（support_ma5=False WR=83.3%）
+    # 此 setup 在6月仅触发2笔且都失败，需持续监控；若衰减持续，考虑降 score_delta 或禁用
     when: "volume_shrink_pullback == true and (support_ma5 == true or support_ma10 == true) and dsa_signal_score >= 80"
     score_delta: 6
     entry_rule: "缩量回踩 MA5/MA10 附近止跌后再确认承接"
