@@ -1,18 +1,18 @@
 import { useApi } from "../app/useApi";
 import { api } from "../api/client";
-import type { ScoreLineStatsRow, StrategyStatsRow, SetupStatsRow } from "../types";
+import type { PrecisionAtKRow, ScoreLineStatsRow, StrategyStatsRow, SetupStatsRow } from "../types";
 import { PageSkeleton, ErrorPage, EmptyState } from "../components/StateViews";
 import { LineChart } from "lucide-react";
 
 /**
  * 指标页 —— 推荐质量分析
- * 后端有 /api/metrics/by_score_line, by_strategy, by_setup 三个端点，
- * 前端原本无页面消费（T7 第76轮填补 gap）。
+ * 后端有 /api/metrics/by_score_line, by_strategy, by_setup, precision-at-k 四个端点。
  *
- * 三视图：
- * 1. 分数段胜率：哪个分数线以上的推荐质量最高
- * 2. 策略胜率：哪个策略表现最好/最差
- * 3. Setup 胜率：哪个 setup 类型最有效
+ * 四视图：
+ * 1. Precision@K：前 K 推荐准确率，衡量推荐排序质量（越靠前应越高）
+ * 2. 分数段胜率：哪个分数线以上的推荐质量最高
+ * 3. 策略胜率：哪个策略表现最好/最差
+ * 4. Setup 胜率：哪个 setup 类型最有效
  */
 export function MetricsPage() {
   const { data: scoreLines, loading: l1, error: e1 } = useApi<ScoreLineStatsRow[]>(
@@ -27,9 +27,13 @@ export function MetricsPage() {
     () => api.metricsBySetup("formal"),
     [],
   );
+  const { data: precisionAtK, loading: l4, error: e4 } = useApi<PrecisionAtKRow[]>(
+    () => api.precisionAtK("formal"),
+    [],
+  );
 
-  const loading = l1 || l2 || l3;
-  const error = e1 || e2 || e3;
+  const loading = l1 || l2 || l3 || l4;
+  const error = e1 || e2 || e3 || e4;
 
   if (loading) return <PageSkeleton title="指标分析" hint="加载推荐质量数据" rowCount={6} />;
   if (error) return <ErrorPage title="指标加载失败" message={error} />;
@@ -38,9 +42,66 @@ export function MetricsPage() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+      <PrecisionPanel rows={precisionAtK ?? []} />
       <ScoreLinePanel rows={scoreLines ?? []} />
       <StrategyPanel rows={strategies ?? []} />
       <SetupPanel rows={setups ?? []} />
+    </div>
+  );
+}
+
+function PrecisionPanel({ rows }: { rows: PrecisionAtKRow[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="panel">
+      <div className="panel__header">
+        <span className="panel__kicker">排序质量</span>
+        <h2 className="panel__title">Precision@K</h2>
+        <span style={{ marginLeft: "auto", color: "var(--text-muted)", fontSize: 13 }}>
+          前 K 推荐准确率（越靠前应越高）
+        </span>
+      </div>
+      <div style={{ display: "grid", gap: "var(--space-2)" }}>
+        {rows.map((r) => {
+          const pct = r.precision * 100;
+          const color = pct >= 60 ? "var(--color-up)" : pct >= 45 ? "var(--text-secondary)" : "var(--color-down)";
+          return (
+            <div
+              key={r.k}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "auto 1fr auto auto",
+                gap: "var(--space-4)",
+                alignItems: "center",
+                padding: "var(--space-2) var(--space-4)",
+                background: "var(--surface-1)",
+                borderRadius: 6,
+              }}
+            >
+              <div style={{ fontWeight: 600, color: "var(--ink)" }}>前 {r.k}</div>
+              <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                {r.success_count}/{r.evaluated_count} 笔命中 · {r.sample_runs} 个 run
+              </div>
+              <div style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 18, fontWeight: 600, color }}>
+                {pct.toFixed(1)}%
+              </div>
+              <div
+                style={{
+                  width: 120,
+                  height: 6,
+                  background: "var(--surface-2)",
+                  borderRadius: 3,
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{ width: `${Math.min(100, pct)}%`, height: "100%", background: color, borderRadius: 3 }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
