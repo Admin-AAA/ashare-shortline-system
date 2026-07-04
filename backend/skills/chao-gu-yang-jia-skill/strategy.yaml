@@ -60,8 +60,8 @@ prefilter:
         reason: "broken_pullback"
       - when: "pos20 < 50"
         reason: "low_pos20_weakness"
-      - when: "avg_cost > 200"
-        reason: "high_avg_cost_overhang"
+      # avg_cost>200 prefilter 已删除：avg_cost 在 feature_builder 阶段才填充，prefilter 阶段不可用（永远 False）；
+      # 且数据证明 avg_cost>200 的科创板高价龙头 WR 76.8%，过滤是误杀（第 100 轮 T5 修复）
 
 phases:
   - name: 退潮
