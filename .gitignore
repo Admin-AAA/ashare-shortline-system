@@ -29,3 +29,6 @@ overview.md
 test.py
 package-lock.json
 package.json
+
+# UX 审计临时产物（截图/JSON/脚本，可重新生成）
+ux-audit/
