@@ -214,6 +214,7 @@ print(f'最大亏损: {r[0]}%')
 - [T3] feature_snapshot 持久化时必须合并 card 顶层字段，不能只取 legacy_stock 副本（第 46 轮）
 - [T5] 回测的 snapshot 是静态的，sentiment 调整效果需实盘验证（第 22 轮）
 - [T5] 胜率单一指标会误判：强势 regime WR 41.3% 但盈亏比 2.65（净正收益），震荡 WR 70% 但盈亏比 0.96（净近零）。判定 regime 优劣必须看盈亏比，不能只看胜率（第 92 轮）
+- [T5] Tushare API 单位陷阱：daily(千元) vs bak_daily(万元) vs realtime(元)。amount_yi 统一用 *1000/1e8 对 bak_daily 少算 10 倍，是 limit-up-reseal-relay 0 推荐的深层根因。多数据源字段必须核对单位，抽纯函数 + 回归测试保护（第 94 轮）
 - [T9] SKILL.md 输出格式必须匹配 SkillReviewOutput schema，否则 LLM 输出字段不正确（第 26 轮）
 ```
 
