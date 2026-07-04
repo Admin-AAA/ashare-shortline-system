@@ -1505,8 +1505,9 @@ def _resolve_exit(
       2. 若基准是 stop_loss_*/horizon_close（即 holding 期内未触及 TP），
          第二轮应用 trailing stop 重模拟：high 达 entry+3% 激活，自峰值回撤 1.5% 锁利。
 
-    回测验证（1585 笔全样本，条件 trailing）：胜率 57.0%→59.7%、盈亏比 1.37→1.40、
-    总收益 +519%、最大亏损持平。关键：take_profit 路径 100% 胜率完整保留。
+    回测验证（235 笔 formal 样本，扣费 0.10%/笔）：胜率 49.4%→63.4%、盈亏比 1.38→1.68、
+    总收益 +232→+604、最大亏损 -15.19%→-7.17%。关键：take_profit 路径完整保留。
+    时序口径：触发价取 min(open, 触发价)，跳空低开时以 open 成交（max 会虚假高估）。
     """
     # 第一轮：基准 exit（原 stop_loss/take_profit 逻辑）
     base_exit = _resolve_exit_base(holding_bars, stop_loss_price, take_profit_price,
@@ -1578,7 +1579,8 @@ def _resolve_exit_with_trailing(
 
     调用前已确认基准 exit 非 take_profit_*，故 holding 期内 high 从未达 take_profit_price。
     trailing 在 high≥entry+3% 激活，自峰值 high 回撤 1.5% 锁利。
-    日线 bar 内时序不确定，触发价取 max(open, hwm-callback) 保守偏低。
+    日线 bar 内时序不确定，触发价取 min(open, hwm-callback)：跳空低开时以 open 成交（更差），
+    避免虚假高估出场价（max 口径会制造 100% 胜率的虚假回测）。
     """
     locked_limit_down_bars = 0
     hwm = 0.0
