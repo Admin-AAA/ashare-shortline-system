@@ -179,16 +179,18 @@ print(f'最大亏损: {r[0]}%')
 - **心跳文件不存在** → 没有进行中的实例，正常选新任务
 
 **文件锁模板（写日志/状态表/git 操作通用）：**
+
+注意：flock 的 `200>file` 语法在 zsh 下会报错，必须用 `bash -c` 包裹：
 ```bash
-(flock -x 200 && cat >> 目标文件 <<'EOF'
+bash -c '(flock -x 200 && cat >> 目标文件 <<"EOF"
 追加内容
 EOF
-) 200>~/.claude/projects/-Users-wangao/memory/.self-improve.lock
+) 200>~/.claude/projects/-Users-wangao/memory/.self-improve.lock'
 ```
 
 **git 操作锁（避免 index 冲突）：**
 ```bash
-(flock -x 200 && git add -A && git commit -m "...") 200>~/Desktop/ashare-shortline-system/.git-self-improve.lock
+bash -c '(flock -x 200 && git add -A && git commit -m "...") 200>~/Desktop/ashare-shortline-system/.git-self-improve.lock'
 ```
 
 ### 完成度追踪
