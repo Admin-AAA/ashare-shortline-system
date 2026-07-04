@@ -8,7 +8,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun, SkillRegistry
@@ -1865,3 +1865,52 @@ def _loads(raw: str | None, default: Any = None) -> Any:
         return json.loads(raw)
     except json.JSONDecodeError:
         return {} if default is None else default
+
+
+def regime_win_loss_breakdown(db: Session) -> dict[str, dict[str, float]]:
+    """按 breadth.regime 分组统计胜率 + 盈亏比。
+
+    防御性 T5 工具：判定 regime 优劣必须看盈亏比不能只看胜率。
+    强势 WR 低但盈亏比高（大赢小亏，净正收益），震荡 WR 高但盈亏比可能 <1（赚的少亏的多）。
+
+    返回 {regime: {count, win_rate, win_avg, loss_avg, profit_loss_ratio, avg_return}}。
+    """
+    rows = db.execute(
+        text(
+            """
+            SELECT o.outcome_label, o.executed_return, r.market_context_json
+            FROM recommendation_outcomes o
+            JOIN recommendations r ON o.recommendation_id = r.recommendation_id
+            WHERE o.outcome_label IN ('success', 'failed')
+              AND r.market_context_json IS NOT NULL
+            """
+        )
+    ).all()
+    buckets: dict[str, dict[str, list[float]]] = {}
+    for label, ret, mj in rows:
+        try:
+            ctx = _loads(mj)
+            regime = (ctx.get("breadth") or {}).get("regime") or "unknown"
+        except Exception:
+            regime = "parse_error"
+        b = buckets.setdefault(regime, {"wins": [], "losses": []})
+        ret = float(ret or 0)
+        if ret > 0:
+            b["wins"].append(ret)
+        elif ret < 0:
+            b["losses"].append(abs(ret))
+    result: dict[str, dict[str, float]] = {}
+    for regime, b in buckets.items():
+        wins, losses = b["wins"], b["losses"]
+        total = len(wins) + len(losses)
+        win_avg = sum(wins) / len(wins) if wins else 0.0
+        loss_avg = sum(losses) / len(losses) if losses else 0.0
+        result[regime] = {
+            "count": total,
+            "win_rate": round(len(wins) * 100 / total, 1) if total else 0.0,
+            "win_avg": round(win_avg, 2),
+            "loss_avg": round(loss_avg, 2),
+            "profit_loss_ratio": round(win_avg / loss_avg, 2) if loss_avg else 0.0,
+            "avg_return": round((sum(wins) - sum(losses)) / total, 2) if total else 0.0,
+        }
+    return result
