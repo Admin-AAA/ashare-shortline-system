@@ -18,27 +18,35 @@ from sqlalchemy import text
 
 
 def diagnose(db) -> dict:
-    """统计 amount_yi 与 daily.amount/1e8 的一致性。"""
+    """统计 amount_yi 与 daily.amount/1e8 的一致性。
+
+    用相对误差（5%）判定，避免小成交额股票的绝对误差误判。
+    只对大成交额（>=0.5亿）判定差 10 倍，小成交额单独统计。
+    """
     row = db.execute(
         text(
             """
             SELECT
               COUNT(*) AS total,
-              SUM(CASE WHEN ABS(sq.amount_yi - dk.amount/1e8) < 0.1 THEN 1 ELSE 0 END) AS consistent,
-              SUM(CASE WHEN ABS(sq.amount_yi*10 - dk.amount/1e8) < 0.1 AND sq.amount_yi > 0
-                       AND ABS(sq.amount_yi - dk.amount/1e8) >= 0.1 THEN 1 ELSE 0 END) AS off_by_10,
-              SUM(CASE WHEN sq.amount_yi = 0 AND dk.amount > 0 THEN 1 ELSE 0 END) AS zero
+              SUM(CASE WHEN dk.amount/1e8 >= 0.5
+                       AND ABS(sq.amount_yi - dk.amount/1e8)/NULLIF(dk.amount/1e8,0) < 0.05
+                       THEN 1 ELSE 0 END) AS consistent_big,
+              SUM(CASE WHEN dk.amount/1e8 >= 0.5
+                       AND ABS(sq.amount_yi*10 - dk.amount/1e8)/NULLIF(dk.amount/1e8,0) < 0.05
+                       AND ABS(sq.amount_yi - dk.amount/1e8)/NULLIF(dk.amount/1e8,0) >= 0.05
+                       THEN 1 ELSE 0 END) AS off_by_10_big,
+              SUM(CASE WHEN dk.amount/1e8 < 0.5 THEN 1 ELSE 0 END) AS small_amount
             FROM stock_quotes sq
             JOIN daily_kbars dk ON dk.code=sq.code AND dk.trade_date=sq.trade_date
-            WHERE dk.amount > 0
+            WHERE dk.amount > 0 AND sq.amount_yi > 0
             """
         )
     ).fetchone()
-    return {"total": row[0], "consistent": row[1], "off_by_10": row[2], "zero": row[3]}
+    return {"total": row[0], "consistent_big": row[1], "off_by_10_big": row[2], "small_amount": row[3]}
 
 
 def fix(db) -> int:
-    """修复差 10 倍的行：用 daily.amount/1e8 覆盖 stock_quotes.amount_yi。"""
+    """修复差 10 倍的行（大成交额，相对误差判定）：用 daily.amount/1e8 覆盖。"""
     result = db.execute(
         text(
             """
@@ -47,8 +55,9 @@ def fix(db) -> int:
             SET sq.amount_yi = ROUND(dk.amount/1e8, 4)
             WHERE dk.amount > 0
               AND sq.amount_yi > 0
-              AND ABS(sq.amount_yi*10 - dk.amount/1e8) < 0.1
-              AND ABS(sq.amount_yi - dk.amount/1e8) >= 0.1
+              AND dk.amount/1e8 >= 0.5
+              AND ABS(sq.amount_yi*10 - dk.amount/1e8)/NULLIF(dk.amount/1e8,0) < 0.05
+              AND ABS(sq.amount_yi - dk.amount/1e8)/NULLIF(dk.amount/1e8,0) >= 0.05
             """
         )
     )
@@ -64,13 +73,13 @@ def main() -> None:
     db = SessionLocal()
     try:
         before = diagnose(db)
-        print(f"修复前: 共 {before['total']}, 一致 {before['consistent']}, 差10倍 {before['off_by_10']}, 零值 {before['zero']}")
+        print(f"修复前: 共 {before['total']}, 大额一致 {before['consistent_big']}, 差10倍 {before['off_by_10_big']}, 小额 {before['small_amount']}")
 
         if args.fix:
             n = fix(db)
             print(f"修复行数: {n}")
             after = diagnose(db)
-            print(f"修复后: 共 {after['total']}, 一致 {after['consistent']}, 差10倍 {after['off_by_10']}, 零值 {after['zero']}")
+            print(f"修复后: 共 {after['total']}, 大额一致 {after['consistent_big']}, 差10倍 {after['off_by_10_big']}, 小额 {after['small_amount']}")
         else:
             print("（仅诊断，加 --fix 执行修复）")
     finally:

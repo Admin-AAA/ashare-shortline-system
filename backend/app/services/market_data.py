@@ -632,6 +632,7 @@ def _fetch_tushare_quotes(settings: Any) -> list[dict[str, Any]]:
     # 再批量拉全市场日线行情，避免逐股票高频调用触发限速。
     batch_quotes = None
     selected_trade_date = ""
+    selected_api_name = ""
     selected_daily_basic_map: dict[str, dict[str, Any]] | None = None
     batch_quote_errors: list[str] = [realtime_error] if realtime_error else []
     recent_trade_dates = _recent_open_trade_dates(settings)
@@ -659,6 +660,7 @@ def _fetch_tushare_quotes(settings: Any) -> list[dict[str, Any]]:
                         continue
                     batch_quotes = candidate
                     selected_trade_date = trade_date
+                    selected_api_name = api_name
                     selected_daily_basic_map = candidate_daily_basic_map
                     break
                 batch_quote_errors.append(f"{trade_date}:{api_name}: empty")
@@ -695,7 +697,12 @@ def _fetch_tushare_quotes(settings: Any) -> list[dict[str, Any]]:
         exchange = _exchange_from_code(symbol)
         pct = _num(quote_row.get("pct_chg"), _num(quote_row.get("pct_change")))
         price = _num(quote_row.get("close"))
-        amount_yi = _num(quote_row.get("amount")) * 1000 / 100000000
+        # Tushare amount 单位因 API 而异：daily=千元，bak_daily=万元。
+        # 统一转亿元：daily 千元×1000=元÷1e8=亿元；bak_daily 万元×10000=元÷1e8=亿元。
+        # 之前统一用 *1000/1e8 对 bak_daily 少算 10 倍（万元被当千元），导致策略 amount_yi 门槛误筛。
+        raw_amount = _num(quote_row.get("amount"))
+        amount_unit_multiplier = 10000 if selected_api_name == "bak_daily" else 1000
+        amount_yi = raw_amount * amount_unit_multiplier / 100000000
         turnover_rate = _num(quote_row.get("turn_over"), _num(basic_row.get("turnover_rate")))
         pe_ttm = _num(quote_row.get("pe"), _num(basic_row.get("pe_ttm")))
         total_mv_yi = _market_value_yi(
