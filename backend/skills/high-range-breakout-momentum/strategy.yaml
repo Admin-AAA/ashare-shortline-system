@@ -115,6 +115,7 @@ setups:
   - name: 阶段高点蓄势观察
     when: "breakout60 == false and pos60 >= 85 and off_high60_pct >= -6 and vol5_20 >= 1.15 and pct > 0 and support_ma5 == true"
     score_delta: -4  # 回测：12 笔 WR 25% avg -2.81%，接近高点未突破易假突破回落，改为惩罚
+    hard_veto: true  # "观察"语义=不确定入场；rationale 自述"仅宜观察"，命中即否决不出推荐
     entry_rule: "接近60日高点但未实际突破，等待放量越过前高或回踩MA5不破后再参与"
     invalid_rule: "跌离60日高点超过8%或放量跌破MA5"
 

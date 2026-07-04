@@ -34,6 +34,7 @@ def run_strategy(
     phase = "未分类"
     score_cap = 100.0
     hard_veto = False
+    veto_reason = ""
     risk_flags: list[str] = []
     evidence: list[str] = []
 
@@ -86,6 +87,10 @@ def run_strategy(
             setup_quality = min(100.0, 60.0 + float(setup.get("score_delta", 0)))
             entry_rule = str(setup.get("entry_rule", ""))
             invalid_rule = str(setup.get("invalid_rule", ""))
+            # "观察"类 setup 命中即否决：策略自己标"观察"=不确定，不该入场
+            if bool(setup.get("hard_veto", False)):
+                hard_veto = True
+                veto_reason = str(setup.get("veto_reason") or f"观察类 setup 命中: {setup_name}")
             evidence.append(f"买点命中: {setup_name}")
             break
 
@@ -108,7 +113,7 @@ def run_strategy(
         score=score,
         phase=phase,
         hard_veto=hard_veto,
-        veto_reason="硬风控阶段命中" if hard_veto else "",
+        veto_reason=veto_reason or ("硬风控阶段命中" if hard_veto else ""),
         risk_flags=risk_flags,
         setup_match=setup_name,
         entry_rule=entry_rule,
