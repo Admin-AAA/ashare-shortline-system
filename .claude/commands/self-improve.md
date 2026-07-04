@@ -172,7 +172,7 @@ print(f'最大亏损: {r[0]}%')
 
 ### 完成度追踪
 
-读取 `~/.claude/projects/-Users-wangao/self-improve-log.md`，更新以下状态表。每轮开始时先更新，结束时写回。
+读取 `~/.claude/projects/-Users-wangao/memory/self-improve-log.md`，更新以下状态表。每轮开始时先更新，结束时写回。
 
 | 任务 | 状态 | 上次执行 | 核心指标 | 用户可见 |
 |------|------|----------|----------|----------|
@@ -230,7 +230,7 @@ print(f'最大亏损: {r[0]}%')
 
 ```bash
 # 读取历史最优
-grep -A2 "胜率\|盈亏比\|Sharpe\|测试套件" ~/.claude/projects/-Users-wangao/self-improve-log.md | tail -20
+grep -A2 "胜率\|盈亏比\|Sharpe\|测试套件" ~/.claude/projects/-Users-wangao/memory/self-improve-log.md | tail -20
 ```
 
 - 如果本轮改动导致核心指标**低于历史最优**，必须分析原因
@@ -427,7 +427,7 @@ echo "实例 ID: $INSTANCE_ID"
 cd ~/Desktop/ashare-shortline-system && git status --short
 
 # 3. 读日志最后一条，看 status 字段
-tail -30 ~/.claude/projects/-Users-wangao/self-improve-log.md
+tail -30 ~/.claude/projects/-Users-wangao/memory/self-improve-log.md
 ```
 
 **决策树：**
@@ -512,7 +512,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 
 用 `flock` 锁定文件后追加：
 ```bash
-(flock -x 200 && cat >> ~/.claude/projects/-Users-wangao/self-improve-log.md <<'EOF'
+(flock -x 200 && cat >> ~/.claude/projects/-Users-wangao/memory/self-improve-log.md <<'EOF'
 
 ## [{实例ID}] YYYY-MM-DD HH:MM 第 N 轮
 

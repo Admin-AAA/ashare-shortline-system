@@ -734,7 +734,7 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
         lu = limit_up_map.get(code)
         if lu:
             stock["is_limit_up"] = True
-            stock["limit_up_consecutive_days"] = lu.get("consecutive_days", 1)
+            stock["limit_up_consecutive_days"] = int(lu.get("limit_times") or lu.get("consecutive_days") or 1)
             stock["limit_up_seal_time"] = lu.get("limit_up_time") or lu.get("first_time")
             stock["limit_up_first_time"] = lu.get("first_time")
             stock["limit_up_last_time"] = lu.get("last_time")

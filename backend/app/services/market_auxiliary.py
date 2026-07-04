@@ -56,8 +56,62 @@ def _compact_trade_date(value: Any) -> str:
 
 def _fetch_limit_up_board(source: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
     if source == "tushare":
-        return _fetch_tushare_limit_up_board(settings, trade_date=trade_date)
+        rows = _fetch_tushare_limit_up_board(settings, trade_date=trade_date)
+        if rows:
+            return rows
+        # Tushare 限速/失败时回退本地 limit_up_board 表（已同步的涨停事实数据）
+        local_rows = _fetch_local_limit_up_board(trade_date)
+        if local_rows:
+            logger.info("涨停板使用本地表 fallback: %d 行 (trade_date=%s)", len(local_rows), trade_date)
+        return local_rows
     return []
+
+
+def _fetch_local_limit_up_board(trade_date: str | None = None) -> list[dict[str, Any]]:
+    """从本地 limit_up_board 表读涨停板（Tushare 限速时的 fallback）。
+
+    涨停板是已发生的事实，本地表有持久化数据；运行时不应因 Tushare 429 让
+    limit-up-reseal-relay 等策略饿死。字段对齐 fetch_limit_up_board 的返回结构。
+    """
+    try:
+        from app.db.session import SessionLocal
+        from app.models.tables import LimitUpBoard
+        from app.services.tushare_client import _fmt_date
+
+        td = _compact_trade_date(trade_date)
+        if not td:
+            return []
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(LimitUpBoard)
+                .filter(LimitUpBoard.trade_date == _fmt_date(td))
+                .all()
+            )
+            result: list[dict[str, Any]] = []
+            for row in rows:
+                result.append({
+                    "code": row.code,
+                    "name": row.name or "",
+                    "trade_date": row.trade_date,
+                    "pct_chg": float(row.pct_chg) if row.pct_chg is not None else 0.0,
+                    "limit_times": int(row.limit_times or 0),
+                    "limit_type": row.limit_type or "",
+                    "first_time": row.first_time or "",
+                    "last_time": row.last_time or "",
+                    "open_times": int(row.open_times or 0),
+                    "up_stat": row.up_stat or "",
+                    "limit_amount_yi": float(row.limit_amount_yi) if row.limit_amount_yi is not None else 0.0,
+                    "turnover_ratio": float(row.turnover_ratio) if row.turnover_ratio is not None else 0.0,
+                    "fd_amount_yi": float(row.fd_amount_yi) if row.fd_amount_yi is not None else 0.0,
+                    "industry": row.industry or "",
+                })
+            return result
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("本地涨停板表不可用: %s", e)
+        return []
 
 
 def _fetch_concept_sectors(source: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
