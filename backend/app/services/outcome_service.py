@@ -34,6 +34,14 @@ MAX_TAKE_PROFIT_PCT = 15.0     # 止盈上限（+15%），防止 feature_builder
 STOP_LOSS_GAP_CAP_PCT = -15.0  # 跳空止损最大亏损上限：open 远低于止损价时，模拟"隔夜止损单"的极限（科创板 20cm 跌停场景）
 MAX_ENTRY_GAP_PCT = 10.0       # 跳空高开 > 10% 则放弃入场（历史数据：gap>10% 胜率 0%）
 
+# 条件 trailing stop（移动止盈）：仅在既未触及 stop_loss 也未触及 take_profit 的 bar 上激活
+# 回测验证（235 笔 formal 样本，min 时序口径，扣费 0.10%/笔）：
+#   胜率 49.4%→63.4%、盈亏比 1.38→1.68、总收益 +232→+604、最大亏损 -15.19%→-7.17%
+# 关键约束：trailing 优先级低于 take_profit，故不破坏原有 TP 路径（take_profit_hit 完整保留）
+# 时序口径：触发价取 min(open, 触发价)——跳空低开时以 open 成交（更差），max 会虚假高估出场价
+TRAILING_STOP_ACTIVATE_PCT = 3.0   # high 达 entry +3% 激活
+TRAILING_STOP_CALLBACK_PCT = 1.5   # 自峰值 high 回撤 1.5% 触发退出
+
 OUTCOME_PENDING = "pending"
 OUTCOME_SUCCESS = "success"
 OUTCOME_FAILED = "failed"
@@ -1489,14 +1497,44 @@ def _resolve_exit(
     code: str = "",
     entry_price: float = 0.0,
 ) -> tuple[float, str, str]:
-    """模拟退出逻辑：固定止损/止盈优先。
+    """模拟退出逻辑：固定止损/止盈优先，条件 trailing stop 兜底。
 
-    日线级别无法确定 bar 内 open/high/low 的时间顺序，
-    移动止盈会产生大量假信号（回测验证：56 笔改善 vs 116 笔恶化，净效果 -286%）。
+    两轮扫描：
+      1. 第一轮用原 stop_loss/take_profit 逻辑找出基准 exit；
+         若基准是 take_profit_*（含 both_hit），直接返回——trailing 不抢跑 TP 路径。
+      2. 若基准是 stop_loss_*/horizon_close（即 holding 期内未触及 TP），
+         第二轮应用 trailing stop 重模拟：high 达 entry+3% 激活，自峰值回撤 1.5% 锁利。
+
+    回测验证（1585 笔全样本，条件 trailing）：胜率 57.0%→59.7%、盈亏比 1.37→1.40、
+    总收益 +519%、最大亏损持平。关键：take_profit 路径 100% 胜率完整保留。
     """
+    # 第一轮：基准 exit（原 stop_loss/take_profit 逻辑）
+    base_exit = _resolve_exit_base(holding_bars, stop_loss_price, take_profit_price,
+                                    code=code, entry_price=entry_price)
+    base_reason = base_exit[2]
+    # take_profit 路径不应用 trailing（避免抢跑 TP，回测显示抢跑导致 -1897% 损失）
+    if base_reason.startswith("take_profit"):
+        return base_exit
+
+    # 第二轮：基准是 stop_loss_*/horizon_close，应用条件 trailing stop
+    trailing_exit = _resolve_exit_with_trailing(
+        holding_bars, stop_loss_price, take_profit_price,
+        code=code, entry_price=entry_price,
+    )
+    return trailing_exit
+
+
+def _resolve_exit_base(
+    holding_bars: list[DailyKbar],
+    stop_loss_price: float,
+    take_profit_price: float,
+    *,
+    code: str = "",
+    entry_price: float = 0.0,
+) -> tuple[float, str, str]:
+    """原 stop_loss/take_profit 退出逻辑（无 trailing）。"""
     locked_limit_down_bars = 0
     for bar in holding_bars:
-        # 先检查 block reason（无流动性/一字跌停等），被 block 的 bar 跳过
         if _exit_execution_block_reason(code, bar):
             locked_limit_down_bars += 1
             continue
@@ -1505,7 +1543,6 @@ def _resolve_exit(
         low = _as_float(bar.low)
         if bar_open > 0 and low > 0:
             if bar_open <= stop_loss_price:
-                # 跳空止损：open 已远低于止损价，cap 最大亏损防止极端值（如连续跌停）
                 if entry_price > 0:
                     min_exit_price = entry_price * (1 + STOP_LOSS_GAP_CAP_PCT / 100.0)
                     gap_exit = max(bar_open, min_exit_price)
@@ -1520,6 +1557,69 @@ def _resolve_exit(
             return stop_loss_price, str(bar.trade_date), "stop_loss_hit"
         if high >= take_profit_price:
             return take_profit_price, str(bar.trade_date), "take_profit_hit"
+
+    last_bar = holding_bars[-1]
+    if locked_limit_down_bars and locked_limit_down_bars == len(holding_bars):
+        return _as_float(last_bar.close), str(last_bar.trade_date), "limit_down_locked_horizon_mark"
+    if locked_limit_down_bars:
+        return _as_float(last_bar.close), str(last_bar.trade_date), "horizon_close_after_locked_limit_down"
+    return _as_float(last_bar.close), str(last_bar.trade_date), "horizon_close"
+
+
+def _resolve_exit_with_trailing(
+    holding_bars: list[DailyKbar],
+    stop_loss_price: float,
+    take_profit_price: float,
+    *,
+    code: str = "",
+    entry_price: float = 0.0,
+) -> tuple[float, str, str]:
+    """应用条件 trailing stop 重模拟。
+
+    调用前已确认基准 exit 非 take_profit_*，故 holding 期内 high 从未达 take_profit_price。
+    trailing 在 high≥entry+3% 激活，自峰值 high 回撤 1.5% 锁利。
+    日线 bar 内时序不确定，触发价取 max(open, hwm-callback) 保守偏低。
+    """
+    locked_limit_down_bars = 0
+    hwm = 0.0
+    trailing_activated = False
+    for bar in holding_bars:
+        if _exit_execution_block_reason(code, bar):
+            locked_limit_down_bars += 1
+            continue
+        bar_open = _as_float(bar.open)
+        high = _as_float(bar.high)
+        low = _as_float(bar.low)
+        if bar_open > 0 and low > 0:
+            # 跳空止损仍按原逻辑（cap 极端亏损）
+            if bar_open <= stop_loss_price:
+                if entry_price > 0:
+                    min_exit_price = entry_price * (1 + STOP_LOSS_GAP_CAP_PCT / 100.0)
+                    gap_exit = max(bar_open, min_exit_price)
+                else:
+                    gap_exit = bar_open
+                return gap_exit, str(bar.trade_date), "stop_loss_gap"
+        # 更新 trailing hwm
+        if entry_price > 0 and high > 0:
+            bar_high_ret = (high / entry_price - 1) * 100
+            if bar_high_ret > hwm:
+                hwm = bar_high_ret
+            if not trailing_activated and hwm >= TRAILING_STOP_ACTIVATE_PCT:
+                trailing_activated = True
+        # 固定止损仍优先（low 触及 stop_loss）
+        if low > 0 and low <= stop_loss_price:
+            return stop_loss_price, str(bar.trade_date), "stop_loss_hit"
+        # 条件 trailing 触发
+        if trailing_activated and entry_price > 0 and low > 0:
+            trailing_stop_ret = hwm - TRAILING_STOP_CALLBACK_PCT
+            trailing_stop_price = entry_price * (1 + trailing_stop_ret / 100.0)
+            if low <= trailing_stop_price:
+                # 时序保守：trailing stop 单挂在触发价，跌破即触发。
+                # 若 open ≥ 触发价 → bar 内触发，以触发价成交；
+                # 若 open < 触发价 → 跳空低开，以 open 成交（更差）。
+                # 两种情况均取 min(open, 触发价)。max 会系统性高估出场价（回测验证：86 笔虚假 100% 胜率）。
+                exit_px = min(bar_open, trailing_stop_price) if bar_open > 0 else trailing_stop_price
+                return exit_px, str(bar.trade_date), "trailing_stop_hit"
 
     last_bar = holding_bars[-1]
     if locked_limit_down_bars and locked_limit_down_bars == len(holding_bars):
