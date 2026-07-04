@@ -25,6 +25,8 @@ contract:
   executable: true
   schema_version: 1
 
+require_setup: true  # 突破接力必须有明确入场 setup；breakout 命中但量价不达标 = 无入场理由，hard_veto
+
 universe:
   include:
     - "amount_yi >= 3"

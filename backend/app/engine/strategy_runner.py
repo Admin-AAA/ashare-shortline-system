@@ -94,6 +94,13 @@ def run_strategy(
             evidence.append(f"买点命中: {setup_name}")
             break
 
+    # require_setup: 策略声明"必须有明确入场 setup 才能推荐"
+    # 适用于 setup 即入场必要条件的策略（如突破接力：突破但量价不达标 = 无入场理由）
+    # setup_name 为空 = 没有命中任何 setup，若策略要求 require_setup 则 hard_veto
+    if not setup_name and bool(contract.get("require_setup", False)):
+        hard_veto = True
+        veto_reason = "未命中任何入场 setup（策略要求 require_setup）"
+
     for rule in contract.get("risk", {}).get("rules", []) or []:
         if evaluate(str(rule.get("when", "")), context):
             risk_flags.append(str(rule.get("flag", "风险提示")))
