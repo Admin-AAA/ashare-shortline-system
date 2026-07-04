@@ -24,7 +24,7 @@ export function HistoryPage() {
       <div className="panel__header">
         <span className="panel__kicker">复盘</span>
         <h2 className="panel__title">推荐历史</h2>
-        <span style={{ marginLeft: "auto", color: "var(--text-muted)", fontSize: 13 }}>
+        <span style={{ marginLeft: "auto", color: "var(--muted)", fontSize: 13 }}>
           最近 {runs.length} 次运行
         </span>
       </div>
@@ -34,23 +34,23 @@ export function HistoryPage() {
           const rec = r.recommended_count ?? 0;
           const statusColor =
             r.status === "completed"
-              ? "var(--color-up)"
+              ? "var(--market-down)"
               : r.status === "running"
-                ? "var(--color-info)"
+                ? "var(--accent)"
                 : r.status === "failed"
-                  ? "var(--color-down)"
-                  : "var(--text-muted)";
+                  ? "var(--market-up)"
+                  : "var(--muted)";
           return (
             <button
               key={r.run_id}
-              onClick={() => navigate(`/run?id=${r.run_id}`)}
+              onClick={() => navigate(`/run`, { params: { run_id: r.run_id } })}
               style={{
                 display: "grid",
                 gridTemplateColumns: "auto 1fr auto auto auto",
                 gap: "var(--space-4)",
                 alignItems: "center",
                 padding: "var(--space-3) var(--space-4)",
-                background: "var(--surface-1)",
+                background: "var(--surface-soft)",
                 borderRadius: 8,
                 border: "none",
                 cursor: "pointer",
@@ -68,15 +68,15 @@ export function HistoryPage() {
               />
               <div>
                 <div style={{ fontWeight: 600 }}>{r.preset_name}</div>
-                <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                <div style={{ fontSize: 12, color: "var(--muted)" }}>
                   {r.trade_date} · {r.run_mode} · {r.market_scope}
                 </div>
               </div>
-              <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{r.status}</span>
-              <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 13 }}>
+              <span style={{ fontSize: 12, color: "var(--muted)" }}>{r.status}</span>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>
                 推荐 {rec}
               </span>
-              <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+              <span style={{ fontSize: 12, color: "var(--muted)" }}>
                 {r.finished_at ? new Date(r.finished_at).toLocaleString("zh-CN", { hour12: false }) : "—"}
               </span>
             </button>

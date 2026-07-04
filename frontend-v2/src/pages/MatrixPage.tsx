@@ -41,8 +41,7 @@ export function MatrixPage() {
           <button
             onClick={startMatrix}
             disabled={starting}
-            className="primary-button"
-            style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}
+            className="btn btn--primary"
           >
             <PlayCircle size={16} />
             {starting ? "启动中…" : "启动矩阵回测"}
@@ -55,9 +54,10 @@ export function MatrixPage() {
           style={{
             marginTop: "var(--space-3)",
             padding: "var(--space-3)",
-            background: "var(--surface-2)",
-            borderRadius: 6,
-            fontSize: 13,
+            background: "var(--surface-soft)",
+            borderRadius: "var(--radius-md)",
+            fontSize: "var(--text-sm)",
+            color: "var(--ink-secondary)",
           }}
         >
           {status}

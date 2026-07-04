@@ -72,6 +72,15 @@
   --shadow-md: 0 4px 16px rgb(15 23 42 / 0.06);
   --shadow-lg: 0 12px 40px rgb(15 23 42 / 0.10);
   --shadow-glow: 0 0 24px color-mix(in srgb, var(--accent) 16%, transparent);
+
+  /* ── 兼容别名（旧 token 名 → 新 token，避免逐文件替换） ── */
+  --text-muted: var(--muted);
+  --text-secondary: var(--ink-secondary);
+  --color-up: var(--market-down);   /* A股：涨红跌绿，up=红 */
+  --color-down: var(--market-up);
+  --color-info: var(--accent);
+  --surface-1: var(--surface-soft);
+  --surface-2: var(--surface-strong);
 }
 
 /* Respect reduced motion preferences */

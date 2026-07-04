@@ -270,6 +270,11 @@ function regimeToLabel(regime: string): string {
     bear: "熊市",
     strong_bear: "强势·熊市",
     climax: "高潮",
+    "强势": "强势·牛市",
+    "牛市": "牛市",
+    "震荡": "震荡",
+    "熊市": "熊市",
+    "弱势": "弱势·熊市",
   };
   return map[regime] ?? regime ?? "—";
 }
