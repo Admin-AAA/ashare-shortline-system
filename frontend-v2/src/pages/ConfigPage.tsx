@@ -101,7 +101,7 @@ export function ConfigPage() {
             >
               <div>
                 <div style={{ fontWeight: 600 }}>{s.name}</div>
-                <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>
                   {s.skill_id} · {s.mode}
                   {s.assigned_presets.length > 0 && ` · ${s.assigned_presets.join(" / ")}`}
                 </div>
@@ -124,7 +124,7 @@ export function ConfigPage() {
           padding: "var(--space-3)",
           background: "var(--surface-2)",
           borderRadius: 6,
-          fontSize: 12,
+          fontSize: "var(--text-sm)",
           color: "var(--text-muted)",
           display: "flex",
           gap: "var(--space-2)",
@@ -145,7 +145,7 @@ function Metric({ label, value, color }: { label: string; value: string; color?:
       <div
         style={{
           fontFamily: "var(--font-mono, monospace)",
-          fontSize: 15,
+          fontSize: "var(--text-lg)",
           fontWeight: 600,
           color: color || "var(--text-primary)",
         }}

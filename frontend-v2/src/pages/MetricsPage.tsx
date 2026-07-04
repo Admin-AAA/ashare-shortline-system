@@ -175,7 +175,7 @@ function Metric({ label, value, color }: { label: string; value: string; color?:
       <div
         style={{
           fontFamily: "var(--font-mono, monospace)",
-          fontSize: 14,
+          fontSize: "var(--text-md)",
           fontWeight: 600,
           color: color || "var(--text-primary)",
         }}

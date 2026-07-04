@@ -463,7 +463,7 @@ function TradeMetric({
       }}
     >
       <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginBottom: 2 }}>{label}</div>
-      <div style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 15, fontWeight: 600, color }}>
+      <div style={{ fontFamily: "var(--font-mono, monospace)", fontSize: "var(--text-lg)", fontWeight: 600, color }}>
         {value != null ? value.toFixed(2) : "—"}
       </div>
     </div>
