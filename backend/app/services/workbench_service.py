@@ -2608,7 +2608,7 @@ def _serialize_recommendation_cached(
         "take_profit": feature_snapshot.get("take_profit"),
         "ideal_buy": feature_snapshot.get("ideal_buy"),
         "secondary_buy": feature_snapshot.get("secondary_buy"),
-        "bucket": "",
+        "bucket": rec.bucket or "",
         "final_score": rec.final_score,
         "consensus_score": rec.consensus_score,
         "setup_type": rec.setup_type,
@@ -2652,7 +2652,7 @@ def _serialize_recommendation(db: Session, rec: Recommendation) -> dict[str, Any
         "recommend_price": rec.recommend_price,
         "stop_loss": feature_snapshot.get("stop_loss"),
         "take_profit": feature_snapshot.get("take_profit"),
-        "bucket": "",
+        "bucket": rec.bucket or "",
         "final_score": rec.final_score,
         "consensus_score": rec.consensus_score,
         "setup_type": rec.setup_type,
@@ -3479,7 +3479,7 @@ def _historical_recommendations(db: Session, code: str, exclude_recommendation_i
             "run_id": rec.run_id,
             "trade_date": rec.trade_date,
             "final_score": rec.final_score,
-            "bucket": "",
+            "bucket": rec.bucket or "",
             "status": rec.status,
         }
         for rec in history
@@ -3683,7 +3683,7 @@ def _agent_history_context(db: Session, skill_id: str, stock: dict[str, Any]) ->
         same_stock_history.append(
             {
                 "trade_date": rec.trade_date,
-                "bucket": "",
+                "bucket": rec.bucket or "",
                 "final_score": rec.final_score,
                 "setup_type": rec.setup_type,
                 "outcome_label": normalized_outcome_label(outcome) if outcome else rec.status,

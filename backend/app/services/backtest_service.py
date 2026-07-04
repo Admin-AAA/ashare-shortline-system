@@ -55,6 +55,7 @@ from app.services.outcome_service import (
     resolved_trade_return,
 )
 from app.services.temporal_consistency import check_run_temporal_consistency, check_backtest_temporal_consistency
+from app.services.runs.persistence import best_strategy_id
 from app.services.evaluation_metrics import (
     compute_full_metrics,
     _empty_metrics as _backtest_empty_metrics,
@@ -716,7 +717,7 @@ def _persist_backtest_recommendations(
             name=card.get("name", ""),
             industry=card.get("industry"),
             recommend_price=card.get("recommend_price", 0),
-            bucket="",
+            bucket=best_strategy_id(card.get("strategy_signals") or []),
             final_score=card.get("final_score", 0),
             consensus_score=card.get("consensus_score", 0),
             setup_type=card.get("setup_type"),

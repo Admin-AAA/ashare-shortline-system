@@ -737,7 +737,7 @@ class Recommendation(Base):
     name: Mapped[str] = mapped_column(String(80))
     industry: Mapped[str | None] = mapped_column(String(80))
     recommend_price: Mapped[float] = mapped_column(Float, default=0)
-    bucket: Mapped[str] = mapped_column(String(30))
+    bucket: Mapped[str] = mapped_column(String(64), default="")
     final_score: Mapped[float] = mapped_column(Float)
     consensus_score: Mapped[float] = mapped_column(Float, default=0)
     setup_type: Mapped[str | None] = mapped_column(String(80))

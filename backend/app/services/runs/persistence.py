@@ -11,6 +11,24 @@ from app.models.tables import AgentDecisionLog, Recommendation
 ProgressCallback = Callable[[int, int], None]
 
 
+def best_strategy_id(strategy_signals: list[dict[str, Any]]) -> str:
+    """从 strategy_signals 取得分最高的 strategy_id 作为 bucket。
+
+    用于按策略归因胜率：每笔推荐记录贡献最高分的策略，便于后续
+    SELECT bucket, COUNT(*), SUM(success) FROM recommendations GROUP BY bucket。
+    hard_veto 的 signal 不参与（score 可能虚高但已否决）。
+    """
+    if not strategy_signals:
+        return ""
+    candidates = [s for s in strategy_signals if not s.get("hard_veto")]
+    pool = candidates or strategy_signals
+    best = max(
+        pool,
+        key=lambda s: float(s.get("score") or 0),
+    )
+    return str(best.get("strategy_id") or "")
+
+
 def persist_recommendation_cards(
     db: Session,
     *,
@@ -32,7 +50,7 @@ def persist_recommendation_cards(
             name=card["name"],
             industry=card.get("industry"),
             recommend_price=float(card.get("recommend_price") or 0),
-            bucket="",
+            bucket=best_strategy_id(card.get("strategy_signals") or []),
             final_score=float(card["final_score"]),
             consensus_score=float(card.get("consensus_score") or 0),
             setup_type=card.get("setup_type"),
