@@ -859,3 +859,39 @@ def test_default_presets_do_not_overwrite_user_skill_selection(production_mysql)
         db.rollback()
         db.commit = original_commit
         db.close()
+
+
+def test_tushare_amount_to_yi_daily_kiloyuan():
+    """daily API amount 单位是千元：千元×1000=元÷1e8=亿元。"""
+    from app.services.market_data import _tushare_amount_to_yi
+    # 920992 daily amount=9534.6 千元 = 9534600 元 = 0.095346 亿
+    assert _tushare_amount_to_yi(9534.6, "daily") == pytest.approx(0.095346, abs=1e-6)
+
+
+def test_tushare_amount_to_yi_bak_daily_wanyuan():
+    """bak_daily API amount 单位是万元：万元×10000=元÷1e8=亿元。
+
+    回归测试：之前统一用 *1000/1e8 对 bak_daily 少算 10 倍，导致 stock_quotes.amount_yi
+    偏小，limit-up-reseal-relay 的 amount_yi>=3 门槛误筛涨停股。
+    """
+    from app.services.market_data import _tushare_amount_to_yi
+    # 920992 bak_daily amount=953.46 万元 = 9534600 元 = 0.095346 亿
+    assert _tushare_amount_to_yi(953.46, "bak_daily") == pytest.approx(0.095346, abs=1e-6)
+
+
+def test_tushare_amount_to_yi_daily_and_bak_daily_match():
+    """同一只股票 daily 和 bak_daily 的 amount 转亿元后应一致（差 10 倍的单位应抵消）。"""
+    from app.services.market_data import _tushare_amount_to_yi
+    # daily 9534.6 千元 vs bak_daily 953.46 万元 → 都代表 9534600 元
+    daily_yi = _tushare_amount_to_yi(9534.6, "daily")
+    bak_yi = _tushare_amount_to_yi(953.46, "bak_daily")
+    assert daily_yi == pytest.approx(bak_yi, abs=1e-6)
+
+
+def test_tushare_amount_to_yi_typical_stock():
+    """典型大盘股成交额验证：55 亿成交额的股票。"""
+    from app.services.market_data import _tushare_amount_to_yi
+    # 002747 daily amount=5508070 千元 = 55.0807 亿
+    assert _tushare_amount_to_yi(5508070, "daily") == pytest.approx(55.0807, abs=1e-4)
+    # 002747 bak_daily amount=550807 万元 = 55.0807 亿
+    assert _tushare_amount_to_yi(550807, "bak_daily") == pytest.approx(55.0807, abs=1e-4)

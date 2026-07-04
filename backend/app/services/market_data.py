@@ -697,12 +697,7 @@ def _fetch_tushare_quotes(settings: Any) -> list[dict[str, Any]]:
         exchange = _exchange_from_code(symbol)
         pct = _num(quote_row.get("pct_chg"), _num(quote_row.get("pct_change")))
         price = _num(quote_row.get("close"))
-        # Tushare amount 单位因 API 而异：daily=千元，bak_daily=万元。
-        # 统一转亿元：daily 千元×1000=元÷1e8=亿元；bak_daily 万元×10000=元÷1e8=亿元。
-        # 之前统一用 *1000/1e8 对 bak_daily 少算 10 倍（万元被当千元），导致策略 amount_yi 门槛误筛。
-        raw_amount = _num(quote_row.get("amount"))
-        amount_unit_multiplier = 10000 if selected_api_name == "bak_daily" else 1000
-        amount_yi = raw_amount * amount_unit_multiplier / 100000000
+        amount_yi = _tushare_amount_to_yi(_num(quote_row.get("amount")), selected_api_name)
         turnover_rate = _num(quote_row.get("turn_over"), _num(basic_row.get("turnover_rate")))
         pe_ttm = _num(quote_row.get("pe"), _num(basic_row.get("pe_ttm")))
         total_mv_yi = _market_value_yi(
@@ -1679,6 +1674,21 @@ def _num(value: Any, default: float = 0.0) -> float:
     if math.isnan(number) or math.isinf(number):
         return float(default)
     return number
+
+
+def _tushare_amount_to_yi(raw_amount: float, api_name: str) -> float:
+    """Tushare amount 字段转亿元。
+
+    Tushare API 的 amount 单位因接口而异（常见陷阱）：
+    - daily: 千元（×1000=元，÷1e8=亿元）
+    - bak_daily: 万元（×10000=元，÷1e8=亿元）
+    - realtime_quote: 元（÷1e8=亿元）
+
+    之前 _fetch_tushare_quotes 统一用 *1000/1e8 对 bak_daily 少算 10 倍，
+    导致 stock_quotes.amount_yi 偏小，策略 amount_yi 门槛误筛涨停股。
+    """
+    multiplier = 10000 if api_name == "bak_daily" else 1000
+    return raw_amount * multiplier / 100000000
 
 
 def _market_value_yi(value: Any, fallback: Any = None) -> float:
