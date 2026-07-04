@@ -1,18 +1,25 @@
 import { useApi } from "../app/useApi";
 import { api } from "../api/client";
-import type { PrecisionAtKRow, ScoreLineStatsRow, StrategyStatsRow, SetupStatsRow } from "../types";
+import type {
+  FilterEffectiveness,
+  PrecisionAtKRow,
+  ScoreLineStatsRow,
+  StrategyStatsRow,
+  SetupStatsRow,
+} from "../types";
 import { PageSkeleton, ErrorPage, EmptyState } from "../components/StateViews";
 import { LineChart } from "lucide-react";
 
 /**
  * 指标页 —— 推荐质量分析
- * 后端有 /api/metrics/by_score_line, by_strategy, by_setup, precision-at-k 四个端点。
+ * 后端有 /api/metrics/by_score_line, by_strategy, by_setup, precision-at-k, filter-effectiveness 五个端点。
  *
- * 四视图：
+ * 五视图：
  * 1. Precision@K：前 K 推荐准确率，衡量推荐排序质量（越靠前应越高）
- * 2. 分数段胜率：哪个分数线以上的推荐质量最高
- * 3. 策略胜率：哪个策略表现最好/最差
- * 4. Setup 胜率：哪个 setup 类型最有效
+ * 2. 过滤效果：各过滤规则保留/过滤的胜率对比，暴露误杀
+ * 3. 分数段胜率：哪个分数线以上的推荐质量最高
+ * 4. 策略胜率：哪个策略表现最好/最差
+ * 5. Setup 胜率：哪个 setup 类型最有效
  */
 export function MetricsPage() {
   const { data: scoreLines, loading: l1, error: e1 } = useApi<ScoreLineStatsRow[]>(
@@ -31,9 +38,13 @@ export function MetricsPage() {
     () => api.precisionAtK("formal"),
     [],
   );
+  const { data: filterEffect, loading: l5, error: e5 } = useApi<FilterEffectiveness>(
+    () => api.filterEffectiveness("formal"),
+    [],
+  );
 
-  const loading = l1 || l2 || l3 || l4;
-  const error = e1 || e2 || e3 || e4;
+  const loading = l1 || l2 || l3 || l4 || l5;
+  const error = e1 || e2 || e3 || e4 || e5;
 
   if (loading) return <PageSkeleton title="指标分析" hint="加载推荐质量数据" rowCount={6} />;
   if (error) return <ErrorPage title="指标加载失败" message={error} />;
@@ -43,9 +54,69 @@ export function MetricsPage() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
       <PrecisionPanel rows={precisionAtK ?? []} />
+      <FilterEffectivenessPanel data={filterEffect} />
       <ScoreLinePanel rows={scoreLines ?? []} />
       <StrategyPanel rows={strategies ?? []} />
       <SetupPanel rows={setups ?? []} />
+    </div>
+  );
+}
+
+function FilterEffectivenessPanel({ data }: { data: FilterEffectiveness | null }) {
+  if (!data) return null;
+  const kept = data.kept;
+  const rules = Object.entries(data.filtered_by_rule || {});
+  return (
+    <div className="panel">
+      <div className="panel__header">
+        <span className="panel__kicker">过滤效果</span>
+        <h2 className="panel__title">规则有效性</h2>
+        <span style={{ marginLeft: "auto", color: "var(--text-muted)", fontSize: 13 }}>
+          保留 {kept.count} 笔 WR {kept.net_win_rate.toFixed(1)}% · 过滤 {data.filtered_count} 笔（{data.filter_rate_pct.toFixed(1)}%）
+        </span>
+      </div>
+      <div style={{ display: "grid", gap: "var(--space-2)" }}>
+        {rules.map(([rule, stats]) => {
+          const wr = stats.win_rate;
+          const isMisfilter = wr >= kept.net_win_rate; // 过滤掉的胜率 >= 保留 = 误杀
+          const color = wr >= 60 ? "var(--color-up)" : wr >= 45 ? "var(--text-secondary)" : "var(--color-down)";
+          return (
+            <div
+              key={rule}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr auto auto auto",
+                gap: "var(--space-4)",
+                alignItems: "center",
+                padding: "var(--space-2) var(--space-4)",
+                background: "var(--surface-1)",
+                borderRadius: 6,
+                border: isMisfilter ? "1px solid var(--color-up)" : "none",
+              }}
+            >
+              <div style={{ fontWeight: 600, color: "var(--ink)" }}>
+                {rule}
+                {isMisfilter && (
+                  <span style={{ marginLeft: 8, fontSize: 11, color: "var(--color-up)" }}>⚠ 误杀</span>
+                )}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{stats.count} 笔</div>
+              <div style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 16, fontWeight: 600, color }}>
+                {(wr * 100).toFixed(1)}%
+              </div>
+              <div
+                style={{
+                  fontFamily: "var(--font-mono, monospace)",
+                  fontSize: 13,
+                  color: stats.avg_return >= 0 ? "var(--color-up)" : "var(--color-down)",
+                }}
+              >
+                {stats.avg_return >= 0 ? "+" : ""}{stats.avg_return.toFixed(2)}%
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
