@@ -212,6 +212,7 @@ print(f'最大亏损: {r[0]}%')
 - [T3] 活跃阶段应买超跌股，不是追高（第 25 轮）
 - [T3] feature_snapshot 中 final_score 字段缺失会导致分析读到 0（第 28 轮修复）
 - [T3] feature_snapshot 持久化时必须合并 card 顶层字段，不能只取 legacy_stock 副本（第 46 轮）
+- [T3] 龙头评分（shortline_leader_score）对胜率 point-biserial=0.046 无预测力，但它是选股逻辑（度量主力资金行为）非胜率预测。权重调整对胜率影响有限，胜率主要由 trailing stop + 策略 universe 决定。调整权重前必须回测验证，避免破坏选股逻辑（第 95 轮）
 - [T5] 回测的 snapshot 是静态的，sentiment 调整效果需实盘验证（第 22 轮）
 - [T5] 胜率单一指标会误判：强势 regime WR 41.3% 但盈亏比 2.65（净正收益），震荡 WR 70% 但盈亏比 0.96（净近零）。判定 regime 优劣必须看盈亏比，不能只看胜率（第 92 轮）
 - [T5] Tushare API 单位陷阱：daily(千元) vs bak_daily(万元) vs realtime(元)。amount_yi 统一用 *1000/1e8 对 bak_daily 少算 10 倍，是 limit-up-reseal-relay 0 推荐的深层根因。多数据源字段必须核对单位，抽纯函数 + 回归测试保护（第 94 轮）
