@@ -278,6 +278,37 @@ function ExpandedRow({
         <p style={{ margin: 0, marginBottom: "var(--space-3)", color: "var(--ink-secondary)", fontSize: "var(--text-sm)", lineHeight: 1.6 }}>
           {item.rationale || "—"}
         </p>
+        {(() => {
+          const breadth = (item.market_context?.breadth ?? {}) as Record<string, unknown>;
+          const regime = breadth.regime as string | undefined;
+          const risk = breadth.risk as string | undefined;
+          const hotTheme = breadth.hot_theme as string | undefined;
+          const industries = item.market_context?.main_industries ?? [];
+          if (!regime && !risk && !hotTheme && industries.length === 0) return null;
+          return (
+            <div style={{ marginBottom: "var(--space-3)", fontSize: "var(--text-xs)", lineHeight: 1.6 }}>
+              {regime && (
+                <div style={{ marginBottom: "var(--space-1)" }}>
+                  <span style={{ color: "var(--text-muted)" }}>市场阶段 · </span>
+                  <span style={{ color: "var(--ink-secondary)" }}>{regime}</span>
+                  {risk && <span style={{ color: "var(--text-muted)" }}>（风险 {risk}）</span>}
+                </div>
+              )}
+              {hotTheme && (
+                <div style={{ marginBottom: "var(--space-1)" }}>
+                  <span style={{ color: "var(--text-muted)" }}>热门题材 · </span>
+                  <span style={{ color: "var(--ink-secondary)" }}>{hotTheme}</span>
+                </div>
+              )}
+              {industries.length > 0 && (
+                <div>
+                  <span style={{ color: "var(--text-muted)" }}>主线 · </span>
+                  <span style={{ color: "var(--ink-secondary)" }}>{industries.join(" / ")}</span>
+                </div>
+              )}
+            </div>
+          );
+        })()}
         {(item.entry_rule || item.invalid_rule) && (
           <div style={{ marginBottom: "var(--space-3)", fontSize: "var(--text-xs)", lineHeight: 1.6 }}>
             {item.entry_rule && (

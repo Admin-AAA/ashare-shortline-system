@@ -49,6 +49,7 @@ def build_cockpit_recommendation(rec: Any, watch: Any = None) -> CockpitRecommen
     skill_breakdown = _loads_recommendation_field(rec, "skill_breakdown_json", "skill_breakdown", [])
     risk_tags = _loads_recommendation_field(rec, "risk_tags_json", "risk_tags", [])
     info_tags = _loads_recommendation_field(rec, "info_tags_json", "info_tags", [])
+    market_context = _loads_recommendation_field(rec, "market_context_json", "market_context", {}) or {}
     final_score = float(_get(rec, "final_score", 0.0) or 0.0)
     score_line_meta = _get(feature_snapshot, "score_line_meta", {}) or {}
     effective_score_line = _get(score_line_meta, "effective_score_line")
@@ -89,6 +90,7 @@ def build_cockpit_recommendation(rec: Any, watch: Any = None) -> CockpitRecommen
         entry_rule=_get(rec, "entry_rule"),
         invalid_rule=_get(rec, "invalid_rule"),
         degraded_reason=_detect_degradation(info_tags, _get(rec, "rationale", "") or ""),
+        market_context=market_context,
     )
 
 

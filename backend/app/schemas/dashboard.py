@@ -74,6 +74,7 @@ class CockpitRecommendation(BaseModel):
     entry_rule: str | None = None
     invalid_rule: str | None = None
     degraded_reason: str | None = None
+    market_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class RiskRadar(BaseModel):

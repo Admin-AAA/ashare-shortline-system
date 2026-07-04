@@ -213,6 +213,10 @@ export type CockpitRecommendation = {
   entry_rule?: string | null;
   invalid_rule?: string | null;
   degraded_reason?: string | null;
+  market_context?: {
+    main_industries?: string[];
+    breadth?: Record<string, unknown>;
+  };
 };
 
 export type RiskRadar = {
