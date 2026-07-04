@@ -134,6 +134,7 @@ export function HistoryPage() {
                 <th style={thStyle}>日期</th>
                 <th style={thStyle}>股票</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>分数</th>
+                <th style={thStyle}>买点</th>
                 <th style={thStyle}>结果</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>收益</th>
                 <th style={thStyle}>退出原因</th>
@@ -163,6 +164,9 @@ export function HistoryPage() {
                     </td>
                     <td style={{ ...tdStyle, textAlign: "right", fontFamily: "var(--font-mono)" }}>
                       {it.final_score.toFixed(1)}
+                    </td>
+                    <td style={{ ...tdStyle, color: "var(--muted)", fontSize: 12 }}>
+                      {it.setup_type || "—"}
                     </td>
                     <td style={{ ...tdStyle, color: labelColor, fontWeight: 600 }}>
                       {o?.outcome_label ?? "—"}
