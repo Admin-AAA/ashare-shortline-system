@@ -217,6 +217,11 @@ def _apply_leader_factor(stock: dict[str, Any]) -> None:
     # 结论：权重调整对胜率影响有限，胜率主要由 trailing stop + 策略 universe 决定。
     # 调整权重前必须回测验证（见 alpha-decay-false-positive 教训），避免破坏选股逻辑。
     score = 0.0
+    # is_main_theme 占 24 分（最大权重），但 95.7% 的推荐都是 True（第105轮 T1 衰减复检）。
+    # 衰减 38.8%（point-biserial 0.125→-0.077），但近期 False 样本仅 5 笔（不可信）。
+    # True 胜率前期 72.1%→近期 61.6%（降 10.5%，市场环境变化），False 样本太少无法判定。
+    # 95.7% 都是 True 说明该因子几乎无区分度（只排除 4.3%），24 分等于普遍提分。
+    # 未来优化方向：降低 is_main_theme 权重，把分数让给有区分度的因子（需回测验证）。
     score += 24.0 if stock.get("is_main_theme") else 0.0
     score += min(28.0, _num(stock.get("sector_ladder_completeness_score")) * 0.28)
     score += min(24.0, _num(stock.get("capital_resonance_score")) * 0.24)
