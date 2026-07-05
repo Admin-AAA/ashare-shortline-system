@@ -221,6 +221,10 @@ def _apply_leader_factor(stock: dict[str, Any]) -> None:
     # 衰减 38.8%（point-biserial 0.125→-0.077），但近期 False 样本仅 5 笔（不可信）。
     # True 胜率前期 72.1%→近期 61.6%（降 10.5%，市场环境变化），False 样本太少无法判定。
     # 95.7% 都是 True 说明该因子几乎无区分度（只排除 4.3%），24 分等于普遍提分。
+    # 盈亏比维度（第106轮 T2，按第92轮教训看盈亏比不只看胜率）：
+    #   True 盈亏比 1.68（avg_loss 3.5%）vs False 盈亏比 3.85（avg_loss 1.74%）
+    #   False 盈亏比更高——非主线股票亏损更可控（但 False 仅 18 笔，不显著）
+    #   印证第92轮教训：胜率高的因子盈亏比可能反而低
     # 未来优化方向：降低 is_main_theme 权重，把分数让给有区分度的因子（需回测验证）。
     score += 24.0 if stock.get("is_main_theme") else 0.0
     score += min(28.0, _num(stock.get("sector_ladder_completeness_score")) * 0.28)
