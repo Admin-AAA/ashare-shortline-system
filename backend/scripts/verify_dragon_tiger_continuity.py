@@ -1,8 +1,8 @@
-"""验证 dragon_tiger 表数据连续性 + 推荐龙虎榜填充率。
+"""验证辅助数据表日期连续性 + 推荐龙虎榜填充率。
 
-T5 一致性：dragon_tiger 数据缺口导致推荐 dragon_tiger_is_on_list 全 false。
+T5 一致性：数据缺口导致推荐特征缺失（dragon_tiger 缺口→龙虎榜因子失效）。
 本脚本检测：
-1. dragon_tiger 表日期是否连续（无缺口）
+1. 所有辅助数据表的日期连续性（识别缺口）
 2. 推荐中 dragon_tiger_is_on_list=true 的比例
 
 用法: python scripts/verify_dragon_tiger_continuity.py
@@ -10,43 +10,60 @@ T5 一致性：dragon_tiger 数据缺口导致推荐 dragon_tiger_is_on_list 全
 from __future__ import annotations
 
 import sys
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
-# 让脚本能 import app
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.db.session import SessionLocal  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
+# 检查的辅助数据表（推荐管线依赖）
+AUX_TABLES = [
+    "limit_up_board",
+    "dragon_tiger",
+    "concept_sector",
+    "capital_flow",
+]
 
-def main() -> int:
-    db = SessionLocal()
-    # 1. 检查 dragon_tiger 表日期连续性
+
+def check_table_continuity(db, table: str) -> list[tuple[date, date]]:
+    """检查表的日期连续性，返回缺口列表。"""
     rows = db.execute(
-        text(
-            "SELECT trade_date, COUNT(*) FROM dragon_tiger "
-            "GROUP BY trade_date ORDER BY trade_date"
-        )
+        text(f"SELECT trade_date FROM {table} GROUP BY trade_date ORDER BY trade_date")
     ).all()
+    if not rows:
+        return []
     dates = [date.fromisoformat(str(r[0])) for r in rows]
-    print(f"dragon_tiger 表: {len(dates)} 个日期, 范围 {dates[0]} ~ {dates[-1]}")
-
     gaps: list[tuple[date, date]] = []
     for i in range(1, len(dates)):
         prev, cur = dates[i - 1], dates[i]
-        # 跳过周末（周五到周一 gap 3 天正常）
-        business_gap = (cur - prev).days
-        if business_gap > 3:  # >3 天说明有缺口（含周末）
+        if (cur - prev).days > 3:  # >3 天说明有缺口（含周末）
             gaps.append((prev, cur))
-    if gaps:
-        print(f"⚠ 日期缺口 {len(gaps)} 处:")
-        for prev, cur in gaps:
-            print(f"  {prev} → {cur} (gap {(cur - prev).days} 天)")
-    else:
-        print("✅ 日期连续（无缺口）")
+    return gaps
 
-    # 2. 检查推荐龙虎榜填充率
+
+def main() -> int:
+    db = SessionLocal()
+    all_gaps: dict[str, list] = {}
+    for table in AUX_TABLES:
+        try:
+            rows = db.execute(
+                text(f"SELECT COUNT(*), MIN(trade_date), MAX(trade_date) FROM {table}")
+            ).fetchone()
+            gaps = check_table_continuity(db, table)
+            all_gaps[table] = gaps
+            print(f"{table:25s} {rows[0]:6d} 行  {rows[1]} ~ {rows[2]}", end="")
+            if gaps:
+                print(f"  ⚠ 缺口 {len(gaps)} 处")
+                for prev, cur in gaps[:5]:
+                    print(f"    {prev} → {cur} (gap {(cur - prev).days} 天)")
+            else:
+                print("  ✅ 连续")
+        except Exception as e:
+            print(f"{table}: ERROR {e}")
+
+    # 推荐龙虎榜填充率
     print()
     total = db.execute(
         text(
@@ -63,10 +80,9 @@ def main() -> int:
     print(f"推荐龙虎榜填充: {on_list}/{total} 笔 ({rate:.1f}%) on_list=true")
     if rate < 5:
         print("⚠ 填充率 <5%，可能数据缺口或填充逻辑问题")
-    else:
-        print("✅ 填充率正常")
 
-    return 0 if not gaps and rate >= 5 else 1
+    has_gaps = any(gaps for gaps in all_gaps.values())
+    return 0 if not has_gaps and rate >= 5 else 1
 
 
 if __name__ == "__main__":
