@@ -520,3 +520,31 @@ def test_high_range_require_setup_and_observation_hard_veto():
     signal3 = run_strategy(skill, true_breakout_stock, ["半导体"], skip_universe_check=True)
     assert signal3["hard_veto"] is False, f"真突破应放行: {signal3}"
     assert signal3["setup_match"] == "60日新高放量突破"
+
+
+def test_all_skill_md_have_agent_output_constraints():
+    """所有 SKILL.md 必须含 Agent 审查输出约束（stance + action 字段）。
+
+    回归保护：第 101-102 轮 T9 给 5 个 B 类 SKILL.md 补齐输出约束，
+    防止未来新增/修改 SKILL.md 时遗漏输出格式指导，导致 LLM agent 输出字段不一致。
+    A 类 SKILL.md（DSA/chao-gu-yang-jia/chen-xiaoqun）自有 stance 表，B 类引用 SkillReviewOutput schema。
+    """
+    from pathlib import Path
+
+    skills_dir = Path(__file__).resolve().parents[1] / "skills"
+    # stance + action 是 SkillReviewOutput 的核心字段，所有 SKILL.md 必须提及
+    required_markers = ["stance", "action"]
+    missing = []
+
+    for skill_dir in sorted(skills_dir.iterdir()):
+        if not skill_dir.is_dir():
+            continue
+        skill_md = skill_dir / "SKILL.md"
+        if not skill_md.exists():
+            continue
+        content = skill_md.read_text(encoding="utf-8")
+        for marker in required_markers:
+            if marker not in content:
+                missing.append(f"{skill_dir.name}: 缺 {marker}")
+
+    assert not missing, f"SKILL.md 输出约束缺失: {missing}"
