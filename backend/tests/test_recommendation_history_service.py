@@ -92,3 +92,46 @@ def test_history_items_have_outcome_field():
             assert "outcome" in item
     finally:
         db.close()
+
+
+def test_recompute_stale_outcomes_idempotent():
+    """recompute_stale_outcomes 幂等性：连续两次重算，第二次 flipped 应全空。
+
+    验证 simulation 逻辑稳定——同一批 rec 重算后不应再翻转 outcome_label。
+    若 flipped 非空，说明 simulation 逻辑不稳定（同一输入产生不同结果）。
+    """
+    from app.services.outcome_service import recompute_stale_outcomes
+
+    db = _db()
+    try:
+        first = recompute_stale_outcomes(db, horizon_days=5, run_mode="formal", limit=30)
+        second = recompute_stale_outcomes(db, horizon_days=5, run_mode="formal", limit=30)
+
+        # 返回结构
+        assert "recomputed" in first
+        assert "errors" in first
+        assert "flipped" in first
+
+        # 第二次重算不应有翻转（幂等）
+        assert second["flipped"] == {}, f"recompute 非幂等，第二次仍有翻转: {second['flipped']}"
+        # 第二次 errors 也应为 0
+        assert second["errors"] == 0
+    finally:
+        db.close()
+
+
+def test_recompute_stale_outcomes_invalid_run_mode_rejected():
+    """recompute 端点 run_mode 参数校验（API 层 HTTP 400）。
+
+    回归保护：run_mode 非 formal/experiment 时应拒绝。
+    """
+    from fastapi import HTTPException
+    from app.api.outcomes import recompute
+
+    # 模拟 API 层校验（不调真实 db）
+    try:
+        recompute(horizon_days=5, run_mode="invalid_mode", limit=10, db=None)
+        assert False, "应抛 HTTPException(400)"
+    except HTTPException as e:
+        assert e.status_code == 400
+        assert "run_mode" in e.detail
