@@ -4,7 +4,9 @@ import AuthGate from "./AuthGate";
 import { NAV_ITEMS, navMatches, type Section } from "./nav";
 import { useUrlRoute } from "./useUrlRoute";
 import { useThemePreference } from "../shared/theme/useThemePreference";
+import { WaveBackground } from "../components/WaveBackground";
 
+const HomeScreenPage = lazy(() => import("../pages/HomeScreenPage").then((m) => ({ default: m.HomePage })));
 const HomePage = lazy(() => import("../pages/HomePage").then((m) => ({ default: m.HomePage })));
 const PoolPage = lazy(() => import("../pages/PoolPage").then((m) => ({ default: m.PoolPage })));
 const HistoryPage = lazy(() => import("../pages/HistoryPage").then((m) => ({ default: m.HistoryPage })));
@@ -15,6 +17,8 @@ const RunDetailPage = lazy(() => import("../pages/RunDetailPage").then((m) => ({
 
 function SectionView({ section }: { section: Section }) {
   switch (section) {
+    case "home":
+      return <HomeScreenPage />;
     case "dashboard":
       return <HomePage />;
     case "pool":
@@ -52,11 +56,12 @@ export function AppShell() {
 
   return (
     <AuthGate>
+      <WaveBackground theme={theme} />
       <div className="app-shell">
         <header className="topbar">
           <div
             className="topbar__brand"
-            onClick={() => navigateSection("dashboard")}
+            onClick={() => navigate("/")}
             role="button"
             tabIndex={0}
           >

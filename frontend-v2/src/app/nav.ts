@@ -8,9 +8,11 @@ import {
   Settings2,
 } from "lucide-react";
 
-/** 频率驱动的六入口导航 — 见 UX-architecture-full-report.md §5.2 */
+/** 频率驱动的六入口导航 — 见 UX-architecture-full-report.md §5.2
+ * home 是空白起始页（大留白），不计入主导航频率分组 */
 export type Section =
-  | "dashboard" // 🏠 驾驶舱（首页）
+  | "home" // 空白首页（大留白起始页）
+  | "dashboard" // 🏠 驾驶舱
   | "pool" // 🎯 候选池
   | "history" // 📊 复盘
   | "matrix" // 📈 矩阵
@@ -42,6 +44,7 @@ export type RoutePath =
   | "/data-health";
 
 export const SECTION_PATHS: Record<Section, string> = {
+  home: "/",
   dashboard: "/dashboard",
   pool: "/pool",
   history: "/history",
@@ -53,12 +56,14 @@ export const SECTION_PATHS: Record<Section, string> = {
 /** 从 URL pathname 反向解析 section（不含 run 等子路由） */
 export function sectionFromPath(pathname: string): Section {
   const normalized = pathname.replace(/\/+$/, "") || "/";
+  if (normalized === "/") return "home";
   for (const [section, path] of Object.entries(SECTION_PATHS)) {
+    if (section === "home") continue;
     if (normalized === path) return section as Section;
   }
   // /run → 不属于主导航，但默认回到驾驶舱
   if (normalized === "/run") return "dashboard";
-  return "dashboard";
+  return "home";
 }
 
 /** 主导航是否匹配当前 path（用于高亮） */

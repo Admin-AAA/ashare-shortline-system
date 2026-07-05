@@ -1047,10 +1047,13 @@ export type RecommendationCard = {
   name: string;
   industry?: string | null;
   recommend_price: number;
+  ideal_buy?: number | null;
+  secondary_buy?: number | null;
   stop_loss?: number | null;
   take_profit?: number | null;
   final_score: number;
   consensus_score: number;
+  bucket?: string | null;
   setup_type?: string | null;
   entry_rule?: string | null;
   invalid_rule?: string | null;

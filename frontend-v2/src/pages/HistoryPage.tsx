@@ -1,22 +1,25 @@
-import { History, Search } from "lucide-react";
-import { useState } from "react";
+import { ChevronDown, ChevronRight, History, Loader2, Search } from "lucide-react";
+import { Fragment, useCallback, useState } from "react";
 import { api } from "../api/client";
-import type { RecommendationHistoryResponse } from "../types";
+import type { RecommendationCard, RecommendationHistoryResponse } from "../types";
 import { PageSkeleton, ErrorPage, EmptyState } from "../components/StateViews";
-import { useUrlRoute } from "../app/useUrlRoute";
 import { useApi } from "../app/useApi";
+import { RecommendationDetailCard } from "../components/RecommendationDetailCard";
 
 /**
  * 复盘页 —— 推荐历史记录（跨 run，按 trade_date 倒序，带 outcome）。
  * 填补北极星"推荐历史记录页"缺口：用户查看每笔推荐的实际表现，支持分页 + 筛选。
- * 点击任一推荐跳转 /run?id=xxx 查看候选详情。
+ * 点击行展开 inline 详情（评分分解 / 买点 / 风控 / LLM 摘要）。
  */
 export function HistoryPage() {
-  const { navigate } = useUrlRoute();
   const [runMode, setRunMode] = useState<"formal" | "experiment">("formal");
   const [label, setLabel] = useState<"" | "success" | "failed" | "missed" | "pending">("");
   const [codeInput, setCodeInput] = useState("");
   const [page, setPage] = useState(0);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [details, setDetails] = useState<Record<string, RecommendationCard>>({});
+  const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
+  const [detailError, setDetailError] = useState<Record<string, string>>({});
   const pageSize = 50;
 
   // code 只在用户提交时触发查询（避免每键都请求）；用本地 state 控制
@@ -44,6 +47,28 @@ export function HistoryPage() {
     setCodeQuery(codeInput.trim());
     resetPage();
   };
+
+  const handleToggle = useCallback(
+    async (id: string) => {
+      if (expandedId === id) {
+        setExpandedId(null);
+        return;
+      }
+      setExpandedId(id);
+      if (details[id]) return;
+      setDetailLoadingId(id);
+      setDetailError((prev) => ({ ...prev, [id]: "" }));
+      try {
+        const detail = await api.recommendationDetail(id);
+        setDetails((prev) => ({ ...prev, [id]: detail }));
+      } catch (e) {
+        setDetailError((prev) => ({ ...prev, [id]: (e as Error).message || "加载失败" }));
+      } finally {
+        setDetailLoadingId(null);
+      }
+    },
+    [expandedId, details],
+  );
 
   const winCount = items.filter((it) => it.outcome?.outcome_label === "success").length;
   const hasOutcome = items.some((it) => it.outcome);
@@ -134,11 +159,12 @@ export function HistoryPage() {
                 <th style={thStyle}>日期</th>
                 <th style={thStyle}>股票</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>分数</th>
-                <th style={thStyle}>买点</th>
+                <th style={thStyle}>策略/买点</th>
+                <th style={thStyle}>价格/风控</th>
+                <th style={thStyle}>执行规则</th>
                 <th style={thStyle}>结果</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>收益</th>
-                <th style={thStyle}>退出原因</th>
-                <th style={thStyle}>持仓</th>
+                <th style={thStyle}>退出/持仓</th>
               </tr>
             </thead>
             <tbody>
@@ -152,41 +178,84 @@ export function HistoryPage() {
                       ? "var(--market-down)"
                       : "var(--muted)";
                 return (
-                  <tr
-                    key={it.recommendation_id}
-                    onClick={() => navigate(`/run`, { params: { run_id: it.run_id } })}
-                    style={rowStyle}
-                  >
-                    <td style={tdStyle}>{it.trade_date}</td>
-                    <td style={{ ...tdStyle, fontFamily: "var(--font-mono)" }}>
-                      {it.code} <span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }}>{it.name}</span>
-                    </td>
-                    <td style={{ ...tdStyle, textAlign: "right", fontFamily: "var(--font-mono)" }}>
-                      {it.final_score.toFixed(1)}
-                    </td>
-                    <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>
-                      {it.setup_type || "—"}
-                    </td>
-                    <td style={{ ...tdStyle, color: labelColor, fontWeight: 600 }}>
-                      {o?.outcome_label ?? "—"}
-                    </td>
-                    <td
-                      style={{
-                        ...tdStyle,
-                        textAlign: "right",
-                        fontFamily: "var(--font-mono)",
-                        color: ret == null ? "var(--muted)" : ret >= 0 ? "var(--market-up)" : "var(--market-down)",
-                      }}
+                  <Fragment key={it.recommendation_id}>
+                    <tr
+                      onClick={() => handleToggle(it.recommendation_id)}
+                      style={rowStyle}
+                      title="点击展开完整决策详情"
                     >
-                      {ret == null ? "—" : `${ret >= 0 ? "+" : ""}${ret.toFixed(2)}%`}
-                    </td>
-                    <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>
-                      {o?.exit_reason ?? "—"}
-                    </td>
-                    <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>
-                      {o?.holding_days != null ? `${o.holding_days}d` : "—"}
-                    </td>
-                  </tr>
+                      <td style={tdStyle}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}>
+                          {expandedId === it.recommendation_id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                          {it.trade_date}
+                        </span>
+                      </td>
+                      <td style={{ ...tdStyle, fontFamily: "var(--font-mono)" }}>
+                        {it.code} <span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }}>{it.name}</span>
+                      </td>
+                      <td style={{ ...tdStyle, textAlign: "right", fontFamily: "var(--font-mono)" }}>
+                        {it.final_score.toFixed(1)}
+                      </td>
+                      <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>
+                        <div style={stackStyle}>
+                          <span style={{ color: "var(--text)", fontFamily: "var(--font-mono)" }}>{it.bucket || "—"}</span>
+                          <span>{it.setup_type || "未命中买点"}</span>
+                        </div>
+                      </td>
+                      <td style={{ ...tdStyle, fontSize: "var(--text-sm)" }}>
+                        <div style={stackStyle}>
+                          <span style={{ fontFamily: "var(--font-mono)", color: "var(--text)" }}>
+                            买 {fmtPrice(it.recommend_price)} · 止 {fmtPrice(it.stop_loss)} · 盈 {fmtPrice(it.take_profit)}
+                          </span>
+                          <span style={{ color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
+                            理想 {fmtPrice(it.ideal_buy)} · 次买 {fmtPrice(it.secondary_buy)}
+                          </span>
+                        </div>
+                      </td>
+                      <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)", maxWidth: 320 }}>
+                        <div style={stackStyle}>
+                          <span title={it.entry_rule || ""}>入场: {clip(it.entry_rule || "—", 32)}</span>
+                          <span title={it.invalid_rule || ""}>失效: {clip(it.invalid_rule || "—", 32)}</span>
+                        </div>
+                      </td>
+                      <td style={{ ...tdStyle, color: labelColor, fontWeight: 600 }}>
+                        {outcomeLabel(o?.outcome_label)}
+                      </td>
+                      <td
+                        style={{
+                          ...tdStyle,
+                          textAlign: "right",
+                          fontFamily: "var(--font-mono)",
+                          color: ret == null ? "var(--muted)" : ret >= 0 ? "var(--market-up)" : "var(--market-down)",
+                        }}
+                      >
+                        {ret == null ? "—" : `${ret >= 0 ? "+" : ""}${ret.toFixed(2)}%`}
+                      </td>
+                      <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>
+                        <div style={stackStyle}>
+                          <span>{o?.exit_reason ?? "—"}</span>
+                          <span>{o?.holding_days != null ? `${o.holding_days}d` : "—"}</span>
+                        </div>
+                      </td>
+                    </tr>
+                    {expandedId === it.recommendation_id && (
+                      <tr>
+                        <td colSpan={9} style={{ padding: 0, borderBottom: "1px solid var(--border)" }}>
+                          {detailLoadingId === it.recommendation_id ? (
+                            <div style={detailStateStyle}>
+                              <Loader2 size={16} className="spin" /> 加载完整决策详情…
+                            </div>
+                          ) : detailError[it.recommendation_id] ? (
+                            <div style={{ ...detailStateStyle, color: "var(--market-down)" }}>
+                              {detailError[it.recommendation_id]}
+                            </div>
+                          ) : (
+                            <RecommendationDetailCard item={details[it.recommendation_id] || it} />
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -221,6 +290,40 @@ export function HistoryPage() {
     </div>
   );
 }
+
+const detailStateStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "var(--space-2)",
+  padding: "var(--space-4)",
+  color: "var(--muted)",
+  background: "var(--surface-soft)",
+  fontSize: "var(--text-sm)",
+};
+
+const stackStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 4,
+};
+
+const fmtPrice = (value: number | null | undefined) => {
+  if (value == null || Number.isNaN(value)) return "—";
+  return value.toFixed(2);
+};
+
+const clip = (value: string, max: number) => {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max)}…`;
+};
+
+const outcomeLabel = (value: string | null | undefined) => {
+  if (value === "success") return "成功";
+  if (value === "failed") return "失败";
+  if (value === "missed") return "未触发";
+  if (value === "pending") return "待标注";
+  return value || "—";
+};
 
 const selectStyle: React.CSSProperties = {
   background: "var(--surface-soft)",
