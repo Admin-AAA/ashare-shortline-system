@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { applyTheme } from "./shared/theme/initTheme";
 import { App } from "./App";
+import "./styles/app.css";
 
 applyTheme("dark");
 
