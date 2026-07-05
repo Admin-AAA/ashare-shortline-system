@@ -302,3 +302,43 @@ def test_resolve_exit_trailing_not_activated_below_threshold():
     result = _resolve_exit(bars, stop_loss_price=9.0, take_profit_price=12.0, code="000001", entry_price=10.0)
     assert result[2] == "horizon_close"
     assert result[0] == 9.95  # 最后一根 bar 的 close
+
+
+def test_simulate_outcome_feature_snapshot_preparse_consistency():
+    """回归测试：_simulate_outcome 传入预解析 feature_snapshot 与内部解析结果一致。
+
+    上轮 T4 优化加 feature_snapshot 可选参数（534→215ms，3 horizon 共享解析）。
+    防止未来回退：移除参数或改解析逻辑时，本测试确保两种调用方式结果一致。
+    """
+    snapshot_dict = {"ideal_buy": 11.0, "stop_loss": 10.0, "take_profit": 12.0}
+    rec = SimpleNamespace(
+        code="000001",
+        trade_date="2026-05-12",
+        recommend_price=11.0,
+        feature_snapshot_json=json.dumps(snapshot_dict, ensure_ascii=False),
+    )
+    bars = [
+        _bar(trade_date="2026-05-13", open=10.9, high=11.2, low=10.8, close=11.0, pct_chg=0.0),
+        _bar(trade_date="2026-05-14", open=11.0, high=11.5, low=10.9, close=11.3, pct_chg=2.7),
+        _bar(trade_date="2026-05-15", open=11.3, high=11.6, low=11.1, close=11.4, pct_chg=0.9),
+    ]
+    dates = ["2026-05-13", "2026-05-14", "2026-05-15"]
+
+    # 1. 不传 feature_snapshot（内部解析）
+    sim_internal = _simulate_outcome(rec, bars, dates, horizon_days=3)
+    assert sim_internal is not None
+
+    # 2. 传预解析 feature_snapshot
+    sim_preparsed = _simulate_outcome(rec, bars, dates, horizon_days=3, feature_snapshot=snapshot_dict)
+    assert sim_preparsed is not None
+
+    # 两种方式结果必须一致
+    assert sim_internal["entry_triggered"] == sim_preparsed["entry_triggered"]
+    assert sim_internal["entry_date"] == sim_preparsed["entry_date"]
+    assert sim_internal["executed_return"] == sim_preparsed["executed_return"]
+    assert sim_internal["outcome_label"] == sim_preparsed["outcome_label"]
+
+    # 3. 传 None 应回退到内部解析（向后兼容）
+    sim_none = _simulate_outcome(rec, bars, dates, horizon_days=3, feature_snapshot=None)
+    assert sim_none is not None
+    assert sim_none["entry_triggered"] == sim_internal["entry_triggered"]
