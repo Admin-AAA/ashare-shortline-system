@@ -20,6 +20,12 @@ DEFAULT_DSA_WEIGHTS = {
     "dsa_w_macd": 1.0,
     "dsa_w_rsi": 1.0,
 }
+# 校准诊断（第109轮 T3，1584 笔样本，时间分割验证）:
+#   全样本 point-biserial: trend=-0.038/-0.084(两半都负), volume=-0.103/-0.144(两半都负)
+#   → trend/volume 移除安全（两半都负相关，无预测力）
+#   bias/support/macd/rsi 前期/近期矛盾（bias: +0.183→-0.040, support: +0.298→-0.071, rsi: -0.016→+0.188）
+#   → 按 alpha-decay-false-positive 教训，矛盾时不调整
+# 未来优化：可安全设 trend/volume 权重=0，但需反事实验证推荐排序是否改善
 
 DSA_WEIGHT_KEYS = [
     "dsa_w_trend",
