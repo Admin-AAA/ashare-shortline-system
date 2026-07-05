@@ -368,7 +368,8 @@ def test_tag_features_synthetic():
     _tag_features(item)
     tags = item.get("_feature_tags", {})
     assert tags.get("concentration_90") == "ESTIMATED"
-    assert tags.get("revenue_yoy") == "ESTIMATED"
+    # revenue_yoy is now OBSERVED (real financial data from fina_indicator)
+    assert tags.get("revenue_yoy") == "OBSERVED"
 
 
 def test_compute_authenticity_all_observed():

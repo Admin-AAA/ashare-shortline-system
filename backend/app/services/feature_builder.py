@@ -216,6 +216,7 @@ def _apply_context_blocks(item: dict[str, Any], profile: dict[str, Any]) -> None
     # 数据可用性标记：避免把 strict_real 模式下的默认值误解为真实 0
     item["has_real_capital_flow"] = strict_real and "main_net_inflow" not in gaps
     item["has_real_valuation"] = strict_real and "valuation" not in gaps
+    item["has_real_fundamental"] = bool(item.get("has_real_fundamental"))
     item["has_real_news"] = strict_real and "news" not in gaps
 
     item["main_net_inflow_yi"] = _num(
@@ -245,10 +246,10 @@ def _apply_context_blocks(item: dict[str, Any], profile: dict[str, Any]) -> None
     item["chip_health"] = str(profile.get("chip_health") or _chip_health(item))
     item["chip_health_score"] = _chip_health_score(item)
 
-    item["revenue_yoy"] = _num(profile.get("revenue_yoy", item.get("revenue_yoy")), 0.0 if strict_real else 12.0 if item.get("is_main_theme") else 3.0)
-    item["net_profit_yoy"] = _num(profile.get("net_profit_yoy", item.get("net_profit_yoy")), 0.0 if strict_real else 10.0 if item.get("is_main_theme") else -2.0)
-    item["roe"] = _num(profile.get("roe", item.get("roe")), 0.0 if strict_real else 11.5)
-    item["gross_margin"] = _num(profile.get("gross_margin", item.get("gross_margin")), 0.0 if strict_real else 28.0)
+    item["revenue_yoy"] = profile.get("revenue_yoy", item.get("revenue_yoy"))
+    item["net_profit_yoy"] = profile.get("net_profit_yoy", item.get("net_profit_yoy"))
+    item["roe"] = profile.get("roe", item.get("roe"))
+    item["gross_margin"] = profile.get("gross_margin", item.get("gross_margin"))
     item["pe_ttm"] = _num(profile.get("pe_ttm", item.get("pe_ttm")), 0.0 if strict_real else 32.0 if item.get("is_main_theme") else 26.0)
     item["earnings_outlook"] = str(profile.get("earnings_outlook") or ("未接入真实财务增强数据" if strict_real else "暂无重大负面业绩信号"))
     item["fundamental_score"] = _fundamental_score(item)
@@ -585,6 +586,7 @@ _OBSERVABLE_FIELDS = {
     "main_net_inflow_yi",
     "pe_ttm",
     "industry",
+    "revenue_yoy", "net_profit_yoy", "roe", "gross_margin",
 }
 
 # Fields that come from external data sources and may or may not be available
@@ -640,13 +642,14 @@ for _f in (
     "small_net_inflow_yi", "main_net_inflow_ratio", "cumulative_inflow_3d_yi",
 ):
     _FIELD_TO_MISSING_CATEGORY[_f] = "capital_flow"
+for _f in ("revenue_yoy", "net_profit_yoy", "roe", "gross_margin"):
+    _FIELD_TO_MISSING_CATEGORY[_f] = "fundamental"
 
 # Fields that are always synthetically estimated (no real data source)
 _SYNTHETIC_FIELDS = {
     "concentration_90", "profit_ratio",
     "cost_90_low", "cost_90_high", "cost_70_low", "cost_70_high",
     "concentration_70", "avg_cost",
-    "revenue_yoy", "net_profit_yoy", "roe", "gross_margin",
     "sector_fund_rank",
     "chip_health", "chip_health_score", "chip_concentration",
     "earnings_outlook", "sentiment_summary",
@@ -711,6 +714,7 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
     block_trade_map = aux.get("block_trades", {})
     hsgt_top10_map = aux.get("hsgt_top10", {})
     hsgt_flow_data = aux.get("hsgt_flow")
+    fina_map = aux.get("finas", {})
     coverage = aux.get("coverage", {}) or {}
     audit = (snapshot.get("breadth") or {}).get("auxiliary_data_audit") or {}
     checked_news_codes = _checked_codes_from_audit(audit.get("news"))
@@ -917,6 +921,33 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             stock["north_money_yi"] = hsgt_flow_data.get("north_money", 0)
         else:
             stock["north_money_yi"] = 0
+
+        # ── 财务指标特征（fina_indicator 真实数据） ──
+        fina = fina_map.get(code)
+        if fina:
+            profile["revenue_yoy"] = fina.get("revenue_yoy")
+            profile["net_profit_yoy"] = fina.get("net_profit_yoy")
+            profile["roe"] = fina.get("roe")
+            profile["gross_margin"] = fina.get("gross_margin")
+            profile["pe_ttm"] = fina.get("pe_ttm")
+            if fina.get("end_date"):
+                profile["earnings_outlook"] = f"财报期{fina['end_date']}"
+                profile["fina_end_date"] = fina["end_date"]
+            if fina.get("ann_date"):
+                profile["fina_ann_date"] = fina["ann_date"]
+            has_real_fina = any(
+                fina.get(k) is not None
+                for k in ("revenue_yoy", "net_profit_yoy", "roe", "gross_margin")
+            )
+            if has_real_fina:
+                missing_fields.discard("fundamental")
+                data_quality["fina_checked"] = True
+            else:
+                missing_fields.add("fundamental")
+            stock["has_real_fundamental"] = has_real_fina
+        else:
+            stock["has_real_fundamental"] = False
+            missing_fields.add("fundamental")
 
         stock["dsa_profile"] = profile
         data_quality["missing_fields"] = sorted(missing_fields)

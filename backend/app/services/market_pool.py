@@ -2270,6 +2270,89 @@ def _load_share_float_upcoming(
     return dict(result)
 
 
+def _persist_fina_indicator(db: Session, rows: list[dict[str, Any]]) -> None:
+    """持久化财务指标（upsert by code+end_date）。"""
+    if not rows:
+        return
+    from app.models.tables import FinaIndicator
+
+    columns = set(FinaIndicator.__mapper__.columns.keys())
+    for row in rows:
+        code = str(row.get("code") or "").strip()
+        end_date = str(row.get("end_date") or "").strip()
+        if len(code) != 6 or not end_date:
+            continue
+        existing = db.scalar(
+            select(FinaIndicator).where(
+                FinaIndicator.code == code,
+                FinaIndicator.end_date == end_date,
+            )
+        )
+        payload = {k: v for k, v in row.items() if k in columns and k not in {"id", "updated_at"}}
+        if existing:
+            for key, value in payload.items():
+                setattr(existing, key, value)
+            existing.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        else:
+            db.add(FinaIndicator(**payload))
+    db.commit()
+
+
+def _load_fina_indicator_for_stocks(db: Session, codes: list[str], trade_date: str | None = None) -> dict[str, dict[str, Any]]:
+    """加载最新一期已披露财务指标；本地缺失时按需从 Tushare 拉取并入库。"""
+    if not codes:
+        return {}
+    from app.models.tables import FinaIndicator
+    from sqlalchemy import and_
+
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
+    target_ann_date = target_trade_date.replace("-", "") if target_trade_date else ""
+
+    def _query_latest() -> dict[str, dict[str, Any]]:
+        subq_stmt = (
+            select(FinaIndicator.code, func.max(FinaIndicator.end_date).label("max_ed"))
+            .where(FinaIndicator.code.in_(codes))
+        )
+        if target_ann_date:
+            subq_stmt = subq_stmt.where(FinaIndicator.ann_date <= target_ann_date)
+        subq = subq_stmt.group_by(FinaIndicator.code).subquery()
+        rows = db.scalars(
+            select(FinaIndicator).join(
+                subq, and_(
+                    FinaIndicator.code == subq.c.code,
+                    FinaIndicator.end_date == subq.c.max_ed,
+                )
+            )
+        ).all()
+        return {
+            r.code: {
+                "roe": r.roe,
+                "gross_margin": r.grossprofit_margin,        # feature_builder 读 gross_margin
+                "net_profit_yoy": r.netprofit_yoy,           # feature_builder 读 net_profit_yoy
+                "revenue_yoy": r.or_yoy,                     # feature_builder 读 revenue_yoy
+                "netprofit_margin": r.netprofit_margin,
+                "eps": r.eps,
+                "bps": r.bps,
+                "end_date": r.end_date,
+                "ann_date": r.ann_date,
+            }
+            for r in rows
+        }
+
+    result = _query_latest()
+    missing_codes = [code for code in codes if code not in result]
+    if missing_codes:
+        from app.services.tushare_client import fetch_fina_indicator
+
+        fetched: list[dict[str, Any]] = []
+        for code in missing_codes:
+            fetched.extend(fetch_fina_indicator(code, trade_date=target_trade_date, limit=4))
+        if fetched:
+            _persist_fina_indicator(db, fetched)
+            result = _query_latest()
+    return result
+
+
 def load_auxiliary_for_stocks(db: Session, codes: list[str], trade_date: str | None = None) -> dict[str, Any]:
     """批量加载所有辅助数据，返回按code索引的字典。"""
     target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
@@ -2314,6 +2397,7 @@ def load_auxiliary_for_stocks(db: Session, codes: list[str], trade_date: str | N
         "block_trades": _load_block_trade_for_stocks(db, codes, trade_date=target_trade_date),
         "hsgt_top10": _load_hsgt_top10_for_stocks(db, codes, trade_date=target_trade_date),
         "hsgt_flow": _load_hsgt_flow(db, trade_date=target_trade_date),
+        "finas": _load_fina_indicator_for_stocks(db, codes, trade_date=target_trade_date),
         "coverage": _auxiliary_coverage_for_stocks(
             db,
             codes,

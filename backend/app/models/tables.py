@@ -443,6 +443,29 @@ class HolderNumber(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class FinaIndicator(Base):
+    """财务指标（季报）。数据来源：Tushare fina_indicator。
+
+    字段名对齐 fina_indicator 原始字段（grossprofit_margin 无下划线）。
+    用于替代 feature_builder 中的常数默认值，提供真实 ROE/毛利率/同比等。
+    """
+    __tablename__ = "stock_fina_indicator"
+    __table_args__ = (UniqueConstraint("code", "end_date", name="uq_fina_code_end_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(6), index=True)
+    end_date: Mapped[str] = mapped_column(String(8), index=True)       # 财报期末 YYYYMMDD
+    ann_date: Mapped[str | None] = mapped_column(String(8), index=True)  # 公告日
+    roe: Mapped[float | None] = mapped_column(Float)                    # 净资产收益率 %
+    grossprofit_margin: Mapped[float | None] = mapped_column(Float)     # 销售毛利率 %
+    netprofit_margin: Mapped[float | None] = mapped_column(Float)       # 销售净利率 %
+    netprofit_yoy: Mapped[float | None] = mapped_column(Float)          # 归母净利润同比 %
+    or_yoy: Mapped[float | None] = mapped_column(Float)                # 营业收入同比 %
+    eps: Mapped[float | None] = mapped_column(Float)
+    bps: Mapped[float | None] = mapped_column(Float)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class StkLimit(Base):
     """每日涨跌停价格。数据来源：Tushare stk_limit。"""
     __tablename__ = "stk_limits"

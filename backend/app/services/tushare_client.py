@@ -1519,8 +1519,116 @@ def fetch_hsgt_top10(trade_date: str | None = None) -> list[dict[str, Any]]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# 财务指标（季报）
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def fetch_fina_indicator(
+    code: str,
+    limit: int = 4,
+    trade_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """获取个股财务指标（fina_indicator 接口）。
+
+    缺失字段保留为 None（不伪装成 0），由消费端区分"无数据"和"真实 0"。
+
+    Parameters
+    ----------
+    code : str
+        6 位股票代码。
+    limit : int
+        返回最近几期报告，默认 4（即最近一年）。
+    trade_date : str, optional
+        YYYY-MM-DD 或 YYYYMMDD。指定时只返回该日之前（含）的报告期。
+    """
+    pro = get_pro()
+    tsc = ts_code(code)
+    target = _compact_trade_date(trade_date)
+    try:
+        df = pro.fina_indicator(ts_code=tsc, limit=limit)
+    except Exception:
+        return []
+    if df is None or df.empty:
+        return []
+    if target:
+        if "ann_date" in df.columns:
+            df = df[df["ann_date"].astype(str) <= target]
+        elif "end_date" in df.columns:
+            df = df[df["end_date"].astype(str) <= target]
+    result: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        end_raw = str(row.get("end_date", ""))
+        ann_raw = str(row.get("ann_date", ""))
+        result.append({
+            "code": code,
+            "end_date": end_raw,
+            "ann_date": ann_raw,
+            "roe": _safe_float(row.get("roe")),
+            "grossprofit_margin": _safe_float(row.get("grossprofit_margin")),
+            "netprofit_margin": _safe_float(row.get("netprofit_margin")),
+            "netprofit_yoy": _safe_float(row.get("netprofit_yoy")),
+            "or_yoy": _safe_float(row.get("or_yoy")),
+            "eps": _safe_float(row.get("eps")),
+            "bps": _safe_float(row.get("bps")),
+        })
+    return result
+
+
+def fetch_fina_indicator_batch(
+    trade_date: str | None = None,
+    limit: int = 4,
+) -> list[dict[str, Any]]:
+    """按公告日批量获取全市场财务指标。
+
+    适合 backfill 场景：一次拉取某日之前公告的所有财报数据，返回
+    最近 limit 期的指标。缺失字段保留为 None。
+    """
+    pro = get_pro()
+    target = _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
+    try:
+        df = pro.fina_indicator(ann_date=target)
+    except Exception:
+        return []
+    if df is None or df.empty:
+        return []
+    result: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        ts = str(row.get("ts_code", ""))
+        code = ts.split(".")[0]
+        if len(code) != 6:
+            continue
+        end_raw = str(row.get("end_date", ""))
+        ann_raw = str(row.get("ann_date", ""))
+        result.append({
+            "code": code,
+            "end_date": end_raw,
+            "ann_date": ann_raw,
+            "roe": _safe_float(row.get("roe")),
+            "grossprofit_margin": _safe_float(row.get("grossprofit_margin")),
+            "netprofit_margin": _safe_float(row.get("netprofit_margin")),
+            "netprofit_yoy": _safe_float(row.get("netprofit_yoy")),
+            "or_yoy": _safe_float(row.get("or_yoy")),
+            "eps": _safe_float(row.get("eps")),
+            "bps": _safe_float(row.get("bps")),
+        })
+    return result
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # helpers
 # ═════════════════════════════════════════════════════════════════════════════
+
+
+def _safe_float(val: Any) -> float | None:
+    """安全转 float，NaN/空值保留为 None。"""
+    import math
+    if val is None or val == "":
+        return None
+    try:
+        v = float(val)
+        return None if math.isnan(v) else v
+    except (ValueError, TypeError):
+        return None
 
 
 def _f(val: Any, default: float = 0.0) -> float:
