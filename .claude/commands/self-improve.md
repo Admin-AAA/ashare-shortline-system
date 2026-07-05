@@ -209,6 +209,7 @@ print(f'最大亏损: {r[0]}%')
 - [T1] alpha 衰减误判：dist60 point-biserial 衰减 81.6% 但阈值加分在近期仍有效（前期移除有利、近期移除不利，矛盾）。因子移除必须时间分割反事实验证，前期/近期矛盾时不能贸然移除（第 93 轮）
 - [T1] 分数线调整不能只看单个阶段效果——+5.0 适得其反，增加了平淡阶段低质量交易（第 26 轮）
 - [T1] 高潮阶段禁用动态降线，宁可零推荐也不降质量（第 33 轮）
+- [T1] 单因子衰减 ≠ 策略衰减：is_main_theme point-biserial 衰减，但策略整体 alpha 改善（DSA 68.8%→75.5%、high-range 21.4%→44.4%）。trailing stop + 多策略组合抵消单因子衰减。因子移除前必须看策略整体表现，不只看单因子相关性（第 105 轮）
 - [T2] 除权事件会导致虚假巨亏，需用 pct_chg 链计算（第 11 轮）
 - [T2] 回测跑不出来时直接查 DB 现有数据，不要硬等（第 28 轮）
 - [T2] 回测 DB 累积重复，分析前必须按 (trade_date, code) 去重（第 46 轮）
@@ -220,6 +221,7 @@ print(f'最大亏损: {r[0]}%')
 - [T5] 胜率单一指标会误判：强势 regime WR 41.3% 但盈亏比 2.65（净正收益），震荡 WR 70% 但盈亏比 0.96（净近零）。判定 regime 优劣必须看盈亏比，不能只看胜率（第 92 轮）
 - [T5] Tushare API 单位陷阱：daily(千元) vs bak_daily(万元) vs realtime(元)。amount_yi 统一用 *1000/1e8 对 bak_daily 少算 10 倍，是 limit-up-reseal-relay 0 推荐的深层根因。多数据源字段必须核对单位，抽纯函数 + 回归测试保护（第 94 轮）
 - [T5] prefilter 字段可用性需验证而非假设：avg_cost 在 feature_builder 阶段才填充（prefilter 失效），但 pos20 在 market_pool._build_stock_from_bars 就填充（prefilter 有效）。pos20<50 规则有效：WR 70.6%(pos20>=50) vs 32.9%(pos20<50)，差距 -37.7pp。不要因"字段名像 feature_builder 字段"就假设失效，必须验证实际 prefilter 阶段 stocks 是否有值（第 97 轮）
+- [T5] 辅助数据表连续性需定期检查：limit_up_board/dragon_tiger/concept_sector/capital_flow 4 表可能因 Tushare 限速留缺口，缺口导致特征缺失→策略 0 产出。scripts/verify_dragon_tiger_continuity.py 扩展为 4 表检查，识别 >3 天 gap（第 106 轮）
 - [T9] SKILL.md 输出格式必须匹配 SkillReviewOutput schema，否则 LLM 输出字段不正确（第 26 轮）
 ```
 
