@@ -1127,12 +1127,15 @@ def _compute_horizon_metric_records(db: Session, rows: list[Any]) -> dict[str, d
         code = str(getattr(row, "code", "") or "")
         if not rec_id or code not in bars_by_code:
             continue
+        # 预解析 feature_snapshot，3 个 horizon 共享，省 2/3 JSON 解析（705→235 次）
+        row_snapshot = _loads(getattr(row, "feature_snapshot_json", None), {})
         for horizon_days in BREAKDOWN_HORIZON_DAYS:
             simulation = _simulate_outcome(
                 row,
                 bars_by_code.get(code, []),
                 dates_by_code.get(code, []),
                 horizon_days=horizon_days,
+                feature_snapshot=row_snapshot,
             )
             if simulation is None:
                 continue
@@ -1325,6 +1328,8 @@ def _simulate_outcome(
     bars: list[DailyKbar],
     dates: list[str],
     horizon_days: int,
+    feature_snapshot: dict[str, Any] | None = None,
+
 ) -> dict[str, Any] | None:
     if not bars:
         return None
@@ -1336,7 +1341,7 @@ def _simulate_outcome(
     if not future_bars:
         return None
 
-    feature_snapshot = _loads(getattr(rec, "feature_snapshot_json", None), {})
+    feature_snapshot = feature_snapshot if feature_snapshot is not None else _loads(getattr(rec, "feature_snapshot_json", None), {})
     static_metrics = _static_window_metrics(rec, signal_bar, future_bars, horizon_days)
 
     recommendation_block_reason = _recommendation_execution_block_reason(feature_snapshot)
