@@ -221,3 +221,84 @@ def test_resolve_exit_defers_locked_limit_down_until_sellable_stop():
     assert price == 9.4
     assert trade_date == "2026-05-14"
     assert reason == "stop_loss_gap"
+
+
+def _bar_trailing(
+    *,
+    trade_date: str,
+    open: float,
+    high: float,
+    low: float,
+    close: float,
+    pct_chg: float,
+    volume: float = 1000,
+    amount: float = 10000,
+) -> DailyKbar:
+    return DailyKbar(
+        code="000001",
+        trade_date=trade_date,
+        open=open,
+        high=high,
+        low=low,
+        close=close,
+        pct_chg=pct_chg,
+        volume=volume,
+        amount=amount,
+    )
+
+
+def test_resolve_exit_take_profit_path_preserved():
+    """trailing 不抢跑 take_profit 路径：TP 触发时直接返回，不走 trailing。"""
+    from app.services.outcome_service import _resolve_exit
+    # holding 期内 high 触及 take_profit → 应返回 take_profit_hit
+    bars = [
+        _bar_trailing(trade_date="2026-07-02", open=10.0, high=11.5, low=10.0, close=11.0, pct_chg=10.0),
+    ]
+    result = _resolve_exit(bars, stop_loss_price=9.5, take_profit_price=11.0, code="000001", entry_price=10.0)
+    assert result[2] == "take_profit_hit"
+    assert result[0] == 11.0  # 以 take_profit 价成交
+
+
+def test_resolve_exit_trailing_uses_min_open_on_gap_down():
+    """trailing 触发价取 min(open, 触发价)——跳空低开时以 open 成交（更差）。
+
+    回归测试：之前用 max 会虚假高估出场价（86 笔虚假 100% 胜率）。
+    """
+    from app.services.outcome_service import _resolve_exit
+    # entry=10.0, bar1 high=10.3（+3%，激活 trailing），触发价=10*(1+(3-0.8)/100)=10.22
+    # bar1 low=10.25 > 10.22 不触发；bar2 跳空低开 open=9.8, low=9.7 ≤ 10.22 → trailing 触发
+    # exit=min(9.8, 10.22)=9.8（跳空低开以 open 成交）
+    bars = [
+        _bar_trailing(trade_date="2026-07-02", open=10.25, high=10.3, low=10.25, close=10.28, pct_chg=3.0),
+        _bar_trailing(trade_date="2026-07-03", open=9.8, high=9.9, low=9.7, close=9.8, pct_chg=-5.0),
+    ]
+    result = _resolve_exit(bars, stop_loss_price=9.0, take_profit_price=12.0, code="000001", entry_price=10.0)
+    assert result[2] == "trailing_stop_hit"
+    assert result[0] == 9.8  # min(open, 触发价)，跳空低开以 open 成交
+
+
+def test_resolve_exit_stop_loss_priority_over_trailing():
+    """固定止损优先于 trailing：low 触及 stop_loss 时返回 stop_loss_hit，不走 trailing。"""
+    from app.services.outcome_service import _resolve_exit
+    # bar1 high=10.3（激活 trailing），low=10.25 > 触发价 10.22 不触发
+    # bar2 low=9.5 触及 stop_loss → stop_loss 优先于 trailing 返回 stop_loss_hit
+    bars = [
+        _bar_trailing(trade_date="2026-07-02", open=10.25, high=10.3, low=10.25, close=10.28, pct_chg=3.0),
+        _bar_trailing(trade_date="2026-07-03", open=9.6, high=9.7, low=9.5, close=9.6, pct_chg=-5.0),
+    ]
+    result = _resolve_exit(bars, stop_loss_price=9.5, take_profit_price=12.0, code="000001", entry_price=10.0)
+    assert result[2] == "stop_loss_hit"
+    assert result[0] == 9.5
+
+
+def test_resolve_exit_trailing_not_activated_below_threshold():
+    """high 未达激活阈值（+2%）时 trailing 不激活，走 horizon_close。"""
+    from app.services.outcome_service import _resolve_exit
+    # bar1 high=10.1（+1%，未达 2% 激活阈值）, bar2 回落 → horizon_close
+    bars = [
+        _bar_trailing(trade_date="2026-07-02", open=10.0, high=10.1, low=10.0, close=10.05, pct_chg=1.0),
+        _bar_trailing(trade_date="2026-07-03", open=10.0, high=10.1, low=9.9, close=9.95, pct_chg=0.0),
+    ]
+    result = _resolve_exit(bars, stop_loss_price=9.0, take_profit_price=12.0, code="000001", entry_price=10.0)
+    assert result[2] == "horizon_close"
+    assert result[0] == 9.95  # 最后一根 bar 的 close
