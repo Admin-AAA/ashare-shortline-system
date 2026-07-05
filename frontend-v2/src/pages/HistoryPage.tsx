@@ -145,7 +145,6 @@ export function HistoryPage() {
               {items.map((it) => {
                 const o = it.outcome;
                 const ret = o?.executed_return;
-                const isWin = o?.outcome_label === "success";
                 const labelColor =
                   o?.outcome_label === "success"
                     ? "var(--market-up)"

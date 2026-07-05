@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, Loader2, PlayCircle } from "lucide-react";
 import { api } from "../api/client";
-import type { Preset, RunDetail, RunProgress } from "../types";
-import { EmptyState, ErrorPage } from "../components/StateViews";
+import type { Preset, RunDetail } from "../types";
+import { ErrorPage } from "../components/StateViews";
 import { useUrlRoute } from "../app/useUrlRoute";
 import { queryParam } from "../app/nav";
 

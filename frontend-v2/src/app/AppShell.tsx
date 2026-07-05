@@ -1,5 +1,5 @@
 import { Activity, Bell, Moon, RefreshCw, Sun } from "lucide-react";
-import { lazy, Suspense, useState, type ReactNode } from "react";
+import { lazy, Suspense, useState } from "react";
 import AuthGate from "./AuthGate";
 import { NAV_ITEMS, navMatches, type Section } from "./nav";
 import { useUrlRoute } from "./useUrlRoute";
