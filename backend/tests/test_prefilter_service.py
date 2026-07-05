@@ -116,3 +116,55 @@ def test_apply_prefilters_keeps_union_and_fills_if_needed():
     assert audit["union_pass_count"] == 1
     assert audit["fill_count"] == 1
     assert audit["fallback_used"] is False
+
+
+def _limit_up_skill():
+    for s in _selected_skills():
+        if s["skill_id"] == "limit-up-reseal-relay":
+            return s
+    raise AssertionError("limit-up-reseal-relay skill not found")
+
+
+def test_limit_up_reseal_rejects_non_limit_up_stock():
+    """非涨停股（is_limit_up=False）应被 universe 拒绝。"""
+    stock = _positive_stock_for_skill("limit-up-reseal-relay")
+    stock["is_limit_up"] = False
+    passed, reason = evaluate_skill_prefilter(_limit_up_skill()["skill"], stock, stage="market")
+    assert passed is False
+    assert reason == "universe_include"
+
+
+def test_limit_up_reseal_rejects_low_amount():
+    """amount_yi < 3 应被 universe 拒绝（流动性门槛，第 87-94 轮修复的根因）。"""
+    stock = _positive_stock_for_skill("limit-up-reseal-relay")
+    stock["amount_yi"] = 2.5  # < 3
+    passed, reason = evaluate_skill_prefilter(_limit_up_skill()["skill"], stock, stage="market")
+    assert passed is False
+    assert reason == "universe_include"
+
+
+def test_limit_up_reseal_rejects_high_board():
+    """limit_up_consecutive_days > 3 应被 prefilter 拒绝（板高过高）。"""
+    stock = _positive_stock_for_skill("limit-up-reseal-relay")
+    stock["limit_up_consecutive_days"] = 5  # > 3
+    passed, reason = evaluate_skill_prefilter(_limit_up_skill()["skill"], stock, stage="market")
+    assert passed is False
+    assert reason == "board_height_too_high"
+
+
+def test_limit_up_reseal_rejects_weak_seal_no_reseal():
+    """一字板（open_times=0）且封单弱（fd<0.5）应被 prefilter exclude 拒绝。"""
+    stock = _positive_stock_for_skill("limit-up-reseal-relay")
+    stock["limit_up_open_times"] = 0
+    stock["limit_up_fd_amount_yi"] = 0.3  # < 0.5
+    passed, reason = evaluate_skill_prefilter(_limit_up_skill()["skill"], stock, stage="market")
+    assert passed is False
+    assert reason == "one_word_or_weak_seal"
+
+
+def test_limit_up_reseal_accepts_strong_first_board():
+    """首板强封（consecutive_days=1, fd>=0.5, open_times=1-8）应通过 prefilter。"""
+    stock = _positive_stock_for_skill("limit-up-reseal-relay")
+    # 已是正向场景：is_limit_up=True, consecutive=1, fd=0.5, open_times=1, pct=9.8
+    passed, reason = evaluate_skill_prefilter(_limit_up_skill()["skill"], stock, stage="market")
+    assert passed is True, reason
