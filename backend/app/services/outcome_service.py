@@ -1236,6 +1236,44 @@ def _group_metric_fields(metrics: dict[str, Any]) -> dict[str, Any]:
 
 
 def _scoped_recommendation_rows(db: Session, run_mode: str) -> list[Any]:
+    # 两步查询：先 SQL 去重拿 (trade_date, code) 分组下 final_score 最高的 recommendation_id（235 个），
+    # 再按 id 取详情。避免查全部 1479 行大字段（feature_snapshot_json/market_context_json）再 Python 去重。
+    # MySQL 8+ 窗口函数：ROW_NUMBER() OVER (PARTITION BY trade_date, code ORDER BY final_score DESC)
+    dedup_ids_stmt = (
+        select(
+            Recommendation.recommendation_id,
+            Recommendation.trade_date,
+            Recommendation.code,
+            Recommendation.final_score,
+        )
+        .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
+        .where(RecommendationRun.run_mode == run_mode)
+    )
+    # 用子查询取每组 final_score 最大的 id（GROUP BY + MAX 定位，再 JOIN 回表）
+    dedup_subq = dedup_ids_stmt.subquery()
+    max_score_subq = (
+        select(
+            dedup_subq.c.trade_date,
+            dedup_subq.c.code,
+            func.max(dedup_subq.c.final_score).label("max_score"),
+        )
+        .group_by(dedup_subq.c.trade_date, dedup_subq.c.code)
+    ).subquery()
+    # JOIN 回原表取对应 recommendation_id（同 trade_date+code+final_score 的取第一个）
+    id_rows = db.execute(
+        select(dedup_subq.c.recommendation_id)
+        .join(
+            max_score_subq,
+            (max_score_subq.c.trade_date == dedup_subq.c.trade_date)
+            & (max_score_subq.c.code == dedup_subq.c.code)
+            & (max_score_subq.c.max_score == dedup_subq.c.final_score),
+        )
+        .order_by(dedup_subq.c.trade_date.asc(), dedup_subq.c.final_score.desc())
+    ).all()
+    deduped_ids = [str(row[0]) for row in id_rows]
+    if not deduped_ids:
+        return []
+
     rows = list(
         db.execute(
             select(
@@ -1265,14 +1303,12 @@ def _scoped_recommendation_rows(db: Session, run_mode: str) -> list[Any]:
                 RecommendationOutcome.exit_date,
             )
             .select_from(Recommendation)
-            .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
             .outerjoin(RecommendationOutcome, RecommendationOutcome.recommendation_id == Recommendation.recommendation_id)
-            .where(RecommendationRun.run_mode == run_mode)
+            .where(Recommendation.recommendation_id.in_(deduped_ids))
             .order_by(Recommendation.trade_date.asc(), Recommendation.final_score.desc(), Recommendation.recommendation_id.asc())
         ).all()
     )
-    # 按 (trade_date, code) 去重，保留 final_score 最高的行
-    # 原因：回测 DB 累积多个 bt_ run 产生同一股票同日的重复记录
+    # 已通过 SQL 去重，但仍可能有同 (trade_date, code) 的重复（同分多笔），保留第一次
     seen: set[tuple] = set()
     deduped: list[Any] = []
     for row in rows:
