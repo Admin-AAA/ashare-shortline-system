@@ -471,15 +471,24 @@ for i in $(seq 1 120); do
 done
 trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
 cd ~/Desktop/ashare-shortline-system
+# 主工作树可能有其他实例未提交改动（dist/、frontend 文件等），阻塞 git checkout main。
+# 安全暂存：stash 不丢任何工作，pop 恢复。这是处理"merge 被未提交改动阻塞"的标准做法。
+_STASHED=0
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  git stash push -u -m "self-improve-merge-stash-$INSTANCE_ID" 2>/dev/null && _STASHED=1
+fi
 git checkout main 2>/dev/null
 if git merge --no-ff "$WT_BRANCH" -m "merge self-improve [$INSTANCE_ID]"; then
   echo "merge 成功"
+  # 恢复暂存的其他实例改动（如有）
+  if [ "$_STASHED" = "1" ]; then git stash pop 2>/dev/null || echo "stash pop 失败，改动在 git stash list"; fi
   git worktree remove "$WT_DIR" --force 2>/dev/null || true
   git branch -d "$WT_BRANCH" 2>/dev/null || true
   rm -f "$HB_DIR/$INSTANCE_ID.txt"
 else
   # merge 冲突——绝不强推/覆盖，标记冲突待解，保留双方分支
   git merge --abort
+  if [ "$_STASHED" = "1" ]; then git stash pop 2>/dev/null || echo "stash pop 失败"; fi
   echo "$INSTANCE_ID|$START_TS|T{编号}|冲突待解|$(date +%s)" > "$HB_DIR/$INSTANCE_ID.txt"
   echo "merge 冲突，分支 $WT_BRANCH 保留待人工/下一轮处理，未丢工作"
 fi
