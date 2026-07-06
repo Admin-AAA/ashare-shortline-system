@@ -2271,30 +2271,36 @@ def _load_share_float_upcoming(
 
 
 def _persist_fina_indicator(db: Session, rows: list[dict[str, Any]]) -> None:
-    """持久化财务指标（upsert by code+end_date）。"""
+    """持久化财务指标（原子 upsert by code+end_date）。
+
+    用 mysql_insert.on_duplicate_key_update 替代 check-then-insert：
+    并发 run 时两个请求同时检查\"不存在\"→ 同时 INSERT → 唯一键冲突 (1062)
+    导致整个推荐管线 500。原子 upsert 由 MySQL 保证 by code+end_date 唯一性。
+    """
     if not rows:
         return
     from app.models.tables import FinaIndicator
 
-    columns = set(FinaIndicator.__mapper__.columns.keys())
+    columns = set(FinaIndicator.__mapper__.columns.keys()) - {"id", "updated_at"}
+    chunk: list[dict[str, Any]] = []
+    # 收集本次 INSERT 实际出现的列（不含 code/end_date 唯一键）
+    update_col_names: set[str] = set()
     for row in rows:
         code = str(row.get("code") or "").strip()
         end_date = str(row.get("end_date") or "").strip()
         if len(code) != 6 or not end_date:
             continue
-        existing = db.scalar(
-            select(FinaIndicator).where(
-                FinaIndicator.code == code,
-                FinaIndicator.end_date == end_date,
-            )
-        )
-        payload = {k: v for k, v in row.items() if k in columns and k not in {"id", "updated_at"}}
-        if existing:
-            for key, value in payload.items():
-                setattr(existing, key, value)
-            existing.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        else:
-            db.add(FinaIndicator(**payload))
+        payload = {k: v for k, v in row.items() if k in columns}
+        if not payload:
+            continue
+        chunk.append(payload)
+        update_col_names.update(k for k in payload if k not in {"code", "end_date"})
+    if not chunk:
+        return
+    stmt = mysql_insert(FinaIndicator).values(chunk)
+    # 只 UPDATE 本次 INSERT 实际出现的列（避免引用 new.<missing_col>）
+    update_cols = {c: stmt.inserted[c] for c in update_col_names}
+    db.execute(stmt.on_duplicate_key_update(**update_cols))
     db.commit()
 
 
