@@ -1,0 +1,1 @@
+import{j as e}from"./index-DVxtJDfx.js";import"./vendor-react-CEUiQZj-.js";function n(){return e.jsx("section",{className:"home-screen",children:e.jsxs("div",{className:"home-screen__inner",children:[e.jsx("h1",{className:"home-screen__title",children:"短线交易驾驶舱"}),e.jsx("p",{className:"home-screen__subtitle",children:"于数据海洋之上，凝视纵深，捕捉信号"})]})})}export{n as HomePage};

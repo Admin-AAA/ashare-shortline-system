@@ -8,7 +8,6 @@ import {
 } from "lucide-react";
 import { api } from "../api/client";
 import type {
-  MatrixRecordDetail,
   MatrixRecordsResponse,
   RecommendationDetail,
   RecommendationOutcome,
@@ -18,7 +17,19 @@ import type {
 } from "../types";
 import { ErrorPage, EmptyState, PageSkeleton } from "../components/StateViews";
 import { RecommendationDetailCard } from "../components/RecommendationDetailCard";
-import { fmtPrice } from "../components/Shared";
+import { MatrixRecordDetailView } from "../components/MatrixRecordDetailView";
+import {
+  Metric,
+  ReturnCell,
+  ReturnStat,
+  fmtPrice,
+  formatTime,
+  tableStyle,
+  thStyle,
+  tdStyle,
+  rowStyle,
+  pageBtnStyle,
+} from "../components/recordsShared";
 import { useApi } from "../app/useApi";
 import { useUrlRoute } from "../app/useUrlRoute";
 import { queryParam } from "../app/nav";
@@ -473,33 +484,6 @@ function RecommendationsReturnTable({
   );
 }
 
-function ReturnCell({ value, bold }: { value: number | null; bold?: boolean }) {
-  const color = value == null ? "var(--muted)" : value >= 0 ? "var(--market-up)" : "var(--market-down)";
-  return (
-    <td style={{
-      ...tdStyle,
-      textAlign: "right",
-      fontFamily: "var(--font-mono)",
-      color,
-      fontWeight: bold ? 600 : 400,
-    }}>
-      {value == null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`}
-    </td>
-  );
-}
-
-function ReturnStat({ label, value, suffix }: { label: string; value: number | null; suffix?: string }) {
-  const color = value == null ? "var(--muted)" : value >= 0 ? "var(--market-up)" : "var(--market-down)";
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-      <span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }}>{label}</span>
-      <span style={{ fontFamily: "var(--font-mono)", color, fontWeight: 600 }}>
-        {value == null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(2)}${suffix || "%"}`}
-      </span>
-    </div>
-  );
-}
-
 function computeStats(recs: RunRecordDetail["recommendations"]) {
   const pick = (r: RecommendationReturns | undefined, key: keyof RecommendationReturns) =>
     r && typeof r[key] === "number" ? (r[key] as number) : null;
@@ -800,150 +784,7 @@ const numOr = (v: unknown) =>
 // 矩阵记录详情
 // ============================================================
 
-function MatrixRecordDetailView({ recordId, onBack }: { recordId: number; onBack: () => void }) {
-  const { data, loading, error } = useApi<MatrixRecordDetail>(() => api.matrixRecordDetail(recordId), [recordId]);
-
-  if (loading) return <PageSkeleton title="矩阵记录详情" hint="加载分析结果与收益" rowCount={8} />;
-  if (error) return <ErrorPage title="详情加载失败" message={error} onRetry={onBack} />;
-  if (!data) return null;
-
-  const r = data.returns;
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
-      <button className="btn btn--ghost" onClick={onBack} style={{ alignSelf: "flex-start" }}>
-        <ArrowLeft size={14} />
-        返回记录列表
-      </button>
-
-      <section className="panel">
-        <div className="panel__header">
-          <div>
-            <div className="panel__kicker">矩阵分析详情</div>
-            <h3 className="panel__title" style={{ fontFamily: "var(--font-mono)" }}>
-              {data.code} · {data.trade_date}
-            </h3>
-          </div>
-          <span style={{ color: data.analysis_type === "backtest" ? "var(--accent)" : "var(--muted)" }}>
-            {data.analysis_type}
-          </span>
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "var(--space-3)" }}>
-          <Metric label="基准价" value={fmtPrice(data.base_price)} mono />
-          <Metric label="综合评分" value={data.final_score != null ? data.final_score.toFixed(1) : "—"} mono />
-          <Metric label="预估胜率" value={data.win_rate_est != null ? `${(data.win_rate_est * 100).toFixed(1)}%` : "—"} mono />
-          <Metric label="预估收益" value={data.avg_return_est != null ? `${(data.avg_return_est * 100).toFixed(2)}%` : "—"} mono />
-          <Metric label="skill数" value={String(data.skill_count)} mono />
-          <Metric label="耗时" value={data.elapsed_ms != null ? `${(data.elapsed_ms / 1000).toFixed(1)}s` : "—"} />
-        </div>
-      </section>
-
-      <section className="panel">
-        <div className="panel__header">
-          <div>
-            <div className="panel__kicker">实际收益</div>
-            <h3 className="panel__title">分析日 → 今天</h3>
-          </div>
-          <span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }}>
-            基准 = 分析日收盘价 · 至 {r.as_of_date || "—"}
-          </span>
-        </div>
-
-        <div style={{ display: "flex", gap: "var(--space-5)", flexWrap: "wrap", padding: "var(--space-3) 0" }}>
-          <ReturnStat label="1日" value={r.return_1d} />
-          <ReturnStat label="3日" value={r.return_3d} />
-          <ReturnStat label="5日" value={r.return_5d} />
-          <ReturnStat label="至今" value={r.return_to_date} />
-        </div>
-        <div style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }}>
-          最新交易日：<span className="text-mono">{r.latest_date || "—"}</span>
-          {r.latest_close != null && <> · 收盘 <span className="text-mono">{fmtPrice(r.latest_close)}</span></>}
-        </div>
-      </section>
-
-      {data.result && Object.keys(data.result).length > 0 && (
-        <section className="panel">
-          <div className="panel__header">
-            <div>
-              <div className="panel__kicker">完整分析结果</div>
-              <h3 className="panel__title">原始 JSON</h3>
-            </div>
-          </div>
-          <pre style={{
-            background: "var(--surface-soft)",
-            padding: "var(--space-3)",
-            borderRadius: 6,
-            fontSize: "var(--text-sm)",
-            fontFamily: "var(--font-mono)",
-            overflow: "auto",
-            maxHeight: 400,
-            color: "var(--text)",
-          }}>
-            {JSON.stringify(data.result, null, 2)}
-          </pre>
-        </section>
-      )}
-    </div>
-  );
-}
 
 // ============================================================
 // 通用小组件
 // ============================================================
-
-function Metric({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-      <span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }}>{label}</span>
-      <span style={{ fontFamily: mono ? "var(--font-mono)" : "inherit", color: "var(--text)" }}>{value}</span>
-    </div>
-  );
-}
-
-const formatTime = (iso: string | null | undefined) => {
-  if (!iso) return "—";
-  // ISO → MM-DD HH:MM
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mi = String(d.getMinutes()).padStart(2, "0");
-  return `${mm}-${dd} ${hh}:${mi}`;
-};
-
-const tableStyle: React.CSSProperties = {
-  width: "100%",
-  borderCollapse: "collapse",
-  fontSize: "var(--text-base)",
-};
-
-const thStyle: React.CSSProperties = {
-  textAlign: "left",
-  padding: "var(--space-2) var(--space-3)",
-  color: "var(--muted)",
-  fontWeight: 500,
-  fontSize: "var(--text-sm)",
-  borderBottom: "1px solid var(--border)",
-};
-
-const tdStyle: React.CSSProperties = {
-  padding: "var(--space-2) var(--space-3)",
-  borderBottom: "1px solid var(--border)",
-};
-
-const rowStyle: React.CSSProperties = {
-  cursor: "default",
-};
-
-const pageBtnStyle = (disabled: boolean): React.CSSProperties => ({
-  background: "var(--surface-soft)",
-  color: disabled ? "var(--muted)" : "var(--text)",
-  border: "1px solid var(--border)",
-  borderRadius: 6,
-  padding: "6px 12px",
-  fontSize: "var(--text-base)",
-  cursor: disabled ? "default" : "pointer",
-  opacity: disabled ? 0.5 : 1,
-});
