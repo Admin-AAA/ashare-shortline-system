@@ -276,10 +276,13 @@ def _run_llm_analysis(
             # T8 第70轮验证：LLM 净价值 +84.24%（过滤 27 笔 WR=14.8% 的垃圾推荐）
             "rule_score": stock_result.get("scoring", {}).get("dsa_signal_score") if isinstance(stock_result.get("scoring"), dict) else stock_result.get("dsa_signal_score"),
             "llm_adjustment": round(float(raw.get("score", 50)) - float(stock_result.get("scoring", {}).get("dsa_signal_score", 50) if isinstance(stock_result.get("scoring"), dict) else stock_result.get("dsa_signal_score", 50)), 2),
+            "stance": raw.get("stance"),
+            "confidence": raw.get("confidence"),
+            "summary": raw.get("summary"),
+            "action": raw.get("action"),
+            "market_regime_judgment": raw.get("market_regime_judgment"),
             "supports": raw.get("evidence") or raw.get("supports") or [],
             "risks": raw.get("risks") or [],
-            "setup_type": raw.get("setup_type"),
-            "verdict": raw.get("verdict"),
             "api_costs": api_costs,
             "total_tokens_est": sum(c.get("prompt_tokens_est", 0) + c.get("completion_tokens_est", 0) for c in api_costs),
         }
