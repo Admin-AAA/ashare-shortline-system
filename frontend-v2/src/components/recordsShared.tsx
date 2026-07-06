@@ -1,0 +1,90 @@
+import type { CSSProperties } from "react";
+
+/** RecordsPage 共享的小组件与工具函数 —— 从 RecordsPage.tsx 抽离，消除重复。 */
+
+export function Metric({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      <span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }}>{label}</span>
+      <span style={{ fontFamily: mono ? "var(--font-mono)" : "inherit", color: "var(--text)" }}>{value}</span>
+    </div>
+  );
+}
+
+export function ReturnCell({ value, bold }: { value: number | null; bold?: boolean }) {
+  const color = value == null ? "var(--muted)" : value >= 0 ? "var(--market-up)" : "var(--market-down)";
+  return (
+    <td style={{
+      ...tdStyle,
+      textAlign: "right",
+      fontFamily: "var(--font-mono)",
+      color,
+      fontWeight: bold ? 600 : 400,
+    }}>
+      {value == null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`}
+    </td>
+  );
+}
+
+export function ReturnStat({ label, value, suffix }: { label: string; value: number | null; suffix?: string }) {
+  const color = value == null ? "var(--muted)" : value >= 0 ? "var(--market-up)" : "var(--market-down)";
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      <span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }}>{label}</span>
+      <span style={{ fontFamily: "var(--font-mono)", color, fontWeight: 600 }}>
+        {value == null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(2)}${suffix || "%"}`}
+      </span>
+    </div>
+  );
+}
+
+export const fmtPrice = (v: number | null | undefined) => {
+  if (v == null || Number.isNaN(v)) return "—";
+  return v.toFixed(2);
+};
+
+export const formatTime = (iso: string | null | undefined) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  return `${mm}-${dd} ${hh}:${mi}`;
+};
+
+export const tableStyle: CSSProperties = {
+  width: "100%",
+  borderCollapse: "collapse",
+  fontSize: "var(--text-base)",
+};
+
+export const thStyle: CSSProperties = {
+  textAlign: "left",
+  padding: "var(--space-2) var(--space-3)",
+  color: "var(--muted)",
+  fontWeight: 500,
+  fontSize: "var(--text-sm)",
+  borderBottom: "1px solid var(--border)",
+};
+
+export const tdStyle: CSSProperties = {
+  padding: "var(--space-2) var(--space-3)",
+  borderBottom: "1px solid var(--border)",
+};
+
+export const rowStyle: CSSProperties = {
+  cursor: "default",
+};
+
+export const pageBtnStyle = (disabled: boolean): CSSProperties => ({
+  background: "var(--surface-soft)",
+  color: disabled ? "var(--muted)" : "var(--text)",
+  border: "1px solid var(--border)",
+  borderRadius: 6,
+  padding: "6px 12px",
+  fontSize: "var(--text-base)",
+  cursor: disabled ? "default" : "pointer",
+  opacity: disabled ? 0.5 : 1,
+});
