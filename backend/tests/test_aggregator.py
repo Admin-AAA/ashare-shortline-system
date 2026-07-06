@@ -595,13 +595,14 @@ def test_apply_sector_diversity_penalizes_same_industry():
 
     result = _apply_sector_diversity(cards)
 
-    # 第 6 只元器件应被硬剔（_MAX_PER_INDUSTRY=5，count>5 剔除）
+    # 元器件和半导体同属"科技硬件"关联组，合计 7 只，_MAX_PER_INDUSTRY=5 → 保留 5 只
+    # 第 6 只元器件（科技硬件第6只）和半导体（科技硬件第7只）都被硬剔
     yuanjian = [c for c in result if c["industry"] == "元器件"]
     assert len(yuanjian) == _MAX_PER_INDUSTRY, f"元器件应保留 {_MAX_PER_INDUSTRY} 只（第6只硬剔），实际 {len(yuanjian)}"
 
-    # 半导体第1只无 penalty
-    semiconductor = [c for c in result if c["industry"] == "半导体"][0]
-    assert semiconductor.get("sector_diversity_penalty", 0) == 0
+    # 半导体被硬剔（科技硬件组第7只，count > _MAX_PER_INDUSTRY）
+    semiconductor = [c for c in result if c["industry"] == "半导体"]
+    assert len(semiconductor) == 0, f"半导体属于科技硬件组第7只，应被硬剔，实际保留 {len(semiconductor)}"
 
     # 元器件第1只无 penalty，第2只扣5，第3+只扣10
     yuanjian_sorted = sorted(yuanjian, key=lambda c: -c["final_score"])

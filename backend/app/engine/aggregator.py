@@ -1008,12 +1008,31 @@ _MAX_PER_INDUSTRY = 5                             # 单一行业最多推荐 5 �
 # 数据驱动（T5 第79轮反事实验证）：MAX=3 剔除的第4只同行业股 WR=100% avg+5.24%（误杀）
 # 放宽到 5：保留 WR 57.6% avg+0.27%（vs MAX=3 的 56.5%/+0.12%），净收益 +2.56%→+26.03%
 
+# 关联行业组：不同 industry 但高度相关（同涨同跌），去重时归为一组
+# 因果机制：元器件/半导体/通信设备 共享供应链和终端需求，分散持仓效果有限
+# 2026-06-22 实例：元器件4只+半导体2只+通信设备1只 = 7只科技硬件，industry 去重无法识别
+_INDUSTRY_GROUPS: dict[str, str] = {}
+for _ind in ("元器件", "半导体", "通信设备", "消费电子", "电子制造"):
+    _INDUSTRY_GROUPS[_ind] = "科技硬件"
+for _ind in ("电池", "新能源车", "汽车零部件", "光伏"):
+    _INDUSTRY_GROUPS[_ind] = "新能源"
+for _ind in ("证券", "保险", "银行"):
+    _INDUSTRY_GROUPS[_ind] = "金融"
+
+
+def _industry_group(industry: str) -> str:
+    """返回行业所属的关联组（无映射则返回原始 industry）。"""
+    return _INDUSTRY_GROUPS.get(industry, industry)
+
+
 
 def _apply_sector_diversity(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """板块去重：同行业第二只推荐扣 5 分，第三只起扣 10 分，第四只起硬性剔除。
 
     因果机制：同行业股票高度相关，集中持有没有分散效果。
     跳过未知行业（无 industry 字段的卡片不参与去重）。
+    使用关联行业组（_industry_group）：元器件+半导体+通信设备 等高度相关行业归为"科技硬件"组，
+    在组内做去重，避免不同 industry 但同涨同跌的股票集中持仓。
     """
     industry_count: dict[str, int] = {}
     capped: list[dict[str, Any]] = []
@@ -1022,8 +1041,9 @@ def _apply_sector_diversity(cards: list[dict[str, Any]]) -> list[dict[str, Any]]
         if not industry or industry == "unknown":
             capped.append(card)
             continue
-        count = industry_count.get(industry, 0) + 1
-        industry_count[industry] = count
+        group = _industry_group(industry)
+        count = industry_count.get(group, 0) + 1
+        industry_count[group] = count
         if count > _MAX_PER_INDUSTRY:
             # 第四只起硬性剔除，避免单一行业过度集中
             continue
