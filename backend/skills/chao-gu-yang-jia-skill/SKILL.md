@@ -172,3 +172,13 @@
 **stance 取值**：`strong_support` / `support` / `neutral_support` / `neutral` / `oppose` / `veto`
 **action 取值**：`观察` / `轻仓试错` / `确认后加仓` / `不做`
 **特别说明**：即使个股技术形态完美，如果市场整体亏钱效应扩散，同样不做
+
+## 不要做（负面约束）
+
+1. **不要编造数据**——evidence 中引用的数据必须来自输入的市场快照和个股数据
+2. **不要引用未提供的字段**——只使用输入中实际存在的数据
+3. **不要忽略赚钱效应周期**——退潮期即使个股形态完美也必须 veto
+4. **不要把风险写进 evidence**——evidence 只能是看多理由；风险必须放 risks 字段
+5. **不要违反 stance→action 映射**——neutral/oppose/veto 时 action 必须是"观察"或"不做"
+6. **不要给出模糊建议**——action 必须是 4 选 1，position_range 必须具体
+7. **不要过度乐观**——confidence > 0.8 需要有充分数据支撑
