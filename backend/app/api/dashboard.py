@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
+import threading
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -8,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
 from app.models.tables import MarketSnapshot, RecommendationRun, StockQuote
 from app.schemas.dashboard import DashboardOverview
 from app.services.cost_service import list_scheduled_tasks
@@ -24,7 +27,18 @@ from app.services.recommendations.projection import (
 from app.services.runs.progress import progress_pct
 from app.services.workbench_service import list_run_recommendations
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+
+# ── 概览响应缓存（stale-while-revalidate）──
+# 驾驶舱概览在每次页面加载/轮询时调用，且包含一次本地池状态全量扫描（冷缓存时约 1.8s）
+# 与若干 run 查询。缓存整包响应，使重复请求在 TTL 内直接命中（<50ms）；过期时先返回
+# 旧值并在后台异步刷新，用户永不阻塞在重计算上。T4：Dashboard 延迟 695ms → <300ms。
+_OVERVIEW_CACHE: dict = {"ts": 0.0, "data": None}
+_OVERVIEW_LOCK = threading.Lock()
+_OVERVIEW_REFRESHING = False
+_OVERVIEW_TTL_SECONDS = 30.0
 RUN_ACTIVE_STATUSES = {"queued", "running"}
 RUN_HEARTBEAT_STALE_SECONDS = 1200
 DASHBOARD_POOL_PREVIEW_LIMIT = 0
@@ -182,37 +196,89 @@ def _normalize_trade_date(value: Any) -> str:
     return ""
 
 
+def _build_overview_payload(db: Session) -> DashboardOverview:
+    """组合概览响应（重计算路径）。抽离出来供首次同步计算与后台刷新复用。"""
+    market_snapshot = _select_dashboard_market_snapshot(db)
+    recent_run_row = _select_dashboard_run(db)
+    recent_run = serialize_run_progress_row(recent_run_row)
+    recommendation_run_row = _select_dashboard_recommendation_run(db)
+    run_recommendations = []
+    if recommendation_run_row is not None:
+        run_recommendations = list_run_recommendations(db, str(recommendation_run_row.run_id))[:12]
+
+    pool_status = load_dashboard_pool_status(db)
+    data_health = summarize_pool_status(pool_status)
+    task_health = summarize_tasks(list_scheduled_tasks(db))
+    quality_scorecard = build_dashboard_quality_scorecard(
+        db,
+        data_health=data_health,
+        task_health=task_health,
+        current_run=recent_run,
+    )
+    return compose_overview(
+        market_snapshot=market_snapshot,
+        recent_run=recent_run,
+        recommendations=run_recommendations,
+        data_health=data_health,
+        task_health=task_health,
+        validation=build_validation_summary(pool_status, quality_scorecard=quality_scorecard),
+        quality_scorecard=quality_scorecard,
+    )
+
+
 @router.get("/overview", response_model=DashboardOverview)
 def overview(db: Session = Depends(get_db)) -> DashboardOverview:
+    now = time.monotonic()
+    with _OVERVIEW_LOCK:
+        cached = _OVERVIEW_CACHE["data"]
+        if cached is not None and (now - _OVERVIEW_CACHE["ts"]) < _OVERVIEW_TTL_SECONDS:
+            return cached  # 命中：直接返回，不触碰 DB
+        if cached is not None:
+            _schedule_overview_refresh()  # 过期但存在：先返回旧值，后台刷新
+            return cached
+    # 冷缓存（首次/进程重启后）：同步计算一次并写入缓存
     try:
-        market_snapshot = _select_dashboard_market_snapshot(db)
-        recent_run_row = _select_dashboard_run(db)
-        recent_run = serialize_run_progress_row(recent_run_row)
-        recommendation_run_row = _select_dashboard_recommendation_run(db)
-        run_recommendations = []
-        if recommendation_run_row is not None:
-            run_recommendations = list_run_recommendations(db, str(recommendation_run_row.run_id))[:12]
-
-        pool_status = load_dashboard_pool_status(db)
-        data_health = summarize_pool_status(pool_status)
-        task_health = summarize_tasks(list_scheduled_tasks(db))
-        quality_scorecard = build_dashboard_quality_scorecard(
-            db,
-            data_health=data_health,
-            task_health=task_health,
-            current_run=recent_run,
-        )
-        return compose_overview(
-            market_snapshot=market_snapshot,
-            recent_run=recent_run,
-            recommendations=run_recommendations,
-            data_health=data_health,
-            task_health=task_health,
-            validation=(validation := build_validation_summary(pool_status, quality_scorecard=quality_scorecard)),
-            quality_scorecard=quality_scorecard,
-        )
+        payload = _build_overview_payload(db)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    with _OVERVIEW_LOCK:
+        _OVERVIEW_CACHE["data"] = payload
+        _OVERVIEW_CACHE["ts"] = time.monotonic()
+    return payload
+
+
+def _schedule_overview_refresh() -> None:
+    """后台异步刷新概览缓存，避免刷新期间请求阻塞。带去重，防止并发堆叠。"""
+    global _OVERVIEW_REFRESHING
+    with _OVERVIEW_LOCK:
+        if _OVERVIEW_REFRESHING:
+            return
+        _OVERVIEW_REFRESHING = True
+    try:
+        threading.Thread(target=_overview_refresh_worker, daemon=True).start()
+    except Exception:
+        with _OVERVIEW_LOCK:
+            _OVERVIEW_REFRESHING = False
+        logger.exception("概览缓存后台刷新调度失败")
+
+
+def _overview_refresh_worker() -> None:
+    global _OVERVIEW_REFRESHING
+    db = None
+    try:
+        db = SessionLocal()
+        payload = _build_overview_payload(db)
+        with _OVERVIEW_LOCK:
+            _OVERVIEW_CACHE["data"] = payload
+            _OVERVIEW_CACHE["ts"] = time.monotonic()
+    except Exception:
+        logger.exception("概览缓存后台刷新失败")
+    finally:
+        if db is not None:
+            db.close()
+        with _OVERVIEW_LOCK:
+            _OVERVIEW_REFRESHING = False
+
 
 
 def _select_dashboard_run(db: Session) -> RecommendationRun | None:
