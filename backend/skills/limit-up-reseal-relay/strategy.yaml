@@ -79,12 +79,16 @@ phases:
 
   - name: 回封确认
     when: "is_limit_up == true and limit_up_open_times >= 1 and limit_up_open_times <= 8 and limit_up_fd_amount_yi >= 0.15"
-    score_cap: 92
+    # score_cap 100（原 92）：涨停接力策略次日入场（entry_rule=次日竞价），
+    # 但 apply_pool_rules 累加执行风险 +5（误伤：假设当日涨停排队）+ 强势 regime +8 + 高潮分数线 +13。
+    # 92 分候选被 96 分数线全拒（历史 0 产出）。提到 100 让高质量候选（base38+rules53+setup12=103→100）
+    # 能通过 96 分数线，恢复策略产出。support_ma5 +6 已在 aggregator 对涨停卡豁免。
+    score_cap: 100
     hard_veto: false
 
   - name: 首板强封
     when: "limit_up_consecutive_days <= 1 and limit_up_fd_amount_yi >= 0.5 and sector_ladder_completeness_score >= 50"
-    score_cap: 88
+    score_cap: 98
     hard_veto: false
 
 setups:

@@ -483,6 +483,34 @@ def test_apply_pool_rules_structural_strength_ma5_penalty():
         assert by_code["A"]["score_line_meta"]["effective_score_line"] - by_code["B"]["score_line_meta"]["effective_score_line"] == 6.0
 
 
+def test_apply_pool_rules_limit_up_exempt_from_support_ma5_penalty():
+    """涨停股豁免 support_ma5 交叉惩罚。
+
+    因果：support_ma5 惩罚针对"强势市已回落均线=追弱"，但涨停股=+10% 必然高于 MA5，
+    support_ma5=True 是动能副产品而非追弱信号。limit-up-reseal-relay 历史因
+    82(强牛高潮) + 8(强势) + 5(涨停执行风险) + 6(support_ma5) = 101 门槛拒绝 92 分候选，
+    导致 0 产出。修复：涨停卡豁免 support_ma5 +6（执行风险+8 保留，是真实成交约束）。
+
+    验证：相同高分数/support_ma5/regime，涨停卡 vs 普通卡的 effective_score_line
+    差 6 分（普通卡 +6 惩罚，涨停卡豁免）。
+    """
+    snapshot = {
+        "sample_count": 100, "up_count": 58, "down_count": 42,
+        "limit_up_count": 5, "limit_down_count": 0,
+        "market_regime": "强势",
+    }
+    # 高分确保两张卡都进入结果（涨停卡 effective=83+5+8=96，普通卡 +6=102）
+    cards = [
+        {**_card("LIMIT", 110), "support_ma5": True, "is_limit_up": True},
+        {**_card("NORMAL", 110), "support_ma5": True, "is_limit_up": False},
+    ]
+    result = apply_pool_rules(cards, score_line=70, market_snapshot=snapshot)
+    by_code = {c["code"]: c for c in result}
+    # 涨停卡豁免 support_ma5 惩罚，普通卡仍 +6（核心断言）
+    assert by_code["LIMIT"]["score_line_meta"]["regime_support_ma5_penalty"] == 0.0
+    assert by_code["NORMAL"]["score_line_meta"]["regime_support_ma5_penalty"] == 6.0
+
+
 def test_apply_pool_rules_sorted_by_score():
     cards = [
         _card("C", 75),

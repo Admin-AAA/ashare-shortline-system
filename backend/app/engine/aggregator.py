@@ -919,7 +919,11 @@ def apply_pool_rules(
             or ((market_snapshot or {}).get("breadth") or {}).get("regime")
             or ""
         )
-        if _snapshot_regime in ("结构性强势", "强势") and card.get("support_ma5"):
+        # 涨停股豁免 support_ma5 交叉惩罚：涨停=+10% 必然贴近/高于 MA5，
+        # 这是动能副产品而非"回落均线追弱"信号。惩罚误伤 limit-up-reseal-relay
+        # 等涨停动能策略（1186 outcomes 中 0 笔，根因：92 分候选被 82+8+6=96 拒绝）。
+        _is_limit_up_card = bool(card.get("is_limit_up"))
+        if _snapshot_regime in ("结构性强势", "强势") and card.get("support_ma5") and not _is_limit_up_card:
             # 提高门槛 6 分（约等于 21pp 胜率差距对应的合理惩罚）
             effective_score_line = round(effective_score_line + 6.0, 2)
             card["_regime_support_ma5_penalty"] = 6.0

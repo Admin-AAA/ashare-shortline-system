@@ -57,19 +57,43 @@ EXECUTED_OUTCOME_LABELS = {OUTCOME_SUCCESS, OUTCOME_FAILED}
 # 短时缓存
 _metrics_cache: dict[str, tuple[float, Any]] = {}
 _metrics_cache_lock = threading.Lock()
+_metrics_compute_locks: dict[str, threading.Lock] = {}
+_metrics_compute_locks_lock = threading.Lock()
 _METRICS_CACHE_TTL = 30.0  # 指标缓存 30 秒（原 5 秒过短，冷启动 350ms 频繁触发）
 
 
 def _cached(key: str, factory):
+    """带 per-key 计算锁的缓存，防止缓存击穿（多请求同时计算同一 key）。
+
+    MetricsPage 并发发起 5 个请求，如果缓存未命中，不加锁会同时计算
+    _compute_horizon_metric_records（705 次模拟），造成 CPU 浪费和延迟叠加。
+    加 per-key 锁后，同一 key 只有一个请求计算，其它等待结果。
+    """
     now = time.time()
     with _metrics_cache_lock:
         entry = _metrics_cache.get(key)
         if entry is not None and (now - entry[0]) < _METRICS_CACHE_TTL:
             return entry[1]
-    result = factory()
-    with _metrics_cache_lock:
-        _metrics_cache[key] = (time.time(), result)
-    return result
+
+    # 获取 per-key 计算锁（防止多请求同时计算同一 key）
+    with _metrics_compute_locks_lock:
+        lock = _metrics_compute_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _metrics_compute_locks[key] = lock
+
+    with lock:
+        # double-check：持有锁后再次检查缓存（可能已被其它请求计算）
+        now = time.time()
+        with _metrics_cache_lock:
+            entry = _metrics_cache.get(key)
+            if entry is not None and (now - entry[0]) < _METRICS_CACHE_TTL:
+                return entry[1]
+
+        result = factory()
+        with _metrics_cache_lock:
+            _metrics_cache[key] = (time.time(), result)
+        return result
 
 
 def invalidate_outcome_metrics_cache() -> None:
