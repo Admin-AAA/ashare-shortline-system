@@ -1038,6 +1038,12 @@ def list_run_recommendations(db: Session, run_id: str) -> list[dict[str, Any]]:
     return _serialize_recommendations_batched(db, recs)
 
 
+# 推荐历史短时缓存：历史数据不频繁变化（新 run 后才变），30s TTL 足够
+_history_cache: dict[str, tuple[float, Any]] = {}
+_history_cache_lock = threading.Lock()
+_HISTORY_CACHE_TTL = 30.0
+
+
 def list_recommendation_history(
     db: Session,
     *,
@@ -1055,6 +1061,13 @@ def list_recommendation_history(
     性能：先只取 recommendation_id + trade_date + code + final_score（轻量列，不取整行），
     Python 去重后切片分页，再只对 50 个 id 批量取详情。避免查全部 1584 行整行 + outcome。
     """
+    # 短时缓存：历史数据不频繁变化（新 run 后才变），30s TTL
+    cache_key = f"hist:{run_mode}:{code or ''}:{label or ''}:{limit}:{offset}"
+    now = time.time()
+    with _history_cache_lock:
+        entry = _history_cache.get(cache_key)
+        if entry is not None and (now - entry[0]) < _HISTORY_CACHE_TTL:
+            return entry[1]
     # 第 1 步：轻量查询——只取去重所需列（不取 feature_snapshot_json 等大字段）
     id_stmt = (
         select(
@@ -1119,7 +1132,10 @@ def list_recommendation_history(
         rec_id = item.get("recommendation_id")
         item["outcome"] = _serialize_outcome(outcome_map.get(rec_id)) if rec_id else None
 
-    return {"items": items, "total": total, "offset": offset, "limit": limit, "run_mode": run_mode}
+    result = {"items": items, "total": total, "offset": offset, "limit": limit, "run_mode": run_mode}
+    with _history_cache_lock:
+        _history_cache[cache_key] = (time.time(), result)
+    return result
 
 
 def get_run_replay_analysis(db: Session, run_id: str) -> dict[str, Any] | None:
