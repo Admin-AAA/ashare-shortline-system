@@ -22,8 +22,11 @@ import type {
   PoolRefreshResult,
   RunDetail,
   RunFunnelAudit,
+  RunRecordDetail,
   RunResult,
   RunSummary,
+  MatrixRecordsResponse,
+  MatrixRecordDetail,
   ScheduledTask,
   ScheduledTaskRun,
   ScheduledTaskPayload,
@@ -346,5 +349,23 @@ export const api = {
   metricsByStrategy: (mode: "formal" | "experiment") => request<StrategyStatsRow[]>(`/api/metrics/by-strategy?mode=${mode}`),
   metricsBySetup: (mode: "formal" | "experiment") => request<SetupStatsRow[]>(`/api/metrics/by-setup?mode=${mode}`),
   precisionAtK: (mode: "formal" | "experiment") => request<PrecisionAtKRow[]>(`/api/metrics/precision-at-k?mode=${mode}`),
-  metricsByScoreLine: (mode: "formal" | "experiment") => request<ScoreLineStatsRow[]>(`/api/metrics/by-score-line?mode=${mode}`)
+  metricsByScoreLine: (mode: "formal" | "experiment") => request<ScoreLineStatsRow[]>(`/api/metrics/by-score-line?mode=${mode}`),
+
+  // —— 记录中心：运行推荐记录 + 矩阵运行记录 ——
+  runRecords: (params?: { run_mode?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.run_mode) qs.set("run_mode", params.run_mode);
+    if (params?.limit) qs.set("limit", String(params.limit));
+    const str = qs.toString();
+    return request<RunSummary[]>(`/api/records/runs${str ? `?${str}` : ""}`);
+  },
+  runRecordDetail: (runId: string) => request<RunRecordDetail>(`/api/records/runs/${runId}`),
+  matrixRecords: (params?: { page?: number; page_size?: number; code?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.page) qs.set("page", String(params.page));
+    if (params?.page_size) qs.set("page_size", String(params.page_size));
+    if (params?.code) qs.set("code", params.code);
+    return request<MatrixRecordsResponse>(`/api/records/matrix?${qs.toString()}`);
+  },
+  matrixRecordDetail: (id: number) => request<MatrixRecordDetail>(`/api/records/matrix/${id}`)
 };
