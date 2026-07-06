@@ -270,6 +270,7 @@ def _build_system_prompt(skill: StrategySkill) -> str:
 5. 输出必须包含: stance, score(0-100), confidence(0-1), evidence, risks, summary, market_regime_judgment, action, position_range, entry_style, invalidation_conditions, next_day_plan
 6. `summary` 必须明确动作倾向（如观察 / 轻仓试错 / 不做），并用 Skill 语言说明原因。
 7. `action` 只能从 `观察`、`轻仓试错`、`确认后加仓`、`不做` 中选择。
+8. `position_range` 和 `entry_style` **必须按 SKILL.md 中该策略定义的取值范围选择**，不要使用通用默认值。例如隔夜持股法的 entry_style 应从"尾盘竞价/隔夜持有/竞价承接确认"中选，而非通用的"分歧低吸/回封确认"。
 """)
 
     return "\n\n".join(parts)
@@ -335,8 +336,8 @@ def _build_user_prompt(
   "summary": "一句中文审查结论",
   "market_regime_judgment": "Skill视角的市场状态判断",
   "action": "观察|轻仓试错|确认后加仓|不做",
-  "position_range": "0%|0-5%|5-15%|20-40%",
-  "entry_style": "分歧低吸|回封确认|突破跟随|当前不设买点",
+  "position_range": "按 SKILL.md 定义（通常为 0%|0-5%|5-15%|15-30%）",
+  "entry_style": "按 SKILL.md 定义（策略特定的入场方式）",
   "invalidation_conditions": ["失效条件1", ...],
   "next_day_plan": ["次日计划1", ...]
 }}
