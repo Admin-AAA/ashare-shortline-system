@@ -2,6 +2,7 @@ import {
   BarChart3,
   Compass,
   History,
+  Layers,
   LayoutGrid,
   LineChart,
   ListChecks,
@@ -19,6 +20,7 @@ export type Section =
   | "records" // 📋 记录中心（运行/矩阵记录 + 收益复盘）
   | "matrix" // 📈 矩阵
   | "metrics" // 📐 指标分析
+  | "strategies" // 🧩 策略清单（8 策略 + 简介 + 回测胜率）
   | "config"; // ⚙️ 配置
 
 export type NavItem = {
@@ -34,6 +36,7 @@ export const NAV_ITEMS: NavItem[] = [
   { section: "records", label: "记录", icon: ListChecks },
   { section: "matrix", label: "矩阵", icon: LayoutGrid },
   { section: "metrics", label: "指标", icon: LineChart },
+  { section: "strategies", label: "策略", icon: Layers },
   { section: "config", label: "配置", icon: Settings2 },
 ];
 
@@ -54,6 +57,7 @@ export const SECTION_PATHS: Record<Section, string> = {
   records: "/records",
   matrix: "/matrix",
   metrics: "/metrics",
+  strategies: "/strategies",
   config: "/config",
 };
 

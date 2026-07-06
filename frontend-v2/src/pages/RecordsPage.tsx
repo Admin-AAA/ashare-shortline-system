@@ -18,6 +18,7 @@ import type {
 } from "../types";
 import { ErrorPage, EmptyState, PageSkeleton } from "../components/StateViews";
 import { RecommendationDetailCard } from "../components/RecommendationDetailCard";
+import { fmtPrice } from "../components/Shared";
 import { useApi } from "../app/useApi";
 import { useUrlRoute } from "../app/useUrlRoute";
 import { queryParam } from "../app/nav";
@@ -41,17 +42,20 @@ export function RecordsPage() {
   const recId = queryParam("rec_id");
   const matrixId = queryParam("matrix_id");
 
-  // 详情视图
+  // 路由身份：任一参数变化 → key 变化 → 整段内容强制重挂载，
+  // 彻底规避「URL 变了但父组件没重渲染 / 内部 state 残留」的问题。
+  const routeKey = `${tab}|${runId ?? ""}|${recId ?? ""}|${matrixId ?? ""}`;
+
+  let content: React.ReactNode;
   if (tab === "run" && runId && recId) {
-    return (
+    content = (
       <StockAnalysisDetailView
         recId={recId}
         onBack={() => navigate("/records", { params: { tab: "run", run_id: runId } })}
       />
     );
-  }
-  if (tab === "run" && runId) {
-    return (
+  } else if (tab === "run" && runId) {
+    content = (
       <RunRecordDetailView
         runId={runId}
         onBack={() => navigate("/records", { params: { tab: "run" } })}
@@ -60,12 +64,18 @@ export function RecordsPage() {
         }
       />
     );
-  }
-  if (tab === "matrix" && matrixId) {
-    return <MatrixRecordDetailView recordId={Number(matrixId)} onBack={() => navigate("/records", { params: { tab: "matrix" } })} />;
+  } else if (tab === "matrix" && matrixId) {
+    content = (
+      <MatrixRecordDetailView
+        recordId={Number(matrixId)}
+        onBack={() => navigate("/records", { params: { tab: "matrix" } })}
+      />
+    );
+  } else {
+    content = <RecordsListPage initialTab={tab} />;
   }
 
-  return <RecordsListPage initialTab={tab} />;
+  return <div key={routeKey}>{content}</div>;
 }
 
 // ============================================================
@@ -890,11 +900,6 @@ function Metric({ label, value, mono }: { label: string; value: string; mono?: b
     </div>
   );
 }
-
-const fmtPrice = (v: number | null | undefined) => {
-  if (v == null || Number.isNaN(v)) return "—";
-  return v.toFixed(2);
-};
 
 const formatTime = (iso: string | null | undefined) => {
   if (!iso) return "—";

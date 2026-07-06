@@ -36,6 +36,7 @@ import type {
   SkillSummary,
   ScoreLineStatsRow,
   SetupStatsRow,
+  StrategyListItem,
   StrategyStatsRow,
   StatsOverview
 } from "../types";
@@ -286,6 +287,8 @@ export const api = {
     request<{ ok: boolean }>(`/api/admin/tasks/${taskId}/run`, json("POST")),
 
   skills: () => request<SkillSummary[]>("/api/skills", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
+  strategies: (mode: "formal" | "experiment" = "formal") =>
+    request<StrategyListItem[]>(`/api/strategies?mode=${mode}`, undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   installSkill: (payload: { source: string; skill_id?: string }) =>
     request<SkillDetail>("/api/skills/install", json("POST", payload)),
   skillDetail: (id: string) => request<SkillDetail>(`/api/skills/${id}`),

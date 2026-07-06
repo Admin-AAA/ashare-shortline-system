@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import admin, dashboard, data_sources, frontend_logs, home, metrics, outcomes, presets, records, recommendations, runs, skills, stats
+from app.api import admin, dashboard, data_sources, frontend_logs, home, metrics, outcomes, presets, records, recommendations, runs, skills, stats, strategies
 from app.core.config import get_settings
 from app.core.logger import setup_logging
 from app.db.init_db import init_db
@@ -207,6 +207,7 @@ app.include_router(home.router)
 app.include_router(presets.router)
 app.include_router(runs.router)
 app.include_router(skills.router)
+app.include_router(strategies.router)
 app.include_router(stats.router)
 app.include_router(metrics.router)
 app.include_router(outcomes.router)

@@ -1406,6 +1406,33 @@ export type SkillSummary = {
   assigned_presets: string[];
 };
 
+/** 单个策略的实盘/回测表现（来自 /api/metrics/by-strategy，按 strategy_id join） */
+export type StrategyPerformance = {
+  sample_count: number;
+  labeled_count: number;
+  triggered_count: number;
+  missed_count: number;
+  success_count: number;
+  trigger_rate: number | null;
+  hit_rate: number | null;
+  avg_score: number | null;
+  avg_return: number | null;
+  horizon_metrics?: Record<string, unknown> | null;
+};
+
+/** 策略清单页单行（策略元数据 + 表现，单次请求返回） */
+export type StrategyListItem = {
+  skill_id: string;
+  name: string;
+  description: string;
+  mode: string;
+  enabled: boolean;
+  source_type: string | null;
+  assigned_presets: string[];
+  has_backtest_adapter: boolean;
+  performance: StrategyPerformance | null;
+};
+
 export type SkillReferenceFile = {
   path: string;
   size?: number;

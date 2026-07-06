@@ -13,6 +13,7 @@ const HistoryPage = lazy(() => import("../pages/HistoryPage").then((m) => ({ def
 const RecordsPage = lazy(() => import("../pages/RecordsPage").then((m) => ({ default: m.RecordsPage })));
 const MatrixPage = lazy(() => import("../pages/MatrixPage").then((m) => ({ default: m.MatrixPage })));
 const MetricsPage = lazy(() => import("../pages/MetricsPage").then((m) => ({ default: m.MetricsPage })));
+const StrategiesPage = lazy(() => import("../pages/StrategiesPage").then((m) => ({ default: m.StrategiesPage })));
 const ConfigPage = lazy(() => import("../pages/ConfigPage").then((m) => ({ default: m.ConfigPage })));
 const RunDetailPage = lazy(() => import("../pages/RunDetailPage").then((m) => ({ default: m.RunDetailPage })));
 
@@ -32,6 +33,8 @@ function SectionView({ section }: { section: Section }) {
       return <MatrixPage />;
     case "metrics":
       return <MetricsPage />;
+    case "strategies":
+      return <StrategiesPage />;
     case "config":
       return <ConfigPage />;
   }
