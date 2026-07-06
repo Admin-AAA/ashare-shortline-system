@@ -331,7 +331,10 @@ def load_dashboard_pool_status(db: Session) -> dict[str, Any]:
         cache_only=True,
     )
     if _is_unready_pool_cache(pool_status):
-        # First-ever request: cache is empty, fall back to full load
+        # Cache miss: do full load once, then cache the result (even if empty).
+        # Without this, every dashboard request re-scans the DB (775ms × N = 30s+).
+        # get_cached_local_pool_status(cache_only=False) populates the cache internally,
+        # so subsequent requests hit cache_only=True and return instantly.
         pool_status = get_cached_local_pool_status(
             db,
             u_limit=DASHBOARD_POOL_PREVIEW_LIMIT,
