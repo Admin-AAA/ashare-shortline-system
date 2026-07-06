@@ -8,6 +8,7 @@ import type {
   SetupStatsRow,
 } from "../types";
 import { PageSkeleton, ErrorPage, EmptyState } from "../components/StateViews";
+import { SkillsCatalogPanel } from "../components/SkillsCatalogPanel";
 import { LineChart } from "lucide-react";
 
 /**
@@ -58,6 +59,7 @@ export function MetricsPage() {
       <ScoreLinePanel rows={scoreLines ?? []} />
       <StrategyPanel rows={strategies ?? []} />
       <SetupPanel rows={setups ?? []} />
+      <SkillsCatalogPanel />
     </div>
   );
 }
