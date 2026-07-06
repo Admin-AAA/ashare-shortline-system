@@ -91,6 +91,8 @@ export function PoolPage() {
         onChange={setFilter}
       />
 
+      <SectorDiversityBar items={filtered} />
+
       {expanded.size > 3 && (
         <div className="tag tag--warning" style={{ alignSelf: "flex-start" }}>
           已展开 {expanded.size} 行，可能超出可视范围
@@ -114,7 +116,7 @@ export function PoolPage() {
               style={{
                 width: "100%",
                 display: "grid",
-                gridTemplateColumns: "32px 80px 1fr 100px 120px 24px",
+                gridTemplateColumns: "28px 76px minmax(150px,1fr) 168px 84px 112px 24px",
                 alignItems: "center",
                 gap: "var(--space-3)",
                 padding: "var(--space-3) var(--space-4)",
@@ -126,7 +128,34 @@ export function PoolPage() {
             >
               <span className="text-mono text-muted" style={{ fontSize: "var(--text-sm)" }}>#{i + 1}</span>
               <span className="text-mono" style={{ fontSize: "var(--text-sm)" }}>{c.code}</span>
-              <span style={{ fontWeight: 600, color: "var(--ink)" }}>{c.name}</span>
+              <div style={{ minWidth: 0 }}>
+                <div
+                  style={{
+                    fontWeight: 600,
+                    color: "var(--ink)",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {c.name}
+                </div>
+                {c.entry_rule && (
+                  <div
+                    style={{
+                      fontSize: "var(--text-xs)",
+                      color: "var(--text-muted)",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      marginTop: 2,
+                    }}
+                  >
+                    入场 · {c.entry_rule}
+                  </div>
+                )}
+              </div>
+              <TradeParamsInline item={c} />
               <span className="text-mono" style={{ fontWeight: 700, color: "var(--accent-strong)", fontSize: "var(--text-lg)" }}>
                 {c.final_score.toFixed(0)}
               </span>
@@ -140,6 +169,53 @@ export function PoolPage() {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/** 板块分散度指示器 —— 显示行业分布，过度集中时警告 */
+function SectorDiversityBar({ items }: { items: CockpitRecommendation[] }) {
+  if (items.length === 0) return null;
+
+  const industryCount: Record<string, number> = {};
+  for (const c of items) {
+    const ind = c.industry || "未知";
+    industryCount[ind] = (industryCount[ind] || 0) + 1;
+  }
+
+  const industries = Object.entries(industryCount).sort((a, b) => b[1] - a[1]);
+  const maxCount = industries[0]?.[1] || 0;
+  const maxRatio = maxCount / items.length;
+  const isConcentrated = maxRatio > 0.5 && items.length > 2;
+
+  return (
+    <div
+      className="panel"
+      style={{
+        padding: "var(--space-2) var(--space-4)",
+        display: "flex",
+        alignItems: "center",
+        gap: "var(--space-2)",
+        flexWrap: "wrap",
+        fontSize: "var(--text-sm)",
+      }}
+    >
+      <span className="text-muted">板块分散度</span>
+      <span className="text-mono" style={{ fontWeight: 600 }}>
+        {items.length} 只 / {industries.length} 行业
+      </span>
+      {isConcentrated && (
+        <span
+          className="tag tag--warning"
+          style={{ fontSize: "var(--text-xs)" }}
+          title={`${industries[0][0]} 占比 ${(maxRatio * 100).toFixed(0)}%，过度集中`}
+        >
+          ⚠ {industries[0][0]} {maxCount}/{items.length} ({(maxRatio * 100).toFixed(0)}%)
+        </span>
+      )}
+      <span style={{ marginLeft: "auto", color: "var(--muted)", fontSize: "var(--text-xs)" }}>
+        {industries.slice(0, 4).map(([ind, cnt]) => `${ind} ${cnt}`).join(" · ")}
+      </span>
     </div>
   );
 }
@@ -219,6 +295,48 @@ function RiskTag({ level, setup }: { level: RiskLevel; setup?: string | null }) 
     <div style={{ display: "flex", gap: "var(--space-1)" }}>
       {setup && <span className="tag">{setup}</span>}
       <span className={`tag ${toneClass}`} style={{ color }}>{level}</span>
+    </div>
+  );
+}
+
+/**
+ * 行内交易参数 —— 推荐价/止损/止盈一屏可见，等宽数字右对齐。
+ * A 股涨红跌绿：止盈(上行目标)=红、止损(下行保护)=绿，低饱和。
+ * 让用户在展开前即可看到风控报价，无需逐行点开。
+ */
+function TradeParamsInline({ item }: { item: CockpitRecommendation }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "var(--space-3)" }}>
+      <TradeParam label="推荐" value={item.recommend_price} />
+      <TradeParam label="止损" value={item.stop_loss} tone="down" />
+      <TradeParam label="止盈" value={item.take_profit} tone="up" />
+    </div>
+  );
+}
+
+function TradeParam({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value?: number | null;
+  tone?: "up" | "down";
+}) {
+  const color =
+    value == null
+      ? "var(--text-muted)"
+      : tone === "up"
+        ? "var(--market-up)"
+        : tone === "down"
+          ? "var(--market-down)"
+          : "var(--ink)";
+  return (
+    <div style={{ display: "inline-flex", alignItems: "baseline", gap: 4 }}>
+      <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{label}</span>
+      <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: "var(--text-sm)", fontWeight: 600, color }}>
+        {value != null ? value.toFixed(2) : "—"}
+      </span>
     </div>
   );
 }
