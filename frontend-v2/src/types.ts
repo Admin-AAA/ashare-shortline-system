@@ -96,6 +96,13 @@ export type RunSummary = {
   interrupted_at?: string | null;
   checkpoint_phase?: string | null;
   skill_count: number;
+  /** 聚合收益率（推荐股票 1/3/5 日 + 至今均值，百分比），由 records 列表接口补算 */
+  returns?: {
+    return_1d: number | null;
+    return_3d: number | null;
+    return_5d: number | null;
+    return_to_date?: number | null;
+  } | null;
   hit_rate: number;
   result_summary: {
     top_codes?: string[];

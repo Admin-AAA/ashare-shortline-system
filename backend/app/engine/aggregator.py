@@ -245,7 +245,10 @@ def resolve_score_line_context(
         "balanced": 0.0,
         "aggressive": -1.0,
     }.get(str(risk_template or "balanced"), 0.0)
-    effective = round(max(35.0, min(95.0, base + market_adjustment + sentiment_adjustment + risk_adjustment)), 2)
+    # 上限对齐生产部署：生产版本无 95 硬上限，强牛·高潮阶段分数线可达 ~119。
+    # 旧值 95 会让高潮阶段线被压低、与回测/生产不一致；提到 120 仅放开上限，
+    # 不影响线 < 95 的常态场景。下限 35 保持不变。
+    effective = round(max(35.0, min(120.0, base + market_adjustment + sentiment_adjustment + risk_adjustment)), 2)
     return {
         "base_score_line": round(base, 2),
         "market_base": market_base,
@@ -866,7 +869,10 @@ def apply_pool_rules(
     market_snapshot: dict[str, Any] | None = None,
     risk_template: str = "balanced",
     display_limit: int | None = None,
-) -> list[dict[str, Any]]:
+    return_watchlist: bool = False,
+    watchlist_top_n: int = 8,
+    watchlist_min_hit: int = 3,
+) -> list[dict[str, Any]] | dict[str, Any]:
     """按分数线过滤正式推荐，展示上限不参与核心选股决策。"""
     if display_limit is None and output_count is not None:
         display_limit = resolve_display_limit(output_count, market_snapshot)
@@ -875,6 +881,11 @@ def apply_pool_rules(
         market_snapshot=market_snapshot,
         risk_template=risk_template,
     )
+    # 高潮/强牛阶段禁用动态降线：此阶段宁可零推荐也不降线，避免追高陷阱。
+    # 观察池仅在禁用降线的阶段（即真正的高潮/强牛）作为兜底，其余阶段由软降线处理。
+    _ctx_base = score_line_context.get("market_base")
+    _ctx_sentiment = score_line_context.get("market_sentiment")
+    _disable_soft_floor = _ctx_sentiment == "高潮" or _ctx_base == "强牛"
     ordered = sorted(
         cards,
         key=lambda card: float(card.get("final_score", 0)),
@@ -891,6 +902,7 @@ def apply_pool_rules(
             seen_codes.add(code)
         deduped.append(card)
     result: list[dict[str, Any]] = []
+    watchlist: list[dict[str, Any]] = []
     top_final_score = 0.0
     for card in deduped:
         final_score = float(card.get("final_score") or 0)
@@ -957,6 +969,21 @@ def apply_pool_rules(
                 list(card.get("risk_flags") or []) + execution_viability["risk_flags"]
             )
         card["execution_viability"] = execution_viability
+        # 高潮/强牛阶段观察池：未正式过线、未封死成交的候选，作为轻仓观察兜底，
+        # 不降低分数线，仅避免系统在长期高潮中完全静默（不推荐 ≠ 无任何信号）。
+        if return_watchlist and _disable_soft_floor:
+            _wl_blocked = execution_viability["status"] == "blocked"
+            _wl_passed = final_score >= effective_score_line and not _wl_blocked
+            if not _wl_blocked and not _wl_passed:
+                _wl_gap = round(final_score - effective_score_line, 2)
+                _wl_hit = _count_hit_strategies(card)
+                if _wl_gap >= -15.0 or _wl_hit >= watchlist_min_hit:
+                    _wl_card = dict(card)
+                    _wl_card["watchlist"] = True
+                    _wl_card["watchlist_gap"] = _wl_gap
+                    _wl_card["watchlist_hit_strategies"] = _wl_hit
+                    _wl_card["watchlist_note"] = "高潮/强牛阶段不正式推荐，仅作轻仓观察"
+                    watchlist.append(_wl_card)
         if execution_viability["status"] == "blocked":
             continue
         if final_score < effective_score_line:
@@ -965,10 +992,7 @@ def apply_pool_rules(
 
     # 动态降线：无候选过线时，以 top_score - 0.5 为软下界，避免零推荐
     # 高潮/强牛阶段禁用降线：回测验证高潮阶段降线导致 7 笔 0% WR 交易（6/9 偏多·高潮）
-    # 高潮阶段宁可零推荐也不降线，避免追高陷阱
-    _ctx_base = score_line_context.get("market_base")
-    _ctx_sentiment = score_line_context.get("market_sentiment")
-    _disable_soft_floor = _ctx_sentiment == "高潮" or _ctx_base == "强牛"
+    # 高潮阶段宁可零推荐也不降线，避免追高陷阱（_disable_soft_floor 已在函数前部计算）
     if not result and ordered and top_final_score > 0 and not _disable_soft_floor:
         soft_floor = round(top_final_score - 1.0, 2)
         base_floor = round(score_line_context["base_score_line"] - 8.0, 2)
@@ -995,11 +1019,31 @@ def apply_pool_rules(
                 if final_score >= new_effective:
                     result.append(card)
     result = _apply_sector_diversity(result)
+    if return_watchlist:
+        watchlist.sort(
+            key=lambda c: (c.get("watchlist_gap", 0.0), float(c.get("final_score") or 0)),
+            reverse=True,
+        )
+        watchlist = watchlist[:watchlist_top_n]
+        _recs = result[:display_limit] if (display_limit and display_limit > 0) else result
+        return {"recommendations": _recs, "watchlist": watchlist}
     if display_limit is None:
         return result
     if display_limit <= 0:
         return result
     return result[:display_limit]
+
+
+def _count_hit_strategies(card: dict[str, Any]) -> int:
+    """统计实际触发（score>=60）的策略数量，用于高潮观察池筛选。
+
+    不依赖具体 preset 的命中口径，仅以策略信号得分作为命中代理，
+    保证观察池偏向「被多策略共同认可、仅因高潮门槛过高而未过线」的候选。
+    """
+    signals = card.get("strategy_signals") or []
+    if not signals:
+        return 0
+    return sum(1 for s in signals if float(s.get("score", 0)) >= 60.0)
 
 
 # ============================================================================

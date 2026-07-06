@@ -6,7 +6,10 @@
   display: flex;
   flex-direction: column;
   min-height: 100dvh;
-  background: var(--canvas);
+  /* 透明：让底层波浪背景透出；body 的 --canvas 作为降级底色 */
+  background: transparent;
+  position: relative;
+  z-index: 1;
 }
 
 /* ── 顶部栏 (64px) ── */
@@ -225,6 +228,25 @@
 
 .btn--ghost:hover {
   background: var(--surface-soft);
+}
+
+/* ── 记录中心：可点击的下钻行（运行详情 → 单股票分析）── */
+.records-row--clickable {
+  cursor: pointer;
+  transition: background var(--motion-instant);
+}
+
+.records-row--clickable:hover {
+  background: var(--surface-soft);
+}
+
+.records-row--clickable:hover .records-row__chevron {
+  color: var(--accent);
+  transform: translateX(2px);
+}
+
+.records-row__chevron {
+  transition: transform var(--motion-instant), color var(--motion-instant);
 }
 
 /* ── 标签 / 徽标 ── */

@@ -92,9 +92,80 @@ def list_run_records(
     run_mode: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
-    """推荐运行记录列表（轻量，不含推荐股票明细）。"""
+    """推荐运行记录列表（轻量，不含推荐股票明细）。
+
+    在此（而非共享的 list_runs）补充每个 run 的「聚合 1/3/5 日 + 至今收益率」，
+    避免拖慢 bootstrap / 仪表盘（它们也调用 list_runs）。
+    """
     from app.services.workbench_service import list_runs
-    return list_runs(db, run_mode=run_mode, limit=limit)
+
+    runs = list_runs(db, run_mode=run_mode, limit=limit)
+    return _attach_run_aggregate_returns(db, runs)
+
+
+def _empty_agg_returns() -> dict[str, Any]:
+    return {"return_1d": None, "return_3d": None, "return_5d": None, "return_to_date": None}
+
+
+def _aggregate_returns(rec_returns: list[dict[str, Any]]) -> dict[str, Any]:
+    """对多个 rec 的 returns 取各口径均值（忽略 None）。"""
+    out = _empty_agg_returns()
+    for k in ("return_1d", "return_3d", "return_5d", "return_to_date"):
+        vals = [rr.get(k) for rr in rec_returns if rr.get(k) is not None]
+        if vals:
+            out[k] = round(sum(vals) / len(vals), 2)
+    return out
+
+
+def _attach_run_aggregate_returns(db: Session, runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """批量计算每个 run 的聚合收益率（推荐股票 1/3/5 日 + 至今均值），挂到 run['returns']。
+
+    一次性按 code 批量加载 K 线（>= 最小推荐日），与各 run 的推荐做链式累乘，
+    与 get_run_record_detail 同日径；仅在 records 列表接口触发，不影响 bootstrap。
+    """
+    if not runs:
+        return runs
+    run_ids = [r["run_id"] for r in runs]
+    recs = db.scalars(
+        select(Recommendation).where(Recommendation.run_id.in_(run_ids))
+    ).all()
+    if not recs:
+        for r in runs:
+            r["returns"] = _empty_agg_returns()
+        return runs
+
+    today = _latest_kbar_date(db) or ""
+    codes = list({r.code for r in recs})
+    min_date = min(r.trade_date for r in recs)
+
+    rows = db.scalars(
+        select(DailyKbar)
+        .where(DailyKbar.code.in_(codes), DailyKbar.trade_date >= min_date)
+        .order_by(DailyKbar.code.asc(), DailyKbar.trade_date.asc())
+    ).all()
+    by_code: dict[str, list[DailyKbar]] = {}
+    for b in rows:
+        by_code.setdefault(b.code, []).append(b)
+
+    per_rec: dict[str, dict[str, Any]] = {}
+    for rc in recs:
+        all_bars = by_code.get(rc.code, [])
+        r_bars = [b for b in all_bars if b.trade_date >= rc.trade_date]
+        try:
+            price = float(rc.recommend_price or 0)
+        except (TypeError, ValueError):
+            price = 0.0
+        per_rec[rc.recommendation_id] = _compute_returns(price, r_bars, today)
+
+    recs_by_run: dict[str, list[Recommendation]] = {}
+    for rc in recs:
+        recs_by_run.setdefault(rc.run_id, []).append(rc)
+
+    for run in runs:
+        run_recs = recs_by_run.get(run["run_id"], [])
+        rec_returns = [per_rec[rc.recommendation_id] for rc in run_recs if rc.recommendation_id in per_rec]
+        run["returns"] = _aggregate_returns(rec_returns)
+    return runs
 
 
 def get_run_record_detail(db: Session, run_id: str, today_date: str | None = None) -> dict[str, Any] | None:

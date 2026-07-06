@@ -2112,13 +2112,20 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             pipeline_audit["skill_review_failure_audit"] = review_failure_audit
         pipeline_audit["rule_only_fallback_count"] = 0
         scored_cards = list(cards)
-        cards = apply_pool_rules(
+        pool_result = apply_pool_rules(
             scored_cards,
             output_count=int(params["output_count"]),
             score_line=float(params["score_line"]),
             market_snapshot=snapshot,
             risk_template=params["risk_template"],
+            return_watchlist=True,
         )
+        if isinstance(pool_result, dict):
+            cards = pool_result.get("recommendations", [])
+            climax_watchlist = pool_result.get("watchlist", [])
+        else:
+            cards = pool_result
+            climax_watchlist = []
         pipeline_audit["filter_audit"] = _build_filter_audit(
             prefilter_audit=prefilter_audit,
             skill_gate_audit=skill_gate_audit,
@@ -2164,6 +2171,28 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         run.progress_message = "运行完成"
         run.filter_audit_json = _dumps(pipeline_audit.get("filter_audit") or {})
         summary = _build_run_summary(cards, saved, snapshot, _strip_audit_rows(pipeline_audit))
+        summary["score_line_meta"] = resolve_score_line_context(
+            float(params["score_line"]),
+            market_snapshot=snapshot,
+            risk_template=params["risk_template"],
+        )
+        summary["top_candidate_score"] = round(
+            max((float(c.get("final_score") or 0) for c in scored_cards), default=0.0), 2
+        )
+        if climax_watchlist:
+            summary["climax_watchlist"] = [
+                {
+                    "code": c.get("code"),
+                    "name": c.get("name"),
+                    "industry": c.get("industry"),
+                    "final_score": c.get("final_score"),
+                    "effective_score_line": (c.get("score_line_meta") or {}).get("effective_score_line"),
+                    "watchlist_gap": c.get("watchlist_gap"),
+                    "hit_strategies": c.get("watchlist_hit_strategies"),
+                    "note": c.get("watchlist_note"),
+                }
+                for c in climax_watchlist
+            ]
         if params.get("matrix_batch_id"):
             summary["matrix_batch_id"] = params.get("matrix_batch_id")
             summary["matrix_batch_name"] = params.get("matrix_batch_name") or "盘后预设矩阵"

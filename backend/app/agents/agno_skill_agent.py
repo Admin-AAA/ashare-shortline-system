@@ -33,6 +33,7 @@ from app.agents.tools import (
     query_stock_history,
 )
 from app.services.model_router_service import get_active_model_routes
+from app.services.llm_review_cache_service import build_review_cache_key
 
 
 # ── 结构化输出模型 ────────────────────────────────────────────────────
@@ -135,8 +136,8 @@ def _append_api_cost(
     prompt_tokens_est = int(prompt_chars / 1.8)
     completion_tokens_est = int(completion_chars / 1.8)
     _pending_api_costs.append({
-        "model": route.model,
-        "endpoint": _route_endpoint(route),
+        "model": route.model if route is not None else "cache",
+        "endpoint": _route_endpoint(route) if route is not None else "cache",
         "prompt_chars": prompt_chars,
         "completion_chars": completion_chars,
         "prompt_tokens_est": prompt_tokens_est,
@@ -145,6 +146,44 @@ def _append_api_cost(
         "status": status,
         "error_message": error_message,
     })
+
+
+def _load_cached_review(cache_key: str) -> dict[str, Any] | None:
+    """查 LLM 审查结果缓存。命中返回 review dict，未命中或异常返回 None。"""
+    try:
+        from app.db.session import SessionLocal
+        from app.services.llm_review_cache_service import get_cached_review
+        with SessionLocal() as db:
+            return get_cached_review(db, cache_key)
+    except Exception:
+        return None
+
+
+def _persist_review_cache(
+    skill: StrategySkill,
+    cache_key: str,
+    code: str,
+    trade_date: str | None,
+    review: dict[str, Any],
+    model: str,
+) -> None:
+    """写入 LLM 审查结果缓存。失败不影响主流程。"""
+    try:
+        from app.db.session import SessionLocal
+        from app.services.llm_review_cache_service import write_cached_review
+        with SessionLocal() as db:
+            write_cached_review(
+                db,
+                cache_key=cache_key,
+                skill_id=skill.skill_id,
+                skill_hash=skill.skill_hash,
+                trade_date=trade_date,
+                code=code or None,
+                review=review,
+                model=model,
+            )
+    except Exception:
+        pass
 
 
 _ACTION_ALIASES = {
@@ -780,10 +819,36 @@ async def run_skill_agent_direct(
     直接调用 DeepSeek API（单次请求，无工具调用），快速获取审查结果。
 
     绕过 Agno Agent 框架的工具调用开销（2-3 次 API 往返 → 1 次）。
+
+    带跨 run 持久化结果缓存：相同输入（skill_hash + 股票特征 + 市场状态 + 规则信号）
+    直接复用历史 LLM 输出，0 LLM 调用。skill 文件改动 / 市场状态变化 / 规则信号
+    变化 → cache_key 自动失效。
     """
     from openai import AsyncOpenAI
 
     settings = get_settings()
+
+    # ── 跨 run 结果缓存查询（命中则 0 LLM 调用）──
+    cache_key = build_review_cache_key(
+        skill_hash=skill.skill_hash,
+        stock=stock,
+        snapshot=snapshot,
+        rule_signal=rule_signal,
+    )
+    code = str(stock.get("code") or "")
+    trade_date = str(snapshot.get("trade_date") or "") or None
+    cached_review = _load_cached_review(cache_key)
+    if cached_review is not None:
+        _append_api_cost(
+            route=None,
+            prompt_chars=0,
+            completion_chars=0,
+            latency_ms=0,
+            status="cache_hit",
+            error_message=None,
+        )
+        return _parse_to_output(cached_review)
+
     routes = get_active_model_routes()
     if not routes:
         raise RuntimeError("Skill Agent 未配置可用模型路由，请先在数据源页配置模型与 Key")
@@ -833,6 +898,7 @@ async def run_skill_agent_direct(
                         temperature=settings.agent_temperature,
                         max_tokens=settings.agent_max_tokens,
                         response_format={"type": "json_object"},
+                        extra_body={"prompt_cache_key": (skill.skill_hash or skill.skill_id)[:64]},
                     )
                     elapsed_ms = (asyncio.get_event_loop().time() - t0) * 1000
                     content = resp.choices[0].message.content or ""
@@ -846,6 +912,7 @@ async def run_skill_agent_direct(
                         status="success",
                     )
                     record_result(route_key, success=True)
+                    _persist_review_cache(skill, cache_key, code, trade_date, parsed, route.model)
                     return result
                 except Exception as exc:
                     last_latency_ms = (asyncio.get_event_loop().time() - t0) * 1000
@@ -879,10 +946,19 @@ async def run_skill_agent_direct(
     raise RuntimeError(f"Skill Agent 直接审查失败：已尝试 {tried_count} 个模型路由；{tail}")
 
 
+# system prompt 进程级缓存：key=skill_hash，value=拼接好的 system prompt。
+# skill 文件改动后 skill_hash 变化，缓存自动失效。避免同一 skill 在一次 run 内
+# 对 N 只股票重复拼接 + 重复读参考文件。
+_direct_system_cache: dict[str, str] = {}
+
+
 def _build_direct_system(skill: StrategySkill) -> str:
-    """构建精简版 System Prompt（不引导工具调用）。"""
+    """构建精简版 System Prompt（不引导工具调用）。按 skill_hash 冻结。"""
+    key = skill.skill_hash or skill.skill_id
+    cached = _direct_system_cache.get(key)
+    if cached is not None:
+        return cached
     md_body = skill.skill_body.strip()
-    # 限制长度避免超时
     if len(md_body) > 6000:
         md_body = md_body[:6000] + "\n\n... (SKILL.md 内容已按长度截断)"
 
@@ -893,7 +969,7 @@ def _build_direct_system(skill: StrategySkill) -> str:
             content = ref_path.read_text(encoding="utf-8", errors="replace")[:3000]
             ref_text += f"\n\n## 参考: {ref['path']}\n{content}"
 
-    return f"""你是 A 股短线交易系统的 Skill Agent，严格按以下方法论审查股票。
+    result = f"""你是 A 股短线交易系统的 Skill Agent，严格按以下方法论审查股票。
 
 {md_body}
 {ref_text}
@@ -902,6 +978,8 @@ def _build_direct_system(skill: StrategySkill) -> str:
 不要编造数据，数据不足时降低 confidence 并在 risks 中注明。
 技术面结论必须引用候选股票数据里的具体字段和值；如果 rsi_6/rsi_12/rsi_24、MACD 或均线字段已提供，不得声称这些技术指标缺失或只能推断。
 `action` 只能从 `观察`、`轻仓试错`、`确认后加仓`、`不做` 中选择。"""
+    _direct_system_cache[key] = result
+    return result
 
 
 def _build_direct_prompt(
@@ -912,21 +990,19 @@ def _build_direct_prompt(
 ) -> str:
     """构建一次性审查 Prompt（包含所有数据，无需工具查询）。
 
-    前缀布局优化：稳定的 market snapshot + rule signal + 审查指引放在最前面，
-    变化的 stock 数据放在最后。LLM API prompt cache 是前缀匹配——
-    同一 skill + 同一次 run 内，前 ~1.5K chars 可命中缓存，只变化尾部 stock 数据。
+    前缀分层（DeepSeek prompt cache 是逐字节前缀匹配）：
+      - 稳定前缀：market snapshot + 静态审查指引（同一 run 内所有股票共享）
+      - 变化后缀：rule_signal + 候选股票数据（每只股票不同）
+
+    关键：rule_signal 含 evidence/risk_flags 等 list，每只股票都不同，
+    必须放在 stock 数据之前但仍属变化区，避免污染稳定前缀。所有 json.dumps
+    用 sort_keys=True 保证 key 顺序稳定，避免 dict 插入顺序差异打断前缀。
     """
     parts = []
 
     # ── 稳定前缀（同一 run 内所有股票共享，prompt cache 命中关键）──
     parts.append("# 市场快照\n")
-    parts.append(json.dumps(_compact_snapshot(snapshot), ensure_ascii=False, indent=2))
-
-    parts.append("\n\n# strategy.yaml 规则评分\n")
-    if rule_signal:
-        parts.append(json.dumps(_compact_signal(rule_signal), ensure_ascii=False, indent=2))
-    else:
-        parts.append('{"runtime": "agent_only"}')
+    parts.append(json.dumps(_compact_snapshot(snapshot), ensure_ascii=False, indent=2, sort_keys=True))
 
     parts.append(f"""
 
@@ -939,10 +1015,14 @@ def _build_direct_prompt(
 
 ---
 
-# 候选股票数据（以下内容因股票不同而变化）
+# strategy.yaml 规则评分（以下内容因股票不同而变化）
 """)
+    if rule_signal:
+        parts.append(json.dumps(_compact_signal(rule_signal), ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        parts.append('{"runtime": "agent_only"}')
 
-    # ── 变化后缀（每只股票不同，放在最后以保持前缀缓存）──
-    parts.append(json.dumps(_compact_stock(stock), ensure_ascii=False, indent=2))
+    parts.append("\n\n# 候选股票数据\n")
+    parts.append(json.dumps(_compact_stock(stock), ensure_ascii=False, indent=2, sort_keys=True))
 
     return "\n\n".join(parts)

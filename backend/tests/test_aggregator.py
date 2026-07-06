@@ -445,6 +445,57 @@ def test_apply_pool_rules_allows_only_small_trial_in_weak_ice_point():
     assert result[0]["score_line_meta"]["market_sentiment"] == "冰点"
 
 
+def test_apply_pool_rules_climax_watchlist_surfaces_near_miss_candidates():
+    cards = [_card(code, score) for code, score in [
+        ("A", 95), ("B", 92), ("C", 88), ("D", 86), ("E", 84), ("F", 70),
+    ]]
+    snapshot = {"sample_count": 100, "up_count": 72, "limit_up_count": 5, "limit_down_count": 0}
+    out = apply_pool_rules(cards, output_count=6, score_line=72, market_snapshot=snapshot, return_watchlist=True)
+    assert isinstance(out, dict)
+    # A/B 过线成为正式推荐
+    assert [c["code"] for c in out["recommendations"]] == ["A", "B"]
+    # 高潮阶段：最接近过线且未封死的候选进入观察池（F 距线 -21 超出 -15 容差，不入）
+    wl_codes = [c["code"] for c in out["watchlist"]]
+    assert "C" in wl_codes and "D" in wl_codes and "E" in wl_codes
+    assert "F" not in wl_codes
+    assert all(c.get("watchlist") for c in out["watchlist"])
+
+
+def test_apply_pool_rules_watchlist_empty_when_not_climax():
+    cards = [_card(code, score) for code, score in [("A", 60), ("B", 55)]]
+    out = apply_pool_rules(
+        cards, output_count=6, score_line=72, market_snapshot=_neutral_snapshot(), return_watchlist=True,
+    )
+    assert isinstance(out, dict)
+    assert out["recommendations"] == []
+    assert out["watchlist"] == []
+
+
+def test_apply_pool_rules_watchlist_excludes_blocked_cards():
+    card = _card("Z", 88)
+    # 一字涨停：open==high==low==close 且无开板，触发入场封死判定 → 不入观察池
+    card["is_limit_up"] = True
+    card["open"] = 11.0
+    card["high"] = 11.0
+    card["low"] = 11.0
+    card["close"] = 11.0
+    card["pct"] = 10.0
+    card["limit_up_open_times"] = 0
+    card["limit_up_seal_time"] = "093001"
+    snapshot = {"sample_count": 100, "up_count": 72, "limit_up_count": 5, "limit_down_count": 0}
+    out = apply_pool_rules([card], output_count=6, score_line=72, market_snapshot=snapshot, return_watchlist=True)
+    assert all(c["code"] != "Z" for c in out["watchlist"])
+
+
+def test_apply_pool_rules_watchlist_includes_multi_hit_despite_gap():
+    card = _card("M", 70)  # 距线 70-91=-21，超出 -15 容差
+    card["strategy_signals"] = [{"score": 80}, {"score": 75}, {"score": 70}, {"score": 65}]
+    snapshot = {"sample_count": 100, "up_count": 72, "limit_up_count": 5, "limit_down_count": 0}
+    out = apply_pool_rules([card], output_count=6, score_line=72, market_snapshot=snapshot, return_watchlist=True)
+    assert any(c["code"] == "M" for c in out["watchlist"])
+
+
+
 def test_apply_pool_rules_dynamic_weak_market_line_passes_top_candidate():
     """弱市+冰点时动态降线应放行接近有效线的顶部候选。"""
     cards = [_card("A", 70)]

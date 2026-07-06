@@ -900,6 +900,25 @@ class ApiCallLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class LLMReviewCache(Base):
+    """LLM Skill 审查结果缓存。
+
+    key = sha256(skill_hash + stock_feature_json + snapshot_json + rule_signal_json)
+    相同输入直接复用历史 LLM 输出，不再调用 LLM。skill 文件改动 / 市场状态变化 /
+    规则信号变化 → cache_key 自动失效。跨 run 持久化，日内重跑零 LLM 调用。
+    """
+    __tablename__ = "llm_review_cache"
+
+    cache_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    skill_id: Mapped[str] = mapped_column(String(80), index=True)
+    skill_hash: Mapped[str | None] = mapped_column(String(80))
+    trade_date: Mapped[str | None] = mapped_column(String(10), index=True)
+    code: Mapped[str | None] = mapped_column(String(6), index=True)
+    review_json: Mapped[str] = mapped_column(LONGTEXT().with_variant(Text(), "sqlite"))
+    model: Mapped[str | None] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
 class ScheduledTask(Base):
     __tablename__ = "scheduled_tasks"
 

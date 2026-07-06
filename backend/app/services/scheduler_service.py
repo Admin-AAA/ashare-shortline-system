@@ -845,8 +845,17 @@ async def _run_preset_matrix(db, payload: dict, task_run_id: str | None = None) 
         try:
             result = await run_workbench(db, run_payload)
             run = result.get("run") or {}
+            run_summary = run.get("result_summary") or {}
             recommended_count = int(run.get("recommended_count") or 0)
             recommended_total += recommended_count
+            _slm = run_summary.get("score_line_meta") or {}
+            _pipeline = run_summary.get("pipeline") or {}
+            _scored = (
+                _pipeline.get("scored_count")
+                or _pipeline.get("skill_pass_count")
+                or _pipeline.get("skill_gate_candidate_count")
+                or _pipeline.get("actual_scan_count")
+            )
             rows.append(
                 {
                     "preset_id": preset.preset_id,
@@ -854,6 +863,14 @@ async def _run_preset_matrix(db, payload: dict, task_run_id: str | None = None) 
                     "run_id": str(run.get("run_id") or ""),
                     "status": "completed",
                     "recommended_count": recommended_count,
+                    "universe_count": int(run.get("universe_count") or 0),
+                    "scored_count": int(_scored) if _scored is not None else None,
+                    "effective_score_line": _slm.get("effective_score_line"),
+                    "market_base": _slm.get("market_base"),
+                    "market_sentiment": _slm.get("market_sentiment"),
+                    "top_candidate_score": run_summary.get("top_candidate_score"),
+                    "climax_watchlist": run_summary.get("climax_watchlist") or [],
+                    "result_summary": run_summary,
                 }
             )
         except Exception as exc:
@@ -872,6 +889,28 @@ async def _run_preset_matrix(db, payload: dict, task_run_id: str | None = None) 
 
     completed_count = sum(1 for row in rows if row.get("status") == "completed")
     failed_count = sum(1 for row in rows if row.get("status") == "failed")
+    # 聚合行情状态与观察池，供前端矩阵报告展示「正确静默」而非误判为 bug
+    _regime_rows = [r for r in rows if r.get("market_base")]
+    market_base = _regime_rows[0]["market_base"] if _regime_rows else None
+    market_sentiment = _regime_rows[0]["market_sentiment"] if _regime_rows else None
+    market_regime = f"{market_base}·{market_sentiment}" if market_base and market_sentiment else None
+    aggregated_watchlist: list[dict[str, object]] = []
+    _seen_codes: set[str] = set()
+    for r in rows:
+        for c in (r.get("climax_watchlist") or []):
+            code = c.get("code")
+            if code and code not in _seen_codes:
+                _seen_codes.add(code)
+                aggregated_watchlist.append(c)
+    aggregated_watchlist.sort(key=lambda x: float(x.get("final_score") or 0), reverse=True)
+    top_candidate_score = max(
+        (float(c.get("final_score") or 0) for c in aggregated_watchlist), default=0.0
+    )
+    if not top_candidate_score:
+        top_candidate_score = max(
+            (float(r.get("top_candidate_score") or 0) for r in rows if r.get("top_candidate_score")),
+            default=0.0,
+        )
     return {
         "matrix_batch_id": matrix_batch_id,
         "matrix_batch_name": matrix_batch_name,
@@ -881,6 +920,12 @@ async def _run_preset_matrix(db, payload: dict, task_run_id: str | None = None) 
         "failed_count": failed_count,
         "recommended_count": recommended_total,
         "runs": rows,
+        "market_regime": market_regime,
+        "market_base": market_base,
+        "market_sentiment": market_sentiment,
+        "top_candidate_score": round(top_candidate_score, 2) if top_candidate_score else None,
+        "aggregated_watchlist": aggregated_watchlist,
+        "all_zero": recommended_total == 0,
         "summary_text": (
             f"矩阵批次 {completed_count}/{len(presets)} 个预设完成，"
             f"失败 {failed_count} 个，推荐合计 {recommended_total} 条"

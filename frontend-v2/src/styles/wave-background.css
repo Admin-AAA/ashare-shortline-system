@@ -1,0 +1,53 @@
+/* ═══════════════════════════════════════════════════════════════
+   波浪动态背景 —— 全屏固定层，置于内容之下（z-index: 0）
+   app-shell 设为 relative/z-index:1 且透明，使波浪透出。
+   ═══════════════════════════════════════════════════════════════ */
+
+.wave-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  /* 隔离混合上下文：canvas 的 mix-blend-mode 仅与容器渐变混合，不污染内容 */
+  isolation: isolate;
+  transition: background 0.45s ease;
+}
+
+.wave-bg canvas {
+  display: block;
+  opacity: 0;
+  animation: wave-fade-in 0.7s ease forwards;
+}
+
+@keyframes wave-fade-in {
+  to {
+    opacity: 1;
+  }
+}
+
+/* ── 浅色主题：与源文件一致，冷雾蓝渐变 + multiply 混合 ── */
+.wave-bg[data-theme="light"] {
+  background: linear-gradient(135deg, #f8fbff 0%, #eef2ff 52%, #f0fdfa 100%);
+}
+.wave-bg[data-theme="light"] canvas {
+  mix-blend-mode: multiply;
+}
+
+/* ── 深色主题：深海极光渐变 + screen 混合，让青蓝网格/粒子发光 ── */
+.wave-bg[data-theme="dark"] {
+  background:
+    radial-gradient(ellipse 70% 50% at 50% -10%, rgba(37, 99, 235, 0.18), transparent 60%),
+    radial-gradient(ellipse 55% 45% at 85% 115%, rgba(45, 212, 191, 0.10), transparent 60%),
+    #020617;
+}
+.wave-bg[data-theme="dark"] canvas {
+  mix-blend-mode: screen;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wave-bg canvas {
+    animation: none;
+    opacity: 1;
+  }
+}
