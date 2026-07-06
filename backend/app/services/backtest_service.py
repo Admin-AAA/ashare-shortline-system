@@ -47,6 +47,7 @@ from app.services.market_data import (
     _exchange_from_code,
     _select_recall_candidates,
 )
+from app.services.market_pool import inject_limit_up_flags
 from app.services.outcome_service import (
     is_accurate_recommendation,
     is_trade_executed,
@@ -380,6 +381,10 @@ def _backtest_single_date(
         {"run_mode": run_mode, "score_line": score_line},
         selected_skill_count=len(selected_skills),
     )
+    # 注入涨停板字段（与推荐管线 workbench_service.py:1483 一致）。
+    # limit-up-reseal-relay 等 skill 依赖 is_limit_up/limit_up_open_times/limit_up_fd_amount_yi，
+    # 缺失时 prefilter 永远 0 命中 → 回测无法验证涨停策略。
+    inject_limit_up_flags(db, stocks, trade_date=trade_date)
     prefiltered_stocks, _prefilter_audit = apply_prefilters(
         stocks,
         selected_skills,
