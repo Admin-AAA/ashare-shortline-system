@@ -1,6 +1,9 @@
 import type { CSSProperties } from "react";
+import { fmtPrice } from "./Shared";
 
 /** RecordsPage 共享的小组件与工具函数 —— 从 RecordsPage.tsx 抽离，消除重复。 */
+// fmtPrice 已统一到 Shared.tsx，此处 re-export 保持 RecordsPage import 兼容
+export { fmtPrice };
 
 export function Metric({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
@@ -37,11 +40,6 @@ export function ReturnStat({ label, value, suffix }: { label: string; value: num
     </div>
   );
 }
-
-export const fmtPrice = (v: number | null | undefined) => {
-  if (v == null || Number.isNaN(v)) return "—";
-  return v.toFixed(2);
-};
 
 export const formatTime = (iso: string | null | undefined) => {
   if (!iso) return "—";
