@@ -5,6 +5,7 @@ import type { RecommendationCard, RecommendationHistoryResponse } from "../types
 import { PageSkeleton, ErrorPage, EmptyState } from "../components/StateViews";
 import { useApi } from "../app/useApi";
 import { RecommendationDetailCard } from "../components/RecommendationDetailCard";
+import { fmtPrice } from "../components/Shared";
 
 /**
  * 复盘页 —— 推荐历史记录（跨 run，按 trade_date 倒序，带 outcome）。
@@ -104,8 +105,8 @@ export function HistoryPage() {
             }}
             style={selectStyle}
           >
-            <option value="formal">formal</option>
-            <option value="experiment">experiment</option>
+            <option value="formal">正式</option>
+            <option value="experiment">实验</option>
           </select>
         </label>
         <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-base)" }}>
@@ -305,11 +306,6 @@ const stackStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 4,
-};
-
-const fmtPrice = (value: number | null | undefined) => {
-  if (value == null || Number.isNaN(value)) return "—";
-  return value.toFixed(2);
 };
 
 const clip = (value: string, max: number) => {
