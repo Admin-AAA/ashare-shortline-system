@@ -199,6 +199,9 @@ def _apply_dsa_context(item: dict[str, Any], profile: dict[str, Any], dsa_weight
     item["macd_signal"] = str(profile.get("macd_signal", ""))
 
     rsi_12 = _num(profile.get("rsi_12"), 50.0)
+    # RSI 有效范围 [1, 99]；0 表示上游计算异常（数据不足），用默认值 50.0
+    if rsi_12 < 1 or rsi_12 > 99:
+        rsi_12 = 50.0
     item["rsi_6"] = _num(profile.get("rsi_6"), min(95, max(8, rsi_12 + 4)))
     item["rsi_12"] = rsi_12
     item["rsi_24"] = _num(profile.get("rsi_24"), min(90, max(12, rsi_12 - 3)))

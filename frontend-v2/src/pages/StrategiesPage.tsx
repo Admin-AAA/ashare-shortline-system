@@ -54,8 +54,8 @@ export function StrategiesPage() {
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", padding: "var(--space-2) 0 var(--space-4)" }}>
         <span style={{ color: "var(--muted)", fontSize: "var(--text-base)" }}>口径</span>
         <select value={mode} onChange={(e) => setMode(e.target.value as "formal" | "experiment")} style={selectStyle}>
-          <option value="formal">formal</option>
-          <option value="experiment">experiment</option>
+          <option value="formal">正式</option>
+          <option value="experiment">实验</option>
         </select>
       </div>
 

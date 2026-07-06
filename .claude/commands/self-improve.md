@@ -90,16 +90,44 @@ print(f'最大亏损: {r[0]}%')
 
 ### 多实例并发
 
-- **共享**：`memory/self-improve-log.md`（教训库、指标）+ `memory/lessons.md`（教训库）
-- **独立**：轮次计数、任务选择——每个实例自主决定
-- **实例标识**：`echo "I$$$(date +%s)$$RANDOM" | tail -c 8`（PID+秒+随机，8 字符内）
-- **避让**：读日志最后 5 条 + `git log --oneline -5`，避开其他实例刚做的任务；撞了随机等 30-120 秒
-- **Git**：commit message 含实例标识；多实例并发用 `.git-self-improve.lock` 串行 commit
+**核心原则：每个实例在独立 git worktree 里工作，文件改动物理隔离。** 多实例在同一主工作树改同一批文件必然互相覆盖（lock 只锁 commit 那一瞬间，锁不到改文件过程）。worktree 是唯一可靠的隔离方式。
 
-**心跳机制（判断实例死活）：** 在 `~/.claude/projects/-Users-wangao/memory/.self-improve-heartbeat.txt` 写 `{实例ID}|{开始时间戳}|{当前任务}|{状态}|{最近心跳时间戳}`，执行中每完成一个子步骤更新。续跑判断（阈值 10 分钟）：
-- `进行中` 且 `< 10 分钟` → 实例还活着，**不抢**，选别的任务
-- `进行中` 且 `> 10 分钟` → 实例已死，**接管**续跑
+- **共享**：`memory/self-improve-log.md`（教训库、指标）+ `memory/lessons.md`（教训库）+ main 分支
+- **独立**：worktree（文件改动）、轮次计数、任务选择——每个实例自主决定
+- **实例标识 + worktree（每轮启动第一件事）**：
+
+```bash
+INSTANCE_ID="si$(echo "$$$RANDOM$(date +%s)" | tail -c 7 | tr -dc 'a-z0-9')"   # si 前缀，9 字符
+WT_DIR="$HOME/Desktop/ashare-shortline-system/.claude/worktrees/self-improve-$INSTANCE_ID"
+WT_BRANCH="self-improve/$INSTANCE_ID"
+START_TS=$(date +%s)
+
+# 创建独立 worktree（git worktree add 原子操作，自带 .git/worktrees 锁）
+cd ~/Desktop/ashare-shortline-system
+git worktree add -b "$WT_BRANCH" "$WT_DIR" main 2>/dev/null || \
+  git worktree add "$WT_DIR" "$WT_BRANCH"          # 分支已存在则复用（崩溃续跑）
+cd "$WT_DIR"                                       # 此后所有改文件/测试都在自己的 worktree
+echo "实例 $INSTANCE_ID worktree=$WT_DIR"
+```
+
+此后**所有 `cd ~/Desktop/ashare-shortline-system` 改成 `cd "$WT_DIR"`**（只有 merge 收尾时才回主工作树）。
+
+- **心跳（目录式，多实例共存）**：`~/.claude/projects/-Users-wangao/memory/.self-improve-heartbeat/{实例ID}.txt`，每实例一个文件，互不覆盖：
+
+```bash
+HB_DIR=~/.claude/projects/-Users-wangao/memory/.self-improve-heartbeat
+mkdir -p "$HB_DIR"
+echo "$INSTANCE_ID|$START_TS|T{编号}|进行中|$(date +%s)" > "$HB_DIR/$INSTANCE_ID.txt"
+```
+
+- **避让**：启动时遍历心跳目录全量 + `git log --oneline -5`，把所有「活着实例正在做的 T 编号」列入黑名单，直接选别的 T，不在主工作树等。
+- **Git**：commit message 含实例标识；worktree 各自 commit 到自己分支（无冲突），用 `.git-self-improve.lock` 串行 merge 回 main。
+
+**心跳机制（判断实例死活，逐实例）**：遍历 `$HB_DIR/*.txt`，每个文件一个实例。续跑判断（阈值 10 分钟，逐实例）：
+- 某实例 `进行中` 且 `< 10 分钟` → 还活着，**不抢**，T 编号入黑名单
+- 某实例 `进行中` 且 `> 10 分钟` → 已死，可**接管**（只接管最老的一个，其余跳过；接管时复用它的 worktree，文件状态就是它留下的）
 - `已完成`/无心跳 → 正常选新任务
+- `冲突待解` → 该实例 merge 冲突未解，跳过，等人工或下一轮处理
 
 ### 任务轮转
 
@@ -293,37 +321,52 @@ LLM agent 的输出质量直接取决于 SKILL.md 的写法。
 
 ### 0. 续跑检测（每轮最先做，优先级最高）
 
-用心跳判断实例死活（阈值 10 分钟——长任务如前端 build/回测可能 5+ 分钟无心跳但仍在跑）：
+**先创建自己的 worktree + 心跳文件（见「多实例并发」段），再遍历所有心跳判断别人死活。** 阈值 10 分钟（长任务如前端 build/回测可能 5+ 分钟无心跳但仍在跑）。
 
 ```bash
-INSTANCE_ID=$(echo "I$$$(date +%s)$$RANDOM" | tail -c 8)
+# 1. 创建本实例 worktree + 心跳（见「多实例并发」段的 INSTANCE_ID/WT_DIR 代码块）
+# 2. 遍历所有心跳，判断其他实例死活
 NOW_TS=$(date +%s)
-HB_FILE=~/.claude/projects/-Users-wangao/memory/.self-improve-heartbeat.txt
-if [ -f "$HB_FILE" ]; then
-  HB_TIME=$(cut -d'|' -f5 "$HB_FILE")
-  AGE=$((NOW_TS - HB_TIME))
-  echo "心跳: $(cat $HB_FILE) | ${AGE}秒前"
-fi
-cd ~/Desktop/ashare-shortline-system && git status --short | grep -v "dist/"
+HB_DIR=~/.claude/projects/-Users-wangao/memory/.self-improve-heartbeat
+mkdir -p "$HB_DIR"
+echo "=== 所有实例心跳 ==="
+for f in "$HB_DIR"/*.txt; do
+  [ -f "$f" ] || continue
+  line=$(cat "$f")
+  hb_id=$(echo "$line"|cut -d'|' -f1); hb_task=$(echo "$line"|cut -d'|' -f3)
+  hb_status=$(echo "$line"|cut -d'|' -f4); hb_time=$(echo "$line"|cut -d'|' -f5)
+  hb_age=$((NOW_TS - hb_time))
+  echo "$hb_id | $hb_status | ${hb_age}秒前 | $hb_task"
+done
+echo "=== 主工作树状态（只读，不动）==="
+cd ~/Desktop/ashare-shortline-system && git log --oneline -5
 tail -30 ~/.claude/projects/-Users-wangao/memory/self-improve-log.md
 ```
 
-**决策树（基于心跳时间，不绑实例 ID）：**
-- `状态=进行中` 且 `AGE < 600秒` → **原实例还活着，不抢**：选别的任务（避开心跳里的任务），不动 git 工作树
-- `状态=进行中` 且 `AGE >= 600秒` → **原实例已死，接管**：读日志上一轮的 `**计划**`+`**调研结论**`，用新实例 ID（标注"接管自 [{原ID}]"），把心跳改成自己 ID，接着计划做（git 已改的步骤跳过）
-- `状态=已完成`/`状态=无`/无心跳 → **正常选新任务**
-- `状态=中断` → 有未提交改动且测试通过则 commit 收尾；半成品跑不通则 `git stash`
+**决策树（逐实例判断，基于心跳时间）：**
+- 列出所有 `状态=进行中` 的实例，按 AGE 排序
+- `AGE < 600秒` 的实例都**活着**：它们的 T 编号全部入黑名单，**不抢**，选别的任务
+- `AGE >= 600秒` 的实例**已死**：只接管**最老的一个**——复用它的 worktree（`cd "$WT_DIR_of_dead"` 后 `git status` 看未提交改动），读日志上一轮的 `**计划**`+`**调研结论**`，用新实例 ID（标注"接管自 [{原ID}]"），把它的心跳文件改成自己 ID，接着计划做（worktree 已改的步骤跳过）。其余死亡实例跳过，等下一轮。
+- 全部 `已完成`/无心跳 → **正常选新任务**
+- `状态=冲突待解` → 跳过该实例，不接管冲突分支
 
-**关键原则：不丢失上一轮工作，也不抢活着的实例。** 续跑时第一步把上一轮的 `**计划**`+`**调研结论**` 读进上下文。
+**关键原则：不丢失上一轮工作，也不抢活着的实例。** 续跑时第一步把上一轮的 `**计划**`+`**调研结论**` 读进上下文，复用死亡实例的 worktree（文件状态就是它崩溃时留下的，物理隔离保证没被别的实例污染）。
 
 ### 1. 状态检查
+
+**worktree 环境说明**：worktree 不含 `.venv`（在 .gitignore）。测试用主工作树的 venv 解释器跑 worktree 里的代码；常驻后端服务 + app.log 都在主工作树。
 
 ```bash
 curl -s --max-time 3 http://127.0.0.1:8765/api/health
 launchctl list | grep wangao
 tail -20 ~/Desktop/ashare-shortline-system/backend/logs/app.log 2>/dev/null
-cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && python -m pytest tests/ -x -q --tb=short -k "改动的模块名" 2>&1 | tail -20
+# 用主工作树 venv 跑 worktree 里的测试（cd worktree，python 用绝对路径）
+cd "$WT_DIR/backend" && ~/Desktop/ashare-shortline-system/backend/.venv/bin/python -m pytest tests/ -x -q --tb=short -k "改动的模块名" 2>&1 | tail -20
 ```
+
+**重要**：改完代码后端要重启才生效——但常驻后端跑在主工作树，worktree 改动未 merge 回 main 时后端不会加载。验证改动效果的两种方式：
+- **不依赖后端进程**：直接在 worktree 里跑 pytest / 回测脚本 / `python -c` 调用模块
+- **依赖后端进程**：先 commit+merge 回 main，再 `launchctl`/`systemctl` 重启后端，然后 curl 验证
 
 **上下文预算管理（防止超限）：**
 - 提示词 + 日志 + 源码总 token 不能超过 150k（留 50k 给执行）
@@ -345,11 +388,13 @@ cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && pyt
 
 ### 3. 实施改动
 
-- **策略改动**：直接编辑 `strategy.yaml`
-- **代码改动**：直接编辑 Python/TypeScript 文件
+**前提：已在 `$WT_DIR`（自己的 worktree）里，所有文件改动只动 worktree，不碰主工作树。**
+
+- **策略改动**：直接编辑 `strategy.yaml`（worktree 内）
+- **代码改动**：直接编辑 Python/TypeScript 文件（worktree 内）
 - **数据库改动**：只做 additive（加索引、加列），不做破坏性操作
-- **前端改动**：直接改 `frontend-v2/`，遵循审美硬约束
-- **每次改动后运行测试**确认没有回归
+- **前端改动**：直接改 `frontend-v2/`（worktree 内），遵循审美硬约束
+- **每次改动后运行测试**确认没有回归（用主工作树 venv 跑 worktree 代码，见「1. 状态检查」）
 
 **禁止碎片化：一个完整功能必须在同一个 commit 里完成**（实现+测试+验证）。不允许把一个功能拆成"实现""测试""验证"三个 commit。如果一个功能太大，拆成独立的子功能，每个子功能一个完整 commit。
 
@@ -359,7 +404,7 @@ cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && pyt
 - 运行 `pytest` 确认无回归
 - 改了策略：跑回测对比改动前后
 - 改了性能：对比改动前后查询耗时
-- 改了前端：`cd frontend-v2 && npm run build` 无报错
+- 改了前端：`cd "$WT_DIR/frontend-v2" && npm run build` 无报错（worktree 无 node_modules，首次 `npm install` 或用 `--prefix` 指主工作树 node_modules）
 
 **4.2 端到端验收（用户可见任务必做）：**
 
@@ -401,10 +446,12 @@ cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && pyt
 **4.4 LLM 层验证（每 5 轮做一次）：**
 触发 1-3 只股票的 skill agent 分析，检查 LLM 输出是否正常、评分是否合理、token 消耗是否可控。记录到日志（含 token 消耗量）。
 
-### 5. Git 提交（每轮必做，多实例加锁）
+### 5. Git 提交（每轮必做，worktree 内 commit + 锁内 merge 回 main）
+
+**第 1 步：在 worktree 内 commit 到自己的分支**（无冲突，不用锁）：
 
 ```bash
-cd ~/Desktop/ashare-shortline-system && git add -A && git commit -m "self-improve [{实例ID}]: T{编号} {简短描述}
+cd "$WT_DIR" && git add -A && git commit -m "self-improve [$INSTANCE_ID]: T{编号} {简短描述}
 
 - 具体改动 1
 - 验证: pytest X passed / 回测胜率 X% / 性能 Xms→Yms
@@ -412,12 +459,39 @@ cd ~/Desktop/ashare-shortline-system && git add -A && git commit -m "self-improv
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
+**第 2 步：用 `.git-self-improve.lock` 串行 merge 回 main**（macOS 无 flock，用 mkdir 当锁）：
+
+```bash
+LOCK=~/Desktop/ashare-shortline-system/.git-self-improve.lock
+LOCK_DIR="$LOCK.d"
+# 自旋等锁（最多 120 秒）
+for i in $(seq 1 120); do
+  mkdir "$LOCK_DIR" 2>/dev/null && break
+  sleep 1
+done
+trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+cd ~/Desktop/ashare-shortline-system
+git checkout main 2>/dev/null
+if git merge --no-ff "$WT_BRANCH" -m "merge self-improve [$INSTANCE_ID]"; then
+  echo "merge 成功"
+  git worktree remove "$WT_DIR" --force 2>/dev/null || true
+  git branch -d "$WT_BRANCH" 2>/dev/null || true
+  rm -f "$HB_DIR/$INSTANCE_ID.txt"
+else
+  # merge 冲突——绝不强推/覆盖，标记冲突待解，保留双方分支
+  git merge --abort
+  echo "$INSTANCE_ID|$START_TS|T{编号}|冲突待解|$(date +%s)" > "$HB_DIR/$INSTANCE_ID.txt"
+  echo "merge 冲突，分支 $WT_BRANCH 保留待人工/下一轮处理，未丢工作"
+fi
+```
+
 规则：
 - **一个完整功能一个 commit**（实现+测试+验证在一起），禁止碎片化拆分
 - 跨任务的改动拆成多个 commit
 - 不提交 .env/logs/node_modules/.venv
 - 提交前 `git status` 确认无意外文件
-- 多实例并发时用 `.git-self-improve.lock` 串行 commit（macOS 无 flock，串行即可）
+- **worktree 内 commit 不用锁**（物理隔离，无冲突）；**merge 回 main 用锁串行**（main 是共享的）
+- **merge 冲突不要强推/覆盖**——`git merge --abort` 后标 `冲突待解`，保留双方分支，不丢工作
 
 ### 6. 记录（分三步，防崩溃丢上下文 + 心跳防抢）
 
@@ -429,7 +503,7 @@ python3 -c "
 p='/Users/wangao/.claude/projects/-Users-wangao/memory/self-improve-log.md'
 open(p,'a').write('''
 
-## [{实例ID}] YYYY-MM-DD HH:MM 第 N 轮
+## [$INSTANCE_ID] YYYY-MM-DD HH:MM 第 N 轮
 
 **状态**: 进行中
 **任务类型**: T{编号} {简短描述}
@@ -437,18 +511,19 @@ open(p,'a').write('''
 **调研结论**: - 边调研边写关键发现
 ''')
 "
-# 心跳
-NOW_TS=$(date +%s)
-echo "{实例ID}|{开始时间戳}|T{编号}|进行中|$NOW_TS" > ~/.claude/projects/-Users-wangao/memory/.self-improve-heartbeat.txt
+# 心跳（目录式，每实例一个文件，互不覆盖）
+HB_DIR=~/.claude/projects/-Users-wangao/memory/.self-improve-heartbeat
+mkdir -p "$HB_DIR"
+echo "$INSTANCE_ID|$START_TS|T{编号}|进行中|$(date +%s)" > "$HB_DIR/$INSTANCE_ID.txt"
 ```
 
-**第 2 步：执行中定期更新心跳**（每改完文件/跑完测试/回测后）：
+**第 2 步：执行中定期更新心跳**（每改完文件/跑完测试/回测后，只改自己的文件）：
 ```bash
-NOW_TS=$(date +%s)
-sed -i '' "s/|进行中|[0-9]*$/|进行中|$NOW_TS/" ~/.claude/projects/-Users-wangao/memory/.self-improve-heartbeat.txt
+HB_DIR=~/.claude/projects/-Users-wangao/memory/.self-improve-heartbeat
+sed -i '' "s/|进行中|[0-9]*$/|进行中|$(date +%s)/" "$HB_DIR/$INSTANCE_ID.txt"
 ```
 
-**第 3 步：任务完成后更新日志"已完成" + 心跳标记完成**（验证通过、commit 后）：
+**第 3 步：任务完成后更新日志"已完成" + 删除心跳**（验证通过、commit + merge 后）：
 
 把日志里那条的 `状态: 进行中` 改为 `状态: 已完成`，并追加：
 ```
@@ -459,11 +534,11 @@ sed -i '' "s/|进行中|[0-9]*$/|进行中|$NOW_TS/" ~/.claude/projects/-Users-w
 ```
 
 ```bash
-NOW_TS=$(date +%s)
-echo "{实例ID}|{开始时间戳}|T{编号}|已完成|$NOW_TS" > ~/.claude/projects/-Users-wangao/memory/.self-improve-heartbeat.txt
+# merge 成功已在「5. Git 提交」第 2 步删除心跳文件；此处幂等兜底
+rm -f "$HB_DIR/$INSTANCE_ID.txt" 2>/dev/null
 ```
 
-**为什么要三步：** 第 1 步声明进行中（别人不抢）→ 第 2 步更新心跳（证明还活着，崩溃后 >10 分钟被判定死亡）→ 第 3 步标记完成（释放续跑权）。崩溃时中间状态（计划+调研结论）都落盘在日志里。
+**为什么要三步：** 第 1 步声明进行中（别人不抢，只写自己的心跳文件不覆盖别人）→ 第 2 步更新心跳（证明还活着，崩溃后 >10 分钟被判定死亡）→ 第 3 步标记完成（删心跳释放续跑权）。崩溃时中间状态（计划+调研结论）都落盘在日志里，worktree 文件状态也保留着等接管。
 
 ---
 
@@ -501,3 +576,6 @@ echo "{实例ID}|{开始时间戳}|T{编号}|已完成|$NOW_TS" > ~/.claude/proj
 - **不要改 `frontend/`（旧版遗留）**——所有前端改动只改 `frontend-v2/`
 - **不要碎片化 commit**——一个完整功能一个 commit（实现+测试+验证在一起）
 - **不要只跑通测试就收工**——用户可见任务必须端到端验收，在前端/真实推荐中看到效果
+- **不要在主工作树 `~/Desktop/ashare-shortline-system`（main 分支）直接改代码**——self-improve 必须在自己的 worktree（`.claude/worktrees/self-improve-{ID}/`）里改。主工作树只用来 merge 收尾。多实例同改主工作树是互相覆盖的根因。
+- **不要 merge 冲突强推/覆盖**——`git merge --abort` 后标 `冲突待解`，保留双方分支，绝不 `git checkout --` / `git reset --hard` / `git push -f` 丢工作。
+- **不要写单文件心跳**——必须用 `.self-improve-heartbeat/{实例ID}.txt` 目录式，每实例一个文件。单文件心跳会被新实例覆盖写，丢失旧实例状态。
