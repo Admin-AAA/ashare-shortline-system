@@ -4,6 +4,7 @@ import {
   History,
   LayoutGrid,
   LineChart,
+  ListChecks,
   type LucideIcon,
   Settings2,
 } from "lucide-react";
@@ -15,6 +16,7 @@ export type Section =
   | "dashboard" // 🏠 驾驶舱
   | "pool" // 🎯 候选池
   | "history" // 📊 复盘
+  | "records" // 📋 记录中心（运行/矩阵记录 + 收益复盘）
   | "matrix" // 📈 矩阵
   | "metrics" // 📐 指标分析
   | "config"; // ⚙️ 配置
@@ -29,6 +31,7 @@ export const NAV_ITEMS: NavItem[] = [
   { section: "dashboard", label: "驾驶舱", icon: Compass },
   { section: "pool", label: "候选池", icon: BarChart3 },
   { section: "history", label: "复盘", icon: History },
+  { section: "records", label: "记录", icon: ListChecks },
   { section: "matrix", label: "矩阵", icon: LayoutGrid },
   { section: "metrics", label: "指标", icon: LineChart },
   { section: "config", label: "配置", icon: Settings2 },
@@ -48,6 +51,7 @@ export const SECTION_PATHS: Record<Section, string> = {
   dashboard: "/dashboard",
   pool: "/pool",
   history: "/history",
+  records: "/records",
   matrix: "/matrix",
   metrics: "/metrics",
   config: "/config",

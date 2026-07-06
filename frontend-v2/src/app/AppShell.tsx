@@ -10,6 +10,7 @@ const HomeScreenPage = lazy(() => import("../pages/HomeScreenPage").then((m) => 
 const HomePage = lazy(() => import("../pages/HomePage").then((m) => ({ default: m.HomePage })));
 const PoolPage = lazy(() => import("../pages/PoolPage").then((m) => ({ default: m.PoolPage })));
 const HistoryPage = lazy(() => import("../pages/HistoryPage").then((m) => ({ default: m.HistoryPage })));
+const RecordsPage = lazy(() => import("../pages/RecordsPage").then((m) => ({ default: m.RecordsPage })));
 const MatrixPage = lazy(() => import("../pages/MatrixPage").then((m) => ({ default: m.MatrixPage })));
 const MetricsPage = lazy(() => import("../pages/MetricsPage").then((m) => ({ default: m.MetricsPage })));
 const ConfigPage = lazy(() => import("../pages/ConfigPage").then((m) => ({ default: m.ConfigPage })));
@@ -25,6 +26,8 @@ function SectionView({ section }: { section: Section }) {
       return <PoolPage />;
     case "history":
       return <HistoryPage />;
+    case "records":
+      return <RecordsPage />;
     case "matrix":
       return <MatrixPage />;
     case "metrics":

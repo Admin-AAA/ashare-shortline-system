@@ -1837,3 +1837,37 @@ export type StockMatrixHistoryResult = {
   total: number;
   items: StockMatrixHistoryItem[];
 };
+
+/** 推荐股票的 1/3/5日 + 至今收益率（除权安全，pct_chg 链式累乘） */
+export type RecommendationReturns = {
+  return_1d: number | null;
+  return_3d: number | null;
+  return_5d: number | null;
+  return_to_date: number | null;
+  latest_date: string | null;
+  latest_close: number | null;
+  available_bars: number;
+  as_of_date?: string | null;
+};
+
+/** 记录中心：单次推荐运行的详情 + 推荐股票（含收益率） */
+export type RunRecordDetail = {
+  run: RunDetail;
+  recommendations: Array<RecommendationCard & { returns: RecommendationReturns }>;
+  as_of_date: string;
+};
+
+/** 记录中心：矩阵历史列表（跨所有 code，按 created_at 倒序） */
+export type MatrixRecordsResponse = {
+  page: number;
+  page_size: number;
+  total: number;
+  items: StockMatrixHistoryItem[];
+};
+
+/** 记录中心：单条矩阵记录详情 */
+export type MatrixRecordDetail = StockMatrixHistoryItem & {
+  result: Record<string, unknown>;
+  base_price: number;
+  returns: RecommendationReturns;
+};
