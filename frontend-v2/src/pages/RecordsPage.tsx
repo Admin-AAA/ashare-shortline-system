@@ -133,7 +133,7 @@ function TabButton({
 function RunRecordsList() {
   const { navigate } = useUrlRoute();
   const { data, loading, error } = useApi<RunSummary[]>(
-    (signal) => api.runRecords({ limit: 100 }),
+    (_signal) => api.runRecords({ limit: 100 }),
     [],
   );
 

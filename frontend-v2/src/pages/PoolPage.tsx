@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
-  History,
   Search,
 } from "lucide-react";
 import { api } from "../api/client";

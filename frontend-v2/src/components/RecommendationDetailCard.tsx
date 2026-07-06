@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api } from "../api/client";
 import type { RecommendationCard, SkillSignal } from "../types";
 
