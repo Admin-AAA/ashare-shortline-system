@@ -472,6 +472,13 @@ def _chip_health_score(item: dict[str, Any]) -> float:
 
 
 def _fundamental_score(item: dict[str, Any]) -> float:
+    # 任一关键字段有真实值才评分；否则返回中性 55（诚实表达"无数据"）
+    has_any = any(
+        item.get(k) is not None and item.get(k) != ""
+        for k in ("revenue_yoy", "net_profit_yoy", "roe", "gross_margin")
+    )
+    if not has_any:
+        return 55.0
     score = 55.0
     if _num(item.get("revenue_yoy")) > 10:
         score += 10
