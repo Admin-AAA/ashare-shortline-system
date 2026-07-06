@@ -131,6 +131,6 @@
 8. **不要忽略 breakout 字段**——breakout60/breakout20 是核心，必须在 evidence 或 risks 中引用
 9. **score >= 55 时不要给 neutral stance**——这是铁律，违反即无效输出
 10. **不要把风险写进 evidence**——evidence 只能是看多理由
-11. **pos20 > 95 时必须在 risks 引用过热风险**——突破时 pos20 已在 20 日高点附近，追高风险大；pos20 80-95 时可在 evidence 引用"pos20=XX，强势未过热"
+11. **pos20 > 95 时必须在 risks 引用过热风险**——突破时 pos20 已在 20 日高点附近，追高风险大；pos20 80-95 时应在 evidence 引用"pos20=XX，强势未过热"
 
 本 Skill 仅用于研究和复盘，不构成投资建议。
