@@ -788,6 +788,33 @@ def skill_performance_summary(db: Session, skill_id: str) -> dict[str, Any] | No
     }
 
 
+def batch_skill_performance_summaries(db: Session) -> list[dict[str, Any]]:
+    """批量获取所有 skill 的 performance summary，避免前端并发 8 次请求。
+
+    优化：sync_skills 只调用一次（5s TTL 缓存），validate_skill 对每个 skill 独立调用。
+    """
+    skills = sync_skills(db)
+    results: list[dict[str, Any]] = []
+    for skill_obj in skills:
+        errors = validate_skill(skill_obj)
+        performance_experiment = _skill_performance(db, skill_obj.skill_id, "experiment")
+        performance = performance_experiment
+        if performance["sample_count"] == 0:
+            performance = _skill_performance(db, skill_obj.skill_id, "formal")
+        results.append({
+            "skill_id": skill_obj.skill_id,
+            "status": "completed",
+            "summary_type": "historical_performance",
+            "source": "recommendation_outcomes",
+            "runs_backtest": False,
+            "sample_count": performance["sample_count"],
+            "hit_rate": performance["hit_rate"],
+            "avg_return": performance["avg_return"],
+            "errors": errors,
+        })
+    return results
+
+
 def backtest_skill(db: Session, skill_id: str) -> dict[str, Any] | None:
     result = skill_performance_summary(db, skill_id)
     if result is not None:

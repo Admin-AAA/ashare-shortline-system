@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.services.workbench_service import (
     backtest_skill as backtest_skill_service,
+    batch_skill_performance_summaries as batch_skill_performance_summaries_service,
     get_skill_detail as get_skill_detail_service,
     install_skill as install_skill_service,
     list_skills as list_skills_service,
@@ -30,6 +31,16 @@ def install(payload: dict, db: Session = Depends(get_db)):
     except ValueError as exc:
         logger.exception("install skill failed")
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/performance-summaries")
+def batch_performance_summaries(db: Session = Depends(get_db)):
+    """批量获取所有 skill 的 performance summary。
+
+    替代前端并发 8 次 /api/skills/{id}/performance-summary，
+    一次请求获取全部，减少 MySQL CPU 争抢。
+    """
+    return batch_skill_performance_summaries_service(db)
 
 
 @router.get("/{skill_id}")

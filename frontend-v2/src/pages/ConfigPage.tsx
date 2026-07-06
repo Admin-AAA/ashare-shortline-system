@@ -20,19 +20,27 @@ type SkillsData = { skills: SkillSummary[]; perfs: Record<string, SkillPerf> };
 
 async function fetchSkillsData(): Promise<SkillsData> {
   const skills = await api.skills();
-  // 并发拉每个策略的绩效
-  const entries = await Promise.all(
-    skills.map(async (s) => {
-      try {
-        const p = await api.skillPerformanceSummary(s.skill_id);
-        return [s.skill_id, p] as const;
-      } catch {
-        return [s.skill_id, { skill_id: s.skill_id, sample_count: 0, hit_rate: 0, avg_return: 0 }] as const;
-      }
-    }),
-  );
-  const perfs: Record<string, SkillPerf> = {};
-  for (const [id, p] of entries) perfs[id] = p;
+  // 批量拉取所有策略绩效（1 次请求替代 N 次并发，减少 MySQL CPU 争抢）
+  let perfs: Record<string, SkillPerf> = {};
+  try {
+    const summaries = await api.batchSkillPerformanceSummaries();
+    for (const p of summaries) {
+      perfs[p.skill_id] = p;
+    }
+  } catch {
+    // 降级到逐个请求
+    const entries = await Promise.all(
+      skills.map(async (s) => {
+        try {
+          const p = await api.skillPerformanceSummary(s.skill_id);
+          return [s.skill_id, p] as const;
+        } catch {
+          return [s.skill_id, { skill_id: s.skill_id, sample_count: 0, hit_rate: 0, avg_return: 0 }] as const;
+        }
+      }),
+    );
+    for (const [id, p] of entries) perfs[id] = p;
+  }
   return { skills, perfs };
 }
 

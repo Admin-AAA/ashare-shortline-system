@@ -302,6 +302,18 @@ export const api = {
       avg_return: number;
       errors: string[];
     }>(`/api/skills/${id}/performance-summary`),
+  batchSkillPerformanceSummaries: () =>
+    request<Array<{
+      skill_id: string;
+      status: string;
+      summary_type: string;
+      source: string;
+      runs_backtest: boolean;
+      sample_count: number;
+      hit_rate: number;
+      avg_return: number;
+      errors: string[];
+    }>>(`/api/skills/performance-summaries`),
 
   resumeRun: (id: string) => requestWithTimeout<RunResult>(`/api/runs/${id}/resume`, 300_000, json("POST")),
   deleteRun: (id: string) => request<{ deleted: string }>(`/api/runs/${id}`, json("DELETE")),
