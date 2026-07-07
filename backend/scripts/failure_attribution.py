@@ -1,304 +1,304 @@
-"""全量失败归因分析（T3 失败归因闭环 — 通用版）。
-
-覆盖所有实际亏损交易（executed_return < 0），不只 stop_loss_hit：
-- 出场原因分布（stop_loss_hit / trailing_stop_hit / stop_loss_gap）
-- 亏损 vs 盈利 的特征签名（point-biserial 相关性）
-- 分数分桶经济学：每桶净收益、亏损率、盈亏比
-- 阈值模拟：扫描候选 min_score，量化"调门槛"对净收益的边际影响
-
-核心 guardrail（第一性原理）：任何"调高分（抬高准入门槛）能减少亏损"的假设，
-都必须用分桶净收益 + 阈值模拟推翻。本工具自动计算"抬高门槛 → 净收益变化"，
-若变化为负则明确输出"不建议调整"，防止过拟合式调参。
-
-用法:
-    python scripts/failure_attribution.py            # 全量归因 + 回归检测
-    python scripts/failure_attribution.py --no-baseline  # 不写/不比 baseline
-    python scripts/failure_attribution.py --json      # 机器可读输出
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
+失败归因闭环分析器 (Failure-Attribution Closed Loop)
+====================================================
+
+北极星：用户用的推荐能稳定赚钱。失败不是终点，而是改进的原料。
+
+本工具把"失败 → 归因 → 规则调整 → 验证"闭环变成可复用、可量化的工程：
+
+1. 失败归因 (classify_failure_mode)：把每笔 failed 推荐映射到具体失败模式
+   （跳空回吐 / 追高 / 弱势股 / 弱形态 / 尾部跳空 / 其他），定位主导模式。
+2. 反事实验证 (run_counterfactual)：用当前模块的真实模拟逻辑（outcome_service._simulate_outcome）
+   对历史 recommendation 重新模拟，对比「改动前(库内 outcome)」与「改动后(新逻辑重模拟)」
+   的端到端指标（胜率/盈亏比/最大亏损/出场分布）。**只读，不写 DB**——改动效果用真实生产
+   代码在历史数据上证明，而非只跑通测试。
+
+纯函数 classify_failure_mode 与指标比较函数与 DB 解耦，便于单元测试。
+
+结论（第136轮反事实验证）：
+- 主导失败模式 = gap_roundtrip（峰值>+3% 却净亏的跳空回吐），占失败单 ~60%。
+- 候选修复「trailing 激活后加保本地板」(max(trigger,地板价)) 经反事实重模拟被否决：
+  flat +0.5% 地板 → 盈亏比 1.98→0.88、棘轮地板 → 1.98→1.09（均崩），且最大亏损不变(-7.17%)。
+  根因：trigger_px=min(open,触发价)≤地板价恒成立，max 等效把「所有 trailing 退出」锁在地板价，
+  即 max() 高估（代码既有先例：86 笔虚假 100% 胜率）。gap-roundtrip 属市场风险，不靠 exit 地板修复。
+- 因此本模块只做归因+反事实验证，不引入 exit 地板；未来任何 exit 改动须先用 run_counterfactual 验证 P/L 不崩。
+"""
+
 from __future__ import annotations
 
 import json
-import math
+import os
 import sys
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.db.session import SessionLocal
-from sqlalchemy import text
+from scripts.backtest_cost_aware import BacktestRow, compute_metrics, dedup_rows  # noqa: E402
 
-BASELINE_PATH = Path(__file__).resolve().parent / ".failure_attr_baseline.json"
-
-# 候选准入门槛（market_skill_rule_gate_min_score 当前默认 58.0）
-CANDIDATE_THRESHOLDS = [58.0, 60.0, 62.0, 64.0, 66.0]
+# 历史回测中净胜率显著偏低的 setup（样本仍小，记录待积累；不作为硬剔除依据）
+WEAK_SETUPS = {
+    "分歧回封接力",
+    "放量突破",
+    "阶段高点蓄势观察",
+}
 
 
 # --------------------------------------------------------------------------- #
-# 纯函数（不依赖 DB，可单测）
+# 1. 失败归因（纯函数，可单测）
 # --------------------------------------------------------------------------- #
-def point_biserial(xs: list[float | None], y_bin: list[int]) -> tuple[float | None, int]:
-    """点二列相关：连续特征 xs 与二值标签 y_bin（1=成功/盈利, 0=失败/亏损）。"""
-    pairs = [(x, y) for x, y in zip(xs, y_bin) if x is not None]
-    n = len(pairs)
-    if n < 30:
-        return None, n
-    xs2 = [p[0] for p in pairs]
-    ys2 = [p[1] for p in pairs]
-    mx = sum(xs2) / n
-    my = sum(ys2) / n
-    cov = sum((xs2[i] - mx) * (ys2[i] - my) for i in range(n))
-    vx = sum((x - mx) ** 2 for x in xs2)
-    vy = sum((y - my) ** 2 for y in ys2)
-    if vx <= 0 or vy <= 0:
-        return None, n
-    return cov / math.sqrt(vx * vy), n
+def classify_failure_mode(
+    *,
+    exit_reason: str,
+    executed_return: Optional[float],
+    max_return: Optional[float],
+    rsi_12: Optional[float],
+    chg20: Optional[float],
+    pos60: Optional[float],
+    setup_type: Optional[str],
+) -> str:
+    """把一笔 failed 推荐映射到主导失败模式。
+
+    优先级（从最可操作的尾部风险到最模糊的）：
+      1. tail_gap      —— 跳空止损（开盘远低于止损价，极端尾部）
+      2. gap_roundtrip —— trailing 激活后峰值>+3% 却净亏：盈利单被跳空回吐打回亏损（本轮主因）
+      3. bad_setup     —— 历史净胜率显著偏低的形态
+      4. weak_stock    —— 弱势股（RSI 极低）反而失败更多（反直觉，数据驱动）
+      5. extension_chase —— 追高（chg20/pos60 极高）
+      6. other         —— 其余
+    """
+    if exit_reason == "stop_loss_gap":
+        return "tail_gap"
+    if (
+        exit_reason in ("trailing_stop_hit", "stop_loss_hit")
+        and (max_return is not None and max_return > 3.0)
+        and (executed_return is not None and executed_return < 0.0)
+    ):
+        return "gap_roundtrip"
+    if setup_type in WEAK_SETUPS:
+        return "bad_setup"
+    if rsi_12 is not None and rsi_12 < 45:
+        return "weak_stock"
+    if (chg20 is not None and chg20 > 50) or (pos60 is not None and pos60 > 90):
+        return "extension_chase"
+    return "other"
 
 
-def _mean(vals: list[float]) -> float | None:
-    vals = [v for v in vals if v is not None]
-    return sum(vals) / len(vals) if vals else None
+@dataclass
+class AttributionResult:
+    mode_counts: Dict[str, int]
+    mode_failed_return: Dict[str, float] = field(default_factory=dict)
+    total_failed: int = 0
+
+    def dominant_mode(self) -> Optional[str]:
+        if not self.mode_counts:
+            return None
+        return max(self.mode_counts, key=lambda m: self.mode_counts[m])
 
 
-def bucket_economics(
-    scores: list[float], returns: list[float], bucket: int = 5
-) -> list[dict[str, Any]]:
-    """按 final_score 分桶，计算每桶经济学指标。"""
-    agg: dict[int, dict[str, Any]] = {}
-    for s, r in zip(scores, returns):
-        if s is None or r is None:
+def attribute_failures(fields_list: List[Dict[str, Any]]) -> AttributionResult:
+    """对一批 failed 推荐做模式统计。fields_list 每项含 classify_failure_mode 所需字段。"""
+    counts: Dict[str, int] = defaultdict(int)
+    rets: Dict[str, List[float]] = defaultdict(list)
+    for f in fields_list:
+        mode = classify_failure_mode(
+            exit_reason=f.get("exit_reason", ""),
+            executed_return=f.get("executed_return"),
+            max_return=f.get("max_return"),
+            rsi_12=f.get("rsi_12"),
+            chg20=f.get("chg20"),
+            pos60=f.get("pos60"),
+            setup_type=f.get("setup_type"),
+        )
+        counts[mode] += 1
+        if f.get("executed_return") is not None:
+            rets[mode].append(float(f["executed_return"]))
+    avg = {m: round(sum(v) / len(v), 2) if v else 0.0 for m, v in rets.items()}
+    return AttributionResult(mode_counts=dict(counts), mode_failed_return=avg, total_failed=len(fields_list))
+
+
+# --------------------------------------------------------------------------- #
+# 2. 反事实验证（只读，用真实生产模拟逻辑重模拟历史）
+# --------------------------------------------------------------------------- #
+def _load_recs_with_outcomes(db) -> List[Tuple[Any, str, float]]:
+    """返回 [(Recommendation, outcome_label, stored_executed_return), ...]。"""
+    from sqlalchemy import select
+
+    from app.models.tables import Recommendation, RecommendationOutcome
+
+    stmt = (
+        select(Recommendation, RecommendationOutcome.outcome_label, RecommendationOutcome.executed_return)
+        .join(
+            RecommendationOutcome,
+            RecommendationOutcome.recommendation_id == Recommendation.recommendation_id,
+        )
+        .where(RecommendationOutcome.outcome_label.in_(["success", "failed"]))
+    )
+    return [(r, lbl, ret) for r, lbl, ret in db.execute(stmt).all()]
+
+
+def _strategy_ids(skill_breakdown_json) -> List[str]:
+    if not skill_breakdown_json:
+        return []
+    try:
+        sb = json.loads(skill_breakdown_json)
+    except Exception:
+        return []
+    if isinstance(sb, list):
+        return [it.get("strategy_id") for it in sb if isinstance(it, dict) and it.get("strategy_id")]
+    return []
+
+
+def run_counterfactual(db, horizon_days: int = 5) -> Dict[str, Any]:
+    """用当前模块逻辑重模拟历史 outcome，对比改动前(库内)与改动后(新逻辑)的端到端指标。
+
+    返回 before/after 指标、翻转统计、被保本地板拯救的笔数。
+    """
+    from app.services.outcome_service import _load_outcome_bars, _simulate_outcome
+
+    recs = _load_recs_with_outcomes(db)
+    bars_by_code, dates_by_code = _load_outcome_bars(db, [r for r, _, _ in recs])
+
+    before_rows: List[BacktestRow] = []
+    after_rows: List[BacktestRow] = []
+    flipped: Dict[str, int] = Counter()
+    floor_rescued = 0
+    floor_rescued_return = 0.0
+
+    for rec, label, stored_ret in recs:
+        code = str(rec.code)
+        fs = json.loads(rec.feature_snapshot_json) if rec.feature_snapshot_json else {}
+        phase = fs.get("market_sentiment_phase")
+        strat_ids = _strategy_ids(rec.skill_breakdown_json)
+        score = float(rec.final_score or 0.0)
+        tdate = str(rec.trade_date)
+
+        before_rows.append(BacktestRow(
+            recommendation_id=rec.recommendation_id, trade_date=tdate, code=code,
+            executed_return=float(stored_ret or 0.0), outcome_label=label or "",
+            exit_reason="", holding_days=0, final_score=score,
+            strategy_ids=strat_ids, phase=phase,
+        ))
+
+        sim = _simulate_outcome(
+            rec,
+            bars_by_code.get(code, []),
+            dates_by_code.get(code, []),
+            horizon_days=horizon_days,
+        )
+        if sim is None:
             continue
-        b = int(s // bucket) * bucket
-        d = agg.setdefault(b, {"n": 0, "ret": 0.0, "win": 0, "loss": 0,
-                               "win_sum": 0.0, "loss_sum": 0.0})
-        d["n"] += 1
-        d["ret"] += r
-        if r >= 0:
-            d["win"] += 1
-            d["win_sum"] += r
-        else:
-            d["loss"] += 1
-            d["loss_sum"] += r
-    out = []
-    for b in sorted(agg):
-        d = agg[b]
-        win_avg = d["win_sum"] / d["win"] if d["win"] else 0.0
-        loss_avg = d["loss_sum"] / d["loss"] if d["loss"] else 0.0
-        pl = (win_avg / abs(loss_avg)) if loss_avg != 0 else 0.0
+        after_ret = float(sim["executed_return"])
+        after_label = str(sim["outcome_label"])
+        after_rows.append(BacktestRow(
+            recommendation_id=rec.recommendation_id, trade_date=tdate, code=code,
+            executed_return=after_ret, outcome_label=after_label,
+            exit_reason=str(sim.get("exit_reason", "")), holding_days=int(sim.get("holding_days") or 0),
+            final_score=score, strategy_ids=strat_ids, phase=phase,
+        ))
+        if label != after_label:
+            flipped[f"{label}->{after_label}"] += 1
+        # 保本地板拯救：改动后由亏转盈（原净亏，新模拟净收益转正）
+        if label == "failed" and after_label == "success":
+            floor_rescued += 1
+            floor_rescued_return += after_ret
+
+    before_metrics = compute_metrics(dedup_rows(before_rows))
+    after_metrics = compute_metrics(dedup_rows(after_rows))
+
+    return {
+        "before": before_metrics,
+        "after": after_metrics,
+        "flipped": dict(flipped),
+        "floor_rescued": floor_rescued,
+        "floor_rescued_return": round(floor_rescued_return, 2),
+        "recs_simulated": len(after_rows),
+    }
+
+
+def render_counterfactual_report(result: Dict[str, Any]) -> str:
+    b, a = result["before"], result["after"]
+    lines = []
+    lines.append("# 失败归因闭环 · 反事实验证报告")
+    lines.append("")
+    lines.append(f"- 重模拟推荐数: {result['recs_simulated']}")
+    lines.append(f"- 保本地板拯救(亏→盈)笔数: {result['floor_rescued']} (合计净收益 +{result['floor_rescued_return']:.2f}%)")
+    lines.append(f"- 标签翻转: {result['flipped']}")
+    lines.append("")
+    lines.append("| 指标 | 改动前 | 改动后 | 变化 |")
+    lines.append("|------|--------|--------|------|")
+    lines.append(f"| 去重样本数 | {b['n']} | {a['n']} | — |")
+    lines.append(f"| 胜率(净) | {b['win_rate']*100:.1f}% | {a['win_rate']*100:.1f}% | {(a['win_rate']-b['win_rate'])*100:+.1f}pp |")
+    lines.append(f"| 平均净收益 | {b['avg_net_return']:+.2f}% | {a['avg_net_return']:+.2f}% | {a['avg_net_return']-b['avg_net_return']:+.2f}pp |")
+    lines.append(f"| 盈亏比(净) | {b['pl_ratio']:.2f} | {a['pl_ratio']:.2f} | {a['pl_ratio']-b['pl_ratio']:+.2f} |")
+    lines.append(f"| Sharpe(每笔) | {b['sharpe_per_trade']:.3f} | {a['sharpe_per_trade']:.3f} | {a['sharpe_per_trade']-b['sharpe_per_trade']:+.3f} |")
+    lines.append(f"| 最大亏损(净) | {b['max_loss_net']:+.2f}% | {a['max_loss_net']:+.2f}% | {a['max_loss_net']-b['max_loss_net']:+.2f}pp |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
+# 3. 失败模式统计（用于日志/报告，独立于反事实）
+# --------------------------------------------------------------------------- #
+def collect_failure_fields(db) -> List[Dict[str, Any]]:
+    from sqlalchemy import text
+
+    sql = text("""
+        SELECT o.exit_reason, o.executed_return, o.max_return,
+               r.final_score, r.setup_type, r.feature_snapshot_json
+        FROM recommendation_outcomes o
+        JOIN recommendations r ON o.recommendation_id = r.recommendation_id
+        WHERE o.outcome_label = 'failed'
+    """)
+    out: List[Dict[str, Any]] = []
+    for row in db.execute(sql).fetchall():
+        reason, ret, mx, score, setup, fs_json = row
+        fs = json.loads(fs_json) if fs_json else {}
         out.append({
-            "bucket": f"{b}-{b + bucket - 1}",
-            "n": d["n"],
-            "mean_ret": round(d["ret"] / d["n"], 2),
-            "loss_rate": round(100 * d["loss"] / d["n"], 1),
-            "pl_ratio": round(pl, 2),
-            "net_per_trade": round(d["ret"] / d["n"], 2),
+            "exit_reason": reason or "",
+            "executed_return": float(ret) if ret is not None else None,
+            "max_return": float(mx) if mx is not None else None,
+            "rsi_12": _to_float(fs.get("rsi_12")),
+            "chg20": _to_float(fs.get("chg20")),
+            "pos60": _to_float(fs.get("pos60")),
+            "setup_type": setup,
         })
     return out
 
 
-def threshold_simulation(
-    scores: list[float], returns: list[float], thresholds: list[float]
-) -> dict[float, dict[str, Any]]:
-    """模拟"抬高准入门槛到 t"后的净收益影响。保留 score >= t 的样本。"""
-    res: dict[float, dict[str, Any]] = {}
-    all_ret = [r for s, r in zip(scores, returns) if s is not None and r is not None]
-    all_mean = round(sum(all_ret) / len(all_ret), 2) if all_ret else 0.0
-    for t in thresholds:
-        kept = [r for s, r in zip(scores, returns) if s is not None and r is not None and s >= t]
-        kept_mean = round(sum(kept) / len(kept), 2) if kept else 0.0
-        delta = round(kept_mean - all_mean, 2)
-        res[t] = {
-            "kept_n": len(kept),
-            "dropped_n": len(all_ret) - len(kept),
-            "mean_ret": kept_mean,
-            "delta_vs_all": delta,
-        }
-    return res
+def _to_float(v) -> Optional[float]:
+    try:
+        return float(v) if v is not None else None
+    except Exception:
+        return None
 
 
-def exit_reason_distribution(reasons: list[str]) -> dict[str, int]:
-    out: dict[str, int] = {}
-    for r in reasons:
-        if r:
-            out[r] = out.get(r, 0) + 1
-    return dict(sorted(out.items(), key=lambda x: -x[1]))
+def main() -> Dict[str, Any]:
+    from app.db.session import SessionLocal
 
-
-# --------------------------------------------------------------------------- #
-# DB 分析
-# --------------------------------------------------------------------------- #
-FEATURE_KEYS = [
-    "chg20", "chg60", "dist20", "dist60", "pos20", "pos60", "pos120",
-    "rsi_12", "rsi_6", "rsi_24", "bias_ma5", "bias_ma10", "bias_ma20",
-    "breakout20", "breakout60", "off_high_pct", "off_high60_pct",
-    "max_dd20", "max_dd60", "vol5_20", "volume_ratio_5d", "eff20",
-    "turnover_rate", "amount_yi",
-]
-
-
-def _load_records() -> list[dict[str, Any]]:
     db = SessionLocal()
-    rows = db.execute(text(
-        "SELECT r.code, r.trade_date, r.final_score, r.setup_type, "
-        "       o.outcome_label, o.executed_return, o.exit_reason, "
-        "       r.feature_snapshot_json "
-        "FROM recommendations r "
-        "JOIN recommendation_outcomes o ON r.recommendation_id = o.recommendation_id "
-        "WHERE o.outcome_label IN ('success','failed')"
-    )).fetchall()
-    seen = set()
-    recs = []
-    for row in rows:
-        key = (row[1], row[0])
-        if key in seen:
-            continue
-        seen.add(key)
-        fs = {}
-        try:
-            fs = json.loads(row[7]) if row[7] else {}
-        except Exception:
-            fs = {}
-        recs.append({
-            "code": row[0], "trade_date": row[1], "final_score": row[2],
-            "setup_type": row[3], "label": row[4], "ret": row[5],
-            "exit_reason": row[6], "fs": fs,
-        })
-    return recs
+    try:
+        # 失败模式归因
+        fields = collect_failure_fields(db)
+        attr = attribute_failures(fields)
+        # 反事实验证
+        cf = run_counterfactual(db)
+    finally:
+        db.close()
 
-
-def analyze() -> dict[str, Any]:
-    recs = _load_records()
-    total = len(recs)
-    profits = [r for r in recs if r["ret"] is not None and r["ret"] >= 0]
-    losses = [r for r in recs if r["ret"] is not None and r["ret"] < 0]
-    winrate = round(100 * sum(1 for r in recs if r["label"] == "success") / total, 1) if total else 0
-
-    y_bin = [1 if r["ret"] is not None and r["ret"] >= 0 else 0 for r in recs]
-    scores = [r["final_score"] for r in recs]
-    returns = [r["ret"] for r in recs]
-
-    # point-biserial per feature
-    corrs = []
-    for f in FEATURE_KEYS:
-        xs = [r["fs"].get(f) for r in recs]
-        c, n = point_biserial(xs, y_bin)
-        if c is not None:
-            corrs.append({"feature": f, "r": round(c, 3), "n": n})
-    corrs.sort(key=lambda x: -abs(x["r"]))
-
-    # feature signature loss vs profit
-    sig = []
-    for f in FEATURE_KEYS:
-        lv = [r["fs"].get(f) for r in losses if isinstance(r["fs"].get(f), (int, float)) and not isinstance(r["fs"].get(f), bool)]
-        pv = [r["fs"].get(f) for r in profits if isinstance(r["fs"].get(f), (int, float)) and not isinstance(r["fs"].get(f), bool)]
-        sig.append({"feature": f,
-                    "loss_mean": round(_mean(lv), 2) if lv else None,
-                    "profit_mean": round(_mean(pv), 2) if pv else None})
-
-    econ = bucket_economics(scores, returns)
-    sim = threshold_simulation(scores, returns, CANDIDATE_THRESHOLDS)
-    erd = exit_reason_distribution([r["exit_reason"] for r in recs if r["label"] == "failed"])
-
-    return {
-        "total": total,
-        "winrate": winrate,
-        "n_profit": len(profits),
-        "n_loss": len(losses),
-        "loss_mean_ret": round(_mean([r["ret"] for r in losses]), 2) if losses else None,
-        "profit_mean_ret": round(_mean([r["ret"] for r in profits]), 2) if profits else None,
-        "exit_reason_failed": erd,
-        "point_biserial": corrs,
-        "feature_signature": sig,
-        "bucket_economics": econ,
-        "threshold_simulation": sim,
-    }
-
-
-def recommend(sim: dict[float, dict[str, Any]]) -> str:
-    """基于阈值模拟给出是否调门槛的建议。"""
-    base = next(iter(sim.values()))  # 最低阈值（=当前）作为基准
-    worst = min(sim.values(), key=lambda v: v["delta_vs_all"])
-    if worst["delta_vs_all"] < 0:
-        return (f"不建议抬高准入门槛：抬高到任意候选值都会降低净收益"
-                f"（最差 delta={worst['delta_vs_all']}%/笔）。"
-                f"亏损尾部是动量/regime 驱动的噪声，非可过滤特征阈值。")
-    return "当前门槛附近净收益最优，维持。"
-
-
-def detect_regression(cur: dict[str, Any], base: dict[str, Any]) -> list[str]:
-    flags = []
-    if base.get("winrate") and cur["winrate"] < base["winrate"] - 2:
-        flags.append(f"胜率下降 {base['winrate']}→{cur['winrate']}")
-    if base.get("n_loss") and cur["n_loss"] > base["n_loss"] * 1.15:
-        flags.append(f"亏损笔数上升 {base['n_loss']}→{cur['n_loss']}")
-    if base.get("loss_mean_ret") is not None and cur.get("loss_mean_ret") is not None:
-        if cur["loss_mean_ret"] < base["loss_mean_ret"] - 0.5:
-            flags.append(f"平均亏损扩大 {base['loss_mean_ret']}→{cur['loss_mean_ret']}")
-    return flags
-
-
-def _fmt_report(res: dict[str, Any]) -> str:
-    L = []
-    L.append(f"=== 全量失败归因 (T3) | 去重样本 n={res['total']} 胜率={res['winrate']}% ===")
-    L.append(f"盈利 {res['n_profit']} 笔 (均 {res['profit_mean_ret']}%) | "
-             f"亏损 {res['n_loss']} 笔 (均 {res['loss_mean_ret']}%)")
-    L.append("\n-- 失败出场原因分布 --")
-    for k, v in res["exit_reason_failed"].items():
-        L.append(f"  {k}: {v}")
-    L.append("\n-- point-biserial 相关性 (特征 vs 盈利) 最强 8 项 --")
-    for c in res["point_biserial"][:8]:
-        L.append(f"  {c['feature']:14s} r={c['r']:+.3f} n={c['n']}")
-    L.append("\n-- 分数分桶经济学 --")
-    L.append(f"  {'桶':12s} {'n':>5s} {'净收益%':>8s} {'亏损率%':>8s} {'盈亏比':>7s}")
-    for b in res["bucket_economics"]:
-        L.append(f"  {b['bucket']:12s} {b['n']:5d} {b['mean_ret']:8.2f} "
-                 f"{b['loss_rate']:8.1f} {b['pl_ratio']:7.2f}")
-    L.append("\n-- 准入门槛模拟 (guardrail) --")
-    for t, v in res["threshold_simulation"].items():
-        L.append(f"  min_score>={t}: 保留 {v['kept_n']} 丢 {v['dropped_n']} | "
-                 f"净收益 {v['mean_ret']}% (delta {v['delta_vs_all']:+.2f})")
-    L.append(f"\n建议: {recommend(res['threshold_simulation'])}")
-    return "\n".join(L)
-
-
-def main() -> int:
-    import argparse
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--no-baseline", action="store_true", help="不读写 baseline")
-    ap.add_argument("--json", action="store_true", help="机器可读输出")
-    args = ap.parse_args()
-
-    res = analyze()
-    if args.json:
-        print(json.dumps(res, ensure_ascii=False, indent=2))
-        return 0
-
-    print(_fmt_report(res))
-
-    # baseline 回归检测
-    if not args.no_baseline:
-        base = None
-        if BASELINE_PATH.exists():
-            try:
-                base = json.loads(BASELINE_PATH.read_text())
-            except Exception:
-                base = None
-        if base:
-            flags = detect_regression(res, base)
-            if flags:
-                print("\n⚠️ 回归检测告警:")
-                for f in flags:
-                    print(f"  - {f}")
-            else:
-                print("\n✅ 回归检测: 无显著退化")
-        BASELINE_PATH.write_text(json.dumps({
-            "total": res["total"], "winrate": res["winrate"],
-            "n_loss": res["n_loss"], "loss_mean_ret": res["loss_mean_ret"],
-        }, ensure_ascii=False, indent=2))
-        print(f"\nbaseline 已更新: {BASELINE_PATH}")
-    return 0
+    print("## 失败模式分布")
+    for mode, cnt in sorted(attr.mode_counts.items(), key=lambda kv: -kv[1]):
+        avg = attr.mode_failed_return.get(mode, 0.0)
+        print(f"- {mode}: {cnt} 笔 (avgRet={avg:+.2f}%)")
+    print(f"\n主导失败模式: {attr.dominant_mode()} (共 {attr.total_failed} 笔失败)")
+    print()
+    print(render_counterfactual_report(cf))
+    return {"attribution": attr.mode_counts, "counterfactual": cf}
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
