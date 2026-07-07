@@ -1,4 +1,4 @@
-import { Activity, Bell, Moon, RefreshCw, Sun } from "lucide-react";
+import { Activity, Moon, RefreshCw, Sun } from "lucide-react";
 import { lazy, Suspense, useState } from "react";
 import AuthGate from "./AuthGate";
 import { NAV_ITEMS, navMatches, type Section } from "./nav";
@@ -94,9 +94,6 @@ export function AppShell() {
 
           <div className="topbar__actions">
             <RunCtaButton onClick={() => navigate("/run")} />
-            <button className="icon-button" title="通知" aria-label="通知">
-              <Bell size={16} />
-            </button>
             <button
               className="icon-button"
               onClick={handleRefresh}
