@@ -32,26 +32,26 @@ def _row(executed_return, label="success", score=80.0, tdate="2026-01-01",
 def test_cost_subtraction_is_applied():
     r = _row(5.0)
     assert r.net_return == pytest.approx(5.0 - ADDITIONAL_COST_PCT)
-    # executed_return 未含成本；net 扣 0.10%
-    assert ADDITIONAL_COST_PCT == 0.10
+    # executed_return 未含成本；net 扣 0.07%（佣金万1双边+印花税0.05%）
+    assert ADDITIONAL_COST_PCT == 0.07
 
 
 def test_win_rate_net_of_cost():
     rows = [_row(5.0, "success"), _row(0.05, "failed"), _row(-3.0, "failed")]
     m = compute_metrics(rows)
-    # net: 4.9, -0.05, -3.1 -> 只有第1笔 >0
+    # net: 4.93, -0.02, -3.07 -> 只有第1笔 >0
     assert m["n"] == 3
     assert m["win_rate"] == pytest.approx(round(1 / 3, 4), abs=1e-3)
-    assert m["avg_net_return"] == pytest.approx(round((4.9 - 0.05 - 3.1) / 3, 4), abs=1e-3)
+    assert m["avg_net_return"] == pytest.approx(round((4.93 - 0.02 - 3.07) / 3, 4), abs=1e-3)
 
 
 def test_pl_ratio_net():
     rows = [_row(10.0, "success"), _row(6.0, "success"), _row(-4.0, "failed")]
     m = compute_metrics(rows)
-    # wins net: 9.9, 5.9 avg=7.9 ; loss net abs: 4.1
-    assert m["avg_win"] == pytest.approx(round(7.9, 4), abs=1e-3)
-    assert m["avg_loss_abs"] == pytest.approx(round(4.1, 4), abs=1e-3)
-    assert m["pl_ratio"] == pytest.approx(round(7.9 / 4.1, 4), abs=1e-3)
+    # wins net: 9.93, 5.93 avg=7.93 ; loss net abs: 4.07
+    assert m["avg_win"] == pytest.approx(round(7.93, 4), abs=1e-3)
+    assert m["avg_loss_abs"] == pytest.approx(round(4.07, 4), abs=1e-3)
+    assert m["pl_ratio"] == pytest.approx(round(7.93 / 4.07, 4), abs=1e-3)
 
 
 def test_max_loss_and_sharpe():

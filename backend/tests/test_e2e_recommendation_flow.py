@@ -1539,9 +1539,9 @@ class TestCostAdjustedMetrics:
 
         assert "gross" in result
         assert "net" in result
-        assert result["additional_cost_pct"] == 0.10
+        assert result["additional_cost_pct"] == 0.07
         assert result["net"]["avg_return"] < result["gross"]["avg_return"]
-        assert result["cost_drag_pct"] == 0.10
+        assert result["cost_drag_pct"] == 0.07
 
 
 class TestAlphaDecayDetection:
