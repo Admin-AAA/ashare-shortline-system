@@ -27,6 +27,8 @@ ALLOWED_NAMES = {
     "dragon_tiger_is_on_list",
     "dragon_tiger_buy_dispersion",
     "dragon_tiger_inst_buy_ratio",
+    "dragon_tiger_net_buy_ratio",
+    "dragon_tiger_institution_net_buy_yi",
     "dist20",
     "dist60",
     "dsa_bias_score",

@@ -1,0 +1,116 @@
+id: dragon-tiger-smart-money
+name: 龙虎榜聪明钱接力
+enabled: true
+weight: 1.15
+
+meta:
+  author: system
+  style: dragon-tiger-smart-money
+  version: 0.1.0
+  holding_days: [1, 2, 3]
+  strategy_independence: 0.82
+  default_preset_groups:
+    formal_opening:
+      weight: 1.10
+      sort_order: 80
+    formal_trend_core:
+      weight: 1.10
+      sort_order: 80
+
+contract:
+  type: strategy
+  executable: true
+  schema_version: 1
+
+universe:
+  include:
+    - "dragon_tiger_is_on_list == true"
+    - "amount_yi >= 2"
+    - "free_mv_yi >= 15"
+    - "turnover_rate >= 2"
+  exclude:
+    - "is_st == true"
+    - "announcement_negative_count > 0"
+
+prefilter:
+  market:
+    # dragon_tiger_is_on_list 已由 inject_dragon_tiger_flags 在 prefilter 前注入（同 limit_up 机制）
+    include:
+      - when: "dragon_tiger_is_on_list == true"
+        reason: "requires_dragon_tiger_list"
+    include_any:
+      - when: "dragon_tiger_net_buy_ratio >= 0.03"
+        reason: "requires_smart_money_net_buy"
+      - when: "dragon_tiger_inst_buy_ratio >= 0.5"
+        reason: "requires_institution_net_buy"
+
+phases:
+  - name: 龙虎榜净卖出回避
+    when: "dragon_tiger_net_buy_ratio <= 0"
+    score_cap: 30
+    hard_veto: true
+    risk_flags: ["龙虎榜净卖出，主力出逃"]
+  - name: 弱净买观察
+    when: "dragon_tiger_net_buy_ratio > 0 and dragon_tiger_net_buy_ratio < 0.03"
+    score_cap: 58
+    hard_veto: false
+    risk_flags: ["净买偏弱，不追"]
+  - name: 强聪明钱接力
+    when: "dragon_tiger_net_buy_ratio >= 0.05"
+    score_cap: 95
+    hard_veto: false
+
+setups:
+  - name: 一线游资净买接力
+    when: "dragon_tiger_net_buy_ratio >= 0.05"
+    score_delta: 10
+    entry_rule: "龙虎榜净买占成交额≥5%（强聪明钱，回测 WR 85.6%），次日竞价不破分时均线介入"
+    invalid_rule: "低开低走跌破榜单日最低价"
+  - name: 机构净买确认
+    when: "dragon_tiger_net_buy_ratio >= 0.03 and dragon_tiger_inst_buy_ratio >= 0.5"
+    score_delta: 6
+    entry_rule: "净买且聪明钱占比过半，趋势延续概率高"
+    invalid_rule: "次日放量长上影"
+
+scoring:
+  base: 45
+  rules:
+    # ── 聪明钱强度（核心 alpha，已回测验证）──
+    - when: "dragon_tiger_net_buy_ratio >= 0.10"
+      delta: 12
+      reason: 龙虎榜净买占成交额≥10%(极强聪明钱)
+    - when: "dragon_tiger_net_buy_ratio >= 0.05"
+      delta: 18
+      reason: 净买占成交额≥5%(强聪明钱,WR85.6%)
+    - when: "dragon_tiger_net_buy_ratio >= 0.03 and dragon_tiger_net_buy_ratio < 0.05"
+      delta: 6
+      reason: 净买占比中等
+    - when: "dragon_tiger_net_buy_ratio <= 0"
+      delta: -20
+      reason: 龙虎榜净卖出(主力出逃)
+    # ── 聪明钱净买占比（修复后字段，此前恒为0）──
+    - when: "dragon_tiger_inst_buy_ratio >= 0.5"
+      delta: 6
+      reason: 聪明钱净买占比过半
+    # ── 资金同向确认 ──
+    - when: "main_net_inflow_yi > 0.3"
+      delta: 5
+      reason: 主力日内同向流入
+    - when: "capital_resonance_signal == '主力共振'"
+      delta: 8
+      reason: 超大单主力共振
+    - when: "is_main_theme == true"
+      delta: 6
+      reason: 主线题材龙虎榜
+
+risk:
+  rules:
+    - when: "dragon_tiger_net_buy_ratio <= 0"
+      level: high
+      flag: 龙虎榜净卖出
+    - when: "turnover_rate > 12"
+      level: high
+      flag: 高换手风险
+    - when: "announcement_negative_count > 0"
+      level: medium
+      flag: 负面公告

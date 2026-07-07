@@ -2452,6 +2452,40 @@ def inject_limit_up_flags(db: Session, stocks: list[dict[str, Any]], trade_date:
     return hit
 
 
+def inject_dragon_tiger_flags(db: Session, stocks: list[dict[str, Any]], trade_date: str | None = None) -> int:
+    """prefilter 前给 stocks 注入龙虎榜基础字段（dragon_tiger_is_on_list / net_amount_yi / net_buy_ratio 等）。
+
+    龙虎榜是已发生的客观事实，本地 dragon_tiger 表已持久化。dragon-tiger-smart-money 等策略的
+    universe 依赖 dragon_tiger_is_on_list，但 feature_builder 在 prefilter 之后才运行，导致 prefilter
+    阶段 dragon_tiger 字段全部缺失 → 策略 universe 永远 0 命中。本函数轻量注入（单表按交易日查询），
+    让 prefilter 能正确识别龙虎榜股。net_buy_ratio 计算与 feature_builder 一致（净买占成交额比例），
+    避免重复计算与语义漂移。返回命中龙虎榜的股票数。
+    """
+    if not stocks:
+        return 0
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
+    rows = db.scalars(select(DragonTiger).where(DragonTiger.trade_date == target_trade_date)).all()
+    dt_map: dict[str, dict[str, Any]] = {r.code: {c.name: getattr(r, c.name) for c in r.__table__.columns} for r in rows}
+    hit = 0
+    for stock in stocks:
+        code = str(stock.get("code") or "")
+        dt = dt_map.get(code)
+        if dt:
+            hit += 1
+            net_amount_yi = float(dt.get("net_amount_yi") or 0.0)
+            amount_yi = float(stock.get("amount_yi") or 0.0)
+            net_buy_ratio = round(min(1.0, max(-1.0, net_amount_yi / amount_yi)), 4) if amount_yi else 0.0
+            stock["dragon_tiger_is_on_list"] = True
+            stock["dragon_tiger_net_amount_yi"] = net_amount_yi
+            # 修复沉睡因子：institution_net_buy_yi 此前从未赋值 → inst_buy_ratio 恒为 0。
+            # 龙虎榜席位=机构+游资=聪明钱，用净买额作为聪明钱净买代理。
+            stock["dragon_tiger_institution_net_buy_yi"] = net_amount_yi
+            stock["dragon_tiger_net_buy_ratio"] = net_buy_ratio
+        else:
+            stock.setdefault("dragon_tiger_is_on_list", False)
+    return hit
+
+
 def _auxiliary_coverage_for_stocks(
     db: Session,
     codes: list[str],
