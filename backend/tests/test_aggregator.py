@@ -706,3 +706,124 @@ def test_apply_sector_diversity_skips_unknown_industry():
     assert len(result) == 3
     for c in result:
         assert c.get("sector_diversity_penalty", 0) == 0
+
+
+# ---------------------------------------------------------------------------
+# T12 空跑修复：LLM 暂不可用时不得零推荐
+# ---------------------------------------------------------------------------
+
+def _climax_snapshot():
+    """强牛·高潮市场快照（up_ratio>=0.65 → 强牛；涨停率>阈值 → 高潮）。"""
+    return {
+        "sample_count": 4947,
+        "up_count": 3337,
+        "down_count": 1531,
+        "limit_up_count": 149,
+        "limit_down_count": 42,
+    }
+
+
+def _degraded_card(code, final_score):
+    """模拟 LLM Skill Agent 暂不可用走回退的候选卡。"""
+    return {
+        "code": code,
+        "name": f"股票{code}",
+        "final_score": final_score,
+        "evidence_quality_score": 92.0,
+        "data_completeness_score": 100.0,
+        "data_authenticity": 1.0,
+        "data_quality": {"missing_fields": []},
+        "strategy_signals": [
+            {"strategy_id": "s1", "agent_review_unavailable": True, "runtime": "agent_skill_fallback_prelim"}
+        ],
+    }
+
+
+def _normal_card(code, final_score):
+    """LLM 正常审查的候选卡。"""
+    return {
+        "code": code,
+        "name": f"股票{code}",
+        "final_score": final_score,
+        "evidence_quality_score": 92.0,
+        "data_completeness_score": 100.0,
+        "data_authenticity": 1.0,
+        "data_quality": {"missing_fields": []},
+        "strategy_signals": [
+            {"strategy_id": "s1", "agent_skill_review": {"stance": "support", "score": 75}}
+        ],
+    }
+
+
+def test_agent_unavailable_climax_emits_recommendation():
+    """回归 07-03 空跑：强牛·高潮 + LLM 暂不可用，旧逻辑有效线 113.5 → 0 推荐。
+    修复后应在降级模式下以规则层最高分兜底，至少出 1 条。"""
+    from app.engine.aggregator import apply_pool_rules
+
+    cards = [
+        _degraded_card("600001", 67.85),
+        _degraded_card("600002", 60.78),
+        _degraded_card("600003", 59.92),
+        _degraded_card("600004", 59.89),
+    ]
+    out = apply_pool_rules(
+        cards,
+        score_line=72.0,
+        market_snapshot=_climax_snapshot(),
+        return_watchlist=True,
+    )
+    recs = out["recommendations"] if isinstance(out, dict) else out
+    assert len(recs) >= 1, "LLM 暂不可用时不得零推荐（北极星 A 项）"
+    # 最高分候选应被兜底选出
+    assert max(c["final_score"] for c in recs) == pytest.approx(67.85, abs=0.01)
+    # 降级标记应透出，供前端标注「规则层降级输出」
+    assert any(
+        (c.get("score_line_meta") or {}).get("degraded_agent_unavailable")
+        for c in recs
+    )
+
+
+def test_agent_unavailable_non_climax_emits_recommendation():
+    """非高潮/强牛阶段 + LLM 暂不可用，软降线应兜底出票。"""
+    from app.engine.aggregator import apply_pool_rules
+
+    cards = [
+        _degraded_card("600001", 68.0),
+        _degraded_card("600002", 60.0),
+    ]
+    out = apply_pool_rules(
+        cards,
+        score_line=72.0,
+        market_snapshot=_neutral_snapshot(),
+        return_watchlist=True,
+    )
+    recs = out["recommendations"] if isinstance(out, dict) else out
+    assert len(recs) >= 1, "非高潮阶段 LLM 暂不可用时也应兜底出票"
+
+
+def test_agent_available_climax_risk_control_preserved():
+    """LLM 正常时，强牛·高潮阶段仍按设计不正式出票（风险控制在位，无回归）。"""
+    from app.engine.aggregator import apply_pool_rules
+
+    cards = [
+        _normal_card("600001", 60.0),
+        _normal_card("600002", 55.0),
+    ]
+    out = apply_pool_rules(
+        cards,
+        score_line=72.0,
+        market_snapshot=_climax_snapshot(),
+        return_watchlist=True,
+    )
+    recs = out["recommendations"] if isinstance(out, dict) else out
+    assert len(recs) == 0, "LLM 正常时强牛·高潮阶段不应降级兜底（风险控制和旧行为一致）"
+
+
+def test_no_penalty_inflation_on_agent_unavailable():
+    """agent_unavailable_fallback 不再抬高分数线（reason 保留但 evidence_adjustment 不加 8.5）。"""
+    from app.engine.aggregator import _card_score_line_adjustment
+
+    card = _degraded_card("600001", 67.85)
+    adj = _card_score_line_adjustment(card)
+    assert "agent_unavailable_fallback" in adj["reasons"]
+    assert adj["evidence_adjustment"] < 8.5, "LLM 暂不可用不应再抬高有效线"

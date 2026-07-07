@@ -319,7 +319,10 @@ def _card_score_line_adjustment(card: dict[str, Any]) -> dict[str, Any]:
         )
         for signal in strategy_signals
     ):
-        evidence_adjustment += 8.5
+        # 不再抬高分数线：LLM 暂不可用时抬高线会让有效线不可达，
+        # 任何瞬时故障都必然零推荐（违反北极星「每天可见推荐」）。
+        # 降级状态已通过 reasons 透出，并由 _rationale 生成明确警告文本，
+        # 规则层分数照常参与排序与软降线兜底。
         reasons.append("agent_unavailable_fallback")
     return {
         "evidence_adjustment": round(evidence_adjustment if evidence_adjustment > 1.0 else min(0.75, evidence_adjustment), 2),
@@ -993,16 +996,28 @@ def apply_pool_rules(
     # 动态降线：无候选过线时，以 top_score - 0.5 为软下界，避免零推荐
     # 高潮/强牛阶段禁用降线：回测验证高潮阶段降线导致 7 笔 0% WR 交易（6/9 偏多·高潮）
     # 高潮阶段宁可零推荐也不降线，避免追高陷阱（_disable_soft_floor 已在函数前部计算）
-    if not result and ordered and top_final_score > 0 and not _disable_soft_floor:
+    # 检测 LLM 降级：任一候选因 Skill Agent 暂不可用而走回退
+    _agent_unavailable = any(
+        "agent_unavailable_fallback" in ((c.get("score_line_meta") or {}).get("reasons") or [])
+        for c in ordered
+    )
+    # 常规软降线：非高潮/强牛阶段、top 距有效线 ≤20 分时启用，避免零推荐。
+    # 高潮/强牛阶段默认禁用（宁可零推荐也不追高）；但若 LLM 暂不可用（降级模式），
+    # 放宽上限作为最后兜底，保证「每天可见推荐」——降级状态已在前端明确标注。
+    _soft_floor_allowed = (not _disable_soft_floor) or _agent_unavailable
+    if not result and ordered and top_final_score > 0 and _soft_floor_allowed:
         soft_floor = round(top_final_score - 1.0, 2)
         base_floor = round(score_line_context["base_score_line"] - 8.0, 2)
         dynamic_line = max(soft_floor, base_floor, 35.0)
         # top_score 距有效线 20 分以内启用降线（防止质量过差时强行出票）
         gap = score_line_context["effective_score_line"] - top_final_score
-        if 0 < gap <= 20.0:
+        # 降级模式（LLM 不可用）放宽上限，作为最后兜底避免零推荐
+        _degraded = _agent_unavailable and gap > 20.0
+        if 0 < gap <= 20.0 or _degraded:
             score_line_context["dynamic_soft_floor_applied"] = True
             score_line_context["dynamic_soft_floor"] = dynamic_line
             score_line_context["soft_floor_gap"] = round(gap, 2)
+            score_line_context["degraded_agent_unavailable"] = _degraded
             for card in ordered:
                 final_score = float(card.get("final_score") or 0)
                 if final_score <= 0:
@@ -1015,6 +1030,7 @@ def apply_pool_rules(
                 new_effective = min(old_effective, dynamic_line)
                 sm["effective_score_line"] = new_effective
                 sm["dynamic_soft_floor_applied"] = True
+                sm["degraded_agent_unavailable"] = _degraded
                 sm["passed"] = final_score >= new_effective
                 if final_score >= new_effective:
                     result.append(card)
