@@ -616,14 +616,50 @@ def _run_daily_kbar_batch(payload: dict) -> dict:
 
     db = SessionLocal()
     try:
-        return remediate_data_health_gaps(
+        result = remediate_data_health_gaps(
             db,
             target_tables=["daily_kbar"],
             daily_kbar_code_limit=int(payload.get("health_daily_kbar_code_limit") or DEFAULT_DAILY_KBAR_CODE_LIMIT),
             post_diagnosis=bool(payload.get("health_post_diagnosis", True)),
         )
+        # K 线同步后修本地可算指标（ma5/ma10/ma20/vol_ratio/bias/breakout/max_dd）。
+        # remediate_data_health_gaps 只检测行数缺失，不检测 ma5=0——批量同步写入 0 指标时
+        # 不会被自动修复，导致 _build_stock_from_bars fallback 重算（策略能跑但数据质量差）。
+        # try/except 保护：指标补齐是 best-effort 增强，不能因它失败而让 K 线同步整体失败。
+        try:
+            indicator_fix = _backfill_missing_local_indicators(db, days=7)
+            if indicator_fix.get("fixed_dates"):
+                result.setdefault("indicator_backfill", indicator_fix)
+                logger.info("daily_kbar_batch 后补本地指标: %s", indicator_fix)
+        except Exception as exc:
+            logger.warning("daily_kbar_batch 后补本地指标失败（不影响 K 线同步）: %s", exc)
+        return result
     finally:
         db.close()
+
+
+def _backfill_missing_local_indicators(db, days: int = 7) -> dict:
+    """检测最近 N 天 ma5=0 占比 >50% 的交易日，调 backfill_indicators.backfill_date 修复。
+
+    与 scripts/backfill_indicators.py 同逻辑，供 scheduler 在 K 线同步后自动调用，
+    避免 ma5=0 全市场缺失（07-07/07-03 曾发生 5505 只全 0）。
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+    scripts_dir = _Path(__file__).resolve().parent.parent.parent / "scripts"
+    if str(scripts_dir) not in _sys.path:
+        _sys.path.insert(0, str(scripts_dir))
+    try:
+        from backfill_indicators import _dates_needing_indicators, backfill_date
+    except ImportError:
+        return {"fixed_dates": [], "error": "backfill_indicators 不可导入"}
+
+    dates = _dates_needing_indicators(db, days)
+    fixed: list[dict] = []
+    for trade_date in dates:
+        stats = backfill_date(db, trade_date)
+        fixed.append({"trade_date": trade_date, **stats})
+    return {"fixed_dates": fixed}
 
 
 def _run_data_health_remediation(payload: dict) -> dict:
