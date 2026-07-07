@@ -29,6 +29,31 @@ def best_strategy_id(strategy_signals: list[dict[str, Any]]) -> str:
     return str(best.get("strategy_id") or "")
 
 
+def _build_agent_summary(card: dict[str, Any]) -> dict[str, Any]:
+    """构建 agent_summary_json：保留审计 logs，并把首个 LLM 审查的关键决策字段
+    提取到顶层（stance/delta/score/summary/action），供列表视图与 B 项自检直接读取。
+
+    之前只存 mode/logs/data_source，LLM 判断埋在 logs[0].output 里，前端列表与
+    北极星 B 项自检（$.delta）都拿不到——决策链断层。此处补齐。
+    """
+    logs = card.get("agent_logs", []) or []
+    summary: dict[str, Any] = {
+        "mode": "auditable_skill_agents",
+        "logs": logs,
+        "data_source": (card.get("market_snapshot", {}).get("breadth") or {}).get("data_source"),
+    }
+    if not logs:
+        return summary
+    first_output = (logs[0].get("output") or {}) if isinstance(logs[0], dict) else {}
+    if not isinstance(first_output, dict) or not first_output:
+        return summary
+    # 顶层快捷字段（与 RecommendationDetailCard 的 AgentReviewSection 对齐）
+    for key in ("stance", "score_delta", "score", "summary", "action", "position_range", "entry_style"):
+        if key in first_output:
+            summary[key] = first_output[key]
+    return summary
+
+
 def persist_recommendation_cards(
     db: Session,
     *,
@@ -80,13 +105,7 @@ def persist_recommendation_cards(
             ),
             market_context_json=dump_json(card.get("market_snapshot", {})),
             skill_breakdown_json=dump_json(card.get("strategy_signals", [])),
-            agent_summary_json=dump_json(
-                {
-                    "mode": "auditable_skill_agents",
-                    "logs": card.get("agent_logs", []),
-                    "data_source": (card.get("market_snapshot", {}).get("breadth") or {}).get("data_source"),
-                }
-            ),
+            agent_summary_json=dump_json(_build_agent_summary(card)),
         )
         db.add(rec)
         db.flush()

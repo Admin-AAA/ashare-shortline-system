@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../api/client";
-import type { RecommendationCard, SkillSignal } from "../types";
+import type { AgentLog, RecommendationCard, RecommendationDetail, SkillSignal } from "../types";
 
 /**
  * 推荐详情卡片 —— 展示完整决策信息（交易参数/买点原因/市场阶段/评分分解/规则/风险）。
@@ -26,7 +26,7 @@ export function InlineDetailLoader({
   open: boolean;
   onToggle: () => void;
 }) {
-  const [detail, setDetail] = useState<RecommendationCard | null>(null);
+  const [detail, setDetail] = useState<RecommendationDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -97,6 +97,7 @@ type DetailItem = Pick<
 > & {
   ideal_buy?: number | null;
   secondary_buy?: number | null;
+  agent_logs?: AgentLog[];
 };
 
 /** 完整决策详情卡片 —— 交易参数 + 买点原因 + 市场阶段 + 评分分解 + 规则 + 风险标签 */
@@ -129,6 +130,7 @@ export function RecommendationDetailCard({ item }: { item: DetailItem }) {
 
         <MarketContextSection marketContext={item.market_context} />
         <SkillBreakdownSection skillBreakdown={item.skill_breakdown} />
+        <AgentReviewSection agentLogs={item.agent_logs} />
 
         {(item.entry_rule || item.invalid_rule) && (
           <div style={{ marginBottom: "var(--space-3)", fontSize: "var(--text-xs)", lineHeight: 1.6 }}>
@@ -225,6 +227,94 @@ function SkillBreakdownSection({ skillBreakdown }: { skillBreakdown: SkillSignal
       ))}
     </div>
   );
+}
+
+/** LLM Skill Agent 审查区块 —— 展示 stance / score_delta / summary / action / risks
+ * 决策链关键一环：规则层之上 LLM 的独立判断，让用户看到"AI 怎么看这只票"。 */
+function AgentReviewSection({ agentLogs }: { agentLogs?: AgentLog[] }) {
+  const review = agentLogs?.[0]?.output as Record<string, unknown> | undefined;
+  if (!review) return null;
+
+  const stance = review.stance as string | undefined;
+  const scoreDelta = review.score_delta as number | undefined;
+  const summary = review.summary as string | undefined;
+  const action = review.action as string | undefined;
+  const positionRange = review.position_range as string | undefined;
+  const entryStyle = review.entry_style as string | undefined;
+  const risks = (review.risks as string[] | undefined) ?? [];
+  const invalidation = (review.invalidation_conditions as string[] | undefined) ?? [];
+
+  // stance → 颜色映射（A 股红涨绿跌语境：support 偏暖色，oppose/veto 偏冷色）
+  const stanceColor =
+    stance === "strong_support"
+      ? "var(--market-up)"
+      : stance === "support"
+        ? "var(--market-up)"
+        : stance === "veto" || stance === "oppose"
+          ? "var(--market-down)"
+          : "var(--text-muted)";
+
+  return (
+    <div style={{ marginBottom: "var(--space-3)", fontSize: "var(--text-xs)", lineHeight: 1.6 }}>
+      <div className="panel__kicker" style={{ marginBottom: "var(--space-1)" }}>LLM 审查</div>
+      <div style={{ marginBottom: "var(--space-1)", color: "var(--ink-secondary)" }}>
+        {stance && (
+          <span style={{ fontWeight: 600, color: stanceColor }}>{stanceLabel(stance)}</span>
+        )}
+        {scoreDelta != null && (
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontWeight: 600,
+              color: scoreDelta >= 0 ? "var(--market-up)" : "var(--market-down)",
+              marginLeft: "var(--space-2)",
+            }}
+          >
+            {scoreDelta >= 0 ? "+" : ""}{scoreDelta.toFixed(1)}
+          </span>
+        )}
+        {positionRange && (
+          <span style={{ color: "var(--text-muted)", marginLeft: "var(--space-2)" }}>· 仓位 {positionRange}</span>
+        )}
+      </div>
+      {summary && (
+        <p style={{ margin: "0 0 var(--space-1)", color: "var(--ink-secondary)", fontSize: "var(--text-sm)", lineHeight: 1.6 }}>
+          {summary}
+        </p>
+      )}
+      {action && (
+        <div style={{ marginBottom: "var(--space-1)", color: "var(--text-muted)" }}>
+          建议 · <span style={{ color: "var(--ink-secondary)" }}>{action}</span>
+          {entryStyle && <span style={{ color: "var(--text-muted)" }}>（{entryStyle}）</span>}
+        </div>
+      )}
+      {risks.length > 0 && (
+        <div style={{ color: "var(--text-muted)", marginBottom: risks.length ? "var(--space-1)" : 0 }}>
+          <span>风险 · </span>
+          <span style={{ color: "var(--ink-secondary)" }}>{risks.slice(0, 4).join(" / ")}</span>
+        </div>
+      )}
+      {invalidation.length > 0 && (
+        <div style={{ color: "var(--text-muted)" }}>
+          <span>失效 · </span>
+          <span style={{ color: "var(--ink-secondary)" }}>{invalidation.slice(0, 3).join(" / ")}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** stance 原始值（strong_support/support/neutral_support/neutral/oppose/veto）→ 中文标签 */
+function stanceLabel(stance: string): string {
+  const map: Record<string, string> = {
+    strong_support: "强支持",
+    support: "支持",
+    neutral_support: "中性偏多",
+    neutral: "中性",
+    oppose: "反对",
+    veto: "否决",
+  };
+  return map[stance] ?? stance;
 }
 
 /** 交易参数指标块 —— 推荐价/止损/止盈等关键价格一屏可见 */

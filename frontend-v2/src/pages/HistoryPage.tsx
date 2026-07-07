@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight, History, Loader2, Search } from "lucide-react";
 import { Fragment, useCallback, useState } from "react";
 import { api } from "../api/client";
-import type { RecommendationCard, RecommendationHistoryResponse } from "../types";
+import type { RecommendationDetail, RecommendationHistoryResponse } from "../types";
 import { PageSkeleton, ErrorPage, EmptyState } from "../components/StateViews";
 import { CollapsiblePanel } from "../components/CollapsiblePanel";
 import { useApi } from "../app/useApi";
@@ -20,7 +20,7 @@ export function HistoryPage() {
   const [codeInput, setCodeInput] = useState("");
   const [page, setPage] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [details, setDetails] = useState<Record<string, RecommendationCard>>({});
+  const [details, setDetails] = useState<Record<string, RecommendationDetail>>({});
   const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<Record<string, string>>({});
   const pageSize = 50;
@@ -237,7 +237,7 @@ export function HistoryPage() {
                       </td>
                       <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>
                         <div style={stackStyle}>
-                          <span>{exitReasonLabel(o?.exit_reason)}</span>
+                          <span>{exitReasonLabel(o?.exit_reason, "—", ret)}</span>
                           <span>{o?.holding_days != null ? `持仓 ${o.holding_days} 天` : "—"}</span>
                         </div>
                       </td>
