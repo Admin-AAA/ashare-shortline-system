@@ -15,12 +15,17 @@ from scripts.backtest_cost_aware import (
 
 
 def _row(executed_return, label="success", score=80.0, tdate="2026-01-01",
-         code="600000", strategies=None, phase="活跃", holding=3, reason="take_profit_hit"):
+         code="600000", strategies=None, phase="活跃", holding=3, reason="take_profit_hit",
+         rid=None, source=None):
+    rid = rid or f"{tdate}-{code}-{score}"
+    # 与生产 load_rows_from_db 一致：按前缀推断 source，除非显式覆盖
+    if source is None:
+        source = "backtest" if rid.startswith("btrec_") else "live"
     return BacktestRow(
-        recommendation_id=f"{tdate}-{code}-{score}",
+        recommendation_id=rid,
         trade_date=tdate, code=code, executed_return=executed_return,
         outcome_label=label, exit_reason=reason, holding_days=holding,
-        final_score=score, strategy_ids=strategies or [], phase=phase,
+        final_score=score, strategy_ids=strategies or [], phase=phase, source=source,
     )
 
 
@@ -56,15 +61,36 @@ def test_max_loss_and_sharpe():
     assert m["sharpe_per_trade"] != 0.0
 
 
-def test_dedup_keeps_highest_score():
-    a = _row(5.0, score=70.0, code="600001")
-    b = _row(1.0, score=95.0, code="600001")  # 同 (date,code)，score 更高
-    c = _row(3.0, score=80.0, code="600002")
+def test_dedup_by_recommendation_id_keeps_highest_score():
+    # 同一 recommendation_id 出现两次，保留 final_score 更高的一条
+    a = _row(5.0, score=70.0, rid="rec_x")
+    b = _row(1.0, score=95.0, rid="rec_x")  # 同 id，score 更高
+    c = _row(3.0, score=80.0, rid="rec_y")
     out = dedup_rows([a, b, c])
-    codes = sorted(r.code for r in out)
-    assert codes == ["600001", "600002"]
-    kept = [r for r in out if r.code == "600001"][0]
+    ids = sorted(r.recommendation_id for r in out)
+    assert ids == ["rec_x", "rec_y"]
+    kept = [r for r in out if r.recommendation_id == "rec_x"][0]
     assert kept.final_score == 95.0
+
+
+def test_dedup_does_not_merge_same_trade_date_code():
+    # 关键修正：同一 (trade_date, code) 上的不同 recommendation_id 必须各自保留，
+    # 不能像旧版那样按 (td,code) 去重（会非法合并回测的多条独立交易）。
+    a = _row(5.0, code="600001", rid="btrec_aaa")   # 回测交易 1
+    b = _row(1.0, code="600001", rid="btrec_bbb")   # 回测交易 2（同一股票同日，不同 id）
+    c = _row(3.0, code="600002", rid="rec_ccc")     # 实盘交易
+    out = dedup_rows([a, b, c])
+    assert len(out) == 3  # 三条都保留，互不合并且不污染口径
+
+
+def test_source_classification_live_vs_backtest():
+    live = _row(5.0, rid="rec_001")
+    bt = _row(1.0, rid="btrec_001")
+    assert live.source == "live"
+    assert bt.source == "backtest"
+    # loader 逻辑等价：前缀判定
+    assert ("btrec_001".startswith("btrec_"))
+    assert not ("rec_001".startswith("btrec_"))
 
 
 def test_strategy_attribution():
