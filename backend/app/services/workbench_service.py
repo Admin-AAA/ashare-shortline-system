@@ -44,6 +44,7 @@ from app.models.tables import (
     ConceptSectorStock,
     DailyKbar,
     DragonTiger,
+    LimitUpBoard,
     MarketSnapshot,
     NewsAnnouncement,
     Preset,
@@ -74,6 +75,7 @@ from app.services.market_pool import (
     refresh_dragon_tiger,
     refresh_hsgt_flow,
     refresh_hsgt_top10,
+    refresh_limit_up_board,
     refresh_margin_detail,
     refresh_news_for_codes,
 )
@@ -1625,6 +1627,27 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     if skip_aux_refresh:
         for key in aux_audit:
             aux_audit[key] = {"status": "skipped_fast_run", "count": 0, "elapsed_ms": 0}
+        # limit_up_board 硬依赖预检查：limit-up-reseal-relay 的 prefilter.include_any
+        # 需要 limit_up_open_times/limit_up_fd_amount_yi，aux sync partial_completed 时
+        # 当天 limit_up_board 可能为 0 → limit-up 策略 0 候选（07-07 曾发生 44 只涨停全拒）。
+        # skip_aux_refresh 假设 aux 已同步，但 limit_up_board 缺失时必须强制补，否则策略饿死。
+        try:
+            td = snapshot["trade_date"]
+            lu_count = int(db.scalar(
+                select(func.count()).select_from(LimitUpBoard).where(LimitUpBoard.trade_date == td)
+            ) or 0)
+            if lu_count == 0:
+                t0 = time.perf_counter()
+                lu_rows = refresh_limit_up_board(db, trade_date=td)
+                aux_audit["limit_up_board"] = {
+                    "status": "force_synced_on_skip",
+                    "count": len(lu_rows),
+                    "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
+                }
+                logger.info("skip_aux_refresh 模式下 limit_up_board 当天为 0，强制同步 %d 条", len(lu_rows))
+        except Exception as exc:
+            db.rollback()
+            logger.warning("skip_aux_refresh 模式下 limit_up_board 预检查失败: %s", exc)
     elif settings.enable_concept_sector_fetch:
         if _has_fresh_concept_sector_cache(db, snapshot["trade_date"], settings.concept_sector_cache_ttl_seconds):
             aux_audit["concept_sectors"] = {
