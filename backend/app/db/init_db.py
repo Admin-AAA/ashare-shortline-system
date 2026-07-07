@@ -167,6 +167,13 @@ def _ensure_indexes() -> None:
             _ensure_index(connection, inspector, "recommendations", "idx_recs_trade_score", "trade_date, final_score")
             _ensure_index(connection, inspector, "recommendations", "idx_recs_code_trade", "code, trade_date")
 
+        if "api_call_logs" in existing_tables:
+            # 真实 token 用量列（2026-07-07 加，修复 record_api_call prompt_tokens 崩溃）
+            acl_cols = {c["name"] for c in inspector.get_columns("api_call_logs")}
+            _ensure_column(connection, acl_cols, "api_call_logs", "prompt_tokens", "INTEGER")
+            _ensure_column(connection, acl_cols, "api_call_logs", "completion_tokens", "INTEGER")
+            _ensure_column(connection, acl_cols, "api_call_logs", "cache_hit_tokens", "INTEGER")
+
         if "recommendation_outcomes" in existing_tables:
             _ensure_index(connection, inspector, "recommendation_outcomes", "idx_outcomes_label", "outcome_label")
             _ensure_index(connection, inspector, "recommendation_outcomes", "idx_outcomes_entry_label", "entry_triggered, outcome_label")
