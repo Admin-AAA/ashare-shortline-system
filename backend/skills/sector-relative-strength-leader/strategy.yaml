@@ -1,7 +1,7 @@
 id: sector-relative-strength-leader
 name: 主线相对强度龙头
 enabled: true
-weight: 1.0
+weight: 1.06
 
 meta:
   author: system

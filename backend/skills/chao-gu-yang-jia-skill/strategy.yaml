@@ -1,7 +1,7 @@
 id: chao-gu-yang-jia-skill
 name: 炒股养家大局观
 enabled: true
-weight: 1.0
+weight: 1.2
 
 meta:
   author: system

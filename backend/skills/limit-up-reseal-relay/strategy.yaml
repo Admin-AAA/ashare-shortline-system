@@ -1,7 +1,7 @@
 id: limit-up-reseal-relay
 name: 涨停回封接力
 enabled: true
-weight: 1.0
+weight: 0.45
 
 meta:
   author: system
