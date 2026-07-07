@@ -225,7 +225,7 @@ def _upsert_task_from_payload(db: Session, payload: dict) -> dict:
         raise HTTPException(status_code=400, detail="task_id is required")
 
     task_type = str(payload.get("task_type") or "").strip()
-    if task_type not in {"data_sync", "recommendation_run", "preset_matrix_run", "pool_refresh", "data_backfill"}:
+    if task_type not in {"data_sync", "recommendation_run", "preset_matrix_run", "pool_refresh", "data_backfill", "formal_safety_net"}:
         raise HTTPException(status_code=400, detail="task_type is invalid")
 
     payload_data = dict(payload.get("payload") or {})
