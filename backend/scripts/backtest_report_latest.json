@@ -1,0 +1,82 @@
+{
+  "n": 291,
+  "win_rate": 0.6598,
+  "avg_net_return": 3.0341,
+  "avg_win": 6.2156,
+  "avg_loss_abs": 3.136,
+  "pl_ratio": 1.982,
+  "sharpe_per_trade": 0.5171,
+  "max_loss_net": -7.17,
+  "exit_distribution": {
+    "take_profit_hit": 122,
+    "trailing_stop_hit": 117,
+    "stop_loss_hit": 44,
+    "stop_loss_gap": 1,
+    "take_profit_gap": 7
+  },
+  "holding_days_avg": 4.76,
+  "strategy_stats": {
+    "sector-relative-strength-leader": {
+      "n": 23,
+      "win_rate": 0.7391,
+      "avg_net": 5.7257
+    },
+    "chao-gu-yang-jia-skill": {
+      "n": 29,
+      "win_rate": 0.7931,
+      "avg_net": 4.4131
+    },
+    "chen-xiaoqun-skill": {
+      "n": 24,
+      "win_rate": 0.7083,
+      "avg_net": 3.22
+    },
+    "daily-stock-analysis-skill": {
+      "n": 214,
+      "win_rate": 0.6729,
+      "avg_net": 2.9575
+    },
+    "overnight-holding-method": {
+      "n": 8,
+      "win_rate": 0.5,
+      "avg_net": 2.28
+    },
+    "high-range-breakout-momentum": {
+      "n": 10,
+      "win_rate": 0.3,
+      "avg_net": 0.916
+    },
+    "trend-pullback-continuation": {
+      "n": 3,
+      "win_rate": 0.3333,
+      "avg_net": -1.54
+    },
+    "limit-up-reseal-relay": {
+      "n": 5,
+      "win_rate": 0.2,
+      "avg_net": -1.822
+    }
+  },
+  "phase_stats": {
+    "高潮": {
+      "n": 175,
+      "win_rate": 0.6286,
+      "avg_net": 2.9032
+    },
+    "活跃": {
+      "n": 103,
+      "win_rate": 0.7282,
+      "avg_net": 3.2735
+    },
+    "unknown": {
+      "n": 13,
+      "win_rate": 0.5385,
+      "avg_net": 2.9
+    }
+  },
+  "phase_winrate_spread_pp": 18.97,
+  "phase_has_information": true,
+  "cost_pct_per_trade": 0.1,
+  "raw_n": 1594,
+  "dedup_n": 291
+}
