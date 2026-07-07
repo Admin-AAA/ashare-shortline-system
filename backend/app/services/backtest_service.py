@@ -102,6 +102,35 @@ def run_backtest(
     if not dates:
         return {"status": "no_data", "message": "区间内 DailyKbar 无可用交易日数据", "dates_scanned": 0}
 
+    # 预检查：是否有匹配 run_mode 的可用 Skill。无则直接跳过所有日期，
+    # 避免每个日期加载全市场数据（~43s/date）后才在 _backtest_single_date 内发现"无可用的 Skill"。
+    # 实测：limit-up-reseal-relay 在 formal 模式下回测 experiment，24 日期全 skip 仍耗时 1356s。
+    from app.models.tables import SkillRegistry
+    from app.engine.skill_loader import load_skills as _load_skills_for_check
+    _all_skills_check = _load_skills_for_check(settings.skills_dir)
+    _skill_regs_check = {r.skill_id: r for r in db.scalars(select(SkillRegistry)).all()}
+    _has_matching_skill = any(
+        _skill_regs_check.get(s.skill_id) and _skill_regs_check[s.skill_id].mode == run_mode and _skill_regs_check[s.skill_id].enabled
+        for s in _all_skills_check
+    )
+    if not _has_matching_skill and not target_codes:
+        # 无匹配 Skill 且非单股回测 → 全部 skip，不浪费数据加载时间
+        results = [{"trade_date": td, "status": "skipped", "reason": "无可用的 Skill", "elapsed_ms": 0.0} for td in dates]
+        summary = {
+            "status": "completed",
+            "dates_scanned": len(dates),
+            "dates_succeeded": 0,
+            "dates_failed": 0,
+            "total_recommendations": 0,
+            "total_elapsed_ms": 0.0,
+            "labeled_count": 0,
+            "trade_detail_count": 0,
+            "trade_details": [],
+            "results": results,
+        }
+        _save_backtest_summary(db, skill_id, start_date, end_date, summary)
+        return summary
+
     results: list[dict[str, Any]] = []
     for trade_date in dates:
         t0 = time.perf_counter()
