@@ -29,8 +29,11 @@ _scheduler: BackgroundScheduler | None = None
 _running_lock = threading.Lock()
 _running_tasks: set[str] = set()
 TASK_TYPE_PRESET_MATRIX_RUN = "preset_matrix_run"
+TASK_TYPE_FORMAL_SAFETY_NET = "formal_safety_net"
 MANUAL_PRESET_MATRIX_TASK_ID = "manual_preset_matrix_run"
 MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID = "manual_data_health_remediation"
+SAFETY_NET_TASK_ID = "formal_run_safety_net"
+SAFETY_NET_MAX_ATTEMPTS = 3
 DEFAULT_RECOMMENDATION_DATA_SOURCE = "local_pool_preferred"
 
 
@@ -152,6 +155,8 @@ def _execute_task(task_id: str, *, force: bool = False, trigger_source: str = "s
 
         if task_type == "recommendation_run":
             result = asyncio.run(_run_recommendation(db, payload))
+        elif task_type == TASK_TYPE_FORMAL_SAFETY_NET:
+            result = asyncio.run(_safety_net_run(db, payload))
         elif task_type == TASK_TYPE_PRESET_MATRIX_RUN:
             result = asyncio.run(_run_preset_matrix(db, payload, task_run_id=task_run_id))
         elif task_type in ("data_sync", "pool_refresh", "data_backfill"):
@@ -767,6 +772,95 @@ async def _run_recommendation(db, payload: dict) -> dict:
             else f"自动推荐 {recommended_count} 条"
         ),
     }
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Formal Run 安全网：检测断档并自动补跑
+# ═══════════════════════════════════════════════════════════════
+
+def check_formal_recommendation_gap(db) -> dict:
+    """检查最近交易日是否有成功的 formal 推荐（completed + recommended_count>0）。
+
+    返回 {needs_retry, trade_date, ok_count, total_count, reason}。
+    """
+    from sqlalchemy import text as _text
+    r = db.execute(_text("""
+        SELECT trade_date,
+               SUM(CASE WHEN status='completed' AND COALESCE(recommended_count,0) > 0 THEN 1 ELSE 0 END) as ok_count,
+               COUNT(*) as total_count
+        FROM recommendation_runs
+        WHERE run_mode='formal'
+          AND trade_date >= DATE_SUB(CURDATE(), INTERVAL 5 DAY)
+        GROUP BY trade_date
+        ORDER BY trade_date DESC
+        LIMIT 1
+    """)).fetchone()
+
+    if not r:
+        return {"needs_retry": True, "trade_date": None, "ok_count": 0, "total_count": 0,
+                "reason": "最近 5 天无 formal run"}
+
+    trade_date, ok_count, total_count = str(r[0]), int(r[1] or 0), int(r[2] or 0)
+    if ok_count > 0:
+        return {"needs_retry": False, "trade_date": trade_date, "ok_count": ok_count,
+                "total_count": total_count, "reason": f"{trade_date} 已有 {ok_count} 次成功推荐"}
+    if total_count >= SAFETY_NET_MAX_ATTEMPTS:
+        return {"needs_retry": False, "trade_date": trade_date, "ok_count": ok_count,
+                "total_count": total_count, "reason": f"{trade_date} 已尝试 {total_count} 次，放弃"}
+    return {"needs_retry": True, "trade_date": trade_date, "ok_count": ok_count,
+            "total_count": total_count, "reason": f"{trade_date} 无成功推荐（{total_count} 次尝试）"}
+
+
+async def _safety_net_run(db, payload: dict) -> dict:
+    """安全网任务：检查 formal 推荐断档，若需要则自动补跑。"""
+    check = check_formal_recommendation_gap(db)
+    if not check["needs_retry"]:
+        logger.info("安全网跳过: %s", check["reason"])
+        return {"skipped": True, **check, "summary_text": f"安全网跳过: {check['reason']}"}
+
+    logger.info("安全网触发补跑: %s", check["reason"])
+    # 复用 post_sync_formal_recommendation 的 payload，确保参数一致
+    task = db.get(ScheduledTask, "post_sync_formal_recommendation")
+    if task and task.payload_json:
+        run_payload = json.loads(task.payload_json)
+    else:
+        run_payload = {
+            "preset_id": "preset_formal_opening",
+            "run_name": "安全网补跑推荐",
+            "run_mode": "formal",
+            "data_source": DEFAULT_RECOMMENDATION_DATA_SOURCE,
+            "risk_template": "balanced",
+            "score_line": 72,
+            "output_count": 6,
+            "skip_aux_refresh": True,
+        }
+    run_payload["run_name"] = f"安全网补跑 {datetime.now(timezone.utc).replace(tzinfo=None).strftime('%m%d_%H%M')}"
+
+    result = await _run_recommendation(db, run_payload)
+    return {"skipped": False, **check, **result}
+
+
+def ensure_formal_recommendation_safely() -> dict:
+    """线程安全的包装：在后台线程中调用安全网检查并补跑。
+
+    用于 startup 和外部调用。返回检查结果。
+    """
+    db = SessionLocal()
+    try:
+        check = check_formal_recommendation_gap(db)
+        if not check["needs_retry"]:
+            logger.info("启动安全网跳过: %s", check["reason"])
+            return check
+
+        logger.info("启动安全网触发补跑: %s", check["reason"])
+        result = asyncio.run(_safety_net_run(db, {}))
+        logger.info("启动安全网完成: skipped=%s", result.get("skipped", False))
+        return result
+    except Exception:
+        logger.exception("启动安全网执行失败")
+        return {"error": "safety_net_failed"}
+    finally:
+        db.close()
 
 
 def _update_matrix_progress(db, task_run_id: str, summary: str) -> None:

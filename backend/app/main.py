@@ -108,6 +108,15 @@ def on_startup() -> None:
     _warmup_initial_state()
     _warmup_pool_cache(delay_seconds=2.0)
 
+    # 安全网：启动时检查 formal 推荐断档并自动补跑（后台线程，不阻塞启动）
+    import threading as _threading
+    def _safety_net_on_startup() -> None:
+        import time as _time
+        _time.sleep(8)  # 等待调度器和缓存预热完成
+        from app.services.scheduler_service import ensure_formal_recommendation_safely
+        ensure_formal_recommendation_safely()
+    _threading.Thread(target=_safety_net_on_startup, daemon=True).start()
+
 
 def _warmup_initial_state() -> None:
     """启动阶段同步预热首屏所需缓存，确保首访不走冷链路。"""
