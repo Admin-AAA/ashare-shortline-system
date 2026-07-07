@@ -3,6 +3,7 @@ import { ArrowLeft, Loader2, PlayCircle } from "lucide-react";
 import { api } from "../api/client";
 import type { Preset, RunDetail } from "../types";
 import { ErrorPage } from "../components/StateViews";
+import { CollapsiblePanel } from "../components/CollapsiblePanel";
 import { useUrlRoute } from "../app/useUrlRoute";
 import { queryParam } from "../app/nav";
 
@@ -58,14 +59,18 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
         返回驾驶舱
       </button>
 
-      <section className="panel">
-        <div className="panel__kicker">推荐运行</div>
-        <h2 className="panel__title" style={{ marginBottom: "var(--space-4)" }}>
-          <PlayCircle size={18} />
-          运行编排
-        </h2>
-
-        <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "center", marginBottom: "var(--space-3)" }}>
+      <CollapsiblePanel
+        collapsedKey="run-orchestration"
+        kicker="推荐运行"
+        title={
+          <>
+            <PlayCircle size={18} />
+            运行编排
+          </>
+        }
+        bodyStyle={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}
+      >
+        <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "center" }}>
           <label className="text-muted" style={{ fontSize: "var(--text-sm)" }}>运行预设</label>
           <select
             value={selectedPreset}
@@ -98,11 +103,11 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
         </button>
 
         {message && (
-          <div className="text-muted" style={{ marginTop: "var(--space-3)", fontSize: "var(--text-sm)" }}>
+          <div className="text-muted" style={{ fontSize: "var(--text-sm)" }}>
             {message}
           </div>
         )}
-      </section>
+      </CollapsiblePanel>
 
       {error && <ErrorPage title="运行详情加载失败" message={error} onRetry={() => window.location.reload()} />}
 
@@ -113,14 +118,12 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
 
 function RunTimeline({ detail }: { detail: RunDetail }) {
   return (
-    <section className="panel">
-      <div className="panel__header">
-        <div>
-          <div className="panel__kicker">运行时间线</div>
-          <h3 className="panel__title">{detail.run_name ?? detail.run_id}</h3>
-        </div>
-        <span className="tag">{detail.status}</span>
-      </div>
+    <CollapsiblePanel
+      collapsedKey="run-timeline"
+      kicker="运行时间线"
+      title={detail.run_name ?? detail.run_id}
+      actions={<span className="tag">{detail.status}</span>}
+    >
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
         <div className="text-mono text-muted" style={{ fontSize: "var(--text-sm)" }}>
           {detail.progress_message || "暂无消息"}
@@ -131,6 +134,6 @@ function RunTimeline({ detail }: { detail: RunDetail }) {
           </div>
         )}
       </div>
-    </section>
+    </CollapsiblePanel>
   );
 }

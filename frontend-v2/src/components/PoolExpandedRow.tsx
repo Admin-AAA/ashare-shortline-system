@@ -1,6 +1,7 @@
 import { ClipboardCopy, History, ShieldAlert, ShieldCheck, ShieldQuestion } from "lucide-react";
 import type { CockpitRecommendation } from "../types";
 import { TradeMetric } from "./RecommendationDetailCard";
+import { StockTicker } from "./StockTicker";
 
 /**
  * 候选池展开行 —— 从 PoolPage 抽离的结构化子组件。
@@ -35,6 +36,22 @@ export function PoolExpandedRow({
         gap: "var(--space-4)",
       }}
     >
+      {/* 身份条：展开后保留股票代码 + 名称，避免失去上下文 */}
+      <div
+        style={{
+          gridColumn: "1 / -1",
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--space-2)",
+          flexWrap: "wrap",
+          marginBottom: "var(--space-1)",
+        }}
+      >
+        <StockTicker code={item.code} size="md" />
+        <span style={{ fontWeight: 700, color: "var(--ink)", fontSize: "var(--text-md)" }}>{item.name}</span>
+        {item.industry && <span className="tag">{item.industry}</span>}
+      </div>
+
       {/* 左：交易参数 + 买点原因 / 风险提示 */}
       <div>
         {hasTradeParams && (

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { SkillSummary } from "../types";
+import { CollapsiblePanel } from "./CollapsiblePanel";
 
 /**
  * 策略清单面板 —— 展示 8 个策略的名称/模式/独立性/回测胜率。
@@ -59,29 +60,21 @@ export function SkillsCatalogPanel() {
 
   if (loading) {
     return (
-      <div className="panel">
-        <div className="panel__header">
-          <span className="panel__kicker">策略清单</span>
-          <h2 className="panel__title">8 策略总览</h2>
-        </div>
+      <CollapsiblePanel collapsedKey="skills-catalog" kicker="策略清单" title="8 策略总览">
         <div style={{ padding: "var(--space-4)", color: "var(--text-muted)", fontSize: 13 }}>
           正在加载策略清单…
         </div>
-      </div>
+      </CollapsiblePanel>
     );
   }
 
   if (error) {
     return (
-      <div className="panel">
-        <div className="panel__header">
-          <span className="panel__kicker">策略清单</span>
-          <h2 className="panel__title">8 策略总览</h2>
-        </div>
+      <CollapsiblePanel collapsedKey="skills-catalog" kicker="策略清单" title="8 策略总览">
         <div style={{ padding: "var(--space-4)", color: "var(--color-down)", fontSize: 13 }}>
           {error}
         </div>
-      </div>
+      </CollapsiblePanel>
     );
   }
 
@@ -89,15 +82,16 @@ export function SkillsCatalogPanel() {
   const experimentCount = skills.filter((s) => s.mode === "experiment").length;
 
   return (
-    <div className="panel">
-      <div className="panel__header">
-        <span className="panel__kicker">策略清单</span>
-        <h2 className="panel__title">8 策略总览</h2>
+    <CollapsiblePanel
+      collapsedKey="skills-catalog"
+      kicker="策略清单"
+      title="8 策略总览"
+      actions={
         <span style={{ marginLeft: "auto", color: "var(--text-muted)", fontSize: 13 }}>
           {skills.length} 套 · {formalCount} 正式 · {experimentCount} 实验
         </span>
-      </div>
-
+      }
+    >
       <div style={{ display: "grid", gap: "var(--space-2)" }}>
         {skills.map((s) => {
           const perf = perfMap[s.skill_id];
@@ -176,7 +170,7 @@ export function SkillsCatalogPanel() {
           color="var(--color-up)"
         />
       </div>
-    </div>
+    </CollapsiblePanel>
   );
 }
 

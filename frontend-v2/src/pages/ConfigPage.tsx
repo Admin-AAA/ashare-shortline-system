@@ -1,165 +1,320 @@
-import { Settings2, TrendingUp } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Cpu, KeyRound, Loader2, Plug, Save, Zap } from "lucide-react";
 import { api } from "../api/client";
-import type { SkillSummary } from "../types";
-import { PageSkeleton, ErrorPage, EmptyState } from "../components/StateViews";
-import { useApi } from "../app/useApi";
+import type { SystemLlmConfig, SystemLlmTestResult } from "../types";
+import { ErrorPage } from "../components/StateViews";
+import { ModelRoutesSection } from "../components/ModelRoutesSection";
+import { CollapsiblePanel } from "../components/CollapsiblePanel";
 
 /**
- * 配置页 —— 策略清单 + 各策略历史表现
- * 填补北极星"策略清单页"用户可见缺口。
- * 后端已有 GET /api/skills + /api/skills/{id}/performance-summary。
+ * 配置页 —— 系统 LLM 接口（agent_skill_*）配置与连通性测试。
+ *
+ * - 读取当前配置（GET /api/admin/system-llm，API Key 脱敏为 ********）
+ * - 表单修改 base_url / api_key / model / timeout / temperature / max_tokens
+ * - 「测试连接」：用当前表单值真实发起一次 OpenAI 兼容调用并回显延迟/样本
+ * - 「保存配置」：热更新内存 + 持久化到 .env（API Key 留空/******** 表示保留）
  */
-type SkillPerf = {
-  skill_id: string;
-  sample_count: number;
-  hit_rate: number;
-  avg_return: number;
+type FormState = {
+  base_url: string;
+  api_key: string;
+  model: string;
+  timeout_seconds: string;
+  temperature: string;
+  max_tokens: string;
 };
 
-type SkillsData = { skills: SkillSummary[]; perfs: Record<string, SkillPerf> };
+const EMPTY_FORM: FormState = {
+  base_url: "",
+  api_key: "",
+  model: "",
+  timeout_seconds: "",
+  temperature: "",
+  max_tokens: "",
+};
 
-async function fetchSkillsData(): Promise<SkillsData> {
-  const skills = await api.skills();
-  // 批量拉取所有策略绩效（1 次请求替代 N 次并发，减少 MySQL CPU 争抢）
-  let perfs: Record<string, SkillPerf> = {};
-  try {
-    const summaries = await api.batchSkillPerformanceSummaries();
-    for (const p of summaries) {
-      perfs[p.skill_id] = p;
-    }
-  } catch {
-    // 降级到逐个请求
-    const entries = await Promise.all(
-      skills.map(async (s) => {
-        try {
-          const p = await api.skillPerformanceSummary(s.skill_id);
-          return [s.skill_id, p] as const;
-        } catch {
-          return [s.skill_id, { skill_id: s.skill_id, sample_count: 0, hit_rate: 0, avg_return: 0 }] as const;
-        }
-      }),
-    );
-    for (const [id, p] of entries) perfs[id] = p;
-  }
-  return { skills, perfs };
-}
+const MASK = "********";
 
 export function ConfigPage() {
-  const { data, loading, error } = useApi<SkillsData>(fetchSkillsData, []);
-  const skills = data?.skills ?? null;
-  const perfs = data?.perfs ?? {};
+  const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
 
-  if (loading) return <PageSkeleton title="策略配置" hint="加载策略清单与历史表现" rowCount={6} />;
-  if (error) return <ErrorPage title="策略加载失败" message={error} />;
-  if (!skills || skills.length === 0)
-    return <EmptyState icon={<Settings2 size={32} />} title="暂无策略" reason="未安装任何策略" />;
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
-  // 按胜率排序：有样本的按胜率降序，无样本的排最后
-  const sorted = [...skills].sort((a, b) => {
-    const pa = perfs[a.skill_id];
-    const pb = perfs[b.skill_id];
-    const na = pa?.sample_count ?? 0;
-    const nb = pb?.sample_count ?? 0;
-    if (na === 0 && nb === 0) return 0;
-    if (na === 0) return 1;
-    if (nb === 0) return -1;
-    return (pb?.hit_rate ?? 0) - (pa?.hit_rate ?? 0);
-  });
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<SystemLlmTestResult | null>(null);
 
-  const total = skills.length;
-  const active = skills.filter((s) => s.mode === "formal").length;
-  const calledSkills = Object.values(perfs).filter((p) => p.sample_count > 0).length;
+  useEffect(() => {
+    let alive = true;
+    api
+      .systemLlmConfig()
+      .then((cfg: SystemLlmConfig) => {
+        if (!alive) return;
+        setForm({
+          base_url: cfg.base_url,
+          api_key: cfg.has_api_key ? MASK : "",
+          model: cfg.model,
+          timeout_seconds: String(cfg.timeout_seconds),
+          temperature: String(cfg.temperature),
+          max_tokens: String(cfg.max_tokens),
+        });
+        setLoaded(true);
+      })
+      .catch((e: unknown) => {
+        if (!alive) return;
+        setLoadError(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  function update<K extends keyof FormState>(key: K, value: string) {
+    setForm((f) => ({ ...f, [key]: value }));
+    setDirty(true);
+    setSaveMsg(null);
+    setTestResult(null);
+  }
+
+  async function handleTest() {
+    setTesting(true);
+    setTestResult(null);
+    setSaveMsg(null);
+    try {
+      const res = await api.testSystemLlmConfig({
+        base_url: form.base_url || undefined,
+        model: form.model || undefined,
+        api_key: form.api_key === MASK ? undefined : form.api_key || undefined,
+        timeout_seconds: form.timeout_seconds ? Number(form.timeout_seconds) : undefined,
+      });
+      setTestResult(res);
+    } catch (e: unknown) {
+      setTestResult({
+        ok: false,
+        latency_ms: 0,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      const res = await api.updateSystemLlmConfig({
+        base_url: form.base_url || undefined,
+        model: form.model || undefined,
+        api_key: form.api_key === MASK ? undefined : form.api_key || undefined,
+        timeout_seconds: form.timeout_seconds ? Number(form.timeout_seconds) : undefined,
+        temperature: form.temperature ? Number(form.temperature) : undefined,
+        max_tokens: form.max_tokens ? Number(form.max_tokens) : undefined,
+      });
+      // 保存成功后用后端回显覆盖（api_key 重新脱敏）
+      const cfg = res.config;
+      setForm({
+        base_url: cfg.base_url,
+        api_key: cfg.has_api_key ? MASK : "",
+        model: cfg.model,
+        timeout_seconds: String(cfg.timeout_seconds),
+        temperature: String(cfg.temperature),
+        max_tokens: String(cfg.max_tokens),
+      });
+      setDirty(false);
+      setSaveMsg(`已保存 ${res.updated.length} 项配置，即时生效。`);
+    } catch (e: unknown) {
+      setSaveMsg(`保存失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loadError) return <ErrorPage title="配置加载失败" message={loadError} />;
 
   return (
-    <div className="panel">
-      <div className="panel__header">
-        <span className="panel__kicker">配置</span>
-        <h2 className="panel__title">策略清单</h2>
-        <span style={{ marginLeft: "auto", color: "var(--text-muted)", fontSize: 13 }}>
-          {active}/{total} 正式 · {calledSkills}/{total} 有样本
+    <CollapsiblePanel
+      collapsedKey="config-llm"
+      kicker="配置"
+      title="系统 LLM 接口"
+      actions={
+        <span style={{ marginLeft: "auto", color: "var(--muted)", fontSize: "var(--text-sm)" }}>
+          Skill Agent 推理通道（OpenAI 兼容）
         </span>
-      </div>
-
-      <div style={{ display: "grid", gap: "var(--space-3)" }}>
-        {sorted.map((s) => {
-          const p = perfs[s.skill_id];
-          const n = p?.sample_count ?? 0;
-          const wr = n > 0 ? p!.hit_rate * 100 : 0;
-          const avg = p?.avg_return ?? 0;
-          const hasSample = n > 0;
-          const wrColor = !hasSample
-            ? "var(--text-muted)"
-            : wr >= 60
-              ? "var(--color-up)"
-              : wr >= 45
-                ? "var(--text-secondary)"
-                : "var(--color-down)";
-          return (
-            <div
-              key={s.skill_id}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr auto auto auto",
-                gap: "var(--space-4)",
-                alignItems: "center",
-                padding: "var(--space-3) var(--space-4)",
-                background: "var(--surface-1)",
-                borderRadius: 8,
-              }}
-            >
-              <div>
-                <div style={{ fontWeight: 600 }}>{s.name}</div>
-                <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>
-                  {s.skill_id} · {s.mode}
-                  {s.assigned_presets.length > 0 && ` · ${s.assigned_presets.join(" / ")}`}
-                </div>
-              </div>
-              <Metric label="样本" value={hasSample ? String(n) : "—"} />
-              <Metric label="胜率" value={hasSample ? `${wr.toFixed(1)}%` : "—"} color={wrColor} />
-              <Metric
-                label="平均"
-                value={hasSample ? `${avg >= 0 ? "+" : ""}${avg.toFixed(2)}%` : "—"}
-                color={hasSample ? (avg >= 0 ? "var(--color-up)" : "var(--color-down)") : "var(--text-muted)"}
-              />
-            </div>
-          );
-        })}
-      </div>
-
+      }
+    >
       <div
         style={{
           marginTop: "var(--space-4)",
-          padding: "var(--space-3)",
-          background: "var(--surface-2)",
-          borderRadius: 6,
-          fontSize: "var(--text-sm)",
-          color: "var(--text-muted)",
-          display: "flex",
-          gap: "var(--space-2)",
-          alignItems: "center",
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+          gap: "var(--space-4)",
         }}
       >
-        <TrendingUp size={14} />
-        按历史胜率排序；样本量 {'<'} 10 的策略结果不稳健，仅供参考。
+        <Field label="Base URL" hint="OpenAI 兼容接口地址" icon={<Plug size={15} />}>
+          <input
+            className="cfg-input"
+            value={form.base_url}
+            placeholder="https://api.deepseek.com"
+            onChange={(e) => update("base_url", e.target.value)}
+          />
+        </Field>
+
+        <Field label="API Key" hint="留空表示保留当前 Key" icon={<KeyRound size={15} />}>
+          <input
+            className="cfg-input"
+            type="password"
+            value={form.api_key}
+            placeholder={loaded && form.api_key === MASK ? "已配置（隐藏）" : "sk-..."}
+            onChange={(e) => update("api_key", e.target.value)}
+          />
+        </Field>
+
+        <Field label="模型" hint="如 deepseek-chat" icon={<Cpu size={15} />}>
+          <input
+            className="cfg-input"
+            value={form.model}
+            placeholder="deepseek-chat"
+            onChange={(e) => update("model", e.target.value)}
+          />
+        </Field>
+
+        <Field label="超时（秒）" hint="单次调用超时" icon={<Zap size={15} />}>
+          <input
+            className="cfg-input"
+            type="number"
+            min={1}
+            step={1}
+            value={form.timeout_seconds}
+            onChange={(e) => update("timeout_seconds", e.target.value)}
+          />
+        </Field>
+
+        <Field label="Temperature" hint="0 - 1，越低越稳" icon={<Zap size={15} />}>
+          <input
+            className="cfg-input"
+            type="number"
+            min={0}
+            max={2}
+            step={0.1}
+            value={form.temperature}
+            onChange={(e) => update("temperature", e.target.value)}
+          />
+        </Field>
+
+        <Field label="Max Tokens" hint="单次最大输出" icon={<Zap size={15} />}>
+          <input
+            className="cfg-input"
+            type="number"
+            min={1}
+            step={1}
+            value={form.max_tokens}
+            onChange={(e) => update("max_tokens", e.target.value)}
+          />
+        </Field>
       </div>
-    </div>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-3)", marginTop: "var(--space-5)", alignItems: "center" }}>
+        <button className="cfg-btn cfg-btn--primary" onClick={handleTest} disabled={testing || !loaded}>
+          {testing ? <Loader2 size={15} className="spin" /> : <Plug size={15} />}
+          {testing ? "测试中…" : "测试连接"}
+        </button>
+        <button className="cfg-btn" onClick={handleSave} disabled={saving || !dirty}>
+          {saving ? <Loader2 size={15} className="spin" /> : <Save size={15} />}
+          {saving ? "保存中…" : "保存配置"}
+        </button>
+        {dirty && !saving && (
+          <span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }}>有未保存的修改</span>
+        )}
+      </div>
+
+      {saveMsg && (
+        <div
+          style={{
+            marginTop: "var(--space-3)",
+            padding: "var(--space-3)",
+            borderRadius: 8,
+            fontSize: "var(--text-sm)",
+            background: saveMsg.startsWith("保存失败") ? "color-mix(in srgb, var(--color-down) 14%, transparent)" : "color-mix(in srgb, var(--color-up) 14%, transparent)",
+            color: saveMsg.startsWith("保存失败") ? "var(--color-down)" : "var(--color-up)",
+          }}
+        >
+          {saveMsg}
+        </div>
+      )}
+
+      {testResult && (
+        <div
+          style={{
+            marginTop: "var(--space-4)",
+            padding: "var(--space-4)",
+            borderRadius: 10,
+            border: `1px solid ${testResult.ok ? "color-mix(in srgb, var(--color-up) 35%, transparent)" : "color-mix(in srgb, var(--color-down) 35%, transparent)"}`,
+            background: testResult.ok ? "color-mix(in srgb, var(--color-up) 8%, transparent)" : "color-mix(in srgb, var(--color-down) 8%, transparent)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: "var(--space-2)" }}>
+            <span
+              style={{
+                fontSize: "var(--text-xs)",
+                fontWeight: 600,
+                padding: "2px 10px",
+                borderRadius: 999,
+                color: testResult.ok ? "var(--color-up)" : "var(--color-down)",
+                background: testResult.ok ? "color-mix(in srgb, var(--color-up) 16%, transparent)" : "color-mix(in srgb, var(--color-down) 16%, transparent)",
+              }}
+            >
+              {testResult.ok ? "连通正常" : "连接失败"}
+            </span>
+            <span style={{ fontSize: "var(--text-sm)", color: "var(--muted)" }}>
+              延迟 {testResult.latency_ms} ms
+              {testResult.model ? ` · ${testResult.model}` : ""}
+            </span>
+          </div>
+          {testResult.ok ? (
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-sm)" }}>
+              模型回显：<span style={{ color: "var(--text)" }}>{testResult.sample || "（空响应）"}</span>
+            </div>
+          ) : (
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-sm)", color: "var(--color-down)", whiteSpace: "pre-wrap" }}>
+              {testResult.error}
+            </div>
+          )}
+        </div>
+      )}
+
+      <p style={{ marginTop: "var(--space-5)", color: "var(--text-muted)", fontSize: "var(--text-xs)", lineHeight: 1.6 }}>
+        测试与保存均作用于「系统 LLM 接口」（agent_skill_*）：Skill Agent 推理所调用的 OpenAI 兼容端点。
+        保存会即时热更新运行中的配置并写入 .env 持久化，无需重启后端。
+      </p>
+
+      {/* 模型路由：调整优先级 + 逐条测试 + 配置独立 Key */}
+      <ModelRoutesSection />
+    </CollapsiblePanel>
   );
 }
 
-function Metric({ label, value, color }: { label: string; value: string; color?: string }) {
+function Field({
+  label,
+  hint,
+  icon,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  icon?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
-    <div style={{ textAlign: "right" }}>
-      <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{label}</div>
-      <div
-        style={{
-          fontFamily: "var(--font-mono, monospace)",
-          fontSize: "var(--text-lg)",
-          fontWeight: 600,
-          color: color || "var(--text-primary)",
-        }}
-      >
-        {value}
+    <label style={{ display: "block" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, color: "var(--text-secondary)", fontSize: "var(--text-sm)" }}>
+        {icon}
+        <span style={{ fontWeight: 600 }}>{label}</span>
+        {hint && <span style={{ color: "var(--muted)", fontWeight: 400 }}>· {hint}</span>}
       </div>
-    </div>
+      {children}
+    </label>
   );
 }

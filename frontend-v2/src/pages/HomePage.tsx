@@ -7,25 +7,30 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { api } from "../api/client";
-import type { CockpitRecommendation, DashboardOverview } from "../types";
+import type { CockpitRecommendation, DashboardOverview, HomeBootstrap } from "../types";
 import { CardSkeleton, EmptyState, ErrorPage } from "../components/StateViews";
-import { MarketTempPanel, Metric, Sep, regimeToLabel } from "../components/HomePanels";
+import {
+  LatestRunCard,
+  MarketBreadthPanel,
+  QuickNavGrid,
+  Sep,
+  SkillStatusStrip,
+} from "../components/HomePanels";
+import { StockTicker } from "../components/StockTicker";
+import { CollapsiblePanel } from "../components/CollapsiblePanel";
 import { useUrlRoute } from "../app/useUrlRoute";
 
 /**
- * 驾驶舱首页 —— 精简后的 2 列 3 面板 + 1 状态条
- * 见 docs/UX-architecture-full-report.md §6.2
- *
- * 只回答 30 秒内的三个问题：
- * 1. 今天能不能做？ → 市场温度（含风险信号）
- * 2. 跑出结果了吗？ → 运行状态 + 状态条
- * 3. 有哪些候选？ → 龙头候选卡
+ * 驾驶舱首页 —— 状态条 + 温度面板 + 运行状态/龙头候选 + 最近产出/工作区/策略开关
  */
 export function HomePage() {
   const { navigate, navigateSection } = useUrlRoute();
   const [data, setData] = useState<DashboardOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  // 合并自着陆页的独有数据：最近 run + 策略开关状态 + 市场宽度
+  const [boot, setBoot] = useState<HomeBootstrap | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -39,6 +44,15 @@ export function HomePage() {
       })
       .finally(() => setLoading(false));
     return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    api
+      .bootstrap()
+      .then((d) => setBoot(d))
+      .catch(() => {
+        /* 着陆页数据非关键，失败则静默降级，不阻塞驾驶舱 */
+      });
   }, []);
 
   if (loading) return <HomePageSkeleton />;
@@ -58,23 +72,56 @@ export function HomePage() {
         candidateCount={recommendations.length}
       />
 
+      {/* 温度 —— 原市场宽度，提升为驾驶舱首屏核心指标 */}
+      {boot && (
+        <CollapsiblePanel kicker="温度" title="今日涨跌家数">
+          <MarketBreadthPanel snapshot={boot.market_snapshot} />
+        </CollapsiblePanel>
+      )}
+
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "minmax(0, 2fr) minmax(0, 3fr)",
+          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 3fr)",
           gap: "var(--space-4)",
           alignItems: "start",
         }}
       >
-        {/* 左列：市场温度 + 运行状态 */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
-          <MarketTempPanel market={market} radar={risk_radar} />
-          <RunStatusPanel run={current_run} hasRun={hasRun} canRun={canRun} onRun={() => navigate("/run")} onViewHistory={() => navigateSection("history")} />
-        </div>
+        {/* 左列：运行状态（已移除 MarketTempPanel） */}
+        <RunStatusPanel run={current_run} hasRun={hasRun} canRun={canRun} onRun={() => navigate("/run")} onViewHistory={() => navigateSection("history")} />
 
         {/* 右列：龙头候选（视觉重心） */}
         <CandidatePanel items={recommendations} onViewAll={() => navigateSection("pool")} />
       </div>
+
+      {/* 合并自着陆页的独有内容：最近产出 / 工作区 / 策略开关 */}
+      {boot && (
+        <>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+              gap: "var(--space-4)",
+              alignItems: "start",
+            }}
+          >
+            <CollapsiblePanel kicker="最近产出" title="最新推荐 run">
+              <LatestRunCard
+                run={boot.recent_runs.formal ?? boot.recent_runs.experiment}
+                onOpen={() => navigateSection("dashboard")}
+              />
+            </CollapsiblePanel>
+
+            <CollapsiblePanel kicker="工作区" title="快速进入">
+              <QuickNavGrid onNavigate={navigateSection} />
+            </CollapsiblePanel>
+          </div>
+
+          <CollapsiblePanel kicker="系统" title="策略开关状态">
+            <SkillStatusStrip summary={boot.skill_summary} />
+          </CollapsiblePanel>
+        </>
+      )}
     </div>
   );
 }
@@ -147,17 +194,16 @@ function RunStatusPanel({
   onViewHistory: () => void;
 }) {
   return (
-    <section className="panel">
-      <div className="panel__header">
-        <div>
-          <div className="panel__kicker">运行状态</div>
-          <h3 className="panel__title">
-            <Activity size={16} />
-            {hasRun ? "今日已运行" : run.status === "running" ? "运行中" : "今日未运行"}
-          </h3>
-        </div>
-      </div>
-
+    <CollapsiblePanel
+      kicker="运行状态"
+      title={
+        <>
+          <Activity size={16} />
+          {hasRun ? "今日已运行" : run.status === "running" ? "运行中" : "今日未运行"}
+        </>
+      }
+      collapsedKey="home-status"
+    >
       <div style={{ fontSize: "var(--text-sm)", color: "var(--ink-secondary)", marginBottom: "var(--space-4)" }}>
         {run.message || "暂无运行消息"}
       </div>
@@ -185,7 +231,7 @@ function RunStatusPanel({
           </button>
         </div>
       )}
-    </section>
+    </CollapsiblePanel>
   );
 }
 
@@ -200,21 +246,23 @@ function CandidatePanel({
   const top = items.slice(0, 5);
 
   return (
-    <section className="panel" style={{ minHeight: 360 }}>
-      <div className="panel__header">
-        <div>
-          <div className="panel__kicker">龙头候选 · 今日 top 5</div>
-          <h3 className="panel__title">
-            <TrendingUp size={16} />
-            候选 {items.length} 只
-          </h3>
-        </div>
+    <CollapsiblePanel
+      kicker="龙头候选 · 今日 top 5"
+      title={
+        <>
+          <TrendingUp size={16} />
+          候选 {items.length} 只
+        </>
+      }
+      collapsedKey="home-candidates"
+      className="panel--min360"
+      actions={
         <button className="btn btn--ghost" onClick={onViewAll}>
           查看全部
           <ChevronRight size={14} />
         </button>
-      </div>
-
+      }
+    >
       {top.length === 0 ? (
         <EmptyState
           icon={<AlertTriangle size={28} />}
@@ -252,7 +300,7 @@ function CandidatePanel({
           <span>通过率 {passRate(items).toFixed(0)}%</span>
         </div>
       )}
-    </section>
+    </CollapsiblePanel>
   );
 }
 
@@ -282,6 +330,7 @@ function CandidateCard({ item, rank }: { item: CockpitRecommendation; rank: numb
         <div>
           <div className="text-muted text-mono" style={{ fontSize: "var(--text-xs)" }}>
             #{rank} {item.code}
+            <StockTicker code={item.code} />
           </div>
           <div style={{ fontWeight: 600, color: "var(--ink)" }}>{item.name}</div>
         </div>
@@ -375,9 +424,12 @@ function HomePageSkeleton() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
       <div className="skeleton" style={{ height: 40, borderRadius: "var(--radius-lg)" }} />
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 3fr", gap: "var(--space-4)" }}>
+      {/* 温度面板 */}
+      <CardSkeleton count={1} />
+      {/* 运行状态 + 龙头候选 */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 3fr", gap: "var(--space-4)" }}>
+        <CardSkeleton count={1} />
         <CardSkeleton count={2} />
-        <CardSkeleton count={3} />
       </div>
     </div>
   );

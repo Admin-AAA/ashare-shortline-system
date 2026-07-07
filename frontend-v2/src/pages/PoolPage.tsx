@@ -8,6 +8,7 @@ import { api } from "../api/client";
 import type { CockpitRecommendation } from "../types";
 import { EmptyState, ErrorPage } from "../components/StateViews";
 import { PoolExpandedRow } from "../components/PoolExpandedRow";
+import { StockTicker } from "../components/StockTicker";
 import { useUrlRoute } from "../app/useUrlRoute";
 import { useApi } from "../app/useApi";
 import { queryParam } from "../app/nav";
@@ -115,10 +116,10 @@ export function PoolPage() {
               onClick={() => toggle(c.recommendation_id)}
               style={{
                 width: "100%",
-                display: "grid",
-                gridTemplateColumns: "28px 76px minmax(150px,1fr) 168px 84px 112px 24px",
+                display: "flex",
                 alignItems: "center",
                 gap: "var(--space-3)",
+                flexWrap: "wrap",
                 padding: "var(--space-3) var(--space-4)",
                 background: "transparent",
                 border: "none",
@@ -126,41 +127,66 @@ export function PoolPage() {
                 cursor: "pointer",
               }}
             >
-              <span className="text-mono text-muted" style={{ fontSize: "var(--text-sm)" }}>#{i + 1}</span>
-              <span className="text-mono" style={{ fontSize: "var(--text-sm)" }}>{c.code}</span>
-              <div style={{ minWidth: 0 }}>
-                <div
-                  style={{
-                    fontWeight: 600,
-                    color: "var(--ink)",
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
-                >
-                  {c.name}
-                </div>
-                {c.entry_rule && (
+              {/* 身份区：排名 + 代码徽标 + 名称 —— 始终在左、永不裁切 */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "var(--space-2)",
+                  minWidth: 0,
+                  flex: "1 1 220px",
+                }}
+              >
+                <span className="text-mono text-muted" style={{ fontSize: "var(--text-sm)", flexShrink: 0 }}>
+                  #{i + 1}
+                </span>
+                <StockTicker code={c.code} />
+                <div style={{ minWidth: 0 }}>
                   <div
                     style={{
-                      fontSize: "var(--text-xs)",
-                      color: "var(--text-muted)",
+                      fontWeight: 600,
+                      color: "var(--ink)",
                       whiteSpace: "nowrap",
                       overflow: "hidden",
                       textOverflow: "ellipsis",
-                      marginTop: 2,
                     }}
                   >
-                    入场 · {c.entry_rule}
+                    {c.name}
                   </div>
-                )}
+                  {c.entry_rule && (
+                    <div
+                      style={{
+                        fontSize: "var(--text-xs)",
+                        color: "var(--text-muted)",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        marginTop: 2,
+                      }}
+                    >
+                      入场 · {c.entry_rule}
+                    </div>
+                  )}
+                </div>
               </div>
-              <TradeParamsInline item={c} />
-              <span className="text-mono" style={{ fontWeight: 700, color: "var(--accent-strong)", fontSize: "var(--text-lg)" }}>
-                {c.final_score.toFixed(0)}
-              </span>
-              <RiskTag level={c.risk_level} setup={c.setup_type} />
-              {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+
+              {/* 次级信息组：交易参数 + 评分 + 风险 + 展开箭头 —— 窄屏自动换行到第二行 */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "var(--space-3)",
+                  flexWrap: "wrap",
+                  marginLeft: "auto",
+                }}
+              >
+                <TradeParamsInline item={c} />
+                <span className="text-mono" style={{ fontWeight: 700, color: "var(--accent-strong)", fontSize: "var(--text-lg)" }}>
+                  {c.final_score.toFixed(0)}
+                </span>
+                <RiskTag level={c.risk_level} setup={c.setup_type} />
+                {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+              </div>
             </button>
 
             {isOpen && (

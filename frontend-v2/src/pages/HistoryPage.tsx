@@ -3,9 +3,11 @@ import { Fragment, useCallback, useState } from "react";
 import { api } from "../api/client";
 import type { RecommendationCard, RecommendationHistoryResponse } from "../types";
 import { PageSkeleton, ErrorPage, EmptyState } from "../components/StateViews";
+import { CollapsiblePanel } from "../components/CollapsiblePanel";
 import { useApi } from "../app/useApi";
 import { RecommendationDetailCard } from "../components/RecommendationDetailCard";
 import { fmtPrice } from "../components/Shared";
+import { exitReasonLabel } from "../utils/display";
 
 /**
  * 复盘页 —— 推荐历史记录（跨 run，按 trade_date 倒序，带 outcome）。
@@ -75,15 +77,16 @@ export function HistoryPage() {
   const hasOutcome = items.some((it) => it.outcome);
 
   return (
-    <div className="panel">
-      <div className="panel__header">
-        <span className="panel__kicker">复盘</span>
-        <h2 className="panel__title">推荐历史</h2>
+    <CollapsiblePanel
+      collapsedKey="history-recs"
+      kicker="复盘"
+      title="推荐历史"
+      actions={
         <span style={{ marginLeft: "auto", color: "var(--muted)", fontSize: "var(--text-base)" }}>
           共 {total} 笔 · 当前 {page * pageSize + 1}-{Math.min((page + 1) * pageSize, total)}
         </span>
-      </div>
-
+      }
+    >
       {/* 筛选栏 */}
       <div
         style={{
@@ -234,8 +237,8 @@ export function HistoryPage() {
                       </td>
                       <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>
                         <div style={stackStyle}>
-                          <span>{o?.exit_reason ?? "—"}</span>
-                          <span>{o?.holding_days != null ? `${o.holding_days}d` : "—"}</span>
+                          <span>{exitReasonLabel(o?.exit_reason)}</span>
+                          <span>{o?.holding_days != null ? `持仓 ${o.holding_days} 天` : "—"}</span>
                         </div>
                       </td>
                     </tr>
@@ -288,7 +291,7 @@ export function HistoryPage() {
           </div>
         </>
       )}
-    </div>
+    </CollapsiblePanel>
   );
 }
 

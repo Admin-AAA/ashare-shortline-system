@@ -86,6 +86,35 @@ const STATUS_LABELS: Record<string, string> = {
   insufficient_minute_coverage: "分钟线不足，暂停回测",
 };
 
+// 退出原因（exit_reason）原始码 → 中文标签。
+// 与 backend/app/services/outcome_service.py 的 _build_outcome_reason 标签对齐，
+// 并补齐隔夜持仓 / trailing stop 等来源的值。复盘页与记录页共用，避免散落硬编码。
+export const EXIT_REASON_LABELS: Record<string, string> = {
+  take_profit_hit: "盘中触发止盈",
+  take_profit_gap: "开盘跳空止盈",
+  stop_loss_hit: "盘中触发止损",
+  stop_loss_gap: "开盘跳空止损",
+  stop_loss_intraday_both_hit: "同日触止盈止损(保守止损)",
+  horizon_close: "持有到观察期结束",
+  limit_down_locked_horizon_mark: "一字跌停/无流动性(期末标记)",
+  horizon_close_after_locked_limit_down: "递延至观察期末",
+  trailing_stop_hit: "移动止盈触发",
+  trailing_stop_gap: "开盘跳空移动止盈",
+  not_triggered: "未触发",
+  recommendation_execution_blocked: "推荐不可真实成交",
+  gap_up_blocked: "高开未达成交",
+  next_morning_exit: "次日开盘退出",
+  one_word_limit_up_hold: "一字涨停持有",
+  shrinking_limit_up_hold: "缩量涨停持有",
+  deferred_after_limit_up: "涨停后递延",
+};
+
+export function exitReasonLabel(value: unknown, fallback = "—") {
+  const raw = String(value ?? "").trim();
+  if (!raw) return fallback;
+  return EXIT_REASON_LABELS[raw] ?? raw;
+}
+
 export function businessStatusLabel(value: unknown, fallback = "状态待确认") {
   const raw = String(value ?? "").trim();
   if (!raw) return fallback;

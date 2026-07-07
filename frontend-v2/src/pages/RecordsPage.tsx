@@ -33,6 +33,7 @@ import {
 import { useApi } from "../app/useApi";
 import { useUrlRoute } from "../app/useUrlRoute";
 import { queryParam } from "../app/nav";
+import { exitReasonLabel } from "../utils/display";
 
 /**
  * 记录中心 —— 两类历史记录的统一复盘入口：
@@ -664,7 +665,7 @@ function OutcomeSection({
           {outcome.exit_reason && (
             <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
               <span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }}>退出原因</span>
-              <span style={{ fontSize: "var(--text-base)", color: "var(--text)" }}>{outcome.exit_reason}</span>
+              <span style={{ fontSize: "var(--text-base)", color: "var(--text)" }}>{exitReasonLabel(outcome.exit_reason)}</span>
             </div>
           )}
         </div>

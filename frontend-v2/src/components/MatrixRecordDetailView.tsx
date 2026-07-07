@@ -4,6 +4,7 @@ import type { MatrixRecordDetail } from "../types";
 import { ErrorPage, PageSkeleton } from "./StateViews";
 import { useApi } from "../app/useApi";
 import { Metric, ReturnStat, fmtPrice } from "./recordsShared";
+import { CollapsiblePanel } from "./CollapsiblePanel";
 
 /** 矩阵记录详情视图 —— 从 RecordsPage.tsx 抽离。 */
 export function MatrixRecordDetailView({ recordId, onBack }: { recordId: number; onBack: () => void }) {
@@ -22,19 +23,12 @@ export function MatrixRecordDetailView({ recordId, onBack }: { recordId: number;
         返回记录列表
       </button>
 
-      <section className="panel">
-        <div className="panel__header">
-          <div>
-            <div className="panel__kicker">矩阵分析详情</div>
-            <h3 className="panel__title" style={{ fontFamily: "var(--font-mono)" }}>
-              {data.code} · {data.trade_date}
-            </h3>
-          </div>
-          <span style={{ color: data.analysis_type === "backtest" ? "var(--accent)" : "var(--muted)" }}>
-            {data.analysis_type}
-          </span>
-        </div>
-
+      <CollapsiblePanel
+        collapsedKey="matrix-detail-meta"
+        kicker="矩阵分析详情"
+        title={<span style={{ fontFamily: "var(--font-mono)" }}>{data.code} · {data.trade_date}</span>}
+        actions={<span style={{ color: data.analysis_type === "backtest" ? "var(--accent)" : "var(--muted)" }}>{data.analysis_type}</span>}
+      >
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "var(--space-3)" }}>
           <Metric label="基准价" value={fmtPrice(data.base_price)} mono />
           <Metric label="综合评分" value={data.final_score != null ? data.final_score.toFixed(1) : "—"} mono />
@@ -43,19 +37,14 @@ export function MatrixRecordDetailView({ recordId, onBack }: { recordId: number;
           <Metric label="skill数" value={String(data.skill_count)} mono />
           <Metric label="耗时" value={data.elapsed_ms != null ? `${(data.elapsed_ms / 1000).toFixed(1)}s` : "—"} />
         </div>
-      </section>
+      </CollapsiblePanel>
 
-      <section className="panel">
-        <div className="panel__header">
-          <div>
-            <div className="panel__kicker">实际收益</div>
-            <h3 className="panel__title">分析日 → 今天</h3>
-          </div>
-          <span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }}>
-            基准 = 分析日收盘价 · 至 {r.as_of_date || "—"}
-          </span>
-        </div>
-
+      <CollapsiblePanel
+        collapsedKey="matrix-detail-returns"
+        kicker="实际收益"
+        title="分析日 → 今天"
+        actions={<span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }}>基准 = 分析日收盘价 · 至 {r.as_of_date || "—"}</span>}
+      >
         <div style={{ display: "flex", gap: "var(--space-5)", flexWrap: "wrap", padding: "var(--space-3) 0" }}>
           <ReturnStat label="1日" value={r.return_1d} />
           <ReturnStat label="3日" value={r.return_3d} />
@@ -66,16 +55,10 @@ export function MatrixRecordDetailView({ recordId, onBack }: { recordId: number;
           最新交易日：<span className="text-mono">{r.latest_date || "—"}</span>
           {r.latest_close != null && <> · 收盘 <span className="text-mono">{fmtPrice(r.latest_close)}</span></>}
         </div>
-      </section>
+      </CollapsiblePanel>
 
       {data.result && Object.keys(data.result).length > 0 && (
-        <section className="panel">
-          <div className="panel__header">
-            <div>
-              <div className="panel__kicker">完整分析结果</div>
-              <h3 className="panel__title">原始 JSON</h3>
-            </div>
-          </div>
+        <CollapsiblePanel collapsedKey="matrix-detail-raw" kicker="完整分析结果" title="原始 JSON">
           <pre style={{
             background: "var(--surface-soft)",
             padding: "var(--space-3)",
@@ -88,7 +71,7 @@ export function MatrixRecordDetailView({ recordId, onBack }: { recordId: number;
           }}>
             {JSON.stringify(data.result, null, 2)}
           </pre>
-        </section>
+        </CollapsiblePanel>
       )}
     </div>
   );
