@@ -1051,9 +1051,20 @@ def filter_effectiveness(
 
     返回被过滤 vs 保留交易的 WR/avg/笔数，用于监控过滤策略效果。
     """
+    w_start, w_end = _resolve_window(window_days, start_date, end_date)
+    key = f"filter_eff:{run_mode}:{w_start or ''}:{w_end or ''}"
+    return _cached(key, lambda: _filter_effectiveness_impl(db, run_mode, w_start, w_end, window_days))
+
+
+def _filter_effectiveness_impl(
+    db: Session,
+    run_mode: str,
+    w_start: str | None,
+    w_end: str | None,
+    window_days: int | None = None,
+) -> dict[str, Any]:
     import json as _json
 
-    w_start, w_end = _resolve_window(window_days, start_date, end_date)
     stmt = (
         select(Recommendation, RecommendationOutcome)
         .join(RecommendationOutcome, RecommendationOutcome.recommendation_id == Recommendation.recommendation_id)
