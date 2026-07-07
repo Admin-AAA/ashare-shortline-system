@@ -41,13 +41,13 @@ universe:
 
 prefilter:
   market:
+    # dsa_trend_score 是 build_features 后置衍生分,prefilter 阶段为 0 会死锁;
+    # 趋势强度已由 universe(pos60>=55,off_high_pct>=-10,chg20>=3) + phases.破位回避(dsa_trend_score<18 硬否决) 兜底
     include:
       - when: "max_dd20 >= -14"
         reason: "drawdown_too_large"
       - when: "upper_shadow_count20 <= 5"
         reason: "upper_shadow_too_many"
-      - when: "dsa_trend_score >= 18"
-        reason: "trend_not_strong_enough"
       - when: "vol5_20 <= 1.05"
         reason: "pullback_volume_not_shrink"
     include_any:
@@ -64,8 +64,7 @@ prefilter:
         reason: "trend_broken"
       - when: "vol5_20 >= 1.5 and pct < 0"
         reason: "volume_down_not_pullback"
-      - when: "limit_up_overheat_score >= 78"
-        reason: "emotion_overheat"
+      # limit_up_overheat_score(后置衍生分)移到 risk.rules,build_features 后判断
 
 phases:
   - name: 破位回避
@@ -183,3 +182,7 @@ risk:
       level: high
       flag: 新闻风险未完全排除
       score_delta: -10
+    - when: "limit_up_overheat_score >= 78"
+      level: high
+      flag: 涨停情绪过热,不做回踩低吸
+      score_delta: -12

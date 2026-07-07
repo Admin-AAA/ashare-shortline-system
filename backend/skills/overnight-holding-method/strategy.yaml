@@ -52,17 +52,15 @@ universe:
 
 prefilter:
   market:
+    # prefilter 只用盘后立即可得的原始字段;资本共振/涨停过热等衍生分
+    # 在 build_features 之后由 setup(capital_resonance_score>=45) / risk(limit_up_overheat_score>=70) 精确确认
     include:
       - when: "limit_up_days20 >= 1"
         reason: "requires_recent_limit_up"
-      - when: "capital_resonance_score >= 45"
-        reason: "requires_capital_resonance"
       - when: "turnover_rate >= 5"
         reason: "turnover_too_low"
       - when: "turnover_rate <= 10"
         reason: "turnover_too_high"
-      - when: "limit_up_overheat_score < 70"
-        reason: "overheat_too_high"
 
 phases:
   - name: 尾盘观察
