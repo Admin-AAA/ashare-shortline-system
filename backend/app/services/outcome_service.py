@@ -3,7 +3,7 @@ import logging
 import threading
 import time
 from bisect import bisect_left
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -53,6 +53,51 @@ OUTCOME_SUCCESS = "success"
 OUTCOME_FAILED = "failed"
 OUTCOME_MISSED = "missed"
 EXECUTED_OUTCOME_LABELS = {OUTCOME_SUCCESS, OUTCOME_FAILED}
+
+# outcome 结算滞后天数：每日推荐需等 K 线走完 horizon（cron 默认 20 天）才会被
+# label_pending_outcomes 标注为 success/failed/missed。滚动窗口模式下自动把
+# end_date 截到 today - SETTLE_LAG_DAYS，保证窗口内推荐均已结算，避免 pending
+# 污染样本（_metric_records_from_rows 虽会跳过 pending，但样本数会偏少且不可解释）。
+SETTLE_LAG_DAYS = 20
+
+
+def _resolve_window(
+    window_days: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> tuple[str | None, str | None]:
+    """将 window_days / start_date / end_date 解析为 (start, end) ISO 日期字符串。
+
+    优先级：window_days > 显式 start_date/end_date。
+    window_days=N 时：start = today - N，end = today - SETTLE_LAG_DAYS（已结算截止日）。
+    显式模式：end_date 不强制截断（调用方自行决定是否含未结算区间）。
+    """
+    if window_days is not None and window_days > 0:
+        today = date.today()
+        start = (today - timedelta(days=window_days)).isoformat()
+        end = (today - timedelta(days=SETTLE_LAG_DAYS)).isoformat()
+        return start, end
+    return start_date, end_date
+
+
+def _window_meta(
+    window_days: int | None,
+    start_date: str | None,
+    end_date: str | None,
+    total_count: int,
+    labeled_count: int,
+) -> dict[str, Any]:
+    """构建响应里的 date_range 元信息，供前端展示时间窗口与结算截止说明。"""
+    return {
+        "window_days": window_days,
+        "start_date": start_date,
+        "end_date": end_date,
+        "settle_lag_days": SETTLE_LAG_DAYS,
+        "settle_cutoff": (date.today() - timedelta(days=SETTLE_LAG_DAYS)).isoformat() if window_days else None,
+        "total_in_window": total_count,
+        "labeled_in_window": labeled_count,
+        "pending_excluded": max(0, total_count - labeled_count),
+    }
 
 # 短时缓存
 _metrics_cache: dict[str, tuple[float, Any]] = {}
@@ -141,7 +186,7 @@ def resolved_trade_return(outcome: RecommendationOutcome | Any | None) -> float:
 def is_accurate_recommendation(outcome: RecommendationOutcome | Any | None) -> bool:
     """严格准确推荐口径：真实成交，且扣费后净收益为正。
 
-    executed_return 已含滑点但未扣佣金+印花税（_ADDITIONAL_COST_PCT=0.10%），
+    executed_return 已含滑点但未扣佣金+印花税（_ADDITIONAL_COST_PCT，佣金万1双边+印花税0.05%卖出），
     阈值必须覆盖这部分成本，与 outcome_label 判定保持一致。
     """
     return bool(is_trade_executed(outcome) and resolved_trade_return(outcome) > _ADDITIONAL_COST_PCT)
@@ -346,12 +391,26 @@ def recompute_stale_outcomes(
     return {"recomputed": recomputed, "errors": errors, "flipped": flipped}
 
 
-def overview_metrics(db: Session, run_mode: str = "formal") -> dict[str, Any]:
-    return _cached(f"overview:{run_mode}", lambda: _overview_metrics(db, run_mode))
+def overview_metrics(
+    db: Session,
+    run_mode: str = "formal",
+    window_days: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, Any]:
+    start, end = _resolve_window(window_days, start_date, end_date)
+    key = f"overview:{run_mode}:{start or ''}:{end or ''}"
+    return _cached(key, lambda: _overview_metrics(db, run_mode, start, end, window_days))
 
 
-def _overview_metrics(db: Session, run_mode: str) -> dict[str, Any]:
-    rows = _scoped_recommendation_rows(db, run_mode)
+def _overview_metrics(
+    db: Session,
+    run_mode: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    window_days: int | None = None,
+) -> dict[str, Any]:
+    rows = _scoped_recommendation_rows(db, run_mode, start_date, end_date)
     total_recs = len(rows)
 
     labeled = [row for row in rows if normalized_outcome_label(row) != OUTCOME_PENDING]
@@ -376,6 +435,7 @@ def _overview_metrics(db: Session, run_mode: str) -> dict[str, Any]:
             "pending_count": max(0, total_recs - n),
             "success_count": 0,
             "failed_count": 0,
+            "date_range": _window_meta(window_days, start_date, end_date, total_recs, 0),
         }
 
     # ── 收集交易日期 → 批量查询基准指数 ──
@@ -465,15 +525,30 @@ def _overview_metrics(db: Session, run_mode: str) -> dict[str, Any]:
         "accuracy_numerator": full_metrics.get("accuracy_numerator", 0),
         "accuracy_denominator": full_metrics.get("accuracy_denominator", n),
         "accuracy_basis": full_metrics.get("accuracy_basis", "labeled_recommendations"),
+        "date_range": _window_meta(window_days, start_date, end_date, total_recs, n),
     }
 
 
-def metrics_by_strategy(db: Session, run_mode: str = "formal") -> list[dict[str, Any]]:
-    return _cached(f"by_strategy:{run_mode}", lambda: _metrics_by_strategy(db, run_mode))
+def metrics_by_strategy(
+    db: Session,
+    run_mode: str = "formal",
+    window_days: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    start, end = _resolve_window(window_days, start_date, end_date)
+    key = f"by_strategy:{run_mode}:{start or ''}:{end or ''}"
+    return _cached(key, lambda: _metrics_by_strategy(db, run_mode, start, end, window_days))
 
 
-def _metrics_by_strategy(db: Session, run_mode: str) -> list[dict[str, Any]]:
-    rows = _scoped_recommendation_rows(db, run_mode)
+def _metrics_by_strategy(
+    db: Session,
+    run_mode: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    window_days: int | None = None,
+) -> list[dict[str, Any]]:
+    rows = _scoped_recommendation_rows(db, run_mode, start_date, end_date)
     benchmark_by_rec = _benchmark_returns_by_recommendation(db, rows)
     horizon_records = _horizon_metric_records_by_recommendation(db, rows)
     registry = {row.skill_id: row for row in db.scalars(select(SkillRegistry)).all()}
@@ -524,16 +599,89 @@ def _metrics_by_strategy(db: Session, run_mode: str) -> list[dict[str, Any]]:
             "last_recommendation_date": last_rec_date,
             "horizon_metrics": _horizon_metrics_for_rows(item["rows"], horizon_records),
             **_group_metric_fields(metrics),
+            "date_range": _window_meta(window_days, start_date, end_date, len(rows), metrics["trade_count"]),
         })
     return sorted(result, key=lambda x: (x["sample_count"], x["hit_rate"], x["avg_score"]), reverse=True)
 
 
-def metrics_by_setup(db: Session, run_mode: str = "formal") -> list[dict[str, Any]]:
-    return _cached(f"by_setup:{run_mode}", lambda: _metrics_by_setup(db, run_mode))
+def strategy_perf_summary(
+    db: Session,
+    strategy_id: str,
+    run_mode: str = "formal",
+    window_days: int | None = 180,
+) -> dict[str, Any] | None:
+    """单策略历史表现摘要（轻量 SQL，供推荐详情卡片展示"历史同策略胜率"）。
+
+    北极星 B 项：每条推荐一屏可见该策略历史战绩（样本/胜率/盈亏比/最近命中日）。
+    与 metrics_by_strategy 的区别：只查一个策略、不构建完整 horizon_metrics，响应快。
+    按 strategy_breakdown_json 命中该 strategy_id 的推荐归因（与 metrics_by_strategy 一致口径）。
+    """
+    if not strategy_id:
+        return None
+    start, _ = _resolve_window(window_days, None, None)
+    # JSON_CONTAINS 在 MySQL 上对字符串数组可行；strategy_id 来自 bucket/skill_breakdown
+    stmt = (
+        select(
+            Recommendation.recommendation_id,
+            Recommendation.trade_date,
+            RecommendationOutcome.outcome_label,
+            RecommendationOutcome.executed_return,
+        )
+        .select_from(Recommendation)
+        .join(RecommendationRun, Recommendation.run_id == RecommendationRun.run_id)
+        .outerjoin(RecommendationOutcome, Recommendation.recommendation_id == RecommendationOutcome.recommendation_id)
+        .where(
+            RecommendationRun.run_mode == run_mode,
+            Recommendation.skill_breakdown_json.like(f'%"{strategy_id}"%'),
+        )
+    )
+    if start:
+        stmt = stmt.where(Recommendation.recommended_at >= start)
+    rows = db.execute(stmt).all()
+
+    sample_count = len(rows)
+    if sample_count == 0:
+        return None
+    labeled = [r for r in rows if r.outcome_label in ("success", "failed")]
+    labeled_count = len(labeled)
+    wins = [r for r in labeled if r.outcome_label == "success"]
+    losses = [r for r in labeled if r.outcome_label == "failed"]
+    win_avg = sum(r.executed_return or 0 for r in wins) / len(wins) if wins else 0.0
+    loss_avg = sum(abs(r.executed_return or 0) for r in losses) / len(losses) if losses else 0.0
+    last_rec_date = max((str(r.trade_date or "") for r in rows), default=None) or None
+    return {
+        "strategy_id": strategy_id,
+        "sample_count": sample_count,
+        "labeled_count": labeled_count,
+        "success_count": len(wins),
+        "hit_rate": round(len(wins) * 100 / labeled_count, 1) if labeled_count else None,
+        "avg_return": round(sum(r.executed_return or 0 for r in labeled) / labeled_count, 2) if labeled_count else None,
+        "profit_loss_ratio": round(win_avg / loss_avg, 2) if loss_avg else None,
+        "last_recommendation_date": last_rec_date,
+        "window_days": window_days,
+    }
 
 
-def _metrics_by_setup(db: Session, run_mode: str) -> list[dict[str, Any]]:
-    rows = _scoped_recommendation_rows(db, run_mode)
+def metrics_by_setup(
+    db: Session,
+    run_mode: str = "formal",
+    window_days: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    start, end = _resolve_window(window_days, start_date, end_date)
+    key = f"by_setup:{run_mode}:{start or ''}:{end or ''}"
+    return _cached(key, lambda: _metrics_by_setup(db, run_mode, start, end, window_days))
+
+
+def _metrics_by_setup(
+    db: Session,
+    run_mode: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    window_days: int | None = None,
+) -> list[dict[str, Any]]:
+    rows = _scoped_recommendation_rows(db, run_mode, start_date, end_date)
     benchmark_by_rec = _benchmark_returns_by_recommendation(db, rows)
     horizon_records = _horizon_metric_records_by_recommendation(db, rows)
     buckets: dict[str, dict[str, Any]] = {}
@@ -572,6 +720,7 @@ def _metrics_by_setup(db: Session, run_mode: str) -> list[dict[str, Any]]:
                 "avg_drawdown": metrics["avg_max_drawdown"],
                 "horizon_metrics": _horizon_metrics_for_rows(item["rows"], horizon_records),
                 **_group_metric_fields(metrics),
+                "date_range": _window_meta(window_days, start_date, end_date, len(rows), metrics["trade_count"]),
             }
         )
     return sorted(result, key=lambda item: (item["sample_count"], item["hit_rate"], item["avg_score"]), reverse=True)
@@ -824,8 +973,9 @@ def alpha_decay_detection(db: Session, run_mode: str = "formal") -> dict[str, An
 
 
 # A 股短线真实交易成本（在 slippage 之外的额外成本）
-_COMMISSION_RATE_PCT = 0.05   # 佣金万 2.5 双边
-_STAMP_TAX_RATE_PCT = 0.05    # 印花税卖出
+# 佣金：万 1 双边（单边 0.01% × 2 = 0.02%）。印花税：0.05% 仅卖出。
+_COMMISSION_RATE_PCT = 0.02   # 佣金万 1 双边（0.01% × 2）
+_STAMP_TAX_RATE_PCT = 0.05    # 印花税卖出（0.05%，单边）
 _ADDITIONAL_COST_PCT = _COMMISSION_RATE_PCT + _STAMP_TAX_RATE_PCT
 
 
@@ -833,7 +983,7 @@ def cost_adjusted_metrics(db: Session, run_mode: str = "formal") -> dict[str, An
     """扣除佣金+印花税后的真实表现指标。
 
     注意：executed_return 已包含 entry/exit slippage（各 10bps），
-    此函数额外扣除佣金（万 2.5 双边）和印花税（0.05% 卖出）。
+    此函数额外扣除佣金（万 1 双边，单边 0.01%）和印花税（0.05% 卖出）。
     """
     stmt = select(RecommendationOutcome).where(
         RecommendationOutcome.entry_triggered == True,  # noqa: E712
@@ -893,6 +1043,9 @@ def cost_adjusted_metrics(db: Session, run_mode: str = "formal") -> dict[str, An
 def filter_effectiveness(
     db: Session,
     run_mode: str = "formal",
+    window_days: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> dict[str, Any]:
     """三规则过滤效果分析：pos20<50、avg_cost>200、结构性强势×support_ma5。
 
@@ -900,6 +1053,7 @@ def filter_effectiveness(
     """
     import json as _json
 
+    w_start, w_end = _resolve_window(window_days, start_date, end_date)
     stmt = (
         select(Recommendation, RecommendationOutcome)
         .join(RecommendationOutcome, RecommendationOutcome.recommendation_id == Recommendation.recommendation_id)
@@ -912,9 +1066,17 @@ def filter_effectiveness(
         stmt = stmt.join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id).where(
             RecommendationRun.run_mode == run_mode
         )
+    if w_start:
+        stmt = stmt.where(Recommendation.trade_date >= w_start)
+    if w_end:
+        stmt = stmt.where(Recommendation.trade_date <= w_end)
     rows = db.execute(stmt).all()
     if not rows:
-        return {"count": 0, "error": "no executed trades"}
+        return {
+            "count": 0,
+            "error": "no executed trades",
+            "date_range": _window_meta(window_days, w_start, w_end, 0, 0),
+        }
 
     kept = []
     filtered_by_rule: dict[str, list[float]] = {"pos20_low": [], "avg_cost_high": [], "regime_ma5": []}
@@ -964,6 +1126,7 @@ def filter_effectiveness(
             }
             for name, rets in filtered_by_rule.items()
         },
+        "date_range": _window_meta(window_days, w_start, w_end, total, total),
     }
 
 
@@ -971,16 +1134,29 @@ def precision_at_k(
     db: Session,
     run_mode: str = "formal",
     ks: tuple[int, ...] = (1, 3, 5, 10),
+    window_days: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> list[dict[str, Any]]:
-    return _cached(f"precision_at_k:{run_mode}:{','.join(str(k) for k in ks)}", lambda: _precision_at_k(db, run_mode, ks))
+    w_start, w_end = _resolve_window(window_days, start_date, end_date)
+    key = f"precision_at_k:{run_mode}:{','.join(str(k) for k in ks)}:{w_start or ''}:{w_end or ''}"
+    return _cached(key, lambda: _precision_at_k(db, run_mode, ks, w_start, w_end, window_days))
 
 
-def _precision_at_k(db: Session, run_mode: str, ks: tuple[int, ...]) -> list[dict[str, Any]]:
-    recs = db.execute(
+def _precision_at_k(
+    db: Session,
+    run_mode: str,
+    ks: tuple[int, ...],
+    start_date: str | None = None,
+    end_date: str | None = None,
+    window_days: int | None = None,
+) -> list[dict[str, Any]]:
+    stmt = (
         select(
             Recommendation.run_id,
             Recommendation.recommendation_id,
             Recommendation.final_score,
+            Recommendation.trade_date,
             RecommendationOutcome.outcome_label,
             RecommendationOutcome.entry_triggered,
             RecommendationOutcome.executed_return,
@@ -990,8 +1166,15 @@ def _precision_at_k(db: Session, run_mode: str, ks: tuple[int, ...]) -> list[dic
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
         .outerjoin(RecommendationOutcome, RecommendationOutcome.recommendation_id == Recommendation.recommendation_id)
         .where(RecommendationRun.run_mode == run_mode)
-        .order_by(Recommendation.run_id.asc(), Recommendation.final_score.desc(), Recommendation.recommendation_id.asc())
+    )
+    if start_date:
+        stmt = stmt.where(Recommendation.trade_date >= start_date)
+    if end_date:
+        stmt = stmt.where(Recommendation.trade_date <= end_date)
+    recs = db.execute(
+        stmt.order_by(Recommendation.run_id.asc(), Recommendation.final_score.desc(), Recommendation.recommendation_id.asc())
     ).all()
+    total_in_window = len(recs)
     by_run: dict[str, list[Any]] = {}
     for row in recs:
         by_run.setdefault(row.run_id, []).append(row)
@@ -1016,6 +1199,7 @@ def _precision_at_k(db: Session, run_mode: str, ks: tuple[int, ...]) -> list[dic
                 "evaluated_count": evaluated_count,
                 "success_count": success_count,
                 "precision": round(success_count / evaluated_count, 3) if evaluated_count else 0.0,
+                "date_range": _window_meta(window_days, start_date, end_date, total_in_window, evaluated_count),
             }
         )
     return result
@@ -1025,13 +1209,24 @@ def metrics_by_score_line(
     db: Session,
     run_mode: str = "formal",
     score_lines: tuple[int, ...] = (55, 60, 65, 70, 75, 80),
+    window_days: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> list[dict[str, Any]]:
-    key = f"by_score_line:{run_mode}:{','.join(str(line) for line in score_lines)}"
-    return _cached(key, lambda: _metrics_by_score_line(db, run_mode, score_lines))
+    start, end = _resolve_window(window_days, start_date, end_date)
+    key = f"by_score_line:{run_mode}:{','.join(str(line) for line in score_lines)}:{start or ''}:{end or ''}"
+    return _cached(key, lambda: _metrics_by_score_line(db, run_mode, score_lines, start, end, window_days))
 
 
-def _metrics_by_score_line(db: Session, run_mode: str, score_lines: tuple[int, ...]) -> list[dict[str, Any]]:
-    rows = _scoped_recommendation_rows(db, run_mode)
+def _metrics_by_score_line(
+    db: Session,
+    run_mode: str,
+    score_lines: tuple[int, ...],
+    start_date: str | None = None,
+    end_date: str | None = None,
+    window_days: int | None = None,
+) -> list[dict[str, Any]]:
+    rows = _scoped_recommendation_rows(db, run_mode, start_date, end_date)
     if not rows:
         return []
     benchmark_by_rec = _benchmark_returns_by_recommendation(db, rows)
@@ -1057,6 +1252,7 @@ def _metrics_by_score_line(db: Session, run_mode: str, score_lines: tuple[int, .
                 "avg_close_return": metrics["avg_close_return"],
                 "horizon_metrics": _horizon_metrics_for_rows(selected, horizon_records),
                 **_group_metric_fields(metrics),
+                "date_range": _window_meta(window_days, start_date, end_date, total_count, metrics["trade_count"]),
             }
         )
     return result
@@ -1268,10 +1464,17 @@ def _group_metric_fields(metrics: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _scoped_recommendation_rows(db: Session, run_mode: str) -> list[Any]:
+def _scoped_recommendation_rows(
+    db: Session,
+    run_mode: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[Any]:
     # 两步查询：先 SQL 去重拿 (trade_date, code) 分组下 final_score 最高的 recommendation_id（235 个），
     # 再按 id 取详情。避免查全部 1479 行大字段（feature_snapshot_json/market_context_json）再 Python 去重。
     # MySQL 8+ 窗口函数：ROW_NUMBER() OVER (PARTITION BY trade_date, code ORDER BY final_score DESC)
+    # 时间窗口：start_date/end_date 为 ISO 日期字符串（YYYY-MM-DD），按 trade_date 过滤；
+    # window_days 模式下调用方应先用 _resolve_window 转成 start/end 再传入。
     dedup_ids_stmt = (
         select(
             Recommendation.recommendation_id,
@@ -1282,6 +1485,10 @@ def _scoped_recommendation_rows(db: Session, run_mode: str) -> list[Any]:
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
         .where(RecommendationRun.run_mode == run_mode)
     )
+    if start_date:
+        dedup_ids_stmt = dedup_ids_stmt.where(Recommendation.trade_date >= start_date)
+    if end_date:
+        dedup_ids_stmt = dedup_ids_stmt.where(Recommendation.trade_date <= end_date)
     # 用子查询取每组 final_score 最大的 id（GROUP BY + MAX 定位，再 JOIN 回表）
     dedup_subq = dedup_ids_stmt.subquery()
     max_score_subq = (
@@ -1510,7 +1717,7 @@ def _simulate_outcome(
     hit_target = exit_reason.startswith("take_profit") or executed_return >= SUCCESS_RETURN_PCT
     # outcome_label 与 accuracy policy 对齐：扣费滑点后净收益 > 0 即为准确推荐
     # SUCCESS_RETURN_PCT (3%) 是"优质推荐"阈值，不作为 outcome 硬门槛
-    # executed_return 已含滑点但未扣佣金+印花税（_ADDITIONAL_COST_PCT=0.10%），
+    # executed_return 已含滑点但未扣佣金+印花税（_ADDITIONAL_COST_PCT，佣金万1双边+印花税0.05%卖出），
     # 阈值必须覆盖这部分成本，否则 0~0.10% 的微利交易被标 success 但实际亏损
     outcome_label = OUTCOME_SUCCESS if (executed_return > _ADDITIONAL_COST_PCT and not hit_invalid) else OUTCOME_FAILED
 

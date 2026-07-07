@@ -1256,6 +1256,21 @@ export type RecommendationDetail = RecommendationCard & {
     final_score?: number | null;
     signal_features?: Record<string, unknown>;
   };
+  /** 该推荐所属策略的历史战绩（北极星 B 项：一屏可见同策略胜率） */
+  strategy_perf?: StrategyPerfSummary | null;
+};
+
+/** 单策略历史表现摘要 —— strategy_perf_summary 轻量 SQL 输出 */
+export type StrategyPerfSummary = {
+  strategy_id: string;
+  sample_count: number;
+  labeled_count: number;
+  success_count: number;
+  hit_rate: number | null;
+  avg_return: number | null;
+  profit_loss_ratio: number | null;
+  last_recommendation_date: string | null;
+  window_days: number | null;
 };
 
 export type ReplayAnalysisRow = {

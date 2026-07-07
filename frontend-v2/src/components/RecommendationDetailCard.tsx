@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../api/client";
-import type { AgentLog, RecommendationCard, RecommendationDetail, SkillSignal } from "../types";
+import type { AgentLog, RecommendationCard, RecommendationDetail, SkillSignal, StrategyPerfSummary } from "../types";
 
 /**
  * 推荐详情卡片 —— 展示完整决策信息（交易参数/买点原因/市场阶段/评分分解/规则/风险）。
@@ -98,6 +98,7 @@ type DetailItem = Pick<
   ideal_buy?: number | null;
   secondary_buy?: number | null;
   agent_logs?: AgentLog[];
+  strategy_perf?: StrategyPerfSummary | null;
 };
 
 /** 完整决策详情卡片 —— 交易参数 + 买点原因 + 市场阶段 + 评分分解 + 规则 + 风险标签 */
@@ -131,6 +132,7 @@ export function RecommendationDetailCard({ item }: { item: DetailItem }) {
         <MarketContextSection marketContext={item.market_context} />
         <SkillBreakdownSection skillBreakdown={item.skill_breakdown} />
         <AgentReviewSection agentLogs={item.agent_logs} />
+        <StrategyPerfSection strategyPerf={item.strategy_perf} />
 
         {(item.entry_rule || item.invalid_rule) && (
           <div style={{ marginBottom: "var(--space-3)", fontSize: "var(--text-xs)", lineHeight: 1.6 }}>
@@ -299,6 +301,71 @@ function AgentReviewSection({ agentLogs }: { agentLogs?: AgentLog[] }) {
         <div style={{ color: "var(--text-muted)" }}>
           <span>失效 · </span>
           <span style={{ color: "var(--ink-secondary)" }}>{invalidation.slice(0, 3).join(" / ")}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 同策略历史战绩区块 —— 北极星 B 项：一屏可见该策略历史胜率/盈亏比/最近命中日。
+ * 让用户不用跳到策略页就知道"这个策略历史表现如何"。 */
+function StrategyPerfSection({ strategyPerf }: { strategyPerf?: StrategyPerfSummary | null }) {
+  if (!strategyPerf) return null;
+  const { sample_count, labeled_count, hit_rate, profit_loss_ratio, avg_return, last_recommendation_date, window_days } = strategyPerf;
+  // 样本 <10 不稳健，降级提示
+  const thinSample = labeled_count < 10;
+  const wrColor =
+    hit_rate == null
+      ? "var(--text-muted)"
+      : hit_rate >= 60
+        ? "var(--market-up)"
+        : hit_rate >= 50
+          ? "var(--ink-secondary)"
+          : "var(--market-down)";
+
+  return (
+    <div style={{ marginBottom: "var(--space-3)", fontSize: "var(--text-xs)", lineHeight: 1.6 }}>
+      <div className="panel__kicker" style={{ marginBottom: "var(--space-1)" }}>
+        同策略历史 {window_days ? `· 近${window_days}天` : ""}
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-3)", alignItems: "baseline" }}>
+        {hit_rate != null && (
+          <span>
+            <span style={{ color: "var(--text-muted)" }}>胜率 </span>
+            <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, color: wrColor }}>
+              {hit_rate.toFixed(1)}%
+            </span>
+            <span style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>
+              {" "}({labeled_count}笔)
+            </span>
+          </span>
+        )}
+        {profit_loss_ratio != null && (
+          <span>
+            <span style={{ color: "var(--text-muted)" }}>盈亏比 </span>
+            <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, color: "var(--ink-secondary)" }}>
+              {profit_loss_ratio.toFixed(2)}
+            </span>
+          </span>
+        )}
+        {avg_return != null && (
+          <span>
+            <span style={{ color: "var(--text-muted)" }}>均收 </span>
+            <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, color: avg_return >= 0 ? "var(--market-up)" : "var(--market-down)" }}>
+              {avg_return >= 0 ? "+" : ""}{avg_return.toFixed(2)}%
+            </span>
+          </span>
+        )}
+        {last_recommendation_date && (
+          <span>
+            <span style={{ color: "var(--text-muted)" }}>最近命中 </span>
+            <span style={{ color: "var(--ink-secondary)" }}>{last_recommendation_date}</span>
+          </span>
+        )}
+      </div>
+      {thinSample && (
+        <div style={{ color: "var(--text-muted)", marginTop: "var(--space-1)" }}>
+          样本 {labeled_count} 笔较少，数据仅供参考
         </div>
       )}
     </div>

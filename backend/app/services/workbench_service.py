@@ -86,6 +86,7 @@ from app.services.outcome_service import (
     label_pending_outcomes as label_pending_outcomes_service,
     normalized_outcome_label,
     resolved_trade_return,
+    strategy_perf_summary,
 )
 from app.services.candidates import trace as candidate_trace
 from app.services.prefilter_service import apply_prefilters
@@ -2306,6 +2307,8 @@ def get_recommendation_detail(db: Session, recommendation_id: str) -> dict[str, 
         }
     data["history"] = _historical_recommendations(db, rec.code, rec.recommendation_id)
     data["replay_summary"] = _build_replay_summary(data)
+    # 北极星 B 项：该推荐所属策略的历史战绩（样本/胜率/盈亏比/最近命中日）
+    data["strategy_perf"] = strategy_perf_summary(db, rec.bucket or "")
     return data
 
 
