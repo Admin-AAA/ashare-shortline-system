@@ -9,14 +9,24 @@
 
 本工具对 recommendation_outcomes 做端到端、扣交易成本的真实回测：
 
-1. 去重（T2 必做）：按 (trade_date, code) 去重，否则同一笔交易被重复统计
-   （实测存在 180 个重复组，单股单日最多 16 条 outcome）。
-2. 成本模型（T2 必做）：executed_return 已含滑点但未扣佣金+印花税。
+**关键：区分 LIVE 与 BACKTEST 两个总体（2026-07 修正）**
+recommendation_outcomes 混存两类记录，必须用 recommendation_id 前缀区分，
+绝不能用 (trade_date, code) 去重：
+  - `rec_*`  = LIVE 实盘推荐（用户真正看到的，北极星口径）
+  - `btrec_*` = BACKTEST 回测生成的模拟交易（策略历史自验证）
+回测会在同一 (trade_date, code) 上生成多条 *不同* 的 btrec_* 记录（不同的
+历史测试点），它们各自是独立交易，按 (td,code) 去重会非法合并且污染 LIVE
+总体。旧版（si434950）即因此把 1433 条回测交易错误并入 LIVE，得出虚高的
+"66%"——真实 LIVE 胜率仅 61.5%。
+
+1. 去重：按 recommendation_id 去重（每个 id = 一笔独立交易）。LIVE 与 BACKTEST
+   分别统计，绝不互相合并口径。
+2. 成本模型：executed_return 已含滑点但未扣佣金+印花税。
    与 outcome_service.py 保持一致：_ADDITIONAL_COST_PCT = 0.10%
    （佣金万2.5 双边 + 印花税0.05% 卖出 ≈ 0.10%/笔）。
    net_return = executed_return - 0.10
 3. 指标：胜率(净)、平均净收益、盈亏比(净)、Sharpe(每笔)、最大亏损(净)、
-   出场分布、持仓天数。
+   出场分布、持仓天数。LIVE / BACKTEST / 混合 三套分别输出。
 4. 策略归因：从 skill_breakdown_json 提取每只推荐命中的策略，统计各策略
    净胜率与平均净收益，定位拖后腿/贡献大的策略（指导未来 T1/T3）。
 5. 相位信息量检验（T5 一致性）：按 market_sentiment_phase 分组看胜率差。
@@ -53,6 +63,7 @@ class BacktestRow:
     final_score: float
     strategy_ids: List[str] = field(default_factory=list)
     phase: Optional[str] = None
+    source: str = "live"            # "live" (rec_*) | "backtest" (btrec_*)
 
     @property
     def net_return(self) -> float:
@@ -145,10 +156,16 @@ def compute_metrics(rows: List[BacktestRow]) -> Dict[str, Any]:
 
 
 def dedup_rows(rows: List[BacktestRow]) -> List[BacktestRow]:
-    """按 (trade_date, code) 去重，保留 final_score 最高的那条（系统对该笔最强直观）。"""
-    best: Dict[tuple, BacktestRow] = {}
+    """按 recommendation_id 去重（每个 id = 一笔独立交易）。
+
+    关键修正（2026-07）：绝不能用 (trade_date, code) 去重。BACKTEST 会在同一
+    (td,code) 上生成多条 *不同* 的 btrec_* 记录（各自是独立历史测试点），按
+    (td,code) 去重会非法合并、污染 LIVE 总体。这里按 recommendation_id 去重，
+    仅当同一 id 出现多条 outcome 时保留 final_score 最高的一条。
+    """
+    best: Dict[str, BacktestRow] = {}
     for r in rows:
-        key = (r.trade_date, r.code)
+        key = r.recommendation_id
         if key not in best or r.final_score > best[key].final_score:
             best[key] = r
     return list(best.values())
@@ -186,21 +203,24 @@ def load_rows_from_db(db) -> List[BacktestRow]:
                 phase = fs.get("market_sentiment_phase")
             except Exception:
                 pass
+        # 区分 LIVE(rec_*) 与 BACKTEST(btrec_*) 两个总体
+        source = "backtest" if (rid or "").startswith("btrec_") else "live"
         out.append(BacktestRow(
             recommendation_id=rid, trade_date=tdate, code=code,
             executed_return=float(exret or 0.0), outcome_label=label or "",
             exit_reason=reason or "", holding_days=int(hdays or 0),
-            final_score=float(score or 0.0), strategy_ids=strategy_ids, phase=phase,
+            final_score=float(score or 0.0), strategy_ids=strategy_ids,
+            phase=phase, source=source,
         ))
     return out
 
 
-def render_report(metrics: Dict[str, Any], raw_n: int, dedup_n: int) -> str:
+def render_report(metrics: Dict[str, Any], raw_n: int, dedup_n: int, title: str = "成本感知回测报告") -> str:
     lines = []
-    lines.append("# 成本感知回测报告 (Cost-Aware Backtest)")
+    lines.append(f"# {title}")
     lines.append("")
     lines.append(f"- 样本(原始 outcome 行): {raw_n}")
-    lines.append(f"- 样本(去重后 (trade_date,code)): {dedup_n}")
+    lines.append(f"- 样本(去重后 recommendation_id): {dedup_n}")
     lines.append(f"- 单笔交易成本: {metrics['cost_pct_per_trade']}% (佣金万2.5双边+印花税0.05%卖出)")
     lines.append("")
     lines.append("## 核心指标 (净收益=executed_return-成本)")
@@ -245,23 +265,37 @@ def main() -> Dict[str, Any]:
 
     db = SessionLocal()
     raw = load_rows_from_db(db)
-    raw_n = len(raw)
     rows = dedup_rows(raw)
-    metrics = compute_metrics(rows)
-    metrics["raw_n"] = raw_n
-    metrics["dedup_n"] = len(rows)
 
-    report = render_report(metrics, raw_n, len(rows))
+    live = [r for r in rows if r.source == "live"]
+    bt = [r for r in rows if r.source == "backtest"]
+
+    m_all = compute_metrics(rows)
+    m_bt = compute_metrics(bt)
+    m_live = compute_metrics(live)
+
+    raw_all = len(raw)
+    raw_bt = sum(1 for r in raw if r.source == "backtest")
+    raw_live = sum(1 for r in raw if r.source == "live")
+
+    report_parts = [
+        render_report(m_all, raw_all, len(rows), "混合回测报告（live+backtest，口径不同仅作整体参考）"),
+        "",
+        render_report(m_bt, raw_bt, len(bt), "BACKTEST 回测样本 (btrec_*)"),
+        "",
+        render_report(m_live, raw_live, len(live), "LIVE 实盘样本 (rec_*) — 北极星口径"),
+    ]
+    report = "\n".join(report_parts)
     print(report)
 
     out_dir = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(out_dir, "backtest_report_latest.json"), "w", encoding="utf-8") as f:
-        json.dump(metrics, f, ensure_ascii=False, indent=2)
+        json.dump({"live": m_live, "backtest": m_bt, "all": m_all}, f, ensure_ascii=False, indent=2)
     with open(os.path.join(out_dir, "backtest_report_latest.md"), "w", encoding="utf-8") as f:
         f.write(report)
 
     db.close()
-    return metrics
+    return {"live": m_live, "backtest": m_bt, "all": m_all}
 
 
 if __name__ == "__main__":
