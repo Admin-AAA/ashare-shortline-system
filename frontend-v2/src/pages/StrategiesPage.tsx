@@ -3,6 +3,8 @@ import { ChevronDown, ChevronRight, Layers, Target } from "lucide-react";
 import { api } from "../api/client";
 import type { StrategyListItem, StrategyPerformance } from "../types";
 import { ErrorPage, EmptyState, PageSkeleton } from "../components/StateViews";
+import { SkillPerformanceSection } from "../components/SkillPerformanceSection";
+import { CollapsiblePanel } from "../components/CollapsiblePanel";
 import { useApi } from "../app/useApi";
 
 /**
@@ -39,17 +41,16 @@ export function StrategiesPage() {
   const coverage = Math.round((called.length / data.length) * 100);
 
   return (
-    <div className="panel">
-      <div className="panel__header">
-        <div>
-          <span className="panel__kicker">策略</span>
-          <h2 className="panel__title">策略清单</h2>
-        </div>
+    <CollapsiblePanel
+      collapsedKey="strategies-list"
+      kicker="策略"
+      title="策略清单"
+      actions={
         <span style={{ marginLeft: "auto", color: "var(--muted)", fontSize: "var(--text-base)" }}>
           {data.length} 个策略 · {called.length} 已调用 · 覆盖 {coverage}%
         </span>
-      </div>
-
+      }
+    >
       {/* 口径切换 */}
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", padding: "var(--space-2) 0 var(--space-4)" }}>
         <span style={{ color: "var(--muted)", fontSize: "var(--text-base)" }}>口径</span>
@@ -67,7 +68,10 @@ export function StrategiesPage() {
           <DormantCard key={s.skill_id} item={s} />
         ))}
       </div>
-    </div>
+
+      {/* 从原「配置页」迁移而来：策略历史表现明细，置于驾驶舱视图下方 */}
+      <SkillPerformanceSection />
+    </CollapsiblePanel>
   );
 }
 
@@ -78,6 +82,10 @@ function CalledCard({ item }: { item: StrategyListItem }) {
   const win = perf.hit_rate;
   const winColor = win == null ? "var(--muted)" : win >= 0.6 ? "var(--market-up)" : win >= 0.5 ? "var(--market-up)" : "var(--market-down)";
   const retColor = perf.avg_return == null ? "var(--muted)" : perf.avg_return >= 0 ? "var(--market-up)" : "var(--market-down)";
+  const pf = perf.profit_loss_ratio;
+  const pfColor = pf == null ? "var(--muted)" : pf >= 1.4 ? "var(--market-up)" : pf >= 1.0 ? "var(--text)" : "var(--market-down)";
+  // 最近命中交易日（YYYY-MM-DD），北极星 C 项：策略可追溯
+  const lastDate = perf.last_recommendation_date;
 
   return (
     <div className="strat-card" style={cardStyle}>
@@ -106,6 +114,18 @@ function CalledCard({ item }: { item: StrategyListItem }) {
             均收益{" "}
             <span style={{ color: retColor, fontWeight: 600 }}>
               {perf.avg_return == null ? "—" : `${perf.avg_return >= 0 ? "+" : ""}${perf.avg_return.toFixed(2)}%`}
+            </span>
+          </div>
+          <div>
+            盈亏比{" "}
+            <span style={{ color: pfColor, fontWeight: 600 }}>
+              {pf == null ? "—" : pf.toFixed(2)}
+            </span>
+          </div>
+          <div>
+            最近命中{" "}
+            <span style={{ color: lastDate ? "var(--text)" : "var(--muted)", fontWeight: 600 }}>
+              {lastDate || "—"}
             </span>
           </div>
         </div>
