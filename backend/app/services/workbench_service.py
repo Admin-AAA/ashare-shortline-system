@@ -65,6 +65,7 @@ from app.services.market_pool import (
     get_market_snapshot_from_pool,
     get_market_universe_from_pool,
     inject_limit_up_flags,
+    inject_dragon_tiger_flags,
     refresh_block_trade,
     refresh_capital_flows_for_codes,
     refresh_concept_sectors,
@@ -1526,6 +1527,10 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     lu_hit = inject_limit_up_flags(db, scoped_stocks, trade_date=str(snapshot.get("trade_date") or ""))
     if lu_hit:
         logger.info("prefilter 前注入涨停标记: %d 只 (run=%s)", lu_hit, run_id)
+    # prefilter 前注入龙虎榜标记（龙虎榜是客观事实，dragon-tiger-smart-money 等策略 universe 依赖）
+    dt_hit = inject_dragon_tiger_flags(db, scoped_stocks, trade_date=str(snapshot.get("trade_date") or ""))
+    if dt_hit:
+        logger.info("prefilter 前注入龙虎榜标记: %d 只 (run=%s)", dt_hit, run_id)
     min_prefilter_count = _resolve_prefilter_target_count(params, selected_skill_count=len(selected_skills))
     prefiltered_stocks, prefilter_audit = apply_prefilters(
         scoped_stocks,

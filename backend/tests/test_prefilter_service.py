@@ -68,6 +68,14 @@ def _positive_stock_for_skill(skill_id: str):
         return _tradeable_stock(primary_excess20=10.0, industry_positive_excess20_count=3)
     if skill_id == "trend-pullback-continuation":
         return _tradeable_stock(dsa_trend_score=22.0, volume_shrink_pullback=True, support_ma5=True, vol5_20=0.9)
+    if skill_id == "dragon-tiger-smart-money":
+        return _tradeable_stock(
+            dragon_tiger_is_on_list=True,
+            dragon_tiger_net_buy_ratio=0.08,
+            dragon_tiger_inst_buy_ratio=0.6,
+            main_net_inflow_yi=0.5,
+            capital_resonance_signal="主力共振",
+        )
     return _tradeable_stock()
 
 
