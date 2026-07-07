@@ -1,7 +1,7 @@
 id: high-range-breakout-momentum
 name: 阶段新高放量突破
 enabled: true
-weight: 1.0
+weight: 0.35
 
 meta:
   author: system

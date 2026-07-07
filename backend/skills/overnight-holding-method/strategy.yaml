@@ -1,6 +1,7 @@
 id: overnight-holding-method
 name: 隔夜持股法
 enabled: true
+weight: 1.0
 
 meta:
   author: system

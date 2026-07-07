@@ -11,6 +11,9 @@ def run_strategy(
     skip_universe_check: bool = False,
 ) -> dict[str, Any]:
     contract = skill.contract or {}
+    # 实证权重：把 strategy.yaml 顶层 weight 注入 signal，让 aggregator 按历史胜率加权。
+    # 此前该字段从未注入 → aggregator 永远用 weight=1.0（等权），净负策略与赢家同权污染 final_score。
+    skill_weight = float(contract.get("weight", 1.0))
     context = dict(stock)
     industry = stock.get("industry")
     context["is_main_theme"] = bool(
@@ -29,7 +32,7 @@ def run_strategy(
     )
 
     if not skip_universe_check and not _passes_universe(contract, context):
-        return _signal(skill, score=0, phase="排除", hard_veto=True, veto_reason="不在策略股票池", risk_flags=["不符合股票池"])
+        return _signal(skill, score=0, phase="排除", hard_veto=True, veto_reason="不在策略股票池", risk_flags=["不符合股票池"], weight=skill_weight)
 
     phase = "未分类"
     score_cap = 100.0
@@ -128,6 +131,7 @@ def run_strategy(
         evidence=evidence,
         setup_quality=setup_quality,
         score_cap=score_cap,
+        weight=skill_weight,
     )
 
 
@@ -205,6 +209,7 @@ def _signal(
     evidence: list[str] | None = None,
     setup_quality: float = 50.0,
     score_cap: float = 100.0,
+    weight: float = 1.0,
 ) -> dict[str, Any]:
     score = min(score, score_cap)
     return {
@@ -212,6 +217,7 @@ def _signal(
         "strategy_name": skill.name,
         "version_id": f"{skill.skill_id}:{skill.version}:{skill.contract_hash[:8] if skill.contract_hash else 'none'}",
         "strategy_independence": _strategy_independence(skill),
+        "weight": round(float(weight), 3),
         "phase": phase,
         "score": round(score, 2),
         "score_cap": round(score_cap, 2),
