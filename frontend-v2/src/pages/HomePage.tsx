@@ -295,6 +295,66 @@ function CandidateCard({ item, rank }: { item: CockpitRecommendation; rank: numb
           {item.risk_level}
         </span>
       </div>
+
+      {item.recommend_price != null || item.stop_loss != null || item.take_profit != null ? (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, 1fr)",
+            gap: "var(--space-1)",
+            paddingTop: "var(--space-2)",
+            borderTop: "1px solid var(--line)",
+          }}
+        >
+          <MiniMetric label="推荐" value={item.recommend_price} />
+          <MiniMetric label="止损" value={item.stop_loss} tone="down" />
+          <MiniMetric label="止盈" value={item.take_profit} tone="up" />
+        </div>
+      ) : null}
+
+      {item.entry_rule ? (
+        <div
+          title={item.entry_rule}
+          style={{
+            fontSize: 10,
+            lineHeight: 1.3,
+            color: "var(--text-muted)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          入场 · {item.entry_rule}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** 候选卡内联交易参数 —— 等宽数字 + 涨红跌绿（A 股语义），一眼可见决策价 */
+function MiniMetric({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number | null | undefined;
+  tone?: "up" | "down";
+}) {
+  const color =
+    value == null
+      ? "var(--text-muted)"
+      : tone === "up"
+        ? "var(--market-up)"
+        : tone === "down"
+          ? "var(--market-down)"
+          : "var(--ink)";
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+      <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{label}</span>
+      <span className="text-mono" style={{ fontSize: 13, fontWeight: 600, color, lineHeight: 1 }}>
+        {value != null ? value.toFixed(2) : "—"}
+      </span>
     </div>
   );
 }
