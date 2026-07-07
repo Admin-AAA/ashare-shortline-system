@@ -88,7 +88,7 @@ phases:
     hard_veto: false
 
   - name: 趋势内轻回踩
-    when: "pct >= -1.5 and pct <= 1 and support_ma5 == true and vol5_20 <= 0.9"
+    when: "pct >= -1.5 and pct <= 1 and support_ma5 == true and vol5_20 <= 1.0"
     score_cap: 84
     hard_veto: false
 
@@ -106,7 +106,9 @@ setups:
     invalid_rule: "跌破 MA10 后继续放量走弱"
 
   - name: 强趋势轻分歧
-    when: "ma5 > ma10 and ma10 > ma20 and dist20 > 10 and eff20 > 0.5 and pct >= -1.5 and pct <= 0.8 and vol5_20 <= 0.9 and support_ma5 == true"
+    # vol5_20<=1.0（与 prefilter include_any 第三选项 + phase 趋势内轻回踩对齐）
+    # 0.9 无因果依据；回测：301086 vol5_20=0.987 命中后 success +7.93%（take_profit_hit）
+    when: "ma5 > ma10 and ma10 > ma20 and dist20 > 10 and eff20 > 0.5 and pct >= -1.5 and pct <= 0.8 and vol5_20 <= 1.0 and support_ma5 == true"
     score_delta: 7
     entry_rule: "强趋势轻分歧日不追，尾盘或次日确认承接"
     invalid_rule: "轻分歧演变为放量下跌"

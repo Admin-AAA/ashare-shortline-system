@@ -590,6 +590,40 @@ def test_trend_pullback_prefilter_accepts_moderate_volume_pullback():
     assert not passed3, "vol5_20=1.08 应被 include 规则拒"
 
 
+def test_trend_pullback_phase_and_setup_match_moderate_volume():
+    """回归测试：trend-pullback phase 趋势内轻回踩 + setup 强趋势轻分歧 放宽 vol5_20<=0.9→<=1.0。
+
+    第 142 轮 T2：上轮放宽 prefilter 让候选进 skill_gate，但 phase/setup 仍 <=0.9
+    导致 vol5_20∈(0.9,1.0] 候选不命中 setup、无 score_delta。放宽后应命中。
+    回测：301086 vol5_20=0.987 命中 setup 强趋势轻分歧（+7），历史 outcome success +7.93%。
+    """
+    skills = _skills_by_id()
+    skill = skills["trend-pullback-continuation"]
+
+    # 301086 真实快照特征（vol5_20=0.987, 多头排列, dist20>10, eff20>0.5, 窄幅, support_ma5）
+    stock = _stock(
+        "301086",
+        ma5=10.2, ma10=10.0, ma20=9.8,  # 多头排列
+        dist20=14.0, eff20=0.828,  # 趋势强度
+        pct=-0.568,  # 窄幅 [-1.5, 0.8]
+        vol5_20=0.987,  # (0.9, 1.0] —— 旧 <=0.9 不命中，新 <=1.0 命中
+        support_ma5=True,
+        volume_shrink_pullback=False,
+        dsa_trend_score=26, max_dd20=-5, off_high_pct=-3,
+        upper_shadow_count20=1, rsi_12=55,
+        capital_resonance_score=65,
+        turnover_rate=3, amount_yi=5, chg20=8, pos60=70, pos120=75,
+        twenty_cm_risk_gate="pass", news_risk_count=0, announcement_negative_count=0,
+        is_st=False, limit_up_overheat_score=10,
+    )
+    signal = run_strategy(skill, stock, ["半导体"], skip_universe_check=True)
+    # phase 应命中"趋势内轻回踩"（旧 <=0.9 不命中）
+    assert signal["phase"] == "趋势内轻回踩", f"phase 应命中趋势内轻回踩: {signal['phase']}"
+    # setup 应命中"强趋势轻分歧"（+7 score_delta）
+    assert signal["setup_match"] == "强趋势轻分歧", f"setup 应命中强趋势轻分歧: {signal['setup_match']}"
+    assert "强趋势轻分歧" in "；".join(signal["evidence"])
+
+
 def test_all_skill_md_have_agent_output_constraints():
     """所有 SKILL.md 必须含 Agent 审查输出约束（stance + action 字段）。
 
