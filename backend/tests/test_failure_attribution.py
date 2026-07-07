@@ -131,9 +131,11 @@ def test_trailing_not_activated_uses_stop_loss():
 # 指标去重 sanity（与 backtest_cost_aware 复用）
 # --------------------------------------------------------------------------- #
 def test_dedup_keeps_max_score():
+    # dedup_rows 按 recommendation_id 去重（每个 id = 一笔独立交易）；同一 id 多条 outcome
+    # 保留 final_score 最高的一条。这里用相同 id "r1" 验证高分胜出。
     rows = [
         BacktestRow("r1", "2026-01-01", "600000", 2.0, "success", "tp", 5, 60.0, []),
-        BacktestRow("r2", "2026-01-01", "600000", 1.0, "failed", "sl", 5, 80.0, []),  # 同 (date,code) 高分
+        BacktestRow("r1", "2026-01-01", "600000", 1.0, "failed", "sl", 5, 80.0, []),  # 同 recommendation_id 高分
     ]
     d = dedup_rows(rows)
     assert len(d) == 1
