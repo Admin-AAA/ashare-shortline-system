@@ -294,3 +294,25 @@ def test_e2e_signal_reaches_skill_breakdown(db):
     strat_sigs = card.get("strategy_signals") or []
     assert any(s.get("strategy_id") == "dragon-tiger-smart-money" for s in strat_sigs)
 
+
+def test_dragon_tiger_in_formal_opening_preset(db):
+    """回归保护：dragon-tiger-smart-money 必须在 preset_formal_opening 里。
+
+    第149轮 T1 发现：策略已注册（skill_registry mode=formal）+ strategy.yaml 声明
+    default_preset_groups: formal_opening，但 preset_skills 表没记录→从未被 formal run 选中。
+    _default_preset_skill_rows 同步逻辑只在 preset 无 skill_rows 时触发，已存在的 preset
+    不会自动加新策略。修复：直接 INSERT preset_skills。
+    """
+    from app.models.tables import PresetSkill
+
+    row = db.scalar(
+        select(PresetSkill).where(
+            PresetSkill.preset_id == "preset_formal_opening",
+            PresetSkill.skill_id == "dragon-tiger-smart-money",
+        )
+    )
+    assert row is not None, (
+        "dragon-tiger-smart-money 必须在 preset_formal_opening 里，否则 formal run 永远不会选中它"
+    )
+    assert float(row.weight) > 0
+
