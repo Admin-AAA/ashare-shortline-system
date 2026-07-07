@@ -956,6 +956,15 @@ def apply_pool_rules(
         elif _snapshot_regime == "强势":
             effective_score_line = round(effective_score_line + 8.0, 2)
             card["_regime_strong_penalty"] = 8.0
+        # 震荡 regime × pos60<50 交叉否决（第148轮 T3 失败归因闭环）：
+        # 实盘去重 BACKTEST 311 笔：震荡 pos60<50 WR=0%（44笔全败 avg=-3.94%），
+        # pos60>=70 WR=83.4%（229笔 avg=2.91%）。因果：震荡市场超跌股继续跌（无反弹动能），
+        # 弱势市场超跌股反弹（pos60<50 WR=100%）——pos60<50 效果是 regime-dependent。
+        # 门槛 +12（72→84）精确过滤 pos60<50 全部 44/44（最高分 72），不误伤 pos60>=50。
+        _card_pos60 = float(card.get("pos60") or card.get("feature_snapshot", {}).get("pos60") or 0)
+        if _snapshot_regime == "震荡" and 0 < _card_pos60 < 50 and not _is_limit_up_card:
+            effective_score_line = round(effective_score_line + 12.0, 2)
+            card["_regime_oscillation_low_pos_penalty"] = 12.0
         card["score_line_meta"] = {
             **score_line_context,
             **card_adjustment,
@@ -964,6 +973,7 @@ def apply_pool_rules(
             "execution_blocked": execution_viability["status"] == "blocked",
             "block_reason": execution_viability["block_reason"],
             "regime_support_ma5_penalty": card.get("_regime_support_ma5_penalty", 0.0),
+            "regime_oscillation_low_pos_penalty": card.get("_regime_oscillation_low_pos_penalty", 0.0),
             "effective_score_line": effective_score_line,
             "passed": final_score >= effective_score_line and execution_viability["status"] != "blocked",
         }
@@ -1025,6 +1035,9 @@ def apply_pool_rules(
                 sm = card.get("score_line_meta", {})
                 ev = card.get("execution_viability", {})
                 if ev.get("status") == "blocked":
+                    continue
+                # 震荡 × pos60<50 硬否决：不参与软降线（否则惩罚被降线覆盖，WR=0% 的股票又混进来）
+                if sm.get("regime_oscillation_low_pos_penalty"):
                     continue
                 old_effective = sm.get("effective_score_line", 99)
                 new_effective = min(old_effective, dynamic_line)

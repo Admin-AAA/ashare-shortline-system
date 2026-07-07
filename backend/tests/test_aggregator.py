@@ -562,6 +562,51 @@ def test_apply_pool_rules_limit_up_exempt_from_support_ma5_penalty():
     assert by_code["NORMAL"]["score_line_meta"]["regime_support_ma5_penalty"] == 6.0
 
 
+def test_apply_pool_rules_oscillation_low_pos60_penalty():
+    """震荡 regime × pos60<50 交叉否决（+12 门槛）。
+
+    第148轮 T3 失败归因：震荡 pos60<50 WR=0%（44笔全败 avg=-3.94%），
+    pos60>=70 WR=83.4%。因果：震荡市场超跌股继续跌（无反弹动能）。
+    弱势 regime pos60<50 WR=100%（超跌反弹有效）——pos60<50 效果是 regime-dependent。
+    门槛 +12（72→84）过滤 pos60<50 全部 44/44（最高分 72），不误伤 pos60>=50。
+    """
+    snapshot = {
+        "sample_count": 100, "up_count": 45, "down_count": 55,
+        "limit_up_count": 1, "limit_down_count": 0,
+        "market_regime": "震荡",
+    }
+    # 两张卡同分 72，震荡 regime，pos60 低 vs 高
+    cards = [
+        {**_card("LOW_POS", 72), "pos60": 40, "is_limit_up": False, "support_ma5": True},
+        {**_card("HIGH_POS", 72), "pos60": 80, "is_limit_up": False, "support_ma5": True},
+    ]
+    result = apply_pool_rules(cards, score_line=72, market_snapshot=snapshot)
+    by_code = {c["code"]: c for c in result}
+    # 高 pos60 通过（无惩罚），低 pos60 被过滤（+12 门槛→effective 84 > 72）
+    assert "HIGH_POS" in by_code, "pos60>=50 应通过震荡 regime"
+    assert "LOW_POS" not in by_code, "震荡 × pos60<50 应被 +12 门槛过滤"
+    assert by_code["HIGH_POS"]["score_line_meta"]["regime_oscillation_low_pos_penalty"] == 0.0
+
+
+def test_apply_pool_rules_oscillation_low_pos60_exemption():
+    """弱势 regime × pos60<50 不触发惩罚（超跌反弹在弱势有效，WR=100%）。
+
+    pos60<50 效果是 regime-dependent：弱势超跌反弹有效，震荡超跌继续跌。
+    惩罚只在震荡 regime 触发，弱势/结构性强势不触发。
+    """
+    snapshot_weak = {
+        "sample_count": 100, "up_count": 30, "down_count": 70,
+        "limit_up_count": 1, "limit_down_count": 2,
+        "market_regime": "弱势",
+    }
+    cards = [{**_card("LOW_POS_WEAK", 72), "pos60": 40, "is_limit_up": False, "support_ma5": True}]
+    result = apply_pool_rules(cards, score_line=72, market_snapshot=snapshot_weak)
+    by_code = {c["code"]: c for c in result}
+    # 弱势 regime 不触发震荡低 pos 惩罚
+    assert "LOW_POS_WEAK" in by_code, "弱势 × pos60<50 不应被震荡惩罚过滤"
+    assert by_code["LOW_POS_WEAK"]["score_line_meta"]["regime_oscillation_low_pos_penalty"] == 0.0
+
+
 def test_apply_pool_rules_sorted_by_score():
     cards = [
         _card("C", 75),
