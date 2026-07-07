@@ -69,6 +69,7 @@ def test_append_api_cost_captures_real_usage_and_cache_hit():
         prompt_tokens=5013,
         completion_tokens=443,
         cache_hit_tokens=4200,
+        skill_id="sector-relative-strength-leader",
     )
     costs = drain_api_costs()
     assert len(costs) == 1
@@ -77,6 +78,8 @@ def test_append_api_cost_captures_real_usage_and_cache_hit():
     assert c["completion_tokens"] == 443
     assert c["cache_hit_tokens"] == 4200
     assert c["status"] == "success"
+    # skill_id 必须透传到 cost dict（T8 按 skill 归因 token 消耗的前提）
+    assert c["skill_id"] == "sector-relative-strength-leader"
     # 估算字段仍保留（基于 chars/1.8），与新字段并存，向后兼容
     assert c["prompt_tokens_est"] == int(9000 / 1.8)
     assert c["completion_tokens_est"] == int(800 / 1.8)
@@ -90,6 +93,8 @@ def test_append_api_cost_falls_back_to_none_when_real_missing():
     assert c["prompt_tokens"] is None
     assert c["completion_tokens"] is None
     assert c["cache_hit_tokens"] is None
+    # skill_id 未传时回退 None（向后兼容旧调用点）
+    assert c["skill_id"] is None
     # 估算字段仍基于 chars 计算
     assert c["prompt_tokens_est"] == int(100 / 1.8)
 
@@ -118,6 +123,7 @@ def test_record_api_call_accepts_drained_cost_dict(db):
         prompt_tokens=5013,
         completion_tokens=443,
         cache_hit_tokens=4200,
+        skill_id="sector-relative-strength-leader",
     )
     costs = drain_api_costs()
     assert len(costs) == 1
@@ -134,6 +140,8 @@ def test_record_api_call_accepts_drained_cost_dict(db):
     assert log.prompt_tokens == 5013
     assert log.completion_tokens == 443
     assert log.cache_hit_tokens == 4200
+    # skill_id 入库（T8 按 skill 归因 token 消耗的前提）
+    assert log.skill_id == "sector-relative-strength-leader"
 
     # None 用量也必须可写入（provider 未返回真实值时的回退路径）
     _append_api_cost(route=route, prompt_chars=100, completion_chars=10, latency_ms=1.0, status="success")
@@ -142,3 +150,4 @@ def test_record_api_call_accepts_drained_cost_dict(db):
     assert log_none.prompt_tokens is None
     assert log_none.completion_tokens is None
     assert log_none.cache_hit_tokens is None
+    assert log_none.skill_id is None

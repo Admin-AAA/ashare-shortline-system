@@ -153,12 +153,14 @@ def _append_api_cost(
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
     cache_hit_tokens: int | None = None,
+    skill_id: str | None = None,
 ) -> None:
     # 估算 token 数：中文约 1.5-2 字符/token，英文约 4 字符/token
     # 混合文本取中间值 1.8 字符/token（仅在 provider 未返回真实用量时作为回退展示）
     prompt_tokens_est = int(prompt_chars / 1.8)
     completion_tokens_est = int(completion_chars / 1.8)
     _pending_api_costs.append({
+        "skill_id": skill_id,
         "model": route.model if route is not None else "cache",
         "endpoint": _route_endpoint(route) if route is not None else "cache",
         "prompt_chars": prompt_chars,
@@ -881,6 +883,7 @@ async def run_skill_agent_direct(
             latency_ms=0,
             status="cache_hit",
             error_message=None,
+            skill_id=skill.skill_id,
         )
         return _parse_to_output(cached_review)
 
@@ -908,6 +911,7 @@ async def run_skill_agent_direct(
                 latency_ms=0,
                 status="circuit_open",
                 error_message=error_message,
+                skill_id=skill.skill_id,
             )
             route_errors.append(error_message)
             continue
@@ -951,6 +955,7 @@ async def run_skill_agent_direct(
                         prompt_tokens=_pt,
                         completion_tokens=_ct,
                         cache_hit_tokens=_ch,
+                        skill_id=skill.skill_id,
                     )
                     record_result(route_key, success=True)
                     _persist_review_cache(skill, cache_key, code, trade_date, parsed, route.model)
@@ -979,6 +984,7 @@ async def run_skill_agent_direct(
             latency_ms=last_latency_ms,
             status=last_status,
             error_message=error_message,
+            skill_id=skill.skill_id,
         )
         route_errors.append(error_message)
 
