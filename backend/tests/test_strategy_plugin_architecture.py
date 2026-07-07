@@ -554,6 +554,42 @@ def test_high_range_60d_breakout_accepts_high_pct_breakout():
     )
 
 
+def test_trend_pullback_prefilter_accepts_moderate_volume_pullback():
+    """回归测试：trend-pullback-continuation prefilter.include_any 第三选项放宽。
+
+    第 141 轮 T1：原 vol5_20<=0.9 过严，07-07 formal run 仅 1 只通过 prefilter。
+    放宽到 vol5_20<=1.0（与 include 规则 1.05 对齐），让"均量未放大+MA5支撑+窄幅"
+    的趋势内回踩候选能进 prefilter。vol5_20∈(0.9,1.0] 应通过，>1.05 仍被 include 拒。
+    """
+    from app.engine.strategy_runner import evaluate_skill_prefilter
+
+    skills = _skills_by_id()
+    skill = skills["trend-pullback-continuation"]
+
+    # vol5_20=0.95 + support_ma5 + pct 窄幅：原<=0.9 拒，新<=1.0 过
+    moderate_pullback = _stock(
+        "000098",
+        pct=0.3,  # 在 [-1.5, 1] 窄幅
+        vol5_20=0.95,  # 在 (0.9, 1.0]
+        support_ma5=True,
+        volume_shrink_pullback=False,
+        # 其他 prefilter include 必需
+        max_dd20=-5, upper_shadow_count20=1,
+    )
+    passed, reason = evaluate_skill_prefilter(skill, moderate_pullback, stage="market", )
+    assert passed, f"vol5_20=0.95 + MA5 支撑应通过放宽后的 prefilter: {reason}"
+
+    # vol5_20=0.85 仍应通过（原阈值内）
+    tight_pullback = dict(moderate_pullback, code="000099", vol5_20=0.85)
+    passed2, _ = evaluate_skill_prefilter(skill, tight_pullback, stage="market")
+    assert passed2, "vol5_20=0.85 应通过 prefilter"
+
+    # vol5_20=1.08 仍应被 include 规则 <=1.05 拒（未放宽 include，只放宽 include_any）
+    high_vol = dict(moderate_pullback, code="000100", vol5_20=1.08)
+    passed3, reason3 = evaluate_skill_prefilter(skill, high_vol, stage="market")
+    assert not passed3, "vol5_20=1.08 应被 include 规则拒"
+
+
 def test_all_skill_md_have_agent_output_constraints():
     """所有 SKILL.md 必须含 Agent 审查输出约束（stance + action 字段）。
 

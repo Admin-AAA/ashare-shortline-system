@@ -55,7 +55,10 @@ prefilter:
         reason: "requires_ma5_shrink_pullback"
       - when: "volume_shrink_pullback == true and support_ma10 == true"
         reason: "requires_ma10_shrink_pullback"
-      - when: "pct >= -1.5 and pct <= 1 and support_ma5 == true and vol5_20 <= 0.9"
+      # 放宽 vol5_20<=0.9 → <=1.0：与 include 规则 1.05 对齐，让"均量未放大+MA5支撑+窄幅"
+      # 的趋势内回踩候选能进 prefilter（原 0.9 过严，07-07 formal 仅 1 只通过 prefilter）
+      # 实验回测：vol5_20∈[0.9,1.05] 的 trend-pullback 历史样本 2 笔 WR 50%/+4.61%
+      - when: "pct >= -1.5 and pct <= 1 and support_ma5 == true and vol5_20 <= 1.0"
         reason: "requires_near_ma_support"
     exclude:
       - when: "dist20 > 18 and rsi_12 > 72"
