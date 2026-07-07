@@ -66,6 +66,12 @@ prefilter:
       # 数据驱动（T3 第129轮失败归因闭环，500笔去重 sample）
       - when: "pos60 < 50"
         reason: "low_pos60_long_term_downtrend"
+      # chg20>50+pct>2 = WR 22.6%（31笔），gap_roundtrip 高发区：
+      # 20日涨幅>50%的股票在当日涨>2%时入场，几乎必亏（冲高回落）。
+      # 对比 chg20>50+pct<=2 WR=69.8%（43笔），问题在"追涨"不在"涨多了"。
+      # 数据驱动（T3 第138轮失败归因闭环，500笔去重 sample）
+      - when: "chg20 > 50 and pct > 2"
+        reason: "overextended_chase"
       # avg_cost>200 prefilter 已删除：avg_cost 在 feature_builder 阶段才填充，prefilter 阶段不可用（永远 False）；
       # 且数据证明 avg_cost>200 的科创板高价龙头 WR 76.8% avg 3.81%，过滤是误杀（第 100 轮 T5 修复）
 
