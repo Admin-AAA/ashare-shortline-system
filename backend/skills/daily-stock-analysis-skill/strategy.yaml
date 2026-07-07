@@ -61,6 +61,11 @@ prefilter:
         reason: "broken_trend"
       - when: "pos20 < 50"
         reason: "low_pos20_weakness"
+      # pos60<50 是最强负向预测因子：38笔 WR=26.3%（远低于50%基线）。
+      # pos60<50 = 60日位置极低，长期下跌趋势，入场后大概率继续下跌触发止损。
+      # 数据驱动（T3 第129轮失败归因闭环，500笔去重 sample）
+      - when: "pos60 < 50"
+        reason: "low_pos60_long_term_downtrend"
       # avg_cost>200 prefilter 已删除：avg_cost 在 feature_builder 阶段才填充，prefilter 阶段不可用（永远 False）；
       # 且数据证明 avg_cost>200 的科创板高价龙头 WR 76.8% avg 3.81%，过滤是误杀（第 100 轮 T5 修复）
 
