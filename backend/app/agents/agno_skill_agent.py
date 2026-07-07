@@ -122,6 +122,26 @@ def _should_failover_immediately(exc: Exception) -> bool:
     return status_code in {401, 402, 403, 404, 429} or any(marker in text for marker in _ROUTE_FAILOVER_ERROR_MARKERS)
 
 
+def _extract_usage_tokens(resp) -> tuple[int | None, int | None, int | None]:
+    """从 OpenAI 兼容响应抽取真实 token 用量（含 prompt cache 命中）。
+
+    返回 (prompt_tokens, completion_tokens, cache_hit_tokens)。
+    - DeepSeek / OpenAI 在 usage.prompt_tokens_details.cached_tokens 暴露 prompt cache 命中量
+    - 部分兼容实现用 prompt_tokens_cache_hit 字段名，二者都兼容
+    - 无 usage / 无 details 时返回 (None, None, None)，由调用方回退到 chars/1.8 估算
+    """
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return None, None, None
+    prompt_tokens = getattr(usage, "prompt_tokens", None)
+    completion_tokens = getattr(usage, "completion_tokens", None)
+    cache_hit_tokens: int | None = None
+    ptd = getattr(usage, "prompt_tokens_details", None)
+    if ptd is not None:
+        cache_hit_tokens = getattr(ptd, "cached_tokens", None) or getattr(ptd, "prompt_tokens_cache_hit", None)
+    return prompt_tokens, completion_tokens, cache_hit_tokens
+
+
 def _append_api_cost(
     *,
     route,
@@ -130,9 +150,12 @@ def _append_api_cost(
     latency_ms: float,
     status: str,
     error_message: str | None = None,
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
+    cache_hit_tokens: int | None = None,
 ) -> None:
     # 估算 token 数：中文约 1.5-2 字符/token，英文约 4 字符/token
-    # 混合文本取中间值 1.8 字符/token
+    # 混合文本取中间值 1.8 字符/token（仅在 provider 未返回真实用量时作为回退展示）
     prompt_tokens_est = int(prompt_chars / 1.8)
     completion_tokens_est = int(completion_chars / 1.8)
     _pending_api_costs.append({
@@ -142,6 +165,10 @@ def _append_api_cost(
         "completion_chars": completion_chars,
         "prompt_tokens_est": prompt_tokens_est,
         "completion_tokens_est": completion_tokens_est,
+        # 真实用量（来自 provider usage 字段）；None 表示本次调用未取得真实值
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "cache_hit_tokens": cache_hit_tokens,
         "latency_ms": round(latency_ms, 1),
         "status": status,
         "error_message": error_message,
@@ -912,12 +939,18 @@ async def run_skill_agent_direct(
                     content = resp.choices[0].message.content or ""
                     parsed = json.loads(content)
                     result = _parse_to_output(parsed)
+                    # 捕获真实 token 用量（含 prompt cache 命中），用于成本核算与 T8 prompt cache 验证。
+                    # 此前 resp.usage 被丢弃，只能靠 chars/1.8 估算，无法验证 prompt_cache_key 是否生效。
+                    _pt, _ct, _ch = _extract_usage_tokens(resp)
                     _append_api_cost(
                         route=route,
                         prompt_chars=prompt_chars,
                         completion_chars=len(content),
                         latency_ms=elapsed_ms,
                         status="success",
+                        prompt_tokens=_pt,
+                        completion_tokens=_ct,
+                        cache_hit_tokens=_ch,
                     )
                     record_result(route_key, success=True)
                     _persist_review_cache(skill, cache_key, code, trade_date, parsed, route.model)

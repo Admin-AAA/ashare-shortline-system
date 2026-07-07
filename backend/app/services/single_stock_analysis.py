@@ -289,7 +289,13 @@ def _run_llm_analysis(
             "supports": raw.get("evidence") or raw.get("supports") or [],
             "risks": raw.get("risks") or [],
             "api_costs": api_costs,
-            "total_tokens_est": sum(c.get("prompt_tokens_est", 0) + c.get("completion_tokens_est", 0) for c in api_costs),
+            # 估算用量（chars/1.8 回退，用于 provider 未返回 usage 时的展示）
+            "total_tokens_est": sum((c.get("prompt_tokens_est") or 0) + (c.get("completion_tokens_est") or 0) for c in api_costs),
+            # 真实用量（来自 provider usage 字段）；0 表示未取得真实值
+            "total_tokens_real": sum((c.get("prompt_tokens") or 0) + (c.get("completion_tokens") or 0) for c in api_costs),
+            # prompt cache 命中量（DeepSeek prompt_tokens_details.cached_tokens）；>0 即证明 prompt_cache_key 机制生效
+            "total_cache_hit_tokens": sum((c.get("cache_hit_tokens") or 0) for c in api_costs),
+            "prompt_cache_active": any((c.get("cache_hit_tokens") or 0) > 0 for c in api_costs if c.get("status") == "success"),
         }
     except Exception as exc:
         logger.warning("LLM analysis failed for %s: %s", code, exc)
