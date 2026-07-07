@@ -229,13 +229,20 @@ def _build_overview_payload(db: Session) -> DashboardOverview:
 @router.get("/overview", response_model=DashboardOverview)
 def overview(db: Session = Depends(get_db)) -> DashboardOverview:
     now = time.monotonic()
+    schedule_refresh = False
     with _OVERVIEW_LOCK:
         cached = _OVERVIEW_CACHE["data"]
         if cached is not None and (now - _OVERVIEW_CACHE["ts"]) < _OVERVIEW_TTL_SECONDS:
             return cached  # 命中：直接返回，不触碰 DB
         if cached is not None:
-            _schedule_overview_refresh()  # 过期但存在：先返回旧值，后台刷新
-            return cached
+            # 过期但存在：标记后「出锁」再调度后台刷新。
+            # 注意：不能在持锁时调用 _schedule_overview_refresh —— 它内部会再次获取
+            # 同一把非重入 _OVERVIEW_LOCK，导致死锁（旧 bug：/api/dashboard/overview 卡死 10s）。
+            schedule_refresh = True
+        # 冷缓存：退出锁后同步计算
+    if schedule_refresh:
+        _schedule_overview_refresh()  # 锁外调度，后台线程自行获取 _OVERVIEW_LOCK 写缓存
+        return cached
     # 冷缓存（首次/进程重启后）：同步计算一次并写入缓存
     try:
         payload = _build_overview_payload(db)
