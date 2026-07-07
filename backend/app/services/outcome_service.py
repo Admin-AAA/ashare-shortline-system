@@ -504,8 +504,15 @@ def _metrics_by_strategy(db: Session, run_mode: str) -> list[dict[str, Any]]:
         metric_rows = _metric_records_from_rows(item["rows"], benchmark_by_rec)
         metrics = _compute_full_metrics(metric_rows)
         # 最近一次该策略出现在该口径推荐中的日期/时间（北极星 C 项：策略可追溯）
-        last_rec_at = max((r.recommended_at for r in item["rows"] if r.recommended_at), default=None)
-        last_rec_date = max((r.trade_date for r in item["rows"] if r.trade_date), default=None)
+        # 用 getattr 防御：best-effort 字段，mock/部分行缺 recommended_at 时不应崩溃
+        last_rec_at = max(
+            (getattr(r, "recommended_at", None) for r in item["rows"] if getattr(r, "recommended_at", None)),
+            default=None,
+        )
+        last_rec_date = max(
+            (getattr(r, "trade_date", None) for r in item["rows"] if getattr(r, "trade_date", None)),
+            default=None,
+        )
         result.append({
             "strategy_id": item["strategy_id"],
             "strategy_name": item["strategy_name"],
