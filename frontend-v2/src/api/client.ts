@@ -39,6 +39,7 @@ import type {
   StrategyListItem,
   StrategyStatsRow,
   StatsOverview,
+  AlphaDecayResponse,
   SystemLlmConfig,
   SystemLlmTestResult,
   SystemLlmUpdateResult
@@ -365,6 +366,7 @@ export const api = {
   statsOverview: (mode: "formal" | "experiment") => request<StatsOverview>(`/api/stats/overview?mode=${mode}`),
   statsBySkill: (mode: "formal" | "experiment") => request<SkillStatsRow[]>(`/api/stats/by-skill?mode=${mode}`),
   statsByPreset: (mode: "formal" | "experiment") => request<PresetStatsRow[]>(`/api/stats/by-preset?mode=${mode}`),
+  statsAlphaDecay: (mode: "formal" | "experiment") => request<AlphaDecayResponse>(`/api/stats/alpha-decay?mode=${mode}`),
   metricsByStrategy: (mode: "formal" | "experiment", windowDays?: number) =>
     request<StrategyStatsRow[]>(`/api/metrics/by-strategy?mode=${mode}${windowDays ? `&window_days=${windowDays}` : ""}`),
   metricsBySetup: (mode: "formal" | "experiment", windowDays?: number) =>

@@ -1542,6 +1542,34 @@ export type StatsOverview = {
   latest_run_at?: string | null;
 };
 
+/** 因子 Alpha 衰减检测 —— /api/stats/alpha-decay 返回。
+ * 对比因子在早期 vs 近期的 point-biserial 相关性 + 胜率边际，识别衰减中/改善中/稳定的因子。 */
+export type AlphaDecayFactor = {
+  factor: string;
+  early_r: number;
+  recent_r: number;
+  delta: number;
+  decay_pct: number;
+  status: "decaying" | "improving" | "stable";
+  early_n: number;
+  recent_n: number;
+  early_win_edge: number;
+  recent_win_edge: number;
+  early_true_wr: number;
+  recent_true_wr: number;
+  early_false_wr: number;
+  recent_false_wr: number;
+  early_true_n: number;
+  recent_true_n: number;
+};
+
+export type AlphaDecayResponse = {
+  total: number;
+  early_period: string;
+  recent_period: string;
+  factors: AlphaDecayFactor[];
+};
+
 export type SkillStatsRow = {
   skill_id: string;
   name: string;

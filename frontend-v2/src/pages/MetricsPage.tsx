@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useApi } from "../app/useApi";
 import { api } from "../api/client";
 import type {
+  AlphaDecayResponse,
   DateRangeMeta,
   FilterEffectiveness,
   MetricsOverview,
@@ -59,9 +60,13 @@ export function MetricsPage() {
     () => api.metricsOverview("formal", windowDays ?? undefined),
     [windowDays],
   );
+  const { data: alphaDecay, loading: l7, error: e7 } = useApi<AlphaDecayResponse>(
+    () => api.statsAlphaDecay("formal"),
+    [],
+  );
 
-  const loading = l1 || l2 || l3 || l4 || l5 || l6;
-  const error = e1 || e2 || e3 || e4 || e5 || e6;
+  const loading = l1 || l2 || l3 || l4 || l5 || l6 || l7;
+  const error = e1 || e2 || e3 || e4 || e5 || e6 || e7;
 
   // 从任一响应取 date_range 元信息（优先 filterEffect，其次 scoreLines/strategies 首项）
   const dateRange: DateRangeMeta | undefined =
@@ -89,6 +94,7 @@ export function MetricsPage() {
       <ScoreLinePanel rows={scoreLines ?? []} />
       <StrategyPanel rows={strategies ?? []} />
       <SetupPanel rows={setups ?? []} />
+      <AlphaDecayPanel data={alphaDecay} />
       <SkillsCatalogPanel />
     </div>
   );
@@ -247,6 +253,86 @@ function OverviewKpiPanel({ data }: { data: MetricsOverview | null | undefined }
             </div>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/** Alpha 衰减面板 —— 对比因子早期 vs 近期的 point-biserial 相关性 + 胜率边际。
+ * 后端 /api/stats/alpha-decay 早已返回，前端无类型无页面——本轮补齐。
+ * 衰变中(decaying)红 / 改善中(improving)绿 / 稳定(stable)灰。 */
+function AlphaDecayPanel({ data }: { data: AlphaDecayResponse | null | undefined }) {
+  if (!data || !data.factors || data.factors.length === 0) return null;
+  const sorted = [...data.factors].sort((a, b) => a.delta - b.delta); // delta 升序（最衰变在前）
+
+  const statusColor = (s: string) =>
+    s === "decaying" ? "var(--market-down)" : s === "improving" ? "var(--market-up)" : "var(--text-muted)";
+  const statusLabel = (s: string) =>
+    s === "decaying" ? "衰变中" : s === "improving" ? "改善中" : "稳定";
+
+  return (
+    <div className="panel" style={{ padding: "var(--space-4)" }}>
+      <div className="panel__header" style={{ marginBottom: "var(--space-3)" }}>
+        <div>
+          <div className="panel__kicker">因子 Alpha 衰减检测</div>
+          <h3 className="panel__title">早期 vs 近期</h3>
+        </div>
+        <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+          {data.early_period} → {data.recent_period}
+        </span>
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-xs)" }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid var(--line)", color: "var(--text-muted)", textAlign: "right" }}>
+              <th style={{ textAlign: "left", padding: "var(--space-2)", fontWeight: 600 }}>因子</th>
+              <th style={{ padding: "var(--space-2)", fontWeight: 600 }}>状态</th>
+              <th style={{ padding: "var(--space-2)", fontWeight: 600 }}>早期 r</th>
+              <th style={{ padding: "var(--space-2)", fontWeight: 600 }}>近期 r</th>
+              <th style={{ padding: "var(--space-2)", fontWeight: 600 }}>Δ</th>
+              <th style={{ padding: "var(--space-2)", fontWeight: 600 }}>衰减%</th>
+              <th style={{ padding: "var(--space-2)", fontWeight: 600 }}>早期胜率边际</th>
+              <th style={{ padding: "var(--space-2)", fontWeight: 600 }}>近期胜率边际</th>
+              <th style={{ padding: "var(--space-2)", fontWeight: 600 }}>样本</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((f) => (
+              <tr key={f.factor} style={{ borderBottom: "1px solid var(--line)", textAlign: "right" }}>
+                <td style={{ textAlign: "left", padding: "var(--space-2)", fontFamily: "var(--font-mono)", color: "var(--ink)" }}>
+                  {f.factor}
+                </td>
+                <td style={{ padding: "var(--space-2)" }}>
+                  <span style={{ color: statusColor(f.status), fontWeight: 600 }}>{statusLabel(f.status)}</span>
+                </td>
+                <td style={{ padding: "var(--space-2)", fontFamily: "var(--font-mono)", color: f.early_r >= 0 ? "var(--market-up)" : "var(--market-down)" }}>
+                  {f.early_r.toFixed(3)}
+                </td>
+                <td style={{ padding: "var(--space-2)", fontFamily: "var(--font-mono)", color: f.recent_r >= 0 ? "var(--market-up)" : "var(--market-down)" }}>
+                  {f.recent_r.toFixed(3)}
+                </td>
+                <td style={{ padding: "var(--space-2)", fontFamily: "var(--font-mono)", color: f.delta >= 0 ? "var(--market-up)" : "var(--market-down)" }}>
+                  {f.delta >= 0 ? "+" : ""}{f.delta.toFixed(3)}
+                </td>
+                <td style={{ padding: "var(--space-2)", fontFamily: "var(--font-mono)", color: statusColor(f.status) }}>
+                  {f.decay_pct >= 0 ? "+" : ""}{f.decay_pct.toFixed(0)}%
+                </td>
+                <td style={{ padding: "var(--space-2)", fontFamily: "var(--font-mono)", color: "var(--ink-secondary)" }}>
+                  {f.early_win_edge.toFixed(1)}
+                </td>
+                <td style={{ padding: "var(--space-2)", fontFamily: "var(--font-mono)", color: "var(--ink-secondary)" }}>
+                  {f.recent_win_edge.toFixed(1)}
+                </td>
+                <td style={{ padding: "var(--space-2)", fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>
+                  {f.early_true_n}/{f.recent_true_n}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginTop: "var(--space-2)" }}>
+        r = point-biserial 相关性（因子=true vs =false 的胜率差）；胜率边际 = 因子为真时的胜率 - 因子为假时的胜率。衰变中=近期 r 显著低于早期。
       </div>
     </div>
   );
