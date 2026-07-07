@@ -522,6 +522,38 @@ def test_high_range_require_setup_and_observation_hard_veto():
     assert signal3["setup_match"] == "60日新高放量突破"
 
 
+def test_high_range_60d_breakout_accepts_high_pct_breakout():
+    """回归测试：60日新高放量突破 setup 移除 pct<=7 上限。
+
+    历史回测（2026-04~07）：breakout60 + pct∈[1.5,7] + vol5_20>=1.15 + pos120>=70
+    命中 6 笔 WR 50% / +2.47%；放开 pct>7（300502 pct=9.88 → success +5.94%）后
+    命中 7 笔 WR 57.1% / +2.97%。pct>7 的过热由 risk rule（pct>7 → -8）+
+    limit_up_overheat_score 控制，setup 不再硬卡上限。
+    之前 pct>7 被 setup 的 pct<=7 条件直接排除（命中 null setup → require_setup hard_veto），
+    改动后应放行进 60日新高放量突破 setup。
+    """
+    skills = _skills_by_id()
+    skill = skills["high-range-breakout-momentum"]
+
+    high_pct_breakout = _stock(
+        "000099",
+        breakout60=True,
+        pos60=85, pos120=85, off_high60_pct=-1,
+        vol5_20=1.2,  # >= 1.15
+        pct=9.5,  # > 7，旧条件 pct<=7 会被排除
+        support_ma5=True, turnover_rate=3.0,
+        max_dd20=-5, dist60=10,
+        limit_up_overheat_score=20,  # 未过热
+    )
+    signal = run_strategy(skill, high_pct_breakout, ["半导体"], skip_universe_check=True)
+    assert signal["hard_veto"] is False, f"高 pct 真突破应放行（不再被 pct<=7 排除）: {signal}"
+    assert signal["setup_match"] == "60日新高放量突破", f"应命中 60日 setup: {signal['setup_match']}"
+    # pct>7 风险规则仍应生效（score_delta -8）
+    assert any("涨幅过大" in f or "追高" in f for f in signal["risk_flags"]), (
+        f"pct>7 风险标记应触发: {signal['risk_flags']}"
+    )
+
+
 def test_all_skill_md_have_agent_output_constraints():
     """所有 SKILL.md 必须含 Agent 审查输出约束（stance + action 字段）。
 

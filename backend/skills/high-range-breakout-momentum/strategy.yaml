@@ -103,10 +103,13 @@ phases:
 
 setups:
   - name: 60日新高放量突破
-    when: "breakout60 == true and pos120 >= 70 and vol5_20 >= 1.15 and pct >= 1.5 and pct <= 7"
+    when: "breakout60 == true and pos120 >= 70 and vol5_20 >= 1.15 and pct >= 1.5"
     score_delta: 6  # alpha decay: breakout60 r=+0.06→-0.20, reduced from 12
     entry_rule: "放量突破60日平台后，回踩不跌回突破位再跟随"
     invalid_rule: "跌回60日突破平台或失守MA10后不能收回"
+    # pct 上限交给 risk rule（pct>7 → score_delta -8）+ limit_up_overheat_score 控制；
+    # 历史回测：pct∈[1.5,7] 胜率50%/+2.47%，含 pct>7（300502 +5.94%）→ 57.1%/+2.97%。
+    # breakout60=true 中 94% 当日 pct<0（高位回调），pct>=1.5 下限确保"今日实涨"才入场。
 
   - name: 20日平台突破接力
     when: "breakout20 == true and pos120 >= 80 and chg20 >= 8 and vol5_20 >= 1.2 and turnover_rate >= 2"
