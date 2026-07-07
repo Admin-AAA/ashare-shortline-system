@@ -2,9 +2,11 @@ import hashlib
 import copy
 import json
 import logging
+import os
 import queue
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -1191,7 +1193,6 @@ def get_run_replay_analysis(db: Session, run_id: str) -> dict[str, Any] | None:
 
 
 def _enqueue_background_run(run_id: str, payload: dict[str, Any]) -> None:
-    payload["wait_for_completion"] = True
     _run_queue.put((run_id, payload))
     _ensure_run_queue_worker()
 
@@ -1208,9 +1209,37 @@ def _ensure_run_queue_worker() -> None:
         _run_queue_worker_started = True
 
 
+def _spawn_run_subprocess(run_id: str) -> None:
+    """在独立子进程中运行推荐任务，避免后端服务重启/重载导致任务中断。"""
+    import subprocess
+
+    from pathlib import Path
+
+    venv_python = Path(sys.executable)
+    script_path = Path(__file__).resolve().parent.parent.parent / "scripts" / "run_workbench_subprocess.py"
+    log_dir = Path(__file__).resolve().parent.parent.parent / "logs"
+    log_dir.mkdir(exist_ok=True)
+    log_path = log_dir / f"run_{run_id}.log"
+
+    env = os.environ.copy()
+    project_root = Path(__file__).resolve().parent.parent.parent
+    existing_pp = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = f"{project_root}{os.pathsep}{existing_pp}".rstrip(os.pathsep)
+
+    subprocess.Popen(
+        [str(venv_python), str(script_path), run_id],
+        stdout=open(log_path, "a"),
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+        close_fds=True,
+        start_new_session=True,
+        env=env,
+    )
+
+
 def _run_queue_worker() -> None:
     while True:
-        run_id, payload = _run_queue.get()
+        run_id, _payload = _run_queue.get()
         db = SessionLocal()
         try:
             _update_run_progress(
@@ -1222,9 +1251,11 @@ def _run_queue_worker() -> None:
                 message="后台任务已接管，开始准备运行",
                 status="running",
             )
-            asyncio.run(run_workbench(db, payload, existing_run_id=run_id))
+            # 使用独立子进程执行 run，子进程与 uvicorn 进程解耦，
+            # 即使后端重启/重载，推荐任务仍可继续运行。
+            _spawn_run_subprocess(run_id)
         except Exception as exc:
-            logger.exception("background run failed: %s", run_id)
+            logger.exception("background run failed to spawn: %s", run_id)
             _mark_run_failed(db, run_id, exc)
         finally:
             db.close()
@@ -1301,6 +1332,12 @@ def _update_run_progress(
 
 
 def recover_interrupted_runs(db: Session, run_ids: list[str] | None = None) -> int:
+    """启动时将真正失联的后台任务标记为 interrupted。
+
+    推荐任务现在运行在独立子进程中，后端重启后子进程仍可继续更新心跳。
+    因此只有心跳超时的任务才需要被标记为 interrupted；心跳未超时的任务
+    说明子进程仍在正常运行，应继续保留 running 状态。
+    """
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     stmt = select(RecommendationRun).where(RecommendationRun.status.in_(tuple(RUN_ACTIVE_STATUSES)))
     if run_ids is not None:
@@ -1308,6 +1345,11 @@ def recover_interrupted_runs(db: Session, run_ids: list[str] | None = None) -> i
     runs = db.scalars(stmt).all()
     recovered = 0
     for run in runs:
+        heartbeat_age = (now - run.heartbeat_at).total_seconds() if run.heartbeat_at else float("inf")
+        # 心跳未超时说明独立子进程仍在运行，不要打断它
+        if heartbeat_age <= RUN_HEARTBEAT_STALE_SECONDS:
+            logger.info("keep running run %s alive (heartbeat age=%.0fs)", run.run_id, heartbeat_age)
+            continue
         run.status = "interrupted"
         run.interrupted_at = now
         run.finished_at = now
