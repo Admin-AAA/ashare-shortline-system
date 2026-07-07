@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
-import { LayoutGrid, PlayCircle, AlertTriangle, CheckCircle2, Eye, Flame, Loader2, RefreshCw } from "lucide-react";
+import { LayoutGrid, PlayCircle, Eye, Flame, Loader2 } from "lucide-react";
 import { api } from "../api/client";
 import { EmptyState } from "../components/StateViews";
 

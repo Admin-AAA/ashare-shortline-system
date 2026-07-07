@@ -9,7 +9,6 @@ import type {
 } from "../types";
 import { PageSkeleton, ErrorPage, EmptyState } from "../components/StateViews";
 import { SkillsCatalogPanel } from "../components/SkillsCatalogPanel";
-import { FILTER_RULE_META, RuleSection, RuleRow } from "../components/MetricsRulePanels";
 import { LineChart } from "lucide-react";
 
 /**

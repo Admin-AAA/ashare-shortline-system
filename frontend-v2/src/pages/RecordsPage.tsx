@@ -596,7 +596,6 @@ function StockAnalysisDetailView({ recId, onBack }: { recId: string; onBack: () 
 
 function FeatureSnapshotSection({ snapshot }: { snapshot: Record<string, unknown> }) {
   const num = (v: unknown) => (typeof v === "number" && !Number.isNaN(v) ? v.toFixed(2) : "—");
-  const pct = (v: unknown) => (typeof v === "number" && !Number.isNaN(v) ? `${v.toFixed(2)}%` : "—");
 
   const rows: Array<[string, string]> = [
     ["现价", num(snapshot.price)],
