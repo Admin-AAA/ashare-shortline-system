@@ -26,39 +26,28 @@
 
 ## 北极星指标
 
-系统存在的唯一意义：**让用户用的推荐能稳定赚钱**。偏离北极星的改动（哪怕技术上漂亮）是浪费。
+系统存在的唯一意义：**每天打开页面，看到当天系统推了什么、为什么推、跑出来结果如何**。偏离北极星的改动（哪怕技术上漂亮、回测指标再涨一点）是浪费。
 
-### A. 推荐质量
+### 北极星：每日可见推荐 + 策略可追溯
 
-| 指标 | 基线 | 目标 | 攻击优先级 |
-|------|------|------|-----------|
-| 胜率 | 56.8% | 62% | 🔴 高 |
-| 盈亏比 | 1.36 | 1.8 | 🔴 高 |
-| 最大单笔亏损 | -32.64% | -10% | 🔴 高 |
-| 策略调用覆盖 | 3/8 | 8/8 | 🔴 高 |
-| Sharpe | 0.33 | 0.5 | 🟡 中 |
-| 平均收益 | +1.96% | +3% | 🟡 中 |
+三件事，按重要性排序：
 
-### B. 用户体验
-
-| 指标 | 基线 | 目标 | 攻击优先级 |
-|------|------|------|-----------|
-| 推荐卡片信息完整度 | 止损/止盈藏在 feature_snapshot | 价格/止损/止盈/失效规则直达顶层 | 🔴 高 |
-| 策略清单页 | 无 | 有（8 策略+简介+回测胜率） | 🔴 高 |
-| 推荐历史记录页 | 无 | 有（分页+筛选） | 🔴 高 |
-| 交互顺畅度 | 未度量 | 关键操作 <2s，骨架屏 | 🔴 高 |
-| 信息完整性 | 未度量 | 决策信息一屏可见 | 🟡 中 |
-| 页面美观度 | 暗色密度高 | 留白/层级/对齐达标 | 🟡 中 |
-| Dashboard 延迟 | 550ms | <300ms | ⚪ 低 |
+| # | 北极星项 | 现状（2026-07-07） | 目标 | 攻击优先级 |
+|---|---------|-------------------|------|-----------|
+| A | **每个交易日产出可见的 formal 推荐** | formal run 连续中断（7/7 凌晨 4 次 interrupted、0 推荐），最近成功 formal 推荐在 7/7 02:13（5 条，trade_date=07-06） | 每个交易日 T+1 早 9 点前有 ≥1 条成功 formal 推荐，连续 5 个交易日不断档 | 🔴 最高 |
+| B | **每条推荐可在前端看到完整决策链** | 卡片有推荐价/止损/止盈（T7-B 已做），但「为什么推」散在 feature_snapshot/agent_summary，没有一屏可见的因果 | 每条推荐卡片一屏内可见：策略名 + 核心因子 + 入场/失效规则 + LLM delta + 历史同策略胜率 | 🔴 高 |
+| C | **每个策略的表现可追溯** | 8 策略全注册，但只有 chao-gu-yang-jia/daily-stock-analysis 历史命中过 formal；limit-up-reseal-relay 只在 experiment 跑过 5 条 | 每个策略有独立可查的：历史推荐数 + 胜率 + 盈亏比 + 最近一次 formal 命中日期；前端策略清单页可点进详情 | 🔴 高 |
+| D | 回测胜率/盈亏比/最大亏损 | 68.9% / 1.94 / -7.07% | 不低于现状；突破需靠前瞻样本而非历史拟合 | 🔴 高 |
 
 ### 攻击原则
 
-1. **UX 和推荐质量同等重要**——用户看不到止损 = 风控失效（数据有但不展示等于没有）
-2. **优先攻红色缺口**——胜率、盈亏比、最大亏损、策略覆盖、卡片信息完整度、策略清单页、历史记录页、交互顺畅度这 8 个是核心
-3. **最大亏损 -32.64% 是耻辱**——一笔亏 32% 说明风控失效。控制尾部风险 > 提升胜率
-4. **5 个策略没被调用是最大的浪费**——注册了不用等于没写。T1 必须先修
-5. **信息断层是 UX 第一大敌**——后端有数据但前端不展示 = 用户视角的"没有"
-6. **不为了好看的数据优化**——Sharpe 靠过拟合达成不如不做
+1. **可见 > 内部**——一项改动如果用户在页面上感知不到，就不算北极星进展，再漂亮的内部重构也只是 T10 维护项。每轮自检第一问：这轮改动用户能在哪个页面看到？
+2. **能跑出来 > 跑得准**——formal run 产不出推荐 = 系统对用户等于没在跑。A 项优先级高于一切。修 formal 中断 > 调第 N 个因子阈值。
+3. **策略可追溯 > 策略多**——8 个策略注册了不用等于没写，但「用了却没有可查的历史表现」同样等于没有。C 项要求每个策略有独立可查的战绩。
+4. **回测胜率是必要非充分**——回测胜率不代表未来，但它是「策略可追溯」的底气，也是唯一能量化的历史证据。禁止靠过拟合把数字刷高，但同样禁止放任它下滑。D 项与 A/B/C 同级，明显下滑即触发修复。
+5. **最大亏损 -7.07% 要守住并继续压**——尾部风险是短线系统的生死线。不追涨胜率，但最大亏损越接近 0 越好。
+6. **引擎不得打断正在跑的 formal run**——最近 4 次中断是 self-improve 重启后端把 formal run 打断（7/7 凌晨 01:40-01:56）。这是结构性冲突，T11 必须修：改后端重启策略，或让 formal run 跑在独立进程。
+7. **不为了好看的数据优化**——Sharpe 靠过拟合达成不如不做。
 
 ### 每轮自检（选任务前必做）
 
@@ -67,22 +56,65 @@ cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && pyt
 from app.db.session import SessionLocal
 from sqlalchemy import text
 db = SessionLocal()
+
+# A 项：最近 7 天 formal 推荐断档情况
+r = db.execute(text(\"\"\"
+SELECT trade_date, run_mode, status, recommended_count
+FROM recommendation_runs
+WHERE run_mode='formal' AND started_at > DATE_SUB(NOW(), INTERVAL 7 DAY)
+ORDER BY started_at DESC
+\"\"\")).fetchall()
+print('=== 最近 7 天 formal run ===')
+for row in r:
+    print(f'  {row[0]} {row[1]} {row[2]} rec_n={row[3]}')
+ok = [row for row in r if row[2]=='completed' and row[3]>0]
+print(f'A 项：最近 7 天有 {len(ok)} 个交易日产出 formal 推荐（目标 ≥5）')
+
+# A 项根因：是否有 interrupted
+intp = [row for row in r if row[2]=='interrupted']
+if intp:
+    print(f'⚠️ {len(intp)} 个 interrupted run（根因待查）')
+
+# B 项：最近推荐卡片是否一屏可见决策链（定性，看字段）
+r = db.execute(text(\"\"\"
+SELECT final_score, setup_type, entry_rule, invalid_rule,
+       JSON_EXTRACT(feature_snapshot_json, '\$.avg_cost') AS avg_cost,
+       JSON_EXTRACT(agent_summary_json, '\$.delta') AS llm_delta
+FROM recommendations
+ORDER BY recommended_at DESC LIMIT 1
+\"\"\")).fetchone()
+print(f'\\n=== 最近 1 条推荐字段完整性 ===')
+print(f'  final_score={r[0]} setup={r[1]} entry_rule={r[2]} invalid_rule={r[3]}')
+print(f'  avg_cost={r[4]} llm_delta={r[5]}')
+
+# C 项：各策略历史 formal 命中（注意：skill_breakdown_json 字段叫 strategy_id 不是 skill_id）
+r = db.execute(text(\"\"\"
+SELECT JSON_EXTRACT(skill_breakdown_json, '\$[*].strategy_id') AS skills
+FROM recommendations r JOIN recommendation_runs u ON r.run_id=u.run_id
+WHERE u.run_mode='formal' AND r.skill_breakdown_json IS NOT NULL
+\"\"\")).fetchall()
+import json
+skills = set()
+for row in r:
+    try:
+        arr = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+        if isinstance(arr, list): skills.update(arr)
+    except: pass
+print(f'\\nC 项：formal 推荐中命中过的策略 {len(skills)} 个: {sorted(skills)}')
+
+# D 项：核心指标（与 A/B/C 同级，明显下滑即触发修复）
 r = db.execute(text('SELECT COUNT(*), SUM(CASE WHEN outcome_label=\"success\" THEN 1 ELSE 0 END) FROM recommendation_outcomes WHERE outcome_label IN (\"success\",\"failed\")')).fetchone()
-print(f'胜率: {round(r[1]*100/r[0],1)}% ({r[1]}/{r[0]})')
-r = db.execute(text('SELECT ROUND(AVG(CASE WHEN executed_return>0 THEN executed_return END),2), ROUND(AVG(CASE WHEN executed_return<0 THEN ABS(executed_return) END),2) FROM recommendation_outcomes WHERE outcome_label IN (\"success\",\"failed\")')).fetchone()
-print(f'盈亏比: {round(r[0]/r[1],2) if r[1] else 0} (win={r[0]}% loss={r[1]}%)')
+print(f'\\nD 项：胜率 {round(r[1]*100/r[0],1)}% （当前基线 68.9%，明显下滑即触发 T3/T5）')
 r = db.execute(text('SELECT ROUND(MIN(executed_return),2) FROM recommendation_outcomes WHERE outcome_label IN (\"success\",\"failed\")')).fetchone()
-print(f'最大亏损: {r[0]}%')
+print(f'D 项：最大亏损 {r[0]}% （当前基线 -7.07%，越接近 0 越好，恶化即触发）')
 "
 ```
 
-选任务优先攻击最大缺口：
-- 胜率/盈亏比缺口大 → T3 或 T1
-- 最大亏损缺口大 → T3 风控或 T5
-- 策略覆盖缺口大 → T1 注册修复
-- 推荐卡片信息断层 → T7-B
-- 策略清单页/历史记录页缺 → T7-C
-- 交互/信息/美观差 → T7-B 或 T7+T10
+选任务优先攻击**最大缺口**（不是最容易做的）：
+- A 项断档 / formal run interrupted → **T12 推荐 pipeline 稳定性**（最高优先，见下）
+- B 项卡片信息断层 → T7-B（决策链一屏可见）
+- C 项策略无战绩可查 → T7-C（策略详情页）+ T1（让未命中策略跑通 formal）
+- D 项指标下滑 → T3 或 T5（D 项与 A/B/C 同级，胜率/盈亏比/最大亏损任一项明显下滑即触发，不能等破底线）
 
 ---
 
@@ -136,7 +168,8 @@ echo "$INSTANCE_ID|$START_TS|T{编号}|进行中|$(date +%s)" > "$HB_DIR/$INSTAN
 3. **避让（双重检查）**：读日志最后 5 条 + `git log --oneline -5`，避开其他实例刚做的 T 编号；撞了随机等 30-120 秒
 4. **深度优先 + 维护模式轮转**：所有任务至少 `进行中` 时选状态最低的；维护模式下选最近最少做的任务（看 git log 最近 5 个 commit 的 T 编号，避开刚做的，选最久没做的）。如果最近 5 个 commit 有 3+ 个同 T 编号（如 T4 连续3轮），强制选别的，避免多实例扎堆同一类
 5. **组合执行**：允许一轮做 2 个关联任务（如 T2 回测验证 T3 的改动效果），主任务只能 1 个
-6. **用户可见优先**：每 9 轮至少 1 轮用户可见任务（T1/T7/T9/T10）。连续 9 轮模型内化任务（T2/T3/T4/T5/T8）后第 10 轮必须选用户可见
+6. **用户可见优先（新北极星强化）**：新北极星是「每天打开页面看到推荐」。约束改为：**连续 2 轮模型内化任务（T2/T3/T4/T5/T8/T11）后，第 3 轮必须选用户可见任务（T1/T7/T9/T10/T12）**。旧规则的"每 9 轮至少 1 轮"太宽松，导致 50+ 轮都花在模型内化、用户感知不到。每轮自检第一问：这轮改动用户能在哪个页面看到？答不上来 → 强制切用户可见任务。
+7. **A 项最高优先**：每轮自检若发现 A 项断档（最近 5 个交易日有 interrupted formal run 或 0 推荐），**强制选 T12 推荐 pipeline 稳定性**，其他任务全部让位，直到 formal 推荐重新连续产出。
 
 ### 教训库
 
@@ -315,6 +348,29 @@ LLM agent 的输出质量直接取决于 SKILL.md 的写法。
 
 **禁止**：不要改核心结构（第一性原理、检验清单、禁止事项），只改任务描述和执行规则
 
+### T12. 推荐 pipeline 稳定性（用户可见，最高优先级）
+新北极星 A 项的保障任务。formal run 跑不通 = 系统对用户等于没在跑。这是当前最大缺口（2026-07-07 凌晨 4 次 interrupted、0 推荐）。
+
+**触发条件（满足任一即强制执行，优先级高于所有其他任务）：**
+- 每轮自检发现最近 5 个交易日有 interrupted formal run
+- 每轮自检发现最近 5 个交易日成功 formal 推荐数 < 5
+- formal run recommended_count=0 但 status=completed（空跑）
+- formal run 心跳超时 >1200s 被标记 interrupted
+
+**排查清单：**
+1. **进程冲突（首要怀疑）**：查 `recommendation_runs.error_message`，"服务重启或进程退出"= 后端被重启打断。根因常是 self-improve 改后端后重启，把正在跑的 formal run 打死。修复方向：formal run 跑在独立 worker 进程 / 改后端热重载不杀后台任务 / self-improve 重启前先等 formal run 完成
+2. **数据缺失**：`progress_message` 停在"构建特征"/"刷新辅助数据"→ 某只股票的 daily_kbars/stk_factor/cyq_perf 缺失。查 `daily_kbars` 最新交易日覆盖率，跑 `backfill_indicators.py`
+3. **Skill 匹配空跑**：`recommended_count=0` 且无 error → prefilter 把全部股票过滤掉，或 universe 为空。查 `filter_audit_json` 看每层过滤剩多少
+4. **LLM 超时**：`progress_message` 停在"Skill 深审 N/M"→ LLM agent 卡死。查 LLM prompt cache 是否生效、单股超时阈值
+5. **心跳机制**：心跳 >1200s 自动 interrupt → 单股处理太慢。查慢股票，加 per-stock 超时
+
+**验收（必须真实跑通，不是查 DB）**：
+- 跑一次 formal run，`status=completed` 且 `recommended_count >= 1`
+- 推荐出现在前端候选池页（`http://localhost:5174/`）
+- 连续 5 个交易日重跑，断档次数 ≤ 1
+
+**禁止**：只查 DB 假装修好。T12 必须端到端跑通一次真实 formal run 并在前端看到推荐。
+
 ---
 
 ## 执行流程
@@ -373,6 +429,9 @@ cd "$WT_DIR/backend" && ~/Desktop/ashare-shortline-system/backend/.venv/bin/pyth
 - 读源码用 `grep -n` 定位行号，再 `Read` 精确段落，不要整文件读
 - 不要用 Agent 子任务读大文件——会返回大段内容
 - 一轮需要看超过 5 个文件时，考虑用 Workflow 把探索外包
+- **不要用 `/loop` 在同一会话循环跑 self-improve**——`/loop` 复用会话上下文，N 轮后累积撞 1M input limit（400 报错）。定时跑 self-improve 必须每次开新会话（`cron` 模式而非 `loop` 模式），或手动逐次触发。
+- **日志只读末尾**：`self-improve-log.md` 已轮转，只留最近 30 轮；历史在 `self-improve-log-archive.md`，按需 `grep` 查，不要整文件读。
+- **崩溃 worktree 清理**：启动时若发现心跳 >10 分钟的死亡实例 worktree，且 worktree 无未提交改动，直接 `git worktree remove --force` 清理；有未提交改动则先 `git diff > /tmp/recovery-{id}.patch` 导出再清理。残留 worktree 会拖慢启动、膨胀上下文。
 
 ### 2. 深入研究
 
@@ -588,3 +647,5 @@ rm -f "$HB_DIR/$INSTANCE_ID.txt" 2>/dev/null
 - **不要在主工作树 `~/Desktop/ashare-shortline-system`（main 分支）直接改代码**——self-improve 必须在自己的 worktree（`.claude/worktrees/self-improve-{ID}/`）里改。主工作树只用来 merge 收尾。多实例同改主工作树是互相覆盖的根因。
 - **不要 merge 冲突强推/覆盖**——`git merge --abort` 后标 `冲突待解`，保留双方分支，绝不 `git checkout --` / `git reset --hard` / `git push -f` 丢工作。
 - **不要写单文件心跳**——必须用 `.self-improve-heartbeat/{实例ID}.txt` 目录式，每实例一个文件。单文件心跳会被新实例覆盖写，丢失旧实例状态。
+- **不要把回测胜率当唯一北极星**——北极星是 A/B/C/D 四项并重。禁止只盯着胜率刷数字（靠过拟合涨一点不算进展），但 D 项与 A/B/C 同级：胜率/盈亏比/最大亏损任一项明显下滑必须修，不得用"不信任回测"当借口放任退化。
+- **不要打断正在跑的 formal run**——self-improve 重启后端前，先查 `recommendation_runs` 是否有 `status=running` 的 formal run；有就等它完成或手动 finish 后再重启。最近 4 次 formal interrupted 就是引擎自己打断的。
