@@ -856,6 +856,12 @@ def alpha_decay_detection(db: Session, run_mode: str = "formal") -> dict[str, An
     如果因子的预测力在下降（衰减 > 30%），标记为"衰减中"。
     第一性原理：市场会学习并套利掉公开因子，alpha 必然衰减。
     """
+    # 30s 缓存：alpha-decay 计算重（预解析 ~1594 个 feature_snapshot），
+    # MetricsPage 打开时多次调用，缓存避免重复计算。
+    return _cached(f"alpha_decay:{run_mode}", lambda: _alpha_decay_detection(db, run_mode))
+
+
+def _alpha_decay_detection(db: Session, run_mode: str = "formal") -> dict[str, Any]:
     import math
 
     stmt = (
@@ -879,6 +885,18 @@ def alpha_decay_detection(db: Session, run_mode: str = "formal") -> dict[str, An
     early_rows = rows[:mid]
     recent_rows = rows[mid:]
 
+    # 预解析 feature_snapshot_json 一次（T4 性能优化：原 _extract_factor 每因子×2半段
+    # 重新 json.loads，11 因子 × 2 × ~1594 行 = 35068 次解析 → 3883ms。预解析后仅 ~1594 次）
+    def _preload_snapshots(row_pairs: list) -> list[dict[str, Any]]:
+        return [
+            {"snapshot": _loads(getattr(rec, "feature_snapshot_json", None), {}),
+             "return": float(getattr(outcome, "executed_return", 0) or 0)}
+            for rec, outcome in row_pairs
+        ]
+
+    early_preloaded = _preload_snapshots(early_rows)
+    recent_preloaded = _preload_snapshots(recent_rows)
+
     def _pbr(binary_vals: list[int], ret_vals: list[float]) -> float:
         g0 = [r for b, r in zip(binary_vals, ret_vals) if b == 0]
         g1 = [r for b, r in zip(binary_vals, ret_vals) if b == 1]
@@ -896,20 +914,19 @@ def alpha_decay_detection(db: Session, run_mode: str = "formal") -> dict[str, An
             return 0.0
         return (m1 - m0) / sd * math.sqrt(n0 * n1 / (n * n))
 
-    def _extract_factor(row_pairs: list, factor: str) -> tuple[list[int], list[float]]:
+    def _extract_factor(preloaded: list[dict[str, Any]], factor: str) -> tuple[list[int], list[float]]:
         binary, returns = [], []
-        for rec, outcome in row_pairs:
-            snapshot = _loads(getattr(rec, "feature_snapshot_json", None), {})
-            val = snapshot.get(factor)
+        for item in preloaded:
+            val = item["snapshot"].get(factor)
             if val is not None:
                 binary.append(1 if val else 0)
-                returns.append(float(getattr(outcome, "executed_return", 0) or 0))
+                returns.append(item["return"])
         return binary, returns
 
     factors_result = []
     for factor in _ALPHA_DECAY_FACTORS:
-        eb, er = _extract_factor(early_rows, factor)
-        rb, rr = _extract_factor(recent_rows, factor)
+        eb, er = _extract_factor(early_preloaded, factor)
+        rb, rr = _extract_factor(recent_preloaded, factor)
         r_early = _pbr(eb, er)
         r_recent = _pbr(rb, rr)
         delta = r_recent - r_early
