@@ -13,7 +13,7 @@ import asyncio
 import json
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -93,8 +93,47 @@ def start_scheduler() -> BackgroundScheduler:
     _scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
     _load_and_schedule()
     _scheduler.start()
+    _register_periodic_jobs()
     logger.info("调度器已启动，已加载 %d 个任务", len(_scheduler.get_jobs()))
     return _scheduler
+
+
+def _register_periodic_jobs() -> None:
+    """注册与业务调度任务无关的周期巡检任务（如失联运行回收）。"""
+    if _scheduler is None:
+        return
+    _scheduler.add_job(
+        _periodic_recover_stale_runs,
+        trigger="interval",
+        seconds=300,
+        id="periodic_stale_run_recovery",
+        name="失联运行周期回收",
+        replace_existing=True,
+        next_run_time=datetime.now() + timedelta(seconds=60),
+    )
+    logger.info("已注册失联运行周期回收任务（间隔 300s）")
+
+
+def _periodic_recover_stale_runs() -> None:
+    """周期巡检：回收心跳超时的失联运行，避免孤儿 run 长期滞留 running 状态。
+
+    与启动期 recover_interrupted_runs 互补：后者仅在进程启动时执行一次。
+    若两次重启之间无人访问 runs 列表接口，失联运行不会被回收（列表接口的
+    _auto_recover_stale_runs 依赖客户端请求触发）。此周期任务保证即使前端
+    未打开，孤儿运行也会在心跳超时后（默认 1200s）被标记为 interrupted。
+    """
+    try:
+        from app.services.workbench_service import recover_interrupted_runs
+
+        db = SessionLocal()
+        try:
+            recovered = recover_interrupted_runs(db)
+            if recovered:
+                logger.warning("周期巡检回收 %d 个失联运行", recovered)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("周期巡检回收失联运行失败")
 
 
 def stop_scheduler() -> None:
