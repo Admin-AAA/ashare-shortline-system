@@ -18,6 +18,7 @@ export type Preset = {
   market_scope_value?: string | null;
   risk_template: string;
   score_line: number;
+  output_count: number;
   data_source: string;
   hide_recent_repeats: boolean;
   status: string;
@@ -1448,6 +1449,7 @@ export type StrategyPerformance = {
   profit_loss_ratio: number | null;
   last_recommendation_date: string | null;
   horizon_metrics?: Record<string, unknown> | null;
+  date_range?: DateRangeMeta;
 };
 
 /** 策略清单页单行（策略元数据 + 表现，单次请求返回） */
@@ -1587,6 +1589,18 @@ export type PresetStatsRow = {
   last_run_at?: string | null;
 };
 
+/** 指标时间窗口元信息（后端返回，供前端展示窗口与结算截止说明） */
+export type DateRangeMeta = {
+  window_days: number | null;
+  start_date: string | null;
+  end_date: string | null;
+  settle_lag_days: number;
+  settle_cutoff: string | null;
+  total_in_window: number;
+  labeled_in_window: number;
+  pending_excluded: number;
+};
+
 export type EvaluationKpiFields = {
   trade_count?: number;
   recommendation_accuracy?: number;
@@ -1601,6 +1615,7 @@ export type EvaluationKpiFields = {
   accuracy_denominator?: number;
   accuracy_basis?: string;
   horizon_metrics?: Record<string, EvaluationHorizonMetrics>;
+  date_range?: DateRangeMeta;
 };
 
 export type EvaluationHorizonMetrics = {
@@ -1653,6 +1668,7 @@ export type PrecisionAtKRow = {
   evaluated_count: number;
   success_count: number;
   precision: number;
+  date_range?: DateRangeMeta;
 };
 
 export type ScoreLineStatsRow = {
@@ -1761,6 +1777,7 @@ export type MetricsOverview = {
   }>;
   accuracy_gate_summary: AccuracyGateSummary;
   accuracy_policy: AccuracyPolicyAudit;
+  date_range?: DateRangeMeta;
 };
 
 // ── 单股票矩阵分析 ──
@@ -1879,6 +1896,7 @@ export type FilterEffectiveness = {
     win_rate: number;
     avg_return: number;
   }>;
+  date_range?: DateRangeMeta;
 };
 
 export type StockMatrixHistoryItem = {

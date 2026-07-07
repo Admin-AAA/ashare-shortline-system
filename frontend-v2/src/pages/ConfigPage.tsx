@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
-import { Cpu, KeyRound, Loader2, Plug, Save, Zap } from "lucide-react";
+import { Cpu, KeyRound, Layers, Loader2, Plug, Save, Zap } from "lucide-react";
 import { api } from "../api/client";
 import type { SystemLlmConfig, SystemLlmTestResult } from "../types";
 import { ErrorPage } from "../components/StateViews";
 import { ModelRoutesSection } from "../components/ModelRoutesSection";
+import { PresetsSection } from "../components/PresetsSection";
 import { CollapsiblePanel } from "../components/CollapsiblePanel";
+
+type ConfigTab = "llm" | "presets";
 
 /**
  * 配置页 —— 系统 LLM 接口（agent_skill_*）配置与连通性测试。
@@ -35,6 +38,7 @@ const EMPTY_FORM: FormState = {
 const MASK = "********";
 
 export function ConfigPage() {
+  const [tab, setTab] = useState<ConfigTab>("llm");
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -135,24 +139,38 @@ export function ConfigPage() {
   if (loadError) return <ErrorPage title="配置加载失败" message={loadError} />;
 
   return (
-    <CollapsiblePanel
-      collapsedKey="config-llm"
-      kicker="配置"
-      title="系统 LLM 接口"
-      actions={
-        <span style={{ marginLeft: "auto", color: "var(--muted)", fontSize: "var(--text-sm)" }}>
-          Skill Agent 推理通道（OpenAI 兼容）
-        </span>
-      }
-    >
-      <div
-        style={{
-          marginTop: "var(--space-4)",
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-          gap: "var(--space-4)",
-        }}
-      >
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+      {/* 二级 Tab 切换 */}
+      <div className="sub-tabs" style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--border)" }}>
+        <SubTab active={tab === "llm"} onClick={() => setTab("llm")}>
+          <Plug size={14} />
+          LLM 接口
+        </SubTab>
+        <SubTab active={tab === "presets"} onClick={() => setTab("presets")}>
+          <Layers size={14} />
+          预设管理
+        </SubTab>
+      </div>
+
+      {tab === "llm" && (
+        <CollapsiblePanel
+          collapsedKey="config-llm"
+          kicker="配置"
+          title="系统 LLM 接口"
+          actions={
+            <span style={{ marginLeft: "auto", color: "var(--muted)", fontSize: "var(--text-sm)" }}>
+              Skill Agent 推理通道（OpenAI 兼容）
+            </span>
+          }
+        >
+          <div
+            style={{
+              marginTop: "var(--space-4)",
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+              gap: "var(--space-4)",
+            }}
+          >
         <Field label="Base URL" hint="OpenAI 兼容接口地址" icon={<Plug size={15} />}>
           <input
             className="cfg-input"
@@ -290,9 +308,46 @@ export function ConfigPage() {
         保存会即时热更新运行中的配置并写入 .env 持久化，无需重启后端。
       </p>
 
-      {/* 模型路由：调整优先级 + 逐条测试 + 配置独立 Key */}
-      <ModelRoutesSection />
-    </CollapsiblePanel>
+          {/* 模型路由：调整优先级 + 逐条测试 + 配置独立 Key */}
+          <ModelRoutesSection />
+        </CollapsiblePanel>
+      )}
+
+      {tab === "presets" && <PresetsSection />}
+    </div>
+  );
+}
+
+function SubTab({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "10px 18px",
+        background: "transparent",
+        border: "none",
+        borderBottom: active ? "2px solid var(--accent, var(--color-up))" : "2px solid transparent",
+        color: active ? "var(--text)" : "var(--muted)",
+        fontWeight: active ? 650 : 500,
+        fontSize: "var(--text-sm)",
+        cursor: "pointer",
+        transition: "color 160ms ease, border-color 160ms ease",
+        marginBottom: -1,
+      }}
+    >
+      {children}
+    </button>
   );
 }
 
