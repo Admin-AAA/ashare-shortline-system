@@ -215,6 +215,7 @@ function SkillBreakdownSection({ skillBreakdown }: { skillBreakdown: SkillSignal
           </span>
           <span style={{ color: "var(--text-muted)" }}> · {sk.strategy_name}</span>
           {sk.phase && <span style={{ color: "var(--text-muted)" }}> · {sk.phase}</span>}
+          {sk.setup_match && <span style={{ color: "var(--text)" }}> · 买点: {sk.setup_match}</span>}
           {sk.hard_veto && (
             <span style={{ color: "var(--market-up)" }}> · 否决（{sk.veto_reason || "硬风控"}）</span>
           )}
