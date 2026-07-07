@@ -1051,13 +1051,16 @@ def _build_stock_from_bars(
     volumes = [_num(bar["volume"]) for bar in bars]
     price = _num(quote.get("price"), latest["close"]) or latest["close"]
 
-    # Prefer cached indicators from bars (set by market_pool._load_cached_bars)
+    # Prefer cached indicators from bars (set by market_pool._load_cached_bars).
+    # 注意: ma 字段缓存值可能是 0.0(backfill 缺数据时写入),0.0 对均线无效,
+    # 必须视为缺失并 fallback 到 _ma(closes,N) 重算,否则 dist60/breakout 连锁归零
+    # 导致依赖趋势/突破的策略 prefilter 死锁(high-range-breakout-momentum 等)。
     latest_indicator = latest.get("_indicator") or {}
 
-    ma5 = latest.get("ma5") if latest.get("ma5") is not None else _ma(closes, 5)
-    ma10 = latest.get("ma10") if latest.get("ma10") is not None else _ma(closes, 10)
-    ma20 = latest.get("ma20") if latest.get("ma20") is not None else _ma(closes, 20)
-    ma60 = latest.get("ma60") if latest.get("ma60") is not None else _ma(closes, 60)
+    ma5 = latest.get("ma5") or _ma(closes, 5)
+    ma10 = latest.get("ma10") or _ma(closes, 10)
+    ma20 = latest.get("ma20") or _ma(closes, 20)
+    ma60 = latest.get("ma60") or _ma(closes, 60)
     vol5_20 = latest.get("volume_ratio_5d") if latest.get("volume_ratio_5d") is not None else _safe_div(_ma(volumes, 5), _ma(volumes, 20), 1.0)
 
     chg20 = _chg(closes, 20)
@@ -1125,13 +1128,10 @@ def _build_stock_from_bars(
         else:
             macd_status = "多头" if macd_dif_val > 0 else "下穿零轴"
 
-    # Breakout — prefer cached
-    breakout20 = latest_indicator.get("breakout20")
-    breakout60 = latest_indicator.get("breakout60")
-    if breakout20 is None:
-        breakout20 = int(price >= previous_high20 * 0.995) if previous_high20 else 0
-    if breakout60 is None:
-        breakout60 = int(price >= max(highs[-61:-1] or highs) * 0.995)
+    # Breakout — 用原始 highs 重算(backfill 缓存的 breakout 可能为 0 误判,
+    # 且依赖 previous_high60 等需 ma60 正确;直接重算避免连锁错误)
+    breakout20 = int(price >= previous_high20 * 0.995) if previous_high20 else 0
+    breakout60 = int(price >= max(highs[-61:-1] or highs) * 0.995) if len(highs) >= 2 else 0
 
     # Upper shadow count — prefer cached
     upper_shadow_count20 = latest_indicator.get("upper_shadow_count20")
