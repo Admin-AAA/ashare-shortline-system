@@ -28,11 +28,15 @@ def record_api_call(
     # 估算字段（agno_skill_agent 会传，但 ApiCallLog 表不存储，仅用于运行时汇总）
     prompt_tokens_est: int | None = None,
     completion_tokens_est: int | None = None,
+    # 真实用量（来自 provider usage 字段，drain_api_costs 传入；None 表示未取得真实值）
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
+    cache_hit_tokens: int | None = None,
 ) -> ApiCallLog:
     """记录一次 LLM API 调用。
 
-    prompt_tokens_est / completion_tokens_est 是调用方估算的 token 数，
-    ApiCallLog 表只存字符数，token 估算仅用于内存中的成本汇总（drain_api_costs）。
+    prompt_tokens_est / completion_tokens_est 是调用方估算的 token 数，仅用于运行时汇总。
+    prompt_tokens / completion_tokens / cache_hit_tokens 是 provider 返回的真实用量，持久化到表。
     """
     log = ApiCallLog(
         run_id=run_id,
@@ -41,6 +45,9 @@ def record_api_call(
         endpoint=endpoint,
         prompt_chars=prompt_chars,
         completion_chars=completion_chars,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cache_hit_tokens=cache_hit_tokens,
         latency_ms=latency_ms,
         status=status,
         error_message=error_message,

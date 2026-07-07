@@ -894,6 +894,10 @@ class ApiCallLog(Base):
     endpoint: Mapped[str] = mapped_column(String(200))
     prompt_chars: Mapped[int] = mapped_column(Integer, default=0)
     completion_chars: Mapped[int] = mapped_column(Integer, default=0)
+    # 真实 token 用量（来自 provider usage 字段，None 表示本次调用未取得真实值）
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cache_hit_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     latency_ms: Mapped[float] = mapped_column(Float, default=0)
     status: Mapped[str] = mapped_column(String(30), default="success")
     error_message: Mapped[str | None] = mapped_column(Text)
