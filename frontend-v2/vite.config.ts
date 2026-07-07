@@ -13,11 +13,14 @@ export default defineConfig({
     },
   },
   build: {
-    chunkSizeWarningLimit: 400,
+    // three.js 是 WaveBackground 的强依赖（~600KB），从入口 chunk 拆出独立 vendor chunk：
+    // 入口 chunk 从 ~724KB 降到 ~120KB，three 独立缓存 + 并行加载，首屏解析更快。
+    chunkSizeWarningLimit: 650,
     rollupOptions: {
       output: {
         manualChunks: {
           "vendor-react": ["react", "react-dom"],
+          "vendor-three": ["three"],
         },
       },
     },
