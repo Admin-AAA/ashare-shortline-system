@@ -1,11 +1,18 @@
 import { useState } from "react";
 import { ChevronDown, ChevronRight, Layers, Target } from "lucide-react";
 import { api } from "../api/client";
-import type { StrategyListItem, StrategyPerformance } from "../types";
+import type { DateRangeMeta, StrategyListItem, StrategyPerformance } from "../types";
 import { ErrorPage, EmptyState, PageSkeleton } from "../components/StateViews";
 import { SkillPerformanceSection } from "../components/SkillPerformanceSection";
 import { CollapsiblePanel } from "../components/CollapsiblePanel";
 import { useApi } from "../app/useApi";
+
+/** 时间窗口选项：null=全部历史累计，N=最近 N 天且已结算。与指标页保持一致。 */
+const WINDOW_OPTIONS: Array<{ label: string; value: number | null }> = [
+  { label: "全部", value: null },
+  { label: "近 30 天", value: 30 },
+  { label: "近 90 天", value: 90 },
+];
 
 /**
  * 策略清单页 —— 系统全部策略的"驾驶舱视图"。
@@ -25,9 +32,10 @@ const HORIZONS = [
 
 export function StrategiesPage() {
   const [mode, setMode] = useState<"formal" | "experiment">("formal");
+  const [windowDays, setWindowDays] = useState<number | null>(null);
   const { data, loading, error } = useApi<StrategyListItem[]>(
-    () => api.strategies(mode),
-    [mode],
+    () => api.strategies(mode, windowDays ?? undefined),
+    [mode, windowDays],
   );
 
   if (loading) return <PageSkeleton title="策略清单" hint="加载策略与胜率" rowCount={8} />;
@@ -51,13 +59,48 @@ export function StrategiesPage() {
         </span>
       }
     >
-      {/* 口径切换 */}
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", padding: "var(--space-2) 0 var(--space-4)" }}>
-        <span style={{ color: "var(--muted)", fontSize: "var(--text-base)" }}>口径</span>
-        <select value={mode} onChange={(e) => setMode(e.target.value as "formal" | "experiment")} style={selectStyle}>
-          <option value="formal">正式</option>
-          <option value="experiment">实验</option>
-        </select>
+      {/* 口径切换 + 时间窗口 */}
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", padding: "var(--space-2) 0 var(--space-4)", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+          <span style={{ color: "var(--muted)", fontSize: "var(--text-base)" }}>口径</span>
+          <select value={mode} onChange={(e) => setMode(e.target.value as "formal" | "experiment")} style={selectStyle}>
+            <option value="formal">正式</option>
+            <option value="experiment">实验</option>
+          </select>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+          <span style={{ color: "var(--muted)", fontSize: "var(--text-base)", marginRight: "var(--space-1)" }}>时间窗口</span>
+          {WINDOW_OPTIONS.map((opt) => {
+            const active = windowDays === opt.value;
+            return (
+              <button
+                key={String(opt.value)}
+                onClick={() => setWindowDays(opt.value)}
+                style={{
+                  padding: "4px 10px",
+                  fontSize: 12,
+                  borderRadius: 4,
+                  border: "1px solid var(--border)",
+                  background: active ? "var(--accent, #2563eb)" : "var(--surface-soft)",
+                  color: active ? "#fff" : "var(--muted)",
+                  cursor: "pointer",
+                  fontWeight: active ? 600 : 400,
+                }}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+        <span style={{ color: "var(--muted)", fontSize: 11 }}>
+          {(() => {
+            const dr: DateRangeMeta | undefined = called.find((s) => s.performance?.date_range)?.performance?.date_range;
+            if (dr && dr.window_days) {
+              return `窗口 ${dr.start_date} ~ ${dr.end_date}（已结算截止 ${dr.settle_cutoff}，已结算 ${dr.labeled_in_window} 笔）`;
+            }
+            return "统计范围：formal 模式全部历史累计";
+          })()}
+        </span>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: "var(--space-4)" }}>

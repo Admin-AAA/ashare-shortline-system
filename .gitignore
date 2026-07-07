@@ -14,8 +14,8 @@ backend/acceptance_report.json
 node_modules/
 .codegraph/
 
-frontend/dist/
-frontend/.vite/
+frontend-v2/dist/
+frontend-v2/.vite/
 .env
 backend/logs/
 

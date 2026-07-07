@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import json
+import re
 import time
 import uuid
 
@@ -15,6 +16,39 @@ from app.models.tables import ModelRouteConfig
 
 
 DEFAULT_ROUTE_ID = "route_env_default"
+
+
+def _extract_json_object(text: str) -> object | None:
+    """容错解析 JSON：剥离 ```json 围栏，并尝试提取首个 JSON 对象。
+
+    部分 OpenAI 兼容模型（如 deepseek）会在 JSON 外加 markdown 代码围栏或
+    前后缀说明文字，直接 json.loads 会失败。此函数优先原始解析，失败则
+    逐步剥离围栏 / 抽取首个 {...} 子串，最大化兼容不同模型的返回格式。
+    """
+    if not text:
+        return None
+    candidate = text.strip()
+    # 1) 直接解析
+    try:
+        return json.loads(candidate)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # 2) 剥离 ```json ... ``` 或 ``` ... ``` 围栏
+    fence = re.match(r"^```(?:json)?\s*(.*?)\s*```$", candidate, re.DOTALL | re.IGNORECASE)
+    if fence:
+        candidate = fence.group(1).strip()
+        try:
+            return json.loads(candidate)
+        except (json.JSONDecodeError, ValueError):
+            pass
+    # 3) 用正则提取首个 {...}（贪婪，跨行）
+    match = re.search(r"\{.*\}", candidate, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return None
 
 
 @dataclass(frozen=True)
@@ -157,7 +191,7 @@ async def test_model_route(db: Session, payload: dict) -> dict:
                     {"role": "user", "content": '请返回 {"ok": true, "message": "pong"}'},
                 ],
                 temperature=0,
-                max_tokens=32,
+                max_tokens=256,
                 response_format={"type": "json_object"},
             )
         latency_ms = round((time.perf_counter() - started_at) * 1000)
@@ -172,7 +206,19 @@ async def test_model_route(db: Session, payload: dict) -> dict:
                 "key_source": route.key_source,
                 "message": f"{route.name} 返回内容为空，请检查模型响应格式",
             }
-        json.loads(content)
+        # 容错解析：部分 OpenAI 兼容模型会在 JSON 外加 ```json 围栏或前后缀，
+        # 严格 json.loads 会失败。先剥离围栏，再用正则提取首个 JSON 对象。
+        parsed = _extract_json_object(content)
+        if parsed is None:
+            return {
+                "ok": False,
+                "route_id": route.route_id,
+                "route_name": route.name,
+                "model": route.model,
+                "base_url": route.base_url,
+                "key_source": route.key_source,
+                "message": f"{route.name} 返回内容非合法 JSON：{content[:120]}",
+            }
         return {
             "ok": True,
             "route_id": route.route_id,

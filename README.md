@@ -76,15 +76,16 @@ ashare-shortline-system/
 │   │   └── daily-stock-analysis-skill/  # 技术评分
 │   ├── tests/
 │   └── logs/                   # 运行日志（自动创建，Git 忽略）
-├── frontend/
+├── frontend-v2/
 │   ├── src/
 │   │   ├── App.tsx             # 主应用入口（AuthGate + AppShell）
 │   │   ├── app/                # 驾驶舱 shell、鉴权、导航
-│   │   ├── features/dashboard/ # 驾驶舱视图模型与业务模块
-│   │   ├── shared/theme/       # 主题初始化与持久化
+│   │   ├── components/         # 通用组件
+│   │   ├── pages/              # 页面视图
+│   │   ├── shared/             # 主题、公共工具
 │   │   ├── main.tsx            # React 入口
 │   │   ├── types.ts            # TypeScript 类型
-│   │   ├── api/client.ts       # API 客户端
+│   │   ├── api/                # API 客户端
 │   │   └── styles/             # tokenized cockpit styles
 │   ├── vite.config.ts
 │   └── package.json
@@ -231,12 +232,12 @@ launchctl kickstart -k gui/$(id -u)/com.wangao.ashare-backend-restart
 前端：
 
 ```bash
-cd frontend
+cd frontend-v2
 npm install
 npm run dev
 ```
 
-- 前端：`http://localhost:5173`
+- 前端：`http://localhost:5174`
 - 后端 API：`http://localhost:8765`
 - API 文档（Swagger）：`http://localhost:8765/docs`
 

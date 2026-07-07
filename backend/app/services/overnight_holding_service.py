@@ -70,13 +70,13 @@ MIN_RECENT_LIMIT_UP_COUNT = 0  # 信号条件本身做质量守门；涨停预�
 class CostAssumption:
     """交易成本假设（A股标准费率）。
 
-    单边成本（买入）：佣金0.03% + 滑点0.1% = 0.13%
-    单边成本（卖出）：印花税0.05% + 佣金0.03% + 滑点0.1% = 0.18%
-    往返成本总计：0.13% + 0.18% = 0.31%
+    单边成本（买入）：佣金0.01% + 滑点0.1% = 0.11%
+    单边成本（卖出）：印花税0.05% + 佣金0.01% + 滑点0.1% = 0.16%
+    往返成本总计：0.11% + 0.16% = 0.27%
     """
-    buy_commission_bps: float = 3.0     # 佣金 0.03%
+    buy_commission_bps: float = 1.0     # 佣金 0.01%（万1）
     buy_slippage_bps: float = 10.0      # 滑点 0.1%
-    sell_commission_bps: float = 3.0    # 佣金 0.03%
+    sell_commission_bps: float = 1.0    # 佣金 0.01%（万1）
     sell_stamp_tax_bps: float = 5.0    # 印花税 0.05% (仅卖出)
     sell_slippage_bps: float = 10.0    # 滑点 0.1%
 

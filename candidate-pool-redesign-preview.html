@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>候选池 · 股票代码可见性优化预览</title>
+<style>
+  :root[data-theme="light"] {
+    --canvas: #f1f5f9;
+    --surface: #ffffff;
+    --surface-soft: #f8fafc;
+    --surface-strong: #f1f5f9;
+    --line: #e2e8f0;
+    --line-strong: #cbd5e1;
+    --ink: #0f172a;
+    --ink-secondary: #334155;
+    --muted: #64748b;
+    --text-muted: #94a3b8;
+    --accent: #3b82f6;
+    --accent-strong: #2563eb;
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+    --font-mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    --text-xs: 11px; --text-sm: 12px; --text-base: 13px; --text-lg: 16px;
+    --market-up: #ef4444; --market-down: #22c55e; --warning: #d97706;
+    --market-up-soft: rgba(239,68,68,0.12);
+    --market-down-soft: rgba(34,197,94,0.12);
+    --warning-soft: #fef3c7;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 16px;
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: Inter, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+    font-size: 13px;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; font-size: 13px; }
+  .panel-title { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+
+  .row {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    margin-bottom: 10px;
+    overflow: hidden;
+  }
+  .row__btn {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    padding: var(--space-3) var(--space-4);
+    background: transparent;
+    border: none;
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
+  }
+  /* 身份区：排名 + 代码徽标 + 名称 —— 始终在左、永不裁切 */
+  .identity { display: flex; align-items: center; gap: var(--space-2); min-width: 0; flex: 1 1 220px; }
+  .rank { font-family: var(--font-mono); color: var(--muted); font-size: var(--text-sm); flex-shrink: 0; }
+  /* 股票代码徽标 —— 本优化的核心：有边界、有底色，一眼可见 */
+  .ticker {
+    flex-shrink: 0; display: inline-flex; align-items: center;
+    font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 600;
+    color: var(--ink-secondary); background: var(--surface-soft);
+    border: 1px solid var(--line); border-radius: var(--radius-sm);
+    padding: 1px 6px; letter-spacing: .02em; line-height: 1.4;
+  }
+  .name-block { min-width: 0; }
+  .name { font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .entry { font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+
+  /* 次级信息组：窄屏自动换行到第二行 */
+  .secondary { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-left: auto; }
+  .trade-params { display: flex; align-items: center; gap: var(--space-3); }
+  .tp { display: inline-flex; align-items: baseline; gap: 4px; }
+  .tp label { font-size: var(--text-xs); color: var(--text-muted); }
+  .tp val { font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 600; }
+  .score { font-family: var(--font-mono); font-weight: 700; color: var(--accent-strong); font-size: var(--text-lg); }
+  .tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: var(--text-xs); font-weight: 500; background: var(--surface-soft); color: var(--muted); }
+
+  .narrow-note { margin: 28px 0 8px; color: var(--muted); font-size: 12px; }
+  .narrow { max-width: 380px; border: 1px dashed var(--line-strong); padding: 8px; border-radius: var(--radius-md); }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>候选池 · 股票代码可见性优化</h1>
+    <p class="sub">核心改动：股票代码从一个夹在排名与名称之间的 12px 灰字，变为带边框/底色的独立「代码徽标」，与名称形成清晰配对；整行改为响应式 flex，窄屏自动换行，代码永不裁切。</p>
+
+    <p class="panel-title">候选池（宽屏）</p>
+    <div class="row">
+      <button class="row__btn">
+        <div class="identity">
+          <span class="rank">#1</span>
+          <span class="ticker">600519</span>
+          <div class="name-block">
+            <div class="name">贵州茅台</div>
+            <div class="entry">入场 · 突破 20 日新高回踩不破</div>
+          </div>
+        </div>
+        <div class="secondary">
+          <div class="trade-params">
+            <span class="tp"><label>推荐</label><val>1685.20</val></span>
+            <span class="tp"><label>止损</label><val style="color:var(--market-down)">1620.50</val></span>
+            <span class="tp"><label>止盈</label><val style="color:var(--market-up)">1810.00</val></span>
+          </div>
+          <span class="score">82</span>
+          <span class="tag">medium</span>
+          <span style="color:var(--muted)">›</span>
+        </div>
+      </button>
+    </div>
+
+    <div class="row">
+      <button class="row__btn">
+        <div class="identity">
+          <span class="rank">#2</span>
+          <span class="ticker">300750</span>
+          <div class="name-block">
+            <div class="name">宁德时代</div>
+            <div class="entry">入场 · 缩量企稳后放量上攻</div>
+          </div>
+        </div>
+        <div class="secondary">
+          <div class="trade-params">
+            <span class="tp"><label>推荐</label><val>198.40</val></span>
+            <span class="tp"><label>止损</label><val style="color:var(--market-down)">190.10</val></span>
+            <span class="tp"><label>止盈</label><val style="color:var(--market-up)">215.00</val></span>
+          </div>
+          <span class="score">76</span>
+          <span class="tag">low</span>
+          <span style="color:var(--muted)">›</span>
+        </div>
+      </button>
+    </div>
+
+    <p class="panel-title" style="margin-top:32px">展开行（保留代码 + 名称上下文）</p>
+    <div class="row">
+      <button class="row__btn">
+        <div class="identity">
+          <span class="rank">#1</span>
+          <span class="ticker">600519</span>
+          <div class="name-block">
+            <div class="name">贵州茅台</div>
+            <div class="entry">入场 · 突破 20 日新高回踩不破</div>
+          </div>
+        </div>
+        <div class="secondary">
+          <span class="score">82</span><span class="tag">medium</span><span style="color:var(--muted)">⌄</span>
+        </div>
+      </button>
+      <div style="padding:16px; border-top:1px solid var(--line); background:var(--surface-soft);">
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+          <span class="ticker" style="font-size:var(--text-sm); padding:2px 8px;">600519</span>
+          <strong style="font-size:var(--text-base); color:var(--ink)">贵州茅台</strong>
+          <span class="tag">白酒</span>
+        </div>
+        <p style="margin:0; color:var(--ink-secondary); font-size:13px; line-height:1.6;">
+          买点原因：北向连续 3 日净流入，量价配合突破平台，机构共识度高中风险可控。止损设在 1620.5，对应回撤约 3.8%。
+        </p>
+      </div>
+    </div>
+
+    <p class="narrow-note">窄屏（≤380px）效果：次级信息自动换行到第二行，代码 + 名称始终留在第一行左侧，不会被裁切。</p>
+    <div class="narrow">
+      <div class="row" style="margin-bottom:0;">
+        <button class="row__btn">
+          <div class="identity">
+            <span class="rank">#1</span>
+            <span class="ticker">600519</span>
+            <div class="name-block">
+              <div class="name">贵州茅台</div>
+            </div>
+          </div>
+          <div class="secondary">
+            <div class="trade-params">
+              <span class="tp"><label>推荐</label><val>1685.20</val></span>
+              <span class="tp"><label>止损</label><val style="color:var(--market-down)">1620.50</val></span>
+            </div>
+            <span class="score">82</span><span class="tag">medium</span>
+          </div>
+        </button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

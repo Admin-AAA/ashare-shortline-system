@@ -3,8 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 BACKEND="$ROOT/backend"
-FRONTEND="$ROOT/frontend"
-FRONTEND_V2="$ROOT/frontend-v2"
+FRONTEND="$ROOT/frontend-v2"
 
 # ── Colors ──
 GREEN='\033[0;32m'
@@ -48,9 +47,9 @@ fi
 uvicorn app.main:app --host 0.0.0.0 --port 8765 --reload &
 BACKEND_PID=$!
 
-# ── Frontend (老，5173) ──
-free_port 5173
-log "启动前端 (Vite on :5173)..."
+# ── Frontend (5174) ──
+free_port 5174
+log "启动前端 (Vite on :5174)..."
 cd "$FRONTEND"
 
 if [ ! -d "node_modules" ]; then
@@ -61,28 +60,11 @@ fi
 npx vite --host 0.0.0.0 &
 FRONTEND_PID=$!
 
-# ── Frontend v2 (新，5174) ──
-FRONTEND_V2_PID=""
-if [ -d "$FRONTEND_V2" ]; then
-  free_port 5174
-  log "启动前端 v2 (Vite on :5174)..."
-  cd "$FRONTEND_V2"
-
-  if [ ! -d "node_modules" ]; then
-    log "安装前端 v2 依赖..."
-    npm install
-  fi
-
-  npx vite --host 0.0.0.0 &
-  FRONTEND_V2_PID=$!
-fi
-
 # ── Cleanup ──
 cleanup() {
   log "正在关闭..."
   kill $BACKEND_PID 2>/dev/null || true
   kill $FRONTEND_PID 2>/dev/null || true
-  [ -n "$FRONTEND_V2_PID" ] && kill $FRONTEND_V2_PID 2>/dev/null || true
   wait 2>/dev/null
   log "已停止"
 }
@@ -91,8 +73,7 @@ trap cleanup EXIT INT TERM
 echo ""
 log "====================================="
 log "  后端:       http://localhost:8765"
-log "  前端(老):   http://localhost:5173"
-log "  前端 v2:    http://localhost:5174"
+log "  前端:       http://localhost:5174"
 log "  API文档:    http://localhost:8765/docs"
 log "====================================="
 echo ""

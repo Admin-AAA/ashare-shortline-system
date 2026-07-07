@@ -12,16 +12,14 @@ import { CardSkeleton, EmptyState, ErrorPage } from "../components/StateViews";
 import {
   LatestRunCard,
   MarketBreadthPanel,
-  QuickNavGrid,
   Sep,
-  SkillStatusStrip,
 } from "../components/HomePanels";
 import { StockTicker } from "../components/StockTicker";
 import { CollapsiblePanel } from "../components/CollapsiblePanel";
 import { useUrlRoute } from "../app/useUrlRoute";
 
 /**
- * 驾驶舱首页 —— 状态条 + 温度面板 + 运行状态/龙头候选 + 最近产出/工作区/策略开关
+ * 驾驶舱首页 —— 状态条 + 温度面板 + [运行状态/最近产出 | 龙头候选]
  */
 export function HomePage() {
   const { navigate, navigateSection } = useUrlRoute();
@@ -87,41 +85,23 @@ export function HomePage() {
           alignItems: "start",
         }}
       >
-        {/* 左列：运行状态（已移除 MarketTempPanel） */}
-        <RunStatusPanel run={current_run} hasRun={hasRun} canRun={canRun} onRun={() => navigate("/run")} onViewHistory={() => navigateSection("history")} />
+        {/* 左列：运行状态 + 最近产出（与运行状态同宽） */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+          <RunStatusPanel run={current_run} hasRun={hasRun} canRun={canRun} onRun={() => navigate("/run")} onViewHistory={() => navigateSection("history")} />
 
-        {/* 右列：龙头候选（视觉重心） */}
-        <CandidatePanel items={recommendations} onViewAll={() => navigateSection("pool")} />
-      </div>
-
-      {/* 合并自着陆页的独有内容：最近产出 / 工作区 / 策略开关 */}
-      {boot && (
-        <>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-              gap: "var(--space-4)",
-              alignItems: "start",
-            }}
-          >
+          {boot && (
             <CollapsiblePanel kicker="最近产出" title="最新推荐 run">
               <LatestRunCard
                 run={boot.recent_runs.formal ?? boot.recent_runs.experiment}
                 onOpen={() => navigateSection("dashboard")}
               />
             </CollapsiblePanel>
+          )}
+        </div>
 
-            <CollapsiblePanel kicker="工作区" title="快速进入">
-              <QuickNavGrid onNavigate={navigateSection} />
-            </CollapsiblePanel>
-          </div>
-
-          <CollapsiblePanel kicker="系统" title="策略开关状态">
-            <SkillStatusStrip summary={boot.skill_summary} />
-          </CollapsiblePanel>
-        </>
-      )}
+        {/* 右列：龙头候选（视觉重心） */}
+        <CandidatePanel items={recommendations} onViewAll={() => navigateSection("pool")} />
+      </div>
     </div>
   );
 }
@@ -426,9 +406,12 @@ function HomePageSkeleton() {
       <div className="skeleton" style={{ height: 40, borderRadius: "var(--radius-lg)" }} />
       {/* 温度面板 */}
       <CardSkeleton count={1} />
-      {/* 运行状态 + 龙头候选 */}
+      {/* 运行状态 + 最近产出 | 龙头候选 */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 3fr", gap: "var(--space-4)" }}>
-        <CardSkeleton count={1} />
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+          <CardSkeleton count={1} />
+          <CardSkeleton count={1} />
+        </div>
         <CardSkeleton count={2} />
       </div>
     </div>

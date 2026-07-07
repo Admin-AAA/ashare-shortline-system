@@ -290,8 +290,8 @@ export const api = {
     request<{ ok: boolean }>(`/api/admin/tasks/${taskId}/run`, json("POST")),
 
   skills: () => request<SkillSummary[]>("/api/skills", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
-  strategies: (mode: "formal" | "experiment" = "formal") =>
-    request<StrategyListItem[]>(`/api/strategies?mode=${mode}`, undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
+  strategies: (mode: "formal" | "experiment" = "formal", windowDays?: number) =>
+    request<StrategyListItem[]>(`/api/strategies?mode=${mode}${windowDays ? `&window_days=${windowDays}` : ""}`, undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   installSkill: (payload: { source: string; skill_id?: string }) =>
     request<SkillDetail>("/api/skills/install", json("POST", payload)),
   skillDetail: (id: string) => request<SkillDetail>(`/api/skills/${id}`),
@@ -326,13 +326,14 @@ export const api = {
   deleteRecommendation: (id: string) => request<{ deleted: string }>(`/api/recommendations/${id}`, json("DELETE")),
   deletePreset: (id: string) => request<{ deleted: string }>(`/api/presets/${id}`, json("DELETE")),
 
-  metricsOverview: (mode: "formal" | "experiment", options?: RequestOptions) =>
-    request<MetricsOverview>(`/api/metrics/overview?mode=${mode}`, undefined, {
+  // 时间窗口：windowDays=N 取最近 N 天且已结算（today-N ~ today-20）的推荐；不传则全部历史累计。
+  metricsOverview: (mode: "formal" | "experiment", windowDays?: number, options?: RequestOptions) =>
+    request<MetricsOverview>(`/api/metrics/overview?mode=${mode}${windowDays ? `&window_days=${windowDays}` : ""}`, undefined, {
       timeoutMs: options?.timeoutMs ?? 30_000,
       signal: options?.signal,
     }),
-  filterEffectiveness: (mode: "formal" | "experiment", options?: RequestOptions) =>
-    request<FilterEffectiveness>(`/api/metrics/filter-effectiveness?mode=${mode}`, undefined, {
+  filterEffectiveness: (mode: "formal" | "experiment", windowDays?: number, options?: RequestOptions) =>
+    request<FilterEffectiveness>(`/api/metrics/filter-effectiveness?mode=${mode}${windowDays ? `&window_days=${windowDays}` : ""}`, undefined, {
       timeoutMs: options?.timeoutMs ?? 15_000,
       signal: options?.signal,
     }),
@@ -364,10 +365,14 @@ export const api = {
   statsOverview: (mode: "formal" | "experiment") => request<StatsOverview>(`/api/stats/overview?mode=${mode}`),
   statsBySkill: (mode: "formal" | "experiment") => request<SkillStatsRow[]>(`/api/stats/by-skill?mode=${mode}`),
   statsByPreset: (mode: "formal" | "experiment") => request<PresetStatsRow[]>(`/api/stats/by-preset?mode=${mode}`),
-  metricsByStrategy: (mode: "formal" | "experiment") => request<StrategyStatsRow[]>(`/api/metrics/by-strategy?mode=${mode}`),
-  metricsBySetup: (mode: "formal" | "experiment") => request<SetupStatsRow[]>(`/api/metrics/by-setup?mode=${mode}`),
-  precisionAtK: (mode: "formal" | "experiment") => request<PrecisionAtKRow[]>(`/api/metrics/precision-at-k?mode=${mode}`),
-  metricsByScoreLine: (mode: "formal" | "experiment") => request<ScoreLineStatsRow[]>(`/api/metrics/by-score-line?mode=${mode}`),
+  metricsByStrategy: (mode: "formal" | "experiment", windowDays?: number) =>
+    request<StrategyStatsRow[]>(`/api/metrics/by-strategy?mode=${mode}${windowDays ? `&window_days=${windowDays}` : ""}`),
+  metricsBySetup: (mode: "formal" | "experiment", windowDays?: number) =>
+    request<SetupStatsRow[]>(`/api/metrics/by-setup?mode=${mode}${windowDays ? `&window_days=${windowDays}` : ""}`),
+  precisionAtK: (mode: "formal" | "experiment", windowDays?: number) =>
+    request<PrecisionAtKRow[]>(`/api/metrics/precision-at-k?mode=${mode}${windowDays ? `&window_days=${windowDays}` : ""}`),
+  metricsByScoreLine: (mode: "formal" | "experiment", windowDays?: number) =>
+    request<ScoreLineStatsRow[]>(`/api/metrics/by-score-line?mode=${mode}${windowDays ? `&window_days=${windowDays}` : ""}`),
 
   // —— 记录中心：运行推荐记录 + 矩阵运行记录 ——
   runRecords: (params?: { run_mode?: string; limit?: number }) => {

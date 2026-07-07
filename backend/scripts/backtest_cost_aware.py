@@ -22,9 +22,9 @@ recommendation_outcomes 混存两类记录，必须用 recommendation_id 前缀�
 1. 去重：按 recommendation_id 去重（每个 id = 一笔独立交易）。LIVE 与 BACKTEST
    分别统计，绝不互相合并口径。
 2. 成本模型：executed_return 已含滑点但未扣佣金+印花税。
-   与 outcome_service.py 保持一致：_ADDITIONAL_COST_PCT = 0.10%
-   （佣金万2.5 双边 + 印花税0.05% 卖出 ≈ 0.10%/笔）。
-   net_return = executed_return - 0.10
+   与 outcome_service.py 保持一致：_ADDITIONAL_COST_PCT = 0.07%
+   （佣金万1 双边 + 印花税0.05% 卖出 ≈ 0.07%/笔）。
+   net_return = executed_return - 0.07
 3. 指标：胜率(净)、平均净收益、盈亏比(净)、Sharpe(每笔)、最大亏损(净)、
    出场分布、持仓天数。LIVE / BACKTEST / 混合 三套分别输出。
 4. 策略归因：从 skill_breakdown_json 提取每只推荐命中的策略，统计各策略
@@ -47,7 +47,7 @@ from typing import Any, Dict, List, Optional
 
 # 与 backend/app/services/outcome_service.py 保持一致
 # executed_return 已含滑点但未扣佣金+印花税
-ADDITIONAL_COST_PCT = 0.10  # 佣金万2.5双边 + 印花税0.05%卖出 ≈ 0.10%/笔
+ADDITIONAL_COST_PCT = 0.07  # 佣金万1双边 + 印花税0.05%卖出 ≈ 0.07%/笔
 
 
 @dataclass

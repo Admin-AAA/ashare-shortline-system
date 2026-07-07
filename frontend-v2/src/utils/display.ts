@@ -109,10 +109,19 @@ export const EXIT_REASON_LABELS: Record<string, string> = {
   deferred_after_limit_up: "涨停后递延",
 };
 
-export function exitReasonLabel(value: unknown, fallback = "—") {
+export function exitReasonLabel(value: unknown, fallback = "—", executedReturn?: number | null) {
   const raw = String(value ?? "").trim();
   if (!raw) return fallback;
-  return EXIT_REASON_LABELS[raw] ?? raw;
+  const label = EXIT_REASON_LABELS[raw] ?? raw;
+  // trailing_stop 是「移动止盈/止损」机制：激活条件是浮盈≥2%，但跳空低开+扣费后
+  // 实际收益可能为负。根据真实收益动态调整文案，避免"止盈"却亏钱的矛盾感。
+  if (
+    (raw === "trailing_stop_hit" || raw === "trailing_stop_gap") &&
+    executedReturn != null && !Number.isNaN(executedReturn) && executedReturn < 0
+  ) {
+    return raw === "trailing_stop_hit" ? "移动止损触发" : "开盘跳空移动止损";
+  }
+  return label;
 }
 
 export function businessStatusLabel(value: unknown, fallback = "状态待确认") {

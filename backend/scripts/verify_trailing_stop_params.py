@@ -69,7 +69,7 @@ def simulate(db, rows, activate, callback):
             sim = outcome_service._simulate_outcome(rec, bars, dates, horizon_days=5)
             if sim is None or not sim.get("entry_triggered"):
                 continue
-            ret = sim.get("executed_return", 0.0) - 0.10
+            ret = sim.get("executed_return", 0.0) - outcome_service._ADDITIONAL_COST_PCT
             total += ret
             if ret > 0:
                 wins += 1

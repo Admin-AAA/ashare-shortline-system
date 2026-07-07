@@ -2331,7 +2331,7 @@ Run:
 ./start.sh
 ```
 
-Expected: backend on `http://localhost:8765`, frontend on `http://localhost:5173`.
+Expected: backend on `http://localhost:8765`, frontend on `http://localhost:5174`.
 
 - [ ] **Step 5: Verify HTTP endpoints**
 

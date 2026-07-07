@@ -86,3 +86,27 @@ export const pageBtnStyle = (disabled: boolean): CSSProperties => ({
   cursor: disabled ? "default" : "pointer",
   opacity: disabled ? 0.5 : 1,
 });
+
+/** 状态徽章 —— 运行状态颜色映射 */
+export function StatusBadge({ status }: { status: string }) {
+  const color =
+    status === "succeeded" || status === "completed"
+      ? "var(--market-up)"
+      : status === "running"
+        ? "var(--accent)"
+        : status === "failed" || status === "interrupted"
+          ? "var(--market-down)"
+          : "var(--muted)";
+  return (
+    <span style={{
+      display: "inline-block",
+      padding: "2px 8px",
+      borderRadius: 4,
+      fontSize: "var(--text-sm)",
+      color,
+      background: `color-mix(in srgb, ${color} 12%, transparent)`,
+    }}>
+      {status}
+    </span>
+  );
+}

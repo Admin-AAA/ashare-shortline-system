@@ -208,14 +208,14 @@ def _measure_first_page(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Measure cold-start first-visit latency.")
     parser.add_argument("--backend-port", type=int, default=18765)
-    parser.add_argument("--frontend-port", type=int, default=15173)
+    parser.add_argument("--frontend-port", type=int, default=15174)
     parser.add_argument("--timeout", type=float, default=90.0)
     parser.add_argument("--skip-frontend", action="store_true")
     args = parser.parse_args()
 
     backend_root = Path(__file__).resolve().parents[1]
     project_root = backend_root.parent
-    frontend_root = project_root / "frontend"
+    frontend_root = project_root / "frontend-v2"
     backend_python = backend_root / ".venv" / "bin" / "python"
 
     if not backend_python.exists():

@@ -279,30 +279,30 @@ export function MarketBreadthPanel({ snapshot }: { snapshot: MarketSnapshot }) {
     <div>
       <p style={{ margin: "0 0 var(--space-4)", fontSize: 12, color: "var(--muted)" }}>{breadthLine(snapshot)}</p>
 
-      {/* 主对比行：上涨 ← → 下跌（大数字左右对峙） */}
-      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "center", gap: "var(--space-8)", marginBottom: "var(--space-3)" }}>
-        <div style={{ textAlign: "right", flex: 1 }}>
+      {/* 一行四数：上涨(左) | 涨停·跌停(中，左右留限) | 下跌(右) */}
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: "var(--space-4)" }}>
+        {/* 左：上涨 */}
+        <div style={{ textAlign: "left", flex: "0 0 auto" }}>
           <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 2 }}>上涨</div>
-          <div style={{ fontFamily: "var(--font-mono)", fontSize: 36, fontWeight: 700, color: "var(--market-up)", lineHeight: 1.1 }}>{up}</div>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 40, fontWeight: 700, color: "var(--market-up)", lineHeight: 1.1 }}>{up}</div>
         </div>
-        <div style={{ fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 600, color: "var(--muted)", paddingBottom: 6 }}>
-          :
-        </div>
-        <div style={{ textAlign: "left", flex: 1 }}>
-          <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 2 }}>下跌</div>
-          <div style={{ fontFamily: "var(--font-mono)", fontSize: 36, fontWeight: 700, color: "var(--market-down)", lineHeight: 1.1 }}>{down}</div>
-        </div>
-      </div>
 
-      {/* 次要行：涨停 / 跌停 */}
-      <div style={{ display: "flex", justifyContent: "center", gap: "var(--space-8)", marginBottom: "var(--space-4)" }}>
-        <div style={{ textAlign: "center" }}>
-          <span style={{ fontSize: 11, color: "var(--muted)" }}>涨停</span>
-          <span className="text-mono" style={{ fontSize: 16, fontWeight: 600, color: "var(--market-up)", marginLeft: 6 }}> {snapshot.limit_up_count}</span>
+        {/* 中：涨停 | 跌停（居中，左右各留 40px 不挤压两侧） */}
+        <div style={{ display: "flex", gap: "var(--space-6)", alignItems: "flex-end", flex: "0 0 auto", margin: "0 40px" }}>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 2 }}>涨停</div>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 28, fontWeight: 700, color: "var(--market-up)", lineHeight: 1.1 }}>{snapshot.limit_up_count}</div>
+          </div>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 2 }}>跌停</div>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 28, fontWeight: 700, color: "var(--market-down)", lineHeight: 1.1 }}>{snapshot.limit_down_count}</div>
+          </div>
         </div>
-        <div style={{ textAlign: "center" }}>
-          <span style={{ fontSize: 11, color: "var(--muted)" }}>跌停</span>
-          <span className="text-mono" style={{ fontSize: 16, fontWeight: 600, color: "var(--market-down)", marginLeft: 6 }}> {snapshot.limit_down_count}</span>
+
+        {/* 右：下跌 */}
+        <div style={{ textAlign: "right", flex: "0 0 auto" }}>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 2 }}>下跌</div>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 40, fontWeight: 700, color: "var(--market-down)", lineHeight: 1.1 }}>{down}</div>
         </div>
       </div>
 
