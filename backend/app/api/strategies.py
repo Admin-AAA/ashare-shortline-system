@@ -51,6 +51,10 @@ def list_strategies(mode: str = Query(default="formal"), db: Session = Depends(g
                 "hit_rate": m.get("hit_rate"),
                 "avg_score": m.get("avg_score"),
                 "avg_return": m.get("avg_return"),
+                # 北极星 C 项（策略可追溯）：盈亏比 + 最近一次命中日期。
+                # metrics_by_strategy 早已计算，此前被遗漏，导致前端卡片恒显 "—"。
+                "profit_loss_ratio": m.get("profit_loss_ratio"),
+                "last_recommendation_date": m.get("last_recommendation_date"),
                 "horizon_metrics": m.get("horizon_metrics"),
             }
         result.append(

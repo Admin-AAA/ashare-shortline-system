@@ -56,3 +56,21 @@ def test_strategies_endpoint_invalid_mode():
     client = TestClient(app)
     resp = client.get("/api/strategies?mode=bogus")
     assert resp.status_code == 400
+
+
+def test_strategies_endpoint_traceable_fields_present():
+    """北极星 C 项回归：已调用策略的 performance 必须携带盈亏比与最近命中日期。
+
+    此前 strategies.py 在构造 perf 时遗漏这两个字段（metrics_by_strategy 已计算），
+    导致前端策略卡片恒显 "盈亏比 —" / "最近命中 —"，策略可追溯断链。
+    """
+    client = TestClient(app)
+    data = client.get("/api/strategies").json()
+    called = [d for d in data if d["performance"] is not None]
+    assert called, "应有至少一个已调用策略"
+    for d in called:
+        p = d["performance"]
+        assert "profit_loss_ratio" in p, f"{d['skill_id']} 缺 profit_loss_ratio"
+        assert "last_recommendation_date" in p, f"{d['skill_id']} 缺 last_recommendation_date"
+    with_dates = [d for d in called if d["performance"]["last_recommendation_date"]]
+    assert with_dates, "已调用策略中至少应有一条带最近命中日期"

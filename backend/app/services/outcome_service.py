@@ -503,9 +503,11 @@ def _metrics_by_strategy(db: Session, run_mode: str) -> list[dict[str, Any]]:
         count = max(1, item["sample_count"])
         metric_rows = _metric_records_from_rows(item["rows"], benchmark_by_rec)
         metrics = _compute_full_metrics(metric_rows)
-        # 最近一次该策略出现在该口径推荐中的日期/时间（北极星 C 项：策略可追溯）
-        last_rec_at = max((r.recommended_at for r in item["rows"] if r.recommended_at), default=None)
-        last_rec_date = max((r.trade_date for r in item["rows"] if r.trade_date), default=None)
+        # 最近一次该策略出现在该口径推荐中的交易日（北极星 C 项：策略可追溯）
+        last_rec_date = max(
+            (str(getattr(r, "trade_date", "") or "") for r in item["rows"]),
+            default=None,
+        ) or None
         result.append({
             "strategy_id": item["strategy_id"],
             "strategy_name": item["strategy_name"],
@@ -520,7 +522,6 @@ def _metrics_by_strategy(db: Session, run_mode: str) -> list[dict[str, Any]]:
             "avg_score": round(item["avg_score"] / count, 2),
             "avg_return": metrics["average_executed_return"],
             "last_recommendation_date": last_rec_date,
-            "last_recommendation_at": last_rec_at.isoformat() if last_rec_at else None,
             "horizon_metrics": _horizon_metrics_for_rows(item["rows"], horizon_records),
             **_group_metric_fields(metrics),
         })
