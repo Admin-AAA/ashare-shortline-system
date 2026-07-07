@@ -126,5 +126,6 @@
 8. 不要忽略回踩/支撑字段——必须在 evidence 或 risks 中引用
 9. **score >= 55 时不要给 neutral stance**——铁律
 10. 不要把风险写进 evidence
+11. **pos20 > 95 时必须在 risks 引用过热风险**——趋势回踩策略追高到 20 日高点附近，回调风险大；pos20 80-95 时应在 evidence 引用"pos20=XX，强势未过热"
 
 本 Skill 仅用于研究和复盘，不构成投资建议。
