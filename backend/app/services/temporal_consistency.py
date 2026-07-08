@@ -17,7 +17,7 @@ from collections import defaultdict
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.orm import Session
 
 from app.models.tables import (
@@ -467,62 +467,81 @@ def _check_minute_kbar_date_integrity(
     - 信号日的分钟线 trade_date 必须等于推荐日期
     - 出场日的分钟线 trade_date 必须在推荐日期之后
     - 分钟线的 trade_time 中的日期部分必须与 trade_date 一致
+
+    批量查询优化（第 N+13 轮 T4）：原实现对每个 rec 单独查 MinuteKbar（1716 次 N+1 查询，
+    3.75s）。改为收集 (code, td) 对后分批 tuple IN 查询（≤4 批 × 100 对），
+    Python 端按 (code, td) 分组验证，查询次数从 1716 降到 ≤4。
     """
+    # 收集需要检查的 (code, trade_date) 对，并记录每个 pair 对应的 rec 列表
+    pairs: set[tuple[str, str]] = set()
+    pair_recs: dict[tuple[str, str], list[Recommendation]] = {}
     for rec in recs:
-        td = str(rec.trade_date)
-        code = str(rec.code)
-        if not td or not code:
-            continue
+        td = str(rec.trade_date) if rec.trade_date else ""
+        code = str(rec.code) if rec.code else ""
+        if td and code:
+            pairs.add((code, td))
+            pair_recs.setdefault((code, td), []).append(rec)
 
-        fs = json.loads(rec.feature_snapshot_json or "{}")
+    if not pairs:
+        return
 
-        # 检查信号日分钟线
-        minutes = db.scalars(
-            select(MinuteKbar)
-            .where(
-                MinuteKbar.code == code,
+    # 分批 tuple IN 查询（每批 100 对，避免单次 IN 过大）
+    pair_list = sorted(pairs)
+    batch_size = 100
+    minutes_by_pair: dict[tuple[str, str], list] = {}
+    for i in range(0, len(pair_list), batch_size):
+        batch = pair_list[i : i + batch_size]
+        rows = db.scalars(
+            select(MinuteKbar).where(
                 MinuteKbar.freq == "15min",
-                MinuteKbar.trade_date == td,
+                tuple_(MinuteKbar.code, MinuteKbar.trade_date).in_(batch),
             )
-            .order_by(MinuteKbar.trade_time.asc())
         ).all()
+        for m in rows:
+            key = (str(m.code), str(m.trade_date))
+            minutes_by_pair.setdefault(key, []).append(m)
+
+    # 按 (code, td) 分组验证分钟线，对每个 pair 的所有 rec 报 violation（保持原行为）
+    for (code, td) in pair_list:
+        minutes = minutes_by_pair.get((code, td))
         if not minutes:
             continue
 
-        # 验证 trade_date 字段与 trade_time 中的日期一致
-        for m in minutes:
-            mt = str(m.trade_time) if m.trade_time else ""
-            if mt and len(mt) >= 10:
-                date_from_time = mt[:10]
-                if date_from_time != td:
-                    violations.append({
-                        "check": "minute_date_field_mismatch",
-                        "severity": "error",
-                        "rec_id": rec.recommendation_id,
-                        "code": code,
-                        "trade_date": td,
-                        "minute_time": mt,
-                        "message": (
-                            f"分钟线数据: trade_date={td} 但 trade_time={mt}"
-                            f" 中的日期为 {date_from_time}，不一致"
-                        ),
-                    })
+        for rec in pair_recs[(code, td)]:
+            # 验证 trade_date 字段与 trade_time 中的日期一致
+            for m in minutes:
+                mt = str(m.trade_time) if m.trade_time else ""
+                if mt and len(mt) >= 10:
+                    date_from_time = mt[:10]
+                    if date_from_time != td:
+                        violations.append({
+                            "check": "minute_date_field_mismatch",
+                            "severity": "error",
+                            "rec_id": rec.recommendation_id,
+                            "code": code,
+                            "trade_date": td,
+                            "minute_time": mt,
+                            "message": (
+                                f"分钟线数据: trade_date={td} 但 trade_time={mt}"
+                                f" 中的日期为 {date_from_time}，不一致"
+                            ),
+                        })
 
-            # 检查 trade_time 是否在合理交易时段内（9:00 - 15:30）
-            if mt and len(mt) >= 19:
-                time_str = mt[11:19]
-                if time_str < "09:00:00" or time_str > "15:30:00":
-                    violations.append({
-                        "check": "minute_time_outside_trading_hours",
-                        "severity": "warning",
-                        "rec_id": rec.recommendation_id,
-                        "code": code,
-                        "trade_date": td,
-                        "minute_time": mt,
-                        "message": (
-                            f"分钟线 trade_time={mt} 不在交易时段内 (09:00-15:30)"
-                        ),
-                    })
+                # 检查 trade_time 是否在合理交易时段内（9:00 - 15:30）
+                if mt and len(mt) >= 19:
+                    time_str = mt[11:19]
+                    if time_str < "09:00:00" or time_str > "15:30:00":
+                        violations.append({
+                            "check": "minute_time_outside_trading_hours",
+                            "severity": "warning",
+                            "rec_id": rec.recommendation_id,
+                            "code": code,
+                            "trade_date": td,
+                            "minute_time": mt,
+                            "message": (
+                                f"分钟线 trade_time={mt} 不在交易时段内 (09:00-15:30)"
+                            ),
+                        })
 
 
 def _check_backtest_bars_temporal_boundary(
