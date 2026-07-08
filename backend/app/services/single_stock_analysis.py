@@ -1,4 +1,4 @@
-"""单股票分析服务：加载K线 → 构建特征 → 计算 DSA 评分 → 可选触发 LLM agent。"""
+"""单股票分析服务：加载K线 → 构建特征 → 计算基础短线策略评分 → 可选触发 LLM agent。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.tables import DailyKbar, Stock, StockQuote
+from app.models.tables import DailyKbar, Preset, PresetSkill, Stock, StockQuote
 from app.services.market_data import _build_stock_from_bars
 from app.services.market_pool import _normalize_trade_date, _latest_allowed_bar_date
 
@@ -24,17 +24,19 @@ def analyze_stock(
     trade_date: str | None = None,
     include_llm: bool = False,
     skill_id: str = "daily-stock-analysis-skill",
+    preset_id: str | None = None,
 ) -> dict[str, Any]:
-    """对单只股票运行完整的特征构建 + DSA 评分流程。
+    """对单只股票运行完整的特征构建 + 基础短线策略评分流程。
 
     Args:
         code: 股票代码（如 "000001"）
         trade_date: 分析日期（默认最近交易日）
         include_llm: 是否触发 LLM skill agent（消耗 API 额度）
-        skill_id: 使用的 skill ID
+        skill_id: 使用的 skill ID（单 skill 模式，preset_id 优先）
+        preset_id: 预设 ID（多 skill 聚合评分模式，走完整聚合评分管线）
 
     Returns:
-        包含股票信息、特征快照、DSA 评分、可选 LLM 分析结果
+        包含股票信息、特征快照、基础短线策略评分、可选 LLM 分析结果
     """
     t0 = time.perf_counter()
 
@@ -154,7 +156,7 @@ def analyze_stock(
         quote, bar_dicts, quote_source="single_analysis", kline_source="single_analysis"
     )
 
-    # 8. DSA 特征丰富（与推荐管线一致）
+    # 8. 基础短线策略特征丰富（与推荐管线一致）
     from app.services.feature_builder import build_features
     from app.services.market_data import _build_quote_snapshot, _candidate_filter_summary
     from app.services.market_pool import inject_limit_up_flags
@@ -225,14 +227,161 @@ def analyze_stock(
 
     # 9. LLM agent 分析（可选，消耗 API 额度）
     if include_llm:
-        llm_result = _run_llm_analysis(db, code, stock_result, skill_id)
+        if preset_id:
+            # 预设多 skill 聚合评分模式：走完整聚合评分管线
+            llm_result = _run_preset_skill_analysis(db, code, stock_result, preset_id, snapshot)
+        else:
+            # 单 skill 模式（传真实 snapshot，含 trade_date/breadth，避免 LLM 拿 mock regime=未知 + cache trade_date=NULL）
+            llm_result = _run_llm_analysis(db, code, stock_result, skill_id, snapshot)
         result["llm_analysis"] = llm_result
 
     return result
 
 
+def _run_preset_skill_analysis(
+    db: Session,
+    code: str,
+    stock_result: dict[str, Any],
+    preset_id: str,
+    snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    """预设多 skill 聚合评分：加载预设 skills → 并发 LLM 审查 → 聚合评分。
+
+    复用推荐管线的 run_skill_reviews + aggregate，让单股票也能走完整评分流程。
+    """
+    import asyncio
+
+    try:
+        from app.core.config import get_settings
+        from app.engine.skill_loader import load_skills
+        from app.agents.review_runner import run_skill_reviews
+        from app.engine.agent_skill_runner import agent_only_signal
+        from app.engine.aggregator import aggregate
+        from app.services.workbench_service import _select_skills_for_run
+
+        settings = get_settings()
+        all_skills = load_skills(settings.skills_dir)
+        skill_map = {s.skill_id: s for s in all_skills}
+
+        # 加载预设
+        preset = db.get(Preset, preset_id)
+        if not preset:
+            return {"status": "error", "error": f"预设 {preset_id} 不存在"}
+
+        skill_rows = db.scalars(
+            select(PresetSkill)
+            .where(PresetSkill.preset_id == preset_id)
+            .order_by(PresetSkill.sort_order.asc())
+        ).all()
+        requested_skills = [{"skill_id": row.skill_id, "weight": row.weight} for row in skill_rows]
+
+        selected_skills = _select_skills_for_run(db, skill_map, requested_skills)
+        if not selected_skills:
+            return {"status": "error", "error": f"预设 {preset.name} 没有可运行的 Skill"}
+
+        # 构建 rule_signals_by_skill（用基础短线策略特征作为所有 skill 的规则信号）
+        rule_signal = {
+            "dsa_signal_score": stock_result.get("dsa_signal_score"),
+            "trend_status": stock_result.get("trend_status"),
+            "macd_status": stock_result.get("macd_status"),
+        }
+        rule_signals_by_skill = {s["skill_id"]: rule_signal for s in selected_skills}
+
+        # 并发调用所有 Skill Agent
+        skills_list = [s["skill"] for s in selected_skills]
+        session_id = f"single-stock-{code}-{preset_id}"
+
+        t0 = time.perf_counter()
+        skill_reviews = asyncio.run(run_skill_reviews(
+            stock=stock_result,
+            skills=skills_list,
+            snapshot=snapshot,
+            rule_signals_by_skill=rule_signals_by_skill,
+            session_id=session_id,
+        ))
+        elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+
+        # 构建 signals（用 agent_only_signal，因为没有完整策略规则引擎）
+        signals: list[dict[str, Any]] = []
+        for r in skill_reviews:
+            sid = r.get("skill_id")
+            review = r.get("review")
+            if review is None:
+                continue
+            skill_obj = skill_map.get(sid)
+            if skill_obj is None:
+                continue
+            signal = agent_only_signal(skill_obj, stock_result, review)
+            selected = next((s for s in selected_skills if s["skill_id"] == sid), None)
+            if selected:
+                signal["weight"] = selected["weight"]
+            signals.append(signal)
+
+        # 计算 agent_review_score（置信度加权平均）
+        valid_reviews = [r for r in skill_reviews if r.get("review") and not r.get("error")]
+        if valid_reviews:
+            scores = [float(r["review"].get("score", 50)) for r in valid_reviews]
+            confidences = [float(r["review"].get("confidence", 0.5)) for r in valid_reviews]
+            agent_review_score = sum(s * c for s, c in zip(scores, confidences)) / max(sum(confidences), 0.01)
+        else:
+            agent_review_score = 50.0
+
+        # 聚合评分（复用推荐管线的 aggregate）
+        market_score = 50.0  # 单股票分析无完整市场快照，用中性值
+        card = aggregate(
+            stock=stock_result,
+            signals=signals,
+            market_score=market_score,
+            agent_review_score=round(agent_review_score, 2),
+            risk_template=preset.risk_template,
+            market_snapshot=snapshot,
+        )
+
+        # 收集 API 消耗
+        try:
+            from app.agents.agno_skill_agent import drain_api_costs
+            api_costs = drain_api_costs()
+        except Exception:
+            api_costs = []
+
+        return {
+            "status": "ok",
+            "elapsed_ms": elapsed_ms,
+            "preset_id": preset_id,
+            "preset_name": preset.name,
+            "risk_template": preset.risk_template,
+            "final_score": round(float(card.get("final_score", 0)), 2),
+            "component_scores": card.get("component_scores", {}),
+            "agent_review_score": round(agent_review_score, 2),
+            "skill_reviews": [
+                {
+                    "skill_id": r.get("skill_id"),
+                    "skill_name": r.get("skill_name"),
+                    "status": "error" if r.get("error") else "ok",
+                    "error": r.get("error"),
+                    "score": r.get("review", {}).get("score") if r.get("review") else None,
+                    "stance": r.get("review", {}).get("stance") if r.get("review") else None,
+                    "confidence": r.get("review", {}).get("confidence") if r.get("review") else None,
+                    "summary": r.get("review", {}).get("summary") if r.get("review") else None,
+                    "action": r.get("review", {}).get("action") if r.get("review") else None,
+                    "supports": r.get("review", {}).get("supports") or [] if r.get("review") else [],
+                    "risks": r.get("review", {}).get("risks") or [] if r.get("review") else [],
+                }
+                for r in skill_reviews
+            ],
+            "api_costs": api_costs,
+            "total_tokens_est": sum((c.get("prompt_tokens_est") or 0) + (c.get("completion_tokens_est") or 0) for c in api_costs),
+            "total_tokens_real": sum((c.get("prompt_tokens") or 0) + (c.get("completion_tokens") or 0) for c in api_costs),
+            "total_cache_hit_tokens": sum((c.get("cache_hit_tokens") or 0) for c in api_costs),
+            "prompt_cache_active": any((c.get("cache_hit_tokens") or 0) > 0 for c in api_costs if c.get("status") == "success"),
+        }
+    except Exception as exc:
+        logger.warning("Preset skill analysis failed for %s (preset=%s): %s", code, preset_id, exc)
+        return {"status": "error", "error": str(exc)}
+
+
 def _run_llm_analysis(
-    db: Session, code: str, stock_result: dict[str, Any], skill_id: str
+    db: Session, code: str, stock_result: dict[str, Any], skill_id: str, snapshot: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     """触发 LLM skill agent 分析单只股票。消耗 API 额度。"""
     import asyncio
@@ -248,7 +397,10 @@ def _run_llm_analysis(
         if not skill:
             return {"status": "error", "error": f"Skill {skill_id} not found"}
 
-        snapshot = {"sample_count": 1, "breadth": {"regime": "未知"}, "main_industries": []}
+        # 用 analyze_stock 构造的真实 snapshot（含 trade_date/breadth/main_industries），
+        # 避免 LLM 拿 mock regime=未知 影响判断 + cache trade_date=NULL 无法追溯。
+        if snapshot is None:
+            snapshot = {"sample_count": 1, "breadth": {"regime": "未知"}, "main_industries": []}
         rule_signal = {
             "dsa_signal_score": stock_result.get("dsa_signal_score"),
             "trend_status": stock_result.get("trend_status"),
@@ -277,7 +429,7 @@ def _run_llm_analysis(
             "skill_id": skill_id,
             "score": raw.get("score"),
             "score_delta": round(float(raw.get("score", 50)) - 50.0, 2),
-            # 规则层 DSA 评分作为基线，让用户能看到 LLM 减分/加分幅度
+            # 规则层基础短线策略评分作为基线，让用户能看到 LLM 减分/加分幅度
             # T8 第70轮验证：LLM 净价值 +84.24%（过滤 27 笔 WR=14.8% 的垃圾推荐）
             "rule_score": stock_result.get("scoring", {}).get("dsa_signal_score") if isinstance(stock_result.get("scoring"), dict) else stock_result.get("dsa_signal_score"),
             "llm_adjustment": round(float(raw.get("score", 50)) - float(stock_result.get("scoring", {}).get("dsa_signal_score", 50) if isinstance(stock_result.get("scoring"), dict) else stock_result.get("dsa_signal_score", 50)), 2),

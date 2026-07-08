@@ -22,7 +22,7 @@ import {
   rowStyle,
 } from "./recordsShared";
 import { useApi } from "../app/useApi";
-import { exitReasonLabel } from "../utils/display";
+import { bucketLabel, exitReasonLabel } from "../utils/display";
 
 export function StockAnalysisDetailView({ recId, onBack }: { recId: string; onBack: () => void }) {
   const { data, loading, error } = useApi<RecommendationDetail>(
@@ -61,7 +61,7 @@ export function StockAnalysisDetailView({ recId, onBack }: { recId: string; onBa
           <Metric label="分数" value={data.final_score.toFixed(1)} mono />
           <Metric label="共识分" value={data.consensus_score.toFixed(1)} mono />
           <Metric label="推荐价" value={fmtPrice(data.recommend_price)} mono />
-          <Metric label="策略/买点" value={`${data.bucket || "—"} · ${data.setup_type || "—"}`} />
+          <Metric label="策略/买点" value={`${bucketLabel(data.bucket)} · ${data.setup_type || "—"}`} />
           <Metric label="风险等级" value={data.risk_tags?.[0] || "—"} />
         </div>
       </section>
