@@ -51,14 +51,18 @@ prefilter:
       - when: "vol5_20 <= 1.05"
         reason: "pullback_volume_not_shrink"
     include_any:
-      - when: "volume_shrink_pullback == true and support_ma5 == true"
-        reason: "requires_ma5_shrink_pullback"
-      - when: "volume_shrink_pullback == true and support_ma10 == true"
-        reason: "requires_ma10_shrink_pullback"
-      # 放宽 vol5_20<=0.9 → <=1.0：与 include 规则 1.05 对齐，让"均量未放大+MA5支撑+窄幅"
+      # 第 N+15 轮 T5 修复：原条件依赖 volume_shrink_pullback/support_ma5（build_features 后置衍生 bool），
+      # prefilter 阶段为 None/False → 死锁 0 命中（formal 近 60 天 0 覆盖）。
+      # 改用原始字段（vol5_20/pct，market_pool 阶段已填充）：缩量回踩让候选进 skill_gate，
+      # 均线支撑/support_ma5 交给 skill_gate（build_features 后有完整 feature）判断。
+      - when: "vol5_20 <= 0.8 and pct <= 0 and pct >= -5"
+        reason: "requires_shrink_pullback"
+      - when: "vol5_20 <= 0.8 and pct <= 0 and pct >= -5"
+        reason: "requires_shrink_pullback_ma10"
+      # 放宽 vol5_20<=0.9 → <=1.0：与 include 规则 1.05 对齐，让"均量未放大+窄幅"
       # 的趋势内回踩候选能进 prefilter（原 0.9 过严，07-07 formal 仅 1 只通过 prefilter）
       # 实验回测：vol5_20∈[0.9,1.05] 的 trend-pullback 历史样本 2 笔 WR 50%/+4.61%
-      - when: "pct >= -1.5 and pct <= 1 and support_ma5 == true and vol5_20 <= 1.0"
+      - when: "pct >= -1.5 and pct <= 1 and vol5_20 <= 1.0"
         reason: "requires_near_ma_support"
     exclude:
       - when: "dist20 > 18 and rsi_12 > 72"
