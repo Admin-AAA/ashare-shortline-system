@@ -174,7 +174,27 @@ export function LatestRunCard({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-        <span style={{ fontSize: 13, color: "var(--muted)" }}>{run.trade_date}</span>
+        <span style={{ fontSize: 13, color: "var(--muted)", display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+          {run.trade_date}
+          {run.run_mode && (
+            <span
+              title={run.run_mode === "formal" ? "实盘正式推荐" : run.run_mode}
+              style={{
+                fontSize: 10,
+                padding: "1px 6px",
+                borderRadius: 3,
+                fontFamily: "var(--font-mono)",
+                fontWeight: 600,
+                color: run.run_mode === "formal" ? "var(--accent-strong, var(--accent))" : "var(--muted)",
+                border: `1px solid ${run.run_mode === "formal" ? "var(--accent-strong, var(--accent))" : "var(--line)"}40`,
+                background: "transparent",
+                letterSpacing: 0.5,
+              }}
+            >
+              {run.run_mode === "formal" ? "实盘" : run.run_mode.toUpperCase()}
+            </span>
+          )}
+        </span>
         <span
           style={{
             fontSize: 11,

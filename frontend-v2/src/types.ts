@@ -72,6 +72,7 @@ export type RunSummary = {
   preset_id?: string | null;
   preset_name: string;
   trade_date: string;
+  run_mode?: string;
   started_at?: string | null;
   finished_at?: string | null;
   market_scope: string;
