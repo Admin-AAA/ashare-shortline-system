@@ -1,5 +1,5 @@
 import { ClipboardCopy, History, ShieldAlert, ShieldCheck, ShieldQuestion } from "lucide-react";
-import type { CockpitRecommendation } from "../types";
+import type { CockpitRecommendation, OutcomeSummary } from "../types";
 import { TradeMetric } from "./RecommendationDetailCard";
 import { StockTicker } from "./StockTicker";
 
@@ -15,14 +15,20 @@ type RiskLevel = CockpitRecommendation["risk_level"];
 
 export function PoolExpandedRow({
   item,
+  outcomeSummary,
   onReplay,
   onViewHistory,
 }: {
   item: CockpitRecommendation;
+  outcomeSummary?: Record<string, OutcomeSummary>;
   onReplay: () => void;
   onViewHistory: () => void;
 }) {
   const confidence = deriveConfidence(item);
+  // 真实历史表现：优先用后端聚合的已结算胜率/均收益，替换 ConfidenceMeter 的 score_gap/20 启发式
+  const os = outcomeSummary?.[item.code];
+  const hasHistory = !!os && os.settled > 0;
+  const effectiveValidated = hasHistory ? os.win_rate / 100 : confidence.validatedRatio;
   const hasTradeParams =
     item.recommend_price != null || item.stop_loss != null || item.take_profit != null;
   return (
@@ -161,12 +167,53 @@ export function PoolExpandedRow({
             ))
           )}
         </div>
+        {/* 历史表现：真实已结算胜率/均收益，补全北极星「跑出来结果如何」维度 */}
+        {hasHistory ? (
+          <div style={{ marginTop: "var(--space-3)" }}>
+            <div className="panel__kicker" style={{ marginBottom: "var(--space-1)" }}>
+              历史表现 · 已结算 {os!.settled} 次
+            </div>
+            <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-3)", flexWrap: "wrap" }}>
+              <span
+                className="text-mono"
+                style={{
+                  fontWeight: 700,
+                  fontSize: "var(--text-lg)",
+                  color: os!.win_rate >= 50 ? "var(--market-up)" : "var(--market-down)",
+                }}
+              >
+                {os!.win_rate.toFixed(0)}%
+              </span>
+              <span style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>
+                胜率（{os!.wins}/{os!.settled}）
+              </span>
+              <span
+                style={{
+                  fontSize: "var(--text-sm)",
+                  fontWeight: 600,
+                  color: os!.avg_return >= 0 ? "var(--market-up)" : "var(--market-down)",
+                }}
+              >
+                {os!.avg_return >= 0 ? "+" : ""}
+                {os!.avg_return.toFixed(2)}% 均收益
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div style={{ marginTop: "var(--space-3)", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+            该股暂无已结算的历史推荐记录
+          </div>
+        )}
       </div>
 
       {/* 右：LLM 可信度 + 操作 */}
       <div>
         <div className="panel__kicker" style={{ marginBottom: "var(--space-2)" }}>LLM 解释可信度</div>
-        <ConfidenceMeter confidence={confidence} />
+        <ConfidenceMeter
+          confidence={confidence}
+          validatedRatio={effectiveValidated}
+          validatedFrom={hasHistory ? "real" : "estimate"}
+        />
         <div style={{ display: "flex", gap: "var(--space-2)", marginTop: "var(--space-4)" }}>
           <button className="btn btn--primary" onClick={onReplay}>
             <History size={14} />
@@ -202,8 +249,17 @@ function deriveConfidence(item: CockpitRecommendation): Confidence {
   return { certain, uncertain, validatedRatio, level };
 }
 
-function ConfidenceMeter({ confidence }: { confidence: Confidence }) {
-  const { certain, uncertain, validatedRatio, level } = confidence;
+function ConfidenceMeter({
+  confidence,
+  validatedRatio,
+  validatedFrom = "estimate",
+}: {
+  confidence: Confidence;
+  validatedRatio?: number;
+  validatedFrom?: "real" | "estimate";
+}) {
+  const { certain, uncertain, level } = confidence;
+  const ratio = validatedRatio ?? confidence.validatedRatio;
   const Icon = level === "high" ? ShieldCheck : level === "low" ? ShieldAlert : ShieldQuestion;
   const color = level === "high" ? "var(--market-down)" : level === "low" ? "var(--market-up)" : "var(--warning)";
   const label = level === "high" ? "高可信" : level === "low" ? "低可信" : "中等";
@@ -231,9 +287,11 @@ function ConfidenceMeter({ confidence }: { confidence: Confidence }) {
           <div className="text-mono" style={{ color: "var(--warning)", fontWeight: 600 }}>{uncertain} 项</div>
         </div>
         <div>
-          <div className="text-muted">历史验证</div>
+          <div className="text-muted">
+            历史验证{validatedFrom === "real" ? "·真" : "·估"}
+          </div>
           <div className="text-mono" style={{ color: "var(--accent-strong)", fontWeight: 600 }}>
-            {(validatedRatio * 100).toFixed(0)}%
+            {(ratio * 100).toFixed(0)}%
           </div>
         </div>
       </div>
@@ -249,7 +307,7 @@ function ConfidenceMeter({ confidence }: { confidence: Confidence }) {
         <div
           style={{
             height: "100%",
-            width: `${validatedRatio * 100}%`,
+            width: `${ratio * 100}%`,
             background: "var(--accent)",
             transition: "width var(--motion-normal)",
           }}

@@ -13,6 +13,7 @@ import type {
   RecommendationDetail,
   RecommendationHistoryResponse,
   RecommendationOutcome,
+  OutcomeSummary,
   ReplayAnalysisResult,
   DataSourceHealthRow,
   ModelRoute,
@@ -234,6 +235,13 @@ export const api = {
     if (query?.limit) params.set("limit", String(query.limit));
     if (query?.offset) params.set("offset", String(query.offset));
     return request<RecommendationHistoryResponse>(`/api/recommendations/history?${params.toString()}`);
+  },
+  // 每只股票已结算推荐的真实历史表现（胜率/均收益），供实时候选卡「历史验证」使用
+  recommendationOutcomeSummary: (codes: string[]) => {
+    if (codes.length === 0) return Promise.resolve<Record<string, OutcomeSummary>>({});
+    const params = new URLSearchParams();
+    codes.forEach((c) => params.append("codes", c));
+    return request<Record<string, OutcomeSummary>>(`/api/recommendations/outcome-summary?${params.toString()}`);
   },
   replayAnalysis: (runId: string) => request<ReplayAnalysisResult>(`/api/recommendations/runs/${runId}/replay-analysis`),
   watchRecommendation: (id: string, payload: { watch_status?: string; note?: string | null }) =>

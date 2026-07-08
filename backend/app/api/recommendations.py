@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import case
 from sqlalchemy.orm import Session  # noqa: F401 (Query used in endpoints)
 
 from app.db.session import get_db
@@ -46,6 +47,61 @@ def history(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/outcome-summary")
+def outcome_summary(
+    codes: list[str] = Query(default=[], description="股票代码列表，支持逗号分隔或重复参数"),
+    db: Session = Depends(get_db),
+):
+    """每只股票已结算推荐的历史表现（真实盈亏，非回测模拟）。
+
+    填补实时候选卡「历史验证」维度：展开候选卡时展示该股票此前被推荐后的真实胜负与均收益，
+    替换前端 ConfidenceMeter 的 score_gap/20 启发式。仅统计实盘推荐（recommendation_id 以 rec_ 开头），
+    回测 btrec_* 为模拟数据，不计入「跑出来结果如何」。
+    """
+    from app.models.tables import Recommendation, RecommendationOutcome
+    from sqlalchemy import func
+
+    # 规范化：支持逗号分隔与重复参数
+    normalized: list[str] = []
+    for raw in codes:
+        for part in str(raw).split(","):
+            part = part.strip()
+            if part:
+                normalized.append(part)
+    if not normalized:
+        return {}
+
+    rows = (
+        db.query(
+            Recommendation.code,
+            func.count(RecommendationOutcome.recommendation_id).label("settled"),
+            func.sum(case((RecommendationOutcome.outcome_label == "success", 1), else_=0)).label("wins"),
+            func.avg(RecommendationOutcome.executed_return).label("avg_return"),
+        )
+        .join(RecommendationOutcome, RecommendationOutcome.recommendation_id == Recommendation.recommendation_id)
+        .filter(Recommendation.code.in_(normalized))
+        .filter(Recommendation.recommendation_id.like("rec_%"))
+        .filter(RecommendationOutcome.outcome_label.in_(["success", "failed"]))
+        .group_by(Recommendation.code)
+        .all()
+    )
+
+    result: dict[str, dict] = {}
+    for code, settled, wins, avg_return in rows:
+        settled = int(settled or 0)
+        wins = int(wins or 0)
+        result[code] = {
+            "settled": settled,
+            "wins": wins,
+            "win_rate": round(wins * 100.0 / settled, 1) if settled else 0.0,
+            "avg_return": round(float(avg_return or 0.0), 2),
+        }
+    # 补齐「请求了但无历史」的代码，前端据此区分「无历史」与「未查询」
+    for code in normalized:
+        result.setdefault(code, {"settled": 0, "wins": 0, "win_rate": 0.0, "avg_return": 0.0})
+    return result
 
 
 @router.get("/runs/{run_id}/replay-analysis")
