@@ -1,0 +1,197 @@
+id: small-cap-thematic-momentum
+name: 小盘题材动量
+enabled: true
+weight: 1.0
+
+meta:
+  author: system
+  style: small-cap-momentum
+  version: 0.1.0
+  holding_days: [2, 3, 5]
+  strategy_independence: 0.70
+  default_preset_groups:
+    formal_opening:
+      weight: 0.80
+      sort_order: 66
+    experiment_small_cap:
+      weight: 1.0
+      sort_order: 20
+
+contract:
+  type: strategy
+  executable: true
+  schema_version: 1
+
+# 因果链（第一性原理）：
+#   free_mv_yi<50（小盘 -> 流通筹码薄 -> 需求冲击对价格弹性高）
+#   + pos20>=70（处于 20 日区间上 30% -> 已确立相对强度，非下跌中继）
+#   + rsi_12>=60（趋势动量健康，且未过热；>72 才过热）
+#   + is_main_theme（题材叙事顺风，板块资金在轮动进来）
+#   + dist20<10（距 MA20 不远 -> 行情仍在早期，有上行空间）
+#   + turnover_rate<8（尚未爆量过热）
+# 历史验证（formal 推荐 outcome 回溯，n=328）：WR 90.2% / 基线 68.4% / lift +21.9pp，
+# 前后两半时间窗稳定（前半 +18.2pp，后半 +25.2pp），无 alpha 衰减。
+# 与 chip-single-peak-breakout 区别：本策略度量「相对强度动量 + 小盘弹性」，
+# 而非「筹码单峰分布」；与 sector-relative-strength-leader 区别：本策略用 pos20/rsi 动量
+# 而非 primary_excess（后者历史 lift 为负）。
+universe:
+  include:
+    - "amount_yi >= 3"
+    - "turnover_rate >= 1"
+    - "turnover_rate <= 8"
+    - "pos20 >= 45"
+    - "free_mv_yi < 80"
+    - "off_high_pct >= -15"
+    - "twenty_cm_risk_gate != 'block'"
+  exclude:
+    - "is_st == true"
+    - "announcement_negative_count > 0"
+    - "news_risk_count > 1"
+    - "free_mv_yi >= 150"
+
+prefilter:
+  market:
+    include:
+      - when: "free_mv_yi < 50"
+        reason: "small_float"
+      - when: "pos20 >= 70"
+        reason: "relative_strength"
+    include_any:
+      # 核心模式：小盘 + 相对强度 + 动量 + 主线 + 未过度偏离 + 未过热（历史 WR 90.2% / n=328）
+      - when: "free_mv_yi < 50 and pos20 >= 70 and rsi_12 >= 60 and is_main_theme == true and dist20 < 10 and turnover_rate < 8"
+        reason: "requires_small_cap_momentum_profile"
+    exclude:
+      - when: "free_mv_yi >= 100"
+        reason: "large_cap_contrarian"
+      - when: "dist20 > 18 and rsi_12 > 72"
+        reason: "overheated"
+      - when: "off_high_pct < -12 and pct < 0"
+        reason: "trend_broken"
+
+phases:
+  - name: 破位回避
+    when: "max_dd20 < -14 or (off_high_pct < -12 and pct < 0)"
+    score_cap: 32
+    hard_veto: true
+    risk_flags: ["趋势支撑破坏，不做小盘动量"]
+
+  - name: 过热等待
+    when: "dist20 > 18 and rsi_12 > 72"
+    score_cap: 55
+    hard_veto: false
+    risk_flags: ["已过热，等待回踩"]
+
+  - name: 小盘动量确认
+    when: "free_mv_yi < 50 and pos20 >= 70 and rsi_12 >= 60 and is_main_theme == true and dist20 < 10 and turnover_rate < 8"
+    score_cap: 90
+    hard_veto: false
+
+setups:
+  - name: 小盘题材动量启动
+    when: "free_mv_yi < 50 and pos20 >= 70 and rsi_12 >= 60 and is_main_theme == true and dist20 < 10 and turnover_rate < 8"
+    score_delta: 12
+    entry_rule: "小盘主线 + 相对强度高位 + 动量健康，次日不追高，等分时转强或回踩不破介入"
+    invalid_rule: "放量跌破 MA20 或动量转弱（rsi_12<50），小盘弹性失效"
+
+  - name: 小盘多头延续
+    when: "ma5 > ma10 and ma10 > ma20 and free_mv_yi < 50 and pos20 >= 70"
+    score_delta: 8
+    entry_rule: "小盘多头排列 + 相对强度，等放量确认介入"
+    invalid_rule: "多头结构破坏或 free_mv_yi 升至大盘区间"
+
+  - name: 小盘主线共振
+    when: "is_main_theme == true and pos20 >= 70 and dsa_trend_score >= 18 and free_mv_yi < 50"
+    score_delta: 7
+    entry_rule: "主线题材 + 相对强度 + 趋势评分，等突破放量确认"
+    invalid_rule: "主线退潮或趋势评分转弱"
+
+scoring:
+  base: 42
+  rules:
+    - when: "free_mv_yi < 50"
+      delta: 10
+      reason: 小盘弹性（流通筹码薄）
+    - when: "pos20 >= 70"
+      delta: 8
+      reason: 20日相对强度高位
+    - when: "rsi_12 >= 60"
+      delta: 7
+      reason: 趋势动量健康（未过热）
+    - when: "is_main_theme == true"
+      delta: 6
+      reason: 主线题材顺风
+    - when: "dist20 < 10"
+      delta: 6
+      reason: 距 MA20 近，行情早期
+    - when: "turnover_rate < 8 and turnover_rate >= 1"
+      delta: 4
+      reason: 量能健康未过热
+    - when: "ma5 > ma10 and ma10 > ma20"
+      delta: 8
+      reason: 多头排列
+    - when: "dsa_support_score >= 10"
+      delta: 6
+      reason: 支撑有效
+    - when: "dsa_trend_score >= 26"
+      delta: 7
+      reason: 趋势评分高
+    - when: "vol5_20 >= 1.3"
+      delta: 5
+      reason: 放量确认
+    - when: "chg20 >= 20"
+      delta: 4
+      reason: 20日动量
+    - when: "free_mv_yi >= 100"
+      delta: -12
+      reason: 大盘股动量背离（历史负 lift）
+    - when: "dist20 >= 15"
+      delta: -8
+      reason: 偏离 MA20 过远
+    - when: "turnover_rate >= 8"
+      delta: -6
+      reason: 爆量过热
+    - when: "rsi_12 > 72"
+      delta: -6
+      reason: RSI 过热
+    - when: "capital_resonance_score >= 60"
+      delta: -6
+      reason: 资金共振过热（历史负 lift，属冲高回落前兆）
+
+risk:
+  rules:
+    - when: "max_dd20 < -12"
+      level: medium
+      flag: 趋势回撤偏大
+      score_delta: -6
+    - when: "turnover_rate >= 8"
+      level: high
+      flag: 爆量过热，小盘易派发
+      score_delta: -10
+    - when: "free_mv_yi >= 100"
+      level: high
+      flag: 大盘股动量背离
+      score_delta: -8
+    - when: "dist20 >= 15"
+      level: medium
+      flag: 偏离均线过远
+      score_delta: -8
+    - when: "dsa_macd_score <= 2"
+      level: high
+      flag: MACD 转弱
+      score_delta: -10
+    - when: "twenty_cm_risk_gate == 'caution'"
+      level: medium
+      flag: 20cm 票需降仓
+      score_delta: -5
+    - when: "news_risk_count > 0"
+      level: high
+      flag: 新闻风险未完全排除
+      score_delta: -10
+    - when: "limit_up_overheat_score >= 78"
+      level: high
+      flag: 涨停情绪过热
+      score_delta: -10
+    - when: "capital_resonance_score >= 60"
+      level: medium
+      flag: 资金共振过热，防冲高回落
+      score_delta: -6
