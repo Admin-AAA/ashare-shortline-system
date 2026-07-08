@@ -1,5 +1,5 @@
 id: daily-stock-analysis-skill
-name: Daily Stock Analysis 主评分
+name: 基础短线策略
 enabled: true
 weight: 1.0
 
@@ -174,6 +174,15 @@ scoring:
     - when: "dsa_bias_score <= 6"
       delta: -8
       reason: 严重弱势乖离（bias_ma5 < -2%，实盘 WR=47.1%/38.5%，应扣分；原 <=2 误罚 bias>5% 强势股 WR=77.8-100%）
+    # ── 新增辅助数据源正向加分（Tushare 15000 积分接口） ──
+    # 股东人数减少>3% = 筹码集中（机构建仓代理信号）
+    - when: "holder_num_decreasing == true"
+      delta: 4
+      reason: 股东人数减少（筹码集中，机构建仓代理信号，stk_holdernumber）
+    # 机构调研密集（近30天≥3次且有基金访客）= 机构关注度高的正面信号
+    - when: "survey_count >= 3 and survey_fund_visitors >= 10"
+      delta: 3
+      reason: 机构调研密集（近30天≥3次且有基金访客，stk_surv）
 
 risk:
   rules:
@@ -225,3 +234,19 @@ risk:
       level: high
       flag: "超大成交额风险（>80 亿: 30.0% WR, -1.02% 均收益，机构博弈激烈/流动性陷阱）"
       score_delta: -10
+    # ── 新增辅助数据源风险扣分（Tushare 15000 积分接口） ──
+    # 当日炸板（曾涨停后打开）= 情绪转弱，短线抛压大
+    - when: "is_broken_limit_up == true"
+      level: medium
+      flag: 当日炸板（情绪转弱，limit_list_d limit_type=Z）
+      score_delta: -6
+    # 大宗交易折价>5% = 卖方急售折价出货，看空信号
+    - when: "block_trade_avg_discount_rate < -0.05"
+      level: medium
+      flag: 大宗交易折价卖出（折价>5%，卖方急售看空，block_trade）
+      score_delta: -5
+    # 股东净减持（近30天变动比例<0）= 重要股东出货看空
+    - when: "holder_trade_net_ratio < 0"
+      level: medium
+      flag: 股东净减持（近30天，stk_holdertrade）
+      score_delta: -4

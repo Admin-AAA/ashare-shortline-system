@@ -23,8 +23,11 @@ from app.models.tables import (
     DailyKbar,
     DataSourceHealth,
     DragonTiger,
+    HolderNumber,
+    HolderTrade,
     HsgtFlow,
     HsgtTop10,
+    InstitutionalSurvey,
     LimitUpBoard,
     MarginDetail,
     MarketSnapshot,
@@ -2276,6 +2279,29 @@ def _load_cached_limit_up_board(
     ]
 
 
+def _load_cached_broken_limit_up(
+    db: Session,
+    trade_date: str | None = None,
+    max_age_seconds: int | None = None,
+) -> dict[str, dict[str, Any]]:
+    """加载炸板数据（limit_type='Z'）。返回 {code: row} 字典。
+
+    炸板=曾涨停后打开，炸板率高=市场情绪转弱，用于短线情绪温度计。
+    """
+    target_trade_date = _normalize_trade_date(trade_date)
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=max_age_seconds) if max_age_seconds else None
+    stmt = select(LimitUpBoard).where(LimitUpBoard.limit_type == "Z")
+    if target_trade_date:
+        stmt = stmt.where(LimitUpBoard.trade_date == target_trade_date)
+    if cutoff is not None:
+        stmt = stmt.where(LimitUpBoard.created_at >= cutoff)
+    rows = db.scalars(stmt).all()
+    return {
+        str(r.code): {c.name: getattr(r, c.name) for c in r.__table__.columns}
+        for r in rows
+    }
+
+
 def _load_cached_concept_sectors(
     db: Session,
     trade_date: str | None = None,
@@ -2610,6 +2636,10 @@ def load_auxiliary_for_stocks(db: Session, codes: list[str], trade_date: str | N
         "hsgt_top10": _load_hsgt_top10_for_stocks(db, codes, trade_date=target_trade_date),
         "hsgt_flow": _load_hsgt_flow(db, trade_date=target_trade_date),
         "finas": _load_fina_indicator_for_stocks(db, codes, trade_date=target_trade_date),
+        "broken_limit_up": _load_cached_broken_limit_up(db, trade_date=target_trade_date),
+        "holder_numbers": _load_holder_number_for_stocks(db, codes, trade_date=target_trade_date),
+        "holder_trades": _load_holder_trade_for_stocks(db, codes, trade_date=target_trade_date),
+        "surveys": _load_survey_for_stocks(db, codes, trade_date=target_trade_date),
         "coverage": _auxiliary_coverage_for_stocks(
             db,
             codes,
@@ -2820,6 +2850,116 @@ def _load_block_trade_for_stocks(
             "buyer": r.buyer,
             "seller": r.seller,
         })
+    return result
+
+
+def _load_holder_number_for_stocks(
+    db: Session, codes: list[str], trade_date: str | None = None
+) -> dict[str, dict[str, Any]]:
+    """加载股东人数（筹码集中度代理）。取最近两期对比变化率。"""
+    if not codes:
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for code in codes:
+        rows = db.scalars(
+            select(HolderNumber)
+            .where(HolderNumber.code == code)
+            .order_by(HolderNumber.end_date.desc())
+            .limit(2)
+        ).all()
+        if not rows:
+            continue
+        latest = rows[0]
+        holder_num = latest.holder_num or 0
+        prev_num = rows[1].holder_num if len(rows) > 1 else 0
+        # 股东人数减少 = 筹码集中 = 看多信号
+        holder_num_change_pct = (
+            round((holder_num - prev_num) / prev_num * 100, 2)
+            if prev_num > 0 else 0.0
+        )
+        result[code] = {
+            "holder_num": holder_num,
+            "holder_num_end_date": latest.end_date,
+            "holder_num_prev": prev_num,
+            "holder_num_change_pct": holder_num_change_pct,
+            "holder_num_decreasing": holder_num_change_pct < -3,  # 减少>3%为筹码集中信号
+        }
+    return result
+
+
+def _load_holder_trade_for_stocks(
+    db: Session, codes: list[str], trade_date: str | None = None
+) -> dict[str, dict[str, Any]]:
+    """加载股东增减持数据（近30天）。trade_date 为 YYYY-MM-DD 或空。"""
+    if not codes:
+        return {}
+    # trade_date 可能是空字符串（snapshot 表为空时），用今天兜底，避免 fromisoformat("") 崩溃
+    ref_date: date
+    if trade_date and len(trade_date) >= 10:
+        try:
+            ref_date = date.fromisoformat(trade_date[:10])
+        except ValueError:
+            ref_date = date.today()
+    else:
+        ref_date = date.today()
+    cutoff = (ref_date - timedelta(days=30)).isoformat()
+    stmt = select(HolderTrade).where(
+        HolderTrade.code.in_(codes),
+        HolderTrade.ann_date >= cutoff,
+    )
+    rows = db.scalars(stmt).all()
+    # 按股票聚合
+    by_code: dict[str, list] = {}
+    for r in rows:
+        by_code.setdefault(r.code, []).append(r)
+    result: dict[str, dict[str, Any]] = {}
+    for code, recs in by_code.items():
+        increase_count = sum(1 for r in recs if r.in_de == "IN")
+        decrease_count = sum(1 for r in recs if r.in_de == "DE")
+        total_change_ratio = sum(r.change_ratio or 0 for r in recs)
+        result[code] = {
+            "holder_trade_count": len(recs),
+            "holder_trade_increase_count": increase_count,
+            "holder_trade_decrease_count": decrease_count,
+            "holder_trade_net_ratio": round(total_change_ratio, 4),
+            "holder_trade_latest_ann": max((r.ann_date or "") for r in recs),
+        }
+    return result
+
+
+def _load_survey_for_stocks(
+    db: Session, codes: list[str], trade_date: str | None = None
+) -> dict[str, dict[str, Any]]:
+    """加载机构调研数据（近30天）。trade_date 为 YYYY-MM-DD 或空。"""
+    if not codes:
+        return {}
+    # 同 _load_holder_trade_for_stocks：空 trade_date 用今天兜底
+    ref_date: date
+    if trade_date and len(trade_date) >= 10:
+        try:
+            ref_date = date.fromisoformat(trade_date[:10])
+        except ValueError:
+            ref_date = date.today()
+    else:
+        ref_date = date.today()
+    cutoff = (ref_date - timedelta(days=30)).isoformat()
+    stmt = select(InstitutionalSurvey).where(
+        InstitutionalSurvey.code.in_(codes),
+        InstitutionalSurvey.surv_date >= cutoff,
+    )
+    rows = db.scalars(stmt).all()
+    by_code: dict[str, list] = {}
+    for r in rows:
+        by_code.setdefault(r.code, []).append(r)
+    result: dict[str, dict[str, Any]] = {}
+    for code, recs in by_code.items():
+        total_visitors = sum(r.fund_visitors or 0 for r in recs)
+        result[code] = {
+            "survey_count": len(recs),
+            "survey_fund_visitors": total_visitors,
+            "survey_latest_date": max((r.surv_date or "") for r in recs),
+            "survey_org_types": list({r.org_type or "" for r in recs if r.org_type})[:5],
+        }
     return result
 
 

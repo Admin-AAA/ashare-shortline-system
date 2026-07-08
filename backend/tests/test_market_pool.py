@@ -358,6 +358,11 @@ def test_load_auxiliary_for_stocks_uses_same_trade_date_rows_after_ttl(monkeypat
     monkeypatch.setattr(market_pool, "_load_hsgt_top10_for_stocks", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(market_pool, "_load_hsgt_flow", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(market_pool, "_load_fina_indicator_for_stocks", lambda *_args, **_kwargs: {})
+    # 新增辅助数据源加载函数：本测试不验证这些数据源，monkeypatch 避免建表
+    monkeypatch.setattr(market_pool, "_load_cached_broken_limit_up", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(market_pool, "_load_holder_number_for_stocks", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(market_pool, "_load_holder_trade_for_stocks", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(market_pool, "_load_survey_for_stocks", lambda *_args, **_kwargs: {})
     stale_created_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=3)
     code = "000001"
     trade_date = "2026-05-27"

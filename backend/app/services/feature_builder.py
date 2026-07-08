@@ -237,6 +237,32 @@ def _apply_context_blocks(item: dict[str, Any], profile: dict[str, Any]) -> None
     item["sector_fund_rank"] = int(_num(profile.get("sector_fund_rank", item.get("sector_fund_rank")), 99 if strict_real else 5 if item.get("is_main_theme") else 26))
     item["capital_flow_score"] = _capital_flow_score(item)
 
+    # ── 筹码分布真实数据映射（cyq_perf） ──
+    # 如果 stocks 字典中有 chip_cost_50 / chip_winner_rate（从 daily_kbars 加载），则映射到 SYNTHETIC 字段
+    chip_cost_50 = _num(item.get("chip_cost_50"))
+    chip_cost_15 = _num(item.get("chip_cost_15"))
+    chip_cost_85 = _num(item.get("chip_cost_85"))
+    chip_weight_avg = _num(item.get("chip_weight_avg"))
+    chip_winner_rate = _num(item.get("chip_winner_rate"))
+    has_real_chip = chip_cost_50 > 0 or chip_weight_avg > 0
+
+    if has_real_chip:
+        # 用真实筹码数据替换估算值
+        profile["avg_cost"] = chip_weight_avg if chip_weight_avg > 0 else chip_cost_50
+        if chip_cost_15 > 0 and chip_cost_85 > 0:
+            profile["cost_90_low"] = chip_cost_15
+            profile["cost_90_high"] = chip_cost_85
+            # 集中度 = (85%成本 - 15%成本) / 15%成本 * 100
+            profile["concentration_90"] = round((chip_cost_85 - chip_cost_15) / chip_cost_15 * 100 if chip_cost_15 > 0 else 22.0, 2)
+            # 70%成本区间用 50% 为中心估算
+            if chip_cost_50 > 0:
+                profile["cost_70_low"] = round(chip_cost_50 * 0.96, 2)
+                profile["cost_70_high"] = round(chip_cost_50 * 1.04, 2)
+                profile["concentration_70"] = 8.0
+        if chip_winner_rate > 0:
+            profile["profit_ratio"] = chip_winner_rate
+    item["has_real_chip_data"] = has_real_chip
+
     item["profit_ratio"] = _num(profile.get("profit_ratio", item.get("profit_ratio")), 50.0 if strict_real else _default_profit_ratio(item))
     item["avg_cost"] = _num(profile.get("avg_cost", item.get("avg_cost")), round(_num(item.get("price")) * 0.94, 2))
     item["cost_90_low"] = _num(profile.get("cost_90_low", item.get("cost_90_low")), round(item["avg_cost"] * 0.92, 2))
@@ -297,7 +323,7 @@ def _apply_dsa_scores(item: dict[str, Any], dsa_weights: dict[str, float] | None
     item["dsa_macd_score"] = MACD_SCORE_MAP.get(str(item.get("macd_status")), 2)
     item["dsa_rsi_score"] = _rsi_score(_num(item.get("rsi_12")))
 
-    # Use calibrated DSA weights if available, otherwise equal weight (simple sum)
+    # Use calibrated 基础短线策略 weights if available, otherwise equal weight (simple sum)
     w = dsa_weights or {}
     w_trend = w.get("dsa_w_trend", 1.0)
     w_bias = w.get("dsa_w_bias", 1.0)
@@ -623,6 +649,16 @@ _OBSERVABLE_FIELDS.update({
     "is_20cm_stock", "twenty_cm_risk_gate", "twenty_cm_risk_reason",
     "is_shortline_leader_candidate", "dragon_tiger_buy_dispersion",
     "dragon_tiger_inst_buy_ratio", "shortline_factor_explanations",
+    # 新增辅助数据源字段
+    "holder_num", "holder_num_change_pct", "holder_num_decreasing",
+    "holder_trade_count", "holder_trade_increase_count", "holder_trade_decrease_count", "holder_trade_net_ratio",
+    "survey_count", "survey_fund_visitors", "survey_latest_date",
+    "block_trade_avg_discount_rate",
+    "is_broken_limit_up", "broken_limit_up_open_times", "broken_limit_up_up_stat",
+    "has_real_chip_data",
+    # 筹码字段（有 cyq_perf 真实数据源时为 OBSERVED，无数据时 _tag_features 经 chip 类别判 FALLBACK）
+    "avg_cost", "profit_ratio", "concentration_90",
+    "cost_90_low", "cost_90_high", "chip_concentration",
 })
 
 # 辅助字段 → 数据源类别映射。missing_fields 用类别名（news/announcements/dragon_tiger/...），
@@ -654,16 +690,31 @@ for _f in (
     _FIELD_TO_MISSING_CATEGORY[_f] = "capital_flow"
 for _f in ("revenue_yoy", "net_profit_yoy", "roe", "gross_margin"):
     _FIELD_TO_MISSING_CATEGORY[_f] = "fundamental"
+# 筹码字段 → chip 类别（有 cyq_perf 时为 OBSERVED，无时退化为 ESTIMATED）
+for _f in ("avg_cost", "profit_ratio", "concentration_90", "cost_90_low", "cost_90_high", "chip_concentration"):
+    _FIELD_TO_MISSING_CATEGORY[_f] = "chip"
+# 股东人数 → holder_number 类别
+for _f in ("holder_num", "holder_num_change_pct", "holder_num_decreasing"):
+    _FIELD_TO_MISSING_CATEGORY[_f] = "holder_number"
+# 股东增减持 → holder_trade 类别
+for _f in ("holder_trade_count", "holder_trade_increase_count", "holder_trade_decrease_count", "holder_trade_net_ratio"):
+    _FIELD_TO_MISSING_CATEGORY[_f] = "holder_trade"
+# 机构调研 → survey 类别
+for _f in ("survey_count", "survey_fund_visitors", "survey_latest_date"):
+    _FIELD_TO_MISSING_CATEGORY[_f] = "survey"
+# 大宗交易折价率 → block_trade 类别
+_FIELD_TO_MISSING_CATEGORY["block_trade_avg_discount_rate"] = "block_trade"
 
 # Fields that are always synthetically estimated (no real data source)
+# 注意：avg_cost/profit_ratio/concentration_90 等在有 cyq_perf 数据时已映射为真实值（_OBSERVABLE_FIELDS），
+# 但无 cyq_perf 时仍退化为估算值，因此保留在 SYNTHETIC 中作为降级标记。
 _SYNTHETIC_FIELDS = {
-    "concentration_90", "profit_ratio",
-    "cost_90_low", "cost_90_high", "cost_70_low", "cost_70_high",
-    "concentration_70", "avg_cost",
+    "cost_70_low", "cost_70_high",
+    "concentration_70",
     "sector_fund_rank",
-    "chip_health", "chip_health_score", "chip_concentration",
+    "chip_health", "chip_health_score",
     "earnings_outlook", "sentiment_summary",
-    "institution_holding_change", "top10_holder_change",
+    "top10holder_change",
     "volume_breakout_signal", "volume_shrink_pullback",
 }
 
@@ -681,7 +732,7 @@ _DERIVED_SCORE_FIELDS = {
     "shortline_leader_score",
 }
 
-# Features that participate directly in scoring (DSA + risk + shared strategy factors)
+# Features that participate directly in scoring (基础短线策略 + risk + shared strategy factors)
 _SCORED_FEATURES = {
     "trend_status", "bias_ma5", "volume_status",
     "support_ma5", "support_ma10", "macd_status", "rsi_12",
@@ -725,6 +776,10 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
     hsgt_top10_map = aux.get("hsgt_top10", {})
     hsgt_flow_data = aux.get("hsgt_flow")
     fina_map = aux.get("finas", {})
+    broken_limit_up_map = aux.get("broken_limit_up", {})
+    holder_number_map = aux.get("holder_numbers", {})
+    holder_trade_map = aux.get("holder_trades", {})
+    survey_map = aux.get("surveys", {})
     coverage = aux.get("coverage", {}) or {}
     audit = (snapshot.get("breadth") or {}).get("auxiliary_data_audit") or {}
     checked_news_codes = _checked_codes_from_audit(audit.get("news"))
@@ -920,14 +975,28 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             stock["margin_rzrqye"] = 0
             stock["margin_net_buy_yi"] = 0
 
-        # ── 大宗交易特征 ──
+        # ── 大宗交易特征（含折价率） ──
         bt_list = block_trade_map.get(code, [])
         if bt_list:
             stock["block_trade_count"] = len(bt_list)
             stock["block_trade_total_yi"] = round(sum(b.get("amount_yi", 0) or 0 for b in bt_list), 4)
+            # 折价率 = (成交价 / 当日收盘价 - 1) * 100，折价率高=卖方急售=看空
+            close_price = _num(stock.get("price") or stock.get("close"))
+            if close_price > 0:
+                discount_rates = [
+                    round((b.get("price", 0) or 0) / close_price - 1, 4)
+                    for b in bt_list
+                    if b.get("price") and b.get("price") > 0
+                ]
+                stock["block_trade_avg_discount_rate"] = (
+                    round(sum(discount_rates) / len(discount_rates), 4) if discount_rates else 0.0
+                )
+            else:
+                stock["block_trade_avg_discount_rate"] = 0.0
         else:
             stock["block_trade_count"] = 0
             stock["block_trade_total_yi"] = 0
+            stock["block_trade_avg_discount_rate"] = 0.0
 
         # ── 北向持股特征 ──
         hsgt = hsgt_top10_map.get(code)
@@ -970,6 +1039,52 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
         else:
             stock["has_real_fundamental"] = False
             missing_fields.add("fundamental")
+
+        # ── 股东人数变化（筹码集中度代理） ──
+        # 替换 SYNTHETIC 的 institution_holding_change：股东人数减少=机构建仓=看多
+        hn = holder_number_map.get(code)
+        if hn:
+            stock["holder_num"] = hn.get("holder_num", 0)
+            stock["holder_num_change_pct"] = hn.get("holder_num_change_pct", 0.0)
+            stock["holder_num_decreasing"] = hn.get("holder_num_decreasing", False)
+            # 用股东人数变化率作为机构持仓变化的代理（负值=人数减少=筹码集中）
+            profile["institution_holding_change"] = -hn.get("holder_num_change_pct", 0.0)
+        else:
+            stock["holder_num"] = 0
+            stock["holder_num_change_pct"] = 0.0
+            stock["holder_num_decreasing"] = False
+
+        # ── 股东增减持特征 ──
+        ht = holder_trade_map.get(code)
+        if ht:
+            stock["holder_trade_count"] = ht.get("holder_trade_count", 0)
+            stock["holder_trade_increase_count"] = ht.get("holder_trade_increase_count", 0)
+            stock["holder_trade_decrease_count"] = ht.get("holder_trade_decrease_count", 0)
+            stock["holder_trade_net_ratio"] = ht.get("holder_trade_net_ratio", 0.0)
+        else:
+            stock["holder_trade_count"] = 0
+            stock["holder_trade_increase_count"] = 0
+            stock["holder_trade_decrease_count"] = 0
+            stock["holder_trade_net_ratio"] = 0.0
+
+        # ── 机构调研特征 ──
+        sv = survey_map.get(code)
+        if sv:
+            stock["survey_count"] = sv.get("survey_count", 0)
+            stock["survey_fund_visitors"] = sv.get("survey_fund_visitors", 0)
+            stock["survey_latest_date"] = sv.get("survey_latest_date", "")
+        else:
+            stock["survey_count"] = 0
+            stock["survey_fund_visitors"] = 0
+            stock["survey_latest_date"] = ""
+
+        # ── 炸板数据（市场情绪温度计，limit_type='Z'） ──
+        # 炸板=曾涨停后打开，炸板率高=市场情绪转弱
+        broken_lu = broken_limit_up_map.get(code)
+        stock["is_broken_limit_up"] = broken_lu is not None
+        if broken_lu:
+            stock["broken_limit_up_open_times"] = int(broken_lu.get("open_times") or 0)
+            stock["broken_limit_up_up_stat"] = broken_lu.get("up_stat")
 
         stock["dsa_profile"] = profile
         data_quality["missing_fields"] = sorted(missing_fields)

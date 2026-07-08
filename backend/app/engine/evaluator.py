@@ -105,6 +105,14 @@ ALLOWED_NAMES = {
     "vol5_20",
     "volume_breakout_signal",
     "volume_shrink_pullback",
+    # ── 新增辅助数据源字段（Tushare 15000 积分接口） ──
+    "holder_num_change_pct",       # 股东人数变化率（<0=筹码集中看多）
+    "holder_num_decreasing",       # 股东人数减少>3% 的布尔标记
+    "holder_trade_net_ratio",      # 股东增减持净变动比例（<0=净减持看空）
+    "survey_count",                # 近30天机构调研次数
+    "survey_fund_visitors",        # 近30天调研基金访客数
+    "block_trade_avg_discount_rate",  # 大宗交易平均折价率（<0=折价卖方急售看空）
+    "is_broken_limit_up",          # 当日是否炸板（情绪转弱看空）
 }
 
 
