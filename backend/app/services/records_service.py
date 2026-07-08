@@ -96,11 +96,13 @@ def list_run_records(
 
     在此（而非共享的 list_runs）补充每个 run 的「聚合 1/3/5 日 + 至今收益率」，
     避免拖慢 bootstrap / 仪表盘（它们也调用 list_runs）。
+    使用 30s 缓存（与 metrics 端点一致），因为 run 记录变更频率低但查询频繁。
     """
+    from app.services.outcome_service import _cached
     from app.services.workbench_service import list_runs
 
-    runs = list_runs(db, run_mode=run_mode, limit=limit)
-    return _attach_run_aggregate_returns(db, runs)
+    key = f"run_records:{run_mode or ''}:{limit}"
+    return _cached(key, lambda: _attach_run_aggregate_returns(db, list_runs(db, run_mode=run_mode, limit=limit)))
 
 
 def _empty_agg_returns() -> dict[str, Any]:
