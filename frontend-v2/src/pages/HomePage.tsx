@@ -197,7 +197,7 @@ function StatusBar({
       <span className="text-muted">近 5 日胜率：</span>
       <strong className="text-mono" style={{ color: "var(--accent-strong)" }}>—</strong>
 
-      {/* 右侧：健康度指示器（弹性推到最右） */}
+      {/* 右侧：数据健康度指示器（弹性推到最右） */}
       <div style={{ marginLeft: "auto", flexShrink: 0 }}>
         <button
           onClick={onViewHealthDetail}
@@ -206,7 +206,7 @@ function StatusBar({
             display: "inline-flex",
             alignItems: "center",
             gap: "var(--space-2)",
-            padding: "3px 12px",
+            padding: "4px 12px",
             borderRadius: "var(--radius-full)",
             fontSize: "var(--text-xs)",
             fontWeight: 600,
@@ -217,13 +217,13 @@ function StatusBar({
                   ? "color-mix(in srgb, var(--warning) 10%, transparent)"
                   : "color-mix(in srgb, var(--market-up) 10%, transparent)",
             border: "1px solid " + (score >= 90 ? "color-mix(in srgb, var(--market-down) 25%, transparent)" : score >= 70 ? "color-mix(in srgb, var(--warning) 25%, transparent)" : "color-mix(in srgb, var(--market-up) 25%, transparent)"),
-            color: scoreColor,
+            color: "var(--ink)",
             cursor: "pointer",
             transition: "all 150ms ease",
           }}
-          title={issues.length > 0 ? `${issues.length} 个问题 (${highIssues.length} 高危)` : "数据健康度"}
+          title={issues.length > 0 ? `数据健康：共 ${issues.length} 个问题 (${highIssues.length} 高危)` : "数据健康度"}
         >
-          {/* 脉冲动画：有异常时 */}
+          {/* 脉冲动画：有高危问题时 */}
           {highIssues.length > 0 && (
             <span
               style={{
@@ -233,30 +233,29 @@ function StatusBar({
                 background: "var(--market-up)",
                 display: "inline-block",
                 animation: "health-pulse 1.5s ease-in-out infinite",
+                flexShrink: 0,
               }}
             />
           )}
+          <Database size={13} style={{ color: scoreColor, flexShrink: 0 }} />
+          {/* 类别标签 */}
+          <span style={{ color: "var(--ink-secondary)", fontWeight: 600 }}>数据健康</span>
+          {/* 分隔竖线 */}
+          <span style={{ width: 1, height: 12, background: "var(--line-strong)", display: "inline-block" }} />
           {healthLoading ? (
-            <>诊断中…</>
+            <span style={{ color: "var(--muted)" }}>诊断中…</span>
           ) : (
             <>
-              <Database size={13} />
-              <span className="text-mono" style={{ fontWeight: 700, letterSpacing: "-0.02em" }}>
+              <span className="text-mono" style={{ fontWeight: 700, color: scoreColor, letterSpacing: "-0.02em" }}>
                 {score}
               </span>
-              <span>{scoreLabel}</span>
+              <span style={{ color: scoreColor, fontWeight: 600 }}>{scoreLabel}</span>
               {issues.length > 0 && (
-                <span
-                  style={{
-                    marginLeft: 2,
-                    opacity: 0.7,
-                    fontSize: 10,
-                  }}
-                >
+                <span style={{ color: "var(--muted)", fontSize: 10 }}>
                   · {issues.length} 问题
                 </span>
               )}
-              <ChevronRight size={12} style={{ marginLeft: -2 }} />
+              <ChevronRight size={12} style={{ color: "var(--muted)", flexShrink: 0 }} />
             </>
           )}
         </button>
