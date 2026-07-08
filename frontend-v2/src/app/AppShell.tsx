@@ -1,5 +1,5 @@
 import { Activity, Moon, RefreshCw, Sun } from "lucide-react";
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import AuthGate from "./AuthGate";
 import { NAV_ITEMS, navMatches, type Section } from "./nav";
 import { useUrlRoute } from "./useUrlRoute";
@@ -16,7 +16,6 @@ const MetricsPage = lazy(() => import("../pages/MetricsPage").then((m) => ({ def
 const StrategiesPage = lazy(() => import("../pages/StrategiesPage").then((m) => ({ default: m.StrategiesPage })));
 const ConfigPage = lazy(() => import("../pages/ConfigPage").then((m) => ({ default: m.ConfigPage })));
 const RunDetailPage = lazy(() => import("../pages/RunDetailPage").then((m) => ({ default: m.RunDetailPage })));
-const DataHealthPage = lazy(() => import("../pages/DataHealthPage").then((m) => ({ default: m.DataHealthPage })));
 
 function SectionView({ section }: { section: Section }) {
   switch (section) {
@@ -56,9 +55,14 @@ export function AppShell() {
   const { theme, toggleTheme } = useThemePreference();
   const [refreshSignal, setRefreshSignal] = useState(0);
 
-  // /run、/data-health 子路由单独走专属页面
+  // /run 子路由单独走 RunDetailPage；/data-health 已并入配置页 tab，重定向过去
   const isRunDetail = pathname === "/run";
-  const isDataHealth = pathname === "/data-health";
+
+  useEffect(() => {
+    if (pathname === "/data-health") {
+      navigate("/config?tab=data-health", { replace: true });
+    }
+  }, [pathname, navigate]);
 
   const handleRefresh = () => setRefreshSignal((n) => n + 1);
 
@@ -119,10 +123,6 @@ export function AppShell() {
           {isRunDetail ? (
             <Suspense fallback={<PageFallback />}>
               <RunDetailPage refreshSignal={refreshSignal} />
-            </Suspense>
-          ) : isDataHealth ? (
-            <Suspense fallback={<PageFallback />}>
-              <DataHealthPage />
             </Suspense>
           ) : (
             <Suspense fallback={<PageFallback />}>

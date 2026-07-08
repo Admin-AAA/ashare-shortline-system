@@ -1,13 +1,15 @@
 import { useEffect, useState } from "react";
-import { Cpu, KeyRound, Layers, Loader2, Plug, Save, Zap } from "lucide-react";
+import { Cpu, Clock, Database, KeyRound, Layers, Loader2, Plug, Save, Zap } from "lucide-react";
 import { api } from "../api/client";
 import type { SystemLlmConfig, SystemLlmTestResult } from "../types";
 import { ErrorPage } from "../components/StateViews";
 import { ModelRoutesSection } from "../components/ModelRoutesSection";
 import { PresetsSection } from "../components/PresetsSection";
+import { SchedulerTasksSection } from "../components/SchedulerTasksSection";
 import { CollapsiblePanel } from "../components/CollapsiblePanel";
+import { DataHealthSection } from "./DataHealthPage";
 
-type ConfigTab = "llm" | "presets";
+type ConfigTab = "scheduler" | "llm" | "presets" | "data-health";
 
 /**
  * 配置页 —— 系统 LLM 接口（agent_skill_*）配置与连通性测试。
@@ -38,7 +40,10 @@ const EMPTY_FORM: FormState = {
 const MASK = "********";
 
 export function ConfigPage() {
-  const [tab, setTab] = useState<ConfigTab>("llm");
+  const [tab, setTab] = useState<ConfigTab>(() => {
+    const q = new URLSearchParams(window.location.search).get("tab");
+    return q === "data-health" || q === "llm" || q === "presets" ? q : "scheduler";
+  });
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -144,6 +149,10 @@ export function ConfigPage() {
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
       {/* 二级 Tab 切换 */}
       <div className="sub-tabs" style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--border)" }}>
+        <SubTab active={tab === "scheduler"} onClick={() => setTab("scheduler")}>
+          <Clock size={14} />
+          调度任务
+        </SubTab>
         <SubTab active={tab === "llm"} onClick={() => setTab("llm")}>
           <Plug size={14} />
           LLM 接口
@@ -152,7 +161,13 @@ export function ConfigPage() {
           <Layers size={14} />
           预设管理
         </SubTab>
+        <SubTab active={tab === "data-health"} onClick={() => setTab("data-health")}>
+          <Database size={14} />
+          数据健康
+        </SubTab>
       </div>
+
+      {tab === "scheduler" && <SchedulerTasksSection />}
 
       {tab === "llm" && (
         <CollapsiblePanel
@@ -316,6 +331,8 @@ export function ConfigPage() {
       )}
 
       {tab === "presets" && <PresetsSection />}
+
+      {tab === "data-health" && <DataHealthSection />}
     </div>
   );
 }

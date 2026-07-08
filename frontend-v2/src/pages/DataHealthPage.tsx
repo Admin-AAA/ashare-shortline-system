@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronLeft,
   Database,
   Loader2,
   PlayCircle,
@@ -17,17 +16,14 @@ import type {
 } from "../types";
 import { CardSkeleton, EmptyState, ErrorPage } from "../components/StateViews";
 import { CollapsiblePanel } from "../components/CollapsiblePanel";
-import { useUrlRoute } from "../app/useUrlRoute";
 
 /**
- * 数据健康度详情页 —— /data-health
+ * 数据健康度 —— 配置页「数据健康」Tab（与预设管理平级）。
  *
- * 驾驶舱 DataHealthCard 的「详情」入口此前指向一个悬空路由（落到首页）。
- * 本页补齐：展示全部数据表覆盖情况、全部问题、参考交易日来源，
+ * 展示全部数据表覆盖情况、全部问题、参考交易日来源，
  * 并提供「触发修复」按钮（异步任务 + 状态轮询，复用调度任务的 result 字段）。
  */
-export function DataHealthPage() {
-  const { navigate } = useUrlRoute();
+export function DataHealthSection() {
   const [diag, setDiag] = useState<DataHealthDiagnostic | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -118,12 +114,7 @@ export function DataHealthPage() {
   };
 
   if (loading && !diag) {
-    return (
-      <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
-        <PageHeader onBack={() => navigate("/dashboard")} />
-        <CardSkeleton count={2} />
-      </div>
-    );
+    return <CardSkeleton count={2} />;
   }
   if (error) {
     return (
@@ -131,11 +122,6 @@ export function DataHealthPage() {
         title="数据健康度诊断失败"
         message={error}
         onRetry={() => loadDiag({ forceRefresh: true })}
-        secondary={
-          <button className="btn btn--ghost" onClick={() => navigate("/dashboard")}>
-            返回驾驶舱
-          </button>
-        }
       />
     );
   }
@@ -155,6 +141,11 @@ export function DataHealthPage() {
   const highIssues = issues.filter((i) => i.severity === "high");
   const mediumIssues = issues.filter((i) => i.severity === "medium");
   const lowIssues = issues.filter((i) => i.severity === "low" || (i.severity !== "high" && i.severity !== "medium"));
+
+  const dsSummary = diag.data_sources;
+  const dsTitle = dsSummary
+    ? `通 ${dsSummary.working_count ?? 0} · 不通 ${dsSummary.broken_count ?? 0} · 未测试 ${dsSummary.untested_count ?? 0} · 未启用 ${dsSummary.disabled_count ?? 0}`
+    : "加载中…";
 
   const tableRows = Object.entries(tables)
     .map(([key, info]) => ({
@@ -181,8 +172,6 @@ export function DataHealthPage() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
-      <PageHeader onBack={() => navigate("/dashboard")} />
-
       {/* 评分概览 + 修复操作 */}
       <CollapsiblePanel
         kicker="数据健康度"
@@ -311,19 +300,6 @@ export function DataHealthPage() {
       {issues.length === 0 && tableRows.length === 0 && (
         <EmptyState title="无诊断数据" reason="诊断未返回任何表或问题" />
       )}
-    </div>
-  );
-}
-
-// ─── 页面头部 ─────────────────────────────────────────────────────
-function PageHeader({ onBack }: { onBack: () => void }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
-      <button className="btn btn--ghost" onClick={onBack}>
-        <ChevronLeft size={16} />
-        返回驾驶舱
-      </button>
-      <h1 style={{ fontSize: "var(--text-xl)", fontWeight: 600, margin: 0 }}>数据健康度</h1>
     </div>
   );
 }
