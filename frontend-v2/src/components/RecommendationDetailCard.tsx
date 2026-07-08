@@ -94,6 +94,7 @@ type DetailItem = Pick<
   | "info_tags"
   | "skill_breakdown"
   | "market_context"
+  | "setup_type"
 > & {
   ideal_buy?: number | null;
   secondary_buy?: number | null;
@@ -123,6 +124,30 @@ export function RecommendationDetailCard({ item }: { item: DetailItem }) {
                 {item.secondary_buy != null ? ` · 次选 ${item.secondary_buy.toFixed(2)}` : ""}
               </div>
             )}
+          </div>
+        )}
+
+        {item.setup_type && (
+          <div
+            style={{
+              marginBottom: "var(--space-3)",
+              display: "flex",
+              alignItems: "center",
+              gap: "var(--space-2)",
+            }}
+          >
+            <span className="panel__kicker" style={{ marginBottom: 0 }}>
+              买点形态
+            </span>
+            <span
+              className="tag"
+              style={{
+                color: "var(--accent-strong)",
+                border: "1px solid var(--accent-line, var(--line))",
+              }}
+            >
+              {item.setup_type}
+            </span>
           </div>
         )}
 
