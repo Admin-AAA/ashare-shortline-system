@@ -141,7 +141,7 @@ def test_run_preset_matrix_continues_after_single_preset_failure(monkeypatch, db
     assert status_by_preset[successful_preset_id] == "completed"
 
 
-def test_run_preset_matrix_defaults_to_local_pool_preferred(monkeypatch, db):
+def test_run_preset_matrix_defaults_to_auto(monkeypatch, db):
     db.execute(update(Preset).where(Preset.status == "active").values(status="disabled"))
     preset_id = f"preset_matrix_default_source_{uuid.uuid4().hex[:8]}"
     db.add(
@@ -171,7 +171,9 @@ def test_run_preset_matrix_defaults_to_local_pool_preferred(monkeypatch, db):
     result = asyncio.run(scheduler_service._run_preset_matrix(db, {"matrix_batch_id": "matrix_default_source"}))
 
     assert result["completed_count"] == 1
-    assert calls[0]["data_source"] == "local_pool_preferred"
+    # scheduler 默认 data_source=auto（盘中→local_pool_realtime，盘后→local_pool_preferred），
+    # auto 的解析在 workbench._normalize_data_source 内完成，故 workbench 收到的是 "auto"
+    assert calls[0]["data_source"] == "auto"
 
 
 def test_run_data_sync_daily_bars_uses_trade_date_batch_remediation(monkeypatch):
