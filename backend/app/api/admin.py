@@ -231,9 +231,13 @@ def get_readiness(db: Session = Depends(get_db)):
 
 
 @router.get("/data-health")
-def get_data_health(db: Session = Depends(get_db)):
-    """数据质量诊断：各表覆盖情况、滞后天数、健康评分、问题列表。"""
-    return diagnose_all(db)
+def get_data_health(force_refresh: bool = False, db: Session = Depends(get_db)):
+    """数据质量诊断：各表覆盖情况、滞后天数、健康评分、问题列表。
+
+    结果按参考交易日缓存，默认命中缓存。force_refresh=true 跳过缓存（详情页
+    「重新诊断」按钮、修复任务完成后调用）。
+    """
+    return diagnose_all(db, force_refresh=bool(force_refresh))
 
 
 @router.post("/data-health/remediate")

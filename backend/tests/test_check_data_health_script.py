@@ -24,7 +24,7 @@ def test_check_data_health_json_uses_service_output(monkeypatch, capsys):
 
     monkeypatch.setattr(sys, "argv", ["check_data_health.py", "--json"])
     monkeypatch.setattr(check_data_health, "SessionLocal", lambda: FakeSession())
-    monkeypatch.setattr(check_data_health, "diagnose_all", lambda db: expected)
+    monkeypatch.setattr(check_data_health, "diagnose_all", lambda db, **kw: expected)
 
     result = check_data_health.main()
 

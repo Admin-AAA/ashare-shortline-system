@@ -16,6 +16,7 @@ const MetricsPage = lazy(() => import("../pages/MetricsPage").then((m) => ({ def
 const StrategiesPage = lazy(() => import("../pages/StrategiesPage").then((m) => ({ default: m.StrategiesPage })));
 const ConfigPage = lazy(() => import("../pages/ConfigPage").then((m) => ({ default: m.ConfigPage })));
 const RunDetailPage = lazy(() => import("../pages/RunDetailPage").then((m) => ({ default: m.RunDetailPage })));
+const DataHealthPage = lazy(() => import("../pages/DataHealthPage").then((m) => ({ default: m.DataHealthPage })));
 
 function SectionView({ section }: { section: Section }) {
   switch (section) {
@@ -55,8 +56,9 @@ export function AppShell() {
   const { theme, toggleTheme } = useThemePreference();
   const [refreshSignal, setRefreshSignal] = useState(0);
 
-  // /run 子路由单独走 RunDetailPage
+  // /run、/data-health 子路由单独走专属页面
   const isRunDetail = pathname === "/run";
+  const isDataHealth = pathname === "/data-health";
 
   const handleRefresh = () => setRefreshSignal((n) => n + 1);
 
@@ -117,6 +119,10 @@ export function AppShell() {
           {isRunDetail ? (
             <Suspense fallback={<PageFallback />}>
               <RunDetailPage refreshSignal={refreshSignal} />
+            </Suspense>
+          ) : isDataHealth ? (
+            <Suspense fallback={<PageFallback />}>
+              <DataHealthPage />
             </Suspense>
           ) : (
             <Suspense fallback={<PageFallback />}>

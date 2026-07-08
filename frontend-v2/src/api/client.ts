@@ -30,6 +30,7 @@ import type {
   ScheduledTask,
   ScheduledTaskRun,
   ScheduledTaskPayload,
+  SingleStockAnalysis,
   SkillDetail,
   SkillStatsRow,
   SkillSummary,
@@ -214,12 +215,20 @@ export const api = {
   recommendationHistory: (query?: {
     code?: string;
     label?: string;
+    date_from?: string;
+    date_to?: string;
+    bucket?: string;
+    setup_type?: string;
     limit?: number;
     offset?: number;
   }) => {
     const params = new URLSearchParams();
     if (query?.code) params.set("code", query.code);
     if (query?.label) params.set("label", query.label);
+    if (query?.date_from) params.set("date_from", query.date_from);
+    if (query?.date_to) params.set("date_to", query.date_to);
+    if (query?.bucket) params.set("bucket", query.bucket);
+    if (query?.setup_type) params.set("setup_type", query.setup_type);
     if (query?.limit) params.set("limit", String(query.limit));
     if (query?.offset) params.set("offset", String(query.offset));
     return request<RecommendationHistoryResponse>(`/api/recommendations/history?${params.toString()}`);
@@ -317,6 +326,8 @@ export const api = {
       errors: string[];
     }>>(`/api/skills/performance-summaries`),
 
+  analyzeStock: (payload: { code: string; trade_date?: string; include_llm?: boolean; skill_id?: string; preset_id?: string }) =>
+    requestWithTimeout<SingleStockAnalysis>("/api/runs/analyze-stock", 120_000, json("POST", payload)),
   resumeRun: (id: string) => requestWithTimeout<RunResult>(`/api/runs/${id}/resume`, 300_000, json("POST")),
   deleteRun: (id: string) => request<{ deleted: string }>(`/api/runs/${id}`, json("DELETE")),
   deleteRecommendation: (id: string) => request<{ deleted: string }>(`/api/recommendations/${id}`, json("DELETE")),
@@ -333,7 +344,12 @@ export const api = {
       timeoutMs: options?.timeoutMs ?? 15_000,
       signal: options?.signal,
     }),
-  dataHealth: (options?: RequestOptions) => request<DataHealthDiagnostic>("/api/admin/data-health", undefined, options),
+  dataHealth: (options?: RequestOptions & { forceRefresh?: boolean }) =>
+    request<DataHealthDiagnostic>(
+      `/api/admin/data-health${options?.forceRefresh ? "?force_refresh=true" : ""}`,
+      undefined,
+      options,
+    ),
   previewDataHealthRemediation: (payload?: {
     target_tables?: string[];
     dry_run?: boolean;

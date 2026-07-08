@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.tables import DailyKbar, IndexDaily, LimitUpBoard, MinuteKbar, Recommendation, RecommendationRun, Stock, StockQuote
-from app.services.data_health_service import diagnose_all
+from app.services.data_health_service import clear_data_health_cache, diagnose_all
 from app.services.feature_builder import _compute_authenticity, _enrich_with_auxiliary_data, _tag_features
 from app.services.market_pool import (
     _candidate_recall_plan,
@@ -116,7 +116,9 @@ def remediate_data_health_gaps(
         remaining_issues = None if after_diagnosis_skipped else after.get("issues") or []
     else:
         try:
-            after = diagnose_all(db)
+            # 修复已写入数据，必须跳过缓存重算，否则 after 仍是 before 的旧快照
+            clear_data_health_cache()
+            after = diagnose_all(db, force_refresh=True)
             after_snapshot = _diagnosis_snapshot(after)
             comparison = _compare_diagnosis(before, after, requested_tables=requested_tables)
             remaining_issues = after.get("issues") or []

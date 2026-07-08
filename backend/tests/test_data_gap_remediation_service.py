@@ -75,7 +75,7 @@ def test_remediate_data_health_gaps_executes_targeted_plan(monkeypatch):
     diagnosis_calls = [before, after]
     monkeypatch.setattr(
         "app.services.data_gap_remediation_service.diagnose_all",
-        lambda _db: diagnosis_calls.pop(0),
+        lambda _db, **kw: diagnosis_calls.pop(0),
     )
     monkeypatch.setattr(
         "app.services.data_gap_remediation_service._index_ts_codes",
@@ -187,7 +187,7 @@ def test_remediate_data_health_gaps_targets_closed_reference_trade_date_when_lag
     diagnosis_calls = [before, after]
     monkeypatch.setattr(
         "app.services.data_gap_remediation_service.diagnose_all",
-        lambda _db: diagnosis_calls.pop(0),
+        lambda _db, **kw: diagnosis_calls.pop(0),
     )
     monkeypatch.setattr("app.services.data_gap_remediation_service._latest_allowed_bar_date", lambda: "2026-06-10")
     monkeypatch.setattr("app.services.data_gap_remediation_service._daily_kbar_target_codes", lambda _db, trade_date, limit: ["000001"])
@@ -783,7 +783,7 @@ def test_remediate_data_health_gaps_continues_after_single_action_failure(monkey
     diagnosis_calls = [before, after]
     monkeypatch.setattr(
         "app.services.data_gap_remediation_service.diagnose_all",
-        lambda _db: diagnosis_calls.pop(0),
+        lambda _db, **kw: diagnosis_calls.pop(0),
     )
     monkeypatch.setattr(
         "app.services.data_gap_remediation_service._index_ts_codes",
@@ -866,7 +866,7 @@ def test_remediate_data_health_gaps_marks_empty_required_action_partial(monkeypa
     }
     diagnosis_calls = [before, after]
 
-    monkeypatch.setattr("app.services.data_gap_remediation_service.diagnose_all", lambda _db: diagnosis_calls.pop(0))
+    monkeypatch.setattr("app.services.data_gap_remediation_service.diagnose_all", lambda _db, **kw: diagnosis_calls.pop(0))
     monkeypatch.setattr("app.services.data_gap_remediation_service._latest_allowed_bar_date", lambda: "2026-06-11")
     monkeypatch.setattr("app.services.data_gap_remediation_service.refresh_limit_up_board", lambda _db, trade_date=None: [])
 
@@ -984,7 +984,7 @@ def test_remediate_data_health_gaps_executes_minute_kbar_plan(monkeypatch):
     diagnosis_calls = [before, after]
     seen_limits = []
 
-    monkeypatch.setattr("app.services.data_gap_remediation_service.diagnose_all", lambda _db: diagnosis_calls.pop(0))
+    monkeypatch.setattr("app.services.data_gap_remediation_service.diagnose_all", lambda _db, **kw: diagnosis_calls.pop(0))
     monkeypatch.setattr("app.services.data_gap_remediation_service._latest_allowed_bar_date", lambda: "2026-05-27")
     monkeypatch.setattr(
         "app.services.data_gap_remediation_service._minute_kbar_target_codes",
@@ -1134,7 +1134,7 @@ def test_default_remediation_plan_covers_full_recommendation_data_dependencies(m
 
     monkeypatch.setattr(
         "app.services.data_gap_remediation_service.diagnose_all",
-        lambda _db: diagnosis_calls.pop(0),
+        lambda _db, **kw: diagnosis_calls.pop(0),
     )
     monkeypatch.setattr("app.services.data_gap_remediation_service._index_ts_codes", lambda _db: ["000300.SH"])
     monkeypatch.setattr("app.services.data_gap_remediation_service._latest_allowed_bar_date", lambda: "2026-05-27")

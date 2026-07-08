@@ -50,9 +50,52 @@ _RECENT_WARN_MISSING_DAYS = 2
 _RECENT_HIGH_MISSING_DAYS = 4
 _MIN_RECENT_DAILY_KBAR_CODES = 3000
 
+# ── 进程内诊断缓存 ─────────────────────────────────────────────────────
+# 诊断结果在同一个参考交易日内基本稳定（数据只在交易日盘中/盘后增量写入），
+# 按 reference_trade_date 缓存，参考交易日变更即失效。进程重启自然清空。
+_diagnosis_cache: dict[str, Any] = {"reference_trade_date": None, "result": None}
 
-def diagnose_all(db: Session) -> dict[str, Any]:
-    """全面数据质量诊断。"""
+
+def _get_cached_diagnosis() -> dict[str, Any] | None:
+    """命中返回缓存结果，否则 None。"""
+    cached = _diagnosis_cache.get("result")
+    if cached is None:
+        return None
+    if cached.get("reference_trade_date") != _diagnosis_cache.get("reference_trade_date"):
+        return None
+    return cached
+
+
+def _set_cached_diagnosis(result: dict[str, Any]) -> None:
+    _diagnosis_cache["reference_trade_date"] = result.get("reference_trade_date")
+    _diagnosis_cache["result"] = result
+
+
+def clear_data_health_cache() -> None:
+    """显式清空诊断缓存（修复任务完成后调用）。"""
+    _diagnosis_cache["reference_trade_date"] = None
+    _diagnosis_cache["result"] = None
+
+
+def diagnose_all(db: Session, *, force_refresh: bool = False) -> dict[str, Any]:
+    """全面数据质量诊断。
+
+    结果按参考交易日缓存：同一个 reference_trade_date 内重复调用直接返回缓存，
+    避免驾驶舱/详情页每次都全量重算（实测 ~12s）。参考交易日变更或 force_refresh
+    时失效。修复任务完成后调用方应传 force_refresh=True 刷新。
+    """
+    cached = _get_cached_diagnosis()
+    if cached is not None and not force_refresh:
+        logger.debug("data_health: cache hit (reference_date=%s)", cached.get("reference_trade_date"))
+        return cached
+
+    result = _diagnose_all_uncached(db)
+    _set_cached_diagnosis(result)
+    return result
+
+
+def _diagnose_all_uncached(db: Session) -> dict[str, Any]:
+    """全面数据质量诊断（无缓存，实际计算）。"""
 
     # 1. 各表基础统计
     table_stats = _table_stats(db)
