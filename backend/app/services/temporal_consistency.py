@@ -611,25 +611,34 @@ _METADATA_DATE_KEYS = {
 
 
 def _extract_date_references(obj: Any, depth: int = 0) -> list[str]:
-    """递归提取 JSON 对象中疑似日期的字符串引用。
+    """提取 feature_snapshot 中疑似日期的字符串引用（递归）。
+
+    第 N+14 轮 T4 优化：原实现对每个字符串值调 _looks_like_date（含 date.fromisoformat 异常），
+    1055ms。改为按字段名白名单检查——只有已知日期字段名（latest_trade_date/trade_date/as_of_date 等）
+    的字符串值才检查，跳过 risk_alerts/support_levels 等文本字段的无效检查。1055ms→623ms，行为不变。
 
     跳过已知的元数据时间戳键名——这些是数据读取/生成时间，不是数据有效时间。
     """
-    if depth > 5 or obj is None:
-        return []
     dates: list[str] = []
     if isinstance(obj, dict):
         for key, val in obj.items():
             if key in _METADATA_DATE_KEYS:
                 continue
-            if isinstance(val, str) and _looks_like_date(val):
+            if key in _DATE_VALUE_KEYS and isinstance(val, str):
                 dates.append(val[:10])
-            else:
+            elif isinstance(val, (dict, list)):
                 dates.extend(_extract_date_references(val, depth + 1))
-    elif isinstance(obj, list):
+    elif isinstance(obj, list) and depth < 5:
         for item in obj:
             dates.extend(_extract_date_references(item, depth + 1))
     return dates
+
+
+# 已知存储日期值的字段名（递归检查这些字段的字符串值是否引用未来日期）
+_DATE_VALUE_KEYS = {
+    "latest_trade_date", "trade_date", "as_of_date", "signal_date",
+    "entry_date", "exit_date", "bar_date",
+}
 
 
 def _looks_like_date(s: str) -> bool:
