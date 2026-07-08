@@ -1149,7 +1149,7 @@ def _filter_effectiveness_impl(
         "filtered_by_rule": {
             name: {
                 "count": len(rets),
-                "win_rate": round(sum(1 for r in rets if r > 0) / len(rets) * 100, 1) if rets else 0,
+                "win_rate": round(sum(1 for r in rets if r > 0) / len(rets), 4) if rets else 0,
                 "avg_return": round(sum(rets) / len(rets), 2) if rets else 0,
             }
             for name, rets in filtered_by_rule.items()

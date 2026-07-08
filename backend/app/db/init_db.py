@@ -153,6 +153,11 @@ def _ensure_indexes() -> None:
                 f"VARCHAR(20) NOT NULL DEFAULT '{DEFAULT_RECOMMENDATION_DATA_SOURCE}'",
             )
             _ensure_column_default(connection, "presets", "data_source", DEFAULT_RECOMMENDATION_DATA_SOURCE)
+            _ensure_column(connection, p_cols, "presets", "skip_aux_refresh", "BOOLEAN NOT NULL DEFAULT 0")
+            # 一次性迁移：原 experiment 预设设 skip_aux_refresh=1（保持原行为），formal 设 0
+            connection.execute(text(
+                "UPDATE presets SET skip_aux_refresh = 1 WHERE run_mode = 'experiment' AND skip_aux_refresh = 0"
+            ))
 
         if "recommendations" in existing_tables:
             _ensure_column_type(

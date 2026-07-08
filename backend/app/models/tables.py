@@ -690,7 +690,8 @@ class Preset(Base):
     preset_id: Mapped[str] = mapped_column(String(80), primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
     description: Mapped[str | None] = mapped_column(Text)
-    run_mode: Mapped[str] = mapped_column(String(20), default="formal")
+    run_mode: Mapped[str] = mapped_column(String(20), default="formal")  # 保留列，不再用于业务逻辑
+    skip_aux_refresh: Mapped[bool] = mapped_column(Boolean, default=False)
     market_scope: Mapped[str] = mapped_column(String(30), default="all")
     market_scope_value: Mapped[str | None] = mapped_column(String(120))
     risk_template: Mapped[str] = mapped_column(String(20), default="balanced")

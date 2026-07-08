@@ -136,9 +136,8 @@ ALLOWED_DATA_SOURCES = {
 DEFAULT_PRESETS = [
     {
         "preset_id": "preset_formal_opening",
-        "name": "正式盘前组合",
-        "description": "盘前默认正式组合，强调主线、技术确认和风险平衡。",
-        "run_mode": "formal",
+        "name": "盘前组合",
+        "description": "盘前默认组合，强调主线、技术确认和风险平衡。",
         "data_source": DEFAULT_RECOMMENDATION_DATA_SOURCE,
         "market_scope": "all",
         "market_scope_value": None,
@@ -146,91 +145,88 @@ DEFAULT_PRESETS = [
         "score_line": 72.0,
         "output_count": 6,
         "hide_recent_repeats": True,
+        "skip_aux_refresh": False,
         "skill_groups": ["formal_opening"],
     },
     {
         "preset_id": "preset_formal_trend_core",
         "name": "趋势龙头组合",
         "description": "适合主线趋势票，偏重龙头和大局观。",
-        "run_mode": "formal",
         "market_scope": "all",
         "market_scope_value": None,
         "risk_template": "aggressive",
         "score_line": 70.0,
         "output_count": 5,
         "hide_recent_repeats": True,
+        "skip_aux_refresh": False,
         "skill_groups": ["formal_trend_core"],
     },
     {
         "preset_id": "preset_experiment_dsa",
-        "name": "DSA 单 Skill 实验",
-        "description": "单独验证技术评分 Skill 的辨识度，不进入正式统计。",
-        "run_mode": "experiment",
+        "name": "DSA 单 Skill 验证",
+        "description": "单独验证技术评分 Skill 的辨识度。",
         "market_scope": "all",
         "market_scope_value": None,
         "risk_template": "balanced",
         "score_line": 68.0,
         "output_count": 6,
         "hide_recent_repeats": False,
+        "skip_aux_refresh": True,
         "skill_groups": ["experiment_single_factor"],
     },
     {
         "preset_id": "preset_experiment_high_range_breakout",
         "name": "阶段新高突破单策略",
-        "description": "单独验证阶段高点放量突破动量规则，不进入正式统计。",
-        "run_mode": "experiment",
+        "description": "单独验证阶段高点放量突破动量规则。",
         "market_scope": "all",
         "market_scope_value": None,
         "risk_template": "balanced",
         "score_line": 66.0,
         "output_count": 5,
         "hide_recent_repeats": False,
+        "skip_aux_refresh": True,
         "skill_groups": ["experiment_high_range_breakout"],
     },
     {
         "preset_id": "preset_experiment_limit_up_reseal_relay",
         "name": "涨停回封接力单策略",
-        "description": "单独验证涨停开板回封后的短线接力规则，不进入正式统计。",
-        "run_mode": "experiment",
+        "description": "单独验证涨停开板回封后的短线接力规则。",
         "market_scope": "all",
         "market_scope_value": None,
         "risk_template": "aggressive",
         "score_line": 64.0,
         "output_count": 5,
         "hide_recent_repeats": False,
+        "skip_aux_refresh": True,
         "skill_groups": ["experiment_limit_up_reseal_relay"],
     },
     {
         "preset_id": "preset_experiment_trend_pullback",
         "name": "强趋势缩量回踩单策略",
-        "description": "单独验证多头趋势内缩量回踩 MA5/MA10 的低吸规则，不进入正式统计。",
-        "run_mode": "experiment",
+        "description": "单独验证多头趋势内缩量回踩 MA5/MA10 的低吸规则。",
         "market_scope": "all",
         "market_scope_value": None,
         "risk_template": "balanced",
         "score_line": 63.0,
         "output_count": 5,
         "hide_recent_repeats": False,
+        "skip_aux_refresh": True,
         "skill_groups": ["experiment_trend_pullback"],
     },
     {
         "preset_id": "preset_experiment_sector_relative_strength",
         "name": "主线相对强度单策略",
-        "description": "单独验证行业动量与主线龙头相对强度规则，不进入正式统计。",
-        "run_mode": "experiment",
+        "description": "单独验证行业动量与主线龙头相对强度规则。",
         "market_scope": "all",
         "market_scope_value": None,
         "risk_template": "balanced",
         "score_line": 66.0,
         "output_count": 5,
         "hide_recent_repeats": False,
+        "skip_aux_refresh": True,
         "skill_groups": ["experiment_sector_relative_strength"],
     },
 ]
-
-
-def _default_data_source_for_run_mode(run_mode: Any) -> str:
-    return DEFAULT_RECOMMENDATION_DATA_SOURCE
 
 
 def _select_aux_prefetch_codes(stocks: list[dict[str, Any]], count: int) -> list[str]:
@@ -310,7 +306,6 @@ def _resolve_aux_prefetch_count(
     prefiltered_count: int,
     min_prefilter_count: int,
     *,
-    run_mode: str,
     skip_aux_refresh: bool,
     max_codes: int | None = None,
 ) -> int:
@@ -319,9 +314,7 @@ def _resolve_aux_prefetch_count(
     bounded_max = max(1, int(max_codes or get_settings().auxiliary_prefetch_max_codes or 120))
     if skip_aux_refresh:
         return min(prefiltered_count, max(18, min_prefilter_count // 2), 48, bounded_max)
-    if run_mode == "formal":
-        return min(prefiltered_count, max(min_prefilter_count, bounded_max), bounded_max)
-    return min(prefiltered_count, max(18, min_prefilter_count // 2), 48, bounded_max)
+    return min(prefiltered_count, max(min_prefilter_count, bounded_max), bounded_max)
 
 
 _bootstrap_cache_lock = threading.Lock()
@@ -354,8 +347,7 @@ def bootstrap_workbench_state(db: Session) -> dict[str, Any]:
     presets = list_presets(db)
     t2 = time.perf_counter()
     recent_runs = list_runs(db, limit=20)
-    latest_formal = next((run for run in recent_runs if run["run_mode"] == "formal"), None)
-    latest_experiment = next((run for run in recent_runs if run["run_mode"] == "experiment"), None)
+    latest_run = recent_runs[0] if recent_runs else None
     t3 = time.perf_counter()
     try:
         market_snapshot = get_market_snapshot_from_pool(db)
@@ -371,14 +363,12 @@ def bootstrap_workbench_state(db: Session) -> dict[str, Any]:
     state = {
         "presets": presets,
         "recent_runs": {
-            "formal": latest_formal,
-            "experiment": latest_experiment,
+            "latest": latest_run,
         },
         "market_snapshot": market_snapshot,
         "skill_summary": {
-            "formal_count": sum(1 for skill in skills if skill["mode"] == "formal"),
-            "experiment_count": sum(1 for skill in skills if skill["mode"] == "experiment"),
-            "disabled_count": sum(1 for skill in skills if skill["mode"] == "disabled"),
+            "enabled_count": sum(1 for skill in skills if skill["enabled"]),
+            "disabled_count": sum(1 for skill in skills if not skill["enabled"]),
         },
     }
     with _bootstrap_cache_lock:
@@ -464,9 +454,7 @@ def enqueue_workbench_run(db: Session, payload: dict[str, Any]) -> dict[str, Any
     if payload.get("preset_id") and preset is None:
         raise ValueError("预设不存在，请刷新后重试")
     params = _merge_run_params(db, preset, payload)
-    if params["run_mode"] not in {"formal", "experiment"}:
-        raise ValueError("运行模式仅支持 formal 或 experiment")
-    selected_skills = _select_skills_for_run(db, skill_map, params["run_mode"], params["skills"])
+    selected_skills = _select_skills_for_run(db, skill_map, params["skills"])
     if not selected_skills:
         raise ValueError("没有可运行的 Skill，请检查预设配置或 Skill 状态")
 
@@ -476,7 +464,7 @@ def enqueue_workbench_run(db: Session, payload: dict[str, Any]) -> dict[str, Any
         run_id=run_id,
         preset_id=params.get("preset_id"),
         run_name=params["run_name"],
-        run_mode=params["run_mode"],
+        run_mode="formal",
         trade_date=_latest_trade_date(db),
         started_at=now,
         universe_count=0,
@@ -885,7 +873,7 @@ def create_preset(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
         score_line=float(payload.get("score_line") or 72.0),
         output_count=int(payload.get("output_count") or 6),
         bucket_limits_json="{}",
-        data_source=_normalize_data_source(payload.get("data_source") or _default_data_source_for_run_mode(run_mode)),
+        data_source=_normalize_data_source(payload.get("data_source") or DEFAULT_RECOMMENDATION_DATA_SOURCE),
         hide_recent_repeats=bool(payload.get("hide_recent_repeats", True)),
         status=str(payload.get("status") or "active"),
     )
@@ -1444,7 +1432,7 @@ def _persist_run_start(
         db.add(run)
     run.preset_id = params.get("preset_id")
     run.run_name = params["run_name"]
-    run.run_mode = params["run_mode"]
+    run.run_mode = "formal"
     run.trade_date = run.trade_date or _latest_trade_date(db)
     run.finished_at = None
     run.universe_count = 0
@@ -1508,9 +1496,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         if payload.get("preset_id") and preset is None:
             raise ValueError("预设不存在，请刷新后重试")
         params = _merge_run_params(db, preset, payload)
-        if params["run_mode"] not in {"formal", "experiment"}:
-            raise ValueError("运行模式仅支持 formal 或 experiment")
-        selected_skills = _select_skills_for_run(db, skill_map, params["run_mode"], params["skills"])
+        selected_skills = _select_skills_for_run(db, skill_map, params["skills"])
         if not selected_skills:
             raise ValueError("没有可运行的 Skill，请检查预设配置或 Skill 状态")
         run = _persist_run_start(db, run_id, params, selected_skills)
@@ -1522,7 +1508,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         skill_map = {skill.skill_id: skill for skill in skills}
         params = _loads(run.params_json, {})
         selected_skill_rows = _loads(run.selected_skills_json, [])
-        selected_skills = _select_skills_for_run(db, skill_map, params.get("run_mode") or run.run_mode, selected_skill_rows)
+        selected_skills = _select_skills_for_run(db, skill_map, selected_skill_rows)
         if not selected_skills:
             raise ValueError("恢复任务时没有可运行的 Skill，请检查 Skill 状态后重新发起运行")
         preset = db.get(Preset, run.preset_id) if run.preset_id else None
@@ -1609,7 +1595,6 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     aux_prefetch_count = _resolve_aux_prefetch_count(
         len(prefiltered_stocks),
         min_prefilter_count,
-        run_mode=str(params.get("run_mode") or "formal"),
         skip_aux_refresh=skip_aux_refresh,
         max_codes=settings.auxiliary_prefetch_max_codes,
     )
@@ -1928,7 +1913,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         db.add(run)
     run.preset_id = params.get("preset_id")
     run.run_name = params["run_name"]
-    run.run_mode = params["run_mode"]
+    run.run_mode = "formal"
     run.trade_date = snapshot["trade_date"]
     if not run.started_at:
         run.started_at = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -2569,7 +2554,6 @@ def _selected_skill_rows(selected_skills: list[dict[str, Any]]) -> list[dict[str
             "skill_id": item["skill_id"],
             "name": item["name"],
             "weight": item["weight"],
-            "mode": item["mode"],
             "version_id": item["version_id"],
             "has_agent_contract": item["skill"].agent_enabled,
             "has_executable_contract": item["skill"].contract is not None,
@@ -2981,7 +2965,6 @@ def _build_recommendation_card(
         selected = selected_skill_lookup.get(skill_id)
         if selected is not None:
             signal["weight"] = selected["weight"]
-            signal["skill_mode"] = selected["mode"]
         signals.append(signal)
 
     for selected in selected_skills:
@@ -2993,7 +2976,6 @@ def _build_recommendation_card(
             continue
         signal = dict(rule_signal)
         signal["weight"] = selected["weight"]
-        signal["skill_mode"] = selected["mode"]
         signal["runtime"] = signal.get("runtime") or "strategy_yaml_rule_only"
         if not signal.get("hard_veto"):
             reason = ((entry.get("skill_gate_reasons") or {}).get(skill_id) or "规则门未进入 Agent 深审")
@@ -3667,30 +3649,23 @@ def _historical_recommendations(db: Session, code: str, exclude_recommendation_i
 def _merge_run_params(db: Session, preset: Preset | None, payload: dict[str, Any]) -> dict[str, Any]:
     preset_data = _serialize_preset(db, preset) if preset else {}
     skills = payload.get("skills") or preset_data.get("skills") or []
-    run_mode = str(payload.get("run_mode") or preset_data.get("run_mode") or "formal")
-    default_data_source = _default_data_source_for_run_mode(run_mode)
     if payload.get("single_skill_id"):
         single_weight = float(payload.get("single_skill_weight") or 1.0)
         skills = [{"skill_id": str(payload["single_skill_id"]), "weight": single_weight, "sort_order": 0}]
-        run_mode = str(payload.get("run_mode") or "experiment")
-        default_data_source = _default_data_source_for_run_mode(run_mode)
     skip_aux_refresh = bool(
         payload.get("skip_aux_refresh")
         if "skip_aux_refresh" in payload
-        else run_mode == "experiment"
+        else preset_data.get("skip_aux_refresh", False)
     )
-    if run_mode == "formal":
-        skip_aux_refresh = False
     params = {
         "preset_id": preset_data.get("preset_id"),
         "run_name": str(payload.get("run_name") or preset_data.get("name") or "临时运行"),
-        "run_mode": run_mode,
         "market_scope": str(payload.get("market_scope") or preset_data.get("market_scope") or "all"),
         "market_scope_value": payload.get("market_scope_value", preset_data.get("market_scope_value")),
         "risk_template": str(payload.get("risk_template") or preset_data.get("risk_template") or "balanced"),
         "score_line": float(payload.get("score_line") or preset_data.get("score_line") or 72.0),
         "output_count": int(payload.get("output_count") or preset_data.get("output_count") or 6),
-        "data_source": _normalize_data_source(payload.get("data_source") or preset_data.get("data_source") or default_data_source),
+        "data_source": _normalize_data_source(payload.get("data_source") or preset_data.get("data_source") or DEFAULT_RECOMMENDATION_DATA_SOURCE),
         "skip_aux_refresh": skip_aux_refresh,
         "disable_agent_review": bool(payload.get("disable_agent_review", False)),
         "agent_review_limit": int(payload.get("agent_review_limit") or 0),
@@ -3724,18 +3699,14 @@ def _apply_market_scope_to_stocks(db: Session, stocks: list[dict[str, Any]], par
 def _select_skills_for_run(
     db: Session,
     skill_map: dict[str, StrategySkill],
-    run_mode: str,
     requested_skills: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    allowed_modes = {"formal"} if run_mode == "formal" else {"formal", "experiment"}
     selected: list[dict[str, Any]] = []
     for item in requested_skills:
         skill_id = str(item.get("skill_id"))
         registry = db.get(SkillRegistry, skill_id)
         skill = skill_map.get(skill_id)
-        if registry is None or skill is None or registry.mode == "disabled":
-            continue
-        if registry.mode not in allowed_modes:
+        if registry is None or skill is None or not registry.enabled:
             continue
         errors = validate_skill(skill)
         if errors:
@@ -3745,7 +3716,6 @@ def _select_skills_for_run(
                 "skill_id": skill.skill_id,
                 "name": skill.name,
                 "weight": float(item.get("weight") or 1.0),
-                "mode": registry.mode,
                 "version_id": _skill_version_id(skill),
                 "skill": skill,
             }
@@ -4977,13 +4947,12 @@ def _ensure_default_presets(db: Session, skills: list[StrategySkill]) -> None:
     has_changes = False
     for item in DEFAULT_PRESETS:
         preset = db.get(Preset, item["preset_id"])
-        configured_data_source = _normalize_data_source(item.get("data_source") or _default_data_source_for_run_mode(item["run_mode"]))
+        configured_data_source = _normalize_data_source(item.get("data_source") or DEFAULT_RECOMMENDATION_DATA_SOURCE)
         if preset is None:
             preset = Preset(
                 preset_id=item["preset_id"],
                 name=item["name"],
                 description=item["description"],
-                run_mode=item["run_mode"],
                 market_scope=item["market_scope"],
                 market_scope_value=item["market_scope_value"],
                 risk_template=item["risk_template"],
@@ -4992,6 +4961,7 @@ def _ensure_default_presets(db: Session, skills: list[StrategySkill]) -> None:
                 bucket_limits_json="{}",
                 data_source=configured_data_source,
                 hide_recent_repeats=item["hide_recent_repeats"],
+                skip_aux_refresh=item.get("skip_aux_refresh", False),
                 status="active",
             )
             db.add(preset)
