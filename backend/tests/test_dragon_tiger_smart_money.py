@@ -302,6 +302,10 @@ def test_dragon_tiger_in_formal_opening_preset(db):
     default_preset_groups: formal_opening，但 preset_skills 表没记录→从未被 formal run 选中。
     _default_preset_skill_rows 同步逻辑只在 preset 无 skill_rows 时触发，已存在的 preset
     不会自动加新策略。修复：直接 INSERT preset_skills。
+
+    第N+8轮 T5 发现：preset_skills 曾有孤儿记录 preset_id='formal_opening'（无前缀，
+    presets 表无此 preset），导致 dragon-tiger 关联到不存在的 preset，test 查
+    'preset_formal_opening' 找不到。修复：UPDATE preset_id 加 'preset_' 前缀。
     """
     from app.models.tables import PresetSkill
 
@@ -315,4 +319,17 @@ def test_dragon_tiger_in_formal_opening_preset(db):
         "dragon-tiger-smart-money 必须在 preset_formal_opening 里，否则 formal run 永远不会选中它"
     )
     assert float(row.weight) > 0
+
+    # 孤儿 preset_id 检测：'formal_opening'（无 preset_ 前缀）不应存在，
+    # 否则 dragon-tiger 会关联到不存在的 preset 而被 formal run 跳过。
+    orphan = db.scalar(
+        select(PresetSkill).where(
+            PresetSkill.preset_id == "formal_opening",
+            PresetSkill.skill_id == "dragon-tiger-smart-money",
+        )
+    )
+    assert orphan is None, (
+        "发现孤儿 preset_id='formal_opening'（无前缀），应为 'preset_formal_opening'。"
+        "这是手动 INSERT 用错 preset_id 的残留，会导致 dragon-tiger 关联到不存在的 preset。"
+    )
 
