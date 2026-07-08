@@ -35,6 +35,11 @@ def _build_agent_summary(card: dict[str, Any]) -> dict[str, Any]:
 
     之前只存 mode/logs/data_source，LLM 判断埋在 logs[0].output 里，前端列表与
     北极星 B 项自检（$.delta）都拿不到——决策链断层。此处补齐。
+
+    第 N+19 轮 T7：LLM 失败走 fallback_prelim 时 agent_logs 为空，但 strategy_signals
+    里的 agent_skill_review 有降级 stance/score_delta。logs 为空时从 fallback review
+    提取顶层字段，避免前端 stance=None/delta=None（chip-single-peak 命中但 LLM 余额不足
+    时触发，用户看不到降级状态）。
     """
     logs = card.get("agent_logs", []) or []
     summary: dict[str, Any] = {
@@ -42,15 +47,28 @@ def _build_agent_summary(card: dict[str, Any]) -> dict[str, Any]:
         "logs": logs,
         "data_source": (card.get("market_snapshot", {}).get("breadth") or {}).get("data_source"),
     }
-    if not logs:
+    if logs:
+        first_output = (logs[0].get("output") or {}) if isinstance(logs[0], dict) else {}
+        if isinstance(first_output, dict) and first_output:
+            # 顶层快捷字段（与 RecommendationDetailCard 的 AgentReviewSection 对齐）
+            for key in ("stance", "score_delta", "score", "summary", "action", "position_range", "entry_style"):
+                if key in first_output:
+                    summary[key] = first_output[key]
         return summary
-    first_output = (logs[0].get("output") or {}) if isinstance(logs[0], dict) else {}
-    if not isinstance(first_output, dict) or not first_output:
-        return summary
-    # 顶层快捷字段（与 RecommendationDetailCard 的 AgentReviewSection 对齐）
-    for key in ("stance", "score_delta", "score", "summary", "action", "position_range", "entry_style"):
-        if key in first_output:
-            summary[key] = first_output[key]
+
+    # logs 为空：LLM 失败走 fallback_prelim，从 strategy_signals 的 agent_skill_review 提取降级字段
+    signals = card.get("strategy_signals") or []
+    for signal in signals:
+        if not isinstance(signal, dict):
+            continue
+        review = signal.get("agent_skill_review")
+        if not isinstance(review, dict) or not review:
+            continue
+        if str(review.get("runtime") or "") == "agent_skill_fallback_prelim":
+            for key in ("stance", "score_delta", "score", "summary", "action", "position_range", "entry_style"):
+                if key in review:
+                    summary[key] = review[key]
+            break
     return summary
 
 
