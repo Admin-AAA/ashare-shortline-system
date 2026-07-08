@@ -44,10 +44,11 @@ universe:
 prefilter:
   market:
     # chip_concentration 缺失/发散时值为 0，自然不过滤阈值
+    # 第 N+18 轮 T5: >=18 → >=20, 与 setups 阈值一致(避免过 prefilter 但 setup 空的低质量推荐)
     include:
       - when: "max_dd20 >= -14"
         reason: "drawdown_too_large"
-      - when: "chip_concentration >= 18"
+      - when: "chip_concentration >= 20"
         reason: "chip_loose"
     include_any:
       # 核心模式：单峰密集 + 平台/新高突破 + 放量确认（历史验证 WR 83.4% / n=193）
