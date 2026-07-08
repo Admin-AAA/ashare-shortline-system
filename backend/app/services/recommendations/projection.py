@@ -72,7 +72,13 @@ def build_cockpit_recommendation(rec: Any, watch: Any = None) -> CockpitRecommen
     risk_tags = _loads_recommendation_field(rec, "risk_tags_json", "risk_tags", [])
     info_tags = _loads_recommendation_field(rec, "info_tags_json", "info_tags", [])
     market_context = _loads_recommendation_field(rec, "market_context_json", "market_context", {}) or {}
+    agent_summary = _loads_recommendation_field(rec, "agent_summary_json", "agent_summary", {}) or {}
     final_score = float(_get(rec, "final_score", 0.0) or 0.0)
+    # 序列化后的 dict（来自 _serialize_recommendation_cached）已有顶层 llm_stance/llm_delta，
+    # 优先用；否则从 agent_summary 提取（原始 Recommendation 对象路径）
+    llm_stance = _get(rec, "llm_stance") or _get(agent_summary, "stance")
+    llm_delta_raw = _get(rec, "llm_delta")
+    llm_delta = _as_float_or_none(llm_delta_raw) if llm_delta_raw is not None else _as_float_or_none(_get(agent_summary, "score_delta"))
     score_line_meta = _get(feature_snapshot, "score_line_meta", {}) or {}
     effective_score_line = _get(score_line_meta, "effective_score_line")
     score_gap = None
@@ -114,6 +120,9 @@ def build_cockpit_recommendation(rec: Any, watch: Any = None) -> CockpitRecommen
         degraded_reason=_detect_degradation(info_tags, _get(rec, "rationale", "") or ""),
         market_context=market_context,
         skill_breakdown=_build_skill_breakdown_items(skill_breakdown),
+        # LLM 审查顶层快捷字段（B 项：候选池卡片不展开即可见 LLM 态度）
+        llm_stance=llm_stance,
+        llm_delta=llm_delta,
     )
 
 

@@ -2793,6 +2793,9 @@ def _serialize_recommendation_cached(
         "market_context": market_context,
         "skill_breakdown": _loads(rec.skill_breakdown_json, []),
         "agent_logs": (_loads(rec.agent_summary_json, {}) or {}).get("logs", []),
+        # LLM 审查顶层快捷字段（B 项：候选池卡片不展开即可见 LLM 态度）
+        "llm_stance": (_loads(rec.agent_summary_json, {}) or {}).get("stance"),
+        "llm_delta": (_loads(rec.agent_summary_json, {}) or {}).get("score_delta"),
         "score_breakdown": feature_snapshot.get("score_breakdown", {}),
         "score_line_meta": feature_snapshot.get("score_line_meta", {}),
         "execution_viability": feature_snapshot.get("execution_viability", {}),
@@ -2837,6 +2840,9 @@ def _serialize_recommendation(db: Session, rec: Recommendation) -> dict[str, Any
         "market_context": market_context,
         "skill_breakdown": _loads(rec.skill_breakdown_json, []),
         "agent_logs": (_loads(rec.agent_summary_json, {}) or {}).get("logs", []),
+        # LLM 审查顶层快捷字段（B 项：候选池卡片不展开即可见 LLM 态度）
+        "llm_stance": (_loads(rec.agent_summary_json, {}) or {}).get("stance"),
+        "llm_delta": (_loads(rec.agent_summary_json, {}) or {}).get("score_delta"),
         "score_breakdown": feature_snapshot.get("score_breakdown", {}),
         "score_line_meta": feature_snapshot.get("score_line_meta", {}),
         "execution_viability": feature_snapshot.get("execution_viability", {}),

@@ -226,6 +226,9 @@ export type CockpitRecommendation = {
     breadth?: Record<string, unknown>;
   };
   skill_breakdown?: SkillBreakdownItem[];
+  /** LLM 审查顶层快捷字段（B 项：候选池卡片不展开即可见 LLM 态度） */
+  llm_stance?: string | null;
+  llm_delta?: number | null;
 };
 
 export type SkillBreakdownItem = {
@@ -1100,6 +1103,9 @@ export type RecommendationCard = {
   feature_snapshot: FeatureSnapshot;
   market_context: MarketSnapshot;
   skill_breakdown: SkillSignal[];
+  /** LLM 审查顶层快捷字段（B 项：候选池卡片不展开即可见 LLM 态度） */
+  llm_stance?: string | null;
+  llm_delta?: number | null;
   score_breakdown?: {
     raw_scores?: Record<string, number>;
     weighted_scores?: Record<string, number>;

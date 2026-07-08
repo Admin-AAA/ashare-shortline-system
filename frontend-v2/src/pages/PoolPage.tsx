@@ -184,6 +184,7 @@ export function PoolPage() {
                 <span className="text-mono" style={{ fontWeight: 700, color: "var(--accent-strong)", fontSize: "var(--text-lg)" }}>
                   {c.final_score.toFixed(0)}
                 </span>
+                <LlmStanceBadge stance={c.llm_stance} delta={c.llm_delta} />
                 <RiskTag level={c.risk_level} setup={c.setup_type} />
                 {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
               </div>
@@ -309,6 +310,40 @@ function FilterBar({
         {filtered} / {total}
       </span>
     </div>
+  );
+}
+
+/** LLM 态度徽章 —— 候选池卡片不展开即可见 LLM 审查的 stance + delta。
+ * 支持/强支持绿色 +delta，反对/否决红色 -delta，中性灰色。无 LLM 审查时不显示。 */
+function LlmStanceBadge({ stance, delta }: { stance?: string | null; delta?: number | null }) {
+  if (!stance) return null;
+  const isSupport = stance === "strong_support" || stance === "support";
+  const isOppose = stance === "oppose" || stance === "veto";
+  const color = isSupport ? "var(--market-up)" : isOppose ? "var(--market-down)" : "var(--text-muted)";
+  const label =
+    stance === "strong_support" ? "强支持"
+    : stance === "support" ? "支持"
+    : stance === "neutral_support" ? "中性偏多"
+    : stance === "neutral" ? "中性"
+    : stance === "oppose" ? "反对"
+    : stance === "veto" ? "否决"
+    : stance;
+  return (
+    <span
+      className="text-mono"
+      style={{
+        fontSize: "var(--text-xs)",
+        fontWeight: 600,
+        color,
+        padding: "2px 6px",
+        borderRadius: "var(--radius-sm, 4px)",
+        border: `1px solid ${color}40`,
+        whiteSpace: "nowrap",
+      }}
+      title={`LLM 审查: ${label}${delta != null ? ` (${delta >= 0 ? "+" : ""}${delta})` : ""}`}
+    >
+      {label}{delta != null ? ` ${delta >= 0 ? "+" : ""}${delta}` : ""}
+    </span>
   );
 }
 
