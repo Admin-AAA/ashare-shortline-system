@@ -19,6 +19,7 @@ import { ErrorPage, EmptyState, PageSkeleton } from "../components/StateViews";
 import { RecommendationDetailCard } from "../components/RecommendationDetailCard";
 import { MatrixRecordDetailView } from "../components/MatrixRecordDetailView";
 import { RunModeBadge } from "../components/RunModeBadge";
+import { RunFunnelSection } from "../components/RunFunnelSection";
 import {
   Metric,
   ReturnCell,
@@ -361,6 +362,8 @@ function RunRecordDetailView({ runId, onBack, onOpenStock }: { runId: string; on
           <Metric label="收益基准日" value={as_of_date || "—"} mono />
         </div>
       </section>
+
+      <RunFunnelSection runId={runId} />
 
       <section className="panel">
         <div className="panel__header">
