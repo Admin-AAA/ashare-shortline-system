@@ -56,10 +56,10 @@ interface MatrixResult {
   summary_text?: string;
 }
 
-const AMBER_SOFT = "#fff8ed";
-const AMBER_BORDER = "#f59e0b";
-const AMBER_INK = "#b45309";
-const AMBER_MUTED = "#92400e";
+const AMBER_SOFT = "color-mix(in srgb, var(--accent) 8%, var(--surface-1))";
+const AMBER_BORDER = "var(--accent)";
+const AMBER_INK = "var(--accent-strong)";
+const AMBER_MUTED = "var(--text-muted)";
 
 export function MatrixPage() {
   const [starting, setStarting] = useState(false);
@@ -193,7 +193,7 @@ export function MatrixPage() {
                     </h3>
                     <span
                       className="tag"
-                      style={{ background: AMBER_BORDER, color: "#fff", border: "none" }}
+                      style={{ background: AMBER_BORDER, color: "var(--surface)", border: "none" }}
                     >
                       {result.market_regime || "强牛·高潮"}
                     </span>
