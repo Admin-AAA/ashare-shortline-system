@@ -55,3 +55,9 @@ a {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* ── Info tooltip on hover ── */
+.info-icon-wrap:hover .info-tooltip {
+  visibility: visible !important;
+  opacity: 1 !important;
+}

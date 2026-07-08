@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { useApi } from "../app/useApi";
 import { api } from "../api/client";
 import type {
@@ -11,9 +12,11 @@ import type {
   StrategyStatsRow,
   SetupStatsRow,
 } from "../types";
+import type { ReactNode } from "react";
 import { PageSkeleton, ErrorPage, EmptyState } from "../components/StateViews";
 import { SkillsCatalogPanel } from "../components/SkillsCatalogPanel";
-import { LineChart } from "lucide-react";
+import { CollapsiblePanel } from "../components/CollapsiblePanel";
+import { LineChart, Info } from "lucide-react";
 
 /** 时间窗口选项：null=全部历史累计，N=最近 N 天且已结算。 */
 const WINDOW_OPTIONS: Array<{ label: string; value: number | null }> = [
@@ -89,14 +92,48 @@ export function MetricsPage() {
         dateRange={dateRange}
       />
       <OverviewKpiPanel data={overview} />
-      <PrecisionPanel rows={precisionAtK ?? []} />
-      <FilterEffectivenessPanel data={filterEffect} />
-      <ScoreLinePanel rows={scoreLines ?? []} />
-      <StrategyPanel rows={strategies ?? []} />
-      <SetupPanel rows={setups ?? []} />
-      <AlphaDecayPanel data={alphaDecay} />
-      <SkillsCatalogPanel />
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          gap: "var(--space-4)",
+        }}
+      >
+        <PrecisionPanel rows={precisionAtK ?? []} />
+        <FilterEffectivenessPanel data={filterEffect} />
+        <ScoreLinePanel rows={scoreLines ?? []} />
+        <StrategyPanel rows={strategies ?? []} />
+        <SetupPanel rows={setups ?? []} />
+        <AlphaDecayPanel data={alphaDecay} />
+        <SkillsCatalogPanel />
+      </div>
     </div>
+  );
+}
+
+/** 指标页通用可折叠卡片：标题 kicker/title 垂直排列，右上角带折叠按钮。 */
+function MetricCard({
+  kicker,
+  title,
+  actions,
+  collapsedKey,
+  children,
+}: {
+  kicker?: ReactNode;
+  title: ReactNode;
+  actions?: ReactNode;
+  collapsedKey: string;
+  children: ReactNode;
+}) {
+  return (
+    <CollapsiblePanel
+      collapsedKey={collapsedKey}
+      kicker={kicker}
+      title={title}
+      actions={actions}
+    >
+      {children}
+    </CollapsiblePanel>
   );
 }
 
@@ -209,16 +246,16 @@ function OverviewKpiPanel({ data }: { data: MetricsOverview | null | undefined }
   ];
 
   return (
-    <div className="panel" style={{ padding: "var(--space-4)" }}>
-      <div className="panel__header" style={{ marginBottom: "var(--space-3)" }}>
-        <div>
-          <div className="panel__kicker">推荐质量概览</div>
-          <h3 className="panel__title">核心 KPI</h3>
-        </div>
-        {data.sample_confidence === "low" && (
+    <MetricCard
+      kicker="推荐质量概览"
+      title="核心 KPI"
+      collapsedKey="metrics-overview"
+      actions={
+        data.sample_confidence === "low" ? (
           <span className="tag tag--warning">样本不足</span>
-        )}
-      </div>
+        ) : undefined
+      }
+    >
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "var(--space-3)" }}>
         {kpis.map((k) => (
           <div
@@ -254,7 +291,7 @@ function OverviewKpiPanel({ data }: { data: MetricsOverview | null | undefined }
           </div>
         ))}
       </div>
-    </div>
+    </MetricCard>
   );
 }
 
@@ -271,16 +308,16 @@ function AlphaDecayPanel({ data }: { data: AlphaDecayResponse | null | undefined
     s === "decaying" ? "衰变中" : s === "improving" ? "改善中" : "稳定";
 
   return (
-    <div className="panel" style={{ padding: "var(--space-4)" }}>
-      <div className="panel__header" style={{ marginBottom: "var(--space-3)" }}>
-        <div>
-          <div className="panel__kicker">因子 Alpha 衰减检测</div>
-          <h3 className="panel__title">早期 vs 近期</h3>
-        </div>
+    <MetricCard
+      kicker="因子 Alpha 衰减检测"
+      title="早期 vs 近期"
+      collapsedKey="metrics-alpha-decay"
+      actions={
         <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
           {data.early_period} → {data.recent_period}
         </span>
-      </div>
+      }
+    >
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-xs)" }}>
           <thead>
@@ -334,23 +371,73 @@ function AlphaDecayPanel({ data }: { data: AlphaDecayResponse | null | undefined
       <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginTop: "var(--space-2)" }}>
         r = point-biserial 相关性（因子=true vs =false 的胜率差）；胜率边际 = 因子为真时的胜率 - 因子为假时的胜率。衰变中=近期 r 显著低于早期。
       </div>
-    </div>
+    </MetricCard>
   );
 }
 
 // 历史过滤规则元信息：deprecated 规则已从实盘策略删除（见 strategy.yaml），
 // 此处仅作复盘 + 回归护栏。注意：误杀（被砍胜率≥保留）是"有害"信号。
 function PrecisionPanel({ rows }: { rows: PrecisionAtKRow[] }) {
+  const [tip, setTip] = useState<{ show: boolean; x: number; y: number }>({ show: false, x: 0, y: 0 });
+
+  const onEnter = useCallback((e: React.MouseEvent) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setTip({ show: true, x: rect.left + rect.width / 2, y: rect.bottom + 8 });
+  }, []);
+  const onLeave = useCallback(() => setTip(t => ({ ...t, show: false })), []);
+
   if (rows.length === 0) return null;
   return (
-    <div className="panel">
-      <div className="panel__header">
-        <span className="panel__kicker">排序质量</span>
-        <h2 className="panel__title">Precision@K</h2>
-        <span style={{ marginLeft: "auto", color: "var(--text-muted)", fontSize: 13 }}>
-          前 K 推荐准确率（越靠前应越高）
+    <MetricCard
+      kicker="排序质量"
+      title={
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          Precision@K
+          <span
+            style={{ display: "inline-flex", cursor: "help", color: "var(--text-muted)" }}
+            onMouseEnter={onEnter}
+            onMouseLeave={onLeave}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Info size={14} />
+          </span>
         </span>
-      </div>
+      }
+      collapsedKey="metrics-precision"
+    >
+      {tip.show && createPortal(
+        <div
+          style={{
+            position: "fixed",
+            top: tip.y,
+            left: tip.x,
+            transform: "translateX(-50%)",
+            width: 320,
+            padding: "12px 16px",
+            background: "#252540",
+            border: "1px solid #555",
+            borderRadius: 8,
+            fontSize: 13,
+            lineHeight: 1.7,
+            color: "#d0d0d0",
+            whiteSpace: "normal",
+            zIndex: 99999,
+            boxShadow: "0 8px 24px rgba(0,0,0,.6)",
+            pointerEvents: "none",
+          }}
+        >
+          <strong style={{ color: "#fff", display: "block", marginBottom: 6 }}>
+            Precision@K — 前 K 推荐准确率
+          </strong>
+          系统每次会推荐一组股票并按好坏排序。<br />
+          「前 K」表示取排名最靠前的 K 只来看，「命中率」是其中真正赚钱的比例。<br />
+          <span style={{ color: "#aaa", display: "block", marginTop: 6 }}>
+            例：前1 = 60% → 每次推荐的第1只股票，有60%概率是涨的。<br />
+            数值越高且从前1到前10递减越慢，说明排序越准。
+          </span>
+        </div>,
+        document.body,
+      )}
       <div style={{ display: "grid", gap: "var(--space-2)" }}>
         {rows.map((r) => {
           const pct = r.precision * 100;
@@ -392,21 +479,23 @@ function PrecisionPanel({ rows }: { rows: PrecisionAtKRow[] }) {
           );
         })}
       </div>
-    </div>
+    </MetricCard>
   );
 }
 
 function ScoreLinePanel({ rows }: { rows: ScoreLineStatsRow[] }) {
   if (rows.length === 0) return null;
   return (
-    <div className="panel">
-      <div className="panel__header">
-        <span className="panel__kicker">分析</span>
-        <h2 className="panel__title">分数段胜率</h2>
-        <span style={{ marginLeft: "auto", color: "var(--text-muted)", fontSize: 13 }}>
+    <MetricCard
+      kicker="分析"
+      title="分数段胜率"
+      collapsedKey="metrics-scoreline"
+      actions={
+        <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
           推荐分数线 ≥ X 的累计胜率
         </span>
-      </div>
+      }
+    >
       <div style={{ display: "grid", gap: "var(--space-2)" }}>
         {rows.map((r) => (
           <StatsRow
@@ -419,7 +508,7 @@ function ScoreLinePanel({ rows }: { rows: ScoreLineStatsRow[] }) {
           />
         ))}
       </div>
-    </div>
+    </MetricCard>
   );
 }
 
@@ -427,14 +516,16 @@ function StrategyPanel({ rows }: { rows: StrategyStatsRow[] }) {
   if (rows.length === 0) return null;
   const sorted = [...rows].sort((a, b) => b.hit_rate - a.hit_rate);
   return (
-    <div className="panel">
-      <div className="panel__header">
-        <span className="panel__kicker">分析</span>
-        <h2 className="panel__title">策略胜率</h2>
-        <span style={{ marginLeft: "auto", color: "var(--text-muted)", fontSize: 13 }}>
+    <MetricCard
+      kicker="分析"
+      title="策略胜率"
+      collapsedKey="metrics-strategy"
+      actions={
+        <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
           按胜率降序
         </span>
-      </div>
+      }
+    >
       <div style={{ display: "grid", gap: "var(--space-2)" }}>
         {sorted.map((r) => (
           <StatsRow
@@ -446,7 +537,7 @@ function StrategyPanel({ rows }: { rows: StrategyStatsRow[] }) {
           />
         ))}
       </div>
-    </div>
+    </MetricCard>
   );
 }
 
@@ -454,14 +545,16 @@ function SetupPanel({ rows }: { rows: SetupStatsRow[] }) {
   if (rows.length === 0) return null;
   const sorted = [...rows].sort((a, b) => b.hit_rate - a.hit_rate);
   return (
-    <div className="panel">
-      <div className="panel__header">
-        <span className="panel__kicker">分析</span>
-        <h2 className="panel__title">Setup 胜率</h2>
-        <span style={{ marginLeft: "auto", color: "var(--text-muted)", fontSize: 13 }}>
+    <MetricCard
+      kicker="分析"
+      title="Setup 胜率"
+      collapsedKey="metrics-setup"
+      actions={
+        <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
           按胜率降序
         </span>
-      </div>
+      }
+    >
       <div style={{ display: "grid", gap: "var(--space-2)" }}>
         {sorted.map((r) => (
           <StatsRow
@@ -473,7 +566,7 @@ function SetupPanel({ rows }: { rows: SetupStatsRow[] }) {
           />
         ))}
       </div>
-    </div>
+    </MetricCard>
   );
 }
 
@@ -544,22 +637,23 @@ function FilterEffectivenessPanel({ data }: { data: FilterEffectiveness | null |
     .map(([rule, v]) => ({ rule, ...v }))
     .sort((a, b) => b.count - a.count);
 
-  const keptWr = data.kept.net_win_rate * 100;
+  const keptWr = data.kept.net_win_rate;
   const keptWrColor =
     keptWr >= 60 ? "var(--color-up)" : keptWr >= 45 ? "var(--text-secondary)" : "var(--color-down)";
   const keptRet = data.kept.net_avg_return;
   const keptPf = data.kept.net_profit_factor;
 
   return (
-    <div className="panel">
-      <div className="panel__header">
-        <span className="panel__kicker">分析</span>
-        <h2 className="panel__title">过滤效果</h2>
-        <span style={{ marginLeft: "auto", color: "var(--text-muted)", fontSize: 13 }}>
+    <MetricCard
+      kicker="分析"
+      title="过滤效果"
+      collapsedKey="metrics-filter"
+      actions={
+        <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
           过滤率 {data.filter_rate_pct.toFixed(1)}%
         </span>
-      </div>
-
+      }
+    >
       {/* 总体：保留 vs 过滤 */}
       <div
         style={{
@@ -638,6 +732,6 @@ function FilterEffectivenessPanel({ data }: { data: FilterEffectiveness | null |
           );
         })}
       </div>
-    </div>
+    </MetricCard>
   );
 }

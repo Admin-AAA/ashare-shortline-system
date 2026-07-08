@@ -1,4 +1,10 @@
-export type ScheduledTaskType = "data_sync" | "recommendation_run" | "preset_matrix_run" | "pool_refresh" | "data_backfill";
+export type ScheduledTaskType =
+  | "data_sync"
+  | "recommendation_run"
+  | "preset_matrix_run"
+  | "pool_refresh"
+  | "data_backfill"
+  | "formal_safety_net";
 
 export type PresetSkill = {
   skill_id: string;
@@ -371,9 +377,11 @@ export type DataHealthDiagnostic = {
   reference_trade_date?: string | null;
   reference_trade_date_source?: string | null;
   reference_trade_date_note?: string | null;
-  tables?: Record<string, DataHealthTableDiagnostic>;
+    tables?: Record<string, DataHealthTableDiagnostic>;
   lag_days?: Record<string, number>;
   issues?: Array<{ severity: string; message: string }>;
+  data_sources?: DataSourceHealthSummary;
+  data_domains?: DataDomainCoverageSummary;
   recommendation_summary?: {
     total?: number;
     by_run_id?: Record<string, number>;
@@ -738,6 +746,76 @@ export type DataSourceHealthRow = {
   last_error?: string | null;
   status: DataSourceStatus;
   updated_at?: string | null;
+};
+
+/** 数据健康页「数据源接入」卡片用的行（source_type 覆盖全部类型，不限于 quote/kline）。 */
+export type DiagnosticDataSource = {
+  source: string;
+  source_type: string;
+  enabled: boolean;
+  priority: number;
+  note?: string | null;
+  success_count: number;
+  failure_count: number;
+  empty_count: number;
+  success_rate?: number | null;
+  latency_ms?: number | null;
+  last_success_at?: string | null;
+  last_failure_at?: string | null;
+  last_error?: string | null;
+  status: string;
+  updated_at?: string | null;
+};
+
+export type DataSourceHealthSummary = {
+  sources?: DiagnosticDataSource[];
+  working_count?: number;
+  broken_count?: number;
+  untested_count?: number;
+  disabled_count?: number;
+  total?: number;
+  working_sources?: Array<{ source: string; source_type: string; status: string; enabled?: boolean; last_error?: string | null }>;
+  broken_sources?: Array<{ source: string; source_type: string; status: string; enabled?: boolean; last_error?: string | null }>;
+  untested_sources?: Array<{ source: string; source_type: string; status: string; enabled?: boolean; last_error?: string | null }>;
+  disabled_sources?: Array<{ source: string; source_type: string; status: string; enabled?: boolean; last_error?: string | null }>;
+  score_penalty?: number;
+};
+
+/** 数据域（指标级）覆盖明细 —— 对应后端 _data_domain_coverage 单个域。 */
+export type DataDomainCoverage = {
+  key: string;
+  label: string;
+  category: string;
+  status: "covered" | "stale" | "empty" | "error";
+  total_rows: number;
+  max_date: string | null;
+  critical: boolean;
+  fresh_window_days: number | null;
+  gap_days: number | null;
+  note?: string | null;
+};
+
+/** 单个类别下的数据域分组。 */
+export type DataDomainCategory = {
+  category: string;
+  domains: DataDomainCoverage[];
+  covered_count: number;
+  stale_count: number;
+  empty_count: number;
+};
+
+/** 数据域覆盖汇总 —— 数据健康页「数据域接入覆盖」卡片消费。 */
+export type DataDomainCoverageSummary = {
+  categories: DataDomainCategory[];
+  total: number;
+  covered_count: number;
+  stale_count: number;
+  empty_count: number;
+  coverage_rate: number;
+  score_penalty: number;
+  reference_trade_date: string | null;
+  empty_domains?: DataDomainCoverage[];
+  stale_domains?: DataDomainCoverage[];
 };
 
 export type ModelRoute = {
@@ -1995,4 +2073,101 @@ export type MatrixRecordDetail = StockMatrixHistoryItem & {
   result: Record<string, unknown>;
   base_price: number;
   returns: RecommendationReturns;
+};
+
+/** 单股票评分：基础短线策略特征评分（后端 /api/runs/analyze-stock） */
+export type SingleStockScoring = {
+  dsa_signal_score: number | null;
+  dsa_trend_score: number | null;
+  dsa_bias_score: number | null;
+  dsa_volume_score: number | null;
+  dsa_support_score: number | null;
+  dsa_macd_score: number | null;
+  dsa_rsi_score: number | null;
+  risk_score: number | null;
+};
+
+/** 单股票评分：买卖点规则 */
+export type SingleStockEntryRules = {
+  ideal_buy: number | null;
+  secondary_buy: number | null;
+  stop_loss: number | null;
+  take_profit: number | null;
+};
+
+/** 单股票评分：预设模式下单个 skill 的审查结果 */
+export type SingleStockSkillReview = {
+  skill_id: string;
+  skill_name: string;
+  status: string;
+  error?: string | null;
+  score?: number | null;
+  stance?: string | null;
+  confidence?: number | null;
+  summary?: string | null;
+  action?: string | null;
+  supports?: string[];
+  risks?: string[];
+};
+
+/** 单股票评分：LLM agent 分析结果（可选，消耗 API 额度）
+ *  支持两种模式：
+ *  - 单 skill 模式：score/stance/summary 等扁平字段
+ *  - 预设多 skill 模式：final_score/component_scores/skill_reviews[] 聚合字段
+ */
+export type SingleStockLlmAnalysis = {
+  status: string;
+  elapsed_ms?: number;
+  // 单 skill 模式字段
+  skill_id?: string;
+  score?: number | null;
+  score_delta?: number | null;
+  rule_score?: number | null;
+  llm_adjustment?: number | null;
+  stance?: string | null;
+  confidence?: number | null;
+  summary?: string | null;
+  action?: string | null;
+  market_regime_judgment?: string | null;
+  supports?: string[];
+  risks?: string[];
+  // 预设多 skill 模式字段
+  preset_id?: string;
+  preset_name?: string;
+  risk_template?: string;
+  final_score?: number | null;
+  component_scores?: Record<string, number>;
+  agent_review_score?: number | null;
+  skill_reviews?: SingleStockSkillReview[];
+  // 公共字段
+  error?: string;
+  total_tokens_est?: number;
+  total_tokens_real?: number;
+  total_cache_hit_tokens?: number;
+  prompt_cache_active?: boolean;
+};
+
+/** 单股票评分：完整返回结果 */
+export type SingleStockAnalysis = {
+  status: string;
+  code: string;
+  name: string;
+  trade_date: string;
+  bar_count: number;
+  elapsed_ms: number;
+  price: number | null;
+  dsa_profile: {
+    macd_status: string | null;
+    macd_dif: number | null;
+    macd_dea: number | null;
+    rsi_12: number | null;
+    bias_ma5: number | null;
+    bias_ma10: number | null;
+    trend_status: string | null;
+    volume_status: string | null;
+  };
+  scoring: SingleStockScoring;
+  entry_rules: SingleStockEntryRules;
+  llm_analysis?: SingleStockLlmAnalysis;
+  message?: string;
 };

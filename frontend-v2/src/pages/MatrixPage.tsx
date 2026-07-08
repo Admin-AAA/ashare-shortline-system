@@ -5,9 +5,13 @@ import { api } from "../api/client";
 import { EmptyState } from "../components/StateViews";
 
 /**
- * 矩阵页 —— 股票矩阵分析的入口、进度与结果报告
- * 矩阵批量回测通过 POST /api/runs/matrix 触发，status 轮询。
- * 完成后展示 8 个预设的扫描/评分/推荐明细，并在「行情过热·0 推荐」时
+ * 矩阵页 —— 预设矩阵批量执行的入口、进度与结果报告
+ *
+ * 矩阵 = 一次串行跑完所有「启用」状态的预设，并给每个推荐 Run 打上同一个
+ * matrix_batch_id，便于横向对比不同口径（全策略组合 vs 单策略拆分、不同分数线/
+ * 风险模板）选出的票。与单预设运行的区别：单预设只跑一个口径，矩阵跑全部口径。
+ * 触发：POST /api/runs/matrix，status 轮询。
+ * 完成后展示各预设的扫描/评分/推荐明细，并在「行情过热·0 推荐」时
  * 明确告知用户这是系统主动防御（非 Bug），同时给出高潮观察池。
  */
 
@@ -105,7 +109,7 @@ export function MatrixPage() {
     api
       .startMatrixRun({})
       .then((res) => {
-        setStatus(res.started ? "矩阵回测已启动，正在串行执行全部启用预设…" : "已有任务运行中");
+        setStatus(res.started ? "矩阵已启动，正在串行执行全部启用预设…" : "已有任务运行中");
         if (res.started) setPolling(true);
       })
       .catch((err) => {
@@ -131,12 +135,15 @@ export function MatrixPage() {
             <span className="panel__kicker">矩阵</span>
             <h2 className="panel__title">
               <LayoutGrid size={18} />
-              股票矩阵
+              预设矩阵
             </h2>
+            <p style={{ margin: "4px 0 0", fontSize: "var(--text-sm)", color: "var(--ink-secondary)" }}>
+              一次串行跑完所有启用预设（全策略组合 + 各单策略等），横向对比不同口径选出的票。只跑一个预设请到推荐运行页。
+            </p>
           </div>
           <button className="btn btn--primary" onClick={startMatrix} disabled={starting || isRunning}>
             {starting || isRunning ? <Loader2 size={16} className="spin" /> : <PlayCircle size={16} />}
-            {isRunning ? "执行中…" : starting ? "启动中…" : "启动矩阵回测"}
+            {isRunning ? "执行中…" : starting ? "启动中…" : "启动矩阵"}
           </button>
         </div>
 
@@ -172,7 +179,7 @@ export function MatrixPage() {
         <EmptyState
           icon={<LayoutGrid size={32} />}
           title="还没有矩阵结果"
-          reason="对多只股票批量跑回测、对比全部启用预设。点上方按钮启动一次矩阵批次。"
+          reason="矩阵会一次跑完所有启用预设并归到同一批次，用于横向对比不同口径。点上方按钮启动一次矩阵批次。"
         />
       )}
 

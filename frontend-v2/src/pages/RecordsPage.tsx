@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
   ChevronRight,
   LayoutGrid,
   ListChecks,
   PlayCircle,
+  RotateCcw,
 } from "lucide-react";
 import { api } from "../api/client";
 import type {
@@ -37,7 +38,7 @@ import { StockAnalysisDetailView } from "../components/RecordsStockDetail";
 import { useApi } from "../app/useApi";
 import { useUrlRoute } from "../app/useUrlRoute";
 import { queryParam } from "../app/nav";
-import { exitReasonLabel } from "../utils/display";
+import { bucketLabel, exitReasonLabel } from "../utils/display";
 
 /**
  * 记录中心 —— 两类历史记录的统一复盘入口：
@@ -115,8 +116,10 @@ function RecordsListPage({ initialTab }: { initialTab: "run" | "matrix" }) {
   return (
     <div className="panel">
       <div className="panel__header">
-        <span className="panel__kicker">记录中心</span>
-        <h2 className="panel__title">运行记录复盘</h2>
+        <div>
+          <div className="panel__kicker">记录中心</div>
+          <h2 className="panel__title">运行记录复盘</h2>
+        </div>
         <span style={{ marginLeft: "auto", color: "var(--muted)", fontSize: "var(--text-base)" }}>
           查看历史运行与推荐股票的收益表现
         </span>
@@ -183,14 +186,116 @@ function RunRecordsList() {
     [],
   );
 
+  // —— 筛选条件（默认 status=completed，避开大量 failed/interrupted 噪声）——
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("completed");
+  const [presetFilter, setPresetFilter] = useState<string>("__all__");
+  const [modeFilter, setModeFilter] = useState<string>("__all__");
+  // 推荐数下限：空字符串=不筛；数字 N=只看 recommended_count > N
+  const [minRecsFilter, setMinRecsFilter] = useState<string>("0");
+
+  // 策略选项：从数据里动态去重（按 preset_name），按频次倒序
+  const presetOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const r of data ?? []) {
+      const name = r.preset_name || "(未命名)";
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => name);
+  }, [data]);
+
   if (loading) return <PageSkeleton title="运行推荐记录" hint="加载历史运行" rowCount={8} />;
   if (error) return <ErrorPage title="记录加载失败" message={error} onRetry={() => window.location.reload()} />;
   if (!data || data.length === 0) {
     return <EmptyState icon={<PlayCircle size={32} />} title="暂无运行记录" reason="还没有跑过推荐管线" />;
   }
 
+  const filtered = data.filter((r) => {
+    if (dateFrom && r.trade_date < dateFrom) return false;
+    if (dateTo && r.trade_date > dateTo) return false;
+    if (statusFilter !== "__all__" && r.status !== statusFilter) return false;
+    if (presetFilter !== "__all__" && (r.preset_name || "(未命名)") !== presetFilter) return false;
+    if (modeFilter !== "__all__" && r.run_mode !== modeFilter) return false;
+    const min = minRecsFilter === "" ? null : Number(minRecsFilter);
+    if (min != null && !Number.isNaN(min) && !(r.recommended_count > min)) return false;
+    return true;
+  });
+
+  const resetFilters = () => {
+    setDateFrom("");
+    setDateTo("");
+    setStatusFilter("completed");
+    setPresetFilter("__all__");
+    setModeFilter("__all__");
+    setMinRecsFilter("0");
+  };
+
   return (
-    <table style={tableStyle}>
+    <>
+      <div className="records-filterbar">
+        <div className="records-filterbar__group">
+          <label className="records-filterbar__label">日期</label>
+          <input className="cfg-input records-filterbar__date" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+          <span style={{ color: "var(--muted)" }}>→</span>
+          <input className="cfg-input records-filterbar__date" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+        </div>
+
+        <div className="records-filterbar__group">
+          <label className="records-filterbar__label">状态</label>
+          <select className="cfg-input records-filterbar__select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <option value="__all__">全部</option>
+            <option value="completed">completed</option>
+            <option value="failed">failed</option>
+            <option value="interrupted">interrupted</option>
+          </select>
+        </div>
+
+        <div className="records-filterbar__group">
+          <label className="records-filterbar__label">策略</label>
+          <select className="cfg-input records-filterbar__select" value={presetFilter} onChange={(e) => setPresetFilter(e.target.value)}>
+            <option value="__all__">全部</option>
+            {presetOptions.map((name) => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="records-filterbar__group">
+          <label className="records-filterbar__label">运行模式</label>
+          <select className="cfg-input records-filterbar__select" value={modeFilter} onChange={(e) => setModeFilter(e.target.value)}>
+            <option value="__all__">全部</option>
+            <option value="formal">实盘</option>
+            <option value="experiment">实验</option>
+          </select>
+        </div>
+
+        <div className="records-filterbar__group">
+          <label className="records-filterbar__label">推荐数 &gt;</label>
+          <input
+            className="cfg-input records-filterbar__select"
+            type="number"
+            min={0}
+            value={minRecsFilter}
+            onChange={(e) => setMinRecsFilter(e.target.value)}
+            placeholder="0"
+            style={{ width: 70 }}
+          />
+        </div>
+
+        <button className="btn btn--ghost records-filterbar__reset" onClick={resetFilters} title="重置为默认筛选">
+          <RotateCcw size={13} /> 重置
+        </button>
+
+        <span className="records-filterbar__count">
+          显示 {filtered.length} / {data.length}
+        </span>
+      </div>
+
+      {filtered.length === 0 ? (
+        <EmptyState icon={<PlayCircle size={32} />} title="当前筛选无记录" reason="调整筛选条件后再试" />
+      ) : (
+        <table style={tableStyle}>
       <thead>
         <tr>
           <th style={thStyle}>日期</th>
@@ -206,7 +311,7 @@ function RunRecordsList() {
         </tr>
       </thead>
       <tbody>
-        {data.map((run) => (
+        {filtered.map((run) => (
           <tr
             key={run.run_id}
             onClick={() => navigate("/records", { params: { tab: "run", run_id: run.run_id } })}
@@ -238,13 +343,14 @@ function RunRecordsList() {
         ))}
       </tbody>
     </table>
+      )}
+    </>
   );
 }
 
 // ============================================================
 // 矩阵运行记录列表
 // ============================================================
-
 function MatrixRecordsList() {
   const { navigate } = useUrlRoute();
   const [page, setPage] = useState(1);
@@ -447,7 +553,7 @@ function RecommendationsReturnTable({
                   </td>
                   <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>
                     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                      <span style={{ fontFamily: "var(--font-mono)" }}>{rec.bucket || "—"}</span>
+                      <span style={{ fontFamily: "var(--font-mono)" }}>{bucketLabel(rec.bucket)}</span>
                       <span>{rec.setup_type || "—"}</span>
                     </div>
                   </td>

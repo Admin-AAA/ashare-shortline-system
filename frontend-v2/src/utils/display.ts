@@ -58,9 +58,8 @@ const STATUS_LABELS: Record<string, string> = {
   conservative: "保守",
   balanced: "均衡",
   aggressive: "激进",
-  local_pool: "仅本地池",
-  local_pool_preferred: "本地池优先",
-  realtime: "实时数据",
+  local_pool_preferred: "仅用本地池",
+  auto: "本地池+盘中实时",
   data_sync: "数据同步",
   pool_refresh: "行情池刷新",
   data_backfill: "数据回填",
@@ -106,6 +105,26 @@ export const EXIT_REASON_LABELS: Record<string, string> = {
   shrinking_limit_up_hold: "缩量涨停持有",
   deferred_after_limit_up: "涨停后递延",
 };
+
+// 策略 bucket（英文 kebab-case 标识）→ 中文名。
+// 与 backend/skills/*/strategy.yaml 的 id↔name 对齐，避免复盘页买点列直接展示英文。
+export const BUCKET_LABELS: Record<string, string> = {
+  "daily-stock-analysis-skill": "基础短线策略",
+  "chao-gu-yang-jia-skill": "炒股养家大局观",
+  "chen-xiaoqun-skill": "陈小群龙头战法",
+  "high-range-breakout-momentum": "阶段新高放量突破",
+  "trend-pullback-continuation": "强趋势缩量回踩",
+  "sector-relative-strength-leader": "主线相对强度龙头",
+  "overnight-holding-method": "隔夜持股法",
+  "limit-up-reseal-relay": "涨停回封接力",
+  "dragon-tiger-smart-money": "龙虎榜聪明钱接力",
+};
+
+export function bucketLabel(value: unknown, fallback = "—") {
+  const raw = String(value ?? "").trim();
+  if (!raw) return fallback;
+  return BUCKET_LABELS[raw] ?? raw;
+}
 
 export function exitReasonLabel(value: unknown, fallback = "—", executedReturn?: number | null) {
   const raw = String(value ?? "").trim();

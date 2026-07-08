@@ -156,9 +156,17 @@ export function PoolPage() {
                       whiteSpace: "nowrap",
                       overflow: "hidden",
                       textOverflow: "ellipsis",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "var(--space-2)",
                     }}
                   >
                     {c.name}
+                    {c.industry && (
+                      <span className="tag" style={{ fontSize: "var(--text-xs)", flexShrink: 0 }}>
+                        {c.industry}
+                      </span>
+                    )}
                   </div>
                   {c.entry_rule && (
                     <div
@@ -327,9 +335,6 @@ function SectorDiversityBar({ items }: { items: CockpitRecommendation[] }) {
           ⚠ {industries[0][0]} {maxCount}/{items.length} ({(maxRatio * 100).toFixed(0)}%)
         </span>
       )}
-      <span style={{ marginLeft: "auto", color: "var(--muted)", fontSize: "var(--text-xs)" }}>
-        {industries.slice(0, 4).map(([ind, cnt]) => `${ind} ${cnt}`).join(" · ")}
-      </span>
     </div>
   );
 }

@@ -30,14 +30,15 @@ const RISK_TEMPLATE_MAP: Record<string, string> = {
 };
 
 const DATA_SOURCE_MAP: Record<string, string> = {
-  local_pool: "本地池",
-  local_pool_preferred: "本地池优先",
-  realtime: "实时数据",
+  local_pool_preferred: "仅用本地池",
+  auto: "本地池+盘中实时",
+  // 后端规范化后的实际存储值
+  local_pool_realtime: "本地池+盘中实时",
 };
 
 // 保留原始值用于内部逻辑处理
 const RISK_TEMPLATES = ["balanced", "aggressive", "conservative"];
-const DATA_SOURCES = ["local_pool", "local_pool_preferred", "realtime"];
+const DATA_SOURCES = ["local_pool_preferred", "auto"];
 
 type SkillPick = {
   skill_id: string;
@@ -70,7 +71,7 @@ function emptyForm(skills: SkillSummary[]): PresetForm {
     risk_template: "balanced",
     score_line: 72,
     output_count: 6,
-    data_source: "local_pool",
+    data_source: "auto",
     hide_recent_repeats: true,
     skills: skills.map((s) => ({
       skill_id: s.skill_id,

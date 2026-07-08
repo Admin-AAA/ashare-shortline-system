@@ -18,9 +18,19 @@ export default defineConfig({
     chunkSizeWarningLimit: 650,
     rollupOptions: {
       output: {
-        manualChunks: {
-          "vendor-react": ["react", "react-dom"],
-          "vendor-three": ["three"],
+        // Vite 8 (rolldown) 要求 manualChunks 为函数形式
+        manualChunks(id: string) {
+          if (id.includes("node_modules")) {
+            if (id.includes("/three/")) return "vendor-three";
+            if (
+              id.includes("/react/") ||
+              id.includes("/react-dom/") ||
+              id.includes("/scheduler/")
+            ) {
+              return "vendor-react";
+            }
+          }
+          return undefined;
         },
       },
     },
