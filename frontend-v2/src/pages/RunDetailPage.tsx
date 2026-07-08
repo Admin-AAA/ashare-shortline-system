@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, Loader2, PlayCircle, Search, Sparkles } from "lucide-react";
 import { api } from "../api/client";
-import type { Preset, RunDetail, SingleStockAnalysis, SingleStockSkillReview } from "../types";
+import type { Preset, RunDetail, SingleStockAnalysis, SingleStockSkillReview, ReplayAnalysisResult } from "../types";
 import { ErrorPage } from "../components/StateViews";
 import { CollapsiblePanel } from "../components/CollapsiblePanel";
 import { useUrlRoute } from "../app/useUrlRoute";
@@ -116,8 +116,135 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
       {error && <ErrorPage title="运行详情加载失败" message={error} onRetry={() => window.location.reload()} />}
 
       {detail && <RunTimeline detail={detail} />}
+
+      {detail && (detail.recommended_count ?? 0) > 0 && runId && <ReplayAnalysisPanel runId={runId} />}
     </div>
   );
+}
+
+// ============================================================
+// 运行复盘面板 —— 打开已完成 run，看到每只推荐票的实际兑现结果
+// 后端 /api/recommendations/runs/{run_id}/replay-analysis 早已实现（纯 DB 读），
+// 前端 client.replayAnalysis 也已存在，此前 RunDetailPage 从不调用——本轮补齐（北极星 B「跑出来结果如何」）。
+// ============================================================
+
+function ReplayAnalysisPanel({ runId }: { runId: string }) {
+  const [data, setData] = useState<ReplayAnalysisResult | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    setError("");
+    api.replayAnalysis(runId)
+      .then((d) => { if (alive) setData(d); })
+      .catch((e) => { if (alive) setError((e as Error).message || "复盘加载失败"); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [runId]);
+
+  if (loading) {
+    return (
+      <CollapsiblePanel collapsedKey="run-replay" kicker="运行复盘" title="推荐兑现情况">
+        <div className="text-muted" style={{ fontSize: "var(--text-sm)" }}>加载兑现数据…</div>
+      </CollapsiblePanel>
+    );
+  }
+  if (error) return <ErrorPage title="复盘加载失败" message={error} />;
+  if (!data || data.rows.length === 0) return null;
+
+  const { summary, rows } = data;
+  const avgRet = summary.average_net_return;
+  const retTone = avgRet >= 0 ? "var(--market-up)" : "var(--market-down)";
+
+  return (
+    <CollapsiblePanel
+      collapsedKey="run-replay"
+      kicker="运行复盘"
+      title="推荐兑现情况"
+      actions={
+        <span style={{ display: "inline-flex", gap: "var(--space-3)", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+          <span>平均净收益 <b style={{ color: retTone, fontFamily: "var(--font-mono)" }}>{avgRet >= 0 ? "+" : ""}{avgRet.toFixed(2)}%</b></span>
+          <span>误报率 <b style={{ fontFamily: "var(--font-mono)" }}>{(summary.false_positive_rate * 100).toFixed(0)}%</b></span>
+        </span>
+      }
+    >
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-xs)" }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid var(--line)", color: "var(--text-muted)" }}>
+              <th style={{ textAlign: "left", padding: "var(--space-2)", fontWeight: 600 }}>代码 / 名称</th>
+              <th style={{ textAlign: "right", padding: "var(--space-2)", fontWeight: 600 }}>评分</th>
+              <th style={{ textAlign: "right", padding: "var(--space-2)", fontWeight: 600 }}>净收益</th>
+              <th style={{ textAlign: "right", padding: "var(--space-2)", fontWeight: 600 }}>持仓</th>
+              <th style={{ textAlign: "left", padding: "var(--space-2)", fontWeight: 600 }}>状态</th>
+              <th style={{ textAlign: "left", padding: "var(--space-2)", fontWeight: 600 }}>市场环境</th>
+              <th style={{ textAlign: "left", padding: "var(--space-2)", fontWeight: 600 }}>买点规则</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const ret = r.net_return_pct;
+              const retColor = ret == null ? "var(--text-muted)" : ret >= 0 ? "var(--market-up)" : "var(--market-down)";
+              const retText = ret == null ? "结算中" : `${ret >= 0 ? "+" : ""}${ret.toFixed(2)}%`;
+              // 行内状态以「实际兑现结果」为准（outcome_label / 净收益），避免把盈利票误标为误报
+              const statusLabel = r.outcome_label
+                ? r.outcome_label
+                : (ret == null ? "待结算" : (ret >= 0 ? "盈利" : "亏损"));
+              const statusTone = r.outcome_label === "success"
+                ? "up"
+                : r.outcome_label === "failed"
+                  ? "down"
+                  : (ret == null ? "muted" : (ret >= 0 ? "up" : "down"));
+              return (
+                <tr key={r.recommendation_id} style={{ borderBottom: "1px solid var(--line)" }}>
+                  <td style={{ textAlign: "left", padding: "var(--space-2)" }}>
+                    <span className="text-mono" style={{ color: "var(--ink)", fontWeight: 600 }}>{r.symbol}</span>
+                    <span style={{ marginLeft: "var(--space-2)", color: "var(--ink-secondary)" }}>{r.name}</span>
+                  </td>
+                  <td style={{ textAlign: "right", padding: "var(--space-2)", fontFamily: "var(--font-mono)", color: "var(--ink)" }}>
+                    {r.final_score != null ? r.final_score.toFixed(1) : "—"}
+                  </td>
+                  <td style={{ textAlign: "right", padding: "var(--space-2)", fontFamily: "var(--font-mono)", color: retColor, fontWeight: 600 }}>
+                    {retText}
+                  </td>
+                  <td style={{ textAlign: "right", padding: "var(--space-2)", fontFamily: "var(--font-mono)", color: "var(--ink-secondary)" }}>
+                    {r.holding_days != null ? `${r.holding_days}天` : "—"}
+                  </td>
+                  <td style={{ textAlign: "left", padding: "var(--space-2)" }}>
+                    <ReplayStatusTag label={statusLabel} tone={statusTone} />
+                  </td>
+                  <td style={{ textAlign: "left", padding: "var(--space-2)", color: "var(--ink-secondary)" }}>
+                    {[r.market_regime, r.trend_status].filter(Boolean).join(" · ") || "—"}
+                  </td>
+                  <td
+                    style={{ textAlign: "left", padding: "var(--space-2)", color: "var(--text-muted)", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                    title={r.trigger_condition_text || undefined}
+                  >
+                    {r.trigger_condition_text || "—"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {summary.false_positive_count > 0 && (
+        <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginTop: "var(--space-2)" }}>
+          误报 {summary.false_positive_count} 只
+          {summary.reason_counts?.length
+            ? ` · 主因：${summary.reason_counts.slice(0, 2).map((x) => x.reason).filter(Boolean).join("、")}`
+            : ""}
+        </div>
+      )}
+    </CollapsiblePanel>
+  );
+}
+
+function ReplayStatusTag({ label, tone }: { label: string; tone: "up" | "down" | "muted" }) {
+  const color = tone === "up" ? "var(--market-up)" : tone === "down" ? "var(--market-down)" : "var(--text-muted)";
+  return <span style={{ color, fontWeight: 600, fontSize: "var(--text-xs)" }}>{label}</span>;
 }
 
 // ============================================================
