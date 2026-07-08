@@ -13,17 +13,35 @@ from sqlalchemy import distinct, func, select, text
 from sqlalchemy.orm import Session
 
 from app.models.tables import (
+    AuctionData,
+    BlockTrade,
+    BrokerRecommend,
     CapitalFlow,
     ConceptSector,
+    ConceptSectorStock,
     DailyKbar,
     DragonTiger,
+    FinaIndicator,
+    HkHolding,
+    HolderNumber,
+    HolderTrade,
+    HsgtFlow,
+    HsgtTop10,
     IndexDaily,
+    InstitutionalSurvey,
     LimitUpBoard,
+    MarginData,
+    MarginDetail,
     MinuteKbar,
     NewsAnnouncement,
+    PledgeStat,
     Recommendation,
     RecommendationOutcome,
+    Repurchase,
+    ShareFloat,
+    Stock,
     StockQuote,
+    StkLimit,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,6 +67,55 @@ _RECENT_REFERENCE_WINDOW = 10
 _RECENT_WARN_MISSING_DAYS = 2
 _RECENT_HIGH_MISSING_DAYS = 4
 _MIN_RECENT_DAILY_KBAR_CODES = 3000
+
+# ── 数据域（指标级）覆盖目录 ─────────────────────────────────────────
+# 与 provider 级「数据源接入」不同，这里站在「数据域 / 指标」维度，
+# 回答：系统关注哪些市场数据域（K线、筹码峰、龙虎榜、资金流…），
+# 每个域是否真的有接入策略并持续拉取。
+# - table / date_col：存储位置（用于运行时统计行数与最新日期）
+# - fresh_days：判定「接入且新鲜」的容忍滞后天数；为 None 表示事件型
+#   数据（自然稀疏，有数据即视为已接入，不判滞后）
+# - column：可选，非 NULL 计数列（用于部分字段型域，如 筹码峰 chip_cost_50）
+_DATA_DOMAIN_DEFS: list[dict[str, Any]] = [
+    # 行情 K 线
+    {"key": "daily_kbar", "label": "日K线(含技术指标)", "category": "行情K线", "table": DailyKbar, "date_col": "trade_date", "critical": True, "fresh_days": 4},
+    {"key": "chip", "label": "筹码分布(筹码峰)", "category": "行情K线", "table": DailyKbar, "date_col": "trade_date", "critical": False, "fresh_days": 4, "column": "chip_cost_50"},
+    {"key": "minute_kbar", "label": "分钟K线", "category": "行情K线", "table": MinuteKbar, "date_col": "trade_date", "critical": False, "fresh_days": 4},
+    {"key": "index_daily", "label": "指数日线", "category": "行情K线", "table": IndexDaily, "date_col": "trade_date", "critical": True, "fresh_days": 4},
+    {"key": "stk_limit", "label": "涨跌停价格", "category": "行情K线", "table": StkLimit, "date_col": "trade_date", "critical": False, "fresh_days": 4},
+    {"key": "auction", "label": "集合竞价", "category": "行情K线", "table": AuctionData, "date_col": "trade_date", "critical": False, "fresh_days": 4},
+    # 实时盘口
+    {"key": "realtime_quote", "label": "盘中实时快照", "category": "实时盘口", "table": StockQuote, "date_col": "trade_date", "critical": False, "fresh_days": 4},
+    # 情绪题材
+    {"key": "limit_up", "label": "涨停板", "category": "情绪题材", "table": LimitUpBoard, "date_col": "trade_date", "critical": True, "fresh_days": 4},
+    {"key": "concept", "label": "概念板块", "category": "情绪题材", "table": ConceptSector, "date_col": "trade_date", "critical": False, "fresh_days": 4},
+    {"key": "concept_member", "label": "概念板块成分", "category": "情绪题材", "table": ConceptSectorStock, "date_col": "trade_date", "critical": False, "fresh_days": 4},
+    {"key": "dragon_tiger", "label": "龙虎榜", "category": "情绪题材", "table": DragonTiger, "date_col": "trade_date", "critical": False, "fresh_days": 4},
+    {"key": "broker_recommend", "label": "券商金股", "category": "情绪题材", "table": BrokerRecommend, "date_col": "month", "critical": False, "fresh_days": 45},
+    # 资金流向
+    {"key": "capital_flow", "label": "资金流向", "category": "资金流向", "table": CapitalFlow, "date_col": "trade_date", "critical": False, "fresh_days": 4},
+    # 北向 / 港股通
+    {"key": "hsgt_flow", "label": "沪深港通资金流", "category": "北向港股通", "table": HsgtFlow, "date_col": "trade_date", "critical": False, "fresh_days": 4},
+    {"key": "hsgt_top10", "label": "北向持股TOP10", "category": "北向港股通", "table": HsgtTop10, "date_col": "trade_date", "critical": False, "fresh_days": 4},
+    {"key": "hk_hold", "label": "港股通持股", "category": "北向港股通", "table": HkHolding, "date_col": "trade_date", "critical": False, "fresh_days": 4},
+    # 融资融券
+    {"key": "margin", "label": "融资融券", "category": "融资融券", "table": MarginData, "date_col": "trade_date", "critical": False, "fresh_days": 4},
+    {"key": "margin_detail", "label": "融资融券明细", "category": "融资融券", "table": MarginDetail, "date_col": "trade_date", "critical": False, "fresh_days": 4},
+    # 股东 / 筹码
+    {"key": "holder_number", "label": "股东人数(筹码集中度)", "category": "股东筹码", "table": HolderNumber, "date_col": "end_date", "critical": False, "fresh_days": 130},
+    {"key": "holder_trade", "label": "股东增减持", "category": "股东筹码", "table": HolderTrade, "date_col": "ann_date", "critical": False, "fresh_days": None},
+    {"key": "pledge_stat", "label": "股权质押", "category": "股东筹码", "table": PledgeStat, "date_col": "end_date", "critical": False, "fresh_days": None},
+    # 基本面
+    {"key": "fina_indicator", "label": "财务指标", "category": "基本面", "table": FinaIndicator, "date_col": "end_date", "critical": False, "fresh_days": 130},
+    {"key": "institutional_survey", "label": "机构调研", "category": "基本面", "table": InstitutionalSurvey, "date_col": "surv_date", "critical": False, "fresh_days": None},
+    # 事件 / 公告
+    {"key": "news", "label": "新闻公告", "category": "事件公告", "table": NewsAnnouncement, "date_col": "announce_date", "critical": False, "fresh_days": 14},
+    {"key": "block_trade", "label": "大宗交易", "category": "事件公告", "table": BlockTrade, "date_col": "trade_date", "critical": False, "fresh_days": None},
+    {"key": "share_float", "label": "限售解禁", "category": "事件公告", "table": ShareFloat, "date_col": "float_date", "critical": False, "fresh_days": None},
+    {"key": "repurchase", "label": "股票回购", "category": "事件公告", "table": Repurchase, "date_col": "ann_date", "critical": False, "fresh_days": None},
+    # 基础参照
+    {"key": "stock_basic", "label": "股票基础信息", "category": "基础参照", "table": Stock, "date_col": "list_date", "critical": False, "fresh_days": None},
+]
 
 # ── 进程内诊断缓存 ─────────────────────────────────────────────────────
 # 诊断结果在同一个参考交易日内基本稳定（数据只在交易日盘中/盘后增量写入），
@@ -117,11 +184,17 @@ def _diagnose_all_uncached(db: Session) -> dict[str, Any]:
     # 4. 最近交易日覆盖与缺口
     recent_coverage = _recent_trade_day_coverage(db, reference_trade_date)
 
-    # 4. 健康评分 (0-100)
-    score = _compute_health_score(table_stats, lag_days, reference_trade_date, recent_coverage)
+    # 4. 数据源接入健康（通 / 不通），并计入评分
+    source_health = _data_source_health(db)
 
-    # 5. 关键问题列表
-    issues = _find_issues(table_stats, lag_days, reference_trade_date, recent_coverage, reference_info)
+    # 4b. 数据域（指标级）覆盖：哪些数据域有接入策略且持续拉取
+    domain_summary = _data_domain_coverage(db, reference_trade_date)
+
+    # 5. 健康评分 (0-100)
+    score = _compute_health_score(table_stats, lag_days, reference_trade_date, recent_coverage, source_health, domain_summary)
+
+    # 6. 关键问题列表
+    issues = _find_issues(table_stats, lag_days, reference_trade_date, recent_coverage, reference_info, domain_summary)
 
     return {
         "score": score,
@@ -133,6 +206,8 @@ def _diagnose_all_uncached(db: Session) -> dict[str, Any]:
         "lag_days": lag_days,
         "recent_trade_day_coverage": recent_coverage,
         "issues": issues,
+        "data_sources": source_health,
+        "data_domains": domain_summary,
         "recommendation_summary": _recommendation_summary(db),
     }
 
@@ -370,6 +445,8 @@ def _compute_health_score(
     lag_days: dict[str, int],
     reference_trade_date: str | None,
     recent_coverage: dict[str, Any],
+    source_health: dict[str, Any] | None = None,
+    domain_summary: dict[str, Any] | None = None,
 ) -> int:
     """0-100 健康评分。"""
     if not reference_trade_date:
@@ -417,7 +494,205 @@ def _compute_health_score(
     if rec.get("total_rows", 0) == 0:
         score -= 15
 
+    # 扣分：数据源接入健康（来自 source_health 的预计算 penalty）
+    if source_health:
+        penalty = int(source_health.get("score_penalty", 0) or 0)
+        if penalty:
+            score -= penalty
+
+    # 扣分：数据域覆盖缺口（来自 domain_summary 的预计算 penalty）
+    if domain_summary:
+        penalty = int(domain_summary.get("score_penalty", 0) or 0)
+        if penalty:
+            score -= penalty
+
     return max(0, min(100, score))
+
+
+def _data_source_health(db: Session) -> dict[str, Any]:
+    """汇总各数据源接入状态：通 / 不通 / 未测试 / 未启用，并计算评分扣减。
+
+    直接复用 list_data_sources（其会先 sync 注册表，自动清理孤儿行），
+    因此返回的源集合即「实际有接入策略」的集合。
+    """
+    from app.services.data_sources import list_data_sources
+
+    try:
+        sources = list_data_sources(db)
+    except Exception as exc:
+        logger.warning("数据源健康汇总失败: %s", exc)
+        return {
+            "sources": [],
+            "working_count": 0,
+            "broken_count": 0,
+            "untested_count": 0,
+            "disabled_count": 0,
+            "total": 0,
+            "score_penalty": 0,
+            "error": str(exc),
+        }
+
+    working: list[dict[str, Any]] = []
+    broken: list[dict[str, Any]] = []
+    untested: list[dict[str, Any]] = []
+    disabled: list[dict[str, Any]] = []
+    for s in sources:
+        status = s.get("status", "unknown")
+        entry = {
+            "source": s.get("source"),
+            "source_type": s.get("source_type"),
+            "status": status,
+            "enabled": bool(s.get("enabled")),
+            "success_rate": s.get("success_rate"),
+            "last_error": s.get("last_error"),
+            "last_success_at": s.get("last_success_at"),
+        }
+        if status == "healthy":
+            working.append(entry)
+        elif status == "degraded":
+            broken.append(entry)
+        elif status == "disabled":
+            disabled.append(entry)
+        else:  # untested / unknown
+            untested.append(entry)
+
+    # 评分扣减：enabled 且 degraded 的每个 -5（上限 15）；enabled 且 untested 的每个 -1（上限 5）
+    penalty = min(15, len(broken) * 5) + min(5, len([u for u in untested if u["enabled"]]) * 1)
+
+    return {
+        "sources": sources,
+        "working_count": len(working),
+        "broken_count": len(broken),
+        "untested_count": len(untested),
+        "disabled_count": len(disabled),
+        "total": len(sources),
+        "working_sources": working,
+        "broken_sources": broken,
+        "untested_sources": untested,
+        "disabled_sources": disabled,
+        "score_penalty": penalty,
+    }
+
+
+def _data_domain_coverage(db: Session, reference_trade_date: str | None) -> dict[str, Any]:
+    """数据域（指标级）覆盖：哪些市场数据域有接入策略且持续拉取。
+
+    返回按类别分组的覆盖明细 + 汇总（覆盖率、评分扣减）。
+    状态判定：
+      - empty：行数为 0 → 无数据（未接入 / 未拉取）
+      - covered：有数据，且在 fresh_days 容忍窗口内（事件型域有数据即 covered）
+      - stale：有数据，但最新日期超出 fresh_days 容忍窗口（策略未持续刷新）
+    """
+    ref = _fmt_date(reference_trade_date) if reference_trade_date else None
+
+    domains: list[dict[str, Any]] = []
+    covered = stale = empty = 0
+    penalty = 0
+
+    for ddef in _DATA_DOMAIN_DEFS:
+        key = ddef["key"]
+        label = ddef["label"]
+        category = ddef["category"]
+        tbl = ddef["table"]
+        dc = ddef["date_col"]
+        fresh = ddef.get("fresh_days")
+        critical = bool(ddef.get("critical"))
+        column = ddef.get("column")
+
+        total = 0
+        max_date = None
+        try:
+            if column and hasattr(tbl, column):
+                total = int(
+                    db.scalar(select(func.count()).select_from(tbl).where(getattr(tbl, column).is_not(None)))
+                    or 0
+                )
+                max_date = db.scalar(select(func.max(getattr(tbl, dc))).where(getattr(tbl, column).is_not(None)))
+            else:
+                total = int(db.scalar(select(func.count()).select_from(tbl)) or 0)
+                if hasattr(tbl, dc):
+                    max_date = db.scalar(select(func.max(getattr(tbl, dc))))
+        except Exception as exc:
+            _rollback_session_safely(db)
+            logger.warning("数据域 %s 统计失败: %s", key, exc)
+            domains.append({
+                "key": key, "label": label, "category": category, "status": "error",
+                "total_rows": 0, "max_date": None, "critical": critical,
+                "fresh_window_days": fresh, "gap_days": None, "note": str(exc),
+            })
+            continue
+
+        max_date = _fmt_date(max_date)
+        # 月份型列（YYYYMM，如 券商金股 month）归一化为 YYYY-MM 便于展示
+        if max_date and len(max_date) == 6 and max_date.isdigit():
+            max_date = f"{max_date[:4]}-{max_date[4:]}"
+
+        gap_days: int | None = None
+        if total == 0:
+            status = "empty"
+            empty += 1
+            penalty += 2
+        elif fresh is None:
+            status = "covered"
+            covered += 1
+        else:
+            gap_cmp = max_date
+            if gap_cmp and len(gap_cmp) == 7:  # YYYY-MM（month 列）→ 补首日再比较
+                gap_cmp = gap_cmp + "-01"
+            gap = _date_diff(ref, gap_cmp) if ref else 999
+            gap_days = gap if (ref and gap != 999) else None
+            if gap != 999 and gap <= fresh:
+                status = "covered"
+                covered += 1
+            else:
+                status = "stale"
+                stale += 1
+                penalty += 3 if critical else 1
+
+        domains.append({
+            "key": key,
+            "label": label,
+            "category": category,
+            "status": status,
+            "total_rows": total,
+            "max_date": max_date,
+            "critical": critical,
+            "fresh_window_days": fresh,
+            "gap_days": gap_days if (fresh is not None and total > 0) else None,
+            "note": None,
+        })
+
+    # 按类别分组
+    by_cat: dict[str, list[dict[str, Any]]] = {}
+    for d in domains:
+        by_cat.setdefault(d["category"], []).append(d)
+    categories = []
+    for cat, items in by_cat.items():
+        categories.append({
+            "category": cat,
+            "domains": items,
+            "covered_count": sum(1 for i in items if i["status"] == "covered"),
+            "stale_count": sum(1 for i in items if i["status"] == "stale"),
+            "empty_count": sum(1 for i in items if i["status"] == "empty"),
+        })
+    # 有缺口（滞后/空）的类别排前面，便于一眼看到问题
+    categories.sort(key=lambda c: (c["empty_count"] + c["stale_count"] == 0, c["category"]))
+
+    total_domains = len(domains)
+    coverage_rate = round(covered / total_domains, 3) if total_domains else 0.0
+
+    return {
+        "categories": categories,
+        "total": total_domains,
+        "covered_count": covered,
+        "stale_count": stale,
+        "empty_count": empty,
+        "coverage_rate": coverage_rate,
+        "score_penalty": min(penalty, 15),
+        "reference_trade_date": reference_trade_date,
+        "empty_domains": [d for d in domains if d["status"] == "empty"],
+        "stale_domains": [d for d in domains if d["status"] == "stale"],
+    }
 
 
 def _find_issues(
@@ -426,6 +701,7 @@ def _find_issues(
     reference_trade_date: str | None,
     recent_coverage: dict[str, Any],
     reference_info: dict[str, str | None],
+    domain_summary: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """列出所有需要关注的问题。"""
     issues = []
@@ -487,6 +763,23 @@ def _find_issues(
                 f"{'，'.join(parts)}"
             ),
         })
+
+    # 数据域（指标级）覆盖缺口
+    if domain_summary:
+        empty = domain_summary.get("empty_domains") or []
+        stale = domain_summary.get("stale_domains") or []
+        if empty:
+            labels = "、".join(d.get("label") for d in empty)
+            issues.append({
+                "severity": "medium",
+                "message": f"数据域无数据（未接入 / 未拉取）共 {len(empty)} 个：{labels}",
+            })
+        if stale:
+            labels = "、".join(d.get("label") for d in stale)
+            issues.append({
+                "severity": "low",
+                "message": f"数据域接入但数据滞后共 {len(stale)} 个（策略未持续刷新）：{labels}",
+            })
 
     return issues
 

@@ -325,6 +325,12 @@ def enabled_sources(db: Session, source_type: str, configured_sources: list[str]
 
 
 def sync_data_source_configs(db: Session) -> None:
+    """对账数据源注册表：注册 desired（来自配置的实际接入策略），并清理孤儿行。
+
+    孤儿 = 存在于 DataSourceConfig / DataSourceHealth 但不在 desired 中的条目
+    （历史上多 provider 行情源等残留，当前代码仅实现了 tushare 等部分 provider）。
+    清理让注册表与实际策略保持一致。desired 是注册表的唯一真相源。
+    """
     settings = get_settings()
     desired = {
         "quote": _quote_sources(settings),
@@ -335,6 +341,8 @@ def sync_data_source_configs(db: Session) -> None:
         "dragon_tiger": _dragon_tiger_sources(settings),
         "news": _news_sources(settings),
     }
+    desired_set = {(src, st) for st, srcs in desired.items() for src in srcs}
+
     last_error: IntegrityError | None = None
     for _attempt in range(3):
         changed = False
@@ -348,6 +356,14 @@ def sync_data_source_configs(db: Session) -> None:
                     row.priority = index
                     row.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
                     changed = True
+        # 清理孤儿：注册表只保留 desired 中声明的 source×type，删除其余 config + 对应 health
+        for row in db.scalars(select(DataSourceConfig)).all():
+            if (row.source, row.source_type) not in desired_set:
+                health_row = db.get(DataSourceHealth, {"source": row.source, "source_type": row.source_type})
+                if health_row is not None:
+                    db.delete(health_row)
+                db.delete(row)
+                changed = True
         if not changed:
             return
         try:

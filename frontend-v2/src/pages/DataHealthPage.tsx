@@ -10,8 +10,12 @@ import {
 } from "lucide-react";
 import { api } from "../api/client";
 import type {
+  DataDomainCoverage,
+  DataDomainCategory,
+  DataDomainCoverageSummary,
   DataHealthDiagnostic,
   DataHealthRemediationResult,
+  DataSourceHealthSummary,
   ScheduledTaskRun,
 } from "../types";
 import { CardSkeleton, EmptyState, ErrorPage } from "../components/StateViews";
@@ -146,6 +150,8 @@ export function DataHealthSection() {
   const dsTitle = dsSummary
     ? `通 ${dsSummary.working_count ?? 0} · 不通 ${dsSummary.broken_count ?? 0} · 未测试 ${dsSummary.untested_count ?? 0} · 未启用 ${dsSummary.disabled_count ?? 0}`
     : "加载中…";
+
+  const domSummary = diag.data_domains;
 
   const tableRows = Object.entries(tables)
     .map(([key, info]) => ({
@@ -285,6 +291,50 @@ export function DataHealthSection() {
               </tbody>
             </table>
           </div>
+        </CollapsiblePanel>
+      )}
+
+      {/* 数据域接入覆盖 —— 指标级：哪些数据域有接入策略且持续拉取 */}
+      {domSummary && (
+        <CollapsiblePanel
+          kicker="数据域覆盖"
+          title={
+            <>
+              已接入 {domSummary.covered_count} · 滞后 {domSummary.stale_count} · 空 {domSummary.empty_count} · 覆盖率 {Math.round(domSummary.coverage_rate * 100)}%
+            </>
+          }
+          collapsedKey="data-health-domains"
+          actions={
+            domSummary.score_penalty ? (
+              <span className="text-muted" style={{ fontSize: "var(--text-sm)" }}>
+                评分 −{domSummary.score_penalty}
+              </span>
+            ) : (
+              <span style={{ fontSize: "var(--text-sm)", color: "#16a34a" }}>全覆盖</span>
+            )
+          }
+        >
+          <DomainCoverageSection summary={domSummary} />
+        </CollapsiblePanel>
+      )}
+
+      {/* 数据源接入 —— 通 / 不通 / 未测试 / 未启用，计入健康评分 */}
+      {dsSummary && (
+        <CollapsiblePanel
+          kicker="数据源接入"
+          title={dsTitle}
+          collapsedKey="data-health-sources"
+          actions={
+            dsSummary.score_penalty ? (
+              <span className="text-muted" style={{ fontSize: "var(--text-sm)" }}>
+                评分 −{dsSummary.score_penalty}
+              </span>
+            ) : (
+              <span style={{ fontSize: "var(--text-sm)", color: "var(--market-down)" }}>全部通畅</span>
+            )
+          }
+        >
+          <DataSourceSection summary={dsSummary} />
         </CollapsiblePanel>
       )}
 
@@ -445,6 +495,178 @@ function IssueList({
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ─── 数据源接入分组 ───────────────────────────────────────────────
+type SourceEntry = {
+  source: string;
+  source_type: string;
+  status: string;
+  enabled?: boolean;
+  last_error?: string | null;
+};
+
+function SourceRow({ entry, tone }: { entry: SourceEntry; tone: "up" | "down" | "warn" | "muted" }) {
+  const color =
+    tone === "up" ? "#16a34a" : tone === "down" ? "#dc2626" : tone === "warn" ? "#d97706" : "var(--text-muted)";
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "var(--space-2)",
+        padding: "var(--space-1) var(--space-2)",
+        background: "var(--surface-soft)",
+        borderRadius: "var(--radius-sm)",
+        fontSize: "var(--text-sm)",
+        color: "var(--ink-secondary)",
+      }}
+    >
+      <span style={{ width: 7, height: 7, borderRadius: "50%", background: color, flex: "0 0 auto" }} />
+      <span className="text-mono" style={{ fontWeight: 600 }}>
+        {entry.source}
+      </span>
+      <span className="text-muted">{entry.source_type}</span>
+      {entry.last_error && tone === "down" && (
+        <span
+          className="text-muted"
+          style={{ marginLeft: "auto", maxWidth: "55%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          title={entry.last_error}
+        >
+          {entry.last_error}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function SourceGroup({ label, tone, items }: { label: string; tone: "up" | "down" | "warn" | "muted"; items?: SourceEntry[] }) {
+  if (!items || items.length === 0) return null;
+  const color =
+    tone === "up" ? "#16a34a" : tone === "down" ? "#dc2626" : tone === "warn" ? "#d97706" : "var(--text-muted)";
+  return (
+    <div style={{ marginBottom: "var(--space-3)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)", fontSize: "var(--text-sm)", fontWeight: 600, color, marginBottom: "var(--space-1)" }}>
+        {label} · {items.length}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {items.map((it, idx) => (
+          <SourceRow key={idx} entry={it} tone={tone} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DataSourceSection({ summary }: { summary: DataSourceHealthSummary }) {
+  return (
+    <div>
+      <div className="text-muted" style={{ fontSize: "var(--text-sm)", marginBottom: "var(--space-2)" }}>
+        共 {summary.total ?? 0} 个数据源接入策略：
+        <span style={{ color: "#16a34a" }}> {summary.working_count ?? 0} 个通畅</span>
+        {summary.broken_count ? (
+          <>,<span style={{ color: "#dc2626" }}> {summary.broken_count} 个不通（已扣分）</span></>
+        ) : null}
+        {summary.untested_count ? <>, {summary.untested_count} 个未测试</> : null}
+        {summary.disabled_count ? <>, {summary.disabled_count} 个未启用</> : null}。
+      </div>
+      <SourceGroup label="通" tone="up" items={summary.working_sources} />
+      <SourceGroup label="不通" tone="down" items={summary.broken_sources} />
+      <SourceGroup label="未测试" tone="warn" items={summary.untested_sources} />
+      <SourceGroup label="未启用" tone="muted" items={summary.disabled_sources} />
+    </div>
+  );
+}
+
+// ─── 数据域接入覆盖分组 ───────────────────────────────────────────
+const DOMAIN_STATUS_META: Record<string, { color: string; label: string }> = {
+  covered: { color: "#16a34a", label: "已接入" },
+  stale: { color: "#d97706", label: "滞后" },
+  empty: { color: "#dc2626", label: "空" },
+  error: { color: "#dc2626", label: "异常" },
+};
+
+function DomainRow({ d }: { d: DataDomainCoverage }) {
+  const meta = DOMAIN_STATUS_META[d.status] ?? DOMAIN_STATUS_META.empty;
+  const gapText =
+    d.status === "stale" && d.gap_days != null
+      ? `滞后 ${d.gap_days}d`
+      : d.fresh_window_days != null && d.status === "covered"
+        ? `窗口 ${d.fresh_window_days}d`
+        : "";
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "var(--space-2)",
+        padding: "var(--space-1) var(--space-2)",
+        background: "var(--surface-soft)",
+        borderRadius: "var(--radius-sm)",
+        fontSize: "var(--text-sm)",
+        color: "var(--ink-secondary)",
+      }}
+    >
+      <span style={{ width: 7, height: 7, borderRadius: "50%", background: meta.color, flex: "0 0 auto" }} />
+      <span style={{ fontWeight: 600 }}>{d.label}</span>
+      {d.critical && <span className="text-muted" title="关键数据域">·关</span>}
+      <span className="text-muted" style={{ marginLeft: "auto" }}>
+        {d.max_date || "—"}
+      </span>
+      <span className="text-mono" style={{ minWidth: 56, textAlign: "right" }}>
+        {d.total_rows.toLocaleString()} 行
+      </span>
+      {gapText && (
+        <span style={{ minWidth: 64, textAlign: "right", color: meta.color }}>{gapText}</span>
+      )}
+    </div>
+  );
+}
+
+function DomainCategoryGroup({ cat }: { cat: DataDomainCategory }) {
+  const hasGap = cat.stale_count + cat.empty_count > 0;
+  return (
+    <div style={{ marginBottom: "var(--space-3)" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--space-1)",
+          fontSize: "var(--text-sm)",
+          fontWeight: 600,
+          color: hasGap ? "var(--warning)" : "var(--ink-secondary)",
+          marginBottom: "var(--space-1)",
+        }}
+      >
+        {cat.category}
+        <span className="text-muted" style={{ fontWeight: 400 }}>
+          （{cat.covered_count} 已接入
+          {cat.stale_count ? ` · ${cat.stale_count} 滞后` : ""}
+          {cat.empty_count ? ` · ${cat.empty_count} 空` : ""}）
+        </span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {cat.domains.map((d) => (
+          <DomainRow key={d.key} d={d} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DomainCoverageSection({ summary }: { summary: DataDomainCoverageSummary }) {
+  return (
+    <div>
+      <div className="text-muted" style={{ fontSize: "var(--text-sm)", marginBottom: "var(--space-2)" }}>
+        共 {summary.total} 个数据域（指标级）。覆盖率按「有数据且在刷新窗口内」计算；
+        <span style={{ color: "#d97706" }}> 滞后</span> = 接入过但策略未持续刷新，
+        <span style={{ color: "#dc2626" }}> 空</span> = 无数据（未接入 / 未拉取）。
+      </div>
+      {summary.categories.map((cat) => (
+        <DomainCategoryGroup key={cat.category} cat={cat} />
+      ))}
     </div>
   );
 }
