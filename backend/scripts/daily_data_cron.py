@@ -36,6 +36,11 @@ def backfill_auxiliary_data(db, pro):
     from sqlalchemy import func, select
     from app.models.tables import CapitalFlow, LimitUpBoard, IndexDaily, ConceptSector
     from scripts.backfill_moneyflow_concept import backfill_moneyflow, backfill_concept_sector, compute_cumulative_inflows
+    from scripts.backfill_auxiliary_data import (
+        backfill_margin, backfill_hk_hold, backfill_stk_limit,
+        backfill_broker_recommend, backfill_news,
+        backfill_concept_sectors, backfill_chip, _get_top_n_codes_by_market_cap,
+    )
 
     end_date = date.today().isoformat()
     start_date = (date.today() - timedelta(days=10)).isoformat()
@@ -72,6 +77,61 @@ def backfill_auxiliary_data(db, pro):
         r = backfill_index_daily(pro, db, start_date, end_date)
         results["index_daily"] = r
         logger.info("  index_daily: +%d", r.get("stored", 0))
+
+    # 5. 扩充的 Tushare 数据域（此前未纳入每日同步，长期 stale）
+    #    仅覆盖市值前 N 的股票，控制代理配额与运行时长；每个域独立容错，
+    #    单个域失败不影响其余域与整体维护流程。
+    top_codes = _get_top_n_codes_by_market_cap(db, n=300, trade_date=end_date)
+    logger.info("  扩充域目标股票数: %d", len(top_codes))
+
+    try:
+        r = backfill_stk_limit(db, top_codes, trade_date=end_date)
+        results["stk_limit"] = r
+        logger.info("  stk_limit(涨跌停价): +%d", r)
+    except Exception as e:
+        logger.warning("  stk_limit 回填失败: %s", str(e)[:80])
+
+    try:
+        r = backfill_margin(db, top_codes, days=5, trade_date=end_date)
+        results["margin"] = r
+        logger.info("  margin(融资融券): +%d", r)
+    except Exception as e:
+        logger.warning("  margin 回填失败: %s", str(e)[:80])
+
+    try:
+        r = backfill_hk_hold(db, top_codes, trade_date=end_date)
+        results["hk_hold"] = r
+        logger.info("  hk_hold(港股通持股): +%d", r)
+    except Exception as e:
+        logger.warning("  hk_hold 回填失败: %s", str(e)[:80])
+
+    try:
+        r = backfill_chip(db, top_codes, days=5, trade_date=end_date)
+        results["chip"] = r
+        logger.info("  chip(筹码峰): +%d", r)
+    except Exception as e:
+        logger.warning("  chip 回填失败: %s", str(e)[:80])
+
+    try:
+        r = backfill_broker_recommend(db, months=3, trade_date=end_date)
+        results["broker_recommend"] = r
+        logger.info("  broker_recommend(券商金股): +%d", r)
+    except Exception as e:
+        logger.warning("  broker_recommend 回填失败: %s", str(e)[:80])
+
+    try:
+        r = backfill_news(db, top_n=300, trade_date=end_date)
+        results["news"] = r
+        logger.info("  news(新闻公告): +%d", r)
+    except Exception as e:
+        logger.warning("  news 回填失败: %s", str(e)[:80])
+
+    try:
+        r = backfill_concept_sectors(db, trade_date=end_date)
+        results["concept_member"] = r
+        logger.info("  concept_member(概念板块成分): +%d 板块", r)
+    except Exception as e:
+        logger.warning("  concept_member 回填失败: %s", str(e)[:80])
 
     return results
 

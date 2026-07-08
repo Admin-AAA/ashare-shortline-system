@@ -14,11 +14,15 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
+import random
 import threading
 import time
 from collections import deque
 from datetime import date, timedelta
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 import pandas as pd
 import requests
@@ -33,6 +37,34 @@ _CUSTOM_URL = "https://fastapic.stockai888.top/"
 _RATE_LIMIT_LOCK = threading.Lock()
 _RATE_TIMESTAMPS: deque[float] = deque()
 _RATE_LIMIT_PER_MINUTE = 90  # 留 10 次 buffer，避免边界 429
+
+
+# ═════════════════════════════════════════════════════════════════
+# 失败重试 + 指数退避（缓解代理服务器不稳定 / Read timed out）
+# ═════════════════════════════════════════════════════════════════
+
+_MAX_RETRIES = 4           # 最多尝试次数（1 次 + 3 次重试）
+_BASE_BACKOFF = 2.0        # 基础退避秒数
+_MAX_BACKOFF = 30.0        # 单次退避上限
+# 服务端过载 / 限流状态码可重试
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+# 仅网络层瞬时错误可重试；业务错误（权限/积分）由 caller 单独抛出
+_RETRYABLE_EXC = (
+    requests.exceptions.Timeout,
+    requests.exceptions.ConnectionError,
+    requests.exceptions.ProxyError,
+    requests.exceptions.ChunkedEncodingError,
+)
+
+
+def _backoff_sleep(api_name: str, attempt: int, reason: str) -> None:
+    """指数退避 + 抖动，避免代理/限流时请求尖峰。"""
+    backoff = min(_MAX_BACKOFF, _BASE_BACKOFF * (2 ** attempt)) + random.uniform(0, 0.5)
+    logger.warning(
+        "Tushare %s 第%d次请求失败(%s)，%.1fs 后退避重试",
+        api_name, attempt + 1, reason, backoff,
+    )
+    time.sleep(backoff)
 
 
 def _rate_limit_wait() -> None:
@@ -75,26 +107,47 @@ class _TushareSession:
             raise AttributeError(api_name)
 
         def caller(**params: Any) -> pd.DataFrame:
-            _rate_limit_wait()
-            r = self._session.post(
-                f"{self._url}{api_name}",
-                json={
-                    "api_name": api_name,
-                    "token": self._token,
-                    "params": params,
-                    "fields": "",
-                },
-                timeout=self._timeout,
-            )
-            r.raise_for_status()
-            d = r.json()
-            if d.get("code") != 0:
-                msg = d.get("msg", "Unknown error")
-                raise RuntimeError(f"Tushare {api_name}: {msg}")
-            data = d.get("data")
-            if not data or "items" not in data or not data["items"]:
-                return pd.DataFrame()
-            return pd.DataFrame(data["items"], columns=data["fields"])
+            last_exc: Exception | None = None
+            for attempt in range(_MAX_RETRIES):
+                try:
+                    _rate_limit_wait()
+                    r = self._session.post(
+                        f"{self._url}{api_name}",
+                        json={
+                            "api_name": api_name,
+                            "token": self._token,
+                            "params": params,
+                            "fields": "",
+                        },
+                        timeout=self._timeout,
+                    )
+                    status = r.status_code
+                    if status != 200:
+                        r.close()
+                        # 429/5xx 视为可重试的服务端/限流错误；其余 4xx 直接抛出
+                        if status in _RETRYABLE_STATUS and attempt < _MAX_RETRIES - 1:
+                            _backoff_sleep(api_name, attempt, f"HTTP {status}")
+                            continue
+                        r.raise_for_status()
+                    d = r.json()
+                    if d.get("code") != 0:
+                        # 业务错误（权限/积分不足等）不可重试，立即抛出
+                        raise RuntimeError(f"Tushare {api_name}: {d.get('msg', 'Unknown error')}")
+                    data = d.get("data")
+                    if not data or "items" not in data or not data["items"]:
+                        return pd.DataFrame()
+                    return pd.DataFrame(data["items"], columns=data["fields"])
+                except _RETRYABLE_EXC as e:
+                    # 网络超时 / 连接 / 代理错误：指数退避重试
+                    last_exc = e
+                    if attempt < _MAX_RETRIES - 1:
+                        _backoff_sleep(api_name, attempt, type(e).__name__)
+                        continue
+                    logger.error("Tushare %s 重试 %d 次仍失败: %s", api_name, _MAX_RETRIES, e)
+                    raise
+            if last_exc:
+                raise last_exc
+            return pd.DataFrame()  # 理论不可达
 
         return caller
 
@@ -506,12 +559,16 @@ def fetch_moneyflow(code: str, days: int = 10, trade_date: str | None = None) ->
 
 
 def fetch_limit_up_board(trade_date: str | None = None) -> list[dict[str, Any]]:
-    """获取涨停板榜单。trade_date 格式 YYYYMMDD，默认最新交易日。"""
+    """获取涨停板榜单。trade_date 格式 YYYYMMDD，默认最新交易日。
+
+    limit_type: U=涨停 D=跌停 Z=炸板（曾涨停后打开）
+    炸板数据用于短线情绪温度计（炸板率=炸板数/(涨停数+炸板数)）。
+    """
     pro = get_pro()
     td = _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
     result: list[dict[str, Any]] = []
     errors: list[str] = []
-    for limit_type in ("U", "D"):
+    for limit_type in ("U", "D", "Z"):
         try:
             df = pro.limit_list_d(trade_date=td, limit_type=limit_type)
             if df is None or df.empty:

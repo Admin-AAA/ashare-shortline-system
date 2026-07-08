@@ -766,6 +766,55 @@ def backfill_stk_limit(db: Session, codes: list[str], trade_date: str | None = N
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+def backfill_chip(db: Session, codes: list[str], days: int = 5, trade_date: str | None = None) -> int:
+    """刷新筹码分布（Tushare cyq_perf），增量更新 DailyKbar 的 chip_* 列。
+
+    筹码数据嵌在日K表里，只有最近交易日才有意义；这里只更新 top 代码
+    最近 N 天的 chip 字段，开销低，适合纳入每日同步。
+    """
+    from sqlalchemy import update as sa_update
+    from app.services.tushare_client import get_pro, ts_code, _f
+
+    target_trade_date = _resolve_snapshot_trade_date(db, trade_date)
+    end = date.fromisoformat(target_trade_date)
+    start = end - timedelta(days=days * 2)
+    sd = start.strftime("%Y%m%d")
+    ed = end.strftime("%Y%m%d")
+
+    logger.info("── 开始刷新筹码分布 (%s 起 %d 天) ──", target_trade_date, days)
+    pro = get_pro()
+    total = 0
+    for i, code in enumerate(codes):
+        try:
+            df = pro.cyq_perf(ts_code=ts_code(code), start_date=sd, end_date=ed)
+            if df is None or df.empty:
+                continue
+            for _, row in df.iterrows():
+                td = _normalize_trade_date(str(row.get("trade_date")))
+                if td > target_trade_date:
+                    continue
+                db.execute(
+                    sa_update(DailyKbar)
+                    .where(DailyKbar.code == code, DailyKbar.trade_date == td)
+                    .values(
+                        chip_cost_15=_f(row.get("cost_15pct")),
+                        chip_cost_50=_f(row.get("cost_50pct")),
+                        chip_cost_85=_f(row.get("cost_85pct")),
+                        chip_weight_avg=_f(row.get("weight_avg")),
+                        chip_winner_rate=_f(row.get("winner_rate")),
+                    )
+                )
+                total += 1
+        except Exception as e:
+            logger.debug("筹码分布 %s 失败: %s", code, e)
+        if (i + 1) % 100 == 0:
+            db.commit()
+            logger.info("  筹码进度: %d/%d (累计 %d 条)", i + 1, len(codes), total)
+    db.commit()
+    logger.info("筹码分布刷新完成: 共 %d 条", total)
+    return total
+
+
 def backfill_minute_kbars(db: Session, codes: list[str], trade_date: str | None = None) -> int:
     """回填当日分钟K线（腾讯 ifzq API）。"""
     from app.services.tushare_client import fetch_minute_kbars
