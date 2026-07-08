@@ -43,86 +43,10 @@
 ### 每轮自检（选任务前必做）
 
 ```bash
-cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && python3 -c "
-from app.db.session import SessionLocal
-from sqlalchemy import text
-db = SessionLocal()
-
-# A 项：最近 7 天 formal 推荐
-r = db.execute(text(\"\"\"
-SELECT trade_date, run_mode, status, recommended_count
-FROM recommendation_runs
-WHERE run_mode='formal' AND started_at > DATE_SUB(NOW(), INTERVAL 7 DAY)
-ORDER BY started_at DESC
-\"\"\")).fetchall()
-print('=== 最近 7 天 formal run ===')
-for row in r:
-    print(f'  {row[0]} {row[1]} {row[2]} rec_n={row[3]}')
-ok = [row for row in r if row[2]=='completed' and row[3]>0]
-print(f'A 项：最近 7 天有 {len(ok)} 个交易日产出 formal 推荐（目标 ≥5）')
-intp = [row for row in r if row[2]=='interrupted']
-if intp: print(f'⚠️ {len(intp)} 个 interrupted run')
-
-# B 项：最近推荐字段完整性（五项决策链：策略名+核心因子+入场/失效+LLM delta）
-r = db.execute(text(\"\"\"
-SELECT final_score, bucket, setup_type, entry_rule, invalid_rule,
-       JSON_EXTRACT(feature_snapshot_json, '\$.avg_cost') AS avg_cost,
-       JSON_EXTRACT(agent_summary_json, '\$.score_delta') AS llm_delta,
-       JSON_EXTRACT(agent_summary_json, '\$.stance') AS llm_stance
-FROM recommendations ORDER BY recommended_at DESC LIMIT 1
-\"\"\")).fetchone()
-if r:
-    fields = {'策略名(bucket)': r[1], '核心因子(avg_cost)': r[5], '入场规则': r[3], '失效规则': r[4], 'LLM delta': r[6]}
-    missing = [k for k,v in fields.items() if not v]
-    print(f'B 项：score={r[0]} bucket={r[1]} setup={r[2]} stance={r[7]} llm_delta={r[6]} 缺失={missing if missing else \"无\"}')
-
-# C 项：策略命中
-r = db.execute(text(\"\"\"
-SELECT JSON_EXTRACT(skill_breakdown_json, '\$[*].strategy_id') AS skills
-FROM recommendations r JOIN recommendation_runs u ON r.run_id=u.run_id
-WHERE u.run_mode='formal' AND r.skill_breakdown_json IS NOT NULL
-\"\"\")).fetchall()
-import json
-skills = set()
-for row in r:
-    try:
-        arr = json.loads(row[0]) if isinstance(row[0], str) else row[0]
-        if isinstance(arr, list): skills.update(arr)
-    except: pass
-print(f'C 项：formal 命中策略 {len(skills)} 个: {sorted(skills)}')
-
-# E 项：策略覆盖盲区 + 低胜率标记
-import os
-registered = sorted([d for d in os.listdir('/Users/wangao/Desktop/ashare-shortline-system/backend/skills')
-                     if os.path.isdir(f'/Users/wangao/Desktop/ashare-shortline-system/backend/skills/{d}')])
-blind = [s for s in registered if s not in skills]
-print(f'E 项覆盖盲区：{len(blind)} 个策略近 60 天 formal 0 命中: {blind}')
-r = db.execute(text('''
-WITH strategy_hits AS (
-  SELECT jt.strategy_id, o.outcome_label, o.executed_return
-  FROM recommendations r JOIN recommendation_runs u ON r.run_id=u.run_id
-  LEFT JOIN recommendation_outcomes o ON o.recommendation_id=r.recommendation_id
-  JOIN JSON_TABLE(r.skill_breakdown_json, '\$[*]' COLUMNS(strategy_id VARCHAR(80) PATH '\$.strategy_id')) jt
-  WHERE r.skill_breakdown_json IS NOT NULL AND o.outcome_label IN ('success','failed')
-)
-SELECT strategy_id, COUNT(*) n,
-       SUM(CASE WHEN outcome_label='success' THEN 1 ELSE 0 END) wins,
-       ROUND(AVG(executed_return)*100,2) avg_ret
-FROM strategy_hits GROUP BY strategy_id HAVING n < 50 OR wins*100/COUNT(*) < 45
-ORDER BY wins*100/COUNT(*) ASC
-''')).fetchall()
-print('E 项低覆盖(n<50)或低胜率(<45%)策略:')
-for row in r:
-    wr = round(row[2]*100/row[1],1)
-    print(f'  {row[0]}: n={row[1]} wins={row[2]} avg_ret={row[3]}% winrate={wr}% ←{\"低胜率\" if wr<45 else \"低覆盖\"}需标记')
-
-# D 项：核心指标
-r = db.execute(text('SELECT COUNT(*), SUM(CASE WHEN outcome_label=\"success\" THEN 1 ELSE 0 END) FROM recommendation_outcomes WHERE outcome_label IN (\"success\",\"failed\")')).fetchone()
-print(f'D 项：胜率 {round(r[1]*100/r[0],1)}% （LIVE 基线 61.5%，明显下滑触发修复）')
-r = db.execute(text('SELECT ROUND(MIN(executed_return),2) FROM recommendation_outcomes WHERE outcome_label IN (\"success\",\"failed\")')).fetchone()
-print(f'D 项：最大亏损 {r[0]}% （基线 -5.80%，恶化即触发）')
-"
+cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && python3 ../scripts/self_check.py
 ```
+
+脚本输出 A/B/C/D/E 五项北极星指标摘要，直接据此选任务。
 
 ### 选任务规则
 
@@ -220,6 +144,7 @@ cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && \
 
 ### 3. 实施改动
 直接在主工作树 `~/Desktop/ashare-shortline-system` 改（单实例，无需 worktree 隔离）。策略改 `strategy.yaml`；代码改 Python/TS；DB 只做 additive（加索引/列）；前端只改 `frontend-v2/`。**每次改动后运行测试**确认无回归。**一个完整功能在一个 commit 里完成**（实现+测试+验证），禁止拆成"实现/测试/验证"三个 commit。
+**工作树未提交改动处理**：若目标文件已有会话前未提交改动（`git diff` 显示非本轮的 hunks），用 `git apply --cached <patch>` 精确 stage 自己的 hunks，不替别人提交未完成工作；无法分离时把改动保留在工作树 + 日志记录"待一起提交"，不强行 commit。
 
 ### 4. 验证
 **基础**：pytest 无回归；改策略跑回测对比；改性能对比查询耗时；改前端 `cd frontend-v2 && npm run build` 无报错。
@@ -269,12 +194,10 @@ open(p,'a').write('''
 
 - 不要删除数据库表或清空数据
 - 不要修改 `.env` 中的 token/key
-- 不要直接修改 `daily_kbars` 表结构（只能加索引）
 - 不要在没跑测试的情况下提交改动
 - 不要跳过验证步骤——用户可见任务必须端到端验收
 - **不要问用户问题**——自己调研、决策、执行
 - **不要改 `frontend/`（旧版遗留）**——所有前端改动只改 `frontend-v2/`
-- **不要碎片化 commit**——一个完整功能一个 commit
 - **不要用 `/loop` 跑 self-improve**——会撞 1M input limit。定时触发由 launchd + `scripts/run-self-improve.sh` 负责（新会话模式）
 - **不要打断正在跑的 formal run**——重启后端前先查 `recommendation_runs` 是否有 `status=running` 的 formal run，有就等它完成
 - **不要把回测胜率当唯一北极星**——A/B/C/D 四项并重。D 项是监控指标（下滑告警，不为刷数字而刷）
