@@ -284,7 +284,7 @@ def query_stock_detail(code: str, session_id: str) -> dict:
             if main_net_flow is not None:
                 result["main_net_flow"] = round(_num(main_net_flow), 3)
 
-            # ── DSA 关键字段（从 stocks_cache 补充，防止 Agent 凭空推断 ──
+            # ── 基础短线策略关键字段（从 stocks_cache 补充，防止 Agent 凭空推断 ──
             stock_cached = ctx.stocks_cache.get(code) if ctx is not None and ctx.stocks_cache else None
             if stock_cached:
                 for dsa_key in (

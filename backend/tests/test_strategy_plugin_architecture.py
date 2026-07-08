@@ -629,7 +629,7 @@ def test_all_skill_md_have_agent_output_constraints():
 
     回归保护：第 101-102 轮 T9 给 5 个 B 类 SKILL.md 补齐输出约束，
     防止未来新增/修改 SKILL.md 时遗漏输出格式指导，导致 LLM agent 输出字段不一致。
-    A 类 SKILL.md（DSA/chao-gu-yang-jia/chen-xiaoqun）自有 stance 表，B 类引用 SkillReviewOutput schema。
+    A 类 SKILL.md（基础短线策略/chao-gu-yang-jia/chen-xiaoqun）自有 stance 表，B 类引用 SkillReviewOutput schema。
     """
     from pathlib import Path
 

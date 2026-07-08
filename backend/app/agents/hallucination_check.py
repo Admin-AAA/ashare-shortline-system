@@ -410,7 +410,7 @@ def _is_calculated_number(num_str: str, context: str) -> bool:
     if _re.search(rf"\d+\s*[-~至到]\s*{_re.escape(num_str)}", context):
         return True
 
-    # Pattern 1.6: well-known DSA/indicator thresholds referenced as rubric
+    # Pattern 1.6: well-known 基础短线策略/indicator thresholds referenced as rubric
     # boundaries, not external market facts.
     if ("RSI" in context or "rsi" in context) and num_str in {"6", "12", "24", "30", "40", "50", "70", "80"}:
         return True

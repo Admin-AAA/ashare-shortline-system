@@ -747,7 +747,7 @@ def test_default_presets_do_not_overwrite_user_skill_selection(production_mysql)
                 ),
                 SkillRegistry(
                     skill_id="daily-stock-analysis-skill",
-                    name="DSA分析",
+                    name="基础短线策略",
                     source_type="local",
                     installed_path="skills/daily-stock-analysis-skill",
                     current_version="1.0.0",
@@ -776,7 +776,7 @@ def test_default_presets_do_not_overwrite_user_skill_selection(production_mysql)
         db.add(
             Preset(
                 preset_id="preset_experiment_dsa",
-                name="DSA 单 Skill 实验",
+                name="基础短线策略单 Skill 实验",
                 market_scope="all",
                 risk_template="balanced",
                 output_count=6,

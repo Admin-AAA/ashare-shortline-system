@@ -1,5 +1,5 @@
 """
-Calibrate recommendation aggregation weights and DSA sub-score weights
+Calibrate recommendation aggregation weights and 基础短线策略 sub-score weights
 from historical labeled outcomes.
 
 Usage:
@@ -88,17 +88,17 @@ def main() -> None:
             agg_result.get("optimal_weights", DEFAULT_AGG_WEIGHTS),
         )
 
-        print("\n  Running DSA weight calibration...")
+        print("\n  Running 基础短线策略 weight calibration...")
         dsa_result = calibrate_dsa_weights(db)
         print(f"  Samples: {dsa_result['sample_count']}")
         if "error" in dsa_result:
             print(f"  WARNING: {dsa_result['error']}")
         else:
             correlations = dsa_result.get("correlations", {})
-            print(f"  DSA correlations: {correlations}")
+            print(f"  基础短线策略 correlations: {correlations}")
 
         print_comparison(
-            "DSA Sub-Score Weights",
+            "基础短线策略 Sub-Score Weights",
             dsa_result.get("default_weights", DEFAULT_DSA_WEIGHTS),
             dsa_result.get("optimal_weights", DEFAULT_DSA_WEIGHTS),
         )

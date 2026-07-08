@@ -417,7 +417,7 @@ def _build_user_prompt(
 def _compact_stock(stock: dict[str, Any]) -> dict[str, Any]:
     """精简股票字段，只传关键信息给 Agent。
 
-    关键补充：DSA 评分字段（support_ma5/support_ma10/dsa_support_score/
+    关键补充：基础短线策略评分字段（support_ma5/support_ma10/dsa_support_score/
     trend_status/ma_alignment/macd_status/rsi_status）与共享短线因子必须传入，
     防止 Agent 在没有数据情况下凭空推断"MA5支撑确认"等结论。
     """
@@ -453,7 +453,7 @@ def _compact_stock(stock: dict[str, Any]) -> dict[str, Any]:
         "main_net_inflow_yi", "main_net_inflow_ratio",
         "super_large_net_inflow_yi", "large_net_inflow_yi", "small_net_inflow_yi",
         "latest_news", "news_risk_count", "positive_catalyst_count",
-        # DSA 评分关键字段（防止 Agent 幻觉）
+        # 基础短线策略评分关键字段（防止 Agent 幻觉）
         "support_ma5", "support_ma10", "dsa_support_score",
         "dsa_trend_score", "dsa_bias_score", "dsa_volume_score",
         "dsa_macd_score", "dsa_rsi_score", "dsa_signal_score",

@@ -70,7 +70,7 @@ def _seed_skill_registry(db: Session):
     """Seed minimal SkillRegistry rows for test skills."""
     for skill_id, name, mode in [
         ("chen-xiaoqun-skill", "陈小群", "formal"),
-        ("daily-stock-analysis-skill", "DSA分析", "formal"),
+        ("daily-stock-analysis-skill", "基础短线策略", "formal"),
         ("chao-gu-yang-jia-skill", "炒股养家", "experiment"),
     ]:
         if not db.get(SkillRegistry, skill_id):
@@ -1327,7 +1327,7 @@ class TestE2ERecommendationFlow:
         from app.services import workbench_service
 
         _seed_skill_registry(db)
-        skill = _mock_skill("daily-stock-analysis-skill", "DSA分析")
+        skill = _mock_skill("daily-stock-analysis-skill", "基础短线策略")
         monkeypatch.setattr(workbench_service, "sync_skills", lambda _db: [skill])
 
         queued: list[tuple[str, dict]] = []
@@ -1365,7 +1365,7 @@ class TestE2ERecommendationFlow:
 
         run_name = f"同步失败测试-{uuid.uuid4().hex[:8]}"
         _seed_skill_registry(db)
-        skill = _mock_skill("daily-stock-analysis-skill", "DSA分析")
+        skill = _mock_skill("daily-stock-analysis-skill", "基础短线策略")
         monkeypatch.setattr(workbench_service, "sync_skills", lambda _db: [skill])
 
         def fail_market(_db, refresh=False):

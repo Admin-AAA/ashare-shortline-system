@@ -1,4 +1,4 @@
-"""Tests for DSA scoring, risk scoring, shared factors, and authenticity."""
+"""Tests for 基础短线策略 scoring, risk scoring, shared factors, and authenticity."""
 from app.services.feature_builder import (
     TREND_SCORE_MAP,
     VOLUME_SCORE_MAP,
@@ -94,7 +94,7 @@ def test_market_regime_score_range_friendly():
 
 
 # ---------------------------------------------------------------------------
-# DSA scoring
+# 基础短线策略 scoring
 # ---------------------------------------------------------------------------
 
 def test_dsa_trend_score_bullish():
@@ -367,7 +367,8 @@ def test_tag_features_synthetic():
     item = _stock(concentration_90=13.5, revenue_yoy=12.0)
     _tag_features(item)
     tags = item.get("_feature_tags", {})
-    assert tags.get("concentration_90") == "ESTIMATED"
+    # concentration_90 现已接入 cyq_perf 真实数据源（_OBSERVABLE_FIELDS），无缺失时标 OBSERVED
+    assert tags.get("concentration_90") == "OBSERVED"
     # revenue_yoy is now OBSERVED (real financial data from fina_indicator)
     assert tags.get("revenue_yoy") == "OBSERVED"
 

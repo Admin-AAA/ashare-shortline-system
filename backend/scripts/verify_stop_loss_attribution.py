@@ -1,7 +1,7 @@
 """stop_loss_hit 失败归因分析（T3 失败归因闭环）。
 
 结论（2026-07-06）:
-- 86 笔 stop_loss_hit（去重后），100% setup=None（DSA 非 setup 驱动，非问题）
+- 86 笔 stop_loss_hit（去重后），100% setup=None（基础短线策略非 setup 驱动，非问题）
 - 弱势 regime WR=75.0% 反而最高（超跌反弹是 alpha 来源）
 - 强势 regime WR=37.9% 最低（追高必亏），aggregator 已加 +8 分过滤
 - off_high>=-3% WR=84.3% 最高（动量延续），off_high<-8% WR=70.3%（深回撤也不差）
@@ -45,7 +45,7 @@ def main() -> int:
         wr = round(w * 100 / c, 1) if c else 0
         print(f"  {regime}: {c}笔 WR={wr}% avg={avg}%")
 
-    # DSA 按 regime 分组（对比）
+    # 基础短线策略按 regime 分组（对比）
     rows2 = db.execute(text(
         "SELECT "
         "  JSON_EXTRACT(r.feature_snapshot_json, '$.market_regime') as regime, "
@@ -59,7 +59,7 @@ def main() -> int:
         "GROUP BY regime ORDER BY c DESC"
     )).all()
 
-    print("\n=== DSA 按 regime 分组（全量对比）===")
+    print("\n=== 基础短线策略按 regime 分组（全量对比）===")
     for regime, c, w, avg in rows2:
         reg = str(regime).strip('"')
         wr = round(w * 100 / c, 1) if c else 0

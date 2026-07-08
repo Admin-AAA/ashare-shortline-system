@@ -387,7 +387,7 @@ def _compact_stock(stock: dict[str, Any]) -> dict[str, Any]:
         "small_net_inflow_yi",
         "main_net_inflow_yi",
         "main_net_inflow_ratio",
-        # DSA 评分关键字段（防止 Agent 凭空推断"MA5支撑确认"等）
+        # 基础短线策略评分关键字段（防止 Agent 凭空推断“MA5支撑确认”等）
         "support_ma5", "support_ma10", "dsa_support_score",
         "trend_status", "ma_alignment",
         "macd_status", "macd_signal",

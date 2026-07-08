@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""校准权重：用 recommendation_outcomes 数据优化 aggregator 和 DSA 权重。
+"""校准权重：用 recommendation_outcomes 数据优化 aggregator 和基础短线策略权重。
 
 用法:
     python scripts/calibrate_weights.py              # 仅显示结果
@@ -34,7 +34,7 @@ def main():
             delta = v - default_v
             print(f"  {k}: {default_v:.4f} → {v:.4f} ({delta:+.4f})")
 
-        print("\n=== DSA 子分数权重校准 ===")
+        print("\n=== 基础短线策略子分数权重校准 ===")
         dsa = calibrate_dsa_weights(db)
         print(f"样本量: {dsa.get('sample_count', 0)}")
         print(f"最优权重:")

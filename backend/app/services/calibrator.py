@@ -359,7 +359,7 @@ def _point_biserial_corr(scores: list[float], labels: list[int]) -> float:
 
 
 def calibrate_dsa_weights(db: Session) -> dict[str, Any]:
-    """Calibrate DSA sub-score weights using point-biserial correlation with success.
+    """Calibrate 基础短线策略 sub-score weights using point-biserial correlation with success.
 
     Returns dict with optimal_weights, correlations, and sample_count.
     """

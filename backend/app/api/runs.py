@@ -93,7 +93,7 @@ def create_backtest_comparison(payload: dict, db: Session = Depends(get_db)):
 
 @router.post("/analyze-stock")
 def analyze_single_stock(payload: dict, db: Session = Depends(get_db)):
-    """单股票分析：加载历史K线 → 构建特征 → 计算 DSA 评分 → 可选触发 LLM agent。
+    """单股票分析：加载历史K线 → 构建特征 → 计算基础短线策略评分 → 可选触发 LLM agent。
 
     请求体:
         code: str           # 股票代码（必填）
@@ -110,9 +110,13 @@ def analyze_single_stock(payload: dict, db: Session = Depends(get_db)):
     trade_date = str(payload.get("trade_date") or "").strip() or None
     include_llm = bool(payload.get("include_llm", False))
     skill_id = str(payload.get("skill_id") or "daily-stock-analysis-skill").strip()
+    preset_id = str(payload.get("preset_id") or "").strip() or None
 
     try:
-        return analyze_stock(db, code, trade_date=trade_date, include_llm=include_llm, skill_id=skill_id)
+        return analyze_stock(
+            db, code, trade_date=trade_date, include_llm=include_llm,
+            skill_id=skill_id, preset_id=preset_id,
+        )
     except Exception as exc:
         logger.exception("single stock analysis failed for %s", code)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
