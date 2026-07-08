@@ -583,6 +583,7 @@ def sync_skills(db: Session) -> list[StrategySkill]:
         if has_changes:
             db.commit()
         _ensure_default_presets(db, skills)
+        repair_preset_registration(db, skills)
         _last_skill_sync_time = time.time()
         _cached_skill_cache_key = cache_key
         _cached_skill_list = skills
@@ -4985,6 +4986,47 @@ def _ensure_default_presets(db: Session, skills: list[StrategySkill]) -> None:
             if desired_skills:
                 _replace_preset_skills(db, item["preset_id"], desired_skills)
                 has_changes = True
+    if has_changes:
+        db.commit()
+
+
+def repair_preset_registration(db: Session, skills: list[StrategySkill]) -> None:
+    """T1 策略注册自愈（仅加法，绝不删除）。
+
+    根因：``_ensure_default_presets`` 仅在预设「无任何 skill 行」时才用
+    ``_default_preset_skill_rows`` 全量填充；一旦预设已有部分 skill 行
+    （如 ``preset_formal_opening`` 长期只有 2/9 策略），后续新声明该组的策略
+    （含 ``trend-pullback-continuation``）永远不会被加入，导致其从未在每日 formal run
+    中被调用，违反北极星 C「每个策略有独立可查战绩」。
+
+    本函数做加法修复：仅为缺失项 INSERT ``PresetSkill`` 行，绝不 DELETE 任何已有行
+    （保留人工策展的权重/排序），幂等可重复调用，接入 ``sync_skills`` 后每次同步自愈。
+    """
+    has_changes = False
+    for item in DEFAULT_PRESETS:
+        preset_id = item["preset_id"]
+        desired = _default_preset_skill_rows(item, skills)
+        if not desired:
+            continue
+        existing_ids = set(
+            db.scalars(
+                select(PresetSkill.skill_id).where(PresetSkill.preset_id == preset_id)
+            ).all()
+        )
+        for row in desired:
+            sid = str(row["skill_id"])
+            if sid in existing_ids:
+                continue
+            db.add(
+                PresetSkill(
+                    id=f"{preset_id}:{sid}",
+                    preset_id=preset_id,
+                    skill_id=sid,
+                    weight=float(row.get("weight") or 1.0),
+                    sort_order=int(row.get("sort_order") or 0),
+                )
+            )
+            has_changes = True
     if has_changes:
         db.commit()
 
