@@ -10,6 +10,7 @@ import {
 import type { DashboardOverview, MarketSnapshot, RunSummary } from "../types";
 import { CollapsiblePanel } from "./CollapsiblePanel";
 import { EmptyState } from "./StateViews";
+import { RunModeBadge } from "./RunModeBadge";
 
 /** HomePage 共享面板组件 —— 从 HomePage.tsx 抽离，消除主文件过大问题。 */
 
@@ -176,24 +177,7 @@ export function LatestRunCard({
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
         <span style={{ fontSize: 13, color: "var(--muted)", display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
           {run.trade_date}
-          {run.run_mode && (
-            <span
-              title={run.run_mode === "formal" ? "实盘正式推荐" : run.run_mode}
-              style={{
-                fontSize: 10,
-                padding: "1px 6px",
-                borderRadius: 3,
-                fontFamily: "var(--font-mono)",
-                fontWeight: 600,
-                color: run.run_mode === "formal" ? "var(--accent-strong, var(--accent))" : "var(--muted)",
-                border: `1px solid ${run.run_mode === "formal" ? "var(--accent-strong, var(--accent))" : "var(--line)"}40`,
-                background: "transparent",
-                letterSpacing: 0.5,
-              }}
-            >
-              {run.run_mode === "formal" ? "实盘" : run.run_mode.toUpperCase()}
-            </span>
-          )}
+          <RunModeBadge runMode={run.run_mode} />
         </span>
         <span
           style={{

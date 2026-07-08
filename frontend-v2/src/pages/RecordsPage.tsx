@@ -18,6 +18,7 @@ import type {
 import { ErrorPage, EmptyState, PageSkeleton } from "../components/StateViews";
 import { RecommendationDetailCard } from "../components/RecommendationDetailCard";
 import { MatrixRecordDetailView } from "../components/MatrixRecordDetailView";
+import { RunModeBadge } from "../components/RunModeBadge";
 import {
   Metric,
   ReturnCell,
@@ -211,7 +212,12 @@ function RunRecordsList() {
             style={{ ...rowStyle, cursor: "pointer" }}
             title="点击查看当次推荐的股票"
           >
-            <td style={tdStyle} className="text-mono">{run.trade_date}</td>
+            <td style={tdStyle} className="text-mono">
+              <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}>
+                {run.trade_date}
+                <RunModeBadge runMode={run.run_mode} />
+              </span>
+            </td>
             <td style={tdStyle}>{run.run_name || run.run_id.slice(0, 12)}</td>
             <td style={{ ...tdStyle, textAlign: "right", fontFamily: "var(--font-mono)" }}>{run.recommended_count}</td>
             <td style={{ ...tdStyle, textAlign: "right", fontFamily: "var(--font-mono)" }}>{run.score_line.toFixed(1)}</td>
