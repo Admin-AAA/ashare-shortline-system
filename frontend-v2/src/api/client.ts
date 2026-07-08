@@ -14,6 +14,7 @@ import type {
   RecommendationHistoryResponse,
   RecommendationOutcome,
   OutcomeSummary,
+  WinRateSummary,
   ReplayAnalysisResult,
   DataSourceHealthRow,
   ModelRoute,
@@ -244,6 +245,9 @@ export const api = {
     return request<Record<string, OutcomeSummary>>(`/api/recommendations/outcome-summary?${params.toString()}`);
   },
   replayAnalysis: (runId: string) => request<ReplayAnalysisResult>(`/api/recommendations/runs/${runId}/replay-analysis`),
+  // 近 N 交易日 formal 推荐聚合胜率（驾驶舱状态条「近 N 日胜率」），无样本返回 null 字段
+  recommendationWinRate: (windowDays = 5) =>
+    request<WinRateSummary>(`/api/recommendations/win-rate?window_days=${windowDays}`),
   watchRecommendation: (id: string, payload: { watch_status?: string; note?: string | null }) =>
     request<{ recommendation_id: string; watch_status: string; note?: string | null }>(`/api/recommendations/${id}/watch`, json("POST", payload)),
   ignoreRecommendation: (id: string, payload?: { note?: string | null }) =>

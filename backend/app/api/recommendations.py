@@ -3,6 +3,7 @@ from sqlalchemy import case
 from sqlalchemy.orm import Session  # noqa: F401 (Query used in endpoints)
 
 from app.db.session import get_db
+from app.services.outcome_service import recent_formal_win_rate
 from app.services.workbench_service import (
     delete_recommendation,
     get_recommendation_detail,
@@ -102,6 +103,19 @@ def outcome_summary(
     for code in normalized:
         result.setdefault(code, {"settled": 0, "wins": 0, "win_rate": 0.0, "avg_return": 0.0})
     return result
+
+
+@router.get("/win-rate")
+def win_rate(
+    window_days: int = Query(default=5, ge=1, le=60, description="近 N 个已完成 formal 交易日"),
+    db: Session = Depends(get_db),
+):
+    """近 N 个交易日 formal 推荐聚合胜率/均收益（驾驶舱状态条「近 N 日胜率」真实数据源）。
+
+    只统计实盘 rec_ 推荐中已结算的 outcome，未结算不计入分母（诚实，不虚构胜率）；
+    按交易日而非日历日取最近 N 个已完成 formal 交易日，避免空窗虚算。
+    """
+    return recent_formal_win_rate(db, window_trade_days=window_days)
 
 
 @router.get("/runs/{run_id}/replay-analysis")

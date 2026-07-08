@@ -644,6 +644,79 @@ def strategy_perf_summary(
     }
 
 
+def recent_formal_win_rate(db: Session, window_trade_days: int = 5) -> dict[str, Any]:
+    """近 N 个交易日 formal 推荐聚合胜率（北极星 B/C：驾驶舱状态条一眼可见系统近期战绩）。
+
+    口径（与 R133/R148 一致，只用实盘 rec_ 推荐、已结算 outcome）：
+    - trade_date 取最近 N 个 status=completed 的 formal 交易日（按交易日而非日历日，避免空窗虚算）。
+    - 仅统计 outcome_label∈{success,failed} 的已结算推荐；未结算不计入分母（诚实，不虚构胜率）。
+    - 内连接 recommendation_outcomes 天然排除回测 btrec_*；再叠加 rec_ 前缀过滤双保险。
+    """
+    cache_key = f"recent_formal_win_rate:{window_trade_days}"
+    return _cached(cache_key, lambda: _recent_formal_win_rate(db, window_trade_days))
+
+
+def _recent_formal_win_rate(db: Session, window_trade_days: int) -> dict[str, Any]:
+    td_rows = (
+        db.execute(
+            select(RecommendationRun.trade_date)
+            .where(RecommendationRun.run_mode == "formal", RecommendationRun.status == "completed")
+            .distinct()
+            .order_by(RecommendationRun.trade_date.desc())
+            .limit(window_trade_days)
+        )
+        .scalars()
+        .all()
+    )
+    trade_dates = list(td_rows)
+    empty = {
+        "window_trade_days": window_trade_days,
+        "trade_dates": trade_dates,
+        "sample_count": 0,
+        "success_count": 0,
+        "win_rate": None,
+        "avg_return": None,
+        "profit_loss_ratio": None,
+    }
+    if not trade_dates:
+        return empty
+
+    rows = (
+        db.execute(
+            select(
+                RecommendationOutcome.outcome_label,
+                RecommendationOutcome.executed_return,
+            )
+            .select_from(Recommendation)
+            .join(RecommendationRun, Recommendation.run_id == RecommendationRun.run_id)
+            .join(RecommendationOutcome, Recommendation.recommendation_id == RecommendationOutcome.recommendation_id)
+            .where(
+                RecommendationRun.run_mode == "formal",
+                Recommendation.recommendation_id.like("rec_%"),
+                Recommendation.trade_date.in_(trade_dates),
+                RecommendationOutcome.outcome_label.in_(["success", "failed"]),
+            )
+        )
+        .all()
+    )
+    sample_count = len(rows)
+    if sample_count == 0:
+        return empty
+    wins = [r for r in rows if r.outcome_label == "success"]
+    losses = [r for r in rows if r.outcome_label == "failed"]
+    win_avg = sum(r.executed_return or 0 for r in wins) / len(wins) if wins else 0.0
+    loss_avg = sum(abs(r.executed_return or 0) for r in losses) / len(losses) if losses else 0.0
+    return {
+        "window_trade_days": window_trade_days,
+        "trade_dates": trade_dates,
+        "sample_count": sample_count,
+        "success_count": len(wins),
+        "win_rate": round(len(wins) * 100.0 / sample_count, 1),
+        "avg_return": round(sum(r.executed_return or 0 for r in rows) / sample_count, 2),
+        "profit_loss_ratio": round(win_avg / loss_avg, 2) if loss_avg else None,
+    }
+
+
 def metrics_by_setup(
     db: Session,
     window_days: int | None = None,

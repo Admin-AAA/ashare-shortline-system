@@ -13,6 +13,7 @@ import type {
   DashboardOverview,
   DataHealthDiagnostic,
   HomeBootstrap,
+  WinRateSummary,
 } from "../types";
 import { CardSkeleton, EmptyState, ErrorPage } from "../components/StateViews";
 import {
@@ -39,6 +40,9 @@ export function HomePage() {
   // 数据健康度诊断（独立于 overview，调用 /api/admin/data-health）
   const [healthDiag, setHealthDiag] = useState<DataHealthDiagnostic | null>(null);
   const [healthLoading, setHealthLoading] = useState(false);
+
+  // 近 5 交易日 formal 推荐聚合胜率（驾驶舱状态条「近 5 日胜率」真实数据源，替代原硬编码占位 —）
+  const [winRate, setWinRate] = useState<WinRateSummary | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -76,6 +80,17 @@ export function HomePage() {
     return () => controller.abort();
   }, []);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    api
+      .recommendationWinRate(5)
+      .then((d) => setWinRate(d))
+      .catch(() => {
+        /* 胜率非阻塞，失败则保持 null（状态条显示 —），不阻塞驾驶舱 */
+      });
+    return () => controller.abort();
+  }, []);
+
   if (loading) return <HomePageSkeleton />;
   if (error) return <ErrorPage title="驾驶舱加载失败" message={error} onRetry={() => window.location.reload()} />;
   if (!data) return <EmptyState title="暂无驾驶舱数据" reason="后端可能尚未完成今日数据准备" />;
@@ -93,6 +108,7 @@ export function HomePage() {
         candidateCount={recommendations.length}
         healthDiag={healthDiag}
         healthLoading={healthLoading}
+        winRate={winRate}
         onViewHealthDetail={() => navigate("/data-health")}
       />
 
@@ -140,6 +156,7 @@ function StatusBar({
   candidateCount,
   healthDiag,
   healthLoading,
+  winRate,
   onViewHealthDetail,
 }: {
   canRun: boolean;
@@ -148,6 +165,7 @@ function StatusBar({
   candidateCount: number;
   healthDiag: DataHealthDiagnostic | null;
   healthLoading: boolean;
+  winRate: WinRateSummary | null;
   onViewHealthDetail: () => void;
 }) {
   const dot = canRun ? "🟢" : healthStatus === "blocked" ? "🔴" : "🟡";
@@ -195,7 +213,28 @@ function StatusBar({
       <strong className="text-mono" style={{ color: "var(--ink)" }}>{candidateCount} 只</strong>
       <Sep />
       <span className="text-muted">近 5 日胜率：</span>
-      <strong className="text-mono" style={{ color: "var(--accent-strong)" }}>—</strong>
+      {winRate && winRate.win_rate != null ? (
+        <strong
+          className="text-mono"
+          title={
+            winRate.sample_count > 0
+              ? `近 ${winRate.window_trade_days} 个已完成 formal 交易日 · 已结算 ${winRate.sample_count} 笔 · 均收益 ${winRate.avg_return?.toFixed(2)}% · 盈亏比 ${winRate.profit_loss_ratio ?? "—"}`
+              : "暂无已结算样本"
+          }
+          style={{
+            color:
+              winRate.win_rate >= 58
+                ? "var(--market-up)"
+                : winRate.win_rate >= 50
+                  ? "var(--warning)"
+                  : "var(--market-down)",
+          }}
+        >
+          {winRate.win_rate.toFixed(1)}%
+        </strong>
+      ) : (
+        <strong className="text-mono" style={{ color: "var(--muted)" }}>—</strong>
+      )}
 
       {/* 右侧：数据健康度指示器（弹性推到最右） */}
       <div style={{ marginLeft: "auto", flexShrink: 0 }}>

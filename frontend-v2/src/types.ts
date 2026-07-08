@@ -258,6 +258,17 @@ export type OutcomeSummary = {
   avg_return: number; // 平均净收益 %
 };
 
+/** 近 N 个交易日 formal 推荐聚合表现（后端 /api/recommendations/win-rate 返回），驾驶舱状态条「近 N 日胜率」真实数据源 */
+export type WinRateSummary = {
+  window_trade_days: number;
+  trade_dates: string[];
+  sample_count: number; // 已结算推荐数（未结算不计入分母）
+  success_count: number;
+  win_rate: number | null; // 胜率 %，无样本时为 null（诚实不虚构）
+  avg_return: number | null; // 平均净收益 %
+  profit_loss_ratio: number | null; // 盈亏比
+};
+
 export type RiskRadar = {
   high: number;
   medium: number;
