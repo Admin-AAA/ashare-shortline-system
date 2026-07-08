@@ -80,6 +80,9 @@ def _positive_stock_for_skill(skill_id: str):
             main_net_inflow_yi=0.5,
             capital_resonance_signal="主力共振",
         )
+    if skill_id == "small-cap-thematic-momentum":
+        # universe free_mv_yi<80 + 核心模式 free_mv_yi<50（默认 80.0 不满足 include）
+        return _tradeable_stock(free_mv_yi=32.0)
     return _tradeable_stock()
 
 
