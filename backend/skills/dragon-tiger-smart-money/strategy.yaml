@@ -28,6 +28,9 @@ universe:
     - "amount_yi >= 2"
     - "free_mv_yi >= 15"
     - "turnover_rate >= 2"
+    # 排除当日大跌股（603407 pct=-9.89% 仍给 95 分→亏 -9.18%，D 项恶化根因）
+    # 龙虎榜净买不等于该买，当日大跌说明抛压严重，聪明钱也可能被套
+    - "pct >= -3"
   exclude:
     - "is_st == true"
     - "announcement_negative_count > 0"

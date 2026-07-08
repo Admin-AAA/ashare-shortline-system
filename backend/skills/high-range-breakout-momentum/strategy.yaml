@@ -1,3 +1,6 @@
+# ⚠️ SELF-IMPROVE FLAG: 低胜率策略 (winrate=41.2%, n=17, 标记日期=2026-07-08)
+# 失败归因: dist60>10 追高（失败 10.56 vs 成功 5.79）+ off_high_pct 低（假突破）
+# 状态: 🟡 标记中（n<20 补样本，不急着删）
 id: high-range-breakout-momentum
 name: 阶段新高放量突破
 enabled: true
