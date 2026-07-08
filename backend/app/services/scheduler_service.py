@@ -35,7 +35,7 @@ MANUAL_PRESET_MATRIX_TASK_ID = "manual_preset_matrix_run"
 MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID = "manual_data_health_remediation"
 SAFETY_NET_TASK_ID = "formal_run_safety_net"
 SAFETY_NET_MAX_ATTEMPTS = 3
-DEFAULT_RECOMMENDATION_DATA_SOURCE = "local_pool_preferred"
+DEFAULT_RECOMMENDATION_DATA_SOURCE = "auto"
 
 
 def _is_task_running(task_id: str) -> bool:

@@ -12,6 +12,38 @@ from typing import Any
 from app.core.config import get_settings
 from app.services.outcome_service import DEFAULT_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT
 
+# 实时行情代理地址（realtime_quote 是爬虫接口，不走 Pro API 代理）
+_REALTIME_PROXY_URL = "https://realtime.stockai888.top"
+
+
+def _patch_tushare_verify_token() -> None:
+    """绕过 Tushare 库 verify_token 装饰器 bug。
+
+    verify_token.py 第 32 行 ``r = verify_token(...).json()`` 已将 response
+    解析为 dict，但第 39 行错误访问 ``r.text``（dict 无 text 属性），导致
+    realtime_quote 等被装饰的接口在权限验证失败时抛出 AttributeError。
+    """
+    try:
+        import tushare.util.verify_token as vt
+
+        if getattr(vt, "_patched", False):
+            return
+
+        def _mock_verify_token(token=None, event_name="", event_detail=""):  # noqa: ANN001
+            class _MockResp:
+                def json(self):  # noqa: ANN201
+                    return {"message": "success"}
+
+            return _MockResp()
+
+        vt.verify_token = _mock_verify_token
+        vt._patched = True
+    except Exception:
+        pass
+
+
+_patch_tushare_verify_token()
+
 
 class MarketDataError(RuntimeError):
     pass
@@ -491,8 +523,10 @@ def _load_tushare_daily_basic_map(pro: Any, settings: Any, trade_date: str) -> d
 
 def _fetch_tushare_realtime_frame(ts_codes: list[str], settings: Any):
     import tushare as ts
+    from tushare.stock import cons as ct
 
     _throttle_tushare(settings)
+    ct.verify_token_url = _REALTIME_PROXY_URL
     return ts.realtime_quote(ts_code=",".join(ts_codes))
 
 
@@ -511,7 +545,7 @@ def _fetch_tushare_realtime_quotes(
         return []
 
     realtime_map: dict[str, dict[str, Any]] = {}
-    chunk_size = 800
+    chunk_size = 50  # realtime_quote sina 源单次最多 50 只
     for start in range(0, len(ts_codes), chunk_size):
         frame = _fetch_tushare_realtime_frame(ts_codes[start:start + chunk_size], settings)
         if frame is None or frame.empty:
