@@ -451,4 +451,17 @@ def _run_llm_analysis(
         }
     except Exception as exc:
         logger.warning("LLM analysis failed for %s: %s", code, exc)
-        return {"status": "error", "error": str(exc)}
+        # LLM 失败时返回降级 stance（而非纯 error），避免 analyze-stock 用户看不到任何判断
+        # 同 formal run 的 fallback_prelim 逻辑（workbench_service._build_recommendation_card）
+        prelim_score = float(stock_result.get("dsa_signal_score") or 50.0)
+        return {
+            "status": "fallback",
+            "error": str(exc),
+            "stance": "support" if prelim_score >= 72 else "neutral_support" if prelim_score >= 60 else "neutral",
+            "score_delta": round(max(-18.0, min(16.0, prelim_score - 50.0)), 2),
+            "score": round(prelim_score, 2),
+            "confidence": 0.35 if prelim_score >= 70 else 0.25,
+            "summary": f"Skill Agent 暂不可用（{str(exc)[:60]}），已降级为规则预审",
+            "runtime": "agent_skill_fallback_prelim",
+            "rule_score": prelim_score,
+        }
