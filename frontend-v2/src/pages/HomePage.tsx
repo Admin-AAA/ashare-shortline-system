@@ -16,6 +16,7 @@ import {
 } from "../components/HomePanels";
 import { StockTicker } from "../components/StockTicker";
 import { CollapsiblePanel } from "../components/CollapsiblePanel";
+import { LlmStanceBadge } from "../components/LlmStanceBadge";
 import { useUrlRoute } from "../app/useUrlRoute";
 
 /**
@@ -318,11 +319,12 @@ function CandidateCard({ item, rank }: { item: CockpitRecommendation; rank: numb
           {item.final_score.toFixed(0)}
         </div>
       </div>
-      <div style={{ display: "flex", gap: "var(--space-1)", flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: "var(--space-1)", flexWrap: "wrap", alignItems: "center" }}>
         {item.setup_type && <span className="tag">{item.setup_type}</span>}
         <span className={`tag ${toneClass}`} style={{ color: riskTone }}>
           {item.risk_level}
         </span>
+        <LlmStanceBadge stance={item.llm_stance} delta={item.llm_delta} />
       </div>
 
       {item.recommend_price != null || item.stop_loss != null || item.take_profit != null ? (
