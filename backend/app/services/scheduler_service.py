@@ -14,6 +14,7 @@ import json
 import logging
 import threading
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -815,10 +816,21 @@ def _run_auxiliary_script(payload: dict) -> dict:
 
 
 async def _run_recommendation(db, payload: dict) -> dict:
-    """执行推荐流水线。"""
-    from app.services.workbench_service import run_workbench
+    """执行推荐流水线（异步入队到独立子进程，后端重启不影响执行）。
 
-    run_payload = {
+    T12 稳定性修复：原先在此处用 asyncio.run(run_workbench(...)) 在后端进程内
+    同步执行，后端一旦重启/热重载会直接杀死正在跑的 formal run
+    （error=「服务重启或进程退出」），导致 A 项（每日可见推荐）断档。
+
+    现改为与 API 手动触发一致的 enqueue_workbench_run 路径：创建 RecommendationRun
+    后由 _spawn_run_subprocess(start_new_session=True) 派发到独立子进程执行。子进程与
+    uvicorn 进程解耦，后端重启后子进程仍继续更新心跳，recover_interrupted_runs 按心跳
+    超时判定不会误杀存活任务。本函数立即返回入队结果（recommended_count=0），实际推荐
+    数量由子进程完成后写入 recommendation_runs，安全网据此检查断档。
+    """
+    from app.services.workbench_service import enqueue_workbench_run
+
+    run_payload: dict[str, Any] = {
         "preset_id": payload.get("preset_id"),
         "run_name": payload.get("run_name", f"定时推荐 {datetime.now(timezone.utc).replace(tzinfo=None).strftime('%Y%m%d')}"),
     }
@@ -832,18 +844,39 @@ async def _run_recommendation(db, payload: dict) -> dict:
     ):
         if key in payload:
             run_payload[key] = payload.get(key)
-    result = await run_workbench(db, run_payload)
-    logger.info("定时推荐完成: %d 条", result.get("recommended_count", 0))
+
+    # 无 preset_id 时无法入队独立子进程（enqueue 前置条件），退化为原 in-process 执行，
+    # 保留历史行为，避免破坏潜在的非预设触发路径。
+    if not run_payload.get("preset_id"):
+        from app.services.workbench_service import run_workbench
+
+        logger.warning("定时推荐缺少 preset_id，退化为进程内执行: %s", run_payload)
+        result = await run_workbench(db, run_payload)
+        run = result.get("run") or {}
+        related_run_id = str(run.get("run_id") or "")
+        recommended_count = int(run.get("recommended_count") or result.get("recommended_count") or 0)
+        return {
+            "related_run_id": related_run_id,
+            "recommended_count": recommended_count,
+            "summary_text": (
+                f"关联 Run {related_run_id}，推荐 {recommended_count} 条（进程内）"
+                if related_run_id
+                else f"自动推荐 {recommended_count} 条（进程内）"
+            ),
+        }
+
+    result = enqueue_workbench_run(db, run_payload)
     run = result.get("run") or {}
     related_run_id = str(run.get("run_id") or "")
-    recommended_count = int(run.get("recommended_count") or result.get("recommended_count") or 0)
+    logger.info("定时推荐已入队独立子进程: run_id=%s", related_run_id)
     return {
         "related_run_id": related_run_id,
-        "recommended_count": recommended_count,
+        "recommended_count": 0,
+        "queued": True,
         "summary_text": (
-            f"关联 Run {related_run_id}，推荐 {recommended_count} 条"
+            f"已入队 Run {related_run_id}，由独立子进程异步执行"
             if related_run_id
-            else f"自动推荐 {recommended_count} 条"
+            else "已触发推荐（独立子进程）"
         ),
     }
 
