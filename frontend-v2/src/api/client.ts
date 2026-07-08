@@ -219,6 +219,7 @@ export const api = {
     date_to?: string;
     bucket?: string;
     setup_type?: string;
+    strategy_id?: string;
     limit?: number;
     offset?: number;
   }) => {
@@ -229,6 +230,7 @@ export const api = {
     if (query?.date_to) params.set("date_to", query.date_to);
     if (query?.bucket) params.set("bucket", query.bucket);
     if (query?.setup_type) params.set("setup_type", query.setup_type);
+    if (query?.strategy_id) params.set("strategy_id", query.strategy_id);
     if (query?.limit) params.set("limit", String(query.limit));
     if (query?.offset) params.set("offset", String(query.offset));
     return request<RecommendationHistoryResponse>(`/api/recommendations/history?${params.toString()}`);

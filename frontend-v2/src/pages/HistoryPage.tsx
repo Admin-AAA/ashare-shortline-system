@@ -1,22 +1,31 @@
-import { ChevronDown, ChevronRight, History, Loader2, Search } from "lucide-react";
+import { ChevronDown, ChevronRight, History, Layers, Loader2, RotateCcw, Search } from "lucide-react";
 import { Fragment, useCallback, useState } from "react";
 import { api } from "../api/client";
 import type { RecommendationDetail, RecommendationHistoryResponse } from "../types";
 import { PageSkeleton, ErrorPage, EmptyState } from "../components/StateViews";
 import { CollapsiblePanel } from "../components/CollapsiblePanel";
 import { useApi } from "../app/useApi";
+import { useUrlRoute } from "../app/useUrlRoute";
+import { queryParam } from "../app/nav";
 import { RecommendationDetailCard } from "../components/RecommendationDetailCard";
 import { fmtPrice } from "../components/Shared";
-import { exitReasonLabel } from "../utils/display";
+import { bucketLabel, exitReasonLabel, BUCKET_LABELS } from "../utils/display";
 
 /**
  * 复盘页 —— 推荐历史记录（跨 run，按 trade_date 倒序，带 outcome）。
  * 填补北极星"推荐历史记录页"缺口：用户查看每笔推荐的实际表现，支持分页 + 筛选。
  * 点击行展开 inline 详情（评分分解 / 买点 / 风控 / LLM 摘要）。
+ *
+ * 策略下钻（北极星 C 项）：从策略清单页点击策略卡进入本页，URL 带
+ * ?strategy_id=...&strategy_name=...，仅展示该策略的全部推荐历史。
  */
 export function HistoryPage() {
+  const { navigate } = useUrlRoute();
+  const strategyId = queryParam("strategy_id");
+  const strategyName = queryParam("strategy_name");
   const [label, setLabel] = useState<"" | "success" | "failed" | "missed" | "pending">("");
-  const [codeInput, setCodeInput] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, RecommendationDetail>>({});
@@ -24,18 +33,28 @@ export function HistoryPage() {
   const [detailError, setDetailError] = useState<Record<string, string>>({});
   const pageSize = 50;
 
-  // code 只在用户提交时触发查询（避免每键都请求）；用本地 state 控制
+  // code/setupType 只在用户提交时触发查询（避免每键都请求）；用本地 state 控制
+  // bucket 用下拉框，选择即查询
+  const [codeInput, setCodeInput] = useState("");
   const [codeQuery, setCodeQuery] = useState("");
+  const [bucket, setBucket] = useState("");
+  const [setupTypeInput, setSetupTypeInput] = useState("");
+  const [setupTypeQuery, setSetupTypeQuery] = useState("");
 
   const { data, loading, error } = useApi<RecommendationHistoryResponse>(
     () =>
       api.recommendationHistory({
         code: codeQuery || undefined,
         label: label || undefined,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+        bucket: bucket || undefined,
+        setup_type: setupTypeQuery || undefined,
+        strategy_id: strategyId || undefined,
         limit: pageSize,
         offset: page * pageSize,
       }),
-    [label, codeQuery, page],
+    [label, codeQuery, bucket, setupTypeQuery, dateFrom, dateTo, page, strategyId],
   );
 
   const items = data?.items ?? [];
@@ -44,8 +63,21 @@ export function HistoryPage() {
 
   const resetPage = () => setPage(0);
 
-  const submitCode = () => {
+  const submitText = () => {
     setCodeQuery(codeInput.trim());
+    setSetupTypeQuery(setupTypeInput.trim());
+    resetPage();
+  };
+
+  const resetFilters = () => {
+    setLabel("");
+    setDateFrom("");
+    setDateTo("");
+    setCodeInput("");
+    setCodeQuery("");
+    setBucket("");
+    setSetupTypeInput("");
+    setSetupTypeQuery("");
     resetPage();
   };
 
@@ -78,6 +110,14 @@ export function HistoryPage() {
   const winCount = itemsWithResult.filter((it) => it.outcome?.outcome_label === "success").length;
   const hasOutcome = itemsWithResult.length > 0;
 
+  // 收益率：本页有 executed_return 的推荐均值（盈亏样本）
+  const itemsWithReturn = items.filter((it) => it.outcome?.executed_return != null);
+  const retAvg =
+    itemsWithReturn.length > 0
+      ? itemsWithReturn.reduce((acc, it) => acc + (it.outcome?.executed_return ?? 0), 0) / itemsWithReturn.length
+      : 0;
+  const hasReturn = itemsWithReturn.length > 0;
+
   return (
     <CollapsiblePanel
       collapsedKey="history-recs"
@@ -89,26 +129,55 @@ export function HistoryPage() {
         </span>
       }
     >
-      {/* 筛选栏 */}
-      <div
-        style={{
-          display: "flex",
-          gap: "var(--space-3)",
-          alignItems: "center",
-          flexWrap: "wrap",
-          padding: "var(--space-3) 0",
-          borderBottom: "1px solid var(--border)",
-        }}
-      >
-        <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-base)" }}>
-          <span style={{ color: "var(--muted)" }}>结果</span>
+      {/* 策略下钻横幅（北极星 C 项）：从策略清单页进入，仅展示该策略推荐历史 */}
+      {strategyId && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "var(--space-2)",
+            flexWrap: "wrap",
+            padding: "var(--space-2) var(--space-4)",
+            marginBottom: "var(--space-3)",
+            background: "var(--surface-soft)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-md)",
+          }}
+        >
+          <Layers size={14} className="text-muted" />
+          <span className="text-muted">策略下钻</span>
+          <span style={{ fontWeight: 650, color: "var(--ink)" }}>{strategyName || strategyId}</span>
+          <span className="text-muted">的推荐历史</span>
+          <span className="tag" style={{ marginLeft: "auto", fontSize: "var(--text-xs)" }}>{total} 笔</span>
+          <button
+            className="btn btn--ghost"
+            onClick={() => navigate("/strategies")}
+            style={{ padding: "4px 10px", fontSize: "var(--text-sm)" }}
+          >
+            返回策略清单
+          </button>
+        </div>
+      )}
+      {/* 筛选栏（极地海洋玻璃态） */}
+      <div className="records-filterbar">
+        {/* 日期范围 */}
+        <div className="records-filterbar__group">
+          <label className="records-filterbar__label">日期</label>
+          <input className="cfg-input records-filterbar__date" type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); resetPage(); }} />
+          <span className="records-filterbar__arrow">→</span>
+          <input className="cfg-input records-filterbar__date" type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); resetPage(); }} />
+        </div>
+
+        {/* 结果筛选 */}
+        <div className="records-filterbar__group">
+          <label className="records-filterbar__label">结果</label>
           <select
+            className="cfg-input records-filterbar__select"
             value={label}
             onChange={(e) => {
               setLabel(e.target.value as typeof label);
               resetPage();
             }}
-            style={selectStyle}
           >
             <option value="">全部</option>
             <option value="success">成功</option>
@@ -116,24 +185,89 @@ export function HistoryPage() {
             <option value="missed">未触发</option>
             <option value="pending">待标注</option>
           </select>
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-base)" }}>
-          <span style={{ color: "var(--muted)" }}>代码</span>
+        </div>
+
+        {/* 股票代码 */}
+        <div className="records-filterbar__group">
+          <label className="records-filterbar__label">代码</label>
           <input
+            className="cfg-input records-filterbar__select"
             value={codeInput}
             onChange={(e) => setCodeInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && submitCode()}
+            onKeyDown={(e) => e.key === "Enter" && submitText()}
             placeholder="6 位代码"
-            style={{ ...selectStyle, fontFamily: "var(--font-mono)", width: 110 }}
+            style={{ width: 110, fontFamily: "var(--font-mono)" }}
           />
-        </label>
-        <button onClick={submitCode} style={btnStyle}>
+        </div>
+
+        {/* 策略桶（下拉选择） */}
+        <div className="records-filterbar__group">
+          <label className="records-filterbar__label">策略桶</label>
+          <select
+            className="cfg-input records-filterbar__select"
+            value={bucket}
+            onChange={(e) => { setBucket(e.target.value); resetPage(); }}
+            style={{ minWidth: 150 }}
+          >
+            <option value="">全部</option>
+            {Object.entries(BUCKET_LABELS).map(([key, labelText]) => (
+              <option key={key} value={key}>{labelText}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* 买点类型 */}
+        <div className="records-filterbar__group">
+          <label className="records-filterbar__label">买点</label>
+          <input
+            className="cfg-input records-filterbar__select"
+            value={setupTypeInput}
+            onChange={(e) => setSetupTypeInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submitText()}
+            placeholder="setup_type"
+            style={{ width: 130, fontFamily: "var(--font-mono)" }}
+          />
+        </div>
+
+        {/* 操作按钮区 */}
+        <button className="btn btn--primary" onClick={submitText} style={{ padding: "6px 14px", fontSize: "var(--text-sm)" }}>
           <Search size={13} /> 查询
         </button>
-        {hasOutcome && (
-          <span style={{ marginLeft: "auto", fontSize: "var(--text-sm)", color: "var(--muted)" }}>
-            本页胜率 {winCount}/{itemsWithResult.length} = {((winCount / itemsWithResult.length) * 100).toFixed(1)}%
-          </span>
+
+        <button className="btn btn--ghost records-filterbar__reset" onClick={resetFilters} title="清空所有筛选" style={{ padding: "6px 10px", fontSize: "var(--text-sm)" }}>
+          <RotateCcw size={13} /> 重置
+        </button>
+
+        {/* 总计数（轻量） */}
+        <span className="records-filterbar__total">
+          共 {total} 笔
+        </span>
+
+        {/* 胜率徽标（醒目卡片） */}
+        {hasOutcome && (() => {
+          const rate = (winCount / itemsWithResult.length) * 100;
+          const tier = rate >= 60 ? "high" : rate >= 40 ? "mid" : "low";
+          return (
+            <div className={`winrate-badge winrate-badge--${tier}`} title={`本页胜率：${winCount}/${itemsWithResult.length} 已结算推荐`}>
+              <span className="winrate-badge__label">胜率</span>
+              <span className="winrate-badge__fraction">{winCount}/{itemsWithResult.length}</span>
+              <div className="winrate-badge__bar">
+                <div className="winrate-bar__fill" style={{ width: `${rate}%` }} />
+              </div>
+              <span className="winrate-badge__value">{rate.toFixed(1)}%</span>
+            </div>
+          );
+        })()}
+
+        {/* 收益率徽标（配对胜率，A股涨红跌绿） */}
+        {hasReturn && (
+          <div
+            className={`return-badge return-badge--${retAvg >= 0 ? "up" : "down"}`}
+            title={`本页收益率：基于 ${itemsWithReturn.length} 笔已结算推荐的平均收益`}
+          >
+            <span className="return-badge__label">收益率</span>
+            <span className="return-badge__value">{retAvg >= 0 ? "+" : ""}{retAvg.toFixed(2)}%</span>
+          </div>
         )}
       </div>
 
@@ -190,7 +324,7 @@ export function HistoryPage() {
                       </td>
                       <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>
                         <div style={stackStyle}>
-                          <span style={{ color: "var(--text)", fontFamily: "var(--font-mono)" }}>{it.bucket || "—"}</span>
+                          <span style={{ color: "var(--text)", fontFamily: "var(--font-mono)" }}>{bucketLabel(it.bucket)}</span>
                           <span>{it.setup_type || "未命中买点"}</span>
                         </div>
                       </td>
@@ -310,28 +444,6 @@ const outcomeLabel = (value: string | null | undefined) => {
   if (value === "missed") return "未触发";
   if (value === "pending") return "待标注";
   return value || "—";
-};
-
-const selectStyle: React.CSSProperties = {
-  background: "var(--surface-soft)",
-  color: "var(--text)",
-  border: "1px solid var(--border)",
-  borderRadius: 6,
-  padding: "6px 10px",
-  fontSize: "var(--text-base)",
-};
-
-const btnStyle: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: "var(--space-2)",
-  background: "var(--accent)",
-  color: "var(--surface)",
-  border: "none",
-  borderRadius: 6,
-  padding: "6px 12px",
-  fontSize: "var(--text-base)",
-  cursor: "pointer",
 };
 
 const tableStyle: React.CSSProperties = {

@@ -126,12 +126,16 @@ CHECKPOINT_ORDER = [
 ]
 DATA_SOURCE_LOCAL_POOL = "local_pool"
 DATA_SOURCE_LOCAL_POOL_PREFERRED = "local_pool_preferred"
+DATA_SOURCE_LOCAL_POOL_REALTIME = "local_pool_realtime"
 DATA_SOURCE_REALTIME = "realtime"
-DEFAULT_RECOMMENDATION_DATA_SOURCE = DATA_SOURCE_LOCAL_POOL_PREFERRED
+DATA_SOURCE_AUTO = "auto"
+DEFAULT_RECOMMENDATION_DATA_SOURCE = DATA_SOURCE_AUTO
 ALLOWED_DATA_SOURCES = {
     DATA_SOURCE_LOCAL_POOL,
     DATA_SOURCE_LOCAL_POOL_PREFERRED,
+    DATA_SOURCE_LOCAL_POOL_REALTIME,
     DATA_SOURCE_REALTIME,
+    DATA_SOURCE_AUTO,
 }
 DEFAULT_PRESETS = [
     {
@@ -163,7 +167,7 @@ DEFAULT_PRESETS = [
     },
     {
         "preset_id": "preset_experiment_dsa",
-        "name": "DSA 单 Skill 验证",
+        "name": "基础短线策略单 Skill 验证",
         "description": "单独验证技术评分 Skill 的辨识度。",
         "market_scope": "all",
         "market_scope_value": None,
@@ -995,6 +999,11 @@ def list_recommendation_history(
     *,
     code: str | None = None,
     label: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    bucket: str | None = None,
+    setup_type: str | None = None,
+    strategy_id: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> dict[str, Any]:
@@ -1007,7 +1016,7 @@ def list_recommendation_history(
     Python 去重后切片分页，再只对 50 个 id 批量取详情。避免查全部 1584 行整行 + outcome。
     """
     # 短时缓存：历史数据不频繁变化（新 run 后才变），30s TTL
-    cache_key = f"hist:{code or ''}:{label or ''}:{limit}:{offset}"
+    cache_key = f"hist:{code or ''}:{label or ''}:{date_from or ''}:{date_to or ''}:{bucket or ''}:{setup_type or ''}:{strategy_id or ''}:{limit}:{offset}"
     now = time.time()
     with _history_cache_lock:
         entry = _history_cache.get(cache_key)
@@ -1026,6 +1035,23 @@ def list_recommendation_history(
     )
     if code:
         id_stmt = id_stmt.where(Recommendation.code == code)
+    if date_from:
+        id_stmt = id_stmt.where(Recommendation.trade_date >= date_from)
+    if date_to:
+        id_stmt = id_stmt.where(Recommendation.trade_date <= date_to)
+    if bucket:
+        id_stmt = id_stmt.where(Recommendation.bucket == bucket)
+    if setup_type:
+        id_stmt = id_stmt.where(Recommendation.setup_type == setup_type)
+    if strategy_id:
+        # skill_breakdown_json 是 text 列（Python json.dumps 默认 "key": value 带空格），
+        # 用 JSON_SEARCH 做 spacing-agnostic 的 strategy_id 过滤。
+        # 北极星 C 项：策略清单卡可下钻到该策略的全部推荐历史。
+        id_stmt = id_stmt.where(
+            text(
+                "JSON_SEARCH(recommendations.skill_breakdown_json,'one',:sid,NULL,'$[*].strategy_id') IS NOT NULL"
+            ).bindparams(sid=str(strategy_id))
+        )
     if label:
         if label == "pending":
             id_stmt = id_stmt.outerjoin(
@@ -1476,6 +1502,9 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     try:
         if data_source == DATA_SOURCE_REALTIME:
             stocks, snapshot = get_market_universe()
+        elif data_source == DATA_SOURCE_LOCAL_POOL_REALTIME:
+            from app.services.market_pool import get_market_universe_from_pool_with_realtime
+            stocks, snapshot = get_market_universe_from_pool_with_realtime(db)
         elif data_source == DATA_SOURCE_LOCAL_POOL_PREFERRED:
             stocks, snapshot = get_market_universe_from_pool(db, refresh=True)
         else:
@@ -1497,6 +1526,8 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     # 仅在实时行情模式下写回股票元数据；本地池模式数据本就从 DB 读出，写入为冗余操作，
     # 且全市场扫描时 6000+ 行批量 INSERT 会在远程 MySQL 高负载下阻塞推荐管道。
     if data_source == DATA_SOURCE_REALTIME:
+        _persist_stocks_and_bars(db, stocks, persist_bars=True)
+    elif data_source == DATA_SOURCE_LOCAL_POOL_REALTIME:
         _persist_stocks_and_bars(db, stocks, persist_bars=True)
     else:
         logger.info("skip stock/bar persistence for local-pool run %s; mode=%s stocks=%d", run_id, data_source, len(stocks))
@@ -3676,7 +3707,13 @@ def _select_skills_for_run(
 def _normalize_data_source(value: Any) -> str:
     data_source = str(value or DEFAULT_RECOMMENDATION_DATA_SOURCE)
     if data_source not in ALLOWED_DATA_SOURCES:
-        raise ValueError("运行数据仅支持 local_pool、local_pool_preferred 或 realtime")
+        raise ValueError("运行数据仅支持 auto、local_pool、local_pool_preferred、local_pool_realtime 或 realtime")
+    if data_source == DATA_SOURCE_AUTO:
+        now = datetime.now()
+        # 工作日 09:15-15:00 为盘中，用实时模式
+        if now.weekday() < 5 and (now.hour > 9 or (now.hour == 9 and now.minute >= 15)) and now.hour < 15:
+            return DATA_SOURCE_LOCAL_POOL_REALTIME
+        return DATA_SOURCE_LOCAL_POOL_PREFERRED
     return data_source
 
 
@@ -5230,7 +5267,7 @@ def _load_calibrated_agg_weights(db: Session) -> dict[str, float]:
 
 
 def _load_calibrated_dsa_weights(db: Session) -> dict[str, float]:
-    """Load calibrated DSA sub-score weights from CalibrationConfig table."""
+    """Load calibrated 基础短线策略 sub-score weights from CalibrationConfig table."""
     rows = db.scalars(select(CalibrationConfig)).all()
     weights: dict[str, float] = {}
     for row in rows:

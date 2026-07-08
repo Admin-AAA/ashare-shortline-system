@@ -1,11 +1,11 @@
 import { useState } from "react";
-import { ChevronDown, ChevronRight, Layers, Target } from "lucide-react";
+import { ChevronDown, ChevronRight, History, Layers, Target } from "lucide-react";
 import { api } from "../api/client";
 import type { DateRangeMeta, StrategyListItem, StrategyPerformance } from "../types";
 import { ErrorPage, EmptyState, PageSkeleton } from "../components/StateViews";
-import { SkillPerformanceSection } from "../components/SkillPerformanceSection";
 import { CollapsiblePanel } from "../components/CollapsiblePanel";
 import { useApi } from "../app/useApi";
+import { useUrlRoute } from "../app/useUrlRoute";
 
 /** 时间窗口选项：null=全部历史累计，N=最近 N 天且已结算。与指标页保持一致。 */
 const WINDOW_OPTIONS: Array<{ label: string; value: number | null }> = [
@@ -103,9 +103,6 @@ export function StrategiesPage() {
           <DormantCard key={s.skill_id} item={s} />
         ))}
       </div>
-
-      {/* 从原「配置页」迁移而来：策略历史表现明细，置于驾驶舱视图下方 */}
-      <SkillPerformanceSection />
     </CollapsiblePanel>
   );
 }
@@ -113,6 +110,7 @@ export function StrategiesPage() {
 /** 已调用策略：胜率 + 样本 + 收益，可展开看 3/5/10 日表现 */
 function CalledCard({ item }: { item: StrategyListItem }) {
   const perf = item.performance as StrategyPerformance;
+  const { navigate } = useUrlRoute();
   const [open, setOpen] = useState(false);
   const win = perf.hit_rate;
   const winColor = win == null ? "var(--muted)" : win >= 0.6 ? "var(--market-up)" : win >= 0.5 ? "var(--market-up)" : "var(--market-down)";
@@ -206,6 +204,24 @@ function CalledCard({ item }: { item: StrategyListItem }) {
           })}
         </div>
       )}
+
+      <button
+        onClick={() => navigate("/history", { params: { strategy_id: item.skill_id, strategy_name: item.name } })}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
+          marginTop: "var(--space-3)",
+          background: "transparent",
+          border: "none",
+          color: "var(--accent)",
+          cursor: "pointer",
+          fontSize: "var(--text-sm)",
+          padding: 0,
+        }}
+      >
+        <History size={14} /> 查看该策略推荐历史 →
+      </button>
 
       <CardFooter item={item} />
     </div>

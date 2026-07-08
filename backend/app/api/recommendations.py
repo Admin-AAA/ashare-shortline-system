@@ -18,6 +18,11 @@ router = APIRouter(prefix="/api/recommendations", tags=["recommendations"])
 def history(
     code: str | None = Query(default=None),
     label: str | None = Query(default=None),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    bucket: str | None = Query(default=None),
+    setup_type: str | None = Query(default=None),
+    strategy_id: str | None = Query(default=None, description="按策略下钻：仅返回 skill_breakdown 含该 strategy_id 的推荐"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -25,11 +30,21 @@ def history(
     """跨 run 推荐历史（带 outcome），支持分页 + 筛选。
 
     填补推荐历史记录页缺口：用户查看所有推荐过的股票及其实际表现。
+    strategy_id 支持从策略清单页下钻到单策略的全部推荐历史（北极星 C 项）。
     """
     if label is not None and label not in {"success", "failed", "missed", "pending"}:
         raise HTTPException(status_code=400, detail="label must be success/failed/missed/pending")
     return list_recommendation_history(
-        db, code=code, label=label, limit=limit, offset=offset
+        db,
+        code=code,
+        label=label,
+        date_from=date_from,
+        date_to=date_to,
+        bucket=bucket,
+        setup_type=setup_type,
+        strategy_id=strategy_id,
+        limit=limit,
+        offset=offset,
     )
 
 
