@@ -1605,6 +1605,8 @@ def _load_cached_bars_batch(
                 "chip_cost_85": row.chip_cost_85,
                 "holder_pct": row.holder_pct,
                 "profit_efficiency": row.profit_efficiency,
+                # 筹码集中度（前移计算，供 prefilter 阶段使用，避免 chip-single-peak 策略 prefilter 死锁）
+                "chip_concentration": round((float(row.chip_cost_85) - float(row.chip_cost_15)) / float(row.chip_cost_15) * 100, 2) if row.chip_cost_15 and float(row.chip_cost_15) > 0 and row.chip_cost_85 else None,
                 "_indicator": {
                     "rsi_6": row.rsi_6,
                     "rsi_12": row.rsi_12,
@@ -1662,6 +1664,8 @@ def _load_cached_bars(db: Session, code: str, limit: int) -> list[dict[str, Any]
             "chip_cost_85": row.chip_cost_85,
             "holder_pct": row.holder_pct,
             "profit_efficiency": row.profit_efficiency,
+            # 筹码集中度（前移计算，供 prefilter 阶段使用，避免 chip-single-peak 策略 prefilter 死锁）
+            "chip_concentration": round((float(row.chip_cost_85) - float(row.chip_cost_15)) / float(row.chip_cost_15) * 100, 2) if row.chip_cost_15 and float(row.chip_cost_15) > 0 and row.chip_cost_85 else None,
             "_indicator": {
                 "rsi_6": row.rsi_6,
                 "rsi_12": row.rsi_12,
