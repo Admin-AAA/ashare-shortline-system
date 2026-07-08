@@ -114,18 +114,19 @@ def check_e_item(db, hit_skills: set) -> None:
     blind = [s for s in registered if s not in hit_skills]
     print(f'E 项覆盖盲区：{len(blind)} 个策略近 60 天 formal 0 命中: {blind}')
 
-    # 低覆盖 / 低胜率策略
+    # 低覆盖 / 低胜率策略（按 recommendation_id 去重，避免 JSON_TABLE 多策略行重复计数）
     rows = db.execute(text("""
         WITH strategy_hits AS (
-            SELECT jt.strategy_id, o.outcome_label, o.executed_return
-            FROM recommendations r
-            JOIN recommendation_runs u ON r.run_id = u.run_id
-            LEFT JOIN recommendation_outcomes o ON o.recommendation_id = r.recommendation_id
+            SELECT DISTINCT rec.recommendation_id, jt.strategy_id, o.outcome_label, o.executed_return
+            FROM recommendations rec
+            JOIN recommendation_runs u ON rec.run_id = u.run_id
+            LEFT JOIN recommendation_outcomes o ON o.recommendation_id = rec.recommendation_id
             JOIN JSON_TABLE(
-                r.skill_breakdown_json, '$[*]'
+                rec.skill_breakdown_json, '$[*]'
                 COLUMNS (strategy_id VARCHAR(80) PATH '$.strategy_id')
             ) jt
-            WHERE r.skill_breakdown_json IS NOT NULL
+            WHERE u.run_mode = 'formal'
+              AND rec.skill_breakdown_json IS NOT NULL
               AND o.outcome_label IN ('success', 'failed')
         )
         SELECT strategy_id,
