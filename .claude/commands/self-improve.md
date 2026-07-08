@@ -137,8 +137,6 @@ cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && \
 ```
 **改完后端要重启才生效**：`launchctl kickstart -k gui/$(id -u)/com.wangao.ashare-backend`（重启前先查 formal run 是否在跑，见 T12）。
 
-**上下文预算**：提示词+日志+源码总 token 不超 150k。读源码用 `grep -n` 定位再 `Read` 精确段落，不整文件读。日志只读末尾 30 轮。
-
 ### 2. 深入研究
 读相关源码（`grep -n` 定位 → `Read` 精确段落）；策略研发用 WebSearch；回测查 DB；性能用 `EXPLAIN ANALYZE`；前端读 `frontend-v2/src/`。研究结论立即写入日志 `**调研结论**` 字段（防崩溃丢上下文）。
 
