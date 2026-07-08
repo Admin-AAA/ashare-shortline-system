@@ -132,7 +132,7 @@ def check_e_item(db, hit_skills: set) -> None:
         SELECT strategy_id,
                COUNT(*)                                                          AS n,
                SUM(CASE WHEN outcome_label = 'success' THEN 1 ELSE 0 END)       AS wins,
-               ROUND(AVG(executed_return) * 100, 2)                             AS avg_ret
+               ROUND(AVG(executed_return), 2)                                    AS avg_ret
         FROM strategy_hits
         GROUP BY strategy_id
         HAVING n < 50 OR wins * 100 / COUNT(*) < 45
