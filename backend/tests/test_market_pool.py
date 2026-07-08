@@ -1055,6 +1055,11 @@ def test_cached_quotes_ignore_inactive_rows_even_on_allowed_trade_date(db, monke
 
 
 def test_load_or_refresh_quotes_does_not_use_stale_cache_after_refresh_error(db, monkeypatch):
+    """T12 修复：刷新全失败时用旧缓存兜底（formal run 跑不通 = 系统没在跑）。
+
+    旧行为：刷新失败 → MarketDataError → formal run 0 推荐（A 项断档）
+    新行为：刷新失败 + 有旧缓存 → 用旧缓存兜底 + warning 标记（旧缓存虽非最新但有数据）
+    """
     settings = DummySettings()
     codes = _codes(2)
     _persist_quotes(
@@ -1085,12 +1090,12 @@ def test_load_or_refresh_quotes_does_not_use_stale_cache_after_refresh_error(db,
 
     monkeypatch.setattr(market_pool, "_fetch_quotes", fake_fetch_quotes)
 
-    try:
-        market_pool._load_or_refresh_quotes(db, settings)
-    except market_pool.MarketDataError as exc:
-        assert "统一行情池刷新失败" in str(exc)
-    else:
-        raise AssertionError("expected MarketDataError")
+    # T12：刷新全失败时用旧缓存兜底，不再抛 MarketDataError
+    result = market_pool._load_or_refresh_quotes(db, settings)
+    quotes, meta = result
+    assert len(quotes) == 2, "应用旧缓存兜底返回 2 条"
+    # meta 标记 stale_cache_fallback
+    assert meta.get("source") == "stale_cache_fallback" or meta.get("status") == "stale_cache_fallback"
 
 
 def test_disabled_quote_source_is_not_called(db, monkeypatch):

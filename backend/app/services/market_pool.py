@@ -42,9 +42,14 @@ from app.services.market_data import (
     _candidate_recall_plan,
     _candidate_filter_summary,
     _eligible_market_quotes,
+    _exchange_from_code,
+    _fetch_tushare_realtime_frame,
+    _format_yyyymmdd,
     _latest_allowed_quote_date,
     _latest_trade_date_from_quotes,
+    _normalize_code,
     _num,
+    _row_value,
     _select_recall_candidates,
 )
 from app.services import market_pool_adapters as pool_adapters
@@ -283,6 +288,194 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[l
         }
     )
     snapshot["snapshot_id"] = f"snapshot_pool_{snapshot['trade_date']}_{datetime.now(timezone.utc).replace(tzinfo=None).strftime('%H%M%S')}"
+    return stocks, snapshot
+
+
+def _build_realtime_bar(realtime_row: dict[str, Any], prev_close: float, code: str) -> dict[str, Any]:
+    """将 realtime_quote 返回的实时行情拼接为一条日K。"""
+    price = _num(_row_value(realtime_row, "PRICE", "price"))
+    return {
+        "code": code,
+        "trade_date": _format_yyyymmdd(_row_value(realtime_row, "DATE", "date")),
+        "open": _num(_row_value(realtime_row, "OPEN", "open")),
+        "high": _num(_row_value(realtime_row, "HIGH", "high")),
+        "low": _num(_row_value(realtime_row, "LOW", "low")),
+        "close": price,
+        "volume": _num(_row_value(realtime_row, "VOLUME", "volume", "volumn")),
+        "amount": _num(_row_value(realtime_row, "AMOUNT", "amount")),
+        "pct_chg": round((price - prev_close) / prev_close * 100, 4) if prev_close > 0 else 0.0,
+        "turnover_rate": 0.0,
+        "source": "realtime_quote",
+    }
+
+
+def get_market_universe_from_pool_with_realtime(db: Session) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """盘中实时模式：本地池历史K线 + realtime_quote 今日实时快照拼接。
+
+    流程：
+    1. 从本地 stock_quotes 加载缓存行情（含市值/PE/换手率）
+    2. 提取候选股票，分批拉取 realtime_quote 实时快照
+    3. 合并 quote：实时 price/high/low/volume/amount + 缓存市值/PE
+    4. 从 daily_kbars 加载历史K线，拼接今日实时K线
+    5. 调用 _build_stock_from_bars 构建完整 Stock 对象
+    """
+    settings = get_settings()
+    quotes, quote_meta = _load_quotes_from_pool(db, settings, skip_metrics=True)
+    total_quote_count = len(quotes)
+    eligible_quotes = _eligible_market_quotes(quotes)
+    filter_summary = _candidate_filter_summary(quotes)
+    recall_plan = _candidate_recall_plan(total_quote_count, len(eligible_quotes), settings)
+    execution_recall_count = _execution_recall_count(recall_plan, len(eligible_quotes))
+    candidates = _select_recall_candidates(eligible_quotes, execution_recall_count)
+    if not candidates:
+        raise MarketDataError("统一行情池没有可用候选股票，已停止运行。")
+
+    candidate_codes = [quote["code"] for quote in candidates]
+    ts_codes = [f"{code}.{_exchange_from_code(code)}" for code in candidate_codes]
+
+    # 分批拉取 realtime_quote（sina 源单次最多 50 只）
+    realtime_map: dict[str, dict[str, Any]] = {}
+    chunk_size = 50
+    for start in range(0, len(ts_codes), chunk_size):
+        chunk = ts_codes[start:start + chunk_size]
+        try:
+            frame = _fetch_tushare_realtime_frame(chunk, settings)
+            if frame is None or frame.empty:
+                continue
+            for _, row in frame.iterrows():
+                item = dict(row)
+                code = _normalize_code(str(_row_value(item, "TS_CODE", "ts_code", "code") or "").split(".")[0])
+                if code:
+                    realtime_map[code] = item
+        except Exception as exc:
+            logger.warning("realtime_quote 批次 %d-%d 失败: %s", start, start + chunk_size, exc)
+
+    if not realtime_map:
+        raise MarketDataError("盘中实时行情拉取失败，realtime_quote 未返回任何数据。")
+
+    # 合并 quote：实时 price/high/low/volume/amount + 缓存市值/PE
+    merged_quotes: list[dict[str, Any]] = []
+    for quote in candidates:
+        code = quote["code"]
+        rt = realtime_map.get(code)
+        if not rt:
+            continue
+        price = _num(_row_value(rt, "PRICE", "price"))
+        if price <= 0:
+            continue
+        preclose = _num(_row_value(rt, "PRE_CLOSE", "pre_close", "preclose")) or _num(quote.get("preclose"))
+        merged = dict(quote)
+        merged["price"] = price
+        merged["pct"] = round((price - preclose) / preclose * 100, 4) if preclose > 0 else 0.0
+        merged["high"] = _num(_row_value(rt, "HIGH", "high"))
+        merged["low"] = _num(_row_value(rt, "LOW", "low"))
+        merged["open"] = _num(_row_value(rt, "OPEN", "open"))
+        merged["preclose"] = preclose
+        merged["volume"] = _num(_row_value(rt, "VOLUME", "volume", "volumn"))
+        merged["amount_yi"] = _num(_row_value(rt, "AMOUNT", "amount")) / 100000000
+        free_mv_yi = _num(quote.get("free_mv_yi"))
+        if free_mv_yi > 0 and merged["amount_yi"] > 0:
+            merged["turnover_rate"] = round(merged["amount_yi"] / free_mv_yi * 100, 4)
+        merged["trade_date"] = _format_yyyymmdd(_row_value(rt, "DATE", "date"))
+        merged["fetched_at"] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+        merged_quotes.append(merged)
+
+    if not merged_quotes:
+        raise MarketDataError("盘中实时行情合并失败，无有效候选。")
+
+    # 批量预加载历史K线
+    stocks: list[dict[str, Any]] = []
+    kline_errors: dict[str, list[str]] = {}
+    kline_usage: Counter[str] = Counter()
+    bars_batch = _load_cached_bars_batch(db, candidate_codes, settings.market_kline_days)
+
+    for quote in merged_quotes:
+        if len(stocks) >= recall_plan["scan_target_count"]:
+            break
+        code = quote["code"]
+        bars = list(bars_batch.get(code, []))
+        if len(bars) < 30:
+            kline_errors[code] = [f"daily_bars_cache: 本地日K不足30条，仅 {len(bars)} 条"]
+            continue
+
+        # 拼接今日实时K线
+        prev_close = bars[-1]["close"] if bars else _num(quote.get("preclose"))
+        rt_bar = _build_realtime_bar(realtime_map[code], prev_close, code)
+        # 如果今日实时K线日期与最后一条历史K线相同，替换最后一条
+        if bars and bars[-1]["trade_date"] == rt_bar["trade_date"]:
+            bars = bars[:-1]
+        bars.append(rt_bar)
+
+        selected_source = "daily_bars_cache+realtime"
+        stock = _build_stock_from_bars(
+            quote,
+            bars,
+            quote_source="unified_pool_realtime",
+            kline_source=selected_source,
+        )
+        stock["quote_source"] = "unified_pool_realtime"
+        stock["quote_time"] = quote.get("fetched_at") or stock.get("quote_time")
+        stock["data_quality"] = _merge_quality(stock.get("data_quality"), quote, {"selected_source": selected_source, "freshness_status": "realtime"})
+        stock["source_trace"] = {
+            "data_source": "local_pool_realtime",
+            "quote_source": "unified_pool_realtime",
+            "quote_raw_sources": ["tushare_realtime"],
+            "quote_source_count": 1,
+            "quote_quality_score": quote.get("quality_score", 0),
+            "quote_conflicts": [],
+            "quote_cache_status": "realtime",
+            "kline_source": selected_source,
+            "kline_cache_status": "local_pool+realtime_bar",
+        }
+        stocks.append(stock)
+        kline_usage[selected_source] += 1
+
+    if not stocks:
+        detail = "; ".join(f"{code}: {' | '.join(errors[:2])}" for code, errors in list(kline_errors.items())[:8])
+        raise MarketDataError(f"盘中实时行情池无法取得候选日K，已停止运行。{detail}")
+
+    quote_snapshot = _build_quote_snapshot(
+        merged_quotes,
+        data_source="local_pool_realtime",
+        quote_source="unified_pool_realtime",
+        quote_errors=quote_meta.get("errors", []),
+    )
+    _apply_relative_features(stocks)
+    snapshot = _build_snapshot(
+        stocks=stocks,
+        quote_source="unified_pool_realtime",
+        quote_errors=quote_meta.get("errors", []),
+        kline_sources=_kline_sources(settings),
+        kline_usage=kline_usage,
+        kline_errors=kline_errors,
+        quote_snapshot=quote_snapshot,
+    )
+    snapshot["breadth"].update(
+        {
+            "data_source": "local_pool_realtime",
+            "quote_pool_status": quote_meta.get("status"),
+            "realtime_quote_count": len(realtime_map),
+            "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+            "full_market_mode": recall_plan["full_market_mode"],
+            "unified_quote_total": total_quote_count,
+            "base_filter_eligible_count": len(eligible_quotes),
+            "candidate_filter": filter_summary,
+            "actual_scan_count": len(stocks),
+            "kline_missing_count": len(kline_errors),
+            "kline_skip_reasons": _summarize_kline_skip_reasons(kline_errors),
+            "candidate_limit_config": {
+                "market_candidate_count": recall_plan["explicit_scan_limit"],
+                "lookahead_multiplier": recall_plan["lookahead_multiplier"],
+                "lookahead_count": recall_plan["broad_recall_count"],
+                "target_scan_count": recall_plan["scan_target_count"],
+                "broad_recall_count": execution_recall_count,
+                "configured_broad_recall_count": recall_plan["broad_recall_count"],
+                "broad_recall_limited": execution_recall_count < len(eligible_quotes),
+                "recall_strategy": "multi_bucket_quote_recall",
+            },
+        }
+    )
+    snapshot["snapshot_id"] = f"snapshot_pool_rt_{snapshot['trade_date']}_{datetime.now(timezone.utc).replace(tzinfo=None).strftime('%H%M%S')}"
     return stocks, snapshot
 
 
@@ -660,6 +853,19 @@ def _refresh_quote_pool(
 
     if not grouped:
         db.commit()
+        # 所有报价源都失败时，用旧缓存兜底（T12：preclose_overnight 因 Tushare 超时失败，
+        # formal run 跑不通 = 系统对用户等于没在跑。旧缓存虽非最新但有数据，比 0 推荐好）
+        try:
+            cached = _load_cached_quotes(db, skip_metrics=True)
+            if cached:
+                logger.warning(
+                    "行情池刷新全失败，用旧缓存兜底（%d 条）。错误: %s",
+                    len(cached),
+                    "；".join(errors),
+                )
+                return cached, _quote_meta("stale_cache_fallback", cached, errors=errors)
+        except Exception:
+            pass
         raise MarketDataError("统一行情池刷新失败，所有报价源不可用。" + "；".join(errors))
 
     merged = [_merge_quote_rows(code, rows, sources, settings) for code, rows in grouped.items()]
