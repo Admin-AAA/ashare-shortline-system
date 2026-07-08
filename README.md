@@ -19,9 +19,9 @@ A 股短线交易驾驶舱，支持多数据源行情采集、多技能策略打
 |---|------|
 | 后端框架 | Python 3.12 + FastAPI |
 | 数据库 | MySQL + SQLAlchemy ORM |
-| 前端 | React 19 + TypeScript + Vite |
-| 图表 | ECharts 5 |
-| 状态管理 | Zustand 5 |
+| 前端 | React 19 + TypeScript + Vite 8 |
+| UI / 图标 | Zustand 5（状态管理）· lucide-react（图标） |
+| 可视化 | three.js 0.185（WebGL 动态背景）· 自研 SVG/Canvas 图表组件 |
 | 行情数据 | THS SDK / 腾讯 / 东方财富 / AkShare / 新浪 / BaoStock |
 
 ## 目录结构
@@ -40,7 +40,7 @@ ashare-shortline-system/
 │   │   │   ├── session.py      # SQLAlchemy 引擎与连接
 │   │   │   └── init_db.py      # 建表
 │   │   ├── models/
-│   │   │   └── tables.py       # 所有 ORM 模型（22 张表）
+│   │   │   └── tables.py       # 所有 ORM 模型（49 张表）
 │   │   ├── api/                # FastAPI 路由层
 │   │   │   ├── home.py         # 首页 bootstrap
 │   │   │   ├── runs.py         # 推荐运行
@@ -76,21 +76,30 @@ ashare-shortline-system/
 │   │   └── daily-stock-analysis-skill/  # 技术评分
 │   ├── tests/
 │   └── logs/                   # 运行日志（自动创建，Git 忽略）
-├── frontend-v2/
+├── frontend-v2/                # 唯一活跃前端（旧的 frontend/ 已弃用并移除）
 │   ├── src/
-│   │   ├── App.tsx             # 主应用入口（AuthGate + AppShell）
-│   │   ├── app/                # 驾驶舱 shell、鉴权、导航
-│   │   ├── components/         # 通用组件
-│   │   ├── pages/              # 页面视图
-│   │   ├── shared/             # 主题、公共工具
+│   │   ├── App.tsx             # 主应用入口
 │   │   ├── main.tsx            # React 入口
 │   │   ├── types.ts            # TypeScript 类型
+│   │   ├── app/                # 驾驶舱 shell（AppShell）、鉴权（AuthGate）、导航、URL 路由（useUrlRoute）、API 封装（useApi）
+│   │   ├── components/         # 通用组件（含 WaveBackground WebGL 动态背景）
+│   │   ├── pages/              # 页面视图（首页/矩阵/运行详情/数据池/记录中心/复盘/策略/指标/配置/数据健康等）
+│   │   ├── shared/theme/       # 主题系统（initTheme / useThemePreference，持久化到 localStorage）
 │   │   ├── api/                # API 客户端
-│   │   └── styles/             # tokenized cockpit styles
-│   ├── vite.config.ts
+│   │   ├── utils/              # 公共工具
+│   │   └── styles/             # tokenized cockpit styles（themes.css / tokens.css / wave-background.css 等）
+│   ├── vite.config.ts          # 端口 5174，/api 代理到 8765，three 拆独立 vendor chunk
 │   └── package.json
-└── docs/
+├── docs/                       # UX 架构图与报告、superpowers
+└── scripts/                    # 辅助脚本
 ```
+
+## 前端特性
+
+- **WebGL 动态背景**：`frontend-v2/src/components/WaveBackground.tsx` 使用 three.js（0.185）渲染全屏动态波形背景，固定挂载于 `AppShell` 之下；`body` 的 `--canvas` 作为 WebGL 不可用时的降级底色。
+- **暗/亮主题**：通过 `html[data-theme="dark"|"light"]` 切换，色彩 token 定义在 `src/styles/themes.css`（`--canvas`/`--surface`/`--accent` 等）。`shared/theme/useThemePreference()` 提供 `theme` 与 `toggleTheme`，选择持久化到 `localStorage`，默认暗色。
+- **URL 驱动路由**：`app/useUrlRoute.ts` 为模块级共享 store（listeners + emitChange），统一处理页面导航，确保 URL 变化能驱动整页重渲染（记录中心等深层页面依赖此机制）。
+- **页面视图**：首页驾驶舱、推荐矩阵、运行详情、本地数据池、记录中心、复盘、策略、指标、配置、数据健康等。
 
 ## 快速开始
 
@@ -252,7 +261,7 @@ npm run dev
 ┌─────────────────────────────┐
 │  本地统一行情池 (market_pool)  │
 │  ┌─────────────────────────┐ │
-│  │ 报价缓存 (StockQuote)   │ │  ← 8 小时 TTL，过期才刷新
+│  │ 报价缓存 (StockQuote)   │ │  ← 可配置 TTL（默认 300 秒），过期才刷新
 │  │ 日K缓存 (DailyKbar)     │ │  ← 20 小时 TTL
 │  └─────────────────────────┘ │
 └─────────────────────────────┘
@@ -331,9 +340,9 @@ npm run dev
 | `ASHARE_DATABASE_URL` | `mysql+pymysql://user:password@host:3306/ashare_workbench?charset=utf8mb4` | 数据库连接（仅支持 MySQL） |
 | `ASHARE_QUOTE_SOURCES` | `thsdk,eastmoney,akshare,tencent,sina` | 报价数据源优先级 |
 | `ASHARE_KLINE_SOURCES` | `tencent,thsdk,eastmoney,akshare` | K线数据源优先级 |
-| `ASHARE_MARKET_CANDIDATE_COUNT` | `300` | 候选股票数量上限；`0` 表示使用全部合格股票 |
+| `ASHARE_MARKET_CANDIDATE_COUNT` | `0` | 候选股票数量上限；`0` 表示不在首段召回前硬截断，交给宽召回窗口与后续精排控制 |
 | `ASHARE_MARKET_KLINE_DAYS` | `90` | K线数据天数 |
-| `ASHARE_MARKET_QUOTE_CACHE_TTL_SECONDS` | `28800` | 行情缓存有效期（秒），默认 8 小时 |
+| `ASHARE_MARKET_QUOTE_CACHE_TTL_SECONDS` | `300` | 行情缓存有效期（秒），默认 5 分钟（高频刷新以保证盘中介入价实时性） |
 | `ASHARE_MARKET_KLINE_CACHE_TTL_HOURS` | `20` | K线缓存有效期（小时） |
 | `ASHARE_MARKET_POOL_MIN_SOURCE_COUNT` | `2` | 行情多源交叉验证最少来源数 |
 | `ASHARE_MARKET_REQUEST_TIMEOUT_SECONDS` | `10.0` | 外部 API 请求超时 |
@@ -345,7 +354,7 @@ npm run dev
 | `ASHARE_AGENT_SKILL_BASE_URL` | `https://api.deepseek.com` | DeepSeek OpenAI 兼容 API 地址 |
 | `ASHARE_AGENT_SKILL_MODEL` | `deepseek-v4-pro` | LLM 模型 |
 | `ASHARE_AGENT_SKILL_TIMEOUT_SECONDS` | `300.0` | Agno Skill Agent 单次审查超时（秒） |
-| `ASHARE_MARKET_SKILL_REVIEW_CONCURRENCY` | `2` | Agno Skill 深审候选并发数 |
+| `ASHARE_MARKET_SKILL_REVIEW_CONCURRENCY` | `10` | Agno Skill 深审候选并发数（运行时可被 agent_review_concurrency 覆盖） |
 | `ASHARE_LOG_LEVEL` | `INFO` | 日志级别 |
 | `ASHARE_LOG_DIR` | `backend/logs/` | 日志目录 |
 
@@ -381,11 +390,17 @@ Agent 审查强制使用真实 LLM：缺少 `ASHARE_AGENT_SKILL_API_KEY`、DeepS
 
 ### 内置技能
 
-| 技能 | 说明 |
-|------|------|
-| 陈小群龙头战法 | 聚焦龙头辨识、量价确认和情绪周期 |
-| 炒股养家大局观 | 侧重宏观环境、市场结构和板块轮动 |
-| Daily Stock Analysis | 技术指标综合评分（MACD/RSI/均线/量价） |
+| 技能 | 目录 | 说明 |
+|------|------|------|
+| 陈小群龙头战法 | chen-xiaoqun-skill | 聚焦龙头辨识、量价确认和情绪周期 |
+| 炒股养家大局观 | chao-gu-yang-jia-skill | 侧重宏观环境、市场结构和板块轮动 |
+| Daily Stock Analysis | daily-stock-analysis-skill | 技术指标综合评分（MACD/RSI/均线/量价） |
+| 龙虎榜聪明钱接力 | dragon-tiger-smart-money | 跟踪龙虎榜机构/游资合力接力 |
+| 阶段新高放量突破 | high-range-breakout-momentum | 横盘后阶段新高伴随放量突破 |
+| 涨停回封接力 | limit-up-reseal-relay | 涨停开板后的回封接力机会 |
+| 隔夜持股法 | overnight-holding-method | 强势股隔夜持仓与次日动量管理 |
+| 主线相对强度龙头 | sector-relative-strength-leader | 板块相对强度排序下的主线龙头 |
+| 强趋势缩量回踩 | trend-pullback-continuation | 上升趋势中缩量回踩均线的延续买点 |
 
 ## 日志
 
@@ -401,5 +416,5 @@ Agent 审查强制使用真实 LLM：缺少 `ASHARE_AGENT_SKILL_API_KEY`、DeepS
 
 - TradingAgents-CN：多角色研究、反方、风控、交易员的审查链路
 - fin-agent：Tushare 数据接入、技术指标与自然语言金融工具
-- daily_stock_analysis：多数据源行情、技术评分和本地仪表盘工作流
+- github开源项目daily_stock_analysis：多数据源行情、技术评分和本地仪表盘工作流
 - FinRobot：面向金融任务的可审计 Agent/报告式输出
