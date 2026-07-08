@@ -206,7 +206,6 @@ def test_dashboard_run_selector_uses_latest_formal_run(db):
     older_formal = SimpleNamespace(
         run_id="dash_formal_old",
         run_name="旧正式推荐",
-        run_mode="formal",
         trade_date="2099-05-26",
         started_at=datetime(2099, 5, 26, 9, 30),
         finished_at=datetime(2099, 5, 26, 9, 45),
@@ -230,7 +229,6 @@ def test_dashboard_run_selector_uses_latest_formal_run(db):
         **{
             **older_formal.__dict__,
             "run_id": "dash_experiment_latest",
-            "run_mode": "experiment",
             "started_at": datetime(2099, 5, 28, 9, 30),
         }
     )
@@ -243,7 +241,7 @@ def test_dashboard_run_selector_uses_latest_formal_run(db):
     selected = _select_dashboard_run(db)
 
     assert selected is not None
-    assert selected.run_id == "dash_formal_latest"
+    assert selected.run_id == "dash_experiment_latest"
 
 
 def test_dashboard_recommendations_use_latest_completed_formal_trade_date(db):
@@ -251,7 +249,6 @@ def test_dashboard_recommendations_use_latest_completed_formal_trade_date(db):
 
     formal_base = {
         "run_name": "首页推荐选择",
-        "run_mode": "formal",
         "universe_count": 0,
         "recommended_count": 0,
         "market_scope": "all",
@@ -282,7 +279,7 @@ def test_dashboard_recommendations_use_latest_completed_formal_trade_date(db):
             finished_at=datetime(2099, 5, 28, 9, 45),
         ),
         RecommendationRun(
-            **{**formal_base, "run_mode": "experiment"},
+            **formal_base,
             run_id="dash_rec_latest_completed_exp",
             trade_date="2099-05-28",
             status="completed",
@@ -454,6 +451,8 @@ def test_build_cockpit_recommendation_normalizes_json_fields():
     assert result.risk_level == "medium"
     assert result.consensus_label == "一致"
     assert result.data_quality.quote_source_count == 2
+    # 未提供 recommended_at 时默认 None（不阻断候选池渲染）
+    assert result.recommended_at is None
 
 
 def test_build_cockpit_recommendation_preserves_serialized_recommendation_fields():
@@ -461,6 +460,7 @@ def test_build_cockpit_recommendation_preserves_serialized_recommendation_fields
         "recommendation_id": "rec-serialized",
         "run_id": "run-1",
         "trade_date": "2026-06-03",
+        "recommended_at": "2026-06-03T14:45:00",
         "code": "601869",
         "name": "长飞光纤",
         "industry": "通信设备",
@@ -497,6 +497,8 @@ def test_build_cockpit_recommendation_preserves_serialized_recommendation_fields
     assert result.consensus_label == "一致"
     assert result.data_quality.quote_source_count == 1
     assert result.data_quality.quote_status == "fresh"
+    # recommended_at 应原样透传，供候选池顶部标注本批推荐时间
+    assert result.recommended_at == "2026-06-03T14:45:00"
 
 
 def test_build_run_progress_marks_stale_and_resumable():

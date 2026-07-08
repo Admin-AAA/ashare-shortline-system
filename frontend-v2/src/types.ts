@@ -1,5 +1,3 @@
-export type RunMode = "formal" | "experiment";
-export type SkillMode = "formal" | "experiment" | "disabled";
 export type ScheduledTaskType = "data_sync" | "recommendation_run" | "preset_matrix_run" | "pool_refresh" | "data_backfill";
 
 export type PresetSkill = {
@@ -13,7 +11,7 @@ export type Preset = {
   preset_id: string;
   name: string;
   description?: string | null;
-  run_mode: RunMode;
+  skip_aux_refresh: boolean;
   market_scope: string;
   market_scope_value?: string | null;
   risk_template: string;
@@ -73,7 +71,6 @@ export type RunSummary = {
   run_name: string;
   preset_id?: string | null;
   preset_name: string;
-  run_mode: RunMode;
   trade_date: string;
   started_at?: string | null;
   finished_at?: string | null;
@@ -198,6 +195,7 @@ export type CockpitRecommendation = {
   recommendation_id: string;
   run_id: string;
   trade_date: string;
+  recommended_at?: string | null;
   code: string;
   name: string;
   industry?: string | null;
@@ -213,6 +211,9 @@ export type CockpitRecommendation = {
   watch_status: string;
   consensus_label: string;
   data_quality: DataQualitySummary;
+  preset_name?: string | null;
+  preset_id?: string | null;
+  run_name?: string | null;
   ideal_buy?: number | null;
   secondary_buy?: number | null;
   stop_loss?: number | null;
@@ -686,13 +687,11 @@ export type LocalPoolGapSyncResult = {
 export type HomeBootstrap = {
   presets: Preset[];
   recent_runs: {
-    formal: RunSummary | null;
-    experiment: RunSummary | null;
+    latest: RunSummary | null;
   };
   market_snapshot: MarketSnapshot;
   skill_summary: {
-    formal_count: number;
-    experiment_count: number;
+    enabled_count: number;
     disabled_count: number;
   };
 };
@@ -753,6 +752,10 @@ export type ModelRoute = {
   has_api_key: boolean;
   key_source: string;
   api_key_masked: string;
+  // 独立配置参数（为空时使用系统默认值）
+  max_tokens?: number | null;
+  temperature?: number | null;
+  timeout_seconds?: number | null;
   created_at?: string | null;
   updated_at?: string | null;
 };
@@ -1220,11 +1223,9 @@ export type RecommendationHistoryResponse = {
   total: number;
   offset: number;
   limit: number;
-  run_mode: string;
 };
 
 export type RecommendationHistoryQuery = {
-  run_mode?: string;
   code?: string;
   label?: "success" | "failed" | "missed" | "pending";
   limit?: number;
@@ -1444,7 +1445,6 @@ export type SkillSummary = {
   source_url?: string | null;
   installed_path: string;
   current_version: string;
-  mode: SkillMode;
   enabled: boolean;
   has_executable_contract: boolean;
   has_agent_contract?: boolean;
@@ -1505,7 +1505,6 @@ export type SkillPerformance = {
 export type SkillDetail = {
   skill_id: string;
   name: string;
-  mode: SkillMode;
   enabled: boolean;
   current_version: string;
   has_executable_contract: boolean;
@@ -1518,14 +1517,10 @@ export type SkillDetail = {
   skill_md: string;
   errors: string[];
   assigned_presets: Array<{ preset_id: string; name: string }>;
-  performance: {
-    formal: SkillPerformance;
-    experiment: SkillPerformance;
-  };
+  performance: SkillPerformance;
 };
 
 export type StatsOverview = {
-  mode: RunMode;
   run_count: number;
   recommendation_count: number;
   labeled_count: number;
@@ -1579,7 +1574,6 @@ export type AlphaDecayResponse = {
 export type SkillStatsRow = {
   skill_id: string;
   name: string;
-  current_mode: string;
   sample_count: number;
   run_count: number;
   labeled_count: number;
@@ -1604,7 +1598,7 @@ export type RunTarget = "preset" | "single-skill";
 export type PresetDraft = {
   name: string;
   description: string;
-  run_mode: RunMode;
+  skip_aux_refresh?: boolean;
   market_scope: string;
   market_scope_value: string;
   risk_template: string;
@@ -1774,7 +1768,6 @@ export type AccuracyPolicyAudit = {
 
 /** 9-KPI 评估指标（来自 /api/metrics/overview） */
 export type MetricsOverview = {
-  mode: "formal" | "experiment";
   total_recommendations: number;
   labeled_count: number;
   triggered_count: number;

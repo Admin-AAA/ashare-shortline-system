@@ -23,14 +23,11 @@ router = APIRouter(prefix="/api/records", tags=["records"])
 
 @router.get("/runs")
 def run_records(
-    run_mode: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
 ):
     """推荐运行记录列表（轻量摘要，不含推荐股票明细）。"""
-    if run_mode is not None and run_mode not in {"formal", "experiment"}:
-        raise HTTPException(status_code=400, detail="run_mode must be formal or experiment")
-    return list_run_records(db, run_mode=run_mode, limit=limit)
+    return list_run_records(db, limit=limit)
 
 
 @router.get("/runs/{run_id}")

@@ -92,6 +92,8 @@ export function ConfigPage() {
         model: form.model || undefined,
         api_key: form.api_key === MASK ? undefined : form.api_key || undefined,
         timeout_seconds: form.timeout_seconds ? Number(form.timeout_seconds) : undefined,
+        temperature: form.temperature ? Number(form.temperature) : undefined,
+        max_tokens: form.max_tokens ? Number(form.max_tokens) : undefined,
       });
       setTestResult(res);
     } catch (e: unknown) {

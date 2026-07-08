@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     agent_retry_backoff: float = 1.5
     agent_model: str = "deepseek-v4-pro"
     agent_temperature: float = 0.3
-    agent_max_tokens: int = 4096
+    agent_max_tokens: int = 40000
     agent_skill_weight: float = 0.50
     # 辅助数据源（tushare 优先，eastmoney/akshare 备用）
     limit_up_sources: str = "tushare"

@@ -325,6 +325,17 @@ def _apply_route_payload(route: ModelRouteConfig, payload: dict, *, creating: bo
     route.enabled = bool(payload.get("enabled", route.enabled if not creating else True))
     route.priority = max(1, int(payload.get("priority") or route.priority or 1))
 
+    # 独立配置参数（可选，为空时使用系统默认值）
+    if "max_tokens" in payload:
+        val = payload.get("max_tokens")
+        route.max_tokens = int(val) if val is not None and val != "" else None
+    if "temperature" in payload:
+        val = payload.get("temperature")
+        route.temperature = float(val) if val is not None and val != "" else None
+    if "timeout_seconds" in payload:
+        val = payload.get("timeout_seconds")
+        route.timeout_seconds = float(val) if val is not None and val != "" else None
+
     if creating:
         api_key = str(payload.get("api_key") or "").strip()
         route.api_key = api_key
@@ -409,6 +420,10 @@ def _serialize_route(route: ModelRouteConfig, settings) -> dict:
         "has_api_key": bool(custom_key or settings.agent_skill_api_key),
         "key_source": "env_default" if uses_default_key else "custom",
         "api_key_masked": "使用系统默认 Key" if uses_default_key and default_key_available else _mask_key(custom_key),
+        # 独立配置参数（为空时使用系统默认值）
+        "max_tokens": route.max_tokens,
+        "temperature": route.temperature,
+        "timeout_seconds": route.timeout_seconds,
         "created_at": route.created_at.isoformat() if route.created_at else None,
         "updated_at": route.updated_at.isoformat() if route.updated_at else None,
     }

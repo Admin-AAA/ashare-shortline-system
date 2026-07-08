@@ -77,9 +77,9 @@ class TestCheckRunTemporalConsistency:
         from app.db.session import SessionLocal
         db = SessionLocal()
         try:
-            result = check_run_temporal_consistency(db, run_mode="formal")
+            result = check_run_temporal_consistency(db)
             if result["status"] == "no_data":
-                pytest.skip("测试环境无 formal 推荐数据")
+                pytest.skip("测试环境无推荐数据")
             assert result["status"] == "completed"
             assert "check_summary" in result
             assert "violations" in result

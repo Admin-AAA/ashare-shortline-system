@@ -44,15 +44,15 @@ def _cached(key: str, factory):
     return result
 
 
-def get_overview_stats(db: Session, mode: str = "formal") -> dict[str, Any]:
-    return _cached(f"overview:{mode}", lambda: _get_overview_stats(db, mode))
+def get_overview_stats(db: Session) -> dict[str, Any]:
+    return _cached("overview", lambda: _get_overview_stats(db))
 
 
-def _get_overview_stats(db: Session, mode: str) -> dict[str, Any]:
-    runs = _runs_for_mode(db, mode)
+def _get_overview_stats(db: Session) -> dict[str, Any]:
+    runs = _runs_for_mode(db)
     run_ids = [run.run_id for run in runs]
     if not run_ids:
-        return _empty_overview(mode)
+        return _empty_overview()
 
     rec_rows = db.execute(
         select(Recommendation.recommendation_id, Recommendation.run_id, Recommendation.final_score)
@@ -105,7 +105,6 @@ def _get_overview_stats(db: Session, mode: str) -> dict[str, Any]:
     full_metrics = compute_full_metrics(trade_records) if trade_records else {}
 
     return {
-        "mode": mode,
         "run_count": len(runs),
         "recommendation_count": len(rec_rows),
         "labeled_count": len(labeled),
@@ -139,13 +138,13 @@ def _get_overview_stats(db: Session, mode: str) -> dict[str, Any]:
     }
 
 
-def get_skill_stats(db: Session, mode: str = "formal") -> list[dict[str, Any]]:
-    return _cached(f"skill:{mode}", lambda: _get_skill_stats(db, mode))
+def get_skill_stats(db: Session) -> list[dict[str, Any]]:
+    return _cached("skill", lambda: _get_skill_stats(db))
 
 
-def _get_skill_stats(db: Session, mode: str) -> list[dict[str, Any]]:
+def _get_skill_stats(db: Session) -> list[dict[str, Any]]:
     t0 = time.perf_counter()
-    runs = _runs_for_mode(db, mode)
+    runs = _runs_for_mode(db)
     run_ids = [run.run_id for run in runs]
     if not run_ids:
         return []
@@ -276,12 +275,12 @@ def _get_skill_stats(db: Session, mode: str) -> list[dict[str, Any]]:
     return sorted(result, key=lambda item: (item["sample_count"], item["hit_rate"], item["avg_signal_score"]), reverse=True)
 
 
-def get_preset_stats(db: Session, mode: str = "formal") -> list[dict[str, Any]]:
-    return _cached(f"preset:{mode}", lambda: _get_preset_stats(db, mode))
+def get_preset_stats(db: Session) -> list[dict[str, Any]]:
+    return _cached("preset", lambda: _get_preset_stats(db))
 
 
-def _get_preset_stats(db: Session, mode: str) -> list[dict[str, Any]]:
-    runs = _runs_for_mode(db, mode)
+def _get_preset_stats(db: Session) -> list[dict[str, Any]]:
+    runs = _runs_for_mode(db)
     if not runs:
         return []
 
@@ -376,9 +375,8 @@ def _get_preset_stats(db: Session, mode: str) -> list[dict[str, Any]]:
     return sorted(result, key=lambda item: (item["run_count"], item["hit_rate"], item["recommendation_count"]), reverse=True)
 
 
-def _empty_overview(mode: str) -> dict[str, Any]:
+def _empty_overview() -> dict[str, Any]:
     return {
-        "mode": mode,
         "run_count": 0,
         "recommendation_count": 0,
         "labeled_count": 0,
@@ -402,11 +400,9 @@ def _empty_overview(mode: str) -> dict[str, Any]:
     }
 
 
-def _runs_for_mode(db: Session, mode: str) -> list[RecommendationRun]:
-    if mode not in VALID_RUN_MODES:
-        raise ValueError("mode must be formal or experiment")
+def _runs_for_mode(db: Session) -> list[RecommendationRun]:
     return db.scalars(
-        select(RecommendationRun).where(RecommendationRun.run_mode == mode).order_by(RecommendationRun.started_at.desc())
+        select(RecommendationRun).order_by(RecommendationRun.started_at.desc())
     ).all()
 
 

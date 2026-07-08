@@ -388,7 +388,7 @@ def test_filter_effectiveness_returns_structure(db):
     """filter_effectiveness 应返回正确的结构：count/filtered_count/kept/filters。"""
     from app.services.outcome_service import filter_effectiveness
 
-    result = filter_effectiveness(db, run_mode="formal")
+    result = filter_effectiveness(db)
     # 无数据时应返回 error 或正确结构
     if "error" in result:
         assert result["count"] == 0

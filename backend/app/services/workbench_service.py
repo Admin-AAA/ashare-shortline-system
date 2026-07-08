@@ -527,7 +527,6 @@ def sync_skills(db: Session) -> list[StrategySkill]:
             manifest_data["_skill_runtime"] = "dual" if skill.contract is not None and skill.agent_enabled else "agent" if skill.agent_enabled else "rule"
             manifest_data["_strategy_backtest_adapter"] = _strategy_backtest_adapter_manifest(skill)
             manifest_json = json.dumps(manifest_data, ensure_ascii=False)
-            default_mode = _default_skill_mode(skill)
             if registry is None:
                 registry = SkillRegistry(
                     skill_id=skill.skill_id,
@@ -536,15 +535,15 @@ def sync_skills(db: Session) -> list[StrategySkill]:
                     source_url=skill.manifest.get("source_url"),
                     installed_path=str(skill.path),
                     current_version=skill.version,
-                    mode=default_mode,
-                    enabled=default_mode != "disabled",
+                    mode="formal",
+                    enabled=skill.enabled,
                     has_executable_contract=skill.contract is not None,
                     manifest_json=manifest_json,
                 )
                 db.add(registry)
                 has_changes = True
             else:
-                has_changes = _sync_registry_row(registry, skill, manifest_json, default_mode) or has_changes
+                has_changes = _sync_registry_row(registry, skill, manifest_json) or has_changes
 
             version_id = _skill_version_id(skill)
             if db.get(SkillVersion, version_id) is None:
@@ -557,7 +556,7 @@ def sync_skills(db: Session) -> list[StrategySkill]:
                         installed_path=str(skill.path),
                         manifest_json=manifest_json,
                         contract_hash=skill.contract_hash,
-                        status=registry.mode,
+                        status="formal",
                     )
                 )
                 has_changes = True
@@ -567,7 +566,7 @@ def sync_skills(db: Session) -> list[StrategySkill]:
                         version_id=version_id,
                         strategy_id=skill.skill_id,
                         name=skill.name,
-                        enabled=registry.mode != "disabled",
+                        enabled=registry.enabled,
                         skill_repo=skill.manifest.get("source_url"),
                         skill_ref=skill.manifest.get("source_ref"),
                         skill_path=str(skill.path),
@@ -598,7 +597,6 @@ def _sync_registry_row(
     registry: SkillRegistry,
     skill: StrategySkill,
     manifest_json: str,
-    default_mode: str,
 ) -> bool:
     changed = False
     updates = {
@@ -615,14 +613,7 @@ def _sync_registry_row(
             setattr(registry, field, value)
             changed = True
     if not registry.mode:
-        registry.mode = default_mode
-        changed = True
-    if _should_reset_external_to_experiment(registry):
-        registry.mode = "experiment"
-        changed = True
-    enabled = registry.mode != "disabled"
-    if registry.enabled != enabled:
-        registry.enabled = enabled
+        registry.mode = "formal"
         changed = True
     if changed:
         registry.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -662,7 +653,6 @@ def list_skills(db: Session) -> list[dict[str, Any]]:
                 "source_url": row.source_url,
                 "installed_path": row.installed_path,
                 "current_version": row.current_version,
-                "mode": row.mode,
                 "enabled": row.enabled,
                 "has_executable_contract": row.has_executable_contract,
                 "has_agent_contract": bool(manifest.get("_skill_md_available")),
@@ -691,8 +681,7 @@ def get_skill_detail(db: Session, skill_id: str) -> dict[str, Any] | None:
         skill_md = path.joinpath("SKILL.md").read_text(encoding="utf-8")
     if skill_obj is not None:
         errors = validate_skill(skill_obj)
-    performance_formal = _skill_performance(db, skill_id, "formal")
-    performance_experiment = _skill_performance(db, skill_id, "experiment")
+    performance = _skill_performance(db, skill_id)
     assigned_presets = [
         {"preset_id": preset_id, "name": db.get(Preset, preset_id).name}
         for preset_id in {row.preset_id for row in db.scalars(select(PresetSkill).where(PresetSkill.skill_id == skill_id)).all()}
@@ -703,7 +692,6 @@ def get_skill_detail(db: Session, skill_id: str) -> dict[str, Any] | None:
     return {
         "skill_id": row.skill_id,
         "name": row.name,
-        "mode": row.mode,
         "enabled": row.enabled,
         "current_version": row.current_version,
         "has_executable_contract": row.has_executable_contract,
@@ -716,44 +704,20 @@ def get_skill_detail(db: Session, skill_id: str) -> dict[str, Any] | None:
         "skill_md": skill_md,
         "errors": errors,
         "assigned_presets": assigned_presets,
-        "performance": {
-            "formal": performance_formal,
-            "experiment": performance_experiment,
-        },
+        "performance": performance,
     }
 
 
-def set_skill_mode(db: Session, skill_id: str, mode: str) -> dict[str, Any] | None:
+def set_skill_enabled(db: Session, skill_id: str, enabled: bool) -> dict[str, Any] | None:
     row = db.get(SkillRegistry, skill_id)
     if row is None:
         return None
-    row.mode = mode
-    row.enabled = mode != "disabled"
-    compatibility = _loads(row.compatibility_json, {})
-    compatibility["mode_set_by_user"] = True
-    row.compatibility_json = _dumps(compatibility)
+    row.enabled = enabled
     row.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.commit()
     invalidate_bootstrap_cache()
-    return {"skill_id": row.skill_id, "mode": row.mode, "enabled": row.enabled}
+    return {"skill_id": row.skill_id, "enabled": row.enabled}
 
-
-def _default_skill_mode(skill: StrategySkill) -> str:
-    if not skill.enabled:
-        return "disabled"
-    source_type = str(skill.manifest.get("source_type") or "local")
-    if source_type in {"github", "external"}:
-        return "experiment"
-    return "formal"
-
-
-def _should_reset_external_to_experiment(registry: SkillRegistry) -> bool:
-    if registry.source_type not in {"github", "external"}:
-        return False
-    if registry.mode != "formal":
-        return False
-    compatibility = _loads(registry.compatibility_json, {})
-    return not bool(compatibility.get("mode_set_by_user"))
 
 
 def skill_performance_summary(db: Session, skill_id: str) -> dict[str, Any] | None:
@@ -765,10 +729,7 @@ def skill_performance_summary(db: Session, skill_id: str) -> dict[str, Any] | No
     if skill_obj is None:
         return None
     errors = validate_skill(skill_obj)
-    performance_experiment = _skill_performance(db, skill_id, "experiment")
-    performance = performance_experiment
-    if performance["sample_count"] == 0:
-        performance = _skill_performance(db, skill_id, "formal")
+    performance = _skill_performance(db, skill_id)
     return {
         "skill_id": skill_id,
         "status": "completed",
@@ -791,10 +752,7 @@ def batch_skill_performance_summaries(db: Session) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for skill_obj in skills:
         errors = validate_skill(skill_obj)
-        performance_experiment = _skill_performance(db, skill_obj.skill_id, "experiment")
-        performance = performance_experiment
-        if performance["sample_count"] == 0:
-            performance = _skill_performance(db, skill_obj.skill_id, "formal")
+        performance = _skill_performance(db, skill_obj.skill_id)
         results.append({
             "skill_id": skill_obj.skill_id,
             "status": "completed",
@@ -861,12 +819,12 @@ def create_preset(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
     preset_id = str(payload.get("preset_id") or _slugify(payload.get("name") or f"preset-{uuid.uuid4().hex[:6]}"))
     if db.get(Preset, preset_id) is not None:
         preset_id = f"{preset_id}-{uuid.uuid4().hex[:4]}"
-    run_mode = str(payload.get("run_mode") or "formal")
     preset = Preset(
         preset_id=preset_id,
         name=str(payload.get("name") or "未命名预设"),
         description=payload.get("description"),
-        run_mode=run_mode,
+        run_mode="formal",
+        skip_aux_refresh=bool(payload.get("skip_aux_refresh", False)),
         market_scope=str(payload.get("market_scope") or "all"),
         market_scope_value=payload.get("market_scope_value"),
         risk_template=str(payload.get("risk_template") or "balanced"),
@@ -892,7 +850,6 @@ def update_preset(db: Session, preset_id: str, payload: dict[str, Any]) -> dict[
     for field in [
         "name",
         "description",
-        "run_mode",
         "market_scope",
         "market_scope_value",
         "risk_template",
@@ -905,6 +862,8 @@ def update_preset(db: Session, preset_id: str, payload: dict[str, Any]) -> dict[
             setattr(preset, field, value)
     if "output_count" in payload:
         preset.output_count = int(payload["output_count"])
+    if "skip_aux_refresh" in payload:
+        preset.skip_aux_refresh = bool(payload["skip_aux_refresh"])
     if "hide_recent_repeats" in payload:
         preset.hide_recent_repeats = bool(payload["hide_recent_repeats"])
     preset.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -915,15 +874,8 @@ def update_preset(db: Session, preset_id: str, payload: dict[str, Any]) -> dict[
     return _serialize_preset(db, preset)
 
 
-def list_runs(db: Session, run_mode: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+def list_runs(db: Session, limit: int = 100) -> list[dict[str, Any]]:
     stmt = select(RecommendationRun).order_by(RecommendationRun.started_at.desc()).limit(limit)
-    if run_mode:
-        stmt = (
-            select(RecommendationRun)
-            .where(RecommendationRun.run_mode == run_mode)
-            .order_by(RecommendationRun.started_at.desc())
-            .limit(limit)
-        )
     runs = db.scalars(stmt).all()
     _auto_recover_stale_runs(db, runs)
     return _serialize_run_summaries_batched(db, runs)
@@ -1041,7 +993,6 @@ _HISTORY_CACHE_TTL = 30.0
 def list_recommendation_history(
     db: Session,
     *,
-    run_mode: str = "formal",
     code: str | None = None,
     label: str | None = None,
     limit: int = 50,
@@ -1056,7 +1007,7 @@ def list_recommendation_history(
     Python 去重后切片分页，再只对 50 个 id 批量取详情。避免查全部 1584 行整行 + outcome。
     """
     # 短时缓存：历史数据不频繁变化（新 run 后才变），30s TTL
-    cache_key = f"hist:{run_mode}:{code or ''}:{label or ''}:{limit}:{offset}"
+    cache_key = f"hist:{code or ''}:{label or ''}:{limit}:{offset}"
     now = time.time()
     with _history_cache_lock:
         entry = _history_cache.get(cache_key)
@@ -1071,7 +1022,6 @@ def list_recommendation_history(
             Recommendation.final_score,
         )
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
-        .where(RecommendationRun.run_mode == run_mode)
         .order_by(Recommendation.trade_date.desc(), Recommendation.final_score.desc())
     )
     if code:
@@ -1107,7 +1057,7 @@ def list_recommendation_history(
     total = len(deduped_ids)
     page_ids = deduped_ids[offset : offset + limit]
     if not page_ids:
-        return {"items": [], "total": total, "offset": offset, "limit": limit, "run_mode": run_mode}
+        return {"items": [], "total": total, "offset": offset, "limit": limit}
 
     # 第 2 步：只对分页的 id 批量取详情（推荐 + outcome）
     page_recs = db.scalars(
@@ -1126,7 +1076,7 @@ def list_recommendation_history(
         rec_id = item.get("recommendation_id")
         item["outcome"] = _serialize_outcome(outcome_map.get(rec_id)) if rec_id else None
 
-    result = {"items": items, "total": total, "offset": offset, "limit": limit, "run_mode": run_mode}
+    result = {"items": items, "total": total, "offset": offset, "limit": limit}
     with _history_cache_lock:
         _history_cache[cache_key] = (time.time(), result)
     return result
@@ -2442,8 +2392,8 @@ def label_outcome_manually(db: Session, recommendation_id: str, payload: dict[st
     return _serialize_outcome(outcome)
 
 
-def label_pending_outcomes(db: Session, horizon_days: int = 5, run_mode: str | None = None) -> dict[str, Any]:
-    result = label_pending_outcomes_service(db, horizon_days=horizon_days, run_mode=run_mode)
+def label_pending_outcomes(db: Session, horizon_days: int = 5) -> dict[str, Any]:
+    result = label_pending_outcomes_service(db, horizon_days=horizon_days)
     labeled = int(result.get("labeled") or 0)
     if labeled:
         invalidate_bootstrap_cache()
@@ -2458,7 +2408,7 @@ def _serialize_preset(db: Session, preset: Preset) -> dict[str, Any]:
         "preset_id": preset.preset_id,
         "name": preset.name,
         "description": preset.description,
-        "run_mode": preset.run_mode,
+        "skip_aux_refresh": preset.skip_aux_refresh,
         "market_scope": preset.market_scope,
         "market_scope_value": preset.market_scope_value,
         "risk_template": preset.risk_template,
@@ -2511,7 +2461,7 @@ def _serialize_presets_batched(db: Session, presets: list[Preset]) -> list[dict[
             "preset_id": preset.preset_id,
             "name": preset.name,
             "description": preset.description,
-            "run_mode": preset.run_mode,
+            "skip_aux_refresh": preset.skip_aux_refresh,
             "market_scope": preset.market_scope,
             "market_scope_value": preset.market_scope_value,
             "risk_template": preset.risk_template,
@@ -2624,7 +2574,6 @@ def _serialize_run_summary_from_cache(run: RecommendationRun, preset: Preset | N
         "run_name": run.run_name,
         "preset_id": run.preset_id,
         "preset_name": preset.name if preset else "临时运行",
-        "run_mode": run.run_mode,
         "trade_date": run.trade_date,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
@@ -2681,7 +2630,6 @@ def _serialize_run_summary(db: Session, run: RecommendationRun) -> dict[str, Any
         "run_name": run.run_name,
         "preset_id": run.preset_id,
         "preset_name": preset.name if preset else "临时运行",
-        "run_mode": run.run_mode,
         "trade_date": run.trade_date,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
@@ -4918,6 +4866,8 @@ def _replace_preset_skills(db: Session, preset_id: str, skills: list[dict[str, A
     existing = db.scalars(select(PresetSkill).where(PresetSkill.preset_id == preset_id)).all()
     for row in existing:
         db.delete(row)
+    # 显式 flush：确保 DELETE 先落库，否则同事务内 INSERT 与待删旧行主键/唯一键冲突（uq_preset_skill）。
+    db.flush()
     for index, item in enumerate(skills):
         db.add(
             PresetSkill(
@@ -5030,7 +4980,7 @@ def _default_preset_skill_rows(preset_config: dict[str, Any], skills: list[Strat
     return sorted(rows, key=lambda row: (int(row.get("sort_order") or 0), str(row.get("skill_id") or "")))
 
 
-def _skill_performance(db: Session, skill_id: str, run_mode: str) -> dict[str, Any]:
+def _skill_performance(db: Session, skill_id: str) -> dict[str, Any]:
     _EMPTY: dict[str, Any] = {
         "sample_count": 0, "triggered_count": 0, "trigger_rate": 0.0,
         "hit_rate": 0.0, "avg_return": 0.0, "avg_score": 0.0, "failure_reasons": [],
@@ -5054,8 +5004,7 @@ def _skill_performance(db: Session, skill_id: str, run_mode: str) -> dict[str, A
             ) jt
             LEFT JOIN recommendation_outcomes o
                 ON o.recommendation_id = r.recommendation_id
-            WHERE rr.run_mode = :run_mode
-              AND jt.sid = :skill_id
+            WHERE jt.sid = :skill_id
         )
         SELECT
             COUNT(*)                                                      AS sample_count,
@@ -5067,7 +5016,7 @@ def _skill_performance(db: Session, skill_id: str, run_mode: str) -> dict[str, A
         FROM matched
     """)
     row = db.execute(agg_sql, {
-        "run_mode": run_mode, "skill_id": skill_id, "cost": _ADDITIONAL_COST_PCT,
+        "skill_id": skill_id, "cost": _ADDITIONAL_COST_PCT,
     }).first()
     if not row or (row.sample_count or 0) == 0:
         return _EMPTY
@@ -5092,8 +5041,7 @@ def _skill_performance(db: Session, skill_id: str, run_mode: str) -> dict[str, A
                 )
             ) jt
             JOIN recommendation_outcomes o  ON o.recommendation_id = r.recommendation_id
-            WHERE rr.run_mode = :run_mode
-              AND jt.sid = :skill_id
+            WHERE jt.sid = :skill_id
               AND o.entry_triggered = 1
               AND COALESCE(o.executed_return, o.close_return, 0) <= :cost
             GROUP BY reason
@@ -5101,7 +5049,7 @@ def _skill_performance(db: Session, skill_id: str, run_mode: str) -> dict[str, A
             LIMIT 5
         """)
         for frow in db.execute(fail_sql, {
-            "run_mode": run_mode, "skill_id": skill_id, "cost": _ADDITIONAL_COST_PCT,
+            "skill_id": skill_id, "cost": _ADDITIONAL_COST_PCT,
         }):
             failures[frow.reason] = frow.cnt
 

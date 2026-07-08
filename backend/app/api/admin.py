@@ -48,6 +48,8 @@ class SystemLlmTestPayload(BaseModel):
     model: str | None = None
     api_key: str | None = None
     timeout_seconds: float | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
 
 
 def _read_system_llm_config() -> dict:
@@ -263,7 +265,6 @@ def get_data_health_remediation_status():
 
 @router.get("/temporal-consistency")
 def get_temporal_consistency(
-    run_mode: str = "formal",
     db: Session = Depends(get_db),
 ):
     """时态一致性检查：验证推荐/回测数据没有时间穿越问题。
@@ -276,9 +277,9 @@ def get_temporal_consistency(
     from app.services.temporal_consistency import check_run_temporal_consistency
     from app.services.outcome_service import _cached as outcome_cached
 
-    cache_key = f"temporal_consistency:{run_mode}"
+    cache_key = "temporal_consistency"
     def _compute():
-        return check_run_temporal_consistency(db, run_mode=run_mode)
+        return check_run_temporal_consistency(db)
     return outcome_cached(cache_key, _compute)
 
 

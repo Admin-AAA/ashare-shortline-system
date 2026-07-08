@@ -16,7 +16,6 @@ def test_run_preset_matrix_tags_all_active_presets(monkeypatch, db):
             Preset(
                 preset_id=preset_a_id,
                 name="矩阵预设A",
-                run_mode="formal",
                 market_scope="all",
                 risk_template="balanced",
                 score_line=72,
@@ -29,7 +28,6 @@ def test_run_preset_matrix_tags_all_active_presets(monkeypatch, db):
             Preset(
                 preset_id=preset_b_id,
                 name="矩阵预设B",
-                run_mode="experiment",
                 market_scope="all",
                 risk_template="balanced",
                 score_line=70,
@@ -42,7 +40,6 @@ def test_run_preset_matrix_tags_all_active_presets(monkeypatch, db):
             Preset(
                 preset_id=f"preset_matrix_disabled_{uuid.uuid4().hex[:8]}",
                 name="矩阵停用预设",
-                run_mode="formal",
                 market_scope="all",
                 risk_template="balanced",
                 score_line=72,
@@ -102,7 +99,6 @@ def test_run_preset_matrix_continues_after_single_preset_failure(monkeypatch, db
             Preset(
                 preset_id=failing_preset_id,
                 name="矩阵失败预设",
-                run_mode="formal",
                 market_scope="all",
                 risk_template="balanced",
                 score_line=72,
@@ -115,7 +111,6 @@ def test_run_preset_matrix_continues_after_single_preset_failure(monkeypatch, db
             Preset(
                 preset_id=successful_preset_id,
                 name="矩阵成功预设",
-                run_mode="formal",
                 market_scope="all",
                 risk_template="balanced",
                 score_line=72,
@@ -153,7 +148,6 @@ def test_run_preset_matrix_defaults_to_local_pool_preferred(monkeypatch, db):
         Preset(
             preset_id=preset_id,
             name="矩阵默认数据源预设",
-            run_mode="formal",
             market_scope="all",
             risk_template="balanced",
             score_line=72,

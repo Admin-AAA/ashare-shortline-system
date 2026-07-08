@@ -81,9 +81,9 @@ def _patch_deps():
             yield
 
 
-def _build_trade_detail_list(db, start, end, mode):
+def _build_trade_detail_list(db, start, end, run_ids=None):
     from app.services.backtest_service import _build_trade_detail_list as fn
-    return fn(db, start, end, mode)
+    return fn(db, start, end, run_ids)
 
 
 def test_build_trade_detail_fields_complete():
@@ -104,7 +104,7 @@ def test_build_trade_detail_fields_complete():
         _make_scalars_result(outcomes),
     ]
 
-    details = _build_trade_detail_list(db, "2026-05-18", "2026-05-25", "experiment")
+    details = _build_trade_detail_list(db, "2026-05-18", "2026-05-25")
 
     assert len(details) == 2, "应有2笔交易"
 
@@ -133,7 +133,7 @@ def test_build_trade_detail_no_recommendations():
     """无推荐时应返回空列表。"""
     db = MagicMock()
     db.scalars.return_value = _make_scalars_result([])
-    details = _build_trade_detail_list(db, "2026-01-01", "2026-01-31", "experiment")
+    details = _build_trade_detail_list(db, "2026-01-01", "2026-01-31")
     assert details == []
 
 
@@ -153,7 +153,7 @@ def test_build_trade_detail_no_executed_trades():
         _make_scalars_result(outcomes),
     ]
 
-    details = _build_trade_detail_list(db, "2026-05-18", "2026-05-25", "experiment")
+    details = _build_trade_detail_list(db, "2026-05-18", "2026-05-25")
     assert details == []
 
 
@@ -177,7 +177,7 @@ def test_build_trade_detail_false_positive_trade():
         _make_scalars_result(outcomes),
     ]
 
-    details = _build_trade_detail_list(db, "2026-05-18", "2026-05-25", "experiment")
+    details = _build_trade_detail_list(db, "2026-05-18", "2026-05-25")
 
     assert len(details) == 1
     detail = details[0]
@@ -337,7 +337,6 @@ def test_backtest_horizon_return_matrix_groups_by_strategy_and_trading_day():
         db,
         "2026-05-18",
         "2026-05-21",
-        "experiment",
         run_ids={"run_1"},
         horizons=(1, 3),
     )

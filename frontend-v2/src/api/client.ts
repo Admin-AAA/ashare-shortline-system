@@ -31,7 +31,6 @@ import type {
   ScheduledTaskRun,
   ScheduledTaskPayload,
   SkillDetail,
-  SkillMode,
   SkillStatsRow,
   SkillSummary,
   ScoreLineStatsRow,
@@ -197,9 +196,8 @@ export const api = {
   updatePreset: (presetId: string, payload: PresetPayload) =>
     request<Preset>(`/api/presets/${presetId}`, json("PATCH", payload)),
 
-  runs: (runMode?: string, limit?: number) => {
+  runs: (limit?: number) => {
     const params = new URLSearchParams();
-    if (runMode) params.set("run_mode", runMode);
     if (limit) params.set("limit", String(limit));
     const qs = params.toString();
     return request<RunSummary[]>(`/api/runs${qs ? `?${qs}` : ""}`);
@@ -214,14 +212,12 @@ export const api = {
 
   recommendationDetail: (id: string) => request<RecommendationDetail>(`/api/recommendations/${id}`),
   recommendationHistory: (query?: {
-    run_mode?: string;
     code?: string;
     label?: string;
     limit?: number;
     offset?: number;
   }) => {
     const params = new URLSearchParams();
-    params.set("run_mode", query?.run_mode ?? "formal");
     if (query?.code) params.set("code", query.code);
     if (query?.label) params.set("label", query.label);
     if (query?.limit) params.set("limit", String(query.limit));
@@ -238,10 +234,9 @@ export const api = {
 
   labelOutcome: (id: string, payload: { outcome_label: string; outcome_reason?: string; horizon_days?: number }) =>
     request<RecommendationOutcome>(`/api/outcomes/${id}/label`, json("POST", payload)),
-  autoLabelOutcomes: (payload?: { horizon_days?: number; run_mode?: string }) => {
+  autoLabelOutcomes: (payload?: { horizon_days?: number }) => {
     const params = new URLSearchParams();
     if (payload?.horizon_days) params.set("horizon_days", String(payload.horizon_days));
-    if (payload?.run_mode) params.set("run_mode", payload.run_mode);
     const qs = params.toString();
     return request<{ labeled: number }>(`/api/outcomes/label${qs ? `?${qs}` : ""}`, json("POST"));
   },
@@ -291,12 +286,12 @@ export const api = {
     request<{ ok: boolean }>(`/api/admin/tasks/${taskId}/run`, json("POST")),
 
   skills: () => request<SkillSummary[]>("/api/skills", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
-  strategies: (mode: "formal" | "experiment" = "formal", windowDays?: number) =>
-    request<StrategyListItem[]>(`/api/strategies?mode=${mode}${windowDays ? `&window_days=${windowDays}` : ""}`, undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
+  strategies: (windowDays?: number) =>
+    request<StrategyListItem[]>(`/api/strategies${windowDays ? `?window_days=${windowDays}` : ""}`, undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   installSkill: (payload: { source: string; skill_id?: string }) =>
     request<SkillDetail>("/api/skills/install", json("POST", payload)),
   skillDetail: (id: string) => request<SkillDetail>(`/api/skills/${id}`),
-  setSkillMode: (id: string, mode: SkillMode) => request<{ skill_id: string; mode: SkillMode; enabled: boolean }>(`/api/skills/${id}/mode`, json("POST", { mode })),
+  setSkillEnabled: (id: string, enabled: boolean) => request<{ skill_id: string; enabled: boolean }>(`/api/skills/${id}/enabled`, json("POST", { enabled })),
   skillPerformanceSummary: (id: string) =>
     request<{
       skill_id: string;
@@ -328,13 +323,13 @@ export const api = {
   deletePreset: (id: string) => request<{ deleted: string }>(`/api/presets/${id}`, json("DELETE")),
 
   // 时间窗口：windowDays=N 取最近 N 天且已结算（today-N ~ today-20）的推荐；不传则全部历史累计。
-  metricsOverview: (mode: "formal" | "experiment", windowDays?: number, options?: RequestOptions) =>
-    request<MetricsOverview>(`/api/metrics/overview?mode=${mode}${windowDays ? `&window_days=${windowDays}` : ""}`, undefined, {
+  metricsOverview: (windowDays?: number, options?: RequestOptions) =>
+    request<MetricsOverview>(`/api/metrics/overview${windowDays ? `?window_days=${windowDays}` : ""}`, undefined, {
       timeoutMs: options?.timeoutMs ?? 30_000,
       signal: options?.signal,
     }),
-  filterEffectiveness: (mode: "formal" | "experiment", windowDays?: number, options?: RequestOptions) =>
-    request<FilterEffectiveness>(`/api/metrics/filter-effectiveness?mode=${mode}${windowDays ? `&window_days=${windowDays}` : ""}`, undefined, {
+  filterEffectiveness: (windowDays?: number, options?: RequestOptions) =>
+    request<FilterEffectiveness>(`/api/metrics/filter-effectiveness${windowDays ? `?window_days=${windowDays}` : ""}`, undefined, {
       timeoutMs: options?.timeoutMs ?? 15_000,
       signal: options?.signal,
     }),
@@ -357,29 +352,28 @@ export const api = {
     request<{ started: boolean; task_run: ScheduledTaskRun | null }>("/api/admin/data-health/remediate", json("POST", payload ?? {})),
   dataHealthRemediationStatus: () =>
     request<{ task_run: ScheduledTaskRun | null }>("/api/admin/data-health/remediate/status"),
-  temporalConsistency: (runMode?: string, options?: RequestOptions) =>
-    request<Record<string, unknown>>(`/api/admin/temporal-consistency${runMode ? `?run_mode=${runMode}` : ""}`, undefined, options),
+  temporalConsistency: (options?: RequestOptions) =>
+    request<Record<string, unknown>>("/api/admin/temporal-consistency", undefined, options),
   previewMinuteGate: (payload: { start_date: string; end_date: string; strategy_id: string }) =>
     request<MinutePrepResult>("/api/runs/backtest", json("POST", { ...payload, action: "preview_minute_gate" }), { timeoutMs: 120_000 }),
   remediateMinuteGaps: (payload: { start_date: string; end_date: string; strategy_id: string }) =>
     request<MinutePrepResult>("/api/runs/backtest", json("POST", { ...payload, action: "remediate_minute_gaps" }), { timeoutMs: 120_000 }),
-  statsOverview: (mode: "formal" | "experiment") => request<StatsOverview>(`/api/stats/overview?mode=${mode}`),
-  statsBySkill: (mode: "formal" | "experiment") => request<SkillStatsRow[]>(`/api/stats/by-skill?mode=${mode}`),
-  statsByPreset: (mode: "formal" | "experiment") => request<PresetStatsRow[]>(`/api/stats/by-preset?mode=${mode}`),
-  statsAlphaDecay: (mode: "formal" | "experiment") => request<AlphaDecayResponse>(`/api/stats/alpha-decay?mode=${mode}`),
-  metricsByStrategy: (mode: "formal" | "experiment", windowDays?: number) =>
-    request<StrategyStatsRow[]>(`/api/metrics/by-strategy?mode=${mode}${windowDays ? `&window_days=${windowDays}` : ""}`),
-  metricsBySetup: (mode: "formal" | "experiment", windowDays?: number) =>
-    request<SetupStatsRow[]>(`/api/metrics/by-setup?mode=${mode}${windowDays ? `&window_days=${windowDays}` : ""}`),
-  precisionAtK: (mode: "formal" | "experiment", windowDays?: number) =>
-    request<PrecisionAtKRow[]>(`/api/metrics/precision-at-k?mode=${mode}${windowDays ? `&window_days=${windowDays}` : ""}`),
-  metricsByScoreLine: (mode: "formal" | "experiment", windowDays?: number) =>
-    request<ScoreLineStatsRow[]>(`/api/metrics/by-score-line?mode=${mode}${windowDays ? `&window_days=${windowDays}` : ""}`),
+  statsOverview: () => request<StatsOverview>(`/api/stats/overview`),
+  statsBySkill: () => request<SkillStatsRow[]>(`/api/stats/by-skill`),
+  statsByPreset: () => request<PresetStatsRow[]>(`/api/stats/by-preset`),
+  statsAlphaDecay: () => request<AlphaDecayResponse>(`/api/stats/alpha-decay`),
+  metricsByStrategy: (windowDays?: number) =>
+    request<StrategyStatsRow[]>(`/api/metrics/by-strategy${windowDays ? `?window_days=${windowDays}` : ""}`),
+  metricsBySetup: (windowDays?: number) =>
+    request<SetupStatsRow[]>(`/api/metrics/by-setup${windowDays ? `?window_days=${windowDays}` : ""}`),
+  precisionAtK: (windowDays?: number) =>
+    request<PrecisionAtKRow[]>(`/api/metrics/precision-at-k${windowDays ? `?window_days=${windowDays}` : ""}`),
+  metricsByScoreLine: (windowDays?: number) =>
+    request<ScoreLineStatsRow[]>(`/api/metrics/by-score-line${windowDays ? `?window_days=${windowDays}` : ""}`),
 
   // —— 记录中心：运行推荐记录 + 矩阵运行记录 ——
-  runRecords: (params?: { run_mode?: string; limit?: number }) => {
+  runRecords: (params?: { limit?: number }) => {
     const qs = new URLSearchParams();
-    if (params?.run_mode) qs.set("run_mode", params.run_mode);
     if (params?.limit) qs.set("limit", String(params.limit));
     const str = qs.toString();
     return request<RunSummary[]>(`/api/records/runs${str ? `?${str}` : ""}`);
@@ -403,5 +397,7 @@ export const api = {
     model?: string;
     api_key?: string;
     timeout_seconds?: number;
+    temperature?: number;
+    max_tokens?: number;
   }) => request<SystemLlmTestResult>("/api/admin/system-llm/test", json("POST", payload), { timeoutMs: 35_000 })
 };

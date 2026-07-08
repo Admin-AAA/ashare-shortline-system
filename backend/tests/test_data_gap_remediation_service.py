@@ -384,7 +384,6 @@ def test_remediate_recommendation_run_auxiliary_data_updates_candidate_snapshot(
     run = RecommendationRun(
         run_id=run_id,
         run_name="辅助证据补齐测试",
-        run_mode="experiment",
         trade_date="2026-05-27",
         universe_count=1,
         recommended_count=1,

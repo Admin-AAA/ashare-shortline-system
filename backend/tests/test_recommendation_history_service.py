@@ -4,7 +4,7 @@
 - 按 (trade_date, code) 去重（教训库第 46 轮：回测 DB 累积重复）
 - code/label 筛选
 - 分页（limit/offset）
-- 返回结构（items/total/offset/limit/run_mode）
+- 返回结构（items/total/offset/limit）
 
 使用真实生产 MySQL（CLAUDE.md 允许），只读不写。
 """
@@ -22,10 +22,9 @@ def test_history_returns_deduplicated_items():
     """跨 run 历史按 (trade_date, code) 去重，total 应 <= 推荐总数。"""
     db = _db()
     try:
-        result = list_recommendation_history(db, run_mode="formal", limit=50, offset=0)
+        result = list_recommendation_history(db, limit=50, offset=0)
         assert "items" in result
         assert "total" in result
-        assert result["run_mode"] == "formal"
         assert result["limit"] == 50
         assert result["offset"] == 0
         # 去重验证：items 里不应有重复 (trade_date, code)
@@ -44,11 +43,11 @@ def test_history_code_filter():
     db = _db()
     try:
         # 先取一个存在的 code
-        result_all = list_recommendation_history(db, run_mode="formal", limit=5)
+        result_all = list_recommendation_history(db, limit=5)
         if not result_all["items"]:
             return  # 无数据，跳过
         target_code = result_all["items"][0]["code"]
-        result = list_recommendation_history(db, run_mode="formal", code=target_code, limit=50)
+        result = list_recommendation_history(db, code=target_code, limit=50)
         assert result["total"] > 0
         for item in result["items"]:
             assert item["code"] == target_code
@@ -60,7 +59,7 @@ def test_history_label_filter():
     """label 筛选只返回指定 outcome_label。"""
     db = _db()
     try:
-        result = list_recommendation_history(db, run_mode="formal", label="success", limit=50)
+        result = list_recommendation_history(db, label="success", limit=50)
         for item in result["items"]:
             outcome = item.get("outcome")
             if outcome:
@@ -73,8 +72,8 @@ def test_history_pagination():
     """分页：offset 翻页，items 不重叠。"""
     db = _db()
     try:
-        page1 = list_recommendation_history(db, run_mode="formal", limit=10, offset=0)
-        page2 = list_recommendation_history(db, run_mode="formal", limit=10, offset=10)
+        page1 = list_recommendation_history(db, limit=10, offset=0)
+        page2 = list_recommendation_history(db, limit=10, offset=10)
         if len(page1["items"]) == 10 and len(page2["items"]) > 0:
             ids1 = {i["recommendation_id"] for i in page1["items"]}
             ids2 = {i["recommendation_id"] for i in page2["items"]}
@@ -87,7 +86,7 @@ def test_history_items_have_outcome_field():
     """每个 item 应有 outcome 字段（可能为 None）。"""
     db = _db()
     try:
-        result = list_recommendation_history(db, run_mode="formal", limit=5)
+        result = list_recommendation_history(db, limit=5)
         for item in result["items"]:
             assert "outcome" in item
     finally:
@@ -104,8 +103,8 @@ def test_recompute_stale_outcomes_idempotent():
 
     db = _db()
     try:
-        first = recompute_stale_outcomes(db, horizon_days=5, run_mode="formal", limit=30)
-        second = recompute_stale_outcomes(db, horizon_days=5, run_mode="formal", limit=30)
+        first = recompute_stale_outcomes(db, horizon_days=5, limit=30)
+        second = recompute_stale_outcomes(db, horizon_days=5, limit=30)
 
         # 返回结构
         assert "recomputed" in first
@@ -118,20 +117,3 @@ def test_recompute_stale_outcomes_idempotent():
         assert second["errors"] == 0
     finally:
         db.close()
-
-
-def test_recompute_stale_outcomes_invalid_run_mode_rejected():
-    """recompute 端点 run_mode 参数校验（API 层 HTTP 400）。
-
-    回归保护：run_mode 非 formal/experiment 时应拒绝。
-    """
-    from fastapi import HTTPException
-    from app.api.outcomes import recompute
-
-    # 模拟 API 层校验（不调真实 db）
-    try:
-        recompute(horizon_days=5, run_mode="invalid_mode", limit=10, db=None)
-        assert False, "应抛 HTTPException(400)"
-    except HTTPException as e:
-        assert e.status_code == 400
-        assert "run_mode" in e.detail

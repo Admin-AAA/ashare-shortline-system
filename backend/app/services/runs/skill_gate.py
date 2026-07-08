@@ -21,7 +21,7 @@ def resolve_skill_review_limit(params: dict[str, Any], settings: Any, selected_s
     if skill_review_limit > 0:
         return skill_review_limit
     score_line = float(params.get("score_line") or 72.0)
-    base = 14 if params.get("run_mode") == "experiment" else 28
+    base = 28
     if score_line < 70:
         base += 10
     elif score_line >= 78:

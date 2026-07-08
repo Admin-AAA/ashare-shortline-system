@@ -158,14 +158,13 @@ def test_load_backtest_trades_filters_to_current_successful_run_ids():
 
     with patch("app.services.backtest_service._build_backtest_metric_records") as mock_records:
         mock_records.return_value = [{"trade_date": "2026-05-18", "code": "000001"}]
-        trades = _load_backtest_trades(db, result, "2026-05-18", "2026-05-21", "experiment")
+        trades = _load_backtest_trades(db, result, "2026-05-18", "2026-05-21")
 
     assert trades == [{"trade_date": "2026-05-18", "code": "000001"}]
     mock_records.assert_called_once_with(
         db,
         "2026-05-18",
         "2026-05-21",
-        "experiment",
         run_ids={"baseline_run"},
     )
 

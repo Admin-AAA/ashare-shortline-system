@@ -45,8 +45,6 @@ const STATUS_LABELS: Record<string, string> = {
   low: "低置信度",
   high: "高风险",
   medium: "中等风险",
-  formal: "正式",
-  experiment: "实验",
   none: "未关注",
   pending: "待复盘",
   watching: "已关注",
@@ -198,9 +196,9 @@ export function formatApiDateTime(
 
 export function statusTone(value: unknown): Tone {
   const key = String(value ?? "").trim().toLowerCase();
-  if (["ready", "completed", "healthy", "ok", "normal", "formal"].includes(key)) return "positive";
+  if (["ready", "completed", "healthy", "ok", "normal"].includes(key)) return "positive";
   if (["failed", "error", "interrupted", "stale", "blocked", "unavailable", "high"].includes(key)) return "danger";
-  if (["warning", "risk", "queued", "running", "experiment", "manual", "schedule", "low", "degraded", "untested", "partial_completed"].includes(key)) return "warning";
+  if (["warning", "risk", "queued", "running", "manual", "schedule", "low", "degraded", "untested", "partial_completed"].includes(key)) return "warning";
   return "neutral";
 }
 

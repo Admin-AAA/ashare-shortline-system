@@ -291,7 +291,6 @@ def _overview_refresh_worker() -> None:
 def _select_dashboard_run(db: Session) -> RecommendationRun | None:
     return db.scalar(
         select(RecommendationRun)
-        .where(RecommendationRun.run_mode == "formal")
         .order_by(RecommendationRun.started_at.desc())
         .limit(1)
     )
@@ -304,7 +303,6 @@ def _select_dashboard_recommendation_run(db: Session) -> RecommendationRun | Non
     return db.scalar(
         select(RecommendationRun)
         .where(
-            RecommendationRun.run_mode == "formal",
             RecommendationRun.status == "completed",
             RecommendationRun.trade_date == latest_trade_date,
         )
@@ -316,7 +314,7 @@ def _select_dashboard_recommendation_run(db: Session) -> RecommendationRun | Non
 def _latest_dashboard_trade_date(db: Session) -> str | None:
     return db.scalar(
         select(RecommendationRun.trade_date)
-        .where(RecommendationRun.run_mode == "formal", RecommendationRun.status == "completed")
+        .where(RecommendationRun.status == "completed")
         .order_by(RecommendationRun.trade_date.desc())
         .limit(1)
     )

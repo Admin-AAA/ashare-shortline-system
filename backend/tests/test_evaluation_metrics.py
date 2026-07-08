@@ -493,7 +493,7 @@ class TestBackendIntegration:
         """验证 outcome_service.overview_metrics 现在返回 9-KPI 字段。"""
         from app.services.outcome_service import overview_metrics
 
-        metrics = overview_metrics(self.db, "formal")
+        metrics = overview_metrics(self.db)
         for k in ["recommendation_accuracy", "average_net_return", "median_net_return",
                    "profit_loss_ratio", "max_drawdown", "positive_month_ratio",
                    "benchmark_excess_return", "sample_confidence", "false_positive_notes"]:

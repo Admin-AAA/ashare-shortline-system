@@ -27,7 +27,6 @@ def _make_run(run_id: str, *, heartbeat_at) -> RecommendationRun:
     return RecommendationRun(
         run_id=run_id,
         run_name="__test_stale_recovery__",
-        run_mode="formal",
         trade_date="2026-07-08",
         started_at=datetime.now(timezone.utc).replace(tzinfo=None),
         status="running",

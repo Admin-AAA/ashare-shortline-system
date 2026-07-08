@@ -764,7 +764,6 @@ def test_default_presets_do_not_overwrite_user_skill_selection(production_mysql)
             Preset(
                 preset_id="preset_formal_opening",
                 name="正式盘前组合",
-                run_mode="formal",
                 market_scope="all",
                 risk_template="balanced",
                 output_count=6,
@@ -778,7 +777,6 @@ def test_default_presets_do_not_overwrite_user_skill_selection(production_mysql)
             Preset(
                 preset_id="preset_experiment_dsa",
                 name="DSA 单 Skill 实验",
-                run_mode="experiment",
                 market_scope="all",
                 risk_template="balanced",
                 output_count=6,

@@ -823,7 +823,6 @@ async def _run_recommendation(db, payload: dict) -> dict:
         "run_name": payload.get("run_name", f"定时推荐 {datetime.now(timezone.utc).replace(tzinfo=None).strftime('%Y%m%d')}"),
     }
     for key in (
-        "run_mode",
         "data_source",
         "risk_template",
         "score_line",
@@ -864,8 +863,7 @@ def check_formal_recommendation_gap(db) -> dict:
                SUM(CASE WHEN status='completed' AND COALESCE(recommended_count,0) > 0 THEN 1 ELSE 0 END) as ok_count,
                COUNT(*) as total_count
         FROM recommendation_runs
-        WHERE run_mode='formal'
-          AND trade_date >= DATE_SUB(CURDATE(), INTERVAL 5 DAY)
+        WHERE trade_date >= DATE_SUB(CURDATE(), INTERVAL 5 DAY)
         GROUP BY trade_date
         ORDER BY trade_date DESC
         LIMIT 1
@@ -902,7 +900,6 @@ async def _safety_net_run(db, payload: dict) -> dict:
         run_payload = {
             "preset_id": "preset_formal_opening",
             "run_name": "安全网补跑推荐",
-            "run_mode": "formal",
             "data_source": DEFAULT_RECOMMENDATION_DATA_SOURCE,
             "risk_template": "balanced",
             "score_line": 72,
@@ -999,7 +996,6 @@ async def _run_preset_matrix(db, payload: dict, task_run_id: str | None = None) 
             "matrix_run": True,
         }
         for key in (
-            "run_mode",
             "risk_template",
             "score_line",
             "output_count",

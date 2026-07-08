@@ -110,7 +110,7 @@ export function SkillPerformanceSection() {
               <div>
                 <div style={{ fontWeight: 600 }}>{s.name}</div>
                 <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>
-                  {s.skill_id} · {s.mode}
+                  {s.skill_id}
                   {s.assigned_presets.length > 0 && ` · ${s.assigned_presets.join(" / ")}`}
                 </div>
               </div>

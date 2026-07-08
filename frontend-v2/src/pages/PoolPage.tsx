@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
+  Clock,
   Search,
 } from "lucide-react";
 import { api } from "../api/client";
@@ -83,8 +84,13 @@ export function PoolPage() {
     );
   }
 
+  // 从候选列表中提取本批共同的推荐时间信息（同一 run 共享 trade_date / recommended_at）
+  // deriveBatchMeta 是纯函数且只需取首元素，无需 useMemo（避免在条件 return 后违反 Hooks 规则）
+  const batchMeta = deriveBatchMeta(items);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
+      <RecommendationTimeBar meta={batchMeta} runId={runId} total={items.length} />
       <FilterBar
         total={items.length}
         filtered={filtered.length}
@@ -198,6 +204,86 @@ export function PoolPage() {
       })}
     </div>
   );
+}
+
+/** 本批候选的推荐时间信息（同一 run 共享） */
+type BatchMeta = {
+  trade_date: string;
+  recommended_at?: string | null;
+  run_name?: string | null;
+  preset_name?: string | null;
+  run_id?: string | null;
+};
+
+function deriveBatchMeta(items: CockpitRecommendation[] | null | undefined): BatchMeta | null {
+  if (!items || items.length === 0) return null;
+  const first = items[0];
+  return {
+    trade_date: first.trade_date,
+    recommended_at: first.recommended_at ?? null,
+    run_name: first.run_name ?? null,
+    preset_name: first.preset_name ?? null,
+    run_id: first.run_id ?? null,
+  };
+}
+
+/** 推荐时间标注条 —— 明确标注这一批候选的推荐日期/时间、来源 run 与预设。 */
+function RecommendationTimeBar({
+  meta,
+  runId,
+  total,
+}: {
+  meta: BatchMeta | null;
+  runId: string | null;
+  total: number;
+}) {
+  if (!meta) return null;
+  const parts: string[] = [];
+  // 推荐日期（trade_date）
+  if (meta.trade_date) parts.push(`推荐日期 ${meta.trade_date}`);
+  // 推荐时刻（recommended_at 带时分，截取到分钟）
+  if (meta.recommended_at) {
+    const timeLabel = formatRecommendedAt(meta.recommended_at);
+    if (timeLabel) parts.push(timeLabel);
+  }
+  // 预设 / 运行名称
+  if (meta.preset_name) parts.push(`预设 ${meta.preset_name}`);
+  if (meta.run_name && meta.run_name !== meta.preset_name) parts.push(meta.run_name);
+  // run_id（URL 已带 runId 时不重复显示）
+  const effectiveRunId = runId || meta.run_id;
+  if (effectiveRunId) parts.push(`Run ${effectiveRunId.slice(-8)}`);
+
+  return (
+    <div
+      className="panel"
+      style={{
+        padding: "var(--space-2) var(--space-4)",
+        display: "flex",
+        alignItems: "center",
+        gap: "var(--space-2)",
+        flexWrap: "wrap",
+        fontSize: "var(--text-sm)",
+      }}
+    >
+      <Clock size={14} className="text-muted" />
+      <span className="text-muted">本批推荐</span>
+      <span className="text-mono" style={{ fontWeight: 600, color: "var(--ink)" }}>
+        {parts.length > 0 ? parts.join(" · ") : "—"}
+      </span>
+      <span className="tag" style={{ marginLeft: "auto", fontSize: "var(--text-xs)" }}>
+        {total} 只候选
+      </span>
+    </div>
+  );
+}
+
+/** 将 recommended_at ISO 字符串格式化为「推荐时刻 MM-DD HH:MM」。 */
+function formatRecommendedAt(iso: string): string | null {
+  // 期望形如 2026-07-08T14:45:00 或 2026-07-08T14:45:00.123456
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso);
+  if (!match) return null;
+  const [, , mm, dd, hh, min] = match;
+  return `推荐时刻 ${mm}-${dd} ${hh}:${min}`;
 }
 
 /** 板块分散度指示器 —— 显示行业分布，过度集中时警告 */

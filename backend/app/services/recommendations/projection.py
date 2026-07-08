@@ -88,10 +88,23 @@ def build_cockpit_recommendation(rec: Any, watch: Any = None) -> CockpitRecommen
     if watch:
         watch_status = _get(watch, "watch_status", watch_status)
 
+    recommended_at_value = _get(rec, "recommended_at")
+    recommended_at_str = None
+    if recommended_at_value is not None:
+        try:
+            recommended_at_str = (
+                recommended_at_value.isoformat()
+                if hasattr(recommended_at_value, "isoformat")
+                else str(recommended_at_value)
+            )
+        except Exception:
+            recommended_at_str = str(recommended_at_value)
+
     return CockpitRecommendation(
         recommendation_id=_get(rec, "recommendation_id", ""),
         run_id=_get(rec, "run_id", ""),
         trade_date=_get(rec, "trade_date", ""),
+        recommended_at=recommended_at_str,
         code=_get(rec, "code", ""),
         name=_get(rec, "name", ""),
         industry=_get(rec, "industry"),

@@ -44,17 +44,16 @@ class TemporalViolation(Exception):
 def check_run_temporal_consistency(
     db: Session,
     run_id: str | None = None,
-    run_mode: str | None = None,
     verbose: bool = False,
 ) -> dict[str, Any]:
-    """对指定 run（或 mode）做完整的时态一致性检查。
+    """对指定 run 做完整的时态一致性检查。
 
     返回报告包含：
     - check_summary: 总检查项数 / 通过 / 警告 / 失败
     - violations: 具体违规列表
     - statistics: 按 run 聚合的统计
     """
-    recs, run_map = _load_recommendations(db, run_id=run_id, run_mode=run_mode)
+    recs, run_map = _load_recommendations(db, run_id=run_id)
     if not recs:
         return {
             "status": "no_data",
@@ -202,15 +201,12 @@ def check_backtest_temporal_consistency(
 def _load_recommendations(
     db: Session,
     run_id: str | None = None,
-    run_mode: str | None = None,
 ) -> tuple[list[Any], dict[str, Any]]:
     stmt = select(Recommendation).join(
         RecommendationRun, RecommendationRun.run_id == Recommendation.run_id
     )
     if run_id:
         stmt = stmt.where(Recommendation.run_id == run_id)
-    if run_mode:
-        stmt = stmt.where(RecommendationRun.run_mode == run_mode)
     stmt = stmt.order_by(Recommendation.trade_date.asc())
     recs = db.scalars(stmt).all()
 

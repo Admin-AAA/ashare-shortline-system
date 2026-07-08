@@ -92,7 +92,7 @@ export function HomePage() {
           {boot && (
             <CollapsiblePanel kicker="最近产出" title="最新推荐 run">
               <LatestRunCard
-                run={boot.recent_runs.formal ?? boot.recent_runs.experiment}
+                run={boot.recent_runs.latest}
                 onOpen={() => navigateSection("dashboard")}
               />
             </CollapsiblePanel>

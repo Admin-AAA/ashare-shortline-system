@@ -564,7 +564,7 @@ def _recent_daily_trade_days(db: Session, reference_trade_date: str, window: int
     reference_compact = _compact_date(reference_trade_date)
     normalized_col = func.replace(DailyKbar.trade_date, "-", "")
     rows = db.scalars(
-        select(distinct(normalized_col))
+        select(func.distinct(normalized_col))
         .where(DailyKbar.trade_date.is_not(None), normalized_col <= reference_compact)
         .order_by(normalized_col.desc())
         .limit(max(1, window))

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session  # noqa: F401 (Query used in endpoints)
 
 from app.db.session import get_db
 from app.services.workbench_service import (
@@ -16,7 +16,6 @@ router = APIRouter(prefix="/api/recommendations", tags=["recommendations"])
 
 @router.get("/history")
 def history(
-    run_mode: str = Query(default="formal"),
     code: str | None = Query(default=None),
     label: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
@@ -27,12 +26,10 @@ def history(
 
     填补推荐历史记录页缺口：用户查看所有推荐过的股票及其实际表现。
     """
-    if run_mode not in {"formal", "experiment"}:
-        raise HTTPException(status_code=400, detail="run_mode must be formal or experiment")
     if label is not None and label not in {"success", "failed", "missed", "pending"}:
         raise HTTPException(status_code=400, detail="label must be success/failed/missed/pending")
     return list_recommendation_history(
-        db, run_mode=run_mode, code=code, label=label, limit=limit, offset=offset
+        db, code=code, label=label, limit=limit, offset=offset
     )
 
 

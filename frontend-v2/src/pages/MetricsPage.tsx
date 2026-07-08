@@ -37,31 +37,31 @@ export function MetricsPage() {
   const [windowDays, setWindowDays] = useState<number | null>(null);
 
   const { data: scoreLines, loading: l1, error: e1 } = useApi<ScoreLineStatsRow[]>(
-    () => api.metricsByScoreLine("formal", windowDays ?? undefined),
+    () => api.metricsByScoreLine(windowDays ?? undefined),
     [windowDays],
   );
   const { data: strategies, loading: l2, error: e2 } = useApi<StrategyStatsRow[]>(
-    () => api.metricsByStrategy("formal", windowDays ?? undefined),
+    () => api.metricsByStrategy(windowDays ?? undefined),
     [windowDays],
   );
   const { data: setups, loading: l3, error: e3 } = useApi<SetupStatsRow[]>(
-    () => api.metricsBySetup("formal", windowDays ?? undefined),
+    () => api.metricsBySetup(windowDays ?? undefined),
     [windowDays],
   );
   const { data: precisionAtK, loading: l4, error: e4 } = useApi<PrecisionAtKRow[]>(
-    () => api.precisionAtK("formal", windowDays ?? undefined),
+    () => api.precisionAtK(windowDays ?? undefined),
     [windowDays],
   );
   const { data: filterEffect, loading: l5, error: e5 } = useApi<FilterEffectiveness>(
-    () => api.filterEffectiveness("formal", windowDays ?? undefined),
+    () => api.filterEffectiveness(windowDays ?? undefined),
     [windowDays],
   );
   const { data: overview, loading: l6, error: e6 } = useApi<MetricsOverview>(
-    () => api.metricsOverview("formal", windowDays ?? undefined),
+    () => api.metricsOverview(windowDays ?? undefined),
     [windowDays],
   );
   const { data: alphaDecay, loading: l7, error: e7 } = useApi<AlphaDecayResponse>(
-    () => api.statsAlphaDecay("formal"),
+    () => api.statsAlphaDecay(),
     [],
   );
 
@@ -144,7 +144,7 @@ function MetricsWindowBar({
               排除未结算 {dateRange.pending_excluded} 笔，已结算 {dateRange.labeled_in_window} 笔）
             </>
           ) : (
-            <>统计范围：formal 模式全部历史累计推荐（无时间窗口）</>
+            <>统计范围：全部历史累计推荐（无时间窗口）</>
           )}
         </span>
       </div>

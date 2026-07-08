@@ -31,11 +31,10 @@ const HORIZONS = [
 ];
 
 export function StrategiesPage() {
-  const [mode, setMode] = useState<"formal" | "experiment">("formal");
   const [windowDays, setWindowDays] = useState<number | null>(null);
   const { data, loading, error } = useApi<StrategyListItem[]>(
-    () => api.strategies(mode, windowDays ?? undefined),
-    [mode, windowDays],
+    () => api.strategies(windowDays ?? undefined),
+    [windowDays],
   );
 
   if (loading) return <PageSkeleton title="策略清单" hint="加载策略与胜率" rowCount={8} />;
@@ -59,15 +58,8 @@ export function StrategiesPage() {
         </span>
       }
     >
-      {/* 口径切换 + 时间窗口 */}
+      {/* 时间窗口 */}
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", padding: "var(--space-2) 0 var(--space-4)", flexWrap: "wrap" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-          <span style={{ color: "var(--muted)", fontSize: "var(--text-base)" }}>口径</span>
-          <select value={mode} onChange={(e) => setMode(e.target.value as "formal" | "experiment")} style={selectStyle}>
-            <option value="formal">正式</option>
-            <option value="experiment">实验</option>
-          </select>
-        </div>
         <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
           <span style={{ color: "var(--muted)", fontSize: "var(--text-base)", marginRight: "var(--space-1)" }}>时间窗口</span>
           {WINDOW_OPTIONS.map((opt) => {
@@ -98,7 +90,7 @@ export function StrategiesPage() {
             if (dr && dr.window_days) {
               return `窗口 ${dr.start_date} ~ ${dr.end_date}（已结算截止 ${dr.settle_cutoff}，已结算 ${dr.labeled_in_window} 笔）`;
             }
-            return "统计范围：formal 模式全部历史累计";
+            return "统计范围：全部历史累计";
           })()}
         </span>
       </div>

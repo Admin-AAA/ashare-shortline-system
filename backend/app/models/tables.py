@@ -880,6 +880,10 @@ class ModelRouteConfig(Base):
     api_key: Mapped[str | None] = mapped_column(Text)
     priority: Mapped[int] = mapped_column(Integer, default=1, index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    # 独立配置参数（可选，为空时使用系统默认值）
+    max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    temperature: Mapped[float | None] = mapped_column(Float, nullable=True)
+    timeout_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

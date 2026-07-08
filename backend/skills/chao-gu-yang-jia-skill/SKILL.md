@@ -153,8 +153,8 @@
   "score": 72,
   "confidence": 0.7,
   "evidence": [
-    "赚钱效应明显，涨停家数 > 30",
-    "板块梯队完整，龙头确认"
+    "赚钱效应明显，limit_up_count=32 > 30 阈值",
+    "sector_ladder_completeness_score=68，板块梯队完整（首板2/二板1/三板1）"
   ],
   "risks": [
     "热点持续性存疑，已运行 3 天"
@@ -177,8 +177,9 @@
 
 1. **不要编造数据**——evidence 中引用的数据必须来自输入的市场快照和个股数据
 2. **不要引用未提供的字段**——只使用输入中实际存在的数据
-3. **不要忽略赚钱效应周期**——退潮期即使个股形态完美也必须 veto
-4. **不要把风险写进 evidence**——evidence 只能是看多理由；风险必须放 risks 字段
-5. **不要违反 stance→action 映射**——neutral/oppose/veto 时 action 必须是"观察"或"不做"
-6. **不要给出模糊建议**——action 必须是 4 选 1，position_range 必须具体
-7. **不要过度乐观**——confidence > 0.8 需要有充分数据支撑
+3. **evidence 必须引用具体字段名+数值**——如"limit_up_count=32"、"sector_ladder_completeness_score=68"，不得纯定性（如"板块梯队完整"无数值支撑）
+4. **不要忽略赚钱效应周期**——退潮期即使个股形态完美也必须 veto
+5. **不要把风险写进 evidence**——evidence 只能是看多理由；风险必须放 risks 字段
+6. **不要违反 stance→action 映射**——neutral/oppose/veto 时 action 必须是"观察"或"不做"
+7. **不要给出模糊建议**——action 必须是 4 选 1，position_range 必须具体
+8. **不要过度乐观**——confidence > 0.8 需要有充分数据支撑

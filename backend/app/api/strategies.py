@@ -11,7 +11,7 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -25,7 +25,6 @@ router = APIRouter(prefix="/api/strategies", tags=["strategies"])
 
 @router.get("")
 def list_strategies(
-    mode: str = Query(default="formal"),
     db: Session = Depends(get_db),
     window_days: int | None = Query(default=None, ge=1, le=365, description="滚动窗口天数，如 30/90；设置后自动截到已结算截止日"),
     start_date: str | None = Query(default=None, description="显式起始日期 YYYY-MM-DD（window_days 优先）"),
@@ -38,13 +37,10 @@ def list_strategies(
     时间窗口：window_days/start_date/end_date 透传给 metrics_by_strategy，
     与 /api/metrics/by-strategy 口径一致，便于策略清单页与指标页跨页对照。
     """
-    if mode not in {"formal", "experiment"}:
-        raise HTTPException(status_code=400, detail="mode must be formal or experiment")
-
     skills = list_skills(db)
     metrics_by_id = {
         m["strategy_id"]: m
-        for m in metrics_by_strategy(db, mode, window_days=window_days, start_date=start_date, end_date=end_date)
+        for m in metrics_by_strategy(db, window_days=window_days, start_date=start_date, end_date=end_date)
     }
 
     result = []
@@ -74,7 +70,6 @@ def list_strategies(
                 "skill_id": s["skill_id"],
                 "name": s["name"],
                 "description": (s.get("manifest") or {}).get("description") or "",
-                "mode": s["mode"],
                 "enabled": s["enabled"],
                 "source_type": s.get("source_type"),
                 "assigned_presets": s.get("assigned_presets") or [],

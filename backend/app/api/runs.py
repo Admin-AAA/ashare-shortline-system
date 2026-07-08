@@ -64,7 +64,7 @@ def create_backtest_comparison(payload: dict, db: Session = Depends(get_db)):
     请求体:
         start_date: str
         end_date: str
-        run_mode: str (默认 experiment)
+
         horizon_days: int (默认 5)
         baseline_score_line: float (默认 72.0)
         candidate_score_line: float (默认 65.0)
@@ -77,15 +77,12 @@ def create_backtest_comparison(payload: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="start_date and end_date are required")
     if start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date must be <= end_date")
-    run_mode = payload.get("run_mode", "experiment")
-    if run_mode not in {"formal", "experiment"}:
-        raise HTTPException(status_code=400, detail="run_mode must be formal or experiment")
     horizon_days = int(payload.get("horizon_days", 5))
     baseline_score_line = float(payload.get("baseline_score_line", 72.0))
     candidate_score_line = float(payload.get("candidate_score_line", 65.0))
     try:
         return run_backtest_comparison(
-            db, start_date, end_date, run_mode, horizon_days,
+            db, start_date, end_date, horizon_days,
             baseline_score_line=baseline_score_line,
             candidate_score_line=candidate_score_line,
         )
@@ -128,7 +125,6 @@ def create_backtest(payload: dict, db: Session = Depends(get_db)):
     请求体:
         start_date: str  # 起始日期 YYYY-MM-DD
         end_date: str    # 结束日期 YYYY-MM-DD
-        run_mode: str    # formal | experiment（默认 experiment）
         horizon_days: int # 持仓天数（默认 5）
     """
     from app.services.backtest_service import run_backtest
@@ -139,10 +135,6 @@ def create_backtest(payload: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="start_date and end_date are required")
     if start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date must be <= end_date")
-
-    run_mode = payload.get("run_mode", "experiment")
-    if run_mode not in {"formal", "experiment"}:
-        raise HTTPException(status_code=400, detail="run_mode must be formal or experiment")
 
     horizon_days = int(payload.get("horizon_days", 5))
     if horizon_days < 1 or horizon_days > 20:
@@ -168,7 +160,6 @@ def create_backtest(payload: dict, db: Session = Depends(get_db)):
             db,
             start_date,
             end_date,
-            run_mode,
             horizon_days,
             score_line,
             skill_id=skill_id or strategy_id or None,
@@ -233,13 +224,10 @@ def backtest_detail(backtest_id: str, db: Session = Depends(get_db)):
 
 @router.get("")
 def get_runs(
-    run_mode: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
 ):
-    if run_mode is not None and run_mode not in {"formal", "experiment"}:
-        raise HTTPException(status_code=400, detail="run_mode must be formal or experiment")
-    return list_runs(db, run_mode=run_mode, limit=limit)
+    return list_runs(db, limit=limit)
 
 
 @router.get("/{run_id}")

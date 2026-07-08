@@ -51,6 +51,9 @@ export function ModelRoutesSection() {
     api_key: "",
     enabled: true,
     clear_key: false,
+    max_tokens: "",
+    temperature: "",
+    timeout_seconds: "",
   });
   const [editSaving, setEditSaving] = useState(false);
 
@@ -63,6 +66,9 @@ export function ModelRoutesSection() {
       api_key: "",
       enabled: route.enabled,
       clear_key: false,
+      max_tokens: route.max_tokens != null ? String(route.max_tokens) : "",
+      temperature: route.temperature != null ? String(route.temperature) : "",
+      timeout_seconds: route.timeout_seconds != null ? String(route.timeout_seconds) : "",
     });
     setEditingId(route.route_id);
     setError(null);
@@ -70,7 +76,7 @@ export function ModelRoutesSection() {
 
   function cancelEdit() {
     setEditingId(null);
-    setEditForm({ name: "", provider: "openai_compatible", base_url: "", model: "", api_key: "", enabled: true, clear_key: false });
+    setEditForm({ name: "", provider: "openai_compatible", base_url: "", model: "", api_key: "", enabled: true, clear_key: false, max_tokens: "", temperature: "", timeout_seconds: "" });
   }
 
   async function handleEditSave(route: ModelRoute) {
@@ -94,10 +100,20 @@ export function ModelRoutesSection() {
     } else if (editForm.api_key.trim()) {
       payload.api_key = editForm.api_key.trim();
     }
+    // 高级配置参数（为空表示使用系统默认值）
+    if (editForm.max_tokens.trim()) {
+      payload.max_tokens = Number(editForm.max_tokens);
+    }
+    if (editForm.temperature.trim()) {
+      payload.temperature = Number(editForm.temperature);
+    }
+    if (editForm.timeout_seconds.trim()) {
+      payload.timeout_seconds = Number(editForm.timeout_seconds);
+    }
     try {
       await api.updateModelRoute(route.route_id, payload);
       setEditingId(null);
-      setEditForm({ name: "", provider: "openai_compatible", base_url: "", model: "", api_key: "", enabled: true, clear_key: false });
+      setEditForm({ name: "", provider: "openai_compatible", base_url: "", model: "", api_key: "", enabled: true, clear_key: false, max_tokens: "", temperature: "", timeout_seconds: "" });
       await load();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -378,6 +394,38 @@ export function ModelRoutesSection() {
                     password
                     onChange={(v) => setEditForm((f) => ({ ...f, api_key: v }))}
                   />
+                  {/* 高级配置参数 */}
+                  <LabeledInput
+                    label="Max Tokens"
+                    hint="单次最大输出，留空使用系统默认"
+                    value={editForm.max_tokens}
+                    placeholder="如 40000"
+                    type="number"
+                    min={1}
+                    step={1}
+                    onChange={(v) => setEditForm((f) => ({ ...f, max_tokens: v }))}
+                  />
+                  <LabeledInput
+                    label="Temperature"
+                    hint="0-2，越低越稳，留空使用系统默认"
+                    value={editForm.temperature}
+                    placeholder="如 0.3"
+                    type="number"
+                    min={0}
+                    max={2}
+                    step={0.1}
+                    onChange={(v) => setEditForm((f) => ({ ...f, temperature: v }))}
+                  />
+                  <LabeledInput
+                    label="超时（秒）"
+                    hint="单次调用超时，留空使用系统默认"
+                    value={editForm.timeout_seconds}
+                    placeholder="如 300"
+                    type="number"
+                    min={1}
+                    step={1}
+                    onChange={(v) => setEditForm((f) => ({ ...f, timeout_seconds: v }))}
+                  />
                   <div style={{ display: "flex", alignItems: "flex-end", gap: "var(--space-2)", flexWrap: "wrap" }}>
                     <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "var(--text-sm)", color: "var(--text-secondary)" }}>
                       <input type="checkbox" checked={editForm.enabled} onChange={(e) => setEditForm((f) => ({ ...f, enabled: e.target.checked }))} />
@@ -437,22 +485,38 @@ function LabeledInput({
   placeholder,
   onChange,
   password,
+  hint,
+  type,
+  min,
+  max,
+  step,
 }: {
   label: string;
   value: string;
   placeholder?: string;
   onChange: (v: string) => void;
   password?: boolean;
+  hint?: string;
+  type?: string;
+  min?: number;
+  max?: number;
+  step?: number;
 }) {
   return (
     <label style={{ display: "block" }}>
       <div style={{ fontSize: "var(--text-xs)", color: "var(--text-secondary)", marginBottom: 4, fontWeight: 600 }}>{label}</div>
+      {hint ? (
+        <div style={{ fontSize: "var(--text-xs)", color: "var(--muted)", marginBottom: 4 }}>{hint}</div>
+      ) : null}
       <input
         className="cfg-input"
-        type={password ? "password" : "text"}
+        type={type ? (password ? "password" : type) : password ? "password" : "text"}
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
+        min={min}
+        max={max}
+        step={step}
       />
     </label>
   );

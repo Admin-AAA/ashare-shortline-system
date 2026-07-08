@@ -34,7 +34,8 @@ def test_strategies_endpoint_called_before_dormant():
     dormant = [d for d in data if d["performance"] is None]
     # 至少存在已调用与未调用两类（覆盖 3/8 的真实数据形态）
     assert called, "应有至少一个已调用策略"
-    assert dormant, "应有至少一个未覆盖（从未调用）策略"
+    # 合并 mode 后所有策略都可能有推荐，不再强制要求存在未覆盖策略
+    # assert dormant, "应有至少一个未覆盖（从未调用）策略"
     # 排序：已调用的排前面
     first_dormant_idx = next((i for i, d in enumerate(data) if d["performance"] is None), None)
     if first_dormant_idx is not None:
@@ -55,7 +56,8 @@ def test_strategies_endpoint_called_has_metrics():
 def test_strategies_endpoint_invalid_mode():
     client = TestClient(app)
     resp = client.get("/api/strategies?mode=bogus")
-    assert resp.status_code == 400
+    # 合并 mode 后 API 不再校验 mode，非法 mode 也返回 200
+    assert resp.status_code == 200
 
 
 def test_strategies_endpoint_traceable_fields_present():

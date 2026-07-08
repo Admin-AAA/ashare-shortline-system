@@ -8,7 +8,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api/client";
-import type { Preset, RunMode, SkillSummary } from "../types";
+import type { Preset, SkillSummary } from "../types";
 
 /**
  * 预设管理 —— 配置页「预设管理」Tab。
@@ -22,13 +22,26 @@ import type { Preset, RunMode, SkillSummary } from "../types";
  * - 编辑预设（展开行内表单）
  * - 删除预设
  */
+// 风险模板与数据源的中文显示映射
+const RISK_TEMPLATE_MAP: Record<string, string> = {
+  balanced: "平衡型",
+  aggressive: "激进型",
+  conservative: "保守型",
+};
+
+const DATA_SOURCE_MAP: Record<string, string> = {
+  local_pool: "本地池",
+  local_pool_preferred: "本地池优先",
+  realtime: "实时数据",
+};
+
+// 保留原始值用于内部逻辑处理
 const RISK_TEMPLATES = ["balanced", "aggressive", "conservative"];
 const DATA_SOURCES = ["local_pool", "local_pool_preferred", "realtime"];
 
 type SkillPick = {
   skill_id: string;
   name: string;
-  mode: string;
   selected: boolean;
   weight: number;
 };
@@ -36,7 +49,7 @@ type SkillPick = {
 type PresetForm = {
   name: string;
   description: string;
-  run_mode: RunMode;
+  skip_aux_refresh: boolean;
   market_scope: string;
   market_scope_value: string;
   risk_template: string;
@@ -51,7 +64,7 @@ function emptyForm(skills: SkillSummary[]): PresetForm {
   return {
     name: "",
     description: "",
-    run_mode: "formal",
+    skip_aux_refresh: false,
     market_scope: "all",
     market_scope_value: "",
     risk_template: "balanced",
@@ -62,7 +75,6 @@ function emptyForm(skills: SkillSummary[]): PresetForm {
     skills: skills.map((s) => ({
       skill_id: s.skill_id,
       name: s.name,
-      mode: s.mode,
       selected: false,
       weight: 1,
     })),
@@ -77,7 +89,7 @@ function formFromPreset(p: Preset, skills: SkillSummary[]): PresetForm {
   return {
     name: p.name,
     description: p.description ?? "",
-    run_mode: p.run_mode,
+    skip_aux_refresh: p.skip_aux_refresh,
     market_scope: p.market_scope,
     market_scope_value: p.market_scope_value ?? "",
     risk_template: p.risk_template,
@@ -91,7 +103,6 @@ function formFromPreset(p: Preset, skills: SkillSummary[]): PresetForm {
         return {
           skill_id: s.skill_id,
           name: s.name,
-          mode: s.mode,
           selected: !!hit,
           weight: hit?.weight ?? 1,
         };
@@ -105,7 +116,7 @@ function formToPayload(f: PresetForm) {
   return {
     name: f.name,
     description: f.description || null,
-    run_mode: f.run_mode,
+    skip_aux_refresh: f.skip_aux_refresh,
     market_scope: f.market_scope,
     market_scope_value: f.market_scope_value || null,
     risk_template: f.risk_template,
@@ -300,7 +311,6 @@ export function PresetsSection() {
               <div style={{ minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
                   <span style={{ fontWeight: 650, fontSize: "var(--text-lg)", color: "var(--text)" }}>{p.name}</span>
-                  <ModeBadge mode={p.run_mode} />
                   <span style={pillStyle(p.status === "active" ? "var(--color-up)" : "var(--muted)")}>
                     {p.status === "active" ? "启用" : "停用"}
                   </span>
@@ -332,8 +342,8 @@ export function PresetsSection() {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: "var(--space-3)", marginTop: "var(--space-3)" }}>
               <Metric label="分数线" value={String(p.score_line)} />
               <Metric label="输出数" value={String(p.output_count)} />
-              <Metric label="风险模板" value={p.risk_template} />
-              <Metric label="数据源" value={p.data_source} />
+              <Metric label="风险模板" value={RISK_TEMPLATE_MAP[p.risk_template] || p.risk_template} />
+              <Metric label="数据源" value={DATA_SOURCE_MAP[p.data_source] || p.data_source} />
               <Metric label="隐藏重复" value={p.hide_recent_repeats ? "是" : "否"} />
             </div>
 
@@ -463,13 +473,7 @@ function PresetEditor({
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "var(--space-3)" }}>
         <FormField label="名称">
-          <input className="cfg-input" value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="如：正式·全市场" />
-        </FormField>
-        <FormField label="运行模式">
-          <select className="cfg-input" value={form.run_mode} onChange={(e) => set("run_mode", e.target.value as RunMode)}>
-            <option value="formal">正式（formal）</option>
-            <option value="experiment">实验（experiment）</option>
-          </select>
+          <input className="cfg-input" value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="如：全市场" />
         </FormField>
         <FormField label="分数线">
           <input className="cfg-input" type="number" min={0} max={100} step={0.5} value={form.score_line} onChange={(e) => set("score_line", Number(e.target.value))} />
@@ -480,14 +484,14 @@ function PresetEditor({
         <FormField label="风险模板">
           <select className="cfg-input" value={form.risk_template} onChange={(e) => set("risk_template", e.target.value)}>
             {RISK_TEMPLATES.map((t) => (
-              <option key={t} value={t}>{t}</option>
+              <option key={t} value={t}>{RISK_TEMPLATE_MAP[t] || t}</option>
             ))}
           </select>
         </FormField>
         <FormField label="数据源">
           <select className="cfg-input" value={form.data_source} onChange={(e) => set("data_source", e.target.value)}>
             {DATA_SOURCES.map((d) => (
-              <option key={d} value={d}>{d}</option>
+              <option key={d} value={d}>{DATA_SOURCE_MAP[d] || d}</option>
             ))}
           </select>
         </FormField>
@@ -509,10 +513,16 @@ function PresetEditor({
         </FormField>
       </div>
 
-      <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginTop: "var(--space-3)", cursor: "pointer" }}>
-        <input type="checkbox" checked={form.hide_recent_repeats} onChange={(e) => set("hide_recent_repeats", e.target.checked)} />
-        <span style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)" }}>隐藏近期重复推荐</span>
-      </label>
+      <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)", marginTop: "var(--space-3)" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", cursor: "pointer" }}>
+          <input type="checkbox" checked={form.hide_recent_repeats} onChange={(e) => set("hide_recent_repeats", e.target.checked)} />
+          <span style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)" }}>隐藏近期重复推荐</span>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", cursor: "pointer" }}>
+          <input type="checkbox" checked={form.skip_aux_refresh} onChange={(e) => set("skip_aux_refresh", e.target.checked)} />
+          <span style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)" }}>跳过辅助数据刷新（适用矩阵快测）</span>
+        </label>
+      </div>
 
       {/* 策略多选 */}
       <div style={{ marginTop: "var(--space-4)" }}>
@@ -520,14 +530,9 @@ function PresetEditor({
           <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-secondary)" }}>
             包含策略（已选 {selectedCount} / {form.skills.length}）
           </span>
-          <span style={{ fontSize: "var(--text-xs)", color: "var(--muted)" }}>
-            formal 模式预设只会运行 formal 策略，experiment 策略需选 experiment 模式
-          </span>
         </div>
         <div style={{ display: "grid", gap: "var(--space-2)" }}>
           {form.skills.map((s) => {
-            const incompatible =
-              form.run_mode === "formal" && s.mode === "experiment";
             return (
               <div
                 key={s.skill_id}
@@ -539,40 +544,16 @@ function PresetEditor({
                   borderRadius: 8,
                   background: s.selected ? "color-mix(in srgb, var(--color-up) 8%, transparent)" : "var(--surface-1)",
                   border: `1px solid ${s.selected ? "color-mix(in srgb, var(--color-up) 28%, transparent)" : "var(--border)"}`,
-                  opacity: incompatible ? 0.6 : 1,
                 }}
               >
                 <input
                   type="checkbox"
                   checked={s.selected}
                   onChange={() => toggleSkill(s.skill_id)}
-                  disabled={incompatible}
                 />
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <span style={{ fontWeight: 600, fontSize: "var(--text-sm)", color: "var(--text)" }}>{s.name}</span>
                   <span style={{ marginLeft: 8, fontSize: "var(--text-xs)", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>{s.skill_id}</span>
-                  <span
-                    style={{
-                      marginLeft: 8,
-                      fontSize: "var(--text-xs)",
-                      padding: "1px 6px",
-                      borderRadius: 999,
-                      color: s.mode === "formal" ? "var(--color-up)" : s.mode === "experiment" ? "var(--gold, #e8c547)" : "var(--muted)",
-                      background:
-                        s.mode === "formal"
-                          ? "color-mix(in srgb, var(--color-up) 14%, transparent)"
-                          : s.mode === "experiment"
-                          ? "color-mix(in srgb, var(--gold, #e8c547) 14%, transparent)"
-                          : "var(--surface-1)",
-                    }}
-                  >
-                    {s.mode}
-                  </span>
-                  {incompatible && (
-                    <span style={{ marginLeft: 8, fontSize: "var(--text-xs)", color: "var(--color-down)" }}>
-                      formal 预设不可选
-                    </span>
-                  )}
                 </div>
                 {s.selected && (
                   <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "var(--text-sm)", color: "var(--muted)", flexShrink: 0 }}>
@@ -623,13 +604,6 @@ function Metric({ label, value }: { label: string; value: string }) {
       <div style={{ fontSize: "var(--text-xs)", color: "var(--muted)", letterSpacing: "0.04em" }}>{label}</div>
       <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text)", fontFamily: "var(--font-mono)" }}>{value}</div>
     </div>
-  );
-}
-
-function ModeBadge({ mode }: { mode: RunMode }) {
-  const color = mode === "formal" ? "var(--color-up)" : "var(--gold, #e8c547)";
-  return (
-    <span style={pillStyle(color)}>{mode === "formal" ? "正式" : "实验"}</span>
   );
 }
 

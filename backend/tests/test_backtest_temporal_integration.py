@@ -22,7 +22,7 @@ from app.services.backtest_service import _run_backtest_temporal_check
 def test_temporal_check_skipped_when_no_run_ids():
     """空结果列表时返回 skipped。"""
     db = MagicMock()
-    result = _run_backtest_temporal_check(db, [], "experiment")
+    result = _run_backtest_temporal_check(db, [])
     assert result["status"] == "skipped"
     assert "无可检查" in result["message"]
 
@@ -56,7 +56,7 @@ def test_temporal_check_delegates_to_check_functions():
             "violations": [],
         }
 
-        result = _run_backtest_temporal_check(db, results, "experiment")
+        result = _run_backtest_temporal_check(db, results)
 
     assert result["status"] == "completed"
     assert result["violation_count"] == 1
@@ -66,7 +66,7 @@ def test_temporal_check_delegates_to_check_functions():
     assert result["summary"]["errors"] == 1
 
     # 验证委托调用
-    mock_run_check.assert_called_once_with(db, run_id="bt_001", run_mode="experiment")
+    mock_run_check.assert_called_once_with(db, run_id="bt_001")
     mock_bt_check.assert_called_once()
 
 
@@ -90,7 +90,7 @@ def test_temporal_check_passes_with_no_violations():
             "violations": [],
         }
 
-        result = _run_backtest_temporal_check(db, results, "experiment")
+        result = _run_backtest_temporal_check(db, results)
 
     assert result["status"] == "completed"
     assert result["violation_count"] == 0
@@ -131,7 +131,7 @@ def test_temporal_check_counts_warnings_separately():
             "violations": [],
         }
 
-        result = _run_backtest_temporal_check(db, results, "experiment")
+        result = _run_backtest_temporal_check(db, results)
 
     assert result["violation_count"] == 2
     assert result["error_count"] == 1

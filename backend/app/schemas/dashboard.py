@@ -60,6 +60,7 @@ class CockpitRecommendation(BaseModel):
     recommendation_id: str
     run_id: str
     trade_date: str
+    recommended_at: str | None = None
     code: str
     name: str
     industry: str | None = None

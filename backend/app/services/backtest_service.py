@@ -83,7 +83,6 @@ def run_backtest(
     db: Session,
     start_date: str,
     end_date: str,
-    run_mode: str = "experiment",
     horizon_days: int = 5,
     score_line: float = 72.0,
     skill_id: str | None = None,
@@ -102,15 +101,14 @@ def run_backtest(
     if not dates:
         return {"status": "no_data", "message": "区间内 DailyKbar 无可用交易日数据", "dates_scanned": 0}
 
-    # 预检查：是否有匹配 run_mode 的可用 Skill。无则直接跳过所有日期，
+    # 预检查：是否有可用的 Skill。无则直接跳过所有日期，
     # 避免每个日期加载全市场数据（~43s/date）后才在 _backtest_single_date 内发现"无可用的 Skill"。
-    # 实测：limit-up-reseal-relay 在 formal 模式下回测 experiment，24 日期全 skip 仍耗时 1356s。
     from app.models.tables import SkillRegistry
     from app.engine.skill_loader import load_skills as _load_skills_for_check
     _all_skills_check = _load_skills_for_check(settings.skills_dir)
     _skill_regs_check = {r.skill_id: r for r in db.scalars(select(SkillRegistry)).all()}
     _has_matching_skill = any(
-        _skill_regs_check.get(s.skill_id) and _skill_regs_check[s.skill_id].mode == run_mode and _skill_regs_check[s.skill_id].enabled
+        _skill_regs_check.get(s.skill_id) and _skill_regs_check[s.skill_id].enabled
         for s in _all_skills_check
     )
     if not _has_matching_skill and not target_codes:
@@ -138,7 +136,6 @@ def run_backtest(
             date_result = _backtest_single_date(
                 db,
                 trade_date,
-                run_mode,
                 settings,
                 score_line=score_line,
                 target_codes=target_codes,
@@ -156,7 +153,7 @@ def run_backtest(
     labeled = label_pending_outcomes(db, horizon_days=horizon_days)
 
     # ── 自动时态一致性检查 ──
-    temporal_check = _run_backtest_temporal_check(db, results, run_mode)
+    temporal_check = _run_backtest_temporal_check(db, results)
 
     success_dates = [r for r in results if r.get("status") == "ok"]
     failed_dates = [r for r in results if r.get("status") != "ok"]
@@ -164,7 +161,7 @@ def run_backtest(
     run_ids = _run_ids_from_results(results)
 
     # 构建交易明细（用于复盘）
-    trade_details = _build_trade_detail_list(db, start_date, end_date, run_mode, run_ids=run_ids)
+    trade_details = _build_trade_detail_list(db, start_date, end_date, run_ids=run_ids)
 
     summary = {
         "status": "completed",
@@ -183,9 +180,9 @@ def run_backtest(
     }
 
     if summary["total_recommendations"] > 0:
-        summary["breakdown"] = _backtest_breakdown(db, start_date, end_date, run_mode, run_ids=run_ids)
-        summary["aggregate_metrics"] = _backtest_aggregate_metrics(db, start_date, end_date, run_mode, run_ids=run_ids)
-        summary["horizon_return_matrix"] = _backtest_horizon_return_matrix(db, start_date, end_date, run_mode, run_ids=run_ids)
+        summary["breakdown"] = _backtest_breakdown(db, start_date, end_date, run_ids=run_ids)
+        summary["aggregate_metrics"] = _backtest_aggregate_metrics(db, start_date, end_date, run_ids=run_ids)
+        summary["horizon_return_matrix"] = _backtest_horizon_return_matrix(db, start_date, end_date, run_ids=run_ids)
 
     _save_backtest_summary(db, skill_id, start_date, end_date, summary)
     return summary
@@ -316,7 +313,6 @@ def _historical_quotes_from_bars(
 def _backtest_single_date(
     db: Session,
     trade_date: str,
-    run_mode: str,
     settings: Any,
     score_line: float,
     target_codes: list[str] | None = None,
@@ -393,7 +389,7 @@ def _backtest_single_date(
     skill_map = {skill.skill_id: skill for skill in all_skills}
     for skill in all_skills:
         reg = skill_registries.get(skill.skill_id)
-        if reg and reg.mode == run_mode and reg.enabled:
+        if reg and reg.enabled:
             selected_skills.append(
                 {
                     "skill_id": skill.skill_id,
@@ -407,7 +403,7 @@ def _backtest_single_date(
     if not selected_skills:
         return {"trade_date": trade_date, "status": "skipped", "reason": "无可用的 Skill"}
     min_prefilter_count = _resolve_prefilter_target_count(
-        {"run_mode": run_mode, "score_line": score_line},
+        {"run_mode": "formal", "score_line": score_line},
         selected_skill_count=len(selected_skills),
     )
     # 注入涨停板字段（与推荐管线 workbench_service.py:1483 一致）。
@@ -457,7 +453,7 @@ def _backtest_single_date(
     gate_result = _build_skill_rule_gate(prelim_entries, selected_skills, settings)
     skill_candidates = gate_result["skill_candidates"]
     skill_review_limit = _resolve_skill_review_limit(
-        {"run_mode": run_mode, "score_line": score_line},
+        {"run_mode": "formal", "score_line": score_line},
         settings,
     )
     if skill_review_limit > 0 and len(skill_candidates) > skill_review_limit:
@@ -490,7 +486,6 @@ def _backtest_single_date(
     run_id = _persist_backtest_run(
         db,
         trade_date,
-        run_mode,
         len(research_contexts),
         len(recommendations),
         [selected["skill"] for selected in selected_skills],
@@ -667,7 +662,6 @@ def _build_stocks_from_bars(
 def _persist_backtest_run(
     db: Session,
     trade_date: str,
-    run_mode: str,
     universe_count: int,
     recommended_count: int,
     skills: list[Any],
@@ -678,7 +672,7 @@ def _persist_backtest_run(
     run = RecommendationRun(
         run_id=run_id,
         run_name=f"回测 {trade_date}",
-        run_mode=run_mode,
+        run_mode="formal",
         trade_date=trade_date,
         started_at=now,
         finished_at=now,
@@ -694,7 +688,7 @@ def _persist_backtest_run(
             {
                 "backtest": True,
                 "trade_date": trade_date,
-                "run_mode": run_mode,
+                "run_mode": "formal",
                 "score_line": score_line,
             }
         ),
@@ -771,7 +765,7 @@ def _persist_backtest_recommendations(
 
 
 def _backtest_breakdown(
-    db: Session, start_date: str, end_date: str, run_mode: str, run_ids: set[str] | None = None
+    db: Session, start_date: str, end_date: str, run_ids: set[str] | None = None
 ) -> dict[str, Any]:
     """按 Skill / 行业 / 分数段 分组统计。"""
     if run_ids is not None and not run_ids:
@@ -789,7 +783,6 @@ def _backtest_breakdown(
         .where(
             RecommendationRun.trade_date >= start_date,
             RecommendationRun.trade_date <= end_date,
-            RecommendationRun.run_mode == run_mode,
         )
     )
     if run_ids is not None:
@@ -990,7 +983,6 @@ def _backtest_horizon_return_matrix(
     db: Session,
     start_date: str,
     end_date: str,
-    run_mode: str,
     run_ids: set[str] | None = None,
     horizons: tuple[int, ...] = (1, 3, 5, 10, 20, 30),
 ) -> list[dict[str, Any]]:
@@ -1002,7 +994,6 @@ def _backtest_horizon_return_matrix(
         .where(
             RecommendationRun.trade_date >= start_date,
             RecommendationRun.trade_date <= end_date,
-            RecommendationRun.run_mode == run_mode,
         )
     )
     if run_ids is not None:
@@ -1133,7 +1124,6 @@ def _build_trade_detail_list(
     db: Session,
     start_date: str,
     end_date: str,
-    run_mode: str,
     run_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """构建每笔交易的明细记录，用于复盘分析。
@@ -1157,7 +1147,6 @@ def _build_trade_detail_list(
         .where(
             RecommendationRun.trade_date >= start_date,
             RecommendationRun.trade_date <= end_date,
-            RecommendationRun.run_mode == run_mode,
         )
     )
     if run_ids is not None:
@@ -1262,7 +1251,6 @@ def _build_backtest_metric_records(
     db: Session,
     start_date: str,
     end_date: str,
-    run_mode: str,
     run_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     if run_ids is not None and not run_ids:
@@ -1273,7 +1261,6 @@ def _build_backtest_metric_records(
         .where(
             RecommendationRun.trade_date >= start_date,
             RecommendationRun.trade_date <= end_date,
-            RecommendationRun.run_mode == run_mode,
         )
     )
     if run_ids is not None:
@@ -1351,11 +1338,10 @@ def _backtest_aggregate_metrics(
     db: Session,
     start_date: str,
     end_date: str,
-    run_mode: str,
     run_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """回测汇总指标 — 通过共享的 evaluation_metrics 计算完整 9-KPI。"""
-    metric_records = _build_backtest_metric_records(db, start_date, end_date, run_mode, run_ids=run_ids)
+    metric_records = _build_backtest_metric_records(db, start_date, end_date, run_ids=run_ids)
     if not metric_records:
         return _backtest_empty_metrics()
     return compute_full_metrics(metric_records)
@@ -1441,7 +1427,6 @@ def _run_ids_from_results(results: list[dict[str, Any]]) -> set[str]:
 def _run_backtest_temporal_check(
     db: Session,
     results: list[dict[str, Any]],
-    run_mode: str,
 ) -> dict[str, Any]:
     """对回测结果做自动时态一致性检查。
 
@@ -1470,7 +1455,7 @@ def _run_backtest_temporal_check(
     violations: list[dict[str, Any]] = []
     for run_id in run_ids:
         check_result = check_run_temporal_consistency(
-            db, run_id=run_id, run_mode=run_mode
+            db, run_id=run_id
         )
         if check_result.get("status") == "completed":
             v = check_result.get("violations", [])
@@ -1503,7 +1488,6 @@ def run_backtest_comparison(
     db: Session,
     start_date: str,
     end_date: str,
-    run_mode: str = "experiment",
     horizon_days: int = 5,
     baseline_score_line: float = 72.0,
     candidate_score_line: float = 65.0,
@@ -1522,7 +1506,6 @@ def run_backtest_comparison(
         db: 数据库会话
         start_date: 起始日期
         end_date: 结束日期
-        run_mode: formal | experiment
         horizon_days: 持仓天数
         baseline_score_line: 基线版评分线（默认 72，更严格）
         candidate_score_line: 候选版评分线（默认 65，更宽松）
@@ -1543,11 +1526,11 @@ def run_backtest_comparison(
     logger.info("回测比较开始: baseline=%.1f candidate=%.1f", baseline_score_line, candidate_score_line)
 
     baseline_result = run_backtest(
-        db, start_date, end_date, run_mode, horizon_days,
+        db, start_date, end_date, horizon_days,
         score_line=baseline_score_line, skill_id=skill_id,
     )
     candidate_result = run_backtest(
-        db, start_date, end_date, run_mode, horizon_days,
+        db, start_date, end_date, horizon_days,
         score_line=candidate_score_line, skill_id=skill_id,
     )
 
@@ -1561,7 +1544,7 @@ def run_backtest_comparison(
             return []
         # aggregate_metrics 已经是 compute_full_metrics 的输出
         # 我们需要更详细的 trade 数据，从 results 中的 run_ids 获取
-        return _load_backtest_trades(db, result, start_date, end_date, run_mode)
+        return _load_backtest_trades(db, result, start_date, end_date)
 
     baseline_trades = _extract_trades(baseline_result)
     candidate_trades = _extract_trades(candidate_result)
@@ -1670,7 +1653,6 @@ def _load_backtest_trades(
     result: dict[str, Any],
     start_date: str,
     end_date: str,
-    run_mode: str,
 ) -> list[dict[str, Any]]:
     """从本次回测结果中加载推荐级记录（用于 walk_forward/time-split 分析）。"""
     run_ids = _run_ids_from_results(list(result.get("results") or []))
@@ -1680,6 +1662,5 @@ def _load_backtest_trades(
         db,
         start_date,
         end_date,
-        run_mode,
         run_ids=run_ids,
     )

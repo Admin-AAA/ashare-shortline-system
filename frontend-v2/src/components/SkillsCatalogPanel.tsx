@@ -78,9 +78,6 @@ export function SkillsCatalogPanel() {
     );
   }
 
-  const formalCount = skills.filter((s) => s.mode === "formal").length;
-  const experimentCount = skills.filter((s) => s.mode === "experiment").length;
-
   return (
     <CollapsiblePanel
       collapsedKey="skills-catalog"
@@ -88,7 +85,7 @@ export function SkillsCatalogPanel() {
       title="8 策略总览"
       actions={
         <span style={{ marginLeft: "auto", color: "var(--text-muted)", fontSize: 13 }}>
-          {skills.length} 套 · {formalCount} 正式 · {experimentCount} 实验
+          {skills.length} 套
         </span>
       }
     >
@@ -98,14 +95,13 @@ export function SkillsCatalogPanel() {
           const hasPerf = perf && perf.sample_count > 0;
           const wr = hasPerf ? perf.hit_rate * 100 : null;
           const wrColor = wr == null ? "var(--text-muted)" : wr >= 60 ? "var(--color-up)" : wr >= 45 ? "var(--text-secondary)" : "var(--color-down)";
-          const modeColor = s.mode === "formal" ? "var(--color-up)" : s.mode === "experiment" ? "var(--gold, #e8c547)" : "var(--text-muted)";
 
           return (
             <div
               key={s.skill_id}
               style={{
                 display: "grid",
-                gridTemplateColumns: "1fr auto auto auto auto",
+                gridTemplateColumns: "1fr auto auto auto",
                 gap: "var(--space-4)",
                 alignItems: "center",
                 padding: "var(--space-2) var(--space-4)",
@@ -119,11 +115,6 @@ export function SkillsCatalogPanel() {
                 <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono, monospace)" }}>
                   {s.skill_id}
                 </div>
-              </div>
-
-              {/* 模式 */}
-              <div style={{ fontSize: 12, fontWeight: 600, color: modeColor }}>
-                {s.mode === "formal" ? "正式" : s.mode === "experiment" ? "实验" : "停用"}
               </div>
 
               {/* Agent 能力 */}

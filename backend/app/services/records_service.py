@@ -89,7 +89,6 @@ def _compute_returns(recommend_price: float, bars: list[DailyKbar], today_date: 
 def list_run_records(
     db: Session,
     *,
-    run_mode: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     """推荐运行记录列表（轻量，不含推荐股票明细）。
@@ -101,8 +100,8 @@ def list_run_records(
     from app.services.outcome_service import _cached
     from app.services.workbench_service import list_runs
 
-    key = f"run_records:{run_mode or ''}:{limit}"
-    return _cached(key, lambda: _attach_run_aggregate_returns(db, list_runs(db, run_mode=run_mode, limit=limit)))
+    key = f"run_records:{limit}"
+    return _cached(key, lambda: _attach_run_aggregate_returns(db, list_runs(db, limit=limit)))
 
 
 def _empty_agg_returns() -> dict[str, Any]:

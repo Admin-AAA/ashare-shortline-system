@@ -15,7 +15,6 @@ import { exitReasonLabel } from "../utils/display";
  * 点击行展开 inline 详情（评分分解 / 买点 / 风控 / LLM 摘要）。
  */
 export function HistoryPage() {
-  const [runMode, setRunMode] = useState<"formal" | "experiment">("formal");
   const [label, setLabel] = useState<"" | "success" | "failed" | "missed" | "pending">("");
   const [codeInput, setCodeInput] = useState("");
   const [page, setPage] = useState(0);
@@ -31,13 +30,12 @@ export function HistoryPage() {
   const { data, loading, error } = useApi<RecommendationHistoryResponse>(
     () =>
       api.recommendationHistory({
-        run_mode: runMode,
         code: codeQuery || undefined,
         label: label || undefined,
         limit: pageSize,
         offset: page * pageSize,
       }),
-    [runMode, label, codeQuery, page],
+    [label, codeQuery, page],
   );
 
   const items = data?.items ?? [];
@@ -73,8 +71,12 @@ export function HistoryPage() {
     [expandedId, details],
   );
 
-  const winCount = items.filter((it) => it.outcome?.outcome_label === "success").length;
-  const hasOutcome = items.some((it) => it.outcome);
+  // 胜率只统计已触发且已结算的推荐（success/failed），pending/missed/outcome 为空的不计入分母
+  const itemsWithResult = items.filter(
+    (it) => it.outcome?.outcome_label === "success" || it.outcome?.outcome_label === "failed"
+  );
+  const winCount = itemsWithResult.filter((it) => it.outcome?.outcome_label === "success").length;
+  const hasOutcome = itemsWithResult.length > 0;
 
   return (
     <CollapsiblePanel
@@ -98,20 +100,6 @@ export function HistoryPage() {
           borderBottom: "1px solid var(--border)",
         }}
       >
-        <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-base)" }}>
-          <span style={{ color: "var(--muted)" }}>口径</span>
-          <select
-            value={runMode}
-            onChange={(e) => {
-              setRunMode(e.target.value as "formal" | "experiment");
-              resetPage();
-            }}
-            style={selectStyle}
-          >
-            <option value="formal">正式</option>
-            <option value="experiment">实验</option>
-          </select>
-        </label>
         <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-base)" }}>
           <span style={{ color: "var(--muted)" }}>结果</span>
           <select
@@ -144,7 +132,7 @@ export function HistoryPage() {
         </button>
         {hasOutcome && (
           <span style={{ marginLeft: "auto", fontSize: "var(--text-sm)", color: "var(--muted)" }}>
-            本页胜率 {winCount}/{items.length} = {((winCount / items.length) * 100).toFixed(1)}%
+            本页胜率 {winCount}/{itemsWithResult.length} = {((winCount / itemsWithResult.length) * 100).toFixed(1)}%
           </span>
         )}
       </div>

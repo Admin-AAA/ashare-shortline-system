@@ -186,7 +186,6 @@ export function LatestRunCard({
             background: "transparent",
           }}
         >
-          {run.run_mode === "formal" ? "正式 · " : "实验 · "}
           {statusLabel}
         </span>
       </div>
@@ -250,16 +249,13 @@ export function QuickNavGrid({
 export function SkillStatusStrip({
   summary,
 }: {
-  summary: { formal_count: number; experiment_count: number; disabled_count: number };
+  summary: { enabled_count: number; disabled_count: number };
 }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "var(--space-4)", fontSize: 13, color: "var(--muted)", flexWrap: "wrap" }}>
       <span style={{ color: "var(--ink)", fontWeight: 600 }}>策略开关</span>
       <span>
-        正式 <b style={{ color: "var(--market-up)", fontFamily: "var(--font-mono)" }}>{summary.formal_count}</b>
-      </span>
-      <span>
-        实验 <b style={{ color: "var(--ink)", fontFamily: "var(--font-mono)" }}>{summary.experiment_count}</b>
+        启用 <b style={{ color: "var(--market-up)", fontFamily: "var(--font-mono)" }}>{summary.enabled_count}</b>
       </span>
       <span>
         停用 <b style={{ color: "var(--muted)", fontFamily: "var(--font-mono)" }}>{summary.disabled_count}</b>
