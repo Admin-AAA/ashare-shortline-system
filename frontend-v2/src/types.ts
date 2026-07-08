@@ -250,6 +250,14 @@ export type SkillBreakdownItem = {
   veto_reason: string;
 };
 
+/** 单只股票已结算推荐的历史表现（后端 /api/recommendations/outcome-summary 返回） */
+export type OutcomeSummary = {
+  settled: number; // 已结算（success/failed）推荐数
+  wins: number; // 其中成功数
+  win_rate: number; // 胜率 %
+  avg_return: number; // 平均净收益 %
+};
+
 export type RiskRadar = {
   high: number;
   medium: number;

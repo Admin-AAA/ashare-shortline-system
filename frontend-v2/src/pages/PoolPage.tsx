@@ -6,7 +6,7 @@ import {
   Search,
 } from "lucide-react";
 import { api } from "../api/client";
-import type { CockpitRecommendation } from "../types";
+import type { CockpitRecommendation, OutcomeSummary } from "../types";
 import { EmptyState, ErrorPage } from "../components/StateViews";
 import { PoolExpandedRow } from "../components/PoolExpandedRow";
 import { StockTicker } from "../components/StockTicker";
@@ -50,6 +50,17 @@ export function PoolPage() {
       return true;
     });
   }, [items, filter]);
+
+  // 每只股票已结算推荐的真实历史表现（胜率/均收益），用于展开行「历史验证」替换启发式
+  const codes = useMemo(
+    () => (items ? Array.from(new Set(items.map((c) => c.code))) : []),
+    [items],
+  );
+  const codesKey = codes.join(",");
+  const { data: outcomeSummary } = useApi<Record<string, OutcomeSummary>>(
+    () => api.recommendationOutcomeSummary(codes),
+    [codesKey],
+  );
 
   const toggle = (id: string) => {
     setExpanded((prev) => {
@@ -206,7 +217,7 @@ export function PoolPage() {
             </button>
 
             {isOpen && (
-              <PoolExpandedRow item={c} onReplay={() => navigate("/history", { params: { recommendation_id: c.recommendation_id } })} onViewHistory={() => navigateSection("history")} />
+              <PoolExpandedRow item={c} outcomeSummary={outcomeSummary ?? {}} onReplay={() => navigate("/history", { params: { recommendation_id: c.recommendation_id } })} onViewHistory={() => navigateSection("history")} />
             )}
           </div>
         );
