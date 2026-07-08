@@ -32,6 +32,7 @@
 | A | **每个交易日产出可见的 formal 推荐** | 每个交易日 T+1 早 9 点前有 ≥1 条成功 formal 推荐，连续 5 个交易日不断档 | 🔴 最高 |
 | B | **每条推荐可一屏看到完整决策链** | 策略名 + 核心因子 + 入场/失效规则 + LLM delta + 历史同策略胜率 | 🔴 高 |
 | C | **每个策略表现可追溯** | 每个策略有独立可查的：历史推荐数 + 胜率 + 盈亏比 + 最近 formal 命中日期 | 🔴 高 |
+| E | **策略覆盖健康度** | 无策略长期 0 命中（覆盖盲区）；低胜率策略被显式标记并验证 | 🟡 中 |
 | D | **回测胜率/盈亏比/最大亏损** | 不低于现状（LIVE 61.5% / 1.94 / -5.80%）；突破靠前瞻样本而非历史拟合 | 🔴 高（监控项，下滑告警） |
 
 **攻击原则**：
@@ -62,14 +63,18 @@ print(f'A 项：最近 7 天有 {len(ok)} 个交易日产出 formal 推荐（目
 intp = [row for row in r if row[2]=='interrupted']
 if intp: print(f'⚠️ {len(intp)} 个 interrupted run')
 
-# B 项：最近推荐字段完整性
+# B 项：最近推荐字段完整性（五项决策链：策略名+核心因子+入场/失效+LLM delta）
 r = db.execute(text(\"\"\"
-SELECT final_score, setup_type, entry_rule, invalid_rule,
+SELECT final_score, bucket, setup_type, entry_rule, invalid_rule,
        JSON_EXTRACT(feature_snapshot_json, '\$.avg_cost') AS avg_cost,
-       JSON_EXTRACT(agent_summary_json, '\$.delta') AS llm_delta
+       JSON_EXTRACT(agent_summary_json, '\$.score_delta') AS llm_delta,
+       JSON_EXTRACT(agent_summary_json, '\$.stance') AS llm_stance
 FROM recommendations ORDER BY recommended_at DESC LIMIT 1
 \"\"\")).fetchone()
-if r: print(f'B 项：score={r[0]} setup={r[1]} entry={r[2]} invalid={r[3]} llm_delta={r[5]}')
+if r:
+    fields = {'策略名(bucket)': r[1], '核心因子(avg_cost)': r[5], '入场规则': r[3], '失效规则': r[4], 'LLM delta': r[6]}
+    missing = [k for k,v in fields.items() if not v]
+    print(f'B 项：score={r[0]} bucket={r[1]} setup={r[2]} stance={r[7]} llm_delta={r[6]} 缺失={missing if missing else \"无\"}')
 
 # C 项：策略命中
 r = db.execute(text(\"\"\"
@@ -86,6 +91,31 @@ for row in r:
     except: pass
 print(f'C 项：formal 命中策略 {len(skills)} 个: {sorted(skills)}')
 
+# E 项：策略覆盖盲区 + 低胜率标记
+import os
+registered = sorted([d for d in os.listdir('/Users/wangao/Desktop/ashare-shortline-system/backend/skills')
+                     if os.path.isdir(f'/Users/wangao/Desktop/ashare-shortline-system/backend/skills/{d}')])
+blind = [s for s in registered if s not in skills]
+print(f'E 项覆盖盲区：{len(blind)} 个策略近 60 天 formal 0 命中: {blind}')
+r = db.execute(text('''
+WITH strategy_hits AS (
+  SELECT jt.strategy_id, o.outcome_label, o.executed_return
+  FROM recommendations r JOIN recommendation_runs u ON r.run_id=u.run_id
+  LEFT JOIN recommendation_outcomes o ON o.recommendation_id=r.recommendation_id
+  JOIN JSON_TABLE(r.skill_breakdown_json, '\$[*]' COLUMNS(strategy_id VARCHAR(80) PATH '\$.strategy_id')) jt
+  WHERE r.skill_breakdown_json IS NOT NULL AND o.outcome_label IN ('success','failed')
+)
+SELECT strategy_id, COUNT(*) n,
+       SUM(CASE WHEN outcome_label='success' THEN 1 ELSE 0 END) wins,
+       ROUND(AVG(executed_return)*100,2) avg_ret
+FROM strategy_hits GROUP BY strategy_id HAVING n < 50 OR wins*100/COUNT(*) < 45
+ORDER BY wins*100/COUNT(*) ASC
+''')).fetchall()
+print('E 项低覆盖(n<50)或低胜率(<45%)策略:')
+for row in r:
+    wr = round(row[2]*100/row[1],1)
+    print(f'  {row[0]}: n={row[1]} wins={row[2]} avg_ret={row[3]}% winrate={wr}% ←{\"低胜率\" if wr<45 else \"低覆盖\"}需标记')
+
 # D 项：核心指标
 r = db.execute(text('SELECT COUNT(*), SUM(CASE WHEN outcome_label=\"success\" THEN 1 ELSE 0 END) FROM recommendation_outcomes WHERE outcome_label IN (\"success\",\"failed\")')).fetchone()
 print(f'D 项：胜率 {round(r[1]*100/r[0],1)}% （LIVE 基线 61.5%，明显下滑触发修复）')
@@ -98,8 +128,9 @@ print(f'D 项：最大亏损 {r[0]}% （基线 -5.80%，恶化即触发）')
 
 1. **A 项断档**（最近 5 个交易日有 interrupted formal run 或 0 推荐）→ **强制选 T12**，其他让位。
 2. 否则按 **用户可见（T1/T7/T9/T10/T12）: 模型内化（T2/T3/T4/T5/T8/T11）= 2:1** 轮转——看 `git log --oneline -3`，最近 3 轮都是模型内化则强制切用户可见。
-3. 同一任务不连续超过 2 轮。
-4. 选任务前先 grep 教训库：`grep "\[T{编号}\]" ~/.claude/projects/-Users-wangao/memory/lessons.md`
+3. **E 项触发**（自检发现覆盖盲区 ≥1 个策略 0 命中，或 ≥1 个策略胜率 <45%）→ 在 T3 下执行「策略覆盖与低胜率标记」子任务（见 T3.6），优先级高于普通 T3。
+4. 同一任务不连续超过 2 轮。
+5. 选任务前先 grep 教训库：`grep "\[T{编号}\]" ~/.claude/projects/-Users-wangao/memory/lessons.md`
 
 ---
 
@@ -121,6 +152,10 @@ print(f'D 项：最大亏损 {r[0]}% （基线 -5.80%，恶化即触发）')
 3. 检查 `feature_builder.py` 估算字段（MACD/RSI 用 chg20 启发式而非真实值）——已知硬伤
 4. **失败归因闭环**：对 `failed` 推荐逐条分析（追高/止损没执行/板块退潮/黑天鹅），映射到 strategy.yaml 规则，形成"失败→归因→规则调整→验证"闭环
 5. 每 5 轮至少深度优化一个业务模块（龙头评分/龙虎榜/情绪分阶段/Aggregator 权重/trailing stop/score cap）
+6. **策略覆盖与低胜率标记（E 项闭环，触发时执行）**：
+   - **覆盖盲区**：自检 E 项报告里近 60 天 formal 0 命中的策略，逐个查原因——是该策略 `strategy.yaml` 的 `universe.include/exclude` 阈值过严把候选全过滤了？还是评分权重太低永远进不了 top？还是 prefilter 硬性卡掉？查 `filter_audit_json` 确认。**哪怕该策略历史胜率很低也要标记出来**，不能让它"静默死亡"。修复后必须跑一次 formal run 确认该 strategy_id 出现在 `skill_breakdown_json`。
+   - **低胜率标记**：自检 E 项报告里 winrate <45% 且样本 n≥10 的策略，在该策略 `strategy.yaml` 顶部加 `# ⚠️ SELF-IMPROVE FLAG: 低胜率策略 (winrate=X%, n=Y, 标记日期)` 注释，并在 `~/.claude/projects/-Users-wangao/memory/low-winrate-strategies.md` 追加一行（策略名 / 当前胜率 / 样本数 / 标记日期 / 失败归因 / 下一步动作）。**不急着删策略**——先做失败归因（T3.4 闭环），样本不足 n<20 的先补样本再判。连续 2 轮验证仍 <45% 且归因无解，才降权或下线。
+   - **产出**：每轮 E 项任务结束，low-winrate-strategies.md 必须有更新（新增标记或更新已有条目的验证结果）。
 
 ### T4. 性能优化（模型内化）
 查 `backend/logs/app.log` 慢请求，`EXPLAIN ANALYZE` 查慢 SQL。大 JSON 字段查询是性能杀手：两步查询（小列定位 id → 按 id 取详情）+ 预解析共享。
