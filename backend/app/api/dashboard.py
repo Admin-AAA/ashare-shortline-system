@@ -300,6 +300,22 @@ def _select_dashboard_recommendation_run(db: Session) -> RecommendationRun | Non
     latest_trade_date = _latest_dashboard_trade_date(db)
     if not latest_trade_date:
         return None
+    # 北极星 A 项：落地页（候选池/驾驶舱）必须展示官方每日 formal 推送，而非 experiment/backtest。
+    # 同一交易日若有 experiment run 完成更晚（finished_at 更大），旧逻辑会选 experiment，
+    # 导致用户打开页面看到的是测试推荐而非正式推送（07-07 / 07-03 均触发过）。
+    # 故优先选 formal；仅当该交易日无任何 formal 完成时才回退到最新的任意 completed run。
+    formal = db.scalar(
+        select(RecommendationRun)
+        .where(
+            RecommendationRun.status == "completed",
+            RecommendationRun.run_mode == "formal",
+            RecommendationRun.trade_date == latest_trade_date,
+        )
+        .order_by(RecommendationRun.finished_at.desc(), RecommendationRun.started_at.desc())
+        .limit(1)
+    )
+    if formal is not None:
+        return formal
     return db.scalar(
         select(RecommendationRun)
         .where(
