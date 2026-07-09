@@ -101,6 +101,17 @@ phases:
     hard_veto: false
     risk_flags: ["趋势分不足，alpha 衰减后低 WR"]
 
+  # 弱市多头顺势毒区：弱市+多头趋势特征 → score_cap 68（低于 score_line 72，柔性过滤）
+  # LIVE 验证（2026-07 第142轮失败归因闭环）：弱市×多头顺势 07月 38 笔 WR=42.1% avg=-1.39%
+  #   分数中位 81.1，-8 score_delta 仅过滤 42%、仍过线 22 笔 WR=31.8% avg=-2.16%（更毒）
+  #   故用 phase score_cap=68 整体压到线下；扣佣金后负期望，弱市 alpha 应留在均值回归策略
+  # 因果：弱市 up_ratio<0.35，多头顺势=追高，当日冲高回落止损，高方差无 alpha
+  - name: 弱市多头顺势毒区
+    when: "market_regime == '弱势' and dsa_trend_score >= 26 and dsa_bias_score >= 14 and dsa_macd_score >= 8"
+    score_cap: 68
+    hard_veto: false
+    risk_flags: ["弱市多头顺势净零期望高方差，弱市不宜追多"]
+
   - name: 趋势跟踪
     when: "dsa_trend_score >= 18"
     score_cap: 100

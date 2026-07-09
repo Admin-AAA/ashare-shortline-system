@@ -1,9 +1,10 @@
 # ⚠️ SELF-IMPROVE FLAG: 低胜率策略 (winrate=41.2%, n=17去重, 标记日期=2026-07-08)
 # 失败归因(2026-07-08 校准): ❌dist60 归因作废(成功10.19 vs 失败9.5 无差异, 旧归因是 experiment 历史噪声)
 # ❌chg20 追涨归因也站不住(失败中位16 vs 成功20 接近, 追涨死亡区仅1条 experiment 历史)
-# 真实失败模式=分散市场风险: 7 trailing_stop(冲高回落) + 3 stop_loss(跳空跌破), 同 lessons 第136轮 gap_roundtrip
-# 状态: 🟡 formal 已结算仅1笔(失败), 16/17 是已下线 experiment 历史; 不加规则(lessons 136/137 小样本勿加过滤器)
-# 已有保护: universe.exclude chg20>50 AND pct>2(lessons 138) + scoring chg20>35→-8 梯度
+# 真实失败模式=弱市×追高: 弱市 n=11 WR=18.2% avg=-2.11% (2026-07 第142轮 LIVE 验证)
+# 第142轮修复: 加弱市 hard_veto phase（弱市追高突破确定性亏损），alpha 限定在趋势市
+# 状态: 🟡 非弱市样本不足继续观察；弱市已硬否决
+# 已有保护: universe.exclude chg20>50 AND pct>2(lessons 138) + scoring chg20>35→-8 梯度 + 弱市veto(第142轮)
 id: high-range-breakout-momentum
 name: 阶段新高放量突破
 enabled: true
@@ -79,6 +80,16 @@ prefilter:
         reason: "limit_up_overheat"
 
 phases:
+  # 弱市毒区硬否决：弱市(regime=弱势)追高突破确定性亏损
+  # LIVE 验证（2026-07 第142轮失败归因闭环）：弱市 n=11，WR=18.2%，avg=-2.11%，6笔大亏(>3%)
+  # 因果：弱市 up_ratio<0.35，追高突破当日冲高回落、次日跳空跌破，trailing_stop/stop_loss 高发
+  # 对比非弱市（强牛/结构性强势）该策略 WR 60-100%，alpha 来自趋势市而非弱市
+  - name: 弱市追高毒区
+    when: "market_regime == '弱势'"
+    score_cap: 20
+    hard_veto: true
+    risk_flags: ["弱市追高突破确定性亏损，硬否决"]
+
   - name: 破位回避
     when: "max_dd20 < -18 or (off_high60_pct < -8 and breakout60 == false)"
     score_cap: 30
