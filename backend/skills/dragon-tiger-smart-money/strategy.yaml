@@ -53,6 +53,20 @@ phases:
     score_cap: 30
     hard_veto: true
     risk_flags: ["龙虎榜净卖出，主力出逃"]
+
+  # 弱市大跌日龙虎榜诱多毒区：弱市+当日大跌(pct<-5) → cap 68（低于 score_line 72）
+  # LIVE 验证（2026-07 第148轮 D项最大亏损-9.18%根因，全策略 LIVE formal 去重）：
+  #   dragon-tiger 弱市 & pct<-5: n=4(去重) WR=25% avg=-1.53% min=-9.18%（603407 -9.18% 最大亏损源）
+  #   对照 dragon-tiger 涨停日(pct>=9.5): n=19 WR=68.4% avg=+1.58%（涨停龙虎榜是真聪明钱 alpha）
+  # 因果：龙虎榜"聪明钱接力"赌次日延续，但弱市大跌日(pct<-5)的龙虎榜净买多为机构对倒/诱多接盘
+  #   （大跌日散户恐慌，龙虎榜净买≠聪明钱），次日继续跌。与涨停日龙虎榜（真追板）逻辑相反。
+  # 用 pct<-5 原始因子（prefilter 阶段可用，_build_stock_from_bars 产出），不误伤涨停日 alpha。
+  - name: 弱市大跌日龙虎榜诱多毒区
+    when: "market_regime == '弱势' and pct < -5"
+    score_cap: 68
+    hard_veto: false
+    risk_flags: ["弱市大跌日龙虎榜净买多为诱多接盘，非聪明钱接力"]
+
   - name: 弱净买观察
     when: "dragon_tiger_net_buy_ratio > 0 and dragon_tiger_net_buy_ratio < 0.03"
     score_cap: 58
