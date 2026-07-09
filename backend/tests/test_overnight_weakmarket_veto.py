@@ -60,8 +60,12 @@ def test_non_weak_market_overnight_not_vetoed():
 
 
 def test_overnight_weight_injected_and_downweighted():
-    """低胜率策略必须按实证加权降权 (35% WR → weight=0.5, 不再满权 1.0)。"""
+    """低胜率策略必须按实证加权降权 (35% WR → weight=0.35 地板, 不再满权 1.0)。
+
+    第157轮先降到 0.5 中间档待 post-veto 复核；本轮 post-veto 样本 WR 不升反降至
+    25%(n=12)，连续 2 轮验证 WR<45% 且归因无解 → 按第157轮计划降到 0.35 最低权重档。
+    """
     sk = _load()
-    assert sk.contract.get("weight") == 0.5, f"overnight weight 应为 0.5, got {sk.contract.get('weight')}"
+    assert sk.contract.get("weight") == 0.35, f"overnight weight 应为 0.35 地板, got {sk.contract.get('weight')}"
     out = run_strategy(sk, _weak_ctx(), main_industries=["半导体"], skip_universe_check=True)
-    assert out["weight"] == 0.5
+    assert out["weight"] == 0.35

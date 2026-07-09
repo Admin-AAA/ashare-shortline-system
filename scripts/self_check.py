@@ -232,6 +232,7 @@ def check_d_item(db) -> None:
                SUM(CASE WHEN o.outcome_label = 'success' THEN 1 ELSE 0 END)
         FROM recommendation_outcomes o
         JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
         WHERE o.outcome_label IN ('success', 'failed')
           AND r.recommendation_id LIKE 'rec_%'
     """)).fetchone()
@@ -246,6 +247,7 @@ def check_d_item(db) -> None:
         SELECT ROUND(MIN(o.executed_return), 2)
         FROM recommendation_outcomes o
         JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
         WHERE o.outcome_label IN ('success', 'failed')
           AND r.recommendation_id LIKE 'rec_%'
     """)).fetchone()
@@ -255,6 +257,28 @@ def check_d_item(db) -> None:
         worsened = min_ret < MAX_LOSS_BASELINE
         tag = f'⚠️ 恶化 {round(min_ret - MAX_LOSS_BASELINE, 2)}pp' if worsened else f'优于基线'
         print(f'D 项：最大亏损 {min_ret}% （基线 {MAX_LOSS_BASELINE}%，{tag}）')
+
+    # 单日集中度诊断：防止单日异常高量（如 2026-07-08 单日 116 笔占 65%）扭曲 D 项，
+    # 让 self-improve 误判"持续恶化"而循环加规则。D 项仍是全样本口径，仅在此提示。
+    total_n = db.execute(text("""
+        SELECT COUNT(*) FROM recommendation_outcomes o
+        JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+        WHERE o.outcome_label IN ('success','failed') AND r.recommendation_id LIKE 'rec_%'
+    """)).fetchone()[0]
+    top_day = db.execute(text("""
+        SELECT DATE(r.recommended_at) AS d, COUNT(*) AS n
+        FROM recommendation_outcomes o
+        JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+        WHERE o.outcome_label IN ('success','failed') AND r.recommendation_id LIKE 'rec_%'
+        GROUP BY d ORDER BY n DESC LIMIT 1
+    """)).fetchone()
+    if total_n and top_day:
+        share = top_day[1] * 100 / total_n
+        flag = (f'⚠️ 单日 {top_day[0]} 占 {share:.0f}%（D 项可能被单日异常高量扭曲，'
+                f'勿据此循环加规则）') if share >= 40 else '单日集中度正常'
+        print(f'D 项单日集中度：最大单日 {top_day[0]} {top_day[1]} 笔（{share:.0f}%）— {flag}')
 
     # 规则覆盖前瞻校验：区分"历史污染"vs"真退化"
     check_d_rule_coverage(db, WIN_RATE_BASELINE)
@@ -283,6 +307,7 @@ def check_d_rule_coverage(db, win_rate_baseline: float) -> None:
                r.feature_snapshot_json, r.skill_breakdown_json
         FROM recommendation_outcomes o
         JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
         WHERE o.outcome_label IN ('success', 'failed')
           AND r.recommendation_id LIKE 'rec_%'
     """)).fetchall()
