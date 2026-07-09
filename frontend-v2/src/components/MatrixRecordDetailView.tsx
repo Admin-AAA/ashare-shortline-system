@@ -24,7 +24,6 @@ export function MatrixRecordDetailView({ recordId, onBack }: { recordId: number;
       </button>
 
       <CollapsiblePanel
-        collapsedKey="matrix-detail-meta"
         kicker="矩阵分析详情"
         title={<span style={{ fontFamily: "var(--font-mono)" }}>{data.code} · {data.trade_date}</span>}
         actions={<span style={{ color: data.analysis_type === "backtest" ? "var(--accent)" : "var(--muted)" }}>{data.analysis_type}</span>}
@@ -40,7 +39,6 @@ export function MatrixRecordDetailView({ recordId, onBack }: { recordId: number;
       </CollapsiblePanel>
 
       <CollapsiblePanel
-        collapsedKey="matrix-detail-returns"
         kicker="实际收益"
         title="分析日 → 今天"
         actions={<span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }}>基准 = 分析日收盘价 · 至 {r.as_of_date || "—"}</span>}
@@ -58,7 +56,7 @@ export function MatrixRecordDetailView({ recordId, onBack }: { recordId: number;
       </CollapsiblePanel>
 
       {data.result && Object.keys(data.result).length > 0 && (
-        <CollapsiblePanel collapsedKey="matrix-detail-raw" kicker="完整分析结果" title="原始 JSON">
+        <CollapsiblePanel kicker="完整分析结果" title="原始 JSON">
           <pre style={{
             background: "var(--surface-soft)",
             padding: "var(--space-3)",

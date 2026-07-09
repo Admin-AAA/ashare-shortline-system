@@ -171,7 +171,6 @@ export function ConfigPage() {
 
       {tab === "llm" && (
         <CollapsiblePanel
-          collapsedKey="config-llm"
           kicker="配置"
           title="系统 LLM 接口"
           actions={

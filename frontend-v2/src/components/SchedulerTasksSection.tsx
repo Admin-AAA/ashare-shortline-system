@@ -416,7 +416,6 @@ export function SchedulerTasksSection() {
       {/* 新建表单 */}
       {creating && createForm && (
         <CollapsiblePanel
-          collapsedKey="scheduler-create"
           kicker="新建"
           title="新建调度任务"
           actions={
@@ -470,7 +469,6 @@ export function SchedulerTasksSection() {
         return (
           <CollapsiblePanel
             key={t.task_id}
-            collapsedKey={`scheduler-task-${t.task_id}`}
             kicker={TASK_TYPE_LABEL[t.task_type]}
             title={
               <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}>

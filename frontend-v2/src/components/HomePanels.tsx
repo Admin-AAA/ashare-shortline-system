@@ -86,7 +86,6 @@ export function MarketTempPanel({
 
   return (
     <CollapsiblePanel
-      collapsedKey="home-market-temp"
       kicker="市场温度"
       title={
         <>

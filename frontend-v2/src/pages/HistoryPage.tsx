@@ -120,7 +120,6 @@ export function HistoryPage() {
 
   return (
     <CollapsiblePanel
-      collapsedKey="history-recs"
       kicker="复盘"
       title="推荐历史"
       actions={

@@ -116,18 +116,15 @@ function MetricCard({
   kicker,
   title,
   actions,
-  collapsedKey,
   children,
 }: {
   kicker?: ReactNode;
   title: ReactNode;
   actions?: ReactNode;
-  collapsedKey: string;
   children: ReactNode;
 }) {
   return (
     <CollapsiblePanel
-      collapsedKey={collapsedKey}
       kicker={kicker}
       title={title}
       actions={actions}
@@ -249,7 +246,6 @@ function OverviewKpiPanel({ data }: { data: MetricsOverview | null | undefined }
     <MetricCard
       kicker="推荐质量概览"
       title="核心 KPI"
-      collapsedKey="metrics-overview"
       actions={
         data.sample_confidence === "low" ? (
           <span className="tag tag--warning">样本不足</span>
@@ -311,7 +307,6 @@ function AlphaDecayPanel({ data }: { data: AlphaDecayResponse | null | undefined
     <MetricCard
       kicker="因子 Alpha 衰减检测"
       title="早期 vs 近期"
-      collapsedKey="metrics-alpha-decay"
       actions={
         <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
           {data.early_period} → {data.recent_period}
@@ -403,7 +398,6 @@ function PrecisionPanel({ rows }: { rows: PrecisionAtKRow[] }) {
           </span>
         </span>
       }
-      collapsedKey="metrics-precision"
     >
       {tip.show && createPortal(
         <div
@@ -489,7 +483,6 @@ function ScoreLinePanel({ rows }: { rows: ScoreLineStatsRow[] }) {
     <MetricCard
       kicker="分析"
       title="分数段胜率"
-      collapsedKey="metrics-scoreline"
       actions={
         <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
           推荐分数线 ≥ X 的累计胜率
@@ -519,7 +512,6 @@ function StrategyPanel({ rows }: { rows: StrategyStatsRow[] }) {
     <MetricCard
       kicker="分析"
       title="策略胜率"
-      collapsedKey="metrics-strategy"
       actions={
         <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
           按胜率降序
@@ -548,7 +540,6 @@ function SetupPanel({ rows }: { rows: SetupStatsRow[] }) {
     <MetricCard
       kicker="分析"
       title="Setup 胜率"
-      collapsedKey="metrics-setup"
       actions={
         <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
           按胜率降序
@@ -647,7 +638,6 @@ function FilterEffectivenessPanel({ data }: { data: FilterEffectiveness | null |
     <MetricCard
       kicker="分析"
       title="过滤效果"
-      collapsedKey="metrics-filter"
       actions={
         <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
           过滤率 {data.filter_rate_pct.toFixed(1)}%

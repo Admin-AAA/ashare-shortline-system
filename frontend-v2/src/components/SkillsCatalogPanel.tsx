@@ -60,7 +60,7 @@ export function SkillsCatalogPanel() {
 
   if (loading) {
     return (
-      <CollapsiblePanel collapsedKey="skills-catalog" kicker="策略清单" title="8 策略总览">
+      <CollapsiblePanel kicker="策略清单" title="8 策略总览">
         <div style={{ padding: "var(--space-4)", color: "var(--text-muted)", fontSize: 13 }}>
           正在加载策略清单…
         </div>
@@ -70,7 +70,7 @@ export function SkillsCatalogPanel() {
 
   if (error) {
     return (
-      <CollapsiblePanel collapsedKey="skills-catalog" kicker="策略清单" title="8 策略总览">
+      <CollapsiblePanel kicker="策略清单" title="8 策略总览">
         <div style={{ padding: "var(--space-4)", color: "var(--color-down)", fontSize: 13 }}>
           {error}
         </div>
@@ -80,7 +80,6 @@ export function SkillsCatalogPanel() {
 
   return (
     <CollapsiblePanel
-      collapsedKey="skills-catalog"
       kicker="策略清单"
       title="8 策略总览"
       actions={

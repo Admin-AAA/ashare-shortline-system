@@ -61,7 +61,6 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: "var(--space-4)", alignItems: "start" }}>
         <CollapsiblePanel
-          collapsedKey="run-orchestration"
           kicker="推荐运行"
           title={
             <>
@@ -146,7 +145,7 @@ function ReplayAnalysisPanel({ runId }: { runId: string }) {
 
   if (loading) {
     return (
-      <CollapsiblePanel collapsedKey="run-replay" kicker="运行复盘" title="推荐兑现情况">
+      <CollapsiblePanel kicker="运行复盘" title="推荐兑现情况">
         <div className="text-muted" style={{ fontSize: "var(--text-sm)" }}>加载兑现数据…</div>
       </CollapsiblePanel>
     );
@@ -160,7 +159,6 @@ function ReplayAnalysisPanel({ runId }: { runId: string }) {
 
   return (
     <CollapsiblePanel
-      collapsedKey="run-replay"
       kicker="运行复盘"
       title="推荐兑现情况"
       actions={
@@ -288,7 +286,6 @@ function SingleStockScorePanel({ presets }: { presets: Preset[] }) {
 
   return (
     <CollapsiblePanel
-      collapsedKey="single-stock-score"
       kicker="单股票评分"
       title={
         <>
@@ -667,7 +664,6 @@ function SkillReviewRow({ review }: { review: SingleStockSkillReview }) {
 function RunTimeline({ detail }: { detail: RunDetail }) {
   return (
     <CollapsiblePanel
-      collapsedKey="run-timeline"
       kicker="运行时间线"
       title={detail.run_name ?? detail.run_id}
       actions={<span className="tag">{detail.status}</span>}

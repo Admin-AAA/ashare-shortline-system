@@ -1,5 +1,6 @@
 .DS_Store
 .venv/
+.venv
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -12,6 +13,7 @@ backend/scripts/.backfill_daily_bars_progress.jsonl
 backend/acceptance_report.json
 .playwright-cli/
 node_modules/
+node_modules
 .codegraph/
 
 frontend-v2/dist/

@@ -9,7 +9,7 @@
 - 前端：`frontend-v2/`（React 19 + TypeScript + Vite，端口 5174）—— **当前主用**。`frontend/` 是旧版遗留，不要改。
 - 访问 v2：http://localhost:5174/
 
-**触发方式**：launchd 每小时调用 `scripts/run-self-improve.sh`，该脚本用 `mkdir` 锁做单实例门禁 + `claude -p "/self-improve"` 起新会话。每次新会话，上下文不累积（禁止用 `/loop`，会撞 1M input limit）。单实例运行，无需 worktree/心跳/续跑机制。
+**触发方式**：手动运行 `bash scripts/run-self-improve.sh`（无 launchd、无锁、无定时）。脚本只有一行 `claude -p "/self-improve"`，编排责任（worktree / commit / merge / 解冲突 / 清理）**全部由你本人在下文「§0 编排」承担**。每次新会话，上下文不累积（禁止用 `/loop`，会撞 1M input limit）。需要并行时直接再跑一次 `run-self-improve.sh`，靠 worktree 隔离互不干扰。
 
 ---
 
@@ -25,20 +25,20 @@
 
 ## 北极星指标
 
-系统存在的唯一意义：**每天打开页面，看到当天系统推了什么、为什么推、跑出来结果如何**。
+系统已进入稳定期：pipeline 稳定、推荐可见、策略可追溯均已达标。**当前唯一核心目标是把回测质量（胜率/盈亏比/最大亏损）做上去**——在准确的基础上谈可见，不为可见性牺牲准确性。
 
 | # | 北极星项 | 目标 | 攻击优先级 |
 |---|---------|------|-----------|
-| A | **每个交易日产出可见的 formal 推荐** | 每个交易日 T+1 早 9 点前有 ≥1 条成功 formal 推荐，连续 5 个交易日不断档 | 🔴 最高（pipeline 硬底线，跑不出谈不上准确） |
-| B | **每条推荐可一屏看到完整决策链** | 策略名 + 核心因子 + 入场/失效规则 + LLM delta + 历史同策略胜率 | 🔴 高 |
-| C | **每个策略表现可追溯** | 每个策略有独立可查的：历史推荐数 + 胜率 + 盈亏比 + 最近 formal 命中日期 | 🔴 高 |
-| E | **策略曝光公平度** | 近30天曝光归一化熵 ≥0.5（无单一策略吃掉 >60% 曝光）；每策略已结算样本 ≥20（胜率统计可信）；低胜率策略被显式标记并验证 | 🔴 高（样本不可信→按胜率选策略失效→准确性受损） |
-| D | **回测胜率/盈亏比/最大亏损** | 不低于现状（LIVE 61.5% / 1.94 / -5.80%）；突破靠前瞻样本而非历史拟合 | 🔴 高（与 A/B/C 并重，下滑告警，不为刷数字而刷） |
+| D | **回测胜率/盈亏比/最大亏损** | 突破现状（LIVE 61.5% / 1.94 / -5.80%），朝 65%+/2.0+/-4% 攻击；突破靠前瞻样本而非历史拟合 | 🔴 最高（核心攻击目标，每轮首选） |
+| E | **策略曝光公平度** | 近30天曝光归一化熵 ≥0.5（无单一策略吃掉 >60% 曝光）；每策略已结算样本 ≥20（胜率统计可信）；低胜率策略被显式标记并验证 | 🔴 高（D 的前置：样本不可信→按胜率选策略失效→D 攻击无效） |
+| A | **每个交易日产出可见的 formal 推荐** | 每个交易日 T+1 早 9 点前有 ≥1 条成功 formal 推荐，连续 5 个交易日不断档 | 🟡 中（系统已稳定达标，仅断档才触发 T12，平时不抢 D 的档期） |
+| B | **每条推荐可一屏看到完整决策链** | 策略名 + 核心因子 + 入场/失效规则 + LLM delta + 历史同策略胜率 | 🟡 中 |
+| C | **每个策略表现可追溯** | 每个策略有独立可查的：历史推荐数 + 胜率 + 盈亏比 + 最近 formal 命中日期 | 🟡 中 |
 
 **攻击原则**：
-1. **准确 > 可见**——用户能看到的推荐必须准。为可见性而牺牲准确性（推得出但推不准）是本末倒置。用户可见退居其次，但仍是重要目标，不是可忽略项。
-2. **跑得准 > 跑出来**——但「跑出来」是准确性的前提：formal run 产不出推荐，系统对用户等于没在跑，谈不上准不准。故 T12（pipeline 稳定）作为硬底线仍保最高优先级；在 pipeline 通的前提下，优先保证推荐质量而非堆可见性。
-3. **不为了好看的数据优化**——Sharpe 靠过拟合达成不如不做。D 项与 A/B/C 并重为🔴高（不再仅是监控项），明显下滑即触发修复，但不为刷数字而刷。
+1. **准确 > 可见**——用户能看到的推荐必须准。为可见性而牺牲准确性（推得出但推不准）是本末倒置。稳定期 D 是第一目标，A/B/C 已达标退居其次但仍是不可忽略项。
+2. **D 优先于一切非断档任务**——只要 A 没断档，每轮首选 D 相关（T2 回测验证 / T3 准确度 / T1 新策略因子），不为追求可见性的 T7/T10 让位。准确性优先于可见性：宁可少推也不推不准。
+3. **不为了好看的数据优化**——Sharpe/胜率靠过拟合达成不如不做。D 项必须用前瞻样本（未参与训练的近期真实推荐 outcome）验证，样本外下滑才算真退化；明显下滑即触发修复，但不为刷数字而刷。
 
 ### 每轮自检（选任务前必做）
 
@@ -50,17 +50,17 @@ cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && pyt
 
 ### 选任务规则
 
-1. **A 项断档**（最近 5 个交易日有 interrupted formal run 或 0 推荐）→ **强制选 T12**，其他让位。
-2. 否则按 **用户可见（T1/T7/T9/T10/T12）: 模型内化（T2/T3/T4/T5/T8/T11）= 1:1** 轮转——看 `git log --oneline -3`，最近 3 轮都是同一类则强制切另一类。准确性优先：模型内化（含 T3 准确度提升）不因轮转比例被压缩。
-3. **E 项触发**（自检发现曝光公平度 H_norm<0.5 或 ≥1 策略样本 <20，或 ≥1 策略胜率 <45%）→ 在 T3 下执行「策略曝光与低胜率标记」子任务（见 T3.6），优先级高于普通 T3。
-4. 同一任务不连续超过 2 轮。
+1. **A 项断档**（最近 5 个交易日有 interrupted formal run 或 0 推荐）→ **强制选 T12**，D 让位。pipeline 不通谈不上 D。
+2. **A 未断档时，首选 D 攻击**——按 **准确度类（T1/T2/T3/T8）: 可见类（T7/T9/T10/T12）= 2:1** 轮转。看 `git log --oneline -3`：最近 3 轮若 ≥2 轮是可见类，强制切准确度类；准确度类不因轮转比例被压缩，可连续多轮。
+3. **E 项触发**（自检发现曝光公平度 H_norm<0.5 或 ≥1 策略样本 <20，或 ≥1 策略胜率 <45%）→ 在 T3 下执行「策略曝光与低胜率标记」子任务（见 T3.6），优先级高于普通 T3（它是 D 的样本可信前置）。
+4. 同一任务不连续超过 2 轮（T3 的 D 攻击子任务除外，可连续 3 轮追同一毒区根因）。
 5. 选任务前先 grep 教训库：`grep "\[T{编号}\]" ~/.claude/projects/-Users-wangao/memory/lessons.md`
 
 ---
 
 ## 任务清单
 
-### T1. 策略研发（用户可见，最高优先级）
+### T1. 策略研发（准确度类，D 项核心手段）
 搜索学术论文、量化论坛（聚宽/优矿/米筐/知乎量化/GitHub quant）、游资语录，寻找 A 股短线因子。只采纳有回测支撑的策略，必须映射到 `strategy.yaml`。**Alpha 衰减检测**：关键因子用近 N 天 vs 之前 N 天 point-biserial 对比，衰减 >30% 标记。**端到端验收**：新策略必须跑真实推荐出现在 `skill_breakdown_json` 中，前端候选池可见。
 
 ### T2. 回测验证（模型内化）
@@ -116,7 +116,7 @@ cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && pyt
 ### T11. 自我优化提示词递归改进（模型内化）
 随机触发（约 15% 概率，或连续 2 轮觉得提示词指导不清晰时）。读当前提示词逐段审查 + 读日志最近 10 轮按 T 编号统计产出效率。产出低的任务改描述或合并；反复出现的教训提升为正式规则。**精简硬约束**：每次 T11 必须删除不少于新增行数的旧规则，净行数不能增长。**禁止改核心结构**（第一性原理/检验清单/禁止事项）。
 
-### T12. 推荐 pipeline 稳定性（用户可见，最高优先级）
+### T12. 推荐 pipeline 稳定性（可见类，A 项断档时才触发）
 formal run 跑不通 = 系统对用户等于没在跑。
 **触发条件**（满足任一即强制执行，优先级高于一切）：最近 5 交易日有 interrupted formal run / 成功 formal 推荐 <5 / recommended_count=0 但 completed / 心跳 >1200s 被 interrupt。
 **排查清单**：
@@ -131,6 +131,61 @@ formal run 跑不通 = 系统对用户等于没在跑。
 
 ## 执行流程
 
+### 0. 编排（worktree 全生命周期，由你本人承担）
+
+脚本只起会话，下面这一整段是你每次运行的**第一件事**，也是**最后一件事**。禁止跳过。
+
+**主仓位置**：`/Users/wangao/Desktop/ashare-shortline-system`（你**不**直接在这里改代码——主仓是用户的工作区，可能停在任意分支上）。
+**worktree 根**：`/Users/wangao/Desktop/ashare-shortline-system/.claude/worktrees/`（已被 `.gitignore` 排除，commit 不会误带）。
+**claude 可执行**：`/opt/homebrew/bin/claude`。
+
+```bash
+# —— 启动时：创建隔离工作树 ——
+cd /Users/wangao/Desktop/ashare-shortline-system
+TS=$(date +%Y%m%d-%H%M%S)
+BRANCH="self-improve/si-${TS}-$$"          # $$ 是当前 claude 进程 PID，天然保证并行不撞名
+WORKTREE=".claude/worktrees/self-improve-${TS}-$$"
+git worktree add -b "$BRANCH" "$WORKTREE" main   # 永远基于 main，不管主仓当前在哪个分支
+cd "$WORKTREE"
+
+# 复用主仓的 venv / node_modules（gitignore 的东西 worktree 没有，软链接即可）
+ln -s /Users/wangao/Desktop/ashare-shortline-system/backend/.venv backend/.venv 2>/dev/null || true
+ln -s /Users/wangao/Desktop/ashare-shortline-system/frontend-v2/node_modules frontend-v2/node_modules 2>/dev/null || true
+mkdir -p backend/logs                         # self-improve 往 logs 写时不报错
+```
+
+做完上面的「§1 状态检查 → §5 Git 提交」之后，**执行收尾**：
+
+```bash
+# —— 收尾：merge 回 main + 清理 ——
+cd /Users/wangao/Desktop/ashare-shortline-system
+git checkout main
+git merge --ff-only "$BRANCH"                 # 快进合并：worktree 分支是 main 的直接后裔
+git worktree remove --force "$WORKTREE"
+git branch -d "$BRANCH"                       # 已 merge，-d 安全
+```
+
+**冲突处理**（ff-only 失败 = 并行的另一个 self-improve 已先 merge 过，main 前进了）：
+```bash
+cd "$WORKTREE"
+git rebase main                               # 把自己的提交挪到最新 main 之上
+# 冲突时：你自己 git status 看冲突文件，逐个打开 <<<<<<< ======= >>>>>>> 标记，
+# 保留双方有效改动，git add -A && git rebase --continue，反复直到 clean。
+# 禁止起子 claude 进程解冲突——你本人就是 claude，直接解。
+# 真遇到无法判断的语义冲突：保留两边代码 + 注释标记，不要瞎删。
+# rebase 完成后回主仓重跑上面那段 merge --ff-only + 清理。
+```
+
+**任何退出路径（包括异常 / 被打断）都必须清理 worktree**。如果你要中断当前轮：
+```bash
+cd /Users/wangao/Desktop/ashare-shortline-system
+git worktree remove --force ".claude/worktrees/self-improve-${TS}-$$" 2>/dev/null
+git branch -D "$BRANCH" 2>/dev/null
+```
+留着脏 worktree = 下次 `git worktree list` 一堆僵尸 + 占磁盘。**轮失败也要删**，别保留待排查——日志在 `backend/logs/app.log` 和 `self-improve-log.md` 里，不在 worktree 里。
+
+**并行安全**：多个 `run-self-improve.sh` 同时跑时，每个 claude 进程的 `$$`（PID）不同 → 分支名/worktree 路径天然唯一。唯一竞争点在 merge：ff-only 失败就 rebase，永远不 force push、不强改 main。
+
 ### 1. 状态检查
 ```bash
 curl -s --max-time 3 http://127.0.0.1:8765/api/health
@@ -144,8 +199,8 @@ cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && \
 读相关源码（`grep -n` 定位 → `Read` 精确段落）；策略研发用 WebSearch；回测查 DB；性能用 `EXPLAIN ANALYZE`；前端读 `frontend-v2/src/`。研究结论立即写入日志 `**调研结论**` 字段（防崩溃丢上下文）。
 
 ### 3. 实施改动
-直接在主工作树 `~/Desktop/ashare-shortline-system` 改（单实例，无需 worktree 隔离）。策略改 `strategy.yaml`；代码改 Python/TS；DB 只做 additive（加索引/列）；前端只改 `frontend-v2/`。**每次改动后运行测试**确认无回归。**一个完整功能在一个 commit 里完成**（实现+测试+验证），禁止拆成"实现/测试/验证"三个 commit。
-**工作树未提交改动处理**：若目标文件已有会话前未提交改动（`git diff` 显示非本轮的 hunks），用 `git apply --cached <patch>` 精确 stage 自己的 hunks，不替别人提交未完成工作；无法分离时把改动保留在工作树 + 日志记录"待一起提交"，不强行 commit。
+你在 §0 创建的独立 worktree 里（分支 `self-improve/si-*`）。直接改当前 worktree 的文件即可——工作目录隔离，不会和其他并行的 self-improve 冲突。策略改 `strategy.yaml`；代码改 Python/TS；DB 只做 additive（加索引/列）；前端只改 `frontend-v2/`。**每次改动后运行测试**确认无回归（`.venv`/`node_modules` 是 §0 软链接的主仓环境，pytest/npm build 直接用）。**一个完整功能在一个 commit 里完成**（实现+测试+验证），禁止拆成"实现/测试/验证"三个 commit。
+merge 回 main + 清理 worktree 是你自己的收尾步骤（见 §0），不是脚本代劳。
 
 ### 4. 验证
 **基础**：pytest 无回归；改策略跑回测对比；改性能对比查询耗时；改前端 `cd frontend-v2 && npm run build` 无报错。
@@ -155,11 +210,11 @@ cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && \
 
 ### 5. Git 提交（每轮必做）
 ```bash
-cd ~/Desktop/ashare-shortline-system && git add -A && git commit -m "self-improve: T{编号} {简短描述}
+git add -A && git commit -m "self-improve: T{编号} {简短描述}
 - 具体改动 1
 - 验证: pytest X passed / 回测胜率 X% / 性能 Xms→Yms"
 ```
-单实例直接 commit 到 main，无需 worktree/锁/merge。不提交 .env/logs/node_modules/.venv。提交前 `git status` 确认无意外文件。
+commit 进当前 worktree 分支即可（§0 收尾会把它 ff-merge 回 main + 清理 worktree，冲突你自己在 worktree 里 rebase 解）。不提交 .env/logs/node_modules/.venv（软链接已被 .gitignore 排除）。提交前 `git status` 确认无意外文件。
 
 ### 6. 记录
 任务开始时写"进行中"占位，完成后改"已完成"并追加改动/验证/Git/下一步：
@@ -198,8 +253,7 @@ open(p,'a').write('''
 - 不要在没跑测试的情况下提交改动
 - 不要跳过验证步骤——用户可见任务必须端到端验收
 - **不要问用户问题**——自己调研、决策、执行
-- **不要改 `frontend/`（旧版遗留）**——所有前端改动只改 `frontend-v2/`
-- **不要用 `/loop` 跑 self-improve**——会撞 1M input limit。定时触发由 launchd + `scripts/run-self-improve.sh` 负责（新会话模式）
+- **不要留下脏 worktree**——任何退出路径（异常/被打断/失败）都要按 §0 末尾清理 worktree + 删分支。轮失败不丢日志（在 app.log / self-improve-log.md），不需要保留 worktree 排查
 - **不要打断正在跑的 formal run**——重启后端前先查 `recommendation_runs` 是否有 `status=running` 的 formal run，有就等它完成
-- **不要把回测胜率当唯一北极星**——A/B/C/D 四项并重。D 项与 A/B/C 同为🔴高（下滑告警，不为刷数字而刷），但准确性优先于可见性：宁可少推也不推不准。
+- **D 项是当前最高北极星，但不许靠过拟合刷数字**——胜率/盈亏比必须用前瞻样本（未参与训练的近期真实推荐 outcome）验证，样本外才算真提升。A/B/C 已达标退居🟡中，A 断档才触发 T12 打断 D。准确性优先于可见性：宁可少推也不推不准。
 - **不要只盯胜率**——强势 regime 低胜率高盈亏比可能是净正，震荡高胜率低盈亏比可能是净近零，判 regime 必须看盈亏比

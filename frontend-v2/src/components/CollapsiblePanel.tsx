@@ -10,30 +10,16 @@ interface CollapsiblePanelProps {
   actions?: ReactNode;
   children: ReactNode;
   className?: string;
-  /** 默认是否折叠（仅当未提供 collapsedKey 时生效） */
+  /** 默认是否折叠；不传则默认展开。状态不持久化，刷新后回到默认值 */
   defaultCollapsed?: boolean;
-  /** 提供则把折叠状态持久化到 localStorage（key 应稳定） */
-  collapsedKey?: string;
   /** 内容区自定义样式 */
   bodyStyle?: CSSProperties;
-}
-
-const STORAGE_PREFIX = "panel-collapsed:";
-
-function readStored(key: string): boolean | null {
-  try {
-    const v = localStorage.getItem(STORAGE_PREFIX + key);
-    if (v === null) return null;
-    return v === "1";
-  } catch {
-    return null;
-  }
 }
 
 /**
  * 可折叠卡片 —— 统一替代分散在各页的 <section className="panel">。
  * 点击右上角折叠按钮（或标题栏）收起内容，折叠后只保留标题栏。
- * 提供 collapsedKey 时，折叠偏好会记住（刷新后保持）。
+ * 状态不持久化：所有卡片默认展开，刷新后回到默认展开状态。
  */
 export function CollapsiblePanel({
   title,
@@ -42,29 +28,12 @@ export function CollapsiblePanel({
   children,
   className,
   defaultCollapsed = false,
-  collapsedKey,
   bodyStyle,
 }: CollapsiblePanelProps) {
-  const [collapsed, setCollapsed] = useState<boolean>(() => {
-    if (collapsedKey) {
-      const stored = readStored(collapsedKey);
-      if (stored !== null) return stored;
-    }
-    return defaultCollapsed;
-  });
+  const [collapsed, setCollapsed] = useState<boolean>(defaultCollapsed);
 
   const toggle = () => {
-    setCollapsed((prev) => {
-      const next = !prev;
-      if (collapsedKey) {
-        try {
-          localStorage.setItem(STORAGE_PREFIX + collapsedKey, next ? "1" : "0");
-        } catch {
-          /* 隐私模式下 localStorage 可能不可用，忽略 */
-        }
-      }
-      return next;
-    });
+    setCollapsed((prev) => !prev);
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {

@@ -334,7 +334,6 @@ function RunStatusPanel({
           {hasRun ? "今日已运行" : run.status === "running" ? "运行中" : "今日未运行"}
         </>
       }
-      collapsedKey="home-status"
     >
       <div style={{ fontSize: "var(--text-sm)", color: "var(--ink-secondary)", marginBottom: "var(--space-4)" }}>
         {run.message || "暂无运行消息"}
@@ -419,7 +418,6 @@ function DataHealthCard({
           {loading ? "诊断中…" : `${score} 分 · ${scoreLabel}`}
         </>
       }
-      collapsedKey="home-data-health"
       actions={
         <button className="btn btn--ghost" onClick={onViewDetail}>
           详情
@@ -585,7 +583,6 @@ function CandidatePanel({
           候选 {items.length} 只
         </>
       }
-      collapsedKey="home-candidates"
       className="panel--min360"
       actions={
         <button className="btn btn--ghost" onClick={onViewAll}>

@@ -49,7 +49,6 @@ export function StrategiesPage() {
 
   return (
     <CollapsiblePanel
-      collapsedKey="strategies-list"
       kicker="策略"
       title="策略清单"
       actions={

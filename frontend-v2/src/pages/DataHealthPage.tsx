@@ -187,7 +187,6 @@ export function DataHealthSection() {
             {score} 分 · {scoreLabel}
           </>
         }
-        collapsedKey="data-health-overview"
         actions={
           <button
             className="btn btn--primary"
@@ -234,7 +233,6 @@ export function DataHealthSection() {
         <CollapsiblePanel
           kicker="数据表覆盖"
           title={`共 ${tableRows.length} 张表`}
-          collapsedKey="data-health-tables"
           actions={
             <button className="btn btn--ghost" onClick={() => loadDiag({ forceRefresh: true })} title="重新诊断（跳过缓存）">
               <RefreshCw size={14} />
@@ -303,7 +301,6 @@ export function DataHealthSection() {
               已接入 {domSummary.covered_count} · 滞后 {domSummary.stale_count} · 空 {domSummary.empty_count} · 覆盖率 {Math.round(domSummary.coverage_rate * 100)}%
             </>
           }
-          collapsedKey="data-health-domains"
           actions={
             domSummary.score_penalty ? (
               <span className="text-muted" style={{ fontSize: "var(--text-sm)" }}>
@@ -323,7 +320,6 @@ export function DataHealthSection() {
         <CollapsiblePanel
           kicker="数据源接入"
           title={dsTitle}
-          collapsedKey="data-health-sources"
           actions={
             dsSummary.score_penalty ? (
               <span className="text-muted" style={{ fontSize: "var(--text-sm)" }}>
@@ -340,7 +336,7 @@ export function DataHealthSection() {
 
       {/* 问题列表 —— 全量，按严重度分组 */}
       {issues.length > 0 && (
-        <CollapsiblePanel kicker="诊断问题" title={`共 ${issues.length} 个`} collapsedKey="data-health-issues">
+        <CollapsiblePanel kicker="诊断问题" title={`共 ${issues.length} 个`}>
           <IssueList title="高优先级" tone="down" icon={<XCircle size={14} />} items={highIssues} />
           <IssueList title="中优先级" tone="warn" icon={<AlertTriangle size={14} />} items={mediumIssues} />
           <IssueList title="低优先级" tone="muted" icon={<CheckCircle2 size={14} />} items={lowIssues} />
