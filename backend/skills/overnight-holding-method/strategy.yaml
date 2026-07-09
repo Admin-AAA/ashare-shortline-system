@@ -1,7 +1,14 @@
+# ⚠️ SELF-IMPROVE FLAG: 低胜率策略 (winrate=35.0%, n=20, 标记日期=2026-07-10)
+# 失败归因(T3.6 第157轮+): 弱市×追高毒区(14/15 历史推荐 regime=弱势) + 中期空头死猫跳(bias_ma20<0)
+#   + cold_chase 毒区(603268/000636 多笔)；universe pct∈[3,5] 本身即在追高区。
+# 已修复: 弱市硬否决 phase(market_regime=='弱势'→hard_veto) + universe.dist20>=0(排除死猫跳)。
+# 权重 1.0→0.5: 全量 formal WR 35% 是全策略最低、且为唯一仍持满权的低胜率策略
+#   (对照 high-range 0.35 / limit-up 0.45 已降权)，与实证加权方案一致；
+#   弱市否决生效后剩余非弱市样本有限，0.5 取中间档(非 0.35 地板)，待 07-10 起 post-veto 结算后再复核。
 id: overnight-holding-method
 name: 隔夜持股法
 enabled: true
-weight: 1.0
+weight: 0.5
 
 meta:
   author: system
