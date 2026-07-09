@@ -64,6 +64,8 @@ def _stock(code: str, **overrides):
         "sector_fund_rank": 3,
         "announcement_negative_count": 0,
         "is_st": False,
+        "twenty_cm_risk_gate": "pass",
+        "news_risk_count": 0,
         "data_quality": {"capital_flow_checked": True, "missing_fields": []},
         "dsa_profile": {
             "ma5": 9.9,
@@ -523,12 +525,15 @@ def test_dsa_weak_regime_chase_tox_phase_caps_overextended():
         f"弱势超跌不应被追高毒区 cap: cap={signal_oversold['score_cap']} phase={signal_oversold['phase']}"
     )
 
-    # 反事实3：弱势市场 pct>=3 但乖离不大(bias_ma5<5) 不应被 cap（温和上行非毒区）
+    # 反事实3：弱势市场 pct∈[3,5] 即使乖离不大(bias_ma5<5) 仍应被 cap
+    # 数据事实（第145轮 LIVE formal 验证）：弱市 pct∈[3,5] 全区间都是毒区，
+    #   bias>=5 子集 WR=22.2% avg=-3.98%，bias<5 子集 WR=11.1% avg=-2.92%，
+    #   不按乖离拆分（prior 第143轮已决定全区间覆盖，低乖离子集更差不能豁免）。
     stock["pct"] = 4.0
     stock["bias_ma5"] = 3.0
     signal_mild = run_strategy(skills["daily-stock-analysis-skill"], stock, ["测试"])
-    assert signal_mild["score_cap"] > 68, (
-        f"弱势温和上行不应被追高毒区 cap: cap={signal_mild['score_cap']} phase={signal_mild['phase']}"
+    assert signal_mild["score_cap"] <= 68, (
+        f"弱势半吊子(3-5)区间不论乖离均应被毒区 cap: cap={signal_mild['score_cap']} phase={signal_mild['phase']}"
     )
 
 

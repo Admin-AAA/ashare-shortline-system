@@ -138,16 +138,16 @@ def run_strategy(
 def _passes_universe(contract: dict[str, Any], context: dict[str, Any]) -> bool:
     universe = contract.get("universe", {})
     for expr in universe.get("include", []) or []:
-        if not evaluate(str(expr), context):
+        if not evaluate(str(expr), context, strict_missing=True):
             return False
     for expr in universe.get("exclude", []) or []:
-        if evaluate(str(expr), context):
+        if evaluate(str(expr), context, strict_missing=True):
             return False
     # prefilter.market.exclude 总是执行（即使 skip_universe_check=True）
     # 回测与实盘一致性：avg_cost>200 等硬过滤规则不应被跳过
     market_prefilter = (contract.get("prefilter") or {}).get("market") or {}
     for rule in market_prefilter.get("exclude", []) or []:
-        if evaluate(_rule_expr(rule), context):
+        if evaluate(_rule_expr(rule), context, strict_missing=True):
             return False
     return True
 
@@ -162,23 +162,28 @@ def evaluate_skill_prefilter(
     universe = contract.get("universe", {}) or {}
     prefilter = ((contract.get("prefilter") or {}).get(stage) or {})
 
+    # universe/prefilter 用 strict_missing：字段缺失时 `dist20 >= 0` 等规则
+    # 不再因 _coerce(None)=0.0 静默放行（死猫跳 dist20 缺失被当多头排列放行致止损）。
+    # include 缺失→False→拒绝（安全）；exclude 缺失→False→不排除→放行，但
+    # exclude 用到的字段（is_st/twenty_cm_risk_gate/dragon_tiger_is_on_list 等）
+    # 均由 _build_stock_from_bars 必然赋值，不会缺失，故 exclude 行为不变。
     for rule in universe.get("include", []) or []:
-        if not evaluate(_rule_expr(rule), context):
+        if not evaluate(_rule_expr(rule), context, strict_missing=True):
             return False, _rule_reason(rule, "universe_include")
     for rule in universe.get("exclude", []) or []:
-        if evaluate(_rule_expr(rule), context):
+        if evaluate(_rule_expr(rule), context, strict_missing=True):
             return False, _rule_reason(rule, "universe_exclude")
 
     for rule in prefilter.get("include", []) or []:
-        if not evaluate(_rule_expr(rule), context):
+        if not evaluate(_rule_expr(rule), context, strict_missing=True):
             return False, _rule_reason(rule, "prefilter_include")
 
     include_any = prefilter.get("include_any", []) or []
-    if include_any and not any(evaluate(_rule_expr(rule), context) for rule in include_any):
+    if include_any and not any(evaluate(_rule_expr(rule), context, strict_missing=True) for rule in include_any):
         return False, "prefilter_include_any"
 
     for rule in prefilter.get("exclude", []) or []:
-        if evaluate(_rule_expr(rule), context):
+        if evaluate(_rule_expr(rule), context, strict_missing=True):
             return False, _rule_reason(rule, "prefilter_exclude")
 
     return True, "pass"

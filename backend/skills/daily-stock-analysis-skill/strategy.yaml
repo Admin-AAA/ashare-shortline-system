@@ -129,6 +129,20 @@ phases:
     hard_veto: false
     risk_flags: ["弱市半吊子追高（当日涨3-5%无封板惯性无超跌安全垫），弱市宜等超跌不宜追多"]
 
+  # 弱市半强势高乖离追高毒区：弱市+当日涨5-9.5%（非涨停封板）+ bias_ma5>=5（高乖离）→ cap 68
+  # LIVE 验证（2026-07 第145轮 D项失败归因，全策略 LIVE formal 去重）：
+  #   弱势 & pct∈(5,9.5) & bias_ma5>=5: n=16 WR=43.8% avg=-2.21% min=-5.72%（毒区）
+  #   对照 弱势 & pct∈(5,9.5) & bias_ma5<5: n=4 WR=100% avg=+3.55%（低乖离是 alpha 不误伤）
+  #   对照 弱势 & pct>=9.5（涨停惯性）: n=33 WR=69.7% avg=+2.15%（封板是 alpha 不误伤）
+  # 因果：5-9.5% 涨幅未封板（无涨停惯性资金护盘）+ 高乖离（bias_ma5>=5 当日已远离均线），
+  #   弱市次日无资金接力，高乖离回踩触发 stop_loss（002266 pct=8.7 bias_ma5=8.45 → -5.72%）。
+  #   用 pct<9.5 精确避开涨停封板区，用 bias_ma5>=5 避开低乖离均值回归 alpha。
+  - name: 弱市半强势高乖离追高毒区
+    when: "market_regime == '弱势' and pct > 5 and pct < 9.5 and bias_ma5 >= 5"
+    score_cap: 68
+    hard_veto: false
+    risk_flags: ["弱市半强势高乖离追高（5-9.5%未封板+bias_ma5>=5高乖离，弱市无接力资金高乖离回踩止损）"]
+
   - name: 趋势跟踪
     when: "dsa_trend_score >= 18"
     score_cap: 100

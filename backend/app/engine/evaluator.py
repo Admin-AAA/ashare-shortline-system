@@ -124,7 +124,30 @@ ALLOWED_NAMES = {
 _ast_cache: dict[str, ast.AST] = {}
 
 
-def evaluate(expression: str, context: dict[str, Any]) -> bool:
+class _Missing:
+    """字段缺失哨兵。
+
+    universe/prefilter 规则在 strict_missing 模式下，缺失字段返回 _Missing()，
+    任何数值比较均判定为 False（include 规则缺失→拒绝，exclude 规则缺失→不排除）。
+    根因：原先 _coerce(None)=0.0，使 `dist20 >= 0` 在 dist20 缺失时变成 0.0>=0=True
+    静默放行死猫跳（000636 dist20=-11.163 仍被 overnight 推荐致 -5.68% 止损）。
+    """
+
+    __slots__ = ()
+
+    def __lt__(self, other): return False
+    def __le__(self, other): return False
+    def __gt__(self, other): return False
+    def __ge__(self, other): return False
+    def __eq__(self, other): return other is self
+    def __ne__(self, other): return other is not self
+    def __bool__(self): return False
+
+
+_MISSING = _Missing()
+
+
+def evaluate(expression: str, context: dict[str, Any], strict_missing: bool = False) -> bool:
     if not expression:
         return False
     normalized = (
@@ -139,7 +162,7 @@ def evaluate(expression: str, context: dict[str, Any]) -> bool:
         if node is None:
             node = ast.parse(normalized, mode="eval")
             _ast_cache[normalized] = node
-        return bool(_eval(node.body, context))
+        return bool(_eval(node.body, context, strict_missing))
     except UnsafeExpression:
         return False
     except Exception:
@@ -147,9 +170,9 @@ def evaluate(expression: str, context: dict[str, Any]) -> bool:
         return False
 
 
-def _eval(node: ast.AST, context: dict[str, Any]) -> Any:
+def _eval(node: ast.AST, context: dict[str, Any], strict_missing: bool = False) -> Any:
     if isinstance(node, ast.BoolOp):
-        values = [_eval(v, context) for v in node.values]
+        values = [_eval(v, context, strict_missing) for v in node.values]
         if isinstance(node.op, ast.And):
             return all(values)
         if isinstance(node.op, ast.Or):
@@ -158,17 +181,17 @@ def _eval(node: ast.AST, context: dict[str, Any]) -> Any:
 
     if isinstance(node, ast.UnaryOp):
         if isinstance(node.op, ast.Not):
-            return not _eval(node.operand, context)
+            return not _eval(node.operand, context, strict_missing)
         if isinstance(node.op, ast.USub):
-            return -_eval(node.operand, context)
+            return -_eval(node.operand, context, strict_missing)
         if isinstance(node.op, ast.UAdd):
-            return +_eval(node.operand, context)
+            return +_eval(node.operand, context, strict_missing)
         raise UnsafeExpression("unsupported unary op")
 
     if isinstance(node, ast.Compare):
-        left = _eval(node.left, context)
+        left = _eval(node.left, context, strict_missing)
         for op, comparator in zip(node.ops, node.comparators):
-            right = _eval(comparator, context)
+            right = _eval(comparator, context, strict_missing)
             if not _compare(left, op, right):
                 return False
             left = right
@@ -182,7 +205,10 @@ def _eval(node: ast.AST, context: dict[str, Any]) -> Any:
             return False
         if name not in ALLOWED_NAMES:
             raise UnsafeExpression(f"name not allowed: {name}")
-        return _coerce(context.get(name))
+        value = context.get(name)
+        if strict_missing and value is None:
+            return _MISSING
+        return _coerce(value)
 
     if isinstance(node, ast.Constant):
         if isinstance(node.value, (int, float, bool, str)):
@@ -190,8 +216,8 @@ def _eval(node: ast.AST, context: dict[str, Any]) -> Any:
         raise UnsafeExpression("only numeric, bool and string constants are allowed")
 
     if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div)):
-        left = _eval(node.left, context)
-        right = _eval(node.right, context)
+        left = _eval(node.left, context, strict_missing)
+        right = _eval(node.right, context, strict_missing)
         if isinstance(node.op, ast.Add):
             return left + right
         if isinstance(node.op, ast.Sub):
@@ -205,6 +231,9 @@ def _eval(node: ast.AST, context: dict[str, Any]) -> Any:
 
 
 def _compare(left: Any, op: ast.cmpop, right: Any) -> bool:
+    # 字段缺失哨兵：任何比较均为 False（strict_missing 模式下缺失字段不满足任何条件）
+    if isinstance(left, _Missing) or isinstance(right, _Missing):
+        return False
     if isinstance(op, ast.Lt):
         return left < right
     if isinstance(op, ast.LtE):
