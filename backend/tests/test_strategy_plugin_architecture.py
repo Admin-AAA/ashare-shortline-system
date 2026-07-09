@@ -468,6 +468,70 @@ def test_dsa_turnover_too_low_risk_rule():
     assert not has_low_turnover2, f"≥5% 不应触发: {risk_flags2}"
 
 
+def test_dsa_weak_regime_chase_tox_phase_caps_overextended():
+    """弱势市场 + 当日追高(pct>=3) + 高乖离(bias_ma5>=5) 应 cap 到 68（低于 score_line 72）。
+    数据依据（2026-07 第143轮 D项下滑失败归因闭环，LIVE formal 去重 sample）：
+      弱势 & pct>=3 & bias_ma5>=5: n=25 WR=36.0% avg=-2.85% PL=0.08（净近零，毒区）
+      对照 弱势 & pct<0（超跌）: n=41 WR=61.0% avg=+1.93% PL=4.8（均值回归 alpha）
+    根因：旧「弱市多头顺势毒区」phase 要求 dsa_macd_score>=8，漏掉 dsa_macd<8 的追高票
+    （如 002266: dsa_macd=5, pct=8.7, bias_ma5=8.45, regime=弱势 → 旧 phase 不匹配 →
+    趋势跟踪 cap 100 → score=100 → final 81.7 → 推荐 → 亏 -5.72%）。
+    修复：新增 phase 用原始因子 market_regime=='弱势' and pct>=3 and bias_ma5>=5，cap 68。"""
+    skills = _skills_by_id()
+    stock = _stock("002266")
+    stock.update({
+        "amount_yi": 8.0, "turnover_rate": 6.0,
+        "chg20": 25.0,  # 避开 cold_chase_pullback(chg20<15) 与 overextended_chase(chg20>50)
+        "off_high_pct": -5.0,
+        "pct": 8.7,  # 当日涨 8.7%（追高）
+        "bias_ma5": 8.45,  # 乖离 MA5 达 8.45%（高乖离）
+        "pos20": 94.7, "pos60": 70.0, "dist60": 8.0, "dist20": 2.0,
+        "rsi_12": 50.0, "max_dd20": -8.0, "upper_shadow_count20": 2,
+        "support_ma5": False, "avg_cost": 100.0,
+        "market_regime": "弱势",
+        # 关键：dsa_macd_score<8 使旧「弱市多头顺势毒区」phase 不匹配（复现 002266 漏网）
+        "dsa_trend_score": 26, "dsa_bias_score": 20, "dsa_macd_score": 5,
+        "dsa_signal_score": 69,
+    })
+    signal = run_strategy(skills["daily-stock-analysis-skill"], stock, ["测试"])
+
+    # 应被 cap 到 68（低于 score_line 72），不再 cap 100 给高分
+    assert signal["score_cap"] <= 68, (
+        f"弱势追高毒区应 cap<=68，实际 cap={signal['score_cap']} phase={signal['phase']}"
+    )
+    assert signal["score"] <= 68, (
+        f"弱势追高毒区 score 应<=68，实际 score={signal['score']} phase={signal['phase']}"
+    )
+    # phase 应命中追高毒区（而非"趋势跟踪"）
+    assert "追高" in signal["phase"] or "毒区" in signal["phase"], (
+        f"phase 应命中追高毒区: {signal['phase']}"
+    )
+
+    # 反事实1：强势市场同样追高特征不应被此 phase cap（强势追高不属此毒区）
+    stock["market_regime"] = "强势"
+    signal_strong = run_strategy(skills["daily-stock-analysis-skill"], stock, ["测试"])
+    assert signal_strong["score_cap"] > 68, (
+        f"强势市场追高不应被弱势毒区 phase cap: cap={signal_strong['score_cap']} phase={signal_strong['phase']}"
+    )
+
+    # 反事实2：弱势市场但超跌(pct<0)不应被 cap（超跌是均值回归 alpha，WR 61%）
+    stock["market_regime"] = "弱势"
+    stock["pct"] = -1.0
+    stock["bias_ma5"] = -2.0
+    signal_oversold = run_strategy(skills["daily-stock-analysis-skill"], stock, ["测试"])
+    assert signal_oversold["score_cap"] > 68, (
+        f"弱势超跌不应被追高毒区 cap: cap={signal_oversold['score_cap']} phase={signal_oversold['phase']}"
+    )
+
+    # 反事实3：弱势市场 pct>=3 但乖离不大(bias_ma5<5) 不应被 cap（温和上行非毒区）
+    stock["pct"] = 4.0
+    stock["bias_ma5"] = 3.0
+    signal_mild = run_strategy(skills["daily-stock-analysis-skill"], stock, ["测试"])
+    assert signal_mild["score_cap"] > 68, (
+        f"弱势温和上行不应被追高毒区 cap: cap={signal_mild['score_cap']} phase={signal_mild['phase']}"
+    )
+
+
 def test_high_range_require_setup_and_observation_hard_veto():
     """回归测试：high-range-breakout-momentum 的 require_setup + 阶段高点蓄势观察 hard_veto。
 
