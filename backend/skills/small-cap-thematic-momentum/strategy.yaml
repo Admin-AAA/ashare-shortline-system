@@ -34,6 +34,13 @@ contract:
 # 与 chip-single-peak-breakout 区别：本策略度量「相对强度动量 + 小盘弹性」，
 # 而非「筹码单峰分布」；与 sector-relative-strength-leader 区别：本策略用 pos20/rsi 动量
 # 而非 primary_excess（后者历史 lift 为负）。
+#
+# ⚠️ SELF-IMPROVE FLAG: 覆盖盲区 (2026-07-09 第156轮发现)
+# 近 60 天 formal 0 命中。根因=prefilter 三层过严：
+#   universe 31→prefilter.include(free<50 砍到8, pos20>=70 砍到4)→include_any(6条AND含 is_main_theme)→0
+# 修复：移除 prefilter.include 与 include_any 重复的 free_mv/pos20 收紧（universe.include 已有宽松版），
+# 保留 dist20<10+turnover<8 作行情早期/未过热约束；include_any 拆成 3 个互补选项（动量/主线共振/多头排列），
+# 让 is_main_theme/dist20/turnover 回归 scoring 加分项而非硬否决。验证：0→2 通过(301038,300533)
 universe:
   include:
     - "amount_yi >= 3"
@@ -51,15 +58,19 @@ universe:
 
 prefilter:
   market:
+    # prefilter.include 只保留行情早期+未过热（dist20/turnover）；free_mv/pos20 收紧交给
+    # include_any 各选项按场景定义，避免与 universe.include 重复 AND 导致三层叠加 0 命中
     include:
-      - when: "free_mv_yi < 50"
-        reason: "small_float"
-      - when: "pos20 >= 70"
-        reason: "relative_strength"
+      - "dist20 < 10"
+      - "turnover_rate < 8"
     include_any:
-      # 核心模式：小盘 + 相对强度 + 动量 + 主线 + 未过度偏离 + 未过热（历史 WR 90.2% / n=328）
-      - when: "free_mv_yi < 50 and pos20 >= 70 and rsi_12 >= 60 and is_main_theme == true and dist20 < 10 and turnover_rate < 8"
+      # 核心模式拆为 3 个互补选项，任一命中即进 skill_gate；is_main_theme 回归 scoring 加分
+      - when: "free_mv_yi < 50 and pos20 >= 70 and rsi_12 >= 60"
         reason: "requires_small_cap_momentum_profile"
+      - when: "free_mv_yi < 50 and is_main_theme == true and pos20 >= 60"
+        reason: "requires_small_cap_main_theme_resonance"
+      - when: "free_mv_yi < 50 and pos20 >= 70 and ma5 > ma10"
+        reason: "requires_small_cap_multi_ma_alignment"
     exclude:
       - when: "free_mv_yi >= 100"
         reason: "large_cap_contrarian"

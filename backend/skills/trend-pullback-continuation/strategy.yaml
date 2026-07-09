@@ -1,3 +1,12 @@
+# ⚠️ SELF-IMPROVE FLAG: 覆盖盲区 (2026-07-09 第156轮深化)
+# 近 60 天 formal 0 命中。根因=regime 适配（非配置 bug）：
+#   universe 64→prefilter.include max_dd20>=-14(砍到5)→vol5_20<=1.05(0)→include_any(0)
+# 弱势市场（07-08 regime=弱势, up_ratio=0.278）趋势票普遍 max_dd20<-14（59/64 被卡），
+# 剩余 5 只无"缩量小跌"形态（vol5_20<=0.8 and pct∈[-5,0]）。
+# 教训库第141轮：震荡 regime failed 100% stop_loss；第148轮 pos60<50 效果 regime-dependent。
+# 趋势回踩策略在弱势/震荡市场本就不该强产出——0 命中是市场适配而非死锁。
+# prefilter 死锁已在前序轮修复（60e299d），include_any 已改用原始字段。当前是分数竞争+regime 双重作用。
+# 下一步：等市场转活跃/强牛 regime 后验证是否自然命中；不强行放宽 max_dd20（破位股不该做回踩）。
 id: trend-pullback-continuation
 name: 强趋势缩量回踩
 enabled: true
