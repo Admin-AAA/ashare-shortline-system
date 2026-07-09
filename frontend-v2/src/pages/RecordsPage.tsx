@@ -267,6 +267,7 @@ function RunRecordsList() {
             <option value="__all__">全部</option>
             <option value="formal">实盘</option>
             <option value="experiment">实验</option>
+            <option value="backtest">回测</option>
           </select>
         </div>
 

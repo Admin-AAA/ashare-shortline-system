@@ -1,13 +1,20 @@
 /** Run 模式徽章 —— formal(实盘) 强调色，其他(回测等) muted。
  *  北极星 A 项强调 formal 推荐，所有 run 展示处（LatestRunCard / RunRecordsList）一屏可辨实盘 vs 回测。
  *  被 HomePanels.LatestRunCard 与 RecordsPage.RunRecordsList 共用。 */
+const RUN_MODE_LABELS: Record<string, string> = {
+  formal: "实盘",
+  experiment: "实验",
+  backtest: "回测",
+};
+
 export function RunModeBadge({ runMode }: { runMode?: string | null }) {
   if (!runMode) return null;
   const isFormal = runMode === "formal";
+  const label = RUN_MODE_LABELS[runMode] ?? runMode;
   const color = isFormal ? "var(--accent-strong, var(--accent))" : "var(--muted)";
   return (
     <span
-      title={isFormal ? "实盘正式推荐" : runMode}
+      title={isFormal ? "实盘正式推荐" : label}
       style={{
         fontSize: 10,
         padding: "1px 6px",
@@ -21,7 +28,7 @@ export function RunModeBadge({ runMode }: { runMode?: string | null }) {
         whiteSpace: "nowrap",
       }}
     >
-      {isFormal ? "实盘" : runMode.toUpperCase()}
+      {label}
     </span>
   );
 }

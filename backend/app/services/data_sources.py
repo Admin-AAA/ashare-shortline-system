@@ -703,7 +703,8 @@ def _latest_allowed_bar_date(today: date | None = None) -> str:
     if today is None:
         now = datetime.now()
         today = now.date()
-        if today.weekday() < 5 and now.hour < 16:
+        if today.weekday() < 5 and (now.hour < 17 or (now.hour == 17 and now.minute < 30)):
+            # 17:30 前视为当日 daily 未就绪（Tushare 盘后约 17:00 后才出当日收盘数据）
             today = _previous_weekday(today)
     if today.weekday() == 5:
         return (today - timedelta(days=1)).isoformat()

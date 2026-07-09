@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections import Counter, OrderedDict
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -35,9 +36,10 @@ from app.services.data_sources import enabled_sources
 from app.services.remediation import transaction as remediation_transaction
 from app.services.tushare_client import fetch_basic_daily_kbars, fetch_daily_kbars_for_trade_date, fetch_index_daily, fetch_minute_kbars
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_REMEDIABLE_TABLES = (
     "daily_kbar",
-    "minute_kbar",
     "index_daily",
     "limit_up_board",
     "capital_flow",
@@ -45,6 +47,8 @@ DEFAULT_REMEDIABLE_TABLES = (
     "dragon_tiger",
     "news",
 )
+# minute_kbar 暂不纳入自动修复：Tushare 15000 积分无 stk_mins 分钟权限，
+# 每次跑都是空结果待重试，白白拖 40 分钟。待开通分钟权限后再加回。
 DEFAULT_INDEX_TS_CODES = (
     "000001.SH",
     "000300.SH",
@@ -1326,6 +1330,25 @@ def _backfill_daily_kbar_date(db: Session, trade_date: str, codes: list[str]) ->
     ]
 
     if rows:
+        # 防线 B：若数据源返回的整批 pct_chg 全为 0/None，判定为
+        # 「Tushare 当日 daily 尚未就绪」（盘后数据未出），不落库——
+        # 避免用 0 覆盖已有的真实值或写入假数据，导致收益计算全 0。
+        # 阈值 >=100 行才触发，小批量逐股票补数（停牌/新股正常 0）不误杀。
+        if len(rows) >= 100 and not any(_float(r.get("pct_chg")) for r in rows):
+            logger.warning(
+                "daily_kbar 批量同步 %s: %d 行 pct_chg 全 0，判定数据源未就绪，跳过写库",
+                target, len(rows),
+            )
+            return {
+                "row_count": 0,
+                "provider_row_count": len(source_rows),
+                "requested_code_count": len(target_codes),
+                "target_hit_count": 0,
+                "missing_code_count": len(target_codes),
+                "missing_codes": target_codes[:10],
+                "status": "skipped",
+                "reason": "pct_chg_all_zero_data_not_ready",
+            }
         payload = [_daily_kbar_payload(row) for row in rows]
         _upsert_daily_kbar_payload(db, payload)
 
@@ -1857,7 +1880,8 @@ def _latest_allowed_bar_date(today: date | None = None) -> str:
     if today is None:
         now = datetime.now()
         today = now.date()
-        if today.weekday() < 5 and now.hour < 16:
+        if today.weekday() < 5 and (now.hour < 17 or (now.hour == 17 and now.minute < 30)):
+            # 17:30 前视为当日 daily 未就绪（Tushare 盘后约 17:00 后才出当日收盘数据）
             today = _previous_weekday(today)
     if today.weekday() == 5:
         return (today - timedelta(days=1)).isoformat()
