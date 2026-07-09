@@ -471,6 +471,46 @@ def test_apply_pool_rules_watchlist_empty_when_not_climax():
     assert out["watchlist"] == []
 
 
+def test_apply_pool_rules_panic_day_veto_blocks_all_when_limit_down_over_100():
+    """limit_down_count>100 = 系统性恐慌日，score_line +12→84，且不参与软降线兜底。
+    反事实：2026-05-29(ld=134) 27 笔 LIVE formal 全失败 WR=0% 最高分 76.24，
+    84 线全部过滤（panic 日无候选过线）。"""
+    cards = [_card(code, score) for code, score in [("A", 80), ("B", 76), ("C", 72)]]
+    # 弱势恐慌日：limit_down=134
+    snapshot = {"sample_count": 100, "up_count": 20, "down_count": 80,
+                "limit_up_count": 5, "limit_down_count": 134}
+    result = apply_pool_rules(cards, output_count=6, score_line=72, market_snapshot=snapshot)
+    # 全部被 panic_day 否决过滤（最高分 80 < 84）；软降线不兜底 panic_day_penalty
+    assert result == []
+    # 即使软降线在无候选时本会触发，panic_day_penalty 卡片仍被排除
+    for card in cards:
+        assert card["score_line_meta"]["panic_day_penalty"] == 12.0
+        assert card["score_line_meta"]["effective_score_line"] >= 84.0
+
+
+def test_apply_pool_rules_panic_day_veto_lets_through_high_score():
+    """ld>100 时 score_line 提到 84，真正高分（>=84）的候选仍可通过（极少见）。"""
+    cards = [_card(code, score) for code, score in [("A", 90), ("B", 80), ("C", 72)]]
+    snapshot = {"sample_count": 100, "up_count": 20, "down_count": 80,
+                "limit_up_count": 5, "limit_down_count": 134}
+    result = apply_pool_rules(cards, output_count=6, score_line=72, market_snapshot=snapshot)
+    # 仅 A(90>=84) 通过；B(80<84) 被 panic 否决；C(72<84) 被否决
+    assert [c["code"] for c in result] == ["A"]
+    assert result[0]["score_line_meta"]["panic_day_penalty"] == 12.0
+
+
+def test_apply_pool_rules_no_panic_veto_below_threshold():
+    """ld<=100 不触发恐慌日否决（81-100 是 regime-dependent 弱信号，留策略层处理）。"""
+    cards = [_card(code, score) for code, score in [("A", 80), ("B", 72)]]
+    # ld=84（81-100 区间，不触发 panic veto）
+    snapshot = {"sample_count": 100, "up_count": 20, "down_count": 80,
+                "limit_up_count": 5, "limit_down_count": 84}
+    result = apply_pool_rules(cards, output_count=6, score_line=72, market_snapshot=snapshot)
+    # 不应有 panic_day_penalty
+    for c in cards:
+        assert c["score_line_meta"]["panic_day_penalty"] == 0.0
+
+
 def test_apply_pool_rules_watchlist_excludes_blocked_cards():
     card = _card("Z", 88)
     # 一字涨停：open==high==low==close 且无开板，触发入场封死判定 → 不入观察池

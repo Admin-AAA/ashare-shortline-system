@@ -977,6 +977,19 @@ def apply_pool_rules(
         if _snapshot_regime == "弱势" and 0 <= _card_chg20 < 15 and not _is_limit_up_card:
             effective_score_line = round(effective_score_line + 12.0, 2)
             card["_regime_weak_low_chg20_penalty"] = 12.0
+        # 全局恐慌日否决（第146轮 T3 D项攻击，LIVE formal 全策略 May-Jul 302笔去重）：
+        # limit_down_count>100 = 系统性恐慌蔓延日，全市场强平传染，均值回归与趋势跟踪齐失效。
+        #   ≤50: WR 65.2% / 51-80: WR 67.5% / 81-100: WR 46.4% / >100: WR 11.1%（完全单调）
+        #   2026-05-29(ld=134) 27笔 LIVE formal 全失败 WR=0% avg=-4.93%，最高分 76.24。
+        # 反事实（+12→84）：过滤 8 笔全 WR=0%（gross=-45.52%），零误报（panic 日最高分 76.24<84），
+        #   整体 passed WR 53.5%→56.6% avg +0.546%→+0.912% gross +78%→+124%。
+        # 因果：>100只跌停=强平缺口下杀，止损被吞、次日续跌；非 regime-dependent 弱信号
+        #   （ld 81-100 dragon-tiger/chen-xiaoqun 仍 WR 90%+，留策略层处理），是硬不可交易条件，
+        #   符合「全局只保留 ST/停牌/无数据 等硬性不可交易过滤」原则。
+        _panic_limit_down = int((market_snapshot or {}).get("limit_down_count") or 0)
+        if _panic_limit_down > 100:
+            effective_score_line = round(effective_score_line + 12.0, 2)
+            card["_panic_day_penalty"] = 12.0
         card["score_line_meta"] = {
             **score_line_context,
             **card_adjustment,
@@ -987,6 +1000,7 @@ def apply_pool_rules(
             "regime_support_ma5_penalty": card.get("_regime_support_ma5_penalty", 0.0),
             "regime_oscillation_low_pos_penalty": card.get("_regime_oscillation_low_pos_penalty", 0.0),
             "regime_weak_low_chg20_penalty": card.get("_regime_weak_low_chg20_penalty", 0.0),
+            "panic_day_penalty": card.get("_panic_day_penalty", 0.0),
             "effective_score_line": effective_score_line,
             "passed": final_score >= effective_score_line and execution_viability["status"] != "blocked",
         }
@@ -1054,6 +1068,9 @@ def apply_pool_rules(
                     continue
                 # 弱势 × chg20<15 硬否决：同上，惩罚不被降线覆盖（WR=33% 的半强股不兜底出票）
                 if sm.get("regime_weak_low_chg20_penalty"):
+                    continue
+                # 全局恐慌日否决：ld>100 = WR 0% 系统性恐慌，不参与软降线兜底（否则降线后 76 分的毒区票混进推荐）
+                if sm.get("panic_day_penalty"):
                     continue
                 old_effective = sm.get("effective_score_line", 99)
                 new_effective = min(old_effective, dynamic_line)
