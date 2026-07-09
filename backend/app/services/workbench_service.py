@@ -149,6 +149,7 @@ DEFAULT_PRESETS = [
         "score_line": 72.0,
         "output_count": 6,
         "hide_recent_repeats": True,
+        "dedup_same_day": True,
         "skip_aux_refresh": False,
         "skill_groups": ["formal_opening"],
     },
@@ -162,6 +163,7 @@ DEFAULT_PRESETS = [
         "score_line": 70.0,
         "output_count": 5,
         "hide_recent_repeats": True,
+        "dedup_same_day": True,
         "skip_aux_refresh": False,
         "skill_groups": ["formal_trend_core"],
     },
@@ -1935,6 +1937,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         )
 
         recent_codes = _recent_recommended_codes(db, snapshot["trade_date"])
+        same_day_codes = _same_day_recommended_codes(db, snapshot["trade_date"], run.run_id)
         market_score = market_regime_score(snapshot)
         calibrated_weights = _load_calibrated_agg_weights(db)
         cards: list[dict[str, Any]] = []
@@ -2149,10 +2152,16 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                 calibrated_weights=calibrated_weights,
                 snapshot=snapshot,
                 recent_codes=recent_codes,
+                same_day_codes=same_day_codes,
             )
             if card.get("agent_logs"):
                 candidate_success_count += 1
-            if params["hide_recent_repeats"] and card["recent_repeat"]:
+            if _drop_as_repeat_card(
+                card,
+                params,
+                recent_repeat=bool(card.get("recent_repeat")),
+                same_day_repeat=bool(card.get("same_day_repeat")),
+            ):
                 continue
             cards.append(card)
 
@@ -2851,6 +2860,7 @@ def _build_recommendation_card(
     calibrated_weights: dict[str, float] | None,
     snapshot: dict[str, Any],
     recent_codes: set[str] | None = None,
+    same_day_codes: set[str] | None = None,
 ) -> dict[str, Any]:
     context = entry.get("context")
     stock = entry["stock"]
@@ -3004,6 +3014,7 @@ def _build_recommendation_card(
     card["market_snapshot"] = snapshot
     card["agent_logs"] = review_log["logs"]
     card["recent_repeat"] = stock["code"] in (recent_codes or set())
+    card["same_day_repeat"] = stock["code"] in (same_day_codes or set())
     return card
 
 
@@ -3657,6 +3668,11 @@ def _merge_run_params(db: Session, preset: Preset | None, payload: dict[str, Any
             if "hide_recent_repeats" in payload
             else preset_data.get("hide_recent_repeats", True)
         ),
+        "dedup_same_day": bool(
+            payload.get("dedup_same_day")
+            if "dedup_same_day" in payload
+            else preset_data.get("dedup_same_day", True)
+        ),
         "skills": skills,
     }
     for key in ("matrix_batch_id", "matrix_batch_name", "matrix_run"):
@@ -3804,6 +3820,50 @@ def _recent_recommended_codes(db: Session, trade_date: str) -> set[str]:
         )
     ).all()
     return {row.code for row in rows}
+
+
+def _same_day_recommended_codes(
+    db: Session, trade_date: str, exclude_run_id: str | None = None
+) -> set[str]:
+    """同一交易日、已由其他 formal run 推荐过的 code 集合（跨 run 同日去重）。
+
+    因果：多个 formal run 在同一交易日各自扫描全市场，常把同一只强势票重复推荐，
+    造成「同一笔坏赌注当日被计 2~7 次亏损」的集中度/噪声问题（如 603268 在 2026-07-08
+    被 7 个 run 各推一次、全部次日止损 -5.69%）。在最终卡片过滤阶段剔除当日已被其他
+    formal run 推荐过的 code（本 run 自身推荐不剔除——单 run 内聚合已按 code 去重）。
+    这是硬风险控制（不重复集中同一只票），与 hide_recent_repeats（跨日去重）正交。
+    """
+    stmt = (
+        select(Recommendation.code)
+        .join(RecommendationRun, Recommendation.run_id == RecommendationRun.run_id)
+        .where(RecommendationRun.run_mode == "formal", Recommendation.trade_date == trade_date)
+    )
+    if exclude_run_id is not None:
+        stmt = stmt.where(Recommendation.run_id != exclude_run_id)
+    rows = db.scalars(stmt).all()
+    return {row for row in rows}
+
+
+def _drop_as_repeat_card(
+    card: dict[str, Any],
+    params: dict[str, Any],
+    recent_repeat: bool,
+    same_day_repeat: bool,
+) -> bool:
+    """是否因「重复推荐」在最终过滤阶段剔除该卡片。
+
+    - hide_recent_repeats：剔除近 7 日已被推荐过的 code（既有逻辑，跨日去重）。
+    - dedup_same_day：剔除当日已被其他 formal run 推荐过的 code（新增，同日跨 run 去重）。
+    两者正交，任一命中即剔除。
+    """
+    code = card.get("code")
+    if not code:
+        return False
+    if params.get("hide_recent_repeats", True) and recent_repeat:
+        return True
+    if params.get("dedup_same_day", True) and same_day_repeat:
+        return True
+    return False
 
 
 def _agent_history_context(db: Session, skill_id: str, stock: dict[str, Any]) -> dict[str, Any]:
