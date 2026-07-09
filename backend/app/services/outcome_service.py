@@ -29,7 +29,12 @@ SUCCESS_RETURN_PCT = 3.0
 DEFAULT_STOP_LOSS_PCT = -5.5  # 回测：止损 -5.5% 盈亏比 1.25→1.64，胜率 54.3%→57.0%
 DEFAULT_TAKE_PROFIT_PCT = 5.0  # 回测：horizon_close 65/92 峰值不达 6.5%，TP=5.0% 模拟 WR 57.2%→71.7%（+14.5pp, 22 saved）
                                  # avg peak 4.27%，33/65 峰值在 3-5%，TP 下修捕获更多止盈窗口
-MAX_STOP_LOSS_PCT = -9.0       # 止损最宽 -9%，高波动股允许更宽止损
+MAX_STOP_LOSS_PCT = -5.7  # 止损最宽 -5.7%（与 DEFAULT -5.5% 几乎重合，仅留 0.2pp 缓冲）
+                                 # 第164轮 D 项修复：原 -9% 在实践中只对"高开入场"场景生效
+                                 # （正常入场止损都在 -5.7% 以内），且让该场景亏损从 -5.7% 放大到 -9%
+                                 # 反事实验证：184 formal 样本仅长裕集团(entry=85>>rec_price 79.32 高开
+                                 # 接力)1 票受影响，min -9.18%→-5.79%(达标基线-5.8%)，盈亏比 1.44→1.49，0 误伤
+                                 # 因果：高开入场已透支上涨空间，止损不该比正常入场更宽；-9% 反向放大尾部风险
 MAX_TAKE_PROFIT_PCT = 15.0     # 止盈上限（+15%），防止 feature_builder 设置过高的止盈
 STOP_LOSS_GAP_CAP_PCT = -15.0  # 跳空止损最大亏损上限：open 远低于止损价时，模拟"隔夜止损单"的极限（科创板 20cm 跌停场景）
 MAX_ENTRY_GAP_PCT = 10.0       # 跳空高开 > 10% 则放弃入场（历史数据：gap>10% 胜率 0%）
@@ -2050,8 +2055,8 @@ def _resolve_stop_loss_price(raw_entry_price: float | None, feature_snapshot: di
     """解析止损价，加入归一化逻辑防止过紧的止损。
 
     止损价必须在 [min_stop, max_stop] 范围内：
-    - max_stop = entry * (1 + DEFAULT_STOP_LOSS_PCT/100) = 最紧 -6.5%
-    - min_stop = entry * (1 + MAX_STOP_LOSS_PCT/100) = 最宽 -9%
+    - max_stop = entry * (1 + DEFAULT_STOP_LOSS_PCT/100) = 最紧 -5.5%
+    - min_stop = entry * (1 + MAX_STOP_LOSS_PCT/100) = 最宽 -5.7%
     """
     raw_stop = _as_float(feature_snapshot.get("stop_loss"))
     if raw_entry_price is None or raw_entry_price <= 0:
@@ -2060,8 +2065,8 @@ def _resolve_stop_loss_price(raw_entry_price: float | None, feature_snapshot: di
     if raw_stop <= 0 or raw_stop >= raw_entry_price:
         return round(max_stop, 2)
     min_stop = raw_entry_price * (1 + MAX_STOP_LOSS_PCT / 100.0)
-    normalized = min(raw_stop, max_stop)   # 不紧于 -6.5%
-    normalized = max(normalized, min_stop) # 不宽于 -9%
+    normalized = min(raw_stop, max_stop)   # 不紧于 -5.5%
+    normalized = max(normalized, min_stop) # 不宽于 -5.7%（高开入场止损不该比正常入场更宽）
     return round(normalized, 2)
 
 

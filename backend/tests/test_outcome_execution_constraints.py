@@ -2,7 +2,14 @@ import json
 from types import SimpleNamespace
 
 from app.models.tables import DailyKbar
-from app.services.outcome_service import _resolve_entry, _resolve_exit, _simulate_outcome
+from app.services.outcome_service import (
+    _resolve_entry,
+    _resolve_exit,
+    _resolve_stop_loss_price,
+    _simulate_outcome,
+    DEFAULT_STOP_LOSS_PCT,
+    MAX_STOP_LOSS_PCT,
+)
 
 
 def _bar(
@@ -342,3 +349,47 @@ def test_simulate_outcome_feature_snapshot_preparse_consistency():
     sim_none = _simulate_outcome(rec, bars, dates, horizon_days=3, feature_snapshot=None)
     assert sim_none is not None
     assert sim_none["entry_triggered"] == sim_internal["entry_triggered"]
+
+
+def test_resolve_stop_loss_caps_gap_up_entry_to_max():
+    """高开入场场景止损 cap 在 MAX_STOP_LOSS_PCT（-5.7%），不再放宽到 -9%。
+
+    回归第164轮 D 项 maxloss 根因：长裕集团 rec_price=79.32，次日竞价高开 entry=85.0，
+    策略止损基于推荐价 74.96（相对入场 -11.9%）。旧 MAX=-9% 把它拉宽到 entry×-9%=77.35，
+    单笔亏损放大到 -9.18%。收紧 MAX 到 -5.7% 后止损抬到 entry×-5.7%=80.16，封住尾部。
+    """
+    entry = 85.0
+    raw_stop_based_on_rec_price = 74.96  # 策略止损基于推荐价 79.32（-5.6%），相对入场已 -11.9%
+    sl = _resolve_stop_loss_price(entry, {"stop_loss": raw_stop_based_on_rec_price})
+    # 止损相对入场亏损不应超过 MAX_STOP_LOSS_PCT（-5.7%）
+    loss_pct = (sl / entry - 1) * 100
+    assert loss_pct >= MAX_STOP_LOSS_PCT - 0.01, f"止损 {loss_pct:.2f}% 宽于 MAX {MAX_STOP_LOSS_PCT}%"
+    # 具体值：entry × (1 - 5.7/100) = 80.165 → round 80.17
+    assert sl == round(entry * (1 + MAX_STOP_LOSS_PCT / 100.0), 2)
+
+
+def test_resolve_stop_loss_keeps_inrange_strategy_stop():
+    """策略止损落在 [MAX, DEFAULT] 区间内时直接采用，不被归一化篡改。"""
+    entry = 100.0
+    # 策略止损 -5.6%（在 -5.7% ~ -5.5% 区间内）
+    raw_stop = entry * (1 - 5.6 / 100.0)
+    sl = _resolve_stop_loss_price(entry, {"stop_loss": raw_stop})
+    assert sl == round(raw_stop, 2)
+
+
+def test_resolve_stop_loss_caps_normal_stop_to_default():
+    """策略止损比 DEFAULT(-5.5%) 还紧时不收紧到更紧（最紧 -5.5%）。"""
+    entry = 100.0
+    raw_stop = entry * (1 - 3.0 / 100.0)  # -3%，过紧
+    sl = _resolve_stop_loss_price(entry, {"stop_loss": raw_stop})
+    assert sl == round(entry * (1 + DEFAULT_STOP_LOSS_PCT / 100.0), 2)
+
+
+def test_resolve_stop_loss_max_not_wider_than_default_by_much():
+    """MAX_STOP_LOSS_PCT 不应远宽于 DEFAULT——否则高开入场尾部风险失控。
+
+    第164轮硬约束：MAX 与 DEFAULT 差距 ≤ 0.3pp（-5.7% vs -5.5%），保证止损几乎固定在 -5.5%~-5.7%，
+    杜绝 -9% 那种把高开入场亏损放大到 -9%+ 的尾部。注意 MAX(-5.7) 比 DEFAULT(-5.5) 更负=更宽。
+    """
+    assert DEFAULT_STOP_LOSS_PCT - MAX_STOP_LOSS_PCT <= 0.3  # DEFAULT - MAX ≤ 0.3pp
+    assert MAX_STOP_LOSS_PCT < DEFAULT_STOP_LOSS_PCT  # MAX 更负 = 最宽边界
