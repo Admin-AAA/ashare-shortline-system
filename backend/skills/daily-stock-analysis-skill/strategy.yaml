@@ -72,6 +72,13 @@ prefilter:
       # 数据驱动（T3 第138轮失败归因闭环，500笔去重 sample）
       - when: "chg20 > 50 and pct > 2"
         reason: "overextended_chase"
+      # chg20<15 & 3<=pct<9.5 = WR 27.3%（33笔），avg -2.52%，PL 0.15——冷门追高毒区。
+      # 对称于 overextended_chase：20日没涨(chg20<15)的冷门股当日拉升3%-9.5%(非涨停封板)
+      # = 冲高回落出货，次日大概率止损。涨停封板(pct>=9.5)有溢价效应保留不排除
+      # （pct>=9.5 WR=57.9%）。反事实：排除后整体 PL 1.73->3.05，WR 54.5%->60.7%。
+      # 数据驱动（T3 第157轮 D项下滑失败归因闭环，178笔 LIVE formal 去重 sample）
+      - when: "chg20 < 15 and pct >= 3 and pct < 9.5"
+        reason: "cold_chase_pullback"
       # avg_cost>200 prefilter 已删除：avg_cost 在 feature_builder 阶段才填充，prefilter 阶段不可用（永远 False）；
       # 且数据证明 avg_cost>200 的科创板高价龙头 WR 76.8% avg 3.81%，过滤是误杀（第 100 轮 T5 修复）
 

@@ -16,7 +16,7 @@ def _tradeable_stock(**overrides):
         "name": "测试股",
         "amount_yi": 8.0,
         "turnover_rate": 6.0,
-        "pct": 3.0,
+        "pct": 1.5,  # 回调入场样本（避开 cold_chase_pullback 毒区 chg20<15 & pct>=3）
         "limit_up_days20": 1,
         "chg20": 12.0,
         "pos20": 72.0,
@@ -83,6 +83,9 @@ def _positive_stock_for_skill(skill_id: str):
     if skill_id == "small-cap-thematic-momentum":
         # universe free_mv_yi<80 + 核心模式 free_mv_yi<50（默认 80.0 不满足 include）
         return _tradeable_stock(free_mv_yi=32.0)
+    if skill_id == "overnight-holding-method":
+        # universe 要求 pct∈[3,5]（隔夜持有需当日有涨幅），override 默认 1.5
+        return _tradeable_stock(pct=4.0)
     return _tradeable_stock()
 
 
