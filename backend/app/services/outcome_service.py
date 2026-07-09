@@ -2009,8 +2009,8 @@ def _resolve_exit_with_trailing(
 
     调用前已确认基准 exit 非 take_profit_*，故 holding 期内 high 从未达 take_profit_price。
     trailing 在 high≥entry+2% 激活，自峰值 high 回撤 0.8% 锁利。
-    日线 bar 内时序不确定，触发价取 min(open, hwm-callback)：跳空低开时以 open 成交（更差），
-    避免虚假高估出场价（max 口径会制造 100% 胜率的虚假回测）。
+    时序口径分同 bar / 跨 bar 触发（见触发处注释）：同 bar 触发取触发价（high 先达 hwm
+    是激活前提，时序确定）；跨 bar 触发取 min(open, 触发价)（可能跳空低开透单，保守）。
     """
     locked_limit_down_bars = 0
     hwm = 0.0
@@ -2031,13 +2031,15 @@ def _resolve_exit_with_trailing(
                 else:
                     gap_exit = bar_open
                 return gap_exit, str(bar.trade_date), "stop_loss_gap"
-        # 更新 trailing hwm
+        # 更新 trailing hwm；记录 trailing 是否在当前 bar 刚激活（区分同 bar 触发 vs 跨 bar 触发）
+        activated_this_bar = False
         if entry_price > 0 and high > 0:
             bar_high_ret = (high / entry_price - 1) * 100
             if bar_high_ret > hwm:
                 hwm = bar_high_ret
             if not trailing_activated and hwm >= TRAILING_STOP_ACTIVATE_PCT:
                 trailing_activated = True
+                activated_this_bar = True
         # 固定止损仍优先（low 触及 stop_loss）
         if low > 0 and low <= stop_loss_price:
             return stop_loss_price, str(bar.trade_date), "stop_loss_hit"
@@ -2046,11 +2048,17 @@ def _resolve_exit_with_trailing(
             trailing_stop_ret = hwm - TRAILING_STOP_CALLBACK_PCT
             trailing_stop_price = entry_price * (1 + trailing_stop_ret / 100.0)
             if low <= trailing_stop_price:
-                # 时序保守：trailing stop 单挂在触发价，跌破即触发。
-                # 若 open ≥ 触发价 → bar 内触发，以触发价成交；
-                # 若 open < 触发价 → 跳空低开，以 open 成交（更差）。
-                # 两种情况均取 min(open, 触发价)。max 会系统性高估出场价（回测验证：86 笔虚假 100% 胜率）。
-                exit_px = min(bar_open, trailing_stop_price) if bar_open > 0 else trailing_stop_price
+                # 时序口径分两种情况（因果必然性，不是保守估计）：
+                # - 同 bar 触发（trailing 在本 bar 刚激活）：激活前提是 high 先达 hwm，
+                #   故时序上 high 必先于 low，价格路径是 high 见顶后回落到触发价成交。
+                #   成交价 = 触发价（trailing limit 的本意）。min(open,触发价) 会把平开冲高
+                #   回落（open≈entry < 触发价）误判成跳空，以 open 出场，把盈利单变微亏（D 项 28 笔 -0.20% 假失败根因）。
+                # - 跨 bar 触发（trailing 之前 bar 已激活，本 bar 才触发）：本 bar 开盘可能跳空低开
+                #   穿透触发价，以 open 成交（更差）。维持 min(open, 触发价) 保守口径。
+                if activated_this_bar:
+                    exit_px = trailing_stop_price
+                else:
+                    exit_px = min(bar_open, trailing_stop_price) if bar_open > 0 else trailing_stop_price
                 return exit_px, str(bar.trade_date), "trailing_stop_hit"
 
     last_bar = holding_bars[-1]

@@ -274,14 +274,37 @@ def test_resolve_exit_trailing_uses_min_open_on_gap_down():
     from app.services.outcome_service import _resolve_exit
     # entry=10.0, bar1 high=10.3（+3%，激活 trailing），触发价=10*(1+(3-0.8)/100)=10.22
     # bar1 low=10.25 > 10.22 不触发；bar2 跳空低开 open=9.8, low=9.7 ≤ 10.22 → trailing 触发
-    # exit=min(9.8, 10.22)=9.8（跳空低开以 open 成交）
+    # exit=min(9.8, 10.22)=9.8（跨 bar 触发：跳空低开以 open 成交）
     bars = [
         _bar_trailing(trade_date="2026-07-02", open=10.25, high=10.3, low=10.25, close=10.28, pct_chg=3.0),
         _bar_trailing(trade_date="2026-07-03", open=9.8, high=9.9, low=9.7, close=9.8, pct_chg=-5.0),
     ]
     result = _resolve_exit(bars, stop_loss_price=9.0, take_profit_price=12.0, code="000001", entry_price=10.0)
     assert result[2] == "trailing_stop_hit"
-    assert result[0] == 9.8  # min(open, 触发价)，跳空低开以 open 成交
+    assert result[0] == 9.8  # 跨 bar 触发：跳空低开以 open 成交
+
+
+def test_resolve_exit_trailing_same_bar_uses_trigger_price():
+    """同 bar 触发（trailing 在本 bar 刚激活且 low 跌破触发价）：取触发价成交。
+
+    因果必然：trailing 激活前提是 high 先达 hwm，故同 bar 触发时 high 必先于 low，
+    价格路径是 high 见顶后回落到触发价成交。旧口径 min(open,触发价) 把"平开冲高回落"
+    （open≈entry < 触发价）误判成跳空，以 open 出场，把盈利单标成 -0.20% 微亏假失败
+    （D 项 28 笔 trailing failed 全落在 -0.5%~0 区间的根因）。
+
+    复现 000962 2026-07-08 真实场景：entry=64.08，当天 open≈平开，high 冲到 +4%，
+    low 回落到触发价下方 → 应以触发价成交（+3% 附近），不是 open（-0.1%）。
+    """
+    from app.services.outcome_service import _resolve_exit
+    # entry=10.0, bar1: open=10.0（平开）, high=10.4（+4%，激活 trailing），触发价=10*(1+(4-0.8)/100)=10.32
+    # bar1 low=10.1 ≤ 10.32 → 同 bar 触发。旧口径 min(10.0, 10.32)=10.0（-0.2% 假亏）；
+    # 修复后取触发价 10.32（+3.2% 真盈）。
+    bars = [
+        _bar_trailing(trade_date="2026-07-02", open=10.0, high=10.4, low=10.1, close=10.2, pct_chg=2.0),
+    ]
+    result = _resolve_exit(bars, stop_loss_price=9.5, take_profit_price=12.0, code="000001", entry_price=10.0)
+    assert result[2] == "trailing_stop_hit"
+    assert result[0] == 10.32  # 同 bar 触发：以触发价成交，不以平开 open 成交
 
 
 def test_resolve_exit_stop_loss_priority_over_trailing():
