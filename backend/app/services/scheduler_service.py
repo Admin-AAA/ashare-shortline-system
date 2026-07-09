@@ -33,6 +33,7 @@ _running_tasks: set[str] = set()
 TASK_TYPE_PRESET_MATRIX_RUN = "preset_matrix_run"
 TASK_TYPE_FORMAL_SAFETY_NET = "formal_safety_net"
 TASK_TYPE_STRATEGY_EXPOSURE_RUN = "strategy_exposure_run"
+TASK_TYPE_OUTCOME_LABEL = "outcome_label"
 MANUAL_PRESET_MATRIX_TASK_ID = "manual_preset_matrix_run"
 MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID = "manual_data_health_remediation"
 SAFETY_NET_TASK_ID = "formal_run_safety_net"
@@ -98,11 +99,43 @@ def start_scheduler() -> BackgroundScheduler:
         return _scheduler
 
     _scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
+    _ensure_outcome_label_task()
     _load_and_schedule()
     _scheduler.start()
     _register_periodic_jobs()
     logger.info("调度器已启动，已加载 %d 个任务", len(_scheduler.get_jobs()))
     return _scheduler
+
+
+def _ensure_outcome_label_task() -> None:
+    """确保 outcome 结算调度任务存在（D 项前瞻验证前置）。
+
+    收盘后日K同步（17:40）+ 辅助数据（18:05）完成后，18:20 结算 pending 推荐 outcome。
+    若任务已存在则不覆盖（保留用户手动调整的 cron/payload）。
+    """
+    OUTCOME_LABEL_TASK_ID = "postclose_outcome_label"
+    CRON = "20 18 * * 1-5"  # 周一到周五 18:20（收盘后数据同步后）
+    try:
+        db = SessionLocal()
+        try:
+            existing = db.get(ScheduledTask, OUTCOME_LABEL_TASK_ID)
+            if existing:
+                return
+            task = ScheduledTask(
+                task_id=OUTCOME_LABEL_TASK_ID,
+                name="收盘后推荐 outcome 结算",
+                task_type=TASK_TYPE_OUTCOME_LABEL,
+                cron_expression=CRON,
+                payload_json=json.dumps({"horizon_days": 5}),
+                enabled=True,
+            )
+            db.add(task)
+            db.commit()
+            logger.info("已注册 outcome 结算调度任务: %s (cron=%s)", OUTCOME_LABEL_TASK_ID, CRON)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("注册 outcome 结算任务失败")
 
 
 def _register_periodic_jobs() -> None:
@@ -207,6 +240,8 @@ def _execute_task(task_id: str, *, force: bool = False, trigger_source: str = "s
             result = asyncio.run(_run_preset_matrix(db, payload, task_run_id=task_run_id))
         elif task_type == TASK_TYPE_STRATEGY_EXPOSURE_RUN:
             result = asyncio.run(_run_strategy_exposure(db, payload, task_run_id=task_run_id))
+        elif task_type == TASK_TYPE_OUTCOME_LABEL:
+            result = _run_outcome_label(db, payload)
         elif task_type in ("data_sync", "pool_refresh", "data_backfill"):
             result = _run_data_sync(db, payload, task_type=task_type)
         else:
@@ -612,6 +647,26 @@ def _execute_manual_strategy_exposure(task_run_id: str, payload: dict) -> None:
     finally:
         db.close()
         _mark_done_memory(MANUAL_STRATEGY_EXPOSURE_TASK_ID)
+
+
+def _run_outcome_label(db, payload: dict) -> dict:
+    """结算 pending 推荐 outcome（D 项前瞻验证前置基础设施）。
+
+    收盘后日K同步完成（postclose_daily_kbar_batch 17:40 + auxiliary 18:05）后触发，
+    调 label_pending_outcomes 用 T+1 日K结算昨日推荐的执行收益/胜负标签。
+    无此前置：自检 D 项前瞻窗口永远报"等结算"，上几轮毒区改动无法前瞻确认。
+    """
+    from app.services.outcome_service import label_pending_outcomes
+
+    horizon_days = int(payload.get("horizon_days") or 5)
+    result = label_pending_outcomes(db, horizon_days=horizon_days)
+    labeled = int(result.get("labeled") or 0)
+    logger.info("outcome 结算完成: %d 笔（horizon=%d）", labeled, horizon_days)
+    return {
+        "summary_text": f"结算 {labeled} 笔",
+        "labeled": labeled,
+        "horizon_days": horizon_days,
+    }
 
 
 def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
