@@ -70,6 +70,21 @@ prefilter:
         reason: "turnover_too_high"
 
 phases:
+  # 弱市隔夜毒区硬否决：overnight 入场区间 pct∈[3,5] 恰是弱市半吊子追高毒区
+  # LIVE 验证（2026-07 第144轮 D项恶化失败归因闭环，全策略 LIVE formal）：
+  #   弱势 & pct∈[3,5]: n=64 WR=23.4% avg=-1.52% PL=0.10（3 个月稳定毒区）
+  #   overnight 弱势全样本: n=19 WR=36.8% avg=-0.31%（3 轮修复后仍低于 50%）
+  #   对照 弱势 pct<0(超跌) WR=61.4% | pct>=9(涨停惯性) WR=69.7% —— 唯独 3-5 毒区
+  # 因果：隔夜持股赌次日趋势延续，但弱市 up_ratio<0.35 无延续资金；3-5% 涨幅既无超跌安全垫
+  #   也无涨停封板惯性，次日低开闷杀（603268/000636/000815 等 -5.7%~-5.69% 止损高发）。
+  #   第142-143轮 dist20>=0 / 中期空头过滤只能拦死猫跳，拦不住多头高位隔夜补跌。
+  # 弱市下 overnight 入场区间整体是毒区，hard_veto 直接否决；alpha 留给超跌均值回归策略。
+  - name: 弱市隔夜毒区
+    when: "market_regime == '弱势'"
+    score_cap: 20
+    hard_veto: true
+    risk_flags: ["弱市隔夜追高确定性亏损（入场区间pct3-5即半吊子追高毒区），硬否决"]
+
   - name: 尾盘观察
     when: "pct >= 3 and pct <= 5"
     score_cap: 100

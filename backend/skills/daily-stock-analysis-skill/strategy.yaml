@@ -112,21 +112,22 @@ phases:
     hard_veto: false
     risk_flags: ["弱市多头顺势净零期望高方差，弱市不宜追多"]
 
-  # 弱市追高毒区（原始因子版）：弱市+当日追高(pct>=3)+高乖离(bias_ma5>=5) → score_cap 68
-  # LIVE 验证（2026-07 第143轮 D项下滑失败归因闭环，LIVE formal 去重 sample）：
-  #   弱势 & pct>=3 & bias_ma5>=5: n=25 WR=36.0% avg=-2.85% PL=0.08（净近零，毒区）
-  #   对照 弱势 & pct<0（超跌）: n=41 WR=61.0% avg=+1.93% PL=4.8（均值回归 alpha，不误伤）
-  #   剔除后 daily WR 54.8%→59.4%（+4.6pp），avg 0.71%→1.59%
-  # 根因：上方「弱市多头顺势毒区」phase 要求 dsa_macd_score>=8，漏掉 dsa_macd<8 的追高票
-  # （002266: dsa_macd=5, pct=8.7, bias_ma5=8.45, regime=弱势 → 旧 phase 不匹配 →
-  # 趋势跟踪 cap 100 → score=100 → final 81.7 → 推荐 → 亏 -5.72%）。
-  # 用原始因子 pct/bias_ma5 而非 dsa 复合分：因果直接、阈值稳定（dsa_bias>=14 与 bias_ma5>=5 映射不稳）。
-  # 因果：弱市 up_ratio<0.13（87% 下跌），当日已涨3%+且乖离5%+ = 追高，次日冲高回落止损，PL 0.08 净近零。
-  - name: 弱市追高毒区
-    when: "market_regime == '弱势' and pct >= 3 and bias_ma5 >= 5"
+  # 弱市半吊子追高毒区：弱市+当日涨幅 3-5%（尾盘追高半吊子位）→ score_cap 68（低于 score_line 72）
+  # LIVE 验证（2026-07 第144轮 D项持续恶化失败归因闭环，全策略 LIVE formal 去重）：
+  #   弱势 & pct∈[3,5]: n=64 WR=23.4% avg=-1.52% PL=0.10（3 个月稳定毒区：5月14.3%/6月51.9%/7月23.3%，均低于 other）
+  #   daily 弱势 & pct∈[3,5]: n=26 WR=23.1% avg=-2.28%
+  #   对照（弱市 pct 分桶，两侧均 alpha，唯独 3-5 毒区）:
+  #     pct<0(超跌) n=70 WR=61.4% avg=+1.81% | pct∈[0,3) n=45 WR=66.7% avg=+1.85%
+  #     pct∈[5,7) n=27 WR=70.4% avg=+3.21% | pct>=9 n=33 WR=69.7% avg=+2.15%
+  # 第143轮根因：旧条件 pct>=3 and bias_ma5>=5 漏掉 bias<5 子集（17 笔 WR=23.5% avg=-1.39% 未覆盖），
+  #   且 pct>5 的强势封板/涨停惯性区是 alpha 不能误伤，故精确收敛到 pct∈[3,5]。
+  # 因果：3-5% 涨幅既无超跌安全垫也无涨停封板惯性，弱市次日无资金护盘闷杀（up_ratio<0.35），
+  #   trailing_stop/stop_loss 高发。弱市 alpha 应留在超跌均值回归（pct<0）而非半吊子追高。
+  - name: 弱市半吊子追高毒区
+    when: "market_regime == '弱势' and pct >= 3 and pct <= 5"
     score_cap: 68
     hard_veto: false
-    risk_flags: ["弱市追高（当日涨≥3%且乖离MA5≥5%），次日冲高回落高方差，弱市宜等超跌不宜追多"]
+    risk_flags: ["弱市半吊子追高（当日涨3-5%无封板惯性无超跌安全垫），弱市宜等超跌不宜追多"]
 
   - name: 趋势跟踪
     when: "dsa_trend_score >= 18"
