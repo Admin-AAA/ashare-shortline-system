@@ -713,6 +713,13 @@ def _recent_formal_win_rate(db: Session, window_trade_days: int) -> dict[str, An
     losses = [r for r in rows if r.outcome_label == "failed"]
     win_avg = sum(r.executed_return or 0 for r in wins) / len(wins) if wins else 0.0
     loss_avg = sum(abs(r.executed_return or 0) for r in losses) / len(losses) if losses else 0.0
+    # 净成本口径（扣 0.07%/笔：佣金万1双边 + 印花税卖出）—— D 项目标定义为扣费后须达标
+    rets = [r.executed_return or 0 for r in rows]
+    net_rets = [x - _ADDITIONAL_COST_PCT for x in rets]
+    net_wins = [x for x in net_rets if x > 0]
+    net_losses = [abs(x) for x in net_rets if x < 0]
+    net_win_avg = sum(net_wins) / len(net_wins) if net_wins else 0.0
+    net_loss_avg = sum(net_losses) / len(net_losses) if net_losses else 0.0
     return {
         "window_trade_days": window_trade_days,
         "trade_dates": trade_dates,
@@ -721,6 +728,10 @@ def _recent_formal_win_rate(db: Session, window_trade_days: int) -> dict[str, An
         "win_rate": round(len(wins) * 100.0 / sample_count, 1),
         "avg_return": round(sum(r.executed_return or 0 for r in rows) / sample_count, 2),
         "profit_loss_ratio": round(win_avg / loss_avg, 2) if loss_avg else None,
+        # 净成本口径（D 项扣费后真实胜率/盈亏比，与 self_check.ADDITIONAL_COST_PCT 一致）
+        "net_win_rate": round(len(net_wins) * 100.0 / sample_count, 1),
+        "net_avg_return": round(sum(net_rets) / sample_count, 2),
+        "net_profit_loss_ratio": round(net_win_avg / net_loss_avg, 2) if net_loss_avg else None,
     }
 
 

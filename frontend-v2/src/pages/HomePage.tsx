@@ -239,7 +239,7 @@ function StatusBar({
           className="text-mono"
           title={
             winRate.sample_count > 0
-              ? `近 ${winRate.window_trade_days} 个已完成 formal 交易日 · 已结算 ${winRate.sample_count} 笔 · 均收益 ${winRate.avg_return?.toFixed(2)}% · 盈亏比 ${winRate.profit_loss_ratio ?? "—"}`
+              ? `近 ${winRate.window_trade_days} 个已完成 formal 交易日 · 已结算 ${winRate.sample_count} 笔\n均收益 ${winRate.avg_return?.toFixed(2)}% (净 ${(winRate.net_avg_return ?? 0).toFixed(2)}%) · 盈亏比 ${winRate.profit_loss_ratio ?? "—"} (净 ${winRate.net_profit_loss_ratio ?? "—"})\n净口径扣 0.07%/笔（佣金万1双边 + 印花税卖出）`
               : "暂无已结算样本"
           }
           style={{
@@ -255,6 +255,26 @@ function StatusBar({
         </strong>
       ) : (
         <strong className="text-mono" style={{ color: "var(--muted)" }}>—</strong>
+      )}
+      {winRate && winRate.net_profit_loss_ratio != null && (
+        <>
+          <Sep />
+          <span className="text-muted">净盈亏比：</span>
+          <strong
+            className="text-mono"
+            title="扣 0.07%/笔交易成本后的盈亏比（D 项目标：净盈亏比 ≥ 2.0）"
+            style={{
+              color:
+                winRate.net_profit_loss_ratio >= 2.0
+                  ? "var(--market-up)"
+                  : winRate.net_profit_loss_ratio >= 1.4
+                    ? "var(--warning)"
+                    : "var(--market-down)",
+            }}
+          >
+            {winRate.net_profit_loss_ratio.toFixed(2)}
+          </strong>
+        </>
       )}
 
       {/* 右侧：数据健康度指示器（弹性推到最右） */}
