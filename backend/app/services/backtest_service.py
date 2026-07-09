@@ -672,7 +672,9 @@ def _persist_backtest_run(
     run = RecommendationRun(
         run_id=run_id,
         run_name=f"回测 {trade_date}",
-        run_mode="formal",
+        # 回测 run 用 backtest 而非 formal：formal 必须只代表真实 LIVE 推送，
+        # 否则会污染所有按 run_mode='formal' 过滤的统计（自检 D/E 项、list_runs、dashboard）。
+        run_mode="backtest",
         trade_date=trade_date,
         started_at=now,
         finished_at=now,
@@ -688,7 +690,7 @@ def _persist_backtest_run(
             {
                 "backtest": True,
                 "trade_date": trade_date,
-                "run_mode": "formal",
+                "run_mode": "backtest",
                 "score_line": score_line,
             }
         ),

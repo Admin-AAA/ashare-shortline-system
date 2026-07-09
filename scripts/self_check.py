@@ -148,27 +148,36 @@ def check_e_item(db, hit_skills: set) -> None:
 
 
 def check_d_item(db) -> None:
-    """D 项：核心指标（胜率 + 最大亏损），自动对比基线判断方向。"""
+    """D 项：核心指标（胜率 + 最大亏损），自动对比基线判断方向。
+
+    只统计真实 LIVE formal 推荐（recommendation_id 以 rec_ 开头）。
+    回测（btrec_）与 experiment 补跑不纳入北极星 D 项——它们会虚高胜率、
+    掩盖真实 formal 表现（回测污染曾使 D 项胜率从真实 59% 虚报到 68%）。
+    """
     WIN_RATE_BASELINE = 61.5
     MAX_LOSS_BASELINE = -5.80
 
     row = db.execute(text("""
         SELECT COUNT(*),
-               SUM(CASE WHEN outcome_label = 'success' THEN 1 ELSE 0 END)
-        FROM recommendation_outcomes
-        WHERE outcome_label IN ('success', 'failed')
+               SUM(CASE WHEN o.outcome_label = 'success' THEN 1 ELSE 0 END)
+        FROM recommendation_outcomes o
+        JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+        WHERE o.outcome_label IN ('success', 'failed')
+          AND r.recommendation_id LIKE 'rec_%'
     """)).fetchone()
 
     if row and row[0] > 0:
         win_rate = round(float(row[1]) * 100 / float(row[0]), 1)
         delta = round(win_rate - WIN_RATE_BASELINE, 1)
         tag = f'⚠️ 下滑 {abs(delta)}pp' if delta < 0 else f'↑ 高于基线 {delta}pp'
-        print(f'D 项：胜率 {win_rate}% （基线 {WIN_RATE_BASELINE}%，{tag}）')
+        print(f'D 项：胜率 {win_rate}% （n={row[0]}，基线 {WIN_RATE_BASELINE}%，{tag}）')
 
     row = db.execute(text("""
-        SELECT ROUND(MIN(executed_return), 2)
-        FROM recommendation_outcomes
-        WHERE outcome_label IN ('success', 'failed')
+        SELECT ROUND(MIN(o.executed_return), 2)
+        FROM recommendation_outcomes o
+        JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+        WHERE o.outcome_label IN ('success', 'failed')
+          AND r.recommendation_id LIKE 'rec_%'
     """)).fetchone()
 
     if row and row[0] is not None:

@@ -24,7 +24,7 @@ from app.services.outcome_service import is_outcome_labeled, normalized_outcome_
 import logging
 logger = logging.getLogger(__name__)
 
-VALID_RUN_MODES = {"formal", "experiment"}
+VALID_RUN_MODES = {"formal", "experiment", "backtest"}
 
 # 短时缓存：stats 数据变更频率低（仅在创建新 run 后变化），5 秒 TTL 足够
 _stats_cache: dict[str, tuple[float, Any]] = {}
