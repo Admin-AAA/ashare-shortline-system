@@ -217,8 +217,63 @@ def check_e_item(db, hit_skills: set) -> None:
         print(f'⚠️ {len(under_floor)} 个策略样本 <{SAMPLE_FLOOR}（胜率统计不可信，补跑应持续喂）: {under_floor}')
 
 
+# 前瞻样本分界：自该交易日起，同日去重 + 弱市否决等修复已部署进生产，
+# 其后的 formal run 才反映修复后的真实胜率。此前样本含修复前历史污染
+# （如 2026-07-07/07-08 在去重与弱市否决 commit 之前生成的 run），
+# 不应据此循环加规则（见 T3 失败归因 / 第160-163轮）。
+FORWARD_EPOCH = "2026-07-09"
+
+
+def _fetch_dedup_live_formal(db) -> list:
+    """LIVE formal 成功/失败样本，按 (code, trade_date) 去重。
+    返回 [(code, trade_date_str, label, executed_return), ...]。
+    """
+    return db.execute(text("""
+        SELECT r.code, r.trade_date, MAX(o.outcome_label) AS label,
+               ROUND(MIN(o.executed_return), 2) AS min_ret
+        FROM recommendation_outcomes o
+        JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+        WHERE o.outcome_label IN ('success', 'failed')
+          AND r.recommendation_id LIKE 'rec_%'
+        GROUP BY r.code, r.trade_date
+    """)).fetchall()
+
+
+def _compute_d_window(rows: list, *, since_date: str | None = None,
+                      trade_dates: set | None = None) -> tuple | None:
+    """纯函数：在 rows（[(code, trade_date, label, executed_return)]）上按窗口
+    计算 (win_rate, n, max_loss)。since_date / trade_dates 二选一过滤。
+    不碰 DB，便于单元测试锁定统计逻辑，避免每轮误判退化循环加规则过拟合。
+    """
+    if trade_dates is not None:
+        win = [r for r in rows if str(r[1]) in trade_dates]
+    elif since_date is not None:
+        win = [r for r in rows if str(r[1]) >= since_date]
+    else:
+        win = list(rows)
+    if not win:
+        return None
+    n = len(win)
+    wins = sum(1 for r in win if r[2] == 'success')
+    wr = round(wins * 100 / n, 1)
+    ml = round(min(r[3] for r in win if r[3] is not None), 2)
+    return wr, n, ml
+
+
+def _fmt_d(tag: str, res: tuple | None, baseline_wr: float, baseline_loss: float) -> None:
+    if res is None:
+        print(f'  {tag}: 样本不足（前瞻窗口需等修复后新 run 结算）')
+        return
+    wr, n, ml = res
+    d = round(wr - baseline_wr, 1)
+    tag_w = f'⚠️ 下滑 {abs(d)}pp' if d < 0 else f'↑ 高于基线 {d}pp'
+    tag_l = '⚠️ 恶化' if ml < baseline_loss else '优于基线'
+    print(f'  {tag}: 胜率 {wr}% (n={n}, 基线 {baseline_wr}%, {tag_w}) | 最大亏损 {ml}% ({tag_l})')
+
+
 def check_d_item(db) -> None:
-    """D 项：核心指标（胜率 + 最大亏损），自动对比基线判断方向。
+    """D 项：核心指标（胜率 + 最大亏损），多窗口呈现以区分历史污染 vs 前瞻真退化。
 
     只统计真实 LIVE formal 推荐（recommendation_id 以 rec_ 开头）。
     回测（btrec_）与 experiment 补跑不纳入北极星 D 项——它们会虚高胜率、
@@ -228,45 +283,22 @@ def check_d_item(db) -> None:
     MAX_LOSS_BASELINE = -5.80
 
     # 胜率按 (code, trade_date) 去重：同一交易日同一只股票常被多个 formal run 重复推荐
-    # （2026-07-08 单日 14 个 run，松发股份被推荐 7 次全部 -5.69% 止损）。这些重复记录
-    # 是同一信号的多次存储，outcome 完全一致（LIVE 验证 15 组同股同日 0 组不一致），
-    # 按笔数统计会把失败股放大 N 倍扭曲胜率。去重后反映真实独立股票胜率。
-    # （2026-07-10 第162轮：去重前 n=302 WR=56.6% 看似下滑，去重后 n=171 WR=60.2% 接近基线）
-    row = db.execute(text("""
-        WITH dedup AS (
-            SELECT r.code, r.trade_date, MAX(o.outcome_label) AS label
-            FROM recommendation_outcomes o
-            JOIN recommendations r ON r.recommendation_id = o.recommendation_id
-            JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
-            WHERE o.outcome_label IN ('success', 'failed')
-              AND r.recommendation_id LIKE 'rec_%'
-            GROUP BY r.code, r.trade_date
-        )
-        SELECT COUNT(*),
-               SUM(CASE WHEN label = 'success' THEN 1 ELSE 0 END)
-        FROM dedup
-    """)).fetchone()
+    # （2026-07-08 单日 14 个 run，松发股份被推荐 7 次全部 -5.69% 止损）。去重后反映
+    # 真实独立股票胜率，避免把失败股放大 N 倍扭曲胜率。
+    rows = _fetch_dedup_live_formal(db)
+    _fmt_d('D 项(全量)', _compute_d_window(rows), WIN_RATE_BASELINE, MAX_LOSS_BASELINE)
 
-    if row and row[0] > 0:
-        win_rate = round(float(row[1]) * 100 / float(row[0]), 1)
-        delta = round(win_rate - WIN_RATE_BASELINE, 1)
-        tag = f'⚠️ 下滑 {abs(delta)}pp' if delta < 0 else f'↑ 高于基线 {delta}pp'
-        print(f'D 项：胜率 {win_rate}% （n={row[0]}，基线 {WIN_RATE_BASELINE}%，{tag}）')
+    # 近 10 交易日窗口：看近期趋势（自然老化修复前历史污染）。
+    dates = sorted({str(r[1]) for r in rows})
+    last10 = set(dates[-10:]) if dates else set()
+    _fmt_d('D 项(近10交易日)', _compute_d_window(rows, trade_dates=last10),
+           WIN_RATE_BASELINE, MAX_LOSS_BASELINE)
 
-    row = db.execute(text("""
-        SELECT ROUND(MIN(o.executed_return), 2)
-        FROM recommendation_outcomes o
-        JOIN recommendations r ON r.recommendation_id = o.recommendation_id
-        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
-        WHERE o.outcome_label IN ('success', 'failed')
-          AND r.recommendation_id LIKE 'rec_%'
-    """)).fetchone()
-
-    if row and row[0] is not None:
-        min_ret = float(row[0])
-        worsened = min_ret < MAX_LOSS_BASELINE
-        tag = f'⚠️ 恶化 {round(min_ret - MAX_LOSS_BASELINE, 2)}pp' if worsened else f'优于基线'
-        print(f'D 项：最大亏损 {min_ret}% （基线 {MAX_LOSS_BASELINE}%，{tag}）')
+    # 前瞻窗口（修复后）：FORWARD_EPOCH 之后的 run 才反映去重/弱市否决的真实胜率。
+    # 若前瞻窗口胜率显著高于全量，说明全量下滑是历史污染而非真退化——
+    # 切勿据此循环加规则（禁止过拟合，第164轮 T3 失败归因结论）。
+    _fmt_d(f'D 项(前瞻≥{FORWARD_EPOCH})', _compute_d_window(rows, since_date=FORWARD_EPOCH),
+           WIN_RATE_BASELINE, MAX_LOSS_BASELINE)
 
     # 单日集中度诊断（独立股票口径）：防止单日异常高量扭曲 D 项判断。
     # 已改用独立股票数（同股同日多 run 只算 1 只），避免"单日 N 笔"假警报——
