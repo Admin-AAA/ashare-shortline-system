@@ -227,14 +227,24 @@ def check_d_item(db) -> None:
     WIN_RATE_BASELINE = 61.5
     MAX_LOSS_BASELINE = -5.80
 
+    # 胜率按 (code, trade_date) 去重：同一交易日同一只股票常被多个 formal run 重复推荐
+    # （2026-07-08 单日 14 个 run，松发股份被推荐 7 次全部 -5.69% 止损）。这些重复记录
+    # 是同一信号的多次存储，outcome 完全一致（LIVE 验证 15 组同股同日 0 组不一致），
+    # 按笔数统计会把失败股放大 N 倍扭曲胜率。去重后反映真实独立股票胜率。
+    # （2026-07-10 第162轮：去重前 n=302 WR=56.6% 看似下滑，去重后 n=171 WR=60.2% 接近基线）
     row = db.execute(text("""
+        WITH dedup AS (
+            SELECT r.code, r.trade_date, MAX(o.outcome_label) AS label
+            FROM recommendation_outcomes o
+            JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+            JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+            WHERE o.outcome_label IN ('success', 'failed')
+              AND r.recommendation_id LIKE 'rec_%'
+            GROUP BY r.code, r.trade_date
+        )
         SELECT COUNT(*),
-               SUM(CASE WHEN o.outcome_label = 'success' THEN 1 ELSE 0 END)
-        FROM recommendation_outcomes o
-        JOIN recommendations r ON r.recommendation_id = o.recommendation_id
-        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
-        WHERE o.outcome_label IN ('success', 'failed')
-          AND r.recommendation_id LIKE 'rec_%'
+               SUM(CASE WHEN label = 'success' THEN 1 ELSE 0 END)
+        FROM dedup
     """)).fetchone()
 
     if row and row[0] > 0:
@@ -258,16 +268,18 @@ def check_d_item(db) -> None:
         tag = f'⚠️ 恶化 {round(min_ret - MAX_LOSS_BASELINE, 2)}pp' if worsened else f'优于基线'
         print(f'D 项：最大亏损 {min_ret}% （基线 {MAX_LOSS_BASELINE}%，{tag}）')
 
-    # 单日集中度诊断：防止单日异常高量（如 2026-07-08 单日 116 笔占 65%）扭曲 D 项，
-    # 让 self-improve 误判"持续恶化"而循环加规则。D 项仍是全样本口径，仅在此提示。
+    # 单日集中度诊断（独立股票口径）：防止单日异常高量扭曲 D 项判断。
+    # 已改用独立股票数（同股同日多 run 只算 1 只），避免"单日 N 笔"假警报——
+    # 2026-07-08 笔口径 126 笔占 71%，独立股票口径仅 36 只占 21%，不再是扭曲信号。
     total_n = db.execute(text("""
-        SELECT COUNT(*) FROM recommendation_outcomes o
+        SELECT COUNT(DISTINCT CONCAT(r.code,'_',r.trade_date))
+        FROM recommendation_outcomes o
         JOIN recommendations r ON r.recommendation_id = o.recommendation_id
         JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
         WHERE o.outcome_label IN ('success','failed') AND r.recommendation_id LIKE 'rec_%'
     """)).fetchone()[0]
     top_day = db.execute(text("""
-        SELECT DATE(r.recommended_at) AS d, COUNT(*) AS n
+        SELECT r.trade_date AS d, COUNT(DISTINCT r.code) AS n
         FROM recommendation_outcomes o
         JOIN recommendations r ON r.recommendation_id = o.recommendation_id
         JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
@@ -276,9 +288,9 @@ def check_d_item(db) -> None:
     """)).fetchone()
     if total_n and top_day:
         share = top_day[1] * 100 / total_n
-        flag = (f'⚠️ 单日 {top_day[0]} 占 {share:.0f}%（D 项可能被单日异常高量扭曲，'
+        flag = (f'⚠️ 单日 {top_day[0]} 独立股票 {share:.0f}%（D 项可能被单日集中扭曲，'
                 f'勿据此循环加规则）') if share >= 40 else '单日集中度正常'
-        print(f'D 项单日集中度：最大单日 {top_day[0]} {top_day[1]} 笔（{share:.0f}%）— {flag}')
+        print(f'D 项单日集中度：最大单日 {top_day[0]} {top_day[1]} 只独立股票（{share:.0f}%）— {flag}')
 
     # 规则覆盖前瞻校验：区分"历史污染"vs"真退化"
     check_d_rule_coverage(db, WIN_RATE_BASELINE)
