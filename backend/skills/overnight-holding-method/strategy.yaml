@@ -48,6 +48,12 @@ universe:
     - "turnover_rate >= 5"
     - "turnover_rate <= 10"
     - "twenty_cm_risk_gate != 'block'"
+    # 中期趋势方向过滤：隔夜持股赌次日趋势延续，股价在20日均线下方（dist20<0，
+    # 即 bias_ma20<0）的当日反弹是死猫跳，次日大概率继续跌。
+    # 失败归因：000636/000815/300604 等 dist20<0 票隔夜追入全部 -5.7%~-0.2% 失败。
+    # 用 dist20 而非 bias_ma20：prefilter 阶段 stock 已含 dist20（_build_stock_from_bars 产出），
+    # bias_ma20 是 build_features 后置字段，prefilter 阶段缺失会被 _coerce(None)→0.0 静默绕过。
+    - "dist20 >= 0"
   exclude:
     - "is_st == true"
 
