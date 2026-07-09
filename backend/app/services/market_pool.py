@@ -2690,6 +2690,11 @@ def inject_limit_up_flags(db: Session, stocks: list[dict[str, Any]], trade_date:
             stock.setdefault("is_limit_up", False)
             stock.setdefault("limit_up_consecutive_days", 0)
             stock.setdefault("limit_up_open_times", 0)
+        # 所有股票（含非涨停）都补 twenty_cm_risk_gate 默认值，否则 prefilter 阶段该字段
+        # 缺失（feature_builder 在 prefilter 之后才重算），strict_missing 下
+        # `twenty_cm_risk_gate != 'block'` 会拒绝全部非涨停股（overnight/sector 等策略死锁）。
+        # not_applicable 语义=未做 20cm 风险检测=不阻断，与 shortline_factors 一致。
+        stock.setdefault("twenty_cm_risk_gate", "not_applicable")
     return hit
 
 
