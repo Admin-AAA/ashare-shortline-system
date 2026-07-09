@@ -137,7 +137,8 @@ def check_e_item(db, hit_skills: set) -> None:
     # 低覆盖 / 低胜率策略（按 recommendation_id 去重，避免 JSON_TABLE 多策略行重复计数）
     rows = db.execute(text("""
         WITH strategy_hits AS (
-            SELECT DISTINCT rec.recommendation_id, jt.strategy_id, o.outcome_label, o.executed_return
+            SELECT DISTINCT rec.recommendation_id, jt.strategy_id, o.outcome_label, o.executed_return,
+               u.trade_date
             FROM recommendations rec
             JOIN recommendation_runs u ON rec.run_id = u.run_id
             LEFT JOIN recommendation_outcomes o ON o.recommendation_id = rec.recommendation_id
@@ -152,19 +153,29 @@ def check_e_item(db, hit_skills: set) -> None:
         SELECT strategy_id,
                COUNT(*)                                                          AS n,
                SUM(CASE WHEN outcome_label = 'success' THEN 1 ELSE 0 END)       AS wins,
-               ROUND(AVG(executed_return), 2)                                    AS avg_ret
+               ROUND(AVG(executed_return), 2)                                    AS avg_ret,
+               SUM(CASE WHEN trade_date >= :epoch THEN 1 ELSE 0 END)            AS fwd_n,
+               SUM(CASE WHEN trade_date >= :epoch AND outcome_label = 'success' THEN 1 ELSE 0 END) AS fwd_wins
         FROM strategy_hits
         GROUP BY strategy_id
         HAVING n < 50 OR wins * 100 / COUNT(*) < 45
         ORDER BY wins * 100 / COUNT(*) ASC
-    """)).fetchall()
+    """), {"epoch": FORWARD_EPOCH}).fetchall()
 
     print('E 项低覆盖(n<50)或低胜率(<45%)策略:')
     for row in rows:
-        n, wins, avg_ret = row[1], row[2], row[3]
+        n, wins, avg_ret, fwd_n, fwd_wins = row[1], row[2], row[3], row[4], row[5]
         win_rate = round(wins * 100 / n, 1)
         tag = '低胜率' if win_rate < 45 else '低覆盖'
-        print(f'  {row[0]}: n={n} wins={wins} avg_ret={avg_ret}% winrate={win_rate}% ←{tag}需标记')
+        # 前瞻窗口口径（FORWARD_EPOCH 之后）：区分旧代码污染 vs 真低胜率
+        # 前瞻无样本 → 等结算；前瞻胜率回升 → 旧污染；前瞻仍低 → 真低胜率需标记
+        fwd_note = ""
+        if fwd_n > 0:
+            fwd_wr = round(fwd_wins * 100 / fwd_n, 1)
+            fwd_note = f" | 前瞻{n>=20 and '仍' or ''}{fwd_n}笔 WR={fwd_wr}%{'(旧污染)' if fwd_wr >= 45 else '(真低胜率)'}"
+        else:
+            fwd_note = " | 前瞻0笔(等结算)"
+        print(f'  {row[0]}: n={n} wins={wins} avg_ret={avg_ret}% winrate={win_rate}%{fwd_note} ←{tag}需标记')
 
     # 曝光公平度 + 样本置信度（近 30 天 formal+experiment，不含 backtest）
     # 目的：让每个策略胜率统计可信，避免头部策略吃掉 80%+ 曝光、尾部策略样本稀疏不可信。
