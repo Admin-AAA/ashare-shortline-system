@@ -101,16 +101,20 @@ phases:
     hard_veto: false
     risk_flags: ["趋势分不足，alpha 衰减后低 WR"]
 
-  # 弱市多头顺势毒区：弱市+多头趋势特征 → score_cap 68（低于 score_line 72，柔性过滤）
-  # LIVE 验证（2026-07 第142轮失败归因闭环）：弱市×多头顺势 07月 38 笔 WR=42.1% avg=-1.39%
-  #   分数中位 81.1，-8 score_delta 仅过滤 42%、仍过线 22 笔 WR=31.8% avg=-2.16%（更毒）
-  #   故用 phase score_cap=68 整体压到线下；扣佣金后负期望，弱市 alpha 应留在均值回归策略
-  # 因果：弱市 up_ratio<0.35，多头顺势=追高，当日冲高回落止损，高方差无 alpha
-  - name: 弱市多头顺势毒区
-    when: "market_regime == '弱势' and dsa_trend_score >= 26 and dsa_bias_score >= 14 and dsa_macd_score >= 8"
-    score_cap: 68
-    hard_veto: false
-    risk_flags: ["弱市多头顺势净零期望高方差，弱市不宜追多"]
+  # 弱市多头顺势毒区：已弃用（第147轮反事实验证后下线）
+  # 历史：第142轮加，用 dsa 复合分（trend>=26 & bias>=14 & macd>=8）覆盖弱市多头趋势票
+  # 弃用原因：dsa 复合分映射不稳（prior 第143轮已证），该 phase 误伤超跌/低位/涨停 alpha：
+  #   全量 dsa 弱势被该 phase 拦截的样本按 pct 分桶（LIVE formal 去重）：
+  #     A超跌(pct<0) n=11 WR=63.6% 合计+28.64% | B低位(0-3) n=14 WR=57.1% 合计+10.41%
+  #     D半强势(5-9.5) n=15 WR=86.7% 合计+12.39% | E涨停(>=9.5) n=5 WR=60% 合计+25.55%
+  #     C半吊子(3-5) n=18 WR=11.1% 合计-64.96%（唯一真毒区，但已被第144轮"弱市半吊子追高毒区"精确覆盖）
+  #   移除后恢复放行 36 笔 alpha（合计+86.23%），C桶仍被半吊子毒区拦、D桶高乖离仍被第145轮半强势高乖离毒区拦，行为不退化。
+  #   该 phase 用 dsa 复合分把超跌均值回归（pct<0 WR=61.4%）和涨停惯性（pct>=9.5 WR=69.7%）当多头顺势误拦，净负。
+  # - name: 弱市多头顺势毒区
+  #   when: "market_regime == '弱势' and dsa_trend_score >= 26 and dsa_bias_score >= 14 and dsa_macd_score >= 8"
+  #   score_cap: 68
+  #   hard_veto: false
+  #   risk_flags: ["弱市多头顺势净零期望高方差，弱市不宜追多"]
 
   # 弱市半吊子追高毒区：弱市+当日涨幅 3-5%（尾盘追高半吊子位）→ score_cap 68（低于 score_line 72）
   # LIVE 验证（2026-07 第144轮 D项持续恶化失败归因闭环，全策略 LIVE formal 去重）：
