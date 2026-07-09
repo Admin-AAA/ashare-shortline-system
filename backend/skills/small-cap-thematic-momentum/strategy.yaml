@@ -35,12 +35,16 @@ contract:
 # 而非「筹码单峰分布」；与 sector-relative-strength-leader 区别：本策略用 pos20/rsi 动量
 # 而非 primary_excess（后者历史 lift 为负）。
 #
-# ⚠️ SELF-IMPROVE FLAG: 覆盖盲区 (2026-07-09 第156轮发现)
-# 近 60 天 formal 0 命中。根因=prefilter 三层过严：
-#   universe 31→prefilter.include(free<50 砍到8, pos20>=70 砍到4)→include_any(6条AND含 is_main_theme)→0
-# 修复：移除 prefilter.include 与 include_any 重复的 free_mv/pos20 收紧（universe.include 已有宽松版），
-# 保留 dist20<10+turnover<8 作行情早期/未过热约束；include_any 拆成 3 个互补选项（动量/主线共振/多头排列），
-# 让 is_main_theme/dist20/turnover 回归 scoring 加分项而非硬否决。验证：0→2 通过(301038,300533)
+# ⚠️ SELF-IMPROVE FLAG: 覆盖盲区 (2026-07-09 第156轮发现，2026-07-10 第165轮复核)
+# 近 60 天 formal 0 命中。
+# 第156轮诊断=「prefilter 三层过严」并重构 prefilter（include_any 拆 3 互补选项，去除与 universe 重复收紧）。
+#   但该诊断基于有缺陷的 diagnose_skill_prefilter.py（未注入 twenty_cm_risk_gate，strict_missing 误拒全部
+#   gated 策略），故「0→2 通过」实为生产实验路径结果，诊断口径并不准。
+# 第165轮修复诊断（注入 limit_up/dragon_tiger 标志，复刻生产管线）后复测：修复后的 prefilter 在当前
+#   弱市池仅通过 1/4951 只——说明根因不是 prefilter 死锁，而是策略条件（free_mv<50 & pos20>=70 & rsi>=60
+#   或 is_main_theme）在 2026 弱势市极端稀缺 → 真·regime 适配型盲区（同 trend-pullback-continuation 第156轮结论）。
+# 处置：不强行放宽 universe（会引入破位/冷门股污染 D 项，违反「准确>可见」）。标记观察，等市场转活跃
+#   （小盘动量条件自然出现）后验证是否自然命中。每轮 self_check 的覆盖盲区告警据此判定为预期内。
 universe:
   include:
     - "amount_yi >= 3"
