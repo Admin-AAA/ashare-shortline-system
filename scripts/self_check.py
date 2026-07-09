@@ -21,6 +21,13 @@ from sqlalchemy import text
 
 SKILLS_DIR = os.path.join(os.path.dirname(__file__), '..', 'backend', 'skills')
 
+# A 股短线真实交易成本（与 app/services/outcome_service.py:_ADDITIONAL_COST_PCT 保持一致）：
+# 佣金万1双边(0.02%) + 印花税卖出(0.05%) = 0.07%/笔。executed_return 已含滑点但未扣此成本。
+# 北极星 D 项目标定义为"扣费后须达标"(T2 step4)，故 D 项必须呈净成本口径，不能只看毛值。
+ADDITIONAL_COST_PCT = 0.07
+PL_RATIO_BASELINE = 1.94   # 北极星 D 项盈亏比历史基线（LIVE 1.94）
+PL_RATIO_TARGET = 2.0      # 北极星 D 项目标（朝 2.0 攻击）
+
 # 策略规则引擎（用于 D 项"规则覆盖前瞻校验"——区分历史污染 vs 真退化）
 # 惰性加载：仅在 check_d_rule_coverage 执行时载入一次，避免 A/B/C/E 项承受导入开销
 _SKILLS_CACHE: dict | None = None
@@ -299,6 +306,68 @@ def _fmt_d(tag: str, res: tuple | None, baseline_wr: float, baseline_loss: float
     print(f'  {tag}: 胜率 {wr}% (n={n}, 基线 {baseline_wr}%, {tag_w}) | 最大亏损 {ml}% ({tag_l})')
 
 
+def _compute_d_cost(rows: list, *, since_date: str | None = None,
+                    trade_dates: set | None = None) -> dict | None:
+    """纯函数：在去重 LIVE formal 样本 rows[(code, trade_date, label, ret)] 上，
+    计算扣交易成本(0.07%/笔)后的净指标——暴露 D 项第三子指标 盈亏比(P/L ratio)
+    并诚实呈现净胜率/净平均收益。
+
+    executed_return 已含滑点但未扣佣金+印花税（见 outcome_service._ADDITIONAL_COST_PCT），
+    而北极星 D 项目标定义为"扣费后须达标"(T2 step4)。此前 D 项只报毛胜率+最大亏损，
+    盈亏比与净胜率缺失 → 1/3 核心攻击目标不可见。本函数补齐，纯函数便于单测锁定逻辑，
+    不碰 DB，与 _compute_d_window 正交（后者保毛胜率/最大亏损基线对比连续性）。
+    """
+    if trade_dates is not None:
+        win = [r for r in rows if str(r[1]) in trade_dates]
+    elif since_date is not None:
+        win = [r for r in rows if str(r[1]) >= since_date]
+    else:
+        win = list(rows)
+    rets = [float(r[3]) for r in win if r[3] is not None]
+    n = len(rets)
+    if n == 0:
+        return None
+    net = [x - ADDITIONAL_COST_PCT for x in rets]
+    gross_wins = sum(1 for x in rets if x > 0)
+    net_wins = sum(1 for x in net if x > 0)
+    gross_profit = sum(x for x in rets if x > 0)
+    gross_loss = abs(sum(x for x in rets if x < 0))
+    net_profit = sum(x for x in net if x > 0)
+    net_loss = abs(sum(x for x in net if x < 0))
+    gross_pl = round(gross_profit / gross_loss, 2) if gross_loss > 0 else 999.0
+    net_pl = round(net_profit / net_loss, 2) if net_loss > 0 else 999.0
+    return {
+        "n": n,
+        "gross_wr": round(gross_wins * 100 / n, 1),
+        "net_wr": round(net_wins * 100 / n, 1),
+        "gross_pl": gross_pl,
+        "net_pl": net_pl,
+        "gross_avg": round(sum(rets) / n, 2),
+        "net_avg": round(sum(net) / n, 2),
+        "max_loss": round(min(rets), 2),
+    }
+
+
+def _fmt_d_cost(tag: str, m: dict | None, baseline_wr: float, baseline_pl: float) -> None:
+    """打印净成本 D 项块（盈亏比 + 净胜率 + 净平均收益）。"""
+    if m is None:
+        print(f'  {tag}(净成本): 样本不足')
+        return
+    d_w = round(m["net_wr"] - baseline_wr, 1)
+    tag_w = (f'⚠️ 净胜率下滑 {abs(d_w)}pp' if d_w < 0
+             else f'净胜率高于基线 {d_w}pp')
+    d_p = round(m["net_pl"] - baseline_pl, 2)
+    if m["net_pl"] >= PL_RATIO_TARGET:
+        tag_p = f'✅ 净盈亏比达标(≥{PL_RATIO_TARGET})'
+    elif d_p < 0:
+        tag_p = f'⚠️ 净盈亏比低于基线 {abs(d_p)}'
+    else:
+        tag_p = f'净盈亏比高于基线 {d_p}(未达{PL_RATIO_TARGET}目标)'
+    print(f'  {tag}(净成本,扣{ADDITIONAL_COST_PCT}%): 净胜率 {m["net_wr"]}% (毛 {m["gross_wr"]}%, {tag_w}) '
+          f'| 盈亏比 净 {m["net_pl"]}/毛 {m["gross_pl"]} ({tag_p}) '
+          f'| 平均收益 净 {m["net_avg"]}%/毛 {m["gross_avg"]}%')
+
+
 def check_d_item(db) -> None:
     """D 项：核心指标（胜率 + 最大亏损），多窗口呈现以区分历史污染 vs 前瞻真退化。
 
@@ -314,18 +383,23 @@ def check_d_item(db) -> None:
     # 真实独立股票胜率，避免把失败股放大 N 倍扭曲胜率。
     rows = _fetch_dedup_live_formal(db)
     _fmt_d('D 项(全量)', _compute_d_window(rows), WIN_RATE_BASELINE, MAX_LOSS_BASELINE)
+    _fmt_d_cost('D 项(全量)', _compute_d_cost(rows), WIN_RATE_BASELINE, PL_RATIO_BASELINE)
 
     # 近 10 交易日窗口：看近期趋势（自然老化修复前历史污染）。
     dates = sorted({str(r[1]) for r in rows})
     last10 = set(dates[-10:]) if dates else set()
     _fmt_d('D 项(近10交易日)', _compute_d_window(rows, trade_dates=last10),
            WIN_RATE_BASELINE, MAX_LOSS_BASELINE)
+    _fmt_d_cost('D 项(近10交易日)', _compute_d_cost(rows, trade_dates=last10),
+                WIN_RATE_BASELINE, PL_RATIO_BASELINE)
 
     # 前瞻窗口（修复后）：FORWARD_EPOCH 之后的 run 才反映去重/弱市否决的真实胜率。
     # 若前瞻窗口胜率显著高于全量，说明全量下滑是历史污染而非真退化——
     # 切勿据此循环加规则（禁止过拟合，第164轮 T3 失败归因结论）。
     _fmt_d(f'D 项(前瞻≥{FORWARD_EPOCH})', _compute_d_window(rows, since_date=FORWARD_EPOCH),
            WIN_RATE_BASELINE, MAX_LOSS_BASELINE)
+    _fmt_d_cost(f'D 项(前瞻≥{FORWARD_EPOCH})', _compute_d_cost(rows, since_date=FORWARD_EPOCH),
+                WIN_RATE_BASELINE, PL_RATIO_BASELINE)
 
     # 单日集中度诊断（独立股票口径）：防止单日异常高量扭曲 D 项判断。
     # 已改用独立股票数（同股同日多 run 只算 1 只），避免"单日 N 笔"假警报——
