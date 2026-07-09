@@ -1062,6 +1062,11 @@ async def _run_strategy_exposure(db, payload: dict, task_run_id: str | None = No
 
     每个策略单独 enqueue 到独立子进程，run_mode=experiment，关闭 LLM 审查以加速。
     产出的推荐只供 metrics_by_strategy 统计胜率，不进记录中心/驾驶舱（list_runs 过滤 experiment）。
+
+    低曝光判定口径（修复点）：只统计 run_mode IN ('formal','experiment') 的真实推荐样本，
+    必须排除 'backtest' 合成回测。backtest run 同样带 skill_breakdown_json，若计入会让
+    真实样本不足的策略被误判为「样本已够」而永远不被补跑（high-range 曾因 13 笔 backtest
+    命中被误判 sample>=20，真实 formal+experiment 仅 16，长期卡在 n<20）。
     """
     from app.services.outcome_service import metrics_by_strategy
     from app.services.workbench_service import enqueue_workbench_run, sync_skills
@@ -1074,8 +1079,8 @@ async def _run_strategy_exposure(db, payload: dict, task_run_id: str | None = No
     skills = sync_skills(db)
     enabled_ids = [s.skill_id for s in skills if s.enabled]
 
-    # 2. 拿近 window_days 各策略已兑现样本数
-    metrics = metrics_by_strategy(db, window_days=window_days)
+    # 2. 拿近 window_days 各策略「真实」样本数（formal+experiment，排除 backtest 合成回测）
+    metrics = metrics_by_strategy(db, window_days=window_days, run_mode=("formal", "experiment"))
     sample_by_sid = {m.get("strategy_id"): int(m.get("sample_count") or 0) for m in metrics}
 
     # 3. 筛低曝光策略：enabled 但样本 < 阈值

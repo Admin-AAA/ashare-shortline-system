@@ -76,7 +76,7 @@ def test_overview_metrics_do_not_trust_success_label_when_net_return_is_negative
         _row(rec_id="rec_label_success_loss", outcome_label="success", entry_triggered=True, executed_return=-0.2),
         _row(rec_id="rec_loss", outcome_label="failed", entry_triggered=True, executed_return=-1.5),
     ]
-    monkeypatch.setattr("app.services.outcome_service._scoped_recommendation_rows", lambda _db, _s=None, _e=None: rows)
+    monkeypatch.setattr("app.services.outcome_service._scoped_recommendation_rows", lambda _db, _s=None, _e=None, **_k: rows)
     monkeypatch.setattr("app.services.benchmark_service.get_benchmark_close_map", lambda _db, _dates: {})
     monkeypatch.setattr("app.services.benchmark_service.compute_benchmark_return", lambda _close_map, _entry, _exit: 0.0)
 
@@ -130,7 +130,7 @@ def test_grouped_setup_metrics_include_recommendation_accuracy_denominator(monke
     ]
     monkeypatch.setattr("app.services.benchmark_service.get_benchmark_close_map", lambda _db, _dates: {})
     monkeypatch.setattr("app.services.benchmark_service.compute_benchmark_return", lambda _close_map, _entry, _exit: 0.0)
-    monkeypatch.setattr("app.services.outcome_service._scoped_recommendation_rows", lambda _db, _s=None, _e=None: rows)
+    monkeypatch.setattr("app.services.outcome_service._scoped_recommendation_rows", lambda _db, _s=None, _e=None, **_k: rows)
 
     result = _metrics_by_setup(MagicMock())
 
@@ -154,7 +154,7 @@ def test_score_line_metrics_expose_9kpi_for_each_threshold(monkeypatch):
     ]
     monkeypatch.setattr("app.services.benchmark_service.get_benchmark_close_map", lambda _db, _dates: {})
     monkeypatch.setattr("app.services.benchmark_service.compute_benchmark_return", lambda _close_map, _entry, _exit: 0.0)
-    monkeypatch.setattr("app.services.outcome_service._scoped_recommendation_rows", lambda _db, _s=None, _e=None: rows)
+    monkeypatch.setattr("app.services.outcome_service._scoped_recommendation_rows", lambda _db, _s=None, _e=None, **_k: rows)
 
     result = _metrics_by_score_line(MagicMock(), (60, 80))
 
@@ -177,7 +177,7 @@ def test_strategy_metrics_expose_9kpi_not_only_trade_hit_rate(monkeypatch):
     ]
     monkeypatch.setattr("app.services.benchmark_service.get_benchmark_close_map", lambda _db, _dates: {})
     monkeypatch.setattr("app.services.benchmark_service.compute_benchmark_return", lambda _close_map, _entry, _exit: 0.0)
-    monkeypatch.setattr("app.services.outcome_service._scoped_recommendation_rows", lambda _db, _s=None, _e=None: rows)
+    monkeypatch.setattr("app.services.outcome_service._scoped_recommendation_rows", lambda _db, _s=None, _e=None, **_k: rows)
 
     result = _metrics_by_strategy(MagicMock())
 

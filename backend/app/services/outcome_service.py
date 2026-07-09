@@ -525,10 +525,11 @@ def metrics_by_strategy(
     window_days: int | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    run_mode: str | tuple[str, ...] | list[str] | None = None,
 ) -> list[dict[str, Any]]:
     start, end = _resolve_window(window_days, start_date, end_date)
-    key = f"by_strategy:{start or ''}:{end or ''}"
-    return _cached(key, lambda: _metrics_by_strategy(db, start, end, window_days))
+    key = f"by_strategy:{start or ''}:{end or ''}:{run_mode or 'all'}"
+    return _cached(key, lambda: _metrics_by_strategy(db, start, end, window_days, run_mode=run_mode))
 
 
 def _metrics_by_strategy(
@@ -536,8 +537,9 @@ def _metrics_by_strategy(
     start_date: str | None = None,
     end_date: str | None = None,
     window_days: int | None = None,
+    run_mode: str | tuple[str, ...] | list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    rows = _scoped_recommendation_rows(db, start_date, end_date)
+    rows = _scoped_recommendation_rows(db, start_date, end_date, run_mode=run_mode)
     benchmark_by_rec = _benchmark_returns_by_recommendation(db, rows)
     horizon_records = _horizon_metric_records_by_recommendation(db, rows)
     registry = {row.skill_id: row for row in db.scalars(select(SkillRegistry)).all()}
@@ -1519,12 +1521,14 @@ def _scoped_recommendation_rows(
     db: Session,
     start_date: str | None = None,
     end_date: str | None = None,
+    run_mode: str | tuple[str, ...] | list[str] | None = None,
 ) -> list[Any]:
     # 两步查询：先 SQL 去重拿 (trade_date, code) 分组下 final_score 最高的 recommendation_id（235 个），
     # 再按 id 取详情。避免查全部 1479 行大字段（feature_snapshot_json/market_context_json）再 Python 去重。
     # MySQL 8+ 窗口函数：ROW_NUMBER() OVER (PARTITION BY trade_date, code ORDER BY final_score DESC)
     # 时间窗口：start_date/end_date 为 ISO 日期字符串（YYYY-MM-DD），按 trade_date 过滤；
     # window_days 模式下调用方应先用 _resolve_window 转成 start/end 再传入。
+    # run_mode：可选，按 recommendation_runs.run_mode 过滤（如 ('formal','experiment') 排除 backtest 合成回测）。
     dedup_ids_stmt = (
         select(
             Recommendation.recommendation_id,
@@ -1538,6 +1542,12 @@ def _scoped_recommendation_rows(
         dedup_ids_stmt = dedup_ids_stmt.where(Recommendation.trade_date >= start_date)
     if end_date:
         dedup_ids_stmt = dedup_ids_stmt.where(Recommendation.trade_date <= end_date)
+    if run_mode:
+        if isinstance(run_mode, (list, tuple, set)):
+            _modes = tuple(str(m) for m in run_mode)
+            dedup_ids_stmt = dedup_ids_stmt.where(RecommendationRun.run_mode.in_(_modes))
+        else:
+            dedup_ids_stmt = dedup_ids_stmt.where(RecommendationRun.run_mode == str(run_mode))
     # 用子查询取每组 final_score 最大的 id（GROUP BY + MAX 定位，再 JOIN 回表）
     dedup_subq = dedup_ids_stmt.subquery()
     max_score_subq = (
