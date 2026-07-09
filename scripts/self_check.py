@@ -10,6 +10,7 @@ import math
 import os
 import sys
 from collections import Counter
+from pathlib import Path
 
 # 让 backend/ 下的 app 包可被导入
 BACKEND_DIR = os.path.join(os.path.dirname(__file__), '..', 'backend')
@@ -19,6 +20,23 @@ from app.db.session import SessionLocal
 from sqlalchemy import text
 
 SKILLS_DIR = os.path.join(os.path.dirname(__file__), '..', 'backend', 'skills')
+
+# 策略规则引擎（用于 D 项"规则覆盖前瞻校验"——区分历史污染 vs 真退化）
+# 惰性加载：仅在 check_d_rule_coverage 执行时载入一次，避免 A/B/C/E 项承受导入开销
+_SKILLS_CACHE: dict | None = None
+
+
+def _load_skills_once() -> dict:
+    global _SKILLS_CACHE
+    if _SKILLS_CACHE is None:
+        try:
+            from app.engine.skill_loader import load_skills
+            _SKILLS_CACHE = {s.skill_id: s for s in load_skills(Path(SKILLS_DIR))}
+        except Exception as e:
+            # 规则引擎不可用时静默降级（D 项规则覆盖校验会跳过），不影响 A/B/C/D/E 主指标
+            print(f'  (规则引擎加载失败，跳过 D 项覆盖校验: {type(e).__name__}: {e})')
+            _SKILLS_CACHE = {}
+    return _SKILLS_CACHE
 
 
 def check_a_item(db) -> None:
@@ -237,6 +255,85 @@ def check_d_item(db) -> None:
         worsened = min_ret < MAX_LOSS_BASELINE
         tag = f'⚠️ 恶化 {round(min_ret - MAX_LOSS_BASELINE, 2)}pp' if worsened else f'优于基线'
         print(f'D 项：最大亏损 {min_ret}% （基线 {MAX_LOSS_BASELINE}%，{tag}）')
+
+    # 规则覆盖前瞻校验：区分"历史污染"vs"真退化"
+    check_d_rule_coverage(db, WIN_RATE_BASELINE)
+
+
+def check_d_rule_coverage(db, win_rate_baseline: float) -> None:
+    """D 项规则覆盖前瞻校验：用当前 strategy.yaml 重跑所有 LIVE formal 失败样本，
+    统计已被当前规则覆盖（会被 hard_veto / universe 排除）的失败笔。
+
+    目的：D 项胜率会被"规则加入前的历史失败样本"污染（规则晚于失败样本 commit），
+    单看总胜率无法区分"历史污染"vs"真退化"，导致每轮误判持续恶化、循环加规则。
+    本校验把失败样本拆成两段：
+      - 已被当前规则覆盖：待前瞻验证（下一个交易日 formal run 会自动确认）
+      - 未被覆盖：真残留毒区清单（下一轮 D 攻击的精确目标）
+
+    注：用 feature_snapshot_json 重跑 stock，market_regime 为事后写入值，
+    故"已被覆盖"是上界估计（生产 run 时 regime 若缺失可能不触发），但作为
+    "哪些失败样本已被规则覆盖"的下界信号足够稳——能拦住的就是真拦住了。
+    """
+    skills = _load_skills_once()
+    if not skills:
+        return
+
+    rows = db.execute(text("""
+        SELECT r.recommendation_id, o.outcome_label, o.executed_return,
+               r.feature_snapshot_json, r.skill_breakdown_json
+        FROM recommendation_outcomes o
+        JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+        WHERE o.outcome_label IN ('success', 'failed')
+          AND r.recommendation_id LIKE 'rec_%'
+    """)).fetchall()
+    if not rows:
+        return
+
+    blocked, new_total, wins, total = _classify_failed_coverage(rows, skills)
+    new_wr = round(wins * 100 / new_total, 1) if new_total else 0.0
+    delta = round(new_wr - win_rate_baseline, 1)
+    tag = f'↑ 高于基线 {delta}pp' if delta >= 0 else f'⚠️ 真退化 {abs(delta)}pp'
+    print(
+        f'D 项规则覆盖：{blocked} 笔失败已被当前规则覆盖（待前瞻验证），'
+        f'反事实胜率 {new_wr}% （n={new_total}，基线 {win_rate_baseline}%，{tag}）'
+    )
+
+
+def _classify_failed_coverage(rows, skills) -> tuple[int, int, int, int]:
+    """统计失败样本中被当前规则覆盖（hard_veto / universe 排除）的笔数。
+
+    纯函数（不碰 DB），便于单元测试。返回 (blocked_count, new_total, wins, total)：
+      - blocked_count: 失败样本中会被当前 yaml 拦截的去重 recommendation_id 数
+      - new_total: total - blocked_count（剔除被覆盖失败笔后的样本数）
+      - wins: 成功笔数（不变）
+      - total: 样本总数
+    """
+    from app.engine.strategy_runner import run_strategy
+
+    total = len(rows)
+    wins = sum(1 for r in rows if r[1] == 'success')
+
+    blocked_rids: set = set()
+    for rid, label, _ret, fsj, sbj in rows:
+        if label != 'failed':
+            continue
+        fs = json.loads(fsj) if fsj else {}
+        sb = json.loads(sbj) if sbj else []
+        for s in sb:
+            sid = s.get('strategy_id')
+            skill = skills.get(sid)
+            if not skill:
+                continue
+            try:
+                sig = run_strategy(skill, dict(fs), [], skip_universe_check=False)
+                if sig.get('hard_veto') or (sig.get('phase') == '排除'):
+                    blocked_rids.add(rid)
+                    break
+            except Exception:
+                continue
+
+    blocked = len(blocked_rids)
+    return blocked, total - blocked, wins, total
 
 
 def main() -> None:
