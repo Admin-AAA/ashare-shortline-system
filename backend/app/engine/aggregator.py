@@ -965,6 +965,18 @@ def apply_pool_rules(
         if _snapshot_regime == "震荡" and 0 < _card_pos60 < 50 and not _is_limit_up_card:
             effective_score_line = round(effective_score_line + 12.0, 2)
             card["_regime_oscillation_low_pos_penalty"] = 12.0
+        # 弱势 regime × chg20<15 交叉惩罚（第150轮 T3 失败归因闭环）：
+        # 实盘去重 LIVE formal 96 笔（弱势 regime 全历史）：chg20<15 WR=33.3%（33笔 avg=-0.58%），
+        # chg20>=15 WR=65.5%（55笔 avg=2.10%），差距 32pp，且 [0,10)/[10,15)/[15,20)/[20,30)/[30,+)
+        # 五档完全单调（33/33/56/61/76%）。6 月强势市场 chg20<15 WR=71%——效果 regime-dependent。
+        # 因果：弱势市场资金避险抱团少数强势龙头，chg20<15 的"半强股"无资金关注继续跌；
+        # 强势市场普涨，低位补涨股弹性更大。涨停股豁免（limit-up-reseal-relay 策略靠封板动能
+        # 不靠 chg20，且炸板回封 chg20 可能为负/低，惩罚会误伤）。
+        # 门槛 +12（72→84）模拟：过滤 31 笔（WR=35.5%），放行 10 笔，整体 WR 56.6%→63.1%。
+        _card_chg20 = float(card.get("chg20") or card.get("feature_snapshot", {}).get("chg20") or 0)
+        if _snapshot_regime == "弱势" and 0 <= _card_chg20 < 15 and not _is_limit_up_card:
+            effective_score_line = round(effective_score_line + 12.0, 2)
+            card["_regime_weak_low_chg20_penalty"] = 12.0
         card["score_line_meta"] = {
             **score_line_context,
             **card_adjustment,
@@ -974,6 +986,7 @@ def apply_pool_rules(
             "block_reason": execution_viability["block_reason"],
             "regime_support_ma5_penalty": card.get("_regime_support_ma5_penalty", 0.0),
             "regime_oscillation_low_pos_penalty": card.get("_regime_oscillation_low_pos_penalty", 0.0),
+            "regime_weak_low_chg20_penalty": card.get("_regime_weak_low_chg20_penalty", 0.0),
             "effective_score_line": effective_score_line,
             "passed": final_score >= effective_score_line and execution_viability["status"] != "blocked",
         }
@@ -1038,6 +1051,9 @@ def apply_pool_rules(
                     continue
                 # 震荡 × pos60<50 硬否决：不参与软降线（否则惩罚被降线覆盖，WR=0% 的股票又混进来）
                 if sm.get("regime_oscillation_low_pos_penalty"):
+                    continue
+                # 弱势 × chg20<15 硬否决：同上，惩罚不被降线覆盖（WR=33% 的半强股不兜底出票）
+                if sm.get("regime_weak_low_chg20_penalty"):
                     continue
                 old_effective = sm.get("effective_score_line", 99)
                 new_effective = min(old_effective, dynamic_line)

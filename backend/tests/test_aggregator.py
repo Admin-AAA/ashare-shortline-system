@@ -599,12 +599,62 @@ def test_apply_pool_rules_oscillation_low_pos60_exemption():
         "limit_up_count": 1, "limit_down_count": 2,
         "market_regime": "弱势",
     }
-    cards = [{**_card("LOW_POS_WEAK", 72), "pos60": 40, "is_limit_up": False, "support_ma5": True}]
+    cards = [{**_card("LOW_POS_WEAK", 72), "pos60": 40, "chg20": 20, "is_limit_up": False, "support_ma5": True}]
     result = apply_pool_rules(cards, score_line=72, market_snapshot=snapshot_weak)
     by_code = {c["code"]: c for c in result}
     # 弱势 regime 不触发震荡低 pos 惩罚
     assert "LOW_POS_WEAK" in by_code, "弱势 × pos60<50 不应被震荡惩罚过滤"
     assert by_code["LOW_POS_WEAK"]["score_line_meta"]["regime_oscillation_low_pos_penalty"] == 0.0
+
+
+def test_apply_pool_rules_weak_low_chg20_penalty():
+    """弱势 regime × chg20<15 交叉惩罚（+12 门槛）。
+
+    第150轮 T3 失败归因：弱势 chg20<15 WR=33.3%（33笔 avg=-0.58%），
+    chg20>=15 WR=65.5%（55笔 avg=2.10%），五档完全单调（33/33/56/61/76%）。
+    因果：弱势资金抱团强势龙头，半强股无资金关注继续跌。
+    涨停股豁免（limit-up-reseal-relay 策略靠封板动能不靠 chg20）。
+    门槛 +12（72→84）模拟整体 WR 56.6%→63.1%。
+    """
+    snapshot = {
+        "sample_count": 100, "up_count": 30, "down_count": 70,
+        "limit_up_count": 1, "limit_down_count": 2,
+        "market_regime": "弱势",
+    }
+    # 三张卡同分 72，弱势 regime：低 chg20 / 高 chg20 / 涨停低 chg20
+    cards = [
+        {**_card("LOW_CHG", 72), "chg20": 8, "is_limit_up": False, "support_ma5": True},
+        {**_card("HIGH_CHG", 72), "chg20": 25, "is_limit_up": False, "support_ma5": True},
+        {**_card("LIMIT_LOW_CHG", 72), "chg20": -5, "is_limit_up": True, "support_ma5": True},
+    ]
+    result = apply_pool_rules(cards, score_line=72, market_snapshot=snapshot)
+    by_code = {c["code"]: c for c in result}
+    # 高 chg20 通过，低 chg20 被过滤（+12 门槛→effective 84 > 72），涨停低 chg20 豁免通过
+    assert "HIGH_CHG" in by_code, "弱势 × chg20>=15 应通过"
+    assert "LOW_CHG" not in by_code, "弱势 × chg20<15 应被 +12 门槛过滤"
+    assert "LIMIT_LOW_CHG" in by_code, "涨停股豁免弱势低 chg20 惩罚"
+    assert by_code["HIGH_CHG"]["score_line_meta"]["regime_weak_low_chg20_penalty"] == 0.0
+    assert by_code["LIMIT_LOW_CHG"]["score_line_meta"]["regime_weak_low_chg20_penalty"] == 0.0
+
+
+def test_apply_pool_rules_weak_low_chg20_not_in_strong_regime():
+    """非弱势 regime × chg20<15 不触发弱势惩罚（效果 regime-dependent）。
+
+    强势市场普涨，低位补涨股弹性更大（6月 chg20<10 WR=71%）。
+    惩罚只在弱势 regime 触发；震荡 regime 只触发 pos60<50 惩罚，不触发 chg20 惩罚。
+    """
+    snapshot_oscillation = {
+        "sample_count": 100, "up_count": 45, "down_count": 55,
+        "limit_up_count": 1, "limit_down_count": 0,
+        "market_regime": "震荡",
+    }
+    # 震荡 regime，pos60=60（不触发震荡惩罚），chg20=8（<15 但非弱势）
+    cards = [{**_card("LOW_CHG_OSC", 72), "pos60": 60, "chg20": 8, "is_limit_up": False, "support_ma5": True}]
+    result = apply_pool_rules(cards, score_line=72, market_snapshot=snapshot_oscillation)
+    by_code = {c["code"]: c for c in result}
+    # 震荡 regime 不触发弱势低 chg20 惩罚
+    assert "LOW_CHG_OSC" in by_code, "震荡 × chg20<15（pos60正常）应通过"
+    assert by_code["LOW_CHG_OSC"]["score_line_meta"]["regime_weak_low_chg20_penalty"] == 0.0
 
 
 def test_apply_pool_rules_sorted_by_score():
