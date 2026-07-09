@@ -6,8 +6,10 @@
 """
 
 import json
+import math
 import os
 import sys
+from collections import Counter
 
 # 让 backend/ 下的 app 包可被导入
 BACKEND_DIR = os.path.join(os.path.dirname(__file__), '..', 'backend')
@@ -145,6 +147,56 @@ def check_e_item(db, hit_skills: set) -> None:
         win_rate = round(wins * 100 / n, 1)
         tag = '低胜率' if win_rate < 45 else '低覆盖'
         print(f'  {row[0]}: n={n} wins={wins} avg_ret={avg_ret}% winrate={win_rate}% ←{tag}需标记')
+
+    # 曝光公平度 + 样本置信度（近 30 天 formal+experiment，不含 backtest）
+    # 目的：让每个策略胜率统计可信，避免头部策略吃掉 80%+ 曝光、尾部策略样本稀疏不可信。
+    SAMPLE_FLOOR = 20          # 每策略近 30 天样本下限（统计可信）
+    FAIRNESS_TARGET = 0.50     # 归一化熵目标（=1 表示完全均匀，=0 表示全集中一个策略）
+    exp_rows = db.execute(text("""
+        SELECT rec.recommendation_id, jt.strategy_id
+        FROM recommendations rec
+        JOIN recommendation_runs u ON rec.run_id = u.run_id
+        JOIN JSON_TABLE(
+            rec.skill_breakdown_json, '$[*]'
+            COLUMNS (strategy_id VARCHAR(80) PATH '$.strategy_id')
+        ) jt
+        WHERE u.run_mode IN ('formal', 'experiment')
+          AND rec.skill_breakdown_json IS NOT NULL
+          AND rec.recommended_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+    """)).fetchall()
+    # 按 recommendation_id 去重（同条推荐被多策略命中，每个策略各计一次曝光）
+    per_rec: dict = {}
+    for rid, sid in exp_rows:
+        per_rec.setdefault(rid, set()).add(sid)
+    exposure: Counter = Counter()
+    for sids in per_rec.values():
+        for sid in sids:
+            exposure[sid] += 1
+
+    print(f'E 项曝光分布（近 30 天 formal+experiment，按推荐去重）:')
+    total_exp = sum(exposure.values())
+    for sid, n in exposure.most_common():
+        share = (n / total_exp * 100) if total_exp else 0
+        flag = '⚠️<样本下限' if n < SAMPLE_FLOOR else ''
+        print(f'  {sid}: {n} ({share:.1f}%){(" " + flag) if flag else ""}')
+
+    # 归一化熵 H/H_max：衡量曝光集中度。被命中的策略数 = exposure 的 key 数
+    k = len(exposure)
+    if k > 1 and total_exp > 0:
+        entropy = -sum((n / total_exp) * math.log(n / total_exp) for n in exposure.values())
+        h_norm = entropy / math.log(k)
+    else:
+        h_norm = 0.0
+    fair_tag = '✅ 达标' if h_norm >= FAIRNESS_TARGET else '⚠️ 过度集中'
+    print(f'E 项曝光公平度: H_norm={h_norm:.3f} （目标 ≥{FAIRNESS_TARGET}，{fair_tag}）')
+
+    # 注册策略中近 30 天 0 曝光的（曝光补跑应持续喂到 SAMPLE_FLOOR）
+    zero_exp = [s for s in registered if s not in exposure]
+    if zero_exp:
+        print(f'⚠️ {len(zero_exp)} 个注册策略近 30 天 0 曝光（补跑未覆盖）: {sorted(zero_exp)}')
+    under_floor = sorted(s for s, n in exposure.items() if n < SAMPLE_FLOOR)
+    if under_floor:
+        print(f'⚠️ {len(under_floor)} 个策略样本 <{SAMPLE_FLOOR}（胜率统计不可信，补跑应持续喂）: {under_floor}')
 
 
 def check_d_item(db) -> None:

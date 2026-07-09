@@ -5,6 +5,7 @@
   - data_sync: 同步行情数据（刷新报价池 + 按日批量日K + 健康补数 + 辅助数据）
   - recommendation_run: 执行推荐流水线
   - preset_matrix_run: 盘后批量执行全部启用预设，用于预设矩阵对比
+  - strategy_exposure_run: 盘前对近30天样本不足的策略单独补跑，产出仅供胜率统计（experiment 模式，不进记录中心）
 """
 
 from __future__ import annotations
@@ -31,11 +32,16 @@ _running_lock = threading.Lock()
 _running_tasks: set[str] = set()
 TASK_TYPE_PRESET_MATRIX_RUN = "preset_matrix_run"
 TASK_TYPE_FORMAL_SAFETY_NET = "formal_safety_net"
+TASK_TYPE_STRATEGY_EXPOSURE_RUN = "strategy_exposure_run"
 MANUAL_PRESET_MATRIX_TASK_ID = "manual_preset_matrix_run"
 MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID = "manual_data_health_remediation"
 SAFETY_NET_TASK_ID = "formal_run_safety_net"
 SAFETY_NET_MAX_ATTEMPTS = 3
 DEFAULT_RECOMMENDATION_DATA_SOURCE = "auto"
+# 曝光补跑默认阈值：近30天已兑现样本 < 此值的 enabled 策略才补跑。
+# 取 20 与北极星 E 项样本置信度下限对齐——样本 <20 时胜率统计不可信（置信区间过宽），
+# 补跑持续喂到此值才让每个策略胜率可被信任，进而能按胜率选策略。
+DEFAULT_EXPOSURE_MIN_SAMPLE = 20
 
 
 def _is_task_running(task_id: str) -> bool:
@@ -199,6 +205,8 @@ def _execute_task(task_id: str, *, force: bool = False, trigger_source: str = "s
             result = asyncio.run(_safety_net_run(db, payload))
         elif task_type == TASK_TYPE_PRESET_MATRIX_RUN:
             result = asyncio.run(_run_preset_matrix(db, payload, task_run_id=task_run_id))
+        elif task_type == TASK_TYPE_STRATEGY_EXPOSURE_RUN:
+            result = asyncio.run(_run_strategy_exposure(db, payload, task_run_id=task_run_id))
         elif task_type in ("data_sync", "pool_refresh", "data_backfill"):
             result = _run_data_sync(db, payload, task_type=task_type)
         else:
@@ -506,6 +514,104 @@ def _default_matrix_payload(payload: dict) -> dict:
         if key not in result:
             result[key] = value
     return result
+
+
+MANUAL_STRATEGY_EXPOSURE_TASK_ID = "manual_strategy_exposure_run"
+
+
+def start_strategy_exposure_now(payload: dict | None = None) -> dict:
+    """异步启动一次低曝光策略补跑，立即返回任务运行状态。
+
+    供手动触发/测试用；定时路径由 scheduled_tasks 表的 strategy_exposure_run 任务按 cron 触发。
+    """
+    if not _try_mark_running_memory(MANUAL_STRATEGY_EXPOSURE_TASK_ID):
+        running = get_latest_strategy_exposure_task_run()
+        if running and running.get("status") == "running":
+            return {"started": False, "task_run": running}
+        raise RuntimeError("策略曝光补跑正在执行中，请等待当前批次完成")
+
+    run_payload = dict(payload or {})
+    db = SessionLocal()
+    task_run_id: str | None = None
+    try:
+        existing_running = _latest_running_strategy_exposure_task_run(db)
+        if existing_running is not None:
+            _mark_done_memory(MANUAL_STRATEGY_EXPOSURE_TASK_ID)
+            return {"started": False, "task_run": serialize_scheduled_task_run(existing_running)}
+
+        task = ScheduledTask(task_id=MANUAL_STRATEGY_EXPOSURE_TASK_ID)
+        task.name = "手工策略曝光补跑"
+        task.task_type = TASK_TYPE_STRATEGY_EXPOSURE_RUN
+        task.cron_expression = "0 0 * * *"
+        task.payload_json = json.dumps(run_payload, ensure_ascii=False)
+        task.enabled = False
+        task.is_running = True
+        task_run = start_task_run(db, task, trigger_source="manual")
+        task_run_id = task_run.task_run_id
+    except Exception:
+        _mark_done_memory(MANUAL_STRATEGY_EXPOSURE_TASK_ID)
+        raise
+    finally:
+        db.close()
+
+    thread = threading.Thread(
+        target=_execute_manual_strategy_exposure,
+        args=[task_run_id, run_payload],
+        name=f"strategy-exposure-{task_run_id}",
+        daemon=True,
+    )
+    thread.start()
+    return {"started": True, "task_run": get_latest_strategy_exposure_task_run()}
+
+
+def get_latest_strategy_exposure_task_run() -> dict | None:
+    db = SessionLocal()
+    try:
+        run = db.scalars(
+            select(ScheduledTaskRun)
+            .where(ScheduledTaskRun.task_type == TASK_TYPE_STRATEGY_EXPOSURE_RUN)
+            .order_by(ScheduledTaskRun.started_at.desc())
+            .limit(1)
+        ).first()
+        return serialize_scheduled_task_run(run) if run is not None else None
+    finally:
+        db.close()
+
+
+def _latest_running_strategy_exposure_task_run(db) -> ScheduledTaskRun | None:
+    return db.scalars(
+        select(ScheduledTaskRun)
+        .where(
+            ScheduledTaskRun.task_type == TASK_TYPE_STRATEGY_EXPOSURE_RUN,
+            ScheduledTaskRun.status == "running",
+            ScheduledTaskRun.finished_at.is_(None),
+        )
+        .order_by(ScheduledTaskRun.started_at.desc())
+        .limit(1)
+    ).first()
+
+
+def _execute_manual_strategy_exposure(task_run_id: str, payload: dict) -> None:
+    db = SessionLocal()
+    try:
+        result = asyncio.run(_run_strategy_exposure(db, payload, task_run_id=task_run_id))
+        finish_task_run(
+            db,
+            task_run_id,
+            status=_task_result_status(result),
+            summary=str(result.get("summary_text") or ""),
+            result=result,
+        )
+    except Exception as exc:
+        logger.exception("手工策略曝光补跑失败: %s", task_run_id)
+        db.rollback()
+        try:
+            finish_task_run(db, task_run_id, status="failed", error=str(exc), summary=str(exc))
+        except Exception:
+            pass
+    finally:
+        db.close()
+        _mark_done_memory(MANUAL_STRATEGY_EXPOSURE_TASK_ID)
 
 
 def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
@@ -943,6 +1049,108 @@ async def _safety_net_run(db, payload: dict) -> dict:
 
     result = await _run_recommendation(db, run_payload)
     return {"skipped": False, **check, **result}
+
+
+# ═══════════════════════════════════════════════════════════════
+#  低曝光策略补跑：对近30天样本不足的 enabled 策略单独跑 single_skill_id，
+#  产出 experiment run，仅供 metrics_by_strategy 统计，不进记录中心/驾驶舱。
+#  目的：打破「低曝光策略没样本 → 永远不被选 → 永远没样本」的死循环。
+# ═══════════════════════════════════════════════════════════════
+
+async def _run_strategy_exposure(db, payload: dict, task_run_id: str | None = None) -> dict:
+    """对近30天样本不足的策略串行补跑 single_skill_id（experiment 模式）。
+
+    每个策略单独 enqueue 到独立子进程，run_mode=experiment，关闭 LLM 审查以加速。
+    产出的推荐只供 metrics_by_strategy 统计胜率，不进记录中心/驾驶舱（list_runs 过滤 experiment）。
+    """
+    from app.services.outcome_service import metrics_by_strategy
+    from app.services.workbench_service import enqueue_workbench_run, sync_skills
+
+    window_days = int(payload.get("window_days", 30))
+    min_sample = int(payload.get("min_sample_threshold") or DEFAULT_EXPOSURE_MIN_SAMPLE)
+    trade_date = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y%m%d")
+
+    # 1. 拿全部 enabled 策略
+    skills = sync_skills(db)
+    enabled_ids = [s.skill_id for s in skills if s.enabled]
+
+    # 2. 拿近 window_days 各策略已兑现样本数
+    metrics = metrics_by_strategy(db, window_days=window_days)
+    sample_by_sid = {m.get("strategy_id"): int(m.get("sample_count") or 0) for m in metrics}
+
+    # 3. 筛低曝光策略：enabled 但样本 < 阈值
+    low_exposure = []
+    skipped = []
+    for sid in sorted(enabled_ids):
+        cnt = sample_by_sid.get(sid, 0)
+        if cnt < min_sample:
+            low_exposure.append({"skill_id": sid, "sample_count": cnt})
+        else:
+            skipped.append({"skill_id": sid, "sample_count": cnt})
+
+    if not low_exposure:
+        msg = f"曝光补跑跳过: 全部 {len(enabled_ids)} 个策略近{window_days}天样本均≥{min_sample}"
+        logger.info(msg)
+        return {
+            "skipped": True,
+            "window_days": window_days,
+            "min_sample_threshold": min_sample,
+            "exposed_strategies": [],
+            "skipped_strategies": skipped,
+            "summary_text": msg,
+        }
+
+    logger.info(
+        "曝光补跑启动: 近%d天低曝光策略 %d/%d: %s",
+        window_days, len(low_exposure), len(enabled_ids),
+        [r["skill_id"] for r in low_exposure],
+    )
+
+    # 4. 串行 enqueue 每个低曝光策略
+    exposed: list[dict] = []
+    total = len(low_exposure)
+    for index, item in enumerate(low_exposure, start=1):
+        sid = item["skill_id"]
+        if task_run_id:
+            _update_matrix_progress(
+                db,
+                task_run_id,
+                summary=f"曝光补跑 {index}/{total}: {sid}（样本 {item['sample_count']}）",
+            )
+        try:
+            result = enqueue_workbench_run(
+                db,
+                {
+                    "single_skill_id": sid,
+                    "run_name": f"曝光补跑 {sid} {trade_date}",
+                    "run_mode": "experiment",
+                    "skip_aux_refresh": True,
+                    "disable_agent_review": True,
+                },
+            )
+            run = result.get("run") or {}
+            exposed.append({
+                "skill_id": sid,
+                "run_id": run.get("run_id"),
+                "queued": bool(result.get("queued")),
+            })
+        except Exception as exc:
+            logger.exception("曝光补跑策略 %s 入队失败: %s", sid, exc)
+            db.rollback()
+            exposed.append({"skill_id": sid, "error": str(exc)})
+
+    msg = (
+        f"曝光补跑完成: {len(exposed)}/{total} 策略已入队"
+        f"（近{window_days}天样本<{min_sample}的: {', '.join(r['skill_id'] for r in low_exposure)}）"
+    )
+    return {
+        "skipped": False,
+        "window_days": window_days,
+        "min_sample_threshold": min_sample,
+        "exposed_strategies": exposed,
+        "skipped_strategies": skipped,
+        "summary_text": msg,
+    }
 
 
 def ensure_formal_recommendation_safely() -> dict:
