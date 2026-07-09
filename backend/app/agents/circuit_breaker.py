@@ -1,9 +1,13 @@
 """
 LLM API 调用断路器。
 
-简单的滑动窗口断路器：
-- 若某个 model 连续失败达到阈值，则阻断该 model 的后续调用一段时间。
-- 一次成功即可重置计数器，解除断路。
+按错误类型差异化冷却：
+- 永久性错误（402 余额不足 / 401 鉴权 / 404 模型不存在）不会自行恢复，
+  用长冷却（默认 30 分钟）避免熔断-重试-再熔断的无效循环。
+  07-09 deepseek 402 余额耗尽：340 calls 320 failed，B 项 LLM delta 全缺失，
+  根因之一是 60s 短冷却导致每分钟解封后试 5 次又 402。
+- 暂时性错误（429 限流 / 超时 / 网络抖动）保持短冷却（默认 60s）快速恢复。
+- 一次成功即可重置计数器，解除断路（余额充值后立即恢复）。
 """
 
 from __future__ import annotations
@@ -11,6 +15,19 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
+
+
+# 永久性错误：不会自行恢复，长冷却避免无效重试
+# 402 余额不足 / 401-403 鉴权 / 404 模型不存在 / model_unavailable
+PERMANENT_ERROR_TYPES = frozenset({
+    "insufficient_balance",
+    "auth_error",
+    "model_unavailable",
+})
+
+# 永久性错误的长冷却（秒）。余额/鉴权/模型配置问题不会 60s 后自行解决，
+# 30 分钟冷却既避免无效重试，又能在用户充值/修配置后 reasonably 恢复。
+PERMANENT_COOLDOWN_SECONDS: float = 1800.0
 
 
 @dataclass
@@ -49,13 +66,16 @@ class CircuitBreaker:
         if state.blocked_until > 0 and time.monotonic() >= state.blocked_until:
             state.blocked_until = 0.0
 
-    def record_result(self, model_id: str, success: bool) -> None:
+    def record_result(self, model_id: str, success: bool, error_type: str | None = None) -> None:
         """
         记录一次调用结果。
 
         Args:
             model_id: LLM 模型标识
             success: 调用是否成功
+            error_type: 失败时的错误类型（来自 _route_error_status）。
+                永久性错误（insufficient_balance/auth_error/model_unavailable）
+                用长冷却；其他保持默认短冷却。成功时忽略。
         """
         state = self._states[model_id]
         if success:
@@ -64,7 +84,10 @@ class CircuitBreaker:
         else:
             state.consecutive_failures += 1
             if state.consecutive_failures >= self.failure_threshold:
-                state.blocked_until = time.monotonic() + self.cooldown_seconds
+                if error_type in PERMANENT_ERROR_TYPES:
+                    state.blocked_until = time.monotonic() + PERMANENT_COOLDOWN_SECONDS
+                else:
+                    state.blocked_until = time.monotonic() + self.cooldown_seconds
 
     def status(self, model_id: str) -> dict:
         """返回当前 circuit 状态（供观测/调试）。"""
@@ -95,6 +118,6 @@ def check_circuit(model_id: str) -> None:
     get_circuit_breaker().check_circuit(model_id)
 
 
-def record_result(model_id: str, success: bool) -> None:
+def record_result(model_id: str, success: bool, error_type: str | None = None) -> None:
     """便捷函数：记录 model 的一次调用结果。"""
-    get_circuit_breaker().record_result(model_id, success)
+    get_circuit_breaker().record_result(model_id, success, error_type=error_type)

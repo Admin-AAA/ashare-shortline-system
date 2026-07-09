@@ -606,7 +606,8 @@ async def run_skill_agent(
 
         except Exception as e:
             last_error = str(e)
-            record_result(model_id, success=False)
+            # 按错误类型差异化冷却：402/auth/model 永久性错误长冷却，避免无效重试
+            record_result(model_id, success=False, error_type=_route_error_status(e))
             if attempt < max_retries:
                 wait = backoff ** attempt
                 await asyncio.sleep(wait)
@@ -971,7 +972,7 @@ async def run_skill_agent_direct(
                         continue
                     break
 
-        record_result(route_key, success=False)
+        record_result(route_key, success=False, error_type=last_status)
         error_message = (
             f"{route.name} ({route.model}) 失败: {last_error}"
             if last_error
