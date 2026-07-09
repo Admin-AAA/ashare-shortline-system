@@ -13,6 +13,7 @@ import type {
   DashboardOverview,
   DataHealthDiagnostic,
   HomeBootstrap,
+  OutcomeSummary,
   WinRateSummary,
 } from "../types";
 import { CardSkeleton, EmptyState, ErrorPage } from "../components/StateViews";
@@ -43,6 +44,8 @@ export function HomePage() {
 
   // 近 5 交易日 formal 推荐聚合胜率（驾驶舱状态条「近 5 日胜率」真实数据源，替代原硬编码占位 —）
   const [winRate, setWinRate] = useState<WinRateSummary | null>(null);
+  // 候选股票历史已结算推荐胜率（北极星 B 项「历史同策略胜率」一屏可见）
+  const [outcomeMap, setOutcomeMap] = useState<Record<string, OutcomeSummary>>({});
 
   useEffect(() => {
     const controller = new AbortController();
@@ -90,6 +93,24 @@ export function HomePage() {
       });
     return () => controller.abort();
   }, []);
+
+  // 候选股票历史已结算推荐胜率：recommendations 变化时按 codes 批量拉取（B 项历史同策略胜率）
+  useEffect(() => {
+    const codes = (data?.recommendations ?? []).map((r) => r.code).filter(Boolean);
+    if (codes.length === 0) {
+      setOutcomeMap({});
+      return;
+    }
+    let cancelled = false;
+    api.recommendationOutcomeSummary(codes).then((m) => {
+      if (!cancelled) setOutcomeMap(m);
+    }).catch(() => {
+      /* 历史胜率非阻塞，失败则候选卡不显示徽章 */
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [data?.recommendations]);
 
   if (loading) return <HomePageSkeleton />;
   if (error) return <ErrorPage title="驾驶舱加载失败" message={error} onRetry={() => window.location.reload()} />;
@@ -142,7 +163,7 @@ export function HomePage() {
         </div>
 
         {/* 右列：龙头候选（视觉重心） */}
-        <CandidatePanel items={recommendations} onViewAll={() => navigateSection("pool")} />
+        <CandidatePanel items={recommendations} outcomeMap={outcomeMap} onViewAll={() => navigateSection("pool")} />
       </div>
     </div>
   );
@@ -567,9 +588,11 @@ function DataHealthCard({
 // ─── 龙头候选面板（视觉重心） ─────────────────────────────────
 function CandidatePanel({
   items,
+  outcomeMap,
   onViewAll,
 }: {
   items: CockpitRecommendation[];
+  outcomeMap: Record<string, OutcomeSummary>;
   onViewAll: () => void;
 }) {
   const top = items.slice(0, 5);
@@ -605,7 +628,7 @@ function CandidatePanel({
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "var(--space-3)" }}>
           {top.map((c, i) => (
-            <CandidateCard key={c.recommendation_id} item={c} rank={i + 1} />
+            <CandidateCard key={c.recommendation_id} item={c} rank={i + 1} outcome={outcomeMap[c.code]} />
           ))}
         </div>
       )}
@@ -632,7 +655,15 @@ function CandidatePanel({
   );
 }
 
-function CandidateCard({ item, rank }: { item: CockpitRecommendation; rank: number }) {
+function CandidateCard({
+  item,
+  rank,
+  outcome,
+}: {
+  item: CockpitRecommendation;
+  rank: number;
+  outcome?: OutcomeSummary;
+}) {
   const riskTone =
     item.risk_level === "high"
       ? "var(--market-up)"
@@ -641,6 +672,12 @@ function CandidateCard({ item, rank }: { item: CockpitRecommendation; rank: numb
       : "var(--market-down)";
   const toneClass =
     item.risk_level === "high" ? "tag--negative" : item.risk_level === "medium" ? "tag--warning" : "tag--positive";
+  // 历史已结算推荐胜率（B 项）：settled>=2 才显示，避免单样本噪声；A 股语义涨红跌绿
+  const histSettled = outcome?.settled ?? 0;
+  const histWr = outcome?.win_rate ?? 0;
+  const histAvg = outcome?.avg_return ?? 0;
+  const showHist = histSettled >= 2;
+  const histTone = histWr >= 55 ? "var(--market-up)" : histWr >= 45 ? "var(--text-muted)" : "var(--market-down)";
 
   return (
     <div
@@ -672,6 +709,23 @@ function CandidateCard({ item, rank }: { item: CockpitRecommendation; rank: numb
           {item.risk_level}
         </span>
         <LlmStanceBadge stance={item.llm_stance} delta={item.llm_delta} />
+        {showHist && (
+          <span
+            className="text-mono"
+            title={`该股历史已结算推荐 ${histSettled} 笔：胜率 ${histWr}%，均收益 ${histAvg}%`}
+            style={{
+              fontSize: "var(--text-xs)",
+              fontWeight: 600,
+              color: histTone,
+              padding: "2px 6px",
+              borderRadius: "var(--radius-sm, 4px)",
+              border: `1px solid ${histTone}40`,
+              whiteSpace: "nowrap",
+            }}
+          >
+            史{histWr}%
+          </span>
+        )}
       </div>
 
       {item.recommend_price != null || item.stop_loss != null || item.take_profit != null ? (
