@@ -461,6 +461,39 @@ def test_apply_pool_rules_climax_watchlist_surfaces_near_miss_candidates():
     assert all(c.get("watchlist") for c in out["watchlist"])
 
 
+def test_apply_pool_rules_climax_degraded_mode_soft_floor_engages():
+    """T12 修复回归：LLM 不可用（降级模式，本机未配 ASHARE_AGENT_SKILL_API_KEY）时，
+    高潮阶段也应启用软降线兜底，保证「每天可见推荐」。
+
+    复现 2026-07-10 断档：有效线≈99、最佳候选 89.01，原逻辑因 _agent_unavailable
+    检测失效（缺失 key 的 review 路径不置该 flag）导致 _soft_floor_allowed=False，
+    60 只 skill 过线候选全被挡、rec_n=0。修复后传入 agent_available=False 即可触发兜底。
+    """
+    cards = [_card(code, score) for code, score in [
+        ("A", 89.01), ("B", 87.0), ("C", 85.0), ("D", 82.0),
+    ]]
+    snapshot = {"sample_count": 100, "up_count": 72, "limit_up_count": 5, "limit_down_count": 0}
+    result = apply_pool_rules(
+        cards, output_count=6, score_line=80, market_snapshot=snapshot, agent_available=False,
+    )
+    # 降级模式软降线兜底：dynamic_line≈88.01，最佳候选 A 过线，输出非空
+    assert [c["code"] for c in result] == ["A"]
+    assert result[0]["score_line_meta"]["degraded_agent_unavailable"] is True
+    assert result[0]["score_line_meta"]["dynamic_soft_floor_applied"] is True
+
+
+def test_apply_pool_rules_climax_full_mode_stays_silent():
+    """对比回归：LLM 可用（完整系统）时，高潮阶段仍保持严格——
+    宁可零推荐也不追高。确保 T12 修复没有放松完整系统的质量闸门（D 项：准确性优先）。"""
+    cards = [_card(code, score) for code, score in [("A", 89.01), ("B", 87.0)]]
+    snapshot = {"sample_count": 100, "up_count": 72, "limit_up_count": 5, "limit_down_count": 0}
+    result = apply_pool_rules(
+        cards, output_count=6, score_line=80, market_snapshot=snapshot, agent_available=True,
+    )
+    # 完整系统高潮阶段不过线候选 → 空（保留原意图：不追高）
+    assert result == []
+
+
 def test_apply_pool_rules_watchlist_empty_when_not_climax():
     cards = [_card(code, score) for code, score in [("A", 60), ("B", 55)]]
     out = apply_pool_rules(

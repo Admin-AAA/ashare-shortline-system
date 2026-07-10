@@ -876,8 +876,16 @@ def apply_pool_rules(
     watchlist_top_n: int = 8,
     watchlist_min_hit: int = 3,
     same_day_industry_counts: dict[str, int] | None = None,
+    agent_available: bool = True,
 ) -> list[dict[str, Any]] | dict[str, Any]:
-    """按分数线过滤正式推荐，展示上限不参与核心选股决策。"""
+    """按分数线过滤正式推荐，展示上限不参与核心选股决策。
+
+    agent_available: LLM Agent 审查是否可用（由调用方按全局配置传入）。
+    False 表示系统处于降级模式（未配置 ASHARE_AGENT_SKILL_API_KEY 等），
+    此时高潮/强牛阶段也启用软降线兜底，保证「每天可见推荐」（北极星 A 项）。
+    与 card 级 ``agent_unavailable_fallback`` 原因等效，但来源更可靠——
+    配置级缺失不会被单次 review 异常吞掉，避免任何瞬时故障都必然零推荐。
+    """
     if display_limit is None and output_count is not None:
         display_limit = resolve_display_limit(output_count, market_snapshot)
     score_line_context = resolve_score_line_context(
@@ -1039,10 +1047,17 @@ def apply_pool_rules(
         "agent_unavailable_fallback" in ((c.get("score_line_meta") or {}).get("reasons") or [])
         for c in ordered
     )
+    # 配置级降级：LLM key 缺失/未配置时系统整体处于降级模式，与 card 级
+    # agent_unavailable_fallback 等效，但来源更可靠（不会被单次 review 异常吞掉）。
+    # 真实部署（本机未配置 ASHARE_AGENT_SKILL_API_KEY）所有 run 均为降级，
+    # 应启用软降线兜底保证「每天可见推荐」（北极星 A 项）。
+    _agent_config_unavailable = not agent_available
+    _degraded = _agent_unavailable or _agent_config_unavailable
     # 常规软降线：非高潮/强牛阶段、top 距有效线 ≤20 分时启用，避免零推荐。
-    # 高潮/强牛阶段默认禁用（宁可零推荐也不追高）；但若 LLM 暂不可用（降级模式），
-    # 放宽上限作为最后兜底，保证「每天可见推荐」——降级状态已在前端明确标注。
-    _soft_floor_allowed = (not _disable_soft_floor) or _agent_unavailable
+    # 高潮/强牛阶段默认禁用（宁可零推荐也不追高）；但若 LLM 暂不可用（降级模式，
+    # 配置级或 card 级），放宽上限作为最后兜底，保证「每天可见推荐」——
+    # 降级状态已在前端明确标注（指标页 agent_runtime=llm 但实际走规则预审降级）。
+    _soft_floor_allowed = (not _disable_soft_floor) or _degraded
     if not result and ordered and top_final_score > 0 and _soft_floor_allowed:
         soft_floor = round(top_final_score - 1.0, 2)
         base_floor = round(score_line_context["base_score_line"] - 8.0, 2)
@@ -1050,8 +1065,8 @@ def apply_pool_rules(
         # top_score 距有效线 20 分以内启用降线（防止质量过差时强行出票）
         gap = score_line_context["effective_score_line"] - top_final_score
         # 降级模式（LLM 不可用）放宽上限，作为最后兜底避免零推荐
-        _degraded = _agent_unavailable and gap > 20.0
-        if 0 < gap <= 20.0 or _degraded:
+        _degraded_gap = _degraded and gap > 20.0
+        if 0 < gap <= 20.0 or _degraded_gap:
             score_line_context["dynamic_soft_floor_applied"] = True
             score_line_context["dynamic_soft_floor"] = dynamic_line
             score_line_context["soft_floor_gap"] = round(gap, 2)
