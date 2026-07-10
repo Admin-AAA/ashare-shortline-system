@@ -76,3 +76,15 @@
 
 - 不要把服务器密码、API Key、数据库密码写入 Git 跟踪文件
 - .env 文件不上传 GitHub
+
+# Git 提交规则
+
+**完成一批改动后主动提交并推送**，不要把改动积压在工作区。
+
+- 按改动主题切分 commit：单一主题一个 commit，跨主题分多个；不为分而分，也不机械全塞一个。
+- commit message 首行 `type: 简述`（fix/feat/chore/refactor/docs），空行后中文正文，末尾加 `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`。
+- 提交前扫一遍未跟踪新文件，命中 `password|secret|api_key|token|1279990918|aowang` 则停下问用户，不要提交凭据。
+- 在 main 分支上有新改动时，先开 feature 分支再提交，不直接往 main 提交。
+- push 用 `git push -u origin <分支>`（首次设 upstream）。
+- **如果在 worktree 里**（`git rev-parse --git-common-dir` 返回绝对路径）：当前分支提交 + push 后，切到主仓库 main、`git pull --ff-only origin main`、`git merge --no-ff <当前分支>`、`git push origin main`，把改动合并回 main。冲突不要硬解，停下问用户。
+- 禁止 `git push --force`、`git reset --hard`、删 worktree，除非用户明确要求。
