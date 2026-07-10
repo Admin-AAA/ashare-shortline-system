@@ -19,7 +19,7 @@ import type {
   ScheduledTaskRun,
 } from "../types";
 import { CardSkeleton, EmptyState, ErrorPage } from "../components/StateViews";
-import { CollapsiblePanel } from "../components/CollapsiblePanel";
+import { Panel } from "../components/Panel";
 
 /**
  * 数据健康度 —— 配置页「数据健康」Tab（与预设管理平级）。
@@ -179,7 +179,7 @@ export function DataHealthSection() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
       {/* 评分概览 + 修复操作 */}
-      <CollapsiblePanel
+      <Panel
         kicker="数据健康度"
         title={
           <>
@@ -226,11 +226,11 @@ export function DataHealthSection() {
           error={remediationError}
           result={remediationResult}
         />
-      </CollapsiblePanel>
+      </Panel>
 
       {/* 各表覆盖情况 —— 全量 */}
       {tableRows.length > 0 && (
-        <CollapsiblePanel
+        <Panel
           kicker="数据表覆盖"
           title={`共 ${tableRows.length} 张表`}
           actions={
@@ -289,12 +289,12 @@ export function DataHealthSection() {
               </tbody>
             </table>
           </div>
-        </CollapsiblePanel>
+        </Panel>
       )}
 
       {/* 数据域接入覆盖 —— 指标级：哪些数据域有接入策略且持续拉取 */}
       {domSummary && (
-        <CollapsiblePanel
+        <Panel
           kicker="数据域覆盖"
           title={
             <>
@@ -312,12 +312,12 @@ export function DataHealthSection() {
           }
         >
           <DomainCoverageSection summary={domSummary} />
-        </CollapsiblePanel>
+        </Panel>
       )}
 
       {/* 数据源接入 —— 通 / 不通 / 未测试 / 未启用，计入健康评分 */}
       {dsSummary && (
-        <CollapsiblePanel
+        <Panel
           kicker="数据源接入"
           title={dsTitle}
           actions={
@@ -331,16 +331,16 @@ export function DataHealthSection() {
           }
         >
           <DataSourceSection summary={dsSummary} />
-        </CollapsiblePanel>
+        </Panel>
       )}
 
       {/* 问题列表 —— 全量，按严重度分组 */}
       {issues.length > 0 && (
-        <CollapsiblePanel kicker="诊断问题" title={`共 ${issues.length} 个`}>
+        <Panel kicker="诊断问题" title={`共 ${issues.length} 个`}>
           <IssueList title="高优先级" tone="down" icon={<XCircle size={14} />} items={highIssues} />
           <IssueList title="中优先级" tone="warn" icon={<AlertTriangle size={14} />} items={mediumIssues} />
           <IssueList title="低优先级" tone="muted" icon={<CheckCircle2 size={14} />} items={lowIssues} />
-        </CollapsiblePanel>
+        </Panel>
       )}
 
       {issues.length === 0 && tableRows.length === 0 && (

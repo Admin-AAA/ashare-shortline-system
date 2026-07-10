@@ -8,7 +8,7 @@ import {
   ListChecks,
 } from "lucide-react";
 import type { DashboardOverview, MarketSnapshot, RunSummary } from "../types";
-import { CollapsiblePanel } from "./CollapsiblePanel";
+import { Panel } from "./Panel";
 import { EmptyState } from "./StateViews";
 import { RunModeBadge } from "./RunModeBadge";
 
@@ -85,7 +85,7 @@ export function MarketTempPanel({
   const isCold = heat < 30;
 
   return (
-    <CollapsiblePanel
+    <Panel
       kicker="市场温度"
       title={
         <>
@@ -153,7 +153,7 @@ export function MarketTempPanel({
           </div>
         </div>
       )}
-    </CollapsiblePanel>
+    </Panel>
   );
 }
 

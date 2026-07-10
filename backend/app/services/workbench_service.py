@@ -1493,6 +1493,14 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         preset = db.get(Preset, run.preset_id) if run.preset_id else None
 
     data_source = _normalize_data_source(params.get("data_source"))
+    trade_date_override = params.get("trade_date_override") or None
+    if trade_date_override:
+        logger.info("run %s using trade_date_override=%s", run_id, trade_date_override)
+        # 覆盖 run 记录的 trade_date，确保推荐入库的 trade_date 与历史日期一致
+        existing_run = db.get(RecommendationRun, run_id)
+        if existing_run:
+            existing_run.trade_date = trade_date_override
+            db.commit()
     _update_run_progress(
         db,
         run_id,
@@ -1509,9 +1517,9 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             from app.services.market_pool import get_market_universe_from_pool_with_realtime
             stocks, snapshot = get_market_universe_from_pool_with_realtime(db)
         elif data_source == DATA_SOURCE_LOCAL_POOL_PREFERRED:
-            stocks, snapshot = get_market_universe_from_pool(db, refresh=True)
+            stocks, snapshot = get_market_universe_from_pool(db, refresh=True, as_of_date=trade_date_override)
         else:
-            stocks, snapshot = get_market_universe_from_pool(db, refresh=False)
+            stocks, snapshot = get_market_universe_from_pool(db, refresh=False, as_of_date=trade_date_override)
     except Exception as exc:
         _mark_run_failed(db, run_id, exc)
         raise
@@ -3680,7 +3688,7 @@ def _merge_run_params(db: Session, preset: Preset | None, payload: dict[str, Any
         ),
         "skills": skills,
     }
-    for key in ("matrix_batch_id", "matrix_batch_name", "matrix_run"):
+    for key in ("matrix_batch_id", "matrix_batch_name", "matrix_run", "trade_date_override"):
         if key in payload:
             params[key] = payload.get(key)
     return params

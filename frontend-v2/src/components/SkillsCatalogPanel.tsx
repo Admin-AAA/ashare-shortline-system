@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { SkillSummary } from "../types";
-import { CollapsiblePanel } from "./CollapsiblePanel";
+import { Panel } from "./Panel";
 
 /**
  * 策略清单面板 —— 展示 8 个策略的名称/模式/独立性/回测胜率。
@@ -60,26 +60,26 @@ export function SkillsCatalogPanel() {
 
   if (loading) {
     return (
-      <CollapsiblePanel kicker="策略清单" title="8 策略总览">
+      <Panel kicker="策略清单" title="8 策略总览">
         <div style={{ padding: "var(--space-4)", color: "var(--text-muted)", fontSize: 13 }}>
           正在加载策略清单…
         </div>
-      </CollapsiblePanel>
+      </Panel>
     );
   }
 
   if (error) {
     return (
-      <CollapsiblePanel kicker="策略清单" title="8 策略总览">
+      <Panel kicker="策略清单" title="8 策略总览">
         <div style={{ padding: "var(--space-4)", color: "var(--color-down)", fontSize: 13 }}>
           {error}
         </div>
-      </CollapsiblePanel>
+      </Panel>
     );
   }
 
   return (
-    <CollapsiblePanel
+    <Panel
       kicker="策略清单"
       title="8 策略总览"
       actions={
@@ -160,7 +160,7 @@ export function SkillsCatalogPanel() {
           color="var(--color-up)"
         />
       </div>
-    </CollapsiblePanel>
+    </Panel>
   );
 }
 

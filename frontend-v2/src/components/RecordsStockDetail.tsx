@@ -8,7 +8,7 @@ import { api } from "../api/client";
 import type { RecommendationDetail, RecommendationOutcome } from "../types";
 import { ErrorPage, PageSkeleton } from "./StateViews";
 import { RecommendationDetailCard } from "./RecommendationDetailCard";
-import { CollapsiblePanel } from "./CollapsiblePanel";
+import { Panel } from "./Panel";
 import {
   Metric,
   ReturnCell,

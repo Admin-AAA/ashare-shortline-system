@@ -3,7 +3,7 @@ import { Fragment, useCallback, useState } from "react";
 import { api } from "../api/client";
 import type { RecommendationDetail, RecommendationHistoryResponse } from "../types";
 import { PageSkeleton, ErrorPage, EmptyState } from "../components/StateViews";
-import { CollapsiblePanel } from "../components/CollapsiblePanel";
+import { Panel } from "../components/Panel";
 import { useApi } from "../app/useApi";
 import { useUrlRoute } from "../app/useUrlRoute";
 import { queryParam } from "../app/nav";
@@ -119,7 +119,7 @@ export function HistoryPage() {
   const hasReturn = itemsWithReturn.length > 0;
 
   return (
-    <CollapsiblePanel
+    <Panel
       kicker="复盘"
       title="推荐历史"
       actions={
@@ -412,7 +412,7 @@ export function HistoryPage() {
           </div>
         </>
       )}
-    </CollapsiblePanel>
+    </Panel>
   );
 }
 

@@ -149,9 +149,11 @@ def _resolve_snapshot_trade_date(db: Session, trade_date: str | None = None) -> 
     return date.today().isoformat()
 
 
-def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def get_market_universe_from_pool(db: Session, refresh: bool = False, as_of_date: str | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     settings = get_settings()
-    quotes, quote_meta = _load_or_refresh_quotes(db, settings) if refresh else _load_quotes_from_pool(db, settings, skip_metrics=True)
+    # as_of_date 指定历史日期时强制走只读路径（不刷新），避免用最新行情覆盖历史日期的语义
+    effective_refresh = refresh and (as_of_date is None)
+    quotes, quote_meta = _load_or_refresh_quotes(db, settings) if effective_refresh else _load_quotes_from_pool(db, settings, skip_metrics=True, as_of_date=as_of_date)
     total_quote_count = len(quotes)
     eligible_quotes = _eligible_market_quotes(quotes)
     filter_summary = _candidate_filter_summary(quotes)
@@ -163,9 +165,9 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[l
 
     candidate_codes = [quote["code"] for quote in candidates]
     latest_quote_trade_date = _latest_trade_date_from_quotes(candidates)
-    latest_allowed_bar_date = _latest_allowed_bar_date()
+    latest_allowed_bar_date = as_of_date or _latest_allowed_bar_date()
     latest_backfill_count = 0
-    if refresh and candidate_codes and latest_quote_trade_date:
+    if effective_refresh and candidate_codes and latest_quote_trade_date:
         backfill_target_trade_date = _required_bar_date_for_quote({"trade_date": latest_quote_trade_date})
         bar_summaries = _load_cached_bars_summary(db, candidate_codes, 30)
         missing_latest_trade_date_quotes = []
@@ -190,8 +192,8 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False) -> tuple[l
     kline_usage: Counter[str] = Counter()
 
     # ── 批量预加载日K（非刷新模式），避免 N 次逐个查询 ──
-    if not refresh:
-        bars_batch = _load_cached_bars_batch(db, candidate_codes, settings.market_kline_days)
+    if not effective_refresh:
+        bars_batch = _load_cached_bars_batch(db, candidate_codes, settings.market_kline_days, as_of_date=as_of_date)
     else:
         bars_batch = None
 
@@ -770,12 +772,13 @@ def _execution_recall_count(recall_plan: dict[str, Any], eligible_count: int) ->
     return min(eligible_count, max(broad_count, target_count * 3))
 
 
-def _load_quotes_from_pool(db: Session, settings: Any, skip_metrics: bool = False) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _load_quotes_from_pool(db: Session, settings: Any, skip_metrics: bool = False, as_of_date: str | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     active_sources = enabled_sources(db, "quote", _quote_sources(settings))
     quotes = _load_cached_quotes(
         db,
         allowed_sources=set(active_sources) if active_sources else None,
         skip_metrics=skip_metrics,
+        as_of_date=as_of_date,
     )
     if not active_sources and not quotes:
         raise MarketDataError("所有报价数据源都已关闭，且本地数据池没有可用缓存。请至少启用一个报价源。")
@@ -883,21 +886,26 @@ def _load_cached_quotes(
     max_age: timedelta | None = None,
     allowed_sources: set[str] | None = None,
     skip_metrics: bool = False,
+    as_of_date: str | None = None,
 ) -> list[dict[str, Any]]:
     cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - max_age if max_age is not None else None
-    latest_allowed_date = _latest_allowed_quote_date()
+    latest_allowed_date = as_of_date or _latest_allowed_quote_date()
+    base_cond = [StockQuote.trade_date <= latest_allowed_date]
+    if as_of_date:
+        # 历史日期模式：inactive 只是表示"不再是最新行情"，历史数据仍然有效
+        base_cond.append(StockQuote.trade_date == as_of_date)
+    else:
+        base_cond.append(StockQuote.freshness_status != "inactive")
     stmt = (
         select(StockQuote)
-        .where(
-            StockQuote.freshness_status != "inactive",
-            StockQuote.trade_date <= latest_allowed_date,
-        )
+        .where(*base_cond)
         .order_by(StockQuote.quality_score.desc(), StockQuote.snapped_at.desc())
     )
-    if cutoff is not None:
+    if cutoff is not None and as_of_date is None:
+        # max_age 仅对实时刷新有意义，历史日期覆盖时跳过时效过滤
         stmt = stmt.where(StockQuote.snapped_at >= cutoff)
     rows = _dedupe_latest_quote_rows(db.scalars(stmt).all())
-    local_metrics = {} if skip_metrics else _quote_metrics_from_bars(db, [row.code for row in rows])
+    local_metrics = {} if skip_metrics else _quote_metrics_from_bars(db, [row.code for row in rows], as_of_date=as_of_date)
     quotes = []
     for row in rows:
         quote = {
@@ -968,12 +976,12 @@ def enrich_quote_with_local_metrics(db: Session, code: str, quote: dict[str, Any
     return enriched
 
 
-def _quote_metrics_from_bars(db: Session, codes: list[str]) -> dict[str, dict[str, float]]:
+def _quote_metrics_from_bars(db: Session, codes: list[str], as_of_date: str | None = None) -> dict[str, dict[str, float]]:
     unique_codes = sorted({str(code) for code in codes if code})
     if not unique_codes:
         return {}
 
-    latest_allowed_date = _latest_allowed_bar_date()
+    latest_allowed_date = as_of_date or _latest_allowed_bar_date()
     year_start = date.fromisoformat(latest_allowed_date).replace(month=1, day=1).isoformat()
     # 只查询需要的列 + 限制日期范围（避免加载全年数据，只需最近 ~150 交易日）
     cutoff_date = (date.fromisoformat(latest_allowed_date) - timedelta(days=220)).isoformat()
@@ -1557,12 +1565,12 @@ def _persist_kbars(db: Session, bars: list[dict[str, Any]]) -> None:
 
 
 def _load_cached_bars_batch(
-    db: Session, codes: list[str], limit: int
+    db: Session, codes: list[str], limit: int, as_of_date: str | None = None
 ) -> dict[str, list[dict[str, Any]]]:
-    """批量加载日K（DailyKbar 单表，无需 JOIN）。"""
+    """批量加载日K（DailyKbar 单表，无需 JOIN）。as_of_date 用于历史日期补跑。"""
     if not codes:
         return {}
-    latest_allowed_date = _latest_allowed_bar_date()
+    latest_allowed_date = as_of_date or _latest_allowed_bar_date()
 
     all_rows = db.scalars(
         select(DailyKbar)

@@ -76,3 +76,25 @@ def test_strategies_endpoint_traceable_fields_present():
         assert "last_recommendation_date" in p, f"{d['skill_id']} 缺 last_recommendation_date"
     with_dates = [d for d in called if d["performance"]["last_recommendation_date"]]
     assert with_dates, "已调用策略中至少应有一条带最近命中日期"
+
+
+def test_strategies_reliable_flag_consistent_with_sample_count():
+    """T7 统计可信度：performance.reliable 须与样本数阈值(20)严格一致。
+
+    防止前端在策略胜率下方误标/漏标「样本不足」——这正是 self_check 长期预警的
+    「5 策略样本<20 胜率不可信」用户可见缺口。可靠数据源 = 后端此字段。
+    """
+    client = TestClient(app)
+    data = client.get("/api/strategies").json()
+    called = [d for d in data if d["performance"] is not None]
+    assert called, "应有至少一个已调用策略"
+    for d in called:
+        p = d["performance"]
+        assert isinstance(p["reliable"], bool), f"{d['skill_id']} reliable 须为布尔"
+        expected = p["sample_count"] >= 20
+        assert p["reliable"] == expected, (
+            f"{d['skill_id']} reliable={p['reliable']} 与 sample_count={p['sample_count']} 阈值 20 不一致"
+        )
+    # 端到端真值：当前生产库至少存在 1 个 n<20 的低样本策略（reliable=False）
+    low = [d for d in called if not d["performance"]["reliable"]]
+    assert low, "当前生产库应有样本<20 的策略使其 reliable=False（否则阈值无意义）"

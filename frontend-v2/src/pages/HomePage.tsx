@@ -23,7 +23,7 @@ import {
   Sep,
 } from "../components/HomePanels";
 import { StockTicker } from "../components/StockTicker";
-import { CollapsiblePanel } from "../components/CollapsiblePanel";
+import { Panel } from "../components/Panel";
 import { LlmStanceBadge } from "../components/LlmStanceBadge";
 import { useUrlRoute } from "../app/useUrlRoute";
 
@@ -135,9 +135,9 @@ export function HomePage() {
 
       {/* 温度 —— 原市场宽度，提升为驾驶舱首屏核心指标 */}
       {boot && (
-        <CollapsiblePanel kicker="温度" title="今日涨跌家数">
+        <Panel kicker="温度" title="今日涨跌家数">
           <MarketBreadthPanel snapshot={boot.market_snapshot} />
-        </CollapsiblePanel>
+        </Panel>
       )}
 
       <div
@@ -153,12 +153,12 @@ export function HomePage() {
           <RunStatusPanel run={current_run} hasRun={hasRun} canRun={canRun} onRun={() => navigate("/run")} onViewHistory={() => navigateSection("history")} />
 
           {boot && (
-            <CollapsiblePanel kicker="最近产出" title="最新推荐 run">
+            <Panel kicker="最近产出" title="最新推荐 run">
               <LatestRunCard
                 run={boot.recent_runs.latest}
                 onOpen={() => navigateSection("dashboard")}
               />
-            </CollapsiblePanel>
+            </Panel>
           )}
         </div>
 
@@ -367,7 +367,7 @@ function RunStatusPanel({
   onViewHistory: () => void;
 }) {
   return (
-    <CollapsiblePanel
+    <Panel
       kicker="运行状态"
       title={
         <>
@@ -403,7 +403,7 @@ function RunStatusPanel({
           </button>
         </div>
       )}
-    </CollapsiblePanel>
+    </Panel>
   );
 }
 
@@ -451,7 +451,7 @@ function DataHealthCard({
   const topIssues = [...highIssues, ...mediumIssues].slice(0, 4);
 
   return (
-    <CollapsiblePanel
+    <Panel
       kicker="数据健康度"
       title={
         <>
@@ -601,7 +601,7 @@ function DataHealthCard({
           )}
         </div>
       )}
-    </CollapsiblePanel>
+    </Panel>
   );
 }
 
@@ -618,7 +618,7 @@ function CandidatePanel({
   const top = items.slice(0, 5);
 
   return (
-    <CollapsiblePanel
+    <Panel
       kicker="龙头候选 · 今日 top 5"
       title={
         <>
@@ -671,7 +671,7 @@ function CandidatePanel({
           <span>通过率 {passRate(items).toFixed(0)}%</span>
         </div>
       )}
-    </CollapsiblePanel>
+    </Panel>
   );
 }
 
