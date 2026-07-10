@@ -101,7 +101,7 @@ async def run_skill_reviews(
             # 标准化字段名：SkillReviewOutput 用 evidence/score，下游用 supports/score_delta
             raw.setdefault("runtime", "agent_skill_agno")
             raw.setdefault("supports", list(raw.get("evidence") or []))
-            raw["score_delta"] = round(float(raw.get("score", 50)) - 50.0, 2)
+            raw["score_delta"] = round(max(-18.0, min(16.0, float(raw.get("score", 50)) - 50.0)), 2)
             result["review"] = raw
             result["hallucination_check"] = hc
 
