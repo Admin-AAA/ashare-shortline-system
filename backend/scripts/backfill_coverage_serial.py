@@ -10,6 +10,22 @@ import requests
 
 BASE_URL = "http://localhost:8765"
 
+# skill_id -> 策略中文名（与 backend/skills/*/strategy.yaml 的 name 字段保持一致）
+# records 页展示 run_name，用英文 skill_id 拼接会让人看不出是什么策略，务必用中文名。
+STRATEGY_NAMES = {
+    "small-cap-thematic-momentum": "小盘题材动量",
+    "chip-single-peak-breakout": "筹码单峰突破",
+    "trend-pullback-continuation": "强趋势缩量回踩",
+    "limit-up-reseal-relay": "涨停回封接力",
+    "high-range-breakout-momentum": "阶段新高放量突破",
+    "dragon-tiger-smart-money": "龙虎榜聪明钱接力",
+    "chao-gu-yang-jia-skill": "炒股养家大局观",
+    "chen-xiaoqun-skill": "陈小群龙头战法",
+    "daily-stock-analysis-skill": "基础短线策略",
+    "overnight-holding-method": "隔夜持股法",
+    "sector-relative-strength-leader": "主线相对强度龙头",
+}
+
 LOW_COVERAGE = [
     "small-cap-thematic-momentum",
     "chip-single-peak-breakout",
@@ -31,9 +47,10 @@ DATES = [
 ]
 
 def submit_run(skill_id: str, trade_date: str) -> str | None:
+    strategy_name = STRATEGY_NAMES.get(skill_id, skill_id)
     payload = {
         "single_skill_id": skill_id,
-        "run_name": f"历史补跑v5 {skill_id} {trade_date}",
+        "run_name": f"历史覆盖度补跑 {strategy_name} {trade_date}",
         "run_mode": "experiment",
         "data_source": "local_pool",
         "trade_date_override": trade_date,

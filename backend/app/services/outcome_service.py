@@ -59,11 +59,13 @@ OUTCOME_FAILED = "failed"
 OUTCOME_MISSED = "missed"
 EXECUTED_OUTCOME_LABELS = {OUTCOME_SUCCESS, OUTCOME_FAILED}
 
-# outcome 结算滞后天数：每日推荐需等 K 线走完 horizon（cron 默认 20 天）才会被
+# outcome 结算滞后天数：每日推荐需等 K 线走完 horizon（盘后 cron 默认 horizon_days=5）才会被
 # label_pending_outcomes 标注为 success/failed/missed。滚动窗口模式下自动把
 # end_date 截到 today - SETTLE_LAG_DAYS，保证窗口内推荐均已结算，避免 pending
 # 污染样本（_metric_records_from_rows 虽会跳过 pending，但样本数会偏少且不可解释）。
-SETTLE_LAG_DAYS = 20
+# 5 天 horizon + 2 天缓冲（应对偶发结算延迟），过大会导致近期覆盖度补跑样本被滚动窗口截掉
+# （曾出现 window_days=30 时有效区间被截到仅 10 天，最近补跑的策略样本全部消失）。
+SETTLE_LAG_DAYS = 7
 
 
 def _resolve_window(

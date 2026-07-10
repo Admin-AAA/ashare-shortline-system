@@ -1133,6 +1133,7 @@ async def _run_strategy_exposure(db, payload: dict, task_run_id: str | None = No
     # 1. 拿全部 enabled 策略
     skills = sync_skills(db)
     enabled_ids = [s.skill_id for s in skills if s.enabled]
+    name_by_sid = {s.skill_id: s.name for s in skills}
 
     # 2. 拿近 window_days 各策略「真实」样本数（formal+experiment，排除 backtest 合成回测）
     metrics = metrics_by_strategy(db, window_days=window_days, run_mode=("formal", "experiment"))
@@ -1182,7 +1183,7 @@ async def _run_strategy_exposure(db, payload: dict, task_run_id: str | None = No
                 db,
                 {
                     "single_skill_id": sid,
-                    "run_name": f"曝光补跑 {sid} {trade_date}",
+                    "run_name": f"曝光补跑 {name_by_sid.get(sid, sid)} {trade_date}",
                     "run_mode": "experiment",
                     "skip_aux_refresh": True,
                     "disable_agent_review": True,
