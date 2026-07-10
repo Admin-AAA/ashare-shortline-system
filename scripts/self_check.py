@@ -108,6 +108,46 @@ def check_b_item(db) -> None:
         f'stance={row[7]} llm_delta={row[6]} 缺失={missing_str}'
     )
 
+    # LLM delta 缺失时追加路由健康诊断：区分「LLM 本身不可用」vs「路由配置错配」两类根因，
+    # 避免像第176轮那样——model_route_config.base_url 指向 api.deepseek.com 但用的是
+    # jucode.cn 的 key，401 被误判为"key 失效"实际是 base_url/key 提供商不匹配。
+    if 'LLM delta' in missing:
+        _check_llm_route_health(db)
+
+
+def _check_llm_route_health(db) -> None:
+    """LLM delta 缺失时的路由健康诊断：查最近 llm_review_cache 命中情况 + 路由启用状态。"""
+    try:
+        cache_row = db.execute(text(
+            "SELECT MAX(created_at) AS latest, "
+            "TIMESTAMPDIFF(MINUTE, MAX(created_at), NOW()) AS mins_since_latest "
+            "FROM llm_review_cache"
+        )).fetchone()
+        route_rows = db.execute(text(
+            "SELECT route_id, name, base_url, model, enabled, "
+            "(api_key IS NOT NULL AND api_key != '') AS has_custom_key "
+            "FROM model_route_config WHERE enabled = 1"
+        )).fetchall()
+    except Exception as exc:
+        print(f'  ⚠️ LLM 路由诊断查询失败: {exc}')
+        return
+
+    # 用「距最近一次缓存命中的分钟数」而非「窗口内计数」——后者会被窗口边界外的历史记录
+    # 掩盖真实空窗（如本轮修复前 10:34→15:30 长达 5h 空窗，24h 计数仍 >0 不会报警）。
+    mins_since = cache_row[1] if cache_row and cache_row[1] is not None else None
+    STALE_THRESHOLD_MIN = 180  # formal run 按小时触发，>3h 无命中即视为异常
+    if mins_since is None or mins_since > STALE_THRESHOLD_MIN:
+        hint = f'{mins_since}分钟前' if mins_since is not None else '从未命中过'
+        print(f'  ⚠️ 最近一次 llm_review_cache 命中是 {hint}（>{STALE_THRESHOLD_MIN}分钟无命中，LLM 审查可能全局失效）')
+        if not route_rows:
+            print('    根因候选: model_route_config 无已启用路由')
+        else:
+            for r in route_rows:
+                key_note = '自定义 key' if r[5] else '系统默认 key(.env ASHARE_AGENT_SKILL_API_KEY)'
+                print(f'    路由 {r[1]} base_url={r[2]} model={r[3]} 使用{key_note}')
+            print('    排查建议: 前端「设置→模型路由」点「测试」验证该 base_url 下系统默认 key 是否真实可用')
+            print('    （常见根因：base_url 指向的 provider 与 .env key 发放方不一致，如 base_url=deepseek.com 但 key 是 jucode.cn 的）')
+
 
 def check_c_item(db) -> set:
     """C 项：策略命中覆盖。返回已命中策略集合供 E 项使用。"""
