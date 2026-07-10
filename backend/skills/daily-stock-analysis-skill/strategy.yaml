@@ -281,6 +281,19 @@ risk:
       level: medium
       flag: 震荡期中价股风险（avg_cost 50-100 WR=41.2% vs 非震荡 75.6%）
       score_delta: -6
+    # amount_yi 20-30 扩展：30-60 亿已被下方规则覆盖(-8)，但 20-30 亿同属毒区未覆盖。
+    # LIVE 验证（第180轮 T3 D项 other 残留毒区，DSA LIVE formal 去重 n=117）：
+    #   amount_yi 20-25: n=15 WR=33% avg=-2.06% | amount_yi 25-30: n=3 WR=33% avg=-3.10%
+    #   amount_yi 30-40: n=6 WR=17% avg=-2.68%（已有规则）
+    #   对照 amount_yi <15: n=57 WR=86% avg=2.84%（小成交额是真实 alpha）
+    # 因果：20-30 亿成交额 = 已出现大资金参与（机构/游资已在博弈），通用技术策略对博弈方向
+    #   判断力弱（依赖 DSA 信号），博弈扰动叠加 DSA 噪声 → WR 崩塌。30 亿以上已有扣分，
+    #   20-30 是覆盖盲区，扩展规则消除盲区（-6，比 30-60 的 -8 略轻，样本n=18边际稍小）。
+    # 反事实：全系统 WR 70.7%→73.3%(+2.7pp)，DSA 单策略 WR 72%→79%(+7pp)。
+    - when: "amount_yi >= 20 and amount_yi < 30"
+      level: medium
+      flag: 成交额中大盘（20-30 亿区间 WR=33%，avg=-2.3%，机构博弈扰动通用技术信号）
+      score_delta: -6
     - when: "amount_yi >= 30 and amount_yi < 60"
       level: medium
       flag: 成交额过大盘（30-60 亿区间 35.5% 胜率，-1.32% 均收益，机构博弈激烈）
