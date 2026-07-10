@@ -6,7 +6,7 @@
 
 项目路径：`~/Desktop/ashare-shortline-system`
 - 后端：`backend/`（Python 3.12 + FastAPI + MySQL）
-- 前端：`frontend-v2/`（React 19 + TypeScript + Vite，端口 5174）—— **当前主用**。`frontend/` 是旧版遗留，不要改。
+- 前端：`frontend-v2/`（React 19 + TypeScript + Vite，端口 5174）
 - 访问 v2：http://localhost:5174/
 
 **触发方式**：手动运行 `bash scripts/run-self-improve.sh`（无 launchd、无锁、无定时）。脚本只有一行 `claude -p "/self-improve"`，编排责任（worktree / commit / merge / 解冲突 / 清理）**全部由你本人在下文「§0 编排」承担**。每次新会话，上下文不累积（禁止用 `/loop`，会撞 1M input limit）。需要并行时直接再跑一次 `run-self-improve.sh`，靠 worktree 隔离互不干扰。
