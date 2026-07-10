@@ -843,6 +843,41 @@ def test_apply_sector_diversity_skips_unknown_industry():
         assert c.get("sector_diversity_penalty", 0) == 0
 
 
+
+def test_apply_pool_rules_respects_same_day_industry_counts_across_runs():
+    """同日其他 formal run 已占满行业组时，本 run 不得再把同组股票放进正式推荐。"""
+    cards = [
+        {
+            **_card("688001", 92),
+            "industry": "半导体",
+            "feature_snapshot": {},
+        },
+        {
+            **_card("002001", 90),
+            "industry": "元器件",
+            "feature_snapshot": {},
+        },
+        {
+            **_card("600001", 88),
+            "industry": "白酒",
+            "feature_snapshot": {},
+        },
+    ]
+
+    result = apply_pool_rules(
+        cards,
+        output_count=10,
+        score_line=70,
+        market_snapshot=_neutral_snapshot(),
+        same_day_industry_counts={"科技硬件": 4},
+    )
+
+    assert [card["code"] for card in result] == ["600001", "688001"]
+    kept_hw = next(card for card in result if card["code"] == "688001")
+    assert kept_hw["sector_diversity_penalty"] == 10.0
+    assert all(card["code"] != "002001" for card in result)
+
+
 # ---------------------------------------------------------------------------
 # T12 空跑修复：LLM 暂不可用时不得零推荐
 # ---------------------------------------------------------------------------

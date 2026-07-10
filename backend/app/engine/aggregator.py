@@ -875,6 +875,7 @@ def apply_pool_rules(
     return_watchlist: bool = False,
     watchlist_top_n: int = 8,
     watchlist_min_hit: int = 3,
+    same_day_industry_counts: dict[str, int] | None = None,
 ) -> list[dict[str, Any]] | dict[str, Any]:
     """按分数线过滤正式推荐，展示上限不参与核心选股决策。"""
     if display_limit is None and output_count is not None:
@@ -1080,7 +1081,7 @@ def apply_pool_rules(
                 sm["passed"] = final_score >= new_effective
                 if final_score >= new_effective:
                     result.append(card)
-    result = _apply_sector_diversity(result)
+    result = _apply_sector_diversity(result, same_day_industry_counts=same_day_industry_counts)
     if return_watchlist:
         watchlist.sort(
             key=lambda c: (c.get("watchlist_gap", 0.0), float(c.get("final_score") or 0)),
@@ -1136,15 +1137,21 @@ def _industry_group(industry: str) -> str:
 
 
 
-def _apply_sector_diversity(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """板块去重：同行业第二只推荐扣 5 分，第三只起扣 10 分，第四只起硬性剔除。
+def _apply_sector_diversity(
+    cards: list[dict[str, Any]],
+    *,
+    same_day_industry_counts: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
+    """板块去重：同行业第二只推荐扣 5 分，第三只起扣 10 分，第六只起硬性剔除。
 
     因果机制：同行业股票高度相关，集中持有没有分散效果。
     跳过未知行业（无 industry 字段的卡片不参与去重）。
     使用关联行业组（_industry_group）：元器件+半导体+通信设备 等高度相关行业归为"科技硬件"组，
     在组内做去重，避免不同 industry 但同涨同跌的股票集中持仓。
+    same_day_industry_counts 用于把同日其他 formal run 已推荐的行业组数量计入基数，
+    防止单 run 内不过线、跨 run 累积后单一板块过度集中。
     """
-    industry_count: dict[str, int] = {}
+    industry_count = dict(same_day_industry_counts or {})
     capped: list[dict[str, Any]] = []
     for card in cards:
         industry = str(card.get("industry") or "")
@@ -1155,7 +1162,7 @@ def _apply_sector_diversity(cards: list[dict[str, Any]]) -> list[dict[str, Any]]
         count = industry_count.get(group, 0) + 1
         industry_count[group] = count
         if count > _MAX_PER_INDUSTRY:
-            # 第四只起硬性剔除，避免单一行业过度集中
+            # 第六只起硬性剔除，避免单一行业过度集中
             continue
         penalty = _SECTOR_DIVERSITY_PENALTY.get(count, _SECTOR_DIVERSITY_PENALTY_DEFAULT)
         if penalty > 0:

@@ -1938,6 +1938,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
 
         recent_codes = _recent_recommended_codes(db, snapshot["trade_date"])
         same_day_codes = _same_day_recommended_codes(db, snapshot["trade_date"], run.run_id)
+        same_day_industry_counts = _same_day_industry_counts(db, snapshot["trade_date"], run.run_id)
         market_score = market_regime_score(snapshot)
         calibrated_weights = _load_calibrated_agg_weights(db)
         cards: list[dict[str, Any]] = []
@@ -2182,6 +2183,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             market_snapshot=snapshot,
             risk_template=params["risk_template"],
             return_watchlist=True,
+            same_day_industry_counts=same_day_industry_counts,
         )
         if isinstance(pool_result, dict):
             cards = pool_result.get("recommendations", [])
@@ -3842,6 +3844,36 @@ def _same_day_recommended_codes(
         stmt = stmt.where(Recommendation.run_id != exclude_run_id)
     rows = db.scalars(stmt).all()
     return {row for row in rows}
+
+
+def _same_day_industry_counts(
+    db: Session, trade_date: str, exclude_run_id: str | None = None
+) -> dict[str, int]:
+    """同一交易日、已由其他 formal run 推荐过的行业组计数（跨 run 行业集中控制）。
+
+    因果：_apply_sector_diversity 的 _MAX_PER_INDUSTRY=5 只在单 run 内生效，但同日多个
+    formal run 各推 3-4 只半导体 → 跨 run 累积 16 只半导体（50% 集中），违反组合分散。
+    返回当日其他 run 已推荐的 group→count，作为本 run _apply_sector_diversity 的基数。
+    用 _industry_group（aggregator）归并关联行业（元器件/半导体/通信设备→科技硬件）。
+    """
+    from app.engine.aggregator import _industry_group
+
+    stmt = (
+        select(Recommendation.industry)
+        .join(RecommendationRun, Recommendation.run_id == RecommendationRun.run_id)
+        .where(RecommendationRun.run_mode == "formal", Recommendation.trade_date == trade_date)
+    )
+    if exclude_run_id is not None:
+        stmt = stmt.where(Recommendation.run_id != exclude_run_id)
+    rows = db.scalars(stmt).all()
+    counts: dict[str, int] = {}
+    for industry in rows:
+        ind = str(industry or "")
+        if not ind or ind == "unknown":
+            continue
+        group = _industry_group(ind)
+        counts[group] = counts.get(group, 0) + 1
+    return counts
 
 
 def _drop_as_repeat_card(
