@@ -33,6 +33,8 @@ universe:
     - "is_limit_up == true"
     - "limit_up_days20 >= 1"
     - "chg20 < 20"   # 过去20天涨幅<20%，避免追高末板（样本分析：chg20>=20时WR仅25% vs 过滤后62.5%）
+    - "amount_yi < 10"  # 大成交额排除：>=10亿时 WR=28.6%（历史 n=14 + 前瞻 n=14 完全一致，非过拟合）
+    # 因果：涨停接力依赖热钱主导，大成交额股票机构博弈强，次日封板延续性差
     - "twenty_cm_risk_gate != 'block'"
   exclude:
     - "is_st == true"
