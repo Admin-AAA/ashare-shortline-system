@@ -72,6 +72,19 @@ phases:
     hard_veto: true
     risk_flags: ["趋势支撑破坏，不做单峰突破"]
 
+  # 弱市半吊子追高毒区：弱市 + pct∈[3,5] → cap 68（低于 score_line 72）
+  # LIVE 验证（2026-07 第174轮 D项残留毒区，chip-single-peak-breakout LIVE formal）：
+  #   弱势 & pct∈[3,5]: n=4 WR=0%（001331 -5.70% / 300347 -5.69% / 601788 -1.78% / 600196 -1.38%）
+  #   对照 弱势 pct<3: n=3 WR=100%（bias_ma5<4且chg20低者全部成功）
+  # 因果：chip 策略依赖单峰密集突破后次日顺势运行，弱市 pct 3-5% 无涨停惯性无超跌安全垫，
+  #   次日无资金接力触发 stop_loss（与 daily-stock-analysis-skill 同一毒区根因一致）。
+  # 数据驱动（第174轮 D项残留毒区 other 归因，LIVE formal rec_* 去重 n=12）。
+  - name: 弱市半吊子追高毒区
+    when: "market_regime == '弱势' and pct >= 3 and pct <= 5"
+    score_cap: 68
+    hard_veto: false
+    risk_flags: ["弱市半吊子追高（当日涨3-5%无封板惯性无超跌安全垫），弱市不宜追多"]
+
   - name: 过热等待
     when: "dist20 > 18 and rsi_12 > 72"
     score_cap: 55
