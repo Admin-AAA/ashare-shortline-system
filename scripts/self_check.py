@@ -431,7 +431,7 @@ def check_d_item(db) -> None:
 
 def check_d_rule_coverage(db, win_rate_baseline: float) -> None:
     """D 项规则覆盖前瞻校验：用当前 strategy.yaml 重跑所有 LIVE formal 失败样本，
-    统计已被当前规则覆盖（会被 hard_veto / universe 排除）的失败笔。
+    统计已被当前规则覆盖（会被 hard_veto / universe / prefilter 排除）的失败笔。
 
     目的：D 项胜率会被"规则加入前的历史失败样本"污染（规则晚于失败样本 commit），
     单看总胜率无法区分"历史污染"vs"真退化"，导致每轮误判持续恶化、循环加规则。
@@ -439,9 +439,10 @@ def check_d_rule_coverage(db, win_rate_baseline: float) -> None:
       - 已被当前规则覆盖：待前瞻验证（下一个交易日 formal run 会自动确认）
       - 未被覆盖：真残留毒区清单（下一轮 D 攻击的精确目标）
 
-    注：用 feature_snapshot_json 重跑 stock，market_regime 为事后写入值，
-    故"已被覆盖"是上界估计（生产 run 时 regime 若缺失可能不触发），但作为
-    "哪些失败样本已被规则覆盖"的下界信号足够稳——能拦住的就是真拦住了。
+    注：用 feature_snapshot_json 重跑 stock，market_regime 在生产 run 时即写入快照
+    （非事后补值），故 prefilter / phase 判断与生产一致。"已被覆盖"复刻生产
+    evaluate_skill_prefilter（universe + prefilter.market.include/include_any/exclude）
+    + run_strategy 的 hard_veto/排除 phase，覆盖口径与生产一致——能拦住的就是真拦住了。
     """
     skills = _load_skills_once()
     if not skills:
@@ -470,15 +471,24 @@ def check_d_rule_coverage(db, win_rate_baseline: float) -> None:
 
 
 def _classify_failed_coverage(rows, skills) -> tuple[int, int, int, int]:
-    """统计失败样本中被当前规则覆盖（hard_veto / universe 排除）的笔数。
+    """统计失败样本中被当前规则覆盖（hard_veto / universe / prefilter 排除）的笔数。
 
     纯函数（不碰 DB），便于单元测试。返回 (blocked_count, new_total, wins, total)：
       - blocked_count: 失败样本中会被当前 yaml 拦截的去重 recommendation_id 数
       - new_total: total - blocked_count（剔除被覆盖失败笔后的样本数）
       - wins: 成功笔数（不变）
       - total: 样本总数
+
+    覆盖口径复刻生产管线，两路并查任一命中即算覆盖：
+      1. evaluate_skill_prefilter(stage='market')：universe + prefilter.market.include
+         /include_any/exclude（生产 prefilter 全量，含 run_strategy._passes_universe 漏掉
+         的 prefilter.market.include/include_any）。
+      2. run_strategy：phases hard_veto（如弱市隔夜毒区）+ 排除 phase + setup hard_veto
+         + risk rules。这些在 prefilter 之后、scoring 阶段才判定，evaluate_skill_prefilter 不查。
+    两路并查确保与生产一致——只查 universe+prefilter.market.exclude（旧实现）会漏掉
+    prefilter.market.include 覆盖（如 chip_loose），低估覆盖率、高估残留毒区。
     """
-    from app.engine.strategy_runner import run_strategy
+    from app.engine.strategy_runner import run_strategy, evaluate_skill_prefilter
 
     total = len(rows)
     wins = sum(1 for r in rows if r[1] == 'success')
@@ -495,8 +505,11 @@ def _classify_failed_coverage(rows, skills) -> tuple[int, int, int, int]:
             if not skill:
                 continue
             try:
+                # 路 1：生产 prefilter（universe + prefilter.market.include/include_any/exclude）
+                prefilter_pass, _reason = evaluate_skill_prefilter(skill, dict(fs), stage='market')
+                # 路 2：scoring 阶段 hard_veto / 排除 phase（prefilter 之后才判定）
                 sig = run_strategy(skill, dict(fs), [], skip_universe_check=False)
-                if sig.get('hard_veto') or (sig.get('phase') == '排除'):
+                if (not prefilter_pass) or sig.get('hard_veto') or (sig.get('phase') == '排除'):
                     blocked_rids.add(rid)
                     break
             except Exception:

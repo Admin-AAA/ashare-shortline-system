@@ -98,3 +98,48 @@ def test_unknown_skill_does_not_crash():
     blocked, new_total, wins, total = self_check._classify_failed_coverage(rows, _skills())
     assert blocked == 0  # 未知策略无法重跑，不算被覆盖
     assert total == 1
+
+
+def _chip_ctx(chip_concentration: float) -> dict:
+    """chip-single-peak universe 全过、无 hard_veto/排除 phase 的 context（真实快照提炼）。
+
+    chip_concentration>=20 才过 prefilter.market.include(chip_loose)；
+    chip_concentration<20 → 生产 prefilter 拦截(chip_loose)，但 run_strategy 的
+    _passes_universe 只查 universe + prefilter.market.exclude，漏 prefilter.market.include
+    /include_any → 反事实若不复刻生产 prefilter 会把这笔判为「未覆盖」（漏判）。
+    本 ctx 通过全部 universe.include（amount/turnover/chg20/pos60/off_high），
+    专门锁定 prefilter.include 覆盖口径（非 universe、非 hard_veto、非排除 phase）。
+    """
+    return {
+        "code": "003016", "name": "欣贺股份", "industry": "多元金融",
+        "amount_yi": 9.02, "turnover_rate": 5.31, "chg20": 8.15, "pos60": 46.067,
+        "off_high_pct": -1.172, "twenty_cm_risk_gate": "not_applicable",
+        "is_st": False, "announcement_negative_count": 0, "news_risk_count": 0,
+        "max_dd20": -12.424, "chip_concentration": chip_concentration,
+        "breakout20": 1, "breakout60": 0, "vol5_20": 4.958,
+        "upper_shadow_count20": 0, "pct": 3.69, "market_regime": "弱势",
+        "market_sample_count": 4951, "capital_resonance_score": 57.0,
+        "sector_ladder_completeness_score": 10.0, "limit_up_overheat_score": 32.0,
+        "dsa_trend_score": 18, "dsa_support_score": 0, "dsa_macd_score": 12,
+        "ma5": 4.61, "ma10": 4.5, "ma20": 4.52, "dist20": 8.532,
+    }
+
+
+def test_prefilter_include_coverage_counted():
+    """被 prefilter.market.include（非 hard_veto、非 universe、非排除 phase）拦截的失败笔
+    必须计入 blocked——否则反事实会低估规则覆盖、高估残留毒区，误导下轮 D 攻击。
+
+    复刻生产管线（evaluate_skill_prefilter 查 prefilter.market.include/include_any），
+    不能只靠 run_strategy._passes_universe（漏 prefilter.market.include/include_any）。
+    chip_concentration=18 < 20 → chip_loose 拦截（生产 prefilter），反事实须判 blocked。
+    """
+    rows = [
+        _row("rec_chip_001", "failed", -3.0, _chip_ctx(18.0), "chip-single-peak-breakout"),
+        _row("rec_chip_002", "success", 5.0, _chip_ctx(25.0), "chip-single-peak-breakout"),
+    ]
+    blocked, new_total, wins, total = self_check._classify_failed_coverage(rows, _skills())
+    assert total == 2
+    assert wins == 1
+    assert blocked == 1  # chip_concentration=18 的失败笔被 prefilter.include 覆盖
+    assert new_total == 1  # 剔除被覆盖的 1 笔失败后剩 1 笔（成功笔不计入剔除）
+    assert round(wins * 100 / new_total, 1) == 100.0  # 反事实胜率 = 1/1 = 100%
