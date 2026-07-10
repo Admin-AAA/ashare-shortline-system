@@ -130,8 +130,7 @@ def on_startup() -> None:
             try:
                 result = label_pending_outcomes(db, horizon_days=5)
                 labeled = int(result.get("labeled") or 0)
-                if labeled:
-                    logger.info("启动补结算 outcome: %d 笔", labeled)
+                logger.info("启动补结算 outcome: 结算 %d 笔（缺 T+1 K线的 pending 自动跳过）", labeled)
             finally:
                 db.close()
         except Exception:
