@@ -779,6 +779,23 @@ function CandidateCard({
           入场 · {item.entry_rule}
         </div>
       ) : null}
+
+      {item.invalid_rule ? (
+        <div
+          title={item.invalid_rule}
+          style={{
+            fontSize: 10,
+            lineHeight: 1.3,
+            color: "var(--market-down)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            opacity: 0.75,
+          }}
+        >
+          失效 · {item.invalid_rule}
+        </div>
+      ) : null}
     </div>
   );
 }
