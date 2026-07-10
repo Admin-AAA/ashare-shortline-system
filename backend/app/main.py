@@ -117,6 +117,27 @@ def on_startup() -> None:
         ensure_formal_recommendation_safely()
     _threading.Thread(target=_safety_net_on_startup, daemon=True).start()
 
+    # outcome 补结算：后端不 7x24 运行，cron 18:20 可能被错过（如机器睡眠/重启）。
+    # 启动时补跑 label_pending_outcomes——自动只结算 T+1 K线已同步的 pending 推荐
+    # （_simulate_outcome 对缺 K 线的返回 None 跳过，安全）。D 项前瞻验证前置。
+    def _outcome_label_on_startup() -> None:
+        import time as _time
+        _time.sleep(12)  # 等安全网 + 缓存预热，避免与 startup 抢资源
+        try:
+            from app.db.session import SessionLocal
+            from app.services.outcome_service import label_pending_outcomes
+            db = SessionLocal()
+            try:
+                result = label_pending_outcomes(db, horizon_days=5)
+                labeled = int(result.get("labeled") or 0)
+                if labeled:
+                    logger.info("启动补结算 outcome: %d 笔", labeled)
+            finally:
+                db.close()
+        except Exception:
+            logger.exception("启动补结算 outcome 失败")
+    _threading.Thread(target=_outcome_label_on_startup, daemon=True).start()
+
 
 def _warmup_initial_state() -> None:
     """启动阶段同步预热首屏所需缓存，确保首访不走冷链路。"""
