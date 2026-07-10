@@ -61,6 +61,11 @@ universe:
     # 用 dist20 而非 bias_ma20：prefilter 阶段 stock 已含 dist20（_build_stock_from_bars 产出），
     # bias_ma20 是 build_features 后置字段，prefilter 阶段缺失会被 _coerce(None)→0.0 静默绕过。
     - "dist20 >= 0"
+    # 短期位置过滤（pos20>=50）：20日位置偏低的股票隔夜 WR 持续恶化
+    # 全量: pos20<50 WR=66.7% vs pos20>=50 WR=91.7%（+25pp），前瞻>=07-06: pos20<50 WR=55.6%（低于基线61.5%）
+    # 因果：隔夜持股赌次日惯性延续，pos20<50=20日内价格处于下半段，短期动量偏弱，次日无延续资金
+    # 注：dragon-tiger 也加了同样的 pos20>=50 护栏，与本策略逻辑一致
+    - "pos20 >= 50"
   exclude:
     - "is_st == true"
 
