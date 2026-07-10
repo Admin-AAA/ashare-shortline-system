@@ -368,6 +368,53 @@ def _fmt_d_cost(tag: str, m: dict | None, baseline_wr: float, baseline_pl: float
           f'| 平均收益 净 {m["net_avg"]}%/毛 {m["gross_avg"]}%')
 
 
+def _is_20cm_code(code: str) -> bool:
+    """20cm 板块判定（创业板 300/301、科创板 688/689）。"""
+    return str(code).startswith(("300", "301", "688", "689"))
+
+
+def _compute_d_board_breakdown(rows: list) -> dict:
+    """纯函数：按板块(20cm 创业板/科创板 vs 10cm 主板/中小板)拆分 D 项。
+
+    返回 {board: {n, win_rate, max_loss, avg}}（无样本为 None）。
+    防过拟合护栏（数据驱动结论，第169轮 T3 实证）：
+    若 20cm 是胜率最高分段，后续 self-improve 轮次**不得**对 20cm 加风险闸门/降权/
+    缩小 universe——会砍掉系统最强分段、损害整体 D 项胜率。最大亏损在两类板块均
+    为止损地板(~-5.7%)，并非「20cm 跳空驱动」，故板块不是 maxloss 的归因因子。
+    """
+    out: dict = {}
+    for board in ("20cm", "10cm"):
+        grp = [r for r in rows if _is_20cm_code(r[0]) == (board == "20cm")]
+        n = len(grp)
+        if n == 0:
+            out[board] = None
+            continue
+        wins = sum(1 for r in grp if r[2] == "success")
+        rets = [float(r[3]) for r in grp if r[3] is not None]
+        out[board] = {
+            "n": n,
+            "win_rate": round(wins * 100 / n, 1),
+            "max_loss": round(min(rets), 2) if rets else 0.0,
+            "avg": round(sum(rets) / n, 2),
+        }
+    return out
+
+
+_BOARD_LABEL = {"20cm": "20cm(创业板/科创板)", "10cm": "10cm(主板/中小板)"}
+
+
+def _fmt_d_board(tag: str, bd: dict) -> None:
+    if not bd:
+        return
+    for board in ("20cm", "10cm"):
+        m = bd.get(board)
+        if m is None:
+            print(f'  {tag}[{_BOARD_LABEL[board]}]: 样本不足')
+            continue
+        print(f'  {tag}[{_BOARD_LABEL[board]}]: 胜率 {m["win_rate"]}% (n={m["n"]}) '
+              f'| 最大亏损 {m["max_loss"]}% | 平均收益 {m["avg"]}%')
+
+
 def check_d_item(db) -> None:
     """D 项：核心指标（胜率 + 最大亏损），多窗口呈现以区分历史污染 vs 前瞻真退化。
 
@@ -400,6 +447,17 @@ def check_d_item(db) -> None:
            WIN_RATE_BASELINE, MAX_LOSS_BASELINE)
     _fmt_d_cost(f'D 项(前瞻≥{FORWARD_EPOCH})', _compute_d_cost(rows, since_date=FORWARD_EPOCH),
                 WIN_RATE_BASELINE, PL_RATIO_BASELINE)
+
+    # 板块拆分护栏（第169轮 T3 实证）：验证「最大亏损由 20cm 跳空驱动」假设。
+    # 实证结论：20cm 是胜率最高分段（非风险源），maxloss 在两类板块均为止损地板(~-5.7%)。
+    # 故后续轮次不得对 20cm 加风险闸门/降权——会砍掉最强分段、损害整体 D 项胜率。
+    bd = _compute_d_board_breakdown(rows)
+    _fmt_d_board('D 项(板块拆分)', bd)
+    _20 = bd.get("20cm") or {}
+    _10 = bd.get("10cm") or {}
+    if _20 and _10 and _20.get("win_rate", 0) > _10.get("win_rate", 0):
+        print(f'  ⚠️ 护栏: 20cm 胜率({_20.get("win_rate")}%)高于10cm({_10.get("win_rate")}%)'
+              f'— 后续轮次禁止对 20cm 加风险闸门/降权（会损害 D 项）')
 
     # 单日集中度诊断（独立股票口径）：防止单日异常高量扭曲 D 项判断。
     # 已改用独立股票数（同股同日多 run 只算 1 只），避免"单日 N 笔"假警报——
