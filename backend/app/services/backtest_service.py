@@ -419,7 +419,7 @@ def _backtest_single_date(
     # dragon-tiger-smart-money 依赖 dragon_tiger_is_on_list，回测此前漏注入此字段，
     # 导致该策略在任何历史区间回测里恒为 0 命中（universe 永远不通过）。
     inject_dragon_tiger_flags(db, stocks, trade_date=trade_date)
-    prefiltered_stocks, _prefilter_audit = apply_prefilters(
+    prefiltered_stocks, prefilter_audit = apply_prefilters(
         stocks,
         selected_skills,
         min_candidate_count=min_prefilter_count,
@@ -495,10 +495,14 @@ def _backtest_single_date(
     run_id = _persist_backtest_run(
         db,
         trade_date,
-        len(research_contexts),
+        len(eligible_quotes),
         len(recommendations),
         [selected["skill"] for selected in selected_skills],
         score_line=score_line,
+        prefilter_audit=prefilter_audit,
+        gate_audit=gate_result.get("audit"),
+        prefilter_count=len(prefiltered_stocks),
+        scored_cards=recommendations,
     )
     _persist_backtest_recommendations(db, run_id, recommendations, snapshot)
 
@@ -675,9 +679,66 @@ def _persist_backtest_run(
     recommended_count: int,
     skills: list[Any],
     score_line: float,
+    *,
+    prefilter_audit: dict[str, Any] | None = None,
+    gate_audit: dict[str, Any] | None = None,
+    prefilter_count: int = 0,
+    scored_cards: list[dict[str, Any]] | None = None,
 ) -> str:
     run_id = f"bt_{trade_date}_{uuid.uuid4().hex[:8]}"
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    # 构建过滤漏斗审计（stage_summary），让前端记录中心的"过滤漏斗"正确展示
+    # 全市场→基础合格→预过滤→规则扫描→出票，而不是全部0→N
+    stage_summary = [
+        {
+            "stage": "market_universe",
+            "label": "全市场 -> 基础合格",
+            "input_count": universe_count,
+            "pass_count": universe_count,
+            "filtered_count": 0,
+            "reason_counts": {},
+        },
+        {
+            "stage": "scope_recall",
+            "label": "基础合格 -> 范围候选",
+            "input_count": universe_count,
+            "pass_count": prefilter_count or universe_count,
+            "filtered_count": universe_count - (prefilter_count or universe_count),
+            "reason_counts": {},
+        },
+        {
+            "stage": "prefilter",
+            "label": "范围候选 -> 预过滤",
+            "input_count": (prefilter_audit or {}).get("input_count") or prefilter_count,
+            "pass_count": (prefilter_audit or {}).get("prefilter_candidate_count") or prefilter_count,
+            "filtered_count": 0,
+            "reason_counts": {},
+        },
+        {
+            "stage": "skill_gate",
+            "label": "规则扫描 -> Skill 深审",
+            "input_count": prefilter_count,
+            "pass_count": (gate_audit or {}).get("skill_gate_candidate_count") or 0,
+            "filtered_count": 0,
+            "reason_counts": {},
+        },
+        {
+            "stage": "score_line",
+            "label": "最终分 -> 正式出票",
+            "input_count": (gate_audit or {}).get("skill_gate_candidate_count") or 0,
+            "pass_count": recommended_count,
+            "filtered_count": 0,
+            "reason_counts": {},
+        },
+    ]
+    filter_audit = {
+        "stage_summary": stage_summary,
+        "rows": (prefilter_audit or {}).get("rows") or [],
+        "distributions": {},
+        "reason_counts": {},
+    }
+
     run = RecommendationRun(
         run_id=run_id,
         run_name=f"回测 {trade_date}",
@@ -705,6 +766,7 @@ def _persist_backtest_run(
         ),
         market_snapshot_json="{}",
         result_summary_json=json.dumps({"backtest": True, "score_line": score_line}),
+        filter_audit_json=json.dumps(filter_audit, ensure_ascii=False),
     )
     db.add(run)
     db.commit()
