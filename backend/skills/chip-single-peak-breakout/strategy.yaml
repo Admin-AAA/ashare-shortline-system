@@ -85,6 +85,19 @@ phases:
     hard_veto: false
     risk_flags: ["弱市半吊子追高（当日涨3-5%无封板惯性无超跌安全垫），弱市不宜追多"]
 
+  # 高位追高毒区：pos20>=85 + pct>=3.5 → cap 68（不分市场状态的通用毒区）
+  # LIVE 验证（2026-07 第166轮 T2快速路径，chip-single-peak-breakout LIVE formal rec_*）：
+  #   pos20>=85 & pct>=3.5: n=3 WR=0%（600120 -1.22% / 001331 -5.70% / 300347 -5.69%），前瞻(>=07-01)同为 n=3 WR=0%
+  #   对照 pos20>=85 & pct<3.5: n=5 WR=60%（低位低涨幅仍有 alpha）
+  # 因果：chip策略依赖单峰突破后次日延续，pos20>=85=20日位置已处高位，pct>=3.5=当日已显著拉升，
+  #   二者叠加=高位追高，次日无延续资金触发止损（与 daily-stock/overnight 高位追高毒区同一根因）。
+  #   不局限弱市：active/强牛均发现此组合失败，不受 regime 限制。
+  - name: 高位追高毒区
+    when: "pos20 >= 85 and pct >= 3.5"
+    score_cap: 68
+    hard_veto: false
+    risk_flags: ["高位追高（pos20>=85且当日涨幅>=3.5%，20日高位已过度拉升无延续资金）"]
+
   - name: 过热等待
     when: "dist20 > 18 and rsi_12 > 72"
     score_cap: 55
