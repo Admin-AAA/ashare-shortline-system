@@ -890,12 +890,15 @@ def _load_cached_quotes(
 ) -> list[dict[str, Any]]:
     cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - max_age if max_age is not None else None
     latest_allowed_date = as_of_date or _latest_allowed_quote_date()
+    base_cond = [StockQuote.trade_date <= latest_allowed_date]
+    if as_of_date:
+        # 历史日期模式：inactive 只是表示"不再是最新行情"，历史数据仍然有效
+        base_cond.append(StockQuote.trade_date == as_of_date)
+    else:
+        base_cond.append(StockQuote.freshness_status != "inactive")
     stmt = (
         select(StockQuote)
-        .where(
-            StockQuote.freshness_status != "inactive",
-            StockQuote.trade_date <= latest_allowed_date,
-        )
+        .where(*base_cond)
         .order_by(StockQuote.quality_score.desc(), StockQuote.snapped_at.desc())
     )
     if cutoff is not None and as_of_date is None:
