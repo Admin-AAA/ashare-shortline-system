@@ -111,6 +111,15 @@ _metrics_compute_locks: dict[str, threading.Lock] = {}
 _metrics_compute_locks_lock = threading.Lock()
 _METRICS_CACHE_TTL = 30.0  # 指标缓存 30 秒（原 5 秒过短，冷启动 350ms 频繁触发）
 
+# outcome 结算进程内串行锁：三个入口（startup 补结算线程 / 首屏预热 _auto_backfill_outcomes
+# / cron 18:20 _run_outcome_label）都直接调 label_pending_outcomes，用各自 SessionLocal。
+# 若不串行，两个 session 在各自事务隔离下都把同一批 pending rec 当"未结算"捞出（看不到对方
+# 未提交的 INSERT），第二个 db.commit() 的 executemany 撞 PRIMARY KEY 1062 → 整批回滚、0 笔结算
+# （app.log 2026-06-23 样本已实证 rec_20260623_001_0fcd 重复 INSERT 致 startup 补结算静默失败，
+# 7/9 的 28 条前瞻样本因此长期 0 结算）。串行后第二个调用开始时第一个已 commit，db.get 能看到
+# 已存在的 outcome → update 而非 INSERT，根因消除。D 项前瞻验证前置基础设施可靠性修复。
+_label_outcome_lock = threading.Lock()
+
 
 def _cached(key: str, factory):
     """带 per-key 计算锁的缓存，防止缓存击穿（多请求同时计算同一 key）。
@@ -263,46 +272,51 @@ def label_pending_outcomes(
     - 进出场价格/日期
     - 执行收益（含双边滑点）
     - 持仓天数 / 仓位权重 / 退出原因
+
+    进程内串行（_label_outcome_lock）：防多入口并发双 session 捞同一批 pending 撞主键回滚
+    （见 _label_outcome_lock 注释）。锁内完成查询→模拟→commit 全流程，第二个调用开始时
+    第一个已 commit，db.get 命中 update 而非 INSERT。
     """
-    stmt = (
-        select(Recommendation)
-        .outerjoin(
-            RecommendationOutcome,
-            RecommendationOutcome.recommendation_id == Recommendation.recommendation_id,
-        )
-        .where(
-            or_(
-                RecommendationOutcome.recommendation_id.is_(None),
-                RecommendationOutcome.outcome_label == OUTCOME_PENDING,
-                Recommendation.status == OUTCOME_PENDING,
+    with _label_outcome_lock:
+        stmt = (
+            select(Recommendation)
+            .outerjoin(
+                RecommendationOutcome,
+                RecommendationOutcome.recommendation_id == Recommendation.recommendation_id,
+            )
+            .where(
+                or_(
+                    RecommendationOutcome.recommendation_id.is_(None),
+                    RecommendationOutcome.outcome_label == OUTCOME_PENDING,
+                    Recommendation.status == OUTCOME_PENDING,
+                )
             )
         )
-    )
-    recs = db.scalars(stmt.order_by(Recommendation.trade_date.asc())).unique().all()
-    if not recs:
-        return {"labeled": 0}
+        recs = db.scalars(stmt.order_by(Recommendation.trade_date.asc())).unique().all()
+        if not recs:
+            return {"labeled": 0}
 
-    bars_by_code, dates_by_code = _load_outcome_bars(db, recs)
-    labeled = 0
-    errors = 0
-    for rec in recs:
-        simulation = _simulate_outcome(
-            rec,
-            bars_by_code.get(str(rec.code), []),
-            dates_by_code.get(str(rec.code), []),
-            horizon_days=horizon_days,
-        )
-        if simulation is None:
-            continue
-        if _apply_outcome_simulation(db, rec, simulation, horizon_days, label_source="auto"):
-            labeled += 1
-        else:
-            errors += 1
+        bars_by_code, dates_by_code = _load_outcome_bars(db, recs)
+        labeled = 0
+        errors = 0
+        for rec in recs:
+            simulation = _simulate_outcome(
+                rec,
+                bars_by_code.get(str(rec.code), []),
+                dates_by_code.get(str(rec.code), []),
+                horizon_days=horizon_days,
+            )
+            if simulation is None:
+                continue
+            if _apply_outcome_simulation(db, rec, simulation, horizon_days, label_source="auto"):
+                labeled += 1
+            else:
+                errors += 1
 
-    db.commit()
-    if labeled:
-        invalidate_outcome_metrics_cache()
-    return {"labeled": labeled, "errors": errors}
+        db.commit()
+        if labeled:
+            invalidate_outcome_metrics_cache()
+        return {"labeled": labeled, "errors": errors}
 
 
 def _load_outcome_bars(
