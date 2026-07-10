@@ -1217,6 +1217,14 @@ def _build_stock_from_bars(
         "off_high_pct": round((price - max_high20) / max_high20 * 100, 3) if max_high20 else 0.0,
         "off_high60_pct": round((price - max_high60) / max_high60 * 100, 3) if max_high60 else 0.0,
         "limit_up_days20": sum(1 for bar in bars[-20:] if _num(bar.get("pct_chg")) >= 9.8),
+        # 筹码集中度顶层字段（前移计算，供 prefilter 阶段使用，与 market_pool._load_cached_bars_batch
+        # 一致的计算口径）。此前只在 dsa_profile 嵌套字典里赋值，顶层 stock 字典缺失该字段，
+        # 导致 chip-single-peak-breakout 策略 prefilter.market.include 的
+        # chip_concentration >= 20 因 strict_missing 判定为缺失字段而永远拒绝，
+        # 该策略历史全部推荐样本实为 fallback fill 补齐凑数，未真正命中过规则。
+        "chip_concentration": round(
+            (_num(latest.get("chip_cost_85")) - _num(latest.get("chip_cost_15"))) / _num(latest.get("chip_cost_15")) * 100, 2
+        ) if _num(latest.get("chip_cost_15")) > 0 and latest.get("chip_cost_85") else None,
         "announcement_negative_count": 0,
         "news_risk_count": 0,
         "is_st": bool(quote.get("is_st")),

@@ -40,6 +40,7 @@ from app.models.tables import (
 )
 from app.services.feature_builder import build_features, market_regime_score
 from app.services.market_data import (
+    _apply_relative_features,
     _build_quote_snapshot,
     _build_stock_from_bars,
     _candidate_recall_plan,
@@ -47,7 +48,7 @@ from app.services.market_data import (
     _exchange_from_code,
     _select_recall_candidates,
 )
-from app.services.market_pool import inject_limit_up_flags
+from app.services.market_pool import inject_dragon_tiger_flags, inject_limit_up_flags
 from app.services.outcome_service import (
     is_accurate_recommendation,
     is_trade_executed,
@@ -351,6 +352,10 @@ def _backtest_single_date(
     stocks = _build_stocks_from_bars(candidates, bars_history, stocks_meta, trade_date, quote_map)
     if not stocks:
         return {"trade_date": trade_date, "status": "skipped", "reason": "宽召回候选缺少历史K线"}
+    # 计算相对强度字段（与推荐管线 market_pool.py:254/448 一致）。
+    # sector-relative-strength-leader 依赖 primary_excess20/is_main_theme，回测此前漏调用此函数，
+    # 导致这批字段全部缺失（None），该策略 universe.include 的 primary_excess20 >= 3 永远不通过。
+    _apply_relative_features(stocks)
 
     quote_snapshot = _build_quote_snapshot(
         eligible_quotes,
@@ -410,6 +415,10 @@ def _backtest_single_date(
     # limit-up-reseal-relay 等 skill 依赖 is_limit_up/limit_up_open_times/limit_up_fd_amount_yi，
     # 缺失时 prefilter 永远 0 命中 → 回测无法验证涨停策略。
     inject_limit_up_flags(db, stocks, trade_date=trade_date)
+    # 注入龙虎榜字段（与推荐管线 workbench_service.py:1546 一致）。
+    # dragon-tiger-smart-money 依赖 dragon_tiger_is_on_list，回测此前漏注入此字段，
+    # 导致该策略在任何历史区间回测里恒为 0 命中（universe 永远不通过）。
+    inject_dragon_tiger_flags(db, stocks, trade_date=trade_date)
     prefiltered_stocks, _prefilter_audit = apply_prefilters(
         stocks,
         selected_skills,
