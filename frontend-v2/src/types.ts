@@ -1571,6 +1571,8 @@ export type StrategyPerformance = {
   avg_return: number | null;
   profit_loss_ratio: number | null;
   last_recommendation_date: string | null;
+  /** 统计可信度：样本数 < 20 时为 false（胜率属噪声，前端标「样本不足·统计参考」） */
+  reliable: boolean;
   horizon_metrics?: Record<string, unknown> | null;
   date_range?: DateRangeMeta;
 };

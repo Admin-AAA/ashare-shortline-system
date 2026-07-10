@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, Loader2, PlayCircle, Search, Sparkles } from "lucide-react";
+import { ArrowLeft, Loader2, PlayCircle, RotateCw, Search, Sparkles } from "lucide-react";
 import { api } from "../api/client";
 import type { Preset, RunDetail, SingleStockAnalysis, SingleStockSkillReview, ReplayAnalysisResult } from "../types";
 import { ErrorPage } from "../components/StateViews";
-import { CollapsiblePanel } from "../components/CollapsiblePanel";
+import { Panel } from "../components/Panel";
 import { useUrlRoute } from "../app/useUrlRoute";
 import { queryParam } from "../app/nav";
 
@@ -29,10 +29,47 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
     }).catch(() => {});
   }, []);
 
+  // 首次进入 / 刷新 / 顶部刷新按钮：拉取运行详情并重置
   useEffect(() => {
     if (!runId) return;
-    api.runDetail(runId).then(setDetail).catch((e) => setError(e.message || "运行详情加载失败"));
+    let alive = true;
+    setDetail(null);
+    setError("");
+    api.runDetail(runId)
+      .then((d) => { if (alive) setDetail(d); })
+      .catch((e) => { if (alive) setError((e as Error).message || "运行详情加载失败"); });
+    return () => { alive = false; };
   }, [runId, refreshSignal]);
+
+  // 实时轮询：运行进行中（queued / running）持续刷新进度。
+  // 这样无论是首次进入还是页面刷新后，只要后台任务还在跑，都能看到实时进度。
+  useEffect(() => {
+    if (!runId) return;
+    if (!detail) return;
+    if (detail.status !== "queued" && detail.status !== "running") return;
+    const timer = window.setInterval(() => {
+      api.runDetail(runId)
+        .then((d) => {
+          setDetail((prev) => {
+            if (!prev) return d;
+            // 仅当关键进度字段变化时才更新，避免每 2s 无谓重渲染
+            const changed =
+              prev.status !== d.status ||
+              prev.progress_pct !== d.progress_pct ||
+              prev.progress_current !== d.progress_current ||
+              prev.progress_total !== d.progress_total ||
+              prev.progress_phase !== d.progress_phase ||
+              prev.progress_message !== d.progress_message ||
+              prev.heartbeat_at !== d.heartbeat_at ||
+              prev.recommended_count !== d.recommended_count ||
+              prev.is_stale !== d.is_stale;
+            return changed ? d : prev;
+          });
+        })
+        .catch(() => {});
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [runId, detail?.status]);
 
   async function startRun() {
     if (!selectedPreset) return;
@@ -52,6 +89,17 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
     }
   }
 
+  async function resumeRun() {
+    if (!runId) return;
+    setMessage("正在触发续跑…");
+    try {
+      await api.resumeRun(runId);
+      setMessage("已触发续跑，后台恢复运行中…");
+    } catch (e) {
+      setMessage(`续跑失败：${(e as Error).message}`);
+    }
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
       <button className="btn btn--ghost" onClick={() => navigateSection("dashboard")} style={{ alignSelf: "flex-start" }}>
@@ -60,7 +108,7 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
       </button>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: "var(--space-4)", alignItems: "start" }}>
-        <CollapsiblePanel
+        <Panel
           kicker="推荐运行"
           title={
             <>
@@ -107,14 +155,14 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
               {message}
             </div>
           )}
-        </CollapsiblePanel>
+        </Panel>
 
         <SingleStockScorePanel presets={presets} />
       </div>
 
       {error && <ErrorPage title="运行详情加载失败" message={error} onRetry={() => window.location.reload()} />}
 
-      {detail && <RunTimeline detail={detail} />}
+      {detail && <RunProgressPanel detail={detail} onResume={resumeRun} />}
 
       {detail && (detail.recommended_count ?? 0) > 0 && runId && <ReplayAnalysisPanel runId={runId} />}
     </div>
@@ -145,9 +193,9 @@ function ReplayAnalysisPanel({ runId }: { runId: string }) {
 
   if (loading) {
     return (
-      <CollapsiblePanel kicker="运行复盘" title="推荐兑现情况">
+      <Panel kicker="运行复盘" title="推荐兑现情况">
         <div className="text-muted" style={{ fontSize: "var(--text-sm)" }}>加载兑现数据…</div>
-      </CollapsiblePanel>
+      </Panel>
     );
   }
   if (error) return <ErrorPage title="复盘加载失败" message={error} />;
@@ -158,7 +206,7 @@ function ReplayAnalysisPanel({ runId }: { runId: string }) {
   const retTone = avgRet >= 0 ? "var(--market-up)" : "var(--market-down)";
 
   return (
-    <CollapsiblePanel
+    <Panel
       kicker="运行复盘"
       title="推荐兑现情况"
       actions={
@@ -236,7 +284,7 @@ function ReplayAnalysisPanel({ runId }: { runId: string }) {
             : ""}
         </div>
       )}
-    </CollapsiblePanel>
+    </Panel>
   );
 }
 
@@ -285,7 +333,7 @@ function SingleStockScorePanel({ presets }: { presets: Preset[] }) {
   }
 
   return (
-    <CollapsiblePanel
+    <Panel
       kicker="单股票评分"
       title={
         <>
@@ -359,7 +407,7 @@ function SingleStockScorePanel({ presets }: { presets: Preset[] }) {
       )}
 
       {result && <SingleStockScoreResult result={result} />}
-    </CollapsiblePanel>
+    </Panel>
   );
 }
 
@@ -661,23 +709,125 @@ function SkillReviewRow({ review }: { review: SingleStockSkillReview }) {
   );
 }
 
-function RunTimeline({ detail }: { detail: RunDetail }) {
+const RUN_STATUS_META: Record<string, { label: string; color: string }> = {
+  queued: { label: "排队中", color: "var(--muted-strong)" },
+  running: { label: "运行中", color: "var(--accent)" },
+  completed: { label: "已完成", color: "var(--market-up)" },
+  failed: { label: "失败", color: "var(--market-down)" },
+  interrupted: { label: "已中断", color: "var(--warning)" },
+};
+
+function runPhaseLabel(phase?: string | null): string {
+  const map: Record<string, string> = {
+    queued: "排队等待",
+    base_filter: "基础筛选",
+    data_prep: "数据准备",
+    feature_build: "特征构建",
+    skill_review: "Skill 审查",
+    scoring: "评分聚合",
+    gate: "质量闸门",
+    interrupted: "已中断",
+    failed: "失败",
+    completed: "完成",
+  };
+  if (!phase) return "";
+  return map[phase] ?? phase;
+}
+
+function formatHeartbeatAge(sec?: number | null): string {
+  if (sec == null) return "";
+  const s = Math.max(0, Math.round(sec));
+  if (s < 60) return `${s} 秒`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} 分 ${s % 60} 秒`;
+  const h = Math.floor(m / 60);
+  return `${h} 时 ${m % 60} 分`;
+}
+
+function RunStatusTag({ status }: { status: string }) {
+  const meta = RUN_STATUS_META[status] ?? { label: status, color: "var(--muted-strong)" };
+  const active = status === "queued" || status === "running";
   return (
-    <CollapsiblePanel
-      kicker="运行时间线"
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "var(--text-xs)", color: meta.color, fontWeight: 600 }}>
+      {active && <span className="run-progress-spin" style={{ width: 7, height: 7, borderRadius: "50%", background: meta.color, display: "inline-block" }} />}
+      {meta.label}
+    </span>
+  );
+}
+
+function RunProgressPanel({ detail, onResume }: { detail: RunDetail; onResume?: () => void }) {
+  const active = detail.status === "queued" || detail.status === "running";
+  const pct = detail.progress_pct;
+  const hasPct = typeof pct === "number" && pct >= 0;
+  const derivedPct = !hasPct && detail.progress_total != null && detail.progress_current != null
+    ? Math.min(100, Math.round((detail.progress_current / detail.progress_total) * 100))
+    : null;
+  const effectivePct = hasPct ? pct! : derivedPct;
+  const indeterminate = active && effectivePct == null;
+  const barWidth = effectivePct != null ? `${Math.max(2, Math.min(100, effectivePct))}%` : "100%";
+  const stale = !!detail.is_stale;
+  const resumable = detail.status === "interrupted" || detail.status === "failed";
+
+  return (
+    <Panel
+      kicker="运行进度"
       title={detail.run_name ?? detail.run_id}
-      actions={<span className="tag">{detail.status}</span>}
+      actions={<RunStatusTag status={detail.status} />}
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
-        <div className="text-mono text-muted" style={{ fontSize: "var(--text-sm)" }}>
-          {detail.progress_message || "暂无消息"}
+      <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
+        {active && (
+          <div className="run-progress-bar" role="progressbar" aria-valuenow={effectivePct ?? undefined}>
+            <div
+              className={`run-progress-bar__fill${indeterminate ? " run-progress-bar__fill--indeterminate" : ""}`}
+              style={{ width: barWidth }}
+            />
+          </div>
+        )}
+
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-3)", alignItems: "baseline" }}>
+          {detail.progress_phase && (
+            <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--ink)" }}>
+              {runPhaseLabel(detail.progress_phase)}
+            </span>
+          )}
+          {effectivePct != null && (
+            <span className="text-mono" style={{ fontSize: "var(--text-sm)", color: "var(--accent)" }}>{effectivePct}%</span>
+          )}
+          {detail.progress_total ? (
+            <span className="text-muted text-mono" style={{ fontSize: "var(--text-xs)" }}>
+              {detail.progress_current}/{detail.progress_total}
+            </span>
+          ) : null}
         </div>
-        {detail.recommended_count != null && (
-          <div style={{ fontSize: "var(--text-sm)" }}>
-            产出候选：<strong className="text-mono">{detail.recommended_count}</strong> 只
+
+        <div className="text-mono text-muted" style={{ fontSize: "var(--text-sm)", minHeight: 18 }}>
+          {active ? (detail.progress_message || "运行中…") : (detail.progress_message || "暂无消息")}
+        </div>
+
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-3)", alignItems: "center", fontSize: "var(--text-xs)" }}>
+          {detail.heartbeat_at && (
+            <span className="text-muted">心跳 {formatHeartbeatAge(detail.heartbeat_age_seconds)}前</span>
+          )}
+          {stale && (
+            <span style={{ color: "var(--warning)", fontWeight: 600 }}>⚠ 心跳超时（后台可能中断）</span>
+          )}
+          {detail.recommended_count != null && detail.recommended_count > 0 && (
+            <span style={{ fontSize: "var(--text-sm)" }}>
+              产出候选：<strong className="text-mono">{detail.recommended_count}</strong> 只
+            </span>
+          )}
+        </div>
+
+        {resumable && (
+          <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "center" }}>
+            <button className="btn btn--primary" onClick={onResume} style={{ padding: "var(--space-2) var(--space-4)" }}>
+              <RotateCw size={15} />
+              续跑此运行
+            </button>
+            <span className="text-muted" style={{ fontSize: "var(--text-xs)" }}>该运行被中断或失败，可尝试从断点恢复。</span>
           </div>
         )}
       </div>
-    </CollapsiblePanel>
+    </Panel>
   );
 }
