@@ -18,6 +18,11 @@ from app.db.session import get_db
 from app.services.outcome_service import metrics_by_strategy
 from app.services.workbench_service import list_skills
 
+# 统计可信阈值：与 scheduler_service.DEFAULT_EXPOSURE_MIN_SAMPLE=20 对齐。
+# 低于此样本数的策略，其胜率/盈亏比属统计噪声，前端须标注「样本不足 · 统计参考」，
+# 防止用户对 n<20 的策略过度信任（self_check 长期预警：5 策略样本<20 胜率不可信）。
+MIN_SAMPLE_FOR_RELIABLE = 20
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/strategies", tags=["strategies"])
@@ -62,6 +67,9 @@ def list_strategies(
                 # metrics_by_strategy 早已计算，此前被遗漏，导致前端卡片恒显 "—"。
                 "profit_loss_ratio": m.get("profit_loss_ratio"),
                 "last_recommendation_date": m.get("last_recommendation_date"),
+                # 统计可信度：样本数 < MIN_SAMPLE_FOR_RELIABLE(20) 时胜率属噪声，
+                # 前端据此标注「样本不足 · 统计参考」，避免用户过度信任小样本策略。
+                "reliable": (m.get("sample_count") or 0) >= MIN_SAMPLE_FOR_RELIABLE,
                 "horizon_metrics": m.get("horizon_metrics"),
                 "date_range": m.get("date_range"),
             }
