@@ -415,6 +415,29 @@ def _fmt_d_board(tag: str, bd: dict) -> None:
               f'| 最大亏损 {m["max_loss"]}% | 平均收益 {m["avg"]}%')
 
 
+def _forward_verification_flag(full_wr: float | None, fwd_result: tuple | None,
+                                baseline_wr: float) -> str | None:
+    """D 项前瞻验证护栏（纯函数，便于单测锁定）。
+
+    返回非空警示字符串当且仅当：全量胜率高于基线，**但**前瞻窗口（FORWARD_EPOCH 之后、
+    修复后新 run 结算的样本）为空(None)——此时全量胜率可能含修复前历史污染，
+    未经样本外验证，运营者不可据此 claim D 项改进（违反「D 项必须前瞻样本验证、不为刷数字而刷」护栏）。
+
+    返回 None 的两种情况：
+      - 前瞻窗口已有样本（fwd_result 非 None）→ 已可样本外验证，无需警示；
+      - 全量胜率未高于基线 → 没有「虚高改进」可误读。
+    """
+    if full_wr is None:
+        return None
+    if fwd_result is not None:
+        return None
+    if full_wr > baseline_wr:
+        return (f'⚠️ 护栏: 前瞻窗口(≥{FORWARD_EPOCH})样本不足，全量胜率 {full_wr}% 高于基线 '
+                f'{baseline_wr}% 但未经样本外验证——勿据此 claim D 项改进；'
+                f'修复后新 run 结算后下轮复核')
+    return None
+
+
 def check_d_item(db) -> None:
     """D 项：核心指标（胜率 + 最大亏损），多窗口呈现以区分历史污染 vs 前瞻真退化。
 
@@ -429,7 +452,8 @@ def check_d_item(db) -> None:
     # （2026-07-08 单日 14 个 run，松发股份被推荐 7 次全部 -5.69% 止损）。去重后反映
     # 真实独立股票胜率，避免把失败股放大 N 倍扭曲胜率。
     rows = _fetch_dedup_live_formal(db)
-    _fmt_d('D 项(全量)', _compute_d_window(rows), WIN_RATE_BASELINE, MAX_LOSS_BASELINE)
+    full_res = _compute_d_window(rows)
+    _fmt_d('D 项(全量)', full_res, WIN_RATE_BASELINE, MAX_LOSS_BASELINE)
     _fmt_d_cost('D 项(全量)', _compute_d_cost(rows), WIN_RATE_BASELINE, PL_RATIO_BASELINE)
 
     # 近 10 交易日窗口：看近期趋势（自然老化修复前历史污染）。
@@ -443,10 +467,15 @@ def check_d_item(db) -> None:
     # 前瞻窗口（修复后）：FORWARD_EPOCH 之后的 run 才反映去重/弱市否决的真实胜率。
     # 若前瞻窗口胜率显著高于全量，说明全量下滑是历史污染而非真退化——
     # 切勿据此循环加规则（禁止过拟合，第164轮 T3 失败归因结论）。
-    _fmt_d(f'D 项(前瞻≥{FORWARD_EPOCH})', _compute_d_window(rows, since_date=FORWARD_EPOCH),
-           WIN_RATE_BASELINE, MAX_LOSS_BASELINE)
+    fwd_res = _compute_d_window(rows, since_date=FORWARD_EPOCH)
+    _fmt_d(f'D 项(前瞻≥{FORWARD_EPOCH})', fwd_res, WIN_RATE_BASELINE, MAX_LOSS_BASELINE)
     _fmt_d_cost(f'D 项(前瞻≥{FORWARD_EPOCH})', _compute_d_cost(rows, since_date=FORWARD_EPOCH),
                 WIN_RATE_BASELINE, PL_RATIO_BASELINE)
+
+    # 前瞻验证护栏：全量高于基线但前瞻窗口空 → 不可 claim 改进（见 _forward_verification_flag）
+    flag = _forward_verification_flag(full_res[0] if full_res else None, fwd_res, WIN_RATE_BASELINE)
+    if flag:
+        print(f'  {flag}')
 
     # 板块拆分护栏（第169轮 T3 实证）：验证「最大亏损由 20cm 跳空驱动」假设。
     # 实证结论：20cm 是胜率最高分段（非风险源），maxloss 在两类板块均为止损地板(~-5.7%)。
