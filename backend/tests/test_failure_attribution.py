@@ -13,6 +13,8 @@ from scripts.backtest_cost_aware import BacktestRow, compute_metrics, dedup_rows
 from scripts.failure_attribution import (  # noqa: E402
     attribute_failures,
     classify_failure_mode,
+    _veto_net_effect,
+    veto_passes_guard,
 )
 
 
@@ -152,3 +154,62 @@ def test_compute_metrics_basic():
     assert m["n"] == 2
     assert math.isclose(m["win_rate"], 0.5)
     assert m["max_loss_net"] < 0
+
+
+# --------------------------------------------------------------------------- #
+# 反事实 veto 护栏（anti-overfit guard，第172轮新增）
+# --------------------------------------------------------------------------- #
+def _mk_rec(rid, label, ret, fs):
+    return {"rid": rid, "label": label, "ret": ret, "fs": fs}
+
+
+def test_veto_net_effect_harmful_removes_winners():
+    # 过拟合典型（真实 pos60>90 即此形态）：被 veto 子群胜率更低（删之→总胜率被刷高），
+    # 但净收益为正（删之→总收益↓）。护栏应判不过。
+    # 全量 5 赢/10 = 50% WR，净 +6.0；veto 子群(pos60>90) 1 赢 4 亏 WR20% 净 +3.0；
+    # 保留子群 4 赢 1 亏 WR80% 净 +3.0。施加后 WR 80%(+30pp) 但净 +3.0-6.0=-3.0。
+    recs = [
+        _mk_rec("vw1", "success", 5.0, {"pos60": 95}),
+        _mk_rec("vf1", "failed", -0.5, {"pos60": 96}),
+        _mk_rec("vf2", "failed", -0.5, {"pos60": 97}),
+        _mk_rec("vf3", "failed", -0.5, {"pos60": 98}),
+        _mk_rec("vf4", "failed", -0.5, {"pos60": 99}),
+        _mk_rec("kw1", "success", 1.0, {"pos60": 30}),
+        _mk_rec("kw2", "success", 1.0, {"pos60": 31}),
+        _mk_rec("kw3", "success", 1.0, {"pos60": 32}),
+        _mk_rec("kw4", "success", 1.0, {"pos60": 33}),
+        _mk_rec("kf1", "failed", -1.0, {"pos60": 34}),
+    ]
+    res = _veto_net_effect(recs, lambda fs: fs.get("pos60", 0) > 90)
+    assert res["removed_n"] == 5
+    assert res["removed_wins"] == 1
+    assert res["removed_fails"] == 4
+    assert res["delta_win_rate"] > 0          # 胜率被刷高
+    assert res["delta_net_return"] < 0        # 但总收益下降 → 过拟合
+    assert not veto_passes_guard(res)         # 护栏拦截
+
+
+def test_veto_net_effect_beneficial_removes_losers():
+    # 良性 veto：只删亏损单（总收益↑且胜率↑）→ 护栏应通过
+    recs = [
+        _mk_rec("w1", "success", 4.0, {"pos60": 95}),  # 保留（赢）
+        _mk_rec("w2", "success", 3.0, {"pos60": 96}),  # 保留（赢）
+        _mk_rec("f1", "failed", -2.0, {"pos60": 30}),  # 被 veto（亏）
+        _mk_rec("f2", "failed", -1.0, {"pos60": 20}),  # 被 veto（亏）
+    ]
+    res = _veto_net_effect(recs, lambda fs: fs.get("pos60", 0) < 50)
+    assert res["removed_n"] == 2
+    assert res["removed_wins"] == 0
+    assert res["removed_fails"] == 2
+    assert res["delta_win_rate"] > 0
+    assert res["delta_net_return"] > 0        # 总收益上升 → 良性
+    assert veto_passes_guard(res)             # 护栏通过
+
+
+def test_veto_net_effect_noop():
+    # 不删任何笔 → Δ 全 0，护栏通过（中性）
+    recs = [_mk_rec("a", "success", 2.0, {"pos60": 50}), _mk_rec("b", "failed", -1.0, {"pos60": 40})]
+    res = _veto_net_effect(recs, lambda fs: False)
+    assert res["removed_n"] == 0
+    assert res["delta_net_return"] == 0.0
+    assert veto_passes_guard(res)

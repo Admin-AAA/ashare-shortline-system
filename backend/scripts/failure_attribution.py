@@ -242,6 +242,112 @@ def render_counterfactual_report(result: Dict[str, Any]) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# 2.5 反事实 veto 护栏（anti-overfit guard for D-attack）
+# --------------------------------------------------------------------------- #
+def _load_live_formal_recs(db) -> List[Dict[str, Any]]:
+    """全量 LIVE formal 推荐（成功+失败），含 feature_snapshot + outcome。
+    仅 rec_*（实盘），排除 btrec_*（回测），避免污染 LIVE 总体。
+    """
+    from sqlalchemy import text
+
+    rows = db.execute(text("""
+        SELECT r.recommendation_id, o.outcome_label, o.executed_return, r.feature_snapshot_json
+        FROM recommendation_outcomes o
+        JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+        WHERE o.outcome_label IN ('success', 'failed')
+          AND r.recommendation_id LIKE 'rec_%'
+    """)).fetchall()
+    out: List[Dict[str, Any]] = []
+    for rid, label, ret, fsj in rows:
+        fs = json.loads(fsj) if fsj else {}
+        out.append({
+            "rid": rid,
+            "label": label,
+            "ret": float(ret) if ret is not None else None,
+            "fs": fs,
+        })
+    return out
+
+
+def _metrics_of(subset: List[Dict[str, Any]]) -> Dict[str, float]:
+    n = len(subset)
+    if n == 0:
+        return {"n": 0, "win_rate": 0.0, "avg_return": 0.0, "pl_ratio": 0.0, "net_return": 0.0}
+    wins = [r for r in subset if r["label"] == "success"]
+    fails = [r for r in subset if r["label"] == "failed"]
+    wr = len(wins) / n
+    avg = sum((r["ret"] or 0) for r in subset) / n
+    gp = sum((r["ret"] or 0) for r in wins) or 0.0001
+    gl = abs(sum((r["ret"] or 0) for r in fails)) or 0.0001
+    return {
+        "n": n,
+        "win_rate": round(wr, 4),
+        "avg_return": round(avg, 4),
+        "pl_ratio": round(gp / gl, 4),
+        "net_return": round(sum((r["ret"] or 0) for r in subset), 4),
+    }
+
+
+def _veto_net_effect(recs: List[Dict[str, Any]], veto_pred) -> Dict[str, Any]:
+    """纯函数：对全量 LIVE 账本施加 veto_pred(fs)->bool，比较前后指标。
+
+    返回 before/after 指标 + 移除笔数（赢/亏）+ 各项 Δ。纯函数，便于单测。
+    """
+    before = _metrics_of(recs)
+    kept = [r for r in recs if not veto_pred(r["fs"])]
+    after = _metrics_of(kept)
+    removed = [r for r in recs if veto_pred(r["fs"])]
+    return {
+        "before": before,
+        "after": after,
+        "removed_n": len(removed),
+        "removed_wins": sum(1 for r in removed if r["label"] == "success"),
+        "removed_fails": sum(1 for r in removed if r["label"] == "failed"),
+        "delta_win_rate": round(after["win_rate"] - before["win_rate"], 4),
+        "delta_avg_return": round(after["avg_return"] - before["avg_return"], 4),
+        "delta_pl_ratio": round(after["pl_ratio"] - before["pl_ratio"], 4),
+        "delta_net_return": round(after["net_return"] - before["net_return"], 4),
+    }
+
+
+def run_veto_counterfactual(db, veto_pred) -> Dict[str, Any]:
+    """种群级反事实：测量任一提议的 hard veto 对全量 LIVE formal 账本的真实净效应。
+
+    用途（D 项攻击护栏）：任何「新 veto 规则」必须先过本函数——
+      - delta_net_return < 0  （丢掉盈利单去刷胜率）→ 判定过拟合，禁止落地
+      - delta_net_return >= 0 且 delta_win_rate/pl_ratio 不恶化 → 可落地
+    防止把「胜率↑但总收益↓」的噪声规则误当改进（守第一性原理「不许靠过拟合刷数字」）。
+    """
+    recs = _load_live_formal_recs(db)
+    return _veto_net_effect(recs, veto_pred)
+
+
+def veto_passes_guard(result: Dict[str, Any], net_return_floor: float = 0.0) -> bool:
+    """反事实验证护栏：净收益不下降（默认 floor=0）即视为通过，否则过拟合。"""
+    return result["delta_net_return"] >= net_return_floor
+
+
+def render_veto_report(result: Dict[str, Any], veto_name: str) -> str:
+    b, a = result["before"], result["after"]
+    lines = []
+    lines.append(f"# 反事实 veto 护栏 · {veto_name}")
+    lines.append("")
+    lines.append(f"- 移除笔数: {result['removed_n']} (赢 {result['removed_wins']} / 亏 {result['removed_fails']})")
+    lines.append(f"- 净收益 Δ: {result['delta_net_return']:+.2f} (护栏: {'✅ 通过' if veto_passes_guard(result) else '⚠️ 过拟合禁止'})")
+    lines.append("")
+    lines.append("| 指标 | 全量 | 施加后 | 变化 |")
+    lines.append("|------|------|--------|------|")
+    lines.append(f"| 样本数 | {b['n']} | {a['n']} | — |")
+    lines.append(f"| 胜率 | {b['win_rate']*100:.1f}% | {a['win_rate']*100:.1f}% | {result['delta_win_rate']*100:+.1f}pp |")
+    lines.append(f"| 平均收益 | {b['avg_return']:+.2f}% | {a['avg_return']:+.2f}% | {result['delta_avg_return']:+.2f}pp |")
+    lines.append(f"| 盈亏比 | {b['pl_ratio']:.2f} | {a['pl_ratio']:.2f} | {result['delta_pl_ratio']:+.2f} |")
+    lines.append(f"| 净收益 | {b['net_return']:+.2f} | {a['net_return']:+.2f} | {result['delta_net_return']:+.2f} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
 # 3. 失败模式统计（用于日志/报告，独立于反事实）
 # --------------------------------------------------------------------------- #
 def collect_failure_fields(db) -> List[Dict[str, Any]]:
@@ -297,7 +403,20 @@ def main() -> Dict[str, Any]:
     print(f"\n主导失败模式: {attr.dominant_mode()} (共 {attr.total_failed} 笔失败)")
     print()
     print(render_counterfactual_report(cf))
-    return {"attribution": attr.mode_counts, "counterfactual": cf}
+
+    # 反事实 veto 护栏：对候选 hard veto 验证净效应，拦截过拟合（守第一性原理）。
+    # 本轮候选：pos60>90（60日高位追高=chasing）。若净收益↓即判定过拟合、禁止落地。
+    demo = run_veto_counterfactual(
+        db,
+        lambda fs: fs.get("pos60") is not None and float(fs.get("pos60")) > 90,
+    )
+    print()
+    print(render_veto_report(demo, "pos60>90 (60日高位追高 veto 候选)"))
+    return {
+        "attribution": attr.mode_counts,
+        "counterfactual": cf,
+        "veto_guard": demo,
+    }
 
 
 if __name__ == "__main__":
