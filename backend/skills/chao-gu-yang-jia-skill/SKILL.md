@@ -183,3 +183,4 @@
 6. **不要违反 stance→action 映射**——neutral/oppose/veto 时 action 必须是"观察"或"不做"
 7. **不要给出模糊建议**——action 必须是 4 选 1，position_range 必须具体
 8. **不要过度乐观**——confidence > 0.8 需要有充分数据支撑
+9. **action=观察/不做 时 score 必须 ≤ 60**——position_range="0%" 时不要给出高分（如 score=75 + action=观察 自相矛盾：聚合器会把高分推进推荐，与你的"不进场"判断相反）。action=观察/不做 时 score 应反映"当前时点不适合操作"，控制在 60 以下。
