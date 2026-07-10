@@ -27,6 +27,7 @@ contract:
 universe:
   include:
     - "amount_yi >= 3"
+    - "amount_yi < 15"  # 大成交额排除：>=15亿时 DSA WR=32.4%（n=34全量/n=25前瞻），策略不适用机构博弈盘（因果：DSA是技术趋势策略，机构博弈盘价格行为非趋势跟随）
     - "turnover_rate >= 0.3"
   exclude:
     - "is_st == true"
