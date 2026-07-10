@@ -6,7 +6,7 @@ import { ErrorPage } from "../components/StateViews";
 import { ModelRoutesSection } from "../components/ModelRoutesSection";
 import { PresetsSection } from "../components/PresetsSection";
 import { SchedulerTasksSection } from "../components/SchedulerTasksSection";
-import { CollapsiblePanel } from "../components/CollapsiblePanel";
+import { Panel } from "../components/Panel";
 import { DataHealthSection } from "./DataHealthPage";
 
 type ConfigTab = "scheduler" | "llm" | "presets" | "data-health";
@@ -170,7 +170,7 @@ export function ConfigPage() {
       {tab === "scheduler" && <SchedulerTasksSection />}
 
       {tab === "llm" && (
-        <CollapsiblePanel
+        <Panel
           kicker="配置"
           title="系统 LLM 接口"
           actions={
@@ -326,7 +326,7 @@ export function ConfigPage() {
 
           {/* 模型路由：调整优先级 + 逐条测试 + 配置独立 Key */}
           <ModelRoutesSection />
-        </CollapsiblePanel>
+        </Panel>
       )}
 
       {tab === "presets" && <PresetsSection />}

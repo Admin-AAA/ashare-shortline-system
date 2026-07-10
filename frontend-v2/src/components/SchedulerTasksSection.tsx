@@ -13,7 +13,7 @@ import {
 import { api } from "../api/client";
 import type { Preset, ScheduledTask, ScheduledTaskType } from "../types";
 import { CardSkeleton, EmptyState, ErrorPage } from "./StateViews";
-import { CollapsiblePanel } from "./CollapsiblePanel";
+import { Panel } from "./Panel";
 
 /**
  * 调度任务管理 —— 配置页「调度任务」Tab。
@@ -415,7 +415,7 @@ export function SchedulerTasksSection() {
 
       {/* 新建表单 */}
       {creating && createForm && (
-        <CollapsiblePanel
+        <Panel
           kicker="新建"
           title="新建调度任务"
           actions={
@@ -444,7 +444,7 @@ export function SchedulerTasksSection() {
               {createSaving ? "创建中…" : "创建任务"}
             </button>
           </div>
-        </CollapsiblePanel>
+        </Panel>
       )}
 
       {/* 任务卡片列表 */}
@@ -467,7 +467,7 @@ export function SchedulerTasksSection() {
         const isBusy = busyId === t.task_id;
         const lastStatus = t.last_status ?? null;
         return (
-          <CollapsiblePanel
+          <Panel
             key={t.task_id}
             kicker={TASK_TYPE_LABEL[t.task_type]}
             title={
@@ -628,7 +628,7 @@ export function SchedulerTasksSection() {
                 </button>
               </div>
             )}
-          </CollapsiblePanel>
+          </Panel>
         );
       })}
 

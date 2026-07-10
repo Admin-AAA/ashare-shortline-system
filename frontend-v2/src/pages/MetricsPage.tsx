@@ -15,7 +15,7 @@ import type {
 import type { ReactNode } from "react";
 import { PageSkeleton, ErrorPage, EmptyState } from "../components/StateViews";
 import { SkillsCatalogPanel } from "../components/SkillsCatalogPanel";
-import { CollapsiblePanel } from "../components/CollapsiblePanel";
+import { Panel } from "../components/Panel";
 import { LineChart, Info } from "lucide-react";
 
 /** 时间窗口选项：null=全部历史累计，N=最近 N 天且已结算。 */
@@ -124,13 +124,13 @@ function MetricCard({
   children: ReactNode;
 }) {
   return (
-    <CollapsiblePanel
+    <Panel
       kicker={kicker}
       title={title}
       actions={actions}
     >
       {children}
-    </CollapsiblePanel>
+    </Panel>
   );
 }
 

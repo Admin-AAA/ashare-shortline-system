@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight, History, Layers, Target } from "lucide-react
 import { api } from "../api/client";
 import type { DateRangeMeta, StrategyListItem, StrategyPerformance } from "../types";
 import { ErrorPage, EmptyState, PageSkeleton } from "../components/StateViews";
-import { CollapsiblePanel } from "../components/CollapsiblePanel";
+import { Panel } from "../components/Panel";
 import { useApi } from "../app/useApi";
 import { useUrlRoute } from "../app/useUrlRoute";
 
@@ -48,7 +48,7 @@ export function StrategiesPage() {
   const coverage = Math.round((called.length / data.length) * 100);
 
   return (
-    <CollapsiblePanel
+    <Panel
       kicker="策略"
       title="策略清单"
       actions={
@@ -102,7 +102,7 @@ export function StrategiesPage() {
           <DormantCard key={s.skill_id} item={s} />
         ))}
       </div>
-    </CollapsiblePanel>
+    </Panel>
   );
 }
 
@@ -116,6 +116,8 @@ function CalledCard({ item }: { item: StrategyListItem }) {
   const retColor = perf.avg_return == null ? "var(--muted)" : perf.avg_return >= 0 ? "var(--market-up)" : "var(--market-down)";
   const pf = perf.profit_loss_ratio;
   const pfColor = pf == null ? "var(--muted)" : pf >= 1.4 ? "var(--market-up)" : pf >= 1.0 ? "var(--text)" : "var(--market-down)";
+  // 统计可信度：后端 reliable=false（样本<20）时胜率属噪声，须显式提示，防过度信任
+  const lowSample = !perf.reliable;
   // 最近命中交易日（YYYY-MM-DD），北极星 C 项：策略可追溯
   const lastDate = perf.last_recommendation_date;
 
@@ -162,6 +164,26 @@ function CalledCard({ item }: { item: StrategyListItem }) {
           </div>
         </div>
       </div>
+
+        {lowSample && (
+          <div
+            style={{
+              marginTop: "var(--space-3)",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: "var(--text-xs)",
+              color: "var(--warning, #b45309)",
+              background: "color-mix(in srgb, var(--warning, #b45309) 12%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--warning, #b45309) 30%, transparent)",
+              borderRadius: 999,
+              padding: "3px 10px",
+              alignSelf: "flex-start",
+            }}
+          >
+            样本不足（n={perf.sample_count}）· 胜率统计仅供参考
+          </div>
+        )}
 
       <button
         onClick={() => setOpen((o) => !o)}

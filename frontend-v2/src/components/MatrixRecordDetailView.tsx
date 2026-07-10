@@ -4,7 +4,7 @@ import type { MatrixRecordDetail } from "../types";
 import { ErrorPage, PageSkeleton } from "./StateViews";
 import { useApi } from "../app/useApi";
 import { Metric, ReturnStat, fmtPrice } from "./recordsShared";
-import { CollapsiblePanel } from "./CollapsiblePanel";
+import { Panel } from "./Panel";
 
 /** 矩阵记录详情视图 —— 从 RecordsPage.tsx 抽离。 */
 export function MatrixRecordDetailView({ recordId, onBack }: { recordId: number; onBack: () => void }) {
@@ -23,7 +23,7 @@ export function MatrixRecordDetailView({ recordId, onBack }: { recordId: number;
         返回记录列表
       </button>
 
-      <CollapsiblePanel
+      <Panel
         kicker="矩阵分析详情"
         title={<span style={{ fontFamily: "var(--font-mono)" }}>{data.code} · {data.trade_date}</span>}
         actions={<span style={{ color: data.analysis_type === "backtest" ? "var(--accent)" : "var(--muted)" }}>{data.analysis_type}</span>}
@@ -36,9 +36,9 @@ export function MatrixRecordDetailView({ recordId, onBack }: { recordId: number;
           <Metric label="skill数" value={String(data.skill_count)} mono />
           <Metric label="耗时" value={data.elapsed_ms != null ? `${(data.elapsed_ms / 1000).toFixed(1)}s` : "—"} />
         </div>
-      </CollapsiblePanel>
+      </Panel>
 
-      <CollapsiblePanel
+      <Panel
         kicker="实际收益"
         title="分析日 → 今天"
         actions={<span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }}>基准 = 分析日收盘价 · 至 {r.as_of_date || "—"}</span>}
@@ -53,10 +53,10 @@ export function MatrixRecordDetailView({ recordId, onBack }: { recordId: number;
           最新交易日：<span className="text-mono">{r.latest_date || "—"}</span>
           {r.latest_close != null && <> · 收盘 <span className="text-mono">{fmtPrice(r.latest_close)}</span></>}
         </div>
-      </CollapsiblePanel>
+      </Panel>
 
       {data.result && Object.keys(data.result).length > 0 && (
-        <CollapsiblePanel kicker="完整分析结果" title="原始 JSON">
+        <Panel kicker="完整分析结果" title="原始 JSON">
           <pre style={{
             background: "var(--surface-soft)",
             padding: "var(--space-3)",
@@ -69,7 +69,7 @@ export function MatrixRecordDetailView({ recordId, onBack }: { recordId: number;
           }}>
             {JSON.stringify(data.result, null, 2)}
           </pre>
-        </CollapsiblePanel>
+        </Panel>
       )}
     </div>
   );
