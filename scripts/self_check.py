@@ -537,7 +537,8 @@ def check_d_rule_coverage(db, win_rate_baseline: float) -> None:
 
     rows = db.execute(text("""
         SELECT r.recommendation_id, o.outcome_label, o.executed_return,
-               r.feature_snapshot_json, r.skill_breakdown_json
+               r.feature_snapshot_json, r.skill_breakdown_json,
+               o.exit_reason, o.max_return
         FROM recommendation_outcomes o
         JOIN recommendations r ON r.recommendation_id = o.recommendation_id
         JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
@@ -555,6 +556,12 @@ def check_d_rule_coverage(db, win_rate_baseline: float) -> None:
         f'D 项规则覆盖：{blocked} 笔失败已被当前规则覆盖（待前瞻验证），'
         f'反事实胜率 {new_wr}% （n={new_total}，基线 {win_rate_baseline}%，{tag}）'
     )
+
+    # 真残留毒区：未被当前任何规则覆盖的失败笔——下一轮 D 攻击的精确目标。
+    # 旧实现只打印 blocked 而丢弃这段，导致每轮 D 攻击靠猜 targets（见函数 docstring）。
+    uncovered = _collect_uncovered_failures(rows, skills)
+    if uncovered:
+        _print_residual_poison_zone(uncovered)
 
 
 def _classify_failed_coverage(rows, skills) -> tuple[int, int, int, int]:
@@ -581,7 +588,8 @@ def _classify_failed_coverage(rows, skills) -> tuple[int, int, int, int]:
     wins = sum(1 for r in rows if r[1] == 'success')
 
     blocked_rids: set = set()
-    for rid, label, _ret, fsj, sbj in rows:
+    for row in rows:
+        rid, label, _ret, fsj, sbj = row[0], row[1], row[2], row[3], row[4]
         if label != 'failed':
             continue
         fs = json.loads(fsj) if fsj else {}
@@ -604,6 +612,142 @@ def _classify_failed_coverage(rows, skills) -> tuple[int, int, int, int]:
 
     blocked = len(blocked_rids)
     return blocked, total - blocked, wins, total
+
+
+# --------------------------------------------------------------------------- #
+# 真残留毒区采集 + 归因（D 项规则覆盖校验第二段，旧实现遗漏）
+# --------------------------------------------------------------------------- #
+def _collect_uncovered_failures(rows, skills) -> list[dict]:
+    """采集失败样本中被当前规则「未」覆盖（不被 hard_veto / universe / prefilter 排除）的笔。
+
+    与 _classify_failed_coverage 同源、同覆盖口径（两路并查），只是收集未覆盖项。
+    返回 list[dict]，每项含 rid / feature_snapshot(dict) / exit_reason / max_return /
+    executed_return，供 _print_residual_poison_zone 做模式归因。纯函数，便于单测。
+    """
+    from app.engine.strategy_runner import run_strategy, evaluate_skill_prefilter
+
+    out: list[dict] = []
+    for row in rows:
+        rid, label, ret, fsj, sbj = row[0], row[1], row[2], row[3], row[4]
+        exit_reason = row[5] if len(row) > 5 else None
+        max_return = row[6] if len(row) > 6 else None
+        if label != 'failed':
+            continue
+        fs = json.loads(fsj) if fsj else {}
+        sb = json.loads(sbj) if sbj else []
+        covered = False
+        for s in sb:
+            sid = s.get('strategy_id')
+            skill = skills.get(sid)
+            if not skill:
+                continue
+            try:
+                prefilter_pass, _reason = evaluate_skill_prefilter(skill, dict(fs), stage='market')
+                sig = run_strategy(skill, dict(fs), [], skip_universe_check=False)
+                if (not prefilter_pass) or sig.get('hard_veto') or (sig.get('phase') == '排除'):
+                    covered = True
+                    break
+            except Exception:
+                continue
+        if not covered:
+            out.append({
+                'rid': rid,
+                'fs': fs,
+                'exit_reason': exit_reason,
+                'max_return': max_return,
+                'executed_return': ret,
+            })
+    return out
+
+
+def _classify_failure_mode_inline(
+    *, exit_reason, executed_return, max_return, rsi_12, chg20, pos60, setup_type
+) -> str:
+    """内联镜像 failure_attribution.classify_failure_mode（纯函数、避免跨包导入脆弱性）。
+
+    逻辑与 backend/scripts/failure_attribution.py 保持一致；若未来该模块可稳定导入，
+    此处应改回调用其权威实现，避免漂移。
+    """
+    WEAK_SETUPS = {"分歧回封接力", "放量突破", "阶段高点蓄势观察"}
+    if exit_reason == "stop_loss_gap":
+        return "tail_gap"
+    if (
+        exit_reason in ("trailing_stop_hit", "stop_loss_hit")
+        and (max_return is not None and max_return > 3.0)
+        and (executed_return is not None and executed_return < 0.0)
+    ):
+        return "gap_roundtrip"
+    if setup_type in WEAK_SETUPS:
+        return "bad_setup"
+    if rsi_12 is not None and rsi_12 < 45:
+        return "weak_stock"
+    if (chg20 is not None and chg20 > 50) or (pos60 is not None and pos60 > 90):
+        return "extension_chase"
+    return "other"
+
+
+def _print_residual_poison_zone(uncovered: list[dict]) -> None:
+    """打印真残留毒区：未覆盖失败笔数 + 模式分布 + 各模式平均净收益 + 集中度提示。
+
+    目的：把"下一轮 D 攻击的精确目标"显式化，避免每轮靠猜（历史污染已用 blocked 段处理，
+    本段专盯真退化毒区）。模式映射复用 failure_attribution.classify_failure_mode 口径。
+    """
+    # 尝试用权威实现；失败（跨包导入脆弱）则回退内联镜像。
+    classify = None
+    try:
+        import importlib.util
+        fa_path = os.path.join(BACKEND_DIR, 'scripts', 'failure_attribution.py')
+        if os.path.exists(fa_path):
+            spec = importlib.util.spec_from_file_location('failure_attribution_lazy', fa_path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            classify = mod.classify_failure_mode
+    except Exception:
+        classify = None
+
+    modes: Counter = Counter()
+    mode_rets: dict[str, list[float]] = {}
+    by_date: Counter = Counter()
+    for u in uncovered:
+        fs = u['fs']
+        if classify is not None:
+            mode = classify(
+                exit_reason=u.get('exit_reason') or '',
+                executed_return=u.get('executed_return'),
+                max_return=u.get('max_return'),
+                rsi_12=fs.get('rsi_12'),
+                chg20=fs.get('chg20'),
+                pos60=fs.get('pos60'),
+                setup_type=fs.get('setup_type'),
+            )
+        else:
+            mode = _classify_failure_mode_inline(
+                exit_reason=u.get('exit_reason') or '',
+                executed_return=u.get('executed_return'),
+                max_return=u.get('max_return'),
+                rsi_12=fs.get('rsi_12'),
+                chg20=fs.get('chg20'),
+                pos60=fs.get('pos60'),
+                setup_type=fs.get('setup_type'),
+            )
+        modes[mode] += 1
+        ret = u.get('executed_return')
+        if ret is not None:
+            mode_rets.setdefault(mode, []).append(float(ret))
+        rid = u.get('rid', '')
+        # rid 形如 rec_20260707_003_xxxx → 提取交易日
+        if '_' in rid:
+            by_date[rid.split('_')[1]] += 1
+
+    print(f'D 项真残留毒区（未被任何规则覆盖）：{len(uncovered)} 笔（下一轮 D 攻击精确目标）')
+    for m, c in modes.most_common():
+        rets = mode_rets.get(m, [])
+        avg = round(sum(rets) / len(rets), 2) if rets else 0.0
+        print(f'  - {m}: {c} 笔（均净 {avg}%）')
+    if by_date:
+        top_date, top_n = by_date.most_common(1)[0]
+        if top_n >= 3:
+            print(f'  ⚠️ 单日集中：{top_date} {top_n} 笔（疑似单日 regime 风险，非个股因子可解）')
 
 
 def main() -> None:

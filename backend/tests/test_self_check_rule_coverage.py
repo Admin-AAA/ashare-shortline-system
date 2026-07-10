@@ -143,3 +143,50 @@ def test_prefilter_include_coverage_counted():
     assert blocked == 1  # chip_concentration=18 的失败笔被 prefilter.include 覆盖
     assert new_total == 1  # 剔除被覆盖的 1 笔失败后剩 1 笔（成功笔不计入剔除）
     assert round(wins * 100 / new_total, 1) == 100.0  # 反事实胜率 = 1/1 = 100%
+
+
+def test_collect_uncovered_returns_only_non_blocked():
+    """_collect_uncovered_failures 只返回未被任何规则覆盖的失败笔（与 _classify_failed_coverage 互补）。"""
+    rows = [
+        _row("rec_w", "failed", -5.69, _overnight_ctx("弱势"), "overnight-holding-method"),
+        _row("rec_s", "failed", -5.72, _overnight_ctx("强势"), "overnight-holding-method"),
+        _row("rec_ok", "success", 6.39, _overnight_ctx("强势"), "overnight-holding-method"),
+    ]
+    uncovered = self_check._collect_uncovered_failures(rows, _skills())
+    assert len(uncovered) == 1
+    assert uncovered[0]["rid"] == "rec_s"  # 仅强势未 veto 的失败笔
+    assert uncovered[0]["executed_return"] == -5.72
+
+
+def test_collect_uncovered_tolerates_7tuple_and_captures_exit_reason():
+    """生产路径返回 7 列（含 exit_reason/max_return），采集须容错并保留这两个字段用于归因。"""
+    fs = _overnight_ctx("强势")
+    sb = [{"strategy_id": "overnight-holding-method"}]
+    row7 = (
+        "rec_7", "failed", -5.67,
+        json.dumps(fs), json.dumps(sb),
+        "stop_loss_hit", 0.5,  # exit_reason, max_return
+    )
+    uncovered = self_check._collect_uncovered_failures([row7], _skills())
+    assert len(uncovered) == 1
+    assert uncovered[0]["exit_reason"] == "stop_loss_hit"
+    assert uncovered[0]["max_return"] == 0.5
+
+
+def test_classify_failure_mode_inline_modes():
+    """内联镜像 classify_failure_mode 的模式判定须与 failure_attribution 口径一致。"""
+    # gap_roundtrip：stop_loss_hit 且峰值 >3% 却净亏
+    assert self_check._classify_failure_mode_inline(
+        exit_reason="stop_loss_hit", executed_return=-1.0, max_return=4.0,
+        rsi_12=55, chg20=10, pos60=50, setup_type=None,
+    ) == "gap_roundtrip"
+    # extension_chase：chg20 极高
+    assert self_check._classify_failure_mode_inline(
+        exit_reason="stop_loss_hit", executed_return=-5.0, max_return=0.1,
+        rsi_12=70, chg20=55, pos60=60, setup_type=None,
+    ) == "extension_chase"
+    # other：无明显信号
+    assert self_check._classify_failure_mode_inline(
+        exit_reason="stop_loss_hit", executed_return=-2.0, max_return=0.5,
+        rsi_12=55, chg20=10, pos60=50, setup_type=None,
+    ) == "other"
