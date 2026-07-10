@@ -301,10 +301,10 @@ def _select_dashboard_recommendation_run(db: Session) -> RecommendationRun | Non
     if not latest_trade_date:
         return None
     # 北极星 A 项：落地页（候选池/驾驶舱）必须展示官方每日 formal 推送，而非 experiment/backtest。
-    # 同一交易日若有 experiment run 完成更晚（finished_at 更大），旧逻辑会选 experiment，
-    # 导致用户打开页面看到的是测试推荐而非正式推送（07-07 / 07-03 均触发过）。
-    # 故优先选 formal；仅当该交易日无任何 formal 完成时才回退到最新的任意 completed run。
-    formal = db.scalar(
+    # 优先级：formal+有推荐 > formal+无推荐 > 任意 completed（兜底）。
+    # 背景：覆盖度补跑会在手动推荐之后完成，其 recommended_count=0；若只按 finished_at DESC
+    # 选第一条，会拿到空 run，导致候选池一片空白（07-10 触发）。
+    base_formal = (
         select(RecommendationRun)
         .where(
             RecommendationRun.status == "completed",
@@ -312,10 +312,18 @@ def _select_dashboard_recommendation_run(db: Session) -> RecommendationRun | Non
             RecommendationRun.trade_date == latest_trade_date,
         )
         .order_by(RecommendationRun.finished_at.desc(), RecommendationRun.started_at.desc())
-        .limit(1)
     )
-    if formal is not None:
-        return formal
+    # 1st choice: formal with actual recommendations
+    formal_with_recs = db.scalar(
+        base_formal.where(RecommendationRun.recommended_count > 0).limit(1)
+    )
+    if formal_with_recs is not None:
+        return formal_with_recs
+    # 2nd choice: any formal (even empty, covers edge case where all recs were filtered)
+    formal_any = db.scalar(base_formal.limit(1))
+    if formal_any is not None:
+        return formal_any
+    # 3rd choice: fallback to any completed run on that date
     return db.scalar(
         select(RecommendationRun)
         .where(
