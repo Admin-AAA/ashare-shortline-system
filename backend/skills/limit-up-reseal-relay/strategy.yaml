@@ -32,6 +32,7 @@ universe:
     - "turnover_rate <= 12"
     - "is_limit_up == true"
     - "limit_up_days20 >= 1"
+    - "chg20 < 20"   # 过去20天涨幅<20%，避免追高末板（样本分析：chg20>=20时WR仅25% vs 过滤后62.5%）
     - "twenty_cm_risk_gate != 'block'"
   exclude:
     - "is_st == true"
