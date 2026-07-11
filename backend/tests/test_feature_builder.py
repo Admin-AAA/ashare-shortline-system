@@ -164,6 +164,34 @@ def test_dsa_rsi_score():
     assert _rsi_score(75) == 0   # > 70
 
 
+def test_rsi_zero_pollution_guard():
+    """RSI=0 是上游数据污染（stk_factor 缺失被 _f 转 0），feature_builder 必须清洗。
+
+    2026-07-07 Tushare stk_factor 批量返回空 RSI，daily_kbars 写入 0.0。
+    rsi_12 原有 <1 or >99 → 50.0 守卫；rsi_6/rsi_24 曾缺守卫保留 0.0，污染快照。
+    本测验证三者一致清洗：0.0 不应出现在最终 item 的 rsi_* 字段。
+    """
+    from app.services.feature_builder import _apply_dsa_context
+
+    item = _stock(price=100.0)
+    # profile 里 rsi 全为 0.0（数据污染指纹）
+    profile = {"rsi_6": 0.0, "rsi_12": 0.0, "rsi_24": 0.0, "bias_ma5": 1.0}
+    _apply_dsa_context(item, profile, {})
+    # rsi_12=0 → 守卫清洗为 50.0；rsi_6/rsi_24=0 → 用基于 rsi_12 的默认值
+    assert item["rsi_12"] == 50.0
+    assert 1 <= item["rsi_6"] <= 99, f"rsi_6 应被清洗出 [1,99]，实际 {item['rsi_6']}"
+    assert 1 <= item["rsi_24"] <= 99, f"rsi_24 应被清洗出 [1,99]，实际 {item['rsi_24']}"
+    assert item["rsi_6"] != 0.0 and item["rsi_24"] != 0.0
+
+    # 对照：正常 rsi 值不被清洗
+    item2 = _stock(price=100.0)
+    profile2 = {"rsi_6": 65.0, "rsi_12": 60.0, "rsi_24": 55.0, "bias_ma5": 1.0}
+    _apply_dsa_context(item2, profile2, {})
+    assert item2["rsi_6"] == 65.0
+    assert item2["rsi_12"] == 60.0
+    assert item2["rsi_24"] == 55.0
+
+
 def test_dsa_support_score():
     item = _stock(price=100, dist20=6, pct=1.5)
     item["dsa_profile"] = {"bias_ma5": 1.0, "bias_ma10": 2.0, "ma5": 99, "ma10": 98, "ma20": 94}

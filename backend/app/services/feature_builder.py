@@ -199,12 +199,21 @@ def _apply_dsa_context(item: dict[str, Any], profile: dict[str, Any], dsa_weight
     item["macd_signal"] = str(profile.get("macd_signal", ""))
 
     rsi_12 = _num(profile.get("rsi_12"), 50.0)
-    # RSI 有效范围 [1, 99]；0 表示上游计算异常（数据不足），用默认值 50.0
+    # RSI 有效范围 [1, 99]；0 表示上游计算异常（数据不足/数据源 None 被 _f 转 0），
+    # 用默认值 50.0。rsi_6/rsi_24 同口径守卫——2026-07-07 Tushare stk_factor 批量
+    # 返回空 RSI，_f(None,0.0) 写入 daily_kbars 为 0.0，曾使 rsi_6=0 漏网（rsi_12
+    # 有守卫被清洗成 50，rsi_6 无守卫保留 0.0），污染特征快照。
     if rsi_12 < 1 or rsi_12 > 99:
         rsi_12 = 50.0
-    item["rsi_6"] = _num(profile.get("rsi_6"), min(95, max(8, rsi_12 + 4)))
+    rsi_6 = _num(profile.get("rsi_6"), min(95, max(8, rsi_12 + 4)))
+    if rsi_6 < 1 or rsi_6 > 99:
+        rsi_6 = min(95, max(8, rsi_12 + 4))
+    rsi_24 = _num(profile.get("rsi_24"), min(90, max(12, rsi_12 - 3)))
+    if rsi_24 < 1 or rsi_24 > 99:
+        rsi_24 = min(90, max(12, rsi_12 - 3))
+    item["rsi_6"] = rsi_6
     item["rsi_12"] = rsi_12
-    item["rsi_24"] = _num(profile.get("rsi_24"), min(90, max(12, rsi_12 - 3)))
+    item["rsi_24"] = rsi_24
     item["rsi_status"] = str(profile.get("rsi_status", "未知"))
     item["rsi_signal"] = str(profile.get("rsi_signal", ""))
 
