@@ -341,7 +341,7 @@ export const api = {
     }>>(`/api/skills/performance-summaries`),
 
   analyzeStock: (payload: { code: string; trade_date?: string; include_llm?: boolean; skill_id?: string; preset_id?: string }) =>
-    requestWithTimeout<SingleStockAnalysis>("/api/runs/analyze-stock", 120_000, json("POST", payload)),
+    requestWithTimeout<SingleStockAnalysis>("/api/runs/analyze-stock", 300_000, json("POST", payload)),
   resumeRun: (id: string) => requestWithTimeout<RunResult>(`/api/runs/${id}/resume`, 300_000, json("POST")),
   deleteRun: (id: string) => request<{ deleted: string }>(`/api/runs/${id}`, json("DELETE")),
   deleteRecommendation: (id: string) => request<{ deleted: string }>(`/api/recommendations/${id}`, json("DELETE")),
