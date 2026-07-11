@@ -43,6 +43,9 @@ def _overnight_ctx(market_regime: str) -> dict:
         "code": "603268", "name": "松发股份", "industry": "通用",
         "pct": 4.0, "turnover_rate": 6.0, "dist20": 5.0,
         "limit_up_days20": 1, "twenty_cm_risk_gate": "pass",
+        # pos20>=50 满足 d80bd8f 加的「短期动量过滤」(prefilter 放行)，
+        # 使 强势 用例不被该过滤误伤、仍靠 regime 判定覆盖——保持测试原意。
+        "pos20": 60.0,
         "market_regime": market_regime, "market_sample_count": 4000,
         "capital_resonance_score": 50, "sector_ladder_completeness_score": 50,
         "limit_up_overheat_score": 30,
