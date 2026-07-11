@@ -80,6 +80,18 @@ phases:
     hard_veto: false
     risk_flags: ["高标接力进入末端，默认不追"]
 
+  # 下行趋势中秒板毒区：20日仍下跌(chg20<0)却当日涨停 = 下跌中继的死猫反弹，非真二波起点
+  # LIVE 验证（2026-07-11 D项残留毒区归因，limit-up-reseal-relay 去重样本 n=20）：
+  #   chg20<0: n=5 WR=40.0%(3败/2赢) vs 其余 n=15 WR=53.3%(8赢/7败)
+  #   反事实剔除 ΔWR +3.3pp（净正，误伤比40%）。代表样本 002467 二六三 chg20=-12.5 pct=10.09 → -5.72% 止损
+  #   因果：涨停接力赌"分歧转强二波"，但 chg20<0=过去20日整体仍下跌，涨停只是下跌途中的一次反抽
+  #     （死猫反弹），次日无持续买盘即回落触发止损。与"上升趋势中首板/二板"(真alpha)逻辑相反。
+  - name: 下行趋势中秒板毒区
+    when: "chg20 < 0"
+    score_cap: 50
+    hard_veto: true
+    risk_flags: ["20日仍下跌却涨停=下跌中继死猫反弹，非二波起点"]
+
   - name: 回封确认
     when: "is_limit_up == true and limit_up_open_times >= 1 and limit_up_open_times <= 8 and limit_up_fd_amount_yi >= 0.15"
     # score_cap 100（原 92）：涨停接力策略次日入场（entry_rule=次日竞价），
