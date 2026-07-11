@@ -885,34 +885,6 @@ export type ModelRouteTestResult = {
   message: string;
 };
 
-/** 系统 LLM 接口（agent_skill_*）当前配置 */
-export type SystemLlmConfig = {
-  runtime: string;
-  base_url: string;
-  model: string;
-  api_key: string;
-  has_api_key: boolean;
-  timeout_seconds: number;
-  temperature: number;
-  max_tokens: number;
-};
-
-/** 系统 LLM 接口连通性测试结果 */
-export type SystemLlmTestResult = {
-  ok: boolean;
-  latency_ms: number;
-  model?: string;
-  sample?: string;
-  error?: string;
-};
-
-/** 保存系统 LLM 接口配置后的响应 */
-export type SystemLlmUpdateResult = {
-  ok: boolean;
-  updated: string[];
-  config: SystemLlmConfig;
-};
-
 export type PoolSourceSummary = {
   source: string;
   row_count: number;

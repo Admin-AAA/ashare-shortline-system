@@ -120,7 +120,7 @@ def compute_full_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
     flat = [r for r in returns if r == 0]
     avg_win = sum(wins) / len(wins) if wins else 0.0
     avg_loss = sum(losses) / len(losses) if losses else 0.0
-    profit_loss_ratio = round(avg_win / max(abs(avg_loss), 0.001), 3) if wins else 0.0
+    profit_loss_ratio = round(avg_win / abs(avg_loss), 3) if wins and losses else None
     profit_factor = round(
         sum(wins) / max(abs(sum(losses)), 0.001), 3
     ) if wins else 0.0

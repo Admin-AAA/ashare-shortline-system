@@ -12,6 +12,7 @@ from typing import Any
 from app.agents.agno_skill_agent import SkillReviewOutput, create_skill_agent, run_skill_agent
 from app.core.config import get_settings
 from app.engine.skill_loader import StrategySkill
+from app.services.model_router_service import get_active_model_routes
 
 
 OUTPUT_SCHEMA = {
@@ -62,8 +63,10 @@ def run_agent_skill(
     settings = get_settings()
     if settings.agent_skill_runtime != "llm":
         raise RuntimeError("Agent Skill 已配置为强制真实 LLM，请将 ASHARE_AGENT_SKILL_RUNTIME 设为 llm。")
-    if not settings.agent_skill_api_key:
-        raise RuntimeError("未配置 ASHARE_AGENT_SKILL_API_KEY，无法执行真实 LLM Agent Skill。")
+    # 路由可用性检查：模型路由由数据库 model_route_config 表驱动，每条路由自带
+    # 独立 key，全局 env key（ASHARE_AGENT_SKILL_API_KEY）已弃用，不再作为回退。
+    if not get_active_model_routes():
+        raise RuntimeError("未配置可用模型路由：请在模型路由表中为至少一条路由填写独立 API Key 后再执行。")
 
     # 生成会话 ID（若未提供）
     own_session = not bool(session_id)

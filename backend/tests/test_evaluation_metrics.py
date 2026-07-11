@@ -60,8 +60,8 @@ class TestComputeFullMetrics:
         assert result["recommendation_accuracy"] == 1.0
         assert result["average_net_return"] == 5.0
         assert result["median_net_return"] == 5.0
-        # 无亏损交易时 profit_loss_ratio 极高（分母为 0.001 防止除零）
-        assert result["profit_loss_ratio"] > 100
+        # 无亏损交易时 profit_loss_ratio 无定义（不应返回被放大的伪数值）
+        assert result["profit_loss_ratio"] is None
         assert result["benchmark_excess_return"] == 3.0  # 5% - 2%
         assert result["sample_confidence"] == "low"
 

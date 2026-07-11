@@ -513,11 +513,18 @@ def create_skill_agent(skill: StrategySkill, session_id: str):
 
     try:
         from agno.agent import Agent
-        from agno.models.deepseek import DeepSeek
+        from agno.models.openai import OpenAIChat
     except ImportError as e:
         raise RuntimeError(
             "Agno 框架未安装。请运行: pip install 'agno>=2.6.0'"
         ) from e
+
+    # 路由表是唯一真相源：取优先级最高的有效路由（自带 key/base_url/model）。
+    # 不再使用全局 env key 或 config 默认 key/url。
+    routes = get_active_model_routes()
+    if not routes:
+        raise RuntimeError("未配置可用模型路由，无法创建 Skill Agent；请先在模型路由表为至少一条路由填写独立 API Key")
+    route = routes[0]
 
     # 截断 system_prompt 到配置限制
     limit = max(4000, settings.agent_skill_prompt_char_limit)
@@ -525,9 +532,10 @@ def create_skill_agent(skill: StrategySkill, session_id: str):
         room = int(limit * 0.6)
         system_prompt = system_prompt[: room - 80] + "\n\n...[完整 SKILL.md 保存在本地 Skill 包中]"
 
-    model = DeepSeek(
-        id=settings.agent_model,
-        api_key=settings.agent_skill_api_key,
+    model = OpenAIChat(
+        id=route.model,
+        api_key=route.api_key,
+        base_url=route.base_url,
         temperature=settings.agent_temperature,
         max_tokens=settings.agent_max_tokens,
         timeout=settings.agent_skill_timeout_seconds,
@@ -571,7 +579,8 @@ async def run_skill_agent(
         SkillReviewOutput 结构化审查结果
     """
     settings = get_settings()
-    model_id = settings.agent_model
+    routes = get_active_model_routes()
+    model_id = routes[0].model if routes else "no_active_route"
     max_retries = settings.agent_retry_count
     backoff = settings.agent_retry_backoff
     user_prompt = _build_user_prompt(stock, snapshot, rule_signal, None, skill_id)

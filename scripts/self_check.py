@@ -789,6 +789,15 @@ def _print_residual_poison_zone(uncovered: list[dict]) -> None:
         if top_n >= 3:
             print(f'  ⚠️ 单日集中：{top_date} {top_n} 笔（疑似单日 regime 风险，非个股因子可解）')
 
+    # 数据质量标记：RSI=0 是上游数据污染（_f(None,0.0) 写库 + rsi_6 缺守卫），
+    # 不是策略可解毒区。统计残留毒区里 RSI 污染笔占比，提示勿当策略毒区循环加规则。
+    rsi_polluted = [u for u in uncovered
+                    if u['fs'].get('rsi_6') == 0.0 and u['fs'].get('rsi_12') == 50.0]
+    if rsi_polluted:
+        print(f'  ℹ️ 其中 {len(rsi_polluted)} 笔为 RSI 数据污染（rsi_6=0 & rsi_12=50，'
+              f'上游 stk_factor 缺失被 _f 转 0）— 数据质量问题，非策略可解，'
+              f'feature_builder 已加 rsi_6/rsi_24 守卫清洗，勿当毒区加规则')
+
 
 def main() -> None:
     db = SessionLocal()

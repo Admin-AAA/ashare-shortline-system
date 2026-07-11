@@ -50,8 +50,13 @@ def test_agent_skill_requires_api_key(monkeypatch):
         },
     )()
     monkeypatch.setattr("app.engine.agent_skill_runner.get_settings", lambda: settings)
+    # 全局 env key 已弃用：可用性改为依赖数据库模型路由表。模拟「无可用路由」。
+    monkeypatch.setattr(
+        "app.engine.agent_skill_runner.get_active_model_routes",
+        lambda: [],
+    )
 
-    with pytest.raises(RuntimeError, match="ASHARE_AGENT_SKILL_API_KEY"):
+    with pytest.raises(RuntimeError, match="未配置可用模型路由"):
         run_agent_skill(_skill(), {"code": "000001"}, {"breadth": {}})
 
 
