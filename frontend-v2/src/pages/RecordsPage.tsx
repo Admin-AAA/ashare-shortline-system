@@ -179,10 +179,12 @@ function TabButton({
 // 运行推荐记录列表
 // ============================================================
 
+type RunSortKey = "trade_date" | "recommended_count" | "score_line" | "return_1d" | "return_3d" | "return_5d" | "finished_at";
+
 function RunRecordsList() {
   const { navigate } = useUrlRoute();
   const { data, loading, error } = useApi<RunSummary[]>(
-    (_signal) => api.runRecords({ limit: 100 }),
+    (_signal) => api.runRecords({ limit: 500 }),
     [],
   );
 
@@ -192,8 +194,17 @@ function RunRecordsList() {
   const [statusFilter, setStatusFilter] = useState<string>("completed");
   const [presetFilter, setPresetFilter] = useState<string>("__all__");
   const [modeFilter, setModeFilter] = useState<string>("__all__");
-  // 推荐数下限：空字符串=不筛；数字 N=只看 recommended_count > N
   const [minRecsFilter, setMinRecsFilter] = useState<string>("0");
+
+  // —— 排序 ——
+  const [sortKey, setSortKey] = useState<RunSortKey>("trade_date");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  // —— 分页 ——
+  const [page, setPage] = useState(0);
+  const pageSize = 20;
+
+  const resetPage = () => setPage(0);
 
   // 策略选项：从数据里动态去重（按 preset_name），按频次倒序
   const presetOptions = useMemo(() => {
@@ -222,6 +233,38 @@ function RunRecordsList() {
     return true;
   });
 
+  // 排序
+  const getSortVal = (r: RunSummary): number | string => {
+    if (sortKey === "trade_date") return r.trade_date;
+    if (sortKey === "recommended_count") return r.recommended_count;
+    if (sortKey === "score_line") return r.score_line;
+    if (sortKey === "return_1d") return r.returns?.return_1d ?? -Infinity;
+    if (sortKey === "return_3d") return r.returns?.return_3d ?? -Infinity;
+    if (sortKey === "return_5d") return r.returns?.return_5d ?? -Infinity;
+    if (sortKey === "finished_at") return r.finished_at ?? "";
+    return "";
+  };
+  const sorted = [...filtered].sort((a, b) => {
+    const va = getSortVal(a);
+    const vb = getSortVal(b);
+    const cmp = va < vb ? -1 : va > vb ? 1 : 0;
+    return sortDir === "asc" ? cmp : -cmp;
+  });
+
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
+  const safePage = Math.min(page, totalPages - 1);
+  const pageItems = sorted.slice(safePage * pageSize, (safePage + 1) * pageSize);
+
+  const handleSort = (key: RunSortKey) => {
+    if (key === sortKey) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir("desc");
+    }
+    resetPage();
+  };
+
   const resetFilters = () => {
     setDateFrom("");
     setDateTo("");
@@ -229,6 +272,29 @@ function RunRecordsList() {
     setPresetFilter("__all__");
     setModeFilter("__all__");
     setMinRecsFilter("0");
+    resetPage();
+  };
+
+  const SortTh = ({
+    col,
+    align = "left",
+    children,
+  }: {
+    col: RunSortKey;
+    align?: "left" | "right";
+    children: React.ReactNode;
+  }) => {
+    const active = sortKey === col;
+    const arrow = active ? (sortDir === "asc" ? " ↑" : " ↓") : "";
+    return (
+      <th
+        style={{ ...thStyle, textAlign: align, cursor: "pointer", userSelect: "none", color: active ? "var(--text)" : "var(--muted)" }}
+        onClick={() => handleSort(col)}
+        title={`按${String(children)}排序`}
+      >
+        {children}{arrow}
+      </th>
+    );
   };
 
   return (
@@ -236,14 +302,14 @@ function RunRecordsList() {
       <div className="records-filterbar">
         <div className="records-filterbar__group">
           <label className="records-filterbar__label">日期</label>
-          <input className="cfg-input records-filterbar__date" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+          <input className="cfg-input records-filterbar__date" type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); resetPage(); }} />
           <span style={{ color: "var(--muted)" }}>→</span>
-          <input className="cfg-input records-filterbar__date" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          <input className="cfg-input records-filterbar__date" type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); resetPage(); }} />
         </div>
 
         <div className="records-filterbar__group">
           <label className="records-filterbar__label">状态</label>
-          <select className="cfg-input records-filterbar__select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+          <select className="cfg-input records-filterbar__select" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); resetPage(); }}>
             <option value="__all__">全部</option>
             <option value="completed">completed</option>
             <option value="failed">failed</option>
@@ -253,7 +319,7 @@ function RunRecordsList() {
 
         <div className="records-filterbar__group">
           <label className="records-filterbar__label">策略</label>
-          <select className="cfg-input records-filterbar__select" value={presetFilter} onChange={(e) => setPresetFilter(e.target.value)}>
+          <select className="cfg-input records-filterbar__select" value={presetFilter} onChange={(e) => { setPresetFilter(e.target.value); resetPage(); }}>
             <option value="__all__">全部</option>
             {presetOptions.map((name) => (
               <option key={name} value={name}>{name}</option>
@@ -263,7 +329,7 @@ function RunRecordsList() {
 
         <div className="records-filterbar__group">
           <label className="records-filterbar__label">运行模式</label>
-          <select className="cfg-input records-filterbar__select" value={modeFilter} onChange={(e) => setModeFilter(e.target.value)}>
+          <select className="cfg-input records-filterbar__select" value={modeFilter} onChange={(e) => { setModeFilter(e.target.value); resetPage(); }}>
             <option value="__all__">全部</option>
             <option value="formal">实盘</option>
             <option value="experiment">实验</option>
@@ -278,7 +344,7 @@ function RunRecordsList() {
             type="number"
             min={0}
             value={minRecsFilter}
-            onChange={(e) => setMinRecsFilter(e.target.value)}
+            onChange={(e) => { setMinRecsFilter(e.target.value); resetPage(); }}
             placeholder="0"
             style={{ width: 70 }}
           />
@@ -289,61 +355,75 @@ function RunRecordsList() {
         </button>
 
         <span className="records-filterbar__count">
-          显示 {filtered.length} / {data.length}
+          {filtered.length} / {data.length} 条
         </span>
       </div>
 
       {filtered.length === 0 ? (
         <EmptyState icon={<PlayCircle size={32} />} title="当前筛选无记录" reason="调整筛选条件后再试" />
       ) : (
-        <table style={tableStyle}>
-      <thead>
-        <tr>
-          <th style={thStyle}>日期</th>
-          <th style={thStyle}>运行名</th>
-          <th style={{ ...thStyle, textAlign: "right" }}>推荐数</th>
-          <th style={{ ...thStyle, textAlign: "right" }}>分数线</th>
-          <th style={{ ...thStyle, textAlign: "right" }}>一日收益</th>
-          <th style={{ ...thStyle, textAlign: "right" }}>三日收益</th>
-          <th style={{ ...thStyle, textAlign: "right" }}>五日收益</th>
-          <th style={thStyle}>状态</th>
-          <th style={thStyle}>完成时间</th>
-          <th style={thStyle}></th>
-        </tr>
-      </thead>
-      <tbody>
-        {filtered.map((run) => (
-          <tr
-            key={run.run_id}
-            onClick={() => navigate("/records", { params: { tab: "run", run_id: run.run_id } })}
-            style={{ ...rowStyle, cursor: "pointer" }}
-            title="点击查看当次推荐的股票"
-          >
-            <td style={tdStyle} className="text-mono">
-              <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}>
-                {run.trade_date}
-                <RunModeBadge runMode={run.run_mode} />
-              </span>
-            </td>
-            <td style={tdStyle}>{run.run_name || run.run_id.slice(0, 12)}</td>
-            <td style={{ ...tdStyle, textAlign: "right", fontFamily: "var(--font-mono)" }}>{run.recommended_count}</td>
-            <td style={{ ...tdStyle, textAlign: "right", fontFamily: "var(--font-mono)" }}>{run.score_line.toFixed(1)}</td>
-            <ReturnCell value={run.returns?.return_1d ?? null} />
-            <ReturnCell value={run.returns?.return_3d ?? null} />
-            <ReturnCell value={run.returns?.return_5d ?? null} />
-            <td style={tdStyle}>
-              <StatusBadge status={run.status} />
-            </td>
-            <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>
-              {run.finished_at ? formatTime(run.finished_at) : "—"}
-            </td>
-            <td style={{ ...tdStyle, textAlign: "right" }}>
-              <ChevronRight size={14} style={{ color: "var(--muted)" }} />
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+        <>
+          <table style={tableStyle}>
+            <thead>
+              <tr>
+                <SortTh col="trade_date">日期</SortTh>
+                <th style={thStyle}>运行名</th>
+                <SortTh col="recommended_count" align="right">推荐数</SortTh>
+                <SortTh col="score_line" align="right">分数线</SortTh>
+                <SortTh col="return_1d" align="right">一日收益</SortTh>
+                <SortTh col="return_3d" align="right">三日收益</SortTh>
+                <SortTh col="return_5d" align="right">五日收益</SortTh>
+                <th style={thStyle}>状态</th>
+                <SortTh col="finished_at">完成时间</SortTh>
+                <th style={thStyle}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {pageItems.map((run) => (
+                <tr
+                  key={run.run_id}
+                  onClick={() => navigate("/records", { params: { tab: "run", run_id: run.run_id } })}
+                  style={{ ...rowStyle, cursor: "pointer" }}
+                  title="点击查看当次推荐的股票"
+                >
+                  <td style={tdStyle} className="text-mono">
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}>
+                      {run.trade_date}
+                      <RunModeBadge runMode={run.run_mode} />
+                    </span>
+                  </td>
+                  <td style={tdStyle}>{run.run_name || run.run_id.slice(0, 12)}</td>
+                  <td style={{ ...tdStyle, textAlign: "right", fontFamily: "var(--font-mono)" }}>{run.recommended_count}</td>
+                  <td style={{ ...tdStyle, textAlign: "right", fontFamily: "var(--font-mono)" }}>{run.score_line.toFixed(1)}</td>
+                  <ReturnCell value={run.returns?.return_1d ?? null} />
+                  <ReturnCell value={run.returns?.return_3d ?? null} />
+                  <ReturnCell value={run.returns?.return_5d ?? null} />
+                  <td style={tdStyle}>
+                    <StatusBadge status={run.status} />
+                  </td>
+                  <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>
+                    {run.finished_at ? formatTime(run.finished_at) : "—"}
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: "right" }}>
+                    <ChevronRight size={14} style={{ color: "var(--muted)" }} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", padding: "var(--space-3) 0", borderTop: "1px solid var(--border)" }}>
+            <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={safePage === 0} style={pageBtnStyle(safePage === 0)}>
+              上一页
+            </button>
+            <span style={{ fontSize: "var(--text-base)", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
+              {safePage + 1} / {totalPages} · 共 {filtered.length} 条
+            </span>
+            <button onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))} disabled={safePage >= totalPages - 1} style={pageBtnStyle(safePage >= totalPages - 1)}>
+              下一页
+            </button>
+          </div>
+        </>
       )}
     </>
   );
