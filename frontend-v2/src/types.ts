@@ -273,6 +273,18 @@ export type WinRateSummary = {
   net_profit_loss_ratio?: number | null; // 净盈亏比
 };
 
+// LLM 审查层健康度（驾驶舱状态条「AI 审查」徽章数据源 — 北极星 B 项可见性缺口修复）
+// 以 llm_review_cache 最近命中时间为新鲜度代理：缓存只在 LLM 审查【成功】时写入，
+// key 失效 / provider 故障时审查静默停摆 → 推荐缺 LLM delta 而用户无感知。此类型让该状态可见。
+export type LlmReviewHealth = {
+  last_review_at: string | null; // 最近一次成功 LLM 审查时间（ISO）
+  recent_count_24h: number; // 近 24h 成功审查次数
+  total_entries: number; // 缓存总条数
+  model: string | null; // 最近一次审查使用的模型
+  status: "ok" | "stale" | "never"; // 审查层健康度
+  checked_at: string | null;
+};
+
 export type RiskRadar = {
   high: number;
   medium: number;

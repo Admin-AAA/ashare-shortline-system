@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   Activity,
   AlertTriangle,
+  Brain,
   ChevronRight,
   Database,
   PlayCircle,
@@ -13,6 +14,7 @@ import type {
   DashboardOverview,
   DataHealthDiagnostic,
   HomeBootstrap,
+  LlmReviewHealth,
   OutcomeSummary,
   WinRateSummary,
 } from "../types";
@@ -44,6 +46,8 @@ export function HomePage() {
 
   // 近 5 交易日 formal 推荐聚合胜率（驾驶舱状态条「近 5 日胜率」真实数据源，替代原硬编码占位 —）
   const [winRate, setWinRate] = useState<WinRateSummary | null>(null);
+  // LLM 审查层健康度（驾驶舱状态条「AI 审查」徽章 — 北极星 B 项可见性缺口修复）
+  const [llmHealth, setLlmHealth] = useState<LlmReviewHealth | null>(null);
   // 候选股票历史已结算推荐胜率（北极星 B 项「历史同策略胜率」一屏可见）
   const [outcomeMap, setOutcomeMap] = useState<Record<string, OutcomeSummary>>({});
 
@@ -94,6 +98,18 @@ export function HomePage() {
     return () => controller.abort();
   }, []);
 
+  // LLM 审查层健康度（非阻塞，失败则保持 null，状态条不显示该徽章）
+  useEffect(() => {
+    const controller = new AbortController();
+    api
+      .llmReviewHealth()
+      .then((d) => setLlmHealth(d))
+      .catch(() => {
+        /* 审查健康度非阻塞，失败则静默降级 */
+      });
+    return () => controller.abort();
+  }, []);
+
   // 候选股票历史已结算推荐胜率：recommendations 变化时按 codes 批量拉取（B 项历史同策略胜率）
   useEffect(() => {
     const codes = (data?.recommendations ?? []).map((r) => r.code).filter(Boolean);
@@ -130,6 +146,7 @@ export function HomePage() {
         healthDiag={healthDiag}
         healthLoading={healthLoading}
         winRate={winRate}
+        llmHealth={llmHealth}
         onViewHealthDetail={() => navigate("/data-health")}
       />
 
@@ -178,6 +195,7 @@ function StatusBar({
   healthDiag,
   healthLoading,
   winRate,
+  llmHealth,
   onViewHealthDetail,
 }: {
   canRun: boolean;
@@ -187,6 +205,7 @@ function StatusBar({
   healthDiag: DataHealthDiagnostic | null;
   healthLoading: boolean;
   winRate: WinRateSummary | null;
+  llmHealth: LlmReviewHealth | null;
   onViewHealthDetail: () => void;
 }) {
   const dot = canRun ? "🟢" : healthStatus === "blocked" ? "🔴" : "🟡";
@@ -276,6 +295,41 @@ function StatusBar({
           </strong>
         </>
       )}
+
+      {/* AI 审查层健康度（北极星 B 项可见性缺口修复）：以最近成功审查时间为新鲜度代理，
+          key 失效 / provider 故障时审查静默停摆 → 推荐缺 LLM delta 而用户无感知，此处使其可见 */}
+      {(() => {
+        const st = llmHealth?.status ?? null;
+        if (!st) return null;
+        const last = llmHealth?.last_review_at ? new Date(llmHealth.last_review_at) : null;
+        const hoursAgo = last ? Math.max(0, Math.round((Date.now() - last.getTime()) / 3600000)) : null;
+        const color = st === "ok" ? "var(--market-up)" : st === "stale" ? "var(--warning)" : "var(--market-down)";
+        const label =
+          st === "never" ? "从未审查"
+          : st === "stale" ? `静默 ${hoursAgo ?? "?"}h`
+          : last ? `${last.getHours().toString().padStart(2, "0")}:${last.getMinutes().toString().padStart(2, "0")} 更新` : "—";
+        const title =
+          `AI 审查层状态：${st}\n` +
+          `最近成功审查：${llmHealth?.last_review_at ?? "无"}\n` +
+          `近 24h 审查次数：${llmHealth?.recent_count_24h ?? 0}\n` +
+          `缓存总数：${llmHealth?.total_entries ?? 0}\n` +
+          `模型：${llmHealth?.model ?? "—"}\n` +
+          (st !== "ok" ? "\n⚠️ 审查层可能已停摆（key 失效 / provider 故障），推荐或缺失 LLM delta" : "");
+        return (
+          <>
+            <Sep />
+            <span className="text-muted">AI 审查：</span>
+            <strong
+              className="text-mono"
+              title={title}
+              style={{ color, display: "inline-flex", alignItems: "center", gap: "var(--space-1)" }}
+            >
+              <Brain size={13} style={{ color, flexShrink: 0 }} />
+              {label}
+            </strong>
+          </>
+        );
+      })()}
 
       {/* 右侧：数据健康度指示器（弹性推到最右） */}
       <div style={{ marginLeft: "auto", flexShrink: 0 }}>
