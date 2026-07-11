@@ -548,6 +548,47 @@ def metrics_by_strategy(
     return _cached(key, lambda: _metrics_by_strategy(db, start, end, window_days, run_mode=run_mode))
 
 
+def exposure_sample_counts(
+    db: Session,
+    window_days: int = 30,
+    run_mode: tuple[str, ...] = ("formal", "experiment"),
+) -> dict[str, int]:
+    """近 window_days 各策略「真实」样本数（formal+experiment，排除 backtest 合成回测）。
+
+    与 scripts/self_check.py 的 E 项曝光分布口径**完全一致**：按 recommended_at 近 N 天、
+    run_mode IN (formal, experiment)、JSON_TABLE 展开 skill_breakdown_json，按推荐去重后
+    每策略各计一次。供策略曝光补跑判定「哪些策略样本不足」。
+
+    ⚠️ 必须与 self_check 口径一致（recommended_at，而非 trade_date）：早期 _run_strategy_exposure
+    误用 metrics_by_strategy（按 trade_date 窗口），而 trade_date 与 recommended_at 严重偏离
+    （大量推荐 trade_date 落在窗口外），导致 metrics_by_strategy 严重低估样本数——daily-stock
+    真实 115 样本被误判为 7，曝光补跑错把高覆盖策略也选入、真正低覆盖策略反被淹没。改用
+    recommended_at 口径后，曝光补跑才能精确命中 self_check 标出的 <SAMPLE_FLOOR 策略。
+    """
+    placeholders = ", ".join(f":m{i}" for i in range(len(run_mode)))
+    params: dict[str, Any] = {f"m{i}": m for i, m in enumerate(run_mode)}
+    params["days"] = window_days
+    rows = db.execute(
+        text(
+            f"""
+            SELECT jt.strategy_id, COUNT(DISTINCT rec.recommendation_id) AS cnt
+            FROM recommendations rec
+            JOIN recommendation_runs u ON rec.run_id = u.run_id
+            JOIN JSON_TABLE(
+                rec.skill_breakdown_json, '$[*]'
+                COLUMNS (strategy_id VARCHAR(80) PATH '$.strategy_id')
+            ) jt
+            WHERE u.run_mode IN ({placeholders})
+              AND rec.skill_breakdown_json IS NOT NULL
+              AND rec.recommended_at >= DATE_SUB(NOW(), INTERVAL :days DAY)
+            GROUP BY jt.strategy_id
+            """
+        ),
+        params,
+    ).fetchall()
+    return {str(r[0]): int(r[1]) for r in rows}
+
+
 def _metrics_by_strategy(
     db: Session,
     start_date: str | None = None,

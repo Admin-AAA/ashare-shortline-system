@@ -39,6 +39,10 @@ MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID = "manual_data_health_remediation"
 SAFETY_NET_TASK_ID = "formal_run_safety_net"
 SAFETY_NET_MAX_ATTEMPTS = 3
 DEFAULT_RECOMMENDATION_DATA_SOURCE = "auto"
+# 策略曝光补跑调度任务（E 项样本可信前置）：盘前对近30天样本不足的策略单独补跑。
+# 任务 ID 固定，start_scheduler 时幂等注册（已存在则不覆盖用户手动调整的 cron/payload）。
+EXPOSURE_TASK_ID = "strategy_exposure_run"
+EXPOSURE_CRON = "3 8 * * 1-5"  # 周一到周五 08:03（盘前，避免与盘后结算/回填争抢资源）
 # 曝光补跑默认阈值：近30天已兑现样本 < 此值的 enabled 策略才补跑。
 # 取 20 与北极星 E 项样本置信度下限对齐——样本 <20 时胜率统计不可信（置信区间过宽），
 # 补跑持续喂到此值才让每个策略胜率可被信任，进而能按胜率选策略。
@@ -100,6 +104,7 @@ def start_scheduler() -> BackgroundScheduler:
 
     _scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
     _ensure_outcome_label_task()
+    _ensure_strategy_exposure_task()
     _load_and_schedule()
     _scheduler.start()
     _register_periodic_jobs()
@@ -136,6 +141,47 @@ def _ensure_outcome_label_task() -> None:
             db.close()
     except Exception:
         logger.exception("注册 outcome 结算任务失败")
+
+
+def _ensure_strategy_exposure_task() -> None:
+    """确保策略曝光补跑调度任务存在（E 项样本可信前置）。
+
+    盘前对近30天样本 < DEFAULT_EXPOSURE_MIN_SAMPLE(20) 的 enabled 策略单独补跑，
+    使其胜率统计可信（样本 ≥20 才能按胜率选策略、低胜率策略才敢标记）。
+
+    ⚠️ 历史根因：本函数曾缺失（仅 manual 触发路径 + _run_strategy_exposure 实现存在，
+    但 start_scheduler 从不注册定时任务），导致 exposure cron 从未被排程——4 个低频
+    策略（chip/high-range/small-cap/trend-pullback）长期卡在 n<20，胜率统计不可信，
+    E 项持续误触发。此处与 _ensure_outcome_label_task 同构幂等注册，修复该盲区。
+
+    若任务已存在则不覆盖（保留用户手动调整的 cron/payload）。
+    """
+    try:
+        db = SessionLocal()
+        try:
+            existing = db.get(ScheduledTask, EXPOSURE_TASK_ID)
+            if existing:
+                return
+            task = ScheduledTask(
+                task_id=EXPOSURE_TASK_ID,
+                name="策略曝光补跑（盘前样本补齐）",
+                task_type=TASK_TYPE_STRATEGY_EXPOSURE_RUN,
+                cron_expression=EXPOSURE_CRON,
+                payload_json=json.dumps(
+                    {
+                        "window_days": 30,
+                        "min_sample_threshold": DEFAULT_EXPOSURE_MIN_SAMPLE,
+                    }
+                ),
+                enabled=True,
+            )
+            db.add(task)
+            db.commit()
+            logger.info("已注册策略曝光补跑调度任务: %s (cron=%s)", EXPOSURE_TASK_ID, EXPOSURE_CRON)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("注册策略曝光补跑任务失败")
 
 
 def _register_periodic_jobs() -> None:
@@ -1123,7 +1169,6 @@ async def _run_strategy_exposure(db, payload: dict, task_run_id: str | None = No
     真实样本不足的策略被误判为「样本已够」而永远不被补跑（high-range 曾因 13 笔 backtest
     命中被误判 sample>=20，真实 formal+experiment 仅 16，长期卡在 n<20）。
     """
-    from app.services.outcome_service import metrics_by_strategy
     from app.services.workbench_service import enqueue_workbench_run, sync_skills
 
     window_days = int(payload.get("window_days", 30))
@@ -1136,8 +1181,13 @@ async def _run_strategy_exposure(db, payload: dict, task_run_id: str | None = No
     name_by_sid = {s.skill_id: s.name for s in skills}
 
     # 2. 拿近 window_days 各策略「真实」样本数（formal+experiment，排除 backtest 合成回测）
-    metrics = metrics_by_strategy(db, window_days=window_days, run_mode=("formal", "experiment"))
-    sample_by_sid = {m.get("strategy_id"): int(m.get("sample_count") or 0) for m in metrics}
+    #    口径与 scripts/self_check.py 的 E 项曝光分布一致（按 recommended_at 近 N 天），
+    #    避免误用 trade_date 窗口导致高覆盖策略被低估、错选入曝光补跑。
+    from app.services.outcome_service import exposure_sample_counts
+
+    sample_by_sid = exposure_sample_counts(
+        db, window_days=window_days, run_mode=("formal", "experiment")
+    )
 
     # 3. 筛低曝光策略：enabled 但样本 < 阈值
     low_exposure = []
