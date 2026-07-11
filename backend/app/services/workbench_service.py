@@ -470,7 +470,10 @@ def enqueue_workbench_run(db: Session, payload: dict[str, Any]) -> dict[str, Any
         run_id=run_id,
         preset_id=params.get("preset_id"),
         run_name=params["run_name"],
-        run_mode="formal",
+        # 尊重调用方显式指定的 run_mode（如曝光补跑传 experiment），
+        # 默认仍为 formal。修复：原先硬编码 "formal" 导致曝光补跑的
+        # experiment 意图失效，run 被错误创建为 formal 并污染记录中心/正式胜率统计。
+        run_mode=str(payload.get("run_mode") or "formal"),
         trade_date=_latest_trade_date(db),
         started_at=now,
         universe_count=0,

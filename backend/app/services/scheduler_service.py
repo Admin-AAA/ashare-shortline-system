@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -22,7 +23,12 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 
 from app.db.session import SessionLocal
-from app.models.tables import Preset, ScheduledTask, ScheduledTaskRun
+from app.models.tables import (
+    Preset,
+    RecommendationRun,
+    ScheduledTask,
+    ScheduledTaskRun,
+)
 from app.services.cost_service import finish_task_run, serialize_scheduled_task_run, start_task_run
 
 logger = logging.getLogger("scheduler")
@@ -1158,6 +1164,39 @@ async def _safety_net_run(db, payload: dict) -> dict:
 #  目的：打破「低曝光策略没样本 → 永远不被选 → 永远没样本」的死循环。
 # ═══════════════════════════════════════════════════════════════
 
+# 串行 enqueue 时每个策略之间的间隔，避免同时拉起多个全市场扫描子进程造成 CPU 尖峰/心跳超时。
+EXPOSURE_ENQUEUE_STAGGER_SECONDS = 8
+
+
+def _has_inflight_experiment_run(db, skill_id: str, within_minutes: int = 60) -> bool:
+    """该策略近 within_minutes 分钟内是否已有 queued/running 的 experiment run。
+
+    曝光补跑串行 enqueue 多个策略，每个策略起一个独立子进程跑全市场扫描（85~160s）。
+    若上一次补跑的子进程尚未结束（或被后端重启打断后仍在窗口内），重复 enqueue 会造成
+    同一策略多个重离子进程并发 → CPU 争用 → 心跳超时中断（实测 interrupted 多源于此）。
+    跳过在途任务可避免堆积，让有限的补跑窗口真正产出样本。
+    """
+    if db is None:
+        # 测试中以 None 注入（DB 全 mock）时无法查在途，直接放行（与旧行为一致）。
+        return False
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=within_minutes)
+    stmt = (
+        select(RecommendationRun)
+        .where(RecommendationRun.run_mode == "experiment")
+        .where(RecommendationRun.status.in_(("queued", "running")))
+        .where(RecommendationRun.started_at >= cutoff)
+    )
+    for run in db.scalars(stmt).all():
+        try:
+            skills = json.loads(run.selected_skills_json or "[]")
+        except (ValueError, TypeError):
+            continue
+        ids = [s.get("skill_id") for s in skills if isinstance(s, dict)]
+        if skill_id in ids:
+            return True
+    return False
+
+
 async def _run_strategy_exposure(db, payload: dict, task_run_id: str | None = None) -> dict:
     """对近30天样本不足的策略串行补跑 single_skill_id（experiment 模式）。
 
@@ -1219,6 +1258,7 @@ async def _run_strategy_exposure(db, payload: dict, task_run_id: str | None = No
 
     # 4. 串行 enqueue 每个低曝光策略
     exposed: list[dict] = []
+    skipped_inflight: list[dict] = []
     total = len(low_exposure)
     for index, item in enumerate(low_exposure, start=1):
         sid = item["skill_id"]
@@ -1228,6 +1268,12 @@ async def _run_strategy_exposure(db, payload: dict, task_run_id: str | None = No
                 task_run_id,
                 summary=f"曝光补跑 {index}/{total}: {sid}（样本 {item['sample_count']}）",
             )
+        # 跳过在途任务：避免与尚未结束的上一次补跑（或被重启打断仍在窗口内）重叠，
+        # 防止同一策略多个重离子进程并发导致 CPU 争用与心跳超时中断。
+        if _has_inflight_experiment_run(db, sid):
+            logger.info("曝光补跑跳过在途任务: %s（近 60min 已有 queued/running experiment run）", sid)
+            skipped_inflight.append({"skill_id": sid, "sample_count": item["sample_count"]})
+            continue
         try:
             result = enqueue_workbench_run(
                 db,
@@ -1249,16 +1295,22 @@ async def _run_strategy_exposure(db, payload: dict, task_run_id: str | None = No
             logger.exception("曝光补跑策略 %s 入队失败: %s", sid, exc)
             db.rollback()
             exposed.append({"skill_id": sid, "error": str(exc)})
+        # 错峰入队：每个策略起一个全市场扫描子进程，间隔拉起避免 CPU 尖峰。
+        if index < total:
+            time.sleep(EXPOSURE_ENQUEUE_STAGGER_SECONDS)
 
+    inflight_sids = [r["skill_id"] for r in skipped_inflight]
     msg = (
         f"曝光补跑完成: {len(exposed)}/{total} 策略已入队"
-        f"（近{window_days}天样本<{min_sample}的: {', '.join(r['skill_id'] for r in low_exposure)}）"
+        f"（跳过在途 {len(skipped_inflight)}: {', '.join(inflight_sids) or '无'}；"
+        f"近{window_days}天样本<{min_sample}的: {', '.join(r['skill_id'] for r in low_exposure)}）"
     )
     return {
         "skipped": False,
         "window_days": window_days,
         "min_sample_threshold": min_sample,
         "exposed_strategies": exposed,
+        "skipped_inflight_strategies": skipped_inflight,
         "skipped_strategies": skipped,
         "summary_text": msg,
     }
