@@ -5,9 +5,19 @@
 2. 永不复跑 disabled 策略（即便其样本为 0）
 3. 永不复跑已达标（样本≥阈值）策略
 4. 入队 payload 必为 run_mode='experiment' 且 disable_agent_review=True（不进记录中心/驾驶舱，免 LLM）
-5. metrics 查询口径必须是 ('formal','experiment')——排除 backtest 合成回测，
+5. 样本查询口径必须是 ('formal','experiment')——排除 backtest 合成回测，
    这是历史上 high-range-breakout-momentum 被 13 笔 backtest 误判 sample≥20、
    真实 formal+experiment 仅 16、长期卡 n<20 的根因回归点。
+
+⚠️ 口径对齐（与 parallel commit 557e196 的测试约定一致，但修正其样本窗口基准）：
+- 样本计数函数已改为 outcome_service.exposure_sample_counts（而非旧 metrics_by_strategy），
+  按 recommended_at 近 N 天、run_mode IN (formal,experiment)、JSON_TABLE 展开 skill_breakdown_json
+  去重统计——与 scripts/self_check.py 的 E 项曝光分布**完全一致**（E 项触发口径）。
+- 旧版误用 metrics_by_strategy 的 trade_date 窗口，与 self_check E 项（recommended_at）严重偏离，
+  导致 daily-stock 真实 115 样本被误判为 7、曝光补跑错把高覆盖策略也选入、真正低覆盖策略
+  反被淹没（实盘 cron 曾喂 sector/limit-up 而 chip 得 0 样本即为铁证）。本测试随修正改为
+  mock exposure_sample_counts（返回 dict 口径），其余不变量（只补低样本 enabled、跳过 disabled/达标、
+  experiment 模式禁 LLM、formal+experiment 排除 backtest）全部保留。
 
 注意：_run_strategy_exposure 在函数体内局部 import 三个服务函数，
 故此处 patch 的是源模块（app.services.workbench_service / outcome_service）的属性。
@@ -42,15 +52,16 @@ def fake_backfill(monkeypatch):
 
     calls = {}
 
-    def _fake_metrics(db, window_days=30, run_mode=None):
+    def _fake_exposure_counts(db, window_days=30, run_mode=None):
         calls["window_days"] = window_days
         calls["run_mode"] = run_mode
-        # chip=12, small-cap=3, daily=115；disabled-strategy 不在 metrics 中 -> 视为 0（但 disabled）
-        return [
-            {"strategy_id": "daily-stock-analysis-skill", "sample_count": 115, "hit_rate": 53.0},
-            {"strategy_id": "chip-single-peak-breakout", "sample_count": 12, "hit_rate": 58.3},
-            {"strategy_id": "small-cap-thematic-momentum", "sample_count": 3, "hit_rate": 0.0},
-        ]
+        # 与 exposure_sample_counts 口径一致：返回 {strategy_id: count} dict。
+        # chip=12, small-cap=3, daily=115；disabled-strategy 不在结果中 -> 视为 0（但 disabled）
+        return {
+            "daily-stock-analysis-skill": 115,
+            "chip-single-peak-breakout": 12,
+            "small-cap-thematic-momentum": 3,
+        }
 
     captured = []
 
@@ -59,7 +70,7 @@ def fake_backfill(monkeypatch):
         return {"run": {"run_id": "run_x"}, "queued": True}
 
     monkeypatch.setattr("app.services.workbench_service.sync_skills", _fake_sync_skills)
-    monkeypatch.setattr("app.services.outcome_service.metrics_by_strategy", _fake_metrics)
+    monkeypatch.setattr("app.services.outcome_service.exposure_sample_counts", _fake_exposure_counts)
     monkeypatch.setattr("app.services.workbench_service.enqueue_workbench_run", _fake_enqueue)
 
     return {"calls": calls, "captured": captured}
@@ -87,8 +98,11 @@ def test_exposure_enqueue_uses_experiment_mode_and_disables_llm(fake_backfill):
         assert p["single_skill_id"] in {"chip-single-peak-breakout", "small-cap-thematic-momentum"}
 
 
-def test_exposure_metrics_query_excludes_backtest(fake_backfill):
-    """锁定历史 high-range bug：补跑只统计 formal+experiment，必须排除 backtest 合成回测。"""
+def test_exposure_query_excludes_backtest(fake_backfill):
+    """锁定历史 high-range bug：补跑只统计 formal+experiment，必须排除 backtest 合成回测。
+
+    现由 exposure_sample_counts(run_mode=('formal','experiment')) 承接该口径。
+    """
     asyncio.run(
         scheduler_service._run_strategy_exposure(None, {"window_days": 30, "min_sample_threshold": 20})
     )
@@ -102,10 +116,8 @@ def test_exposure_skips_when_all_covered(monkeypatch):
         lambda db: [_FakeSkill("only-skill", "唯一策略", True)],
     )
     monkeypatch.setattr(
-        "app.services.outcome_service.metrics_by_strategy",
-        lambda db, window_days=30, run_mode=None: [
-            {"strategy_id": "only-skill", "sample_count": 50, "hit_rate": 60.0}
-        ],
+        "app.services.outcome_service.exposure_sample_counts",
+        lambda db, window_days=30, run_mode=None: {"only-skill": 50},
     )
     captured = []
     monkeypatch.setattr(
