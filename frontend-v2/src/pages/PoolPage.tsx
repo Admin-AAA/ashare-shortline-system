@@ -179,20 +179,10 @@ export function PoolPage() {
                       </span>
                     )}
                   </div>
-                  {c.entry_rule && (
-                    <div
-                      style={{
-                        fontSize: "var(--text-xs)",
-                        color: "var(--text-muted)",
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        marginTop: 2,
-                      }}
-                    >
-                      入场 · {c.entry_rule}
-                    </div>
-                  )}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+                    {c.entry_rule && <RuleLine label="入场" text={c.entry_rule} />}
+                    {c.invalid_rule && <RuleLine label="失效" text={c.invalid_rule} />}
+                  </div>
                 </div>
               </div>
 
@@ -425,6 +415,31 @@ function RiskTag({ level, setup }: { level: RiskLevel; setup?: string | null }) 
     <div style={{ display: "flex", gap: "var(--space-1)" }}>
       {setup && <span className="tag">{setup}</span>}
       <span className={`tag ${toneClass}`} style={{ color }}>{level}</span>
+    </div>
+  );
+}
+
+/**
+ * 行内决策规则（入场 / 失效）—— 折叠态即可见完整决策链，无需逐行展开。
+ * 标签用 ink-secondary 提亮便于扫读，规则文本沿用 muted 保持克制（bold 只留给关键数字）。
+ * 长规则单行省略（title 悬浮看全文），避免折叠行被撑高。
+ */
+function RuleLine({ label, text }: { label: string; text: string }) {
+  return (
+    <div
+      style={{
+        fontSize: "var(--text-xs)",
+        color: "var(--text-muted)",
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        display: "flex",
+        gap: "var(--space-1)",
+      }}
+      title={text}
+    >
+      <span style={{ flexShrink: 0, color: "var(--ink-secondary)", fontWeight: 600 }}>{label} ·</span>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{text}</span>
     </div>
   );
 }
