@@ -7,6 +7,7 @@ self-improve 实例并行加脆弱过滤器，存在过拟合风险。verify_d_g
 2. verify_d_guardrail 的阈值常量与 _check 闸门逻辑——任何调低阈值的改动都会被本测试拦下。
 不依赖 DB 真实数据，纯函数确定性验证。
 """
+import json
 import pathlib
 import sys
 
@@ -92,3 +93,38 @@ def test_guardrail_check_logic():
     # 最大亏损方向：越接近 0 越好，-5.0 >= -6.5 视为达标
     assert verify_d_guardrail._check("ml", True, -5.0, -6.5) is True
     assert verify_d_guardrail._check("ml", False, -7.0, -6.5) is False
+
+
+def test_build_report_structure_and_thresholds():
+    """build_report 结构锁定：含 full/forward/passed/thresholds，前瞻块含 n。"""
+    full = {"n": 187, "net_wr": 75.4, "net_pl": 2.98, "max_loss": -5.88}
+    fwd = {"n": 31, "net_wr": 77.4, "net_pl": 4.19, "max_loss": -4.2}
+    rep = verify_d_guardrail.build_report(full, fwd, True, 0)
+    assert rep["passed"] is True
+    assert rep["exit_code"] == 0
+    assert rep["full"] == full
+    assert rep["forward"] == fwd
+    assert rep["thresholds"]["net_winrate_floor"] == 65.0
+    assert rep["thresholds"]["forward_net_winrate_floor"] == 60.0
+    assert isinstance(rep["generated_at"], str) and "T" in rep["generated_at"]
+
+
+def test_build_report_handles_empty_samples():
+    """样本不足（None）时报告仍可结构化，不抛异常，passed=False/exit=2。"""
+    rep = verify_d_guardrail.build_report(None, None, False, 2)
+    assert rep["full"] is None
+    assert rep["forward"] is None
+    assert rep["passed"] is False
+    assert rep["exit_code"] == 2
+
+
+def test_write_report_roundtrip(tmp_path):
+    """write_report 落盘 JSON 可被回读且内容一致（跨 run 漂移追踪的基础）。"""
+    path = tmp_path / "d_guardrail_report.json"
+    full = {"n": 10, "net_wr": 70.0, "net_pl": 3.0, "max_loss": -5.0}
+    fwd = {"n": 5, "net_wr": 65.0, "net_pl": 2.5, "max_loss": -4.0}
+    rep = verify_d_guardrail.build_report(full, fwd, True, 0)
+    verify_d_guardrail.write_report(rep, str(path))
+    assert path.exists()
+    back = json.loads(path.read_text(encoding="utf-8"))
+    assert back == rep

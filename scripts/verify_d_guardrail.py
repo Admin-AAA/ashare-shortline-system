@@ -13,16 +13,15 @@
 
 用法（在 worktree / 主仓均可）：
     cd backend && source .venv/bin/activate && python3 ../scripts/verify_d_guardrail.py
+    python3 ../scripts/verify_d_guardrail.py --json output/d_guardrail_report.json   # 机器可读报告
 退出码：0=达标，1=任意阈值被突破（回归），2=样本不足无法判定。
 
-阈值（取自北极星 D 项目标「朝 65%+/2.0+/-4%」+ 历史基线 -5.80）：
-  - NET_WINRATE_FLOOR = 65.0      净胜率下限（扣 0.07% 成本后）
-  - NET_PL_RATIO_FLOOR = 2.0      净盈亏比下限
-  - MAX_LOSS_FLOOR = -6.5         最大亏损下限（基线 -5.80 ± 噪声；给 0.7pp 缓冲，
-                                    只拦灾难性回归，不被日度方差误触发）
-  - FORWARD_NET_WINRATE_FLOOR = 60.0  前瞻窗口（≥FORWARD_EPOCH）净胜率下限——
-                                    样本外必须仍达标，否则视为过拟合（刷样本内、外样本崩）
+--json 说明：默认仅打印 stdout（行为向后兼容）；加 --json 才落盘 JSON 报告。报告写入
+output/（已被 .gitignore 忽略），不进版本库，供跨 run 漂移追踪（慢退化单点阈值查不出）。
 """
+import argparse
+import datetime
+import json
 import os
 import sys
 
@@ -39,6 +38,11 @@ NET_PL_RATIO_FLOOR = 2.0
 MAX_LOSS_FLOOR = -6.5          # 即 max_loss 不得低于 -6.5%
 FORWARD_NET_WINRATE_FLOOR = 60.0
 
+# 默认报告落盘路径（output/ 已被 .gitignore 忽略，不会进版本库）
+REPORT_DEFAULT_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), '..', 'output', 'd_guardrail_report.json')
+)
+
 
 def _check(name: str, ok: bool, actual, floor) -> bool:
     status = "✅ PASS" if ok else "❌ FAIL"
@@ -46,13 +50,58 @@ def _check(name: str, ok: bool, actual, floor) -> bool:
     return ok
 
 
-def main() -> int:
+def build_report(full: dict | None, fwd: dict | None, ok: bool, exit_code: int) -> dict:
+    """把本轮 D 项护栏结果结构化为机器可读报告，供跨 run 漂移追踪。
+
+    full / fwd 为 self_check._compute_d_cost 的返回 dict（含 n/net_wr/net_pl/max_loss）。
+    只萃取 D 项护栏关心的四个字段，剔除噪声字段，避免报告随实现细节漂移。
+    """
+    def _block(m):
+        return None if m is None else {
+            "n": m["n"],
+            "net_wr": m["net_wr"],
+            "net_pl": m["net_pl"],
+            "max_loss": m["max_loss"],
+        }
+    return {
+        "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "thresholds": {
+            "net_winrate_floor": NET_WINRATE_FLOOR,
+            "net_pl_ratio_floor": NET_PL_RATIO_FLOOR,
+            "max_loss_floor": MAX_LOSS_FLOOR,
+            "forward_net_winrate_floor": FORWARD_NET_WINRATE_FLOOR,
+        },
+        "full": _block(full),
+        "forward": _block(fwd),
+        "passed": bool(ok),
+        "exit_code": int(exit_code),
+    }
+
+
+def write_report(report: dict, path: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+
+
+def main(argv: list | None = None) -> int:
+    parser = argparse.ArgumentParser(description="D 项北极星回归护栏")
+    parser.add_argument(
+        "--json", nargs="?", const=REPORT_DEFAULT_PATH, default=None,
+        help="写出机器可读 JSON 报告；不指定路径则用默认 output/d_guardrail_report.json",
+    )
+    args = parser.parse_args(argv)
+
     db = SessionLocal()
     rows = self_check._fetch_dedup_live_formal(db)
     db.close()
 
     if not rows:
         print("⚠️ D 项护栏：无 LIVE formal 样本，无法判定（退出码 2）。")
+        report = build_report(None, None, False, 2)
+        if args.json:
+            write_report(report, args.json)
+            print(f"📄 JSON 报告已写出: {args.json}")
         return 2
 
     full = self_check._compute_d_cost(rows)
@@ -81,9 +130,15 @@ def main() -> int:
     print("-" * 60)
     if ok:
         print("✅ D 项护栏全部达标：未检测到对北极星 D 项的回归。")
-        return 0
-    print("❌ D 项护栏触发：检测到对北极星 D 项的回归，阻断合并并排查最近 strategy.yaml 改动。")
-    return 1
+    else:
+        print("❌ D 项护栏触发：检测到对北极星 D 项的回归，阻断合并并排查最近 strategy.yaml 改动。")
+
+    exit_code = 0 if ok else 1
+    report = build_report(full, fwd, ok, exit_code)
+    if args.json:
+        write_report(report, args.json)
+        print(f"📄 JSON 报告已写出: {args.json}")
+    return exit_code
 
 
 if __name__ == '__main__':
