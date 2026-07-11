@@ -27,6 +27,7 @@ from app.agents.session_registry import AgentSessionRegistry
 from app.db.session import SessionLocal
 from app.core.config import get_settings
 from app.engine.agent_skill_runner import agent_only_signal, enrich_signal_with_agent_review
+from app.services.model_router_service import has_active_model_routes
 from app.engine.aggregator import (
     aggregate,
     apply_pool_rules,
@@ -2195,9 +2196,10 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             risk_template=params["risk_template"],
             return_watchlist=True,
             same_day_industry_counts=same_day_industry_counts,
-            # 配置级降级信号：未配置 LLM key 时系统整体降级，高潮/强牛阶段也启用
-            # 软降线兜底，保证「每天可见推荐」（北极星 A 项，修复 07-10 零推荐断档根因）。
-            agent_available=bool(get_settings().agent_skill_api_key),
+            # 配置级降级信号：未配置任何有效模型路由（自带 key）时系统整体降级，
+            # 高潮/强牛阶段也启用软降线兜底，保证「每天可见推荐」。
+            # 注意：基于数据库 model_route_config 表，不再依赖已弃用的全局 env key。
+            agent_available=has_active_model_routes(),
         )
         if isinstance(pool_result, dict):
             cards = pool_result.get("recommendations", [])

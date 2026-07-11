@@ -22,7 +22,7 @@ import type { ModelRoute, ModelRouteTestResult } from "../types";
  * - 新增 / 删除路由（含 base_url / api_key / model）
  * 这些路由是 Skill Agent 实际调用的 LLM 故障转移通道。
  */
-export function ModelRoutesSection() {
+export function ModelRoutesSection({ refreshKey }: { refreshKey?: number } = {}) {
   const [routes, setRoutes] = useState<ModelRoute[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -38,6 +38,9 @@ export function ModelRoutesSection() {
     model: "",
     api_key: "",
     enabled: true,
+    max_tokens: "",
+    temperature: "",
+    timeout_seconds: "",
   });
   const [saving, setSaving] = useState(false);
 
@@ -93,7 +96,7 @@ export function ModelRoutesSection() {
       model: editForm.model.trim(),
       enabled: editForm.enabled,
     };
-    // 编辑 Key 语义：勾选「清除」则清掉独立 Key 回退系统默认；
+    // 编辑 Key 语义：勾选「清除」则清空该路由独立 Key（清空后此路由无 Key、变为不可用）；
     // 输入了新 Key 则更新；两者皆无则保留原 Key（不传 api_key 字段）。
     if (editForm.clear_key) {
       payload.clear_api_key = true;
@@ -135,10 +138,10 @@ export function ModelRoutesSection() {
     }
   }
 
-  // 首次挂载加载（必须在 useEffect 中，避免渲染阶段触发 setState）
+  // 首次挂载及 refreshKey 变化时重新加载
   useEffect(() => {
     load();
-  }, []);
+  }, [refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleTest(route: ModelRoute) {
     setBusyId(route.route_id);
@@ -219,8 +222,11 @@ export function ModelRoutesSection() {
         model: form.model.trim(),
         api_key: form.api_key.trim() || undefined,
         enabled: form.enabled,
+        ...(form.max_tokens.trim() ? { max_tokens: Number(form.max_tokens) } : {}),
+        ...(form.temperature.trim() ? { temperature: Number(form.temperature) } : {}),
+        ...(form.timeout_seconds.trim() ? { timeout_seconds: Number(form.timeout_seconds) } : {}),
       });
-      setForm({ name: "", provider: "openai_compatible", base_url: "", model: "", api_key: "", enabled: true });
+      setForm({ name: "", provider: "openai_compatible", base_url: "", model: "", api_key: "", enabled: true, max_tokens: "", temperature: "", timeout_seconds: "" });
       setAdding(false);
       await load();
     } catch (e: unknown) {
@@ -284,7 +290,10 @@ export function ModelRoutesSection() {
           <LabeledInput label="Provider" value={form.provider} placeholder="openai_compatible" onChange={(v) => setForm((f) => ({ ...f, provider: v }))} />
           <LabeledInput label="Base URL" value={form.base_url} placeholder="https://api.deepseek.com" onChange={(v) => setForm((f) => ({ ...f, base_url: v }))} />
           <LabeledInput label="模型" value={form.model} placeholder="deepseek-chat" onChange={(v) => setForm((f) => ({ ...f, model: v }))} />
-          <LabeledInput label="API Key" value={form.api_key} placeholder="留空则使用系统默认 Key" password onChange={(v) => setForm((f) => ({ ...f, api_key: v }))} />
+          <LabeledInput label="API Key" value={form.api_key} placeholder="必填：本路由独立 Key（无默认 Key）" password onChange={(v) => setForm((f) => ({ ...f, api_key: v }))} />
+          <LabeledInput label="Max Tokens" hint="留空使用系统默认" value={form.max_tokens} placeholder="如 40000" type="number" min={1} step={1} onChange={(v) => setForm((f) => ({ ...f, max_tokens: v }))} />
+          <LabeledInput label="Temperature" hint="0-2，留空使用系统默认" value={form.temperature} placeholder="如 0.3" type="number" min={0} max={2} step={0.1} onChange={(v) => setForm((f) => ({ ...f, temperature: v }))} />
+          <LabeledInput label="超时（秒）" hint="留空使用系统默认" value={form.timeout_seconds} placeholder="如 300" type="number" min={1} step={1} onChange={(v) => setForm((f) => ({ ...f, timeout_seconds: v }))} />
           <div style={{ display: "flex", alignItems: "flex-end", gap: "var(--space-2)" }}>
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "var(--text-sm)", color: "var(--text-secondary)" }}>
               <input type="checkbox" checked={form.enabled} onChange={(e) => setForm((f) => ({ ...f, enabled: e.target.checked }))} />
@@ -347,8 +356,8 @@ export function ModelRoutesSection() {
                 >
                   {r.enabled ? "启用" : "停用"}
                 </span>
-                <span style={{ fontSize: "var(--text-xs)", color: "var(--muted)" }}>
-                  {r.api_key_masked || (r.uses_default_key ? "使用系统默认 Key" : "未配置")}
+                <span style={{ fontSize: "var(--text-xs)", color: r.has_api_key ? "var(--muted)" : "var(--color-down)" }}>
+                  {r.api_key_masked || "未配置 Key（路由不可用）"}
                 </span>
 
                 <div style={{ display: "flex", gap: "var(--space-2)", marginLeft: "auto" }}>
@@ -390,7 +399,7 @@ export function ModelRoutesSection() {
                   <LabeledInput
                     label="API Key"
                     value={editForm.api_key}
-                    placeholder={r.has_api_key ? "留空则保留当前 Key" : "留空则使用系统默认 Key"}
+                    placeholder={r.has_api_key ? "留空则保留当前 Key" : "必填：请输入本路由独立 Key（无默认 Key）"}
                     password
                     onChange={(v) => setEditForm((f) => ({ ...f, api_key: v }))}
                   />

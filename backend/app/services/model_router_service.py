@@ -61,6 +61,7 @@ class ResolvedModelRoute:
     api_key: str
     priority: int
     key_source: str
+    valid: bool = True
 
     @property
     def circuit_key(self) -> str:
@@ -161,7 +162,17 @@ async def test_model_route(db: Session, payload: dict) -> dict:
             "model": route.model,
             "base_url": route.base_url,
             "key_source": "missing",
-            "message": "未配置可用 API Key，请先填写自定义 Key 或配置系统默认 Key",
+            "message": "未配置可用 API Key，请为这条路由填写独立 Key",
+        }
+    if not route.base_url or not route.model:
+        return {
+            "ok": False,
+            "route_id": route.route_id,
+            "route_name": route.name,
+            "model": route.model,
+            "base_url": route.base_url,
+            "key_source": route.key_source,
+            "message": "未配置 Base URL 或模型，请先补全该路由的 Base URL 与模型",
         }
     if route.provider != "openai_compatible":
         return {
@@ -242,7 +253,13 @@ async def test_model_route(db: Session, payload: dict) -> dict:
 
 
 def get_active_model_routes() -> list[ResolvedModelRoute]:
-    settings = get_settings()
+    """返回当前可用的模型路由（按优先级升序）。
+
+    路由表是唯一真相源：每条路由必须自带 api_key / base_url / model。
+    全局 env key（ASHARE_AGENT_SKILL_API_KEY）与 config 默认 key/url 均不参与
+    解析，也不作为回退。缺少 key 或 base_url/model 任意一项的路由视为无效，
+    直接排除。无任何有效路由时返回空列表（调用方应据此明确报错，而非静默降级）。
+    """
     with SessionLocal() as db:
         _ensure_default_route(db)
         rows = db.scalars(
@@ -251,52 +268,54 @@ def get_active_model_routes() -> list[ResolvedModelRoute]:
             .order_by(ModelRouteConfig.priority.asc(), ModelRouteConfig.updated_at.asc())
         ).all()
         _normalize_priorities(db, rows)
+        db.commit()
         active: list[ResolvedModelRoute] = []
         for row in rows:
-            api_key = str(row.api_key or settings.agent_skill_api_key or "").strip()
-            if not api_key:
-                continue
+            api_key = str(row.api_key or "").strip()
+            base_url = str(row.base_url or "").strip()
+            model = str(row.model or "").strip()
+            has_key = bool(api_key)
+            valid = bool(api_key and base_url and model)
             active.append(
                 ResolvedModelRoute(
                     route_id=str(row.route_id),
                     name=str(row.name),
                     provider=str(row.provider or "openai_compatible"),
-                    base_url=str(row.base_url or settings.agent_skill_base_url or "").strip(),
-                    model=str(row.model or settings.agent_model),
+                    base_url=base_url,
+                    model=model,
                     api_key=api_key,
                     priority=int(row.priority or 1),
-                    key_source="env_default" if not str(row.api_key or "").strip() else "custom",
+                    key_source="custom" if has_key else "missing",
+                    valid=valid,
                 )
             )
-        if active:
-            db.commit()
-            return active
-        db.commit()
-    return [
-        ResolvedModelRoute(
-            route_id=DEFAULT_ROUTE_ID,
-            name=f"默认模型 {settings.agent_model}",
-            provider="openai_compatible",
-            base_url=settings.agent_skill_base_url,
-            model=settings.agent_model,
-            api_key=settings.agent_skill_api_key,
-            priority=1,
-            key_source="env_default",
-        )
-    ] if settings.agent_skill_api_key else []
+        return [r for r in active if r.valid]
+
+
+def has_active_model_routes() -> bool:
+    """是否存在至少一条可用（自带 key/base_url/model）的模型路由。"""
+    try:
+        return bool(get_active_model_routes())
+    except Exception:
+        return False
 
 
 def _ensure_default_route(db: Session) -> None:
+    """库为空时栽植一条占位路由，提示用户去配置。
+
+    该占位路由的 base_url / model / api_key 均为空，属于「无效路由」，
+    不会被 get_active_model_routes() 选中——不存在「全局默认 key/url」回退。
+    用户必须在模型路由表中为每条路由填写独立 Key 后才可使用。
+    """
     existing = db.scalars(select(ModelRouteConfig).limit(1)).first()
     if existing is not None:
         return
-    settings = get_settings()
     default_route = ModelRouteConfig(
         route_id=DEFAULT_ROUTE_ID,
-        name=f"默认模型 {settings.agent_model}",
+        name="默认模型路由（请配置 Base URL / 模型 / API Key）",
         provider="openai_compatible",
-        base_url=settings.agent_skill_base_url,
-        model=settings.agent_model,
+        base_url="",
+        model="",
         api_key="",
         priority=1,
         enabled=True,
@@ -317,11 +336,13 @@ def _normalize_priorities(db: Session, rows: list[ModelRouteConfig]) -> None:
 
 
 def _apply_route_payload(route: ModelRouteConfig, payload: dict, *, creating: bool) -> None:
-    settings = get_settings()
-    route.name = str(payload.get("name") or route.name or f"模型 {payload.get('model') or settings.agent_model}").strip()
+    # 注意：不再回退到 config 默认 base_url/model（已弃用），缺失即为空，
+    # 由调用方/UI 负责填写，避免出现「隐藏的默认 deepseek 路由」。
+    fallback_name = route.name or f"模型 {payload.get('model') or '路由'}"
+    route.name = str(payload.get("name") or fallback_name).strip()
     route.provider = str(payload.get("provider") or route.provider or "openai_compatible").strip() or "openai_compatible"
-    route.base_url = str(payload.get("base_url") or route.base_url or settings.agent_skill_base_url).strip()
-    route.model = str(payload.get("model") or route.model or settings.agent_model).strip() or settings.agent_model
+    route.base_url = str(payload.get("base_url") or route.base_url or "").strip()
+    route.model = str(payload.get("model") or route.model or "").strip() or ""
     route.enabled = bool(payload.get("enabled", route.enabled if not creating else True))
     route.priority = max(1, int(payload.get("priority") or route.priority or 1))
 
@@ -355,8 +376,8 @@ def _resolve_route_for_test(db: Session, payload: dict, settings) -> ResolvedMod
         raise LookupError("模型路由不存在，请先刷新列表后重试")
 
     provider = str(payload.get("provider") or (existing.provider if existing else "") or "openai_compatible").strip() or "openai_compatible"
-    base_url = str(payload.get("base_url") or (existing.base_url if existing else "") or settings.agent_skill_base_url).strip()
-    model = str(payload.get("model") or (existing.model if existing else "") or settings.agent_model).strip() or settings.agent_model
+    base_url = str(payload.get("base_url") or (existing.base_url if existing else "") or "").strip()
+    model = str(payload.get("model") or (existing.model if existing else "") or "").strip() or ""
     name = str(payload.get("name") or (existing.name if existing else "") or f"模型 {model}").strip() or f"模型 {model}"
     api_key, key_source = _resolve_test_api_key(existing, payload, settings)
 
@@ -373,18 +394,20 @@ def _resolve_route_for_test(db: Session, payload: dict, settings) -> ResolvedMod
 
 
 def _resolve_test_api_key(route: ModelRouteConfig | None, payload: dict, settings) -> tuple[str, str]:
-    env_api_key = str(settings.agent_skill_api_key or "").strip()
+    """解析测试连接所用的 key。
+
+    仅从「本次表单输入的 key」或「路由自身已存储的 key」取，绝不回退到全局
+    env key（ASHARE_AGENT_SKILL_API_KEY，已弃用）。清除操作时返回空 key。
+    """
     draft_api_key = str(payload.get("api_key") or "").strip() if "api_key" in payload else ""
     stored_api_key = str(route.api_key or "").strip() if route else ""
 
     if payload.get("clear_api_key"):
-        return env_api_key, "env_default" if env_api_key else "missing"
+        return "", "missing"
     if draft_api_key:
         return draft_api_key, "custom"
     if stored_api_key:
         return stored_api_key, "custom"
-    if env_api_key:
-        return env_api_key, "env_default"
     return "", "missing"
 
 
@@ -405,8 +428,7 @@ def _format_test_route_error(route_name: str, model: str, exc: Exception) -> str
 
 def _serialize_route(route: ModelRouteConfig, settings) -> dict:
     custom_key = str(route.api_key or "").strip()
-    uses_default_key = not custom_key
-    default_key_available = bool(settings.agent_skill_api_key)
+    has_api_key = bool(custom_key)
     return {
         "route_id": route.route_id,
         "name": route.name,
@@ -415,11 +437,11 @@ def _serialize_route(route: ModelRouteConfig, settings) -> dict:
         "model": route.model,
         "priority": int(route.priority or 1),
         "enabled": bool(route.enabled),
-        "uses_default_key": uses_default_key,
-        "default_key_available": default_key_available,
-        "has_api_key": bool(custom_key or settings.agent_skill_api_key),
-        "key_source": "env_default" if uses_default_key else "custom",
-        "api_key_masked": "使用系统默认 Key" if uses_default_key and default_key_available else _mask_key(custom_key),
+        "uses_default_key": False,
+        "default_key_available": False,
+        "has_api_key": has_api_key,
+        "key_source": "custom" if has_api_key else "missing",
+        "api_key_masked": _mask_key(custom_key) if has_api_key else "未配置",
         # 独立配置参数（为空时使用系统默认值）
         "max_tokens": route.max_tokens,
         "temperature": route.temperature,

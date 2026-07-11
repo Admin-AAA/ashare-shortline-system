@@ -41,10 +41,7 @@ import type {
   StrategyListItem,
   StrategyStatsRow,
   StatsOverview,
-  AlphaDecayResponse,
-  SystemLlmConfig,
-  SystemLlmTestResult,
-  SystemLlmUpdateResult
+  AlphaDecayResponse
 } from "../types";
 import { createDashboardApi } from "./dashboard";
 import { logger } from "../utils/logger";
@@ -417,17 +414,4 @@ export const api = {
     return request<MatrixRecordsResponse>(`/api/records/matrix?${qs.toString()}`);
   },
   matrixRecordDetail: (id: number) => request<MatrixRecordDetail>(`/api/records/matrix/${id}`),
-
-  // —— 系统 LLM 接口（agent_skill_*）配置 / 测试 ——
-  systemLlmConfig: () => request<SystemLlmConfig>("/api/admin/system-llm"),
-  updateSystemLlmConfig: (payload: Partial<SystemLlmConfig>) =>
-    request<SystemLlmUpdateResult>("/api/admin/system-llm", json("POST", payload)),
-  testSystemLlmConfig: (payload: {
-    base_url?: string;
-    model?: string;
-    api_key?: string;
-    timeout_seconds?: number;
-    temperature?: number;
-    max_tokens?: number;
-  }) => request<SystemLlmTestResult>("/api/admin/system-llm/test", json("POST", payload), { timeoutMs: 35_000 })
 };

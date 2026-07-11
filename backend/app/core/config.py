@@ -36,14 +36,18 @@ class Settings(BaseSettings):
     market_request_timeout_seconds: float = 10.0
     script_timeout_seconds: int = 7200  # subprocess 调用回填脚本的超时；0 表示不限时
     agent_skill_runtime: str = "llm"
-    agent_skill_api_key: str = ""
-    agent_skill_base_url: str = "https://api.deepseek.com"
-    agent_skill_model: str = "deepseek-v4-pro"
+    # ── 以下 agent_skill_* / agent_model 已弃用 ──
+    # 模型路由改由数据库 model_route_config 表驱动：每条路由自带独立
+    # api_key / base_url / model。「全局默认 key/url」不再参与任何路由解析，
+    # 也不作为回退。保留字段仅为向后兼容 .env 解析，路由代码不再读取。
+    agent_skill_api_key: str = ""          # 弃用：不再作为任何路由的回退 key
+    agent_skill_base_url: str = ""         # 弃用：不再作为任何路由的回退 base_url
+    agent_skill_model: str = ""            # 弃用
     agent_skill_timeout_seconds: float = 300.0  # 正式链路默认按分钟级超时控制长尾，避免单Skill异常把整次推荐拖到 10+ 分钟
     agent_skill_prompt_char_limit: int = 22000
     agent_retry_count: int = 3
     agent_retry_backoff: float = 1.5
-    agent_model: str = "deepseek-v4-pro"
+    agent_model: str = ""                  # 弃用：Agno 路径已改为读取路由表
     agent_temperature: float = 0.3
     agent_max_tokens: int = 40000
     agent_skill_weight: float = 0.50
@@ -77,12 +81,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_critical_config(self):
-        if self.agent_skill_runtime == "llm" and not self.agent_skill_api_key:
-            import logging
-            logging.getLogger(__name__).warning(
-                "ASHARE_AGENT_SKILL_API_KEY 未配置 — LLM Agent 审查将全部失败，"
-                "系统将仅依赖策略规则引擎。请设置环境变量或 .env 文件。"
-            )
+        # 注：ASHARE_AGENT_SKILL_API_KEY 已弃用。模型路由由数据库
+        # model_route_config 表驱动，每条路由自带独立 key，不再依赖全局 env key。
         if not self.tushare_token:
             import logging
             logging.getLogger(__name__).warning(
