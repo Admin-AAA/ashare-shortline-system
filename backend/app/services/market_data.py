@@ -10,6 +10,20 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.core.config import get_settings
+from app.engine.trading_calendar import (
+    latest_allowed_bar_date as _latest_allowed_bar_date,
+    latest_allowed_quote_date as _latest_allowed_quote_date,
+)
+from app.services.indicator_computer import (
+    bias as _bias,
+    efficiency as _efficiency,
+    ma as _ma,
+    macd as _macd,
+    max_drawdown as _max_drawdown,
+    rsi as _rsi,
+    safe_div as _safe_div,
+    upper_shadow_count as _upper_shadow_count,
+)
 from app.services.outcome_service import DEFAULT_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT
 
 # 实时行情代理地址（realtime_quote 是爬虫接口，不走 Pro API 代理）
@@ -1542,36 +1556,6 @@ def _latest_trade_date_from_quotes(quotes: list[dict[str, Any]]) -> str:
     return _latest_allowed_bar_date()
 
 
-def _latest_allowed_bar_date(today: date | None = None) -> str:
-    if today is None:
-        now = datetime.now()
-        today = now.date()
-        if today.weekday() < 5 and (now.hour < 17 or (now.hour == 17 and now.minute < 30)):
-            # 17:30 前视为当日 daily 未就绪（Tushare 盘后约 17:00 后才出当日收盘数据）
-            today = _previous_weekday(today)
-    if today.weekday() == 5:
-        return (today - timedelta(days=1)).isoformat()
-    if today.weekday() == 6:
-        return (today - timedelta(days=2)).isoformat()
-    return today.isoformat()
-
-
-def _latest_allowed_quote_date(today: date | None = None) -> str:
-    today = today or datetime.now().date()
-    if today.weekday() == 5:
-        return (today - timedelta(days=1)).isoformat()
-    if today.weekday() == 6:
-        return (today - timedelta(days=2)).isoformat()
-    return today.isoformat()
-
-
-def _previous_weekday(day: date) -> date:
-    current = day - timedelta(days=1)
-    while current.weekday() >= 5:
-        current -= timedelta(days=1)
-    return current
-
-
 def _latest_tushare_trade_date(pro: Any) -> str:
     today = date.today().strftime("%Y%m%d")
     start = (date.today() - timedelta(days=14)).strftime("%Y%m%d")
@@ -1588,19 +1572,10 @@ def _format_yyyymmdd(value: Any) -> str:
     return text
 
 
-def _ma(values: list[float], window: int) -> float:
-    sample = values[-window:] if len(values) >= window else values
-    return statistics.fmean(sample) if sample else 0.0
-
-
 def _chg(values: list[float], window: int) -> float:
     if len(values) <= window or values[-window - 1] == 0:
         return 0.0
     return (values[-1] - values[-window - 1]) / values[-window - 1] * 100
-
-
-def _bias(price: float, ma: float) -> float:
-    return (price - ma) / ma * 100 if ma else 0.0
 
 
 def _position(price: float, highs: list[float], lows: list[float]) -> float:
@@ -1611,100 +1586,8 @@ def _position(price: float, highs: list[float], lows: list[float]) -> float:
     return (price - low) / (high - low) * 100 if high > low else 50.0
 
 
-def _efficiency(values: list[float], window: int) -> float:
-    if len(values) <= window:
-        return 0.0
-    direction = abs(values[-1] - values[-window - 1])
-    noise = sum(abs(values[index] - values[index - 1]) for index in range(len(values) - window, len(values)))
-    return direction / noise if noise else 0.0
-
-
-def _upper_shadow_count(bars: list[dict[str, Any]]) -> int:
-    count = 0
-    for bar in bars:
-        high = _num(bar.get("high"))
-        low = _num(bar.get("low"))
-        open_ = _num(bar.get("open"))
-        close = _num(bar.get("close"))
-        spread = high - low
-        if spread > 0 and (high - max(open_, close)) / spread >= 0.45:
-            count += 1
-    return count
-
-
-def _max_drawdown(values: list[float]) -> float:
-    if not values:
-        return 0.0
-    peak = values[0]
-    max_dd = 0.0
-    for value in values:
-        peak = max(peak, value)
-        if peak:
-            max_dd = min(max_dd, (value - peak) / peak * 100)
-    return max_dd
-
-
-def _rsi(values: list[float], window: int) -> float:
-    if len(values) <= window:
-        return 50.0
-    deltas = [values[index] - values[index - 1] for index in range(len(values) - window, len(values))]
-    gains = [delta for delta in deltas if delta > 0]
-    losses = [-delta for delta in deltas if delta < 0]
-    avg_gain = statistics.fmean(gains) if gains else 0.0
-    avg_loss = statistics.fmean(losses) if losses else 0.0
-    if avg_loss == 0:
-        return 100.0 if avg_gain else 50.0
-    rs = avg_gain / avg_loss
-    return round(100 - (100 / (1 + rs)), 2)
-
-
-def _macd_status(values: list[float]) -> str:
-    if len(values) < 35:
-        return "上穿零轴"
-    dif, dea = _macd(values)
-    if dif > 0 and dif > dea:
-        return "零轴上金叉"
-    if dif > dea:
-        return "金叉"
-    if dif < 0 and dif < dea:
-        return "空头"
-    return "多头" if dif > 0 else "下穿零轴"
-
-
-def _macd(values: list[float]) -> tuple[float, float]:
-    if len(values) < 26:
-        ema12 = _ema(values, 12)
-        ema26 = _ema(values, 26)
-        return ema12 - ema26, 0.0
-    alpha12 = 2 / 13
-    alpha26 = 2 / 27
-    alpha9 = 2 / 10
-    ema12 = values[0]
-    ema26 = values[0]
-    dif_series: list[float] = []
-    for value in values:
-        ema12 = alpha12 * value + (1 - alpha12) * ema12
-        ema26 = alpha26 * value + (1 - alpha26) * ema26
-        dif_series.append(ema12 - ema26)
-    dif = dif_series[-1]
-    dea = dif_series[0]
-    for d in dif_series[1:]:
-        dea = alpha9 * d + (1 - alpha9) * dea
-    return dif, dea
-
-
-def _ema(values: list[float], span: int) -> float:
-    if not values:
-        return 0.0
-    alpha = 2 / (span + 1)
-    result = values[0]
-    for value in values[1:]:
-        result = alpha * value + (1 - alpha) * result
-    return result
-
-
-def _safe_div(left: float, right: float, default: float = 0.0) -> float:
-    return left / right if right else default
+# `_upper_shadow_count` 已收口到 indicator_computer.upper_shadow_count（唯一实现，
+# 采用与此处等价的健壮 `_num` 数值兜底）；此处经上方 import 复用，本地不再保留副本。
 
 
 def _num(value: Any, default: float = 0.0) -> float:

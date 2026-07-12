@@ -1,6 +1,7 @@
 from typing import Any
 
 from app.engine.evaluator import evaluate
+from app.engine.signal import Signal
 from app.engine.skill_loader import StrategySkill
 
 
@@ -9,7 +10,7 @@ def run_strategy(
     stock: dict[str, Any],
     main_industries: list[str],
     skip_universe_check: bool = False,
-) -> dict[str, Any]:
+) -> Signal:
     contract = skill.contract or {}
     # 实证权重：把 strategy.yaml 顶层 weight 注入 signal，让 aggregator 按历史胜率加权。
     # 此前该字段从未注入 → aggregator 永远用 weight=1.0（等权），净负策略与赢家同权污染 final_score。
@@ -215,7 +216,7 @@ def _signal(
     setup_quality: float = 50.0,
     score_cap: float = 100.0,
     weight: float = 1.0,
-) -> dict[str, Any]:
+) -> Signal:
     score = min(score, score_cap)
     return {
         "strategy_id": skill.skill_id,

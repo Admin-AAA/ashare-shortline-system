@@ -14,6 +14,10 @@ from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.orm import Session
 
 from app.models.tables import BacktestRun, DailyKbar, MinuteKbar, Stock
+from app.engine.board_rules import (
+    is_one_word_limit_up_open_low as _is_one_word_limit_up,
+    main_board_up_limit as _main_board_up_limit,
+)
 from app.services.evaluation_metrics import (
     MIN_SIGNAL_SAMPLE as _SHARED_MIN_SAMPLE,
     compute_full_metrics,
@@ -49,7 +53,6 @@ BENCHMARK_CODE = "000300"
 BENCHMARK_NAME = "沪深300"
 TAIL_START_TIME = "14:30:00"
 MORNING_EXIT_TIME = "09:35:00"
-LIMIT_UP_PCT = 0.10
 VWAP_HOLD_TOLERANCE_BPS = 12.0
 TAIL_VWAP_MAX_GAP_BPS = 500.0
 TAIL_RETEST_WINDOW_MINUTES = 15
@@ -1651,10 +1654,6 @@ def _is_limit_up_bar(bar: DailyKbar) -> bool:
     return _num(bar.pct_chg) >= 9.8
 
 
-def _is_one_word_limit_up(bar: DailyKbar, up_limit: float) -> bool:
-    return _num(bar.open) >= up_limit * 0.995 and _num(bar.low) >= up_limit * 0.995
-
-
 def _is_shrinking_limit_up(bar: DailyKbar, up_limit: float, signal_day_volume: float) -> bool:
     return (
         _num(bar.close) >= up_limit * 0.995
@@ -1663,10 +1662,6 @@ def _is_shrinking_limit_up(bar: DailyKbar, up_limit: float, signal_day_volume: f
         and signal_day_volume > 0
         and _num(bar.volume) <= signal_day_volume * SHRINK_LIMIT_VOLUME_RATIO
     )
-
-
-def _main_board_up_limit(prev_close: float) -> float:
-    return round(prev_close * (1 + LIMIT_UP_PCT), 2)
 
 
 def _apply_entry_cost(price: float, cost: CostAssumption) -> float:

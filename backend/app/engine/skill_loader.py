@@ -24,11 +24,46 @@ class StrategySkill:
 
     @property
     def executable(self) -> bool:
-        return self.contract is not None and bool(self.contract.get("contract", {}).get("executable", True))
+        """该 skill 能否被策略分发管线执行（对应 ``strategy_registry.get(...).evaluate``
+        是否会被调用）。
+
+        声明式路径（有 ``strategy.yaml``）沿用原有语义：``contract`` 存在且未被
+        ``contract.executable`` 显式关闭。命令式路径（``impl_class`` 声明，
+        ``contract is None``）本任务（3.4，需求 4.1/4.2）新增：只要声明了
+        ``impl_class`` 就视为可执行——命令式 skill 没有 ``strategy.yaml``，
+        "executable" 的判断依据从「合同是否放行」换成「是否能被装配出一个
+        ``Strategy`` 实例」，两者殊途同归，都是"这个 skill_id 在
+        ``strategy_registry`` 里能拿到一个可 evaluate 的实例"这件事的谓词。
+        没有这一步，``workbench_service``/``backtest_service`` 里
+        ``registry.get(...).evaluate(...) if skill.executable else None`` 会让
+        命令式策略永远拿不到调用机会，与声明式路径不共享同一套分发闭环
+        （需求 4.4：aggregator 不应区分策略来源）。
+        """
+        if self.contract is not None:
+            return bool(self.contract.get("contract", {}).get("executable", True))
+        return self.impl_class is not None
 
     @property
     def agent_enabled(self) -> bool:
         return bool(self.skill_body.strip())
+
+    @property
+    def impl_class(self) -> str | None:
+        """manifest 里声明的命令式策略实现类引用（任务 3.4，需求 4.1）。
+
+        格式：``"module.path:ClassName"``（点号分隔模块路径 + 冒号分隔类名，与
+        Python 生态 entry_points 惯例一致，便于未来若要接入 ``importlib.metadata``
+        风格的插件发现）。声明了该字段的 skill 由
+        ``app.engine.strategy.instantiate_strategy`` 动态 import 并实例化为命令式
+        ``Strategy`` 实现；未声明则装配层回退为 ``DeclarativeStrategy``（需求 4.2）。
+
+        命令式 skill 可以没有 ``strategy.yaml``（``contract is None``），只需
+        ``manifest.json``（含 ``impl_class``）+ ``SKILL.md`` + 对应 Python 类
+        ——``validate_skill`` 现有「``contract is None`` 时提前返回」的逻辑已天然
+        支持这条路径，无需改动。
+        """
+        value = self.manifest.get("impl_class")
+        return str(value) if value else None
 
 
 def load_skills(skills_dir: Path) -> list[StrategySkill]:

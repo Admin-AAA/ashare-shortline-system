@@ -36,7 +36,7 @@ from app.engine.aggregator import (
     resolve_score_line_context,
 )
 from app.engine.skill_loader import StrategySkill, load_skills, validate_skill
-from app.engine.strategy_runner import run_strategy
+from app.engine.strategy import StrategyContext, build_registry_from_skills
 from app.models.tables import (
     AgentDecisionLog,
     CalibrationConfig,
@@ -1939,6 +1939,12 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
 
     agent_session_id = f"sess_{run_id}"
     all_skill_objs = [s["skill"] for s in selected_skills]
+    # 策略分发经 registry 统一取实例（任务 3.2）：run pipeline 不再直调
+    # run_strategy，而是先用本次选中的 skills 建一个 StrategyRegistry，随后
+    # `registry.get(skill_id).evaluate(stock, ctx)`。当前仅 selected_skills 里的
+    # skill 全部是声明式（`DeclarativeStrategy` 委托既有 run_strategy），产出的
+    # Signal 与直接调用 run_strategy 逐字段一致——这是重构，不是新增行为。
+    strategy_registry = build_registry_from_skills(all_skill_objs)
 
     try:
         AgentSessionRegistry.register(
@@ -1989,7 +1995,8 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                     signal = None
                 else:
                     skip_universe = prefilter_source == "skill_pass" and skill_obj.skill_id in prefilter_skill_ids
-                    signal = run_strategy(skill_obj, stock, snapshot["main_industries"], skip_universe_check=skip_universe) if skill_obj.executable else None
+                    ctx = StrategyContext(main_industries=snapshot["main_industries"], skip_universe_check=skip_universe)
+                    signal = strategy_registry.get(skill_obj.skill_id).evaluate(stock, ctx) if skill_obj.executable else None
                 rule_signals_by_skill[skill_obj.skill_id] = signal
 
             prelim_entries.append(

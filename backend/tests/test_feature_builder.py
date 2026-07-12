@@ -11,7 +11,7 @@ from app.services.feature_builder import (
     build_features,
     market_regime_score,
 )
-from app.services.shortline_factors import SHORTLINE_FACTOR_SPECS
+from app.services.factors import default_registry, iter_explainable_factors
 
 
 # ---------------------------------------------------------------------------
@@ -275,11 +275,17 @@ def test_risk_score_macd_weak():
 # ---------------------------------------------------------------------------
 
 def test_shared_shortline_factor_specs_are_explainable():
-    for spec in SHORTLINE_FACTOR_SPECS.values():
+    # 解释规格已迁入因子 metadata；逐个可解释因子校验：描述文本复用 metadata，
+    # fields / value_field / score_field 由解释规格声明。
+    explainable = iter_explainable_factors(default_registry)
+    assert explainable, "应至少有一个声明了解释规格的因子"
+    for factor, spec in explainable:
         assert spec["fields"]
-        assert spec["logic"]
-        assert spec["data_sources"]
-        assert spec["degradation"]
+        assert spec["value_field"]
+        assert spec["score_field"]
+        assert factor.metadata["logic"]
+        assert factor.metadata["data_sources"]
+        assert factor.metadata["degradation"]
 
 
 def test_feature_builder_does_not_emit_buy_decision_fields():
@@ -305,9 +311,12 @@ def test_limit_up_overheat_factor_has_spec_and_degrades_from_snapshot():
     enriched = build_features([stock], _snapshot(sample_count=300, limit_up_count=28, limit_down_count=8))[0]
     spec = enriched["shortline_factor_explanations"]["limit_up_overheat"]
 
+    limit_up_spec = next(
+        s for _, s in iter_explainable_factors(default_registry) if s["key"] == "limit_up_overheat"
+    )
     assert enriched["limit_up_overheat_score"] >= 70
     assert enriched["limit_up_overheat_level"] == "高"
-    assert spec["fields"] == SHORTLINE_FACTOR_SPECS["limit_up_overheat"]["fields"]
+    assert spec["fields"] == limit_up_spec["fields"]
     assert spec["data_sources"]
     assert spec["degradation"]
 

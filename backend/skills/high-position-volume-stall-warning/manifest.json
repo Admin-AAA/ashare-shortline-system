@@ -1,0 +1,9 @@
+{
+  "id": "high-position-volume-stall-warning",
+  "name": "高位放量滞涨预警",
+  "version": "0.1.0",
+  "enabled": true,
+  "source_type": "local",
+  "description": "识别高位乖离率下量能放大但价格滞涨的顶部风险信号（放量不涨=资金派发嫌疑），命令式（Python）实现，无需 strategy.yaml。",
+  "impl_class": "app.skills_impl.high_position_volume_stall_warning:HighPositionVolumeStallWarning"
+}

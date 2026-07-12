@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from typing import Any
 
+from app.services.indicator_computer import bias as _bias
 from app.services.shortline_factors import apply_shared_shortline_factors
 
 
@@ -580,10 +581,6 @@ def _ma_from_bias(price: float, bias_pct: float) -> float:
     return price / (1 + bias_pct / 100) if (1 + bias_pct / 100) else price
 
 
-def _bias(price: float, ma: float) -> float:
-    return (price - ma) / ma * 100 if ma else 0.0
-
-
 def _num(value: Any, default: float = 0.0) -> float:
     if value is None or value == "":
         return float(default)
@@ -838,7 +835,8 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             net_amount_yi = _num(dt.get("net_amount_yi", 0))
             stock["dragon_tiger_net_amount_yi"] = net_amount_yi
             # 修复沉睡因子：dragon_tiger_institution_net_buy_yi 此前从未赋值，导致
-            # shortline_factors._apply_dragon_tiger_factor 算出的 dragon_tiger_inst_buy_ratio
+            # 龙虎榜因子（factors.shortline.DragonTigerFactor，任务 2.3 前为
+            # shortline_factors._apply_dragon_tiger_factor）算出的 dragon_tiger_inst_buy_ratio
             # 恒为 0，令 chen-xiaoqun / limit-up-reseal 的 inst_buy_ratio>=0.5 规则永不起作用。
             # dragon_tiger 表无机构细分列，用净买额作为聪明钱净买代理（龙虎榜席位=机构+游资=聪明钱）。
             stock["dragon_tiger_institution_net_buy_yi"] = net_amount_yi

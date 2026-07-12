@@ -13,11 +13,12 @@ from sqlalchemy.orm import Session
 
 from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun, SkillRegistry
 from app.services.evaluation_metrics import compute_full_metrics as _compute_full_metrics
+from app.engine.board_rules import (
+    is_one_word_limit_down_bar,
+)
 from app.services.execution_constraints import (
     entry_execution_block_reason_from_bar,
     exit_execution_block_reason_from_bar,
-    is_one_word_limit_down_bar,
-    is_one_word_limit_up_bar,
     no_liquidity_reason_from_bar,
 )
 
@@ -2222,10 +2223,6 @@ def _entry_not_triggered_reason(blocked_reasons: list[str], *, has_targets: bool
 
 def _has_no_liquidity(bar: DailyKbar) -> bool:
     return no_liquidity_reason_from_bar(bar, side="entry") is not None
-
-
-def _is_one_word_limit_up(code: str, bar: DailyKbar) -> bool:
-    return is_one_word_limit_up_bar(code, bar)
 
 
 def _is_one_word_limit_down(code: str, bar: DailyKbar) -> bool:

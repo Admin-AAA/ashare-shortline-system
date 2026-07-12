@@ -32,7 +32,6 @@ from app.models.tables import (
     MarginDetail,
     MarketSnapshot,
     NewsAnnouncement,
-    Stock,
     StockQuote,
 )
 from app.services.data_sources import enabled_sources
@@ -48,12 +47,21 @@ from app.services.market_data import (
     _exchange_from_code,
     _fetch_tushare_realtime_frame,
     _format_yyyymmdd,
-    _latest_allowed_quote_date,
     _latest_trade_date_from_quotes,
     _normalize_code,
     _num,
     _row_value,
     _select_recall_candidates,
+)
+from app.engine.trading_calendar import (
+    latest_allowed_bar_date as _latest_allowed_bar_date,
+    latest_allowed_quote_date as _latest_allowed_quote_date,
+    normalize_trade_date as _normalize_trade_date,
+    previous_weekday as _previous_weekday,
+)
+from app.services.history_maturity import (
+    is_natural_short_history as _is_natural_short_history,
+    load_history_maturity_map as _load_history_maturity_map,
 )
 from app.services import market_pool_adapters as pool_adapters
 
@@ -96,20 +104,6 @@ STRICT_CONSENSUS_FIELDS = {"price": 0.018, "pct": 0.08}
 DERIVED_RETURN_FIELDS = {"chg60", "ytd_chg"}
 LOCAL_DAILY_BAR_FIELDS = DERIVED_RETURN_FIELDS | {"ma5", "ma10", "ma20"}
 STOCK_QUOTE_UPSERT_BATCH_SIZE = 500
-
-
-def _normalize_trade_date(value: Any) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    if len(raw) >= 10 and raw[4] == "-" and raw[7] == "-":
-        return raw[:10]
-    digits = "".join(ch for ch in raw if ch.isdigit())
-    if len(digits) >= 8:
-        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
-    return raw[:10]
-
-
 
 
 def _required_bar_date_for_quote(quote: dict[str, Any]) -> str:
@@ -1781,78 +1775,10 @@ def _load_cached_bars_summary(
     }
 
 
-def _load_history_maturity_map(db: Session, codes: list[str]) -> dict[str, dict[str, str | None]]:
-    normalized_codes = [str(code or "").strip() for code in codes if str(code or "").strip()]
-    if not normalized_codes:
-        return {}
-    code_set = set(normalized_codes)
-    result: dict[str, dict[str, str | None]] = {}
-    first_bar_rows = db.execute(
-        select(
-            DailyKbar.code.label("code"),
-            func.min(DailyKbar.trade_date).label("first_bar_date"),
-        )
-        .group_by(DailyKbar.code)
-    ).all()
-    for row in first_bar_rows:
-        if row.code in code_set:
-            result[str(row.code)] = {
-                "first_bar_date": _normalize_trade_date(row.first_bar_date),
-                "list_date": None,
-            }
-    stock_rows = db.execute(
-        select(Stock.code, Stock.list_date).where(Stock.code.in_(normalized_codes))
-    ).all()
-    for row in stock_rows:
-        item = result.setdefault(str(row.code), {"first_bar_date": None, "list_date": None})
-        item["list_date"] = _normalize_trade_date(row.list_date)
-    return result
-
-
-def _is_natural_short_history(
-    *,
-    bar_count: int,
-    latest_bar_date: str | None,
-    quote_date: str,
-    first_bar_date: str | None,
-    list_date: str | None,
-) -> bool:
-    return bool(
-        0 < int(bar_count or 0)
-        and latest_bar_date
-        and quote_date
-        and latest_bar_date >= quote_date
-        and first_bar_date
-        and list_date
-        and first_bar_date <= list_date
-    )
-
-
 def _bars_cover_quote_date(bars: list[dict[str, Any]], quote: dict[str, Any]) -> bool:
     quote_date = _required_bar_date_for_quote(quote)
     latest = max(_normalize_trade_date(bar.get("trade_date")) for bar in bars)
     return latest >= quote_date
-
-
-def _latest_allowed_bar_date(today: date | None = None) -> str:
-    if today is None:
-        now = datetime.now()
-        today = now.date()
-        if today.weekday() < 5 and (now.hour < 17 or (now.hour == 17 and now.minute < 30)):
-            # 17:30 前视为当日 daily 未就绪（Tushare 盘后约 17:00 后才出当日收盘数据）
-            today = _previous_weekday(today)
-    if today.weekday() == 5:
-        return (today - timedelta(days=1)).isoformat()
-    if today.weekday() == 6:
-        return (today - timedelta(days=2)).isoformat()
-    return today.isoformat()
-
-
-def _previous_weekday(day: date) -> date:
-    current = day - timedelta(days=1)
-    while current.weekday() >= 5:
-        current -= timedelta(days=1)
-    return current
 
 
 def _source_rank(source: Any, source_priority: list[str]) -> int:

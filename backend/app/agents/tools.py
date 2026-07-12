@@ -26,6 +26,11 @@ from app.models.tables import (
     Stock,
     StockQuote,
 )
+from app.services.indicator_computer import (
+    bias as _bias,
+    ma as _ic_ma,
+    strict_upper_shadow_count as _upper_shadow_count,
+)
 
 
 # ── Agno tool 装饰器 ──────────────────────────────────────────────────
@@ -72,14 +77,10 @@ def _num(value: Any, default: float = 0.0) -> float:
         return float(default)
 
 
-def _bias(price: float, ma: float) -> float:
-    return (price - ma) / ma * 100 if ma else 0.0
-
-
+# `_ma` 已收口到 indicator_computer.ma：tools 历史上短序列（len<window）取最后一个值，
+# 经关键字参数 short="last" 复用唯一实现，保留原调用点写法 `_ma(values, window)` 与行为。
 def _ma(values: list[float], window: int) -> float:
-    if len(values) < window:
-        return values[-1] if values else 0.0
-    return sum(values[-window:]) / window
+    return _ic_ma(values, window, short="last")
 
 
 # ── Tool 函数 ─────────────────────────────────────────────────────────
@@ -816,20 +817,9 @@ def query_industry_peers(code: str, session_id: str) -> dict:
 # ── 内部工具函数 ──────────────────────────────────────────────────────
 
 
-def _upper_shadow_count(bars_20: list) -> int:
-    """统计 20 日内上影线天数。"""
-    count = 0
-    for bar in bars_20:
-        high = float(getattr(bar, "high", bar["high"]) if isinstance(bar, DailyKbar) else bar["high"])
-        close = float(getattr(bar, "close", bar["close"]) if isinstance(bar, DailyKbar) else bar["close"])
-        open_ = float(getattr(bar, "open", bar["open"]) if isinstance(bar, DailyKbar) else bar["open"])
-        low = float(getattr(bar, "low", bar["low"]) if isinstance(bar, DailyKbar) else bar["low"])
-        body = abs(close - open_)
-        upper = high - max(close, open_)
-        shadow_range = high - low
-        if shadow_range > 0 and body > 0 and (upper / shadow_range) >= 0.55 and body / shadow_range <= 0.4:
-            count += 1
-    return count
+# `_upper_shadow_count`（严格口径：上影线/全幅 ≥ 0.55 且 实体/全幅 ≤ 0.4 且 实体 > 0，
+# 兼容 ORM/dict 入参）已收口到 indicator_computer.strict_upper_shadow_count，经顶部
+# import 别名复用，本地不再保留副本。
 
 
 def _detect_missing(quote_data: dict, bars: list) -> list[str]:

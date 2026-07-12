@@ -27,9 +27,11 @@ from app.services.outcome_service import (
     _as_float,
     _loads,
 )
+from app.engine.board_rules import (
+    is_one_word_limit_down_bar,
+)
 from app.services.execution_constraints import (
     exit_execution_block_reason_from_bar,
-    is_one_word_limit_down_bar,
 )
 
 logger = logging.getLogger(__name__)

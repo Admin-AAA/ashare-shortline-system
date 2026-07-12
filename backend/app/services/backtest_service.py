@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.engine.aggregator import apply_pool_rules
 from app.engine.skill_loader import load_skills
-from app.engine.strategy_runner import run_strategy
+from app.engine.strategy import StrategyContext, build_registry_from_skills
 from app.models.tables import (
     BacktestRun,
     DailyKbar,
@@ -407,6 +407,12 @@ def _backtest_single_date(
 
     if not selected_skills:
         return {"trade_date": trade_date, "status": "skipped", "reason": "无可用的 Skill"}
+    # 策略分发经 registry 统一取实例（任务 3.2）：backtest 预检不再直调
+    # run_strategy，而是先用本次选中的 skills 建一个 StrategyRegistry，随后
+    # `registry.get(skill_id).evaluate(stock, ctx)`。当前全部是声明式
+    # （`DeclarativeStrategy` 委托既有 run_strategy），产出的 Signal 与直接调用
+    # run_strategy 逐字段一致——这是重构，不是新增行为。
+    strategy_registry = build_registry_from_skills([selected["skill"] for selected in selected_skills])
     min_prefilter_count = _resolve_prefilter_target_count(
         {"run_mode": "formal", "score_line": score_line},
         selected_skill_count=len(selected_skills),
@@ -447,7 +453,8 @@ def _backtest_single_date(
                 signal = None
             else:
                 skip_universe = prefilter_source == "skill_pass" and skill_obj.skill_id in prefilter_skill_ids
-                signal = run_strategy(skill_obj, stock, snapshot["main_industries"], skip_universe_check=skip_universe) if skill_obj.executable else None
+                ctx = StrategyContext(main_industries=snapshot["main_industries"], skip_universe_check=skip_universe)
+                signal = strategy_registry.get(skill_obj.skill_id).evaluate(stock, ctx) if skill_obj.executable else None
             rule_signals_by_skill[skill_obj.skill_id] = signal
         prelim_entries.append(
             {
