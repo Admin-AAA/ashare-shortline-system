@@ -1,0 +1,139 @@
+backend/tests/test_market_source_adapters.py
+  ai_agent 1-121
+backend/tests/_shortline_equiv_fixtures.py
+  ai_agent 1-394
+backend/app/services/market_pool_adapters.py
+  ai_agent 1-23,41-42,54-61,65-72
+backend/tests/test_trading_calendar.py
+  ai_agent 1-186
+backend/tests/test_signal_equivalence.py
+  ai_agent 1-287
+backend/app/services/factors/explanations.py
+  ai_agent 1-89
+backend/app/services/stock_backtest_service.py
+  ai_agent 30-32
+backend/app/services/workbench_service.py
+  ai_agent 39,1942-1947,1998-1999
+backend/app/services/overnight_holding_service.py
+  ai_agent 17-20
+backend/app/skills_impl/high_position_volume_stall_warning.py
+  ai_agent 1-117
+.kiro/specs/architecture-deepening/design.md
+  ai_agent 1-89
+backend/app/services/backtest_service.py
+  ai_agent 31,410-415,456-457
+backend/app/services/feature_builder.py
+  ai_agent 4,838-839
+backend/app/agents/tools.py
+  ai_agent 29-33,80-81,83,820-822
+backend/app/engine/strategy.py
+  ai_agent 1-274
+backend/app/engine/trading_calendar.py
+  ai_agent 1-85
+backend/app/engine/skill_loader.py
+  ai_agent 27-44,50-66
+backend/skills/high-position-volume-stall-warning/SKILL.md
+  ai_agent 1-50
+backend/tests/test_dragon_tiger_smart_money.py
+  ai_agent 21-22,25-30
+.agents/skills/improve-codebase-architecture/SKILL.md
+  ai_agent 1-67
+backend/app/engine/board_rules.py
+  ai_agent 1-209
+.agents/skills/codebase-design/SKILL.md
+  ai_agent 1-115
+backend/tests/test_board_rules.py
+  ai_agent 1-186
+backend/app/engine/evaluator.py
+  ai_agent 12-21
+.kiro/specs/architecture-deepening/requirements.md
+  ai_agent 1-85
+.agents/skills/codebase-design/DEEPENING.md
+  ai_agent 1-37
+backend/app/services/market_source/port.py
+  ai_agent 1-170
+backend/app/engine/signal.py
+  ai_agent 1-55
+backend/app/engine/imperative_strategy.py
+  ai_agent 1-233
+backend/app/engine/strategy_runner.py
+  ai_agent 4,13,219
+backend/tests/test_imperative_strategy.py
+  ai_agent 1-221
+backend/app/services/factors/registry.py
+  ai_agent 1-180
+backend/app/services/shortline_factors.py
+  ai_agent 5-17,21-38,40-47
+backend/tests/_impl_class_fixtures.py
+  ai_agent 1-48
+backend/app/services/market_source/multi_source_adapter.py
+  ai_agent 1-150
+backend/app/services/factors/__init__.py
+  ai_agent 1-69
+backend/app/services/market_source/__init__.py
+  ai_agent 1-16
+backend/tests/test_feature_builder.py
+  ai_agent 14,278-282,284-288,314-316,319
+backend/app/services/factors/driver.py
+  ai_agent 1-86
+backend/tests/data/shortline_factor_golden.json
+  ai_agent 1-1226
+backend/app/services/factors/shortline.py
+  ai_agent 1-499
+backend/tests/test_imperative_sample_strategy.py
+  ai_agent 1-228
+backend/tests/test_impl_class_loading.py
+  ai_agent 1-341
+backend/app/services/market_pool.py
+  ai_agent 56-65
+backend/tests/test_shortline_factors_equivalence.py
+  ai_agent 1-212
+backend/app/services/execution_constraints.py
+  ai_agent 1-6,11-14
+backend/app/services/market_source/in_memory_adapter.py
+  ai_agent 1-62
+backend/app/services/outcome_service.py
+  ai_agent 16-18
+backend/app/services/data_sources.py
+  ai_agent 35-38
+backend/tests/test_factor_explanations.py
+  ai_agent 1-144
+.agents/skills/codebase-design/DESIGN-IT-TWICE.md
+  ai_agent 1-44
+backend/app/skills_impl/__init__.py
+  ai_agent 1-27
+backend/skills/high-position-volume-stall-warning/manifest.json
+  ai_agent 1-9
+backend/tests/test_factor_framework.py
+  ai_agent 1-296
+backend/tests/test_indicator_computer.py
+  ai_agent 1-404
+backend/app/services/indicator_computer.py
+  ai_agent 1-12,15,19-70,80,94,96-97,116-126,129-148,151-154,161-192,204,220-224,253-255,258-260,287-289,306,311-312
+backend/app/services/data_gap_remediation_service.py
+  ai_agent 9,14-22
+backend/app/services/factors/base.py
+  ai_agent 1-140
+backend/app/services/factors/allowlist.py
+  ai_agent 1-78
+.agents/skills/improve-codebase-architecture/HTML-REPORT.md
+  ai_agent 1-123
+backend/tests/test_history_maturity.py
+  ai_agent 1-184
+backend/tests/test_strategy_registry.py
+  ai_agent 1-291
+backend/app/engine/aggregator.py
+  ai_agent 6-8
+backend/app/services/history_maturity.py
+  ai_agent 1-88
+backend/app/services/market_data.py
+  ai_agent 13-26,1589-1590
+backend/tests/test_factor_allowlist_injection.py
+  ai_agent 1-175
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.33-trip",
+  "base_commit_sha": "501f44953692992ab6f7d9d2f4a8129d9eb3b407",
+  "prompts": {}
+}
