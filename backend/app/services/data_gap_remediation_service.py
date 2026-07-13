@@ -15,7 +15,7 @@ from app.engine.trading_calendar import (
     latest_allowed_bar_date as _latest_allowed_bar_date,
     normalize_trade_date as _normalize_trade_date,
 )
-from app.services.history_maturity import (
+from app.services.market_pool.history_maturity import (
     is_natural_short_history as _is_natural_short_history,
     load_history_maturity_map as _load_history_maturity_map,
 )

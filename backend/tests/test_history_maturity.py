@@ -1,4 +1,4 @@
-"""`app.services.history_maturity` 深模块单测。
+"""`app.services.market_pool.history_maturity` 深模块单测。
 
 历史成熟度收口后的唯一实现（原 market_pool / data_gap 两份副本已删，见需求 2.4/2.5）。
 `load_history_maturity_map` 触库，故用内存 sqlite 造数据 in-process 验证（禁止真实 MySQL）：
@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.session import Base
 from app.models.tables import DailyKbar, Stock
-from app.services.history_maturity import (
+from app.services.market_pool.history_maturity import (
     is_natural_short_history,
     load_history_maturity_map,
 )

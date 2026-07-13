@@ -59,7 +59,7 @@ from app.engine.trading_calendar import (
     normalize_trade_date as _normalize_trade_date,
     previous_weekday as _previous_weekday,
 )
-from app.services.history_maturity import (
+from app.services.market_pool.history_maturity import (
     is_natural_short_history as _is_natural_short_history,
     load_history_maturity_map as _load_history_maturity_map,
 )

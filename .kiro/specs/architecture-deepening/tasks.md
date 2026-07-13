@@ -2,6 +2,7 @@
 
 > 每个阶段（S1–S8）独立成 1 个或多个主题 commit；新增文件一律 `git add`（需求 11）。
 > 触库用例本环境跳过并标注，交 CI 带库（需求 1.3 / 10.3）。行为不变以 pytest 对拍验证（需求 1）。
+> 所有MySQL Redis都连接不上，如果需要测试MySQL，你可以考虑mock或者直接放弃测试
 
 ## S1 · 地基：复制规则收口为深模块（in-process）
 - [x] 1.1 新建 `engine/trading_calendar.py`（latest_allowed_bar_date / latest_allowed_quote_date / previous_weekday / normalize_trade_date），补 pytest；把 market_data、market_pool、data_gap_remediation、data_sources 4 处调用改为 import，删本地副本
@@ -40,21 +41,21 @@
   - _需求 8.1, 8.2_
 - [x] 4.2 实现 `multi_source_adapter`（迁入多源与回退顺序，藏在 implementation）与 `in_memory_adapter`；`market_pool_adapters` 指向 port
   - _需求 8.1, 8.2_
-- [-] 4.3 抽出 `candidates/screening`（候选召回/打分）与 `market_source/snapshot`（快照），移出 market_data 采集职责
+- [x] 4.3 抽出 `candidates/screening`（候选召回/打分）与 `market_source/snapshot`（快照），移出 market_data 采集职责
   - _需求 8.3_
-- [ ] 4.4 改造 `test_market_pool` 经 port 注入 `in_memory_adapter`，替换对内部私有函数的 monkeypatch，不留双份覆盖
+- [x] 4.4 改造 `test_market_pool` 经 port 注入 `in_memory_adapter`，替换对内部私有函数的 monkeypatch，不留双份覆盖
   - _需求 8.1, 10.2_
 
 ## S5 · 行情池拆分（local-substitutable / sqlite 可测）
-- [ ] 5.1 抽出 `market_pool/core`（报价+日K+readiness），核心池 interface 仅暴露 universe/snapshot/readiness
+- [ ] 5.1 抽出 `market_pool/core`（报价+日K+readiness），核心池 interface 仅暴露 universe/snapshot/readiness 所有MySQL Redis都连接不上，如果需要测试MySQL，你可以考虑mock或者直接放弃测试
   - _需求 5.2_
-- [ ] 5.2 定义 `AuxiliaryDataset` 描述符 + 通用 refresh/persist/load，将 ~15 组三件套迁为描述符（内部调 tushare_client）；对相同输入做结果一致对拍
+- [ ] 5.2 定义 `AuxiliaryDataset` 描述符 + 通用 refresh/persist/load，将 ~15 组三件套迁为描述符（内部调 tushare_client）；对相同输入做结果一致对拍 所有MySQL Redis都连接不上，如果需要测试MySQL，你可以考虑mock或者直接放弃测试
   - _需求 5.1, 5.3, 1.1_
 
 ## S6 · 结果模拟与指标分离
-- [ ] 6.1 抽出 `outcome/simulation`（模拟引擎，in-process），补本地 pytest 对拍
+- [x] 6.1 抽出 `outcome/simulation`（模拟引擎，in-process），补本地 pytest 对拍
   - _需求 7.1, 1.1_
-- [ ] 6.2 将 outcome/backtest/overnight 的指标统一汇流 `evaluation_metrics`，删除各自重造的 metric record
+- [x] 6.2 将 outcome/backtest/overnight 的指标统一汇流 `evaluation_metrics`，删除各自重造的 metric record
   - _需求 7.2, 2.5_
 
 ## S7 · 推荐运行编排深化（最高 leverage）
@@ -72,7 +73,7 @@
   - _需求 1.1, 6.3_
 
 ## S8 · 回测家族统一（Speculative）
-- [ ] 8.1 抽出 `backtest/result` 单一深模块（trades→指标/样本），backtest/overnight/stock 家族成员改为只喂 trades，指标走 evaluation_metrics
+- [x] 8.1 抽出 `backtest/result` 单一深模块（trades→指标/样本），backtest/overnight/stock 家族成员改为只喂 trades，指标走 evaluation_metrics
   - _需求 9.1, 7.2_
-- [ ] 8.2 将形状二命令式回测策略对齐需求 4 的 Strategy 协议方向
+- [x] 8.2 将形状二命令式回测策略对齐需求 4 的 Strategy 协议方向
   - _需求 9.2_

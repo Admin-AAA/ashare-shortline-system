@@ -1,10 +1,11 @@
 # 设计文档 · 架构深化重构（architecture-deepening）
 
 > 状态：Design-first，grilling 已收敛（§15 全部拍板）→ 下一步 requirements.md
+> 所有MySQL Redis都连接不上，如果需要测试MySQL，你可以考虑mock或者直接放弃测试
 > 词汇遵循 `.agents/skills/codebase-design`：module / interface / implementation / depth / deep / shallow / seam / adapter / leverage / locality。
 
 ## 0. 验证边界
-基于只读静态分析：实读 `skill_loader / strategy_runner / evaluator / shortline_factors` 与 `feature_builder` 调用点 + grep/wc 证据（重复分布、委托壳、行数、import 广度）。细粒度断言（`run_workbench` 精确行区间、`indicator_computer` 与 `market_data` 是否逐字相同、conftest 连生产库、持久化 SQL 方言）标 `【待核实】`，实现前逐一精读补证。纯 in-process 部分本环境可用 `test_feature_builder / test_aggregator` 验证；`production_mysql` 用例跳过标注。
+基于只读静态分析：实读 `skill_loader / strategy_runner / evaluator / shortline_factors` 与 `feature_builder` 调用点 + grep/wc 证据（重复分布、委托壳、行数、import 广度）。细粒度断言（`run_workbench` 精确行区间、`indicator_computer` 与 `market_data` 是否逐字相同、conftest 连生产库、持久化 SQL 方言）标 `【待核实】`，实现前逐一精读补证。纯 in-process 部分本环境可用 `test_feature_builder / test_aggregator` 验证；`production_mysql` 用例跳过标注。所有MySQL Redis都连接不上，如果需要测试MySQL，你可以考虑mock或者直接放弃测试
 
 ## 1. 依赖分类图例
 `in-process`（纯计算，无替身）/ `local-substitutable`（DB session、文件 → sqlite/临时目录/注入）/ `ports&adapters`（Tushare 等真实外部 → port + in-memory adapter）/ `mock`（不得已，最少量）。

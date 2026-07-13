@@ -251,6 +251,11 @@
         "executionId": "c2f11343-9c48-4d17-b46f-a56fe175cdc0",
         "chatSessionId": "sess_2a5846a2-b3fd-4164-a027-6692d18ffb05",
         "timestamp": 1783843139907
+      },
+      {
+        "executionId": "c8f911fc-b307-47fd-9c27-e9bb4c2140de",
+        "chatSessionId": "sess_a9487a5d-02cd-4ad2-b549-00f716714c17",
+        "timestamp": 1783864923639
       }
     ],
     "4.4 改造 `test_market_pool` 经 port 注入 `in_memory_adapter`，替换对内部私有函数的 monkeypatch，不留双份覆盖": [
@@ -258,6 +263,21 @@
         "executionId": "d8fb6307-cb9a-4ab5-bce1-d4c9a45dba4b",
         "chatSessionId": "sess_2a5846a2-b3fd-4164-a027-6692d18ffb05",
         "timestamp": 1783784761460
+      },
+      {
+        "executionId": "c8f911fc-b307-47fd-9c27-e9bb4c2140de",
+        "chatSessionId": "sess_a9487a5d-02cd-4ad2-b549-00f716714c17",
+        "timestamp": 1783862441120
+      },
+      {
+        "executionId": "c8f911fc-b307-47fd-9c27-e9bb4c2140de",
+        "chatSessionId": "sess_a9487a5d-02cd-4ad2-b549-00f716714c17",
+        "timestamp": 1783864931274
+      },
+      {
+        "executionId": "6e6cc02e-2a35-4545-b1ca-c32ce2f26e35",
+        "chatSessionId": "sess_a9487a5d-02cd-4ad2-b549-00f716714c17",
+        "timestamp": 1783865530941
       }
     ],
     "5.1 抽出 `market_pool/core`（报价+日K+readiness），核心池 interface 仅暴露 universe/snapshot/readiness": [
@@ -265,6 +285,11 @@
         "executionId": "d8fb6307-cb9a-4ab5-bce1-d4c9a45dba4b",
         "chatSessionId": "sess_2a5846a2-b3fd-4164-a027-6692d18ffb05",
         "timestamp": 1783784761487
+      },
+      {
+        "executionId": "c8f911fc-b307-47fd-9c27-e9bb4c2140de",
+        "chatSessionId": "sess_a9487a5d-02cd-4ad2-b549-00f716714c17",
+        "timestamp": 1783862441162
       }
     ],
     "5.2 定义 `AuxiliaryDataset` 描述符 + 通用 refresh/persist/load，将 ~15 组三件套迁为描述符（内部调 tushare_client）；对相同输入做结果一致对拍": [
@@ -272,6 +297,11 @@
         "executionId": "d8fb6307-cb9a-4ab5-bce1-d4c9a45dba4b",
         "chatSessionId": "sess_2a5846a2-b3fd-4164-a027-6692d18ffb05",
         "timestamp": 1783784761513
+      },
+      {
+        "executionId": "c8f911fc-b307-47fd-9c27-e9bb4c2140de",
+        "chatSessionId": "sess_a9487a5d-02cd-4ad2-b549-00f716714c17",
+        "timestamp": 1783862441193
       }
     ],
     "6.1 抽出 `outcome/simulation`（模拟引擎，in-process），补本地 pytest 对拍": [
@@ -279,6 +309,11 @@
         "executionId": "d8fb6307-cb9a-4ab5-bce1-d4c9a45dba4b",
         "chatSessionId": "sess_2a5846a2-b3fd-4164-a027-6692d18ffb05",
         "timestamp": 1783784761539
+      },
+      {
+        "executionId": "c8f911fc-b307-47fd-9c27-e9bb4c2140de",
+        "chatSessionId": "sess_a9487a5d-02cd-4ad2-b549-00f716714c17",
+        "timestamp": 1783862441239
       }
     ],
     "6.2 将 outcome/backtest/overnight 的指标统一汇流 `evaluation_metrics`，删除各自重造的 metric record": [
@@ -286,6 +321,11 @@
         "executionId": "d8fb6307-cb9a-4ab5-bce1-d4c9a45dba4b",
         "chatSessionId": "sess_2a5846a2-b3fd-4164-a027-6692d18ffb05",
         "timestamp": 1783784761561
+      },
+      {
+        "executionId": "c8f911fc-b307-47fd-9c27-e9bb4c2140de",
+        "chatSessionId": "sess_a9487a5d-02cd-4ad2-b549-00f716714c17",
+        "timestamp": 1783862441277
       }
     ],
     "7.1 精读 `run_workbench` 与持久化 SQL，判定 sqlite 可移植性，决定 golden-master 端到端对拍 vs 退化方案": [
@@ -293,6 +333,11 @@
         "executionId": "d8fb6307-cb9a-4ab5-bce1-d4c9a45dba4b",
         "chatSessionId": "sess_2a5846a2-b3fd-4164-a027-6692d18ffb05",
         "timestamp": 1783784761586
+      },
+      {
+        "executionId": "c8f911fc-b307-47fd-9c27-e9bb4c2140de",
+        "chatSessionId": "sess_a9487a5d-02cd-4ad2-b549-00f716714c17",
+        "timestamp": 1783862441308
       }
     ],
     "7.2 搭建 golden-master 夹具（in-memory adapter + sqlite；或纯计算件），锁定重构前基线（仅确定性字段）": [
@@ -300,6 +345,11 @@
         "executionId": "d8fb6307-cb9a-4ab5-bce1-d4c9a45dba4b",
         "chatSessionId": "sess_2a5846a2-b3fd-4164-a027-6692d18ffb05",
         "timestamp": 1783784761612
+      },
+      {
+        "executionId": "c8f911fc-b307-47fd-9c27-e9bb4c2140de",
+        "chatSessionId": "sess_a9487a5d-02cd-4ad2-b549-00f716714c17",
+        "timestamp": 1783862441336
       }
     ],
     "7.3 下沉 filter-audit 到 `runs/filter_audit`（trace 累积器 + `build_filter_audit`），管线仅 append trace": [
@@ -307,6 +357,11 @@
         "executionId": "d8fb6307-cb9a-4ab5-bce1-d4c9a45dba4b",
         "chatSessionId": "sess_2a5846a2-b3fd-4164-a027-6692d18ffb05",
         "timestamp": 1783784761643
+      },
+      {
+        "executionId": "c8f911fc-b307-47fd-9c27-e9bb4c2140de",
+        "chatSessionId": "sess_a9487a5d-02cd-4ad2-b549-00f716714c17",
+        "timestamp": 1783862441367
       }
     ],
     "7.4 序列化下沉 `recommendations/projection`；skill/preset CRUD → `registry/*`；queue/subprocess/persistence 归位到 `runs/*`": [
@@ -314,6 +369,11 @@
         "executionId": "d8fb6307-cb9a-4ab5-bce1-d4c9a45dba4b",
         "chatSessionId": "sess_2a5846a2-b3fd-4164-a027-6692d18ffb05",
         "timestamp": 1783784761670
+      },
+      {
+        "executionId": "c8f911fc-b307-47fd-9c27-e9bb4c2140de",
+        "chatSessionId": "sess_a9487a5d-02cd-4ad2-b549-00f716714c17",
+        "timestamp": 1783862441395
       }
     ],
     "7.5 删除 `_resolve_prefilter_target_count`/`_resolve_skill_review_limit`/`_build_skill_rule_gate` 三个 shallow wrapper，编排直调 `runs/skill_gate`，run_workbench 收成薄编排": [
@@ -321,6 +381,11 @@
         "executionId": "d8fb6307-cb9a-4ab5-bce1-d4c9a45dba4b",
         "chatSessionId": "sess_2a5846a2-b3fd-4164-a027-6692d18ffb05",
         "timestamp": 1783784761699
+      },
+      {
+        "executionId": "c8f911fc-b307-47fd-9c27-e9bb4c2140de",
+        "chatSessionId": "sess_a9487a5d-02cd-4ad2-b549-00f716714c17",
+        "timestamp": 1783862441432
       }
     ],
     "7.6 跑 golden-master 对拍通过；校验 `app/api/*` 等 15 处调用点行为不变": [
@@ -328,6 +393,11 @@
         "executionId": "d8fb6307-cb9a-4ab5-bce1-d4c9a45dba4b",
         "chatSessionId": "sess_2a5846a2-b3fd-4164-a027-6692d18ffb05",
         "timestamp": 1783784761730
+      },
+      {
+        "executionId": "c8f911fc-b307-47fd-9c27-e9bb4c2140de",
+        "chatSessionId": "sess_a9487a5d-02cd-4ad2-b549-00f716714c17",
+        "timestamp": 1783862441458
       }
     ],
     "8.1 抽出 `backtest/result` 单一深模块（trades→指标/样本），backtest/overnight/stock 家族成员改为只喂 trades，指标走 evaluation_metrics": [
@@ -335,6 +405,11 @@
         "executionId": "d8fb6307-cb9a-4ab5-bce1-d4c9a45dba4b",
         "chatSessionId": "sess_2a5846a2-b3fd-4164-a027-6692d18ffb05",
         "timestamp": 1783784761755
+      },
+      {
+        "executionId": "c8f911fc-b307-47fd-9c27-e9bb4c2140de",
+        "chatSessionId": "sess_a9487a5d-02cd-4ad2-b549-00f716714c17",
+        "timestamp": 1783862441487
       }
     ],
     "8.2 将形状二命令式回测策略对齐需求 4 的 Strategy 协议方向": [
@@ -342,6 +417,11 @@
         "executionId": "d8fb6307-cb9a-4ab5-bce1-d4c9a45dba4b",
         "chatSessionId": "sess_2a5846a2-b3fd-4164-a027-6692d18ffb05",
         "timestamp": 1783784761775
+      },
+      {
+        "executionId": "c8f911fc-b307-47fd-9c27-e9bb4c2140de",
+        "chatSessionId": "sess_a9487a5d-02cd-4ad2-b549-00f716714c17",
+        "timestamp": 1783862441540
       }
     ]
   }

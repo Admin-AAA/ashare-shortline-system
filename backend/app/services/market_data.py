@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import math
-import statistics
 import threading
 import time
-from collections import Counter, defaultdict
+from collections import Counter
 from collections import deque
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -25,6 +24,36 @@ from app.services.indicator_computer import (
     upper_shadow_count as _upper_shadow_count,
 )
 from app.services.outcome_service import DEFAULT_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT
+
+# ── 候选召回/打分：权威实现已收口到 candidates/screening.py（任务 4.3），
+# 以下为兼容 re-export，保持 `from app.services.market_data import _candidate_score`
+# 等既有导入路径不失效（见 backend/tests/test_market_candidate_scoring.py）。
+from app.services.candidates.screening import (  # noqa: F401 - re-export for backward compatibility
+    _candidate_amount_score,
+    _candidate_exclusion_reason,
+    _candidate_filter_summary,
+    _candidate_pct_score,
+    _candidate_recall_plan,
+    _candidate_score,
+    _candidate_trend_score,
+    _candidate_turnover_score,
+    _eligible_market_quotes,
+    _select_candidates,
+    _select_recall_candidates,
+)
+
+# ── 快照构建：权威实现已收口到 market_source/snapshot.py（任务 4.3），
+# 以下为兼容 re-export，保持 `from app.services.market_data import _build_quote_snapshot`
+# 等既有导入路径不失效（见 market_pool.py / backtest_service.py 等调用方）。
+from app.services.market_source.snapshot import (  # noqa: F401 - re-export for backward compatibility
+    _apply_relative_features,
+    _breadth_from_counts,
+    _build_quote_snapshot,
+    _build_snapshot,
+    _latest_trade_date_from_quotes,
+    _rank_industries,
+    _top_industries_from_quotes,
+)
 
 # 实时行情代理地址（realtime_quote 是爬虫接口，不走 Pro API 代理）
 _REALTIME_PROXY_URL = "https://realtime.stockai888.top"
@@ -202,113 +231,6 @@ def _fetch_first_candidate_quotes(sources: list[str], settings: Any) -> tuple[st
     except Exception as exc:  # noqa: BLE001 - returned to the local operator as run evidence
         raise MarketDataError("真实行情候选池获取失败，已停止运行。" + str(exc)) from exc
     raise MarketDataError("真实行情候选池获取失败，已停止运行。Tushare 返回空。")
-
-
-def _eligible_market_quotes(quotes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        item
-        for item in quotes
-        if _candidate_exclusion_reason(item) is None
-    ]
-
-
-def _candidate_recall_plan(total_quote_count: int, eligible_count: int, settings: Any) -> dict[str, Any]:
-    explicit_scan_limit = max(0, int(getattr(settings, "market_candidate_count", 0) or 0))
-    lookahead_multiplier = max(1, int(getattr(settings, "market_candidate_lookahead_multiplier", 4) or 1))
-    broad_recall_default = max(0, int(getattr(settings, "market_broad_recall_count", 1800) or 0))
-    full_market_mode = explicit_scan_limit <= 0
-
-    if explicit_scan_limit > 0:
-        broad_recall_count = min(
-            eligible_count,
-            max(explicit_scan_limit, explicit_scan_limit * lookahead_multiplier),
-        )
-        scan_target_count = min(eligible_count, explicit_scan_limit)
-    else:
-        if broad_recall_default <= 0:
-            broad_recall_count = eligible_count
-        else:
-            broad_recall_count = min(eligible_count, broad_recall_default)
-        scan_target_count = broad_recall_count
-
-    return {
-        "full_market_mode": full_market_mode,
-        "explicit_scan_limit": explicit_scan_limit,
-        "lookahead_multiplier": lookahead_multiplier,
-        "broad_recall_count": broad_recall_count,
-        "scan_target_count": scan_target_count,
-        "broad_recall_limited": broad_recall_count < eligible_count,
-        "total_quote_count": total_quote_count,
-        "eligible_count": eligible_count,
-    }
-
-
-def _select_recall_candidates(quotes: list[dict[str, Any]], count: int) -> list[dict[str, Any]]:
-    if not quotes:
-        return []
-
-    ordered = list(quotes)
-    if count <= 0 or count >= len(ordered):
-        return sorted(
-            ordered,
-            key=lambda item: (_candidate_score(item), float(item.get("amount_yi") or 0)),
-            reverse=True,
-        )
-
-    window = min(len(ordered), max(count * 3, 160))
-    recall_scores: dict[str, float] = defaultdict(float)
-    recall_factors: dict[str, set[str]] = defaultdict(set)
-    ranking_specs = [
-        ("composite", lambda item: _candidate_score(item), 1.0),
-        ("amount", lambda item: float(item.get("amount_yi") or 0), 0.75),
-        ("turnover", lambda item: _candidate_turnover_score(float(item.get("turnover_rate") or 0)), 0.65),
-        ("pct", lambda item: _candidate_pct_score(float(item.get("pct") or 0)), 0.65),
-        ("trend", lambda item: _candidate_trend_score(float(item.get("chg60") or 0)), 0.55),
-    ]
-    for factor_name, key_fn, weight in ranking_specs:
-        ranked = sorted(ordered, key=key_fn, reverse=True)[:window]
-        for rank, item in enumerate(ranked):
-            code = str(item.get("code") or "")
-            if not code:
-                continue
-            recall_scores[code] += weight * (window - rank)
-            recall_factors[code].add(factor_name)
-
-    industry_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for item in ordered:
-        industry = str(item.get("industry") or "未分类")
-        if industry != "未分类":
-            industry_rows[industry].append(item)
-    industry_quota = max(2, min(8, max(1, count // 150)))
-    for industry in _top_industries_from_quotes(ordered)[:12]:
-        ranked = sorted(
-            industry_rows.get(industry, []),
-            key=lambda item: (_candidate_score(item), float(item.get("amount_yi") or 0)),
-            reverse=True,
-        )[:industry_quota]
-        for rank, item in enumerate(ranked):
-            code = str(item.get("code") or "")
-            if not code:
-                continue
-            recall_scores[code] += max(12.0, window * 0.35) - rank
-            recall_factors[code].add("industry")
-
-    selected = sorted(
-        ordered,
-        key=lambda item: (
-            recall_scores.get(str(item.get("code") or ""), 0.0),
-            len(recall_factors.get(str(item.get("code") or ""), set())),
-            _candidate_score(item),
-            float(item.get("amount_yi") or 0),
-        ),
-        reverse=True,
-    )[:count]
-    result = [dict(item) for item in selected]
-    for item in result:
-        code = str(item.get("code") or "")
-        item["_quote_recall_score"] = round(recall_scores.get(code, 0.0), 2)
-        item["_quote_recall_factors"] = sorted(recall_factors.get(code, set()))
-    return result
 
 
 def _fetch_first_kline(
@@ -962,121 +884,6 @@ def _quote(**kwargs: Any) -> dict[str, Any]:
     }
 
 
-def _select_candidates(quotes: list[dict[str, Any]], count: int) -> list[dict[str, Any]]:
-    filtered = [
-        item
-        for item in quotes
-        if _candidate_exclusion_reason(item) is None
-    ]
-    filtered.sort(key=_candidate_score, reverse=True)
-    return filtered[:count]
-
-
-def _candidate_exclusion_reason(item: dict[str, Any]) -> str | None:
-    if not _is_supported_a_share(item):
-        return "unsupported_market"
-    name = str(item.get("name") or "")
-    if item.get("is_st") or "ST" in name.upper() or "退" in name:
-        return "st_or_delisting_risk"
-    if float(item.get("price") or 0) <= 1:
-        return "invalid_price"
-    if float(item.get("amount_yi") or 0) <= 0 or float(item.get("turnover_rate") or 0) <= 0:
-        return "suspended_or_no_trade"
-    return None
-
-
-def _candidate_filter_summary(quotes: list[dict[str, Any]]) -> dict[str, Any]:
-    exclusion_counts: Counter[str] = Counter()
-    eligible_count = 0
-    high_liquidity_count = 0
-    tradeable_quote_count = 0
-    for item in quotes:
-        reason = _candidate_exclusion_reason(item)
-        if reason is not None:
-            exclusion_counts[reason] += 1
-            continue
-        eligible_count += 1
-        if float(item.get("amount_yi") or 0) >= 0.5 and float(item.get("turnover_rate") or 0) >= 0.1:
-            high_liquidity_count += 1
-        if float(item.get("amount_yi") or 0) >= 1.5 and 1.0 <= float(item.get("turnover_rate") or 0) <= 12.0:
-            tradeable_quote_count += 1
-    return {
-        "total_count": len(quotes),
-        "base_eligible_count": eligible_count,
-        "excluded_count": len(quotes) - eligible_count,
-        "high_liquidity_count": high_liquidity_count,
-        "low_liquidity_count": max(0, eligible_count - high_liquidity_count),
-        "tradeable_quote_count": tradeable_quote_count,
-        "exclusion_counts": dict(exclusion_counts),
-        "high_liquidity_threshold": {
-            "amount_yi": 0.5,
-            "turnover_rate": 0.1,
-        },
-        "preferred_tradeability_threshold": {
-            "amount_yi": 1.5,
-            "turnover_rate_min": 1.0,
-            "turnover_rate_max": 12.0,
-        },
-    }
-
-
-def _candidate_score(item: dict[str, Any]) -> float:
-    return (
-        _candidate_amount_score(float(item.get("amount_yi") or 0))
-        + _candidate_pct_score(float(item.get("pct") or 0))
-        + _candidate_turnover_score(float(item.get("turnover_rate") or 0))
-        + _candidate_trend_score(float(item.get("chg60") or 0))
-    )
-
-
-def _candidate_amount_score(amount_yi: float) -> float:
-    if amount_yi <= 0:
-        return -20.0
-    return min(18.0, math.log1p(amount_yi) * 7.5)
-
-
-def _candidate_pct_score(pct: float) -> float:
-    if pct <= -7:
-        return -10.0
-    if pct <= -3:
-        return -5.0
-    if pct < 0:
-        return -1.5
-    if pct <= 1:
-        return 4.0
-    if pct <= 5:
-        return 15.0 - abs(pct - 3.0) * 2.0
-    if pct <= 8:
-        return 11.0 - (pct - 5.0) * 1.5
-    return max(-6.0, 6.5 - (pct - 8.0) * 2.4)
-
-
-def _candidate_turnover_score(turnover_rate: float) -> float:
-    if turnover_rate < 0.8:
-        return -8.0
-    if turnover_rate < 2.0:
-        return 3.0 + (turnover_rate - 0.8) * 4.0
-    if turnover_rate <= 8.0:
-        return 15.0 - abs(turnover_rate - 5.0) * 1.2
-    if turnover_rate <= 12.0:
-        return 8.5 - (turnover_rate - 8.0) * 2.0
-    return max(-8.0, 0.5 - (turnover_rate - 12.0) * 1.8)
-
-
-def _candidate_trend_score(chg60: float) -> float:
-    if chg60 <= -15:
-        return -8.0
-    if chg60 < 0:
-        return -2.5
-    if chg60 <= 5:
-        return 2.0 + chg60 * 0.6
-    if chg60 <= 30:
-        return 5.0 + (chg60 - 5.0) * 0.32
-    if chg60 <= 50:
-        return 13.0 - (chg60 - 30.0) * 0.22
-    return max(-4.0, 8.6 - (chg60 - 50.0) * 0.28)
-
-
 def _quote_sources(settings: Any) -> list[str]:
     return ["tushare"]
 
@@ -1313,175 +1120,6 @@ def _build_stock_from_bars(
     return stock
 
 
-def _apply_relative_features(stocks: list[dict[str, Any]]) -> None:
-    if not stocks:
-        return
-    market_chg20 = statistics.fmean(float(item.get("chg20") or 0) for item in stocks)
-    market_chg60 = statistics.fmean(float(item.get("chg60") or 0) for item in stocks)
-    industry_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for stock in stocks:
-        industry_rows[str(stock.get("industry") or "未分类")].append(stock)
-    ranked_industries = _rank_industries(stocks)
-    main_industries = {item for item, _score in ranked_industries[:3] if item != "未分类"}
-    for stock in stocks:
-        peers = industry_rows[str(stock.get("industry") or "未分类")]
-        stock["primary_excess20"] = round(float(stock.get("chg20") or 0) - market_chg20, 3)
-        stock["primary_excess60"] = round(float(stock.get("chg60") or 0) - market_chg60, 3)
-        stock["industry_capacity_like_count"] = sum(1 for peer in peers if float(peer.get("amount_yi") or 0) >= 3)
-        stock["industry_positive_excess20_count"] = sum(1 for peer in peers if float(peer.get("chg20") or 0) > market_chg20)
-        stock["is_main_theme"] = stock.get("industry") in main_industries and stock.get("industry") != "未分类"
-        profile = dict(stock.get("dsa_profile") or {})
-        if stock["is_main_theme"]:
-            profile["sector_fund_rank"] = min(8, profile.get("sector_fund_rank", 99))
-        stock["dsa_profile"] = profile
-
-
-def _build_quote_snapshot(
-    quotes: list[dict[str, Any]],
-    data_source: str,
-    quote_source: str,
-    quote_errors: list[str],
-) -> dict[str, Any]:
-    trade_date = _latest_trade_date_from_quotes(quotes)
-    up_count = sum(1 for item in quotes if item.get("pct", 0) > 0)
-    down_count = sum(1 for item in quotes if item.get("pct", 0) < 0)
-    limit_up_count = sum(1 for item in quotes if item.get("pct", 0) >= 9.8)
-    limit_down_count = sum(1 for item in quotes if item.get("pct", 0) <= -9.8)
-    main_industries = _top_industries_from_quotes(quotes)
-    breadth = _breadth_from_counts(len(quotes), up_count, down_count, limit_up_count, limit_down_count)
-    breadth.update(
-        {
-            "data_source": data_source,
-            "quote_source": quote_source,
-            "quote_errors": quote_errors,
-            "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
-            "hot_theme": " / ".join(main_industries[:2]) if main_industries else "未知",
-        }
-    )
-    return {
-        "snapshot_id": f"snapshot_{data_source}_{quote_source}_{trade_date}_{datetime.now(timezone.utc).replace(tzinfo=None).strftime('%H%M%S')}",
-        "trade_date": trade_date,
-        "sample_count": len(quotes),
-        "up_count": up_count,
-        "down_count": down_count,
-        "limit_up_count": limit_up_count,
-        "limit_down_count": limit_down_count,
-        "main_industries": main_industries,
-        "breadth": breadth,
-    }
-
-
-def _build_snapshot(
-    stocks: list[dict[str, Any]],
-    quote_source: str,
-    quote_errors: list[str],
-    kline_sources: list[str],
-    kline_usage: Counter[str],
-    kline_errors: dict[str, list[str]],
-    quote_snapshot: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    if quote_snapshot is not None:
-        trade_date = str(quote_snapshot.get("trade_date") or date.today().isoformat())
-        up_count = int(quote_snapshot.get("up_count") or 0)
-        down_count = int(quote_snapshot.get("down_count") or 0)
-        limit_up_count = int(quote_snapshot.get("limit_up_count") or 0)
-        limit_down_count = int(quote_snapshot.get("limit_down_count") or 0)
-        main_industries = list(quote_snapshot.get("main_industries") or [])
-        breadth = dict(quote_snapshot.get("breadth") or {})
-        snapshot_id = str(quote_snapshot.get("snapshot_id") or "")
-        sample_count = int(quote_snapshot.get("sample_count") or 0)
-    else:
-        trade_date = max(str(item.get("latest_trade_date") or date.today().isoformat()) for item in stocks)
-        up_count = sum(1 for item in stocks if item.get("pct", 0) > 0)
-        down_count = sum(1 for item in stocks if item.get("pct", 0) < 0)
-        limit_up_count = sum(1 for item in stocks if item.get("pct", 0) >= 9.8)
-        limit_down_count = sum(1 for item in stocks if item.get("pct", 0) <= -9.8)
-        main_industries = [name for name, _score in _rank_industries(stocks)[:3] if name != "未分类"]
-        breadth = _breadth_from_counts(len(stocks), up_count, down_count, limit_up_count, limit_down_count)
-        snapshot_id = f"snapshot_real_{quote_source}_{trade_date}_{datetime.now(timezone.utc).replace(tzinfo=None).strftime('%H%M%S')}"
-        sample_count = len(stocks)
-    breadth.update(
-        {
-            "data_source": breadth.get("data_source") or "real_market",
-            "quote_source": quote_source,
-            "kline_sources": dict(kline_usage),
-            "configured_kline_sources": kline_sources,
-            "quote_errors": quote_errors,
-            "kline_error_count": len(kline_errors),
-            "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
-            "hot_theme": breadth.get("hot_theme") or (" / ".join(main_industries[:2]) if main_industries else "未知"),
-        }
-    )
-    return {
-        "snapshot_id": snapshot_id,
-        "trade_date": trade_date,
-        "sample_count": sample_count,
-        "up_count": up_count,
-        "down_count": down_count,
-        "limit_up_count": limit_up_count,
-        "limit_down_count": limit_down_count,
-        "main_industries": main_industries,
-        "breadth": breadth,
-    }
-
-
-def _rank_industries(stocks: list[dict[str, Any]]) -> list[tuple[str, float]]:
-    scores: dict[str, float] = defaultdict(float)
-    for stock in stocks:
-        industry = str(stock.get("industry") or "未分类")
-        amount = max(0.0, float(stock.get("amount_yi") or 0))
-        pct = float(stock.get("pct") or 0)
-        chg20 = float(stock.get("chg20") or 0)
-        scores[industry] += amount * (1 + max(-0.2, min(0.5, pct / 20))) + max(0.0, chg20) * 0.8
-    return sorted(scores.items(), key=lambda item: item[1], reverse=True)
-
-
-def _top_industries_from_quotes(quotes: list[dict[str, Any]]) -> list[str]:
-    scores: dict[str, float] = defaultdict(float)
-    for quote in quotes:
-        industry = str(quote.get("industry") or "未分类")
-        if industry == "未分类":
-            continue
-        amount = max(0.0, float(quote.get("amount_yi") or 0))
-        pct = float(quote.get("pct") or 0)
-        scores[industry] += amount * (1 + max(-0.2, min(0.5, pct / 20)))
-    return [name for name, _score in sorted(scores.items(), key=lambda item: item[1], reverse=True)[:3]]
-
-
-def _breadth_from_counts(
-    sample_count: int,
-    up_count: int,
-    down_count: int,
-    limit_up_count: int,
-    limit_down_count: int,
-) -> dict[str, Any]:
-    sample = max(1, sample_count)
-    up_ratio = up_count / sample
-    limit_ratio = limit_up_count / sample
-    if up_ratio >= 0.62 and limit_ratio >= 0.03:
-        regime = "强势"
-        risk = "中"
-    elif up_ratio >= 0.55:
-        regime = "结构性强势"
-        risk = "中"
-    elif up_ratio >= 0.42:
-        regime = "震荡"
-        risk = "中高"
-    else:
-        regime = "弱势"
-        risk = "高"
-    return {
-        "regime": regime,
-        "risk": risk,
-        "up_ratio": round(up_ratio, 3),
-        "down_ratio": round(down_count / sample, 3),
-        "up_limit_ratio": round(limit_ratio, 3),
-        "limit_down_ratio": round(limit_down_count / sample, 3),
-        "leadership_height": None,
-        "broken_board_rate": None,
-    }
-
-
 def _summarize_kline_skip_reasons(kline_errors: dict[str, list[str]]) -> dict[str, int]:
     summary: Counter[str] = Counter()
     for errors in kline_errors.values():
@@ -1539,21 +1177,6 @@ def _exchange_from_code(code: str) -> str:
     if code.startswith(("8", "4")):
         return "BJ"
     return "SZ"
-
-
-def _latest_trade_date_from_quotes(quotes: list[dict[str, Any]]) -> str:
-    trade_dates: list[str] = []
-    for quote in quotes:
-        raw = str(quote.get("trade_date") or quote.get("date") or "").strip()
-        if not raw:
-            continue
-        if len(raw) == 8 and raw.isdigit():
-            raw = _format_yyyymmdd(raw)
-        if len(raw) >= 10:
-            trade_dates.append(raw[:10])
-    if trade_dates:
-        return max(trade_dates)
-    return _latest_allowed_bar_date()
 
 
 def _latest_tushare_trade_date(pro: Any) -> str:

@@ -13,8 +13,8 @@ session），实现体承担建仓日/首根 K 线日/最新 K 线覆盖等成�
 - local-substitutable：依赖 SQLAlchemy Session，可用内存 sqlite 造数据 in-process 单测。
 - `normalize_trade_date` 复用 `app.engine.trading_calendar` 单一来源，不再本地重造。
 
-注：本模块暂落 `services/history_maturity.py`；S5 拆 market_pool 为包时归位到
-`services/market_pool/history_maturity.py`（见 design §3/§7、需求 2.4）。
+注：本模块已归位到 `services/market_pool/history_maturity.py`（任务 5.1，
+market_pool 拆包时一并落位；见 design §3/§7、需求 2.4）。
 """
 from __future__ import annotations
 

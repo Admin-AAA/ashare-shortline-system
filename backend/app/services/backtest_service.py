@@ -69,6 +69,11 @@ from app.services.backtest_validation import (
     _build_time_split_analysis,
     _choose_backtest_variant,
 )
+from app.services.backtest.result import (
+    project_false_positive_sample,
+    project_recommendation_record,
+    select_false_positive_trades,
+)
 from app.services.prefilter_service import apply_prefilters
 from app.services.research_context import build_research_contexts
 from app.services.workbench_service import (
@@ -1428,54 +1433,43 @@ def _backtest_aggregate_metrics(
 
 
 def _backtest_recommendation_records(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """trades → 展示用 recommendation records（收敛到 backtest/result，S8.1）。"""
     ordered = sorted(
         trades,
         key=lambda item: (item.get("trade_date", ""), item.get("entry_date", ""), item.get("code", "")),
     )
     return [
-        {
-            "trade_date": item.get("trade_date"),
-            "code": item.get("code"),
-            "name": item.get("name"),
-            "recommendation_time": item.get("trade_date"),
-            "entry_time": item.get("entry_date"),
-            "entry_price": item.get("entry_price"),
-            "exit_date": item.get("exit_date"),
-            "exit_time": item.get("exit_date"),
-            "exit_price": item.get("exit_price"),
-            "net_return_pct": item.get("net_return_pct"),
-            "gross_return_pct": item.get("gross_return_pct"),
-            "benchmark_return_pct": item.get("benchmark_return_pct"),
-            "accurate": item.get("accurate"),
-            "signal_valid_at_recommend_time": item.get("signal_valid_at_recommend_time", True),
-            "executed": item.get("executed", True),
-            "net_return_positive": item.get("net_return_positive", False),
-            "accuracy_failure_label": _accuracy_failure_label(item),
-            "exit_reason": item.get("exit_reason"),
-            "false_positive_reason": item.get("false_positive_reason"),
-        }
+        project_recommendation_record(
+            item,
+            entry_time_key="entry_date",
+            exit_time_key="exit_date",
+            extra_fields={
+                "signal_valid_at_recommend_time": item.get("signal_valid_at_recommend_time", True),
+                "executed": item.get("executed", True),
+                "net_return_positive": item.get("net_return_positive", False),
+                "accuracy_failure_label": _accuracy_failure_label(item),
+            },
+        )
         for item in ordered
     ]
 
 
 def _backtest_false_positive_samples(trades: list[dict[str, Any]], limit: int = 8) -> list[dict[str, Any]]:
-    losers = [item for item in trades if item.get("resolved") and not item.get("accurate")]
-    losers.sort(key=lambda item: float(item.get("net_return_pct") or 0.0))
+    """trades → 展示用误判样本（收敛到 backtest/result，S8.1）。"""
+    losers = select_false_positive_trades(trades, limit=limit)
     return [
-        {
-            "trade_date": item.get("trade_date"),
-            "code": item.get("code"),
-            "name": item.get("name"),
-            "entry_time": item.get("entry_date"),
-            "exit_time": item.get("exit_date"),
-            "net_return_pct": item.get("net_return_pct"),
-            "false_positive_reason": item.get("false_positive_reason"),
-            "signal_valid_at_recommend_time": item.get("signal_valid_at_recommend_time", True),
-            "executed": item.get("executed", True),
-            "net_return_positive": item.get("net_return_positive", False),
-            "accuracy_failure_label": _accuracy_failure_label(item),
-        }
-        for item in losers[:limit]
+        project_false_positive_sample(
+            item,
+            entry_time_key="entry_date",
+            exit_time_key="exit_date",
+            extra_fields={
+                "signal_valid_at_recommend_time": item.get("signal_valid_at_recommend_time", True),
+                "executed": item.get("executed", True),
+                "net_return_positive": item.get("net_return_positive", False),
+                "accuracy_failure_label": _accuracy_failure_label(item),
+            },
+        )
+        for item in losers
     ]
 
 

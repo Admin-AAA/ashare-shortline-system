@@ -60,3 +60,30 @@ class InMemoryMarketSourceAdapter:
                 continue
             result[code] = list(self._bars_by_code.get(code, []))
         return result
+
+    def fetch_bars_for_quote(
+        self,
+        quote: dict[str, Any],
+        settings: Any = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """兼容出口：按完整 quote 字典查表返回预置日K（任务 4.4）。
+
+        不是 `MarketSourcePort` 协议方法——`market_pool_adapters.fetch_kline_rows`
+        现状收到的是调用方（`market_pool._refresh_bars_for_quote`）手上
+        **完整**的 quote 字典（不只是 code），生产 `TushareMarketSourceAdapter`
+        为此单独暴露了同名兼容方法（用于兜底 `turnover_rate` 等真实字段，见
+        `multi_source_adapter.py` 的详细说明）。本内存实现的测试夹具数据
+        本身就是按 `quote["code"]` 准备好的固定结果，不需要重现那层
+        `turnover_rate` 兜底细节，所以直接按 `quote["code"]` 查表，忽略
+        `settings`/`start_date`/`end_date`——这几个参数只是为了与生产
+        adapter 保持同一签名，方便两者互换。
+
+        对齐 `fetch_daily_bars` 的降级语义：`failing_codes` 命中或查表未命中
+        时返回空列表 `[]`，不抛异常。
+        """
+        code = str(quote.get("code") or "")
+        if not code or code in self._failing_codes:
+            return []
+        return list(self._bars_by_code.get(code, []))
