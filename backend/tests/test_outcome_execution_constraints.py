@@ -6,9 +6,12 @@ from app.services.outcome_service import (
     _resolve_entry,
     _resolve_exit,
     _resolve_stop_loss_price,
+    _resolve_take_profit_price,
     _simulate_outcome,
     DEFAULT_STOP_LOSS_PCT,
+    DEFAULT_TAKE_PROFIT_PCT,
     MAX_STOP_LOSS_PCT,
+    MAX_TAKE_PROFIT_PCT,
 )
 
 
@@ -416,3 +419,61 @@ def test_resolve_stop_loss_max_not_wider_than_default_by_much():
     """
     assert DEFAULT_STOP_LOSS_PCT - MAX_STOP_LOSS_PCT <= 0.3  # DEFAULT - MAX ≤ 0.3pp
     assert MAX_STOP_LOSS_PCT < DEFAULT_STOP_LOSS_PCT  # MAX 更负 = 最宽边界
+
+
+# --------------------------------------------------------------------------- #
+# 止盈价按比例重算（与止损对称）：第186轮修复 bug
+# 根因：跳空低开后止盈价只裁剪不重算，把设计 +5% 抬到 +14.5%，固定止盈失效→trailing 兜底错标 success
+# --------------------------------------------------------------------------- #
+def test_resolve_take_profit_recalculates_on_gap_down():
+    """跳空低开 -8.31% 场景：止盈价必须按隐含比例重算到 ~entry×1.05，而非保留推荐时的 176.6。
+
+    复现 docs/bugs/take-profit-not-rebased-on-actual-entry-price.md 的 603991 至正股份案例：
+    recommend_price=168.19，take_profit=176.60（+5%），次日跳空低开 entry=154.21。
+    旧实现保留 176.6（相对 entry +14.5%），固定止盈路径失效 → trailing 兜底错标 success。
+    修复后应返回 entry×1.05 ≈ 161.92（相对 entry +5%）。
+    """
+    recommend_price = 168.19
+    feature_snapshot = {"take_profit": 176.60}
+    entry = 154.21  # 跳空低开 -8.31% 后的实际开盘价
+    tp = _resolve_take_profit_price(entry, feature_snapshot, recommend_price=recommend_price)
+    expected = round(entry * (1 + DEFAULT_TAKE_PROFIT_PCT / 100.0), 2)
+    assert tp == expected, f"跳空低开止盈价应重算为 {expected}，实际 {tp}"
+    # 相对入场价必须是设计比例 +5%，而非被抬高的 +14.5%
+    assert (tp / entry - 1) * 100 < 6.0
+
+
+def test_resolve_take_profit_no_gap_unchanged():
+    """无跳空（entry == recommend_price）时结果应与旧实现一致：直接采用 take_profit。"""
+    recommend_price = 168.19
+    feature_snapshot = {"take_profit": 176.60}
+    entry = 168.19
+    tp = _resolve_take_profit_price(entry, feature_snapshot, recommend_price=recommend_price)
+    # 无跳空：隐含比例 0.05 → entry×1.05 = 176.599 → 176.6
+    assert tp == round(176.60, 2)
+
+
+def test_resolve_take_profit_caps_implied_ratio_to_max():
+    """隐含比例过高时 clamp 到 MAX_TAKE_PROFIT_PCT（+15%），不被异常 take_profit 抬高。"""
+    recommend_price = 100.0
+    feature_snapshot = {"take_profit": 130.0}  # 隐含 +30%，远超设计
+    entry = 95.0  # 跳空低开
+    tp = _resolve_take_profit_price(entry, feature_snapshot, recommend_price=recommend_price)
+    assert tp == round(entry * (1 + MAX_TAKE_PROFIT_PCT / 100.0), 2)
+
+
+def test_resolve_take_profit_floors_implied_ratio_to_default():
+    """隐含比例过低（take_profit 异常低于入场）时 clamp 到 DEFAULT_TAKE_PROFIT_PCT（+5%）。"""
+    recommend_price = 100.0
+    feature_snapshot = {"take_profit": 98.0}  # 隐含 -2%，异常
+    entry = 95.0
+    tp = _resolve_take_profit_price(entry, feature_snapshot, recommend_price=recommend_price)
+    assert tp == round(entry * (1 + DEFAULT_TAKE_PROFIT_PCT / 100.0), 2)
+
+
+def test_resolve_take_profit_without_recommend_price_keeps_legacy_behavior():
+    """未传 recommend_price（静态/跳空高开拦截路径）时退回旧行为：仅上限裁剪、不重算。"""
+    feature_snapshot = {"take_profit": 176.60}
+    entry = 154.21  # 此路径下 entry 为 None，这里仅验证 None 分支退回原值
+    tp = _resolve_take_profit_price(None, feature_snapshot)
+    assert tp == round(176.60, 2)
