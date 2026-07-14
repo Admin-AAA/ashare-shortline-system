@@ -1502,7 +1502,7 @@ def test_latest_allowed_bar_date_uses_previous_session_before_close(monkeypatch)
         def now(cls):
             return cls(2026, 5, 13, 0, 30)
 
-    monkeypatch.setattr(market_pool.core, "datetime", FakeDateTime)
+    monkeypatch.setattr("app.engine.trading_calendar.datetime", FakeDateTime)
 
     assert market_pool._latest_allowed_bar_date() == "2026-05-12"
 
@@ -1654,3 +1654,40 @@ def test_inject_limit_up_flags_marks_limit_up_stocks(db, monkeypatch):
 def test_inject_limit_up_flags_empty_stocks_returns_zero(db):
     """空 stocks 列表应返回 0，不报错。"""
     assert market_pool.inject_limit_up_flags(db, [], trade_date="2026-07-03") == 0
+
+
+def test_auxiliary_dataset_upsert_deduplicates_and_updates_declared_keys():
+    """描述符驱动持久化按声明键去重，并更新同一逻辑记录。"""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[CapitalFlow.__table__])
+    Session = sessionmaker(bind=engine)
+    db = Session()
+    try:
+        dataset = market_pool.AUXILIARY_DATASETS["capital_flow"]
+
+        market_pool._upsert_by_key(
+            db,
+            dataset,
+            [
+                {"code": "000001", "trade_date": "2026-05-27", "main_net_inflow_yi": 1.2},
+                # 同一批次重复键保留第一条，避免无意义的重复 ORM 查询/更新。
+                {"code": "000001", "trade_date": "2026-05-27", "main_net_inflow_yi": 9.9},
+            ],
+        )
+        db.commit()
+
+        row = db.scalar(select(CapitalFlow).where(CapitalFlow.code == "000001"))
+        assert row.main_net_inflow_yi == 1.2
+
+        market_pool._upsert_by_key(
+            db,
+            dataset,
+            [{"code": "000001", "trade_date": "2026-05-27", "main_net_inflow_yi": 2.5}],
+        )
+        db.commit()
+
+        rows = db.scalars(select(CapitalFlow).where(CapitalFlow.code == "000001")).all()
+        assert len(rows) == 1
+        assert rows[0].main_net_inflow_yi == 2.5
+    finally:
+        db.close()

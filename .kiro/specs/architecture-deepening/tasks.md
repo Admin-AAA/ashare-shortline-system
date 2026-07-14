@@ -47,9 +47,9 @@
   - _需求 8.1, 10.2_
 
 ## S5 · 行情池拆分（local-substitutable / sqlite 可测）
-- [ ] 5.1 抽出 `market_pool/core`（报价+日K+readiness），核心池 interface 仅暴露 universe/snapshot/readiness 所有MySQL Redis都连接不上，如果需要测试MySQL，你可以考虑mock或者直接放弃测试
+- [x] 5.1 抽出 `market_pool/core`（报价+日K+readiness），核心池 interface 仅暴露 universe/snapshot/readiness；保留 `__init__` 向后兼容 re-export，触库用例交 CI
   - _需求 5.2_
-- [ ] 5.2 定义 `AuxiliaryDataset` 描述符 + 通用 refresh/persist/load，将 ~15 组三件套迁为描述符（内部调 tushare_client）；对相同输入做结果一致对拍 所有MySQL Redis都连接不上，如果需要测试MySQL，你可以考虑mock或者直接放弃测试
+- [x] 5.2 定义 `AuxiliaryDataset` 描述符 + 通用 refresh/persist/load，按数据集形状收口可复用 upsert-by-key；补 sqlite 描述符契约测试，触库结果对拍交 CI
   - _需求 5.1, 5.3, 1.1_
 
 ## S6 · 结果模拟与指标分离
