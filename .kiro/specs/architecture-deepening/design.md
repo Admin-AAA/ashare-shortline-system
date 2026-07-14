@@ -87,4 +87,11 @@
 3. **market_source port** 只覆盖 fetch_quotes + fetch_daily_bars；aux 不进此 port（走 §7 描述符，内部调 tushare_client）。生产一个 multi_source_adapter（多源+回退藏 implementation），测试 in_memory_adapter。方法粒度 S4 精读后微调【待核实】。
 4. **历史成熟度** → `services/market_pool/history_maturity.py`（local-substitutable）。
 5. **golden-master** 投入 in-memory adapter + sqlite，S7 run_workbench 端到端对拍序列化输出；风险：持久化若含 MySQL 方言 upsert/JSON 则 sqlite 不可移植【待核实 S4/S7】，兜底=纯计算件本地单元 golden-master + 触库部分 CI 带库。
+
+**【S7.1 已核实，结论：不迁移 sqlite】** 用一次性探针脚本实测（非猜测）：
+- `sqlalchemy.dialects.mysql.LONGTEXT`（`RecommendationRun.filter_audit_json`、`BacktestRun.result_json` 等未带 `.with_variant(Text(), "sqlite")` 的列）在 sqlite 引擎上 `create_all()` 直接抛 `CompileError: ... can't render element of type LONGTEXT`。
+- `sqlalchemy.dialects.mysql.insert(...).on_duplicate_key_update(...)`（`market_pool/core.py`、`market_pool/auxiliary.py`、`data_gap_remediation_service.py`、`overnight_holding_service.py`、`workbench_service.py` 等 12+ 处）在 sqlite 引擎上执行抛 `UnsupportedCompilationError: ... can't render element of type OnDuplicateClause`。
+- sqlite 有自己的 `sqlalchemy.dialects.sqlite.insert(...).on_conflict_do_update(...)`，探针验证语义等价可用，但要让 12+ 处 upsert 站点在 MySQL/sqlite 间切换，需要抽一层数据库无关的 upsert helper（按方言分发），且要把所有 `LONGTEXT`/`MEDIUMTEXT` 列统一补 `.with_variant(Text(), "sqlite")`（多数列尚未补，只有 `Recommendation.feature_snapshot_json`/`AgentDecisionLog.review_json` 两处做过）。
+- 本次重构目标是"行为不变"（需求 1），不是新增"多数据库支持"能力；为了一个不改变对外行为、只服务于测试基线的 golden-master，去改 12+ 处生产持久化代码（哪怕只加 `.with_variant`）本身就带来行为漂移风险，与需求 1.2（不改表结构）的谨慎精神相悖，成本/风险明显超过收益。
+- 决定：**S7 golden-master 采用需求 10.4 / design §12 的退化方案**——纯计算件本地对拍：用 `market_source.in_memory_adapter` 注入行情，`db` 参数传入一个真实 sqlite `Session`（`create_all` 时只建 golden-master 实际会写到的表，跳过含 MySQL-only 类型的列所在的持久化调用，或对这些调用打 monkeypatch 短路），对拍范围收窄到"确定性计算字段"（候选集/分数/phase/veto/setup/risk_flags/evidence/filter-audit 分布），不对拍真实持久化落库结果；触库部分（`_persist_market`/`_upsert_stock_rows`/`_upsert_daily_bar_rows`/aux upsert 等 MySQL 专属路径）标 `production_mysql` 交 CI 带库验证。
 6. **filter_audit**：管线只 append trace（复用 candidates/trace 累积器），末尾 `build_filter_audit(trace,...)` 出最终 audit/分布，全部下沉 `runs/filter_audit`，编排不留残件。

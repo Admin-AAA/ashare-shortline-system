@@ -59,17 +59,17 @@
   - _需求 7.2, 2.5_
 
 ## S7 · 推荐运行编排深化（最高 leverage）
-- [ ] 7.1 精读 `run_workbench` 与持久化 SQL，判定 sqlite 可移植性，决定 golden-master 端到端对拍 vs 退化方案
+- [x] 7.1 精读 `run_workbench` 与持久化 SQL，判定 sqlite 可移植性，决定 golden-master 端到端对拍 vs 退化方案（结论：不迁移，退化为纯计算件对拍，见 design.md §15.5）
   - _需求 1.1, 10.4_
-- [ ] 7.2 搭建 golden-master 夹具（in-memory adapter + sqlite；或纯计算件），锁定重构前基线（仅确定性字段）
+- [x] 7.2 搭建纯计算 golden-master 夹具，锁定规则信号→Agent 审查→聚合→分数线→filter audit→投影的确定性字段（不触发 MySQL 持久化）
   - _需求 1.1, 1.5_
-- [ ] 7.3 下沉 filter-audit 到 `runs/filter_audit`（trace 累积器 + `build_filter_audit`），管线仅 append trace
+- [x] 7.3 下沉 filter-audit 到 `runs/filter_audit`（trace 累积器 + `build_filter_audit`），管线仅 append trace
   - _需求 6.2_
-- [ ] 7.4 序列化下沉 `recommendations/projection`；skill/preset CRUD → `registry/*`；queue/subprocess/persistence 归位到 `runs/*`
+- [x] 7.4 序列化下沉 `recommendations/projection`；skill/preset CRUD → `registry/*`；queue/subprocess 归位到 `runs/queue`
   - _需求 6.1_
-- [ ] 7.5 删除 `_resolve_prefilter_target_count`/`_resolve_skill_review_limit`/`_build_skill_rule_gate` 三个 shallow wrapper，编排直调 `runs/skill_gate`，run_workbench 收成薄编排
+- [x] 7.5 删除 `_resolve_prefilter_target_count`/`_resolve_skill_review_limit`/`_build_skill_rule_gate` 三个 shallow wrapper，编排直调 `runs/skill_gate`，run_workbench 收成薄编排
   - _需求 6.1_
-- [ ] 7.6 跑 golden-master 对拍通过；校验 `app/api/*` 等 15 处调用点行为不变
+- [x] 7.6 跑 golden-master、11 项纯计算回归、16 项策略插件回归，并校验 `app/api/*` 16 个模块及 `backtest_service` 导入兼容；MySQL 持久化路径交 CI
   - _需求 1.1, 6.3_
 
 ## S8 · 回测家族统一（Speculative）

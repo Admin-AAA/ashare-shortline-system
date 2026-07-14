@@ -3,7 +3,8 @@ from pathlib import Path
 from app.engine.skill_loader import load_skills
 from app.engine.strategy_runner import run_strategy
 from app.services.feature_builder import build_features
-from app.services.workbench_service import _default_preset_skill_rows, _strategy_backtest_adapter_manifest
+from app.services.registry.presets import _default_preset_skill_rows
+from app.services.registry.skills import _strategy_backtest_adapter_manifest
 
 
 SHORTLINE_SKILL_IDS = {

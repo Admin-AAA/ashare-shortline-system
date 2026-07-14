@@ -76,12 +76,14 @@ from app.services.backtest.result import (
 )
 from app.services.prefilter_service import apply_prefilters
 from app.services.research_context import build_research_contexts
+from app.services.runs.skill_gate import (
+    build_skill_rule_gate,
+    resolve_prefilter_target_count,
+    resolve_skill_review_limit,
+)
 from app.services.workbench_service import (
     _build_recommendation_card,
-    _build_skill_rule_gate,
     _prelim_rule_score,
-    _resolve_prefilter_target_count,
-    _resolve_skill_review_limit,
 )
 
 
@@ -418,7 +420,7 @@ def _backtest_single_date(
     # （`DeclarativeStrategy` 委托既有 run_strategy），产出的 Signal 与直接调用
     # run_strategy 逐字段一致——这是重构，不是新增行为。
     strategy_registry = build_registry_from_skills([selected["skill"] for selected in selected_skills])
-    min_prefilter_count = _resolve_prefilter_target_count(
+    min_prefilter_count = resolve_prefilter_target_count(
         {"run_mode": "formal", "score_line": score_line},
         selected_skill_count=len(selected_skills),
     )
@@ -471,9 +473,9 @@ def _backtest_single_date(
         )
 
     prelim_entries.sort(key=lambda item: float(item.get("prelim_score") or 0), reverse=True)
-    gate_result = _build_skill_rule_gate(prelim_entries, selected_skills, settings)
+    gate_result = build_skill_rule_gate(prelim_entries, selected_skills, settings)
     skill_candidates = gate_result["skill_candidates"]
-    skill_review_limit = _resolve_skill_review_limit(
+    skill_review_limit = resolve_skill_review_limit(
         {"run_mode": "formal", "score_line": score_line},
         settings,
     )
