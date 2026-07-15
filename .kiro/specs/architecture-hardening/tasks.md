@@ -225,13 +225,13 @@
   - persistence 失败时不得留下 completed run 或重复推荐。
   - _需求：3.2–3.5, 10.6_
 
-- [~] 5.7 收缩 `workbench_service`
+- [x] 5.7 收缩 `workbench_service`
   - 先将 run facade 切换到 RunCoordinator，再迁移查询/projection/人工标注/历史分析，最后删除完整旧流水线。
   - 删除模块级隐藏依赖；用调用点 inventory 验证旧入口引用为 0。
   - 新增运行阶段只允许修改 phase 定义、该阶段实现、装配和对应测试。
   - _需求：3.6–3.8, 11.1_
 
-- [~] 5.8 建立真实 Coordinator golden-master 与结构化日志断言
+- [x] 5.8 建立真实 Coordinator golden-master 与结构化日志断言
   - 直接执行 RunCoordinator，使用 in-memory market source、fake review 和可回滚 repository。
   - 分别覆盖 happy path、失败资源释放、checkpoint/side-effect 幂等和 projection golden。
   - 断言每个 phase 日志含 run_id/phase/status/duration_ms/stable_error_code；成功为 NULL，失败属于固定枚举。

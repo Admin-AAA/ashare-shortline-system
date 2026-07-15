@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+import inspect
 import logging
 import os
 import socket
@@ -322,7 +323,7 @@ class RunCoordinator:
         if pending is None:
             return None
         stage, context = pending
-        if isinstance(stage, AsyncRunStage):
+        if inspect.iscoroutinefunction(getattr(stage, "execute", None)):
             raise TypeError(
                 f"stage {stage.phase.value} is async; await execute_next_stage_async instead"
             )
@@ -350,7 +351,7 @@ class RunCoordinator:
             return None
         stage, context = pending
         stage_data = data if data is not None else StageData()
-        if isinstance(stage, AsyncRunStage):
+        if inspect.iscoroutinefunction(getattr(stage, "execute", None)):
             output = await stage.execute(context, stage_data)
         else:
             output = stage.execute(context, stage_data)
