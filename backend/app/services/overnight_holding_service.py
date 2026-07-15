@@ -14,10 +14,19 @@ from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.orm import Session
 
 from app.models.tables import BacktestRun, DailyKbar, MinuteKbar, Stock
+from app.engine.board_rules import (
+    is_one_word_limit_up_open_low as _is_one_word_limit_up,
+    main_board_up_limit as _main_board_up_limit,
+)
 from app.services.evaluation_metrics import (
     MIN_SIGNAL_SAMPLE as _SHARED_MIN_SAMPLE,
     compute_full_metrics,
     _empty_metrics as _shared_empty_metrics,
+)
+from app.services.backtest.result import (
+    project_false_positive_sample,
+    project_recommendation_record,
+    select_false_positive_trades,
 )
 from app.services.minute_data_prep import (
     build_data_coverage as _build_data_coverage,
@@ -49,7 +58,6 @@ BENCHMARK_CODE = "000300"
 BENCHMARK_NAME = "沪深300"
 TAIL_START_TIME = "14:30:00"
 MORNING_EXIT_TIME = "09:35:00"
-LIMIT_UP_PCT = 0.10
 VWAP_HOLD_TOLERANCE_BPS = 12.0
 TAIL_VWAP_MAX_GAP_BPS = 500.0
 TAIL_RETEST_WINDOW_MINUTES = 15
@@ -127,6 +135,38 @@ RELAXED_PCT_VARIANT = OvernightVariant(
     min_pct=2.0,
     max_pct=7.0,
 )
+
+
+class OvernightHoldingBacktestStrategy:
+    """隔夜持股法（形状二）对齐 ``TimeSeriesBacktestStrategy`` 协议的适配器（任务 8.2，需求 9.2）。
+
+    纯委托：不重写 ``run_overnight_holding_backtest``/``_choose_variant`` 任何一行
+    业务逻辑，只是把已存在的模块级函数包一层协议壳，验证 ``TimeSeriesBacktestStrategy``
+    的方法签名对这个真实实现是「够用、不多余」的——与 ``DeclarativeStrategy`` 委托
+    ``run_strategy``（3.2）同一手法。``run()``/``choose_variant()`` 的返回值与直接调用
+    模块级函数**逐字段一致**（零行为变化），对外 API（``run_overnight_holding_backtest``
+    本身）签名/返回值不受影响。
+    """
+
+    strategy_id = STRATEGY_ID
+    strategy_name = STRATEGY_NAME
+
+    def variants(self) -> tuple[OvernightVariant, ...]:
+        """本策略参与网格搜索/对比的全部参数变体，顺序与 ``run_overnight_holding_backtest``
+        内部循环一致（baseline/candidate/delayed_exit/relaxed_pct）。"""
+        return (BASELINE_VARIANT, CANDIDATE_VARIANT, DELAYED_EXIT_VARIANT, RELAXED_PCT_VARIANT)
+
+    def run(self, db: Session, start_date: str, end_date: str) -> dict[str, Any]:
+        """委托 ``run_overnight_holding_backtest``，返回值原样透传。"""
+        return run_overnight_holding_backtest(db, start_date, end_date)
+
+    def choose_variant(
+        self,
+        signal_dates: list[str],
+        comparisons: dict[str, dict[str, Any]],
+    ) -> tuple[str, str]:
+        """委托 ``_choose_variant``，返回值原样透传。"""
+        return _choose_variant(signal_dates, comparisons)
 
 
 def run_overnight_holding_backtest(
@@ -1569,44 +1609,26 @@ def _trade_samples(trades: list[dict[str, Any]], limit: int = 12) -> list[dict[s
 
 
 def _recommendation_records(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """trades → 展示用 recommendation records（收敛到 backtest/result，S8.1）。"""
     return [
-        {
-            "trade_date": item["trade_date"],
-            "code": item["code"],
-            "name": item["name"],
-            "recommendation_time": item["recommendation_time"],
-            "entry_time": item["entry_time"],
-            "entry_price": item["entry_price"],
-            "exit_date": item["exit_date"],
-            "exit_time": item["exit_time"],
-            "exit_price": item["exit_price"],
-            "net_return_pct": item["net_return_pct"],
-            "gross_return_pct": item["gross_return_pct"],
-            "benchmark_return_pct": item.get("benchmark_return_pct"),
-            "accurate": item["accurate"],
-            "conditions": item["conditions"],
-            "exit_reason": item["exit_reason"],
-            "false_positive_reason": item.get("false_positive_reason"),
-        }
+        project_recommendation_record(
+            item,
+            recommendation_time_key="recommendation_time",
+            extra_fields={"conditions": item["conditions"]},
+        )
         for item in trades
     ]
 
 
 def _false_positive_samples(trades: list[dict[str, Any]], limit: int = 8) -> list[dict[str, Any]]:
-    losers = [item for item in trades if item.get("resolved") and not item.get("accurate")]
-    losers.sort(key=lambda item: (item.get("net_return_pct") or 0.0))
+    """trades → 展示用误判样本（收敛到 backtest/result，S8.1）。"""
+    losers = select_false_positive_trades(trades, limit=limit)
     return [
-        {
-            "trade_date": item["trade_date"],
-            "code": item["code"],
-            "name": item["name"],
-            "entry_time": item["entry_time"],
-            "exit_time": item["exit_time"],
-            "net_return_pct": item["net_return_pct"],
-            "false_positive_reason": item["false_positive_reason"],
-            "conditions": item["conditions"],
-        }
-        for item in losers[:limit]
+        project_false_positive_sample(
+            item,
+            extra_fields={"conditions": item["conditions"]},
+        )
+        for item in losers
     ]
 
 
@@ -1651,10 +1673,6 @@ def _is_limit_up_bar(bar: DailyKbar) -> bool:
     return _num(bar.pct_chg) >= 9.8
 
 
-def _is_one_word_limit_up(bar: DailyKbar, up_limit: float) -> bool:
-    return _num(bar.open) >= up_limit * 0.995 and _num(bar.low) >= up_limit * 0.995
-
-
 def _is_shrinking_limit_up(bar: DailyKbar, up_limit: float, signal_day_volume: float) -> bool:
     return (
         _num(bar.close) >= up_limit * 0.995
@@ -1663,10 +1681,6 @@ def _is_shrinking_limit_up(bar: DailyKbar, up_limit: float, signal_day_volume: f
         and signal_day_volume > 0
         and _num(bar.volume) <= signal_day_volume * SHRINK_LIMIT_VOLUME_RATIO
     )
-
-
-def _main_board_up_limit(prev_close: float) -> float:
-    return round(prev_close * (1 + LIMIT_UP_PCT), 2)
 
 
 def _apply_entry_cost(price: float, cost: CostAssumption) -> float:

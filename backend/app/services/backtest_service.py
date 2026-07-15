@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.engine.aggregator import apply_pool_rules
 from app.engine.skill_loader import load_skills
-from app.engine.strategy_runner import run_strategy
+from app.engine.strategy import StrategyContext, build_registry_from_skills
 from app.models.tables import (
     BacktestRun,
     DailyKbar,
@@ -58,6 +58,15 @@ from app.services.outcome_service import (
 )
 from app.services.temporal_consistency import check_run_temporal_consistency, check_backtest_temporal_consistency
 from app.services.runs.persistence import best_strategy_id
+from app.services.runs.contracts import (
+    CanonicalExecutionVersionBuilder,
+    ExecutionVersionInput,
+    application_identity_from_environment,
+    parse_run_request,
+    selected_recommendation_execution_policy,
+)
+from app.services.runs.request_persistence import assert_run_request_index_consistency
+from app.services.factors.registry import bootstrap_default_factor_registry
 from app.services.evaluation_metrics import (
     compute_full_metrics,
     _empty_metrics as _backtest_empty_metrics,
@@ -69,14 +78,21 @@ from app.services.backtest_validation import (
     _build_time_split_analysis,
     _choose_backtest_variant,
 )
+from app.services.backtest.result import (
+    project_false_positive_sample,
+    project_recommendation_record,
+    select_false_positive_trades,
+)
 from app.services.prefilter_service import apply_prefilters
 from app.services.research_context import build_research_contexts
+from app.services.runs.skill_gate import (
+    build_skill_rule_gate,
+    resolve_prefilter_target_count,
+    resolve_skill_review_limit,
+)
 from app.services.workbench_service import (
     _build_recommendation_card,
-    _build_skill_rule_gate,
     _prelim_rule_score,
-    _resolve_prefilter_target_count,
-    _resolve_skill_review_limit,
 )
 
 
@@ -407,7 +423,13 @@ def _backtest_single_date(
 
     if not selected_skills:
         return {"trade_date": trade_date, "status": "skipped", "reason": "无可用的 Skill"}
-    min_prefilter_count = _resolve_prefilter_target_count(
+    # 策略分发经 registry 统一取实例（任务 3.2）：backtest 预检不再直调
+    # run_strategy，而是先用本次选中的 skills 建一个 StrategyRegistry，随后
+    # `registry.get(skill_id).evaluate(stock, ctx)`。当前全部是声明式
+    # （`DeclarativeStrategy` 委托既有 run_strategy），产出的 Signal 与直接调用
+    # run_strategy 逐字段一致——这是重构，不是新增行为。
+    strategy_registry = build_registry_from_skills([selected["skill"] for selected in selected_skills])
+    min_prefilter_count = resolve_prefilter_target_count(
         {"run_mode": "formal", "score_line": score_line},
         selected_skill_count=len(selected_skills),
     )
@@ -447,7 +469,8 @@ def _backtest_single_date(
                 signal = None
             else:
                 skip_universe = prefilter_source == "skill_pass" and skill_obj.skill_id in prefilter_skill_ids
-                signal = run_strategy(skill_obj, stock, snapshot["main_industries"], skip_universe_check=skip_universe) if skill_obj.executable else None
+                ctx = StrategyContext(main_industries=snapshot["main_industries"], skip_universe_check=skip_universe)
+                signal = strategy_registry.get(skill_obj.skill_id).evaluate(stock, ctx) if skill_obj.executable else None
             rule_signals_by_skill[skill_obj.skill_id] = signal
         prelim_entries.append(
             {
@@ -459,9 +482,9 @@ def _backtest_single_date(
         )
 
     prelim_entries.sort(key=lambda item: float(item.get("prelim_score") or 0), reverse=True)
-    gate_result = _build_skill_rule_gate(prelim_entries, selected_skills, settings)
+    gate_result = build_skill_rule_gate(prelim_entries, selected_skills, settings)
     skill_candidates = gate_result["skill_candidates"]
-    skill_review_limit = _resolve_skill_review_limit(
+    skill_review_limit = resolve_skill_review_limit(
         {"run_mode": "formal", "score_line": score_line},
         settings,
     )
@@ -739,19 +762,41 @@ def _persist_backtest_run(
         "reason_counts": {},
     }
 
+    request = parse_run_request(
+        {
+            "run_mode": "backtest",
+            "run_name": f"回测 {trade_date}",
+            "market_scope": "全市场",
+            "risk_template": "balanced",
+            "score_line": score_line,
+            "output_count": 1,
+            "trade_date_override": trade_date,
+            "skills": [{"skill_id": skill.skill_id} for skill in skills],
+        }
+    )
+    factor_plan = bootstrap_default_factor_registry()
+    execution_version = CanonicalExecutionVersionBuilder().build(
+        ExecutionVersionInput(
+            application=application_identity_from_environment(),
+            request_schema_version=request.schema_version,
+            execution_policy=selected_recommendation_execution_policy(request),
+            factor_execution_plan_fingerprint=factor_plan.fingerprint,
+        )
+    )
     run = RecommendationRun(
         run_id=run_id,
-        run_name=f"回测 {trade_date}",
-        # 回测 run 用 backtest 而非 formal：formal 必须只代表真实 LIVE 推送，
-        # 否则会污染所有按 run_mode='formal' 过滤的统计（自检 D/E 项、list_runs、dashboard）。
-        run_mode="backtest",
-        trade_date=trade_date,
+        run_name=request.run_name,
+        # The indexed projection is written from the same immutable request that
+        # is stored in request_json; never independently classify a backtest as
+        # formal while its canonical request says otherwise.
+        run_mode=request.run_mode.value,
+        trade_date=request.trade_date_override or trade_date,
         started_at=now,
         finished_at=now,
-        market_scope="全市场",
-        risk_template="balanced",
-        score_line=score_line,
-        output_count=0,
+        market_scope=request.market_scope,
+        risk_template=request.risk_template,
+        score_line=request.score_line,
+        output_count=request.output_count,
         universe_count=universe_count,
         recommended_count=recommended_count,
         status="completed",
@@ -764,10 +809,14 @@ def _persist_backtest_run(
                 "score_line": score_line,
             }
         ),
+        request_schema_version=request.schema_version,
+        request_json=request.to_canonical_json(),
+        execution_version=execution_version,
         market_snapshot_json="{}",
         result_summary_json=json.dumps({"backtest": True, "score_line": score_line}),
         filter_audit_json=json.dumps(filter_audit, ensure_ascii=False),
     )
+    assert_run_request_index_consistency(run, request)
     db.add(run)
     db.commit()
     return run_id
@@ -1421,54 +1470,43 @@ def _backtest_aggregate_metrics(
 
 
 def _backtest_recommendation_records(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """trades → 展示用 recommendation records（收敛到 backtest/result，S8.1）。"""
     ordered = sorted(
         trades,
         key=lambda item: (item.get("trade_date", ""), item.get("entry_date", ""), item.get("code", "")),
     )
     return [
-        {
-            "trade_date": item.get("trade_date"),
-            "code": item.get("code"),
-            "name": item.get("name"),
-            "recommendation_time": item.get("trade_date"),
-            "entry_time": item.get("entry_date"),
-            "entry_price": item.get("entry_price"),
-            "exit_date": item.get("exit_date"),
-            "exit_time": item.get("exit_date"),
-            "exit_price": item.get("exit_price"),
-            "net_return_pct": item.get("net_return_pct"),
-            "gross_return_pct": item.get("gross_return_pct"),
-            "benchmark_return_pct": item.get("benchmark_return_pct"),
-            "accurate": item.get("accurate"),
-            "signal_valid_at_recommend_time": item.get("signal_valid_at_recommend_time", True),
-            "executed": item.get("executed", True),
-            "net_return_positive": item.get("net_return_positive", False),
-            "accuracy_failure_label": _accuracy_failure_label(item),
-            "exit_reason": item.get("exit_reason"),
-            "false_positive_reason": item.get("false_positive_reason"),
-        }
+        project_recommendation_record(
+            item,
+            entry_time_key="entry_date",
+            exit_time_key="exit_date",
+            extra_fields={
+                "signal_valid_at_recommend_time": item.get("signal_valid_at_recommend_time", True),
+                "executed": item.get("executed", True),
+                "net_return_positive": item.get("net_return_positive", False),
+                "accuracy_failure_label": _accuracy_failure_label(item),
+            },
+        )
         for item in ordered
     ]
 
 
 def _backtest_false_positive_samples(trades: list[dict[str, Any]], limit: int = 8) -> list[dict[str, Any]]:
-    losers = [item for item in trades if item.get("resolved") and not item.get("accurate")]
-    losers.sort(key=lambda item: float(item.get("net_return_pct") or 0.0))
+    """trades → 展示用误判样本（收敛到 backtest/result，S8.1）。"""
+    losers = select_false_positive_trades(trades, limit=limit)
     return [
-        {
-            "trade_date": item.get("trade_date"),
-            "code": item.get("code"),
-            "name": item.get("name"),
-            "entry_time": item.get("entry_date"),
-            "exit_time": item.get("exit_date"),
-            "net_return_pct": item.get("net_return_pct"),
-            "false_positive_reason": item.get("false_positive_reason"),
-            "signal_valid_at_recommend_time": item.get("signal_valid_at_recommend_time", True),
-            "executed": item.get("executed", True),
-            "net_return_positive": item.get("net_return_positive", False),
-            "accuracy_failure_label": _accuracy_failure_label(item),
-        }
-        for item in losers[:limit]
+        project_false_positive_sample(
+            item,
+            entry_time_key="entry_date",
+            exit_time_key="exit_date",
+            extra_fields={
+                "signal_valid_at_recommend_time": item.get("signal_valid_at_recommend_time", True),
+                "executed": item.get("executed", True),
+                "net_return_positive": item.get("net_return_positive", False),
+                "accuracy_failure_label": _accuracy_failure_label(item),
+            },
+        )
+        for item in losers
     ]
 
 

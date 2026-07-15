@@ -2,6 +2,10 @@
   "id": "chip-single-peak-breakout",
   "name": "筹码单峰突破",
   "version": "0.1.0",
+  "mode": "declarative",
+  "status": "active",
+  "requirements": ["stock_feature_context"],
+  "capabilities": ["signal_evaluation"],
   "enabled": true,
   "source_type": "local",
   "description": "基于 90% 筹码单峰密集（chip_concentration>=20）且放量突破成本密集区的低位启动预设；因果链：上方套牢盘极轻 -> 突破阻力小 -> 主力低位收集完毕后的启动信号。"

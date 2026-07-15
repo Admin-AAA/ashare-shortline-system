@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
+
+from app.engine.aggregator import market_regime_weights
 
 from app.schemas.dashboard import (
     CandidateTraceRow,
@@ -240,6 +243,123 @@ def build_risk_radar(recommendations: list[CockpitRecommendation]) -> RiskRadar:
                 tags.append(tag)
 
     return RiskRadar(high=high, medium=medium, info=info, tags=tags[:12])
+
+
+def serialize_recommendation(
+    rec: Any,
+    watch: Any = None,
+    run: Any = None,
+    preset_name: str | None = None,
+) -> dict[str, Any]:
+    """将 Recommendation 及其已加载关联对象投影为 API 稳定字典。
+
+    数据库查询由调用方批量完成；本函数只负责确定性字段投影，因此可在不连接
+    MySQL 的场景下参与 golden-master 对拍。
+    """
+    feature_snapshot = loads_json(_get(rec, "feature_snapshot_json"), {}) or {}
+    market_context = loads_json(_get(rec, "market_context_json"), {}) or {}
+    if "aggregation_weights" not in feature_snapshot:
+        feature_snapshot["aggregation_weights"] = market_regime_weights(market_context)
+    agent_summary = loads_json(_get(rec, "agent_summary_json"), {}) or {}
+    recommended_at = _get(rec, "recommended_at")
+    return {
+        "recommendation_id": _get(rec, "recommendation_id"),
+        "run_id": _get(rec, "run_id"),
+        "trade_date": _get(rec, "trade_date"),
+        "recommended_at": recommended_at.isoformat() if recommended_at else None,
+        "code": _get(rec, "code"),
+        "name": _get(rec, "name"),
+        "industry": _get(rec, "industry"),
+        "recommend_price": _get(rec, "recommend_price"),
+        "stop_loss": feature_snapshot.get("stop_loss"),
+        "take_profit": feature_snapshot.get("take_profit"),
+        "ideal_buy": feature_snapshot.get("ideal_buy"),
+        "secondary_buy": feature_snapshot.get("secondary_buy"),
+        "bucket": _get(rec, "bucket") or "",
+        "final_score": _get(rec, "final_score"),
+        "consensus_score": _get(rec, "consensus_score"),
+        "setup_type": _get(rec, "setup_type"),
+        "entry_rule": _get(rec, "entry_rule"),
+        "invalid_rule": _get(rec, "invalid_rule"),
+        "rationale": _get(rec, "rationale"),
+        "risk_tags": loads_json(_get(rec, "risk_tags_json"), []),
+        "info_tags": loads_json(_get(rec, "info_tags_json"), []),
+        "feature_snapshot": feature_snapshot,
+        "market_context": market_context,
+        "skill_breakdown": loads_json(_get(rec, "skill_breakdown_json"), []),
+        "agent_logs": agent_summary.get("logs", []),
+        "llm_stance": agent_summary.get("stance"),
+        "llm_delta": agent_summary.get("score_delta"),
+        "score_breakdown": feature_snapshot.get("score_breakdown", {}),
+        "score_line_meta": feature_snapshot.get("score_line_meta", {}),
+        "execution_viability": feature_snapshot.get("execution_viability", {}),
+        "status": _get(rec, "status"),
+        "recent_repeat": _get(rec, "recent_repeat"),
+        "watch_status": _get(watch, "watch_status", "none") if watch else "none",
+        "watch_note": _get(watch, "note") if watch else None,
+        "preset_name": preset_name,
+        "preset_id": _get(run, "preset_id") if run else None,
+        "run_name": _get(run, "run_name") if run else None,
+    }
+
+
+def serialize_run_summary(
+    run: Any,
+    preset: Any,
+    hit_rate: float,
+    *,
+    active_statuses: set[str],
+    heartbeat_stale_seconds: int,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """投影运行摘要；命中率与预设关联由调用方查询并传入。"""
+    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
+    heartbeat_at = _get(run, "heartbeat_at")
+    heartbeat_age_seconds = (
+        max(0, int((now - heartbeat_at).total_seconds()))
+        if heartbeat_at is not None
+        else None
+    )
+    progress_current = int(_get(run, "progress_current", 0) or 0)
+    progress_total = int(_get(run, "progress_total", 0) or 0)
+    progress_pct = round(min(100.0, max(0.0, progress_current * 100 / progress_total)), 2) if progress_total else None
+    status = _get(run, "status")
+    return {
+        "run_id": _get(run, "run_id"),
+        "run_name": _get(run, "run_name"),
+        "preset_id": _get(run, "preset_id"),
+        "preset_name": _get(preset, "name", "临时运行") if preset else "临时运行",
+        "trade_date": _get(run, "trade_date"),
+        "run_mode": _get(run, "run_mode"),
+        "started_at": _isoformat_or_none(_get(run, "started_at")),
+        "finished_at": _isoformat_or_none(_get(run, "finished_at")),
+        "market_scope": _get(run, "market_scope"),
+        "market_scope_value": _get(run, "market_scope_value"),
+        "risk_template": _get(run, "risk_template"),
+        "score_line": _get(run, "score_line"),
+        "universe_count": _get(run, "universe_count"),
+        "recommended_count": _get(run, "recommended_count"),
+        "status": status,
+        "error_message": _get(run, "error_message"),
+        "heartbeat_at": _isoformat_or_none(heartbeat_at),
+        "heartbeat_age_seconds": heartbeat_age_seconds,
+        "heartbeat_stale_seconds": heartbeat_stale_seconds,
+        "is_stale": bool(status in active_statuses and heartbeat_age_seconds is not None and heartbeat_age_seconds > heartbeat_stale_seconds),
+        "progress_phase": _get(run, "progress_phase"),
+        "progress_current": progress_current,
+        "progress_total": progress_total,
+        "progress_pct": progress_pct,
+        "progress_message": _get(run, "progress_message"),
+        "interrupted_at": _isoformat_or_none(_get(run, "interrupted_at")),
+        "skill_count": len(loads_json(_get(run, "selected_skills_json"), [])),
+        "hit_rate": hit_rate,
+        "result_summary": loads_json(_get(run, "result_summary_json"), {}),
+        "checkpoint_phase": _get(run, "checkpoint_phase"),
+    }
+
+
+def _isoformat_or_none(value: Any) -> str | None:
+    return value.isoformat() if value is not None and hasattr(value, "isoformat") else None
 
 
 def _get(value: Any, key: str, default: Any = None) -> Any:

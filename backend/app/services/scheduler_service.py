@@ -1047,16 +1047,54 @@ async def _run_recommendation(db, payload: dict) -> dict:
         "preset_id": payload.get("preset_id"),
         "run_name": payload.get("run_name", f"定时推荐 {datetime.now(timezone.utc).replace(tzinfo=None).strftime('%Y%m%d')}"),
     }
+    # Preserve every explicitly scheduled RunRequest input.  Defaults remain owned
+    # by the canonical parser/preset merge, but a scheduler must never silently
+    # discard an explicitly selected review, date, scope, or matrix policy.
     for key in (
         "data_source",
         "risk_template",
         "score_line",
         "output_count",
         "selected_skill_ids",
+        "skills",
         "skip_aux_refresh",
+        "disable_agent_review",
+        "trade_date_override",
+        "market_scope",
+        "market_scope_value",
+        "agent_review_limit",
+        "agent_review_concurrency",
+        "hide_recent_repeats",
+        "dedup_same_day",
+        "matrix_batch_id",
+        "matrix_batch_name",
+        "matrix_run",
     ):
         if key in payload:
             run_payload[key] = payload.get(key)
+
+    # Scheduler emits the same immutable request shape as API callers.  Keep the
+    # no-preset in-process fallback below, but never let it bypass request parsing.
+    from app.services.runs.contracts import parse_run_request, validate_run_request_no_credentials
+
+    validate_run_request_no_credentials(payload)
+    if "selected_skill_ids" in run_payload:
+        run_payload["skills"] = [
+            {"skill_id": str(skill_id), "weight": 1.0, "sort_order": index}
+            for index, skill_id in enumerate(run_payload.pop("selected_skill_ids") or [])
+            if str(skill_id).strip()
+        ]
+    # Validate the durable shape, but keep only explicitly scheduled fields in
+    # ``run_payload`` so Pydantic defaults never overwrite a preset during merge.
+    # ``RunRequest`` owns the formal default; an explicitly supplied value must
+    # survive unchanged so invalid values are rejected rather than silently
+    # rewritten and experiment/backtest modes cross every dispatch boundary.
+    validation_payload = dict(run_payload)
+    if "run_mode" in payload:
+        validation_payload["run_mode"] = payload["run_mode"]
+    parse_run_request(validation_payload)
+    if "run_mode" in payload:
+        run_payload["run_mode"] = payload["run_mode"]
 
     # 无 preset_id 时无法入队独立子进程（enqueue 前置条件），退化为原 in-process 执行，
     # 保留历史行为，避免破坏潜在的非预设触发路径。
@@ -1408,6 +1446,7 @@ async def _run_preset_matrix(db, payload: dict, task_run_id: str | None = None) 
             "disable_agent_review",
             "agent_review_limit",
             "agent_review_concurrency",
+            "run_mode",
         ):
             if key in payload:
                 run_payload[key] = payload.get(key)

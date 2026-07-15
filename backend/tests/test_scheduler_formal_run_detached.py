@@ -13,10 +13,13 @@ _spawn_run_subprocess(start_new_session=True) 派发到独立子进程，后端�
 
 import asyncio
 
+import pytest
+
 from app.services import scheduler_service
 
 
-def test_run_recommendation_enqueues_detached_subprocess_when_preset_present(monkeypatch, db):
+@pytest.mark.parametrize("run_mode", ("formal", "experiment", "backtest"))
+def test_run_recommendation_enqueues_detached_subprocess_when_preset_present(monkeypatch, db, run_mode):
     enqueue_calls = []
     run_wb_calls = []
 
@@ -35,11 +38,17 @@ def test_run_recommendation_enqueues_detached_subprocess_when_preset_present(mon
     monkeypatch.setattr("app.services.workbench_service.enqueue_workbench_run", fake_enqueue)
     monkeypatch.setattr("app.services.workbench_service.run_workbench", fake_run_workbench)
 
-    payload = {"preset_id": "preset_formal_opening", "data_source": "local_pool_preferred", "score_line": 72}
+    payload = {
+        "preset_id": "preset_formal_opening",
+        "data_source": "local_pool_preferred",
+        "score_line": 72,
+        "run_mode": run_mode,
+    }
     result = asyncio.run(scheduler_service._run_recommendation(db, payload))
 
     # 关键断言：有 preset_id 时必须走 enqueue（独立子进程），绝不走进程内 run_workbench
     assert enqueue_calls, "expected enqueue_workbench_run to be called for preset-based formal run"
+    assert enqueue_calls[0]["run_mode"] == run_mode
     assert not run_wb_calls, "in-process run_workbench must NOT run when preset_id is present (T12 回归)"
     assert result["queued"] is True
     assert result["recommended_count"] == 0, "入队即返回，实际数量由子进程完成后写入"
@@ -47,7 +56,8 @@ def test_run_recommendation_enqueues_detached_subprocess_when_preset_present(mon
     assert "独立子进程" in result["summary_text"]
 
 
-def test_run_recommendation_falls_back_to_inline_when_no_preset(monkeypatch, db):
+@pytest.mark.parametrize("run_mode", ("formal", "experiment", "backtest"))
+def test_run_recommendation_falls_back_to_inline_when_no_preset(monkeypatch, db, run_mode):
     enqueue_calls = []
     run_wb_calls = []
 
@@ -62,11 +72,12 @@ def test_run_recommendation_falls_back_to_inline_when_no_preset(monkeypatch, db)
     monkeypatch.setattr("app.services.workbench_service.enqueue_workbench_run", fake_enqueue)
     monkeypatch.setattr("app.services.workbench_service.run_workbench", fake_run_workbench)
 
-    payload = {"data_source": "local_pool_preferred"}  # 无 preset_id
+    payload = {"data_source": "local_pool_preferred", "run_mode": run_mode}  # 无 preset_id
     result = asyncio.run(scheduler_service._run_recommendation(db, payload))
 
     # 无 preset_id 时 enqueue 前置条件不满足，退化为进程内执行（保留历史行为）
     assert run_wb_calls, "expected in-process run_workbench fallback when preset_id missing"
+    assert run_wb_calls[0]["run_mode"] == run_mode
     assert not enqueue_calls, "enqueue must NOT be called without preset_id"
     assert result.get("queued") is not True
     assert result["recommended_count"] == 3

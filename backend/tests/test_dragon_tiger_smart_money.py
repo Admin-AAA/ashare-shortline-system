@@ -18,9 +18,16 @@ from app.engine.aggregator import aggregate
 from app.engine.skill_loader import load_skill
 from app.engine.strategy_runner import run_strategy
 from app.models.tables import DragonTiger
+from app.services.factors import FactorContext
+from app.services.factors.shortline import DragonTigerFactor
 from app.services.feature_builder import _enrich_with_auxiliary_data, build_features
 from app.services.market_pool import inject_dragon_tiger_flags
-from app.services.shortline_factors import _apply_dragon_tiger_factor
+
+
+def _apply_dragon_tiger_factor(stock: dict) -> None:
+    """新接口适配：龙虎榜因子迁入因子框架后（任务 2.3），compute 返回新增字段 dict，
+    此处按新接口调用并 in-place 合并回 stock，保持本用例断言语义不变。"""
+    stock.update(DragonTigerFactor().compute(stock, FactorContext()))
 
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 NEW_SKILL_DIR = SKILLS_DIR / "dragon-tiger-smart-money"

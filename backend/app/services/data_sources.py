@@ -32,6 +32,10 @@ from app.services.market_auxiliary import (
     _news_sources,
 )
 from app.services.market_data import _kline_sources, _quote_sources
+from app.engine.trading_calendar import (
+    latest_allowed_bar_date as _latest_allowed_bar_date,
+    previous_weekday as _previous_weekday,
+)
 
 
 def _compact_trade_date(value: Any) -> str:
@@ -697,24 +701,3 @@ def _unified_quote_rows_from_rows(all_rows: list, limit: int = 50, offset: int =
         _unified_quote_payload(db, row, precomputed_metrics=local_metrics.get(row.code))
         for row in paged
     ]
-
-
-def _latest_allowed_bar_date(today: date | None = None) -> str:
-    if today is None:
-        now = datetime.now()
-        today = now.date()
-        if today.weekday() < 5 and (now.hour < 17 or (now.hour == 17 and now.minute < 30)):
-            # 17:30 前视为当日 daily 未就绪（Tushare 盘后约 17:00 后才出当日收盘数据）
-            today = _previous_weekday(today)
-    if today.weekday() == 5:
-        return (today - timedelta(days=1)).isoformat()
-    if today.weekday() == 6:
-        return (today - timedelta(days=2)).isoformat()
-    return today.isoformat()
-
-
-def _previous_weekday(day: date) -> date:
-    current = day - timedelta(days=1)
-    while current.weekday() >= 5:
-        current -= timedelta(days=1)
-    return current

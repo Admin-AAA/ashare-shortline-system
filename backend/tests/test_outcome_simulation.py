@@ -1,17 +1,25 @@
+"""结果模拟引擎（`app.services.outcome_simulation`）单测（任务 6.1）。
+
+**Validates: Requirements 7.1, 1.1**
+
+本文件从 `tests/test_outcome_execution_constraints.py` 迁移而来（module extraction 后
+的测试迁移，需求 10.2：接口搬迁后绑定旧路径的测试改写为新路径，不留双份覆盖）。
+迁移前该文件从 `app.services.outcome_service` import 这些函数（该模块只是 re-export），
+迁移后直接从权威实现 `app.services.outcome_simulation` import，验证同一套纯计算逻辑：
+入场判定（`_resolve_entry`）、出场判定（`_resolve_exit` / trailing stop）、止损价归一化
+（`_resolve_stop_loss_price`）、核心模拟入口（`_simulate_outcome`）在各分支下的行为。
+"""
 import json
 from types import SimpleNamespace
 
 from app.models.tables import DailyKbar
-from app.services.outcome_service import (
+from app.services.outcome_simulation import (
+    DEFAULT_STOP_LOSS_PCT,
+    MAX_STOP_LOSS_PCT,
     _resolve_entry,
     _resolve_exit,
     _resolve_stop_loss_price,
-    _resolve_take_profit_price,
     _simulate_outcome,
-    DEFAULT_STOP_LOSS_PCT,
-    DEFAULT_TAKE_PROFIT_PCT,
-    MAX_STOP_LOSS_PCT,
-    MAX_TAKE_PROFIT_PCT,
 )
 
 
@@ -259,7 +267,6 @@ def _bar_trailing(
 
 def test_resolve_exit_take_profit_path_preserved():
     """trailing 不抢跑 take_profit 路径：TP 触发时直接返回，不走 trailing。"""
-    from app.services.outcome_service import _resolve_exit
     # holding 期内 high 触及 take_profit → 应返回 take_profit_hit
     bars = [
         _bar_trailing(trade_date="2026-07-02", open=10.0, high=11.5, low=10.0, close=11.0, pct_chg=10.0),
@@ -274,7 +281,6 @@ def test_resolve_exit_trailing_uses_min_open_on_gap_down():
 
     回归测试：之前用 max 会虚假高估出场价（86 笔虚假 100% 胜率）。
     """
-    from app.services.outcome_service import _resolve_exit
     # entry=10.0, bar1 high=10.3（+3%，激活 trailing），触发价=10*(1+(3-0.8)/100)=10.22
     # bar1 low=10.25 > 10.22 不触发；bar2 跳空低开 open=9.8, low=9.7 ≤ 10.22 → trailing 触发
     # exit=min(9.8, 10.22)=9.8（跨 bar 触发：跳空低开以 open 成交）
@@ -298,7 +304,6 @@ def test_resolve_exit_trailing_same_bar_uses_trigger_price():
     复现 000962 2026-07-08 真实场景：entry=64.08，当天 open≈平开，high 冲到 +4%，
     low 回落到触发价下方 → 应以触发价成交（+3% 附近），不是 open（-0.1%）。
     """
-    from app.services.outcome_service import _resolve_exit
     # entry=10.0, bar1: open=10.0（平开）, high=10.4（+4%，激活 trailing），触发价=10*(1+(4-0.8)/100)=10.32
     # bar1 low=10.1 ≤ 10.32 → 同 bar 触发。旧口径 min(10.0, 10.32)=10.0（-0.2% 假亏）；
     # 修复后取触发价 10.32（+3.2% 真盈）。
@@ -312,7 +317,6 @@ def test_resolve_exit_trailing_same_bar_uses_trigger_price():
 
 def test_resolve_exit_stop_loss_priority_over_trailing():
     """固定止损优先于 trailing：low 触及 stop_loss 时返回 stop_loss_hit，不走 trailing。"""
-    from app.services.outcome_service import _resolve_exit
     # bar1 high=10.3（激活 trailing），low=10.25 > 触发价 10.22 不触发
     # bar2 low=9.5 触及 stop_loss → stop_loss 优先于 trailing 返回 stop_loss_hit
     bars = [
@@ -326,7 +330,6 @@ def test_resolve_exit_stop_loss_priority_over_trailing():
 
 def test_resolve_exit_trailing_not_activated_below_threshold():
     """high 未达激活阈值（+2%）时 trailing 不激活，走 horizon_close。"""
-    from app.services.outcome_service import _resolve_exit
     # bar1 high=10.1（+1%，未达 2% 激活阈值）, bar2 回落 → horizon_close
     bars = [
         _bar_trailing(trade_date="2026-07-02", open=10.0, high=10.1, low=10.0, close=10.05, pct_chg=1.0),
@@ -380,7 +383,7 @@ def test_simulate_outcome_feature_snapshot_preparse_consistency():
 def test_resolve_stop_loss_caps_gap_up_entry_to_max():
     """高开入场场景止损 cap 在 MAX_STOP_LOSS_PCT（-5.7%），不再放宽到 -9%。
 
-    回归第164轮 D 项 maxloss 根因：长裕集团 rec_price=79.32，次日竞价高开 entry=85.0，
+    回归第164轮 D 项修复根因：长裕集团 rec_price=79.32，次日竞价高开 entry=85.0，
     策略止损基于推荐价 74.96（相对入场 -11.9%）。旧 MAX=-9% 把它拉宽到 entry×-9%=77.35，
     单笔亏损放大到 -9.18%。收紧 MAX 到 -5.7% 后止损抬到 entry×-5.7%=80.16，封住尾部。
     """
@@ -419,61 +422,3 @@ def test_resolve_stop_loss_max_not_wider_than_default_by_much():
     """
     assert DEFAULT_STOP_LOSS_PCT - MAX_STOP_LOSS_PCT <= 0.3  # DEFAULT - MAX ≤ 0.3pp
     assert MAX_STOP_LOSS_PCT < DEFAULT_STOP_LOSS_PCT  # MAX 更负 = 最宽边界
-
-
-# --------------------------------------------------------------------------- #
-# 止盈价按比例重算（与止损对称）：第186轮修复 bug
-# 根因：跳空低开后止盈价只裁剪不重算，把设计 +5% 抬到 +14.5%，固定止盈失效→trailing 兜底错标 success
-# --------------------------------------------------------------------------- #
-def test_resolve_take_profit_recalculates_on_gap_down():
-    """跳空低开 -8.31% 场景：止盈价必须按隐含比例重算到 ~entry×1.05，而非保留推荐时的 176.6。
-
-    复现 docs/bugs/take-profit-not-rebased-on-actual-entry-price.md 的 603991 至正股份案例：
-    recommend_price=168.19，take_profit=176.60（+5%），次日跳空低开 entry=154.21。
-    旧实现保留 176.6（相对 entry +14.5%），固定止盈路径失效 → trailing 兜底错标 success。
-    修复后应返回 entry×1.05 ≈ 161.92（相对 entry +5%）。
-    """
-    recommend_price = 168.19
-    feature_snapshot = {"take_profit": 176.60}
-    entry = 154.21  # 跳空低开 -8.31% 后的实际开盘价
-    tp = _resolve_take_profit_price(entry, feature_snapshot, recommend_price=recommend_price)
-    expected = round(entry * (1 + DEFAULT_TAKE_PROFIT_PCT / 100.0), 2)
-    assert tp == expected, f"跳空低开止盈价应重算为 {expected}，实际 {tp}"
-    # 相对入场价必须是设计比例 +5%，而非被抬高的 +14.5%
-    assert (tp / entry - 1) * 100 < 6.0
-
-
-def test_resolve_take_profit_no_gap_unchanged():
-    """无跳空（entry == recommend_price）时结果应与旧实现一致：直接采用 take_profit。"""
-    recommend_price = 168.19
-    feature_snapshot = {"take_profit": 176.60}
-    entry = 168.19
-    tp = _resolve_take_profit_price(entry, feature_snapshot, recommend_price=recommend_price)
-    # 无跳空：隐含比例 0.05 → entry×1.05 = 176.599 → 176.6
-    assert tp == round(176.60, 2)
-
-
-def test_resolve_take_profit_caps_implied_ratio_to_max():
-    """隐含比例过高时 clamp 到 MAX_TAKE_PROFIT_PCT（+15%），不被异常 take_profit 抬高。"""
-    recommend_price = 100.0
-    feature_snapshot = {"take_profit": 130.0}  # 隐含 +30%，远超设计
-    entry = 95.0  # 跳空低开
-    tp = _resolve_take_profit_price(entry, feature_snapshot, recommend_price=recommend_price)
-    assert tp == round(entry * (1 + MAX_TAKE_PROFIT_PCT / 100.0), 2)
-
-
-def test_resolve_take_profit_floors_implied_ratio_to_default():
-    """隐含比例过低（take_profit 异常低于入场）时 clamp 到 DEFAULT_TAKE_PROFIT_PCT（+5%）。"""
-    recommend_price = 100.0
-    feature_snapshot = {"take_profit": 98.0}  # 隐含 -2%，异常
-    entry = 95.0
-    tp = _resolve_take_profit_price(entry, feature_snapshot, recommend_price=recommend_price)
-    assert tp == round(entry * (1 + DEFAULT_TAKE_PROFIT_PCT / 100.0), 2)
-
-
-def test_resolve_take_profit_without_recommend_price_keeps_legacy_behavior():
-    """未传 recommend_price（静态/跳空高开拦截路径）时退回旧行为：仅上限裁剪、不重算。"""
-    feature_snapshot = {"take_profit": 176.60}
-    entry = 154.21  # 此路径下 entry 为 None，这里仅验证 None 分支退回原值
-    tp = _resolve_take_profit_price(None, feature_snapshot)
-    assert tp == round(176.60, 2)

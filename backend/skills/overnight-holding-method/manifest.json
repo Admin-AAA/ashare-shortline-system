@@ -2,6 +2,10 @@
   "id": "overnight-holding-method",
   "name": "隔夜持股法",
   "version": "0.1.0",
+  "mode": "declarative",
+  "status": "active",
+  "requirements": ["stock_feature_context"],
+  "capabilities": ["signal_evaluation"],
   "enabled": true,
   "source_type": "local",
   "description": "尾盘 14:30 后筛选主板强势股隔夜持有，默认次日早盘兑现，例外处理一字/缩量涨停。"

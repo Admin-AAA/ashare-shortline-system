@@ -1330,11 +1330,11 @@ class TestE2ERecommendationFlow:
         skill = _mock_skill("daily-stock-analysis-skill", "基础短线策略")
         monkeypatch.setattr(workbench_service, "sync_skills", lambda _db: [skill])
 
-        queued: list[tuple[str, dict]] = []
+        queued: list[str] = []
         monkeypatch.setattr(
-            workbench_service,
-            "_enqueue_background_run",
-            lambda run_id, payload: queued.append((run_id, payload)),
+            workbench_service._run_dispatcher,
+            "enqueue",
+            lambda run_id: queued.append(run_id),
         )
 
         result = enqueue_workbench_run(
@@ -1357,7 +1357,7 @@ class TestE2ERecommendationFlow:
         assert persisted.progress_message == "等待后台工作线程接管"
         assert result["run"]["status"] == "queued"
         assert result["run"]["progress_phase"] == "queued"
-        assert queued and queued[0][0] == run_id
+        assert queued and queued[0] == run_id
 
     def test_sync_run_market_failure_persists_failed_run(self, db, monkeypatch):
         """Synchronous runs should be visible and failed if market loading fails early."""
@@ -1368,7 +1368,7 @@ class TestE2ERecommendationFlow:
         skill = _mock_skill("daily-stock-analysis-skill", "基础短线策略")
         monkeypatch.setattr(workbench_service, "sync_skills", lambda _db: [skill])
 
-        def fail_market(_db, refresh=False):
+        def fail_market(_db, refresh=False, as_of_date=None):
             raise RuntimeError("market pool timeout")
 
         monkeypatch.setattr(workbench_service, "get_market_universe_from_pool", fail_market)

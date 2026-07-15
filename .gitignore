@@ -36,3 +36,4 @@ package.json
 ux-audit/
 .git-self-improve.lock
 backend/scripts/.failure_attr_baseline.json
+.ai-tracker/

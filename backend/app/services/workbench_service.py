@@ -1,5 +1,4 @@
 import hashlib
-import copy
 import json
 import logging
 import os
@@ -36,7 +35,7 @@ from app.engine.aggregator import (
     resolve_score_line_context,
 )
 from app.engine.skill_loader import StrategySkill, load_skills, validate_skill
-from app.engine.strategy_runner import run_strategy
+from app.engine.strategy import StrategyContext, build_registry_from_skills
 from app.models.tables import (
     AgentDecisionLog,
     CalibrationConfig,
@@ -63,6 +62,13 @@ from app.models.tables import (
     StockQuote,
 )
 from app.services.feature_builder import build_features, market_regime_score
+from app.services.factors.registry import bootstrap_default_factor_registry
+from app.services.auxiliary.legacy_projection import (
+    auxiliary_projection_payload,
+    project_legacy_auxiliary_audit,
+)
+from app.services.auxiliary.contracts import AuxiliaryInstrument
+from app.services.market_source.local_pool_adapter import load_legacy_market_universe
 from app.services.failure_attribution import classify_false_positive
 from app.services.market_data import MarketDataError, get_market_universe
 from app.services.market_pool import (
@@ -91,16 +97,89 @@ from app.services.outcome_service import (
     resolved_trade_return,
     strategy_perf_summary,
 )
-from app.services.candidates import trace as candidate_trace
 from app.services.prefilter_service import apply_prefilters
 from app.services.research_context import build_research_contexts
+from app.services.registry.data_source import (
+    ALLOWED_DATA_SOURCES,
+    DATA_SOURCE_AUTO,
+    DATA_SOURCE_LOCAL_POOL,
+    DATA_SOURCE_LOCAL_POOL_PREFERRED,
+    DATA_SOURCE_LOCAL_POOL_REALTIME,
+    DATA_SOURCE_REALTIME,
+    DEFAULT_PRESETS,
+    DEFAULT_RECOMMENDATION_DATA_SOURCE,
+    normalize_data_source,
+)
+from app.services.registry.presets import (
+    _serialize_preset,
+    create_preset,
+    delete_preset,
+    list_presets,
+    update_preset,
+)
+from app.services.registry.skills import (
+    backtest_skill,
+    batch_skill_performance_summaries,
+    get_skill_detail,
+    install_skill,
+    list_skills,
+    set_skill_enabled,
+    skill_performance as _skill_performance,
+    skill_performance_summary,
+    skill_version_id as _skill_version_id,
+    sync_skills,
+)
+from app.services.runs.bootstrap_cache import (
+    get_bootstrap_cache,
+    get_initial_state_cache,
+    invalidate_bootstrap_cache,
+    set_bootstrap_cache,
+    set_initial_state_cache,
+)
+from app.services.runs.filter_audit import (
+    apply_skill_review_failure_audit_to_stage_summary as _apply_skill_review_failure_audit_to_stage_summary,
+    build_filter_audit as _build_filter_audit,
+    build_pipeline_audit as _build_pipeline_audit,
+    skill_review_failure_audit as _skill_review_failure_audit,
+    skill_review_failure_audit_from_logs as _skill_review_failure_audit_from_logs,
+    strip_audit_rows as _strip_audit_rows,
+    upgrade_filter_audit as _upgrade_filter_audit,
+)
+from app.services.candidates.trace import (
+    coverage_heatmap as _coverage_heatmap,
+    fallback_filter_audit as _fallback_filter_audit,
+    quality_distribution as _quality_distribution,
+    score_distribution as _score_distribution,
+)
+from app.services.recommendations.projection import (
+    serialize_recommendation as _project_recommendation,
+    serialize_run_summary as _project_run_summary,
+)
 from app.services.runs.persistence import persist_recommendation_cards
 from app.services.runs.progress import progress_pct as compute_progress_pct
+from app.services.runs.contracts import (
+    CanonicalExecutionVersionBuilder,
+    ExecutionVersionInput,
+    RunRequest,
+    RunStatus,
+    application_identity_from_environment,
+    parse_run_request,
+    selected_recommendation_execution_policy,
+    validate_run_request_no_credentials,
+)
+from app.services.runs.request_persistence import (
+    assert_run_request_index_consistency,
+    load_canonical_run_request,
+)
+from app.services.runs.coordinator import LegacyWorkbenchRunCoordinator
+from app.services.runs.repository import CreateQueuedRun
+from app.services.runs.sqlalchemy_repository import SQLAlchemyRunRepository
+from app.services.runs.queue import BackgroundRunDispatcher, spawn_run_subprocess
 from app.services.runs.skill_gate import (
-    build_skill_rule_gate as _skill_gate_build_skill_rule_gate,
-    finalize_skill_gate_audit as _skill_gate_finalize_skill_gate_audit,
-    resolve_prefilter_target_count as _skill_gate_resolve_prefilter_target_count,
-    resolve_skill_review_limit as _skill_gate_resolve_skill_review_limit,
+    build_skill_rule_gate,
+    finalize_skill_gate_audit,
+    resolve_prefilter_target_count,
+    resolve_skill_review_limit,
 )
 
 
@@ -125,117 +204,6 @@ CHECKPOINT_ORDER = [
     "aggregate",
     "persist",
 ]
-DATA_SOURCE_LOCAL_POOL = "local_pool"
-DATA_SOURCE_LOCAL_POOL_PREFERRED = "local_pool_preferred"
-DATA_SOURCE_LOCAL_POOL_REALTIME = "local_pool_realtime"
-DATA_SOURCE_REALTIME = "realtime"
-DATA_SOURCE_AUTO = "auto"
-DEFAULT_RECOMMENDATION_DATA_SOURCE = DATA_SOURCE_AUTO
-ALLOWED_DATA_SOURCES = {
-    DATA_SOURCE_LOCAL_POOL,
-    DATA_SOURCE_LOCAL_POOL_PREFERRED,
-    DATA_SOURCE_LOCAL_POOL_REALTIME,
-    DATA_SOURCE_REALTIME,
-    DATA_SOURCE_AUTO,
-}
-DEFAULT_PRESETS = [
-    {
-        "preset_id": "preset_formal_opening",
-        "name": "盘前组合",
-        "description": "盘前默认组合，强调主线、技术确认和风险平衡。",
-        "data_source": DEFAULT_RECOMMENDATION_DATA_SOURCE,
-        "market_scope": "all",
-        "market_scope_value": None,
-        "risk_template": "balanced",
-        "score_line": 72.0,
-        "output_count": 6,
-        "hide_recent_repeats": True,
-        "dedup_same_day": True,
-        "skip_aux_refresh": False,
-        "skill_groups": ["formal_opening"],
-    },
-    {
-        "preset_id": "preset_formal_trend_core",
-        "name": "趋势龙头组合",
-        "description": "适合主线趋势票，偏重龙头和大局观。",
-        "market_scope": "all",
-        "market_scope_value": None,
-        "risk_template": "aggressive",
-        "score_line": 70.0,
-        "output_count": 5,
-        "hide_recent_repeats": True,
-        "dedup_same_day": True,
-        "skip_aux_refresh": False,
-        "skill_groups": ["formal_trend_core"],
-    },
-    {
-        "preset_id": "preset_experiment_dsa",
-        "name": "基础短线策略单 Skill 验证",
-        "description": "单独验证技术评分 Skill 的辨识度。",
-        "market_scope": "all",
-        "market_scope_value": None,
-        "risk_template": "balanced",
-        "score_line": 68.0,
-        "output_count": 6,
-        "hide_recent_repeats": False,
-        "skip_aux_refresh": True,
-        "skill_groups": ["experiment_single_factor"],
-    },
-    {
-        "preset_id": "preset_experiment_high_range_breakout",
-        "name": "阶段新高突破单策略",
-        "description": "单独验证阶段高点放量突破动量规则。",
-        "market_scope": "all",
-        "market_scope_value": None,
-        "risk_template": "balanced",
-        "score_line": 66.0,
-        "output_count": 5,
-        "hide_recent_repeats": False,
-        "skip_aux_refresh": True,
-        "skill_groups": ["experiment_high_range_breakout"],
-    },
-    {
-        "preset_id": "preset_experiment_limit_up_reseal_relay",
-        "name": "涨停回封接力单策略",
-        "description": "单独验证涨停开板回封后的短线接力规则。",
-        "market_scope": "all",
-        "market_scope_value": None,
-        "risk_template": "aggressive",
-        "score_line": 64.0,
-        "output_count": 5,
-        "hide_recent_repeats": False,
-        "skip_aux_refresh": True,
-        "skill_groups": ["experiment_limit_up_reseal_relay"],
-    },
-    {
-        "preset_id": "preset_experiment_trend_pullback",
-        "name": "强趋势缩量回踩单策略",
-        "description": "单独验证多头趋势内缩量回踩 MA5/MA10 的低吸规则。",
-        "market_scope": "all",
-        "market_scope_value": None,
-        "risk_template": "balanced",
-        "score_line": 63.0,
-        "output_count": 5,
-        "hide_recent_repeats": False,
-        "skip_aux_refresh": True,
-        "skill_groups": ["experiment_trend_pullback"],
-    },
-    {
-        "preset_id": "preset_experiment_sector_relative_strength",
-        "name": "主线相对强度单策略",
-        "description": "单独验证行业动量与主线龙头相对强度规则。",
-        "market_scope": "all",
-        "market_scope_value": None,
-        "risk_template": "balanced",
-        "score_line": 66.0,
-        "output_count": 5,
-        "hide_recent_repeats": False,
-        "skip_aux_refresh": True,
-        "skill_groups": ["experiment_sector_relative_strength"],
-    },
-]
-
-
 def _select_aux_prefetch_codes(stocks: list[dict[str, Any]], count: int) -> list[str]:
     if count <= 0 or not stocks:
         return []
@@ -324,27 +292,111 @@ def _resolve_aux_prefetch_count(
     return min(prefiltered_count, max(min_prefilter_count, bounded_max), bounded_max)
 
 
-_bootstrap_cache_lock = threading.Lock()
-_bootstrap_cache: dict[tuple[str, str], dict[str, Any]] = {}
-_initial_state_cache_lock = threading.Lock()
-_initial_state_cache: dict[tuple[str, str], dict[str, Any]] = {}
 _progress_commit_state_lock = threading.Lock()
 _progress_commit_state: dict[str, dict[str, Any]] = {}
 _outcome_backfill_lock = threading.Lock()
 _outcome_backfill_ts = 0.0
-_run_queue: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue()
-_run_queue_lock = threading.Lock()
-_run_queue_worker_started = False
+# Kept as a module-level injection point for callers/tests; the dispatcher resolves
+# it at spawn time so a test can safely suppress child-process creation.
+_spawn_run_subprocess = spawn_run_subprocess
+_run_dispatcher = BackgroundRunDispatcher(
+    session_factory=SessionLocal,
+    mark_running=lambda db, run_id: _mark_run_dispatched(db, run_id),
+    mark_failed=lambda db, run_id, exc: _mark_run_failed(db, run_id, exc),
+    spawn=lambda run_id: _spawn_run_subprocess(run_id),
+)
+
+
+def _canonical_workbench_request(params: dict[str, Any], payload: dict[str, Any]) -> RunRequest:
+    """Freeze one legacy/preset merge into the only durable RunRequest form.
+
+    The parser owns the formal default.  An explicit caller value is copied exactly
+    once, so malformed values fail validation and a preselected experiment/backtest
+    mode cannot be silently replaced during a preset merge.
+    """
+    validate_run_request_no_credentials(payload)
+    document = dict(params)
+    if "run_mode" in payload:
+        document["run_mode"] = payload["run_mode"]
+    return parse_run_request(document)
+
+
+def _factor_execution_identity() -> tuple[str, dict[str, Any]]:
+    """Return the frozen Factor plan audit projection used by execution-version input."""
+    plan = bootstrap_default_factor_registry()
+    return (
+        plan.fingerprint,
+        {
+            "contract_version": plan.contract_version,
+            "fingerprint": plan.fingerprint,
+            "factor_ids": list(plan.factor_ids),
+        },
+    )
+
+
+def _execution_version_identity(request: RunRequest) -> tuple[str, dict[str, Any]]:
+    """Build audit identity only; it never contributes to filtering or scoring.
+
+    Factor plans are already frozen at bootstrap.  StrategyDescriptor fingerprints
+    deliberately remain an empty extension point here: S2 will project selected
+    descriptors into the same immutable input without changing this persisted format.
+    """
+    factor_plan_fingerprint, factor_plan_audit = _factor_execution_identity()
+    version_input = ExecutionVersionInput(
+        application=application_identity_from_environment(),
+        request_schema_version=request.schema_version,
+        execution_policy=selected_recommendation_execution_policy(request),
+        factor_execution_plan_fingerprint=factor_plan_fingerprint,
+    )
+    execution_version = CanonicalExecutionVersionBuilder().build(version_input)
+    return (
+        execution_version,
+        {
+            "execution_version_schema_version": version_input.schema_version,
+            "application": version_input.application.to_canonical_payload(),
+            "request_schema_version": version_input.request_schema_version,
+            "strategy_fingerprints": [],
+            "factor_plan": factor_plan_audit,
+            "execution_policy": {
+                "policy_id": version_input.execution_policy.policy_id,
+                "policy_version": version_input.execution_policy.policy_version,
+                "fingerprint": version_input.execution_policy.fingerprint,
+            },
+        },
+    )
+
+
+def _mark_run_dispatched(db: Session, run_id: str) -> bool:
+    """Move canonical queued runs through the state machine before spawning."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    repository = SQLAlchemyRunRepository(db)
+    coordinator = LegacyWorkbenchRunCoordinator(repository)
+    managed = repository.get_run(run_id) is not None
+    started = coordinator.start_dispatch(run_id, now=now) if managed else False
+    if managed and not started:
+        logger.warning("dispatcher did not acquire queued Run lifecycle transition: %s", run_id)
+        return False
+    _update_run_progress(
+        db,
+        run_id,
+        phase="starting",
+        current=0,
+        total=0,
+        message="后台任务已接管，开始准备运行",
+        status=None if managed else "running",
+        # ``BackgroundRunDispatcher`` commits this lifecycle/progress pair before
+        # spawning the child.  Keep both facts in its one explicit transaction.
+        commit=False,
+    )
+    return True
 
 
 def bootstrap_workbench_state(db: Session) -> dict[str, Any]:
     settings = get_settings()
     cache_key = (settings.database_url, str(settings.skills_dir.resolve()))
-    now = time.monotonic()
-    with _bootstrap_cache_lock:
-        cached = _bootstrap_cache.get(cache_key)
-        if cached and (now - float(cached["ts"])) < BOOTSTRAP_CACHE_TTL_SECONDS:
-            return copy.deepcopy(cached["data"])
+    cached = get_bootstrap_cache(cache_key, BOOTSTRAP_CACHE_TTL_SECONDS)
+    if cached is not None:
+        return cached
 
     _auto_backfill_outcomes(db)
 
@@ -378,16 +430,8 @@ def bootstrap_workbench_state(db: Session) -> dict[str, Any]:
             "disabled_count": sum(1 for skill in skills if not skill["enabled"]),
         },
     }
-    with _bootstrap_cache_lock:
-        _bootstrap_cache[cache_key] = {"ts": time.monotonic(), "data": copy.deepcopy(state)}
+    set_bootstrap_cache(cache_key, state)
     return state
-
-
-def invalidate_bootstrap_cache() -> None:
-    with _bootstrap_cache_lock:
-        _bootstrap_cache.clear()
-    with _initial_state_cache_lock:
-        _initial_state_cache.clear()
 
 
 def _auto_backfill_outcomes(db: Session, horizon_days: int = 5, min_interval_seconds: float = 600.0) -> None:
@@ -408,11 +452,9 @@ def get_initial_workbench_state(db: Session) -> dict[str, Any]:
 
     settings = get_settings()
     cache_key = (settings.database_url, str(settings.skills_dir.resolve()))
-    now = time.monotonic()
-    with _initial_state_cache_lock:
-        cached = _initial_state_cache.get(cache_key)
-        if cached and (now - float(cached["ts"])) < INITIAL_STATE_CACHE_TTL_SECONDS:
-            return copy.deepcopy(cached["data"])
+    cached = get_initial_state_cache(cache_key, INITIAL_STATE_CACHE_TTL_SECONDS)
+    if cached is not None:
+        return cached
 
     from app.services.data_sources import list_data_sources
 
@@ -449,55 +491,55 @@ def get_initial_workbench_state(db: Session) -> dict[str, Any]:
         (t5 - t4) * 1000,
         (t5 - t0) * 1000,
     )
-    with _initial_state_cache_lock:
-        _initial_state_cache[cache_key] = {"ts": time.monotonic(), "data": copy.deepcopy(payload)}
+    set_initial_state_cache(cache_key, payload)
     return payload
 
 
 def enqueue_workbench_run(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Persist a canonical queued request before the dispatcher may spawn a worker."""
     skills = sync_skills(db)
     skill_map = {skill.skill_id: skill for skill in skills}
     preset = db.get(Preset, payload["preset_id"]) if payload.get("preset_id") else None
     if payload.get("preset_id") and preset is None:
         raise ValueError("预设不存在，请刷新后重试")
     params = _merge_run_params(db, preset, payload)
+    request = _canonical_workbench_request(params, payload)
+    # ``params_json`` remains a legacy display projection, so keep its mode
+    # aligned with the canonical request instead of leaving an implicit formal
+    # default that would misdescribe experiment/backtest runs.
+    params["run_mode"] = request.run_mode.value
     selected_skills = _select_skills_for_run(db, skill_map, params["skills"])
     if not selected_skills:
         raise ValueError("没有可运行的 Skill，请检查预设配置或 Skill 状态")
 
     run_id = _new_run_id()
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    run = RecommendationRun(
-        run_id=run_id,
-        preset_id=params.get("preset_id"),
-        run_name=params["run_name"],
-        # 尊重调用方显式指定的 run_mode（如曝光补跑传 experiment），
-        # 默认仍为 formal。修复：原先硬编码 "formal" 导致曝光补跑的
-        # experiment 意图失效，run 被错误创建为 formal 并污染记录中心/正式胜率统计。
-        run_mode=str(payload.get("run_mode") or "formal"),
-        trade_date=_latest_trade_date(db),
-        started_at=now,
-        universe_count=0,
-        recommended_count=0,
-        market_scope=params["market_scope"],
-        market_scope_value=params.get("market_scope_value"),
-        risk_template=params["risk_template"],
-        output_count=params["output_count"],
-        selected_skills_json=_dumps(_selected_skill_rows(selected_skills)),
-        params_json=_dumps(params),
-        market_snapshot_json=_dumps({}),
-        result_summary_json=_dumps({"agent_runtime": "queued"}),
-        status="queued",
-        heartbeat_at=now,
-        progress_phase="queued",
-        progress_current=0,
-        progress_total=0,
-        progress_message="等待后台工作线程接管",
+    execution_version, execution_audit = _execution_version_identity(request)
+    repository = SQLAlchemyRunRepository(db)
+    created = repository.create_queued_run(
+        CreateQueuedRun(
+            run_id=run_id,
+            request=request,
+            execution_version=execution_version,
+            created_at=now,
+        )
     )
-    db.add(run)
+    if not created.applied:
+        raise RuntimeError(f"无法持久化 queued Run: {created.outcome.value}")
+    run = db.get(RecommendationRun, run_id)
+    assert run is not None  # The repository just inserted and flushed this row.
+    # Keep legacy projections byte-compatible while request_json remains canonical.
+    run.selected_skills_json = _dumps(_selected_skill_rows(selected_skills))
+    run.params_json = _dumps(params)
+    run.result_summary_json = _dumps(
+        {
+            "agent_runtime": "queued",
+            "execution": {**execution_audit, "execution_version": execution_version},
+        }
+    )
     db.commit()
     invalidate_bootstrap_cache()
-    _enqueue_background_run(run_id, dict(payload))
+    _run_dispatcher.enqueue(run_id)
     return {
         "run": _serialize_run_summary(db, run),
         "recommendations": [],
@@ -505,384 +547,24 @@ def enqueue_workbench_run(db: Session, payload: dict[str, Any]) -> dict[str, Any
     }
 
 
-_last_skill_sync_time: float = 0.0
-_skill_sync_ttl: float = 5.0  # seconds — avoid redundant disk I/O on concurrent requests
-_cached_skill_list: list[StrategySkill] | None = None
-_cached_skill_cache_key: tuple[str, str] | None = None
-_skill_sync_lock = threading.Lock()
+def dispatch_workbench_run(db: Session, run_id: str) -> None:
+    """Dispatch an already-persisted run after its state transition is committed.
 
-
-def sync_skills(db: Session) -> list[StrategySkill]:
-    global _last_skill_sync_time, _cached_skill_cache_key, _cached_skill_list
-    settings = get_settings()
-    cache_key = (settings.database_url, str(settings.skills_dir.resolve()))
-    now = time.time()
-    if _is_skill_cache_fresh(now, cache_key):
-        return _cached_skill_list
-
-    with _skill_sync_lock:
-        now = time.time()
-        if _is_skill_cache_fresh(now, cache_key):
-            return _cached_skill_list
-
-        skills = load_skills(settings.skills_dir)
-        has_changes = False
-        for skill in skills:
-            registry = db.get(SkillRegistry, skill.skill_id)
-            manifest_data = dict(skill.manifest)
-            manifest_data["_skill_md_available"] = skill.agent_enabled
-            manifest_data["_skill_md_hash"] = skill.skill_hash
-            manifest_data["_skill_frontmatter"] = _json_safe(skill.skill_frontmatter)
-            manifest_data["_skill_reference_files"] = _json_safe(skill.reference_files)
-            manifest_data["_skill_runtime"] = "dual" if skill.contract is not None and skill.agent_enabled else "agent" if skill.agent_enabled else "rule"
-            manifest_data["_strategy_backtest_adapter"] = _strategy_backtest_adapter_manifest(skill)
-            manifest_json = json.dumps(manifest_data, ensure_ascii=False)
-            if registry is None:
-                registry = SkillRegistry(
-                    skill_id=skill.skill_id,
-                    name=skill.name,
-                    source_type=skill.manifest.get("source_type", "local"),
-                    source_url=skill.manifest.get("source_url"),
-                    installed_path=str(skill.path),
-                    current_version=skill.version,
-                    mode="formal",
-                    enabled=skill.enabled,
-                    has_executable_contract=skill.contract is not None,
-                    manifest_json=manifest_json,
-                )
-                db.add(registry)
-                has_changes = True
-            else:
-                has_changes = _sync_registry_row(registry, skill, manifest_json) or has_changes
-
-            version_id = _skill_version_id(skill)
-            if db.get(SkillVersion, version_id) is None:
-                db.add(
-                    SkillVersion(
-                        id=version_id,
-                        skill_id=skill.skill_id,
-                        version=skill.version,
-                        source_ref=skill.manifest.get("source_ref"),
-                        installed_path=str(skill.path),
-                        manifest_json=manifest_json,
-                        contract_hash=skill.contract_hash,
-                        status="formal",
-                    )
-                )
-                has_changes = True
-            if skill.contract is not None and db.get(StrategyVersion, version_id) is None:
-                db.add(
-                    StrategyVersion(
-                        version_id=version_id,
-                        strategy_id=skill.skill_id,
-                        name=skill.name,
-                        enabled=registry.enabled,
-                        skill_repo=skill.manifest.get("source_url"),
-                        skill_ref=skill.manifest.get("source_ref"),
-                        skill_path=str(skill.path),
-                        yaml_path=str(skill.path / "strategy.yaml"),
-                        yaml_hash=skill.contract_hash or "",
-                        manifest_json=manifest_json,
-                    )
-                )
-                has_changes = True
-        if has_changes:
-            db.commit()
-        _ensure_default_presets(db, skills)
-        repair_preset_registration(db, skills)
-        _last_skill_sync_time = time.time()
-        _cached_skill_cache_key = cache_key
-        _cached_skill_list = skills
-        return skills
-
-
-def _is_skill_cache_fresh(now: float, cache_key: tuple[str, str]) -> bool:
-    return (
-        _cached_skill_list is not None
-        and _cached_skill_cache_key == cache_key
-        and (now - _last_skill_sync_time) < _skill_sync_ttl
-    )
-
-
-def _sync_registry_row(
-    registry: SkillRegistry,
-    skill: StrategySkill,
-    manifest_json: str,
-) -> bool:
-    changed = False
-    updates = {
-        "name": skill.name,
-        "source_type": skill.manifest.get("source_type", registry.source_type),
-        "source_url": skill.manifest.get("source_url", registry.source_url),
-        "installed_path": str(skill.path),
-        "current_version": skill.version,
-        "has_executable_contract": skill.contract is not None,
-        "manifest_json": manifest_json,
-    }
-    for field, value in updates.items():
-        if getattr(registry, field) != value:
-            setattr(registry, field, value)
-            changed = True
-    if not registry.mode:
-        registry.mode = "formal"
-        changed = True
-    if changed:
-        registry.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
-    return changed
-
-
-def _strategy_backtest_adapter_manifest(skill: StrategySkill) -> dict[str, Any] | None:
-    adapter = ((skill.contract or {}).get("meta") or {}).get("backtest_adapter")
-    if not isinstance(adapter, dict):
-        return None
-    actions = adapter.get("actions") or {}
-    if not isinstance(actions, dict):
-        actions = {}
-    return {
-        "default_action": str(adapter.get("default_action") or "run"),
-        "actions": sorted(str(action) for action in actions if str(action).strip()),
-    }
-
-
-def list_skills(db: Session) -> list[dict[str, Any]]:
-    sync_skills(db)
-    preset_rows = db.execute(
-        select(PresetSkill.skill_id, Preset.name).join(Preset, Preset.preset_id == PresetSkill.preset_id)
-    ).all()
-    preset_map: dict[str, list[str]] = {}
-    for skill_id, preset_name in preset_rows:
-        preset_map.setdefault(skill_id, []).append(preset_name)
-    rows = db.scalars(select(SkillRegistry).order_by(SkillRegistry.skill_id.asc())).all()
-    items: list[dict[str, Any]] = []
-    for row in rows:
-        manifest = _loads(row.manifest_json, {})
-        items.append(
-            {
-                "skill_id": row.skill_id,
-                "name": row.name,
-                "source_type": row.source_type,
-                "source_url": row.source_url,
-                "installed_path": row.installed_path,
-                "current_version": row.current_version,
-                "enabled": row.enabled,
-                "has_executable_contract": row.has_executable_contract,
-                "has_agent_contract": bool(manifest.get("_skill_md_available")),
-                "agent_runtime": manifest.get("_skill_runtime", "unknown"),
-                "has_backtest_adapter": bool(manifest.get("_strategy_backtest_adapter")),
-                "backtest_adapter_actions": (manifest.get("_strategy_backtest_adapter") or {}).get("actions", []),
-                "reference_count": len(manifest.get("_skill_reference_files", [])),
-                "manifest": manifest,
-                "assigned_presets": preset_map.get(row.skill_id, []),
-            }
-        )
-    return items
-
-
-def get_skill_detail(db: Session, skill_id: str) -> dict[str, Any] | None:
-    sync_skills(db)
-    row = db.get(SkillRegistry, skill_id)
-    if row is None:
-        return None
-    path = PathLike(row.installed_path)
-    skill = load_skills(get_settings().skills_dir)
-    skill_obj = next((item for item in skill if item.skill_id == skill_id), None)
-    skill_md = ""
-    errors: list[str] = []
-    if path.joinpath("SKILL.md").exists():
-        skill_md = path.joinpath("SKILL.md").read_text(encoding="utf-8")
-    if skill_obj is not None:
-        errors = validate_skill(skill_obj)
-    performance = _skill_performance(db, skill_id)
-    assigned_presets = [
-        {"preset_id": preset_id, "name": db.get(Preset, preset_id).name}
-        for preset_id in {row.preset_id for row in db.scalars(select(PresetSkill).where(PresetSkill.skill_id == skill_id)).all()}
-        if db.get(Preset, preset_id) is not None
-    ]
-    manifest = _loads(row.manifest_json, {})
-    adapter_manifest = manifest.get("_strategy_backtest_adapter") or {}
-    return {
-        "skill_id": row.skill_id,
-        "name": row.name,
-        "enabled": row.enabled,
-        "current_version": row.current_version,
-        "has_executable_contract": row.has_executable_contract,
-        "has_agent_contract": bool(skill_md.strip()),
-        "agent_runtime": manifest.get("_skill_runtime", "unknown"),
-        "has_backtest_adapter": bool(adapter_manifest),
-        "backtest_adapter_actions": adapter_manifest.get("actions", []),
-        "reference_files": manifest.get("_skill_reference_files", []),
-        "manifest": manifest,
-        "skill_md": skill_md,
-        "errors": errors,
-        "assigned_presets": assigned_presets,
-        "performance": performance,
-    }
-
-
-def set_skill_enabled(db: Session, skill_id: str, enabled: bool) -> dict[str, Any] | None:
-    row = db.get(SkillRegistry, skill_id)
-    if row is None:
-        return None
-    row.enabled = enabled
-    row.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
-    db.commit()
-    invalidate_bootstrap_cache()
-    return {"skill_id": row.skill_id, "enabled": row.enabled}
-
-
-
-def skill_performance_summary(db: Session, skill_id: str) -> dict[str, Any] | None:
-    # 直接走轻量路径，避免 get_skill_detail 的重复 load_skills / SKILL.md 读取 /
-    # validate_skill / assigned_presets 查询——这些字段 summary 不需要。
-    # 实测：8 skills × 2 modes 从 3-6s 并发降至 <0.5s（攻击 UX 红色缺口"关键操作 <2s"）。
-    skills = sync_skills(db)
-    skill_obj = next((item for item in skills if item.skill_id == skill_id), None)
-    if skill_obj is None:
-        return None
-    errors = validate_skill(skill_obj)
-    performance = _skill_performance(db, skill_id)
-    return {
-        "skill_id": skill_id,
-        "status": "completed",
-        "summary_type": "historical_performance",
-        "source": "recommendation_outcomes",
-        "runs_backtest": False,
-        "sample_count": performance["sample_count"],
-        "hit_rate": performance["hit_rate"],
-        "avg_return": performance["avg_return"],
-        "errors": errors,
-    }
-
-
-def batch_skill_performance_summaries(db: Session) -> list[dict[str, Any]]:
-    """批量获取所有 skill 的 performance summary，避免前端并发 8 次请求。
-
-    优化：sync_skills 只调用一次（5s TTL 缓存），validate_skill 对每个 skill 独立调用。
+    Recovery uses this same boundary as initial enqueue.  The repository read is a
+    cutover guard: an invalid or legacy-only row cannot be sent to a worker that
+    would have to reconstruct business input from ``params_json``.
     """
-    skills = sync_skills(db)
-    results: list[dict[str, Any]] = []
-    for skill_obj in skills:
-        errors = validate_skill(skill_obj)
-        performance = _skill_performance(db, skill_obj.skill_id)
-        results.append({
-            "skill_id": skill_obj.skill_id,
-            "status": "completed",
-            "summary_type": "historical_performance",
-            "source": "recommendation_outcomes",
-            "runs_backtest": False,
-            "sample_count": performance["sample_count"],
-            "hit_rate": performance["hit_rate"],
-            "avg_return": performance["avg_return"],
-            "errors": errors,
-        })
-    return results
-
-
-def backtest_skill(db: Session, skill_id: str) -> dict[str, Any] | None:
-    result = skill_performance_summary(db, skill_id)
-    if result is not None:
-        result["deprecated_endpoint"] = "/api/skills/{skill_id}/backtest"
-        result["replacement_endpoint"] = "/api/skills/{skill_id}/performance-summary"
-    return result
-
-
-def install_skill(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
-    source = str(payload.get("source") or payload.get("url") or "").strip()
-    if not source:
-        raise ValueError("source is required")
-    settings = get_settings()
-    settings.skills_dir.mkdir(parents=True, exist_ok=True)
-    if source.startswith("http://") or source.startswith("https://") or source.endswith(".git"):
-        target_name = str(payload.get("skill_id") or Path(source.rstrip("/").removesuffix(".git")).name)
-        target = settings.skills_dir / target_name
-        if target.exists():
-            shutil.rmtree(target)
-        subprocess.run(["git", "clone", "--depth", "1", source, str(target)], check=True, capture_output=True, text=True)
-    else:
-        src = Path(source).expanduser().resolve()
-        if not src.exists() or not src.is_dir():
-            raise ValueError("local skill path does not exist")
-        target_name = str(payload.get("skill_id") or src.name)
-        target = settings.skills_dir / target_name
-        if target.exists():
-            shutil.rmtree(target)
-        shutil.copytree(src, target)
-    _write_install_manifest(target, target_name, source)
-    sync_skills(db)
-    skill = load_skills(settings.skills_dir)
-    installed = next((item for item in skill if item.path == target), None)
-    if installed is None:
-        raise ValueError("skill install failed")
-    detail = get_skill_detail(db, installed.skill_id)
-    if detail is None:
-        raise ValueError("skill registry failed")
-    invalidate_bootstrap_cache()
-    return detail
-
-
-def list_presets(db: Session) -> list[dict[str, Any]]:
-    sync_skills(db)
-    presets = db.scalars(select(Preset).order_by(Preset.created_at.asc())).all()
-    return _serialize_presets_batched(db, presets)
-
-
-def create_preset(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
-    preset_id = str(payload.get("preset_id") or _slugify(payload.get("name") or f"preset-{uuid.uuid4().hex[:6]}"))
-    if db.get(Preset, preset_id) is not None:
-        preset_id = f"{preset_id}-{uuid.uuid4().hex[:4]}"
-    preset = Preset(
-        preset_id=preset_id,
-        name=str(payload.get("name") or "未命名预设"),
-        description=payload.get("description"),
-        run_mode="formal",
-        skip_aux_refresh=bool(payload.get("skip_aux_refresh", False)),
-        market_scope=str(payload.get("market_scope") or "all"),
-        market_scope_value=payload.get("market_scope_value"),
-        risk_template=str(payload.get("risk_template") or "balanced"),
-        score_line=float(payload.get("score_line") or 72.0),
-        output_count=int(payload.get("output_count") or 6),
-        bucket_limits_json="{}",
-        data_source=_normalize_data_source(payload.get("data_source") or DEFAULT_RECOMMENDATION_DATA_SOURCE),
-        hide_recent_repeats=bool(payload.get("hide_recent_repeats", True)),
-        status=str(payload.get("status") or "active"),
-    )
-    db.add(preset)
-    db.flush()
-    _replace_preset_skills(db, preset.preset_id, payload.get("skills") or [])
-    db.commit()
-    invalidate_bootstrap_cache()
-    return _serialize_preset(db, preset)
-
-
-def update_preset(db: Session, preset_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
-    preset = db.get(Preset, preset_id)
-    if preset is None:
-        return None
-    for field in [
-        "name",
-        "description",
-        "market_scope",
-        "market_scope_value",
-        "risk_template",
-        "score_line",
-        "data_source",
-        "status",
-    ]:
-        if field in payload:
-            value = _normalize_data_source(payload[field]) if field == "data_source" else payload[field]
-            setattr(preset, field, value)
-    if "output_count" in payload:
-        preset.output_count = int(payload["output_count"])
-    if "skip_aux_refresh" in payload:
-        preset.skip_aux_refresh = bool(payload["skip_aux_refresh"])
-    if "hide_recent_repeats" in payload:
-        preset.hide_recent_repeats = bool(payload["hide_recent_repeats"])
-    preset.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
-    if "skills" in payload:
-        _replace_preset_skills(db, preset.preset_id, payload["skills"] or [])
-    db.commit()
-    invalidate_bootstrap_cache()
-    return _serialize_preset(db, preset)
+    normalized_run_id = str(run_id).strip()
+    if not normalized_run_id:
+        raise ValueError("run_id 不能为空")
+    record = SQLAlchemyRunRepository(db).get_run(normalized_run_id)
+    if record is None:
+        raise RuntimeError(f"Run {normalized_run_id} 没有可用的 canonical request")
+    if record.status not in {RunStatus.QUEUED, RunStatus.RUNNING}:
+        raise RuntimeError(f"Run {normalized_run_id} 当前状态不可派发: {record.status.value}")
+    # The caller owns the preceding CAS commit.  No request payload is allowed to
+    # cross this boundary; the dispatcher carries only run_id.
+    _run_dispatcher.enqueue(normalized_run_id)
 
 
 def list_runs(db: Session, limit: int = 100) -> list[dict[str, Any]]:
@@ -893,27 +575,18 @@ def list_runs(db: Session, limit: int = 100) -> list[dict[str, Any]]:
 
 
 def _auto_recover_stale_runs(db: Session, runs: list[RecommendationRun]) -> int:
-    """自动将心跳超时的活跃运行标记为 interrupted。"""
+    """Route dashboard watchdog recovery through the same lifecycle CAS."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    recovered = 0
-    for run in runs:
-        if run.status not in RUN_ACTIVE_STATUSES:
-            continue
-        if run.heartbeat_at and (now - run.heartbeat_at).total_seconds() > RUN_HEARTBEAT_STALE_SECONDS:
-            run.status = "interrupted"
-            run.interrupted_at = now
-            run.finished_at = now
-            run.heartbeat_at = now
-            run.error_message = f"心跳超时（>{RUN_HEARTBEAT_STALE_SECONDS}s），自动标记为中断"
-            run.progress_phase = "interrupted"
-            if not run.progress_message:
-                run.progress_message = "心跳超时自动中断"
-            recovered += 1
-    if recovered:
-        db.commit()
-        invalidate_bootstrap_cache()
-        logger.warning("auto-recovered %d stale runs", recovered)
-    return recovered
+    stale_ids = [
+        run.run_id
+        for run in runs
+        if run.status in RUN_ACTIVE_STATUSES
+        and run.heartbeat_at
+        and (now - run.heartbeat_at).total_seconds() > RUN_HEARTBEAT_STALE_SECONDS
+    ]
+    if not stale_ids:
+        return 0
+    return recover_interrupted_runs(db, stale_ids)
 
 
 def get_run_detail(db: Session, run_id: str) -> dict[str, Any] | None:
@@ -970,19 +643,6 @@ def delete_recommendation(db: Session, recommendation_id: str) -> bool:
     db.execute(text("DELETE FROM watch_items WHERE source_recommendation_id = :rid"), {"rid": recommendation_id})
     db.execute(text("DELETE FROM recommendation_outcomes WHERE recommendation_id = :rid"), {"rid": recommendation_id})
     db.delete(rec)
-    db.commit()
-    invalidate_bootstrap_cache()
-    return True
-
-
-def delete_preset(db: Session, preset_id: str) -> bool:
-    preset = db.get(Preset, preset_id)
-    if preset is None:
-        logger.warning("delete_preset: preset_id=%s not found, treating as idempotent success", preset_id)
-        invalidate_bootstrap_cache()
-        return True
-    db.execute(text("DELETE FROM preset_skills WHERE preset_id = :pid"), {"pid": preset_id})
-    db.delete(preset)
     db.commit()
     invalidate_bootstrap_cache()
     return True
@@ -1167,85 +827,42 @@ def get_run_replay_analysis(db: Session, run_id: str) -> dict[str, Any] | None:
     }
 
 
-def _enqueue_background_run(run_id: str, payload: dict[str, Any]) -> None:
-    _run_queue.put((run_id, payload))
-    _ensure_run_queue_worker()
-
-
-def _ensure_run_queue_worker() -> None:
-    global _run_queue_worker_started
-    if _run_queue_worker_started:
-        return
-    with _run_queue_lock:
-        if _run_queue_worker_started:
-            return
-        worker = threading.Thread(target=_run_queue_worker, name="ashare-run-worker", daemon=True)
-        worker.start()
-        _run_queue_worker_started = True
-
-
-def _spawn_run_subprocess(run_id: str) -> None:
-    """在独立子进程中运行推荐任务，避免后端服务重启/重载导致任务中断。"""
-    import subprocess
-
-    from pathlib import Path
-
-    venv_python = Path(sys.executable)
-    script_path = Path(__file__).resolve().parent.parent.parent / "scripts" / "run_workbench_subprocess.py"
-    log_dir = Path(__file__).resolve().parent.parent.parent / "logs"
-    log_dir.mkdir(exist_ok=True)
-    log_path = log_dir / f"run_{run_id}.log"
-
-    env = os.environ.copy()
-    project_root = Path(__file__).resolve().parent.parent.parent
-    existing_pp = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = f"{project_root}{os.pathsep}{existing_pp}".rstrip(os.pathsep)
-
-    subprocess.Popen(
-        [str(venv_python), str(script_path), run_id],
-        stdout=open(log_path, "a"),
-        stderr=subprocess.STDOUT,
-        stdin=subprocess.DEVNULL,
-        close_fds=True,
-        start_new_session=True,
-        env=env,
-    )
-
-
-def _run_queue_worker() -> None:
-    while True:
-        run_id, _payload = _run_queue.get()
-        db = SessionLocal()
-        try:
-            _update_run_progress(
-                db,
-                run_id,
-                phase="starting",
-                current=0,
-                total=0,
-                message="后台任务已接管，开始准备运行",
-                status="running",
-            )
-            # 使用独立子进程执行 run，子进程与 uvicorn 进程解耦，
-            # 即使后端重启/重载，推荐任务仍可继续运行。
-            _spawn_run_subprocess(run_id)
-        except Exception as exc:
-            logger.exception("background run failed to spawn: %s", run_id)
-            _mark_run_failed(db, run_id, exc)
-        finally:
-            db.close()
-            _run_queue.task_done()
-
-
 def _mark_run_failed(db: Session, run_id: str, exc: Exception) -> None:
+    """Persist dispatcher/worker failure through lifecycle CAS when available."""
     try:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        repository = SQLAlchemyRunRepository(db)
+        lifecycle = LegacyWorkbenchRunCoordinator(repository)
+        record = repository.get_run(run_id)
+        if record is not None:
+            if record.status in {RunStatus.QUEUED, RunStatus.RUNNING}:
+                transition_applied = lifecycle.spawn_failed(run_id, now=now, message=str(exc))
+                if not transition_applied:
+                    logger.warning("run failure CAS lost for %s; refusing direct status overwrite", run_id)
+                    db.rollback()
+                    return
+                db.expire_all()
+                run = db.get(RecommendationRun, run_id)
+                if run is None:
+                    return
+                # The lifecycle CAS owns status, finished_at, heartbeat and lease
+                # cleanup.  Only legacy projection fields are written here.
+                run.progress_phase = "failed"
+                run.progress_message = str(exc)
+                db.commit()
+                invalidate_bootstrap_cache()
+                _record_progress_commit(run)
+            return
+
+        # Historical rows without canonical request columns cannot participate in
+        # the state machine; preserve their old projection-only failure fallback.
         run = db.get(RecommendationRun, run_id)
-        if run is None:
+        if run is None or run.status not in {"queued", "running"}:
             return
         run.status = "failed"
         run.error_message = str(exc)
-        run.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        run.heartbeat_at = run.finished_at
+        run.finished_at = now
+        run.heartbeat_at = now
         run.progress_phase = "failed"
         run.progress_message = str(exc)
         db.commit()
@@ -1272,6 +889,21 @@ def _update_run_progress(
     if run is None:
         return None
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    lifecycle_repository = SQLAlchemyRunRepository(db)
+    lifecycle_record = lifecycle_repository.get_run(run_id)
+    if lifecycle_record is not None and lifecycle_record.lease is not None:
+        renewed = LegacyWorkbenchRunCoordinator(lifecycle_repository).renew_worker_lease(
+            run_id,
+            now=now,
+            ttl=timedelta(seconds=RUN_HEARTBEAT_STALE_SECONDS),
+        )
+        if not renewed:
+            raise RuntimeError("Run lifecycle lease 已丢失或过期，worker 必须停止写入")
+        # Repository CAS expires the identity map so this legacy progress write
+        # cannot accidentally flush an obsolete status/revision view.
+        run = db.get(RecommendationRun, run_id)
+        if run is None:
+            return None
     run.heartbeat_at = now
     run.progress_phase = phase
     if current is not None:
@@ -1307,24 +939,39 @@ def _update_run_progress(
 
 
 def recover_interrupted_runs(db: Session, run_ids: list[str] | None = None) -> int:
-    """启动时将真正失联的后台任务标记为 interrupted。
-
-    推荐任务现在运行在独立子进程中，后端重启后子进程仍可继续更新心跳。
-    因此只有心跳超时的任务才需要被标记为 interrupted；心跳未超时的任务
-    说明子进程仍在正常运行，应继续保留 running 状态。
-    """
+    """Move stale active runs to ``interrupted`` through the lifecycle CAS."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     stmt = select(RecommendationRun).where(RecommendationRun.status.in_(tuple(RUN_ACTIVE_STATUSES)))
     if run_ids is not None:
         stmt = stmt.where(RecommendationRun.run_id.in_(run_ids))
     runs = db.scalars(stmt).all()
+    repository = SQLAlchemyRunRepository(db)
+    lifecycle = LegacyWorkbenchRunCoordinator(repository)
     recovered = 0
     for run in runs:
         heartbeat_age = (now - run.heartbeat_at).total_seconds() if run.heartbeat_at else float("inf")
-        # 心跳未超时说明独立子进程仍在运行，不要打断它
         if heartbeat_age <= RUN_HEARTBEAT_STALE_SECONDS:
             logger.info("keep running run %s alive (heartbeat age=%.0fs)", run.run_id, heartbeat_age)
             continue
+
+        record = repository.get_run(run.run_id)
+        if record is not None:
+            if lifecycle.heartbeat_timeout(
+                run.run_id,
+                now=now,
+                message="服务重启或进程退出，后台任务已中断；请重新发起运行。",
+            ):
+                recovered += 1
+                db.expire_all()
+                refreshed = db.get(RecommendationRun, run.run_id)
+                if refreshed is not None:
+                    refreshed.progress_phase = "interrupted"
+                    if not refreshed.progress_message:
+                        refreshed.progress_message = "任务未正常结束"
+            continue
+
+        # Historical rows without canonical request columns retain a projection-only
+        # fallback; new rows must never bypass the state machine.
         run.status = "interrupted"
         run.interrupted_at = now
         run.finished_at = now
@@ -1345,12 +992,31 @@ def recover_interrupted_runs(db: Session, run_ids: list[str] | None = None) -> i
 
 
 def _save_checkpoint(db: Session, run_id: str, phase: str) -> None:
-    """将当前阶段写入断点，commit 确保中断后可恢复。"""
+    """Commit the legacy checkpoint and, when present, its canonical lifecycle twin."""
     run = db.get(RecommendationRun, run_id)
     if run is None:
         return
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     run.checkpoint_phase = phase
-    run.heartbeat_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    run.heartbeat_at = now
+    # New runs have an opaque lease and receive monotonic RunPhase checkpoints.
+    # Renew in the same worker turn so a long stage can never commit after expiry.
+    lifecycle_repository = SQLAlchemyRunRepository(db)
+    lifecycle = LegacyWorkbenchRunCoordinator(lifecycle_repository)
+    lifecycle_record = lifecycle_repository.get_run(run_id)
+    if lifecycle_record is not None and lifecycle_record.lease is not None:
+        if not lifecycle.renew_worker_lease(
+            run_id,
+            now=now,
+            ttl=timedelta(seconds=RUN_HEARTBEAT_STALE_SECONDS),
+        ):
+            raise RuntimeError("Run lifecycle lease 已丢失或过期，不能提交 checkpoint")
+    # Old runs keep their original resume behavior without a forced backfill.
+    lifecycle.sync_checkpoint(
+        run_id,
+        legacy_phase=phase,
+        now=now,
+    )
     db.commit()
     _record_progress_commit(run)
 
@@ -1405,6 +1071,8 @@ def _persist_run_start(
     params: dict[str, Any],
     selected_skills: list[dict[str, Any]],
     *,
+    request: RunRequest,
+    execution_version: str | None = None,
     phase: str = "prepare",
     message: str = "同步 Skill 与运行参数完成，准备拉取市场数据",
 ) -> RecommendationRun:
@@ -1415,7 +1083,9 @@ def _persist_run_start(
         db.add(run)
     run.preset_id = params.get("preset_id")
     run.run_name = params["run_name"]
-    run.run_mode = "formal"
+    # The indexed column and the canonical request are written from the same
+    # validated value; a later worker can therefore reject drift deterministically.
+    run.run_mode = request.run_mode.value
     run.trade_date = run.trade_date or _latest_trade_date(db)
     run.finished_at = None
     run.universe_count = 0
@@ -1426,7 +1096,13 @@ def _persist_run_start(
     run.score_line = float(params["score_line"])
     run.output_count = params["output_count"]
     run.selected_skills_json = _dumps(_selected_skill_rows(selected_skills))
+    # Dual-write: params_json remains a legacy projection, while these two
+    # columns are the only durable request identity used by workers.
     run.params_json = _dumps(params)
+    run.request_schema_version = request.schema_version
+    run.request_json = request.to_canonical_json()
+    if execution_version is not None and not run.execution_version:
+        run.execution_version = execution_version
     run.market_snapshot_json = run.market_snapshot_json or _dumps({})
     run.result_summary_json = _dumps({"agent_runtime": "starting"})
     run.filter_audit_json = run.filter_audit_json or _dumps({})
@@ -1439,6 +1115,7 @@ def _persist_run_start(
     run.progress_message = message
     run.interrupted_at = None
     run.checkpoint_phase = phase
+    assert_run_request_index_consistency(run, request)
     db.commit()
     invalidate_bootstrap_cache()
     _record_progress_commit(run)
@@ -1449,11 +1126,16 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     run_id = existing_run_id or _new_run_id()
     is_resume = bool(existing_run_id)
 
-    # 读取断点信息
+    # 读取断点信息；已有 run 必须先通过 canonical request cutover guard。
     checkpoint_phase: str | None = None
+    existing_run: RecommendationRun | None = None
+    existing_request: RunRequest | None = None
     if is_resume:
         existing_run = db.get(RecommendationRun, run_id)
-        if existing_run and existing_run.checkpoint_phase:
+        if existing_run is None:
+            raise RuntimeError(f"Run {run_id} 不存在")
+        existing_request = load_canonical_run_request(existing_run)
+        if existing_run.checkpoint_phase:
             checkpoint_phase = existing_run.checkpoint_phase
         logger.info("resume run %s from checkpoint %s", run_id, checkpoint_phase or "start")
 
@@ -1462,6 +1144,20 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         if not checkpoint_phase:
             return True
         return _phase_index(phase) > _phase_index(checkpoint_phase)
+
+    lifecycle_repository = SQLAlchemyRunRepository(db)
+    lifecycle = LegacyWorkbenchRunCoordinator(lifecycle_repository)
+    if existing_run is not None:
+        lifecycle_now = datetime.now(timezone.utc).replace(tzinfo=None)
+        if existing_run.status == "interrupted" and not lifecycle.resume(run_id, now=lifecycle_now):
+            raise RuntimeError("Run interrupted resume 缺少有效 checkpoint、存在活跃 lease 或 CAS 冲突")
+        lease = lifecycle.acquire_worker_lease(
+            run_id,
+            now=lifecycle_now,
+            ttl=timedelta(seconds=RUN_HEARTBEAT_STALE_SECONDS),
+        )
+        if lifecycle_repository.get_run(run_id) is not None and lease is None:
+            raise RuntimeError("该 Run 已被另一个 worker 接管或缺少可用生命周期 lease")
 
     if not is_resume or _should_run("prepare"):
         _update_run_progress(
@@ -1475,28 +1171,56 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         )
         skills = sync_skills(db)
         skill_map = {skill.skill_id: skill for skill in skills}
-        preset = db.get(Preset, payload["preset_id"]) if payload.get("preset_id") else None
-        if payload.get("preset_id") and preset is None:
-            raise ValueError("预设不存在，请刷新后重试")
-        params = _merge_run_params(db, preset, payload)
+        if existing_request is not None:
+            # A resumed run never re-merges caller payload/preset defaults.  The
+            # persisted canonical request is the sole execution input.
+            run_request = existing_request
+            params = run_request.model_dump(mode="json")
+            preset = db.get(Preset, run_request.preset_id) if run_request.preset_id else None
+        else:
+            preset = db.get(Preset, payload["preset_id"]) if payload.get("preset_id") else None
+            if payload.get("preset_id") and preset is None:
+                raise ValueError("预设不存在，请刷新后重试")
+            params = _merge_run_params(db, preset, payload)
+            run_request = _canonical_workbench_request(params, payload)
+            params["run_mode"] = run_request.run_mode.value
         selected_skills = _select_skills_for_run(db, skill_map, params["skills"])
         if not selected_skills:
             raise ValueError("没有可运行的 Skill，请检查预设配置或 Skill 状态")
-        run = _persist_run_start(db, run_id, params, selected_skills)
+        execution_version, _execution_audit = _execution_version_identity(run_request)
+        run = _persist_run_start(
+            db,
+            run_id,
+            params,
+            selected_skills,
+            request=run_request,
+            execution_version=execution_version,
+        )
         _save_checkpoint(db, run_id, "prepare")
     else:
-        # 从已有 Run 重建状态
+        # 从已有 Run 重建状态；params_json 仅保留为历史投影，不能驱动恢复。
         run = existing_run
+        assert run is not None
+        run_request = existing_request or load_canonical_run_request(run)
+        params = run_request.model_dump(mode="json")
         skills = sync_skills(db)
         skill_map = {skill.skill_id: skill for skill in skills}
-        params = _loads(run.params_json, {})
-        selected_skill_rows = _loads(run.selected_skills_json, [])
-        selected_skills = _select_skills_for_run(db, skill_map, selected_skill_rows)
+        selected_skills = _select_skills_for_run(db, skill_map, params["skills"])
         if not selected_skills:
             raise ValueError("恢复任务时没有可运行的 Skill，请检查 Skill 状态后重新发起运行")
         preset = db.get(Preset, run.preset_id) if run.preset_id else None
 
-    data_source = _normalize_data_source(params.get("data_source"))
+    # Re-read and validate the persisted canonical pair after the prepare branch.
+    # This also protects direct/scheduler callers that create the row themselves.
+    run_request = load_canonical_run_request(run)
+    params = run_request.model_dump(mode="json")
+    execution_version, execution_audit = _execution_version_identity(run_request)
+    factor_plan_audit = execution_audit["factor_plan"]
+    if not run.execution_version:
+        run.execution_version = execution_version
+    db.commit()
+
+    data_source = normalize_data_source(params.get("data_source"))
     trade_date_override = params.get("trade_date_override") or None
     if trade_date_override:
         logger.info("run %s using trade_date_override=%s", run_id, trade_date_override)
@@ -1515,19 +1239,17 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         status="running",
     )
     try:
-        if data_source == DATA_SOURCE_REALTIME:
-            stocks, snapshot = get_market_universe()
-        elif data_source == DATA_SOURCE_LOCAL_POOL_REALTIME:
-            from app.services.market_pool import get_market_universe_from_pool_with_realtime
-            stocks, snapshot = get_market_universe_from_pool_with_realtime(db)
-        elif data_source == DATA_SOURCE_LOCAL_POOL_PREFERRED:
-            stocks, snapshot = get_market_universe_from_pool(db, refresh=True, as_of_date=trade_date_override)
-        else:
-            stocks, snapshot = get_market_universe_from_pool(db, refresh=False, as_of_date=trade_date_override)
+        stocks, snapshot, market_source_audit = load_legacy_market_universe(
+            db,
+            data_source=data_source,
+            as_of_date=trade_date_override,
+        )
     except Exception as exc:
         _mark_run_failed(db, run_id, exc)
         raise
     snapshot.setdefault("breadth", {})["run_data_source_mode"] = data_source
+    snapshot["breadth"]["market_source_audit"] = market_source_audit
+    snapshot["breadth"]["factor_execution_plan"] = factor_plan_audit
     _update_run_progress(
         db,
         run_id,
@@ -1558,7 +1280,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     dt_hit = inject_dragon_tiger_flags(db, scoped_stocks, trade_date=str(snapshot.get("trade_date") or ""))
     if dt_hit:
         logger.info("prefilter 前注入龙虎榜标记: %d 只 (run=%s)", dt_hit, run_id)
-    min_prefilter_count = _resolve_prefilter_target_count(params, selected_skill_count=len(selected_skills))
+    min_prefilter_count = resolve_prefilter_target_count(params, selected_skill_count=len(selected_skills))
     prefiltered_stocks, prefilter_audit = apply_prefilters(
         scoped_stocks,
         selected_skills,
@@ -1880,6 +1602,13 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         status="running",
     )
     snapshot.setdefault("breadth", {})["auxiliary_data_audit"] = aux_audit
+    auxiliary_result = project_legacy_auxiliary_audit(
+        aux_audit,
+        instruments=tuple(AuxiliaryInstrument(code=str(code)) for code in aux_prefetch_codes),
+        trade_date=date.fromisoformat(str(snapshot["trade_date"])),
+        refresh_enabled=not skip_aux_refresh,
+    )
+    snapshot["breadth"]["auxiliary_orchestration"] = auxiliary_projection_payload(auxiliary_result)
     _save_checkpoint(db, run_id, "auxiliary_data")
 
     _update_run_progress(
@@ -1909,7 +1638,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         db.add(run)
     run.preset_id = params.get("preset_id")
     run.run_name = params["run_name"]
-    run.run_mode = "formal"
+    run.run_mode = run_request.run_mode.value
     run.trade_date = snapshot["trade_date"]
     if not run.started_at:
         run.started_at = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -1923,6 +1652,10 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     run.output_count = params["output_count"]
     run.selected_skills_json = _dumps(_selected_skill_rows(selected_skills))
     run.params_json = _dumps(params)
+    # Keep the legacy projection for historical queries, but always refresh the
+    # canonical pair from the same validated RunRequest used by execution.
+    run.request_schema_version = run_request.schema_version
+    run.request_json = run_request.to_canonical_json()
     run.market_snapshot_json = _dumps(snapshot)
     run.result_summary_json = _dumps({})
     run.status = "running"
@@ -1933,12 +1666,18 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     run.progress_total = len(research_contexts)
     run.progress_message = f"特征构建完成，进入规则扫描：{len(research_contexts)} 只"
     run.interrupted_at = None
+    assert_run_request_index_consistency(run, run_request)
     db.flush()
     db.commit()  # Persist immediately so the run record survives failures
     invalidate_bootstrap_cache()
 
     agent_session_id = f"sess_{run_id}"
     all_skill_objs = [s["skill"] for s in selected_skills]
+    # 策略分发只经 descriptor-backed registry：命令式与声明式实现都先由同一
+    # bootstrap 装配，再统一调用 `registry.get(skill_id).evaluate(stock, ctx)`。
+    # Adapter 负责把命令式 StrategyDecision 投影为规范 Signal，调用方不得读取
+    # 实现类身份字段或绕过 manifest/Descriptor。
+    strategy_registry = build_registry_from_skills(all_skill_objs)
 
     try:
         AgentSessionRegistry.register(
@@ -1958,7 +1697,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         # ═══ 阶段一：策略规则全市场扫描（所有基础过滤合格股票，无 LLM） ═══
         settings = get_settings()
         agent_review_disabled = bool(params.get("disable_agent_review"))
-        skill_review_limit = _resolve_skill_review_limit(params, settings, selected_skill_count=len(selected_skills))
+        skill_review_limit = resolve_skill_review_limit(params, settings, selected_skill_count=len(selected_skills))
         skill_review_concurrency = max(1, int(params.get("agent_review_concurrency") or settings.market_skill_review_concurrency or 1))
         prelim_entries: list[dict[str, Any]] = []
         total_contexts = len(research_contexts)
@@ -1989,7 +1728,8 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                     signal = None
                 else:
                     skip_universe = prefilter_source == "skill_pass" and skill_obj.skill_id in prefilter_skill_ids
-                    signal = run_strategy(skill_obj, stock, snapshot["main_industries"], skip_universe_check=skip_universe) if skill_obj.executable else None
+                    ctx = StrategyContext(main_industries=snapshot["main_industries"], skip_universe_check=skip_universe)
+                    signal = strategy_registry.get(skill_obj.skill_id).evaluate(stock, ctx) if skill_obj.executable else None
                 rule_signals_by_skill[skill_obj.skill_id] = signal
 
             prelim_entries.append(
@@ -2012,7 +1752,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
                 )
 
         prelim_entries.sort(key=lambda item: float(item.get("prelim_score") or 0), reverse=True)
-        gate_result = _build_skill_rule_gate(prelim_entries, selected_skills, settings)
+        gate_result = build_skill_rule_gate(prelim_entries, selected_skills, settings)
         skill_candidates = gate_result["skill_candidates"]
         non_skill_entries = gate_result["non_skill_entries"]
         explicit_review_limit_skipped = 0
@@ -2023,7 +1763,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             skill_demo_limited = True
         else:
             skill_demo_limited = False
-        skill_gate_audit = _finalize_skill_gate_audit(
+        skill_gate_audit = finalize_skill_gate_audit(
             gate_result["audit"],
             skill_candidates,
             explicit_review_limit_skipped=explicit_review_limit_skipped,
@@ -2242,16 +1982,37 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             ),
         )
 
+        _save_checkpoint(db, run_id, "persist")
+
         run.recommended_count = len(saved)
-        run.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        run.status = "completed"
-        run.heartbeat_at = run.finished_at
+        completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        managed_record = lifecycle_repository.get_run(run_id)
+        if managed_record is not None:
+            if managed_record.lease is None:
+                raise RuntimeError("Run lifecycle completion requires an active worker lease")
+            db.flush()
+            if not lifecycle.complete(run_id, now=completed_at):
+                raise RuntimeError("Run lifecycle completion CAS failed")
+            db.expire_all()
+            run = db.get(RecommendationRun, run_id)
+            if run is None:
+                raise RuntimeError("Run disappeared during lifecycle completion")
+        else:
+            # Historical/direct runs without canonical lifecycle columns retain the
+            # old projection-only completion path.
+            run.finished_at = completed_at
+            run.status = "completed"
+            run.heartbeat_at = completed_at
         run.progress_phase = "completed"
         run.progress_current = len(saved)
         run.progress_total = len(saved)
         run.progress_message = "运行完成"
         run.filter_audit_json = _dumps(pipeline_audit.get("filter_audit") or {})
         summary = _build_run_summary(cards, saved, snapshot, _strip_audit_rows(pipeline_audit))
+        summary["execution"] = {
+            **execution_audit,
+            "execution_version": run.execution_version or execution_version,
+        }
         summary["score_line_meta"] = resolve_score_line_context(
             float(params["score_line"]),
             market_snapshot=snapshot,
@@ -2286,12 +2047,26 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             "recommendations": [_serialize_recommendation(db, rec) for rec in saved],
         }
     except Exception as exc:
-        run.status = "failed"
-        run.error_message = str(exc)
-        run.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        run.heartbeat_at = run.finished_at
-        run.progress_phase = "failed"
-        run.progress_message = str(exc)
+        failed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        managed_record = lifecycle_repository.get_run(run_id)
+        if managed_record is not None:
+            if not lifecycle.fail(run_id, now=failed_at, message=str(exc)):
+                db.rollback()
+                logger.warning("run failure CAS lost for %s; refusing direct status overwrite", run_id)
+                raise
+            db.expire_all()
+            run = db.get(RecommendationRun, run_id) or run
+            # Lifecycle status, error code, timestamp and durable lease cleanup are
+            # owned by the CAS.  Only the legacy progress projection is updated.
+            run.progress_phase = "failed"
+            run.progress_message = str(exc)
+        else:
+            run.status = "failed"
+            run.error_message = str(exc)
+            run.finished_at = failed_at
+            run.heartbeat_at = failed_at
+            run.progress_phase = "failed"
+            run.progress_message = str(exc)
         db.commit()
         invalidate_bootstrap_cache()
         raise
@@ -2459,80 +2234,7 @@ def label_pending_outcomes(db: Session, horizon_days: int = 5) -> dict[str, Any]
     return {"labeled": labeled}
 
 
-def _serialize_preset(db: Session, preset: Preset) -> dict[str, Any]:
-    skills = db.scalars(
-        select(PresetSkill).where(PresetSkill.preset_id == preset.preset_id).order_by(PresetSkill.sort_order.asc())
-    ).all()
-    return {
-        "preset_id": preset.preset_id,
-        "name": preset.name,
-        "description": preset.description,
-        "skip_aux_refresh": preset.skip_aux_refresh,
-        "market_scope": preset.market_scope,
-        "market_scope_value": preset.market_scope_value,
-        "risk_template": preset.risk_template,
-        "score_line": preset.score_line,
-        "output_count": preset.output_count,
-        "data_source": preset.data_source,
-        "hide_recent_repeats": preset.hide_recent_repeats,
-        "status": preset.status,
-        "skills": [
-            {
-                "skill_id": row.skill_id,
-                "weight": row.weight,
-                "sort_order": row.sort_order,
-                "name": (registry.name if (registry := db.get(SkillRegistry, row.skill_id)) else row.skill_id),
-            }
-            for row in skills
-        ],
-    }
 
-
-def _serialize_presets_batched(db: Session, presets: list[Preset]) -> list[dict[str, Any]]:
-    if not presets:
-        return []
-    preset_ids = [preset.preset_id for preset in presets]
-    skill_rows = db.scalars(
-        select(PresetSkill)
-        .where(PresetSkill.preset_id.in_(preset_ids))
-        .order_by(PresetSkill.preset_id.asc(), PresetSkill.sort_order.asc())
-    ).all()
-    skill_ids = {row.skill_id for row in skill_rows}
-    skill_name_map = {}
-    if skill_ids:
-        skill_name_map = {
-            row.skill_id: row.name
-            for row in db.scalars(select(SkillRegistry).where(SkillRegistry.skill_id.in_(skill_ids))).all()
-        }
-    skills_by_preset: dict[str, list[dict[str, Any]]] = {}
-    for row in skill_rows:
-        skills_by_preset.setdefault(row.preset_id, []).append(
-            {
-                "skill_id": row.skill_id,
-                "weight": row.weight,
-                "sort_order": row.sort_order,
-                "name": skill_name_map.get(row.skill_id, row.skill_id),
-            }
-        )
-
-    return [
-        {
-            "preset_id": preset.preset_id,
-            "name": preset.name,
-            "description": preset.description,
-            "skip_aux_refresh": preset.skip_aux_refresh,
-            "market_scope": preset.market_scope,
-            "market_scope_value": preset.market_scope_value,
-            "risk_template": preset.risk_template,
-            "score_line": preset.score_line,
-            "output_count": preset.output_count,
-            "data_source": preset.data_source,
-            "hide_recent_repeats": preset.hide_recent_repeats,
-            "status": preset.status,
-            "skills": skills_by_preset.get(preset.preset_id, []),
-        }
-        for preset in presets
-    ]
 
 
 def _new_run_id() -> str:
@@ -2616,55 +2318,17 @@ def _serialize_run_summaries_batched(db: Session, runs: list[RecommendationRun])
 
 
 def _serialize_run_summary_from_cache(run: RecommendationRun, preset: Preset | None, hit_rate: float) -> dict[str, Any]:
-    summary = _loads(run.result_summary_json, {})
-    heartbeat_age_seconds = None
-    if run.heartbeat_at:
-        heartbeat_age_seconds = max(0, int((datetime.now(timezone.utc).replace(tzinfo=None) - run.heartbeat_at).total_seconds()))
-    progress_total = int(run.progress_total or 0)
-    progress_current = int(run.progress_current or 0)
-    progress_pct = compute_progress_pct(progress_current, progress_total)
-    is_stale = (
-        run.status in RUN_ACTIVE_STATUSES
-        and heartbeat_age_seconds is not None
-        and heartbeat_age_seconds > RUN_HEARTBEAT_STALE_SECONDS
+    return _project_run_summary(
+        run,
+        preset,
+        hit_rate,
+        active_statuses=RUN_ACTIVE_STATUSES,
+        heartbeat_stale_seconds=RUN_HEARTBEAT_STALE_SECONDS,
     )
-    return {
-        "run_id": run.run_id,
-        "run_name": run.run_name,
-        "preset_id": run.preset_id,
-        "preset_name": preset.name if preset else "临时运行",
-        "trade_date": run.trade_date,
-        "run_mode": run.run_mode,
-        "started_at": run.started_at.isoformat() if run.started_at else None,
-        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
-        "market_scope": run.market_scope,
-        "market_scope_value": run.market_scope_value,
-        "risk_template": run.risk_template,
-        "score_line": run.score_line,
-        "universe_count": run.universe_count,
-        "recommended_count": run.recommended_count,
-        "status": run.status,
-        "error_message": run.error_message,
-        "heartbeat_at": run.heartbeat_at.isoformat() if run.heartbeat_at else None,
-        "heartbeat_age_seconds": heartbeat_age_seconds,
-        "heartbeat_stale_seconds": RUN_HEARTBEAT_STALE_SECONDS,
-        "is_stale": is_stale,
-        "progress_phase": run.progress_phase,
-        "progress_current": progress_current,
-        "progress_total": progress_total,
-        "progress_pct": progress_pct,
-        "progress_message": run.progress_message,
-        "interrupted_at": run.interrupted_at.isoformat() if run.interrupted_at else None,
-        "skill_count": len(_loads(run.selected_skills_json, [])),
-        "hit_rate": hit_rate,
-        "result_summary": summary,
-        "checkpoint_phase": run.checkpoint_phase,
-    }
 
 
 def _serialize_run_summary(db: Session, run: RecommendationRun) -> dict[str, Any]:
     preset = db.get(Preset, run.preset_id) if run.preset_id else None
-    summary = _loads(run.result_summary_json, {})
     outcome_ids = [rec.recommendation_id for rec in db.scalars(select(Recommendation).where(Recommendation.run_id == run.run_id)).all()]
     outcomes = (
         db.scalars(select(RecommendationOutcome).where(RecommendationOutcome.recommendation_id.in_(outcome_ids))).all()
@@ -2674,49 +2338,13 @@ def _serialize_run_summary(db: Session, run: RecommendationRun) -> dict[str, Any
     executed = [outcome for outcome in outcomes if is_trade_executed(outcome)]
     success_count = sum(1 for outcome in executed if is_accurate_recommendation(outcome))
     hit_rate = round(success_count / len(executed), 3) if executed else 0.0
-    heartbeat_age_seconds = None
-    if run.heartbeat_at:
-        heartbeat_age_seconds = max(0, int((datetime.now(timezone.utc).replace(tzinfo=None) - run.heartbeat_at).total_seconds()))
-    progress_total = int(run.progress_total or 0)
-    progress_current = int(run.progress_current or 0)
-    progress_pct = compute_progress_pct(progress_current, progress_total)
-    is_stale = (
-        run.status in RUN_ACTIVE_STATUSES
-        and heartbeat_age_seconds is not None
-        and heartbeat_age_seconds > RUN_HEARTBEAT_STALE_SECONDS
+    return _project_run_summary(
+        run,
+        preset,
+        hit_rate,
+        active_statuses=RUN_ACTIVE_STATUSES,
+        heartbeat_stale_seconds=RUN_HEARTBEAT_STALE_SECONDS,
     )
-    return {
-        "run_id": run.run_id,
-        "run_name": run.run_name,
-        "preset_id": run.preset_id,
-        "preset_name": preset.name if preset else "临时运行",
-        "trade_date": run.trade_date,
-        "run_mode": run.run_mode,
-        "started_at": run.started_at.isoformat() if run.started_at else None,
-        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
-        "market_scope": run.market_scope,
-        "market_scope_value": run.market_scope_value,
-        "risk_template": run.risk_template,
-        "score_line": run.score_line,
-        "universe_count": run.universe_count,
-        "recommended_count": run.recommended_count,
-        "status": run.status,
-        "error_message": run.error_message,
-        "heartbeat_at": run.heartbeat_at.isoformat() if run.heartbeat_at else None,
-        "heartbeat_age_seconds": heartbeat_age_seconds,
-        "heartbeat_stale_seconds": RUN_HEARTBEAT_STALE_SECONDS,
-        "is_stale": is_stale,
-        "progress_phase": run.progress_phase,
-        "progress_current": progress_current,
-        "progress_total": progress_total,
-        "progress_pct": progress_pct,
-        "progress_message": run.progress_message,
-        "interrupted_at": run.interrupted_at.isoformat() if run.interrupted_at else None,
-        "skill_count": len(_loads(run.selected_skills_json, [])),
-        "hit_rate": hit_rate,
-        "result_summary": summary,
-        "checkpoint_phase": run.checkpoint_phase,
-    }
 
 
 def _serialize_recommendations_batched(db: Session, recs: list[Recommendation]) -> list[dict[str, Any]]:
@@ -2755,95 +2383,12 @@ def _serialize_recommendation_cached(
     rec: Recommendation, watch: WatchItem | None, run: RecommendationRun | None = None,
     preset_name: str | None = None,
 ) -> dict[str, Any]:
-    feature_snapshot = _loads(rec.feature_snapshot_json, {})
-    market_context = _loads(rec.market_context_json, {})
-    if "aggregation_weights" not in feature_snapshot:
-        weights = market_regime_weights(market_context)
-        feature_snapshot["aggregation_weights"] = weights
-    return {
-        "recommendation_id": rec.recommendation_id,
-        "run_id": rec.run_id,
-        "trade_date": rec.trade_date,
-        "recommended_at": rec.recommended_at.isoformat(),
-        "code": rec.code,
-        "name": rec.name,
-        "industry": rec.industry,
-        "recommend_price": rec.recommend_price,
-        "stop_loss": feature_snapshot.get("stop_loss"),
-        "take_profit": feature_snapshot.get("take_profit"),
-        "ideal_buy": feature_snapshot.get("ideal_buy"),
-        "secondary_buy": feature_snapshot.get("secondary_buy"),
-        "bucket": rec.bucket or "",
-        "final_score": rec.final_score,
-        "consensus_score": rec.consensus_score,
-        "setup_type": rec.setup_type,
-        "entry_rule": rec.entry_rule,
-        "invalid_rule": rec.invalid_rule,
-        "rationale": rec.rationale,
-        "risk_tags": _loads(rec.risk_tags_json, []),
-        "info_tags": _loads(rec.info_tags_json, []),
-        "feature_snapshot": feature_snapshot,
-        "market_context": market_context,
-        "skill_breakdown": _loads(rec.skill_breakdown_json, []),
-        "agent_logs": (_loads(rec.agent_summary_json, {}) or {}).get("logs", []),
-        # LLM 审查顶层快捷字段（B 项：候选池卡片不展开即可见 LLM 态度）
-        "llm_stance": (_loads(rec.agent_summary_json, {}) or {}).get("stance"),
-        "llm_delta": (_loads(rec.agent_summary_json, {}) or {}).get("score_delta"),
-        "score_breakdown": feature_snapshot.get("score_breakdown", {}),
-        "score_line_meta": feature_snapshot.get("score_line_meta", {}),
-        "execution_viability": feature_snapshot.get("execution_viability", {}),
-        "status": rec.status,
-        "recent_repeat": rec.recent_repeat,
-        "watch_status": watch.watch_status if watch else "none",
-        "watch_note": watch.note if watch else None,
-        "preset_name": preset_name,
-        "preset_id": run.preset_id if run else None,
-        "run_name": run.run_name if run else None,
-    }
+    return _project_recommendation(rec, watch, run, preset_name)
 
 
 def _serialize_recommendation(db: Session, rec: Recommendation) -> dict[str, Any]:
     watch = db.scalar(select(WatchItem).where(WatchItem.source_recommendation_id == rec.recommendation_id))
-    feature_snapshot = _loads(rec.feature_snapshot_json, {})
-    market_context = _loads(rec.market_context_json, {})
-    if "aggregation_weights" not in feature_snapshot:
-        weights = market_regime_weights(market_context)
-        feature_snapshot["aggregation_weights"] = weights
-    return {
-        "recommendation_id": rec.recommendation_id,
-        "run_id": rec.run_id,
-        "trade_date": rec.trade_date,
-        "recommended_at": rec.recommended_at.isoformat(),
-        "code": rec.code,
-        "name": rec.name,
-        "industry": rec.industry,
-        "recommend_price": rec.recommend_price,
-        "stop_loss": feature_snapshot.get("stop_loss"),
-        "take_profit": feature_snapshot.get("take_profit"),
-        "bucket": rec.bucket or "",
-        "final_score": rec.final_score,
-        "consensus_score": rec.consensus_score,
-        "setup_type": rec.setup_type,
-        "entry_rule": rec.entry_rule,
-        "invalid_rule": rec.invalid_rule,
-        "rationale": rec.rationale,
-        "risk_tags": _loads(rec.risk_tags_json, []),
-        "info_tags": _loads(rec.info_tags_json, []),
-        "feature_snapshot": feature_snapshot,
-        "market_context": market_context,
-        "skill_breakdown": _loads(rec.skill_breakdown_json, []),
-        "agent_logs": (_loads(rec.agent_summary_json, {}) or {}).get("logs", []),
-        # LLM 审查顶层快捷字段（B 项：候选池卡片不展开即可见 LLM 态度）
-        "llm_stance": (_loads(rec.agent_summary_json, {}) or {}).get("stance"),
-        "llm_delta": (_loads(rec.agent_summary_json, {}) or {}).get("score_delta"),
-        "score_breakdown": feature_snapshot.get("score_breakdown", {}),
-        "score_line_meta": feature_snapshot.get("score_line_meta", {}),
-        "execution_viability": feature_snapshot.get("execution_viability", {}),
-        "status": rec.status,
-        "recent_repeat": rec.recent_repeat,
-        "watch_status": watch.watch_status if watch else "none",
-        "watch_note": watch.note if watch else None,
-    }
+    return _project_recommendation(rec, watch)
 
 
 def _prelim_rule_score(stock: dict[str, Any], rule_signals_by_skill: dict[str, Any], snapshot: dict[str, Any]) -> float:
@@ -2857,14 +2402,6 @@ def _prelim_rule_score(stock: dict[str, Any], rule_signals_by_skill: dict[str, A
     if industry and industry != "未分类" and industry in (snapshot.get("main_industries") or []):
         prelim_score += 3.0
     return round(prelim_score, 2)
-
-
-def _resolve_prefilter_target_count(params: dict[str, Any], selected_skill_count: int) -> int:
-    return _skill_gate_resolve_prefilter_target_count(params, selected_skill_count)
-
-
-def _resolve_skill_review_limit(params: dict[str, Any], settings: Any, selected_skill_count: int = 1) -> int:
-    return _skill_gate_resolve_skill_review_limit(params, settings, selected_skill_count)
 
 
 def _build_recommendation_card(
@@ -3036,327 +2573,7 @@ def _build_recommendation_card(
     return card
 
 
-def _build_skill_rule_gate(
-    prelim_entries: list[dict[str, Any]],
-    selected_skills: list[dict[str, Any]],
-    settings: Any,
-) -> dict[str, Any]:
-    return _skill_gate_build_skill_rule_gate(prelim_entries, selected_skills, settings)
-    min_score = float(getattr(settings, "market_skill_rule_gate_min_score", 58.0) or 58.0)
-    min_per_skill = max(0, int(getattr(settings, "market_skill_rule_gate_min_per_skill", 20) or 0))
-    min_total = max(0, int(getattr(settings, "market_skill_rule_gate_min_total", 20) or 0))
-    # 动态 max_per_skill：规则合格数的 min(10%, 30)，至少 20
-    _config_max_per_skill = max(0, int(getattr(settings, "market_skill_rule_gate_max_per_skill", 0) or 0))
-    max_total = max(min_total, int(getattr(settings, "market_skill_rule_gate_max_total", 120) or 0))
-    selected_ids = [str(item["skill_id"]) for item in selected_skills]
-    skill_count = len(selected_ids)
-    by_code: dict[str, dict[str, Any]] = {}
-    skill_rows: dict[str, list[dict[str, Any]]] = {skill_id: [] for skill_id in selected_ids}
-    per_skill_audit: dict[str, dict[str, Any]] = {
-        skill_id: {
-            "scanned": len(prelim_entries),
-            "rule_eligible": 0,
-            "gate_pass": 0,
-            "llm_reviewed": 0,
-            "skipped_hard_veto": 0,
-            "skipped_low_score": 0,
-            "skipped_no_rule": 0,
-            "high_quality_count": 0,
-            "mid_quality_count": 0,
-        }
-        for skill_id in selected_ids
-    }
 
-    # Phase 1: Scan and classify
-    for entry in prelim_entries:
-        stock = entry["stock"]
-        code = str(stock.get("code") or "")
-        by_code[code] = {
-            **entry,
-            "review_skill_ids": [],
-            "skill_gate_reasons": {},
-            "skill_gate_scores": {},
-            "skill_quality_tier": {},
-        }
-        for skill_id in selected_ids:
-            signal = (entry.get("rule_signals") or {}).get(skill_id)
-            if not signal:
-                per_skill_audit[skill_id]["skipped_no_rule"] += 1
-                continue
-            if signal.get("hard_veto"):
-                per_skill_audit[skill_id]["skipped_hard_veto"] += 1
-                by_code[code]["skill_gate_reasons"][skill_id] = signal.get("veto_reason") or "规则硬否决"
-                continue
-            gate_score = _skill_gate_score(signal, entry)
-            by_code[code]["skill_gate_scores"][skill_id] = gate_score
-            if gate_score >= min_score:
-                per_skill_audit[skill_id]["rule_eligible"] += 1
-                # 质量分层
-                if gate_score >= 80:
-                    tier = "high"
-                    per_skill_audit[skill_id]["high_quality_count"] += 1
-                elif gate_score >= 70:
-                    tier = "mid"
-                    per_skill_audit[skill_id]["mid_quality_count"] += 1
-                else:
-                    tier = "standard"
-                skill_rows[skill_id].append(
-                    {
-                        "code": code,
-                        "score": gate_score,
-                        "tier": tier,
-                        "reason": _skill_gate_reason(signal, gate_score, min_score),
-                    }
-                )
-            else:
-                per_skill_audit[skill_id]["skipped_low_score"] += 1
-                by_code[code]["skill_gate_reasons"][skill_id] = f"规则门分 {round(gate_score, 2)} 低于 {round(min_score, 2)}"
-
-    # Phase 2: Dynamic per-skill cap + quality-tiered selection
-    selected_pairs: list[dict[str, Any]] = []
-    selected_pair_keys: set[tuple[str, str]] = set()
-
-    for skill_id, rows in skill_rows.items():
-        eligible = per_skill_audit[skill_id]["rule_eligible"]
-        if not rows:
-            continue
-        # 动态 max_per_skill: max(20, min(eligible * 10%, 30))
-        if _config_max_per_skill > 0:
-            dynamic_max = max(min_per_skill, min(eligible, _config_max_per_skill))
-        else:
-            dynamic_max = max(min_per_skill, min(eligible, max(20, int(eligible * 0.1))))
-        # 上限 30（避免 LLM 调用过多）
-        dynamic_max = min(dynamic_max, 30)
-        per_skill_audit[skill_id]["dynamic_max_per_skill"] = dynamic_max
-
-        rows.sort(key=lambda row: float(row["score"]), reverse=True)
-
-        # 质量分层深审：高分段（>=80）全部深审
-        high_tier = [r for r in rows if r["tier"] == "high"]
-        mid_tier = [r for r in rows if r["tier"] == "mid"]
-        standard_tier = [r for r in rows if r["tier"] == "standard"]
-
-        selected_for_skill: list[dict[str, Any]] = []
-        # 高分全部入选
-        for row in high_tier:
-            if len(selected_for_skill) >= dynamic_max:
-                break
-            selected_for_skill.append(row)
-
-        # 中分按剩余容量采样（至少选一半中分段）
-        remaining = dynamic_max - len(selected_for_skill)
-        if remaining > 0 and mid_tier:
-            mid_sample = min(len(mid_tier), max(len(mid_tier) // 2, remaining))
-            selected_for_skill.extend(mid_tier[:mid_sample])
-
-        # 标准分段填满剩余容量
-        remaining = dynamic_max - len(selected_for_skill)
-        if remaining > 0 and standard_tier:
-            selected_for_skill.extend(standard_tier[:remaining])
-
-        # 实际入选数量可能不足 min_per_skill，从剩余高分填充
-        if len(selected_for_skill) < min_per_skill:
-            remaining_rows = [r for r in rows if r not in selected_for_skill]
-            selected_for_skill.extend(remaining_rows[: min_per_skill - len(selected_for_skill)])
-
-        for row in selected_for_skill:
-            key = (row["code"], skill_id)
-            if key in selected_pair_keys:
-                continue
-            selected_pair_keys.add(key)
-            selected_pairs.append({**row, "skill_id": skill_id})
-            per_skill_audit[skill_id]["gate_pass"] += 1
-
-    # Phase 3: Global cap
-    selected_pairs.sort(key=lambda row: float(row["score"]), reverse=True)
-    if max_total and len(selected_pairs) > max_total:
-        selected_pairs = selected_pairs[:max_total]
-        selected_pair_keys = {(row["code"], row["skill_id"]) for row in selected_pairs}
-
-    # Minimum total fallback
-    if len(selected_pairs) < min_total:
-        fallback_rows: list[dict[str, Any]] = []
-        for skill_id, rows in skill_rows.items():
-            for row in rows:
-                key = (row["code"], skill_id)
-                if key not in selected_pair_keys:
-                    fallback_rows.append({**row, "skill_id": skill_id})
-        fallback_rows.sort(key=lambda row: float(row["score"]), reverse=True)
-        for row in fallback_rows[: max(0, min_total - len(selected_pairs))]:
-            selected_pair_keys.add((row["code"], row["skill_id"]))
-            selected_pairs.append(row)
-
-    # Phase 4: Assign reviews
-    for row in selected_pairs:
-        entry = by_code.get(row["code"])
-        if not entry:
-            continue
-        skill_id = row["skill_id"]
-        if skill_id not in entry["review_skill_ids"]:
-            entry["review_skill_ids"].append(skill_id)
-            entry["skill_gate_reasons"][skill_id] = row["reason"]
-            entry["skill_quality_tier"][skill_id] = row.get("tier", "standard")
-            per_skill_audit[skill_id]["llm_reviewed"] += 1
-
-    skill_candidates = [
-        entry for entry in by_code.values() if entry.get("review_skill_ids")
-    ]
-    skill_candidates.sort(
-        key=lambda entry: max((entry.get("skill_gate_scores") or {"_": entry.get("prelim_score", 0)}).values()),
-        reverse=True,
-    )
-    non_skill_entries = [
-        entry
-        for entry in prelim_entries
-        if str(entry["stock"].get("code") or "") not in {item["stock"].get("code") for item in skill_candidates}
-    ]
-    audit_rows = _build_skill_gate_rows(by_code, selected_ids, min_score)
-    audit = {
-        "mode": "rule_gate_dynamic_tiered",
-        "min_score": min_score,
-        "min_per_skill": min_per_skill,
-        "min_total": min_total,
-        "max_total": max_total,
-        "quality_tiers": {"high": ">=80 全部深审", "mid": ">=70 按容量采样", "standard": ">=min_score 填充剩余"},
-        "skill_rule_candidate_count": len({row["code"] for row in selected_pairs}),
-        "skill_gate_candidate_count": len(skill_candidates),
-        "skill_agent_call_count": len(selected_pairs),
-        "per_skill": per_skill_audit,
-        "rows": audit_rows,
-        "reason_counts": dict(Counter(row["reason_key"] for row in audit_rows if not row.get("passed"))),
-    }
-    return {
-        "skill_candidates": skill_candidates,
-        "non_skill_entries": non_skill_entries,
-        "audit": audit,
-    }
-
-
-def _build_skill_gate_rows(
-    by_code: dict[str, dict[str, Any]],
-    selected_ids: list[str],
-    min_score: float,
-) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for code, entry in by_code.items():
-        stock = entry.get("stock") or {}
-        rule_signals = entry.get("rule_signals") or {}
-        gate_scores = {sid: float(score) for sid, score in (entry.get("skill_gate_scores") or {}).items()}
-        gate_reasons = dict(entry.get("skill_gate_reasons") or {})
-        review_skill_ids = [str(item) for item in (entry.get("review_skill_ids") or [])]
-        best_skill_id = None
-        best_gate_score = None
-        if gate_scores:
-            best_skill_id, best_gate_score = max(gate_scores.items(), key=lambda item: float(item[1]))
-
-        if review_skill_ids:
-            reason_key = "gate_pass"
-            reason = gate_reasons.get(review_skill_ids[0]) or "规则门通过，进入 Skill 深审"
-            passed = True
-        else:
-            present_signals = [rule_signals.get(skill_id) for skill_id in selected_ids if rule_signals.get(skill_id)]
-            hard_veto_reasons = [
-                str(signal.get("veto_reason") or "规则硬否决")
-                for signal in present_signals
-                if signal and signal.get("hard_veto")
-            ]
-            if not present_signals:
-                reason_key = "no_rule_signal"
-                reason = "无可用规则信号"
-            elif best_gate_score is not None and best_gate_score >= min_score:
-                reason_key = "gate_capacity"
-                reason = "规则门分合格，但未进入本次 Skill 深审容量"
-            elif hard_veto_reasons and len(hard_veto_reasons) >= len(present_signals):
-                reason_key = "hard_veto"
-                reason = "；".join(sorted(set(hard_veto_reasons))[:3])
-            elif best_skill_id and best_skill_id in gate_reasons:
-                reason_key = "low_gate_score"
-                reason = gate_reasons[best_skill_id]
-            else:
-                reason_key = "low_gate_score"
-                reason = f"规则门分低于 {round(min_score, 2)}"
-            passed = False
-
-        rows.append(
-            {
-                "code": code,
-                "name": stock.get("name"),
-                "industry": stock.get("industry"),
-                "stage": "skill_gate",
-                "passed": passed,
-                "reason_key": reason_key,
-                "reason": reason,
-                "prelim_score": float(entry.get("prelim_score") or 0),
-                "best_skill_id": best_skill_id,
-                "best_gate_score": best_gate_score,
-                "gate_scores": gate_scores,
-                "gate_reasons": gate_reasons,
-                "review_skill_ids": review_skill_ids,
-                "quality_tier": entry.get("skill_quality_tier") or {},
-            }
-        )
-    return rows
-
-
-def _skill_gate_score(signal: dict[str, Any], entry: dict[str, Any]) -> float:
-    score = float(signal.get("score") or 0)
-    if signal.get("setup_match"):
-        score += 8.0
-    if float(signal.get("score") or 0) >= 80:
-        score += 6.0
-    elif float(signal.get("score") or 0) >= 64:
-        score += 3.0
-    score += min(4.0, float(signal.get("setup_quality") or 50.0) / 25.0)
-    score += min(2.0, float(entry.get("prelim_score") or 0) / 50.0)
-    return round(score, 2)
-
-
-def _skill_gate_reason(signal: dict[str, Any], gate_score: float, min_score: float) -> str:
-    reasons = [f"规则门分 {round(gate_score, 2)} >= {round(min_score, 2)}"]
-    if signal.get("setup_match"):
-        reasons.append(f"买点: {signal.get('setup_match')}")
-    signal_score = float(signal.get("score") or 0)
-    if signal_score >= 80:
-        reasons.append(f"高分信号: {signal_score}")
-    elif signal_score >= 64:
-        reasons.append(f"中等信号: {signal_score}")
-    return "；".join(reasons)
-
-
-def _finalize_skill_gate_audit(
-    audit: dict[str, Any],
-    skill_candidates: list[dict[str, Any]],
-    explicit_review_limit_skipped: int = 0,
-) -> dict[str, Any]:
-    return _skill_gate_finalize_skill_gate_audit(audit, skill_candidates, explicit_review_limit_skipped)
-    finalized = dict(audit or {})
-    finalized["skill_rule_candidate_count"] = len(skill_candidates)
-    finalized["skill_gate_candidate_count"] = len(skill_candidates)
-    finalized["skill_agent_call_count"] = sum(len(entry.get("review_skill_ids") or []) for entry in skill_candidates)
-    finalized["explicit_review_limit_skipped"] = explicit_review_limit_skipped
-    per_skill = finalized.get("per_skill") or {}
-    for stats in per_skill.values():
-        stats["llm_reviewed"] = 0
-    for entry in skill_candidates:
-        for skill_id in entry.get("review_skill_ids") or []:
-            if skill_id in per_skill:
-                per_skill[skill_id]["llm_reviewed"] += 1
-    selected_codes = {str((entry.get("stock") or {}).get("code") or "") for entry in skill_candidates}
-    rows = list(finalized.get("rows") or [])
-    if rows:
-        reason_counts: Counter[str] = Counter()
-        for row in rows:
-            code = str(row.get("code") or "")
-            review_selected = code in selected_codes
-            row["review_selected"] = review_selected
-            if row.get("passed") and not review_selected:
-                row["review_limit_reason"] = "规则门通过，但被本次 Agent 深审上限截断"
-                reason_counts["review_limit"] += 1
-            elif not row.get("passed"):
-                reason_counts[str(row.get("reason_key") or "filtered")] += 1
-        finalized["rows"] = rows
-        finalized["reason_counts"] = dict(reason_counts)
-    return finalized
 
 
 def _serialize_outcome(outcome: RecommendationOutcome | None) -> dict[str, Any] | None:
@@ -3676,7 +2893,7 @@ def _merge_run_params(db: Session, preset: Preset | None, payload: dict[str, Any
         "risk_template": str(payload.get("risk_template") or preset_data.get("risk_template") or "balanced"),
         "score_line": float(payload.get("score_line") or preset_data.get("score_line") or 72.0),
         "output_count": int(payload.get("output_count") or preset_data.get("output_count") or 6),
-        "data_source": _normalize_data_source(payload.get("data_source") or preset_data.get("data_source") or DEFAULT_RECOMMENDATION_DATA_SOURCE),
+        "data_source": normalize_data_source(payload.get("data_source") or preset_data.get("data_source") or DEFAULT_RECOMMENDATION_DATA_SOURCE),
         "skip_aux_refresh": skip_aux_refresh,
         "disable_agent_review": bool(payload.get("disable_agent_review", False)),
         "agent_review_limit": int(payload.get("agent_review_limit") or 0),
@@ -3737,19 +2954,6 @@ def _select_skills_for_run(
             }
         )
     return sorted(selected, key=lambda row: row["skill_id"])
-
-
-def _normalize_data_source(value: Any) -> str:
-    data_source = str(value or DEFAULT_RECOMMENDATION_DATA_SOURCE)
-    if data_source not in ALLOWED_DATA_SOURCES:
-        raise ValueError("运行数据仅支持 auto、local_pool、local_pool_preferred、local_pool_realtime 或 realtime")
-    if data_source == DATA_SOURCE_AUTO:
-        now = datetime.now()
-        # 工作日 09:15-15:00 为盘中，用实时模式
-        if now.weekday() < 5 and (now.hour > 9 or (now.hour == 9 and now.minute >= 15)) and now.hour < 15:
-            return DATA_SOURCE_LOCAL_POOL_REALTIME
-        return DATA_SOURCE_LOCAL_POOL_PREFERRED
-    return data_source
 
 
 def _apply_market_scope(db: Session, features: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -3962,1008 +3166,6 @@ def _agent_history_context(db: Session, skill_id: str, stock: dict[str, Any]) ->
     }
 
 
-def _build_pipeline_audit(
-    snapshot: dict[str, Any],
-    params: dict[str, Any],
-    total_contexts: int,
-    prelim_count: int,
-    skill_input_count: int,
-    skill_review_limit: int,
-    skill_review_concurrency: int,
-    skill_demo_limited: bool,
-    skill_agent_call_count: int = 0,
-    skill_gate_audit: dict[str, Any] | None = None,
-    prefilter_audit: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    breadth = snapshot.get("breadth", {}) or {}
-    config = breadth.get("candidate_limit_config") or {}
-    gate = skill_gate_audit or {}
-    prefilter = prefilter_audit or (breadth.get("prefilter_audit") or {})
-    aux = breadth.get("auxiliary_data_audit") or {}
-    score_line_context = resolve_score_line_context(
-        float(params.get("score_line") or 72.0),
-        market_snapshot=snapshot,
-        risk_template=str(params.get("risk_template") or "balanced"),
-    )
-    display_limit = resolve_display_limit(int(params.get("output_count") or 0), snapshot)
-    market_candidate_count = (
-        int(config["market_candidate_count"])
-        if "market_candidate_count" in config
-        else int(get_settings().market_candidate_count)
-    )
-    lookahead_multiplier = (
-        int(config["lookahead_multiplier"])
-        if "lookahead_multiplier" in config
-        else int(get_settings().market_candidate_lookahead_multiplier)
-    )
-    lookahead_count = (
-        int(config["lookahead_count"])
-        if "lookahead_count" in config
-        else prelim_count
-    )
-    return {
-        "unified_quote_total": int(breadth.get("unified_quote_total") or snapshot.get("sample_count") or total_contexts),
-        "base_filter_eligible_count": int(breadth.get("base_filter_eligible_count") or total_contexts),
-        "daily_kline_coverage_count": int(snapshot.get("sample_count") or total_contexts),
-        "filtered_kline_coverage_count": total_contexts,
-        "scoped_candidate_count": int(breadth.get("scoped_candidate_count") or total_contexts),
-        "prefilter_candidate_count": int(prefilter.get("prefilter_candidate_count") or total_contexts),
-        "prefilter": prefilter,
-        "actual_scan_count": prelim_count,
-        "skill_input_count": skill_input_count,
-        "skill_agent_call_count": skill_agent_call_count,
-        "skill_rule_candidate_count": int(gate.get("skill_rule_candidate_count") or skill_input_count),
-        "skill_gate_candidate_count": int(gate.get("skill_gate_candidate_count") or skill_input_count),
-        "skill_gate": gate,
-        "skill_review_success_count": 0,
-        "score_line": score_line_context,
-        "output_count": int(params.get("output_count") or 0),
-        "effective_output_count": display_limit,
-        "market_candidate_count": market_candidate_count,
-        "lookahead_multiplier": lookahead_multiplier,
-        "lookahead_count": lookahead_count,
-        "skill_review_limit": skill_review_limit,
-        "skill_review_concurrency": skill_review_concurrency,
-        "scan_limited": bool(config) and int(config.get("market_candidate_count") or 0) > 0,
-        "skill_limited": skill_demo_limited,
-        "demo_limited": skill_demo_limited or (bool(config) and int(config.get("market_candidate_count") or 0) > 0),
-        "auxiliary_data": aux,
-        "skip_reasons": {
-            "kline": breadth.get("kline_skip_reasons") or {},
-            "recent_repeat_filter_enabled": bool(params.get("hide_recent_repeats")),
-            "prefilter": "先做公共可交易过滤，再按每个 Skill 的 market prefilter 缩小候选池",
-            "pool_rules": "按 final_score 与动态 score_line 决定是否出票，展示上限不参与核心决策",
-            "skill_rule_gate": "全市场先跑 strategy.yaml 规则；只有通过规则门的股票-Skill 组合进入真实 Skill Agent 深审",
-            "rule_only_fallback": "已禁用 — 不再为凑数量补规则候补票",
-        },
-    }
-
-
-def _strip_audit_rows(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {
-            key: _strip_audit_rows(item)
-            for key, item in value.items()
-            if key != "rows"
-        }
-    if isinstance(value, list):
-        return [_strip_audit_rows(item) for item in value]
-    return value
-
-
-def _skill_review_failure_audit(
-    candidate_results: list[dict[str, Any]],
-    api_costs: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    """Summarize Agent review failures so degraded runs are explainable in the funnel."""
-    errors: list[str] = []
-    affected_codes: set[str] = set()
-    affected_skills: set[str] = set()
-    for entry in candidate_results:
-        code = str((entry.get("stock") or {}).get("code") or "").strip()
-        for review in entry.get("skill_reviews") or []:
-            error = str(review.get("error") or "").strip()
-            if not error:
-                continue
-            errors.append(error)
-            skill_id = str(review.get("skill_id") or "").strip()
-            if code:
-                affected_codes.add(code)
-            if skill_id:
-                affected_skills.add(skill_id)
-
-    api_failures = [
-        cost for cost in (api_costs or [])
-        if str(cost.get("status") or "success") != "success" or cost.get("error_message")
-    ]
-    for cost in api_failures:
-        error = str(cost.get("error_message") or "").strip()
-        if error:
-            errors.append(error)
-
-    reason_counts = _categorical_distribution(_skill_review_error_bucket(error) for error in errors)
-    sample_errors = _unique_head(errors, limit=3, max_chars=260)
-    return {
-        "failed_count": len(errors),
-        "affected_stock_count": len(affected_codes),
-        "affected_skill_count": len(affected_skills),
-        "api_failure_count": len(api_failures),
-        "reason_counts": reason_counts,
-        "sample_errors": sample_errors,
-    }
-
-
-def _skill_review_failure_audit_from_logs(db: Session, run_id: str) -> dict[str, Any]:
-    logs = db.scalars(
-        select(ApiCallLog)
-        .where(ApiCallLog.run_id == run_id)
-        .where(ApiCallLog.status != "success")
-        .order_by(ApiCallLog.created_at.desc())
-        .limit(200)
-    ).all()
-    errors = [str(log.error_message or "").strip() for log in logs if str(log.error_message or "").strip()]
-    reason_counts = _categorical_distribution(_skill_review_error_bucket(error) for error in errors)
-    return {
-        "failed_count": len(errors),
-        "affected_stock_count": 0,
-        "affected_skill_count": 0,
-        "api_failure_count": len(logs),
-        "reason_counts": reason_counts,
-        "sample_errors": _unique_head(errors, limit=3, max_chars=260),
-    }
-
-
-def _skill_review_error_bucket(error: Any) -> str:
-    text = str(error or "").strip()
-    lowered = text.lower()
-    if "402" in text or "payment required" in lowered:
-        return "model_payment_required"
-    if "401" in text or "unauthorized" in lowered or "invalid api key" in lowered:
-        return "model_auth_failed"
-    if "429" in text or "rate limit" in lowered:
-        return "model_rate_limited"
-    if "timeout" in lowered or "超时" in text:
-        return "model_timeout"
-    if "熔断" in text or "circuit" in lowered:
-        return "model_circuit_open"
-    if "未配置" in text or "no route" in lowered or "route" in lowered:
-        return "model_route_unavailable"
-    if text:
-        return "agent_review_error"
-    return "agent_review_failed"
-
-
-def _unique_head(values: list[str], *, limit: int, max_chars: int) -> list[str]:
-    result: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        text = str(value or "").strip()
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        if len(text) > max_chars:
-            text = text[: max(0, max_chars - 1)] + "…"
-        result.append(text)
-        if len(result) >= limit:
-            break
-    return result
-
-
-def _build_filter_audit(
-    *,
-    prefilter_audit: dict[str, Any] | None,
-    skill_gate_audit: dict[str, Any] | None,
-    scored_cards: list[dict[str, Any]],
-    recommended_cards: list[dict[str, Any]],
-    pipeline: dict[str, Any],
-) -> dict[str, Any]:
-    rows_by_code: dict[str, dict[str, Any]] = {}
-
-    for item in (prefilter_audit or {}).get("rows") or []:
-        code = str(item.get("code") or "")
-        if not code:
-            continue
-        passed = bool(item.get("passed"))
-        common_pass = bool(item.get("common_pass", passed))
-        row = {
-            "code": code,
-            "name": item.get("name"),
-            "industry": item.get("industry"),
-            "price": item.get("price"),
-            "pct": item.get("pct"),
-            "amount_yi": item.get("amount_yi"),
-            "turnover_rate": item.get("turnover_rate"),
-            "final_stage": "prefilter_pass" if passed else str(item.get("stage") or "prefilter"),
-            "final_status": "active" if passed else "filtered",
-            "final_reason": item.get("reason") or ("预过滤通过" if passed else "预过滤未通过"),
-            "prefilter": item,
-            "trace": [],
-        }
-        _append_trace_step(
-            row,
-            "prefilter_common",
-            common_pass,
-            item.get("common_reason") or ("公共可交易过滤通过" if common_pass else "公共可交易过滤未通过"),
-            amount_yi=item.get("amount_yi"),
-            turnover_rate=item.get("turnover_rate"),
-            pct=item.get("pct"),
-        )
-        if common_pass:
-            _append_trace_step(
-                row,
-                "prefilter_pass" if passed else "prefilter_skill",
-                passed,
-                item.get("reason") or ("技能预过滤命中" if passed else "未命中任何 Skill 市场预过滤"),
-                skill_pass_ids=item.get("skill_pass_ids") or [],
-                prefilter_source=item.get("prefilter_source"),
-            )
-        rows_by_code[code] = row
-
-    for item in (skill_gate_audit or {}).get("rows") or []:
-        code = str(item.get("code") or "")
-        if not code:
-            continue
-        row = rows_by_code.setdefault(
-            code,
-            {
-                "code": code,
-                "name": item.get("name"),
-                "industry": item.get("industry"),
-                "final_stage": "rule_scan",
-                "final_status": "active",
-                "final_reason": "进入规则扫描",
-            },
-        )
-        if not row.get("trace"):
-            row["trace"] = []
-            _append_trace_step(row, "prefilter_pass", True, "进入规则扫描")
-        row["name"] = row.get("name") or item.get("name")
-        row["industry"] = row.get("industry") or item.get("industry")
-        row["rule_gate"] = item
-        if not item.get("passed"):
-            _append_trace_step(
-                row,
-                "skill_gate",
-                False,
-                item.get("reason") or "规则门未通过",
-                best_skill_id=item.get("best_skill_id"),
-                best_gate_score=item.get("best_gate_score"),
-                prelim_score=item.get("prelim_score"),
-            )
-            row["final_stage"] = "skill_gate"
-            row["final_status"] = "filtered"
-            row["final_reason"] = item.get("reason") or "规则门未通过"
-        elif not item.get("review_selected", True):
-            _append_trace_step(
-                row,
-                "skill_gate",
-                True,
-                item.get("reason") or "规则门通过",
-                best_skill_id=item.get("best_skill_id"),
-                best_gate_score=item.get("best_gate_score"),
-                prelim_score=item.get("prelim_score"),
-            )
-            _append_trace_step(
-                row,
-                "skill_review_limit",
-                False,
-                item.get("review_limit_reason") or "规则门通过，但未进入本次深审容量",
-                review_skill_ids=item.get("review_skill_ids") or [],
-            )
-            row["final_stage"] = "skill_review_limit"
-            row["final_status"] = "filtered"
-            row["final_reason"] = item.get("review_limit_reason") or "规则门通过，但未进入本次深审容量"
-        elif row.get("final_status") != "filtered":
-            _append_trace_step(
-                row,
-                "skill_gate",
-                True,
-                item.get("reason") or "规则门通过，进入 Skill 深审",
-                best_skill_id=item.get("best_skill_id"),
-                best_gate_score=item.get("best_gate_score"),
-                prelim_score=item.get("prelim_score"),
-            )
-            _append_trace_step(
-                row,
-                "skill_review",
-                True,
-                "进入 Skill 深审",
-                review_skill_ids=item.get("review_skill_ids") or [],
-            )
-            row["final_stage"] = "skill_review"
-            row["final_status"] = "active"
-            row["final_reason"] = "进入 Skill 深审"
-
-    recommended_codes = {str(card.get("code") or "") for card in recommended_cards}
-    score_rows: list[dict[str, Any]] = []
-    for card in scored_cards:
-        code = str(card.get("code") or "")
-        if not code:
-            continue
-        score_line_meta = card.get("score_line_meta") or {}
-        execution_viability = card.get("execution_viability") or {}
-        final_score = float(card.get("final_score") or 0)
-        effective_line = float(score_line_meta.get("effective_score_line") or 0)
-        passed = code in recommended_codes or bool(score_line_meta.get("passed"))
-        score_gap = round(final_score - effective_line, 2) if effective_line else None
-        if bool(score_line_meta.get("execution_blocked")):
-            score_reason = str(score_line_meta.get("block_reason") or "入场不可成交，未纳入正式推荐")
-        else:
-            score_reason = "达到正式分数线" if passed else f"最终分 {round(final_score, 2)} 低于有效线 {round(effective_line, 2)}"
-        score_row = {
-            "code": code,
-            "final_score": round(final_score, 2),
-            "effective_score_line": round(effective_line, 2),
-            "score_gap": score_gap,
-            "passed": passed,
-            "reason": score_reason,
-            "evidence_quality_score": float(card.get("evidence_quality_score") or 0),
-            "data_completeness_score": float(card.get("data_completeness_score") or 0),
-            "score_breakdown": card.get("score_breakdown") or {},
-            "score_line_meta": score_line_meta,
-            "risk_tags": card.get("risk_flags") or card.get("risk_tags") or [],
-            "info_tags": card.get("info_tags") or [],
-            "setup_type": card.get("setup_type"),
-            "data_authenticity": float(card.get("data_authenticity") or 0),
-            "data_quality": card.get("data_quality") or {},
-            "raw_component_scores": card.get("raw_component_scores") or (card.get("score_breakdown") or {}).get("raw_scores") or {},
-            "weighted_component_scores": card.get("weighted_component_scores") or (card.get("score_breakdown") or {}).get("weighted_scores") or {},
-            "aggregation_weights": card.get("aggregation_weights") or (card.get("score_breakdown") or {}).get("weights") or {},
-            "component_scale": card.get("component_scale"),
-            "consensus_boost": card.get("consensus_boost") or (card.get("score_breakdown") or {}).get("consensus_boost"),
-            "consensus_tags": card.get("consensus_tags") or [],
-            "quality_cap": (card.get("score_breakdown") or {}).get("quality_cap"),
-            "market_regime": card.get("market_regime"),
-            "market_discipline": card.get("market_discipline") or {},
-            "execution_viability": execution_viability,
-            "skill_disagreement": card.get("skill_disagreement") or {},
-            "strategy_signal_count": len(card.get("strategy_signals") or []),
-        }
-        score_rows.append(score_row)
-        row = rows_by_code.setdefault(
-            code,
-            {
-                "code": code,
-                "name": card.get("name"),
-                "industry": card.get("industry"),
-                "trace": [],
-            },
-        )
-        if not row.get("trace"):
-            _append_trace_step(row, "prefilter_pass", True, "进入聚合评分")
-            _append_trace_step(row, "skill_review", True, "进入聚合评分")
-        row["name"] = row.get("name") or card.get("name")
-        row["industry"] = row.get("industry") or card.get("industry")
-        row["score_line"] = score_row
-        _append_trace_step(
-            row,
-            "score_line",
-            passed,
-            score_reason,
-            final_score=round(final_score, 2),
-            effective_score_line=round(effective_line, 2),
-            score_gap=score_gap,
-            evidence_adjustment=score_line_meta.get("evidence_adjustment"),
-            execution_adjustment=score_line_meta.get("execution_adjustment"),
-            execution_status=score_line_meta.get("execution_status"),
-            adjustment_reasons=score_line_meta.get("reasons") or [],
-        )
-        if passed:
-            row["final_stage"] = "recommended"
-            row["final_status"] = "recommended"
-            row["final_reason"] = score_reason
-        else:
-            row["final_stage"] = "score_line"
-            row["final_status"] = "filtered"
-            row["final_reason"] = score_reason
-
-    rows = list(rows_by_code.values())
-    for row in rows:
-        row["trace_summary"] = _trace_summary(row.get("trace") or [])
-    rows.sort(
-        key=lambda row: (
-            _filter_stage_order(str(row.get("final_stage") or "")),
-            -float(((row.get("score_line") or {}).get("final_score") or 0)),
-            str(row.get("code") or ""),
-        )
-    )
-
-    reason_counts: dict[str, dict[str, int]] = {}
-    for row in rows:
-        stage = str(row.get("final_stage") or "unknown")
-        reason = str(row.get("final_reason") or "-")
-        reason_counts.setdefault(stage, {})
-        reason_counts[stage][reason] = reason_counts[stage].get(reason, 0) + 1
-
-    distributions = _build_filter_distributions(
-        rows=rows,
-        scored_cards=scored_cards,
-        recommended_cards=recommended_cards,
-        score_rows=score_rows,
-    )
-
-    stage_summary = _build_filter_stage_summary(
-        pipeline=pipeline,
-        prefilter_audit=prefilter_audit or {},
-        skill_gate_audit=skill_gate_audit or {},
-        scored_count=len(scored_cards),
-        recommended_count=len(recommended_cards),
-        reason_counts=reason_counts,
-    )
-    return {
-        "stage_summary": stage_summary,
-        "distributions": distributions,
-        "reason_counts": reason_counts,
-        "rows": rows,
-    }
-
-
-def _filter_stage_order(stage: str) -> int:
-    order = {
-        "prefilter_common": 10,
-        "prefilter_skill": 20,
-        "skill_gate": 30,
-        "skill_review_limit": 40,
-        "score_line": 50,
-        "recommended": 60,
-        "prefilter_pass": 70,
-        "skill_review": 80,
-    }
-    return order.get(stage, 99)
-
-
-def _append_trace_step(row: dict[str, Any], stage: str, passed: bool, reason: Any, **detail: Any) -> None:
-    trace = row.setdefault("trace", [])
-    step: dict[str, Any] = {
-        "stage": stage,
-        "label": _filter_stage_label(stage),
-        "passed": bool(passed),
-        "reason": str(reason or ("通过" if passed else "未通过")),
-    }
-    for key, value in detail.items():
-        if value is None or value == "":
-            continue
-        step[key] = value
-    trace.append(step)
-
-
-def _filter_stage_label(stage: str) -> str:
-    labels = {
-        "prefilter_common": "公共预过滤",
-        "prefilter_skill": "Skill 预过滤",
-        "prefilter_pass": "预过滤通过",
-        "skill_gate": "规则门",
-        "skill_review_limit": "深审容量",
-        "skill_review": "Skill 深审",
-        "score_line": "分数线",
-        "recommended": "正式推荐",
-    }
-    return labels.get(stage, stage)
-
-
-def _trace_summary(trace: list[dict[str, Any]]) -> str:
-    if not trace:
-        return ""
-    fragments = []
-    for item in trace:
-        label = item.get("label") or _filter_stage_label(str(item.get("stage") or ""))
-        marker = "过" if item.get("passed") else "止"
-        fragments.append(f"{label}:{marker}")
-        if item.get("passed") is False:
-            break
-    return " -> ".join(fragments)
-
-
-def _upgrade_filter_audit(audit: dict[str, Any]) -> dict[str, Any]:
-    """补齐旧 Run 的逐票路径和完整分布，避免只能重跑后才能审计。"""
-    if not isinstance(audit, dict):
-        return {}
-    rows = audit.get("rows") or []
-    if not isinstance(rows, list):
-        return audit
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        if not row.get("trace"):
-            row["trace"] = _trace_from_audit_row(row)
-        row["trace_summary"] = row.get("trace_summary") or _trace_summary(row.get("trace") or [])
-
-    distributions = audit.get("distributions") or {}
-    if rows and not {"final_stage", "data_completeness_all", "score_line_adjustment_reason"}.issubset(set(distributions.keys())):
-        scored_cards: list[dict[str, Any]] = []
-        recommended_cards: list[dict[str, Any]] = []
-        score_rows: list[dict[str, Any]] = []
-        for row in rows:
-            if not isinstance(row, dict) or not isinstance(row.get("score_line"), dict):
-                continue
-            score_row = dict(row.get("score_line") or {})
-            card = _score_card_from_audit_row(row, score_row)
-            score_rows.append(score_row)
-            scored_cards.append(card)
-            if row.get("final_status") == "recommended" or score_row.get("passed"):
-                recommended_cards.append(card)
-        upgraded_distributions = _build_filter_distributions(
-            rows=[row for row in rows if isinstance(row, dict)],
-            scored_cards=scored_cards,
-            recommended_cards=recommended_cards,
-            score_rows=score_rows,
-        )
-        audit["distributions"] = {**distributions, **upgraded_distributions}
-    return audit
-
-
-def _trace_from_audit_row(row: dict[str, Any]) -> list[dict[str, Any]]:
-    traced: dict[str, Any] = {"trace": []}
-    prefilter = row.get("prefilter") if isinstance(row.get("prefilter"), dict) else {}
-    rule_gate = row.get("rule_gate") if isinstance(row.get("rule_gate"), dict) else {}
-    score_line = row.get("score_line") if isinstance(row.get("score_line"), dict) else {}
-
-    if prefilter:
-        common_pass = bool(prefilter.get("common_pass", row.get("final_stage") != "prefilter_common"))
-        _append_trace_step(
-            traced,
-            "prefilter_common",
-            common_pass,
-            prefilter.get("common_reason") or ("公共可交易过滤通过" if common_pass else row.get("final_reason")),
-            amount_yi=prefilter.get("amount_yi"),
-            turnover_rate=prefilter.get("turnover_rate"),
-            pct=prefilter.get("pct"),
-        )
-        if common_pass:
-            prefilter_pass = bool(prefilter.get("passed", row.get("final_stage") not in {"prefilter_skill", "prefilter_common"}))
-            _append_trace_step(
-                traced,
-                "prefilter_pass" if prefilter_pass else "prefilter_skill",
-                prefilter_pass,
-                prefilter.get("reason") or ("技能预过滤命中" if prefilter_pass else row.get("final_reason")),
-                skill_pass_ids=prefilter.get("skill_pass_ids") or [],
-                prefilter_source=prefilter.get("prefilter_source"),
-            )
-
-    if rule_gate:
-        gate_pass = bool(rule_gate.get("passed"))
-        _append_trace_step(
-            traced,
-            "skill_gate",
-            gate_pass,
-            rule_gate.get("reason") or ("规则门通过" if gate_pass else row.get("final_reason")),
-            best_skill_id=rule_gate.get("best_skill_id"),
-            best_gate_score=rule_gate.get("best_gate_score"),
-            prelim_score=rule_gate.get("prelim_score"),
-        )
-        if gate_pass and rule_gate.get("review_selected") is False:
-            _append_trace_step(
-                traced,
-                "skill_review_limit",
-                False,
-                rule_gate.get("review_limit_reason") or row.get("final_reason") or "规则门通过，但未进入本次深审容量",
-                review_skill_ids=rule_gate.get("review_skill_ids") or [],
-            )
-        elif gate_pass:
-            _append_trace_step(
-                traced,
-                "skill_review",
-                True,
-                "进入 Skill 深审",
-                review_skill_ids=rule_gate.get("review_skill_ids") or [],
-            )
-
-    if score_line:
-        final_score = score_line.get("final_score")
-        effective_line = score_line.get("effective_score_line")
-        try:
-            gap = round(float(final_score or 0) - float(effective_line or 0), 2) if effective_line is not None else score_line.get("score_gap")
-        except (TypeError, ValueError):
-            gap = score_line.get("score_gap")
-        meta = score_line.get("score_line_meta") or {}
-        _append_trace_step(
-            traced,
-            "score_line",
-            bool(score_line.get("passed") or row.get("final_status") == "recommended"),
-            score_line.get("reason") or row.get("final_reason") or "分数线判断",
-            final_score=final_score,
-            effective_score_line=effective_line,
-            score_gap=gap,
-            evidence_adjustment=meta.get("evidence_adjustment") if isinstance(meta, dict) else None,
-            adjustment_reasons=(meta.get("reasons") if isinstance(meta, dict) else None) or [],
-        )
-
-    if not traced["trace"]:
-        _append_trace_step(
-            traced,
-            str(row.get("final_stage") or "unknown"),
-            row.get("final_status") != "filtered",
-            row.get("final_reason") or "无路径明细",
-        )
-    return traced["trace"]
-
-
-def _score_card_from_audit_row(row: dict[str, Any], score_row: dict[str, Any]) -> dict[str, Any]:
-    breakdown = score_row.get("score_breakdown") if isinstance(score_row.get("score_breakdown"), dict) else {}
-    raw_scores = score_row.get("raw_component_scores") or breakdown.get("raw_scores") or {}
-    weighted_scores = score_row.get("weighted_component_scores") or breakdown.get("weighted_scores") or {}
-    weights = score_row.get("aggregation_weights") or breakdown.get("weights") or {}
-    return {
-        **score_row,
-        "code": row.get("code"),
-        "name": row.get("name"),
-        "industry": row.get("industry"),
-        "final_score": score_row.get("final_score"),
-        "evidence_quality_score": score_row.get("evidence_quality_score"),
-        "data_completeness_score": score_row.get("data_completeness_score"),
-        "data_authenticity": score_row.get("data_authenticity"),
-        "data_quality": score_row.get("data_quality") or {},
-        "score_breakdown": breakdown,
-        "raw_component_scores": raw_scores,
-        "weighted_component_scores": weighted_scores,
-        "aggregation_weights": weights,
-        "risk_flags": score_row.get("risk_tags") or [],
-        "info_tags": score_row.get("info_tags") or [],
-        "score_line_meta": score_row.get("score_line_meta") or {},
-        "execution_viability": score_row.get("execution_viability") or {},
-        "market_regime": score_row.get("market_regime"),
-        "setup_type": score_row.get("setup_type"),
-    }
-
-
-def _build_filter_stage_summary(
-    *,
-    pipeline: dict[str, Any],
-    prefilter_audit: dict[str, Any],
-    skill_gate_audit: dict[str, Any],
-    scored_count: int,
-    recommended_count: int,
-    reason_counts: dict[str, dict[str, int]],
-) -> list[dict[str, Any]]:
-    return candidate_trace.build_stage_summary(
-        pipeline=pipeline,
-        prefilter_audit=prefilter_audit,
-        skill_gate_audit=skill_gate_audit,
-        scored_count=scored_count,
-        recommended_count=recommended_count,
-        reason_counts=reason_counts,
-    )
-    unified = int(pipeline.get("unified_quote_total") or 0)
-    base = int(pipeline.get("base_filter_eligible_count") or 0)
-    scoped = int(pipeline.get("scoped_candidate_count") or prefilter_audit.get("input_count") or 0)
-    prefilter_pass = int(pipeline.get("prefilter_candidate_count") or prefilter_audit.get("prefilter_candidate_count") or 0)
-    actual_scan = int(pipeline.get("actual_scan_count") or prefilter_pass)
-    skill_input = int(pipeline.get("skill_input_count") or 0)
-    reviewed_success = int(pipeline.get("skill_review_success_count") or 0)
-    agent_review_disabled = bool(pipeline.get("agent_review_disabled") or (skill_gate_audit or {}).get("agent_review_disabled"))
-    failure_audit = pipeline.get("skill_review_failure_audit") if isinstance(pipeline.get("skill_review_failure_audit"), dict) else {}
-    review_reason_counts = dict(failure_audit.get("reason_counts") or {})
-    if not review_reason_counts and skill_input > reviewed_success and not agent_review_disabled:
-        review_reason_counts = {"agent_review_failed": max(0, skill_input - reviewed_success)}
-    if agent_review_disabled and skill_input:
-        review_reason_counts = {"agent_review_disabled": skill_input}
-    return [
-        {
-            "stage": "market_universe",
-            "label": "全市场 -> 基础合格",
-            "input_count": unified,
-            "pass_count": base,
-            "filtered_count": max(0, unified - base),
-            "reason_counts": pipeline.get("skip_reasons", {}).get("base_filter", {}),
-        },
-        {
-            "stage": "scope_recall",
-            "label": "基础合格 -> 范围候选",
-            "input_count": base,
-            "pass_count": scoped,
-            "filtered_count": max(0, base - scoped),
-            "reason_counts": {},
-        },
-        {
-            "stage": "prefilter",
-            "label": "范围候选 -> 预过滤",
-            "input_count": int(prefilter_audit.get("input_count") or scoped),
-            "pass_count": prefilter_pass,
-            "filtered_count": max(0, int(prefilter_audit.get("input_count") or scoped) - prefilter_pass),
-            "reason_counts": _merge_reason_counts(
-                reason_counts.get("prefilter_common") or {},
-                reason_counts.get("prefilter_skill") or {},
-            ),
-        },
-        {
-            "stage": "skill_gate",
-            "label": "规则扫描 -> Skill 深审",
-            "input_count": actual_scan,
-            "pass_count": skill_input,
-            "filtered_count": max(0, actual_scan - skill_input),
-            "reason_counts": skill_gate_audit.get("reason_counts") or reason_counts.get("skill_gate") or {},
-        },
-        {
-            "stage": "skill_review",
-            "label": "Skill 深审 -> 可聚合",
-            "input_count": skill_input,
-            "pass_count": scored_count,
-            "filtered_count": max(0, skill_input - scored_count),
-            "reason_counts": review_reason_counts,
-        },
-        {
-            "stage": "score_line",
-            "label": "最终分 -> 正式出票",
-            "input_count": scored_count,
-            "pass_count": recommended_count,
-            "filtered_count": max(0, scored_count - recommended_count),
-            "reason_counts": reason_counts.get("score_line") or {},
-        },
-    ]
-
-
-def _apply_skill_review_failure_audit_to_stage_summary(
-    stage_summary: list[dict[str, Any]],
-    failure_audit: dict[str, Any],
-) -> None:
-    reason_counts = failure_audit.get("reason_counts") or {}
-    if not reason_counts:
-        return
-    for row in stage_summary:
-        if isinstance(row, dict) and row.get("stage") == "skill_review":
-            row["reason_counts"] = reason_counts
-            return
-
-
-def _build_filter_distributions(
-    *,
-    rows: list[dict[str, Any]],
-    scored_cards: list[dict[str, Any]],
-    recommended_cards: list[dict[str, Any]],
-    score_rows: list[dict[str, Any]],
-) -> dict[str, dict[str, int]]:
-    recommended_codes = {str(card.get("code") or "") for card in recommended_cards}
-    filtered_scored_cards = [card for card in scored_cards if str(card.get("code") or "") not in recommended_codes]
-    rule_gate_rows = [row.get("rule_gate") or {} for row in rows if row.get("rule_gate")]
-
-    distributions: dict[str, dict[str, int]] = {
-        "final_stage": _categorical_distribution([row.get("final_stage") for row in rows]),
-        "final_status": _categorical_distribution([row.get("final_status") for row in rows]),
-        "industry": _categorical_distribution([row.get("industry") for row in rows], limit=12),
-        "prefilter_stage": _categorical_distribution([(row.get("prefilter") or {}).get("stage") for row in rows if row.get("prefilter")]),
-        "prefilter_source": _categorical_distribution([(row.get("prefilter") or {}).get("prefilter_source") for row in rows if row.get("prefilter")]),
-        "skill_gate_result": _categorical_distribution(_skill_gate_result(row) for row in rule_gate_rows),
-        "skill_gate_reason": _categorical_distribution(_skill_gate_reason_bucket(row) for row in rule_gate_rows),
-        "score_line_result": _categorical_distribution(["通过" if row.get("passed") else "未通过" for row in score_rows]),
-        "execution_status": _categorical_distribution(
-            ((row.get("execution_viability") or {}).get("status") or "unknown") for row in score_rows
-        ),
-        "score_line_adjustment_reason": _list_distribution(
-            (row.get("score_line_meta") or {}).get("reasons") or ["无附加证据惩罚"] for row in score_rows
-        ),
-        "setup_type": _categorical_distribution([row.get("setup_type") or "未分类" for row in score_rows]),
-        "market_regime": _categorical_distribution([row.get("market_regime") for row in score_rows], limit=10),
-        "prelim_score": _numeric_distribution(
-            _numeric_values(rule_gate_rows, "prelim_score"),
-            buckets=[0, 50, 60, 70, 80, 90],
-        ),
-        "best_gate_score": _numeric_distribution(
-            _numeric_values(rule_gate_rows, "best_gate_score"),
-            buckets=[0, 58, 70, 80, 90],
-        ),
-        "final_score_all": _score_distribution(scored_cards),
-        "final_score_filtered": _score_distribution(filtered_scored_cards),
-        "final_score_recommended": _score_distribution(recommended_cards),
-        "effective_score_line": _numeric_distribution(
-            _numeric_values(score_rows, "effective_score_line"),
-            buckets=[0, 60, 70, 75, 80, 85, 90],
-        ),
-        "score_gap": _score_gap_distribution(score_rows),
-        "evidence_quality_all": _quality_distribution(scored_cards),
-        "data_completeness_all": _numeric_distribution(
-            _numeric_values(score_rows, "data_completeness_score"),
-            buckets=[0, 50, 65, 75, 90, 100],
-        ),
-        "data_authenticity_all": _numeric_distribution(
-            _numeric_values(score_rows, "data_authenticity"),
-            buckets=[0, 0.5, 0.75, 0.9, 1.0],
-        ),
-        "quality_cap": _numeric_distribution(
-            _numeric_values(score_rows, "quality_cap"),
-            buckets=[0, 60, 70, 80, 90, 100],
-        ),
-        "consensus_boost": _numeric_distribution(
-            _numeric_values(score_rows, "consensus_boost"),
-            buckets=[0, 0.8, 0.95, 1.0, 1.05, 1.15],
-        ),
-        "score_line_adjustment": _numeric_distribution(
-            [float((row.get("score_line_meta") or {}).get("evidence_adjustment") or 0) for row in score_rows],
-            buckets=[0, 2, 4, 6, 8, 10, 14],
-        ),
-        "execution_adjustment": _numeric_distribution(
-            [float((row.get("score_line_meta") or {}).get("execution_adjustment") or 0) for row in score_rows],
-            buckets=[0, 2, 4, 6, 8, 10, 14],
-        ),
-        "risk_tag_count": _count_distribution(len(row.get("risk_tags") or []) for row in score_rows),
-        "info_tag_count": _count_distribution(len(row.get("info_tags") or []) for row in score_rows),
-        "risk_tags": _list_distribution(row.get("risk_tags") or [] for row in score_rows),
-        "info_tags": _list_distribution(row.get("info_tags") or [] for row in score_rows),
-        "missing_fields": _list_distribution((row.get("data_quality") or {}).get("missing_fields") or [] for row in score_rows),
-        "data_source_breakdown": _source_breakdown_distribution(score_rows),
-        "pct": _numeric_distribution(_numeric_values(rows, "pct"), buckets=[-20, -10, -5, 0, 3, 7, 10, 20]),
-        "amount_yi": _numeric_distribution(_numeric_values(rows, "amount_yi"), buckets=[0, 1.5, 3, 5, 10, 20, 50]),
-        "turnover_rate": _numeric_distribution(_numeric_values(rows, "turnover_rate"), buckets=[0, 1, 3, 6, 10, 12, 20]),
-    }
-
-    for component in ("skill_agent", "strategy_rule", "market", "risk", "evidence"):
-        distributions[f"raw_{component}"] = _component_distribution(
-            score_rows,
-            "raw_component_scores",
-            component,
-            buckets=[0, 20, 40, 60, 80, 100],
-        )
-        distributions[f"weighted_{component}"] = _component_distribution(
-            score_rows,
-            "weighted_component_scores",
-            component,
-            buckets=[0, 5, 10, 20, 35, 50],
-        )
-    return {key: value for key, value in distributions.items() if value}
-
-
-def _skill_gate_result(row: dict[str, Any]) -> str:
-    if not row.get("passed"):
-        return "规则门未通过"
-    if row.get("review_selected") is False:
-        return "通过但容量截断"
-    return "进入深审"
-
-
-def _skill_gate_reason_bucket(row: dict[str, Any]) -> str:
-    if row.get("review_selected") is False:
-        return "review_limit"
-    return str(row.get("reason_key") or ("gate_pass" if row.get("passed") else "filtered"))
-
-
-def _categorical_distribution(values: Any, limit: int = 12) -> dict[str, int]:
-    counter: Counter[str] = Counter()
-    for value in values:
-        if value is None or value == "":
-            continue
-        counter[str(value)] += 1
-    if not counter:
-        return {}
-    items = sorted(counter.items(), key=lambda item: (-item[1], item[0]))
-    if limit and len(items) > limit:
-        head = items[:limit]
-        tail_count = sum(count for _, count in items[limit:])
-        items = head + [("其他", tail_count)]
-    return {key: int(count) for key, count in items if count > 0}
-
-
-def _list_distribution(values: Any, limit: int = 12) -> dict[str, int]:
-    counter: Counter[str] = Counter()
-    for value in values:
-        if isinstance(value, (list, tuple, set)):
-            for item in value:
-                if item is None or item == "":
-                    continue
-                counter[str(item)] += 1
-        elif value is not None and value != "":
-            counter[str(value)] += 1
-    if not counter:
-        return {}
-    items = sorted(counter.items(), key=lambda item: (-item[1], item[0]))
-    if limit and len(items) > limit:
-        head = items[:limit]
-        tail_count = sum(count for _, count in items[limit:])
-        items = head + [("其他", tail_count)]
-    return {key: int(count) for key, count in items if count > 0}
-
-
-def _count_distribution(values: Any) -> dict[str, int]:
-    counter: Counter[str] = Counter(str(int(value or 0)) for value in values)
-    return {key: int(counter[key]) for key in sorted(counter, key=lambda item: int(item))}
-
-
-def _numeric_values(rows: list[dict[str, Any]], key: str) -> list[float]:
-    values: list[float] = []
-    for row in rows:
-        value = row.get(key)
-        if value is None or value == "":
-            continue
-        try:
-            values.append(float(value))
-        except (TypeError, ValueError):
-            continue
-    return values
-
-
-def _component_distribution(
-    rows: list[dict[str, Any]],
-    source_key: str,
-    component: str,
-    buckets: list[float],
-) -> dict[str, int]:
-    values: list[float] = []
-    for row in rows:
-        scores = row.get(source_key) or {}
-        value = scores.get(component) if isinstance(scores, dict) else None
-        if value is None:
-            continue
-        try:
-            values.append(float(value))
-        except (TypeError, ValueError):
-            continue
-    return _numeric_distribution(values, buckets) if values else {}
-
-
-def _source_breakdown_distribution(rows: list[dict[str, Any]], limit: int = 12) -> dict[str, int]:
-    counter: Counter[str] = Counter()
-    for row in rows:
-        source_breakdown = (row.get("data_quality") or {}).get("source_breakdown") or {}
-        if not isinstance(source_breakdown, dict):
-            continue
-        for source, count in source_breakdown.items():
-            try:
-                counter[str(source)] += int(float(count or 0))
-            except (TypeError, ValueError):
-                continue
-    if not counter:
-        return {}
-    items = sorted(counter.items(), key=lambda item: (-item[1], item[0]))
-    if limit and len(items) > limit:
-        head = items[:limit]
-        tail_count = sum(count for _, count in items[limit:])
-        items = head + [("其他", tail_count)]
-    return {key: int(count) for key, count in items if count > 0}
-
-
-def _numeric_distribution(values: list[float], buckets: list[float]) -> dict[str, int]:
-    if not buckets or not values:
-        return {}
-    ordered = sorted(float(item) for item in buckets)
-    result: dict[str, int] = {}
-    for index, lower in enumerate(ordered):
-        if index + 1 < len(ordered):
-            upper = ordered[index + 1]
-            label = f"{lower:g}-{upper:g}"
-            result[label] = sum(1 for value in values if lower <= value < upper)
-        else:
-            label = f"{lower:g}+"
-            result[label] = sum(1 for value in values if value >= lower)
-    return result
-
-
-def _merge_reason_counts(*items: dict[str, int]) -> dict[str, int]:
-    return candidate_trace.merge_reason_counts(*items)
-
-
-def _score_gap_distribution(rows: list[dict[str, Any]]) -> dict[str, int]:
-    buckets = {">=5": 0, "0-5": 0, "-5-0": 0, "-10--5": 0, "<-10": 0, "unknown": 0}
-    for row in rows:
-        gap = row.get("score_gap")
-        if gap is None:
-            buckets["unknown"] += 1
-        elif float(gap) >= 5:
-            buckets[">=5"] += 1
-        elif float(gap) >= 0:
-            buckets["0-5"] += 1
-        elif float(gap) >= -5:
-            buckets["-5-0"] += 1
-        elif float(gap) >= -10:
-            buckets["-10--5"] += 1
-        else:
-            buckets["<-10"] += 1
-    return buckets
-
-
-def _fallback_filter_audit(summary: dict[str, Any], pipeline: dict[str, Any], recommended_count: int) -> dict[str, Any]:
-    return candidate_trace.fallback_filter_audit(summary, pipeline, recommended_count)
-
-
-def _score_distribution(cards: list[dict[str, Any]]) -> dict[str, int]:
-    return candidate_trace.score_distribution(cards)
-
-
-def _quality_distribution(cards: list[dict[str, Any]]) -> dict[str, int]:
-    return candidate_trace.quality_distribution(cards)
-
-
-def _coverage_heatmap(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return candidate_trace.coverage_heatmap(cards)
-
-
 def _build_run_summary(
     cards: list[dict[str, Any]],
     saved: list[Recommendation],
@@ -5007,253 +3209,6 @@ def _build_run_summary(
         "scan_limited": pipeline.get("scan_limited", False),
         "skill_limited": pipeline.get("skill_limited", False),
         "skip_reasons": pipeline.get("skip_reasons", {}),
-    }
-
-
-def _replace_preset_skills(db: Session, preset_id: str, skills: list[dict[str, Any]]) -> None:
-    existing = db.scalars(select(PresetSkill).where(PresetSkill.preset_id == preset_id)).all()
-    for row in existing:
-        db.delete(row)
-    # 显式 flush：确保 DELETE 先落库，否则同事务内 INSERT 与待删旧行主键/唯一键冲突（uq_preset_skill）。
-    db.flush()
-    for index, item in enumerate(skills):
-        db.add(
-            PresetSkill(
-                id=f"{preset_id}:{item['skill_id']}",
-                preset_id=preset_id,
-                skill_id=str(item["skill_id"]),
-                weight=float(item.get("weight") or 1.0),
-                sort_order=int(item.get("sort_order") or index),
-            )
-        )
-
-
-def _write_install_manifest(target: Path, skill_id: str, source: str) -> None:
-    manifest_path = target / "manifest.json"
-    manifest = _loads(manifest_path.read_text(encoding="utf-8") if manifest_path.exists() else None, {})
-    if not isinstance(manifest, dict):
-        manifest = {}
-    manifest.setdefault("name", skill_id)
-    manifest["id"] = skill_id
-    manifest["enabled"] = manifest.get("enabled", True)
-    manifest["source_type"] = "github" if source.startswith(("http://", "https://")) else "local"
-    manifest["source_url"] = source
-    manifest_path.write_text(json.dumps(_json_safe(manifest), ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def _ensure_default_presets(db: Session, skills: list[StrategySkill]) -> None:
-    has_changes = False
-    for item in DEFAULT_PRESETS:
-        preset = db.get(Preset, item["preset_id"])
-        configured_data_source = _normalize_data_source(item.get("data_source") or DEFAULT_RECOMMENDATION_DATA_SOURCE)
-        if preset is None:
-            preset = Preset(
-                preset_id=item["preset_id"],
-                name=item["name"],
-                description=item["description"],
-                market_scope=item["market_scope"],
-                market_scope_value=item["market_scope_value"],
-                risk_template=item["risk_template"],
-                score_line=item["score_line"],
-                output_count=item["output_count"],
-                bucket_limits_json="{}",
-                data_source=configured_data_source,
-                hide_recent_repeats=item["hide_recent_repeats"],
-                skip_aux_refresh=item.get("skip_aux_refresh", False),
-                status="active",
-            )
-            db.add(preset)
-            db.flush()
-            desired_skills = _default_preset_skill_rows(item, skills)
-            _replace_preset_skills(db, item["preset_id"], desired_skills)
-            has_changes = True
-            continue
-
-        if (
-            not str(preset.data_source or "").strip()
-            or (
-                preset.preset_id == item["preset_id"]
-                and preset.data_source == DATA_SOURCE_LOCAL_POOL
-                and configured_data_source == DEFAULT_RECOMMENDATION_DATA_SOURCE
-            )
-        ):
-            preset.data_source = configured_data_source
-            has_changes = True
-        if float(preset.score_line or 0) <= 0:
-            preset.score_line = float(item["score_line"])
-            has_changes = True
-        has_skill_rows = bool(
-            db.scalar(
-                select(PresetSkill.id)
-                .where(PresetSkill.preset_id == item["preset_id"])
-                .limit(1)
-            )
-        )
-        if not has_skill_rows:
-            desired_skills = _default_preset_skill_rows(item, skills)
-            if desired_skills:
-                _replace_preset_skills(db, item["preset_id"], desired_skills)
-                has_changes = True
-    if has_changes:
-        db.commit()
-
-
-def repair_preset_registration(db: Session, skills: list[StrategySkill]) -> None:
-    """T1 策略注册自愈（仅加法，绝不删除）。
-
-    根因：``_ensure_default_presets`` 仅在预设「无任何 skill 行」时才用
-    ``_default_preset_skill_rows`` 全量填充；一旦预设已有部分 skill 行
-    （如 ``preset_formal_opening`` 长期只有 2/9 策略），后续新声明该组的策略
-    （含 ``trend-pullback-continuation``）永远不会被加入，导致其从未在每日 formal run
-    中被调用，违反北极星 C「每个策略有独立可查战绩」。
-
-    本函数做加法修复：仅为缺失项 INSERT ``PresetSkill`` 行，绝不 DELETE 任何已有行
-    （保留人工策展的权重/排序），幂等可重复调用，接入 ``sync_skills`` 后每次同步自愈。
-    """
-    has_changes = False
-    for item in DEFAULT_PRESETS:
-        preset_id = item["preset_id"]
-        desired = _default_preset_skill_rows(item, skills)
-        if not desired:
-            continue
-        existing_ids = set(
-            db.scalars(
-                select(PresetSkill.skill_id).where(PresetSkill.preset_id == preset_id)
-            ).all()
-        )
-        for row in desired:
-            sid = str(row["skill_id"])
-            if sid in existing_ids:
-                continue
-            db.add(
-                PresetSkill(
-                    id=f"{preset_id}:{sid}",
-                    preset_id=preset_id,
-                    skill_id=sid,
-                    weight=float(row.get("weight") or 1.0),
-                    sort_order=int(row.get("sort_order") or 0),
-                )
-            )
-            has_changes = True
-    if has_changes:
-        db.commit()
-
-
-def _default_preset_skill_rows(preset_config: dict[str, Any], skills: list[StrategySkill]) -> list[dict[str, Any]]:
-    groups = {str(group) for group in preset_config.get("skill_groups", []) if str(group).strip()}
-    if not groups:
-        return []
-    rows: list[dict[str, Any]] = []
-    for skill in skills:
-        meta = (skill.contract or {}).get("meta") or {}
-        group_config = meta.get("default_preset_groups") or {}
-        if not isinstance(group_config, dict):
-            continue
-        for group in groups:
-            if group not in group_config:
-                continue
-            spec = group_config[group]
-            if isinstance(spec, dict):
-                weight = float(spec.get("weight") or 1.0)
-                sort_order = int(spec.get("sort_order") or len(rows))
-            elif isinstance(spec, (int, float)):
-                weight = float(spec)
-                sort_order = len(rows)
-            elif spec is True:
-                weight = float((skill.contract or {}).get("weight") or 1.0)
-                sort_order = len(rows)
-            else:
-                continue
-            rows.append({"skill_id": skill.skill_id, "weight": weight, "sort_order": sort_order})
-            break
-    return sorted(rows, key=lambda row: (int(row.get("sort_order") or 0), str(row.get("skill_id") or "")))
-
-
-def _skill_performance(db: Session, skill_id: str) -> dict[str, Any]:
-    _EMPTY: dict[str, Any] = {
-        "sample_count": 0, "triggered_count": 0, "trigger_rate": 0.0,
-        "hit_rate": 0.0, "avg_return": 0.0, "avg_score": 0.0, "failure_reasons": [],
-    }
-    # JSON_TABLE 把 skill_breakdown_json 展开为行，过滤下推到 MySQL，
-    # 避免拉取全量 runs → recs → Python JSON 解析（~1.2s/call → <50ms）。
-    agg_sql = text("""
-        WITH matched AS (
-            SELECT
-                COALESCE(jt.scr, 0)                              AS signal_score,
-                COALESCE(o.entry_triggered, 0)                   AS entry_triggered,
-                COALESCE(o.executed_return, o.close_return, 0)   AS resolved_return
-            FROM recommendation_runs rr
-            JOIN recommendations r          ON r.run_id = rr.run_id
-            JOIN JSON_TABLE(
-                r.skill_breakdown_json,
-                '$[*]' COLUMNS (
-                    sid VARCHAR(100) PATH '$.strategy_id',
-                    scr DOUBLE        PATH '$.score'
-                )
-            ) jt
-            LEFT JOIN recommendation_outcomes o
-                ON o.recommendation_id = r.recommendation_id
-            WHERE jt.sid = :skill_id
-        )
-        SELECT
-            COUNT(*)                                                      AS sample_count,
-            SUM(entry_triggered)                                          AS triggered_count,
-            SUM(CASE WHEN entry_triggered THEN resolved_return ELSE 0 END) AS total_return,
-            SUM(CASE WHEN entry_triggered AND resolved_return > :cost
-                     THEN 1 ELSE 0 END)                                   AS success_count,
-            SUM(signal_score)                                             AS total_score
-        FROM matched
-    """)
-    row = db.execute(agg_sql, {
-        "skill_id": skill_id, "cost": _ADDITIONAL_COST_PCT,
-    }).first()
-    if not row or (row.sample_count or 0) == 0:
-        return _EMPTY
-
-    sample_count: int = int(row.sample_count)
-    triggered_count: int = int(row.triggered_count or 0)
-    success_count: int = int(row.success_count or 0)
-    total_return: float = float(row.total_return or 0)
-    total_score: float = float(row.total_score or 0)
-
-    # 失败原因明细：仅在有失败记录时执行第二次查询
-    failures: dict[str, int] = {}
-    if triggered_count > success_count:
-        fail_sql = text("""
-            SELECT COALESCE(o.outcome_reason, '未达标') AS reason, COUNT(*) AS cnt
-            FROM recommendation_runs rr
-            JOIN recommendations r          ON r.run_id = rr.run_id
-            JOIN JSON_TABLE(
-                r.skill_breakdown_json,
-                '$[*]' COLUMNS (
-                    sid VARCHAR(100) PATH '$.strategy_id'
-                )
-            ) jt
-            JOIN recommendation_outcomes o  ON o.recommendation_id = r.recommendation_id
-            WHERE jt.sid = :skill_id
-              AND o.entry_triggered = 1
-              AND COALESCE(o.executed_return, o.close_return, 0) <= :cost
-            GROUP BY reason
-            ORDER BY cnt DESC
-            LIMIT 5
-        """)
-        for frow in db.execute(fail_sql, {
-            "skill_id": skill_id, "cost": _ADDITIONAL_COST_PCT,
-        }):
-            failures[frow.reason] = frow.cnt
-
-    return {
-        "sample_count": sample_count,
-        "triggered_count": triggered_count,
-        "trigger_rate": round(triggered_count / sample_count, 3) if sample_count else 0.0,
-        "hit_rate": round(success_count / triggered_count, 3) if triggered_count else 0.0,
-        "avg_return": round(total_return / max(1, triggered_count), 2) if triggered_count else 0.0,
-        "avg_score": round(total_score / sample_count, 2) if sample_count else 0.0,
-        "failure_reasons": sorted(
-            [{"reason": key, "count": count} for key, count in failures.items()],
-            key=lambda item: item["count"],
-            reverse=True,
-        )[:5],
     }
 
 
@@ -5391,16 +3346,6 @@ def _float_or_none(value: Any) -> float | None:
         return None
 
 
-def _skill_version_id(skill: StrategySkill) -> str:
-    contract_part = skill.contract_hash[:8] if skill.contract_hash else "none"
-    skill_part = skill.skill_hash[:8] if skill.skill_hash else "noskill"
-    return f"{skill.skill_id}:{skill.version}:{contract_part}:{skill_part}"
-
-
-def _slugify(value: str) -> str:
-    return hashlib.md5(value.encode("utf-8")).hexdigest()[:12]
-
-
 def _load_calibrated_agg_weights(db: Session) -> dict[str, float]:
     """Load calibrated aggregation weights from CalibrationConfig table.
 
@@ -5437,13 +3382,6 @@ def _loads(raw: str | None, default: Any) -> Any:
         return json.loads(raw)
     except json.JSONDecodeError:
         return default
-
-
-class PathLike(str):
-    def joinpath(self, *parts: str):
-        from pathlib import Path
-
-        return Path(self).joinpath(*parts)
 
 
 def _empty_market_snapshot() -> dict[str, Any]:

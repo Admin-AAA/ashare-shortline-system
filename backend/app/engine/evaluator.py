@@ -9,6 +9,16 @@ class UnsafeExpression(ValueError):
     pass
 
 
+# 策略 DSL 表达式的合法字段白名单：``_eval`` 只允许引用本集合内的字段名。
+#
+# 任务 2.2 起，因子框架声明的 ``output_fields`` 会由
+# ``app.services.factors.inject_factor_output_fields``（经 ``bootstrap_factor_allowlist``
+# 在因子注册完成后调用）**自动并入**本集合——新增因子无需再手工来此登记字段。
+# 注入为就地并集（只增不删、幂等），故不会影响下方已有条目。
+#
+# 下方硬编码条目暂时保留：现有 6 因子要到任务 2.3 才迁入因子框架，届时这些字段
+# 将由注入机制提供，可清理与之重复的硬编码项；在迁移前删除会打断策略对这些字段
+# 名的引用（变成谁都不提供的空窗），故清理留到 2.3 之后再做。
 ALLOWED_NAMES = {
     "amount_yi",
     "announcement_negative_count",

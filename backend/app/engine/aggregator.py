@@ -3,9 +3,11 @@ from typing import Any
 # 保持旧接口兼容：从 agent_skill_runner 导入 enrich_signal_with_agent_review
 # 调用方可以通过此模块直接访问该函数
 from app.engine.agent_skill_runner import enrich_signal_with_agent_review  # noqa: F401
+from app.engine.board_rules import (
+    is_one_word_limit_up_card as _is_one_word_limit_up_card,
+)
 from app.services.execution_constraints import (
     entry_no_liquidity_reason_from_card as _entry_no_liquidity_reason,
-    is_one_word_limit_up_card as _is_one_word_limit_up_card,
 )
 
 RISK_TEMPLATE_PENALTY = {

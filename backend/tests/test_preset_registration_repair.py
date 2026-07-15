@@ -4,11 +4,8 @@ from sqlalchemy import select
 
 from app.engine.skill_loader import load_skills
 from app.models.tables import PresetSkill
-from app.services.workbench_service import (
-    DEFAULT_PRESETS,
-    _default_preset_skill_rows,
-    repair_preset_registration,
-)
+from app.services.registry.data_source import DEFAULT_PRESETS
+from app.services.registry.presets import _default_preset_skill_rows, repair_preset_registration
 
 SKILLS_DIR = Path(__file__).resolve().parents[1] / "skills"
 

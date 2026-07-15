@@ -6,12 +6,20 @@ from collections import Counter, OrderedDict
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models.tables import DailyKbar, IndexDaily, LimitUpBoard, MinuteKbar, Recommendation, RecommendationRun, Stock, StockQuote
+from app.engine.trading_calendar import (
+    latest_allowed_bar_date as _latest_allowed_bar_date,
+    normalize_trade_date as _normalize_trade_date,
+)
+from app.services.market_pool.history_maturity import (
+    is_natural_short_history as _is_natural_short_history,
+    load_history_maturity_map as _load_history_maturity_map,
+)
+from app.models.tables import DailyKbar, IndexDaily, LimitUpBoard, MinuteKbar, Recommendation, RecommendationRun, StockQuote
 from app.services.data_health_service import clear_data_health_cache, diagnose_all
 from app.services.feature_builder import _compute_authenticity, _enrich_with_auxiliary_data, _tag_features
 from app.services.market_pool import (
@@ -824,52 +832,6 @@ def _local_pool_kline_gap_state(db: Session, *, min_bars: int) -> dict[str, Any]
 
     counts["gap_count"] = len(gaps)
     return {"counts": counts, "gaps": gaps}
-
-
-def _load_history_maturity_map(db: Session, codes: list[str]) -> dict[str, dict[str, str | None]]:
-    normalized_codes = [str(code or "").strip() for code in codes if str(code or "").strip()]
-    if not normalized_codes:
-        return {}
-    result: dict[str, dict[str, str | None]] = {}
-    first_bar_rows = db.execute(
-        select(
-            DailyKbar.code.label("code"),
-            func.min(DailyKbar.trade_date).label("first_bar_date"),
-        )
-        .where(DailyKbar.code.in_(normalized_codes))
-        .group_by(DailyKbar.code)
-    ).all()
-    for row in first_bar_rows:
-        result[str(row.code)] = {
-            "first_bar_date": _normalize_trade_date(row.first_bar_date),
-            "list_date": None,
-        }
-    stock_rows = db.execute(
-        select(Stock.code, Stock.list_date).where(Stock.code.in_(normalized_codes))
-    ).all()
-    for row in stock_rows:
-        item = result.setdefault(str(row.code), {"first_bar_date": None, "list_date": None})
-        item["list_date"] = _normalize_trade_date(row.list_date)
-    return result
-
-
-def _is_natural_short_history(
-    *,
-    bar_count: int,
-    latest_bar_date: str | None,
-    quote_date: str,
-    first_bar_date: str | None,
-    list_date: str | None,
-) -> bool:
-    return bool(
-        0 < int(bar_count or 0)
-        and latest_bar_date
-        and quote_date
-        and latest_bar_date >= quote_date
-        and first_bar_date
-        and list_date
-        and first_bar_date <= list_date
-    )
 
 
 def _candidate_quote_date(quote: dict[str, Any], latest_allowed: str) -> str:
@@ -1876,27 +1838,6 @@ def _closed_target_dates(dates: list[str], reference_trade_date: str, max_closed
     )
 
 
-def _latest_allowed_bar_date(today: date | None = None) -> str:
-    if today is None:
-        now = datetime.now()
-        today = now.date()
-        if today.weekday() < 5 and (now.hour < 17 or (now.hour == 17 and now.minute < 30)):
-            # 17:30 前视为当日 daily 未就绪（Tushare 盘后约 17:00 后才出当日收盘数据）
-            today = _previous_weekday(today)
-    if today.weekday() == 5:
-        return (today - timedelta(days=1)).isoformat()
-    if today.weekday() == 6:
-        return (today - timedelta(days=2)).isoformat()
-    return today.isoformat()
-
-
-def _previous_weekday(day: date) -> date:
-    current = day - timedelta(days=1)
-    while current.weekday() >= 5:
-        current -= timedelta(days=1)
-    return current
-
-
 def _diagnosis_snapshot(diagnosis: dict[str, Any]) -> dict[str, Any]:
     recent = diagnosis.get("recent_trade_day_coverage") or {}
     summary = recent.get("summary") or {}
@@ -2004,18 +1945,6 @@ def _numeric_delta(after_value: Any, before_value: Any) -> int | None:
         return int(after_value) - int(before_value)
     except (TypeError, ValueError):
         return None
-
-
-def _normalize_trade_date(value: Any) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    if len(raw) >= 10 and raw[4] == "-" and raw[7] == "-":
-        return raw[:10]
-    digits = "".join(ch for ch in raw if ch.isdigit())
-    if len(digits) >= 8:
-        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
-    return raw[:10]
 
 
 def _trade_date_variants(value: Any) -> list[str]:

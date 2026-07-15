@@ -266,7 +266,7 @@ def test_sync_local_pool_kline_gaps_reports_unlimited_scope(monkeypatch):
 
 
 def test_candidate_quote_date_allows_current_realtime_quote_bar_gap(monkeypatch):
-    monkeypatch.setattr("app.services.market_pool._latest_allowed_quote_date", lambda today=None: "2026-06-10")
+    monkeypatch.setattr("app.services.market_pool.core._latest_allowed_quote_date", lambda today=None: "2026-06-10")
 
     quote_date = _candidate_quote_date({"trade_date": "2026-06-10"}, "2026-06-10")
 
