@@ -1,89 +1,142 @@
-"""测试用行情采集 adapter：持有预置夹具数据，实现 `MarketSourcePort`（任务 4.2）。
-
-不发起任何网络/Tushare 调用——`fetch_quotes`/`fetch_daily_bars` 只从构造时
-传入的夹具字典里取数据，供单测替换生产 `TushareMarketSourceAdapter` 使用。
-"""
+"""Deterministic in-memory implementation of the public market-source Port."""
 from __future__ import annotations
 
-from typing import Any, Sequence
+from types import MappingProxyType
+from typing import Mapping, Sequence
 
-from app.services.market_source.port import DateRange, QuoteScope
+from app.services.market_source.port import (
+    BatchStatus,
+    DailyBar,
+    DailyBarBatch,
+    DailyBarRequest,
+    DateRange,
+    FailurePolicy,
+    ItemAudit,
+    MarketSourceAudit,
+    MarketSourceError,
+    MarketSourceErrorCode,
+    MarketSourceOperation,
+    MarketSourceRequestFailed,
+    Quote,
+    QuoteBatch,
+    QuoteRef,
+    QuoteRequest,
+    QuoteScope,
+    classify_status,
+)
 
 
 class InMemoryMarketSourceAdapter:
-    """夹具驱动的 `MarketSourcePort` 实现，用于测试。
+    """Fixture-backed adapter that performs no network or database access.
 
-    构造参数：
-        quotes: 预置的报价快照列表（`fetch_quotes` 的返回值来源）。
-        bars_by_code: `{code: bars}`，`fetch_daily_bars` 按 code 查表返回。
-        failing_codes: 可选，模拟"单只股票拉取失败"——`fetch_daily_bars`
-            对这些 code 返回空列表 `[]`（对齐 `MarketSourcePort.fetch_daily_bars`
-            docstring 里"某只股票取不到数据时对应 value 应为空列表"的降级
-            语义），而不是从 `bars_by_code` 里查表。
+    Typed request objects return typed batches.  The list/no-request forms and
+    ``fetch_bars_for_quote`` exist only so the unmodified market-pool seam can
+    keep using this fake until its own migration is permitted.
     """
 
     def __init__(
         self,
-        quotes: list[dict[str, Any]] | None = None,
-        bars_by_code: dict[str, list[dict[str, Any]]] | None = None,
+        quotes: Sequence[Mapping[str, object]] | None = None,
+        bars_by_code: Mapping[str, Sequence[Mapping[str, object]]] | None = None,
         failing_codes: Sequence[str] | None = None,
     ) -> None:
-        self._quotes = list(quotes or [])
-        self._bars_by_code = dict(bars_by_code or {})
-        self._failing_codes = set(failing_codes or ())
+        self.quotes = tuple(dict(quote) for quote in (quotes or ()))
+        self.bars_by_code = {
+            str(code): tuple(dict(bar) for bar in bars)
+            for code, bars in (bars_by_code or {}).items()
+        }
+        self.failing_codes = frozenset(str(code) for code in (failing_codes or ()))
 
-    def fetch_quotes(self, scope: QuoteScope | None = None) -> list[dict[str, Any]]:
-        """返回预置报价快照；`scope.max_quote_count` 时截断前 N 条。
+    def fetch_quotes(
+        self, request: QuoteRequest | QuoteScope | None = None
+    ) -> QuoteBatch | list[dict[str, object]]:
+        if not isinstance(request, QuoteRequest):
+            limit = request.max_quote_count if isinstance(request, QuoteScope) else None
+            rows = self.quotes if limit is None else self.quotes[:limit]
+            return [dict(row) for row in rows]
 
-        对齐生产 adapter 与现状 `_fetch_tushare_quotes` 的切片语义
-        （`realtime_quotes[:settings.market_scan_size]`），`scope=None`
-        或 `max_quote_count=None` 时不截断，返回全部预置数据。
-        """
-        if scope is not None and scope.max_quote_count is not None:
-            return list(self._quotes[: scope.max_quote_count])
-        return list(self._quotes)
+        rows = self.quotes
+        if request.max_quote_count is not None:
+            rows = rows[: request.max_quote_count]
+        quotes = tuple(Quote.from_row(row) for row in rows)
+        audit = MarketSourceAudit(
+            source="in_memory",
+            operation=MarketSourceOperation.QUOTES,
+            failure_policy=request.failure_policy,
+            status=classify_status(len(quotes), 0),
+            requested_count=1,
+            returned_count=len(quotes),
+            empty_count=1 if not quotes else 0,
+            failed_count=0,
+        )
+        return QuoteBatch(quotes=quotes, errors=(), audit=audit)
 
     def fetch_daily_bars(
-        self, codes: Sequence[str], date_range: DateRange | None = None
-    ) -> dict[str, list[dict[str, Any]]]:
-        """按 code 查表返回预置日K；`failing_codes` 命中时返回空列表。
+        self, request: DailyBarRequest | Sequence[str], date_range: DateRange | None = None
+    ) -> DailyBarBatch | dict[str, list[dict[str, object]]]:
+        if not isinstance(request, DailyBarRequest):
+            return {
+                str(code): [] if str(code) in self.failing_codes else [dict(row) for row in self.bars_by_code.get(str(code), ())]
+                for code in request
+            }
 
-        `date_range` 当前不参与夹具过滤——夹具数据本身就是测试用例按需
-        准备好的固定区间，没有必要在内存实现里重新实现一遍按日期裁剪的逻辑；
-        需要验证"调用方传了什么 date_range"的用例，应直接对 adapter 实例
-        的调用记录做断言，而不是依赖本方法按 date_range 过滤返回值。
-        """
-        result: dict[str, list[dict[str, Any]]] = {}
-        for code in codes:
-            if code in self._failing_codes:
-                result[code] = []
+        rows_by_instrument: dict[QuoteRef, tuple[DailyBar, ...]] = {}
+        audits: dict[QuoteRef, ItemAudit] = {}
+        errors: list[MarketSourceError] = []
+        for reference in request.instruments:
+            if reference.code in self.failing_codes:
+                error = MarketSourceError(
+                    operation=MarketSourceOperation.DAILY_BARS,
+                    code=MarketSourceErrorCode.INSTRUMENT_UNAVAILABLE,
+                    message="in-memory daily-bar fixture configured to fail",
+                    reference=reference,
+                    retryable=False,
+                )
+                if request.failure_policy is FailurePolicy.RAISE:
+                    raise MarketSourceRequestFailed(error)
+                errors.append(error)
+                rows_by_instrument[reference] = ()
+                audits[reference] = ItemAudit(reference, BatchStatus.FAILURE, 0, error)
                 continue
-            result[code] = list(self._bars_by_code.get(code, []))
-        return result
+
+            bars = tuple(
+                DailyBar.from_row(reference, row)
+                for row in self.bars_by_code.get(reference.code, ())
+            )
+            rows_by_instrument[reference] = bars
+            status = BatchStatus.SUCCESS if bars else BatchStatus.EMPTY
+            audits[reference] = ItemAudit(reference, status, len(bars))
+
+        returned_count = sum(len(bars) for bars in rows_by_instrument.values())
+        failed_count = len(errors)
+        empty_count = sum(1 for audit in audits.values() if audit.status is BatchStatus.EMPTY)
+        audit = MarketSourceAudit(
+            source="in_memory",
+            operation=MarketSourceOperation.DAILY_BARS,
+            failure_policy=request.failure_policy,
+            status=classify_status(returned_count, failed_count),
+            requested_count=len(request.instruments),
+            returned_count=returned_count,
+            empty_count=empty_count,
+            failed_count=failed_count,
+        )
+        return DailyBarBatch(
+            bars_by_instrument=MappingProxyType(rows_by_instrument),
+            item_audits=MappingProxyType(audits),
+            errors=tuple(errors),
+            audit=audit,
+        )
 
     def fetch_bars_for_quote(
         self,
-        quote: dict[str, Any],
-        settings: Any = None,
+        quote: Mapping[str, object],
+        settings: object | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """兼容出口：按完整 quote 字典查表返回预置日K（任务 4.4）。
+    ) -> list[dict[str, object]]:
+        """Deprecated market-pool compatibility shim; not part of MarketSourcePort."""
 
-        不是 `MarketSourcePort` 协议方法——`market_pool_adapters.fetch_kline_rows`
-        现状收到的是调用方（`market_pool._refresh_bars_for_quote`）手上
-        **完整**的 quote 字典（不只是 code），生产 `TushareMarketSourceAdapter`
-        为此单独暴露了同名兼容方法（用于兜底 `turnover_rate` 等真实字段，见
-        `multi_source_adapter.py` 的详细说明）。本内存实现的测试夹具数据
-        本身就是按 `quote["code"]` 准备好的固定结果，不需要重现那层
-        `turnover_rate` 兜底细节，所以直接按 `quote["code"]` 查表，忽略
-        `settings`/`start_date`/`end_date`——这几个参数只是为了与生产
-        adapter 保持同一签名，方便两者互换。
-
-        对齐 `fetch_daily_bars` 的降级语义：`failing_codes` 命中或查表未命中
-        时返回空列表 `[]`，不抛异常。
-        """
         code = str(quote.get("code") or "")
-        if not code or code in self._failing_codes:
+        if not code or code in self.failing_codes:
             return []
-        return list(self._bars_by_code.get(code, []))
+        return [dict(row) for row in self.bars_by_code.get(code, ())]
