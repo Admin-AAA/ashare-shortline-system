@@ -197,29 +197,29 @@
   - Stage 通过构造注入 Port/Repository；生产与测试使用同一装配入口。
   - _需求：3.2, 3.3, 3.6_
 
-- [~] 5.2 迁移 prepare、market 和 auxiliary 阶段
+- [x] 5.2 迁移 prepare、market 和 auxiliary 阶段
   - prepare 只解析持久化 RunRequest 和 Strategy/Factor plan。
   - market 阶段只依赖 MarketSource/MarketPreparation Port。
   - auxiliary 阶段只依赖 AuxiliaryDataOrchestrator。
   - 保持阶段审计和 checkpoint 顺序等价。
   - _需求：3.2–3.5, 5.3, 6.3_
 
-- [~] 5.3 迁移 feature 阶段
+- [x] 5.3 迁移 feature 阶段
   - FeaturePipeline 使用类型化输入/输出并通过构造注入。
   - 保持现有特征字段、缺失值和审计语义；阶段测试不访问外部供应商。
   - _需求：3.2, 3.3, 10.6_
 
-- [~] 5.4 迁移 strategy evaluation 阶段
+- [x] 5.4 迁移 strategy evaluation 阶段
   - StrategyEvaluationService 只依赖冻结 Registry/ExecutionPlan 和类型化 stock context。
   - 保持 candidate、Signal、veto、score cap 和 evidence golden 等价。
   - _需求：3.2, 3.3, 4.6, 7.2, 10.6_
 
-- [~] 5.5 迁移 review 阶段并验证资源策略
+- [x] 5.5 迁移 review 阶段并验证资源策略
   - ReviewExecutor Port 封装 Agno/OpenAI，Coordinator 不直接导入供应商实现。
   - 明确并测试并发、超时、partial failure、降级和 cancel；失败后可计数 Agent/DB/temp lease 均为 0。
   - _需求：3.3, 3.4, 3.6, 12.1_
 
-- [~] 5.6 迁移 aggregation、persistence 和 completion 阶段
+- [x] 5.6 迁移 aggregation、persistence 和 completion 阶段
   - recommendation assembly 保持一期评分、过滤和审计行为。
   - Repository 负责幂等推荐写入、run summary、checkpoint 和完成状态。
   - persistence 失败时不得留下 completed run 或重复推荐。

@@ -7,28 +7,68 @@ evolve independently.
 """
 from __future__ import annotations
 
+from sqlalchemy.orm import Session
+
 from .contracts import StageData
+from .adapters import (
+    ProductionAuxiliaryApplication,
+    ProductionCostRecording,
+    ProductionExecutionVersion,
+    ProductionFeatureBuild,
+    ProductionMarketPersistence,
+    ProductionMarketScope,
+    ProductionMarketUniverse,
+    ProductionRecommendationAssembly,
+    ProductionRecommendationPersistence,
+    ProductionReviewExecutor,
+    ProductionRunStart,
+    ProductionSkillResolution,
+    ProductionStrategyEvaluation,
+)
+from .prepare import PrepareStage
+from .market_data import MarketDataStage
+from .auxiliary_data import AuxiliaryDataStage
+from .features import FeaturesStage
+from .strategy_evaluation import StrategyEvaluationStage
+from .review import ReviewStage
+from .aggregation import AggregationStage
+from .persistence import PersistenceStage
 from ..coordinator import AnyStage, RunCoordinator, RunCoordinatorDependencies
 
 
-def assemble_pipeline_stages() -> tuple[AnyStage, ...]:
-    """Build the ordered tuple of recommendation-pipeline stages.
-
-    Individual stage imports are intentionally lazy: a stage that has not yet been
-    migrated simply does not appear here.  As each S5 subtask lands, its import
-    and construction are added to this function.
-    """
-    stages: list[AnyStage] = []
-    # Each S5 step adds one import + construction below:
-    #
-    # from .prepare import PrepareStage
-    # stages.append(PrepareStage(...))
-    #
-    # from .market_data import MarketDataStage
-    # stages.append(MarketDataStage(...))
-    #
-    # …and so on through persistence.
-    return tuple(stages)
+def assemble_pipeline_stages(db: Session, *, run_id: str) -> tuple[AnyStage, ...]:
+    """Build the ordered tuple of recommendation-pipeline stages with production adapters."""
+    return (
+        PrepareStage(
+            skill_resolution=ProductionSkillResolution(db),
+            run_start=ProductionRunStart(db),
+            execution_version=ProductionExecutionVersion(),
+        ),
+        MarketDataStage(
+            market_universe=ProductionMarketUniverse(db),
+            market_persistence=ProductionMarketPersistence(db),
+            market_scope=ProductionMarketScope(db),
+        ),
+        AuxiliaryDataStage(
+            auxiliary_application=ProductionAuxiliaryApplication(db),
+        ),
+        FeaturesStage(
+            feature_build=ProductionFeatureBuild(db),
+        ),
+        StrategyEvaluationStage(
+            strategy_evaluation=ProductionStrategyEvaluation(db),
+        ),
+        ReviewStage(
+            review_executor=ProductionReviewExecutor(),
+            cost_recording=ProductionCostRecording(db, run_id),
+        ),
+        AggregationStage(
+            recommendation_assembly=ProductionRecommendationAssembly(db),
+        ),
+        PersistenceStage(
+            recommendation_persistence=ProductionRecommendationPersistence(db),
+        ),
+    )
 
 
 def assemble_run_pipeline_coordinator(
