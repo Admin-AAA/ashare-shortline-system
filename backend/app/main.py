@@ -12,6 +12,7 @@ from app.api import admin, dashboard, data_sources, frontend_logs, home, llm, me
 from app.core.config import get_settings
 from app.core.logger import setup_logging
 from app.db.init_db import init_db
+from app.db.migrations import get_migration_health
 
 logger = logging.getLogger(__name__)
 access_logger = logging.getLogger("app.access")
@@ -194,7 +195,19 @@ def on_shutdown() -> None:
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "database": "degraded" if _startup_db_error else "ok"}
+    migration = get_migration_health()
+    if migration.status == "error":
+        database = "migration_error"
+    elif _startup_db_error:
+        database = "unavailable"
+    else:
+        database = "ok"
+    return {
+        "ok": database == "ok",
+        "database": database,
+        "application": "ok" if database == "ok" else "degraded",
+        "migration": migration.as_dict(),
+    }
 
 
 @app.get("/api/auth/status")
