@@ -88,6 +88,20 @@ RUN_PHASE_ORDER: tuple[RunPhase, ...] = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class RunStageResult:
+    """Stable result emitted after a stage has completed its own side effect."""
+
+    phase: RunPhase
+    side_effect_key: str
+
+    def __post_init__(self) -> None:
+        if self.phase not in RUN_PHASE_ORDER:
+            raise ValueError("stage result must name an executable checkpoint phase")
+        if not self.side_effect_key.strip():
+            raise ValueError("stage result requires a side_effect_key")
+
+
 class RunActor(str, Enum):
     API = "api"
     DISPATCHER = "dispatcher"

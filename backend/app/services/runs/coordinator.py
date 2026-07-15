@@ -1,9 +1,9 @@
 """Explicit lifecycle coordinator around the recommendation run contracts.
 
 The legacy workbench still owns business stages, but all status, lease and checkpoint
-mutations go through this module and :class:`RunRepository`.  Provider/session
-resources are injected as small releasable leases so terminal and failure paths can be
-verified without importing Agent, database, or temporary-file implementations here.
+mutations go through this module and :class:`RunRepository`. Provider/session
+resources and future stages are constructor-injected so this module stays independent
+of Agent, database, temporary-file, and vendor implementations.
 """
 from __future__ import annotations
 
@@ -12,18 +12,21 @@ from datetime import datetime, timedelta
 import logging
 import os
 import socket
-from typing import Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol, Sequence, Union, runtime_checkable
 
-from .contracts import RunActor, RunPhase, RunStatus, RunTrigger
+from .contracts import RUN_PHASE_ORDER, RunActor, RunPhase, RunRequest, RunStageResult, RunStatus, RunTrigger
 from .repository import (
     CheckpointCommit,
     CompareAndSetOutcome,
     LeaseRenewal,
     LeaseRequest,
     RunCheckpoint,
+    RunRecord,
+    RunRepository,
     TransitionCommit,
 )
 from .state_machine import ResumeCheck, RunStateMachine
+from .stages.contracts import StageData, StageOutput
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +53,76 @@ class WorkerLease:
     revision: int
 
 
+@dataclass(frozen=True, slots=True)
+class RunContext:
+    """Immutable typed state supplied to one explicitly registered stage.
+
+    The context is a projection of the durable run record at the point a worker owns
+    its lease. It deliberately has no arbitrary payload dictionary: stage-specific
+    recommendation, progress, market, and review data stay behind that stage's
+    constructor-injected Port until those legacy bodies are migrated in later tasks.
+    """
+
+    run_id: str
+    request: RunRequest
+    worker_lease: WorkerLease
+    checkpoint: RunCheckpoint | None = None
+
+    def __post_init__(self) -> None:
+        if not self.run_id.strip():
+            raise ValueError("run context requires a non-empty run_id")
+        if self.worker_lease.run_id != self.run_id:
+            raise ValueError("run context lease must belong to the same run_id")
+        if self.worker_lease.revision < 0:
+            raise ValueError("run context lease revision cannot be negative")
+
+    @property
+    def last_committed_phase(self) -> RunPhase | None:
+        """Durable checkpoint from which the coordinator calculates the next stage."""
+        return self.checkpoint.phase if self.checkpoint is not None else None
+
+    @property
+    def side_effect_key(self) -> str | None:
+        """Idempotency key paired atomically with ``last_committed_phase``."""
+        return self.checkpoint.side_effect_key if self.checkpoint is not None else None
+
+    def with_checkpoint(self, checkpoint: RunCheckpoint, *, revision: int) -> "RunContext":
+        """Return the next immutable context after the repository CAS succeeds."""
+        return RunContext(
+            run_id=self.run_id,
+            request=self.request,
+            worker_lease=WorkerLease(
+                run_id=self.run_id,
+                token=self.worker_lease.token,
+                revision=revision,
+            ),
+            checkpoint=checkpoint,
+        )
+
+
+@runtime_checkable
+class RunStage(Protocol):
+    """A synchronous constructor-injected run stage."""
+
+    phase: RunPhase
+
+    def execute(self, context: RunContext, data: StageData) -> StageOutput:
+        """Perform one side effect and return a typed hand-off to the next stage."""
+
+
+@runtime_checkable
+class AsyncRunStage(Protocol):
+    """An async constructor-injected run stage (e.g. LLM review with concurrency)."""
+
+    phase: RunPhase
+
+    async def execute(self, context: RunContext, data: StageData) -> StageOutput:
+        """Perform one async side effect and return a typed hand-off to the next stage."""
+
+
+AnyStage = RunStage | AsyncRunStage
+
+
 @runtime_checkable
 class ResourceLease(Protocol):
     """A process-local resource that must be released exactly once."""
@@ -64,7 +137,7 @@ class RunResourceLeases:
 
     The durable database worker lease is cleared by the repository's terminal CAS;
     these three hooks cover process-local resources such as an Agent session, a
-    dedicated DB/session wrapper, and a temporary artifact directory.  ``release`` is
+    dedicated DB/session wrapper, and a temporary artifact directory. ``release`` is
     idempotent and attempts every hook even if one cleanup callback raises.
     """
 
@@ -92,17 +165,67 @@ class RunResourceLeases:
                 if first_error is None:
                     first_error = exc
         if first_error is not None:
-            # Cleanup is best effort after the lifecycle CAS.  Preserve the original
+            # Cleanup is best effort after the lifecycle CAS. Preserve the original
             # run outcome while still making the error visible to operators.
             logger.warning("one or more run resource leases failed to release: %s", first_error)
 
 
-class LegacyWorkbenchRunCoordinator:
-    """Translate legacy pipeline checkpoints to the durable state machine."""
+@dataclass(frozen=True, slots=True)
+class RunCoordinatorDependencies:
+    """The single composition input used by production and coordinator tests.
 
-    def __init__(self, repository, resource_leases: RunResourceLeases | None = None) -> None:
+    Stages are pre-constructed with their own explicit Ports/repositories. The
+    coordinator receives only their protocol, avoiding vendor/ORM imports while
+    allowing later tasks to migrate one legacy phase at a time.
+    """
+
+    repository: RunRepository
+    stages: tuple[AnyStage, ...] = ()
+    resource_leases: RunResourceLeases | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "stages", tuple(self.stages))
+
+
+class RunCoordinator:
+    """Coordinate durable lifecycle transitions and typed stage checkpoints."""
+
+    def __init__(
+        self,
+        repository: RunRepository,
+        resource_leases: RunResourceLeases | None = None,
+        *,
+        stages: Sequence[AnyStage] = (),
+    ) -> None:
         self._repository = repository
         self._resource_leases = resource_leases
+        self._stages = self._index_stages(stages)
+
+    @classmethod
+    def from_dependencies(cls, dependencies: RunCoordinatorDependencies) -> "RunCoordinator":
+        """Build a coordinator through the shared dependency-assembly entry point."""
+        return cls(
+            dependencies.repository,
+            dependencies.resource_leases,
+            stages=dependencies.stages,
+        )
+
+    @staticmethod
+    def _index_stages(stages: Sequence[AnyStage]) -> dict[RunPhase, AnyStage]:
+        indexed: dict[RunPhase, AnyStage] = {}
+        for stage in stages:
+            phase = stage.phase
+            if phase not in RUN_PHASE_ORDER:
+                raise ValueError(f"stage phase {phase.value} is not executable")
+            if phase in indexed:
+                raise ValueError(f"duplicate stage registration for {phase.value}")
+            indexed[phase] = stage
+        return indexed
+
+    @property
+    def stage_phases(self) -> tuple[RunPhase, ...]:
+        """Registered phases in their one canonical execution order."""
+        return tuple(phase for phase in RUN_PHASE_ORDER if phase in self._stages)
 
     @staticmethod
     def worker_owner_id() -> str:
@@ -111,6 +234,134 @@ class LegacyWorkbenchRunCoordinator:
     def _release_resources(self) -> None:
         if self._resource_leases is not None:
             self._resource_leases.release()
+
+    @staticmethod
+    def _context_from_record(record: RunRecord) -> RunContext | None:
+        if record.status is not RunStatus.RUNNING or record.lease is None:
+            return None
+        return RunContext(
+            run_id=record.run_id,
+            request=record.request,
+            worker_lease=WorkerLease(record.run_id, record.lease.token, record.revision),
+            checkpoint=record.checkpoint,
+        )
+
+    def next_stage(self, run_id: str, *, now: datetime) -> tuple[AnyStage, RunContext] | None:
+        """Load the sole legal next stage for a live worker-owned run.
+
+        Missing registrations deliberately return ``None``: task 5.1 only installs
+        the stage contract, and later tasks migrate legacy phases incrementally. An
+        out-of-order durable checkpoint still raises from the state machine rather
+        than being silently skipped.
+        """
+        record = self._repository.get_run(run_id)
+        if record is None or not record.has_active_lease(now):
+            return None
+        context = self._context_from_record(record)
+        if context is None:
+            return None
+        phase = RunStateMachine.next_phase(context.last_committed_phase)
+        if phase is None:
+            return None
+        stage = self._stages.get(phase)
+        return (stage, context) if stage is not None else None
+
+    def commit_stage_result(
+        self,
+        context: RunContext,
+        result: RunStageResult,
+        *,
+        now: datetime,
+    ) -> RunContext | None:
+        """Atomically checkpoint a completed stage after its side effect succeeds.
+
+        The single repository operation writes phase, side-effect key, and heartbeat
+        under the context's revision and lease token. A lost lease or stale revision
+        returns ``None`` and leaves recovery/error policy to the existing lifecycle
+        caller; this helper intentionally does not change legacy phase error paths.
+        """
+        RunStateMachine.require_next_checkpoint(
+            last_committed_phase=context.last_committed_phase,
+            phase=result.phase,
+        )
+        checkpoint = RunCheckpoint(
+            phase=result.phase,
+            side_effect_key=result.side_effect_key,
+            heartbeat_at=now,
+        )
+        committed = self._repository.commit_checkpoint(
+            context.run_id,
+            CheckpointCommit(
+                expected_revision=context.worker_lease.revision,
+                lease_token=context.worker_lease.token,
+                checkpoint=checkpoint,
+            ),
+        )
+        if not committed.applied or committed.record is None:
+            return None
+        committed_context = self._context_from_record(committed.record)
+        if committed_context is None:
+            return None
+        return committed_context
+
+    def execute_next_stage(
+        self,
+        run_id: str,
+        *,
+        now: datetime,
+        data: StageData | None = None,
+    ) -> tuple[StageOutput, RunContext] | None:
+        """Execute and atomically checkpoint one registered next stage.
+
+        Synchronous stages run inline; async stages must be awaited by the caller
+        through :meth:`execute_next_stage_async`.  Stage exceptions intentionally
+        propagate so the caller's failure classification and resource cleanup path
+        owns the terminal CAS.
+        """
+        pending = self.next_stage(run_id, now=now)
+        if pending is None:
+            return None
+        stage, context = pending
+        if isinstance(stage, AsyncRunStage):
+            raise TypeError(
+                f"stage {stage.phase.value} is async; await execute_next_stage_async instead"
+            )
+        stage_data = data if data is not None else StageData()
+        output = stage.execute(context, stage_data)
+        if output.result.phase is not stage.phase:
+            raise ValueError(
+                f"stage {stage.phase.value} returned result for {output.result.phase.value}"
+            )
+        committed_context = self.commit_stage_result(context, output.result, now=now)
+        if committed_context is None:
+            return None
+        return output, committed_context
+
+    async def execute_next_stage_async(
+        self,
+        run_id: str,
+        *,
+        now: datetime,
+        data: StageData | None = None,
+    ) -> tuple[StageOutput, RunContext] | None:
+        """Async variant for :class:`AsyncRunStage` phases such as review."""
+        pending = self.next_stage(run_id, now=now)
+        if pending is None:
+            return None
+        stage, context = pending
+        stage_data = data if data is not None else StageData()
+        if isinstance(stage, AsyncRunStage):
+            output = await stage.execute(context, stage_data)
+        else:
+            output = stage.execute(context, stage_data)
+        if output.result.phase is not stage.phase:
+            raise ValueError(
+                f"stage {stage.phase.value} returned result for {output.result.phase.value}"
+            )
+        committed_context = self.commit_stage_result(context, output.result, now=now)
+        if committed_context is None:
+            return None
+        return output, committed_context
 
     def start_dispatch(self, run_id: str, *, now: datetime) -> bool:
         record = self._repository.get_run(run_id)
@@ -363,10 +614,31 @@ class LegacyWorkbenchRunCoordinator:
         )
 
 
+class LegacyWorkbenchRunCoordinator(RunCoordinator):
+    """Compatibility name for existing lifecycle callers pending the task 5.7 switch.
+
+    New code must use :class:`RunCoordinator`; this subclass preserves current
+    imports without changing the legacy workbench phase bodies or call sites.
+    """
+
+
+def assemble_run_coordinator(dependencies: RunCoordinatorDependencies) -> RunCoordinator:
+    """Build the public lifecycle coordinator from the shared composition contract."""
+    return RunCoordinator.from_dependencies(dependencies)
+
+
 __all__ = [
     "LEGACY_PHASE_TO_RUN_PHASE",
     "LegacyWorkbenchRunCoordinator",
+    "AnyStage",
+    "AsyncRunStage",
     "ResourceLease",
+    "RunContext",
+    "RunCoordinator",
+    "RunCoordinatorDependencies",
     "RunResourceLeases",
+    "RunStage",
+    "RunStageResult",
     "WorkerLease",
+    "assemble_run_coordinator",
 ]
