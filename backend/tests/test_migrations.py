@@ -4,13 +4,14 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 
 from app.db.migrations import all_migrations
 from app.db.migrations.contract import (
     MigrationBaselineError,
     MigrationChecksumMismatchError,
     MigrationDefinitionError,
+    MigrationExecutionTimeoutError,
     MigrationLockError,
     MigrationOperation,
     MigrationSafetyError,
@@ -297,3 +298,191 @@ def test_init_db_bootstraps_an_in_memory_sqlite_schema(monkeypatch) -> None:
         assert connection.scalar(text("SELECT COUNT(*) FROM schema_migrations WHERE version = 'V000'")) == 1
         assert connection.scalar(text("SELECT COUNT(*) FROM schema_migrations WHERE version = 'V001_p0_research'")) == 1
         assert connection.scalar(text("SELECT COUNT(*) FROM schema_migrations WHERE version = 'V002_workbench_run_lifecycle'")) == 1
+
+
+def test_runner_configures_bounded_mysql_wait_and_query_limits() -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class SessionConnection:
+        dialect = SimpleNamespace(name="mysql")
+
+        def execute(self, statement, params):
+            calls.append((str(statement), dict(params)))
+
+    MigrationRunner(
+        object(),
+        (),
+        lock_wait_timeout_seconds=7,
+        innodb_lock_wait_timeout_seconds=9,
+        preflight_query_timeout_milliseconds=1111,
+    )._configure_mysql_session(SessionConnection())
+
+    assert [(sql, params) for sql, params in calls] == [
+        ("SET SESSION lock_wait_timeout = :seconds", {"seconds": 7}),
+        ("SET SESSION innodb_lock_wait_timeout = :seconds", {"seconds": 9}),
+        ("SET SESSION max_execution_time = :milliseconds", {"milliseconds": 1111}),
+    ]
+
+
+def test_runner_rejects_a_slow_operation_before_success_ledger(monkeypatch) -> None:
+    import app.db.migrations.runner as runner_module
+
+    engine = create_engine("sqlite:///:memory:")
+    operation = _table_operation("timeout_fixture")
+    migration = _migration("V106", "timeout_fixture")
+    runner = MigrationRunner(engine, (migration,))
+    ticks = iter((0.0, 2.0))
+    monkeypatch.setattr(runner_module, "perf_counter", lambda: next(ticks))
+
+    from app.db.migrations.contract import MigrationContext
+    connection = engine.connect()
+    try:
+        with pytest.raises(MigrationExecutionTimeoutError, match="execution timeout"):
+            runner._apply_migration(
+                MigrationContext(connection),
+                migration,
+                ddl_execution_timeout_seconds=1,
+            )
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("failure_step", (1, 2, 3))
+def test_multi_operation_failure_at_each_step_reenters_without_duplicate_ledger(failure_step: int) -> None:
+    """A fault after any applied operation must resume from its postcondition."""
+    from app.db.migrations.contract import MigrationContext
+
+    engine = create_engine("sqlite:///:memory:")
+    table = f"reentry_data_{failure_step}"
+    index = f"idx_{table}_value"
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                f"CREATE TABLE `{table}` ("
+                "`id` INTEGER PRIMARY KEY, `value` INTEGER NOT NULL)"
+            )
+        )
+        connection.execute(text(f"INSERT INTO `{table}` (`id`, `value`) VALUES (1, 7)"))
+
+    injected = False
+
+    def fail_after(step: int) -> None:
+        nonlocal injected
+        if step == failure_step and not injected:
+            injected = True
+            raise RuntimeError(f"injected failure at operation {step}")
+
+    def marker_state(context: MigrationContext) -> OperationState:
+        return OperationState.SATISFIED if context.has_column(table, "marker") else OperationState.PENDING
+
+    def add_marker(context: MigrationContext) -> None:
+        context.add_column(table, "marker", "INTEGER NULL")
+        fail_after(1)
+
+    def marked_row_state(context: MigrationContext) -> OperationState:
+        return (
+            OperationState.SATISFIED
+            if context.count_rows(
+                table,
+                where_sql="id = :row_id AND marker = :marker",
+                params={"row_id": 1, "marker": 9},
+            )
+            == 1
+            else OperationState.PENDING
+        )
+
+    def mark_row(context: MigrationContext) -> None:
+        context.update_rows(
+            table,
+            {"marker": 9},
+            where_sql="id = :row_id",
+            where_params={"row_id": 1},
+        )
+        fail_after(2)
+
+    def index_state(context: MigrationContext) -> OperationState:
+        return OperationState.SATISFIED if context.has_index(table, index) else OperationState.PENDING
+
+    def create_value_index(context: MigrationContext) -> None:
+        context.create_index(table, index, ("value",))
+        fail_after(3)
+
+    migration = define_migration(
+        version=f"V20{failure_step}",
+        description="Re-enter a three-operation migration after each operation boundary",
+        operations=(
+            MigrationOperation(
+                name="add_marker",
+                checksum_material="add nullable marker column",
+                precondition=marker_state,
+                apply=add_marker,
+                postcondition=marker_state,
+            ),
+            MigrationOperation(
+                name="mark_seed_row",
+                checksum_material="bounded update of the seed row marker",
+                precondition=marked_row_state,
+                apply=mark_row,
+                postcondition=marked_row_state,
+            ),
+            MigrationOperation(
+                name="create_value_index",
+                checksum_material="create value index",
+                precondition=index_state,
+                apply=create_value_index,
+                postcondition=index_state,
+            ),
+        ),
+    )
+    runner = MigrationRunner(engine, (migration,))
+
+    with pytest.raises(RuntimeError, match=f"operation {failure_step}"):
+        runner.run()
+
+    with engine.connect() as connection:
+        assert connection.scalar(
+            text("SELECT COUNT(*) FROM schema_migrations WHERE version = :version"),
+            {"version": migration.version},
+        ) == 0
+
+    result = runner.run()
+
+    assert result.applied_versions == (migration.version,)
+    assert result.skipped_versions == ()
+    with engine.connect() as connection:
+        assert connection.scalar(
+            text("SELECT COUNT(*) FROM schema_migrations WHERE version = :version"),
+            {"version": migration.version},
+        ) == 1
+        assert connection.scalar(text(f"SELECT marker FROM `{table}` WHERE id = 1")) == 9
+        assert connection.dialect.get_indexes(connection, table)[0]["name"] == index
+
+
+@pytest.mark.parametrize("definition", ("INTEGER; DROP TABLE safe_sql_fixture", "INTEGER TRUNCATE"))
+def test_context_rejects_disabled_destructive_sql_fragments(definition: str) -> None:
+    from app.db.migrations.contract import MigrationContext
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        context = MigrationContext(connection)
+        context.create_table("safe_sql_fixture", (("id", "INTEGER PRIMARY KEY"),))
+        with pytest.raises(MigrationSafetyError):
+            context.add_column("safe_sql_fixture", "value", definition)
+        assert not hasattr(context, "delete_rows")
+        assert not hasattr(context, "execute_sql")
+
+
+def test_request_expand_columns_are_nullable_and_have_no_default_one() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        _create_baseline_inventory(connection)
+    MigrationRunner(engine, all_migrations()).run()
+
+    with engine.connect() as connection:
+        columns = {
+            item["name"]: item
+            for item in inspect(connection).get_columns("recommendation_runs")
+        }
+    for name in ("request_schema_version", "request_json", "execution_version"):
+        assert columns[name]["nullable"] is True
+        assert columns[name]["default"] is None

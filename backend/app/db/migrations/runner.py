@@ -16,6 +16,7 @@ from .contract import (
     MigrationConditionError,
     MigrationDefinitionError,
     MigrationError,
+    MigrationExecutionTimeoutError,
     MigrationLockError,
     MigrationContext,
     OperationState,
@@ -47,6 +48,7 @@ class MigrationRunner:
         lock_wait_timeout_seconds: int = 15,
         innodb_lock_wait_timeout_seconds: int = 15,
         preflight_query_timeout_milliseconds: int = 30_000,
+        ddl_execution_timeout_seconds: int = 300,
     ) -> None:
         if not lock_name:
             raise MigrationDefinitionError("migration lock name is required")
@@ -56,6 +58,8 @@ class MigrationRunner:
             raise MigrationDefinitionError("migration lock wait timeouts must be positive")
         if preflight_query_timeout_milliseconds < 1:
             raise MigrationDefinitionError("preflight query timeout must be positive")
+        if ddl_execution_timeout_seconds < 1:
+            raise MigrationDefinitionError("DDL execution timeout must be positive")
         self._engine = engine
         self._migrations = self._validate_migrations(migrations)
         self._lock_name = lock_name
@@ -63,6 +67,7 @@ class MigrationRunner:
         self._lock_wait_timeout_seconds = lock_wait_timeout_seconds
         self._innodb_lock_wait_timeout_seconds = innodb_lock_wait_timeout_seconds
         self._preflight_query_timeout_milliseconds = preflight_query_timeout_milliseconds
+        self._ddl_execution_timeout_seconds = ddl_execution_timeout_seconds
 
     def run(self) -> MigrationRunResult:
         """Execute in version order; any failure propagates and leaves no success ledger row."""
@@ -95,7 +100,11 @@ class MigrationRunner:
                     self._log_migration(migration, status="noop", execution_ms=0)
                     continue
                 started = perf_counter()
-                self._apply_migration(context, migration)
+                self._apply_migration(
+                    context,
+                    migration,
+                    ddl_execution_timeout_seconds=self._ddl_execution_timeout_seconds,
+                )
                 execution_ms = max(0, int((perf_counter() - started) * 1000))
                 self._write_ledger(connection, migration, execution_ms)
                 ledger[migration.version] = migration.checksum
@@ -164,8 +173,13 @@ class MigrationRunner:
         )
         connection.commit()
 
-    @staticmethod
-    def _apply_migration(context: MigrationContext, migration: Migration) -> None:
+    def _apply_migration(
+        self,
+        context: MigrationContext,
+        migration: Migration,
+        *,
+        ddl_execution_timeout_seconds: int,
+    ) -> None:
         for operation in migration.operations:
             state = operation.precondition(context)
             if state not in (OperationState.PENDING, OperationState.SATISFIED):
@@ -174,7 +188,14 @@ class MigrationRunner:
                     version=migration.version,
                 )
             if state is OperationState.PENDING:
+                operation_started = perf_counter()
                 operation.apply(context)
+                elapsed = perf_counter() - operation_started
+                if elapsed > ddl_execution_timeout_seconds:
+                    raise MigrationExecutionTimeoutError(
+                        f"migration operation exceeded execution timeout: {migration.version}:{operation.name}",
+                        version=migration.version,
+                    )
             post_state = operation.postcondition(context)
             if post_state is not OperationState.SATISFIED:
                 raise MigrationConditionError(

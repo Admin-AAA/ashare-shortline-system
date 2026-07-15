@@ -4,6 +4,12 @@ from __future__ import annotations
 from sqlalchemy.engine import Engine
 
 from .health import MigrationHealth, get_migration_health
+from .schema_inventory import (
+    BASELINE_REQUIRED_COLUMNS,
+    BASELINE_REQUIRED_INDEXES,
+    FORBIDDEN_DESTRUCTIVE_TABLES,
+    LEGACY_SCHEMA_INVENTORY,
+)
 from .runner import MigrationRunResult, MigrationRunner
 from .versions import all_migrations
 
@@ -14,6 +20,10 @@ def run_migrations(engine: Engine) -> MigrationRunResult:
 
 
 __all__ = [
+    "BASELINE_REQUIRED_COLUMNS",
+    "BASELINE_REQUIRED_INDEXES",
+    "FORBIDDEN_DESTRUCTIVE_TABLES",
+    "LEGACY_SCHEMA_INVENTORY",
     "MigrationHealth",
     "MigrationRunResult",
     "MigrationRunner",

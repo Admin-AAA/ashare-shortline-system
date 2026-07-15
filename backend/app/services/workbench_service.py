@@ -62,6 +62,13 @@ from app.models.tables import (
     StockQuote,
 )
 from app.services.feature_builder import build_features, market_regime_score
+from app.services.factors.registry import bootstrap_default_factor_registry
+from app.services.auxiliary.legacy_projection import (
+    auxiliary_projection_payload,
+    project_legacy_auxiliary_audit,
+)
+from app.services.auxiliary.contracts import AuxiliaryInstrument
+from app.services.market_source.local_pool_adapter import load_legacy_market_universe
 from app.services.failure_attribution import classify_false_positive
 from app.services.market_data import MarketDataError, get_market_universe
 from app.services.market_pool import (
@@ -150,7 +157,24 @@ from app.services.recommendations.projection import (
 )
 from app.services.runs.persistence import persist_recommendation_cards
 from app.services.runs.progress import progress_pct as compute_progress_pct
-from app.services.runs.queue import BackgroundRunDispatcher
+from app.services.runs.contracts import (
+    CanonicalExecutionVersionBuilder,
+    ExecutionVersionInput,
+    RunRequest,
+    RunStatus,
+    application_identity_from_environment,
+    parse_run_request,
+    selected_recommendation_execution_policy,
+    validate_run_request_no_credentials,
+)
+from app.services.runs.request_persistence import (
+    assert_run_request_index_consistency,
+    load_canonical_run_request,
+)
+from app.services.runs.coordinator import LegacyWorkbenchRunCoordinator
+from app.services.runs.repository import CreateQueuedRun
+from app.services.runs.sqlalchemy_repository import SQLAlchemyRunRepository
+from app.services.runs.queue import BackgroundRunDispatcher, spawn_run_subprocess
 from app.services.runs.skill_gate import (
     build_skill_rule_gate,
     finalize_skill_gate_audit,
@@ -272,19 +296,99 @@ _progress_commit_state_lock = threading.Lock()
 _progress_commit_state: dict[str, dict[str, Any]] = {}
 _outcome_backfill_lock = threading.Lock()
 _outcome_backfill_ts = 0.0
+# Kept as a module-level injection point for callers/tests; the dispatcher resolves
+# it at spawn time so a test can safely suppress child-process creation.
+_spawn_run_subprocess = spawn_run_subprocess
 _run_dispatcher = BackgroundRunDispatcher(
     session_factory=SessionLocal,
-    mark_running=lambda db, run_id: _update_run_progress(
+    mark_running=lambda db, run_id: _mark_run_dispatched(db, run_id),
+    mark_failed=lambda db, run_id, exc: _mark_run_failed(db, run_id, exc),
+    spawn=lambda run_id: _spawn_run_subprocess(run_id),
+)
+
+
+def _canonical_workbench_request(params: dict[str, Any], payload: dict[str, Any]) -> RunRequest:
+    """Freeze one legacy/preset merge into the only durable RunRequest form.
+
+    The parser owns the formal default.  An explicit caller value is copied exactly
+    once, so malformed values fail validation and a preselected experiment/backtest
+    mode cannot be silently replaced during a preset merge.
+    """
+    validate_run_request_no_credentials(payload)
+    document = dict(params)
+    if "run_mode" in payload:
+        document["run_mode"] = payload["run_mode"]
+    return parse_run_request(document)
+
+
+def _factor_execution_identity() -> tuple[str, dict[str, Any]]:
+    """Return the frozen Factor plan audit projection used by execution-version input."""
+    plan = bootstrap_default_factor_registry()
+    return (
+        plan.fingerprint,
+        {
+            "contract_version": plan.contract_version,
+            "fingerprint": plan.fingerprint,
+            "factor_ids": list(plan.factor_ids),
+        },
+    )
+
+
+def _execution_version_identity(request: RunRequest) -> tuple[str, dict[str, Any]]:
+    """Build audit identity only; it never contributes to filtering or scoring.
+
+    Factor plans are already frozen at bootstrap.  StrategyDescriptor fingerprints
+    deliberately remain an empty extension point here: S2 will project selected
+    descriptors into the same immutable input without changing this persisted format.
+    """
+    factor_plan_fingerprint, factor_plan_audit = _factor_execution_identity()
+    version_input = ExecutionVersionInput(
+        application=application_identity_from_environment(),
+        request_schema_version=request.schema_version,
+        execution_policy=selected_recommendation_execution_policy(request),
+        factor_execution_plan_fingerprint=factor_plan_fingerprint,
+    )
+    execution_version = CanonicalExecutionVersionBuilder().build(version_input)
+    return (
+        execution_version,
+        {
+            "execution_version_schema_version": version_input.schema_version,
+            "application": version_input.application.to_canonical_payload(),
+            "request_schema_version": version_input.request_schema_version,
+            "strategy_fingerprints": [],
+            "factor_plan": factor_plan_audit,
+            "execution_policy": {
+                "policy_id": version_input.execution_policy.policy_id,
+                "policy_version": version_input.execution_policy.policy_version,
+                "fingerprint": version_input.execution_policy.fingerprint,
+            },
+        },
+    )
+
+
+def _mark_run_dispatched(db: Session, run_id: str) -> bool:
+    """Move canonical queued runs through the state machine before spawning."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    repository = SQLAlchemyRunRepository(db)
+    coordinator = LegacyWorkbenchRunCoordinator(repository)
+    managed = repository.get_run(run_id) is not None
+    started = coordinator.start_dispatch(run_id, now=now) if managed else False
+    if managed and not started:
+        logger.warning("dispatcher did not acquire queued Run lifecycle transition: %s", run_id)
+        return False
+    _update_run_progress(
         db,
         run_id,
         phase="starting",
         current=0,
         total=0,
         message="后台任务已接管，开始准备运行",
-        status="running",
-    ),
-    mark_failed=lambda db, run_id, exc: _mark_run_failed(db, run_id, exc),
-)
+        status=None if managed else "running",
+        # ``BackgroundRunDispatcher`` commits this lifecycle/progress pair before
+        # spawning the child.  Keep both facts in its one explicit transaction.
+        commit=False,
+    )
+    return True
 
 
 def bootstrap_workbench_state(db: Session) -> dict[str, Any]:
@@ -392,54 +496,75 @@ def get_initial_workbench_state(db: Session) -> dict[str, Any]:
 
 
 def enqueue_workbench_run(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Persist a canonical queued request before the dispatcher may spawn a worker."""
     skills = sync_skills(db)
     skill_map = {skill.skill_id: skill for skill in skills}
     preset = db.get(Preset, payload["preset_id"]) if payload.get("preset_id") else None
     if payload.get("preset_id") and preset is None:
         raise ValueError("预设不存在，请刷新后重试")
     params = _merge_run_params(db, preset, payload)
+    request = _canonical_workbench_request(params, payload)
+    # ``params_json`` remains a legacy display projection, so keep its mode
+    # aligned with the canonical request instead of leaving an implicit formal
+    # default that would misdescribe experiment/backtest runs.
+    params["run_mode"] = request.run_mode.value
     selected_skills = _select_skills_for_run(db, skill_map, params["skills"])
     if not selected_skills:
         raise ValueError("没有可运行的 Skill，请检查预设配置或 Skill 状态")
 
     run_id = _new_run_id()
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    run = RecommendationRun(
-        run_id=run_id,
-        preset_id=params.get("preset_id"),
-        run_name=params["run_name"],
-        # 尊重调用方显式指定的 run_mode（如曝光补跑传 experiment），
-        # 默认仍为 formal。修复：原先硬编码 "formal" 导致曝光补跑的
-        # experiment 意图失效，run 被错误创建为 formal 并污染记录中心/正式胜率统计。
-        run_mode=str(payload.get("run_mode") or "formal"),
-        trade_date=_latest_trade_date(db),
-        started_at=now,
-        universe_count=0,
-        recommended_count=0,
-        market_scope=params["market_scope"],
-        market_scope_value=params.get("market_scope_value"),
-        risk_template=params["risk_template"],
-        output_count=params["output_count"],
-        selected_skills_json=_dumps(_selected_skill_rows(selected_skills)),
-        params_json=_dumps(params),
-        market_snapshot_json=_dumps({}),
-        result_summary_json=_dumps({"agent_runtime": "queued"}),
-        status="queued",
-        heartbeat_at=now,
-        progress_phase="queued",
-        progress_current=0,
-        progress_total=0,
-        progress_message="等待后台工作线程接管",
+    execution_version, execution_audit = _execution_version_identity(request)
+    repository = SQLAlchemyRunRepository(db)
+    created = repository.create_queued_run(
+        CreateQueuedRun(
+            run_id=run_id,
+            request=request,
+            execution_version=execution_version,
+            created_at=now,
+        )
     )
-    db.add(run)
+    if not created.applied:
+        raise RuntimeError(f"无法持久化 queued Run: {created.outcome.value}")
+    run = db.get(RecommendationRun, run_id)
+    assert run is not None  # The repository just inserted and flushed this row.
+    # Keep legacy projections byte-compatible while request_json remains canonical.
+    run.selected_skills_json = _dumps(_selected_skill_rows(selected_skills))
+    run.params_json = _dumps(params)
+    run.result_summary_json = _dumps(
+        {
+            "agent_runtime": "queued",
+            "execution": {**execution_audit, "execution_version": execution_version},
+        }
+    )
     db.commit()
     invalidate_bootstrap_cache()
-    _run_dispatcher.enqueue(run_id, dict(payload))
+    _run_dispatcher.enqueue(run_id)
     return {
         "run": _serialize_run_summary(db, run),
         "recommendations": [],
         "queued": True,
     }
+
+
+def dispatch_workbench_run(db: Session, run_id: str) -> None:
+    """Dispatch an already-persisted run after its state transition is committed.
+
+    Recovery uses this same boundary as initial enqueue.  The repository read is a
+    cutover guard: an invalid or legacy-only row cannot be sent to a worker that
+    would have to reconstruct business input from ``params_json``.
+    """
+    normalized_run_id = str(run_id).strip()
+    if not normalized_run_id:
+        raise ValueError("run_id 不能为空")
+    record = SQLAlchemyRunRepository(db).get_run(normalized_run_id)
+    if record is None:
+        raise RuntimeError(f"Run {normalized_run_id} 没有可用的 canonical request")
+    if record.status not in {RunStatus.QUEUED, RunStatus.RUNNING}:
+        raise RuntimeError(f"Run {normalized_run_id} 当前状态不可派发: {record.status.value}")
+    # The caller owns the preceding CAS commit.  No request payload is allowed to
+    # cross this boundary; the dispatcher carries only run_id.
+    _run_dispatcher.enqueue(normalized_run_id)
 
 
 def list_runs(db: Session, limit: int = 100) -> list[dict[str, Any]]:
@@ -450,27 +575,18 @@ def list_runs(db: Session, limit: int = 100) -> list[dict[str, Any]]:
 
 
 def _auto_recover_stale_runs(db: Session, runs: list[RecommendationRun]) -> int:
-    """自动将心跳超时的活跃运行标记为 interrupted。"""
+    """Route dashboard watchdog recovery through the same lifecycle CAS."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    recovered = 0
-    for run in runs:
-        if run.status not in RUN_ACTIVE_STATUSES:
-            continue
-        if run.heartbeat_at and (now - run.heartbeat_at).total_seconds() > RUN_HEARTBEAT_STALE_SECONDS:
-            run.status = "interrupted"
-            run.interrupted_at = now
-            run.finished_at = now
-            run.heartbeat_at = now
-            run.error_message = f"心跳超时（>{RUN_HEARTBEAT_STALE_SECONDS}s），自动标记为中断"
-            run.progress_phase = "interrupted"
-            if not run.progress_message:
-                run.progress_message = "心跳超时自动中断"
-            recovered += 1
-    if recovered:
-        db.commit()
-        invalidate_bootstrap_cache()
-        logger.warning("auto-recovered %d stale runs", recovered)
-    return recovered
+    stale_ids = [
+        run.run_id
+        for run in runs
+        if run.status in RUN_ACTIVE_STATUSES
+        and run.heartbeat_at
+        and (now - run.heartbeat_at).total_seconds() > RUN_HEARTBEAT_STALE_SECONDS
+    ]
+    if not stale_ids:
+        return 0
+    return recover_interrupted_runs(db, stale_ids)
 
 
 def get_run_detail(db: Session, run_id: str) -> dict[str, Any] | None:
@@ -712,14 +828,41 @@ def get_run_replay_analysis(db: Session, run_id: str) -> dict[str, Any] | None:
 
 
 def _mark_run_failed(db: Session, run_id: str, exc: Exception) -> None:
+    """Persist dispatcher/worker failure through lifecycle CAS when available."""
     try:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        repository = SQLAlchemyRunRepository(db)
+        lifecycle = LegacyWorkbenchRunCoordinator(repository)
+        record = repository.get_run(run_id)
+        if record is not None:
+            if record.status in {RunStatus.QUEUED, RunStatus.RUNNING}:
+                transition_applied = lifecycle.spawn_failed(run_id, now=now, message=str(exc))
+                if not transition_applied:
+                    logger.warning("run failure CAS lost for %s; refusing direct status overwrite", run_id)
+                    db.rollback()
+                    return
+                db.expire_all()
+                run = db.get(RecommendationRun, run_id)
+                if run is None:
+                    return
+                # The lifecycle CAS owns status, finished_at, heartbeat and lease
+                # cleanup.  Only legacy projection fields are written here.
+                run.progress_phase = "failed"
+                run.progress_message = str(exc)
+                db.commit()
+                invalidate_bootstrap_cache()
+                _record_progress_commit(run)
+            return
+
+        # Historical rows without canonical request columns cannot participate in
+        # the state machine; preserve their old projection-only failure fallback.
         run = db.get(RecommendationRun, run_id)
-        if run is None:
+        if run is None or run.status not in {"queued", "running"}:
             return
         run.status = "failed"
         run.error_message = str(exc)
-        run.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        run.heartbeat_at = run.finished_at
+        run.finished_at = now
+        run.heartbeat_at = now
         run.progress_phase = "failed"
         run.progress_message = str(exc)
         db.commit()
@@ -746,6 +889,21 @@ def _update_run_progress(
     if run is None:
         return None
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    lifecycle_repository = SQLAlchemyRunRepository(db)
+    lifecycle_record = lifecycle_repository.get_run(run_id)
+    if lifecycle_record is not None and lifecycle_record.lease is not None:
+        renewed = LegacyWorkbenchRunCoordinator(lifecycle_repository).renew_worker_lease(
+            run_id,
+            now=now,
+            ttl=timedelta(seconds=RUN_HEARTBEAT_STALE_SECONDS),
+        )
+        if not renewed:
+            raise RuntimeError("Run lifecycle lease 已丢失或过期，worker 必须停止写入")
+        # Repository CAS expires the identity map so this legacy progress write
+        # cannot accidentally flush an obsolete status/revision view.
+        run = db.get(RecommendationRun, run_id)
+        if run is None:
+            return None
     run.heartbeat_at = now
     run.progress_phase = phase
     if current is not None:
@@ -781,24 +939,39 @@ def _update_run_progress(
 
 
 def recover_interrupted_runs(db: Session, run_ids: list[str] | None = None) -> int:
-    """启动时将真正失联的后台任务标记为 interrupted。
-
-    推荐任务现在运行在独立子进程中，后端重启后子进程仍可继续更新心跳。
-    因此只有心跳超时的任务才需要被标记为 interrupted；心跳未超时的任务
-    说明子进程仍在正常运行，应继续保留 running 状态。
-    """
+    """Move stale active runs to ``interrupted`` through the lifecycle CAS."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     stmt = select(RecommendationRun).where(RecommendationRun.status.in_(tuple(RUN_ACTIVE_STATUSES)))
     if run_ids is not None:
         stmt = stmt.where(RecommendationRun.run_id.in_(run_ids))
     runs = db.scalars(stmt).all()
+    repository = SQLAlchemyRunRepository(db)
+    lifecycle = LegacyWorkbenchRunCoordinator(repository)
     recovered = 0
     for run in runs:
         heartbeat_age = (now - run.heartbeat_at).total_seconds() if run.heartbeat_at else float("inf")
-        # 心跳未超时说明独立子进程仍在运行，不要打断它
         if heartbeat_age <= RUN_HEARTBEAT_STALE_SECONDS:
             logger.info("keep running run %s alive (heartbeat age=%.0fs)", run.run_id, heartbeat_age)
             continue
+
+        record = repository.get_run(run.run_id)
+        if record is not None:
+            if lifecycle.heartbeat_timeout(
+                run.run_id,
+                now=now,
+                message="服务重启或进程退出，后台任务已中断；请重新发起运行。",
+            ):
+                recovered += 1
+                db.expire_all()
+                refreshed = db.get(RecommendationRun, run.run_id)
+                if refreshed is not None:
+                    refreshed.progress_phase = "interrupted"
+                    if not refreshed.progress_message:
+                        refreshed.progress_message = "任务未正常结束"
+            continue
+
+        # Historical rows without canonical request columns retain a projection-only
+        # fallback; new rows must never bypass the state machine.
         run.status = "interrupted"
         run.interrupted_at = now
         run.finished_at = now
@@ -819,12 +992,31 @@ def recover_interrupted_runs(db: Session, run_ids: list[str] | None = None) -> i
 
 
 def _save_checkpoint(db: Session, run_id: str, phase: str) -> None:
-    """将当前阶段写入断点，commit 确保中断后可恢复。"""
+    """Commit the legacy checkpoint and, when present, its canonical lifecycle twin."""
     run = db.get(RecommendationRun, run_id)
     if run is None:
         return
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     run.checkpoint_phase = phase
-    run.heartbeat_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    run.heartbeat_at = now
+    # New runs have an opaque lease and receive monotonic RunPhase checkpoints.
+    # Renew in the same worker turn so a long stage can never commit after expiry.
+    lifecycle_repository = SQLAlchemyRunRepository(db)
+    lifecycle = LegacyWorkbenchRunCoordinator(lifecycle_repository)
+    lifecycle_record = lifecycle_repository.get_run(run_id)
+    if lifecycle_record is not None and lifecycle_record.lease is not None:
+        if not lifecycle.renew_worker_lease(
+            run_id,
+            now=now,
+            ttl=timedelta(seconds=RUN_HEARTBEAT_STALE_SECONDS),
+        ):
+            raise RuntimeError("Run lifecycle lease 已丢失或过期，不能提交 checkpoint")
+    # Old runs keep their original resume behavior without a forced backfill.
+    lifecycle.sync_checkpoint(
+        run_id,
+        legacy_phase=phase,
+        now=now,
+    )
     db.commit()
     _record_progress_commit(run)
 
@@ -879,6 +1071,8 @@ def _persist_run_start(
     params: dict[str, Any],
     selected_skills: list[dict[str, Any]],
     *,
+    request: RunRequest,
+    execution_version: str | None = None,
     phase: str = "prepare",
     message: str = "同步 Skill 与运行参数完成，准备拉取市场数据",
 ) -> RecommendationRun:
@@ -889,7 +1083,9 @@ def _persist_run_start(
         db.add(run)
     run.preset_id = params.get("preset_id")
     run.run_name = params["run_name"]
-    run.run_mode = "formal"
+    # The indexed column and the canonical request are written from the same
+    # validated value; a later worker can therefore reject drift deterministically.
+    run.run_mode = request.run_mode.value
     run.trade_date = run.trade_date or _latest_trade_date(db)
     run.finished_at = None
     run.universe_count = 0
@@ -900,7 +1096,13 @@ def _persist_run_start(
     run.score_line = float(params["score_line"])
     run.output_count = params["output_count"]
     run.selected_skills_json = _dumps(_selected_skill_rows(selected_skills))
+    # Dual-write: params_json remains a legacy projection, while these two
+    # columns are the only durable request identity used by workers.
     run.params_json = _dumps(params)
+    run.request_schema_version = request.schema_version
+    run.request_json = request.to_canonical_json()
+    if execution_version is not None and not run.execution_version:
+        run.execution_version = execution_version
     run.market_snapshot_json = run.market_snapshot_json or _dumps({})
     run.result_summary_json = _dumps({"agent_runtime": "starting"})
     run.filter_audit_json = run.filter_audit_json or _dumps({})
@@ -913,6 +1115,7 @@ def _persist_run_start(
     run.progress_message = message
     run.interrupted_at = None
     run.checkpoint_phase = phase
+    assert_run_request_index_consistency(run, request)
     db.commit()
     invalidate_bootstrap_cache()
     _record_progress_commit(run)
@@ -923,11 +1126,16 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     run_id = existing_run_id or _new_run_id()
     is_resume = bool(existing_run_id)
 
-    # 读取断点信息
+    # 读取断点信息；已有 run 必须先通过 canonical request cutover guard。
     checkpoint_phase: str | None = None
+    existing_run: RecommendationRun | None = None
+    existing_request: RunRequest | None = None
     if is_resume:
         existing_run = db.get(RecommendationRun, run_id)
-        if existing_run and existing_run.checkpoint_phase:
+        if existing_run is None:
+            raise RuntimeError(f"Run {run_id} 不存在")
+        existing_request = load_canonical_run_request(existing_run)
+        if existing_run.checkpoint_phase:
             checkpoint_phase = existing_run.checkpoint_phase
         logger.info("resume run %s from checkpoint %s", run_id, checkpoint_phase or "start")
 
@@ -936,6 +1144,20 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         if not checkpoint_phase:
             return True
         return _phase_index(phase) > _phase_index(checkpoint_phase)
+
+    lifecycle_repository = SQLAlchemyRunRepository(db)
+    lifecycle = LegacyWorkbenchRunCoordinator(lifecycle_repository)
+    if existing_run is not None:
+        lifecycle_now = datetime.now(timezone.utc).replace(tzinfo=None)
+        if existing_run.status == "interrupted" and not lifecycle.resume(run_id, now=lifecycle_now):
+            raise RuntimeError("Run interrupted resume 缺少有效 checkpoint、存在活跃 lease 或 CAS 冲突")
+        lease = lifecycle.acquire_worker_lease(
+            run_id,
+            now=lifecycle_now,
+            ttl=timedelta(seconds=RUN_HEARTBEAT_STALE_SECONDS),
+        )
+        if lifecycle_repository.get_run(run_id) is not None and lease is None:
+            raise RuntimeError("该 Run 已被另一个 worker 接管或缺少可用生命周期 lease")
 
     if not is_resume or _should_run("prepare"):
         _update_run_progress(
@@ -949,26 +1171,54 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         )
         skills = sync_skills(db)
         skill_map = {skill.skill_id: skill for skill in skills}
-        preset = db.get(Preset, payload["preset_id"]) if payload.get("preset_id") else None
-        if payload.get("preset_id") and preset is None:
-            raise ValueError("预设不存在，请刷新后重试")
-        params = _merge_run_params(db, preset, payload)
+        if existing_request is not None:
+            # A resumed run never re-merges caller payload/preset defaults.  The
+            # persisted canonical request is the sole execution input.
+            run_request = existing_request
+            params = run_request.model_dump(mode="json")
+            preset = db.get(Preset, run_request.preset_id) if run_request.preset_id else None
+        else:
+            preset = db.get(Preset, payload["preset_id"]) if payload.get("preset_id") else None
+            if payload.get("preset_id") and preset is None:
+                raise ValueError("预设不存在，请刷新后重试")
+            params = _merge_run_params(db, preset, payload)
+            run_request = _canonical_workbench_request(params, payload)
+            params["run_mode"] = run_request.run_mode.value
         selected_skills = _select_skills_for_run(db, skill_map, params["skills"])
         if not selected_skills:
             raise ValueError("没有可运行的 Skill，请检查预设配置或 Skill 状态")
-        run = _persist_run_start(db, run_id, params, selected_skills)
+        execution_version, _execution_audit = _execution_version_identity(run_request)
+        run = _persist_run_start(
+            db,
+            run_id,
+            params,
+            selected_skills,
+            request=run_request,
+            execution_version=execution_version,
+        )
         _save_checkpoint(db, run_id, "prepare")
     else:
-        # 从已有 Run 重建状态
+        # 从已有 Run 重建状态；params_json 仅保留为历史投影，不能驱动恢复。
         run = existing_run
+        assert run is not None
+        run_request = existing_request or load_canonical_run_request(run)
+        params = run_request.model_dump(mode="json")
         skills = sync_skills(db)
         skill_map = {skill.skill_id: skill for skill in skills}
-        params = _loads(run.params_json, {})
-        selected_skill_rows = _loads(run.selected_skills_json, [])
-        selected_skills = _select_skills_for_run(db, skill_map, selected_skill_rows)
+        selected_skills = _select_skills_for_run(db, skill_map, params["skills"])
         if not selected_skills:
             raise ValueError("恢复任务时没有可运行的 Skill，请检查 Skill 状态后重新发起运行")
         preset = db.get(Preset, run.preset_id) if run.preset_id else None
+
+    # Re-read and validate the persisted canonical pair after the prepare branch.
+    # This also protects direct/scheduler callers that create the row themselves.
+    run_request = load_canonical_run_request(run)
+    params = run_request.model_dump(mode="json")
+    execution_version, execution_audit = _execution_version_identity(run_request)
+    factor_plan_audit = execution_audit["factor_plan"]
+    if not run.execution_version:
+        run.execution_version = execution_version
+    db.commit()
 
     data_source = normalize_data_source(params.get("data_source"))
     trade_date_override = params.get("trade_date_override") or None
@@ -989,19 +1239,17 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         status="running",
     )
     try:
-        if data_source == DATA_SOURCE_REALTIME:
-            stocks, snapshot = get_market_universe()
-        elif data_source == DATA_SOURCE_LOCAL_POOL_REALTIME:
-            from app.services.market_pool import get_market_universe_from_pool_with_realtime
-            stocks, snapshot = get_market_universe_from_pool_with_realtime(db)
-        elif data_source == DATA_SOURCE_LOCAL_POOL_PREFERRED:
-            stocks, snapshot = get_market_universe_from_pool(db, refresh=True, as_of_date=trade_date_override)
-        else:
-            stocks, snapshot = get_market_universe_from_pool(db, refresh=False, as_of_date=trade_date_override)
+        stocks, snapshot, market_source_audit = load_legacy_market_universe(
+            db,
+            data_source=data_source,
+            as_of_date=trade_date_override,
+        )
     except Exception as exc:
         _mark_run_failed(db, run_id, exc)
         raise
     snapshot.setdefault("breadth", {})["run_data_source_mode"] = data_source
+    snapshot["breadth"]["market_source_audit"] = market_source_audit
+    snapshot["breadth"]["factor_execution_plan"] = factor_plan_audit
     _update_run_progress(
         db,
         run_id,
@@ -1354,6 +1602,13 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         status="running",
     )
     snapshot.setdefault("breadth", {})["auxiliary_data_audit"] = aux_audit
+    auxiliary_result = project_legacy_auxiliary_audit(
+        aux_audit,
+        instruments=tuple(AuxiliaryInstrument(code=str(code)) for code in aux_prefetch_codes),
+        trade_date=date.fromisoformat(str(snapshot["trade_date"])),
+        refresh_enabled=not skip_aux_refresh,
+    )
+    snapshot["breadth"]["auxiliary_orchestration"] = auxiliary_projection_payload(auxiliary_result)
     _save_checkpoint(db, run_id, "auxiliary_data")
 
     _update_run_progress(
@@ -1383,7 +1638,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         db.add(run)
     run.preset_id = params.get("preset_id")
     run.run_name = params["run_name"]
-    run.run_mode = "formal"
+    run.run_mode = run_request.run_mode.value
     run.trade_date = snapshot["trade_date"]
     if not run.started_at:
         run.started_at = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -1397,6 +1652,10 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     run.output_count = params["output_count"]
     run.selected_skills_json = _dumps(_selected_skill_rows(selected_skills))
     run.params_json = _dumps(params)
+    # Keep the legacy projection for historical queries, but always refresh the
+    # canonical pair from the same validated RunRequest used by execution.
+    run.request_schema_version = run_request.schema_version
+    run.request_json = run_request.to_canonical_json()
     run.market_snapshot_json = _dumps(snapshot)
     run.result_summary_json = _dumps({})
     run.status = "running"
@@ -1407,17 +1666,17 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     run.progress_total = len(research_contexts)
     run.progress_message = f"特征构建完成，进入规则扫描：{len(research_contexts)} 只"
     run.interrupted_at = None
+    assert_run_request_index_consistency(run, run_request)
     db.flush()
     db.commit()  # Persist immediately so the run record survives failures
     invalidate_bootstrap_cache()
 
     agent_session_id = f"sess_{run_id}"
     all_skill_objs = [s["skill"] for s in selected_skills]
-    # 策略分发经 registry 统一取实例（任务 3.2）：run pipeline 不再直调
-    # run_strategy，而是先用本次选中的 skills 建一个 StrategyRegistry，随后
-    # `registry.get(skill_id).evaluate(stock, ctx)`。当前仅 selected_skills 里的
-    # skill 全部是声明式（`DeclarativeStrategy` 委托既有 run_strategy），产出的
-    # Signal 与直接调用 run_strategy 逐字段一致——这是重构，不是新增行为。
+    # 策略分发只经 descriptor-backed registry：命令式与声明式实现都先由同一
+    # bootstrap 装配，再统一调用 `registry.get(skill_id).evaluate(stock, ctx)`。
+    # Adapter 负责把命令式 StrategyDecision 投影为规范 Signal，调用方不得读取
+    # 实现类身份字段或绕过 manifest/Descriptor。
     strategy_registry = build_registry_from_skills(all_skill_objs)
 
     try:
@@ -1723,16 +1982,37 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             ),
         )
 
+        _save_checkpoint(db, run_id, "persist")
+
         run.recommended_count = len(saved)
-        run.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        run.status = "completed"
-        run.heartbeat_at = run.finished_at
+        completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        managed_record = lifecycle_repository.get_run(run_id)
+        if managed_record is not None:
+            if managed_record.lease is None:
+                raise RuntimeError("Run lifecycle completion requires an active worker lease")
+            db.flush()
+            if not lifecycle.complete(run_id, now=completed_at):
+                raise RuntimeError("Run lifecycle completion CAS failed")
+            db.expire_all()
+            run = db.get(RecommendationRun, run_id)
+            if run is None:
+                raise RuntimeError("Run disappeared during lifecycle completion")
+        else:
+            # Historical/direct runs without canonical lifecycle columns retain the
+            # old projection-only completion path.
+            run.finished_at = completed_at
+            run.status = "completed"
+            run.heartbeat_at = completed_at
         run.progress_phase = "completed"
         run.progress_current = len(saved)
         run.progress_total = len(saved)
         run.progress_message = "运行完成"
         run.filter_audit_json = _dumps(pipeline_audit.get("filter_audit") or {})
         summary = _build_run_summary(cards, saved, snapshot, _strip_audit_rows(pipeline_audit))
+        summary["execution"] = {
+            **execution_audit,
+            "execution_version": run.execution_version or execution_version,
+        }
         summary["score_line_meta"] = resolve_score_line_context(
             float(params["score_line"]),
             market_snapshot=snapshot,
@@ -1767,12 +2047,26 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             "recommendations": [_serialize_recommendation(db, rec) for rec in saved],
         }
     except Exception as exc:
-        run.status = "failed"
-        run.error_message = str(exc)
-        run.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        run.heartbeat_at = run.finished_at
-        run.progress_phase = "failed"
-        run.progress_message = str(exc)
+        failed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        managed_record = lifecycle_repository.get_run(run_id)
+        if managed_record is not None:
+            if not lifecycle.fail(run_id, now=failed_at, message=str(exc)):
+                db.rollback()
+                logger.warning("run failure CAS lost for %s; refusing direct status overwrite", run_id)
+                raise
+            db.expire_all()
+            run = db.get(RecommendationRun, run_id) or run
+            # Lifecycle status, error code, timestamp and durable lease cleanup are
+            # owned by the CAS.  Only the legacy progress projection is updated.
+            run.progress_phase = "failed"
+            run.progress_message = str(exc)
+        else:
+            run.status = "failed"
+            run.error_message = str(exc)
+            run.finished_at = failed_at
+            run.heartbeat_at = failed_at
+            run.progress_phase = "failed"
+            run.progress_message = str(exc)
         db.commit()
         invalidate_bootstrap_cache()
         raise

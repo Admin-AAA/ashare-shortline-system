@@ -58,6 +58,15 @@ from app.services.outcome_service import (
 )
 from app.services.temporal_consistency import check_run_temporal_consistency, check_backtest_temporal_consistency
 from app.services.runs.persistence import best_strategy_id
+from app.services.runs.contracts import (
+    CanonicalExecutionVersionBuilder,
+    ExecutionVersionInput,
+    application_identity_from_environment,
+    parse_run_request,
+    selected_recommendation_execution_policy,
+)
+from app.services.runs.request_persistence import assert_run_request_index_consistency
+from app.services.factors.registry import bootstrap_default_factor_registry
 from app.services.evaluation_metrics import (
     compute_full_metrics,
     _empty_metrics as _backtest_empty_metrics,
@@ -753,19 +762,41 @@ def _persist_backtest_run(
         "reason_counts": {},
     }
 
+    request = parse_run_request(
+        {
+            "run_mode": "backtest",
+            "run_name": f"回测 {trade_date}",
+            "market_scope": "全市场",
+            "risk_template": "balanced",
+            "score_line": score_line,
+            "output_count": 1,
+            "trade_date_override": trade_date,
+            "skills": [{"skill_id": skill.skill_id} for skill in skills],
+        }
+    )
+    factor_plan = bootstrap_default_factor_registry()
+    execution_version = CanonicalExecutionVersionBuilder().build(
+        ExecutionVersionInput(
+            application=application_identity_from_environment(),
+            request_schema_version=request.schema_version,
+            execution_policy=selected_recommendation_execution_policy(request),
+            factor_execution_plan_fingerprint=factor_plan.fingerprint,
+        )
+    )
     run = RecommendationRun(
         run_id=run_id,
-        run_name=f"回测 {trade_date}",
-        # 回测 run 用 backtest 而非 formal：formal 必须只代表真实 LIVE 推送，
-        # 否则会污染所有按 run_mode='formal' 过滤的统计（自检 D/E 项、list_runs、dashboard）。
-        run_mode="backtest",
-        trade_date=trade_date,
+        run_name=request.run_name,
+        # The indexed projection is written from the same immutable request that
+        # is stored in request_json; never independently classify a backtest as
+        # formal while its canonical request says otherwise.
+        run_mode=request.run_mode.value,
+        trade_date=request.trade_date_override or trade_date,
         started_at=now,
         finished_at=now,
-        market_scope="全市场",
-        risk_template="balanced",
-        score_line=score_line,
-        output_count=0,
+        market_scope=request.market_scope,
+        risk_template=request.risk_template,
+        score_line=request.score_line,
+        output_count=request.output_count,
         universe_count=universe_count,
         recommended_count=recommended_count,
         status="completed",
@@ -778,10 +809,14 @@ def _persist_backtest_run(
                 "score_line": score_line,
             }
         ),
+        request_schema_version=request.schema_version,
+        request_json=request.to_canonical_json(),
+        execution_version=execution_version,
         market_snapshot_json="{}",
         result_summary_json=json.dumps({"backtest": True, "score_line": score_line}),
         filter_audit_json=json.dumps(filter_audit, ensure_ascii=False),
     )
+    assert_run_request_index_consistency(run, request)
     db.add(run)
     db.commit()
     return run_id

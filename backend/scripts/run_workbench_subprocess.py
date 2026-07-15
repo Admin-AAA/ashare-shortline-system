@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import sys
 import traceback
@@ -23,17 +22,19 @@ load_dotenv(BASE_DIR / ".env")
 
 from app.db.session import SessionLocal  # noqa: E402
 from app.models.tables import RecommendationRun  # noqa: E402
+from app.services.runs.sqlalchemy_repository import SQLAlchemyRunRepository  # noqa: E402
 from app.services.workbench_service import run_workbench  # noqa: E402
 
 
 async def _run(run_id: str) -> None:
     db = SessionLocal()
     try:
-        run_record = db.get(RecommendationRun, run_id)
-        if run_record is None:
-            raise RuntimeError(f"Run {run_id} not found")
-        payload = json.loads(run_record.params_json or "{}")
-        await run_workbench(db, payload, existing_run_id=run_id)
+        # Repository loading is the subprocess cutover boundary.  It parses and
+        # upgrades the persisted canonical request; params_json is never consulted.
+        record = SQLAlchemyRunRepository(db).get_run(run_id)
+        if record is None:
+            raise RuntimeError(f"Run {run_id} not found or has no valid canonical request")
+        await run_workbench(db, record.request, existing_run_id=run_id)
     finally:
         db.close()
 
@@ -48,6 +49,14 @@ def _mark_failed(run_id: str, exc: BaseException) -> None:
             if run.status not in {"queued", "running"}:
                 return
             now = datetime.now(timezone.utc).replace(tzinfo=None)
+            repository = SQLAlchemyRunRepository(db)
+            managed = repository.get_run(run_id)
+            if managed is not None:
+                from app.services.runs.coordinator import LegacyWorkbenchRunCoordinator
+
+                LegacyWorkbenchRunCoordinator(repository).fail(run_id, now=now, message=str(exc))
+                db.commit()
+                return
             run.status = "failed"
             run.error_message = str(exc)
             run.finished_at = now

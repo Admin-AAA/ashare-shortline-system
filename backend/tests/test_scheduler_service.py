@@ -1,6 +1,7 @@
 import asyncio
 import uuid
 
+import pytest
 from sqlalchemy import update
 
 from app.models.tables import Preset, ScheduledTaskRun
@@ -141,7 +142,8 @@ def test_run_preset_matrix_continues_after_single_preset_failure(monkeypatch, db
     assert status_by_preset[successful_preset_id] == "completed"
 
 
-def test_run_preset_matrix_defaults_to_auto(monkeypatch, db):
+@pytest.mark.parametrize("run_mode", ("formal", "experiment", "backtest"))
+def test_run_preset_matrix_defaults_to_auto(monkeypatch, db, run_mode):
     db.execute(update(Preset).where(Preset.status == "active").values(status="disabled"))
     preset_id = f"preset_matrix_default_source_{uuid.uuid4().hex[:8]}"
     db.add(
@@ -168,12 +170,18 @@ def test_run_preset_matrix_defaults_to_auto(monkeypatch, db):
 
     monkeypatch.setattr("app.services.workbench_service.run_workbench", fake_run_workbench)
 
-    result = asyncio.run(scheduler_service._run_preset_matrix(db, {"matrix_batch_id": "matrix_default_source"}))
+    result = asyncio.run(
+        scheduler_service._run_preset_matrix(
+            db,
+            {"matrix_batch_id": "matrix_default_source", "run_mode": run_mode},
+        )
+    )
 
     assert result["completed_count"] == 1
     # scheduler 默认 data_source=auto（盘中→local_pool_realtime，盘后→local_pool_preferred），
     # auto 的解析在 workbench._normalize_data_source 内完成，故 workbench 收到的是 "auto"
     assert calls[0]["data_source"] == "auto"
+    assert calls[0]["run_mode"] == run_mode
 
 
 def test_run_data_sync_daily_bars_uses_trade_date_batch_remediation(monkeypatch):

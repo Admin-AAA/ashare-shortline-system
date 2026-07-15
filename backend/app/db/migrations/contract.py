@@ -42,6 +42,10 @@ class MigrationConditionError(MigrationError):
     code = "migration_condition_failed"
 
 
+class MigrationExecutionTimeoutError(MigrationError):
+    code = "migration_execution_timeout"
+
+
 class MigrationSafetyError(MigrationError):
     code = "migration_operation_rejected"
 
@@ -340,13 +344,21 @@ class MigrationContext:
         columns: Sequence[str],
         *,
         unique: bool = False,
+        ddl_target: Any | None = None,
     ) -> None:
-        """Create an index only when absent."""
+        """Create an index only when absent.
+
+        Existing-table indexes must pass an explicit read-only DDL preflight;
+        callers creating indexes as part of a brand-new table may omit the
+        target because the table has no existing data or lock surface yet.
+        """
         safe_table = self._validate_identifier(table)
         safe_index = self._validate_identifier(index)
         safe_columns = tuple(self._validate_identifier(column) for column in columns)
         if not safe_columns:
             raise MigrationSafetyError("create_index requires at least one column")
+        if ddl_target is not None:
+            self.require_ddl_preflight(ddl_target)
         if self.has_index(safe_table, safe_index):
             return
         unique_sql = "UNIQUE " if unique else ""
@@ -354,6 +366,35 @@ class MigrationContext:
             text(
                 f"CREATE {unique_sql}INDEX {self._quote(safe_index)} "
                 f"ON {self._quote(safe_table)} ({', '.join(self._quote(column) for column in safe_columns)})"
+            )
+        )
+
+    def alter_column(
+        self,
+        table: str,
+        column: str,
+        definition: str,
+        *,
+        ddl_target: Any,
+    ) -> None:
+        """Apply a preflighted compatible MySQL column type adjustment.
+
+        There is intentionally no generic SQL escape hatch.  SQLite unit tests
+        cannot emulate MySQL ``MODIFY COLUMN`` and therefore fail closed rather
+        than pretending that a type migration ran.
+        """
+        safe_table = self._validate_identifier(table)
+        safe_column = self._validate_identifier(column)
+        if not self.has_column(safe_table, safe_column):
+            raise MigrationSafetyError(f"cannot alter missing column: {safe_table}.{safe_column}")
+        self.require_ddl_preflight(ddl_target)
+        if self.dialect_name != "mysql":
+            raise MigrationSafetyError("compatible column type adjustment requires MySQL")
+        self.__connection.execute(
+            text(
+                f"ALTER TABLE {self._quote(safe_table)} MODIFY COLUMN "
+                f"{self._quote(safe_column)} {self._validate_fragment(definition)}, "
+                "ALGORITHM=INPLACE, LOCK=NONE"
             )
         )
 

@@ -8,6 +8,7 @@ canonical request, revision, checkpoint and lease columns.
 from __future__ import annotations
 
 from ..contract import Migration, MigrationContext, MigrationOperation, OperationState, define_migration
+from ..preflight import DdlOperation, DdlTarget
 
 
 _TABLE = "recommendation_runs"
@@ -49,11 +50,24 @@ def _column_operation(column: str, definition: str) -> MigrationOperation:
 
 
 def _index_operation(index: str, columns: tuple[str, ...]) -> MigrationOperation:
+    target = DdlTarget(
+        migration_version="V002_workbench_run_lifecycle",
+        operation=DdlOperation.ADD_INDEX,
+        table=_TABLE,
+        index_columns=columns,
+        algorithm="INPLACE",
+        lock="NONE",
+    )
     return MigrationOperation(
         name=f"create_{index}",
         checksum_material=f"CREATE INDEX {index} ON {_TABLE} ({','.join(columns)})",
         precondition=lambda context, index=index: _index_state(context, index),
-        apply=lambda context, index=index, columns=columns: context.create_index(_TABLE, index, columns),
+        apply=lambda context, index=index, columns=columns: context.create_index(
+            _TABLE,
+            index,
+            columns,
+            ddl_target=target,
+        ),
         postcondition=lambda context, index=index: _index_state(context, index),
     )
 

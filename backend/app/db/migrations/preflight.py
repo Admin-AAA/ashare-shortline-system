@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import json
 from pathlib import Path
 import re
 import shutil
@@ -49,10 +50,14 @@ class DdlTarget:
     expected_nullable: bool | None = None
     expected_default: str | None = None
     natural_key: tuple[str, ...] = ()
+    index_columns: tuple[str, ...] = ()
     algorithm: str = "INSTANT"
     lock: str = "NONE"
     minimum_free_bytes: int = 256 * 1024 * 1024
     long_transaction_limit_seconds: int = 120
+    maximum_estimated_rows: int | None = None
+    maximum_table_bytes: int | None = None
+    duplicate_sample_limit: int = 10
 
     def __post_init__(self) -> None:
         _validate_identifier(self.table)
@@ -66,10 +71,20 @@ class DdlTarget:
             raise ValueError("expected_data_types requires column")
         if not self.expected_data_types and self.operation is DdlOperation.ADD_COLUMN:
             raise ValueError("add_column target requires expected_data_types")
-        for column in self.natural_key:
+        if self.operation is DdlOperation.ADD_UNIQUE and not self.natural_key:
+            raise ValueError("UNIQUE targets require ordered natural_key columns")
+        if self.operation is DdlOperation.ADD_INDEX and not (self.index_columns or self.natural_key):
+            raise ValueError("index targets require ordered index_columns")
+        for column in (*self.natural_key, *self.index_columns):
             _validate_identifier(column)
         if self.minimum_free_bytes < 0:
             raise ValueError("minimum_free_bytes must be non-negative")
+        if self.maximum_estimated_rows is not None and self.maximum_estimated_rows < 0:
+            raise ValueError("maximum_estimated_rows must be non-negative")
+        if self.maximum_table_bytes is not None and self.maximum_table_bytes < 0:
+            raise ValueError("maximum_table_bytes must be non-negative")
+        if self.duplicate_sample_limit < 1:
+            raise ValueError("duplicate_sample_limit must be positive")
         if self.long_transaction_limit_seconds < 1:
             raise ValueError("long_transaction_limit_seconds must be positive")
         if self.algorithm not in {"INSTANT", "INPLACE"}:
@@ -183,20 +198,53 @@ class DdlPreflight:
         if row is None:
             return PreflightCheck.create("table_inventory", PreflightStatus.BLOCK, {"reason": "target_table_missing"})
         engine = str(row.get("engine") or "").lower()
+        estimated_rows = int(row.get("estimated_rows") or 0)
+        data_bytes = int(row.get("data_bytes") or 0)
+        index_bytes = int(row.get("index_bytes") or 0)
+        table_bytes = data_bytes + index_bytes
         if engine != "innodb":
             return PreflightCheck.create(
                 "table_inventory",
                 PreflightStatus.BLOCK,
                 {"engine": engine or "unknown", "reason": "online DDL requires InnoDB"},
             )
+        if target.maximum_estimated_rows is not None and estimated_rows > target.maximum_estimated_rows:
+            return PreflightCheck.create(
+                "table_inventory",
+                PreflightStatus.BLOCK,
+                {
+                    "engine": engine,
+                    "estimated_rows": estimated_rows,
+                    "maximum_estimated_rows": target.maximum_estimated_rows,
+                    "data_bytes": data_bytes,
+                    "index_bytes": index_bytes,
+                    "table_bytes": table_bytes,
+                    "reason": "estimated_row_limit_exceeded",
+                },
+            )
+        if target.maximum_table_bytes is not None and table_bytes > target.maximum_table_bytes:
+            return PreflightCheck.create(
+                "table_inventory",
+                PreflightStatus.BLOCK,
+                {
+                    "engine": engine,
+                    "estimated_rows": estimated_rows,
+                    "data_bytes": data_bytes,
+                    "index_bytes": index_bytes,
+                    "table_bytes": table_bytes,
+                    "maximum_table_bytes": target.maximum_table_bytes,
+                    "reason": "table_size_limit_exceeded",
+                },
+            )
         return PreflightCheck.create(
             "table_inventory",
             PreflightStatus.PASS,
             {
                 "engine": engine,
-                "estimated_rows": int(row.get("estimated_rows") or 0),
-                "data_bytes": int(row.get("data_bytes") or 0),
-                "index_bytes": int(row.get("index_bytes") or 0),
+                "estimated_rows": estimated_rows,
+                "data_bytes": data_bytes,
+                "index_bytes": index_bytes,
+                "table_bytes": table_bytes,
                 "free_bytes": int(row.get("free_bytes") or 0),
             },
         )
@@ -246,7 +294,25 @@ class DdlPreflight:
         if match is None:
             return PreflightCheck.create("online_capability", PreflightStatus.UNKNOWN, {"reason": "unknown_server_version"})
         major, minor = (int(match.group(1)), int(match.group(2)))
-        supported = target.operation is DdlOperation.ADD_COLUMN and (major, minor) >= (8, 0)
+        server_version = (major, minor)
+        # Keep the matrix conservative: an operation only passes when the
+        # requested algorithm/lock pair is known to be online for MySQL 8+.
+        supported = (
+            server_version >= (8, 0)
+            and (
+                (target.operation is DdlOperation.ADD_COLUMN and target.algorithm == "INSTANT" and target.lock == "NONE")
+                or (
+                    target.operation in {DdlOperation.ADD_INDEX, DdlOperation.ADD_UNIQUE}
+                    and target.algorithm == "INPLACE"
+                    and target.lock == "NONE"
+                )
+                or (
+                    target.operation is DdlOperation.ALTER_COLUMN
+                    and target.algorithm == "INPLACE"
+                    and target.lock in {"NONE", "SHARED"}
+                )
+            )
+        )
         return PreflightCheck.create(
             "online_capability",
             PreflightStatus.PASS if supported else PreflightStatus.BLOCK,
@@ -255,6 +321,7 @@ class DdlPreflight:
                 "server_minor": minor,
                 "algorithm": target.algorithm,
                 "lock": target.lock,
+                "operation": target.operation.value,
                 "reason": "supported" if supported else "operation_or_server_not_in_capability_matrix",
             },
         )
@@ -285,24 +352,50 @@ class DdlPreflight:
         )
 
     def _check_metadata_lock_waits(self, target: DdlTarget) -> PreflightCheck:
+        """Find pending metadata waits and the granted locks blocking them.
+
+        ``performance_schema.metadata_locks`` is intentionally queried rather
+        than PROCESSLIST/KILL: the gate is read-only and never attempts to
+        resolve a blocker automatically.  Missing SELECT permission remains
+        UNKNOWN and therefore blocks DDL through ``report.is_safe``.
+        """
         try:
-            pending = int(
-                self._connection.scalar(
-                    text(
-                        "SELECT COUNT(*) FROM performance_schema.metadata_locks "
-                        "WHERE object_type = 'TABLE' AND object_schema = DATABASE() "
-                        "AND object_name = :table AND lock_status = 'PENDING'"
-                    ),
-                    {"table": target.table},
-                )
-                or 0
-            )
+            row = self._connection.execute(
+                text(
+                    "SELECT "
+                    "COUNT(DISTINCT pending.OWNER_THREAD_ID) AS waiting_threads, "
+                    "COUNT(DISTINCT blocking.OWNER_THREAD_ID) AS blocker_threads, "
+                    "COUNT(*) AS pending_waits "
+                    "FROM performance_schema.metadata_locks AS pending "
+                    "LEFT JOIN performance_schema.metadata_locks AS blocking "
+                    "ON blocking.OBJECT_TYPE = pending.OBJECT_TYPE "
+                    "AND blocking.OBJECT_SCHEMA <=> pending.OBJECT_SCHEMA "
+                    "AND blocking.OBJECT_NAME <=> pending.OBJECT_NAME "
+                    "AND blocking.LOCK_STATUS = 'GRANTED' "
+                    "WHERE pending.OBJECT_TYPE = 'TABLE' "
+                    "AND pending.OBJECT_SCHEMA = DATABASE() "
+                    "AND pending.OBJECT_NAME = :table "
+                    "AND pending.LOCK_STATUS = 'PENDING'"
+                ),
+                {"table": target.table},
+            ).mappings().first()
         except SQLAlchemyError as exc:
             return _unknown("metadata_lock_waits", exc)
+        if row is None:
+            return PreflightCheck.create("metadata_lock_waits", PreflightStatus.UNKNOWN, {"reason": "no_lock_evidence"})
+        pending = int(row.get("pending_waits") or 0)
+        waiting_threads = int(row.get("waiting_threads") or 0)
+        blockers = int(row.get("blocker_threads") or 0)
+        blocked = pending > 0 or blockers > 0
         return PreflightCheck.create(
             "metadata_lock_waits",
-            PreflightStatus.PASS if pending == 0 else PreflightStatus.BLOCK,
-            {"pending_waits": pending},
+            PreflightStatus.BLOCK if blocked else PreflightStatus.PASS,
+            {
+                "pending_waits": pending,
+                "waiting_threads": waiting_threads,
+                "blocker_threads": blockers,
+                "reason": "metadata_lock_blocker_present" if blocked else "no_pending_metadata_lock_wait",
+            },
         )
 
     def _check_long_transactions(self, target: DdlTarget) -> PreflightCheck:
@@ -326,7 +419,7 @@ class DdlPreflight:
         )
 
     def _check_natural_key_duplicates(self, target: DdlTarget) -> PreflightCheck:
-        if not target.natural_key:
+        if target.operation is not DdlOperation.ADD_UNIQUE or not target.natural_key:
             return PreflightCheck.create("natural_key_duplicates", PreflightStatus.NOT_APPLICABLE)
         columns = ", ".join(_quote_identifier(column) for column in target.natural_key)
         try:
@@ -339,12 +432,34 @@ class DdlPreflight:
                 )
                 or 0
             )
+            sample_rows = self._connection.execute(
+                text(
+                    f"SELECT {columns}, COUNT(*) AS duplicate_count "
+                    f"FROM {_quote_identifier(target.table)} "
+                    f"GROUP BY {columns} HAVING COUNT(*) > 1 "
+                    "ORDER BY duplicate_count DESC LIMIT :sample_limit"
+                ),
+                {"sample_limit": target.duplicate_sample_limit},
+            ).mappings().all()
         except SQLAlchemyError as exc:
             return _unknown("natural_key_duplicates", exc)
+        conflicts = [
+            {str(column): row.get(column) for column in (*target.natural_key, "duplicate_count")}
+            for row in sample_rows
+        ]
         return PreflightCheck.create(
             "natural_key_duplicates",
             PreflightStatus.PASS if duplicates == 0 else PreflightStatus.BLOCK,
-            {"duplicate_groups": duplicates, "key_columns": ",".join(target.natural_key)},
+            {
+                "duplicate_groups": duplicates,
+                "sample_count": len(conflicts),
+                "sample_limit": target.duplicate_sample_limit,
+                "key_columns": ",".join(target.natural_key),
+                # JSON makes the conflict report machine-readable while the
+                # limit prevents a preflight from dumping an entire table.
+                "conflicts": json.dumps(conflicts, ensure_ascii=True, sort_keys=True, default=str),
+                "reason": "no_duplicate_natural_keys" if duplicates == 0 else "duplicate_keys_require_manual_resolution",
+            },
         )
 
 
