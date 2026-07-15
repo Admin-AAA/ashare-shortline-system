@@ -192,6 +192,8 @@
 
 ## S5 — RunCoordinator 分阶段迁移
 
+> **当前状态（2026-07-15，S5 已完成）**：8 个 stage 全部迁移，RunCoordinator 通过 `execute_next_stage_async` 驱动完整阶段链。StageData/StageOutput 提供类型化阶段间数据传递，AsyncRunStage 支持 review 阶段。生产适配器（adapters.py）将 Port 委托给现有服务函数，pipeline.py 提供 `run_staged_pipeline` 入口。6 个 Coordinator 集成测试覆盖 happy path、数据累积、失败传播、资源释放和阶段顺序。
+
 - [x] 5.1 定义 RunContext、Stage Protocol 和依赖装配
   - RunContext 使用类型化字段，不以共享 `dict[str, Any]` 作为阶段隐式协议。
   - Stage 通过构造注入 Port/Repository；生产与测试使用同一装配入口。
