@@ -19,9 +19,10 @@
 ``depends_on`` 三者，保证上游先算、其输出先 merge 回工作 stock。其余因子彼此无依赖，
 它们之间的相对顺序不影响结果（各因子只写自己的 output_fields，无写-写冲突）。
 
-注册与白名单闭环：模块底部用 ``register_factor`` 把 7 个因子登记进进程级
-``default_registry``，随后调用一次 ``bootstrap_factor_allowlist()`` —— 这些 output_fields
-即自动并入 ``evaluator.ALLOWED_NAMES``（需求 3.2），新增因子无需再手工编辑白名单。
+注册与白名单闭环：内置因子类只在本模块声明。生产代码必须显式调用
+``bootstrap_default_factor_registry()``，它会按下方 ``BUILTIN_FACTORS`` 注册、完成依赖/
+输出归属校验、生成冻结 ExecutionPlan，最后才注入 evaluator 白名单；模块 import 不会
+修改全局 Registry，新增因子也无需手工维护白名单。
 
 行为基线（需求 3.5 / 1.1）：迁移后相同输入下各 output 字段值与迁移前逐字段一致，由
 ``tests/test_shortline_factors_equivalence.py`` 的等价对拍守护。20cm 识别复用
@@ -34,9 +35,7 @@ from typing import Any
 
 from app.engine.board_rules import is_twenty_cm_stock
 
-from .allowlist import bootstrap_factor_allowlist
 from .base import BaseFactor, FactorContext
-from .registry import register_factor
 
 
 # ── 数值 / 分级助手（与迁移前 shortline_factors 逐字一致）────────────────────
@@ -131,7 +130,6 @@ def main_industries_of(snapshot: Mapping[str, Any]) -> set[str]:
 
 
 # ── 因子实现 ────────────────────────────────────────────────────────────
-@register_factor
 class MarketContextFactor(BaseFactor):
     """市场上下文：标注个股是否处于主线题材、当日市场情绪相位。
 
@@ -161,7 +159,6 @@ class MarketContextFactor(BaseFactor):
         }
 
 
-@register_factor
 class SectorLadderFactor(BaseFactor):
     """板块梯队完整度：按同板块首/二/高板、涨停数、强势股与题材热度计分。"""
 
@@ -214,7 +211,6 @@ class SectorLadderFactor(BaseFactor):
         }
 
 
-@register_factor
 class CapitalResonanceFactor(BaseFactor):
     """资金共振：主力净流入/超大单/散户方向/板块资金排名/同板块资金扩散计分。
 
@@ -286,7 +282,6 @@ class CapitalResonanceFactor(BaseFactor):
         }
 
 
-@register_factor
 class LimitUpOverheatFactor(BaseFactor):
     """涨停情绪过热：按市场涨停率、跌停压力、连板高度、涨幅位置与封板分歧计分。"""
 
@@ -328,7 +323,6 @@ class LimitUpOverheatFactor(BaseFactor):
         }
 
 
-@register_factor
 class TwentyCmRiskFactor(BaseFactor):
     """20cm 风险闸门：识别创业/科创/北交高波动标的，按涨幅/换手/流动性/位置给闸门。
 
@@ -399,7 +393,6 @@ class TwentyCmRiskFactor(BaseFactor):
         }
 
 
-@register_factor
 class LeaderFactor(BaseFactor):
     """龙头候选评分：度量「龙头属性」（主线/板块阶梯/资金共振/涨停/突破）。
 
@@ -460,7 +453,6 @@ class LeaderFactor(BaseFactor):
         }
 
 
-@register_factor
 class DragonTigerFactor(BaseFactor):
     """龙虎榜聪明钱：买方席位分散度 + 机构净买占比（净买额为 0 或未上榜时归零）。"""
 
@@ -494,6 +486,14 @@ class DragonTigerFactor(BaseFactor):
         }
 
 
-# ── 白名单闭环：7 因子注册完成后一次性把 output_fields 注入 evaluator 白名单 ──
-# 需求 3.2：output_fields 自动成为策略 DSL 合法引用名，新增因子无需手工编辑白名单。
-bootstrap_factor_allowlist()
+# 内置因子在 ``bootstrap_default_factor_registry`` 中显式注册、验证并冻结；模块导入
+# 只声明实现，不修改进程级 Registry，避免隐式 import side effect。
+BUILTIN_FACTORS = (
+    MarketContextFactor,
+    SectorLadderFactor,
+    CapitalResonanceFactor,
+    LimitUpOverheatFactor,
+    TwentyCmRiskFactor,
+    LeaderFactor,
+    DragonTigerFactor,
+)

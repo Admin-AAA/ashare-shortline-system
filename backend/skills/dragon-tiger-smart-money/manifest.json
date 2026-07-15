@@ -2,6 +2,10 @@
   "id": "dragon-tiger-smart-money",
   "name": "龙虎榜聪明钱接力",
   "version": "0.1.0",
+  "mode": "declarative",
+  "status": "active",
+  "requirements": ["stock_feature_context"],
+  "capabilities": ["signal_evaluation"],
   "enabled": true,
   "source_type": "local",
   "description": "基于龙虎榜净买入占当日成交额比例（聪明钱强度）的短线接力策略。龙虎榜席位=机构+游资=聪明钱，净买占比≥5% 回测胜率 85.6%。修复了此前 dragon_tiger_inst_buy_ratio 恒为 0 的沉睡因子。"

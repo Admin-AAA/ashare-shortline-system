@@ -25,6 +25,8 @@ from app.services.factors import (
     FactorDependencyError,
     FactorError,
     FactorRegistry,
+    FactorRegistryFrozenError,
+    bootstrap_default_factor_registry,
     default_registry,
     register_factor,
     run_factors,
@@ -96,20 +98,13 @@ def test_register_as_class_decorator():
     assert run_factors([{}], registry=reg)[0]["k"] == 7
 
 
-def test_register_factor_uses_default_registry():
-    try:
-        @register_factor
-        class TmpDefault(BaseFactor):
-            id = "tmp_default_reg"
-            output_fields = ("t",)
+def test_default_registry_requires_explicit_bootstrap_then_rejects_dynamic_registration():
+    plan = bootstrap_default_factor_registry()
 
-            def compute(self, stock, ctx):
-                return {"t": 1}
-
-        assert "tmp_default_reg" in default_registry
-    finally:
-        default_registry.unregister("tmp_default_reg")
-    assert "tmp_default_reg" not in default_registry
+    assert default_registry.is_frozen is True
+    assert set(plan.factor_ids) >= {"market_context", "leader"}
+    with pytest.raises(FactorRegistryFrozenError):
+        register_factor(_Dummy("tmp_default_reg", ("t",), fn=lambda s, c: {"t": 1}))
 
 
 # ── 线性依赖顺序 ───────────────────────────────────────────────────────

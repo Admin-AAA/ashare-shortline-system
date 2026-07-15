@@ -2,6 +2,10 @@
   "id": "chao-gu-yang-jia-skill",
   "name": "炒股养家大局观",
   "version": "0.1.0",
+  "mode": "declarative",
+  "status": "active",
+  "requirements": ["stock_feature_context"],
+  "capabilities": ["signal_evaluation"],
   "enabled": true,
   "source_type": "local",
   "description": "A股短线大局观、主流热点、赚钱效应、仓位节奏。"

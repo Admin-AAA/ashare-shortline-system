@@ -51,6 +51,9 @@ def _serialize_preset(db: Session, preset: Preset) -> dict[str, Any]:
         "status": preset.status,
         "skills": [
             {
+                # skill_id is retained for the public API; its value is the
+                # descriptor-owned strategy_id, exposed explicitly for new consumers.
+                "strategy_id": row.skill_id,
                 "skill_id": row.skill_id,
                 "weight": row.weight,
                 "sort_order": row.sort_order,
@@ -81,6 +84,7 @@ def _serialize_presets_batched(db: Session, presets: list[Preset]) -> list[dict[
     for row in skill_rows:
         skills_by_preset.setdefault(row.preset_id, []).append(
             {
+                "strategy_id": row.skill_id,
                 "skill_id": row.skill_id,
                 "weight": row.weight,
                 "sort_order": row.sort_order,
@@ -196,11 +200,16 @@ def _replace_preset_skills(db: Session, preset_id: str, skills: list[dict[str, A
     # 显式 flush：确保 DELETE 先落库，否则同事务内 INSERT 与待删旧行主键/唯一键冲突（uq_preset_skill）。
     db.flush()
     for index, item in enumerate(skills):
+        # strategy_id is canonical; skill_id remains accepted and persisted as the
+        # historical column name so existing API clients and rows stay compatible.
+        strategy_id = str(item.get("strategy_id") or item.get("skill_id") or "").strip()
+        if not strategy_id:
+            raise ValueError("preset skill requires strategy_id or skill_id")
         db.add(
             PresetSkill(
-                id=f"{preset_id}:{item['skill_id']}",
+                id=f"{preset_id}:{strategy_id}",
                 preset_id=preset_id,
-                skill_id=str(item["skill_id"]),
+                skill_id=strategy_id,
                 weight=float(item.get("weight") or 1.0),
                 sort_order=int(item.get("sort_order") or index),
             )

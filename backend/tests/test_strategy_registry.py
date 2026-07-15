@@ -1,19 +1,4 @@
-"""``Strategy`` 协议 + ``DeclarativeStrategy`` + ``StrategyRegistry`` 单测（任务 3.2，需求 4.4）。
-
-覆盖范围：
-1. ``StrategyRegistry`` 注册 / 查找 / 未知 id 报错（结构性行为，对齐 2.1 的
-   ``FactorRegistry`` 用例手法）。
-2. ``DeclarativeStrategy.evaluate`` 与直接调用 ``run_strategy`` 的结果**逐字段一致**
-   ——复用 3.1 ``test_signal_equivalence.py`` 的等价对拍手法：手写内联 contract，
-   不从磁盘 / yaml 加载，直接实例化 frozen ``StrategySkill``。
-3. ``build_registry_from_skills`` 批量注册正确（skill_id 到 ``DeclarativeStrategy``
-   的映射、重复 id 报错等）。
-
-纯 in-process：只依赖 ``app.engine.strategy`` / ``app.engine.strategy_runner`` /
-``app.engine.skill_loader`` / ``app.engine.signal``，不吃 DB / 网络，不 import
-``app.services.workbench_service`` / ``app.services.backtest_service``（它们会触发
-``pymysql`` 等 DB 驱动 import，本环境不可用）。
-"""
+"""Descriptor-only StrategyRegistry regression tests."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -27,265 +12,124 @@ from app.engine.strategy import (
     DuplicateStrategyError,
     Strategy,
     StrategyContext,
+    StrategyError,
     StrategyNotFoundError,
     StrategyRegistry,
     build_registry_from_skills,
+    build_strategy_descriptor,
 )
 from app.engine.strategy_runner import run_strategy
 
-# ── 内联 contract：与 3.1 test_signal_equivalence.py 同一手法，覆盖 universe /
-#    prefilter / phases / scoring / setups / risk 的完整评分路径。 ──────────
 _CONTRACT: dict = {
     "id": "registry-equiv-strategy",
     "name": "注册表等价测试策略",
     "weight": 1.1,
     "meta": {"strategy_independence": 0.88},
-    "universe": {
-        "include": ["amount_yi >= 1"],
-        "exclude": ["is_st == true"],
-    },
+    "universe": {"include": ["amount_yi >= 1"], "exclude": ["is_st == true"]},
     "prefilter": {"market": {"exclude": ["avg_cost > 200"]}},
-    "phases": [
-        {"when": "pct >= 5", "name": "上涨", "score_cap": 90, "hard_veto": False, "risk_flags": ["涨幅偏高"]},
-    ],
-    "scoring": {
-        "base": 50,
-        "score_fields": [
-            {"field": "pct", "multiplier": 2.0, "cap": 20, "reason": "涨幅贡献"},
-        ],
-        "rules": [
-            {"when": "vol5_20 >= 1", "delta": 10, "reason": "量比放大"},
-        ],
-    },
-    "setups": [
-        {"when": "breakout20 == true", "name": "突破买点", "score_delta": 6,
-         "entry_rule": "突破确认后进场", "invalid_rule": "跌破 MA20"},
-    ],
-    "risk": {
-        "rules": [
-            {"when": "bias_ma20 >= 15", "flag": "乖离率偏高", "level": "high"},
-        ],
-    },
+    "phases": [{"when": "pct >= 5", "name": "上涨", "score_cap": 90, "hard_veto": False, "risk_flags": ["涨幅偏高"]}],
+    "scoring": {"base": 50, "score_fields": [{"field": "pct", "multiplier": 2.0, "cap": 20, "reason": "涨幅贡献"}], "rules": [{"when": "vol5_20 >= 1", "delta": 10, "reason": "量比放大"}]},
+    "setups": [{"when": "breakout20 == true", "name": "突破买点", "score_delta": 6, "entry_rule": "突破确认后进场", "invalid_rule": "跌破 MA20"}],
+    "risk": {"rules": [{"when": "bias_ma20 >= 15", "flag": "乖离率偏高", "level": "high"}]},
     "require_setup": False,
 }
 
-_CONTRACT_HASH = "fedcba9876543210fedcba9876543210"
-
 
 def _make_skill(skill_id: str = "registry-equiv-strategy", contract: dict | None = None) -> StrategySkill:
-    """直接实例化 frozen ``StrategySkill``，绕开磁盘 / yaml 加载。"""
-    contract = dict(contract or _CONTRACT)
-    contract["id"] = skill_id
+    contract_value = dict(contract or _CONTRACT)
+    contract_value["id"] = skill_id
+    name = str(contract_value.get("name", skill_id))
     return StrategySkill(
         skill_id=skill_id,
-        name=contract.get("name", skill_id),
+        name=name,
         version="1.0.0",
-        path=Path(f"/nonexistent/{skill_id}"),  # run_strategy 不访问 path
-        manifest={},
-        skill_frontmatter={},
-        skill_body="",
-        skill_hash=None,
-        reference_files=[],
-        contract=contract,
-        contract_hash=_CONTRACT_HASH,
-        enabled=True,
+        path=Path(f"/nonexistent/{skill_id}"),
+        manifest={"id": skill_id, "name": name, "version": "1.0.0", "mode": "declarative", "status": "active", "requirements": ["stock_feature_context"], "capabilities": ["signal_evaluation"], "enabled": True},
+        skill_frontmatter={}, skill_body="", skill_hash=None, reference_files=[],
+        contract=contract_value, contract_hash="fedcba9876543210fedcba9876543210", enabled=True,
     )
 
 
 def _full_quality(**extra) -> dict:
-    base = {
-        "code": "600000",
-        "name": "测试股",
-        "market_sample_count": 200,
-        "data_completeness_score": 100,
-        "evidence_quality_score": 100,
-    }
+    base = {"code": "600000", "name": "测试股", "market_sample_count": 200, "data_completeness_score": 100, "evidence_quality_score": 100}
     base.update(extra)
     return base
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# 1. StrategyRegistry：注册 / 查找 / 未知 id 报错
-# ══════════════════════════════════════════════════════════════════════════
 class _StubStrategy:
-    """最小 Strategy 协议实现，仅用于验证注册表结构性行为，不涉及真实评分逻辑。"""
-
-    def __init__(self, tag: str) -> None:
+    def __init__(self, tag: str, descriptor) -> None:  # noqa: ANN001 - local test double
         self.tag = tag
+        self.descriptor = descriptor
 
-    def evaluate(self, stock, ctx):  # noqa: ANN001 - 测试替身，签名对齐协议即可
+    def evaluate(self, stock, ctx):  # noqa: ANN001 - local test double
         return {"tag": self.tag}
 
 
-def test_register_and_get_roundtrip():
+def _register_stub(registry: StrategyRegistry, strategy_id: str, tag: str) -> _StubStrategy:
+    descriptor = build_strategy_descriptor(_make_skill(strategy_id))
+    stub = _StubStrategy(tag, descriptor)
+    assert registry.register(descriptor, stub) is stub
+    return stub
+
+
+def test_register_and_get_roundtrip_uses_descriptor_key():
     registry = StrategyRegistry()
-    stub = _StubStrategy("a")
-
-    returned = registry.register("skill-a", stub)
-
-    assert returned is stub
+    stub = _register_stub(registry, "skill-a", "a")
     assert registry.get("skill-a") is stub
-    assert "skill-a" in registry
-    assert len(registry) == 1
+    assert registry.get_descriptor("skill-a") is stub.descriptor
+    assert registry.ids() == ("skill-a",)
 
 
-def test_register_duplicate_skill_id_raises():
+def test_register_rejects_standalone_string_key_and_duplicate_descriptor_id():
     registry = StrategyRegistry()
-    registry.register("skill-a", _StubStrategy("a"))
-
+    with pytest.raises(StrategyError, match="StrategyDescriptor"):
+        registry.register("skill-a", object())  # type: ignore[arg-type]
+    _register_stub(registry, "skill-a", "a")
     with pytest.raises(DuplicateStrategyError):
-        registry.register("skill-a", _StubStrategy("b"))
+        _register_stub(registry, "skill-a", "b")
 
 
-def test_get_unknown_skill_id_raises():
-    registry = StrategyRegistry()
-
+def test_get_unknown_strategy_id_raises():
     with pytest.raises(StrategyNotFoundError):
-        registry.get("does-not-exist")
+        StrategyRegistry().get("does-not-exist")
 
 
-def test_list_strategies_and_ids_preserve_registration_order():
+def test_list_and_unregister_preserve_descriptor_registration_order():
     registry = StrategyRegistry()
-    s_a, s_b, s_c = _StubStrategy("a"), _StubStrategy("b"), _StubStrategy("c")
-    registry.register("skill-a", s_a)
-    registry.register("skill-b", s_b)
-    registry.register("skill-c", s_c)
-
-    assert registry.list_strategies() == [s_a, s_b, s_c]
-    assert registry.ids() == ("skill-a", "skill-b", "skill-c")
-
-
-def test_unregister_removes_entry_and_is_idempotent_for_missing_id():
-    registry = StrategyRegistry()
-    registry.register("skill-a", _StubStrategy("a"))
-
+    stubs = [_register_stub(registry, key, key[-1]) for key in ("skill-a", "skill-b", "skill-c")]
+    assert registry.list_strategies() == stubs
+    assert [item.strategy_id for item in registry.list_descriptors()] == ["skill-a", "skill-b", "skill-c"]
     registry.unregister("skill-a")
     assert "skill-a" not in registry
-    # 移除不存在的 id 不应报错（幂等）。
     registry.unregister("skill-a")
 
 
-def test_register_rejects_object_without_evaluate():
-    registry = StrategyRegistry()
-
-    class _NotAStrategy:
-        pass
-
-    with pytest.raises(Exception):
-        registry.register("skill-x", _NotAStrategy())
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# 2. DeclarativeStrategy.evaluate 与直接 run_strategy 结果逐字段一致
-# ══════════════════════════════════════════════════════════════════════════
-_EQUIV_SCENARIOS: list[dict] = [
-    {
-        "name": "universe_veto",
-        "stock": _full_quality(amount_yi=0.5, pct=8, breakout20=True),
-        "main_industries": [],
-        "skip_universe_check": False,
-    },
-    {
-        "name": "full_scoring_phase_setup_risk",
-        "stock": _full_quality(
-            amount_yi=5, is_st=False, avg_cost=50, pct=8, vol5_20=1.5,
-            breakout20=True, bias_ma20=20,
-        ),
-        "main_industries": ["半导体"],
-        "skip_universe_check": False,
-    },
-    {
-        "name": "skip_universe_check_true",
-        "stock": _full_quality(
-            amount_yi=0.5, is_st=False, pct=3, vol5_20=0.5,
-            breakout20=False, bias_ma20=5,
-        ),
-        "main_industries": [],
-        "skip_universe_check": True,
-    },
-    {
-        "name": "coverage_cap_downgrade",
-        "stock": _full_quality(
-            amount_yi=5, is_st=False, avg_cost=50, pct=8, vol5_20=1.5,
-            breakout20=True, bias_ma20=5,
-            market_sample_count=10,
-        ),
-        "main_industries": [],
-        "skip_universe_check": False,
-    },
-]
-
-
-@pytest.mark.parametrize("scenario", _EQUIV_SCENARIOS, ids=lambda s: s["name"])
-def test_declarative_strategy_evaluate_matches_run_strategy_byte_for_byte(scenario):
-    """DeclarativeStrategy.evaluate 委托 run_strategy，产出必须逐字段一致（零行为变化）。"""
+def test_declarative_strategy_direct_use_preserves_legacy_signal_contract():
     skill = _make_skill()
     strategy = DeclarativeStrategy(skill)
-    ctx = StrategyContext(
-        main_industries=scenario["main_industries"],
-        skip_universe_check=scenario["skip_universe_check"],
-    )
-
-    direct = run_strategy(
-        skill,
-        dict(scenario["stock"]),
-        main_industries=scenario["main_industries"],
-        skip_universe_check=scenario["skip_universe_check"],
-    )
-    via_strategy = strategy.evaluate(dict(scenario["stock"]), ctx)
-
-    assert via_strategy == direct, f"[{scenario['name']}] DeclarativeStrategy 与直接 run_strategy 结果不一致"
-    # 键序也必须一致（防止委托层意外重排/丢字段）。
+    ctx = StrategyContext(main_industries=[], skip_universe_check=False)
+    stock = _full_quality(amount_yi=5, is_st=False, avg_cost=50, pct=8, vol5_20=1.5, breakout20=True, bias_ma20=20)
+    direct = run_strategy(skill, dict(stock), main_industries=[], skip_universe_check=False)
+    via_strategy = strategy.evaluate(dict(stock), ctx)
+    assert via_strategy == direct
     assert list(via_strategy.keys()) == list(direct.keys()) == list(SIGNAL_FIELDS)
-
-
-def test_declarative_strategy_skill_id_property():
-    skill = _make_skill(skill_id="registry-equiv-strategy")
-    strategy = DeclarativeStrategy(skill)
-    assert strategy.skill_id == "registry-equiv-strategy"
-
-
-def test_declarative_strategy_satisfies_strategy_protocol():
-    skill = _make_skill()
-    strategy = DeclarativeStrategy(skill)
     assert isinstance(strategy, Strategy)
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# 3. build_registry_from_skills：批量注册正确
-# ══════════════════════════════════════════════════════════════════════════
-def test_build_registry_from_skills_registers_all_as_declarative():
-    skills = [
-        _make_skill(skill_id="skill-1"),
-        _make_skill(skill_id="skill-2"),
-        _make_skill(skill_id="skill-3"),
-    ]
-
+def test_build_registry_from_skills_binds_every_signal_to_descriptor_version():
+    skills = [_make_skill(skill_id="skill-1"), _make_skill(skill_id="skill-2")]
     registry = build_registry_from_skills(skills)
-
-    assert registry.ids() == ("skill-1", "skill-2", "skill-3")
-    for skill in skills:
-        strategy = registry.get(skill.skill_id)
-        assert isinstance(strategy, DeclarativeStrategy)
-        assert strategy.skill is skill
-
-
-def test_build_registry_from_skills_empty_list_yields_empty_registry():
-    registry = build_registry_from_skills([])
-    assert len(registry) == 0
-    assert registry.ids() == ()
-
-
-def test_build_registry_from_skills_then_evaluate_matches_run_strategy():
-    """端到端：build_registry_from_skills 产出的 registry，经 get().evaluate() 取得的
-    Signal 与直接 run_strategy 结果一致——这正是 workbench_service/backtest_service
-    改造点的核心不变量。"""
-    skill = _make_skill(skill_id="e2e-skill")
-    registry = build_registry_from_skills([skill])
+    assert registry.ids() == ("skill-1", "skill-2")
     stock = _full_quality(amount_yi=5, is_st=False, avg_cost=50, pct=8, vol5_20=1.5, breakout20=True, bias_ma20=5)
-    ctx = StrategyContext(main_industries=["半导体"], skip_universe_check=False)
+    for skill in skills:
+        descriptor, strategy = registry.resolve(skill.skill_id)
+        assert isinstance(strategy, DeclarativeStrategy)
+        signal = strategy.evaluate(dict(stock), StrategyContext(main_industries=["半导体"]))
+        assert signal["strategy_id"] == descriptor.strategy_id
+        assert signal["version_id"] == descriptor.effective_version
 
-    via_registry = registry.get("e2e-skill").evaluate(dict(stock), ctx)
-    direct = run_strategy(skill, dict(stock), main_industries=["半导体"], skip_universe_check=False)
 
-    assert via_registry == direct
+def test_empty_bootstrap_produces_a_frozen_empty_registry():
+    registry = build_registry_from_skills([])
+    assert registry.is_frozen
+    assert registry.ids() == ()

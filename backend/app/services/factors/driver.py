@@ -22,7 +22,7 @@ from .base import (
     FactorContractError,
     output_fields_of,
 )
-from .registry import FactorRegistry, default_registry
+from .registry import FactorRegistry, bootstrap_default_factor_registry, default_registry
 
 
 def run_factors(
@@ -45,9 +45,13 @@ def run_factors(
     FactorContractError: 某因子返回越界字段或非 Mapping。
     """
     reg = registry if registry is not None else default_registry
+    # 生产默认 Registry 必须先经过显式 bootstrap 并冻结；保留此处的惰性兜底，
+    # 是为了让历史入口首次调用时也只能执行同一份冻结 plan，而非可变注册表。
+    if reg is default_registry and not reg.is_frozen:
+        bootstrap_default_factor_registry()
     context = ctx if ctx is not None else FactorContext()
 
-    # 只解析一次执行序（含循环 / 悬空依赖检测），对所有股票复用。
+    # 冻结 Registry 从 ExecutionPlan 取顺序；局部测试 Registry 保持现有按需解析语义。
     ordered = reg.resolve_order()
 
     results: "list[dict[str, Any]]" = []

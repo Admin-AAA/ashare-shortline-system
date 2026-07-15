@@ -32,7 +32,12 @@ from _shortline_equiv_fixtures import (
     produced_view,
 )
 from app.engine import evaluator
-from app.services.factors import FactorContext, default_registry, run_factors
+from app.services.factors import (
+    FactorContext,
+    bootstrap_default_factor_registry,
+    default_registry,
+    run_factors,
+)
 from app.services.factors.shortline import (
     CapitalResonanceFactor,
     DragonTigerFactor,
@@ -192,6 +197,9 @@ def test_leader_depends_on_upstream_factors():
 
 def test_run_factors_default_registry_is_topologically_orderable():
     """默认注册表（7 短线因子）可解析出拓扑序，且 leader 在其三上游之后。"""
+    plan = bootstrap_default_factor_registry()
+    assert default_registry.is_frozen is True
+    assert plan.factor_ids
     order = [f.id for f in default_registry.resolve_order()]
     assert set(order) >= {
         "market_context", "sector_ladder", "capital_resonance",

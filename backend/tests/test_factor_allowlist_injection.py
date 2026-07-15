@@ -159,17 +159,13 @@ def test_injected_field_becomes_referenceable_in_evaluator(allowlist_snapshot):
 
 
 # ── bootstrap 接线入口：经默认注册表注入全局白名单 ─────────────────────
-def test_bootstrap_injects_default_registry_into_global(allowlist_snapshot):
+def test_bootstrap_injects_a_completed_registry_into_global(allowlist_snapshot):
     field = "bootstrap_field"
-    try:
-        default_registry.register(_Dummy("bootstrap_dummy", (field,)))
-        assert field not in evaluator.ALLOWED_NAMES
+    registry = FactorRegistry()
+    registry.register(_Dummy("bootstrap_dummy", (field,)))
+    assert field not in evaluator.ALLOWED_NAMES
 
-        result = bootstrap_factor_allowlist()
+    result = bootstrap_factor_allowlist(registry)
 
-        assert result is evaluator.ALLOWED_NAMES
-        assert field in evaluator.ALLOWED_NAMES
-    finally:
-        # 还原默认注册表（全局白名单由 allowlist_snapshot 夹具还原）
-        default_registry.unregister("bootstrap_dummy")
-    assert "bootstrap_dummy" not in default_registry
+    assert result is evaluator.ALLOWED_NAMES
+    assert field in evaluator.ALLOWED_NAMES

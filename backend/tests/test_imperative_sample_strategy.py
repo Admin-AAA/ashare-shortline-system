@@ -1,32 +1,13 @@
-"""端到端命令式样例策略分发测试（任务 3.5，需求 4.6）。
+"""端到端命令式样例策略 descriptor 分发回归。
 
-验证目标：「新增命令式策略 = 建 skill 目录（``manifest.json`` + ``SKILL.md``）+
-写一个 ``score()``，零改动分发管线」这条设计目标的最终闭环——
-
-    load_skill(真实目录) → instantiate_strategy(skill) / build_registry_from_skills([skill])
-        → registry.get(id).evaluate(stock, ctx) → 正常产出 Signal
-
-样例策略：``app.skills_impl.high_position_volume_stall_warning.HighPositionVolumeStallWarning``
-（「高位放量滞涨预警」，业务逻辑见该模块 docstring）。对应真实 skill 目录：
-``backend/skills/high-position-volume-stall-warning/``（与其它声明式技能同级，
-manifest.json 声明 ``impl_class``，无 ``strategy.yaml``）。
-
-覆盖范围：
-1. ``load_skill(真实目录路径)``：``impl_class`` 正确解析、``executable is True``、
-   ``contract is None``（命令式路径没有 strategy.yaml）。
-2. ``instantiate_strategy(skill)``：装配出的实例是该类的实例，满足 ``Strategy`` 协议。
-3. 四个代表性 stock（对应 ``score()`` 内四个业务分支）逐一调用 ``evaluate``，断言
-   ``Signal`` 结构正确、值符合策略打分/否决逻辑。
-4. ``build_registry_from_skills([skill])`` 走完整分发路径，与直接实例化结果逐字段
-   一致——这是本任务要验证的「run pipeline 正常分发」闭环。
-
-纯 in-process：只依赖 ``app.engine.skill_loader`` / ``app.engine.strategy`` /
-``app.engine.signal`` / ``app.core.config``，不吃 DB / 网络。
+覆盖真实命令式策略从 manifest 加载、bootstrap 绑定不可变
+``StrategyDescriptor``，并由 adapter 输出与声明式策略一致的 ``Signal``。实现类
+只负责 ``evaluate() -> StrategyDecision``，不暴露业务身份。
 """
 from __future__ import annotations
 
 from app.core.config import get_settings
-from app.engine.imperative_strategy import ImperativeStrategy
+from app.engine.imperative_strategy import DescriptorBoundImperativeStrategy, ImperativeStrategy
 from app.engine.signal import SIGNAL_FIELDS
 from app.engine.skill_loader import load_skill, validate_skill
 from app.engine.strategy import (
@@ -72,32 +53,35 @@ def test_load_skill_from_real_directory_resolves_impl_class():
     # 命令式路径：没有 strategy.yaml，contract 应为 None。
     assert skill.contract is None
     assert skill.contract_hash is None
-    # 3.4 新增语义：impl_class 存在即可执行。
     assert skill.executable is True
     assert skill.agent_enabled is True
     assert skill.enabled is True
-
-    # validate_skill 对命令式路径（contract is None）应提前返回，无报错。
     assert validate_skill(skill) == []
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 2. instantiate_strategy(skill)：装配出正确的类实例
+# 2. instantiate_strategy(skill)：装配 Descriptor adapter，而不是身份自带实现类
 # ══════════════════════════════════════════════════════════════════════════
-def test_instantiate_strategy_assembles_the_correct_class_instance():
+def test_instantiate_strategy_wraps_behavior_only_implementation_with_descriptor():
     skill = load_skill(_skill_dir())
 
     strategy = instantiate_strategy(skill)
+    implementation = HighPositionVolumeStallWarning()
 
-    assert isinstance(strategy, HighPositionVolumeStallWarning)
-    assert isinstance(strategy, ImperativeStrategy)
+    assert isinstance(strategy, DescriptorBoundImperativeStrategy)
     assert isinstance(strategy, Strategy)
-    assert strategy.strategy_id == _SKILL_ID
-    assert strategy.strategy_name == "高位放量滞涨预警"
+    assert isinstance(implementation, ImperativeStrategy)
+    assert not isinstance(strategy, HighPositionVolumeStallWarning)
+    assert all(
+        not hasattr(implementation, attribute)
+        for attribute in ("strategy_id", "strategy_name", "version", "run_mode", "weight")
+    )
+    assert strategy.descriptor.strategy_id == _SKILL_ID
+    assert strategy.descriptor.name == "高位放量滞涨预警"
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 3. 四个代表性 stock，对应 score() 的四个业务分支
+# 3. 四个代表性 stock，对应 evaluate() 的四个业务分支
 # ══════════════════════════════════════════════════════════════════════════
 def test_branch_1_stall_warning_with_extreme_turnover_hard_vetoes():
     """高位 + 放量 + 滞涨 + 换手率极端 → 硬否决。"""
@@ -162,7 +146,7 @@ def test_branch_4_below_high_position_threshold_yields_baseline_score():
 
 
 def test_universe_exclusion_still_applies_to_command_style_skill():
-    """命令式策略仍走模板方法的 universe 校验：ST 股应被否决，score() 不被调用。"""
+    """命令式策略仍由 adapter 执行 universe 校验，ST 股不进入实现计算。"""
     skill = load_skill(_skill_dir())
     strategy = instantiate_strategy(skill)
     ctx = StrategyContext(main_industries=[], skip_universe_check=False)
@@ -176,18 +160,16 @@ def test_universe_exclusion_still_applies_to_command_style_skill():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 4. build_registry_from_skills([skill])：完整分发路径与直接实例化一致
+# 4. build_registry_from_skills([skill])：完整分发路径与直接装配一致
 # ══════════════════════════════════════════════════════════════════════════
 def test_run_pipeline_dispatch_via_registry_matches_direct_instantiation():
-    """端到端闭环：build_registry_from_skills → registry.get(id).evaluate(...) 的
-    产出必须与直接 instantiate_strategy(skill).evaluate(...) 逐字段一致——这正是
-    「被启用后 run pipeline 正常产出 Signal」这一验收标准的直接验证。"""
+    """Registry 与直接装配必须都经 descriptor adapter，Signal 逐字段一致。"""
     skill = load_skill(_skill_dir())
     registry = build_registry_from_skills([skill])
 
     assert registry.ids() == (_SKILL_ID,)
     via_registry_strategy = registry.get(_SKILL_ID)
-    assert isinstance(via_registry_strategy, HighPositionVolumeStallWarning)
+    assert isinstance(via_registry_strategy, DescriptorBoundImperativeStrategy)
 
     ctx = StrategyContext(main_industries=[], skip_universe_check=False)
     scenarios = [
@@ -203,12 +185,12 @@ def test_run_pipeline_dispatch_via_registry_matches_direct_instantiation():
         direct = direct_strategy.evaluate(dict(stock), ctx)
         assert via_registry == direct
         assert list(via_registry.keys()) == list(SIGNAL_FIELDS)
+        assert via_registry["strategy_id"] == via_registry_strategy.descriptor.strategy_id
+        assert via_registry["version_id"] == via_registry_strategy.descriptor.effective_version
 
 
 def test_build_registry_from_skills_alongside_declarative_skills_mixed_dispatch():
-    """混合场景：本命令式 skill 与真实声明式 skill（从磁盘加载）共同经
-    build_registry_from_skills 分发，二者互不干扰、各自产出合法 Signal——验证
-    aggregator/调用方无需区分策略来源（需求 4.4/4.6 的联合闭环）。"""
+    """命令式与声明式策略经同一 registry 分发，调用方无需区分来源。"""
     imperative_skill = load_skill(_skill_dir())
     declarative_skill = load_skill(get_settings().skills_dir / "high-range-breakout-momentum")
 

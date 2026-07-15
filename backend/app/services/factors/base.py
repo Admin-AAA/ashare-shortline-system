@@ -64,6 +64,24 @@ class FactorCycleError(FactorError):
         super().__init__("因子依赖存在循环：" + " -> ".join(self.cycle))
 
 
+class FactorOutputOwnershipError(FactorError):
+    """多个 Factor 声明拥有同一 output field，无法保证写入归属。"""
+
+    def __init__(self, output_field: str, owners: tuple[str, str]) -> None:
+        self.output_field = output_field
+        self.owners = tuple(owners)
+        super().__init__(
+            f"因子输出字段 '{output_field}' 被多个因子声明：'{owners[0]}'、'{owners[1]}'。"
+        )
+
+
+class FactorRegistryFrozenError(FactorError):
+    """冻结后的生产 Registry 被尝试动态修改。"""
+
+    def __init__(self) -> None:
+        super().__init__("FactorRegistry 已冻结；生产执行计划不允许动态注册、移除或清空因子。")
+
+
 # ── 跨股上下文载体 ─────────────────────────────────────────────────────
 @dataclass
 class FactorContext:

@@ -1,70 +1,67 @@
-"""命令式策略模板方法基类（``ImperativeStrategy``，任务 3.3，需求 4.3）。
+"""Behavior-only contract and descriptor-bound adapter for imperative strategies.
 
-落点说明——为什么放在 ``engine/`` 而不是新建 ``services/strategies/`` 包：
-    与 ``strategy.py``（3.2）同一个理由：``engine/`` 已经是「策略评估原语」的深模块
-    聚集地——``evaluator.py`` / ``skill_loader.py`` / ``strategy_runner.py`` /
-    ``signal.py`` / ``strategy.py`` 都在这里。``ImperativeStrategy`` 是这套原语之上
-    再加一层「命令式策略的统一模板」，继续放在 ``engine/`` 保持 locality。
-
-设计取舍：
-    - **模板方法模式**：``evaluate(...)``（``final``，子类不应覆写）编排「不变的步骤」
-      ——universe/prefilter 校验 → 子类 ``score(...)`` 钩子 → evidence 覆盖度诚实性
-      上限 → ``Signal`` 组装。子类**只写** ``score(stock, ctx) -> ImperativeScoreResult``
-      这一处「新逻辑」（打分/阶段/setup/风控标记的原始判断），与声明式 YAML 路径共享
-      同一套风控/上限/组装规则（design §4.2：「加命令式策略只写打分，风控/上限与
-      声明式一致，locality 不破」）。
-    - **不改 ``strategy_runner.py``**：universe 校验与 evidence 上限直接**复用**
-      ``strategy_runner._passes_universe`` / ``strategy_runner._evidence_score_cap``
-      两个既有函数（模块内已有先例直接引用该模块的下划线前缀函数，见
-      ``scripts/diagnose_skill_prefilter.py`` 对 ``_rule_expr`` 的引用）。这样声明式
-      路径（``run_strategy`` / ``DeclarativeStrategy``）一行代码都不变，3.1/3.2 的
-      等价对拍测试不受影响，不需要重新验证。
-    - **``contract`` 概念收窄为 ``universe``/``prefilter`` 两个类属性**：命令式策略
-      没有完整的 ``strategy.yaml``（阶段/打分/setup/风控规则都在 ``score()`` 里用
-      Python 写），但 universe/prefilter 门槛校验仍是「声明式」的（复用同一套
-      AST 表达式求值），所以命令式子类可选声明 ``universe``/``prefilter`` 两个类
-      属性（结构与 yaml 里的同名键完全一致：``{"include": [...], "exclude": [...]}``
-      / ``{"market": {"exclude": [...]}}``），基类内部拼成 ``_passes_universe`` 需要
-      的 ``{"universe": ..., "prefilter": ...}`` 形状即可复用，无需子类关心内部
-      拼装细节。不声明则默认空——即「不设门槛，全量放行」。
-    - **身份信息作为类属性而非从 ``StrategySkill``/``manifest`` 读取**：3.4 才会把
-      ``load_skills`` 扩展为识别 ``impl_class`` 并做实例化装配，本任务先把
-      ``ImperativeStrategy`` 需要哪些身份信息设计清楚——``strategy_id`` /
-      ``strategy_name`` / ``version`` / ``weight`` / ``strategy_independence``，与
-      声明式 ``_signal(...)`` 组装用到的字段一一对应（``skill.skill_id`` /
-      ``skill.name`` / ``skill.version`` / 合同 ``weight`` / ``meta.strategy_independence``）。
-      3.4 接入 manifest 装配后，这些类属性可由装配层从 manifest 覆盖/校验，本类
-      本身不依赖 ``StrategySkill``/``contract_hash``（命令式策略没有 yaml contract
-      hash 可用），``version_id`` 用固定后缀 ``"imperative"`` 替代声明式的
-      ``contract_hash[:8]`` 位——语义上标注「本 Signal 出自命令式实现」，格式仍是
-      ``f"{strategy_id}:{version}:<后缀>"``，与声明式格式呼应但不强行复刻字面量。
-    - **不要求命令式与声明式产出完全相同的 Signal 值**——只要求**结构相同**：同一组
-      ``SIGNAL_FIELDS`` 键、类型契合 ``Signal`` 注解（design §4.2 / 需求 4.4）。
+Imperative implementations calculate a :class:`StrategyDecision` only.  They do
+not own a business id, display name, version, run mode, weight, or other
+manifest metadata.  Bootstrap validates that constraint and wraps each
+implementation in :class:`DescriptorBoundImperativeStrategy`, which projects
+its decision into the canonical :class:`~app.engine.signal.Signal` contract.
 """
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+import inspect
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, final
+from typing import TYPE_CHECKING, Any, Mapping, Protocol, cast, runtime_checkable
 
 from app.engine.signal import Signal
-from app.engine.strategy import StrategyContext
 from app.engine.strategy_runner import _evidence_score_cap, _passes_universe
+
+if TYPE_CHECKING:
+    from app.engine.strategy import StrategyContext, StrategyDescriptor
+
+
+_IDENTITY_OR_METADATA_ATTRIBUTES = (
+    "id",
+    "skill_id",
+    "strategy_id",
+    "strategy_name",
+    "name",
+    "display_name",
+    "version",
+    "version_id",
+    "declared_version",
+    "effective_version",
+    "mode",
+    "run_mode",
+    "status",
+    "enabled",
+    "requirements",
+    "capabilities",
+    "deprecation_reason",
+    "replacement_strategy_id",
+    "weight",
+    "signal_weight",
+    "strategy_independence",
+    "metadata",
+    "signal_metadata",
+    "manifest",
+    "descriptor",
+    # ``universe`` is the sole optional implementation-side hook.  The old
+    # prefilter hook would create a second, untracked execution declaration.
+    "prefilter",
+)
+
+
+class ImperativeStrategyProtocolError(TypeError):
+    """An imperative implementation does not honor the behavior-only contract."""
 
 
 @dataclass(frozen=True)
-class ImperativeScoreResult:
-    """``ImperativeStrategy.score(...)`` 钩子的返回契约。
+class StrategyDecision:
+    """Behavioral result returned by an imperative implementation.
 
-    这是命令式子类**唯一要产出**的「新逻辑」——打分与阶段/setup/风控相关的原始
-    判断结果。基类 ``evaluate(...)`` 拿到这个结果后，统一套用 evidence 覆盖度
-    诚实性上限并组装成最终 ``Signal``，子类不必（也不应）关心这两步。
-
-    字段与声明式 ``run_strategy`` 内部对应的中间变量一一对应，便于迁移直觉：
-    ``score``→打分累加结果，``phase``→阶段命中名，``score_cap``→阶段/子类自定的
-    分数上限（会再与 evidence 覆盖度上限取 min），``hard_veto``/``veto_reason``→
-    子类自身判定的否决（如「观察类」信号），``risk_flags``/``evidence``→子类产出
-    的风险提示与证据说明（基类会在此基础上追加 evidence 覆盖度相关的追加项）。
+    This deliberately contains no strategy identity or descriptor metadata.  The
+    descriptor-bound adapter owns those fields when it converts the decision to
+    a ``Signal``.
     """
 
     score: float
@@ -80,59 +77,91 @@ class ImperativeScoreResult:
     evidence: list[str] = field(default_factory=list)
 
 
-class ImperativeStrategy(ABC):
-    """命令式（Python）策略的模板方法基类。
+@runtime_checkable
+class ImperativeStrategy(Protocol):
+    """The only required imperative implementation behavior.
 
-    子类**只需**：
-      1. 声明最小身份属性：``strategy_id`` / ``strategy_name``（必填，无默认值，
-         不声明会在实例化时因缺少类属性而在 ``evaluate`` 内取值处报错，等价于
-         「显式要求填写」）；``version`` / ``weight`` / ``strategy_independence``
-         有合理默认值，可选覆写。
-      2. 可选声明 ``universe`` / ``prefilter`` 两个类属性（结构同 yaml 同名键），
-         供基类做门槛校验；不声明则不设门槛。
-      3. 实现 ``score(self, stock, ctx) -> ImperativeScoreResult`` 这一个抽象方法。
-
-    子类**不应**覆写 ``evaluate``——它是模板方法，标记为 ``@final``，把「不变的
-    步骤」（universe/prefilter 校验 → evidence 上限 → Signal 组装）钉死在基类，
-    确保命令式策略与声明式策略共享同一套风控/诚实性口径（design §4.2）。
+    Implementations may additionally expose an optional ``universe`` mapping
+    compatible with the declarative strategy universe section.  All business
+    identity and manifest-declared metadata are intentionally absent.
     """
 
-    # ── 身份信息（子类必须声明 strategy_id / strategy_name；其余有默认值） ──
-    strategy_id: ClassVar[str]
-    strategy_name: ClassVar[str]
-    version: ClassVar[str] = "0.1.0"
-    weight: ClassVar[float] = 1.0
-    strategy_independence: ClassVar[float] = 0.85
+    def evaluate(self, stock: dict[str, Any], ctx: "StrategyContext") -> StrategyDecision:
+        """Calculate a decision for one stock without assembling a Signal."""
+        ...
 
-    # ── 可选门槛声明：结构与 strategy.yaml 同名键一致，供 _passes_universe 复用 ──
-    universe: ClassVar[dict[str, Any]] = {}
-    prefilter: ClassVar[dict[str, Any]] = {}
 
-    @abstractmethod
-    def score(self, stock: dict[str, Any], ctx: StrategyContext) -> ImperativeScoreResult:
-        """子类唯一要写的「新逻辑」：对一只股票打分并给出阶段/setup/风控原始判断。
+def validate_imperative_implementation(implementation: object) -> None:
+    """Validate an implementation before descriptor binding at bootstrap time."""
+    if not isinstance(implementation, ImperativeStrategy):
+        raise ImperativeStrategyProtocolError("缺少可调用的 evaluate(stock, ctx) 方法。")
+    _validate_evaluate_signature(implementation.evaluate)
 
-        ``stock`` 是基类已注入 ``is_main_theme`` 派生字段后的上下文视图（与声明式
-        ``run_strategy`` 内部传给 ``evaluate(...)`` 表达式求值的 ``context`` 语义
-        一致），``ctx`` 是本次调用的 ``StrategyContext``（携带 ``main_industries`` /
-        ``skip_universe_check``）。
-        """
-        raise NotImplementedError
+    duplicate = _declared_identity_or_metadata(implementation)
+    if duplicate is not None:
+        attribute, value = duplicate
+        if attribute == "prefilter":
+            raise ImperativeStrategyProtocolError(
+                "命令式实现仅可声明可选 universe hook，不能声明 prefilter；"
+                "过滤声明必须来自 manifest/StrategyDescriptor。"
+            )
+        raise ImperativeStrategyProtocolError(
+            f"实现不得重复声明 {attribute}={value!r}；"
+            "strategy_id、名称、版本、运行模式和声明元数据只能来自 manifest/StrategyDescriptor。"
+        )
 
-    @final
-    def evaluate(self, stock: dict[str, Any], ctx: StrategyContext) -> Signal:
-        """模板方法：不应被子类覆写。
+    universe = getattr(implementation, "universe", {})
+    if not isinstance(universe, Mapping):
+        raise ImperativeStrategyProtocolError("可选 universe hook 必须为 mapping。")
+    for key in ("include", "exclude"):
+        values = universe.get(key, ())
+        if not isinstance(values, (list, tuple)) or any(not isinstance(value, str) for value in values):
+            raise ImperativeStrategyProtocolError(
+                f"可选 universe hook 的 {key} 必须为字符串列表。"
+            )
 
-        步骤（与声明式 ``run_strategy`` 的不变步骤对齐）：
-          1. universe/prefilter 校验（复用 ``strategy_runner._passes_universe``，
-             逻辑与声明式路径完全一致）——不过则提前返回否决 ``Signal``，子类
-             ``score(...)`` 不会被调用。
-          2. 调用子类 ``score(stock, ctx)`` 钩子，取得打分原始结果。
-          3. 应用 evidence 覆盖度诚实性上限（复用
-             ``strategy_runner._evidence_score_cap``，阈值/追加风险提示与证据说明
-             逐字对齐声明式路径）。
-          4. 组装最终 ``Signal``（身份字段取自子类声明的类属性）。
-        """
+
+def _validate_evaluate_signature(evaluate: object) -> None:
+    """Require the runtime callable shape promised by ``ImperativeStrategy``."""
+    try:
+        signature = inspect.signature(cast(Any, evaluate))
+    except (TypeError, ValueError) as exc:
+        raise ImperativeStrategyProtocolError(
+            "evaluate(stock, ctx) 方法签名无法验证。"
+        ) from exc
+    try:
+        signature.bind({}, object())
+    except TypeError as exc:
+        raise ImperativeStrategyProtocolError(
+            "evaluate 必须能以 (stock, ctx) 两个位置参数调用。"
+        ) from exc
+
+
+def _declared_identity_or_metadata(implementation: object) -> tuple[str, object] | None:
+    instance_values = vars(implementation) if hasattr(implementation, "__dict__") else {}
+    for attribute in _IDENTITY_OR_METADATA_ATTRIBUTES:
+        if attribute in instance_values:
+            return attribute, instance_values[attribute]
+    for owner in type(implementation).__mro__:
+        owner_values = vars(owner)
+        for attribute in _IDENTITY_OR_METADATA_ATTRIBUTES:
+            if attribute in owner_values:
+                return attribute, owner_values[attribute]
+    return None
+
+
+class DescriptorBoundImperativeStrategy:
+    """Adapter that injects immutable descriptor identity into imperative output."""
+
+    __slots__ = ("_implementation", "_universe", "descriptor")
+
+    def __init__(self, implementation: ImperativeStrategy, descriptor: "StrategyDescriptor") -> None:
+        validate_imperative_implementation(implementation)
+        self._implementation = implementation
+        self._universe = dict(cast(Mapping[str, Any], getattr(implementation, "universe", {})))
+        self.descriptor = descriptor
+
+    def evaluate(self, stock: dict[str, Any], ctx: "StrategyContext") -> Signal:
         context = dict(stock)
         industry = stock.get("industry")
         context["is_main_theme"] = bool(
@@ -140,23 +169,24 @@ class ImperativeStrategy(ABC):
             or (industry in set(ctx.main_industries) and industry != "未分类")
         )
 
-        mini_contract = {"universe": self.universe or {}, "prefilter": self.prefilter or {}}
-        if not ctx.skip_universe_check and not _passes_universe(mini_contract, context):
-            return self._build_signal(
+        if not ctx.skip_universe_check and not _passes_universe({"universe": self._universe}, context):
+            return self._assemble_signal(
+                StrategyDecision(
+                    score=0.0,
+                    phase="排除",
+                    hard_veto=True,
+                    veto_reason="不在策略股票池",
+                    risk_flags=["不符合股票池"],
+                ),
                 score=0.0,
-                phase="排除",
                 score_cap=100.0,
-                hard_veto=True,
-                veto_reason="不在策略股票池",
-                risk_flags=["不符合股票池"],
-                setup_match="",
-                entry_rule="",
-                invalid_rule="",
-                setup_quality=50.0,
-                evidence=[],
             )
 
-        result = self.score(context, ctx)
+        decision = self._implementation.evaluate(context, ctx)
+        if not isinstance(decision, StrategyDecision):
+            raise ImperativeStrategyProtocolError(
+                f"命令式策略 '{self.descriptor.strategy_id}' 的 evaluate 必须返回 StrategyDecision。"
+            )
 
         data_quality = dict(stock.get("data_quality") or {})
         missing_fields = set(data_quality.get("missing_fields") or [])
@@ -172,62 +202,55 @@ class ImperativeStrategy(ABC):
             evidence_quality=evidence_quality,
             missing_fields=missing_fields,
         )
-
-        score_cap = min(result.score_cap, coverage_cap)
-        risk_flags = list(result.risk_flags)
-        evidence = list(result.evidence)
+        score_cap = min(decision.score_cap, coverage_cap)
+        risk_flags = list(decision.risk_flags)
+        evidence = list(decision.evidence)
         if coverage_cap < 82:
             risk_flags.append("样本或证据覆盖不足，评分已降权")
             evidence.append(f"诚实性上限: {round(coverage_cap, 1)}")
-
-        score = max(0.0, min(result.score, score_cap))
-
-        return self._build_signal(
-            score=score,
-            phase=result.phase,
+        return self._assemble_signal(
+            decision,
+            score=max(0.0, min(decision.score, score_cap)),
             score_cap=score_cap,
-            hard_veto=result.hard_veto,
-            veto_reason=result.veto_reason,
             risk_flags=risk_flags,
-            setup_match=result.setup_match,
-            entry_rule=result.entry_rule,
-            invalid_rule=result.invalid_rule,
-            setup_quality=result.setup_quality,
             evidence=evidence,
         )
 
-    def _build_signal(
+    def _assemble_signal(
         self,
+        decision: StrategyDecision,
         *,
         score: float,
-        phase: str,
         score_cap: float,
-        hard_veto: bool,
-        veto_reason: str,
-        risk_flags: list[str],
-        setup_match: str,
-        entry_rule: str,
-        invalid_rule: str,
-        setup_quality: float,
-        evidence: list[str],
+        risk_flags: list[str] | None = None,
+        evidence: list[str] | None = None,
     ) -> Signal:
-        score = min(score, score_cap)
+        descriptor = self.descriptor
         return {
-            "strategy_id": self.strategy_id,
-            "strategy_name": self.strategy_name,
-            "version_id": f"{self.strategy_id}:{self.version}:imperative",
-            "strategy_independence": max(0.0, min(1.0, float(self.strategy_independence))),
-            "weight": round(float(self.weight), 3),
-            "phase": phase,
-            "score": round(score, 2),
+            "strategy_id": descriptor.strategy_id,
+            "strategy_name": descriptor.name,
+            "version_id": descriptor.effective_version,
+            "strategy_independence": max(0.0, min(1.0, float(descriptor.strategy_independence))),
+            "weight": round(float(descriptor.signal_weight), 3),
+            "phase": decision.phase,
+            "score": round(min(score, score_cap), 2),
             "score_cap": round(score_cap, 2),
             "confidence": round(min(0.95, max(0.2, score / 100)), 2),
-            "setup_match": setup_match,
-            "entry_rule": entry_rule,
-            "invalid_rule": invalid_rule,
-            "setup_quality": setup_quality,
-            "hard_veto": hard_veto,
-            "veto_reason": veto_reason,
-            "risk_flags": risk_flags,
-            "evidence": evidence,
+            "setup_match": decision.setup_match,
+            "entry_rule": decision.entry_rule,
+            "invalid_rule": decision.invalid_rule,
+            "setup_quality": decision.setup_quality,
+            "hard_veto": decision.hard_veto,
+            "veto_reason": decision.veto_reason,
+            "risk_flags": list(decision.risk_flags if risk_flags is None else risk_flags),
+            "evidence": list(decision.evidence if evidence is None else evidence),
         }
+
+
+__all__ = [
+    "DescriptorBoundImperativeStrategy",
+    "ImperativeStrategy",
+    "ImperativeStrategyProtocolError",
+    "StrategyDecision",
+    "validate_imperative_implementation",
+]

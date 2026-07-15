@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -74,25 +75,26 @@ def _is_skill_cache_fresh(now: float, cache_key: tuple[str, str]) -> bool:
 def _sync_registry_row(
     registry: SkillRegistry,
     skill: StrategySkill,
+    descriptor: "StrategyDescriptor",
     manifest_json: str,
 ) -> bool:
+    """Refresh the database cache strictly as a descriptor projection."""
     changed = False
     updates = {
-        "name": skill.name,
+        "name": descriptor.name,
         "source_type": skill.manifest.get("source_type", registry.source_type),
         "source_url": skill.manifest.get("source_url", registry.source_url),
         "installed_path": str(skill.path),
-        "current_version": skill.version,
-        "has_executable_contract": skill.contract is not None,
+        "current_version": descriptor.declared_version,
+        "mode": descriptor.mode.value,
+        "enabled": descriptor.enabled,
+        "has_executable_contract": skill.executable,
         "manifest_json": manifest_json,
     }
     for field, value in updates.items():
         if getattr(registry, field) != value:
             setattr(registry, field, value)
             changed = True
-    if not registry.mode:
-        registry.mode = "formal"
-        changed = True
     if changed:
         registry.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     return changed
@@ -111,6 +113,15 @@ def _strategy_backtest_adapter_manifest(skill: StrategySkill) -> dict[str, Any] 
     }
 
 
+def _descriptor_map(skills: list[StrategySkill]) -> dict[str, "StrategyDescriptor"]:
+    # This invokes the same official bootstrap used by execution; it also verifies
+    # every impl_class before the registry cache can advertise a strategy version.
+    from app.engine.strategy import build_registry_from_skills
+
+    registry = build_registry_from_skills(skills)
+    return {descriptor.strategy_id: descriptor for descriptor in registry.list_descriptors()}
+
+
 def sync_skills(db: Session) -> list[StrategySkill]:
     global _last_skill_sync_time, _cached_skill_cache_key, _cached_skill_list
     settings = get_settings()
@@ -125,70 +136,75 @@ def sync_skills(db: Session) -> list[StrategySkill]:
             return _cached_skill_list
 
         skills = load_skills(settings.skills_dir)
+        descriptors = _descriptor_map(skills)
         has_changes = False
         for skill in skills:
-            registry = db.get(SkillRegistry, skill.skill_id)
+            descriptor = descriptors.get(skill.skill_id)
+            if descriptor is None:
+                # Non-executable agent skills are intentionally not strategies and
+                # therefore cannot be used as a second identity source.
+                continue
+            registry = db.get(SkillRegistry, descriptor.strategy_id)
             manifest_data = dict(skill.manifest)
+            manifest_data["_strategy_descriptor"] = descriptor.to_projection()
             manifest_data["_skill_md_available"] = skill.agent_enabled
             manifest_data["_skill_md_hash"] = skill.skill_hash
             manifest_data["_skill_frontmatter"] = _json_safe(skill.skill_frontmatter)
             manifest_data["_skill_reference_files"] = _json_safe(skill.reference_files)
             manifest_data["_skill_runtime"] = "dual" if skill.contract is not None and skill.agent_enabled else "agent" if skill.agent_enabled else "rule"
             manifest_data["_strategy_backtest_adapter"] = _strategy_backtest_adapter_manifest(skill)
-            manifest_json = json.dumps(manifest_data, ensure_ascii=False)
+            manifest_json = json.dumps(manifest_data, ensure_ascii=False, sort_keys=True)
             if registry is None:
                 registry = SkillRegistry(
-                    skill_id=skill.skill_id,
-                    name=skill.name,
+                    skill_id=descriptor.strategy_id,
+                    name=descriptor.name,
                     source_type=skill.manifest.get("source_type", "local"),
                     source_url=skill.manifest.get("source_url"),
                     installed_path=str(skill.path),
-                    current_version=skill.version,
-                    mode="formal",
-                    enabled=skill.enabled,
-                    has_executable_contract=skill.contract is not None,
+                    current_version=descriptor.declared_version,
+                    mode=descriptor.mode.value,
+                    enabled=descriptor.enabled,
+                    has_executable_contract=skill.executable,
                     manifest_json=manifest_json,
                 )
                 db.add(registry)
                 has_changes = True
             else:
-                has_changes = _sync_registry_row(registry, skill, manifest_json) or has_changes
+                has_changes = _sync_registry_row(registry, skill, descriptor, manifest_json) or has_changes
 
-            version_id = skill_version_id(skill)
+            version_id = skill_version_id(skill, descriptor)
             if db.get(SkillVersion, version_id) is None:
                 db.add(
                     SkillVersion(
                         id=version_id,
-                        skill_id=skill.skill_id,
-                        version=skill.version,
+                        skill_id=descriptor.strategy_id,
+                        version=descriptor.declared_version,
                         source_ref=skill.manifest.get("source_ref"),
                         installed_path=str(skill.path),
                         manifest_json=manifest_json,
-                        contract_hash=skill.contract_hash,
-                        status="formal",
+                        contract_hash=descriptor.manifest_hash,
+                        status=descriptor.status.value,
                     )
                 )
                 has_changes = True
-            if skill.contract is not None and db.get(StrategyVersion, version_id) is None:
+            if db.get(StrategyVersion, version_id) is None:
                 db.add(
                     StrategyVersion(
                         version_id=version_id,
-                        strategy_id=skill.skill_id,
-                        name=skill.name,
-                        enabled=registry.enabled,
+                        strategy_id=descriptor.strategy_id,
+                        name=descriptor.name,
+                        enabled=descriptor.enabled,
                         skill_repo=skill.manifest.get("source_url"),
                         skill_ref=skill.manifest.get("source_ref"),
                         skill_path=str(skill.path),
                         yaml_path=str(skill.path / "strategy.yaml"),
-                        yaml_hash=skill.contract_hash or "",
+                        yaml_hash=descriptor.manifest_hash,
                         manifest_json=manifest_json,
                     )
                 )
                 has_changes = True
         if has_changes:
             db.commit()
-        # 延迟 import 避免与 registry.presets 之间产生循环依赖（presets 模块也需要
-        # sync_skills 提供的最新 skills 列表来自愈默认预设的 skill 分配）。
         from app.services.registry.presets import _ensure_default_presets, repair_preset_registration
 
         _ensure_default_presets(db, skills)
@@ -199,10 +215,14 @@ def sync_skills(db: Session) -> list[StrategySkill]:
         return skills
 
 
-def skill_version_id(skill: StrategySkill) -> str:
-    contract_part = skill.contract_hash[:8] if skill.contract_hash else "none"
-    skill_part = skill.skill_hash[:8] if skill.skill_hash else "noskill"
-    return f"{skill.skill_id}:{skill.version}:{contract_part}:{skill_part}"
+def skill_version_id(skill: StrategySkill, descriptor: "StrategyDescriptor" | None = None) -> str:
+    """Return a fixed-width version-row key derived from the effective descriptor."""
+    if descriptor is None:
+        from app.engine.strategy import build_strategy_descriptor
+
+        descriptor = build_strategy_descriptor(skill)
+    seed = f"{descriptor.strategy_id}:{descriptor.effective_version}"
+    return f"sd1:{hashlib.sha256(seed.encode('utf-8')).hexdigest()}"
 
 
 def list_skills(db: Session) -> list[dict[str, Any]]:
@@ -281,14 +301,41 @@ def get_skill_detail(db: Session, skill_id: str) -> dict[str, Any] | None:
 
 
 def set_skill_enabled(db: Session, skill_id: str, enabled: bool) -> dict[str, Any] | None:
+    """Change status at the manifest source, then refresh all descriptor projections."""
     row = db.get(SkillRegistry, skill_id)
     if row is None:
         return None
-    row.enabled = enabled
-    row.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
-    db.commit()
+    manifest_path = Path(row.installed_path) / "manifest.json"
+    manifest = _loads(manifest_path.read_text(encoding="utf-8") if manifest_path.exists() else None, {})
+    if not isinstance(manifest, dict):
+        raise ValueError(f"策略 '{skill_id}' 的 manifest 无法读取。")
+    if manifest.get("status") == "deprecated" and enabled:
+        raise ValueError(f"已弃用策略 '{skill_id}' 不能通过 enabled 兼容入口重新启用。")
+    manifest["status"] = "active" if enabled else "disabled"
+    manifest["enabled"] = enabled
+    temp_path = manifest_path.with_name(f".{manifest_path.name}.tmp")
+    try:
+        temp_path.write_text(json.dumps(_json_safe(manifest), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temp_path.replace(manifest_path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+    global _last_skill_sync_time, _cached_skill_cache_key, _cached_skill_list
+    _last_skill_sync_time = 0.0
+    _cached_skill_cache_key = None
+    _cached_skill_list = None
+    sync_skills(db)
+    refreshed = db.get(SkillRegistry, skill_id)
     invalidate_bootstrap_cache()
-    return {"skill_id": row.skill_id, "enabled": row.enabled}
+    if refreshed is None:
+        return None
+    descriptor = (_loads(refreshed.manifest_json, {}).get("_strategy_descriptor") or {})
+    return {
+        "strategy_id": descriptor.get("strategy_id", refreshed.skill_id),
+        "skill_id": refreshed.skill_id,
+        "enabled": bool(descriptor.get("enabled", refreshed.enabled)),
+        "status": descriptor.get("status", "active" if refreshed.enabled else "disabled"),
+    }
 
 
 def skill_performance_summary(db: Session, skill_id: str) -> dict[str, Any] | None:
@@ -387,7 +434,12 @@ def _write_install_manifest(target: Path, skill_id: str, source: str) -> None:
         manifest = {}
     manifest.setdefault("name", skill_id)
     manifest["id"] = skill_id
-    manifest["enabled"] = manifest.get("enabled", True)
+    manifest.setdefault("mode", "imperative" if manifest.get("impl_class") else "declarative")
+    manifest.setdefault("status", "active" if manifest.get("enabled", True) else "disabled")
+    # status is canonical; enabled is retained only as its public compatibility projection.
+    manifest["enabled"] = manifest["status"] == "active"
+    manifest.setdefault("requirements", ["stock_feature_context"])
+    manifest.setdefault("capabilities", ["signal_evaluation"])
     manifest["source_type"] = "github" if source.startswith(("http://", "https://")) else "local"
     manifest["source_url"] = source
     manifest_path.write_text(json.dumps(_json_safe(manifest), ensure_ascii=False, indent=2), encoding="utf-8")

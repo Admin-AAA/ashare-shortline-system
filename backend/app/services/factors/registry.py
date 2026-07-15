@@ -1,47 +1,75 @@
-"""因子注册表与依赖解析（拓扑排序 / 循环检测 / 悬空依赖检测）。
-
-``FactorRegistry`` 是依赖图的持有者：``register`` 收集因子，``resolve_order``
-把它们按 ``depends_on`` 解析为一个**确定性**的执行序，并在这一步拦截两类结构
-错误——「引用未注册因子」（悬空依赖）与「循环依赖」。真正的执行（读 stock、
-校验返回契约、按序 merge）交给 ``driver.run_factors``。
-
-设计意图（deep module）：对外暴露 register / get / list_factors / resolve_order
-这几个窄接口；Kahn 拓扑排序与 DFS 环提取的复杂度都收在实现体里。
-"""
+"""Factor Registry：显式 bootstrap、图校验、确定性 ExecutionPlan 与冻结边界。"""
 from __future__ import annotations
 
-from typing import Union
+import hashlib
+import inspect
+from pathlib import Path
+from typing import Any, Union
+
+from app.engine.factor_plan import FactorExecutionPlan, FactorPlanEntry
 
 from .base import (
     Factor,
     FactorCycleError,
     FactorDependencyError,
     FactorError,
+    FactorOutputOwnershipError,
+    FactorRegistryFrozenError,
     depends_on_of,
+    output_fields_of,
 )
 
-# 一个待注册项：可以是已构造好的因子实例，也可以是无参可实例化的因子类。
+
 Registrable = Union[Factor, type]
 
 
 class FactorRegistry:
-    """进程内因子注册表。轻量、无外部依赖，可为每个用途/每次测试独立创建。"""
+    """可局部构建的 Factor Registry；成功 bootstrap 后不可再变更。"""
 
     def __init__(self) -> None:
-        # dict 保持插入顺序 —— 作为拓扑排序在「多个因子同时就绪」时的确定性
-        # tie-break 依据（先注册者先执行），从而保住迁移前的字段计算顺序。
-        self._factors: "dict[str, Factor]" = {}
+        self._factors: dict[str, Factor] = {}
+        self._execution_plan: FactorExecutionPlan | None = None
+        self._frozen = False
+
+    # ── 生命周期 ──────────────────────────────────────────────────
+    @property
+    def is_frozen(self) -> bool:
+        return self._frozen
+
+    @property
+    def execution_plan(self) -> FactorExecutionPlan:
+        if self._execution_plan is None:
+            raise FactorError("FactorRegistry 尚未 bootstrap；没有可执行的冻结 ExecutionPlan。")
+        return self._execution_plan
+
+    def bootstrap(self) -> FactorExecutionPlan:
+        """验证整个图、生成确定性 plan，并冻结此 Registry。"""
+        if self._frozen:
+            return self.execution_plan
+        ordered = self._resolve_order_unfrozen()
+        self._validate_output_ownership(ordered)
+        entries = tuple(
+            FactorPlanEntry(
+                factor_id=factor.id,
+                output_fields=output_fields_of(factor),
+                depends_on=depends_on_of(factor),
+                implementation_hash=_factor_implementation_hash(factor),
+            )
+            for factor in ordered
+        )
+        self._execution_plan = FactorExecutionPlan(entries=entries)
+        self._frozen = True
+        return self._execution_plan
+
+    def freeze(self) -> FactorExecutionPlan:
+        """``bootstrap`` 的语义化别名。"""
+        return self.bootstrap()
 
     # ── 注册 ──────────────────────────────────────────────────────
     def register(self, factor_or_cls: Registrable) -> Registrable:
-        """注册一个因子。两种用法：
-
-        - ``registry.register(instance)``：注册实例，返回该实例。
-        - 作为类装饰器 ``@registry.register``：对无参可实例化的因子类，实例化后
-          注册，并原样返回该类（不改写类，便于继续引用 / 继承）。
-        """
+        self._assert_mutable()
         if isinstance(factor_or_cls, type):
-            instance = factor_or_cls()  # 无参构造
+            instance = factor_or_cls()
             self._add(instance)
             return factor_or_cls
         self._add(factor_or_cls)
@@ -55,14 +83,18 @@ class FactorRegistry:
             raise FactorError(f"因子 id 重复注册：'{fid}'。")
         if not callable(getattr(factor, "compute", None)):
             raise FactorError(f"因子 '{fid}' 必须实现可调用的 compute 方法。")
+        fields = output_fields_of(factor)
+        invalid = tuple(field for field in fields if not isinstance(field, str) or not field)
+        if invalid:
+            raise FactorError(f"因子 '{fid}' 的 output_fields 必须都是非空字符串：{list(invalid)}。")
         self._factors[fid] = factor
 
     def unregister(self, factor_id: str) -> None:
-        """移除一个已注册因子（不存在则忽略）。"""
+        self._assert_mutable()
         self._factors.pop(factor_id, None)
 
     def clear(self) -> None:
-        """清空注册表。"""
+        self._assert_mutable()
         self._factors.clear()
 
     # ── 查询 ──────────────────────────────────────────────────────
@@ -72,12 +104,10 @@ class FactorRegistry:
         except KeyError:
             raise FactorError(f"未注册的因子：'{factor_id}'。") from None
 
-    def list_factors(self) -> "list[Factor]":
-        """按注册顺序列出全部因子实例。"""
+    def list_factors(self) -> list[Factor]:
         return list(self._factors.values())
 
     def ids(self) -> tuple[str, ...]:
-        """按注册顺序列出全部因子 id。"""
         return tuple(self._factors)
 
     def __contains__(self, factor_id: object) -> bool:
@@ -86,95 +116,133 @@ class FactorRegistry:
     def __len__(self) -> int:
         return len(self._factors)
 
-    # ── 依赖解析 ──────────────────────────────────────────────────
-    def resolve_order(self) -> "list[Factor]":
-        """把已注册因子按 ``depends_on`` 拓扑排序为确定性执行序。
+    # ── 图解析 ────────────────────────────────────────────────────
+    def resolve_order(self) -> list[Factor]:
+        """返回确定性执行序；冻结后只从已验证 ExecutionPlan 读取。"""
+        if self._frozen:
+            return [self._factors[factor_id] for factor_id in self.execution_plan.factor_ids]
+        return self._resolve_order_unfrozen()
 
-        先做悬空依赖检查（引用未注册因子 → ``FactorDependencyError``），再做
-        Kahn 拓扑排序；若存在环则抽取环上节点抛 ``FactorCycleError``。同时就绪
-        的因子按注册顺序 tie-break，保证输出稳定可复现。
-        """
+    def _resolve_order_unfrozen(self) -> list[Factor]:
         factors = self._factors
         known = set(factors)
-
-        # 1) 悬空依赖：任一 depends_on 指向未注册因子 → 立即报错。
         for fid, factor in factors.items():
-            missing = tuple(d for d in depends_on_of(factor) if d not in known)
+            missing = tuple(dep for dep in depends_on_of(factor) if dep not in known)
             if missing:
                 raise FactorDependencyError(fid, missing)
 
-        # 2) Kahn 拓扑排序（确定性：ready 集合按注册序处理）。
-        order_index = {fid: i for i, fid in enumerate(factors)}
+        order_index = {fid: index for index, fid in enumerate(factors)}
         indegree = {fid: len(set(depends_on_of(factors[fid]))) for fid in factors}
-        dependents: "dict[str, list[str]]" = {fid: [] for fid in factors}
+        dependents: dict[str, list[str]] = {fid: [] for fid in factors}
         for fid, factor in factors.items():
-            for dep in set(depends_on_of(factor)):
-                dependents[dep].append(fid)
+            for dependency in set(depends_on_of(factor)):
+                dependents[dependency].append(fid)
 
         ready = sorted(
-            (fid for fid, deg in indegree.items() if deg == 0),
+            (fid for fid, degree in indegree.items() if degree == 0),
             key=order_index.__getitem__,
         )
-        ordered: "list[str]" = []
+        ordered_ids: list[str] = []
         while ready:
             current = ready.pop(0)
-            ordered.append(current)
-            newly_ready = []
+            ordered_ids.append(current)
+            newly_ready: list[str] = []
             for dependent in dependents[current]:
                 indegree[dependent] -= 1
                 if indegree[dependent] == 0:
                     newly_ready.append(dependent)
-            if newly_ready:
-                ready.extend(newly_ready)
-                ready.sort(key=order_index.__getitem__)
+            ready.extend(newly_ready)
+            ready.sort(key=order_index.__getitem__)
 
-        # 3) 未能全部排序 → 图中有环，抽取一条环路径报清晰错误。
-        if len(ordered) < len(factors):
+        if len(ordered_ids) < len(factors):
             raise FactorCycleError(self._find_cycle())
+        return [factors[fid] for fid in ordered_ids]
 
-        return [factors[fid] for fid in ordered]
+    def _validate_output_ownership(self, ordered: list[Factor]) -> None:
+        owners: dict[str, str] = {}
+        for factor in ordered:
+            for output_field in output_fields_of(factor):
+                owner = owners.get(output_field)
+                if owner is not None and owner != factor.id:
+                    raise FactorOutputOwnershipError(output_field, (owner, factor.id))
+                owners[output_field] = factor.id
 
     def _find_cycle(self) -> tuple[str, ...]:
-        """DFS 抽取一条真实环路径（如 ``("B", "C", "B")``），用于报错信息。"""
         factors = self._factors
-        WHITE, GRAY, BLACK = 0, 1, 2
-        color = {fid: WHITE for fid in factors}
-        path: "list[str]" = []
+        white, gray, black = 0, 1, 2
+        color = {fid: white for fid in factors}
+        path: list[str] = []
 
         def dfs(node: str) -> tuple[str, ...] | None:
-            color[node] = GRAY
+            color[node] = gray
             path.append(node)
-            for dep in set(depends_on_of(factors[node])):
-                if dep not in factors:
-                    continue  # 悬空依赖已在 resolve_order 前拦截，此处防御性跳过
-                if color[dep] == GRAY:  # 回边 → 找到环
-                    start = path.index(dep)
-                    return tuple(path[start:] + [dep])
-                if color[dep] == WHITE:
-                    found = dfs(dep)
+            for dependency in set(depends_on_of(factors[node])):
+                if dependency not in factors:
+                    continue
+                if color[dependency] == gray:
+                    start = path.index(dependency)
+                    return tuple(path[start:] + [dependency])
+                if color[dependency] == white:
+                    found = dfs(dependency)
                     if found:
                         return found
             path.pop()
-            color[node] = BLACK
+            color[node] = black
             return None
 
         for fid in factors:
-            if color[fid] == WHITE:
+            if color[fid] == white:
                 found = dfs(fid)
                 if found:
                     return found
-        return tuple(factors)  # 理论不可达：仅在确有环时才会调用本方法
+        return tuple(factors)
+
+    def _assert_mutable(self) -> None:
+        if self._frozen:
+            raise FactorRegistryFrozenError()
 
 
-# ── 进程级默认注册表 + 装饰器 ──────────────────────────────────────────
-# 生产代码用 ``@register_factor`` 把因子登记到这个默认注册表（见任务 2.3 迁移
-# 6 因子）。测试则各自 ``FactorRegistry()`` 独立实例，互不污染。
+def _factor_implementation_hash(factor: Factor) -> str:
+    """包含实现类及其基类源码；源码不可读时稳定回退为逻辑名。"""
+    parts: list[bytes] = []
+    seen_paths: set[Path] = set()
+    for cls in factor.__class__.mro():
+        if cls is object:
+            continue
+        source_path = inspect.getsourcefile(cls)
+        if source_path:
+            path = Path(source_path)
+            if path.exists() and path not in seen_paths:
+                seen_paths.add(path)
+                parts.append(path.read_bytes())
+                continue
+        parts.append(f"{cls.__module__}:{cls.__qualname__}".encode("utf-8"))
+    return hashlib.sha256(b"\n--factor-source--\n".join(parts)).hexdigest()
+
+
+# 默认注册表只由显式 bootstrap 填充并立即冻结；测试应创建独立 FactorRegistry。
 default_registry = FactorRegistry()
 
 
-def register_factor(factor_or_cls: Registrable) -> Registrable:
-    """把因子登记到进程级默认注册表。
+def bootstrap_default_factor_registry() -> FactorExecutionPlan:
+    """显式注册内置因子、校验、白名单注入并冻结生产 Registry（幂等）。"""
+    if default_registry.is_frozen:
+        return default_registry.execution_plan
 
-    既可 ``@register_factor`` 装饰因子类，也可 ``register_factor(instance)``。
-    """
+    # 导入只取得声明的因子类；shortline 模块本身不再以装饰器修改全局 Registry。
+    from .shortline import BUILTIN_FACTORS
+
+    for factor_cls in BUILTIN_FACTORS:
+        default_registry.register(factor_cls)
+    plan = default_registry.bootstrap()
+
+    # 只有计划验证成功后才开放 DSL 输出字段，避免坏图污染 evaluator allowlist。
+    from .allowlist import bootstrap_factor_allowlist
+
+    bootstrap_factor_allowlist(default_registry)
+    return plan
+
+
+def register_factor(factor_or_cls: Registrable) -> Registrable:
+    """兼容性注册入口；生产默认 Registry 冻结后会明确拒绝动态扩展。"""
     return default_registry.register(factor_or_cls)

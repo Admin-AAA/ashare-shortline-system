@@ -1,274 +1,603 @@
-"""策略协议（``Strategy``）+ 声明式策略实现 + 策略注册表（任务 3.2）。
-
-落点说明——为什么放在 ``engine/`` 而不是新建 ``services/strategies/`` 包：
-    ``engine/`` 已经是「策略评估原语」的深模块聚集地——``evaluator.py``（表达式求值）、
-    ``skill_loader.py``（``StrategySkill`` 契约与目录加载）、``strategy_runner.py``
-    （声明式 YAML 解释器 + typed ``Signal`` 组装）、``signal.py``（3.1 产出的 ``Signal``
-    契约）都在这里。``Strategy`` 协议本质上是这些原语之上再加一层「统一调用面」：
-    它不引入新的业务逻辑，只是把「怎么拿到一个可 ``evaluate`` 的策略对象」这件事
-    收敛成一个 seam，供 ``run_workbench`` / 回测预检等编排层调用。这与
-    ``services/factors/`` 独立成包的理由（因子有自己的依赖图、跨股 ``FactorContext``、
-    契约校验体系，是一个独立子域）不同——策略框架目前只有「协议 + 声明式适配器 +
-    按 id 索引的注册表」三件套，体量与 ``signal.py``/``strategy_runner.py`` 相当，
-    继续放在 ``engine/`` 保持 locality（调用方已经在 import ``app.engine.*``），
-    不必为此新开一个包。若 3.3/3.4 落地 ``ImperativeStrategy``/manifest 装配后体量
-    明显变大，可再考虑整包搬迁——但那是后续任务的判断，不在本任务范围内。
-
-设计取舍：
-    - ``Strategy`` 用 ``Protocol``（structural typing，非强制继承），与
-      ``services/factors/base.py`` 的 ``Factor`` 协议手法一致。
-    - ``StrategyContext`` 只搬运 ``run_strategy`` 现有调用点已经在用的两个参数
-      （``main_industries`` / ``skip_universe_check``），不多不少——这是重构，不是
-      新增行为。3.3 的 ``ImperativeStrategy`` 如需更多字段，再在这个 dataclass 上
-      新增带默认值的字段，不破坏既有调用点。
-    - ``DeclarativeStrategy`` 只做委托：``evaluate`` 内部原样调用既有
-      ``run_strategy(skill, stock, ...)`` 并把返回值原样透传，不做任何字段改写。
-      这是需求 4.4「声明式 YAML 路径行为逐字段不变」的落点。
-    - ``StrategyRegistry`` 的设计感对齐 2.1 的 ``FactorRegistry``：进程内、无外部
-      依赖、可各自独立实例化（测试互不污染）。与 ``FactorRegistry`` 不同的是，策略
-      之间没有 ``depends_on`` 依赖图——每个策略独立对一只股票打分，互不依赖彼此的
-      输出——所以本注册表只是一个按 ``skill_id`` 索引的容器，没有拓扑排序。
-"""
+"""Strategy protocol, immutable descriptor, and descriptor-backed registry."""
 from __future__ import annotations
 
+import hashlib
 import importlib
+import inspect
+import json
+import math
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from enum import Enum
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any, Mapping, Protocol, cast, runtime_checkable
 
 from app.engine.signal import Signal
 from app.engine.skill_loader import StrategySkill
 from app.engine.strategy_runner import run_strategy
 
 
-# ── 异常族 ──────────────────────────────────────────────────────────────
+STRATEGY_DESCRIPTOR_CONTRACT_VERSION = "strategy-descriptor/v1"
+
+
 class StrategyError(Exception):
-    """策略框架错误基类，便于调用方统一捕获。"""
+    """Base error for the strategy framework."""
 
 
 class StrategyNotFoundError(StrategyError, KeyError):
-    """按 ``skill_id`` 查找策略失败：注册表中不存在该 id。"""
+    """The requested strategy_id is not registered."""
 
-    def __init__(self, skill_id: str) -> None:
-        self.skill_id = skill_id
-        super().__init__(f"未注册的策略：'{skill_id}'。")
+    def __init__(self, strategy_id: str) -> None:
+        self.strategy_id = strategy_id
+        super().__init__(f"未注册的策略：'{strategy_id}'。")
+
+
+class StrategyUnavailableError(StrategyError):
+    """A disabled or deprecated descriptor was requested for new execution."""
+
+    def __init__(self, descriptor: "StrategyDescriptor") -> None:
+        self.strategy_id = descriptor.strategy_id
+        self.status = descriptor.status
+        detail = descriptor.deprecation_reason or "策略状态不允许新执行"
+        super().__init__(
+            f"策略 '{descriptor.strategy_id}' 当前状态为 '{descriptor.status.value}'，无法解析：{detail}。"
+        )
 
 
 class DuplicateStrategyError(StrategyError):
-    """同一 ``skill_id`` 被重复注册。"""
+    """A descriptor strategy_id was registered more than once."""
 
-    def __init__(self, skill_id: str) -> None:
-        self.skill_id = skill_id
-        super().__init__(f"策略 id 重复注册：'{skill_id}'。")
+    def __init__(self, strategy_id: str) -> None:
+        self.strategy_id = strategy_id
+        super().__init__(f"策略 id 重复注册：'{strategy_id}'。")
+
+
+class StrategyIdentityError(StrategyError):
+    """Manifest, legacy contract, or implementation identity drifted."""
+
+
+class StrategyRegistryFrozenError(StrategyError):
+    """A frozen production registry was modified."""
+
+    def __init__(self) -> None:
+        super().__init__("StrategyRegistry 已冻结；不可动态注册、移除或清空策略。")
 
 
 class StrategyAssemblyError(StrategyError):
-    """``instantiate_strategy`` 装配命令式策略失败（任务 3.4，需求 4.1）。
-
-    覆盖三类清晰可诊断的失败原因：``impl_class`` 格式不合法、模块 / 类找不到、
-    类不满足 ``Strategy`` 协议（含实例化本身抛异常）。统一成一个异常类型，
-    便于调用方（``build_registry_from_skills`` / 上层装配点）用一个 ``except``
-    分支捕获所有装配期错误，而不必分别处理 ``ImportError``/``AttributeError``/
-    ``TypeError``。
-    """
+    """An imperative strategy could not be assembled during bootstrap."""
 
 
-# ── 调用上下文 ────────────────────────────────────────────────────────────
+class StrategyMode(str, Enum):
+    DECLARATIVE = "declarative"
+    IMPERATIVE = "imperative"
+
+
+class StrategyStatus(str, Enum):
+    ACTIVE = "active"
+    DISABLED = "disabled"
+    DEPRECATED = "deprecated"
+
+
+@dataclass(frozen=True)
+class StrategyDescriptor:
+    """The sole immutable strategy identity and declared execution metadata."""
+
+    strategy_id: str
+    name: str
+    mode: StrategyMode
+    declared_version: str
+    manifest_hash: str
+    implementation_hash: str
+    effective_version: str
+    requirements: tuple[str, ...]
+    capabilities: tuple[str, ...]
+    status: StrategyStatus
+    # Signal metadata is manifest-owned and injected by adapters. Implementations
+    # cannot provide another mutable source for these values.
+    signal_weight: float = 1.0
+    strategy_independence: float = 0.85
+    deprecation_reason: str | None = None
+    replacement_strategy_id: str | None = None
+
+    @property
+    def display_name(self) -> str:
+        return self.name
+
+    @property
+    def effective_fingerprint(self) -> str:
+        return self.effective_version
+
+    @property
+    def deprecated(self) -> bool:
+        return self.status is StrategyStatus.DEPRECATED
+
+    @property
+    def enabled(self) -> bool:
+        return self.status is StrategyStatus.ACTIVE
+
+    @property
+    def available_for_execution(self) -> bool:
+        return self.enabled and not self.deprecated
+
+    def to_projection(self) -> dict[str, Any]:
+        return {
+            "strategy_id": self.strategy_id,
+            "skill_id": self.strategy_id,
+            "name": self.name,
+            "display_name": self.display_name,
+            "mode": self.mode.value,
+            "declared_version": self.declared_version,
+            "manifest_hash": self.manifest_hash,
+            "implementation_hash": self.implementation_hash,
+            "effective_version": self.effective_version,
+            "requirements": list(self.requirements),
+            "capabilities": list(self.capabilities),
+            "status": self.status.value,
+            "enabled": self.enabled,
+            "signal_metadata": {
+                "weight": self.signal_weight,
+                "strategy_independence": self.strategy_independence,
+            },
+            "deprecated": self.deprecated,
+            "deprecation_reason": self.deprecation_reason,
+            "replacement_strategy_id": self.replacement_strategy_id,
+        }
+
+
 @dataclass(frozen=True)
 class StrategyContext:
-    """一次 ``Strategy.evaluate`` 调用的只读上下文。
-
-    字段与 ``run_strategy(skill, stock, main_industries, skip_universe_check)``
-    现有调用点逐一对应：
-
-    - ``main_industries``：判定 ``is_main_theme`` 需要的当日主线行业列表。
-    - ``skip_universe_check``：是否跳过 universe 校验（prefilter 已放行时复用其
-      结论，避免同一 stock 在 universe 与 prefilter 两处重复求值）。
-
-    调用方（``run_workbench`` / 回测预检）对同一批 ``selected_skills`` 里的不同
-    skill，``skip_universe_check`` 取值可能不同（取决于该 skill 是否命中
-    prefilter 白名单），因此每次 ``evaluate`` 调用应携带一个按需构造的
-    ``StrategyContext``，而不是把它绑死在 ``Strategy`` 实例上。
-    """
+    """Read-only context for one per-stock strategy evaluation."""
 
     main_industries: list[str] = field(default_factory=list)
     skip_universe_check: bool = False
 
 
-# ── Strategy 协议 ─────────────────────────────────────────────────────────
 @runtime_checkable
 class Strategy(Protocol):
-    """一次 per-stock 策略评估的结构化契约（structural typing，实现类无需显式继承）。
-
-    命令式（``ImperativeStrategy``，3.3）与声明式（``DeclarativeStrategy``，本任务）
-    都实现同一个 ``evaluate`` 方法，返回同一个 typed ``Signal`` 契约——
-    ``StrategyRegistry`` 与调用方无需区分策略来源（需求 4.4）。
-    """
-
     def evaluate(self, stock: dict[str, Any], ctx: StrategyContext) -> Signal:
         ...
 
 
-# ── DeclarativeStrategy：委托现有 run_strategy，YAML 路径零改动 ────────────────
 class DeclarativeStrategy:
-    """声明式（``strategy.yaml``）策略的 ``Strategy`` 协议实现。
+    """Descriptor-bound adapter for the existing declarative evaluator."""
 
-    不重新实现任何评分 / 风控逻辑——只是把既有 ``run_strategy(skill, stock, ...)``
-    包一层 ``Strategy`` 协议的壳，返回值原样透传（键集合、键序、每个字段的值均
-    不变）。本类本身不产出新行为，只是「策略分发经 registry 统一取实例」这个
-    seam 的声明式一侧实现。
-    """
-
-    __slots__ = ("skill",)
+    __slots__ = ("skill", "descriptor", "_runtime_skill")
 
     def __init__(self, skill: StrategySkill) -> None:
         self.skill = skill
+        self.descriptor: StrategyDescriptor | None = None
+        self._runtime_skill: StrategySkill | None = None
 
     @property
     def skill_id(self) -> str:
         return self.skill.skill_id
 
+    def bind_descriptor(self, descriptor: StrategyDescriptor) -> None:
+        if descriptor.strategy_id != self.skill_id:
+            raise StrategyIdentityError(
+                f"声明式策略 '{self.skill_id}' 不能绑定 id 为 '{descriptor.strategy_id}' 的 Descriptor。"
+            )
+        self.descriptor = descriptor
+        self._runtime_skill = _frozen_skill_snapshot(self.skill)
+
     def evaluate(self, stock: dict[str, Any], ctx: StrategyContext) -> Signal:
-        return run_strategy(
-            self.skill,
+        signal = run_strategy(
+            self._runtime_skill or self.skill,
             stock,
             ctx.main_industries,
             skip_universe_check=ctx.skip_universe_check,
         )
+        if self.descriptor is None:
+            return signal
+        if signal["strategy_id"] != self.descriptor.strategy_id:
+            raise StrategyIdentityError(
+                f"声明式策略 Signal id '{signal['strategy_id']}' 与 Descriptor "
+                f"'{self.descriptor.strategy_id}' 不一致。"
+            )
+        projected = dict(signal)
+        projected["strategy_id"] = self.descriptor.strategy_id
+        projected["strategy_name"] = self.descriptor.name
+        projected["version_id"] = self.descriptor.effective_version
+        return cast(Signal, projected)
 
 
-# ── StrategyRegistry ──────────────────────────────────────────────────────
+class _DescriptorBoundStrategy:
+    """Wrap structural non-imperative implementations without a descriptor slot."""
+
+    __slots__ = ("_implementation", "descriptor")
+
+    def __init__(self, implementation: Strategy, descriptor: StrategyDescriptor) -> None:
+        self._implementation = implementation
+        self.descriptor = descriptor
+
+    def evaluate(self, stock: dict[str, Any], ctx: StrategyContext) -> Signal:
+        signal = dict(self._implementation.evaluate(stock, ctx))
+        signal["strategy_id"] = self.descriptor.strategy_id
+        signal["strategy_name"] = self.descriptor.name
+        signal["version_id"] = self.descriptor.effective_version
+        return cast(Signal, signal)
+
+
 class StrategyRegistry:
-    """进程内策略注册表：按 ``skill_id`` 注册 / 查找 / 列出策略实例。
-
-    轻量、无外部依赖，可为每个用途 / 每次测试独立创建一个实例，互不污染
-    （与 ``FactorRegistry`` 相同的用法约定，见 ``services/factors/registry.py``）。
-    """
+    """Official registry keyed only by ``StrategyDescriptor.strategy_id``."""
 
     def __init__(self) -> None:
-        # dict 保持插入顺序，list_strategies()/ids() 按注册顺序输出，便于确定性遍历。
         self._strategies: dict[str, Strategy] = {}
+        self._descriptors: dict[str, StrategyDescriptor] = {}
+        self._frozen = False
 
-    # ── 注册 ──────────────────────────────────────────────────────
-    def register(self, skill_id: str, strategy: Strategy) -> Strategy:
-        if not isinstance(skill_id, str) or not skill_id:
-            raise StrategyError("策略必须绑定非空字符串 skill_id 才能注册。")
-        if skill_id in self._strategies:
-            raise DuplicateStrategyError(skill_id)
+    @property
+    def is_frozen(self) -> bool:
+        return self._frozen
+
+    def freeze(self) -> None:
+        self._frozen = True
+
+    def _assert_mutable(self) -> None:
+        if self._frozen:
+            raise StrategyRegistryFrozenError()
+
+    def register(self, descriptor: StrategyDescriptor, strategy: Strategy) -> Strategy:
+        if not isinstance(descriptor, StrategyDescriptor):
+            raise StrategyError("StrategyRegistry.register 必须接收 StrategyDescriptor，不能使用独立字符串 key。")
+        self._assert_mutable()
+        if descriptor.strategy_id in self._strategies:
+            raise DuplicateStrategyError(descriptor.strategy_id)
         if not callable(getattr(strategy, "evaluate", None)):
-            raise StrategyError(f"策略 '{skill_id}' 必须实现可调用的 evaluate 方法。")
-        self._strategies[skill_id] = strategy
+            raise StrategyError(f"策略 '{descriptor.strategy_id}' 必须实现可调用的 evaluate 方法。")
+        if getattr(strategy, "descriptor", None) is not descriptor:
+            strategy = _DescriptorBoundStrategy(strategy, descriptor)
+        self._strategies[descriptor.strategy_id] = strategy
+        self._descriptors[descriptor.strategy_id] = descriptor
         return strategy
 
-    def unregister(self, skill_id: str) -> None:
-        """移除一个已注册策略（不存在则忽略）。"""
-        self._strategies.pop(skill_id, None)
+    def unregister(self, strategy_id: str) -> None:
+        self._assert_mutable()
+        self._strategies.pop(strategy_id, None)
+        self._descriptors.pop(strategy_id, None)
 
     def clear(self) -> None:
-        """清空注册表。"""
+        self._assert_mutable()
         self._strategies.clear()
+        self._descriptors.clear()
 
-    # ── 查询 ──────────────────────────────────────────────────────
-    def get(self, skill_id: str) -> Strategy:
+    def get(self, strategy_id: str) -> Strategy:
         try:
-            return self._strategies[skill_id]
+            return self._strategies[strategy_id]
         except KeyError:
-            raise StrategyNotFoundError(skill_id) from None
+            raise StrategyNotFoundError(strategy_id) from None
+
+    def get_descriptor(self, strategy_id: str) -> StrategyDescriptor:
+        try:
+            return self._descriptors[strategy_id]
+        except KeyError:
+            raise StrategyNotFoundError(strategy_id) from None
+
+    def resolve(
+        self,
+        strategy_id: str,
+        *,
+        effective_version: str | None = None,
+        allow_unavailable: bool = False,
+    ) -> tuple[StrategyDescriptor, Strategy]:
+        descriptor = self.get_descriptor(strategy_id)
+        if not allow_unavailable and not descriptor.available_for_execution:
+            raise StrategyUnavailableError(descriptor)
+        if effective_version is not None and effective_version != descriptor.effective_version:
+            raise StrategyIdentityError(
+                f"策略 '{strategy_id}' 当前有效版本为 '{descriptor.effective_version}'，"
+                f"不能解析请求的 '{effective_version}'。"
+            )
+        return descriptor, self.get(strategy_id)
 
     def list_strategies(self) -> list[Strategy]:
-        """按注册顺序列出全部策略实例。"""
         return list(self._strategies.values())
 
+    def list_descriptors(self) -> tuple[StrategyDescriptor, ...]:
+        return tuple(self._descriptors.values())
+
     def ids(self) -> tuple[str, ...]:
-        """按注册顺序列出全部策略 id。"""
         return tuple(self._strategies)
 
-    def __contains__(self, skill_id: object) -> bool:
-        return skill_id in self._strategies
+    def __contains__(self, strategy_id: object) -> bool:
+        return strategy_id in self._strategies
 
     def __len__(self) -> int:
         return len(self._strategies)
 
 
+def build_strategy_descriptor(
+    skill: StrategySkill,
+    implementation: object | None = None,
+) -> StrategyDescriptor:
+    """Build the immutable descriptor from one validated StrategySkill instance."""
+    mode = _strategy_mode(skill)
+    _validate_skill_identity(skill, mode)
+    manifest = skill.manifest
+    status = _strategy_status(skill)
+    implementation_target = implementation if implementation is not None else run_strategy
+    manifest_hash = _manifest_fingerprint(skill, mode)
+    implementation_hash = _implementation_fingerprint(implementation_target)
+    effective_version = hashlib.sha256(
+        f"{manifest_hash}:{implementation_hash}:{STRATEGY_DESCRIPTOR_CONTRACT_VERSION}".encode("utf-8")
+    ).hexdigest()
+    signal_weight, strategy_independence = _signal_metadata(manifest)
+    return StrategyDescriptor(
+        strategy_id=skill.skill_id,
+        name=skill.name,
+        mode=mode,
+        declared_version=str(skill.version),
+        manifest_hash=manifest_hash,
+        implementation_hash=implementation_hash,
+        effective_version=effective_version,
+        requirements=_manifest_string_tuple(manifest, "requirements"),
+        capabilities=_manifest_string_tuple(manifest, "capabilities"),
+        status=status,
+        signal_weight=signal_weight,
+        strategy_independence=strategy_independence,
+        deprecation_reason=_optional_manifest_string(manifest, "deprecation_reason"),
+        replacement_strategy_id=_optional_manifest_string(manifest, "replacement_strategy_id"),
+    )
+
+
 def instantiate_strategy(skill: StrategySkill) -> Strategy:
-    """按 ``skill.manifest`` 是否声明 ``impl_class`` 装配对应的 ``Strategy`` 实现
-    （任务 3.4，需求 4.1 / 4.2）。
-
-    分派规则：
-      - 声明了 ``impl_class``（格式 ``"module.path:ClassName"``）→ 动态 import
-        该模块、取类、实例化，返回命令式实现（预期是 ``ImperativeStrategy`` 子类，
-        但只做 structural typing 校验——满足 ``Strategy`` 协议即可，不强制
-        ``isinstance(ImperativeStrategy)``，保持与协议本身「结构化而非继承」的
-        设计一致）。
-      - 未声明 → 返回 ``DeclarativeStrategy(skill)``（3.2 现状，零改动）。
-
-    失败即报 ``StrategyAssemblyError``，三类原因均给出清晰、可定位到 ``skill_id`` /
-    ``impl_class`` 字面值的错误信息：
-      1. ``impl_class`` 格式不合法（缺冒号分隔的模块:类名）。
-      2. 模块 import 失败（``ModuleNotFoundError``/``ImportError``）或类在模块内
-         找不到（``AttributeError``）。
-      3. 目标类实例化后不满足 ``Strategy`` 协议（缺 ``evaluate`` 方法），或类本身
-         实例化过程抛异常（如缺 ``strategy_id``/``strategy_name`` 等必填类属性）。
-    """
+    """Assemble an implementation and bind its sole descriptor at bootstrap."""
     impl_class = skill.impl_class
     if not impl_class:
-        return DeclarativeStrategy(skill)
+        strategy = DeclarativeStrategy(skill)
+        descriptor = build_strategy_descriptor(skill)
+        strategy.bind_descriptor(descriptor)
+        return strategy
 
-    if ":" not in impl_class:
-        raise StrategyAssemblyError(
-            f"策略 '{skill.skill_id}' 的 impl_class 格式不合法：'{impl_class}'，"
-            "期望格式 'module.path:ClassName'。"
-        )
-    module_path, _, class_name = impl_class.partition(":")
-    module_path = module_path.strip()
-    class_name = class_name.strip()
-    if not module_path or not class_name:
-        raise StrategyAssemblyError(
-            f"策略 '{skill.skill_id}' 的 impl_class 格式不合法：'{impl_class}'，"
-            "模块路径与类名均不能为空。"
-        )
-
+    module_path, class_name = _parse_impl_class(skill, impl_class)
     try:
         module = importlib.import_module(module_path)
     except ImportError as exc:
         raise StrategyAssemblyError(
             f"策略 '{skill.skill_id}' 装配失败：无法 import 模块 '{module_path}'（impl_class='{impl_class}'）：{exc}"
         ) from exc
-
     try:
         strategy_cls = getattr(module, class_name)
     except AttributeError as exc:
         raise StrategyAssemblyError(
             f"策略 '{skill.skill_id}' 装配失败：模块 '{module_path}' 内找不到类 '{class_name}'（impl_class='{impl_class}'）。"
         ) from exc
-
     try:
-        instance = strategy_cls()
-    except Exception as exc:  # noqa: BLE001 - 需要把子类实例化失败的任何原因都归入统一的装配错误
+        implementation = strategy_cls()
+    except Exception as exc:  # noqa: BLE001
         raise StrategyAssemblyError(
             f"策略 '{skill.skill_id}' 装配失败：实例化 '{impl_class}' 时抛出异常：{exc}"
         ) from exc
 
-    if not isinstance(instance, Strategy):
+    from app.engine.imperative_strategy import (
+        DescriptorBoundImperativeStrategy,
+        ImperativeStrategy,
+        ImperativeStrategyProtocolError,
+        validate_imperative_implementation,
+    )
+
+    if not isinstance(implementation, ImperativeStrategy):
         raise StrategyAssemblyError(
-            f"策略 '{skill.skill_id}' 装配失败：'{impl_class}' 的实例不满足 Strategy 协议"
-            "（缺可调用的 evaluate(stock, ctx) 方法）。"
+            f"策略 '{skill.skill_id}' 装配失败：'{impl_class}' 的实例不满足命令式 Strategy 协议"
+            "（命令式策略 Protocol，缺可调用的 evaluate(stock, ctx) 方法）。"
         )
-    return instance
+    try:
+        validate_imperative_implementation(implementation)
+    except ImperativeStrategyProtocolError as exc:
+        message = str(exc)
+        if "不得重复声明" in message:
+            raise StrategyIdentityError(f"命令式策略 '{skill.skill_id}' 的{message}") from exc
+        raise StrategyAssemblyError(
+            f"策略 '{skill.skill_id}' 装配失败：'{impl_class}' 不满足命令式策略 Protocol（{message}）。"
+        ) from exc
+    descriptor = build_strategy_descriptor(skill, implementation)
+    return DescriptorBoundImperativeStrategy(implementation, descriptor)
 
 
 def build_registry_from_skills(skills: list[StrategySkill]) -> StrategyRegistry:
-    """从 ``load_skills(...)`` 结果批量构建并注册 ``Strategy`` 实例。
-
-    3.2 时本函数只处理声明式路径：每个 skill 无条件包一层 ``DeclarativeStrategy``
-    后注册。3.4 起改为调用 ``instantiate_strategy(skill)`` 决定具体实现——声明式
-    skill（无 ``impl_class``）路径**零行为变化**（``instantiate_strategy`` 对这类
-    skill 的返回值就是 ``DeclarativeStrategy(skill)``，与 3.2 逐字段一致，已有
-    ``test_strategy_registry.py`` 等价对拍覆盖）；命令式 skill（声明了
-    ``impl_class``）则装配为对应的命令式实现。调用方（``run_workbench`` / 回测
-    预检）无需改动，仍是「拿到 skills 列表 → 建 registry →
-    registry.get(id).evaluate(...)」这一套统一分发方式（需求 4.4）。
-    """
+    """Perform one bootstrap pass and publish a frozen descriptor-backed registry."""
     registry = StrategyRegistry()
     for skill in skills:
-        registry.register(skill.skill_id, instantiate_strategy(skill))
+        if not skill.executable:
+            continue
+        strategy = instantiate_strategy(skill)
+        descriptor = _descriptor_of(strategy)
+        registry.register(descriptor, strategy)
+    registry.freeze()
     return registry
+
+
+def _descriptor_of(strategy: Strategy) -> StrategyDescriptor:
+    descriptor = getattr(strategy, "descriptor", None)
+    if not isinstance(descriptor, StrategyDescriptor):
+        raise StrategyAssemblyError("策略装配成功但未绑定不可变 StrategyDescriptor。")
+    return descriptor
+
+
+def _frozen_skill_snapshot(skill: StrategySkill) -> StrategySkill:
+    """Project manifest identity into the legacy YAML runtime contract once."""
+    runtime_contract: dict[str, Any] | None = None
+    if skill.contract is not None:
+        runtime_contract = dict(skill.contract)
+        runtime_contract["id"] = skill.skill_id
+        runtime_contract["name"] = skill.name
+    return StrategySkill(
+        skill_id=skill.skill_id,
+        name=skill.name,
+        version=skill.version,
+        path=skill.path,
+        manifest=cast(dict[str, Any], _freeze_value(skill.manifest)),
+        skill_frontmatter=cast(dict[str, Any], _freeze_value(skill.skill_frontmatter)),
+        skill_body=skill.skill_body,
+        skill_hash=skill.skill_hash,
+        reference_files=cast(list[dict[str, Any]], _freeze_value(skill.reference_files)),
+        contract=cast(dict[str, Any] | None, _freeze_value(runtime_contract)),
+        contract_hash=skill.contract_hash,
+        enabled=skill.enabled,
+    )
+
+
+def _freeze_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_value(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze_value(item) for item in value)
+    if isinstance(value, tuple):
+        return tuple(_freeze_value(item) for item in value)
+    if isinstance(value, set):
+        return frozenset(_freeze_value(item) for item in value)
+    return value
+
+
+def _parse_impl_class(skill: StrategySkill, impl_class: str) -> tuple[str, str]:
+    if ":" not in impl_class:
+        raise StrategyAssemblyError(
+            f"策略 '{skill.skill_id}' 的 impl_class 格式不合法：'{impl_class}'，期望格式 'module.path:ClassName'。"
+        )
+    module_path, _, class_name = impl_class.partition(":")
+    module_path, class_name = module_path.strip(), class_name.strip()
+    if not module_path or not class_name:
+        raise StrategyAssemblyError(
+            f"策略 '{skill.skill_id}' 的 impl_class 格式不合法：'{impl_class}'，模块路径与类名均不能为空。"
+        )
+    return module_path, class_name
+
+
+def _strategy_mode(skill: StrategySkill) -> StrategyMode:
+    declared = skill.manifest.get("mode") if isinstance(skill.manifest, Mapping) else None
+    try:
+        mode = StrategyMode(str(declared).lower())
+    except ValueError as exc:
+        raise StrategyIdentityError(
+            f"策略 '{skill.skill_id}' 的 manifest.mode='{declared}' 无效，应为 declarative 或 imperative。"
+        ) from exc
+    inferred = StrategyMode.IMPERATIVE if skill.impl_class else StrategyMode.DECLARATIVE
+    if mode is not inferred:
+        raise StrategyIdentityError(
+            f"策略 '{skill.skill_id}' 的 manifest.mode='{mode.value}' 与 impl_class 推导的 '{inferred.value}' 不一致。"
+        )
+    return mode
+
+
+def _strategy_status(skill: StrategySkill) -> StrategyStatus:
+    raw_status = skill.manifest.get("status") if isinstance(skill.manifest, Mapping) else None
+    try:
+        status = StrategyStatus(str(raw_status).lower())
+    except ValueError as exc:
+        raise StrategyIdentityError(
+            f"策略 '{skill.skill_id}' 的 manifest.status='{raw_status}' 无效，应为 active、disabled 或 deprecated。"
+        ) from exc
+    if skill.enabled is not (status is StrategyStatus.ACTIVE):
+        raise StrategyIdentityError(
+            f"策略 '{skill.skill_id}' 的 legacy manifest.enabled 必须是 status='{status.value}' 的投影。"
+        )
+    if status is StrategyStatus.DEPRECATED and not _optional_manifest_string(skill.manifest, "deprecation_reason"):
+        raise StrategyIdentityError(f"已弃用策略 '{skill.skill_id}' 必须提供 manifest.deprecation_reason。")
+    return status
+
+
+def _validate_skill_identity(skill: StrategySkill, mode: StrategyMode) -> None:
+    manifest = skill.manifest
+    if not isinstance(manifest, Mapping):
+        raise StrategyIdentityError("StrategySkill 必须提供 manifest。")
+    for key, expected in (
+        ("id", skill.skill_id),
+        ("name", skill.name),
+        ("version", str(skill.version)),
+    ):
+        actual = manifest.get(key)
+        if not isinstance(actual, str) or actual.strip() != expected:
+            raise StrategyIdentityError(
+                f"策略身份不一致：manifest.{key}='{actual}'，但 StrategySkill 对应值为 '{expected}'。"
+            )
+    for key in ("mode", "status", "requirements", "capabilities"):
+        if key not in manifest:
+            raise StrategyIdentityError(f"策略 '{skill.skill_id}' 的 manifest 缺少必填字段 '{key}'。")
+    _manifest_string_tuple(manifest, "requirements")
+    _manifest_string_tuple(manifest, "capabilities")
+    _signal_metadata(manifest)
+    _strategy_status(skill)
+    for source_name, source in (("strategy.yaml", skill.contract or {}),):
+        if not isinstance(source, Mapping):
+            continue
+        for key, expected in (("id", skill.skill_id), ("name", skill.name)):
+            actual = source.get(key)
+            if actual not in (None, "") and str(actual) != expected:
+                raise StrategyIdentityError(
+                    f"策略身份不一致：{source_name}.{key}='{actual}'，但 manifest.{key}='{expected}'。"
+                )
+    if mode is StrategyMode.DECLARATIVE and skill.contract is None:
+        raise StrategyIdentityError(f"声明式策略 '{skill.skill_id}' 缺少 strategy.yaml contract。")
+
+
+def _manifest_string_tuple(manifest: Mapping[str, Any], field_name: str) -> tuple[str, ...]:
+    raw = manifest.get(field_name)
+    if not isinstance(raw, (list, tuple)) or any(not isinstance(item, str) or not item.strip() for item in raw):
+        raise StrategyIdentityError(f"manifest.{field_name} 必须为非空字符串组成的列表。")
+    return tuple(str(item).strip() for item in raw)
+
+
+def _signal_metadata(manifest: Mapping[str, Any]) -> tuple[float, float]:
+    raw = manifest.get("signal_metadata", {})
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, Mapping):
+        raise StrategyIdentityError("manifest.signal_metadata 必须为 object。")
+    try:
+        weight = float(raw.get("weight", 1.0))
+        independence = float(raw.get("strategy_independence", 0.85))
+    except (TypeError, ValueError) as exc:
+        raise StrategyIdentityError("manifest.signal_metadata 的 weight 和 strategy_independence 必须为数字。") from exc
+    if not math.isfinite(weight) or weight < 0:
+        raise StrategyIdentityError("manifest.signal_metadata.weight 必须为非负有限数。")
+    if not math.isfinite(independence) or not 0 <= independence <= 1:
+        raise StrategyIdentityError("manifest.signal_metadata.strategy_independence 必须位于 [0, 1]。")
+    return weight, independence
+
+
+def _optional_manifest_string(manifest: Mapping[str, Any], field_name: str) -> str | None:
+    value = manifest.get(field_name)
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        raise StrategyIdentityError(f"manifest.{field_name} 必须为字符串。")
+    return value.strip() or None
+
+
+def _manifest_fingerprint(skill: StrategySkill, mode: StrategyMode) -> str:
+    payload = {
+        "strategy_id": skill.skill_id,
+        "name": skill.name,
+        "mode": mode.value,
+        "declared_version": str(skill.version),
+        "manifest": skill.manifest,
+        "contract": skill.contract,
+        "skill_hash": skill.skill_hash,
+        "contract_hash": skill.contract_hash,
+        "reference_files": skill.reference_files,
+    }
+    return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def _implementation_fingerprint(implementation: object) -> str:
+    targets = implementation.__class__.mro() if not inspect.isfunction(implementation) else [implementation]
+    parts: list[bytes] = []
+    seen_paths: set[Path] = set()
+    for target in targets:
+        if target is object:
+            continue
+        source_path = inspect.getsourcefile(target)
+        if source_path:
+            path = Path(source_path)
+            if path not in seen_paths and path.exists():
+                seen_paths.add(path)
+                parts.append(path.read_bytes())
+                continue
+        module = getattr(target, "__module__", type(target).__module__)
+        qualname = getattr(target, "__qualname__", type(target).__qualname__)
+        parts.append(f"{module}:{qualname}".encode("utf-8"))
+    return hashlib.sha256(b"\n--strategy-source--\n".join(parts)).hexdigest()
+
+
+def _canonical_json(payload: object) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
