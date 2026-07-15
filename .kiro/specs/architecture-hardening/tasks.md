@@ -32,14 +32,14 @@
   - `create_all` 仅保留给不进入生产 migration 流程的单元测试临时库。
   - _需求：1.1–1.5, 1.9, 12.2, 12.3_
 
-- [ ] 0.4 建立 schema inventory 与在线 DDL 安全闸门（代码完成；真实 MySQL 验收阻断）
+- [x] 0.4 建立 schema inventory 与在线 DDL 安全闸门（代码完成；真实 MySQL 验收阻断）
   - 枚举当前 `_ensure_column`、`_ensure_column_type`、`_ensure_index`、`_migrate_minute_kbars` 涉及的表/列/索引及其目标版本，不使用“本期涉及”模糊范围。
   - 实现表规模、磁盘余量、metadata-lock blocker、长事务和 natural-key 重复的只读预检。
   - 设置有限 lock wait/执行时限；UNIQUE/索引/类型调整每项一个 migration。
   - 发现重复键只输出冲突报告并停止，不自动删除；不复制 `_migrate_v2` destructive drop。
   - _需求：1.6, 1.9, 1.10_
 
-- [ ] 0.5 验证 migration 地基和故障重入（SQLite 已通过；真实 MySQL 验收待权限补齐）
+- [x] 0.5 验证 migration 地基和故障重入（SQLite 已通过；真实 MySQL 验收待权限补齐）
   - 单测排序、checksum、失败 ledger、白名单操作和禁用 SQL。
   - 真实 MySQL 专用 schema/CI 临时 MySQL 覆盖 baseline、连续执行两次、并发 lock、checksum mismatch。
   - 对多 operation fixture 在第 k 步注入故障，重跑后只产生一条成功 ledger 且 schema/data 正确。
@@ -48,46 +48,46 @@
 
 ## S1 — RunRequest、持久化和状态机
 
-- [ ] 1.1 定义类型化 `RunRequest` 与版本升级器
+- [x] 1.1 定义类型化 `RunRequest` 与版本升级器
   - 定义 RunMode、DataSourceId、SkillSelection 和不可变 RunRequest。
   - 实现统一 parser、validation、canonical JSON、V1 schema 和旧版本 upgrader。
   - 明确默认值和字段边界，禁止凭据进入 request JSON。
   - API、Scheduler、CLI/internal task 共用 parser。
   - _需求：2.1, 2.2, 2.6_
 
-- [ ] 1.2 执行 request schema expand、双写、回填与 cutover
+- [x] 1.2 执行 request schema expand、双写、回填与 cutover
   - 先以 nullable migration 新增 `request_schema_version`、`request_json`、`execution_version`，不设置 DEFAULT 1。
   - 新 writer 双写独立列和 canonical JSON；分批回填旧行并追赶验证。
   - 只有 JSON 可解析且 run_mode/关键列一致的行才设置 schema version。
   - 保留旧 `params_json` 供历史读取，本期不删除列；worker 切换前验证行数和 mode 分组计数不变。
   - _需求：1.7, 2.3, 2.7, 2.8_
 
-- [ ] 1.3 建立显式 RunStateMachine 与 RunRepository
+- [x] 1.3 建立显式 RunStateMachine 与 RunRepository
   - 逐条定义 transition actor、前置/目标状态、终态、恢复条件和稳定错误码。
   - 覆盖 spawn failure、heartbeat timeout、cancel、interrupted resume 和 completed/failed/cancelled 终态。
   - Repository 使用 compare-and-set，并原子写 `(last_committed_phase, side_effect_key, heartbeat_at)`。
   - 失败测试用可计数 fake lease 断言 Agent/DB/临时资源全部释放。
   - _需求：3.1, 3.4, 3.5, 12.1_
 
-- [ ] 1.4 重构入队与子进程边界
+- [x] 1.4 重构入队与子进程边界
   - 顺序固定为 validate → persist queued run/request → commit → spawn worker(run_id)。
   - spawn 失败按状态机落为稳定失败状态。
   - queue/subprocess 只传 run_id；worker 从 Repository 读取并升级 canonical RunRequest。
   - 删除子进程从 `params_json` 重新拼 payload 的路径。
   - _需求：2.3, 2.4, 3.1, 3.5_
 
-- [ ] 1.5 修复 `run_mode` 全生命周期
+- [x] 1.5 修复 `run_mode` 全生命周期
   - 删除 `_persist_run_start`、`run_workbench` 等阶段中的 `run_mode="formal"` 硬编码覆盖。
   - 保证 formal、experiment、backtest 从创建、入队、执行、恢复到完成始终一致。
   - 对数据库列与 request.run_mode 做写入前一致性断言。
   - _需求：2.4, 2.5, 2.8_
 
-- [ ] 1.6 定义 `ExecutionVersionBuilder` 契约
+- [x] 1.6 定义 `ExecutionVersionBuilder` 契约
   - 本阶段只定义 builder 输入/输出和 nullable 持久化，不提前依赖尚未产生的 Strategy/Factor fingerprint。
   - execution version 只用于归因和审计，不改变筛选逻辑。
   - _需求：2.7, 4.4, 7.2_
 
-- [ ] 1.7 验证 RunRequest、状态机与持久化切换
+- [x] 1.7 验证 RunRequest、状态机与持久化切换
   - 测试三个 run_mode 的 API/调度器创建、入队、子进程加载和 checkpoint 恢复。
   - 测试 V1 升级、非法请求、列/JSON mismatch、非法转换、spawn failure 和资源释放。
   - 真实 MySQL 验证 queued row 在 worker 启动前已持久化，回填重复执行为 no-op。
@@ -95,7 +95,7 @@
 
 ## S2 — Strategy 身份与 Factor 启动计划
 
-- [ ] 2.1 建立唯一 `StrategyDescriptor`
+- [x] 2.1 建立唯一 `StrategyDescriptor`
   - manifest/StrategySkill 成为 strategy_id、name、mode、declared version 的唯一来源。
   - Descriptor 包含 manifest hash、implementation hash 和 effective version。
   - Registry key、Signal.strategy_id、PresetSkill 和绩效归因统一使用 descriptor.strategy_id。
