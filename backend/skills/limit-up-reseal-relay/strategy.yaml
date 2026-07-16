@@ -74,6 +74,20 @@ phases:
     hard_veto: true
     risk_flags: ["涨停接力环境不佳"]
 
+  # 弱势市打板毒区（第159轮 D 攻击，前瞻盈亏比定位）：
+  # limit-up 弱势市 LIVE formal n=18 WR=55.6% 但 PL=0.79<1（净负）：win_avg=4.51% vs loss_avg=5.69%，
+  #   8 笔 stop_loss_hit -5.69% 全吃、10 笔 success 仅 +4.5% 锁利，净均 -0.02% 净 -0.38%。
+  # 因果：涨停接力赌次日封板延续，弱势市次日封板成功率尚可(55.6%)但失败时大亏(-5.69%跳空止损)，
+  #   赢的却被 +5% take_profit 锁死(+4.5%)，盈亏比结构性 <1。属 CLAUDE.md "判 regime 必须看盈亏比"的
+  #   高胜率低盈亏比净近零陷阱。对照震荡 n=2 WR 100% avg+4.79%（非弱势无此问题）。
+  # 动作：hard_veto 直接否决（与 overnight 弱市/震荡毒区同模式）。limit-unp 非弱势仍有 alpha（震荡/强势）。
+  #   不静默死亡：phase name + risk_flags 进 filter_audit_json 供追溯。前瞻待下一交易日 formal 确认。
+  - name: 弱势市打板毒区
+    when: "market_regime == '弱势'"
+    score_cap: 20
+    hard_veto: true
+    risk_flags: ["弱势市打板盈亏比<1（win4.5%/loss5.7%，PL0.79），硬否决"]
+
   - name: 高标末端
     when: "limit_up_consecutive_days >= 4 or (limit_up_overheat_score >= 75 and sector_ladder_height >= 4)"
     score_cap: 50
