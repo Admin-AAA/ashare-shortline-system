@@ -72,6 +72,44 @@ def _build_agent_summary(card: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+def _slim_market_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Strip run-level audit blobs from a market snapshot before per-recommendation storage.
+
+    The snapshot's ``breadth`` contains heavy audit fields
+    (``auxiliary_data_audit``, ``auxiliary_orchestration``,
+    ``recommendation_pipeline``) that are identical across all
+    recommendations in the same run.  Storing a full copy per row wastes
+    ~200 KB × N recommendations and can trigger MySQL ``Data too long``
+    when the audit payload grows unexpectedly.  The full snapshot is
+    already persisted once in ``recommendation_runs.market_snapshot_json``,
+    so per-row copies only need the lightweight regime/risk/counts.
+    """
+    breadth = snapshot.get("breadth")
+    if not isinstance(breadth, dict):
+        return snapshot
+    slim_breadth = {k: v for k, v in breadth.items() if k not in (
+        "auxiliary_data_audit",
+        "auxiliary_orchestration",
+        "recommendation_pipeline",
+        "prefilter_audit",
+        "market_source_audit",
+        "factor_execution_plan",
+    )}
+    # Keep a size hint so downstream code knows data was trimmed.
+    for key in ("auxiliary_data_audit", "auxiliary_orchestration", "recommendation_pipeline"):
+        original = breadth.get(key)
+        if isinstance(original, dict):
+            slim_breadth[f"{key}_summary"] = {
+                "datasets": list(original.keys()),
+                "trimmed": True,
+            }
+        elif isinstance(original, list):
+            slim_breadth[f"{key}_summary"] = {"count": len(original), "trimmed": True}
+    slim = dict(snapshot)
+    slim["breadth"] = slim_breadth
+    return slim
+
+
 def persist_recommendation_cards(
     db: Session,
     *,
@@ -121,7 +159,7 @@ def persist_recommendation_cards(
                     "consensus_boost": card.get("consensus_boost", 1.0),
                 }
             ),
-            market_context_json=dump_json(card.get("market_snapshot", {})),
+            market_context_json=dump_json(_slim_market_snapshot(card.get("market_snapshot") or {})),
             skill_breakdown_json=dump_json(card.get("strategy_signals", [])),
             agent_summary_json=dump_json(_build_agent_summary(card)),
         )

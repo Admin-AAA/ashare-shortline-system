@@ -845,6 +845,12 @@ def get_run_replay_analysis(db: Session, run_id: str) -> dict[str, Any] | None:
 def _mark_run_failed(db: Session, run_id: str, exc: Exception) -> None:
     """Persist dispatcher/worker failure through lifecycle CAS when available."""
     try:
+        # A prior flush failure may have poisoned the session; rollback first
+        # so lifecycle operations can succeed.
+        try:
+            db.rollback()
+        except Exception:
+            pass
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         repository = SQLAlchemyRunRepository(db)
         lifecycle = LegacyWorkbenchRunCoordinator(repository)
@@ -1800,6 +1806,14 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             "recommendations": [_serialize_recommendation(db, rec) for rec in saved],
         }
     except Exception as exc:
+        # A prior flush failure (e.g. Data too long) poisons the session into
+        # PendingRollbackError.  Roll back first so lifecycle operations can
+        # succeed — otherwise get_run / fail / commit all cascade-fail and the
+        # run is stuck in "running" forever.
+        try:
+            db.rollback()
+        except Exception:
+            pass
         failed_at = datetime.now(timezone.utc).replace(tzinfo=None)
         managed_record = lifecycle_repository.get_run(run_id)
         if managed_record is not None:
