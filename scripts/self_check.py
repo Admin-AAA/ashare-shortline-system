@@ -81,14 +81,20 @@ def check_a_item(db) -> None:
 
 
 def check_b_item(db) -> None:
-    """B 项：最近推荐字段完整性（五项决策链：策略名+核心因子+入场/失效+LLM delta）。"""
+    """B 项：最近推荐字段完整性（五项决策链：策略名+核心因子+入场/失效+LLM delta）。
+
+    只看 formal run 的推荐：experiment 曝光补跑（skip_aux_refresh=True）的
+    agent_summary 是空骨架，本就不走 LLM deep review，不应触发 LLM delta 缺失告警。
+    """
     row = db.execute(text("""
-        SELECT final_score, bucket, setup_type, entry_rule, invalid_rule,
-               JSON_EXTRACT(feature_snapshot_json, '$.avg_cost')   AS avg_cost,
-               JSON_EXTRACT(agent_summary_json,  '$.score_delta')  AS llm_delta,
-               JSON_EXTRACT(agent_summary_json,  '$.stance')       AS llm_stance
-        FROM recommendations
-        ORDER BY recommended_at DESC
+        SELECT r.final_score, r.bucket, r.setup_type, r.entry_rule, r.invalid_rule,
+               JSON_EXTRACT(r.feature_snapshot_json, '$.avg_cost')   AS avg_cost,
+               JSON_EXTRACT(r.agent_summary_json,  '$.score_delta')  AS llm_delta,
+               JSON_EXTRACT(r.agent_summary_json,  '$.stance')       AS llm_stance
+        FROM recommendations r
+        JOIN recommendation_runs u ON r.run_id = u.run_id
+        WHERE u.run_mode = 'formal'
+        ORDER BY r.recommended_at DESC
         LIMIT 1
     """)).fetchone()
 
@@ -117,12 +123,37 @@ def check_b_item(db) -> None:
         _check_llm_route_health(db)
 
 
+def _llm_route_diagnosis(cache_latest, mins_since, total):
+    """纯函数：基于 llm_review_cache 状态判定 LLM 路由失效证据（便于单测）。
+
+    cache MAX 的局限：LLM 命中已有 cache 时不写新行（直接复用），故 cache
+    「最近写入时间」不等于「LLM 最近工作过」。真正的失效信号是 B 项主查询——
+    最近 formal run 的推荐缺 score_delta——已在调用方判定。本函数只给出
+    cache 层的强失效证据（从未命中 / 跨多个交易日无新写入）或非失效提示。
+
+    返回 (severity, message)：severity ∈ {'never','strong_stale','normal'}。
+    """
+    STRONG_STALE_MIN = 24 * 60
+    if total == 0 or cache_latest is None:
+        return ('never', 'llm_review_cache 从未命中过——LLM 审查层从未成功工作过（部署/配置缺失）')
+    if mins_since is not None and mins_since > STRONG_STALE_MIN:
+        return ('strong_stale', f'llm_review_cache {mins_since}分钟无新写入（>24h，跨多个交易日仍无新 cache）'
+                f'——配合本次「最近 formal 推荐缺 LLM delta」，LLM 路由很可能失效')
+    return ('normal', f'llm_review_cache 最近写入 {mins_since}分钟前（{cache_latest}）——'
+            f'cache 仍在更新，本次 LLM delta 缺失可能是「该股票命中已有 cache 但未回填 score_delta」'
+            f'或单只 LLM agent 异常，非全局路由失效')
+
+
 def _check_llm_route_health(db) -> None:
-    """LLM delta 缺失时的路由健康诊断：查最近 llm_review_cache 命中情况 + 路由启用状态。"""
+    """LLM delta 缺失时的路由健康诊断（仅在最近 formal 推荐确实缺 LLM delta 时被调用）。
+
+    用 _llm_route_diagnosis 纯函数判定 cache 失效证据；路由配置仅作排查信息打印。
+    """
     try:
         cache_row = db.execute(text(
             "SELECT MAX(created_at) AS latest, "
-            "TIMESTAMPDIFF(MINUTE, MAX(created_at), NOW()) AS mins_since_latest "
+            "TIMESTAMPDIFF(MINUTE, MAX(created_at), NOW()) AS mins_since_latest, "
+            "COUNT(*) AS total "
             "FROM llm_review_cache"
         )).fetchone()
         route_rows = db.execute(text(
@@ -134,21 +165,22 @@ def _check_llm_route_health(db) -> None:
         print(f'  ⚠️ LLM 路由诊断查询失败: {exc}')
         return
 
-    # 用「距最近一次缓存命中的分钟数」而非「窗口内计数」——后者会被窗口边界外的历史记录
-    # 掩盖真实空窗（如本轮修复前 10:34→15:30 长达 5h 空窗，24h 计数仍 >0 不会报警）。
+    cache_latest = cache_row[0] if cache_row else None
     mins_since = cache_row[1] if cache_row and cache_row[1] is not None else None
-    STALE_THRESHOLD_MIN = 180  # formal run 按小时触发，>3h 无命中即视为异常
-    if mins_since is None or mins_since > STALE_THRESHOLD_MIN:
-        hint = f'{mins_since}分钟前' if mins_since is not None else '从未命中过'
-        print(f'  ⚠️ 最近一次 llm_review_cache 命中是 {hint}（>{STALE_THRESHOLD_MIN}分钟无命中，LLM 审查可能全局失效）')
-        if not route_rows:
-            print('    根因候选: model_route_config 无已启用路由')
-        else:
-            for r in route_rows:
-                key_note = '自定义 key' if r[5] else '系统默认 key(.env ASHARE_AGENT_SKILL_API_KEY)'
-                print(f'    路由 {r[1]} base_url={r[2]} model={r[3]} 使用{key_note}')
-            print('    排查建议: 前端「设置→模型路由」点「测试」验证该 base_url 下系统默认 key 是否真实可用')
-            print('    （常见根因：base_url 指向的 provider 与 .env key 发放方不一致，如 base_url=deepseek.com 但 key 是 jucode.cn 的）')
+    total = int(cache_row[2] or 0) if cache_row else 0
+
+    severity, msg = _llm_route_diagnosis(cache_latest, mins_since, total)
+    prefix = '⚠️ ' if severity in ('never', 'strong_stale') else 'ℹ️ '
+    print(f'  {prefix}{msg}')
+
+    if not route_rows:
+        print('    根因候选: model_route_config 无已启用路由')
+    else:
+        for r in route_rows:
+            key_note = '自定义 key' if r[5] else '系统默认 key(.env ASHARE_AGENT_SKILL_API_KEY)'
+            print(f'    路由 {r[1]} base_url={r[2]} model={r[3]} 使用{key_note}')
+        print('    排查建议: 前端「设置→模型路由」点「测试」验证该 base_url 下系统默认 key 是否真实可用')
+        print('    （常见根因：base_url 指向的 provider 与 .env key 发放方不一致，如 base_url=deepseek.com 但 key 是 jucode.cn 的）')
 
 
 def check_c_item(db) -> set:
