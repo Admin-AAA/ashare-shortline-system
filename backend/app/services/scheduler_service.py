@@ -924,11 +924,13 @@ def _run_auxiliary_remediation(payload: dict) -> dict:
                 instruments=(),
                 trade_date=str(trade_date),
                 refresh=True,
-                # 慢变批量集 + margin/hsgt 批量集。pledge_stat/holder_number/
-                # fina_indicator 此前只在推荐 run 时逐股惰性拉（4948 股 × 3 接口
-                # → 429 限流卡死），现在在每日同步批量拉全市场落库，run 时走本地。
+                # 慢变批量集 + margin/hsgt 批量集。pledge_stat/holder_number 此前
+                # 只在推荐 run 时逐股惰性拉（4948 股 × N 接口 → 429 限流卡死），
+                # 现在每日同步批量拉全市场落库。fina_indicator 代理不支持 period/
+                # ann_date 批量（500），不在此同步，由 backfill_fina_indicator.py
+                # 在财报季手动/定时按 ts_code 逐股补（cap 守卫防卡死）。
                 datasets=("margin_detail", "block_trade", "hsgt_flow", "hsgt_top10",
-                          "pledge_stat", "holder_number", "fina_indicator"),
+                          "pledge_stat", "holder_number"),
             )
             result["batch_sync"] = {
                 item.dataset_key: {

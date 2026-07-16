@@ -100,9 +100,28 @@ def pledge_stat(self, request):
 
 ## 验证
 
-- 新增 `app/services/auxiliary/tests/test_state_provider_batch.py`（7 个测试）覆盖：单次批量调用、`requested_codes` 过滤、空 codes 不过滤、季末回退（跨年）、auction 无权限立即短路、fina_indicator `ann_date<=trade_date` 剔除晚披露。
-- `pytest app/services/auxiliary/tests/ tests/test_scheduler_service.py tests/test_data_gap_remediation_service.py tests/test_auxiliary_application.py` 全绿（74 passed）。
-- 待跑：盘后真实 formal run 确认 `auxiliary_data` phase 不再卡死（< 5 分钟）、pledge_stats 表行数上升。
+盘后实测（2026-07-16，trade_date=2026-07-16）：
+
+| 数据集 | 改造前 | 改造后 | 耗时 | 表行数变化 |
+|--------|--------|--------|------|-----------|
+| pledge_stat | 4948 次逐股（卡死 4.6h） | 1 次 end_date 批量 + 季末回退链 | 3.0s | 384 → 2634 |
+| holder_number | 4948 次逐股（卡死） | 1 次 end_date 批量 + NaN/去重容错 | 0.8s | 553 → 6032 |
+| capital_flow | 4948 次逐股（卡死） | 1 次 trade_date 批量 | <1s | （代理支持，正常） |
+| fina_indicator | 4948 次逐股（卡死） | period 批量失败→ts_code+period 逐股兜底（cap 200） | <30s | 17708（已有，代理限制） |
+| auction | 4948 次逐股（无权限） | 1 次 trade_date 批量，异常即 () | <1s | 0（无权限） |
+
+关键发现：
+1. **fina_indicator 代理不支持 `period=`/`ann_date=` 批量**（返回 500），只有 `ts_code=` 单股可行。
+   fina_indicator 改为：先试 period 批量，失败回退到 ts_code+period 逐股，加 `_FINA_PER_STOCK_CAP=200`
+   上限防止宽召回（~6000 股）卡死；每日同步不纳入（instruments=() 无 requested_codes 不触发逐股兜底），
+   由 `backfill_fina_indicator.py` 在财报季手动/定时按 ts_code 逐股补。
+2. **pledge_stat 披露日不规则**：2026-06-30/2026-03-31 无数据，2025-12-31/2025-09-30 有数据。
+   `_quarter_end_candidates` 按季末从近到远回退到第一个非空日期。
+3. **holder_number Tushare 返回 NaN holder_num + 重复 (code, end_date)**：
+   - NaN 导致 `int(NaN)` ValueError 中断整批 → 加 `_safe_int`（NaN→None→落 0）。
+   - 重复自然键触发 `_assert_unique_batch` 抛错 → 加 `seen_keys` 去重。
+
+测试：`app/services/auxiliary/tests/test_state_provider_batch.py` 9 个测试全绿（单次批量调用/过滤/空 codes 不过滤/季末跨年回退/auction 无权限短路/fina cap 守卫/holder NaN+去重容错）。`pytest auxiliary+scheduler+data_gap+auxiliary_application` 共 75 passed。
 
 ## 影响/回滚
 

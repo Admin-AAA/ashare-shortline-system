@@ -65,11 +65,30 @@ def _compact_day(value: date) -> str:
 def _quarter_end_day(value: date) -> str:
     """最近已披露的季末日（YYYYMMDD）。质押/股东人数/财务指标按季度披露，
     非季末日按 ts_code 调会返回空，且逐股循环会触发 429 限流。"""
-    quarter_end_months = [(3, 31), (6, 30), (9, 30), (12, 31)]
-    candidates = [date(value.year, m, day) for m, day in quarter_end_months if date(value.year, m, day) <= value]
-    if not candidates:
-        candidates = [date(value.year - 1, 12, 31)]
-    return candidates[-1].strftime("%Y%m%d")
+    return _quarter_end_candidates(value)[0]
+
+
+def _quarter_end_candidates(value: date, *, lookback_quarters: int = 6) -> list[str]:
+    """季末候选日列表（YYYYMMDD），从近到远回退。质押等披露不规则的慢变数据，
+    最近季末日可能尚未披露，需按候选回退到第一个有数据的日期。"""
+    quarter_end_months = [(12, 31), (9, 30), (6, 30), (3, 31)]
+    candidates: list[str] = []
+    cursor_year = value.year
+    placed = set()
+    while len(candidates) < lookback_quarters:
+        for m, day in quarter_end_months:
+            candidate = date(cursor_year, m, day)
+            if candidate > value:
+                continue
+            key = candidate.isoformat()
+            if key in placed:
+                continue
+            placed.add(key)
+            candidates.append(candidate.strftime("%Y%m%d"))
+            if len(candidates) >= lookback_quarters:
+                break
+        cursor_year -= 1
+    return candidates
 
 
 def _iso_day(value: object) -> str:
@@ -84,6 +103,31 @@ def _number(value: object, default: float = 0.0) -> float:
         return float(value) if value is not None else default
     except (TypeError, ValueError):
         return default
+
+
+def _safe_int(value: object) -> int | None:
+    """安全转 int；None/NaN/空值返回 None（由 upsert 写 NULL，不抛异常中断整批）。"""
+    import math
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(v):
+        return None
+    return int(v)
+
+
+def _ts_code(code: str) -> str:
+    if "." in code:
+        return code
+    return f"{code}.{'SH' if code.startswith(('5', '6', '9')) else 'SZ'}"
+
+
+# 逐股兜底上限：财务指标在代理不支持 period 批量时按 ts_code 逐股拉，超过此数
+# 停止（留给每日同步补全），避免宽召回（~6000 股）逐股调用卡死 run。
+_FINA_PER_STOCK_CAP = 200
 
 
 def _row(model: Any) -> dict[str, Any]:
@@ -423,9 +467,18 @@ class TushareStateProvider:
     def pledge_stat(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
         # 质押统计按季度披露（慢变数据），用 end_date 批量一次拉全市场，再按
         # requested_codes 过滤。逐股循环会触发 ~4948 次 Tushare 请求 + 429 限流。
-        target = _quarter_end_day(request.trade_date)
-        frame = self._client.pledge_stat(end_date=target)
-        if frame is None or frame.empty:
+        # pledge_stat 披露日不规则（非严格季末有数据），按季末候选从近到远回退
+        # 到第一个有数据的日期。
+        frame: Any = None
+        for candidate in _quarter_end_candidates(request.trade_date):
+            try:
+                candidate_frame = self._client.pledge_stat(end_date=candidate)
+            except Exception:
+                continue
+            if candidate_frame is not None and not candidate_frame.empty:
+                frame = candidate_frame
+                break
+        if frame is None:
             return ()
         wanted = set(request.requested_codes)
         rows: list[dict[str, Any]] = []
@@ -436,10 +489,11 @@ class TushareStateProvider:
             if len(code) != 6 or code in seen or (wanted and code not in wanted):
                 continue
             seen.add(code)
+            pledge_count = _safe_int(item.get("pledge_count"))
             rows.append({
                 "code": code,
                 "end_date": _iso_day(item.get("end_date")),
-                "pledge_count": int(_number(item.get("pledge_count"))),
+                "pledge_count": pledge_count if pledge_count is not None else 0,
                 "unrest_pledge": _number(item.get("unrest_pledge")),
                 "rest_pledge": _number(item.get("rest_pledge")),
                 "pledge_ratio": _number(item.get("pledge_ratio")),
@@ -463,22 +517,53 @@ class TushareStateProvider:
         )
 
     def fina_indicator(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
-        # 财务指标按季度披露（慢变数据），用 period=批量一次拉全市场某期的最新数据，
-        # 再按 requested_codes 过滤、剔除晚于 trade_date 的公告。逐股循环会触发
-        # ~4948 次 Tushare 请求 + 429 限流。
+        # 财务指标按季度披露（慢变数据）。优先用 period=批量一次拉全市场（1 次调用），
+        # 代理不支持时回退到按 requested_codes 逐股拉（ts_code+period，每股 1 行）。
+        # 逐股回退设有上限 _FINA_PER_STOCK_CAP，防止宽召回（~6000 股）卡死；
+        # 超出上限的留给每日同步补全，run 时走本地优先。
         target = _compact_day(request.trade_date)
         period = _quarter_end_day(request.trade_date)
-        rows: list[dict[str, Any]] = []
         wanted = set(request.requested_codes)
-        frame = self._client.fina_indicator(period=period)
-        if frame is None or frame.empty:
-            return ()
-        if "ann_date" in frame.columns:
-            frame = frame[frame["ann_date"].astype(str) <= target]
-        for _, item in frame.iterrows():
-            code = str(item.get("ts_code") or "").split(".")[0]
-            if len(code) != 6 or (wanted and code not in wanted):
+        rows: list[dict[str, Any]] = []
+
+        try:
+            frame = self._client.fina_indicator(period=period)
+        except Exception:
+            frame = None
+        if frame is not None and not frame.empty:
+            if "ann_date" in frame.columns:
+                frame = frame[frame["ann_date"].astype(str) <= target]
+            for _, item in frame.iterrows():
+                code = str(item.get("ts_code") or "").split(".")[0]
+                if len(code) != 6 or (wanted and code not in wanted):
+                    continue
+                end_date = str(item.get("end_date") or "")
+                if not end_date:
+                    continue
+                rows.append({
+                    "code": code,
+                    "end_date": end_date,
+                    "ann_date": str(item.get("ann_date") or ""),
+                    "roe": _number(item.get("roe")),
+                    "grossprofit_margin": _number(item.get("grossprofit_margin")),
+                    "netprofit_margin": _number(item.get("netprofit_margin")),
+                    "netprofit_yoy": _number(item.get("netprofit_yoy")),
+                    "or_yoy": _number(item.get("or_yoy")),
+                    "eps": _number(item.get("eps")),
+                    "bps": _number(item.get("bps")),
+                })
+            return rows
+
+        # 代理不支持 period 批量 → 逐股兜底，加上限防止宽召回卡死
+        codes = [c for c in request.requested_codes if c][:_FINA_PER_STOCK_CAP]
+        for code in codes:
+            try:
+                stock_frame = self._client.fina_indicator(ts_code=_ts_code(code), period=period)
+            except Exception:
                 continue
+            if stock_frame is None or stock_frame.empty:
+                continue
+            item = stock_frame.iloc[0]
             end_date = str(item.get("end_date") or "")
             if not end_date:
                 continue
@@ -536,13 +621,20 @@ class TushareStateProvider:
         iso_cutoff = request.trade_date.isoformat()
         wanted = set(request.requested_codes)
         rows: list[dict[str, Any]] = []
+        seen_keys: set[tuple[str, str]] = set()  # 去重 (code, end_date)，Tushare 可能返回同股同期重复行
         for _, item in frame.iterrows():
             code = str(item.get("ts_code") or "").split(".")[0]
             if len(code) != 6 or (wanted and code not in wanted):
                 continue
             end_date = _iso_day(item.get("end_date"))
-            if end_date and end_date <= iso_cutoff:
-                rows.append({"code": code, "end_date": end_date, "holder_num": int(_number(item.get("holder_num")))})
+            if not (end_date and end_date <= iso_cutoff):
+                continue
+            key = (code, end_date)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            holder_num = _safe_int(item.get("holder_num"))
+            rows.append({"code": code, "end_date": end_date, "holder_num": holder_num if holder_num is not None else 0})
         return rows
 
 

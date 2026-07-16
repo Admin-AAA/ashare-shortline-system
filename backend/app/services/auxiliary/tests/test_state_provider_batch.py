@@ -128,9 +128,85 @@ def test_auction_unavailable_returns_empty_without_per_stock_loop():
     assert client.calls == 1  # single batch attempt, NOT 3 per-stock calls
 
 
-def test_pledge_stat_quarter_end_rollback_into_prior_year():
-    # 2026-01-15 → no quarter-end yet in 2026 → rolls back to 2025-12-31
-    client = _RecordingClient({"pledge_stat": pd.DataFrame()})
+def test_pledge_stat_quarter_end_rollback_to_first_non_empty():
+    # pledge_stat 披露日不规则：2026-06-30/2026-03-31 无数据，回退到 2025-12-31。
+    # 空响应会继续向更早候选回退，直到拿到非空帧。
+    empty = pd.DataFrame()
+    non_empty = pd.DataFrame([{
+        "ts_code": "000001.SZ", "end_date": "20251231",
+        "pledge_count": 1, "unrest_pledge": 0.1, "rest_pledge": 0.2, "pledge_ratio": 3,
+    }])
+    client = _RecordingClient({
+        "pledge_stat": non_empty,  # 所有调用都返回同一非空帧 → 第一次就命中
+    })
     provider = TushareStateProvider(client, session=None)
-    provider.pledge_stat(_request(("000001",), date(2026, 1, 15)))
-    assert client.calls == [("pledge_stat", {"end_date": "20251231"})]
+    rows = provider.pledge_stat(_request(("000001",), date(2026, 7, 16)))
+    # 第一个候选是最近季末日 2026-06-30，非空即停
+    assert client.calls[0] == ("pledge_stat", {"end_date": "20260630"})
+    assert len(client.calls) == 1
+    assert {row["code"] for row in rows} == {"000001"}
+
+    # 真实回退场景：最近候选都空，直到 2025-12-31 才有数据
+    responses = {}
+    candidate_dates = ["20260630", "20260331", "20251231", "20250930", "20250630", "20250331"]
+    for d in candidate_dates:
+        responses[d] = non_empty if d == "20251231" else pd.DataFrame()
+
+    class _ByEndDateClient:
+        def __init__(self):
+            self.calls = []
+        def pledge_stat(self, end_date=None):
+            self.calls.append(end_date)
+            return responses.get(end_date)
+
+    client2 = _ByEndDateClient()
+    provider2 = TushareStateProvider(client2, session=None)
+    rows2 = provider2.pledge_stat(_request(("000001",), date(2026, 7, 16)))
+    # 回退链：20260630 → 20260331 → 20251231（命中）
+    assert client2.calls == ["20260630", "20260331", "20251231"]
+    assert {row["code"] for row in rows2} == {"000001"}
+
+
+def test_fina_indicator_batch_unsupported_falls_back_to_per_stock_with_cap():
+    # 代理不支持 period 批量（抛异常）→ 回退到 ts_code+period 逐股拉，
+    # 且超过 _FINA_PER_STOCK_CAP 后停止，不无限拉 6000 股。
+    stock_frame = pd.DataFrame([
+        {"ts_code": "000001.SZ", "end_date": "20260630", "ann_date": "20260710", "roe": 12.0}
+    ])
+    calls = {"batch": 0, "per_stock": 0}
+
+    class _Client:
+        def fina_indicator(self, **kwargs):
+            if "period" in kwargs and "ts_code" not in kwargs:
+                calls["batch"] += 1
+                raise RuntimeError("500 Server Error")  # 代理不支持批量
+            calls["per_stock"] += 1
+            return stock_frame
+
+    # 请求 250 只股，应只逐股拉前 200 只（cap）
+    codes = tuple(f"{i:06d}" for i in range(250))
+    client = _Client()
+    provider = TushareStateProvider(client, session=None)
+    rows = provider.fina_indicator(_request(codes, date(2026, 7, 16)))
+    assert calls["batch"] == 1
+    assert calls["per_stock"] == 200  # cap 生效，不会拉 250 只
+    assert len(rows) == 200
+
+
+def test_holder_number_nan_and_duplicate_natural_key_handled():
+    # Tushare 批量返回里 holder_num 可能为 NaN（int(NaN) 会 ValueError 中断整批），
+    # 且同 (code, end_date) 可能重复（_assert_unique_batch 会抛错）。两者都需容错。
+    import math
+    frame = pd.DataFrame([
+        {"ts_code": "000001.SZ", "end_date": "20260630", "holder_num": 100},
+        {"ts_code": "000001.SZ", "end_date": "20260630", "holder_num": 100},  # 重复自然键
+        {"ts_code": "600000.SH", "end_date": "20260630", "holder_num": float("nan")},  # NaN
+    ])
+    client = _RecordingClient({"stk_holdernumber": frame})
+    provider = TushareStateProvider(client, session=None)
+    rows = provider.holder_number(_request((), date(2026, 7, 16)))
+    keys = {(r["code"], r["end_date"]) for r in rows}
+    assert keys == {("000001", "2026-06-30"), ("600000", "2026-06-30")}  # 重复被去重
+    # NaN 不抛异常，落为 0（避免 int(NaN) 中断整批）
+    nan_row = next(r for r in rows if r["code"] == "600000")
+    assert nan_row["holder_num"] == 0
