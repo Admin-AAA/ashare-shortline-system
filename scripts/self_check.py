@@ -677,6 +677,11 @@ def check_d_rule_coverage(db, win_rate_baseline: float) -> None:
     if uncovered:
         _print_residual_poison_zone(uncovered)
 
+    # 前瞻窗口规则覆盖反事实：剔除被当前 veto 覆盖的失败笔后重算胜率+盈亏比。
+    # 解决"前瞻盈亏比低→误判需加规则"的循环：前瞻样本含 veto commit 前的 run（veto 还没生效），
+    # 直接看前瞻盈亏比会误判"veto 没用"。本段剔除被覆盖失败笔，反映 veto 后的真实预期。
+    _print_forward_veto_counterfactual(rows, skills, win_rate_baseline)
+
 
 def _classify_failed_coverage(rows, skills) -> tuple[int, int, int, int]:
     """统计失败样本中被当前规则覆盖（hard_veto / universe / prefilter 排除）的笔数。
@@ -810,10 +815,16 @@ def _print_residual_poison_zone(uncovered: list[dict]) -> None:
     classify = None
     try:
         import importlib.util
+        import sys as _sys
         fa_path = os.path.join(BACKEND_DIR, 'scripts', 'failure_attribution.py')
         if os.path.exists(fa_path):
             spec = importlib.util.spec_from_file_location('failure_attribution_lazy', fa_path)
             mod = importlib.util.module_from_spec(spec)
+            # 必须先注册到 sys.modules 再 exec_module：failure_attribution 用 dataclass，
+            # dataclass._is_type 通过 sys.modules[cls.__module__] 解析类型注解；
+            # 未注册时该查找返回 None → 'NoneType' has no '__dict__' → 整个模块加载失败，
+            # 静默回退内联镜像（与权威实现漂移，归因口径不可信）。
+            _sys.modules['failure_attribution_lazy'] = mod
             spec.loader.exec_module(mod)
             classify = mod.classify_failure_mode
     except Exception:
@@ -871,6 +882,78 @@ def _print_residual_poison_zone(uncovered: list[dict]) -> None:
         print(f'  ℹ️ 其中 {len(rsi_polluted)} 笔为 RSI 数据污染（rsi_6=0 & rsi_12=50，'
               f'上游 stk_factor 缺失被 _f 转 0）— 数据质量问题，非策略可解，'
               f'feature_builder 已加 rsi_6/rsi_24 守卫清洗，勿当毒区加规则')
+
+
+def _print_forward_veto_counterfactual(rows, skills, win_rate_baseline: float) -> None:
+    """前瞻窗口内，剔除被当前 veto 覆盖的失败笔后重算胜率 + 净盈亏比。
+
+    解决"D 项前瞻盈亏比低→每轮误判需加规则"的循环：前瞻窗口(FORWARD_EPOCH 之后)的
+    formal run 含 veto commit 前生成的样本（veto 当时还没生效，失败笔已结算入库）。
+    直接看前瞻盈亏比会误判"veto 没用 / 还需加规则"。本段用当前 strategy.yaml 重跑前瞻
+    失败笔，剔除会被 veto 拦截的，重算净胜率 + 净盈亏比（扣 0.07%/笔），反映 veto 后
+    的真实前瞻预期。覆盖口径与 _classify_failed_coverage 一致（hard_veto / 排除 phase /
+    prefilter）。
+
+    纯函数（仅读 rows/skills），不碰 DB，便于单测。
+    """
+    from app.engine.strategy_runner import run_strategy, evaluate_skill_prefilter
+
+    # 前瞻窗口子集（去重 by rid，与 _classify_failed_coverage 同口径）
+    fwd = {row[0]: row for row in rows if row[0].startswith('rec_')}
+    fwd_rows = [r for r in fwd.values() if _rid_trade_date(r[0]) >= FORWARD_EPOCH]
+    if not fwd_rows:
+        return
+
+    blocked_rids: set = set()
+    for row in fwd_rows:
+        rid, label, _ret, fsj, sbj = row[0], row[1], row[2], row[3], row[4]
+        if label != 'failed':
+            continue
+        fs = json.loads(fsj) if fsj else {}
+        sb = json.loads(sbj) if sbj else []
+        for s in sb:
+            sid = s.get('strategy_id')
+            skill = skills.get(sid)
+            if not skill:
+                continue
+            try:
+                prefilter_pass, _ = evaluate_skill_prefilter(skill, dict(fs), stage='market')
+                sig = run_strategy(skill, dict(fs), [], skip_universe_check=False)
+                if (not prefilter_pass) or sig.get('hard_veto') or (sig.get('phase') == '排除'):
+                    blocked_rids.add(rid)
+                    break
+            except Exception:
+                continue
+
+    # 剔除被覆盖失败笔后的样本（扣 0.07%/笔净成本）
+    kept = [r for r in fwd_rows if not (r[1] == 'failed' and r[0] in blocked_rids)]
+    n = len(kept)
+    if n < 3:  # 样本太少不打印（噪声大，单测用 3+ 笔）
+        return
+    wins = [float(r[2]) - 0.07 for r in kept if r[1] == 'success']
+    losses = [float(r[2]) - 0.07 for r in kept if r[1] == 'failed']
+    wr = round(len(wins) * 100 / n, 1)
+    win_avg = sum(wins) / len(wins) if wins else 0.0
+    loss_avg = abs(sum(losses) / len(losses)) if losses else 0.0
+    pl = round(win_avg / loss_avg, 2) if loss_avg else 0.0
+    avg = round((sum(wins) + sum(losses)) / n, 2)
+    blocked_n = len(blocked_rids)
+    pl_tag = '✅' if pl >= PL_RATIO_TARGET else ('⚠️' if pl < PL_RATIO_BASELINE else '')
+    print(
+        f'D 项前瞻 veto 反事实：前瞻窗口剔除 {blocked_n} 笔被覆盖失败后 '
+        f'WR={wr}% (n={n}) 净盈亏比={pl} {pl_tag} 平均收益={avg}% '
+        f'（对照前瞻未剔除：见上方"D 项(前瞻)"行；本行反映 veto 后真实预期）'
+    )
+
+
+def _rid_trade_date(rid: str) -> str:
+    """rec_20260709_001_xxxx → '2026-07-09'（与 FORWARD_EPOCH 同格式，可直接字符串比较）。
+    无法解析返回空串（排序时排到最前）。"""
+    parts = rid.split('_')
+    if len(parts) < 2 or len(parts[1]) != 8:
+        return ''
+    d = parts[1]
+    return f'{d[:4]}-{d[4:6]}-{d[6:8]}'
 
 
 def main() -> None:

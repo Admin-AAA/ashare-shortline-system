@@ -193,3 +193,33 @@ def test_classify_failure_mode_inline_modes():
         exit_reason="stop_loss_hit", executed_return=-2.0, max_return=0.5,
         rsi_12=55, chg20=10, pos60=50, setup_type=None,
     ) == "other"
+
+
+def test_rid_trade_date_parses_iso_format():
+    """_rid_trade_date 返回 ISO 格式，与 FORWARD_EPOCH 可直接字符串比较。"""
+    assert self_check._rid_trade_date("rec_20260709_001_abc") == "2026-07-09"
+    assert self_check._rid_trade_date("rec_20260708_002") == "2026-07-08"
+    # 无法解析返回空串（字符串比较时 < 任何 FORWARD_EPOCH，不进前瞻窗口）
+    assert self_check._rid_trade_date("badrid") == ""
+    assert self_check._rid_trade_date("rec_x") == ""
+
+
+def test_forward_veto_counterfactual_excludes_covered_failures(capsys):
+    """前瞻 veto 反事实：剔除被覆盖失败笔后重算，反映 veto 后预期（非 veto 前历史）。
+
+    构造前瞻窗口内 3 笔：1 弱市失败(被 veto 覆盖) + 1 强势失败(未覆盖) + 1 成功。
+    剔除弱市失败后剩 2 笔(1 失败+1 成功)，胜率 50%。
+    """
+    rows = [
+        _row("rec_20260710_001", "failed", -5.69, _overnight_ctx("弱势"), "overnight-holding-method"),
+        _row("rec_20260710_002", "failed", -5.70, _overnight_ctx("强势"), "overnight-holding-method"),
+        _row("rec_20260710_003", "success", 4.79, _overnight_ctx("强势"), "overnight-holding-method"),
+        _row("rec_20260710_004", "success", 4.80, _overnight_ctx("强势"), "overnight-holding-method"),
+        _row("rec_20260710_005", "success", 4.78, _overnight_ctx("强势"), "overnight-holding-method"),
+    ]
+    self_check._print_forward_veto_counterfactual(rows, _skills(), win_rate_baseline=61.5)
+    out = capsys.readouterr().out
+    assert "前瞻 veto 反事实" in out
+    # 剔除 1 笔被覆盖失败后剩 2 笔，1 成功 → WR=50%
+    assert "WR=75.0%" in out
+    assert "剔除 1 笔" in out
