@@ -77,6 +77,13 @@ def test_build_registry_dispatches_mixed_manifest_modes():
     assert isinstance(registry.get("impl"), ImperativeStrategy)
 
 
+def test_build_registry_rejects_imperative_skill_without_impl_class():
+    skill = _make_skill(skill_id="missing-impl", manifest={"mode": "imperative"})
+    assert skill.executable is False
+    with pytest.raises(StrategyAssemblyError, match=r"缺少 manifest\.impl_class"):
+        build_registry_from_skills([skill])
+
+
 def test_load_skill_rejects_missing_canonical_manifest_fields(tmp_path: Path):
     skill_dir = tmp_path / "invalid"
     skill_dir.mkdir()
@@ -96,6 +103,11 @@ def test_load_skill_command_style_directory_requires_and_projects_manifest_contr
     assert skill.executable is True
     assert validate_skill(skill) == []
     assert isinstance(instantiate_strategy(skill), ImperativeStrategy)
+
+
+def test_load_skill_rejects_imperative_manifest_without_impl_class(tmp_path: Path):
+    with pytest.raises(SkillManifestError, match=r"manifest\.impl_class"):
+        load_skill(_write_command_skill_dir(tmp_path, skill_id="missing-impl", impl_class=None))
 
 
 def test_load_skill_rejects_status_enabled_drift(tmp_path: Path):

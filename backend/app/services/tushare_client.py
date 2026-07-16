@@ -19,13 +19,19 @@ import random
 import threading
 import time
 from collections import deque
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date, timedelta
+import hashlib
+from types import MappingProxyType
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 import pandas as pd
 import requests
+
+from app.engine.trading_calendar import normalize_trade_date as _normalize_trade_date
 
 _TOKEN = "eqyrJ71eIKjLoM12OeDLQOwRMUTuETs2ItnXAJitOhjTE8sLIjm8UuihObjXEs3zOFDKUI1PMrTmMp1yO9Tjl19"
 _CUSTOM_URL = "https://fastapic.stockai888.top/"
@@ -90,6 +96,132 @@ def _rate_limit_wait() -> None:
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+class TushareRawEnvelopeError(RuntimeError):
+    """A successful HTTP response did not satisfy the raw Tushare envelope contract."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+@dataclass(frozen=True, slots=True)
+class TushareRawEnvelope:
+    """Lossless successful Tushare envelope projected to schema + item mappings.
+
+    Request credentials and response message/detail text are intentionally excluded.  The
+    complete response field order and every item value are retained before any DataFrame
+    construction or legacy normalization.  Tushare-compatible successful empty replies
+    may omit ``data.fields`` (or provide an empty field sequence); non-empty replies
+    still require an explicit, complete field list for lossless row capture.
+    """
+
+    api_name: str
+    requested_fields: str
+    envelope_keys: tuple[str, ...]
+    data_keys: tuple[str, ...]
+    fields: tuple[str, ...]
+    items: tuple[Mapping[str, Any], ...]
+
+    def __post_init__(self) -> None:
+        if not self.api_name.strip():
+            raise TushareRawEnvelopeError("tushare_raw_invalid_api", "raw API name must not be blank")
+        if any(not key.strip() for key in (*self.envelope_keys, *self.data_keys, *self.fields)):
+            raise TushareRawEnvelopeError(
+                "tushare_raw_invalid_envelope", "raw envelope keys and fields must not be blank"
+            )
+        if len(self.fields) != len(set(self.fields)):
+            raise TushareRawEnvelopeError(
+                "tushare_raw_invalid_envelope", "raw response fields must be unique"
+            )
+        expected_fields = set(self.fields)
+        if any(set(item) != expected_fields for item in self.items):
+            raise TushareRawEnvelopeError(
+                "tushare_raw_invalid_envelope", "raw response items must match the full field set"
+            )
+
+    @property
+    def field_fingerprint(self) -> str:
+        return hashlib.sha256(
+            json.dumps(self.fields, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+    @classmethod
+    def from_envelope(
+        cls,
+        *,
+        api_name: str,
+        requested_fields: str,
+        envelope: Mapping[str, Any],
+    ) -> "TushareRawEnvelope":
+        if not isinstance(envelope, Mapping):
+            raise TushareRawEnvelopeError(
+                "tushare_raw_invalid_envelope", "raw provider envelope must be a mapping"
+            )
+        data = envelope.get("data")
+        if not isinstance(data, Mapping):
+            raise TushareRawEnvelopeError(
+                "tushare_raw_invalid_envelope", "raw provider envelope must contain data mapping"
+            )
+        raw_fields = data.get("fields")
+        raw_items = data.get("items")
+        if not isinstance(raw_items, Sequence) or isinstance(raw_items, (str, bytes, bytearray)):
+            raise TushareRawEnvelopeError(
+                "tushare_raw_invalid_envelope", "raw provider data.items must be an item sequence"
+            )
+
+        # Tushare returns successful empty result sets in both forms observed in
+        # compatible transports: ``items=[]`` with no ``fields`` key, and
+        # ``items=[]`` with ``fields=[]``.  An omitted/empty schema is safe only
+        # when there are no rows: otherwise values cannot be captured losslessly.
+        if raw_fields is None:
+            if raw_items:
+                raise TushareRawEnvelopeError(
+                    "tushare_raw_invalid_envelope",
+                    "non-empty raw provider items require an explicit field sequence",
+                )
+            fields: tuple[str, ...] = ()
+        else:
+            if (
+                not isinstance(raw_fields, Sequence)
+                or isinstance(raw_fields, (str, bytes, bytearray))
+                or not all(isinstance(field, str) and field.strip() for field in raw_fields)
+            ):
+                raise TushareRawEnvelopeError(
+                    "tushare_raw_invalid_envelope", "raw provider data.fields must be a field sequence"
+                )
+            fields = tuple(raw_fields)
+            if not fields and raw_items:
+                raise TushareRawEnvelopeError(
+                    "tushare_raw_invalid_envelope",
+                    "non-empty raw provider items require at least one declared field",
+                )
+        if len(fields) != len(set(fields)):
+            raise TushareRawEnvelopeError(
+                "tushare_raw_invalid_envelope", "raw provider data.fields must be unique"
+            )
+        items: list[Mapping[str, Any]] = []
+        for raw_item in raw_items:
+            if (
+                not isinstance(raw_item, Sequence)
+                or isinstance(raw_item, (str, bytes, bytearray))
+                or len(raw_item) != len(fields)
+            ):
+                raise TushareRawEnvelopeError(
+                    "tushare_raw_invalid_envelope",
+                    "raw provider item does not match the declared field list",
+                )
+            items.append(MappingProxyType(dict(zip(fields, raw_item, strict=True))))
+        return cls(
+            api_name=api_name,
+            requested_fields=requested_fields,
+            envelope_keys=tuple(str(key) for key in envelope),
+            data_keys=tuple(str(key) for key in data),
+            fields=fields,
+            items=tuple(items),
+        )
+
+
 class _TushareSession:
     """Tushare pro_api 兼容接口，底层用 requests.Session 池化连接。"""
 
@@ -101,6 +233,70 @@ class _TushareSession:
 
     def close(self) -> None:
         self._session.close()
+
+    def fetch_raw(
+        self,
+        api_name: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+        fields: str = "",
+    ) -> TushareRawEnvelope:
+        """Fetch one successful raw envelope without altering legacy DataFrame callers."""
+        if not api_name.strip() or api_name.startswith("_"):
+            raise TushareRawEnvelopeError("tushare_raw_invalid_api", "raw API name is invalid")
+        if not isinstance(fields, str):
+            raise TushareRawEnvelopeError(
+                "tushare_raw_invalid_request", "raw fields request must be a string"
+            )
+        request_params = dict(params or {})
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_RETRIES):
+            response: requests.Response | None = None
+            try:
+                _rate_limit_wait()
+                response = self._session.post(
+                    f"{self._url}{api_name}",
+                    json={
+                        "api_name": api_name,
+                        "token": self._token,
+                        "params": request_params,
+                        "fields": fields,
+                    },
+                    timeout=self._timeout,
+                )
+                status = response.status_code
+                if status != 200:
+                    if status in _RETRYABLE_STATUS and attempt < _MAX_RETRIES - 1:
+                        _backoff_sleep(api_name, attempt, f"HTTP {status}")
+                        continue
+                    response.raise_for_status()
+                envelope = response.json()
+                if not isinstance(envelope, Mapping):
+                    raise TushareRawEnvelopeError(
+                        "tushare_raw_invalid_envelope", "raw provider envelope must be a mapping"
+                    )
+                if envelope.get("code") != 0:
+                    raise TushareRawEnvelopeError(
+                        "tushare_raw_provider_error", "raw provider reported a request error"
+                    )
+                return TushareRawEnvelope.from_envelope(
+                    api_name=api_name,
+                    requested_fields=fields,
+                    envelope=envelope,
+                )
+            except _RETRYABLE_EXC as exc:
+                last_exc = exc
+                if attempt < _MAX_RETRIES - 1:
+                    _backoff_sleep(api_name, attempt, type(exc).__name__)
+                    continue
+                logger.error("Tushare %s 重试 %d 次仍失败: %s", api_name, _MAX_RETRIES, exc)
+                raise
+            finally:
+                if response is not None:
+                    response.close()
+        if last_exc:
+            raise last_exc
+        raise TushareRawEnvelopeError("tushare_raw_unknown_error", "raw provider request did not finish")
 
     def __getattr__(self, api_name: str):
         if api_name.startswith("_"):
@@ -172,18 +368,6 @@ def ts_code(code: str) -> str:
     if code.startswith(("6", "9")):
         return f"{code}.SH"
     return f"{code}.SZ"
-
-
-def _normalize_trade_date(value: Any) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    if len(raw) >= 10 and raw[4] == "-" and raw[7] == "-":
-        return raw[:10]
-    digits = "".join(ch for ch in raw if ch.isdigit())
-    if len(digits) >= 8:
-        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
-    return raw[:10]
 
 
 def _compact_trade_date(value: Any) -> str:
@@ -1051,34 +1235,6 @@ def fetch_holder_trade(code: str) -> list[dict[str, Any]]:
             "change_ratio": _f(row.get("change_ratio")),
             "after_ratio": _f(row.get("after_ratio")),
             "avg_price": _f(row.get("avg_price")),
-        })
-    return result
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# 机构调研
-# ═════════════════════════════════════════════════════════════════════════════
-
-
-def fetch_survey(code: str) -> list[dict[str, Any]]:
-    """获取机构调研记录。"""
-    pro = get_pro()
-    tsc = ts_code(code)
-    try:
-        df = pro.stk_surv(ts_code=tsc)
-    except Exception:
-        return []
-    if df is None or df.empty:
-        return []
-    result = []
-    for _, row in df.iterrows():
-        result.append({
-            "code": code,
-            "name": str(row.get("name", "")),
-            "surv_date": _fmt_date(str(row.get("surv_date", ""))),
-            "fund_visitors": int(_f(row.get("fund_visitors"))),
-            "rece_org": str(row.get("rece_org", "")),
-            "org_type": str(row.get("org_type", "")),
         })
     return result
 

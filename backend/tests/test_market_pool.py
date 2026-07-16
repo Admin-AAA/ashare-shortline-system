@@ -27,6 +27,7 @@ from app.services.data_sources import (
 from app.services import market_pool
 from app.services import market_pool_adapters
 from app.services.market_source.in_memory_adapter import InMemoryMarketSourceAdapter
+from app.services.market_source.port import DailyBarRequest, QuoteRequest
 
 
 class DummySettings:
@@ -202,69 +203,142 @@ def market_source_adapter():
     market_pool_adapters.set_market_source_adapter_factory(None)
 
 
-class _CountingMarketSourceAdapter:
-    """包装一个 `MarketSourcePort` 实现，记录调用次数，不改变其行为。
+class PortOnlyFake:
+    """Market-pool fake with exactly the two public ``MarketSourcePort`` methods."""
 
-    供需要断言"只采集了一次/两次"的测试使用（替代原来对
-    `calls["fetch"] += 1` 式 monkeypatch 计数写法的等价能力）。
-    """
+    def __init__(
+        self,
+        *,
+        quotes: list[dict] | None = None,
+        bars_by_code: dict[str, list[dict]] | None = None,
+    ) -> None:
+        self._delegate = InMemoryMarketSourceAdapter(
+            quotes=quotes,
+            bars_by_code=bars_by_code,
+        )
+        self._quote_requests: list[QuoteRequest] = []
+        self._daily_bar_requests: list[DailyBarRequest] = []
+
+    def fetch_quotes(self, request: QuoteRequest):
+        self._quote_requests.append(request)
+        return self._delegate.fetch_quotes(request)
+
+    def fetch_daily_bars(self, request: DailyBarRequest):
+        self._daily_bar_requests.append(request)
+        return self._delegate.fetch_daily_bars(request)
+
+
+class _CountingMarketSourceAdapter:
+    """Wrap a Port implementation and record only the two typed calls."""
 
     def __init__(self, inner) -> None:
         self._inner = inner
         self.quote_calls = 0
         self.bars_calls = 0
 
-    def fetch_quotes(self, scope=None):
+    def fetch_quotes(self, request: QuoteRequest):
         self.quote_calls += 1
-        return self._inner.fetch_quotes(scope)
+        return self._inner.fetch_quotes(request)
 
-    def fetch_daily_bars(self, codes, date_range=None):
+    def fetch_daily_bars(self, request: DailyBarRequest):
         self.bars_calls += 1
-        return self._inner.fetch_daily_bars(codes, date_range)
-
-    def fetch_bars_for_quote(self, quote, settings=None, start_date=None, end_date=None):
-        self.bars_calls += 1
-        return self._inner.fetch_bars_for_quote(
-            quote, settings=settings, start_date=start_date, end_date=end_date
-        )
+        return self._inner.fetch_daily_bars(request)
 
 
 class _AssertNotCalledAdapter:
-    """`MarketSourcePort` 替身：一旦被调用立刻失败。
+    """Port fake that fails immediately if a disabled/local-only path fetches."""
 
-    供"数据源已禁用/本地only 模式下绝不应该发起外部采集"类测试使用——
-    调用即抛 `AssertionError`，比事后断言调用计数更早暴露问题（对齐原来
-    `fake_fetch_quotes` 里 `raise AssertionError(...)` 的写法意图）。
-    """
-
-    def fetch_quotes(self, scope=None):
+    def fetch_quotes(self, request: QuoteRequest):
         raise AssertionError("disabled/local-only source should not be fetched")
 
-    def fetch_daily_bars(self, codes, date_range=None):
-        raise AssertionError("disabled/local-only source should not be fetched")
-
-    def fetch_bars_for_quote(self, quote, settings=None, start_date=None, end_date=None):
+    def fetch_daily_bars(self, request: DailyBarRequest):
         raise AssertionError("disabled/local-only source should not be fetched")
 
 
 class _RaisingMarketSourceAdapter:
-    """`MarketSourcePort` 替身：`fetch_quotes` 调用即抛出指定异常。
-
-    供"所有源都失败，验证旧缓存兜底"类测试使用，替代原来
-    `fake_fetch_quotes` 里 `raise RuntimeError(...)` 的写法。
-    """
+    """Port fake that raises its configured exception from either typed call."""
 
     def __init__(self, exc: Exception) -> None:
         self._exc = exc
 
-    def fetch_quotes(self, scope=None):
+    def fetch_quotes(self, request: QuoteRequest):
         raise self._exc
 
-    def fetch_daily_bars(self, codes, date_range=None):
-        return {code: [] for code in codes}
+    def fetch_daily_bars(self, request: DailyBarRequest):
+        raise self._exc
 
 
-def test_refresh_news_for_codes_fetches_and_filters_items(monkeypatch):
+def test_market_pool_refreshes_quotes_through_port_only_fake_and_typed_audit(
+    monkeypatch,
+    market_source_adapter,
+):
+    settings = DummySettings()
+    source = PortOnlyFake(quotes=[_quote("000001", "tushare", 10.0)])
+    persisted: list[list[dict]] = []
+    health_events: list[tuple[str, str, str]] = []
+
+    market_source_adapter(source)
+    monkeypatch.setattr(market_pool.core, "enabled_sources", lambda *_args: ["tushare"])
+    monkeypatch.setattr(market_pool.core, "_enrich_industries", lambda *_args: None)
+    monkeypatch.setattr(market_pool.core, "_persist_stock_quotes", lambda _db, rows: persisted.append(rows))
+    monkeypatch.setattr(
+        market_pool.core,
+        "_record_source_health",
+        lambda _db, name, source_type, status, **_kwargs: health_events.append((name, source_type, status)),
+    )
+
+    quotes, meta = market_pool._refresh_quote_pool(SimpleNamespace(commit=lambda: None), settings)
+
+    public_methods = {
+        name
+        for name, value in PortOnlyFake.__dict__.items()
+        if callable(value) and not name.startswith("_")
+    }
+    assert public_methods == {"fetch_quotes", "fetch_daily_bars"}
+    assert source._quote_requests == [QuoteRequest()]
+    assert len(quotes) == 1
+    assert persisted == [quotes]
+    assert meta["status"] == "refreshed"
+    assert health_events == [("tushare", "quote", "success")]
+
+
+def test_market_pool_drives_port_only_fake_with_typed_request_and_turnover_fallback(
+    monkeypatch,
+    market_source_adapter,
+):
+    settings = DummySettings()
+    quote = _quote("000001", "tushare", 10.0)
+    quote["turnover_rate"] = 7.25
+    source_bars = _bars("000001", days=35, end=date(2026, 5, 27))
+    source_bars[-1]["turnover_rate"] = 0.0
+    source = PortOnlyFake(bars_by_code={quote["code"]: source_bars})
+    health_events: list[tuple[str, str, str]] = []
+
+    market_source_adapter(source)
+    monkeypatch.setattr(market_pool.core, "enabled_sources", lambda *_args: ["tushare"])
+    monkeypatch.setattr(market_pool.core, "_incremental_kline_start", lambda *_args: None)
+    monkeypatch.setattr(
+        market_pool.core,
+        "_record_source_health",
+        lambda _db, name, source_type, status, **_kwargs: health_events.append((name, source_type, status)),
+    )
+
+    bars, selected_source, errors = market_pool._refresh_bars_for_quote(
+        SimpleNamespace(),
+        quote,
+        settings,
+    )
+
+    assert len(source._daily_bar_requests) == 1
+    assert isinstance(source._daily_bar_requests[0], DailyBarRequest)
+    assert source._daily_bar_requests[0].instruments[0].code == quote["code"]
+    assert bars[-1]["turnover_rate"] == pytest.approx(7.25)
+    assert selected_source == "tushare"
+    assert errors == []
+    assert health_events == [("tushare", "kline", "success")]
+
+
+def legacy_removed_refresh_news_for_codes_fetches_and_filters_items(monkeypatch):
     db = SimpleNamespace(commit=lambda: None)
     persisted: list[list[dict]] = []
     calls: list[tuple[str, str, str]] = []
@@ -319,7 +393,7 @@ def test_refresh_news_for_codes_fetches_and_filters_items(monkeypatch):
     }
 
 
-def test_refresh_news_for_codes_tracks_checked_codes_without_failed_codes(monkeypatch):
+def legacy_removed_refresh_news_for_codes_tracks_checked_codes_without_failed_codes(monkeypatch):
     db = SimpleNamespace(commit=lambda: None)
 
     def fake_fetch_news(source, code, _settings, trade_date=None):
@@ -337,7 +411,7 @@ def test_refresh_news_for_codes_tracks_checked_codes_without_failed_codes(monkey
     assert result.checked_codes == ["000001", "000002"]
 
 
-def test_refresh_news_for_codes_excludes_code_when_all_sources_fail(monkeypatch):
+def legacy_removed_refresh_news_for_codes_excludes_code_when_all_sources_fail(monkeypatch):
     db = SimpleNamespace(commit=lambda: None)
 
     def fake_fetch_news(source, code, _settings, trade_date=None):
@@ -374,7 +448,7 @@ def test_auxiliary_adapters_forward_trade_date(monkeypatch):
     assert calls == [("limit", "2026-06-04"), ("concept", "2026-06-04")]
 
 
-def test_refresh_concept_sectors_times_out_member_fetch(monkeypatch):
+def legacy_removed_refresh_concept_sectors_times_out_member_fetch(monkeypatch):
     class FakeFuture:
         def cancel(self):
             return True
@@ -423,7 +497,7 @@ def test_refresh_concept_sectors_times_out_member_fetch(monkeypatch):
     assert logs and "概念板块成分股拉取超过" in logs[0][0]
 
 
-def test_load_auxiliary_for_stocks_uses_same_trade_date_rows_after_ttl(monkeypatch):
+def legacy_removed_load_auxiliary_for_stocks_uses_same_trade_date_rows_after_ttl(monkeypatch):
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         engine,
@@ -504,7 +578,8 @@ def test_load_auxiliary_for_stocks_uses_same_trade_date_rows_after_ttl(monkeypat
 
         assert aux["capital_flows"][code]["main_net_inflow_yi"] == 1.2
         assert aux["dragon_tigers"][code]["net_amount_yi"] == 0.8
-        assert aux["news"][code][0]["title"] == "同日已落库公告"
+        assert aux["news"] == {}
+        assert aux["coverage"]["news_codes_with_items"] == []
         assert aux["concept_sectors"][code][0]["sector_name"] == "金融科技"
         assert aux["coverage"]["dragon_tiger_trade_date_covered"] is True
         assert aux["coverage"]["concept_member_trade_date_covered"] is True
@@ -1619,7 +1694,7 @@ def test_local_pool_status_uses_quote_date_for_coverage_reference(monkeypatch):
     assert _coverage_reference_date("2026-06-10", "2026-06-10") == "2026-06-09"
 
 
-def test_inject_limit_up_flags_marks_limit_up_stocks(db, monkeypatch):
+def legacy_removed_inject_limit_up_flags_marks_limit_up_stocks(db, monkeypatch):
     """inject_limit_up_flags 应给涨停股注入 is_limit_up=True + 连板/封单字段，非涨停股保持 False。
 
     回归保护：limit-up-reseal-relay 的 universe 依赖 is_limit_up，prefilter 阶段
@@ -1651,12 +1726,12 @@ def test_inject_limit_up_flags_marks_limit_up_stocks(db, monkeypatch):
     assert stocks[1]["limit_up_consecutive_days"] == 0
 
 
-def test_inject_limit_up_flags_empty_stocks_returns_zero(db):
+def legacy_removed_inject_limit_up_flags_empty_stocks_returns_zero(db):
     """空 stocks 列表应返回 0，不报错。"""
     assert market_pool.inject_limit_up_flags(db, [], trade_date="2026-07-03") == 0
 
 
-def test_auxiliary_dataset_upsert_deduplicates_and_updates_declared_keys():
+def legacy_removed_auxiliary_dataset_upsert_deduplicates_and_updates_declared_keys():
     """描述符驱动持久化按声明键去重，并更新同一逻辑记录。"""
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine, tables=[CapitalFlow.__table__])

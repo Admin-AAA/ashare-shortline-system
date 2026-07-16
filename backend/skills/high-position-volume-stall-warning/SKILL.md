@@ -14,7 +14,9 @@
 
 本策略打分/否决逻辑完全由 Python 类
 （``app.skills_impl.high_position_volume_stall_warning:HighPositionVolumeStallWarning``）
-的 ``score(stock, ctx)`` 方法实现，不依赖 ``strategy.yaml``。核心判断字段：
+的 ``evaluate(stock, ctx) -> StrategyDecision`` 方法实现，不依赖 ``strategy.yaml``。该实现只返回
+``StrategyDecision``；``DescriptorBoundImperativeStrategy`` adapter 负责将其转换为标准 ``Signal``。
+核心判断字段：
 
 - `bias_ma20`（乖离率）>= 8：视为"高位"
 - `vol5_20`（量比）>= 1.3：视为"放量"
@@ -37,9 +39,9 @@
 ## Agent 审查输出约束
 
 命令式策略仍与声明式技能共用 agent review 机制（需求 4.5）：Python 的
-`score()` 只负责规则打分，agent 仍需按 `SkillReviewOutput` schema 独立审查，
-输出需包含 `stance`（支持/否决倾向）与 `action`（观察/轻仓试错/确认后加仓等）
-字段，不得重新计算 `score()` 已给出的分数。
+`evaluate(stock, ctx)` 只负责规则打分并返回 `StrategyDecision`，而 adapter 再输出标准 `Signal`；agent
+仍需按 `SkillReviewOutput` schema 独立审查，输出需包含 `stance`（支持/否决倾向）与
+`action`（观察/轻仓试错/确认后加仓等）字段，不得重新计算 `evaluate()` 已给出的分数。
 
 ## 不要做（负面约束）
 

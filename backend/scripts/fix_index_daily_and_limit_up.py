@@ -7,12 +7,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import logging
+from datetime import date
 
 from sqlalchemy import func, select
 
 from app.db.session import SessionLocal
 from app.models.tables import IndexDaily
-from app.services.market_pool import refresh_limit_up_board
+from app.services.auxiliary.application import run_auxiliary_application
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("fix_index_limit_up")
@@ -78,10 +79,19 @@ def backfill_limit_up_board(trade_date: str | None = None) -> int:
     """补齐 limit_up_board 指定日期数据。"""
     db = SessionLocal()
     try:
-        rows = refresh_limit_up_board(db, trade_date=trade_date)
+        result = run_auxiliary_application(
+            db,
+            instruments=(),
+            trade_date=trade_date or date.today(),
+            refresh=True,
+            datasets=("limit_up_board",),
+        )
+        item = result.orchestrated.result_for("limit_up_board")
+        if item.errors:
+            raise RuntimeError(", ".join(error.message for error in item.errors))
         db.commit()
-        logger.info("limit_up_board 补齐完成: trade_date=%s rows=%d", trade_date, len(rows))
-        return len(rows)
+        logger.info("limit_up_board 补齐完成: trade_date=%s rows=%d", trade_date, item.coverage.record_count)
+        return item.coverage.record_count
     finally:
         db.close()
 

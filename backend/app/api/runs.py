@@ -67,6 +67,9 @@ def matrix_run_status():
 def create_backtest_comparison(payload: dict, db: Session = Depends(get_db)):
     """执行 baseline vs candidate 双版本回测对比（含 walk-forward + time-split）。
 
+    Uses the P0 Research Gateway Runner for both arms; writes only to
+    ``backtest_*`` tables, never to ``btrec_*`` or ``Recommendation``.
+
     请求体:
         start_date: str
         end_date: str
@@ -74,8 +77,9 @@ def create_backtest_comparison(payload: dict, db: Session = Depends(get_db)):
         horizon_days: int (默认 5)
         baseline_score_line: float (默认 72.0)
         candidate_score_line: float (默认 65.0)
+        strategy_id: str (默认 daily-stock-analysis-skill)
     """
-    from app.services.backtest_service import run_backtest_comparison
+    from app.services.backtest.comparison import run_p0_comparison
 
     start_date = payload.get("start_date")
     end_date = payload.get("end_date")
@@ -86,11 +90,13 @@ def create_backtest_comparison(payload: dict, db: Session = Depends(get_db)):
     horizon_days = int(payload.get("horizon_days", 5))
     baseline_score_line = float(payload.get("baseline_score_line", 72.0))
     candidate_score_line = float(payload.get("candidate_score_line", 65.0))
+    strategy_id = str(payload.get("strategy_id") or payload.get("skill_id") or "daily-stock-analysis-skill").strip()
     try:
-        return run_backtest_comparison(
+        return run_p0_comparison(
             db, start_date, end_date, horizon_days,
             baseline_score_line=baseline_score_line,
             candidate_score_line=candidate_score_line,
+            strategy_id=strategy_id,
         )
     except Exception as exc:
         logger.exception("backtest comparison failed")
@@ -190,10 +196,7 @@ def create_backtest(payload: dict, db: Session = Depends(get_db)):
             date_selector=SingleDate(start_date) if start_date == end_date else DateRange(start_date, end_date),
             execution_policy=ExecutionPolicy(**policy),
             target_codes=target_codes,
-            parameter_set={
-                "minimum_signal_score": score_line,
-                "compatibility_source": "api.runs.backtest",
-            },
+            parameter_set={"minimum_signal_score": score_line},
         )
         result = ResearchBacktestRunner(ResearchBacktestRepository(db)).run(request)
         result["compatibility_adapter"] = {

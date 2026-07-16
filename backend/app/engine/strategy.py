@@ -12,6 +12,12 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol, cast, runtime_checkable
 
+from app.engine.backtest import (
+    AuxiliaryDataRequirement,
+    BacktestErrorCode,
+    BacktestValidationError,
+    DataRequirement,
+)
 from app.engine.signal import Signal
 from app.engine.skill_loader import StrategySkill
 from app.engine.strategy_runner import run_strategy
@@ -78,6 +84,143 @@ class StrategyStatus(str, Enum):
     DEPRECATED = "deprecated"
 
 
+class BacktestParameterType(str, Enum):
+    """Supported, deterministic scalar types for a strategy research parameter."""
+
+    NUMBER = "number"
+    INTEGER = "integer"
+    BOOLEAN = "boolean"
+    STRING = "string"
+
+
+@dataclass(frozen=True)
+class BacktestParameterSpec:
+    """One manifest-owned, bounded parameter accepted by a research backtest."""
+
+    name: str
+    value_type: BacktestParameterType
+    default: object | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    choices: tuple[object, ...] = ()
+
+    def __post_init__(self) -> None:
+        name = str(self.name).strip()
+        if not name:
+            raise StrategyIdentityError("backtest parameter name must not be blank")
+        try:
+            value_type = (
+                self.value_type
+                if isinstance(self.value_type, BacktestParameterType)
+                else BacktestParameterType(str(self.value_type))
+            )
+        except ValueError as exc:
+            raise StrategyIdentityError(f"backtest parameter '{name}' has an invalid type") from exc
+        if (self.minimum is not None or self.maximum is not None) and value_type not in {
+            BacktestParameterType.NUMBER,
+            BacktestParameterType.INTEGER,
+        }:
+            raise StrategyIdentityError(f"backtest parameter '{name}' range requires a numeric type")
+        minimum = _parameter_bound(self.minimum, name, "minimum")
+        maximum = _parameter_bound(self.maximum, name, "maximum")
+        if minimum is not None and maximum is not None and minimum > maximum:
+            raise StrategyIdentityError(f"backtest parameter '{name}' minimum must not exceed maximum")
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "value_type", value_type)
+        object.__setattr__(self, "minimum", minimum)
+        object.__setattr__(self, "maximum", maximum)
+        normalized_choices = tuple(self._coerce(value) for value in self.choices)
+        if len(set(_parameter_identity(value) for value in normalized_choices)) != len(normalized_choices):
+            raise StrategyIdentityError(f"backtest parameter '{name}' choices must not repeat")
+        object.__setattr__(self, "choices", normalized_choices)
+        if self.default is not None:
+            object.__setattr__(self, "default", self.normalize(self.default))
+
+    def _coerce(self, value: object) -> object:
+        if self.value_type is BacktestParameterType.NUMBER:
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                raise StrategyIdentityError(f"backtest parameter '{self.name}' must be a finite number")
+            return float(value)
+        if self.value_type is BacktestParameterType.INTEGER:
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise StrategyIdentityError(f"backtest parameter '{self.name}' must be an integer")
+            return value
+        if self.value_type is BacktestParameterType.BOOLEAN:
+            if not isinstance(value, bool):
+                raise StrategyIdentityError(f"backtest parameter '{self.name}' must be a boolean")
+            return value
+        if not isinstance(value, str) or not value.strip():
+            raise StrategyIdentityError(f"backtest parameter '{self.name}' must be a non-blank string")
+        return value.strip()
+
+    def normalize(self, value: object) -> object:
+        try:
+            normalized = self._coerce(value)
+        except StrategyIdentityError as exc:
+            raise BacktestValidationError(
+                BacktestErrorCode.INVALID_REQUEST,
+                f"parameter_set.{self.name} has an invalid value",
+            ) from exc
+        if isinstance(normalized, (int, float)) and not isinstance(normalized, bool):
+            numeric = float(normalized)
+            if self.minimum is not None and numeric < self.minimum:
+                raise BacktestValidationError(
+                    BacktestErrorCode.INVALID_REQUEST,
+                    f"parameter_set.{self.name} must be at least {self.minimum}",
+                )
+            if self.maximum is not None and numeric > self.maximum:
+                raise BacktestValidationError(
+                    BacktestErrorCode.INVALID_REQUEST,
+                    f"parameter_set.{self.name} must be at most {self.maximum}",
+                )
+        if self.choices and _parameter_identity(normalized) not in {
+            _parameter_identity(choice) for choice in self.choices
+        }:
+            raise BacktestValidationError(
+                BacktestErrorCode.INVALID_REQUEST,
+                f"parameter_set.{self.name} is not one of the manifest-declared choices",
+            )
+        return normalized
+
+    def to_projection(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "type": self.value_type.value,
+            "default": self.default,
+            "minimum": self.minimum,
+            "maximum": self.maximum,
+            "choices": list(self.choices),
+        }
+
+
+def _parameter_bound(value: object | None, name: str, field_name: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        raise StrategyIdentityError(f"backtest parameter '{name}' {field_name} must be a finite number")
+    return float(value)
+
+
+def _parameter_identity(value: object) -> tuple[str, str]:
+    return (type(value).__name__, repr(value))
+
+
+_DEFAULT_DATA_REQUIREMENT = DataRequirement(
+    lookback_bars=60,
+    future_label_horizon_days=0,
+    requires_daily_bars=True,
+)
+_DEFAULT_BACKTEST_PARAMETERS = (
+    BacktestParameterSpec(
+        name="minimum_signal_score",
+        value_type=BacktestParameterType.NUMBER,
+        default=70.0,
+        minimum=0.0,
+        maximum=100.0,
+    ),
+)
+
+
 @dataclass(frozen=True)
 class StrategyDescriptor:
     """The sole immutable strategy identity and declared execution metadata."""
@@ -98,6 +241,19 @@ class StrategyDescriptor:
     strategy_independence: float = 0.85
     deprecation_reason: str | None = None
     replacement_strategy_id: str | None = None
+    data_requirement: DataRequirement = field(default_factory=lambda: _DEFAULT_DATA_REQUIREMENT)
+    backtest_parameters: tuple[BacktestParameterSpec, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.data_requirement, DataRequirement):
+            raise StrategyIdentityError("StrategyDescriptor.data_requirement must be a DataRequirement")
+        parameters = tuple(self.backtest_parameters)
+        if not all(isinstance(item, BacktestParameterSpec) for item in parameters):
+            raise StrategyIdentityError("StrategyDescriptor.backtest_parameters must contain BacktestParameterSpec values")
+        names = tuple(item.name for item in parameters)
+        if len(names) != len(set(names)):
+            raise StrategyIdentityError("StrategyDescriptor.backtest_parameters must not repeat parameter names")
+        object.__setattr__(self, "backtest_parameters", parameters)
 
     @property
     def display_name(self) -> str:
@@ -141,6 +297,8 @@ class StrategyDescriptor:
             "deprecated": self.deprecated,
             "deprecation_reason": self.deprecation_reason,
             "replacement_strategy_id": self.replacement_strategy_id,
+            "data_requirement": self.data_requirement.canonical_payload(),
+            "backtest_parameters": [item.to_projection() for item in self.backtest_parameters],
         }
 
 
@@ -245,7 +403,15 @@ class StrategyRegistry:
             raise DuplicateStrategyError(descriptor.strategy_id)
         if not callable(getattr(strategy, "evaluate", None)):
             raise StrategyError(f"策略 '{descriptor.strategy_id}' 必须实现可调用的 evaluate 方法。")
-        if getattr(strategy, "descriptor", None) is not descriptor:
+        if descriptor.mode is StrategyMode.IMPERATIVE:
+            from app.engine.imperative_strategy import DescriptorBoundImperativeStrategy
+
+            if not isinstance(strategy, DescriptorBoundImperativeStrategy) or strategy.descriptor is not descriptor:
+                raise StrategyError(
+                    f"命令式策略 '{descriptor.strategy_id}' 必须注册为绑定同一 Descriptor 对象的 "
+                    "DescriptorBoundImperativeStrategy；不接受兼容的 Signal-returning 实现。"
+                )
+        elif getattr(strategy, "descriptor", None) is not descriptor:
             strategy = _DescriptorBoundStrategy(strategy, descriptor)
         self._strategies[descriptor.strategy_id] = strategy
         self._descriptors[descriptor.strategy_id] = descriptor
@@ -322,6 +488,8 @@ def build_strategy_descriptor(
         f"{manifest_hash}:{implementation_hash}:{STRATEGY_DESCRIPTOR_CONTRACT_VERSION}".encode("utf-8")
     ).hexdigest()
     signal_weight, strategy_independence = _signal_metadata(manifest)
+    data_requirement = _data_requirement_from_manifest(manifest)
+    backtest_parameters = _backtest_parameters_from_manifest(manifest)
     return StrategyDescriptor(
         strategy_id=skill.skill_id,
         name=skill.name,
@@ -337,6 +505,8 @@ def build_strategy_descriptor(
         strategy_independence=strategy_independence,
         deprecation_reason=_optional_manifest_string(manifest, "deprecation_reason"),
         replacement_strategy_id=_optional_manifest_string(manifest, "replacement_strategy_id"),
+        data_requirement=data_requirement,
+        backtest_parameters=backtest_parameters,
     )
 
 
@@ -398,6 +568,10 @@ def build_registry_from_skills(skills: list[StrategySkill]) -> StrategyRegistry:
     """Perform one bootstrap pass and publish a frozen descriptor-backed registry."""
     registry = StrategyRegistry()
     for skill in skills:
+        if skill.mode == StrategyMode.IMPERATIVE.value and not skill.impl_class:
+            raise StrategyAssemblyError(
+                f"命令式策略 '{skill.skill_id}' 缺少 manifest.impl_class，无法装配。"
+            )
         if not skill.executable:
             continue
         strategy = instantiate_strategy(skill)
@@ -516,6 +690,8 @@ def _validate_skill_identity(skill: StrategySkill, mode: StrategyMode) -> None:
     _manifest_string_tuple(manifest, "requirements")
     _manifest_string_tuple(manifest, "capabilities")
     _signal_metadata(manifest)
+    _data_requirement_from_manifest(manifest)
+    _backtest_parameters_from_manifest(manifest)
     _strategy_status(skill)
     for source_name, source in (("strategy.yaml", skill.contract or {}),):
         if not isinstance(source, Mapping):
@@ -528,6 +704,115 @@ def _validate_skill_identity(skill: StrategySkill, mode: StrategyMode) -> None:
                 )
     if mode is StrategyMode.DECLARATIVE and skill.contract is None:
         raise StrategyIdentityError(f"声明式策略 '{skill.skill_id}' 缺少 strategy.yaml contract。")
+
+
+def _data_requirement_from_manifest(manifest: Mapping[str, Any]) -> DataRequirement:
+    """Build an immutable read contract from an optional manifest declaration.
+
+    Legacy manifests are upgraded to a conservative daily-bar requirement rather
+    than being granted unbounded data access.  New manifests can declare stricter
+    daily/minute/benchmark/auxiliary requirements explicitly.
+    """
+
+    raw = manifest.get("data_requirement")
+    if raw is None:
+        return _DEFAULT_DATA_REQUIREMENT
+    if not isinstance(raw, Mapping):
+        raise StrategyIdentityError("manifest.data_requirement must be an object")
+    raw_auxiliary = raw.get("auxiliary_datasets", ())
+    if isinstance(raw_auxiliary, (str, bytes)) or not isinstance(raw_auxiliary, (list, tuple)):
+        raise StrategyIdentityError("manifest.data_requirement.auxiliary_datasets must be a list")
+    try:
+        auxiliary = tuple(
+            AuxiliaryDataRequirement(
+                key=str(item.get("key") or ""),
+                minimum_coverage=item.get("minimum_coverage", 0.95),
+                release_lag_days=item.get("release_lag_days", 0),
+            )
+            for item in raw_auxiliary
+            if isinstance(item, Mapping)
+        )
+    except BacktestValidationError as exc:
+        raise StrategyIdentityError(f"invalid manifest.data_requirement auxiliary dataset: {exc}") from exc
+    if len(auxiliary) != len(raw_auxiliary):
+        raise StrategyIdentityError("manifest.data_requirement.auxiliary_datasets items must be objects")
+    try:
+        return DataRequirement(
+            lookback_bars=raw.get("lookback_bars", _DEFAULT_DATA_REQUIREMENT.lookback_bars),
+            future_label_horizon_days=raw.get("future_label_horizon_days", 0),
+            requires_daily_bars=raw.get("requires_daily_bars", True),
+            requires_minute_bars=raw.get("requires_minute_bars", False),
+            benchmark_code=raw.get("benchmark_code"),
+            auxiliary_datasets=auxiliary,
+            minimum_coverage=raw.get("minimum_coverage", 0.95),
+        )
+    except BacktestValidationError as exc:
+        raise StrategyIdentityError(f"invalid manifest.data_requirement: {exc}") from exc
+
+
+def _backtest_parameters_from_manifest(manifest: Mapping[str, Any]) -> tuple[BacktestParameterSpec, ...]:
+    """Parse manifest-owned parameter specifications and reject implicit overrides."""
+
+    raw = manifest.get("backtest_parameters")
+    if raw is None:
+        # This versioned compatibility schema is intentionally narrow.  It keeps
+        # old manifests executable while accepting only the legacy public score
+        # threshold; every new override must appear in the manifest itself.
+        return _DEFAULT_BACKTEST_PARAMETERS
+    if isinstance(raw, (str, bytes)) or not isinstance(raw, (list, tuple)):
+        raise StrategyIdentityError("manifest.backtest_parameters must be a list")
+    try:
+        parameters = tuple(
+            BacktestParameterSpec(
+                name=str(item.get("name") or ""),
+                value_type=item.get("type", item.get("value_type", "")),
+                default=item.get("default"),
+                minimum=item.get("minimum"),
+                maximum=item.get("maximum"),
+                choices=tuple(item.get("choices") or ()),
+            )
+            for item in raw
+            if isinstance(item, Mapping)
+        )
+    except (BacktestValidationError, StrategyIdentityError) as exc:
+        raise StrategyIdentityError(f"invalid manifest.backtest_parameters: {exc}") from exc
+    if len(parameters) != len(raw):
+        raise StrategyIdentityError("manifest.backtest_parameters items must be objects")
+    names = tuple(item.name for item in parameters)
+    if len(names) != len(set(names)):
+        raise StrategyIdentityError("manifest.backtest_parameters must not repeat names")
+    return parameters
+
+
+def validate_backtest_parameter_set(
+    descriptor: StrategyDescriptor,
+    parameter_set: Mapping[str, Any] | None,
+) -> Mapping[str, object]:
+    """Normalize only manifest-declared strategy parameters into a frozen mapping."""
+
+    if not isinstance(descriptor, StrategyDescriptor):
+        raise BacktestValidationError(BacktestErrorCode.INVALID_REQUEST, "a StrategyDescriptor is required")
+    if parameter_set is None:
+        values: Mapping[str, Any] = {}
+    elif isinstance(parameter_set, Mapping):
+        values = parameter_set
+    else:
+        raise BacktestValidationError(BacktestErrorCode.INVALID_REQUEST, "parameter_set must be an object")
+    specs = {spec.name: spec for spec in descriptor.backtest_parameters}
+    unexpected = sorted(str(key) for key in values if str(key) not in specs)
+    if unexpected:
+        raise BacktestValidationError(
+            BacktestErrorCode.INVALID_REQUEST,
+            f"parameter_set contains undeclared parameters: {', '.join(unexpected)}",
+            details={"strategy_id": descriptor.strategy_id, "undeclared_parameters": unexpected},
+        )
+    normalized: dict[str, object] = {}
+    for name, spec in specs.items():
+        if name in values:
+            normalized[name] = spec.normalize(values[name])
+        elif spec.default is not None:
+            normalized[name] = spec.default
+    return MappingProxyType(dict(sorted(normalized.items())))
 
 
 def _manifest_string_tuple(manifest: Mapping[str, Any], field_name: str) -> tuple[str, ...]:

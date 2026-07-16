@@ -137,7 +137,11 @@ def test_enqueue_commits_canonical_queued_run_before_dispatch(monkeypatch):
     )
     monkeypatch.setattr(workbench_service, "_select_skills_for_run", lambda *_args: [object()])
     monkeypatch.setattr(workbench_service, "_selected_skill_rows", lambda _skills: [])
-    monkeypatch.setattr(workbench_service, "_factor_execution_identity", lambda: ("test-execution-v1", {}))
+    monkeypatch.setattr(
+        workbench_service,
+        "_execution_version_identity",
+        lambda _request, _selected_skills: ("test-execution-v1", {}),
+    )
     monkeypatch.setattr(workbench_service, "_new_run_id", lambda: "run-api-boundary")
     monkeypatch.setattr(
         workbench_service,

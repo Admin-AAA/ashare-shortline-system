@@ -65,10 +65,11 @@ cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && pyt
 
 ### T2. 回测验证（模型内化）
 1. 快速路径（诊断首选）：查 DB 已有 outcome 分析，不跑新回测
-2. 真实回测（改完策略必做）：5 分钟超时，卡住切快速路径
-3. **去重必做**：按 `recommendation_id` 去重，区分 LIVE(rec_*) 与 BACKTEST(btrec_*) 两个总体，不能按 (trade_date,code) 混并
+2. 真实回测（改完策略必做）：通过 P0 Agent Research Gateway（`POST /api/runs/backtest` 或 `POST /api/backtests`）执行，5 分钟超时，卡住切快速路径
+3. **去重必做**：按 `backtest_id` + `attempt_no` 隔离，区分 LIVE(`rec_*`) 与 P0 RESEARCH(`backtest_*`) 两个总体，不能按 (trade_date,code) 混并。禁止使用旧 `btrec_*` 前缀产生新证据
 4. **交易成本**：佣金万1双边 + 印花税0.05%卖出 = 0.07%/笔。扣费后须达标（胜率>50%、盈亏比>1.4）
 5. 输出：胜率、平均收益、盈亏比、止损率、出场分布
+6. **回测对比**：使用 `POST /api/runs/backtest/comparison`（已迁移到 P0 Runner），不再调用 `backtest_service.run_backtest_comparison`
 
 ### T3. 准确度提升（模型内化）
 1. 查 `recommendation_outcomes` 各 skill 历史胜率

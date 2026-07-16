@@ -324,8 +324,7 @@ def test_mysql_repository_batches_mysql_atomic_upserts_without_database_access()
         natural_key=("code", "trade_date"),
         row_encoder=lambda row: row,
         policy=MySQLUpsertPolicy(
-            overwrite_fields=("value",),
-            preserve_fields=("source_version",),
+            overwrite_fields=("value", "source_version"),
             latest_wins_field="source_version",
         ),
         batch_size=2,
@@ -342,6 +341,9 @@ def test_mysql_repository_batches_mysql_atomic_upserts_without_database_access()
     assert metrics.execute_count == 2
     assert metrics.affected_rows == 4
     assert metrics.inserted_rows is None and metrics.updated_rows is None
+    assert metrics.batch_size == 2
+    assert metrics.batch_statement_bound == 2
+    assert metrics.fixed_statement_count == 0
     compiled = str(executor.statements[0].compile(dialect=mysql.dialect()))
     assert "ON DUPLICATE KEY UPDATE" in compiled
     assert "CASE WHEN" in compiled
@@ -411,3 +413,397 @@ def test_successful_custom_handler_preserves_shared_typed_audit_result():
     assert [event.stage for event in result.audit] == [AuxiliaryStage.CUSTOM, AuxiliaryStage.CUSTOM]
     assert result.audit[0].detail_map["event"] == "dispatched"
     assert result.audit[1].detail_map["implementation"] == "fixture"
+
+
+class FixtureSchemaReadiness:
+    """Test-only schema evidence; production must use migration-backed evidence."""
+
+    def assert_ready(self, entry: Any) -> None:
+        del entry
+
+
+def test_inventory_is_frozen_auditable_and_marks_identity_specific_work_as_blocked():
+    from app.services.auxiliary.production import (
+        AUDIT_ONLY_AUXILIARY_DATASET_KEYS,
+        AUXILIARY_AUDIT_ONLY_DATASET_INVENTORY,
+        AUXILIARY_DATASET_BY_KEY,
+        AUXILIARY_DATASET_INVENTORY,
+        IMMUTABLE_PARTITION_SNAPSHOT_DATASET_KEYS,
+        REQUIRED_AUXILIARY_CATEGORIES,
+        STATE_ATOMIC_UPSERT_DATASET_KEYS,
+        AuxiliaryPersistenceIdentity,
+        MySQLVerificationRequirement,
+        SnapshotVerificationRequirement,
+        validate_auxiliary_inventory,
+    )
+
+    validate_auxiliary_inventory()
+    assert REQUIRED_AUXILIARY_CATEGORIES <= {entry.category for entry in AUXILIARY_DATASET_INVENTORY}
+    assert len(AUXILIARY_DATASET_INVENTORY) == 17
+    assert {entry.key for entry in AUXILIARY_AUDIT_ONLY_DATASET_INVENTORY} == AUDIT_ONLY_AUXILIARY_DATASET_KEYS
+    assert set(AUXILIARY_DATASET_BY_KEY) == {entry.key for entry in AUXILIARY_DATASET_INVENTORY}
+    state_entries = tuple(entry for entry in AUXILIARY_DATASET_INVENTORY if entry.is_state_dataset)
+    snapshot_entries = tuple(entry for entry in AUXILIARY_DATASET_INVENTORY if entry.is_snapshot_dataset)
+    assert {entry.key for entry in state_entries} == STATE_ATOMIC_UPSERT_DATASET_KEYS
+    assert {entry.key for entry in snapshot_entries} == IMMUTABLE_PARTITION_SNAPSHOT_DATASET_KEYS
+    assert all(
+        entry.identity_semantics is AuxiliaryPersistenceIdentity.STATE_ATOMIC_UPSERT
+        and set(entry.mysql_blockers) == set(MySQLVerificationRequirement)
+        and not entry.snapshot_blockers
+        for entry in state_entries
+    )
+    assert all(
+        entry.identity_semantics is AuxiliaryPersistenceIdentity.IMMUTABLE_PARTITION_SNAPSHOT
+        and not entry.natural_key
+        and entry.row_identity == ("batch_id", "row_ordinal")
+        and not entry.mysql_blockers
+        and set(entry.snapshot_blockers) == set(SnapshotVerificationRequirement)
+        for entry in snapshot_entries
+    )
+    assert all(entry.table_name == entry.model.__tablename__ for entry in AUXILIARY_DATASET_INVENTORY)
+    with pytest.raises(TypeError):
+        AUXILIARY_DATASET_BY_KEY["unexpected"] = AUXILIARY_DATASET_INVENTORY[0]  # type: ignore[index]
+
+
+def test_declared_standard_adapter_runs_new_dataset_without_custom_handler():
+    import dataclasses
+
+    from app.services.auxiliary.production import (
+        AUXILIARY_DATASET_INVENTORY,
+        StandardAuxiliaryDatasetAdapters,
+        build_production_auxiliary_orchestrator,
+    )
+
+    fixture = dataclasses.replace(
+        next(entry for entry in AUXILIARY_DATASET_INVENTORY if entry.key == "capital_flow"),
+        key="fixture_without_custom_handler",
+        view_key="fixture.view",
+    )
+    repository = FakeRepository(AuxiliaryRepositorySnapshot(0))
+    orchestrator = build_production_auxiliary_orchestrator(
+        {
+            fixture.key: StandardAuxiliaryDatasetAdapters(
+                fetcher=FakeFetcher([{"code": "000001", "value": 1}]),
+                normalizer=FakeNormalizer(),
+                repository=repository,
+                loader=FakeLoader(fixture.view_key),
+            )
+        },
+        schema_readiness=FixtureSchemaReadiness(),
+        inventory=(fixture,),
+        clock=lambda: NOW,
+    )
+
+    result = orchestrator.prepare(
+        datasets=(fixture.key,),
+        instruments=INSTRUMENTS,
+        trade_date=TRADE_DATE,
+        refresh=True,
+    ).result_for(fixture.key)
+
+    assert result.is_usable
+    assert result.view_key == "fixture.view"
+    assert result.persistence is not None
+    assert repository.persisted == ({"code": "000001", "value": 1, "trade_date": TRADE_DATE},)
+
+
+def test_unverified_schema_gate_blocks_production_assembly_without_database_access():
+    import dataclasses
+
+    from app.services.auxiliary.production import (
+        AUXILIARY_DATASET_INVENTORY,
+        AuxiliarySchemaMigrationBlockedError,
+        StandardAuxiliaryDatasetAdapters,
+        UnverifiedMySQLSchemaReadiness,
+        build_production_auxiliary_registry,
+    )
+
+    fixture = dataclasses.replace(
+        next(entry for entry in AUXILIARY_DATASET_INVENTORY if entry.key == "capital_flow"),
+        key="blocked_fixture",
+        view_key="blocked.fixture",
+    )
+    with pytest.raises(AuxiliarySchemaMigrationBlockedError, match="两个连接|two_connection"):
+        build_production_auxiliary_registry(
+            {
+                fixture.key: StandardAuxiliaryDatasetAdapters(
+                    fetcher=FakeFetcher([]),
+                    normalizer=FakeNormalizer(),
+                    repository=FakeRepository(AuxiliaryRepositorySnapshot(0)),
+                    loader=FakeLoader(fixture.view_key),
+                )
+            },
+            schema_readiness=UnverifiedMySQLSchemaReadiness(),
+            inventory=(fixture,),
+        )
+
+
+def test_mysql_repository_preflights_duplicate_keys_before_any_fake_execute():
+    from app.services.auxiliary.mysql_repository import MySQLDuplicateNaturalKeyError
+
+    table = Table(
+        "duplicate_preflight_rows",
+        MetaData(),
+        Column("code", String(6), primary_key=True),
+        Column("trade_date", Date, primary_key=True),
+        Column("value", Integer, nullable=False),
+    )
+    executor = CapturingExecutor()
+    repository = MySQLAtomicUpsertRepository[dict[str, Any]](
+        executor=executor,
+        table=table,
+        natural_key=("code", "trade_date"),
+        row_encoder=lambda row: row,
+        policy=MySQLUpsertPolicy(overwrite_fields=("value",)),
+        batch_size=1,
+    )
+    rows = [
+        {"code": "000001", "trade_date": TRADE_DATE, "value": 1},
+        {"code": "000001", "trade_date": TRADE_DATE, "value": 2},
+    ]
+
+    preflight = repository.preflight_duplicate_keys(rows)
+    assert not preflight.is_clear
+    assert preflight.attempted_rows == 2
+    assert preflight.unique_key_count == 1
+    with pytest.raises(MySQLDuplicateNaturalKeyError):
+        repository.upsert(rows, _request())
+    assert executor.statements == []
+
+
+def test_mysql_repository_rejects_unknown_update_payload_and_exposes_batch_bound():
+    table = Table(
+        "whitelist_rows",
+        MetaData(),
+        Column("code", String(6), primary_key=True),
+        Column("trade_date", Date, primary_key=True),
+        Column("value", Integer, nullable=False),
+    )
+    repository = MySQLAtomicUpsertRepository[dict[str, Any]](
+        executor=CapturingExecutor(),
+        table=table,
+        natural_key=("code", "trade_date"),
+        row_encoder=lambda row: row,
+        policy=MySQLUpsertPolicy(overwrite_fields=("value",)),
+        batch_size=2,
+    )
+
+    with pytest.raises(MySQLUpsertConfigurationError, match="不存在的字段"):
+        repository.build_statement(
+            [{"code": "000001", "trade_date": TRADE_DATE, "value": 1, "unsafe": "nope"}]
+        )
+    assert repository.update_whitelist == ("value",)
+    assert repository.fixed_statement_count == 0
+    assert repository.dml_statement_upper_bound(0) == 0
+    assert repository.dml_statement_upper_bound(3) == 2
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value", "message"),
+    [
+        ("natural_key", (), "natural_key"),
+        ("fetcher", object(), "fetcher.fetch"),
+        ("freshness_extractor", None, "freshness_field"),
+    ],
+)
+def test_registry_bootstrap_revalidates_descriptor_contracts_before_freezing(
+    attribute: str,
+    value: object,
+    message: str,
+):
+    descriptor = _descriptor()
+    registry = AuxiliaryDatasetRegistry()
+    registry.register(descriptor)
+
+    # Frozen dataclasses protect normal callers.  This deliberately bypasses that
+    # guard to prove bootstrap re-checks every descriptor before publication.
+    object.__setattr__(descriptor, attribute, value)
+
+    with pytest.raises(AuxiliaryContractError, match=message):
+        registry.freeze()
+    assert registry.is_frozen is False
+
+
+def test_registry_bootstrap_rejects_duplicate_key_and_invalid_dependency_graph():
+    from app.services.auxiliary.registry import (
+        AuxiliaryDependencyError,
+        DuplicateAuxiliaryDatasetError,
+    )
+
+    duplicate = AuxiliaryDatasetRegistry()
+    duplicate.register(_descriptor(key="one", view_key="one_view"))
+    with pytest.raises(DuplicateAuxiliaryDatasetError):
+        duplicate.register(_descriptor(key="one", view_key="two_view"))
+
+    missing_dependency = AuxiliaryDatasetRegistry()
+    missing_dependency.register(
+        _descriptor(key="dependent", view_key="dependent_view", dependencies=("missing",))
+    )
+    with pytest.raises(AuxiliaryDependencyError, match="未注册"):
+        missing_dependency.freeze()
+    assert missing_dependency.is_frozen is False
+
+    cyclic = AuxiliaryDatasetRegistry()
+    cyclic.register(_descriptor(key="first", view_key="first_view", dependencies=("second",)))
+    cyclic.register(_descriptor(key="second", view_key="second_view", dependencies=("first",)))
+    with pytest.raises(AuxiliaryDependencyError, match="循环"):
+        cyclic.freeze()
+    assert cyclic.is_frozen is False
+
+
+class NoConnectionSchemaReadiness:
+    """Records descriptor assembly without claiming real-MySQL evidence."""
+
+    def __init__(self) -> None:
+        self.entries: list[str] = []
+
+    def assert_ready(self, entry: Any) -> None:
+        self.entries.append(entry.key)
+
+
+def test_s4_inventory_declares_unique_plans_only_for_state_datasets_and_registers_them():
+    """State datasets have discovered UNIQUE migrations; event datasets never do."""
+    from app.db.migrations.auxiliary_unique import AuxiliaryUniqueConstraintDeclaration
+    from app.db.migrations.versions import all_migrations
+    from app.services.auxiliary.production import (
+        AUXILIARY_DATASET_COMPLETION,
+        AUXILIARY_DATASET_INVENTORY,
+        AUXILIARY_UNIQUE_MIGRATION_PLANS,
+        IMMUTABLE_PARTITION_SNAPSHOT_DATASET_KEYS,
+        STATE_ATOMIC_UPSERT_DATASET_KEYS,
+        AuxiliaryCompletionState,
+        AuxiliaryMigrationRegistrationState,
+        AuxiliarySnapshotDatasetCompletion,
+        AuxiliaryStateDatasetCompletion,
+        MySQLVerificationRequirement,
+        validate_auxiliary_migration_inventory,
+    )
+
+    validate_auxiliary_migration_inventory()
+    inventory_keys = {entry.key for entry in AUXILIARY_DATASET_INVENTORY}
+    registered_versions = {migration.version for migration in all_migrations()}
+    unique_versions = {plan.version for plan in AUXILIARY_UNIQUE_MIGRATION_PLANS.values()}
+
+    assert set(AUXILIARY_UNIQUE_MIGRATION_PLANS) == STATE_ATOMIC_UPSERT_DATASET_KEYS
+    assert not (set(AUXILIARY_UNIQUE_MIGRATION_PLANS) & IMMUTABLE_PARTITION_SNAPSHOT_DATASET_KEYS)
+    assert set(AUXILIARY_DATASET_COMPLETION) == inventory_keys
+    assert len(unique_versions) == 13
+    assert unique_versions <= registered_versions
+
+    for dataset_key in STATE_ATOMIC_UPSERT_DATASET_KEYS:
+        entry = next(item for item in AUXILIARY_DATASET_INVENTORY if item.key == dataset_key)
+        plan = AUXILIARY_UNIQUE_MIGRATION_PLANS[dataset_key]
+        completion = AUXILIARY_DATASET_COMPLETION[dataset_key]
+
+        assert isinstance(plan.declaration, AuxiliaryUniqueConstraintDeclaration)
+        assert plan.declaration.dataset_key == entry.key
+        assert plan.declaration.table == entry.table_name
+        assert plan.declaration.natural_key == entry.natural_key
+        assert plan.duplicate_preflight is MySQLVerificationRequirement.STORED_DATA_DUPLICATE_PREFLIGHT
+        assert plan.registration_state is AuxiliaryMigrationRegistrationState.REGISTERED
+        assert isinstance(completion, AuxiliaryStateDatasetCompletion)
+        assert completion.migration_version == plan.version
+        assert completion.duplicate_preflight is AuxiliaryCompletionState.PENDING_REAL_MYSQL
+        assert completion.unique_migration is AuxiliaryCompletionState.PENDING_REAL_MYSQL
+        assert completion.two_connection_acceptance is AuxiliaryCompletionState.PENDING_REAL_MYSQL
+        assert completion.overall is AuxiliaryCompletionState.BLOCKED_REAL_MYSQL
+        assert not completion.is_production_ready
+
+    for dataset_key in IMMUTABLE_PARTITION_SNAPSHOT_DATASET_KEYS:
+        completion = AUXILIARY_DATASET_COMPLETION[dataset_key]
+        assert isinstance(completion, AuxiliarySnapshotDatasetCompletion)
+        assert completion.snapshot_schema is AuxiliaryCompletionState.PENDING_SNAPSHOT_SCHEMA
+        assert completion.provider_contract is AuxiliaryCompletionState.PENDING_PROVIDER_CONTRACT
+        assert completion.publish_acceptance is AuxiliaryCompletionState.PENDING_PUBLISH_ACCEPTANCE
+        assert completion.overall is AuxiliaryCompletionState.BLOCKED_SNAPSHOT_ACCEPTANCE
+        assert not completion.is_production_ready
+
+
+def test_s4_inventory_exercises_every_state_descriptor_with_no_connection_fakes():
+    """The thirteen state descriptors remain generically assemblable without a database."""
+    from app.services.auxiliary.production import (
+        AUXILIARY_DATASET_INVENTORY,
+        StandardAuxiliaryDatasetAdapters,
+        build_production_auxiliary_orchestrator,
+    )
+
+    state_inventory = tuple(entry for entry in AUXILIARY_DATASET_INVENTORY if entry.is_state_dataset)
+    readiness = NoConnectionSchemaReadiness()
+    adapters = {
+        entry.key: StandardAuxiliaryDatasetAdapters(
+            fetcher=FakeFetcher([{"code": "000001", "value": entry.key}]),
+            normalizer=FakeNormalizer(),
+            repository=FakeRepository(AuxiliaryRepositorySnapshot(0)),
+            loader=FakeLoader(entry.view_key),
+        )
+        for entry in state_inventory
+    }
+    orchestrator = build_production_auxiliary_orchestrator(
+        adapters,
+        schema_readiness=readiness,
+        inventory=state_inventory,
+        clock=lambda: NOW,
+    )
+
+    result = orchestrator.prepare(
+        datasets=tuple(entry.key for entry in state_inventory),
+        instruments=INSTRUMENTS,
+        trade_date=TRADE_DATE,
+        refresh=True,
+    )
+
+    assert readiness.entries == [entry.key for entry in state_inventory]
+    assert [item.dataset_key for item in result.results] == [entry.key for entry in state_inventory]
+    assert result.errors == ()
+    assert all(item.is_usable and item.persistence is not None for item in result.results)
+
+
+def test_s4_default_production_orchestrator_builds_the_full_inventory_without_io():
+    """The public production builder routes default 13+4 inventory through composition."""
+    from app.services.auxiliary.production import (
+        AUXILIARY_DATASET_INVENTORY,
+        StandardAuxiliaryDatasetAdapters,
+        build_production_auxiliary_orchestrator,
+    )
+
+    class NoIOConnection:
+        def execute(self, *args: Any, **kwargs: Any) -> None:
+            raise AssertionError("registry construction must not query the connection")
+
+    class NoFetchRawProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def fetch_raw(self, *args: Any, **kwargs: Any) -> Any:
+            self.calls += 1
+            raise AssertionError("registry construction must not fetch the provider")
+
+    state_inventory = tuple(entry for entry in AUXILIARY_DATASET_INVENTORY if entry.is_state_dataset)
+    event_keys = {entry.key for entry in AUXILIARY_DATASET_INVENTORY if entry.is_snapshot_dataset}
+    readiness = NoConnectionSchemaReadiness()
+    adapters = {
+        entry.key: StandardAuxiliaryDatasetAdapters(
+            fetcher=FakeFetcher([{"code": "000001", "value": entry.key}]),
+            normalizer=FakeNormalizer(),
+            repository=FakeRepository(AuxiliaryRepositorySnapshot(0)),
+            loader=FakeLoader(entry.view_key),
+        )
+        for entry in state_inventory
+    }
+    provider = NoFetchRawProvider()
+
+    orchestrator = build_production_auxiliary_orchestrator(
+        adapters,
+        schema_readiness=readiness,
+        connection=NoIOConnection(),
+        raw_provider=provider,
+        clock=lambda: NOW,
+    )
+
+    descriptors = orchestrator._registry.descriptors()
+    assert {descriptor.key for descriptor in descriptors} == {
+        entry.key for entry in AUXILIARY_DATASET_INVENTORY
+    }
+    assert {descriptor.key for descriptor in descriptors if descriptor.custom_handler is not None} == event_keys
+    assert readiness.entries == [entry.key for entry in state_inventory]
+    assert provider.calls == 0

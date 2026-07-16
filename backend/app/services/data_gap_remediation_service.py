@@ -22,32 +22,37 @@ from app.services.market_pool.history_maturity import (
 from app.models.tables import DailyKbar, IndexDaily, LimitUpBoard, MinuteKbar, Recommendation, RecommendationRun, StockQuote
 from app.services.data_health_service import clear_data_health_cache, diagnose_all
 from app.services.feature_builder import _compute_authenticity, _enrich_with_auxiliary_data, _tag_features
-from app.services.market_pool import (
+from app.services.auxiliary.application import (
+    load_auxiliary_feature_views,
+    run_auxiliary_application,
+)
+from app.services.market_pool.core import (
     _candidate_recall_plan,
     _eligible_market_quotes,
     _execution_recall_count,
-    _latest_allowed_bar_date as _pool_latest_allowed_bar_date,
     _load_cached_bars_summary,
     _load_cached_quotes,
     _quote_sources,
-    _required_bar_date_for_quote as _pool_required_bar_date_for_quote,
     _select_recall_candidates,
-    load_auxiliary_for_stocks,
-    refresh_capital_flows_for_codes,
-    refresh_concept_sectors,
-    refresh_dragon_tiger,
-    refresh_limit_up_board,
-    refresh_news_for_codes,
+)
+from app.engine.trading_calendar import (
+    latest_allowed_bar_date as _pool_latest_allowed_bar_date,
+)
+from app.services.market_pool.core import (
+    _required_bar_date_for_quote as _pool_required_bar_date_for_quote,
 )
 from app.services.research_context import build_research_context
 from app.services.data_sources import enabled_sources
 from app.services.remediation import transaction as remediation_transaction
-from app.services.tushare_client import fetch_basic_daily_kbars, fetch_daily_kbars_for_trade_date, fetch_index_daily, fetch_minute_kbars
+from app.adapters.market_source import TushareMarketSourceAdapter
+from app.services.market_source.port import DailyBarRequest, MarketSourcePort, QuoteRef
+from app.services.tushare_client import fetch_index_daily, fetch_minute_kbars
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_REMEDIABLE_TABLES = (
     "daily_kbar",
+    "minute_kbar",
     "index_daily",
     "limit_up_board",
     "capital_flow",
@@ -55,8 +60,8 @@ DEFAULT_REMEDIABLE_TABLES = (
     "dragon_tiger",
     "news",
 )
-# minute_kbar 暂不纳入自动修复：Tushare 15000 积分无 stk_mins 分钟权限，
-# 每次跑都是空结果待重试，白白拖 40 分钟。待开通分钟权限后再加回。
+# minute_kbar 由计划显式处理并保留失败审计；缺少供应商权限时不会阻止其余
+# 日线与辅助数据的补数动作。
 DEFAULT_INDEX_TS_CODES = (
     "000001.SH",
     "000300.SH",
@@ -79,6 +84,58 @@ AUXILIARY_GAP_FIELDS = {
     "theme_tags",
 }
 AUXILIARY_REMEDIABLE_TABLES = {"capital_flow", "concept_sector", "dragon_tiger", "news"}
+
+
+def _refresh_auxiliary_dataset(
+    db: Session,
+    *,
+    dataset: str,
+    trade_date: str,
+    codes: list[str] | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """Refresh one frozen S4 descriptor through the sole application boundary."""
+    result = run_auxiliary_application(
+        db,
+        instruments=tuple(codes or ()),
+        trade_date=trade_date,
+        refresh=True,
+        datasets=(dataset,),
+    )
+    item = result.orchestrated.result_for(dataset)
+    if item.errors:
+        raise RuntimeError(", ".join(error.message for error in item.errors))
+    return item.coverage.record_count, dict(result.audit_payload[dataset])
+
+
+def _resolve_market_source(market_source: MarketSourcePort | None) -> MarketSourcePort:
+    """Use the typed production adapter unless a Port is explicitly injected."""
+
+    return market_source if market_source is not None else TushareMarketSourceAdapter()
+
+
+def _market_source_audit_payload(batch: Any) -> dict[str, Any]:
+    """Project typed Port evidence into remediation-safe operation logs."""
+
+    audit = batch.audit
+    return {
+        "source": audit.source,
+        "operation": audit.operation.value,
+        "status": audit.status.value,
+        "requested_count": audit.requested_count,
+        "returned_count": audit.returned_count,
+        "empty_count": audit.empty_count,
+        "failed_count": audit.failed_count,
+        "failure_policy": audit.failure_policy.value,
+        "errors": [
+            {
+                "code": error.code.value,
+                "message": error.message,
+                "reference": error.reference.code if error.reference else None,
+                "retryable": error.retryable,
+            }
+            for error in batch.errors
+        ],
+    }
 
 
 def remediate_data_health_gaps(
@@ -177,6 +234,7 @@ def sync_local_pool_kline_gaps(
     days: int = DEFAULT_LOCAL_POOL_GAP_DAYS,
     min_bars: int = DEFAULT_LOCAL_POOL_MIN_BARS,
     dry_run: bool = False,
+    market_source: MarketSourcePort | None = None,
 ) -> dict[str, Any]:
     """Backfill daily K-line history for local-pool candidates with readiness gaps."""
     fetch_days = max(min_bars, int(days or DEFAULT_LOCAL_POOL_GAP_DAYS))
@@ -219,21 +277,44 @@ def sync_local_pool_kline_gaps(
             "operation_log": operation_log,
         }
 
-    batch_result = _sync_same_day_stale_kline_gaps(db, before_state, targets, requested_limit, fetch_days, required_bars)
+    batch_result = _sync_same_day_stale_kline_gaps(
+        db,
+        before_state,
+        targets,
+        requested_limit,
+        fetch_days,
+        required_bars,
+        market_source=market_source,
+    )
     if batch_result is not None:
         return batch_result
 
     latest_allowed = _pool_latest_allowed_bar_date()
-    latest_allowed_compact = latest_allowed.replace("-", "")
     operation_log: list[dict[str, Any]] = []
     payload: list[dict[str, Any]] = []
+    source = _resolve_market_source(market_source)
+    history_start_date = (date.fromisoformat(latest_allowed) - timedelta(days=fetch_days * 3)).isoformat()
 
     for item in targets:
         code = str(item.get("code") or "").strip()
         if not code:
             continue
+        source_audit: dict[str, Any] | None = None
         try:
-            rows = fetch_basic_daily_kbars(code, days=fetch_days, end_date=latest_allowed_compact)
+            batch = source.fetch_daily_bars(
+                DailyBarRequest(
+                    instruments=(QuoteRef(code),),
+                    start_date=history_start_date,
+                    end_date=latest_allowed,
+                )
+            )
+            source_audit = _market_source_audit_payload(batch)
+            if batch.audit.failed_count:
+                raise RuntimeError("market source failed to retrieve daily-bar history")
+            rows = [
+                bar.as_legacy_row()
+                for bar in batch.bars_by_instrument.get(QuoteRef(code), ())
+            ]
             normalized_rows = [
                 {**row, "code": code, "trade_date": _normalize_trade_date(row.get("trade_date"))}
                 for row in rows
@@ -254,6 +335,7 @@ def sync_local_pool_kline_gaps(
                     "status": status,
                     "row_count": len(normalized_rows),
                     "latest_trade_date": latest_row_date,
+                    "market_source_audit": source_audit,
                 }
             )
         except Exception as exc:  # noqa: BLE001 - keep one bad code from aborting the batch
@@ -265,6 +347,7 @@ def sync_local_pool_kline_gaps(
                     "row_count": 0,
                     "error": str(exc),
                     "error_type": type(exc).__name__,
+                    **({"market_source_audit": source_audit} if source_audit else {}),
                 }
             )
 
@@ -315,6 +398,8 @@ def _sync_same_day_stale_kline_gaps(
     requested_limit: int,
     fetch_days: int,
     required_bars: int,
+    *,
+    market_source: MarketSourcePort | None = None,
 ) -> dict[str, Any] | None:
     """Use one Tushare trade-date batch fetch when many candidates are stale on the same date."""
     if not targets:
@@ -331,7 +416,12 @@ def _sync_same_day_stale_kline_gaps(
     trade_date = next(iter(quote_dates))
     target_codes = [str(item.get("code") or "").strip() for item in targets if str(item.get("code") or "").strip()]
     try:
-        result = _backfill_daily_kbar_date(db, trade_date, target_codes)
+        result = _backfill_daily_kbar_date(
+            db,
+            trade_date,
+            target_codes,
+            market_source=market_source,
+        )
         operation_log = [
             {
                 "table": "daily_kbar",
@@ -475,7 +565,7 @@ def remediate_recommendation_run_auxiliary_data(
     snapshot.setdefault("trade_date", run.trade_date)
     snapshot.setdefault("breadth", {})["auxiliary_data_audit"] = _actions_to_auxiliary_audit(executed_actions, codes)
     run.market_snapshot_json = _dumps_json(snapshot)
-    aux = load_auxiliary_for_stocks(db, codes, trade_date=run.trade_date) if codes else {}
+    aux = load_auxiliary_feature_views(db, codes, trade_date=run.trade_date) if codes else {}
     _rewrite_recommendation_auxiliary_snapshots(recs, snapshot=snapshot, aux=aux)
     db.commit()
 
@@ -588,33 +678,41 @@ def _execute_recommendation_auxiliary_action_safely(db: Session, item: dict[str,
         table = item["table"]
         if table == "capital_flow":
             codes = item.get("codes") or []
-            rows = refresh_capital_flows_for_codes(db, codes, trade_date=item["trade_date"])
+            row_count, _audit = _refresh_auxiliary_dataset(
+                db, dataset="capital_flow", trade_date=item["trade_date"], codes=list(codes)
+            )
             return {
                 **item,
-                "status": "completed" if rows else "empty",
-                "row_count": len(rows),
+                "status": "completed" if row_count else "empty",
+                "row_count": row_count,
                 "requested_code_count": len(codes),
                 "checked_codes": codes,
             }
         if table == "concept_sector":
-            rows = refresh_concept_sectors(db, trade_date=item["trade_date"])
-            return {**item, "status": "completed" if rows else "empty", "row_count": len(rows)}
+            row_count, _audit = _refresh_auxiliary_dataset(
+                db, dataset="concept_sector", trade_date=item["trade_date"]
+            )
+            return {**item, "status": "completed" if row_count else "empty", "row_count": row_count}
         if table == "dragon_tiger":
-            rows = refresh_dragon_tiger(db, trade_date=item["trade_date"])
+            row_count, _audit = _refresh_auxiliary_dataset(
+                db, dataset="dragon_tiger", trade_date=item["trade_date"]
+            )
             return {
                 **item,
-                "status": "completed" if rows else "empty",
-                "row_count": len(rows),
+                "status": "completed" if row_count else "empty",
+                "row_count": row_count,
                 "covered_trade_date": item["trade_date"],
             }
         if table == "news":
             codes = item.get("codes") or []
-            rows = refresh_news_for_codes(db, codes, trade_date=item["trade_date"])
-            checked_codes = list(getattr(rows, "checked_codes", codes))
+            row_count, _audit = _refresh_auxiliary_dataset(
+                db, dataset="news_announcement", trade_date=item["trade_date"], codes=list(codes)
+            )
+            checked_codes = list(codes)
             return {
                 **item,
-                "status": "completed" if rows else "empty",
-                "row_count": sum(len(values) for values in rows.values()),
+                "status": "completed" if row_count else "empty",
+                "row_count": row_count,
                 "requested_code_count": len(codes),
                 "checked_codes": checked_codes,
             }
@@ -1216,11 +1314,13 @@ def _execute_plan_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
             **_backfill_index_daily_dates(db, item.get("target_dates") or [], item.get("ts_codes") or []),
         }
     if table == "limit_up_board":
-        rows = refresh_limit_up_board(db, trade_date=item["trade_date"])
+        row_count, _audit = _refresh_auxiliary_dataset(
+            db, dataset="limit_up_board", trade_date=item["trade_date"]
+        )
         return {
             **item,
-            "status": "completed" if rows else "empty",
-            "row_count": len(rows),
+            "status": "completed" if row_count else "empty",
+            "row_count": row_count,
         }
     if table == "capital_flow":
         codes = item.get("codes") or []
@@ -1231,26 +1331,32 @@ def _execute_plan_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
                 "reason": "目标交易日缺少活跃股票样本，未执行资金流向补数。",
                 "row_count": 0,
             }
-        rows = refresh_capital_flows_for_codes(db, codes, trade_date=item["trade_date"])
+        row_count, _audit = _refresh_auxiliary_dataset(
+            db, dataset="capital_flow", trade_date=item["trade_date"], codes=list(codes)
+        )
         return {
             **item,
-            "status": "completed" if rows else "empty",
-            "row_count": len(rows),
+            "status": "completed" if row_count else "empty",
+            "row_count": row_count,
             "requested_code_count": len(codes),
         }
     if table == "concept_sector":
-        rows = refresh_concept_sectors(db, trade_date=item["trade_date"])
+        row_count, _audit = _refresh_auxiliary_dataset(
+            db, dataset="concept_sector", trade_date=item["trade_date"]
+        )
         return {
             **item,
-            "status": "completed" if rows else "empty",
-            "row_count": len(rows),
+            "status": "completed" if row_count else "empty",
+            "row_count": row_count,
         }
     if table == "dragon_tiger":
-        rows = refresh_dragon_tiger(db, trade_date=item["trade_date"])
+        row_count, _audit = _refresh_auxiliary_dataset(
+            db, dataset="dragon_tiger", trade_date=item["trade_date"]
+        )
         return {
             **item,
-            "status": "completed" if rows else "empty",
-            "row_count": len(rows),
+            "status": "completed" if row_count else "empty",
+            "row_count": row_count,
         }
     if table == "news":
         codes = item.get("codes") or []
@@ -1261,11 +1367,13 @@ def _execute_plan_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
                 "reason": "目标交易日缺少活跃股票样本，未执行新闻公告补数。",
                 "row_count": 0,
             }
-        rows = refresh_news_for_codes(db, codes, trade_date=item["trade_date"])
+        row_count, _audit = _refresh_auxiliary_dataset(
+            db, dataset="news_announcement", trade_date=item["trade_date"], codes=list(codes)
+        )
         return {
             **item,
-            "status": "completed" if rows else "empty",
-            "row_count": sum(len(items) for items in rows.values()),
+            "status": "completed" if row_count else "empty",
+            "row_count": row_count,
             "requested_code_count": len(codes),
         }
     return {**item, "status": "skipped", "reason": "unsupported_table"}
@@ -1277,19 +1385,40 @@ def _index_ts_codes(db: Session) -> list[str]:
     return existing or list(DEFAULT_INDEX_TS_CODES)
 
 
-def _backfill_daily_kbar_date(db: Session, trade_date: str, codes: list[str]) -> dict[str, Any]:
+def _backfill_daily_kbar_date(
+    db: Session,
+    trade_date: str,
+    codes: list[str],
+    *,
+    market_source: MarketSourcePort | None = None,
+) -> dict[str, Any]:
+    """Backfill target symbols from one typed, full-market trade-date batch."""
     target = _normalize_trade_date(trade_date)
     if not target or not codes:
         return {"row_count": 0, "requested_code_count": len(codes), "target_hit_count": 0}
 
     target_codes = [str(code or "").strip() for code in codes if str(code or "").strip()]
     target_code_set = set(target_codes)
-    source_rows = fetch_daily_kbars_for_trade_date(target)
+    source = _resolve_market_source(market_source)
+    batch = source.fetch_daily_bars(
+        DailyBarRequest(
+            instruments=tuple(QuoteRef(code) for code in target_codes),
+            trade_date=target,
+        )
+    )
+    if batch.audit.failed_count:
+        raise RuntimeError("market source failed to retrieve the daily-bar trade-date batch")
+    source_rows = [
+        bar.as_legacy_row()
+        for bars in batch.bars_by_instrument.values()
+        for bar in bars
+    ]
     rows = [
         {**row, "code": str(row.get("code") or "").strip(), "trade_date": _normalize_trade_date(row.get("trade_date"))}
         for row in source_rows
         if str(row.get("code") or "").strip() in target_code_set and _normalize_trade_date(row.get("trade_date")) == target
     ]
+    audit_payload = _market_source_audit_payload(batch)
 
     if rows:
         # 防线 B：若数据源返回的整批 pct_chg 全为 0/None，判定为
@@ -1303,13 +1432,14 @@ def _backfill_daily_kbar_date(db: Session, trade_date: str, codes: list[str]) ->
             )
             return {
                 "row_count": 0,
-                "provider_row_count": len(source_rows),
+                "provider_row_count": batch.audit.returned_count,
                 "requested_code_count": len(target_codes),
                 "target_hit_count": 0,
                 "missing_code_count": len(target_codes),
                 "missing_codes": target_codes[:10],
                 "status": "skipped",
                 "reason": "pct_chg_all_zero_data_not_ready",
+                "market_source_audit": audit_payload,
             }
         payload = [_daily_kbar_payload(row) for row in rows]
         _upsert_daily_kbar_payload(db, payload)
@@ -1318,11 +1448,12 @@ def _backfill_daily_kbar_date(db: Session, trade_date: str, codes: list[str]) ->
     missing_codes = [code for code in target_codes if code not in hit_codes]
     return {
         "row_count": len(rows),
-        "provider_row_count": len(source_rows),
+        "provider_row_count": batch.audit.returned_count,
         "requested_code_count": len(target_codes),
         "target_hit_count": len(hit_codes),
         "missing_code_count": len(missing_codes),
         "missing_codes": missing_codes[:10],
+        "market_source_audit": audit_payload,
     }
 
 
@@ -1500,7 +1631,7 @@ def _backfill_missing_indicators(db: Session, lookback_days: int = 14) -> None:
 
     from app.models.tables import DailyKbar
     from app.services.indicator_computer import compute_daily_bar_indicators, compute_daily_indicators
-    from app.services.market_pool import _persist_kbars
+    from app.services.market_pool.core import _persist_kbars
 
     cutoff = (date.today() - timedelta(days=lookback_days)).isoformat()
     # 找出近期指标缺失的日期（macd_dif 全为 0 且记录数 > 100）

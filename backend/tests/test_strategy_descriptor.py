@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.core.config import get_settings
+from app.engine.backtest import BacktestErrorCode, BacktestValidationError
 from app.engine.skill_loader import StrategySkill, load_skills
 from app.engine.strategy import (
     DeclarativeStrategy,
@@ -19,6 +20,7 @@ from app.engine.strategy import (
     StrategyUnavailableError,
     build_registry_from_skills,
     build_strategy_descriptor,
+    validate_backtest_parameter_set,
 )
 
 _UNSET = object()
@@ -192,3 +194,50 @@ def test_registry_rejects_a_standalone_string_key():
     registry = build_registry_from_skills([])
     with pytest.raises(StrategyError, match="StrategyDescriptor"):
         registry.register(skill.skill_id, DeclarativeStrategy(skill))  # type: ignore[arg-type]
+
+
+def test_descriptor_freezes_manifest_data_requirement_and_parameter_schema() -> None:
+    descriptor = build_strategy_descriptor(
+        _skill(
+            manifest={
+                "data_requirement": {
+                    "lookback_bars": 120,
+                    "future_label_horizon_days": 3,
+                    "requires_daily_bars": True,
+                    "requires_minute_bars": False,
+                    "benchmark_code": "000300.SH",
+                    "auxiliary_datasets": [
+                        {"key": "capital_flow", "minimum_coverage": 0.8, "release_lag_days": 1}
+                    ],
+                },
+                "backtest_parameters": [
+                    {"name": "minimum_signal_score", "type": "number", "default": 72, "minimum": 0, "maximum": 100},
+                    {"name": "holding_style", "type": "string", "choices": ["strict", "relaxed"], "default": "strict"},
+                ],
+            }
+        )
+    )
+
+    assert descriptor.data_requirement.lookback_bars == 120
+    assert descriptor.data_requirement.future_label_horizon_days == 3
+    assert descriptor.data_requirement.benchmark_code == "000300.SH"
+    assert descriptor.data_requirement.auxiliary_datasets[0].key == "capital_flow"
+    assert descriptor.to_projection()["backtest_parameters"][0]["name"] == "minimum_signal_score"
+    assert dict(validate_backtest_parameter_set(descriptor, {"holding_style": "relaxed"})) == {
+        "holding_style": "relaxed",
+        "minimum_signal_score": 72.0,
+    }
+
+    with pytest.raises(BacktestValidationError) as raised:
+        validate_backtest_parameter_set(descriptor, {"unsafe": True})
+    assert raised.value.code == BacktestErrorCode.INVALID_REQUEST.value
+
+
+def test_legacy_descriptor_uses_only_the_narrow_compatibility_parameter_schema() -> None:
+    descriptor = build_strategy_descriptor(_skill())
+
+    assert descriptor.data_requirement.requires_daily_bars is True
+    assert descriptor.data_requirement.lookback_bars == 60
+    assert dict(validate_backtest_parameter_set(descriptor, None)) == {"minimum_signal_score": 70.0}
+    with pytest.raises(BacktestValidationError, match="undeclared"):
+        validate_backtest_parameter_set(descriptor, {"compatibility_source": "unsafe"})

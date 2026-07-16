@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.session import Base
 from app.models.tables import Recommendation, RecommendationRun, DailyKbar, StockQuote
+from app.services.market_source import InMemoryMarketSourceAdapter
 from app.services.data_gap_remediation_service import (
     DEFAULT_DAILY_KBAR_CODE_LIMIT,
     _backfill_daily_kbar_date,
@@ -89,17 +90,13 @@ def test_remediate_data_health_gaps_executes_targeted_plan(monkeypatch):
             "requested_ts_code_count": len(ts_codes),
         },
     )
+    def _refresh_auxiliary(_db, *, dataset, trade_date, codes=None):
+        del trade_date
+        return (len(codes or ()) if dataset == "capital_flow" else 1, {"dataset": dataset})
+
     monkeypatch.setattr(
-        "app.services.data_gap_remediation_service.refresh_limit_up_board",
-        lambda _db, trade_date=None: [{"trade_date": trade_date, "code": "000001"}],
-    )
-    monkeypatch.setattr(
-        "app.services.data_gap_remediation_service.refresh_concept_sectors",
-        lambda _db, trade_date=None: [{"trade_date": trade_date, "sector_code": "885001"}],
-    )
-    monkeypatch.setattr(
-        "app.services.data_gap_remediation_service.refresh_capital_flows_for_codes",
-        lambda _db, codes, trade_date=None: {code: {"trade_date": trade_date} for code in codes},
+        "app.services.data_gap_remediation_service._refresh_auxiliary_dataset",
+        _refresh_auxiliary,
     )
     monkeypatch.setattr(
         "app.services.data_gap_remediation_service._capital_flow_target_codes",
@@ -207,12 +204,8 @@ def test_remediate_data_health_gaps_targets_closed_reference_trade_date_when_lag
         lambda _db, target_dates, ts_codes: {"row_count": len(target_dates) * len(ts_codes), "target_dates": target_dates},
     )
     monkeypatch.setattr(
-        "app.services.data_gap_remediation_service.refresh_limit_up_board",
-        lambda _db, trade_date=None: [{"trade_date": trade_date, "code": "000001"}],
-    )
-    monkeypatch.setattr(
-        "app.services.data_gap_remediation_service.refresh_capital_flows_for_codes",
-        lambda _db, codes, trade_date=None: {code: {"trade_date": trade_date} for code in codes},
+        "app.services.data_gap_remediation_service._refresh_auxiliary_dataset",
+        lambda _db, *, dataset, trade_date, codes=None: (1, {"dataset": dataset}),
     )
 
     result = remediate_data_health_gaps(
@@ -302,7 +295,7 @@ def test_sync_local_pool_kline_gaps_batches_same_day_stale_targets(monkeypatch):
     )
     monkeypatch.setattr(
         "app.services.data_gap_remediation_service._backfill_daily_kbar_date",
-        lambda _db, trade_date, codes: {
+        lambda _db, trade_date, codes, **_kwargs: {
             "row_count": 2,
             "provider_row_count": 5200,
             "requested_code_count": len(codes),
@@ -310,11 +303,6 @@ def test_sync_local_pool_kline_gaps_batches_same_day_stale_targets(monkeypatch):
             "missing_code_count": 0,
             "missing_codes": [],
         },
-    )
-    fallback_fetch = MagicMock()
-    monkeypatch.setattr(
-        "app.services.data_gap_remediation_service.fetch_basic_daily_kbars",
-        fallback_fetch,
     )
 
     result = sync_local_pool_kline_gaps(db, code_limit=0, dry_run=False)
@@ -336,7 +324,6 @@ def test_sync_local_pool_kline_gaps_batches_same_day_stale_targets(monkeypatch):
             "mode": "trade_date_batch",
         }
     ]
-    fallback_fetch.assert_not_called()
 
 
 def test_backfill_latest_days_detects_incomplete_latest_trade_date(monkeypatch):
@@ -447,35 +434,15 @@ def test_remediate_recommendation_run_auxiliary_data_updates_candidate_snapshot(
     )
     db.commit()
 
+    def _refresh_auxiliary(_db, *, dataset, trade_date, codes=None):
+        return (len(codes or ()) if dataset in {"capital_flow", "news_announcement"} else 1, {"dataset": dataset})
+
     monkeypatch.setattr(
-        "app.services.data_gap_remediation_service.refresh_capital_flows_for_codes",
-        lambda _db, codes, trade_date=None: {
-            code: {
-                "trade_date": trade_date,
-                "main_net_inflow_yi": 1.2,
-                "super_large_net_inflow_yi": 0.5,
-                "large_net_inflow_yi": 0.7,
-            }
-            for code in codes
-        },
+        "app.services.data_gap_remediation_service._refresh_auxiliary_dataset",
+        _refresh_auxiliary,
     )
     monkeypatch.setattr(
-        "app.services.data_gap_remediation_service.refresh_dragon_tiger",
-        lambda _db, trade_date=None: [{"trade_date": trade_date, "code": "000001"}],
-    )
-    monkeypatch.setattr(
-        "app.services.data_gap_remediation_service.refresh_news_for_codes",
-        lambda _db, codes, trade_date=None: {
-            code: [{"announce_date": trade_date, "title": "订单增长", "sentiment": "positive"}]
-            for code in codes
-        },
-    )
-    monkeypatch.setattr(
-        "app.services.data_gap_remediation_service.refresh_concept_sectors",
-        lambda _db, trade_date=None: [{"trade_date": trade_date, "sector_code": "BK001", "sector_name": "金融科技", "heat_rank": 3}],
-    )
-    monkeypatch.setattr(
-        "app.services.data_gap_remediation_service.load_auxiliary_for_stocks",
+        "app.services.data_gap_remediation_service.load_auxiliary_feature_views",
         lambda _db, codes, trade_date=None: {
             "limit_up": {},
             "concept_sectors": {"000001": [{"sector_name": "金融科技", "heat_rank": 3}]},
@@ -798,24 +765,19 @@ def test_remediate_data_health_gaps_continues_after_single_action_failure(monkey
         },
     )
 
-    def _raise_limit_up_error(_db, trade_date=None):
-        raise RuntimeError(f"limit_up_board source failed: {trade_date}")
-
-    monkeypatch.setattr(
-        "app.services.data_gap_remediation_service.refresh_limit_up_board",
-        _raise_limit_up_error,
-    )
     monkeypatch.setattr(
         "app.services.data_gap_remediation_service._capital_flow_target_codes",
         lambda _db, trade_date, limit: ["000001"],
     )
+
+    def _refresh_auxiliary(_db, *, dataset, trade_date, codes=None):
+        if dataset == "limit_up_board":
+            raise RuntimeError(f"limit_up_board source failed: {trade_date}")
+        return (len(codes or ()) if dataset == "capital_flow" else 1, {"dataset": dataset})
+
     monkeypatch.setattr(
-        "app.services.data_gap_remediation_service.refresh_capital_flows_for_codes",
-        lambda _db, codes, trade_date=None: {codes[0]: {"trade_date": trade_date}},
-    )
-    monkeypatch.setattr(
-        "app.services.data_gap_remediation_service.refresh_concept_sectors",
-        lambda _db, trade_date=None: [{"trade_date": trade_date, "sector_code": "885001"}],
+        "app.services.data_gap_remediation_service._refresh_auxiliary_dataset",
+        _refresh_auxiliary,
     )
 
     result = remediate_data_health_gaps(
@@ -868,7 +830,10 @@ def test_remediate_data_health_gaps_marks_empty_required_action_partial(monkeypa
 
     monkeypatch.setattr("app.services.data_gap_remediation_service.diagnose_all", lambda _db, **kw: diagnosis_calls.pop(0))
     monkeypatch.setattr("app.services.data_gap_remediation_service._latest_allowed_bar_date", lambda: "2026-06-11")
-    monkeypatch.setattr("app.services.data_gap_remediation_service.refresh_limit_up_board", lambda _db, trade_date=None: [])
+    monkeypatch.setattr(
+        "app.services.data_gap_remediation_service._refresh_auxiliary_dataset",
+        lambda _db, *, dataset, trade_date, codes=None: (0, {"dataset": dataset}),
+    )
 
     result = remediate_data_health_gaps(db, target_tables=["limit_up_board"])
 
@@ -903,32 +868,37 @@ def test_daily_kbar_target_codes_includes_quote_date_codes_for_full_refresh():
         db.close()
 
 
-def test_backfill_daily_kbar_date_uses_trade_date_batch_fetch(monkeypatch):
+def test_backfill_daily_kbar_date_uses_one_typed_trade_date_batch() -> None:
     db = MagicMock()
-    calls = []
+    source = InMemoryMarketSourceAdapter(
+        bars_by_code={
+            "000001": [{"code": "000001", "trade_date": "20260527", "open": 1, "high": 2, "low": 1, "close": 2}],
+            "000002": [{"code": "000002", "trade_date": "2026-05-27", "open": 1, "high": 2, "low": 1, "close": 2}],
+            "000004": [{"code": "000004", "trade_date": "2026-05-27", "open": 1, "high": 2, "low": 1, "close": 2}],
+        }
+    )
+    source.fetch_daily_bars = MagicMock(wraps=source.fetch_daily_bars)  # type: ignore[method-assign]
 
-    def _fake_fetch(trade_date):
-        calls.append(trade_date)
-        return [
-            {"code": "000001", "trade_date": "20260527", "open": 1, "high": 2, "low": 1, "close": 2},
-            {"code": "000002", "trade_date": "2026-05-27", "open": 1, "high": 2, "low": 1, "close": 2},
-            {"code": "000004", "trade_date": "2026-05-27", "open": 1, "high": 2, "low": 1, "close": 2},
-        ]
-
-    monkeypatch.setattr(
-        "app.services.data_gap_remediation_service.fetch_daily_kbars_for_trade_date",
-        _fake_fetch,
+    result = _backfill_daily_kbar_date(
+        db,
+        "2026-05-27",
+        ["000001", "000003"],
+        market_source=source,
     )
 
-    result = _backfill_daily_kbar_date(db, "2026-05-27", ["000001", "000003"])
-
-    assert calls == ["2026-05-27"]
+    source.fetch_daily_bars.assert_called_once()
+    request = source.fetch_daily_bars.call_args.args[0]
+    assert request.is_trade_date_batch
+    assert request.trade_date == "2026-05-27"
+    assert [reference.code for reference in request.instruments] == ["000001", "000003"]
     assert result["row_count"] == 1
     assert result["provider_row_count"] == 3
     assert result["requested_code_count"] == 2
     assert result["target_hit_count"] == 1
     assert result["missing_code_count"] == 1
     assert result["missing_codes"] == ["000003"]
+    assert result["market_source_audit"]["status"] == "success"
+    assert result["market_source_audit"]["returned_count"] == 3
     db.execute.assert_called_once()
     db.commit.assert_called_once()
 
@@ -1170,11 +1140,13 @@ def test_default_remediation_plan_covers_full_recommendation_data_dependencies(m
     )
     monkeypatch.setattr("app.services.data_gap_remediation_service._auxiliary_target_codes", lambda _db, trade_date, limit: ["000001", "000002"])
     monkeypatch.setattr("app.services.data_gap_remediation_service._capital_flow_target_codes", lambda _db, trade_date, limit: ["000001", "000002"])
-    monkeypatch.setattr("app.services.data_gap_remediation_service.refresh_limit_up_board", lambda _db, trade_date=None: [{"trade_date": trade_date}])
-    monkeypatch.setattr("app.services.data_gap_remediation_service.refresh_concept_sectors", lambda _db, trade_date=None: [{"trade_date": trade_date}])
-    monkeypatch.setattr("app.services.data_gap_remediation_service.refresh_capital_flows_for_codes", lambda _db, codes, trade_date=None: {code: [{"trade_date": trade_date}] for code in codes})
-    monkeypatch.setattr("app.services.data_gap_remediation_service.refresh_dragon_tiger", lambda _db, trade_date=None: [{"trade_date": trade_date, "code": "000001"}])
-    monkeypatch.setattr("app.services.data_gap_remediation_service.refresh_news_for_codes", lambda _db, codes, trade_date=None: {code: [{"announce_date": trade_date}] for code in codes})
+    monkeypatch.setattr(
+        "app.services.data_gap_remediation_service._refresh_auxiliary_dataset",
+        lambda _db, *, dataset, trade_date, codes=None: (
+            len(codes or ()) if dataset in {"capital_flow", "news_announcement"} else 1,
+            {"dataset": dataset},
+        ),
+    )
 
     result = remediate_data_health_gaps(db)
 

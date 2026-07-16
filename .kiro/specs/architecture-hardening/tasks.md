@@ -281,7 +281,7 @@
   - Agent 仅能创建/读取研究和 candidate proposal；`promotion_candidate` 不得自动启用、降权或改写 formal 策略、Preset、权重和生产参数。
   - _需求：9.13–9.16, 9.20, 9.22–9.24_
 
-- [~] 6.6 优先验证 Gateway 可重放、防前瞻、幂等和归因闭环
+- [x] 6.6 优先验证 Gateway 可重放、防前瞻、幂等和归因闭环
   - 源表回填/修正后按旧 snapshot 重放结果和 input hash 不变；artifact 缺失/损坏不得静默读新数据。
   - 策略未来读取失败；Simulation 仅能读取 execution policy 允许的未来窗口。
   - 真实 MySQL 覆盖两个连续 force rerun、failed/incomplete 重试、相同请求并发 claim、attempt 递增及所有历史证据保留。
@@ -290,14 +290,14 @@
   - 运行一条机器可消费的 Agent contract smoke，证明 self-improve 可完成研究闭环且无法调用 formal 发布写路径。
   - _需求：9.17–9.24, 10.4–10.6_
 
-- [~] 6.7 逐家族迁移到已验收的 Gateway/Runner
+- [x] 6.7 逐家族迁移到已验收的 Gateway/Runner
   - overnight、stock skill、time-series 和现有推荐流水线回放改为统一结果与 Runner。
   - 专用数据输入通过 adapter 提供，不复制公共指标计算；隔夜策略保留分钟线覆盖门禁、成本与 walk-forward 语义。
   - 将 `/api/runs/backtest` 改为兼容 adapter，拒绝原有裸 dict 的全策略默认行为；新 Agent 只使用 `/api/backtests`。
   - 保持现有公开 API 字段语义和 golden result；迁移完成后删除 legacy result adapter、全 enabled skill 默认执行和重复计算。
   - _需求：9.3–9.6, 9.8–9.13, 9.24, 10.6_
 
-- [~] 6.8 完成全量回测/实验回归和 self-improve 切换
+- [x] 6.8 完成全量回测/实验回归和 self-improve 切换
   - 覆盖单策略单日/区间、未知/禁用策略、多策略拒绝、无信号、日线/分钟线缺口、未来标签不足、成本和隔离。
   - 在真实 MySQL 验证全部专属表 migration、约束、索引、查询和第二次 migration no-op。
   - 回归胜率、平均净收益、盈亏比、最大回撤、止损率、出场分布和按 split 失败归因输出。
@@ -306,20 +306,20 @@
 
 ## S7 — 依赖收口、CI 与最终验收
 
-- [~] 7.1 删除 market_pool 私有兼容面并验证外部 API
+- [x] 7.1 删除 market_pool 私有兼容面并验证外部 API
   - 将仓内调用点迁移到明确 core/auxiliary Port 或 application service。
   - 删除 facade 对 `_persist_*`、`_load_*`、`_fetch_*`、`_upsert_by_key` 的 re-export。
   - 测试改 patch 注入依赖，不 patch 已删除的 service 私有函数。
   - 对公开 HTTP endpoints 运行 schema/status/关键字段 contract snapshot；内部 Python import 不保兼容。
   - _需求：11.2, 11.3, 11.5_
 
-- [~] 7.2 建立架构依赖自动检查
+- [x] 7.2 建立架构依赖自动检查
   - 声明 engine/domain、application、adapter/repository 的允许依赖方向。
   - 检查 Protocol 外调用、私有 facade import、生产 Registry 动态注册和 Coordinator 供应商 import。
   - 将检查纳入本地验证和 CI。
   - _需求：11.1–11.4_
 
-- [~] 7.3 恢复并扩展 CI
+- [x] 7.3 恢复并扩展 CI
   - 恢复 frontend build。
   - 增加 Python compile/import、纯单测、架构检查和 `git diff --check`。
   - 增加临时 MySQL service 的 migration、atomic upsert、snapshot replay、attempt concurrency、Agent Gateway contract 和 coordinator integration job。
@@ -327,7 +327,7 @@
   - 固定依赖安装方式，不在日志输出凭据。
   - _需求：9.17–9.24, 10.4, 10.5, 11.4, 11.6_
 
-- [~] 7.4 按安全闸门执行真实业务 MySQL 验收
+- [x] 7.4 按安全闸门执行真实业务 MySQL 验收
   - 先执行只读预检：表规模、磁盘、重复自然键、metadata-lock blocker、长事务和目标 DDL online 能力。
   - 保存可恢复备份证据并做 go/no-go；未通过不得执行 migration。
   - migration 逐版本执行，失败立即停止；随后只读验证 request 回填、mode 分组计数、全部 backtest/snapshot/artifact/claim/attribution/experiment 表、索引、唯一约束和 ledger，再执行第二次确认 no-op。
@@ -336,13 +336,13 @@
   - 检查日志无凭据、migration error 或隐藏 Protocol 调用。
   - _需求：1.8, 1.10, 2.3–2.5, 9.17–9.24, 10.3–10.7, 12.2, 12.3_
 
-- [~] 7.5 全量回归与性能验证
+- [x] 7.5 全量回归与性能验证
   - 运行一期全部相关测试、二期 domain/contract/coordinator/MySQL 测试和前端 build。
   - 运行 compile/import、架构检查、`git diff --check`。
   - 在 0.1 固定环境预热后对同一 fixture 至少执行 5 次；断言 `median_v2 <= 1.20 * median_baseline`，超限即失败。
   - _需求：10.6, 11.4, 12.5_
 
-- [~] 7.6 最终需求追踪与清理
+- [x] 7.6 最终需求追踪与清理
   - 建立需求 1–12 到代码、migration、测试和验证命令的追踪矩阵。
   - 确认 Agent Research Gateway 已成为 self-improve 新研究证据的唯一入口，且旧编排、旧 request 重建、身份双源、隐藏 Port、逐行 upsert 和私有 facade 已删除。
   - 确认未提交凭据、临时报告、测试数据库数据或与本 Spec 无关的文件。

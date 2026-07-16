@@ -914,32 +914,26 @@ def _run_auxiliary_remediation(payload: dict) -> dict:
             post_diagnosis=bool(payload.get("auxiliary_post_diagnosis", True)),
         )
 
-        # 新增批量接口同步（全市场，1次API调用/接口）
+        # All scheduled state/event batch work enters the S4 composition boundary.
         trade_date = payload.get("trade_date") or result.get("trade_date")
         if trade_date:
-            from app.services.market_pool import (
-                refresh_margin_detail,
-                refresh_block_trade,
-                refresh_hsgt_flow,
-                refresh_hsgt_top10,
+            from app.services.auxiliary.application import run_auxiliary_application
+
+            auxiliary = run_auxiliary_application(
+                db,
+                instruments=(),
+                trade_date=str(trade_date),
+                refresh=True,
+                datasets=("margin_detail", "block_trade", "hsgt_flow", "hsgt_top10"),
             )
-            batch_results = {}
-            for name, func in [
-                ("margin_detail", lambda: refresh_margin_detail(db, trade_date=trade_date)),
-                ("block_trade", lambda: refresh_block_trade(db, trade_date=trade_date)),
-                ("hsgt_flow", lambda: refresh_hsgt_flow(db, trade_date=trade_date)),
-                ("hsgt_top10", lambda: refresh_hsgt_top10(db, trade_date=trade_date)),
-            ]:
-                try:
-                    count_or_data = func()
-                    batch_results[name] = {
-                        "status": "success",
-                        "count": count_or_data if isinstance(count_or_data, int) else (1 if count_or_data else 0),
-                    }
-                except Exception as exc:
-                    db.rollback()
-                    batch_results[name] = {"status": "failed", "error": str(exc)[:200]}
-            result["batch_sync"] = batch_results
+            result["batch_sync"] = {
+                item.dataset_key: {
+                    "status": "failed" if item.errors else "success",
+                    "count": item.coverage.record_count,
+                    "errors": [error.code.value for error in item.errors],
+                }
+                for item in auxiliary.orchestrated.results
+            }
 
         return result
     finally:

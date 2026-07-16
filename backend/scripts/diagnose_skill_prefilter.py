@@ -16,11 +16,11 @@ from app.engine.evaluator import evaluate  # noqa: E402
 from app.engine.skill_loader import load_skills  # noqa: E402
 from app.engine.strategy_runner import evaluate_skill_prefilter, _rule_expr  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
-from app.services.market_pool import (  # noqa: E402
-    get_market_universe_from_pool,
-    inject_limit_up_flags,
-    inject_dragon_tiger_flags,
+from app.services.auxiliary.application import (  # noqa: E402
+    inject_auxiliary_prefilter_flags,
+    load_auxiliary_feature_views,
 )
+from app.services.market_pool import get_market_universe_from_pool  # noqa: E402
 
 
 def diagnose_universe_rules(skill, stocks: list[dict]) -> None:
@@ -60,8 +60,12 @@ def main() -> None:
         # 依赖这些字段的 universe 规则会拒绝全部股票（small-cap/sector/limit-up-reseal/
         # chip/dragon-tiger 等策略被误诊为 0 命中）。生产管线在 workbench_service.py
         # 的 prefilter 前已调用这两个注入函数，诊断必须复刻才准确。
-        inject_limit_up_flags(db, stocks, trade_date=str(trade_date or ""))
-        inject_dragon_tiger_flags(db, stocks, trade_date=str(trade_date or ""))
+        prefilter_auxiliary = load_auxiliary_feature_views(
+            db,
+            [str(stock.get("code") or "") for stock in stocks if stock.get("code")],
+            trade_date=str(trade_date or ""),
+        )
+        inject_auxiliary_prefilter_flags(stocks, prefilter_auxiliary)
         print(f"交易日={trade_date} 股票池={len(stocks)} 只")
         print("=" * 80)
 

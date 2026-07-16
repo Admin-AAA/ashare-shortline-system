@@ -39,14 +39,9 @@ from app.engine.strategy import StrategyContext, build_registry_from_skills
 from app.models.tables import (
     AgentDecisionLog,
     CalibrationConfig,
-    CapitalFlow,
-    ConceptSector,
     ConceptSectorStock,
     DailyKbar,
-    DragonTiger,
-    LimitUpBoard,
     MarketSnapshot,
-    NewsAnnouncement,
     Preset,
     PresetSkill,
     Recommendation,
@@ -63,28 +58,17 @@ from app.models.tables import (
 )
 from app.services.feature_builder import build_features, market_regime_score
 from app.services.factors.registry import bootstrap_default_factor_registry
-from app.services.auxiliary.legacy_projection import (
-    auxiliary_projection_payload,
-    project_legacy_auxiliary_audit,
+from app.services.auxiliary.application import (
+    inject_auxiliary_prefilter_flags,
+    load_auxiliary_feature_views,
+    run_auxiliary_application,
 )
-from app.services.auxiliary.contracts import AuxiliaryInstrument
 from app.services.market_source.local_pool_adapter import load_legacy_market_universe
 from app.services.failure_attribution import classify_false_positive
 from app.services.market_data import MarketDataError, get_market_universe
 from app.services.market_pool import (
     get_market_snapshot_from_pool,
     get_market_universe_from_pool,
-    inject_limit_up_flags,
-    inject_dragon_tiger_flags,
-    refresh_block_trade,
-    refresh_capital_flows_for_codes,
-    refresh_concept_sectors,
-    refresh_dragon_tiger,
-    refresh_hsgt_flow,
-    refresh_hsgt_top10,
-    refresh_limit_up_board,
-    refresh_margin_detail,
-    refresh_news_for_codes,
 )
 from app.services.outcome_service import (
     _ADDITIONAL_COST_PCT,
@@ -161,6 +145,7 @@ from app.services.runs.contracts import (
     CanonicalExecutionVersionBuilder,
     ExecutionVersionInput,
     RunRequest,
+    StrategyExecutionFingerprint,
     RunStatus,
     application_identity_from_environment,
     parse_run_request,
@@ -334,18 +319,29 @@ def _factor_execution_identity() -> tuple[str, dict[str, Any]]:
     )
 
 
-def _execution_version_identity(request: RunRequest) -> tuple[str, dict[str, Any]]:
+def _execution_version_identity(
+    request: RunRequest,
+    selected_skills: list[dict[str, Any]],
+) -> tuple[str, dict[str, Any]]:
     """Build audit identity only; it never contributes to filtering or scoring.
 
-    Factor plans are already frozen at bootstrap.  StrategyDescriptor fingerprints
-    deliberately remain an empty extension point here: S2 will project selected
-    descriptors into the same immutable input without changing this persisted format.
+    The selected skills are resolved through the same frozen registry contract as
+    execution.  Persisting its immutable Descriptor projections makes the version
+    change whenever a selected strategy manifest or implementation changes.
     """
+    strategy_registry = build_registry_from_skills([selected["skill"] for selected in selected_skills])
+    strategy_fingerprints = tuple(
+        StrategyExecutionFingerprint.from_descriptor(
+            strategy_registry.get_descriptor(str(selected["skill_id"]))
+        )
+        for selected in selected_skills
+    )
     factor_plan_fingerprint, factor_plan_audit = _factor_execution_identity()
     version_input = ExecutionVersionInput(
         application=application_identity_from_environment(),
         request_schema_version=request.schema_version,
         execution_policy=selected_recommendation_execution_policy(request),
+        strategy_fingerprints=strategy_fingerprints,
         factor_execution_plan_fingerprint=factor_plan_fingerprint,
     )
     execution_version = CanonicalExecutionVersionBuilder().build(version_input)
@@ -355,7 +351,10 @@ def _execution_version_identity(request: RunRequest) -> tuple[str, dict[str, Any
             "execution_version_schema_version": version_input.schema_version,
             "application": version_input.application.to_canonical_payload(),
             "request_schema_version": version_input.request_schema_version,
-            "strategy_fingerprints": [],
+            "strategy_fingerprints": [
+                fingerprint.to_canonical_payload()
+                for fingerprint in version_input.strategy_fingerprints
+            ],
             "factor_plan": factor_plan_audit,
             "execution_policy": {
                 "policy_id": version_input.execution_policy.policy_id,
@@ -364,6 +363,22 @@ def _execution_version_identity(request: RunRequest) -> tuple[str, dict[str, Any
             },
         },
     )
+
+
+def _execution_audit_from_result_summary(raw_summary: str | None) -> dict[str, Any] | None:
+    """Return the first persisted execution audit without reconstructing it."""
+    summary = _loads(raw_summary, {})
+    execution = summary.get("execution") if isinstance(summary, dict) else None
+    return dict(execution) if isinstance(execution, dict) else None
+
+
+def _persist_execution_version(run: RecommendationRun, candidate: str) -> None:
+    """Write a version once, or reject descriptor/policy drift before execution."""
+    if not run.execution_version:
+        run.execution_version = candidate
+        return
+    if run.execution_version != candidate:
+        raise RuntimeError("Run 已持久化的 execution_version 与当前策略/因子/执行策略身份不一致")
 
 
 def _mark_run_dispatched(db: Session, run_id: str) -> bool:
@@ -514,7 +529,7 @@ def enqueue_workbench_run(db: Session, payload: dict[str, Any]) -> dict[str, Any
 
     run_id = _new_run_id()
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    execution_version, execution_audit = _execution_version_identity(request)
+    execution_version, execution_audit = _execution_version_identity(request, selected_skills)
     repository = SQLAlchemyRunRepository(db)
     created = repository.create_queued_run(
         CreateQueuedRun(
@@ -1101,10 +1116,14 @@ def _persist_run_start(
     run.params_json = _dumps(params)
     run.request_schema_version = request.schema_version
     run.request_json = request.to_canonical_json()
-    if execution_version is not None and not run.execution_version:
-        run.execution_version = execution_version
+    if execution_version is not None:
+        _persist_execution_version(run, execution_version)
     run.market_snapshot_json = run.market_snapshot_json or _dumps({})
-    run.result_summary_json = _dumps({"agent_runtime": "starting"})
+    result_summary = {"agent_runtime": "starting"}
+    existing_execution_audit = _execution_audit_from_result_summary(run.result_summary_json)
+    if existing_execution_audit is not None:
+        result_summary["execution"] = existing_execution_audit
+    run.result_summary_json = _dumps(result_summary)
     run.filter_audit_json = run.filter_audit_json or _dumps({})
     run.status = "running"
     run.error_message = None
@@ -1187,7 +1206,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         selected_skills = _select_skills_for_run(db, skill_map, params["skills"])
         if not selected_skills:
             raise ValueError("没有可运行的 Skill，请检查预设配置或 Skill 状态")
-        execution_version, _execution_audit = _execution_version_identity(run_request)
+        execution_version, _execution_audit = _execution_version_identity(run_request, selected_skills)
         run = _persist_run_start(
             db,
             run_id,
@@ -1214,10 +1233,17 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     # This also protects direct/scheduler callers that create the row themselves.
     run_request = load_canonical_run_request(run)
     params = run_request.model_dump(mode="json")
-    execution_version, execution_audit = _execution_version_identity(run_request)
+    execution_version, execution_audit = _execution_version_identity(run_request, selected_skills)
     factor_plan_audit = execution_audit["factor_plan"]
-    if not run.execution_version:
-        run.execution_version = execution_version
+    _persist_execution_version(run, execution_version)
+    persisted_execution_audit = _execution_audit_from_result_summary(run.result_summary_json)
+    if persisted_execution_audit is None:
+        persisted_execution_audit = {**execution_audit, "execution_version": run.execution_version}
+        result_summary = _loads(run.result_summary_json, {})
+        if not isinstance(result_summary, dict):
+            result_summary = {}
+        result_summary["execution"] = persisted_execution_audit
+        run.result_summary_json = _dumps(result_summary)
     db.commit()
 
     data_source = normalize_data_source(params.get("data_source"))
@@ -1272,14 +1298,16 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     if not scoped_stocks:
         raise ValueError("当前市场范围内没有可运行的股票，请调整预设范围后重试")
     snapshot.setdefault("breadth", {})["scoped_candidate_count"] = len(scoped_stocks)
-    # prefilter 前注入涨停板字段（涨停是客观事实，limit-up-reseal-relay 的 universe 依赖此字段）
-    lu_hit = inject_limit_up_flags(db, scoped_stocks, trade_date=str(snapshot.get("trade_date") or ""))
-    if lu_hit:
-        logger.info("prefilter 前注入涨停标记: %d 只 (run=%s)", lu_hit, run_id)
-    # prefilter 前注入龙虎榜标记（龙虎榜是客观事实，dragon-tiger-smart-money 等策略 universe 依赖）
-    dt_hit = inject_dragon_tiger_flags(db, scoped_stocks, trade_date=str(snapshot.get("trade_date") or ""))
-    if dt_hit:
-        logger.info("prefilter 前注入龙虎榜标记: %d 只 (run=%s)", dt_hit, run_id)
+    # Prefilter uses current state plus active event pointers through the same S4
+    # application boundary.  This is pointer-only/current-state loading: no network.
+    prefilter_auxiliary = load_auxiliary_feature_views(
+        db,
+        [str(stock.get("code") or "") for stock in scoped_stocks if stock.get("code")],
+        trade_date=str(snapshot.get("trade_date") or ""),
+    )
+    prefilter_hits = inject_auxiliary_prefilter_flags(scoped_stocks, prefilter_auxiliary)
+    if prefilter_hits:
+        logger.info("prefilter 前注入 S4 auxiliary state: %d field hits (run=%s)", prefilter_hits, run_id)
     min_prefilter_count = resolve_prefilter_target_count(params, selected_skill_count=len(selected_skills))
     prefiltered_stocks, prefilter_audit = apply_prefilters(
         scoped_stocks,
@@ -1301,314 +1329,42 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         status="running",
     )
 
-    # ── 辅助数据刷新：概念板块 / 龙虎榜 / 资金流向 / 新闻公告 ──
-    aux_audit: dict[str, Any] = {
-        "concept_sectors": {"status": "skipped", "count": 0, "elapsed_ms": 0},
-        "dragon_tiger": {"status": "skipped", "count": 0, "elapsed_ms": 0},
-        "capital_flows": {"status": "skipped", "count": 0, "elapsed_ms": 0},
-        "news": {"status": "skipped", "count": 0, "elapsed_ms": 0},
-    }
-    settings = get_settings()
+    # S4 owns one application/composition boundary for all frozen auxiliary
+    # descriptors.  ``skip_aux_refresh`` is deliberately pointer/current-state
+    # loading only; it never acquires a provider or force-refreshes missing rows.
     skip_aux_refresh = bool(params.get("skip_aux_refresh"))
-    aux_prefetch_count = _resolve_aux_prefetch_count(
-        len(prefiltered_stocks),
-        min_prefilter_count,
-        skip_aux_refresh=skip_aux_refresh,
-        max_codes=settings.auxiliary_prefetch_max_codes,
-    )
-    aux_prefetch_codes = _select_aux_prefetch_codes(prefiltered_stocks, aux_prefetch_count)
+    auxiliary_codes = [str(stock.get("code") or "") for stock in prefiltered_stocks if stock.get("code")]
     _update_run_progress(
         db,
         run_id,
         phase="auxiliary_data",
         current=0,
-        total=4,
-        message="刷新辅助数据：概念板块、龙虎榜、资金流向、新闻公告",
+        total=18,
+        message="通过 S4 registry 准备 18 个辅助数据集",
         status="running",
     )
-    # 概念板块：全量刷新（数据量小，覆盖所有 A 股板块）
-    if skip_aux_refresh:
-        for key in aux_audit:
-            aux_audit[key] = {"status": "skipped_fast_run", "count": 0, "elapsed_ms": 0}
-        # limit_up_board 硬依赖预检查：limit-up-reseal-relay 的 prefilter.include_any
-        # 需要 limit_up_open_times/limit_up_fd_amount_yi，aux sync partial_completed 时
-        # 当天 limit_up_board 可能为 0 → limit-up 策略 0 候选（07-07 曾发生 44 只涨停全拒）。
-        # skip_aux_refresh 假设 aux 已同步，但 limit_up_board 缺失时必须强制补，否则策略饿死。
-        try:
-            td = snapshot["trade_date"]
-            lu_count = int(db.scalar(
-                select(func.count()).select_from(LimitUpBoard).where(LimitUpBoard.trade_date == td)
-            ) or 0)
-            if lu_count == 0:
-                t0 = time.perf_counter()
-                lu_rows = refresh_limit_up_board(db, trade_date=td)
-                aux_audit["limit_up_board"] = {
-                    "status": "force_synced_on_skip",
-                    "count": len(lu_rows),
-                    "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
-                }
-                logger.info("skip_aux_refresh 模式下 limit_up_board 当天为 0，强制同步 %d 条", len(lu_rows))
-        except Exception as exc:
-            db.rollback()
-            logger.warning("skip_aux_refresh 模式下 limit_up_board 预检查失败: %s", exc)
-    elif settings.enable_concept_sector_fetch:
-        if _has_fresh_concept_sector_cache(db, snapshot["trade_date"], settings.concept_sector_cache_ttl_seconds):
-            aux_audit["concept_sectors"] = {
-                "status": "cached",
-                "count": int(
-                    db.scalar(
-                        select(func.count()).select_from(ConceptSector).where(ConceptSector.trade_date == snapshot["trade_date"])
-                    ) or 0
-                ),
-                "elapsed_ms": 0,
-            }
-        else:
-            t0 = time.perf_counter()
-            try:
-                sectors = refresh_concept_sectors(db, trade_date=snapshot["trade_date"])
-                aux_audit["concept_sectors"] = {
-                    "status": "success",
-                    "count": len(sectors),
-                    "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
-                }
-            except Exception as exc:
-                db.rollback()
-                aux_audit["concept_sectors"] = {
-                    "status": "failed",
-                    "count": 0,
-                    "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
-                    "error": str(exc),
-                }
+    auxiliary_result = run_auxiliary_application(
+        db,
+        instruments=auxiliary_codes,
+        trade_date=str(snapshot["trade_date"]),
+        refresh=not skip_aux_refresh,
+    )
     _update_run_progress(
         db,
         run_id,
         phase="auxiliary_data",
-        current=1,
-        total=4,
-        message="概念板块数据检查完成",
+        current=18,
+        total=18,
+        message="S4 auxiliary registry 已完成当前状态/活动快照处理",
         status="running",
     )
-    # 龙虎榜：全量刷新（每日上榜股票总量小）
-    if not skip_aux_refresh and settings.enable_dragon_tiger_fetch:
-        if _has_fresh_dragon_tiger_cache(db, snapshot["trade_date"], settings.dragon_tiger_cache_ttl_seconds):
-            aux_audit["dragon_tiger"] = {
-                "status": "cached",
-                "count": int(
-                    db.scalar(
-                        select(func.count()).select_from(DragonTiger).where(DragonTiger.trade_date == snapshot["trade_date"])
-                    )
-                    or 0
-                ),
-                "elapsed_ms": 0,
-                "covered_trade_date": snapshot["trade_date"],
-            }
-        else:
-            t0 = time.perf_counter()
-            try:
-                dt_rows = refresh_dragon_tiger(db, trade_date=snapshot["trade_date"])
-                aux_audit["dragon_tiger"] = {
-                    "status": "success",
-                    "count": len(dt_rows),
-                    "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
-                    "covered_trade_date": snapshot["trade_date"],
-                }
-            except Exception as exc:
-                db.rollback()
-                aux_audit["dragon_tiger"] = {
-                    "status": "failed",
-                    "count": 0,
-                    "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
-                    "error": str(exc),
-                }
-    _update_run_progress(
-        db,
-        run_id,
-        phase="auxiliary_data",
-        current=2,
-        total=4,
-        message="龙虎榜数据检查完成",
-        status="running",
-    )
-    # 资金流向 + 新闻：只补当前范围内、市值靠前股票的缺失缓存。
-    if not skip_aux_refresh and settings.enable_capital_flow_fetch and aux_prefetch_codes:
-        stale_capital_flow_codes = _stale_capital_flow_codes(
-            db,
-            aux_prefetch_codes,
-            snapshot["trade_date"],
-            settings.capital_flow_cache_ttl_seconds,
-        )
-        if stale_capital_flow_codes:
-            t0 = time.perf_counter()
-            try:
-                cf_result = refresh_capital_flows_for_codes(db, stale_capital_flow_codes, trade_date=snapshot["trade_date"])
-                aux_audit["capital_flows"] = {
-                    "status": "success",
-                    "count": len(cf_result),
-                    "requested_count": len(stale_capital_flow_codes),
-                    "checked_codes": aux_prefetch_codes,
-                    "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
-                }
-            except Exception as exc:
-                db.rollback()
-                aux_audit["capital_flows"] = {
-                    "status": "failed",
-                    "count": 0,
-                    "requested_count": len(stale_capital_flow_codes),
-                    "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
-                    "error": str(exc),
-                }
-        else:
-            aux_audit["capital_flows"] = {
-                "status": "cached",
-                "count": len(aux_prefetch_codes),
-                "requested_count": 0,
-                "checked_codes": aux_prefetch_codes,
-                "elapsed_ms": 0,
-            }
-    _update_run_progress(
-        db,
-        run_id,
-        phase="auxiliary_data",
-        current=3,
-        total=4,
-        message="资金流向数据检查完成",
-        status="running",
-    )
-    if not skip_aux_refresh and settings.enable_news_fetch and aux_prefetch_codes:
-        stale_news_codes = _stale_news_codes(
-            db,
-            aux_prefetch_codes,
-            snapshot["trade_date"],
-            settings.news_cache_ttl_seconds,
-        )
-        if stale_news_codes:
-            t0 = time.perf_counter()
-            try:
-                news_result = refresh_news_for_codes(db, stale_news_codes, trade_date=snapshot["trade_date"])
-                checked_codes = sorted(
-                    {
-                        *[code for code in aux_prefetch_codes if code not in set(stale_news_codes)],
-                        *list(getattr(news_result, "checked_codes", [])),
-                    }
-                )
-                aux_audit["news"] = {
-                    "status": "success",
-                    "count": len(news_result),
-                    "requested_count": len(stale_news_codes),
-                    "checked_codes": checked_codes,
-                    "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
-                }
-            except Exception as exc:
-                db.rollback()
-                aux_audit["news"] = {
-                    "status": "failed",
-                    "count": 0,
-                    "requested_count": len(stale_news_codes),
-                    "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
-                    "error": str(exc),
-                }
-        else:
-            aux_audit["news"] = {
-                "status": "cached",
-                "count": len(aux_prefetch_codes),
-                "requested_count": 0,
-                "checked_codes": aux_prefetch_codes,
-                "elapsed_ms": 0,
-            }
-    # ── 新增批量接口同步（融资融券/大宗交易/北向资金） ──
-    if not skip_aux_refresh:
-        # 融资融券明细（全市场批量，1次API调用）
-        t0 = time.perf_counter()
-        try:
-            md_count = refresh_margin_detail(db, trade_date=snapshot["trade_date"])
-            aux_audit["margin_detail"] = {
-                "status": "success",
-                "count": md_count,
-                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
-            }
-        except Exception as exc:
-            db.rollback()
-            aux_audit["margin_detail"] = {
-                "status": "failed",
-                "count": 0,
-                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
-                "error": str(exc),
-            }
-
-        # 大宗交易（全市场批量，1次API调用）
-        t0 = time.perf_counter()
-        try:
-            bt_count = refresh_block_trade(db, trade_date=snapshot["trade_date"])
-            aux_audit["block_trade"] = {
-                "status": "success",
-                "count": bt_count,
-                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
-            }
-        except Exception as exc:
-            db.rollback()
-            aux_audit["block_trade"] = {
-                "status": "failed",
-                "count": 0,
-                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
-                "error": str(exc),
-            }
-
-        # 北向资金流向（全市场汇总，1条/天）
-        t0 = time.perf_counter()
-        try:
-            hf = refresh_hsgt_flow(db, trade_date=snapshot["trade_date"])
-            aux_audit["hsgt_flow"] = {
-                "status": "success",
-                "count": 1 if hf else 0,
-                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
-            }
-        except Exception as exc:
-            db.rollback()
-            aux_audit["hsgt_flow"] = {
-                "status": "failed",
-                "count": 0,
-                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
-                "error": str(exc),
-            }
-
-        # 北向持股TOP10
-        t0 = time.perf_counter()
-        try:
-            top10_count = refresh_hsgt_top10(db, trade_date=snapshot["trade_date"])
-            aux_audit["hsgt_top10"] = {
-                "status": "success",
-                "count": top10_count,
-                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
-            }
-        except Exception as exc:
-            db.rollback()
-            aux_audit["hsgt_top10"] = {
-                "status": "failed",
-                "count": 0,
-                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
-                "error": str(exc),
-            }
-    else:
-        for key in ("margin_detail", "block_trade", "hsgt_flow", "hsgt_top10"):
-            aux_audit[key] = {"status": "skipped_fast_run", "count": 0, "elapsed_ms": 0}
-
-    _update_run_progress(
-        db,
-        run_id,
-        phase="auxiliary_data",
-        current=4,
-        total=4,
-        message="辅助数据刷新完成",
-        status="running",
-    )
-    snapshot.setdefault("breadth", {})["auxiliary_data_audit"] = aux_audit
-    auxiliary_result = project_legacy_auxiliary_audit(
-        aux_audit,
-        instruments=tuple(AuxiliaryInstrument(code=str(code)) for code in aux_prefetch_codes),
-        trade_date=date.fromisoformat(str(snapshot["trade_date"])),
-        refresh_enabled=not skip_aux_refresh,
-    )
-    snapshot["breadth"]["auxiliary_orchestration"] = auxiliary_projection_payload(auxiliary_result)
+    snapshot.setdefault("breadth", {})["auxiliary_data_audit"] = dict(auxiliary_result.audit_payload)
+    snapshot["breadth"]["auxiliary_orchestration"] = {
+        "usable": auxiliary_result.orchestrated.is_usable,
+        "inventory": tuple(item.dataset_key for item in auxiliary_result.orchestrated.results),
+        "datasets": dict(auxiliary_result.audit_payload),
+        "skip_aux_refresh": skip_aux_refresh,
+    }
     _save_checkpoint(db, run_id, "auxiliary_data")
 
     _update_run_progress(
@@ -1657,7 +1413,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     run.request_schema_version = run_request.schema_version
     run.request_json = run_request.to_canonical_json()
     run.market_snapshot_json = _dumps(snapshot)
-    run.result_summary_json = _dumps({})
+    run.result_summary_json = _dumps({"execution": persisted_execution_audit})
     run.status = "running"
     run.error_message = None
     run.heartbeat_at = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -2009,10 +1765,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
         run.progress_message = "运行完成"
         run.filter_audit_json = _dumps(pipeline_audit.get("filter_audit") or {})
         summary = _build_run_summary(cards, saved, snapshot, _strip_audit_rows(pipeline_audit))
-        summary["execution"] = {
-            **execution_audit,
-            "execution_version": run.execution_version or execution_version,
-        }
+        summary["execution"] = persisted_execution_audit
         summary["score_line_meta"] = resolve_score_line_context(
             float(params["score_line"]),
             market_snapshot=snapshot,
@@ -2877,6 +2630,12 @@ def _historical_recommendations(db: Session, code: str, exclude_recommendation_i
 def _merge_run_params(db: Session, preset: Preset | None, payload: dict[str, Any]) -> dict[str, Any]:
     preset_data = _serialize_preset(db, preset) if preset else {}
     skills = payload.get("skills") or preset_data.get("skills") or []
+    # SkillSelection only accepts skill_id/weight/sort_order; strip extra fields
+    skills = [
+        {k: v for k, v in s.items() if k in ("skill_id", "weight", "sort_order")}
+        for s in skills
+        if isinstance(s, dict)
+    ]
     if payload.get("single_skill_id"):
         single_weight = float(payload.get("single_skill_weight") or 1.0)
         skills = [{"skill_id": str(payload["single_skill_id"]), "weight": single_weight, "sort_order": 0}]
@@ -2959,78 +2718,6 @@ def _select_skills_for_run(
 def _apply_market_scope(db: Session, features: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
     scoped_codes = {item["code"] for item in _apply_market_scope_to_stocks(db, features, params)}
     return [item for item in features if item["code"] in scoped_codes]
-
-
-def _has_fresh_concept_sector_cache(db: Session, trade_date: str, freshness_seconds: int) -> bool:
-    cutoff = _freshness_cutoff(freshness_seconds)
-    sector_count = db.scalar(
-        select(func.count()).select_from(ConceptSector).where(
-            ConceptSector.trade_date == trade_date,
-            ConceptSector.created_at >= cutoff,
-        )
-    ) or 0
-    return sector_count > 0
-
-
-def _has_fresh_dragon_tiger_cache(db: Session, trade_date: str, freshness_seconds: int) -> bool:
-    count = db.scalar(
-        select(func.count()).select_from(DragonTiger).where(
-            DragonTiger.trade_date == trade_date,
-            DragonTiger.created_at >= _freshness_cutoff(freshness_seconds),
-        )
-    ) or 0
-    return count > 0
-
-
-def _stale_capital_flow_codes(
-    db: Session,
-    codes: list[str],
-    trade_date: str,
-    freshness_seconds: int,
-) -> list[str]:
-    if not codes:
-        return []
-    fresh_codes = {
-        code
-        for code, in db.execute(
-            select(CapitalFlow.code).where(
-                CapitalFlow.code.in_(codes),
-                CapitalFlow.trade_date == trade_date,
-                CapitalFlow.created_at >= _freshness_cutoff(freshness_seconds),
-            ).distinct()
-        ).all()
-    }
-    return [code for code in codes if code not in fresh_codes]
-
-
-def _stale_news_codes(
-    db: Session,
-    codes: list[str],
-    trade_date: str,
-    freshness_seconds: int,
-) -> list[str]:
-    if not codes:
-        return []
-    latest_allowed = date.fromisoformat(trade_date)
-    ttl_days = max(2, int((int(freshness_seconds or 0) + 86399) // 86400)) if freshness_seconds else 2
-    earliest_allowed = (latest_allowed - timedelta(days=ttl_days)).isoformat()
-    fresh_codes = {
-        code
-        for code, in db.execute(
-            select(NewsAnnouncement.code).where(
-                NewsAnnouncement.code.in_(codes),
-                NewsAnnouncement.announce_date <= latest_allowed.isoformat(),
-                NewsAnnouncement.announce_date >= earliest_allowed,
-                NewsAnnouncement.created_at >= _freshness_cutoff(freshness_seconds),
-            ).distinct()
-        ).all()
-    }
-    return [code for code in codes if code not in fresh_codes]
-
-
-def _freshness_cutoff(freshness_seconds: int) -> datetime:
-    ttl = max(0, int(freshness_seconds or 0))
-    return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=ttl)
 
 
 def _recent_recommended_codes(db: Session, trade_date: str) -> set[str]:

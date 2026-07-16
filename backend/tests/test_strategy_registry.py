@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from app.engine.imperative_strategy import DescriptorBoundImperativeStrategy, StrategyDecision
 from app.engine.signal import SIGNAL_FIELDS
 from app.engine.skill_loader import StrategySkill
 from app.engine.strategy import (
@@ -50,6 +51,33 @@ def _make_skill(skill_id: str = "registry-equiv-strategy", contract: dict | None
     )
 
 
+def _make_imperative_skill(skill_id: str = "registry-imperative-strategy") -> StrategySkill:
+    return StrategySkill(
+        skill_id=skill_id,
+        name=skill_id,
+        version="1.0.0",
+        path=Path(f"/nonexistent/{skill_id}"),
+        manifest={
+            "id": skill_id,
+            "name": skill_id,
+            "version": "1.0.0",
+            "mode": "imperative",
+            "status": "active",
+            "requirements": ["stock_feature_context"],
+            "capabilities": ["signal_evaluation"],
+            "enabled": True,
+            "impl_class": "tests.fixtures:ImperativeStrategy",
+        },
+        skill_frontmatter={},
+        skill_body="",
+        skill_hash=None,
+        reference_files=[],
+        contract=None,
+        contract_hash=None,
+        enabled=True,
+    )
+
+
 def _full_quality(**extra) -> dict:
     base = {"code": "600000", "name": "测试股", "market_sample_count": 200, "data_completeness_score": 100, "evidence_quality_score": 100}
     base.update(extra)
@@ -63,6 +91,11 @@ class _StubStrategy:
 
     def evaluate(self, stock, ctx):  # noqa: ANN001 - local test double
         return {"tag": self.tag}
+
+
+class _ImperativeImplementation:
+    def evaluate(self, stock, ctx):  # noqa: ANN001 - local test double
+        return StrategyDecision(score=50.0, phase="fixture")
 
 
 def _register_stub(registry: StrategyRegistry, strategy_id: str, tag: str) -> _StubStrategy:
@@ -87,6 +120,23 @@ def test_register_rejects_standalone_string_key_and_duplicate_descriptor_id():
     _register_stub(registry, "skill-a", "a")
     with pytest.raises(DuplicateStrategyError):
         _register_stub(registry, "skill-a", "b")
+
+
+def test_register_requires_descriptor_bound_adapter_for_imperative_strategies():
+    descriptor = build_strategy_descriptor(_make_imperative_skill())
+    registry = StrategyRegistry()
+
+    legacy_signal_strategy = _StubStrategy("legacy-signal", descriptor)
+    with pytest.raises(StrategyError, match="DescriptorBoundImperativeStrategy"):
+        registry.register(descriptor, legacy_signal_strategy)
+
+    other_descriptor = build_strategy_descriptor(_make_imperative_skill())
+    mismatched_adapter = DescriptorBoundImperativeStrategy(_ImperativeImplementation(), other_descriptor)
+    with pytest.raises(StrategyError, match="同一 Descriptor 对象"):
+        registry.register(descriptor, mismatched_adapter)
+
+    bound_adapter = DescriptorBoundImperativeStrategy(_ImperativeImplementation(), descriptor)
+    assert registry.register(descriptor, bound_adapter) is bound_adapter
 
 
 def test_get_unknown_strategy_id_raises():

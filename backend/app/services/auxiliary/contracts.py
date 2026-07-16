@@ -38,6 +38,8 @@ class AuxiliaryErrorCode(str, Enum):
     COVERAGE_INSUFFICIENT = "coverage_insufficient"
     CUSTOM_HANDLER_FAILED = "custom_handler_failed"
     CUSTOM_HANDLER_RESULT_INVALID = "custom_handler_result_invalid"
+    SNAPSHOT_PUBLISH_BLOCKED = "snapshot_publish_blocked"
+    SNAPSHOT_POINTER_MISSING = "snapshot_pointer_missing"
 
 
 class AuxiliaryStage(str, Enum):
@@ -278,9 +280,20 @@ class AuxiliaryPersistResult:
     duration_ms: float
     inserted_rows: int | None = None
     updated_rows: int | None = None
+    batch_size: int | None = None
+    batch_statement_bound: int | None = None
+    fixed_statement_count: int = 0
 
     def __post_init__(self) -> None:
-        if any(value < 0 for value in (self.attempted_rows, self.failed_rows, self.execute_count)):
+        if any(
+            value < 0
+            for value in (
+                self.attempted_rows,
+                self.failed_rows,
+                self.execute_count,
+                self.fixed_statement_count,
+            )
+        ):
             raise AuxiliaryContractError("persistence 计数不能为负数")
         if self.affected_rows is not None and self.affected_rows < 0:
             raise AuxiliaryContractError("affected_rows 不能为负数")
@@ -290,6 +303,15 @@ class AuxiliaryPersistResult:
             raise AuxiliaryContractError(
                 "普通 MySQL upsert 不得把 rowcount 推断为精确 inserted/updated 行数"
             )
+        if (self.batch_size is None) != (self.batch_statement_bound is None):
+            raise AuxiliaryContractError("batch_size 与 batch_statement_bound 必须同时声明或同时省略")
+        if self.batch_size is not None and self.batch_size <= 0:
+            raise AuxiliaryContractError("batch_size 必须大于零")
+        if self.batch_statement_bound is not None:
+            if self.batch_statement_bound < 0:
+                raise AuxiliaryContractError("batch_statement_bound 不能为负数")
+            if self.execute_count > self.batch_statement_bound:
+                raise AuxiliaryContractError("execute_count 不得超过 batch_statement_bound")
 
 
 @dataclass(frozen=True, slots=True)
@@ -465,6 +487,14 @@ class AuxiliaryDatasetDescriptor(Generic[RawT, NormalizedT, ViewT]):
     custom_handler: AuxiliaryDatasetHandler[ViewT] | None = None
 
     def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Validate this declaration before it is published by a registry.
+
+        Construction performs the first check.  Registry bootstrap invokes this
+        method again so only a complete descriptor can enter a frozen snapshot.
+        """
         if not self.key.strip():
             raise AuxiliaryContractError("descriptor key 不能为空")
         if not self.view_key.strip():

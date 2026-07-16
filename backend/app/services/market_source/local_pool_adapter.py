@@ -1,12 +1,8 @@
-"""Production adapters over the existing local market-pool read path.
-
-The adapter deliberately delegates refresh, cache preference and realtime merge to
-existing workbench functions.  It adds typed request/result boundaries and audit
-records; it does not change provider choice, row shaping or persistence behaviour.
-"""
+"""Typed local-pool implementation of the closed market-source contract."""
 from __future__ import annotations
 
 from collections import defaultdict
+from types import MappingProxyType
 from typing import Any
 
 from sqlalchemy import select
@@ -28,7 +24,10 @@ from .port import (
     FailurePolicy,
     ItemAudit,
     MarketSourceAudit,
+    MarketSourceError,
+    MarketSourceErrorCode,
     MarketSourceOperation,
+    MarketSourceRequestFailed,
     Quote,
     QuoteBatch,
     QuoteRef,
@@ -38,12 +37,7 @@ from .port import (
 
 
 class LocalPoolMarketSourceAdapter:
-    """``MarketSourcePort`` adapter for local-pool quote/bar reads.
-
-    ``last_snapshot`` is intentionally adapter-specific: the legacy workbench needs
-    its rich snapshot unchanged, while the narrow public port carries only quote
-    rows and transport audit data.
-    """
+    """``MarketSourcePort`` adapter over the existing local-pool read path."""
 
     source_name = "local_pool"
 
@@ -62,69 +56,131 @@ class LocalPoolMarketSourceAdapter:
         self.last_snapshot: dict[str, Any] = {}
 
     def fetch_quotes(self, request: QuoteRequest) -> QuoteBatch:
-        # Delayed imports avoid a legacy import cycle:
-        # market_data -> candidates -> market_source.snapshot -> this package.
-        from app.services.market_pool import (
-            get_market_universe_from_pool,
-            get_market_universe_from_pool_with_realtime,
+        source = "local_pool_realtime" if self._include_realtime else (
+            "local_pool_preferred" if self._refresh else self.source_name
         )
-
-        if self._include_realtime:
-            rows, snapshot = get_market_universe_from_pool_with_realtime(self._db)
-            source = "local_pool_realtime"
-        else:
-            rows, snapshot = get_market_universe_from_pool(
-                self._db,
-                refresh=self._refresh,
-                as_of_date=self._as_of_date,
+        try:
+            # Delayed imports avoid the legacy market-data import cycle.
+            from app.services.market_pool import (
+                get_market_universe_from_pool,
+                get_market_universe_from_pool_with_realtime,
             )
-            source = "local_pool_preferred" if self._refresh else self.source_name
+
+            if self._include_realtime:
+                rows, snapshot = get_market_universe_from_pool_with_realtime(self._db)
+            else:
+                rows, snapshot = get_market_universe_from_pool(
+                    self._db,
+                    refresh=self._refresh,
+                    as_of_date=self._as_of_date,
+                )
+        except Exception:
+            error = MarketSourceError(
+                operation=MarketSourceOperation.QUOTES,
+                code=MarketSourceErrorCode.SOURCE_UNAVAILABLE,
+                message="local-pool quote retrieval failed",
+                retryable=False,
+            )
+            if request.failure_policy is FailurePolicy.RAISE:
+                raise MarketSourceRequestFailed(error) from None
+            return QuoteBatch(
+                quotes=(),
+                errors=(error,),
+                audit=MarketSourceAudit(
+                    source=source,
+                    operation=MarketSourceOperation.QUOTES,
+                    failure_policy=request.failure_policy,
+                    status=BatchStatus.FAILURE,
+                    requested_count=1,
+                    returned_count=0,
+                    empty_count=0,
+                    failed_count=1,
+                ),
+            )
+
         if request.max_quote_count is not None:
             rows = rows[: request.max_quote_count]
         self.last_snapshot = dict(snapshot)
         quotes = tuple(Quote.from_row(row) for row in rows)
-        audit = MarketSourceAudit(
-            source=source,
-            operation=MarketSourceOperation.QUOTES,
-            failure_policy=request.failure_policy,
-            status=classify_status(len(quotes), 0),
-            requested_count=request.max_quote_count or len(quotes),
-            returned_count=len(quotes),
-            empty_count=0 if quotes else 1,
-            failed_count=0,
+        return QuoteBatch(
+            quotes=quotes,
+            errors=(),
+            audit=MarketSourceAudit(
+                source=source,
+                operation=MarketSourceOperation.QUOTES,
+                failure_policy=request.failure_policy,
+                status=classify_status(len(quotes), 0),
+                requested_count=request.max_quote_count or len(quotes),
+                returned_count=len(quotes),
+                empty_count=0 if quotes else 1,
+                failed_count=0,
+            ),
         )
-        return QuoteBatch(quotes=quotes, errors=(), audit=audit)
 
     def fetch_daily_bars(self, request: DailyBarRequest) -> DailyBarBatch:
         references = tuple(request.instruments)
         by_code = {reference.code: reference for reference in references}
-        statement = select(DailyKbar).where(DailyKbar.code.in_(tuple(by_code)))
-        if request.start_date:
-            statement = statement.where(DailyKbar.trade_date >= request.start_date)
-        if request.end_date:
-            statement = statement.where(DailyKbar.trade_date <= request.end_date)
-        statement = statement.order_by(DailyKbar.code, DailyKbar.trade_date)
-        grouped: dict[QuoteRef, list[DailyBar]] = defaultdict(list)
-        for row in self._db.scalars(statement).all():
-            reference = by_code[str(row.code)]
-            grouped[reference].append(
-                DailyBar.from_row(
-                    reference,
-                    {
-                        "code": row.code,
-                        "trade_date": row.trade_date,
-                        "open": row.open,
-                        "high": row.high,
-                        "low": row.low,
-                        "close": row.close,
-                        "volume": row.volume,
-                        "amount": row.amount,
-                        "pct_chg": row.pct_chg,
-                        "turnover_rate": row.turnover_rate,
-                        "source": row.source,
-                    },
+        try:
+            statement = select(DailyKbar).where(DailyKbar.code.in_(tuple(by_code)))
+            if request.start_date:
+                statement = statement.where(DailyKbar.trade_date >= request.start_date)
+            if request.end_date:
+                statement = statement.where(DailyKbar.trade_date <= request.end_date)
+            statement = statement.order_by(DailyKbar.code, DailyKbar.trade_date)
+            grouped: dict[QuoteRef, list[DailyBar]] = defaultdict(list)
+            for row in self._db.scalars(statement).all():
+                reference = by_code[str(row.code)]
+                grouped[reference].append(
+                    DailyBar.from_row(
+                        reference,
+                        {
+                            "code": row.code,
+                            "trade_date": row.trade_date,
+                            "open": row.open,
+                            "high": row.high,
+                            "low": row.low,
+                            "close": row.close,
+                            "volume": row.volume,
+                            "amount": row.amount,
+                            "pct_chg": row.pct_chg,
+                            "turnover_rate": row.turnover_rate,
+                            "source": row.source,
+                        },
+                    )
                 )
+        except Exception:
+            errors = tuple(
+                MarketSourceError(
+                    operation=MarketSourceOperation.DAILY_BARS,
+                    code=MarketSourceErrorCode.SOURCE_UNAVAILABLE,
+                    message="local-pool daily-bar retrieval failed",
+                    reference=reference,
+                    retryable=False,
+                )
+                for reference in references
             )
+            if request.failure_policy is FailurePolicy.RAISE and errors:
+                raise MarketSourceRequestFailed(errors[0]) from None
+            failed_audits = {
+                reference: ItemAudit(reference, BatchStatus.FAILURE, 0, error)
+                for reference, error in zip(references, errors)
+            }
+            return DailyBarBatch(
+                bars_by_instrument=MappingProxyType({reference: () for reference in references}),
+                item_audits=MappingProxyType(failed_audits),
+                errors=errors,
+                audit=MarketSourceAudit(
+                    source=self.source_name,
+                    operation=MarketSourceOperation.DAILY_BARS,
+                    failure_policy=request.failure_policy,
+                    status=classify_status(0, len(errors)),
+                    requested_count=len(references),
+                    returned_count=0,
+                    empty_count=0,
+                    failed_count=len(errors),
+                ),
+            )
+
         frozen_groups = {reference: tuple(grouped.get(reference, ())) for reference in references}
         item_audits = {
             reference: ItemAudit(
@@ -135,21 +191,20 @@ class LocalPoolMarketSourceAdapter:
             for reference in references
         }
         returned = sum(len(items) for items in frozen_groups.values())
-        audit = MarketSourceAudit(
-            source=self.source_name,
-            operation=MarketSourceOperation.DAILY_BARS,
-            failure_policy=request.failure_policy,
-            status=classify_status(returned, 0),
-            requested_count=len(references),
-            returned_count=returned,
-            empty_count=sum(1 for items in frozen_groups.values() if not items),
-            failed_count=0,
-        )
         return DailyBarBatch(
-            bars_by_instrument=frozen_groups,
-            item_audits=item_audits,
+            bars_by_instrument=MappingProxyType(frozen_groups),
+            item_audits=MappingProxyType(item_audits),
             errors=(),
-            audit=audit,
+            audit=MarketSourceAudit(
+                source=self.source_name,
+                operation=MarketSourceOperation.DAILY_BARS,
+                failure_policy=request.failure_policy,
+                status=classify_status(returned, 0),
+                requested_count=len(references),
+                returned_count=returned,
+                empty_count=sum(1 for items in frozen_groups.values() if not items),
+                failed_count=0,
+            ),
         )
 
 
@@ -159,11 +214,8 @@ def load_legacy_market_universe(
     data_source: str,
     as_of_date: str | None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
-    """Load legacy workbench rows through a typed audit facade.
+    """Load legacy workbench rows through the typed quote-batch facade."""
 
-    Returns the existing row/snapshot shapes exactly, followed by a JSON-safe typed
-    audit projection.  Realtime remains delegated to its established implementation.
-    """
     if data_source == DATA_SOURCE_REALTIME:
         from app.services.market_data import get_market_universe
 

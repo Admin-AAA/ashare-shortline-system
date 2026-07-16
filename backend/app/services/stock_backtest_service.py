@@ -16,7 +16,7 @@ from app.core.config import get_settings
 from app.engine.skill_loader import StrategySkill, load_skills
 from app.engine.strategy_runner import run_strategy
 from app.models.tables import DailyKbar, Stock
-from app.services.market_pool import _normalize_trade_date
+from app.engine.trading_calendar import normalize_trade_date
 from app.services.outcome_service import (
     ENTRY_SLIPPAGE_BPS,
     EXIT_SLIPPAGE_BPS,
