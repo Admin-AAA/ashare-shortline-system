@@ -276,6 +276,38 @@ def check_e_item(db, hit_skills: set) -> None:
     if under_floor:
         print(f'⚠️ {len(under_floor)} 个策略样本 <{SAMPLE_FLOOR}（胜率统计不可信，补跑应持续喂）: {under_floor}')
 
+    # 曝光补跑健康诊断：样本 <20 的策略里，区分「补跑在喂但窄口径天然慢」vs
+    # 「补跑 run 失败停滞」。只查近 7 天该策略出现在 experiment run skill_breakdown
+    # 的推荐数：>0 = 在喂（窄策略样本增长慢是 universe 窄非 bug）；0 = 停滞（补跑
+    # 失败/run 未触发，需人工触发修复——曾出现 high-position 连续 2 天曝光补跑
+    # 失败导致样本永远卡在 3 笔但 E 项只报「n<20」不自知的静默事故）。
+    if under_floor:
+        recent_rows = db.execute(text("""
+            SELECT jt.strategy_id AS sid, MAX(u.started_at) AS latest, COUNT(*) AS n
+            FROM recommendations rec
+            JOIN recommendation_runs u ON rec.run_id = u.run_id AND u.run_mode = 'experiment'
+            JOIN JSON_TABLE(
+                rec.skill_breakdown_json, '$[*]'
+                COLUMNS (strategy_id VARCHAR(80) PATH '$.strategy_id')
+            ) jt
+            WHERE rec.skill_breakdown_json IS NOT NULL
+              AND rec.recommended_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+            GROUP BY jt.strategy_id
+        """)).fetchall()
+        recent_in_experiment: dict[str, tuple] = {row[0]: (row[1], int(row[2] or 0)) for row in recent_rows}
+        stalled: list[str] = []
+        feeding: list[str] = []
+        for sid in under_floor:
+            hit = recent_in_experiment.get(sid)
+            if hit and hit[1] > 0:
+                feeding.append(f'{sid}({hit[1]}笔@{str(hit[0])[:10]})')
+            else:
+                stalled.append(sid)
+        if feeding:
+            print(f'  ℹ️ 补跑在喂（窄口径样本天然慢，非 bug，不加 universe）: {feeding}')
+        if stalled:
+            print(f'  🚨 补跑停滞（近7天 0 experiment 命中，run 可能失败/未触发，需手动触发验证）: {stalled}')
+
 
 # 前瞻样本分界：自该交易日起，已上线的策略规则（strategy.yaml / aggregator.py）
 # 之后生成的 formal run 才反映修复后的真实胜率。此前样本含修复前历史污染
