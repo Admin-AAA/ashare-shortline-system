@@ -2630,6 +2630,12 @@ def _historical_recommendations(db: Session, code: str, exclude_recommendation_i
 def _merge_run_params(db: Session, preset: Preset | None, payload: dict[str, Any]) -> dict[str, Any]:
     preset_data = _serialize_preset(db, preset) if preset else {}
     skills = payload.get("skills") or preset_data.get("skills") or []
+    # SkillSelection only accepts skill_id/weight/sort_order; strip extra fields
+    skills = [
+        {k: v for k, v in s.items() if k in ("skill_id", "weight", "sort_order")}
+        for s in skills
+        if isinstance(s, dict)
+    ]
     if payload.get("single_skill_id"):
         single_weight = float(payload.get("single_skill_weight") or 1.0)
         skills = [{"skill_id": str(payload["single_skill_id"]), "weight": single_weight, "sort_order": 0}]
