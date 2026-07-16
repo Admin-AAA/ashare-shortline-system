@@ -320,8 +320,16 @@ def _default_preset_skill_rows(preset_config: dict[str, Any], skills: list[Strat
         return []
     rows: list[dict[str, Any]] = []
     for skill in skills:
+        # Declarative strategies declare preset membership in strategy.yaml
+        # (contract.meta.default_preset_groups).  Imperative strategies have no
+        # strategy.yaml (contract=None), so they would never be enrolled in any
+        # preset and silently vanish from formal runs — read the same field from
+        # manifest.meta as a fallback so imperative skills can declare membership.
         meta = (skill.contract or {}).get("meta") or {}
-        group_config = meta.get("default_preset_groups") or {}
+        group_config = meta.get("default_preset_groups")
+        if not group_config and skill.manifest is not None:
+            manifest_meta = skill.manifest.get("meta") or {}
+            group_config = manifest_meta.get("default_preset_groups")
         if not isinstance(group_config, dict):
             continue
         for group in groups:
@@ -335,7 +343,9 @@ def _default_preset_skill_rows(preset_config: dict[str, Any], skills: list[Strat
                 weight = float(spec)
                 sort_order = len(rows)
             elif spec is True:
-                weight = float((skill.contract or {}).get("weight") or 1.0)
+                # Imperative skills carry their weight in signal_metadata.
+                weight = float((skill.contract or {}).get("weight") or
+                               ((skill.manifest or {}).get("signal_metadata") or {}).get("weight") or 1.0)
                 sort_order = len(rows)
             else:
                 continue

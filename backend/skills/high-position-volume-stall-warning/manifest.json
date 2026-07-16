@@ -13,5 +13,17 @@
   "signal_metadata": {
     "weight": 0.3,
     "strategy_independence": 0.8
+  },
+  "meta": {
+    "default_preset_groups": {
+      "formal_opening": {
+        "weight": 0.3,
+        "sort_order": 70
+      },
+      "formal_trend_core": {
+        "weight": 0.3,
+        "sort_order": 70
+      }
+    }
   }
 }
