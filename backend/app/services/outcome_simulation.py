@@ -215,7 +215,9 @@ def _simulate_outcome(
 
     executed_entry_price = round(raw_entry_price * (1 + ENTRY_SLIPPAGE_BPS / 10000.0), 4)
     stop_loss_price = _resolve_stop_loss_price(raw_entry_price, feature_snapshot)
-    take_profit_price = _resolve_take_profit_price(raw_entry_price, feature_snapshot)
+    take_profit_price = _resolve_take_profit_price(
+        raw_entry_price, feature_snapshot, recommend_price=recommend_price
+    )
 
     holding_bars = future_bars[entry_index : entry_index + max(1, horizon_days)]
     if not holding_bars:
@@ -576,16 +578,32 @@ def _resolve_stop_loss_price(raw_entry_price: float | None, feature_snapshot: di
     return round(normalized, 2)
 
 
-def _resolve_take_profit_price(raw_entry_price: float | None, feature_snapshot: dict[str, Any]) -> float:
-    """解析止盈价，加入上限归一化防止过高的止盈目标。"""
+def _resolve_take_profit_price(
+    raw_entry_price: float | None,
+    feature_snapshot: dict[str, Any],
+    recommend_price: float | None = None,
+) -> float:
+    """解析止盈价，与 _resolve_stop_loss_price 对称：实际入场价偏离推荐价时按比例重算。
+
+    设计止盈比例隐含在推荐时（take_profit / recommend_price − 1）。次日实际入场价因跳空
+    偏离推荐价时，旧实现只做上限裁剪、不按比例重算，导致跳空低开后设计的 +5% 止盈目标被
+    相对抬高（如 603991 推荐价 168.19、入场价 154.21，止盈 176.60 相对入场变 +14.5% 而非 +5%），
+    固定止盈路径失效 → 全推给 trailing 兜底、且被错标 success。
+    修复：用隐含比例重算 entry × (1 + implied_tp_pct)，再 clamp 到 [entry×1.05, entry×1.15]。
+    """
     raw_target = _as_float(feature_snapshot.get("take_profit"))
     if raw_entry_price is None or raw_entry_price <= 0:
         return round(raw_target, 2) if raw_target > 0 else 0.0
     fallback = raw_entry_price * (1 + DEFAULT_TAKE_PROFIT_PCT / 100.0)
-    if raw_target <= raw_entry_price:
+    if raw_target <= 0:
         return round(fallback, 2)
+    # 跳空导致实际入场价偏离推荐价：按推荐时隐含的止盈比例重算，保证盈亏比设计不被破坏
+    if recommend_price and recommend_price > 0:
+        implied_tp_pct = raw_target / recommend_price - 1.0
+        raw_target = raw_entry_price * (1 + implied_tp_pct)
     max_tp = raw_entry_price * (1 + MAX_TAKE_PROFIT_PCT / 100.0)
-    normalized = min(raw_target, max_tp)
+    normalized = min(raw_target, max_tp)    # 不高于 +15%
+    normalized = max(normalized, fallback)  # 不低于 +5%
     return round(normalized, 2)
 
 

@@ -19,6 +19,7 @@ from app.services.outcome_simulation import (
     _resolve_entry,
     _resolve_exit,
     _resolve_stop_loss_price,
+    _resolve_take_profit_price,
     _simulate_outcome,
 )
 
@@ -422,3 +423,53 @@ def test_resolve_stop_loss_max_not_wider_than_default_by_much():
     """
     assert DEFAULT_STOP_LOSS_PCT - MAX_STOP_LOSS_PCT <= 0.3  # DEFAULT - MAX ≤ 0.3pp
     assert MAX_STOP_LOSS_PCT < DEFAULT_STOP_LOSS_PCT  # MAX 更负 = 最宽边界
+
+
+# --- 止盈价重算（修复 docs/bugs/take-profit-not-rebased-on-actual-entry-price） ---
+# 86ad8fc 修复曾因 module extraction（d29e326 把函数搬到 outcome_simulation.py）丢失，
+# 搬过去的是修复前版本。下方 5 个测试钉死重算逻辑，防止再次被重构静默覆盖。
+
+
+def test_resolve_take_profit_rebases_on_gap_down():
+    """跳空低开后按推荐时隐含止盈比例重算：603991 案例。
+
+    recommend_price=168.19，take_profit=176.60（设计 +5%）；次日跳空低开 entry=154.21。
+    旧实现保留 176.60 → 相对入场 +14.5%，固定止盈路径失效被 trailing 兜底、错标 success。
+    修复后按 implied_tp=176.60/168.19-1=+5.0% 重算 entry×1.05=161.92，high 164.42 可触发。
+    """
+    tp = _resolve_take_profit_price(
+        154.21, {"take_profit": 176.60}, recommend_price=168.19
+    )
+    assert tp == 161.92  # 154.21 × (176.60/168.19) ≈ 161.92
+
+
+def test_resolve_take_profit_no_rebase_when_no_gap():
+    """无跳空（入场价=推荐价）时重算结果与原值一致。"""
+    tp = _resolve_take_profit_price(
+        100.0, {"take_profit": 105.0}, recommend_price=100.0
+    )
+    assert tp == 105.0
+
+
+def test_resolve_take_profit_clamps_to_max():
+    """重算后超过 +15% 上限时裁剪到 entry×1.15。"""
+    # recommend=100, tp=130（隐含 +30%），低开入场 100 → 重算 130 > MAX，clamp
+    tp = _resolve_take_profit_price(
+        100.0, {"take_profit": 130.0}, recommend_price=100.0
+    )
+    assert tp == 115.0  # entry × 1.15
+
+
+def test_resolve_take_profit_clamps_to_min():
+    """重算后低于 +5% 下限时抬到 entry×1.05。"""
+    # recommend=100, tp=103（隐含 +3%），低开入场 100 → 重算 103 < fallback，clamp
+    tp = _resolve_take_profit_price(
+        100.0, {"take_profit": 103.0}, recommend_price=100.0
+    )
+    assert tp == 105.0  # entry × 1.05
+
+
+def test_resolve_take_profit_without_recommend_keeps_old_behavior():
+    """不传 recommend_price 时退回旧行为：只做上限裁剪、不按比例重算。"""
+    tp = _resolve_take_profit_price(154.21, {"take_profit": 176.60})
+    assert tp == 176.60  # 旧实现保留原值（入场价偏离时仍是绝对价，不重算）
