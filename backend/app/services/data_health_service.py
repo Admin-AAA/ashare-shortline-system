@@ -62,7 +62,6 @@ _TABLE_DEFS: list[dict[str, Any]] = [
     {"key": "outcome",          "label": "标注结果",     "table": RecommendationOutcome, "date_col": None, "critical": True, "expect_recent_coverage": False},
 ]
 
-_TUSHARE_TABLES = {"daily_kbar", "stock_quote", "minute_kbar", "index_daily", "limit_up_board", "dragon_tiger", "concept_sector", "capital_flow"}
 _RECENT_REFERENCE_WINDOW = 10
 _RECENT_WARN_MISSING_DAYS = 2
 _RECENT_HIGH_MISSING_DAYS = 4
@@ -230,8 +229,11 @@ def _table_stats(db: Session) -> dict[str, Any]:
                 col = getattr(tbl, dc)
                 if tbl is StockQuote:
                     min_date, max_date = _active_stock_quote_date_bounds(db)
+                elif tdef.get("fast_date_bounds"):
+                    # minute_kbar 行数巨大，用归一化日期避免混存格式干扰
+                    min_date, max_date = _date_bounds(db, col)
                 else:
-                    min_date, max_date = _fast_date_bounds(db, col) if tdef.get("fast_date_bounds") else _date_bounds(db, col)
+                    min_date, max_date = _date_bounds(db, col)
 
             result[key] = {
                 "label": label,
@@ -607,11 +609,17 @@ def _data_domain_coverage(db: Session, reference_trade_date: str | None) -> dict
                     db.scalar(select(func.count()).select_from(tbl).where(getattr(tbl, column).is_not(None)))
                     or 0
                 )
-                max_date = db.scalar(select(func.max(getattr(tbl, dc))).where(getattr(tbl, column).is_not(None)))
+                # 归一化日期格式（与 _date_bounds 一致），避免 YYYYMMDD / YYYY-MM-DD 混存时
+                # 字符串排序导致 max_date 误判（如 '20260525' > '2026-06-23'）
+                normalized_col = func.replace(getattr(tbl, dc), "-", "")
+                max_date = db.scalar(
+                    select(func.max(normalized_col)).where(getattr(tbl, column).is_not(None))
+                )
             else:
                 total = int(db.scalar(select(func.count()).select_from(tbl)) or 0)
                 if hasattr(tbl, dc):
-                    max_date = db.scalar(select(func.max(getattr(tbl, dc))))
+                    normalized_col = func.replace(getattr(tbl, dc), "-", "")
+                    max_date = db.scalar(select(func.max(normalized_col)).where(getattr(tbl, dc).is_not(None)))
         except Exception as exc:
             _rollback_session_safely(db)
             logger.warning("数据域 %s 统计失败: %s", key, exc)
@@ -881,14 +889,6 @@ def _estimated_table_rows(db: Session, table_name: str) -> int | None:
 
 
 def _date_bounds(db: Session, col: Any) -> tuple[str | None, str | None]:
-    normalized_col = func.replace(col, "-", "")
-    min_date, max_date = db.execute(
-        select(func.min(normalized_col), func.max(normalized_col)).where(col.is_not(None))
-    ).one()
-    return _fmt_date(min_date), _fmt_date(max_date)
-
-
-def _fast_date_bounds(db: Session, col: Any) -> tuple[str | None, str | None]:
     normalized_col = func.replace(col, "-", "")
     min_date, max_date = db.execute(
         select(func.min(normalized_col), func.max(normalized_col)).where(col.is_not(None))
