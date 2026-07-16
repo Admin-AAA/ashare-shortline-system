@@ -42,11 +42,15 @@ def spawn_run_subprocess(run_id: str) -> None:
     script_path = backend_root / "scripts" / "run_workbench_subprocess.py"
     log_dir = backend_root / "logs"
     log_dir.mkdir(exist_ok=True)
-    log_path = log_dir / f"run_{run_id}.log"
+    # run_id already starts with ``run_``; avoid the doubled ``run_run_`` prefix.
+    log_name = run_id if run_id.startswith("run_") else f"run_{run_id}"
+    log_path = log_dir / f"{log_name}.log"
 
     env = os.environ.copy()
     existing_pythonpath = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = f"{backend_root}{os.pathsep}{existing_pythonpath}".rstrip(os.pathsep)
+    # Ensure child stdout/stderr is unbuffered so logs hit the file immediately.
+    env["PYTHONUNBUFFERED"] = "1"
 
     # Popen 已复制 stdout 文件描述符；with 块关闭父进程侧描述符，避免每次派发泄漏句柄。
     with log_path.open("a", encoding="utf-8") as log_file:
