@@ -1,6 +1,13 @@
 """
 历史回测服务：在历史日期上重跑推荐流水线并自动标注结果。
 
+.. deprecated::
+    本模块的 ``run_backtest`` 和 ``run_backtest_comparison`` 已被 P0 Agent
+    Research Gateway（``ResearchBacktestRunner``）取代。新代码应使用
+    ``/api/backtests`` 或 ``/api/runs/backtest`` 端点，它们只写入隔离的
+    ``backtest_*`` 表，不产生 ``btrec_*`` 推荐证据。本模块保留供历史
+    数据读取和向后兼容，不应再被新功能调用。
+
 工作流：
 1. 接受日期区间
 2. 从本地 DailyKbar 池加载历史 K 线数据，构建伪行情
@@ -48,7 +55,10 @@ from app.services.market_data import (
     _exchange_from_code,
     _select_recall_candidates,
 )
-from app.services.market_pool import inject_dragon_tiger_flags, inject_limit_up_flags
+from app.services.auxiliary.application import (
+    inject_auxiliary_prefilter_flags,
+    load_auxiliary_feature_views,
+)
 from app.services.outcome_service import (
     is_accurate_recommendation,
     is_trade_executed,
@@ -61,6 +71,7 @@ from app.services.runs.persistence import best_strategy_id
 from app.services.runs.contracts import (
     CanonicalExecutionVersionBuilder,
     ExecutionVersionInput,
+    StrategyExecutionFingerprint,
     application_identity_from_environment,
     parse_run_request,
     selected_recommendation_execution_policy,
@@ -433,14 +444,14 @@ def _backtest_single_date(
         {"run_mode": "formal", "score_line": score_line},
         selected_skill_count=len(selected_skills),
     )
-    # 注入涨停板字段（与推荐管线 workbench_service.py:1483 一致）。
-    # limit-up-reseal-relay 等 skill 依赖 is_limit_up/limit_up_open_times/limit_up_fd_amount_yi，
-    # 缺失时 prefilter 永远 0 命中 → 回测无法验证涨停策略。
-    inject_limit_up_flags(db, stocks, trade_date=trade_date)
-    # 注入龙虎榜字段（与推荐管线 workbench_service.py:1546 一致）。
-    # dragon-tiger-smart-money 依赖 dragon_tiger_is_on_list，回测此前漏注入此字段，
-    # 导致该策略在任何历史区间回测里恒为 0 命中（universe 永远不通过）。
-    inject_dragon_tiger_flags(db, stocks, trade_date=trade_date)
+    # Historical prefiltering uses the same current-state/active-pointer S4 reader
+    # as the workbench, without any provider refresh.
+    prefilter_auxiliary = load_auxiliary_feature_views(
+        db,
+        [str(stock.get("code") or "") for stock in stocks if stock.get("code")],
+        trade_date=trade_date,
+    )
+    inject_auxiliary_prefilter_flags(stocks, prefilter_auxiliary)
     prefiltered_stocks, prefilter_audit = apply_prefilters(
         stocks,
         selected_skills,
@@ -775,11 +786,17 @@ def _persist_backtest_run(
         }
     )
     factor_plan = bootstrap_default_factor_registry()
+    strategy_registry = build_registry_from_skills(skills)
+    strategy_fingerprints = tuple(
+        StrategyExecutionFingerprint.from_descriptor(strategy_registry.get_descriptor(skill.skill_id))
+        for skill in skills
+    )
     execution_version = CanonicalExecutionVersionBuilder().build(
         ExecutionVersionInput(
             application=application_identity_from_environment(),
             request_schema_version=request.schema_version,
             execution_policy=selected_recommendation_execution_policy(request),
+            strategy_fingerprints=strategy_fingerprints,
             factor_execution_plan_fingerprint=factor_plan.fingerprint,
         )
     )
@@ -828,6 +845,13 @@ def _persist_backtest_recommendations(
     cards: list[dict[str, Any]],
     snapshot: dict[str, Any],
 ) -> None:
+    import warnings
+    warnings.warn(
+        "_persist_backtest_recommendations is deprecated: use ResearchBacktestRepository "
+        "for new backtest evidence. btrec_* writes will be removed in a future release.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     # 清理同 trade_date 的旧 backtest 推荐与 outcome，避免跨 run 累积污染统计
     # 只清理 btrec_（回测推荐），不影响实盘 rec_

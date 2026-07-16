@@ -525,6 +525,12 @@ insert(table).values(batch).on_duplicate_key_update(...)
 - 明确哪些字段覆盖、保留或取最新值。
 - SQLite 仅用于纯 contract tests；并发和原子性必须在真实 MySQL 验证。
 
+### 11.4 Production publication inventory and audit-only survey boundary
+
+默认 Registry、`AuxiliaryDataOrchestrator`、`run_auxiliary_application`、workbench、feature/prefilter consumers and maintenance scripts use **exactly 17 required datasets**: 13 mutable state atomic-upsert datasets plus the four publishable immutable event datasets `news_announcement`, `block_trade`, `share_float`, and `holder_trade`. Their event-contract map is also exact, so a default run cannot invoke `stk_surv` or report a survey pointer error.
+
+`institutional_survey` is a permanently separate **audit-only** artifact because no authoritative provider completeness contract exists. `capture_institutional_survey_audit(request, raw_provider)` is the sole typed boundary: it requires an injected raw provider and a caller-owned transaction; it captures the default all-field response through the strict raw adapter and persists each successful or failed immutable snapshot. It has no Registry descriptor, orchestrator handler, loader, feature view, active-pointer reader, legacy-table fallback, or pointer-publication capability. The audit contract deliberately declares neither cap nor pagination/termination semantics and never infers `has_more` or `count`; empty items are safe only as empty envelopes, and nonempty items require the declared complete schema. Rollback removes both audit batches and rows without residue.
+
 ## 12. Simulation 与 Backtest
 
 ### 12.1 Simulation

@@ -89,18 +89,18 @@ class PortOnlyFake:
     """A test double deliberately lacking every legacy compatibility method."""
 
     def __init__(self) -> None:
-        self.delegate = InMemoryMarketSourceAdapter(
+        self._delegate = InMemoryMarketSourceAdapter(
             quotes=[{"code": "000001", "exchange": "SZ", "price": 10.0}],
             bars_by_code={"000001": [{"trade_date": "20260527", "close": 10.0}]},
         )
 
     def fetch_quotes(self, request: QuoteRequest) -> QuoteBatch:
-        result = self.delegate.fetch_quotes(request)
+        result = self._delegate.fetch_quotes(request)
         assert isinstance(result, QuoteBatch)
         return result
 
     def fetch_daily_bars(self, request: DailyBarRequest) -> DailyBarBatch:
-        result = self.delegate.fetch_daily_bars(request)
+        result = self._delegate.fetch_daily_bars(request)
         assert isinstance(result, DailyBarBatch)
         return result
 

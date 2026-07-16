@@ -1,6 +1,10 @@
 # Architecture Hardening（二期）需求文档
 
-## 1. 背景与目标
+## Introduction
+
+本文档定义 Architecture Hardening（二期）的架构加固需求：以稳定的 Agent 研究入口为 P0 核心交付，在不改变既有业务语义的前提下，建立可审计迁移、可重放回测、可信数据边界和可验证的生产编排能力。
+
+## Background and Goals
 
 一期 `architecture-deepening` 已完成交易日历、板规则、Signal、Factor、Strategy Registry、Market Source、Market Pool、Simulation、Backtest Result 与推荐运行子模块的初步拆分，并通过真实 MySQL 和目标回归测试验证了当前行为基本稳定。
 
@@ -8,9 +12,9 @@
 
 本期允许修改 MySQL 表结构，但必须采用可审计、可重复、非破坏性的迁移方式。禁止对业务数据库执行清库、重建、`DROP TABLE` 或 `TRUNCATE`。
 
-## 2. 范围
+## Scope
 
-### 2.1 本期范围
+### In Scope
 
 按业务优先级排序；实现仍须遵守依赖关系和迁移安全门禁：
 
@@ -26,7 +30,7 @@
 10. 将推荐运行拆为薄 `RunCoordinator` 与可注入阶段服务。
 11. 增加真实顶层编排、Agent 研究入口、迁移、架构门禁和 CI 验收。
 
-### 2.2 非目标
+### Non-Goals
 
 1. 不重写前端交互或改变现有公开 API 的业务语义。
 2. 不改变选股阈值、策略评分公式、推荐排序和风控口径，除非为修复已确认缺陷且有 golden-master 证据。
@@ -35,7 +39,25 @@
 5. 不为旧的 Python 私有函数、下划线导出或内部 import 路径保留兼容层；仓内调用点必须同步迁移。
 6. 不对业务数据库做破坏性回滚；迁移失败使用向前修复。
 
-### 2.3 一期残余问题追踪
+## Glossary
+
+- **RunRequest**：推荐运行唯一输入契约，覆盖 API、调度器、队列、子进程和断点恢复。
+- **RunCoordinator**：只负责运行阶段顺序、状态转换和错误策略的应用层编排器。
+- **Port**：生产调用者唯一允许依赖的公开 Protocol。
+- **Descriptor**：描述一个辅助数据集完整生命周期策略的不可变声明。
+- **Execution Plan**：Factor Registry 完成依赖校验后冻结的确定性拓扑执行计划。
+- **Migration Ledger**：记录已应用 schema migration 版本、checksum 和执行结果的数据库表。
+- **BacktestRequest**：独立研究回测的唯一、不可变输入契约；必须精确绑定一项策略与一个日期选择器。
+- **交易日（signal date）**：策略可见数据的截止交易日；单日回测只在该日生成信号，收益标签只能读取该日之后由执行/持有 policy 允许的行情。
+- **数据截面（Data Snapshot）**：某次回测读取的表覆盖、watermark、行数、内容摘要、数据质量和缺口的不可变证据，不包含凭据。
+- **研究实验（Experiment）**：假设、候选策略版本、基线、时间切分、准入标准和回测证据的持久化记录；实验结果不能自动修改 formal 策略、权重或预设。
+- **失败归因（Failure Attribution）**：仅面向已成交且负收益/失败标签回测交易的类型化原因、证据引用、关联规则/因子、置信度和未知状态；无信号、数据缺口或未完成标签不属于失败归因。
+- **Agent 研究入口（Agent Research Gateway）**：后续自我优化 Agent 创建预检、单策略回测、重放、实验对照和失败归因查询的 P0 应用层 API；它不授予 formal 发布权限。
+- **业务库**：当前配置指向的 `ashare_workbench` MySQL 数据库。
+
+## Traceability
+
+### 一期残余问题追踪
 
 | 来源问题 | 二期需求 | 设计落点 | 任务落点 |
 |---|---|---|---|
@@ -52,31 +74,13 @@
 
 版本化 migration、在线 DDL 安全闸门和运行可观测性属于二期新增治理能力，不是一期候选的简单延续。
 
-## 3. 术语
+## Requirements
 
-- **RunRequest**：推荐运行唯一输入契约，覆盖 API、调度器、队列、子进程和断点恢复。
-- **RunCoordinator**：只负责运行阶段顺序、状态转换和错误策略的应用层编排器。
-- **Port**：生产调用者唯一允许依赖的公开 Protocol。
-- **Descriptor**：描述一个辅助数据集完整生命周期策略的不可变声明。
-- **Execution Plan**：Factor Registry 完成依赖校验后冻结的确定性拓扑执行计划。
-- **Migration Ledger**：记录已应用 schema migration 版本、checksum 和执行结果的数据库表。
-- **BacktestRequest**：独立研究回测的唯一、不可变输入契约；必须精确绑定一项策略与一个日期选择器。
-- **交易日（signal date）**：策略可见数据的截止交易日；单日回测只在该日生成信号，收益标签只能读取该日之后由执行/持有 policy 允许的行情。
-- **数据截面（Data Snapshot）**：某次回测读取的表覆盖、watermark、行数、内容摘要、数据质量和缺口的不可变证据，不包含凭据。
-- **研究实验（Experiment）**：假设、候选策略版本、基线、时间切分、准入标准和回测证据的持久化记录；实验结果不能自动修改 formal 策略、权重或预设。
-- **失败归因（Failure Attribution）**：仅面向已成交且负收益/失败标签回测交易的类型化原因、证据引用、关联规则/因子、置信度和未知状态；无信号、数据缺口或未完成标签不属于失败归因。
-- **Agent 研究入口（Agent Research Gateway）**：后续自我优化 Agent 创建预检、单策略回测、重放、实验对照和失败归因查询的 P0 应用层 API；它不授予 formal 发布权限。
-- **业务库**：当前配置指向的 `ashare_workbench` MySQL 数据库。
+### Requirement 1: 版本化数据库迁移
 
----
+**User Story:** 作为维护者，我希望数据库结构能够随代码安全演进，从而避免启动时静默修改失败或依赖人工重建数据库。
 
-## 4. 功能需求
-
-### 需求 1：版本化数据库迁移
-
-**用户故事：** 作为维护者，我希望数据库结构能够随代码安全演进，从而避免启动时静默修改失败或依赖人工重建数据库。
-
-#### 验收标准
+#### Acceptance Criteria
 
 1. WHEN 应用初始化数据库 THEN 系统 SHALL 在同一个专用、不归还连接池的 MySQL connection 上获取 migration lock、执行 ledger 检查与全部 migration，并在 finally 中释放 lock；`GET_LOCK` 返回 0 或 NULL 时必须失败。
 2. WHEN migration 成功应用 THEN 系统 SHALL 在 `schema_migrations` 记录 version、description、checksum、applied_at 和 execution_ms。
@@ -89,11 +93,11 @@
 9. THE existing `init_db` ad-hoc `_ensure_column`/`_ensure_index` 逻辑 SHALL 迁入有版本和测试的 migration，不再以 catch-and-ignore 作为成功语义；生产 schema 只由 migration runner 管理，`create_all` 仅用于不进入生产迁移流程的单元测试临时库。
 10. BEFORE 业务库执行索引、UNIQUE 或类型变更 THEN 系统 SHALL 只读预检表规模、自然键重复、磁盘余量和 metadata-lock blocker，并设置有限 lock wait/执行时限；预检失败必须停止且不得自动删除冲突数据。
 
-### 需求 2：唯一且可版本化的运行请求契约
+### Requirement 2: 唯一且可版本化的运行请求契约
 
-**用户故事：** 作为运行系统维护者，我希望所有入口共享同一个请求模型，从而避免字段在异步边界或恢复过程中丢失。
+**User Story:** 作为运行系统维护者，我希望所有入口共享同一个请求模型，从而避免字段在异步边界或恢复过程中丢失。
 
-#### 验收标准
+#### Acceptance Criteria
 
 1. THE system SHALL 定义不可变、类型化的 `RunRequest`，覆盖 run_mode、data_source、preset、skills、score_line、risk、review、refresh 和 trade_date override 等运行输入。
 2. WHEN API、调度器或内部任务创建运行 THEN 系统 SHALL 只通过同一个 parser/validator 构造 `RunRequest`。
@@ -104,11 +108,11 @@
 7. THE `recommendation_runs` table SHALL 先以 nullable expand migration 新增 `request_schema_version`、`request_json` 和 `execution_version`；只有成功回填且校验一致的行才能设置 schema version，旧 writer 切换前不得声明全局 DEFAULT 1。
 8. THE frequently queried columns（run_mode、status、trade_date、started_at）SHALL 继续使用独立列和索引，不要求查询 JSON。
 
-### 需求 3：显式运行状态机与薄编排器
+### Requirement 3: 显式运行状态机与薄编排器
 
-**用户故事：** 作为功能开发者，我希望新增运行阶段时只扩展一个阶段服务和状态定义，而不是修改数千行中央服务。
+**User Story:** 作为功能开发者，我希望新增运行阶段时只扩展一个阶段服务和状态定义，而不是修改数千行中央服务。
 
-#### 验收标准
+#### Acceptance Criteria
 
 1. THE system SHALL 定义有限的 RunPhase 和 RunStatus 转换表，逐条声明触发者、前置状态、目标状态、持久化原子性和恢复条件；非法转换必须立即失败。
 2. THE `RunCoordinator` SHALL 只负责阶段顺序、checkpoint、heartbeat、状态转换、错误分类和补偿调用。
@@ -119,11 +123,11 @@
 7. THE existing `workbench_service` SHALL 收缩为公开应用服务 facade 和查询入口，不再拥有完整流水线实现。
 8. WHEN 新增一个不改变既有数据结构的运行阶段 THEN 修改范围 SHALL 限于 phase 定义、阶段实现、装配和测试，不需要修改无关阶段。
 
-### 需求 4：策略身份单一来源
+### Requirement 4: 策略身份单一来源
 
-**用户故事：** 作为策略作者，我希望策略 ID、名称和版本只有一个权威来源，从而保证启用状态、结果归因和绩效统计一致。
+**User Story:** 作为策略作者，我希望策略 ID、名称和版本只有一个权威来源，从而保证启用状态、结果归因和绩效统计一致。
 
-#### 验收标准
+#### Acceptance Criteria
 
 1. THE `StrategySkill`/manifest SHALL 是 strategy_id、name、mode 和声明版本的唯一业务身份来源。
 2. THE imperative Python implementation SHALL 只提供策略计算行为，不重复声明可漂移的业务 ID 和名称。
@@ -133,11 +137,11 @@
 6. WHEN 策略返回 Signal THEN Signal.strategy_id SHALL 始终等于 Registry key。
 7. THE tests SHALL 覆盖身份 mismatch、实现不存在、版本变化和声明式/命令式统一分发。
 
-### 需求 5：完整且可信的 MarketSourcePort
+### Requirement 5: 完整且可信的 MarketSourcePort
 
-**用户故事：** 作为数据源开发者，我希望只实现公开 Port 就能接入生产路径，而不需要猜测隐藏方法。
+**User Story:** 作为数据源开发者，我希望只实现公开 Port 就能接入生产路径，而不需要猜测隐藏方法。
 
-#### 验收标准
+#### Acceptance Criteria
 
 1. THE `MarketSourcePort` SHALL 声明生产路径实际需要的全部 quote 和 daily-bar 能力。
 2. THE daily-bar 请求 SHALL 使用类型化 request/quote reference 表达 code、exchange、date range 和 fallback 所需信息。
@@ -146,11 +150,11 @@
 5. THE multi-source 与 in-memory adapter SHALL 具有一致的错误、空结果和部分失败语义。
 6. WHEN 单只股票拉取失败 THEN 是否降级、跳过或中止 SHALL 由显式 policy 决定并写入数据审计。
 
-### 需求 6：辅助数据全生命周期扩展点
+### Requirement 6: 辅助数据全生命周期扩展点
 
-**用户故事：** 作为数据工程开发者，我希望增加普通辅助数据集时只注册描述符和数据模型，而不修改中央运行编排。
+**User Story:** 作为数据工程开发者，我希望增加普通辅助数据集时只注册描述符和数据模型，而不修改中央运行编排。
 
-#### 验收标准
+#### Acceptance Criteria
 
 1. THE `AuxiliaryDatasetDescriptor` SHALL 声明 dataset key、model/repository、fetcher、normalizer、loader、coverage policy、refresh policy、natural key 和 `freshness_field`/`freshness_extractor`。
 2. WHEN 注册普通辅助数据集 THEN 通用驱动 SHALL 能完成 refresh → normalize → persist → load → coverage audit 全链路。
@@ -160,12 +164,13 @@
 6. WHEN 同一批次重复导入或两个 worker 并发导入相同自然键 THEN 最终 SHALL 只有一条逻辑记录且字段符合确定性更新策略。
 7. WHEN 数据集具有特殊拉取或加载逻辑 THEN 它 SHALL 通过 strategy/handler 注入，不得绕过统一审计和持久化入口。
 8. THE persistence layer SHALL 对 batch size、attempted/affected/failed rows、execute count 和 duration_ms 输出结构化指标；除非数据集使用显式 staging/查询方案，否则不得把 MySQL rowcount 推断成精确 inserted/updated 数。
+9. `institutional_survey` SHALL 永久作为审计专用、不可发布的辅助工件：因供应商未提供可核实的完整性合同，它不属于必须发布的生产 inventory，不得驱动 feature、预过滤、策略、推荐或任何 feature view。系统只可经显式类型化审计边界，在调用方拥有的事务内捕获全字段原始响应并持久化 immutable success/failure snapshot；该边界不得发布 active pointer、读取 pointer 或 legacy 数据，也不得推断 provider cap、分页、`has_more` 或 `count` 语义。
 
-### 需求 7：Factor 启动期执行计划
+### Requirement 7: Factor 启动期执行计划
 
-**用户故事：** 作为因子开发者，我希望依赖错误在应用启动时暴露，而不是等到第一轮推荐才失败。
+**User Story:** 作为因子开发者，我希望依赖错误在应用启动时暴露，而不是等到第一轮推荐才失败。
 
-#### 验收标准
+#### Acceptance Criteria
 
 1. WHEN Factor 注册完成 THEN bootstrap SHALL 立即校验重复 key、重复 output owner、悬空依赖和循环依赖。
 2. WHEN 校验成功 THEN Registry SHALL 生成并冻结确定性 ExecutionPlan。
@@ -173,11 +178,11 @@
 4. THE factor registration SHALL 使用显式 bootstrap，不依赖不可见的 import side effect。
 5. THE tests SHALL 使用独立可变 Registry 构造 fixture，不共享生产全局状态。
 
-### 需求 8：纯 Simulation 领域边界
+### Requirement 8: 纯 Simulation 领域边界
 
-**用户故事：** 作为回测维护者，我希望收益模拟可以脱离数据库独立测试和复用。
+**User Story:** 作为回测维护者，我希望收益模拟可以脱离数据库独立测试和复用。
 
-#### 验收标准
+#### Acceptance Criteria
 
 1. THE outcome simulation SHALL 接收不可变 RecommendationInput、BarInput 和 SimulationPolicy，不接收 ORM entity 或 Session。
 2. THE SimulationPolicy SHALL 显式包含手续费、滑点、止损止盈、持有期和价格约束。
@@ -186,11 +191,11 @@
 5. FOR ALL 固定输入序列，重复模拟 SHALL 返回完全一致的结果。
 6. THE existing outcome golden cases SHALL 在迁移后保持等价。
 
-### 需求 9：统一 Backtest 领域模型与分发
+### Requirement 9: 统一 Backtest 领域模型与分发
 
-**用户故事：** 作为策略研究开发者或后续自我优化 Agent，我希望通过二期 P0 研究入口指定一个策略和单日/日期区间，复用统一 Runner、Trade、Result、重放和实验比较能力，从而持续提高胜率、盈亏比并降低回撤，而不是复制 service/API/统计逻辑或直接改写 formal 配置。
+**User Story:** 作为策略研究开发者或后续自我优化 Agent，我希望通过二期 P0 研究入口指定一个策略和单日/日期区间，复用统一 Runner、Trade、Result、重放和实验比较能力，从而持续提高胜率、盈亏比并降低回撤，而不是复制 service/API/统计逻辑或直接改写 formal 配置。
 
-#### 验收标准
+#### Acceptance Criteria
 
 1. THE system SHALL 定义统一的 `BacktestRequest`、`Trade`、`EquityPoint`、`BacktestMetrics` 和 `BacktestResult`；独立策略研究 Backtest 不等同于 recommendation `RunRequest.run_mode=backtest`，后者仅表示推荐管线回放并通过 adapter 委托 Backtest Runner。
 2. THE Backtest Registry SHALL 以 strategy_type/version 注册实现并在 bootstrap 时校验重复和缺失实现。
@@ -217,11 +222,11 @@
 23. THE Agent Research Gateway SHALL 是二期 P0 应用入口；在广泛迁移全部历史回测家族前，系统 SHALL 先交付至少一个真实声明式策略的端到端垂直切片，覆盖 preflight → snapshot → 单日/区间执行 → candidate/trade → attribution → experiment comparison，并以同一稳定契约供后续策略接入。
 24. WHEN 二期进入最终验收 THEN `self-improve` 的 T1/T2/T3 研究流程 SHALL 只通过 Agent Research Gateway 创建新回测和实验，不再直接拼接旧 `/api/runs/backtest` payload、查询 `btrec_*` 作为新证据或修改数据库研究记录；旧入口仅承担外部兼容。
 
-### 需求 10：真实顶层编排与 MySQL 验收
+### Requirement 10: 真实顶层编排与 MySQL 验收
 
-**用户故事：** 作为维护者，我希望测试覆盖真实架构接线，而不仅是手工组合内部纯函数。
+**User Story:** 作为维护者，我希望测试覆盖真实架构接线，而不仅是手工组合内部纯函数。
 
-#### 验收标准
+#### Acceptance Criteria
 
 1. THE test suite SHALL 至少有一条直接执行 `RunCoordinator` 的确定性测试，覆盖 prepare → evaluate → review → persist 完整路径。
 2. THE coordinator test SHALL 使用 in-memory market source、fake review executor 和可回滚 repository，不访问外网。
@@ -231,11 +236,11 @@
 6. WHEN 运行二期目标回归 THEN 一期 golden-master、现有 API 投影和推荐结果 SHALL 保持等价。
 7. THE test harness SHALL NOT 对业务库执行 drop/truncate；CI 可使用随 Job 销毁的临时 MySQL 实例。
 
-### 需求 11：架构依赖与兼容面收口
+### Requirement 11: 架构依赖与兼容面收口
 
-**用户故事：** 作为代码审查者，我希望依赖规则能够自动检查，防止重构后再次出现跨层私有调用。
+**User Story:** 作为代码审查者，我希望依赖规则能够自动检查，防止重构后再次出现跨层私有调用。
 
-#### 验收标准
+#### Acceptance Criteria
 
 1. THE project SHALL 定义并自动验证依赖方向：API/scheduler 可依赖 application；application 可依赖 domain/engine 与 application-owned Ports；adapters/repositories 实现 Ports；domain/engine 不得依赖 application、ORM、adapter 或供应商。
 2. THE market_pool facade SHALL 不再 re-export `_persist_*`、`_load_*`、`_fetch_*`、`_upsert_by_key` 等私有实现。
@@ -244,11 +249,11 @@
 5. THE external HTTP API SHALL 保持兼容；内部 Python import 路径不要求兼容。
 6. THE CI SHALL 恢复前端 build，并增加纯 Python 测试、架构检查和 MySQL integration job。
 
-### 需求 12：可观测性、性能与交付质量
+### Requirement 12: 可观测性、性能与交付质量
 
-**用户故事：** 作为运维和维护人员，我希望能快速判断运行卡在哪个阶段、迁移是否成功以及重构是否引入性能回退。
+**User Story:** 作为运维和维护人员，我希望能快速判断运行卡在哪个阶段、迁移是否成功以及重构是否引入性能回退。
 
-#### 验收标准
+#### Acceptance Criteria
 
 1. THE coordinator SHALL 为每个 phase 输出 run_id、phase、status、duration_ms 和 stable_error_code 的结构化日志。
 2. THE health endpoint SHALL 区分 database unavailable、migration error 和 application degraded。
@@ -257,9 +262,7 @@
 5. WHEN 在固定环境完成预热后对同一 fixture 各执行至少 5 次推荐 coordinator THEN `median_v2 SHALL <= 1.20 * median_baseline`；超过阈值即验收失败，原因只能记录风险而不能替代通过。
 6. THE final delivery SHALL 包含需求追踪矩阵、真实 MySQL 验证记录、测试结果和未解决风险。
 
----
-
-## 5. 完成定义（Definition of Done）
+## Definition of Done
 
 本 Spec 只有同时满足以下条件才可标记完成：
 

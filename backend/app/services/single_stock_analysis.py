@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.models.tables import DailyKbar, Preset, PresetSkill, Stock, StockQuote
 from app.services.market_data import _build_stock_from_bars
-from app.services.market_pool import _normalize_trade_date, _latest_allowed_bar_date
+from app.engine.trading_calendar import normalize_trade_date, latest_allowed_bar_date
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +42,8 @@ def analyze_stock(
 
     # 1. 确定目标日期
     if not trade_date:
-        trade_date = _latest_allowed_bar_date()
-    trade_date = _normalize_trade_date(trade_date)
+        trade_date = latest_allowed_bar_date()
+    trade_date = normalize_trade_date(trade_date)
 
     # 2. 加载股票基础信息
     stock = db.scalar(select(Stock).where(Stock.code == code))
@@ -159,7 +159,10 @@ def analyze_stock(
     # 8. 基础短线策略特征丰富（与推荐管线一致）
     from app.services.feature_builder import build_features
     from app.services.market_data import _build_quote_snapshot, _candidate_filter_summary
-    from app.services.market_pool import inject_limit_up_flags
+    from app.services.auxiliary.application import (
+        inject_auxiliary_prefilter_flags,
+        load_auxiliary_feature_views,
+    )
 
     # 提取 enrich 前的 profile（build_features 会 pop 掉 dsa_profile）
     profile_pre = dict(stock_result.get("dsa_profile") or {})
@@ -170,10 +173,8 @@ def analyze_stock(
     snapshot["main_industries"] = []
     snapshot["breadth"] = snapshot.get("breadth", {})
     snapshot["breadth"]["regime"] = "未知"
-    # 注入涨停板字段（与推荐管线 workbench_service.py:1483 一致）。
-    # limit-up-reseal-relay 等 skill 依赖 is_limit_up/limit_up_open_times/limit_up_fd_amount_yi，
-    # 缺失时 LLM agent 报"核心数据缺失"→ 误判 oppose score=35（实际是涨停股）。
-    inject_limit_up_flags(db, [stock_result], trade_date=trade_date)
+    prefilter_auxiliary = load_auxiliary_feature_views(db, [code], trade_date=trade_date)
+    inject_auxiliary_prefilter_flags([stock_result], prefilter_auxiliary)
     enriched_list = build_features([stock_result], snapshot)
     if enriched_list:
         stock_result = enriched_list[0]

@@ -502,7 +502,7 @@ class BacktestRequest(CanonicalValue):
 @dataclass(frozen=True)
 class AuxiliaryDataRequirement(CanonicalValue):
     key: str
-    minimum_coverage: float = 1.0
+    minimum_coverage: float = 0.95
     release_lag_days: int = 0
 
     def __post_init__(self) -> None:
@@ -539,7 +539,7 @@ class DataRequirement(CanonicalValue):
     requires_minute_bars: bool = False
     benchmark_code: str | None = None
     auxiliary_datasets: tuple[AuxiliaryDataRequirement, ...] = ()
-    minimum_coverage: float = 1.0
+    minimum_coverage: float = 0.95
 
     def __post_init__(self) -> None:
         _require_non_negative_int(self.lookback_bars, "lookback_bars", BacktestErrorCode.INVALID_DATA_REQUIREMENT)

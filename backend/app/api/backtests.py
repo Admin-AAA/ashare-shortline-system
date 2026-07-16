@@ -178,6 +178,7 @@ class BacktestRequestBody(_StrictModel):
     execution_policy: ExecutionPolicyRequest = Field(default_factory=ExecutionPolicyRequest)
     data_policy: BacktestDataPolicyRequest = Field(default_factory=BacktestDataPolicyRequest)
     target_codes: list[StockCode] = Field(default_factory=list, max_length=50)
+    parameter_set: dict[str, Any] = Field(default_factory=dict)
     force_rerun: bool = False
 
     @field_validator("strategy_id")
@@ -226,6 +227,7 @@ class BacktestRequestBody(_StrictModel):
             execution_policy=self.execution_policy.to_domain(),
             target_codes=tuple(self.target_codes),
             data_policy=self.data_policy.to_domain(),
+            parameter_set=self.parameter_set,
             force_rerun=self.force_rerun,
         )
 

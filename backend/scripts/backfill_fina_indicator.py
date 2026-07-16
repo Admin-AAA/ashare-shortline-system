@@ -29,12 +29,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from datetime import date
+
 from sqlalchemy import func, select
 
 from app.db.session import SessionLocal
 from app.models.tables import FinaIndicator, Stock
-from app.services.tushare_client import fetch_fina_indicator
-from app.services.market_pool import _persist_fina_indicator
+from app.services.auxiliary.application import run_auxiliary_application
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,30 +56,21 @@ def _resolve_codes(db, codes_arg: str | None, all_flag: bool) -> list[str]:
 
 
 def backfill_codes(db, codes: list[str], periods: int) -> dict:
-    """逐股票拉取财务指标并入库。返回统计。"""
-    stored = 0
-    skipped = 0
-    errors = 0
-    total = len(codes)
-
-    for i, code in enumerate(codes, start=1):
-        try:
-            rows = fetch_fina_indicator(code, limit=periods)
-            if not rows:
-                skipped += 1
-                continue
-            _persist_fina_indicator(db, rows)
-            stored += len(rows)
-        except Exception as e:
-            db.rollback()
-            errors += 1
-            logger.warning("  %s 失败: %s", code, str(e)[:80])
-
-        if total > 10 and (i % 50 == 0 or i == total):
-            logger.info("  进度 %d/%d | 入库%d 跳过%d 错误%d", i, total, stored, skipped, errors)
-
-    logger.info("完成: 入库%d 跳过%d 错误%d", stored, skipped, errors)
-    return {"stored": stored, "skipped": skipped, "errors": errors}
+    """Backfill financial indicators through the S4 frozen state descriptor."""
+    del periods  # The frozen descriptor owns its documented four-report source window.
+    result = run_auxiliary_application(
+        db,
+        instruments=codes,
+        trade_date=date.today(),
+        refresh=True,
+        datasets=("fina_indicator",),
+    )
+    item = result.orchestrated.result_for("fina_indicator")
+    if item.errors:
+        raise RuntimeError(", ".join(error.message for error in item.errors))
+    stored = item.coverage.record_count
+    logger.info("完成: 入库%d", stored)
+    return {"stored": stored, "skipped": max(0, len(codes) - stored), "errors": 0}
 
 
 def main():

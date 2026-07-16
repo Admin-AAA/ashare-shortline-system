@@ -5,6 +5,8 @@ import json
 
 import pytest
 
+from app.core.config import get_settings
+from app.engine.skill_loader import load_skills
 from app.models.tables import RecommendationRun
 from app.services import workbench_service
 from app.services.backtest_service import _persist_backtest_run
@@ -78,15 +80,13 @@ def test_enqueue_defaults_to_formal_only_in_run_request_parser(monkeypatch, db):
 def test_legacy_backtest_entry_persists_canonical_backtest_mode(db):
     """The legacy recommendation backtest writer cannot diverge from its request."""
 
-    class Skill:
-        skill_id = "chip-single-peak-breakout"
-
+    skill = next(skill for skill in load_skills(get_settings().skills_dir) if skill.executable)
     run_id = _persist_backtest_run(
         db,
         "2026-07-14",
         universe_count=10,
         recommended_count=1,
-        skills=[Skill()],
+        skills=[skill],
         score_line=72.0,
     )
     run = db.get(RecommendationRun, run_id)

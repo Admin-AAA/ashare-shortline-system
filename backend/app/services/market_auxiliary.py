@@ -11,6 +11,7 @@ from hashlib import sha1
 from typing import Any
 
 from app.core.config import get_settings
+from app.engine.trading_calendar import normalize_trade_date as _normalize_trade_date
 from app.services.market_data import _split_sources
 
 logger = logging.getLogger(__name__)
@@ -37,18 +38,6 @@ def _news_sources(settings: Any) -> list[str]:
 
 
 # ── Dispatch ────────────────────────────────────────────────────────────
-
-def _normalize_trade_date(value: Any) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    if len(raw) >= 10 and raw[4] == "-" and raw[7] == "-":
-        return raw[:10]
-    digits = "".join(ch for ch in raw if ch.isdigit())
-    if len(digits) >= 8:
-        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
-    return raw[:10]
-
 
 def _compact_trade_date(value: Any) -> str:
     return _normalize_trade_date(value).replace("-", "")

@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime
 from hashlib import sha256
 import json
+import math
 from typing import Any
 from uuid import uuid4
 
@@ -1043,6 +1044,8 @@ class ResearchBacktestRepository:
         )
         row = self.get_experiment(experiment_id)
         conclusion_json = _canonical_json(conclusion, field="conclusion")
+        if status == "promotion_candidate":
+            _validate_promotion_candidate_acceptance(row, _load_json(conclusion_json))
         if row.status == status and row.conclusion_json == conclusion_json:
             return row
         if row.status != "frozen":
@@ -1316,6 +1319,79 @@ def _baseline_signal_dates(run: Any) -> set[str] | None:
         if dates:
             return dates
     return None
+
+
+def _validate_promotion_candidate_acceptance(row: Any, conclusion: Any) -> None:
+    """Allow promotion only when frozen OOS acceptance gates are evidenced."""
+
+    if not isinstance(conclusion, Mapping):
+        raise ExperimentValidationError("promotion_candidate conclusion 必须是 object。")
+    metrics = conclusion.get("out_of_sample_metrics")
+    if not isinstance(metrics, Mapping):
+        raise ExperimentValidationError(
+            "promotion_candidate 必须提供 out_of_sample_metrics。",
+            details={"required_field": "out_of_sample_metrics"},
+        )
+    acceptance = _load_json(row.acceptance_json)
+    if not isinstance(acceptance, Mapping):
+        raise ExperimentValidationError("冻结 acceptance_json 不是 object。")
+
+    def metric(name: str, *aliases: str) -> float:
+        for key in (name, *aliases):
+            value = metrics.get(key)
+            if isinstance(value, bool):
+                continue
+            try:
+                normalized = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(normalized):
+                return normalized
+        raise ExperimentValidationError(
+            f"promotion_candidate 缺少有效 OOS 指标 {name}。",
+            details={"required_metric": name},
+        )
+
+    expected = {
+        "min_trade_count": acceptance.get("min_trade_count"),
+        "min_win_rate_pct": acceptance.get("min_win_rate_pct"),
+        "min_profit_loss_ratio": acceptance.get("min_profit_loss_ratio"),
+        "min_average_net_return_pct": acceptance.get("min_average_net_return_pct"),
+        "max_drawdown_pct": acceptance.get("max_drawdown_pct"),
+    }
+    try:
+        thresholds = {key: float(value) for key, value in expected.items()}
+    except (TypeError, ValueError) as exc:
+        raise ExperimentValidationError("冻结 acceptance 指标不完整或非法。") from exc
+    if any(not math.isfinite(value) for value in thresholds.values()):
+        raise ExperimentValidationError("冻结 acceptance 指标必须是有限数。")
+
+    observed = {
+        "min_trade_count": metric("executed_trade_count", "trade_count"),
+        "min_win_rate_pct": metric("win_rate_pct"),
+        "min_profit_loss_ratio": metric("profit_loss_ratio"),
+        "min_average_net_return_pct": metric("average_net_return_pct"),
+        "max_drawdown_pct": metric("max_drawdown_pct"),
+    }
+    failures: dict[str, dict[str, float]] = {}
+    for key in (
+        "min_trade_count",
+        "min_win_rate_pct",
+        "min_profit_loss_ratio",
+        "min_average_net_return_pct",
+    ):
+        if observed[key] < thresholds[key]:
+            failures[key] = {"actual": observed[key], "required_minimum": thresholds[key]}
+    if observed["max_drawdown_pct"] > thresholds["max_drawdown_pct"]:
+        failures["max_drawdown_pct"] = {
+            "actual": observed["max_drawdown_pct"],
+            "required_maximum": thresholds["max_drawdown_pct"],
+        }
+    if failures:
+        raise ExperimentValidationError(
+            "out-of-sample 指标未满足冻结 promotion acceptance。",
+            details={"failed_gates": failures, "out_of_sample_metrics": observed},
+        )
 
 
 def _trade_payload(trade: Any) -> Mapping[str, Any]:

@@ -760,13 +760,17 @@ _SCORED_FEATURES = {
 
 def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot: dict[str, Any], _aux_override: dict | None = None) -> None:
     """从本地辅助数据池加载真实数据，覆盖 SYNTHETIC 默认值。"""
-    from app.services.market_pool import load_auxiliary_for_stocks
+    from app.services.auxiliary.application import load_auxiliary_feature_views
 
     codes = [s["code"] for s in stocks]
     if not codes:
         return
     trade_date = str(snapshot.get("trade_date") or "")
-    aux = _aux_override if _aux_override is not None else load_auxiliary_for_stocks(db, codes, trade_date=trade_date)
+    aux = _aux_override if _aux_override is not None else load_auxiliary_feature_views(
+        db,
+        codes,
+        trade_date=trade_date,
+    )
 
     limit_up_map = aux.get("limit_up", {})
     concept_map = aux.get("concept_sectors", {})

@@ -75,11 +75,18 @@ from app.services.market_pool.history_maturity import (
     load_history_maturity_map as _load_history_maturity_map,
 )
 from app.services import market_pool_adapters as pool_adapters
+from app.services.market_source.port import (
+    BatchStatus,
+    DailyBarRequest,
+    MarketSourceError,
+    QuoteRef,
+    QuoteRequest,
+)
 
 _quote_sources = pool_adapters.quote_sources
 _kline_sources = pool_adapters.kline_sources
-_fetch_quotes = pool_adapters.fetch_quote_rows
-_fetch_kline = pool_adapters.fetch_kline_rows
+_fetch_quote_batch = pool_adapters.fetch_quote_batch
+_fetch_daily_bar_batch = pool_adapters.fetch_daily_bar_batch
 
 
 NUMERIC_QUOTE_FIELDS = [
@@ -821,6 +828,13 @@ def _cached_quotes_cover_latest_quote_date(quotes: list[dict[str, Any]]) -> bool
     return bool(latest_cached_date and latest_cached_date >= latest_quote_date)
 
 
+def _batch_error_detail(errors: tuple[MarketSourceError, ...], fallback: str) -> str:
+    """Render typed adapter errors into the pool's persisted run evidence."""
+
+    messages = [error.message for error in errors if error.message]
+    return " | ".join(messages) if messages else fallback
+
+
 def _refresh_quote_pool(
     db: Session,
     settings: Any,
@@ -834,19 +848,30 @@ def _refresh_quote_pool(
     for source in sources:
         start = time.perf_counter()
         try:
-            rows = _fetch_quotes(source, settings)
+            batch = _fetch_quote_batch(source, settings, QuoteRequest())
             latency_ms = (time.perf_counter() - start) * 1000
-            if not rows:
+            if batch.audit.status is BatchStatus.FAILURE:
+                detail = _batch_error_detail(batch.errors, "quote retrieval failed")
+                _record_source_health(db, source, "quote", "failure", error=detail, latency_ms=latency_ms)
+                errors.append(f"{source}: {detail}")
+                continue
+
+            rows = batch.as_legacy_rows()
+            if batch.audit.status is BatchStatus.EMPTY or not rows:
                 _record_source_health(db, source, "quote", "empty", latency_ms=latency_ms)
                 errors.append(f"{source}: empty result")
                 continue
-            trade_date = _latest_trade_date_from_quotes(rows)
+            if batch.audit.status is BatchStatus.PARTIAL:
+                errors.append(
+                    f"{source}: partial result: "
+                    f"{_batch_error_detail(batch.errors, 'incomplete quote batch')}"
+                )
             _record_source_health(db, source, "quote", "success", latency_ms=latency_ms)
             for row in rows:
                 code = str(row.get("code") or "")
                 if code:
                     grouped[code].append(row)
-        except Exception as exc:  # noqa: BLE001 - errors become run evidence
+        except Exception as exc:  # noqa: BLE001 - unexpected adapter boundary failure is run evidence
             latency_ms = (time.perf_counter() - start) * 1000
             _record_source_health(db, source, "quote", "failure", error=str(exc), latency_ms=latency_ms)
             errors.append(f"{source}: {exc}")
@@ -1103,19 +1128,44 @@ def _refresh_bars_for_quote(
     # 增量拉取：查本地已存数据的最新日期，只拉缺失的天数
     start_date = _incremental_kline_start(db, quote["code"], settings)
     incremental_mode = start_date is not None
+    reference = QuoteRef.from_row(quote)
 
     for source in sources:
         start = time.perf_counter()
         try:
-            bars = _fetch_kline(source, quote, settings, start_date=start_date)
+            batch = _fetch_daily_bar_batch(
+                source,
+                settings,
+                DailyBarRequest((reference,), start_date=start_date),
+            )
             latency_ms = (time.perf_counter() - start) * 1000
+            if batch.audit.status is BatchStatus.FAILURE:
+                detail = _batch_error_detail(batch.errors, "daily-bar retrieval failed")
+                errors.append(f"{source}: {detail}")
+                _record_source_health(db, source, "kline", "failure", error=detail, latency_ms=latency_ms)
+                continue
+
+            bars = [bar.as_legacy_row() for bar in batch.bars_by_instrument.get(reference, ())]
+            if bars:
+                # The typed request intentionally carries only stable identity.
+                # Preserve the provider's former quote-row fallback at the
+                # boundary where that richer quote context still exists.
+                bars[-1]["turnover_rate"] = (
+                    _num(bars[-1].get("turnover_rate"))
+                    or _num(quote.get("turnover_rate"))
+                )
+            if batch.audit.status is BatchStatus.PARTIAL:
+                errors.append(
+                    f"{source}: partial result: "
+                    f"{_batch_error_detail(batch.errors, 'incomplete daily-bar batch')}"
+                )
             if len(bars) < 30 and not incremental_mode:
                 _record_source_health(db, source, "kline", "empty", latency_ms=latency_ms)
                 errors.append(f"{source}: 日K不足30条")
                 continue
             _record_source_health(db, source, "kline", "success", latency_ms=latency_ms)
             return bars[-settings.market_kline_days :] if not incremental_mode else bars, source, errors
-        except Exception as exc:  # noqa: BLE001 - returned as run evidence
+        except Exception as exc:  # noqa: BLE001 - unexpected adapter boundary failure is run evidence
             latency_ms = (time.perf_counter() - start) * 1000
             message = f"{source}: {exc}"
             errors.append(message)

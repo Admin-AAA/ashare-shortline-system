@@ -117,7 +117,7 @@ def get_market_universe() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     cached_bars_map: dict[str, list[dict[str, Any]]] = {}
     try:
         from app.db.session import SessionLocal
-        from app.services.market_pool import _load_cached_bars_batch
+        from app.services.market_pool.core import _load_cached_bars_batch
         db = SessionLocal()
         try:
             cached_bars_map = _load_cached_bars_batch(db, candidate_codes, settings.market_kline_days)

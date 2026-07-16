@@ -8,7 +8,6 @@ from .port import (
     DailyBar,
     DailyBarBatch,
     DailyBarRequest,
-    DateRange,
     FailurePolicy,
     ItemAudit,
     MarketSourceAudit,
@@ -21,7 +20,6 @@ from .port import (
     QuoteBatch,
     QuoteRef,
     QuoteRequest,
-    QuoteScope,
 )
 
 __all__ = [
@@ -29,12 +27,10 @@ __all__ = [
     "DailyBar",
     "DailyBarBatch",
     "DailyBarRequest",
-    "DateRange",
     "FailurePolicy",
     "InMemoryMarketSourceAdapter",
-    "LocalPoolMarketSourceAdapter",
-    "load_legacy_market_universe",
     "ItemAudit",
+    "LocalPoolMarketSourceAdapter",
     "MarketSourceAudit",
     "MarketSourceError",
     "MarketSourceErrorCode",
@@ -45,5 +41,5 @@ __all__ = [
     "QuoteBatch",
     "QuoteRef",
     "QuoteRequest",
-    "QuoteScope",
+    "load_legacy_market_universe",
 ]

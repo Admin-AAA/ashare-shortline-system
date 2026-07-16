@@ -16,7 +16,7 @@ from app.engine.strategy_runner import run_strategy
 from app.engine.aggregator import aggregate
 from app.models.tables import DailyKbar, Stock, StockQuote
 from app.services.market_data import _build_stock_from_bars, _build_quote_snapshot
-from app.services.market_pool import _normalize_trade_date, _latest_allowed_bar_date
+from app.engine.trading_calendar import normalize_trade_date, latest_allowed_bar_date
 from app.services.feature_builder import build_features
 from sqlalchemy import select
 
@@ -56,8 +56,8 @@ def analyze_stock_matrix(
 
     # ── 2. 加载股票数据 ──
     if not trade_date:
-        trade_date = _latest_allowed_bar_date()
-    trade_date = _normalize_trade_date(trade_date)
+        trade_date = latest_allowed_bar_date()
+    trade_date = normalize_trade_date(trade_date)
 
     stock = db.scalar(select(Stock).where(Stock.code == code))
     if not stock:

@@ -16,7 +16,7 @@ from dataclasses import dataclass, replace
 from datetime import date, timedelta
 import json
 import math
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Protocol, Sequence, runtime_checkable
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -36,6 +36,7 @@ from app.engine.backtest import (
     CoverageResult,
     CoverageStatus,
     DataGap,
+    DataRequirement,
     DataSnapshot,
     DateRange,
     EvidenceRef,
@@ -48,6 +49,7 @@ from app.engine.backtest import (
     SignalInputRequirement,
     SingleDate,
     SnapshotArtifactUnavailableError,
+    SnapshotIntegrityError,
     Trade,
     canonical_fingerprint,
     canonical_json,
@@ -61,19 +63,48 @@ from app.engine.strategy import (
     StrategyError,
     StrategyRegistry,
     build_registry_from_skills,
+    validate_backtest_parameter_set,
 )
-from app.models.tables import BacktestInputArtifact, DailyKbar, Stock
+from app.models.tables import DailyKbar, IndexDaily, MinuteKbar, Stock
 from app.services.backtest.research_repository import (
+    ArtifactIntegrityError,
     ResearchBacktestRepository,
     ResearchRecordNotFound,
     ResearchRepositoryError,
 )
+from app.services.factors.registry import bootstrap_default_factor_registry
+from app.services.runs.contracts import (
+    CanonicalExecutionVersionBuilder,
+    ExecutionPolicyIdentity,
+    ExecutionVersionInput,
+    StrategyExecutionFingerprint,
+    application_identity_from_environment,
+)
 
 
-RUNNER_EXECUTION_VERSION = "research-backtest-runner/v1"
 MINIMUM_SIGNAL_SCORE = 70.0
 MAX_SIGNAL_DATES = 250
 LOOKBACK_CALENDAR_DAYS = 420
+
+
+def _research_execution_version(request: BacktestRequest, descriptor: StrategyDescriptor) -> str:
+    """Build the complete, secret-free audit identity for one P0 attempt."""
+    factor_plan = bootstrap_default_factor_registry()
+    version_input = ExecutionVersionInput(
+        application=application_identity_from_environment(),
+        request_schema_version=request.schema_version,
+        execution_policy=ExecutionPolicyIdentity(
+            policy_id="research-backtest-execution",
+            policy_version=f"v{request.execution_policy.schema_version}",
+            settings={
+                **request.execution_policy.canonical_payload(),
+                "minimum_signal_score": _minimum_signal_score(request),
+            },
+        ),
+        strategy_fingerprints=(StrategyExecutionFingerprint.from_descriptor(descriptor),),
+        factor_execution_plan_fingerprint=factor_plan.fingerprint,
+    )
+    return CanonicalExecutionVersionBuilder().build(version_input)
 
 
 class ResearchBacktestRunnerError(RuntimeError):
@@ -123,10 +154,7 @@ class ArtifactSignalDateDataReader:
         del requirement
         if signal_date != self._artifact.signal_date:
             raise SnapshotArtifactUnavailableError(self._artifact.artifact_id)
-        row = self._repository.get_artifact(
-            self._artifact.artifact_id,
-            expected_content_hash=self._artifact.content_hash,
-        )
+        row = _read_referenced_artifact(self._repository, self._artifact)
         payload = _decode_artifact_payload(bytes(row.payload), self._artifact.artifact_id)
         visible_at = payload.get("visible_at")
         stocks = payload.get("stocks")
@@ -161,10 +189,7 @@ class ArtifactOutcomeDataReader:
         del policy
         if signal_date != self._artifact.signal_date:
             raise SnapshotArtifactUnavailableError(self._artifact.artifact_id)
-        row = self._repository.get_artifact(
-            self._artifact.artifact_id,
-            expected_content_hash=self._artifact.content_hash,
-        )
+        row = _read_referenced_artifact(self._repository, self._artifact)
         payload = _decode_artifact_payload(bytes(row.payload), self._artifact.artifact_id)
         bars_by_code = payload.get("bars_by_code")
         if not isinstance(bars_by_code, Mapping):
@@ -186,13 +211,219 @@ class ArtifactOutcomeDataReader:
         )
 
 
-class LocalResearchSnapshotBuilder:
-    """Capture local daily-bar inputs once, with no refresh/network capability."""
+def _read_referenced_artifact(
+    repository: ResearchBacktestRepository,
+    artifact: ArtifactRef,
+) -> Any:
+    """Load exactly one referenced artifact and normalize repository failures."""
+
+    try:
+        return repository.get_artifact(
+            artifact.artifact_id,
+            expected_content_hash=artifact.content_hash,
+        )
+    except ResearchRecordNotFound as exc:
+        raise SnapshotArtifactUnavailableError(artifact.artifact_id) from exc
+    except ArtifactIntegrityError as exc:
+        actual_hash = str(
+            exc.details.get("expected_hash")
+            or exc.details.get("actual_hash")
+            or artifact.content_hash
+        )
+        raise SnapshotIntegrityError(
+            artifact.artifact_id,
+            expected_hash=artifact.content_hash,
+            actual_hash=actual_hash,
+        ) from exc
+
+
+@runtime_checkable
+class DataReadinessPort(Protocol):
+    """Read-only preflight capability for a frozen strategy data contract."""
+
+    def assess(
+        self,
+        *,
+        signal_date: str,
+        codes: Sequence[str],
+        daily_rows_by_code: Mapping[str, Sequence[DailyKbar]],
+        data_requirement: DataRequirement,
+        execution_policy: ExecutionPolicy,
+    ) -> CoverageResult:
+        """Return observable readiness without refreshing or mutating source data."""
+        ...
+
+
+class LocalDataReadinessAdapter:
+    """Local-only ``DataReadinessPort`` implementation for P0 snapshot capture."""
 
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def capture(self, request: BacktestRequest) -> SnapshotBundle:
+    def assess(
+        self,
+        *,
+        signal_date: str,
+        codes: Sequence[str],
+        daily_rows_by_code: Mapping[str, Sequence[DailyKbar]],
+        data_requirement: DataRequirement,
+        execution_policy: ExecutionPolicy,
+    ) -> CoverageResult:
+        normalized_codes = tuple(sorted({str(code).strip() for code in codes if str(code).strip()}))
+        if not normalized_codes:
+            gap = DataGap(
+                signal_date,
+                "daily_kbars_signal_input",
+                BacktestErrorCode.INSUFFICIENT_DATA,
+                "no local daily-bar codes are available on the signal date",
+            )
+            return CoverageResult(signal_date, CoverageStatus.INSUFFICIENT_DATA, 0.0, (gap,))
+
+        daily_ready: list[str] = []
+        future_ready: list[str] = []
+        required_future_bars = max(
+            execution_policy.entry_lookahead_days + execution_policy.horizon_days,
+            data_requirement.future_label_horizon_days,
+        )
+        for code in normalized_codes:
+            rows = tuple(daily_rows_by_code.get(code, ()))
+            history = tuple(
+                row
+                for row in rows
+                if str(row.trade_date) <= signal_date and _has_valid_ohlc(row)
+            )
+            future = tuple(
+                row
+                for row in rows
+                if str(row.trade_date) > signal_date and _has_valid_ohlc(row)
+            )
+            if not data_requirement.requires_daily_bars or len(history) >= data_requirement.lookback_bars:
+                daily_ready.append(code)
+            if len(future) >= required_future_bars:
+                future_ready.append(code)
+
+        total = len(normalized_codes)
+        ratios = [len(daily_ready) / total, len(future_ready) / total]
+        gaps: list[DataGap] = []
+        hard_insufficiency = False
+        if data_requirement.requires_daily_bars and len(daily_ready) / total < data_requirement.minimum_coverage:
+            missing = [code for code in normalized_codes if code not in set(daily_ready)]
+            gaps.append(
+                DataGap(
+                    signal_date,
+                    "daily_kbars_lookback",
+                    BacktestErrorCode.INSUFFICIENT_DATA,
+                    (
+                        f"requires {data_requirement.lookback_bars} valid local daily bars; "
+                        f"missing for {len(missing)}/{total} codes: {', '.join(missing[:10])}"
+                    ),
+                )
+            )
+            hard_insufficiency = True
+        if len(future_ready) / total < data_requirement.minimum_coverage:
+            missing = [code for code in normalized_codes if code not in set(future_ready)]
+            gaps.append(
+                DataGap(
+                    signal_date,
+                    "daily_kbars_future_window",
+                    BacktestErrorCode.INCOMPLETE_EVALUATION,
+                    (
+                        f"requires {required_future_bars} valid future daily bars "
+                        f"(entry lookahead + horizon); missing for {len(missing)}/{total} codes: "
+                        f"{', '.join(missing[:10])}"
+                    ),
+                )
+            )
+        if data_requirement.requires_minute_bars:
+            minute_codes = {
+                str(code)
+                for code in self._session.scalars(
+                    select(MinuteKbar.code).where(
+                        MinuteKbar.code.in_(normalized_codes),
+                        MinuteKbar.trade_date == signal_date,
+                    )
+                ).all()
+            }
+            minute_ratio = len(minute_codes) / total
+            ratios.append(minute_ratio)
+            if minute_ratio < data_requirement.minimum_coverage:
+                missing = [code for code in normalized_codes if code not in minute_codes]
+                gaps.append(
+                    DataGap(
+                        signal_date,
+                        "minute_kbars_signal_input",
+                        BacktestErrorCode.INSUFFICIENT_DATA,
+                        f"local minute bars missing for {len(missing)}/{total} codes: {', '.join(missing[:10])}",
+                    )
+                )
+                hard_insufficiency = True
+        if data_requirement.benchmark_code:
+            benchmark_present = self._session.scalar(
+                select(IndexDaily.id)
+                .where(
+                    IndexDaily.ts_code == data_requirement.benchmark_code,
+                    IndexDaily.trade_date == signal_date,
+                )
+                .limit(1)
+            )
+            ratios.append(1.0 if benchmark_present is not None else 0.0)
+            if benchmark_present is None:
+                gaps.append(
+                    DataGap(
+                        signal_date,
+                        f"benchmark:{data_requirement.benchmark_code}",
+                        BacktestErrorCode.INSUFFICIENT_DATA,
+                        "required benchmark is unavailable in local index_daily",
+                    )
+                )
+                hard_insufficiency = True
+        unavailable_auxiliary = tuple(
+            requirement.key
+            for requirement in data_requirement.auxiliary_datasets
+            if requirement.minimum_coverage > 0
+        )
+        if unavailable_auxiliary:
+            ratios.append(0.0)
+            gaps.append(
+                DataGap(
+                    signal_date,
+                    "auxiliary_datasets",
+                    BacktestErrorCode.INSUFFICIENT_DATA,
+                    "local auxiliary readiness is unavailable for: " + ", ".join(unavailable_auxiliary),
+                )
+            )
+            hard_insufficiency = True
+
+        coverage_ratio = min(ratios) if ratios else 0.0
+        if not gaps:
+            return CoverageResult(signal_date, CoverageStatus.READY, coverage_ratio)
+        status = CoverageStatus.INSUFFICIENT_DATA if hard_insufficiency else CoverageStatus.INCOMPLETE_EVALUATION
+        return CoverageResult(signal_date, status, coverage_ratio, tuple(gaps))
+
+
+class LocalResearchSnapshotBuilder:
+    """Capture local daily-bar inputs once, with no refresh/network capability."""
+
+    def __init__(
+        self,
+        session: Session,
+        *,
+        data_readiness: DataReadinessPort | None = None,
+    ) -> None:
+        self._session = session
+        self._data_readiness = data_readiness or LocalDataReadinessAdapter(session)
+
+    def capture(
+        self,
+        request: BacktestRequest,
+        *,
+        data_requirement: DataRequirement | None = None,
+    ) -> SnapshotBundle:
+        requirement = data_requirement or DataRequirement(
+            lookback_bars=60,
+            future_label_horizon_days=0,
+            requires_daily_bars=True,
+        )
         dates = self._signal_dates(request)
         artifact_namespace = canonical_fingerprint(
             {
@@ -200,6 +431,7 @@ class LocalResearchSnapshotBuilder:
                 "target_codes": request.target_codes,
                 "execution_policy": request.execution_policy,
                 "data_policy": request.data_policy,
+                "data_requirement": requirement,
             }
         )[:20]
         if len(dates) > MAX_SIGNAL_DATES:
@@ -212,11 +444,13 @@ class LocalResearchSnapshotBuilder:
 
         first_date = date.fromisoformat(dates[0])
         last_date = date.fromisoformat(dates[-1])
-        history_start = (first_date - timedelta(days=LOOKBACK_CALENDAR_DAYS)).isoformat()
-        outcome_end = (
-            last_date
-            + timedelta(days=request.execution_policy.entry_lookahead_days + request.execution_policy.horizon_days + 14)
-        ).isoformat()
+        lookback_calendar_days = max(LOOKBACK_CALENDAR_DAYS, requirement.lookback_bars * 3)
+        history_start = (first_date - timedelta(days=lookback_calendar_days)).isoformat()
+        future_window_days = max(
+            request.execution_policy.entry_lookahead_days + request.execution_policy.horizon_days,
+            requirement.future_label_horizon_days,
+        )
+        outcome_end = (last_date + timedelta(days=future_window_days + 14)).isoformat()
 
         signal_rows = list(
             self._session.scalars(
@@ -265,6 +499,13 @@ class LocalResearchSnapshotBuilder:
         gaps: list[DataGap] = []
         for signal_date in dates:
             raw_signal_rows = rows_at_date.get(signal_date, ())
+            readiness = self._data_readiness.assess(
+                signal_date=signal_date,
+                codes=tuple(str(row.code) for row in raw_signal_rows),
+                daily_rows_by_code=rows_by_code,
+                data_requirement=requirement,
+                execution_policy=request.execution_policy,
+            )
             signal_stocks: list[dict[str, Any]] = []
             invalid_signal_rows = 0
             for row in raw_signal_rows:
@@ -326,27 +567,37 @@ class LocalResearchSnapshotBuilder:
             payloads[outcome_ref.artifact_id] = outcome_bytes
 
             has_future_bars = outcome_bar_count > 0
-            if signal_stocks and has_future_bars and invalid_signal_rows == 0:
-                coverage[signal_date] = CoverageResult(signal_date, CoverageStatus.READY, 1.0)
+            total_signal_rows = len(raw_signal_rows)
+            # A small fraction of invalid OHLC rows (new listings, suspended
+            # stocks, data gaps) is tolerable: those rows are excluded from the
+            # signal artifact and do not affect the quality of the rest.  Only
+            # when the loss exceeds the strategy's minimum_coverage threshold
+            # does the date become incomplete.
+            invalid_ratio = invalid_signal_rows / total_signal_rows if total_signal_rows else 0.0
+            invalid_tolerable = invalid_ratio <= max(0.0, 1.0 - requirement.minimum_coverage)
+            if not readiness.is_ready:
+                coverage[signal_date] = readiness
+                gaps.extend(readiness.gaps)
+            elif signal_stocks and has_future_bars and invalid_tolerable:
+                coverage[signal_date] = CoverageResult(signal_date, CoverageStatus.READY, readiness.coverage_ratio)
             else:
                 if not signal_stocks:
                     status = CoverageStatus.INSUFFICIENT_DATA
                     error_code = BacktestErrorCode.INSUFFICIENT_DATA
-                    requirement = "daily_kbars_signal_input"
+                    requirement_name = "daily_kbars_signal_input"
                     detail = "no valid local daily bars on signal date"
-                elif invalid_signal_rows:
+                elif invalid_signal_rows and not invalid_tolerable:
                     status = CoverageStatus.INCOMPLETE_EVALUATION
                     error_code = BacktestErrorCode.INCOMPLETE_EVALUATION
-                    requirement = "daily_kbars_signal_input"
+                    requirement_name = "daily_kbars_signal_input"
                     detail = f"{invalid_signal_rows} local daily-bar rows have invalid non-positive OHLC values"
                 else:
                     status = CoverageStatus.INCOMPLETE_EVALUATION
                     error_code = BacktestErrorCode.INCOMPLETE_EVALUATION
-                    requirement = "daily_kbars_outcome_input"
+                    requirement_name = "daily_kbars_outcome_input"
                     detail = "no future local daily bars for execution"
-                gap = DataGap(signal_date, requirement, error_code, detail)
+                gap = DataGap(signal_date, requirement_name, error_code, detail)
                 gaps.append(gap)
-                total_signal_rows = len(raw_signal_rows)
                 ratio = len(signal_stocks) / total_signal_rows if total_signal_rows else 0.0
                 coverage[signal_date] = CoverageResult(signal_date, status, ratio, (gap,))
 
@@ -460,7 +711,11 @@ class ResearchBacktestRunner:
 
     def preflight(self, request: BacktestRequest) -> dict[str, Any]:
         descriptor, _strategy = self._resolve_strategy(request)
-        bundle = self._snapshot_builder.capture(request)
+        resolved_request = self._request_with_validated_parameters(request, descriptor)
+        bundle = self._snapshot_builder.capture(
+            resolved_request,
+            data_requirement=descriptor.data_requirement,
+        )
         return {
             "status": "ready" if _snapshot_ready(bundle.snapshot) else "insufficient_data",
             "strategy_id": descriptor.strategy_id,
@@ -477,8 +732,12 @@ class ResearchBacktestRunner:
 
     def run(self, request: BacktestRequest) -> dict[str, Any]:
         descriptor, strategy = self._resolve_strategy(request)
-        resolved_request = replace(request, strategy_version=descriptor.effective_version)
-        bundle = self._snapshot_builder.capture(resolved_request)
+        validated_request = self._request_with_validated_parameters(request, descriptor)
+        resolved_request = replace(validated_request, strategy_version=descriptor.effective_version)
+        bundle = self._snapshot_builder.capture(
+            resolved_request,
+            data_requirement=descriptor.data_requirement,
+        )
         return self._execute(resolved_request, descriptor, strategy, bundle)
 
     def replay(self, backtest_id: str, *, force_rerun: bool = True) -> dict[str, Any]:
@@ -491,6 +750,7 @@ class ResearchBacktestRunner:
         request = _request_from_canonical_json(str(source.request_json), force_rerun=True)
         resolved_request = replace(request, strategy_version=str(source.strategy_version), force_rerun=True)
         descriptor, strategy = self._resolve_strategy(resolved_request)
+        resolved_request = self._request_with_validated_parameters(resolved_request, descriptor)
         if descriptor.effective_version != str(source.strategy_version):
             raise StrategyUnavailableError(
                 "the exact strategy version required by this immutable replay is not installed",
@@ -511,7 +771,7 @@ class ResearchBacktestRunner:
         bundle: SnapshotBundle,
     ) -> dict[str, Any]:
         self._persist_bundle(bundle)
-        execution_version = f"{RUNNER_EXECUTION_VERSION}:{descriptor.effective_version[:24]}"
+        execution_version = _research_execution_version(request, descriptor)
         request_fingerprint = request.request_fingerprint(
             snapshot_id=bundle.snapshot.snapshot_id,
             effective_strategy_version=descriptor.effective_version,
@@ -731,10 +991,18 @@ class ResearchBacktestRunner:
 
     def _persist_bundle(self, bundle: SnapshotBundle) -> None:
         snapshot = bundle.snapshot
+        immutable_manifest = {
+            "schema_version": 2,
+            "partitions": [partition.canonical_payload() for partition in snapshot.partitions],
+            "artifacts_by_signal_date": {
+                signal_date: [reference.canonical_payload() for reference in references]
+                for signal_date, references in snapshot.artifacts_by_signal_date.items()
+            },
+        }
         self._repository.persist_snapshot(
             snapshot_id=snapshot.snapshot_id,
             snapshot_version=snapshot.snapshot_version,
-            partition_manifest=[partition.canonical_payload() for partition in snapshot.partitions],
+            partition_manifest=immutable_manifest,
             coverage={
                 signal_date: result.canonical_payload()
                 for signal_date, result in snapshot.coverage_by_signal_date.items()
@@ -745,7 +1013,7 @@ class ResearchBacktestRunner:
             for ref in refs:
                 payload = bundle.payloads_by_artifact_id.get(ref.artifact_id)
                 if payload is None:
-                    row = self._repository.get_artifact(ref.artifact_id, expected_content_hash=ref.content_hash)
+                    row = _read_referenced_artifact(self._repository, ref)
                     payload = bytes(row.payload)
                 self._repository.persist_artifact(
                     artifact_id=ref.artifact_id,
@@ -764,35 +1032,38 @@ class ResearchBacktestRunner:
     def _load_snapshot_bundle(self, snapshot_id: str) -> SnapshotBundle:
         row = self._repository.get_snapshot(snapshot_id)
         try:
-            partitions_payload = json.loads(str(row.partition_manifest_json))
+            stored_manifest = json.loads(str(row.partition_manifest_json))
             coverage_payload = json.loads(str(row.coverage_json))
             gaps_payload = json.loads(str(row.missing_requirements_json))
         except json.JSONDecodeError as exc:
             raise SnapshotCaptureError("stored snapshot JSON is malformed", details={"snapshot_id": snapshot_id}) from exc
-        artifacts_by_date: dict[str, list[ArtifactRef]] = defaultdict(list)
+        if not isinstance(stored_manifest, Mapping) or stored_manifest.get("schema_version") != 2:
+            # A legacy list-only manifest cannot prove which current artifact rows
+            # belong to the historical snapshot.  Safe-fail rather than infer.
+            raise SnapshotArtifactUnavailableError(f"{snapshot_id}:artifact_manifest")
+        partitions_payload = stored_manifest.get("partitions")
+        artifact_payload = stored_manifest.get("artifacts_by_signal_date")
+        if not isinstance(partitions_payload, list) or not isinstance(artifact_payload, Mapping):
+            raise SnapshotCaptureError("stored immutable snapshot manifest is malformed", details={"snapshot_id": snapshot_id})
+        if not isinstance(coverage_payload, Mapping) or not isinstance(gaps_payload, list):
+            raise SnapshotCaptureError("stored snapshot coverage JSON is malformed", details={"snapshot_id": snapshot_id})
+
+        artifacts_by_date: dict[str, tuple[ArtifactRef, ...]] = {}
         payloads: dict[str, bytes] = {}
-        for artifact in self._session.scalars(
-            select(BacktestInputArtifact)
-            .where(BacktestInputArtifact.snapshot_id == snapshot_id)
-            .order_by(
-                BacktestInputArtifact.signal_date,
-                BacktestInputArtifact.artifact_scope,
-                BacktestInputArtifact.artifact_type,
-            )
-        ):
-            artifact = self._repository.get_artifact(str(artifact.artifact_id))
-            ref = ArtifactRef(
-                artifact_id=str(artifact.artifact_id),
-                signal_date=str(artifact.signal_date),
-                artifact_scope=str(artifact.artifact_scope),
-                artifact_type=str(artifact.artifact_type),
-                schema_version=int(artifact.schema_version),
-                row_count=int(artifact.row_count),
-                content_hash=str(artifact.content_hash),
-                content_encoding=str(artifact.content_encoding),
-            )
-            artifacts_by_date[ref.signal_date].append(ref)
-            payloads[ref.artifact_id] = bytes(artifact.payload)
+        for signal_date, ref_payloads in artifact_payload.items():
+            if not isinstance(signal_date, str) or not isinstance(ref_payloads, list):
+                raise SnapshotCaptureError("stored artifact reference manifest is malformed", details={"snapshot_id": snapshot_id})
+            refs = tuple(_artifact_ref_from_payload(value) for value in ref_payloads)
+            if any(ref.signal_date != signal_date for ref in refs):
+                raise SnapshotCaptureError(
+                    "stored artifact reference signal date is inconsistent",
+                    details={"snapshot_id": snapshot_id, "signal_date": signal_date},
+                )
+            artifacts_by_date[signal_date] = refs
+            for ref in refs:
+                artifact = _read_referenced_artifact(self._repository, ref)
+                payloads[ref.artifact_id] = bytes(artifact.payload)
+
         partitions = tuple(_partition_from_payload(value) for value in partitions_payload)
         coverage = {
             str(day): _coverage_from_payload(value)
@@ -803,7 +1074,7 @@ class ResearchBacktestRunner:
             snapshot_id=snapshot_id,
             snapshot_version=int(row.snapshot_version),
             partitions=partitions,
-            artifacts_by_signal_date={day: tuple(refs) for day, refs in artifacts_by_date.items()},
+            artifacts_by_signal_date=artifacts_by_date,
             coverage_by_signal_date=coverage,
             missing_requirements=gaps,
         )
@@ -818,6 +1089,18 @@ class ResearchBacktestRunner:
                 "requested strategy is not available for a reproducible local research run",
                 details={"strategy_id": request.strategy_id, "requested_version": request.strategy_version},
             ) from exc
+
+    def _request_with_validated_parameters(
+        self,
+        request: BacktestRequest,
+        descriptor: StrategyDescriptor,
+    ) -> BacktestRequest:
+        """Freeze only the descriptor-declared parameters before data capture."""
+
+        return replace(
+            request,
+            parameter_set=validate_backtest_parameter_set(descriptor, request.parameter_set),
+        )
 
     @staticmethod
     def _build_default_registry(strategy_id: str) -> StrategyRegistry:
@@ -1088,6 +1371,24 @@ def _decode_artifact_payload(payload: bytes, artifact_id: str) -> dict[str, Any]
     return decoded
 
 
+def _artifact_ref_from_payload(value: Any) -> ArtifactRef:
+    if not isinstance(value, Mapping):
+        raise SnapshotCaptureError("stored artifact reference is malformed")
+    try:
+        return ArtifactRef(
+            artifact_id=str(value.get("artifact_id") or ""),
+            signal_date=str(value.get("signal_date") or ""),
+            artifact_scope=str(value.get("artifact_scope") or ""),
+            artifact_type=str(value.get("artifact_type") or ""),
+            schema_version=int(value.get("schema_version") or 0),
+            row_count=int(value.get("row_count") or 0),
+            content_hash=str(value.get("content_hash") or ""),
+            content_encoding=str(value.get("content_encoding") or "json"),
+        )
+    except (TypeError, ValueError, BacktestValidationError) as exc:
+        raise SnapshotCaptureError("stored artifact reference is invalid") from exc
+
+
 def _partition_from_payload(value: Any) -> PartitionManifest:
     if not isinstance(value, Mapping):
         raise SnapshotCaptureError("stored partition manifest item is malformed")
@@ -1143,6 +1444,10 @@ def _project_run(run: Any, *, reused: bool, reuse_reason: str | None) -> dict[st
     }
 
 
+def _has_valid_ohlc(row: DailyKbar) -> bool:
+    return all(_number(getattr(row, field_name, 0)) > 0 for field_name in ("open", "high", "low", "close"))
+
+
 def _number(value: object) -> float:
     try:
         result = float(value or 0)
@@ -1196,6 +1501,8 @@ def _error_code(exc: Exception) -> str:
 __all__ = [
     "ArtifactOutcomeDataReader",
     "ArtifactSignalDateDataReader",
+    "DataReadinessPort",
+    "LocalDataReadinessAdapter",
     "LocalResearchSnapshotBuilder",
     "ResearchBacktestRunner",
     "ResearchBacktestRunnerError",

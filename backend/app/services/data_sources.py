@@ -34,6 +34,7 @@ from app.services.market_auxiliary import (
 from app.services.market_data import _kline_sources, _quote_sources
 from app.engine.trading_calendar import (
     latest_allowed_bar_date as _latest_allowed_bar_date,
+    normalize_trade_date as _normalize_trade_date,
     previous_weekday as _previous_weekday,
 )
 
@@ -41,18 +42,6 @@ from app.engine.trading_calendar import (
 def _compact_trade_date(value: Any) -> str:
     digits = "".join(ch for ch in str(value or "") if ch.isdigit())
     return digits[:8] if len(digits) >= 8 else digits
-
-
-def _normalize_trade_date(value: Any) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    if len(raw) >= 10 and raw[4] == "-" and raw[7] == "-":
-        return raw[:10]
-    digits = "".join(ch for ch in raw if ch.isdigit())
-    if len(digits) >= 8:
-        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
-    return raw[:10]
 
 
 
@@ -140,7 +129,7 @@ def get_local_pool_status(
     all_quote_rows = db.scalars(
         select(StockQuote).where(StockQuote.freshness_status != "inactive")
     ).all()
-    from app.services.market_pool import _dedupe_latest_quote_rows
+    from app.services.market_pool.core import _dedupe_latest_quote_rows
     current_quote_rows = _dedupe_latest_quote_rows(all_quote_rows)
     active_unified_quote_count = len(current_quote_rows)
     latest_quote_date = max(
@@ -158,7 +147,7 @@ def get_local_pool_status(
     indicator_coverage_pct = 0.0
     t_distinct_bars = time.perf_counter()
 
-    from app.services.market_pool import (
+    from app.services.market_pool.core import (
         _candidate_recall_plan,
         _eligible_market_quotes,
         _execution_recall_count,
@@ -167,8 +156,8 @@ def get_local_pool_status(
         _quote_sources as _pool_quote_sources,
         _required_bar_date_for_quote,
         _select_recall_candidates,
-        local_pool_recommendation_readiness,
     )
+    from app.services.market_pool.core import local_pool_recommendation_readiness
     from app.services.market_data import _candidate_filter_summary
 
     settings = get_settings()
@@ -478,7 +467,7 @@ def _coverage_reference_date(latest_quote_date: str | None, latest_allowed_bar_d
     quote_date = str(latest_quote_date)[:10]
     if not quote_date:
         return latest_allowed_bar_date
-    from app.services.market_pool import _required_bar_date_for_quote
+    from app.services.market_pool.core import _required_bar_date_for_quote
 
     return _required_bar_date_for_quote({"trade_date": quote_date})
 
@@ -531,7 +520,7 @@ def _raw_bar_source_rows(db: Session) -> list[dict[str, Any]]:
 
 
 def _unified_quote_rows(db: Session, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
-    from app.services.market_pool import _dedupe_latest_quote_rows, _quote_metrics_from_bars
+    from app.services.market_pool.core import _dedupe_latest_quote_rows, _quote_metrics_from_bars
 
     rows = db.scalars(
         select(StockQuote)
@@ -574,7 +563,7 @@ def _daily_bar_rows(db: Session, limit: int = 50, offset: int = 0) -> list[dict[
 
 
 def _unified_quote_payload(db: Session, row: StockQuote, precomputed_metrics: dict[str, float] | None = None) -> dict[str, Any]:
-    from app.services.market_pool import _apply_local_quote_metrics, enrich_quote_with_local_metrics
+    from app.services.market_pool.core import _apply_local_quote_metrics, enrich_quote_with_local_metrics
 
     quote = {
         "code": row.code,
@@ -690,7 +679,7 @@ def _unified_rows_to_quotes(rows: list, skip_metrics: bool = False) -> list[dict
 
 def _unified_quote_rows_from_rows(all_rows: list, limit: int = 50, offset: int = 0, db: Session = None) -> list[dict[str, Any]]:
     """从预加载的 StockQuote ORM 行构建分页的 quote 展示数据。"""
-    from app.services.market_pool import _quote_metrics_from_bars, _apply_local_quote_metrics, enrich_quote_with_local_metrics
+    from app.services.market_pool.core import _quote_metrics_from_bars, _apply_local_quote_metrics, enrich_quote_with_local_metrics
 
     # 按质量分数降序排序后分页
     sorted_rows = sorted(all_rows, key=lambda r: (r.quality_score or 0), reverse=True)

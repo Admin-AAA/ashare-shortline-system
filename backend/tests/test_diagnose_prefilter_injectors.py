@@ -23,11 +23,11 @@ from app.core.config import get_settings  # noqa: E402
 from app.db.session import SessionLocal  # noqa: E402
 from app.engine.skill_loader import load_skills  # noqa: E402
 from app.engine.strategy_runner import evaluate_skill_prefilter  # noqa: E402
-from app.services.market_pool import (  # noqa: E402
-    get_market_universe_from_pool,
-    inject_limit_up_flags,
-    inject_dragon_tiger_flags,
+from app.services.auxiliary.application import (  # noqa: E402
+    inject_auxiliary_prefilter_flags,
+    load_auxiliary_feature_views,
 )
+from app.services.market_pool import get_market_universe_from_pool  # noqa: E402
 
 
 def _gated_skill():
@@ -69,7 +69,7 @@ def test_twenty_cm_gate_requires_injection():
         assert ok_missing is False, "缺字段时 strict_missing 应拒绝 gated 策略"
         assert stock.get("twenty_cm_risk_gate") is None
 
-        inject_limit_up_flags(db, [stock], "2026-07-09")
+        inject_auxiliary_prefilter_flags([stock], {"limit_up": {}, "dragon_tigers": {}})
         assert stock.get("twenty_cm_risk_gate") is not None, "inject 必须填充 twenty_cm_risk_gate"
         ok_after, _ = evaluate_skill_prefilter(skill, stock, stage="market")
         assert ok_after is True, "注入 not_applicable 后 twenty_cm != 'block' 应通过"
@@ -83,8 +83,8 @@ def test_diagnostic_pool_twenty_cm_populated_after_injection():
     try:
         stocks, snap = get_market_universe_from_pool(db, refresh=False)
         td = str(snap.get("trade_date") or "")
-        inject_limit_up_flags(db, stocks, td)
-        inject_dragon_tiger_flags(db, stocks, td)
+        auxiliary_views = load_auxiliary_feature_views(db, [str(stock["code"]) for stock in stocks], trade_date=td)
+        inject_auxiliary_prefilter_flags(stocks, auxiliary_views)
         none_count = sum(1 for s in stocks if s.get("twenty_cm_risk_gate") is None)
         assert none_count == 0, f"{none_count} 只股票注入后仍缺 twenty_cm_risk_gate"
     finally:

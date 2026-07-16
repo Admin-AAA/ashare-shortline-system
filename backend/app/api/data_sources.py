@@ -1,6 +1,7 @@
 import logging
 import time
 import threading
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -12,14 +13,8 @@ from app.services.data_gap_remediation_service import (
     sync_local_pool_kline_gaps,
 )
 from app.services.workbench_service import invalidate_bootstrap_cache
-from app.services.market_pool import (
-    refresh_capital_flows_for_codes,
-    refresh_concept_sectors,
-    refresh_dragon_tiger,
-    refresh_limit_up_board,
-    refresh_news_for_codes,
-    refresh_quote_pool,
-)
+from app.services.auxiliary.application import run_auxiliary_application
+from app.services.market_pool import refresh_quote_pool
 
 
 router = APIRouter(prefix="/api/data-sources", tags=["data-sources"])
@@ -326,26 +321,29 @@ def set_enabled(source_type: str, source: str, payload: dict, db: Session = Depe
 
 @router.post("/pool/refresh/limit-up")
 def refresh_limit_up(db: Session = Depends(get_db)):
-    rows = refresh_limit_up_board(db)
+    result = run_auxiliary_application(db, instruments=(), trade_date=date.today(), refresh=True, datasets=("limit_up_board",))
     with _pool_status_lock:
         _pool_status_cache.clear()
     invalidate_bootstrap_cache()
-    return {"refreshed": len(rows)}
+    item = result.orchestrated.result_for("limit_up_board")
+    return {"refreshed": item.coverage.record_count, "audit": result.audit_payload["limit_up_board"]}
 
 
 @router.post("/pool/refresh/concept-sectors")
 def refresh_sectors(db: Session = Depends(get_db)):
-    rows = refresh_concept_sectors(db)
+    result = run_auxiliary_application(db, instruments=(), trade_date=date.today(), refresh=True, datasets=("concept_sector", "concept_sector_stock"))
     with _pool_status_lock:
         _pool_status_cache.clear()
     invalidate_bootstrap_cache()
-    return {"refreshed": len(rows)}
+    item = result.orchestrated.result_for("concept_sector")
+    return {"refreshed": item.coverage.record_count, "audit": result.audit_payload["concept_sector"]}
 
 
 @router.post("/pool/refresh/dragon-tiger")
 def refresh_dt(db: Session = Depends(get_db)):
-    rows = refresh_dragon_tiger(db)
+    result = run_auxiliary_application(db, instruments=(), trade_date=date.today(), refresh=True, datasets=("dragon_tiger",))
     with _pool_status_lock:
         _pool_status_cache.clear()
     invalidate_bootstrap_cache()
-    return {"refreshed": len(rows)}
+    item = result.orchestrated.result_for("dragon_tiger")
+    return {"refreshed": item.coverage.record_count, "audit": result.audit_payload["dragon_tiger"]}

@@ -204,6 +204,35 @@ def _create_baseline_inventory(connection) -> None:
         for index in indexes:
             connection.execute(text(f"CREATE INDEX IF NOT EXISTS `{index}` ON `{table}` (`id`)"))
 
+    # The runner now discovers all V006–V021 state-key migrations.  This fixture
+    # represents a compatible legacy schema, so it supplies their declared natural
+    # key columns without pre-creating the UNIQUE shapes those migrations own.
+    from app.services.auxiliary.production import AUXILIARY_UNIQUE_MIGRATION_PLANS
+
+    for plan in AUXILIARY_UNIQUE_MIGRATION_PLANS.values():
+        declaration = plan.declaration
+        existing_tables = {
+            row[0]
+            for row in connection.execute(
+                text("SELECT name FROM sqlite_master WHERE type = 'table'")
+            )
+        }
+        if declaration.table not in existing_tables:
+            definitions = ", ".join(
+                ("`id` INTEGER", *(f"`{column}` TEXT" for column in declaration.natural_key))
+            )
+            connection.execute(text(f"CREATE TABLE `{declaration.table}` ({definitions})"))
+            continue
+        existing_columns = {
+            row[1]
+            for row in connection.execute(text(f"PRAGMA table_info(`{declaration.table}`)"))
+        }
+        for column in declaration.natural_key:
+            if column not in existing_columns:
+                connection.execute(
+                    text(f"ALTER TABLE `{declaration.table}` ADD COLUMN `{column}` TEXT")
+                )
+
 
 def test_existing_schema_baseline_applies_owned_p0_research_schema_forward_only() -> None:
     engine = create_engine("sqlite:///:memory:")
@@ -228,6 +257,20 @@ def test_existing_schema_baseline_applies_owned_p0_research_schema_forward_only(
         "V003_add_model_route_max_tokens",
         "V004_add_model_route_temperature",
         "V005_add_model_route_timeout_seconds",
+        "V006_auxiliary_limit_up_board_unique",
+        "V007_auxiliary_concept_sector_unique",
+        "V008_auxiliary_concept_sector_stock_unique",
+        "V009_auxiliary_capital_flow_unique",
+        "V010_auxiliary_dragon_tiger_unique",
+        "V012_auxiliary_margin_detail_unique",
+        "V014_auxiliary_hsgt_flow_unique",
+        "V015_auxiliary_hsgt_top10_unique",
+        "V016_auxiliary_pledge_stat_unique",
+        "V017_auxiliary_broker_recommend_unique",
+        "V019_auxiliary_fina_indicator_unique",
+        "V020_auxiliary_auction_unique",
+        "V021_auxiliary_holder_number_unique",
+        "V024_auxiliary_partition_snapshots",
     )
     assert result.applied_versions == expected_versions
     assert [migration.version for migration in all_migrations()] == list(expected_versions)

@@ -289,6 +289,12 @@ def attribute_failure(trade: Trade) -> FailureAttribution | None:
     elif "gap" in reason_text or "chase" in reason_text:
         reason = FailureReasonCode.CHASE_HIGH
         confidence = 0.7
+    elif "sector" in reason_text or "decay" in reason_text:
+        reason = FailureReasonCode.SECTOR_DECAY
+        confidence = 0.8
+    elif "black_swan" in reason_text or "crash" in reason_text:
+        reason = FailureReasonCode.BLACK_SWAN
+        confidence = 0.9
     elif "execution" in reason_text or "untradable" in reason_text:
         reason = FailureReasonCode.EXECUTION_FAILURE
         confidence = 0.7

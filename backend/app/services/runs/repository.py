@@ -139,8 +139,12 @@ class CreateQueuedRun:
 
     run_id: str
     request: RunRequest
-    execution_version: str | None
+    execution_version: str
     created_at: datetime
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.execution_version, str) or not self.execution_version.strip():
+            raise ValueError("新的 queued Run 必须提供非空 execution_version")
 
     @property
     def request_json(self) -> str:

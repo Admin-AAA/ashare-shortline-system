@@ -87,6 +87,16 @@ class IndexSignature:
 
 
 @dataclass(frozen=True)
+class ForeignKeySignature:
+    """Observable foreign-key shape used by create-table postconditions."""
+
+    columns: tuple[str, ...]
+    referred_table: str
+    referred_columns: tuple[str, ...]
+    ondelete: str | None
+
+
+@dataclass(frozen=True)
 class MigrationOperation:
     """One independently re-runnable schema or bounded-data change."""
 
@@ -269,6 +279,60 @@ class MigrationContext:
             signature is not None
             and signature.columns == expected_columns
             and signature.unique is unique
+        )
+
+    def primary_key_columns(self, table: str) -> tuple[str, ...]:
+        """Return the ordered primary-key columns for exact create-table verification."""
+        safe_table = self._validate_identifier(table)
+        if not self.has_table(safe_table):
+            return ()
+        raw = inspect(self.__connection).get_pk_constraint(safe_table)
+        return tuple(str(column) for column in raw.get("constrained_columns") or ())
+
+    def unique_signatures(self, table: str) -> tuple[IndexSignature, ...]:
+        """Return every non-primary UNIQUE shape, including unique indexes."""
+        safe_table = self._validate_identifier(table)
+        if not self.has_table(safe_table):
+            return ()
+        inspector = inspect(self.__connection)
+        signatures: dict[tuple[tuple[str, ...], str], IndexSignature] = {}
+        for raw in inspector.get_unique_constraints(safe_table):
+            columns = tuple(str(column) for column in raw.get("column_names") or ())
+            name = str(raw.get("name") or "")
+            signatures[(columns, name)] = IndexSignature(name=name, columns=columns, unique=True)
+        for raw in inspector.get_indexes(safe_table):
+            if not raw.get("unique"):
+                continue
+            columns = tuple(str(column) for column in raw.get("column_names") or ())
+            name = str(raw.get("name") or "")
+            signatures.setdefault(
+                (columns, name),
+                IndexSignature(name=name, columns=columns, unique=True),
+            )
+        return tuple(sorted(signatures.values(), key=lambda item: (item.columns, item.name)))
+
+    def foreign_key_signatures(self, table: str) -> tuple[ForeignKeySignature, ...]:
+        """Return exact FK column/target/delete-policy shapes without exposing SQL."""
+        safe_table = self._validate_identifier(table)
+        if not self.has_table(safe_table):
+            return ()
+        signatures = []
+        for raw in inspect(self.__connection).get_foreign_keys(safe_table):
+            options = raw.get("options") or {}
+            ondelete = options.get("ondelete")
+            signatures.append(
+                ForeignKeySignature(
+                    columns=tuple(str(column) for column in raw.get("constrained_columns") or ()),
+                    referred_table=str(raw.get("referred_table") or ""),
+                    referred_columns=tuple(str(column) for column in raw.get("referred_columns") or ()),
+                    ondelete=str(ondelete).upper() if ondelete else None,
+                )
+            )
+        return tuple(
+            sorted(
+                signatures,
+                key=lambda item: (item.columns, item.referred_table, item.referred_columns),
+            )
         )
 
     def require_ddl_preflight(self, target: Any) -> Any:

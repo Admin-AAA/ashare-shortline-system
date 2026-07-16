@@ -21,7 +21,10 @@ from app.models.tables import DragonTiger
 from app.services.factors import FactorContext
 from app.services.factors.shortline import DragonTigerFactor
 from app.services.feature_builder import _enrich_with_auxiliary_data, build_features
-from app.services.market_pool import inject_dragon_tiger_flags
+from app.services.auxiliary.application import (
+    inject_auxiliary_prefilter_flags,
+    load_auxiliary_feature_views,
+)
 
 
 def _apply_dragon_tiger_factor(stock: dict) -> None:
@@ -271,13 +274,17 @@ def test_e2e_signal_reaches_skill_breakdown(db):
 
     stock = _stock(code=code, amount_yi=10.0, dragon_tiger_is_on_list=False)
     # 1) prefilter 前注入龙虎榜标记（真实管线：inject_dragon_tiger_flags 在 apply_prefilters 之前）
-    hit = inject_dragon_tiger_flags(db, [stock], trade_date=dt_date)
+    auxiliary_views = load_auxiliary_feature_views(db, [code], trade_date=dt_date)
+    hit = inject_auxiliary_prefilter_flags([stock], auxiliary_views)
     assert hit == 1
     assert stock["dragon_tiger_is_on_list"] is True
     assert abs(stock["dragon_tiger_net_buy_ratio"] - 0.12) < 1e-6
     assert stock["dragon_tiger_institution_net_buy_yi"] == 1.2
 
     # 2) build_features（无 aux，不应覆盖已注入的龙虎榜字段）
+    from app.services.factors.registry import bootstrap_default_factor_registry
+
+    bootstrap_default_factor_registry()
     build_features([stock], _snapshot())
     assert stock["dragon_tiger_is_on_list"] is True
     assert abs(stock["dragon_tiger_net_buy_ratio"] - 0.12) < 1e-6

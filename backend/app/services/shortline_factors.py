@@ -9,7 +9,7 @@ from app.services.factors import (
     default_registry,
     run_factors,
 )
-# 导入即触发 7 个短线因子注册进 default_registry 并闭环 evaluator 白名单（见该模块底部）。
+# 内置短线因子由应用启动时显式 bootstrap 注册、校验并冻结；本模块只消费已就绪的 Registry。
 from app.services.factors.shortline import (
     compute_sector_stats,
     main_industries_of,

@@ -55,6 +55,9 @@ class AuxiliaryDatasetRegistry:
     ) -> AuxiliaryDatasetDescriptor[Any, Any, Any]:
         if self.is_frozen:
             raise AuxiliaryRegistryFrozenError("冻结后的 Auxiliary Dataset Registry 禁止注册")
+        if not isinstance(descriptor, AuxiliaryDatasetDescriptor):
+            raise AuxiliaryRegistryError("Auxiliary Dataset Registry 只接受 AuxiliaryDatasetDescriptor")
+        descriptor.validate()
         if descriptor.key in self._descriptors:
             raise DuplicateAuxiliaryDatasetError(descriptor.key)
         if any(existing.view_key == descriptor.view_key for existing in self._descriptors.values()):
@@ -63,9 +66,10 @@ class AuxiliaryDatasetRegistry:
         return descriptor
 
     def freeze(self) -> "AuxiliaryDatasetRegistry":
-        """Verify all graph invariants and publish an immutable descriptor snapshot."""
+        """Validate all descriptors and publish an immutable bootstrap snapshot."""
         if self.is_frozen:
             return self
+        self._validate_descriptor_contracts()
         self._validate_dependencies()
         self._frozen_descriptors = MappingProxyType(dict(self._descriptors))
         return self
@@ -103,6 +107,29 @@ class AuxiliaryDatasetRegistry:
         for key in dataset_keys:
             visit(key)
         return tuple(ordered)
+
+    def _validate_descriptor_contracts(self) -> None:
+        """Re-check every declaration at bootstrap before publishing it.
+
+        The registration-time checks provide early feedback, while this final pass
+        guarantees that the frozen mapping contains unique dataset/view keys and
+        descriptors whose natural keys, handlers, and freshness configuration still
+        satisfy the public contract.
+        """
+        descriptor_keys: set[str] = set()
+        view_keys: set[str] = set()
+        for registered_key, descriptor in self._descriptors.items():
+            descriptor.validate()
+            if descriptor.key != registered_key:
+                raise AuxiliaryRegistryError(
+                    "注册 key 与 descriptor.key 不一致；descriptor 不得在 bootstrap 前变更"
+                )
+            if descriptor.key in descriptor_keys:
+                raise DuplicateAuxiliaryDatasetError(descriptor.key)
+            if descriptor.view_key in view_keys:
+                raise DuplicateAuxiliaryViewKeyError(descriptor.view_key)
+            descriptor_keys.add(descriptor.key)
+            view_keys.add(descriptor.view_key)
 
     def _validate_dependencies(self) -> None:
         for descriptor in self._descriptors.values():

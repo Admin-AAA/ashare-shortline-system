@@ -12,6 +12,7 @@ from app.api import admin, backtests, dashboard, data_sources, frontend_logs, ho
 from app.core.config import get_settings
 from app.core.logger import setup_logging
 from app.db.init_db import init_db
+from app.services.factors import bootstrap_default_factor_registry
 from app.db.migrations import get_migration_health
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,7 @@ async def catch_unhandled_exceptions(request: Request, call_next):
 def on_startup() -> None:
     global _startup_db_error
     setup_logging()
+    bootstrap_default_factor_registry()
     try:
         init_db()
     except Exception as exc:  # noqa: BLE001 - keep the frontend reachable during DB outages

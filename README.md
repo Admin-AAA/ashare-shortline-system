@@ -362,12 +362,8 @@ npm run dev
 
 正式运行使用真实行情源。当前支持：
 
-- **THS SDK**：默认主源，支持全市场列表和实时行情；未配置账号时使用游客账号
-- **腾讯**：默认报价和日K来源
-- **新浪**：报价补充源
-- **东方财富**：报价和日K增强源
+- **TuShare**：主源
 - **AkShare**：补充源
-- **BaoStock**：可选日K兜底源，需加入 `ASHARE_KLINE_SOURCES`
 
 数据源可在前端界面或 API 中启用/禁用。如果所有数据源都失败，系统返回错误，不会回退模拟数据。推荐运行支持 `local_pool`、`local_pool_preferred`、`realtime` 三档；本地数据池页面会显示当前是否缺失数据，以及能否只靠本地池推荐股票。默认配置下会先筛出全部合格股票（`ASHARE_MARKET_CANDIDATE_COUNT=0`），再结合日K可用性、去重和预设 `output_count` 产出最终推荐结果。
 

@@ -21,6 +21,7 @@ from sqlalchemy import func, select
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal
+from app.engine.trading_calendar import latest_allowed_bar_date
 from app.models.tables import DailyKbar, StockQuote
 from app.services.indicator_computer import compute_daily_bar_indicators, compute_daily_indicators
 from app.services.tushare_client import fetch_daily_kbars, fetch_latest_trade_date
@@ -104,19 +105,13 @@ def load_universe(db, limit_codes: list[str] | None) -> list[dict[str, Any]]:
     return [{"code": q.code, "name": q.name} for q in quotes]
 
 
-def latest_allowed_bar_date() -> str:
-    """最新允许的 bar 日期（最新交易日）。"""
-    try:
-        return fetch_latest_trade_date()
-    except Exception:
-        from datetime import date
-        return date.today().strftime("%Y%m%d")
-
-
 def main() -> int:
     args = parse_args()
     settings = get_settings()
-    latest_allowed = latest_allowed_bar_date()
+    try:
+        latest_allowed = fetch_latest_trade_date()
+    except Exception:
+        latest_allowed = latest_allowed_bar_date().replace("-", "")
     target_display = f"{latest_allowed[:4]}-{latest_allowed[4:6]}-{latest_allowed[6:]}"
 
     limit_codes = None

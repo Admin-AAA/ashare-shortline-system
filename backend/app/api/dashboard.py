@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, get_db
+from app.engine.trading_calendar import normalize_trade_date as _normalize_trade_date
 from app.models.tables import MarketSnapshot, RecommendationRun, StockQuote
 from app.schemas.dashboard import DashboardOverview
 from app.services.cost_service import list_scheduled_tasks
@@ -184,16 +185,6 @@ def _latest_stock_quote_trade_date(db: Session) -> str:
         )
     )
     return _normalize_trade_date(latest)
-
-
-def _normalize_trade_date(value: Any) -> str:
-    raw = str(value or "").strip()
-    if len(raw) >= 10 and raw[4] == "-" and raw[7] == "-":
-        return raw[:10]
-    digits = "".join(ch for ch in raw if ch.isdigit())
-    if len(digits) >= 8:
-        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
-    return ""
 
 
 def _build_overview_payload(db: Session) -> DashboardOverview:

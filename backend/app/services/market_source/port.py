@@ -88,19 +88,40 @@ class QuoteRequest:
 
 @dataclass(frozen=True)
 class DailyBarRequest:
-    """Request daily bars for explicit instruments and an optional date range."""
+    """Request daily bars for explicit instruments or one complete trade-date batch.
 
-    instruments: tuple[QuoteRef, ...]
+    A ``trade_date`` request deliberately remains a ``fetch_daily_bars`` operation:
+    providers may retrieve a complete market-day batch once and consumers can filter
+    it to ``instruments`` locally.  This preserves the high-throughput remediation
+    path without exposing an untyped third Port method.
+    """
+
+    instruments: tuple[QuoteRef, ...] = ()
     start_date: str | None = None
     end_date: str | None = None
+    trade_date: str | None = None
     failure_policy: FailurePolicy = FailurePolicy.RETURN_PARTIAL
 
     def __post_init__(self) -> None:
         if len(set(self.instruments)) != len(self.instruments):
             raise ValueError("DailyBarRequest.instruments must not contain duplicates")
-        for field_name, value in (("start_date", self.start_date), ("end_date", self.end_date)):
+        for field_name, value in (
+            ("start_date", self.start_date),
+            ("end_date", self.end_date),
+            ("trade_date", self.trade_date),
+        ):
             if value is not None and not str(value).strip():
                 raise ValueError(f"DailyBarRequest.{field_name} must not be blank")
+        if self.trade_date is not None and (self.start_date is not None or self.end_date is not None):
+            raise ValueError("DailyBarRequest.trade_date cannot be combined with a date range")
+        if not self.instruments and self.trade_date is None:
+            raise ValueError("DailyBarRequest requires instruments or trade_date")
+
+    @property
+    def is_trade_date_batch(self) -> bool:
+        """Whether the provider should retrieve the entire market for one day."""
+
+        return self.trade_date is not None
 
 
 @dataclass(frozen=True)
@@ -212,18 +233,6 @@ class MarketSourceRequestFailed(RuntimeError):
     def __init__(self, error: MarketSourceError) -> None:
         self.error = error
         super().__init__(error.message)
-
-
-# Deprecated compatibility request types. They are not accepted by MarketSourcePort.
-@dataclass(frozen=True)
-class QuoteScope:
-    max_quote_count: int | None = None
-
-
-@dataclass(frozen=True)
-class DateRange:
-    start_date: str | None = None
-    end_date: str | None = None
 
 
 @runtime_checkable
