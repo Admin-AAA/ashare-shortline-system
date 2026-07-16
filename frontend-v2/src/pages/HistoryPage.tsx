@@ -296,6 +296,17 @@ export function HistoryPage() {
               {items.map((it) => {
                 const o = it.outcome;
                 const ret = o?.executed_return;
+                // 跳空入场：实际入场价偏离推荐价 >3% 时，executed_return（相对实入场）
+                // 与相对推荐价的真实收益会明显背离，两个基准都要让用户看见。
+                // 阈值 3%：-1%~-2% 是正常滑点/波动（-1% 桶 316 单），不该当跳空噪音标注。
+                const recPrice = it.recommend_price;
+                const gapEntry = o?.entry_price != null && recPrice != null
+                  ? Math.abs((o.entry_price - recPrice) / recPrice * 100)
+                  : 0;
+                const isGapEntry = gapEntry > 3;
+                const relRecReturn = o?.exit_price != null && recPrice != null && recPrice > 0
+                  ? (o.exit_price - recPrice) / recPrice * 100
+                  : null;
                 const labelColor =
                   o?.outcome_label === "success"
                     ? "var(--market-up)"
@@ -335,6 +346,12 @@ export function HistoryPage() {
                           <span style={{ color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
                             理想 {fmtPrice(it.ideal_buy)} · 次买 {fmtPrice(it.secondary_buy)}
                           </span>
+                          {isGapEntry && o?.entry_price != null && (
+                              <span style={{ color: "var(--muted)", fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)" }}>
+                                实入场 {fmtPrice(o.entry_price)} · 实止损 {fmtPrice(o.stop_loss_price)} · 实止盈 {fmtPrice(o.take_profit_price)}
+                                <span style={{ opacity: 0.7 }}>（跳空，按实入场重算）</span>
+                              </span>
+                            )}
                         </div>
                       </td>
                       <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)", maxWidth: 320 }}>
@@ -354,7 +371,23 @@ export function HistoryPage() {
                           color: ret == null ? "var(--muted)" : ret >= 0 ? "var(--market-up)" : "var(--market-down)",
                         }}
                       >
-                        {ret == null ? "—" : `${ret >= 0 ? "+" : ""}${ret.toFixed(2)}%`}
+                        <div style={stackStyle}>
+                          <span>{ret == null ? "—" : `${ret >= 0 ? "+" : ""}${ret.toFixed(2)}%`}</span>
+                          {ret != null && isGapEntry && (
+                            <span style={{ color: "var(--muted)", fontSize: "var(--text-xs)", opacity: 0.8 }}>
+                              相对实入场
+                            </span>
+                          )}
+                          {ret != null && isGapEntry && relRecReturn != null && (
+                            <span style={{
+                              color: relRecReturn >= 0 ? "var(--market-up)" : "var(--market-down)",
+                              fontSize: "var(--text-xs)",
+                              opacity: 0.75,
+                            }}>
+                              {relRecReturn >= 0 ? "+" : ""}{relRecReturn.toFixed(2)}% 相对推荐价
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>
                         <div style={stackStyle}>
