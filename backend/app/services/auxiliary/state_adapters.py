@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Protocol
 
 from sqlalchemy import func, select
@@ -62,17 +62,21 @@ def _compact_day(value: date) -> str:
     return value.strftime("%Y%m%d")
 
 
+def _quarter_end_day(value: date) -> str:
+    """最近已披露的季末日（YYYYMMDD）。质押/股东人数/财务指标按季度披露，
+    非季末日按 ts_code 调会返回空，且逐股循环会触发 429 限流。"""
+    quarter_end_months = [(3, 31), (6, 30), (9, 30), (12, 31)]
+    candidates = [date(value.year, m, day) for m, day in quarter_end_months if date(value.year, m, day) <= value]
+    if not candidates:
+        candidates = [date(value.year - 1, 12, 31)]
+    return candidates[-1].strftime("%Y%m%d")
+
+
 def _iso_day(value: object) -> str:
     text = str(value or "").strip().replace("-", "")
     if len(text) == 8 and text.isdigit():
         return f"{text[:4]}-{text[4:6]}-{text[6:]}"
     return str(value or "").strip()[:10]
-
-
-def _ts_code(code: str) -> str:
-    if "." in code:
-        return code
-    return f"{code}.{'SH' if code.startswith(('5', '6', '9')) else 'SZ'}"
 
 
 def _number(value: object, default: float = 0.0) -> float:
@@ -312,19 +316,21 @@ class TushareStateProvider:
         return rows
 
     def capital_flow(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
+        # 单股资金流向按 trade_date 批量一次拉全市场，再按 requested_codes 过滤；
+        # 逐股循环会触发 ~4948 次 Tushare 请求 + 429 限流。当日累计字段由
+        # backfill_moneyflow+compute_cumulative_inflows 在每日同步阶段补全，
+        # 本路径在 run 时通常已被本地表覆盖（refresh=False）；refresh=True 兜底
+        # 时仅入当日净额，累计窗口交给每日同步。
         target = _compact_day(request.trade_date)
-        start = (request.trade_date - timedelta(days=30)).strftime("%Y%m%d")
+        wanted = set(request.requested_codes)
+        frame = self._client.moneyflow(trade_date=target)
+        if frame is None or frame.empty:
+            return ()
         records: list[dict[str, Any]] = []
-        for code in request.requested_codes:
-            frame = self._client.moneyflow(ts_code=_ts_code(code), start_date=start, end_date=target)
-            if frame is None or frame.empty:
+        for _, latest in frame.iterrows():
+            code = str(latest.get("ts_code") or "").split(".")[0]
+            if len(code) != 6 or (wanted and code not in wanted):
                 continue
-            frame = frame.sort_values("trade_date", ascending=False)
-            frame = frame[frame["trade_date"].astype(str) <= target]
-            if frame.empty or str(frame.iloc[0].get("trade_date") or "") != target:
-                continue
-            latest = frame.iloc[0]
-            cumulative = [_number(frame.iloc[index].get("net_mf_amount")) for index in range(min(len(frame), 10))]
             records.append({
                 "code": code,
                 "trade_date": _iso_day(latest.get("trade_date") or target),
@@ -334,9 +340,9 @@ class TushareStateProvider:
                 "medium_net_inflow_yi": round((_number(latest.get("buy_md_amount")) - _number(latest.get("sell_md_amount"))) / 1e8, 4),
                 "small_net_inflow_yi": round((_number(latest.get("buy_sm_amount")) - _number(latest.get("sell_sm_amount"))) / 1e8, 4),
                 "main_net_inflow_ratio": round(_number(latest.get("net_mf_vol")), 2),
-                "cumulative_inflow_3d_yi": round(sum(cumulative[:3]) / 1e8, 4),
-                "cumulative_inflow_5d_yi": round(sum(cumulative[:5]) / 1e8, 4),
-                "cumulative_inflow_10d_yi": round(sum(cumulative[:10]) / 1e8, 4),
+                "cumulative_inflow_3d_yi": 0.0,
+                "cumulative_inflow_5d_yi": 0.0,
+                "cumulative_inflow_10d_yi": 0.0,
             })
         return records
 
@@ -415,12 +421,21 @@ class TushareStateProvider:
         )
 
     def pledge_stat(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
+        # 质押统计按季度披露（慢变数据），用 end_date 批量一次拉全市场，再按
+        # requested_codes 过滤。逐股循环会触发 ~4948 次 Tushare 请求 + 429 限流。
+        target = _quarter_end_day(request.trade_date)
+        frame = self._client.pledge_stat(end_date=target)
+        if frame is None or frame.empty:
+            return ()
+        wanted = set(request.requested_codes)
         rows: list[dict[str, Any]] = []
-        for code in request.requested_codes:
-            frame = self._client.pledge_stat(ts_code=_ts_code(code))
-            if frame is None or frame.empty:
+        seen: set[str] = set()
+        frame = frame.sort_values("end_date")
+        for _, item in frame.iterrows():
+            code = str(item.get("ts_code") or "").split(".")[0]
+            if len(code) != 6 or code in seen or (wanted and code not in wanted):
                 continue
-            item = frame.sort_values("end_date").iloc[-1]
+            seen.add(code)
             rows.append({
                 "code": code,
                 "end_date": _iso_day(item.get("end_date")),
@@ -448,40 +463,56 @@ class TushareStateProvider:
         )
 
     def fina_indicator(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
-        rows: list[dict[str, Any]] = []
+        # 财务指标按季度披露（慢变数据），用 period=批量一次拉全市场某期的最新数据，
+        # 再按 requested_codes 过滤、剔除晚于 trade_date 的公告。逐股循环会触发
+        # ~4948 次 Tushare 请求 + 429 限流。
         target = _compact_day(request.trade_date)
-        for code in request.requested_codes:
-            frame = self._client.fina_indicator(ts_code=_ts_code(code), limit=4)
-            if frame is None or frame.empty:
+        period = _quarter_end_day(request.trade_date)
+        rows: list[dict[str, Any]] = []
+        wanted = set(request.requested_codes)
+        frame = self._client.fina_indicator(period=period)
+        if frame is None or frame.empty:
+            return ()
+        if "ann_date" in frame.columns:
+            frame = frame[frame["ann_date"].astype(str) <= target]
+        for _, item in frame.iterrows():
+            code = str(item.get("ts_code") or "").split(".")[0]
+            if len(code) != 6 or (wanted and code not in wanted):
                 continue
-            if "ann_date" in frame.columns:
-                frame = frame[frame["ann_date"].astype(str) <= target]
-            for _, item in frame.iterrows():
-                end_date = str(item.get("end_date") or "")
-                if not end_date:
-                    continue
-                rows.append({
-                    "code": code,
-                    "end_date": end_date,
-                    "ann_date": str(item.get("ann_date") or ""),
-                    "roe": _number(item.get("roe")),
-                    "grossprofit_margin": _number(item.get("grossprofit_margin")),
-                    "netprofit_margin": _number(item.get("netprofit_margin")),
-                    "netprofit_yoy": _number(item.get("netprofit_yoy")),
-                    "or_yoy": _number(item.get("or_yoy")),
-                    "eps": _number(item.get("eps")),
-                    "bps": _number(item.get("bps")),
-                })
+            end_date = str(item.get("end_date") or "")
+            if not end_date:
+                continue
+            rows.append({
+                "code": code,
+                "end_date": end_date,
+                "ann_date": str(item.get("ann_date") or ""),
+                "roe": _number(item.get("roe")),
+                "grossprofit_margin": _number(item.get("grossprofit_margin")),
+                "netprofit_margin": _number(item.get("netprofit_margin")),
+                "netprofit_yoy": _number(item.get("netprofit_yoy")),
+                "or_yoy": _number(item.get("or_yoy")),
+                "eps": _number(item.get("eps")),
+                "bps": _number(item.get("bps")),
+            })
         return rows
 
     def auction(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
+        # 集合竞价按 trade_date 批量一次拉全市场（Tushare stk_auction）。
+        # 逐股循环调 stk_auction 在无权限账号下会触发 N 次 API 错误；这里改成
+        # 单次 trade_date 批量调用，失败即数据源不可用（无权限），返回 ()。
         target = _compact_day(request.trade_date)
+        try:
+            frame = self._client.stk_auction(trade_date=target)
+        except Exception:
+            return ()
+        if frame is None or frame.empty:
+            return ()
+        wanted = set(request.requested_codes)
         rows: list[dict[str, Any]] = []
-        for code in request.requested_codes:
-            frame = self._client.stk_auction(ts_code=_ts_code(code), trade_date=target)
-            if frame is None or frame.empty:
+        for _, item in frame.iterrows():
+            code = str(item.get("ts_code") or "").split(".")[0]
+            if len(code) != 6 or (wanted and code not in wanted):
                 continue
-            item = frame.iloc[0]
             rows.append({
                 "code": code,
                 "trade_date": _iso_day(item.get("trade_date") or target),
@@ -496,16 +527,22 @@ class TushareStateProvider:
         return rows
 
     def holder_number(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
-        target = _compact_day(request.trade_date)
+        # 股东人数按季度披露（慢变数据），用 end_date 批量一次拉全市场，再按
+        # requested_codes 过滤。逐股循环会触发 ~4948 次 Tushare 请求 + 429 限流。
+        target = _quarter_end_day(request.trade_date)
+        frame = self._client.stk_holdernumber(end_date=target)
+        if frame is None or frame.empty:
+            return ()
+        iso_cutoff = request.trade_date.isoformat()
+        wanted = set(request.requested_codes)
         rows: list[dict[str, Any]] = []
-        for code in request.requested_codes:
-            frame = self._client.stk_holdernumber(ts_code=_ts_code(code), end_date=target, limit=5)
-            if frame is None or frame.empty:
+        for _, item in frame.iterrows():
+            code = str(item.get("ts_code") or "").split(".")[0]
+            if len(code) != 6 or (wanted and code not in wanted):
                 continue
-            for _, item in frame.iterrows():
-                end_date = _iso_day(item.get("end_date"))
-                if end_date and end_date <= request.trade_date.isoformat():
-                    rows.append({"code": code, "end_date": end_date, "holder_num": int(_number(item.get("holder_num")))})
+            end_date = _iso_day(item.get("end_date"))
+            if end_date and end_date <= iso_cutoff:
+                rows.append({"code": code, "end_date": end_date, "holder_num": int(_number(item.get("holder_num")))})
         return rows
 
 

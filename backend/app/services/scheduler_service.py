@@ -924,7 +924,11 @@ def _run_auxiliary_remediation(payload: dict) -> dict:
                 instruments=(),
                 trade_date=str(trade_date),
                 refresh=True,
-                datasets=("margin_detail", "block_trade", "hsgt_flow", "hsgt_top10"),
+                # 慢变批量集 + margin/hsgt 批量集。pledge_stat/holder_number/
+                # fina_indicator 此前只在推荐 run 时逐股惰性拉（4948 股 × 3 接口
+                # → 429 限流卡死），现在在每日同步批量拉全市场落库，run 时走本地。
+                datasets=("margin_detail", "block_trade", "hsgt_flow", "hsgt_top10",
+                          "pledge_stat", "holder_number", "fina_indicator"),
             )
             result["batch_sync"] = {
                 item.dataset_key: {
