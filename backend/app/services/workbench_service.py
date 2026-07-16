@@ -2735,11 +2735,19 @@ def _apply_market_scope(db: Session, features: list[dict[str, Any]], params: dic
 
 
 def _recent_recommended_codes(db: Session, trade_date: str) -> set[str]:
+    # 近 7 天已推荐过的 code（含当天 trade_date）。
+    # 含当天是为了兜底 dedup_same_day 的竞态：多个 formal run 在同一天 trade_date 上先后跑时，
+    # 后一个 run 在 start 时算一次 same_day_codes，但前一个 run 的推荐可能尚未 commit 落库
+    # （如 601881 在 2026-07-08 01:35/01:43/02:19/02:26 被 4 个 formal run 各推一次全失败，
+    # run2 start 距 run1 finish 仅 1 秒）。把当天纳入 recent_codes 后，跨 run 同日重复被
+    # hide_recent_repeats 保险兜住（dedup_same_day 仍为第一道，互为冗余）。
+    # 单 run 内按 code 去重（_apply_pool_rules 的 seen_codes），故当前 run 自己当天落库的
+    # 同股推荐不会误伤（同股不会在同一 run 内出现第二次）。
     recent_date = (datetime.fromisoformat(trade_date) - timedelta(days=7)).date().isoformat()
     rows = db.scalars(
         select(Recommendation).where(
             Recommendation.trade_date >= recent_date,
-            Recommendation.trade_date < trade_date,
+            Recommendation.trade_date <= trade_date,
         )
     ).all()
     return {row.code for row in rows}

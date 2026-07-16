@@ -9,6 +9,7 @@ from sqlalchemy import text
 
 from app.services.workbench_service import (
     _drop_as_repeat_card,
+    _recent_recommended_codes,
     _same_day_recommended_codes,
 )
 
@@ -90,3 +91,25 @@ def test_drop_as_repeat_card_respects_dedup_same_day_toggle():
 
 def test_drop_as_repeat_card_no_code_safe():
     assert _drop_as_repeat_card({}, {"dedup_same_day": True}, recent_repeat=False, same_day_repeat=False) is False
+
+
+def test_recent_recommended_codes_includes_same_day(db):
+    """_recent_recommended_codes 必须包含当天 trade_date 的推荐，兜底 dedup_same_day 竞态。
+
+    因果：多个 formal run 在同一天 trade_date 上先后跑时，dedup_same_day 在 run start
+    时算一次 same_day_codes，但前一个 run 的推荐可能尚未 commit（如 601881 在 2026-07-08
+    被 4 个 formal run 各推一次全失败，run2 start 距 run1 finish 仅 1 秒）。把当天纳入
+    recent_codes 后，跨 run 同日重复被 hide_recent_repeats 保险兜住。
+    """
+    found = _find_same_day_multi_run_dup(db)
+    if found is None:
+        import pytest
+
+        pytest.skip("no same-day cross-run duplicate formal recs in DB")
+    td, code, _ = found
+    # 当天已被其他 formal run 推荐过的 code 必须出现在 recent_codes 里（含当天）
+    result = _recent_recommended_codes(db, td)
+    assert code in result, (
+        f"code {code} 当天被多 run 推荐但不在 recent_codes(含当天) 中，"
+        "dedup_same_day 竞态失效时无兜底"
+    )
