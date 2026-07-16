@@ -73,6 +73,9 @@ def main() -> None:
     if len(sys.argv) < 2:
         print("Usage: run_workbench_subprocess.py <run_id>", file=sys.stderr)
         sys.exit(1)
+    # Force line-buffered stdout so subprocess logs are visible in real time
+    # (Python defaults to full buffering when stdout is not a tty).
+    sys.stdout.reconfigure(line_buffering=True)
     run_id = sys.argv[1]
     try:
         asyncio.run(_run(run_id))
