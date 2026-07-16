@@ -1690,6 +1690,16 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
             pipeline_audit["skill_review_failure_audit"] = review_failure_audit
         pipeline_audit["rule_only_fallback_count"] = 0
         scored_cards = list(cards)
+        # 实时刷新同日跨 run 行业计数：1454 行在 run start 时算一次缓存，但 run_workbench
+        # 主循环（特征构建/skill 评估/LLM 审查）耗时数分钟，期间同日其他 formal run 的推荐
+        # 已落库。用缓存值会漏算前 run 推荐（基数偏低），导致 _apply_sector_diversity 的
+        # 跨 run 行业硬上限失效——2026-07-09 实例：06:30 run start 时 01:39 run 已落库 5 只
+        # 科技硬件，但缓存基数未计入，06:30 又推 3 只半导体，跨 run 累积当日 26 只科技硬件
+        # 集中止损（D 项 07-09 半导体板块退潮 7/13 失败）。apply_pool_rules 前实时重查，
+        # 确保基数含所有已落库的同日 formal 推荐。
+        same_day_industry_counts = _same_day_industry_counts(
+            db, snapshot["trade_date"], run.run_id
+        )
         pool_result = apply_pool_rules(
             scored_cards,
             output_count=int(params["output_count"]),

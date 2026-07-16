@@ -1030,3 +1030,70 @@ def test_no_penalty_inflation_on_agent_unavailable():
     adj = _card_score_line_adjustment(card)
     assert "agent_unavailable_fallback" in adj["reasons"]
     assert adj["evidence_adjustment"] < 8.5, "LLM 暂不可用不应再抬高有效线"
+
+
+# ---------------------------------------------------------------------------
+# 跨 run 行业集中控制：same_day_industry_counts 基数必须正确计入，否则
+# _apply_sector_diversity 的硬上限失效（2026-07-09 半导体板块退潮 D 项失败归因）
+# ---------------------------------------------------------------------------
+
+def _industry_card(code: str, industry: str, final_score: float):
+    """带 industry 字段的测试卡片（_card 默认无 industry，不参与 sector diversity）。"""
+    return {
+        "code": code,
+        "final_score": final_score,
+        "industry": industry,
+        "evidence_quality_score": 92.0,
+        "data_completeness_score": 100.0,
+        "data_authenticity": 1.0,
+        "data_quality": {"missing_fields": []},
+    }
+
+
+def test_apply_pool_rules_same_day_industry_base_caps_concentration():
+    """同日跨 run 基数正确时，本 run 推第 6 只同行业股应被硬剔除。
+
+    因果：2026-07-09 06:30 run start 时 01:39 run 已落库 5 只科技硬件，
+    若 same_day_industry_counts 基数正确计入（=5），本 run 第 1 只半导体
+    count=6 > _MAX_PER_INDUSTRY(5) 应被剔除 → 0 只半导体输出。
+    旧 bug：基数漏算（=0）时 count 1/2/3 < 5 全保留 → 跨 run 累积 26 只科技硬件。
+    """
+    cards = [
+        _industry_card("300136", "元器件", 75.0),
+        _industry_card("301308", "半导体", 75.0),
+        _industry_card("600460", "半导体", 75.0),
+    ]
+    result = apply_pool_rules(
+        cards,
+        output_count=6,
+        score_line=72.0,
+        market_snapshot=_neutral_snapshot(),
+        same_day_industry_counts={"科技硬件": 5},
+    )
+    # 基数 5 → 第 1 只半导体 count=6 > 5 全部剔除（含软降线兜底后再过 sector diversity）
+    assert result == [], (
+        "同日基数 5 时本 run 半导体应被 sector diversity 硬剔除，避免跨 run 累积集中"
+    )
+
+
+def test_apply_pool_rules_zero_base_lets_single_run_industry_through():
+    """基数 0（无跨 run 前序）时，单 run 内前 5 只同行业股应保留（_MAX_PER_INDUSTRY=5）。
+
+    对照组：基数 0 是合法的（当日首个 formal run），本 run 推 3 只半导体 < 5 应保留。
+    避免修复过度收紧导致单 run 正常推荐被误杀。
+    """
+    cards = [
+        _industry_card("300136", "元器件", 75.0),
+        _industry_card("301308", "半导体", 75.0),
+        _industry_card("600460", "半导体", 75.0),
+    ]
+    result = apply_pool_rules(
+        cards,
+        output_count=6,
+        score_line=72.0,
+        market_snapshot=_neutral_snapshot(),
+        same_day_industry_counts={},
+    )
+    codes = [c["code"] for c in result]
+    # 基数 0 → 3 只 count 1/2/3 < 5 全保留（元器件+半导体同属科技硬件组）
+    assert set(codes) == {"300136", "301308", "600460"}
