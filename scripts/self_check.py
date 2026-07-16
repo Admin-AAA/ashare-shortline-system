@@ -581,6 +581,46 @@ def _fmt_d_board(tag: str, bd: dict) -> None:
               f'| 最大亏损 {m["max_loss"]}% | 平均收益 {m["avg"]}%')
 
 
+def _rsi_pollution_split(rows: list) -> tuple[float, float, int, int] | None:
+    """纯函数：按 RSI 污染（rsi_6=0 & rsi_12=50）拆分去重样本，返回
+    (clean_wr, polluted_wr, clean_n, polluted_n)。无 clean 或无 polluted 返回 None。
+    rows 元素: (code, trade_date, label, rsi6, rsi12)。便于单测锁定分类+胜率计算。
+    """
+    if not rows:
+        return None
+    clean = [r for r in rows if not (float(r[3] or 0) == 0.0 and float(r[4] or 0) == 50.0)]
+    polluted = [r for r in rows if float(r[3] or 0) == 0.0 and float(r[4] or 0) == 50.0]
+    if not clean or not polluted:
+        return None
+    clean_wr = round(sum(1 for r in clean if r[2] == 'success') * 100 / len(clean), 1)
+    polluted_wr = round(sum(1 for r in polluted if r[2] == 'success') * 100 / len(polluted), 1)
+    return (clean_wr, polluted_wr, len(clean), len(polluted))
+
+
+def _d_rsi_pollution_impact(db) -> tuple[float, float, int, int] | None:
+    """D 项 RSI 数据污染影响（按 code+trade_date 去重，与 _fetch_dedup_live_formal 同口径）。
+
+    RSI 污染（rsi_6=0 & rsi_12=50）是历史 stk_factor 缺失被 _f(None,0.0) 写入的产物，
+    feature_builder 已加守卫（新数据不污染）。这些样本选股时用了错的 RSI，不反映策略
+    真实能力，但不剔除主口径（避免系统性刷数字）。返回 (clean_wr, polluted_wr,
+    clean_n, polluted_n) 供 check_d_item 打印影响差——胜率下滑时区分「策略退化」
+    vs「数据污染扭曲」，防止误判循环加规则（第164轮过拟合护栏）。
+    """
+    rows = db.execute(text("""
+        SELECT r.code, r.trade_date,
+               MAX(o.outcome_label) AS label,
+               MAX(JSON_EXTRACT(r.feature_snapshot_json, '$.rsi_6')) AS rsi6,
+               MAX(JSON_EXTRACT(r.feature_snapshot_json, '$.rsi_12')) AS rsi12
+        FROM recommendation_outcomes o
+        JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+        WHERE o.outcome_label IN ('success', 'failed')
+          AND r.recommendation_id LIKE 'rec_%'
+        GROUP BY r.code, r.trade_date
+    """)).fetchall()
+    return _rsi_pollution_split(rows)
+
+
 def _forward_verification_flag(full_wr: float | None, fwd_result: tuple | None,
                                 baseline_wr: float) -> str | None:
     """D 项前瞻验证护栏（纯函数，便于单测锁定）。
@@ -665,6 +705,18 @@ def check_d_item(db) -> None:
     if _20 and _10 and _20.get("win_rate", 0) > _10.get("win_rate", 0):
         print(f'  ⚠️ 护栏: 20cm 胜率({_20.get("win_rate")}%)高于10cm({_10.get("win_rate")}%)'
               f'— 后续轮次禁止对 20cm 加风险闸门/降权（会损害 D 项）')
+
+    # 数据质量影响诊断：RSI 污染样本是历史 stk_factor 缺失产物（feature_builder 已加守卫），
+    # 不剔除主口径，但报告干净 vs 污染胜率差——胜率下滑时区分「策略退化」vs「数据污染扭曲」。
+    rsi_impact = _d_rsi_pollution_impact(db)
+    if rsi_impact:
+        clean_wr, pol_wr, clean_n, pol_n = rsi_impact
+        delta = round(clean_wr - pol_wr, 1)
+        if delta > 3:
+            print(f'  ℹ️ 数据质量影响：RSI 污染样本（rsi_6=0&rsi_12=50，历史 stk_factor 缺失）'
+                  f'WR {pol_wr}% (n={pol_n}) vs 干净样本 WR {clean_wr}% (n={clean_n})，差 {delta}pp')
+            print(f'     ——污染样本不剔除（避免刷数字），但胜率下滑时先排查是否数据污染扭曲'
+                  f'而非策略退化（feature_builder 已加守卫，新数据不污染）')
 
     # 单日集中度诊断（独立股票口径）：防止单日异常高量扭曲 D 项判断。
     # 已改用独立股票数（同股同日多 run 只算 1 只），避免"单日 N 笔"假警报——
