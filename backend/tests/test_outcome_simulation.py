@@ -317,7 +317,15 @@ def test_resolve_exit_trailing_same_bar_uses_trigger_price():
 
 
 def test_resolve_exit_stop_loss_priority_over_trailing():
-    """固定止损优先于 trailing：low 触及 stop_loss 时返回 stop_loss_hit，不走 trailing。"""
+    """固定止损优先于 trailing：low 触及 stop_loss 时返回 stop_loss_hit，不走 trailing。
+
+    护栏原因（第 162 轮反事实验证）：002674 @ 2026-07-08 持有期 max_return +13.89% 却
+    exit_reason=stop_loss_hit（-5.7%）。看似 trailing 没锁利，实则 max 与 exit 同日 → 同 bar
+    high 冲高激活 trailing 又 low 触止损，日线时序无法确定 high/low 谁先到。让 trailing 优先
+    的反事实变体在 191 笔样本上"胜率 74.9%→85.9%"，但全部 21 笔改善来自同 bar 乐观假设
+    （high 先到激活 trailing 再 low 触发）——跨 bar 保守口径下 0 笔改善，证明是过拟合。
+    故 stop_loss 优先是保守口径，禁止改成 trailing 优先（除非有分钟级时序数据）。
+    """
     # bar1 high=10.3（激活 trailing），low=10.25 > 触发价 10.22 不触发
     # bar2 low=9.5 触及 stop_loss → stop_loss 优先于 trailing 返回 stop_loss_hit
     bars = [
@@ -327,6 +335,24 @@ def test_resolve_exit_stop_loss_priority_over_trailing():
     result = _resolve_exit(bars, stop_loss_price=9.5, take_profit_price=12.0, code="000001", entry_price=10.0)
     assert result[2] == "stop_loss_hit"
     assert result[0] == 9.5
+
+
+def test_resolve_exit_same_bar_high_surge_then_stop_loss_uses_stop_loss():
+    """同 bar high 冲高激活 trailing 又 low 触止损 → 仍 stop_loss_hit（不 trailing 锁利）。
+
+    回归锁定 002674 @ 2026-07-08 场景：单日 high 冲到 +14%（激活 trailing），同日 low 触 -5.7%
+    止损。日线无法判断 high/low 时序，stop_loss 优先是保守口径。未来轮次若被此类"浮盈 14%
+    却止损"案例诱导想加 trailing 优先规则，本测试挡住——见 verify_trailing_priority.py
+    反事实验证：同 bar trailing 优先变体 +11pp 胜率全是过拟合，跨 bar 保守口径 0 改善。
+    """
+    # entry=10.0, 单 bar: high=11.4（+14% 激活 trailing，hwm=14），low=9.43（触 -5.7% 止损 9.43）
+    # trailing 触发价=10*(1+(14-0.8)/100)=11.32，low=9.43 ≤ 11.32 但 low ≤ stop_loss 9.43 先返回
+    bars = [
+        _bar_trailing(trade_date="2026-07-09", open=10.0, high=11.4, low=9.43, close=9.5, pct_chg=-5.0),
+    ]
+    result = _resolve_exit(bars, stop_loss_price=9.43, take_profit_price=12.0, code="002674", entry_price=10.0)
+    assert result[2] == "stop_loss_hit"
+    assert result[0] == 9.43  # 保守止损，不取 trailing 触发价 11.32
 
 
 def test_resolve_exit_trailing_not_activated_below_threshold():

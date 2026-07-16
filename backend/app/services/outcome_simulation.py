@@ -530,7 +530,12 @@ def _resolve_exit_with_trailing(
             if not trailing_activated and hwm >= TRAILING_STOP_ACTIVATE_PCT:
                 trailing_activated = True
                 activated_this_bar = True
-        # 固定止损仍优先（low 触及 stop_loss）
+        # 固定止损仍优先于已激活 trailing（low 触及 stop_loss 即返回 stop_loss_hit）。
+        # 护栏（第 162 轮反事实验证）：同 bar 内 high 冲高激活 trailing 后 low 触止损，日线
+        # 时序无法确定 high/low 谁先到。让 trailing 优先的变体在 191 笔样本上虚假 +11pp 胜率，
+        # 但 21 笔改善全来自同 bar 乐观假设（high 先到）——跨 bar 保守口径下 0 笔改善，纯过拟合。
+        # 故 stop_loss 优先是保守口径，禁止改 trailing 优先（除非接入分钟级时序数据）。
+        # 见 scripts/verify_trailing_priority.py 与 test_resolve_exit_same_bar_high_surge_then_stop_loss_uses_stop_loss。
         if low > 0 and low <= stop_loss_price:
             return stop_loss_price, str(bar.trade_date), "stop_loss_hit"
         # 条件 trailing 触发
