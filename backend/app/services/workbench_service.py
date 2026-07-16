@@ -139,7 +139,7 @@ from app.services.recommendations.projection import (
     serialize_recommendation as _project_recommendation,
     serialize_run_summary as _project_run_summary,
 )
-from app.services.runs.persistence import persist_recommendation_cards
+from app.services.runs.persistence import _slim_market_snapshot, persist_recommendation_cards
 from app.services.runs.progress import progress_pct as compute_progress_pct
 from app.services.runs.contracts import (
     CanonicalExecutionVersionBuilder,
@@ -1418,7 +1418,7 @@ async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: s
     # canonical pair from the same validated RunRequest used by execution.
     run.request_schema_version = run_request.schema_version
     run.request_json = run_request.to_canonical_json()
-    run.market_snapshot_json = _dumps(snapshot)
+    run.market_snapshot_json = _dumps(_slim_market_snapshot(snapshot))
     run.result_summary_json = _dumps({"execution": persisted_execution_audit})
     run.status = "running"
     run.error_message = None
