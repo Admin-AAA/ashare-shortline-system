@@ -217,6 +217,7 @@ def test_forward_veto_counterfactual_excludes_covered_failures(capsys):
         _row("rec_20260710_004", "success", 4.80, _overnight_ctx("强势"), "overnight-holding-method"),
         _row("rec_20260710_005", "success", 4.78, _overnight_ctx("强势"), "overnight-holding-method"),
     ]
+    self_check.FORWARD_EPOCH = "2026-07-09"
     self_check._print_forward_veto_counterfactual(rows, _skills(), win_rate_baseline=61.5)
     out = capsys.readouterr().out
     assert "前瞻 veto 反事实" in out

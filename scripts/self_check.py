@@ -898,6 +898,9 @@ def _print_forward_veto_counterfactual(rows, skills, win_rate_baseline: float) -
     """
     from app.engine.strategy_runner import run_strategy, evaluate_skill_prefilter
 
+    if not FORWARD_EPOCH:
+        return
+
     # 前瞻窗口子集（去重 by rid，与 _classify_failed_coverage 同口径）
     fwd = {row[0]: row for row in rows if row[0].startswith('rec_')}
     fwd_rows = [r for r in fwd.values() if _rid_trade_date(r[0]) >= FORWARD_EPOCH]
