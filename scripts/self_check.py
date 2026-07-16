@@ -8,8 +8,10 @@
 import json
 import math
 import os
+import subprocess
 import sys
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 # 让 backend/ 下的 app 包可被导入
@@ -275,11 +277,71 @@ def check_e_item(db, hit_skills: set) -> None:
         print(f'⚠️ {len(under_floor)} 个策略样本 <{SAMPLE_FLOOR}（胜率统计不可信，补跑应持续喂）: {under_floor}')
 
 
-# 前瞻样本分界：自该交易日起，同日去重 + 弱市否决等修复已部署进生产，
-# 其后的 formal run 才反映修复后的真实胜率。此前样本含修复前历史污染
+# 前瞻样本分界：自该交易日起，已上线的策略规则（strategy.yaml / aggregator.py）
+# 之后生成的 formal run 才反映修复后的真实胜率。此前样本含修复前历史污染
 # （如 2026-07-07/07-08 在去重与弱市否决 commit 之前生成的 run），
 # 不应据此循环加规则（见 T3 失败归因 / 第160-163轮）。
-FORWARD_EPOCH = "2026-07-09"
+#
+# 时间错位陷阱（d-item-time-lag-illusion）：硬编码日期会随每轮新规则上线而失准——
+# 例如 2026-07-09 设为 epoch 时，07-09 当天生成的 overnight 失败样本其实是 07-16
+# 震荡 veto 上线前的产物，却被当"前瞻修复后"统计，造成 D 项前瞻盈亏比假性下滑 1.36，
+# 误导后续轮次循环加规则。故改为动态解析：取最近一次改动 strategy.yaml/aggregator.py
+# 的 commit 时间之后的首个 formal 交易日。commit 后若无交易日，返回 None
+# （前瞻窗口空，self_check 报"样本不足"，不再拿修复前样本算假指标）。
+REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+
+def _last_rule_change_time() -> datetime | None:
+    """最近一次改动策略规则（strategy.yaml / aggregator.py）的 commit 时间。
+
+    本地仓库时间；self_check 仅本地运行（CLAUDE.md「本地 MySQL 为主」），
+    仓库历史必在。git 不可用时返回 None（降级为无前瞻窗口）。
+
+    返回 naive datetime（去掉 tzinfo，保留 commit 壁钟时间）：recommendation_runs.started_at
+    在 DB 里是 naive 北京时间，壁钟对齐才能正确比较「commit 之后生成的 run」。
+    """
+    try:
+        out = subprocess.check_output(
+            [
+                "git", "-C", REPO_DIR, "log", "-1", "--format=%cI",
+                "--", "backend/skills/", "backend/app/engine/aggregator.py",
+            ],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+        ).strip()
+        if not out:
+            return None
+        return datetime.fromisoformat(out).replace(tzinfo=None)
+    except Exception:
+        return None
+
+
+def _resolve_forward_epoch(db) -> str | None:
+    """策略规则最近一次上线 commit 之后的首个 formal 交易日。
+
+    规则 commit 时间后的首个交易日，该日及以后的 formal run 才是在新规则下生成。
+    commit 当天盘前的 run 仍是旧规则产物，故严格用 commit 时间之后首个 trade_date。
+    若 commit 后还没有 formal 推荐交易日，返回 None（前瞻窗口空）。
+    """
+    t = _last_rule_change_time()
+    if t is None:
+        return None
+    # 该 commit 时间之后首个有 LIVE formal 推荐的交易日
+    row = db.execute(text("""
+        SELECT MIN(r.trade_date) AS d
+        FROM recommendations r
+        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+        WHERE r.recommendation_id LIKE 'rec_%'
+          AND u.started_at >= :t
+    """), {"t": t}).first()
+    d = row[0] if row else None
+    return str(d) if d else None
+
+
+# 模块加载时暂置为占位 None；main() 里建立 db 后解析真实值并写回模块级常量，
+# 供 check_e_item / check_d_item 等所有引用点统一使用。
+FORWARD_EPOCH: str | None = None
 
 
 def _fetch_dedup_live_formal(db) -> list:
@@ -472,7 +534,8 @@ def _forward_verification_flag(full_wr: float | None, fwd_result: tuple | None,
     if fwd_result is not None:
         return None
     if full_wr > baseline_wr:
-        return (f'⚠️ 护栏: 前瞻窗口(≥{FORWARD_EPOCH})样本不足，全量胜率 {full_wr}% 高于基线 '
+        ep_label = FORWARD_EPOCH or "规则上线后"
+        return (f'⚠️ 护栏: 前瞻窗口(≥{ep_label})样本不足，全量胜率 {full_wr}% 高于基线 '
                 f'{baseline_wr}% 但未经样本外验证——勿据此 claim D 项改进；'
                 f'修复后新 run 结算后下轮复核')
     return None
@@ -507,10 +570,21 @@ def check_d_item(db) -> None:
     # 前瞻窗口（修复后）：FORWARD_EPOCH 之后的 run 才反映去重/弱市否决的真实胜率。
     # 若前瞻窗口胜率显著高于全量，说明全量下滑是历史污染而非真退化——
     # 切勿据此循环加规则（禁止过拟合，第164轮 T3 失败归因结论）。
-    fwd_res = _compute_d_window(rows, since_date=FORWARD_EPOCH)
-    _fmt_d(f'D 项(前瞻≥{FORWARD_EPOCH})', fwd_res, WIN_RATE_BASELINE, MAX_LOSS_BASELINE)
-    _fmt_d_cost(f'D 项(前瞻≥{FORWARD_EPOCH})', _compute_d_cost(rows, since_date=FORWARD_EPOCH),
-                WIN_RATE_BASELINE, PL_RATIO_BASELINE)
+    #
+    # 时间错位护栏：FORWARD_EPOCH 动态跟踪最近一次策略规则 commit 后的首个交易日。
+    # 若为 None（最近 commit 后尚无 formal run 结算），前瞻窗口空——报"样本不足"，
+    # 绝不退回全量当前瞻（曾因此把 07-16 震荡 veto 上线前的 07-09 失败样本当前瞻，
+    # 造出盈亏比 1.36 假性下滑，误导循环加规则）。
+    if FORWARD_EPOCH is None:
+        fwd_res = None
+        fwd_cost = None
+        print(f'  D 项(前瞻): 样本不足（最近规则上线后尚无 formal run 结算，待新交易日）')
+    else:
+        fwd_res = _compute_d_window(rows, since_date=FORWARD_EPOCH)
+        fwd_cost = _compute_d_cost(rows, since_date=FORWARD_EPOCH)
+        _fmt_d(f'D 项(前瞻≥{FORWARD_EPOCH})', fwd_res, WIN_RATE_BASELINE, MAX_LOSS_BASELINE)
+        _fmt_d_cost(f'D 项(前瞻≥{FORWARD_EPOCH})', fwd_cost,
+                    WIN_RATE_BASELINE, PL_RATIO_BASELINE)
 
     # 前瞻验证护栏：全量高于基线但前瞻窗口空 → 不可 claim 改进（见 _forward_verification_flag）
     flag = _forward_verification_flag(full_res[0] if full_res else None, fwd_res, WIN_RATE_BASELINE)
@@ -800,8 +874,10 @@ def _print_residual_poison_zone(uncovered: list[dict]) -> None:
 
 
 def main() -> None:
+    global FORWARD_EPOCH
     db = SessionLocal()
     try:
+        FORWARD_EPOCH = _resolve_forward_epoch(db)
         check_a_item(db)
         check_b_item(db)
         hit_skills = check_c_item(db)
