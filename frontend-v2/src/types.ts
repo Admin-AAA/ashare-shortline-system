@@ -1309,6 +1309,14 @@ export type RecommendationHistoryResponse = {
   total: number;
   offset: number;
   limit: number;
+  summary: {
+    trade_count: number;
+    win_count: number;
+    win_rate: number | null;
+    average_net_return: number | null;
+    total_net_return: number;
+    additional_cost_pct: number;
+  };
 };
 
 export type RecommendationHistoryQuery = {

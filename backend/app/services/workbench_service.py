@@ -689,7 +689,7 @@ def list_recommendation_history(
     limit: int = 50,
     offset: int = 0,
 ) -> dict[str, Any]:
-    """跨 run 推荐历史（带 outcome），支持分页 + 筛选。
+    """正式运行推荐历史（带 outcome），支持分页 + 筛选。
 
     填补北极星"推荐历史记录页"缺口：用户可查看所有推荐过的股票及其实际表现。
     按 (trade_date, code) 去重，保留 final_score 最高的（回测 DB 累积重复 run）。
@@ -713,6 +713,7 @@ def list_recommendation_history(
             Recommendation.final_score,
         )
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
+        .where(RecommendationRun.run_mode == "formal")
         .order_by(Recommendation.trade_date.desc(), Recommendation.final_score.desc())
     )
     if code:
@@ -763,9 +764,13 @@ def list_recommendation_history(
         deduped_ids.append(rec_id)
 
     total = len(deduped_ids)
+    all_outcomes = list(db.scalars(
+        select(RecommendationOutcome).where(RecommendationOutcome.recommendation_id.in_(deduped_ids))
+    ).all()) if deduped_ids else []
+    summary = _build_recommendation_history_summary(all_outcomes)
     page_ids = deduped_ids[offset : offset + limit]
     if not page_ids:
-        return {"items": [], "total": total, "offset": offset, "limit": limit}
+        return {"items": [], "total": total, "offset": offset, "limit": limit, "summary": summary}
 
     # 第 2 步：只对分页的 id 批量取详情（推荐 + outcome）
     page_recs = db.scalars(
@@ -784,10 +789,31 @@ def list_recommendation_history(
         rec_id = item.get("recommendation_id")
         item["outcome"] = _serialize_outcome(outcome_map.get(rec_id)) if rec_id else None
 
-    result = {"items": items, "total": total, "offset": offset, "limit": limit}
+    result = {"items": items, "total": total, "offset": offset, "limit": limit, "summary": summary}
     with _history_cache_lock:
         _history_cache[cache_key] = (time.time(), result)
     return result
+
+
+def _build_recommendation_history_summary(outcomes: list[Any]) -> dict[str, Any]:
+    """按统一的已成交净收益口径汇总复盘指标。"""
+    settled = [
+        outcome
+        for outcome in outcomes
+        if is_trade_executed(outcome) and normalized_outcome_label(outcome) in {"success", "failed"}
+    ]
+    net_returns = [resolved_trade_return(outcome) - _ADDITIONAL_COST_PCT for outcome in settled]
+    win_count = sum(value > 0 for value in net_returns)
+    trade_count = len(net_returns)
+    total_net_return = sum(net_returns)
+    return {
+        "trade_count": trade_count,
+        "win_count": win_count,
+        "win_rate": round(win_count * 100.0 / trade_count, 1) if trade_count else None,
+        "average_net_return": round(total_net_return / trade_count, 2) if trade_count else None,
+        "total_net_return": round(total_net_return, 2),
+        "additional_cost_pct": _ADDITIONAL_COST_PCT,
+    }
 
 
 def get_run_replay_analysis(db: Session, run_id: str) -> dict[str, Any] | None:
