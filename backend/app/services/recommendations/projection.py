@@ -250,11 +250,18 @@ def serialize_recommendation(
     watch: Any = None,
     run: Any = None,
     preset_name: str | None = None,
+    *,
+    slim: bool = False,
 ) -> dict[str, Any]:
     """将 Recommendation 及其已加载关联对象投影为 API 稳定字典。
 
     数据库查询由调用方批量完成；本函数只负责确定性字段投影，因此可在不连接
     MySQL 的场景下参与 golden-master 对拍。
+
+    slim=True 时剥离体积庞大的 feature_snapshot / market_context / skill_breakdown /
+    agent_logs / score_breakdown / score_line_meta / execution_viability（单条可达数百 KB），
+    供推荐历史列表接口使用——列表页只用 trade_date/code/final_score/bucket/价位/规则等轻量字段，
+    完整审计字段由 /api/recommendations/{id} 详情接口按需返回。
     """
     feature_snapshot = loads_json(_get(rec, "feature_snapshot_json"), {}) or {}
     market_context = loads_json(_get(rec, "market_context_json"), {}) or {}
@@ -262,7 +269,7 @@ def serialize_recommendation(
         feature_snapshot["aggregation_weights"] = market_regime_weights(market_context)
     agent_summary = loads_json(_get(rec, "agent_summary_json"), {}) or {}
     recommended_at = _get(rec, "recommended_at")
-    return {
+    payload = {
         "recommendation_id": _get(rec, "recommendation_id"),
         "run_id": _get(rec, "run_id"),
         "trade_date": _get(rec, "trade_date"),
@@ -284,6 +291,20 @@ def serialize_recommendation(
         "rationale": _get(rec, "rationale"),
         "risk_tags": loads_json(_get(rec, "risk_tags_json"), []),
         "info_tags": loads_json(_get(rec, "info_tags_json"), []),
+        "status": _get(rec, "status"),
+        "recent_repeat": _get(rec, "recent_repeat"),
+        "watch_status": _get(watch, "watch_status", "none") if watch else "none",
+        "watch_note": _get(watch, "note") if watch else None,
+        "preset_name": preset_name,
+        "preset_id": _get(run, "preset_id") if run else None,
+        "run_name": _get(run, "run_name") if run else None,
+    }
+    if slim:
+        # 列表路径只补 LLM 态度顶层快捷字段（轻量），其余大字段留给详情接口。
+        payload["llm_stance"] = agent_summary.get("stance")
+        payload["llm_delta"] = agent_summary.get("score_delta")
+        return payload
+    payload.update({
         "feature_snapshot": feature_snapshot,
         "market_context": market_context,
         "skill_breakdown": loads_json(_get(rec, "skill_breakdown_json"), []),
@@ -293,14 +314,9 @@ def serialize_recommendation(
         "score_breakdown": feature_snapshot.get("score_breakdown", {}),
         "score_line_meta": feature_snapshot.get("score_line_meta", {}),
         "execution_viability": feature_snapshot.get("execution_viability", {}),
-        "status": _get(rec, "status"),
-        "recent_repeat": _get(rec, "recent_repeat"),
-        "watch_status": _get(watch, "watch_status", "none") if watch else "none",
-        "watch_note": _get(watch, "note") if watch else None,
-        "preset_name": preset_name,
-        "preset_id": _get(run, "preset_id") if run else None,
-        "run_name": _get(run, "run_name") if run else None,
-    }
+    })
+    return payload
+
 
 
 def serialize_run_summary(

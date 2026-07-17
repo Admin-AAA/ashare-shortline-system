@@ -783,7 +783,7 @@ def list_recommendation_history(
 
     # 按去重后的 id 顺序排序（保证 trade_date DESC, final_score DESC）
     ordered_recs = [rec_by_id[rid] for rid in page_ids if rid in rec_by_id]
-    items = _serialize_recommendations_batched(db, ordered_recs)
+    items = _serialize_recommendations_batched(db, ordered_recs, slim=True)
     for item in items:
         rec_id = item.get("recommendation_id")
         item["outcome"] = _serialize_outcome(outcome_map.get(rec_id)) if rec_id else None
@@ -2172,7 +2172,7 @@ def _serialize_run_summary(db: Session, run: RecommendationRun) -> dict[str, Any
     )
 
 
-def _serialize_recommendations_batched(db: Session, recs: list[Recommendation]) -> list[dict[str, Any]]:
+def _serialize_recommendations_batched(db: Session, recs: list[Recommendation], *, slim: bool = False) -> list[dict[str, Any]]:
     """批量序列化推荐，避免 N+1 WatchItem / Run 查询。"""
     if not recs:
         return []
@@ -2199,6 +2199,7 @@ def _serialize_recommendations_batched(db: Session, recs: list[Recommendation]) 
             rec, watch_map.get(rec.recommendation_id),
             run_map.get(rec.run_id),
             preset_map.get(run_map[rec.run_id].preset_id) if rec.run_id in run_map and run_map[rec.run_id].preset_id else None,
+            slim=slim,
         )
         for rec in recs
     ]
@@ -2206,9 +2207,9 @@ def _serialize_recommendations_batched(db: Session, recs: list[Recommendation]) 
 
 def _serialize_recommendation_cached(
     rec: Recommendation, watch: WatchItem | None, run: RecommendationRun | None = None,
-    preset_name: str | None = None,
+    preset_name: str | None = None, *, slim: bool = False,
 ) -> dict[str, Any]:
-    return _project_recommendation(rec, watch, run, preset_name)
+    return _project_recommendation(rec, watch, run, preset_name, slim=slim)
 
 
 def _serialize_recommendation(db: Session, rec: Recommendation) -> dict[str, Any]:
