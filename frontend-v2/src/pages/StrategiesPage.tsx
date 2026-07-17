@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronRight, History, Layers, Target } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, History, Layers, Target } from "lucide-react";
 import { api } from "../api/client";
 import type { DateRangeMeta, StrategyListItem, StrategyPerformance } from "../types";
 import { ErrorPage, EmptyState, PageSkeleton } from "../components/StateViews";
@@ -244,6 +244,8 @@ function CalledCard({ item }: { item: StrategyListItem }) {
         <History size={14} /> 查看该策略推荐历史 →
       </button>
 
+      <StrategyDetailLink item={item} />
+
       <CardFooter item={item} />
     </div>
   );
@@ -270,8 +272,33 @@ function DormantCard({ item }: { item: StrategyListItem }) {
         已注册，但推荐管线尚未触发此策略
       </div>
 
+      <StrategyDetailLink item={item} />
       <CardFooter item={item} />
     </div>
+  );
+}
+
+function StrategyDetailLink({ item }: { item: StrategyListItem }) {
+  const { navigate } = useUrlRoute();
+  return (
+    <button
+      onClick={() => navigate(`/strategies/${encodeURIComponent(item.skill_id)}`)}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 4,
+        marginTop: "var(--space-3)",
+        background: "transparent",
+        border: "none",
+        color: "var(--text)",
+        cursor: "pointer",
+        fontSize: "var(--text-sm)",
+        padding: 0,
+        fontWeight: 600,
+      }}
+    >
+      <FileText size={14} /> 查看策略内容与版本 →
+    </button>
   );
 }
 

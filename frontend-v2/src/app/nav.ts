@@ -71,6 +71,7 @@ export function sectionFromPath(pathname: string): Section {
   }
   // /run → 不属于主导航，但默认回到驾驶舱
   if (normalized === "/run") return "dashboard";
+  if (normalized.startsWith("/strategies/")) return "strategies";
   return "home";
 }
 
@@ -86,6 +87,9 @@ export function navMatches(section: Section, pathname: string): boolean {
     return true;
   }
   if (section === "dashboard" && normalized === "/run") {
+    return true;
+  }
+  if (section === "strategies" && normalized.startsWith("/strategies/")) {
     return true;
   }
   return false;

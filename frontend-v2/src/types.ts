@@ -1238,6 +1238,8 @@ export type RecommendationCard = {
   recent_repeat: boolean;
   watch_status: string;
   watch_note?: string | null;
+  execution_version?: string | null;
+  strategy_versions?: Array<{ strategy_id: string; name: string; version_id: string }>;
   aggregation_weights?: Record<string, number>;
   market_regime?: string;
   skill_disagreement?: SkillDisagreement;
@@ -1579,6 +1581,65 @@ export type StrategyListItem = {
   source_type: string | null;
   assigned_presets: string[];
   has_backtest_adapter: boolean;
+  performance: StrategyPerformance | null;
+};
+
+export type StrategyVersionUsage = {
+  version_id: string;
+  declared_version: string;
+  yaml_hash: string;
+  created_at: string | null;
+  snapshot_available: boolean;
+  content_hash: string | null;
+  is_current: boolean;
+  run_count: number;
+  recommendation_count: number;
+  latest_run_at: string | null;
+};
+
+export type StrategyVersionChange = {
+  path: string;
+  change_type: "added" | "removed" | "changed";
+  before: unknown;
+  after: unknown;
+};
+
+export type StrategyArtifactSnapshot = {
+  schema_version: number;
+  strategy_id: string;
+  name: string;
+  mode: string;
+  status: string;
+  declared_version: string;
+  effective_version: string;
+  manifest: Record<string, unknown>;
+  contract: Record<string, unknown> | null;
+  skill_frontmatter: Record<string, unknown>;
+  skill_body: string;
+  skill_hash: string | null;
+  reference_files: Array<Record<string, unknown>>;
+};
+
+export type StrategyCenterDetail = {
+  strategy_id: string;
+  name: string;
+  description: string;
+  mode: string;
+  status: string;
+  enabled: boolean;
+  current_version_id: string;
+  selected_version_id: string;
+  selected_is_current: boolean;
+  effective_version: string;
+  registry_updated_at: string | null;
+  snapshot: StrategyArtifactSnapshot | null;
+  snapshot_available: boolean;
+  timeline: StrategyVersionUsage[];
+  diff: {
+    base_version_id: string | null;
+    target_version_id: string;
+    changes: StrategyVersionChange[];
+  };
   performance: StrategyPerformance | null;
 };
 

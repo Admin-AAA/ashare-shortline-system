@@ -261,6 +261,16 @@ def serialize_recommendation(
     if "aggregation_weights" not in feature_snapshot:
         feature_snapshot["aggregation_weights"] = market_regime_weights(market_context)
     agent_summary = loads_json(_get(rec, "agent_summary_json"), {}) or {}
+    selected_skills = loads_json(_get(run, "selected_skills_json"), []) if run else []
+    strategy_versions = [
+        {
+            "strategy_id": str(item.get("skill_id") or ""),
+            "name": str(item.get("name") or ""),
+            "version_id": str(item.get("version_id") or ""),
+        }
+        for item in selected_skills
+        if isinstance(item, dict) and item.get("skill_id") and item.get("version_id")
+    ]
     recommended_at = _get(rec, "recommended_at")
     return {
         "recommendation_id": _get(rec, "recommendation_id"),
@@ -300,6 +310,8 @@ def serialize_recommendation(
         "preset_name": preset_name,
         "preset_id": _get(run, "preset_id") if run else None,
         "run_name": _get(run, "run_name") if run else None,
+        "execution_version": _get(run, "execution_version") if run else None,
+        "strategy_versions": strategy_versions,
     }
 
 

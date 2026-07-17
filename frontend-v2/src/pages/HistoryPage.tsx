@@ -23,6 +23,8 @@ export function HistoryPage() {
   const { navigate } = useUrlRoute();
   const strategyId = queryParam("strategy_id");
   const strategyName = queryParam("strategy_name");
+  const strategyVersionId = queryParam("strategy_version_id");
+  const strategyVersion = queryParam("strategy_version");
   const [label, setLabel] = useState<"" | "success" | "failed" | "missed" | "pending">("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -51,10 +53,11 @@ export function HistoryPage() {
         bucket: bucket || undefined,
         setup_type: setupTypeQuery || undefined,
         strategy_id: strategyId || undefined,
+        strategy_version_id: strategyVersionId || undefined,
         limit: pageSize,
         offset: page * pageSize,
       }),
-    [label, codeQuery, bucket, setupTypeQuery, dateFrom, dateTo, page, strategyId],
+    [label, codeQuery, bucket, setupTypeQuery, dateFrom, dateTo, page, strategyId, strategyVersionId],
   );
 
   const items = data?.items ?? [];
@@ -110,7 +113,7 @@ export function HistoryPage() {
       title="推荐历史"
       actions={
         <span style={{ marginLeft: "auto", color: "var(--muted)", fontSize: "var(--text-base)" }}>
-          共 {total} 笔 · 当前 {page * pageSize + 1}-{Math.min((page + 1) * pageSize, total)}
+          共 {total} 笔 · 当前 {total === 0 ? 0 : page * pageSize + 1}-{Math.min((page + 1) * pageSize, total)}
         </span>
       }
     >
@@ -132,7 +135,14 @@ export function HistoryPage() {
           <Layers size={14} className="text-muted" />
           <span className="text-muted">策略下钻</span>
           <span style={{ fontWeight: 650, color: "var(--ink)" }}>{strategyName || strategyId}</span>
-          <span className="text-muted">的推荐历史</span>
+          <span className="text-muted">
+            {strategyVersionId ? "直接参与评分的正式推荐" : "的推荐历史"}
+          </span>
+          {strategyVersionId && (
+            <span className="tag" title={strategyVersionId} style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)" }}>
+              v{strategyVersion || "历史"} · {shortVersionId(strategyVersionId)}
+            </span>
+          )}
           <span className="tag" style={{ marginLeft: "auto", fontSize: "var(--text-xs)" }}>{total} 笔</span>
           <button
             className="btn btn--ghost"
@@ -307,6 +317,7 @@ export function HistoryPage() {
                     : o?.outcome_label === "failed"
                       ? "var(--market-down)"
                       : "var(--muted)";
+                const matchedVersion = it.strategy_versions?.find((version) => version.strategy_id === strategyId);
                 return (
                   <Fragment key={it.recommendation_id}>
                     <tr
@@ -330,6 +341,11 @@ export function HistoryPage() {
                         <div style={stackStyle}>
                           <span style={{ color: "var(--text)", fontFamily: "var(--font-mono)" }}>{bucketLabel(it.bucket)}</span>
                           <span>{it.setup_type || "未命中买点"}</span>
+                          {matchedVersion && (
+                            <span title={matchedVersion.version_id} style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)" }}>
+                              版本 {shortVersionId(matchedVersion.version_id)}
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td style={{ ...tdStyle, fontSize: "var(--text-sm)" }}>
@@ -463,6 +479,8 @@ const clip = (value: string, max: number) => {
   if (value.length <= max) return value;
   return `${value.slice(0, max)}…`;
 };
+
+const shortVersionId = (value: string) => value.length <= 14 ? value : `${value.slice(0, 14)}…`;
 
 const outcomeLabel = (value: string | null | undefined) => {
   if (value === "success") return "成功";

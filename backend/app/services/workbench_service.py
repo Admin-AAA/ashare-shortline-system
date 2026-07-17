@@ -686,6 +686,7 @@ def list_recommendation_history(
     bucket: str | None = None,
     setup_type: str | None = None,
     strategy_id: str | None = None,
+    strategy_version_id: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> dict[str, Any]:
@@ -698,7 +699,7 @@ def list_recommendation_history(
     Python 去重后切片分页，再只对 50 个 id 批量取详情。避免查全部 1584 行整行 + outcome。
     """
     # 短时缓存：历史数据不频繁变化（新 run 后才变），30s TTL
-    cache_key = f"hist:{code or ''}:{label or ''}:{date_from or ''}:{date_to or ''}:{bucket or ''}:{setup_type or ''}:{strategy_id or ''}:{limit}:{offset}"
+    cache_key = f"hist:{code or ''}:{label or ''}:{date_from or ''}:{date_to or ''}:{bucket or ''}:{setup_type or ''}:{strategy_id or ''}:{strategy_version_id or ''}:{limit}:{offset}"
     now = time.time()
     with _history_cache_lock:
         entry = _history_cache.get(cache_key)
@@ -734,6 +735,12 @@ def list_recommendation_history(
             text(
                 "JSON_SEARCH(recommendations.skill_breakdown_json,'one',:sid,NULL,'$[*].strategy_id') IS NOT NULL"
             ).bindparams(sid=str(strategy_id))
+        )
+    if strategy_version_id:
+        id_stmt = id_stmt.where(
+            text(
+                "JSON_SEARCH(recommendation_runs.selected_skills_json,'one',:strategy_version_id,NULL,'$[*].version_id') IS NOT NULL"
+            ).bindparams(strategy_version_id=str(strategy_version_id))
         )
     if label:
         if label == "pending":

@@ -11,7 +11,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import CHAR, Boolean, DateTime, Float, Integer, LargeBinary, String, Text, UniqueConstraint
+from sqlalchemy import CHAR, Boolean, DateTime, Float, Index, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.dialects.mysql import DATETIME, LONGBLOB, LONGTEXT, MEDIUMTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -681,6 +681,21 @@ class StrategyVersion(Base):
     yaml_path: Mapped[str] = mapped_column(String(500))
     yaml_hash: Mapped[str] = mapped_column(String(80))
     manifest_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class StrategyVersionSnapshot(Base):
+    """Immutable, self-contained strategy artifact captured for one version id."""
+
+    __tablename__ = "strategy_version_snapshots"
+    __table_args__ = (
+        Index("idx_strategy_version_snapshots_strategy_created", "strategy_id", "created_at"),
+    )
+
+    version_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    strategy_id: Mapped[str] = mapped_column(String(80))
+    snapshot_json: Mapped[str] = mapped_column(LONGTEXT().with_variant(Text(), "sqlite"))
+    content_hash: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

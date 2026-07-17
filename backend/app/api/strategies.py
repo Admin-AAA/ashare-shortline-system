@@ -11,11 +11,15 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.services.outcome_service import metrics_by_strategy
+from app.services.strategy_center_service import (
+    StrategyVersionNotFoundError,
+    get_strategy_center_detail,
+)
 from app.services.workbench_service import list_skills
 
 # 统计可信阈值：与 scheduler_service.DEFAULT_EXPOSURE_MIN_SAMPLE=20 对齐。
@@ -26,6 +30,27 @@ MIN_SAMPLE_FOR_RELIABLE = 20
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/strategies", tags=["strategies"])
+
+
+def _performance_payload(metric: dict | None) -> dict | None:
+    if not metric or (metric.get("sample_count") or 0) <= 0:
+        return None
+    return {
+        "sample_count": metric["sample_count"],
+        "labeled_count": metric.get("labeled_count", 0),
+        "triggered_count": metric.get("triggered_count", 0),
+        "missed_count": metric.get("missed_count", 0),
+        "success_count": metric.get("success_count", 0),
+        "trigger_rate": metric.get("trigger_rate"),
+        "hit_rate": metric.get("hit_rate"),
+        "avg_score": metric.get("avg_score"),
+        "avg_return": metric.get("avg_return"),
+        "profit_loss_ratio": metric.get("profit_loss_ratio"),
+        "last_recommendation_date": metric.get("last_recommendation_date"),
+        "reliable": (metric.get("sample_count") or 0) >= MIN_SAMPLE_FOR_RELIABLE,
+        "horizon_metrics": metric.get("horizon_metrics"),
+        "date_range": metric.get("date_range"),
+    }
 
 
 @router.get("")
@@ -51,28 +76,7 @@ def list_strategies(
     result = []
     for s in skills:
         m = metrics_by_id.get(s["skill_id"])
-        perf = None
-        if m and (m.get("sample_count") or 0) > 0:
-            perf = {
-                "sample_count": m["sample_count"],
-                "labeled_count": m.get("labeled_count", 0),
-                "triggered_count": m.get("triggered_count", 0),
-                "missed_count": m.get("missed_count", 0),
-                "success_count": m.get("success_count", 0),
-                "trigger_rate": m.get("trigger_rate"),
-                "hit_rate": m.get("hit_rate"),
-                "avg_score": m.get("avg_score"),
-                "avg_return": m.get("avg_return"),
-                # 北极星 C 项（策略可追溯）：盈亏比 + 最近一次命中日期。
-                # metrics_by_strategy 早已计算，此前被遗漏，导致前端卡片恒显 "—"。
-                "profit_loss_ratio": m.get("profit_loss_ratio"),
-                "last_recommendation_date": m.get("last_recommendation_date"),
-                # 统计可信度：样本数 < MIN_SAMPLE_FOR_RELIABLE(20) 时胜率属噪声，
-                # 前端据此标注「样本不足 · 统计参考」，避免用户过度信任小样本策略。
-                "reliable": (m.get("sample_count") or 0) >= MIN_SAMPLE_FOR_RELIABLE,
-                "horizon_metrics": m.get("horizon_metrics"),
-                "date_range": m.get("date_range"),
-            }
+        perf = _performance_payload(m)
         result.append(
             {
                 "skill_id": s["skill_id"],
@@ -97,3 +101,23 @@ def list_strategies(
         reverse=True,
     )
     return result
+
+
+@router.get("/{strategy_id}")
+def strategy_detail(
+    strategy_id: str,
+    version_id: str | None = Query(default=None, description="查看指定的不可变策略版本快照"),
+    db: Session = Depends(get_db),
+):
+    try:
+        detail = get_strategy_center_detail(db, strategy_id, version_id=version_id)
+    except StrategyVersionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="strategy version not found") from exc
+    if detail is None:
+        raise HTTPException(status_code=404, detail="strategy not found")
+    metric = next(
+        (item for item in metrics_by_strategy(db) if item.get("strategy_id") == strategy_id),
+        None,
+    )
+    detail["performance"] = _performance_payload(metric)
+    return detail
