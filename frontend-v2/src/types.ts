@@ -1186,6 +1186,8 @@ export type RecommendationCard = {
   entry_rule?: string | null;
   invalid_rule?: string | null;
   rationale?: string | null;
+  /** 后端按风险标签统一归类，供候选池低/中/高风险筛选使用。 */
+  risk_level?: "low" | "medium" | "high" | "unknown";
   risk_tags: string[];
   info_tags: string[];
   degraded_reason?: string | null;

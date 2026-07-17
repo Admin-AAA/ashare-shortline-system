@@ -37,6 +37,7 @@ from app.services.recommendations.projection import (
     build_risk_radar,
     build_run_progress,
     build_skill_reviews,
+    serialize_recommendation,
 )
 from app.services.recommendations.explanation import consensus_label
 from app.services.runs.progress import is_resumable_status, progress_pct
@@ -499,6 +500,37 @@ def test_build_cockpit_recommendation_preserves_serialized_recommendation_fields
     assert result.data_quality.quote_status == "fresh"
     # recommended_at 应原样透传，供候选池顶部标注本批推荐时间
     assert result.recommended_at == "2026-06-03T14:45:00"
+
+
+def test_serialize_recommendation_exposes_risk_level_for_run_candidate_filters():
+    rec = SimpleNamespace(
+        recommendation_id="rec-risk-level",
+        run_id="run-risk-level",
+        trade_date="2026-06-03",
+        recommended_at=datetime(2026, 6, 3, 14, 45),
+        code="600519",
+        name="贵州茅台",
+        industry="白酒",
+        recommend_price=1500.0,
+        bucket="core",
+        final_score=80.0,
+        consensus_score=75.0,
+        setup_type="趋势突破",
+        entry_rule="站稳均线",
+        invalid_rule="跌破止损",
+        rationale="测试",
+        risk_tags_json=json.dumps(["跌停压力不低于涨停"], ensure_ascii=False),
+        info_tags_json="[]",
+        status="pending",
+        recent_repeat=False,
+        feature_snapshot_json="{}",
+        market_context_json="{}",
+        agent_summary_json="{}",
+    )
+
+    result = serialize_recommendation(rec)
+
+    assert result["risk_level"] == "high"
 
 
 def test_build_run_progress_marks_stale_and_resumable():

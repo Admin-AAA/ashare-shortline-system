@@ -265,7 +265,7 @@ function RunDrawer({ run, open, onToggle }: { run: RunSummary; open: boolean; on
   const description = describePoolRun(run);
   const statusColor = runStatusColor(description.kind);
   return (
-    <section style={{ background: "var(--surface)", border: `1px solid ${open ? statusColor : "var(--line)"}`, borderRadius: "var(--radius-lg)", overflow: "hidden" }}>
+    <section style={{ background: "var(--surface)", border: "1px solid var(--line)", borderRadius: "var(--radius-lg)", overflow: "hidden" }}>
       <button
         onClick={onToggle}
         aria-expanded={open}
