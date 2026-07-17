@@ -590,7 +590,7 @@ function DomainRow({ d }: { d: DataDomainCoverage }) {
     d.status === "stale" && d.gap_days != null
       ? `滞后 ${d.gap_days}d`
       : d.fresh_window_days != null && d.status === "covered"
-        ? `窗口 ${d.fresh_window_days}d`
+        ? d.fresh_window_days === 0 ? "最新" : `窗口 ${d.fresh_window_days}d`
         : "";
   return (
     <div
@@ -656,7 +656,7 @@ function DomainCoverageSection({ summary }: { summary: DataDomainCoverageSummary
   return (
     <div>
       <div className="text-muted" style={{ fontSize: "var(--text-sm)", marginBottom: "var(--space-2)" }}>
-        共 {summary.total} 个数据域（指标级）。覆盖率按「有数据且在刷新窗口内」计算；
+        共 {summary.total} 个数据域（指标级）。日频数据必须覆盖参考交易日才算最新；
         <span style={{ color: "#d97706" }}> 滞后</span> = 接入过但策略未持续刷新，
         <span style={{ color: "#dc2626" }}> 空</span> = 无数据（未接入 / 未拉取）。
       </div>
