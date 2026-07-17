@@ -25,6 +25,39 @@ const WINDOW_OPTIONS: Array<{ label: string; value: number | null }> = [
   { label: "近 90 天", value: 90 },
 ];
 
+/** 英文因子名 → 中文小字翻译（Alpha 衰减面板的因子列）。 */
+const FACTOR_LABELS_ZH: Record<string, string> = {
+  is_main_theme: "主线题材",
+  breakout60: "60日突破",
+  capital_resonance_signal: "资金共振信号",
+  volume_breakout_signal: "量能突破信号",
+  breakout20: "20日突破",
+  support_ma5: "MA5 支撑",
+  support_ma10: "MA10 支撑",
+  is_shortline_leader_candidate: "短线龙头候选",
+  is_20cm_stock: "20cm 高波动标的",
+  chip_health_score_high: "筹码健康度高",
+  capital_flow_score_high: "资金流分高",
+};
+
+/** 英文过滤规则名 → 中文小字翻译（过滤效果面板的规则列）。 */
+const RULE_LABELS_ZH: Record<string, string> = {
+  pos20_low: "获利盘 < 50%",
+  avg_cost_high: "平均成本 > 200",
+  regime_ma5: "结构性强势 × MA5",
+};
+
+/** 渲染英文术语 + 中文小字：英文原值下方跟一行灰色翻译，无映射时只显示原值。 */
+function TermWithZh({ en, zhMap }: { en: string; zhMap: Record<string, string> }) {
+  const zh = zhMap[en];
+  return (
+    <div>
+      <div>{en}</div>
+      {zh && <div style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 400, marginTop: 2 }}>{zh}</div>}
+    </div>
+  );
+}
+
 /**
  * 指标页 —— 推荐质量分析
  * 后端有 /api/metrics/by_score_line, by_strategy, by_setup, precision-at-k, filter-effectiveness 五个端点。
@@ -332,7 +365,7 @@ function AlphaDecayPanel({ data }: { data: AlphaDecayResponse | null | undefined
             {sorted.map((f) => (
               <tr key={f.factor} style={{ borderBottom: "1px solid var(--line)", textAlign: "right" }}>
                 <td style={{ textAlign: "left", padding: "var(--space-2)", fontFamily: "var(--font-mono)", color: "var(--ink)" }}>
-                  {f.factor}
+                  <TermWithZh en={f.factor} zhMap={FACTOR_LABELS_ZH} />
                 </td>
                 <td style={{ padding: "var(--space-2)" }}>
                   <span style={{ color: statusColor(f.status), fontWeight: 600 }}>{statusLabel(f.status)}</span>
@@ -710,7 +743,9 @@ function FilterEffectivenessPanel({ data }: { data: FilterEffectiveness | null |
                 borderRadius: 6,
               }}
             >
-              <div style={{ fontWeight: 600, color: "var(--ink)" }}>{r.rule}</div>
+              <div style={{ fontWeight: 600, color: "var(--ink)" }}>
+                <TermWithZh en={r.rule} zhMap={RULE_LABELS_ZH} />
+              </div>
               <Metric label="过滤" value={String(r.count)} />
               <Metric label="胜率" value={`${wr.toFixed(1)}%`} color={wrColor} />
               <Metric
