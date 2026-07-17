@@ -985,7 +985,14 @@ def _update_run_progress(
 
 
 def recover_interrupted_runs(db: Session, run_ids: list[str] | None = None) -> int:
-    """Move stale active runs to ``interrupted`` through the lifecycle CAS."""
+    """Move stale active runs to ``interrupted`` through the lifecycle CAS.
+
+    queued 与 running 分开处理：queued run 的 heartbeat 在 worker 接管前不会更新
+    （曝光补跑 stagger enqueue 多个全市场扫描 run，单 worker 串行 dispatch 时
+    排队中的 run heartbeat 停在创建时间），heartbeat 超时对 queued 是错误指标——
+    排队等待 ≠ worker 失联。queued 超时改为重新 enqueue（覆盖后端重启丢队列场景），
+    只有 running 才走 heartbeat_timeout → interrupted。
+    """
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     stmt = select(RecommendationRun).where(RecommendationRun.status.in_(tuple(RUN_ACTIVE_STATUSES)))
     if run_ids is not None:
@@ -994,10 +1001,20 @@ def recover_interrupted_runs(db: Session, run_ids: list[str] | None = None) -> i
     repository = SQLAlchemyRunRepository(db)
     lifecycle = LegacyWorkbenchRunCoordinator(repository)
     recovered = 0
+    redispatched: list[str] = []
     for run in runs:
         heartbeat_age = (now - run.heartbeat_at).total_seconds() if run.heartbeat_at else float("inf")
         if heartbeat_age <= RUN_HEARTBEAT_STALE_SECONDS:
             logger.info("keep running run %s alive (heartbeat age=%.0fs)", run.run_id, heartbeat_age)
+            continue
+
+        # queued 超时：worker 尚未接管，heartbeat 不更新是正常的；重新派发而非标 interrupted。
+        # 覆盖两类场景：(a) 后端重启导致 dispatcher 内存队列丢失的孤儿 queued run；
+        # (b) 曝光补跑一次 enqueue 多个全市场扫描 run，单 worker 串行 dispatch 排队超 20min。
+        if run.status == "queued":
+            run.heartbeat_at = now  # 续命，避免下一轮 5min 巡检再次命中
+            db.flush()
+            redispatched.append(run.run_id)
             continue
 
         record = repository.get_run(run.run_id)
@@ -1034,6 +1051,11 @@ def recover_interrupted_runs(db: Session, run_ids: list[str] | None = None) -> i
             if run.status == "interrupted":
                 _record_progress_commit(run)
         logger.warning("marked %d stale recommendation runs as interrupted on startup", recovered)
+    if redispatched:
+        db.commit()
+        for run_id in redispatched:
+            _run_dispatcher.enqueue(run_id)
+        logger.info("redispatched %d stale queued runs (heartbeat timeout while waiting for worker)", len(redispatched))
     return recovered
 
 

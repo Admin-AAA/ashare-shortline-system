@@ -92,3 +92,59 @@ def test_recover_interrupted_runs_noop_when_all_fresh():
             db.delete(row)
         db.commit()
         db.close()
+
+
+def test_recover_interrupted_runs_redispatches_stale_queued_not_interrupted():
+    """queued run 排队等待时 heartbeat 不更新，超时必须重新派发而非标 interrupted。
+
+    回归场景：曝光补跑 stagger enqueue 多个全市场扫描 run，单 worker 串行 dispatch，
+    排队中的 run heartbeat 停在创建时间，20min 后被周期巡检误判为 worker 失联。
+    修复后 queued 超时 → redispatch（续命 heartbeat + 重新入队），状态保持 queued。
+    """
+    import app.services.workbench_service as ws_mod
+
+    enqueued: list[str] = []
+    real_enqueue = ws_mod._run_dispatcher.enqueue
+
+    def _capture_enqueue(run_id: str) -> None:
+        enqueued.append(run_id)
+
+    ws_mod._run_dispatcher.enqueue = _capture_enqueue
+    run_id_queued = f"__test_queued_{uuid.uuid4().hex[:12]}"
+    run_id_running = f"__test_running_{uuid.uuid4().hex[:12]}"
+    db = SessionLocal()
+    try:
+        queued = _make_run(run_id_queued, heartbeat_at=_utc_naive(-timedelta(hours=2)))
+        queued.status = "queued"
+        queued.progress_message = "等待后台工作线程接管"
+        db.add(queued)
+        # running 失联仍应走 interrupted
+        db.add(_make_run(run_id_running, heartbeat_at=_utc_naive(-timedelta(hours=2))))
+        db.commit()
+
+        recovered = recover_interrupted_runs(db)
+
+        queued_row = db.get(RecommendationRun, run_id_queued)
+        running_row = db.get(RecommendationRun, run_id_running)
+        # queued 未被标 interrupted（未计入 recovered）
+        assert queued_row is not None and queued_row.status == "queued"
+        assert queued_row.error_message is None
+        # running 仍标 interrupted
+        assert running_row is not None and running_row.status == "interrupted"
+        assert recovered >= 1
+        # queued heartbeat 被续命（不再是 2h 前）
+        assert queued_row.heartbeat_at is not None
+        age = (datetime.now(timezone.utc).replace(tzinfo=None) - queued_row.heartbeat_at).total_seconds()
+        assert age < 60  # 续命到当前时间附近
+        # queued run 被重新入队派发
+        assert run_id_queued in enqueued
+        assert run_id_running not in enqueued
+    finally:
+        ws_mod._run_dispatcher.enqueue = real_enqueue
+        db.rollback()
+        for rid in (run_id_queued, run_id_running):
+            row = db.get(RecommendationRun, rid)
+            if row is not None:
+                db.delete(row)
+        db.commit()
+        db.close()
