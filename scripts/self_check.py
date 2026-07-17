@@ -48,8 +48,30 @@ def _load_skills_once() -> dict:
     return _SKILLS_CACHE
 
 
+def _zero_rec_day_is_protective(stage_summaries_list: list[list[dict]]) -> bool:
+    """判断一个 0 推荐日是否"保护性 0 推荐"（D 项 score_line 拦截，非 pipeline 故障）。
+
+    保护性：至少一个 completed run 的 filter_audit 显示 score_line 阶段 input>0 且 pass=0
+    （候选进入分数线但最高分低于有效线，regime 有效线过高 / 恐慌日 veto / 强势 penalty）。
+    故障性：所有 completed run 都未到 score_line（prefilter/skill_gate 卡住）或无 completed run。
+    """
+    for stages in stage_summaries_list:
+        sl = next((s for s in stages if s.get("stage") == "score_line"), None)
+        if sl and (sl.get("input_count") or 0) > 0 and (sl.get("pass_count") or 0) == 0:
+            return True
+    return False
+
+
 def check_a_item(db) -> None:
-    """A 项：最近 7 天 formal 推荐产出（按交易日聚合，标出断档日）。"""
+    """A 项：最近 7 天 formal 推荐产出（按交易日聚合，标出断档日）。
+
+    区分两类 0 推荐日：
+    - 保护性 0 推荐：completed run 跑到 score_line 阶段但最高分低于有效线（regime
+      有效线过高 / 恐慌日 veto / 强势 regime penalty），是"准确 > 可见"的设计意图，
+      不算 pipeline 故障，不触发 T12。
+    - 故障性 0 推荐：completed run 在 prefilter/skill_gate 阶段就 0 通过（候选没进
+      score_line），或无 completed run（全 interrupted/failed），是真 T12 断档。
+    """
     rows = db.execute(text("""
         SELECT trade_date, run_mode, status, recommended_count
         FROM recommendation_runs
@@ -69,11 +91,32 @@ def check_a_item(db) -> None:
         by_date[td] = by_date.get(td, False) or has_ok
 
     ok_dates = sorted(d for d, ok in by_date.items() if ok)
-    # 断档日 = 系统跑过 formal run 但当日无任何成功推荐（排除周末/假日——那几天没有 run）
     gap_dates = sorted(d for d, ok in by_date.items() if not ok)
     print(f'A 项：最近 7 天有 {len(ok_dates)} 个交易日产出 formal 推荐（目标 ≥5）')
     if gap_dates:
-        print(f'⚠️ {len(gap_dates)} 个交易日系统跑了但 0 推荐（T12 排查: prefilter 过滤/数据缺失）: {gap_dates}')
+        protective: list[str] = []
+        faulty: list[str] = []
+        for td in gap_dates:
+            stage_rows = db.execute(text("""
+                SELECT filter_audit_json
+                FROM recommendation_runs
+                WHERE trade_date = :td AND run_mode='formal' AND status='completed'
+            """).bindparams(td=td)).fetchall()
+            stage_summaries_list: list[list[dict]] = []
+            for sr in stage_rows:
+                try:
+                    fa = json.loads(sr[0]) if sr[0] else {}
+                except (TypeError, ValueError):
+                    fa = {}
+                stage_summaries_list.append(fa.get("stage_summary") or [])
+            if _zero_rec_day_is_protective(stage_summaries_list):
+                protective.append(td)
+            else:
+                faulty.append(td)
+        if protective:
+            print(f'  ℹ️ {len(protective)} 个交易日保护性 0 推荐（score_line 拦截，regime 有效线过高，非 pipeline 故障，不触发 T12）: {protective}')
+        if faulty:
+            print(f'  ⚠️ {len(faulty)} 个交易日故障性 0 推荐（prefilter/skill_gate 卡住或全 interrupted，T12 排查）: {faulty}')
 
     interrupted = [r for r in rows if r[2] == 'interrupted']
     if interrupted:
