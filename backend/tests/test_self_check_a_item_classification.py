@@ -80,3 +80,37 @@ def test_faulty_when_score_line_has_passes_but_rec_still_zero():
         _stage("score_line", 60, 5),  # 5 只过线
     ]
     assert self_check._zero_rec_day_is_protective([stages]) is False
+
+
+# --------------------------------------------------------------------------- #
+# 失败归因内联镜像漂移守卫（第184轮新增）
+# --------------------------------------------------------------------------- #
+def test_inline_classify_matches_authoritative_no_follow_through():
+    """self_check 内联 _classify_failure_mode_inline 必须与权威 classify_failure_mode 一致。
+
+    防止两份实现漂移（上轮 T12 的内联镜像已知风险）。覆盖 no_follow_through 新分支
+    及边界：入场即套（max≤0.5 & ret<0）、max>0.5 不命中、可盈利单不命中。
+    """
+    from scripts.failure_attribution import classify_failure_mode
+
+    cases = [
+        # no_follow_through 正例
+        {"exit_reason": "stop_loss_hit", "executed_return": -4.0, "max_return": 0.15,
+         "rsi_12": 55, "chg20": 13, "pos60": 72, "setup_type": "多头顺势"},
+        # horizon_close + 峰值负 → no_follow_through
+        {"exit_reason": "horizon_close", "executed_return": -2.4, "max_return": -0.65,
+         "rsi_12": 58, "chg20": 11, "pos60": 77, "setup_type": "单峰放量突破"},
+        # 边界：max=1.0>0.5 不命中 no_follow_through（落到 other）
+        {"exit_reason": "stop_loss_hit", "executed_return": -2.0, "max_return": 1.0,
+         "rsi_12": 55, "chg20": 20, "pos60": 65, "setup_type": "多头顺势"},
+        # gap_roundtrip 不被误判（max>3）
+        {"exit_reason": "trailing_stop_hit", "executed_return": -1.5, "max_return": 5.0,
+         "rsi_12": 70, "chg20": 30, "pos60": 80, "setup_type": "多头顺势"},
+        # weak_stock 优先（rsi<45）不被 no_follow_through 抢
+        {"exit_reason": "stop_loss_hit", "executed_return": -2.0, "max_return": 0.3,
+         "rsi_12": 30, "chg20": -5, "pos60": 40, "setup_type": "多头顺势"},
+    ]
+    for kwargs in cases:
+        expected = classify_failure_mode(**kwargs)
+        got = self_check._classify_failure_mode_inline(**kwargs)
+        assert got == expected, f"漂移: 输入{kwargs} 权威={expected} 内联={got}"

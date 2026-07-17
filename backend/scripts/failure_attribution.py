@@ -9,7 +9,7 @@
 本工具把"失败 → 归因 → 规则调整 → 验证"闭环变成可复用、可量化的工程：
 
 1. 失败归因 (classify_failure_mode)：把每笔 failed 推荐映射到具体失败模式
-   （跳空回吐 / 追高 / 弱势股 / 弱形态 / 尾部跳空 / 其他），定位主导模式。
+   （跳空回吐 / 追高 / 弱势股 / 弱形态 / 入场即套 / 尾部跳空 / 其他），定位主导模式。
 2. 反事实验证 (run_counterfactual)：用当前模块的真实模拟逻辑（outcome_service._simulate_outcome）
    对历史 recommendation 重新模拟，对比「改动前(库内 outcome)」与「改动后(新逻辑重模拟)」
    的端到端指标（胜率/盈亏比/最大亏损/出场分布）。**只读，不写 DB**——改动效果用真实生产
@@ -64,12 +64,13 @@ def classify_failure_mode(
     """把一笔 failed 推荐映射到主导失败模式。
 
     优先级（从最可操作的尾部风险到最模糊的）：
-      1. tail_gap      —— 跳空止损（开盘远低于止损价，极端尾部）
-      2. gap_roundtrip —— trailing 激活后峰值>+3% 却净亏：盈利单被跳空回吐打回亏损（本轮主因）
-      3. bad_setup     —— 历史净胜率显著偏低的形态
-      4. weak_stock    —— 弱势股（RSI 极低）反而失败更多（反直觉，数据驱动）
-      5. extension_chase —— 追高（chg20/pos60 极高）
-      6. other         —— 其余
+      1. tail_gap           —— 跳空止损（开盘远低于止损价，极端尾部）
+      2. gap_roundtrip      —— trailing 激活后峰值>+3% 却净亏：盈利单被跳空回吐打回亏损（本轮主因）
+      3. bad_setup          —— 历史净胜率显著偏低的形态
+      4. weak_stock         —— 弱势股（RSI 极低）反而失败更多（反直觉，数据驱动）
+      5. no_follow_through  —— 入场即套：峰值(max_return)≤0.5% 且净亏（未延续，与 gap_roundtrip 的"涨后回吐"互斥）
+      6. extension_chase    —— 追高（chg20/pos60 极高）
+      7. other              —— 其余
     """
     if exit_reason == "stop_loss_gap":
         return "tail_gap"
@@ -83,6 +84,13 @@ def classify_failure_mode(
         return "bad_setup"
     if rsi_12 is not None and rsi_12 < 45:
         return "weak_stock"
+    if (
+        max_return is not None
+        and executed_return is not None
+        and max_return <= 0.5
+        and executed_return < 0.0
+    ):
+        return "no_follow_through"
     if (chg20 is not None and chg20 > 50) or (pos60 is not None and pos60 > 90):
         return "extension_chase"
     return "other"

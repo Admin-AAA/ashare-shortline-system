@@ -183,14 +183,19 @@ def test_classify_failure_mode_inline_modes():
         exit_reason="stop_loss_hit", executed_return=-1.0, max_return=4.0,
         rsi_12=55, chg20=10, pos60=50, setup_type=None,
     ) == "gap_roundtrip"
-    # extension_chase：chg20 极高
+    # extension_chase：chg20 极高 且 max>0.5（追高失败须确实涨过一点，否则归 no_follow_through）
+    assert self_check._classify_failure_mode_inline(
+        exit_reason="stop_loss_hit", executed_return=-5.0, max_return=1.5,
+        rsi_12=70, chg20=55, pos60=60, setup_type=None,
+    ) == "extension_chase"
+    # no_follow_through：峰值≤0.5 且净亏（入场即套，未延续）
     assert self_check._classify_failure_mode_inline(
         exit_reason="stop_loss_hit", executed_return=-5.0, max_return=0.1,
         rsi_12=70, chg20=55, pos60=60, setup_type=None,
-    ) == "extension_chase"
-    # other：无明显信号
+    ) == "no_follow_through"
+    # other：无明显信号（max>0.5 且 chg20/pos60 不极端）
     assert self_check._classify_failure_mode_inline(
-        exit_reason="stop_loss_hit", executed_return=-2.0, max_return=0.5,
+        exit_reason="stop_loss_hit", executed_return=-2.0, max_return=0.8,
         rsi_12=55, chg20=10, pos60=50, setup_type=None,
     ) == "other"
 

@@ -71,6 +71,38 @@ def test_classify_extension_chase():
     ) == "extension_chase"
 
 
+def test_classify_no_follow_through():
+    # 入场即套：峰值≤0.5% 且净亏，未延续（与 gap_roundtrip 的 max>3% 涨后回吐互斥）
+    assert classify_failure_mode(
+        exit_reason="stop_loss_hit", executed_return=-4.0, max_return=0.15,
+        rsi_12=55, chg20=13, pos60=72, setup_type="多头顺势",
+    ) == "no_follow_through"
+
+
+def test_classify_no_follow_through_horizon_close():
+    # 持有到期平仓也是亏（horizon_close）且峰值几乎没涨 → no_follow_through（非 other）
+    assert classify_failure_mode(
+        exit_reason="horizon_close", executed_return=-2.4, max_return=-0.65,
+        rsi_12=58, chg20=11, pos60=77, setup_type="单峰放量突破",
+    ) == "no_follow_through"
+
+
+def test_classify_no_follow_through_boundary_max_above_threshold():
+    # max_return 刚好 >0.5（如 1.0）不命中 no_follow_through，落到 extension_chase（chg20 高）或 other
+    assert classify_failure_mode(
+        exit_reason="stop_loss_hit", executed_return=-2.0, max_return=1.0,
+        rsi_12=55, chg20=20, pos60=65, setup_type="多头顺势",
+    ) == "other"
+
+
+def test_classify_no_follow_through_not_when_profitable():
+    # max_return≤0.5 但 executed_return≥0（非失败特征）→ 不命中（实际不会出现在 failed 集，但纯函数守卫）
+    assert classify_failure_mode(
+        exit_reason="horizon_close", executed_return=0.5, max_return=0.3,
+        rsi_12=55, chg20=13, pos60=72, setup_type="多头顺势",
+    ) == "other"
+
+
 def test_classify_other():
     assert classify_failure_mode(
         exit_reason="stop_loss_hit", executed_return=-2.0, max_return=1.0,

@@ -959,6 +959,13 @@ def _classify_failure_mode_inline(
         return "bad_setup"
     if rsi_12 is not None and rsi_12 < 45:
         return "weak_stock"
+    if (
+        max_return is not None
+        and executed_return is not None
+        and max_return <= 0.5
+        and executed_return < 0.0
+    ):
+        return "no_follow_through"
     if (chg20 is not None and chg20 > 50) or (pos60 is not None and pos60 > 90):
         return "extension_chase"
     return "other"
