@@ -964,6 +964,38 @@ def _classify_failure_mode_inline(
     return "other"
 
 
+def _residual_regime_sentiment_breakdown(
+    uncovered: list[dict],
+) -> list[tuple[tuple[str, str], dict]]:
+    """真残留毒区按 (market_regime, market_sentiment_phase) 交叉分布。
+
+    feature_snapshot 存 run 时由 aggregator _market_base/_market_sentiment 算出的
+    market_regime + market_sentiment_phase。_market_sentiment 仅用 limit_up_rate 单维度
+    判活跃，会把"涨停集中+大面积下跌"的冰点日误判为活跃，使弱势·活跃 score_line +3
+    放宽本该过滤的低质量票。本函数把该误判在毒区里的占比显式化，供前瞻样本积累后
+    修复 _market_sentiment（加 up_ratio/limit_down 双维度）作精确依据。
+
+    纯函数（仅读 uncovered），返回按 count 降序的 [(base, sent), {count, avg_return}]。
+    """
+    counts: Counter = Counter()
+    rets_by_key: dict[tuple[str, str], list[float]] = {}
+    for u in uncovered:
+        fs = u.get('fs') or {}
+        base = str(fs.get('market_regime') or '?')
+        sent = str(fs.get('market_sentiment_phase') or '?')
+        key = (base, sent)
+        counts[key] += 1
+        ret = u.get('executed_return')
+        if ret is not None:
+            rets_by_key.setdefault(key, []).append(float(ret))
+    out: list[tuple[tuple[str, str], dict[str, Any]]] = []
+    for key, c in counts.most_common():
+        rets = rets_by_key.get(key, [])
+        avg = round(sum(rets) / len(rets), 2) if rets else 0.0
+        out.append((key, {"count": c, "avg_return": avg}))
+    return out
+
+
 def _print_residual_poison_zone(uncovered: list[dict]) -> None:
     """打印真残留毒区：未覆盖失败笔数 + 模式分布 + 各模式平均净收益 + 集中度提示。
 
@@ -1032,6 +1064,19 @@ def _print_residual_poison_zone(uncovered: list[dict]) -> None:
         top_date, top_n = by_date.most_common(1)[0]
         if top_n >= 3:
             print(f'  ⚠️ 单日集中：{top_date} {top_n} 笔（疑似单日 regime 风险，非个股因子可解）')
+
+    # base x sentiment 交叉分布：定位"弱势·活跃是真毒区"类 regime 误判根因。
+    # feature_snapshot 存 market_regime（base）+ market_sentiment_phase（sentiment），
+    # 由 aggregator _market_base/_market_sentiment 在 run 时算出并写入。
+    # _market_sentiment 仅用 limit_up_rate 单维度判活跃，会把"涨停集中+大面积下跌"
+    # 的冰点日（如 2026-07-07 up_ratio=12.4% lu_rate=0.9%）误判为活跃，使弱势·活跃
+    # score_line +3 放宽本该过滤的低质量票。此段把该误判在毒区里的占比显式化，
+    # 供前瞻样本积累后修复 _market_sentiment（加 up_ratio/limit_down 双维度）作精确依据。
+    regime_sent_breakdown = _residual_regime_sentiment_breakdown(uncovered)
+    if regime_sent_breakdown:
+        print('  毒区 × (regime, sentiment) 分布（定位 regime 误判根因）:')
+        for (base, sent), entry in regime_sent_breakdown:
+            print(f'    - {base}·{sent}: {entry["count"]} 笔（均净 {entry["avg_return"]}%）')
 
     # 数据质量标记：RSI=0 是上游数据污染（_f(None,0.0) 写库 + rsi_6 缺守卫），
     # 不是策略可解毒区。统计残留毒区里 RSI 污染笔占比，提示勿当策略毒区循环加规则。
