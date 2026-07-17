@@ -2126,6 +2126,7 @@ def _serialize_run_summary_from_cache(run: RecommendationRun, preset: Preset | N
         hit_rate,
         active_statuses=RUN_ACTIVE_STATUSES,
         heartbeat_stale_seconds=RUN_HEARTBEAT_STALE_SECONDS,
+        slim_result_summary=True,
     )
 
 

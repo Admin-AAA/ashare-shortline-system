@@ -311,8 +311,14 @@ def serialize_run_summary(
     active_statuses: set[str],
     heartbeat_stale_seconds: int,
     now: datetime | None = None,
+    slim_result_summary: bool = False,
 ) -> dict[str, Any]:
-    """投影运行摘要；命中率与预设关联由调用方查询并传入。"""
+    """投影运行摘要；命中率与预设关联由调用方查询并传入。
+
+    slim_result_summary=True 时剥离 result_summary 中体积庞大的 pipeline / auxiliary_data
+    审计快照（单条可达数百 KB），用于 runs 列表接口——列表页只用 top_codes / avg_score
+    等轻量字段，完整审计快照由 /api/runs/{id} 详情接口按需返回。
+    """
     now = now or datetime.now(timezone.utc).replace(tzinfo=None)
     heartbeat_at = _get(run, "heartbeat_at")
     heartbeat_age_seconds = (
@@ -353,9 +359,18 @@ def serialize_run_summary(
         "interrupted_at": _isoformat_or_none(_get(run, "interrupted_at")),
         "skill_count": len(loads_json(_get(run, "selected_skills_json"), [])),
         "hit_rate": hit_rate,
-        "result_summary": loads_json(_get(run, "result_summary_json"), {}),
+        "result_summary": _result_summary_for_run(run, slim_result_summary),
         "checkpoint_phase": _get(run, "checkpoint_phase"),
     }
+
+
+def _result_summary_for_run(run: Any, slim: bool) -> dict[str, Any]:
+    summary = loads_json(_get(run, "result_summary_json"), {})
+    if not slim or not isinstance(summary, dict):
+        return summary
+    # pipeline / auxiliary_data 是单条数百 KB 的审计快照，列表页无人使用。
+    return {k: v for k, v in summary.items() if k not in ("pipeline", "auxiliary_data")}
+
 
 
 def _isoformat_or_none(value: Any) -> str | None:
