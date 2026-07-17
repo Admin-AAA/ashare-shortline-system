@@ -398,19 +398,32 @@ class TushareStateProvider:
         if frame is None or frame.empty:
             return ()
         target = request.trade_date.isoformat()
-        return tuple(
-            {
+        # top_list 对同一 (code, trade_date) 可能返回多条（一只股票同日因多个
+        # reason 上榜）。DragonTiger 表 unique 键是 (code, trade_date)，batch 内
+        # 重复 natural key 会导致整批 upsert 失败。按 (code, trade_date) 去重，
+        # 保留首条（reason 字段拼接多原因，便于追溯）。
+        deduped: dict[tuple[str, str], dict[str, Any]] = {}
+        for _, item in frame.iterrows():
+            code = str(item.get("ts_code") or "").split(".")[0]
+            if len(code) != 6:
+                continue
+            trade_date = _iso_day(item.get("trade_date") or target)
+            key = (code, trade_date)
+            if key in deduped:
+                reason = str(item.get("reason") or "").strip()
+                if reason and reason not in (deduped[key]["reason"] or ""):
+                    deduped[key]["reason"] = f"{deduped[key]['reason']};{reason}"
+                continue
+            deduped[key] = {
                 "code": code,
                 "name": str(item.get("name") or ""),
-                "trade_date": _iso_day(item.get("trade_date") or target),
+                "trade_date": trade_date,
                 "reason": str(item.get("reason") or ""),
                 "buy_amount_yi": round(_number(item.get("l_buy")) / 1e8, 4),
                 "sell_amount_yi": round(_number(item.get("l_sell")) / 1e8, 4),
                 "net_amount_yi": round(_number(item.get("net_amount")) / 1e8, 4),
             }
-            for _, item in frame.iterrows()
-            if len(code := str(item.get("ts_code") or "").split(".")[0]) == 6
-        )
+        return tuple(deduped.values())
 
     def margin_detail(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
         target = _compact_day(request.trade_date)
