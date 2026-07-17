@@ -90,7 +90,6 @@ from app.services.registry.data_source import (
     DATA_SOURCE_LOCAL_POOL_PREFERRED,
     DATA_SOURCE_LOCAL_POOL_REALTIME,
     DATA_SOURCE_REALTIME,
-    DEFAULT_PRESETS,
     DEFAULT_RECOMMENDATION_DATA_SOURCE,
     normalize_data_source,
 )

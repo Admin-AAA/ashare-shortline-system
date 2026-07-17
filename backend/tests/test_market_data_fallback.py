@@ -1,5 +1,5 @@
 from datetime import datetime
-from types import MethodType, SimpleNamespace
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest

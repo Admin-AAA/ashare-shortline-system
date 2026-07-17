@@ -1,9 +1,11 @@
 """预设（Preset）CRUD 深模块。
 
-任务 7.4（需求 6.1）落地：把此前散落在 `workbench_service.py` 的预设增删查改
-（`list_presets` / `create_preset` / `update_preset` / `delete_preset`）与默认
-预设自愈逻辑（`_ensure_default_presets` / `repair_preset_registration` /
-`_default_preset_skill_rows` / `_replace_preset_skills`）收口到本模块。
+预设增删查改（`list_presets` / `create_preset` / `update_preset` / `delete_preset`）
+与策略替换（`_replace_preset_skills`）收口到本模块。
+
+自愈逻辑（`_ensure_default_presets` / `repair_preset_registration` /
+`_default_preset_skill_rows`）已移除：它们会在用户编辑预设后把删掉的策略
+自动加回来，导致前端编辑永远无法生效。预设由用户手动管理，不需要机器自愈。
 """
 from __future__ import annotations
 
@@ -14,11 +16,8 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from app.engine.skill_loader import StrategySkill
 from app.models.tables import Preset, PresetSkill, SkillRegistry
 from app.services.registry.data_source import (
-    DATA_SOURCE_LOCAL_POOL,
-    DEFAULT_PRESETS,
     DEFAULT_RECOMMENDATION_DATA_SOURCE,
     normalize_data_source,
 )
@@ -51,8 +50,6 @@ def _serialize_preset(db: Session, preset: Preset) -> dict[str, Any]:
         "status": preset.status,
         "skills": [
             {
-                # skill_id is retained for the public API; its value is the
-                # descriptor-owned strategy_id, exposed explicitly for new consumers.
                 "strategy_id": row.skill_id,
                 "skill_id": row.skill_id,
                 "weight": row.weight,
@@ -200,8 +197,6 @@ def _replace_preset_skills(db: Session, preset_id: str, skills: list[dict[str, A
     # 显式 flush：确保 DELETE 先落库，否则同事务内 INSERT 与待删旧行主键/唯一键冲突（uq_preset_skill）。
     db.flush()
     for index, item in enumerate(skills):
-        # strategy_id is canonical; skill_id remains accepted and persisted as the
-        # historical column name so existing API clients and rows stay compatible.
         strategy_id = str(item.get("strategy_id") or item.get("skill_id") or "").strip()
         if not strategy_id:
             raise ValueError("preset skill requires strategy_id or skill_id")
@@ -214,141 +209,3 @@ def _replace_preset_skills(db: Session, preset_id: str, skills: list[dict[str, A
                 sort_order=int(item.get("sort_order") or index),
             )
         )
-
-
-def _ensure_default_presets(db: Session, skills: list[StrategySkill]) -> None:
-    has_changes = False
-    for item in DEFAULT_PRESETS:
-        preset = db.get(Preset, item["preset_id"])
-        configured_data_source = normalize_data_source(item.get("data_source") or DEFAULT_RECOMMENDATION_DATA_SOURCE)
-        if preset is None:
-            preset = Preset(
-                preset_id=item["preset_id"],
-                name=item["name"],
-                description=item["description"],
-                market_scope=item["market_scope"],
-                market_scope_value=item["market_scope_value"],
-                risk_template=item["risk_template"],
-                score_line=item["score_line"],
-                output_count=item["output_count"],
-                bucket_limits_json="{}",
-                data_source=configured_data_source,
-                hide_recent_repeats=item["hide_recent_repeats"],
-                skip_aux_refresh=item.get("skip_aux_refresh", False),
-                status="active",
-            )
-            db.add(preset)
-            db.flush()
-            desired_skills = _default_preset_skill_rows(item, skills)
-            _replace_preset_skills(db, item["preset_id"], desired_skills)
-            has_changes = True
-            continue
-
-        if (
-            not str(preset.data_source or "").strip()
-            or (
-                preset.preset_id == item["preset_id"]
-                and preset.data_source == DATA_SOURCE_LOCAL_POOL
-                and configured_data_source == DEFAULT_RECOMMENDATION_DATA_SOURCE
-            )
-        ):
-            preset.data_source = configured_data_source
-            has_changes = True
-        if float(preset.score_line or 0) <= 0:
-            preset.score_line = float(item["score_line"])
-            has_changes = True
-        has_skill_rows = bool(
-            db.scalar(
-                select(PresetSkill.id)
-                .where(PresetSkill.preset_id == item["preset_id"])
-                .limit(1)
-            )
-        )
-        if not has_skill_rows:
-            desired_skills = _default_preset_skill_rows(item, skills)
-            if desired_skills:
-                _replace_preset_skills(db, item["preset_id"], desired_skills)
-                has_changes = True
-    if has_changes:
-        db.commit()
-
-
-def repair_preset_registration(db: Session, skills: list[StrategySkill]) -> None:
-    """T1 策略注册自愈（仅加法，绝不删除）。
-
-    根因：``_ensure_default_presets`` 仅在预设「无任何 skill 行」时才用
-    ``_default_preset_skill_rows`` 全量填充；一旦预设已有部分 skill 行
-    （如 ``preset_formal_opening`` 长期只有 2/9 策略），后续新声明该组的策略
-    （含 ``trend-pullback-continuation``）永远不会被加入，导致其从未在每日 formal run
-    中被调用，违反北极星 C「每个策略有独立可查战绩」。
-
-    本函数做加法修复：仅为缺失项 INSERT ``PresetSkill`` 行，绝不 DELETE 任何已有行
-    （保留人工策展的权重/排序），幂等可重复调用，接入 ``sync_skills`` 后每次同步自愈。
-    """
-    has_changes = False
-    for item in DEFAULT_PRESETS:
-        preset_id = item["preset_id"]
-        desired = _default_preset_skill_rows(item, skills)
-        if not desired:
-            continue
-        existing_ids = set(
-            db.scalars(
-                select(PresetSkill.skill_id).where(PresetSkill.preset_id == preset_id)
-            ).all()
-        )
-        for row in desired:
-            sid = str(row["skill_id"])
-            if sid in existing_ids:
-                continue
-            db.add(
-                PresetSkill(
-                    id=f"{preset_id}:{sid}",
-                    preset_id=preset_id,
-                    skill_id=sid,
-                    weight=float(row.get("weight") or 1.0),
-                    sort_order=int(row.get("sort_order") or 0),
-                )
-            )
-            has_changes = True
-    if has_changes:
-        db.commit()
-
-
-def _default_preset_skill_rows(preset_config: dict[str, Any], skills: list[StrategySkill]) -> list[dict[str, Any]]:
-    groups = {str(group) for group in preset_config.get("skill_groups", []) if str(group).strip()}
-    if not groups:
-        return []
-    rows: list[dict[str, Any]] = []
-    for skill in skills:
-        # Declarative strategies declare preset membership in strategy.yaml
-        # (contract.meta.default_preset_groups).  Imperative strategies have no
-        # strategy.yaml (contract=None), so they would never be enrolled in any
-        # preset and silently vanish from formal runs — read the same field from
-        # manifest.meta as a fallback so imperative skills can declare membership.
-        meta = (skill.contract or {}).get("meta") or {}
-        group_config = meta.get("default_preset_groups")
-        if not group_config and skill.manifest is not None:
-            manifest_meta = skill.manifest.get("meta") or {}
-            group_config = manifest_meta.get("default_preset_groups")
-        if not isinstance(group_config, dict):
-            continue
-        for group in groups:
-            if group not in group_config:
-                continue
-            spec = group_config[group]
-            if isinstance(spec, dict):
-                weight = float(spec.get("weight") or 1.0)
-                sort_order = int(spec.get("sort_order") or len(rows))
-            elif isinstance(spec, (int, float)):
-                weight = float(spec)
-                sort_order = len(rows)
-            elif spec is True:
-                # Imperative skills carry their weight in signal_metadata.
-                weight = float((skill.contract or {}).get("weight") or
-                               ((skill.manifest or {}).get("signal_metadata") or {}).get("weight") or 1.0)
-                sort_order = len(rows)
-            else:
-                continue
-            rows.append({"skill_id": skill.skill_id, "weight": weight, "sort_order": sort_order})
-            break
-    return sorted(rows, key=lambda row: (int(row.get("sort_order") or 0), str(row.get("skill_id") or "")))

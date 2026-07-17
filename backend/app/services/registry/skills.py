@@ -205,10 +205,8 @@ def sync_skills(db: Session) -> list[StrategySkill]:
                 has_changes = True
         if has_changes:
             db.commit()
-        from app.services.registry.presets import _ensure_default_presets, repair_preset_registration
-
-        _ensure_default_presets(db, skills)
-        repair_preset_registration(db, skills)
+        # 自愈逻辑已移除：repair_preset_registration 会在用户编辑预设后把删掉的策略加回来，
+        # 导致前端编辑永远无法生效。预设由用户手动管理，不需要机器自动补全。
         _last_skill_sync_time = time.time()
         _cached_skill_cache_key = cache_key
         _cached_skill_list = skills
