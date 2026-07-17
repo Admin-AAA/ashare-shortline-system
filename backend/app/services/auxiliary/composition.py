@@ -163,6 +163,30 @@ def _news_date_partitions(request: AuxiliaryDatasetRequest) -> tuple[EventSnapsh
     )
 
 
+def _share_float_market_partition(request: AuxiliaryDatasetRequest) -> tuple[EventSnapshotRequest, ...]:
+    """一次拉全市场未来 30 天解禁，避免按 5000 只股票逐股请求。"""
+    return (
+        EventSnapshotRequest.from_mapping(
+            {
+                "start_date": _compact_day(request.trade_date),
+                "end_date": _compact_day(request.trade_date + timedelta(days=30)),
+            }
+        ),
+    )
+
+
+def _holder_trade_market_partition(request: AuxiliaryDatasetRequest) -> tuple[EventSnapshotRequest, ...]:
+    """一次拉全市场最近 30 天股东增减持，避免逐股请求。"""
+    return (
+        EventSnapshotRequest.from_mapping(
+            {
+                "start_date": _compact_day(request.trade_date - timedelta(days=30)),
+                "end_date": _compact_day(request.trade_date),
+            }
+        ),
+    )
+
+
 def _rows(snapshots: Sequence[ImmutablePartitionSnapshot]) -> tuple[Mapping[str, Any], ...]:
     records: list[Mapping[str, Any]] = []
     for snapshot in snapshots:
@@ -361,10 +385,10 @@ def build_auxiliary_production_composition(
             partitions = _single_trade_date_partition
             view = _block_trade_view
         elif entry.key == "share_float":
-            partitions = lambda request: _instrument_partitions(request, ts_code_formatter=ts_code_formatter)
+            partitions = _share_float_market_partition
             view = _share_float_view
         elif entry.key == "holder_trade":
-            partitions = lambda request: _instrument_partitions(request, ts_code_formatter=ts_code_formatter)
+            partitions = _holder_trade_market_partition
             view = _holder_trade_view
         elif entry.key == "news_announcement":
             partitions = _news_date_partitions

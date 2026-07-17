@@ -734,10 +734,10 @@ class RecommendationRun(Base):
     risk_template: Mapped[str] = mapped_column(String(20), default="balanced")
     score_line: Mapped[float] = mapped_column(Float, default=72.0)
     output_count: Mapped[int] = mapped_column(Integer, default=6)
-    selected_skills_json: Mapped[str] = mapped_column(MEDIUMTEXT, default="[]")
-    params_json: Mapped[str] = mapped_column(MEDIUMTEXT, default="{}")
-    market_snapshot_json: Mapped[str] = mapped_column(MEDIUMTEXT, default="{}")
-    result_summary_json: Mapped[str] = mapped_column(MEDIUMTEXT, default="{}")
+    selected_skills_json: Mapped[str] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"), default="[]")
+    params_json: Mapped[str] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"), default="{}")
+    market_snapshot_json: Mapped[str] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"), default="{}")
+    result_summary_json: Mapped[str] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"), default="{}")
     filter_audit_json: Mapped[str] = mapped_column(LONGTEXT().with_variant(Text(), "sqlite"), default="{}")
     status: Mapped[str] = mapped_column(String(30), default="running")
     error_message: Mapped[str | None] = mapped_column(Text)
@@ -783,13 +783,13 @@ class Recommendation(Base):
     entry_rule: Mapped[str | None] = mapped_column(Text)
     invalid_rule: Mapped[str | None] = mapped_column(Text)
     rationale: Mapped[str | None] = mapped_column(Text)
-    risk_tags_json: Mapped[str] = mapped_column(MEDIUMTEXT, default="[]")
-    info_tags_json: Mapped[str] = mapped_column(MEDIUMTEXT, default="[]")
+    risk_tags_json: Mapped[str] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"), default="[]")
+    info_tags_json: Mapped[str] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"), default="[]")
     recent_repeat: Mapped[bool] = mapped_column(Boolean, default=False)
     feature_snapshot_json: Mapped[str] = mapped_column(LONGTEXT().with_variant(Text(), "sqlite"), default="{}")
-    market_context_json: Mapped[str] = mapped_column(MEDIUMTEXT, default="{}")
-    skill_breakdown_json: Mapped[str] = mapped_column(MEDIUMTEXT, default="[]")
-    agent_summary_json: Mapped[str] = mapped_column(MEDIUMTEXT, default="{}")
+    market_context_json: Mapped[str] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"), default="{}")
+    skill_breakdown_json: Mapped[str] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"), default="[]")
+    agent_summary_json: Mapped[str] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"), default="{}")
     status: Mapped[str] = mapped_column(String(30), default="pending")
 
 
@@ -872,7 +872,7 @@ class BacktestRun(Base):
     date_from: Mapped[str] = mapped_column(String(10))
     date_to: Mapped[str] = mapped_column(String(10))
     status: Mapped[str] = mapped_column(String(30), default="completed")
-    result_json: Mapped[str] = mapped_column(MEDIUMTEXT, default="{}")
+    result_json: Mapped[str] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"), default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -973,8 +973,8 @@ class ScheduledTaskRun(Base):
     status: Mapped[str] = mapped_column(String(30), default="running")
     summary: Mapped[str | None] = mapped_column(Text)
     error_message: Mapped[str | None] = mapped_column(Text)
-    payload_json: Mapped[str] = mapped_column(MEDIUMTEXT, default="{}")
-    result_json: Mapped[str] = mapped_column(MEDIUMTEXT, default="{}")
+    payload_json: Mapped[str] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"), default="{}")
+    result_json: Mapped[str] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"), default="{}")
 
 
 class StockMatrixHistory(Base):
@@ -989,7 +989,7 @@ class StockMatrixHistory(Base):
     win_rate_est: Mapped[float | None] = mapped_column(Float)
     avg_return_est: Mapped[float | None] = mapped_column(Float)
     skill_count: Mapped[int] = mapped_column(Integer, default=0)
-    result_json: Mapped[str] = mapped_column(MEDIUMTEXT, default="{}")
+    result_json: Mapped[str] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"), default="{}")
     elapsed_ms: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 

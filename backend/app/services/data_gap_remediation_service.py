@@ -104,6 +104,9 @@ def _refresh_auxiliary_dataset(
     item = result.orchestrated.result_for(dataset)
     if item.errors:
         raise RuntimeError(", ".join(error.message for error in item.errors))
+    # run_auxiliary_application 把事务所有权交给调用方。补数动作以单数据集为
+    # 恢复单元，成功后必须立即提交；否则 Session close 会回滚，任务却仍报告成功。
+    db.commit()
     return item.coverage.record_count, dict(result.audit_payload[dataset])
 
 

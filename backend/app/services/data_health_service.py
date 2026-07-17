@@ -12,6 +12,8 @@ from typing import Any
 from sqlalchemy import distinct, func, select, text
 from sqlalchemy.orm import Session
 
+from app.engine.trading_calendar import latest_allowed_bar_date as _latest_allowed_bar_date
+
 from app.models.tables import (
     AuctionData,
     BlockTrade,
@@ -195,7 +197,7 @@ def _diagnose_all_uncached(db: Session) -> dict[str, Any]:
     # 6. 关键问题列表
     issues = _find_issues(table_stats, lag_days, reference_trade_date, recent_coverage, reference_info, domain_summary)
 
-    return {
+    result = {
         "score": score,
         "tushare_latest_trade_date": external_trade_date,
         "reference_trade_date": reference_trade_date,
@@ -209,6 +211,8 @@ def _diagnose_all_uncached(db: Session) -> dict[str, Any]:
         "data_domains": domain_summary,
         "recommendation_summary": _recommendation_summary(db),
     }
+    result["recommendation_readiness"] = recommendation_readiness_from_diagnosis(result)
+    return result
 
 
 def _table_stats(db: Session) -> dict[str, Any]:
@@ -266,11 +270,13 @@ def _get_tushare_latest_trade_date() -> str | None:
 def _resolve_reference_trade_date(db: Session) -> dict[str, str | None]:
     external_trade_date = _get_tushare_latest_trade_date()
     if external_trade_date:
+        latest_closed_trade_date = _latest_allowed_bar_date()
+        reference_trade_date = min(external_trade_date, latest_closed_trade_date)
         return {
-            "reference_trade_date": external_trade_date,
+            "reference_trade_date": reference_trade_date,
             "external_trade_date": external_trade_date,
             "source": "tushare",
-            "note": "参考交易日来自 Tushare 交易日历。",
+            "note": "参考交易日来自 Tushare 交易日历，并限制为当前已收盘交易日。",
         }
 
     local_trade_date = _infer_local_reference_trade_date(db)
@@ -906,6 +912,9 @@ def _recent_daily_trade_days(db: Session, reference_trade_date: str, window: int
         .limit(max(1, window))
     ).all()
     normalized = [_fmt_date(item) for item in rows if _fmt_date(item)]
+    reference = _fmt_date(reference_trade_date)
+    if reference and reference not in normalized:
+        normalized = [reference, *normalized]
     return list(reversed(normalized[:window]))
 
 
@@ -971,11 +980,57 @@ def _realtime_tolerated_gap_dates(
     incomplete_dates: list[str],
     reference_trade_date: str | None,
 ) -> set[str]:
-    reference = _fmt_date(reference_trade_date)
+    # reference_trade_date 已被限制为最新“已收盘”交易日，因此这里不再容忍任何
+    # 参考日缺口。盘中实时快照由 market_pool 的 realtime 模式单独处理，不能掩盖
+    # 日 K、指数、涨停板或资金流在收盘后的整日缺失。
+    del missing_dates, incomplete_dates, reference_trade_date
+    return set()
+
+
+_RECOMMENDATION_REQUIRED_TABLES = (
+    "daily_kbar",
+    "stock_quote",
+    "index_daily",
+    "limit_up_board",
+)
+
+
+def recommendation_readiness_from_diagnosis(
+    diagnosis: dict[str, Any],
+    *,
+    expected_trade_date: str | None = None,
+) -> dict[str, Any]:
+    """把全面诊断投影为盘后本地推荐的硬闸门。"""
+    reference = _fmt_date(expected_trade_date or diagnosis.get("reference_trade_date"))
+    tables = diagnosis.get("tables") or {}
+    recent = (diagnosis.get("recent_trade_day_coverage") or {}).get("tables") or {}
+    blockers: list[str] = []
+    warnings: list[str] = []
+
     if not reference:
-        return set()
-    gap_dates = {_fmt_date(day) for day in [*missing_dates, *incomplete_dates]}
-    return {reference} if reference in gap_dates else set()
+        blockers.append("无法确定最新已收盘交易日")
+    for key in _RECOMMENDATION_REQUIRED_TABLES:
+        info = tables.get(key) or {}
+        max_date = _fmt_date(info.get("max_date"))
+        if info.get("error"):
+            blockers.append(f"{info.get('label') or key}诊断失败")
+        elif reference and max_date != reference:
+            blockers.append(f"{info.get('label') or key}未覆盖 {reference}（最新 {max_date or '无'}）")
+        coverage = recent.get(key) or {}
+        if int(coverage.get("effective_gap_count") or 0) > 0:
+            blockers.append(f"{coverage.get('label') or key}近期仍有缺口")
+
+    for issue in diagnosis.get("issues") or []:
+        if issue.get("severity") in {"medium", "low"}:
+            warnings.append(str(issue.get("message") or ""))
+
+    return {
+        "status": "blocked" if blockers else ("degraded" if warnings else "ready"),
+        "can_run_local_recommendation": not blockers,
+        "reference_trade_date": reference,
+        "blockers": blockers,
+        "warnings": warnings,
+    }
 
 
 def _rollback_session_safely(db: Session) -> None:
