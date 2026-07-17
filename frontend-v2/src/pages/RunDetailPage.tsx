@@ -14,6 +14,7 @@ import { queryParam } from "../app/nav";
 export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
   const { navigate, navigateSection } = useUrlRoute();
   const runId = queryParam("run_id");
+  const presetId = queryParam("preset_id");
 
   const [presets, setPresets] = useState<Preset[]>([]);
   const [selectedPreset, setSelectedPreset] = useState<string>("");
@@ -25,9 +26,13 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
   useEffect(() => {
     api.presets().then((p) => {
       setPresets(p);
-      if (p.length && !selectedPreset) setSelectedPreset(p[0].preset_id);
+      setSelectedPreset((current) => {
+        if (current) return current;
+        if (presetId && p.some((item) => item.preset_id === presetId)) return presetId;
+        return p[0]?.preset_id || "";
+      });
     }).catch(() => {});
-  }, []);
+  }, [presetId]);
 
   // 首次进入 / 刷新 / 顶部刷新按钮：拉取运行详情并重置
   useEffect(() => {

@@ -1,70 +1,106 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
+  CalendarDays,
+  CheckCircle2,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
+  CircleDashed,
   Clock,
+  Loader2,
+  PlayCircle,
   Search,
+  XCircle,
 } from "lucide-react";
 import { api } from "../api/client";
-import type { CockpitRecommendation, OutcomeSummary } from "../types";
-import { EmptyState, ErrorPage } from "../components/StateViews";
+import type { CockpitRecommendation, OutcomeSummary, RunSummary } from "../types";
+import { ErrorPage } from "../components/StateViews";
 import { PoolExpandedRow } from "../components/PoolExpandedRow";
 import { StockTicker } from "../components/StockTicker";
 import { LlmStanceBadge } from "../components/LlmStanceBadge";
 import { useUrlRoute } from "../app/useUrlRoute";
 import { useApi } from "../app/useApi";
 import { queryParam } from "../app/nav";
+import { describePoolRun, summarizePoolRuns, type PoolRunKind } from "./poolRunView";
 
 /**
- * 候选池 —— 可展开行模式（替代原 master-detail）
- * 见 docs/UX-architecture-full-report.md §6.4
+ * 候选池 —— 日期运行日志 → 运行抽屉 → 股票二级展开。
  *
- * 支持同时展开多行并排对比买点与风险。
- * 每张展开卡含 LLM 可信度指示器（确定 / 不确定 / 历史验证率）。
+ * 运行记录是页面骨架；推荐股票是某次运行的结果。这样即使推荐数为 0，
+ * 页面仍能明确展示本次运行的时间、预设、完成状态和筛空信息。
  */
 type RiskLevel = CockpitRecommendation["risk_level"];
+type RunFilter = "all" | PoolRunKind;
 
 export function PoolPage() {
-  const { navigate, navigateSection } = useUrlRoute();
+  const { navigate } = useUrlRoute();
   const runId = queryParam("run_id");
+  const today = localDateKey();
+  const [selectedDate, setSelectedDate] = useState(today);
+  const [presetFilter, setPresetFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState<RunFilter>("all");
+  const [expandedRuns, setExpandedRuns] = useState<Set<string>>(new Set());
+  const initializedDate = useRef("");
+  const { data: runs, loading, error, refetch } = useApi<RunSummary[]>(() => api.runs(100), []);
 
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [filter, setFilter] = useState<{ risk?: RiskLevel; q: string }>({ q: "" });
-  // 若有 run_id 则加载该 run 的候选，否则加载最新候选
-  // runRecommendations 返回 RecommendationCard[]（含 risk_level 等扩展字段，后端实际返回），
-  // dashboard.overview 返回 CockpitRecommendation[]；统一按 CockpitRecommendation 消费
-  const { data: items, loading, error } = useApi<CockpitRecommendation[]>(
-    (signal) =>
-      runId
-        ? api.runRecommendations(runId).then((list) => list as unknown as CockpitRecommendation[])
-        : api.dashboard.overview({ signal }).then((d) => d.recommendations),
-    [runId],
+  const allRuns = runs ?? [];
+  const linkedRun = runId ? allRuns.find((run) => run.run_id === runId) : undefined;
+  const effectiveDate = selectedDate;
+  const availableDates = useMemo(
+    () => Array.from(new Set([today, ...allRuns.map((run) => run.trade_date).filter(Boolean)])).sort().reverse(),
+    [allRuns, today],
   );
-
-  const filtered = useMemo(() => {
-    if (!items) return [];
-    const q = filter.q.trim().toLowerCase();
-    return items.filter((c) => {
-      if (filter.risk && c.risk_level !== filter.risk) return false;
-      if (q && !(`${c.code} ${c.name}`.toLowerCase().includes(q))) return false;
-      return true;
-    });
-  }, [items, filter]);
-
-  // 每只股票已结算推荐的真实历史表现（胜率/均收益），用于展开行「历史验证」替换启发式
-  const codes = useMemo(
-    () => (items ? Array.from(new Set(items.map((c) => c.code))) : []),
-    [items],
+  const dayRuns = useMemo(
+    () => allRuns
+      .filter((run) => run.trade_date === effectiveDate)
+      .sort((a, b) => runSortTime(b).localeCompare(runSortTime(a))),
+    [allRuns, effectiveDate],
   );
-  const codesKey = codes.join(",");
-  const { data: outcomeSummary } = useApi<Record<string, OutcomeSummary>>(
-    () => api.recommendationOutcomeSummary(codes),
-    [codesKey],
+  const presetOptions = useMemo(
+    () => Array.from(new Set(dayRuns.map((run) => run.preset_name || run.run_name || "未命名预设"))).sort(),
+    [dayRuns],
   );
+  const filteredRuns = dayRuns.filter((run) => {
+    if (presetFilter !== "all" && (run.preset_name || run.run_name || "未命名预设") !== presetFilter) return false;
+    if (statusFilter !== "all" && describePoolRun(run).kind !== statusFilter) return false;
+    return true;
+  });
+  const summary = summarizePoolRuns(dayRuns);
+  const dateIndex = availableDates.indexOf(effectiveDate);
+  const olderDate = dateIndex >= 0 ? availableDates[dateIndex + 1] : undefined;
+  const newerDate = dateIndex > 0 ? availableDates[dateIndex - 1] : undefined;
+  const hasActiveRun = allRuns.some((run) => describePoolRun(run).kind === "active");
 
-  const toggle = (id: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
+  useEffect(() => {
+    if (!linkedRun) return;
+    setSelectedDate(linkedRun.trade_date);
+    setExpandedRuns((current) => new Set(current).add(linkedRun.run_id));
+  }, [linkedRun?.run_id, linkedRun?.trade_date]);
+
+  useEffect(() => {
+    if (!runs || initializedDate.current === effectiveDate) return;
+    const defaults = dayRuns.slice(0, 1).map((run) => run.run_id);
+    setExpandedRuns(new Set(defaults));
+    initializedDate.current = effectiveDate;
+  }, [runs, dayRuns, effectiveDate]);
+
+  useEffect(() => {
+    if (!hasActiveRun) return;
+    const timer = window.setInterval(refetch, 3000);
+    return () => window.clearInterval(timer);
+  }, [hasActiveRun, refetch]);
+
+  const chooseDate = (date: string) => {
+    initializedDate.current = "";
+    setPresetFilter("all");
+    setStatusFilter("all");
+    setSelectedDate(date);
+  };
+
+  const toggleRun = (id: string) => {
+    setExpandedRuns((current) => {
+      const next = new Set(current);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
@@ -74,226 +110,393 @@ export function PoolPage() {
   if (loading) {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-        {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="skeleton" style={{ height: 56 }} />
+        <div className="skeleton" style={{ height: 96 }} />
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="skeleton" style={{ height: 68 }} />
         ))}
       </div>
     );
   }
-  if (error) return <ErrorPage title="候选加载失败" message={error} onRetry={() => window.location.reload()} />;
-  if (!items || items.length === 0) {
-    return (
-      <EmptyState
-        icon={<Search size={32} />}
-        title="当前没有达标龙头候选"
-        reason={runId ? `运行 ${runId} 未产出候选` : "今日可能尚未运行推荐"}
-        action={
-          <button className="btn btn--primary" onClick={() => navigate("/run")}>
-            去运行推荐
-          </button>
-        }
-      />
-    );
-  }
-
-  // 从候选列表中提取本批共同的推荐时间信息（同一 run 共享 trade_date / recommended_at）
-  // deriveBatchMeta 是纯函数且只需取首元素，无需 useMemo（避免在条件 return 后违反 Hooks 规则）
-  const batchMeta = deriveBatchMeta(items);
+  if (error) return <ErrorPage title="运行记录加载失败" message={error} onRetry={refetch} />;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-      <RecommendationTimeBar meta={batchMeta} runId={runId} total={items.length} />
-      <FilterBar
-        total={items.length}
-        filtered={filtered.length}
-        filter={filter}
-        onChange={setFilter}
+      <PoolRunToolbar
+        date={effectiveDate}
+        today={today}
+        olderDate={olderDate}
+        newerDate={newerDate}
+        presetFilter={presetFilter}
+        presetOptions={presetOptions}
+        statusFilter={statusFilter}
+        summary={summary}
+        onDateChange={chooseDate}
+        onPresetChange={setPresetFilter}
+        onStatusChange={setStatusFilter}
       />
 
-      <SectorDiversityBar items={filtered} />
-
-      {expanded.size > 3 && (
-        <div className="tag tag--warning" style={{ alignSelf: "flex-start" }}>
-          已展开 {expanded.size} 行，可能超出可视范围
+      {dayRuns.length === 0 ? (
+        <NoRunsToday date={effectiveDate} today={today} onRun={() => navigate("/run")} />
+      ) : filteredRuns.length === 0 ? (
+        <div className="panel" style={{ padding: "var(--space-6)", textAlign: "center" }}>
+          <div style={{ fontWeight: 600, color: "var(--ink)" }}>没有符合当前筛选的运行记录</div>
+          <div className="text-muted" style={{ marginTop: "var(--space-2)", fontSize: "var(--text-sm)" }}>
+            当天实际运行了 {dayRuns.length} 次，清除预设或状态筛选即可查看。
+          </div>
         </div>
+      ) : (
+        filteredRuns.map((run) => (
+          <RunDrawer
+            key={run.run_id}
+            run={run}
+            open={expandedRuns.has(run.run_id)}
+            onToggle={() => toggleRun(run.run_id)}
+          />
+        ))
       )}
+    </div>
+  );
+}
 
-      {filtered.map((c, i) => {
-        const isOpen = expanded.has(c.recommendation_id);
+function PoolRunToolbar({
+  date,
+  today,
+  olderDate,
+  newerDate,
+  presetFilter,
+  presetOptions,
+  statusFilter,
+  summary,
+  onDateChange,
+  onPresetChange,
+  onStatusChange,
+}: {
+  date: string;
+  today: string;
+  olderDate?: string;
+  newerDate?: string;
+  presetFilter: string;
+  presetOptions: string[];
+  statusFilter: RunFilter;
+  summary: ReturnType<typeof summarizePoolRuns>;
+  onDateChange: (date: string) => void;
+  onPresetChange: (value: string) => void;
+  onStatusChange: (value: RunFilter) => void;
+}) {
+  return (
+    <div className="panel" style={{ padding: "var(--space-4)", display: "grid", gap: "var(--space-3)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap" }}>
+        <CalendarDays size={18} className="text-muted" />
+        <button className="btn btn--ghost" disabled={!olderDate} onClick={() => olderDate && onDateChange(olderDate)} title="前一个有记录的日期">
+          <ChevronLeft size={16} />
+        </button>
+        <strong className="text-mono" style={{ fontSize: "var(--text-lg)", color: "var(--ink)" }}>
+          {date} {date === today ? "今天" : ""}
+        </strong>
+        <button className="btn btn--ghost" disabled={!newerDate} onClick={() => newerDate && onDateChange(newerDate)} title="后一个有记录的日期">
+          <ChevronRight size={16} />
+        </button>
+        <div style={{ display: "flex", gap: "var(--space-2)", marginLeft: "auto", flexWrap: "wrap" }}>
+          <select value={presetFilter} onChange={(event) => onPresetChange(event.target.value)} style={selectStyle} aria-label="按预设筛选">
+            <option value="all">全部预设</option>
+            {presetOptions.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+          <select value={statusFilter} onChange={(event) => onStatusChange(event.target.value as RunFilter)} style={selectStyle} aria-label="按运行状态筛选">
+            <option value="all">全部状态</option>
+            <option value="completed">有推荐</option>
+            <option value="empty">无推荐</option>
+            <option value="active">运行中</option>
+            <option value="failed">失败或中断</option>
+          </select>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", alignItems: "center" }}>
+        <strong style={{ color: "var(--ink)", marginRight: "var(--space-2)" }}>{date === today ? "今日" : "当日"}运行 {summary.total} 次</strong>
+        <SummaryTag icon={<CheckCircle2 size={13} />} label={`有推荐 ${summary.completed}`} tone="positive" />
+        <SummaryTag icon={<AlertTriangle size={13} />} label={`无推荐 ${summary.empty}`} tone="warning" />
+        <SummaryTag icon={<CircleDashed size={13} />} label={`运行中 ${summary.active}`} tone="accent" />
+        <SummaryTag icon={<XCircle size={13} />} label={`失败 ${summary.failed}`} tone="negative" />
+      </div>
+    </div>
+  );
+}
+
+const selectStyle = {
+  background: "var(--surface-soft)",
+  border: "1px solid var(--line-strong)",
+  borderRadius: "var(--radius-md)",
+  padding: "var(--space-2) var(--space-3)",
+  color: "var(--ink)",
+  fontFamily: "inherit",
+} as const;
+
+function SummaryTag({ icon, label, tone }: { icon: React.ReactNode; label: string; tone: "positive" | "warning" | "accent" | "negative" }) {
+  const colors = {
+    positive: "var(--positive)",
+    warning: "var(--warning)",
+    accent: "var(--accent-strong)",
+    negative: "var(--danger)",
+  };
+  return (
+    <span className="tag" style={{ color: colors[tone], display: "inline-flex", alignItems: "center", gap: 5 }}>
+      {icon}{label}
+    </span>
+  );
+}
+
+function NoRunsToday({ date, today, onRun }: { date: string; today: string; onRun: () => void }) {
+  return (
+    <div className="panel" style={{ padding: "var(--space-6)", display: "flex", gap: "var(--space-4)", alignItems: "flex-start", flexWrap: "wrap" }}>
+      <Clock size={28} className="text-muted" />
+      <div style={{ flex: "1 1 360px" }}>
+        <h3 style={{ margin: 0, color: "var(--ink)" }}>{date === today ? "今天尚未运行推荐" : "当天没有运行记录"}</h3>
+        <p className="text-muted" style={{ margin: "var(--space-2) 0 0", lineHeight: 1.7 }}>
+          {date === today
+            ? "系统没有发现今天的推荐运行记录。这表示尚未运行，不是运行成功但没有推荐。"
+            : `${date} 没有发现推荐运行记录。`}
+        </p>
+      </div>
+      {date === today && <button className="btn btn--primary" onClick={onRun}><PlayCircle size={15} />去运行推荐</button>}
+    </div>
+  );
+}
+
+function RunDrawer({ run, open, onToggle }: { run: RunSummary; open: boolean; onToggle: () => void }) {
+  const description = describePoolRun(run);
+  const statusColor = runStatusColor(description.kind);
+  return (
+    <section style={{ background: "var(--surface)", border: `1px solid ${open ? statusColor : "var(--line)"}`, borderRadius: "var(--radius-lg)", overflow: "hidden" }}>
+      <button
+        onClick={onToggle}
+        aria-expanded={open}
+        style={{ width: "100%", display: "flex", alignItems: "center", gap: "var(--space-4)", flexWrap: "wrap", padding: "var(--space-4)", background: "transparent", border: 0, color: "var(--ink)", textAlign: "left", cursor: "pointer" }}
+      >
+        {open ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+        <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)", minWidth: 150 }}>
+          <strong className="text-mono" style={{ fontSize: "var(--text-xl)" }}>{formatRunTime(run.started_at, run.trade_date)}</strong>
+          <span className="text-muted" style={{ fontSize: "var(--text-xs)" }}>开始</span>
+        </div>
+        <div style={{ minWidth: 180, flex: "1 1 220px" }}>
+          <strong>{run.preset_name || run.run_name || "未命名预设"}</strong>
+          {run.run_name && run.run_name !== run.preset_name && <div className="text-muted" style={{ fontSize: "var(--text-xs)", marginTop: 3 }}>{run.run_name}</div>}
+        </div>
+        <span className="tag" style={{ color: statusColor, borderColor: statusColor, display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <RunStatusIcon kind={description.kind} />{description.label}
+          {description.kind === "active" && run.progress_pct != null ? ` ${Math.round(run.progress_pct)}%` : ""}
+        </span>
+        <strong className="text-mono" style={{ color: description.kind === "empty" ? "var(--warning)" : "var(--ink)", minWidth: 84, textAlign: "right" }}>
+          {description.countLabel}
+        </strong>
+      </button>
+      {open && <RunDrawerBody run={run} kind={description.kind} />}
+    </section>
+  );
+}
+
+function RunStatusIcon({ kind }: { kind: PoolRunKind }) {
+  if (kind === "completed") return <CheckCircle2 size={14} />;
+  if (kind === "empty") return <AlertTriangle size={14} />;
+  if (kind === "active") return <Loader2 size={14} className="spin" />;
+  if (kind === "failed") return <XCircle size={14} />;
+  return <CircleDashed size={14} />;
+}
+
+function RunDrawerBody({ run, kind }: { run: RunSummary; kind: PoolRunKind }) {
+  const { navigate } = useUrlRoute();
+  const detailButton = (
+    <button className="btn btn--ghost" onClick={() => navigate("/records", { params: { tab: "run", run_id: run.run_id } })}>
+      查看本次运行详情 <ChevronRight size={14} />
+    </button>
+  );
+  if (kind === "completed") return <RecommendationResults run={run} />;
+  if (kind === "empty") {
+    const eligible = run.result_summary?.base_filter_eligible_count;
+    const strategyInput = run.result_summary?.skill_input_count ?? run.result_summary?.actual_scan_count;
+    const marketTotal = run.result_summary?.unified_quote_total ?? run.universe_count;
+    return (
+      <div style={drawerBodyStyle}>
+        <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "flex-start" }}>
+          <CheckCircle2 size={20} style={{ color: "var(--positive)", flexShrink: 0 }} />
+          <div>
+            <strong style={{ color: "var(--ink)" }}>推荐管线已正常执行完成</strong>
+            <p className="text-muted" style={{ margin: "var(--space-1) 0 0", lineHeight: 1.7 }}>本次没有股票达到推荐条件，不是运行失败。</p>
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
+          <FunnelStep label="全市场" value={marketTotal} />
+          <ChevronRight size={14} className="text-muted" />
+          <FunnelStep label="可交易" value={eligible} />
+          <ChevronRight size={14} className="text-muted" />
+          <FunnelStep label="进入策略" value={strategyInput} />
+          <ChevronRight size={14} className="text-muted" />
+          <FunnelStep label="达到推荐线" value={0} warning />
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>{detailButton}</div>
+      </div>
+    );
+  }
+  if (kind === "active") {
+    const pct = Math.max(0, Math.min(100, run.progress_pct ?? 0));
+    return (
+      <div style={drawerBodyStyle}>
+        <div><strong style={{ color: "var(--ink)" }}>正在进行：{run.progress_message || run.progress_phase || "等待后台更新"}</strong></div>
+        <div style={{ height: 8, borderRadius: 999, background: "var(--surface-soft)", overflow: "hidden" }}>
+          <div style={{ width: `${pct}%`, height: "100%", background: "var(--accent)", transition: "width 240ms ease" }} />
+        </div>
+        <div className="text-muted" style={{ display: "flex", justifyContent: "space-between", gap: "var(--space-3)", flexWrap: "wrap", fontSize: "var(--text-sm)" }}>
+          <span>{run.progress_current ?? 0} / {run.progress_total ?? "—"}</span>
+          <span>{run.heartbeat_at ? `最后更新 ${formatRunTime(run.heartbeat_at)}` : "等待首次进度回报"}</span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>{detailButton}</div>
+      </div>
+    );
+  }
+  if (kind === "failed") {
+    return (
+      <div style={drawerBodyStyle}>
+        <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "flex-start" }}>
+          <XCircle size={20} style={{ color: "var(--danger)", flexShrink: 0 }} />
+          <div>
+            <strong style={{ color: "var(--ink)" }}>本次运行未完成，因此没有形成有效推荐结果。</strong>
+            <p style={{ margin: "var(--space-2) 0 0", color: "var(--danger)", lineHeight: 1.7 }}>{shortError(run.error_message || run.progress_message)}</p>
+            {run.progress_phase && <div className="text-muted" style={{ fontSize: "var(--text-sm)" }}>停止阶段：{run.progress_phase}</div>}
+          </div>
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--space-2)", flexWrap: "wrap" }}>
+          {detailButton}
+          <button className="btn btn--primary" onClick={() => navigate("/run", { params: { preset_id: run.preset_id } })}>按原预设重新运行</button>
+        </div>
+      </div>
+    );
+  }
+  return <div style={drawerBodyStyle}><span className="text-muted">当前状态暂时无法识别，请打开运行详情确认。</span>{detailButton}</div>;
+}
+
+const drawerBodyStyle = {
+  borderTop: "1px solid var(--line)",
+  padding: "var(--space-4)",
+  display: "grid",
+  gap: "var(--space-4)",
+  background: "var(--surface-soft)",
+} as const;
+
+function FunnelStep({ label, value, warning = false }: { label: string; value?: number; warning?: boolean }) {
+  return (
+    <div className="tag" style={{ padding: "var(--space-2) var(--space-3)", color: warning ? "var(--warning)" : "var(--ink)" }}>
+      <span className="text-muted">{label}</span> <strong className="text-mono">{value ?? "—"}</strong>
+    </div>
+  );
+}
+
+function RecommendationResults({ run }: { run: RunSummary }) {
+  const { navigate, navigateSection } = useUrlRoute();
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState<{ risk?: RiskLevel; q: string }>({ q: "" });
+  const { data: items, loading, error, refetch } = useApi<CockpitRecommendation[]>(
+    () => api.runRecommendations(run.run_id).then((list) => list as unknown as CockpitRecommendation[]),
+    [run.run_id],
+  );
+  const filtered = useMemo(() => {
+    const q = filter.q.trim().toLowerCase();
+    return (items ?? []).filter((item) => {
+      if (filter.risk && item.risk_level !== filter.risk) return false;
+      return !q || `${item.code} ${item.name}`.toLowerCase().includes(q);
+    });
+  }, [items, filter]);
+  const codes = useMemo(() => Array.from(new Set((items ?? []).map((item) => item.code))), [items]);
+  const codesKey = codes.join(",");
+  const { data: outcomeSummary } = useApi<Record<string, OutcomeSummary>>(
+    () => codes.length ? api.recommendationOutcomeSummary(codes) : Promise.resolve({}),
+    [codesKey],
+  );
+
+  if (loading) return <div style={drawerBodyStyle}><div className="skeleton" style={{ height: 56 }} /><div className="skeleton" style={{ height: 56 }} /></div>;
+  if (error) return <div style={drawerBodyStyle}><ErrorPage title="推荐股票加载失败" message={error} onRetry={refetch} /></div>;
+  if (!items || items.length === 0) {
+    return <div style={drawerBodyStyle}><AlertTriangle size={20} style={{ color: "var(--warning)" }} /><span>运行记录显示 {run.recommended_count} 只推荐，但没有读取到股票明细。</span></div>;
+  }
+
+  const toggleStock = (id: string) => setExpanded((current) => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  return (
+    <div style={drawerBodyStyle}>
+      <FilterBar total={items.length} filtered={filtered.length} filter={filter} onChange={setFilter} />
+      <SectorDiversityBar items={filtered} />
+      {filtered.map((item, index) => {
+        const isOpen = expanded.has(item.recommendation_id);
         return (
-          <div
-            key={c.recommendation_id}
-            style={{
-              background: "var(--surface)",
-              border: "1px solid var(--line)",
-              borderRadius: "var(--radius-lg)",
-              overflow: "hidden",
-            }}
-          >
-            <button
-              onClick={() => toggle(c.recommendation_id)}
-              style={{
-                width: "100%",
-                display: "flex",
-                alignItems: "center",
-                gap: "var(--space-3)",
-                flexWrap: "wrap",
-                padding: "var(--space-3) var(--space-4)",
-                background: "transparent",
-                border: "none",
-                textAlign: "left",
-                cursor: "pointer",
-              }}
-            >
-              {/* 身份区：排名 + 代码徽标 + 名称 —— 始终在左、永不裁切 */}
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "var(--space-2)",
-                  minWidth: 0,
-                  flex: "1 1 220px",
-                }}
-              >
-                <span className="text-mono text-muted" style={{ fontSize: "var(--text-sm)", flexShrink: 0 }}>
-                  #{i + 1}
-                </span>
-                <StockTicker code={c.code} />
+          <div key={item.recommendation_id} style={{ background: "var(--surface)", border: "1px solid var(--line)", borderRadius: "var(--radius-lg)", overflow: "hidden" }}>
+            <button onClick={() => toggleStock(item.recommendation_id)} style={{ width: "100%", display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap", padding: "var(--space-3) var(--space-4)", background: "transparent", border: "none", textAlign: "left", cursor: "pointer" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0, flex: "1 1 260px" }}>
+                <span className="text-mono text-muted" style={{ fontSize: "var(--text-sm)", flexShrink: 0 }}>#{index + 1}</span>
+                <StockTicker code={item.code} />
                 <div style={{ minWidth: 0 }}>
-                  <div
-                    style={{
-                      fontWeight: 600,
-                      color: "var(--ink)",
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "var(--space-2)",
-                    }}
-                  >
-                    {c.name}
-                    {c.industry && (
-                      <span className="tag" style={{ fontSize: "var(--text-xs)", flexShrink: 0 }}>
-                        {c.industry}
-                      </span>
-                    )}
+                  <div style={{ fontWeight: 600, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                    {item.name}
+                    {item.industry && <span className="tag" style={{ fontSize: "var(--text-xs)", flexShrink: 0 }}>{item.industry}</span>}
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-                    {c.entry_rule && <RuleLine label="入场" text={c.entry_rule} />}
-                    {c.invalid_rule && <RuleLine label="失效" text={c.invalid_rule} />}
+                    {item.entry_rule && <RuleLine label="入场" text={item.entry_rule} />}
+                    {item.invalid_rule && <RuleLine label="失效" text={item.invalid_rule} />}
                   </div>
                 </div>
               </div>
-
-              {/* 次级信息组：交易参数 + 评分 + 风险 + 展开箭头 —— 窄屏自动换行到第二行 */}
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "var(--space-3)",
-                  flexWrap: "wrap",
-                  marginLeft: "auto",
-                }}
-              >
-                <TradeParamsInline item={c} />
-                <span className="text-mono" style={{ fontWeight: 700, color: "var(--accent-strong)", fontSize: "var(--text-lg)" }}>
-                  {c.final_score.toFixed(0)}
-                </span>
-                <LlmStanceBadge stance={c.llm_stance} delta={c.llm_delta} />
-                <RiskTag level={c.risk_level} setup={c.setup_type} />
+              <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap", marginLeft: "auto" }}>
+                <TradeParamsInline item={item} />
+                <span className="text-mono" style={{ fontWeight: 700, color: "var(--accent-strong)", fontSize: "var(--text-lg)" }}>{item.final_score.toFixed(0)}</span>
+                <LlmStanceBadge stance={item.llm_stance} delta={item.llm_delta} />
+                <RiskTag level={item.risk_level} setup={item.setup_type} />
                 {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
               </div>
             </button>
-
-            {isOpen && (
-              <PoolExpandedRow item={c} outcomeSummary={outcomeSummary ?? {}} onReplay={() => navigate("/history", { params: { recommendation_id: c.recommendation_id } })} onViewHistory={() => navigateSection("history")} />
-            )}
+            {isOpen && <PoolExpandedRow item={item} outcomeSummary={outcomeSummary ?? {}} onReplay={() => navigate("/history", { params: { recommendation_id: item.recommendation_id } })} onViewHistory={() => navigateSection("history")} />}
           </div>
         );
       })}
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <button className="btn btn--ghost" onClick={() => navigate("/records", { params: { tab: "run", run_id: run.run_id } })}>查看本次运行详情 <ChevronRight size={14} /></button>
+      </div>
     </div>
   );
 }
 
-/** 本批候选的推荐时间信息（同一 run 共享） */
-type BatchMeta = {
-  trade_date: string;
-  recommended_at?: string | null;
-  run_name?: string | null;
-  preset_name?: string | null;
-  run_id?: string | null;
-};
-
-function deriveBatchMeta(items: CockpitRecommendation[] | null | undefined): BatchMeta | null {
-  if (!items || items.length === 0) return null;
-  const first = items[0];
-  return {
-    trade_date: first.trade_date,
-    recommended_at: first.recommended_at ?? null,
-    run_name: first.run_name ?? null,
-    preset_name: first.preset_name ?? null,
-    run_id: first.run_id ?? null,
-  };
+function localDateKey() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
-/** 推荐时间标注条 —— 明确标注这一批候选的推荐日期/时间、来源 run 与预设。 */
-function RecommendationTimeBar({
-  meta,
-  runId,
-  total,
-}: {
-  meta: BatchMeta | null;
-  runId: string | null;
-  total: number;
-}) {
-  if (!meta) return null;
-  const parts: string[] = [];
-  // 推荐日期（trade_date）
-  if (meta.trade_date) parts.push(`推荐日期 ${meta.trade_date}`);
-  // 推荐时刻（recommended_at 带时分，截取到分钟）
-  if (meta.recommended_at) {
-    const timeLabel = formatRecommendedAt(meta.recommended_at);
-    if (timeLabel) parts.push(timeLabel);
-  }
-  // 预设 / 运行名称
-  if (meta.preset_name) parts.push(`预设 ${meta.preset_name}`);
-  if (meta.run_name && meta.run_name !== meta.preset_name) parts.push(meta.run_name);
-  // run_id（URL 已带 runId 时不重复显示）
-  const effectiveRunId = runId || meta.run_id;
-  if (effectiveRunId) parts.push(`Run ${effectiveRunId.slice(-8)}`);
-
-  return (
-    <div
-      className="panel"
-      style={{
-        padding: "var(--space-2) var(--space-4)",
-        display: "flex",
-        alignItems: "center",
-        gap: "var(--space-2)",
-        flexWrap: "wrap",
-        fontSize: "var(--text-sm)",
-      }}
-    >
-      <Clock size={14} className="text-muted" />
-      <span className="text-muted">本批推荐</span>
-      <span className="text-mono" style={{ fontWeight: 600, color: "var(--ink)" }}>
-        {parts.length > 0 ? parts.join(" · ") : "—"}
-      </span>
-      <span className="tag" style={{ marginLeft: "auto", fontSize: "var(--text-xs)" }}>
-        {total} 只候选
-      </span>
-    </div>
-  );
+function runSortTime(run: RunSummary) {
+  return run.started_at || run.finished_at || `${run.trade_date}T00:00:00`;
 }
 
-/** 将 recommended_at ISO 字符串格式化为「推荐时刻 MM-DD HH:MM」。 */
-function formatRecommendedAt(iso: string): string | null {
-  // 期望形如 2026-07-08T14:45:00 或 2026-07-08T14:45:00.123456
+function formatRunTime(iso?: string | null, tradeDate?: string) {
+  if (!iso) return "--:--";
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso);
-  if (!match) return null;
-  const [, , mm, dd, hh, min] = match;
-  return `推荐时刻 ${mm}-${dd} ${hh}:${min}`;
+  if (!match) return "--:--";
+  const [, year, month, day, hour, minute] = match;
+  const actualDate = `${year}-${month}-${day}`;
+  return tradeDate && actualDate !== tradeDate ? `${month}-${day} ${hour}:${minute}` : `${hour}:${minute}`;
+}
+
+function runStatusColor(kind: PoolRunKind) {
+  if (kind === "completed") return "var(--positive)";
+  if (kind === "empty") return "var(--warning)";
+  if (kind === "active") return "var(--accent-strong)";
+  if (kind === "failed") return "var(--danger)";
+  return "var(--muted)";
+}
+
+function shortError(message?: string | null) {
+  if (!message) return "未记录具体失败原因";
+  const compact = message.replace(/\s+/g, " ").trim();
+  return compact.length > 240 ? `${compact.slice(0, 240)}…` : compact;
 }
 
 /** 板块分散度指示器 —— 显示行业分布，过度集中时警告 */
@@ -366,9 +569,6 @@ function FilterBar({
         alignItems: "center",
         gap: "var(--space-3)",
         flexWrap: "wrap",
-        position: "sticky",
-        top: "calc(var(--topbar-height) + var(--space-3))",
-        zIndex: "var(--z-sticky)",
       }}
     >
       <Search size={16} className="text-muted" />
