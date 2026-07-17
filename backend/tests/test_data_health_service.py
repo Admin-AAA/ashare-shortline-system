@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+import app.services.data_health_service as data_health_service
 from app.db.session import Base
 from app.models.tables import CapitalFlow, DailyKbar, IndexDaily, LimitUpBoard, Recommendation, StockQuote
 from app.services.data_health_service import (
@@ -43,6 +44,27 @@ def test_resolve_reference_trade_date_caps_external_calendar_at_latest_closed_se
     assert result["reference_trade_date"] == "2026-05-26"
     assert result["external_trade_date"] == "2026-05-27"
     assert "收盘" in result["note"]
+
+
+def test_daily_data_domain_one_day_lag_is_stale():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[StockQuote.__table__])
+    Session = sessionmaker(bind=engine)
+    db = Session()
+    try:
+        db.add(StockQuote(code="000001", name="测试股票", trade_date="2026-05-26", source="test"))
+        db.commit()
+        quote_domain = next(item for item in data_health_service._DATA_DOMAIN_DEFS if item["key"] == "realtime_quote")
+
+        with patch.object(data_health_service, "_DATA_DOMAIN_DEFS", [quote_domain]):
+            result = data_health_service._data_domain_coverage(db, "2026-05-27")
+
+        domain = result["categories"][0]["domains"][0]
+        assert domain["status"] == "stale"
+        assert domain["gap_days"] == 1
+        assert domain["fresh_window_days"] == 0
+    finally:
+        db.close()
 
 
 def test_recent_daily_trade_days_includes_reference_even_when_daily_table_missed_whole_day():
