@@ -131,11 +131,11 @@ def _persist_quotes(db, quotes: list[dict], trade_date: str = "2026-05-27") -> N
                 },
             }
         )
-    market_pool._persist_stock_quotes(db, rows)
+    market_pool.core._persist_stock_quotes(db, rows)
 
 
 def _persist_bars(db, bars: list[dict]) -> None:
-    market_pool._persist_kbars(db, bars)
+    market_pool.core._persist_kbars(db, bars)
 
 
 def _bar_summaries(codes: list[str], bar_count: int = 35, latest_trade_date: str = "2026-05-27") -> dict[str, dict]:
@@ -180,7 +180,7 @@ def _bars(code: str, days: int = 35, end: date | None = None) -> list[dict]:
 # ---------------------------------------------------------------------------
 # 任务 4.4：经 `market_source` port 注入替身的测试基础设施
 #
-# 以下 fixture/替身类替代原来对 `market_pool._fetch_quotes`/`_fetch_kline`
+# 以下 fixture/替身类替代原来对 `market_pool.core._fetch_quotes`/`_fetch_kline`
 # 这两个内部私有函数别名的 monkeypatch（需求 8.1 禁止的做法）。改为经
 # `market_pool_adapters.set_market_source_adapter_factory` 这个显式注入点
 # 换入一个 `MarketSourcePort` 实现——调用方（`market_pool.py`）完全不知道
@@ -287,7 +287,7 @@ def test_market_pool_refreshes_quotes_through_port_only_fake_and_typed_audit(
         lambda _db, name, source_type, status, **_kwargs: health_events.append((name, source_type, status)),
     )
 
-    quotes, meta = market_pool._refresh_quote_pool(SimpleNamespace(commit=lambda: None), settings)
+    quotes, meta = market_pool.core._refresh_quote_pool(SimpleNamespace(commit=lambda: None), settings)
 
     public_methods = {
         name
@@ -323,7 +323,7 @@ def test_market_pool_drives_port_only_fake_with_typed_request_and_turnover_fallb
         lambda _db, name, source_type, status, **_kwargs: health_events.append((name, source_type, status)),
     )
 
-    bars, selected_source, errors = market_pool._refresh_bars_for_quote(
+    bars, selected_source, errors = market_pool.core._refresh_bars_for_quote(
         SimpleNamespace(),
         quote,
         settings,
@@ -613,7 +613,7 @@ def test_refresh_quote_pool_persists_raw_and_unified_quotes(db, monkeypatch, mar
 def test_quote_pool_records_no_conflicts_with_single_source():
     settings = DummySettings()
 
-    merged = market_pool._merge_quote_rows(
+    merged = market_pool.core._merge_quote_rows(
         "000001",
         [{**_quote("000001", "tushare", 10.00, pct=3.0), "trade_date": "2026-05-27"}],
         ["tushare"],
@@ -633,7 +633,7 @@ def test_dedupe_latest_quote_rows_keeps_latest_trade_date_per_code():
         SimpleNamespace(code="000002", trade_date="2026-05-26", snapped_at="2026-05-26T15:40:06", quality_score=90.0),
     ]
 
-    deduped = market_pool._dedupe_latest_quote_rows(rows)
+    deduped = market_pool.core._dedupe_latest_quote_rows(rows)
 
     assert [(row.code, row.trade_date) for row in deduped] == [
         ("000002", "2026-05-26"),
@@ -655,7 +655,7 @@ def test_persist_stock_quotes_uses_bulk_upsert_and_batch_inactivation():
         def add(self, obj):
             raise AssertionError("bulk upsert path 不应逐条 add ORM 实体")
 
-    market_pool._persist_stock_quotes(
+    market_pool.core._persist_stock_quotes(
         FakeDB(),
         [
             {
@@ -762,7 +762,7 @@ def test_load_cached_quotes_allows_realtime_quote_date_before_bar_close(db, monk
     monkeypatch.setattr(market_pool.core, "_latest_allowed_bar_date", lambda today=None: "2026-06-09")
     monkeypatch.setattr(market_pool.core, "_latest_allowed_quote_date", lambda today=None: "2026-06-10")
 
-    quotes = market_pool._load_cached_quotes(db, skip_metrics=True)
+    quotes = market_pool.core._load_cached_quotes(db, skip_metrics=True)
 
     loaded = [quote for quote in quotes if quote["code"] == code]
     assert loaded
@@ -779,8 +779,8 @@ def test_load_or_refresh_quotes_uses_fresh_cache(db, monkeypatch, market_source_
     market_source_adapter(counting_adapter)
     monkeypatch.setattr(market_pool.core, "_latest_allowed_quote_date", lambda today=None: "2026-05-27")
 
-    first, first_meta = market_pool._load_or_refresh_quotes(db, settings)
-    second, second_meta = market_pool._load_or_refresh_quotes(db, settings)
+    first, first_meta = market_pool.core._load_or_refresh_quotes(db, settings)
+    second, second_meta = market_pool.core._load_or_refresh_quotes(db, settings)
 
     assert first_meta["status"] == "refreshed"
     assert second_meta["status"] == "fresh_cache"
@@ -813,7 +813,7 @@ def test_load_or_refresh_quotes_refreshes_when_cached_trade_date_lags(db, monkey
     market_source_adapter(counting_adapter)
     monkeypatch.setattr(market_pool.core, "_latest_allowed_quote_date", lambda today=None: "2026-06-10")
 
-    quotes, meta = market_pool._load_or_refresh_quotes(db, settings)
+    quotes, meta = market_pool.core._load_or_refresh_quotes(db, settings)
 
     assert meta["status"] == "refreshed"
     assert counting_adapter.quote_calls == 1
@@ -1035,7 +1035,7 @@ def test_backfill_latest_trade_date_bars_builds_from_quotes_without_tushare(monk
     monkeypatch.setattr(market_pool.core, "_call_tushare_with_retry", unexpected_retry, raising=False)
     monkeypatch.setattr(market_pool.core, "_persist_kbars", lambda _db, bars: persisted_batches.append(bars))
 
-    count = market_pool._backfill_latest_trade_date_bars(
+    count = market_pool.core._backfill_latest_trade_date_bars(
         db,
         [
             {
@@ -1074,7 +1074,7 @@ def test_persist_kbars_writes_computed_indicator_columns():
             executed.append(stmt)
             return None
 
-    market_pool._persist_kbars(
+    market_pool.core._persist_kbars(
         FakeDB(),
         [
             {
@@ -1157,7 +1157,7 @@ def test_cached_quotes_are_enriched_with_local_bar_metrics(db, monkeypatch):
 
     monkeypatch.setattr(market_pool.core, "_latest_allowed_bar_date", lambda today=None: "2026-02-03")
 
-    quotes = market_pool._load_cached_quotes(db)
+    quotes = market_pool.core._load_cached_quotes(db)
     quote = next(item for item in quotes if item["code"] == code)
 
     assert quote["chg60"] != 0
@@ -1211,7 +1211,7 @@ def test_cached_quotes_ignore_inactive_rows_even_on_allowed_trade_date(db, monke
     db.commit()
     monkeypatch.setattr(market_pool.core, "_latest_allowed_bar_date", lambda today=None: trade_date)
 
-    quotes = market_pool._load_cached_quotes(db, skip_metrics=True)
+    quotes = market_pool.core._load_cached_quotes(db, skip_metrics=True)
     codes = {item["code"] for item in quotes}
 
     assert active_code in codes
@@ -1229,13 +1229,13 @@ def test_load_or_refresh_quotes_does_not_use_stale_cache_after_refresh_error(db,
     _persist_quotes(
         db,
         [
-            market_pool._merge_quote_rows(
+            market_pool.core._merge_quote_rows(
                 codes[0],
                 [_quote(codes[0], "tushare", 10.00)],
                 ["tushare"],
                 settings,
             ),
-            market_pool._merge_quote_rows(
+            market_pool.core._merge_quote_rows(
                 codes[1],
                 [_quote(codes[1], "tushare", 20.00)],
                 ["tushare"],
@@ -1252,7 +1252,7 @@ def test_load_or_refresh_quotes_does_not_use_stale_cache_after_refresh_error(db,
     market_source_adapter(_RaisingMarketSourceAdapter(RuntimeError("tushare down")))
 
     # T12：刷新全失败时用旧缓存兜底，不再抛 MarketDataError
-    result = market_pool._load_or_refresh_quotes(db, settings)
+    result = market_pool.core._load_or_refresh_quotes(db, settings)
     quotes, meta = result
     assert len(quotes) == 2, "应用旧缓存兜底返回 2 条"
     # meta 标记 stale_cache_fallback
@@ -1267,7 +1267,7 @@ def test_disabled_quote_source_is_not_called(db, monkeypatch, market_source_adap
     monkeypatch.setattr(market_pool.core, "_load_cached_quotes", lambda *_args, **_kwargs: [])
 
     with pytest.raises(market_pool.MarketDataError, match="本地数据池没有可用缓存"):
-        market_pool._load_or_refresh_quotes(db, settings)
+        market_pool.core._load_or_refresh_quotes(db, settings)
 
 
 def test_all_quote_sources_disabled_raises_without_fetching(db, monkeypatch, market_source_adapter):
@@ -1278,7 +1278,7 @@ def test_all_quote_sources_disabled_raises_without_fetching(db, monkeypatch, mar
     monkeypatch.setattr(market_pool.core, "_load_cached_quotes", lambda *_args, **_kwargs: [])
 
     try:
-        market_pool._load_or_refresh_quotes(db, settings)
+        market_pool.core._load_or_refresh_quotes(db, settings)
     except market_pool.MarketDataError as exc:
         assert "本地数据池没有可用缓存" in str(exc)
     else:
@@ -1293,7 +1293,7 @@ def test_all_quote_sources_disabled_can_use_cached_quotes_without_fetching(db, m
     market_source_adapter(_AssertNotCalledAdapter())
     monkeypatch.setattr(market_pool.core, "_load_cached_quotes", lambda *_args, **_kwargs: cached)
 
-    quotes, meta = market_pool._load_or_refresh_quotes(db, settings)
+    quotes, meta = market_pool.core._load_or_refresh_quotes(db, settings)
 
     assert quotes == cached
     assert meta["status"] == "local_pool_readonly_source_disabled"
@@ -1327,7 +1327,7 @@ def test_load_quotes_from_pool_never_fetches_external_sources(db, monkeypatch, m
     monkeypatch.setattr(market_pool.core, "_load_cached_quotes", lambda *_args, **_kwargs: [])
 
     try:
-        market_pool._load_quotes_from_pool(db, settings)
+        market_pool.core._load_quotes_from_pool(db, settings)
     except market_pool.MarketDataError as exc:
         assert "本地数据池可用报价不足" in str(exc)
     else:
@@ -1340,7 +1340,7 @@ def test_local_only_skips_stale_bars_instead_of_running_with_them(db, monkeypatc
     settings.market_candidate_lookahead_multiplier = 1
     code = _codes(1)[0]
 
-    merged = market_pool._merge_quote_rows(
+    merged = market_pool.core._merge_quote_rows(
         code,
         [_quote(code, "tushare", 10.00)],
         ["tushare"],
@@ -1370,8 +1370,8 @@ def test_current_realtime_quote_accepts_previous_trade_day_bars(monkeypatch):
 
     monkeypatch.setattr(market_pool.core, "_latest_allowed_quote_date", lambda today=None: "2026-06-10")
 
-    assert market_pool._required_bar_date_for_quote(quote) == "2026-06-09"
-    assert market_pool._bars_cover_quote_date(bars, quote) is True
+    assert market_pool.core._required_bar_date_for_quote(quote) == "2026-06-09"
+    assert market_pool.core._bars_cover_quote_date(bars, quote) is True
 
 
 def test_readiness_treats_current_realtime_quote_one_bar_day_gap_as_ready(db, monkeypatch):
@@ -1447,7 +1447,7 @@ def test_load_or_refresh_bars_merges_incremental_bars_with_cached_history(monkey
     monkeypatch.setattr(market_pool.core, "_persist_kbars", fake_persist_kbars)
     monkeypatch.setattr(market_pool.core, "_latest_allowed_bar_date", lambda today=None: "2026-05-27")
 
-    bars, trace, errors = market_pool._load_or_refresh_bars(db, quote, settings)
+    bars, trace, errors = market_pool.core._load_or_refresh_bars(db, quote, settings)
 
     assert len(bars) == 32
     assert bars[-1]["trade_date"] == "2026-05-27"
@@ -1462,8 +1462,8 @@ def test_incremental_kline_start_forces_full_backfill_when_cached_history_is_sho
     _persist_bars(db, _bars(ready_code, days=35, end=date(2026, 5, 27)))
     db.flush()
 
-    assert market_pool._incremental_kline_start(db, short_code, settings) is None
-    assert market_pool._incremental_kline_start(db, ready_code, settings) == "20260517"
+    assert market_pool.core._incremental_kline_start(db, short_code, settings) is None
+    assert market_pool.core._incremental_kline_start(db, ready_code, settings) == "20260517"
 
 
 def test_market_snapshot_uses_full_eligible_universe_instead_of_top_300(db, monkeypatch):
@@ -1579,7 +1579,7 @@ def test_latest_allowed_bar_date_uses_previous_session_before_close(monkeypatch)
 
     monkeypatch.setattr("app.engine.trading_calendar.datetime", FakeDateTime)
 
-    assert market_pool._latest_allowed_bar_date() == "2026-05-12"
+    assert market_pool.core._latest_allowed_bar_date() == "2026-05-12"
 
 
 def test_local_pool_status_reports_missing_kline_gap(db, monkeypatch):
@@ -1740,7 +1740,7 @@ def legacy_removed_auxiliary_dataset_upsert_deduplicates_and_updates_declared_ke
     try:
         dataset = market_pool.AUXILIARY_DATASETS["capital_flow"]
 
-        market_pool._upsert_by_key(
+        market_pool.core._upsert_by_key(
             db,
             dataset,
             [
@@ -1754,7 +1754,7 @@ def legacy_removed_auxiliary_dataset_upsert_deduplicates_and_updates_declared_ke
         row = db.scalar(select(CapitalFlow).where(CapitalFlow.code == "000001"))
         assert row.main_net_inflow_yi == 1.2
 
-        market_pool._upsert_by_key(
+        market_pool.core._upsert_by_key(
             db,
             dataset,
             [{"code": "000001", "trade_date": "2026-05-27", "main_net_inflow_yi": 2.5}],

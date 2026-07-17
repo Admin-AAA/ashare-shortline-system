@@ -99,8 +99,11 @@ def _iso_day(value: object) -> str:
 
 
 def _number(value: object, default: float = 0.0) -> float:
+    import math
+
     try:
-        return float(value) if value is not None else default
+        numeric = float(value) if value is not None else default
+        return default if math.isnan(numeric) else numeric
     except (TypeError, ValueError):
         return default
 

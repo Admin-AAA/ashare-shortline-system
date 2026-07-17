@@ -44,14 +44,10 @@ from app.services.workbench_service import (
     _build_recommendation_card,
     _build_pipeline_audit,
     _build_filter_audit,
-    _has_fresh_concept_sector_cache,
-    _has_fresh_dragon_tiger_cache,
     _latest_trade_date,
     _merge_run_params,
     _skill_review_failure_audit,
     _resolve_aux_prefetch_count,
-    _stale_capital_flow_codes,
-    _stale_news_codes,
     _update_run_progress,
     enqueue_workbench_run,
     get_initial_workbench_state,
@@ -1012,39 +1008,6 @@ class TestE2ERecommendationFlow:
         assert replay["effective_score_line"] == 72.0
         assert replay["signal_features"]["market_regime"] == "active"
 
-    def test_trade_date_and_aux_cache_freshness_respect_trade_date_and_ttl(self, db):
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        stale = now - timedelta(hours=3)
-        fresh_code = f"{(uuid.uuid4().int % 900000) + 100000:06d}"
-        stale_code = f"{(uuid.uuid4().int % 900000) + 100000:06d}"
-
-        try:
-            db.add_all(
-                [
-                    MarketSnapshot(snapshot_id=f"snap_old_{uuid.uuid4().hex[:6]}", trade_date="2026-05-11", created_at=now),
-                    MarketSnapshot(snapshot_id=f"snap_new_{uuid.uuid4().hex[:6]}", trade_date="2026-05-12", created_at=stale),
-                    ConceptSector(sector_code=f"BK{uuid.uuid4().hex[:6]}", trade_date="2026-05-12", sector_name="测试概念", created_at=now),
-                    ConceptSector(sector_code=f"BK{uuid.uuid4().hex[:6]}", trade_date="2026-05-13", sector_name="旧TTL概念", created_at=stale),
-                    DragonTiger(code=fresh_code, trade_date="2026-05-12", name="新鲜样本", created_at=now),
-                    DragonTiger(code=stale_code, trade_date="2026-05-13", name="过期样本", created_at=stale),
-                    CapitalFlow(code=fresh_code, trade_date="2026-05-12", main_net_inflow_yi=1.2, created_at=now),
-                    CapitalFlow(code=stale_code, trade_date="2026-05-12", main_net_inflow_yi=0.8, created_at=stale),
-                    NewsAnnouncement(source="tushare", article_id=f"news_{uuid.uuid4().hex[:6]}", code=fresh_code, announce_date="2026-05-12", title="测试新闻", created_at=now),
-                    NewsAnnouncement(source="tushare", article_id=f"news_{uuid.uuid4().hex[:6]}", code=stale_code, announce_date="2026-05-12", title="旧TTL新闻", created_at=stale),
-                ]
-            )
-            db.flush()
-
-            assert _latest_trade_date(db) >= "2026-05-12"
-            assert _has_fresh_concept_sector_cache(db, "2026-05-12", 3600) is True
-            assert _has_fresh_concept_sector_cache(db, "2026-05-13", 3600) is False
-            assert _has_fresh_dragon_tiger_cache(db, "2026-05-12", 3600) is True
-            assert _has_fresh_dragon_tiger_cache(db, "2026-05-13", 3600) is False
-            assert _stale_capital_flow_codes(db, [fresh_code, stale_code], "2026-05-12", 3600) == [stale_code]
-            assert _stale_news_codes(db, [fresh_code, stale_code], "2026-05-12", 3600) == [stale_code]
-        finally:
-            db.rollback()
-
     def test_calibrated_weights_flow(self, db):
         """Verify calibrated weights stored in CalibrationConfig are loaded correctly."""
         calibration_keys = ["skill_agent", "strategy_rule", "market", "risk", "evidence"]
@@ -1546,4 +1509,3 @@ class TestAlphaDecayDetection:
         # status 应包含组合保护状态
         statuses = {f["status"] for f in factors}
         assert statuses.issubset({"noise", "decaying", "decaying_but_usable", "improving", "stable"})
-

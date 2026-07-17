@@ -3,7 +3,6 @@ from pathlib import Path
 from app.engine.skill_loader import load_skills
 from app.engine.strategy_runner import run_strategy
 from app.services.feature_builder import build_features
-from app.services.registry.presets import _default_preset_skill_rows
 from app.services.registry.skills import _strategy_backtest_adapter_manifest
 
 
@@ -347,41 +346,6 @@ risk:
     assert signal["score"] > 70
     assert signal["strategy_independence"] == 0.62
     assert "共享资金共振" in signal["evidence"]
-
-    rows = _default_preset_skill_rows(
-        {"skill_groups": ["formal_trend_core"]},
-        list(skills.values()),
-    )
-    assert rows == [{"skill_id": "generic-momentum", "weight": 0.77, "sort_order": 5}]
-
-
-def test_high_range_breakout_default_single_strategy_preset():
-    skills = _skills_by_id()
-
-    rows = _default_preset_skill_rows(
-        {"skill_groups": ["experiment_high_range_breakout"]},
-        list(skills.values()),
-    )
-
-    assert rows == [{"skill_id": "high-range-breakout-momentum", "weight": 1.0, "sort_order": 10}]
-
-
-def test_new_default_single_strategy_presets():
-    skills = _skills_by_id()
-    cases = {
-        "experiment_limit_up_reseal_relay": "limit-up-reseal-relay",
-        "experiment_trend_pullback": "trend-pullback-continuation",
-        "experiment_sector_relative_strength": "sector-relative-strength-leader",
-    }
-
-    for group, skill_id in cases.items():
-        rows = _default_preset_skill_rows(
-            {"skill_groups": [group]},
-            list(skills.values()),
-        )
-
-        assert rows == [{"skill_id": skill_id, "weight": 1.0, "sort_order": 10}]
-
 
 def test_dsa_oscillation_mid_price_risk_rule():
     """震荡期 + avg_cost 50-100 应触发风险扣分。

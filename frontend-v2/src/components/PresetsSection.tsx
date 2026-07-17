@@ -71,7 +71,7 @@ function emptyForm(skills: SkillSummary[]): PresetForm {
     risk_template: "balanced",
     score_line: 72,
     output_count: 6,
-    data_source: "auto",
+    data_source: "local_pool_preferred",
     hide_recent_repeats: true,
     skills: skills.map((s) => ({
       skill_id: s.skill_id,

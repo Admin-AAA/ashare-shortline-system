@@ -201,7 +201,7 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False, as_of_date
     for quote in candidates:
         if len(stocks) >= recall_plan["scan_target_count"]:
             break
-        if refresh:
+        if effective_refresh:
             bars, kline_trace, errors = _load_or_refresh_bars(db, quote, settings)
         else:
             cached = bars_batch.get(quote["code"], []) if bars_batch else []

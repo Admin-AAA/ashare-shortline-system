@@ -201,7 +201,7 @@ class RunRequest(BaseModel):
     schema_version: StrictInt = Field(default=CURRENT_SCHEMA_VERSION)
     run_mode: RunMode = RunMode.FORMAL
     run_name: str = Field(default="临时运行", min_length=1, max_length=120)
-    data_source: DataSourceId = DataSourceId.AUTO
+    data_source: DataSourceId = DataSourceId.LOCAL_POOL_PREFERRED
     preset_id: str | None = Field(default=None, max_length=80)
     skills: tuple[SkillSelection, ...] = ()
     score_line: StrictFloat = Field(default=72.0, ge=0, le=100)

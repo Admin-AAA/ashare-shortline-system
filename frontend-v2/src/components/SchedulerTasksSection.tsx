@@ -179,7 +179,7 @@ function emptyPayload(taskType: ScheduledTaskType): PayloadForm {
       return {
         matrix_batch_name: "盘后预设矩阵",
         run_name_prefix: "",
-        data_source: "auto",
+        data_source: "local_pool_preferred",
         stop_on_error: false,
       };
     case "data_sync":

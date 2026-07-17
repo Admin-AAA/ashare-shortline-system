@@ -30,6 +30,11 @@ from app.models.tables import (
     ScheduledTaskRun,
 )
 from app.services.cost_service import finish_task_run, serialize_scheduled_task_run, start_task_run
+from app.engine.trading_calendar import latest_allowed_bar_date as _latest_allowed_bar_date
+from app.services.registry.data_source import (
+    DATA_SOURCE_LOCAL_POOL_PREFERRED,
+    DEFAULT_RECOMMENDATION_DATA_SOURCE,
+)
 
 logger = logging.getLogger("scheduler")
 
@@ -44,7 +49,15 @@ MANUAL_PRESET_MATRIX_TASK_ID = "manual_preset_matrix_run"
 MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID = "manual_data_health_remediation"
 SAFETY_NET_TASK_ID = "formal_run_safety_net"
 SAFETY_NET_MAX_ATTEMPTS = 3
-DEFAULT_RECOMMENDATION_DATA_SOURCE = "auto"
+POSTCLOSE_PIPELINE_TASK_ID = "post_sync_formal_recommendation"
+POSTCLOSE_PIPELINE_CRON = "35 17 * * 1-5"
+LEGACY_POSTCLOSE_TASK_IDS = (
+    "postclose_quote_refresh",
+    "postclose_daily_kbar_batch",
+    "postclose_data_health_remediation",
+    "postclose_auxiliary_data_sync",
+    "postclose_outcome_label",
+)
 # 策略曝光补跑调度任务（E 项样本可信前置）：盘前对近30天样本不足的策略单独补跑。
 # 任务 ID 固定，start_scheduler 时幂等注册（已存在则不覆盖用户手动调整的 cron/payload）。
 EXPOSURE_TASK_ID = "strategy_exposure_run"
@@ -109,7 +122,7 @@ def start_scheduler() -> BackgroundScheduler:
         return _scheduler
 
     _scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
-    _ensure_outcome_label_task()
+    _ensure_postclose_pipeline_task()
     _ensure_strategy_exposure_task()
     _load_and_schedule()
     _scheduler.start()
@@ -118,35 +131,79 @@ def start_scheduler() -> BackgroundScheduler:
     return _scheduler
 
 
-def _ensure_outcome_label_task() -> None:
-    """确保 outcome 结算调度任务存在（D 项前瞻验证前置）。
+def _postclose_pipeline_payload(existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = dict(existing or {})
+    payload.update(
+        {
+            "pre_run_full_sync": True,
+            "sync_scope": "all",
+            "preset_id": payload.get("preset_id") or "preset_formal_opening",
+            "run_name": payload.get("run_name") or "盘后全量同步后正式推荐",
+            "run_mode": "formal",
+            "data_source": DATA_SOURCE_LOCAL_POOL_PREFERRED,
+            "risk_template": payload.get("risk_template") or "balanced",
+            "score_line": float(payload.get("score_line") or 72),
+            "output_count": int(payload.get("output_count") or 6),
+            "skip_aux_refresh": True,
+            "health_remediation_tables": [
+                "daily_kbar",
+                "minute_kbar",
+                "index_daily",
+                "limit_up_board",
+                "capital_flow",
+            ],
+            "auxiliary_remediation_tables": [
+                "limit_up_board",
+                "concept_sector",
+                "dragon_tiger",
+                "news",
+                "capital_flow",
+            ],
+            "health_post_diagnosis": True,
+            "auxiliary_post_diagnosis": False,
+            "horizon_days": int(payload.get("horizon_days") or 5),
+            "recommendation_wait_timeout_seconds": int(
+                payload.get("recommendation_wait_timeout_seconds") or 3600
+            ),
+        }
+    )
+    return payload
 
-    收盘后日K同步（17:40）+ 辅助数据（18:05）完成后，18:20 结算 pending 推荐 outcome。
-    若任务已存在则不覆盖（保留用户手动调整的 cron/payload）。
-    """
-    OUTCOME_LABEL_TASK_ID = "postclose_outcome_label"
-    CRON = "20 18 * * 1-5"  # 周一到周五 18:20（收盘后数据同步后）
+
+def _configure_postclose_pipeline_tasks(db) -> None:
+    """幂等收敛旧盘后 cron，避免同步阶段与推荐再次并发。"""
+    task = db.get(ScheduledTask, POSTCLOSE_PIPELINE_TASK_ID)
+    existing_payload: dict[str, Any] = {}
+    if task is None:
+        task = ScheduledTask(task_id=POSTCLOSE_PIPELINE_TASK_ID)
+        db.add(task)
+    else:
+        try:
+            existing_payload = json.loads(task.payload_json or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            existing_payload = {}
+    task.name = "盘后全量同步、健康检查与正式推荐"
+    task.task_type = "recommendation_run"
+    task.cron_expression = POSTCLOSE_PIPELINE_CRON
+    task.payload_json = json.dumps(_postclose_pipeline_payload(existing_payload), ensure_ascii=False)
+    task.enabled = True
+
+    for task_id in LEGACY_POSTCLOSE_TASK_IDS:
+        legacy = db.get(ScheduledTask, task_id)
+        if legacy is not None:
+            legacy.enabled = False
+    db.commit()
+
+
+def _ensure_postclose_pipeline_task() -> None:
     try:
         db = SessionLocal()
         try:
-            existing = db.get(ScheduledTask, OUTCOME_LABEL_TASK_ID)
-            if existing:
-                return
-            task = ScheduledTask(
-                task_id=OUTCOME_LABEL_TASK_ID,
-                name="收盘后推荐 outcome 结算",
-                task_type=TASK_TYPE_OUTCOME_LABEL,
-                cron_expression=CRON,
-                payload_json=json.dumps({"horizon_days": 5}),
-                enabled=True,
-            )
-            db.add(task)
-            db.commit()
-            logger.info("已注册 outcome 结算调度任务: %s (cron=%s)", OUTCOME_LABEL_TASK_ID, CRON)
+            _configure_postclose_pipeline_tasks(db)
         finally:
             db.close()
     except Exception:
-        logger.exception("注册 outcome 结算任务失败")
+        logger.exception("注册盘后全量同步流水线失败")
 
 
 def _ensure_strategy_exposure_task() -> None:
@@ -158,7 +215,7 @@ def _ensure_strategy_exposure_task() -> None:
     ⚠️ 历史根因：本函数曾缺失（仅 manual 触发路径 + _run_strategy_exposure 实现存在，
     但 start_scheduler 从不注册定时任务），导致 exposure cron 从未被排程——4 个低频
     策略（chip/high-range/small-cap/trend-pullback）长期卡在 n<20，胜率统计不可信，
-    E 项持续误触发。此处与 _ensure_outcome_label_task 同构幂等注册，修复该盲区。
+    E 项持续误触发。此处使用幂等注册修复该盲区。
 
     若任务已存在则不覆盖（保留用户手动调整的 cron/payload）。
     """
@@ -285,7 +342,11 @@ def _execute_task(task_id: str, *, force: bool = False, trigger_source: str = "s
         task_run_id = start_task_run(db, task, trigger_source=trigger_source).task_run_id
 
         if task_type == "recommendation_run":
-            result = asyncio.run(_run_recommendation(db, payload))
+            result = asyncio.run(
+                _run_postclose_pipeline(db, payload)
+                if payload.get("pre_run_full_sync")
+                else _run_recommendation(db, payload)
+            )
         elif task_type == TASK_TYPE_FORMAL_SAFETY_NET:
             result = asyncio.run(_safety_net_run(db, payload))
         elif task_type == TASK_TYPE_PRESET_MATRIX_RUN:
@@ -724,6 +785,7 @@ def _run_outcome_label(db, payload: dict) -> dict:
 def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
     """统一数据同步入口，按 sync_scope 执行可恢复的小阶段。"""
     from app.api.data_sources import invalidate_pool_status_cache
+    from app.services.data_health_service import clear_data_health_cache
     from app.services.market_pool import refresh_quote_pool
 
     sync_scope = str(payload.get("sync_scope") or _default_sync_scope(task_type))
@@ -734,6 +796,7 @@ def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
     if sync_scope in ("quotes", "all"):
         quotes, meta = refresh_quote_pool(db)
         invalidate_pool_status_cache()
+        clear_data_health_cache()
         logger.info("行情池刷新: %d 条行情, %s", len(quotes), meta)
         result["quotes"] = {"refreshed": len(quotes), "meta": meta}
         quote_trade_dates = [str(row.get("trade_date") or "") for row in quotes if row.get("trade_date")]
@@ -744,30 +807,36 @@ def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
 
     # 2. 按交易日批量回填日K，避免逐股票脚本在全市场 force 模式下长时间超时。
     if sync_scope in ("daily_bars", "all"):
-        daily_kbar_batch = _run_daily_kbar_batch(payload)
+        daily_payload = dict(payload)
+        if sync_scope == "all":
+            daily_payload["health_post_diagnosis"] = False
+        daily_kbar_batch = _run_daily_kbar_batch(daily_payload)
         invalidate_pool_status_cache()
+        clear_data_health_cache()
         result["daily_kbar_batch"] = daily_kbar_batch
         summary_parts.append(_sync_step_summary("日K按日批量补数", daily_kbar_batch))
         result["steps"].append({"name": "daily_kbar_batch", "status": daily_kbar_batch.get("status")})
 
-    # 3. 健康补数
-    if sync_scope in ("health_remediation", "all") and not bool(payload.get("skip_health_remediation")):
-        health_remediation = _run_data_health_remediation(payload)
-        invalidate_pool_status_cache()
-        result["health_remediation"] = health_remediation
-        summary_parts.append(_sync_step_summary("健康补数完成", health_remediation))
-        result["steps"].append({"name": "health_remediation", "status": health_remediation.get("status")})
-
-    # 4. 回填辅助数据
+    # 3. 回填辅助数据。all 模式必须先完成辅助数据，再做最终健康诊断。
     if sync_scope in ("auxiliary", "all"):
         auxiliary_payload = dict(payload)
         if result.get("trade_date") and not auxiliary_payload.get("trade_date"):
             auxiliary_payload["trade_date"] = result["trade_date"]
         auxiliary = _run_auxiliary_remediation(auxiliary_payload)
         invalidate_pool_status_cache()
+        clear_data_health_cache()
         result["auxiliary"] = auxiliary
         summary_parts.append(_sync_step_summary("辅助数据补数完成", auxiliary))
         result["steps"].append({"name": "auxiliary", "status": auxiliary.get("status")})
+
+    # 4. 最终健康补数与诊断，确保后续推荐读取的是所有同步阶段之后的快照。
+    if sync_scope in ("health_remediation", "all") and not bool(payload.get("skip_health_remediation")):
+        health_remediation = _run_data_health_remediation(payload)
+        invalidate_pool_status_cache()
+        clear_data_health_cache()
+        result["health_remediation"] = health_remediation
+        summary_parts.append(_sync_step_summary("健康补数完成", health_remediation))
+        result["steps"].append({"name": "health_remediation", "status": health_remediation.get("status")})
 
     result["status"] = _task_result_status(result)
     result["summary_text"] = "；".join(summary_parts) if summary_parts else "自动任务执行完成"
@@ -901,6 +970,7 @@ def _run_data_health_remediation(payload: dict) -> dict:
 
 def _run_auxiliary_remediation(payload: dict) -> dict:
     from app.services.data_gap_remediation_service import remediate_data_health_gaps
+    from app.services.auxiliary.production import AUXILIARY_DATASET_INVENTORY
 
     target_tables = payload.get("auxiliary_remediation_tables")
     if target_tables is None:
@@ -914,32 +984,35 @@ def _run_auxiliary_remediation(payload: dict) -> dict:
             post_diagnosis=bool(payload.get("auxiliary_post_diagnosis", True)),
         )
 
-        # All scheduled state/event batch work enters the S4 composition boundary.
-        trade_date = payload.get("trade_date") or result.get("trade_date")
-        if trade_date:
-            from app.services.auxiliary.application import run_auxiliary_application
+        # 独立辅助任务也必须拥有明确交易日；此前缺失该字段导致整个批量分支静默跳过。
+        trade_date = str(payload.get("trade_date") or result.get("trade_date") or _latest_allowed_bar_date())
+        from app.services.auxiliary.application import run_auxiliary_application
 
-            auxiliary = run_auxiliary_application(
-                db,
-                instruments=(),
-                trade_date=str(trade_date),
-                refresh=True,
-                # 慢变批量集 + margin/hsgt 批量集。pledge_stat/holder_number 此前
-                # 只在推荐 run 时逐股惰性拉（4948 股 × N 接口 → 429 限流卡死），
-                # 现在每日同步批量拉全市场落库。fina_indicator 代理不支持 period/
-                # ann_date 批量（500），不在此同步，由 backfill_fina_indicator.py
-                # 在财报季手动/定时按 ts_code 逐股补（cap 守卫防卡死）。
-                datasets=("margin_detail", "block_trade", "hsgt_flow", "hsgt_top10",
-                          "pledge_stat", "holder_number"),
-            )
-            result["batch_sync"] = {
-                item.dataset_key: {
-                    "status": "failed" if item.errors else "success",
-                    "count": item.coverage.record_count,
-                    "errors": [error.code.value for error in item.errors],
-                }
-                for item in auxiliary.orchestrated.results
+        datasets = tuple(
+            payload.get("auxiliary_batch_datasets")
+            or [entry.key for entry in AUXILIARY_DATASET_INVENTORY]
+        )
+        auxiliary = run_auxiliary_application(
+            db,
+            instruments=(),
+            trade_date=trade_date,
+            refresh=True,
+            datasets=datasets,
+        )
+        result["trade_date"] = trade_date
+        result["batch_sync"] = {
+            item.dataset_key: {
+                "status": "failed" if item.errors else "success",
+                "count": item.coverage.record_count,
+                "errors": [error.code.value for error in item.errors],
             }
+            for item in auxiliary.orchestrated.results
+        }
+        # S4 application boundary 明确把事务所有权交给调用方；调度入口必须提交，
+        # 否则 Session close 会把已经拉取和 upsert 的批量数据全部回滚。
+        db.commit()
+        if any(item["status"] == "failed" for item in result["batch_sync"].values()):
+            result["status"] = "partial_failed"
 
         return result
     finally:
@@ -1025,6 +1098,111 @@ def _run_auxiliary_script(payload: dict) -> dict:
     return {
         "stdout_tail": "\n".join(lines[-10:]),
         "summary_text": lines[-1] if lines else "辅助数据回填完成",
+    }
+
+
+def _diagnose_postclose_readiness(db, trade_date: str) -> dict[str, Any]:
+    from app.services.data_health_service import (
+        diagnose_all,
+        recommendation_readiness_from_diagnosis,
+    )
+
+    diagnosis = diagnose_all(db, force_refresh=True)
+    readiness = recommendation_readiness_from_diagnosis(
+        diagnosis,
+        expected_trade_date=trade_date,
+    )
+    return {
+        **readiness,
+        "score": diagnosis.get("score"),
+        "issues": diagnosis.get("issues") or [],
+    }
+
+
+async def _wait_for_recommendation_run(
+    db,
+    run_id: str,
+    *,
+    timeout_seconds: int = 3600,
+    poll_seconds: float = 2.0,
+) -> dict[str, Any]:
+    """等待独立 worker 的最终状态，让调度任务不再把“已入队”误报为完成。"""
+    deadline = time.monotonic() + max(1, timeout_seconds)
+    terminal = {"completed", "failed", "interrupted", "cancelled"}
+    while time.monotonic() < deadline:
+        db.expire_all()
+        run = db.get(RecommendationRun, run_id)
+        if run is None:
+            raise RuntimeError(f"推荐 Run 不存在: {run_id}")
+        if run.status in terminal:
+            return {
+                "run_id": run.run_id,
+                "status": run.status,
+                "recommended_count": int(run.recommended_count or 0),
+                "error": run.error_message,
+                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+            }
+        await asyncio.sleep(max(0.1, poll_seconds))
+    raise TimeoutError(f"推荐 Run {run_id} 在 {timeout_seconds} 秒内未结束")
+
+
+async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
+    """单一盘后流水线：全量同步 → 健康闸门 → outcome → 正式推荐。"""
+    trade_date = _latest_allowed_bar_date()
+    sync_payload = dict(payload)
+    sync_payload.update({"sync_scope": "all", "trade_date": trade_date})
+    sync_result = _run_data_sync(db, sync_payload)
+
+    readiness = _diagnose_postclose_readiness(db, trade_date)
+    if not readiness.get("can_run_local_recommendation"):
+        blockers = "；".join(readiness.get("blockers") or ["未知数据健康问题"])
+        return {
+            "status": "failed",
+            "trade_date": trade_date,
+            "sync": sync_result,
+            "readiness": readiness,
+            "summary_text": f"盘后同步完成，但健康闸门阻止推荐：{blockers}",
+        }
+
+    outcome = _run_outcome_label(
+        db,
+        {"horizon_days": int(payload.get("horizon_days") or 5)},
+    )
+    recommendation = await _run_recommendation(db, payload)
+    run_id = str(recommendation.get("related_run_id") or "")
+    if not run_id:
+        raise RuntimeError("盘后正式推荐未返回关联 Run ID")
+    final_run = await _wait_for_recommendation_run(
+        db,
+        run_id,
+        timeout_seconds=int(payload.get("recommendation_wait_timeout_seconds") or 3600),
+    )
+    final_status = str(final_run.get("status") or "failed")
+    if final_status != "completed":
+        return {
+            "status": "failed",
+            "trade_date": trade_date,
+            "sync": sync_result,
+            "readiness": readiness,
+            "outcome": outcome,
+            "recommendation": recommendation,
+            "final_run": final_run,
+            "related_run_id": run_id,
+            "summary_text": f"盘后推荐 Run {run_id} 最终状态为 {final_status}",
+        }
+
+    recommended_count = int(final_run.get("recommended_count") or 0)
+    return {
+        "status": "completed",
+        "trade_date": trade_date,
+        "sync": sync_result,
+        "readiness": readiness,
+        "outcome": outcome,
+        "recommendation": recommendation,
+        "final_run": final_run,
+        "related_run_id": run_id,
+        "recommended_count": recommended_count,
+        "summary_text": f"盘后数据已同步并通过健康检查，正式推荐完成 {recommended_count} 条",
     }
 
 
