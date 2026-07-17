@@ -12,7 +12,7 @@ import { fmtPrice } from "../components/Shared";
 import { bucketLabel, exitReasonLabel, BUCKET_LABELS } from "../utils/display";
 
 /**
- * 复盘页 —— 推荐历史记录（跨 run，按 trade_date 倒序，带 outcome）。
+ * 复盘页 —— 正式运行推荐历史（跨 run，按 trade_date 倒序，带 outcome）。
  * 填补北极星"推荐历史记录页"缺口：用户查看每笔推荐的实际表现，支持分页 + 筛选。
  * 点击行展开 inline 详情（评分分解 / 买点 / 风控 / LLM 摘要）。
  *
@@ -59,6 +59,7 @@ export function HistoryPage() {
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
+  const summary = data?.summary;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   const resetPage = () => setPage(0);
@@ -102,21 +103,6 @@ export function HistoryPage() {
     },
     [expandedId, details],
   );
-
-  // 胜率只统计已触发且已结算的推荐（success/failed），pending/missed/outcome 为空的不计入分母
-  const itemsWithResult = items.filter(
-    (it) => it.outcome?.outcome_label === "success" || it.outcome?.outcome_label === "failed"
-  );
-  const winCount = itemsWithResult.filter((it) => it.outcome?.outcome_label === "success").length;
-  const hasOutcome = itemsWithResult.length > 0;
-
-  // 收益率：本页有 executed_return 的推荐均值（盈亏样本）
-  const itemsWithReturn = items.filter((it) => it.outcome?.executed_return != null);
-  const retAvg =
-    itemsWithReturn.length > 0
-      ? itemsWithReturn.reduce((acc, it) => acc + (it.outcome?.executed_return ?? 0), 0) / itemsWithReturn.length
-      : 0;
-  const hasReturn = itemsWithReturn.length > 0;
 
   return (
     <Panel
@@ -239,17 +225,17 @@ export function HistoryPage() {
 
         {/* 总计数（轻量） */}
         <span className="records-filterbar__total">
-          共 {total} 笔
+          正式 · 共 {total} 笔
         </span>
 
         {/* 胜率徽标（醒目卡片） */}
-        {hasOutcome && (() => {
-          const rate = (winCount / itemsWithResult.length) * 100;
+        {summary?.win_rate != null && (() => {
+          const rate = summary.win_rate;
           const tier = rate >= 60 ? "high" : rate >= 40 ? "mid" : "low";
           return (
-            <div className={`winrate-badge winrate-badge--${tier}`} title={`本页胜率：${winCount}/${itemsWithResult.length} 已结算推荐`}>
+            <div className={`winrate-badge winrate-badge--${tier}`} title={`当前筛选范围净胜率：${summary.win_count}/${summary.trade_count} 笔已成交正式推荐`}>
               <span className="winrate-badge__label">胜率</span>
-              <span className="winrate-badge__fraction">{winCount}/{itemsWithResult.length}</span>
+              <span className="winrate-badge__fraction">{summary.win_count}/{summary.trade_count}</span>
               <div className="winrate-badge__bar">
                 <div className="winrate-bar__fill" style={{ width: `${rate}%` }} />
               </div>
@@ -258,14 +244,24 @@ export function HistoryPage() {
           );
         })()}
 
-        {/* 收益率徽标（配对胜率，A股涨红跌绿） */}
-        {hasReturn && (
+        {/* 全筛选范围净收益指标（executed_return 已含滑点，另扣佣金与印花税） */}
+        {summary?.average_net_return != null && (
           <div
-            className={`return-badge return-badge--${retAvg >= 0 ? "up" : "down"}`}
-            title={`本页收益率：基于 ${itemsWithReturn.length} 笔已结算推荐的平均收益`}
+            className={`return-badge return-badge--${summary.average_net_return >= 0 ? "up" : "down"}`}
+            title={`当前筛选范围 ${summary.trade_count} 笔已成交正式推荐的平均单笔净收益，已扣 ${summary.additional_cost_pct.toFixed(2)}% 交易成本`}
           >
-            <span className="return-badge__label">收益率</span>
-            <span className="return-badge__value">{retAvg >= 0 ? "+" : ""}{retAvg.toFixed(2)}%</span>
+            <span className="return-badge__label">平均单笔净收益</span>
+            <span className="return-badge__value">{summary.average_net_return >= 0 ? "+" : ""}{summary.average_net_return.toFixed(2)}%</span>
+          </div>
+        )}
+
+        {summary && summary.trade_count > 0 && (
+          <div
+            className={`return-badge return-badge--${summary.total_net_return >= 0 ? "up" : "down"}`}
+            title="当前筛选范围所有已成交正式推荐的单笔净收益之和；不是账户复利收益率"
+          >
+            <span className="return-badge__label">累计单笔净收益</span>
+            <span className="return-badge__value">{summary.total_net_return >= 0 ? "+" : ""}{summary.total_net_return.toFixed(2)}%</span>
           </div>
         )}
       </div>

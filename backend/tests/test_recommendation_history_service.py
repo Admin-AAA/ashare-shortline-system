@@ -10,8 +10,14 @@
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from app.db.session import SessionLocal
-from app.services.workbench_service import list_recommendation_history
+from app.models.tables import RecommendationRun
+from app.services.workbench_service import (
+    _build_recommendation_history_summary,
+    list_recommendation_history,
+)
 
 
 def _db():
@@ -27,6 +33,7 @@ def test_history_returns_deduplicated_items():
         assert "total" in result
         assert result["limit"] == 50
         assert result["offset"] == 0
+        assert "summary" in result
         # 去重验证：items 里不应有重复 (trade_date, code)
         seen = set()
         for item in result["items"]:
@@ -34,6 +41,51 @@ def test_history_returns_deduplicated_items():
             assert key not in seen, f"重复 (trade_date, code): {key}"
             seen.add(key)
         assert len(result["items"]) <= 50
+    finally:
+        db.close()
+
+
+def test_history_summary_uses_settled_net_returns_only():
+    outcomes = [
+        SimpleNamespace(entry_triggered=True, outcome_label="success", label_source="auto", executed_return=5.0),
+        SimpleNamespace(entry_triggered=True, outcome_label="failed", label_source="auto", executed_return=-2.0),
+        SimpleNamespace(entry_triggered=False, outcome_label="missed", label_source="auto", executed_return=0.0),
+        SimpleNamespace(entry_triggered=False, outcome_label="pending", label_source="auto", executed_return=99.0),
+    ]
+
+    summary = _build_recommendation_history_summary(outcomes)
+
+    assert summary == {
+        "trade_count": 2,
+        "win_count": 1,
+        "win_rate": 50.0,
+        "average_net_return": 1.43,
+        "total_net_return": 2.86,
+        "additional_cost_pct": 0.07,
+    }
+
+
+def test_history_summary_does_not_change_between_pages():
+    db = _db()
+    try:
+        page1 = list_recommendation_history(db, limit=10, offset=0)
+        page2 = list_recommendation_history(db, limit=10, offset=10)
+        assert page1["summary"] == page2["summary"]
+    finally:
+        db.close()
+
+
+def test_history_contains_formal_runs_only():
+    db = _db()
+    try:
+        result = list_recommendation_history(db, limit=50)
+        run_ids = {item["run_id"] for item in result["items"]}
+        run_modes = {
+            run.run_mode
+            for run_id in run_ids
+            if (run := db.get(RecommendationRun, run_id)) is not None
+        }
+        assert run_modes <= {"formal"}
     finally:
         db.close()
 
