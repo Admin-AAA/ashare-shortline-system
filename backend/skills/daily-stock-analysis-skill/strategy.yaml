@@ -28,7 +28,7 @@ universe:
   include:
     - "amount_yi >= 3"
     - "amount_yi < 15"  # 大成交额排除：>=15亿时 DSA WR=32.4%（n=34全量/n=25前瞻），策略不适用机构博弈盘（因果：DSA是技术趋势策略，机构博弈盘价格行为非趋势跟随）
-    - "turnover_rate >= 0.3"
+    - "turnover_rate >= 1.5"  # SELF-IMPROVE T3 第185轮：低换手率毒区（反事实护栏 delta_net=+19.84，36笔输赢各半但亏单均亏>赢单均赚，净正）；NFT入场即套与低换手同源；07-16前瞻样本一致（turnover<1.5 的6笔净-8.5%）
   exclude:
     - "is_st == true"
     - "announcement_negative_count > 0"
@@ -36,7 +36,7 @@ universe:
 prefilter:
   market:
     include:
-      - when: "turnover_rate >= 0.8"
+      - when: "turnover_rate >= 1.5"
         reason: "turnover_too_low"
       - when: "turnover_rate <= 12"
         reason: "turnover_too_high"
