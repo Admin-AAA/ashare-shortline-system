@@ -64,8 +64,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - name: git diff --check
-        run: git diff --check HEAD~1 HEAD || true
+        run: git diff --check HEAD~1 HEAD
 
   frontend-build:
     name: Frontend v2 build
@@ -81,6 +83,6 @@ jobs:
           cache: "npm"
           cache-dependency-path: frontend-v2/package-lock.json
       - name: Install
-        run: npm ci || npm install
+        run: npm ci
       - name: Build
         run: npm run build
