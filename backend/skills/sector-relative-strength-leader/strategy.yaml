@@ -72,6 +72,19 @@ phases:
     hard_veto: true
     risk_flags: ["非主线且无板块梯队，不做孤票"]
 
+  # 弱市降权：弱市整体 PL=0.82（n=59）净负，主线相对强度在弱市次日无接力资金
+  # LIVE 验证（2026-07 第181轮 D项失败归因闭环，sector-relative-strength-leader LIVE formal 去重）：
+  #   弱市: n=59 WR=72.9% avg=+1.88% PL=0.82 | 结构性强势: n=9 WR=100% PL=1.00+ | 震荡: n=7 PL=0.85
+  #   弱市+RSI>=60: n=11 PL=0.83 | 弱市+RSI<60: n=48 PL=0.82（RSI 不区分，弱市整体净负）
+  # 因果：主线相对强度策略赌"板块梯队延续"，弱市下板块梯队次日易退潮（无增量资金），
+  #   龙头相对强度虽在但绝对收益为负（win 4.5%/loss 5.5% 盈亏比<1）。
+  # 动作：cap 68 降权（低于 score_line 72，大幅压缩弱市产出，保留极少数高分超跌 alpha）
+  - name: 弱市降权
+    when: "market_regime == '弱势'"
+    score_cap: 68
+    hard_veto: false
+    risk_flags: ["弱市主线相对强度盈亏比0.82净负，降权压缩产出"]
+
   - name: 主线退潮回避
     when: "market_sentiment_phase == '冰点' and sector_ladder_completeness_score < 50"
     score_cap: 35

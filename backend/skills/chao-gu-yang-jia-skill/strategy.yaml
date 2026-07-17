@@ -70,6 +70,31 @@ phases:
     hard_veto: true
     risk_flags: ["退潮不交易"]
 
+  # 弱市超买毒区：弱市+RSI>=60 → hard_veto cap 50（远低于 score_line 72）
+  # LIVE 验证（2026-07 第181轮 D项失败归因闭环，chao-gu-yang-jia-skill LIVE formal 去重）：
+  #   弱市+RSI>=60: n=57 WR=75.4% avg=+1.86% PL=0.76（win_avg 4.5% vs loss_avg 5.9%，赚小亏大净负）
+  #     其中 RSI[60,70): n=42 WR=71.4% PL=0.74 | RSI>=70: n=15 PL=0.81（全段净负，非过拟合）
+  #   对照 弱市+RSI<60: n=39 WR=76.9% PL=0.82 | 结构性强势: n=33 WR=78.8% PL=1.02（非弱市净正）
+  #   对照 daily 弱市+RSI>=60: n=26 WR=88.5% PL=1.05（同条件 daily 净正，毒区是 chao-gu 策略特有）
+  # 因果：炒股养家策略赌"主线龙头分歧转强"，但弱市下 RSI>=60=股价已偏强（非超跌安全垫），
+  #   弱市次日无接力资金，偏强股（RSI>=60）高乖离回踩触发 stop_loss（win 4.5%/loss 5.9% 盈亏比<1）。
+  #   与 daily 的"弱市半吊子追高"同源：弱市宜等超跌（RSI<50 PL=0.92 接近净正）不宜追偏强。
+  # 动作：hard_veto（cap 50）。RSI<60 子集 PL=0.82 仍轻度净负，由下方"弱市降权"cap 68 兜底保留超跌 alpha。
+  - name: 弱市超买毒区
+    when: "market_regime == '弱势' and rsi_12 >= 60"
+    score_cap: 50
+    hard_veto: true
+    risk_flags: ["弱市+RSI>=60（偏强股弱市无接力，盈亏比0.76净负），弱市宜等超跌不宜追偏强"]
+
+  # 弱市降权：弱市整体 PL=0.78（n=96）净负，但 RSI<60 含超跌 alpha（RSI<50 PL=0.92），
+  # 不 hard_veto 只降权到 cap 68（低于 score_line 72，仅极高 base 分能过，相当于大幅压缩产出）
+  # LIVE 验证（同上第181轮）：弱市 n=96 WR=76.0% avg=+2.03% PL=0.78 | 震荡 n=21 PL=0.83 | 结构性强势 n=33 PL=1.02
+  - name: 弱市降权
+    when: "market_regime == '弱势'"
+    score_cap: 68
+    hard_veto: false
+    risk_flags: ["弱市整体盈亏比0.78净负，降权压缩产出（RSI>=60已 hard_veto，此处兜底 RSI<60）"]
+
   - name: 非主线加速
     when: "dist60 > 30 and pos60 > 90 and is_main_theme == false"
     score_cap: 20
