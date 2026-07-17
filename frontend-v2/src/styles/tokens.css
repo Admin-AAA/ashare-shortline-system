@@ -75,8 +75,8 @@
   /* ── 兼容别名（旧 token 名 → 新 token，避免逐文件替换） ── */
   --text-muted: var(--muted);
   --text-secondary: var(--ink-secondary);
-  --color-up: var(--market-down);   /* A股：涨红跌绿，up=红 */
-  --color-down: var(--market-up);
+  --color-up: var(--market-up);     /* A股：涨红跌绿，up=红 */
+  --color-down: var(--market-down); /* down=绿 */
   --color-info: var(--accent);
   --surface-1: var(--surface-soft);
   --surface-2: var(--surface-strong);

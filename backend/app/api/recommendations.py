@@ -25,6 +25,7 @@ def history(
     bucket: str | None = Query(default=None),
     setup_type: str | None = Query(default=None),
     strategy_id: str | None = Query(default=None, description="按策略下钻：仅返回 skill_breakdown 含该 strategy_id 的推荐"),
+    strategy_version_id: str | None = Query(default=None, description="按策略版本下钻：匹配运行时 selected_skills.version_id"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -36,6 +37,8 @@ def history(
     """
     if label is not None and label not in {"success", "failed", "missed", "pending"}:
         raise HTTPException(status_code=400, detail="label must be success/failed/missed/pending")
+    if strategy_version_id and not strategy_id:
+        raise HTTPException(status_code=400, detail="strategy_version_id requires strategy_id")
     return list_recommendation_history(
         db,
         code=code,
@@ -45,6 +48,7 @@ def history(
         bucket=bucket,
         setup_type=setup_type,
         strategy_id=strategy_id,
+        strategy_version_id=strategy_version_id,
         limit=limit,
         offset=offset,
     )

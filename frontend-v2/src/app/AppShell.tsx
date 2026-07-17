@@ -14,6 +14,7 @@ const RecordsPage = lazy(() => import("../pages/RecordsPage").then((m) => ({ def
 const MatrixPage = lazy(() => import("../pages/MatrixPage").then((m) => ({ default: m.MatrixPage })));
 const MetricsPage = lazy(() => import("../pages/MetricsPage").then((m) => ({ default: m.MetricsPage })));
 const StrategiesPage = lazy(() => import("../pages/StrategiesPage").then((m) => ({ default: m.StrategiesPage })));
+const StrategyDetailPage = lazy(() => import("../pages/StrategyDetailPage").then((m) => ({ default: m.StrategyDetailPage })));
 const ConfigPage = lazy(() => import("../pages/ConfigPage").then((m) => ({ default: m.ConfigPage })));
 const RunDetailPage = lazy(() => import("../pages/RunDetailPage").then((m) => ({ default: m.RunDetailPage })));
 
@@ -57,6 +58,7 @@ export function AppShell() {
 
   // /run 子路由单独走 RunDetailPage；/data-health 已并入配置页 tab，重定向过去
   const isRunDetail = pathname === "/run";
+  const isStrategyDetail = pathname.startsWith("/strategies/");
 
   useEffect(() => {
     if (pathname === "/data-health") {
@@ -123,6 +125,10 @@ export function AppShell() {
           {isRunDetail ? (
             <Suspense fallback={<PageFallback />}>
               <RunDetailPage refreshSignal={refreshSignal} />
+            </Suspense>
+          ) : isStrategyDetail ? (
+            <Suspense fallback={<PageFallback />}>
+              <StrategyDetailPage refreshSignal={refreshSignal} />
             </Suspense>
           ) : (
             <Suspense fallback={<PageFallback />}>

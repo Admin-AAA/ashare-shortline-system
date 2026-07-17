@@ -271,6 +271,7 @@ def test_existing_schema_baseline_applies_owned_p0_research_schema_forward_only(
         "V020_auxiliary_auction_unique",
         "V021_auxiliary_holder_number_unique",
         "V024_auxiliary_partition_snapshots",
+        "V025_strategy_version_snapshots",
     )
     assert result.applied_versions == expected_versions
     assert [migration.version for migration in all_migrations()] == list(expected_versions)
@@ -279,6 +280,9 @@ def test_existing_schema_baseline_applies_owned_p0_research_schema_forward_only(
         assert connection.scalar(
             text("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'backtest_%'")
         ) == 8
+        assert connection.scalar(
+            text("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = 'strategy_version_snapshots'")
+        ) == 1
 
 
 def test_init_db_uses_create_all_only_for_sqlite(monkeypatch) -> None:

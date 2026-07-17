@@ -25,7 +25,14 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.engine.skill_loader import StrategySkill, load_skills, validate_skill
-from app.models.tables import Preset, PresetSkill, SkillRegistry, SkillVersion, StrategyVersion
+from app.models.tables import (
+    Preset,
+    PresetSkill,
+    SkillRegistry,
+    SkillVersion,
+    StrategyVersion,
+    StrategyVersionSnapshot,
+)
 from app.services.runs.bootstrap_cache import invalidate_bootstrap_cache
 
 
@@ -53,6 +60,31 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)
     return value
+
+
+def _strategy_snapshot(skill: StrategySkill, descriptor: "StrategyDescriptor") -> tuple[str, str]:
+    """Return canonical immutable content and its hash for one runtime version."""
+    payload = {
+        "schema_version": 1,
+        "strategy_id": descriptor.strategy_id,
+        "name": descriptor.name,
+        "mode": descriptor.mode.value,
+        "status": descriptor.status.value,
+        "declared_version": descriptor.declared_version,
+        "effective_version": descriptor.effective_version,
+        "manifest": {
+            key: _json_safe(value)
+            for key, value in skill.manifest.items()
+            if not str(key).startswith("_")
+        },
+        "contract": _json_safe(skill.contract),
+        "skill_frontmatter": _json_safe(skill.skill_frontmatter),
+        "skill_body": skill.skill_body,
+        "skill_hash": skill.skill_hash,
+        "reference_files": _json_safe(skill.reference_files),
+    }
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return serialized, hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def _loads(raw: str | None, default: Any) -> Any:
@@ -203,6 +235,22 @@ def sync_skills(db: Session) -> list[StrategySkill]:
                     )
                 )
                 has_changes = True
+            snapshot_json, snapshot_hash = _strategy_snapshot(skill, descriptor)
+            snapshot = db.get(StrategyVersionSnapshot, version_id)
+            if snapshot is None:
+                db.add(
+                    StrategyVersionSnapshot(
+                        version_id=version_id,
+                        strategy_id=descriptor.strategy_id,
+                        snapshot_json=snapshot_json,
+                        content_hash=snapshot_hash,
+                    )
+                )
+                has_changes = True
+            elif snapshot.content_hash != snapshot_hash:
+                raise RuntimeError(
+                    f"策略版本快照不可变约束冲突: {descriptor.strategy_id}/{version_id}"
+                )
         if has_changes:
             db.commit()
         # 自愈逻辑已移除：repair_preset_registration 会在用户编辑预设后把删掉的策略加回来，

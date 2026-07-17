@@ -40,6 +40,7 @@ import type {
   ScoreLineStatsRow,
   SetupStatsRow,
   StrategyListItem,
+  StrategyCenterDetail,
   StrategyStatsRow,
   StatsOverview,
   AlphaDecayResponse
@@ -220,6 +221,7 @@ export const api = {
     bucket?: string;
     setup_type?: string;
     strategy_id?: string;
+    strategy_version_id?: string;
     limit?: number;
     offset?: number;
   }) => {
@@ -231,6 +233,7 @@ export const api = {
     if (query?.bucket) params.set("bucket", query.bucket);
     if (query?.setup_type) params.set("setup_type", query.setup_type);
     if (query?.strategy_id) params.set("strategy_id", query.strategy_id);
+    if (query?.strategy_version_id) params.set("strategy_version_id", query.strategy_version_id);
     if (query?.limit) params.set("limit", String(query.limit));
     if (query?.offset) params.set("offset", String(query.offset));
     return request<RecommendationHistoryResponse>(`/api/recommendations/history?${params.toString()}`);
@@ -311,6 +314,12 @@ export const api = {
   skills: () => request<SkillSummary[]>("/api/skills", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   strategies: (windowDays?: number) =>
     request<StrategyListItem[]>(`/api/strategies${windowDays ? `?window_days=${windowDays}` : ""}`, undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
+  strategyDetail: (strategyId: string, versionId?: string) => {
+    const params = new URLSearchParams();
+    if (versionId) params.set("version_id", versionId);
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return request<StrategyCenterDetail>(`/api/strategies/${encodeURIComponent(strategyId)}${suffix}`, undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS });
+  },
   installSkill: (payload: { source: string; skill_id?: string }) =>
     request<SkillDetail>("/api/skills/install", json("POST", payload)),
   skillDetail: (id: string) => request<SkillDetail>(`/api/skills/${id}`),
