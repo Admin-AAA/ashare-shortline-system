@@ -78,6 +78,12 @@ _MIN_RECENT_DAILY_KBAR_CODES = 3000
 #   数据（自然稀疏，有数据即视为已接入，不判滞后）
 # - column：可选，非 NULL 计数列（用于部分字段型域，如 筹码峰 chip_cost_50）
 _DAILY_DATA_FRESH_DAYS = 0
+# 已知 Tushare 盘后延迟出数的数据域：融资融券明细(margin_detail)盘后晚出，
+# 港股通持股(hk_hold)只能逐股票拉（慢，盘后管线不补）。给 1 天宽限，避免把
+# 「数据源当日未就绪」误判成「系统漏拉」刷低健康分。真正的缺口仍会被
+# 盘后窗口回填补上（见 scheduler._backfill_auxiliary_window_gaps）。
+_MARGIN_LIKE_FRESH_DAYS = 1
+_HK_HOLD_FRESH_DAYS = 7
 
 _DATA_DOMAIN_DEFS: list[dict[str, Any]] = [
     # 行情 K 线
@@ -98,12 +104,12 @@ _DATA_DOMAIN_DEFS: list[dict[str, Any]] = [
     # 资金流向
     {"key": "capital_flow", "label": "资金流向", "category": "资金流向", "table": CapitalFlow, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS},
     # 北向 / 港股通
-    {"key": "hsgt_flow", "label": "沪深港通资金流", "category": "北向港股通", "table": HsgtFlow, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS},
-    {"key": "hsgt_top10", "label": "北向持股TOP10", "category": "北向港股通", "table": HsgtTop10, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS},
-    {"key": "hk_hold", "label": "港股通持股", "category": "北向港股通", "table": HkHolding, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS},
+    {"key": "hsgt_flow", "label": "沪深港通资金流", "category": "北向港股通", "table": HsgtFlow, "date_col": "trade_date", "critical": False, "fresh_days": _MARGIN_LIKE_FRESH_DAYS, "source_lag_prone": True},
+    {"key": "hsgt_top10", "label": "北向持股TOP10", "category": "北向港股通", "table": HsgtTop10, "date_col": "trade_date", "critical": False, "fresh_days": _MARGIN_LIKE_FRESH_DAYS, "source_lag_prone": True},
+    {"key": "hk_hold", "label": "港股通持股", "category": "北向港股通", "table": HkHolding, "date_col": "trade_date", "critical": False, "fresh_days": _HK_HOLD_FRESH_DAYS, "source_lag_prone": True},
     # 融资融券
-    {"key": "margin", "label": "融资融券", "category": "融资融券", "table": MarginData, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS},
-    {"key": "margin_detail", "label": "融资融券明细", "category": "融资融券", "table": MarginDetail, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS},
+    {"key": "margin", "label": "融资融券", "category": "融资融券", "table": MarginData, "date_col": "trade_date", "critical": False, "fresh_days": _MARGIN_LIKE_FRESH_DAYS, "source_lag_prone": True},
+    {"key": "margin_detail", "label": "融资融券明细", "category": "融资融券", "table": MarginDetail, "date_col": "trade_date", "critical": False, "fresh_days": _MARGIN_LIKE_FRESH_DAYS, "source_lag_prone": True},
     # 股东 / 筹码
     {"key": "holder_number", "label": "股东人数(筹码集中度)", "category": "股东筹码", "table": HolderNumber, "date_col": "end_date", "critical": False, "fresh_days": 130},
     {"key": "holder_trade", "label": "股东增减持", "category": "股东筹码", "table": HolderTrade, "date_col": "ann_date", "critical": False, "fresh_days": None},
@@ -643,7 +649,9 @@ def _data_domain_coverage(db: Session, reference_trade_date: str | None) -> dict
         if max_date and len(max_date) == 6 and max_date.isdigit():
             max_date = f"{max_date[:4]}-{max_date[4:]}"
 
+        source_lag_prone = bool(ddef.get("source_lag_prone"))
         gap_days: int | None = None
+        note: str | None = None
         if total == 0:
             status = "empty"
             empty += 1
@@ -664,6 +672,11 @@ def _data_domain_coverage(db: Session, reference_trade_date: str | None) -> dict
                 status = "stale"
                 stale += 1
                 penalty += 3 if critical else 1
+                # 区分「系统漏拉」与「数据源盘后延迟」：已知延迟型数据域
+                # (融资融券、港股通持股) 在参考日附近滞后，更可能是 Tushare
+                # 当日数据未出而非补数链路故障，标注让用户优先排查系统侧。
+                if source_lag_prone and gap_days is not None and gap_days <= max(2, fresh + 1):
+                    note = "可能数据源盘后延迟（非系统漏拉），下一盘后周期会自动补"
 
         domains.append({
             "key": key,
@@ -675,7 +688,7 @@ def _data_domain_coverage(db: Session, reference_trade_date: str | None) -> dict
             "critical": critical,
             "fresh_window_days": fresh,
             "gap_days": gap_days if (fresh is not None and total > 0) else None,
-            "note": None,
+            "note": note,
         })
 
     # 按类别分组
@@ -796,6 +809,15 @@ def _find_issues(
                 "severity": "low",
                 "message": f"数据域接入但数据滞后共 {len(stale)} 个（策略未持续刷新）：{labels}",
             })
+            # 对已知数据源延迟型数据域单独提示，避免把 Tushare 当日未出数据
+            # 误当系统故障排查。
+            lag_notes = [d["note"] for d in stale if d.get("note")]
+            if lag_notes:
+                issues.append({
+                    "severity": "low",
+                    "message": "其中部分滞后可能源于 Tushare 盘后延迟出数，"
+                               "下一盘后周期会自动回填，非系统漏拉",
+                })
 
     return issues
 

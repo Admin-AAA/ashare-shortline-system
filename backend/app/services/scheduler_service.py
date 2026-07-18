@@ -1014,9 +1014,208 @@ def _run_auxiliary_remediation(payload: dict) -> dict:
         if any(item["status"] == "failed" for item in result["batch_sync"].values()):
             result["status"] = "partial_failed"
 
+        # 回填最近窗口缺口日：run_auxiliary_application 只按参考日单日拉取，
+        # 若前几个交易日的数据在当日盘后未拉到（管线失败 / Tushare 当日延迟），
+        # 这些缺口会长期滞留——只补参考日永远填不满。这里对窗口内早于参考日
+        # 的交易日逐日回填「按 trade_date 批量」的数据集，让历史缺口自愈。
+        window_days = int(payload.get("auxiliary_backfill_window_days") or 5)
+        window_backfill = _backfill_auxiliary_window_gaps(
+            db,
+            reference_trade_date=trade_date,
+            window_days=window_days,
+        )
+        if window_backfill.get("backfilled_dates"):
+            result["window_backfill"] = window_backfill
+
+        # stk_limit（涨跌停价）不在 S4 AUXILIARY_DATASET_INVENTORY，此前只靠
+        # 未调度的 daily_data_cron 补，长期 stale。它按 trade_date 批量
+        # (pro.stk_limit(trade_date=))，与辅助窗口回填同节奏，这里一并补缺口日。
+        if not bool(payload.get("skip_stk_limit_backfill")):
+            stk_limit_backfill = _backfill_stk_limit_window(
+                db,
+                reference_trade_date=trade_date,
+                window_days=window_days,
+            )
+            if stk_limit_backfill.get("backfilled_dates"):
+                result["stk_limit_backfill"] = stk_limit_backfill
+
         return result
     finally:
         db.close()
+
+
+# 按 trade_date 批量拉取的数据集：state_adapters 对这些数据集用
+# pro.xxx(trade_date=target) 一次拉全市场，天然支持逐日回填。
+# 排除事件型/月度型/季频数据集（broker_recommend/holder_number/fina_indicator/
+# pledge_stat/share_float/holder_trade/news_announcement/auction），它们不适合
+# 也不需要按交易日逐日批量回填。auction 受 API 权限限制，单独跳过。
+_AUXILIARY_TRADE_DATE_BATCH_DATASETS = (
+    "limit_up_board",
+    "concept_sector",
+    "concept_sector_stock",
+    "capital_flow",
+    "dragon_tiger",
+    "margin_detail",
+    "hsgt_flow",
+    "hsgt_top10",
+    "block_trade",
+)
+
+
+def _backfill_auxiliary_window_gaps(
+    db,
+    *,
+    reference_trade_date: str,
+    window_days: int,
+) -> dict[str, Any]:
+    """对最近 window_days 个交易日中早于参考日的缺口日逐日回填辅助数据集。
+
+    只回填「按 trade_date 批量」的数据集（见 _AUXILIARY_TRADE_DATE_BATCH_DATASETS），
+    避免对事件型/季频数据集做无意义的逐日拉取。每个缺口日一次
+    run_auxiliary_application 调用，内部按数据集并行拉取全市场批量，upsert 去重，
+    已有数据不会被重复写入。
+    """
+    from app.services.auxiliary.application import run_auxiliary_application
+    from app.models.tables import DailyKbar
+    from sqlalchemy import func, select
+
+    backfilled: list[dict[str, Any]] = []
+    if not reference_trade_date or window_days <= 0:
+        return {"backfilled_dates": backfilled}
+
+    # 取最近 window_days+1 个交易日（含参考日），用于逐日回填窗口内的缺口。
+    ref_compact = reference_trade_date.replace("-", "")
+    trade_days = _recent_trade_day_compacts(db, ref_compact, window_days + 1)
+    # 去掉参考日本身（已在上一步跑过），按时间正序回填，保证时序。
+    # 去掉参考日本身（已在上一步跑过），按时间正序回填，保证时序。
+    gap_dates = [d for d in trade_days if d != ref_compact]
+    gap_dates.reverse()
+    if not gap_dates:
+        return {"backfilled_dates": backfilled}
+
+    for compact in gap_dates:
+        iso = f"{compact[:4]}-{compact[4:6]}-{compact[6:8]}"
+        try:
+            aux = run_auxiliary_application(
+                db,
+                instruments=(),
+                trade_date=iso,
+                refresh=True,
+                datasets=_AUXILIARY_TRADE_DATE_BATCH_DATASETS,
+            )
+            db.commit()
+            backfilled.append({
+                "trade_date": iso,
+                "status": "success" if not any(item.errors for item in aux.orchestrated.results) else "partial",
+                "datasets": {
+                    item.dataset_key: {
+                        "status": "failed" if item.errors else "success",
+                        "count": item.coverage.record_count,
+                    }
+                    for item in aux.orchestrated.results
+                },
+            })
+        except Exception as exc:
+            logger.warning("辅助数据窗口回填 %s 失败: %s", iso, str(exc)[:120])
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            backfilled.append({"trade_date": iso, "status": "failed", "error": str(exc)[:120]})
+    return {"backfilled_dates": backfilled}
+
+
+def _backfill_stk_limit_window(
+    db,
+    *,
+    reference_trade_date: str,
+    window_days: int,
+) -> dict[str, Any]:
+    """对最近 window_days 个交易日回填 stk_limit（涨跌停价）。
+
+    stk_limit 不在 S4 辅助数据集清单，此前无盘后补数路径。按 trade_date 批量
+    (pro.stk_limit(trade_date=)) 一次拉全市场，逐日 upsert。已有数据不会被
+    重复写入（on_duplicate_key_update）。
+    """
+    from sqlalchemy.dialects.mysql import insert as mysql_insert
+    from app.models.tables import StkLimit
+    from app.services.tushare_client import get_pro
+
+    backfilled: list[dict[str, Any]] = []
+    if not reference_trade_date or window_days <= 0:
+        return {"backfilled_dates": backfilled}
+
+    ref_compact = reference_trade_date.replace("-", "")
+    trade_days = _recent_trade_day_compacts(db, ref_compact, window_days + 1)
+    # 含参考日；按正序回填，参考日也要补（此前管线从不补 stk_limit）。
+    gap_dates = list(reversed([d for d in trade_days]))
+    if not gap_dates:
+        return {"backfilled_dates": backfilled}
+
+    pro = get_pro()
+    for compact in gap_dates:
+        iso = f"{compact[:4]}-{compact[4:6]}-{compact[6:8]}"
+        try:
+            df = pro.stk_limit(trade_date=compact)
+        except Exception as exc:
+            logger.warning("stk_limit(%s) 拉取失败: %s", iso, str(exc)[:120])
+            backfilled.append({"trade_date": iso, "status": "failed", "error": str(exc)[:120]})
+            continue
+        if df is None or df.empty:
+            backfilled.append({"trade_date": iso, "status": "empty", "count": 0})
+            continue
+        rows = []
+        for _, r in df.iterrows():
+            code = str(r.get("ts_code", "")).split(".")[0]
+            if len(code) != 6:
+                continue
+            rows.append({
+                "code": code,
+                "trade_date": iso,
+                "up_limit": _safe_float(r.get("up_limit")),
+                "down_limit": _safe_float(r.get("down_limit")),
+            })
+        if not rows:
+            backfilled.append({"trade_date": iso, "status": "empty", "count": 0})
+            continue
+        stmt = mysql_insert(StkLimit).values(rows)
+        stmt = stmt.on_duplicate_key_update(
+            up_limit=stmt.inserted.up_limit,
+            down_limit=stmt.inserted.down_limit,
+        )
+        db.execute(stmt)
+        db.commit()
+        backfilled.append({"trade_date": iso, "status": "success", "count": len(rows)})
+    return {"backfilled_dates": backfilled}
+
+
+def _safe_float(val: Any) -> float | None:
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        import math
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return f
+    except (TypeError, ValueError):
+        return None
+
+
+def _recent_trade_day_compacts(db, ref_compact: str, limit: int) -> list[str]:
+    """最近 limit 个交易日（含 ref_compact），紧凑 YYYYMMDD 格式，倒序。"""
+    from app.models.tables import DailyKbar
+    from sqlalchemy import func, select
+
+    normalized_col = func.replace(DailyKbar.trade_date, "-", "")
+    rows = db.scalars(
+        select(normalized_col)
+        .where(DailyKbar.trade_date.is_not(None), normalized_col <= ref_compact)
+        .group_by(normalized_col)
+        .order_by(normalized_col.desc())
+        .limit(max(1, limit))
+    ).all()
+    return [str(r) for r in rows if r]
 
 
 def _run_backfill_script(payload: dict) -> dict:
@@ -1168,15 +1367,34 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         db,
         {"horizon_days": int(payload.get("horizon_days") or 5)},
     )
-    recommendation = await _run_recommendation(db, payload)
-    run_id = str(recommendation.get("related_run_id") or "")
-    if not run_id:
-        raise RuntimeError("盘后正式推荐未返回关联 Run ID")
-    final_run = await _wait_for_recommendation_run(
-        db,
-        run_id,
-        timeout_seconds=int(payload.get("recommendation_wait_timeout_seconds") or 3600),
-    )
+
+    # 推荐阶段失败（入队失败 / 等待超时 / Run 异常）不抛错——此前 raise 会丢掉
+    # 已完成的 sync/auxiliary/readiness/outcome 中间结果，failed run 的 result_json
+    # 只剩一句 error，无法诊断数据同步是否成功。这里捕获并把中间结果一并返回。
+    try:
+        recommendation = await _run_recommendation(db, payload)
+        run_id = str(recommendation.get("related_run_id") or "")
+        if not run_id:
+            raise RuntimeError("盘后正式推荐未返回关联 Run ID")
+        final_run = await _wait_for_recommendation_run(
+            db,
+            run_id,
+            timeout_seconds=int(payload.get("recommendation_wait_timeout_seconds") or 3600),
+        )
+    except Exception as exc:
+        logger.exception("盘后推荐阶段失败，保留已完成的数据同步结果: %s", exc)
+        return {
+            "status": "failed",
+            "trade_date": trade_date,
+            "sync": sync_result,
+            "readiness": readiness,
+            "outcome": outcome,
+            "recommendation": recommendation if "recommendation" in locals() else None,
+            "related_run_id": run_id if "run_id" in locals() else "",
+            "error": str(exc),
+            "summary_text": f"盘后同步已完成，但推荐阶段失败：{str(exc)[:120]}",
+        }
+
     final_status = str(final_run.get("status") or "failed")
     if final_status != "completed":
         return {

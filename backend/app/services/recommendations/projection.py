@@ -265,6 +265,7 @@ def serialize_recommendation(
     """
     feature_snapshot = loads_json(_get(rec, "feature_snapshot_json"), {}) or {}
     market_context = loads_json(_get(rec, "market_context_json"), {}) or {}
+    risk_tags = loads_json(_get(rec, "risk_tags_json"), []) or []
     if "aggregation_weights" not in feature_snapshot:
         feature_snapshot["aggregation_weights"] = market_regime_weights(market_context)
     agent_summary = loads_json(_get(rec, "agent_summary_json"), {}) or {}
@@ -299,7 +300,8 @@ def serialize_recommendation(
         "entry_rule": _get(rec, "entry_rule"),
         "invalid_rule": _get(rec, "invalid_rule"),
         "rationale": _get(rec, "rationale"),
-        "risk_tags": loads_json(_get(rec, "risk_tags_json"), []),
+        "risk_tags": risk_tags,
+        "risk_level": risk_level_from_tags(risk_tags),
         "info_tags": loads_json(_get(rec, "info_tags_json"), []),
         "status": _get(rec, "status"),
         "recent_repeat": _get(rec, "recent_repeat"),

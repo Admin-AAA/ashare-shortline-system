@@ -70,6 +70,10 @@ def test_auxiliary_sync_uses_closed_trade_date_and_commits(monkeypatch):
 
     monkeypatch.setattr("app.services.auxiliary.application.run_auxiliary_application", fake_run)
     monkeypatch.setattr(scheduler_service, "_latest_allowed_bar_date", lambda: "2026-07-16")
+    # 窗口回填与 stk_limit 回填是独立阶段，此测试聚焦「参考日补数 + commit」契约，
+    # 将其置空避免 FakeDb 不支持 db.scalars。
+    monkeypatch.setattr(scheduler_service, "_backfill_auxiliary_window_gaps", lambda *_a, **_kw: {"backfilled_dates": []})
+    monkeypatch.setattr(scheduler_service, "_backfill_stk_limit_window", lambda *_a, **_kw: {"backfilled_dates": []})
 
     result = scheduler_service._run_auxiliary_remediation({})
 

@@ -582,6 +582,22 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
     except Exception:
         pass
 
+    # 筹码分布（cyq_perf）——按 trade_date 批量一次拉全市场。此前批量补数只拉
+    # daily/daily_basic/stk_factor，导致盘后写入的 DailyKbar 行 chip_cost_50/15/85
+    # 永远为 0，数据健康页把「筹码峰」域误判为长期 stale。逐股票路径
+    # (fetch_daily_kbars) 含 cyq_perf，但盘后批量路径遗漏，这里补齐。
+    chip_map: dict[str, dict[str, Any]] = {}
+    try:
+        chips = pro.cyq_perf(
+            trade_date=target,
+            fields="ts_code,trade_date,cost_15pct,cost_50pct,cost_85pct,weight_avg,winner_rate",
+        )
+        if chips is not None and not chips.empty:
+            for _, row in chips.iterrows():
+                chip_map[str(row.get("ts_code") or "")] = dict(row)
+    except Exception:
+        pass
+
     bars: list[dict[str, Any]] = []
     for _, row in daily.iterrows():
         raw_ts_code = str(row.get("ts_code") or "")
@@ -590,6 +606,7 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
             continue
         fac = factor_map.get(raw_ts_code, {})
         bas = basic_map.get(raw_ts_code, {})
+        chp = chip_map.get(raw_ts_code, {})
         bars.append(
             {
                 "code": code,
@@ -623,6 +640,11 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
                 "boll_lower": _f(fac.get("boll_lower")),
                 "cci": _f(fac.get("cci")),
                 "adj_factor": _f(fac.get("adj_factor")),
+                "chip_cost_15": _f(chp.get("cost_15pct")),
+                "chip_cost_50": _f(chp.get("cost_50pct")),
+                "chip_cost_85": _f(chp.get("cost_85pct")),
+                "chip_weight_avg": _f(chp.get("weight_avg")),
+                "chip_winner_rate": _f(chp.get("winner_rate")),
                 "source": "tushare",
             }
         )
