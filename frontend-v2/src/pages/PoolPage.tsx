@@ -22,7 +22,7 @@ import { LlmStanceBadge } from "../components/LlmStanceBadge";
 import { useUrlRoute } from "../app/useUrlRoute";
 import { useApi } from "../app/useApi";
 import { queryParam } from "../app/nav";
-import { describePoolRun, summarizePoolRuns, type PoolRunKind } from "./poolRunView";
+import { describePoolRun, formatPoolRunTime, summarizePoolRuns, type PoolRunKind } from "./poolRunView";
 
 /**
  * 候选池 —— 日期运行日志 → 运行抽屉 → 股票二级展开。
@@ -273,7 +273,7 @@ function RunDrawer({ run, open, onToggle }: { run: RunSummary; open: boolean; on
       >
         {open ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
         <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)", minWidth: 150 }}>
-          <strong className="text-mono" style={{ fontSize: "var(--text-xl)" }}>{formatRunTime(run.started_at, run.trade_date)}</strong>
+          <strong className="text-mono" style={{ fontSize: "var(--text-xl)" }}>{formatPoolRunTime(run.started_at, run.trade_date)}</strong>
           <span className="text-muted" style={{ fontSize: "var(--text-xs)" }}>开始</span>
         </div>
         <div style={{ minWidth: 180, flex: "1 1 220px" }}>
@@ -345,7 +345,7 @@ function RunDrawerBody({ run, kind }: { run: RunSummary; kind: PoolRunKind }) {
         </div>
         <div className="text-muted" style={{ display: "flex", justifyContent: "space-between", gap: "var(--space-3)", flexWrap: "wrap", fontSize: "var(--text-sm)" }}>
           <span>{run.progress_current ?? 0} / {run.progress_total ?? "—"}</span>
-          <span>{run.heartbeat_at ? `最后更新 ${formatRunTime(run.heartbeat_at)}` : "等待首次进度回报"}</span>
+          <span>{run.heartbeat_at ? `最后更新 ${formatPoolRunTime(run.heartbeat_at)}` : "等待首次进度回报"}</span>
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end" }}>{detailButton}</div>
       </div>
@@ -474,15 +474,6 @@ function localDateKey() {
 
 function runSortTime(run: RunSummary) {
   return run.started_at || run.finished_at || `${run.trade_date}T00:00:00`;
-}
-
-function formatRunTime(iso?: string | null, tradeDate?: string) {
-  if (!iso) return "--:--";
-  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso);
-  if (!match) return "--:--";
-  const [, year, month, day, hour, minute] = match;
-  const actualDate = `${year}-${month}-${day}`;
-  return tradeDate && actualDate !== tradeDate ? `${month}-${day} ${hour}:${minute}` : `${hour}:${minute}`;
 }
 
 function runStatusColor(kind: PoolRunKind) {

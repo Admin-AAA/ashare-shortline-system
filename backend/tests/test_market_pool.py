@@ -86,6 +86,17 @@ def _quote(code: str, source: str, price: float, pct: float = 3.0) -> dict:
     }
 
 
+def test_run_owned_snapshot_ids_are_unique_within_the_same_second():
+    created_at = datetime(2026, 7, 19, 8, 18, 42)
+
+    first = market_pool.core._new_snapshot_id("snapshot_pool", "2026-07-17", now=created_at)
+    second = market_pool.core._new_snapshot_id("snapshot_pool", "2026-07-17", now=created_at)
+
+    assert first.startswith("snapshot_pool_2026-07-17_081842_")
+    assert second.startswith("snapshot_pool_2026-07-17_081842_")
+    assert first != second
+
+
 def _codes(count: int, prefix: str = "09") -> list[str]:
     suffix_digits = max(1, 6 - len(prefix))
     modulus = 10 ** suffix_digits

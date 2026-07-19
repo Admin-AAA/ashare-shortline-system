@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { describePoolRun, summarizePoolRuns } from "../src/pages/poolRunView.ts";
+import { describePoolRun, formatPoolRunTime, summarizePoolRuns } from "../src/pages/poolRunView.ts";
 
 test("completed run with zero recommendations is a successful empty result", () => {
   assert.deepEqual(
@@ -57,4 +57,14 @@ test("daily summary keeps successful empty runs separate from failures", () => {
     ]),
     { total: 4, completed: 1, empty: 1, active: 1, failed: 1 },
   );
+});
+
+test("naive backend UTC timestamps render in the browser local timezone", () => {
+  const originalTimeZone = process.env.TZ;
+  process.env.TZ = "Asia/Shanghai";
+  try {
+    assert.equal(formatPoolRunTime("2026-07-19T08:18:02", "2026-07-19"), "16:18");
+  } finally {
+    process.env.TZ = originalTimeZone;
+  }
 });

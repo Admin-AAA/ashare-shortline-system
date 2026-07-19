@@ -31,6 +31,7 @@ import time
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,12 @@ STRICT_CONSENSUS_FIELDS = {"price": 0.018, "pct": 0.08}
 DERIVED_RETURN_FIELDS = {"chg60", "ytd_chg"}
 LOCAL_DAILY_BAR_FIELDS = DERIVED_RETURN_FIELDS | {"ma5", "ma10", "ma20"}
 STOCK_QUOTE_UPSERT_BATCH_SIZE = 500
+
+
+def _new_snapshot_id(prefix: str, trade_date: str, *, now: datetime | None = None) -> str:
+    """Create a collision-resistant ID for a run-owned market snapshot."""
+    created_at = now or datetime.now(timezone.utc).replace(tzinfo=None)
+    return f"{prefix}_{trade_date}_{created_at.strftime('%H%M%S')}_{uuid4().hex[:12]}"
 
 
 def _required_bar_date_for_quote(quote: dict[str, Any]) -> str:
@@ -293,7 +300,7 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False, as_of_date
             "latest_trade_date_backfill_count": latest_backfill_count,
         }
     )
-    snapshot["snapshot_id"] = f"snapshot_pool_{snapshot['trade_date']}_{datetime.now(timezone.utc).replace(tzinfo=None).strftime('%H%M%S')}"
+    snapshot["snapshot_id"] = _new_snapshot_id("snapshot_pool", snapshot["trade_date"])
     return stocks, snapshot
 
 
@@ -481,7 +488,7 @@ def get_market_universe_from_pool_with_realtime(db: Session) -> tuple[list[dict[
             },
         }
     )
-    snapshot["snapshot_id"] = f"snapshot_pool_rt_{snapshot['trade_date']}_{datetime.now(timezone.utc).replace(tzinfo=None).strftime('%H%M%S')}"
+    snapshot["snapshot_id"] = _new_snapshot_id("snapshot_pool_rt", snapshot["trade_date"])
     return stocks, snapshot
 
 

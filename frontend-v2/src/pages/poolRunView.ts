@@ -49,3 +49,18 @@ export function summarizePoolRuns(runs: RunStateInput[]) {
   }
   return summary;
 }
+
+/** Backend datetimes are stored as naive UTC and must be rendered in browser local time. */
+export function formatPoolRunTime(iso?: string | null, tradeDate?: string) {
+  if (!iso) return "--:--";
+  const instant = new Date(/(?:Z|[+-]\d{2}:?\d{2})$/.test(iso) ? iso : `${iso}Z`);
+  if (Number.isNaN(instant.getTime())) return "--:--";
+
+  const year = instant.getFullYear();
+  const month = String(instant.getMonth() + 1).padStart(2, "0");
+  const day = String(instant.getDate()).padStart(2, "0");
+  const hour = String(instant.getHours()).padStart(2, "0");
+  const minute = String(instant.getMinutes()).padStart(2, "0");
+  const actualDate = `${year}-${month}-${day}`;
+  return tradeDate && actualDate !== tradeDate ? `${month}-${day} ${hour}:${minute}` : `${hour}:${minute}`;
+}
