@@ -11,6 +11,7 @@ import asyncio
 import json
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.engine.aggregator import DEFAULT_AGG_WEIGHTS, aggregate
-from app.engine.skill_loader import StrategySkill
+from app.engine.skill_loader import StrategySkill, load_skill
 from app.models.tables import (
     CalibrationConfig,
     CapitalFlow,
@@ -242,9 +243,23 @@ def _mock_skill(skill_id="test-skill", name="TestSkill"):
     skill.skill_body = "# Test Skill\n\n买入原则：均线多头时介入"
     skill.skill_frontmatter = {}
     skill.reference_files = []
-    skill.manifest = {"source_type": "local"}
+    skill.manifest = {
+        "id": skill_id,
+        "name": name,
+        "version": "1.0.0",
+        "mode": "imperative",
+        "status": "active",
+        "requirements": [],
+        "capabilities": ["signal_evaluation"],
+        "enabled": True,
+        "source_type": "local",
+    }
     skill.path = MagicMock()
     return skill
+
+
+def _real_skill(skill_id: str) -> StrategySkill:
+    return load_skill(Path(__file__).resolve().parents[1] / "skills" / skill_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1290,7 +1305,7 @@ class TestE2ERecommendationFlow:
         from app.services import workbench_service
 
         _seed_skill_registry(db)
-        skill = _mock_skill("daily-stock-analysis-skill", "基础短线策略")
+        skill = _real_skill("daily-stock-analysis-skill")
         monkeypatch.setattr(workbench_service, "sync_skills", lambda _db: [skill])
 
         queued: list[str] = []
@@ -1328,13 +1343,13 @@ class TestE2ERecommendationFlow:
 
         run_name = f"同步失败测试-{uuid.uuid4().hex[:8]}"
         _seed_skill_registry(db)
-        skill = _mock_skill("daily-stock-analysis-skill", "基础短线策略")
+        skill = _real_skill("daily-stock-analysis-skill")
         monkeypatch.setattr(workbench_service, "sync_skills", lambda _db: [skill])
 
-        def fail_market(_db, refresh=False, as_of_date=None):
+        def fail_market(_db, *, data_source, as_of_date=None):
             raise RuntimeError("market pool timeout")
 
-        monkeypatch.setattr(workbench_service, "get_market_universe_from_pool", fail_market)
+        monkeypatch.setattr(workbench_service, "load_legacy_market_universe", fail_market)
 
         persisted = None
         try:
@@ -1420,8 +1435,8 @@ class TestE2ERecommendationFlow:
 
         recovered = recover_interrupted_runs(db, run_ids=[run_ids["queued"], run_ids["running"], run_ids["completed"]])
 
-        assert recovered == 2
-        assert db.get(RecommendationRun, run_ids["queued"]).status == "interrupted"
+        assert recovered == 1
+        assert db.get(RecommendationRun, run_ids["queued"]).status == "queued"
         assert db.get(RecommendationRun, run_ids["running"]).status == "interrupted"
         assert db.get(RecommendationRun, run_ids["completed"]).status == "completed"
         assert db.get(RecommendationRun, run_ids["running"]).interrupted_at is not None

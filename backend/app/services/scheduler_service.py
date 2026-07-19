@@ -1325,22 +1325,27 @@ async def _wait_for_recommendation_run(
     timeout_seconds: int = 3600,
     poll_seconds: float = 2.0,
 ) -> dict[str, Any]:
-    """等待独立 worker 的最终状态，让调度任务不再把“已入队”误报为完成。"""
+    """等待独立 worker 的最终状态，让调度任务不再把“已入队”误报为完成。
+
+    轮询必须使用短生命周期 Session。生产 MySQL 使用 REPEATABLE-READ；如果复用
+    盘后流水线的长事务，即使 ``expire_all`` 也仍会读到第一次查询建立的旧快照，
+    从而把早已完成的 worker 误报为超时。
+    """
     deadline = time.monotonic() + max(1, timeout_seconds)
     terminal = {"completed", "failed", "interrupted", "cancelled"}
     while time.monotonic() < deadline:
-        db.expire_all()
-        run = db.get(RecommendationRun, run_id)
-        if run is None:
-            raise RuntimeError(f"推荐 Run 不存在: {run_id}")
-        if run.status in terminal:
-            return {
-                "run_id": run.run_id,
-                "status": run.status,
-                "recommended_count": int(run.recommended_count or 0),
-                "error": run.error_message,
-                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
-            }
+        with SessionLocal() as poll_db:
+            run = poll_db.get(RecommendationRun, run_id)
+            if run is None:
+                raise RuntimeError(f"推荐 Run 不存在: {run_id}")
+            if run.status in terminal:
+                return {
+                    "run_id": run.run_id,
+                    "status": run.status,
+                    "recommended_count": int(run.recommended_count or 0),
+                    "error": run.error_message,
+                    "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+                }
         await asyncio.sleep(max(0.1, poll_seconds))
     raise TimeoutError(f"推荐 Run {run_id} 在 {timeout_seconds} 秒内未结束")
 

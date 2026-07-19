@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from app.models.tables import DailyKbar, Stock
-from app.services import market_pool
+from app.services.market_pool.core import _persist_kbars
 from app.services.overnight_holding_service import (
     BASELINE_VARIANT,
     CANDIDATE_VARIANT,
@@ -43,7 +43,7 @@ def _seed_stock(db, code: str):
         ("2026-05-21", 11.5, 11.8, 11.3, 11.9, 1000, 10000, 4.0, 6.0),
         ("2026-05-22", 11.9, 12.0, 11.0, 11.2, 1000, 10000, -5.9, 6.0),
     ]
-    market_pool._persist_kbars(
+    _persist_kbars(
         db,
         [
             {

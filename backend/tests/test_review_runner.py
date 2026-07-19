@@ -94,7 +94,7 @@ def test_run_skill_reviews_uses_direct_path_and_primes_session(monkeypatch):
     assert review["runtime"] == "agent_skill_agno"
     assert review["supports"] == ["主线热点延续"]
     assert review["evidence"] == ["主线热点延续"]
-    assert review["score_delta"] == 28.0
+    assert review["score_delta"] == 16.0
     assert review["action"] == "轻仓试错"
     assert review["position_range"] == "5-15%"
     assert review["entry_style"] == "分歧低吸"

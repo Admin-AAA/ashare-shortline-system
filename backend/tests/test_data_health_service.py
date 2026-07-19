@@ -67,6 +67,14 @@ def test_daily_data_domain_one_day_lag_is_stale():
         db.close()
 
 
+def test_domain_inventory_uses_current_margin_source_and_quarterly_hk_hold_cadence():
+    domains = {item["key"]: item for item in data_health_service._DATA_DOMAIN_DEFS}
+
+    assert "margin" not in domains
+    assert domains["margin_detail"]["table"].__tablename__ == "margin_detail"
+    assert domains["hk_hold"]["fresh_days"] == 130
+
+
 def test_recent_daily_trade_days_includes_reference_even_when_daily_table_missed_whole_day():
     db = MagicMock()
     rows = MagicMock()

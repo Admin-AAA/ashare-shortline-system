@@ -30,11 +30,11 @@ def test_v024_is_discovered_once_in_stable_forward_order_with_stable_checksum() 
     first = all_migrations()
     second = all_migrations()
     versions = tuple(item.version for item in first)
+    second_by_version = {item.version: item for item in second}
 
     assert versions == tuple(sorted(versions))
-    assert versions[-1] == VERSION
     assert versions.count(VERSION) == 1
-    assert migration.checksum == second[-1].checksum
+    assert migration.checksum == second_by_version[VERSION].checksum
     assert migration.checksum == "08a7bc09e1ce8086dbc4189d7ecca8ead2c4df0416baa57982ccbe64059fe72a"
 
 
