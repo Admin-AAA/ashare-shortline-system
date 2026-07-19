@@ -189,12 +189,15 @@ function RunRecordsList() {
   );
 
   // —— 筛选条件（默认 status=completed，避开大量 failed/interrupted 噪声）——
+  // datePreset：近7天/近30天/本月/全部/自定义；自定义时用 dateFrom/dateTo 手选
+  const [datePreset, setDatePreset] = useState<"7d" | "30d" | "month" | "all" | "custom">("30d");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("completed");
   const [presetFilter, setPresetFilter] = useState<string>("__all__");
   const [modeFilter, setModeFilter] = useState<string>("__all__");
-  const [minRecsFilter, setMinRecsFilter] = useState<string>("0");
+  // 推荐数下限：空 = 不筛选（任意推荐数）；填数字 = recommended_count > N
+  const [minRecsFilter, setMinRecsFilter] = useState<string>("");
 
   // —— 排序 ——
   const [sortKey, setSortKey] = useState<RunSortKey>("trade_date");
@@ -205,6 +208,23 @@ function RunRecordsList() {
   const pageSize = 20;
 
   const resetPage = () => setPage(0);
+
+  // 日期预设 → 实际 dateFrom/dateTo（基于今天，trade_date 是 YYYY-MM-DD）。
+  // custom 时用用户手选的 dateFrom/dateTo。
+  const effectiveDateRange = useMemo(() => {
+    if (datePreset === "custom") return { from: dateFrom, to: dateTo };
+    if (datePreset === "all") return { from: "", to: "" };
+    const today = new Date();
+    const to = today.toISOString().slice(0, 10);
+    const from = new Date(today);
+    if (datePreset === "7d") from.setDate(from.getDate() - 6);
+    else if (datePreset === "30d") from.setDate(from.getDate() - 29);
+    else if (datePreset === "month") {
+      // 本月：从月初到今天
+      from.setDate(1);
+    }
+    return { from: from.toISOString().slice(0, 10), to };
+  }, [datePreset, dateFrom, dateTo]);
 
   // 策略选项：从数据里动态去重（按 preset_name），按频次倒序
   const presetOptions = useMemo(() => {
@@ -223,13 +243,16 @@ function RunRecordsList() {
   }
 
   const filtered = data.filter((r) => {
-    if (dateFrom && r.trade_date < dateFrom) return false;
-    if (dateTo && r.trade_date > dateTo) return false;
+    if (effectiveDateRange.from && r.trade_date < effectiveDateRange.from) return false;
+    if (effectiveDateRange.to && r.trade_date > effectiveDateRange.to) return false;
     if (statusFilter !== "__all__" && r.status !== statusFilter) return false;
     if (presetFilter !== "__all__" && (r.preset_name || "(未命名)") !== presetFilter) return false;
     if (modeFilter !== "__all__" && r.run_mode !== modeFilter) return false;
-    const min = minRecsFilter === "" ? null : Number(minRecsFilter);
-    if (min != null && !Number.isNaN(min) && !(r.recommended_count > min)) return false;
+    // 推荐数：空 = 不筛选；否则 recommended_count > N
+    if (minRecsFilter.trim() !== "") {
+      const min = Number(minRecsFilter);
+      if (!Number.isNaN(min) && !(r.recommended_count > min)) return false;
+    }
     return true;
   });
 
@@ -266,12 +289,13 @@ function RunRecordsList() {
   };
 
   const resetFilters = () => {
+    setDatePreset("30d");
     setDateFrom("");
     setDateTo("");
     setStatusFilter("completed");
     setPresetFilter("__all__");
     setModeFilter("__all__");
-    setMinRecsFilter("0");
+    setMinRecsFilter("");
     resetPage();
   };
 
@@ -302,9 +326,40 @@ function RunRecordsList() {
       <div className="records-filterbar">
         <div className="records-filterbar__group">
           <label className="records-filterbar__label">日期</label>
-          <input className="cfg-input records-filterbar__date" type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); resetPage(); }} />
-          <span style={{ color: "var(--muted)" }}>→</span>
-          <input className="cfg-input records-filterbar__date" type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); resetPage(); }} />
+          <div className="records-filterbar__preset">
+            {([
+              { key: "7d", label: "近7天" },
+              { key: "30d", label: "近30天" },
+              { key: "month", label: "本月" },
+              { key: "all", label: "全部" },
+              { key: "custom", label: "自定义" },
+            ] as const).map((opt) => (
+              <button
+                key={opt.key}
+                className={`records-filterbar__chip ${datePreset === opt.key ? "records-filterbar__chip--active" : ""}`}
+                onClick={() => { setDatePreset(opt.key); resetPage(); }}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          {datePreset === "custom" && (
+            <>
+              <input className="cfg-input records-filterbar__date" type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); resetPage(); }} />
+              <span style={{ color: "var(--muted)" }}>→</span>
+              <input className="cfg-input records-filterbar__date" type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); resetPage(); }} />
+            </>
+          )}
+        </div>
+
+        <div className="records-filterbar__group">
+          <label className="records-filterbar__label">模式</label>
+          <select className="cfg-input records-filterbar__select" value={modeFilter} onChange={(e) => { setModeFilter(e.target.value); resetPage(); }}>
+            <option value="__all__">全部</option>
+            <option value="formal">实盘</option>
+            <option value="experiment">实验</option>
+            <option value="backtest">回测</option>
+          </select>
         </div>
 
         <div className="records-filterbar__group">
@@ -328,16 +383,6 @@ function RunRecordsList() {
         </div>
 
         <div className="records-filterbar__group">
-          <label className="records-filterbar__label">运行模式</label>
-          <select className="cfg-input records-filterbar__select" value={modeFilter} onChange={(e) => { setModeFilter(e.target.value); resetPage(); }}>
-            <option value="__all__">全部</option>
-            <option value="formal">实盘</option>
-            <option value="experiment">实验</option>
-            <option value="backtest">回测</option>
-          </select>
-        </div>
-
-        <div className="records-filterbar__group">
           <label className="records-filterbar__label">推荐数 &gt;</label>
           <input
             className="cfg-input records-filterbar__select"
@@ -345,8 +390,8 @@ function RunRecordsList() {
             min={0}
             value={minRecsFilter}
             onChange={(e) => { setMinRecsFilter(e.target.value); resetPage(); }}
-            placeholder="0"
-            style={{ width: 70 }}
+            placeholder="不限"
+            style={{ width: 80 }}
           />
         </div>
 
