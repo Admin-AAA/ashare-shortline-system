@@ -84,7 +84,11 @@ from app.services.runs.contracts import (
 
 MINIMUM_SIGNAL_SCORE = 70.0
 MAX_SIGNAL_DATES = 250
-LOOKBACK_CALENDAR_DAYS = 420
+# Trading calendars contain weekends and holidays; two calendar days per
+# required bar plus a 120-day floor provides enough buffer for a 60-bar rule
+# without loading years
+# of irrelevant full-market history into one immutable research capture.
+MIN_LOOKBACK_CALENDAR_DAYS = 120
 
 
 def _research_execution_version(request: BacktestRequest, descriptor: StrategyDescriptor) -> str:
@@ -425,15 +429,6 @@ class LocalResearchSnapshotBuilder:
             requires_daily_bars=True,
         )
         dates = self._signal_dates(request)
-        artifact_namespace = canonical_fingerprint(
-            {
-                "date_selector": request.date_selector,
-                "target_codes": request.target_codes,
-                "execution_policy": request.execution_policy,
-                "data_policy": request.data_policy,
-                "data_requirement": requirement,
-            }
-        )[:20]
         if len(dates) > MAX_SIGNAL_DATES:
             raise SnapshotCaptureError(
                 "research request exceeds the maximum reproducible signal-date window",
@@ -444,21 +439,42 @@ class LocalResearchSnapshotBuilder:
 
         first_date = date.fromisoformat(dates[0])
         last_date = date.fromisoformat(dates[-1])
-        lookback_calendar_days = max(LOOKBACK_CALENDAR_DAYS, requirement.lookback_bars * 3)
+        lookback_calendar_days = max(MIN_LOOKBACK_CALENDAR_DAYS, requirement.lookback_bars * 2)
         history_start = (first_date - timedelta(days=lookback_calendar_days)).isoformat()
         future_window_days = max(
             request.execution_policy.entry_lookahead_days + request.execution_policy.horizon_days,
             requirement.future_label_horizon_days,
         )
         outcome_end = (last_date + timedelta(days=future_window_days + 14)).isoformat()
+        # Artifact IDs are global primary keys while their natural key is
+        # snapshot-scoped. Include the concrete local query window so a future
+        # change to capture scope cannot alias an earlier immutable artifact
+        # whose per-day payload happens to be identical.
+        artifact_namespace = canonical_fingerprint(
+            {
+                "date_selector": request.date_selector,
+                "target_codes": request.target_codes,
+                "execution_policy": request.execution_policy,
+                "data_policy": request.data_policy,
+                "data_requirement": requirement,
+                "input_window": {"history_start": history_start, "outcome_end": outcome_end},
+            }
+        )[:20]
 
-        signal_rows = list(
+        market_signal_rows = list(
             self._session.scalars(
                 select(DailyKbar)
                 .where(DailyKbar.trade_date.in_(dates))
                 .order_by(DailyKbar.trade_date, DailyKbar.code)
             )
         )
+        # 市场广度必须以全市场当日横截面计算。target_codes 只限定待评估
+        # 标的，不能把单只股票的涨跌误当成市场 regime。
+        market_context_by_date = {
+            signal_date: _historical_market_context(rows)
+            for signal_date, rows in _rows_by_trade_date(market_signal_rows).items()
+        }
+        signal_rows = market_signal_rows
         if request.target_codes:
             requested_codes = set(request.target_codes)
             signal_rows = [row for row in signal_rows if row.code in requested_codes]
@@ -508,6 +524,7 @@ class LocalResearchSnapshotBuilder:
             )
             signal_stocks: list[dict[str, Any]] = []
             invalid_signal_rows = 0
+            market_context = market_context_by_date.get(signal_date, _historical_market_context(()))
             for row in raw_signal_rows:
                 try:
                     signal_stocks.append(
@@ -516,6 +533,7 @@ class LocalResearchSnapshotBuilder:
                             rows_by_code.get(str(row.code), ()),
                             stock_meta.get(str(row.code), {}),
                             signal_date,
+                            market_context,
                         )
                     )
                 except BacktestValidationError:
@@ -1122,6 +1140,7 @@ def _stock_as_of(
     history: Sequence[DailyKbar],
     metadata: Mapping[str, Any],
     signal_date: str,
+    market_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     prior = [item for item in history if str(item.trade_date) <= signal_date]
     close = _positive_number(row.close, "close")
@@ -1207,7 +1226,11 @@ def _stock_as_of(
         "dsa_macd_score": float(dsa_macd),
         "dsa_rsi_score": float(dsa_rsi),
         "dsa_signal_score": float(dsa_trend + dsa_bias + dsa_volume + dsa_support + dsa_macd + dsa_rsi),
-        "market_regime": "震荡",
+        "market_regime": str((market_context or {}).get("regime") or "震荡"),
+        "up_count": int((market_context or {}).get("up_count") or 0),
+        "down_count": int((market_context or {}).get("down_count") or 0),
+        "limit_up_count": int((market_context or {}).get("limit_up_count") or 0),
+        "limit_down_count": int((market_context or {}).get("limit_down_count") or 0),
         "twenty_cm_risk_gate": "normal",
         "news_risk_count": 0,
         "announcement_negative_count": 0,
@@ -1215,11 +1238,51 @@ def _stock_as_of(
         "capital_resonance_score": 0.0,
         "sector_ladder_completeness_score": 0.0,
         "is_main_theme": False,
-        "market_sample_count": len(prior),
+        "market_sample_count": int((market_context or {}).get("sample_count") or 0),
         "data_completeness_score": 100.0,
         "evidence_quality_score": 100.0,
     }
     return stock
+
+
+def _rows_by_trade_date(rows: Sequence[DailyKbar]) -> dict[str, list[DailyKbar]]:
+    grouped: dict[str, list[DailyKbar]] = defaultdict(list)
+    for row in rows:
+        grouped[str(row.trade_date)].append(row)
+    return grouped
+
+
+def _historical_market_context(rows: Sequence[DailyKbar]) -> dict[str, Any]:
+    """Build the production-equivalent breadth fields from local daily bars.
+
+    This intentionally mirrors ``market_source.snapshot._breadth_from_counts``:
+    research evaluates a strategy with the market information known at the
+    signal close, while preserving a local-only, immutable input artifact.
+    """
+
+    sample_count = len(rows)
+    up_count = sum(1 for row in rows if _number(row.pct_chg) > 0)
+    down_count = sum(1 for row in rows if _number(row.pct_chg) < 0)
+    limit_up_count = sum(1 for row in rows if _number(row.pct_chg) >= 9.8)
+    limit_down_count = sum(1 for row in rows if _number(row.pct_chg) <= -9.8)
+    up_ratio = up_count / max(1, sample_count)
+    limit_up_ratio = limit_up_count / max(1, sample_count)
+    if up_ratio >= 0.62 and limit_up_ratio >= 0.03:
+        regime = "强势"
+    elif up_ratio >= 0.55:
+        regime = "结构性强势"
+    elif up_ratio >= 0.42:
+        regime = "震荡"
+    else:
+        regime = "弱势"
+    return {
+        "sample_count": sample_count,
+        "up_count": up_count,
+        "down_count": down_count,
+        "limit_up_count": limit_up_count,
+        "limit_down_count": limit_down_count,
+        "regime": regime,
+    }
 
 
 def _outcome_bars(
