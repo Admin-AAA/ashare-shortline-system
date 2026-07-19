@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pandas as pd
 
-from app.models.tables import ScheduledTask
+from app.db.session import SessionLocal
+from app.models.tables import RecommendationRun, ScheduledTask
 from app.services import scheduler_service
 from app.services.auxiliary.state_adapters import TushareStateProvider
 from app.services.data_health_service import recommendation_readiness_from_diagnosis
@@ -130,6 +133,57 @@ def test_postclose_pipeline_orders_sync_health_gate_and_recommendation(monkeypat
     ]
     assert result["status"] == "completed"
     assert result["recommended_count"] == 3
+
+
+def test_wait_for_recommendation_run_observes_worker_commit(production_mysql):
+    """轮询必须越过 MySQL REPEATABLE-READ 快照看到独立 worker 的提交。"""
+    run_id = f"__test_wait_refresh_{uuid.uuid4().hex[:12]}"
+    setup_db = SessionLocal()
+    waiting_db = SessionLocal()
+    worker_db = SessionLocal()
+    try:
+        setup_db.add(
+            RecommendationRun(
+                run_id=run_id,
+                run_name="__test_wait_refresh__",
+                trade_date="2026-07-17",
+                status="queued",
+                recommended_count=0,
+            )
+        )
+        setup_db.commit()
+
+        # 先读一次以建立 REPEATABLE-READ 快照，再模拟独立 worker 提交终态。
+        assert waiting_db.get(RecommendationRun, run_id).status == "queued"
+        worker_run = worker_db.get(RecommendationRun, run_id)
+        worker_run.status = "completed"
+        worker_run.recommended_count = 2
+        worker_run.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        worker_db.commit()
+
+        result = asyncio.run(
+            scheduler_service._wait_for_recommendation_run(
+                waiting_db,
+                run_id,
+                timeout_seconds=1,
+                poll_seconds=0.05,
+            )
+        )
+
+        assert result["status"] == "completed"
+        assert result["recommended_count"] == 2
+    finally:
+        setup_db.close()
+        waiting_db.close()
+        worker_db.close()
+        cleanup_db = SessionLocal()
+        try:
+            row = cleanup_db.get(RecommendationRun, run_id)
+            if row is not None:
+                cleanup_db.delete(row)
+                cleanup_db.commit()
+        finally:
+            cleanup_db.close()
 
 
 def test_postclose_task_configuration_disables_racing_legacy_crons(db):

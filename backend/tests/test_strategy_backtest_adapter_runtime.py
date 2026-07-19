@@ -14,6 +14,12 @@ from app.engine.skill_loader import StrategySkill, load_skill
 def _adapter_skill(tmp_path: Path) -> StrategySkill:
     skill_dir = tmp_path / "sample-adapter"
     skill_dir.mkdir()
+    (skill_dir / "manifest.json").write_text(
+        '{"id":"sample-adapter","name":"示例适配策略","version":"0.1.0",'
+        '"mode":"declarative","status":"active","requirements":[],"capabilities":[],"enabled":true}',
+        encoding="utf-8",
+    )
+    (skill_dir / "SKILL.md").write_text("# 示例适配策略\n\n用于测试回测适配契约。\n", encoding="utf-8")
     (skill_dir / "strategy.yaml").write_text(
         """
 id: sample-adapter

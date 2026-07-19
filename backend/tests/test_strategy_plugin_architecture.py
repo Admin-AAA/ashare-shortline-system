@@ -3,6 +3,7 @@ from pathlib import Path
 from app.engine.skill_loader import load_skills
 from app.engine.strategy_runner import run_strategy
 from app.services.feature_builder import build_features
+from app.services.factors.registry import bootstrap_default_factor_registry
 from app.services.registry.skills import _strategy_backtest_adapter_manifest
 
 
@@ -96,6 +97,7 @@ def _snapshot(**overrides):
 
 
 def _shared_factor_stock():
+    bootstrap_default_factor_registry()
     stocks = [
         _stock("002001"),
         _stock("002002", is_limit_up=True, limit_up_consecutive_days=1, pct=10.0),
@@ -106,6 +108,7 @@ def _shared_factor_stock():
 
 
 def _shared_factor_stocks():
+    bootstrap_default_factor_registry()
     stocks = [
         _stock("002001"),
         _stock("002002", is_limit_up=True, limit_up_consecutive_days=1, pct=10.0),
@@ -270,7 +273,8 @@ def test_new_strategy_plugin_can_use_shared_factors_without_core_engine_changes(
     plugin_dir = skills_dir / "generic-momentum"
     plugin_dir.mkdir(parents=True)
     (plugin_dir / "manifest.json").write_text(
-        '{"id":"generic-momentum","name":"通用共享因子动量","version":"0.1.0","enabled":true}',
+        '{"id":"generic-momentum","name":"通用共享因子动量","version":"0.1.0",'
+        '"mode":"declarative","status":"active","requirements":[],"capabilities":[],"enabled":true}',
         encoding="utf-8",
     )
     (plugin_dir / "SKILL.md").write_text(

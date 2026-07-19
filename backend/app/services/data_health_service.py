@@ -32,7 +32,6 @@ from app.models.tables import (
     IndexDaily,
     InstitutionalSurvey,
     LimitUpBoard,
-    MarginData,
     MarginDetail,
     MinuteKbar,
     NewsAnnouncement,
@@ -78,12 +77,10 @@ _MIN_RECENT_DAILY_KBAR_CODES = 3000
 #   数据（自然稀疏，有数据即视为已接入，不判滞后）
 # - column：可选，非 NULL 计数列（用于部分字段型域，如 筹码峰 chip_cost_50）
 _DAILY_DATA_FRESH_DAYS = 0
-# 已知 Tushare 盘后延迟出数的数据域：融资融券明细(margin_detail)盘后晚出，
-# 港股通持股(hk_hold)只能逐股票拉（慢，盘后管线不补）。给 1 天宽限，避免把
-# 「数据源当日未就绪」误判成「系统漏拉」刷低健康分。真正的缺口仍会被
-# 盘后窗口回填补上（见 scheduler._backfill_auxiliary_window_gaps）。
+# 已知 Tushare 盘后延迟出数的数据域：融资融券明细(margin_detail)盘后晚出。
+# hk_hold 是季末持股快照，不是日频数据；按季报/股东人数相同窗口检查。
 _MARGIN_LIKE_FRESH_DAYS = 1
-_HK_HOLD_FRESH_DAYS = 7
+_HK_HOLD_FRESH_DAYS = 130
 
 _DATA_DOMAIN_DEFS: list[dict[str, Any]] = [
     # 行情 K 线
@@ -108,7 +105,8 @@ _DATA_DOMAIN_DEFS: list[dict[str, Any]] = [
     {"key": "hsgt_top10", "label": "北向持股TOP10", "category": "北向港股通", "table": HsgtTop10, "date_col": "trade_date", "critical": False, "fresh_days": _MARGIN_LIKE_FRESH_DAYS, "source_lag_prone": True},
     {"key": "hk_hold", "label": "港股通持股", "category": "北向港股通", "table": HkHolding, "date_col": "trade_date", "critical": False, "fresh_days": _HK_HOLD_FRESH_DAYS, "source_lag_prone": True},
     # 融资融券
-    {"key": "margin", "label": "融资融券", "category": "融资融券", "table": MarginData, "date_col": "trade_date", "critical": False, "fresh_days": _MARGIN_LIKE_FRESH_DAYS, "source_lag_prone": True},
+    # margin_data 是旧版逐股投影，已无生产消费者；当前唯一执行数据源是 S4
+    # margin_detail。继续把旧表计入健康分会在主数据正常时制造重复的假告警。
     {"key": "margin_detail", "label": "融资融券明细", "category": "融资融券", "table": MarginDetail, "date_col": "trade_date", "critical": False, "fresh_days": _MARGIN_LIKE_FRESH_DAYS, "source_lag_prone": True},
     # 股东 / 筹码
     {"key": "holder_number", "label": "股东人数(筹码集中度)", "category": "股东筹码", "table": HolderNumber, "date_col": "end_date", "critical": False, "fresh_days": 130},

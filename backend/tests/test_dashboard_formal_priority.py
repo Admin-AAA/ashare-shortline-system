@@ -52,6 +52,7 @@ def test_fallback_to_any_completed_when_no_formal(monkeypatch):
 def test_returns_none_when_no_completed_run(monkeypatch):
     monkeypatch.setattr(dashboard_mod, "_latest_dashboard_trade_date", lambda db: "2026-07-07")
     db = MagicMock()
-    db.scalar = MagicMock(side_effect=[None, None])
+    db.scalar = MagicMock(side_effect=[None, None, None])
 
     assert dashboard_mod._select_dashboard_recommendation_run(db) is None
+    assert db.scalar.call_count == 3

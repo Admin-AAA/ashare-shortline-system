@@ -49,7 +49,7 @@ def test_start_scheduler_registers_exposure_task(monkeypatch, db):
     db.commit()
 
     # 模拟调度器启动时的注册链（不真正启动 APScheduler，避免后台线程）
-    scheduler_service._ensure_outcome_label_task()
+    scheduler_service._ensure_postclose_pipeline_task()
     scheduler_service._ensure_strategy_exposure_task()
 
     task = db.get(ScheduledTask, EXPOSURE_TASK_ID)

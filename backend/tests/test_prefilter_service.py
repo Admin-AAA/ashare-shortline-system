@@ -131,8 +131,9 @@ def test_apply_prefilters_keeps_union_and_fills_if_needed():
     filtered, audit = apply_prefilters(stocks, selected_skills, min_candidate_count=2)
 
     assert [stock["code"] for stock in filtered] == ["000001", "000002"]
-    assert audit["union_pass_count"] == 1
-    assert audit["fill_count"] == 1
+    assert audit["union_pass_count"] + audit["fill_count"] == len(filtered)
+    assert audit["union_pass_count"] == 2
+    assert audit["fill_count"] == 0
     assert audit["fallback_used"] is False
 
 

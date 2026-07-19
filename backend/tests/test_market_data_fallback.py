@@ -302,6 +302,8 @@ def test_fetch_tushare_quotes_prefers_realtime_current_session(monkeypatch):
     )
     monkeypatch.setattr(market_data, "_fetch_tushare_realtime_frame", fake_realtime_frame)
     monkeypatch.setattr(market_data, "_throttle_tushare", lambda _settings: None)
+    monkeypatch.setattr(market_data, "_latest_allowed_quote_date", lambda: "2026-06-10")
+    monkeypatch.setattr(market_data, "_latest_allowed_bar_date", lambda: "2026-06-09")
 
     quotes = market_data._fetch_tushare_quotes(DummySettings())
 
@@ -588,6 +590,7 @@ def test_recent_open_trade_dates_excludes_unclosed_current_session(monkeypatch):
     monkeypatch.setattr(market_data, "datetime", FakeDateTime)
     monkeypatch.setattr("app.services.tushare_client.get_pro", lambda: FakePro())
     monkeypatch.setattr(market_data, "_throttle_tushare", lambda _settings: None)
+    monkeypatch.setattr(market_data, "_latest_allowed_bar_date", lambda: "2026-05-27")
 
     assert market_data._recent_open_trade_dates(DummySettings()) == ["20260526", "20260527"]
 
@@ -637,6 +640,9 @@ def test_small_market_sample_caps_final_score_honestly():
 
 def test_authenticity_treats_composite_scores_as_observed_when_inputs_are_real():
     from app.services.feature_builder import build_features
+    from app.services.factors.registry import bootstrap_default_factor_registry
+
+    bootstrap_default_factor_registry()
 
     stock = {
         "code": "000001",
@@ -671,6 +677,9 @@ def test_data_availability_flags_mark_missing_context_data():
     """strict_real + missing_fields 时，has_real_* 标记应为 False。
     避免把 strict_real 模式下的默认值（0/99/false）误解为真实数据。"""
     from app.services.feature_builder import build_features
+    from app.services.factors.registry import bootstrap_default_factor_registry
+
+    bootstrap_default_factor_registry()
 
     stock = {
         "code": "000001", "name": "测试", "industry": "银行",

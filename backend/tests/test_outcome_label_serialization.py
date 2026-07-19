@@ -72,7 +72,46 @@ def _make_pending_rec(db: Session, rec_id: str, code: str, trade_date: str = "20
     return run_id
 
 
-def test_label_pending_outcomes_is_serialized_by_lock():
+@pytest.fixture
+def committed_pending_rec():
+    """提交一组独立 Session 可见的结算样本，并按精确主键清理。"""
+    from app.db.session import SessionLocal
+
+    suffix = uuid.uuid4().hex[:8]
+    rec_id = f"rec_lock_dup_{suffix}"
+    code = _unique_stock_code("97")
+    setup_db = SessionLocal()
+    try:
+        run_id = _make_pending_rec(setup_db, rec_id, code)
+    finally:
+        setup_db.close()
+
+    try:
+        yield rec_id, code, run_id
+    finally:
+        cleanup_db = SessionLocal()
+        try:
+            cleanup_db.query(RecommendationOutcome).filter(
+                RecommendationOutcome.recommendation_id == rec_id
+            ).delete(synchronize_session=False)
+            cleanup_db.query(Recommendation).filter(
+                Recommendation.recommendation_id == rec_id
+            ).delete(synchronize_session=False)
+            cleanup_db.query(DailyKbar).filter(
+                DailyKbar.code == code
+            ).delete(synchronize_session=False)
+            cleanup_db.query(Stock).filter(
+                Stock.code == code
+            ).delete(synchronize_session=False)
+            cleanup_db.query(RecommendationRun).filter(
+                RecommendationRun.run_id == run_id
+            ).delete(synchronize_session=False)
+            cleanup_db.commit()
+        finally:
+            cleanup_db.close()
+
+
+def test_label_pending_outcomes_is_serialized_by_lock(committed_pending_rec):
     """_label_outcome_lock 保证 label_pending_outcomes 临界区不重叠。
 
     mock _simulate_outcome 注入 sleep，记录两个线程是否同时进入临界区。
@@ -120,7 +159,10 @@ def test_label_pending_outcomes_is_serialized_by_lock():
     )
 
 
-def test_concurrent_label_pending_outcomes_does_not_duplicate(db: Session):
+def test_concurrent_label_pending_outcomes_does_not_duplicate(
+    db: Session,
+    committed_pending_rec,
+):
     """两个独立 session 并发结算同一条 pending rec，不撞主键、只产生 1 条 outcome。
 
     复现 app.log 2026-06-23 场景：startup 补结算线程与首屏预热 backfill 同时跑。
@@ -132,14 +174,7 @@ def test_concurrent_label_pending_outcomes_does_not_duplicate(db: Session):
     """
     from app.db.session import SessionLocal
 
-    suffix = uuid.uuid4().hex[:8]
-    rec_id = f"rec_lock_dup_{suffix}"
-    code = _unique_stock_code("97")
-    setup_db = SessionLocal()
-    try:
-        _make_pending_rec(setup_db, rec_id, code)
-    finally:
-        setup_db.close()
+    rec_id, _code, _run_id = committed_pending_rec
 
     errors: list[str] = []
     results: dict[str, object] = {}
@@ -171,24 +206,4 @@ def test_concurrent_label_pending_outcomes_does_not_duplicate(db: Session):
         assert outcome.outcome_label == "success"
         # 只产生 1 条 outcome（不重复 INSERT）——主键约束天然保证，串行后第二次走 update
     finally:
-        # 清理测试数据（独立 session 真正 commit 的，fixture 不会回滚）
-        cleanup_db = SessionLocal()
-        try:
-            cleanup_db.query(RecommendationOutcome).filter(
-                RecommendationOutcome.recommendation_id == rec_id
-            ).delete()
-            rec = cleanup_db.get(RecommendationOutcome, rec_id)
-            cleanup_db.query(Recommendation).filter(
-                Recommendation.code == code
-            ).delete()
-            cleanup_db.query(DailyKbar).filter(DailyKbar.code == code).delete()
-            run = cleanup_db.query(RecommendationRun).filter(
-                RecommendationRun.run_id.like(f"run_lock_{suffix}%")
-            ).first()
-            if run:
-                cleanup_db.delete(run)
-            cleanup_db.query(Stock).filter(Stock.code == code).delete()
-            cleanup_db.commit()
-        finally:
-            cleanup_db.close()
-            verify_db.close()
+        verify_db.close()
