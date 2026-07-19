@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, History, Layers, Loader2, RotateCcw, Search } from "lucide-react";
-import { Fragment, useCallback, useState } from "react";
+import { Fragment, useCallback, useMemo, useState } from "react";
 import { api } from "../api/client";
 import type { RecommendationDetail, RecommendationHistoryResponse } from "../types";
 import { PageSkeleton, ErrorPage, EmptyState } from "../components/StateViews";
@@ -26,6 +26,9 @@ export function HistoryPage() {
   const strategyVersionId = queryParam("strategy_version_id");
   const strategyVersion = queryParam("strategy_version");
   const [label, setLabel] = useState<"" | "success" | "failed" | "missed" | "pending">("");
+  // datePreset：近7天/近30天/本月/全部/自定义；custom 时用 dateFrom/dateTo 手选。
+  // 默认近30天，与 records 页一致。
+  const [datePreset, setDatePreset] = useState<"7d" | "30d" | "month" | "all" | "custom">("30d");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(0);
@@ -34,6 +37,19 @@ export function HistoryPage() {
   const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<Record<string, string>>({});
   const pageSize = 50;
+
+  // 日期预设 → 实际 dateFrom/dateTo（基于今天）。custom 用手选，all 不限。
+  const effectiveDateRange = useMemo(() => {
+    if (datePreset === "custom") return { from: dateFrom, to: dateTo };
+    if (datePreset === "all") return { from: "", to: "" };
+    const today = new Date();
+    const to = today.toISOString().slice(0, 10);
+    const from = new Date(today);
+    if (datePreset === "7d") from.setDate(from.getDate() - 6);
+    else if (datePreset === "30d") from.setDate(from.getDate() - 29);
+    else if (datePreset === "month") from.setDate(1);
+    return { from: from.toISOString().slice(0, 10), to };
+  }, [datePreset, dateFrom, dateTo]);
 
   // code/setupType 只在用户提交时触发查询（避免每键都请求）；用本地 state 控制
   // bucket 用下拉框，选择即查询
@@ -48,8 +64,8 @@ export function HistoryPage() {
       api.recommendationHistory({
         code: codeQuery || undefined,
         label: label || undefined,
-        date_from: dateFrom || undefined,
-        date_to: dateTo || undefined,
+        date_from: effectiveDateRange.from || undefined,
+        date_to: effectiveDateRange.to || undefined,
         bucket: bucket || undefined,
         setup_type: setupTypeQuery || undefined,
         strategy_id: strategyId || undefined,
@@ -57,7 +73,7 @@ export function HistoryPage() {
         limit: pageSize,
         offset: page * pageSize,
       }),
-    [label, codeQuery, bucket, setupTypeQuery, dateFrom, dateTo, page, strategyId, strategyVersionId],
+    [label, codeQuery, bucket, setupTypeQuery, effectiveDateRange, page, strategyId, strategyVersionId],
   );
 
   const items = data?.items ?? [];
@@ -75,6 +91,7 @@ export function HistoryPage() {
 
   const resetFilters = () => {
     setLabel("");
+    setDatePreset("30d");
     setDateFrom("");
     setDateTo("");
     setCodeInput("");
@@ -158,9 +175,30 @@ export function HistoryPage() {
         {/* 日期范围 */}
         <div className="records-filterbar__group">
           <label className="records-filterbar__label">日期</label>
-          <input className="cfg-input records-filterbar__date" type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); resetPage(); }} />
-          <span className="records-filterbar__arrow">→</span>
-          <input className="cfg-input records-filterbar__date" type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); resetPage(); }} />
+          <div className="records-filterbar__preset">
+            {([
+              { key: "7d", label: "近7天" },
+              { key: "30d", label: "近30天" },
+              { key: "month", label: "本月" },
+              { key: "all", label: "全部" },
+              { key: "custom", label: "自定义" },
+            ] as const).map((opt) => (
+              <button
+                key={opt.key}
+                className={`records-filterbar__chip ${datePreset === opt.key ? "records-filterbar__chip--active" : ""}`}
+                onClick={() => { setDatePreset(opt.key); resetPage(); }}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          {datePreset === "custom" && (
+            <>
+              <input className="cfg-input records-filterbar__date" type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); resetPage(); }} />
+              <span className="records-filterbar__arrow">→</span>
+              <input className="cfg-input records-filterbar__date" type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); resetPage(); }} />
+            </>
+          )}
         </div>
 
         {/* 结果筛选 */}
