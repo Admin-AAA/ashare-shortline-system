@@ -412,6 +412,37 @@
   font-size: var(--text-sm);
 }
 
+/* 日期预设按钮组 */
+.records-filterbar__preset {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-soft, color-mix(in srgb, var(--ink) 5%, transparent));
+  border-radius: var(--radius-sm);
+}
+
+.records-filterbar__chip {
+  border: none;
+  background: transparent;
+  color: var(--muted-strong);
+  font-size: var(--text-sm);
+  padding: 4px 10px;
+  border-radius: calc(var(--radius-sm) - 2px);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+
+.records-filterbar__chip:hover {
+  color: var(--text);
+}
+
+.records-filterbar__chip--active {
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+  font-weight: 600;
+}
+
 .records-filterbar__reset {
   margin-left: auto;
 }
