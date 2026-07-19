@@ -9,6 +9,7 @@ export type PoolRunDescription = {
 };
 
 type RunStateInput = Pick<RunSummary, "status" | "recommended_count">;
+type RunDateInput = Pick<RunSummary, "started_at" | "trade_date">;
 
 export function describePoolRun(run: RunStateInput): PoolRunDescription {
   if (run.status === "running") {
@@ -51,16 +52,32 @@ export function summarizePoolRuns(runs: RunStateInput[]) {
 }
 
 /** Backend datetimes are stored as naive UTC and must be rendered in browser local time. */
-export function formatPoolRunTime(iso?: string | null, tradeDate?: string) {
-  if (!iso) return "--:--";
+function parseBackendUtc(iso?: string | null) {
+  if (!iso) return null;
   const instant = new Date(/(?:Z|[+-]\d{2}:?\d{2})$/.test(iso) ? iso : `${iso}Z`);
-  if (Number.isNaN(instant.getTime())) return "--:--";
+  return Number.isNaN(instant.getTime()) ? null : instant;
+}
 
+function localDateKey(instant: Date) {
   const year = instant.getFullYear();
+  const month = String(instant.getMonth() + 1).padStart(2, "0");
+  const day = String(instant.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+export function poolRunDate(run: RunDateInput) {
+  const instant = parseBackendUtc(run.started_at);
+  return instant ? localDateKey(instant) : run.trade_date;
+}
+
+export function formatPoolRunTime(iso?: string | null, tradeDate?: string) {
+  const instant = parseBackendUtc(iso);
+  if (!instant) return "--:--";
+
   const month = String(instant.getMonth() + 1).padStart(2, "0");
   const day = String(instant.getDate()).padStart(2, "0");
   const hour = String(instant.getHours()).padStart(2, "0");
   const minute = String(instant.getMinutes()).padStart(2, "0");
-  const actualDate = `${year}-${month}-${day}`;
+  const actualDate = localDateKey(instant);
   return tradeDate && actualDate !== tradeDate ? `${month}-${day} ${hour}:${minute}` : `${hour}:${minute}`;
 }

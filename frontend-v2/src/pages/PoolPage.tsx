@@ -22,7 +22,7 @@ import { LlmStanceBadge } from "../components/LlmStanceBadge";
 import { useUrlRoute } from "../app/useUrlRoute";
 import { useApi } from "../app/useApi";
 import { queryParam } from "../app/nav";
-import { describePoolRun, formatPoolRunTime, summarizePoolRuns, type PoolRunKind } from "./poolRunView";
+import { describePoolRun, formatPoolRunTime, poolRunDate, summarizePoolRuns, type PoolRunKind } from "./poolRunView";
 
 /**
  * 候选池 —— 日期运行日志 → 运行抽屉 → 股票二级展开。
@@ -48,12 +48,12 @@ export function PoolPage() {
   const linkedRun = runId ? allRuns.find((run) => run.run_id === runId) : undefined;
   const effectiveDate = selectedDate;
   const availableDates = useMemo(
-    () => Array.from(new Set([today, ...allRuns.map((run) => run.trade_date).filter(Boolean)])).sort().reverse(),
+    () => Array.from(new Set([today, ...allRuns.map(poolRunDate).filter(Boolean)])).sort().reverse(),
     [allRuns, today],
   );
   const dayRuns = useMemo(
     () => allRuns
-      .filter((run) => run.trade_date === effectiveDate)
+      .filter((run) => poolRunDate(run) === effectiveDate)
       .sort((a, b) => runSortTime(b).localeCompare(runSortTime(a))),
     [allRuns, effectiveDate],
   );
@@ -74,7 +74,7 @@ export function PoolPage() {
 
   useEffect(() => {
     if (!linkedRun) return;
-    setSelectedDate(linkedRun.trade_date);
+    setSelectedDate(poolRunDate(linkedRun));
     setExpandedRuns((current) => new Set(current).add(linkedRun.run_id));
   }, [linkedRun?.run_id, linkedRun?.trade_date]);
 
@@ -276,6 +276,7 @@ function RunDrawer({ run, open, onToggle }: { run: RunSummary; open: boolean; on
           <strong className="text-mono" style={{ fontSize: "var(--text-xl)" }}>{formatPoolRunTime(run.started_at, run.trade_date)}</strong>
           <span className="text-muted" style={{ fontSize: "var(--text-xs)" }}>开始</span>
         </div>
+        {run.trade_date && run.trade_date !== poolRunDate(run) && <span className="tag text-mono" style={{ fontSize: "var(--text-xs)" }}>数据 {run.trade_date}</span>}
         <div style={{ minWidth: 180, flex: "1 1 220px" }}>
           <strong>{run.preset_name || run.run_name || "未命名预设"}</strong>
           {run.run_name && run.run_name !== run.preset_name && <div className="text-muted" style={{ fontSize: "var(--text-xs)", marginTop: 3 }}>{run.run_name}</div>}

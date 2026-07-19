@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { describePoolRun, formatPoolRunTime, summarizePoolRuns } from "../src/pages/poolRunView.ts";
+import { describePoolRun, formatPoolRunTime, poolRunDate, summarizePoolRuns } from "../src/pages/poolRunView.ts";
 
 test("completed run with zero recommendations is a successful empty result", () => {
   assert.deepEqual(
@@ -64,6 +64,7 @@ test("naive backend UTC timestamps render in the browser local timezone", () => 
   process.env.TZ = "Asia/Shanghai";
   try {
     assert.equal(formatPoolRunTime("2026-07-19T08:18:02", "2026-07-19"), "16:18");
+    assert.equal(poolRunDate({ started_at: "2026-07-19T09:15:34", trade_date: "2026-07-17" }), "2026-07-19");
   } finally {
     process.env.TZ = originalTimeZone;
   }
