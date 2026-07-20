@@ -185,6 +185,9 @@ def check_b_item(db) -> None:
     if 'LLM delta' in missing:
         _check_llm_route_health(db)
 
+    # LLM 层有效性护栏（T8/T9）：去混杂判 delta 单调性 + oppose 率 + 顶层求和超 clamp。
+    check_llm_delta_effectiveness(db)
+
 
 def _llm_route_diagnosis(cache_latest, mins_since, total):
     """纯函数：基于 llm_review_cache 状态判定 LLM 路由失效证据（便于单测）。
@@ -244,6 +247,120 @@ def _check_llm_route_health(db) -> None:
             print(f'    路由 {r[1]} base_url={r[2]} model={r[3]} 使用{key_note}')
         print('    排查建议: 前端「设置→模型路由」点「测试」验证该 base_url 下系统默认 key 是否真实可用')
         print('    （常见根因：base_url 指向的 provider 与 .env key 发放方不一致，如 base_url=deepseek.com 但 key 是 jucode.cn 的）')
+
+
+def _llm_delta_effectiveness(records: list[dict]) -> dict:
+    """纯函数：LLM delta 有效性诊断（不碰 DB，便于单测）。
+
+    背景（第 8 轮 T8 实证）：直接按「有无 delta」比分组胜率会得出「LLM 负价值」的
+    误判——delta>0 的票 87% 集中 07-07/08/09（regime 不利日），无 delta 票分散在
+    07-06/16/06-08（regime 较好日），且 0 个 run 同时含两类票（LLM 按 run 整体开关）。
+    这是「开启 LLM 的 run 恰逢差日」的时间混杂，非 LLM 损害 D（feature_signal_guard
+    预判的单日集中伪影）。去混杂后须按 delta 分档看单调性（大 delta=强信心应胜率更高），
+    并盯两个真实问题：①oppose stance 占比（LLM 几乎从不反对则风险识别形同虚设）；
+    ②顶层聚合 score_delta 超单 agent clamp[-18,16]（多 agent 求和未 clamp 的数据完整性）。
+
+    参数 records: [{delta: float|None, stance: str|None, label: 'success'|'failed'}]
+    返回 {monotonic_ok, bucket_wr, oppose_ratio, over_clamp_count, notes:[...]}
+    """
+    deltas = [(r["delta"], r["label"]) for r in records if r.get("delta") is not None]
+    n_with = len(deltas)
+    oppose = sum(1 for r in records if str(r.get("stance") or "").lower() == "oppose")
+    oppose_ratio = oppose / len(records) if records else 0.0
+    over_clamp = sum(1 for r in records if r.get("delta") is not None and (r["delta"] > 16 or r["delta"] < -18))
+
+    def _wr(group):
+        return round(sum(1 for _, l in group if l == "success") / len(group) * 100, 1) if group else None
+
+    buckets = {
+        "0-15": _wr([(d, l) for d, l in deltas if 0 <= d < 15]),
+        "15-30": _wr([(d, l) for d, l in deltas if 15 <= d < 30]),
+        "30+": _wr([(d, l) for d, l in deltas if d >= 30]),
+    }
+    # 单调性：大 delta 档胜率应 >= 小 delta 档（去混杂后 LLM 审查强度与质量正相关）
+    vals = [v for v in (buckets["0-15"], buckets["15-30"], buckets["30+"]) if v is not None]
+    monotonic_ok = len(vals) < 2 or vals[-1] >= vals[0]
+
+    notes = []
+    if n_with < 20:
+        notes.append(f"有 delta 样本过少(n={n_with})，单调性判断为噪声")
+    if oppose_ratio < 0.05 and len(records) >= 30:
+        notes.append(
+            f"oppose stance 占比 {oppose_ratio:.0%}<5%（n={len(records)}），"
+            f"LLM 几乎从不反对，风险识别形同虚设——T9 prompt 应校准 oppose 触发标准"
+        )
+    if over_clamp > 0:
+        notes.append(
+            f"{over_clamp} 条顶层聚合 score_delta 超单 agent clamp[-18,16]：多 agent 求和未 clamp，"
+            f"读侧（projection/cost_service）按单 agent 语义消费会低估实际增量——数据完整性问题"
+        )
+    if not monotonic_ok:
+        notes.append("delta 分档胜率非单调（大 delta 反而低胜率），LLM 校准失效，T9 需复核")
+    return {
+        "monotonic_ok": monotonic_ok,
+        "bucket_wr": buckets,
+        "oppose_ratio": round(oppose_ratio, 4),
+        "over_clamp_count": over_clamp,
+        "notes": notes,
+    }
+
+
+def check_llm_delta_effectiveness(db) -> None:
+    """LLM 层（T8/T9 护栏）：delta 有效性 + oppose 率 + 超 clamp 诊断。
+
+    防「LLM 负价值」误判（单日集中混杂），并把两个真实问题（从不 oppose / 顶层求和超 clamp）
+    显式化，供 T9 prompt 优化与聚合 clamp 修复作依据。
+    """
+    try:
+        rows = db.execute(text("""
+            SELECT JSON_EXTRACT(r.agent_summary_json, '$.score_delta') AS delta,
+                   JSON_EXTRACT(r.agent_summary_json, '$.stance')      AS stance,
+                   o.outcome_label
+            FROM recommendations r
+            JOIN recommendation_runs u ON r.run_id = u.run_id
+            JOIN recommendation_outcomes o ON r.recommendation_id = o.recommendation_id
+            WHERE u.run_mode = 'formal' AND r.recommendation_id LIKE 'rec_%'
+              AND o.outcome_label IN ('success','failed')
+              AND r.agent_summary_json IS NOT NULL
+        """)).fetchall()
+    except Exception as exc:
+        print(f'  ⚠️ LLM delta 有效性诊断查询失败: {exc}')
+        return
+
+    def _f(v):
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            try:
+                return float(json.loads(v))
+            except (TypeError, ValueError):
+                return None
+
+    def _stance(v):
+        # JSON_EXTRACT('$.stance') 返回带引号的 JSON 字符串（如 '"oppose"'），需 json.loads 去引号
+        if v is None:
+            return None
+        try:
+            return json.loads(v)
+        except (TypeError, ValueError):
+            return str(v)
+
+    records = [
+        {"delta": _f(r[0]), "stance": _stance(r[1]), "label": r[2]}
+        for r in rows
+    ]
+    if not records:
+        return
+    result = _llm_delta_effectiveness(records)
+    b = result["bucket_wr"]
+    print(
+        f'  LLM delta 有效性（去混杂·按档胜率）: 0-15={b["0-15"]}% 15-30={b["15-30"]}% '
+        f'30+={b["30+"]}% | oppose率={result["oppose_ratio"]:.0%} 超clamp={result["over_clamp_count"]}条'
+    )
+    for note in result["notes"]:
+        print(f'    ⚠️ {note}')
 
 
 def check_c_item(db) -> set:
