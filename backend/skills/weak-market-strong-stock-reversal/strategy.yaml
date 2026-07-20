@@ -1,0 +1,135 @@
+id: weak-market-strong-stock-reversal
+name: 弱市强势股确认回撤
+enabled: true
+weight: 1.0
+
+meta:
+  author: system
+  style: weak-market-confirmed-reversal
+  version: 0.1.0
+  holding_days: [3, 5]
+  strategy_independence: 0.82
+  default_preset_groups:
+    experiment_weak_market_reversal:
+      weight: 1.0
+      sort_order: 10
+
+contract:
+  type: strategy
+  executable: true
+
+# 研究假设：弱市不是买全市场超跌，而是只做仍有中期强度、回撤未破位且
+# 当日已经止跌的小阳确认。下一交易日开盘才是实际入场，不使用收盘后的未来信息。
+universe:
+  include:
+    - "market_regime == '弱势'"
+    - "limit_down_count <= 100"
+    - "amount_yi >= 2"
+    - "turnover_rate >= 1"
+    - "turnover_rate <= 10"
+    - "chg20 >= 15"
+    - "pos60 >= 50"
+    - "off_high_pct >= -12"
+    - "pct >= 0"
+    - "pct < 3"
+    - "twenty_cm_risk_gate != 'block'"
+  exclude:
+    - "is_st == true"
+    - "announcement_negative_count > 0"
+    - "news_risk_count > 1"
+
+prefilter:
+  market:
+    include:
+      - when: "max_dd20 >= -14"
+        reason: "trend_broken"
+      - when: "vol5_20 <= 1.1"
+        reason: "confirmation_volume_too_large"
+      - when: "support_ma5 == true or support_ma10 == true"
+        reason: "no_ma_support"
+    exclude:
+      - when: "vol5_20 >= 1.4 and pct <= 0"
+        reason: "volume_down_not_reversal"
+
+phases:
+  - name: 系统性恐慌禁入
+    when: "limit_down_count > 100"
+    score_cap: 0
+    hard_veto: true
+    risk_flags: ["跌停蔓延，弱市反转假设失效"]
+
+  - name: 非弱市不适用
+    when: "market_regime != '弱势'"
+    score_cap: 0
+    hard_veto: true
+    risk_flags: ["本策略仅服务弱市确认回撤"]
+
+  - name: 弱市确认回撤
+    when: "chg20 >= 15 and pos60 >= 50 and pct >= 0 and pct < 3 and vol5_20 <= 1.1 and (support_ma5 == true or support_ma10 == true)"
+    score_cap: 90
+    hard_veto: false
+
+setups:
+  - name: 强势股缩量止跌确认
+    when: "chg20 >= 15 and pos60 >= 50 and pct >= 0 and pct < 3 and vol5_20 <= 1.1 and (support_ma5 == true or support_ma10 == true)"
+    score_delta: 10
+    entry_rule: "弱市中仅在缩量回撤后出现小阳或平盘确认时，下一交易日开盘轻仓参与"
+    invalid_rule: "次日低开并放量跌破 MA10，或市场跌停家数重新扩散"
+
+require_setup: true
+
+scoring:
+  base: 42
+  rules:
+    - when: "chg20 >= 25"
+      delta: 12
+      reason: 20日强势领先
+    - when: "chg20 >= 15 and chg20 < 25"
+      delta: 8
+      reason: 20日仍保持强势
+    - when: "pos60 >= 60 and pos60 <= 92"
+      delta: 8
+      reason: 60日位置健康
+    - when: "ma5 > ma10 and ma10 >= ma20"
+      delta: 8
+      reason: 均线结构未破
+    - when: "support_ma5 == true"
+      delta: 5
+      reason: MA5承接有效
+    - when: "support_ma10 == true"
+      delta: 4
+      reason: MA10支撑有效
+    - when: "vol5_20 >= 0.65 and vol5_20 <= 1.0"
+      delta: 6
+      reason: 缩量回撤后承接正常
+    - when: "pct > 0 and pct < 3"
+      delta: 5
+      reason: 当日止跌确认，未追涨
+    - when: "off_high_pct >= -8"
+      delta: 4
+      reason: 距阶段高点可控
+    - when: "rsi_12 > 72"
+      delta: -8
+      reason: RSI过热
+    - when: "pos60 > 94"
+      delta: -6
+      reason: 高位回撤风险
+
+risk:
+  rules:
+    - when: "max_dd20 < -10"
+      level: medium
+      flag: 回撤偏深，降低仓位
+      score_delta: -6
+    - when: "vol5_20 < 0.55"
+      level: medium
+      flag: 量能过度萎缩，反弹弹性不足
+      score_delta: -5
+    - when: "dsa_macd_score <= 2"
+      level: high
+      flag: MACD仍偏弱
+      score_delta: -10
+    - when: "news_risk_count > 0"
+      level: high
+      flag: 存在新闻风险
+      score_delta: -10

@@ -49,6 +49,12 @@ def build_features(
         item["is_main_theme"] = item.get("industry") in main_industries and item.get("industry") != "未分类"
         item["market_sample_count"] = int(snapshot.get("sample_count") or 0)
         item["market_regime"] = snapshot.get("breadth", {}).get("regime", "未知")
+        # 市场状态是策略上下文的一部分。策略若声明恐慌日禁入，必须看到与
+        # 推荐卡片一致的当日广度数据，不能只依赖笼统的 regime 标签。
+        item["up_count"] = int(snapshot.get("up_count") or 0)
+        item["down_count"] = int(snapshot.get("down_count") or 0)
+        item["limit_up_count"] = int(snapshot.get("limit_up_count") or 0)
+        item["limit_down_count"] = int(snapshot.get("limit_down_count") or 0)
         enriched.append(item)
 
     # 从本地辅助数据池丰富特征（涨停板/龙虎榜/新闻/资金流/概念板块）
