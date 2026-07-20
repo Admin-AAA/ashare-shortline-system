@@ -305,6 +305,46 @@ def _llm_delta_effectiveness(records: list[dict]) -> dict:
     }
 
 
+def _llm_stance_winrate(records: list[dict]) -> dict:
+    """纯函数：按 LLM stance 强度分档胜率——监测 LLM 信心信号是否持续提供区分度。
+
+    背景（第193轮 T8 实证）：真 LLM 样本 strong_support n=18 WR=78% vs support n=102
+    WR=62%，16pp 溢价；neutral_support 介于其间。stance 强度与胜率正相关 = LLM 审查
+    提供了真实的信心区分度（非噪声）。但 strong_support 胜率溢价跨日不稳（07-08/09 强、
+    07-07 无差）且样本小，**不构成可加 entry/加权规则**——仅作 LLM 层健康监测。
+    若 strong_support 胜率溢价消失（→ support 水平），说明 LLM 信心校准退化，T9 需复核。
+
+    stance 强度排序：strong_support > support > neutral_support > neutral > oppose。
+    返回 {stance_wr: {stance: (n, wr)}, premium: strong_support_wr - support_wr,
+    premium_ok, note}。样本不足（strong_support<10 或 support<10）时 premium=None。
+    """
+    groups: dict[str, list[str]] = {}
+    for r in records:
+        st = str(r.get("stance") or "").strip() or "None"
+        groups.setdefault(st, []).append(r.get("label"))
+
+    def _wr(labels):
+        n = len(labels)
+        if n == 0:
+            return None
+        return round(sum(1 for l in labels if l == "success") / n * 100, 1)
+
+    stance_wr = {st: (len(labels), _wr(labels)) for st, labels in groups.items()}
+    ss = stance_wr.get("strong_support")
+    sp = stance_wr.get("support")
+    premium = None
+    premium_ok = None
+    note = None
+    if ss and sp and ss[0] >= 10 and sp[0] >= 10 and ss[1] is not None and sp[1] is not None:
+        premium = round(ss[1] - sp[1], 1)
+        # strong_support 应 >= support（信心越强胜率越高）；溢价消失/反转为负 = 校准退化
+        premium_ok = premium >= 0
+        if not premium_ok:
+            note = (f'strong_support 胜率 {ss[1]}% 低于 support {sp[1]}%（溢价 {premium}pp 反转），'
+                    f'LLM 信心校准退化——T9 prompt 应复核 strong_support 触发标准')
+    return {"stance_wr": stance_wr, "premium": premium, "premium_ok": premium_ok, "note": note}
+
+
 def check_llm_delta_effectiveness(db) -> None:
     """LLM 层（T8/T9 护栏）：delta 有效性 + oppose 率 + 超 clamp 诊断。
 
@@ -361,6 +401,20 @@ def check_llm_delta_effectiveness(db) -> None:
     )
     for note in result["notes"]:
         print(f'    ⚠️ {note}')
+
+    # stance 强度分档胜率：监测 LLM 信心信号区分度（strong_support 应 >= support）。
+    # 仅监测不加规则（strong_support 溢价跨日不稳、样本小，第193轮 T8 实证）。
+    sw = _llm_stance_winrate(records)
+    parts = []
+    for st in ("strong_support", "support", "neutral_support", "neutral", "oppose"):
+        if st in sw["stance_wr"]:
+            n, wr = sw["stance_wr"][st]
+            parts.append(f'{st}={wr}%(n={n})')
+    if parts:
+        prem = f' 溢价{sw["premium"]:+}pp' if sw["premium"] is not None else ''
+        print(f'  LLM stance 分档胜率: {" ".join(parts)}{prem}')
+        if sw["note"]:
+            print(f'    ⚠️ {sw["note"]}')
 
 
 def check_c_item(db) -> set:
