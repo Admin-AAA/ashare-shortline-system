@@ -597,6 +597,64 @@ def _fmt_d_cost(tag: str, m: dict | None, baseline_wr: float, baseline_pl: float
           f'| 平均收益 净 {m["net_avg"]}%/毛 {m["gross_avg"]}%')
 
 
+def _single_day_pl_drag(rows: list, trade_dates: set) -> dict | None:
+    """纯函数：诊断近 N 日窗口内 PF 是否被单一交易日拖累（单日 regime 噪声 vs 真退化）。
+
+    背景（第191轮 T3 实证）：D 项近10日净盈亏比低于基线时，需先区分「单日情绪异常日
+    主导」vs「多日普遍低 PF」。前者（如单一冰点被误判活跃日，见 lessons #350 /
+    no_follow_through 子簇护栏）个股 entry 侧不可解、禁止加规则；后者才需正常排查。
+    若不显式诊断，运营者看到 PF<基线 会误判真退化、循环加 entry 规则过拟合噪声。
+
+    判定：剔除「窗口内总亏损最大的单日」后 PF 回升 >= PF_RECOVER_MIN，且该日亏损
+    占窗口总亏损 >= LOSS_SHARE_MIN → 返回单日拖累诊断；否则 None（PF 下滑是普遍的，
+    可能是真退化或多日连续低 PF，需正常排查，不豁免）。
+
+    不碰 DB，便于单测锁定。返回 {worst_day, day_loss, day_loss_share, pf_with, pf_without, recover}。
+    """
+    PF_RECOVER_MIN = 0.15   # 剔除单日后 PF 回升 >=0.15 才算「单日显著拖累」
+    LOSS_SHARE_MIN = 0.40   # 该日亏损占窗口总亏损 >=40% 才认定是单日主导
+    win_rows = [r for r in rows if str(r[1]) in trade_dates]
+    if not win_rows:
+        return None
+    # 按日聚合净收益（扣成本口径，与 _compute_d_cost 一致）
+    day_net: dict[str, list[float]] = {}
+    for r in win_rows:
+        if r[3] is None:
+            continue
+        day_net.setdefault(str(r[1]), []).append(float(r[3]) - ADDITIONAL_COST_PCT)
+    if not day_net:
+        return None
+
+    def _pf(nets: list[float]) -> float:
+        profit = sum(x for x in nets if x > 0)
+        loss = abs(sum(x for x in nets if x < 0))
+        return round(profit / loss, 2) if loss > 0 else 999.0
+
+    day_loss = {d: abs(sum(x for x in nets if x < 0)) for d, nets in day_net.items()}
+    total_loss = sum(day_loss.values())
+    if total_loss <= 0:
+        return None
+    worst_day = max(day_loss, key=lambda d: day_loss[d])
+    worst_loss = day_loss[worst_day]
+    loss_share = worst_loss / total_loss
+
+    all_nets = [x for nets in day_net.values() for x in nets]
+    pf_with = _pf(all_nets)
+    pf_without = _pf([x for d, nets in day_net.items() if d != worst_day for x in nets])
+    recover = round(pf_without - pf_with, 2)
+
+    if loss_share >= LOSS_SHARE_MIN and recover >= PF_RECOVER_MIN:
+        return {
+            "worst_day": worst_day,
+            "day_loss": round(worst_loss, 2),
+            "day_loss_share": round(loss_share * 100, 1),
+            "pf_with": pf_with,
+            "pf_without": pf_without,
+            "recover": recover,
+        }
+    return None
+
+
 def _is_20cm_code(code: str) -> bool:
     """20cm 板块判定（创业板 300/301、科创板 688/689）。"""
     return str(code).startswith(("300", "301", "688", "689"))
@@ -733,6 +791,13 @@ def check_d_item(db) -> None:
            WIN_RATE_BASELINE, MAX_LOSS_BASELINE)
     _fmt_d_cost('D 项(近10交易日)', _compute_d_cost(rows, trade_dates=last10),
                 WIN_RATE_BASELINE, PL_RATIO_BASELINE)
+    # 单日 PF 拖累护栏：近10日 PF 低于基线时，诊断是否被单一交易日（情绪异常日）主导。
+    # 是 → 明确「单日 regime 驱动，非策略退化」，禁止据此循环加 entry 规则（lessons #350）。
+    _drag = _single_day_pl_drag(rows, last10)
+    if _drag is not None:
+        print(f'  ⚠️ 护栏: 近10日盈亏比被单日 {_drag["worst_day"]} 拖累——该日亏损占窗口 '
+              f'{_drag["day_loss_share"]}%，剔除后 PF {_drag["pf_with"]}→{_drag["pf_without"]} '
+              f'(回升{_drag["recover"]})。单日 regime 噪声非策略退化，禁止据此加 entry 规则')
 
     # 前瞻窗口（修复后）：FORWARD_EPOCH 之后的 run 才反映去重/弱市否决的真实胜率。
     # 若前瞻窗口胜率显著高于全量，说明全量下滑是历史污染而非真退化——
