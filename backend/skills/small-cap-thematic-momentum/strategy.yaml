@@ -29,8 +29,13 @@ contract:
 #   + is_main_theme（题材叙事顺风，板块资金在轮动进来）
 #   + dist20<10（距 MA20 不远 -> 行情仍在早期，有上行空间）
 #   + turnover_rate<8（尚未爆量过热）
-# 历史验证（formal 推荐 outcome 回溯，n=328）：WR 90.2% / 基线 68.4% / lift +21.9pp，
-# 前后两半时间窗稳定（前半 +18.2pp，后半 +25.2pp），无 alpha 衰减。
+# ⚠️ 历史验证口径修正（2026-07-21 数据诚信核查）：
+#   原注释称「formal 推荐 outcome 回溯 n=328 WR 90.2%」——经核对 recommendation_outcomes
+#   该数字实为 backtest 合成样本（backtest n=39 WR 79.5%），**不是 LIVE formal**。
+#   真实 LIVE formal（run_mode='formal' 且 recommendation_id LIKE 'rec_%'）仅 n=1 WR 0%。
+#   本策略在生产环境几乎未产生真实 formal 推荐（见下方覆盖盲区 FLAG：弱势市条件极端稀缺），
+#   backtest 胜率不能作为 formal 有效性的证据——回测用历史理想成交，无前滑点/无真实流动性约束。
+#   有效性结论以 LIVE formal 为准；backtest 仅作因子方向参考，不作胜率证据。
 # 与 chip-single-peak-breakout 区别：本策略度量「相对强度动量 + 小盘弹性」，
 # 而非「筹码单峰分布」；与 sector-relative-strength-leader 区别：本策略用 pos20/rsi 动量
 # 而非 primary_excess（后者历史 lift 为负）。
