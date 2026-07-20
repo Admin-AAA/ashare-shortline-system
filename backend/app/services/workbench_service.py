@@ -2991,17 +2991,32 @@ def _persist_market(db: Session, snapshot: dict[str, Any]) -> None:
     existing = db.get(MarketSnapshot, snapshot["snapshot_id"])
     if existing is not None:
         return
-    db.add(
-        MarketSnapshot(
-            snapshot_id=snapshot["snapshot_id"],
-            trade_date=snapshot["trade_date"],
-            sample_count=snapshot["sample_count"],
-            up_count=snapshot["up_count"],
-            down_count=snapshot["down_count"],
-            limit_up_count=snapshot["limit_up_count"],
-            limit_down_count=snapshot["limit_down_count"],
-            main_industries_json=_dumps(snapshot["main_industries"]),
-            breadth_json=_dumps(snapshot["breadth"]),
+    # 幂等 upsert：两个并发 run 生成相同 snapshot_id 时，第二个写由 INSERT 转为
+    # on_duplicate_key_update（同值覆盖），不再抛 IntegrityError。旧实现 check-then-add
+    # 在 ORM unit-of-work flush 时才撞主键，IntegrityError 污染整个 run 大事务 → 整个
+    # formal run failed（2026-07-19 run_20260719_081801 即此因）。用 mysql_insert 方言
+    # 立即执行 + 主键冲突降级为 UPDATE，无竞态、不回滚外层事务。
+    stmt = mysql_insert(MarketSnapshot).values(
+        snapshot_id=snapshot["snapshot_id"],
+        trade_date=snapshot["trade_date"],
+        sample_count=snapshot["sample_count"],
+        up_count=snapshot["up_count"],
+        down_count=snapshot["down_count"],
+        limit_up_count=snapshot["limit_up_count"],
+        limit_down_count=snapshot["limit_down_count"],
+        main_industries_json=_dumps(snapshot["main_industries"]),
+        breadth_json=_dumps(snapshot["breadth"]),
+    )
+    db.execute(
+        stmt.on_duplicate_key_update(
+            trade_date=stmt.inserted.trade_date,
+            sample_count=stmt.inserted.sample_count,
+            up_count=stmt.inserted.up_count,
+            down_count=stmt.inserted.down_count,
+            limit_up_count=stmt.inserted.limit_up_count,
+            limit_down_count=stmt.inserted.limit_down_count,
+            main_industries_json=stmt.inserted.main_industries_json,
+            breadth_json=stmt.inserted.breadth_json,
         )
     )
 
