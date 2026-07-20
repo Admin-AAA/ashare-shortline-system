@@ -87,7 +87,7 @@ export function PoolPage() {
 
   useEffect(() => {
     if (!hasActiveRun) return;
-    const timer = window.setInterval(refetch, 3000);
+    const timer = window.setInterval(refetch, 300_000);
     return () => window.clearInterval(timer);
   }, [hasActiveRun, refetch]);
 
