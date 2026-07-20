@@ -3,10 +3,10 @@
   "name": "隔夜持股法",
   "version": "0.1.0",
   "mode": "declarative",
-  "status": "active",
+  "status": "disabled",
   "requirements": ["stock_feature_context"],
   "capabilities": ["signal_evaluation"],
-  "enabled": true,
+  "enabled": false,
   "source_type": "local",
-  "description": "尾盘 14:30 后筛选主板强势股隔夜持有，默认次日早盘兑现，例外处理一字/缩量涨停。"
+  "description": "尾盘 14:30 后筛选主板强势股隔夜持有，默认次日早盘兑现，例外处理一字/缩量涨停。【2026-07-21 暂停】连续3轮验证低胜率(35%→25%→34.6%)+归因无解(pct∈[3,5]追高隔夜无惯性)+0.35地板仍纯亏(近10日PF=0.36/均净-2.43%)，剔除后全量PF 1.95→2.26/近10日PF 1.32→1.64，反事实两窗口一致改善，按 T3.6 下线规则暂停。"
 }
