@@ -119,16 +119,6 @@ SENTIMENT_LIMIT_UP_RATE_HOT = 0.012    # 涨停率 > 1.2% → 高潮
 SENTIMENT_LIMIT_UP_RATE_ACTIVE = 0.005  # 涨停率 > 0.5% → 活跃
 SENTIMENT_LIMIT_UP_RATE_FLAT = 0.001    # 涨停率 >= 0.1% → 平淡
 SENTIMENT_LIMIT_DOWN_RATIO = 3          # 涨停/跌停比 > 3:1 才确认高潮
-# 冰点守卫：上涨比 < 此值时，即便涨停率达标也不判「活跃」（最多平淡）。
-# 单维度涨停率会把「涨停集中 + 大面积下跌」的冰点/弱势日误判活跃（score_line +3.0 放宽），
-# 2026-07-06(up 32%)/07-07(up 13%) 的 no_follow_through 毒区 16/18 笔落在这类误判日。
-# 阈值 0.35 与 _market_base 的 BASE_UP_RATIO_RANGE 一致：<0.35 即弱势，不该给「活跃」的放宽。
-SENTIMENT_ACTIVE_MIN_UP_RATIO = 0.35    # 上涨比 >= 35% 才允许判「活跃」
-# 冰点·高潮守卫：上涨比 < 此值的极端冰点日，即便涨停率>1.2% 也不判「高潮」（压为平淡）。
-# 「弱势·高潮」是已被验证的反转买点（78.1% 胜率，不抑制），但那是弱势日（up_ratio 0.20~0.35）；
-# up_ratio<0.20 的冰点日大面积跌停、涨停高度集中，属恐慌而非反转，score_line +7 会错误放宽。
-# 校准：近 42 个交易日仅 1 天（2026-06-26，up 14%）触发，罕见不误伤常态。
-SENTIMENT_CLIMAX_MIN_UP_RATIO = 0.20    # 上涨比 >= 20% 才允许判「高潮」
 BASE_UP_RATIO_BULL = 0.65               # 上涨比 >= 65% → 强牛
 BASE_UP_RATIO_BULLISH = 0.50            # 上涨比 >= 50% → 偏多
 BASE_UP_RATIO_RANGE = 0.35              # 上涨比 >= 35% → 震荡
@@ -144,19 +134,12 @@ def _market_sentiment(snapshot: dict[str, Any] | None) -> str:
     # 用涨停率而非绝对数，适配不同市场规模
     lu_rate = limit_up / sample
     ld_rate = limit_down / sample
-    # 冰点守卫：上涨比 < 阈值时，活跃档压为平淡；极端冰点（更低阈值）连高潮档也压为平淡。
-    # 「活跃」在 score_line 上是 +3.0 放宽、「高潮」+7.0（弱势·高潮反转买点除外），
-    # 冰点/弱势日被误判活跃/高潮会错误放宽放进低质量票。
-    # 高潮守卫阈值更严（up_ratio<0.20 才压），保护弱势日（0.20~0.35）的反转买点不受影响。
-    up_ratio = float(snapshot.get("up_count") or 0) / sample
-    climax_cap = up_ratio < SENTIMENT_CLIMAX_MIN_UP_RATIO
-    active_cap = up_ratio < SENTIMENT_ACTIVE_MIN_UP_RATIO
     if lu_rate > SENTIMENT_LIMIT_UP_RATE_HOT and (
         ld_rate == 0 or lu_rate / max(ld_rate, 0.0001) > SENTIMENT_LIMIT_DOWN_RATIO
     ):
-        return "平淡" if climax_cap else "高潮"
+        return "高潮"
     if lu_rate > SENTIMENT_LIMIT_UP_RATE_ACTIVE:
-        return "平淡" if active_cap else "活跃"
+        return "活跃"
     if lu_rate >= SENTIMENT_LIMIT_UP_RATE_FLAT:
         return "平淡"
     return "冰点"
