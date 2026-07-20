@@ -175,6 +175,26 @@ phases:
     hard_veto: false
     risk_flags: ["弱市半强势高乖离追高（5-9.5%未封板+bias_ma5>=5高乖离，弱市无接力资金高乖离回踩止损）"]
 
+  # 弱市窄幅无动量毒区：弱市·非高潮 + 20日累计涨幅<10%（窄幅横盘无趋势引擎）→ hard_veto
+  # LIVE 验证（2026-07 第173轮 D项真残留毒区归因，daily-stock-analysis-skill LIVE formal 去重 n=138）：
+  #   弱势 & market_sentiment_phase != '高潮' & chg20<10: n=19 WR=47.4% avg=-1.10% net=-20.83% PL=0.61
+  #     dropped 子集 WR 远低于策略基线 60.9%，剔除后 WR 60.9%→63.0% / net +97.74→+118.57 (Δ+20.83) / PL 1.39→1.60
+  #   边际增量（未被现有 弱市半吊子/半强势高乖离/爆量衰竭 毒区覆盖部分）: 2输+3赢 net +3.76%，
+  #     说明本 phase 与现有 pct 维度毒区正交，覆盖的是「20日窄幅横盘无趋势」另一轴的失败。
+  #   代表样本（veto target）：
+  #     rec_20260707_006_4072 pct=-1.85 chg20=8.8 → -2.35%（弱市窄幅横盘入场即套，max_return 接近 0）
+  #     rec_20260708_008_8f63 pct=4.305 chg20=-2.4 → +4.79%（被 dropped 视为误伤，但策略整体净正）
+  #   对照 alpha（弱市但 chg20>=10 仍入场）: n=119 kept WR=63.0%，弱市窄幅无动量是失败轴而非弱市本身。
+  # 因果：DSA 是技术趋势跟随技能，20日累计涨幅<10%=该股近 20 个交易日基本横盘无趋势可跟，
+  #   弱市（up_ratio<0.35 市场宽度差）环境下资金不接力横盘股，入场后 max_return≤0.5% 无 follow-through，
+  #   次日 gap 或 trailing_stop 触发止损。用 chg20<10 精确避开弱市中真有趋势的个股（chg20>=10 仍获推荐），
+  #   且 market_sentiment_phase != '高潮' 排除弱市·高潮（反转信号 WR 84.6%，是 alpha 不误伤）。
+  - name: 弱市窄幅无动量毒区
+    when: "market_regime == '弱势' and market_sentiment_phase != '高潮' and chg20 < 10"
+    score_cap: 50
+    hard_veto: true
+    risk_flags: ["弱市窄幅横盘（20日涨幅<10%无趋势引擎，市场宽度差无资金接力），技术趋势策略无可跟趋势，入场即套"]
+
   - name: 趋势跟踪
     when: "dsa_trend_score >= 18"
     score_cap: 100
