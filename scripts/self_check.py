@@ -90,13 +90,31 @@ def check_a_item(db) -> None:
         has_ok = r[2] == 'completed' and (r[3] or 0) > 0
         by_date[td] = by_date.get(td, False) or has_ok
 
+    # 真实交易日历（daily_kbars 有 K 线的日子）：recommendation_runs 可能出现
+    # 非交易日（周末/节假日被误建 run，如 2026-07-19 周日全天 interrupted）。非交易日
+    # 本就无 K 线、无真实推荐义务，0 推荐是预期而非 pipeline 断档——不应计入故障日触发
+    # T12 假警报（否则未来轮次会浪费精力去"修"一个本就不该有推荐的非交易日）。
+    # 窗口用 >= CURDATE()-8 天（日历日，略宽于 A 项 7 天窗口的下界 07-14），确保落在窗口
+    # 边界的真实交易日（如 07-14）不被 INTERVAL 严格 > 漏判；多拉的日历日无 K 线自然被过滤。
+    trade_cal_rows = db.execute(text("""
+        SELECT DISTINCT trade_date FROM daily_kbars
+        WHERE trade_date >= DATE_SUB(CURDATE(), INTERVAL 8 DAY)
+    """)).fetchall()
+    real_trade_dates = {str(r[0]) for r in trade_cal_rows}
+
     ok_dates = sorted(d for d, ok in by_date.items() if ok)
     gap_dates = sorted(d for d, ok in by_date.items() if not ok)
     print(f'A 项：最近 7 天有 {len(ok_dates)} 个交易日产出 formal 推荐（目标 ≥5）')
     if gap_dates:
         protective: list[str] = []
         faulty: list[str] = []
+        non_trade: list[str] = []
         for td in gap_dates:
+            # 非交易日（周末/节假日，daily_kbars 无当日 K 线）本就无推荐义务：
+            # 归 non_trade 提示，不进 faulty（不触发 T12），也无需查 filter_audit。
+            if td not in real_trade_dates:
+                non_trade.append(td)
+                continue
             stage_rows = db.execute(text("""
                 SELECT filter_audit_json
                 FROM recommendation_runs
@@ -115,6 +133,8 @@ def check_a_item(db) -> None:
                 faulty.append(td)
         if protective:
             print(f'  ℹ️ {len(protective)} 个交易日保护性 0 推荐（score_line 拦截，regime 有效线过高，非 pipeline 故障，不触发 T12）: {protective}')
+        if non_trade:
+            print(f'  ℹ️ {len(non_trade)} 个非交易日 0 推荐（周末/节假日无 K 线，本就该 0 推荐，不触发 T12）: {non_trade}')
         if faulty:
             print(f'  ⚠️ {len(faulty)} 个交易日故障性 0 推荐（prefilter/skill_gate 卡住或全 interrupted，T12 排查）: {faulty}')
 
