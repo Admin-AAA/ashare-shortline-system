@@ -10,13 +10,17 @@ type ConfigTab = "scheduler" | "llm" | "presets" | "data-health";
 export function ConfigPage() {
   const [tab, setTab] = useState<ConfigTab>(() => {
     const q = new URLSearchParams(window.location.search).get("tab");
-    return q === "data-health" || q === "llm" || q === "presets" ? q : "scheduler";
+    return q === "scheduler" || q === "llm" || q === "presets" ? q : "data-health";
   });
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
       {/* 二级 Tab 切换 */}
       <div className="sub-tabs" style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--border)" }}>
+        <SubTab active={tab === "data-health"} onClick={() => setTab("data-health")}>
+          <Database size={14} />
+          数据健康
+        </SubTab>
         <SubTab active={tab === "scheduler"} onClick={() => setTab("scheduler")}>
           <Clock size={14} />
           调度任务
@@ -28,10 +32,6 @@ export function ConfigPage() {
         <SubTab active={tab === "presets"} onClick={() => setTab("presets")}>
           <Layers size={14} />
           预设管理
-        </SubTab>
-        <SubTab active={tab === "data-health"} onClick={() => setTab("data-health")}>
-          <Database size={14} />
-          数据健康
         </SubTab>
       </div>
 
