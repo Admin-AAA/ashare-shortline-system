@@ -135,34 +135,21 @@ function CalledCard({ item }: { item: StrategyListItem }) {
         {item.description || "（无简介）"}
       </p>
 
-      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginTop: "var(--space-4)", paddingTop: "var(--space-3)", borderTop: "1px solid var(--border)" }}>
-        <div>
-          <div style={{ fontSize: "var(--text-xs)", color: "var(--muted)", letterSpacing: "0.04em" }}>胜率</div>
-          <div style={{ fontSize: 30, fontWeight: 700, lineHeight: 1.1, color: winColor, fontFamily: "var(--font-mono)" }}>
-            {win == null ? "—" : `${(win * 100).toFixed(1)}%`}
-          </div>
-        </div>
-        <div style={{ textAlign: "right", fontSize: "var(--text-sm)", color: "var(--muted)", lineHeight: 1.7, fontFamily: "var(--font-mono)" }}>
-          <div>样本 {perf.sample_count} 笔</div>
-          <div>
-            均收益{" "}
-            <span style={{ color: retColor, fontWeight: 600 }}>
-              {perf.avg_return == null ? "—" : `${perf.avg_return >= 0 ? "+" : ""}${perf.avg_return.toFixed(2)}%`}
-            </span>
-          </div>
-          <div>
-            盈亏比{" "}
-            <span style={{ color: pfColor, fontWeight: 600 }}>
-              {pf == null ? "—" : pf.toFixed(2)}
-            </span>
-          </div>
-          <div>
-            最近命中{" "}
-            <span style={{ color: lastDate ? "var(--text)" : "var(--muted)", fontWeight: 600 }}>
-              {lastDate || "—"}
-            </span>
-          </div>
-        </div>
+      {/* 核心三指标等权：胜率 / 盈亏比 / 均收益。
+          克制原则——不让胜率独占 hero：盈亏比 <1 的高胜率策略风险调整后并不优，
+          skill 明确「不要只盯胜率，判 regime 必须看盈亏比」。三个 D 项指标平级、右对齐、等宽字体。 */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "var(--space-3)", marginTop: "var(--space-4)", paddingTop: "var(--space-3)", borderTop: "1px solid var(--border)" }}>
+        <Metric label="胜率" value={win == null ? "—" : `${(win * 100).toFixed(1)}%`} color={winColor} />
+        <Metric label="盈亏比" value={pf == null ? "—" : pf.toFixed(2)} color={pfColor} />
+        <Metric
+          label="均收益"
+          value={perf.avg_return == null ? "—" : `${perf.avg_return >= 0 ? "+" : ""}${perf.avg_return.toFixed(2)}%`}
+          color={retColor}
+        />
+      </div>
+      <div style={{ marginTop: "var(--space-2)", fontSize: "var(--text-xs)", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
+        样本 {perf.sample_count} 笔 · 最近命中{" "}
+        <span style={{ color: lastDate ? "var(--text)" : "var(--muted)" }}>{lastDate || "—"}</span>
       </div>
 
         {lowSample && (
@@ -247,6 +234,18 @@ function CalledCard({ item }: { item: StrategyListItem }) {
       <StrategyDetailLink item={item} />
 
       <CardFooter item={item} />
+    </div>
+  );
+}
+
+/** 单个核心指标：标签在上、等宽大数字右对齐，颜色由调用方按涨红跌绿给出 */
+function Metric({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div style={{ textAlign: "right", minWidth: 0 }}>
+      <div style={{ fontSize: "var(--text-xs)", color: "var(--muted)", letterSpacing: "0.04em" }}>{label}</div>
+      <div style={{ fontSize: 20, fontWeight: 700, lineHeight: 1.2, color, fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" }}>
+        {value}
+      </div>
     </div>
   );
 }
