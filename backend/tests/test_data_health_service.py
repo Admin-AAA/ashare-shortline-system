@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from threading import Event, Lock, Thread
 from unittest.mock import MagicMock, patch
 
 from sqlalchemy import create_engine
@@ -31,6 +32,58 @@ def test_resolve_reference_trade_date_falls_back_to_local_when_tushare_unavailab
     assert result["external_trade_date"] is None
     assert result["source"] == "local"
     assert "回退" in result["note"]
+
+
+def test_diagnose_all_coalesces_concurrent_cold_requests(monkeypatch):
+    data_health_service.clear_data_health_cache()
+    started = Event()
+    release = Event()
+    call_count_lock = Lock()
+    call_count = 0
+    results: list[dict] = []
+    errors: list[BaseException] = []
+
+    def slow_diagnosis(_db):
+        nonlocal call_count
+        with call_count_lock:
+            call_count += 1
+        started.set()
+        assert release.wait(timeout=2)
+        return {"reference_trade_date": "2026-05-27", "score": 100}
+
+    def run_diagnosis():
+        try:
+            results.append(data_health_service.diagnose_all(MagicMock()))
+        except BaseException as exc:  # noqa: BLE001 - surface thread failures in the assertion below
+            errors.append(exc)
+
+    monkeypatch.setattr(data_health_service, "_diagnose_all_uncached", slow_diagnosis)
+    first = Thread(target=run_diagnosis)
+    second = Thread(target=run_diagnosis)
+    try:
+        first.start()
+        assert started.wait(timeout=1)
+        second.start()
+        assert not release.wait(timeout=0.1)
+        assert call_count == 1
+
+        release.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+
+        assert not first.is_alive()
+        assert not second.is_alive()
+        assert errors == []
+        assert call_count == 1
+        assert results == [
+            {"reference_trade_date": "2026-05-27", "score": 100},
+            {"reference_trade_date": "2026-05-27", "score": 100},
+        ]
+    finally:
+        release.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+        data_health_service.clear_data_health_cache()
 
 
 def test_resolve_reference_trade_date_caps_external_calendar_at_latest_closed_session():

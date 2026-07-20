@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+from threading import Condition
 from typing import Any
 
 from sqlalchemy import distinct, func, select, text
@@ -125,9 +126,12 @@ _DATA_DOMAIN_DEFS: list[dict[str, Any]] = [
 ]
 
 # ── 进程内诊断缓存 ─────────────────────────────────────────────────────
-# 诊断结果在同一个参考交易日内基本稳定（数据只在交易日盘中/盘后增量写入），
-# 按 reference_trade_date 缓存，参考交易日变更即失效。进程重启自然清空。
+# 诊断结果会被驾驶舱与配置页同时读取。冷缓存时合并并发请求，避免 React
+# StrictMode 等重复挂载让两个请求各自执行一次约 20 秒的全量诊断。
 _diagnosis_cache: dict[str, Any] = {"reference_trade_date": None, "result": None}
+_diagnosis_cache_condition = Condition()
+_diagnosis_cache_generation = 0
+_diagnosis_in_progress = False
 
 
 def _get_cached_diagnosis() -> dict[str, Any] | None:
@@ -147,24 +151,50 @@ def _set_cached_diagnosis(result: dict[str, Any]) -> None:
 
 def clear_data_health_cache() -> None:
     """显式清空诊断缓存（修复任务完成后调用）。"""
-    _diagnosis_cache["reference_trade_date"] = None
-    _diagnosis_cache["result"] = None
+    global _diagnosis_cache_generation
+    with _diagnosis_cache_condition:
+        _diagnosis_cache["reference_trade_date"] = None
+        _diagnosis_cache["result"] = None
+        _diagnosis_cache_generation += 1
 
 
 def diagnose_all(db: Session, *, force_refresh: bool = False) -> dict[str, Any]:
     """全面数据质量诊断。
 
-    结果按参考交易日缓存：同一个 reference_trade_date 内重复调用直接返回缓存，
-    避免驾驶舱/详情页每次都全量重算（实测 ~12s）。参考交易日变更或 force_refresh
-    时失效。修复任务完成后调用方应传 force_refresh=True 刷新。
+    默认命中进程内缓存；同步/修复写入会显式清空，force_refresh 会绕过已完成
+    的缓存。若已有一次诊断正在运行，所有调用者复用该次结果，避免重复全量查询。
     """
-    cached = _get_cached_diagnosis()
-    if cached is not None and not force_refresh:
-        logger.debug("data_health: cache hit (reference_date=%s)", cached.get("reference_trade_date"))
-        return cached
+    global _diagnosis_in_progress
+    with _diagnosis_cache_condition:
+        cached = _get_cached_diagnosis()
+        if cached is not None and not force_refresh:
+            logger.debug("data_health: cache hit (reference_date=%s)", cached.get("reference_trade_date"))
+            return cached
 
-    result = _diagnose_all_uncached(db)
-    _set_cached_diagnosis(result)
+        while _diagnosis_in_progress:
+            logger.debug("data_health: waiting for in-flight diagnosis")
+            _diagnosis_cache_condition.wait()
+            cached = _get_cached_diagnosis()
+            if cached is not None:
+                logger.debug("data_health: reusing completed in-flight diagnosis")
+                return cached
+
+        cache_generation = _diagnosis_cache_generation
+        _diagnosis_in_progress = True
+
+    try:
+        result = _diagnose_all_uncached(db)
+    except Exception:
+        with _diagnosis_cache_condition:
+            _diagnosis_in_progress = False
+            _diagnosis_cache_condition.notify_all()
+        raise
+
+    with _diagnosis_cache_condition:
+        if cache_generation == _diagnosis_cache_generation:
+            _set_cached_diagnosis(result)
+        _diagnosis_in_progress = False
+        _diagnosis_cache_condition.notify_all()
     return result
 
 
