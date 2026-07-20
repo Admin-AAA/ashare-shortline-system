@@ -14,6 +14,7 @@ from sqlalchemy import delete
 
 from app.models.tables import ScheduledTask
 from app.services import scheduler_service
+from app.services.registry.skills import sync_skills
 from app.services.scheduler_service import (
     EXPOSURE_CRON,
     EXPOSURE_TASK_ID,
@@ -95,7 +96,12 @@ def test_run_strategy_exposure_selects_only_low_n_strategies(monkeypatch, db):
     from app.services.outcome_service import exposure_sample_counts
 
     counts = exposure_sample_counts(db, window_days=30, run_mode=("formal", "experiment"))
-    under_floor = {sid for sid, n in counts.items() if n < DEFAULT_EXPOSURE_MIN_SAMPLE}
+    # 低曝光口径与 _run_strategy_exposure 一致：样本 < 阈值 即低曝光；counts 缺失
+    # （enabled 但近30天 0 推荐，如 weak-market-strong-stock-reversal）等价于样本 0，
+    # 同样是低曝光。仅统计 counts 里出现过的策略会漏掉「从未被推荐」的 0 样本策略，
+    # 导致 selected ⊄ under_floor 假阴性。
+    enabled_ids = {s.skill_id for s in sync_skills(db) if s.enabled}
+    under_floor = {sid for sid in enabled_ids if counts.get(sid, 0) < DEFAULT_EXPOSURE_MIN_SAMPLE}
     assert selected.issubset(under_floor), f"选中 {selected} 含非低曝光策略"
     assert result["skipped"] is False
 
