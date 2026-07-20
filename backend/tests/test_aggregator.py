@@ -6,6 +6,7 @@ from app.engine.aggregator import (
     STANCE_MULTIPLIER,
     _consensus_boost,
     _extract_skill_agent_score,
+    _market_sentiment,
     aggregate,
     apply_pool_rules,
     resolve_score_line_context,
@@ -288,7 +289,8 @@ def test_aggregate_market_discipline_caps_position_in_weak_market():
     card = aggregate(stock, signals, market_score=42, agent_review_score=90, market_snapshot=snapshot)
     discipline = card["market_discipline"]
 
-    assert discipline["market_regime"] == "弱势·活跃"
+    # up_count=70/300=23%(<0.35) 触发冰点守卫：涨停率 0.67% 虽达活跃档，仍压为平淡 → 标签退化为「弱势」
+    assert discipline["market_regime"] == "弱势"
     assert discipline["max_position_pct"] <= 20
     assert "市场弱势，按防守仓位处理" in card["risk_flags"]
     assert "跌停压力不低于涨停，先控制回撤" in card["risk_flags"]
@@ -443,6 +445,39 @@ def test_apply_pool_rules_allows_only_small_trial_in_weak_ice_point():
     assert [card["code"] for card in result] == ["A"]
     assert result[0]["score_line_meta"]["market_base"] == "弱势"
     assert result[0]["score_line_meta"]["market_sentiment"] == "冰点"
+
+
+def test_market_sentiment_caps_active_when_up_ratio_low():
+    """冰点守卫：涨停率达标(>0.5%)但上涨比 <35% 的弱势日，不判「活跃」而压为「平淡」。
+
+    回归点（第N轮 T3 D 攻击）：单维度涨停率把「涨停集中+大面积下跌」的冰点日误判活跃，
+    score_line +3.0 错误放宽 → 2026-07-06/07-07 no_follow_through 毒区 16/18 笔落在此类误判日。
+    修复后活跃档需 up_ratio >= 0.35 才放行。
+    """
+    # 涨停率 1%（>0.5% 达活跃）但上涨比仅 13%（冰点，如 2026-07-07）→ 压为平淡
+    icy = {"sample_count": 100, "up_count": 13, "limit_up_count": 1, "limit_down_count": 5}
+    assert _market_sentiment(icy) == "平淡"
+    # 涨停率 1% + 上涨比 45%（震荡）→ 仍判活跃（不压）
+    active = {"sample_count": 100, "up_count": 45, "limit_up_count": 1, "limit_down_count": 0}
+    assert _market_sentiment(active) == "活跃"
+    # 冰点守卫不压高潮：涨停率 2% + 上涨比 30%（弱势·高潮，反转买点，不抑制）
+    climax = {"sample_count": 100, "up_count": 30, "limit_up_count": 2, "limit_down_count": 0}
+    assert _market_sentiment(climax) == "高潮"
+
+
+def test_market_sentiment_caps_climax_on_extreme_ice_point():
+    """冰点·高潮守卫：up_ratio<20% 的极端冰点日，涨停率再高也不判「高潮」。
+
+    「弱势·高潮」是反转买点（up_ratio 0.20~0.35，不抑制），但 up_ratio<0.20 的冰点日
+    大面积跌停、涨停集中属恐慌而非反转，score_line +7 会错误放宽。仅极端冰点压高潮，
+    保护弱势·高潮反转买点（见上一测试 up_count=30 仍判高潮）。
+    """
+    # 涨停率 2% + 上涨比 14%（极端冰点，如 2026-06-26）→ 压为平淡
+    icy_climax = {"sample_count": 100, "up_count": 14, "limit_up_count": 2, "limit_down_count": 0}
+    assert _market_sentiment(icy_climax) == "平淡"
+    # 涨停率 2% + 上涨比 25%（弱势·高潮，反转买点）→ 仍判高潮（不压）
+    weak_climax = {"sample_count": 100, "up_count": 25, "limit_up_count": 2, "limit_down_count": 0}
+    assert _market_sentiment(weak_climax) == "高潮"
 
 
 def test_apply_pool_rules_climax_watchlist_surfaces_near_miss_candidates():
