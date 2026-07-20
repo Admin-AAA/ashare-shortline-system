@@ -1236,6 +1236,15 @@ def _print_residual_poison_zone(uncovered: list[dict]) -> None:
               f'上游 stk_factor 缺失被 _f 转 0）— 数据质量问题，非策略可解，'
               f'feature_builder 已加 rsi_6/rsi_24 守卫清洗，勿当毒区加规则')
 
+    # 元护栏（第 7 轮）：point-biserial 单特征挖毒区在 n≈200 样本上全是伪影——头部候选
+    # 多为「稀疏特征 × 单日 regime」乘积（holder_trade / dragon_tiger_nb / roe 三连证伪）。
+    # 未来轮次挖到「高预测力特征」时，先用 feature_signal_guard.evaluate_feature_signal
+    # 判其正例时间分布，trustworthy=False（小样本/单日集中/跨日过窄）即禁止据此加规则。
+    print('  ℹ️ 特征信号护栏：point-biserial 单特征候选须先经 '
+          'feature_signal_guard.evaluate_feature_signal 判正例时间分布，'
+          '小样本(<12)/单日集中(≥40%)/跨日<3 一律禁止据此加规则（第7轮 holder_trade/'
+          'dragon_tiger_nb/roe 三连伪影实证）')
+
 
 def _print_forward_veto_counterfactual(rows, skills, win_rate_baseline: float) -> None:
     """前瞻窗口内，剔除被当前 veto 覆盖的失败笔后重算胜率 + 净盈亏比。
