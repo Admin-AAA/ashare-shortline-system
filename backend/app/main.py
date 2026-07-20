@@ -109,6 +109,7 @@ def on_startup() -> None:
     from app.services.scheduler_service import start_scheduler
     start_scheduler()
     _warmup_initial_state()
+    _warmup_data_health_cache()
     _warmup_pool_cache(delay_seconds=2.0)
 
     # 安全网：启动时检查 formal 推荐断档并自动补跑（后台线程，不阻塞启动）
@@ -155,6 +156,27 @@ def _warmup_initial_state() -> None:
         logger.exception("首屏缓存预热失败")
     finally:
         db.close()
+
+
+def _warmup_data_health_cache() -> None:
+    """后台生成数据健康诊断，避免服务重启后的首次页面访问走冷链路。"""
+    import threading
+
+    def _warm():
+        from app.db.session import SessionLocal
+        from app.services.data_health_service import diagnose_all
+
+        started_at = perf_counter()
+        db = SessionLocal()
+        try:
+            diagnose_all(db)
+            logger.info("数据健康缓存预热完成 (%.0fms)", (perf_counter() - started_at) * 1000)
+        except Exception:
+            logger.exception("数据健康缓存预热失败")
+        finally:
+            db.close()
+
+    threading.Thread(target=_warm, name="data-health-warmup", daemon=True).start()
 
 
 def _warmup_pool_cache(delay_seconds: float = 0.0) -> None:
