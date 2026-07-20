@@ -919,7 +919,12 @@ def check_d_rule_coverage(db, win_rate_baseline: float) -> None:
     # 旧实现只打印 blocked 而丢弃这段，导致每轮 D 攻击靠猜 targets（见函数 docstring）。
     uncovered = _collect_uncovered_failures(rows, skills)
     if uncovered:
-        _print_residual_poison_zone(uncovered)
+        # 成功样本对照：供「失败 vs 成功特征可分性」护栏判定个股 entry 侧是否可解。
+        success_items = [
+            {'fs': json.loads(r[3]) if r[3] else {}}
+            for r in rows if r[1] == 'success'
+        ]
+        _print_residual_poison_zone(uncovered, success_items=success_items)
 
     # 前瞻窗口规则覆盖反事实：剔除被当前 veto 覆盖的失败笔后重算胜率+盈亏比。
     # 解决"前瞻盈亏比低→误判需加规则"的循环：前瞻样本含 veto commit 前的 run（veto 还没生效），
@@ -1088,7 +1093,45 @@ def _residual_regime_sentiment_breakdown(
     return out
 
 
-def _print_residual_poison_zone(uncovered: list[dict]) -> None:
+def _entry_separability_falsified(fail_items: list[dict], success_items: list[dict],
+                                  feature_keys: tuple = ("vol5_20", "pos60"),
+                                  tol: float = 0.20) -> dict | None:
+    """纯函数：判定某毒区模式在「干净个股特征」上失败 vs 成功是否中位数全重叠。
+
+    背景（第192轮 T3 实证）：no_follow_through low_vol 失败笔与同窗口成功笔在
+    vol5_20(1.18 vs 1.38)、pos60(77.3 vs 78.3) 中位数几乎完全重叠（rel_gap 0.14/0.01）。
+    这两个是最干净的维度——量能(vol5_20)与位置(pos60)误伤率低；而 turnover/chg20 虽有
+    中等 gap(0.44/0.36)但 lessons #350 已证伪其阈值误伤 40%+（误删最佳股票），不可用。
+    干净维度全重叠 + 中等维度误伤过高 → 无高特异性 entry 规则可加，失败由 regime 驱动
+    而非个股特征，entry 侧不可解。
+
+    判定：对 feature_keys（默认仅 vol5_20/pos60 两干净维度）算失败/成功中位数相对差异，
+    全部 < tol（默认 20%）视为「干净特征全重叠、无干净可分维度」，返回 {feature_gap}；
+    任一 >= tol 则返回 None。fail/success_items 需含 fs。样本不足返回 None。
+    """
+    import statistics
+
+    def _med(items, key):
+        vals = [float((it.get('fs') or {}).get(key)) for it in items
+                if (it.get('fs') or {}).get(key) is not None]
+        return statistics.median(vals) if vals else None
+
+    if len(fail_items) < 3 or len(success_items) < 5:
+        return None
+    gap: dict[str, float] = {}
+    for k in feature_keys:
+        fm = _med(fail_items, k)
+        sm = _med(success_items, k)
+        if fm is None or sm is None:
+            continue
+        denom = abs(sm) if abs(sm) > 1e-6 else 1.0
+        gap[k] = round(abs(fm - sm) / denom, 2)
+    if gap and all(g < tol for g in gap.values()):
+        return {"feature_gap": gap}
+    return None
+
+
+def _print_residual_poison_zone(uncovered: list[dict], success_items: list[dict] | None = None) -> None:
     """打印真残留毒区：未覆盖失败笔数 + 模式分布 + 各模式平均净收益 + 集中度提示。
 
     目的：把"下一轮 D 攻击的精确目标"显式化，避免每轮靠猜（历史污染已用 blocked 段处理，
@@ -1177,6 +1220,27 @@ def _print_residual_poison_zone(uncovered: list[dict]) -> None:
                     continue
                 _r = _gmod.single_day_concentration(mode_dates.get(m, []))
                 _verdict = '🚫禁止entry规则' if _r['single_day_driven'] else '✅可验证'
+                # 失败 vs 成功特征可分性复检：模式级跨多日（✅可验证）仍可能「失败与成功
+                # 在关键个股特征上中位数全重叠」——无可分阈值，失败由 regime 驱动而非个股，
+                # entry 侧不可解。把 ✅ 降级为 🚫（no_follow_through 第192轮证伪先例）。
+                # 排除 high_vol(vol5_20>=3)子簇：它已被下方子簇级单日集中护栏单独禁，混进来
+                # 会偶然抬高 vol5_20 失败中位数、误判「可分」。只判 low_vol（模式级 ✅ 真子集）。
+                if not _r['single_day_driven'] and success_items:
+                    _mode_items = [u for u in uncovered
+                                   if _classify_failure_mode_inline(
+                                       exit_reason=u.get('exit_reason') or '',
+                                       executed_return=u.get('executed_return'),
+                                       max_return=u.get('max_return'),
+                                       rsi_12=(u.get('fs') or {}).get('rsi_12'),
+                                       chg20=(u.get('fs') or {}).get('chg20'),
+                                       pos60=(u.get('fs') or {}).get('pos60'),
+                                       setup_type=(u.get('fs') or {}).get('setup_type'),
+                                   ) == m
+                                   and ((u.get('fs') or {}).get('vol5_20') is None
+                                        or float((u.get('fs') or {}).get('vol5_20')) < 3.0)]
+                    _sep = _entry_separability_falsified(_mode_items, success_items)
+                    if _sep is not None:
+                        _verdict = '🚫个股特征与成功样本中位数全重叠(regime驱动非个股,entry侧不可解)'
                 _guard_lines.append(
                     f'    - {m}: 独立日={_r["independent_days"]} top={_r["top_day"]}'
                     f'({_r["top_day_ratio"]:.0%}) → {_verdict}'
