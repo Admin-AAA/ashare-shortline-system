@@ -1030,6 +1030,7 @@ def _print_residual_poison_zone(uncovered: list[dict]) -> None:
 
     modes: Counter = Counter()
     mode_rets: dict[str, list[float]] = {}
+    mode_dates: dict[str, list[str]] = {}
     by_date: Counter = Counter()
     for u in uncovered:
         fs = u['fs']
@@ -1060,7 +1061,9 @@ def _print_residual_poison_zone(uncovered: list[dict]) -> None:
         rid = u.get('rid', '')
         # rid 形如 rec_20260707_003_xxxx → 提取交易日
         if '_' in rid:
-            by_date[rid.split('_')[1]] += 1
+            _d = rid.split('_')[1]
+            by_date[_d] += 1
+            mode_dates.setdefault(mode, []).append(_d)
 
     print(f'D 项真残留毒区（未被任何规则覆盖）：{len(uncovered)} 笔（下一轮 D 攻击精确目标）')
     for m, c in modes.most_common():
@@ -1071,6 +1074,60 @@ def _print_residual_poison_zone(uncovered: list[dict]) -> None:
         top_date, top_n = by_date.most_common(1)[0]
         if top_n >= 3:
             print(f'  ⚠️ 单日集中：{top_date} {top_n} 笔（疑似单日 regime 风险，非个股因子可解）')
+
+    # 单日集中度护栏：逐模式判定是否被单一交易日主导。单日（尤其情绪异常日）集中驱动的
+    # 毒区，个股 entry 侧不可解，任何据此加的 entry 规则都是对一个交易日噪声的过拟合
+    # （lessons.md 第187轮：no_follow_through 18笔被多角度证伪，活跃档 up_ratio∈[0.50,0.65)
+    # 28笔全部来自 07-16 单日，剔除后无其它日期样本）。把判定显式化，防每轮重复加规则。
+    try:
+        import importlib.util as _ilu
+        _gpath = os.path.join(os.path.dirname(__file__), 'poison_zone_day_guard.py')
+        if os.path.exists(_gpath):
+            _gspec = _ilu.spec_from_file_location('poison_zone_day_guard_lazy', _gpath)
+            _gmod = _ilu.module_from_spec(_gspec)
+            _gspec.loader.exec_module(_gmod)
+            _guard_lines = []
+            for m, c in modes.most_common():
+                if c < 3:
+                    continue
+                _r = _gmod.single_day_concentration(mode_dates.get(m, []))
+                _verdict = '🚫禁止entry规则' if _r['single_day_driven'] else '✅可验证'
+                _guard_lines.append(
+                    f'    - {m}: 独立日={_r["independent_days"]} top={_r["top_day"]}'
+                    f'({_r["top_day_ratio"]:.0%}) → {_verdict}'
+                )
+            if _guard_lines:
+                print('  毒区单日集中度护栏（单日主导→禁止据其加 entry 规则）:')
+                for _ln in _guard_lines:
+                    print(_ln)
+
+            # 子簇级护栏：模式级绿灯（跨多日）仍可能掩盖「特征子簇集中单日」。
+            # no_follow_through 18笔模式级 top=07-16(44%)→✅，但 vol5_20>=3 子簇 8/9
+            # 集中 07-16（89%）。对最大模式按 vol5_20 高/低分子簇检测隐藏单日集中。
+            if modes:
+                _top_mode = modes.most_common(1)[0][0]
+                _sub_items = []
+                for u in uncovered:
+                    _fs = u['fs']
+                    _m = _classify_failure_mode_inline(
+                        exit_reason=u.get('exit_reason') or '',
+                        executed_return=u.get('executed_return'),
+                        max_return=u.get('max_return'),
+                        rsi_12=_fs.get('rsi_12'), chg20=_fs.get('chg20'),
+                        pos60=_fs.get('pos60'), setup_type=_fs.get('setup_type'),
+                    )
+                    if _m != _top_mode or '_' not in u.get('rid', ''):
+                        continue
+                    _v = _fs.get('vol5_20')
+                    _cl = 'high_vol(>=3)' if (_v is not None and _v >= 3) else 'low_vol(<3)'
+                    _sub_items.append((_cl, u['rid'].split('_')[1]))
+                _worst = _gmod.subcluster_day_concentration(_sub_items)
+                if _worst:
+                    print(f'  ⚠️ 子簇级单日集中：{_top_mode} 的 {_worst["cluster_key"]} 子簇 '
+                          f'{_worst["n"]}笔中 {_worst["top_day_ratio"]:.0%} 集中 {_worst["top_day"]}'
+                          f' — 模式级绿灯掩盖子簇单日风险，勿据该子簇加 entry 规则（过拟合单日）')
+    except Exception:
+        pass
 
     # base x sentiment 交叉分布：定位"弱势·活跃是真毒区"类 regime 误判根因。
     # feature_snapshot 存 market_regime（base）+ market_sentiment_phase（sentiment），
