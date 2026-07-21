@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Database,
   PlayCircle,
+  ShieldCheck,
   TrendingUp,
 } from "lucide-react";
 import { api } from "../api/client";
@@ -16,6 +17,7 @@ import type {
   HomeBootstrap,
   LlmReviewHealth,
   OutcomeSummary,
+  RunProgress,
   WinRateSummary,
 } from "../types";
 import { CardSkeleton, EmptyState, ErrorPage } from "../components/StateViews";
@@ -180,7 +182,14 @@ export function HomePage() {
         </div>
 
         {/* 右列：龙头候选（视觉重心） */}
-        <CandidatePanel items={recommendations} outcomeMap={outcomeMap} onViewAll={() => navigateSection("pool")} />
+        <CandidatePanel
+          items={recommendations}
+          outcomeMap={outcomeMap}
+          currentRun={current_run}
+          marketRegime={market.regime}
+          onViewAll={() => navigateSection("pool")}
+          onViewHistory={() => navigateSection("history")}
+        />
       </div>
     </div>
   );
@@ -704,11 +713,17 @@ function DataHealthCard({
 function CandidatePanel({
   items,
   outcomeMap,
+  currentRun,
+  marketRegime,
   onViewAll,
+  onViewHistory,
 }: {
   items: CockpitRecommendation[];
   outcomeMap: Record<string, OutcomeSummary>;
+  currentRun?: RunProgress;
+  marketRegime?: string;
   onViewAll: () => void;
+  onViewHistory: () => void;
 }) {
   const top = items.slice(0, 5);
 
@@ -730,15 +745,11 @@ function CandidatePanel({
       }
     >
       {top.length === 0 ? (
-        <EmptyState
-          icon={<AlertTriangle size={28} />}
-          title="当前没有达标龙头候选"
-          reason="可能因为市场温度过低、过滤条件严格或今日尚未运行推荐"
-          action={
-            <button className="btn btn--primary" onClick={onViewAll}>
-              去候选池
-            </button>
-          }
+        <CandidateEmptyState
+          currentRun={currentRun}
+          marketRegime={marketRegime}
+          onViewAll={onViewAll}
+          onViewHistory={onViewHistory}
         />
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "var(--space-3)" }}>
@@ -767,6 +778,75 @@ function CandidatePanel({
         </div>
       )}
     </Panel>
+  );
+}
+
+// 0 候选空状态：按系统运行状态区分「保护性强风控拦截」与「运行异常/未运行」，
+// 避免用户把正确的动态分数线拦截误读为系统故障（北极星 A 项体验缺口）。
+function CandidateEmptyState({
+  currentRun,
+  marketRegime,
+  onViewAll,
+  onViewHistory,
+}: {
+  currentRun?: RunProgress;
+  marketRegime?: string;
+  onViewAll: () => void;
+  onViewHistory: () => void;
+}) {
+  const status = currentRun?.status;
+  const regime = marketRegime?.trim();
+
+  // 运行已完成但 0 候选 = 动态分数线主动拦截（保护准确性），非故障
+  if (status === "completed") {
+    const reason = regime
+      ? `市场处于【${regime}】阶段，动态分数线已按当前市况校准，今日无个股达到推荐阈值（保护推荐准确性）。系统运行正常，非故障。`
+      : "动态分数线已按当前市况校准，今日无个股达到推荐阈值（保护推荐准确性）。系统运行正常，非故障。";
+    return (
+      <EmptyState
+        icon={<ShieldCheck size={28} />}
+        title="今日无达标推荐"
+        reason={reason}
+        action={
+          <button className="btn btn--ghost" onClick={onViewHistory}>
+            查看运行复盘
+            <ChevronRight size={14} />
+          </button>
+        }
+      />
+    );
+  }
+
+  // 运行异常（失败 / 被打断）
+  if (status === "failed" || status === "interrupted") {
+    return (
+      <EmptyState
+        icon={<AlertTriangle size={28} />}
+        title="今日推荐运行异常"
+        reason="最近一次推荐运行未正常完成，可稍后重试或查看运行复盘。"
+        action={
+          <button className="btn btn--ghost" onClick={onViewHistory}>
+            查看运行复盘
+            <ChevronRight size={14} />
+          </button>
+        }
+      />
+    );
+  }
+
+  // 运行中 / 尚未运行
+  const running = status === "running";
+  return (
+    <EmptyState
+      icon={<AlertTriangle size={28} />}
+      title={running ? "推荐运行中" : "今日尚未运行推荐"}
+      reason={running ? "正在扫描候选，请稍候刷新。" : "运行推荐后这里会展示今日达标龙头候选。"}
+      action={
+        <button className="btn btn--primary" onClick={onViewAll}>
+          去候选池
+        </button>
+      }
+    />
   );
 }
 
