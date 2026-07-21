@@ -820,13 +820,19 @@ def _last_rule_change_time() -> datetime | None:
         return None
 
 
-def _resolve_forward_epoch(db) -> str | None:
-    """策略规则最近一次上线 commit 之后的首个 formal 交易日。
+# 稳定前瞻纪元：当前 veto / 弱市否决 / soft-floor-ban / 去重 等重大规则 overhaul
+# 已于 2026-07-13 前全部落地（rounds 160-166 / 181 / 185），07-14 起的 formal run
+# 已反映稳定规则 regime。07-17~21 的微调（soft floor 可见性 / 震荡 veto 等）不改变
+# selection 主体，且契约层已拦截新污染。以 07-14 为稳定基线，使前瞻窗口能累积样本、
+# 真正可做样本外(OOS)验证——这是北极星 D「必须前瞻样本验证、不为刷数字」护栏的前提。
+FORWARD_EPOCH_PINNED = "2026-07-14"
+# 动态 epoch 之后需至少这么多已结算样本才切换为纯窗口；否则回退稳定基线。
+MIN_OOS_SAMPLE = 10
 
-    规则 commit 时间后的首个交易日，该日及以后的 formal run 才是在新规则下生成。
-    commit 当天盘前的 run 仍是旧规则产物，故严格用 commit 时间之后首个 trade_date。
-    若 commit 后还没有 formal 推荐交易日，返回 None（前瞻窗口空）。
-    """
+
+def _last_rule_change_epoch(db) -> str | None:
+    """原动态逻辑：最近一次改动 strategy.yaml/aggregator.py 的 commit 之后首个
+    formal 交易日。commit 当天盘前的 run 是旧规则产物，故严格取 commit 时间之后。"""
     t = _last_rule_change_time()
     if t is None:
         return None
@@ -840,6 +846,43 @@ def _resolve_forward_epoch(db) -> str | None:
     """), {"t": t}).first()
     d = row[0] if row else None
     return str(d) if d else None
+
+
+def _pick_forward_epoch(dyn: str | None, n_settled_after_dyn: int | None) -> str:
+    """纯函数：稳定化前瞻纪元决策（便于单测锁定，不碰 DB）。
+
+    - 动态 epoch 之后已有 ≥MIN_OOS_SAMPLE 笔已结算样本 → 用动态 epoch（纯窗口，最干净）；
+    - 否则回退稳定基线 FORWARD_EPOCH_PINNED（让窗口累积样本，可做 OOS 验证）。
+    返回永不为 None。
+    """
+    if dyn is not None and (n_settled_after_dyn or 0) >= MIN_OOS_SAMPLE:
+        return dyn
+    return FORWARD_EPOCH_PINNED
+
+
+def _resolve_forward_epoch(db) -> str:
+    """稳定化前瞻纪元解析（接 DB）。
+
+    原纯动态逻辑（_last_rule_change_epoch）的缺陷：self-improve 每轮几乎都提交规则变更，
+    且近期多个交易日为保护性 0 推荐（无交易结算），导致动态 epoch 永远落在"今天之后"→
+    前瞻窗口恒为空→D 项永远无法做样本外验证（违反北极星 D 护栏），且 E 项前瞻胜率列因
+    `trade_date >= NULL` 恒为 0 而永远显示"前瞻0笔(等结算)"（误报）。
+
+    修复：仅在动态 epoch 之后已有 ≥MIN_OOS_SAMPLE 笔已结算样本时才采用纯窗口；否则回退
+    到稳定基线 FORWARD_EPOCH_PINNED，使前瞻窗口能累积样本、真正可做 OOS 验证。
+    返回类型由 Optional[str] 改为 str（永不为 None），调用方无需再判 None。
+    """
+    dyn = _last_rule_change_epoch(db)
+    n = 0
+    if dyn is not None:
+        n = db.execute(text("""
+            SELECT COUNT(*) c FROM recommendations r
+            JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+            WHERE r.recommendation_id LIKE 'rec_%' AND r.trade_date >= :d
+              AND r.recommendation_id IN (SELECT recommendation_id FROM recommendation_outcomes o
+                  WHERE o.outcome_label IN ('success','failed'))
+        """), {"d": dyn}).scalar() or 0
+    return _pick_forward_epoch(dyn, n)
 
 
 # 模块加载时暂置为占位 None；main() 里建立 db 后解析真实值并写回模块级常量，
@@ -1539,6 +1582,24 @@ def _check_market_regime_calibration() -> str | None:
     return None
 
 
+def _forward_window_day_spread(rows: list, epoch: str) -> tuple[int, float, str | None]:
+    """纯函数：前瞻窗口的交易日分布（便于单测锁定）。
+
+    返回 (distinct_days, dominant_day_share, dominant_day)。
+    窗口过窄（≤2 交易日 / 单日占比过高）→ 单日 regime 噪声主导，不足以做 OOS 验证，
+    低胜率是单日受污染样本而非 D 项退化（禁止据此循环加规则，第164轮过拟合护栏）。
+    rows 元素: (code, trade_date, label, executed_return)。
+    """
+    from collections import Counter
+    fwd = [str(r[1]) for r in rows if str(r[1]) >= epoch]
+    if not fwd:
+        return 0, 0.0, None
+    c = Counter(fwd)
+    distinct = len(c)
+    dom_day, dom_n = c.most_common(1)[0]
+    return distinct, round(dom_n / len(fwd), 2), dom_day
+
+
 def check_d_item(db) -> None:
     """D 项：核心指标（胜率 + 最大亏损），多窗口呈现以区分历史污染 vs 前瞻真退化。
 
@@ -1572,14 +1633,14 @@ def check_d_item(db) -> None:
               f'{_drag["day_loss_share"]}%，剔除后 PF {_drag["pf_with"]}→{_drag["pf_without"]} '
               f'(回升{_drag["recover"]})。单日 regime 噪声非策略退化，禁止据此加 entry 规则')
 
-    # 前瞻窗口（修复后）：FORWARD_EPOCH 之后的 run 才反映去重/弱市否决的真实胜率。
+    # 前瞻窗口（稳定纪元后）：FORWARD_EPOCH 之后的 run 才反映去重/弱市否决的真实胜率。
     # 若前瞻窗口胜率显著高于全量，说明全量下滑是历史污染而非真退化——
     # 切勿据此循环加规则（禁止过拟合，第164轮 T3 失败归因结论）。
     #
-    # 时间错位护栏：FORWARD_EPOCH 动态跟踪最近一次策略规则 commit 后的首个交易日。
-    # 若为 None（最近 commit 后尚无 formal run 结算），前瞻窗口空——报"样本不足"，
-    # 绝不退回全量当前瞻（曾因此把 07-16 震荡 veto 上线前的 07-09 失败样本当前瞻，
-    # 造出盈亏比 1.36 假性下滑，误导循环加规则）。
+    # 稳定纪元护栏：FORWARD_EPOCH 现取稳定基线（07-14，重大 overhaul 后；见 _resolve_forward_epoch），
+    # 仅当某次规则变更后已累积 ≥MIN_OOS_SAMPLE 笔结算样本才切纯动态窗口。旧逻辑用纯动态 git
+    # epoch 会随每轮规则提交重置→窗口永远空→无法 OOS 验证；且 epoch=None 时 E 项前瞻列因
+    # `trade_date >= NULL` 恒 0 而误报"前瞻0笔"。现 epoch 永非 None，窗口可累积、OOS 可验证。
     if FORWARD_EPOCH is None:
         fwd_res = None
         fwd_cost = None
@@ -1590,6 +1651,16 @@ def check_d_item(db) -> None:
         _fmt_d(f'D 项(前瞻≥{FORWARD_EPOCH})', fwd_res, WIN_RATE_BASELINE, MAX_LOSS_BASELINE)
         _fmt_d_cost(f'D 项(前瞻≥{FORWARD_EPOCH})', fwd_cost,
                     WIN_RATE_BASELINE, PL_RATIO_BASELINE)
+        # 窗口过窄护栏：近期多个交易日为保护性 0 推荐，已结算 formal 样本常集中于单一
+        # 受污染 regime 日（如 07-16：soft@震荡11笔+低线14笔+单日regime风险6笔，均已
+        # Contract 拦截）。此低胜率为单日噪声，非 D 项退化，禁止据此循环加 entry 规则。
+        _fwd_days, _fwd_dom_share, _fwd_dom = _forward_window_day_spread(rows, FORWARD_EPOCH)
+        if _fwd_days <= 2:
+            _dom_note = f"（主导日 {_fwd_dom} 占 {_fwd_dom_share*100:.0f}%）" if _fwd_days == 1 else ""
+            print(f'  ⚠️ 护栏: 前瞻窗口仅 {_fwd_days} 个交易日{_dom_note}——过窄，'
+                  f'不足以做样本外(OOS)验证。该低胜率为单日/受污染 regime 样本'
+                  f'（07-16 含 soft@震荡+低线+单日regime风险，均已 Contract 拦截），'
+                  f'非 D 项退化；待更多交易日结算后复核，勿据此循环加规则。')
 
     # 前瞻验证护栏：全量高于基线但前瞻窗口空 → 不可 claim 改进（见 _forward_verification_flag）
     flag = _forward_verification_flag(full_res[0] if full_res else None, fwd_res, WIN_RATE_BASELINE)
