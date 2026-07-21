@@ -147,6 +147,16 @@ def enrich_signal_with_agent_review(signal: dict[str, Any], review: dict[str, An
         delta = float(review.get("score_delta", 0))
     else:
         delta = float(review.get("score", 50)) - 50.0
+    # T5 一致性（self-improve，2026-07-21）：反对票(oppose)不得为股票加分。
+    # 逻辑：stance=oppose 表示 LLM 明确反对这笔交易，其 score_delta 却可能因
+    # score≥50 而为正，导致"反对票把股票推过 score_line"（self_check 实证 1 笔
+    # oppose 票 WR=0% 因此被推过线）。此处将 oppose 的加分钳到 ≤0——oppose 只能
+    # 中性或减分，绝不能作为股票过线的正向贡献。
+    # 安全性：仅当 stance==oppose 且 delta>0 时行为变化；support/neutral/veto 不变。
+    # 规则分本身已 ≥ 正式地板(72)的股票仍会过线（隐藏强票被保留），只有"靠 oppose
+    # 加分才勉强过线"的边际票被挡下，与"准确>可见"一致，不牺牲真实赢家。
+    if review.get("stance") == "oppose" and delta > 0:
+        delta = 0.0
     enriched["score"] = max(0.0, min(score_cap, float(enriched.get("score", 0)) + delta))
     enriched["confidence"] = max(float(enriched.get("confidence", 0)), float(review.get("confidence", 0)))
     enriched.setdefault("evidence", [])
@@ -166,7 +176,12 @@ def enrich_signal_with_agent_review(signal: dict[str, Any], review: dict[str, An
 
 def agent_only_signal(skill: StrategySkill, stock: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
     if "score_delta" in review:
-        score = 50 + float(review.get("score_delta", 0))
+        delta = float(review.get("score_delta", 0))
+        # T5 一致性（self-improve，2026-07-21）：oppose 不得加分（与 enrich 路径一致）。
+        # agent_only 无规则基线，oppose 即封顶到中性(50)，绝不赖 oppose 加分过线。
+        if review.get("stance") == "oppose" and delta > 0:
+            delta = 0.0
+        score = 50 + delta
     else:
         score = float(review.get("score", 50))
     return {
