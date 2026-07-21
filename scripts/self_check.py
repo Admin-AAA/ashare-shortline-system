@@ -1193,6 +1193,162 @@ def _print_soft_regime_pollution(db) -> None:
     )
 
 
+def _pure_pollution_keys(
+    rows_enriched: list,
+    *,
+    score_floor: float = FORMAL_SCORE_LINE_FLOOR,
+    banned_soft_bases: frozenset[str] | set[str] = frozenset({"震荡"}),
+) -> dict:
+    """从 enriched formal 行提取 pure 污染 (code, trade_date) 集合。
+
+    输入 rows_enriched: [(code, trade_date, label, ret, score_line, soft_applied, market_base), ...]
+    pure_low = 仅 sl<floor 产出且无 hard 孪生
+    pure_soft = 仅 soft@banned_base 产出且无 hard 孪生
+    union = 并集（两污染源正交时 = 和）
+    纯函数，便于单测。
+    """
+    def _truthy(v) -> bool:
+        return v is not None and str(v).lower() in ("1", "true", "yes")
+
+    hard_sl: set[tuple] = set()
+    low_sl: set[tuple] = set()
+    hard_soft: set[tuple] = set()
+    soft_ban: set[tuple] = set()
+    for r in rows_enriched:
+        code, td = r[0], str(r[1])
+        key = (code, td)
+        sl = float(r[4] or 0)
+        soft, base = r[5], r[6]
+        if sl >= score_floor:
+            hard_sl.add(key)
+        else:
+            low_sl.add(key)
+        if not _truthy(soft):
+            hard_soft.add(key)
+        elif str(base or "") in banned_soft_bases:
+            soft_ban.add(key)
+    pure_low = low_sl - hard_sl
+    pure_soft = soft_ban - hard_soft
+    return {
+        "pure_low": pure_low,
+        "pure_soft": pure_soft,
+        "union": pure_low | pure_soft,
+    }
+
+
+def _clean_d_counterfactual(
+    dedup_rows: list,
+    pollution_keys: set[tuple],
+    *,
+    last10_dates: set | None = None,
+) -> dict | None:
+    """去 pure 污染后的 D 项反事实（不改主口径，只报告）。
+
+    dedup_rows: _fetch_dedup_live_formal 口径 [(code, trade_date, label, ret), ...]
+    pollution_keys: pure 污染 (code, trade_date)
+    返回 full/last10 的 raw vs clean 净成本指标 + 关键结论。
+    """
+    if not dedup_rows:
+        return None
+    clean_rows = [
+        r for r in dedup_rows
+        if (r[0], str(r[1])) not in pollution_keys
+    ]
+    if last10_dates is None:
+        dates = sorted({str(r[1]) for r in dedup_rows})
+        last10_dates = set(dates[-10:]) if dates else set()
+    full_raw = _compute_d_cost(dedup_rows)
+    full_clean = _compute_d_cost(clean_rows)
+    l10_raw = _compute_d_cost(dedup_rows, trade_dates=last10_dates)
+    l10_clean = _compute_d_cost(clean_rows, trade_dates=last10_dates)
+    if full_raw is None:
+        return None
+    return {
+        "pollution_n": len(pollution_keys),
+        "full_raw": full_raw,
+        "full_clean": full_clean,
+        "last10_raw": l10_raw,
+        "last10_clean": l10_clean,
+        # 关键诊断：污染主要伤 WR 还是 PL
+        "wr_delta_full": (
+            round(full_clean["net_wr"] - full_raw["net_wr"], 1)
+            if full_clean else None
+        ),
+        "pl_delta_full": (
+            round(full_clean["net_pl"] - full_raw["net_pl"], 2)
+            if full_clean else None
+        ),
+        "wr_delta_last10": (
+            round(l10_clean["net_wr"] - l10_raw["net_wr"], 1)
+            if l10_raw and l10_clean else None
+        ),
+        "pl_delta_last10": (
+            round(l10_clean["net_pl"] - l10_raw["net_pl"], 2)
+            if l10_raw and l10_clean else None
+        ),
+    }
+
+
+def _print_clean_d_counterfactual(db) -> None:
+    """D 项：低线+soft@震荡 合并去污染反事实（接 DB）。
+
+    背景（2026-07-21 T16）：两道污染护栏各自报 WR 提升，但近10日净 PL 1.65
+    是否被污染解释不清楚 → 误把 PL 压缩当 entry 可解。本函数合并 pure 污染源，
+    对全量/近10日同时报去污染后 WR 与净 PL，并点明「WR 回升但 PL 仍弱」时
+    主因在出场/regime 而非 entry。
+    """
+    raw = db.execute(text("""
+        SELECT r.code, r.trade_date, o.outcome_label, o.executed_return, u.score_line,
+               JSON_EXTRACT(r.feature_snapshot_json,
+                            '$.score_line_meta.dynamic_soft_floor_applied') AS soft,
+               JSON_UNQUOTE(JSON_EXTRACT(r.feature_snapshot_json,
+                            '$.score_line_meta.market_base')) AS mbase
+        FROM recommendation_outcomes o
+        JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+        WHERE o.outcome_label IN ('success', 'failed')
+          AND r.recommendation_id LIKE 'rec_%'
+    """)).fetchall()
+    keys = _pure_pollution_keys(list(raw))
+    if not keys["union"]:
+        return
+    dedup = _fetch_dedup_live_formal(db)
+    dates = sorted({str(r[1]) for r in dedup})
+    last10 = set(dates[-10:]) if dates else set()
+    cf = _clean_d_counterfactual(dedup, keys["union"], last10_dates=last10)
+    if cf is None or cf["full_clean"] is None:
+        return
+    fr, fc = cf["full_raw"], cf["full_clean"]
+    print(
+        f'  ℹ️ 去污染反事实（pure 低线 {len(keys["pure_low"])} + soft@震荡 {len(keys["pure_soft"])}'
+        f' = {cf["pollution_n"]} 独立票，不改主口径）:'
+    )
+    print(
+        f'     全量 净WR {fr["net_wr"]}%→{fc["net_wr"]}% (Δ{cf["wr_delta_full"]:+}pp)'
+        f' | 净PL {fr["net_pl"]}→{fc["net_pl"]} (Δ{cf["pl_delta_full"]:+})'
+        f' | 净均 {fr["net_avg"]}%→{fc["net_avg"]}% | n {fr["n"]}→{fc["n"]}'
+    )
+    lr, lc = cf["last10_raw"], cf["last10_clean"]
+    if lr and lc and cf["wr_delta_last10"] is not None:
+        print(
+            f'     近10日 净WR {lr["net_wr"]}%→{lc["net_wr"]}% (Δ{cf["wr_delta_last10"]:+}pp)'
+            f' | 净PL {lr["net_pl"]}→{lc["net_pl"]} (Δ{cf["pl_delta_last10"]:+})'
+            f' | 净均 {lr["net_avg"]}%→{lc["net_avg"]}% | n {lr["n"]}→{lc["n"]}'
+        )
+        # PL 几乎不动但 WR 回升 → 污染解释不了盈亏比，禁止据此加 entry
+        if abs(cf["pl_delta_last10"] or 0) < 0.05 and (cf["wr_delta_last10"] or 0) >= 3:
+            print(
+                f'     ——近10日去污染后 WR 回升但净 PL 几乎不变（{lr["net_pl"]}→{lc["net_pl"]}）：'
+                f'PL 压缩主因不在低线/soft 污染，勿加 entry 规则；'
+                f'查出场结构/单日 regime（trailing 过早锁利、震荡日）'
+            )
+        elif (cf["pl_delta_last10"] or 0) >= 0.1:
+            print(
+                f'     ——近10日去污染后净 PL 回升：历史污染是主拖累之一，'
+                f'契约层+soft ban 已拦截新污染，等前瞻 formal 结算确认'
+            )
+
+
 def _single_day_pl_drag(rows: list, trade_dates: set) -> dict | None:
     """纯函数：诊断近 N 日窗口内 PF 是否被单一交易日拖累（单日 regime 噪声 vs 真退化）。
 
@@ -1446,6 +1602,8 @@ def check_d_item(db) -> None:
     _print_low_score_line_pollution(db)
     # soft@震荡 历史污染护栏（aggregator 已禁，历史票仍拖近10日 PL）
     _print_soft_regime_pollution(db)
+    # 两道污染合并去污染反事实：近10日 WR vs PL 是否同向回升（防误判 PL=污染）
+    _print_clean_d_counterfactual(db)
 
     # 单日集中度诊断（独立股票口径）：防止单日异常高量扭曲 D 项判断。
     # 已改用独立股票数（同股同日多 run 只算 1 只），避免"单日 N 笔"假警报——
