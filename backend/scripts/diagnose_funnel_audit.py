@@ -30,7 +30,7 @@ import json
 import os
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 # 名义地板：与 app/services/runs/contracts.py:FORMAL_SCORE_LINE_FLOOR=72.0 对齐
 NOMINAL_FLOOR = 72.0
@@ -436,6 +436,44 @@ def render_t1_counterfactual(buckets: list[T1Bucket]) -> str:
     return "\n".join(lines)
 
 
+def resolve_suspects_with_t1(results: list[RunFunnel], buckets: list[T1Bucket]) -> list[RunFunnel]:
+    """用 T+1 反事实 at_floor_plus 桶（final≥地板、被 regime 有效线拦下的候选）判定 per-run 的
+    gate_misblock_suspect 是否误报。纯函数，不连库、不改输入，返回新列表。
+
+    规则（与 render_t1_counterfactual 说明一致）：
+      - at_floor_plus 桶 T+1 净正（avg>0 且 WR>=50%）才构成 gate_misblock 下沉规则的生产等价反事实；
+      - 若 at_floor_plus 桶净负（avg<=0 或 WR<50%），说明 regime 线整体上是在保护而非误拦，
+        per-run 的 gate_misblock_suspect 属误报，下调为 gate_misblock_resolved_false（不改规则、不改结论）；
+      - 若 at_floor_plus 无样本（n=0，T+1 数据缺失），证据不足，保守保留 suspect 不自动清除。
+    """
+    at_floor = next((b for b in buckets if b.label.startswith("at_floor_plus")), None)
+    protective = False
+    if at_floor and at_floor.n > 0:
+        wr = at_floor.wins / at_floor.n
+        protective = (at_floor.avg <= 0) or (wr < 0.5)
+    if not protective:
+        return results  # 净正或证据不足：保留 suspect，需更深 per-run 复核
+
+    out: list[RunFunnel] = []
+    for rf in results:
+        if rf.classification == "gate_misblock_suspect":
+            rf2 = replace(
+                rf,
+                classification="gate_misblock_resolved_false",
+                classification_note=(
+                    rf.classification_note
+                    + f" T+1 反事实复核(at_floor_plus 桶 n={at_floor.n} "
+                    f"WR={at_floor.wins / at_floor.n * 100:.1f}% avg={at_floor.avg:+.2f}%)："
+                    f"regime 线拦下的 final≥地板候选 T+1 净负，证实整体保护性，"
+                    f"本 suspect 为误报——保留 formal 防线，不降线凑票。"
+                ),
+            )
+            out.append(rf2)
+        else:
+            out.append(rf)
+    return out
+
+
 def audit_run(db, run_id: str, floor: float = NOMINAL_FLOOR, top_k: int = 3) -> RunFunnel | None:
     from sqlalchemy import text
 
@@ -506,6 +544,16 @@ def main() -> None:
             print("无 completed=0 formal run 可审计。")
             return
 
+        # T+1 反事实：把「须用反事实证明误拦净正」从口号变成自动化证据。
+        # 即便全部 legitimate_empty（最高候选<地板），T+1 反事实也能揭示「被拦候选整体 T+1 是否净负」——
+        # 净负=防线正确，净正=地板边缘有 alpha 候选（须 P0 backtest 复核，不直接降地板）。
+        # 计算后即刻用 at_floor_plus 桶把 per-run 的 gate_misblock_suspect 自动复核/降级，
+        # 让汇总不再 perpetual 标记已证伪的嫌疑（证据不足时保守保留 suspect）。
+        buckets = None
+        if args.t1:
+            buckets = compute_t1_counterfactual(db, results)
+            results = resolve_suspects_with_t1(results, buckets)
+
         for rf in results:
             print(render_funnel(rf))
             print()
@@ -521,21 +569,22 @@ def main() -> None:
         suspect = cnt.get("gate_misblock_suspect", 0)
         fault = cnt.get("data_fault", 0)
         scoped = cnt.get("scoped_run", 0)
+        resolved = cnt.get("gate_misblock_resolved_false", 0)
         print(f"\n结论速读: legitimate_empty={legit}（市场缺合格候选/边际合格, 保留防线） "
-              f"gate_misblock_suspect={suspect}（需反事实复核） data_fault={fault}（先查故障） "
-              f"scoped_run={scoped}（范围受限, 不计入主因）")
-        if fault == 0 and suspect == 0 and legit > 0:
+              f"gate_misblock_suspect={suspect}（需反事实复核） "
+              f"gate_misblock_resolved_false={resolved}（T+1 证实误报） "
+              f"data_fault={fault}（先查故障） scoped_run={scoped}（范围受限, 不计入主因）")
+        if fault == 0 and suspect == 0 and resolved > 0 and legit > 0:
+            print(f"→ {resolved} 个 gate_misblock_suspect 经 T+1 反事实证实为误报（regime 线整体保护性，"
+                  f"拦下的 final≥地板候选 T+1 净负），本轮 0 推荐为合理主动空仓，保留 formal 防线，不降线凑票。")
+        elif fault == 0 and suspect == 0 and legit > 0:
             print("→ 本轮 0 推荐为合理主动空仓（市场级已验证风险），保留 formal 防线，不降线凑票。")
         elif suspect > 0:
             print("→ 存在强候选被 regime 抬线误拦嫌疑，须用生产等价反事实证明误拦净正候选后方可下沉/下调，证据不足保留为 experiment。")
         elif fault > 0:
             print("→ 存在疑似运行/数据故障，优先排查快照/范围异常，修复后仅验证故障消失，不顺势改策略。")
 
-        # T+1 反事实：把「须用反事实证明误拦净正」从口号变成自动化证据。
-        # 即使全部 legitimate_empty（最高候选<地板），T+1 反事实也能揭示「被拦候选整体 T+1 是否净负」——
-        # 净负=防线正确，净正=地板边缘有 alpha 候选（须 P0 backtest 复核，不直接降地板）。
-        if args.t1:
-            buckets = compute_t1_counterfactual(db, results)
+        if args.t1 and buckets is not None:
             print()
             print(render_t1_counterfactual(buckets))
     finally:

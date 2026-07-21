@@ -7,7 +7,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from diagnose_funnel_audit import (  # noqa: E402
     NOMINAL_FLOOR,
+    T1Bucket,
     T1_NEAR_FLOOR_LOW,
+    RunFunnel,
     _bucketize,
     classify_zero_run,
     extract_blocked_candidates,
@@ -15,6 +17,7 @@ from diagnose_funnel_audit import (  # noqa: E402
     extract_near_misses,
     extract_stages,
     parse_funnel,
+    resolve_suspects_with_t1,
 )
 
 
@@ -186,3 +189,49 @@ def test_t1_bucket_boundary_floor_plus_includes_floor():
     assert bf.n == 1 and bn.n == 1
     # 验证边界常量自洽：near_floor 上界 == NOMINAL_FLOOR
     assert T1_NEAR_FLOOR_LOW == NOMINAL_FLOOR - 4.0
+
+
+def _suspect_funnel() -> RunFunnel:
+    """构造一个 gate_misblock_suspect run（最高候选 83.65 ≥ 地板+8，被 regime 线拦下）。"""
+    audit = _audit(83.65, 93.2)
+    return parse_funnel("run_s", "2026-07-21", 4950, 0, audit)
+
+
+def test_resolve_suspects_resolved_when_at_floor_plus_net_negative():
+    """at_floor_plus 桶 T+1 净负（WR25% avg-1.95）→ regime 线保护性，suspect 自动证伪为误报。"""
+    rf = _suspect_funnel()
+    assert rf.classification == "gate_misblock_suspect"
+    buckets = [
+        T1Bucket("near_floor([68,72))", 0, 0, 0.0, 0.0),
+        T1Bucket("at_floor_plus(>=72)", 12, 3, -1.95, 0.27),  # WR25% 净负
+        T1Bucket("all_blocked", 0, 0, 0.0, 0.0),
+    ]
+    out = resolve_suspects_with_t1([rf], buckets)
+    assert out[0].classification == "gate_misblock_resolved_false"
+    assert "T+1 反事实复核" in out[0].classification_note
+    # 不原地改输入
+    assert rf.classification == "gate_misblock_suspect"
+
+
+def test_resolve_suspects_kept_when_at_floor_plus_net_positive():
+    """at_floor_plus 桶 T+1 净正（WR75% avg+1.20）→ 构成 gate_misblock 反事实，保留 suspect 不降级。"""
+    rf = _suspect_funnel()
+    buckets = [
+        T1Bucket("at_floor_plus(>=72)", 12, 9, 1.20, 2.5),  # WR75% 净正
+        T1Bucket("near_floor([68,72))", 0, 0, 0.0, 0.0),
+        T1Bucket("all_blocked", 0, 0, 0.0, 0.0),
+    ]
+    out = resolve_suspects_with_t1([rf], buckets)
+    assert out[0].classification == "gate_misblock_suspect"
+
+
+def test_resolve_suspects_kept_when_no_at_floor_plus_data():
+    """at_floor_plus 无样本（n=0，T+1 数据缺失）→ 证据不足，保守保留 suspect 不自动清除。"""
+    rf = _suspect_funnel()
+    buckets = [
+        T1Bucket("at_floor_plus(>=72)", 0, 0, 0.0, 0.0),
+        T1Bucket("near_floor([68,72))", 0, 0, 0.0, 0.0),
+        T1Bucket("all_blocked", 0, 0, 0.0, 0.0),
+    ]
+    out = resolve_suspects_with_t1([rf], buckets)
+    assert out[0].classification == "gate_misblock_suspect"
