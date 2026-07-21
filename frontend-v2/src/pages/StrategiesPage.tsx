@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, FileText, History, Layers, Target } from "lucide-react";
 import { api } from "../api/client";
-import type { DateRangeMeta, StrategyListItem, StrategyPerformance } from "../types";
+import type { DateRangeMeta, PresetStatsRow, StrategyListItem, StrategyPerformance } from "../types";
 import { ErrorPage, EmptyState, PageSkeleton } from "../components/StateViews";
 import { Panel } from "../components/Panel";
 import { useApi } from "../app/useApi";
@@ -31,14 +31,69 @@ const HORIZONS = [
 ];
 
 export function StrategiesPage() {
+  const [tab, setTab] = useState<"skills" | "presets">("skills");
   const [windowDays, setWindowDays] = useState<number | null>(null);
-  const { data, loading, error } = useApi<StrategyListItem[]>(
+  const skills = useApi<StrategyListItem[]>(
     () => api.strategies(windowDays ?? undefined),
     [windowDays],
   );
+  // 预设表现：后端 /api/stats/by-preset 已有完整数据，此前无任何页面消费（T7-C 缺口）。
+  const presets = useApi<PresetStatsRow[]>(() => api.statsByPreset());
 
-  if (loading) return <PageSkeleton title="策略清单" hint="加载策略与胜率" rowCount={8} />;
-  if (error) return <ErrorPage title="策略加载失败" message={error} />;
+  return (
+    <Panel
+      kicker="策略"
+      title="策略清单"
+      actions={
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+          <TabButton active={tab === "skills"} onClick={() => setTab("skills")}>策略</TabButton>
+          <TabButton active={tab === "presets"} onClick={() => setTab("presets")}>预设表现</TabButton>
+        </div>
+      }
+    >
+      {tab === "skills" ? (
+        <SkillsView skills={skills} windowDays={windowDays} setWindowDays={setWindowDays} />
+      ) : (
+        <PresetsView presets={presets} />
+      )}
+    </Panel>
+  );
+}
+
+/** 克制 tab 切换：复用既有窗口按钮视觉语言，不引入新样式/弹窗。 */
+function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: "4px 12px",
+        fontSize: 12,
+        borderRadius: 4,
+        border: "1px solid var(--border)",
+        background: active ? "var(--accent, #2563eb)" : "var(--surface-soft)",
+        color: active ? "#fff" : "var(--muted)",
+        cursor: "pointer",
+        fontWeight: active ? 600 : 400,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** 原策略清单视图（已调用/未调用卡片网格 + 时间窗口） */
+function SkillsView({
+  skills,
+  windowDays,
+  setWindowDays,
+}: {
+  skills: { data: StrategyListItem[] | null; loading: boolean; error: string };
+  windowDays: number | null;
+  setWindowDays: (v: number | null) => void;
+}) {
+  if (skills.loading) return <PageSkeleton title="策略清单" hint="加载策略与胜率" rowCount={8} />;
+  if (skills.error) return <ErrorPage title="策略加载失败" message={skills.error} />;
+  const data = skills.data;
   if (!data || data.length === 0) {
     return <EmptyState icon={<Layers size={32} />} title="暂无策略" reason="系统尚未注册任何策略" />;
   }
@@ -48,15 +103,7 @@ export function StrategiesPage() {
   const coverage = Math.round((called.length / data.length) * 100);
 
   return (
-    <Panel
-      kicker="策略"
-      title="策略清单"
-      actions={
-        <span style={{ marginLeft: "auto", color: "var(--muted)", fontSize: "var(--text-base)" }}>
-          {data.length} 个策略 · {called.length} 已调用 · 覆盖 {coverage}%
-        </span>
-      }
-    >
+    <>
       {/* 时间窗口 */}
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", padding: "var(--space-2) 0 var(--space-4)", flexWrap: "wrap" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
@@ -102,7 +149,78 @@ export function StrategiesPage() {
           <DormantCard key={s.skill_id} item={s} />
         ))}
       </div>
-    </Panel>
+    </>
+  );
+}
+
+/**
+ * 预设表现视图（T7-C 缺口填补）：消费 /api/stats/by-preset，
+ * 直接服务北极星 E「策略曝光公平度」——从 preset 维度看各运行组合的样本数/胜率/均收益，
+ * 与「策略」tab 的 skill 维度互补。表格化、等宽数字、涨红跌绿、样本<20 显式标注噪声。
+ */
+function PresetsView({ presets }: { presets: { data: PresetStatsRow[] | null; loading: boolean; error: string } }) {
+  if (presets.loading) return <PageSkeleton title="预设表现" hint="加载预设胜率" rowCount={6} />;
+  if (presets.error) return <ErrorPage title="预设加载失败" message={presets.error} />;
+  const rows = presets.data;
+  if (!rows || rows.length === 0) {
+    return <EmptyState icon={<Layers size={32} />} title="暂无预设表现" reason="系统尚未登记任何运行预设" />;
+  }
+  return <PresetTable rows={rows} />;
+}
+
+/** 预设表现表格：列 = 预设 / 运行数 / 推荐样本 / 胜率 / 均收益 / 均分 / 最近运行。
+ * 克制：bold 只落胜率与均收益两个 D 项核心数字；其余安静；涨红跌绿按 A 股语义。 */
+function PresetTable({ rows }: { rows: PresetStatsRow[] }) {
+  const sorted = [...rows].sort((a, b) => (b.hit_rate ?? -1) - (a.hit_rate ?? -1));
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" }}>
+        <thead>
+          <tr style={{ color: "var(--muted)", fontSize: "var(--text-xs)", textAlign: "right" }}>
+            <th style={{ textAlign: "left", padding: "var(--space-2) var(--space-3)", fontWeight: 500 }}>预设</th>
+            <th style={{ padding: "var(--space-2) var(--space-3)", fontWeight: 500 }}>运行</th>
+            <th style={{ padding: "var(--space-2) var(--space-3)", fontWeight: 500 }}>推荐样本</th>
+            <th style={{ padding: "var(--space-2) var(--space-3)", fontWeight: 500 }}>胜率</th>
+            <th style={{ padding: "var(--space-2) var(--space-3)", fontWeight: 500 }}>均收益</th>
+            <th style={{ padding: "var(--space-2) var(--space-3)", fontWeight: 500 }}>均分</th>
+            <th style={{ textAlign: "left", padding: "var(--space-2) var(--space-3)", fontWeight: 500 }}>最近运行</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((r) => {
+            const win = r.hit_rate;
+            const winColor =
+              win == null ? "var(--muted)" : win >= 0.6 ? "var(--market-up)" : win >= 0.5 ? "var(--market-up)" : "var(--market-down)";
+            const ret = r.avg_return;
+            const retColor = ret == null ? "var(--muted)" : ret >= 0 ? "var(--market-up)" : "var(--market-down)";
+            // 统计可信度：样本<20 时胜率属噪声（与 skill 卡片同源阈值），显式标注防过度信任
+            const lowSample = (r.recommendation_count ?? 0) < 20;
+            return (
+              <tr key={r.preset_id ?? r.preset_name} style={{ borderTop: "1px solid var(--border)", fontSize: "var(--text-sm)" }}>
+                <td style={{ textAlign: "left", padding: "var(--space-3) var(--space-3)", color: "var(--text)" }}>{r.preset_name}</td>
+                <td style={{ padding: "var(--space-3) var(--space-3)", color: "var(--muted)" }}>{r.run_count}</td>
+                <td style={{ padding: "var(--space-3) var(--space-3)", color: lowSample ? "var(--warning, #b45309)" : "var(--muted)" }}>
+                  {r.recommendation_count}
+                  {lowSample ? " ⚠" : ""}
+                </td>
+                <td style={{ padding: "var(--space-3) var(--space-3)", fontWeight: 700, color: winColor }}>
+                  {win == null ? "—" : `${(win * 100).toFixed(1)}%`}
+                </td>
+                <td style={{ padding: "var(--space-3) var(--space-3)", fontWeight: 600, color: retColor }}>
+                  {ret == null ? "—" : `${ret >= 0 ? "+" : ""}${ret.toFixed(2)}%`}
+                </td>
+                <td style={{ padding: "var(--space-3) var(--space-3)", color: "var(--muted)" }}>
+                  {r.avg_score == null ? "—" : r.avg_score.toFixed(1)}
+                </td>
+                <td style={{ textAlign: "left", padding: "var(--space-3) var(--space-3)", color: "var(--muted)" }}>
+                  {r.last_run_at ?? "—"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
