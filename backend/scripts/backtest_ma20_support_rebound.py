@@ -36,14 +36,19 @@ def _connect():
 
 
 def load_data(start: str) -> pd.DataFrame:
+    # OOS-INTEGRITY FIX (round-?? T1): rsi_12 / macd / chip_winner_rate are ONLY
+    # populated for recent ~25-53 trade days (backfill gap). Filtering on
+    # `rsi_12 IS NOT NULL` collapsed the cohort to a single period, so the
+    # "rolling-OOS" verdicts below were actually single-period. We drop rsi_12
+    # and use bias_ma20 (close vs ma20, both full-history) as the momentum proxy.
     conn = _connect()
     sql = f"""
         SELECT code, trade_date, close, ma20, ma60, vol_ratio_5, vol_ratio_20,
-               rsi_12, max_dd20, turnover_rate, pct_chg, breakout20
+               max_dd20, turnover_rate, pct_chg, breakout20
         FROM daily_kbars
         WHERE trade_date >= '{start}'
           AND ma20 > 0 AND ma60 > 0 AND vol_ratio_5 IS NOT NULL
-          AND rsi_12 IS NOT NULL AND max_dd20 IS NOT NULL
+          AND max_dd20 IS NOT NULL
           AND turnover_rate IS NOT NULL AND close > 0
         ORDER BY code, trade_date
     """
@@ -74,12 +79,12 @@ def forward_returns(df: pd.DataFrame):
 # ── Factor hypotheses ──
 def f_post_limitup_pullback(d: pd.DataFrame) -> pd.Series:
     """二波前兆：近期涨停(强资金介入) + 首调不破(洗盘非出货) + 缩量 + 站上ma20。
-    Causal: 涨停=主力确认；回踩不破ma20=筹码稳定；缩量=惜售；二波启动概率高。"""
+    Causal: 涨停=主力确认；回踩不破ma20=筹码稳定；缩量=惜售；二波启动概率高。
+    (动量代理用 bias_ma20∈[-3,8] 替代原 rsi_12∈[40,65]，rsi 仅近期有值)"""
     return (
         d["lim5"]
-        & d["bias_ma20"].between(-6.0, 2.0)
+        & d["bias_ma20"].between(-3.0, 8.0)
         & (d["vol_ratio_5"] < 0.9)
-        & d["rsi_12"].between(40, 65)
         & d["trend_up"]
         & (d["turnover_rate"] >= 1.0)
     ).fillna(False)
@@ -87,23 +92,24 @@ def f_post_limitup_pullback(d: pd.DataFrame) -> pd.Series:
 
 def f_platform_breakout_vol(d: pd.DataFrame) -> pd.Series:
     """平台突破放量：breakout20 + 量能放大确认 + 多头结构 + 适度动量。
-    Causal: 平台突破=供给耗尽；放量=主力启动；非追高(动量适中)。"""
+    Causal: 平台突破=供给耗尽；放量=主力启动；非追高(动量适中)。
+    (动量代理用 bias_ma20∈[-1,12] 替代原 rsi_12∈[50,72])"""
     return (
         (d["breakout20"] == 1)
         & (d["vol5_20"] >= 1.3)
-        & d["rsi_12"].between(50, 72)
+        & d["bias_ma20"].between(-1.0, 12.0)
         & d["trend_up"]
-        & d["bias_ma20"].between(-3.0, 8.0)
         & (d["turnover_rate"] >= 1.0)
     ).fillna(False)
 
 
 def f_volume_capitulation(d: pd.DataFrame) -> pd.Series:
     """地量见地价反转：极端缩量 + 超卖 + 当日转强 + 趋势结构未破坏。
-    Causal: 地量=抛压极致；超卖=估值修复空间；当日转强=止跌信号。"""
+    Causal: 地量=抛压极致；超卖=估值修复空间；当日转强=止跌信号。
+    (超卖代理用 bias_ma20<-6 替代原 rsi_12<35，rsi 仅近期有值)"""
     return (
         (d["vol_ratio_5"] < 0.5)
-        & (d["rsi_12"] < 35)
+        & (d["bias_ma20"] < -6.0)
         & (d["pct_chg"] > 0)
         & (d["max_dd20"] >= -12.0)
         & d["trend_up"]
