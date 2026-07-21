@@ -2752,6 +2752,22 @@ def _merge_run_params(db: Session, preset: Preset | None, payload: dict[str, Any
     for key in ("matrix_batch_id", "matrix_batch_name", "matrix_run", "trade_date_override"):
         if key in payload:
             params[key] = payload.get(key)
+    # formal 模式 score_line 硬地板（与 RunRequest 契约一致）：matrix/手动降线不得
+    # 污染 LIVE formal 推荐口径。run_mode 在 payload 显式给出时立刻夹；未给出时由
+    # parse_run_request 默认 formal 再夹一次（契约层兜底）。
+    from app.services.runs.contracts import FORMAL_SCORE_LINE_FLOOR, RunMode
+
+    run_mode_raw = payload.get("run_mode") or payload.get("mode") or params.get("run_mode")
+    if run_mode_raw is None or str(run_mode_raw).lower() == RunMode.FORMAL.value:
+        if float(params["score_line"]) < FORMAL_SCORE_LINE_FLOOR:
+            logger.warning(
+                "formal score_line %.1f < floor %.1f，抬到地板（preset=%s run_name=%s）",
+                float(params["score_line"]),
+                FORMAL_SCORE_LINE_FLOOR,
+                params.get("preset_id"),
+                params.get("run_name"),
+            )
+            params["score_line"] = float(FORMAL_SCORE_LINE_FLOOR)
     return params
 
 

@@ -54,6 +54,12 @@ class DataSourceId(str, Enum):
 
 RUN_REQUEST_SCHEMA_VERSION = 1
 
+# formal 模式 score_line 硬地板（默认 72）。
+# 实证（2026-07-21 T3）：matrix/手动曾把 score_line=55 写入 formal run
+# （preset_formal_opening 07-16 14 票 WR 仅 39% 拖累近 10 日净盈亏比），
+# experiment 可继续用更低线喂样本，formal 不允许低于此值污染 D 项口径。
+FORMAL_SCORE_LINE_FLOOR = 72.0
+
 
 class RunStatus(str, Enum):
     QUEUED = "queued"
@@ -263,9 +269,19 @@ class RunRequest(BaseModel):
         if len(skill_ids) != len(set(skill_ids)):
             raise ValueError("skills 不能包含重复的 skill_id")
         ordered = tuple(sorted(self.skills, key=lambda item: (item.sort_order, item.skill_id)))
-        if ordered == self.skills:
+        updates: dict[str, Any] = {}
+        if ordered != self.skills:
+            updates["skills"] = ordered
+        # formal 硬地板：低于 FORMAL_SCORE_LINE_FLOOR 一律抬到地板（不 raise，避免
+        # matrix/旧前端 payload 整批失败；experiment/backtest 不受限）。
+        if (
+            self.run_mode is RunMode.FORMAL
+            and float(self.score_line) < FORMAL_SCORE_LINE_FLOOR
+        ):
+            updates["score_line"] = float(FORMAL_SCORE_LINE_FLOOR)
+        if not updates:
             return self
-        return self.model_copy(update={"skills": ordered})
+        return self.model_copy(update=updates)
 
     @classmethod
     def from_json(cls, raw: str | bytes | bytearray) -> "RunRequest":

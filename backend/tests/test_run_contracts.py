@@ -105,6 +105,33 @@ def test_v1_defaults_are_explicit_and_parser_rejects_implicit_type_coercion():
         assert exc_info.value.code == RunErrorCode.INVALID_REQUEST_SCHEMA.value
 
 
+def test_formal_score_line_below_floor_is_clamped():
+    """formal 模式 score_line < 72 必须抬到地板；experiment/backtest 不受限。
+
+    背景：2026-07-16 matrix 把 score_line=55 写入 formal，14 票拖累近 10 日 PL。
+    """
+    from app.services.runs.contracts import FORMAL_SCORE_LINE_FLOOR
+
+    assert FORMAL_SCORE_LINE_FLOOR == 72.0
+
+    # formal 默认 + 显式 55 → 抬到 72
+    formal_low = parse_run_request({"score_line": 55.0})
+    assert formal_low.run_mode is RunMode.FORMAL
+    assert formal_low.score_line == 72.0
+
+    formal_exact = parse_run_request({"run_mode": "formal", "score_line": 72.0})
+    assert formal_exact.score_line == 72.0
+
+    formal_high = parse_run_request({"run_mode": "formal", "score_line": 80.0})
+    assert formal_high.score_line == 80.0
+
+    # experiment / backtest 可低于地板（补曝光 / 回测对比需要宽松线）
+    exp = parse_run_request({"run_mode": "experiment", "score_line": 55.0})
+    assert exp.score_line == 55.0
+    bt = parse_run_request({"run_mode": "backtest", "score_line": 60.0})
+    assert bt.score_line == 60.0
+
+
 def test_v0_upgrader_maps_legacy_run_fields_without_dropping_identity():
     request = parse_run_request(
         {

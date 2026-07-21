@@ -972,6 +972,110 @@ def _fmt_d_cost(tag: str, m: dict | None, baseline_wr: float, baseline_pl: float
           f'| 平均收益 净 {m["net_avg"]}%/毛 {m["gross_avg"]}%')
 
 
+# formal 硬地板与 RunRequest.FORMAL_SCORE_LINE_FLOOR 对齐；self_check 不强制导入
+# contracts（避免 A/B/C/E 路径负担），常量镜像此处。
+FORMAL_SCORE_LINE_FLOOR = 72.0
+
+
+def _low_score_line_pollution(
+    rows_with_sl: list,
+    *,
+    floor: float = FORMAL_SCORE_LINE_FLOOR,
+) -> dict | None:
+    """纯函数：诊断 formal 推荐是否被低 score_line run 污染。
+
+    输入 rows_with_sl: [(code, trade_date, label, ret, score_line), ...]
+    （同一 (code, trade_date) 可有多条不同 score_line 的 run 产物）。
+
+    返回 None 表示无污染；否则返回污染笔数 / 污染胜率 / 剔除后反事实指标。
+    背景（2026-07-21 T3）：matrix 把 score_line=55 写入 formal（07-16 14 票），
+    近 10 日净盈亏比被拖到 1.65。契约层已加 formal 地板，本护栏暴露历史污染幅度，
+    防未来轮次把"被低线污染的 D 项下滑"误判为策略退化去加 entry 规则。
+    """
+    if not rows_with_sl:
+        return None
+    # 全量：按 (code, date) 去重取最差 ret（与 _fetch_dedup_live_formal 一致）
+    all_best: dict[tuple, tuple] = {}
+    clean_best: dict[tuple, tuple] = {}
+    polluted_best: dict[tuple, tuple] = {}
+    for r in rows_with_sl:
+        code, td, label, ret, sl = r[0], str(r[1]), r[2], r[3], float(r[4] or 0)
+        key = (code, td)
+        row4 = (code, td, label, ret)
+        if key not in all_best or float(ret or 0) < float(all_best[key][3] or 0):
+            all_best[key] = row4
+        if sl >= floor:
+            if key not in clean_best or float(ret or 0) < float(clean_best[key][3] or 0):
+                clean_best[key] = row4
+        else:
+            if key not in polluted_best or float(ret or 0) < float(polluted_best[key][3] or 0):
+                polluted_best[key] = row4
+    if not polluted_best:
+        return None
+    # 仅在"干净总体"里不存在的污染独立票才算真污染（同日同股高线 run 也覆盖则不算）
+    pure_polluted = {
+        k: v for k, v in polluted_best.items() if k not in clean_best
+    }
+    if not pure_polluted:
+        return None
+
+    def _wr(items: list) -> tuple[float, int]:
+        if not items:
+            return 0.0, 0
+        wins = sum(1 for x in items if x[2] == 'success')
+        return round(wins * 100 / len(items), 1), len(items)
+
+    pol_items = list(pure_polluted.values())
+    clean_items = list(clean_best.values())
+    all_items = list(all_best.values())
+    pol_wr, pol_n = _wr(pol_items)
+    clean_wr, clean_n = _wr(clean_items)
+    full_wr, full_n = _wr(all_items)
+    # 按 score_line 分桶计数（只看 pure polluted 来源 run 的 sl）
+    sl_buckets: Counter = Counter()
+    for r in rows_with_sl:
+        key = (r[0], str(r[1]))
+        if key in pure_polluted and float(r[4] or 0) < floor:
+            sl_buckets[float(r[4] or 0)] += 1
+    return {
+        "floor": floor,
+        "polluted_n": pol_n,
+        "polluted_wr": pol_wr,
+        "clean_n": clean_n,
+        "clean_wr": clean_wr,
+        "full_n": full_n,
+        "full_wr": full_wr,
+        "delta_pp": round(clean_wr - full_wr, 1) if clean_n and full_n else 0.0,
+        "sl_buckets": dict(sorted(sl_buckets.items())),
+    }
+
+
+def _print_low_score_line_pollution(db) -> None:
+    """D 项：低 score_line formal run 污染诊断（接 DB）。"""
+    rows = db.execute(text("""
+        SELECT r.code, r.trade_date, o.outcome_label, o.executed_return, u.score_line
+        FROM recommendation_outcomes o
+        JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+        WHERE o.outcome_label IN ('success', 'failed')
+          AND r.recommendation_id LIKE 'rec_%'
+    """)).fetchall()
+    result = _low_score_line_pollution(list(rows))
+    if result is None:
+        return
+    print(
+        f'  ⚠️ 护栏: formal 低 score_line 污染（<{result["floor"]}）独立票 '
+        f'{result["polluted_n"]} 笔 WR={result["polluted_wr"]}% '
+        f'| 剔除后 WR {result["full_wr"]}%→{result["clean_wr"]}% '
+        f'(Δ+{result["delta_pp"]}pp, n={result["clean_n"]}) '
+        f'| sl 分布={result["sl_buckets"]}'
+    )
+    print(
+        f'     ——契约层 FORMAL_SCORE_LINE_FLOOR={result["floor"]} 已拦截新污染；'
+        f'历史低线票不重标（避免刷数字），D 项下滑先查是否低线污染而非策略退化'
+    )
+
+
 def _single_day_pl_drag(rows: list, trade_dates: set) -> dict | None:
     """纯函数：诊断近 N 日窗口内 PF 是否被单一交易日拖累（单日 regime 噪声 vs 真退化）。
 
@@ -1220,6 +1324,9 @@ def check_d_item(db) -> None:
                   f'WR {pol_wr}% (n={pol_n}) vs 干净样本 WR {clean_wr}% (n={clean_n})，差 {delta}pp')
             print(f'     ——污染样本不剔除（避免刷数字），但胜率下滑时先排查是否数据污染扭曲'
                   f'而非策略退化（feature_builder 已加守卫，新数据不污染）')
+
+    # 低 score_line formal 污染护栏（matrix/手动降线 → 低质量票进 LIVE formal 拖累 D）
+    _print_low_score_line_pollution(db)
 
     # 单日集中度诊断（独立股票口径）：防止单日异常高量扭曲 D 项判断。
     # 已改用独立股票数（同股同日多 run 只算 1 只），避免"单日 N 笔"假警报——
