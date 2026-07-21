@@ -15,6 +15,8 @@ from scripts.failure_attribution import (  # noqa: E402
     classify_failure_mode,
     _veto_net_effect,
     veto_passes_guard,
+    sweep_veto_candidates,
+    DEFAULT_VETO_CANDIDATES,
 )
 
 
@@ -245,3 +247,44 @@ def test_veto_net_effect_noop():
     assert res["removed_n"] == 0
     assert res["delta_net_return"] == 0.0
     assert veto_passes_guard(res)
+
+
+# --------------------------------------------------------------------------- #
+# veto 候选扫描（D 攻击护栏·一键否决筛查，2026-07-21 新增）
+# --------------------------------------------------------------------------- #
+def test_sweep_veto_candidates_flags_overfit_defaults():
+    # 复刻真实 LIVE formal 账本性质：每个默认候选 veto 都「删赢多于亏、净收益↓」
+    # → 全部被护栏 BLOCK。锁定「当前账本无干净 D 攻击」发现，防未来轮次重复尝试
+    # 这些已知过拟合候选（pos60>90 / chg20>50 / rsi<45 / pos60<50&rsi<50）。
+    recs = [
+        _mk_rec("w1", "success", 8.0, {"pos60": 95, "chg20": 60, "rsi_12": 70}),  # pos60>90 赢
+        _mk_rec("f1", "failed", -2.0, {"pos60": 96, "chg20": 55, "rsi_12": 72}),  # pos60>90 亏
+        _mk_rec("w2", "success", 6.0, {"pos60": 30, "chg20": 60, "rsi_12": 68}),  # chg20>50 赢
+        _mk_rec("f2", "failed", -1.5, {"pos60": 40, "chg20": 55, "rsi_12": 66}),  # chg20>50 亏
+        _mk_rec("w3", "success", 5.0, {"pos60": 50, "chg20": 10, "rsi_12": 30}),  # rsi<45 赢
+        _mk_rec("f3", "failed", -1.0, {"pos60": 55, "chg20": 12, "rsi_12": 32}),  # rsi<45 亏
+        _mk_rec("w4", "success", 4.0, {"pos60": 30, "chg20": 8, "rsi_12": 30}),   # pos<50&rsi<45 赢
+        _mk_rec("f4", "failed", -0.8, {"pos60": 35, "chg20": 9, "rsi_12": 33}),   # pos<50&rsi<45 亏
+    ]
+    results = sweep_veto_candidates(recs)
+    assert len(results) == len(DEFAULT_VETO_CANDIDATES)
+    for r in results:
+        assert r["delta_net_return"] < 0, f"{r['name']} 净收益应下降"
+        assert not r["passed"], f"{r['name']} 应被 BLOCK（删赢多于亏）"
+
+
+def test_sweep_veto_candidates_passes_clean():
+    # 对照：只删亏损单（净收益↑且胜率↑）的良性 veto → 护栏通过。
+    recs = [
+        _mk_rec("w1", "success", 5.0, {"pos60": 95, "chg20": 60, "rsi_12": 70}),
+        _mk_rec("w2", "success", 4.0, {"pos60": 96, "chg20": 55, "rsi_12": 72}),
+        _mk_rec("f1", "failed", -2.0, {"pos60": 30, "chg20": 10, "rsi_12": 40}),
+        _mk_rec("f2", "failed", -1.5, {"pos60": 35, "chg20": 12, "rsi_12": 42}),
+    ]
+    results = sweep_veto_candidates(
+        recs, candidates=[("pos60<50 only fails", lambda fs: fs.get("pos60", 99) < 50)]
+    )
+    assert len(results) == 1
+    assert results[0]["removed_wins"] == 0
+    assert results[0]["delta_net_return"] > 0
+    assert results[0]["passed"]

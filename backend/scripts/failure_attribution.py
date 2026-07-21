@@ -336,6 +336,68 @@ def veto_passes_guard(result: Dict[str, Any], net_return_floor: float = 0.0) -> 
     return result["delta_net_return"] >= net_return_floor
 
 
+# --------------------------------------------------------------------------- #
+# 2.6 veto 候选扫描（D 攻击护栏·一键否决筛查）
+# --------------------------------------------------------------------------- #
+# 默认否决候选篮：每轮 D 攻击最先会想到的「硬特征 veto」。
+# 历史 LIVE formal 账本反事实已证明——这些候选「删赢多于亏、净收益↓」→ 全部被护栏拦截
+# （过拟合单日/单簇，非干净 D 攻击）。固化为默认篮，使未来轮次 `run_veto_sweep_db`
+# 一键即得「无干净 D 攻击」证据，避免重复尝试已知过拟合候选。
+# 每个候选: (name, pred)；pred(fs: dict) -> bool。fs 键: rsi_12 / chg20 / pos60 / setup_type
+DEFAULT_VETO_CANDIDATES: List[Tuple[str, Any]] = [
+    ("pos60>90 (60日高位追高)", lambda fs: fs.get("pos60") is not None and float(fs["pos60"]) > 90),
+    ("chg20>50 (20日涨幅追高)", lambda fs: fs.get("chg20") is not None and float(fs["chg20"]) > 50),
+    ("rsi12<45 (弱势股)", lambda fs: fs.get("rsi_12") is not None and float(fs["rsi_12"]) < 45),
+    ("pos60<50&rsi<50 (低位弱势)", lambda fs: (fs.get("pos60") is not None and float(fs["pos60"]) < 50)
+        and (fs.get("rsi_12") is not None and float(fs["rsi_12"]) < 50)),
+]
+
+
+def sweep_veto_candidates(
+    ledger: List[Dict[str, Any]],
+    candidates: List[Tuple[str, Any]] = DEFAULT_VETO_CANDIDATES,
+    net_return_floor: float = 0.0,
+) -> List[Dict[str, Any]]:
+    """纯函数：对一组候选 hard veto 跑种群级反事实，返回每候选 PASS/BLOCK 报告。
+
+    不依赖 DB，便于单测与 CI。每个报告含：name / removed_n / removed_wins /
+    removed_fails / before / after / delta_* / passed（veto_passes_guard 结论）。
+    用途（D 攻击护栏）：任何新 hard veto 规则先过本扫描——全部 BLOCK 即「无干净 D 攻击」。
+    """
+    out: List[Dict[str, Any]] = []
+    for name, pred in candidates:
+        res = _veto_net_effect(ledger, pred)
+        res["name"] = name
+        res["passed"] = veto_passes_guard(res, net_return_floor)
+        out.append(res)
+    return out
+
+
+def run_veto_sweep_db(db, candidates: List[Tuple[str, Any]] = DEFAULT_VETO_CANDIDATES) -> List[Dict[str, Any]]:
+    """加载全量 LIVE formal 账本并对候选篮跑反事实扫描（只读，不写 DB）。"""
+    recs = _load_live_formal_recs(db)
+    ledger = [{"rid": r["rid"], "label": r["label"], "ret": r["ret"], "fs": r["fs"]} for r in recs]
+    return sweep_veto_candidates(ledger, candidates)
+
+
+def render_veto_sweep_report(results: List[Dict[str, Any]]) -> str:
+    lines = ["# 反事实 veto 候选扫描报告", ""]
+    n_block = sum(1 for r in results if not r["passed"])
+    for r in results:
+        status = "✅ PASS" if r["passed"] else "⚠️ BLOCK(过拟合)"
+        lines.append(
+            f"- [{r['name']}] {status} | 移除 {r['removed_n']} "
+            f"(赢 {r['removed_wins']}/亏 {r['removed_fails']}) | 净Δ {r['delta_net_return']:+.2f}"
+        )
+    lines.append("")
+    if n_block == len(results) and results:
+        lines.append("结论：全部候选被护栏拦截（删赢多于亏、净收益↓）→ 当前账本无干净 D 攻击，"
+                     "禁止据此加 entry 规则（过拟合）。")
+    else:
+        lines.append(f"结论：{len(results) - n_block}/{len(results)} 个候选通过护栏，可进入反事实细节复核。")
+    return "\n".join(lines)
+
+
 def render_veto_report(result: Dict[str, Any], veto_name: str) -> str:
     b, a = result["before"], result["after"]
     lines = []
@@ -412,18 +474,18 @@ def main() -> Dict[str, Any]:
     print()
     print(render_counterfactual_report(cf))
 
-    # 反事实 veto 护栏：对候选 hard veto 验证净效应，拦截过拟合（守第一性原理）。
-    # 本轮候选：pos60>90（60日高位追高=chasing）。若净收益↓即判定过拟合、禁止落地。
-    demo = run_veto_counterfactual(
-        db,
-        lambda fs: fs.get("pos60") is not None and float(fs.get("pos60")) > 90,
-    )
+    # 反事实 veto 候选扫描：对默认候选篮（每轮 D 攻击最先想到的硬特征 veto）跑种群级
+    # 反事实，护栏（净收益不下降）逐候选给 PASS/BLOCK。全部 BLOCK = 当前账本无干净 D 攻击，
+    # 禁止据此加 entry 规则（过拟合单日/单簇）。守第一性原理「不准靠过拟合刷数字」。
+    sweep = run_veto_sweep_db(db)
     print()
-    print(render_veto_report(demo, "pos60>90 (60日高位追高 veto 候选)"))
+    print(render_veto_sweep_report(sweep))
     return {
         "attribution": attr.mode_counts,
         "counterfactual": cf,
-        "veto_guard": demo,
+        "veto_sweep": [{"name": r["name"], "passed": r["passed"],
+                        "removed_n": r["removed_n"], "delta_net_return": r["delta_net_return"]}
+                       for r in sweep],
     }
 
 
