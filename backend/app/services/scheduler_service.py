@@ -121,7 +121,18 @@ def start_scheduler() -> BackgroundScheduler:
     if _scheduler is not None:
         return _scheduler
 
-    _scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
+    # 补跑容错：错过 cron 时刻后 1 小时内恢复运行仍补跑一次（coalesce 合并为单次）。
+    # 根因：BackgroundScheduler 用 time.sleep 轮询，macOS 显示器休眠 / launchd 重启会让
+    # 调度线程挂起而错过触发点；默认 misfire_grace_time=1s 会把错过的 cron 永久丢弃。
+    # 两类已证实的错过都被 1h 覆盖：
+    #   ① launchd 每日 08:50 kickstart 重启 → 错过 08:03 盘前曝光 / 08:30 安全网(差 47/20min)；
+    #   ② 显示器休眠挂起 → 错过 17:35 盘后 post_sync（睡眠醒来距 cron 通常 <1h）。
+    # 1h 是上限而非越大越好：更大的宽限会把隔夜/跨时段任务在错误时间点补跑（如清晨补跑
+    # 前一日盘后同步），反而制造脏数据。隔夜 misfire 远超 1h 仍会被正确丢弃。
+    _scheduler = BackgroundScheduler(
+        timezone="Asia/Shanghai",
+        job_defaults={"misfire_grace_time": 3600, "coalesce": True},
+    )
     _ensure_postclose_pipeline_task()
     _ensure_strategy_exposure_task()
     _load_and_schedule()
@@ -1327,25 +1338,41 @@ async def _wait_for_recommendation_run(
 ) -> dict[str, Any]:
     """等待独立 worker 的最终状态，让调度任务不再把“已入队”误报为完成。
 
-    轮询必须使用短生命周期 Session。生产 MySQL 使用 REPEATABLE-READ；如果复用
-    盘后流水线的长事务，即使 ``expire_all`` 也仍会读到第一次查询建立的旧快照，
-    从而把早已完成的 worker 误报为超时。
+    轮询必须绕开连接池、每次用物理全新连接读取。生产 MySQL 是 REPEATABLE-READ 且
+    SessionLocal 走连接池（pool_size=20）：盘后同步阶段的长事务会把某个池连接的
+    一致性快照钉在同步开始时刻，归还池后快照不随 commit 推进；``SessionLocal()``
+    大概率复用到这同一个连接，于是 ``poll_db.get()`` 一直读到旧的 queued/running，
+    把早已完成并 commit 的 worker 误报为超时（实测推荐 2 分钟跑完却空转 3600s）。
+    ``engine.connect()`` 每次建立物理新连接，事务快照从当前时刻开始，必然读到最新状态。
     """
+    from app.db.session import engine as _engine
+
     deadline = time.monotonic() + max(1, timeout_seconds)
     terminal = {"completed", "failed", "interrupted", "cancelled"}
+    stmt = (
+        select(
+            RecommendationRun.run_id,
+            RecommendationRun.status,
+            RecommendationRun.recommended_count,
+            RecommendationRun.error_message,
+            RecommendationRun.finished_at,
+        )
+        .where(RecommendationRun.run_id == run_id)
+    )
     while time.monotonic() < deadline:
-        with SessionLocal() as poll_db:
-            run = poll_db.get(RecommendationRun, run_id)
-            if run is None:
-                raise RuntimeError(f"推荐 Run 不存在: {run_id}")
-            if run.status in terminal:
-                return {
-                    "run_id": run.run_id,
-                    "status": run.status,
-                    "recommended_count": int(run.recommended_count or 0),
-                    "error": run.error_message,
-                    "finished_at": run.finished_at.isoformat() if run.finished_at else None,
-                }
+        with _engine.connect() as conn:
+            row = conn.execute(stmt).first()
+        if row is None:
+            raise RuntimeError(f"推荐 Run 不存在: {run_id}")
+        status = row.status
+        if status in terminal:
+            return {
+                "run_id": row.run_id,
+                "status": status,
+                "recommended_count": int(row.recommended_count or 0),
+                "error": row.error_message,
+                "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+            }
         await asyncio.sleep(max(0.1, poll_seconds))
     raise TimeoutError(f"推荐 Run {run_id} 在 {timeout_seconds} 秒内未结束")
 
