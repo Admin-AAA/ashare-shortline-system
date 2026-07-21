@@ -19,6 +19,7 @@ BACKEND_DIR = os.path.join(os.path.dirname(__file__), '..', 'backend')
 sys.path.insert(0, os.path.abspath(BACKEND_DIR))
 
 from app.db.session import SessionLocal
+from app.services.feature_builder import market_regime_score
 from sqlalchemy import text
 
 SKILLS_DIR = os.path.join(os.path.dirname(__file__), '..', 'backend', 'skills')
@@ -1518,6 +1519,26 @@ def _forward_verification_flag(full_wr: float | None, fwd_result: tuple | None,
     return None
 
 
+def _check_market_regime_calibration() -> str | None:
+    """T5 一致性护栏（第185轮闭环 round-185）：market_regime_score 必须保持「逆势立场」。
+
+    函数返回值越高 → 自适应 score_line 门槛越宽松（放行更多票）。强牛(up_ratio>=0.65)
+    市场观测胜率虽高(~96.4%)但含选择偏差（严格门槛只放行最优选手），故函数刻意返低分(严格)。
+
+    ❌ 若有人为"修正校准"而翻转（强牛返高分、弱市返低分），会放行更差票、D 项反而恶化
+    （过拟合）。本护栏纯函数比对函数输出梯度，不碰 DB，便于单测锁定。
+
+    返回 None = 校准正常（强牛返分 < 弱市返分）；返回 str = 疑似被翻转、需人工核查。
+    """
+    weak = market_regime_score({"up_count": 10, "sample_count": 100})    # up_ratio=0.10 <0.35
+    strong = market_regime_score({"up_count": 90, "sample_count": 100})  # up_ratio=0.90 >=0.65
+    if not (strong < weak):
+        return (f'⚠️ [T5] market_regime_score 校准疑似被翻转：强牛返分({strong:.0f})≥'
+                f'弱市返分({weak:.0f})。强牛高胜率含选择偏差，翻转会放行更差票损害 D 项'
+                f'——禁止翻转，保持逆势立场（见 feature_builder.market_regime_score docstring）')
+    return None
+
+
 def check_d_item(db) -> None:
     """D 项：核心指标（胜率 + 最大亏损），多窗口呈现以区分历史污染 vs 前瞻真退化。
 
@@ -1585,6 +1606,12 @@ def check_d_item(db) -> None:
     if _20 and _10 and _20.get("win_rate", 0) > _10.get("win_rate", 0):
         print(f'  ⚠️ 护栏: 20cm 胜率({_20.get("win_rate")}%)高于10cm({_10.get("win_rate")}%)'
               f'— 后续轮次禁止对 20cm 加风险闸门/降权（会损害 D 项）')
+
+    # T5 一致性护栏：market_regime_score 必须保持逆势立场（强牛返分<弱市返分）。
+    # 若被"修正校准"翻转会放行更差票、D 项恶化（过拟合，lessons #185 已锁）。
+    _calib = _check_market_regime_calibration()
+    if _calib:
+        print(f'  {_calib}')
 
     # 数据质量影响诊断：RSI 污染样本是历史 stk_factor 缺失产物（feature_builder 已加守卫），
     # 不剔除主口径，但报告干净 vs 污染胜率差——胜率下滑时区分「策略退化」vs「数据污染扭曲」。
