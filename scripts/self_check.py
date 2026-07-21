@@ -559,6 +559,26 @@ def _classify_zero_exposure(
     return {"covered_zero": covered_zero, "uncovered": uncovered}
 
 
+def _format_e_coverage_tag(
+    n: int,
+    win_rate: float,
+    *,
+    sample_floor: int = 20,
+    low_wr_threshold: float = 45.0,
+) -> str:
+    """E 项列表标签：低胜率 vs 低覆盖（纯函数，便于单测）。
+
+    技能文档 / T3.6：低胜率标记须 n≥20 且 winrate<45%；样本不足时只能标低覆盖
+    （先补曝光再判）。旧逻辑 `win_rate < 45 → 低胜率` 把 small-cap n=1 WR=0%
+    误标「低胜率需标记」，诱导对噪声样本做失败归因/降权。
+    """
+    if n < sample_floor:
+        return "低覆盖"
+    if win_rate < low_wr_threshold:
+        return "低胜率"
+    return "低覆盖"
+
+
 def _format_e_forward_note(
     fwd_n: int,
     fwd_wins: int,
@@ -667,11 +687,12 @@ def check_e_item(db, hit_skills: set) -> None:
         if row[0] in disabled_set:
             print(f'  {row[0]}: n={n} wins={wins} avg_ret={avg_ret}% winrate={win_rate}% ←已下线(disabled)，样本冻结仅供追溯')
             continue
-        tag = '低胜率' if win_rate < 45 else '低覆盖'
+        tag = _format_e_coverage_tag(int(n or 0), float(win_rate))
         # 前瞻窗口口径（FORWARD_EPOCH 之后）：区分旧代码污染 vs 真低胜率 vs 样本过少
         # （T18：fwd_n < MIN_OOS_SAMPLE 勿判真低胜率——high-range 3 笔@07-16 污染日误判先例）
         fwd_note = _format_e_forward_note(int(fwd_n or 0), int(fwd_wins or 0), full_n=int(n or 0))
-        print(f'  {row[0]}: n={n} wins={wins} avg_ret={avg_ret}% winrate={win_rate}%{fwd_note} ←{tag}需标记')
+        action = "需标记" if tag == "低胜率" else "需补曝光/观察"
+        print(f'  {row[0]}: n={n} wins={wins} avg_ret={avg_ret}% winrate={win_rate}%{fwd_note} ←{tag}·{action}')
 
     # 曝光公平度 + 样本置信度（近 30 天 formal+experiment，不含 backtest）
     # 目的：让每个策略胜率统计可信，避免头部策略吃掉 80%+ 曝光、尾部策略样本稀疏不可信。
