@@ -1071,14 +1071,26 @@ def apply_pool_rules(
         soft_floor = round(top_final_score - 1.0, 2)
         base_floor = round(score_line_context["base_score_line"] - 8.0, 2)
         dynamic_line = max(soft_floor, base_floor, 35.0)
-        # top_score 距有效线 20 分以内启用降线（防止质量过差时强行出票）
+        # top 相对市场级有效线的差距：
+        #   gap > 0 → top 低于市场线；gap <= 0 → top 已达/超过市场线
+        # 旧条件 `0 < gap <= 20` 会漏掉 gap<=0：top 已过市场线，但 per-card
+        # 软惩罚（execution_adjustment / evidence_adjustment）把单票有效线抬到
+        # top 之上 → 全场 0 推荐且软降线永不触发。
+        # 实证：limit-up 执行惩罚 +7 时 top=82/market=77/card_eff=84 → gap=-5，
+        # 旧逻辑 rec=0；修复后 gap<=20 也启用。硬否决（panic/弱势×chg20/震荡×pos60）
+        # 仍跳过，不放松 D 项毒区。
         gap = score_line_context["effective_score_line"] - top_final_score
         # 降级模式（LLM 不可用）放宽上限，作为最后兜底避免零推荐
         _degraded_gap = _degraded and gap > 20.0
-        if 0 < gap <= 20.0 or _degraded_gap:
+        # gap<=20 含 gap<=0（top 已过市场线但被软惩罚挡光）；gap>20 仅降级模式
+        if gap <= 20.0 or _degraded_gap:
             score_line_context["dynamic_soft_floor_applied"] = True
             score_line_context["dynamic_soft_floor"] = dynamic_line
             score_line_context["soft_floor_gap"] = round(gap, 2)
+            score_line_context["soft_floor_reason"] = (
+                "per_card_penalty" if gap <= 0 else
+                ("degraded_wide_gap" if _degraded_gap else "near_market_line")
+            )
             score_line_context["degraded_agent_unavailable"] = _degraded
             for card in ordered:
                 final_score = float(card.get("final_score") or 0)
@@ -1097,10 +1109,20 @@ def apply_pool_rules(
                 # 全局恐慌日否决：ld>100 = WR 0% 系统性恐慌，不参与软降线兜底（否则降线后 76 分的毒区票混进推荐）
                 if sm.get("panic_day_penalty"):
                     continue
+                # 结构性强势/强势 regime 门槛与 support_ma5 交叉惩罚：
+                # soft floor 的 min(old, dynamic) 会把这些 regime 惩罚抹平，
+                # 使 support_ma5 毒区票与干净票同线通过（gap<=0 时尤其明显）。
+                # 这两类是基于 WR 实证的 regime 侧门槛，不是 evidence/execution 软惩罚，
+                # 不参与 soft floor 兜底（与 panic/weak/osc 硬否决同级）。
+                if sm.get("regime_support_ma5_penalty"):
+                    continue
+                if sm.get("regime_strong_penalty"):
+                    continue
                 old_effective = sm.get("effective_score_line", 99)
                 new_effective = min(old_effective, dynamic_line)
                 sm["effective_score_line"] = new_effective
                 sm["dynamic_soft_floor_applied"] = True
+                sm["soft_floor_reason"] = score_line_context["soft_floor_reason"]
                 sm["degraded_agent_unavailable"] = _degraded
                 sm["passed"] = final_score >= new_effective
                 if final_score >= new_effective:

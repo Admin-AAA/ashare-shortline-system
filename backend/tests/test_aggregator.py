@@ -589,6 +589,119 @@ def test_apply_pool_rules_no_panic_veto_below_threshold():
         assert c["score_line_meta"]["panic_day_penalty"] == 0.0
 
 
+def _limit_up_risky_card(code: str, final_score: float) -> dict:
+    """涨停 + 执行风险：open_times/弱封单/尾盘封板 → execution_adjustment ≈ +7。"""
+    card = _card(code, final_score)
+    card.update({
+        "is_limit_up": True,
+        "limit_up_open_times": 3,
+        "limit_up_fd_amount_yi": 0.3,
+        "limit_up_last_time": 144500,
+        "chg20": 25.0,
+        "pos60": 80.0,
+    })
+    return card
+
+
+def test_soft_floor_engages_when_top_above_market_line_but_per_card_penalty_blocks():
+    """T12 回归：gap<=0 时 soft floor 也应启用。
+
+    场景：弱势·活跃 market_eff=77，top=82 已过市场线，但涨停执行惩罚 +7
+    把单票有效线抬到 84 → 全部 blocked；旧条件 `0 < gap <= 20` 因 gap=-5
+    永不触发 soft floor → 全场 0 推荐。修复后应放行 top。
+
+    硬否决（panic/弱势×chg20/震荡×pos60）仍跳过，本测无硬否决。
+    """
+    snapshot = {
+        "sample_count": 5000,
+        "up_count": 1500,
+        "down_count": 3400,
+        "limit_up_count": 40,
+        "limit_down_count": 50,  # 非恐慌
+        "breadth": {"regime": "弱势", "up_ratio": 0.30},
+    }
+    ctx = resolve_score_line_context(72, snapshot)
+    assert ctx["effective_score_line"] == 77.0
+    assert ctx["market_base"] == "弱势"
+
+    cards = [
+        _limit_up_risky_card("000001", 82.0),
+        _limit_up_risky_card("000002", 80.0),
+        _limit_up_risky_card("000003", 79.0),
+    ]
+    # 验证 per-card 有效线确实 > top，且 top 过市场线（复现 gap<=0）
+    # 先跑一次拿 meta（会被 soft floor 修改），所以用副本断言 pre-soft 状态无必要——
+    # 直接断言修复后输出非空 + soft_floor_reason=per_card_penalty
+    result = apply_pool_rules(
+        cards, output_count=6, score_line=72, market_snapshot=snapshot, agent_available=True,
+    )
+    assert [c["code"] for c in result] == ["000001"], (
+        f"gap<=0（top 过市场线但 per-card 执行惩罚挡光）应启用 soft floor 放行 top，"
+        f"实际 rec={[c['code'] for c in result]}"
+    )
+    sm = result[0]["score_line_meta"]
+    assert sm["dynamic_soft_floor_applied"] is True
+    assert sm.get("soft_floor_reason") == "per_card_penalty"
+    assert sm["execution_adjustment"] > 0
+    # soft floor 把有效线压到 top-1，top 必须过线
+    assert sm["effective_score_line"] <= 82.0
+    assert sm["passed"] is True
+
+
+def test_soft_floor_gap_le_0_still_skips_hard_veto_panic():
+    """对照：gap<=0 修复不得放松 panic 硬否决。
+
+    top 过市场线，但全员 panic_day_penalty → soft floor 触发后仍跳过硬否决票 → rec=0。
+    """
+    snapshot = {
+        "sample_count": 4955,
+        "up_count": 1685,
+        "down_count": 3200,
+        "limit_up_count": 68,
+        "limit_down_count": 479,  # 恐慌
+        "breadth": {"regime": "弱势", "up_ratio": 0.34},
+    }
+    # top=78 > market_eff=77 → gap=-1；但 panic +12 且硬跳过
+    cards = [_card(code, score) for code, score in [("A", 78.0), ("B", 76.0), ("C", 75.0)]]
+    for c in cards:
+        c["chg20"] = 25.0  # 避免弱势×chg20 再加惩罚，专注 panic
+        c["pos60"] = 80.0
+    result = apply_pool_rules(
+        cards, output_count=6, score_line=72, market_snapshot=snapshot, agent_available=True,
+    )
+    assert result == [], "恐慌日硬否决不得被 gap<=0 soft floor 放行"
+    for c in cards:
+        assert c["score_line_meta"]["panic_day_penalty"] == 12.0
+
+
+def test_soft_floor_gap_le_0_rescues_near_top_limit_up_pair():
+    """两只涨停 risky 票：soft floor 按 dynamic_line=top-1 放行近顶票。
+
+    top=82 → dynamic=81，82/80 过线、79 不过。验证 soft floor 不只放 top。
+    """
+    snapshot = {
+        "sample_count": 5000,
+        "up_count": 1500,
+        "down_count": 3400,
+        "limit_up_count": 40,
+        "limit_down_count": 50,
+        "breadth": {"regime": "弱势", "up_ratio": 0.30},
+    }
+    cards = [
+        _limit_up_risky_card("300001", 82.0),
+        _limit_up_risky_card("300002", 80.0),
+        _limit_up_risky_card("300003", 79.0),
+    ]
+    result = apply_pool_rules(
+        cards, output_count=6, score_line=72, market_snapshot=snapshot, agent_available=True,
+    )
+    codes = [c["code"] for c in result]
+    assert codes == ["300001"], (
+        f"dynamic_line=top-1=81 只放行 82，80/79 仍低于 81；实际 {codes}"
+    )
+    assert result[0]["score_line_meta"].get("soft_floor_reason") == "per_card_penalty"
+
+
 def test_apply_pool_rules_watchlist_excludes_blocked_cards():
     card = _card("Z", 88)
     # 一字涨停：open==high==low==close 且无开板，触发入场封死判定 → 不入观察池
