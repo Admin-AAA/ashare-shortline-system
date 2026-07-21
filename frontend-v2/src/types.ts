@@ -272,11 +272,11 @@ export type WinRateSummary = {
   net_win_rate?: number | null; // 净胜率 %
   net_avg_return?: number | null; // 净平均收益 %
   net_profit_loss_ratio?: number | null; // 净盈亏比
-  // 去污染反事实（主口径不变）：剔除 pure 低线(<72)+pure soft@震荡 后净 PL
-  // 用于解释「近 N 日净 PL 偏低是否历史污染拖累」——契约层/soft ban 已拦新污染，历史票不重标
-  clean_sample_count?: number;
-  clean_net_profit_loss_ratio?: number | null;
-  pollution_n?: number; // pure 污染独立 (code,date) 数
+  // 去污染反事实（主口径不变）：剔除 pure 低线(<72)+所有 soft 票 后净 PL（T39 对齐 self_check）
+  // soft floor 票不属于「当前正式门槛下硬过线」——07-16 的 13 笔 "clean" 全是 soft@震荡
+  clean_sample_count?: number; // clean 样本数（excl soft + low line）；=0 表示近 N 日全部受污染
+  clean_net_profit_loss_ratio?: number | null; // clean PL；null 表示无 clean 样本
+  pollution_n?: number; // 污染独立 (code,date) 数（pure 低线 + 所有 soft）
   pollution_pl_delta?: number | null; // clean_pl - raw_pl，>0 表示污染拖累 PL
 };
 
