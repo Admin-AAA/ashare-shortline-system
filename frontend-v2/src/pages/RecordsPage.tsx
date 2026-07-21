@@ -21,6 +21,7 @@ import { RecommendationDetailCard } from "../components/RecommendationDetailCard
 import { MatrixRecordDetailView } from "../components/MatrixRecordDetailView";
 import { RunModeBadge } from "../components/RunModeBadge";
 import { RunFunnelSection } from "../components/RunFunnelSection";
+import { RunStockScoreSection } from "../components/RunStockScoreSection";
 import {
   Metric,
   ReturnCell,
@@ -596,6 +597,8 @@ function RunRecordDetailView({ runId, onBack, onOpenStock }: { runId: string; on
       </section>
 
       <RunFunnelSection runId={runId} />
+
+      <RunStockScoreSection runId={runId} />
 
       <section className="panel">
         <div className="panel__header">
