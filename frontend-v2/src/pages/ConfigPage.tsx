@@ -1,25 +1,29 @@
 import { useState } from "react";
-import { Clock, Database, Layers, Plug } from "lucide-react";
+import { BarChart3, Clock, Database, Layers, Plug } from "lucide-react";
 import { ModelRoutesSection } from "../components/ModelRoutesSection";
 import { PresetsSection } from "../components/PresetsSection";
 import { SchedulerTasksSection } from "../components/SchedulerTasksSection";
 import { DataHealthSection } from "./DataHealthPage";
+import { SystemStatsSection } from "../components/SystemStatsSection";
 
-type ConfigTab = "scheduler" | "llm" | "presets" | "data-health";
+type ConfigTab = "scheduler" | "llm" | "presets" | "data-health" | "stats";
 
 export function ConfigPage() {
   const [tab, setTab] = useState<ConfigTab>(() => {
     const q = new URLSearchParams(window.location.search).get("tab");
-    return q === "scheduler" || q === "llm" || q === "presets" ? q : "data-health";
+    return q === "scheduler" || q === "llm" || q === "presets" || q === "stats" ? q : "data-health";
   });
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
-      {/* 二级 Tab 切换 */}
       <div className="sub-tabs" style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--border)" }}>
         <SubTab active={tab === "data-health"} onClick={() => setTab("data-health")}>
           <Database size={14} />
           数据健康
+        </SubTab>
+        <SubTab active={tab === "stats"} onClick={() => setTab("stats")}>
+          <BarChart3 size={14} />
+          系统统计
         </SubTab>
         <SubTab active={tab === "scheduler"} onClick={() => setTab("scheduler")}>
           <Clock size={14} />
@@ -39,6 +43,7 @@ export function ConfigPage() {
       {tab === "llm" && <ModelRoutesSection />}
       {tab === "presets" && <PresetsSection />}
       {tab === "data-health" && <DataHealthSection />}
+      {tab === "stats" && <SystemStatsSection />}
     </div>
   );
 }
