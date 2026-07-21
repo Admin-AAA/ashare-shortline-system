@@ -65,47 +65,48 @@ cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && pyt
 
 ### T2. 回测验证（模型内化）
 1. 快速路径（诊断首选）：查 DB 已有 outcome 分析，不跑新回测
-2. 真实回测（改完策略必做）：通过 P0 Agent Research Gateway（`POST /api/runs/backtest` 或 `POST /api/backtests`）执行，5 分钟超时，卡住切快速路径
-3. **去重必做**：按 `backtest_id` + `attempt_no` 隔离，区分 LIVE(`rec_*`) 与 P0 RESEARCH(`backtest_*`) 两个总体，不能按 (trade_date,code) 混并。禁止使用旧 `btrec_*` 前缀产生新证据
-4. **交易成本**：佣金万1双边 + 印花税0.05%卖出 = 0.07%/笔。扣费后须达标（胜率>50%、盈亏比>1.4）
+2. 真实回测（改完策略必做）：P0 Gateway `POST /api/runs/backtest`，5 分钟超时，卡住切快速路径
+3. **去重必做**：按 `backtest_id` + `attempt_no` 隔离 LIVE(`rec_*`) 与 P0 RESEARCH(`backtest_*`)。禁止旧 `btrec_*` 前缀
+4. **交易成本**：0.07%/笔（佣金万1双边 + 印花税卖出）。扣费后须达标（WR>50%、PF>1.4）
 5. 输出：胜率、平均收益、盈亏比、止损率、出场分布
-6. **回测对比**：使用 `POST /api/runs/backtest/comparison`（已迁移到 P0 Runner），不再调用 `backtest_service.run_backtest_comparison`
+6. **回测对比**：`POST /api/runs/backtest/comparison`（P0 Runner）
 
 ### T3. 准确度提升（模型内化）
 1. 查 `recommendation_outcomes` 各 skill 历史胜率
 2. 找预测力最强/最弱的特征（point-biserial）
-3. 检查 `feature_builder.py` 估算字段（MACD/RSI 用 chg20 启发式而非真实值）——已知硬伤
-4. **失败归因闭环**：对 `failed` 推荐逐条分析（追高/止损没执行/板块退潮/黑天鹅），映射到 strategy.yaml 规则，形成"失败→归因→规则调整→验证"闭环
+3. 检查 `feature_builder.py` 估算字段（MACD/RSI 已从 closes 重算，T34 修复）
+4. **失败归因闭环**：对 `failed` 推荐逐条分析（追高/止损没执行/板块退潮/黑天鹅），映射到 strategy.yaml 规则
 5. 每 5 轮至少深度优化一个业务模块（龙头评分/龙虎榜/情绪分阶段/Aggregator 权重/trailing stop/score cap）
-6. **策略曝光公平度与低胜率标记（E 项闭环，触发时执行）**：
-   - **目的**：让每个策略胜率统计可信，避免头部策略吃掉 >60% 曝光、尾部策略样本稀疏不可信，导致"按胜率选策略"失效。**补曝光是为了让胜率可信，不是为了提高尾部策略的胜率**——样本够但胜率差的策略走下面的失败归因，不靠补曝光救。
-   - **曝光公平度**：自检 E 项报告里 H_norm<0.5 或有策略样本 <20 时，触发盘前曝光补跑（`scheduler_service._run_strategy_exposure`，阈值 `DEFAULT_EXPOSURE_MIN_SAMPLE=20` 已与样本下限对齐）。补跑只喂样本 <20 的 enabled 策略，产出 `run_mode=experiment` 不进记录中心。**不要为了凑 H_norm 而人为调 strategy.yaml universe**——曝光不均的根因若在头部策略 universe 太宽/尾部太窄，调 universe 即可；若是评分权重使尾部永远进不了 top，归因到权重而非硬凑曝光。
-   - **覆盖盲区**：自检 E 项报告里近 60 天 formal 0 命中的策略，逐个查原因——是该策略 `strategy.yaml` 的 `universe.include/exclude` 阈值过严把候选全过滤了？还是评分权重太低永远进不了 top？还是 prefilter 硬性卡掉？查 `filter_audit_json` 确认。**哪怕该策略历史胜率很低也要标记出来**，不能让它"静默死亡"。修复后必须跑一次 formal run 确认该 strategy_id 出现在 `skill_breakdown_json`。
-   - **低胜率标记**：自检 E 项报告里 winrate <45% **且样本 n≥20** 的策略（样本 <20 先补曝光再判，不标记），在该策略 `strategy.yaml` 顶部加 `# ⚠️ SELF-IMPROVE FLAG: 低胜率策略 (winrate=X%, n=Y, 标记日期)` 注释，并在 `~/.claude/projects/-Users-wangao/memory/low-winrate-strategies.md` 追加一行（策略名 / 当前胜率 / 样本数 / 标记日期 / 失败归因 / 下一步动作）。**不急着删策略**——先做失败归因（T3.4 闭环）。连续 2 轮验证仍 <45% 且归因无解，才降权或下线。
-   - **口径区分**：低胜率标记看**全量 formal**（更稳，避免近期小样本误判）；曝光公平度看**近30天 formal+experiment**（看近期是否需要补跑）。两段口径不同是故意的。
-   - **产出**：每轮 E 项任务结束，low-winrate-strategies.md 必须有更新（新增标记或更新已有条目的验证结果）；自检 H_norm 与 <20 策略数须有变化记录。
+6. **residual triage 先行**：residual 笔数 >0 时**必须先 triage 分层**（污染/伪活跃/单日簇/稀疏），禁止直接当 entry 精确目标。前三类禁止加 entry；稀疏 ≤3 笔或全被现有规则覆盖时判 D 攻击路径穷尽（见 T11 第 5 条）。
+### T3.6 策略曝光公平度与低胜率标记（E 项闭环，触发时执行）
+   - **目的**：让每个策略胜率统计可信。补曝光是为了让胜率可信，不是为了提高尾部策略胜率。
+   - H_norm<0.5 或策略样本 <20 → 盘前曝光补跑（`scheduler_service._run_strategy_exposure`，阈值 20）。勿为凑 H_norm 调 universe。
+   - 近 60 天 formal 0 命中策略 → 查 filter_audit_json 归因（universe/prefilter/preset），修复后跑 formal 确认 skill_breakdown 出现。
+   - winrate <45% **且 n≥20** → strategy.yaml 加 FLAG 注释 + low-winrate-strategies.md 追加。n<20 先补曝光不标记。连续 2 轮 <45% 且无解才降权/下线。
+   - 低胜率标记看**全量 formal**；曝光公平度看**近30天 formal+experiment**。
+   - 产出：每轮 E 项结束 low-winrate-strategies.md 须有更新；H_norm 与 <20 策略数须有变化记录。
 
 ### T4. 性能优化（模型内化）
-查 `backend/logs/app.log` 慢请求，`EXPLAIN ANALYZE` 查慢 SQL。大 JSON 字段查询是性能杀手：两步查询（小列定位 id → 按 id 取详情）+ 预解析共享。
+查 `backend/logs/app.log` 慢请求 + `EXPLAIN ANALYZE` 慢 SQL。大 JSON 字段查询用两步法（小列定位 id → 按 id 取详情）。
 
 ### T5. 一致性工程（模型内化）
-- **规则一致性**：strategy.yaml 在不同时间/市场对同一股票给一致评估（phase 切换是否过于敏感）
-- **权重一致性**：aggregator walk-forward 校准是否稳定
-- **执行一致性**：entry_rule/invalid_rule 是否能机械执行
-- **持仓相关性**：已实现 `_MAX_PER_INDUSTRY=5` + 关联行业组去重，定期验证
-- **市场状态自适应**：phase 阈值是否合理？冰点买入胜率是否真低于活跃？差异不显著说明 phase 无信息量
+- 规则一致性：strategy.yaml 不同时间/市场给一致评估
+- 权重一致性：aggregator walk-forward 校准稳定
+- 执行一致性：entry_rule/invalid_rule 可机械执行
+- 持仓相关性：`_MAX_PER_INDUSTRY=5` + 关联行业组去重
+- 市场状态自适应：phase 阈值合理？冰点 vs 活跃胜率差异显著说明有信息量
 
 ### T7. 前端设计与体验优化（用户可见）
-**A. 删无用功能**（零成本改善）——扫描 `frontend-v2/src/` 从未被点击/永远空状态的元素，直接删或隐藏。
-**B. 优化已有**——操作路径过长、重复入口、默认值缺失、加载 >2s 加骨架屏、错误状态提示。
-**C. 填缺口**——读后端所有 API 端点，找"后端有数据前端没页面"的 gap。
-**审美硬约束**：简洁+大量留白（间距 8/16/24/32 倍数）；暗色主题（参考 Linear/Vercel/Bloomberg）；默认值优先；零弹窗确认；数字等宽字体+涨红跌绿（低饱和度）+右对齐；禁止 AI slop（蓝紫渐变/模板 hero/无意义编号）；克制原则（bold 集中在一处）。
+**A. 删无用功能**——扫描 `frontend-v2/src/` 从未被点击/永远空状态的元素，删或隐藏。
+**B. 优化已有**——操作路径过长、默认值缺失、加载 >2s 加骨架屏、错误状态提示。
+**C. 填缺口**——读后端 API 端点，找"后端有数据前端没页面"的 gap。
+**审美硬约束**：留白 8/16/24/32 倍数；暗色主题；默认值优先；零弹窗确认；等宽数字+涨红跌绿+右对齐；禁止 AI slop；bold 集中一处。
 
 ### T8. LLM 层验证（模型内化，消耗 API 额度）
 1. `POST /api/runs/analyze-stock`（include_llm=true）对比 LLM 增强评分 vs 纯规则评分
 2. 统计各 skill 的 LLM token 消耗 vs 胜率
 3. 检查 agent_summary 输出质量（幻觉/错误数据引用）
-4. 验证 prompt cache 是否生效，控制单次成本
+4. 验证 prompt cache 是否生效
 5. **每 5 轮至少 1 次**，每轮最多 1-3 只股票，日志记录 token 消耗
 
 ### T9. SKILL.md Prompt 优化（用户可见）
@@ -115,18 +116,23 @@ cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && pyt
 结构性重构（不是微调样式）：组件拆分（>300 行拆）、状态管理（prop drilling >3 层引 context/zustand）、死代码清理、重复逻辑合并。遵循 T7 审美硬约束。**只改 `frontend-v2/`**。
 
 ### T11. 自我优化提示词递归改进（模型内化）
-随机触发（约 15% 概率，或连续 2 轮觉得提示词指导不清晰时）。读当前提示词逐段审查 + 读日志最近 10 轮按 T 编号统计产出效率。产出低的任务改描述或合并；反复出现的教训提升为正式规则。**精简硬约束**：每次 T11 必须删除不少于新增行数的旧规则，净行数不能增长。**禁止改核心结构**（第一性原理/检验清单/禁止事项）。
+触发条件：约 15% 概率，或连续 2 轮觉得提示词指导不清晰 / D 攻击路径穷尽时。
+1. 读当前提示词逐段审查 + 读日志最近 15 轮按 T 编号统计产出效率（`git log --oneline -20 --format="%s" | rg -oP "T\d+" | sort | uniq -c | sort -rn`）
+2. 产出低的任务改描述或合并；反复出现的教训提升为正式规则。
+3. **精简硬约束**：每次 T11 必须删除不少于新增行数的旧规则，净行数不能增长。
+4. **禁止改核心结构**（第一性原理 / 北极星指标表 / 检验清单 / 禁止事项）。
+5. **D 攻击路径穷尽判定**：当 self_check 同时满足以下全部条件时，D 攻击路径已穷尽，应切 T7/T11 而非继续 T3 加规则：
+   - D 全量净盈亏比 ≥ 2.0（达标）
+   - clean≥72 净盈亏比 ≥ 2.0（去污染后仍达标）
+   - residual triage 中 sparse ≤ 3 笔或全被现有规则覆盖
+   - 前瞻窗口仍受 07-16 单日污染主导（n<10 或 93% 污染）
+   此状态下加 entry 规则 = 过拟合历史噪声，应转向可观测性/一致性/待前瞻样本积累。
 
 ### T12. 推荐 pipeline 稳定性（可见类，A 项断档时才触发）
 formal run 跑不通 = 系统对用户等于没在跑。
-**触发条件**（满足任一即强制执行，优先级高于一切）：最近 5 交易日有 interrupted formal run / 成功 formal 推荐 <5 / recommended_count=0 但 completed / 心跳 >1200s 被 interrupt。
-**排查清单**：
-1. 进程冲突：`error_message` 含"服务重启或进程退出"= 后端被重启打断。**重启后端前先查 `recommendation_runs` 是否有 status=running 的 formal run，有就等它完成**
-2. 数据缺失：`progress_message` 停在"构建特征"→ daily_kbars/stk_factor/cyq_perf 缺失，跑 `backfill_indicators.py`
-3. Skill 空跑：`recommended_count=0` 无 error → prefilter 过滤掉全部，查 `filter_audit_json`
-4. LLM 超时：停在"Skill 深审 N/M"→ LLM agent 卡死，查 prompt cache + 单股超时
-5. 心跳 >1200s interrupt → 单股处理太慢，加 per-stock 超时
-**验收**：跑一次真实 formal run，`status=completed` 且 `recommended_count>=1`，前端候选池可见。禁止只查 DB 假装修好。
+**触发**（任一即强制，优先级高于一切）：最近 5 交易日有 interrupted formal run / 成功 formal 推荐 <5 / recommended_count=0 但 completed / 心跳 >1200s 被 interrupt。
+**排查**：①进程冲突（error_message 含"服务重启"→ 重启前查 running formal run）②数据缺失（progress 停在"构建特征"→ backfill_indicators.py）③Skill 空跑（rec=0 无 error → 查 filter_audit_json）④LLM 超时（停在"Skill 深审"→ prompt cache + 单股超时）⑤心跳 >1200s → per-stock 超时。
+**验收**：跑真实 formal run，`status=completed` 且 `recommended_count>=1`。禁止只查 DB 假装修好。
 
 ---
 
@@ -134,11 +140,10 @@ formal run 跑不通 = 系统对用户等于没在跑。
 
 ### 0. 编排（worktree 全生命周期，由你本人承担）
 
-脚本只起会话，下面这一整段是你每次运行的**第一件事**，也是**最后一件事**。禁止跳过。
+脚本只起会话，下面整段是你每次运行的**第一件事**和**最后一件事**。禁止跳过。
 
-**主仓位置**：`/Users/wangao/Desktop/ashare-shortline-system`（你**不**直接在这里改代码——主仓是用户的工作区，可能停在任意分支上）。
-**worktree 根**：`/Users/wangao/Desktop/ashare-shortline-system/.claude/worktrees/`（已被 `.gitignore` 排除，commit 不会误带）。
-**claude 可执行**：`/opt/homebrew/bin/claude`。
+**主仓**：`/Users/wangao/Desktop/ashare-shortline-system`（不直接改代码）。
+**worktree 根**：`.claude/worktrees/`（已被 `.gitignore` 排除）。
 
 ```bash
 # —— 启动时：创建隔离工作树 ——
@@ -177,15 +182,9 @@ git rebase main                               # 把自己的提交挪到最新 m
 # rebase 完成后回主仓重跑上面那段 merge --ff-only + 清理。
 ```
 
-**任何退出路径（包括异常 / 被打断）都必须清理 worktree**。如果你要中断当前轮：
-```bash
-cd /Users/wangao/Desktop/ashare-shortline-system
-git worktree remove --force ".claude/worktrees/self-improve-${TS}-$$" 2>/dev/null
-git branch -D "$BRANCH" 2>/dev/null
-```
-留着脏 worktree = 下次 `git worktree list` 一堆僵尸 + 占磁盘。**轮失败也要删**，别保留待排查——日志在 `backend/logs/app.log` 和 `self-improve-log.md` 里，不在 worktree 里。
+**任何退出路径都必须清理 worktree**。中断当前轮：`git worktree remove --force "$WORKTREE"; git branch -D "$BRANCH"`。日志在 app.log / self-improve-log.md，不在 worktree。
 
-**并行安全**：多个 `run-self-improve.sh` 同时跑时，每个 claude 进程的 `$$`（PID）不同 → 分支名/worktree 路径天然唯一。唯一竞争点在 merge：ff-only 失败就 rebase，永远不 force push、不强改 main。
+**并行安全**：每个 claude 进程 PID 不同 → 分支名/worktree 路径唯一。ff-only 失败就 rebase，永远不 force push、不强改 main。
 
 ### 1. 状态检查
 ```bash
