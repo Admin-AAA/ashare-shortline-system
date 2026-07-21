@@ -10,11 +10,66 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.tables import DailyKbar, Preset, PresetSkill, Stock, StockQuote
+from app.models.tables import DailyKbar, Preset, PresetSkill, RecommendationRun, Stock, StockQuote
 from app.services.market_data import _build_stock_from_bars
 from app.engine.trading_calendar import normalize_trade_date, latest_allowed_bar_date
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_analysis_market_snapshot(
+    db: Session,
+    trade_date: str,
+    quote: dict[str, Any],
+) -> tuple[dict[str, Any], str]:
+    """为 analyze-stock 解析市场快照。
+
+    优先：同 trade_date 最近 completed formal run 的 market_snapshot_json
+    （全市场 sample_count/limit_up/regime/main_industries，与推荐管线同源）。
+    回退：最小单股 snapshot（source=minimal_fallback；LLM 可能因 regime=未知 误判）。
+
+    返回 (snapshot, source_tag)。
+    """
+    from app.services.market_data import _build_quote_snapshot
+
+    try:
+        raw = db.execute(
+            select(RecommendationRun.market_snapshot_json)
+            .where(
+                RecommendationRun.run_mode == "formal",
+                RecommendationRun.status == "completed",
+                RecommendationRun.trade_date == trade_date,
+                RecommendationRun.market_snapshot_json.is_not(None),
+                RecommendationRun.market_snapshot_json != "",
+                RecommendationRun.market_snapshot_json != "{}",
+            )
+            .order_by(RecommendationRun.started_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+    except Exception as exc:  # pragma: no cover - 防御
+        logger.warning("load formal market snapshot failed for %s: %s", trade_date, exc)
+        raw = None
+
+    if raw:
+        try:
+            snap = json.loads(raw) if isinstance(raw, str) else dict(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            snap = None
+        if isinstance(snap, dict) and int(snap.get("sample_count") or 0) >= 100:
+            # 确保 trade_date 对齐分析日
+            snap.setdefault("trade_date", trade_date)
+            breadth = snap.get("breadth") if isinstance(snap.get("breadth"), dict) else {}
+            snap["breadth"] = breadth
+            return snap, "formal_run_snapshot"
+
+    # fallback：最小单股 snapshot（保留旧行为，但打标）
+    snapshot = _build_quote_snapshot([quote], "single", "single", [])
+    snapshot["main_industries"] = []
+    snapshot["breadth"] = snapshot.get("breadth") or {}
+    snapshot["breadth"]["regime"] = "未知"
+    snapshot["trade_date"] = trade_date
+    snapshot["sample_count"] = int(snapshot.get("sample_count") or 1)
+    return snapshot, "minimal_fallback"
 
 
 def analyze_stock(
@@ -162,7 +217,6 @@ def analyze_stock(
 
     # 8. 基础短线策略特征丰富（与推荐管线一致）
     from app.services.feature_builder import build_features
-    from app.services.market_data import _build_quote_snapshot, _candidate_filter_summary
     from app.services.auxiliary.application import (
         inject_auxiliary_prefilter_flags,
         load_auxiliary_feature_views,
@@ -171,12 +225,11 @@ def analyze_stock(
     # 提取 enrich 前的 profile（build_features 会 pop 掉 dsa_profile）
     profile_pre = dict(stock_result.get("dsa_profile") or {})
 
-    # 构建最小 snapshot
-    quote_list = [quote]
-    snapshot = _build_quote_snapshot(quote_list, "single", "single", [])
-    snapshot["main_industries"] = []
-    snapshot["breadth"] = snapshot.get("breadth", {})
-    snapshot["breadth"]["regime"] = "未知"
+    # 市场快照：优先复用同 trade_date 最近 formal run 的真实全市场 snapshot
+    # （sample_count/limit_up/regime/main_industries），避免 analyze-stock 的
+    # 「最小 snapshot」让 LLM 看到 sample_count=1/regime=未知 而系统性误判
+    # 情绪冰点并对主线票 hard veto（T8 2026-07-21 实证：3/3 票因 snapshot 残缺被 veto）。
+    snapshot, snapshot_source = _resolve_analysis_market_snapshot(db, trade_date, quote)
     prefilter_auxiliary = load_auxiliary_feature_views(db, [code], trade_date=trade_date)
     inject_auxiliary_prefilter_flags([stock_result], prefilter_auxiliary)
     enriched_list = build_features([stock_result], snapshot)
@@ -202,6 +255,16 @@ def analyze_stock(
         "bar_count": len(bar_dicts),
         "elapsed_ms": elapsed_ms,
         "price": quote.get("price"),
+        "market_snapshot_source": snapshot_source,
+        "market_snapshot_summary": {
+            "sample_count": snapshot.get("sample_count"),
+            "limit_up_count": snapshot.get("limit_up_count"),
+            "limit_down_count": snapshot.get("limit_down_count"),
+            "regime": (snapshot.get("breadth") or {}).get("regime"),
+            "up_ratio": (snapshot.get("breadth") or {}).get("up_ratio"),
+            "hot_theme": (snapshot.get("breadth") or {}).get("hot_theme"),
+            "main_industries_n": len(snapshot.get("main_industries") or []),
+        },
         "dsa_profile": {
             "macd_status": profile.get("macd_status"),
             "macd_dif": profile.get("macd_dif"),
