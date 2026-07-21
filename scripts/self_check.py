@@ -305,13 +305,21 @@ def _llm_delta_effectiveness(records: list[dict]) -> dict:
     )
     # stance↔delta 矛盾：LLM 判 oppose/veto（反对）却仍给正 delta（推分过线）。
     # 根因（第 9 轮实证 rec_20260707_005_dc16）：score_delta=clamp(raw_score-50) 只看 score
-    # 不看 stance，LLM 内部不一致时（stance=oppose/action=不做 但 score=60）→ delta=+10，
-    # 反对票被推过 score_line。这是逻辑缺陷但低频（2/292）且去混杂后 delta 单调有效——
-    # 不贸然改评分语义（可能错杀 LLM 识别出的隐藏强票），先显式化供前瞻样本积累后决策。
+    # 不看 stance，LLM 内部不一致时（stance=oppose 但 score=60）→ delta=+10。
+    # 修复（2026-07-21 a87924f T5）：agent_skill_runner 对 stance=oppose 且 delta>0 钳到 0；
+    # veto 仍走 hard_veto 拦截。历史 DB 中的 agent_summary 不重写（无前瞻验证手段）。
+    # 分口径同超 clamp：近期仍新增 = 🚨回归；仅历史存量 = 已修复勿再改评分语义。
+    _OPPOSE_FIX = "2026-07-21"  # a87924f oppose 不再加分 上线日
     stance_delta_conflict = sum(
         1 for r in records
         if str(r.get("stance") or "").lower() in ("oppose", "veto")
         and r.get("delta") is not None and r["delta"] > 0
+    )
+    stance_delta_conflict_recent = sum(
+        1 for r in records
+        if str(r.get("stance") or "").lower() in ("oppose", "veto")
+        and r.get("delta") is not None and r["delta"] > 0
+        and r.get("trade_date") and str(r["trade_date"]) >= _OPPOSE_FIX
     )
 
     def _wr(group):
@@ -336,11 +344,16 @@ def _llm_delta_effectiveness(records: list[dict]) -> dict:
             f"本就应多 support——SKILL.md 已有明确 oppose 触发标准（技术面偏空≥2维度差），"
             f"非 prompt 缺陷，勿误判「风险识别虚设」去改 prompt"
         )
-    if stance_delta_conflict > 0:
+    if stance_delta_conflict_recent > 0:
         notes.append(
-            f"{stance_delta_conflict} 条 stance=oppose/veto 却仍给正 delta：score_delta=clamp(score-50) "
-            f"只看 score 不看 stance，LLM 内部不一致（反对但 score 及格）→ 反对票被推过线。"
-            f"低频但属逻辑缺陷，前瞻样本确认无害前不改评分语义（防错杀 LLM 识别的隐藏强票）"
+            f"🚨 {stance_delta_conflict_recent} 条近期(≥{_OPPOSE_FIX}) stance=oppose/veto 仍给正 delta："
+            f"a87924f oppose 不再加分 后出现回归，查 agent_skill_runner enrich/agent_only 路径是否绕过"
+        )
+    elif stance_delta_conflict > 0:
+        notes.append(
+            f"{stance_delta_conflict} 条 stance=oppose/veto 却仍给正 delta 全为 {_OPPOSE_FIX} 前历史存量"
+            f"（旧 score_delta=clamp(score-50) 只看 score 不看 stance；a87924f 已修 oppose 加分钳 0，"
+            f"前瞻 0 新增）。属已修复的历史污染——勿动历史 agent_summary，勿再改评分语义"
         )
     if over_clamp_recent > 0:
         notes.append(
@@ -362,6 +375,7 @@ def _llm_delta_effectiveness(records: list[dict]) -> dict:
         "over_clamp_count": over_clamp,
         "over_clamp_recent": over_clamp_recent,
         "stance_delta_conflict": stance_delta_conflict,
+        "stance_delta_conflict_recent": stance_delta_conflict_recent,
         "notes": notes,
     }
 
@@ -462,6 +476,7 @@ def check_llm_delta_effectiveness(db) -> None:
         f'30+={b["30+"]}% | oppose率={result["oppose_ratio"]:.0%} '
         f'超clamp={result["over_clamp_count"]}条(近期{result["over_clamp_recent"]}) '
         f'stance↔delta矛盾={result["stance_delta_conflict"]}条'
+        f'(近期{result.get("stance_delta_conflict_recent", 0)})'
     )
     for note in result["notes"]:
         print(f'    ⚠️ {note}')

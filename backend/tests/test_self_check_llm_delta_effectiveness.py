@@ -65,20 +65,18 @@ def test_low_oppose_ratio_flagged():
 
 
 def test_stance_delta_conflict_detected():
-    """stance=oppose/veto 却仍给正 delta → stance_delta_conflict + 逻辑缺陷 note。
-
-    第 9 轮实证 rec_20260707_005_dc16：LLM 判 oppose/action=不做 但 score=60 → delta=+10，
-    反对票被推过 score_line。根因 score_delta=clamp(score-50) 只看 score 不看 stance。
-    """
+    """历史日期的 oppose+正 delta → 计数，note 归已修复历史污染（a87924f）。"""
     recs = [
-        _rec(10.0, stance="oppose", label="failed"),   # 矛盾：反对却正 delta
-        _rec(-5.0, stance="oppose", label="failed"),   # 不矛盾：反对且负 delta
-        _rec(12.0, stance="veto", label="failed"),     # 矛盾：veto 却正 delta
-        _rec(20.0, stance="support", label="success"), # 正常：support 正 delta
+        _rec(10.0, stance="oppose", label="failed", trade_date="2026-07-07"),
+        _rec(-5.0, stance="oppose", label="failed"),
+        _rec(12.0, stance="veto", label="failed", trade_date="2026-07-07"),
+        _rec(20.0, stance="support", label="success"),
     ]
     r = self_check._llm_delta_effectiveness(recs)
-    assert r["stance_delta_conflict"] == 2  # oppose+10 和 veto+12
-    assert any("stance=oppose" in n and "正 delta" in n for n in r["notes"])
+    assert r["stance_delta_conflict"] == 2
+    assert r["stance_delta_conflict_recent"] == 0
+    assert any("历史存量" in n and "a87924f" in n for n in r["notes"])
+    assert not any("🚨" in n and "回归" in n and "oppose" in n for n in r["notes"])
 
 
 def test_stance_delta_conflict_not_triggered_for_negative_delta():
@@ -86,7 +84,20 @@ def test_stance_delta_conflict_not_triggered_for_negative_delta():
     recs = [_rec(-8.0, stance="oppose", label="failed"), _rec(20.0, stance="support")]
     r = self_check._llm_delta_effectiveness(recs)
     assert r["stance_delta_conflict"] == 0
-    assert not any("stance=oppose/veto 却仍给正 delta" in n for n in r["notes"])
+    assert not any("正 delta" in n for n in r["notes"])
+
+
+def test_stance_delta_conflict_recent_is_regression():
+    """≥2026-07-21 仍 oppose+正 delta → 🚨 回归 note。"""
+    recs = [
+        _rec(10.0, stance="oppose", label="failed", trade_date="2026-07-21"),
+        _rec(20.0, stance="support", trade_date="2026-07-21"),
+    ]
+    r = self_check._llm_delta_effectiveness(recs)
+    assert r["stance_delta_conflict"] == 1
+    assert r["stance_delta_conflict_recent"] == 1
+    assert any("🚨" in n and "回归" in n for n in r["notes"])
+    assert not any("历史存量" in n and "a87924f" in n for n in r["notes"])
 
 
 def test_normal_oppose_ratio_not_flagged():
