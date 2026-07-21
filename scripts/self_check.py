@@ -2604,11 +2604,12 @@ def _pseudo_active_sentiment_counterfactual(
     still_n = 0
     would_block = 0
     days: dict[str, dict] = {}
+    pseudo_rids: list[str] = []
     for u in weak_active:
         td = str(u.get('trade_date') or '')
+        rid = str(u.get('rid') or '')
         # rid 回退
         if not td:
-            rid = str(u.get('rid') or '')
             parts = rid.split('_')
             if len(parts) > 1 and len(parts[1]) == 8:
                 d = parts[1]
@@ -2622,6 +2623,8 @@ def _pseudo_active_sentiment_counterfactual(
         is_pseudo = new_sent != '活跃'
         if is_pseudo:
             pseudo_n += 1
+            if rid:
+                pseudo_rids.append(rid)
         else:
             still_n += 1
         day = days.setdefault(td, {
@@ -2648,6 +2651,88 @@ def _pseudo_active_sentiment_counterfactual(
         "still_active_n": still_n,
         "would_block_n": would_block,
         "day_breakdown": days,
+        "pseudo_rids": sorted(set(pseudo_rids)),
+    }
+
+
+def _triage_residual_poison(
+    uncovered: list[dict],
+    *,
+    pure_pollution_keys: set[tuple] | None = None,
+    pseudo_active_rids: set[str] | None = None,
+    day_share_floor: float = 0.40,
+    day_min_n: int = 4,
+) -> dict:
+    """真残留毒区 triage（T34）：拆不可攻 vs 可关注。
+
+    分层（互斥，按优先级）：
+      1. pure_pollution — (code, trade_date) 落在 pure 低线/soft@震荡 污染键
+      2. pseudo_active — T28 双维度重判为伪活跃的 rid
+      3. day_clustered — 所在交易日 residual 占比 ≥ day_share_floor 且日 n≥day_min_n
+      4. sparse — 其余（跨日/非污染/非伪活跃；仍禁盲目 entry，仅可关注）
+
+    返回 {n, buckets, counts, clustered_days, sparse_rids, note}。
+    纯函数便于单测；不修改 uncovered。
+    """
+    pure_pollution_keys = pure_pollution_keys or set()
+    pseudo_active_rids = pseudo_active_rids or set()
+    n = len(uncovered)
+    by_day: Counter = Counter()
+    for u in uncovered:
+        td = str(u.get("trade_date") or "")
+        if not td:
+            rid = str(u.get("rid") or "")
+            parts = rid.split("_")
+            if len(parts) > 1 and len(parts[1]) == 8:
+                d = parts[1]
+                td = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+        by_day[td] += 1
+
+    clustered_days = {
+        td for td, c in by_day.items()
+        if n > 0 and c >= day_min_n and c / n >= day_share_floor
+    }
+
+    buckets: dict[str, list[str]] = {
+        "pure_pollution": [],
+        "pseudo_active": [],
+        "day_clustered": [],
+        "sparse": [],
+    }
+    for u in uncovered:
+        rid = str(u.get("rid") or "")
+        fs = u.get("fs") or {}
+        code = str(fs.get("code") or "")
+        td = str(u.get("trade_date") or "")
+        if not td:
+            parts = rid.split("_")
+            if len(parts) > 1 and len(parts[1]) == 8:
+                d = parts[1]
+                td = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+        key = (code, td)
+        if key in pure_pollution_keys:
+            buckets["pure_pollution"].append(rid)
+        elif rid in pseudo_active_rids:
+            buckets["pseudo_active"].append(rid)
+        elif td in clustered_days:
+            buckets["day_clustered"].append(rid)
+        else:
+            buckets["sparse"].append(rid)
+
+    counts = {k: len(v) for k, v in buckets.items()}
+    note = (
+        f"triage residual {n}="
+        f"污染{counts['pure_pollution']}+伪活跃{counts['pseudo_active']}"
+        f"+单日簇{counts['day_clustered']}+稀疏{counts['sparse']}；"
+        f"前三类禁止加 entry；稀疏仅可关注仍须跨日可分"
+    )
+    return {
+        "n": n,
+        "buckets": buckets,
+        "counts": counts,
+        "clustered_days": sorted(clustered_days),
+        "sparse_rids": buckets["sparse"],
+        "note": note,
     }
 
 
@@ -2846,9 +2931,11 @@ def _print_residual_poison_zone(uncovered: list[dict], success_items: list[dict]
             print(f'    - {base}·{sent}: {entry["count"]} 笔（均净 {entry["avg_return"]}%）')
 
     # T30：双维度情绪反事实——历史「弱势·活跃」有多少是伪活跃
+    # T34：接 triage——污染/伪活跃/单日簇/稀疏分层，防 residual=13 被当可攻 entry 目标
     try:
         from app.db.session import SessionLocal as _SL
         _db = _SL()
+        pure_keys: set = set()
         try:
             snap_rows = _db.execute(text("""
                 SELECT trade_date, sample_count, up_count, limit_up_count, limit_down_count
@@ -2863,6 +2950,19 @@ def _print_residual_poison_zone(uncovered: list[dict], success_items: list[dict]
                 }
                 for r in snap_rows
             }
+            poll_raw = _db.execute(text("""
+                SELECT r.code, r.trade_date, o.outcome_label, o.executed_return, u.score_line,
+                       JSON_EXTRACT(r.feature_snapshot_json,
+                                    '$.score_line_meta.dynamic_soft_floor_applied') AS soft,
+                       JSON_UNQUOTE(JSON_EXTRACT(r.feature_snapshot_json,
+                                    '$.score_line_meta.market_base')) AS mbase
+                FROM recommendation_outcomes o
+                JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+                JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+                WHERE o.outcome_label IN ('success', 'failed')
+                  AND r.recommendation_id LIKE 'rec_%'
+            """)).fetchall()
+            pure_keys = set((_pure_pollution_keys(list(poll_raw)) or {}).get("union") or set())
         finally:
             _db.close()
         cf = _pseudo_active_sentiment_counterfactual(uncovered, market_snaps)
@@ -2883,6 +2983,30 @@ def _print_residual_poison_zone(uncovered: list[dict], success_items: list[dict]
                 print(
                     f'     ——弱势·活跃毒区主因是历史伪活跃（涨停孤岛+普跌），'
                     f'T28 已修情绪入口；勿对 residual 弱势·活跃加 entry 规则'
+                )
+        triage = _triage_residual_poison(
+            uncovered,
+            pure_pollution_keys=pure_keys,
+            pseudo_active_rids=set((cf or {}).get("pseudo_rids") or []),
+        )
+        if triage and triage["n"] > 0:
+            c = triage["counts"]
+            print(
+                f'  ℹ️ residual triage（T34）：污染{c["pure_pollution"]} + 伪活跃{c["pseudo_active"]}'
+                f' + 单日簇{c["day_clustered"]} + 稀疏{c["sparse"]}'
+                f' = {triage["n"]}'
+            )
+            if triage.get("clustered_days"):
+                print(f'     · 单日簇日: {triage["clustered_days"]}')
+            if c["sparse"] > 0:
+                print(
+                    f'     · 稀疏 {c["sparse"]} 笔可关注但仍须跨日可分特征；'
+                    f'前三类（污染/伪活跃/单日簇）禁止加 entry'
+                )
+            else:
+                print(
+                    f'     · 无稀疏可攻目标：residual 全被历史污染/伪活跃/单日簇解释，'
+                    f'禁止据此加 entry'
                 )
     except Exception as _e:
         # 诊断失败不阻断主报告
