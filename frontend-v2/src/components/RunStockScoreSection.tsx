@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import type { FunnelAuditRow, FunnelTraceStep, RunFunnelAudit } from "../types";
 import { ErrorPage } from "./StateViews";
 import { tableStyle, thStyle, tdStyle, fmtPrice } from "./recordsShared";
+import { describeSoftFloor, type SoftFloorMeta } from "../utils/softFloor";
 
 /**
  * 运行记录 — 股票分明细
@@ -48,6 +49,21 @@ function linePenalties(row: FunnelAuditRow): Array<{ label: string; value: numbe
   push("证据不足", meta.evidence_adjustment);
   push("成交约束", meta.execution_adjustment);
   return out;
+}
+
+function softFloorMetaOf(row: FunnelAuditRow): SoftFloorMeta {
+  const raw = (row.score_line?.score_line_meta || {}) as Record<string, unknown>;
+  return {
+    dynamic_soft_floor_applied: raw.dynamic_soft_floor_applied as SoftFloorMeta["dynamic_soft_floor_applied"],
+    dynamic_soft_floor: raw.dynamic_soft_floor as number | null | undefined,
+    soft_floor_gap: raw.soft_floor_gap as number | null | undefined,
+    soft_floor_reason: raw.soft_floor_reason as string | null | undefined,
+    market_base: raw.market_base as string | null | undefined,
+    market_sentiment: raw.market_sentiment as string | null | undefined,
+    degraded_agent_unavailable: raw.degraded_agent_unavailable as SoftFloorMeta["degraded_agent_unavailable"],
+    effective_score_line: raw.effective_score_line as number | null | undefined,
+    base_score_line: raw.base_score_line as number | null | undefined,
+  };
 }
 
 export function RunStockScoreSection({ runId }: { runId: string }) {
@@ -166,6 +182,7 @@ function ScoreRow({
   onToggle: () => void;
 }) {
   const gapColor = gap == null ? "var(--muted)" : gap >= 0 ? "var(--market-up)" : "var(--market-down)";
+  const soft = describeSoftFloor(softFloorMetaOf(row));
   return (
     <>
       <tr onClick={onToggle} style={{ cursor: "pointer" }} className="records-row--clickable" title="点击展开分数细节">
@@ -176,6 +193,26 @@ function ScoreRow({
         <td style={tdStyle}>
           {row.name || "—"}
           <span style={{ color: "var(--muted)", fontSize: "var(--text-sm)", marginLeft: 6 }}>{row.industry || ""}</span>
+          {soft.applied ? (
+            <span
+              title={soft.title}
+              style={{
+                marginLeft: 6,
+                fontSize: 10,
+                padding: "1px 5px",
+                borderRadius: 3,
+                border: soft.banned
+                  ? "1px solid var(--warning, #d4a017)40"
+                  : "1px solid var(--border)",
+                color: soft.banned ? "var(--warning, #d4a017)" : "var(--muted)",
+                fontWeight: soft.banned ? 600 : 400,
+                letterSpacing: 0.3,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {soft.badge}
+            </span>
+          ) : null}
         </td>
         <td style={{ ...tdStyle, textAlign: "right", fontFamily: "var(--font-mono)" }}>{fmtNum(gateScore)}</td>
         <td style={{ ...tdStyle, textAlign: "right", fontFamily: "var(--font-mono)", fontWeight: 600 }}>
@@ -222,6 +259,7 @@ function ExpandedDetail({ row }: { row: FunnelAuditRow }) {
   const gateScores = row.rule_gate?.gate_scores || {};
   const adjReasons = (sl.score_line_meta?.reasons as string[] | undefined) || stepOf(row, "score_line")?.adjustment_reasons || [];
   const llmFallback = adjReasons.includes("agent_unavailable_fallback");
+  const soft = describeSoftFloor(softFloorMetaOf(row));
 
   return (
     <tr>
@@ -276,6 +314,13 @@ function ExpandedDetail({ row }: { row: FunnelAuditRow }) {
             )}
             <KV k="有效线" v={fmtNum(sl.effective_score_line)} bold />
             <KV k="最终分" v={fmtNum(sl.final_score)} bold />
+            {soft.applied ? (
+              <KV
+                k={soft.banned ? "软降线·污染" : "软降线"}
+                v={soft.line}
+                accent={soft.banned ? "var(--warning, #d4a017)" : "var(--muted)"}
+              />
+            ) : null}
           </DetailBlock>
         </div>
 
