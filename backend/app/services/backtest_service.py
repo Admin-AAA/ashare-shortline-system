@@ -646,9 +646,11 @@ def _load_bars_history_for_date(
             "profit_efficiency": bar.profit_efficiency,
         })
 
-    # 截取最近120条
+    # 截取最近120条，并对缺失的 ma5/ma20 等本地指标做读时兜底
+    # （2023-2025 历史列全 NULL，与生产 _build_stock_from_bars 口径对齐）
+    from app.services.indicator_computer import fill_missing_local_indicators
     for code in bars_by_code:
-        bars_by_code[code] = bars_by_code[code][-120:]
+        bars_by_code[code] = fill_missing_local_indicators(bars_by_code[code][-120:])
 
     return dict(bars_by_code)
 

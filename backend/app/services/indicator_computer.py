@@ -30,6 +30,7 @@ __all__ = [
     "safe_div",
     "compute_daily_bar_indicators",
     "compute_daily_indicators",
+    "fill_missing_local_indicators",
 ]
 
 
@@ -225,6 +226,56 @@ def compute_daily_bar_indicators(code: str, bars: list[dict[str, Any]]) -> dict[
         }
 
     return result
+
+
+def _is_missing_indicator(value: Any) -> bool:
+    """None / 0 / 0.0 视为本地指标缺失（批量同步常写 0，逐股写 NULL）。"""
+    if value is None:
+        return True
+    try:
+        return float(value) == 0.0
+    except (TypeError, ValueError):
+        return True
+
+
+def fill_missing_local_indicators(bars: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """就地补齐 bar 序列上缺失的本地可算指标（ma5/10/20/60、volume_ratio_5d）。
+
+    背景：daily_kbars 历史列 ma5/ma20 在 2023-2025 全 NULL（scheduler 只补近 7 天），
+    stock_matrix / backtest 等路径直接透传 bar.ma20 会把「站上20日线」等过滤静默杀光。
+    生产 formal 走 market_data._build_stock_from_bars 的 `_ma(closes,N)` 兜底不受影响；
+    本函数把同样口径的兜底前移到 bar dict 构建处，使所有消费方与生产一致。
+
+    - 入参须按 trade_date 升序（与 compute_daily_bar_indicators 相同）
+    - 仅填缺：已有非 0 值不覆盖（尊重上游真实写入）
+    - 返回同一 list（就地修改），便于链式调用
+    """
+    if not bars:
+        return bars
+    closes: list[float] = []
+    volumes: list[float] = []
+    for bar in bars:
+        closes.append(float(bar.get("close") or 0))
+        volumes.append(float(bar.get("volume") or 0))
+        n = len(closes)
+        if _is_missing_indicator(bar.get("ma5")):
+            bar["ma5"] = round(ma(closes, 5), 4)
+        if _is_missing_indicator(bar.get("ma10")):
+            bar["ma10"] = round(ma(closes, 10), 4)
+        if _is_missing_indicator(bar.get("ma20")):
+            bar["ma20"] = round(ma(closes, 20), 4)
+        if _is_missing_indicator(bar.get("ma60")):
+            bar["ma60"] = round(ma(closes, 60 if n >= 60 else n), 4) if n else 0.0
+        # volume_ratio_5d 与 vol_ratio_5 别名：缺谁填谁
+        vr = bar.get("volume_ratio_5d")
+        if vr is None:
+            vr = bar.get("vol_ratio_5")
+        if _is_missing_indicator(vr):
+            filled = round(safe_div(ma(volumes, 5), ma(volumes, 20), 1.0), 4)
+            bar["volume_ratio_5d"] = filled
+            if "vol_ratio_5" in bar or bar.get("vol_ratio_5") is None:
+                bar["vol_ratio_5"] = filled
+    return bars
 
 
 def compute_daily_indicators(code: str, bars: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:

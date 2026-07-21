@@ -151,6 +151,10 @@ def analyze_stock(
             "profit_efficiency": bar.profit_efficiency,
         })
 
+    # 历史 ma 列可能全 NULL；读时现算，与生产 _build_stock_from_bars 一致
+    from app.services.indicator_computer import fill_missing_local_indicators
+    bar_dicts = fill_missing_local_indicators(bar_dicts)
+
     # 7. 构建特征 + 评分
     stock_result = _build_stock_from_bars(
         quote, bar_dicts, quote_source="single_analysis", kline_source="single_analysis"

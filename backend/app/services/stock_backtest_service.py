@@ -283,6 +283,9 @@ def _build_stock_dict_for_date(
             "ma20": bar.ma20,
             "ma60": bar.ma60,
         })
+    # 历史 ma 列可能全 NULL；读时现算，与生产一致
+    from app.services.indicator_computer import fill_missing_local_indicators
+    bar_dicts = fill_missing_local_indicators(bar_dicts)
 
     from app.services.market_data import _build_stock_from_bars
     quote = {

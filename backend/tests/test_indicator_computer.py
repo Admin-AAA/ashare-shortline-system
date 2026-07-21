@@ -402,3 +402,55 @@ def test_ma_never_nan_for_finite_inputs():
         values = [float(i) for i in range(n)]
         for window in (1, 5, 20, 60):
             assert not math.isnan(ic.ma(values, window))
+
+
+# ── fill_missing_local_indicators ─────────────────────────────────────
+
+def test_fill_missing_local_indicators_empty():
+    assert ic.fill_missing_local_indicators([]) == []
+
+
+def test_fill_missing_fills_null_and_zero_ma():
+    """None/0 视为缺失，从 close 现算；已有非 0 值不覆盖。"""
+    bars = [
+        {"trade_date": f"2024-01-{i:02d}", "close": float(10 + i), "volume": 1000.0,
+         "ma5": None, "ma10": 0, "ma20": None, "ma60": None}
+        for i in range(1, 26)
+    ]
+    # 第 25 根预先写入真实 ma5，应保留
+    bars[-1]["ma5"] = 99.0
+    out = ic.fill_missing_local_indicators(bars)
+    assert out is bars  # 就地
+    # 前 24 根 ma5 被填
+    assert out[4]["ma5"] == pytest.approx(
+        sum(b["close"] for b in bars[:5]) / 5, abs=1e-3
+    )
+    # 最后一根 ma5 保留 99
+    assert out[-1]["ma5"] == 99.0
+    # ma20 在第 20 根起应非 0
+    assert out[19]["ma20"] and float(out[19]["ma20"]) > 0
+    assert out[-1]["ma20"] == pytest.approx(
+        sum(b["close"] for b in bars[-20:]) / 20, abs=1e-3
+    )
+
+
+def test_fill_missing_volume_ratio_alias():
+    bars = [
+        {"trade_date": f"2024-01-{i:02d}", "close": 10.0, "volume": float(100 * i),
+         "ma5": 10.0, "ma10": 10.0, "ma20": 10.0, "ma60": 10.0,
+         "volume_ratio_5d": None, "vol_ratio_5": None}
+        for i in range(1, 26)
+    ]
+    ic.fill_missing_local_indicators(bars)
+    assert bars[-1]["volume_ratio_5d"] is not None
+    assert bars[-1]["vol_ratio_5"] == bars[-1]["volume_ratio_5d"]
+
+
+def test_fill_missing_does_not_overwrite_real_values():
+    bars = [
+        {"trade_date": "2024-01-01", "close": 10.0, "volume": 100.0,
+         "ma5": 12.5, "ma10": 11.0, "ma20": 10.5, "ma60": 9.0}
+    ]
+    ic.fill_missing_local_indicators(bars)
+    assert bars[0]["ma5"] == 12.5
+    assert bars[0]["ma20"] == 10.5

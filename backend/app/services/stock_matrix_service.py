@@ -318,7 +318,10 @@ def _build_bar_dicts(bars: list[Any]) -> list[dict[str, Any]]:
             "holder_pct": bar.holder_pct,
             "profit_efficiency": bar.profit_efficiency,
         })
-    return result
+    # 历史 ma5/ma20 列在 2023-2025 全 NULL；与生产 _build_stock_from_bars 一致，
+    # 读时从 OHLCV 现算，避免矩阵回测静默失真。
+    from app.services.indicator_computer import fill_missing_local_indicators
+    return fill_missing_local_indicators(result)
 
 
 def _empty_signal(skill: StrategySkill) -> dict[str, Any]:
