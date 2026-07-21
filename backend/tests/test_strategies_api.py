@@ -126,6 +126,8 @@ def test_strategies_exposure_30d_present_and_nonnegative():
 
 def test_strategies_low_exposure_has_last_exp_gate():
     """T27/T29：曝光 <20 策略须带 last_exp_gate（有效线 vs 最高候选 + 恐慌日字段）。"""
+    from app.api.strategies import _GATE_CACHE
+    _GATE_CACHE.clear()  # 清进程级 TTL 缓存，确保测试拿到最新 DB 值
     client = TestClient(app)
     data = client.get("/api/strategies").json()
     low = [d for d in data if d.get("exposure_30d", 0) < 20 and d.get("enabled", True)]
