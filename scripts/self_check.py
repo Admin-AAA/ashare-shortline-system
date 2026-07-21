@@ -2196,7 +2196,7 @@ def check_d_rule_coverage(db, win_rate_baseline: float) -> None:
     rows = db.execute(text("""
         SELECT r.recommendation_id, o.outcome_label, o.executed_return,
                r.feature_snapshot_json, r.skill_breakdown_json,
-               o.exit_reason, o.max_return
+               o.exit_reason, o.max_return, r.trade_date, r.final_score
         FROM recommendation_outcomes o
         JOIN recommendations r ON r.recommendation_id = o.recommendation_id
         JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
@@ -2329,12 +2329,24 @@ def _collect_uncovered_failures(rows, skills) -> list[dict]:
         fs = json.loads(fsj) if fsj else {}
         sb = json.loads(sbj) if sbj else []
         if not _failure_is_covered(fs, sb, skills):
+            # trade_date / final_score：SQL 扩展列（index 7/8）；rid 回退
+            td = str(row[7]) if len(row) > 7 and row[7] is not None else ''
+            if not td:
+                parts = str(rid).split('_')
+                if len(parts) > 1 and len(parts[1]) == 8:
+                    d = parts[1]
+                    td = f'{d[:4]}-{d[4:6]}-{d[6:8]}'
+            final_score = row[8] if len(row) > 8 else None
+            if final_score is None:
+                final_score = fs.get('final_score')
             out.append({
                 'rid': rid,
                 'fs': fs,
                 'exit_reason': exit_reason,
                 'max_return': max_return,
                 'executed_return': ret,
+                'trade_date': td,
+                'final_score': final_score,
             })
     return out
 
@@ -2378,10 +2390,10 @@ def _residual_regime_sentiment_breakdown(
     """真残留毒区按 (market_regime, market_sentiment_phase) 交叉分布。
 
     feature_snapshot 存 run 时由 aggregator _market_base/_market_sentiment 算出的
-    market_regime + market_sentiment_phase。_market_sentiment 仅用 limit_up_rate 单维度
-    判活跃，会把"涨停集中+大面积下跌"的冰点日误判为活跃，使弱势·活跃 score_line +3
-    放宽本该过滤的低质量票。本函数把该误判在毒区里的占比显式化，供前瞻样本积累后
-    修复 _market_sentiment（加 up_ratio/limit_down 双维度）作精确依据。
+    market_regime + market_sentiment_phase（历史可能为单维度伪活跃）。
+
+    T28 起 _market_sentiment 已双维度（涨停率 + lu/ld≥1.2）；本函数仍报历史标签分布，
+    配合 _pseudo_active_sentiment_counterfactual 区分「历史伪活跃」vs 真活跃毒区。
 
     纯函数（仅读 uncovered），返回按 count 降序的 [(base, sent), {count, avg_return}]。
     """
@@ -2389,8 +2401,17 @@ def _residual_regime_sentiment_breakdown(
     rets_by_key: dict[tuple[str, str], list[float]] = {}
     for u in uncovered:
         fs = u.get('fs') or {}
-        base = str(fs.get('market_regime') or '?')
-        sent = str(fs.get('market_sentiment_phase') or '?')
+        meta = fs.get('score_line_meta') or {}
+        base = str(fs.get('market_regime') or meta.get('market_base') or '?')
+        sent = str(
+            fs.get('market_sentiment_phase')
+            or meta.get('market_sentiment')
+            or '?'
+        )
+        # market_regime 有时是「弱势·活跃」合体；拆开
+        if '·' in base and sent in ('?', ''):
+            parts = base.split('·', 1)
+            base, sent = parts[0], parts[1]
         key = (base, sent)
         counts[key] += 1
         ret = u.get('executed_return')
@@ -2402,6 +2423,99 @@ def _residual_regime_sentiment_breakdown(
         avg = round(sum(rets) / len(rets), 2) if rets else 0.0
         out.append((key, {"count": c, "avg_return": avg}))
     return out
+
+
+def _pseudo_active_sentiment_counterfactual(
+    uncovered: list[dict],
+    market_snaps: dict[str, dict],
+) -> dict | None:
+    """用当前双维度 _market_sentiment 重判历史毒区票的情绪（纯函数）。
+
+    market_snaps: trade_date -> {sample_count, up_count, limit_up_count, limit_down_count}
+    返回 {
+      weak_active_n, pseudo_n, still_active_n,
+      would_raise_line_n,  # 伪活跃→平淡 且 final_score < new_eff@72 会被抬线挡住
+      day_breakdown: {date: {n, pseudo, lu, ld, new_sent}},
+    }
+    无弱势·活跃票返回 None。
+    """
+    from app.engine.aggregator import (
+        _market_sentiment,
+        _market_base,
+        resolve_score_line_context,
+    )
+
+    weak_active: list[dict] = []
+    for u in uncovered:
+        fs = u.get('fs') or {}
+        meta = fs.get('score_line_meta') or {}
+        base = str(fs.get('market_regime') or meta.get('market_base') or '?')
+        sent = str(
+            fs.get('market_sentiment_phase')
+            or meta.get('market_sentiment')
+            or '?'
+        )
+        if '·' in base and sent in ('?', ''):
+            parts = base.split('·', 1)
+            base, sent = parts[0], parts[1]
+        # market_regime 有时已是合体标签
+        if base == '弱势' and sent == '活跃':
+            weak_active.append(u)
+        elif base.startswith('弱势') and '活跃' in base:
+            weak_active.append(u)
+
+    if not weak_active:
+        return None
+
+    pseudo_n = 0
+    still_n = 0
+    would_block = 0
+    days: dict[str, dict] = {}
+    for u in weak_active:
+        td = str(u.get('trade_date') or '')
+        # rid 回退
+        if not td:
+            rid = str(u.get('rid') or '')
+            parts = rid.split('_')
+            if len(parts) > 1 and len(parts[1]) == 8:
+                d = parts[1]
+                td = f'{d[:4]}-{d[4:6]}-{d[6:8]}'
+        snap = market_snaps.get(td) or {}
+        if not snap:
+            still_n += 1
+            continue
+        new_sent = _market_sentiment(snap)
+        new_base = _market_base(snap)
+        is_pseudo = new_sent != '活跃'
+        if is_pseudo:
+            pseudo_n += 1
+        else:
+            still_n += 1
+        day = days.setdefault(td, {
+            "n": 0, "pseudo": 0, "lu": snap.get("limit_up_count"),
+            "ld": snap.get("limit_down_count"), "up": snap.get("up_count"),
+            "sample": snap.get("sample_count"), "new_sent": new_sent,
+            "new_base": new_base,
+        })
+        day["n"] += 1
+        if is_pseudo:
+            day["pseudo"] += 1
+        # 反事实：伪活跃→平淡时，base72 新有效线 vs 历史 final_score
+        # 注：平淡 madj 更低（+2 vs +5），线更低；会挡的是 score < 新线 的低分票
+        ctx = resolve_score_line_context(72.0, snap)
+        score = u.get('final_score')
+        if score is None:
+            score = (u.get('fs') or {}).get('final_score')
+        if is_pseudo and score is not None and float(score) < float(ctx['effective_score_line']):
+            would_block += 1
+
+    return {
+        "weak_active_n": len(weak_active),
+        "pseudo_n": pseudo_n,
+        "still_active_n": still_n,
+        "would_block_n": would_block,
+        "day_breakdown": days,
+    }
 
 
 def _entry_separability_falsified(fail_items: list[dict], success_items: list[dict],
@@ -2590,17 +2704,56 @@ def _print_residual_poison_zone(uncovered: list[dict], success_items: list[dict]
         pass
 
     # base x sentiment 交叉分布：定位"弱势·活跃是真毒区"类 regime 误判根因。
-    # feature_snapshot 存 market_regime（base）+ market_sentiment_phase（sentiment），
-    # 由 aggregator _market_base/_market_sentiment 在 run 时算出并写入。
-    # _market_sentiment 仅用 limit_up_rate 单维度判活跃，会把"涨停集中+大面积下跌"
-    # 的冰点日（如 2026-07-07 up_ratio=12.4% lu_rate=0.9%）误判为活跃，使弱势·活跃
-    # score_line +3 放宽本该过滤的低质量票。此段把该误判在毒区里的占比显式化，
-    # 供前瞻样本积累后修复 _market_sentiment（加 up_ratio/limit_down 双维度）作精确依据。
+    # feature_snapshot 存 run 时的历史标签（T28 前可能为伪活跃）。
+    # T28 起 _market_sentiment 双维度；下方伪活跃反事实用当前规则重判。
     regime_sent_breakdown = _residual_regime_sentiment_breakdown(uncovered)
     if regime_sent_breakdown:
         print('  毒区 × (regime, sentiment) 分布（定位 regime 误判根因）:')
         for (base, sent), entry in regime_sent_breakdown:
             print(f'    - {base}·{sent}: {entry["count"]} 笔（均净 {entry["avg_return"]}%）')
+
+    # T30：双维度情绪反事实——历史「弱势·活跃」有多少是伪活跃
+    try:
+        from app.db.session import SessionLocal as _SL
+        _db = _SL()
+        try:
+            snap_rows = _db.execute(text("""
+                SELECT trade_date, sample_count, up_count, limit_up_count, limit_down_count
+                FROM market_snapshots
+            """)).fetchall()
+            market_snaps = {
+                str(r[0]): {
+                    "sample_count": r[1],
+                    "up_count": r[2],
+                    "limit_up_count": r[3],
+                    "limit_down_count": r[4],
+                }
+                for r in snap_rows
+            }
+        finally:
+            _db.close()
+        cf = _pseudo_active_sentiment_counterfactual(uncovered, market_snaps)
+        if cf and cf["weak_active_n"] > 0:
+            print(
+                f'  ℹ️ 伪活跃反事实（T28 双维度重判历史弱势·活跃 {cf["weak_active_n"]} 笔）: '
+                f'伪活跃 {cf["pseudo_n"]} / 仍活跃 {cf["still_active_n"]}'
+                f'（不重标历史；新 formal 用双维度）'
+            )
+            # 按日摘要
+            for td, d in sorted(cf["day_breakdown"].items()):
+                flag = '伪活跃→' + str(d.get("new_sent")) if d.get("pseudo") else '仍活跃'
+                print(
+                    f'     · {td}: {d["n"]} 笔（{flag}，lu={d.get("lu")} ld={d.get("ld")} '
+                    f'up={d.get("up")}/{d.get("sample")}）'
+                )
+            if cf["pseudo_n"] >= max(3, cf["weak_active_n"] // 2):
+                print(
+                    f'     ——弱势·活跃毒区主因是历史伪活跃（涨停孤岛+普跌），'
+                    f'T28 已修情绪入口；勿对 residual 弱势·活跃加 entry 规则'
+                )
+    except Exception as _e:
+        # 诊断失败不阻断主报告
+        pass
 
     # 数据质量标记：RSI=0 是上游数据污染（_f(None,0.0) 写库 + rsi_6 缺守卫），
     # 不是策略可解毒区。统计残留毒区里 RSI 污染笔占比，提示勿当策略毒区循环加规则。
