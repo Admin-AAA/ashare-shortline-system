@@ -509,8 +509,23 @@ def check_e_item(db, hit_skills: set) -> None:
         d for d in os.listdir(SKILLS_DIR)
         if os.path.isdir(os.path.join(SKILLS_DIR, d))
     )
-    blind = [s for s in registered if s not in hit_skills]
-    print(f'E 项覆盖盲区：{len(blind)} 个策略近 60 天 formal 0 命中: {blind}')
+    # 排除 disabled 策略（manifest.status != 'active'，如 overnight-holding-method 已下线）：
+    # 已下线策略本就不该命中/补跑，否则被误报为「覆盖盲区」「低覆盖需标记」，稀释对
+    # 真正活跃策略的注意力。盲区和曝光公平度都只评估 active 策略；低覆盖统计仍含全量
+    # （历史胜率追溯需要），但对 disabled 策略单独标注「已下线」而非「需标记」。
+    def _status(sid: str) -> str:
+        try:
+            with open(os.path.join(SKILLS_DIR, sid, 'manifest.json')) as f:
+                return str(json.load(f).get('status') or 'active')
+        except Exception:
+            return 'active'
+    active_set = {s for s in registered if _status(s) == 'active'}
+    disabled_set = set(registered) - active_set
+
+    blind = [s for s in registered if s not in hit_skills and s in active_set]
+    if disabled_set:
+        print(f'E 项已下线策略（disabled，不参与盲区/曝光评估）: {sorted(disabled_set)}')
+    print(f'E 项覆盖盲区：{len(blind)} 个 active 策略近 60 天 formal 0 命中: {blind}')
 
     # 低覆盖 / 低胜率策略（按 recommendation_id 去重，避免 JSON_TABLE 多策略行重复计数）
     rows = db.execute(text("""
@@ -544,6 +559,11 @@ def check_e_item(db, hit_skills: set) -> None:
     for row in rows:
         n, wins, avg_ret, fwd_n, fwd_wins = row[1], row[2], row[3], row[4], row[5]
         win_rate = round(wins * 100 / n, 1)
+        # disabled 策略（已下线）不再补跑/标记——样本就此冻结，标注「已下线」供历史追溯，
+        # 不打扰对活跃策略的判断（已下线的 overnight 等不应再出现在「需标记」清单）。
+        if row[0] in disabled_set:
+            print(f'  {row[0]}: n={n} wins={wins} avg_ret={avg_ret}% winrate={win_rate}% ←已下线(disabled)，样本冻结仅供追溯')
+            continue
         tag = '低胜率' if win_rate < 45 else '低覆盖'
         # 前瞻窗口口径（FORWARD_EPOCH 之后）：区分旧代码污染 vs 真低胜率
         # 前瞻无样本 → 等结算；前瞻胜率回升 → 旧污染；前瞻仍低 → 真低胜率需标记
@@ -598,12 +618,13 @@ def check_e_item(db, hit_skills: set) -> None:
     print(f'E 项曝光公平度: H_norm={h_norm:.3f} （目标 ≥{FAIRNESS_TARGET}，{fair_tag}）')
 
     # 注册策略中近 30 天 0 曝光的（曝光补跑应持续喂到 SAMPLE_FLOOR）
-    zero_exp = [s for s in registered if s not in exposure]
+    # 排除 disabled：已下线策略补跑不再喂，0 曝光/样本<20 是预期而非警告。
+    zero_exp = [s for s in active_set if s not in exposure]
     if zero_exp:
-        print(f'⚠️ {len(zero_exp)} 个注册策略近 30 天 0 曝光（补跑未覆盖）: {sorted(zero_exp)}')
-    under_floor = sorted(s for s, n in exposure.items() if n < SAMPLE_FLOOR)
+        print(f'⚠️ {len(zero_exp)} 个 active 策略近 30 天 0 曝光（补跑未覆盖）: {sorted(zero_exp)}')
+    under_floor = sorted(s for s, n in exposure.items() if n < SAMPLE_FLOOR and s in active_set)
     if under_floor:
-        print(f'⚠️ {len(under_floor)} 个策略样本 <{SAMPLE_FLOOR}（胜率统计不可信，补跑应持续喂）: {under_floor}')
+        print(f'⚠️ {len(under_floor)} 个 active 策略样本 <{SAMPLE_FLOOR}（胜率统计不可信，补跑应持续喂）: {under_floor}')
 
     # ── D 项陷阱护栏：曝光-胜率错配 ≠ 应调权重 ─────────────────────────────
     # 未来 D 攻击轮几乎必看到「高胜率策略低曝光 vs daily-stock 低胜率高曝光」，
