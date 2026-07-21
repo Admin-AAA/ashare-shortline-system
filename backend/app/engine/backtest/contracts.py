@@ -295,7 +295,11 @@ class ExecutionPolicy(CanonicalValue):
     position_size: float = 1.0
     stop_loss_pct: float | None = 5.0
     take_profit_pct: float | None = 10.0
-    max_entry_gap_pct: float | None = None
+    # 与生产 outcome 引擎 MAX_ENTRY_GAP_PCT=10 对齐：跳空高开 >10% 放弃入场
+    # （历史 12/12 全部失败、均亏 -4.5%）。默认激活，使回测引擎与生产
+    # 执行模型一致——否则回测会纳入生产已丢弃的 0 胜率跳空票，
+    # 破坏 T1/T2 回测（D 项核心工具）与生产胜率的可比性。
+    max_entry_gap_pct: float | None = 10.0
     skip_untradable_entry_bars: bool = True
     intraday_exit_priority: IntradayExitPriority = IntradayExitPriority.STOP_LOSS
 

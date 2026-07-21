@@ -142,7 +142,7 @@ class ExecutionPolicyRequest(_StrictModel):
     position_size: float = Field(default=1.0, gt=0, le=1)
     stop_loss_pct: float | None = Field(default=5.0, gt=0, lt=100)
     take_profit_pct: float | None = Field(default=10.0, gt=0, lt=100)
-    max_entry_gap_pct: float | None = Field(default=None, ge=0, lt=100)
+    max_entry_gap_pct: float | None = Field(default=10.0, ge=0, lt=100)
     skip_untradable_entry_bars: bool = True
     intraday_exit_priority: Literal["stop_loss", "take_profit"] = "stop_loss"
 

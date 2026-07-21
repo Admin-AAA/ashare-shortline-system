@@ -185,6 +185,32 @@ def test_gap_rejection_is_not_a_trade_and_never_enters_failure_attribution() -> 
     assert attribute_failures((rejected.trade,)) == ()
 
 
+def test_default_max_entry_gap_pct_aligns_with_production_engine() -> None:
+    # 引擎默认 max_entry_gap_pct 现已对齐生产 MAX_ENTRY_GAP_PCT=10：
+    # 否则回测会纳入生产已整笔丢弃的跳空高开票（历史 12/12 全亏），
+    # 破坏 T1/T2 回测（D 项核心工具）与生产胜率的可比性。
+    assert ExecutionPolicy().max_entry_gap_pct == 10.0
+
+    # 次日开盘跳空 +11.1% 高于信号价 90 → 放弃入场（生产 gap_up_blocked，
+    # 整笔丢弃，不进入失败归因）。entry_lookahead_days=1 与生产“丢弃整笔”语义一致。
+    gapped = simulate(
+        RecommendationInput(code="000001", signal_date="2024-01-01", signal_price=90),
+        _bars(),
+        ExecutionPolicy(),  # 默认 entry_lookahead_days=1, max_entry_gap_pct=10.0
+    )
+    assert gapped.entry_triggered is False
+    assert gapped.trade.outcome_label is TradeOutcome.NOT_EXECUTED
+    assert attribute_failures((gapped.trade,)) == ()
+
+    # 无跳空（信号价=开盘价）→ 正常入场，证明默认仅拦跳空、不误杀正常候选。
+    normal = simulate(
+        RecommendationInput(code="000001", signal_date="2024-01-01", signal_price=100),
+        _bars(),
+        ExecutionPolicy(),
+    )
+    assert normal.entry_triggered is True
+
+
 def test_metrics_and_equity_curve_are_deterministic_and_exclude_unexecuted_samples() -> None:
     loss = simulate(RecommendationInput("000001", "2024-01-01", 100), _bars(), _policy()).trade
     win_bars = (
