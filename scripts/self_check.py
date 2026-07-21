@@ -8,6 +8,7 @@
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 from collections import Counter
@@ -606,6 +607,59 @@ def _format_e_forward_note(
     return f" | 前瞻{still}{fwd_n}笔 WR={fwd_wr}%({tag})"
 
 
+def _parse_max_candidate_score(fa_str: str | None) -> float | None:
+    """从 filter_audit_json 的 reason_counts 解析 score_line 阶段被拦候选的最高最终分。
+
+    匹配形如 '最终分 73.16 低于有效线 89.55'（曝光补跑 run 的 filter_audit_json 实测格式）。
+    取所有被拦候选中的最高分，用于判断门线拦截是否因「regime 有效线偏高」(候选分接近线，
+    等国转强会喂) 还是「真无候选」。纯函数便于单测；解析失败/无匹配返回 None。
+    """
+    if not fa_str:
+        return None
+    try:
+        d = json.loads(fa_str)
+    except (TypeError, ValueError):
+        return None
+    reason_counts = (d or {}).get("reason_counts") or {}
+    score_line = reason_counts.get("score_line") or {}
+    pat = re.compile(r"最终分\s*([\d.]+)\s*低于有效线")
+    best: float | None = None
+    for msg in score_line.values():
+        for m in pat.findall(str(msg)):
+            try:
+                v = float(m)
+            except ValueError:
+                continue
+            if best is None or v > best:
+                best = v
+    return best
+
+
+def _fetch_gate_blocked_detail(db, sid: str) -> dict | None:
+    """门线拦截明细：取该策略最近一次 completed experiment 补跑 run 的
+    有效线(score_line 列) 与最高候选最终分(_parse_max_candidate_score)。
+    用于 E 项 gate_blocked 诊断区分钟线拦截根因（regime 有效线偏高 vs 真无候选）。
+    失败/无数据返回 None，调用方降级为仅打印 strategy_id，不影响主报告。
+    """
+    try:
+        params = {"pat": '%"' + sid + '"%'}
+        row = db.execute(text("""
+            SELECT r.score_line, r.filter_audit_json
+            FROM recommendation_runs r
+            WHERE r.run_mode = 'experiment' AND r.status = 'completed'
+              AND r.selected_skills_json LIKE :pat
+              AND r.started_at >= DATE_SUB(NOW(), INTERVAL 14 DAY)
+            ORDER BY r.started_at DESC LIMIT 1
+        """), params).fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+    eff_line = float(row[0]) if row[0] is not None else None
+    max_cand = _parse_max_candidate_score(row[1]) if row[1] else None
+    return {"effective_line": eff_line, "max_candidate_score": max_cand}
+
+
 def check_e_item(db, hit_skills: set) -> None:
     """E 项：策略覆盖盲区 + 低胜率标记。"""
     # 覆盖盲区
@@ -831,9 +885,17 @@ def check_e_item(db, hit_skills: set) -> None:
         if feeding:
             print(f'  ℹ️ 补跑在喂（窄口径样本天然慢，非 bug，不加 universe）: {feeding}')
         if gate_blocked:
-            print(f'  ℹ️ 补跑在跑但门线拦截（该策略近7天 completed experiment 但 0 产出；'
-                  f'低样本策略候选规则分撞线/universe 拦截，当前 regime 无高分票，非补跑故障——'
-                  f'勿为喂样本放宽门线，会污染胜率统计）: {gate_blocked}')
+            details = []
+            for sid in gate_blocked:
+                det = _fetch_gate_blocked_detail(db, sid)
+                if det and det.get("effective_line") is not None:
+                    mc = det.get("max_candidate_score")
+                    mc_s = f"最高候选{mc:.1f}" if mc is not None else "无候选分"
+                    details.append(f"{sid}(有效线{det['effective_line']:.1f} vs {mc_s})")
+                else:
+                    details.append(sid)
+            print(f'  ℹ️ 补跑在跑但门线拦截（regime 有效线偏高，当前 regime 无高分票，非补跑故障——'
+                  f'勿为喂样本放宽门线，会污染胜率统计）: {details}')
         if stalled:
             print(f'  🚨 补跑停滞（近7天无该策略 completed experiment run，可能失败/未触发，需手动触发验证）: {stalled}')
 
