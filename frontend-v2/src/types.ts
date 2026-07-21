@@ -1599,6 +1599,10 @@ export type StrategyPerformance = {
   last_recommendation_date: string | null;
   /** 统计可信度：样本数 < 20 时为 false（胜率属噪声，前端标「样本不足·统计参考」） */
   reliable: boolean;
+  /** 近 30 天 formal+experiment 曝光（与 self_check E 项 / 补跑判定一致） */
+  exposure_30d?: number;
+  /** 曝光样本下限（默认 20） */
+  exposure_floor?: number;
   horizon_metrics?: Record<string, unknown> | null;
   date_range?: DateRangeMeta;
 };
@@ -1613,6 +1617,9 @@ export type StrategyListItem = {
   source_type: string | null;
   assigned_presets: string[];
   has_backtest_adapter: boolean;
+  /** 近 30 天曝光（performance 为空时仍返回，供补跑状态可见） */
+  exposure_30d?: number;
+  exposure_floor?: number;
   performance: StrategyPerformance | null;
 };
 

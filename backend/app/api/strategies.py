@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.services.outcome_service import metrics_by_strategy
+from app.services.outcome_service import exposure_sample_counts, metrics_by_strategy
 from app.services.strategy_center_service import (
     StrategyVersionNotFoundError,
     get_strategy_center_detail,
@@ -26,13 +26,19 @@ from app.services.workbench_service import list_skills
 # 低于此样本数的策略，其胜率/盈亏比属统计噪声，前端须标注「样本不足 · 统计参考」，
 # 防止用户对 n<20 的策略过度信任（self_check 长期预警：5 策略样本<20 胜率不可信）。
 MIN_SAMPLE_FOR_RELIABLE = 20
+# E 项曝光样本下限（与 self_check SAMPLE_FLOOR / DEFAULT_EXPOSURE_MIN_SAMPLE 一致）
+EXPOSURE_SAMPLE_FLOOR = 20
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/strategies", tags=["strategies"])
 
 
-def _performance_payload(metric: dict | None) -> dict | None:
+def _performance_payload(
+    metric: dict | None,
+    *,
+    exposure_30d: int = 0,
+) -> dict | None:
     if not metric or (metric.get("sample_count") or 0) <= 0:
         return None
     return {
@@ -48,6 +54,10 @@ def _performance_payload(metric: dict | None) -> dict | None:
         "profit_loss_ratio": metric.get("profit_loss_ratio"),
         "last_recommendation_date": metric.get("last_recommendation_date"),
         "reliable": (metric.get("sample_count") or 0) >= MIN_SAMPLE_FOR_RELIABLE,
+        # 近 30 天 formal+experiment 曝光（与 self_check E 项口径一致）；
+        # < EXPOSURE_SAMPLE_FLOOR 时前端标「补跑在喂」，勿当故障/勿放宽 universe。
+        "exposure_30d": int(exposure_30d or 0),
+        "exposure_floor": EXPOSURE_SAMPLE_FLOOR,
         "horizon_metrics": metric.get("horizon_metrics"),
         "date_range": metric.get("date_range"),
     }
@@ -72,11 +82,14 @@ def list_strategies(
         m["strategy_id"]: m
         for m in metrics_by_strategy(db, window_days=window_days, start_date=start_date, end_date=end_date)
     }
+    # E 项曝光：formal+experiment 近 30 天，与 self_check / 补跑判定一致
+    exposure_30d = exposure_sample_counts(db, window_days=30)
 
     result = []
     for s in skills:
         m = metrics_by_id.get(s["skill_id"])
-        perf = _performance_payload(m)
+        exp_n = int(exposure_30d.get(s["skill_id"]) or 0)
+        perf = _performance_payload(m, exposure_30d=exp_n)
         result.append(
             {
                 "skill_id": s["skill_id"],
@@ -86,6 +99,9 @@ def list_strategies(
                 "source_type": s.get("source_type"),
                 "assigned_presets": s.get("assigned_presets") or [],
                 "has_backtest_adapter": s.get("has_backtest_adapter", False),
+                # 从未结算的策略也暴露近 30 天曝光，便于「补跑在喂 / 预期稀疏」一屏可见
+                "exposure_30d": exp_n,
+                "exposure_floor": EXPOSURE_SAMPLE_FLOOR,
                 "performance": perf,
             }
         )
@@ -119,5 +135,8 @@ def strategy_detail(
         (item for item in metrics_by_strategy(db) if item.get("strategy_id") == strategy_id),
         None,
     )
-    detail["performance"] = _performance_payload(metric)
+    exp_n = int(exposure_sample_counts(db, window_days=30).get(strategy_id) or 0)
+    detail["performance"] = _performance_payload(metric, exposure_30d=exp_n)
+    detail["exposure_30d"] = exp_n
+    detail["exposure_floor"] = EXPOSURE_SAMPLE_FLOOR
     return detail

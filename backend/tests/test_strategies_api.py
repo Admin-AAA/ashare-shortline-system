@@ -98,3 +98,27 @@ def test_strategies_reliable_flag_consistent_with_sample_count():
     # 端到端真值：当前生产库至少存在 1 个 n<20 的低样本策略（reliable=False）
     low = [d for d in called if not d["performance"]["reliable"]]
     assert low, "当前生产库应有样本<20 的策略使其 reliable=False（否则阈值无意义）"
+
+
+def test_strategies_exposure_30d_present_and_nonnegative():
+    """T7 E 项曝光可见：列表每项含 exposure_30d / exposure_floor，与 self_check 对齐。
+
+    近 30 天 formal+experiment 曝光供前端「补跑在喂」角标；performance 为空时
+    顶层仍返回，避免从未结算策略看不见补跑状态。
+    """
+    client = TestClient(app)
+    data = client.get("/api/strategies").json()
+    assert data
+    for d in data:
+        assert "exposure_30d" in d, f"{d.get('skill_id')} 缺顶层 exposure_30d"
+        assert "exposure_floor" in d
+        assert d["exposure_floor"] == 20
+        assert isinstance(d["exposure_30d"], int) and d["exposure_30d"] >= 0
+        if d["performance"] is not None:
+            p = d["performance"]
+            assert "exposure_30d" in p
+            assert p["exposure_30d"] == d["exposure_30d"]
+            assert p.get("exposure_floor") == 20
+    # 生产库至少应有 1 个曝光 < 20 的策略（chip/small-cap/trend 长期 <20）
+    low_exp = [d for d in data if d["exposure_30d"] < 20]
+    assert low_exp, "应有曝光 <20 的策略以便前端展示「补跑在喂」"

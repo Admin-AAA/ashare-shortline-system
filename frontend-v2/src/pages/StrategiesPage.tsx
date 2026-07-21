@@ -157,18 +157,33 @@ function CalledCard({ item }: { item: StrategyListItem }) {
             style={{
               marginTop: "var(--space-3)",
               display: "flex",
-              alignItems: "center",
-              gap: 6,
+              flexDirection: "column",
+              gap: 4,
               fontSize: "var(--text-xs)",
               color: "var(--warning, #b45309)",
               background: "color-mix(in srgb, var(--warning, #b45309) 12%, transparent)",
               border: "1px solid color-mix(in srgb, var(--warning, #b45309) 30%, transparent)",
-              borderRadius: 999,
-              padding: "3px 10px",
+              borderRadius: 8,
+              padding: "6px 10px",
               alignSelf: "flex-start",
+              maxWidth: "100%",
             }}
+            title={
+              (perf.exposure_30d != null && (perf.exposure_floor ?? 20) > (perf.exposure_30d ?? 0)
+                ? `近30天 formal+experiment 曝光 ${perf.exposure_30d} < 下限 ${perf.exposure_floor ?? 20}；` +
+                  `盘前补跑会继续喂样本。0 产出=当前 regime/universe 拦截（准确>可见），勿放宽门槛。`
+                : `已结算样本 < 20，胜率属噪声，仅供参考。`)
+            }
           >
-            样本不足（n={perf.sample_count}）· 胜率统计仅供参考
+            <span>样本不足（n={perf.sample_count}）· 胜率统计仅供参考</span>
+            {perf.exposure_30d != null && (
+              <span style={{ color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
+                近30天曝光 {perf.exposure_30d}
+                {(perf.exposure_floor ?? 20) > perf.exposure_30d
+                  ? ` / ${perf.exposure_floor ?? 20} · 补跑在喂`
+                  : ` ≥${perf.exposure_floor ?? 20}`}
+              </span>
+            )}
           </div>
         )}
 
