@@ -277,10 +277,10 @@ def test_rid_trade_date_parses_iso_format():
 
 
 def test_forward_veto_counterfactual_excludes_covered_failures(capsys):
-    """前瞻 veto 反事实：剔除被覆盖失败笔后重算，反映 veto 后预期（非 veto 前历史）。
+    """前瞻规则覆盖反事实：剔除被覆盖失败笔后重算（含 soft ban 三路）。
 
-    构造前瞻窗口内 3 笔：1 弱市失败(被 veto 覆盖) + 1 强势失败(未覆盖) + 1 成功。
-    剔除弱市失败后剩 2 笔(1 失败+1 成功)，胜率 50%。
+    构造前瞻窗口内：1 弱市失败(被 veto 覆盖) + 1 强势失败(未覆盖) + 3 成功。
+    剔除弱市失败后剩 4 笔(1 失败+3 成功)，胜率 75%。
     """
     rows = [
         _row("rec_20260710_001", "failed", -5.69, _overnight_ctx("弱势"), "overnight-holding-method"),
@@ -292,7 +292,32 @@ def test_forward_veto_counterfactual_excludes_covered_failures(capsys):
     self_check.FORWARD_EPOCH = "2026-07-09"
     self_check._print_forward_veto_counterfactual(rows, _skills(), win_rate_baseline=61.5)
     out = capsys.readouterr().out
-    assert "前瞻 veto 反事实" in out
-    # 剔除 1 笔被覆盖失败后剩 2 笔，1 成功 → WR=50%
+    assert "前瞻规则覆盖反事实" in out or "前瞻 veto 反事实" in out
+    # 剔除 1 笔被覆盖失败后剩 4 笔，3 成功 → WR=75%
     assert "WR=75.0%" in out
     assert "剔除 1 笔" in out
+
+
+def test_forward_blocked_includes_soft_oscillation_ban():
+    """T19：soft@震荡 失败必须进 blocked（三路覆盖），不得留在 kept 虚低 WR。"""
+    soft_fs = {
+        "code": "301047",
+        "score_line_meta": {
+            "dynamic_soft_floor_applied": True,
+            "market_base": "震荡",
+            "market_sentiment": "活跃",
+        },
+    }
+    hard_fs = _overnight_ctx("强势")
+    rows = [
+        _row("rec_20260716_soft", "failed", -5.0, soft_fs, "nonexistent-skill"),
+        _row("rec_20260716_hard", "failed", -5.0, hard_fs, "overnight-holding-method"),
+        _row("rec_20260716_win", "success", 4.0, hard_fs, "overnight-holding-method"),
+        _row("rec_20260716_win2", "success", 4.0, hard_fs, "overnight-holding-method"),
+        _row("rec_20260716_win3", "success", 4.0, hard_fs, "overnight-holding-method"),
+    ]
+    self_check.FORWARD_EPOCH = "2026-07-14"
+    blocked = self_check._collect_forward_blocked_rids(rows, _skills())
+    assert "rec_20260716_soft" in blocked  # soft ban 路 3
+    # overnight 强势失败：不该被弱市 veto 拦
+    assert "rec_20260716_hard" not in blocked
