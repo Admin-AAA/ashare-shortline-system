@@ -5,6 +5,7 @@ import {
   FORMAL_SCORE_LINE_FLOOR,
   describeScoreLine,
   isLowFormalScoreLine,
+  ticketScoreFlag,
 } from "../src/utils/scoreLine.ts";
 
 test("floor constant matches backend FORMAL_SCORE_LINE_FLOOR", () => {
@@ -44,4 +45,37 @@ test("describeScoreLine clean for formal at floor", () => {
   const d = describeScoreLine(72, "formal");
   assert.equal(d.text, "72.0");
   assert.equal(d.polluted, false);
+});
+
+/* ---------- 单票分数线准入标记（记录中心「股票分明细」） ---------- */
+
+test("ticket above floor is never flagged", () => {
+  // 即便 soft floor 机制参与（可能只是动态抬线），高于地板的票不标，避免错误文案
+  assert.equal(ticketScoreFlag(74.4, { dynamic_soft_floor_applied: true, effective_score_line: 73.4 }), null);
+  assert.equal(ticketScoreFlag(80, { dynamic_soft_floor_applied: true }), null);
+  assert.equal(ticketScoreFlag(72, null), null);
+  assert.equal(ticketScoreFlag(null, { dynamic_soft_floor_applied: true }), null);
+});
+
+test("ticket below floor via soft floor -> soft_floor kind", () => {
+  const f = ticketScoreFlag(53.7, { dynamic_soft_floor_applied: true, effective_score_line: 62.7 });
+  assert.ok(f);
+  assert.equal(f.kind, "soft_floor");
+  assert.match(f.title, /动态降线/);
+  assert.match(f.title, /53\.7/);
+  assert.match(f.title, /72/);
+});
+
+test("ticket below floor via run-level drop (no soft floor) -> low_line kind", () => {
+  const f = ticketScoreFlag(55, { dynamic_soft_floor_applied: false });
+  assert.ok(f);
+  assert.equal(f.kind, "low_line");
+  assert.match(f.title, /历史低分/);
+});
+
+test("soft_floor_applied truthy accepts string/number forms", () => {
+  assert.equal(ticketScoreFlag(60, { dynamic_soft_floor_applied: 1 })?.kind, "soft_floor");
+  assert.equal(ticketScoreFlag(60, { dynamic_soft_floor_applied: "1" })?.kind, "soft_floor");
+  assert.equal(ticketScoreFlag(60, { dynamic_soft_floor_applied: "true" })?.kind, "soft_floor");
+  assert.equal(ticketScoreFlag(60, { dynamic_soft_floor_applied: "False" })?.kind, "low_line");
 });

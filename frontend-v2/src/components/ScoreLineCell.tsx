@@ -1,4 +1,4 @@
-import { describeScoreLine } from "../utils/scoreLine";
+import { describeScoreLine, ticketScoreFlag } from "../utils/scoreLine";
 
 /**
  * 分数线单元格 —— formal 低线污染时用 warning 色 +「低线」角标，
@@ -75,6 +75,42 @@ export function ScoreLineMetricValue({
           formal &lt; 72 历史降线，不代表当前门槛
         </span>
       ) : null}
+    </span>
+  );
+}
+
+/**
+ * 记录中心「股票分明细」单票分数线准入角标（软降线 / 低线）。
+ * 与 run 级 ScoreLineCell 互补：标记单票是否低于正式地板被放行，让运营者区分
+ * 设计内动态降线放行 vs 历史低线污染。无标记数据时静默不展示。
+ */
+export function TicketScoreBadge({
+  finalScore,
+  scoreLineMeta,
+}: {
+  finalScore: number | null | undefined;
+  scoreLineMeta?: Record<string, unknown> | null;
+}) {
+  const flag = ticketScoreFlag(finalScore, scoreLineMeta);
+  if (!flag) return null;
+  const isSoft = flag.kind === "soft_floor";
+  const color = isSoft ? "#6aa9ff" : "var(--warning, #d4a017)";
+  return (
+    <span
+      title={flag.title}
+      style={{
+        fontSize: 10,
+        padding: "1px 5px",
+        borderRadius: 3,
+        border: `1px solid ${color}40`,
+        color,
+        letterSpacing: 0.4,
+        whiteSpace: "nowrap",
+        marginLeft: 6,
+        flexShrink: 0,
+      }}
+    >
+      {isSoft ? "软降线" : "低线"}
     </span>
   );
 }

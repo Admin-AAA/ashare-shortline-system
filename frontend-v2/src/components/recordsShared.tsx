@@ -1,15 +1,18 @@
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { fmtPrice } from "./Shared";
 
 /** RecordsPage 共享的小组件与工具函数 —— 从 RecordsPage.tsx 抽离，消除重复。 */
 // fmtPrice 已统一到 Shared.tsx，此处 re-export 保持 RecordsPage import 兼容
 export { fmtPrice };
 
-export function Metric({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+export function Metric({ label, value, mono, badge }: { label: string; value: string; mono?: boolean; badge?: ReactNode }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
       <span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }}>{label}</span>
-      <span style={{ fontFamily: mono ? "var(--font-mono)" : "inherit", color: "var(--text)" }}>{value}</span>
+      <span style={{ display: "inline-flex", alignItems: "center", fontFamily: mono ? "var(--font-mono)" : "inherit", color: "var(--text)" }}>
+        {value}
+        {badge}
+      </span>
     </div>
   );
 }

@@ -8,6 +8,7 @@ import { api } from "../api/client";
 import type { RecommendationDetail, RecommendationOutcome } from "../types";
 import { ErrorPage, PageSkeleton } from "./StateViews";
 import { RecommendationDetailCard } from "./RecommendationDetailCard";
+import { TicketScoreBadge } from "./ScoreLineCell";
 import { Panel } from "./Panel";
 import {
   Metric,
@@ -58,7 +59,12 @@ export function StockAnalysisDetailView({ recId, onBack }: { recId: string; onBa
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "var(--space-3)" }}>
           <Metric label="推荐日" value={data.trade_date} mono />
-          <Metric label="分数" value={data.final_score.toFixed(1)} mono />
+          <Metric
+            label="分数"
+            value={data.final_score.toFixed(1)}
+            mono
+            badge={<TicketScoreBadge finalScore={data.final_score} scoreLineMeta={data.score_line_meta} />}
+          />
           <Metric label="共识分" value={data.consensus_score.toFixed(1)} mono />
           <Metric label="推荐价" value={fmtPrice(data.recommend_price)} mono />
           <Metric label="策略/买点" value={`${bucketLabel(data.bucket)} · ${data.setup_type || "—"}`} />
