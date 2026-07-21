@@ -122,3 +122,20 @@ def test_strategies_exposure_30d_present_and_nonnegative():
     # 生产库至少应有 1 个曝光 < 20 的策略（chip/small-cap/trend 长期 <20）
     low_exp = [d for d in data if d["exposure_30d"] < 20]
     assert low_exp, "应有曝光 <20 的策略以便前端展示「补跑在喂」"
+
+
+def test_strategies_low_exposure_has_last_exp_gate():
+    """T27：曝光 <20 策略须带 last_exp_gate（有效线 vs 最高候选），与 self_check 同源。"""
+    client = TestClient(app)
+    data = client.get("/api/strategies").json()
+    low = [d for d in data if d.get("exposure_30d", 0) < 20 and d.get("enabled", True)]
+    # 至少 chip/small-cap/trend 之一应有门线明细
+    with_gate = [d for d in low if d.get("last_exp_gate")]
+    assert with_gate, "低曝光策略应返回 last_exp_gate"
+    for d in with_gate:
+        g = d["last_exp_gate"]
+        assert "effective_line" in g
+        assert "max_candidate_score" in g
+        assert "gate_blocked" in g
+        if g.get("gate_blocked") and g.get("effective_line") is not None and g.get("max_candidate_score") is not None:
+            assert float(g["max_candidate_score"]) < float(g["effective_line"])

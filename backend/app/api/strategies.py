@@ -10,6 +10,8 @@
 """
 
 import logging
+import sys
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -23,11 +25,15 @@ from app.services.strategy_center_service import (
 from app.services.workbench_service import list_skills
 
 # 统计可信阈值：与 scheduler_service.DEFAULT_EXPOSURE_MIN_SAMPLE=20 对齐。
-# 低于此样本数的策略，其胜率/盈亏比属统计噪声，前端须标注「样本不足 · 统计参考」，
-# 防止用户对 n<20 的策略过度信任（self_check 长期预警：5 策略样本<20 胜率不可信）。
 MIN_SAMPLE_FOR_RELIABLE = 20
 # E 项曝光样本下限（与 self_check SAMPLE_FLOOR / DEFAULT_EXPOSURE_MIN_SAMPLE 一致）
 EXPOSURE_SAMPLE_FLOOR = 20
+
+# self_check 门线明细（scripts/）——与 E 项 gate_blocked 同源，避免二次实现漂移
+_SCRIPTS = Path(__file__).resolve().parents[3] / "scripts"
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+import self_check  # type: ignore[import-not-found]  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +44,11 @@ def _performance_payload(
     metric: dict | None,
     *,
     exposure_30d: int = 0,
+    last_exp_gate: dict | None = None,
 ) -> dict | None:
     if not metric or (metric.get("sample_count") or 0) <= 0:
         return None
-    return {
+    payload = {
         "sample_count": metric["sample_count"],
         "labeled_count": metric.get("labeled_count", 0),
         "triggered_count": metric.get("triggered_count", 0),
@@ -54,12 +61,36 @@ def _performance_payload(
         "profit_loss_ratio": metric.get("profit_loss_ratio"),
         "last_recommendation_date": metric.get("last_recommendation_date"),
         "reliable": (metric.get("sample_count") or 0) >= MIN_SAMPLE_FOR_RELIABLE,
-        # 近 30 天 formal+experiment 曝光（与 self_check E 项口径一致）；
-        # < EXPOSURE_SAMPLE_FLOOR 时前端标「补跑在喂」，勿当故障/勿放宽 universe。
         "exposure_30d": int(exposure_30d or 0),
         "exposure_floor": EXPOSURE_SAMPLE_FLOOR,
         "horizon_metrics": metric.get("horizon_metrics"),
         "date_range": metric.get("date_range"),
+    }
+    if last_exp_gate is not None:
+        payload["last_exp_gate"] = last_exp_gate
+    return payload
+
+
+def _last_exp_gate_for(db: Session, skill_id: str) -> dict | None:
+    """最近 completed experiment 补跑门线明细（有效线 vs 最高候选）。
+
+    仅供曝光 < floor 策略展示「门线拦截」；无数据返回 None。
+    """
+    det = self_check._fetch_gate_blocked_detail(db, skill_id)
+    if not det:
+        return None
+    return {
+        "effective_line": det.get("effective_line"),
+        "max_candidate_score": det.get("max_candidate_score"),
+        "base_score_line": det.get("base_score_line"),
+        "gate_blocked": (
+            det.get("max_candidate_score") is None
+            or (
+                det.get("effective_line") is not None
+                and det.get("max_candidate_score") is not None
+                and float(det["max_candidate_score"]) < float(det["effective_line"])
+            )
+        ),
     }
 
 
@@ -82,31 +113,32 @@ def list_strategies(
         m["strategy_id"]: m
         for m in metrics_by_strategy(db, window_days=window_days, start_date=start_date, end_date=end_date)
     }
-    # E 项曝光：formal+experiment 近 30 天，与 self_check / 补跑判定一致
     exposure_30d = exposure_sample_counts(db, window_days=30)
 
     result = []
     for s in skills:
-        m = metrics_by_id.get(s["skill_id"])
-        exp_n = int(exposure_30d.get(s["skill_id"]) or 0)
-        perf = _performance_payload(m, exposure_30d=exp_n)
-        result.append(
-            {
-                "skill_id": s["skill_id"],
-                "name": s["name"],
-                "description": (s.get("manifest") or {}).get("description") or "",
-                "enabled": s["enabled"],
-                "source_type": s.get("source_type"),
-                "assigned_presets": s.get("assigned_presets") or [],
-                "has_backtest_adapter": s.get("has_backtest_adapter", False),
-                # 从未结算的策略也暴露近 30 天曝光，便于「补跑在喂 / 预期稀疏」一屏可见
-                "exposure_30d": exp_n,
-                "exposure_floor": EXPOSURE_SAMPLE_FLOOR,
-                "performance": perf,
-            }
-        )
+        sid = s["skill_id"]
+        m = metrics_by_id.get(sid)
+        exp_n = int(exposure_30d.get(sid) or 0)
+        # 仅低曝光策略查门线明细（N 小，避免全量 skill 扫 filter_audit）
+        gate = _last_exp_gate_for(db, sid) if exp_n < EXPOSURE_SAMPLE_FLOOR else None
+        perf = _performance_payload(m, exposure_30d=exp_n, last_exp_gate=gate)
+        item = {
+            "skill_id": sid,
+            "name": s["name"],
+            "description": (s.get("manifest") or {}).get("description") or "",
+            "enabled": s["enabled"],
+            "source_type": s.get("source_type"),
+            "assigned_presets": s.get("assigned_presets") or [],
+            "has_backtest_adapter": s.get("has_backtest_adapter", False),
+            "exposure_30d": exp_n,
+            "exposure_floor": EXPOSURE_SAMPLE_FLOOR,
+            "performance": perf,
+        }
+        if gate is not None:
+            item["last_exp_gate"] = gate
+        result.append(item)
 
-    # 已调用的排前面（按胜率降序），从未调用的排后面
     result.sort(
         key=lambda x: (
             x["performance"] is not None,
@@ -136,7 +168,10 @@ def strategy_detail(
         None,
     )
     exp_n = int(exposure_sample_counts(db, window_days=30).get(strategy_id) or 0)
-    detail["performance"] = _performance_payload(metric, exposure_30d=exp_n)
+    gate = _last_exp_gate_for(db, strategy_id) if exp_n < EXPOSURE_SAMPLE_FLOOR else None
+    detail["performance"] = _performance_payload(metric, exposure_30d=exp_n, last_exp_gate=gate)
     detail["exposure_30d"] = exp_n
     detail["exposure_floor"] = EXPOSURE_SAMPLE_FLOOR
+    if gate is not None:
+        detail["last_exp_gate"] = gate
     return detail
