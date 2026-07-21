@@ -171,6 +171,32 @@ def test_build_report_includes_pollution_and_epoch():
     assert rep["thresholds"]["forward_pollution_share_skip"] == 0.70
 
 
+def test_build_report_includes_residual_pseudo_active():
+    """T31：报告含 residual.pseudo_active，供跨 run 追踪毒区归因。"""
+    full = {"n": 100, "net_wr": 70.0, "net_pl": 2.1, "max_loss": -5.0}
+    residual = {
+        "n": 13,
+        "pseudo_active": {
+            "weak_active_n": 8,
+            "pseudo_n": 7,
+            "still_active_n": 1,
+            "days": {"2026-07-07": {"n": 2, "pseudo": 2, "new_sent": "平淡"}},
+        },
+    }
+    rep = verify_d_guardrail.build_report(
+        full, None, True, 0, residual=residual, forward_epoch="2026-07-14",
+    )
+    assert rep["residual"]["n"] == 13
+    assert rep["residual"]["pseudo_active"]["pseudo_n"] == 7
+    assert rep["residual"]["pseudo_active"]["weak_active_n"] == 8
+
+
+def test_build_report_residual_default_when_omitted():
+    full = {"n": 10, "net_wr": 70.0, "net_pl": 3.0, "max_loss": -5.0}
+    rep = verify_d_guardrail.build_report(full, None, True, 0)
+    assert rep["residual"] == {"n": 0, "pseudo_active": None}
+
+
 def test_recent_trade_dates_returns_k_most_recent():
     """_recent_trade_dates 去重后倒序取最近 k 个独立交易日。"""
     rows = [

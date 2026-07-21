@@ -244,11 +244,13 @@ def build_report(full: dict | None, fwd: dict | None, ok: bool, exit_code: int,
                  recent: dict | None = None, drift: dict | None = None,
                  regime_shock: dict | None = None,
                  pollution: dict | None = None,
-                 forward_epoch: str | None = None) -> dict:
+                 forward_epoch: str | None = None,
+                 residual: dict | None = None) -> dict:
     """把本轮 D 项护栏结果结构化为机器可读报告，供跨 run 漂移追踪。
 
     full / fwd 为 self_check._compute_d_cost 的返回 dict（含 n/net_wr/net_pl/max_loss）。
     pollution 为去污染反事实摘要（可选），forward_epoch 为稳定/动态纪元字符串。
+    residual 为真残留毒区 + 伪活跃反事实（T31，可选）。
     只萃取 D 项护栏关心的字段，剔除噪声字段，避免报告随实现细节漂移。
     """
     def _block(m):
@@ -287,6 +289,9 @@ def build_report(full: dict | None, fwd: dict | None, ok: bool, exit_code: int,
             "full_clean": None, "recent_clean": None, "fwd_clean": None,
             "fwd_gate": {"enforce": False, "share": 0.0, "msg": ""},
         },
+        "residual": residual if residual is not None else {
+            "n": 0, "pseudo_active": None,
+        },
         "passed": bool(ok),
         "exit_code": int(exit_code),
     }
@@ -307,6 +312,7 @@ def main(argv: list | None = None) -> int:
     args = parser.parse_args(argv)
 
     db = SessionLocal()
+    residual_block: dict = {"n": 0, "pseudo_active": None}
     try:
         # T22：必须 resolve 稳定前瞻纪元；否则 FORWARD_EPOCH=None 时
         # _compute_d_cost(since_date=None) 退化为全量，虚高「前瞻」PASS。
@@ -332,6 +338,57 @@ def main(argv: list | None = None) -> int:
             )
         ).fetchall()
         keys = self_check._pure_pollution_keys(list(poll_raw))
+
+        # T31：真残留 + 伪活跃反事实（机器可读，不计入 ok）
+        try:
+            skills = self_check._load_skills_once()
+            cov_rows = db.execute(text("""
+                SELECT r.recommendation_id, o.outcome_label, o.executed_return,
+                       r.feature_snapshot_json, r.skill_breakdown_json,
+                       o.exit_reason, o.max_return, r.trade_date, r.final_score
+                FROM recommendation_outcomes o
+                JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+                JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+                WHERE o.outcome_label IN ('success', 'failed')
+                  AND r.recommendation_id LIKE 'rec_%'
+            """)).fetchall()
+            uncovered = self_check._collect_uncovered_failures(cov_rows, skills) if skills else []
+            snap_rows = db.execute(text("""
+                SELECT trade_date, sample_count, up_count, limit_up_count, limit_down_count
+                FROM market_snapshots
+            """)).fetchall()
+            market_snaps = {
+                str(r[0]): {
+                    "sample_count": r[1],
+                    "up_count": r[2],
+                    "limit_up_count": r[3],
+                    "limit_down_count": r[4],
+                }
+                for r in snap_rows
+            }
+            pa = self_check._pseudo_active_sentiment_counterfactual(
+                uncovered, market_snaps,
+            ) if uncovered else None
+            residual_block = {
+                "n": len(uncovered),
+                "pseudo_active": (
+                    {
+                        "weak_active_n": pa["weak_active_n"],
+                        "pseudo_n": pa["pseudo_n"],
+                        "still_active_n": pa["still_active_n"],
+                        "days": {
+                            td: {
+                                "n": d["n"],
+                                "pseudo": d["pseudo"],
+                                "new_sent": d.get("new_sent"),
+                            }
+                            for td, d in (pa.get("day_breakdown") or {}).items()
+                        },
+                    } if pa else None
+                ),
+            }
+        except Exception:
+            residual_block = {"n": 0, "pseudo_active": None}
     finally:
         db.close()
 
@@ -452,6 +509,18 @@ def main(argv: list | None = None) -> int:
               f"({regime_shock.get('top_failures')}/{regime_shock.get('total_failures')})，"
               f"未达单日冲击阈值 {int(SINGLE_DAY_FAIL_SHARE_FLOOR * 100)}%")
 
+    # T31：真残留 + 伪活跃（与 self_check 对齐，仅信息）
+    if residual_block.get("n", 0) > 0:
+        pa = residual_block.get("pseudo_active")
+        if pa and pa.get("weak_active_n", 0) > 0:
+            print(
+                f"  ℹ️ 真残留毒区 n={residual_block['n']} | 弱势·活跃 "
+                f"{pa['weak_active_n']} 笔中伪活跃 {pa['pseudo_n']} / 仍活跃 {pa['still_active_n']}"
+                f"（T28 双维度；勿对 residual 弱势·活跃加 entry）"
+            )
+        else:
+            print(f"  ℹ️ 真残留毒区 n={residual_block['n']}")
+
     print("-" * 60)
     if ok:
         print("✅ D 项护栏全部达标：未检测到对北极星 D 项的回归。")
@@ -463,6 +532,7 @@ def main(argv: list | None = None) -> int:
         full, fwd, ok, exit_code,
         recent=recent, drift=drift, regime_shock=regime_shock,
         pollution=pollution_block, forward_epoch=epoch,
+        residual=residual_block,
     )
     if args.json:
         write_report(report, args.json)
