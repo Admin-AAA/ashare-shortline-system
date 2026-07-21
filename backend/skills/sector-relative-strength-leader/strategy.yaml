@@ -91,6 +91,14 @@ phases:
     hard_veto: true
     risk_flags: ["主线环境退潮"]
 
+  - name: 相对强度观察
+    # 2026-07-21 T1：oh 门槛 -8→-12，与 setup「主线相对强度观察」对齐。
+    # LIVE formal primary n=14 WR92.9%：多笔赢家 oh∈[-12,-8)（688047 -11.7、001270 -11.3、
+    # 301321 -10.3、300735 -10.7）原 phase 匹配不到 score_cap=86，分在 63–70 难过 72 地板。
+    when: "is_main_theme == true and primary_excess20 >= 8 and off_high_pct >= -12"
+    score_cap: 86
+    hard_veto: false
+
   - name: 主线强度确认
     when: "is_main_theme == true and sector_ladder_completeness_score >= 50 and primary_excess20 >= 5"
     score_cap: 94
@@ -99,11 +107,6 @@ phases:
   - name: 板块梯队龙头
     when: "sector_ladder_completeness_score >= 75 and shortline_leader_score >= 68"
     score_cap: 92
-    hard_veto: false
-
-  - name: 相对强度观察
-    when: "is_main_theme == true and primary_excess20 >= 8 and off_high_pct >= -8"
-    score_cap: 86
     hard_veto: false
 
 setups:
@@ -150,10 +153,10 @@ scoring:
       delta: 7
       reason: 板块梯队展开
     - when: "primary_excess20 >= 15"
-      delta: 10
+      delta: 12  # 2026-07-21 T1：10→12；LIVE primary 赢家 pe20 中位~16，梯队分常低，需靠 pe 清 72 地板
       reason: 个股20日超额收益强
     - when: "primary_excess20 >= 8"
-      delta: 6
+      delta: 8  # 2026-07-21 T1：6→8；与 pe>=15 档同步略抬，帮助高相对强度低梯队赢家过线
       reason: 个股20日超额收益占优
     - when: "primary_excess60 >= 10"
       delta: 5
