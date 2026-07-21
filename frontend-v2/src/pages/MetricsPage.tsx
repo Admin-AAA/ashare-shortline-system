@@ -310,6 +310,23 @@ function DDiagnosticsBlock({
         ) : (
           <HealthRow label="弱活伪活跃" value="—" />
         )}
+        {tr?.sparse_items && tr.sparse_items.length > 0 && (
+          <div
+            style={{
+              fontSize: "var(--text-xs)",
+              color: "var(--text-muted)",
+              lineHeight: 1.45,
+              fontFamily: "var(--font-mono)",
+            }}
+            title={tr.sparse_items.map((it) => `${it.trade_date} ${it.code} ${it.mode} — ${it.note}`).join("\n")}
+          >
+            稀疏:{" "}
+            {tr.sparse_items
+              .slice(0, 3)
+              .map((it) => `${it.code ?? "?"}(${it.mode ?? "?"})`)
+              .join(" · ")}
+          </div>
+        )}
         {(tr?.note || pa?.note) && (
           <div
             style={{

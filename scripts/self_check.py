@@ -2736,6 +2736,76 @@ def _triage_residual_poison(
     }
 
 
+def _sparse_residual_items(
+    uncovered: list[dict],
+    sparse_rids: list[str],
+) -> list[dict]:
+    """稀疏 residual 明细（纯函数）：供 self_check / d-diagnostics 一屏列出。
+
+    每项含 trade_date/code/mode/regime/sentiment/ret/soft_applied/note。
+    soft@弱势 等仍允许的 soft 不进 pure_soft，须在 note 标出以免误当「未解释」。
+    """
+    by_rid = {str(u.get("rid") or ""): u for u in uncovered}
+    out: list[dict] = []
+    for rid in sparse_rids:
+        u = by_rid.get(rid)
+        if not u:
+            continue
+        fs = u.get("fs") or {}
+        meta = fs.get("score_line_meta") or {}
+        base = str(fs.get("market_regime") or meta.get("market_base") or "?")
+        sent = str(
+            fs.get("market_sentiment_phase")
+            or meta.get("market_sentiment")
+            or "?"
+        )
+        if "·" in base and sent in ("?", ""):
+            parts = base.split("·", 1)
+            base, sent = parts[0], parts[1]
+        mode = _classify_failure_mode_inline(
+            exit_reason=u.get("exit_reason") or "",
+            executed_return=u.get("executed_return"),
+            max_return=u.get("max_return"),
+            rsi_12=fs.get("rsi_12"),
+            chg20=fs.get("chg20"),
+            pos60=fs.get("pos60"),
+            setup_type=fs.get("setup_type"),
+        )
+        soft = meta.get("dynamic_soft_floor_applied")
+        soft_on = soft is not None and str(soft).lower() in ("1", "true", "yes")
+        notes: list[str] = []
+        if soft_on:
+            notes.append(f"soft@{base}（非 pure_soft，仅震荡 soft 计入污染）")
+        if base.startswith("弱势") and sent == "活跃":
+            notes.append("弱势·活跃·仍活跃（T28 双维度未改判）")
+        if mode == "extension_chase":
+            notes.append("追高延伸·跨日不可泛化 entry")
+        if mode == "gap_roundtrip":
+            notes.append("跳空往返·市场风险非个股因子")
+        td = str(u.get("trade_date") or "")
+        if not td:
+            parts = rid.split("_")
+            if len(parts) > 1 and len(parts[1]) == 8:
+                d = parts[1]
+                td = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+        out.append(
+            {
+                "rid": rid,
+                "trade_date": td,
+                "code": str(fs.get("code") or ""),
+                "mode": mode,
+                "regime": base,
+                "sentiment": sent,
+                "ret": u.get("executed_return"),
+                "score": u.get("final_score") or fs.get("final_score"),
+                "soft_applied": soft_on,
+                "note": "；".join(notes) if notes else "跨日稀疏·须可分特征再谈 entry",
+            }
+        )
+    return out
+
+
+
 def _entry_separability_falsified(fail_items: list[dict], success_items: list[dict],
                                   feature_keys: tuple = ("vol5_20", "pos60"),
                                   tol: float = 0.20) -> dict | None:
@@ -2836,7 +2906,12 @@ def _print_residual_poison_zone(uncovered: list[dict], success_items: list[dict]
             by_date[_d] += 1
             mode_dates.setdefault(mode, []).append(_d)
 
-    print(f'D 项真残留毒区（未被任何规则覆盖）：{len(uncovered)} 笔（下一轮 D 攻击精确目标）')
+    # T36：禁止「精确目标」措辞——多数 residual 已被污染/伪活跃/单日簇解释，
+    # 直接当 entry 攻击目标会过拟合历史噪声（triage 分层见下方）。
+    print(
+        f'D 项真残留毒区（未被任何规则覆盖）：{len(uncovered)} 笔'
+        f'（须先 triage 分层，禁止直接当 entry 精确目标）'
+    )
     for m, c in modes.most_common():
         rets = mode_rets.get(m, [])
         avg = round(sum(rets) / len(rets), 2) if rets else 0.0
@@ -3003,6 +3078,15 @@ def _print_residual_poison_zone(uncovered: list[dict], success_items: list[dict]
                     f'     · 稀疏 {c["sparse"]} 笔可关注但仍须跨日可分特征；'
                     f'前三类（污染/伪活跃/单日簇）禁止加 entry'
                 )
+                sparse_items = _sparse_residual_items(
+                    uncovered, triage.get("sparse_rids") or [],
+                )
+                for it in sparse_items:
+                    print(
+                        f'       · {it["trade_date"]} {it["code"]} {it["mode"]} '
+                        f'{it["regime"]}·{it["sentiment"]} ret={it["ret"]} '
+                        f'— {it["note"]}'
+                    )
             else:
                 print(
                     f'     · 无稀疏可攻目标：residual 全被历史污染/伪活跃/单日簇解释，'

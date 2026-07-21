@@ -245,6 +245,9 @@ def d_diagnostics(db: Session = Depends(get_db)):
     triage = None
     if triage_raw and triage_raw.get("n", 0) > 0:
         c = triage_raw["counts"]
+        sparse_items = self_check._sparse_residual_items(
+            uncovered, triage_raw.get("sparse_rids") or [],
+        )
         triage = {
             "n": triage_raw["n"],
             "pure_pollution": c.get("pure_pollution", 0),
@@ -253,6 +256,7 @@ def d_diagnostics(db: Session = Depends(get_db)):
             "sparse": c.get("sparse", 0),
             "clustered_days": triage_raw.get("clustered_days") or [],
             "sparse_n": c.get("sparse", 0),
+            "sparse_items": sparse_items,
             "note": triage_raw.get("note"),
             "actionable": c.get("sparse", 0) > 0,
         }

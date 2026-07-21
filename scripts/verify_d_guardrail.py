@@ -396,6 +396,9 @@ def main(argv: list | None = None) -> int:
             triage = None
             if triage_raw and triage_raw.get("n", 0) > 0:
                 c = triage_raw["counts"]
+                sparse_items = self_check._sparse_residual_items(
+                    uncovered, triage_raw.get("sparse_rids") or [],
+                )
                 triage = {
                     "n": triage_raw["n"],
                     "pure_pollution": c.get("pure_pollution", 0),
@@ -403,6 +406,15 @@ def main(argv: list | None = None) -> int:
                     "day_clustered": c.get("day_clustered", 0),
                     "sparse": c.get("sparse", 0),
                     "clustered_days": triage_raw.get("clustered_days") or [],
+                    "sparse_items": [
+                        {
+                            "trade_date": it.get("trade_date"),
+                            "code": it.get("code"),
+                            "mode": it.get("mode"),
+                            "note": it.get("note"),
+                        }
+                        for it in sparse_items
+                    ],
                     "note": triage_raw.get("note"),
                 }
             residual_block = {

@@ -333,6 +333,19 @@ export type DDiagnostics = {
     sparse: number;
     clustered_days?: string[];
     sparse_n?: number;
+    /** T36：稀疏明细（跨日不可合并加 entry） */
+    sparse_items?: Array<{
+      rid?: string;
+      trade_date?: string;
+      code?: string;
+      mode?: string;
+      regime?: string;
+      sentiment?: string;
+      ret?: number | null;
+      score?: number | null;
+      soft_applied?: boolean;
+      note?: string;
+    }>;
     note?: string | null;
     actionable?: boolean;
   } | null;

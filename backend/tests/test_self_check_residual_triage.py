@@ -96,3 +96,48 @@ def test_pseudo_cf_returns_pseudo_rids():
     assert cf is not None
     assert "rec_20260707_a" in cf["pseudo_rids"]
     assert "rec_20260610_a" not in cf["pseudo_rids"]
+
+
+def test_sparse_residual_items_notes_soft_and_modes():
+    unc = [
+        {
+            "rid": "rec_20260610_a",
+            "trade_date": "2026-06-10",
+            "executed_return": -5.69,
+            "final_score": 69.9,
+            "exit_reason": "stop_loss_hit",
+            "max_return": 1.5,
+            "fs": {
+                "code": "688322",
+                "market_regime": "弱势",
+                "market_sentiment_phase": "活跃",
+                "chg20": 53.0,
+                "pos60": 80.0,
+                "score_line_meta": {"dynamic_soft_floor_applied": True},
+            },
+        },
+        {
+            "rid": "rec_20260709_b",
+            "trade_date": "2026-07-09",
+            "executed_return": -5.69,
+            "exit_reason": "stop_loss_hit",
+            "max_return": 3.02,
+            "fs": {
+                "code": "002371",
+                "market_regime": "震荡",
+                "market_sentiment_phase": "高潮",
+                "chg20": 41.0,
+                "pos60": 82.0,
+            },
+        },
+    ]
+    items = sc._sparse_residual_items(unc, ["rec_20260610_a", "rec_20260709_b"])
+    assert len(items) == 2
+    a = items[0]
+    assert a["code"] == "688322"
+    assert a["mode"] == "extension_chase"
+    assert a["soft_applied"] is True
+    assert "soft@" in a["note"]
+    b = items[1]
+    assert b["mode"] == "gap_roundtrip"
+    assert "跳空" in b["note"] or "往返" in b["note"]
