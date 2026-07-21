@@ -81,32 +81,71 @@ def _recent_trade_dates(rows: list, k: int = RECENT_WINDOW_DAYS) -> set:
     return set(dates[:k])
 
 
-def _eval_recent_drift(full: dict | None, recent: dict | None) -> dict:
+def _eval_recent_drift(
+    full: dict | None,
+    recent: dict | None,
+    *,
+    recent_clean: dict | None = None,
+    full_clean: dict | None = None,
+) -> dict:
     """纯函数：评估近窗口相对全量的净盈亏比漂移，仅作早警（不影响退出码）。
 
-    返回 {warn: bool, ratio: float|None, msg: str}。触发条件：近窗口样本 n >= RECENT_MIN_N
-    且 近窗口 net_pl < RECENT_PL_DRAG_RATIO * 全量 net_pl。触发时 msg 解释主因（指向已证伪、
-    禁止再加 entry 规则的 no_follow_through 单日集中簇 + 市场风险的 gap_roundtrip），避免后续
-    轮次对不可解毒区重复攻击、陷入过拟合。
+    返回 {warn: bool, ratio: float|None, msg: str, cause: str|None}。
+    触发条件：近窗口样本 n >= RECENT_MIN_N 且 近窗口 net_pl < RECENT_PL_DRAG_RATIO * 全量 net_pl。
+
+    T23：若提供 recent_clean 且去污染后近窗口 PL 已回升到全量的 RECENT_PL_DRAG_RATIO
+    以上（或超过 raw 近窗口），则 cause=pollution、warn=False——raw 漂移是历史
+    低线/soft 污染，非策略慢退化；避免与 self_check 去污染结论打架。
     """
     if recent is None or full is None:
-        return {"warn": False, "ratio": None, "msg": ""}
+        return {"warn": False, "ratio": None, "msg": "", "cause": None}
     if recent["n"] < RECENT_MIN_N:
-        return {"warn": False, "ratio": None,
-                "msg": f"近窗口样本 {recent['n']}<{RECENT_MIN_N}，不足以断言漂移"}
+        return {
+            "warn": False, "ratio": None, "cause": None,
+            "msg": f"近窗口样本 {recent['n']}<{RECENT_MIN_N}，不足以断言漂移",
+        }
     full_pl = full["net_pl"]
     if not full_pl or full_pl >= 999:
-        return {"warn": False, "ratio": None, "msg": ""}
+        return {"warn": False, "ratio": None, "msg": "", "cause": None}
     ratio = round(recent["net_pl"] / full_pl, 2)
-    if ratio < RECENT_PL_DRAG_RATIO:
-        return {"warn": True, "ratio": ratio,
-                "msg": (f"近{RECENT_WINDOW_DAYS}交易日净盈亏比 {recent['net_pl']} 显著低于全量 "
-                        f"{full_pl}（比值 {ratio}）——疑似慢退化；主因 no_follow_through"
-                        "（07-16 单日集中，第187/192轮证伪禁加 entry 规则）与 gap_roundtrip"
-                        "（开盘跳空市场风险）驱动，非可泛化个股因子；勿据此加 entry 规则，"
-                        "待前瞻样本（规则上线后结算）累积后复核")}
-    return {"warn": False, "ratio": ratio, "msg": ""}
+    if ratio >= RECENT_PL_DRAG_RATIO:
+        return {"warn": False, "ratio": ratio, "msg": "", "cause": None}
 
+    # raw 近窗口显著低于全量 —— 先查去污染是否恢复
+    if recent_clean is not None and recent_clean.get("n", 0) >= RECENT_MIN_N:
+        clean_pl = recent_clean.get("net_pl")
+        # 对照 raw 全量：去污染后近窗口是否回到「全量健康水位」；
+        # full_clean 往往更高（剔污染后抬升），不宜作分母以免 clean_ratio 虚低。
+        if clean_pl is not None and full_pl:
+            clean_ratio = round(clean_pl / full_pl, 2)
+            recovered = clean_ratio >= RECENT_PL_DRAG_RATIO or (
+                clean_pl - recent["net_pl"] >= 0.3
+            )
+            if recovered:
+                return {
+                    "warn": False,
+                    "ratio": ratio,
+                    "cause": "pollution",
+                    "msg": (
+                        f"近{RECENT_WINDOW_DAYS}交易日 raw 净盈亏比 {recent['net_pl']} 低于全量 "
+                        f"{full_pl}（比值 {ratio}），但去污染后 {clean_pl}"
+                        f"（相对全量比 {clean_ratio}）——历史 pure 低线/soft@震荡 污染主导，"
+                        f"非策略慢退化；Contract 已拦新污染，勿加 entry 规则"
+                    ),
+                }
+
+    return {
+        "warn": True,
+        "ratio": ratio,
+        "cause": "slow_degradation",
+        "msg": (
+            f"近{RECENT_WINDOW_DAYS}交易日净盈亏比 {recent['net_pl']} 显著低于全量 "
+            f"{full_pl}（比值 {ratio}）——疑似慢退化；主因 no_follow_through"
+            "（07-16 单日集中，第187/192轮证伪禁加 entry 规则）与 gap_roundtrip"
+            "（开盘跳空市场风险）驱动，非可泛化个股因子；勿据此加 entry 规则，"
+            "待前瞻样本（规则上线后结算）累积后复核"
+        ),
+    }
 
 def _single_day_failure_share(rows: list, dates: set) -> dict:
     """纯函数：在 dates 窗口内统计「单日失败集中度」。
@@ -237,7 +276,9 @@ def build_report(full: dict | None, fwd: dict | None, ok: bool, exit_code: int,
         "full": _block(full),
         "forward": _block(fwd),
         "recent_10d": _block(recent),
-        "recent_drift": drift if drift is not None else {"warn": False, "ratio": None, "msg": ""},
+        "recent_drift": drift if drift is not None else {
+            "warn": False, "ratio": None, "msg": "", "cause": None,
+        },
         "regime_shock": regime_shock if regime_shock is not None else {
             "shock": False, "top_date": None, "top_failures": 0,
             "total_failures": 0, "share": 0.0, "n": 0, "msg": ""},
@@ -305,18 +346,22 @@ def main(argv: list | None = None) -> int:
     full = self_check._compute_d_cost(rows)
     fwd = self_check._compute_d_cost(rows, since_date=epoch) if epoch else None
 
-    # 近窗口漂移早警（软告警，不计入 ok / 退出码）
     recent_dates = _recent_trade_dates(rows, k=RECENT_WINDOW_DAYS)
     recent = self_check._compute_d_cost(rows, trade_dates=recent_dates)
-    drift = _eval_recent_drift(full, recent)
+
+    # 去污染反事实须先于近窗口漂移判定（T23：raw 漂移常被污染解释）
+    cf = self_check._clean_d_counterfactual(
+        rows, keys["union"], last10_dates=recent_dates, since_date=epoch,
+    )
+    drift = _eval_recent_drift(
+        full, recent,
+        recent_clean=(cf or {}).get("last10_clean"),
+        full_clean=(cf or {}).get("full_clean"),
+    )
 
     # 单日 regime 冲击护栏（机器可读早警，不计入 ok / 退出码）
     regime_shock = _eval_regime_shock(rows, recent_dates)
 
-    # 去污染反事实 + 前瞻闸门决策
-    cf = self_check._clean_d_counterfactual(
-        rows, keys["union"], last10_dates=recent_dates, since_date=epoch,
-    )
     fwd_poll_n = (cf or {}).get("fwd_pollution_n") or 0
     fwd_clean_n = (cf or {}).get("fwd_clean_n") or 0
     if epoch and fwd is not None:
@@ -397,6 +442,8 @@ def main(argv: list | None = None) -> int:
         )
     if drift["warn"]:
         print(f"  [⚠️ WARN] {drift['msg']}")
+    elif drift.get("cause") == "pollution" and drift.get("msg"):
+        print(f"  ℹ️ 近窗口 raw 漂移已由污染解释：{drift['msg']}")
     if regime_shock["shock"]:
         print(f"  [🚫 REGIME SHOCK] {regime_shock['msg']}")
     else:

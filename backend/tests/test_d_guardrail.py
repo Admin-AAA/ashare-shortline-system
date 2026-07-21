@@ -195,8 +195,25 @@ def test_eval_recent_drift_triggers_on_significant_drop():
     recent = {"n": 100, "net_wr": 65.0, "net_pl": 1.65, "max_loss": -5.9}
     d = verify_d_guardrail._eval_recent_drift(full, recent)
     assert d["warn"] is True
+    assert d["cause"] == "slow_degradation"
     assert d["ratio"] == round(1.65 / 2.08, 2)
     assert "no_follow_through" in d["msg"] and "gap_roundtrip" in d["msg"]
+
+
+def test_eval_recent_drift_pollution_explains_raw_drop():
+    """T23：raw 近窗口低但去污染后 PL 回升 → warn=False, cause=pollution。"""
+    full = {"n": 200, "net_wr": 68.9, "net_pl": 2.08, "max_loss": -5.9}
+    recent = {"n": 100, "net_wr": 65.0, "net_pl": 1.65, "max_loss": -5.9}
+    recent_clean = {"n": 96, "net_wr": 72.9, "net_pl": 2.36, "max_loss": -5.9}
+    full_clean = {"n": 130, "net_wr": 78.5, "net_pl": 3.42, "max_loss": -5.9}
+    d = verify_d_guardrail._eval_recent_drift(
+        full, recent, recent_clean=recent_clean, full_clean=full_clean,
+    )
+    assert d["warn"] is False
+    assert d["cause"] == "pollution"
+    assert d["ratio"] == round(1.65 / 2.08, 2)
+    assert "污染" in d["msg"]
+    assert "慢退化" not in d["msg"] or "非策略慢退化" in d["msg"]
 
 
 def test_eval_recent_drift_no_trigger_healthy_ratio():
@@ -222,7 +239,7 @@ def test_build_report_includes_recent_window_and_drift():
     full = {"n": 200, "net_wr": 68.9, "net_pl": 2.08, "max_loss": -5.9}
     fwd = {"n": 31, "net_wr": 77.4, "net_pl": 4.19, "max_loss": -4.2}
     recent = {"n": 100, "net_wr": 65.0, "net_pl": 1.65, "max_loss": -5.9}
-    drift = {"warn": True, "ratio": 0.79, "msg": "x"}
+    drift = {"warn": True, "ratio": 0.79, "msg": "x", "cause": "slow_degradation"}
     rep = verify_d_guardrail.build_report(full, fwd, True, 0, recent=recent, drift=drift)
     assert rep["recent_10d"] == recent
     assert rep["recent_drift"] == drift
@@ -237,4 +254,6 @@ def test_build_report_recent_defaults_when_omitted():
     fwd = {"n": 5, "net_wr": 65.0, "net_pl": 2.5, "max_loss": -4.0}
     rep = verify_d_guardrail.build_report(full, fwd, True, 0)
     assert rep["recent_10d"] is None
-    assert rep["recent_drift"] == {"warn": False, "ratio": None, "msg": ""}
+    assert rep["recent_drift"] == {
+        "warn": False, "ratio": None, "msg": "", "cause": None,
+    }
