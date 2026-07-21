@@ -1581,8 +1581,40 @@ def _low_score_line_pollution(
     }
 
 
-def _print_low_score_line_pollution(db) -> None:
-    """D 项：低 score_line formal run 污染诊断（接 DB）。"""
+def _extract_clean_dedup_rows(
+    rows_with_sl: list,
+    *,
+    floor: float = FORMAL_SCORE_LINE_FLOOR,
+) -> list:
+    """纯函数：从带 score_line 的 formal 样本中提取 clean（≥floor）独立票。
+
+    返回 [(code, trade_date, label, ret), ...]，去重口径与 _fetch_dedup_live_formal
+    一致（同股同日取最差 ret），但**只看 sl≥floor 的 run**——没有高线覆盖的低线票
+    不进 clean 总体。
+
+    用途：D 项净成本/胜率在「当前正式门槛」下的真实水平。仅报污染 WR 不够——
+    第 13 轮实证 clean 全量 PL 2.46 达标，但 clean 近10日 PL 1.69 仍低于基线 1.94，
+    说明近10日下滑主因不是低线污染而是 regime（07-16 震荡）。若只看污染 WR 差，
+    会误判「修好污染就够了」而停止排查。
+    """
+    clean_best: dict[tuple, tuple] = {}
+    for r in rows_with_sl:
+        code, td, label, ret, sl = r[0], str(r[1]), r[2], r[3], float(r[4] or 0)
+        if sl < floor:
+            continue
+        key = (code, td)
+        row4 = (code, td, label, ret)
+        if key not in clean_best or float(ret or 0) < float(clean_best[key][3] or 0):
+            clean_best[key] = row4
+    return list(clean_best.values())
+
+
+def _print_low_score_line_pollution(db, last10: set | None = None) -> None:
+    """D 项：低 score_line formal run 污染诊断 + clean 口径净成本（接 DB）。
+
+    除既有「污染笔数/WR 差」外，额外打印 clean≥floor 全量/近10日净盈亏比——
+    让运营者一眼区分「修污染能救多少」vs「clean 口径仍差（regime/策略真问题）」。
+    """
     rows = db.execute(text("""
         SELECT r.code, r.trade_date, o.outcome_label, o.executed_return, u.score_line
         FROM recommendation_outcomes o
@@ -1592,19 +1624,46 @@ def _print_low_score_line_pollution(db) -> None:
           AND r.recommendation_id LIKE 'rec_%'
     """)).fetchall()
     result = _low_score_line_pollution(list(rows))
-    if result is None:
+    if result is not None:
+        print(
+            f'  ⚠️ 护栏: formal 低 score_line 污染（<{result["floor"]}）独立票 '
+            f'{result["polluted_n"]} 笔 WR={result["polluted_wr"]}% '
+            f'| 剔除后 WR {result["full_wr"]}%→{result["clean_wr"]}% '
+            f'(Δ+{result["delta_pp"]}pp, n={result["clean_n"]}) '
+            f'| sl 分布={result["sl_buckets"]}'
+        )
+        print(
+            f'     ——契约层 FORMAL_SCORE_LINE_FLOOR={result["floor"]} 已拦截新污染；'
+            f'历史低线票不重标（避免刷数字），D 项下滑先查是否低线污染而非策略退化'
+        )
+
+    # clean 口径净成本：即使无 pure pollution，也要给出当前门槛下的 PL
+    clean_rows = _extract_clean_dedup_rows(list(rows))
+    if not clean_rows:
         return
-    print(
-        f'  ⚠️ 护栏: formal 低 score_line 污染（<{result["floor"]}）独立票 '
-        f'{result["polluted_n"]} 笔 WR={result["polluted_wr"]}% '
-        f'| 剔除后 WR {result["full_wr"]}%→{result["clean_wr"]}% '
-        f'(Δ+{result["delta_pp"]}pp, n={result["clean_n"]}) '
-        f'| sl 分布={result["sl_buckets"]}'
+    floor = FORMAL_SCORE_LINE_FLOOR
+    _fmt_d_cost(
+        f'D 项(clean≥{floor:g} 全量)',
+        _compute_d_cost(clean_rows),
+        61.5,
+        PL_RATIO_BASELINE,
     )
-    print(
-        f'     ——契约层 FORMAL_SCORE_LINE_FLOOR={result["floor"]} 已拦截新污染；'
-        f'历史低线票不重标（避免刷数字），D 项下滑先查是否低线污染而非策略退化'
-    )
+    if last10:
+        clean_l10 = _compute_d_cost(clean_rows, trade_dates=last10)
+        _fmt_d_cost(
+            f'D 项(clean≥{floor:g} 近10交易日)',
+            clean_l10,
+            61.5,
+            PL_RATIO_BASELINE,
+        )
+        # clean 近10日仍低于基线 → 低线污染不是主因，禁止停在污染叙事
+        if clean_l10 is not None and clean_l10["net_pl"] < PL_RATIO_BASELINE:
+            print(
+                f'  ⚠️ 护栏: clean≥{floor:g} 近10日净盈亏比 {clean_l10["net_pl"]} '
+                f'仍低于基线 {PL_RATIO_BASELINE}（n={clean_l10["n"]}）'
+                f'——低线污染不是近10日 PL 主因；禁止仅凭污染解释停排查，'
+                f'应继续看 regime/策略（如 07-16 震荡 clean WR 塌方）'
+            )
 
 
 def _soft_regime_pollution(
@@ -2273,8 +2332,9 @@ def check_d_item(db) -> None:
             print(f'     ——污染样本不剔除（避免刷数字），但胜率下滑时先排查是否数据污染扭曲'
                   f'而非策略退化（feature_builder 已加守卫，新数据不污染）')
 
-    # 低 score_line formal 污染护栏（matrix/手动降线 → 低质量票进 LIVE formal 拖累 D）
-    _print_low_score_line_pollution(db)
+    # 低 score_line formal 污染护栏 + clean≥floor 净成本口径
+    # （污染 WR 差不够：clean 近10日 PL 仍可低于基线，需并列暴露）
+    _print_low_score_line_pollution(db, last10=last10)
     # soft@震荡 历史污染护栏（aggregator 已禁，历史票仍拖近10日 PL）
     _print_soft_regime_pollution(db)
     # 契约层地板生产态不变量断言（T5/Contract 一致性：地板强制仍 intact）

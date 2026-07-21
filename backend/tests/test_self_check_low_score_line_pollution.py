@@ -82,3 +82,59 @@ def test_custom_floor():
     assert result is not None
     assert result["polluted_n"] == 1
     assert result["clean_n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# _extract_clean_dedup_rows — clean≥floor 独立票提取（D 项 clean 口径净成本）
+# ---------------------------------------------------------------------------
+
+
+def test_extract_clean_drops_below_floor_rows():
+    """sl<floor 的 run 不进 clean 总体。"""
+    rows = [
+        ("000001", "2026-07-08", "success", 5.0, 72.0),
+        ("600001", "2026-07-16", "failed", -5.0, 55.0),  # 低线，被丢
+    ]
+    out = sc._extract_clean_dedup_rows(rows)
+    assert len(out) == 1
+    assert out[0][0] == "000001"
+
+
+def test_extract_clean_dedupes_same_stock_day_keeps_worst_ret():
+    """同股同日多条 clean run，取最差 ret（与 _fetch_dedup_live_formal 一致）。"""
+    rows = [
+        ("000001", "2026-07-16", "success", 3.0, 80.0),
+        ("000001", "2026-07-16", "failed", -5.0, 72.0),  # 更差 → 留这条
+    ]
+    out = sc._extract_clean_dedup_rows(rows)
+    assert len(out) == 1
+    assert out[0][3] == -5.0
+    assert out[0][2] == "failed"
+
+
+def test_extract_clean_low_line_only_when_no_clean_cover():
+    """同股同日既有 sl=55 又有 sl=72 → clean 总体只含 sl≥72 那笔。"""
+    rows = [
+        ("000001", "2026-07-16", "failed", -5.0, 55.0),
+        ("000001", "2026-07-16", "success", 3.0, 72.0),
+    ]
+    out = sc._extract_clean_dedup_rows(rows)
+    assert len(out) == 1
+    assert out[0][3] == 3.0
+
+
+def test_extract_clean_empty_when_all_below_floor():
+    rows = [
+        ("600001", "2026-07-16", "failed", -5.0, 55.0),
+    ]
+    assert sc._extract_clean_dedup_rows(rows) == []
+
+
+def test_extract_clean_custom_floor():
+    rows = [
+        ("000001", "2026-07-08", "success", 5.0, 70.0),
+        ("000002", "2026-07-16", "failed", -5.0, 60.0),
+    ]
+    out = sc._extract_clean_dedup_rows(rows, floor=65.0)
+    assert len(out) == 1
+    assert out[0][0] == "000001"
