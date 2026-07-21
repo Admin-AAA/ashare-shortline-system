@@ -212,6 +212,9 @@ def check_b_item(db) -> None:
     # LLM 层有效性护栏（T8/T9）：去混杂判 delta 单调性 + oppose 率 + 顶层求和超 clamp。
     check_llm_delta_effectiveness(db)
 
+    # LLM 调用健康（T8）：run 级 skill_review 成功率 + 失败原因（与 delta 有效性正交）。
+    _check_llm_call_health(db)
+
 
 def _llm_route_diagnosis(cache_latest, mins_since, total):
     """纯函数：基于 llm_review_cache 状态判定 LLM 路由失效证据（便于单测）。
@@ -495,6 +498,67 @@ def check_llm_delta_effectiveness(db) -> None:
         print(f'  LLM stance 分档胜率: {" ".join(parts)}{prem}')
         if sw["note"]:
             print(f'    ⚠️ {sw["note"]}')
+
+
+def _llm_call_health_status(succ: int, fail: int) -> tuple[float, bool]:
+    """纯函数：由 skill_review 成功/失败数算成功率 + 是否低成功率（<80%）。
+
+    供 _check_llm_call_health 单测，与 DB 查询解耦。
+    """
+    total = succ + fail
+    rate = (succ / total * 100) if total > 0 else 0.0
+    return round(rate, 1), rate < 80.0
+
+
+def _check_llm_call_health(db) -> None:
+    """LLM 调用健康诊断（T8）：报告最近 formal run 的 skill_review 成功率与失败原因。
+
+    check_llm_delta_effectiveness 看「delta 是否有效」（推荐级结果），本函数看「LLM 调用本身
+    是否成功」（run 级过程）——两者正交。formal run 标 agent_runtime=llm 但 skill_review
+    全失败时（如 2026-07-20 gpt-5.4 熔断 succ=0/170 fail），推荐级 delta 全缺失，但 B 项
+    主查询只在「delta 缺失」时触发 _check_llm_route_health，且不报告成功率/失败原因。
+    本函数无条件报告，让 LLM 层失效（熔断/余额/超时）立即可见，而非埋在 result_summary 里。
+    """
+    try:
+        rows = db.execute(text("""
+            SELECT trade_date,
+                   JSON_UNQUOTE(JSON_EXTRACT(result_summary_json, '$.agent_runtime')) AS ar,
+                   JSON_UNQUOTE(JSON_EXTRACT(result_summary_json, '$.skill_input_count')) AS input_cnt,
+                   JSON_UNQUOTE(JSON_EXTRACT(result_summary_json, '$.pipeline.skill_review_success_count')) AS succ,
+                   JSON_UNQUOTE(JSON_EXTRACT(result_summary_json, '$.pipeline.skill_review_failure_audit.failed_count')) AS fail,
+                   JSON_UNQUOTE(JSON_EXTRACT(result_summary_json, '$.pipeline.skill_review_failure_audit.reason_counts')) AS reasons
+            FROM recommendation_runs
+            WHERE run_mode='formal' AND status='completed' AND universe_count > 4000
+            ORDER BY started_at DESC LIMIT 5
+        """)).fetchall()
+    except Exception as exc:
+        print(f'  ⚠️ LLM 调用健康诊断查询失败: {exc}')
+        return
+    if not rows:
+        return
+    print('  LLM 调用健康（最近5个全市场 formal run）:')
+    any_unhealthy = False
+    for r in rows:
+        td, ar = r[0], r[1]
+        inp = int(r[2]) if r[2] not in (None, "null") else 0
+        succ = int(r[3]) if r[3] not in (None, "null") else 0
+        fail = int(r[4]) if r[4] not in (None, "null") else 0
+        reasons = json.loads(r[5]) if r[5] and r[5] != "null" else {}
+        # agent_review_disabled 时 ar != 'llm'，跳过（非 LLM 模式不计入健康判定）
+        if ar != "llm" or inp == 0:
+            continue
+        rate, unhealthy = _llm_call_health_status(succ, fail)
+        flag = " ⚠️低成功率" if unhealthy else ""
+        any_unhealthy = any_unhealthy or unhealthy
+        reason_str = ""
+        if reasons:
+            top = sorted(reasons.items(), key=lambda x: -int(x[1] or 0))[:3]
+            reason_str = " " + " ".join(f"{k}={v}" for k, v in top)
+        print(f'    {td}: 成功 {succ}/{succ + fail} ({rate:.0f}%){flag}{reason_str}')
+    if any_unhealthy:
+        print('    ——LLM 成功率 <80%：检查模型路由配置/余额/熔断（model_route_config 页），')
+        print('      失败原因 reason_counts：circuit_open=连续失败熔断(查模型可用性/key/余额)、')
+        print('      payment_required=余额不足、timeout=模型超时(降并发或加超时)、agent_review_error=解析错误(查 prompt 格式)。')
 
 
 def check_c_item(db) -> set:
