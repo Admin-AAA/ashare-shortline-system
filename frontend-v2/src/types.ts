@@ -1219,6 +1219,16 @@ export type RecommendationCard = {
     effective_score_line?: number;
     passed?: boolean;
     reasons?: string[];
+    /** soft floor 动态降线是否放行了该票（历史污染诊断用） */
+    dynamic_soft_floor_applied?: boolean | number | string;
+    dynamic_soft_floor?: number;
+    soft_floor_gap?: number;
+    soft_floor_reason?: string;
+    degraded_agent_unavailable?: boolean | number | string;
+    panic_day_penalty?: number;
+    regime_weak_low_chg20_penalty?: number;
+    regime_oscillation_low_pos_penalty?: number;
+    regime_support_ma5_penalty?: number;
   };
   execution_viability?: {
     status?: "tradable" | "risky" | "blocked" | string;
