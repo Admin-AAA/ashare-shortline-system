@@ -705,6 +705,10 @@ def _parse_score_line_gate_stats(fa_str: str | None) -> dict:
                 line = float(m.group(2))
             except ValueError:
                 continue
+            # 历史噪声：final=0 且 effective=0（骨架票缺 meta，已修生产路径）
+            # 勿当真实最高候选/有效线，否则 max 被 0 污染或误读。
+            if cand <= 0 and line <= 0:
+                continue
             if best_cand is None or cand > best_cand:
                 best_cand = cand
             if best_line is None or line > best_line:
@@ -716,6 +720,8 @@ def _parse_score_line_gate_stats(fa_str: str | None) -> dict:
                 cand = float(m.group(1))
                 line = float(m.group(2))
             except ValueError:
+                continue
+            if cand <= 0 and line <= 0:
                 continue
             if best_cand is None or cand > best_cand:
                 best_cand = cand

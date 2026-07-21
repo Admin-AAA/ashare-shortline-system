@@ -289,6 +289,42 @@ def trace_summary(trace: list[dict[str, Any]]) -> str:
     return " -> ".join(fragments)
 
 
+def score_line_reject_reason(
+    *,
+    final_score: float,
+    effective_line: float | None,
+    passed: bool,
+    execution_blocked: bool = False,
+    block_reason: str | None = None,
+    hard_veto: bool = False,
+    veto_reason: str | None = None,
+    risk_flags: list | None = None,
+) -> str:
+    """纯函数：score_line 阶段拒绝/通过原因文案。
+
+    背景（2026-07-22 T5）：骨架/hard_veto 票 final_score=0 且无 score_line_meta 时，
+    旧逻辑默认 effective_line=0 → 刷出「最终分 0.0 低于有效线 0.0」噪声
+    （07-21 formal 34/60），淹没真门线拒绝（如 72<95.55）。
+    - 有 meta 的真拒绝：最终分 X 低于有效线 Y
+    - hard_veto / 无 meta：单独文案，不进「低于有效线」正则
+    """
+    if execution_blocked:
+        return str(block_reason or "入场不可成交，未纳入正式推荐")
+    if passed:
+        return "达到正式分数线"
+    if hard_veto:
+        reason = str(
+            veto_reason
+            or ((risk_flags or ["策略 hard_veto"])[0] if risk_flags else "策略 hard_veto")
+        )
+        if not reason.startswith("hard_veto"):
+            return f"hard_veto: {reason}"
+        return reason
+    if effective_line is None:
+        return "无有效线元数据（未完成分数线评估）"
+    return f"最终分 {round(final_score, 2)} 低于有效线 {round(float(effective_line), 2)}"
+
+
 def build_filter_audit(
     *,
     prefilter_audit: dict[str, Any] | None,
@@ -423,17 +459,30 @@ def build_filter_audit(
         score_line_meta = card.get("score_line_meta") or {}
         execution_viability = card.get("execution_viability") or {}
         final_score = float(card.get("final_score") or 0)
-        effective_line = float(score_line_meta.get("effective_score_line") or 0)
+        # effective_line 缺 meta 时勿默认 0——否则 hard_veto/未聚合骨架票会刷出
+        # 「最终分 0.0 低于有效线 0.0」噪声（07-21 formal 34/60 实证），淹没真门线拒绝。
+        has_eff = score_line_meta.get("effective_score_line") is not None
+        effective_line = float(score_line_meta["effective_score_line"]) if has_eff else None
         passed = code in recommended_codes or bool(score_line_meta.get("passed"))
-        score_gap = round(final_score - effective_line, 2) if effective_line else None
-        if bool(score_line_meta.get("execution_blocked")):
-            score_reason = str(score_line_meta.get("block_reason") or "入场不可成交，未纳入正式推荐")
-        else:
-            score_reason = "达到正式分数线" if passed else f"最终分 {round(final_score, 2)} 低于有效线 {round(effective_line, 2)}"
+        score_gap = (
+            round(final_score - effective_line, 2)
+            if effective_line is not None
+            else None
+        )
+        score_reason = score_line_reject_reason(
+            final_score=final_score,
+            effective_line=effective_line,
+            passed=passed,
+            execution_blocked=bool(score_line_meta.get("execution_blocked")),
+            block_reason=score_line_meta.get("block_reason"),
+            hard_veto=bool(card.get("hard_veto")),
+            veto_reason=card.get("veto_reason"),
+            risk_flags=card.get("risk_flags") or card.get("risk_tags"),
+        )
         score_row = {
             "code": code,
             "final_score": round(final_score, 2),
-            "effective_score_line": round(effective_line, 2),
+            "effective_score_line": round(effective_line, 2) if effective_line is not None else None,
             "score_gap": score_gap,
             "passed": passed,
             "reason": score_reason,

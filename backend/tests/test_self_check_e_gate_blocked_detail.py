@@ -227,3 +227,20 @@ def test_fetch_gate_blocked_details_picks_most_recent():
     det = self_check.fetch_gate_blocked_details(db, ["s"])["s"]
     assert det["max_candidate_score"] == 80.0  # 取最新，非旧
 
+
+
+def test_parse_ignores_zero_zero_noise():
+    """历史噪声「最终分 0.0 低于有效线 0.0」不得污染 max 候选/有效线。"""
+    import json
+    fa = json.dumps({
+        "reason_counts": {
+            "score_line": {
+                "最终分 0.0 低于有效线 0.0": 34,
+                "最终分 72.0 低于有效线 95.55": 1,
+                "最终分 36.03 低于有效线 89.55": 5,
+            }
+        }
+    })
+    stats = self_check._parse_score_line_gate_stats(fa)
+    assert stats["max_candidate_score"] == 72.0
+    assert stats["max_effective_line"] == 95.55
