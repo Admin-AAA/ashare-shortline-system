@@ -1285,12 +1285,14 @@ def _clean_d_counterfactual(
     pollution_keys: set[tuple],
     *,
     last10_dates: set | None = None,
+    since_date: str | None = None,
 ) -> dict | None:
     """去 pure 污染后的 D 项反事实（不改主口径，只报告）。
 
     dedup_rows: _fetch_dedup_live_formal 口径 [(code, trade_date, label, ret), ...]
     pollution_keys: pure 污染 (code, trade_date)
-    返回 full/last10 的 raw vs clean 净成本指标 + 关键结论。
+    since_date: 可选前瞻纪元，额外报前瞻窗口 raw vs clean。
+    返回 full/last10[/fwd] 的 raw vs clean 净成本指标 + 关键结论。
     """
     if not dedup_rows:
         return None
@@ -1307,13 +1309,12 @@ def _clean_d_counterfactual(
     l10_clean = _compute_d_cost(clean_rows, trade_dates=last10_dates)
     if full_raw is None:
         return None
-    return {
+    out = {
         "pollution_n": len(pollution_keys),
         "full_raw": full_raw,
         "full_clean": full_clean,
         "last10_raw": l10_raw,
         "last10_clean": l10_clean,
-        # 关键诊断：污染主要伤 WR 还是 PL
         "wr_delta_full": (
             round(full_clean["net_wr"] - full_raw["net_wr"], 1)
             if full_clean else None
@@ -1330,7 +1331,28 @@ def _clean_d_counterfactual(
             round(l10_clean["net_pl"] - l10_raw["net_pl"], 2)
             if l10_raw and l10_clean else None
         ),
+        "fwd_raw": None,
+        "fwd_clean": None,
+        "wr_delta_fwd": None,
+        "pl_delta_fwd": None,
+        "fwd_pollution_n": 0,
+        "fwd_clean_n": 0,
     }
+    if since_date:
+        fwd_raw = _compute_d_cost(dedup_rows, since_date=since_date)
+        fwd_clean = _compute_d_cost(clean_rows, since_date=since_date)
+        out["fwd_raw"] = fwd_raw
+        out["fwd_clean"] = fwd_clean
+        # 前瞻窗口内 pure 污染票数（独立 code+date）
+        fwd_keys = {
+            (r[0], str(r[1])) for r in dedup_rows if str(r[1]) >= since_date
+        }
+        out["fwd_pollution_n"] = len(fwd_keys & pollution_keys)
+        out["fwd_clean_n"] = len(fwd_keys - pollution_keys)
+        if fwd_raw and fwd_clean:
+            out["wr_delta_fwd"] = round(fwd_clean["net_wr"] - fwd_raw["net_wr"], 1)
+            out["pl_delta_fwd"] = round(fwd_clean["net_pl"] - fwd_raw["net_pl"], 2)
+    return out
 
 
 def _print_clean_d_counterfactual(db) -> None:
@@ -1338,8 +1360,11 @@ def _print_clean_d_counterfactual(db) -> None:
 
     背景（2026-07-21 T16）：两道污染护栏各自报 WR 提升，但近10日净 PL 1.65
     是否被污染解释不清楚 → 误把 PL 压缩当 entry 可解。本函数合并 pure 污染源，
-    对全量/近10日同时报去污染后 WR 与净 PL，并点明「WR 回升但 PL 仍弱」时
-    主因在出场/regime 而非 entry。
+    对全量/近10日/前瞻同时报去污染后 WR 与净 PL。
+
+    背景（2026-07-21 T17）：稳定前瞻纪元后 07-16 单日成为窗口全部样本且 26/28
+    为 pure 污染——raw 前瞻 WR 39% 会被误读为 OOS 退化。前瞻去污染 + 污染占比
+    显式化：污染主导 → 非 OOS 退化；clean 样本过少 → 仍不足 OOS。
     """
     raw = db.execute(text("""
         SELECT r.code, r.trade_date, o.outcome_label, o.executed_return, u.score_line,
@@ -1359,7 +1384,10 @@ def _print_clean_d_counterfactual(db) -> None:
     dedup = _fetch_dedup_live_formal(db)
     dates = sorted({str(r[1]) for r in dedup})
     last10 = set(dates[-10:]) if dates else set()
-    cf = _clean_d_counterfactual(dedup, keys["union"], last10_dates=last10)
+    ep = FORWARD_EPOCH  # 模块级，main 入口已 resolve
+    cf = _clean_d_counterfactual(
+        dedup, keys["union"], last10_dates=last10, since_date=ep,
+    )
     if cf is None or cf["full_clean"] is None:
         return
     fr, fc = cf["full_raw"], cf["full_clean"]
@@ -1379,7 +1407,6 @@ def _print_clean_d_counterfactual(db) -> None:
             f' | 净PL {lr["net_pl"]}→{lc["net_pl"]} (Δ{cf["pl_delta_last10"]:+})'
             f' | 净均 {lr["net_avg"]}%→{lc["net_avg"]}% | n {lr["n"]}→{lc["n"]}'
         )
-        # PL 几乎不动但 WR 回升 → 污染解释不了盈亏比，禁止据此加 entry
         if abs(cf["pl_delta_last10"] or 0) < 0.05 and (cf["wr_delta_last10"] or 0) >= 3:
             print(
                 f'     ——近10日去污染后 WR 回升但净 PL 几乎不变（{lr["net_pl"]}→{lc["net_pl"]}）：'
@@ -1390,6 +1417,30 @@ def _print_clean_d_counterfactual(db) -> None:
             print(
                 f'     ——近10日去污染后净 PL 回升：历史污染是主拖累之一，'
                 f'契约层+soft ban 已拦截新污染，等前瞻 formal 结算确认'
+            )
+    fwr, fwc = cf["fwd_raw"], cf["fwd_clean"]
+    if ep and fwr is not None:
+        poll_n, clean_n = cf["fwd_pollution_n"], cf["fwd_clean_n"]
+        total_fwd = poll_n + clean_n
+        share = round(poll_n * 100 / total_fwd, 0) if total_fwd else 0
+        if fwc is not None and clean_n > 0:
+            print(
+                f'     前瞻≥{ep} 净WR {fwr["net_wr"]}%→{fwc["net_wr"]}%'
+                f' | 净PL {fwr["net_pl"]}→{fwc["net_pl"]}'
+                f' | n {fwr["n"]}→{fwc["n"]}'
+                f' （污染 {poll_n}/{total_fwd}={share:.0f}%）'
+            )
+        else:
+            print(
+                f'     前瞻≥{ep} raw n={fwr["n"]} 净WR={fwr["net_wr"]}% 净PL={fwr["net_pl"]}'
+                f' | pure 污染 {poll_n}/{total_fwd}={share:.0f}%，clean 仅 {clean_n} 笔'
+            )
+        # 污染主导（≥70%）或 clean 过少（<MIN_OOS_SAMPLE）→ 非 OOS 退化
+        if total_fwd > 0 and (share >= 70 or clean_n < MIN_OOS_SAMPLE):
+            print(
+                f'     ——前瞻窗口被 pure 污染主导（{poll_n}/{total_fwd}）或 clean 样本'
+                f' <{MIN_OOS_SAMPLE}：raw 低胜率是单日/受污染 regime（如 07-16 soft+低线），'
+                f'非 D 项 OOS 退化；Contract 已拦截新污染，待多交易日 clean formal 结算后再做 OOS'
             )
 
 
