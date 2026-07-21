@@ -56,6 +56,12 @@ from app.services.shortline_factors import apply_shared_shortline_factors
 GOLDEN_PATH = Path(__file__).resolve().parent / "data" / "shortline_factor_golden.json"
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _bootstrap_shortline_factors():
+    """apply_shared_shortline_factors 依赖 default_registry 已 bootstrap 并冻结。"""
+    bootstrap_default_factor_registry()
+
+
 def _load_golden() -> dict[str, list[dict]]:
     assert GOLDEN_PATH.exists(), (
         f"缺少 golden 快照 {GOLDEN_PATH}；应在迁移前用现状代码捕获后提交。"
@@ -116,9 +122,12 @@ def test_apply_is_in_place_and_returns_none():
 # ── 跨股聚合构造器 ─────────────────────────────────────────────────────
 def test_market_sentiment_phase_all_four():
     assert market_sentiment_phase({"sample_count": 300, "limit_up_count": 12, "limit_down_count": 2}) == "高潮"
-    assert market_sentiment_phase({"sample_count": 1000, "limit_up_count": 8, "limit_down_count": 10}) == "活跃"
+    # 活跃：涨停率>0.5% 且 lu/ld ≥ 1.2（T28 双维度）
+    assert market_sentiment_phase({"sample_count": 1000, "limit_up_count": 8, "limit_down_count": 4}) == "活跃"
     assert market_sentiment_phase({"sample_count": 1000, "limit_up_count": 3, "limit_down_count": 1}) == "平淡"
     assert market_sentiment_phase({"sample_count": 1000, "limit_up_count": 0, "limit_down_count": 5}) == "冰点"
+    # 伪活跃：涨停率够但跌停更多 → 平淡
+    assert market_sentiment_phase({"sample_count": 1000, "limit_up_count": 8, "limit_down_count": 10}) == "平淡"
 
 
 def test_main_industries_of_strips_and_stringifies():

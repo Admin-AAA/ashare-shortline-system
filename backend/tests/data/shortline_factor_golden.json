@@ -3,160 +3,72 @@
     "name": "high_sentiment_robot",
     "stocks": [
       {
+        "is_main_theme": true,
+        "market_sentiment_phase": "高潮",
+        "sector_ladder_completeness_score": 100.0,
+        "sector_ladder_level": "完整",
+        "sector_ladder_limit_up_count": 4,
+        "sector_ladder_height": 5,
         "capital_resonance_score": 100.0,
         "capital_resonance_signal": "主力共振",
         "capital_resonance_source": "capital_flow",
-        "dragon_tiger_buy_dispersion": "集中",
-        "dragon_tiger_inst_buy_ratio": 1.0,
-        "is_20cm_stock": true,
-        "is_main_theme": true,
-        "is_shortline_leader_candidate": true,
-        "limit_up_overheat_level": "中",
         "limit_up_overheat_score": 62.0,
-        "market_sentiment_phase": "高潮",
-        "sector_ladder_completeness_score": 100.0,
-        "sector_ladder_height": 5,
-        "sector_ladder_level": "完整",
-        "sector_ladder_limit_up_count": 4,
-        "shortline_factor_explanations": {
-          "capital_resonance": {
-            "data_sources": [
-              "Tushare/本地资金流池",
-              "行情成交额与量比回退"
-            ],
-            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
-            "fields": [
-              "capital_resonance_score",
-              "capital_resonance_signal"
-            ],
-            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
-            "score": 100.0,
-            "source": "capital_flow",
-            "value": "主力共振"
-          },
-          "limit_up_overheat": {
-            "data_sources": [
-              "Tushare/本地涨停池",
-              "行情快照",
-              "日 K 线派生字段"
-            ],
-            "degradation": "缺少涨停明细时退化为市场涨停率、个股涨幅和位置估算；无法确认时给中性偏低风险。",
-            "fields": [
-              "limit_up_overheat_score",
-              "limit_up_overheat_level"
-            ],
-            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
-            "score": 62.0,
-            "value": "中"
-          },
-          "sector_ladder": {
-            "data_sources": [
-              "Tushare/本地涨停池",
-              "本地概念板块池",
-              "行情与行业字段"
-            ],
-            "degradation": "缺少概念板块时退化为行业分组；缺少板块信息时输出 0 分和缺失标签。",
-            "fields": [
-              "sector_ladder_completeness_score",
-              "sector_ladder_level"
-            ],
-            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
-            "score": 100.0,
-            "value": "完整"
-          },
-          "twenty_cm_risk": {
-            "data_sources": [
-              "证券代码/交易所/市场板块",
-              "行情快照",
-              "日 K 线派生字段"
-            ],
-            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
-            "fields": [
-              "is_20cm_stock",
-              "twenty_cm_risk_score",
-              "twenty_cm_risk_gate",
-              "twenty_cm_risk_reason"
-            ],
-            "logic": "识别创业板、科创板、北交所等 20cm 标的，并按涨幅、换手、流动性、位置和封板状态给风险闸门。",
-            "reason": "创业板 20cm 标的；当日涨幅进入 20cm 高波动区；20cm 涨停后追高成交约束更强；换手过高；成交额不足；中期位置过高",
-            "score": 100.0,
-            "value": "block"
-          }
-        },
-        "shortline_leader_score": 100.0,
+        "limit_up_overheat_level": "中",
+        "is_20cm_stock": true,
+        "twenty_cm_risk_score": 100.0,
         "twenty_cm_risk_gate": "block",
         "twenty_cm_risk_reason": "创业板 20cm 标的；当日涨幅进入 20cm 高波动区；20cm 涨停后追高成交约束更强；换手过高；成交额不足；中期位置过高",
-        "twenty_cm_risk_score": 100.0
-      },
-      {
-        "capital_resonance_score": 100.0,
-        "capital_resonance_signal": "主力共振",
-        "capital_resonance_source": "capital_flow",
-        "dragon_tiger_buy_dispersion": "一般",
-        "dragon_tiger_inst_buy_ratio": 0.5,
-        "is_20cm_stock": true,
-        "is_main_theme": true,
+        "shortline_leader_score": 100.0,
         "is_shortline_leader_candidate": true,
-        "limit_up_overheat_level": "中",
-        "limit_up_overheat_score": 52.0,
-        "market_sentiment_phase": "高潮",
-        "sector_ladder_completeness_score": 100.0,
-        "sector_ladder_height": 5,
-        "sector_ladder_level": "完整",
-        "sector_ladder_limit_up_count": 4,
+        "dragon_tiger_buy_dispersion": "集中",
+        "dragon_tiger_inst_buy_ratio": 1.0,
         "shortline_factor_explanations": {
-          "capital_resonance": {
-            "data_sources": [
-              "Tushare/本地资金流池",
-              "行情成交额与量比回退"
-            ],
-            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
-            "fields": [
-              "capital_resonance_score",
-              "capital_resonance_signal"
-            ],
-            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
-            "score": 100.0,
-            "source": "capital_flow",
-            "value": "主力共振"
-          },
           "limit_up_overheat": {
+            "fields": [
+              "limit_up_overheat_score",
+              "limit_up_overheat_level"
+            ],
+            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
             "data_sources": [
               "Tushare/本地涨停池",
               "行情快照",
               "日 K 线派生字段"
             ],
             "degradation": "缺少涨停明细时退化为市场涨停率、个股涨幅和位置估算；无法确认时给中性偏低风险。",
-            "fields": [
-              "limit_up_overheat_score",
-              "limit_up_overheat_level"
-            ],
-            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
-            "score": 52.0,
-            "value": "中"
+            "value": "中",
+            "score": 62.0
           },
           "sector_ladder": {
+            "fields": [
+              "sector_ladder_completeness_score",
+              "sector_ladder_level"
+            ],
+            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
             "data_sources": [
               "Tushare/本地涨停池",
               "本地概念板块池",
               "行情与行业字段"
             ],
             "degradation": "缺少概念板块时退化为行业分组；缺少板块信息时输出 0 分和缺失标签。",
+            "value": "完整",
+            "score": 100.0
+          },
+          "capital_resonance": {
             "fields": [
-              "sector_ladder_completeness_score",
-              "sector_ladder_level"
+              "capital_resonance_score",
+              "capital_resonance_signal"
             ],
-            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
+            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
+            "data_sources": [
+              "Tushare/本地资金流池",
+              "行情成交额与量比回退"
+            ],
+            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
+            "value": "主力共振",
             "score": 100.0,
-            "value": "完整"
+            "source": "capital_flow"
           },
           "twenty_cm_risk": {
-            "data_sources": [
-              "证券代码/交易所/市场板块",
-              "行情快照",
-              "日 K 线派生字段"
-            ],
-            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
             "fields": [
               "is_20cm_stock",
               "twenty_cm_risk_score",
@@ -164,85 +76,85 @@
               "twenty_cm_risk_reason"
             ],
             "logic": "识别创业板、科创板、北交所等 20cm 标的，并按涨幅、换手、流动性、位置和封板状态给风险闸门。",
-            "reason": "创业板 20cm 标的；20cm 涨停后追高成交约束更强",
-            "score": 35.0,
-            "value": "caution"
+            "data_sources": [
+              "证券代码/交易所/市场板块",
+              "行情快照",
+              "日 K 线派生字段"
+            ],
+            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
+            "value": "block",
+            "score": 100.0,
+            "reason": "创业板 20cm 标的；当日涨幅进入 20cm 高波动区；20cm 涨停后追高成交约束更强；换手过高；成交额不足；中期位置过高"
           }
-        },
-        "shortline_leader_score": 100.0,
+        }
+      },
+      {
+        "is_main_theme": true,
+        "market_sentiment_phase": "高潮",
+        "sector_ladder_completeness_score": 100.0,
+        "sector_ladder_level": "完整",
+        "sector_ladder_limit_up_count": 4,
+        "sector_ladder_height": 5,
+        "capital_resonance_score": 100.0,
+        "capital_resonance_signal": "主力共振",
+        "capital_resonance_source": "capital_flow",
+        "limit_up_overheat_score": 52.0,
+        "limit_up_overheat_level": "中",
+        "is_20cm_stock": true,
+        "twenty_cm_risk_score": 35.0,
         "twenty_cm_risk_gate": "caution",
         "twenty_cm_risk_reason": "创业板 20cm 标的；20cm 涨停后追高成交约束更强",
-        "twenty_cm_risk_score": 35.0
-      },
-      {
-        "capital_resonance_score": 100.0,
-        "capital_resonance_signal": "主力共振",
-        "capital_resonance_source": "capital_flow",
-        "dragon_tiger_buy_dispersion": "未上榜",
-        "dragon_tiger_inst_buy_ratio": 0.0,
-        "is_20cm_stock": true,
-        "is_main_theme": true,
+        "shortline_leader_score": 100.0,
         "is_shortline_leader_candidate": true,
-        "limit_up_overheat_level": "中",
-        "limit_up_overheat_score": 64.0,
-        "market_sentiment_phase": "高潮",
-        "sector_ladder_completeness_score": 100.0,
-        "sector_ladder_height": 5,
-        "sector_ladder_level": "完整",
-        "sector_ladder_limit_up_count": 4,
+        "dragon_tiger_buy_dispersion": "一般",
+        "dragon_tiger_inst_buy_ratio": 0.5,
         "shortline_factor_explanations": {
-          "capital_resonance": {
-            "data_sources": [
-              "Tushare/本地资金流池",
-              "行情成交额与量比回退"
-            ],
-            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
-            "fields": [
-              "capital_resonance_score",
-              "capital_resonance_signal"
-            ],
-            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
-            "score": 100.0,
-            "source": "capital_flow",
-            "value": "主力共振"
-          },
           "limit_up_overheat": {
+            "fields": [
+              "limit_up_overheat_score",
+              "limit_up_overheat_level"
+            ],
+            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
             "data_sources": [
               "Tushare/本地涨停池",
               "行情快照",
               "日 K 线派生字段"
             ],
             "degradation": "缺少涨停明细时退化为市场涨停率、个股涨幅和位置估算；无法确认时给中性偏低风险。",
-            "fields": [
-              "limit_up_overheat_score",
-              "limit_up_overheat_level"
-            ],
-            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
-            "score": 64.0,
-            "value": "中"
+            "value": "中",
+            "score": 52.0
           },
           "sector_ladder": {
+            "fields": [
+              "sector_ladder_completeness_score",
+              "sector_ladder_level"
+            ],
+            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
             "data_sources": [
               "Tushare/本地涨停池",
               "本地概念板块池",
               "行情与行业字段"
             ],
             "degradation": "缺少概念板块时退化为行业分组；缺少板块信息时输出 0 分和缺失标签。",
+            "value": "完整",
+            "score": 100.0
+          },
+          "capital_resonance": {
             "fields": [
-              "sector_ladder_completeness_score",
-              "sector_ladder_level"
+              "capital_resonance_score",
+              "capital_resonance_signal"
             ],
-            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
+            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
+            "data_sources": [
+              "Tushare/本地资金流池",
+              "行情成交额与量比回退"
+            ],
+            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
+            "value": "主力共振",
             "score": 100.0,
-            "value": "完整"
+            "source": "capital_flow"
           },
           "twenty_cm_risk": {
-            "data_sources": [
-              "证券代码/交易所/市场板块",
-              "行情快照",
-              "日 K 线派生字段"
-            ],
-            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
             "fields": [
               "is_20cm_stock",
               "twenty_cm_risk_score",
@@ -250,85 +162,85 @@
               "twenty_cm_risk_reason"
             ],
             "logic": "识别创业板、科创板、北交所等 20cm 标的，并按涨幅、换手、流动性、位置和封板状态给风险闸门。",
-            "reason": "科创板 20cm 标的；20cm 涨停后追高成交约束更强；换手过高",
-            "score": 53.0,
-            "value": "caution"
+            "data_sources": [
+              "证券代码/交易所/市场板块",
+              "行情快照",
+              "日 K 线派生字段"
+            ],
+            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
+            "value": "caution",
+            "score": 35.0,
+            "reason": "创业板 20cm 标的；20cm 涨停后追高成交约束更强"
           }
-        },
-        "shortline_leader_score": 100.0,
+        }
+      },
+      {
+        "is_main_theme": true,
+        "market_sentiment_phase": "高潮",
+        "sector_ladder_completeness_score": 100.0,
+        "sector_ladder_level": "完整",
+        "sector_ladder_limit_up_count": 4,
+        "sector_ladder_height": 5,
+        "capital_resonance_score": 100.0,
+        "capital_resonance_signal": "主力共振",
+        "capital_resonance_source": "capital_flow",
+        "limit_up_overheat_score": 64.0,
+        "limit_up_overheat_level": "中",
+        "is_20cm_stock": true,
+        "twenty_cm_risk_score": 53.0,
         "twenty_cm_risk_gate": "caution",
         "twenty_cm_risk_reason": "科创板 20cm 标的；20cm 涨停后追高成交约束更强；换手过高",
-        "twenty_cm_risk_score": 53.0
-      },
-      {
-        "capital_resonance_score": 100.0,
-        "capital_resonance_signal": "主力共振",
-        "capital_resonance_source": "capital_flow",
+        "shortline_leader_score": 100.0,
+        "is_shortline_leader_candidate": true,
         "dragon_tiger_buy_dispersion": "未上榜",
         "dragon_tiger_inst_buy_ratio": 0.0,
-        "is_20cm_stock": true,
-        "is_main_theme": true,
-        "is_shortline_leader_candidate": true,
-        "limit_up_overheat_level": "高",
-        "limit_up_overheat_score": 92.0,
-        "market_sentiment_phase": "高潮",
-        "sector_ladder_completeness_score": 100.0,
-        "sector_ladder_height": 5,
-        "sector_ladder_level": "完整",
-        "sector_ladder_limit_up_count": 4,
         "shortline_factor_explanations": {
-          "capital_resonance": {
-            "data_sources": [
-              "Tushare/本地资金流池",
-              "行情成交额与量比回退"
-            ],
-            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
-            "fields": [
-              "capital_resonance_score",
-              "capital_resonance_signal"
-            ],
-            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
-            "score": 100.0,
-            "source": "capital_flow",
-            "value": "主力共振"
-          },
           "limit_up_overheat": {
+            "fields": [
+              "limit_up_overheat_score",
+              "limit_up_overheat_level"
+            ],
+            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
             "data_sources": [
               "Tushare/本地涨停池",
               "行情快照",
               "日 K 线派生字段"
             ],
             "degradation": "缺少涨停明细时退化为市场涨停率、个股涨幅和位置估算；无法确认时给中性偏低风险。",
-            "fields": [
-              "limit_up_overheat_score",
-              "limit_up_overheat_level"
-            ],
-            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
-            "score": 92.0,
-            "value": "高"
+            "value": "中",
+            "score": 64.0
           },
           "sector_ladder": {
+            "fields": [
+              "sector_ladder_completeness_score",
+              "sector_ladder_level"
+            ],
+            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
             "data_sources": [
               "Tushare/本地涨停池",
               "本地概念板块池",
               "行情与行业字段"
             ],
             "degradation": "缺少概念板块时退化为行业分组；缺少板块信息时输出 0 分和缺失标签。",
+            "value": "完整",
+            "score": 100.0
+          },
+          "capital_resonance": {
             "fields": [
-              "sector_ladder_completeness_score",
-              "sector_ladder_level"
+              "capital_resonance_score",
+              "capital_resonance_signal"
             ],
-            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
+            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
+            "data_sources": [
+              "Tushare/本地资金流池",
+              "行情成交额与量比回退"
+            ],
+            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
+            "value": "主力共振",
             "score": 100.0,
-            "value": "完整"
+            "source": "capital_flow"
           },
           "twenty_cm_risk": {
-            "data_sources": [
-              "证券代码/交易所/市场板块",
-              "行情快照",
-              "日 K 线派生字段"
-            ],
-            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
             "fields": [
               "is_20cm_stock",
               "twenty_cm_risk_score",
@@ -336,85 +248,85 @@
               "twenty_cm_risk_reason"
             ],
             "logic": "识别创业板、科创板、北交所等 20cm 标的，并按涨幅、换手、流动性、位置和封板状态给风险闸门。",
-            "reason": "创业板 20cm 标的；20cm 涨停后追高成交约束更强；中期位置过高",
-            "score": 50.0,
-            "value": "caution"
+            "data_sources": [
+              "证券代码/交易所/市场板块",
+              "行情快照",
+              "日 K 线派生字段"
+            ],
+            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
+            "value": "caution",
+            "score": 53.0,
+            "reason": "科创板 20cm 标的；20cm 涨停后追高成交约束更强；换手过高"
           }
-        },
-        "shortline_leader_score": 100.0,
+        }
+      },
+      {
+        "is_main_theme": true,
+        "market_sentiment_phase": "高潮",
+        "sector_ladder_completeness_score": 100.0,
+        "sector_ladder_level": "完整",
+        "sector_ladder_limit_up_count": 4,
+        "sector_ladder_height": 5,
+        "capital_resonance_score": 100.0,
+        "capital_resonance_signal": "主力共振",
+        "capital_resonance_source": "capital_flow",
+        "limit_up_overheat_score": 92.0,
+        "limit_up_overheat_level": "高",
+        "is_20cm_stock": true,
+        "twenty_cm_risk_score": 50.0,
         "twenty_cm_risk_gate": "caution",
         "twenty_cm_risk_reason": "创业板 20cm 标的；20cm 涨停后追高成交约束更强；中期位置过高",
-        "twenty_cm_risk_score": 50.0
-      },
-      {
-        "capital_resonance_score": 100.0,
-        "capital_resonance_signal": "主力共振",
-        "capital_resonance_source": "capital_flow",
+        "shortline_leader_score": 100.0,
+        "is_shortline_leader_candidate": true,
         "dragon_tiger_buy_dispersion": "未上榜",
         "dragon_tiger_inst_buy_ratio": 0.0,
-        "is_20cm_stock": false,
-        "is_main_theme": true,
-        "is_shortline_leader_candidate": true,
-        "limit_up_overheat_level": "低",
-        "limit_up_overheat_score": 28.0,
-        "market_sentiment_phase": "高潮",
-        "sector_ladder_completeness_score": 100.0,
-        "sector_ladder_height": 5,
-        "sector_ladder_level": "完整",
-        "sector_ladder_limit_up_count": 4,
         "shortline_factor_explanations": {
-          "capital_resonance": {
-            "data_sources": [
-              "Tushare/本地资金流池",
-              "行情成交额与量比回退"
-            ],
-            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
-            "fields": [
-              "capital_resonance_score",
-              "capital_resonance_signal"
-            ],
-            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
-            "score": 100.0,
-            "source": "capital_flow",
-            "value": "主力共振"
-          },
           "limit_up_overheat": {
+            "fields": [
+              "limit_up_overheat_score",
+              "limit_up_overheat_level"
+            ],
+            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
             "data_sources": [
               "Tushare/本地涨停池",
               "行情快照",
               "日 K 线派生字段"
             ],
             "degradation": "缺少涨停明细时退化为市场涨停率、个股涨幅和位置估算；无法确认时给中性偏低风险。",
-            "fields": [
-              "limit_up_overheat_score",
-              "limit_up_overheat_level"
-            ],
-            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
-            "score": 28.0,
-            "value": "低"
+            "value": "高",
+            "score": 92.0
           },
           "sector_ladder": {
+            "fields": [
+              "sector_ladder_completeness_score",
+              "sector_ladder_level"
+            ],
+            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
             "data_sources": [
               "Tushare/本地涨停池",
               "本地概念板块池",
               "行情与行业字段"
             ],
             "degradation": "缺少概念板块时退化为行业分组；缺少板块信息时输出 0 分和缺失标签。",
+            "value": "完整",
+            "score": 100.0
+          },
+          "capital_resonance": {
             "fields": [
-              "sector_ladder_completeness_score",
-              "sector_ladder_level"
+              "capital_resonance_score",
+              "capital_resonance_signal"
             ],
-            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
+            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
+            "data_sources": [
+              "Tushare/本地资金流池",
+              "行情成交额与量比回退"
+            ],
+            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
+            "value": "主力共振",
             "score": 100.0,
-            "value": "完整"
+            "source": "capital_flow"
           },
           "twenty_cm_risk": {
-            "data_sources": [
-              "证券代码/交易所/市场板块",
-              "行情快照",
-              "日 K 线派生字段"
-            ],
-            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
             "fields": [
               "is_20cm_stock",
               "twenty_cm_risk_score",
@@ -422,85 +334,171 @@
               "twenty_cm_risk_reason"
             ],
             "logic": "识别创业板、科创板、北交所等 20cm 标的，并按涨幅、换手、流动性、位置和封板状态给风险闸门。",
-            "reason": "缺少板块信息，按代码前缀未识别为 20cm",
-            "score": 0.0,
-            "value": "not_applicable"
+            "data_sources": [
+              "证券代码/交易所/市场板块",
+              "行情快照",
+              "日 K 线派生字段"
+            ],
+            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
+            "value": "caution",
+            "score": 50.0,
+            "reason": "创业板 20cm 标的；20cm 涨停后追高成交约束更强；中期位置过高"
           }
-        },
-        "shortline_leader_score": 98.0,
-        "twenty_cm_risk_gate": "not_applicable",
-        "twenty_cm_risk_reason": "缺少板块信息，按代码前缀未识别为 20cm",
-        "twenty_cm_risk_score": 0.0
+        }
       },
       {
+        "is_main_theme": true,
+        "market_sentiment_phase": "高潮",
+        "sector_ladder_completeness_score": 100.0,
+        "sector_ladder_level": "完整",
+        "sector_ladder_limit_up_count": 4,
+        "sector_ladder_height": 5,
+        "capital_resonance_score": 100.0,
+        "capital_resonance_signal": "主力共振",
+        "capital_resonance_source": "capital_flow",
+        "limit_up_overheat_score": 28.0,
+        "limit_up_overheat_level": "低",
+        "is_20cm_stock": false,
+        "twenty_cm_risk_score": 0.0,
+        "twenty_cm_risk_gate": "not_applicable",
+        "twenty_cm_risk_reason": "缺少板块信息，按代码前缀未识别为 20cm",
+        "shortline_leader_score": 98.0,
+        "is_shortline_leader_candidate": true,
+        "dragon_tiger_buy_dispersion": "未上榜",
+        "dragon_tiger_inst_buy_ratio": 0.0,
+        "shortline_factor_explanations": {
+          "limit_up_overheat": {
+            "fields": [
+              "limit_up_overheat_score",
+              "limit_up_overheat_level"
+            ],
+            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
+            "data_sources": [
+              "Tushare/本地涨停池",
+              "行情快照",
+              "日 K 线派生字段"
+            ],
+            "degradation": "缺少涨停明细时退化为市场涨停率、个股涨幅和位置估算；无法确认时给中性偏低风险。",
+            "value": "低",
+            "score": 28.0
+          },
+          "sector_ladder": {
+            "fields": [
+              "sector_ladder_completeness_score",
+              "sector_ladder_level"
+            ],
+            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
+            "data_sources": [
+              "Tushare/本地涨停池",
+              "本地概念板块池",
+              "行情与行业字段"
+            ],
+            "degradation": "缺少概念板块时退化为行业分组；缺少板块信息时输出 0 分和缺失标签。",
+            "value": "完整",
+            "score": 100.0
+          },
+          "capital_resonance": {
+            "fields": [
+              "capital_resonance_score",
+              "capital_resonance_signal"
+            ],
+            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
+            "data_sources": [
+              "Tushare/本地资金流池",
+              "行情成交额与量比回退"
+            ],
+            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
+            "value": "主力共振",
+            "score": 100.0,
+            "source": "capital_flow"
+          },
+          "twenty_cm_risk": {
+            "fields": [
+              "is_20cm_stock",
+              "twenty_cm_risk_score",
+              "twenty_cm_risk_gate",
+              "twenty_cm_risk_reason"
+            ],
+            "logic": "识别创业板、科创板、北交所等 20cm 标的，并按涨幅、换手、流动性、位置和封板状态给风险闸门。",
+            "data_sources": [
+              "证券代码/交易所/市场板块",
+              "行情快照",
+              "日 K 线派生字段"
+            ],
+            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
+            "value": "not_applicable",
+            "score": 0.0,
+            "reason": "缺少板块信息，按代码前缀未识别为 20cm"
+          }
+        }
+      },
+      {
+        "is_main_theme": true,
+        "market_sentiment_phase": "高潮",
+        "sector_ladder_completeness_score": 100.0,
+        "sector_ladder_level": "完整",
+        "sector_ladder_limit_up_count": 4,
+        "sector_ladder_height": 5,
         "capital_resonance_score": 55.0,
         "capital_resonance_signal": "中性",
         "capital_resonance_source": "price_volume_fallback",
+        "limit_up_overheat_score": 28.0,
+        "limit_up_overheat_level": "低",
+        "is_20cm_stock": false,
+        "twenty_cm_risk_score": 0.0,
+        "twenty_cm_risk_gate": "not_applicable",
+        "twenty_cm_risk_reason": "缺少板块信息，按代码前缀未识别为 20cm",
+        "shortline_leader_score": 87.2,
+        "is_shortline_leader_candidate": true,
         "dragon_tiger_buy_dispersion": "分散",
         "dragon_tiger_inst_buy_ratio": 0.0,
-        "is_20cm_stock": false,
-        "is_main_theme": true,
-        "is_shortline_leader_candidate": true,
-        "limit_up_overheat_level": "低",
-        "limit_up_overheat_score": 28.0,
-        "market_sentiment_phase": "高潮",
-        "sector_ladder_completeness_score": 100.0,
-        "sector_ladder_height": 5,
-        "sector_ladder_level": "完整",
-        "sector_ladder_limit_up_count": 4,
         "shortline_factor_explanations": {
-          "capital_resonance": {
-            "data_sources": [
-              "Tushare/本地资金流池",
-              "行情成交额与量比回退"
-            ],
-            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
-            "fields": [
-              "capital_resonance_score",
-              "capital_resonance_signal"
-            ],
-            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
-            "score": 55.0,
-            "source": "price_volume_fallback",
-            "value": "中性"
-          },
           "limit_up_overheat": {
+            "fields": [
+              "limit_up_overheat_score",
+              "limit_up_overheat_level"
+            ],
+            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
             "data_sources": [
               "Tushare/本地涨停池",
               "行情快照",
               "日 K 线派生字段"
             ],
             "degradation": "缺少涨停明细时退化为市场涨停率、个股涨幅和位置估算；无法确认时给中性偏低风险。",
-            "fields": [
-              "limit_up_overheat_score",
-              "limit_up_overheat_level"
-            ],
-            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
-            "score": 28.0,
-            "value": "低"
+            "value": "低",
+            "score": 28.0
           },
           "sector_ladder": {
+            "fields": [
+              "sector_ladder_completeness_score",
+              "sector_ladder_level"
+            ],
+            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
             "data_sources": [
               "Tushare/本地涨停池",
               "本地概念板块池",
               "行情与行业字段"
             ],
             "degradation": "缺少概念板块时退化为行业分组；缺少板块信息时输出 0 分和缺失标签。",
+            "value": "完整",
+            "score": 100.0
+          },
+          "capital_resonance": {
             "fields": [
-              "sector_ladder_completeness_score",
-              "sector_ladder_level"
+              "capital_resonance_score",
+              "capital_resonance_signal"
             ],
-            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
-            "score": 100.0,
-            "value": "完整"
+            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
+            "data_sources": [
+              "Tushare/本地资金流池",
+              "行情成交额与量比回退"
+            ],
+            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
+            "value": "中性",
+            "score": 55.0,
+            "source": "price_volume_fallback"
           },
           "twenty_cm_risk": {
-            "data_sources": [
-              "证券代码/交易所/市场板块",
-              "行情快照",
-              "日 K 线派生字段"
-            ],
-            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
             "fields": [
               "is_20cm_stock",
               "twenty_cm_risk_score",
@@ -508,85 +506,85 @@
               "twenty_cm_risk_reason"
             ],
             "logic": "识别创业板、科创板、北交所等 20cm 标的，并按涨幅、换手、流动性、位置和封板状态给风险闸门。",
-            "reason": "缺少板块信息，按代码前缀未识别为 20cm",
+            "data_sources": [
+              "证券代码/交易所/市场板块",
+              "行情快照",
+              "日 K 线派生字段"
+            ],
+            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
+            "value": "not_applicable",
             "score": 0.0,
-            "value": "not_applicable"
+            "reason": "缺少板块信息，按代码前缀未识别为 20cm"
           }
-        },
-        "shortline_leader_score": 87.2,
-        "twenty_cm_risk_gate": "not_applicable",
-        "twenty_cm_risk_reason": "缺少板块信息，按代码前缀未识别为 20cm",
-        "twenty_cm_risk_score": 0.0
+        }
       },
       {
+        "is_main_theme": false,
+        "market_sentiment_phase": "高潮",
+        "sector_ladder_completeness_score": 0.0,
+        "sector_ladder_level": "缺失",
+        "sector_ladder_limit_up_count": 0,
+        "sector_ladder_height": 0,
         "capital_resonance_score": 39.0,
         "capital_resonance_signal": "资金背离",
         "capital_resonance_source": "price_volume_fallback",
+        "limit_up_overheat_score": 28.0,
+        "limit_up_overheat_level": "低",
+        "is_20cm_stock": true,
+        "twenty_cm_risk_score": 27.0,
+        "twenty_cm_risk_gate": "pass",
+        "twenty_cm_risk_reason": "北交所高波动标的；成交额不足",
+        "shortline_leader_score": 25.36,
+        "is_shortline_leader_candidate": false,
         "dragon_tiger_buy_dispersion": "一般",
         "dragon_tiger_inst_buy_ratio": 0.5,
-        "is_20cm_stock": true,
-        "is_main_theme": false,
-        "is_shortline_leader_candidate": false,
-        "limit_up_overheat_level": "低",
-        "limit_up_overheat_score": 28.0,
-        "market_sentiment_phase": "高潮",
-        "sector_ladder_completeness_score": 0.0,
-        "sector_ladder_height": 0,
-        "sector_ladder_level": "缺失",
-        "sector_ladder_limit_up_count": 0,
         "shortline_factor_explanations": {
-          "capital_resonance": {
-            "data_sources": [
-              "Tushare/本地资金流池",
-              "行情成交额与量比回退"
-            ],
-            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
-            "fields": [
-              "capital_resonance_score",
-              "capital_resonance_signal"
-            ],
-            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
-            "score": 39.0,
-            "source": "price_volume_fallback",
-            "value": "资金背离"
-          },
           "limit_up_overheat": {
+            "fields": [
+              "limit_up_overheat_score",
+              "limit_up_overheat_level"
+            ],
+            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
             "data_sources": [
               "Tushare/本地涨停池",
               "行情快照",
               "日 K 线派生字段"
             ],
             "degradation": "缺少涨停明细时退化为市场涨停率、个股涨幅和位置估算；无法确认时给中性偏低风险。",
-            "fields": [
-              "limit_up_overheat_score",
-              "limit_up_overheat_level"
-            ],
-            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
-            "score": 28.0,
-            "value": "低"
+            "value": "低",
+            "score": 28.0
           },
           "sector_ladder": {
+            "fields": [
+              "sector_ladder_completeness_score",
+              "sector_ladder_level"
+            ],
+            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
             "data_sources": [
               "Tushare/本地涨停池",
               "本地概念板块池",
               "行情与行业字段"
             ],
             "degradation": "缺少概念板块时退化为行业分组；缺少板块信息时输出 0 分和缺失标签。",
+            "value": "缺失",
+            "score": 0.0
+          },
+          "capital_resonance": {
             "fields": [
-              "sector_ladder_completeness_score",
-              "sector_ladder_level"
+              "capital_resonance_score",
+              "capital_resonance_signal"
             ],
-            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
-            "score": 0.0,
-            "value": "缺失"
+            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
+            "data_sources": [
+              "Tushare/本地资金流池",
+              "行情成交额与量比回退"
+            ],
+            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
+            "value": "资金背离",
+            "score": 39.0,
+            "source": "price_volume_fallback"
           },
           "twenty_cm_risk": {
-            "data_sources": [
-              "证券代码/交易所/市场板块",
-              "行情快照",
-              "日 K 线派生字段"
-            ],
-            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
             "fields": [
               "is_20cm_stock",
               "twenty_cm_risk_score",
@@ -594,15 +592,17 @@
               "twenty_cm_risk_reason"
             ],
             "logic": "识别创业板、科创板、北交所等 20cm 标的，并按涨幅、换手、流动性、位置和封板状态给风险闸门。",
-            "reason": "北交所高波动标的；成交额不足",
+            "data_sources": [
+              "证券代码/交易所/市场板块",
+              "行情快照",
+              "日 K 线派生字段"
+            ],
+            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
+            "value": "pass",
             "score": 27.0,
-            "value": "pass"
+            "reason": "北交所高波动标的；成交额不足"
           }
-        },
-        "shortline_leader_score": 25.36,
-        "twenty_cm_risk_gate": "pass",
-        "twenty_cm_risk_reason": "北交所高波动标的；成交额不足",
-        "twenty_cm_risk_score": 27.0
+        }
       }
     ]
   },
@@ -610,74 +610,72 @@
     "name": "cold_sentiment",
     "stocks": [
       {
+        "is_main_theme": false,
+        "market_sentiment_phase": "冰点",
+        "sector_ladder_completeness_score": 0.0,
+        "sector_ladder_level": "不完整",
+        "sector_ladder_limit_up_count": 0,
+        "sector_ladder_height": 0,
         "capital_resonance_score": 61.2,
         "capital_resonance_signal": "资金配合",
         "capital_resonance_source": "capital_flow",
+        "limit_up_overheat_score": 12.0,
+        "limit_up_overheat_level": "正常",
+        "is_20cm_stock": false,
+        "twenty_cm_risk_score": 0.0,
+        "twenty_cm_risk_gate": "not_applicable",
+        "twenty_cm_risk_reason": "缺少板块信息，按代码前缀未识别为 20cm",
+        "shortline_leader_score": 14.69,
+        "is_shortline_leader_candidate": false,
         "dragon_tiger_buy_dispersion": "一般",
         "dragon_tiger_inst_buy_ratio": 0.5,
-        "is_20cm_stock": false,
-        "is_main_theme": false,
-        "is_shortline_leader_candidate": false,
-        "limit_up_overheat_level": "正常",
-        "limit_up_overheat_score": 12.0,
-        "market_sentiment_phase": "冰点",
-        "sector_ladder_completeness_score": 0.0,
-        "sector_ladder_height": 0,
-        "sector_ladder_level": "不完整",
-        "sector_ladder_limit_up_count": 0,
         "shortline_factor_explanations": {
-          "capital_resonance": {
-            "data_sources": [
-              "Tushare/本地资金流池",
-              "行情成交额与量比回退"
-            ],
-            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
-            "fields": [
-              "capital_resonance_score",
-              "capital_resonance_signal"
-            ],
-            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
-            "score": 61.2,
-            "source": "capital_flow",
-            "value": "资金配合"
-          },
           "limit_up_overheat": {
+            "fields": [
+              "limit_up_overheat_score",
+              "limit_up_overheat_level"
+            ],
+            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
             "data_sources": [
               "Tushare/本地涨停池",
               "行情快照",
               "日 K 线派生字段"
             ],
             "degradation": "缺少涨停明细时退化为市场涨停率、个股涨幅和位置估算；无法确认时给中性偏低风险。",
-            "fields": [
-              "limit_up_overheat_score",
-              "limit_up_overheat_level"
-            ],
-            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
-            "score": 12.0,
-            "value": "正常"
+            "value": "正常",
+            "score": 12.0
           },
           "sector_ladder": {
+            "fields": [
+              "sector_ladder_completeness_score",
+              "sector_ladder_level"
+            ],
+            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
             "data_sources": [
               "Tushare/本地涨停池",
               "本地概念板块池",
               "行情与行业字段"
             ],
             "degradation": "缺少概念板块时退化为行业分组；缺少板块信息时输出 0 分和缺失标签。",
+            "value": "不完整",
+            "score": 0.0
+          },
+          "capital_resonance": {
             "fields": [
-              "sector_ladder_completeness_score",
-              "sector_ladder_level"
+              "capital_resonance_score",
+              "capital_resonance_signal"
             ],
-            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
-            "score": 0.0,
-            "value": "不完整"
+            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
+            "data_sources": [
+              "Tushare/本地资金流池",
+              "行情成交额与量比回退"
+            ],
+            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
+            "value": "资金配合",
+            "score": 61.2,
+            "source": "capital_flow"
           },
           "twenty_cm_risk": {
-            "data_sources": [
-              "证券代码/交易所/市场板块",
-              "行情快照",
-              "日 K 线派生字段"
-            ],
-            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
             "fields": [
               "is_20cm_stock",
               "twenty_cm_risk_score",
@@ -685,85 +683,85 @@
               "twenty_cm_risk_reason"
             ],
             "logic": "识别创业板、科创板、北交所等 20cm 标的，并按涨幅、换手、流动性、位置和封板状态给风险闸门。",
-            "reason": "缺少板块信息，按代码前缀未识别为 20cm",
+            "data_sources": [
+              "证券代码/交易所/市场板块",
+              "行情快照",
+              "日 K 线派生字段"
+            ],
+            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
+            "value": "not_applicable",
             "score": 0.0,
-            "value": "not_applicable"
+            "reason": "缺少板块信息，按代码前缀未识别为 20cm"
           }
-        },
-        "shortline_leader_score": 14.69,
-        "twenty_cm_risk_gate": "not_applicable",
-        "twenty_cm_risk_reason": "缺少板块信息，按代码前缀未识别为 20cm",
-        "twenty_cm_risk_score": 0.0
+        }
       },
       {
+        "is_main_theme": false,
+        "market_sentiment_phase": "冰点",
+        "sector_ladder_completeness_score": 0.0,
+        "sector_ladder_level": "缺失",
+        "sector_ladder_limit_up_count": 0,
+        "sector_ladder_height": 0,
         "capital_resonance_score": 39.0,
         "capital_resonance_signal": "资金背离",
         "capital_resonance_source": "price_volume_fallback",
+        "limit_up_overheat_score": 12.0,
+        "limit_up_overheat_level": "正常",
+        "is_20cm_stock": false,
+        "twenty_cm_risk_score": 0.0,
+        "twenty_cm_risk_gate": "not_applicable",
+        "twenty_cm_risk_reason": "缺少板块信息，按代码前缀未识别为 20cm",
+        "shortline_leader_score": 9.36,
+        "is_shortline_leader_candidate": false,
         "dragon_tiger_buy_dispersion": "分散",
         "dragon_tiger_inst_buy_ratio": 0.0,
-        "is_20cm_stock": false,
-        "is_main_theme": false,
-        "is_shortline_leader_candidate": false,
-        "limit_up_overheat_level": "正常",
-        "limit_up_overheat_score": 12.0,
-        "market_sentiment_phase": "冰点",
-        "sector_ladder_completeness_score": 0.0,
-        "sector_ladder_height": 0,
-        "sector_ladder_level": "缺失",
-        "sector_ladder_limit_up_count": 0,
         "shortline_factor_explanations": {
-          "capital_resonance": {
-            "data_sources": [
-              "Tushare/本地资金流池",
-              "行情成交额与量比回退"
-            ],
-            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
-            "fields": [
-              "capital_resonance_score",
-              "capital_resonance_signal"
-            ],
-            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
-            "score": 39.0,
-            "source": "price_volume_fallback",
-            "value": "资金背离"
-          },
           "limit_up_overheat": {
+            "fields": [
+              "limit_up_overheat_score",
+              "limit_up_overheat_level"
+            ],
+            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
             "data_sources": [
               "Tushare/本地涨停池",
               "行情快照",
               "日 K 线派生字段"
             ],
             "degradation": "缺少涨停明细时退化为市场涨停率、个股涨幅和位置估算；无法确认时给中性偏低风险。",
-            "fields": [
-              "limit_up_overheat_score",
-              "limit_up_overheat_level"
-            ],
-            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
-            "score": 12.0,
-            "value": "正常"
+            "value": "正常",
+            "score": 12.0
           },
           "sector_ladder": {
+            "fields": [
+              "sector_ladder_completeness_score",
+              "sector_ladder_level"
+            ],
+            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
             "data_sources": [
               "Tushare/本地涨停池",
               "本地概念板块池",
               "行情与行业字段"
             ],
             "degradation": "缺少概念板块时退化为行业分组；缺少板块信息时输出 0 分和缺失标签。",
+            "value": "缺失",
+            "score": 0.0
+          },
+          "capital_resonance": {
             "fields": [
-              "sector_ladder_completeness_score",
-              "sector_ladder_level"
+              "capital_resonance_score",
+              "capital_resonance_signal"
             ],
-            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
-            "score": 0.0,
-            "value": "缺失"
+            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
+            "data_sources": [
+              "Tushare/本地资金流池",
+              "行情成交额与量比回退"
+            ],
+            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
+            "value": "资金背离",
+            "score": 39.0,
+            "source": "price_volume_fallback"
           },
           "twenty_cm_risk": {
-            "data_sources": [
-              "证券代码/交易所/市场板块",
-              "行情快照",
-              "日 K 线派生字段"
-            ],
-            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
             "fields": [
               "is_20cm_stock",
               "twenty_cm_risk_score",
@@ -771,85 +769,85 @@
               "twenty_cm_risk_reason"
             ],
             "logic": "识别创业板、科创板、北交所等 20cm 标的，并按涨幅、换手、流动性、位置和封板状态给风险闸门。",
-            "reason": "缺少板块信息，按代码前缀未识别为 20cm",
+            "data_sources": [
+              "证券代码/交易所/市场板块",
+              "行情快照",
+              "日 K 线派生字段"
+            ],
+            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
+            "value": "not_applicable",
             "score": 0.0,
-            "value": "not_applicable"
+            "reason": "缺少板块信息，按代码前缀未识别为 20cm"
           }
-        },
-        "shortline_leader_score": 9.36,
-        "twenty_cm_risk_gate": "not_applicable",
-        "twenty_cm_risk_reason": "缺少板块信息，按代码前缀未识别为 20cm",
-        "twenty_cm_risk_score": 0.0
+        }
       },
       {
+        "is_main_theme": true,
+        "market_sentiment_phase": "冰点",
+        "sector_ladder_completeness_score": 31.0,
+        "sector_ladder_level": "初现",
+        "sector_ladder_limit_up_count": 1,
+        "sector_ladder_height": 1,
         "capital_resonance_score": 99.0,
         "capital_resonance_signal": "主力共振",
         "capital_resonance_source": "capital_flow",
+        "limit_up_overheat_score": 12.0,
+        "limit_up_overheat_level": "正常",
+        "is_20cm_stock": true,
+        "twenty_cm_risk_score": 15.0,
+        "twenty_cm_risk_gate": "pass",
+        "twenty_cm_risk_reason": "创业板 20cm 标的",
+        "shortline_leader_score": 94.44,
+        "is_shortline_leader_candidate": true,
         "dragon_tiger_buy_dispersion": "未上榜",
         "dragon_tiger_inst_buy_ratio": 0.0,
-        "is_20cm_stock": true,
-        "is_main_theme": true,
-        "is_shortline_leader_candidate": true,
-        "limit_up_overheat_level": "正常",
-        "limit_up_overheat_score": 12.0,
-        "market_sentiment_phase": "冰点",
-        "sector_ladder_completeness_score": 31.0,
-        "sector_ladder_height": 1,
-        "sector_ladder_level": "初现",
-        "sector_ladder_limit_up_count": 1,
         "shortline_factor_explanations": {
-          "capital_resonance": {
-            "data_sources": [
-              "Tushare/本地资金流池",
-              "行情成交额与量比回退"
-            ],
-            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
-            "fields": [
-              "capital_resonance_score",
-              "capital_resonance_signal"
-            ],
-            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
-            "score": 99.0,
-            "source": "capital_flow",
-            "value": "主力共振"
-          },
           "limit_up_overheat": {
+            "fields": [
+              "limit_up_overheat_score",
+              "limit_up_overheat_level"
+            ],
+            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
             "data_sources": [
               "Tushare/本地涨停池",
               "行情快照",
               "日 K 线派生字段"
             ],
             "degradation": "缺少涨停明细时退化为市场涨停率、个股涨幅和位置估算；无法确认时给中性偏低风险。",
-            "fields": [
-              "limit_up_overheat_score",
-              "limit_up_overheat_level"
-            ],
-            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
-            "score": 12.0,
-            "value": "正常"
+            "value": "正常",
+            "score": 12.0
           },
           "sector_ladder": {
+            "fields": [
+              "sector_ladder_completeness_score",
+              "sector_ladder_level"
+            ],
+            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
             "data_sources": [
               "Tushare/本地涨停池",
               "本地概念板块池",
               "行情与行业字段"
             ],
             "degradation": "缺少概念板块时退化为行业分组；缺少板块信息时输出 0 分和缺失标签。",
+            "value": "初现",
+            "score": 31.0
+          },
+          "capital_resonance": {
             "fields": [
-              "sector_ladder_completeness_score",
-              "sector_ladder_level"
+              "capital_resonance_score",
+              "capital_resonance_signal"
             ],
-            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
-            "score": 31.0,
-            "value": "初现"
+            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
+            "data_sources": [
+              "Tushare/本地资金流池",
+              "行情成交额与量比回退"
+            ],
+            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
+            "value": "主力共振",
+            "score": 99.0,
+            "source": "capital_flow"
           },
           "twenty_cm_risk": {
-            "data_sources": [
-              "证券代码/交易所/市场板块",
-              "行情快照",
-              "日 K 线派生字段"
-            ],
-            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
             "fields": [
               "is_20cm_stock",
               "twenty_cm_risk_score",
@@ -857,85 +855,85 @@
               "twenty_cm_risk_reason"
             ],
             "logic": "识别创业板、科创板、北交所等 20cm 标的，并按涨幅、换手、流动性、位置和封板状态给风险闸门。",
-            "reason": "创业板 20cm 标的",
+            "data_sources": [
+              "证券代码/交易所/市场板块",
+              "行情快照",
+              "日 K 线派生字段"
+            ],
+            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
+            "value": "pass",
             "score": 15.0,
-            "value": "pass"
+            "reason": "创业板 20cm 标的"
           }
-        },
-        "shortline_leader_score": 94.44,
-        "twenty_cm_risk_gate": "pass",
-        "twenty_cm_risk_reason": "创业板 20cm 标的",
-        "twenty_cm_risk_score": 15.0
+        }
       },
       {
+        "is_main_theme": true,
+        "market_sentiment_phase": "冰点",
+        "sector_ladder_completeness_score": 31.0,
+        "sector_ladder_level": "初现",
+        "sector_ladder_limit_up_count": 1,
+        "sector_ladder_height": 1,
         "capital_resonance_score": 39.0,
         "capital_resonance_signal": "资金背离",
         "capital_resonance_source": "capital_flow",
+        "limit_up_overheat_score": 38.0,
+        "limit_up_overheat_level": "低",
+        "is_20cm_stock": true,
+        "twenty_cm_risk_score": 100.0,
+        "twenty_cm_risk_gate": "block",
+        "twenty_cm_risk_reason": "科创板 20cm 标的；当日涨幅进入 20cm 高波动区；20cm 涨停后追高成交约束更强；换手过高；成交额不足；中期位置过高",
+        "shortline_leader_score": 64.04,
+        "is_shortline_leader_candidate": false,
         "dragon_tiger_buy_dispersion": "未上榜",
         "dragon_tiger_inst_buy_ratio": 0.0,
-        "is_20cm_stock": true,
-        "is_main_theme": true,
-        "is_shortline_leader_candidate": false,
-        "limit_up_overheat_level": "低",
-        "limit_up_overheat_score": 38.0,
-        "market_sentiment_phase": "冰点",
-        "sector_ladder_completeness_score": 31.0,
-        "sector_ladder_height": 1,
-        "sector_ladder_level": "初现",
-        "sector_ladder_limit_up_count": 1,
         "shortline_factor_explanations": {
-          "capital_resonance": {
-            "data_sources": [
-              "Tushare/本地资金流池",
-              "行情成交额与量比回退"
-            ],
-            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
-            "fields": [
-              "capital_resonance_score",
-              "capital_resonance_signal"
-            ],
-            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
-            "score": 39.0,
-            "source": "capital_flow",
-            "value": "资金背离"
-          },
           "limit_up_overheat": {
+            "fields": [
+              "limit_up_overheat_score",
+              "limit_up_overheat_level"
+            ],
+            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
             "data_sources": [
               "Tushare/本地涨停池",
               "行情快照",
               "日 K 线派生字段"
             ],
             "degradation": "缺少涨停明细时退化为市场涨停率、个股涨幅和位置估算；无法确认时给中性偏低风险。",
-            "fields": [
-              "limit_up_overheat_score",
-              "limit_up_overheat_level"
-            ],
-            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
-            "score": 38.0,
-            "value": "低"
+            "value": "低",
+            "score": 38.0
           },
           "sector_ladder": {
+            "fields": [
+              "sector_ladder_completeness_score",
+              "sector_ladder_level"
+            ],
+            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
             "data_sources": [
               "Tushare/本地涨停池",
               "本地概念板块池",
               "行情与行业字段"
             ],
             "degradation": "缺少概念板块时退化为行业分组；缺少板块信息时输出 0 分和缺失标签。",
+            "value": "初现",
+            "score": 31.0
+          },
+          "capital_resonance": {
             "fields": [
-              "sector_ladder_completeness_score",
-              "sector_ladder_level"
+              "capital_resonance_score",
+              "capital_resonance_signal"
             ],
-            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
-            "score": 31.0,
-            "value": "初现"
+            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
+            "data_sources": [
+              "Tushare/本地资金流池",
+              "行情成交额与量比回退"
+            ],
+            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
+            "value": "资金背离",
+            "score": 39.0,
+            "source": "capital_flow"
           },
           "twenty_cm_risk": {
-            "data_sources": [
-              "证券代码/交易所/市场板块",
-              "行情快照",
-              "日 K 线派生字段"
-            ],
-            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
             "fields": [
               "is_20cm_stock",
               "twenty_cm_risk_score",
@@ -943,85 +941,85 @@
               "twenty_cm_risk_reason"
             ],
             "logic": "识别创业板、科创板、北交所等 20cm 标的，并按涨幅、换手、流动性、位置和封板状态给风险闸门。",
-            "reason": "科创板 20cm 标的；当日涨幅进入 20cm 高波动区；20cm 涨停后追高成交约束更强；换手过高；成交额不足；中期位置过高",
+            "data_sources": [
+              "证券代码/交易所/市场板块",
+              "行情快照",
+              "日 K 线派生字段"
+            ],
+            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
+            "value": "block",
             "score": 100.0,
-            "value": "block"
+            "reason": "科创板 20cm 标的；当日涨幅进入 20cm 高波动区；20cm 涨停后追高成交约束更强；换手过高；成交额不足；中期位置过高"
           }
-        },
-        "shortline_leader_score": 64.04,
-        "twenty_cm_risk_gate": "block",
-        "twenty_cm_risk_reason": "科创板 20cm 标的；当日涨幅进入 20cm 高波动区；20cm 涨停后追高成交约束更强；换手过高；成交额不足；中期位置过高",
-        "twenty_cm_risk_score": 100.0
+        }
       },
       {
+        "is_main_theme": true,
+        "market_sentiment_phase": "冰点",
+        "sector_ladder_completeness_score": 31.0,
+        "sector_ladder_level": "初现",
+        "sector_ladder_limit_up_count": 1,
+        "sector_ladder_height": 1,
         "capital_resonance_score": 49.0,
         "capital_resonance_signal": "中性",
         "capital_resonance_source": "price_volume_fallback",
+        "limit_up_overheat_score": 12.0,
+        "limit_up_overheat_level": "正常",
+        "is_20cm_stock": false,
+        "twenty_cm_risk_score": 0.0,
+        "twenty_cm_risk_gate": "not_applicable",
+        "twenty_cm_risk_reason": "缺少板块信息，按代码前缀未识别为 20cm",
+        "shortline_leader_score": 44.44,
+        "is_shortline_leader_candidate": false,
         "dragon_tiger_buy_dispersion": "未上榜",
         "dragon_tiger_inst_buy_ratio": 0.0,
-        "is_20cm_stock": false,
-        "is_main_theme": true,
-        "is_shortline_leader_candidate": false,
-        "limit_up_overheat_level": "正常",
-        "limit_up_overheat_score": 12.0,
-        "market_sentiment_phase": "冰点",
-        "sector_ladder_completeness_score": 31.0,
-        "sector_ladder_height": 1,
-        "sector_ladder_level": "初现",
-        "sector_ladder_limit_up_count": 1,
         "shortline_factor_explanations": {
-          "capital_resonance": {
-            "data_sources": [
-              "Tushare/本地资金流池",
-              "行情成交额与量比回退"
-            ],
-            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
-            "fields": [
-              "capital_resonance_score",
-              "capital_resonance_signal"
-            ],
-            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
-            "score": 49.0,
-            "source": "price_volume_fallback",
-            "value": "中性"
-          },
           "limit_up_overheat": {
+            "fields": [
+              "limit_up_overheat_score",
+              "limit_up_overheat_level"
+            ],
+            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
             "data_sources": [
               "Tushare/本地涨停池",
               "行情快照",
               "日 K 线派生字段"
             ],
             "degradation": "缺少涨停明细时退化为市场涨停率、个股涨幅和位置估算；无法确认时给中性偏低风险。",
-            "fields": [
-              "limit_up_overheat_score",
-              "limit_up_overheat_level"
-            ],
-            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
-            "score": 12.0,
-            "value": "正常"
+            "value": "正常",
+            "score": 12.0
           },
           "sector_ladder": {
+            "fields": [
+              "sector_ladder_completeness_score",
+              "sector_ladder_level"
+            ],
+            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
             "data_sources": [
               "Tushare/本地涨停池",
               "本地概念板块池",
               "行情与行业字段"
             ],
             "degradation": "缺少概念板块时退化为行业分组；缺少板块信息时输出 0 分和缺失标签。",
+            "value": "初现",
+            "score": 31.0
+          },
+          "capital_resonance": {
             "fields": [
-              "sector_ladder_completeness_score",
-              "sector_ladder_level"
+              "capital_resonance_score",
+              "capital_resonance_signal"
             ],
-            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
-            "score": 31.0,
-            "value": "初现"
+            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
+            "data_sources": [
+              "Tushare/本地资金流池",
+              "行情成交额与量比回退"
+            ],
+            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
+            "value": "中性",
+            "score": 49.0,
+            "source": "price_volume_fallback"
           },
           "twenty_cm_risk": {
-            "data_sources": [
-              "证券代码/交易所/市场板块",
-              "行情快照",
-              "日 K 线派生字段"
-            ],
-            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
             "fields": [
               "is_20cm_stock",
               "twenty_cm_risk_score",
@@ -1029,15 +1027,17 @@
               "twenty_cm_risk_reason"
             ],
             "logic": "识别创业板、科创板、北交所等 20cm 标的，并按涨幅、换手、流动性、位置和封板状态给风险闸门。",
-            "reason": "缺少板块信息，按代码前缀未识别为 20cm",
+            "data_sources": [
+              "证券代码/交易所/市场板块",
+              "行情快照",
+              "日 K 线派生字段"
+            ],
+            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
+            "value": "not_applicable",
             "score": 0.0,
-            "value": "not_applicable"
+            "reason": "缺少板块信息，按代码前缀未识别为 20cm"
           }
-        },
-        "shortline_leader_score": 44.44,
-        "twenty_cm_risk_gate": "not_applicable",
-        "twenty_cm_risk_reason": "缺少板块信息，按代码前缀未识别为 20cm",
-        "twenty_cm_risk_score": 0.0
+        }
       }
     ]
   },
@@ -1045,74 +1045,72 @@
     "name": "active_sentiment",
     "stocks": [
       {
+        "is_main_theme": true,
+        "market_sentiment_phase": "活跃",
+        "sector_ladder_completeness_score": 28.0,
+        "sector_ladder_level": "初现",
+        "sector_ladder_limit_up_count": 1,
+        "sector_ladder_height": 3,
         "capital_resonance_score": 63.2,
         "capital_resonance_signal": "资金配合",
         "capital_resonance_source": "capital_flow",
+        "limit_up_overheat_score": 46.0,
+        "limit_up_overheat_level": "中",
+        "is_20cm_stock": false,
+        "twenty_cm_risk_score": 0.0,
+        "twenty_cm_risk_gate": "not_applicable",
+        "twenty_cm_risk_reason": "缺少板块信息，按代码前缀未识别为 20cm",
+        "shortline_leader_score": 71.01,
+        "is_shortline_leader_candidate": true,
         "dragon_tiger_buy_dispersion": "未上榜",
         "dragon_tiger_inst_buy_ratio": 0.0,
-        "is_20cm_stock": false,
-        "is_main_theme": true,
-        "is_shortline_leader_candidate": true,
-        "limit_up_overheat_level": "中",
-        "limit_up_overheat_score": 58.0,
-        "market_sentiment_phase": "活跃",
-        "sector_ladder_completeness_score": 28.0,
-        "sector_ladder_height": 3,
-        "sector_ladder_level": "初现",
-        "sector_ladder_limit_up_count": 1,
         "shortline_factor_explanations": {
-          "capital_resonance": {
-            "data_sources": [
-              "Tushare/本地资金流池",
-              "行情成交额与量比回退"
-            ],
-            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
-            "fields": [
-              "capital_resonance_score",
-              "capital_resonance_signal"
-            ],
-            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
-            "score": 63.2,
-            "source": "capital_flow",
-            "value": "资金配合"
-          },
           "limit_up_overheat": {
+            "fields": [
+              "limit_up_overheat_score",
+              "limit_up_overheat_level"
+            ],
+            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
             "data_sources": [
               "Tushare/本地涨停池",
               "行情快照",
               "日 K 线派生字段"
             ],
             "degradation": "缺少涨停明细时退化为市场涨停率、个股涨幅和位置估算；无法确认时给中性偏低风险。",
-            "fields": [
-              "limit_up_overheat_score",
-              "limit_up_overheat_level"
-            ],
-            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
-            "score": 58.0,
-            "value": "中"
+            "value": "中",
+            "score": 46.0
           },
           "sector_ladder": {
+            "fields": [
+              "sector_ladder_completeness_score",
+              "sector_ladder_level"
+            ],
+            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
             "data_sources": [
               "Tushare/本地涨停池",
               "本地概念板块池",
               "行情与行业字段"
             ],
             "degradation": "缺少概念板块时退化为行业分组；缺少板块信息时输出 0 分和缺失标签。",
+            "value": "初现",
+            "score": 28.0
+          },
+          "capital_resonance": {
             "fields": [
-              "sector_ladder_completeness_score",
-              "sector_ladder_level"
+              "capital_resonance_score",
+              "capital_resonance_signal"
             ],
-            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
-            "score": 28.0,
-            "value": "初现"
+            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
+            "data_sources": [
+              "Tushare/本地资金流池",
+              "行情成交额与量比回退"
+            ],
+            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
+            "value": "资金配合",
+            "score": 63.2,
+            "source": "capital_flow"
           },
           "twenty_cm_risk": {
-            "data_sources": [
-              "证券代码/交易所/市场板块",
-              "行情快照",
-              "日 K 线派生字段"
-            ],
-            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
             "fields": [
               "is_20cm_stock",
               "twenty_cm_risk_score",
@@ -1120,15 +1118,17 @@
               "twenty_cm_risk_reason"
             ],
             "logic": "识别创业板、科创板、北交所等 20cm 标的，并按涨幅、换手、流动性、位置和封板状态给风险闸门。",
-            "reason": "缺少板块信息，按代码前缀未识别为 20cm",
+            "data_sources": [
+              "证券代码/交易所/市场板块",
+              "行情快照",
+              "日 K 线派生字段"
+            ],
+            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
+            "value": "not_applicable",
             "score": 0.0,
-            "value": "not_applicable"
+            "reason": "缺少板块信息，按代码前缀未识别为 20cm"
           }
-        },
-        "shortline_leader_score": 71.01,
-        "twenty_cm_risk_gate": "not_applicable",
-        "twenty_cm_risk_reason": "缺少板块信息，按代码前缀未识别为 20cm",
-        "twenty_cm_risk_score": 0.0
+        }
       }
     ]
   },
@@ -1136,74 +1136,72 @@
     "name": "flat_sentiment",
     "stocks": [
       {
+        "is_main_theme": false,
+        "market_sentiment_phase": "平淡",
+        "sector_ladder_completeness_score": 0.0,
+        "sector_ladder_level": "不完整",
+        "sector_ladder_limit_up_count": 0,
+        "sector_ladder_height": 0,
         "capital_resonance_score": 49.0,
         "capital_resonance_signal": "中性",
         "capital_resonance_source": "price_volume_fallback",
+        "limit_up_overheat_score": 0.0,
+        "limit_up_overheat_level": "正常",
+        "is_20cm_stock": false,
+        "twenty_cm_risk_score": 0.0,
+        "twenty_cm_risk_gate": "not_applicable",
+        "twenty_cm_risk_reason": "缺少板块信息，按代码前缀未识别为 20cm",
+        "shortline_leader_score": 11.76,
+        "is_shortline_leader_candidate": false,
         "dragon_tiger_buy_dispersion": "未上榜",
         "dragon_tiger_inst_buy_ratio": 0.0,
-        "is_20cm_stock": false,
-        "is_main_theme": false,
-        "is_shortline_leader_candidate": false,
-        "limit_up_overheat_level": "正常",
-        "limit_up_overheat_score": 0.0,
-        "market_sentiment_phase": "平淡",
-        "sector_ladder_completeness_score": 0.0,
-        "sector_ladder_height": 0,
-        "sector_ladder_level": "不完整",
-        "sector_ladder_limit_up_count": 0,
         "shortline_factor_explanations": {
-          "capital_resonance": {
-            "data_sources": [
-              "Tushare/本地资金流池",
-              "行情成交额与量比回退"
-            ],
-            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
-            "fields": [
-              "capital_resonance_score",
-              "capital_resonance_signal"
-            ],
-            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
-            "score": 49.0,
-            "source": "price_volume_fallback",
-            "value": "中性"
-          },
           "limit_up_overheat": {
+            "fields": [
+              "limit_up_overheat_score",
+              "limit_up_overheat_level"
+            ],
+            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
             "data_sources": [
               "Tushare/本地涨停池",
               "行情快照",
               "日 K 线派生字段"
             ],
             "degradation": "缺少涨停明细时退化为市场涨停率、个股涨幅和位置估算；无法确认时给中性偏低风险。",
-            "fields": [
-              "limit_up_overheat_score",
-              "limit_up_overheat_level"
-            ],
-            "logic": "按市场涨停率、跌停压力、个股连板高度、涨幅位置和封板分歧计分，分数越高代表涨停情绪越过热。",
-            "score": 0.0,
-            "value": "正常"
+            "value": "正常",
+            "score": 0.0
           },
           "sector_ladder": {
+            "fields": [
+              "sector_ladder_completeness_score",
+              "sector_ladder_level"
+            ],
+            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
             "data_sources": [
               "Tushare/本地涨停池",
               "本地概念板块池",
               "行情与行业字段"
             ],
             "degradation": "缺少概念板块时退化为行业分组；缺少板块信息时输出 0 分和缺失标签。",
+            "value": "不完整",
+            "score": 0.0
+          },
+          "capital_resonance": {
             "fields": [
-              "sector_ladder_completeness_score",
-              "sector_ladder_level"
+              "capital_resonance_score",
+              "capital_resonance_signal"
             ],
-            "logic": "按同板块首板、二板、中高标、涨停数、强势股数量和题材热度衡量梯队完整度。",
-            "score": 0.0,
-            "value": "不完整"
+            "logic": "按个股主力净流入、超大/大单方向、散户方向、板块资金排名和同板块资金扩散计分。",
+            "data_sources": [
+              "Tushare/本地资金流池",
+              "行情成交额与量比回退"
+            ],
+            "degradation": "缺少资金流时用涨幅、量比、成交额作可回测回退，并在解释中标明回退来源。",
+            "value": "中性",
+            "score": 49.0,
+            "source": "price_volume_fallback"
           },
           "twenty_cm_risk": {
-            "data_sources": [
-              "证券代码/交易所/市场板块",
-              "行情快照",
-              "日 K 线派生字段"
-            ],
-            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
             "fields": [
               "is_20cm_stock",
               "twenty_cm_risk_score",
@@ -1211,15 +1209,17 @@
               "twenty_cm_risk_reason"
             ],
             "logic": "识别创业板、科创板、北交所等 20cm 标的，并按涨幅、换手、流动性、位置和封板状态给风险闸门。",
-            "reason": "缺少板块信息，按代码前缀未识别为 20cm",
+            "data_sources": [
+              "证券代码/交易所/市场板块",
+              "行情快照",
+              "日 K 线派生字段"
+            ],
+            "degradation": "缺少市场板块时用代码前缀推断；无法识别则按非 20cm 处理但保留原因。",
+            "value": "not_applicable",
             "score": 0.0,
-            "value": "not_applicable"
+            "reason": "缺少板块信息，按代码前缀未识别为 20cm"
           }
-        },
-        "shortline_leader_score": 11.76,
-        "twenty_cm_risk_gate": "not_applicable",
-        "twenty_cm_risk_reason": "缺少板块信息，按代码前缀未识别为 20cm",
-        "twenty_cm_risk_score": 0.0
+        }
       }
     ]
   }

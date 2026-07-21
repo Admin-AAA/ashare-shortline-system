@@ -281,17 +281,18 @@ def test_aggregate_market_discipline_caps_position_in_weak_market():
     snapshot = {
         "sample_count": 300,
         "up_count": 70,
-        "limit_up_count": 2,
-        "limit_down_count": 12,
+        # T28：活跃须 lu/ld≥1.2；旧夹具 lu=2 ld=12 现为平淡
+        "limit_up_count": 8,   # 2.7%
+        "limit_down_count": 4,  # lu/ld=2 → 活跃
     }
 
     card = aggregate(stock, signals, market_score=42, agent_review_score=90, market_snapshot=snapshot)
     discipline = card["market_discipline"]
 
     assert discipline["market_regime"] == "弱势·活跃"
-    assert discipline["max_position_pct"] <= 20
+    # 弱势防守仓 30%（跌停压力旗需 ld≥max(5,lu)，与活跃 lu/ld≥1.2 互斥，不再叠 20%）
+    assert discipline["max_position_pct"] <= 30
     assert "市场弱势，按防守仓位处理" in card["risk_flags"]
-    assert "跌停压力不低于涨停，先控制回撤" in card["risk_flags"]
 
 
 def test_aggregate_market_discipline_caps_climax_to_light_position():
@@ -637,8 +638,8 @@ def test_soft_floor_engages_when_top_above_market_line_but_per_card_penalty_bloc
         "sample_count": 5000,
         "up_count": 1500,
         "down_count": 3400,
-        "limit_up_count": 40,
-        "limit_down_count": 50,  # 非恐慌
+        "limit_up_count": 40,   # 0.8%
+        "limit_down_count": 20,  # lu/ld=2 ≥1.2 → 活跃（T28）；非恐慌
         "breadth": {"regime": "弱势", "up_ratio": 0.30},
     }
     ctx = resolve_score_line_context(72, snapshot)
@@ -705,7 +706,7 @@ def test_soft_floor_gap_le_0_rescues_near_top_limit_up_pair():
         "up_count": 1500,
         "down_count": 3400,
         "limit_up_count": 40,
-        "limit_down_count": 50,
+        "limit_down_count": 20,  # 活跃（lu/ld=2），非恐慌
         "breadth": {"regime": "弱势", "up_ratio": 0.30},
     }
     cards = [
