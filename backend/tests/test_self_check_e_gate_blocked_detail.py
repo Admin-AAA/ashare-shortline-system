@@ -157,23 +157,43 @@ class _SpyResult:
 
 
 class _SpyDB:
-    """捕获执行的 SQL，并回放预置行（支持 fetchall）。"""
+    """捕获执行的 SQL，并回放预置行（支持两步查询：fetchall → fetchone）。
+
+    两步查询模式（T4 优化后）：
+    1. fetchall → (run_id, selected_skills_json) 小列扫描
+    2. fetchone → (score_line, filter_audit, result_summary, snapshot, trade_date) 按主键
+    第 1 次 execute 返回 fetchall（列表行），第 2+ 次返回 fetchone（单行 detail）。
+    """
 
     def __init__(self, rows, spy):
+        # rows[0] 是 step1 的 fetchall 列表；每个匹配 sid 的 step2 行
+        # 用 _batch_row 构造的行同时含 step1 和 step2 的列
         self._rows = rows
         self._spy = spy
+        self._call_count = 0
 
     def execute(self, stmt, params=None):
-        self._spy["sql"] = str(stmt)
-        self._spy["params"] = params
-        return _SpyResult(self._rows)
+        self._spy.setdefault("sqls", []).append(str(stmt))
+        self._spy.setdefault("params_list", []).append(params)
+        self._call_count += 1
+        if self._call_count == 1:
+            # Step 1: fetchall 返回所有行（只读 run_id + selected_skills_json）
+            return _SpyResult(self._rows)
+        else:
+            # Step 2: fetchone 返回单行 detail（score_line, fa, rs, snap, trade_date）
+            # 从 params 中取 run_id，找到对应行，返回 detail 列
+            rid = (params or {}).get("rid", "")
+            for row in self._rows:
+                if row[0] == rid:
+                    # 返回 (score_line, filter_audit, result_summary, snapshot, trade_date)
+                    return _SpyResult([(row[2], row[3], row[4], row[5], row[6])])
+            return _SpyResult([])
 
 
 def _batch_row(sid, fa, snap=None, trade_date="2026-07-20",
                started_at="2026-07-20 10:00:00"):
-    """构造批量查询的一行：(run_id, selected_skills_json, score_line,
-    filter_audit_json, result_summary_json, market_snapshot_json,
-    trade_date, started_at)。"""
+    """构造批量查询的一行：两步模式 step1=(run_id, selected_skills_json)，
+    step2=(score_line, filter_audit_json, result_summary_json, market_snapshot_json, trade_date)。"""
     skills = json.dumps([{"skill_id": sid}])
     return ("run_x", skills, 72.0, fa, None, snap, trade_date, started_at)
 
@@ -184,9 +204,10 @@ def test_fetch_gate_blocked_details_single_range_scan_no_like():
     spy: dict = {}
     db = _SpyDB([_batch_row("chip-single-peak-breakout", fa)], spy)
     out = self_check.fetch_gate_blocked_details(db, ["chip-single-peak-breakout"])
-    assert "LIKE" not in spy["sql"], "批量版不应再发逐策略 LIKE 全扫"
-    assert "ORDER BY r.started_at DESC" in spy["sql"]
-    assert "started_at >= DATE_SUB" in spy["sql"]
+    # step1 SQL 不应含 LIKE
+    assert "LIKE" not in spy["sqls"][0], "批量版不应再发逐策略 LIKE 全扫"
+    assert "ORDER BY r.started_at DESC" in spy["sqls"][0]
+    assert "started_at >= DATE_SUB" in spy["sqls"][0]
     det = out["chip-single-peak-breakout"]
     assert det is not None
     assert det["max_candidate_score"] == 73.16
