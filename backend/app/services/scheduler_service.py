@@ -331,6 +331,31 @@ def _load_and_schedule() -> None:
         logger.exception("加载调度任务失败")
 
 
+# 预设下的 Skill 全部被禁用时，enqueue_workbench_run 抛出的错误文案。
+# 这是「预期跳过」而非「故障」：定时任务不应因此污染 ERROR 日志或标记为 failed。
+_NO_RUNNABLE_SKILL_MSG = "没有可运行的 Skill"
+
+
+def _recommendation_run_error_to_skip(task_id: str, payload: dict, exc: Exception) -> dict | None:
+    """将『预设无可用 Skill』的 ValueError 转化为优雅跳过结果。
+
+    返回 skip 结果 dict（调用方应直接使用），或 None（表示异常需继续抛出）。
+    仅匹配无可用 Skill 这一特定、可预期的配置态；其它 ValueError 一律透传。
+    """
+    if isinstance(exc, ValueError) and _NO_RUNNABLE_SKILL_MSG in str(exc):
+        preset_id = payload.get("preset_id")
+        logger.warning(
+            "调度任务 %s 跳过：预设 %s 下无可用(已启用) Skill，属预期跳过而非故障",
+            task_id, preset_id,
+        )
+        return {
+            "status": "skipped",
+            "skipped": True,
+            "summary_text": f"预设 {preset_id} 无可用 Skill（已禁用），已跳过",
+        }
+    return None
+
+
 def _execute_task(task_id: str, *, force: bool = False, trigger_source: str = "schedule") -> None:
     """执行单个调度任务（同步包装异步）。"""
     if _is_task_running(task_id):
@@ -353,11 +378,19 @@ def _execute_task(task_id: str, *, force: bool = False, trigger_source: str = "s
         task_run_id = start_task_run(db, task, trigger_source=trigger_source).task_run_id
 
         if task_type == "recommendation_run":
-            result = asyncio.run(
-                _run_postclose_pipeline(db, payload)
-                if payload.get("pre_run_full_sync")
-                else _run_recommendation(db, payload)
-            )
+            try:
+                result = asyncio.run(
+                    _run_postclose_pipeline(db, payload)
+                    if payload.get("pre_run_full_sync")
+                    else _run_recommendation(db, payload)
+                )
+            except ValueError as ve:
+                # 预设下 Skill 全部被禁用 → 优雅跳过而非报错。其它 ValueError 透传。
+                skip = _recommendation_run_error_to_skip(task_id, payload, ve)
+                if skip is not None:
+                    result = skip
+                else:
+                    raise
         elif task_type == TASK_TYPE_FORMAL_SAFETY_NET:
             result = asyncio.run(_safety_net_run(db, payload))
         elif task_type == TASK_TYPE_PRESET_MATRIX_RUN:
@@ -858,6 +891,8 @@ def _task_result_status(result: dict | None) -> str:
     if not isinstance(result, dict):
         return "completed"
     status = str(result.get("status") or "").strip()
+    if status == "skipped":
+        return "skipped"
     if status == "completed_post_diagnosis_failed":
         return "partial_completed"
     if status in {"failed", "partial_failed", "partial_completed", "diagnosis_failed", "post_diagnosis_failed"}:
