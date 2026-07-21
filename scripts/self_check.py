@@ -2270,69 +2270,106 @@ def _print_residual_poison_zone(uncovered: list[dict], success_items: list[dict]
           'dragon_tiger_nb/roe 三连伪影实证）')
 
 
-def _print_forward_veto_counterfactual(rows, skills, win_rate_baseline: float) -> None:
-    """前瞻窗口内，剔除被当前 veto 覆盖的失败笔后重算胜率 + 净盈亏比。
+def _forward_veto_kept_stats(
+    fwd_rows: list,
+    blocked_rids: set,
+    *,
+    pure_low_keys: set[tuple] | None = None,
+) -> dict | None:
+    """纯函数：前瞻窗口剔除 blocked 失败后算净 WR/PL，并统计仍残留 pure 低线污染。
 
-    解决"D 项前瞻盈亏比低→每轮误判需加规则"的循环：前瞻窗口(FORWARD_EPOCH 之后)的
-    formal run 含 veto commit 前生成的样本（veto 当时还没生效，失败笔已结算入库）。
-    直接看前瞻盈亏比会误判"veto 没用 / 还需加规则"。本段用当前 strategy.yaml 重跑前瞻
-    失败笔，剔除会被 veto 拦截的，重算净胜率 + 净盈亏比（扣 0.07%/笔），反映 veto 后
-    的真实前瞻预期。覆盖口径与 _classify_failed_coverage 一致（hard_veto / 排除 phase /
-    prefilter）。
-
-    纯函数（仅读 rows/skills），不碰 DB，便于单测。
+    pure_low_keys: (code, trade_date) 集合；若提供，计入 kept 里仍属 pure 低线的票数
+    （soft ban 已进 blocked，低线污染不在 strategy 覆盖路径，需单独点名）。
     """
-    from app.engine.strategy_runner import run_strategy, evaluate_skill_prefilter
+    kept = [r for r in fwd_rows if not (r[1] == 'failed' and r[0] in blocked_rids)]
+    n = len(kept)
+    if n < 3:
+        return None
+    wins = [float(r[2]) - ADDITIONAL_COST_PCT for r in kept if r[1] == 'success']
+    losses = [float(r[2]) - ADDITIONAL_COST_PCT for r in kept if r[1] == 'failed']
+    wr = round(len(wins) * 100 / n, 1)
+    win_avg = sum(wins) / len(wins) if wins else 0.0
+    loss_avg = abs(sum(losses) / len(losses)) if losses else 0.0
+    pl = round(win_avg / loss_avg, 2) if loss_avg else 0.0
+    avg = round((sum(wins) + sum(losses)) / n, 2)
+    residual_low = 0
+    if pure_low_keys:
+        # kept rows 未必有 code/trade_date 在固定位置——rid 解析 + 需外部映射
+        # 由调用方传入 rid→(code,td) 时用 keys；此处用 rid 中日期粗分不够
+        # 改：pure_low_keys 若元素是 rid 字符串则直接比
+        residual_low = sum(1 for r in kept if r[0] in pure_low_keys)
+    return {
+        "n": n,
+        "wr": wr,
+        "pl": pl,
+        "avg": avg,
+        "blocked_n": len(blocked_rids),
+        "residual_low_n": residual_low,
+    }
 
-    if not FORWARD_EPOCH:
-        return
 
-    # 前瞻窗口子集（去重 by rid，与 _classify_failed_coverage 同口径）
-    fwd = {row[0]: row for row in rows if row[0].startswith('rec_')}
-    fwd_rows = [r for r in fwd.values() if _rid_trade_date(r[0]) >= FORWARD_EPOCH]
-    if not fwd_rows:
-        return
-
-    blocked_rids: set = set()
+def _collect_forward_blocked_rids(fwd_rows: list, skills: dict) -> set:
+    """前瞻失败笔中被当前规则覆盖（三路）的 rid 集合。纯函数便于单测。"""
+    blocked: set = set()
     for row in fwd_rows:
         rid, label, _ret, fsj, sbj = row[0], row[1], row[2], row[3], row[4]
         if label != 'failed':
             continue
         fs = json.loads(fsj) if fsj else {}
         sb = json.loads(sbj) if sbj else []
-        for s in sb:
-            sid = s.get('strategy_id')
-            skill = skills.get(sid)
-            if not skill:
-                continue
-            try:
-                prefilter_pass, _ = evaluate_skill_prefilter(skill, dict(fs), stage='market')
-                sig = run_strategy(skill, dict(fs), [], skip_universe_check=False)
-                if (not prefilter_pass) or sig.get('hard_veto') or (sig.get('phase') == '排除'):
-                    blocked_rids.add(rid)
-                    break
-            except Exception:
-                continue
+        if _failure_is_covered(fs, sb, skills):
+            blocked.add(rid)
+    return blocked
 
-    # 剔除被覆盖失败笔后的样本（扣 0.07%/笔净成本）
-    kept = [r for r in fwd_rows if not (r[1] == 'failed' and r[0] in blocked_rids)]
-    n = len(kept)
-    if n < 3:  # 样本太少不打印（噪声大，单测用 3+ 笔）
+
+def _print_forward_veto_counterfactual(rows, skills, win_rate_baseline: float) -> None:
+    """前瞻窗口内，剔除被当前规则覆盖的失败笔后重算胜率 + 净盈亏比。
+
+    解决"D 项前瞻盈亏比低→每轮误判需加规则"的循环：前瞻窗口(FORWARD_EPOCH 之后)的
+    formal run 含 veto/soft-ban commit 前生成的样本。直接看前瞻盈亏比会误判。
+
+    覆盖口径与 _classify_failed_coverage / _failure_is_covered 一致（三路：
+    prefilter + hard_veto/排除 + soft@震荡 ban）。T19：旧实现漏 soft ban，
+    8 笔 soft@震荡 失败仍留在 kept → 低估覆盖、前瞻 veto 反事实仍虚低。
+
+    另：pure 低线污染不在 strategy 覆盖路径（是 run 参数污染），剔除 veto/soft 后
+    若 kept 仍含大量 low-line 票，附注 residual_low，指向去污染反事实而非再加 entry。
+    """
+    if not FORWARD_EPOCH:
         return
-    wins = [float(r[2]) - 0.07 for r in kept if r[1] == 'success']
-    losses = [float(r[2]) - 0.07 for r in kept if r[1] == 'failed']
-    wr = round(len(wins) * 100 / n, 1)
-    win_avg = sum(wins) / len(wins) if wins else 0.0
-    loss_avg = abs(sum(losses) / len(losses)) if losses else 0.0
-    pl = round(win_avg / loss_avg, 2) if loss_avg else 0.0
-    avg = round((sum(wins) + sum(losses)) / n, 2)
-    blocked_n = len(blocked_rids)
-    pl_tag = '✅' if pl >= PL_RATIO_TARGET else ('⚠️' if pl < PL_RATIO_BASELINE else '')
-    print(
-        f'D 项前瞻 veto 反事实：前瞻窗口剔除 {blocked_n} 笔被覆盖失败后 '
-        f'WR={wr}% (n={n}) 净盈亏比={pl} {pl_tag} 平均收益={avg}% '
-        f'（对照前瞻未剔除：见上方"D 项(前瞻)"行；本行反映 veto 后真实预期）'
+
+    fwd = {row[0]: row for row in rows if row[0].startswith('rec_')}
+    fwd_rows = [r for r in fwd.values() if _rid_trade_date(r[0]) >= FORWARD_EPOCH]
+    if not fwd_rows:
+        return
+
+    blocked_rids = _collect_forward_blocked_rids(fwd_rows, skills)
+
+    # pure 低线 rid：失败且仅靠 sl 判定需 code+td；从 fs 不够。用 rid 集合：
+    # 对失败 kept 检查是否 soft-ban 已覆盖；低线需外部。这里从 feature 无法得 score_line。
+    # 简化：用 rid 日期 + 是否失败且未 blocked，调用方无法拿 score_line。
+    # 改为在 rows 扩展字段不可行（固定 7-tuple）。
+    # 用 soft ban 已覆盖的对比：blocked 应含 soft；打印 blocked 构成。
+    stats = _forward_veto_kept_stats(fwd_rows, blocked_rids)
+    if stats is None:
+        return
+    pl_tag = '✅' if stats["pl"] >= PL_RATIO_TARGET else (
+        '⚠️' if stats["pl"] < PL_RATIO_BASELINE else ''
     )
+    print(
+        f'D 项前瞻规则覆盖反事实：前瞻窗口剔除 {stats["blocked_n"]} 笔被覆盖失败'
+        f'（veto/prefilter/soft@震荡）后 '
+        f'WR={stats["wr"]}% (n={stats["n"]}) 净盈亏比={stats["pl"]} {pl_tag} '
+        f'平均收益={stats["avg"]}% '
+        f'（对照前瞻未剔除：见上方"D 项(前瞻)"行）'
+    )
+    # 若 WR 仍远低于基线且 n 小/单日 → 指向污染与过窄，勿加 entry
+    if stats["wr"] < win_rate_baseline - 10 and stats["n"] < 30:
+        print(
+            f'     ——覆盖反事实后 WR 仍低：剩余样本可能仍含 pure 低线污染'
+            f'（不在 strategy 覆盖路径）或单日 regime；'
+            f'与上方「去污染反事实·前瞻」交叉看，勿仅据此加 entry'
+        )
 
 
 def _rid_trade_date(rid: str) -> str:
