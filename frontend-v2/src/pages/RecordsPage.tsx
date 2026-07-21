@@ -20,6 +20,7 @@ import { ErrorPage, EmptyState, PageSkeleton } from "../components/StateViews";
 import { RecommendationDetailCard } from "../components/RecommendationDetailCard";
 import { MatrixRecordDetailView } from "../components/MatrixRecordDetailView";
 import { RunModeBadge } from "../components/RunModeBadge";
+import { ScoreLineCell, ScoreLineMetricValue } from "../components/ScoreLineCell";
 import { RunFunnelSection } from "../components/RunFunnelSection";
 import { RunStockScoreSection } from "../components/RunStockScoreSection";
 import {
@@ -440,7 +441,9 @@ function RunRecordsList() {
                   </td>
                   <td style={tdStyle}>{run.run_name || run.run_id.slice(0, 12)}</td>
                   <td style={{ ...tdStyle, textAlign: "right", fontFamily: "var(--font-mono)" }}>{run.recommended_count}</td>
-                  <td style={{ ...tdStyle, textAlign: "right", fontFamily: "var(--font-mono)" }}>{run.score_line.toFixed(1)}</td>
+                  <td style={{ ...tdStyle, textAlign: "right" }}>
+                    <ScoreLineCell scoreLine={run.score_line} runMode={run.run_mode} />
+                  </td>
                   <ReturnCell value={run.returns?.return_1d ?? null} />
                   <ReturnCell value={run.returns?.return_3d ?? null} />
                   <ReturnCell value={run.returns?.return_5d ?? null} />
@@ -589,7 +592,10 @@ function RunRecordDetailView({ runId, onBack, onOpenStock }: { runId: string; on
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "var(--space-3)" }}>
           <Metric label="推荐日" value={run.trade_date} mono />
           <Metric label="推荐数" value={String(run.recommended_count)} mono />
-          <Metric label="分数线" value={run.score_line.toFixed(1)} mono />
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }}>分数线</span>
+            <ScoreLineMetricValue scoreLine={run.score_line} runMode={run.run_mode} />
+          </div>
           <Metric label="预设" value={run.preset_name || "—"} />
           <Metric label="完成时间" value={run.finished_at ? formatTime(run.finished_at) : "—"} />
           <Metric label="收益基准日" value={as_of_date || "—"} mono />

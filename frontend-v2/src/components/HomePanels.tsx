@@ -11,6 +11,7 @@ import type { DashboardOverview, MarketSnapshot, RunSummary } from "../types";
 import { Panel } from "./Panel";
 import { EmptyState } from "./StateViews";
 import { RunModeBadge } from "./RunModeBadge";
+import { ScoreLineCell } from "./ScoreLineCell";
 
 /** HomePage 共享面板组件 —— 从 HomePage.tsx 抽离，消除主文件过大问题。 */
 
@@ -195,7 +196,12 @@ export function LatestRunCard({
       <div style={{ display: "flex", gap: "var(--space-4)" }}>
         <RunStat label="推荐数" value={String(run.recommended_count)} />
         <RunStat label="命中率" value={run.hit_rate > 0 ? `${run.hit_rate.toFixed(1)}%` : "—"} />
-        <RunStat label="分数线" value={run.score_line.toFixed(0)} />
+        <div>
+          <div style={{ fontSize: 11, color: "var(--muted)" }}>分数线</div>
+          <div style={{ fontSize: 18, fontWeight: 600 }}>
+            <ScoreLineCell scoreLine={run.score_line} runMode={run.run_mode} align="left" />
+          </div>
+        </div>
       </div>
       <button onClick={onOpen} className="btn btn--ghost" style={{ alignSelf: "flex-start" }}>
         查看驾驶舱
