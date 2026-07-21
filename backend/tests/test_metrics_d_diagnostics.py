@@ -29,6 +29,7 @@ def test_d_diagnostics_shape():
         assert (
             tr["pure_pollution"]
             + tr["pseudo_active"]
+            + tr.get("soft_allowed", 0)
             + tr["day_clustered"]
             + tr["sparse"]
             == tr["n"]
@@ -67,5 +68,5 @@ def test_d_diagnostics_triage_matches_live_residual():
     tr = data.get("triage")
     assert tr is not None, "residual>0 时必须返回 triage"
     assert tr["n"] == data["residual_n"]
-    s = tr["pure_pollution"] + tr["pseudo_active"] + tr["day_clustered"] + tr["sparse"]
+    s = tr["pure_pollution"] + tr["pseudo_active"] + tr.get("soft_allowed", 0) + tr["day_clustered"] + tr["sparse"]
     assert s == tr["n"]

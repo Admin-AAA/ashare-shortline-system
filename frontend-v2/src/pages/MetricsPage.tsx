@@ -294,7 +294,7 @@ function DDiagnosticsBlock({
         {tr && tr.n > 0 ? (
           <HealthRow
             label="triage"
-            value={`污${tr.pure_pollution}/伪${tr.pseudo_active}/簇${tr.day_clustered}/稀${tr.sparse}`}
+            value={`污${tr.pure_pollution}/伪${tr.pseudo_active}/软${tr.soft_allowed ?? 0}/簇${tr.day_clustered}/稀${tr.sparse}`}
           />
         ) : topMode ? (
           <HealthRow

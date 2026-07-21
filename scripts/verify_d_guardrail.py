@@ -403,6 +403,7 @@ def main(argv: list | None = None) -> int:
                     "n": triage_raw["n"],
                     "pure_pollution": c.get("pure_pollution", 0),
                     "pseudo_active": c.get("pseudo_active", 0),
+                    "soft_allowed": c.get("soft_allowed", 0),
                     "day_clustered": c.get("day_clustered", 0),
                     "sparse": c.get("sparse", 0),
                     "clustered_days": triage_raw.get("clustered_days") or [],
@@ -415,6 +416,7 @@ def main(argv: list | None = None) -> int:
                         }
                         for it in sparse_items
                     ],
+                    "ban_n": triage_raw.get("ban_n"),
                     "note": triage_raw.get("note"),
                 }
             residual_block = {
@@ -566,8 +568,9 @@ def main(argv: list | None = None) -> int:
             print(
                 f"  ℹ️ 真残留毒区 n={residual_block['n']} | triage "
                 f"污染{tr.get('pure_pollution', 0)}+伪活跃{tr.get('pseudo_active', 0)}"
+                f"+允许soft{tr.get('soft_allowed', 0)}"
                 f"+单日簇{tr.get('day_clustered', 0)}+稀疏{tr.get('sparse', 0)}"
-                f"（前三类禁 entry）"
+                f"（前四类禁 entry）"
             )
         elif pa and pa.get("weak_active_n", 0) > 0:
             print(
