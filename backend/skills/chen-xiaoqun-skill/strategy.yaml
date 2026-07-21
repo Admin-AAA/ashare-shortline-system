@@ -44,7 +44,11 @@ prefilter:
     include_any:
       - when: "is_main_theme == true and breakout20 == 1"
         reason: "requires_main_breakout"
-      - when: "is_main_theme == true and pct >= 1 and off_high_pct >= -6"
+      # 2026-07-21 T1 触发放宽：原 off_high>=-6 过严。LIVE formal 主策略=chen-xiaoqun
+      # 去重样本：oh∈[-6,-4) n=11 WR100%；oh<-8 n=8 WR100% avg+5.5%；全量含 CXQ
+      # 的 oh∈[-10,-8) n=8 WR100%。主线深度回踩（-6~-10）仍是龙头 alpha，非破位。
+      # 下限 -10 对齐 off_high 风险带（更深交给加速末期/退潮 phase 否决）。
+      - when: "is_main_theme == true and pct >= 1 and off_high_pct >= -10"
         reason: "requires_main_strength"
       - when: "industry_capacity_like_count >= 2 and pct >= 2 and amount_yi >= 4"
         reason: "requires_sector_leadership"
