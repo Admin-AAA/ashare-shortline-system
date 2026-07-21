@@ -562,6 +562,23 @@ def check_e_item(db, hit_skills: set) -> None:
     if under_floor:
         print(f'⚠️ {len(under_floor)} 个策略样本 <{SAMPLE_FLOOR}（胜率统计不可信，补跑应持续喂）: {under_floor}')
 
+    # ── D 项陷阱护栏：曝光-胜率错配 ≠ 应调权重 ─────────────────────────────
+    # 未来 D 攻击轮几乎必看到「高胜率策略低曝光 vs daily-stock 低胜率高曝光」，
+    # 会想「把高胜率曝光提上去、daily-stock 降权」来刷 D。这是过拟合陷阱：
+    #   ① 曝光高低由 universe 宽窄决定（策略自主定义，架构原则），daily-stock 是
+    #      通用技术分析、候选池天然大，龙虎榜/板块龙头本就 niche——是选择效应非错配。
+    #   ② 高胜率样本普遍 <50（sector-relative n=38/dragon-tiger n=44），按 E 项规则
+    #      样本 <50 不该按胜率大调，随样本增加会回归均值。
+    #   ③ E 项补跑（experiment）已在喂低样本策略，再调权重会重复、且可能破 H_norm。
+    # 按胜率强制重排曝光违背「策略优先架构」（各策略 universe 自主，不全局一刀切）。
+    # 禁据下表直接调 aggregator 权重或曝光补跑阈值；要动 D 走前瞻验证，不刷历史曝光。
+    wr_by_sid = {r[0]: round(r[2] * 100 / r[1], 1) for r in rows if r[1] >= SAMPLE_FLOOR}
+    if wr_by_sid and exposure:
+        print('  ℹ️ 曝光-胜率对照（仅参考，错配=universe 宽窄非 bug，勿按此调权重/曝光）:')
+        for sid, n in exposure.most_common():
+            if sid in wr_by_sid:
+                print(f'    {sid}: 曝光{n}({n/total_exp*100:.0f}%) 前瞻WR={wr_by_sid[sid]}%')
+
     # 曝光补跑健康诊断：样本 <20 的策略里，区分「补跑在喂但窄口径天然慢」vs
     # 「补跑 run 失败停滞」。只查近 7 天该策略出现在 experiment run skill_breakdown
     # 的推荐数：>0 = 在喂（窄策略样本增长慢是 universe 窄非 bug）；0 = 停滞（补跑
