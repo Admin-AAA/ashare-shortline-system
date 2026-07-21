@@ -258,9 +258,10 @@ def _llm_delta_effectiveness(records: list[dict]) -> dict:
     这是「开启 LLM 的 run 恰逢差日」的时间混杂，非 LLM 损害 D（feature_signal_guard
     预判的单日集中伪影）。去混杂后须按 delta 分档看单调性（大 delta=强信心应胜率更高），
     并盯两个真实问题：①oppose stance 占比（LLM 几乎从不反对则风险识别形同虚设）；
-    ②顶层聚合 score_delta 超单 agent clamp[-18,16]（多 agent 求和未 clamp 的数据完整性）。
+    ②score_delta 超单 agent clamp[-18,16]——区分前瞻新增（真回归）vs 历史存量（已修复污染）。
 
-    参数 records: [{delta: float|None, stance: str|None, label: 'success'|'failed'}]
+    参数 records: [{delta: float|None, stance: str|None, label: 'success'|'failed',
+                    trade_date: str|None(可选,用于超clamp历史/前瞻分口径)}]
     返回 {monotonic_ok, bucket_wr, oppose_ratio, over_clamp_count, stance_delta_conflict, notes:[...]}
     """
     deltas = [(r["delta"], r["label"]) for r in records if r.get("delta") is not None]
@@ -268,6 +269,17 @@ def _llm_delta_effectiveness(records: list[dict]) -> dict:
     oppose = sum(1 for r in records if str(r.get("stance") or "").lower() == "oppose")
     oppose_ratio = oppose / len(records) if records else 0.0
     over_clamp = sum(1 for r in records if r.get("delta") is not None and (r["delta"] > 16 or r["delta"] < -18))
+    # 超 clamp 分口径（第 11 轮实证）：root cause 是历史污染非「多 agent 求和」。
+    # agent_skill_runner.py:300 `score_delta=clamp(raw_score-50, -18, 16)` 已生效，
+    # 2026-07-13 起新产生数据 0 超界（前瞻验证过）；超界全是 07-10 及更早旧代码写入的
+    # 存量。故按是否含日期拆分：前瞻（近期）仍新增超界 = 真回归需修；仅历史存量 = 已修复
+    # 勿动历史数据（无前瞻验证手段，直接 clamp 历史会污染 outcome 对齐）。
+    _RECENT = "2026-07-13"  # clamp 修复后首个 0 超界交易日（按日验证过）
+    over_clamp_recent = sum(
+        1 for r in records
+        if r.get("delta") is not None and (r["delta"] > 16 or r["delta"] < -18)
+        and r.get("trade_date") and str(r["trade_date"]) >= _RECENT
+    )
     # stance↔delta 矛盾：LLM 判 oppose/veto（反对）却仍给正 delta（推分过线）。
     # 根因（第 9 轮实证 rec_20260707_005_dc16）：score_delta=clamp(raw_score-50) 只看 score
     # 不看 stance，LLM 内部不一致时（stance=oppose/action=不做 但 score=60）→ delta=+10，
@@ -307,10 +319,16 @@ def _llm_delta_effectiveness(records: list[dict]) -> dict:
             f"只看 score 不看 stance，LLM 内部不一致（反对但 score 及格）→ 反对票被推过线。"
             f"低频但属逻辑缺陷，前瞻样本确认无害前不改评分语义（防错杀 LLM 识别的隐藏强票）"
         )
-    if over_clamp > 0:
+    if over_clamp_recent > 0:
         notes.append(
-            f"{over_clamp} 条顶层聚合 score_delta 超单 agent clamp[-18,16]：多 agent 求和未 clamp，"
-            f"读侧（projection/cost_service）按单 agent 语义消费会低估实际增量——数据完整性问题"
+            f"🚨 {over_clamp_recent} 条近期(≥{_RECENT}) score_delta 超 clamp[-18,16]："
+            f"clamp 修复后出现回归，查 agent_skill_runner.py:300 / 聚合路径是否绕过 clamp"
+        )
+    elif over_clamp > 0:
+        notes.append(
+            f"{over_clamp} 条 score_delta 超 clamp[-18,16] 全为 07-13 前历史存量（旧代码写入，"
+            f"line:300 clamp 已修复，前瞻 0 新增）。属已修复的历史污染——勿动历史数据"
+            f"（无前瞻验证手段），勿误判「多 agent 求和未 clamp」去改聚合"
         )
     if not monotonic_ok:
         notes.append("delta 分档胜率非单调（大 delta 反而低胜率），LLM 校准失效，T9 需复核")
@@ -319,6 +337,7 @@ def _llm_delta_effectiveness(records: list[dict]) -> dict:
         "bucket_wr": buckets,
         "oppose_ratio": round(oppose_ratio, 4),
         "over_clamp_count": over_clamp,
+        "over_clamp_recent": over_clamp_recent,
         "stance_delta_conflict": stance_delta_conflict,
         "notes": notes,
     }
@@ -374,7 +393,8 @@ def check_llm_delta_effectiveness(db) -> None:
         rows = db.execute(text("""
             SELECT JSON_EXTRACT(r.agent_summary_json, '$.score_delta') AS delta,
                    JSON_EXTRACT(r.agent_summary_json, '$.stance')      AS stance,
-                   o.outcome_label
+                   o.outcome_label,
+                   u.trade_date
             FROM recommendations r
             JOIN recommendation_runs u ON r.run_id = u.run_id
             JOIN recommendation_outcomes o ON r.recommendation_id = o.recommendation_id
@@ -407,7 +427,7 @@ def check_llm_delta_effectiveness(db) -> None:
             return str(v)
 
     records = [
-        {"delta": _f(r[0]), "stance": _stance(r[1]), "label": r[2]}
+        {"delta": _f(r[0]), "stance": _stance(r[1]), "label": r[2], "trade_date": str(r[3]) if r[3] else None}
         for r in rows
     ]
     if not records:
@@ -416,7 +436,8 @@ def check_llm_delta_effectiveness(db) -> None:
     b = result["bucket_wr"]
     print(
         f'  LLM delta 有效性（去混杂·按档胜率）: 0-15={b["0-15"]}% 15-30={b["15-30"]}% '
-        f'30+={b["30+"]}% | oppose率={result["oppose_ratio"]:.0%} 超clamp={result["over_clamp_count"]}条 '
+        f'30+={b["30+"]}% | oppose率={result["oppose_ratio"]:.0%} '
+        f'超clamp={result["over_clamp_count"]}条(近期{result["over_clamp_recent"]}) '
         f'stance↔delta矛盾={result["stance_delta_conflict"]}条'
     )
     for note in result["notes"]:

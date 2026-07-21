@@ -4,11 +4,16 @@
 1. 去混杂单调性：delta 分档胜率应单调（大 delta=强信心→胜率更高），防止按「有无 delta」
    分组的单日集中混杂误判「LLM 负价值」。
 2. oppose 率：LLM 几乎从不反对（<5%）→ 风险识别形同虚设，T9 prompt 校准目标。
-3. 顶层聚合超 clamp：多 agent 求和后 score_delta 超单 agent [-18,16] → 数据完整性。
+3. 顶层聚合超 clamp：score_delta 超单 agent [-18,16]，按是否含近期日期区分——
+   前瞻新增=真回归（🚨）vs 历史存量=已修复污染（勿动历史数据）。
 
 背景（第 8 轮 T8 实证）：delta>0 票 WR=63% 表面低于无 delta 74%，实为「开启 LLM 的 run
 恰逢 07-07/08/09 regime 差日」的时间混杂（0 个 run 同时含两类票）；去混杂后按档单调
 （30+ WR78% > 15-30 WR59% > 5-15 WR10%），LLM 审查强度与质量正相关。
+
+第 11 轮修正超 clamp 归因：DB 实证 2026-07-13 起新数据 0 超界（agent_skill_runner.py:300
+`clamp(raw_score-50,-18,16)` 已生效），超界全是 07-10 前旧代码存量。非「多 agent 求和」，
+勿误判去改聚合；勿动历史数据（无前瞻验证手段）。
 """
 import pathlib
 import sys
@@ -20,8 +25,8 @@ if str(SCRIPTS_ROOT) not in sys.path:
 import self_check  # type: ignore[import-not-found]
 
 
-def _rec(delta, stance="support", label="success"):
-    return {"delta": delta, "stance": stance, "label": label}
+def _rec(delta, stance="support", label="success", trade_date=None):
+    return {"delta": delta, "stance": stance, "label": label, "trade_date": trade_date}
 
 
 def test_monotonic_positive_when_large_delta_wins_more():
@@ -92,12 +97,27 @@ def test_normal_oppose_ratio_not_flagged():
     assert not any("反对" in n for n in r["notes"])
 
 
-def test_over_clamp_counted():
-    """delta 超 [-18,16] → over_clamp_count + 数据完整性 note。"""
+def test_over_clamp_without_date_is_historical_pollution():
+    """超 clamp 但无近期日期（历史存量）→ 归因为已修复污染，勿动历史数据、勿改聚合。"""
     recs = [_rec(40.0), _rec(17.0), _rec(-20.0), _rec(10.0)]
     r = self_check._llm_delta_effectiveness(recs)
     assert r["over_clamp_count"] == 3  # 40, 17, -20 超界；10 在界内
-    assert any("clamp" in n and "数据完整性" in n for n in r["notes"])
+    assert r["over_clamp_recent"] == 0  # 无日期 → 不算前瞻新增
+    assert any("历史存量" in n and "勿动历史数据" in n and "多 agent 求和" in n for n in r["notes"])
+
+
+def test_over_clamp_recent_date_is_regression():
+    """超 clamp 且日期 ≥ clamp 修复日（2026-07-13）→ 🚨 真回归 note。"""
+    recs = [
+        _rec(40.0, trade_date="2026-07-15"),   # 近期超界 → 回归
+        _rec(35.0, trade_date="2026-07-08"),   # 历史超界 → 存量
+        _rec(10.0, trade_date="2026-07-15"),   # 界内
+    ]
+    r = self_check._llm_delta_effectiveness(recs)
+    assert r["over_clamp_count"] == 2
+    assert r["over_clamp_recent"] == 1
+    assert any("🚨" in n and "回归" in n for n in r["notes"])
+    assert not any("勿动历史数据" in n for n in r["notes"])
 
 
 def test_small_sample_note():
