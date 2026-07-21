@@ -128,3 +128,72 @@ def test_write_report_roundtrip(tmp_path):
     assert path.exists()
     back = json.loads(path.read_text(encoding="utf-8"))
     assert back == rep
+
+
+def test_recent_trade_dates_returns_k_most_recent():
+    """_recent_trade_dates 去重后倒序取最近 k 个独立交易日。"""
+    rows = [
+        ("A", "2026-07-01", "success", 1.0),
+        ("B", "2026-07-06", "success", 1.0),
+        ("C", "2026-07-06", "failed", -1.0),  # 同日重复应去重
+        ("D", "2026-07-04", "success", 1.0),
+        ("E", "2026-07-05", "success", 1.0),
+        ("F", "2026-07-03", "success", 1.0),
+        ("G", "2026-07-02", "success", 1.0),
+    ]
+    all_dates = verify_d_guardrail._recent_trade_dates(rows, k=10)
+    assert all_dates == {"2026-07-01", "2026-07-02", "2026-07-03",
+                         "2026-07-04", "2026-07-05", "2026-07-06"}
+    top3 = verify_d_guardrail._recent_trade_dates(rows, k=3)
+    assert top3 == {"2026-07-06", "2026-07-05", "2026-07-04"}
+
+
+def test_eval_recent_drift_triggers_on_significant_drop():
+    """近窗口净盈亏比 < 全量*0.80 且 n>=RECENT_MIN_N → 早警触发。"""
+    full = {"n": 200, "net_wr": 68.9, "net_pl": 2.08, "max_loss": -5.9}
+    recent = {"n": 100, "net_wr": 65.0, "net_pl": 1.65, "max_loss": -5.9}
+    d = verify_d_guardrail._eval_recent_drift(full, recent)
+    assert d["warn"] is True
+    assert d["ratio"] == round(1.65 / 2.08, 2)
+    assert "no_follow_through" in d["msg"] and "gap_roundtrip" in d["msg"]
+
+
+def test_eval_recent_drift_no_trigger_healthy_ratio():
+    """近窗口净盈亏比接近全量（比值>=0.80）→ 不触发。"""
+    full = {"n": 200, "net_wr": 68.9, "net_pl": 2.08, "max_loss": -5.9}
+    recent = {"n": 100, "net_wr": 67.0, "net_pl": 2.0, "max_loss": -5.9}
+    d = verify_d_guardrail._eval_recent_drift(full, recent)
+    assert d["warn"] is False
+    assert d["ratio"] == round(2.0 / 2.08, 2)
+
+
+def test_eval_recent_drift_no_trigger_small_sample():
+    """近窗口样本 < RECENT_MIN_N → 不触发（避免小样本误报），msg 说明原因。"""
+    full = {"n": 200, "net_wr": 68.9, "net_pl": 2.08, "max_loss": -5.9}
+    recent = {"n": 20, "net_wr": 50.0, "net_pl": 1.0, "max_loss": -5.9}
+    d = verify_d_guardrail._eval_recent_drift(full, recent)
+    assert d["warn"] is False
+    assert "不足" in d["msg"]
+
+
+def test_build_report_includes_recent_window_and_drift():
+    """build_report 新增 recent_10d + recent_drift 字段且结构正确。"""
+    full = {"n": 200, "net_wr": 68.9, "net_pl": 2.08, "max_loss": -5.9}
+    fwd = {"n": 31, "net_wr": 77.4, "net_pl": 4.19, "max_loss": -4.2}
+    recent = {"n": 100, "net_wr": 65.0, "net_pl": 1.65, "max_loss": -5.9}
+    drift = {"warn": True, "ratio": 0.79, "msg": "x"}
+    rep = verify_d_guardrail.build_report(full, fwd, True, 0, recent=recent, drift=drift)
+    assert rep["recent_10d"] == recent
+    assert rep["recent_drift"] == drift
+    assert rep["thresholds"]["recent_window_days"] == verify_d_guardrail.RECENT_WINDOW_DAYS
+    assert rep["thresholds"]["recent_pl_drag_ratio"] == verify_d_guardrail.RECENT_PL_DRAG_RATIO
+    assert rep["thresholds"]["recent_min_n"] == verify_d_guardrail.RECENT_MIN_N
+
+
+def test_build_report_recent_defaults_when_omitted():
+    """build_report 不传 recent/drift 时回填安全默认（向后兼容既有 4 参数调用）。"""
+    full = {"n": 10, "net_wr": 70.0, "net_pl": 3.0, "max_loss": -5.0}
+    fwd = {"n": 5, "net_wr": 65.0, "net_pl": 2.5, "max_loss": -4.0}
+    rep = verify_d_guardrail.build_report(full, fwd, True, 0)
+    assert rep["recent_10d"] is None
+    assert rep["recent_drift"] == {"warn": False, "ratio": None, "msg": ""}

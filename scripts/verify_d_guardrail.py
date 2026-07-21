@@ -43,6 +43,14 @@ REPORT_DEFAULT_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', 'output', 'd_guardrail_report.json')
 )
 
+# —— 近窗口漂移早警（软告警，非硬闸门，不影响退出码）——
+# 全量护栏已达标，但全量口径会平滑掉近期单日/单簇退化（如 2026-07-16 单日集中簇把
+# 近10交易日净盈亏比拉到 1.65，远低于全量 2.08）。本早警把近期窗口显式化，使慢退化
+# 可被跨 run JSON 历史 diff 捕获，并引导后续轮次勿对已被证伪的毒区重复加 entry 规则。
+RECENT_WINDOW_DAYS = 10
+RECENT_PL_DRAG_RATIO = 0.80   # 近窗口净盈亏比 < 全量 * 0.80 视为显著慢退化
+RECENT_MIN_N = 30             # 近窗口样本需 >= 该值方可断言（避免小样本误报）
+
 
 def _check(name: str, ok: bool, actual, floor) -> bool:
     status = "✅ PASS" if ok else "❌ FAIL"
@@ -50,7 +58,44 @@ def _check(name: str, ok: bool, actual, floor) -> bool:
     return ok
 
 
-def build_report(full: dict | None, fwd: dict | None, ok: bool, exit_code: int) -> dict:
+def _recent_trade_dates(rows: list, k: int = RECENT_WINDOW_DAYS) -> set:
+    """取 rows 中最近的 k 个独立交易日（trade_date 去重后倒序取前 k）。
+
+    rows 元素: (code, trade_date, label, executed_return)。纯函数，便于单测锁定。
+    """
+    dates = sorted({str(r[1]) for r in rows if r[1] is not None}, reverse=True)
+    return set(dates[:k])
+
+
+def _eval_recent_drift(full: dict | None, recent: dict | None) -> dict:
+    """纯函数：评估近窗口相对全量的净盈亏比漂移，仅作早警（不影响退出码）。
+
+    返回 {warn: bool, ratio: float|None, msg: str}。触发条件：近窗口样本 n >= RECENT_MIN_N
+    且 近窗口 net_pl < RECENT_PL_DRAG_RATIO * 全量 net_pl。触发时 msg 解释主因（指向已证伪、
+    禁止再加 entry 规则的 no_follow_through 单日集中簇 + 市场风险的 gap_roundtrip），避免后续
+    轮次对不可解毒区重复攻击、陷入过拟合。
+    """
+    if recent is None or full is None:
+        return {"warn": False, "ratio": None, "msg": ""}
+    if recent["n"] < RECENT_MIN_N:
+        return {"warn": False, "ratio": None,
+                "msg": f"近窗口样本 {recent['n']}<{RECENT_MIN_N}，不足以断言漂移"}
+    full_pl = full["net_pl"]
+    if not full_pl or full_pl >= 999:
+        return {"warn": False, "ratio": None, "msg": ""}
+    ratio = round(recent["net_pl"] / full_pl, 2)
+    if ratio < RECENT_PL_DRAG_RATIO:
+        return {"warn": True, "ratio": ratio,
+                "msg": (f"近{RECENT_WINDOW_DAYS}交易日净盈亏比 {recent['net_pl']} 显著低于全量 "
+                        f"{full_pl}（比值 {ratio}）——疑似慢退化；主因 no_follow_through"
+                        "（07-16 单日集中，第187/192轮证伪禁加 entry 规则）与 gap_roundtrip"
+                        "（开盘跳空市场风险）驱动，非可泛化个股因子；勿据此加 entry 规则，"
+                        "待前瞻样本（规则上线后结算）累积后复核")}
+    return {"warn": False, "ratio": ratio, "msg": ""}
+
+
+def build_report(full: dict | None, fwd: dict | None, ok: bool, exit_code: int,
+                 recent: dict | None = None, drift: dict | None = None) -> dict:
     """把本轮 D 项护栏结果结构化为机器可读报告，供跨 run 漂移追踪。
 
     full / fwd 为 self_check._compute_d_cost 的返回 dict（含 n/net_wr/net_pl/max_loss）。
@@ -70,9 +115,14 @@ def build_report(full: dict | None, fwd: dict | None, ok: bool, exit_code: int) 
             "net_pl_ratio_floor": NET_PL_RATIO_FLOOR,
             "max_loss_floor": MAX_LOSS_FLOOR,
             "forward_net_winrate_floor": FORWARD_NET_WINRATE_FLOOR,
+            "recent_window_days": RECENT_WINDOW_DAYS,
+            "recent_pl_drag_ratio": RECENT_PL_DRAG_RATIO,
+            "recent_min_n": RECENT_MIN_N,
         },
         "full": _block(full),
         "forward": _block(fwd),
+        "recent_10d": _block(recent),
+        "recent_drift": drift if drift is not None else {"warn": False, "ratio": None, "msg": ""},
         "passed": bool(ok),
         "exit_code": int(exit_code),
     }
@@ -107,8 +157,14 @@ def main(argv: list | None = None) -> int:
     full = self_check._compute_d_cost(rows)
     fwd = self_check._compute_d_cost(rows, since_date=self_check.FORWARD_EPOCH)
 
+    # 近窗口漂移早警（软告警，不计入 ok / 退出码）
+    recent_dates = _recent_trade_dates(rows, k=RECENT_WINDOW_DAYS)
+    recent = self_check._compute_d_cost(rows, trade_dates=recent_dates)
+    drift = _eval_recent_drift(full, recent)
+
     print(f"D 项回归护栏（样本 全量 n={full['n']}"
           + (f" / 前瞻 n={fwd['n']}" if fwd else " / 前瞻 空")
+          + f" / 近{RECENT_WINDOW_DAYS}交易日 n={recent['n'] if recent else 0}"
           + "）")
     print("-" * 60)
 
@@ -127,6 +183,13 @@ def main(argv: list | None = None) -> int:
     else:
         print("  [⚠️ SKIP] 前瞻窗口样本为空——无法验证样本外，请等修复后新 run 结算后复核。")
 
+    # 近窗口信息（非闸门，仅展示 + 早警）
+    if recent is not None:
+        print(f"  ℹ️ 近{RECENT_WINDOW_DAYS}交易日(净成本): 净胜率 {recent['net_wr']}% "
+              f"| 净盈亏比 {recent['net_pl']} | 最大亏损 {recent['max_loss']}% | n={recent['n']}")
+    if drift["warn"]:
+        print(f"  [⚠️ WARN] {drift['msg']}")
+
     print("-" * 60)
     if ok:
         print("✅ D 项护栏全部达标：未检测到对北极星 D 项的回归。")
@@ -134,7 +197,7 @@ def main(argv: list | None = None) -> int:
         print("❌ D 项护栏触发：检测到对北极星 D 项的回归，阻断合并并排查最近 strategy.yaml 改动。")
 
     exit_code = 0 if ok else 1
-    report = build_report(full, fwd, ok, exit_code)
+    report = build_report(full, fwd, ok, exit_code, recent=recent, drift=drift)
     if args.json:
         write_report(report, args.json)
         print(f"📄 JSON 报告已写出: {args.json}")
