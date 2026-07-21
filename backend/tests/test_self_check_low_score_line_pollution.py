@@ -138,3 +138,41 @@ def test_extract_clean_custom_floor():
     out = sc._extract_clean_dedup_rows(rows, floor=65.0)
     assert len(out) == 1
     assert out[0][0] == "000001"
+
+
+def test_extract_clean_excludes_soft_floor_by_default():
+    """exclude_soft=True（默认）排除 dynamic_soft_floor_applied 票。
+
+    soft 票即便 sl≥floor（靠软降线放行）也不属于「硬过线」clean 口径。
+    """
+    rows = [
+        ("000001", "2026-07-08", "success", 5.0, 74.0, 0),  # 硬过线
+        ("600001", "2026-07-16", "failed", -5.0, 74.0, 1),  # soft@震荡放行
+    ]
+    out = sc._extract_clean_dedup_rows(rows)
+    assert len(out) == 1
+    assert out[0][0] == "000001"
+
+
+def test_extract_clean_keeps_soft_floor_when_exclude_off():
+    """exclude_soft=False 保留 soft 票（与旧口径一致，向后兼容）。"""
+    rows = [
+        ("000001", "2026-07-08", "success", 5.0, 74.0, 0),
+        ("600001", "2026-07-16", "failed", -5.0, 74.0, 1),
+    ]
+    out = sc._extract_clean_dedup_rows(rows, exclude_soft=False)
+    assert len(out) == 2
+
+
+def test_extract_clean_soft_flag_truthy_variants():
+    """soft 标志取值 1/True/'true' 都应触发排除。"""
+    for soft_val in (1, True, "true"):
+        rows = [("600001", "2026-07-16", "failed", -5.0, 74.0, soft_val)]
+        assert sc._extract_clean_dedup_rows(rows) == [], f"soft={soft_val!r} 应被排除"
+
+
+def test_extract_clean_five_tuple_ignores_soft_flag():
+    """5 列历史/测试输入不触发软排除（len 守卫）。"""
+    rows = [("600001", "2026-07-16", "failed", -5.0, 74.0)]
+    out = sc._extract_clean_dedup_rows(rows)
+    assert len(out) == 1

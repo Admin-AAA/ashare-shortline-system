@@ -1585,6 +1585,7 @@ def _extract_clean_dedup_rows(
     rows_with_sl: list,
     *,
     floor: float = FORMAL_SCORE_LINE_FLOOR,
+    exclude_soft: bool = True,
 ) -> list:
     """纯函数：从带 score_line 的 formal 样本中提取 clean（≥floor）独立票。
 
@@ -1592,16 +1593,22 @@ def _extract_clean_dedup_rows(
     一致（同股同日取最差 ret），但**只看 sl≥floor 的 run**——没有高线覆盖的低线票
     不进 clean 总体。
 
-    用途：D 项净成本/胜率在「当前正式门槛」下的真实水平。仅报污染 WR 不够——
-    第 13 轮实证 clean 全量 PL 2.46 达标，但 clean 近10日 PL 1.69 仍低于基线 1.94，
-    说明近10日下滑主因不是低线污染而是 regime（07-16 震荡）。若只看污染 WR 差，
-    会误判「修好污染就够了」而停止排查。
+    exclude_soft=True（默认）：同时排除 dynamic_soft_floor_applied 票——这些靠
+    软降线放行，不属于「当前正式门槛 + 硬过线」的 clean 口径。07-16 的 soft@震荡
+    票（已被 triage ban）混入会让 clean PL 虚低、误导「regime 塌方」；排除后 clean
+    才代表真正硬过线的正式推荐质量。
+    行格式兼容 5 列（code,td,label,ret,sl）与 6 列（+soft 标志）两种输入——
+    仅当 6 列且 exclude_soft=True 时才生效软排除，历史/测试的 5 列调用不受影响。
     """
     clean_best: dict[tuple, tuple] = {}
     for r in rows_with_sl:
         code, td, label, ret, sl = r[0], str(r[1]), r[2], r[3], float(r[4] or 0)
         if sl < floor:
             continue
+        if exclude_soft and len(r) > 5:
+            soft = r[5]
+            if soft is not None and str(soft).lower() in ("1", "true", "yes"):
+                continue
         key = (code, td)
         row4 = (code, td, label, ret)
         if key not in clean_best or float(ret or 0) < float(clean_best[key][3] or 0):
@@ -1616,7 +1623,9 @@ def _print_low_score_line_pollution(db, last10: set | None = None) -> None:
     让运营者一眼区分「修污染能救多少」vs「clean 口径仍差（regime/策略真问题）」。
     """
     rows = db.execute(text("""
-        SELECT r.code, r.trade_date, o.outcome_label, o.executed_return, u.score_line
+        SELECT r.code, r.trade_date, o.outcome_label, o.executed_return, u.score_line,
+               JSON_EXTRACT(r.feature_snapshot_json,
+                            '$.score_line_meta.dynamic_soft_floor_applied') AS soft
         FROM recommendation_outcomes o
         JOIN recommendations r ON r.recommendation_id = o.recommendation_id
         JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
@@ -1638,7 +1647,7 @@ def _print_low_score_line_pollution(db, last10: set | None = None) -> None:
         )
 
     # clean 口径净成本：即使无 pure pollution，也要给出当前门槛下的 PL
-    clean_rows = _extract_clean_dedup_rows(list(rows))
+    clean_rows = _extract_clean_dedup_rows(list(rows), exclude_soft=True)
     if not clean_rows:
         return
     floor = FORMAL_SCORE_LINE_FLOOR
