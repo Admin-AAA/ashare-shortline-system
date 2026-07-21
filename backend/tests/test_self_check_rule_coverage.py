@@ -103,6 +103,73 @@ def test_unknown_skill_does_not_crash():
     assert total == 1
 
 
+def test_soft_floor_ban_covers_oscillation_soft_failures():
+    """路 3：历史 soft@震荡 失败笔算已被当前 soft ban 覆盖。
+
+    背景：aggregator 禁 震荡 soft 后，07-09/16 soft 票应进「已被覆盖」而非真残留，
+    防 D 攻击把 soft 污染当 entry 可解毒区。
+    """
+    # 构造：soft@震荡·活跃 失败（不命中 overnight veto 等）+ 非 soft 失败
+    soft_fs = {
+        "code": "301047", "pct": 2.0, "turnover_rate": 4.0, "chg20": 20.0,
+        "pos60": 80.0, "market_regime": "震荡",
+        "score_line_meta": {
+            "dynamic_soft_floor_applied": True,
+            "market_base": "震荡",
+            "market_sentiment": "活跃",
+            "effective_score_line": 65.0,
+        },
+    }
+    hard_fs = {
+        "code": "600001", "pct": 2.0, "turnover_rate": 4.0, "chg20": 20.0,
+        "pos60": 80.0, "market_regime": "震荡",
+        "score_line_meta": {
+            "dynamic_soft_floor_applied": False,
+            "market_base": "震荡",
+            "market_sentiment": "活跃",
+        },
+    }
+    # 用 unknown skill 确保路 1/2 不覆盖，只测路 3
+    rows = [
+        _row("rec_soft", "failed", -5.0, soft_fs, "nonexistent-skill"),
+        _row("rec_hard", "failed", -4.0, hard_fs, "nonexistent-skill"),
+        _row("rec_win", "success", 3.0, hard_fs, "nonexistent-skill"),
+    ]
+    blocked, new_total, wins, total = self_check._classify_failed_coverage(rows, _skills())
+    assert blocked == 1  # 仅 soft@震荡
+    assert wins == 1
+    assert total == 3
+    assert new_total == 2  # 剔除 soft 失败
+
+    uncovered = self_check._collect_uncovered_failures(rows, _skills())
+    rids = [u["rid"] for u in uncovered]
+    assert "rec_soft" not in rids
+    assert "rec_hard" in rids
+
+
+def test_soft_floor_ban_only_oscillation_not_weak():
+    """弱势 soft 不在 ban 范围（反转信号 / 净正），不算覆盖。"""
+    weak_soft_fs = {
+        "code": "600002",
+        "score_line_meta": {
+            "dynamic_soft_floor_applied": True,
+            "market_base": "弱势",
+            "market_sentiment": "高潮",
+        },
+    }
+    assert self_check._covered_by_soft_floor_ban(weak_soft_fs) is False
+    osc_soft_fs = {
+        "score_line_meta": {
+            "dynamic_soft_floor_applied": True,
+            "market_base": "震荡",
+            "market_sentiment": "活跃",
+        },
+    }
+    assert self_check._covered_by_soft_floor_ban(osc_soft_fs) is True
+    assert self_check._covered_by_soft_floor_ban({}) is False
+    assert self_check._covered_by_soft_floor_ban({"score_line_meta": {}}) is False
+
+
 def _chip_ctx(chip_concentration: float) -> dict:
     """chip-single-peak universe 全过、无 hard_veto/排除 phase 的 context（真实快照提炼）。
 

@@ -521,6 +521,27 @@ def test_apply_pool_rules_oscillation_climax_degraded_soft_floor_disabled():
     )
 
 
+def test_apply_pool_rules_oscillation_active_soft_floor_disabled():
+    """2026-07-21 T13：震荡·活跃 soft 同机制净负，全震荡档禁用 soft。
+
+    实证：07-16 soft@震荡·活跃 11 笔 WR=27.3% avg=-2.04%。与高潮合 2 日 23 笔
+    WR=30.4%。常规 soft（非高潮/强牛、非降级）在震荡档也不得启用。
+    """
+    # 震荡：up_ratio=0.40；活跃：lu_rate=0.008（>0.5% 活跃阈值）
+    snapshot = {
+        "sample_count": 1000,
+        "up_count": 400,
+        "limit_up_count": 8,
+        "limit_down_count": 2,
+    }
+    # 有效线 = 72 + 0(震荡) + 3(活跃) = 75；候选 70 < 75，旧逻辑会 soft 放行
+    cards = [_card(code, score) for code, score in [("A", 70.0), ("B", 68.0)]]
+    result = apply_pool_rules(
+        cards, output_count=6, score_line=72, market_snapshot=snapshot, agent_available=True,
+    )
+    assert result == [], "震荡·活跃 soft floor 必须禁用"
+
+
 def test_apply_pool_rules_weak_climax_degraded_soft_floor_still_engages():
     """对照：弱势·高潮 soft floor 是反转信号（历史 9 笔 100% WR），降级仍应兜底。"""
     # 弱势：up_ratio=0.20；高潮：lu_rate=0.05
@@ -806,14 +827,15 @@ def test_apply_pool_rules_oscillation_low_pos60_penalty():
         "limit_up_count": 1, "limit_down_count": 0,
         "market_regime": "震荡",
     }
-    # 两张卡同分 72，震荡 regime，pos60 低 vs 高
+    # 同分 80（> 震荡·活跃有效线 75，硬过线不依赖 soft floor——震荡 soft 已禁）。
+    # LOW_POS 加 +12 → effective 87 > 80 被过滤；HIGH_POS 无惩罚通过。
     cards = [
-        {**_card("LOW_POS", 72), "pos60": 40, "is_limit_up": False, "support_ma5": True},
-        {**_card("HIGH_POS", 72), "pos60": 80, "is_limit_up": False, "support_ma5": True},
+        {**_card("LOW_POS", 80), "pos60": 40, "is_limit_up": False, "support_ma5": True},
+        {**_card("HIGH_POS", 80), "pos60": 80, "is_limit_up": False, "support_ma5": True},
     ]
     result = apply_pool_rules(cards, score_line=72, market_snapshot=snapshot)
     by_code = {c["code"]: c for c in result}
-    # 高 pos60 通过（无惩罚），低 pos60 被过滤（+12 门槛→effective 84 > 72）
+    # 高 pos60 通过（无惩罚），低 pos60 被过滤（+12 门槛→effective 87 > 80）
     assert "HIGH_POS" in by_code, "pos60>=50 应通过震荡 regime"
     assert "LOW_POS" not in by_code, "震荡 × pos60<50 应被 +12 门槛过滤"
     assert by_code["HIGH_POS"]["score_line_meta"]["regime_oscillation_low_pos_penalty"] == 0.0
@@ -879,8 +901,9 @@ def test_apply_pool_rules_weak_low_chg20_not_in_strong_regime():
         "limit_up_count": 1, "limit_down_count": 0,
         "market_regime": "震荡",
     }
-    # 震荡 regime，pos60=60（不触发震荡惩罚），chg20=8（<15 但非弱势）
-    cards = [{**_card("LOW_CHG_OSC", 72), "pos60": 60, "chg20": 8, "is_limit_up": False, "support_ma5": True}]
+    # 分数 80 > 震荡·活跃有效线 75（硬过线，不依赖已禁的震荡 soft floor）
+    # pos60=60 不触发震荡低 pos 惩罚；chg20=8 在非弱势不触发 chg20 惩罚
+    cards = [{**_card("LOW_CHG_OSC", 80), "pos60": 60, "chg20": 8, "is_limit_up": False, "support_ma5": True}]
     result = apply_pool_rules(cards, score_line=72, market_snapshot=snapshot_oscillation)
     by_code = {c["code"]: c for c in result}
     # 震荡 regime 不触发弱势低 chg20 惩罚
@@ -1145,21 +1168,29 @@ def test_agent_unavailable_climax_emits_recommendation():
 
 
 def test_agent_unavailable_non_climax_emits_recommendation():
-    """非高潮/强牛阶段 + LLM 暂不可用，软降线应兜底出票。"""
+    """非高潮/强牛/震荡阶段 + LLM 暂不可用，软降线应兜底出票。
+
+    注意：_neutral_snapshot 是震荡（up_ratio=0.45），震荡 soft 已禁；
+    本测用弱势快照验证「允许 soft 的非 climax regime」降级兜底仍在。
+    """
     from app.engine.aggregator import apply_pool_rules
 
     cards = [
         _degraded_card("600001", 68.0),
         _degraded_card("600002", 60.0),
     ]
+    # 弱势·平淡：允许 soft floor（非 震荡 / 非 强牛·高潮 禁区）
+    weak_flat = {
+        "sample_count": 100, "up_count": 25, "limit_up_count": 0, "limit_down_count": 2,
+    }
     out = apply_pool_rules(
         cards,
         score_line=72.0,
-        market_snapshot=_neutral_snapshot(),
+        market_snapshot=weak_flat,
         return_watchlist=True,
     )
     recs = out["recommendations"] if isinstance(out, dict) else out
-    assert len(recs) >= 1, "非高潮阶段 LLM 暂不可用时也应兜底出票"
+    assert len(recs) >= 1, "弱势阶段 LLM 暂不可用时也应兜底出票"
 
 
 def test_agent_available_climax_risk_control_preserved():

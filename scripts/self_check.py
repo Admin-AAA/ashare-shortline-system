@@ -1414,26 +1414,66 @@ def check_d_rule_coverage(db, win_rate_baseline: float) -> None:
     _print_forward_veto_counterfactual(rows, skills, win_rate_baseline)
 
 
+def _covered_by_soft_floor_ban(fs: dict) -> bool:
+    """路 3：历史 soft floor 票若落在当前已禁用 soft 的 regime，算已被覆盖。
+
+    背景（2026-07-21 T13）：aggregator 对 market_base=='震荡' 禁用 soft floor
+    （高潮+活跃均净负，合 23 笔 WR30.4%）。旧覆盖口径只查 prefilter/veto，
+    把 soft@震荡 失败仍报「真残留」→ 误导下轮 D 攻击去挖 entry 规则。
+    本函数读 feature_snapshot.score_line_meta（run 时写入），不碰 DB。
+    """
+    meta = (fs or {}).get('score_line_meta') or {}
+    if not meta.get('dynamic_soft_floor_applied'):
+        return False
+    return meta.get('market_base') == '震荡'
+
+
+def _failure_is_covered(fs: dict, sb: list, skills: dict) -> bool:
+    """单笔失败是否被当前规则覆盖（三路并查）。纯函数，便于单测。
+
+    路 1: evaluate_skill_prefilter(market)
+    路 2: run_strategy hard_veto / 排除 phase
+    路 3: soft floor ban（震荡 regime 历史 soft 票）
+    """
+    if _covered_by_soft_floor_ban(fs):
+        return True
+    from app.engine.strategy_runner import run_strategy, evaluate_skill_prefilter
+
+    for s in sb:
+        sid = s.get('strategy_id')
+        skill = skills.get(sid)
+        if not skill:
+            continue
+        try:
+            prefilter_pass, _reason = evaluate_skill_prefilter(skill, dict(fs), stage='market')
+            sig = run_strategy(skill, dict(fs), [], skip_universe_check=False)
+            if (not prefilter_pass) or sig.get('hard_veto') or (sig.get('phase') == '排除'):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _classify_failed_coverage(rows, skills) -> tuple[int, int, int, int]:
-    """统计失败样本中被当前规则覆盖（hard_veto / universe / prefilter 排除）的笔数。
+    """统计失败样本中被当前规则覆盖（hard_veto / universe / prefilter / soft ban）的笔数。
 
     纯函数（不碰 DB），便于单元测试。返回 (blocked_count, new_total, wins, total)：
-      - blocked_count: 失败样本中会被当前 yaml 拦截的去重 recommendation_id 数
+      - blocked_count: 失败样本中会被当前规则拦截的去重 recommendation_id 数
       - new_total: total - blocked_count（剔除被覆盖失败笔后的样本数）
       - wins: 成功笔数（不变）
       - total: 样本总数
 
-    覆盖口径复刻生产管线，两路并查任一命中即算覆盖：
+    覆盖口径复刻生产管线，三路并查任一命中即算覆盖：
       1. evaluate_skill_prefilter(stage='market')：universe + prefilter.market.include
          /include_any/exclude（生产 prefilter 全量，含 run_strategy._passes_universe 漏掉
          的 prefilter.market.include/include_any）。
       2. run_strategy：phases hard_veto（如弱市隔夜毒区）+ 排除 phase + setup hard_veto
          + risk rules。这些在 prefilter 之后、scoring 阶段才判定，evaluate_skill_prefilter 不查。
-    两路并查确保与生产一致——只查 universe+prefilter.market.exclude（旧实现）会漏掉
+      3. soft floor ban：feature_snapshot.score_line_meta 显示历史 soft 且 market_base==震荡
+         （aggregator 已禁 震荡 soft，见 _covered_by_soft_floor_ban）。
+    三路并查确保与生产一致——只查 universe+prefilter.market.exclude（旧实现）会漏掉
     prefilter.market.include 覆盖（如 chip_loose），低估覆盖率、高估残留毒区。
     """
-    from app.engine.strategy_runner import run_strategy, evaluate_skill_prefilter
-
     total = len(rows)
     wins = sum(1 for r in rows if r[1] == 'success')
 
@@ -1444,21 +1484,8 @@ def _classify_failed_coverage(rows, skills) -> tuple[int, int, int, int]:
             continue
         fs = json.loads(fsj) if fsj else {}
         sb = json.loads(sbj) if sbj else []
-        for s in sb:
-            sid = s.get('strategy_id')
-            skill = skills.get(sid)
-            if not skill:
-                continue
-            try:
-                # 路 1：生产 prefilter（universe + prefilter.market.include/include_any/exclude）
-                prefilter_pass, _reason = evaluate_skill_prefilter(skill, dict(fs), stage='market')
-                # 路 2：scoring 阶段 hard_veto / 排除 phase（prefilter 之后才判定）
-                sig = run_strategy(skill, dict(fs), [], skip_universe_check=False)
-                if (not prefilter_pass) or sig.get('hard_veto') or (sig.get('phase') == '排除'):
-                    blocked_rids.add(rid)
-                    break
-            except Exception:
-                continue
+        if _failure_is_covered(fs, sb, skills):
+            blocked_rids.add(rid)
 
     blocked = len(blocked_rids)
     return blocked, total - blocked, wins, total
@@ -1468,14 +1495,12 @@ def _classify_failed_coverage(rows, skills) -> tuple[int, int, int, int]:
 # 真残留毒区采集 + 归因（D 项规则覆盖校验第二段，旧实现遗漏）
 # --------------------------------------------------------------------------- #
 def _collect_uncovered_failures(rows, skills) -> list[dict]:
-    """采集失败样本中被当前规则「未」覆盖（不被 hard_veto / universe / prefilter 排除）的笔。
+    """采集失败样本中被当前规则「未」覆盖的笔。
 
-    与 _classify_failed_coverage 同源、同覆盖口径（两路并查），只是收集未覆盖项。
+    与 _classify_failed_coverage 同源、同覆盖口径（三路并查），只是收集未覆盖项。
     返回 list[dict]，每项含 rid / feature_snapshot(dict) / exit_reason / max_return /
     executed_return，供 _print_residual_poison_zone 做模式归因。纯函数，便于单测。
     """
-    from app.engine.strategy_runner import run_strategy, evaluate_skill_prefilter
-
     out: list[dict] = []
     for row in rows:
         rid, label, ret, fsj, sbj = row[0], row[1], row[2], row[3], row[4]
@@ -1485,21 +1510,7 @@ def _collect_uncovered_failures(rows, skills) -> list[dict]:
             continue
         fs = json.loads(fsj) if fsj else {}
         sb = json.loads(sbj) if sbj else []
-        covered = False
-        for s in sb:
-            sid = s.get('strategy_id')
-            skill = skills.get(sid)
-            if not skill:
-                continue
-            try:
-                prefilter_pass, _reason = evaluate_skill_prefilter(skill, dict(fs), stage='market')
-                sig = run_strategy(skill, dict(fs), [], skip_universe_check=False)
-                if (not prefilter_pass) or sig.get('hard_veto') or (sig.get('phase') == '排除'):
-                    covered = True
-                    break
-            except Exception:
-                continue
-        if not covered:
+        if not _failure_is_covered(fs, sb, skills):
             out.append({
                 'rid': rid,
                 'fs': fs,

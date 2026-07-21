@@ -1060,13 +1060,15 @@ def apply_pool_rules(
     # 配置级或 card 级），放宽上限作为最后兜底，保证「每天可见推荐」——
     # 降级状态已在前端明确标注（指标页 agent_runtime=llm 但实际走规则预审降级）。
     #
-    # 例外（2026-07-21 T3，LIVE formal 去重）：震荡·高潮 降级 soft floor 净负。
-    # 07-09 单日 12 笔 soft 票 WR=33.3% avg=-1.85%（有效线~85 被压到~65，score 56-78
-    # 混入）。反事实剔除后全量 WR 71.2%→74.5% avg 2.13→2.47。弱势·高潮 soft 是反转
-    # 信号（9 笔 100% WR）必须保留；强牛·高潮 soft 历史偏正但样本稀且已有更高门槛，
-    # 本轮只锁 震荡·高潮——其余 climax 降级 soft 不动，避免为刷 D 项牺牲 A 项可见性。
-    _osc_climax = _ctx_base == "震荡" and _ctx_sentiment == "高潮"
-    _soft_floor_allowed = ((not _disable_soft_floor) or _degraded) and (not _osc_climax)
+    # 例外（2026-07-21 T3/T13，LIVE formal 去重）：震荡 全档 soft floor 净负。
+    # - 震荡·高潮 soft 12 笔@07-09 WR=33.3% avg=-1.85%（有效线~85→~65）
+    # - 震荡·活跃 soft 11 笔@07-16 WR=27.3% avg=-2.04%（同机制）
+    # 合 2 独立日 23 笔 WR=30.4% avg=-1.94%；剔除后 clean WR 70.5%→77.8% avg 2.08→2.81。
+    # 因果：震荡市无延续、soft 降线放行半吊子票 → 入场即套/硬止损；与高潮/活跃无关，
+    # 是 regime=震荡 本身。弱势·高潮 soft 反转信号（9 笔 100%）必须保留；
+    # 强牛·高潮 soft 偏正且是 A 项断档兜底，不动。
+    _osc_regime = _ctx_base == "震荡"
+    _soft_floor_allowed = ((not _disable_soft_floor) or _degraded) and (not _osc_regime)
     if not result and ordered and top_final_score > 0 and _soft_floor_allowed:
         soft_floor = round(top_final_score - 1.0, 2)
         base_floor = round(score_line_context["base_score_line"] - 8.0, 2)

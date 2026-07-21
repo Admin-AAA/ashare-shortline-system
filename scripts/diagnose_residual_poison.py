@@ -106,7 +106,13 @@ def collect_uncovered_failures(
         if not isinstance(sb, list):
             sb = []
         covered = False
+        # 路 3：与 self_check 对齐——震荡 soft floor 历史票算已覆盖
+        meta = fs.get('score_line_meta') if isinstance(fs, dict) else None
+        if isinstance(meta, dict) and meta.get('dynamic_soft_floor_applied') and meta.get('market_base') == '震荡':
+            covered = True
         for s in sb:
+            if covered:
+                break
             sid = s.get('strategy_id') if isinstance(s, dict) else None
             skill = skills.get(sid) if sid else None
             if not skill:
