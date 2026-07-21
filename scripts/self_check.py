@@ -1076,6 +1076,123 @@ def _print_low_score_line_pollution(db) -> None:
     )
 
 
+def _soft_regime_pollution(
+    rows_with_soft: list,
+    *,
+    banned_bases: frozenset[str] | set[str] = frozenset({"震荡"}),
+) -> dict | None:
+    """纯函数：诊断已被 ban 的 regime soft floor 历史污染幅度。
+
+    输入 rows_with_soft: [(code, trade_date, label, ret, soft_applied, market_base), ...]
+    soft_applied 为 truthy（1/True/'true'）表示该笔靠 soft floor 放行。
+
+    pure 污染 = 仅有 soft@banned_base 产出、同日同股无 hard-pass 孪生票。
+    返回 None 表示无污染；否则返回污染 WR / 剔除后反事实 + 分日/分 sentiment 桶。
+    背景（2026-07-21 T13/T14）：aggregator 已禁 震荡 soft，但历史 23 笔 pure soft@震荡
+    WR=30.4% 仍落库拖累近 10 日 PL。本护栏暴露幅度，防把污染当策略退化加 entry。
+    """
+    if not rows_with_soft:
+        return None
+
+    def _truthy(v) -> bool:
+        return v is not None and str(v).lower() in ("1", "true", "yes")
+
+    all_best: dict[tuple, tuple] = {}
+    hard_keys: set[tuple] = set()
+    soft_banned_best: dict[tuple, tuple] = {}
+    soft_banned_meta: dict[tuple, tuple] = {}  # key -> (td, sent)
+
+    for r in rows_with_soft:
+        code, td, label, ret = r[0], str(r[1]), r[2], r[3]
+        soft, base = r[4], r[5]
+        # optional sentiment at index 6
+        sent = r[6] if len(r) > 6 else None
+        key = (code, td)
+        row4 = (code, td, label, ret)
+        if key not in all_best or float(ret or 0) < float(all_best[key][3] or 0):
+            all_best[key] = row4
+        if not _truthy(soft):
+            hard_keys.add(key)
+        elif str(base or "") in banned_bases:
+            if key not in soft_banned_best or float(ret or 0) < float(soft_banned_best[key][3] or 0):
+                soft_banned_best[key] = row4
+                soft_banned_meta[key] = (td, str(sent) if sent is not None else None)
+
+    pure = {k: v for k, v in soft_banned_best.items() if k not in hard_keys}
+    if not pure:
+        return None
+
+    day_buckets: Counter = Counter()
+    sent_buckets: Counter = Counter()
+    for k in pure:
+        td, sent = soft_banned_meta.get(k, (k[1], None))
+        day_buckets[td] += 1
+        if sent is not None and sent != "None":
+            sent_buckets[sent] += 1
+
+    def _wr(items: list) -> tuple[float, int]:
+        if not items:
+            return 0.0, 0
+        wins = sum(1 for x in items if x[2] == "success")
+        return round(wins * 100 / len(items), 1), len(items)
+
+    pol_items = list(pure.values())
+    clean_items = [v for k, v in all_best.items() if k not in pure]
+    all_items = list(all_best.values())
+    pol_wr, pol_n = _wr(pol_items)
+    clean_wr, clean_n = _wr(clean_items)
+    full_wr, full_n = _wr(all_items)
+    rets = [float(x[3] or 0) for x in pol_items]
+    avg_ret = round(sum(rets) / len(rets), 2) if rets else 0.0
+    return {
+        "banned_bases": sorted(banned_bases),
+        "polluted_n": pol_n,
+        "polluted_wr": pol_wr,
+        "polluted_avg": avg_ret,
+        "clean_n": clean_n,
+        "clean_wr": clean_wr,
+        "full_n": full_n,
+        "full_wr": full_wr,
+        "delta_pp": round(clean_wr - full_wr, 1) if clean_n and full_n else 0.0,
+        "day_buckets": dict(sorted(day_buckets.items())),
+        "sent_buckets": dict(sorted(sent_buckets.items())),
+        "independent_days": len({k[1] for k in pure}),
+    }
+
+
+def _print_soft_regime_pollution(db) -> None:
+    """D 项：已 ban regime 的 soft floor 历史污染诊断（接 DB）。"""
+    rows = db.execute(text("""
+        SELECT r.code, r.trade_date, o.outcome_label, o.executed_return,
+               JSON_EXTRACT(r.feature_snapshot_json,
+                            '$.score_line_meta.dynamic_soft_floor_applied') AS soft,
+               JSON_UNQUOTE(JSON_EXTRACT(r.feature_snapshot_json,
+                            '$.score_line_meta.market_base')) AS mbase,
+               JSON_UNQUOTE(JSON_EXTRACT(r.feature_snapshot_json,
+                            '$.score_line_meta.market_sentiment')) AS sent
+        FROM recommendation_outcomes o
+        JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+        WHERE o.outcome_label IN ('success', 'failed')
+          AND r.recommendation_id LIKE 'rec_%'
+    """)).fetchall()
+    result = _soft_regime_pollution(list(rows))
+    if result is None:
+        return
+    print(
+        f'  ⚠️ 护栏: soft@{result["banned_bases"]} 历史污染独立票 '
+        f'{result["polluted_n"]} 笔 WR={result["polluted_wr"]}% avg={result["polluted_avg"]}% '
+        f'(独立日={result["independent_days"]}) '
+        f'| 剔除后 WR {result["full_wr"]}%→{result["clean_wr"]}% '
+        f'(Δ+{result["delta_pp"]}pp, n={result["clean_n"]}) '
+        f'| 日分布={result["day_buckets"]} sentiment={result["sent_buckets"]}'
+    )
+    print(
+        f'     ——aggregator 已禁 {"/".join(result["banned_bases"])} soft（新 run 不再产出）；'
+        f'历史票不重标；近10日 PL 偏低先查 soft 污染+单日 regime，勿加 entry 规则'
+    )
+
+
 def _single_day_pl_drag(rows: list, trade_dates: set) -> dict | None:
     """纯函数：诊断近 N 日窗口内 PF 是否被单一交易日拖累（单日 regime 噪声 vs 真退化）。
 
@@ -1327,6 +1444,8 @@ def check_d_item(db) -> None:
 
     # 低 score_line formal 污染护栏（matrix/手动降线 → 低质量票进 LIVE formal 拖累 D）
     _print_low_score_line_pollution(db)
+    # soft@震荡 历史污染护栏（aggregator 已禁，历史票仍拖近10日 PL）
+    _print_soft_regime_pollution(db)
 
     # 单日集中度诊断（独立股票口径）：防止单日异常高量扭曲 D 项判断。
     # 已改用独立股票数（同股同日多 run 只算 1 只），避免"单日 N 笔"假警报——
