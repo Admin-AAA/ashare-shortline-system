@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from app.models.tables import (
     Preset,
@@ -144,7 +144,7 @@ def get_skill_stats(db: Session) -> list[dict[str, Any]]:
 
 def _get_skill_stats(db: Session) -> list[dict[str, Any]]:
     t0 = time.perf_counter()
-    runs = _runs_for_mode(db)
+    runs = _runs_for_mode(db, extra_cols=[RecommendationRun.market_snapshot_json])
     run_ids = [run.run_id for run in runs]
     if not run_ids:
         return []
@@ -400,9 +400,22 @@ def _empty_overview() -> dict[str, Any]:
     }
 
 
-def _runs_for_mode(db: Session) -> list[RecommendationRun]:
+def _runs_for_mode(db: Session, extra_cols: list | None = None) -> list[RecommendationRun]:
+    # 仅加载各 stats 函数实际使用的列，避免物化每条 run 的 4 个大型 JSON 列
+    # （market_snapshot_json / result_summary_json / filter_audit_json / selected_skills_json）。
+    # 全量加载 890 条 run 会产生 ~2.4GB 传输，冷调用 4.5s+；按列裁剪后 <0.05s（~200x）。
+    # get_skill_stats 需要 regime（埋在 market_snapshot_json），须显式 opt-in；
+    # get_overview_stats / get_preset_stats 不需要该巨型列，默认不加载。
+    cols = [
+        RecommendationRun.run_id,
+        RecommendationRun.preset_id,
+        RecommendationRun.finished_at,
+        RecommendationRun.selected_skills_json,
+    ]
+    if extra_cols:
+        cols = cols + list(extra_cols)
     return db.scalars(
-        select(RecommendationRun).order_by(RecommendationRun.started_at.desc())
+        select(RecommendationRun).options(load_only(*cols)).order_by(RecommendationRun.started_at.desc())
     ).all()
 
 
