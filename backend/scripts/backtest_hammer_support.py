@@ -247,6 +247,7 @@ def _precompute_signals(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]
     ind = data["ind_cache"]
     signals_by_entry: dict[str, list[dict[str, Any]]] = defaultdict(list)
     total = 0
+    year_counts: dict[str, int] = defaultdict(int)
     for code, bars in by_code.items():
         meta = stock_meta.get(code) or {}
         if meta.get("is_st"):
@@ -274,13 +275,16 @@ def _precompute_signals(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]
                 continue
             rng = _f(b.high) - _f(b.low)
             score = (min(_f(b.open), _f(b.close)) - _f(b.low)) / rng if rng > 0 else 0
+            t_date = str(b.trade_date)
             signals_by_entry[str(nb.trade_date)].append({
                 "code": code, "name": meta.get("name", code), "industry": meta.get("industry", "未分类"),
-                "t_date": str(b.trade_date), "entry_date": str(nb.trade_date),
+                "t_date": t_date, "entry_date": str(nb.trade_date),
                 "entry_price": open_p, "score": score,
             })
             total += 1
-    logger.info("预计算信号总数: %d", total)
+            year_counts[t_date[:4]] += 1
+    # 分年信号数：任何「全挤单年」立刻可见（历史 ma/turnover 全 NULL 曾把 922 信号压到 30 且全在 2026）
+    logger.info("预计算信号总数: %d  分年: %s", total, dict(sorted(year_counts.items())))
     return signals_by_entry
 
 
