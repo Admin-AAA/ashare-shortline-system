@@ -261,13 +261,23 @@ def _llm_delta_effectiveness(records: list[dict]) -> dict:
     ②顶层聚合 score_delta 超单 agent clamp[-18,16]（多 agent 求和未 clamp 的数据完整性）。
 
     参数 records: [{delta: float|None, stance: str|None, label: 'success'|'failed'}]
-    返回 {monotonic_ok, bucket_wr, oppose_ratio, over_clamp_count, notes:[...]}
+    返回 {monotonic_ok, bucket_wr, oppose_ratio, over_clamp_count, stance_delta_conflict, notes:[...]}
     """
     deltas = [(r["delta"], r["label"]) for r in records if r.get("delta") is not None]
     n_with = len(deltas)
     oppose = sum(1 for r in records if str(r.get("stance") or "").lower() == "oppose")
     oppose_ratio = oppose / len(records) if records else 0.0
     over_clamp = sum(1 for r in records if r.get("delta") is not None and (r["delta"] > 16 or r["delta"] < -18))
+    # stance↔delta 矛盾：LLM 判 oppose/veto（反对）却仍给正 delta（推分过线）。
+    # 根因（第 9 轮实证 rec_20260707_005_dc16）：score_delta=clamp(raw_score-50) 只看 score
+    # 不看 stance，LLM 内部不一致时（stance=oppose/action=不做 但 score=60）→ delta=+10，
+    # 反对票被推过 score_line。这是逻辑缺陷但低频（2/292）且去混杂后 delta 单调有效——
+    # 不贸然改评分语义（可能错杀 LLM 识别出的隐藏强票），先显式化供前瞻样本积累后决策。
+    stance_delta_conflict = sum(
+        1 for r in records
+        if str(r.get("stance") or "").lower() in ("oppose", "veto")
+        and r.get("delta") is not None and r["delta"] > 0
+    )
 
     def _wr(group):
         return round(sum(1 for _, l in group if l == "success") / len(group) * 100, 1) if group else None
@@ -286,8 +296,16 @@ def _llm_delta_effectiveness(records: list[dict]) -> dict:
         notes.append(f"有 delta 样本过少(n={n_with})，单调性判断为噪声")
     if oppose_ratio < 0.05 and len(records) >= 30:
         notes.append(
-            f"oppose stance 占比 {oppose_ratio:.0%}<5%（n={len(records)}），"
-            f"LLM 几乎从不反对，风险识别形同虚设——T9 prompt 应校准 oppose 触发标准"
+            f"oppose stance 占比 {oppose_ratio:.0%}<5%（n={len(records)}）。"
+            f"主因是 selection bias：LLM 只审查已过 score_line 的高分候选（min54/中位76），"
+            f"本就应多 support——SKILL.md 已有明确 oppose 触发标准（技术面偏空≥2维度差），"
+            f"非 prompt 缺陷，勿误判「风险识别虚设」去改 prompt"
+        )
+    if stance_delta_conflict > 0:
+        notes.append(
+            f"{stance_delta_conflict} 条 stance=oppose/veto 却仍给正 delta：score_delta=clamp(score-50) "
+            f"只看 score 不看 stance，LLM 内部不一致（反对但 score 及格）→ 反对票被推过线。"
+            f"低频但属逻辑缺陷，前瞻样本确认无害前不改评分语义（防错杀 LLM 识别的隐藏强票）"
         )
     if over_clamp > 0:
         notes.append(
@@ -301,6 +319,7 @@ def _llm_delta_effectiveness(records: list[dict]) -> dict:
         "bucket_wr": buckets,
         "oppose_ratio": round(oppose_ratio, 4),
         "over_clamp_count": over_clamp,
+        "stance_delta_conflict": stance_delta_conflict,
         "notes": notes,
     }
 
@@ -397,7 +416,8 @@ def check_llm_delta_effectiveness(db) -> None:
     b = result["bucket_wr"]
     print(
         f'  LLM delta 有效性（去混杂·按档胜率）: 0-15={b["0-15"]}% 15-30={b["15-30"]}% '
-        f'30+={b["30+"]}% | oppose率={result["oppose_ratio"]:.0%} 超clamp={result["over_clamp_count"]}条'
+        f'30+={b["30+"]}% | oppose率={result["oppose_ratio"]:.0%} 超clamp={result["over_clamp_count"]}条 '
+        f'stance↔delta矛盾={result["stance_delta_conflict"]}条'
     )
     for note in result["notes"]:
         print(f'    ⚠️ {note}')

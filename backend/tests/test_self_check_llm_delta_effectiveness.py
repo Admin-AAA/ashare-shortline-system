@@ -48,11 +48,40 @@ def test_non_monotonic_flagged_when_large_delta_loses():
 
 
 def test_low_oppose_ratio_flagged():
-    """oppose stance 占比 <5% 且样本足够 → 「几乎从不反对」note。"""
+    """oppose stance 占比 <5% 且样本足够 → selection bias 归因 note（非 prompt 缺陷）。
+
+    第 9 轮修正：LLM 只审查已过 score_line 的高分候选，本就应多 support，oppose 率 0%
+    是 selection bias 的必然，勿误判「风险识别虚设」去改 prompt（SKILL.md 已有 oppose 标准）。
+    """
     recs = [_rec(20, stance="support") for _ in range(40)]  # 0 oppose
     r = self_check._llm_delta_effectiveness(recs)
     assert r["oppose_ratio"] == 0.0
-    assert any("oppose" in n and "反对" in n for n in r["notes"])
+    assert any("selection bias" in n and "非 prompt 缺陷" in n for n in r["notes"])
+
+
+def test_stance_delta_conflict_detected():
+    """stance=oppose/veto 却仍给正 delta → stance_delta_conflict + 逻辑缺陷 note。
+
+    第 9 轮实证 rec_20260707_005_dc16：LLM 判 oppose/action=不做 但 score=60 → delta=+10，
+    反对票被推过 score_line。根因 score_delta=clamp(score-50) 只看 score 不看 stance。
+    """
+    recs = [
+        _rec(10.0, stance="oppose", label="failed"),   # 矛盾：反对却正 delta
+        _rec(-5.0, stance="oppose", label="failed"),   # 不矛盾：反对且负 delta
+        _rec(12.0, stance="veto", label="failed"),     # 矛盾：veto 却正 delta
+        _rec(20.0, stance="support", label="success"), # 正常：support 正 delta
+    ]
+    r = self_check._llm_delta_effectiveness(recs)
+    assert r["stance_delta_conflict"] == 2  # oppose+10 和 veto+12
+    assert any("stance=oppose" in n and "正 delta" in n for n in r["notes"])
+
+
+def test_stance_delta_conflict_not_triggered_for_negative_delta():
+    """oppose 给负 delta（一致）→ 不计矛盾。"""
+    recs = [_rec(-8.0, stance="oppose", label="failed"), _rec(20.0, stance="support")]
+    r = self_check._llm_delta_effectiveness(recs)
+    assert r["stance_delta_conflict"] == 0
+    assert not any("stance=oppose/veto 却仍给正 delta" in n for n in r["notes"])
 
 
 def test_normal_oppose_ratio_not_flagged():
