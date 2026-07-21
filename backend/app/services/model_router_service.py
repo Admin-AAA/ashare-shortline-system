@@ -62,6 +62,10 @@ class ResolvedModelRoute:
     priority: int
     key_source: str
     valid: bool = True
+    # 路由级推理参数覆盖（None 表示跟随全局默认）
+    max_tokens: int | None = None
+    temperature: float | None = None
+    timeout_seconds: float | None = None
 
     @property
     def circuit_key(self) -> str:
@@ -201,7 +205,7 @@ async def test_model_route(db: Session, payload: dict) -> dict:
                     {"role": "system", "content": "你是模型连通性测试助手，只返回 JSON。"},
                     {"role": "user", "content": '请返回 {"ok": true, "message": "pong"}'},
                 ],
-                temperature=0,
+                temperature=route.temperature if route.temperature is not None else 0,
                 max_tokens=256,
                 response_format={"type": "json_object"},
             )
@@ -287,6 +291,9 @@ def get_active_model_routes() -> list[ResolvedModelRoute]:
                     priority=int(row.priority or 1),
                     key_source="custom" if has_key else "missing",
                     valid=valid,
+                    max_tokens=row.max_tokens,
+                    temperature=row.temperature,
+                    timeout_seconds=row.timeout_seconds,
                 )
             )
         return [r for r in active if r.valid]
@@ -369,6 +376,17 @@ def _apply_route_payload(route: ModelRouteConfig, payload: dict, *, creating: bo
                 route.api_key = api_key
 
 
+def _coalesce_num(payload: dict, existing, key: str, caster):
+    """表单本次填写的值优先；未填则用路由已存值；空串视为未填。"""
+    if key in payload:
+        val = payload.get(key)
+        if val is not None and val != "":
+            return caster(val)
+    if existing is not None:
+        return getattr(existing, key, None)
+    return None
+
+
 def _resolve_route_for_test(db: Session, payload: dict, settings) -> ResolvedModelRoute:
     route_id = str(payload.get("route_id") or "").strip()
     existing = db.get(ModelRouteConfig, route_id) if route_id else None
@@ -390,6 +408,9 @@ def _resolve_route_for_test(db: Session, payload: dict, settings) -> ResolvedMod
         api_key=api_key,
         priority=int(existing.priority if existing and existing.priority else 1),
         key_source=key_source,
+        max_tokens=_coalesce_num(payload, existing, "max_tokens", int),
+        temperature=_coalesce_num(payload, existing, "temperature", float),
+        timeout_seconds=_coalesce_num(payload, existing, "timeout_seconds", float),
     )
 
 

@@ -536,9 +536,9 @@ def create_skill_agent(skill: StrategySkill, session_id: str):
         id=route.model,
         api_key=route.api_key,
         base_url=route.base_url,
-        temperature=settings.agent_temperature,
-        max_tokens=settings.agent_max_tokens,
-        timeout=settings.agent_skill_timeout_seconds,
+        temperature=route.temperature if route.temperature is not None else settings.agent_temperature,
+        max_tokens=route.max_tokens if route.max_tokens is not None else settings.agent_max_tokens,
+        timeout=route.timeout_seconds if route.timeout_seconds is not None else settings.agent_skill_timeout_seconds,
     )
 
     agent = Agent(
@@ -930,10 +930,11 @@ async def run_skill_agent_direct(
         last_status = "error"
         last_latency_ms = 0.0
 
+        route_timeout = route.timeout_seconds if route.timeout_seconds is not None else settings.agent_skill_timeout_seconds
         async with AsyncOpenAI(
             api_key=route.api_key,
             base_url=route.base_url,
-            timeout=settings.agent_skill_timeout_seconds * 3,
+            timeout=route_timeout * 3,
         ) as client:
             for attempt in range(max_retries + 1):
                 t0 = asyncio.get_event_loop().time()
@@ -944,8 +945,8 @@ async def run_skill_agent_direct(
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_prompt},
                         ],
-                        temperature=settings.agent_temperature,
-                        max_tokens=settings.agent_max_tokens,
+                        temperature=route.temperature if route.temperature is not None else settings.agent_temperature,
+                        max_tokens=route.max_tokens if route.max_tokens is not None else settings.agent_max_tokens,
                         response_format={"type": "json_object"},
                         extra_body={"prompt_cache_key": (skill.skill_hash or skill.skill_id)[:64]},
                     )
