@@ -16,11 +16,13 @@ from app.models.tables import DailyKbar
 from app.services.outcome_simulation import (
     DEFAULT_STOP_LOSS_PCT,
     MAX_STOP_LOSS_PCT,
+    _bar_tradeable,
     _resolve_entry,
     _resolve_exit,
     _resolve_stop_loss_price,
     _resolve_take_profit_price,
     _simulate_outcome,
+    _static_window_metrics,
 )
 
 
@@ -499,3 +501,137 @@ def test_resolve_take_profit_without_recommend_keeps_old_behavior():
     """不传 recommend_price 时退回旧行为：只做上限裁剪、不按比例重算。"""
     tp = _resolve_take_profit_price(154.21, {"take_profit": 176.60})
     assert tp == 176.60  # 旧实现保留原值（入场价偏离时仍是绝对价，不重算）
+
+
+def test_bar_tradeable_rejects_zero_ohlc_placeholder():
+    """停牌占位行（OHLC 全 0）不可交易；任一字段为 0 即判定为占位。"""
+    assert _bar_tradeable(_bar(trade_date="d1", open=10, high=11, low=9, close=10, pct_chg=0)) is True
+    # backfill 对停牌日写入 OHLC=0 占位行
+    assert _bar_tradeable(_bar(trade_date="d2", open=0, high=0, low=0, close=0, pct_chg=0, volume=0, amount=0)) is False
+    # 部分为 0 同样不可信（A股最小价格 >0）
+    assert _bar_tradeable(_bar(trade_date="d3", open=10, high=11, low=0, close=10, pct_chg=0)) is False
+
+
+def test_static_window_metrics_skips_suspended_zero_bars():
+    """停牌占位行（OHLC=0）不参与 max/min_return 统计。
+
+    回归根因：2026-06-15 全市场 1149/5508 停牌占位行 low=0 被当成真实最低点，
+    算出 min_return=-100%（如 002463 沪电股份 entry=135.07，06-15 low=0 → -100%）。
+    修复后停牌 bar 被过滤，min_return 反映真实交易日的回撤。
+    """
+    rec = SimpleNamespace(code="002463", trade_date="2026-06-08", recommend_price=135.07)
+    # 5 个交易日窗口，第 5 日 06-15 停牌（OHLC=0）
+    future_bars = [
+        _bar(trade_date="2026-06-09", open=138.0, high=142.3, low=133.01, close=141.09, pct_chg=2.7),
+        _bar(trade_date="2026-06-10", open=136.0, high=136.99, low=127.22, close=130.6, pct_chg=-7.4),
+        _bar(trade_date="2026-06-11", open=129.07, high=130.82, low=124.22, close=126.91, pct_chg=-2.8),
+        _bar(trade_date="2026-06-12", open=131.66, high=134.6, low=125.0, close=125.2, pct_chg=-1.3),
+        _bar(trade_date="2026-06-15", open=0.0, high=0.0, low=0.0, close=0.0, pct_chg=0.0, volume=0, amount=0),
+    ]
+    m = _static_window_metrics(rec, signal_bar=None, future_bars=future_bars, horizon_days=5)
+    # 修复前：min_return=(0-135.07)/135.07=-100%；修复后：真实最低 124.22 → (124.22-135.07)/135.07
+    assert m["min_return"] > -10.0, f"停牌 low=0 不应污染 min_return，got {m['min_return']}"
+    expected_min = round((124.22 - 135.07) / 135.07 * 100, 2)
+    assert abs(m["min_return"] - expected_min) < 0.01
+    # max_return 也用真实高点 142.3，不被停牌 high=0 拉低
+    expected_max = round((142.3 - 135.07) / 135.07 * 100, 2)
+    assert abs(m["max_return"] - expected_max) < 0.01
+    # max_drawdown 与 min_return 对齐（同口径）
+    assert m["max_drawdown"] == m["min_return"]
+    # close_return 用末日有效收盘（06-15 停牌 → 回退到 06-12 的 125.2）
+    expected_close = round((125.2 - 135.07) / 135.07 * 100, 2)
+    assert abs(m["close_return"] - expected_close) < 0.01
+
+
+def test_static_window_metrics_all_suspended_returns_missed():
+    """窗口内全部停牌（极罕见）不产生 -100% 噪声，按 OUTCOME_MISSED 处理。"""
+    rec = SimpleNamespace(code="000001", trade_date="2026-06-08", recommend_price=10.0)
+    future_bars = [
+        _bar(trade_date="2026-06-09", open=0, high=0, low=0, close=0, pct_chg=0, volume=0, amount=0),
+        _bar(trade_date="2026-06-10", open=0, high=0, low=0, close=0, pct_chg=0, volume=0, amount=0),
+    ]
+    m = _static_window_metrics(rec, signal_bar=None, future_bars=future_bars, horizon_days=2)
+    assert m["min_return"] == 0.0
+    assert m["max_return"] == 0.0
+    assert m["outcome_label_legacy"] == "missed"
+
+
+def test_static_window_metrics_normal_bars_unchanged():
+    """无停牌占位行时行为不变（回归保护：修复不误伤正常窗口）。"""
+    rec = SimpleNamespace(code="000001", trade_date="2026-05-12", recommend_price=11.0)
+    future_bars = [
+        _bar(trade_date="2026-05-13", open=10.9, high=11.2, low=10.8, close=11.0, pct_chg=0.0),
+        _bar(trade_date="2026-05-14", open=11.0, high=11.5, low=10.9, close=11.3, pct_chg=2.7),
+    ]
+    m = _static_window_metrics(rec, signal_bar=None, future_bars=future_bars, horizon_days=2)
+    expected_max = round((11.5 - 11.0) / 11.0 * 100, 2)
+    expected_min = round((10.8 - 11.0) / 11.0 * 100, 2)
+    expected_close = round((11.3 - 11.0) / 11.0 * 100, 2)
+    assert abs(m["max_return"] - expected_max) < 0.01
+    assert abs(m["min_return"] - expected_min) < 0.01
+    assert abs(m["close_return"] - expected_close) < 0.01
+
+
+def test_simulate_outcome_20cm_limit_up_not_misjudged_as_ex_right():
+    """20cm 创业板涨停日 pct_chg≈20% 不被误判为「pct_chg 字段未除权」。
+
+    回归根因（2026-07-22）：300065 海兰信 entry=23.79，07-10 涨停 pct_chg=20.0083%、
+    high=28.79 触及 tp=24.98 → take_profit_hit +4.79%。旧除权检测用固定 `abs(cur_pct)>20`
+    且只认科创板（68 前缀），把创业板（300）当 10cm，致涨停日 pct_chg=20.0083>20 触发
+    pct_chg_unreliable，用 pct_chg 链重算把 +4.79% 覆盖成 -19.28% / failed。
+    修复：limit_pct_for_code 按板块判定（创业/科创 20）+ +2pp 容差覆盖涨停浮点误差。
+    """
+    snapshot_dict = {"ideal_buy": 23.79, "stop_loss": 22.48, "take_profit": 25.36}
+    rec = SimpleNamespace(
+        code="300065",  # 创业板 20cm
+        trade_date="2026-07-08",
+        recommend_price=24.15,
+        feature_snapshot_json=json.dumps(snapshot_dict, ensure_ascii=False),
+    )
+    bars = [
+        _bar(trade_date="2026-07-08", open=22.91, high=24.5, low=22.61, close=24.15, pct_chg=4.36),
+        _bar(trade_date="2026-07-09", open=24.48, high=24.5, low=23.1, close=23.99, pct_chg=-0.66),
+        # 07-10 涨停 20cm：pct_chg=20.0083 略超 20，high=28.79 触及 tp=24.98
+        _bar(trade_date="2026-07-10", open=23.57, high=28.79, low=23.32, close=28.79, pct_chg=20.0083),
+        _bar(trade_date="2026-07-13", open=28.0, high=28.0, low=25.19, close=25.81, pct_chg=-10.35),
+        _bar(trade_date="2026-07-14", open=24.62, high=24.86, low=20.58, close=21.01, pct_chg=-18.6),
+        _bar(trade_date="2026-07-15", open=21.22, high=21.88, low=19.4, close=19.56, pct_chg=-7.21),
+    ]
+    dates = [str(b.trade_date) for b in bars]
+    sim = _simulate_outcome(rec, bars, dates, horizon_days=5)
+    # take_profit 在涨停日 07-10 触及，exit_reason=take_profit_hit，正收益
+    assert sim["exit_reason"] == "take_profit_hit"
+    assert sim["executed_return"] > 0, f"涨停日不应触发除权误判覆盖 take_profit 收益，got {sim['executed_return']}"
+    assert sim["outcome_label"] == "success"
+    # 旧 bug 下 executed_return=-19.28%（pct_chg 链重算），修复后应≈+4.79%
+    assert sim["executed_return"] > 3.0, f"应接近 take_profit 收益 +4.79%，got {sim['executed_return']}"
+
+
+def test_simulate_outcome_real_ex_right_day_still_corrected():
+    """真实除权日（价格跳变>20% 且 pct_chg 正常）仍触发 pct_chg 链重算（修复不误伤除权修正）。
+
+    回归保护：688012 2026-05-29 除权场景（raw -32% → 真实 -5.47%）不被本次修复破坏。
+    构造：科创板除权日 open 跳变 -32% 但 pct_chg 在涨停幅度内（已除权调整）。
+    """
+    snapshot_dict = {"ideal_buy": 10.0, "stop_loss": 9.0, "take_profit": 11.0}
+    rec = SimpleNamespace(
+        code="688012",  # 科创板 20cm
+        trade_date="2026-05-28",
+        recommend_price=10.0,
+        feature_snapshot_json=json.dumps(snapshot_dict, ensure_ascii=False),
+    )
+    bars = [
+        _bar(trade_date="2026-05-28", open=10.0, high=10.2, low=9.8, close=10.0, pct_chg=0.0),
+        # 05-29 除权：open=6.8（跳变 -32%）但 pct_chg=-5.0（已除权调整，在 20cm 涨停幅度内）
+        _bar(trade_date="2026-05-29", open=6.8, high=7.0, low=6.6, close=6.9, pct_chg=-5.0),
+        _bar(trade_date="2026-06-01", open=6.9, high=7.2, low=6.7, close=7.1, pct_chg=2.9),
+        _bar(trade_date="2026-06-02", open=7.1, high=7.3, low=6.9, close=7.0, pct_chg=-1.4),
+        _bar(trade_date="2026-06-03", open=7.0, high=7.1, low=6.8, close=6.9, pct_chg=-1.4),
+    ]
+    dates = [str(b.trade_date) for b in bars]
+    sim = _simulate_outcome(rec, bars, dates, horizon_days=5)
+    # 除权日 price_jump=-32% > 20 且 pct_chg=-5 < 20*0.6=12 → has_ex_right_day=True，
+    # 触发 pct_chg 链重算（不被本次 +2pp 容差修复破坏）
+    assert sim is not None
+    # 除权修正后 executed_return 应基于 pct_chg 链（非价格跳变的虚假 -32%）
+    assert sim["executed_return"] > -32.0, "除权日价格跳变不应造成虚假 -32% 收益"

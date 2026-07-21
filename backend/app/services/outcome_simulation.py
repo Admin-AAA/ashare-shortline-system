@@ -41,7 +41,7 @@ import json
 from bisect import bisect_left
 from typing import Any
 
-from app.engine.board_rules import is_one_word_limit_down_bar
+from app.engine.board_rules import is_one_word_limit_down_bar, limit_pct_for_code
 from app.models.tables import DailyKbar, Recommendation
 from app.services.execution_constraints import (
     entry_execution_block_reason_from_bar,
@@ -237,8 +237,10 @@ def _simulate_outcome(
     # 用 pct_chg 链重新计算收益。除权日的价格跳变是除权调整，不是真实暴跌。
     # 不依赖 abs(executed_return) > 20 门槛——STOP_LOSS_GAP_CAP 可能已把 return cap 到 -15%，
     # 但除权日的虚假跳空仍需修正（如 688012 2026-05-29 除权：raw -32% → 真实 -5.47%）。
-    is_star = str(rec.code or "").startswith("68")
-    limit_pct = 20 if is_star else 10
+    # 涨跌停幅度按板块判定（创业/科创 20%、北交 30%、主板 10%）——旧实现只认科创板（68 前缀），
+    # 把创业板（300/301）当 10cm，致 300065 这类 20cm 创业板涨停日 pct_chg=20.0% 被误判为
+    # 「pct_chg 字段未除权」，触发 pct_chg 链重算把 take_profit_hit +4.79% 覆盖成 -19.28%。
+    limit_pct = limit_pct_for_code(str(rec.code or ""))
     has_ex_right_day = False
     pct_chg_unreliable = False
     for i in range(1, len(holding_bars)):
@@ -250,8 +252,10 @@ def _simulate_outcome(
             # 价格跳变 > 20% 但 pct_chg 字段 < limit*0.6 → 除权日（pct_chg 已调整，价格序列有跳变）
             if abs(price_jump) > 20 and abs(cur_pct) < limit_pct * 0.6:
                 has_ex_right_day = True
-            # 价格跳变正常但 pct_chg > 20% → pct_chg 字段未除权（数据错误）
-            if abs(cur_pct) > 20 and abs(price_jump) < limit_pct * 0.6:
+            # 价格跳变正常但 pct_chg 远超板块涨停幅度 → pct_chg 字段未除权（数据错误）。
+            # 用 limit_pct + 容差：涨停日 pct_chg 因四舍五入略超 limit_pct（如 20cm 板 20.0083%），
+            # 这是正常涨停而非数据错误；只有 pct_chg 大幅超过涨停幅度（+2pp 容差）才算未除权。
+            if abs(cur_pct) > limit_pct + 2.0 and abs(price_jump) < limit_pct * 0.6:
                 pct_chg_unreliable = True
     max_daily_pct = max(abs(_as_float(bar.pct_chg)) for bar in holding_bars) if holding_bars else 0
     if has_ex_right_day or pct_chg_unreliable or (abs(executed_return) > 20 and max_daily_pct < limit_pct * 0.6):
@@ -296,6 +300,20 @@ def _simulate_outcome(
     }
 
 
+def _bar_tradeable(bar: DailyKbar) -> bool:
+    """bar 是否为真实交易日（OHLC 均 > 0）。
+
+    backfill 对停牌日写入 OHLC=0 的占位行，这类 bar 不参与 max/min_return 统计——
+    low=0 会被当成真实最低点，算出 min_return=-100% 的虚假最大回撤。
+    """
+    return (
+        _as_float(getattr(bar, "open", 0)) > 0
+        and _as_float(getattr(bar, "high", 0)) > 0
+        and _as_float(getattr(bar, "low", 0)) > 0
+        and _as_float(getattr(bar, "close", 0)) > 0
+    )
+
+
 def _static_window_metrics(
     rec: Recommendation,
     signal_bar: DailyKbar | None,
@@ -315,9 +333,24 @@ def _static_window_metrics(
     baseline_entry = _as_float(rec.recommend_price) or _as_float(signal_bar.close if signal_bar else None) or _as_float(window[0].open) or _as_float(window[0].close)
     if baseline_entry <= 0:
         baseline_entry = max(0.01, _as_float(window[0].close))
-    returns = [((_as_float(bar.high) - baseline_entry) / baseline_entry) * 100 for bar in window]
-    lows = [((_as_float(bar.low) - baseline_entry) / baseline_entry) * 100 for bar in window]
-    close_return = ((_as_float(window[-1].close) - baseline_entry) / baseline_entry) * 100
+    # 过滤停牌占位行（OHLC 全 0）：backfill 对停牌日写入 0 占位行，若纳入 max/min_return
+    # 会把 low=0 当真实最低点 → min_return=-100%（2026-06-15 全市场 1149/5508 停牌占位实证）。
+    # 入场/出场逻辑已由 no_liquidity_reason_from_bar 拦截停牌日，此处统计口径需对齐。
+    tradeable = [bar for bar in window if _bar_tradeable(bar)]
+    if not tradeable:
+        # 窗口内全部停牌（极罕见）：max/min/close 都按 0 计，避免 -100% 噪声
+        return {
+            "max_return": 0.0,
+            "min_return": 0.0,
+            "close_return": 0.0,
+            "achievable_return": 0.0,
+            "max_drawdown": 0.0,
+            "outcome_label_legacy": OUTCOME_MISSED,
+        }
+    returns = [((_as_float(bar.high) - baseline_entry) / baseline_entry) * 100 for bar in tradeable]
+    lows = [((_as_float(bar.low) - baseline_entry) / baseline_entry) * 100 for bar in tradeable]
+    # 期末收盘用窗口内最后一个有效交易日（末日停牌则回退到最近有效收盘）
+    close_return = ((_as_float(tradeable[-1].close) - baseline_entry) / baseline_entry) * 100
     max_return = max(returns) if returns else 0.0
     min_return = min(lows) if lows else 0.0
     achievable_return = (close_return + min(max_return, close_return * 1.5)) / 2.0
