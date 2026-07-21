@@ -291,6 +291,20 @@ export type LlmReviewHealth = {
   checked_at: string | null;
 };
 
+/** 时态一致性检查结果（/api/admin/temporal-consistency）：验证推荐/回测数据无时间穿越。 */
+export type TemporalConsistency = {
+  status: "no_data" | "completed" | string;
+  run_count?: number;
+  recommendation_count?: number;
+  check_summary?: {
+    total?: number;
+    passed?: number;
+    warnings?: number;
+    failed?: number;
+  };
+  violations?: Array<Record<string, unknown>>;
+};
+
 export type RiskRadar = {
   high: number;
   medium: number;

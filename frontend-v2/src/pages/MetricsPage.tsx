@@ -6,14 +6,16 @@ import type {
   AlphaDecayResponse,
   DateRangeMeta,
   FilterEffectiveness,
+  LlmReviewHealth,
   MetricsOverview,
   PrecisionAtKRow,
   ScoreLineStatsRow,
   StrategyStatsRow,
   SetupStatsRow,
+  TemporalConsistency,
 } from "../types";
 import type { ReactNode } from "react";
-import { PageSkeleton, ErrorPage, EmptyState } from "../components/StateViews";
+import { PageSkeleton, ErrorPage, EmptyState, CardSkeleton } from "../components/StateViews";
 import { SkillsCatalogPanel } from "../components/SkillsCatalogPanel";
 import { Panel } from "../components/Panel";
 import { LineChart, Info } from "lucide-react";
@@ -125,6 +127,7 @@ export function MetricsPage() {
         dateRange={dateRange}
       />
       <OverviewKpiPanel data={overview} />
+      <SystemHealthPanel />
       <div
         style={{
           display: "grid",
@@ -164,6 +167,209 @@ function MetricCard({
     >
       {children}
     </Panel>
+  );
+}
+
+/** 把 ISO 时间转成「X 分钟/小时/天前」，null/无效返回「从未」。 */
+function relTime(iso: string | null | undefined): string {
+  if (!iso) return "从未";
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return "未知";
+  const diffMs = Date.now() - t;
+  const min = Math.floor(diffMs / 60000);
+  if (min < 1) return "刚刚";
+  if (min < 60) return `${min} 分钟前`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr} 小时前`;
+  const day = Math.floor(hr / 24);
+  return `${day} 天前`;
+}
+
+/** 系统可信度面板 —— 把两个「后端有数据、前端从未展示」的诊断端点变成一屏可见：
+ *  - LLM 审查层新鲜度（review-health）：AI 审查层是否仍在真实工作（key 过期 / provider 故障会静默停摆，推荐缺 LLM delta 而用户无感知）
+ *  - 时态一致性（temporal-consistency）：推荐 / 回测数据是否存在时间穿越（未来数据泄漏）
+ * 两个子视图各自独立加载 / 容错：任一失败只塌自己一格，不影响主指标页，也不互相拖累。 */
+function SystemHealthPanel() {
+  const { data: review, loading: lR, error: eR } = useApi<LlmReviewHealth>(
+    () => api.llmReviewHealth(),
+    [],
+  );
+  const { data: temporal, loading: lT, error: eT } = useApi<TemporalConsistency>(
+    () => api.temporalConsistency(),
+    [],
+  );
+
+  return (
+    <MetricCard
+      kicker="系统可信度"
+      title="审查层 & 数据一致性"
+      actions={
+        <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+          北极星 B/C 可观测
+        </span>
+      }
+    >
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          gap: "var(--space-4)",
+        }}
+      >
+        <ReviewHealthBlock data={review} loading={lR} error={eR} />
+        <TemporalConsistencyBlock data={temporal} loading={lT} error={eT} />
+      </div>
+    </MetricCard>
+  );
+}
+
+/** 审查层新鲜度块：状态徽章 + 最近审查时间 + 24h 次数 + 模型。 */
+function ReviewHealthBlock({
+  data,
+  loading,
+  error,
+}: {
+  data: LlmReviewHealth | null | undefined;
+  loading: boolean;
+  error: unknown;
+}) {
+  if (loading) return <CardSkeleton count={3} />;
+  if (error) return <HealthErrorNote msg="审查层状态获取失败" />;
+  if (!data) return null;
+
+  const meta =
+    data.status === "ok"
+      ? { label: "正常", color: "var(--market-down)" }
+      : data.status === "stale"
+        ? { label: "陈旧", color: "var(--warning)" }
+        : { label: "从未", color: "var(--market-up)" };
+
+  return (
+    <div
+      style={{
+        background: "var(--surface-1)",
+        border: "1px solid var(--line)",
+        borderRadius: "var(--radius-sm, 6px)",
+        padding: "var(--space-3)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: "var(--space-3)" }}>
+        <span
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            background: meta.color,
+            boxShadow: `0 0 0 3px color-mix(in srgb, ${meta.color} 18%, transparent)`,
+          }}
+        />
+        <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: meta.color }}>AI 审查层 · {meta.label}</span>
+      </div>
+      <div style={{ display: "grid", gap: "var(--space-2)" }}>
+        <HealthRow label="最近审查" value={relTime(data.last_review_at)} />
+        <HealthRow label="近 24h 次数" value={String(data.recent_count_24h)} />
+        <HealthRow label="缓存总数" value={String(data.total_entries)} />
+        <HealthRow label="模型" value={data.model ?? "—"} />
+      </div>
+    </div>
+  );
+}
+
+/** 时态一致性块：状态 + 通过/警告/失败计数 + 违规数。 */
+function TemporalConsistencyBlock({
+  data,
+  loading,
+  error,
+}: {
+  data: TemporalConsistency | null | undefined;
+  loading: boolean;
+  error: unknown;
+}) {
+  if (loading) return <CardSkeleton count={3} />;
+  if (error) return <HealthErrorNote msg="一致性检查获取失败" />;
+  if (!data) return null;
+
+  const summary = data.check_summary ?? {};
+  const failed = summary.failed ?? 0;
+  const warnings = summary.warnings ?? 0;
+  const passed = summary.passed ?? 0;
+
+  const ok = data.status === "completed" && failed === 0;
+  const meta = ok
+    ? { label: "一致", color: "var(--market-down)" }
+    : data.status === "no_data"
+      ? { label: "无数据", color: "var(--text-muted)" }
+      : { label: failed > 0 ? "违规" : "告警", color: failed > 0 ? "var(--market-up)" : "var(--warning)" };
+
+  return (
+    <div
+      style={{
+        background: "var(--surface-1)",
+        border: "1px solid var(--line)",
+        borderRadius: "var(--radius-sm, 6px)",
+        padding: "var(--space-3)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: "var(--space-3)" }}>
+        <span
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            background: meta.color,
+            boxShadow: `0 0 0 3px color-mix(in srgb, ${meta.color} 18%, transparent)`,
+          }}
+        />
+        <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: meta.color }}>时态一致性 · {meta.label}</span>
+      </div>
+      <div style={{ display: "grid", gap: "var(--space-2)" }}>
+        <HealthRow label="检查样本" value={`${data.recommendation_count ?? 0} 笔 / ${data.run_count ?? 0} run`} />
+        <HealthRow label="通过 / 告警 / 失败" value={`${passed} / ${warnings} / ${failed}`} />
+        <HealthRow
+          label="未来引用告警"
+          value={String(warnings)}
+          color={warnings > 0 ? "var(--warning)" : undefined}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** 单条指标：左标签右等宽数字（与全局「数字右对齐 + 等宽」一致）。 */
+function HealthRow({ label, value, color }: { label: string; value: string; color?: string }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "var(--space-3)" }}>
+      <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{label}</span>
+      <span
+        style={{
+          fontFamily: "var(--font-mono, monospace)",
+          fontSize: "var(--text-sm)",
+          fontWeight: 600,
+          color: color ?? "var(--ink)",
+          textAlign: "right",
+        }}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+/** 子块加载/获取失败时的内联降级提示（不依赖整页 ErrorPage）。 */
+function HealthErrorNote({ msg }: { msg: string }) {
+  return (
+    <div
+      style={{
+        background: "var(--surface-1)",
+        border: "1px solid var(--line)",
+        borderRadius: "var(--radius-sm, 6px)",
+        padding: "var(--space-3)",
+        fontSize: "var(--text-xs)",
+        color: "var(--text-muted)",
+      }}
+    >
+      {msg}
+    </div>
   );
 }
 

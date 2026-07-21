@@ -16,6 +16,7 @@ import type {
   OutcomeSummary,
   WinRateSummary,
   LlmReviewHealth,
+  TemporalConsistency,
   ReplayAnalysisResult,
   DataSourceHealthRow,
   ModelRoute,
@@ -392,7 +393,7 @@ export const api = {
   dataHealthRemediationStatus: () =>
     request<{ task_run: ScheduledTaskRun | null }>("/api/admin/data-health/remediate/status"),
   temporalConsistency: (options?: RequestOptions) =>
-    request<Record<string, unknown>>("/api/admin/temporal-consistency", undefined, options),
+    request<TemporalConsistency>("/api/admin/temporal-consistency", undefined, options),
   previewMinuteGate: (payload: { start_date: string; end_date: string; strategy_id: string }) =>
     request<MinutePrepResult>("/api/runs/backtest", json("POST", { ...payload, action: "preview_minute_gate" }), { timeoutMs: 120_000 }),
   remediateMinuteGaps: (payload: { start_date: string; end_date: string; strategy_id: string }) =>
