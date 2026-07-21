@@ -41,6 +41,7 @@ export function PoolPage() {
   const [presetFilter, setPresetFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<RunFilter>("all");
   const [expandedRuns, setExpandedRuns] = useState<Set<string>>(new Set());
+  const [experimentsOpen, setExperimentsOpen] = useState(false);
   const initializedDate = useRef("");
   const { data: runs, loading, error, refetch } = useApi<RunSummary[]>(() => api.runs(100), []);
 
@@ -66,6 +67,10 @@ export function PoolPage() {
     if (statusFilter !== "all" && describePoolRun(run).kind !== statusFilter) return false;
     return true;
   });
+  // 曝光补跑（experiment）是内部补样机制（不进记录中心），与正式（formal）推荐混排会把
+  // 「今天有没有正式推荐」淹没。拆分：formal 逐个展示，experiment 合并折叠进一张分组卡。
+  const formalRuns = filteredRuns.filter((run) => run.run_mode !== "experiment");
+  const experimentRuns = filteredRuns.filter((run) => run.run_mode === "experiment");
   const summary = summarizePoolRuns(dayRuns);
   const dateIndex = availableDates.indexOf(effectiveDate);
   const olderDate = dateIndex >= 0 ? availableDates[dateIndex + 1] : undefined;
@@ -145,14 +150,44 @@ export function PoolPage() {
           </div>
         </div>
       ) : (
-        filteredRuns.map((run) => (
-          <RunDrawer
-            key={run.run_id}
-            run={run}
-            open={expandedRuns.has(run.run_id)}
-            onToggle={() => toggleRun(run.run_id)}
-          />
-        ))
+        <>
+          {formalRuns.map((run) => (
+            <RunDrawer
+              key={run.run_id}
+              run={run}
+              open={expandedRuns.has(run.run_id)}
+              onToggle={() => toggleRun(run.run_id)}
+            />
+          ))}
+          {experimentRuns.length > 0 && (
+            <div className="panel" style={{ padding: "var(--space-3) var(--space-4)" }}>
+              <button
+                onClick={() => setExperimentsOpen((o) => !o)}
+                style={{
+                  display: "flex", alignItems: "center", gap: "var(--space-2)", width: "100%",
+                  background: "transparent", border: "none", cursor: "pointer", padding: 0, textAlign: "left",
+                }}
+              >
+                {experimentsOpen ? <ChevronDown size={14} className="text-muted" /> : <ChevronRight size={14} className="text-muted" />}
+                <span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }}>
+                  曝光补跑 · {experimentRuns.length} 次（内部补样，不产生正式推荐）
+                </span>
+              </button>
+              {experimentsOpen && (
+                <div style={{ marginTop: "var(--space-3)", display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
+                  {experimentRuns.map((run) => (
+                    <RunDrawer
+                      key={run.run_id}
+                      run={run}
+                      open={expandedRuns.has(run.run_id)}
+                      onToggle={() => toggleRun(run.run_id)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
