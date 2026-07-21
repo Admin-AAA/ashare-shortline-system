@@ -1836,10 +1836,14 @@ def _is_20cm_code(code: str) -> bool:
 def _compute_d_board_breakdown(rows: list) -> dict:
     """纯函数：按板块(20cm 创业板/科创板 vs 10cm 主板/中小板)拆分 D 项。
 
-    返回 {board: {n, win_rate, max_loss, avg}}（无样本为 None）。
+    返回 {board: {n, win_rate, max_loss, avg, net_pl, net_avg}}（无样本为 None）。
+    net_pl/net_avg 复用 _compute_d_cost 的精确口径（total P/L=Σ赢/Σ|亏|，扣 0.07%/笔），
+    使 D 项盈亏比退化可按板块分解——定位「赢家变小」是全局还是局部(regime 漂移)，
+    避免把健康的 20cm 分段误判为退化源而过拟合 penalize。
+
     防过拟合护栏（数据驱动结论，第169轮 T3 实证）：
-    若 20cm 是胜率最高分段，后续 self-improve 轮次**不得**对 20cm 加风险闸门/降权/
-    缩小 universe——会砍掉系统最强分段、损害整体 D 项胜率。最大亏损在两类板块均
+    若 20cm 是胜率/盈亏比最高分段，后续 self-improve 轮次**不得**对 20cm 加风险闸门/
+    降权/缩小 universe——会砍掉系统最强分段、损害整体 D 项胜率。最大亏损在两类板块均
     为止损地板(~-5.7%)，并非「20cm 跳空驱动」，故板块不是 maxloss 的归因因子。
     """
     out: dict = {}
@@ -1851,11 +1855,19 @@ def _compute_d_board_breakdown(rows: list) -> dict:
             continue
         wins = sum(1 for r in grp if r[2] == "success")
         rets = [float(r[3]) for r in grp if r[3] is not None]
+        net = [x - ADDITIONAL_COST_PCT for x in rets]
+        gp = sum(x for x in rets if x > 0)
+        gl = abs(sum(x for x in rets if x < 0))
+        np_ = sum(x for x in net if x > 0)
+        nl = abs(sum(x for x in net if x < 0))
+        net_pl = round(np_ / nl, 2) if nl > 0 else 999.0
         out[board] = {
             "n": n,
             "win_rate": round(wins * 100 / n, 1),
             "max_loss": round(min(rets), 2) if rets else 0.0,
             "avg": round(sum(rets) / n, 2),
+            "net_pl": net_pl,
+            "net_avg": round(sum(net) / n, 2),
         }
     return out
 
@@ -1872,7 +1884,15 @@ def _fmt_d_board(tag: str, bd: dict) -> None:
             print(f'  {tag}[{_BOARD_LABEL[board]}]: 样本不足')
             continue
         print(f'  {tag}[{_BOARD_LABEL[board]}]: 胜率 {m["win_rate"]}% (n={m["n"]}) '
-              f'| 最大亏损 {m["max_loss"]}% | 平均收益 {m["avg"]}%')
+              f'| 最大亏损 {m["max_loss"]}% | 平均收益 {m["avg"]}% '
+              f'| 净盈亏比 {m["net_pl"]} | 净均收益 {m["net_avg"]}%')
+    # 防过拟合护栏：D 项盈亏比退化若集中在 10cm、20cm 仍健康，
+    # 后续轮次禁止对 20cm 加闸门/降权（会误伤强分段，把 regime 漂移当全局退化刷数字）。
+    c20, c10 = bd.get("20cm"), bd.get("10cm")
+    if (c20 and c10 and c20["net_pl"] >= 2.0 and c10["net_pl"] < 1.5
+            and c20["net_pl"] > c10["net_pl"] * 1.2):
+        print(f'  ⚠️ 护栏: 净盈亏比退化集中在 10cm({c10["net_pl"]})，20cm 健康({c20["net_pl"]})'
+              f'→ 禁止对 20cm 加风险闸门/降权/缩小 universe（会误伤强分段，过拟合）')
 
 
 def _rsi_pollution_split(rows: list) -> tuple[float, float, int, int] | None:

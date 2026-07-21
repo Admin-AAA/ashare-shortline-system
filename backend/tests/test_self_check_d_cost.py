@@ -117,3 +117,30 @@ def test_board_guardrail_strongest_segment():
     """护栏核心断言：20cm 是胜率最高分段（非风险源）→ 后续轮次不得对其降权/加闸门。"""
     bd = self_check._compute_d_board_breakdown(_BOARD_ROWS)
     assert bd["20cm"]["win_rate"] > bd["10cm"]["win_rate"]
+
+
+def test_board_breakdown_net_pl():
+    """板块拆分须暴露净盈亏比(同 _compute_d_cost 口径)，使 D 项盈亏比退化可按板块定位。
+
+    20cm: 5.0/4.0 胜 + (-5.69) 亏 → Σ赢=9.0/Σ亏=5.69，净=(4.93+3.93)/(5.69+0.07)=8.86/5.76≈1.54
+    10cm: 3.0 胜 + (-5.88)/(-5.0) 亏 → Σ赢=3.0/Σ亏=10.88，净=(3.0-0.07)/(5.88+5.0+0.14)=2.93/11.02≈0.27
+    """
+    bd = self_check._compute_d_board_breakdown(_BOARD_ROWS)
+    c20, c10 = bd["20cm"], bd["10cm"]
+    assert c20 is not None and c10 is not None
+    assert "net_pl" in c20 and "net_avg" in c20
+    assert "net_pl" in c10 and "net_avg" in c10
+    assert c20["net_pl"] == 1.54
+    assert c20["net_avg"] == 1.03
+    assert c10["net_pl"] == 0.27
+    assert c10["net_avg"] == -2.70
+    # 20cm 净盈亏比必须 > 10cm（护栏前置条件：强分段不能被误判为退化源）
+    assert c20["net_pl"] > c10["net_pl"]
+
+
+def test_board_breakdown_missing_board_net_pl_is_none_safe():
+    """无样本的板块返回 None，护栏/格式化可安全判空，net_pl 访问不报错。"""
+    only_10cm = [r for r in _BOARD_ROWS if not r[0].startswith(("300", "301", "688", "689"))]
+    bd = self_check._compute_d_board_breakdown(only_10cm)
+    assert bd["20cm"] is None
+    assert bd["10cm"]["net_pl"] == 0.27  # 仅 10cm 样本，计算不受影响
