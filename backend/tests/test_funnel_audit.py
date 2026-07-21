@@ -7,7 +7,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from diagnose_funnel_audit import (  # noqa: E402
     NOMINAL_FLOOR,
+    T1_NEAR_FLOOR_LOW,
+    _bucketize,
     classify_zero_run,
+    extract_blocked_candidates,
     extract_effective_line,
     extract_near_misses,
     extract_stages,
@@ -117,3 +120,69 @@ def test_parse_funnel_accepts_json_string():
     rf = parse_funnel("run_y", "2026-07-17", 4950, 0, json.dumps(audit))
     assert rf.classification == "gate_misblock_suspect"
     assert rf.best_final_score == 83.65
+
+
+def test_extract_blocked_candidates_returns_all_score_line_rows():
+    """被拦候选提取不截断（与 near_misses 的 top_k 限制对比），供 T+1 反事实统计。"""
+    rows = [
+        {"code": "A", "name": "a", "final_stage": "score_line",
+         "score_line": {"final_score": 71.88, "effective_score_line": 95.55, "score_gap": -23.67}},
+        {"code": "B", "name": "b", "final_stage": "score_line",
+         "score_line": {"final_score": 65.10, "effective_score_line": 89.55, "score_gap": -24.45}},
+        {"code": "C", "name": "c", "final_stage": "score_line",
+         "score_line": {"final_score": 54.43, "effective_score_line": 64.0, "score_gap": -9.57}},
+        {"code": "SKIP", "name": "非分数线阶段", "final_stage": "skill_gate",
+         "score_line": {"final_score": 40.0}},
+    ]
+    audit = _audit(71.88, 95.55, rows=rows)
+    blocked = extract_blocked_candidates(audit)
+    # 全部 score_line 阶段候选（3 个），按 final_score 降序，不含 skill_gate 阶段
+    assert [c.code for c in blocked] == ["A", "B", "C"]
+    assert blocked[0].final_score == 71.88
+
+
+def test_extract_blocked_candidates_fallback_parses_final_reason():
+    """score_line 子结构缺 final_score 时，从 final_reason 正则兜底解析。"""
+    rows = [
+        {"code": "X", "name": "x", "final_stage": "score_line",
+         "score_line": {}, "final_reason": "最终分 70.50 低于有效线 85.00"},
+    ]
+    audit = _audit(70.50, 85.00, rows=rows)
+    blocked = extract_blocked_candidates(audit)
+    assert len(blocked) == 1
+    assert blocked[0].final_score == 70.50
+    assert blocked[0].effective_line == 85.00
+
+
+def test_bucketize_empty_returns_zero_bucket():
+    b = _bucketize("x", [])
+    assert b.n == 0 and b.wins == 0 and b.avg == 0.0 and b.pl == 0.0
+
+
+def test_bucketize_win_rate_avg_pl():
+    # final_score 不参与分桶计算（调用方已分好），只校验 WR/avg/PL 统计
+    subset = [(70.0, 2.0), (71.0, -1.0), (69.0, 3.0)]  # 2 win 1 loss
+    b = _bucketize("near", subset)
+    assert b.n == 3
+    assert b.wins == 2
+    assert abs(b.avg - (4.0 / 3)) < 1e-6
+    # wins=2.0+3.0=5.0, losses=1.0 → PL=5.0
+    assert abs(b.pl - 5.0) < 1e-6
+
+
+def test_bucketize_all_wins_pl_inf():
+    subset = [(72.0, 1.5), (72.0, 2.5)]
+    b = _bucketize("over", subset)
+    assert b.n == 2 and b.wins == 2
+    assert b.pl == float("inf")  # 无亏损样本
+
+
+def test_t1_bucket_boundary_floor_plus_includes_floor():
+    """at_floor_plus 桶边界：final==NOMINAL_FLOOR(72) 归入 at_floor_plus，不归 near_floor。"""
+    at_floor = [(NOMINAL_FLOOR, 1.0)]
+    near = [(NOMINAL_FLOOR - 0.01, 1.0)]
+    bf = _bucketize("at_floor_plus", at_floor)
+    bn = _bucketize("near", near)
+    assert bf.n == 1 and bn.n == 1
+    # 验证边界常量自洽：near_floor 上界 == NOMINAL_FLOOR
+    assert T1_NEAR_FLOOR_LOW == NOMINAL_FLOOR - 4.0

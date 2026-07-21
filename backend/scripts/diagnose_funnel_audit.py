@@ -147,6 +147,44 @@ def extract_near_misses(audit: dict, top_k: int = 3) -> list[NearMiss]:
     return cands[:top_k]
 
 
+def extract_blocked_candidates(audit: dict) -> list[NearMiss]:
+    """取 final_stage=='score_line' 的全部被拦候选（不限 top_k），供 T+1 反事实用。
+
+    与 extract_near_misses 同源数据，但不截断、不要求 final_score 非空——被 score_line
+    拦下的候选一定有 final_score（否则不会进 score_line 阶段），此处保留全部以做反事实统计。
+    """
+    rows = audit.get("rows", []) or []
+    cands: list[NearMiss] = []
+    for row in rows:
+        if row.get("final_stage") != "score_line":
+            continue
+        sl = row.get("score_line") or {}
+        fs = sl.get("final_score")
+        line = sl.get("effective_score_line")
+        if fs is None:
+            # 兜底从 final_reason 解析（部分 run 的 score_line 子结构未落 final_score）
+            m = _SCORE_LINE_RE.search(row.get("final_reason", "") or "")
+            if not m:
+                continue
+            fs = float(m.group(1))
+            line = float(m.group(2)) if line is None else float(line)
+        rg = row.get("rule_gate") or {}
+        cands.append(
+            NearMiss(
+                code=row.get("code", ""),
+                name=row.get("name", ""),
+                final_score=float(fs),
+                effective_line=float(line) if line is not None else 0.0,
+                gap=float(sl.get("score_gap", 0.0) or 0.0),
+                best_skill_id=rg.get("best_skill_id"),
+                best_gate_score=float(rg.get("best_gate_score")) if rg.get("best_gate_score") is not None else None,
+                reason=sl.get("reason", "") or row.get("final_reason", ""),
+            )
+        )
+    cands.sort(key=lambda c: c.final_score, reverse=True)
+    return cands
+
+
 def classify_zero_run(
     recommended_count: int,
     best_final_score: float | None,
@@ -269,6 +307,135 @@ def _connect_db():
     return SessionLocal()
 
 
+# T+1 反事实分桶边界：被拦候选按 final_score 分桶，衡量「被有效线拦下的候选 T+1 真实收益」。
+# - near_floor：final∈[FLOOR-4, FLOOR)，边际未过地板——若 T+1 净正，说明地板边缘候选有 alpha，
+#   但裸 T+1 不含交易成本/止损/滑点，只能提示「值得用 P0 backtest 正式复核」，不能直接降地板。
+# - at_floor_plus：final≥FLOOR，本该过地板却被 regime 有效线拦——若 T+1 净正，才是 gate_misblock
+#   的生产等价反事实验证（跨 run 聚合后≥3 交易日且去污染才可据以下沉规则）。
+T1_NEAR_FLOOR_LOW = NOMINAL_FLOOR - 4.0
+
+
+@dataclass
+class T1Bucket:
+    label: str
+    n: int
+    wins: int
+    avg: float
+    pl: float
+
+
+def _bucketize(label: str, subset: list[tuple[float, float]]) -> T1Bucket:
+    """把 (final_score, t1_ret%) 列表汇总成一个 T1Bucket。纯函数，可单测。"""
+    n = len(subset)
+    if n == 0:
+        return T1Bucket(label, 0, 0, 0.0, 0.0)
+    wins = sum(1 for _, r in subset if r > 0)
+    avg = sum(r for _, r in subset) / n
+    wsum = sum(r for _, r in subset if r > 0)
+    lsum = sum(-r for _, r in subset if r <= 0)
+    pl = wsum / lsum if lsum > 0 else (float("inf") if wsum > 0 else 0.0)
+    return T1Bucket(label, n, wins, avg, pl)
+
+
+def compute_t1_counterfactual(db, run_funnels: list[RunFunnel]) -> list[T1Bucket]:
+    """对全部被拦候选查 T+1 真实 pct_chg（次日收盘/当日收盘 - 1），按 final 分桶汇总。
+
+    只读 daily_kbars，绝不写库。T+1 = 当日之后的最近一个有 K 线的交易日。
+    返回分桶列表（near_floor / at_floor_plus / all）。样本 <1 的桶 n=0、avg/pl=0。
+    """
+    from sqlalchemy import text
+    from collections import defaultdict
+
+    # 收集 (trade_date, code, final_score)，同日同 code 去重
+    seen: set[tuple[str, str]] = set()
+    cands: list[tuple[str, str, float]] = []
+    for rf in run_funnels:
+        td = rf.trade_date
+        # 直接从 filter_audit 重新提取全部被拦候选（near_misses 被 top_k 截断）
+        # 这里 rf 已有 near_misses，但为拿全量重新查库一次
+        row = db.execute(
+            text("SELECT filter_audit_json FROM recommendation_runs WHERE run_id=:rid"),
+            {"rid": rf.run_id},
+        ).fetchone()
+        if not row or not row[0]:
+            continue
+        try:
+            audit = json.loads(row[0])
+        except (TypeError, ValueError):
+            continue
+        for nm in extract_blocked_candidates(audit):
+            k = (td, nm.code)
+            if k in seen or not nm.code:
+                continue
+            seen.add(k)
+            cands.append((td, nm.code, nm.final_score))
+
+    if not cands:
+        return [_bucketize(f"near_floor([{T1_NEAR_FLOOR_LOW:.0f},{NOMINAL_FLOOR:.0f})", []),
+                _bucketize(f"at_floor_plus(>={NOMINAL_FLOOR:.0f})", []),
+                _bucketize("all_blocked", [])]
+
+    by_td: dict[str, list[tuple[str, float]]] = defaultdict(list)
+    for td, code, fin in cands:
+        by_td[td].append((code, fin))
+
+    results: list[tuple[float, float]] = []  # (final_score, t1_ret%)
+    for td, items in by_td.items():
+        codes = [c for c, _ in items]
+        ph = ",".join([":c%d" % i for i in range(len(codes))])
+        params: dict[str, object] = {"td": td}
+        for i, c in enumerate(codes):
+            params["c%d" % i] = c
+        # T+1 交易日
+        nt = db.execute(
+            text("SELECT DISTINCT trade_date FROM daily_kbars WHERE trade_date > :td ORDER BY trade_date LIMIT 1"),
+            {"td": td},
+        ).fetchone()
+        if not nt:
+            continue
+        t1 = nt[0]
+        params["t1"] = t1
+        px: dict[str, dict[str, float]] = defaultdict(dict)
+        rows = db.execute(
+            text(f"SELECT trade_date, code, close FROM daily_kbars "
+                 f"WHERE trade_date IN (:td, :t1) AND code IN ({ph})"),
+            params,
+        ).fetchall()
+        for r in rows:
+            px[r[1]][str(r[0])] = float(r[2])
+        fin_map = {c: f for c, f in items}
+        for code in codes:
+            t0c = px[code].get(td)
+            t1c = px[code].get(str(t1))
+            if t0c and t1c and t0c > 0:
+                results.append((fin_map[code], (t1c - t0c) / t0c * 100.0))
+
+    near = [x for x in results if T1_NEAR_FLOOR_LOW <= x[0] < NOMINAL_FLOOR]
+    over = [x for x in results if x[0] >= NOMINAL_FLOOR]
+    return [
+        _bucketize(f"near_floor([{T1_NEAR_FLOOR_LOW:.0f},{NOMINAL_FLOOR:.0f})", near),
+        _bucketize(f"at_floor_plus(>={NOMINAL_FLOOR:.0f})", over),
+        _bucketize("all_blocked", results),
+    ]
+
+
+def render_t1_counterfactual(buckets: list[T1Bucket]) -> str:
+    """渲染 T+1 反事实报告。裸 T+1 不含交易成本/止损/滑点，仅作误拦判定的辅助证据。"""
+    lines = ["=== T+1 反事实（被拦候选次日真实收盘收益，裸收益未扣费）==="]
+    for b in buckets:
+        if b.n == 0:
+            lines.append(f"  {b.label}: n=0")
+            continue
+        wr = b.wins / b.n * 100.0
+        pl = b.pl if b.pl != float("inf") else float("inf")
+        pl_str = "inf" if b.pl == float("inf") else f"{b.pl:.2f}"
+        lines.append(f"  {b.label}: n={b.n} WR={wr:.1f}% avg={b.avg:+.2f}% PL={pl_str}")
+    lines.append("  说明：裸 T+1 收益未扣 0.07% 双边费用/止损/滑点，且弱势/恐慌日含超跌反弹——")
+    lines.append("        at_floor_plus 桶净正（跨≥3交易日去污染）才构成 gate_misblock 下沉规则的生产等价反事实；")
+    lines.append("        near_floor 桶净正仅提示「地板边缘候选有 alpha 候选」，须 P0 backtest 正式复核，不能直接降地板。")
+    return "\n".join(lines)
+
+
 def audit_run(db, run_id: str, floor: float = NOMINAL_FLOOR, top_k: int = 3) -> RunFunnel | None:
     from sqlalchemy import text
 
@@ -310,6 +477,7 @@ def main() -> None:
     ap.add_argument("--days", type=int, default=10, help="扫描近 N 天 completed=0 formal run（默认 10）")
     ap.add_argument("--floor", type=float, default=NOMINAL_FLOOR, help=f"名义地板（默认 {NOMINAL_FLOOR}）")
     ap.add_argument("--top-k", type=int, default=3, help="每个 run 列出 top-K 近失候选（默认 3）")
+    ap.add_argument("--t1", action="store_true", help="对被拦候选做 T+1 真实收益反事实（查 daily_kbars，只读）")
     args = ap.parse_args()
 
     db = _connect_db()
@@ -362,6 +530,14 @@ def main() -> None:
             print("→ 存在强候选被 regime 抬线误拦嫌疑，须用生产等价反事实证明误拦净正候选后方可下沉/下调，证据不足保留为 experiment。")
         elif fault > 0:
             print("→ 存在疑似运行/数据故障，优先排查快照/范围异常，修复后仅验证故障消失，不顺势改策略。")
+
+        # T+1 反事实：把「须用反事实证明误拦净正」从口号变成自动化证据。
+        # 即使全部 legitimate_empty（最高候选<地板），T+1 反事实也能揭示「被拦候选整体 T+1 是否净负」——
+        # 净负=防线正确，净正=地板边缘有 alpha 候选（须 P0 backtest 复核，不直接降地板）。
+        if args.t1:
+            buckets = compute_t1_counterfactual(db, results)
+            print()
+            print(render_t1_counterfactual(buckets))
     finally:
         db.close()
 
