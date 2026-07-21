@@ -651,44 +651,97 @@ def _format_e_forward_note(
     return f" | 前瞻{still}{fwd_n}笔 WR={fwd_wr}%({tag})"
 
 
-def _parse_max_candidate_score(fa_str: str | None) -> float | None:
-    """从 filter_audit_json 的 reason_counts 解析 score_line 阶段被拦候选的最高最终分。
+def _parse_score_line_gate_stats(fa_str: str | None) -> dict:
+    """从 filter_audit_json 解析 score_line 阶段被拦候选的最高最终分与最高有效线。
 
-    匹配形如 '最终分 73.16 低于有效线 89.55'（曝光补跑 run 的 filter_audit_json 实测格式）。
-    取所有被拦候选中的最高分，用于判断门线拦截是否因「regime 有效线偏高」(候选分接近线，
-    等国转强会喂) 还是「真无候选」。纯函数便于单测；解析失败/无匹配返回 None。
+    实测格式（曝光补跑）：
+      reason_counts.score_line = {
+        "最终分 73.16 低于有效线 89.55": 1,  # key=文案, value=计数
+        ...
+      }
+    旧实现误对 .values()（计数 int）做正则 → 恒 None，self_check 打出「无候选分」。
+    另：recommendation_runs.score_line 是 base（72），真实有效线在文案/meta 里可达 89+。
+
+    返回 {"max_candidate_score": float|None, "max_effective_line": float|None}。
     """
+    out: dict = {"max_candidate_score": None, "max_effective_line": None}
     if not fa_str:
-        return None
+        return out
     try:
-        d = json.loads(fa_str)
+        d = json.loads(fa_str) if isinstance(fa_str, str) else fa_str
     except (TypeError, ValueError):
-        return None
-    reason_counts = (d or {}).get("reason_counts") or {}
+        return out
+    if not isinstance(d, dict):
+        return out
+
+    msgs: list[str] = []
+    reason_counts = d.get("reason_counts") or {}
     score_line = reason_counts.get("score_line") or {}
-    pat = re.compile(r"最终分\s*([\d.]+)\s*低于有效线")
-    best: float | None = None
-    for msg in score_line.values():
-        for m in pat.findall(str(msg)):
+    if isinstance(score_line, dict):
+        # 生产：key=文案 value=计数；旧单测夹具曾 key=rule_i value=文案 —— 两边都扫
+        for k, v in score_line.items():
+            msgs.append(str(k))
+            if not isinstance(v, (int, float)):
+                msgs.append(str(v))
+    # 兼容 stage_summary 内嵌 reason_counts
+    for stage in (d.get("stage_summary") or []):
+        if not isinstance(stage, dict) or stage.get("stage") != "score_line":
+            continue
+        rc = stage.get("reason_counts") or {}
+        if isinstance(rc, dict):
+            for k, v in rc.items():
+                msgs.append(str(k))
+                if not isinstance(v, (int, float)):
+                    msgs.append(str(v))
+    pat = re.compile(
+        r"最终分\s*([\d.]+)\s*低于有效线\s*([\d.]+)"
+    )
+    best_cand: float | None = None
+    best_line: float | None = None
+    for msg in msgs:
+        for m in pat.finditer(msg):
             try:
-                v = float(m)
+                cand = float(m.group(1))
+                line = float(m.group(2))
             except ValueError:
                 continue
-            if best is None or v > best:
-                best = v
-    return best
+            if best_cand is None or cand > best_cand:
+                best_cand = cand
+            if best_line is None or line > best_line:
+                best_line = line
+    # 全文兜底（结构漂移时）
+    if best_cand is None and isinstance(fa_str, str):
+        for m in pat.finditer(fa_str):
+            try:
+                cand = float(m.group(1))
+                line = float(m.group(2))
+            except ValueError:
+                continue
+            if best_cand is None or cand > best_cand:
+                best_cand = cand
+            if best_line is None or line > best_line:
+                best_line = line
+    out["max_candidate_score"] = best_cand
+    out["max_effective_line"] = best_line
+    return out
+
+
+def _parse_max_candidate_score(fa_str: str | None) -> float | None:
+    """兼容旧单测/调用：只返回最高候选最终分。"""
+    return _parse_score_line_gate_stats(fa_str).get("max_candidate_score")
 
 
 def _fetch_gate_blocked_detail(db, sid: str) -> dict | None:
-    """门线拦截明细：取该策略最近一次 completed experiment 补跑 run 的
-    有效线(score_line 列) 与最高候选最终分(_parse_max_candidate_score)。
-    用于 E 项 gate_blocked 诊断区分钟线拦截根因（regime 有效线偏高 vs 真无候选）。
-    失败/无数据返回 None，调用方降级为仅打印 strategy_id，不影响主报告。
+    """门线拦截明细：最近 completed experiment 补跑的有效线 vs 最高候选最终分。
+
+    优先 filter_audit 文案中的有效线（per-card 可能 > base）；否则 result_summary
+    score_line_meta.effective_score_line；再否则 score_line 列（base，可能偏保守）。
+    失败/无数据返回 None。
     """
     try:
         params = {"pat": '%"' + sid + '"%'}
         row = db.execute(text("""
-            SELECT r.score_line, r.filter_audit_json
+            SELECT r.score_line, r.filter_audit_json, r.result_summary_json
             FROM recommendation_runs r
             WHERE r.run_mode = 'experiment' AND r.status = 'completed'
               AND r.selected_skills_json LIKE :pat
@@ -699,10 +752,30 @@ def _fetch_gate_blocked_detail(db, sid: str) -> dict | None:
         return None
     if not row:
         return None
-    eff_line = float(row[0]) if row[0] is not None else None
-    max_cand = _parse_max_candidate_score(row[1]) if row[1] else None
-    return {"effective_line": eff_line, "max_candidate_score": max_cand}
-
+    # 兼容旧假 DB 返回 2 列 (score_line, fa) 与新 3 列 (+ result_summary)
+    base_line = float(row[0]) if row[0] is not None else None
+    fa_raw = row[1] if len(row) > 1 else None
+    rs_raw = row[2] if len(row) > 2 else None
+    stats = _parse_score_line_gate_stats(fa_raw if fa_raw else None)
+    max_cand = stats.get("max_candidate_score")
+    eff_line = stats.get("max_effective_line")
+    if rs_raw:
+        try:
+            rs = json.loads(rs_raw) if isinstance(rs_raw, str) else rs_raw
+            meta = (rs or {}).get("score_line_meta") or {}
+            if eff_line is None and meta.get("effective_score_line") is not None:
+                eff_line = float(meta["effective_score_line"])
+            if max_cand is None and rs.get("top_candidate_score") is not None:
+                max_cand = float(rs["top_candidate_score"])
+        except (TypeError, ValueError):
+            pass
+    if eff_line is None:
+        eff_line = base_line
+    return {
+        "effective_line": eff_line,
+        "max_candidate_score": max_cand,
+        "base_score_line": base_line,
+    }
 
 def check_e_item(db, hit_skills: set) -> None:
     """E 项：策略覆盖盲区 + 低胜率标记。"""
