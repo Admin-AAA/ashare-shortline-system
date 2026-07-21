@@ -267,6 +267,7 @@ export type WinRateSummary = {
   win_rate: number | null; // 胜率 %，无样本时为 null（诚实不虚构）
   avg_return: number | null; // 平均净收益 %
   profit_loss_ratio: number | null; // 盈亏比
+  max_loss?: number | null; // 窗口内单笔最差收益 %（D 项「最大亏损」口径，与 self_check 一致）
   // 净成本口径（扣 0.07%/笔：佣金万1双边 + 印花税卖出）—— D 项目标定义为扣费后须达标
   net_win_rate?: number | null; // 净胜率 %
   net_avg_return?: number | null; // 净平均收益 %

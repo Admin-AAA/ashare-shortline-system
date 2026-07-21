@@ -794,6 +794,7 @@ def _recent_formal_win_rate(db: Session, window_trade_days: int) -> dict[str, An
         "win_rate": None,
         "avg_return": None,
         "profit_loss_ratio": None,
+        "max_loss": None,  # 窗口内单笔最差收益（D 项「最大亏损」口径，与 self_check 一致）
         "net_win_rate": None,
         "net_avg_return": None,
         "net_profit_loss_ratio": None,
@@ -833,6 +834,7 @@ def _recent_formal_win_rate(db: Session, window_trade_days: int) -> dict[str, An
     win_avg = sum(r.executed_return or 0 for r in wins) / len(wins) if wins else 0.0
     loss_avg = sum(abs(r.executed_return or 0) for r in losses) / len(losses) if losses else 0.0
     rets = [float(r.executed_return or 0) for r in rows]
+    worst_loss = min(rets) if rets else None  # D 项「最大亏损」：窗口内单笔最差收益（与 self_check 口径一致）
     net_rets = [x - _ADDITIONAL_COST_PCT for x in rets]
     net_wins = [x for x in net_rets if x > 0]
     net_losses = [abs(x) for x in net_rets if x < 0]
@@ -867,6 +869,7 @@ def _recent_formal_win_rate(db: Session, window_trade_days: int) -> dict[str, An
         "win_rate": round(len(wins) * 100.0 / sample_count, 1),
         "avg_return": round(sum(r.executed_return or 0 for r in rows) / sample_count, 2),
         "profit_loss_ratio": round(win_avg / loss_avg, 2) if loss_avg else None,
+        "max_loss": round(worst_loss, 2) if worst_loss is not None else None,
         "net_win_rate": round(len(net_wins) * 100.0 / sample_count, 1),
         "net_avg_return": round(sum(net_rets) / sample_count, 2),
         "net_profit_loss_ratio": net_pl,

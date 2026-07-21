@@ -346,6 +346,30 @@ function StatusBar({
         </>
       )}
 
+      {/* 最大亏损（D 项唯一低于目标的子指标）：窗口内单笔最差收益，使其在常驻状态条可见 */}
+      {winRate && winRate.max_loss != null && (
+        <>
+          <Sep />
+          <span className="text-muted">最大亏损：</span>
+          <strong
+            className="text-mono"
+            title={
+              `窗口内单笔最差收益（D 项「最大亏损」口径，与 self_check 一致）\n` +
+              `当前 ${winRate.max_loss.toFixed(2)}%（近 ${winRate.window_trade_days} 个已完成 formal 交易日）\n` +
+              `D 项目标：最大亏损 ≥ -4%\n` +
+              (winRate.max_loss < -4.0
+                ? "⚠️ 超过目标，单笔最差亏损偏大（止损地板 ~-5.7% + 滑点，属设计值，非异常）"
+                : "✅ 在目标范围内")
+            }
+            style={{
+              color: winRate.max_loss >= -4.0 ? "var(--warning)" : "var(--market-down)",
+            }}
+          >
+            {winRate.max_loss.toFixed(2)}%
+          </strong>
+        </>
+      )}
+
       {/* AI 审查层健康度（北极星 B 项可见性缺口修复）：以最近成功审查时间为新鲜度代理，
           key 失效 / provider 故障时审查静默停摆 → 推荐缺 LLM delta 而用户无感知，此处使其可见 */}
       {(() => {
@@ -505,204 +529,6 @@ function RunStatusPanel({
           <button className="btn btn--ghost" onClick={onViewHistory}>
             查看历史
           </button>
-        </div>
-      )}
-    </Panel>
-  );
-}
-
-// ─── 数据健康度卡片 ─────────────────────────────────────────
-function DataHealthCard({
-  diag,
-  loading,
-  onViewDetail,
-}: {
-  diag: DataHealthDiagnostic | null;
-  loading: boolean;
-  onViewDetail: () => void;
-}) {
-  const score = diag?.score ?? 0;
-  const scoreColor =
-    score >= 90 ? "var(--market-up)" : score >= 70 ? "var(--warning)" : "var(--market-down)";
-  const scoreLabel = score >= 90 ? "健康" : score >= 70 ? "需关注" : "异常";
-  const refDate = diag?.reference_trade_date || "—";
-  const refSource = diag?.reference_trade_date_source || "";
-  const tables = diag?.tables || {};
-  const lagDays = diag?.lag_days || {};
-  const issues = diag?.issues || [];
-
-  // 按关键表优先排序，取前 6 个
-  const tableRows = Object.entries(tables)
-    .map(([key, info]) => ({
-      key,
-      label: info?.label || key,
-      maxDate: info?.max_date || "—",
-      lag: lagDays[key] ?? null,
-      critical: info?.critical ?? false,
-      totalRows: info?.total_rows ?? 0,
-      error: info?.error ?? null,
-    }))
-    .sort((a, b) => {
-      if (a.critical !== b.critical) return a.critical ? -1 : 1;
-      const aLag = a.lag ?? 999;
-      const bLag = b.lag ?? 999;
-      return bLag - aLag;
-    })
-    .slice(0, 6);
-
-  const highIssues = issues.filter((i) => i.severity === "high");
-  const mediumIssues = issues.filter((i) => i.severity === "medium");
-  const topIssues = [...highIssues, ...mediumIssues].slice(0, 4);
-
-  return (
-    <Panel
-      kicker="数据健康度"
-      title={
-        <>
-          <Database size={16} />
-          {loading ? "诊断中…" : `${score} 分 · ${scoreLabel}`}
-        </>
-      }
-      actions={
-        <button className="btn btn--ghost" onClick={onViewDetail}>
-          详情
-          <ChevronRight size={14} />
-        </button>
-      }
-    >
-      {/* 评分 + 参考交易日 */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "var(--space-4)",
-          marginBottom: "var(--space-3)",
-        }}
-      >
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", minWidth: 64 }}>
-          <span className="text-mono" style={{ fontSize: "var(--text-2xl)", fontWeight: 700, color: scoreColor }}>
-            {loading ? "—" : score}
-          </span>
-          <span style={{ fontSize: 10, color: "var(--text-muted)" }}>健康评分</span>
-        </div>
-        <div style={{ flex: 1, fontSize: "var(--text-sm)", color: "var(--ink-secondary)" }}>
-          <div>
-            参考交易日 <strong className="text-mono">{refDate}</strong>
-            {refSource && <span className="text-muted"> ({refSource})</span>}
-          </div>
-          {!loading && issues.length > 0 && (
-            <div className="text-muted" style={{ marginTop: 2 }}>
-              {highIssues.length > 0 && (
-                <span style={{ color: "var(--market-down)" }}>高 {highIssues.length} </span>
-              )}
-              {mediumIssues.length > 0 && (
-                <span style={{ color: "var(--warning)" }}>中 {mediumIssues.length} </span>
-              )}
-              共 {issues.length} 个问题
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* 各表覆盖情况 */}
-      {tableRows.length > 0 && (
-        <div
-          style={{
-            fontSize: "var(--text-xs)",
-            borderTop: "1px solid var(--line)",
-            paddingTop: "var(--space-2)",
-          }}
-        >
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "minmax(0, 1fr) auto auto",
-              gap: "0 var(--space-3)",
-              color: "var(--text-muted)",
-              marginBottom: "var(--space-1)",
-            }}
-          >
-            <span>数据表</span>
-            <span style={{ textAlign: "right" }}>最新日期</span>
-            <span style={{ textAlign: "right", minWidth: 36 }}>滞后</span>
-          </div>
-          {tableRows.map((row) => {
-            const lagColor =
-              row.lag == null
-                ? "var(--text-muted)"
-                : row.lag <= 0
-                  ? "var(--market-up)"
-                  : row.lag <= 2
-                    ? "var(--warning)"
-                    : "var(--market-down)";
-            return (
-              <div
-                key={row.key}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "minmax(0, 1fr) auto auto",
-                  gap: "0 var(--space-3)",
-                  padding: "2px 0",
-                  alignItems: "center",
-                }}
-              >
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {row.critical && <span style={{ color: "var(--accent-strong)" }}>● </span>}
-                  {row.label}
-                </span>
-                <span className="text-mono" style={{ textAlign: "right", color: "var(--ink-secondary)" }}>
-                  {row.maxDate}
-                </span>
-                <span className="text-mono" style={{ textAlign: "right", color: lagColor, minWidth: 36 }}>
-                  {row.lag == null ? "—" : `${row.lag}d`}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* 问题列表 */}
-      {topIssues.length > 0 && (
-        <div
-          style={{
-            marginTop: "var(--space-2)",
-            paddingTop: "var(--space-2)",
-            borderTop: "1px solid var(--line)",
-            display: "flex",
-            flexDirection: "column",
-            gap: "var(--space-1)",
-          }}
-        >
-          {topIssues.map((issue, idx) => (
-            <div
-              key={idx}
-              style={{
-                fontSize: 11,
-                lineHeight: 1.4,
-                color: "var(--ink-secondary)",
-                display: "flex",
-                gap: "var(--space-1)",
-              }}
-            >
-              <span
-                style={{
-                  color: issue.severity === "high" ? "var(--market-down)" : "var(--warning)",
-                  flexShrink: 0,
-                }}
-              >
-                {issue.severity === "high" ? "🔴" : "🟡"}
-              </span>
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
-                {issue.message}
-              </span>
-            </div>
-          ))}
-          {issues.length > topIssues.length && (
-            <span className="text-muted" style={{ fontSize: 10 }}>
-              还有 {issues.length - topIssues.length} 个问题，点击「详情」查看
-            </span>
-          )}
         </div>
       )}
     </Panel>
