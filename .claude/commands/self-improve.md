@@ -79,22 +79,17 @@ cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && pyt
 5. 每 5 轮至少深度优化一个业务模块（龙头评分/龙虎榜/情绪分阶段/Aggregator 权重/trailing stop/score cap）
 6. **residual triage 先行**：residual 笔数 >0 时**必须先 triage 分层**（污染/伪活跃/单日簇/稀疏），禁止直接当 entry 精确目标。前三类禁止加 entry；稀疏 ≤3 笔或全被现有规则覆盖时判 D 攻击路径穷尽（见 T11 第 5 条）。
 ### T3.6 策略曝光公平度与低胜率标记（E 项闭环，触发时执行）
-   - **目的**：让每个策略胜率统计可信。补曝光是为了让胜率可信，不是为了提高尾部策略胜率。
-   - H_norm<0.5 或策略样本 <20 → 盘前曝光补跑（`scheduler_service._run_strategy_exposure`，阈值 20）。勿为凑 H_norm 调 universe。
-   - 近 60 天 formal 0 命中策略 → 查 filter_audit_json 归因（universe/prefilter/preset），修复后跑 formal 确认 skill_breakdown 出现。
-   - winrate <45% **且 n≥20** → strategy.yaml 加 FLAG 注释 + low-winrate-strategies.md 追加。n<20 先补曝光不标记。连续 2 轮 <45% 且无解才降权/下线。
-   - 低胜率标记看**全量 formal**；曝光公平度看**近30天 formal+experiment**。
-   - 产出：每轮 E 项结束 low-winrate-strategies.md 须有更新；H_norm 与 <20 策略数须有变化记录。
+   - 补曝光是为了让胜率可信，不是提高尾部策略胜率。H_norm<0.5 或策略样本 <20 → 盘前曝光补跑（阈值 20）。勿为凑 H_norm 调 universe。
+   - 近 60 天 formal 0 命中策略 → 查 filter_audit_json 归因，修复后跑 formal 确认 skill_breakdown 出现。
+   - winrate <45% **且 n≥20** → strategy.yaml 加 FLAG + low-winrate-strategies.md 追加。n<20 先补曝光。连续 2 轮无解才降权/下线。
+   - 低胜率标记看**全量 formal**；曝光公平度看**近30天 formal+experiment**。每轮 E 项结束 low-winrate-strategies.md 须有更新。
 
 ### T4. 性能优化（模型内化）
 查 `backend/logs/app.log` 慢请求 + `EXPLAIN ANALYZE` 慢 SQL。大 JSON 字段查询用两步法（小列定位 id → 按 id 取详情）。
 
 ### T5. 一致性工程（模型内化）
-- 规则一致性：strategy.yaml 不同时间/市场给一致评估
-- 权重一致性：aggregator walk-forward 校准稳定
-- 执行一致性：entry_rule/invalid_rule 可机械执行
-- 持仓相关性：`_MAX_PER_INDUSTRY=5` + 关联行业组去重
-- 市场状态自适应：phase 阈值合理？冰点 vs 活跃胜率差异显著说明有信息量
+- 规则一致性：strategy.yaml 不同时间/市场给一致评估。**phase 信息量消失（χ² p≥0.05）时禁止加精细 veto/抬线**——过拟合噪声。
+- 权重一致性 / 执行一致性 / 持仓相关性（`_MAX_PER_INDUSTRY=5`）
 
 ### T7. 前端设计与体验优化（用户可见）
 **A. 删无用功能**——扫描 `frontend-v2/src/` 从未被点击/永远空状态的元素，删或隐藏。
@@ -203,18 +198,18 @@ cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && \
 merge 回 main + 清理 worktree 是你自己的收尾步骤（见 §0），不是脚本代劳。
 
 ### 4. 验证
-**基础**：pytest 无回归；改策略跑回测对比；改性能对比查询耗时；改前端 `cd frontend-v2 && npm run build` 无报错。
-**端到端**（用户可见任务必做）：T1 跑真实推荐确认策略出现在 `skill_breakdown_json` + 前端可见；T7 playwright 截图 v2 前端对比；T9 触发 LLM 分析确认输出；T10 截图对比布局不塌。
-**UX 三项**（T7 必做）：信息完整度扫描（推荐价/止损/止盈/入场/失效/评分分解/风险标签/市场环境一屏可见）；API 耗时（`time curl`，>2s 加缓存）；截图自检（间距/对齐/字号/装饰）。
+**基础**：pytest 无回归；改策略跑回测对比；改前端 `npm run build` 无报错。
+**端到端**（用户可见任务必做）：T1 跑真实推荐出现在 `skill_breakdown_json` + 前端可见；T7 截图对比；T9 触发 LLM 确认输出。
+**UX 三项**（T7 必做）：信息完整度扫描（推荐价/止损/止盈/入场/失效/评分分解一屏可见）；API 耗时（`time curl`，>2s 加缓存）；截图自检。
 **LLM 层**（每 5 轮）：触发 1-3 只股票 skill agent 分析，记录 token 消耗。
 
 ### 5. Git 提交（每轮必做）
 ```bash
 git add -A && git commit -m "self-improve: T{编号} {简短描述}
 - 具体改动 1
-- 验证: pytest X passed / 回测胜率 X% / 性能 Xms→Yms"
+- 验证: pytest X passed / 回测胜率 X%"
 ```
-commit 进当前 worktree 分支即可（§0 收尾会把它 ff-merge 回 main + 清理 worktree，冲突你自己在 worktree 里 rebase 解）。不提交 .env/logs/node_modules/.venv（软链接已被 .gitignore 排除）。提交前 `git status` 确认无意外文件。
+commit 进 worktree 分支，§0 收尾 ff-merge 回 main。提交前 `git status` 确认无意外文件。
 
 ### 6. 记录
 任务开始时写"进行中"占位，完成后改"已完成"并追加改动/验证/Git/下一步：
