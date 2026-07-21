@@ -92,6 +92,13 @@ _ROUTE_FAILOVER_ERROR_MARKERS = (
     "no such model",
     "does not exist",
     "断路器熔断",
+    # 服务端暂时不可用（upstream 5xx）：立即换路由而非重试同一不可用上游。
+    # 实证 2026-07-21：grok-4.5 503 upstream_unavailable 重试 3 次（~7s）才 failover，
+    # 60 候选累积 503 触发 circuit_open 21 次。换路由比重试同一不可用上游更可能成功。
+    "upstream_unavailable",
+    "service temporarily unavailable",
+    "bad gateway",
+    "service unavailable",
 )
 
 
@@ -119,7 +126,12 @@ def _route_error_status(exc: Exception) -> str:
 def _should_failover_immediately(exc: Exception) -> bool:
     text = str(exc).lower()
     status_code = getattr(exc, "status_code", None)
-    return status_code in {401, 402, 403, 404, 429} or any(marker in text for marker in _ROUTE_FAILOVER_ERROR_MARKERS)
+    # 401/402/403/404/429：永久性或限流错误，重试当前路由无益，立即换路由。
+    # 502/503/504：上游服务暂时不可用，重试同一上游不如换路由（实证 07-21 grok-4.5 503
+    # 重试 3 次才 failover，累积触发熔断 21 次）。
+    if status_code in {401, 402, 403, 404, 429, 502, 503, 504}:
+        return True
+    return any(marker in text for marker in _ROUTE_FAILOVER_ERROR_MARKERS)
 
 
 def _extract_usage_tokens(resp) -> tuple[int | None, int | None, int | None]:
