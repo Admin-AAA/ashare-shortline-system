@@ -109,15 +109,21 @@ def compute_sector_stats(stocks: list[dict[str, Any]]) -> dict[str, dict[str, An
 
 
 def market_sentiment_phase(snapshot: Mapping[str, Any]) -> str:
-    """市场情绪相位：高潮 / 活跃 / 平淡 / 冰点（与迁移前 ``_market_sentiment_phase`` 一致）。"""
+    """市场情绪相位：高潮 / 活跃 / 平淡 / 冰点。
+
+    与 aggregator._market_sentiment 对齐（双维度：涨停率 + 涨停/跌停比）。
+    仅涨停率会把「普跌日零星涨停」标活跃（07-07 up_ratio=0.124 伪活跃实证）。
+    """
     sample = max(1, int(_num(snapshot.get("sample_count"), 1)))
     limit_up = _num(snapshot.get("limit_up_count"))
     limit_down = _num(snapshot.get("limit_down_count"))
     lu_rate = limit_up / sample
     ld_rate = limit_down / sample
-    if lu_rate > 0.012 and (ld_rate == 0 or lu_rate / max(ld_rate, 0.0001) > 3):
+    lu_ld = lu_rate / max(ld_rate, 0.0001)
+    if lu_rate > 0.012 and (ld_rate == 0 or lu_ld > 3):
         return "高潮"
-    if lu_rate > 0.005:
+    # 活跃：涨停率>0.5% 且涨停明显多于跌停（≥1.2x）
+    if lu_rate > 0.005 and (ld_rate == 0 or lu_ld >= 1.2):
         return "活跃"
     if lu_rate >= 0.001:
         return "平淡"

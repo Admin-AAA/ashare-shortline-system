@@ -119,13 +119,20 @@ SENTIMENT_LIMIT_UP_RATE_HOT = 0.012    # 涨停率 > 1.2% → 高潮
 SENTIMENT_LIMIT_UP_RATE_ACTIVE = 0.005  # 涨停率 > 0.5% → 活跃
 SENTIMENT_LIMIT_UP_RATE_FLAT = 0.001    # 涨停率 >= 0.1% → 平淡
 SENTIMENT_LIMIT_DOWN_RATIO = 3          # 涨停/跌停比 > 3:1 才确认高潮
+# 活跃判定：涨停须明显多于跌停（否则「涨停孤岛+普跌」伪活跃）
+# 实证 07-07：lu=44 ld=54 up_ratio=0.124 仍被标活跃(+3 madj)，残留毒区 弱势·活跃 核心日
+SENTIMENT_ACTIVE_LU_LD_RATIO = 1.2
 BASE_UP_RATIO_BULL = 0.65               # 上涨比 >= 65% → 强牛
 BASE_UP_RATIO_BULLISH = 0.50            # 上涨比 >= 50% → 偏多
 BASE_UP_RATIO_RANGE = 0.35              # 上涨比 >= 35% → 震荡
 
 
 def _market_sentiment(snapshot: dict[str, Any] | None) -> str:
-    """统一的市场情绪判断，全系统唯一入口。"""
+    """统一的市场情绪判断，全系统唯一入口。
+
+    双维度：涨停率 + 涨停/跌停比。仅用涨停率会把「普跌日零星涨停」标活跃，
+    抬高 madj、放宽 score_line（self_check 弱势·活跃 毒区注释 / 07-07 实证）。
+    """
     if not snapshot:
         return "平淡"
     sample = max(1, int(snapshot.get("sample_count") or 1))
@@ -134,11 +141,15 @@ def _market_sentiment(snapshot: dict[str, Any] | None) -> str:
     # 用涨停率而非绝对数，适配不同市场规模
     lu_rate = limit_up / sample
     ld_rate = limit_down / sample
+    lu_ld = lu_rate / max(ld_rate, 0.0001)
     if lu_rate > SENTIMENT_LIMIT_UP_RATE_HOT and (
-        ld_rate == 0 or lu_rate / max(ld_rate, 0.0001) > SENTIMENT_LIMIT_DOWN_RATIO
+        ld_rate == 0 or lu_ld > SENTIMENT_LIMIT_DOWN_RATIO
     ):
         return "高潮"
-    if lu_rate > SENTIMENT_LIMIT_UP_RATE_ACTIVE:
+    # 活跃：涨停率够且涨停明显多于跌停（排除普跌伪活跃）
+    if lu_rate > SENTIMENT_LIMIT_UP_RATE_ACTIVE and (
+        ld_rate == 0 or lu_ld >= SENTIMENT_ACTIVE_LU_LD_RATIO
+    ):
         return "活跃"
     if lu_rate >= SENTIMENT_LIMIT_UP_RATE_FLAT:
         return "平淡"

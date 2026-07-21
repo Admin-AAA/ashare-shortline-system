@@ -345,7 +345,7 @@ def _scenario_active() -> dict[str, Any]:
     snapshot = {
         "sample_count": 1000,
         "limit_up_count": 8,
-        "limit_down_count": 10,
+        "limit_down_count": 4,  # T28：lu/ld≥1.2 才活跃；旧 10 为伪活跃→平淡
         "main_industries": ["光伏"],
         "trade_date": "2026-05-14",
     }
