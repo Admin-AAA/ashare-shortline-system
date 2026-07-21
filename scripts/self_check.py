@@ -1200,6 +1200,60 @@ def _fmt_d_cost(tag: str, m: dict | None, baseline_wr: float, baseline_pl: float
 # contracts（避免 A/B/C/E 路径负担），常量镜像此处。
 FORMAL_SCORE_LINE_FLOOR = 72.0
 
+# 契约层地板生产态不变量（T5/Contract 一致性护栏）：
+# 经验证（DB 查）：FORMAL_SCORE_LINE_FLOOR 在生产 DB 自该交易日起**已落地生效**——
+# 该日（含）之后 0 笔 formal 推荐 score_line < 72。此前（≤2026-07-16）的低线
+# run 是修复前遗留污染（matrix 把 score_line=55 写入 formal），非当前系统行为。
+# 本护栏断言「first_clean_td 之后 0 笔 sub-72」这一**生产态不变量**，
+# 与 _low_score_line_pollution 的污染诊断（后者只暴露幅度、不 fail-loud）正交：
+# 诊断暴露历史污染幅度，本护栏断言当前生产态地板仍 intact。
+# 价值：多 self-improve 实例并行时，若某实例/未来改动悄悄撤掉地板强制，
+# 该不变量会被破坏、D 项重新被低质量票污染——本护栏 loud-fail 拦截，
+# 保护 20+ 轮 D 工作成果不被静默回归吞掉。
+FORMAL_FLOOR_FIRST_CLEAN_TD = "2026-07-17"
+
+
+def _floor_violation_count(rows_with_sl: list, first_clean_td: str,
+                          floor: float = FORMAL_SCORE_LINE_FLOOR) -> int:
+    """纯函数：统计「first_clean_td 之后仍出现 sub-72 formal 推荐」的污染笔数。
+
+    输入 rows_with_sl: [(code, trade_date, label, ret, score_line), ...]
+    返回 score_line < floor 且 trade_date >= first_clean_td 的行数。
+    便于单测锁定「生产态地板不变量」，不碰 DB。
+    """
+    n = 0
+    for r in rows_with_sl:
+        td = str(r[1])
+        if td >= first_clean_td and (float(r[4] or 0)) < floor:
+            n += 1
+    return n
+
+
+def _print_floor_enforcement(db) -> None:
+    """D 项：契约层地板生产态不变量断言（接 DB）。
+
+    只查 DB 一次，复用与 _low_score_line_pollution 同口径的 formal 成功/失败样本。
+    断言：first_clean_td 起 0 笔 formal 推荐 score_line < FORMAL_SCORE_LINE_FLOOR。
+    不变量 intact → ✅；被破坏 → 🚨 loud-fail（D 污染回归）。
+    """
+    rows = db.execute(text("""
+        SELECT r.code, r.trade_date, o.outcome_label, o.executed_return, u.score_line
+        FROM recommendation_outcomes o
+        JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+        WHERE o.outcome_label IN ('success', 'failed')
+          AND r.recommendation_id LIKE 'rec_%'
+    """)).fetchall()
+    viol = _floor_violation_count(list(rows), FORMAL_FLOOR_FIRST_CLEAN_TD)
+    if viol == 0:
+        print(f'  ✅ 契约层地板生产态有效：自 {FORMAL_FLOOR_FIRST_CLEAN_TD} 起 '
+              f'0 笔 formal 推荐 score_line < {FORMAL_SCORE_LINE_FLOOR}'
+              f'（D 项无低质量票污染，20+ 轮 D 工作成果 intact）')
+    else:
+        print(f'  🚨 契约层地板生产态被破坏！{viol} 笔 formal 自 {FORMAL_FLOOR_FIRST_CLEAN_TD} 起 '
+              f'score_line < {FORMAL_SCORE_LINE_FLOOR}——D 项污染回归风险，'
+              f'立即排查 Contract 强制是否仍生效')
+
 
 def _low_score_line_pollution(
     rows_with_sl: list,
@@ -1950,6 +2004,8 @@ def check_d_item(db) -> None:
     _print_low_score_line_pollution(db)
     # soft@震荡 历史污染护栏（aggregator 已禁，历史票仍拖近10日 PL）
     _print_soft_regime_pollution(db)
+    # 契约层地板生产态不变量断言（T5/Contract 一致性：地板强制仍 intact）
+    _print_floor_enforcement(db)
     # 两道污染合并去污染反事实：近10日 WR vs PL 是否同向回升（防误判 PL=污染）
     _print_clean_d_counterfactual(db)
 
