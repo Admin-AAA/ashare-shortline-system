@@ -842,19 +842,27 @@ def _recent_formal_win_rate(db: Session, window_trade_days: int) -> dict[str, An
     net_loss_avg = sum(net_losses) / len(net_losses) if net_losses else 0.0
     net_pl = round(net_win_avg / net_loss_avg, 2) if net_loss_avg else None
 
-    # 去污染：pure 低线 + pure soft@震荡
+    # 去污染：pure 低线 + pure soft@震荡 + 所有 soft 票（T39 对齐 self_check _extract_clean_dedup_rows）
     pol_input = [
         (r.code, r.trade_date, r.score_line, r.soft, r.mbase)
         for r in rows
     ]
     pol_keys = _pure_pollution_keys_from_rows(pol_input)
+    # T39：self_check clean 口径排除所有 soft（非仅 pure_soft）——07-16 的 13 笔
+    # "clean"全是 soft@震荡，混入让 clean PL 虚低。API 驾驶舱须与 self_check 对齐。
+    all_soft_keys = {
+        (r.code, str(r.trade_date))
+        for r in rows
+        if _truthy_soft(r.soft)
+    }
     clean_rets = [
         float(r.executed_return or 0)
         for r in rows
         if (r.code, str(r.trade_date)) not in pol_keys
+        and (r.code, str(r.trade_date)) not in all_soft_keys
     ]
     clean_pl = _net_pl_ratio(clean_rets) if clean_rets else None
-    pol_n = len(pol_keys)
+    pol_n = len(pol_keys | all_soft_keys)
     pl_delta = (
         round(clean_pl - net_pl, 2)
         if clean_pl is not None and net_pl is not None and pol_n > 0
