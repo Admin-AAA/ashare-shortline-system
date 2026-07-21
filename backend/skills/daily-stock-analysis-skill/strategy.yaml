@@ -117,6 +117,20 @@ phases:
     hard_veto: true
     risk_flags: ["高量能(5日均量比>=3)+弱势RSI(<55)，巨量派发衰竭，次日易回撤"]
 
+  # 中度回撤毒区：距高点回撤 5%~10%（-10<=off_high<-5）
+  # LIVE 验证（2026-07-21 T3，daily-stock-analysis-skill formal primary 去重 n=107）：
+  #   oh∈[-10,-5): n=26 WR=38.5% avg=-1.98% | 其余 n=81 WR=64.2% avg=+0.98%
+  #   反事实剔除 ΔWR +6.3pp（57.9%→64.2%），跨 7 个独立交易日（非单日伪影）
+  #   因果：通用技术趋势策略在「刚跌破近高、尚未深调」的半吊子回撤位易接飞刀——
+  #     不够深（无均值回归安全垫）、又非强势新高（无动量溢价），次日继续杀跌触发止损。
+  #     对照 oh>=-5 WR=64.2%（仍在高位强势）、prefilter 已拦 oh<-18 崩坏趋势。
+  # 动作：hard_veto cap50；不误伤动量策略（chen-xiaoqun 等仍可用更深 oh 主线票）。
+  - name: 中度回撤毒区
+    when: "off_high_pct >= -10 and off_high_pct < -5"
+    score_cap: 50
+    hard_veto: true
+    risk_flags: ["距高点回撤5%~10%半吊子位(WR38.5%净负)，通用分析不宜接飞刀"]
+
   - name: 过热观察
     when: "dsa_bias_score >= 20 and rsi_12 > 70"
     score_cap: 68
