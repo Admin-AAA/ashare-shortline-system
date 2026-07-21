@@ -118,6 +118,8 @@ function CalledCard({ item }: { item: StrategyListItem }) {
   const pfColor = pf == null ? "var(--muted)" : pf >= 1.4 ? "var(--market-up)" : pf >= 1.0 ? "var(--text)" : "var(--market-down)";
   // 统计可信度：后端 reliable=false（样本<20）时胜率属噪声，须显式提示，防过度信任
   const lowSample = !perf.reliable;
+  // 最新补跑门线明细（T27：与 self_check gate_blocked 同源）
+  const gate = item.last_exp_gate ?? perf.last_exp_gate;
   // 最近命中交易日（YYYY-MM-DD），北极星 C 项：策略可追溯
   const lastDate = perf.last_recommendation_date;
 
@@ -169,10 +171,13 @@ function CalledCard({ item }: { item: StrategyListItem }) {
               maxWidth: "100%",
             }}
             title={
-              (perf.exposure_30d != null && (perf.exposure_floor ?? 20) > (perf.exposure_30d ?? 0)
-                ? `近30天 formal+experiment 曝光 ${perf.exposure_30d} < 下限 ${perf.exposure_floor ?? 20}；` +
-                  `盘前补跑会继续喂样本。0 产出=当前 regime/universe 拦截（准确>可见），勿放宽门槛。`
-                : `已结算样本 < 20，胜率属噪声，仅供参考。`)
+              gate?.gate_blocked
+                ? `最新补跑 0 产出：有效线 ${gate.effective_line ?? "—"} vs 最高候选 ${gate.max_candidate_score ?? "无"}。` +
+                  `regime 有效线偏高/无高分票，非补跑故障（准确>可见），勿放宽门线。`
+                : perf.exposure_30d != null && (perf.exposure_floor ?? 20) > (perf.exposure_30d ?? 0)
+                  ? `近30天 formal+experiment 曝光 ${perf.exposure_30d} < 下限 ${perf.exposure_floor ?? 20}；` +
+                    `盘前补跑会继续喂样本。0 产出=当前 regime/universe 拦截（准确>可见），勿放宽门槛。`
+                  : `已结算样本 < 20，胜率属噪声，仅供参考。`
             }
           >
             <span>样本不足（n={perf.sample_count}）· 胜率统计仅供参考</span>
@@ -180,8 +185,20 @@ function CalledCard({ item }: { item: StrategyListItem }) {
               <span style={{ color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
                 近30天曝光 {perf.exposure_30d}
                 {(perf.exposure_floor ?? 20) > perf.exposure_30d
-                  ? ` / ${perf.exposure_floor ?? 20} · 补跑在喂`
+                  ? gate?.gate_blocked
+                    ? ` / ${perf.exposure_floor ?? 20} · 门线拦截`
+                    : ` / ${perf.exposure_floor ?? 20} · 补跑在喂`
                   : ` ≥${perf.exposure_floor ?? 20}`}
+              </span>
+            )}
+            {gate?.gate_blocked && (
+              <span style={{ color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
+                有效线{" "}
+                {gate.effective_line != null ? Number(gate.effective_line).toFixed(1) : "—"}
+                {" vs 最高候选 "}
+                {gate.max_candidate_score != null
+                  ? Number(gate.max_candidate_score).toFixed(1)
+                  : "无"}
               </span>
             )}
           </div>

@@ -1603,6 +1603,13 @@ export type StrategyPerformance = {
   exposure_30d?: number;
   /** 曝光样本下限（默认 20） */
   exposure_floor?: number;
+  /** 最新 completed experiment 门线明细（仅曝光不足策略） */
+  last_exp_gate?: {
+    effective_line?: number | null;
+    max_candidate_score?: number | null;
+    base_score_line?: number | null;
+    gate_blocked?: boolean;
+  };
   horizon_metrics?: Record<string, unknown> | null;
   date_range?: DateRangeMeta;
 };
@@ -1620,6 +1627,7 @@ export type StrategyListItem = {
   /** 近 30 天曝光（performance 为空时仍返回，供补跑状态可见） */
   exposure_30d?: number;
   exposure_floor?: number;
+  last_exp_gate?: StrategyPerformance["last_exp_gate"];
   performance: StrategyPerformance | null;
 };
 
