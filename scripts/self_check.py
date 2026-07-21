@@ -544,6 +544,33 @@ def _classify_zero_exposure(
     return {"covered_zero": covered_zero, "uncovered": uncovered}
 
 
+def _format_e_forward_note(
+    fwd_n: int,
+    fwd_wins: int,
+    *,
+    full_n: int = 0,
+    min_oos: int = 10,  # 与 MIN_OOS_SAMPLE 对齐；字面量避免前向引用
+) -> str:
+    """E 项前瞻胜率附注（纯函数，便于单测）。
+
+    背景（2026-07-21 T18）：原逻辑 fwd_n>0 且 WR<45 一律标「真低胜率」，
+    把 high-range 前瞻 3 笔（全在 07-16 污染日、含 soft/低线）误判为真低胜率。
+    与 D 项 MIN_OOS_SAMPLE 对齐：fwd_n < min_oos → 样本过少勿判；
+    fwd_n 够且 WR≥45 → 旧污染（规则修复后回升）；够且 WR<45 → 真低胜率。
+    """
+    if fwd_n <= 0:
+        return " | 前瞻0笔(等结算)"
+    fwd_wr = round(fwd_wins * 100 / fwd_n, 1)
+    still = "仍" if full_n >= 20 else ""
+    if fwd_n < min_oos:
+        return (
+            f" | 前瞻{still}{fwd_n}笔 WR={fwd_wr}%"
+            f"(样本过少<{min_oos}，勿判真低胜率)"
+        )
+    tag = "旧污染" if fwd_wr >= 45 else "真低胜率"
+    return f" | 前瞻{still}{fwd_n}笔 WR={fwd_wr}%({tag})"
+
+
 def check_e_item(db, hit_skills: set) -> None:
     """E 项：策略覆盖盲区 + 低胜率标记。"""
     # 覆盖盲区
@@ -626,14 +653,9 @@ def check_e_item(db, hit_skills: set) -> None:
             print(f'  {row[0]}: n={n} wins={wins} avg_ret={avg_ret}% winrate={win_rate}% ←已下线(disabled)，样本冻结仅供追溯')
             continue
         tag = '低胜率' if win_rate < 45 else '低覆盖'
-        # 前瞻窗口口径（FORWARD_EPOCH 之后）：区分旧代码污染 vs 真低胜率
-        # 前瞻无样本 → 等结算；前瞻胜率回升 → 旧污染；前瞻仍低 → 真低胜率需标记
-        fwd_note = ""
-        if fwd_n > 0:
-            fwd_wr = round(fwd_wins * 100 / fwd_n, 1)
-            fwd_note = f" | 前瞻{n>=20 and '仍' or ''}{fwd_n}笔 WR={fwd_wr}%{'(旧污染)' if fwd_wr >= 45 else '(真低胜率)'}"
-        else:
-            fwd_note = " | 前瞻0笔(等结算)"
+        # 前瞻窗口口径（FORWARD_EPOCH 之后）：区分旧代码污染 vs 真低胜率 vs 样本过少
+        # （T18：fwd_n < MIN_OOS_SAMPLE 勿判真低胜率——high-range 3 笔@07-16 污染日误判先例）
+        fwd_note = _format_e_forward_note(int(fwd_n or 0), int(fwd_wins or 0), full_n=int(n or 0))
         print(f'  {row[0]}: n={n} wins={wins} avg_ret={avg_ret}% winrate={win_rate}%{fwd_note} ←{tag}需标记')
 
     # 曝光公平度 + 样本置信度（近 30 天 formal+experiment，不含 backtest）
