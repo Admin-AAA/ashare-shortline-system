@@ -281,7 +281,16 @@ function StatusBar({
           <span className="text-muted">净盈亏比：</span>
           <strong
             className="text-mono"
-            title="扣 0.07%/笔交易成本后的盈亏比（D 项目标：净盈亏比 ≥ 2.0）"
+            title={
+              winRate.pollution_n && winRate.pollution_n > 0 && winRate.clean_net_profit_loss_ratio != null
+                ? `扣 0.07%/笔后盈亏比（D 项目标 ≥ 2.0）\n` +
+                  `去污染后 ${winRate.clean_net_profit_loss_ratio.toFixed(2)}` +
+                  (winRate.pollution_pl_delta != null
+                    ? `（Δ${winRate.pollution_pl_delta >= 0 ? "+" : ""}${winRate.pollution_pl_delta.toFixed(2)}，剔除 pure 低线/soft@震荡 ${winRate.pollution_n} 票）`
+                    : "") +
+                  `\n契约层+soft ban 已拦新污染；历史票不重标，勿把污染当策略退化`
+                : "扣 0.07%/笔交易成本后的盈亏比（D 项目标：净盈亏比 ≥ 2.0）"
+            }
             style={{
               color:
                 winRate.net_profit_loss_ratio >= 2.0
@@ -293,6 +302,38 @@ function StatusBar({
           >
             {winRate.net_profit_loss_ratio.toFixed(2)}
           </strong>
+          {/* 去污染可见：净 PL 被历史污染拖累时一屏提示，不改主数字、不刷样本 */}
+          {winRate.pollution_n != null &&
+            winRate.pollution_n > 0 &&
+            winRate.clean_net_profit_loss_ratio != null &&
+            (winRate.pollution_pl_delta ?? 0) >= 0.1 && (
+              <>
+                <Sep />
+                <span className="text-muted">去污后：</span>
+                <strong
+                  className="text-mono"
+                  title={
+                    `剔除 pure 低线(<72) + pure soft@震荡 共 ${winRate.pollution_n} 独立票后的净盈亏比\n` +
+                    `主口径 ${winRate.net_profit_loss_ratio.toFixed(2)} → 去污 ${winRate.clean_net_profit_loss_ratio.toFixed(2)}` +
+                    (winRate.pollution_pl_delta != null
+                      ? `（Δ+${winRate.pollution_pl_delta.toFixed(2)}）`
+                      : "") +
+                    `\n污染是历史 formal@降线/震荡 soft 残留；新 run 已被契约层拦截`
+                  }
+                  style={{
+                    color:
+                      winRate.clean_net_profit_loss_ratio >= 2.0
+                        ? "var(--market-up)"
+                        : winRate.clean_net_profit_loss_ratio >= 1.4
+                          ? "var(--warning)"
+                          : "var(--market-down)",
+                    fontWeight: 500,
+                  }}
+                >
+                  {winRate.clean_net_profit_loss_ratio.toFixed(2)}
+                </strong>
+              </>
+            )}
         </>
       )}
 

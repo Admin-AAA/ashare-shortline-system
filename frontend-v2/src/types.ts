@@ -271,6 +271,12 @@ export type WinRateSummary = {
   net_win_rate?: number | null; // 净胜率 %
   net_avg_return?: number | null; // 净平均收益 %
   net_profit_loss_ratio?: number | null; // 净盈亏比
+  // 去污染反事实（主口径不变）：剔除 pure 低线(<72)+pure soft@震荡 后净 PL
+  // 用于解释「近 N 日净 PL 偏低是否历史污染拖累」——契约层/soft ban 已拦新污染，历史票不重标
+  clean_sample_count?: number;
+  clean_net_profit_loss_ratio?: number | null;
+  pollution_n?: number; // pure 污染独立 (code,date) 数
+  pollution_pl_delta?: number | null; // clean_pl - raw_pl，>0 表示污染拖累 PL
 };
 
 // LLM 审查层健康度（驾驶舱状态条「AI 审查」徽章数据源 — 北极星 B 项可见性缺口修复）

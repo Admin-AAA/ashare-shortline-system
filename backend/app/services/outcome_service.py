@@ -714,9 +714,63 @@ def recent_formal_win_rate(db: Session, window_trade_days: int = 5) -> dict[str,
     - trade_date 取最近 N 个 status=completed 的 formal 交易日（按交易日而非日历日，避免空窗虚算）。
     - 仅统计 outcome_label∈{success,failed} 的已结算推荐；未结算不计入分母（诚实，不虚构胜率）。
     - 内连接 recommendation_outcomes 天然排除回测 btrec_*；再叠加 rec_ 前缀过滤双保险。
+    - 去污染反事实（2026-07-21 T18）：剔除 pure 低线(<72) + pure soft@震荡 后的净盈亏比，
+      供状态条解释「近 N 日净 PL 偏低是否历史污染拖累」（契约层/soft ban 已拦新污染，
+      历史票不重标；不改主口径 win_rate/net_pl，仅附加 clean_* 字段）。
     """
     cache_key = f"recent_formal_win_rate:{window_trade_days}"
     return _cached(cache_key, lambda: _recent_formal_win_rate(db, window_trade_days))
+
+
+def _truthy_soft(v: Any) -> bool:
+    return v is not None and str(v).lower() in ("1", "true", "yes")
+
+
+def _pure_pollution_keys_from_rows(
+    rows: list,
+    *,
+    score_floor: float = 72.0,
+    banned_soft_bases: frozenset[str] | set[str] = frozenset({"震荡"}),
+) -> set[tuple]:
+    """从 win-rate 行提取 pure 污染 (code, trade_date)。
+
+    行形：任一序列，至少含 code/td/sl/soft/mbase（见调用方映射）。
+    pure_low = 仅 sl<floor 产出且同日同股无 hard(sl>=floor) 孪生
+    pure_soft = 仅 soft@banned_base 产出且同日同股无 hard(非 soft) 孪生
+    """
+    hard_sl: set[tuple] = set()
+    low_sl: set[tuple] = set()
+    hard_soft: set[tuple] = set()
+    soft_ban: set[tuple] = set()
+    for code, td, sl, soft, base in rows:
+        key = (code, str(td))
+        try:
+            sl_f = float(sl or 0)
+        except (TypeError, ValueError):
+            sl_f = 0.0
+        if sl_f >= score_floor:
+            hard_sl.add(key)
+        else:
+            low_sl.add(key)
+        if not _truthy_soft(soft):
+            hard_soft.add(key)
+        elif str(base or "") in banned_soft_bases:
+            soft_ban.add(key)
+    pure_low = low_sl - hard_sl
+    pure_soft = soft_ban - hard_soft
+    return pure_low | pure_soft
+
+
+def _net_pl_ratio(rets: list[float]) -> float | None:
+    """扣 0.07%/笔后的盈亏比；无亏损侧时 None。"""
+    net = [x - _ADDITIONAL_COST_PCT for x in rets]
+    wins = [x for x in net if x > 0]
+    losses = [abs(x) for x in net if x < 0]
+    if not losses:
+        return None
+    win_avg = sum(wins) / len(wins) if wins else 0.0
+    loss_avg = sum(losses) / len(losses)
+    return round(win_avg / loss_avg, 2)
 
 
 def _recent_formal_win_rate(db: Session, window_trade_days: int) -> dict[str, Any]:
@@ -740,28 +794,37 @@ def _recent_formal_win_rate(db: Session, window_trade_days: int) -> dict[str, An
         "win_rate": None,
         "avg_return": None,
         "profit_loss_ratio": None,
+        "net_win_rate": None,
+        "net_avg_return": None,
+        "net_profit_loss_ratio": None,
+        "clean_sample_count": 0,
+        "clean_net_profit_loss_ratio": None,
+        "pollution_n": 0,
+        "pollution_pl_delta": None,
     }
     if not trade_dates:
         return empty
 
-    rows = (
-        db.execute(
-            select(
-                RecommendationOutcome.outcome_label,
-                RecommendationOutcome.executed_return,
-            )
-            .select_from(Recommendation)
-            .join(RecommendationRun, Recommendation.run_id == RecommendationRun.run_id)
-            .join(RecommendationOutcome, Recommendation.recommendation_id == RecommendationOutcome.recommendation_id)
-            .where(
-                RecommendationRun.run_mode == "formal",
-                Recommendation.recommendation_id.like("rec_%"),
-                Recommendation.trade_date.in_(trade_dates),
-                RecommendationOutcome.outcome_label.in_(["success", "failed"]),
-            )
-        )
-        .all()
-    )
+    # 带污染诊断字段：run.score_line + feature_snapshot 里 soft/mbase
+    # 用原生 SQL + expanding IN，避免 text().label() 在部分 SA 版本不可用
+    from sqlalchemy import bindparam
+    td_strs = [str(d) for d in trade_dates]
+    stmt = text("""
+        SELECT r.code, r.trade_date, o.outcome_label, o.executed_return,
+               u.score_line,
+               JSON_EXTRACT(r.feature_snapshot_json,
+                            '$.score_line_meta.dynamic_soft_floor_applied') AS soft,
+               JSON_UNQUOTE(JSON_EXTRACT(r.feature_snapshot_json,
+                            '$.score_line_meta.market_base')) AS mbase
+        FROM recommendation_outcomes o
+        JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+        WHERE r.recommendation_id LIKE 'rec_%'
+          AND r.trade_date IN :tds
+          AND o.outcome_label IN ('success', 'failed')
+    """).bindparams(bindparam("tds", expanding=True))
+    rows = db.execute(stmt, {"tds": td_strs}).all()
+
     sample_count = len(rows)
     if sample_count == 0:
         return empty
@@ -769,13 +832,33 @@ def _recent_formal_win_rate(db: Session, window_trade_days: int) -> dict[str, An
     losses = [r for r in rows if r.outcome_label == "failed"]
     win_avg = sum(r.executed_return or 0 for r in wins) / len(wins) if wins else 0.0
     loss_avg = sum(abs(r.executed_return or 0) for r in losses) / len(losses) if losses else 0.0
-    # 净成本口径（扣 0.07%/笔：佣金万1双边 + 印花税卖出）—— D 项目标定义为扣费后须达标
-    rets = [r.executed_return or 0 for r in rows]
+    rets = [float(r.executed_return or 0) for r in rows]
     net_rets = [x - _ADDITIONAL_COST_PCT for x in rets]
     net_wins = [x for x in net_rets if x > 0]
     net_losses = [abs(x) for x in net_rets if x < 0]
     net_win_avg = sum(net_wins) / len(net_wins) if net_wins else 0.0
     net_loss_avg = sum(net_losses) / len(net_losses) if net_losses else 0.0
+    net_pl = round(net_win_avg / net_loss_avg, 2) if net_loss_avg else None
+
+    # 去污染：pure 低线 + pure soft@震荡
+    pol_input = [
+        (r.code, r.trade_date, r.score_line, r.soft, r.mbase)
+        for r in rows
+    ]
+    pol_keys = _pure_pollution_keys_from_rows(pol_input)
+    clean_rets = [
+        float(r.executed_return or 0)
+        for r in rows
+        if (r.code, str(r.trade_date)) not in pol_keys
+    ]
+    clean_pl = _net_pl_ratio(clean_rets) if clean_rets else None
+    pol_n = len(pol_keys)
+    pl_delta = (
+        round(clean_pl - net_pl, 2)
+        if clean_pl is not None and net_pl is not None and pol_n > 0
+        else None
+    )
+
     return {
         "window_trade_days": window_trade_days,
         "trade_dates": trade_dates,
@@ -784,10 +867,14 @@ def _recent_formal_win_rate(db: Session, window_trade_days: int) -> dict[str, An
         "win_rate": round(len(wins) * 100.0 / sample_count, 1),
         "avg_return": round(sum(r.executed_return or 0 for r in rows) / sample_count, 2),
         "profit_loss_ratio": round(win_avg / loss_avg, 2) if loss_avg else None,
-        # 净成本口径（D 项扣费后真实胜率/盈亏比，与 self_check.ADDITIONAL_COST_PCT 一致）
         "net_win_rate": round(len(net_wins) * 100.0 / sample_count, 1),
         "net_avg_return": round(sum(net_rets) / sample_count, 2),
-        "net_profit_loss_ratio": round(net_win_avg / net_loss_avg, 2) if net_loss_avg else None,
+        "net_profit_loss_ratio": net_pl,
+        # 去污染反事实（主口径不变，附加字段）
+        "clean_sample_count": len(clean_rets),
+        "clean_net_profit_loss_ratio": clean_pl,
+        "pollution_n": pol_n,
+        "pollution_pl_delta": pl_delta,
     }
 
 
