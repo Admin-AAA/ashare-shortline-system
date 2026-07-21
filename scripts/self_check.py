@@ -1665,13 +1665,13 @@ def _print_low_score_line_pollution(db, last10: set | None = None) -> None:
             61.5,
             PL_RATIO_BASELINE,
         )
-        # clean 近10日仍低于基线 → 低线污染不是主因，禁止停在污染叙事
+        # clean 近10日仍低于基线 → 低线污染+soft 不是主因，禁止停在污染叙事
+        # T39：排除 soft 后 clean 口径已修正——07-16 "clean WR 23%" 是 soft@震荡混入假象
         if clean_l10 is not None and clean_l10["net_pl"] < PL_RATIO_BASELINE:
             print(
-                f'  ⚠️ 护栏: clean≥{floor:g} 近10日净盈亏比 {clean_l10["net_pl"]} '
+                f'  ⚠️ 护栏: clean≥{floor:g}(excl soft) 近10日净盈亏比 {clean_l10["net_pl"]} '
                 f'仍低于基线 {PL_RATIO_BASELINE}（n={clean_l10["n"]}）'
-                f'——低线污染不是近10日 PL 主因；禁止仅凭污染解释停排查，'
-                f'应继续看 regime/策略（如 07-16 震荡 clean WR 塌方）'
+                f'——排除低线+soft 后仍差，查 regime/策略真问题'
             )
 
 
