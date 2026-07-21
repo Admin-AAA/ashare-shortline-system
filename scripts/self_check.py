@@ -2445,8 +2445,83 @@ def check_d_item(db) -> None:
                 f'勿据此循环加规则）') if share >= 40 else '单日集中度正常'
         print(f'D 项单日集中度：最大单日 {top_day[0]} {top_day[1]} 只独立股票（{share:.0f}%）— {flag}')
 
+    # 出场分布诊断（T3.5 业务模块护栏）：clean≥72 的 exit_reason 分布 + max vs exec 未吃高点。
+    # 防 trailing stop「过早锁利」误判——2026-07-22 实证 trailing_stop_hit 未吃高点仅 +0.90%
+    # （max 3.42% vs exec 2.52%，高点就在触发价附近），并非过早锁利，勿调 callback 参数过拟合。
+    _check_exit_reason_breakdown(db)
+
     # 规则覆盖前瞻校验：区分"历史污染"vs"真退化"
     check_d_rule_coverage(db, WIN_RATE_BASELINE)
+
+
+def _exit_reason_breakdown_stats(items: list) -> dict[str, dict]:
+    """纯函数：由 [(exit_reason, executed_return, max_return)] 列表算每 reason 的分布。
+
+    返回 {reason: {n, avg_exec, avg_max, avg_min_unused(未吃高点)}}。未吃高点 = max - exec，
+    衡量「触发出场后票还有多少没吃到」——trailing_stop 未吃高点小说明没过早锁利。
+    供 _check_exit_reason_breakdown 单测，与 DB 解耦。
+    """
+    from collections import defaultdict
+    buckets: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    for reason, exec_ret, max_ret in items:
+        if reason is None:
+            continue
+        buckets[reason].append((float(exec_ret or 0), float(max_ret or 0)))
+    out: dict[str, dict] = {}
+    for reason, vals in buckets.items():
+        n = len(vals)
+        if n == 0:
+            continue
+        avg_exec = sum(v[0] for v in vals) / n
+        avg_max = sum(v[1] for v in vals) / n
+        left_on_table = sum(v[1] - v[0] for v in vals) / n  # 未吃高点 = max - exec
+        out[reason] = {
+            "n": n,
+            "avg_exec": round(avg_exec, 2),
+            "avg_max": round(avg_max, 2),
+            "left_on_table": round(left_on_table, 2),
+        }
+    return out
+
+
+def _check_exit_reason_breakdown(db) -> None:
+    """clean≥72 formal outcome 的 exit_reason 分布 + 未吃高点诊断。
+
+    防 trailing stop「过早锁利」误判：未吃高点（max_return - executed_return）小 →
+    trailing 触发时高点就在附近，非过早锁利。2026-07-22 实证 trailing_stop_hit 未吃高点
+    仅 +0.90%，证伪上上轮基于虚构 max_return（算到 horizon 末）的过早锁利怀疑。
+    """
+    try:
+        rows = db.execute(text("""
+            SELECT ro.exit_reason, ro.executed_return, ro.max_return
+            FROM recommendation_outcomes ro
+            JOIN recommendations r ON r.recommendation_id = ro.recommendation_id
+            JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+            WHERE ro.outcome_label IN ('success', 'failed')
+              AND r.recommendation_id LIKE 'rec_%'
+              AND r.final_score >= 72.0
+              AND ro.exit_reason IS NOT NULL
+        """)).fetchall()
+    except Exception as exc:
+        print(f'  ⚠️ 出场分布诊断查询失败: {exc}')
+        return
+    if not rows:
+        return
+    stats = _exit_reason_breakdown_stats([(r[0], r[1], r[2]) for r in rows])
+    if not stats:
+        return
+    # 按 n 降序输出
+    print('  出场分布（clean≥72 formal，未吃高点=max_return-executed_return）:')
+    for reason, s in sorted(stats.items(), key=lambda x: -x[1]["n"]):
+        print(f'    {reason}: n={s["n"]} exec={s["avg_exec"]:+.2f}% max={s["avg_max"]:+.2f}% 未吃高点={s["left_on_table"]:+.2f}%')
+    trailing = stats.get("trailing_stop_hit")
+    if trailing and trailing["n"] >= 5:
+        if trailing["left_on_table"] <= 2.0:
+            print(f'    ——trailing_stop 未吃高点 {trailing["left_on_table"]:+.2f}% ≤2%：触发时高点在附近，'
+                  f'非过早锁利，勿调 callback 参数过拟合。')
+        else:
+            print(f'    ⚠️trailing_stop 未吃高点 {trailing["left_on_table"]:+.2f}% >2%：触发过早，'
+                  f'可评估放宽 callback（须 P0 backtest 正式验证，勿直接改参数）。')
 
 
 def check_d_rule_coverage(db, win_rate_baseline: float) -> None:
