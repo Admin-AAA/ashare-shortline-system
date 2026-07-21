@@ -662,18 +662,35 @@ def check_e_item(db, hit_skills: set) -> None:
             GROUP BY jt.strategy_id
         """)).fetchall()
         recent_in_experiment: dict[str, tuple] = {row[0]: (row[1], int(row[2] or 0)) for row in recent_rows}
+        # 近 7 天是否有 completed 的补跑 run（区分「补跑根本没跑」vs「跑了但门线拦 0」）。
+        # 第三种情况（补跑每天跑、completed、但 recommended_count=0）不是停滞也不是在喂，
+        # 是规则门/score_line 把低样本策略的候选全拦——这是该策略当前 regime 无高分票的
+        # 正确反映（补跑用与 formal 相同门线，低曝光策略天然易撞线），**不能为喂样本放宽
+        # 门线**（会把本不该推的低质量票推出去，污染胜率统计）。
+        exposure_run_alive = db.execute(text("""
+            SELECT COUNT(*) FROM recommendation_runs
+            WHERE run_mode = 'experiment' AND status = 'completed'
+              AND started_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+        """)).scalar() or 0
         stalled: list[str] = []
         feeding: list[str] = []
+        gate_blocked: list[str] = []
         for sid in under_floor:
             hit = recent_in_experiment.get(sid)
             if hit and hit[1] > 0:
                 feeding.append(f'{sid}({hit[1]}笔@{str(hit[0])[:10]})')
+            elif exposure_run_alive > 0:
+                gate_blocked.append(sid)
             else:
                 stalled.append(sid)
         if feeding:
             print(f'  ℹ️ 补跑在喂（窄口径样本天然慢，非 bug，不加 universe）: {feeding}')
+        if gate_blocked:
+            print(f'  ℹ️ 补跑在跑但门线拦截（近7天补跑 run completed 但 0 产出={len(gate_blocked)} 策略；'
+                  f'低样本策略候选规则分撞线，当前 regime 无高分票，非补跑故障——'
+                  f'勿为喂样本放宽门线，会污染胜率统计）: {gate_blocked}')
         if stalled:
-            print(f'  🚨 补跑停滞（近7天 0 experiment 命中，run 可能失败/未触发，需手动触发验证）: {stalled}')
+            print(f'  🚨 补跑停滞（近7天无 completed 补跑 run，run 可能失败/未触发，需手动触发验证）: {stalled}')
 
 
 # 前瞻样本分界：自该交易日起，已上线的策略规则（strategy.yaml / aggregator.py）
