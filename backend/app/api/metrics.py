@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
+import logging
 
 from app.db.session import get_db
 from app.services.outcome_service import (
@@ -10,6 +11,8 @@ from app.services.outcome_service import (
     overview_metrics,
     precision_at_k,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/metrics", tags=["metrics"])
 
@@ -210,9 +213,60 @@ def d_diagnostics(db: Session = Depends(get_db)):
             ),
         }
 
+    # phase 信息量（T5→T7：self_check 每轮可见后，指标页一屏同步）
+    phase_info = None
+    try:
+        import importlib.util
+
+        diag_path = scripts / "diagnose_phase_information.py"
+        spec = importlib.util.spec_from_file_location("diagnose_phase_information", diag_path)
+        if spec is not None and spec.loader is not None:
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            records = mod._fetch_live_formal_ledger(db)
+            if records and len(records) >= 30:
+                rep = mod.build_phase_report(records)
+                alpha = getattr(mod, "ALPHA", 0.05)
+                notables = [
+                    {
+                        "dim": b.get("dim"),
+                        "name": b.get("name"),
+                        "n": b.get("n"),
+                        "winrate": b.get("winrate"),
+                        "net_plr": b.get("net_plr"),
+                        "avg_ret": b.get("avg_ret"),
+                    }
+                    for b in (rep.get("notable_buckets") or [])
+                    if b.get("winrate", 100) < (rep.get("overall") or {}).get("winrate", 0)
+                ][:4]
+                phase_info = {
+                    "n": rep["overall"]["n"],
+                    "overall_winrate": rep["overall"]["winrate"],
+                    "regime_chi2": rep["regime_chi2"],
+                    "regime_p": rep["regime_p"],
+                    "regime_significant": rep["regime_p"] < alpha,
+                    "sentiment_chi2": rep["sentiment_chi2"],
+                    "sentiment_p": rep["sentiment_p"],
+                    "sentiment_significant": rep["sentiment_p"] < alpha,
+                    "notable_low_buckets": notables,
+                    "note": (
+                        "sentiment 无独立信息量：防守投 regime 真亏桶，勿对 sentiment 加规则"
+                        if rep["sentiment_p"] >= alpha and rep["regime_p"] < alpha
+                        else (
+                            "regime 信息量消失：勿在 phase 上加精细 veto（过拟合噪声）"
+                            if rep["regime_p"] >= alpha
+                            else None
+                        )
+                    ),
+                }
+    except Exception as exc:
+        logger.warning("phase information for d-diagnostics failed: %s", exc)
+        phase_info = None
+
     return {
         "residual_n": len(uncovered),
         "modes": modes,
         "pseudo_active": pseudo,
+        "phase_information": phase_info,
         "forward_epoch": self_check.FORWARD_EPOCH_PINNED,
     }

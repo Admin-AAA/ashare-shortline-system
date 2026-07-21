@@ -188,7 +188,7 @@ function relTime(iso: string | null | undefined): string {
 
 /** 系统可信度面板 —— 后端诊断一屏可见：
  *  - LLM 审查层新鲜度 / 时态一致性（B/C）
- *  - D 项真残留毒区 + 伪活跃反事实（与 self_check 同源，T32）
+ *  - D 项真残留毒区 + 伪活跃反事实 + phase 信息量（与 self_check 同源，T32/T34）
  * 各子视图独立加载 / 容错。 */
 function SystemHealthPanel() {
   const { data: review, loading: lR, error: eR } = useApi<LlmReviewHealth>(
@@ -207,7 +207,7 @@ function SystemHealthPanel() {
   return (
     <MetricCard
       kicker="系统可信度"
-      title="审查层 · 一致性 · D 项毒区"
+      title="审查层 · 一致性 · D 项毒区 · phase"
       actions={
         <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
           北极星 B/C/D 可观测
@@ -217,13 +217,14 @@ function SystemHealthPanel() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
           gap: "var(--space-4)",
         }}
       >
         <ReviewHealthBlock data={review} loading={lR} error={eR} />
         <TemporalConsistencyBlock data={temporal} loading={lT} error={eT} />
         <DDiagnosticsBlock data={dDiag} loading={lD} error={eD} />
+        <PhaseInformationBlock data={dDiag} loading={lD} error={eD} />
       </div>
     </MetricCard>
   );
@@ -311,6 +312,98 @@ function DDiagnosticsBlock({
             title={pa.note}
           >
             {pa.note.length > 72 ? `${pa.note.slice(0, 72)}…` : pa.note}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** phase/sentiment 信息量块（T34）：与 self_check D 项 phase 摘要同源。 */
+function PhaseInformationBlock({
+  data,
+  loading,
+  error,
+}: {
+  data: DDiagnostics | null | undefined;
+  loading: boolean;
+  error: unknown;
+}) {
+  if (loading) return <CardSkeleton count={3} />;
+  if (error) return <HealthErrorNote msg="phase 信息量获取失败" />;
+  if (!data) return null;
+  const pi = data.phase_information;
+  if (!pi) {
+    return (
+      <div
+        style={{
+          background: "var(--surface-1)",
+          border: "1px solid var(--line)",
+          borderRadius: "var(--radius-sm, 6px)",
+          padding: "var(--space-3)",
+        }}
+      >
+        <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-muted)" }}>
+          phase 信息量 · —
+        </div>
+      </div>
+    );
+  }
+  const ok = pi.regime_significant;
+  const color = ok ? "var(--market-down)" : "var(--warning)";
+  const label = ok ? "regime 有效" : "regime 无信息";
+  const topLow = pi.notable_low_buckets?.[0];
+  return (
+    <div
+      style={{
+        background: "var(--surface-1)",
+        border: "1px solid var(--line)",
+        borderRadius: "var(--radius-sm, 6px)",
+        padding: "var(--space-3)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: "var(--space-3)" }}>
+        <span
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            background: color,
+            boxShadow: `0 0 0 3px color-mix(in srgb, ${color} 18%, transparent)`,
+          }}
+        />
+        <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color }}>
+          phase 信息量 · {label}
+        </span>
+      </div>
+      <div style={{ display: "grid", gap: "var(--space-2)" }}>
+        <HealthRow
+          label="regime"
+          value={`p=${Number(pi.regime_p).toFixed(3)}${pi.regime_significant ? "·显著" : "·否"}`}
+        />
+        <HealthRow
+          label="sentiment"
+          value={`p=${Number(pi.sentiment_p).toFixed(3)}${pi.sentiment_significant ? "·显著" : "·否"}`}
+        />
+        {topLow ? (
+          <HealthRow
+            label="亏桶"
+            value={`${topLow.name} WR=${topLow.winrate}% n=${topLow.n}`}
+          />
+        ) : (
+          <HealthRow label="亏桶" value="—" />
+        )}
+        {pi.note && (
+          <div
+            style={{
+              fontSize: "var(--text-xs)",
+              color: "var(--text-muted)",
+              lineHeight: 1.45,
+              marginTop: 2,
+            }}
+            title={pi.note}
+          >
+            {pi.note.length > 80 ? `${pi.note.slice(0, 80)}…` : pi.note}
           </div>
         )}
       </div>

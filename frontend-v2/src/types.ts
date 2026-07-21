@@ -306,7 +306,7 @@ export type TemporalConsistency = {
   violations?: Array<Record<string, unknown>>;
 };
 
-/** D 项诊断摘要（/api/metrics/d-diagnostics）：真残留毒区 + 伪活跃反事实，与 self_check 同源。 */
+/** D 项诊断摘要（/api/metrics/d-diagnostics）：真残留毒区 + 伪活跃 + phase 信息量，与 self_check 同源。 */
 export type DDiagnostics = {
   residual_n: number;
   modes: Array<{ mode: string; n: number; avg_return: number }>;
@@ -321,6 +321,26 @@ export type DDiagnostics = {
       new_sent?: string;
       lu?: number;
       ld?: number;
+    }>;
+    note?: string | null;
+  } | null;
+  /** phase/sentiment 信息量（T5→T7：self_check 每轮可见后指标页一屏同步） */
+  phase_information?: {
+    n: number;
+    overall_winrate: number;
+    regime_chi2: number;
+    regime_p: number;
+    regime_significant: boolean;
+    sentiment_chi2: number;
+    sentiment_p: number;
+    sentiment_significant: boolean;
+    notable_low_buckets: Array<{
+      dim?: string;
+      name?: string;
+      n?: number;
+      winrate?: number;
+      net_plr?: number;
+      avg_ret?: number;
     }>;
     note?: string | null;
   } | null;
