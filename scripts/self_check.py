@@ -3164,6 +3164,15 @@ def _print_residual_poison_zone(uncovered: list[dict], success_items: list[dict]
                     f'     · 允许 soft 失败 {c["soft_allowed"]} 笔（soft@非震荡仍合法，'
                     f'如 soft@弱势；禁当 sparse entry 目标）'
                 )
+                soft_items = _sparse_residual_items(
+                    uncovered, triage.get("soft_allowed_rids") or [],
+                )
+                for it in soft_items:
+                    print(
+                        f'       · [允许soft] {it["trade_date"]} {it["code"]} {it["mode"]} '
+                        f'{it["regime"]}·{it["sentiment"]} ret={it["ret"]} '
+                        f'— {it["note"]}'
+                    )
             if c["sparse"] > 0:
                 print(
                     f'     · 稀疏 {c["sparse"]} 笔可关注但仍须跨日可分特征；'
@@ -3177,6 +3186,13 @@ def _print_residual_poison_zone(uncovered: list[dict], success_items: list[dict]
                         f'       · {it["trade_date"]} {it["code"]} {it["mode"]} '
                         f'{it["regime"]}·{it["sentiment"]} ret={it["ret"]} '
                         f'— {it["note"]}'
+                    )
+                # T38：稀疏同日但未达 day_cluster(n≥4) 时仍禁止合并加 entry
+                s_days = sorted({str(it.get("trade_date") or "") for it in sparse_items if it.get("trade_date")})
+                if len(s_days) == 1 and len(sparse_items) >= 2:
+                    print(
+                        f'       ——稀疏同日 {s_days[0]} {len(sparse_items)} 笔'
+                        f'（未达单日簇阈值 n≥4，仍禁合并 entry）'
                     )
             else:
                 print(

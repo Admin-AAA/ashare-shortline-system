@@ -348,6 +348,19 @@ export type DDiagnostics = {
       soft_applied?: boolean;
       note?: string;
     }>;
+    /** soft@允许档失败明细（禁当 sparse entry） */
+    soft_allowed_items?: Array<{
+      rid?: string;
+      trade_date?: string;
+      code?: string;
+      mode?: string;
+      regime?: string;
+      sentiment?: string;
+      ret?: number | null;
+      note?: string;
+    }>;
+    /** 稀疏同日（未达 day_cluster n≥4）仍禁合并 entry */
+    sparse_same_day?: string | null;
     note?: string | null;
     actionable?: boolean;
   } | null;

@@ -399,6 +399,12 @@ def main(argv: list | None = None) -> int:
                 sparse_items = self_check._sparse_residual_items(
                     uncovered, triage_raw.get("sparse_rids") or [],
                 )
+                soft_allowed_items = self_check._sparse_residual_items(
+                    uncovered, triage_raw.get("soft_allowed_rids") or [],
+                )
+                sparse_days = sorted(
+                    {str(it.get("trade_date") or "") for it in sparse_items if it.get("trade_date")}
+                )
                 triage = {
                     "n": triage_raw["n"],
                     "pure_pollution": c.get("pure_pollution", 0),
@@ -416,6 +422,20 @@ def main(argv: list | None = None) -> int:
                         }
                         for it in sparse_items
                     ],
+                    "soft_allowed_items": [
+                        {
+                            "trade_date": it.get("trade_date"),
+                            "code": it.get("code"),
+                            "mode": it.get("mode"),
+                            "note": it.get("note"),
+                        }
+                        for it in soft_allowed_items
+                    ],
+                    "sparse_same_day": (
+                        sparse_days[0]
+                        if len(sparse_days) == 1 and len(sparse_items) >= 2
+                        else None
+                    ),
                     "ban_n": triage_raw.get("ban_n"),
                     "note": triage_raw.get("note"),
                 }
