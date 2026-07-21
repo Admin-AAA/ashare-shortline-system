@@ -20,6 +20,8 @@ score_line_meta 兜底），但覆盖**全量 LIVE formal ledger**（含成功�
 """
 from __future__ import annotations
 
+import argparse
+import datetime
 import json
 import math
 import os
@@ -37,6 +39,12 @@ from sqlalchemy import text  # noqa: E402
 MIN_BUCKET_N = 20          # <20 桶胜率不可信（与 E 项 DEFAULT_EXPOSURE_MIN_SAMPLE=20 同源）
 NOTABLE_DEVIATION_PP = 10  # 桶胜率相对全量偏离 >=10pp 视为「值得注意」
 ALPHA = 0.05               # 显著性水平
+BASELINE_WR = 61.5          # 系统全量净胜率基线（与 self_check 基线 61.5% 对齐）
+
+# 默认 JSON 报告落盘路径（output/ 已被 .gitignore 忽略，不进版本库）
+REPORT_DEFAULT_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), '..', 'output', 'phase_information_report.json')
+)
 
 # —— χ² 上尾 p 值：列联表 df=(桶数-1)*(类别数-1)，类别=2(胜/负) → df 必为整数 —— #
 # 故可用闭式解（无需 scipy / 不完全 Gamma 连分式，避免数值脆弱）：
@@ -255,6 +263,48 @@ def build_phase_report(records: list[dict]) -> dict[str, Any]:
     }
 
 
+def evaluate_regime_defense(rep: dict[str, Any], baseline_wr: float = BASELINE_WR) -> dict[str, Any]:
+    """纯函数：基于 χ² 信息量检验 + 各 regime 桶胜率 vs 系统基线，给出 regime 防守评估。
+
+    把「phase 是否值得在防守规则上投入」固化为机器可读结论，供跨 run JSON 漂移追踪，
+    避免每轮靠人工读文本判断。决策树（与第一性原理/历轮证伪一致）：
+      · regime χ² p < ALPHA（显著有信息量）→ keep_defense=True，理由=regime_chi2_significant。
+      · regime χ² p >= ALPHA 但存在桶胜率 < 基线（如 震荡 59.2% < 61.5%）→
+        χ² 不显著是样本不均导致的检验力不足（弱势占 71% 样本、df=4 欠功率），
+        该桶确为拖累（低于系统基线），防守（soft ban / veto）是去噪非过拟合
+        → keep_defense=True，理由=below_baseline_bucket_under_power_limited_chi2。
+      · regime χ² p >= ALPHA 且所有可信桶胜率 >= 基线 → phase 真实无信息量，
+        防守规则可简化（本报告不改规则，仅标记 keep_defense=False，理由=no_information_content）。
+    返回 {keep_defense, reason, below_baseline_buckets, min_bucket_wr}。
+    """
+    below = [
+        name for name, st in rep["by_regime"].items()
+        if st["n"] >= MIN_BUCKET_N and st["winrate"] < baseline_wr
+    ]
+    credible = [st["winrate"] for st in rep["by_regime"].values() if st["n"] >= MIN_BUCKET_N]
+    min_wr = min(credible) if credible else None
+    if rep["regime_p"] < ALPHA:
+        return {
+            "keep_defense": True,
+            "reason": "regime_chi2_significant",
+            "below_baseline_buckets": below,
+            "min_bucket_wr": min_wr,
+        }
+    if below:
+        return {
+            "keep_defense": True,
+            "reason": "below_baseline_bucket_under_power_limited_chi2",
+            "below_baseline_buckets": below,
+            "min_bucket_wr": min_wr,
+        }
+    return {
+        "keep_defense": False,
+        "reason": "no_information_content",
+        "below_baseline_buckets": [],
+        "min_bucket_wr": min_wr,
+    }
+
+
 def _fetch_live_formal_ledger(db) -> list[dict]:
     """从 DB 取 LIVE formal ledger（rec_* + run_mode=formal），每条带 feature_snapshot + outcome。"""
     rows = db.execute(text("""
@@ -338,10 +388,45 @@ def render_report(rep: dict[str, Any]) -> str:
             "结论：phase 对短线 outcome 无统计显著信息量（p>=%s）——继续在 phase 上做精细"
             "veto/抬线/soft 调整本质是过拟合噪声，应简化而非加规则。" % ALPHA
         )
+    # 防守评估（机器可读结论，供跨 run 漂移追踪）
+    defense = evaluate_regime_defense(rep)
+    lines.append("")
+    if defense["keep_defense"]:
+        extra = (
+            f"；低于基线 {BASELINE_WR}% 的桶={defense['below_baseline_buckets']}"
+            if defense["below_baseline_buckets"] else ""
+        )
+        lines.append(
+            f"防守评估：保留 regime 防守（soft ban / veto）。理由={defense['reason']}；"
+            f"最低可信桶胜率={defense['min_bucket_wr']}%{extra}"
+        )
+    else:
+        lines.append(
+            f"防守评估：phase 无信息量且无非基线桶，可考虑简化 regime 防守规则"
+            f"（本报告不改规则）。理由={defense['reason']}；最低可信桶胜率={defense['min_bucket_wr']}%"
+        )
     return "\n".join(lines)
 
 
-def main() -> int:
+def write_report(report: dict[str, Any], path: str) -> None:
+    """把结构化 phase 报告落盘为 JSON（output/ 已被 .gitignore 忽略，不进版本库）。
+
+    供跨 run 漂移追踪——phase χ² p 值 / regime 防守结论若缓慢退化，单点文本看不出，
+    JSON 历史 diff 可捕获（与 verify_d_guardrail --json 同一思路）。
+    """
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+
+
+def main(argv: list | None = None) -> int:
+    parser = argparse.ArgumentParser(description="市场状态(phase)信息量诊断")
+    parser.add_argument(
+        "--json", nargs="?", const=REPORT_DEFAULT_PATH, default=None,
+        help="写出机器可读 JSON 报告；不指定路径则用默认 output/phase_information_report.json",
+    )
+    args = parser.parse_args(argv)
+
     db = SessionLocal()
     try:
         records = _fetch_live_formal_ledger(db)
@@ -352,6 +437,17 @@ def main() -> int:
         return 0
     rep = build_phase_report(records)
     print(render_report(rep))
+    if args.json:
+        defense = evaluate_regime_defense(rep)
+        full_report = {
+            "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
+            "baseline_winrate": BASELINE_WR,
+            "alpha": ALPHA,
+            **rep,
+            "regime_defense": defense,
+        }
+        write_report(full_report, args.json)
+        print(f"📄 JSON 报告已写出: {args.json}")
     return 0
 
 

@@ -129,3 +129,82 @@ def test_render_report_runs():
     out = dpi.render_report(rep)
     assert "显著有信息量" in out
     assert "震荡" in out or "弱势" in out
+
+
+def _phase_report_like(real: bool) -> dict:
+    """构造一个贴近真实 LIVE ledger 的 phase 报告 dict（仅 regime 维度相关字段）。"""
+    if real:
+        # 真实态：regime χ² 不显著(0.0979)，但 震荡 桶 59.2% < 基线 61.5%
+        return {
+            "overall": {"winrate": 71.2, "n": 292},
+            "by_regime": {
+                "弱势": {"n": 207, "winrate": 73.4},
+                "震荡": {"n": 49, "winrate": 59.2},
+                "结构性强势": {"n": 22, "winrate": 63.6},
+                "强势": {"n": 12, "winrate": 91.7},
+            },
+            "regime_p": 0.0979,
+        }
+    # 假设态：regime χ² 显著、两桶差异大
+    return {
+        "overall": {"winrate": 50.0, "n": 200},
+        "by_regime": {
+            "弱势": {"n": 100, "winrate": 70.0},
+            "震荡": {"n": 100, "winrate": 30.0},
+        },
+        "regime_p": 0.01,
+    }
+
+
+def test_evaluate_regime_defense_below_baseline_keeps():
+    # 当前真实态：χ² 不显著（检验力不足），但 震荡 桶低于基线 → 保留防守
+    rep = _phase_report_like(real=True)
+    d = dpi.evaluate_regime_defense(rep)
+    assert d["keep_defense"] is True
+    assert d["reason"] == "below_baseline_bucket_under_power_limited_chi2"
+    assert d["below_baseline_buckets"] == ["震荡"]
+    assert d["min_bucket_wr"] == 59.2
+
+
+def test_evaluate_regime_defense_significant_keeps():
+    # 假设态：χ² 显著 → 保留防守
+    rep = _phase_report_like(real=False)
+    d = dpi.evaluate_regime_defense(rep)
+    assert d["keep_defense"] is True
+    assert d["reason"] == "regime_chi2_significant"
+
+
+def test_evaluate_regime_defense_no_info_drops():
+    # χ² 不显著 且 所有可信桶 ≥ 基线 → 无信息量，标记可简化（不改规则）
+    rep = {
+        "overall": {"winrate": 65.0, "n": 200},
+        "by_regime": {
+            "弱势": {"n": 100, "winrate": 66.0},
+            "强势": {"n": 100, "winrate": 64.0},
+        },
+        "regime_p": 0.5,
+    }
+    d = dpi.evaluate_regime_defense(rep)
+    assert d["keep_defense"] is False
+    assert d["reason"] == "no_information_content"
+    assert d["below_baseline_buckets"] == []
+
+
+def test_write_report_roundtrip(tmp_path):
+    import json as _json
+    recs = _synthetic_records()
+    rep = dpi.build_phase_report(recs)
+    defense = dpi.evaluate_regime_defense(rep)
+    full = {
+        "generated_at": "2026-07-22T00:00:00",
+        "baseline_winrate": dpi.BASELINE_WR,
+        "alpha": dpi.ALPHA,
+        **rep,
+        "regime_defense": defense,
+    }
+    p = str(tmp_path / "phase.json")
+    dpi.write_report(full, p)
+    back = _json.loads(pathlib.Path(p).read_text(encoding="utf-8"))
+    assert back["regime_defense"]["keep_defense"] in (True, False)
+    assert back["regime_chi2"] == rep["regime_chi2"]
+    assert back["baseline_winrate"] == dpi.BASELINE_WR
