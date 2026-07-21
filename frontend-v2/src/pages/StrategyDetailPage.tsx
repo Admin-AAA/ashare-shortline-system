@@ -14,6 +14,7 @@ import { useApi } from "../app/useApi";
 import { useUrlRoute } from "../app/useUrlRoute";
 import { EmptyState, ErrorPage, PageSkeleton } from "../components/StateViews";
 import type {
+  SkillStatsRow,
   StrategyCenterDetail,
   StrategyVersionChange,
   StrategyVersionUsage,
@@ -123,6 +124,8 @@ export function StrategyDetailPage({ refreshSignal = 0 }: { refreshSignal?: numb
             />
           </div>
 
+          <StrategyFingerprint strategyId={data.strategy_id} />
+
           <div className="strategy-detail__actions">
             <div className="strategy-tabs" role="tablist" aria-label="策略详情视图">
               <TabButton active={tab === "rules"} onClick={() => setTab("rules")} icon={<Target size={15} />}>策略规则</TabButton>
@@ -170,6 +173,69 @@ function Metric({ label, value, tone }: { label: string; value: string; tone?: "
     <div className="strategy-metric">
       <span>{label}</span>
       <strong className={tone ? `strategy-metric--${tone}` : ""}>{value}</strong>
+    </div>
+  );
+}
+
+function StrategyFingerprint({ strategyId }: { strategyId: string }) {
+  const { data: rows, loading, error } = useApi<SkillStatsRow[]>(() => api.statsBySkill(), [strategyId]);
+  const row = rows?.find((item) => item.skill_id === strategyId);
+  if (loading) {
+    return (
+      <div className="strategy-fingerprint strategy-fingerprint--loading">
+        <div className="strategy-fingerprint__skeleton" />
+      </div>
+    );
+  }
+  if (error || !row) return null;
+  const blocks: Array<{ title: string; items?: Array<{ name: string; count: number }> }> = [
+    { title: "市场阶段", items: row.top_market_regimes },
+    { title: "行业分布", items: row.top_industries },
+    { title: "入场形态", items: row.top_setups },
+  ];
+  if (blocks.every((block) => !block.items || block.items.length === 0)) {
+    return (
+      <div className="strategy-fingerprint">
+        <p className="strategy-fingerprint__empty">该策略暂未积累足够的标注样本来生成画像。</p>
+      </div>
+    );
+  }
+  return (
+    <section className="strategy-fingerprint" aria-label="策略画像">
+      <header className="strategy-fingerprint__header">
+        <h2>策略画像</h2>
+        <p>基于 {row.sample_count} 笔已标注样本的真实分布 — 看清这个策略在哪些市场阶段、行业与形态上真正被触发。</p>
+      </header>
+      <div className="strategy-fingerprint__grid">
+        {blocks.map((block) => (
+          <FingerprintBlock key={block.title} title={block.title} items={block.items} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function FingerprintBlock({ title, items }: { title: string; items?: Array<{ name: string; count: number }> }) {
+  if (!items || items.length === 0) return null;
+  const max = Math.max(...items.map((item) => item.count));
+  return (
+    <div className="fingerprint-block">
+      <h3>{title}<span>{items.length}</span></h3>
+      <ul className="fingerprint-bars">
+        {items.map((item, index) => {
+          const ratio = max > 0 ? (item.count / max) * 100 : 0;
+          const isLead = index === 0;
+          return (
+            <li key={item.name} className={isLead ? "fingerprint-bar fingerprint-bar--lead" : "fingerprint-bar"}>
+              <span className="fingerprint-bar__label" title={item.name}>{item.name}</span>
+              <span className="fingerprint-bar__track" aria-hidden="true">
+                <span className="fingerprint-bar__fill" style={{ width: `${ratio}%` }} />
+              </span>
+              <span className="fingerprint-bar__value">{item.count}</span>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
