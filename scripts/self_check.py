@@ -140,7 +140,29 @@ def check_a_item(db) -> None:
 
     interrupted = [r for r in rows if r[2] == 'interrupted']
     if interrupted:
-        print(f'⚠️ {len(interrupted)} 个 interrupted run')
+        # 归因分类：裸报 N 个 interrupted 会误导未来轮以为 pipeline 不稳，实际近 7 天
+        # 绝大多数是「服务重启/进程退出」（self-improve 改后端重启打断的历史 run）+
+        # self-improve 验证性中断 + 超时/僵尸清理——全是已知残留非进行中故障。
+        # 只把「无已知归因」的当可疑（真 pipeline 异常需 T12 排查）。
+        msg_rows = db.execute(text("""
+            SELECT COALESCE(error_message, progress_message, '') AS msg
+            FROM recommendation_runs
+            WHERE run_mode='formal' AND status='interrupted'
+              AND started_at > DATE_SUB(NOW(), INTERVAL 7 DAY)
+        """)).fetchall()
+        benign = 0
+        suspicious: list[str] = []
+        for (msg,) in msg_rows:
+            m = str(msg or "")
+            if ("服务重启" in m or "进程退出" in m or "self-improve" in m
+                    or "T3.6验证" in m or "僵尸 run" in m or "心跳过期" in m
+                    or "超时" in m or "skip_aux_refresh" in m or "dispatcher" in m):
+                benign += 1
+            else:
+                suspicious.append(m[:50])
+        print(f'  ℹ️ {len(interrupted)} 个 interrupted run（已知残留 {benign}：服务重启/验证/超时，非进行中故障）')
+        if suspicious:
+            print(f'  ⚠️ {len(suspicious)} 个 interrupted run 无已知归因（疑真 pipeline 异常，T12 排查）: {suspicious[:5]}')
 
 
 def check_b_item(db) -> None:
