@@ -101,3 +101,13 @@ def test_forward_window_pollution_share():
     assert cf["fwd_clean"]["n"] == 1
     assert cf["fwd_raw"]["net_wr"] == 0.0
     assert cf["fwd_clean"]["net_wr"] == 0.0
+
+
+def test_forward_pollution_split():
+    """前瞻窗内 pure_low / pure_soft 拆分计数。"""
+    fwd = {("A", "2026-07-16"), ("B", "2026-07-16"), ("C", "2026-07-16")}
+    low = {("A", "2026-07-16"), ("D", "2026-07-09")}  # D 不在 fwd
+    soft = {("B", "2026-07-16"), ("A", "2026-07-16")}  # A 可 dual
+    n_low, n_soft = sc._forward_pollution_split(fwd, low, soft)
+    assert n_low == 1  # only A
+    assert n_soft == 2  # A+B

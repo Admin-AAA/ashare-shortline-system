@@ -1423,25 +1423,44 @@ def _print_clean_d_counterfactual(db) -> None:
         poll_n, clean_n = cf["fwd_pollution_n"], cf["fwd_clean_n"]
         total_fwd = poll_n + clean_n
         share = round(poll_n * 100 / total_fwd, 0) if total_fwd else 0
+        # 前瞻窗内 pure_low / pure_soft 拆分（污染源可追责，勿只报总数）
+        fwd_keys = {(r[0], str(r[1])) for r in dedup if str(r[1]) >= ep}
+        n_low, n_soft = _forward_pollution_split(
+            fwd_keys, keys["pure_low"], keys["pure_soft"],
+        )
+        split_note = f"低线{n_low}+soft@震荡{n_soft}"
         if fwc is not None and clean_n > 0:
             print(
                 f'     前瞻≥{ep} 净WR {fwr["net_wr"]}%→{fwc["net_wr"]}%'
                 f' | 净PL {fwr["net_pl"]}→{fwc["net_pl"]}'
                 f' | n {fwr["n"]}→{fwc["n"]}'
-                f' （污染 {poll_n}/{total_fwd}={share:.0f}%）'
+                f' （污染 {poll_n}/{total_fwd}={share:.0f}%={split_note}）'
             )
         else:
             print(
                 f'     前瞻≥{ep} raw n={fwr["n"]} 净WR={fwr["net_wr"]}% 净PL={fwr["net_pl"]}'
-                f' | pure 污染 {poll_n}/{total_fwd}={share:.0f}%，clean 仅 {clean_n} 笔'
+                f' | pure 污染 {poll_n}/{total_fwd}={share:.0f}%（{split_note}），clean 仅 {clean_n} 笔'
             )
         # 污染主导（≥70%）或 clean 过少（<MIN_OOS_SAMPLE）→ 非 OOS 退化
         if total_fwd > 0 and (share >= 70 or clean_n < MIN_OOS_SAMPLE):
             print(
-                f'     ——前瞻窗口被 pure 污染主导（{poll_n}/{total_fwd}）或 clean 样本'
+                f'     ——前瞻窗口被 pure 污染主导（{poll_n}/{total_fwd}={split_note}）或 clean 样本'
                 f' <{MIN_OOS_SAMPLE}：raw 低胜率是单日/受污染 regime（如 07-16 soft+低线），'
                 f'非 D 项 OOS 退化；Contract 已拦截新污染，待多交易日 clean formal 结算后再做 OOS'
             )
+
+
+def _forward_pollution_split(
+    fwd_keys: set[tuple],
+    pure_low: set[tuple],
+    pure_soft: set[tuple],
+) -> tuple[int, int]:
+    """纯函数：前瞻窗内 pure_low / pure_soft 票数（可重叠，各自计数）。
+
+    背景：仅报污染总数会掩盖「主要是低线还是 soft」——07-16 实证低线15+soft11。
+    返回 (n_low, n_soft)。
+    """
+    return len(pure_low & fwd_keys), len(pure_soft & fwd_keys)
 
 
 def _single_day_pl_drag(rows: list, trade_dates: set) -> dict | None:
