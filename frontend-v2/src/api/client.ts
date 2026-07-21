@@ -18,6 +18,7 @@ import type {
   LlmReviewHealth,
   TemporalConsistency,
   DDiagnostics,
+  DNetBreakdown,
   ReplayAnalysisResult,
   DataSourceHealthRow,
   ModelRoute,
@@ -414,6 +415,12 @@ export const api = {
   /** D 项诊断：真残留毒区 + 伪活跃反事实（与 self_check 同源，不改主口径） */
   dDiagnostics: (options?: RequestOptions) =>
     request<DDiagnostics>(`/api/metrics/d-diagnostics`, undefined, {
+      timeoutMs: options?.timeoutMs ?? 30_000,
+      signal: options?.signal,
+    }),
+  /** D 项净成本 + 板块(20cm/10cm)分解（指标页透出，与 self_check 板块拆分同源口径） */
+  dNetBreakdown: (windowDays: number = 10, options?: RequestOptions) =>
+    request<DNetBreakdown>(`/api/metrics/d-net?window_days=${windowDays}`, undefined, {
       timeoutMs: options?.timeoutMs ?? 30_000,
       signal: options?.signal,
     }),

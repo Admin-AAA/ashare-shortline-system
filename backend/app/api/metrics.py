@@ -4,6 +4,7 @@ import logging
 
 from app.db.session import get_db
 from app.services.outcome_service import (
+    board_and_net_breakdown,
     filter_effectiveness,
     metrics_by_score_line,
     metrics_by_setup,
@@ -42,6 +43,15 @@ def overview(
     end_date: str | None = _end_date_q(),
 ):
     return overview_metrics(db, window_days=window_days, start_date=start_date, end_date=end_date)
+
+
+@router.get("/d-net")
+def d_net(
+    db: Session = Depends(get_db),
+    window_days: int = Query(default=10, ge=1, le=365, description="滚动窗口交易日数，默认 10"),
+):
+    """D 项净成本 + 板块(20cm/10cm)分解（北极星 D 项 observability）。"""
+    return board_and_net_breakdown(db, window_trade_days=window_days)
 
 
 @router.get("/by-strategy")

@@ -373,6 +373,43 @@ export type DDiagnostics = {
   note?: string | null;
 };
 
+/** D 项净成本 + 板块(20cm/10cm)分解（指标页透出，与 self_check 板块拆分同源口径）。 */
+export type DNetBreakdown = {
+  window_trade_days: number;
+  trade_dates: string[];
+  sample_count: number;
+  net: {
+    sample_count: number;
+    win_rate: number | null;
+    net_win_rate: number | null;
+    avg_return: number | null;
+    net_avg_return: number | null;
+    profit_loss_ratio: number | null;
+    net_profit_loss_ratio: number | null;
+    max_loss: number | null;
+  } | null;
+  board: {
+    "20cm": {
+      n: number;
+      win_rate: number;
+      net_win_rate: number;
+      avg_return: number;
+      net_avg_return: number;
+      profit_loss_ratio: number | null;
+      net_profit_loss_ratio: number | null;
+    } | null;
+    "10cm": {
+      n: number;
+      win_rate: number;
+      net_win_rate: number;
+      avg_return: number;
+      net_avg_return: number;
+      profit_loss_ratio: number | null;
+      net_profit_loss_ratio: number | null;
+    } | null;
+  };
+};
+
 export type RiskRadar = {
   high: number;
   medium: number;

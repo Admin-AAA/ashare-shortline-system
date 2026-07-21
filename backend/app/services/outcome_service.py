@@ -881,6 +881,105 @@ def _recent_formal_win_rate(db: Session, window_trade_days: int) -> dict[str, An
     }
 
 
+def _is_20cm_code(code: str) -> bool:
+    """20cm 板块判定（创业板 300/301、科创板 688/689），与 self_check._is_20cm_code 一致。"""
+    return str(code).startswith(("300", "301", "688", "689"))
+
+
+def board_and_net_breakdown(db: Session, window_trade_days: int = 10) -> dict[str, Any]:
+    """D 项净成本 + 板块(20cm/10cm)分解 —— 北极星 D 项 observability，供前端指标页透出。
+
+    净口径与 self_check._compute_d_cost 一致（扣 0.07%/笔）；板块判定与 self_check._is_20cm_code
+    一致。复用 recent_formal_win_rate 的窗口口径（仅 LIVE rec_ + run_mode=formal + 已结算）。
+    """
+    cache_key = f"board_and_net_breakdown:{window_trade_days}"
+    return _cached(cache_key, lambda: _board_and_net_breakdown(db, window_trade_days))
+
+
+def _board_and_net_breakdown(db: Session, window_trade_days: int) -> dict[str, Any]:
+    td_rows = (
+        db.execute(
+            select(RecommendationRun.trade_date)
+            .where(RecommendationRun.run_mode == "formal", RecommendationRun.status == "completed")
+            .distinct()
+            .order_by(RecommendationRun.trade_date.desc())
+            .limit(window_trade_days)
+        )
+        .scalars()
+        .all()
+    )
+    trade_dates = [str(d) for d in td_rows]
+    if not trade_dates:
+        return {
+            "window_trade_days": window_trade_days,
+            "sample_count": 0,
+            "net": None,
+            "board": {"20cm": None, "10cm": None},
+        }
+
+    from sqlalchemy import bindparam
+
+    stmt = text("""
+        SELECT r.code, o.outcome_label, o.executed_return
+        FROM recommendation_outcomes o
+        JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+        WHERE r.recommendation_id LIKE 'rec_%'
+          AND r.trade_date IN :tds
+          AND o.outcome_label IN ('success', 'failed')
+    """).bindparams(bindparam("tds", expanding=True))
+    rows = db.execute(stmt, {"tds": trade_dates}).all()
+
+    rets = [float(r.executed_return or 0) for r in rows]
+    n = len(rets)
+    wins = [x for x in rets if x > 0]
+    losses = [abs(x) for x in rets if x < 0]
+    net = [x - _ADDITIONAL_COST_PCT for x in rets]
+    net_wins = [x for x in net if x > 0]
+    net_losses = [abs(x) for x in net if x < 0]
+
+    net_summary: dict[str, Any] = {
+        "sample_count": n,
+        "win_rate": round(len(wins) * 100.0 / n, 1) if n else None,
+        "net_win_rate": round(len(net_wins) * 100.0 / n, 1) if n else None,
+        "avg_return": round(sum(rets) / n, 2) if n else None,
+        "net_avg_return": round(sum(net) / n, 2) if n else None,
+        "profit_loss_ratio": round(sum(wins) / sum(losses), 2) if losses else None,
+        "net_profit_loss_ratio": round(sum(net_wins) / sum(net_losses), 2) if net_losses else None,
+        "max_loss": round(min(rets), 2) if rets else None,
+    }
+
+    board: dict[str, Any] = {}
+    for label in ("20cm", "10cm"):
+        grp = [x for r, x in zip(rows, rets) if _is_20cm_code(r.code) == (label == "20cm")]
+        gn = len(grp)
+        if gn == 0:
+            board[label] = None
+            continue
+        gw = [x for x in grp if x > 0]
+        gl = [abs(x) for x in grp if x < 0]
+        gnet = [x - _ADDITIONAL_COST_PCT for x in grp]
+        gnw = [x for x in gnet if x > 0]
+        gnl = [abs(x) for x in gnet if x < 0]
+        board[label] = {
+            "n": gn,
+            "win_rate": round(len(gw) * 100.0 / gn, 1),
+            "net_win_rate": round(len(gnw) * 100.0 / gn, 1),
+            "avg_return": round(sum(grp) / gn, 2),
+            "net_avg_return": round(sum(gnet) / gn, 2),
+            "profit_loss_ratio": round(sum(gw) / sum(gl), 2) if gl else None,
+            "net_profit_loss_ratio": round(sum(gnw) / sum(gnl), 2) if gnl else None,
+        }
+
+    return {
+        "window_trade_days": window_trade_days,
+        "trade_dates": trade_dates,
+        "sample_count": n,
+        "net": net_summary,
+        "board": board,
+    }
+
+
 def metrics_by_setup(
     db: Session,
     window_days: int | None = None,

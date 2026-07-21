@@ -6,6 +6,7 @@ import type {
   AlphaDecayResponse,
   DateRangeMeta,
   DDiagnostics,
+  DNetBreakdown,
   FilterEffectiveness,
   LlmReviewHealth,
   MetricsOverview,
@@ -144,6 +145,7 @@ export function MetricsPage() {
         <AlphaDecayPanel data={alphaDecay} />
         <SkillsCatalogPanel />
       </div>
+      <DNetPanel />
     </div>
   );
 }
@@ -227,6 +229,120 @@ function SystemHealthPanel() {
         <PhaseInformationBlock data={dDiag} loading={lD} error={eD} />
       </div>
     </MetricCard>
+  );
+}
+
+/** D 项净成本 + 板块(20cm/10cm)分解面板：北极星 D 项「净盈亏比≥2.0」目标一屏可见，
+ * 并定位拖后腿的板块（如 10cm 净盈亏比 < 20cm）。与 self_check 板块拆分同源口径。 */
+function DNetPanel() {
+  const [windowDays, setWindowDays] = useState<number>(10);
+  const { data, loading, error } = useApi<DNetBreakdown>(
+    () => api.dNetBreakdown(windowDays),
+    [windowDays],
+  );
+
+  return (
+    <MetricCard
+      kicker="北极星 D 项"
+      title="净成本 + 板块(20cm/10cm)分解"
+      actions={
+        <div style={{ display: "flex", gap: "var(--space-1)" }}>
+          {[10, 30].map((w) => {
+            const active = windowDays === w;
+            return (
+              <button
+                key={w}
+                onClick={() => setWindowDays(w)}
+                style={{
+                  padding: "3px 10px",
+                  fontSize: 12,
+                  borderRadius: 4,
+                  border: "1px solid var(--border)",
+                  background: active ? "var(--color-accent, #2563eb)" : "var(--surface-1)",
+                  color: active ? "#fff" : "var(--text-secondary)",
+                  cursor: "pointer",
+                  fontWeight: active ? 600 : 400,
+                }}
+              >
+                近 {w} 日
+              </button>
+            );
+          })}
+        </div>
+      }
+    >
+      {loading ? (
+        <CardSkeleton count={3} />
+      ) : error ? (
+        <HealthErrorNote msg="D 项净成本分解获取失败" />
+      ) : !data || !data.net ? (
+        <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>窗口内无已结算 formal 推荐</div>
+      ) : (
+        <div style={{ display: "grid", gap: "var(--space-4)" }}>
+          {/* 净成本概要 */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
+              gap: "var(--space-3)",
+            }}
+          >
+            <DNetKpi label="净胜率" value={data.net.net_win_rate != null ? `${data.net.net_win_rate.toFixed(1)}%` : "—"} tone={(data.net.net_win_rate ?? 0) >= 60 ? "up" : (data.net.net_win_rate ?? 0) >= 50 ? "neutral" : "down"} sub="扣 0.07%/笔" />
+            <DNetKpi label="净盈亏比" value={data.net.net_profit_loss_ratio != null ? data.net.net_profit_loss_ratio.toFixed(2) : "—"} tone={(data.net.net_profit_loss_ratio ?? 0) >= 2.0 ? "up" : (data.net.net_profit_loss_ratio ?? 0) >= 1.4 ? "neutral" : "down"} sub="目标 ≥2.0" />
+            <DNetKpi label="净均收益" value={data.net.net_avg_return != null ? `${data.net.net_avg_return >= 0 ? "+" : ""}${data.net.net_avg_return.toFixed(2)}%` : "—"} tone={(data.net.net_avg_return ?? 0) >= 0 ? "up" : "down"} sub="扣费后" />
+            <DNetKpi label="最大亏损" value={data.net.max_loss != null ? `${data.net.max_loss.toFixed(2)}%` : "—"} tone="down" sub="单笔最差" />
+            <DNetKpi label="样本" value={`${data.net.sample_count}`} tone="neutral" sub="已结算 formal" />
+          </div>
+          {/* 板块分解 */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "var(--space-3)" }}>
+            <DNetBoardCard label="20cm · 创业板/科创板" board={data.board["20cm"]} healthy={data.board["20cm"]?.net_profit_loss_ratio ?? null} />
+            <DNetBoardCard label="10cm · 主板/中小板" board={data.board["10cm"]} healthy={data.board["10cm"]?.net_profit_loss_ratio ?? null} />
+          </div>
+        </div>
+      )}
+    </MetricCard>
+  );
+}
+
+/** 单个净成本 KPI（数字右对齐 + 等宽，涨红跌绿低饱和）。 */
+function DNetKpi({ label, value, tone, sub }: { label: string; value: string; tone: "up" | "down" | "neutral"; sub?: string }) {
+  const color = tone === "up" ? "var(--market-up)" : tone === "down" ? "var(--market-down)" : "var(--ink)";
+  return (
+    <div
+      style={{
+        background: "var(--surface)",
+        border: "1px solid var(--line)",
+        borderRadius: "var(--radius-sm, 6px)",
+        padding: "var(--space-3)",
+      }}
+    >
+      <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginBottom: "var(--space-1)" }}>{label}</div>
+      <div style={{ fontFamily: "var(--font-mono, monospace)", fontSize: "var(--text-lg)", fontWeight: 600, color }}>{value}</div>
+      {sub && <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+}
+
+/** 单板块分解卡：净盈亏比 < 2.0 标红（拖后腿），≥2.0 标绿（健康）。 */
+function DNetBoardCard({ label, board, healthy }: { label: string; board: DNetBreakdown["board"]["20cm"]; healthy: number | null }) {
+  if (!board) {
+    return (
+      <div style={{ background: "var(--surface-1)", border: "1px solid var(--line)", borderRadius: "var(--radius-sm, 6px)", padding: "var(--space-3)", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+        {label}：窗口内无样本
+      </div>
+    );
+  }
+  const plColor = healthy != null ? (healthy >= 2.0 ? "var(--market-up)" : healthy >= 1.4 ? "var(--warning)" : "var(--market-down)") : "var(--ink)";
+  return (
+    <div style={{ background: "var(--surface-1)", border: "1px solid var(--line)", borderRadius: "var(--radius-sm, 6px)", padding: "var(--space-3)" }}>
+      <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--ink)", marginBottom: "var(--space-2)" }}>{label}</div>
+      <div style={{ display: "grid", gap: "var(--space-1)" }}>
+        <HealthRow label="净盈亏比" value={board.net_profit_loss_ratio != null ? board.net_profit_loss_ratio.toFixed(2) : "—"} color={plColor} />
+        <HealthRow label="净胜率" value={`${board.net_win_rate.toFixed(1)}%`} />
+        <HealthRow label="净均收益" value={`${board.net_avg_return >= 0 ? "+" : ""}${board.net_avg_return.toFixed(2)}%`} />
+        <HealthRow label="样本" value={`${board.n}`} />
+      </div>
+    </div>
   );
 }
 
