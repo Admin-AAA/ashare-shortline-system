@@ -130,6 +130,47 @@ def test_write_report_roundtrip(tmp_path):
     assert back == rep
 
 
+def test_forward_pollution_gate_skips_when_dominated():
+    """T22：污染≥70% 或 clean <10 → 不 enforce 前瞻硬闸门。"""
+    d = verify_d_guardrail._forward_pollution_gate_decision(26, 2)
+    assert d["enforce"] is False
+    assert d["share"] == 0.93
+    assert "硬闸门" in d["msg"] or "不可当硬闸门" in d["msg"]
+
+    d2 = verify_d_guardrail._forward_pollution_gate_decision(5, 5)
+    # 5/(5+5)=0.5 < 0.7 但 clean=5 < 10 → 仍 skip
+    assert d2["enforce"] is False
+
+    d3 = verify_d_guardrail._forward_pollution_gate_decision(3, 12)
+    # 3/15=0.2 < 0.7 且 clean=12 ≥ 10 → enforce
+    assert d3["enforce"] is True
+    assert d3["msg"] == ""
+
+
+def test_forward_pollution_gate_empty():
+    d = verify_d_guardrail._forward_pollution_gate_decision(0, 0)
+    assert d["enforce"] is False
+
+
+def test_build_report_includes_pollution_and_epoch():
+    """报告须含 pollution 块 + forward_epoch，供跨 run 对比去污染效果。"""
+    full = {"n": 100, "net_wr": 70.0, "net_pl": 2.1, "max_loss": -5.0}
+    fwd = {"n": 28, "net_wr": 39.0, "net_pl": 0.36, "max_loss": -5.7}
+    poll = {
+        "n": 89, "pure_low": 66, "pure_soft": 23,
+        "full_clean": {"n": 130, "net_wr": 78.5, "net_pl": 3.42, "max_loss": -5.9},
+        "recent_clean": None, "fwd_clean": None,
+        "fwd_gate": {"enforce": False, "share": 0.93, "msg": "skip"},
+    }
+    rep = verify_d_guardrail.build_report(
+        full, fwd, True, 0, pollution=poll, forward_epoch="2026-07-14",
+    )
+    assert rep["forward_epoch"] == "2026-07-14"
+    assert rep["pollution"]["n"] == 89
+    assert rep["pollution"]["fwd_gate"]["enforce"] is False
+    assert rep["thresholds"]["forward_pollution_share_skip"] == 0.70
+
+
 def test_recent_trade_dates_returns_k_most_recent():
     """_recent_trade_dates 去重后倒序取最近 k 个独立交易日。"""
     rows = [
