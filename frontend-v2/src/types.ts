@@ -1610,6 +1610,12 @@ export type StrategyPerformance = {
     max_candidate_score?: number | null;
     base_score_line?: number | null;
     gate_blocked?: boolean;
+    /** 恐慌日（ld>100）有效线抬高属设计内，勿当补跑 bug */
+    panic_day?: boolean;
+    limit_down_count?: number | null;
+    limit_up_count?: number | null;
+    regime?: string | null;
+    trade_date?: string | null;
   };
   horizon_metrics?: Record<string, unknown> | null;
   date_range?: DateRangeMeta;

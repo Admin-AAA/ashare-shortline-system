@@ -75,6 +75,7 @@ def _last_exp_gate_for(db: Session, skill_id: str) -> dict | None:
     """最近 completed experiment 补跑门线明细（有效线 vs 最高候选）。
 
     仅供曝光 < floor 策略展示「门线拦截」；无数据返回 None。
+    附 panic_day/ld/regime（self_check T28）——有效线 89–101 在恐慌日属设计内。
     """
     det = self_check._fetch_gate_blocked_detail(db, skill_id)
     if not det:
@@ -91,6 +92,11 @@ def _last_exp_gate_for(db: Session, skill_id: str) -> dict | None:
                 and float(det["max_candidate_score"]) < float(det["effective_line"])
             )
         ),
+        "panic_day": bool(det.get("panic_day")),
+        "limit_down_count": det.get("limit_down_count"),
+        "limit_up_count": det.get("limit_up_count"),
+        "regime": det.get("regime"),
+        "trade_date": det.get("trade_date"),
     }
 
 

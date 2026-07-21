@@ -173,7 +173,9 @@ function CalledCard({ item }: { item: StrategyListItem }) {
             title={
               gate?.gate_blocked
                 ? `最新补跑 0 产出：有效线 ${gate.effective_line ?? "—"} vs 最高候选 ${gate.max_candidate_score ?? "无"}。` +
-                  `regime 有效线偏高/无高分票，非补跑故障（准确>可见），勿放宽门线。`
+                  (gate.panic_day
+                    ? `恐慌日跌停 ${gate.limit_down_count ?? "—"} 家抬线（设计内保护，准确>可见），勿放宽门线。`
+                    : `regime 有效线偏高/无高分票，非补跑故障（准确>可见），勿放宽门线。`)
                 : perf.exposure_30d != null && (perf.exposure_floor ?? 20) > (perf.exposure_30d ?? 0)
                   ? `近30天 formal+experiment 曝光 ${perf.exposure_30d} < 下限 ${perf.exposure_floor ?? 20}；` +
                     `盘前补跑会继续喂样本。0 产出=当前 regime/universe 拦截（准确>可见），勿放宽门槛。`
@@ -186,7 +188,9 @@ function CalledCard({ item }: { item: StrategyListItem }) {
                 近30天曝光 {perf.exposure_30d}
                 {(perf.exposure_floor ?? 20) > perf.exposure_30d
                   ? gate?.gate_blocked
-                    ? ` / ${perf.exposure_floor ?? 20} · 门线拦截`
+                    ? gate.panic_day
+                      ? ` / ${perf.exposure_floor ?? 20} · 门线拦截·恐慌日`
+                      : ` / ${perf.exposure_floor ?? 20} · 门线拦截`
                     : ` / ${perf.exposure_floor ?? 20} · 补跑在喂`
                   : ` ≥${perf.exposure_floor ?? 20}`}
               </span>
@@ -199,6 +203,11 @@ function CalledCard({ item }: { item: StrategyListItem }) {
                 {gate.max_candidate_score != null
                   ? Number(gate.max_candidate_score).toFixed(1)
                   : "无"}
+                {gate.panic_day
+                  ? ` · 恐慌日ld=${gate.limit_down_count ?? "—"}`
+                  : gate.regime
+                    ? ` · ${gate.regime}`
+                    : ""}
               </span>
             )}
           </div>

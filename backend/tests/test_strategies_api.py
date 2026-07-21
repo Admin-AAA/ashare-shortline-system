@@ -125,7 +125,7 @@ def test_strategies_exposure_30d_present_and_nonnegative():
 
 
 def test_strategies_low_exposure_has_last_exp_gate():
-    """T27：曝光 <20 策略须带 last_exp_gate（有效线 vs 最高候选），与 self_check 同源。"""
+    """T27/T29：曝光 <20 策略须带 last_exp_gate（有效线 vs 最高候选 + 恐慌日字段）。"""
     client = TestClient(app)
     data = client.get("/api/strategies").json()
     low = [d for d in data if d.get("exposure_30d", 0) < 20 and d.get("enabled", True)]
@@ -137,5 +137,12 @@ def test_strategies_low_exposure_has_last_exp_gate():
         assert "effective_line" in g
         assert "max_candidate_score" in g
         assert "gate_blocked" in g
+        # T29：panic_day / regime 与 self_check 同源透出
+        assert "panic_day" in g
+        assert "limit_down_count" in g
+        assert "regime" in g
         if g.get("gate_blocked") and g.get("effective_line") is not None and g.get("max_candidate_score") is not None:
             assert float(g["max_candidate_score"]) < float(g["effective_line"])
+        # 当前生产 07-20 补跑为恐慌日（ld=479）时 panic_day 应为 True
+        if g.get("panic_day"):
+            assert g.get("limit_down_count") is not None and int(g["limit_down_count"]) > 100
