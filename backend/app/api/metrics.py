@@ -258,6 +258,10 @@ def d_diagnostics(db: Session = Depends(get_db)):
         sparse_items = self_check._sparse_residual_items(
             uncovered, triage_raw.get("sparse_rids") or [],
         )
+        soft_allowed_items = self_check._sparse_residual_items(
+            uncovered, triage_raw.get("soft_allowed_rids") or [],
+        )
+        sparse_days = sorted({str(it.get("trade_date") or "") for it in sparse_items if it.get("trade_date")})
         triage = {
             "n": triage_raw["n"],
             "pure_pollution": c.get("pure_pollution", 0),
@@ -268,6 +272,10 @@ def d_diagnostics(db: Session = Depends(get_db)):
             "clustered_days": triage_raw.get("clustered_days") or [],
             "sparse_n": c.get("sparse", 0),
             "sparse_items": sparse_items,
+            "soft_allowed_items": soft_allowed_items,
+            "sparse_same_day": (
+                sparse_days[0] if len(sparse_days) == 1 and len(sparse_items) >= 2 else None
+            ),
             "ban_n": triage_raw.get("ban_n"),
             "note": triage_raw.get("note"),
             "actionable": c.get("sparse", 0) > 0,

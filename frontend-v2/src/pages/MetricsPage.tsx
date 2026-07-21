@@ -426,6 +426,23 @@ function DDiagnosticsBlock({
         ) : (
           <HealthRow label="弱活伪活跃" value="—" />
         )}
+        {tr?.soft_allowed_items && tr.soft_allowed_items.length > 0 && (
+          <div
+            style={{
+              fontSize: "var(--text-xs)",
+              color: "var(--text-muted)",
+              lineHeight: 1.45,
+              fontFamily: "var(--font-mono)",
+            }}
+            title={tr.soft_allowed_items.map((it) => `${it.trade_date} ${it.code} ${it.mode} — ${it.note}`).join("\n")}
+          >
+            允许soft:{" "}
+            {tr.soft_allowed_items
+              .slice(0, 3)
+              .map((it) => `${it.code ?? "?"}`)
+              .join(" · ")}
+          </div>
+        )}
         {tr?.sparse_items && tr.sparse_items.length > 0 && (
           <div
             style={{
@@ -441,6 +458,7 @@ function DDiagnosticsBlock({
               .slice(0, 3)
               .map((it) => `${it.code ?? "?"}(${it.mode ?? "?"})`)
               .join(" · ")}
+            {tr.sparse_same_day ? ` · 同日${tr.sparse_same_day}禁合并` : ""}
           </div>
         )}
         {(tr?.note || pa?.note) && (

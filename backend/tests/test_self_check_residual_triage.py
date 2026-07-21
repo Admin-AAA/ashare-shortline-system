@@ -173,3 +173,24 @@ def test_soft_allowed_not_sparse():
     assert t["counts"]["sparse"] == 1
     assert "rec_20260610_a" in t["soft_allowed_rids"]
     assert "rec_20260709_b" in t["sparse_rids"]
+
+
+def test_sparse_two_same_day_not_cluster_when_n_lt_4():
+    """2 笔同日未达 day_cluster(n≥4)，应进 sparse 而非 day_clustered。"""
+    unc = [
+        {
+            "rid": "rec_20260709_a",
+            "trade_date": "2026-07-09",
+            "executed_return": -5.69,
+            "fs": {"code": "002371", "market_regime": "震荡", "market_sentiment_phase": "高潮"},
+        },
+        {
+            "rid": "rec_20260709_b",
+            "trade_date": "2026-07-09",
+            "executed_return": -5.69,
+            "fs": {"code": "300236", "market_regime": "震荡", "market_sentiment_phase": "高潮"},
+        },
+    ]
+    t = sc._triage_residual_poison(unc)
+    assert t["counts"]["day_clustered"] == 0
+    assert t["counts"]["sparse"] == 2
