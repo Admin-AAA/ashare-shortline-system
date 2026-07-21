@@ -494,6 +494,51 @@ def test_apply_pool_rules_climax_full_mode_stays_silent():
     assert result == []
 
 
+def test_apply_pool_rules_oscillation_climax_degraded_soft_floor_disabled():
+    """2026-07-21 T3：震荡·高潮 + 降级 soft floor 净负，必须禁用。
+
+    实证：07-09 单日 12 笔 soft 票 WR=33.3% avg=-1.85%（有效线~85 被压到~65）。
+    反事实剔除后全量 WR 71.2%→74.5%。强牛·高潮降级 soft 仍启用（A 项兜底，见上例）。
+    本测：震荡（up_ratio∈[0.35,0.50)）+ 高潮（涨停率高）+ agent_available=False
+    → soft floor 不得放行低分票，正式推荐为空。
+    """
+    # 震荡：up_ratio=0.40；高潮：lu_rate=0.05 > 1.2% 且 ld=0
+    snapshot = {
+        "sample_count": 100,
+        "up_count": 40,
+        "limit_up_count": 5,
+        "limit_down_count": 0,
+    }
+    # 有效线 = 72 + 0(震荡) + 13(高潮 5+8) = 85；候选最高 78 < 85
+    cards = [_card(code, score) for code, score in [
+        ("A", 78.0), ("B", 72.0), ("C", 66.0), ("D", 56.0),
+    ]]
+    result = apply_pool_rules(
+        cards, output_count=6, score_line=72, market_snapshot=snapshot, agent_available=False,
+    )
+    assert result == [], (
+        "震荡·高潮降级 soft floor 必须禁用，不得放行 score<有效线 的低分票"
+    )
+
+
+def test_apply_pool_rules_weak_climax_degraded_soft_floor_still_engages():
+    """对照：弱势·高潮 soft floor 是反转信号（历史 9 笔 100% WR），降级仍应兜底。"""
+    # 弱势：up_ratio=0.20；高潮：lu_rate=0.05
+    snapshot = {
+        "sample_count": 100,
+        "up_count": 20,
+        "limit_up_count": 5,
+        "limit_down_count": 0,
+    }
+    # 有效线 = 72 + 2(弱势) + 5(高潮无 extra) = 79；候选 74 < 79 靠 soft 放行
+    cards = [_card(code, score) for code, score in [("A", 74.0), ("B", 70.0)]]
+    result = apply_pool_rules(
+        cards, output_count=6, score_line=72, market_snapshot=snapshot, agent_available=False,
+    )
+    assert [c["code"] for c in result] == ["A"]
+    assert result[0]["score_line_meta"]["dynamic_soft_floor_applied"] is True
+
+
 def test_apply_pool_rules_watchlist_empty_when_not_climax():
     cards = [_card(code, score) for code, score in [("A", 60), ("B", 55)]]
     out = apply_pool_rules(
