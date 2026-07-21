@@ -502,6 +502,47 @@ def check_c_item(db) -> set:
     return skills
 
 
+def _classify_coverage_blind(
+    blind: list[str],
+    formal_preset_skills: set[str],
+) -> dict[str, list[str]]:
+    """覆盖盲区二分类：静默死亡（未进 formal preset）vs 预期稀疏（已注册但仍 0 命中）。
+
+    背景（2026-07-21 T3.6）：E 项原把所有 formal 0 命中一律当盲区，会把
+    weak-market-strong-stock-reversal 这类「已在 preset_formal_opening、补跑也跑过、
+    只是当前 regime/universe 无票」的策略和「enabled 但漏注册 preset 静默死亡」
+    混在一起，误导下一轮去放宽 universe（违反准确>可见）。
+
+    - silent_death：不在 formal preset → formal 永远不评估，真故障（🚨）
+    - expected_sparse：已在 formal preset → 管线已覆盖，0 命中是条件稀疏（ℹ️）
+    formal_preset_skills 为空时无法判断，两端都空（调用方应跳过细分类）。
+    """
+    if not formal_preset_skills:
+        return {"silent_death": [], "expected_sparse": []}
+    silent_death = sorted(s for s in blind if s not in formal_preset_skills)
+    expected_sparse = sorted(s for s in blind if s in formal_preset_skills)
+    return {"silent_death": silent_death, "expected_sparse": expected_sparse}
+
+
+def _classify_zero_exposure(
+    zero_exp: list[str],
+    experiment_completed_sids: set[str],
+) -> dict[str, list[str]]:
+    """0 曝光二分类：补跑已覆盖·0 产出 vs 真未入队。
+
+    背景（2026-07-21 T3.6）：weak-market 近 30 天 0 曝光，但 07-21 00:03 曝光补跑
+    已 completed（skill_gate 24 票全「不在策略股票池」/ hard_veto → recommended_count=0）。
+    原话术「补跑未覆盖」是误报——补跑覆盖的是「是否入队评估」，不是「是否产出推荐」。
+    0 产出是 universe/regime 正确拦截，不能为喂样本放宽门槛。
+
+    - covered_zero：近 7 天有该 skill 的 completed experiment run（ℹ️）
+    - uncovered：连 experiment run 都没有（⚠️ 真覆盖缺口）
+    """
+    covered_zero = sorted(s for s in zero_exp if s in experiment_completed_sids)
+    uncovered = sorted(s for s in zero_exp if s not in experiment_completed_sids)
+    return {"covered_zero": covered_zero, "uncovered": uncovered}
+
+
 def check_e_item(db, hit_skills: set) -> None:
     """E 项：策略覆盖盲区 + 低胜率标记。"""
     # 覆盖盲区
@@ -526,6 +567,25 @@ def check_e_item(db, hit_skills: set) -> None:
     if disabled_set:
         print(f'E 项已下线策略（disabled，不参与盲区/曝光评估）: {sorted(disabled_set)}')
     print(f'E 项覆盖盲区：{len(blind)} 个 active 策略近 60 天 formal 0 命中: {blind}')
+    # 细分类：preset 静默死亡 vs 预期稀疏（勿把后者当故障去放宽 universe）
+    formal_preset_skills = {
+        str(r[0])
+        for r in db.execute(text(
+            "SELECT skill_id FROM preset_skills WHERE preset_id = 'preset_formal_opening'"
+        )).fetchall()
+        if r[0]
+    }
+    blind_cls = _classify_coverage_blind(blind, formal_preset_skills)
+    if blind_cls["silent_death"]:
+        print(
+            f'  🚨 覆盖盲区·静默死亡（未进 preset_formal_opening，formal 永不评估，'
+            f'需 INSERT preset_skills）: {blind_cls["silent_death"]}'
+        )
+    if blind_cls["expected_sparse"]:
+        print(
+            f'  ℹ️ 覆盖盲区·预期稀疏（已在 formal preset，当前 regime/universe 0 命中，'
+            f'勿放宽门槛污染 D 项）: {blind_cls["expected_sparse"]}'
+        )
 
     # 低覆盖 / 低胜率策略（按 recommendation_id 去重，避免 JSON_TABLE 多策略行重复计数）
     rows = db.execute(text("""
@@ -619,9 +679,44 @@ def check_e_item(db, hit_skills: set) -> None:
 
     # 注册策略中近 30 天 0 曝光的（曝光补跑应持续喂到 SAMPLE_FLOOR）
     # 排除 disabled：已下线策略补跑不再喂，0 曝光/样本<20 是预期而非警告。
+    # 细分类：补跑「覆盖」= 该 skill 近 7 天有 completed experiment run，
+    # 不等于「产出推荐」。0 产出是 universe/regime 拦截，不能写「补跑未覆盖」。
     zero_exp = [s for s in active_set if s not in exposure]
-    if zero_exp:
-        print(f'⚠️ {len(zero_exp)} 个 active 策略近 30 天 0 曝光（补跑未覆盖）: {sorted(zero_exp)}')
+    # 近 7 天 completed experiment 且 selected_skills 含该 skill_id 的策略集合。
+    # selected_skills_json 是曝光补跑写入的权威字段（single_skill 入队必带）；
+    # 不能用 skill_breakdown（0 推荐时无 rows，会把「跑了但 0 票」误判未覆盖）。
+    exp_completed_rows = db.execute(text("""
+        SELECT selected_skills_json
+        FROM recommendation_runs
+        WHERE run_mode = 'experiment' AND status = 'completed'
+          AND started_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+          AND selected_skills_json IS NOT NULL
+    """)).fetchall()
+    experiment_completed_sids: set[str] = set()
+    for (raw,) in exp_completed_rows:
+        try:
+            skills = json.loads(raw) if isinstance(raw, str) else (raw or [])
+        except (TypeError, ValueError):
+            skills = []
+        if not isinstance(skills, list):
+            continue
+        for item in skills:
+            if isinstance(item, dict):
+                sid = item.get("skill_id") or item.get("strategy_id")
+                if sid:
+                    experiment_completed_sids.add(str(sid))
+    zero_cls = _classify_zero_exposure(zero_exp, experiment_completed_sids)
+    if zero_cls["covered_zero"]:
+        print(
+            f'  ℹ️ {len(zero_cls["covered_zero"])} 个 active 策略近 30 天 0 曝光但补跑已覆盖'
+            f'（completed experiment 0 产出，当前 regime/universe 无票，非补跑故障——'
+            f'勿为喂样本放宽门槛）: {zero_cls["covered_zero"]}'
+        )
+    if zero_cls["uncovered"]:
+        print(
+            f'⚠️ {len(zero_cls["uncovered"])} 个 active 策略近 30 天 0 曝光且补跑未入队'
+            f'（真覆盖缺口，查 strategy_exposure_run）: {zero_cls["uncovered"]}'
+        )
     under_floor = sorted(s for s, n in exposure.items() if n < SAMPLE_FLOOR and s in active_set)
     if under_floor:
         print(f'⚠️ {len(under_floor)} 个 active 策略样本 <{SAMPLE_FLOOR}（胜率统计不可信，补跑应持续喂）: {under_floor}')
@@ -644,10 +739,10 @@ def check_e_item(db, hit_skills: set) -> None:
                 print(f'    {sid}: 曝光{n}({n/total_exp*100:.0f}%) 前瞻WR={wr_by_sid[sid]}%')
 
     # 曝光补跑健康诊断：样本 <20 的策略里，区分「补跑在喂但窄口径天然慢」vs
-    # 「补跑 run 失败停滞」。只查近 7 天该策略出现在 experiment run skill_breakdown
-    # 的推荐数：>0 = 在喂（窄策略样本增长慢是 universe 窄非 bug）；0 = 停滞（补跑
-    # 失败/run 未触发，需人工触发修复——曾出现 high-position 连续 2 天曝光补跑
-    # 失败导致样本永远卡在 3 笔但 E 项只报「n<20」不自知的静默事故）。
+    # 「补跑 run 失败停滞」vs「门线拦截 0 产出」。
+    # 命中口径：近 7 天 skill_breakdown 有推荐 = 在喂。
+    # 门线拦截：该 skill 近 7 天有 completed experiment（selected_skills 命中）但 0 推荐。
+    # 停滞：该 skill 近 7 天连 completed experiment 都没有（真故障/未触发）。
     if under_floor:
         recent_rows = db.execute(text("""
             SELECT jt.strategy_id AS sid, MAX(u.started_at) AS latest, COUNT(*) AS n
@@ -662,16 +757,6 @@ def check_e_item(db, hit_skills: set) -> None:
             GROUP BY jt.strategy_id
         """)).fetchall()
         recent_in_experiment: dict[str, tuple] = {row[0]: (row[1], int(row[2] or 0)) for row in recent_rows}
-        # 近 7 天是否有 completed 的补跑 run（区分「补跑根本没跑」vs「跑了但门线拦 0」）。
-        # 第三种情况（补跑每天跑、completed、但 recommended_count=0）不是停滞也不是在喂，
-        # 是规则门/score_line 把低样本策略的候选全拦——这是该策略当前 regime 无高分票的
-        # 正确反映（补跑用与 formal 相同门线，低曝光策略天然易撞线），**不能为喂样本放宽
-        # 门线**（会把本不该推的低质量票推出去，污染胜率统计）。
-        exposure_run_alive = db.execute(text("""
-            SELECT COUNT(*) FROM recommendation_runs
-            WHERE run_mode = 'experiment' AND status = 'completed'
-              AND started_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-        """)).scalar() or 0
         stalled: list[str] = []
         feeding: list[str] = []
         gate_blocked: list[str] = []
@@ -679,18 +764,19 @@ def check_e_item(db, hit_skills: set) -> None:
             hit = recent_in_experiment.get(sid)
             if hit and hit[1] > 0:
                 feeding.append(f'{sid}({hit[1]}笔@{str(hit[0])[:10]})')
-            elif exposure_run_alive > 0:
+            elif sid in experiment_completed_sids:
+                # 该 skill 的补跑 completed 但 skill_breakdown 无推荐 = 门线/universe 0 产出
                 gate_blocked.append(sid)
             else:
                 stalled.append(sid)
         if feeding:
             print(f'  ℹ️ 补跑在喂（窄口径样本天然慢，非 bug，不加 universe）: {feeding}')
         if gate_blocked:
-            print(f'  ℹ️ 补跑在跑但门线拦截（近7天补跑 run completed 但 0 产出={len(gate_blocked)} 策略；'
-                  f'低样本策略候选规则分撞线，当前 regime 无高分票，非补跑故障——'
+            print(f'  ℹ️ 补跑在跑但门线拦截（该策略近7天 completed experiment 但 0 产出；'
+                  f'低样本策略候选规则分撞线/universe 拦截，当前 regime 无高分票，非补跑故障——'
                   f'勿为喂样本放宽门线，会污染胜率统计）: {gate_blocked}')
         if stalled:
-            print(f'  🚨 补跑停滞（近7天无 completed 补跑 run，run 可能失败/未触发，需手动触发验证）: {stalled}')
+            print(f'  🚨 补跑停滞（近7天无该策略 completed experiment run，可能失败/未触发，需手动触发验证）: {stalled}')
 
 
 # 前瞻样本分界：自该交易日起，已上线的策略规则（strategy.yaml / aggregator.py）

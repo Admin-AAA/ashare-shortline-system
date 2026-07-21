@@ -20,6 +20,15 @@ contract:
 
 # 研究假设：弱市不是买全市场超跌，而是只做仍有中期强度、回撤未破位且
 # 当日已经止跌的小阳确认。下一交易日开盘才是实际入场，不使用收盘后的未来信息。
+#
+# ⚠️ SELF-IMPROVE FLAG: 覆盖盲区·预期稀疏 (2026-07-21 T3.6 复核)
+# 近 60 天 formal 0 命中、近 30 天 0 曝光——但不是静默死亡：
+#   1. 已在 preset_formal_opening（sort_order=12, weight=1.0）
+#   2. 07-21 00:03 曝光补跑 completed：prefilter 24 → skill_gate 全 hard_veto
+#      「不在策略股票池」（universe 条件未满足），recommended_count=0
+#   3. 弱市日 limit_down_count=479 触发「系统性恐慌禁入」设计正确
+# 处置：标记观察，勿放宽 universe/pct/chg20 门槛喂样本（准确>可见）。
+# self_check E 项应归「预期稀疏 / 补跑已覆盖·0 产出」，不是「补跑未覆盖」。
 universe:
   include:
     - "market_regime == '弱势'"
