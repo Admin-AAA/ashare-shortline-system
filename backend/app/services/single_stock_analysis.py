@@ -217,10 +217,15 @@ def analyze_stock(
 
     # 8. 基础短线策略特征丰富（与推荐管线一致）
     from app.services.feature_builder import build_features
+    from app.services.factors.registry import bootstrap_default_factor_registry
     from app.services.auxiliary.application import (
         inject_auxiliary_prefilter_flags,
         load_auxiliary_feature_views,
     )
+
+    # 离线/脚本直接调 analyze_stock 时不会走 FastAPI lifespan → factor registry
+    # 未 bootstrap 会 FactorError。幂等：main.py 已 bootstrap 时此处 no-op。
+    bootstrap_default_factor_registry()
 
     # 提取 enrich 前的 profile（build_features 会 pop 掉 dsa_profile）
     profile_pre = dict(stock_result.get("dsa_profile") or {})

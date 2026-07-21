@@ -736,12 +736,14 @@ def _fetch_gate_blocked_detail(db, sid: str) -> dict | None:
 
     优先 filter_audit 文案中的有效线（per-card 可能 > base）；否则 result_summary
     score_line_meta.effective_score_line；再否则 score_line 列（base，可能偏保守）。
+    附带 market_snapshot 恐慌日标注（ld>100 → 有效线 101 属设计内，非补跑 bug）。
     失败/无数据返回 None。
     """
     try:
         params = {"pat": '%"' + sid + '"%'}
         row = db.execute(text("""
-            SELECT r.score_line, r.filter_audit_json, r.result_summary_json
+            SELECT r.score_line, r.filter_audit_json, r.result_summary_json,
+                   r.market_snapshot_json, r.trade_date
             FROM recommendation_runs r
             WHERE r.run_mode = 'experiment' AND r.status = 'completed'
               AND r.selected_skills_json LIKE :pat
@@ -752,10 +754,12 @@ def _fetch_gate_blocked_detail(db, sid: str) -> dict | None:
         return None
     if not row:
         return None
-    # 兼容旧假 DB 返回 2 列 (score_line, fa) 与新 3 列 (+ result_summary)
+    # 兼容旧假 DB 返回 2 列 (score_line, fa) 与新 3+ 列
     base_line = float(row[0]) if row[0] is not None else None
     fa_raw = row[1] if len(row) > 1 else None
     rs_raw = row[2] if len(row) > 2 else None
+    snap_raw = row[3] if len(row) > 3 else None
+    trade_date = str(row[4]) if len(row) > 4 and row[4] is not None else None
     stats = _parse_score_line_gate_stats(fa_raw if fa_raw else None)
     max_cand = stats.get("max_candidate_score")
     eff_line = stats.get("max_effective_line")
@@ -771,10 +775,37 @@ def _fetch_gate_blocked_detail(db, sid: str) -> dict | None:
             pass
     if eff_line is None:
         eff_line = base_line
+    # 恐慌日 / 弱势标注（解释有效线 89–101 的主因，勿当补跑故障）
+    limit_down = None
+    limit_up = None
+    regime = None
+    if snap_raw:
+        try:
+            snap = json.loads(snap_raw) if isinstance(snap_raw, str) else snap_raw
+            if isinstance(snap, dict):
+                limit_down = snap.get("limit_down_count")
+                limit_up = snap.get("limit_up_count")
+                if limit_down is not None:
+                    limit_down = int(limit_down)
+                if limit_up is not None:
+                    limit_up = int(limit_up)
+                regime = (
+                    (snap.get("breadth") or {}).get("regime")
+                    or snap.get("market_regime")
+                    or snap.get("regime")
+                )
+        except (TypeError, ValueError):
+            pass
+    panic = bool(limit_down is not None and limit_down > 100)
     return {
         "effective_line": eff_line,
         "max_candidate_score": max_cand,
         "base_score_line": base_line,
+        "trade_date": trade_date,
+        "limit_down_count": limit_down,
+        "limit_up_count": limit_up,
+        "regime": regime,
+        "panic_day": panic,
     }
 
 def check_e_item(db, hit_skills: set) -> None:
@@ -1018,17 +1049,30 @@ def check_e_item(db, hit_skills: set) -> None:
             print(f'  ℹ️ 补跑在喂（窄口径样本天然慢，非 bug，不加 universe）: {health["feeding"]}')
         if health["gate_blocked"]:
             details = []
+            panic_n = 0
             for sid in health["gate_blocked"]:
                 det = _fetch_gate_blocked_detail(db, sid)
                 if det and det.get("effective_line") is not None:
                     mc = det.get("max_candidate_score")
                     mc_s = f"最高候选{mc:.1f}" if mc is not None else "无候选分"
-                    details.append(f"{sid}(有效线{det['effective_line']:.1f} vs {mc_s})")
+                    tag = f"有效线{det['effective_line']:.1f} vs {mc_s}"
+                    # 恐慌日（ld>100）有效线 89–101 属设计内：panic+12 + 执行/证据抬线
+                    # （07-20 exposure ld=479 实证）。勿当补跑 bug 去放宽门线/universe。
+                    if det.get("panic_day"):
+                        panic_n += 1
+                        ld = det.get("limit_down_count")
+                        tag += f",恐慌日ld={ld}"
+                    elif det.get("regime"):
+                        tag += f",{det['regime']}"
+                    details.append(f"{sid}({tag})")
                 else:
                     details.append(sid)
-            print(f'  ℹ️ 补跑在跑但门线拦截（最新 completed experiment 0 产出；'
-                  f'regime 有效线偏高/无高分票，非补跑故障——'
-                  f'勿为喂样本放宽门线，会污染胜率统计）: {details}')
+            note = (
+                f'  ℹ️ 补跑在跑但门线拦截（最新 completed experiment 0 产出；'
+                f'{"恐慌日抬线+执行惩罚" if panic_n else "regime 有效线偏高/无高分票"}，'
+                f'非补跑故障——勿为喂样本放宽门线，会污染胜率统计）: {details}'
+            )
+            print(note)
         if health["stalled"]:
             print(f'  🚨 补跑停滞（近7天无该策略 completed experiment run，可能失败/未触发，需手动触发验证）: {health["stalled"]}')
 

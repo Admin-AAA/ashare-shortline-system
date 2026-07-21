@@ -91,6 +91,43 @@ def test_fetch_gate_blocked_detail_prefers_audit_effective_line():
     assert det["max_candidate_score"] == 73.16
     assert det["effective_line"] == 101.35
     assert det["base_score_line"] == 72.0
+    # 无 snapshot → 非恐慌日
+    assert det.get("panic_day") is False
+
+
+def test_fetch_gate_blocked_detail_panic_day_from_snapshot():
+    """market_snapshot limit_down>100 → panic_day，解释有效线 101 属设计内。"""
+    fa = _fa_with_scores((73.2, 101.3), (69.7, 89.5))
+    snap = json.dumps({
+        "limit_down_count": 479,
+        "limit_up_count": 68,
+        "sample_count": 4955,
+        "breadth": {"regime": "弱势"},
+    })
+    # 5 列：score_line, fa, result_summary, snapshot, trade_date
+    db = _FakeDB((72.0, fa, None, snap, "2026-07-20"))
+    det = self_check._fetch_gate_blocked_detail(db, "chip-single-peak-breakout")
+    assert det is not None
+    assert det["effective_line"] == 101.3
+    assert det["panic_day"] is True
+    assert det["limit_down_count"] == 479
+    assert det["regime"] == "弱势"
+    assert det["trade_date"] == "2026-07-20"
+
+
+def test_fetch_gate_blocked_detail_non_panic_regime_only():
+    """ld 正常时 panic_day=False，仍带 regime 标签。"""
+    fa = _fa_with_scores((70.0, 80.0))
+    snap = json.dumps({
+        "limit_down_count": 12,
+        "limit_up_count": 40,
+        "breadth": {"regime": "震荡"},
+    })
+    db = _FakeDB((72.0, fa, None, snap, "2026-07-08"))
+    det = self_check._fetch_gate_blocked_detail(db, "trend-pullback-continuation")
+    assert det["panic_day"] is False
+    assert det["limit_down_count"] == 12
+    assert det["regime"] == "震荡"
 
 
 def test_fetch_gate_blocked_detail_no_row_returns_none():
