@@ -187,6 +187,27 @@ def f_platform_breakout_vol(d: pd.DataFrame) -> pd.Series:
     ).fillna(False)
 
 
+def f_ma20_support_hold(d: pd.DataFrame) -> pd.Series:
+    """顺势 20 日线支撑回踩企稳 (with-trend support-hold)：
+    已确立多头(站上 ma20 & ma60)的票缩量(卖压耗尽)回踩测试 20 日线(±2.5%) 不破，
+    且非追高(距 ma60<20%)。
+    Causal: 上升趋势中买方在均线处防守、缩量=无抛压，支撑有效则续涨概率高——
+    是「续涨中继」而非「抄底反转」。
+    与已 reject 的 volume_reversal(ma20 下方接飞刀反转)及 inconclusive 的
+    platform_breakout_vol(新高放量突破)机制完全不同：本因子是「上升趋势中缩量回踩均线后企稳」，
+    属 continuation 而非 reversal/breakout。全部用全历史字段(close/ma20/ma60/vol_ratio_5/turnover)。"""
+    bias_ma20 = (d["close"] - d["ma20"]) / d["ma20"] * 100.0
+    bias_ma60 = (d["close"] - d["ma60"]) / d["ma60"] * 100.0
+    return (
+        (d["close"] > d["ma20"])
+        & (d["close"] > d["ma60"])
+        & (bias_ma20.abs() < 2.5)      # 回踩测试 20 日线、未远离(0~2.5% 上方)
+        & (d["vol_ratio_5"] < 0.85)    # 缩量=卖压耗尽
+        & (bias_ma60 < 20.0)           # 非追高(距 60 日线<20%)
+        & (d["turnover_rate"] >= 1.0)  # 有流动性
+    ).fillna(False)
+
+
 def f_volume_capitulation(d: pd.DataFrame) -> pd.Series:
     """地量见地价反转：极端缩量 + 超卖 + 当日转强 + 趋势结构未破坏。
     Causal: 地量=抛压极致；超卖=估值修复空间；当日转强=止跌信号。
@@ -337,6 +358,14 @@ FACTOR_LIBRARY = {
         h3_wr_true=None, h3_wr_false=None, h3_n_true=0,
         edge_pp=None, rolling_frac_ok=0.0, rolling_n=0,
         note="诚实多期 OOS(本轮回测): 全历史 0 笔满足(vol5<0.5 & bias_ma20<-6 & 涨 & 趋势未破 的极稀组合)→ 无信号可测 → inconclusive(非 reject)。prior 轮单期坍缩的'reject'为旧口径，作废。",
+    ),
+    "ma20_support_hold": dict(
+        fn=f_ma20_support_hold, kind="cohort",
+        causal="顺势 20 日线支撑回踩企稳：多头中缩量回踩 ma20 不破=买方防守+卖压耗尽，续涨中继。",
+        verdict="reject",
+        h3_wr_true=0.353, h3_wr_false=0.475, h3_n_true=754,
+        edge_pp=-0.122, rolling_frac_ok=0.0, rolling_n=1,
+        note="诚实多期 OOS(2026-07-22): H3 WR=35.3% n=754 vs rest≈47.5% → edge -12.2pp, 滚动窗口 0% 正边缘 → reject(顺势缩量回踩=续跌 contra-信号，与 volume_reversal 同属量价因子噪声)。NOT 加策略。",
     ),
     # ── chip_winner_rate family: BLOCKED by data wall (column only ~25-53 recent days) ──
     "chip_low_10_45": dict(

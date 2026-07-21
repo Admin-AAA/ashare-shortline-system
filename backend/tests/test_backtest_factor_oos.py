@@ -20,6 +20,7 @@ from scripts.backtest_factor_oos import (
     OOS_COLUMNS,
     chip_band,
     chip_base_breakout,
+    f_ma20_support_hold,
     f_volume_reversal,
     load_data,
     run_rolling_oos,
@@ -82,6 +83,40 @@ def test_volume_reversal_handles_nan_gracefully():
     )
     out = f_volume_reversal(df)
     assert out.fillna(False).tolist() == [False, True]
+
+
+def test_ma20_support_hold_triggers_on_uptrend_lowvol_test():
+    # 站上 ma20&ma60、close 略高于 ma20(±2.5%)、缩量、距 ma60<20% → 命中
+    df = _mk(
+        close=[100.0, 100.0, 100.0],
+        ma20=[98.0, 98.0, 98.0],
+        ma60=[90.0, 90.0, 90.0],
+        vol_ratio_5=[0.7, 2.0, 0.7],
+        turnover_rate=[2.0, 2.0, 2.0],
+    )
+    out = f_ma20_support_hold(df)
+    assert list(out) == [True, False, True]
+
+
+def test_ma20_support_hold_rejects_below_ma_or_extended():
+    # row0 跌破 ma20(接飞刀) / row1 距 ma60>20%(追高) / row2 站上但高量 → 全拒
+    df = _mk(
+        close=[95.0, 112.0, 100.0],
+        ma20=[100.0, 98.0, 98.0],
+        ma60=[90.0, 90.0, 90.0],
+        vol_ratio_5=[0.7, 0.7, 2.0],
+        turnover_rate=[2.0, 2.0, 2.0],
+    )
+    out = f_ma20_support_hold(df)
+    assert list(out) == [False, False, False]
+
+
+def test_ma20_support_hold_frozen_verdict_is_reject():
+    meta = FACTOR_LIBRARY["ma20_support_hold"]
+    assert meta["verdict"] == "reject"
+    assert meta["edge_pp"] == -0.122
+    assert meta["h3_wr_true"] == 0.353
+    assert meta["rolling_frac_ok"] == 0.0
 
 
 def test_chip_band_respects_lo_hi_and_base_breakout():
