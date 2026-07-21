@@ -1440,6 +1440,68 @@ def _print_floor_enforcement(db) -> None:
               f'立即排查 Contract 强制是否仍生效')
 
 
+def _format_phase_information_lines(rep: dict) -> list[str]:
+    """纯函数：phase 信息量报告 → 可打印行（便于单测锁定，不碰 DB）。
+
+    rep 结构见 diagnose_phase_information.build_phase_report。
+    """
+    alpha = 0.05
+    r_sig = "显著有信息量" if rep["regime_p"] < alpha else "无显著信息量"
+    s_sig = "显著有信息量" if rep["sentiment_p"] < alpha else "无显著信息量"
+    lines = [
+        f'  ℹ️ phase 信息量（LIVE formal n={rep["overall"]["n"]}）: '
+        f'regime χ²={rep["regime_chi2"]} p={rep["regime_p"]}→{r_sig}；'
+        f'sentiment χ²={rep["sentiment_chi2"]} p={rep["sentiment_p"]}→{s_sig}'
+    ]
+    notables = [
+        b for b in (rep.get("notable_buckets") or [])
+        if b.get("winrate", 100) < rep["overall"]["winrate"]
+    ]
+    if notables:
+        parts = [
+            f'{b["name"]} WR={b["winrate"]}% n={b["n"]} PL={b["net_plr"]}'
+            for b in notables[:4]
+        ]
+        lines.append(f'     ——显著低胜率桶: {"; ".join(parts)}')
+    if rep["regime_p"] >= alpha:
+        lines.append(
+            f'     ——regime 信息量消失（p≥{alpha}）：勿在 phase 上加精细 veto/抬线（过拟合噪声）'
+        )
+    elif rep["sentiment_p"] >= alpha:
+        lines.append(
+            f'     ——sentiment 无独立信息量（p≥{alpha}）：防守规则优先投 regime 真亏桶，'
+            f'勿对 sentiment 维度无谓加规则'
+        )
+    return lines
+
+
+def _print_phase_information(db) -> None:
+    """D 项：phase/sentiment 信息量摘要（复用 diagnose_phase_information）。
+
+    背景（T5 第31轮）：独立脚本证明 regime χ² 显著、sentiment 不显著。
+    仅跑一次易遗忘 → 每轮 self_check D 项复用，防后续对无信息量的 sentiment
+    维度加规则，并持续监控 regime 信息量是否漂移。
+
+    失败静默：诊断导入/查询失败不影响 A/B/C/D 主指标。
+    """
+    try:
+        import importlib.util
+        diag_path = os.path.join(os.path.dirname(__file__), "diagnose_phase_information.py")
+        spec = importlib.util.spec_from_file_location("diagnose_phase_information", diag_path)
+        if spec is None or spec.loader is None:
+            return
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        records = mod._fetch_live_formal_ledger(db)
+        if not records or len(records) < 30:
+            return
+        rep = mod.build_phase_report(records)
+        for line in _format_phase_information_lines(rep):
+            print(line)
+    except Exception as exc:
+        print(f'  ⚠️ phase 信息量诊断跳过: {type(exc).__name__}: {exc}')
+
+
 def _low_score_line_pollution(
     rows_with_sl: list,
     *,
@@ -2213,6 +2275,9 @@ def check_d_item(db) -> None:
     _print_floor_enforcement(db)
     # 两道污染合并去污染反事实：近10日 WR vs PL 是否同向回升（防误判 PL=污染）
     _print_clean_d_counterfactual(db)
+    # phase 信息量诊断（T5）：regime/sentiment 对 outcome 是否有统计显著信息量
+    # —— 独立脚本 diagnose_phase_information 每轮 D 项复用，避免「只跑一次就遗忘」
+    _print_phase_information(db)
 
     # 单日集中度诊断（独立股票口径）：防止单日异常高量扭曲 D 项判断。
     # 已改用独立股票数（同股同日多 run 只算 1 只），避免"单日 N 笔"假警报——
