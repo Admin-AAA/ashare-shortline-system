@@ -949,10 +949,13 @@ def _build_stock_from_bars(
     support_ma5 = abs(bias_ma5_val) <= 2 and price >= ma5
     support_ma10 = abs(bias_ma10_val) <= 2.8 and price >= ma10
 
-    # RSI — prefer cached
-    rsi12 = latest_indicator.get("rsi_12") if latest_indicator.get("rsi_12") is not None else _rsi(closes, 12)
-    rsi6 = latest_indicator.get("rsi_6") if latest_indicator.get("rsi_6") is not None else _rsi(closes, 6)
-    rsi24 = latest_indicator.get("rsi_24") if latest_indicator.get("rsi_24") is not None else _rsi(closes, 24)
+    # RSI — 始终从收盘价重算，不信任 daily_kbars.rsi_* 缓存列。
+    # 该回填列已证实失真：如 301047 在下跌日 rsi_12 从 22.3 跳到 55.4（违反 RSI
+    # 物理意义）；失真列会污染策略 when 条件（rsi_12<55 / >70 等）与 LLM 提示，
+    # 导致推荐过滤与 LLM 推理基于错误超买/超卖信号。收盘价才是唯一可信源。
+    rsi12 = _rsi(closes, 12)
+    rsi6 = _rsi(closes, 6)
+    rsi24 = _rsi(closes, 24)
 
     # MACD — prefer cached
     cached_dif = latest_indicator.get("macd_dif")
@@ -993,9 +996,11 @@ def _build_stock_from_bars(
     if upper_shadow_count20 is None:
         upper_shadow_count20 = _upper_shadow_count(bars[-20:])
 
-    # Max drawdown — prefer cached
-    max_dd20 = latest_indicator.get("max_dd20") if latest_indicator.get("max_dd20") is not None else _max_drawdown(closes[-20:])
-    max_dd60 = latest_indicator.get("max_dd60") if latest_indicator.get("max_dd60") is not None else _max_drawdown(closes[-60:])
+    # Max drawdown — 始终从收盘价重算，不信任 daily_kbars.max_dd* 缓存列
+    # （同 rsi，回填列失真：如 301047 max_dd20 缓存 -19.4 但按收盘价实为 -7.3；
+    # 失真会污染策略 when 条件 max_dd20>=-18 / <-15 等）。
+    max_dd20 = _max_drawdown(closes[-20:])
+    max_dd60 = _max_drawdown(closes[-60:])
 
     stock = {
         "code": quote["code"],
