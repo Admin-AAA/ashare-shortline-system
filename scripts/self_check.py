@@ -560,6 +560,50 @@ def _classify_zero_exposure(
     return {"covered_zero": covered_zero, "uncovered": uncovered}
 
 
+def _classify_exposure_feed_health(
+    under_floor: list[str],
+    *,
+    last_rec: dict[str, tuple],
+    last_exp: dict[str, tuple],
+) -> dict[str, list[str]]:
+    """曝光补跑健康三分法（纯函数，便于单测）。
+
+    last_rec[sid] = (recommended_at, n_recs) 近窗口 skill_breakdown 有推荐
+    last_exp[sid] = (started_at, recommended_count) 近窗口最新 completed experiment
+      （selected_skills 命中该 sid；recommended_count 为该 run 产出）
+
+    分类（T25）：
+    - feeding：最新 completed experiment 产出 >0
+    - gate_blocked：最新 completed experiment 产出 0（含：有更旧推荐但仍被更新 0 产出覆盖）
+    - stalled：近窗口无 completed experiment
+
+    旧逻辑只看「7 天内是否有推荐」会把 07-16 1 笔旧推荐 + 07-21 三次 0 产出
+    误标「补跑在喂」，掩盖门线/regime 拦截。
+    """
+    feeding: list[str] = []
+    gate_blocked: list[str] = []
+    stalled: list[str] = []
+    for sid in under_floor:
+        rec = last_rec.get(sid)
+        exp = last_exp.get(sid)
+        if exp is None:
+            stalled.append(sid)
+            continue
+        exp_ts, exp_rec_n = exp
+        if int(exp_rec_n or 0) <= 0:
+            gate_blocked.append(sid)
+            continue
+        if rec and int(rec[1] or 0) > 0:
+            feeding.append(f"{sid}({int(rec[1])}笔@{str(rec[0])[:10]})")
+        else:
+            feeding.append(f"{sid}(exp@{str(exp_ts)[:10]},rec={int(exp_rec_n)})")
+    return {
+        "feeding": feeding,
+        "gate_blocked": gate_blocked,
+        "stalled": stalled,
+    }
+
+
 def _format_e_coverage_tag(
     n: int,
     win_rate: float,
@@ -851,11 +895,10 @@ def check_e_item(db, hit_skills: set) -> None:
             if sid in wr_by_sid:
                 print(f'    {sid}: 曝光{n}({n/total_exp*100:.0f}%) 前瞻WR={wr_by_sid[sid]}%')
 
-    # 曝光补跑健康诊断：样本 <20 的策略里，区分「补跑在喂但窄口径天然慢」vs
-    # 「补跑 run 失败停滞」vs「门线拦截 0 产出」。
-    # 命中口径：近 7 天 skill_breakdown 有推荐 = 在喂。
-    # 门线拦截：该 skill 近 7 天有 completed experiment（selected_skills 命中）但 0 推荐。
-    # 停滞：该 skill 近 7 天连 completed experiment 都没有（真故障/未触发）。
+    # 曝光补跑健康诊断：样本 <20 的策略里，区分「补跑在喂」vs「门线拦截」vs「停滞」。
+    # T25：以「最新 completed experiment 的 recommended_count」为准——若最新补跑 0 产出，
+    # 即使 7 天内更早有推荐，也标门线拦截（07-16 1 笔 + 07-21 三次 0 产出误标先例）。
+    # gate_blocked 明细沿用 _fetch_gate_blocked_detail（有效线 vs 最高候选分）。
     if under_floor:
         recent_rows = db.execute(text("""
             SELECT jt.strategy_id AS sid, MAX(u.started_at) AS latest, COUNT(*) AS n
@@ -869,24 +912,40 @@ def check_e_item(db, hit_skills: set) -> None:
               AND rec.recommended_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
             GROUP BY jt.strategy_id
         """)).fetchall()
-        recent_in_experiment: dict[str, tuple] = {row[0]: (row[1], int(row[2] or 0)) for row in recent_rows}
-        stalled: list[str] = []
-        feeding: list[str] = []
-        gate_blocked: list[str] = []
-        for sid in under_floor:
-            hit = recent_in_experiment.get(sid)
-            if hit and hit[1] > 0:
-                feeding.append(f'{sid}({hit[1]}笔@{str(hit[0])[:10]})')
-            elif sid in experiment_completed_sids:
-                # 该 skill 的补跑 completed 但 skill_breakdown 无推荐 = 门线/universe 0 产出
-                gate_blocked.append(sid)
-            else:
-                stalled.append(sid)
-        if feeding:
-            print(f'  ℹ️ 补跑在喂（窄口径样本天然慢，非 bug，不加 universe）: {feeding}')
-        if gate_blocked:
+        last_rec: dict[str, tuple] = {
+            row[0]: (row[1], int(row[2] or 0)) for row in recent_rows
+        }
+        exp_run_rows = db.execute(text("""
+            SELECT started_at, recommended_count, selected_skills_json
+            FROM recommendation_runs
+            WHERE run_mode = 'experiment' AND status = 'completed'
+              AND started_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+              AND selected_skills_json IS NOT NULL
+            ORDER BY started_at DESC
+        """)).fetchall()
+        last_exp: dict[str, tuple] = {}
+        for started_at, rec_n, raw in exp_run_rows:
+            try:
+                skills = json.loads(raw) if isinstance(raw, str) else (raw or [])
+            except (TypeError, ValueError):
+                skills = []
+            if not isinstance(skills, list):
+                continue
+            for item in skills:
+                if not isinstance(item, dict):
+                    continue
+                sid = item.get("skill_id") or item.get("strategy_id")
+                if not sid or sid in last_exp:
+                    continue
+                last_exp[str(sid)] = (started_at, int(rec_n or 0))
+        health = _classify_exposure_feed_health(
+            under_floor, last_rec=last_rec, last_exp=last_exp,
+        )
+        if health["feeding"]:
+            print(f'  ℹ️ 补跑在喂（窄口径样本天然慢，非 bug，不加 universe）: {health["feeding"]}')
+        if health["gate_blocked"]:
             details = []
-            for sid in gate_blocked:
+            for sid in health["gate_blocked"]:
                 det = _fetch_gate_blocked_detail(db, sid)
                 if det and det.get("effective_line") is not None:
                     mc = det.get("max_candidate_score")
@@ -894,10 +953,11 @@ def check_e_item(db, hit_skills: set) -> None:
                     details.append(f"{sid}(有效线{det['effective_line']:.1f} vs {mc_s})")
                 else:
                     details.append(sid)
-            print(f'  ℹ️ 补跑在跑但门线拦截（regime 有效线偏高，当前 regime 无高分票，非补跑故障——'
+            print(f'  ℹ️ 补跑在跑但门线拦截（最新 completed experiment 0 产出；'
+                  f'regime 有效线偏高/无高分票，非补跑故障——'
                   f'勿为喂样本放宽门线，会污染胜率统计）: {details}')
-        if stalled:
-            print(f'  🚨 补跑停滞（近7天无该策略 completed experiment run，可能失败/未触发，需手动触发验证）: {stalled}')
+        if health["stalled"]:
+            print(f'  🚨 补跑停滞（近7天无该策略 completed experiment run，可能失败/未触发，需手动触发验证）: {health["stalled"]}')
 
 
 # 前瞻样本分界：自该交易日起，已上线的策略规则（strategy.yaml / aggregator.py）
