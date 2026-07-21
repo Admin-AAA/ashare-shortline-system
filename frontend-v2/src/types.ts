@@ -880,15 +880,6 @@ export type HomeBootstrap = {
   };
 };
 
-export type HomeInitialState = {
-  home: HomeBootstrap;
-  presets: Preset[];
-  runs: RunSummary[];
-  task_runs: ScheduledTaskRun[];
-  skills: SkillSummary[];
-  data_sources: DataSourceHealthRow[];
-};
-
 export type MarketSnapshot = {
   snapshot_id: string;
   trade_date: string;

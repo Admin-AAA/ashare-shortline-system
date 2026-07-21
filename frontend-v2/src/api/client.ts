@@ -1,7 +1,6 @@
 import type {
   FilterEffectiveness,
   HomeBootstrap,
-  HomeInitialState,
   MetricsOverview,
   MinutePrepResult,
   Preset,
@@ -193,7 +192,6 @@ export const api = {
   dashboard: createDashboardApi(request),
 
   bootstrap: () => request<HomeBootstrap>("/api/home/bootstrap"),
-  initial: () => request<HomeInitialState>("/api/home/initial"),
 
   presets: () => request<Preset[]>("/api/presets", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   createPreset: (payload: PresetPayload) =>
