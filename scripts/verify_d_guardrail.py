@@ -51,6 +51,13 @@ RECENT_WINDOW_DAYS = 10
 RECENT_PL_DRAG_RATIO = 0.80   # 近窗口净盈亏比 < 全量 * 0.80 视为显著慢退化
 RECENT_MIN_N = 30             # 近窗口样本需 >= 该值方可断言（避免小样本误报）
 
+# —— 单日 regime 冲击护栏（机器可读早警，不计入 ok/退出码）——
+# 文档化护栏（第187/192轮）：单日失败高度集中（≥40%）属市场 regime 冲击，非个股因子可解，
+# 禁止据此加 entry 规则（过拟合单日）。此前仅 self_check 文本告警，本闸门固化为机器可读信号，
+# 使自动化编排可读取 regime_shock.shock 并拒绝对单日冲击加 entry 规则，避免误读为系统退化。
+SINGLE_DAY_FAIL_SHARE_FLOOR = 0.40   # 单日失败占窗口失败比 ≥ 该值 → 判定单日 regime 冲击
+SINGLE_DAY_MIN_FAIL = 5              # 窗口失败总数需 ≥ 该值方可断言（避免小样本误报）
+
 
 def _check(name: str, ok: bool, actual, floor) -> bool:
     status = "✅ PASS" if ok else "❌ FAIL"
@@ -94,8 +101,58 @@ def _eval_recent_drift(full: dict | None, recent: dict | None) -> dict:
     return {"warn": False, "ratio": ratio, "msg": ""}
 
 
+def _single_day_failure_share(rows: list, dates: set) -> dict:
+    """纯函数：在 dates 窗口内统计「单日失败集中度」。
+
+    rows: [(code, trade_date, label, executed_return)]，失败 = label != 'success'（与
+    _compute_d_cost 的 win 定义一致）。返回 {top_date, top_failures, total_failures, share, n}。
+    share = 失败最多的单日失败数 / 窗口失败总数；无失败返回 share=0.0。
+    """
+    win = [r for r in rows if str(r[1]) in dates]
+    n = len(win)
+    fails = [r for r in win if r[2] != 'success']
+    total_failures = len(fails)
+    if total_failures == 0:
+        return {"top_date": None, "top_failures": 0,
+                "total_failures": 0, "share": 0.0, "n": n}
+    by_date: dict[str, int] = {}
+    for r in fails:
+        d = str(r[1])
+        by_date[d] = by_date.get(d, 0) + 1
+    top_date = max(by_date, key=by_date.get)
+    top_failures = by_date[top_date]
+    return {
+        "top_date": top_date,
+        "top_failures": top_failures,
+        "total_failures": total_failures,
+        "share": round(top_failures / total_failures, 2),
+        "n": n,
+    }
+
+
+def _eval_regime_shock(rows: list, recent_dates: set) -> dict:
+    """纯函数：评估近窗口是否由单日 regime 冲击主导失败。
+
+    返回 {shock: bool, top_date, top_failures, total_failures, share, msg}。触发条件：
+    窗口失败总数 >= SINGLE_DAY_MIN_FAIL 且 单日失败占比 >= SINGLE_DAY_FAIL_SHARE_FLOOR。
+    触发时 msg 明确「禁止据此加 entry 规则」并把该日暴露为可核查锚点；不触发时仍返回集中度
+    原始值（msg 空），供报告透明展示。本信号只作早警，不计入 ok / 退出码（市场冲击≠策略回归）。
+    """
+    s = _single_day_failure_share(rows, recent_dates)
+    if s["total_failures"] < SINGLE_DAY_MIN_FAIL:
+        return {"shock": False, **s,
+                "msg": f"近窗口失败 {s['total_failures']}<{SINGLE_DAY_MIN_FAIL}，不足以断言单日冲击"}
+    if s["share"] >= SINGLE_DAY_FAIL_SHARE_FLOOR:
+        return {"shock": True, **s,
+                "msg": (f"近窗口失败 {s['total_failures']} 笔中 {s['top_failures']} 笔"
+                        f"（{int(s['share'] * 100)}%）集中于 {s['top_date']} 单日——属市场 regime "
+                        f"冲击，非个股因子可解；🚫 禁止据此加 entry 规则（过拟合单日，第187/192轮证伪）")}
+    return {"shock": False, **s, "msg": ""}
+
+
 def build_report(full: dict | None, fwd: dict | None, ok: bool, exit_code: int,
-                 recent: dict | None = None, drift: dict | None = None) -> dict:
+                 recent: dict | None = None, drift: dict | None = None,
+                 regime_shock: dict | None = None) -> dict:
     """把本轮 D 项护栏结果结构化为机器可读报告，供跨 run 漂移追踪。
 
     full / fwd 为 self_check._compute_d_cost 的返回 dict（含 n/net_wr/net_pl/max_loss）。
@@ -118,11 +175,16 @@ def build_report(full: dict | None, fwd: dict | None, ok: bool, exit_code: int,
             "recent_window_days": RECENT_WINDOW_DAYS,
             "recent_pl_drag_ratio": RECENT_PL_DRAG_RATIO,
             "recent_min_n": RECENT_MIN_N,
+            "single_day_fail_share_floor": SINGLE_DAY_FAIL_SHARE_FLOOR,
+            "single_day_min_fail": SINGLE_DAY_MIN_FAIL,
         },
         "full": _block(full),
         "forward": _block(fwd),
         "recent_10d": _block(recent),
         "recent_drift": drift if drift is not None else {"warn": False, "ratio": None, "msg": ""},
+        "regime_shock": regime_shock if regime_shock is not None else {
+            "shock": False, "top_date": None, "top_failures": 0,
+            "total_failures": 0, "share": 0.0, "n": 0, "msg": ""},
         "passed": bool(ok),
         "exit_code": int(exit_code),
     }
@@ -162,6 +224,9 @@ def main(argv: list | None = None) -> int:
     recent = self_check._compute_d_cost(rows, trade_dates=recent_dates)
     drift = _eval_recent_drift(full, recent)
 
+    # 单日 regime 冲击护栏（机器可读早警，不计入 ok / 退出码）
+    regime_shock = _eval_regime_shock(rows, recent_dates)
+
     print(f"D 项回归护栏（样本 全量 n={full['n']}"
           + (f" / 前瞻 n={fwd['n']}" if fwd else " / 前瞻 空")
           + f" / 近{RECENT_WINDOW_DAYS}交易日 n={recent['n'] if recent else 0}"
@@ -189,6 +254,13 @@ def main(argv: list | None = None) -> int:
               f"| 净盈亏比 {recent['net_pl']} | 最大亏损 {recent['max_loss']}% | n={recent['n']}")
     if drift["warn"]:
         print(f"  [⚠️ WARN] {drift['msg']}")
+    if regime_shock["shock"]:
+        print(f"  [🚫 REGIME SHOCK] {regime_shock['msg']}")
+    else:
+        print(f"  ℹ️ 近窗口单日失败集中度: top={regime_shock.get('top_date')} "
+              f"占比 {int(regime_shock.get('share', 0) * 100)}% "
+              f"({regime_shock.get('top_failures')}/{regime_shock.get('total_failures')})，"
+              f"未达单日冲击阈值 {int(SINGLE_DAY_FAIL_SHARE_FLOOR * 100)}%")
 
     print("-" * 60)
     if ok:
@@ -197,7 +269,8 @@ def main(argv: list | None = None) -> int:
         print("❌ D 项护栏触发：检测到对北极星 D 项的回归，阻断合并并排查最近 strategy.yaml 改动。")
 
     exit_code = 0 if ok else 1
-    report = build_report(full, fwd, ok, exit_code, recent=recent, drift=drift)
+    report = build_report(full, fwd, ok, exit_code, recent=recent, drift=drift,
+                          regime_shock=regime_shock)
     if args.json:
         write_report(report, args.json)
         print(f"📄 JSON 报告已写出: {args.json}")
