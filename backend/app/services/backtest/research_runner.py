@@ -20,7 +20,7 @@ from typing import Any, Iterable, Mapping, Protocol, Sequence, runtime_checkable
 from uuid import uuid4
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from app.core.config import get_settings
 from app.engine.backtest import (
@@ -66,6 +66,20 @@ from app.engine.strategy import (
     validate_backtest_parameter_set,
 )
 from app.models.tables import DailyKbar, IndexDaily, MinuteKbar, Stock
+
+# 回测快照捕获实际需要的 daily_kbars 列（共 21/80 列）。对 351MB / 80 列大宽表
+# 用 load_only 只取这些列，避免 SELECT * 触发 30s 超时（MySQL 3024）。
+# 与 capture() 下游消费者(_stock_as_of / _outcome_bars / _data_readiness / _chip_concentration)
+# 逐一核对：新增列访问必须先在此登记，否则 SQLAlchemy 会对未加载列做逐行 lazy-load(N+1)。
+RESEARCH_KBAR_LOADED_COLUMNS = (
+    DailyKbar.code, DailyKbar.trade_date, DailyKbar.open, DailyKbar.high,
+    DailyKbar.low, DailyKbar.close, DailyKbar.volume, DailyKbar.amount,
+    DailyKbar.pct_chg, DailyKbar.turnover_rate, DailyKbar.ma5, DailyKbar.ma10,
+    DailyKbar.ma20, DailyKbar.ma60, DailyKbar.macd_dif, DailyKbar.macd_dea,
+    DailyKbar.rsi_12, DailyKbar.breakout20, DailyKbar.breakout60,
+    DailyKbar.chip_cost_15, DailyKbar.chip_cost_85,
+)
+
 from app.services.backtest.research_repository import (
     ArtifactIntegrityError,
     ResearchBacktestRepository,
@@ -461,30 +475,41 @@ class LocalResearchSnapshotBuilder:
             }
         )[:20]
 
+        # 市场广度必须以全市场当日横截面计算。target_codes 只限定待评估
+        # 标的，不能把单只股票的涨跌误当成市场 regime。该查询只需
+        # code/trade_date/pct_chg 三列（_historical_market_context 仅读 pct_chg），
+        # 用 load_only 避免对 351MB / 80 列大宽表做 SELECT *（曾触发 30s 超时 3024）。
         market_signal_rows = list(
             self._session.scalars(
                 select(DailyKbar)
+                .options(load_only(DailyKbar.code, DailyKbar.trade_date, DailyKbar.pct_chg))
                 .where(DailyKbar.trade_date.in_(dates))
                 .order_by(DailyKbar.trade_date, DailyKbar.code)
             )
         )
-        # 市场广度必须以全市场当日横截面计算。target_codes 只限定待评估
-        # 标的，不能把单只股票的涨跌误当成市场 regime。
         market_context_by_date = {
             signal_date: _historical_market_context(rows)
             for signal_date, rows in _rows_by_trade_date(market_signal_rows).items()
         }
-        signal_rows = market_signal_rows
-        if request.target_codes:
-            requested_codes = set(request.target_codes)
-            signal_rows = [row for row in signal_rows if row.code in requested_codes]
+        # 信号行：完整列（_stock_as_of 需要全部因子），但显式给 target_codes 时
+        # 直接用 code IN 圈定，避免重复拉取全市场再内存过滤。
+        signal_query = select(DailyKbar).where(DailyKbar.trade_date.in_(dates))
+        requested_codes = set(request.target_codes) if request.target_codes else set()
+        if requested_codes:
+            signal_query = signal_query.where(DailyKbar.code.in_(tuple(sorted(requested_codes))))
+        signal_rows = list(
+            self._session.scalars(signal_query.order_by(DailyKbar.trade_date, DailyKbar.code))
+        )
         codes = tuple(sorted({str(row.code) for row in signal_rows}))
         if not codes:
             return self._empty_bundle(request)
 
+        # all_rows 同样只取回测模拟实际需要的列（21/80 列），大幅降低 SELECT *
+        # 的字节传输与 ORM 物化成本；信号棒与历史棒共用同一窄列集。
         all_rows = list(
             self._session.scalars(
                 select(DailyKbar)
+                .options(load_only(*RESEARCH_KBAR_LOADED_COLUMNS))
                 .where(
                     DailyKbar.code.in_(codes),
                     DailyKbar.trade_date >= history_start,
