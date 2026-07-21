@@ -78,3 +78,26 @@ def test_pure_pollution_empty():
     rows = [("A", "2026-07-08", "success", 5.0, 72.0, 0, "弱势")]
     keys = sc._pure_pollution_keys(rows)
     assert keys["union"] == set()
+
+
+def test_forward_window_pollution_share():
+    """前瞻窗口内 pure 污染占比应被正确计数（闭合 07-16 单日污染主导误读）。"""
+    dedup = [
+        ("c1", "2026-07-10", "success", 5.0),  # before epoch
+        ("p1", "2026-07-16", "failed", -5.0),  # pollution in fwd
+        ("p2", "2026-07-16", "failed", -5.0),  # pollution in fwd
+        ("c2", "2026-07-16", "failed", -5.0),  # clean but lose
+    ]
+    poll = {("p1", "2026-07-16"), ("p2", "2026-07-16")}
+    cf = sc._clean_d_counterfactual(
+        dedup, poll, last10_dates={str(r[1]) for r in dedup}, since_date="2026-07-14",
+    )
+    assert cf is not None
+    assert cf["fwd_pollution_n"] == 2
+    assert cf["fwd_clean_n"] == 1
+    assert cf["fwd_raw"] is not None
+    assert cf["fwd_raw"]["n"] == 3
+    assert cf["fwd_clean"] is not None
+    assert cf["fwd_clean"]["n"] == 1
+    assert cf["fwd_raw"]["net_wr"] == 0.0
+    assert cf["fwd_clean"]["net_wr"] == 0.0
