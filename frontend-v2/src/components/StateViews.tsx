@@ -95,37 +95,3 @@ export function ErrorPage({ title, message, onRetry, secondary }: ErrorPageProps
     </div>
   );
 }
-
-interface ErrorCardProps {
-  title: string;
-  message: string;
-  onRetry?: () => void;
-}
-
-/** 局部错误（不影响其他区域） */
-export function ErrorCard({ title, message, onRetry }: ErrorCardProps) {
-  return (
-    <div
-      className="panel"
-      style={{
-        borderColor: "var(--danger)",
-        background: "var(--danger-soft)",
-        padding: "var(--space-4)",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: "var(--space-2)" }}>
-        <AlertCircle size={16} style={{ color: "var(--danger)" }} />
-        <strong style={{ color: "var(--ink)" }}>{title}</strong>
-      </div>
-      <div className="text-muted" style={{ fontSize: "var(--text-sm)", marginBottom: onRetry ? "var(--space-3)" : 0 }}>
-        {message}
-      </div>
-      {onRetry && (
-        <button className="btn" onClick={onRetry} style={{ background: "var(--surface)" }}>
-          <RefreshCw size={14} />
-          重试
-        </button>
-      )}
-    </div>
-  );
-}
