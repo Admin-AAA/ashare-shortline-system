@@ -1,4 +1,4 @@
-"""D 项诊断端点 /api/metrics/d-diagnostics 回归（T32/T34）。"""
+"""D 项诊断端点 /api/metrics/d-diagnostics 回归（T32/T34/T35）。"""
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
@@ -16,14 +16,23 @@ def test_d_diagnostics_shape():
     assert "modes" in data
     assert isinstance(data["modes"], list)
     assert "pseudo_active" in data
-    # phase 信息量（T34）：与 self_check 同源
+    assert "triage" in data
     assert "phase_information" in data
-    # 生产库当前 residual >0 且有弱活伪活跃
     if data["residual_n"] > 0 and data["pseudo_active"]:
         pa = data["pseudo_active"]
         assert pa["weak_active_n"] >= pa["pseudo_n"]
         assert "days" in pa
         assert isinstance(pa["days"], list)
+    if data["residual_n"] > 0 and data["triage"]:
+        tr = data["triage"]
+        assert tr["n"] == data["residual_n"]
+        assert (
+            tr["pure_pollution"]
+            + tr["pseudo_active"]
+            + tr["day_clustered"]
+            + tr["sparse"]
+            == tr["n"]
+        )
 
 
 def test_d_diagnostics_phase_information_when_present():
@@ -32,12 +41,11 @@ def test_d_diagnostics_phase_information_when_present():
     data = client.get("/api/metrics/d-diagnostics").json()
     pi = data.get("phase_information")
     if pi is None:
-        return  # 样本不足时允许空
+        return
     assert pi["n"] >= 30
     assert "regime_p" in pi and "sentiment_p" in pi
     assert "regime_significant" in pi and "sentiment_significant" in pi
     assert isinstance(pi.get("notable_low_buckets"), list)
-    # 当前生产：regime 显著、sentiment 不显著（T5 实证）
     assert pi["regime_significant"] is True
     assert pi["sentiment_significant"] is False
 
@@ -48,3 +56,16 @@ def test_d_diagnostics_modes_sorted_desc():
     modes = data.get("modes") or []
     if len(modes) >= 2:
         assert modes[0]["n"] >= modes[1]["n"]
+
+
+def test_d_diagnostics_triage_matches_live_residual():
+    """T35：triage 分层和 = residual_n。"""
+    client = TestClient(app)
+    data = client.get("/api/metrics/d-diagnostics").json()
+    if data["residual_n"] <= 0:
+        return
+    tr = data.get("triage")
+    assert tr is not None, "residual>0 时必须返回 triage"
+    assert tr["n"] == data["residual_n"]
+    s = tr["pure_pollution"] + tr["pseudo_active"] + tr["day_clustered"] + tr["sparse"]
+    assert s == tr["n"]

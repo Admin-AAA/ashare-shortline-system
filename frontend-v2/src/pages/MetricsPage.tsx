@@ -238,7 +238,7 @@ const MODE_LABEL: Record<string, string> = {
   other: "其他",
 };
 
-/** D 项真残留毒区 + 伪活跃反事实块（T32）。 */
+/** D 项真残留毒区 + 伪活跃 + triage 块（T32/T35）。 */
 function DDiagnosticsBlock({
   data,
   loading,
@@ -254,13 +254,17 @@ function DDiagnosticsBlock({
 
   const n = data.residual_n ?? 0;
   const pa = data.pseudo_active;
+  const tr = data.triage;
   const topMode = data.modes?.[0];
   const ok = n === 0;
+  const mostlyExplained = tr != null && tr.sparse === 0 && tr.n > 0;
   const meta = ok
     ? { label: "干净", color: "var(--market-down)" }
-    : pa && pa.pseudo_n >= Math.max(3, Math.floor(pa.weak_active_n / 2))
-      ? { label: "历史伪活跃", color: "var(--warning)" }
-      : { label: "有残留", color: "var(--market-up)" };
+    : mostlyExplained
+      ? { label: "已解释", color: "var(--warning)" }
+      : pa && pa.pseudo_n >= Math.max(3, Math.floor(pa.weak_active_n / 2))
+        ? { label: "历史伪活跃", color: "var(--warning)" }
+        : { label: "有残留", color: "var(--market-up)" };
 
   return (
     <div
@@ -287,12 +291,17 @@ function DDiagnosticsBlock({
       </div>
       <div style={{ display: "grid", gap: "var(--space-2)" }}>
         <HealthRow label="真残留" value={`${n} 笔`} />
-        {topMode && (
+        {tr && tr.n > 0 ? (
+          <HealthRow
+            label="triage"
+            value={`污${tr.pure_pollution}/伪${tr.pseudo_active}/簇${tr.day_clustered}/稀${tr.sparse}`}
+          />
+        ) : topMode ? (
           <HealthRow
             label="主模式"
             value={`${MODE_LABEL[topMode.mode] ?? topMode.mode} ${topMode.n}·均${topMode.avg_return}%`}
           />
-        )}
+        ) : null}
         {pa && pa.weak_active_n > 0 ? (
           <HealthRow
             label="弱活伪活跃"
@@ -301,7 +310,7 @@ function DDiagnosticsBlock({
         ) : (
           <HealthRow label="弱活伪活跃" value="—" />
         )}
-        {pa?.note && (
+        {(tr?.note || pa?.note) && (
           <div
             style={{
               fontSize: "var(--text-xs)",
@@ -309,9 +318,12 @@ function DDiagnosticsBlock({
               lineHeight: 1.45,
               marginTop: 2,
             }}
-            title={pa.note}
+            title={tr?.note || pa?.note || undefined}
           >
-            {pa.note.length > 72 ? `${pa.note.slice(0, 72)}…` : pa.note}
+            {(() => {
+              const note = tr?.note || pa?.note || "";
+              return note.length > 72 ? `${note.slice(0, 72)}…` : note;
+            })()}
           </div>
         )}
       </div>

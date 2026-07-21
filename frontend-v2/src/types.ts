@@ -324,6 +324,18 @@ export type DDiagnostics = {
     }>;
     note?: string | null;
   } | null;
+  /** T35：residual triage（污染/伪活跃/单日簇/稀疏） */
+  triage?: {
+    n: number;
+    pure_pollution: number;
+    pseudo_active: number;
+    day_clustered: number;
+    sparse: number;
+    clustered_days?: string[];
+    sparse_n?: number;
+    note?: string | null;
+    actionable?: boolean;
+  } | null;
   /** phase/sentiment 信息量（T5→T7：self_check 每轮可见后指标页一屏同步） */
   phase_information?: {
     n: number;
