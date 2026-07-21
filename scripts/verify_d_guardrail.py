@@ -290,7 +290,7 @@ def build_report(full: dict | None, fwd: dict | None, ok: bool, exit_code: int,
             "fwd_gate": {"enforce": False, "share": 0.0, "msg": ""},
         },
         "residual": residual if residual is not None else {
-            "n": 0, "pseudo_active": None,
+            "n": 0, "pseudo_active": None, "triage": None,
         },
         "passed": bool(ok),
         "exit_code": int(exit_code),
@@ -312,7 +312,7 @@ def main(argv: list | None = None) -> int:
     args = parser.parse_args(argv)
 
     db = SessionLocal()
-    residual_block: dict = {"n": 0, "pseudo_active": None}
+    residual_block: dict = {"n": 0, "pseudo_active": None, "triage": None}
     try:
         # T22：必须 resolve 稳定前瞻纪元；否则 FORWARD_EPOCH=None 时
         # _compute_d_cost(since_date=None) 退化为全量，虚高「前瞻」PASS。
@@ -369,6 +369,42 @@ def main(argv: list | None = None) -> int:
             pa = self_check._pseudo_active_sentiment_counterfactual(
                 uncovered, market_snaps,
             ) if uncovered else None
+            pure_keys: set = set()
+            try:
+                poll_raw2 = db.execute(text("""
+                    SELECT r.code, r.trade_date, o.outcome_label, o.executed_return, u.score_line,
+                           JSON_EXTRACT(r.feature_snapshot_json,
+                                        '$.score_line_meta.dynamic_soft_floor_applied') AS soft,
+                           JSON_UNQUOTE(JSON_EXTRACT(r.feature_snapshot_json,
+                                        '$.score_line_meta.market_base')) AS mbase
+                    FROM recommendation_outcomes o
+                    JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+                    JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+                    WHERE o.outcome_label IN ('success', 'failed')
+                      AND r.recommendation_id LIKE 'rec_%'
+                """)).fetchall()
+                pure_keys = set(
+                    (self_check._pure_pollution_keys(list(poll_raw2)) or {}).get("union") or set()
+                )
+            except Exception:
+                pure_keys = set()
+            triage_raw = self_check._triage_residual_poison(
+                uncovered,
+                pure_pollution_keys=pure_keys,
+                pseudo_active_rids=set((pa or {}).get("pseudo_rids") or []),
+            ) if uncovered else None
+            triage = None
+            if triage_raw and triage_raw.get("n", 0) > 0:
+                c = triage_raw["counts"]
+                triage = {
+                    "n": triage_raw["n"],
+                    "pure_pollution": c.get("pure_pollution", 0),
+                    "pseudo_active": c.get("pseudo_active", 0),
+                    "day_clustered": c.get("day_clustered", 0),
+                    "sparse": c.get("sparse", 0),
+                    "clustered_days": triage_raw.get("clustered_days") or [],
+                    "note": triage_raw.get("note"),
+                }
             residual_block = {
                 "n": len(uncovered),
                 "pseudo_active": (
@@ -386,9 +422,10 @@ def main(argv: list | None = None) -> int:
                         },
                     } if pa else None
                 ),
+                "triage": triage,
             }
         except Exception:
-            residual_block = {"n": 0, "pseudo_active": None}
+            residual_block = {"n": 0, "pseudo_active": None, "triage": None}
     finally:
         db.close()
 
@@ -512,7 +549,15 @@ def main(argv: list | None = None) -> int:
     # T31：真残留 + 伪活跃（与 self_check 对齐，仅信息）
     if residual_block.get("n", 0) > 0:
         pa = residual_block.get("pseudo_active")
-        if pa and pa.get("weak_active_n", 0) > 0:
+        tr = residual_block.get("triage")
+        if tr:
+            print(
+                f"  ℹ️ 真残留毒区 n={residual_block['n']} | triage "
+                f"污染{tr.get('pure_pollution', 0)}+伪活跃{tr.get('pseudo_active', 0)}"
+                f"+单日簇{tr.get('day_clustered', 0)}+稀疏{tr.get('sparse', 0)}"
+                f"（前三类禁 entry）"
+            )
+        elif pa and pa.get("weak_active_n", 0) > 0:
             print(
                 f"  ℹ️ 真残留毒区 n={residual_block['n']} | 弱势·活跃 "
                 f"{pa['weak_active_n']} 笔中伪活跃 {pa['pseudo_n']} / 仍活跃 {pa['still_active_n']}"

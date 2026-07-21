@@ -306,7 +306,7 @@ export type TemporalConsistency = {
   violations?: Array<Record<string, unknown>>;
 };
 
-/** D 项诊断摘要（/api/metrics/d-diagnostics）：真残留毒区 + 伪活跃反事实，与 self_check 同源。 */
+/** D 项诊断摘要（/api/metrics/d-diagnostics）：真残留毒区 + 伪活跃 + triage，与 self_check 同源。 */
 export type DDiagnostics = {
   residual_n: number;
   modes: Array<{ mode: string; n: number; avg_return: number }>;
@@ -323,6 +323,18 @@ export type DDiagnostics = {
       ld?: number;
     }>;
     note?: string | null;
+  } | null;
+  /** T35：residual triage（污染/伪活跃/单日簇/稀疏） */
+  triage?: {
+    n: number;
+    pure_pollution: number;
+    pseudo_active: number;
+    day_clustered: number;
+    sparse: number;
+    clustered_days?: string[];
+    sparse_n?: number;
+    note?: string | null;
+    actionable?: boolean;
   } | null;
   forward_epoch?: string | null;
   note?: string | null;

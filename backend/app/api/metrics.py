@@ -114,6 +114,7 @@ def d_diagnostics(db: Session = Depends(get_db)):
             "residual_n": 0,
             "modes": [],
             "pseudo_active": None,
+            "triage": None,
             "note": "no skills loaded",
         }
 
@@ -210,9 +211,48 @@ def d_diagnostics(db: Session = Depends(get_db)):
             ),
         }
 
+    # T35：residual triage（污染/伪活跃/单日簇/稀疏）— 与 self_check 同源
+    poll_raw = db.execute(
+        text(
+            """
+            SELECT r.code, r.trade_date, o.outcome_label, o.executed_return, u.score_line,
+                   JSON_EXTRACT(r.feature_snapshot_json,
+                                '$.score_line_meta.dynamic_soft_floor_applied') AS soft,
+                   JSON_UNQUOTE(JSON_EXTRACT(r.feature_snapshot_json,
+                                '$.score_line_meta.market_base')) AS mbase
+            FROM recommendation_outcomes o
+            JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+            JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+            WHERE o.outcome_label IN ('success', 'failed')
+              AND r.recommendation_id LIKE 'rec_%'
+            """
+        )
+    ).fetchall()
+    pure_keys = set((self_check._pure_pollution_keys(list(poll_raw)) or {}).get("union") or set())
+    triage_raw = self_check._triage_residual_poison(
+        uncovered,
+        pure_pollution_keys=pure_keys,
+        pseudo_active_rids=set((pa or {}).get("pseudo_rids") or []),
+    ) if uncovered else None
+    triage = None
+    if triage_raw and triage_raw.get("n", 0) > 0:
+        c = triage_raw["counts"]
+        triage = {
+            "n": triage_raw["n"],
+            "pure_pollution": c.get("pure_pollution", 0),
+            "pseudo_active": c.get("pseudo_active", 0),
+            "day_clustered": c.get("day_clustered", 0),
+            "sparse": c.get("sparse", 0),
+            "clustered_days": triage_raw.get("clustered_days") or [],
+            "sparse_n": c.get("sparse", 0),
+            "note": triage_raw.get("note"),
+            "actionable": c.get("sparse", 0) > 0,
+        }
+
     return {
         "residual_n": len(uncovered),
         "modes": modes,
         "pseudo_active": pseudo,
+        "triage": triage,
         "forward_epoch": self_check.FORWARD_EPOCH_PINNED,
     }

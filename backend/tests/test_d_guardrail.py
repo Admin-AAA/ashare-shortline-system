@@ -172,7 +172,7 @@ def test_build_report_includes_pollution_and_epoch():
 
 
 def test_build_report_includes_residual_pseudo_active():
-    """T31：报告含 residual.pseudo_active，供跨 run 追踪毒区归因。"""
+    """T31/T35：报告含 residual.pseudo_active + triage，供跨 run 追踪毒区归因。"""
     full = {"n": 100, "net_wr": 70.0, "net_pl": 2.1, "max_loss": -5.0}
     residual = {
         "n": 13,
@@ -182,6 +182,14 @@ def test_build_report_includes_residual_pseudo_active():
             "still_active_n": 1,
             "days": {"2026-07-07": {"n": 2, "pseudo": 2, "new_sent": "平淡"}},
         },
+        "triage": {
+            "n": 13,
+            "pure_pollution": 8,
+            "pseudo_active": 2,
+            "day_clustered": 0,
+            "sparse": 3,
+            "note": "triage residual 13=污染8+伪活跃2+单日簇0+稀疏3",
+        },
     }
     rep = verify_d_guardrail.build_report(
         full, None, True, 0, residual=residual, forward_epoch="2026-07-14",
@@ -189,12 +197,13 @@ def test_build_report_includes_residual_pseudo_active():
     assert rep["residual"]["n"] == 13
     assert rep["residual"]["pseudo_active"]["pseudo_n"] == 7
     assert rep["residual"]["pseudo_active"]["weak_active_n"] == 8
+    assert rep["residual"]["triage"]["sparse"] == 3
 
 
 def test_build_report_residual_default_when_omitted():
     full = {"n": 10, "net_wr": 70.0, "net_pl": 3.0, "max_loss": -5.0}
     rep = verify_d_guardrail.build_report(full, None, True, 0)
-    assert rep["residual"] == {"n": 0, "pseudo_active": None}
+    assert rep["residual"] == {"n": 0, "pseudo_active": None, "triage": None}
 
 
 def test_recent_trade_dates_returns_k_most_recent():
