@@ -121,13 +121,19 @@ def list_strategies(
     }
     exposure_30d = exposure_sample_counts(db, window_days=30)
 
+    # T4：低曝光策略门线明细**批量**查询（1 次索引扫描替代 N 次全扫）
+    low_sids = [
+        s["skill_id"] for s in skills
+        if int(exposure_30d.get(s["skill_id"]) or 0) < EXPOSURE_SAMPLE_FLOOR
+    ]
+    gate_map = self_check.fetch_gate_blocked_details(db, low_sids)
     result = []
     for s in skills:
         sid = s["skill_id"]
         m = metrics_by_id.get(sid)
         exp_n = int(exposure_30d.get(sid) or 0)
-        # 仅低曝光策略查门线明细（N 小，避免全量 skill 扫 filter_audit）
-        gate = _last_exp_gate_for(db, sid) if exp_n < EXPOSURE_SAMPLE_FLOOR else None
+        # 仅低曝光策略展示门线明细（gate_map 已批量查出，非 N 次全扫）
+        gate = gate_map.get(sid) if exp_n < EXPOSURE_SAMPLE_FLOOR else None
         perf = _performance_payload(m, exposure_30d=exp_n, last_exp_gate=gate)
         item = {
             "skill_id": sid,

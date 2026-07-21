@@ -141,3 +141,89 @@ def test_fetch_gate_blocked_detail_db_error_returns_none():
             raise RuntimeError("db down")
 
     assert self_check._fetch_gate_blocked_detail(_BoomDB(), "x") is None
+
+
+# ---- T4：fetch_gate_blocked_details 批量查询（替代 N 次逐策略全扫） ----
+
+class _SpyResult:
+    def __init__(self, rows):
+        self._rows = rows if isinstance(rows, list) else [rows]
+
+    def fetchall(self):
+        return self._rows
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+
+class _SpyDB:
+    """捕获执行的 SQL，并回放预置行（支持 fetchall）。"""
+
+    def __init__(self, rows, spy):
+        self._rows = rows
+        self._spy = spy
+
+    def execute(self, stmt, params=None):
+        self._spy["sql"] = str(stmt)
+        self._spy["params"] = params
+        return _SpyResult(self._rows)
+
+
+def _batch_row(sid, fa, snap=None, trade_date="2026-07-20",
+               started_at="2026-07-20 10:00:00"):
+    """构造批量查询的一行：(run_id, selected_skills_json, score_line,
+    filter_audit_json, result_summary_json, market_snapshot_json,
+    trade_date, started_at)。"""
+    skills = json.dumps([{"skill_id": sid}])
+    return ("run_x", skills, 72.0, fa, None, snap, trade_date, started_at)
+
+
+def test_fetch_gate_blocked_details_single_range_scan_no_like():
+    """批量版走单条 started_at 索引范围扫描，无逐策略 LIKE 全扫。"""
+    fa = _fa_with_scores((73.16, 89.55), (69.79, 101.35))
+    spy: dict = {}
+    db = _SpyDB([_batch_row("chip-single-peak-breakout", fa)], spy)
+    out = self_check.fetch_gate_blocked_details(db, ["chip-single-peak-breakout"])
+    assert "LIKE" not in spy["sql"], "批量版不应再发逐策略 LIKE 全扫"
+    assert "ORDER BY r.started_at DESC" in spy["sql"]
+    assert "started_at >= DATE_SUB" in spy["sql"]
+    det = out["chip-single-peak-breakout"]
+    assert det is not None
+    assert det["max_candidate_score"] == 73.16
+    assert det["effective_line"] == 101.35
+
+
+def test_fetch_gate_blocked_details_matches_singular():
+    """批量版与单条版输出逐字段一致（共享 _build_gate_detail）。"""
+    fa = _fa_with_scores((73.2, 101.3), (69.7, 89.5))
+    snap = json.dumps({
+        "limit_down_count": 479, "limit_up_count": 68,
+        "breadth": {"regime": "弱势"},
+    })
+    # 批量路径：8 列批行
+    db_b = _SpyDB([_batch_row("chip-single-peak-breakout", fa, snap)], {})
+    # 单条路径：自身 5 列查询（score_line, fa, rs, snap, trade_date）
+    row5 = (72.0, fa, None, snap, "2026-07-20")
+    db_s = _SpyDB([row5], {})
+    batched = self_check.fetch_gate_blocked_details(db_b, ["chip-single-peak-breakout"])
+    singular = self_check._fetch_gate_blocked_detail(db_s, "chip-single-peak-breakout")
+    assert batched["chip-single-peak-breakout"] == singular
+
+
+def test_fetch_gate_blocked_details_empty_input():
+    assert self_check.fetch_gate_blocked_details(None, []) == {}
+
+
+def test_fetch_gate_blocked_details_picks_most_recent():
+    """同一 sid 多条 run（DESC 首条=最新），取最新命中（= LIMIT 1 语义）。"""
+    fa_new = _fa_with_scores((80.0, 90.0))
+    fa_old = _fa_with_scores((60.0, 70.0))
+    # 模拟 SQL ORDER BY started_at DESC：最新在前
+    rows = [
+        _batch_row("s", fa_new, trade_date="2026-07-20", started_at="2026-07-20 10:00:00"),
+        _batch_row("s", fa_old, trade_date="2026-07-10", started_at="2026-07-10 10:00:00"),
+    ]
+    db = _SpyDB(rows, {})
+    det = self_check.fetch_gate_blocked_details(db, ["s"])["s"]
+    assert det["max_candidate_score"] == 80.0  # 取最新，非旧
+

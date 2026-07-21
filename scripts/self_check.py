@@ -731,35 +731,14 @@ def _parse_max_candidate_score(fa_str: str | None) -> float | None:
     return _parse_score_line_gate_stats(fa_str).get("max_candidate_score")
 
 
-def _fetch_gate_blocked_detail(db, sid: str) -> dict | None:
-    """门线拦截明细：最近 completed experiment 补跑的有效线 vs 最高候选最终分。
+def _build_gate_detail(base_line, fa_raw, rs_raw, snap_raw, trade_date) -> dict | None:
+    """从一行 experiment run 的字段构建门线拦截明细。
 
-    优先 filter_audit 文案中的有效线（per-card 可能 > base）；否则 result_summary
-    score_line_meta.effective_score_line；再否则 score_line 列（base，可能偏保守）。
-    附带 market_snapshot 恐慌日标注（ld>100 → 有效线 101 属设计内，非补跑 bug）。
-    失败/无数据返回 None。
+    原 _fetch_gate_blocked_detail 的解析逻辑抽出为纯函数，使单条与批量
+    两条查询路径输出**逐字段一致**（self_check 自检 / 策略清单页同源）。
     """
-    try:
-        params = {"pat": '%"' + sid + '"%'}
-        row = db.execute(text("""
-            SELECT r.score_line, r.filter_audit_json, r.result_summary_json,
-                   r.market_snapshot_json, r.trade_date
-            FROM recommendation_runs r
-            WHERE r.run_mode = 'experiment' AND r.status = 'completed'
-              AND r.selected_skills_json LIKE :pat
-              AND r.started_at >= DATE_SUB(NOW(), INTERVAL 14 DAY)
-            ORDER BY r.started_at DESC LIMIT 1
-        """), params).fetchone()
-    except Exception:
-        return None
-    if not row:
-        return None
     # 兼容旧假 DB 返回 2 列 (score_line, fa) 与新 3+ 列
-    base_line = float(row[0]) if row[0] is not None else None
-    fa_raw = row[1] if len(row) > 1 else None
-    rs_raw = row[2] if len(row) > 2 else None
-    snap_raw = row[3] if len(row) > 3 else None
-    trade_date = str(row[4]) if len(row) > 4 and row[4] is not None else None
+    base_line = float(base_line) if base_line is not None else None
     stats = _parse_score_line_gate_stats(fa_raw if fa_raw else None)
     max_cand = stats.get("max_candidate_score")
     eff_line = stats.get("max_effective_line")
@@ -807,6 +786,95 @@ def _fetch_gate_blocked_detail(db, sid: str) -> dict | None:
         "regime": regime,
         "panic_day": panic,
     }
+
+
+def fetch_gate_blocked_details(db, sids: list[str]) -> dict[str, dict | None]:
+    """批量门线拦截明细（T4 性能优化）。
+
+    **根因**：原 _fetch_gate_blocked_detail 对每个策略各跑一次
+    `LIKE '%"sid"%'` 查询——该谓词前导通配符**非 sargable**（无法走索引），
+    且每次都拉 4 个大 JSON 列（filter_audit / result_summary / market_snapshot / trade_date）。
+    5 个低曝光策略串行即 ~529ms（N+1 性能杀手），直接拖慢
+    `/api/strategies`（1.87s）与 self_check 的 E 项自检。
+
+    **修复**：单次 `started_at` 索引范围扫描（run_mode=experiment & status=completed
+    & 近 14 天，约 39 行）→ 内存按 started_at DESC 顺序为每个 sid 取**首条命中**
+    （= 原 LIMIT 1 语义）→ 返回 {sid: detail|None}。
+    查询次数 5→1，且不再做 N 次全列物化。输出与单条版本逐字段一致。
+    """
+    if not sids:
+        return {}
+    targets = set(str(s) for s in sids)
+    # started_at 索引范围扫描：候选集从全表 → 近 14 天 experiment/completed（~39 行）
+    try:
+        rows = db.execute(text("""
+            SELECT r.run_id, r.selected_skills_json, r.score_line,
+                   r.filter_audit_json, r.result_summary_json,
+                   r.market_snapshot_json, r.trade_date, r.started_at
+            FROM recommendation_runs r
+            WHERE r.run_mode = 'experiment' AND r.status = 'completed'
+              AND r.started_at >= DATE_SUB(NOW(), INTERVAL 14 DAY)
+            ORDER BY r.started_at DESC
+        """)).fetchall()
+    except Exception:
+        return {s: None for s in targets}
+    out: dict[str, dict | None] = {s: None for s in targets}
+    for row in rows:
+        raw = row[1]
+        if not raw:
+            continue
+        try:
+            skills = json.loads(raw) if isinstance(raw, str) else (raw or [])
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(skills, list):
+            continue
+        for item in skills:
+            if not isinstance(item, dict):
+                continue
+            sid = item.get("skill_id") or item.get("strategy_id")
+            if not sid or str(sid) not in targets:
+                continue
+            if out.get(str(sid)) is not None:
+                continue  # 已取最新命中（started_at DESC 首条）
+            out[str(sid)] = _build_gate_detail(
+                base_line=row[2], fa_raw=row[3], rs_raw=row[4],
+                snap_raw=row[5], trade_date=row[6],
+            )
+            if all(v is not None for v in out.values()):
+                return out  # 全部命中，提前结束
+    return out
+
+
+def _fetch_gate_blocked_detail(db, sid: str) -> dict | None:
+    """门线拦截明细：最近 completed experiment 补跑的有效线 vs 最高候选最终分。
+
+    单策略版（保留向后兼容：self_check 内部、策略详情端点仍逐条调用）。
+    走自身单条查询（fetchone）+ 共享 _build_gate_detail，输出与批量版逐字段一致。
+    不与 fetch_gate_blocked_details 共享查询，避免改变既有单条调用语义/测试。
+    """
+    try:
+        params = {"pat": '%"' + sid + '"%'}
+        row = db.execute(text("""
+            SELECT r.score_line, r.filter_audit_json, r.result_summary_json,
+                   r.market_snapshot_json, r.trade_date
+            FROM recommendation_runs r
+            WHERE r.run_mode = 'experiment' AND r.status = 'completed'
+              AND r.selected_skills_json LIKE :pat
+              AND r.started_at >= DATE_SUB(NOW(), INTERVAL 14 DAY)
+            ORDER BY r.started_at DESC LIMIT 1
+        """), params).fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+    # 兼容旧假 DB 返回 2 列 (score_line, fa) 与新 3+ 列
+    base_line = float(row[0]) if row[0] is not None else None
+    fa_raw = row[1] if len(row) > 1 else None
+    rs_raw = row[2] if len(row) > 2 else None
+    snap_raw = row[3] if len(row) > 3 else None
+    trade_date = str(row[4]) if len(row) > 4 and row[4] is not None else None
+    return _build_gate_detail(base_line, fa_raw, rs_raw, snap_raw, trade_date)
 
 def check_e_item(db, hit_skills: set) -> None:
     """E 项：策略覆盖盲区 + 低胜率标记。"""
