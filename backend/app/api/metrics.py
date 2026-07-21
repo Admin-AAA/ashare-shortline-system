@@ -89,3 +89,130 @@ def metric_filter_effectiveness(
     end_date: str | None = _end_date_q(),
 ):
     return filter_effectiveness(db, window_days=window_days, start_date=start_date, end_date=end_date)
+
+
+@router.get("/d-diagnostics")
+def d_diagnostics(db: Session = Depends(get_db)):
+    """D 项诊断摘要：真残留毒区 + 伪活跃反事实（与 self_check / verify_d_guardrail 同源）。
+
+    供指标页「系统可信度」一屏可见；不改主口径胜率，仅诊断。
+    不重标历史 formal。
+    """
+    import sys
+    from pathlib import Path
+
+    from sqlalchemy import text
+
+    scripts = Path(__file__).resolve().parents[3] / "scripts"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    import self_check  # type: ignore[import-not-found]
+
+    skills = self_check._load_skills_once()
+    if not skills:
+        return {
+            "residual_n": 0,
+            "modes": [],
+            "pseudo_active": None,
+            "note": "no skills loaded",
+        }
+
+    cov_rows = db.execute(
+        text(
+            """
+            SELECT r.recommendation_id, o.outcome_label, o.executed_return,
+                   r.feature_snapshot_json, r.skill_breakdown_json,
+                   o.exit_reason, o.max_return, r.trade_date, r.final_score
+            FROM recommendation_outcomes o
+            JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+            JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+            WHERE o.outcome_label IN ('success', 'failed')
+              AND r.recommendation_id LIKE 'rec_%'
+            """
+        )
+    ).fetchall()
+    uncovered = self_check._collect_uncovered_failures(cov_rows, skills)
+
+    # 模式分布（与 self_check 毒区一致）
+    from collections import Counter
+
+    mode_c: Counter = Counter()
+    mode_ret: dict[str, list[float]] = {}
+    for u in uncovered:
+        fs = u.get("fs") or {}
+        mode = self_check._classify_failure_mode_inline(
+            exit_reason=u.get("exit_reason"),
+            executed_return=u.get("executed_return"),
+            max_return=u.get("max_return"),
+            rsi_12=fs.get("rsi_12"),
+            chg20=fs.get("chg20"),
+            pos60=fs.get("pos60"),
+            setup_type=fs.get("setup_type"),
+        )
+        mode_c[mode] += 1
+        if u.get("executed_return") is not None:
+            mode_ret.setdefault(mode, []).append(float(u["executed_return"]))
+    modes = [
+        {
+            "mode": m,
+            "n": c,
+            "avg_return": round(sum(mode_ret.get(m, [0])) / max(1, len(mode_ret.get(m, []))), 2)
+            if mode_ret.get(m)
+            else 0.0,
+        }
+        for m, c in mode_c.most_common()
+    ]
+
+    snap_rows = db.execute(
+        text(
+            """
+            SELECT trade_date, sample_count, up_count, limit_up_count, limit_down_count
+            FROM market_snapshots
+            """
+        )
+    ).fetchall()
+    market_snaps = {
+        str(r[0]): {
+            "sample_count": r[1],
+            "up_count": r[2],
+            "limit_up_count": r[3],
+            "limit_down_count": r[4],
+        }
+        for r in snap_rows
+    }
+    pa = (
+        self_check._pseudo_active_sentiment_counterfactual(uncovered, market_snaps)
+        if uncovered
+        else None
+    )
+    pseudo = None
+    if pa:
+        pseudo = {
+            "weak_active_n": pa["weak_active_n"],
+            "pseudo_n": pa["pseudo_n"],
+            "still_active_n": pa["still_active_n"],
+            "days": [
+                {
+                    "trade_date": td,
+                    "n": d["n"],
+                    "pseudo": d["pseudo"],
+                    "new_sent": d.get("new_sent"),
+                    "lu": d.get("lu"),
+                    "ld": d.get("ld"),
+                }
+                for td, d in sorted((pa.get("day_breakdown") or {}).items())
+            ],
+            "note": (
+                "弱势·活跃主因历史伪活跃(涨停孤岛+普跌)；T28 已修情绪入口；"
+                "勿对 residual 弱势·活跃加 entry"
+                if pa["pseudo_n"] >= max(3, pa["weak_active_n"] // 2)
+                else None
+            ),
+        }
+
+    return {
+        "residual_n": len(uncovered),
+        "modes": modes,
+        "pseudo_active": pseudo,
+        "forward_epoch": self_check.FORWARD_EPOCH_PINNED,
+    }

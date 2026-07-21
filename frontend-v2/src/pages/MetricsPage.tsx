@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import type {
   AlphaDecayResponse,
   DateRangeMeta,
+  DDiagnostics,
   FilterEffectiveness,
   LlmReviewHealth,
   MetricsOverview,
@@ -185,10 +186,10 @@ function relTime(iso: string | null | undefined): string {
   return `${day} 天前`;
 }
 
-/** 系统可信度面板 —— 把两个「后端有数据、前端从未展示」的诊断端点变成一屏可见：
- *  - LLM 审查层新鲜度（review-health）：AI 审查层是否仍在真实工作（key 过期 / provider 故障会静默停摆，推荐缺 LLM delta 而用户无感知）
- *  - 时态一致性（temporal-consistency）：推荐 / 回测数据是否存在时间穿越（未来数据泄漏）
- * 两个子视图各自独立加载 / 容错：任一失败只塌自己一格，不影响主指标页，也不互相拖累。 */
+/** 系统可信度面板 —— 后端诊断一屏可见：
+ *  - LLM 审查层新鲜度 / 时态一致性（B/C）
+ *  - D 项真残留毒区 + 伪活跃反事实（与 self_check 同源，T32）
+ * 各子视图独立加载 / 容错。 */
 function SystemHealthPanel() {
   const { data: review, loading: lR, error: eR } = useApi<LlmReviewHealth>(
     () => api.llmReviewHealth(),
@@ -198,28 +199,122 @@ function SystemHealthPanel() {
     () => api.temporalConsistency(),
     [],
   );
+  const { data: dDiag, loading: lD, error: eD } = useApi<DDiagnostics>(
+    () => api.dDiagnostics(),
+    [],
+  );
 
   return (
     <MetricCard
       kicker="系统可信度"
-      title="审查层 & 数据一致性"
+      title="审查层 · 一致性 · D 项毒区"
       actions={
         <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
-          北极星 B/C 可观测
+          北极星 B/C/D 可观测
         </span>
       }
     >
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
           gap: "var(--space-4)",
         }}
       >
         <ReviewHealthBlock data={review} loading={lR} error={eR} />
         <TemporalConsistencyBlock data={temporal} loading={lT} error={eT} />
+        <DDiagnosticsBlock data={dDiag} loading={lD} error={eD} />
       </div>
     </MetricCard>
+  );
+}
+
+const MODE_LABEL: Record<string, string> = {
+  no_follow_through: "无跟风",
+  extension_chase: "追高延伸",
+  weak_stock: "弱势股",
+  gap_roundtrip: "跳空往返",
+  other: "其他",
+};
+
+/** D 项真残留毒区 + 伪活跃反事实块（T32）。 */
+function DDiagnosticsBlock({
+  data,
+  loading,
+  error,
+}: {
+  data: DDiagnostics | null | undefined;
+  loading: boolean;
+  error: unknown;
+}) {
+  if (loading) return <CardSkeleton count={3} />;
+  if (error) return <HealthErrorNote msg="D 项诊断获取失败" />;
+  if (!data) return null;
+
+  const n = data.residual_n ?? 0;
+  const pa = data.pseudo_active;
+  const topMode = data.modes?.[0];
+  const ok = n === 0;
+  const meta = ok
+    ? { label: "干净", color: "var(--market-down)" }
+    : pa && pa.pseudo_n >= Math.max(3, Math.floor(pa.weak_active_n / 2))
+      ? { label: "历史伪活跃", color: "var(--warning)" }
+      : { label: "有残留", color: "var(--market-up)" };
+
+  return (
+    <div
+      style={{
+        background: "var(--surface-1)",
+        border: "1px solid var(--line)",
+        borderRadius: "var(--radius-sm, 6px)",
+        padding: "var(--space-3)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: "var(--space-3)" }}>
+        <span
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            background: meta.color,
+            boxShadow: `0 0 0 3px color-mix(in srgb, ${meta.color} 18%, transparent)`,
+          }}
+        />
+        <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: meta.color }}>
+          D 项毒区 · {meta.label}
+        </span>
+      </div>
+      <div style={{ display: "grid", gap: "var(--space-2)" }}>
+        <HealthRow label="真残留" value={`${n} 笔`} />
+        {topMode && (
+          <HealthRow
+            label="主模式"
+            value={`${MODE_LABEL[topMode.mode] ?? topMode.mode} ${topMode.n}·均${topMode.avg_return}%`}
+          />
+        )}
+        {pa && pa.weak_active_n > 0 ? (
+          <HealthRow
+            label="弱活伪活跃"
+            value={`${pa.pseudo_n}/${pa.weak_active_n}（仍活跃 ${pa.still_active_n}）`}
+          />
+        ) : (
+          <HealthRow label="弱活伪活跃" value="—" />
+        )}
+        {pa?.note && (
+          <div
+            style={{
+              fontSize: "var(--text-xs)",
+              color: "var(--text-muted)",
+              lineHeight: 1.45,
+              marginTop: 2,
+            }}
+            title={pa.note}
+          >
+            {pa.note.length > 72 ? `${pa.note.slice(0, 72)}…` : pa.note}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

@@ -306,6 +306,28 @@ export type TemporalConsistency = {
   violations?: Array<Record<string, unknown>>;
 };
 
+/** D 项诊断摘要（/api/metrics/d-diagnostics）：真残留毒区 + 伪活跃反事实，与 self_check 同源。 */
+export type DDiagnostics = {
+  residual_n: number;
+  modes: Array<{ mode: string; n: number; avg_return: number }>;
+  pseudo_active: {
+    weak_active_n: number;
+    pseudo_n: number;
+    still_active_n: number;
+    days: Array<{
+      trade_date: string;
+      n: number;
+      pseudo: number;
+      new_sent?: string;
+      lu?: number;
+      ld?: number;
+    }>;
+    note?: string | null;
+  } | null;
+  forward_epoch?: string | null;
+  note?: string | null;
+};
+
 export type RiskRadar = {
   high: number;
   medium: number;

@@ -17,6 +17,7 @@ import type {
   WinRateSummary,
   LlmReviewHealth,
   TemporalConsistency,
+  DDiagnostics,
   ReplayAnalysisResult,
   DataSourceHealthRow,
   ModelRoute,
@@ -410,6 +411,12 @@ export const api = {
     request<PrecisionAtKRow[]>(`/api/metrics/precision-at-k${windowDays ? `?window_days=${windowDays}` : ""}`),
   metricsByScoreLine: (windowDays?: number) =>
     request<ScoreLineStatsRow[]>(`/api/metrics/by-score-line${windowDays ? `?window_days=${windowDays}` : ""}`),
+  /** D 项诊断：真残留毒区 + 伪活跃反事实（与 self_check 同源，不改主口径） */
+  dDiagnostics: (options?: RequestOptions) =>
+    request<DDiagnostics>(`/api/metrics/d-diagnostics`, undefined, {
+      timeoutMs: options?.timeoutMs ?? 30_000,
+      signal: options?.signal,
+    }),
 
   // —— 记录中心：运行推荐记录 + 矩阵运行记录 ——
   runRecords: (params?: { limit?: number }) => {
