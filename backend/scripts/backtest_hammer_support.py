@@ -107,6 +107,40 @@ def _f(v: Any, default: float = 0.0) -> float:
         return default
 
 
+def _sma(vals: list[float], i: int, n: int) -> float:
+    """第 i 位（含）向前 n 日的简单移动平均；数据不足返回 0。"""
+    if i + 1 < n:
+        return 0.0
+    s = 0.0
+    for k in range(i + 1 - n, i + 1):
+        s += vals[k]
+    return s / n
+
+
+def _build_indicators(by_code: dict[str, list[Any]]) -> dict[tuple[str, str], dict[str, float]]:
+    """内存计算 MA20 / MA60 / 量比5 —— 不使用 daily_kbars 的 ma20/ma60/vol_ratio_5 列。
+
+    数据质量坑（round #193 / 2026-07-21）：daily_kbars.ma20/ma60/turnover_rate/vol_ratio_5
+    在 2023-2025 全 NULL、2026 约 57~96% 缺失。直接读这些列会让「读 ma20 判定支撑」的因子
+    在 2023-2025 全部信号被静默杀死、2026 也大量漏判 → 负向结论建立在被污染/偏置样本上。
+    这里仅依赖可靠列 close / volume 在内存重算，且 ma20(i) 只用 bars[0..i]（无未来函数）。
+    """
+    cache: dict[tuple[str, str], dict[str, float]] = {}
+    for code, bars in by_code.items():
+        closes = [_f(b.close) for b in bars]
+        vols = [_f(b.volume) for b in bars]
+        m = len(bars)
+        for i, b in enumerate(bars):
+            ma20 = _sma(closes, i, 20)
+            ma60 = _sma(closes, i, 60)
+            lo5 = max(0, i - 4)
+            win = vols[lo5:i + 1]
+            s5 = sum(win)
+            vr5 = (vols[i] / s5 * len(win)) if s5 > 0 else 0.0
+            cache[(code, str(b.trade_date))] = {"ma20": ma20, "ma60": ma60, "vol_ratio_5": vr5}
+    return cache
+
+
 def _is_hammer(b: Any) -> bool:
     """T 日锤子线：长下影 + 极小上影。"""
     o, h, l, c = _f(b.open), _f(b.high), _f(b.low), _f(b.close)
@@ -132,14 +166,14 @@ def _is_hammer(b: Any) -> bool:
     return True
 
 
-def _passes_support_trend(b: Any) -> bool:
-    """上升趋势中的回调至 MA20 支撑。"""
-    if _f(b.ma20) <= 0 or _f(b.ma60) <= 0:
+def _passes_support_trend(b: Any, ind: dict[str, float]) -> bool:
+    """上升趋势中的回调至 MA20 支撑。ind 为内存计算的 {ma20, ma60}（不用 corrupted 列）。"""
+    ma20 = ind["ma20"]
+    ma60 = ind["ma60"]
+    if ma20 <= 0 or ma60 <= 0:
         return False
     close = _f(b.close)
     low = _f(b.low)
-    ma20 = _f(b.ma20)
-    ma60 = _f(b.ma60)
     # 中长期向上（未破长期趋势）
     if close < ma60 * MA60_FLOOR:
         return False
@@ -152,17 +186,16 @@ def _passes_support_trend(b: Any) -> bool:
     return True
 
 
-def _passes_non_extreme(b: Any) -> bool:
+def _passes_non_extreme(b: Any, ind: dict[str, float]) -> bool:
     pct = _f(b.pct_chg)
     if not (PCT_LO <= pct <= PCT_HI):
         return False
     amount_yi = _f(b.amount) / 1e8
-    turnover = _f(b.turnover_rate)
+    # turnover_rate 列在 2023-2025 全 NULL、2026 大量缺失 → 不可信，已移除该过滤；
+    # 流动性改由 amount(成交额) 兜底（MIN_AMOUNT_YI 已门控）。
     if amount_yi < MIN_AMOUNT_YI:
         return False
-    if turnover < MIN_TURNOVER or turnover > MAX_TURNOVER:
-        return False
-    vr = _f(b.vol_ratio_5)
+    vr = ind["vol_ratio_5"]
     if vr > 0 and (vr < VR_LO or vr > VR_HI):
         return False
     return True
@@ -191,12 +224,16 @@ def _load_data(db: Session, start_date: str, end_date: str) -> dict[str, Any]:
     for code in by_code:
         by_code[code].sort(key=lambda x: str(x.trade_date))
 
+    # 内存重算 MA20/MA60/量比5（避免读 corrupted 列，见 _build_indicators）
+    ind_cache = _build_indicators(by_code)
+
     all_codes = set(by_code.keys())
     stock_meta_list = db.scalars(select(Stock).where(Stock.code.in_(all_codes))).all()
     stock_meta = {str(s.code): {"name": str(s.name or s.code), "industry": s.industry or "未分类",
                                 "is_st": bool(s.is_st)} for s in stock_meta_list}
 
-    return {"trade_dates": trade_dates, "by_code": by_code, "bar_map": bar_map, "stock_meta": stock_meta}
+    return {"trade_dates": trade_dates, "by_code": by_code, "bar_map": bar_map,
+            "stock_meta": stock_meta, "ind_cache": ind_cache}
 
 
 def _precompute_signals(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
@@ -207,6 +244,7 @@ def _precompute_signals(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]
     """
     by_code = data["by_code"]
     stock_meta = data["stock_meta"]
+    ind = data["ind_cache"]
     signals_by_entry: dict[str, list[dict[str, Any]]] = defaultdict(list)
     total = 0
     for code, bars in by_code.items():
@@ -216,12 +254,15 @@ def _precompute_signals(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]
         n = len(bars)
         for i in range(1, n - 1):  # 需要 i+1 = T+1
             b = bars[i]
+            bi = ind.get((code, str(b.trade_date)))
+            if bi is None:
+                continue
             # 锤子线 + 支撑趋势 + 非极端
             if not _is_hammer(b):
                 continue
-            if not _passes_support_trend(b):
+            if not _passes_support_trend(b, bi):
                 continue
-            if not _passes_non_extreme(b):
+            if not _passes_non_extreme(b, bi):
                 continue
             nb = bars[i + 1]
             open_p = _f(nb.open) or _f(nb.close)

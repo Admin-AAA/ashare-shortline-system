@@ -7,6 +7,7 @@ DB 集成测试在远程 MySQL 不可达时自动 skip，避免 CI / 无网环�
 import os
 import sys
 
+import inspect
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -92,3 +93,11 @@ def test_integration_single_backtest_runs():
     # 属 regime 依赖噪声，不纳入实盘策略（见 scripts/backtest_first_limit_up_report.md）。
     # 此处仅断言回测可复现且结构正确，不断言胜率必须 >50%（避免把测试变成过拟合锁）。
     assert metrics["total_trades"] >= 0
+
+
+def test_no_turnover_rate_column_read():
+    """回归锁：候选过滤不再读 corrupted 列 turnover_rate（2023-2025 全 NULL、2026 大量缺失）。
+    仅允许注释中出现 'turnover_rate' 字样；禁止代码里出现 '.turnover_rate' 属性访问。"""
+    from scripts import backtest_first_limit_up as m
+    src = inspect.getsource(m)
+    assert ".turnover_rate" not in src, "候选过滤仍读取 daily_kbars.turnover_rate（数据坑未修复）"

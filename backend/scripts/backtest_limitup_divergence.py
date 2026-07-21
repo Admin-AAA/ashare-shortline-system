@@ -226,8 +226,9 @@ def _simulate(data: dict[str, Any], trade_dates: list[str]) -> tuple[dict[str, A
                 continue
             # 流动性
             amount_yi = _f(bar.amount) / 1e8
-            turnover = _f(bar.turnover_rate)
-            if amount_yi < MIN_AMOUNT_YI or turnover < MIN_TURNOVER or turnover > MAX_TURNOVER:
+            # turnover_rate 列在 2023-2025 全 NULL、2026 大量缺失 → 不可信，已移除该过滤；
+            # 流动性由 amount(成交额) 兜底（MIN_AMOUNT_YI 已门控）。
+            if amount_yi < MIN_AMOUNT_YI:
                 continue
             # 分歧日：高开（承接）
             gap = (_f(bar.open) / _f(prev_b.close) - 1) * 100.0

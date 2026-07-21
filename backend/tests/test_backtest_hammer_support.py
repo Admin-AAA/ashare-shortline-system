@@ -20,6 +20,7 @@ from scripts.backtest_hammer_support import (  # noqa: E402
     _compute_metrics,
     _is_hammer,
     _passes_support_trend,
+    _build_indicators,
 )
 
 
@@ -80,25 +81,59 @@ def test_is_hammer_true_doji_small_body():
 def test_passes_support_trend_true():
     """上升趋势中回调至 MA20 支撑：close 刚跌破 ma20、最低精准回踩。"""
     b = _Bar(open=10.0, high=10.1, low=9.95, close=9.97, ma20=10.0, ma60=9.8)
-    assert _passes_support_trend(b) is True
+    assert _passes_support_trend(b, {"ma20": b.ma20, "ma60": b.ma60}) is True
 
 
 def test_passes_support_trend_false_below_band():
     """close 远低于 MA20 支撑带（崩坏），不通过。"""
     b = _Bar(open=9.0, high=9.1, low=8.9, close=9.0, ma20=10.0, ma60=9.8)
-    assert _passes_support_trend(b) is False
+    assert _passes_support_trend(b, {"ma20": b.ma20, "ma60": b.ma60}) is False
 
 
 def test_passes_support_trend_false_broken_ma60():
     """close 跌破 ma60 长期趋势，不通过。"""
     b = _Bar(open=9.0, high=9.1, low=8.95, close=9.2, ma20=9.5, ma60=10.0)
-    assert _passes_support_trend(b) is False
+    assert _passes_support_trend(b, {"ma20": b.ma20, "ma60": b.ma60}) is False
 
 
 def test_passes_support_trend_false_low_not_tagging():
     """最低未回踩到 MA20（下影未打到支撑），不通过。"""
     b = _Bar(open=10.0, high=10.1, low=10.0, close=10.0, ma20=10.0, ma60=9.8)
-    assert _passes_support_trend(b) is False
+    assert _passes_support_trend(b, {"ma20": b.ma20, "ma60": b.ma60}) is False
+
+
+def test_build_indicators_ma20_ma60_vol_ratio():
+    """_build_indicators 内存重算 MA20/MA60/量比5，不读 corrupted 列；ma20(i) 只用历史。"""
+    class B:
+        def __init__(self, td, close, volume):
+            self.trade_date = td
+            self.close = close
+            self.volume = volume
+    dates = [f"2026-01-{d:02d}" for d in range(1, 22)]  # 21 天
+    bars = [B(d, 10.0, 100.0) for d in dates]
+    by_code = {"X": bars}
+    cache = _build_indicators(by_code)
+    # 第 20 位（索引20）前 20 日 close 全 10 → ma20=10
+    ind = cache[("X", "2026-01-21")]
+    assert ind["ma20"] == pytest.approx(10.0, abs=1e-6)
+    # 数据不足 60 日 → ma60=0
+    assert ind["ma60"] == 0.0
+    # 量全 100 → 量比5 = 1.0
+    assert ind["vol_ratio_5"] == pytest.approx(1.0, abs=1e-6)
+    # ma20(i) 只用 bars[0..i]（无未来函数）：改 bars[0]（在窗口外）不影响 ma20@index20
+    bars[0].close = 20.0
+    cache2 = _build_indicators(by_code)
+    assert cache2[("X", "2026-01-21")]["ma20"] == pytest.approx(10.0, abs=1e-6)  # 不受窗口外日影响
+
+
+def test_passes_support_trend_decoupled_from_corrupted_column():
+    """关键回归：bar.ma20=0（被 corrupted 列静默杀死）时，只要内存 ind 有效就应判通过——
+    证明因子不再依赖 daily_kbars.ma20/ma60 列（2023-2025 全 NULL 的数据坑）。"""
+    b = _Bar(open=10.0, high=10.1, low=9.95, close=9.97, ma20=0.0, ma60=0.0)  # 列已坏
+    ind = {"ma20": 10.0, "ma60": 9.8}  # 内存重算有效
+    assert _passes_support_trend(b, ind) is True
+    # 反例：ind 也坏才判否
+    assert _passes_support_trend(b, {"ma20": 0.0, "ma60": 0.0}) is False
 
 
 def _db_reachable():

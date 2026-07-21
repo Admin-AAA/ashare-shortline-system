@@ -196,9 +196,10 @@ def _simulate(data: dict[str, Any], trade_dates: list[str]) -> tuple[dict[str, A
             bar = bar_map.get((code, td))
             if bar is None:
                 continue
-            turnover = _f(bar.turnover_rate)
             amount_yi = _f(bar.amount) / 1e8
-            if amount_yi < MIN_AMOUNT_YI or turnover < MIN_TURNOVER or turnover > MAX_TURNOVER:
+            # turnover_rate 列在 2023-2025 全 NULL、2026 大量缺失 → 不可信，已移除该过滤；
+            # 流动性由 amount(成交额) 兜底（MIN_AMOUNT_YI 已门控）。
+            if amount_yi < MIN_AMOUNT_YI:
                 continue
             if _prior_limit_up(by_code.get(code, []), td, date_to_idx, PRIOR_LIMITUP_LOOKBACK):
                 continue
