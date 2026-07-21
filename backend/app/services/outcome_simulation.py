@@ -230,6 +230,22 @@ def _simulate_outcome(
         code=str(rec.code),
         entry_price=executed_entry_price,
     )
+    # 真实持仓期统计：min/max_return/close_return 只算 entry→exit 之间的 bar，而非整个 horizon。
+    # 旧实现用 future_bars[:horizon]（_static_window_metrics 在 entry/exit 解析前调用），
+    # 把止损/止盈后的 bar 也计入 → stop_loss_hit @ -5.7% 的票 min_return 算到 horizon 末 -34.83%
+    # （688636 实证，154 笔 clean≥72 outcome 的 min_return/max_drawdown 被虚构回撤污染）。
+    # exit_date 对应 holding_bars 的 bar index；盘中触发（take_profit_hit 在 high、stop_loss_hit
+    # 在 low）当日 high/low 都计入（盘中确实到了该价位）。horizon_close 则用整个 holding_bars。
+    exit_bar_count = len(holding_bars)  # 默认整个持仓期（horizon_close 等未提前 exit 的场景）
+    if exit_date:
+        for _i, _b in enumerate(holding_bars):
+            if str(_b.trade_date) == str(exit_date):
+                exit_bar_count = _i + 1
+                break
+    held_metrics = _compute_window_returns(executed_entry_price, holding_bars[:exit_bar_count])
+    if held_metrics is not None:
+        # 用真实持仓期统计覆盖旁路 static_metrics；achievable_return 语义同（持仓期可达成收益）
+        static_metrics = {**static_metrics, **held_metrics}
     executed_exit_price = round(exit_price * (1 - EXIT_SLIPPAGE_BPS / 10000.0), 4)
     executed_return = round(((executed_exit_price - executed_entry_price) / executed_entry_price) * 100, 2)
 
@@ -314,6 +330,30 @@ def _bar_tradeable(bar: DailyKbar) -> bool:
     )
 
 
+def _compute_window_returns(baseline_entry: float, bars: list[DailyKbar]) -> dict[str, float] | None:
+    """对一组 bar 计算 max/min/close_return/achievable_return/max_drawdown（相对 baseline_entry）。
+
+    纯函数，供 _static_window_metrics（未触发 entry 的旁路统计）与主路径（entry→exit 真实持仓期）
+    共用。过滤停牌占位行（OHLC=0，_bar_tradeable）；bars 为空或全停牌返回 None。
+    """
+    tradeable = [bar for bar in bars if _bar_tradeable(bar)]
+    if not tradeable or baseline_entry <= 0:
+        return None
+    returns = [((_as_float(bar.high) - baseline_entry) / baseline_entry) * 100 for bar in tradeable]
+    lows = [((_as_float(bar.low) - baseline_entry) / baseline_entry) * 100 for bar in tradeable]
+    close_return = ((_as_float(tradeable[-1].close) - baseline_entry) / baseline_entry) * 100
+    max_return = max(returns) if returns else 0.0
+    min_return = min(lows) if lows else 0.0
+    achievable_return = (close_return + min(max_return, close_return * 1.5)) / 2.0
+    return {
+        "max_return": round(max_return, 2),
+        "min_return": round(min_return, 2),
+        "close_return": round(close_return, 2),
+        "achievable_return": round(achievable_return, 2),
+        "max_drawdown": round(min_return, 2),
+    }
+
+
 def _static_window_metrics(
     rec: Recommendation,
     signal_bar: DailyKbar | None,
@@ -321,23 +361,18 @@ def _static_window_metrics(
     horizon_days: int,
 ) -> dict[str, Any]:
     window = future_bars[: max(1, horizon_days)]
-    if not window:
-        return {
-            "max_return": 0.0,
-            "min_return": 0.0,
-            "close_return": 0.0,
-            "achievable_return": 0.0,
-            "max_drawdown": 0.0,
-            "outcome_label_legacy": OUTCOME_MISSED,
-        }
-    baseline_entry = _as_float(rec.recommend_price) or _as_float(signal_bar.close if signal_bar else None) or _as_float(window[0].open) or _as_float(window[0].close)
+    baseline_entry = _as_float(rec.recommend_price)
     if baseline_entry <= 0:
+        baseline_entry = _as_float(signal_bar.close if signal_bar else None)
+    if baseline_entry <= 0 and window:
+        baseline_entry = _as_float(window[0].open) or _as_float(window[0].close)
+    if baseline_entry <= 0 and window:
         baseline_entry = max(0.01, _as_float(window[0].close))
     # 过滤停牌占位行（OHLC 全 0）：backfill 对停牌日写入 0 占位行，若纳入 max/min_return
     # 会把 low=0 当真实最低点 → min_return=-100%（2026-06-15 全市场 1149/5508 停牌占位实证）。
     # 入场/出场逻辑已由 no_liquidity_reason_from_bar 拦截停牌日，此处统计口径需对齐。
-    tradeable = [bar for bar in window if _bar_tradeable(bar)]
-    if not tradeable:
+    metrics = _compute_window_returns(baseline_entry, window)
+    if metrics is None:
         # 窗口内全部停牌（极罕见）：max/min/close 都按 0 计，避免 -100% 噪声
         return {
             "max_return": 0.0,
@@ -347,20 +382,10 @@ def _static_window_metrics(
             "max_drawdown": 0.0,
             "outcome_label_legacy": OUTCOME_MISSED,
         }
-    returns = [((_as_float(bar.high) - baseline_entry) / baseline_entry) * 100 for bar in tradeable]
-    lows = [((_as_float(bar.low) - baseline_entry) / baseline_entry) * 100 for bar in tradeable]
-    # 期末收盘用窗口内最后一个有效交易日（末日停牌则回退到最近有效收盘）
-    close_return = ((_as_float(tradeable[-1].close) - baseline_entry) / baseline_entry) * 100
-    max_return = max(returns) if returns else 0.0
-    min_return = min(lows) if lows else 0.0
-    achievable_return = (close_return + min(max_return, close_return * 1.5)) / 2.0
-    legacy_label = OUTCOME_SUCCESS if (max_return >= 5 and min_return > -4) else OUTCOME_FAILED
+    # legacy_label 用窗口统计（旁路参考，主路径会被 entry→exit 截断后重算覆盖）
+    legacy_label = OUTCOME_SUCCESS if (metrics["max_return"] >= 5 and metrics["min_return"] > -4) else OUTCOME_FAILED
     return {
-        "max_return": round(max_return, 2),
-        "min_return": round(min_return, 2),
-        "close_return": round(close_return, 2),
-        "achievable_return": round(achievable_return, 2),
-        "max_drawdown": round(min_return, 2),
+        **metrics,
         "outcome_label_legacy": legacy_label,
     }
 

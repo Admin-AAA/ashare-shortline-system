@@ -635,3 +635,70 @@ def test_simulate_outcome_real_ex_right_day_still_corrected():
     assert sim is not None
     # 除权修正后 executed_return 应基于 pct_chg 链（非价格跳变的虚假 -32%）
     assert sim["executed_return"] > -32.0, "除权日价格跳变不应造成虚假 -32% 收益"
+
+
+def test_simulate_outcome_min_return_truncated_to_exit_not_horizon():
+    """min/max_return 只算 entry→exit 真实持仓期，不算到 horizon 末。
+
+    回归根因（2026-07-22）：_static_window_metrics 在 entry/exit 解析前调用，用整个
+    future_bars[:horizon] 算 min/max_return。止损/止盈后的 bar 被计入 → stop_loss_hit @ -5.7%
+    的票 min_return 算到 horizon 末 -34.83%（688636 实证，154 笔 clean≥72 outcome 的
+    min_return/max_drawdown 被虚构回撤污染）。修复：主路径用 holding_bars[:exit_idx+1] 重算。
+    """
+    snapshot_dict = {"ideal_buy": 40.0, "stop_loss": 38.0, "take_profit": 44.0}
+    rec = SimpleNamespace(
+        code="688636",  # 科创板 20cm
+        trade_date="2026-07-10",
+        recommend_price=40.0,
+        feature_snapshot_json=json.dumps(snapshot_dict, ensure_ascii=False),
+    )
+    bars = [
+        _bar(trade_date="2026-07-10", open=40.0, high=41.0, low=39.5, close=40.5, pct_chg=0.0),
+        # 07-13 触及 stop_loss（low=37.0 < sl≈37.8）→ stop_loss_hit，exit 在 07-13
+        _bar(trade_date="2026-07-13", open=40.0, high=40.5, low=37.0, close=38.5, pct_chg=-4.9),
+        # 07-14 起：持仓已结束，这些 bar 的 low 不该计入 min_return
+        _bar(trade_date="2026-07-14", open=38.0, high=38.5, low=31.61, close=32.85, pct_chg=-15.0),
+        _bar(trade_date="2026-07-15", open=33.0, high=33.5, low=31.81, close=31.86, pct_chg=-3.0),
+        _bar(trade_date="2026-07-16", open=31.5, high=32.0, low=30.35, close=30.6, pct_chg=-4.0),
+        _bar(trade_date="2026-07-17", open=30.5, high=30.6, low=27.04, close=27.1, pct_chg=-11.0),
+    ]
+    dates = [str(b.trade_date) for b in bars]
+    sim = _simulate_outcome(rec, bars, dates, horizon_days=5)
+    assert sim["exit_reason"] == "stop_loss_hit"
+    assert str(sim["exit_date"]) == "2026-07-13"
+    # 旧 bug：min_return 算到 07-17 low=27.04 → (27.04-40)/40=-32%；修复后只算到 07-13 low=37.0
+    assert sim["min_return"] > -10.0, f"止损后窗口未截断，min_return 虚构回撤 got {sim['min_return']}"
+    # 07-13 low=37.0 vs entry≈40 → 约 -7.5%
+    assert sim["min_return"] == sim["max_drawdown"], "max_drawdown 应与截断后 min_return 对齐"
+    # max_return 也只算 entry→exit（07-10/07-13 的 high），不含 07-14 之后
+    assert sim["max_return"] < 5.0, f"max_return 不应含 exit 后的 bar，got {sim['max_return']}"
+
+
+def test_simulate_outcome_take_profit_min_return_truncated():
+    """take_profit_hit 后 min_return 也只算 entry→exit，不算 exit 后的回撤。
+
+    001270 实证：take_profit_hit @ 07-10（+4.79%），旧 min_return=-27.98%（算到 07-14 low）。
+    """
+    snapshot_dict = {"ideal_buy": 30.0, "stop_loss": 28.5, "take_profit": 33.0}
+    rec = SimpleNamespace(
+        code="300270",  # 创业板 20cm，避免 -12.65% 跌幅触发主板除权检测
+        trade_date="2026-07-09",
+        recommend_price=30.0,
+        feature_snapshot_json=json.dumps(snapshot_dict, ensure_ascii=False),
+    )
+    bars = [
+        _bar(trade_date="2026-07-09", open=30.5, high=31.0, low=30.2, close=30.8, pct_chg=0.0),
+        # 07-10: low=29.5 触及 ideal_buy=30（entry 触发），high=33.5 触及 tp=33（take_profit_hit）
+        _bar(trade_date="2026-07-10", open=31.0, high=33.5, low=29.5, close=33.2, pct_chg=7.8),
+        # exit 后温和下跌（pct_chg 与 price_jump 一致，不触发除权检测），但 low=28 低于 exit 日 low
+        _bar(trade_date="2026-07-13", open=33.0, high=33.2, low=28.0, close=29.0, pct_chg=-12.65),
+        _bar(trade_date="2026-07-14", open=29.0, high=29.5, low=27.0, close=27.5, pct_chg=-5.17),
+    ]
+    dates = [str(b.trade_date) for b in bars]
+    sim = _simulate_outcome(rec, bars, dates, horizon_days=4)
+    assert sim["exit_reason"].startswith("take_profit"), f"应在 07-10 触及 tp，got {sim['exit_reason']}"
+    assert str(sim["exit_date"]) == "2026-07-10"
+    # 旧 bug：min_return 算到 07-13/14 low=27-28 → 约 -10%；修复后只算 entry→exit（07-10 low=29.5）
+    # exit 日 07-10 low=29.5 vs entry≈30 → 约 -1.7%，远高于 -10%
+    assert sim["min_return"] > -5.0, f"止盈后窗口未截断，min_return 虚构回撤 got {sim['min_return']}"
+    assert sim["executed_return"] > 0  # take_profit 正收益
