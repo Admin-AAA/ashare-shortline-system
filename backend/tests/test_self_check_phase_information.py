@@ -55,4 +55,4 @@ def test_format_phase_information_lines_regime_not_significant():
     lines = self_check._format_phase_information_lines(rep)
     text = "\n".join(lines)
     assert "无显著信息量" in text
-    assert "勿在 phase 上加精细" in text or "过拟合" in text
+    assert "勿撤 veto" in text or "差距也消失" in text

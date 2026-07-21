@@ -1471,7 +1471,10 @@ def _format_phase_information_lines(rep: dict) -> list[str]:
         lines.append(f'     ——显著低胜率桶: {"; ".join(parts)}')
     if rep["regime_p"] >= alpha:
         lines.append(
-            f'     ——regime 信息量消失（p≥{alpha}）：勿在 phase 上加精细 veto/抬线（过拟合噪声）'
+            f'     ——regime χ² 不显著（p≥{alpha}）：样本分布不均（弱势多/震荡少）'
+            f'致 χ² 检验力不足；但弱势 WR={rep["by_regime"].get("弱势",{}).get("winrate","?")}%'
+            f' vs 震荡 WR={rep["by_regime"].get("震荡",{}).get("winrate","?")}% 差距仍存在时'
+            f'→ regime 规则仍有效，勿撤 veto/soft ban；仅当差距也消失时才判无信息量'
         )
     elif rep["sentiment_p"] >= alpha:
         lines.append(
