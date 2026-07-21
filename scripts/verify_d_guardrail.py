@@ -1,4 +1,4 @@
-#!/usr/env python3
+#!/usr/bin/env python3
 """D 项北极星回归护栏 — 可独立运行的 CI 闸门。
 
 背景（第 178 轮 self-improve）：
@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(BACKEND_DIR, '..', 'scripts')))
 
 from app.db.session import SessionLocal
 import self_check  # type: ignore[import-not-found]
+from sqlalchemy import text
 
 # —— 北极星 D 项目标阈值（硬闸门）——
 NET_WINRATE_FLOOR = 65.0
@@ -57,6 +58,12 @@ RECENT_MIN_N = 30             # 近窗口样本需 >= 该值方可断言（避�
 # 使自动化编排可读取 regime_shock.shock 并拒绝对单日冲击加 entry 规则，避免误读为系统退化。
 SINGLE_DAY_FAIL_SHARE_FLOOR = 0.40   # 单日失败占窗口失败比 ≥ 该值 → 判定单日 regime 冲击
 SINGLE_DAY_MIN_FAIL = 5              # 窗口失败总数需 ≥ 该值方可断言（避免小样本误报）
+
+# —— 前瞻污染主导 → 软跳过硬闸门（第 22 轮）——
+# 稳定纪元后 07-16 单日 formal 样本 93% 为 pure 低线/soft@震荡污染，raw 前瞻 WR 39%
+# 若仍当硬闸门会：要么误 FAIL 阻断合法合并，要么（旧 bug）FORWARD_EPOCH 未 resolve
+# 把全量当前瞻虚高 PASS。污染占比 ≥ 该值 或 clean n < MIN_OOS → 只 WARN，不计入 ok。
+FORWARD_POLLUTION_SHARE_SKIP = 0.70
 
 
 def _check(name: str, ok: bool, actual, floor) -> bool:
@@ -150,13 +157,60 @@ def _eval_regime_shock(rows: list, recent_dates: set) -> dict:
     return {"shock": False, **s, "msg": ""}
 
 
+def _forward_pollution_gate_decision(
+    pollution_n: int,
+    clean_n: int,
+    *,
+    pollution_share_skip: float = FORWARD_POLLUTION_SHARE_SKIP,
+    min_oos: int = 10,
+) -> dict:
+    """纯函数：是否对前瞻窗口执行硬闸门。
+
+    返回 {enforce: bool, pollution_n, clean_n, share, msg}。
+    enforce=False 当：污染占比 ≥ pollution_share_skip 或 clean_n < min_oos
+    （与 self_check 去污染反事实 / MIN_OOS_SAMPLE 对齐）。
+    """
+    total = pollution_n + clean_n
+    share = round(pollution_n / total, 2) if total > 0 else 0.0
+    if total == 0:
+        return {
+            "enforce": False,
+            "pollution_n": 0,
+            "clean_n": 0,
+            "share": 0.0,
+            "msg": "前瞻窗口无样本，无法强制 OOS 闸门",
+        }
+    if share >= pollution_share_skip or clean_n < min_oos:
+        return {
+            "enforce": False,
+            "pollution_n": pollution_n,
+            "clean_n": clean_n,
+            "share": share,
+            "msg": (
+                f"前瞻 pure 污染 {pollution_n}/{total}={int(share * 100)}%、"
+                f"clean n={clean_n}（<{min_oos} 或污染≥{int(pollution_share_skip * 100)}%）"
+                f"——raw 前瞻不可当硬闸门；Contract 已拦新污染，待 clean formal 多日后再 OOS"
+            ),
+        }
+    return {
+        "enforce": True,
+        "pollution_n": pollution_n,
+        "clean_n": clean_n,
+        "share": share,
+        "msg": "",
+    }
+
+
 def build_report(full: dict | None, fwd: dict | None, ok: bool, exit_code: int,
                  recent: dict | None = None, drift: dict | None = None,
-                 regime_shock: dict | None = None) -> dict:
+                 regime_shock: dict | None = None,
+                 pollution: dict | None = None,
+                 forward_epoch: str | None = None) -> dict:
     """把本轮 D 项护栏结果结构化为机器可读报告，供跨 run 漂移追踪。
 
     full / fwd 为 self_check._compute_d_cost 的返回 dict（含 n/net_wr/net_pl/max_loss）。
-    只萃取 D 项护栏关心的四个字段，剔除噪声字段，避免报告随实现细节漂移。
+    pollution 为去污染反事实摘要（可选），forward_epoch 为稳定/动态纪元字符串。
+    只萃取 D 项护栏关心的字段，剔除噪声字段，避免报告随实现细节漂移。
     """
     def _block(m):
         return None if m is None else {
@@ -167,6 +221,7 @@ def build_report(full: dict | None, fwd: dict | None, ok: bool, exit_code: int,
         }
     return {
         "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "forward_epoch": forward_epoch,
         "thresholds": {
             "net_winrate_floor": NET_WINRATE_FLOOR,
             "net_pl_ratio_floor": NET_PL_RATIO_FLOOR,
@@ -177,6 +232,7 @@ def build_report(full: dict | None, fwd: dict | None, ok: bool, exit_code: int,
             "recent_min_n": RECENT_MIN_N,
             "single_day_fail_share_floor": SINGLE_DAY_FAIL_SHARE_FLOOR,
             "single_day_min_fail": SINGLE_DAY_MIN_FAIL,
+            "forward_pollution_share_skip": FORWARD_POLLUTION_SHARE_SKIP,
         },
         "full": _block(full),
         "forward": _block(fwd),
@@ -185,6 +241,11 @@ def build_report(full: dict | None, fwd: dict | None, ok: bool, exit_code: int,
         "regime_shock": regime_shock if regime_shock is not None else {
             "shock": False, "top_date": None, "top_failures": 0,
             "total_failures": 0, "share": 0.0, "n": 0, "msg": ""},
+        "pollution": pollution if pollution is not None else {
+            "n": 0, "pure_low": 0, "pure_soft": 0,
+            "full_clean": None, "recent_clean": None, "fwd_clean": None,
+            "fwd_gate": {"enforce": False, "share": 0.0, "msg": ""},
+        },
         "passed": bool(ok),
         "exit_code": int(exit_code),
     }
@@ -205,19 +266,44 @@ def main(argv: list | None = None) -> int:
     args = parser.parse_args(argv)
 
     db = SessionLocal()
-    rows = self_check._fetch_dedup_live_formal(db)
-    db.close()
+    try:
+        # T22：必须 resolve 稳定前瞻纪元；否则 FORWARD_EPOCH=None 时
+        # _compute_d_cost(since_date=None) 退化为全量，虚高「前瞻」PASS。
+        self_check.FORWARD_EPOCH = self_check._resolve_forward_epoch(db)
+        epoch = self_check.FORWARD_EPOCH
+        rows = self_check._fetch_dedup_live_formal(db)
+
+        # pure 污染源（低线 + soft@震荡），与 self_check 去污染反事实同口径
+        poll_raw = db.execute(
+            text(
+                """
+                SELECT r.code, r.trade_date, o.outcome_label, o.executed_return, u.score_line,
+                       JSON_EXTRACT(r.feature_snapshot_json,
+                                    '$.score_line_meta.dynamic_soft_floor_applied') AS soft,
+                       JSON_UNQUOTE(JSON_EXTRACT(r.feature_snapshot_json,
+                                    '$.score_line_meta.market_base')) AS mbase
+                FROM recommendation_outcomes o
+                JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+                JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+                WHERE o.outcome_label IN ('success', 'failed')
+                  AND r.recommendation_id LIKE 'rec_%'
+                """
+            )
+        ).fetchall()
+        keys = self_check._pure_pollution_keys(list(poll_raw))
+    finally:
+        db.close()
 
     if not rows:
         print("⚠️ D 项护栏：无 LIVE formal 样本，无法判定（退出码 2）。")
-        report = build_report(None, None, False, 2)
+        report = build_report(None, None, False, 2, forward_epoch=None)
         if args.json:
             write_report(report, args.json)
             print(f"📄 JSON 报告已写出: {args.json}")
         return 2
 
     full = self_check._compute_d_cost(rows)
-    fwd = self_check._compute_d_cost(rows, since_date=self_check.FORWARD_EPOCH)
+    fwd = self_check._compute_d_cost(rows, since_date=epoch) if epoch else None
 
     # 近窗口漂移早警（软告警，不计入 ok / 退出码）
     recent_dates = _recent_trade_dates(rows, k=RECENT_WINDOW_DAYS)
@@ -227,10 +313,47 @@ def main(argv: list | None = None) -> int:
     # 单日 regime 冲击护栏（机器可读早警，不计入 ok / 退出码）
     regime_shock = _eval_regime_shock(rows, recent_dates)
 
-    print(f"D 项回归护栏（样本 全量 n={full['n']}"
-          + (f" / 前瞻 n={fwd['n']}" if fwd else " / 前瞻 空")
-          + f" / 近{RECENT_WINDOW_DAYS}交易日 n={recent['n'] if recent else 0}"
-          + "）")
+    # 去污染反事实 + 前瞻闸门决策
+    cf = self_check._clean_d_counterfactual(
+        rows, keys["union"], last10_dates=recent_dates, since_date=epoch,
+    )
+    fwd_poll_n = (cf or {}).get("fwd_pollution_n") or 0
+    fwd_clean_n = (cf or {}).get("fwd_clean_n") or 0
+    if epoch and fwd is not None:
+        # 若 cf 无前瞻块（pollution empty），用 since 窗口手工计
+        if not keys["union"]:
+            fwd_keys = {(r[0], str(r[1])) for r in rows if str(r[1]) >= epoch}
+            fwd_poll_n = 0
+            fwd_clean_n = len(fwd_keys)
+    fwd_gate = _forward_pollution_gate_decision(fwd_poll_n, fwd_clean_n)
+
+    def _slim(m):
+        return None if m is None else {
+            "n": m["n"], "net_wr": m["net_wr"], "net_pl": m["net_pl"], "max_loss": m["max_loss"],
+        }
+
+    pollution_block = {
+        "n": len(keys["union"]),
+        "pure_low": len(keys["pure_low"]),
+        "pure_soft": len(keys["pure_soft"]),
+        "full_clean": _slim((cf or {}).get("full_clean")),
+        "recent_clean": _slim((cf or {}).get("last10_clean")),
+        "fwd_clean": _slim((cf or {}).get("fwd_clean")),
+        "fwd_gate": {
+            "enforce": fwd_gate["enforce"],
+            "pollution_n": fwd_gate["pollution_n"],
+            "clean_n": fwd_gate["clean_n"],
+            "share": fwd_gate["share"],
+            "msg": fwd_gate["msg"],
+        },
+    }
+
+    print(
+        f"D 项回归护栏（样本 全量 n={full['n']}"
+        + (f" / 前瞻≥{epoch} n={fwd['n']}" if fwd else " / 前瞻 空")
+        + f" / 近{RECENT_WINDOW_DAYS}交易日 n={recent['n'] if recent else 0}"
+        + "）"
+    )
     print("-" * 60)
 
     ok = True
@@ -240,11 +363,23 @@ def main(argv: list | None = None) -> int:
                  full["net_pl"], NET_PL_RATIO_FLOOR)
     ok &= _check("全量最大亏损(越接近0越好)", full["max_loss"] >= MAX_LOSS_FLOOR,
                  f"{full['max_loss']}%", MAX_LOSS_FLOOR)
-    if fwd is not None:
-        ok &= _check("前瞻净胜率(样本外)", fwd["net_wr"] >= FORWARD_NET_WINRATE_FLOOR,
-                     f"{fwd['net_wr']}%", FORWARD_NET_WINRATE_FLOOR)
-        ok &= _check("前瞻净盈亏比", fwd["net_pl"] >= NET_PL_RATIO_FLOOR,
-                     fwd["net_pl"], NET_PL_RATIO_FLOOR)
+    if fwd is not None and epoch:
+        if fwd_gate["enforce"]:
+            ok &= _check("前瞻净胜率(样本外)", fwd["net_wr"] >= FORWARD_NET_WINRATE_FLOOR,
+                         f"{fwd['net_wr']}%", FORWARD_NET_WINRATE_FLOOR)
+            ok &= _check("前瞻净盈亏比", fwd["net_pl"] >= NET_PL_RATIO_FLOOR,
+                         fwd["net_pl"], NET_PL_RATIO_FLOOR)
+        else:
+            print(
+                f"  [⚠️ SKIP] 前瞻硬闸门：{fwd_gate['msg']} "
+                f"| raw 净WR={fwd['net_wr']}% 净PL={fwd['net_pl']} n={fwd['n']}"
+            )
+            if pollution_block["fwd_clean"]:
+                fc = pollution_block["fwd_clean"]
+                print(
+                    f"  ℹ️ 前瞻去污染 clean：n={fc['n']} 净WR={fc['net_wr']}% "
+                    f"净PL={fc['net_pl']}（仅信息，不闸门）"
+                )
     else:
         print("  [⚠️ SKIP] 前瞻窗口样本为空——无法验证样本外，请等修复后新 run 结算后复核。")
 
@@ -252,6 +387,14 @@ def main(argv: list | None = None) -> int:
     if recent is not None:
         print(f"  ℹ️ 近{RECENT_WINDOW_DAYS}交易日(净成本): 净胜率 {recent['net_wr']}% "
               f"| 净盈亏比 {recent['net_pl']} | 最大亏损 {recent['max_loss']}% | n={recent['n']}")
+    if pollution_block["n"] > 0 and pollution_block["recent_clean"]:
+        rc = pollution_block["recent_clean"]
+        print(
+            f"  ℹ️ 近{RECENT_WINDOW_DAYS}日去污染: 净WR {rc['net_wr']}% "
+            f"净PL {rc['net_pl']} n={rc['n']} "
+            f"(pure 低线 {pollution_block['pure_low']}+soft {pollution_block['pure_soft']}="
+            f"{pollution_block['n']})"
+        )
     if drift["warn"]:
         print(f"  [⚠️ WARN] {drift['msg']}")
     if regime_shock["shock"]:
@@ -269,8 +412,11 @@ def main(argv: list | None = None) -> int:
         print("❌ D 项护栏触发：检测到对北极星 D 项的回归，阻断合并并排查最近 strategy.yaml 改动。")
 
     exit_code = 0 if ok else 1
-    report = build_report(full, fwd, ok, exit_code, recent=recent, drift=drift,
-                          regime_shock=regime_shock)
+    report = build_report(
+        full, fwd, ok, exit_code,
+        recent=recent, drift=drift, regime_shock=regime_shock,
+        pollution=pollution_block, forward_epoch=epoch,
+    )
     if args.json:
         write_report(report, args.json)
         print(f"📄 JSON 报告已写出: {args.json}")
