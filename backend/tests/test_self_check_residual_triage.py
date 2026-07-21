@@ -141,3 +141,35 @@ def test_sparse_residual_items_notes_soft_and_modes():
     b = items[1]
     assert b["mode"] == "gap_roundtrip"
     assert "跳空" in b["note"] or "往返" in b["note"]
+
+
+def test_soft_allowed_not_sparse():
+    """soft@弱势 失败应进 soft_allowed，不进 sparse 可攻池。"""
+    unc = [
+        {
+            "rid": "rec_20260610_a",
+            "trade_date": "2026-06-10",
+            "executed_return": -5.69,
+            "fs": {
+                "code": "688322",
+                "market_regime": "弱势",
+                "market_sentiment_phase": "活跃",
+                "score_line_meta": {"dynamic_soft_floor_applied": True},
+            },
+        },
+        {
+            "rid": "rec_20260709_b",
+            "trade_date": "2026-07-09",
+            "executed_return": -5.69,
+            "fs": {
+                "code": "002371",
+                "market_regime": "震荡",
+                "market_sentiment_phase": "高潮",
+            },
+        },
+    ]
+    t = sc._triage_residual_poison(unc, pure_pollution_keys=set(), pseudo_active_rids=set())
+    assert t["counts"]["soft_allowed"] == 1
+    assert t["counts"]["sparse"] == 1
+    assert "rec_20260610_a" in t["soft_allowed_rids"]
+    assert "rec_20260709_b" in t["sparse_rids"]

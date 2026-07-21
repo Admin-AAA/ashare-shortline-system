@@ -329,8 +329,10 @@ export type DDiagnostics = {
     n: number;
     pure_pollution: number;
     pseudo_active: number;
+    soft_allowed?: number;
     day_clustered: number;
     sparse: number;
+    ban_n?: number;
     clustered_days?: string[];
     sparse_n?: number;
     /** T36：稀疏明细（跨日不可合并加 entry） */

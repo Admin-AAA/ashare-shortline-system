@@ -2669,13 +2669,14 @@ def _triage_residual_poison(
     day_share_floor: float = 0.40,
     day_min_n: int = 4,
 ) -> dict:
-    """真残留毒区 triage（T34）：拆不可攻 vs 可关注。
+    """真残留毒区 triage（T34/T37）：拆不可攻 vs 可关注。
 
     分层（互斥，按优先级）：
       1. pure_pollution — (code, trade_date) 落在 pure 低线/soft@震荡 污染键
       2. pseudo_active — T28 双维度重判为伪活跃的 rid
-      3. day_clustered — 所在交易日 residual 占比 ≥ day_share_floor 且日 n≥day_min_n
-      4. sparse — 其余（跨日/非污染/非伪活跃；仍禁盲目 entry，仅可关注）
+      3. soft_allowed — soft floor 放行失败但非 pure_soft（如 soft@弱势，仍允许档）
+      4. day_clustered — 所在交易日 residual 占比 ≥ day_share_floor 且日 n≥day_min_n
+      5. sparse — 其余（跨日/未解释；仍禁盲目 entry，仅可关注）
 
     返回 {n, buckets, counts, clustered_days, sparse_rids, note}。
     纯函数便于单测；不修改 uncovered。
@@ -2699,9 +2700,15 @@ def _triage_residual_poison(
         if n > 0 and c >= day_min_n and c / n >= day_share_floor
     }
 
+    def _soft_on(fs: dict) -> bool:
+        meta = (fs or {}).get("score_line_meta") or {}
+        soft = meta.get("dynamic_soft_floor_applied")
+        return soft is not None and str(soft).lower() in ("1", "true", "yes")
+
     buckets: dict[str, list[str]] = {
         "pure_pollution": [],
         "pseudo_active": [],
+        "soft_allowed": [],
         "day_clustered": [],
         "sparse": [],
     }
@@ -2720,17 +2727,27 @@ def _triage_residual_poison(
             buckets["pure_pollution"].append(rid)
         elif rid in pseudo_active_rids:
             buckets["pseudo_active"].append(rid)
+        elif _soft_on(fs):
+            # soft@弱势/偏多 等仍允许档：失败不进 sparse「可关注 entry」
+            buckets["soft_allowed"].append(rid)
         elif td in clustered_days:
             buckets["day_clustered"].append(rid)
         else:
             buckets["sparse"].append(rid)
 
     counts = {k: len(v) for k, v in buckets.items()}
+    ban_n = (
+        counts["pure_pollution"]
+        + counts["pseudo_active"]
+        + counts["soft_allowed"]
+        + counts["day_clustered"]
+    )
     note = (
         f"triage residual {n}="
         f"污染{counts['pure_pollution']}+伪活跃{counts['pseudo_active']}"
+        f"+允许soft{counts['soft_allowed']}"
         f"+单日簇{counts['day_clustered']}+稀疏{counts['sparse']}；"
-        f"前三类禁止加 entry；稀疏仅可关注仍须跨日可分"
+        f"前四类禁止加 entry；稀疏仅可关注仍须跨日可分"
     )
     return {
         "n": n,
@@ -2738,6 +2755,8 @@ def _triage_residual_poison(
         "counts": counts,
         "clustered_days": sorted(clustered_days),
         "sparse_rids": buckets["sparse"],
+        "soft_allowed_rids": buckets["soft_allowed"],
+        "ban_n": ban_n,
         "note": note,
     }
 
@@ -3073,16 +3092,22 @@ def _print_residual_poison_zone(uncovered: list[dict], success_items: list[dict]
         if triage and triage["n"] > 0:
             c = triage["counts"]
             print(
-                f'  ℹ️ residual triage（T34）：污染{c["pure_pollution"]} + 伪活跃{c["pseudo_active"]}'
+                f'  ℹ️ residual triage（T37）：污染{c["pure_pollution"]} + 伪活跃{c["pseudo_active"]}'
+                f' + 允许soft{c.get("soft_allowed", 0)}'
                 f' + 单日簇{c["day_clustered"]} + 稀疏{c["sparse"]}'
                 f' = {triage["n"]}'
             )
             if triage.get("clustered_days"):
                 print(f'     · 单日簇日: {triage["clustered_days"]}')
+            if c.get("soft_allowed", 0) > 0:
+                print(
+                    f'     · 允许 soft 失败 {c["soft_allowed"]} 笔（soft@非震荡仍合法，'
+                    f'如 soft@弱势；禁当 sparse entry 目标）'
+                )
             if c["sparse"] > 0:
                 print(
                     f'     · 稀疏 {c["sparse"]} 笔可关注但仍须跨日可分特征；'
-                    f'前三类（污染/伪活跃/单日簇）禁止加 entry'
+                    f'前四类（污染/伪活跃/允许soft/单日簇）禁止加 entry'
                 )
                 sparse_items = _sparse_residual_items(
                     uncovered, triage.get("sparse_rids") or [],
@@ -3095,7 +3120,7 @@ def _print_residual_poison_zone(uncovered: list[dict], success_items: list[dict]
                     )
             else:
                 print(
-                    f'     · 无稀疏可攻目标：residual 全被历史污染/伪活跃/单日簇解释，'
+                    f'     · 无稀疏可攻目标：residual 全被污染/伪活跃/允许soft/单日簇解释，'
                     f'禁止据此加 entry'
                 )
     except Exception as _e:

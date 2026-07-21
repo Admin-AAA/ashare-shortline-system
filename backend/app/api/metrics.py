@@ -262,11 +262,13 @@ def d_diagnostics(db: Session = Depends(get_db)):
             "n": triage_raw["n"],
             "pure_pollution": c.get("pure_pollution", 0),
             "pseudo_active": c.get("pseudo_active", 0),
+            "soft_allowed": c.get("soft_allowed", 0),
             "day_clustered": c.get("day_clustered", 0),
             "sparse": c.get("sparse", 0),
             "clustered_days": triage_raw.get("clustered_days") or [],
             "sparse_n": c.get("sparse", 0),
             "sparse_items": sparse_items,
+            "ban_n": triage_raw.get("ban_n"),
             "note": triage_raw.get("note"),
             "actionable": c.get("sparse", 0) > 0,
         }
