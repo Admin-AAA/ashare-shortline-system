@@ -142,6 +142,48 @@ def _extract_usage_tokens(resp) -> tuple[int | None, int | None, int | None]:
     return prompt_tokens, completion_tokens, cache_hit_tokens
 
 
+def _enrich_review_with_cost_and_rule(
+    parsed: dict[str, Any],
+    prompt_tokens: int | None,
+    completion_tokens: int | None,
+    cache_hit_tokens: int | None,
+    prompt_chars: int,
+    completion_chars: int,
+    rule_signal: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """持久化前注入真实 token 用量 + 规则基线（additive，不改既有字段）。
+
+    动机（T8）：llm_review_cache 此前只存 LLM review 输出，token 用量与
+    规则基线（rule_score / llm_delta）全部丢失 → T8.2（各 skill token 消耗）
+    与 T8.1（规则 vs LLM delta）无法跨 run 从缓存统计。本函数把这两项写入
+    review 的私有键（下划线前缀），既不影响既有字段，也不 drain 全局
+    _pending_api_costs（调用方的成本核算不受影响）。
+
+    返回新 dict，不原地修改 parsed。
+    """
+    out = dict(parsed)
+    out["_token_cost"] = {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "cache_hit_tokens": cache_hit_tokens,
+        "prompt_tokens_est": int(prompt_chars / 1.8),
+        "completion_tokens_est": int(completion_chars / 1.8),
+        "total_tokens_real": (prompt_tokens or 0) + (completion_tokens or 0),
+        "total_cache_hit_tokens": cache_hit_tokens or 0,
+        "prompt_cache_active": bool(cache_hit_tokens and cache_hit_tokens > 0),
+    }
+    if isinstance(rule_signal, dict):
+        rs = rule_signal.get("dsa_signal_score")
+        if isinstance(rs, (int, float)):
+            try:
+                score = float(parsed.get("score", 50))
+                out["rule_score"] = float(rs)
+                out["llm_delta"] = round(score - float(rs), 2)
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
 def _append_api_cost(
     *,
     route,
@@ -969,6 +1011,10 @@ async def run_skill_agent_direct(
                         skill_id=skill.skill_id,
                     )
                     record_result(route_key, success=True)
+                    # 持久化前注入真实 token 用量 + 规则基线（T8 跨 run 可追踪）
+                    parsed = _enrich_review_with_cost_and_rule(
+                        parsed, _pt, _ct, _ch, prompt_chars, len(content), rule_signal
+                    )
                     _persist_review_cache(skill, cache_key, code, trade_date, parsed, route.model)
                     return result
                 except Exception as exc:
