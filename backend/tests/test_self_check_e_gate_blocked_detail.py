@@ -1,10 +1,9 @@
-"""Regression guard: self_check E 项 gate_blocked 门线拦截根因明细（2026-07-21 T3.6）。
+"""Regression guard: self_check E 项 gate_blocked 门线拦截根因明细（2026-07-21 T3.6 / T26）。
 
-背景: 3 个 sub-20 策略(chip-single-peak-breakout / small-cap-thematic-momentum /
-trend-pullback-continuation) 每日补跑 completed 但 0 产出。filter_audit_json 证实根因是
-「regime 有效线偏高」(候选最终分 69~76 < 有效线 89~101)，与 A 项 3 天保护性 0 推荐同源，
-非配置 bug。本测试锁住解析逻辑，使未来轮次一眼区分「regime 有效线偏高(等国转强会喂)」
-vs「真无候选」，避免误把门线放宽去喂样本而污染 D 项胜率。
+背景: 3 个 sub-20 策略每日补跑 completed 但 0 产出。filter_audit 实测：
+  reason_counts.score_line = {"最终分 73.16 低于有效线 89.55": 1, ...}  # key=文案
+旧实现扫 .values()（计数）→ 恒「无候选分」，且用 score_line 列 72 当有效线误导。
+T26 改为扫 key（+兼容 value 文案夹具），有效线取文案/meta 最高值。
 """
 import json
 import pathlib
@@ -18,14 +17,33 @@ if str(SCRIPTS_ROOT) not in sys.path:
 import self_check  # type: ignore[import-not-found]
 
 
-def _fa_with_scores(*pairs):
-    """构造 filter_audit_json，score_line reason_counts 含 '最终分 X 低于有效线 Y'。"""
-    score_line = {f"rule_{i}": f"最终分 {x} 低于有效线 {y}" for i, (x, y) in enumerate(pairs)}
+def _fa_with_scores(*pairs, as_keys: bool = True):
+    """构造 filter_audit_json。as_keys=True 模拟生产（key=文案）；False 模拟旧夹具（value=文案）。"""
+    if as_keys:
+        score_line = {f"最终分 {x} 低于有效线 {y}": 1 for x, y in pairs}
+    else:
+        score_line = {
+            f"rule_{i}": f"最终分 {x} 低于有效线 {y}" for i, (x, y) in enumerate(pairs)
+        }
     return json.dumps({"reason_counts": {"score_line": score_line}})
 
 
 def test_parse_max_candidate_score_picks_highest():
     fa = _fa_with_scores((73.16, 89.55), (69.79, 101.35), (76.0, 89.55))
+    assert self_check._parse_max_candidate_score(fa) == 76.0
+
+
+def test_parse_max_candidate_score_production_keys():
+    """生产格式：文案在 key、计数在 value。"""
+    fa = _fa_with_scores((73.16, 89.55), (69.79, 101.35), as_keys=True)
+    stats = self_check._parse_score_line_gate_stats(fa)
+    assert stats["max_candidate_score"] == 73.16
+    assert stats["max_effective_line"] == 101.35
+
+
+def test_parse_max_candidate_score_legacy_values():
+    """旧夹具：文案在 value。"""
+    fa = _fa_with_scores((73.16, 89.55), (76.0, 90.0), as_keys=False)
     assert self_check._parse_max_candidate_score(fa) == 76.0
 
 
@@ -43,7 +61,6 @@ def test_parse_max_candidate_score_invalid_json():
 
 
 def test_parse_max_candidate_score_no_score_line_key():
-    # reason_counts 无 score_line 段 → 无匹配 → None
     fa = json.dumps({"reason_counts": {"prefilter_skill": {"x": "未命中"}}})
     assert self_check._parse_max_candidate_score(fa) is None
 
@@ -64,11 +81,16 @@ class _FakeDB:
         return _FakeResult(self._row)
 
 
-def test_fetch_gate_blocked_detail_returns_line_and_max():
+def test_fetch_gate_blocked_detail_prefers_audit_effective_line():
+    """有效线取 audit 文案最高值，非 score_line 列 base。"""
     fa = _fa_with_scores((73.16, 89.55), (69.79, 101.35))
-    db = _FakeDB((89.55, fa))  # (score_line 列, filter_audit_json)
+    # 列 base=72，audit 有效线最高 101.35，最高候选 73.16
+    db = _FakeDB((72.0, fa, None))
     det = self_check._fetch_gate_blocked_detail(db, "chip-single-peak-breakout")
-    assert det == {"effective_line": 89.55, "max_candidate_score": 73.16}
+    assert det is not None
+    assert det["max_candidate_score"] == 73.16
+    assert det["effective_line"] == 101.35
+    assert det["base_score_line"] == 72.0
 
 
 def test_fetch_gate_blocked_detail_no_row_returns_none():
