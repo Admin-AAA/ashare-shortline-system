@@ -321,3 +321,40 @@ def test_forward_blocked_includes_soft_oscillation_ban():
     assert "rec_20260716_soft" in blocked  # soft ban 路 3
     # overnight 强势失败：不该被弱市 veto 拦
     assert "rec_20260716_hard" not in blocked
+
+
+def test_forward_kept_stats_flags_residual_low_line():
+    """T20：三路覆盖后 kept 中 base_score_line<72 必须点名 residual_low。"""
+    low_fs = {
+        "code": "600001",
+        "score_line_meta": {"base_score_line": 55.0, "market_base": "结构性强势"},
+    }
+    hard_fs = {
+        "code": "600002",
+        "score_line_meta": {"base_score_line": 72.0, "market_base": "结构性强势"},
+    }
+    # 不进 blocked（unknown skill + 非 soft@震荡）
+    rows = [
+        _row("rec_20260716_low1", "failed", -5.0, low_fs, "nonexistent-skill"),
+        _row("rec_20260716_low2", "success", 4.0, low_fs, "nonexistent-skill"),
+        _row("rec_20260716_ok1", "success", 4.0, hard_fs, "nonexistent-skill"),
+        _row("rec_20260716_ok2", "failed", -5.0, hard_fs, "nonexistent-skill"),
+        _row("rec_20260716_ok3", "success", 4.0, hard_fs, "nonexistent-skill"),
+    ]
+    blocked: set = set()  # 无 strategy 覆盖
+    stats = self_check._forward_veto_kept_stats(rows, blocked)
+    assert stats is not None
+    assert stats["n"] == 5
+    assert stats["residual_low_n"] == 2
+    assert stats["clean_n"] == 3
+    assert stats["clean_wr"] is not None
+    # clean: 2 success / 3 = 66.7%
+    assert stats["clean_wr"] == 66.7
+
+
+def test_base_score_line_from_fs():
+    assert self_check._base_score_line_from_fs(
+        {"score_line_meta": {"base_score_line": 55}}
+    ) == 55.0
+    assert self_check._base_score_line_from_fs({}) is None
+    assert self_check._base_score_line_from_fs({"score_line_meta": {}}) is None

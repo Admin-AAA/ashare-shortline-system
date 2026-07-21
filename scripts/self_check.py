@@ -2270,41 +2270,74 @@ def _print_residual_poison_zone(uncovered: list[dict], success_items: list[dict]
           'dragon_tiger_nb/roe 三连伪影实证）')
 
 
+def _base_score_line_from_fs(fs: dict) -> float | None:
+    """从 feature_snapshot.score_line_meta.base_score_line 取 run 基线。
+
+    生产写入与 recommendation_runs.score_line 一致（实证 mismatch=0）。
+    用于在 7-tuple 覆盖口径下识别低线污染，无需扩展 SQL 行形状。
+    """
+    meta = (fs or {}).get("score_line_meta") or {}
+    v = meta.get("base_score_line")
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def _forward_veto_kept_stats(
     fwd_rows: list,
     blocked_rids: set,
     *,
-    pure_low_keys: set[tuple] | None = None,
+    score_floor: float = FORMAL_SCORE_LINE_FLOOR,
 ) -> dict | None:
-    """纯函数：前瞻窗口剔除 blocked 失败后算净 WR/PL，并统计仍残留 pure 低线污染。
+    """纯函数：前瞻窗口剔除 blocked 失败后算净 WR/PL，并拆 pure 低线残留。
 
-    pure_low_keys: (code, trade_date) 集合；若提供，计入 kept 里仍属 pure 低线的票数
-    （soft ban 已进 blocked，低线污染不在 strategy 覆盖路径，需单独点名）。
+    residual_low = kept 中 base_score_line < score_floor 的票（run 参数污染，
+    不在 strategy 三路覆盖路径）。clean_kept = 剔除 residual_low 后的指标。
+    n < 3 返回 None（噪声大）。
     """
-    kept = [r for r in fwd_rows if not (r[1] == 'failed' and r[0] in blocked_rids)]
+    kept = [r for r in fwd_rows if not (r[1] == "failed" and r[0] in blocked_rids)]
     n = len(kept)
     if n < 3:
         return None
-    wins = [float(r[2]) - ADDITIONAL_COST_PCT for r in kept if r[1] == 'success']
-    losses = [float(r[2]) - ADDITIONAL_COST_PCT for r in kept if r[1] == 'failed']
-    wr = round(len(wins) * 100 / n, 1)
-    win_avg = sum(wins) / len(wins) if wins else 0.0
-    loss_avg = abs(sum(losses) / len(losses)) if losses else 0.0
-    pl = round(win_avg / loss_avg, 2) if loss_avg else 0.0
-    avg = round((sum(wins) + sum(losses)) / n, 2)
-    residual_low = 0
-    if pure_low_keys:
-        # kept rows 未必有 code/trade_date 在固定位置——rid 解析 + 需外部映射
-        # 由调用方传入 rid→(code,td) 时用 keys；此处用 rid 中日期粗分不够
-        # 改：pure_low_keys 若元素是 rid 字符串则直接比
-        residual_low = sum(1 for r in kept if r[0] in pure_low_keys)
+
+    def _net_metrics(items: list) -> dict:
+        wins = [float(r[2]) - ADDITIONAL_COST_PCT for r in items if r[1] == "success"]
+        losses = [float(r[2]) - ADDITIONAL_COST_PCT for r in items if r[1] == "failed"]
+        nn = len(items)
+        wr = round(len(wins) * 100 / nn, 1) if nn else 0.0
+        win_avg = sum(wins) / len(wins) if wins else 0.0
+        loss_avg = abs(sum(losses) / len(losses)) if losses else 0.0
+        pl = round(win_avg / loss_avg, 2) if loss_avg else 0.0
+        avg = round((sum(wins) + sum(losses)) / nn, 2) if nn else 0.0
+        return {"n": nn, "wr": wr, "pl": pl, "avg": avg}
+
+    # residual pure 低线：base_score_line < floor
+    residual_low_rids: set = set()
+    clean_kept: list = []
+    for r in kept:
+        fs = json.loads(r[3]) if r[3] else {}
+        base = _base_score_line_from_fs(fs)
+        if base is not None and base < score_floor:
+            residual_low_rids.add(r[0])
+        else:
+            clean_kept.append(r)
+
+    full = _net_metrics(kept)
+    clean = _net_metrics(clean_kept) if clean_kept else None
     return {
-        "n": n,
-        "wr": wr,
-        "pl": pl,
-        "avg": avg,
+        "n": full["n"],
+        "wr": full["wr"],
+        "pl": full["pl"],
+        "avg": full["avg"],
         "blocked_n": len(blocked_rids),
-        "residual_low_n": residual_low,
+        "residual_low_n": len(residual_low_rids),
+        "clean_n": clean["n"] if clean else 0,
+        "clean_wr": clean["wr"] if clean else None,
+        "clean_pl": clean["pl"] if clean else None,
+        "clean_avg": clean["avg"] if clean else None,
     }
 
 
@@ -2313,7 +2346,7 @@ def _collect_forward_blocked_rids(fwd_rows: list, skills: dict) -> set:
     blocked: set = set()
     for row in fwd_rows:
         rid, label, _ret, fsj, sbj = row[0], row[1], row[2], row[3], row[4]
-        if label != 'failed':
+        if label != "failed":
             continue
         fs = json.loads(fsj) if fsj else {}
         sb = json.loads(sbj) if sbj else []
@@ -2329,32 +2362,28 @@ def _print_forward_veto_counterfactual(rows, skills, win_rate_baseline: float) -
     formal run 含 veto/soft-ban commit 前生成的样本。直接看前瞻盈亏比会误判。
 
     覆盖口径与 _classify_failed_coverage / _failure_is_covered 一致（三路：
-    prefilter + hard_veto/排除 + soft@震荡 ban）。T19：旧实现漏 soft ban，
-    8 笔 soft@震荡 失败仍留在 kept → 低估覆盖、前瞻 veto 反事实仍虚低。
+    prefilter + hard_veto/排除 + soft@震荡 ban）。T19：旧实现漏 soft ban。
 
-    另：pure 低线污染不在 strategy 覆盖路径（是 run 参数污染），剔除 veto/soft 后
-    若 kept 仍含大量 low-line 票，附注 residual_low，指向去污染反事实而非再加 entry。
+    T20：pure 低线污染不在 strategy 覆盖路径（是 run 参数污染）。剔除三路后
+    若 kept 仍含 base_score_line < 72 票，显式 residual_low_n + clean 子集指标，
+    指向去污染反事实而非再加 entry。实证 07-16 前瞻：剔除 11 后 kept 17 中
+    12 为 pure 低线，clean 仅 5 笔仍单日、不足 OOS。
     """
     if not FORWARD_EPOCH:
         return
 
-    fwd = {row[0]: row for row in rows if row[0].startswith('rec_')}
+    fwd = {row[0]: row for row in rows if row[0].startswith("rec_")}
     fwd_rows = [r for r in fwd.values() if _rid_trade_date(r[0]) >= FORWARD_EPOCH]
     if not fwd_rows:
         return
 
     blocked_rids = _collect_forward_blocked_rids(fwd_rows, skills)
-
-    # pure 低线 rid：失败且仅靠 sl 判定需 code+td；从 fs 不够。用 rid 集合：
-    # 对失败 kept 检查是否 soft-ban 已覆盖；低线需外部。这里从 feature 无法得 score_line。
-    # 简化：用 rid 日期 + 是否失败且未 blocked，调用方无法拿 score_line。
-    # 改为在 rows 扩展字段不可行（固定 7-tuple）。
-    # 用 soft ban 已覆盖的对比：blocked 应含 soft；打印 blocked 构成。
     stats = _forward_veto_kept_stats(fwd_rows, blocked_rids)
     if stats is None:
         return
-    pl_tag = '✅' if stats["pl"] >= PL_RATIO_TARGET else (
-        '⚠️' if stats["pl"] < PL_RATIO_BASELINE else ''
+    pl_tag = (
+        "✅" if stats["pl"] >= PL_RATIO_TARGET
+        else ("⚠️" if stats["pl"] < PL_RATIO_BASELINE else "")
     )
     print(
         f'D 项前瞻规则覆盖反事实：前瞻窗口剔除 {stats["blocked_n"]} 笔被覆盖失败'
@@ -2363,11 +2392,28 @@ def _print_forward_veto_counterfactual(rows, skills, win_rate_baseline: float) -
         f'平均收益={stats["avg"]}% '
         f'（对照前瞻未剔除：见上方"D 项(前瞻)"行）'
     )
-    # 若 WR 仍远低于基线且 n 小/单日 → 指向污染与过窄，勿加 entry
-    if stats["wr"] < win_rate_baseline - 10 and stats["n"] < 30:
+    if stats["residual_low_n"] > 0:
+        share = round(stats["residual_low_n"] * 100 / stats["n"], 0)
+        clean_note = ""
+        if stats["clean_n"] > 0 and stats["clean_wr"] is not None:
+            clean_note = (
+                f'；再剔 pure 低线后 n={stats["clean_n"]} '
+                f'WR={stats["clean_wr"]}% 净PL={stats["clean_pl"]}'
+            )
         print(
-            f'     ——覆盖反事实后 WR 仍低：剩余样本可能仍含 pure 低线污染'
-            f'（不在 strategy 覆盖路径）或单日 regime；'
+            f'     ——kept 中 pure 低线残留 {stats["residual_low_n"]}/{stats["n"]}'
+            f'={share:.0f}%（run score_line < {FORMAL_SCORE_LINE_FLOOR}，'
+            f'不在 strategy 覆盖路径）{clean_note}'
+        )
+        if stats["clean_n"] < MIN_OOS_SAMPLE:
+            print(
+                f'     ——clean 仅 {stats["clean_n"]} 笔 <{MIN_OOS_SAMPLE}：'
+                f'覆盖反事实后的低 PL 仍被低线污染/单日主导，'
+                f'非「规则覆盖无效」；与上方去污染反事实交叉看，勿加 entry'
+            )
+    elif stats["wr"] < win_rate_baseline - 10 and stats["n"] < 30:
+        print(
+            f'     ——覆盖反事实后 WR 仍低且 n 小：可能单日 regime；'
             f'与上方「去污染反事实·前瞻」交叉看，勿仅据此加 entry'
         )
 
