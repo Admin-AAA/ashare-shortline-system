@@ -28,6 +28,11 @@ def _route(**kwargs):
         "model": "deepseek-chat",
         "api_key": "stored-key",
         "priority": 1,
+        # ResolvedModelRoute 透传的路由级参数（None=跟随全局默认），测试 fixture 需提供
+        # 否则 get_active_model_routes 访问 row.max_tokens 时 SimpleNamespace 崩
+        "max_tokens": None,
+        "temperature": None,
+        "timeout_seconds": None,
     }
     data.update(kwargs)
     return types.SimpleNamespace(**data)

@@ -348,7 +348,18 @@ async def check_route_availability() -> list[dict]:
                     "model": route.model, "reachable": False, "status_code": None,
                     "model_count": 0, "error": str(exc)[:120]}
 
-    return await asyncio.gather(*[_check(r) for r in routes])
+    results = await asyncio.gather(*[_check(r) for r in routes])
+    # 附带 circuit_breaker 状态（进程内内存单例）：base_url 可达但熔断中时实际调用仍失败。
+    # 让用户区分「配置错（base_url 不可达）」vs「上游故障熔断（可达但 503 累积触发」。
+    try:
+        from app.agents.circuit_breaker import get_circuit_breaker
+        breaker = get_circuit_breaker()
+        for r, route in zip(results, routes):
+            r["circuit"] = breaker.status(route.circuit_key)
+    except Exception:
+        for r in results:
+            r["circuit"] = None
+    return results
 
 
 def has_active_model_routes() -> bool:
