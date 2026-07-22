@@ -393,20 +393,46 @@ function StatusBar({
       {(() => {
         const st = llmHealth?.status ?? null;
         if (!st) return null;
+        const ch = llmHealth?.call_health;
+        const liveDegraded = ch?.any_unhealthy === true;
         const last = llmHealth?.last_review_at ? new Date(llmHealth.last_review_at) : null;
         const hoursAgo = last ? Math.max(0, Math.round((Date.now() - last.getTime()) / 3600000)) : null;
-        const color = st === "ok" ? "var(--market-up)" : st === "stale" ? "var(--warning)" : "var(--market-down)";
+        // 缓存新鲜度决定基础色；但若近期 formal run 的 LLM 实审成功率下降（外部 provider 降级），
+        // 须以「覆盖率降级」覆盖绿色，避免用户看到「正常」却不知部分推荐缺 LLM delta。
+        const color = st === "ok"
+          ? (liveDegraded ? "var(--warning)" : "var(--market-up)")
+          : st === "stale" ? "var(--warning)" : "var(--market-down)";
         const label =
           st === "never" ? "从未审查"
           : st === "stale" ? `静默 ${hoursAgo ?? "?"}h`
+          : liveDegraded ? "覆盖率降级"
           : last ? `${last.getHours().toString().padStart(2, "0")}:${last.getMinutes().toString().padStart(2, "0")} 更新` : "—";
-        const title =
+        let title =
           `AI 审查层状态：${st}\n` +
           `最近成功审查：${llmHealth?.last_review_at ?? "无"}\n` +
           `近 24h 审查次数：${llmHealth?.recent_count_24h ?? 0}\n` +
           `缓存总数：${llmHealth?.total_entries ?? 0}\n` +
-          `模型：${llmHealth?.model ?? "—"}\n` +
-          (st !== "ok" ? "\n⚠️ 审查层可能已停摆（key 失效 / provider 故障），推荐或缺失 LLM delta" : "");
+          `模型：${llmHealth?.model ?? "—"}\n`;
+        if (st !== "ok") {
+          title += "\n⚠️ 审查层可能已停摆（key 失效 / provider 故障），推荐或缺失 LLM delta";
+        }
+        if (liveDegraded) {
+          const minRate = ch?.runs?.length ? Math.min(...ch.runs.map((r) => r.rate)) : null;
+          const reasons = (ch?.runs ?? [])
+            .flatMap((r) => r.top_reasons ?? [])
+            .reduce<Record<string, number>>((acc, x) => {
+              acc[x.reason] = (acc[x.reason] ?? 0) + x.count;
+              return acc;
+            }, {});
+          const reasonStr = Object.entries(reasons)
+            .sort((a, b) => b[1] - a[1])
+            .map(([k, v]) => `${k}:${v}`)
+            .join(" / ");
+          title +=
+            `\n⚠️ 近期 formal run LLM 实审覆盖率下降（最低 ${minRate != null ? minRate.toFixed(0) : "?"}%）` +
+            (reasonStr ? `，主因 ${reasonStr}` : "") +
+            "\n部分候选以规则分直接入选，缺少 LLM delta（strong_support 胜率溢价未生效）";
+        }
         return (
           <>
             <Sep />
