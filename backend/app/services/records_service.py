@@ -139,12 +139,19 @@ def _attach_run_aggregate_returns(db: Session, runs: list[dict[str, Any]]) -> li
     codes = list({r.code for r in recs})
     min_date = min(r.trade_date for r in recs)
 
-    rows = db.scalars(
-        select(DailyKbar)
+    # 只取 _compute_returns 需要的 4 列（code/trade_date/close/pct_chg），不加载 open/high/low/volume
+    # 等（9275 行 × 全列 ORM 实例化是 _attach 慢的主因）。Row 对象支持 .code/.trade_date 属性访问。
+    rows = db.execute(
+        select(
+            DailyKbar.code,
+            DailyKbar.trade_date,
+            DailyKbar.close,
+            DailyKbar.pct_chg,
+        )
         .where(DailyKbar.code.in_(codes), DailyKbar.trade_date >= min_date)
         .order_by(DailyKbar.code.asc(), DailyKbar.trade_date.asc())
     ).all()
-    by_code: dict[str, list[DailyKbar]] = {}
+    by_code: dict[str, list] = {}
     for b in rows:
         by_code.setdefault(b.code, []).append(b)
 

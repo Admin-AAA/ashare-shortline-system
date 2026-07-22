@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.dialects.mysql import insert as mysql_insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.agents.review_runner import run_skill_reviews
 from app.agents.session_registry import AgentSessionRegistry
@@ -582,7 +582,22 @@ def dispatch_workbench_run(db: Session, run_id: str) -> None:
 
 
 def list_runs(db: Session, limit: int = 100) -> list[dict[str, Any]]:
-    stmt = select(RecommendationRun).order_by(RecommendationRun.started_at.desc()).limit(limit)
+    # 列表序列化（serialize_run_summary）只用标量列 + result_summary_json + selected_skills_json，
+    # 不用 params_json/market_snapshot_json/filter_audit_json/request_json（每个几十~几百 KB）。
+    # defer 这4个大字段避免 500 run 传输几十 MB JSON + ORM 实例化（list_runs 1.26s 主因）。
+    # 详情页 get_run_detail 单独加载完整实体。
+    _LIST_DEFERRED = (
+        RecommendationRun.params_json,
+        RecommendationRun.market_snapshot_json,
+        RecommendationRun.filter_audit_json,
+        RecommendationRun.request_json,
+    )
+    stmt = (
+        select(RecommendationRun)
+        .options(*[defer(c) for c in _LIST_DEFERRED])
+        .order_by(RecommendationRun.started_at.desc())
+        .limit(limit)
+    )
     runs = db.scalars(stmt).all()
     _auto_recover_stale_runs(db, runs)
     return _serialize_run_summaries_batched(db, runs)
@@ -2104,6 +2119,32 @@ def _selected_skill_rows(selected_skills: list[dict[str, Any]]) -> list[dict[str
     ]
 
 
+def _hit_rate_from_outcome_tuples(outcomes: list[tuple | None]) -> float:
+    """由轻量 outcome 元组 (entry_triggered, executed_return, close_return) 算 hit_rate。
+
+    与 is_trade_executed + is_accurate_recommendation 口径一致：
+    - executed = entry_triggered 为真
+    - accurate = executed 且 resolved_trade_return > _ADDITIONAL_COST_PCT
+      （resolved_trade_return = executed_return 非 None 否则 close_return）
+    hit_rate = accurate / executed，executed 为空时 0.0。
+
+    提取为纯函数便于单测，防内联计算回归（口径必须与 outcome_service 一致）。
+    """
+    executed_returns = [
+        (exec_ret, close_ret)
+        for (entry_trig, exec_ret, close_ret) in (o for o in outcomes if o)
+        if entry_trig
+    ]
+    if not executed_returns:
+        return 0.0
+    success_count = sum(
+        1
+        for exec_ret, close_ret in executed_returns
+        if (float(exec_ret) if exec_ret is not None else float(close_ret or 0)) > _ADDITIONAL_COST_PCT
+    )
+    return round(success_count / len(executed_returns), 3)
+
+
 def _serialize_run_summaries_batched(db: Session, runs: list[RecommendationRun]) -> list[dict[str, Any]]:
     """批量序列化 Run 摘要，避免 N+1 查询。"""
     if not runs:
@@ -2116,34 +2157,41 @@ def _serialize_run_summaries_batched(db: Session, runs: list[RecommendationRun])
     if preset_ids:
         preset_map = {p.preset_id: p for p in db.scalars(select(Preset).where(Preset.preset_id.in_(preset_ids))).all()}
 
-    # 批量加载所有 run 对应的 Recommendation
-    all_recs = db.scalars(select(Recommendation).where(Recommendation.run_id.in_(run_ids))).all()
-    recs_by_run: dict[str, list[Recommendation]] = {}
-    for rec in all_recs:
-        recs_by_run.setdefault(rec.run_id, []).append(rec)
+    # 批量加载所有 run 对应的 Recommendation —— 只取 recommendation_id/run_id 两列，
+    # 不加载 feature_snapshot/market_context/skill_breakdown/agent_summary 等大 JSON 字段
+    # （每个几十 KB，500 run × 290 recs = 几十 MB 传输 + ORM 实例化，是 list_runs 慢的主因）。
+    # 此处 recs 仅用于关联 outcome（按 recommendation_id）算 hit_rate，不需要 rec 实体的任何字段。
+    rec_rows = db.execute(
+        select(Recommendation.recommendation_id, Recommendation.run_id)
+        .where(Recommendation.run_id.in_(run_ids))
+    ).all()
+    recs_by_run: dict[str, list[str]] = {}
+    all_rec_ids: list[str] = []
+    for rid, run_id in rec_rows:
+        recs_by_run.setdefault(run_id, []).append(rid)
+        all_rec_ids.append(rid)
 
-    # 批量加载所有 Outcome
-    all_rec_ids = [rec.recommendation_id for rec in all_recs]
-    outcome_map: dict[str, RecommendationOutcome] = {}
+    # 批量加载所有 Outcome —— 只取 hit_rate 计算所需列（entry_triggered/executed_return/close_return），
+    # 不加载 outcome_reason/max_return 等明细字段。outcome 表无大 JSON，但仍减列省 ORM 实例化。
+    outcome_map: dict[str, tuple] = {}
     if all_rec_ids:
-        all_outcomes = db.scalars(
-            select(RecommendationOutcome).where(RecommendationOutcome.recommendation_id.in_(all_rec_ids))
+        outcome_rows = db.execute(
+            select(
+                RecommendationOutcome.recommendation_id,
+                RecommendationOutcome.entry_triggered,
+                RecommendationOutcome.executed_return,
+                RecommendationOutcome.close_return,
+            ).where(RecommendationOutcome.recommendation_id.in_(all_rec_ids))
         ).all()
-        for o in all_outcomes:
-            outcome_map[o.recommendation_id] = o
+        for o in outcome_rows:
+            outcome_map[o[0]] = (o[1], o[2], o[3])  # (entry_triggered, executed_return, close_return)
 
     results = []
     for run in runs:
         preset = preset_map.get(run.preset_id) if run.preset_id else None
-        run_recs = recs_by_run.get(run.run_id, [])
-        run_outcomes = [
-            outcome
-            for rec in run_recs
-            for outcome in [outcome_map.get(rec.recommendation_id)]
-            if outcome is not None and is_trade_executed(outcome)
-        ]
-        success_count = sum(1 for outcome in run_outcomes if is_accurate_recommendation(outcome))
-        hit_rate = round(success_count / len(run_outcomes), 3) if run_outcomes else 0.0
+        run_rec_ids = recs_by_run.get(run.run_id, [])
+        run_outcomes = [outcome_map.get(rid) for rid in run_rec_ids if rid in outcome_map]
+        hit_rate = _hit_rate_from_outcome_tuples(run_outcomes)
         results.append(_serialize_run_summary_from_cache(run, preset, hit_rate))
     return results
 
