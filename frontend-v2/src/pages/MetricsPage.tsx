@@ -622,6 +622,63 @@ function ReviewHealthBlock({
         <HealthRow label="缓存总数" value={String(data.total_entries)} />
         <HealthRow label="模型" value={data.model ?? "—"} />
       </div>
+      {data.call_health && data.call_health.runs.length > 0 && (
+        <CallHealthBlock runs={data.call_health.runs} anyUnhealthy={data.call_health.any_unhealthy} />
+      )}
+    </div>
+  );
+}
+
+/** LLM 调用成功率块：最近5个 formal run 的 skill_review 成功率 + 失败原因。
+ * 与缓存新鲜度正交：缓存命中旧 cache 时新鲜度 ok 但新 run 可能全失败（熔断/余额）。 */
+function CallHealthBlock({
+  runs,
+  anyUnhealthy,
+}: {
+  runs: LlmReviewHealth["call_health"]["runs"];
+  anyUnhealthy: boolean;
+}) {
+  const latest = runs[0]; // 最近的 run（runs 按 started_at DESC）
+  const color = anyUnhealthy ? "var(--market-up)" : "var(--market-down)";
+  return (
+    <div
+      style={{
+        marginTop: "var(--space-3)",
+        paddingTop: "var(--space-3)",
+        borderTop: "1px solid var(--line)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: "var(--space-2)" }}>
+        <span
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: "50%",
+            background: color,
+          }}
+        />
+        <span style={{ fontSize: "var(--text-xs)", fontWeight: 600, color }}>
+          调用成功率 · {anyUnhealthy ? "异常" : "正常"}
+        </span>
+      </div>
+      <div style={{ display: "grid", gap: "var(--space-1)" }}>
+        {runs.slice(0, 3).map((r) => (
+          <div
+            key={r.trade_date}
+            style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}
+          >
+            <span style={{ fontVariantNumeric: "tabular-nums" }}>{r.trade_date}</span>
+            <span style={{ fontVariantNumeric: "tabular-nums", color: r.unhealthy ? "var(--market-up)" : "var(--text)" }}>
+              {r.success}/{r.success + r.failed} ({r.rate.toFixed(0)}%)
+            </span>
+          </div>
+        ))}
+      </div>
+      {latest && latest.top_reasons.length > 0 && (
+        <div style={{ marginTop: "var(--space-1)", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+          失败：{latest.top_reasons.map((x) => `${x.reason}=${x.count}`).join(" ")}
+        </div>
+      )}
     </div>
   );
 }

@@ -141,6 +141,61 @@ def llm_review_health(db: Session) -> dict[str, Any]:
     }
 
 
+def _call_health_rate(succ: int, fail: int) -> tuple[float, bool]:
+    """由 skill_review 成功/失败数算成功率 + 是否低成功率（<80%）。纯函数，可单测。"""
+    total = succ + fail
+    rate = (succ / total * 100) if total > 0 else 0.0
+    return round(rate, 1), rate < 80.0
+
+
+def recent_llm_call_health(db: Session, *, limit: int = 5) -> dict[str, Any]:
+    """最近 N 个全市场 formal run 的 LLM 调用成功率 + 失败原因（run 级过程健康）。
+
+    与 llm_review_health（缓存新鲜度，服务可用性代理）正交：本函数看「skill_review 调用
+    本身是否成功」——formal run 标 agent_runtime=llm 但 skill_review 全失败时（如模型熔断/
+    余额不足），推荐级 delta 全缺失，缓存新鲜度可能仍 ok（命中旧 cache），但实际新 run 的
+    LLM 全失败。本函数从 result_summary_json 提取 skill_review_success/failure_audit，
+    让 LLM 层失效立即可见。
+
+    返回 {runs: [{trade_date, success, failed, rate, unhealthy, top_reasons}], any_unhealthy}。
+    """
+    rows = db.execute(text("""
+        SELECT trade_date,
+               JSON_UNQUOTE(JSON_EXTRACT(result_summary_json, '$.agent_runtime')) AS ar,
+               JSON_UNQUOTE(JSON_EXTRACT(result_summary_json, '$.skill_input_count')) AS input_cnt,
+               JSON_UNQUOTE(JSON_EXTRACT(result_summary_json, '$.pipeline.skill_review_success_count')) AS succ,
+               JSON_UNQUOTE(JSON_EXTRACT(result_summary_json, '$.pipeline.skill_review_failure_audit.failed_count')) AS fail,
+               JSON_UNQUOTE(JSON_EXTRACT(result_summary_json, '$.pipeline.skill_review_failure_audit.reason_counts')) AS reasons
+        FROM recommendation_runs
+        WHERE run_mode='formal' AND status='completed' AND universe_count > 4000
+        ORDER BY started_at DESC LIMIT :lim
+    """), {"lim": limit}).fetchall()
+
+    runs: list[dict[str, Any]] = []
+    any_unhealthy = False
+    for r in rows:
+        td, ar = r[0], r[1]
+        inp = int(r[2]) if r[2] not in (None, "null") else 0
+        succ = int(r[3]) if r[3] not in (None, "null") else 0
+        fail = int(r[4]) if r[4] not in (None, "null") else 0
+        # agent_review_disabled 时 ar != 'llm'，跳过（非 LLM 模式不计入健康判定）
+        if ar != "llm" or inp == 0:
+            continue
+        rate, unhealthy = _call_health_rate(succ, fail)
+        any_unhealthy = any_unhealthy or unhealthy
+        reasons = json.loads(r[5]) if r[5] and r[5] != "null" else {}
+        top_reasons = sorted(reasons.items(), key=lambda x: -int(x[1] or 0))[:3] if reasons else []
+        runs.append({
+            "trade_date": str(td),
+            "success": succ,
+            "failed": fail,
+            "rate": rate,
+            "unhealthy": unhealthy,
+            "top_reasons": [{"reason": k, "count": int(v or 0)} for k, v in top_reasons],
+        })
+    return {"runs": runs, "any_unhealthy": any_unhealthy}
+
+
 def _llm_health_status(
     last_at: datetime | None,
     recent_24h: int,

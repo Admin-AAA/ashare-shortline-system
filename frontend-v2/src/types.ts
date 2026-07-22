@@ -283,13 +283,28 @@ export type WinRateSummary = {
 // LLM 审查层健康度（驾驶舱状态条「AI 审查」徽章数据源 — 北极星 B 项可见性缺口修复）
 // 以 llm_review_cache 最近命中时间为新鲜度代理：缓存只在 LLM 审查【成功】时写入，
 // key 失效 / provider 故障时审查静默停摆 → 推荐缺 LLM delta 而用户无感知。此类型让该状态可见。
+export type LlmCallHealthRun = {
+  trade_date: string;
+  success: number;
+  failed: number;
+  rate: number; // 成功率（0-100）
+  unhealthy: boolean; // 成功率 <80%
+  top_reasons: { reason: string; count: number }[]; // 失败原因 top3
+};
+
+export type LlmCallHealth = {
+  runs: LlmCallHealthRun[];
+  any_unhealthy: boolean; // 最近5个 run 是否有低成功率
+};
+
 export type LlmReviewHealth = {
   last_review_at: string | null; // 最近一次成功 LLM 审查时间（ISO）
   recent_count_24h: number; // 近 24h 成功审查次数
   total_entries: number; // 缓存总条数
   model: string | null; // 最近一次审查使用的模型
-  status: "ok" | "stale" | "never"; // 审查层健康度
+  status: "ok" | "stale" | "never"; // 审查层健康度（缓存新鲜度代理）
   checked_at: string | null;
+  call_health: LlmCallHealth; // 最近5个 formal run 的 skill_review 调用成功率 + 失败原因
 };
 
 /** 时态一致性检查结果（/api/admin/temporal-consistency）：验证推荐/回测数据无时间穿越。 */
