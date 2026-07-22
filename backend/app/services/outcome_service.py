@@ -1676,6 +1676,9 @@ def _compute_horizon_metric_records(db: Session, rows: list[Any]) -> dict[str, d
         dates_by_code.setdefault(code, []).append(str(bar.trade_date))
 
     records: dict[str, dict[int, dict[str, Any]]] = {}
+    import bisect
+    from app.services.outcome_simulation import _resolve_entry as _resolve_entry_fn
+    max_horizon = max(BREAKDOWN_HORIZON_DAYS)
     for row in labeled_rows:
         rec_id = str(getattr(row, "recommendation_id", "") or "")
         code = str(getattr(row, "code", "") or "")
@@ -1683,13 +1686,25 @@ def _compute_horizon_metric_records(db: Session, rows: list[Any]) -> dict[str, d
             continue
         # 预解析 feature_snapshot，3 个 horizon 共享，省 2/3 JSON 解析（705→235 次）
         row_snapshot = _loads(getattr(row, "feature_snapshot_json", None), {})
+        row_bars = bars_by_code.get(code, [])
+        row_dates = dates_by_code.get(code, [])
+        # 预解析 entry：BREAKDOWN_HORIZON_DAYS=[3,5,10] 都 ≥ ENTRY_LOOKAHEAD_DAYS=2，
+        # entry_window=future_bars[:2] 与 horizon_days 无关 → 3 horizon 共享一次 _resolve_entry
+        # （entry 解析占 _simulate_outcome 77% 耗时，省 2/3）。
+        td = str(getattr(row, "trade_date", "") or "")
+        sig_idx = bisect.bisect_left(row_dates, td) if td and row_dates else 0
+        sig_present = sig_idx < len(row_dates) and row_dates[sig_idx] == td
+        future_start = sig_idx + 1 if sig_present else sig_idx
+        future_bars = row_bars[future_start:]
+        pre_entry = _resolve_entry_fn(row, row_snapshot, future_bars, max_horizon) if future_bars else None
         for horizon_days in BREAKDOWN_HORIZON_DAYS:
             simulation = _simulate_outcome(
                 row,
-                bars_by_code.get(code, []),
-                dates_by_code.get(code, []),
+                row_bars,
+                row_dates,
                 horizon_days=horizon_days,
                 feature_snapshot=row_snapshot,
+                pre_resolved_entry=pre_entry,
             )
             if simulation is None:
                 continue

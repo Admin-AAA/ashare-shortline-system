@@ -110,6 +110,8 @@ def _simulate_outcome(
     dates: list[str],
     horizon_days: int,
     feature_snapshot: dict[str, Any] | None = None,
+    *,
+    pre_resolved_entry: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     # _ADDITIONAL_COST_PCT 仍定义在 outcome_service（口径常量，非模拟引擎配置），
     # 延迟 import 避免模块级循环依赖（outcome_service 需要从本模块 re-export 名字）。
@@ -153,7 +155,10 @@ def _simulate_outcome(
             "outcome_reason": f"{recommendation_block_reason}；推荐时已判定不可真实成交，静态窗口结果仅作旁路参考",
         }
 
-    entry_result = _resolve_entry(rec, feature_snapshot, future_bars, horizon_days)
+    # entry 解析：BREAKDOWN_HORIZON_DAYS=[3,5,10] 都 ≥ ENTRY_LOOKAHEAD_DAYS=2，
+    # entry_window=future_bars[:2] 与 horizon_days 无关 → 3 horizon 可共享一次解析。
+    # pre_resolved_entry 由 _compute_horizon_metric_records 预解析传入，省 2/3 _resolve_entry 调用（占模拟 77%）。
+    entry_result = pre_resolved_entry if pre_resolved_entry is not None else _resolve_entry(rec, feature_snapshot, future_bars, horizon_days)
     position_size = _resolve_position_size(feature_snapshot)
 
     if not entry_result.get("triggered"):
