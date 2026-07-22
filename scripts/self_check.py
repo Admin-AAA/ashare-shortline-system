@@ -2507,6 +2507,67 @@ def _check_exit_reason_breakdown(db) -> None:
                   f'可评估放宽 callback（须 P0 backtest 正式验证，勿直接改参数）。')
 
 
+def _backtest_consistency_stats(trades: list) -> dict:
+    """纯函数：由 [(strategy_id, outcome_label, net_return)] 算每策略 backtest 胜率/PL。
+
+    供 check_backtest_consistency 单测，与 DB 解耦。返回 {strategy: {n, wr, avg, pl}}。
+    """
+    from collections import defaultdict
+    buckets: dict[str, list[float]] = defaultdict(list)
+    for strategy, label, net in trades:
+        if strategy is None:
+            continue
+        # success=1, failed=0（按 outcome_label 计胜率）
+        win = 1 if str(label).lower() == "success" else 0
+        ret = float(net or 0)
+        buckets[strategy].append((win, ret))
+    out: dict[str, dict] = {}
+    for strat, vals in buckets.items():
+        n = len(vals)
+        if n == 0:
+            continue
+        wins = sum(v[0] for v in vals)
+        wr = wins / n * 100
+        avg = sum(v[1] for v in vals) / n
+        wsum = sum(v[1] for v in vals if v[1] > 0)
+        lsum = sum(-v[1] for v in vals if v[1] <= 0)
+        pl = wsum / lsum if lsum > 0 else 0.0
+        out[strat] = {"n": n, "wr": round(wr, 1), "avg": round(avg, 2), "pl": round(pl, 2)}
+    return out
+
+
+def check_backtest_consistency(db) -> None:
+    """T2 回测一致性诊断：P0 backtest 胜率 vs LIVE formal，标注口径差异。
+
+    防「backtest 低胜率误判策略差」：backtest 是单日 signal 回测（常含毒区日），
+    与 LIVE formal 全市场多日口径不同。memory backtest-not-formal-evidence 警告：
+    backtest 仅作因子方向参考，有效性以 LIVE formal 为准。
+    本诊断报告 backtest_trades 胜率 + 标注口径，让用户知道差异是设计内非退化。
+    """
+    try:
+        rows = db.execute(text("""
+            SELECT v2.strategy_id, bt.outcome_label,
+                   JSON_UNQUOTE(JSON_EXTRACT(bt.trade_json, '$.net_return_pct')) AS net
+            FROM backtest_trades bt
+            JOIN backtest_runs_v2 v2 ON bt.backtest_id = v2.backtest_id
+            WHERE v2.status = 'completed'
+        """)).fetchall()
+    except Exception as exc:
+        print(f'  ⚠️ backtest 一致性诊断查询失败: {exc}')
+        return
+    if not rows:
+        return
+    stats = _backtest_consistency_stats([(r[0], r[1], r[2]) for r in rows])
+    if not stats:
+        return
+    print('  backtest 一致性（P0 RESEARCH vs LIVE formal，口径不同勿直接对比）:')
+    for strat, s in sorted(stats.items(), key=lambda x: -x[1]["n"]):
+        print(f'    {strat}: n={s["n"]} WR={s["wr"]:.1f}% avg={s["avg"]:+.2f}% PL={s["pl"]:.2f}')
+    print('    ——backtest 是单日 signal 回测（常含毒区日），LIVE formal 是全市场多日 + '
+          '规则覆盖 + LLM 审查；backtest 低胜率非策略退化，有效性以 LIVE formal 为准 '
+          '（[[backtest-not-formal-evidence]]）。')
+
+
 def check_d_rule_coverage(db, win_rate_baseline: float) -> None:
     """D 项规则覆盖前瞻校验：用当前 strategy.yaml 重跑所有 LIVE formal 失败样本，
     统计已被当前规则覆盖（会被 hard_veto / universe / prefilter 排除）的失败笔。
@@ -3524,6 +3585,7 @@ def main() -> None:
         hit_skills = check_c_item(db)
         check_e_item(db, hit_skills)
         check_d_item(db)
+        check_backtest_consistency(db)
     finally:
         db.close()
 
