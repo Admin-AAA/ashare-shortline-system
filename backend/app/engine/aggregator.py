@@ -728,6 +728,17 @@ def aggregate(
     total_w = sum(weights.values())
     weights = {k: v / total_w for k, v in weights.items()}
 
+    # 防御性守卫：任意组件分偶发为 None（如上游客观评分/市场分未就绪，
+    # 曾于 07-22 03:52 正式 run 因市场分 None 触发
+    # `TypeError: type NoneType doesn't define __round__` 使整条管线崩溃）时，
+    # 不得以 None 进入 round()。中性默认值保持评分逻辑不变，纯故障隔离，
+    # 不改动策略/门线/聚合权重。
+    skill_agent_score = float(skill_agent_score if skill_agent_score is not None else 50.0)
+    strategy_rule_score = float(strategy_rule_score if strategy_rule_score is not None else 50.0)
+    market_score = float(market_score if market_score is not None else 50.0)
+    risk_adjustment_score = float(risk_adjustment_score if risk_adjustment_score is not None else 50.0)
+    evidence_quality_score = float(evidence_quality_score if evidence_quality_score is not None else 60.0)
+
     raw_component_scores = {
         "skill_agent": round(skill_agent_score, 2),
         "strategy_rule": round(strategy_rule_score, 2),

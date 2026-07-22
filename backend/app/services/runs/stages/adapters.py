@@ -433,7 +433,7 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
         recent_codes = _recent_recommended_codes(self._db, str(snapshot.get("trade_date") or ""))
         same_day_codes = _same_day_recommended_codes(self._db, str(snapshot.get("trade_date") or ""), None)
         same_day_industry_counts = _same_day_industry_counts(self._db, str(snapshot.get("trade_date") or ""), None)
-        market_score = market_regime_score(dict(snapshot))
+        market_score = market_regime_score(dict(snapshot)) or 50.0  # 防御：市场分未就绪时回退中性值
         calibrated_weights = _load_calibrated_agg_weights(self._db)
 
         cards: list[dict[str, Any]] = []
