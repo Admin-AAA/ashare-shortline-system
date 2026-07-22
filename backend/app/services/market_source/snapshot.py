@@ -29,6 +29,7 @@ from collections import Counter, defaultdict
 from datetime import date, datetime, timezone
 from typing import Any
 
+from app.engine.board_rules import is_price_limit_move
 from app.engine.trading_calendar import latest_allowed_bar_date as _latest_allowed_bar_date
 
 
@@ -64,8 +65,8 @@ def _build_quote_snapshot(
     trade_date = _latest_trade_date_from_quotes(quotes)
     up_count = sum(1 for item in quotes if item.get("pct", 0) > 0)
     down_count = sum(1 for item in quotes if item.get("pct", 0) < 0)
-    limit_up_count = sum(1 for item in quotes if item.get("pct", 0) >= 9.8)
-    limit_down_count = sum(1 for item in quotes if item.get("pct", 0) <= -9.8)
+    limit_up_count = sum(1 for item in quotes if is_price_limit_move(item, up=True))
+    limit_down_count = sum(1 for item in quotes if is_price_limit_move(item, up=False))
     main_industries = _top_industries_from_quotes(quotes)
     breadth = _breadth_from_counts(len(quotes), up_count, down_count, limit_up_count, limit_down_count)
     breadth.update(
@@ -113,8 +114,8 @@ def _build_snapshot(
         trade_date = max(str(item.get("latest_trade_date") or date.today().isoformat()) for item in stocks)
         up_count = sum(1 for item in stocks if item.get("pct", 0) > 0)
         down_count = sum(1 for item in stocks if item.get("pct", 0) < 0)
-        limit_up_count = sum(1 for item in stocks if item.get("pct", 0) >= 9.8)
-        limit_down_count = sum(1 for item in stocks if item.get("pct", 0) <= -9.8)
+        limit_up_count = sum(1 for item in stocks if is_price_limit_move(item, up=True))
+        limit_down_count = sum(1 for item in stocks if is_price_limit_move(item, up=False))
         main_industries = [name for name, _score in _rank_industries(stocks)[:3] if name != "未分类"]
         breadth = _breadth_from_counts(len(stocks), up_count, down_count, limit_up_count, limit_down_count)
         snapshot_id = f"snapshot_real_{quote_source}_{trade_date}_{datetime.now(timezone.utc).replace(tzinfo=None).strftime('%H%M%S')}"

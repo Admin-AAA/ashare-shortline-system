@@ -167,9 +167,9 @@ def test_pledge_stat_quarter_end_rollback_to_first_non_empty():
     assert {row["code"] for row in rows2} == {"000001"}
 
 
-def test_fina_indicator_batch_unsupported_falls_back_to_per_stock_with_cap():
-    # 代理不支持 period 批量（抛异常）→ 回退到 ts_code+period 逐股拉，
-    # 且超过 _FINA_PER_STOCK_CAP 后停止，不无限拉 6000 股。
+def test_fina_indicator_batch_failure_does_not_fan_out_to_per_stock_calls():
+    # 批量源失败代表本轮财务数据不可用；正式 Run 必须快速失败，不能再扩散成
+    # 200 次逐股请求并触发 429，把整个推荐流程拖死。
     stock_frame = pd.DataFrame([
         {"ts_code": "000001.SZ", "end_date": "20260630", "ann_date": "20260710", "roe": 12.0}
     ])
@@ -183,14 +183,14 @@ def test_fina_indicator_batch_unsupported_falls_back_to_per_stock_with_cap():
             calls["per_stock"] += 1
             return stock_frame
 
-    # 请求 250 只股，应只逐股拉前 200 只（cap）
+    # 请求 250 只股也只能有一次批量调用。
     codes = tuple(f"{i:06d}" for i in range(250))
     client = _Client()
     provider = TushareStateProvider(client, session=None)
     rows = provider.fina_indicator(_request(codes, date(2026, 7, 16)))
     assert calls["batch"] == 1
-    assert calls["per_stock"] == 200  # cap 生效，不会拉 250 只
-    assert len(rows) == 200
+    assert calls["per_stock"] == 0
+    assert rows == ()
 
 
 def test_holder_number_nan_and_duplicate_natural_key_handled():

@@ -325,6 +325,39 @@ def score_line_reject_reason(
     return f"最终分 {round(final_score, 2)} 低于有效线 {round(float(effective_line), 2)}"
 
 
+def _data_quality_empty_reason(
+    score_rows: list[dict[str, Any]],
+    recommended_count: int,
+) -> str | None:
+    if recommended_count or not score_rows:
+        return None
+    evaluated = [
+        row
+        for row in score_rows
+        if row.get("effective_score_line") is not None and row.get("quality_cap") is not None
+    ]
+    if not evaluated:
+        return None
+    blocked = [
+        row
+        for row in evaluated
+        if float(row["quality_cap"]) < float(row["effective_score_line"])
+        and (row.get("data_quality") or {}).get("missing_fields")
+    ]
+    if len(blocked) != len(evaluated):
+        return None
+    missing = Counter(
+        str(field)
+        for row in blocked
+        for field in ((row.get("data_quality") or {}).get("missing_fields") or [])
+    )
+    top_missing = ", ".join(field for field, _count in missing.most_common(3)) or "unknown"
+    return (
+        f"data_quality_blocked: {len(blocked)}/{len(evaluated)} 个已评分候选的质量上限低于有效线；"
+        f"主要缺失字段：{top_missing}"
+    )
+
+
 def build_filter_audit(
     *,
     prefilter_audit: dict[str, Any] | None,
@@ -530,7 +563,7 @@ def build_filter_audit(
             passed,
             score_reason,
             final_score=round(final_score, 2),
-            effective_score_line=round(effective_line, 2),
+            effective_score_line=round(effective_line, 2) if effective_line is not None else None,
             score_gap=score_gap,
             evidence_adjustment=score_line_meta.get("evidence_adjustment"),
             execution_adjustment=score_line_meta.get("execution_adjustment"),
@@ -579,12 +612,16 @@ def build_filter_audit(
         recommended_count=len(recommended_cards),
         reason_counts=reason_counts,
     )
-    return {
+    audit = {
         "stage_summary": stage_summary,
         "distributions": distributions,
         "reason_counts": reason_counts,
         "rows": rows,
     }
+    empty_reason = _data_quality_empty_reason(score_rows, len(recommended_cards))
+    if empty_reason:
+        audit["empty_reason"] = empty_reason
+    return audit
 
 
 # ═════════════════════════════════════════════════════════════════════════════

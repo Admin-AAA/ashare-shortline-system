@@ -18,6 +18,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 
+from app.engine.trading_calendar import latest_allowed_bar_date
 from app.services.auxiliary.composition import (
     AuxiliaryProductionComposition,
     INSTITUTIONAL_SURVEY_AUDIT_CONTRACT,
@@ -167,9 +168,10 @@ _EVENT_FEATURE_KEYS = MappingProxyType({
 })
 
 
-def _feature_views(result: AuxiliaryOrchestratorResult) -> Mapping[str, Any]:
+def _feature_views(result: AuxiliaryOrchestratorResult, *, as_of_trade_date: date) -> Mapping[str, Any]:
     """Project declared descriptor views without a legacy refresh/load dispatcher."""
     views: dict[str, Any] = {
+        "as_of_trade_date": as_of_trade_date.isoformat(),
         "limit_up": {}, "broken_limit_up": {}, "concept_sectors": {},
         "capital_flows": {}, "dragon_tigers": {}, "news": {}, "auctions": {},
         "pledges": {}, "broker_recs": {}, "share_floats_upcoming": {},
@@ -193,7 +195,10 @@ def _feature_views(result: AuxiliaryOrchestratorResult) -> Mapping[str, Any]:
         elif isinstance(item.view, Mapping):
             # State loaders declare their own public view keys.  This is a merge of
             # typed loader outputs, not a dataset-name switch or compatibility path.
-            views.update(item.view)
+            view_coverage = item.view.get("_coverage")
+            if isinstance(view_coverage, Mapping):
+                coverage[item.dataset_key].update(view_coverage)
+            views.update({key: value for key, value in item.view.items() if key != "_coverage"})
     views["coverage"] = coverage
     return MappingProxyType(views)
 
@@ -215,6 +220,17 @@ def _date(value: date | str) -> date:
     return date.fromisoformat(str(value)[:10])
 
 
+def resolve_auxiliary_trade_date(
+    requested_trade_date: date | str,
+    *,
+    latest_closed_trade_date: date | str | None = None,
+) -> date:
+    """Clamp daily auxiliary data to the latest fully closed trading day."""
+    requested = _date(requested_trade_date)
+    latest_closed = _date(latest_closed_trade_date or latest_allowed_bar_date())
+    return min(requested, latest_closed)
+
+
 def run_auxiliary_application(
     db: Session,
     *,
@@ -233,7 +249,7 @@ def run_auxiliary_application(
     guarantees pointer/current-state loads cannot accidentally make outbound calls.
     """
     connection = db.connection()
-    effective_date = _date(trade_date)
+    effective_date = resolve_auxiliary_trade_date(trade_date)
     requested = tuple(datasets) if datasets is not None else tuple(
         entry.key for entry in AUXILIARY_DATASET_INVENTORY
     )
@@ -277,7 +293,7 @@ def run_auxiliary_application(
     return AuxiliaryApplicationResult(
         composition=composition,
         orchestrated=orchestrated,
-        feature_views=_feature_views(orchestrated),
+        feature_views=_feature_views(orchestrated, as_of_trade_date=effective_date),
     )
 
 
@@ -386,5 +402,6 @@ __all__ = [
     "capture_institutional_survey_audit",
     "inject_auxiliary_prefilter_flags",
     "load_auxiliary_feature_views",
+    "resolve_auxiliary_trade_date",
     "run_auxiliary_application",
 ]

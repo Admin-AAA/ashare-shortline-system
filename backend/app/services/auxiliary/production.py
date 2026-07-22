@@ -139,6 +139,8 @@ class AuxiliaryDatasetInventoryEntry:
     provider: str | None = None
     endpoint: str | None = None
     dependencies: tuple[str, ...] = ()
+    minimum_instrument_coverage: float = 0.0
+    coverage_instrument_field: str | None = None
     mysql_blockers: tuple[MySQLVerificationRequirement, ...] = (
         MySQLVerificationRequirement.VERSIONED_UNIQUE_MIGRATION,
         MySQLVerificationRequirement.STORED_DATA_DUPLICATE_PREFLIGHT,
@@ -153,6 +155,10 @@ class AuxiliaryDatasetInventoryEntry:
             raise AuxiliaryInventoryError("inventory dependencies 不能自引用或重复")
         if any(not dependency.strip() for dependency in self.dependencies):
             raise AuxiliaryInventoryError("inventory dependency 不能为空")
+        if not 0.0 <= self.minimum_instrument_coverage <= 1.0:
+            raise AuxiliaryInventoryError("minimum_instrument_coverage 必须在 [0, 1] 范围内")
+        if self.minimum_instrument_coverage > 0 and not self.coverage_instrument_field:
+            raise AuxiliaryInventoryError("按股票覆盖率校验必须声明 coverage_instrument_field")
         if not self.freshness_field.strip():
             raise AuxiliaryInventoryError("inventory freshness_field 不能为空")
 
@@ -307,6 +313,7 @@ AUXILIARY_DATASET_INVENTORY: tuple[AuxiliaryDatasetInventoryEntry, ...] = (
     AuxiliaryDatasetInventoryEntry(
         key="capital_flow", category="capital_flow", view_key="market_pool.capital_flows", model=CapitalFlow,
         natural_key=("code", "trade_date"), freshness_field="trade_date",
+        minimum_instrument_coverage=0.90, coverage_instrument_field="code",
         update_policy=_atomic(("main_net_inflow_yi", "super_large_net_inflow_yi", "large_net_inflow_yi", "medium_net_inflow_yi", "small_net_inflow_yi", "main_net_inflow_ratio", "cumulative_inflow_3d_yi", "cumulative_inflow_5d_yi", "cumulative_inflow_10d_yi")),
     ),
     AuxiliaryDatasetInventoryEntry(
@@ -795,6 +802,17 @@ def _mapping_freshness(field: str):
     return extract
 
 
+def _mapping_instrument(field: str | None):
+    if field is None:
+        return None
+
+    def extract(record: Mapping[str, Any]) -> str | None:
+        value = str(record.get(field) or "").strip()
+        return value or None
+
+    return extract
+
+
 def assemble_standard_auxiliary_descriptors(
     adapters: Mapping[str, StandardAuxiliaryDatasetAdapters],
     *,
@@ -831,7 +849,10 @@ def assemble_standard_auxiliary_descriptors(
                 key=entry.key,
                 view_key=entry.view_key,
                 natural_key=entry.natural_key,
-                coverage_policy=CoveragePolicy(),
+                coverage_policy=CoveragePolicy(
+                    minimum_instrument_coverage=entry.minimum_instrument_coverage,
+                    instrument_extractor=_mapping_instrument(entry.coverage_instrument_field),
+                ),
                 refresh_policy=RefreshPolicy(RefreshMode.IF_STALE),
                 fetcher=adapter.fetcher,
                 normalizer=adapter.normalizer,

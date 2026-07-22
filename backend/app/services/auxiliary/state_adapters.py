@@ -128,11 +128,6 @@ def _ts_code(code: str) -> str:
     return f"{code}.{'SH' if code.startswith(('5', '6', '9')) else 'SZ'}"
 
 
-# 逐股兜底上限：财务指标在代理不支持 period 批量时按 ts_code 逐股拉，超过此数
-# 停止（留给每日同步补全），避免宽召回（~6000 股）逐股调用卡死 run。
-_FINA_PER_STOCK_CAP = 200
-
-
 def _row(model: Any) -> dict[str, Any]:
     return {column.name: getattr(model, column.name) for column in model.__table__.columns}
 
@@ -193,6 +188,8 @@ class SQLAlchemyStateRepository:
         conditions: list[Any] = []
         if "code" in table.c and request.requested_codes:
             conditions.append(table.c.code.in_(request.requested_codes))
+        if self._entry.freshness_field == "trade_date":
+            conditions.append(freshness == request.trade_date.isoformat())
         count_stmt = select(func.count()).select_from(table)
         freshness_stmt = select(func.max(freshness)).select_from(table)
         if conditions:
@@ -533,10 +530,8 @@ class TushareStateProvider:
         )
 
     def fina_indicator(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
-        # 财务指标按季度披露（慢变数据）。优先用 period=批量一次拉全市场（1 次调用），
-        # 代理不支持时回退到按 requested_codes 逐股拉（ts_code+period，每股 1 行）。
-        # 逐股回退设有上限 _FINA_PER_STOCK_CAP，防止宽召回（~6000 股）卡死；
-        # 超出上限的留给每日同步补全，run 时走本地优先。
+        # 财务指标按季度披露（慢变数据），只允许 period= 批量拉全市场。
+        # 批量源不可用时如实返回空；禁止扩散成数百次逐股请求并触发 429。
         target = _compact_day(request.trade_date)
         period = _quarter_end_day(request.trade_date)
         wanted = set(request.requested_codes)
@@ -545,41 +540,15 @@ class TushareStateProvider:
         try:
             frame = self._client.fina_indicator(period=period)
         except Exception:
-            frame = None
-        if frame is not None and not frame.empty:
-            if "ann_date" in frame.columns:
-                frame = frame[frame["ann_date"].astype(str) <= target]
-            for _, item in frame.iterrows():
-                code = str(item.get("ts_code") or "").split(".")[0]
-                if len(code) != 6 or (wanted and code not in wanted):
-                    continue
-                end_date = str(item.get("end_date") or "")
-                if not end_date:
-                    continue
-                rows.append({
-                    "code": code,
-                    "end_date": end_date,
-                    "ann_date": str(item.get("ann_date") or ""),
-                    "roe": _number(item.get("roe")),
-                    "grossprofit_margin": _number(item.get("grossprofit_margin")),
-                    "netprofit_margin": _number(item.get("netprofit_margin")),
-                    "netprofit_yoy": _number(item.get("netprofit_yoy")),
-                    "or_yoy": _number(item.get("or_yoy")),
-                    "eps": _number(item.get("eps")),
-                    "bps": _number(item.get("bps")),
-                })
-            return rows
-
-        # 代理不支持 period 批量 → 逐股兜底，加上限防止宽召回卡死
-        codes = [c for c in request.requested_codes if c][:_FINA_PER_STOCK_CAP]
-        for code in codes:
-            try:
-                stock_frame = self._client.fina_indicator(ts_code=_ts_code(code), period=period)
-            except Exception:
+            return ()
+        if frame is None or frame.empty:
+            return ()
+        if "ann_date" in frame.columns:
+            frame = frame[frame["ann_date"].astype(str) <= target]
+        for _, item in frame.iterrows():
+            code = str(item.get("ts_code") or "").split(".")[0]
+            if len(code) != 6 or (wanted and code not in wanted):
                 continue
-            if stock_frame is None or stock_frame.empty:
-                continue
-            item = stock_frame.iloc[0]
             end_date = str(item.get("end_date") or "")
             if not end_date:
                 continue
@@ -703,8 +672,22 @@ class _StateViews:
         return {"capital_flows": {item.code: _row(item) for item in rows}}
 
     def dragon_tiger(self, request: AuxiliaryDatasetRequest) -> Mapping[str, Any]:
-        rows = self._session.scalars(select(DragonTiger).where(DragonTiger.code.in_(request.requested_codes), DragonTiger.trade_date == self._target(request))).all()
-        return {"dragon_tigers": {item.code: _row(item) for item in rows}}
+        target = self._target(request)
+        rows = self._session.scalars(
+            select(DragonTiger).where(DragonTiger.trade_date == target)
+        ).all()
+        wanted = set(request.requested_codes)
+        return {
+            "dragon_tigers": {
+                item.code: _row(item)
+                for item in rows
+                if not wanted or item.code in wanted
+            },
+            "_coverage": {
+                "trade_date_covered": bool(rows),
+                "covered_trade_date": target if rows else None,
+            },
+        }
 
     def margin_detail(self, request: AuxiliaryDatasetRequest) -> Mapping[str, Any]:
         rows = self._session.scalars(select(MarginDetail).where(MarginDetail.code.in_(request.requested_codes), MarginDetail.trade_date == self._target(request))).all()
