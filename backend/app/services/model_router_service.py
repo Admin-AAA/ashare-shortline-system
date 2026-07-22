@@ -299,6 +299,58 @@ def get_active_model_routes() -> list[ResolvedModelRoute]:
         return [r for r in active if r.valid]
 
 
+async def check_route_availability() -> list[dict]:
+    """并发检查每个 enabled 路由的 base_url 可达性 + key 有效性（GET /models）。
+
+    OpenAI 兼容端点标准：GET {base_url}/models 返回模型列表，需 Authorization。
+    轻量（不消耗 chat 额度），5s 超时。返回 [{route_id, name, base_url, model,
+    reachable, status_code, model_count, error}]。
+
+    价值（T8 可观测性）：07-22 LLM 65% 失败但用户不知是 grok-4.5 还是 kimi-k3 的问题。
+    kimi-k3 base_url=api.kimi.com/coding/v1 可疑（标准是 api.moonshot.cn/v1）。
+    本检查让路由可达性可见，运维可快速定位 base_url/key 配置错误。
+    """
+    import asyncio
+    import httpx
+
+    routes = get_active_model_routes()
+
+    async def _check(route: ResolvedModelRoute) -> dict:
+        base = str(route.base_url or "").rstrip("/")
+        url = f"{base}/models"
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(url, headers={"Authorization": f"Bearer {route.api_key}"})
+            model_count = 0
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                    models = data.get("data") or data.get("models") or []
+                    model_count = len(models) if isinstance(models, list) else 0
+                except Exception:
+                    model_count = 0
+            return {
+                "route_id": route.route_id,
+                "name": route.name,
+                "base_url": base,
+                "model": route.model,
+                "reachable": resp.status_code < 500,
+                "status_code": resp.status_code,
+                "model_count": model_count,
+                "error": None if resp.status_code < 500 else f"HTTP {resp.status_code}",
+            }
+        except httpx.TimeoutException:
+            return {"route_id": route.route_id, "name": route.name, "base_url": base,
+                    "model": route.model, "reachable": False, "status_code": None,
+                    "model_count": 0, "error": "timeout (>5s)"}
+        except Exception as exc:
+            return {"route_id": route.route_id, "name": route.name, "base_url": base,
+                    "model": route.model, "reachable": False, "status_code": None,
+                    "model_count": 0, "error": str(exc)[:120]}
+
+    return await asyncio.gather(*[_check(r) for r in routes])
+
+
 def has_active_model_routes() -> bool:
     """是否存在至少一条可用（自带 key/base_url/model）的模型路由。"""
     try:

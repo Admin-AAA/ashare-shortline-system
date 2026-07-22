@@ -36,3 +36,17 @@ def get_llm_review_health(db: Session = Depends(get_db)) -> dict:
     health = llm_review_health(db)
     health["call_health"] = recent_llm_call_health(db)
     return health
+
+
+@router.get("/route-health")
+async def get_llm_route_health() -> list[dict]:
+    """模型路由可用性检查：对每个 enabled 路由发 GET /models（轻量，不消耗 chat 额度）。
+
+    返回每路由的 reachable / status_code / model_count / error。让用户看到 base_url
+    是否可达、key 是否有效——07-22 LLM 65% 失败时定位是 grok-4.5 还是 kimi-k3 的问题，
+    以及 kimi-k3 base_url=api.kimi.com/coding/v1 是否正确（标准 api.moonshot.cn/v1）。
+
+    异步端点 + 5s 超时 + 并发检查，不阻塞主线程。
+    """
+    from app.services.model_router_service import check_route_availability
+    return await check_route_availability()
