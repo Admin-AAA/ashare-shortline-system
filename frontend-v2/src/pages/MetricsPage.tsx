@@ -9,6 +9,7 @@ import type {
   DNetBreakdown,
   FilterEffectiveness,
   LlmReviewHealth,
+  LlmRouteHealthItem,
   MetricsOverview,
   PrecisionAtKRow,
   ScoreLineStatsRow,
@@ -197,6 +198,10 @@ function SystemHealthPanel() {
     () => api.llmReviewHealth(),
     [],
   );
+  const { data: routes, loading: lRoutes, error: eRoutes } = useApi<LlmRouteHealthItem[]>(
+    () => api.llmRouteHealth(),
+    [],
+  );
   const { data: temporal, loading: lT, error: eT } = useApi<TemporalConsistency>(
     () => api.temporalConsistency(),
     [],
@@ -224,6 +229,7 @@ function SystemHealthPanel() {
         }}
       >
         <ReviewHealthBlock data={review} loading={lR} error={eR} />
+        <RouteHealthBlock data={routes} loading={lRoutes} error={eRoutes} />
         <TemporalConsistencyBlock data={temporal} loading={lT} error={eT} />
         <DDiagnosticsBlock data={dDiag} loading={lD} error={eD} />
         <PhaseInformationBlock data={dDiag} loading={lD} error={eD} />
@@ -679,6 +685,64 @@ function CallHealthBlock({
           失败：{latest.top_reasons.map((x) => `${x.reason}=${x.count}`).join(" ")}
         </div>
       )}
+    </div>
+  );
+}
+
+/** 模型路由可用性块：每路由 base_url 可达性 + circuit_breaker 熔断状态。
+ * 区分「配置错（base_url 不可达）」vs「上游故障熔断（可达但 503 累积触发）」。 */
+function RouteHealthBlock({
+  data,
+  loading,
+  error,
+}: {
+  data: LlmRouteHealthItem[] | null | undefined;
+  loading: boolean;
+  error: unknown;
+}) {
+  if (loading) return <CardSkeleton count={3} />;
+  if (error) return <HealthErrorNote msg="路由可用性获取失败" />;
+  if (!data || data.length === 0) return null;
+
+  return (
+    <div
+      style={{
+        background: "var(--surface-1)",
+        border: "1px solid var(--line)",
+        borderRadius: "var(--radius-sm, 6px)",
+        padding: "var(--space-3)",
+      }}
+    >
+      <div style={{ marginBottom: "var(--space-3)", fontSize: "var(--text-sm)", fontWeight: 600 }}>
+        模型路由可用性
+      </div>
+      <div style={{ display: "grid", gap: "var(--space-2)" }}>
+        {data.map((r) => {
+          const circuit = r.circuit;
+          const blocked = circuit?.blocked ?? false;
+          const color = !r.reachable
+            ? "var(--market-up)"
+            : blocked
+              ? "var(--warning)"
+              : "var(--market-down)";
+          return (
+            <div key={r.route_id} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: color }} />
+                <span style={{ fontSize: "var(--text-xs)", fontWeight: 600, color }}>
+                  {r.name} · {r.model}
+                </span>
+              </div>
+              <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", paddingLeft: "var(--space-3)" }}>
+                {r.reachable
+                  ? `可达 (${r.status_code}, ${r.model_count} 模型)`
+                  : `不可达: ${r.error ?? "未知"}`}
+                {blocked && ` · 熔断中（连续失败 ${circuit?.consecutive_failures}）`}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

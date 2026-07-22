@@ -13,6 +13,7 @@ import type {
   OutcomeSummary,
   WinRateSummary,
   LlmReviewHealth,
+  LlmRouteHealthItem,
   TemporalConsistency,
   DDiagnostics,
   DNetBreakdown,
@@ -250,6 +251,7 @@ export const api = {
     request<WinRateSummary>(`/api/recommendations/win-rate?window_days=${windowDays}`),
   // LLM 审查层健康度（驾驶舱状态条「AI 审查」徽章）—— 北极星 B 项可见性缺口修复
   llmReviewHealth: () => request<LlmReviewHealth>("/api/llm/review-health"),
+  llmRouteHealth: () => request<LlmRouteHealthItem[]>("/api/llm/route-health"),
   watchRecommendation: (id: string, payload: { watch_status?: string; note?: string | null }) =>
     request<{ recommendation_id: string; watch_status: string; note?: string | null }>(`/api/recommendations/${id}/watch`, json("POST", payload)),
   ignoreRecommendation: (id: string, payload?: { note?: string | null }) =>

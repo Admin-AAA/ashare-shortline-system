@@ -307,6 +307,26 @@ export type LlmReviewHealth = {
   call_health: LlmCallHealth; // 最近5个 formal run 的 skill_review 调用成功率 + 失败原因
 };
 
+/** 模型路由可用性检查结果（/api/llm/route-health） */
+export type LlmRouteCircuit = {
+  model_id: string;
+  consecutive_failures: number;
+  blocked: boolean; // 熔断中
+  blocked_until: number | null;
+} | null;
+
+export type LlmRouteHealthItem = {
+  route_id: string;
+  name: string;
+  base_url: string;
+  model: string;
+  reachable: boolean; // base_url 可达（GET /models 返回 <500）
+  status_code: number | null;
+  model_count: number; // /models 返回的模型数
+  error: string | null;
+  circuit: LlmRouteCircuit; // circuit_breaker 状态
+};
+
 /** 时态一致性检查结果（/api/admin/temporal-consistency）：验证推荐/回测数据无时间穿越。 */
 export type TemporalConsistency = {
   status: "no_data" | "completed" | string;
