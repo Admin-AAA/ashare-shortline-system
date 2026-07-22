@@ -63,3 +63,21 @@ def test_empty_error_falls_through():
 def test_genuine_parse_error_still_agent_review_error():
     """真正的解析错误（JSONDecodeError 文本）仍归 agent_review_error。"""
     assert skill_review_error_bucket("Expecting value: line 1 column 1 (char 0)") == "agent_review_error"
+
+
+def test_connection_error_buckets_as_network_error():
+    """Connection error 归 model_network_error（非 agent_review_error）。
+
+    实证 07-22：14 个 agent_review_error 中部分是 Connection error（grok-4.5 503 后
+    failover 到 kimi-k3 也 Connection error），误诊为「查 prompt 格式」。
+    """
+    assert skill_review_error_bucket("Connection error.") == "model_network_error"
+    assert skill_review_error_bucket("Skill Agent 直接审查失败: 已尝试 1 个模型路由；默认模型 gpt-5.4 (grok-4.5) 失败: Connection error.") == "model_network_error"
+
+
+def test_connection_reset_buckets_as_network_error():
+    assert skill_review_error_bucket("Connection reset by peer") == "model_network_error"
+
+
+def test_remote_protocol_buckets_as_network_error():
+    assert skill_review_error_bucket("RemoteProtocolError: Server disconnected") == "model_network_error"

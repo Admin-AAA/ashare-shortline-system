@@ -581,8 +581,9 @@ def _check_llm_call_health(db) -> None:
         print('    ——LLM 成功率 <80%：检查模型路由配置/余额/熔断（model_route_config 页），')
         print('      失败原因 reason_counts：circuit_open=连续失败熔断(查模型可用性/key/余额)、')
         print('      payment_required=余额不足、model_upstream_5xx=上游5xx(查 provider 稳定性/换路由)、')
-        print('      timeout=模型超时(降并发或加超时)、agent_review_error=解析错误(查 prompt 格式)。')
-        print('      注：model_upstream_5xx 是外部 provider 不稳定（502/503/504），非代码/ prompt 问题；')
+        print('      timeout=模型超时(降并发或加超时)、model_network_error=网络层错误(Connection error/查网络/换路由)、')
+        print('      agent_review_error=解析错误(查 prompt 格式/JSON 输出)。')
+        print('      注：model_upstream_5xx/model_network_error 是外部 provider/网络不稳定，非代码/ prompt 问题；')
         print('      双路由已配置时 failover 会自动切到备用路由，若仍失败=两端同时降级，需 provider 恢复或加健康路由。')
 
 

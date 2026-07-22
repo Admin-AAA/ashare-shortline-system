@@ -215,6 +215,12 @@ def skill_review_error_bucket(error: Any) -> str:
         )
     ):
         return "model_upstream_5xx"
+    # 网络层错误（Connection error / read timeout / remote protocol）：此前被漏到
+    # agent_review_error 兜底，但根因是网络/provider 不可达，非 LLM 输出格式问题。
+    # 实证 07-22：14 个 agent_review_error 中部分是 Connection error（grok-4.5 503 后
+    # failover 到 kimi-k3 也 Connection error），误诊为「查 prompt 格式」。
+    if any(s in lowered for s in ("connection error", "connection reset", "remoteprotocolerror", "read timeout")):
+        return "model_network_error"
     if "timeout" in lowered or "超时" in text:
         return "model_timeout"
     if "熔断" in text or "circuit" in lowered:
