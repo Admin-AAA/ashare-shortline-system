@@ -28,6 +28,8 @@ from typing import Any
 __all__ = [
     "MAIN_BOARD_LIMIT_UP_PCT",
     "limit_pct_for_code",
+    "limit_pct_for_stock",
+    "is_price_limit_move",
     "limit_price",
     "previous_close_from_price",
     "main_board_up_limit",
@@ -47,11 +49,28 @@ MAIN_BOARD_LIMIT_UP_PCT = 0.10
 def limit_pct_for_code(code: str) -> float:
     """按证券代码前缀返回涨跌停幅度（百分数）：创业 / 科创 20，北交 30，其余主板 10。"""
     normalized = str(code or "")
-    if normalized.startswith(("300", "301", "688")):
+    if normalized.startswith(("300", "301", "688", "689")):
         return 20.0
     if normalized.startswith(("8", "4")):
         return 30.0
     return 10.0
+
+
+def limit_pct_for_stock(stock: dict[str, Any]) -> float:
+    """按股票完整身份返回涨跌停幅度；ST 优先，其次北交所和代码板位。"""
+    name = str(stock.get("name") or "").upper()
+    if bool(stock.get("is_st")) or "ST" in name:
+        return 5.0
+    if str(stock.get("exchange") or "").upper() == "BJ" or str(stock.get("market") or "") == "北交所":
+        return 30.0
+    return limit_pct_for_code(str(stock.get("code") or ""))
+
+
+def is_price_limit_move(stock: dict[str, Any], *, up: bool) -> bool:
+    """按板位判断涨跌幅是否已触及涨/跌停，保留 0.2 个百分点的行情舍入容差。"""
+    threshold = limit_pct_for_stock(stock) - 0.2
+    pct = _as_float(stock.get("pct", stock.get("pct_chg", 0)))
+    return pct >= threshold if up else pct <= -threshold
 
 
 def limit_price(prev_close: float, pct: float, *, up: bool) -> float:

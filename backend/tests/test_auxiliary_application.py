@@ -17,6 +17,7 @@ from app.services.auxiliary.application import (
     InstitutionalSurveyAuditRequest,
     capture_institutional_survey_audit,
     run_auxiliary_application,
+    resolve_auxiliary_trade_date,
 )
 from app.services.auxiliary.composition import (
     EVENT_SNAPSHOT_CONTRACTS,
@@ -163,6 +164,11 @@ def _session():
     engine = create_engine("sqlite:///:memory:")
     snapshot_metadata.create_all(engine)
     return sessionmaker(bind=engine)()
+
+
+def test_auxiliary_trade_date_never_exceeds_latest_closed_trade_date() -> None:
+    assert resolve_auxiliary_trade_date("2026-07-22", latest_closed_trade_date="2026-07-21") == date(2026, 7, 21)
+    assert resolve_auxiliary_trade_date("2026-07-20", latest_closed_trade_date="2026-07-21") == date(2026, 7, 20)
 
 
 def test_application_routes_the_complete_frozen_inventory_without_event_table_fallback() -> None:

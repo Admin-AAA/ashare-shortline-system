@@ -637,6 +637,66 @@ def test_auxiliary_enrichment_marks_checked_empty_as_covered():
     assert stock["theme_tags"] == ["银行"]
 
 
+def test_auxiliary_enrichment_accepts_nested_dragon_tiger_partition_coverage():
+    from app.services.feature_builder import _enrich_with_auxiliary_data
+
+    stock = _stock(
+        code="000001",
+        industry="银行",
+        data_quality={"missing_fields": ["dragon_tiger"]},
+    )
+    aux = {
+        "dragon_tigers": {},
+        "coverage": {
+            "dragon_tiger": {
+                "trade_date_covered": True,
+                "covered_trade_date": "2026-07-21",
+            }
+        },
+    }
+
+    _enrich_with_auxiliary_data(
+        [stock],
+        None,
+        _snapshot(trade_date="2026-07-21"),
+        _aux_override=aux,
+    )
+
+    assert "dragon_tiger" not in stock["data_quality"]["missing_fields"]
+    assert stock["data_quality"]["dragon_tiger_checked_empty"] is True
+
+
+def test_auxiliary_enrichment_uses_auxiliary_as_of_date_for_checked_empty():
+    from app.services.feature_builder import _enrich_with_auxiliary_data
+
+    stock = _stock(
+        code="000001",
+        industry="银行",
+        data_quality={"missing_fields": ["dragon_tiger"]},
+    )
+    aux = {
+        "as_of_trade_date": "2026-07-21",
+        "dragon_tigers": {},
+        "coverage": {
+            "dragon_tiger": {
+                "trade_date_covered": True,
+                "covered_trade_date": "2026-07-21",
+            }
+        },
+    }
+
+    _enrich_with_auxiliary_data(
+        [stock],
+        None,
+        _snapshot(trade_date="2026-07-22"),
+        _aux_override=aux,
+    )
+
+    assert "dragon_tiger" not in stock["data_quality"]["missing_fields"]
+    assert stock["data_quality"]["dragon_tiger_checked_empty"] is True
+    assert stock["data_quality"]["dragon_tiger_checked_trade_date"] == "2026-07-21"
+
+
 def test_auxiliary_enrichment_populates_theme_tags_from_concepts():
     from app.services.feature_builder import _enrich_with_auxiliary_data
 

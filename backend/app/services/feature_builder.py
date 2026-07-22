@@ -804,13 +804,14 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
     holder_trade_map = aux.get("holder_trades", {})
     survey_map = aux.get("surveys", {})
     coverage = aux.get("coverage", {}) or {}
+    auxiliary_trade_date = str(aux.get("as_of_trade_date") or trade_date)
     audit = (snapshot.get("breadth") or {}).get("auxiliary_data_audit") or {}
     checked_news_codes = _checked_codes_from_audit(audit.get("news"))
     checked_capital_flow_codes = _checked_codes_from_audit(audit.get("capital_flows"))
     dragon_tiger_covered = _dragon_tiger_trade_date_covered(
         coverage,
         audit.get("dragon_tiger"),
-        trade_date,
+        auxiliary_trade_date,
     )
 
     for stock in stocks:
@@ -864,14 +865,14 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
                 round(min(1.0, max(-1.0, net_amount_yi / amount_yi)), 4) if amount_yi else 0.0
             )
             missing_fields.discard("dragon_tiger")
-            data_quality["dragon_tiger_checked_trade_date"] = dt.get("trade_date") or trade_date
+            data_quality["dragon_tiger_checked_trade_date"] = dt.get("trade_date") or auxiliary_trade_date
         else:
             stock["dragon_tiger_is_on_list"] = False
             stock["dragon_tiger_recent_count"] = 0
             if dragon_tiger_covered:
                 missing_fields.discard("dragon_tiger")
                 data_quality["dragon_tiger_checked_empty"] = True
-                data_quality["dragon_tiger_checked_trade_date"] = trade_date
+                data_quality["dragon_tiger_checked_trade_date"] = auxiliary_trade_date
             else:
                 missing_fields.add("dragon_tiger")
 
@@ -1130,6 +1131,11 @@ def _dragon_tiger_trade_date_covered(
 ) -> bool:
     if bool(coverage.get("dragon_tiger_trade_date_covered")):
         return True
+    dataset_coverage = coverage.get("dragon_tiger")
+    if isinstance(dataset_coverage, dict):
+        covered_trade_date = str(dataset_coverage.get("covered_trade_date") or "")
+        if bool(dataset_coverage.get("trade_date_covered")) and covered_trade_date == trade_date:
+            return True
     if not isinstance(audit_row, dict):
         return False
     status = str(audit_row.get("status") or "")

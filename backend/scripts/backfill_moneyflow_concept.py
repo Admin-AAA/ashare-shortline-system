@@ -22,6 +22,20 @@ from scripts.tushare_init import get_pro
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("backfill_moneyflow_concept")
 
+MONEYFLOW_MIN_COVERAGE_RATIO = 0.90
+
+
+def moneyflow_coverage_sufficient(
+    moneyflow_count: int,
+    daily_universe_count: int,
+    *,
+    minimum_ratio: float = MONEYFLOW_MIN_COVERAGE_RATIO,
+) -> bool:
+    """资金流覆盖当日日 K 股票池达到最低比例才算完整。"""
+    if daily_universe_count <= 0:
+        return False
+    return moneyflow_count / daily_universe_count >= minimum_ratio
+
 
 def get_trading_dates(db, start_date: str, end_date: str) -> list[str]:
     trading_dates = db.execute(
@@ -39,20 +53,32 @@ def backfill_moneyflow(pro, db, start_date: str, end_date: str) -> dict:
     skipped = 0
     errors = 0
 
-    existing_dates = set(
-        db.execute(
-            select(CapitalFlow.trade_date)
-            .distinct()
-        ).scalars().all()
-    )
-
     trading_dates = get_trading_dates(db, start_date, end_date)
-    target_dates = [td for td in trading_dates if td not in existing_dates
-                    or db.scalar(select(func.count()).select_from(CapitalFlow)
-                                 .where(CapitalFlow.trade_date == td)) < 100]
+    daily_counts = dict(
+        db.execute(
+            select(DailyKbar.trade_date, func.count(func.distinct(DailyKbar.code)))
+            .where(DailyKbar.trade_date >= start_date, DailyKbar.trade_date <= end_date)
+            .group_by(DailyKbar.trade_date)
+        ).all()
+    )
+    moneyflow_counts = dict(
+        db.execute(
+            select(CapitalFlow.trade_date, func.count(func.distinct(CapitalFlow.code)))
+            .where(CapitalFlow.trade_date >= start_date, CapitalFlow.trade_date <= end_date)
+            .group_by(CapitalFlow.trade_date)
+        ).all()
+    )
+    target_dates = [
+        td
+        for td in trading_dates
+        if not moneyflow_coverage_sufficient(
+            int(moneyflow_counts.get(td, 0)),
+            int(daily_counts.get(td, 0)),
+        )
+    ]
 
     logger.info("资金流向回填: %d 个待补交易日", len(target_dates))
-    if not target_dates and all(td in existing_dates for td in trading_dates):
+    if not target_dates:
         logger.info("  资金流向数据已完整，跳过")
         return {"stored": 0, "skipped": len(trading_dates), "errors": 0}
 
