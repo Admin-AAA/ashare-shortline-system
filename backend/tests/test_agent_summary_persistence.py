@@ -71,3 +71,61 @@ def test_build_agent_summary_partial_output_only_extracts_present_fields():
     assert summary["score_delta"] == 0.0
     assert "summary" not in summary
     assert "action" not in summary
+
+
+def test_build_agent_summary_extracts_risks_to_top_level():
+    """LLM risks 提到顶层（B 项决策链一屏可见，前端列表不必翻 logs[0].output.risks）。
+
+    回归根因：07-22 推荐 300039 agent_summary 顶层缺 risks，只有 logs[0].output.risks。
+    前端列表/自检读顶层 $.risks 拿到空，决策链断层。
+    """
+    logs = [{"agent_name": "x", "output": _llm_output(risks=["板块梯队不足", "资金面中性"])}]
+    summary = _build_agent_summary(_card(logs))
+    assert summary["risks"] == ["板块梯队不足", "资金面中性"]
+
+
+def test_build_agent_summary_extracts_supports_preferring_supports_over_evidence():
+    """supports 优先于 evidence（review_runner 已把 evidence 映射为 supports）。
+
+    LLM review 同时存 evidence 与 supports，顶层 supports 取 supports 字段
+    （若存在），否则兜底 evidence。
+    """
+    logs = [{"agent_name": "x", "output": _llm_output(
+        evidence=["evidence1"],
+        supports=["supports1", "supports2"],
+    )}]
+    summary = _build_agent_summary(_card(logs))
+    assert summary["supports"] == ["supports1", "supports2"]
+
+
+def test_build_agent_summary_supports_falls_back_to_evidence():
+    """supports 字段缺失时用 evidence 兜底（兼容旧 review 只有 evidence）。"""
+    logs = [{"agent_name": "x", "output": {"stance": "support", "evidence": ["仅evidence"]}}]
+    summary = _build_agent_summary(_card(logs))
+    assert summary["supports"] == ["仅evidence"]
+
+
+def test_build_agent_summary_supports_absent_when_both_missing():
+    """evidence 和 supports 都没有时不强塞顶层 supports（避免空列表混淆）。"""
+    logs = [{"agent_name": "x", "output": {"stance": "neutral"}}]
+    summary = _build_agent_summary(_card(logs))
+    assert "supports" not in summary
+
+
+def test_build_agent_summary_fallback_prelim_extracts_supports_risks():
+    """LLM 失败走 fallback_prelim 时也提取 supports/risks（降级 review 有这俩）。"""
+    card = {
+        "agent_logs": [],
+        "strategy_signals": [{"agent_skill_review": {
+            "runtime": "agent_skill_fallback_prelim",
+            "stance": "support",
+            "score_delta": 8.0,
+            "supports": ["fallback support"],
+            "risks": ["fallback risk"],
+        }}],
+        "market_snapshot": {},
+    }
+    summary = _build_agent_summary(card)
+    assert summary["supports"] == ["fallback support"]
+    assert summary["risks"] == ["fallback risk"]
+

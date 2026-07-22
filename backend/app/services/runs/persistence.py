@@ -51,9 +51,18 @@ def _build_agent_summary(card: dict[str, Any]) -> dict[str, Any]:
         first_output = (logs[0].get("output") or {}) if isinstance(logs[0], dict) else {}
         if isinstance(first_output, dict) and first_output:
             # 顶层快捷字段（与 RecommendationDetailCard 的 AgentReviewSection 对齐）
-            for key in ("stance", "score_delta", "score", "summary", "action", "position_range", "entry_style"):
+            for key in ("stance", "score_delta", "score", "summary", "action",
+                        "position_range", "entry_style", "risks"):
                 if key in first_output:
                     summary[key] = first_output[key]
+            # supports：LLM review 同时存 evidence 与 supports（review_runner 已把
+            # evidence 映射为 supports），优先 supports 兜底 evidence，供前端列表/详情
+            # 顶层直接读「为什么支持」，不必翻 logs[0].output.evidence（B 项决策链断层修复）。
+            supports = first_output.get("supports")
+            if supports is None:
+                supports = first_output.get("evidence")
+            if supports is not None:
+                summary["supports"] = supports
         return summary
 
     # logs 为空：LLM 失败走 fallback_prelim，从 strategy_signals 的 agent_skill_review 提取降级字段
@@ -65,7 +74,8 @@ def _build_agent_summary(card: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(review, dict) or not review:
             continue
         if str(review.get("runtime") or "") == "agent_skill_fallback_prelim":
-            for key in ("stance", "score_delta", "score", "summary", "action", "position_range", "entry_style"):
+            for key in ("stance", "score_delta", "score", "summary", "action",
+                        "position_range", "entry_style", "risks", "supports"):
                 if key in review:
                     summary[key] = review[key]
             break
