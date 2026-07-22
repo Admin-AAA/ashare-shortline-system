@@ -166,6 +166,54 @@ def check_a_item(db) -> None:
         if suspicious:
             print(f'  ⚠️ {len(suspicious)} 个 interrupted run 无已知归因（疑真 pipeline 异常，T12 排查）: {suspicious[:5]}')
 
+    # failed run 错误类型分布（T12 可观测性）：区分代码 bug（TypeError/AttributeError）vs
+    # 数据缺失 vs 运维问题。07-22 03:52 NoneType __round__ 是代码 bug（5bb9f74 已修），
+    # 但 self_check 只报「failed rec_n=0」不分类型，用户难快速定位根因。
+    failed = [r for r in rows if r[2] == 'failed']
+    if failed:
+        # rows 不含 error_message 列，单独查 DB 取失败原因
+        try:
+            failed_msgs = db.execute(text("""
+                SELECT COALESCE(error_message, progress_message, '') AS msg
+                FROM recommendation_runs
+                WHERE run_mode='formal' AND status='failed'
+                  AND started_at > DATE_SUB(NOW(), INTERVAL 7 DAY)
+            """)).fetchall()
+            failed_types = _failed_run_error_types([m[0] for m in failed_msgs])
+        except Exception:
+            failed_types = {}
+        if failed_types:
+            print(f'  ℹ️ {len(failed)} 个 failed run 错误类型: {failed_types}')
+            code_bugs = failed_types.get('code_bug', 0)
+            if code_bugs:
+                print(f'    ⚠️ {code_bugs} 个含 TypeError/AttributeError/KeyError（代码 bug，查 app.log + 修代码）')
+
+
+def _failed_run_error_types(messages: list[str]) -> dict[str, int]:
+    """纯函数：由 failed run 的 error_message 列表归类错误类型。
+
+    返回 {code_bug, data_missing, llm_timeout, process, other} 计数。
+    code_bug=TypeError/AttributeError/KeyError/IndexError（需修代码）；
+    data_missing=数据缺失；llm_timeout=LLM 超时；process=服务重启/进程退出；
+    other=未分类。供 check_a_item 单测，与 DB 解耦。
+    """
+    types: dict[str, int] = {}
+    for msg in messages:
+        m = str(msg or "").lower()
+        if any(k in m for k in ("typeerror", "attributeerror", "keyerror", "indexerror",
+                                 "nonetype", "__round__", "traceback")):
+            t = "code_bug"
+        elif any(k in m for k in ("数据缺失", "构建特征", "daily_kbars", "stk_factor", "cyq_perf")):
+            t = "data_missing"
+        elif any(k in m for k in ("skill 深审", "llm", "超时", "timeout")):
+            t = "llm_timeout"
+        elif any(k in m for k in ("服务重启", "进程退出", "dispatcher")):
+            t = "process"
+        else:
+            t = "other"
+        types[t] = types.get(t, 0) + 1
+    return types
+
 
 def check_b_item(db) -> None:
     """B 项：最近推荐字段完整性（五项决策链：策略名+核心因子+入场/失效+LLM delta）。
