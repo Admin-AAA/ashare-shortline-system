@@ -1950,6 +1950,26 @@ def get_recommendation_detail(db: Session, recommendation_id: str) -> dict[str, 
     return data
 
 
+# filter_audit.rows 持久化了每只股票的完整诊断对象，但前端实际只消费
+# rule_gate / score_line / trace / final_* 字段。prefilter(每股票 15 键 dict) 与
+# trace_summary(字符串) 在 RunFunnelSection / RunStockScoreSection 中从未被读取
+# （types.ts 虽声明但未使用；StrategyDetailPage 的 prefilter 是策略契约对象，无关）。
+# 单 run 全市场 ~4955 行时这两个字段占 rows 载荷 ~40%(prefilter 约 4.5MB)，
+# 纯属浪费带宽。剥离它们不影响任何 UI 行为，把 /api/runs/{id}/funnel 响应从
+# ~12MB 降到 ~7MB。
+_FUNNEL_ROW_DEAD_FIELDS = ("prefilter", "trace_summary")
+
+
+def _strip_funnel_row_dead_fields(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """原地剥离 funnel rows 中前端从不消费的诊断字段（纯函数、可单测）。"""
+    if not rows:
+        return rows
+    for r in rows:
+        for f in _FUNNEL_ROW_DEAD_FIELDS:
+            r.pop(f, None)
+    return rows
+
+
 def get_run_filter_audit(db: Session, run_id: str) -> dict[str, Any] | None:
     run = db.get(RecommendationRun, run_id)
     if run is None:
@@ -1976,12 +1996,14 @@ def get_run_filter_audit(db: Session, run_id: str) -> dict[str, Any] | None:
             audit.get("stage_summary") or [],
             skill_review_failure_audit,
         )
+    rows = audit.get("rows") or []
+    _strip_funnel_row_dead_fields(rows)
     return {
         "run": _serialize_run_summary(db, run),
         "stage_summary": audit.get("stage_summary", []),
         "distributions": audit.get("distributions", {}),
         "reason_counts": audit.get("reason_counts", {}),
-        "rows": audit.get("rows", []),
+        "rows": rows,
         "empty_reason": audit.get("empty_reason"),
         "skill_review_failure_audit": skill_review_failure_audit if skill_review_failure_audit.get("failed_count") else {},
     }
