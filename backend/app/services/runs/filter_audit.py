@@ -530,7 +530,7 @@ def build_filter_audit(
             passed,
             score_reason,
             final_score=round(final_score, 2),
-            effective_score_line=round(effective_line, 2),
+            effective_score_line=round(effective_line, 2) if effective_line is not None else None,
             score_gap=score_gap,
             evidence_adjustment=score_line_meta.get("evidence_adjustment"),
             execution_adjustment=score_line_meta.get("execution_adjustment"),
