@@ -2,12 +2,10 @@ import type {
   FilterEffectiveness,
   HomeBootstrap,
   MetricsOverview,
-  MinutePrepResult,
   Preset,
   PrecisionAtKRow,
   PresetStatsRow,
   DataHealthDiagnostic,
-  DataHealthRemediationResult,
   RecommendationCard,
   RecommendationDetail,
   RecommendationHistoryResponse,
@@ -337,19 +335,6 @@ export const api = {
       avg_return: number;
       errors: string[];
     }>(`/api/skills/${id}/performance-summary`),
-  batchSkillPerformanceSummaries: () =>
-    request<Array<{
-      skill_id: string;
-      status: string;
-      summary_type: string;
-      source: string;
-      runs_backtest: boolean;
-      sample_count: number;
-      hit_rate: number;
-      avg_return: number;
-      errors: string[];
-    }>>(`/api/skills/performance-summaries`),
-
   analyzeStock: (payload: { code: string; trade_date?: string; include_llm?: boolean; skill_id?: string; preset_id?: string }) =>
     requestWithTimeout<SingleStockAnalysis>("/api/runs/analyze-stock", 300_000, json("POST", payload)),
   resumeRun: (id: string) => requestWithTimeout<RunResult>(`/api/runs/${id}/resume`, 300_000, json("POST")),
@@ -374,14 +359,6 @@ export const api = {
       undefined,
       options,
     ),
-  previewDataHealthRemediation: (payload?: {
-    target_tables?: string[];
-    dry_run?: boolean;
-    capital_flow_code_limit?: number;
-    daily_kbar_code_limit?: number;
-    post_diagnosis?: boolean;
-  }) =>
-    request<DataHealthRemediationResult>("/api/admin/data-health/remediate", json("POST", payload ?? {}), { timeoutMs: 300_000 }),
   startDataHealthRemediation: (payload?: {
     target_tables?: string[];
     capital_flow_code_limit?: number;
@@ -394,10 +371,6 @@ export const api = {
     request<{ task_run: ScheduledTaskRun | null }>("/api/admin/data-health/remediate/status"),
   temporalConsistency: (options?: RequestOptions) =>
     request<TemporalConsistency>("/api/admin/temporal-consistency", undefined, options),
-  previewMinuteGate: (payload: { start_date: string; end_date: string; strategy_id: string }) =>
-    request<MinutePrepResult>("/api/runs/backtest", json("POST", { ...payload, action: "preview_minute_gate" }), { timeoutMs: 120_000 }),
-  remediateMinuteGaps: (payload: { start_date: string; end_date: string; strategy_id: string }) =>
-    request<MinutePrepResult>("/api/runs/backtest", json("POST", { ...payload, action: "remediate_minute_gaps" }), { timeoutMs: 120_000 }),
   statsOverview: () => request<StatsOverview>(`/api/stats/overview`),
   statsBySkill: () => request<SkillStatsRow[]>(`/api/stats/by-skill`),
   statsByPreset: () => request<PresetStatsRow[]>(`/api/stats/by-preset`),
