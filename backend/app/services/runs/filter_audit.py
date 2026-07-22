@@ -201,6 +201,20 @@ def skill_review_error_bucket(error: Any) -> str:
         return "model_auth_failed"
     if "429" in text or "rate limit" in lowered:
         return "model_rate_limited"
+    # 上游 5xx（502/503/504/500）：此前无专属 bucket，被漏到 agent_review_error 兜底，
+    # 导致 self_check 误判为「解析错误 / 查 prompt 格式」，而真实根因是模型 provider
+    # 不稳定（upstream_unavailable / service temporarily unavailable）。识别后单列
+    # model_upstream_5xx，避免把外部 5xx 误诊为 LLM 输出格式问题去改 prompt。
+    if any(
+        s in lowered
+        for s in (
+            "error code: 500", "error code: 502", "error code: 503", "error code: 504",
+            " 500", " 502", " 503", " 504",
+            "upstream_unavailable", "bad gateway",
+            "service temporarily unavailable", "service unavailable",
+        )
+    ):
+        return "model_upstream_5xx"
     if "timeout" in lowered or "超时" in text:
         return "model_timeout"
     if "熔断" in text or "circuit" in lowered:
