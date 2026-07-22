@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { api } from "../api/client";
 import type { Preset, SkillSummary } from "../types";
+import { RISK_TEMPLATE_MAP, DATA_SOURCE_MAP } from "../utils/riskTemplates";
 
 /**
  * 预设管理 —— 配置页「预设管理」Tab。
@@ -22,20 +23,6 @@ import type { Preset, SkillSummary } from "../types";
  * - 编辑预设（展开行内表单）
  * - 删除预设
  */
-// 风险模板与数据源的中文显示映射
-const RISK_TEMPLATE_MAP: Record<string, string> = {
-  balanced: "平衡型",
-  aggressive: "激进型",
-  conservative: "保守型",
-};
-
-const DATA_SOURCE_MAP: Record<string, string> = {
-  local_pool_preferred: "仅用本地池",
-  auto: "本地池+盘中实时",
-  // 后端规范化后的实际存储值
-  local_pool_realtime: "本地池+盘中实时",
-};
-
 // 保留原始值用于内部逻辑处理
 const RISK_TEMPLATES = ["balanced", "aggressive", "conservative"];
 const DATA_SOURCES = ["local_pool_preferred", "auto"];

@@ -11,6 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api/client";
+import { RISK_TEMPLATE_MAP, DATA_SOURCE_MAP } from "../utils/riskTemplates";
 import type { Preset, ScheduledTask, ScheduledTaskType } from "../types";
 import { CardSkeleton, EmptyState, ErrorPage } from "./StateViews";
 import { Panel } from "./Panel";
@@ -36,19 +37,6 @@ const TASK_TYPE_LABEL: Record<ScheduledTaskType, string> = {
   data_sync: "数据同步",
   pool_refresh: "报价刷新",
   data_backfill: "数据补数",
-};
-
-const RISK_TEMPLATE_MAP: Record<string, string> = {
-  balanced: "平衡型",
-  aggressive: "激进型",
-  conservative: "保守型",
-};
-
-const DATA_SOURCE_MAP: Record<string, string> = {
-  local_pool_preferred: "仅用本地池",
-  auto: "本地池+盘中实时",
-  // local_pool_realtime 是后端规范化后的存储值，显示时复用 auto 标签
-  local_pool_realtime: "本地池+盘中实时",
 };
 
 /** 下拉框渲染用的选项列表（不包含后端存储值 local_pool_realtime） */
