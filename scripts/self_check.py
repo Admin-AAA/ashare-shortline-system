@@ -574,6 +574,9 @@ def _check_llm_call_health(db) -> None:
         if r.get("top_reasons"):
             reason_str = " " + " ".join(f"{x['reason']}={x['count']}" for x in r["top_reasons"])
         print(f'    {r["trade_date"]}: 成功 {r["success"]}/{r["success"] + r["failed"]} ({r["rate"]:.0f}%){flag}{reason_str}')
+        # 失败样本的具体错误文本（定位 agent_review_error 的根因：JSON 解析失败 vs 其他）
+        for err in (r.get("sample_errors") or [])[:2]:
+            print(f'      样本: {err}')
     if result.get("any_unhealthy"):
         print('    ——LLM 成功率 <80%：检查模型路由配置/余额/熔断（model_route_config 页），')
         print('      失败原因 reason_counts：circuit_open=连续失败熔断(查模型可用性/key/余额)、')

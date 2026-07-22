@@ -157,7 +157,7 @@ def recent_llm_call_health(db: Session, *, limit: int = 5) -> dict[str, Any]:
     LLM 全失败。本函数从 result_summary_json 提取 skill_review_success/failure_audit，
     让 LLM 层失效立即可见。
 
-    返回 {runs: [{trade_date, success, failed, rate, unhealthy, top_reasons}], any_unhealthy}。
+    返回 {runs: [{trade_date, success, failed, rate, unhealthy, top_reasons, sample_errors}], any_unhealthy}。
     """
     rows = db.execute(text("""
         SELECT trade_date,
@@ -165,7 +165,8 @@ def recent_llm_call_health(db: Session, *, limit: int = 5) -> dict[str, Any]:
                JSON_UNQUOTE(JSON_EXTRACT(result_summary_json, '$.skill_input_count')) AS input_cnt,
                JSON_UNQUOTE(JSON_EXTRACT(result_summary_json, '$.pipeline.skill_review_success_count')) AS succ,
                JSON_UNQUOTE(JSON_EXTRACT(result_summary_json, '$.pipeline.skill_review_failure_audit.failed_count')) AS fail,
-               JSON_UNQUOTE(JSON_EXTRACT(result_summary_json, '$.pipeline.skill_review_failure_audit.reason_counts')) AS reasons
+               JSON_UNQUOTE(JSON_EXTRACT(result_summary_json, '$.pipeline.skill_review_failure_audit.reason_counts')) AS reasons,
+               JSON_UNQUOTE(JSON_EXTRACT(result_summary_json, '$.pipeline.skill_review_failure_audit.sample_errors')) AS sample_errors
         FROM recommendation_runs
         WHERE run_mode='formal' AND status='completed' AND universe_count > 4000
         ORDER BY started_at DESC LIMIT :lim
@@ -185,6 +186,10 @@ def recent_llm_call_health(db: Session, *, limit: int = 5) -> dict[str, Any]:
         any_unhealthy = any_unhealthy or unhealthy
         reasons = json.loads(r[5]) if r[5] and r[5] != "null" else {}
         top_reasons = sorted(reasons.items(), key=lambda x: -int(x[1] or 0))[:3] if reasons else []
+        # sample_errors：失败样本的具体错误文本（最多3个，截120字），让用户看到 agent_review_error
+        # 的具体内容（如"无法从 Agent 响应中提取 JSON: ..."），快速定位是 JSON 格式问题还是其他。
+        sample_errors_raw = json.loads(r[6]) if r[6] and r[6] != "null" else []
+        sample_errors = [str(e)[:120] for e in (sample_errors_raw or [])[:3]]
         runs.append({
             "trade_date": str(td),
             "success": succ,
@@ -192,6 +197,7 @@ def recent_llm_call_health(db: Session, *, limit: int = 5) -> dict[str, Any]:
             "rate": rate,
             "unhealthy": unhealthy,
             "top_reasons": [{"reason": k, "count": int(v or 0)} for k, v in top_reasons],
+            "sample_errors": sample_errors,
         })
     return {"runs": runs, "any_unhealthy": any_unhealthy}
 
