@@ -1651,15 +1651,26 @@ def _compute_horizon_metric_records(db: Session, rows: list[Any]) -> dict[str, d
     if not codes or not trade_dates:
         return {}
 
-    bars = db.scalars(
-        select(DailyKbar)
+    # 只取 _simulate_outcome 需要的 7 列（code/trade_date/open/high/low/close/pct_chg），
+    # 不加载完整 DailyKbar 实体（19778 bars × 全列 ORM 实例化 = 0.86s 主因，T4 优化）。
+    # Row 对象支持 .code/.open 等属性访问，_simulate_outcome 无需改。
+    bar_rows = db.execute(
+        select(
+            DailyKbar.code,
+            DailyKbar.trade_date,
+            DailyKbar.open,
+            DailyKbar.high,
+            DailyKbar.low,
+            DailyKbar.close,
+            DailyKbar.pct_chg,
+        )
         .where(DailyKbar.code.in_(codes), DailyKbar.trade_date >= min(trade_dates))
         .order_by(DailyKbar.code.asc(), DailyKbar.trade_date.asc())
     ).all()
 
-    bars_by_code: dict[str, list[DailyKbar]] = {}
+    bars_by_code: dict[str, list] = {}
     dates_by_code: dict[str, list[str]] = {}
-    for bar in bars:
+    for bar in bar_rows:
         code = str(bar.code)
         bars_by_code.setdefault(code, []).append(bar)
         dates_by_code.setdefault(code, []).append(str(bar.trade_date))
