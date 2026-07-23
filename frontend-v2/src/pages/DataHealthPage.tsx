@@ -9,17 +9,20 @@ import {
   XCircle,
 } from "lucide-react";
 import { api } from "../api/client";
+import { useApi } from "../app/useApi";
 import type {
   DataDomainCoverage,
   DataDomainCategory,
   DataDomainCoverageSummary,
   DataHealthDiagnostic,
   DataHealthRemediationResult,
+  DataSourceHealthRow,
   DataSourceHealthSummary,
   ScheduledTaskRun,
 } from "../types";
 import { CardSkeleton, EmptyState, ErrorPage } from "../components/StateViews";
 import { Panel } from "../components/Panel";
+import { formatApiDateTime } from "../utils/display";
 
 /**
  * 数据健康度 —— 配置页「数据健康」Tab（与预设管理平级）。
@@ -333,6 +336,9 @@ export function DataHealthSection() {
           <DataSourceSection summary={dsSummary} />
         </Panel>
       )}
+
+      {/* 数据源实时健康 —— /api/data-sources 运行时统计（成功率/延迟/最近失败），区别于上方诊断快照 */}
+      <RealtimeDataSourcePanel />
 
       {/* 问题列表 —— 全量，按严重度分组 */}
       {issues.length > 0 && (
@@ -664,5 +670,124 @@ function DomainCoverageSection({ summary }: { summary: DataDomainCoverageSummary
         <DomainCategoryGroup key={cat.category} cat={cat} />
       ))}
     </div>
+  );
+}
+
+// ─── 数据源实时健康（/api/data-sources 运行时统计）─────────────────
+// 区别于上方 DataSourceSection（诊断快照：通/不通/未测试）：
+// 这里展示每个数据源的累积成功率、延迟、最近成功/失败时间、失败原因——
+// self_check 报 Tushare 500/429 或 LLM 成功率波动时，在此一屏定位是哪个接口在降级。
+const REALTIME_STATUS_META: Record<string, { color: string; label: string }> = {
+  healthy: { color: "#16a34a", label: "健康" },
+  degraded: { color: "#dc2626", label: "降级" },
+  disabled: { color: "var(--text-muted)", label: "未启用" },
+  untested: { color: "var(--text-muted)", label: "未测试" },
+};
+
+function RealtimeDataSourcePanel() {
+  const { data, loading, error, refetch } = useApi<DataSourceHealthRow[]>(() => api.dataSources(), []);
+
+  if (loading) {
+    return (
+      <Panel kicker="数据源实时健康" title="加载中…">
+        <CardSkeleton count={3} />
+      </Panel>
+    );
+  }
+  if (error) {
+    return <ErrorPage title="数据源实时健康加载失败" message={error} onRetry={refetch} />;
+  }
+  if (!data || data.length === 0) {
+    return (
+      <Panel kicker="数据源实时健康" title="暂无数据">
+        <EmptyState title="无数据源健康记录" reason="后端尚未累积运行时统计" />
+      </Panel>
+    );
+  }
+
+  const rows = [...data].sort(
+    (a, b) => a.source_type.localeCompare(b.source_type) || a.priority - b.priority || a.source.localeCompare(b.source),
+  );
+  const degraded = rows.filter((r) => r.status === "degraded" || (r.success_rate != null && r.success_rate < 0.9)).length;
+
+  return (
+    <Panel
+      kicker="数据源实时健康"
+      title={`共 ${rows.length} 个数据源`}
+      actions={
+        <span style={{ fontSize: "var(--text-sm)", color: degraded ? "#dc2626" : "#16a34a" }}>
+          {degraded ? `${degraded} 个降级` : "全部正常"}
+        </span>
+      }
+    >
+      <div className="text-muted" style={{ fontSize: "var(--text-sm)", marginBottom: "var(--space-3)" }}>
+        运行时累积统计（每次 API 调用更新）。成功率 = 成功 / (成功 + 失败)，空返回不计入分母。
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-sm)" }}>
+          <thead>
+            <tr className="text-muted" style={{ textAlign: "left", borderBottom: "1px solid var(--line)" }}>
+              <th style={{ padding: "var(--space-2)", fontWeight: 500 }}>类型</th>
+              <th style={{ padding: "var(--space-2)", fontWeight: 500 }}>数据源</th>
+              <th style={{ padding: "var(--space-2)", fontWeight: 500, textAlign: "right" }}>成功率</th>
+              <th style={{ padding: "var(--space-2)", fontWeight: 500, textAlign: "right" }}>延迟</th>
+              <th style={{ padding: "var(--space-2)", fontWeight: 500, textAlign: "right" }}>成功/失败/空</th>
+              <th style={{ padding: "var(--space-2)", fontWeight: 500 }}>最近成功</th>
+              <th style={{ padding: "var(--space-2)", fontWeight: 500 }}>最近失败</th>
+              <th style={{ padding: "var(--space-2)", fontWeight: 500 }}>失败原因</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const meta = REALTIME_STATUS_META[r.status] ?? { color: "var(--text-muted)", label: r.status };
+              const sr = r.success_rate;
+              // 涨红跌绿：A股惯例红=好。成功率越高越红，低于 0.9 转绿（警示）
+              const srColor = sr == null ? "var(--text-muted)" : sr >= 0.95 ? "#dc2626" : sr >= 0.9 ? "#d97706" : "#16a34a";
+              return (
+                <tr key={`${r.source_type}-${r.source}`} style={{ borderBottom: "1px solid var(--line)" }}>
+                  <td style={{ padding: "var(--space-2)" }}>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-1)" }}>
+                      <span style={{ width: 7, height: 7, borderRadius: "50%", background: meta.color, flex: "0 0 auto" }} />
+                      <span className="text-muted">{r.source_type}</span>
+                    </span>
+                  </td>
+                  <td style={{ padding: "var(--space-2)" }} className="text-mono">
+                    {r.source}
+                  </td>
+                  <td style={{ padding: "var(--space-2)", textAlign: "right", fontVariantNumeric: "tabular-nums", color: srColor, fontWeight: 600 }}>
+                    {sr == null ? "—" : `${Math.round(sr * 100)}%`}
+                  </td>
+                  <td style={{ padding: "var(--space-2)", textAlign: "right", fontVariantNumeric: "tabular-nums" }} className="text-muted">
+                    {r.latency_ms == null ? "—" : `${(r.latency_ms / 1000).toFixed(1)}s`}
+                  </td>
+                  <td style={{ padding: "var(--space-2)", textAlign: "right", fontVariantNumeric: "tabular-nums" }} className="text-muted">
+                    {r.success_count}/{r.failure_count}/{r.empty_count}
+                  </td>
+                  <td style={{ padding: "var(--space-2)", fontVariantNumeric: "tabular-nums" }} className="text-muted">
+                    {formatApiDateTime(r.last_success_at)}
+                  </td>
+                  <td style={{ padding: "var(--space-2)", fontVariantNumeric: "tabular-nums" }} className="text-muted">
+                    {formatApiDateTime(r.last_failure_at)}
+                  </td>
+                  <td
+                    style={{
+                      padding: "var(--space-2)",
+                      maxWidth: 280,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      color: r.last_error ? "#dc2626" : "var(--text-muted)",
+                    }}
+                    title={r.last_error ?? ""}
+                  >
+                    {r.last_error || "—"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Panel>
   );
 }

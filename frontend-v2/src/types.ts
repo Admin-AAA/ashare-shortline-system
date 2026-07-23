@@ -813,7 +813,9 @@ export type MarketSnapshot = {
   breadth: Record<string, unknown>;
 };
 
-export type DataSourceType = "quote" | "kline";
+// 后端 list_data_sources 实际返回 quote/kline/news/dragon_tiger/limit_up/concept_sector/capital_flow 等
+// 多种 source_type，不限于 quote/kline——用 string 覆盖全集，避免新增类型时漏改
+export type DataSourceType = string;
 
 export type DataSourceStatus = "healthy" | "degraded" | "disabled" | "untested";
 
