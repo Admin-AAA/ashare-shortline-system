@@ -29,6 +29,23 @@ def test_permanent_error_uses_long_cooldown():
     assert remaining > 60, f"永久性错误冷却应长于 60s，实际 {remaining:.0f}s"
 
 
+def test_permanent_error_blocks_on_first_failure():
+    """永久性错误（401/402/404）是确定性失败，首次即熔断，不等阈值——
+    重试同一坏 key/坏配置 N 次纯属浪费调用（07-23 kimi-k3 401 key 失效实证）。"""
+    cb = CircuitBreaker(failure_threshold=5, cooldown_seconds=60)
+    cb.record_result("kimi-k3", success=False, error_type="auth_error")  # 仅 1 次
+    state = cb._states["kimi-k3"]
+    assert state.blocked_until > 0, "永久性错误首次失败应立即熔断"
+    remaining = state.blocked_until - time.monotonic()
+    assert remaining > 60, f"永久性错误首次即长冷却，实际 {remaining:.0f}s"
+    # 熔断期间 check_circuit 应拦截
+    try:
+        cb.check_circuit("kimi-k3")
+        assert False, "永久性错误首次熔断后应被 check_circuit 拦截"
+    except RuntimeError:
+        pass
+
+
 def test_rate_limited_uses_short_cooldown():
     """429 限流是暂时性错误，保持短冷却快速恢复。"""
     cb = CircuitBreaker(failure_threshold=5, cooldown_seconds=60)
@@ -73,9 +90,9 @@ def test_success_resets_permanent_cooldown():
 
 
 def test_below_threshold_no_block():
-    """未达阈值不熔断。"""
+    """暂时性错误未达阈值不熔断（给上游恢复时间）。永久性错误不在此列——见 test_permanent_error_blocks_on_first_failure。"""
     cb = CircuitBreaker(failure_threshold=5, cooldown_seconds=60)
-    _trigger_failures(cb, "deepseek", "insufficient_balance", 4)
+    _trigger_failures(cb, "deepseek", "rate_limited", 4)
     assert cb._states["deepseek"].blocked_until == 0
     cb.check_circuit("deepseek")  # 不抛异常
 

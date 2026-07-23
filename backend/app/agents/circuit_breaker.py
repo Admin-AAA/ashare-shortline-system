@@ -74,8 +74,11 @@ class CircuitBreaker:
             model_id: LLM 模型标识
             success: 调用是否成功
             error_type: 失败时的错误类型（来自 _route_error_status）。
-                永久性错误（insufficient_balance/auth_error/model_unavailable）
-                用长冷却；其他保持默认短冷却。成功时忽略。
+                永久性错误（insufficient_balance/auth_error/model_unavailable）首次即熔断长冷却——
+                key 失效/余额耗尽是确定性失败，重试 N 次仍是同一结果，等阈值只会浪费 N-1 次调用
+                （07-23 kimi-k3 401 key 失效：连续 4 次无效调用才熔断）。
+                暂时性错误（429/超时/网络）保持阈值后才熔断短冷却，给上游恢复时间。
+                成功时忽略。
         """
         state = self._states[model_id]
         if success:
@@ -83,11 +86,11 @@ class CircuitBreaker:
             state.blocked_until = 0.0
         else:
             state.consecutive_failures += 1
-            if state.consecutive_failures >= self.failure_threshold:
-                if error_type in PERMANENT_ERROR_TYPES:
-                    state.blocked_until = time.monotonic() + PERMANENT_COOLDOWN_SECONDS
-                else:
-                    state.blocked_until = time.monotonic() + self.cooldown_seconds
+            # 永久性错误首次即熔断（确定性失败，重试无益）
+            if error_type in PERMANENT_ERROR_TYPES:
+                state.blocked_until = time.monotonic() + PERMANENT_COOLDOWN_SECONDS
+            elif state.consecutive_failures >= self.failure_threshold:
+                state.blocked_until = time.monotonic() + self.cooldown_seconds
 
     def status(self, model_id: str) -> dict:
         """返回当前 circuit 状态（供观测/调试）。"""

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime
+import httpx
 import json
 import re
 import time
@@ -299,25 +301,11 @@ def get_active_model_routes() -> list[ResolvedModelRoute]:
         return [r for r in active if r.valid]
 
 
-async def check_route_availability() -> list[dict]:
-    """并发检查每个 enabled 路由的 base_url 可达性 + key 有效性（GET /models）。
-
-    OpenAI 兼容端点标准：GET {base_url}/models 返回模型列表，需 Authorization。
-    轻量（不消耗 chat 额度），5s 超时。返回 [{route_id, name, base_url, model,
-    reachable, status_code, model_count, error}]。
-
-    价值（T8 可观测性）：07-22 LLM 65% 失败但用户不知是 grok-4.5 还是 kimi-k3 的问题。
-    kimi-k3 base_url=api.kimi.com/coding/v1 可疑（标准是 api.moonshot.cn/v1）。
-    本检查让路由可达性可见，运维可快速定位 base_url/key 配置错误。
-    """
-import asyncio
-import httpx
-import time as _time
-
 # route-health 缓存：GET /models 需 2 次外部 HTTP（~2.7s），MetricsPage 每次刷新都
 # 重发太慢。30s TTL 与 metrics 缓存一致，route 配置变更后 30s 内自动刷新。
 _route_health_cache: tuple[float, list[dict]] | None = None
 _ROUTE_HEALTH_TTL = 30.0
+
 
 async def check_route_availability() -> list[dict]:
     """并发检查每个 enabled 路由的 base_url 可达性 + key 有效性（GET /models）。
@@ -333,9 +321,11 @@ async def check_route_availability() -> list[dict]:
     30s 缓存避免每次 MetricsPage 刷新都重发 2 次外部 HTTP（~2.7s → <0.01s 命中）。
     """
     global _route_health_cache
-    now = _time.time()
+    now = time.time()
     if _route_health_cache is not None and (now - _route_health_cache[0]) < _ROUTE_HEALTH_TTL:
         return _route_health_cache[1]
+
+    routes = get_active_model_routes()
 
     async def _check(route: ResolvedModelRoute) -> dict:
         base = str(route.base_url or "").rstrip("/")
