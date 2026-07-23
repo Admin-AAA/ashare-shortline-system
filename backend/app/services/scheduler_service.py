@@ -1632,11 +1632,45 @@ def check_formal_recommendation_gap(db) -> dict:
 
 
 async def _safety_net_run(db, payload: dict) -> dict:
-    """安全网任务：检查 formal 推荐断档，若需要则自动补跑。"""
+    """安全网任务：检查 formal 推荐断档，若需要则自动补跑。
+
+    另：若盘后流水线（post_sync_formal_recommendation）上次 failed 或超过 1 交易日
+    未跑，自动触发 label_pending_outcomes 结算 pending 推荐——盘后流水线含 outcome
+    结算步骤，failed/漏跑时 outcome 不结算 → 前瞻样本无法积累（D 项阻塞）。
+    safety_net 每日 08:30 跑，确保至少每天补一次 outcome 结算。
+    """
+    # 补 outcome 结算：盘后流水线 failed/漏跑时，pending 推荐不会被自动结算。
+    outcome_result = None
+    try:
+        postclose_task = db.get(ScheduledTask, "post_sync_formal_recommendation")
+        if postclose_task:
+            needs_outcome = (
+                str(postclose_task.last_status or "") == "failed"
+                or postclose_task.last_run_at is None
+            )
+            if not needs_outcome and postclose_task.last_run_at:
+                from datetime import datetime as _dt
+                # last_run_at 超过 1 个交易日（按 25h 估算含隔夜）未跑 → 补 outcome
+                try:
+                    last = postclose_task.last_run_at
+                    if hasattr(last, "timestamp"):
+                        age_hours = (_dt.now() - last.replace(tzinfo=None)).total_seconds() / 3600
+                    else:
+                        age_hours = 999
+                    needs_outcome = age_hours > 25
+                except Exception:
+                    needs_outcome = False
+            if needs_outcome:
+                from app.services.outcome_service import label_pending_outcomes
+                outcome_result = label_pending_outcomes(db, horizon_days=5)
+                logger.info("安全网补 outcome 结算: %s", outcome_result)
+    except Exception as exc:
+        logger.warning("安全网补 outcome 结算失败（非阻塞）: %s", exc)
+
     check = check_formal_recommendation_gap(db)
     if not check["needs_retry"]:
         logger.info("安全网跳过: %s", check["reason"])
-        return {"skipped": True, **check, "summary_text": f"安全网跳过: {check['reason']}"}
+        return {"skipped": True, **check, "outcome": outcome_result, "summary_text": f"安全网跳过: {check['reason']}"}
 
     logger.info("安全网触发补跑: %s", check["reason"])
     # 复用 post_sync_formal_recommendation 的 payload，确保参数一致
