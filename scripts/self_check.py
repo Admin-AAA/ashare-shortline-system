@@ -3783,6 +3783,39 @@ def check_auxiliary_factor_data(db) -> None:
         except Exception as exc:
             print(f'  {table:16} {usage}: 查询失败 {str(exc)[:60]}')
 
+    # 资金流因子预测力摘要（T1 Alpha 衰减监控）：3日累计主力净流入 vs outcome
+    # 2026-07-24 发现 r_pb=+0.118 通过 feature_signal_guard，待前瞻验证。本段每轮
+    # 报告当前预测力，监控 Alpha 衰减（T1 要求衰减>30% 标记）。
+    try:
+        rows = db.execute(text("""
+            SELECT o.outcome_label, cf.cumulative_inflow_3d_yi
+            FROM recommendations r
+            JOIN recommendation_runs rr ON r.run_id = rr.run_id
+            JOIN recommendation_outcomes o ON o.recommendation_id = r.recommendation_id
+            JOIN capital_flow cf ON cf.code = r.code AND cf.trade_date = r.trade_date
+            WHERE rr.run_mode='formal' AND o.outcome_label IN ('success','failed')
+              AND cf.cumulative_inflow_3d_yi IS NOT NULL AND ABS(cf.cumulative_inflow_3d_yi) > 0.001
+        """)).fetchall()
+        if len(rows) >= 20:
+            import math as _m
+            y = [1 if r[0] == 'success' else 0 for r in rows]
+            x = [float(r[1] or 0) for r in rows]
+            n1, n0 = sum(y), len(y) - sum(y)
+            mean = sum(x) / len(x)
+            sd = _m.sqrt(sum((xi - mean) ** 2 for xi in x) / len(x))
+            r_pb = (sum(xi for xi, yi in zip(x, y) if yi == 1) / n1 -
+                    sum(xi for xi, yi in zip(x, y) if yi == 0) / n0) / sd * _m.sqrt(n1 * n0 / (len(y) ** 2)) if sd > 0 and n1 and n0 else None
+            pos = [yi for xi, yi in zip(x, y) if xi > 0]
+            neg = [yi for xi, yi in zip(x, y) if xi <= 0]
+            wr_pos = sum(pos) * 100 / len(pos) if pos else 0
+            wr_neg = sum(neg) * 100 / len(neg) if neg else 0
+            r_pb_str = f'{r_pb:+.4f}' if r_pb is not None else 'N/A'
+            print(f'  资金流因子(3日累计主力净流入): n={len(rows)} r_pb={r_pb_str} | '
+                  f'流入>0 WR={wr_pos:.1f}% 流入<=0 WR={wr_neg:.1f}% (Δ{wr_pos-wr_neg:+.1f}pp) | '
+                  f'基准 r_pb=+0.118(2026-07-24)，衰减>30%需复查')
+    except Exception as exc:
+        print(f'  资金流因子预测力查询失败: {str(exc)[:60]}')
+
 
 def main() -> None:
     global FORWARD_EPOCH
