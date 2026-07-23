@@ -10,6 +10,7 @@
 （`_resolve_stop_loss_price`）、核心模拟入口（`_simulate_outcome`）在各分支下的行为。
 """
 import json
+from datetime import datetime
 from types import SimpleNamespace
 
 from app.models.tables import DailyKbar
@@ -269,9 +270,13 @@ def _bar_trailing(
 
 
 def test_resolve_exit_take_profit_path_preserved():
-    """trailing 不抢跑 take_profit 路径：TP 触发时直接返回，不走 trailing。"""
-    # holding 期内 high 触及 take_profit → 应返回 take_profit_hit
+    """trailing 不抢跑 take_profit 路径：TP 触发时直接返回，不走 trailing。
+
+    T+1 口径：bars[0] 是入场日（不参与离场），从 bars[1] 起扫。
+    """
+    # 入场日（不触发离场）+ 次日 high 触及 take_profit → 应返回 take_profit_hit
     bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.9, close=10.0, pct_chg=0.0),
         _bar_trailing(trade_date="2026-07-02", open=10.0, high=11.5, low=10.0, close=11.0, pct_chg=10.0),
     ]
     result = _resolve_exit(bars, stop_loss_price=9.5, take_profit_price=11.0, code="000001", entry_price=10.0)
@@ -284,10 +289,11 @@ def test_resolve_exit_trailing_uses_min_open_on_gap_down():
 
     回归测试：之前用 max 会虚假高估出场价（86 笔虚假 100% 胜率）。
     """
-    # entry=10.0, bar1 high=10.3（+3%，激活 trailing），触发价=10*(1+(3-0.8)/100)=10.22
-    # bar1 low=10.25 > 10.22 不触发；bar2 跳空低开 open=9.8, low=9.7 ≤ 10.22 → trailing 触发
+    # entry=10.0, bar1（入场日，不触发）；bar2 high=10.3（+3%，激活 trailing），触发价=10*(1+(3-0.8)/100)=10.22
+    # bar2 low=10.25 > 10.22 不触发；bar3 跳空低开 open=9.8, low=9.7 ≤ 10.22 → trailing 触发
     # exit=min(9.8, 10.22)=9.8（跨 bar 触发：跳空低开以 open 成交）
     bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.9, close=10.0, pct_chg=0.0),
         _bar_trailing(trade_date="2026-07-02", open=10.25, high=10.3, low=10.25, close=10.28, pct_chg=3.0),
         _bar_trailing(trade_date="2026-07-03", open=9.8, high=9.9, low=9.7, close=9.8, pct_chg=-5.0),
     ]
@@ -307,10 +313,11 @@ def test_resolve_exit_trailing_same_bar_uses_trigger_price():
     复现 000962 2026-07-08 真实场景：entry=64.08，当天 open≈平开，high 冲到 +4%，
     low 回落到触发价下方 → 应以触发价成交（+3% 附近），不是 open（-0.1%）。
     """
-    # entry=10.0, bar1: open=10.0（平开）, high=10.4（+4%，激活 trailing），触发价=10*(1+(4-0.8)/100)=10.32
-    # bar1 low=10.1 ≤ 10.32 → 同 bar 触发。旧口径 min(10.0, 10.32)=10.0（-0.2% 假亏）；
-    # 修复后取触发价 10.32（+3.2% 真盈）。
+    # entry=10.0, bar1（入场日，不触发）；bar2: open=10.0（平开）, high=10.4（+4%，激活 trailing），
+    # 触发价=10*(1+(4-0.8)/100)=10.32，bar2 low=10.1 ≤ 10.32 → 同 bar 触发。
+    # 旧口径 min(10.0, 10.32)=10.0（-0.2% 假亏）；修复后取触发价 10.32（+3.2% 真盈）。
     bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.9, close=10.0, pct_chg=0.0),
         _bar_trailing(trade_date="2026-07-02", open=10.0, high=10.4, low=10.1, close=10.2, pct_chg=2.0),
     ]
     result = _resolve_exit(bars, stop_loss_price=9.5, take_profit_price=12.0, code="000001", entry_price=10.0)
@@ -328,9 +335,10 @@ def test_resolve_exit_stop_loss_priority_over_trailing():
     （high 先到激活 trailing 再 low 触发）——跨 bar 保守口径下 0 笔改善，证明是过拟合。
     故 stop_loss 优先是保守口径，禁止改成 trailing 优先（除非有分钟级时序数据）。
     """
-    # bar1 high=10.3（激活 trailing），low=10.25 > 触发价 10.22 不触发
-    # bar2 low=9.5 触及 stop_loss → stop_loss 优先于 trailing 返回 stop_loss_hit
+    # bar1（入场日，不触发）；bar2 high=10.3（激活 trailing），low=10.25 > 触发价 10.22 不触发
+    # bar3 low=9.5 触及 stop_loss → stop_loss 优先于 trailing 返回 stop_loss_hit
     bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.9, close=10.0, pct_chg=0.0),
         _bar_trailing(trade_date="2026-07-02", open=10.25, high=10.3, low=10.25, close=10.28, pct_chg=3.0),
         _bar_trailing(trade_date="2026-07-03", open=9.6, high=9.7, low=9.5, close=9.6, pct_chg=-5.0),
     ]
@@ -347,9 +355,11 @@ def test_resolve_exit_same_bar_high_surge_then_stop_loss_uses_stop_loss():
     却止损"案例诱导想加 trailing 优先规则，本测试挡住——见 verify_trailing_priority.py
     反事实验证：同 bar trailing 优先变体 +11pp 胜率全是过拟合，跨 bar 保守口径 0 改善。
     """
-    # entry=10.0, 单 bar: high=11.4（+14% 激活 trailing，hwm=14），low=9.43（触 -5.7% 止损 9.43）
-    # trailing 触发价=10*(1+(14-0.8)/100)=11.32，low=9.43 ≤ 11.32 但 low ≤ stop_loss 9.43 先返回
+    # entry=10.0, bar1（入场日，不触发）；bar2 单 bar: high=11.4（+14% 激活 trailing，hwm=14），
+    # low=9.43（触 -5.7% 止损 9.43），trailing 触发价=10*(1+(14-0.8)/100)=11.32，
+    # low=9.43 ≤ 11.32 但 low ≤ stop_loss 9.43 先返回
     bars = [
+        _bar_trailing(trade_date="2026-07-08", open=10.0, high=10.1, low=9.9, close=10.0, pct_chg=0.0),
         _bar_trailing(trade_date="2026-07-09", open=10.0, high=11.4, low=9.43, close=9.5, pct_chg=-5.0),
     ]
     result = _resolve_exit(bars, stop_loss_price=9.43, take_profit_price=12.0, code="002674", entry_price=10.0)
@@ -359,8 +369,9 @@ def test_resolve_exit_same_bar_high_surge_then_stop_loss_uses_stop_loss():
 
 def test_resolve_exit_trailing_not_activated_below_threshold():
     """high 未达激活阈值（+2%）时 trailing 不激活，走 horizon_close。"""
-    # bar1 high=10.1（+1%，未达 2% 激活阈值）, bar2 回落 → horizon_close
+    # bar1（入场日，不触发）；bar2 high=10.1（+1%，未达 2% 激活阈值）, bar3 回落 → horizon_close
     bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.9, close=10.0, pct_chg=0.0),
         _bar_trailing(trade_date="2026-07-02", open=10.0, high=10.1, low=10.0, close=10.05, pct_chg=1.0),
         _bar_trailing(trade_date="2026-07-03", open=10.0, high=10.1, low=9.9, close=9.95, pct_chg=0.0),
     ]
@@ -650,6 +661,7 @@ def test_simulate_outcome_min_return_truncated_to_exit_not_horizon():
         code="688636",  # 科创板 20cm
         trade_date="2026-07-10",
         recommend_price=40.0,
+        recommended_at=datetime(2026, 7, 10, 2, 0),  # 盘中推荐（UTC 02:00=北京10:00）：T 当天入场、T+1 离场
         feature_snapshot_json=json.dumps(snapshot_dict, ensure_ascii=False),
     )
     bars = [
@@ -684,11 +696,12 @@ def test_simulate_outcome_take_profit_min_return_truncated():
         code="300270",  # 创业板 20cm，避免 -12.65% 跌幅触发主板除权检测
         trade_date="2026-07-09",
         recommend_price=30.0,
+        recommended_at=datetime(2026, 7, 9, 2, 0),  # 盘中推荐（UTC 02:00=北京10:00）：T 当天入场、T+1 离场
         feature_snapshot_json=json.dumps(snapshot_dict, ensure_ascii=False),
     )
     bars = [
-        _bar(trade_date="2026-07-09", open=30.5, high=31.0, low=30.2, close=30.8, pct_chg=0.0),
-        # 07-10: low=29.5 触及 ideal_buy=30（entry 触发），high=33.5 触及 tp=33（take_profit_hit）
+        _bar(trade_date="2026-07-09", open=30.5, high=31.0, low=29.8, close=30.8, pct_chg=0.0),
+        # 07-10: 入场次日，high=33.5 触及 tp=33（take_profit_hit）
         _bar(trade_date="2026-07-10", open=31.0, high=33.5, low=29.5, close=33.2, pct_chg=7.8),
         # exit 后温和下跌（pct_chg 与 price_jump 一致，不触发除权检测），但 low=28 低于 exit 日 low
         _bar(trade_date="2026-07-13", open=33.0, high=33.2, low=28.0, close=29.0, pct_chg=-12.65),

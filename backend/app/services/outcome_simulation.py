@@ -39,10 +39,33 @@ from __future__ import annotations
 
 import json
 from bisect import bisect_left
+from datetime import time
 from typing import Any
 
 from app.engine.board_rules import is_one_word_limit_down_bar, limit_pct_for_code
 from app.models.tables import DailyKbar, Recommendation
+
+# A 股 T+1 交收：买入当日不能卖出。推荐时点决定入场日与最早可离场日：
+# - 盘后推荐（recommended_at 落在非交易时段）：推荐价≈当日收盘，T+1 才能买入 → 离场最早 T+2
+# - 盘中推荐（recommended_at 落在交易时段）：推荐价为盘中实时价，T 当天可成交 → 离场最早 T+1
+# recommended_at 以 UTC 存储（datetime.utcnow），北京时间 09:30–15:00 = UTC 01:30–07:00。
+_INTRADAY_UTC_START = time(1, 30)
+_INTRADAY_UTC_END = time(7, 0)
+
+
+def _is_intraday_recommendation(rec: Recommendation) -> bool:
+    """推荐是否在交易时段内发出（盘中推荐）。
+
+    盘中推荐可当日按推荐价成交（T 入场、T+1 离场）；盘后推荐只能 T+1 入场、T+2 离场。
+    recommended_at 缺失时按盘后处理（保守：延后离场，不虚构当日可卖）。
+    """
+    recommended_at = getattr(rec, "recommended_at", None)
+    if recommended_at is None:
+        return False
+    t = recommended_at.time() if hasattr(recommended_at, "time") else None
+    if t is None:
+        return False
+    return _INTRADAY_UTC_START <= t <= _INTRADAY_UTC_END
 from app.services.execution_constraints import (
     entry_execution_block_reason_from_bar,
     exit_execution_block_reason_from_bar,
@@ -158,7 +181,9 @@ def _simulate_outcome(
     # entry 解析：BREAKDOWN_HORIZON_DAYS=[3,5,10] 都 ≥ ENTRY_LOOKAHEAD_DAYS=2，
     # entry_window=future_bars[:2] 与 horizon_days 无关 → 3 horizon 可共享一次解析。
     # pre_resolved_entry 由 _compute_horizon_metric_records 预解析传入，省 2/3 _resolve_entry 调用（占模拟 77%）。
-    entry_result = pre_resolved_entry if pre_resolved_entry is not None else _resolve_entry(rec, feature_snapshot, future_bars, horizon_days)
+    entry_result = pre_resolved_entry if pre_resolved_entry is not None else _resolve_entry(
+        rec, feature_snapshot, future_bars, horizon_days, signal_bar=signal_bar,
+    )
     position_size = _resolve_position_size(feature_snapshot)
 
     if not entry_result.get("triggered"):
@@ -185,7 +210,6 @@ def _simulate_outcome(
             "outcome_reason": f"{entry_result.get('reason') or '未触发买点，未建仓'}；静态窗口结果仅作旁路参考",
         }
 
-    entry_index = int(entry_result["bar_index"])
     raw_entry_price = float(entry_result["price"])
     entry_date = str(entry_result["date"])
 
@@ -224,7 +248,20 @@ def _simulate_outcome(
         raw_entry_price, feature_snapshot, recommend_price=recommend_price
     )
 
-    holding_bars = future_bars[entry_index : entry_index + max(1, horizon_days)]
+    # 持仓 K 线：从入场日（含）起的 future bars，取 horizon_days 根。
+    # 用 entry_date 在 bars 里定位起点，而非 entry_index——盘中推荐时入场日可能是
+    # signal_bar（T 当天），entry_index 相对 entry_window 的语义与 future_bars 不同步，
+    # 按 entry_date 定位最稳。入场日是 signal_bar 时从 signal_index 起，否则从 future_start 起。
+    if signal_bar is not None and entry_date == str(signal_bar.trade_date):
+        holding_start = signal_index
+    else:
+        holding_start = future_start
+        # 在 future_bars 里找 entry_date 对应的偏移
+        for _i, _b in enumerate(future_bars):
+            if str(_b.trade_date) == entry_date:
+                holding_start = future_start + _i
+                break
+    holding_bars = bars[holding_start : holding_start + max(1, horizon_days)]
     if not holding_bars:
         return None
 
@@ -400,7 +437,19 @@ def _resolve_entry(
     feature_snapshot: dict[str, Any],
     future_bars: list[DailyKbar],
     horizon_days: int,
+    *,
+    signal_bar: DailyKbar | None = None,
 ) -> dict[str, Any]:
+    """解析入场日与入场价。
+
+    推荐时点决定入场候选窗口：
+    - 盘中推荐（_is_intraday_recommendation）：signal_bar（推荐日 T 当天）作为首个候选，
+      推荐价为盘中实时价可当日成交；之后才是 future_bars（T+1、T+2）。
+    - 盘后推荐：signal_bar 不作为候选（盘后只能 T+1 买入），维持 future_bars[:2] 原窗口。
+
+    入场优先级：目标买点（ideal_buy/secondary_buy 的 low 触及）> 次日开盘市价回退。
+    """
+    intraday = _is_intraday_recommendation(rec)
     entry_targets = [
         value for value in (
             _as_float(feature_snapshot.get("ideal_buy")),
@@ -408,7 +457,12 @@ def _resolve_entry(
         )
         if value > 0
     ]
-    entry_window = future_bars[: max(1, min(ENTRY_LOOKAHEAD_DAYS, horizon_days, len(future_bars)))]
+    lookahead = max(1, min(ENTRY_LOOKAHEAD_DAYS, horizon_days, len(future_bars)))
+    # 盘中推荐：signal_bar 作首候选（T 当天），后接 future_bars 前 lookahead 根
+    if intraday and signal_bar is not None:
+        entry_window = [signal_bar] + future_bars[:lookahead]
+    else:
+        entry_window = future_bars[:lookahead]
     blocked_reasons: list[str] = []
     for bar_index, bar in enumerate(entry_window):
         low = _as_float(bar.low)
@@ -482,18 +536,26 @@ def _resolve_exit(
 ) -> tuple[float, str, str]:
     """模拟退出逻辑：固定止损/止盈优先，条件 trailing stop 兜底。
 
-    两轮扫描：
+    A 股 T+1 交收：买入当日不能卖出。holding_bars[0] 是入场日，**当天不触发任何离场**
+    （含开盘跳空止损、盘中 high/low 触及止盈止损），从 holding_bars[1:]（入场日次日起）起扫。
+    若仅 1 根 bar（入场日即 horizon 末），强制 horizon_close——持仓但未到可卖日，按入场日收盘标记。
+
+    两轮扫描（在 holding_bars[1:] 上）：
       1. 第一轮用原 stop_loss/take_profit 逻辑找出基准 exit；
          若基准是 take_profit_*（含 both_hit），直接返回——trailing 不抢跑 TP 路径。
       2. 若基准是 stop_loss_*/horizon_close（即 holding 期内未触及 TP），
          第二轮应用 trailing stop 重模拟：high 达 entry+2% 激活，自峰值回撤 0.8% 锁利。
 
-    回测验证（235 笔 formal 样本，扣费 0.10%/笔）：胜率 49.4%→66.8%、盈亏比 1.38→1.89、
-    总收益 +232→+685、最大亏损 -15.19%→-7.17%。关键：take_profit 路径完整保留。
     时序口径：触发价取 min(open, 触发价)，跳空低开时以 open 成交（max 会虚假高估）。
     """
+    # T+1 约束：入场日 holding_bars[0] 不参与离场，从次日起扫
+    if len(holding_bars) <= 1:
+        last = holding_bars[-1]
+        return _as_float(last.close or 0), str(last.trade_date), "horizon_close_t1_locked"
+    scan_bars = holding_bars[1:]
+
     # 第一轮：基准 exit（原 stop_loss/take_profit 逻辑）
-    base_exit = _resolve_exit_base(holding_bars, stop_loss_price, take_profit_price,
+    base_exit = _resolve_exit_base(scan_bars, stop_loss_price, take_profit_price,
                                     code=code, entry_price=entry_price)
     base_reason = base_exit[2]
     # take_profit 路径不应用 trailing（避免抢跑 TP，回测显示抢跑导致 -1897% 损失）
@@ -502,7 +564,7 @@ def _resolve_exit(
 
     # 第二轮：基准是 stop_loss_*/horizon_close，应用条件 trailing stop
     trailing_exit = _resolve_exit_with_trailing(
-        holding_bars, stop_loss_price, take_profit_price,
+        scan_bars, stop_loss_price, take_profit_price,
         code=code, entry_price=entry_price,
     )
     return trailing_exit
