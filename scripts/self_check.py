@@ -107,6 +107,19 @@ def check_a_item(db) -> None:
     ok_dates = sorted(d for d, ok in by_date.items() if ok)
     gap_dates = sorted(d for d, ok in by_date.items() if not ok)
     print(f'A 项：最近 7 天有 {len(ok_dates)} 个交易日产出 formal 推荐（目标 ≥5）')
+    # pending outcomes 计数：未结算推荐数（outcome=None 或 pending），让用户知道有推荐待 T+1 结算
+    try:
+        pending_count = db.execute(text("""
+            SELECT COUNT(*) FROM recommendations rec
+            JOIN recommendation_runs rr ON rec.run_id = rr.run_id
+            LEFT JOIN recommendation_outcomes ro ON rec.recommendation_id = ro.recommendation_id
+            WHERE rr.run_mode = 'formal' AND rec.recommendation_id LIKE 'rec_%'
+              AND (ro.outcome_label IS NULL OR ro.outcome_label = 'pending')
+        """)).scalar() or 0
+        if pending_count > 0:
+            print(f'  ℹ️ {pending_count} 笔 pending 推荐（待 T+1 结算；盘后流水线/safety_net 会自动结算）')
+    except Exception:
+        pass
     if gap_dates:
         protective: list[str] = []
         faulty: list[str] = []
