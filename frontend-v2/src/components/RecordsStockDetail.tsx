@@ -160,6 +160,23 @@ function OutcomeSection({
           )}
         </div>
       )}
+      {outcome?.entry_date && (
+        <div style={{ display: "flex", gap: "var(--space-4)", flexWrap: "wrap", alignItems: "center", padding: "var(--space-2) 0", fontSize: "var(--text-sm)", color: "var(--muted)" }}>
+          <span>入场基准：</span>
+          <span style={{ fontFamily: "var(--font-mono)" }}>{outcome.entry_date}</span>
+          {outcome.entry_price != null && (
+            <span style={{ fontFamily: "var(--font-mono)" }}>开 {outcome.entry_price.toFixed(2)}</span>
+          )}
+          {outcome.exit_date && (
+            <>
+              <span>→</span>
+              <span style={{ fontFamily: "var(--font-mono)" }}>{outcome.exit_date} 离场</span>
+            </>
+          )}
+          <span style={{ color: "var(--line-strong)" }}>·</span>
+          <span>T+1 交收口径（入场日不触发离场，含跳空止损）</span>
+        </div>
+      )}
       {timeline && timeline.length > 0 && (
         <div style={{ overflowX: "auto", marginTop: "var(--space-3)" }}>
           <table style={tableStyle}>
