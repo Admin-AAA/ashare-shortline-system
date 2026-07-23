@@ -3779,8 +3779,21 @@ def check_auxiliary_factor_data(db) -> None:
             else:
                 ov = 0
             status = "✅可做因子" if (needs_ts and days and days >= 20) or (not needs_ts and n and n >= 200) else "⚠️覆盖不足"
+            # capital_flow 数据质量校验：max(abs(main_net))<0.1 说明单位又错了（万元/亿=1e-4）
+            # 2026-07-24 曾发生 80 天 ~0 值但覆盖诊断显示✅的漏检。backfill 已修(/1e4)，
+            # 此校验防 Tushare 改单位/字段时回归。
+            quality_tag = ""
+            if table == "capital_flow" and n and n > 0:
+                max_abs = db.execute(text(
+                    "SELECT MAX(ABS(main_net_inflow_yi)) FROM capital_flow WHERE main_net_inflow_yi IS NOT NULL"
+                )).fetchone()[0]
+                if max_abs is not None and max_abs < 0.1:
+                    quality_tag = " ⚠️数据质量异常(max_abs<0.1，疑单位错误/1e8)"
+                    status = "⚠️数据质量异常"
+                else:
+                    quality_tag = f" 质量✅(max_abs={max_abs:.1f})" if max_abs is not None else ""
             print(f'  {table:16} {usage}: n={n} days={days} {first_d}→{last_d} '
-                  f'重叠formal {ov}/10 {status}')
+                  f'重叠formal {ov}/10 {status}{quality_tag}')
         except Exception as exc:
             print(f'  {table:16} {usage}: 查询失败 {str(exc)[:60]}')
 
