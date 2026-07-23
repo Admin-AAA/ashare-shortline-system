@@ -48,7 +48,7 @@ def main() -> None:
     db = SessionLocal()
     try:
         rows = [dict(r._mapping) for r in db.execute(text("""
-            SELECT r.code, r.trade_date, o.outcome_label,
+            SELECT r.code, r.trade_date, o.outcome_label, o.executed_return,
                    cf.main_net_inflow_yi, cf.super_large_net_inflow_yi,
                    cf.large_net_inflow_yi, cf.cumulative_inflow_3d_yi,
                    cf.cumulative_inflow_5d_yi
@@ -110,6 +110,33 @@ def main() -> None:
             else:
                 print(f"  feature_signal_guard: ❌ {guard['reason']}")
                 print(f"  → 禁止据此加规则（单日伪影风险）")
+
+            # 反事实：剔除最强因子<=0 的票后 D 项净盈亏比变化（量化因子边际价值）
+            # 只读分析，不加规则。代价=损失被剔除的样本量，需权衡信息增益 vs 样本损失。
+            def _net_pl(lst):
+                rets = [float(r['executed_return'] or 0) - 0.07 for r in lst if r['executed_return'] is not None]
+                if not rets: return None, 0, 0
+                win = sum(x for x in rets if x > 0)
+                lose = abs(sum(x for x in rets if x < 0))
+                pl = win / lose if lose > 0 else float('inf')
+                wr = sum(1 for r in lst if r['outcome_label'] == 'success') * 100 / len(lst)
+                avg = sum(rets) / len(rets)
+                return pl, wr, avg
+
+            all_rows = [r for r in rows if r[field] is not None and abs(float(r[field] or 0)) > 0.001]
+            kept = [r for r in all_rows if float(r[field] or 0) > 0]
+            dropped = [r for r in all_rows if float(r[field] or 0) <= 0]
+            pl_all, wr_all, avg_all = _net_pl(all_rows)
+            pl_kept, wr_kept, avg_kept = _net_pl(kept)
+            pl_drop, wr_drop, avg_drop = _net_pl(dropped)
+            if pl_all and pl_kept:
+                drop_pct = len(dropped) * 100 / len(all_rows) if all_rows else 0
+                print(f"\n  反事实（剔除 {name}<=0 的票）:")
+                print(f"    全量:        n={len(all_rows)} WR={wr_all:.1f}% avg={avg_all:.2f}% 净PL={pl_all:.2f}")
+                print(f"    剔除后(>0):  n={len(kept)} WR={wr_kept:.1f}% avg={avg_kept:.2f}% 净PL={pl_kept:.2f}")
+                print(f"    被剔除(<=0): n={len(dropped)} WR={wr_drop:.1f}% avg={avg_drop:.2f}% 净PL={pl_drop:.2f}")
+                print(f"    边际: WR {wr_all:.1f}→{wr_kept:.1f} ({wr_kept-wr_all:+.1f}pp) | "
+                      f"净PL {pl_all:.2f}→{pl_kept:.2f} ({pl_kept-pl_all:+.2f}) | 代价=损失{drop_pct:.0f}%样本")
     finally:
         db.close()
 
