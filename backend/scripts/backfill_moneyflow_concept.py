@@ -37,6 +37,21 @@ def moneyflow_coverage_sufficient(
     return moneyflow_count / daily_universe_count >= minimum_ratio
 
 
+# Tushare moneyflow 的 buy_elg_amount 等单位是万元，转亿用 /1e4（非 /1e8）。
+# 旧代码 /1e8 致 main_net_inflow_yi 全是 ~0 小值（万元/亿=1e-4 量级），ratio 因分母接近
+# 0 产出 -3909310 异常值，累计流入也全 0。2026-07-24 修复 + 重算全历史。
+MONEYFLOW_WAN_TO_YI = 1e4
+
+
+def moneyflow_net_yi(buy_amount_wan: float, sell_amount_wan: float) -> float:
+    """单档资金净流入：万元买入 - 万元卖出，转亿。
+
+    主力净流入 = 超大单净 + 大单净 = moneyflow_net_yi(elg) + moneyflow_net_yi(lg)。
+    提取为纯函数便于单测锁定单位（/1e4 万元→亿，非 /1e8）。
+    """
+    return (float(buy_amount_wan or 0) - float(sell_amount_wan or 0)) / MONEYFLOW_WAN_TO_YI
+
+
 def get_trading_dates(db, start_date: str, end_date: str) -> list[str]:
     trading_dates = db.execute(
         select(DailyKbar.trade_date)
@@ -105,10 +120,13 @@ def backfill_moneyflow(pro, db, start_date: str, end_date: str) -> dict:
                     buy_sm = float(row.get("buy_sm_amount", 0) or 0)
                     sell_sm = float(row.get("sell_sm_amount", 0) or 0)
 
-                    super_large = (buy_elg - sell_elg) / 1e8
-                    large = (buy_lg - sell_lg) / 1e8
-                    medium = (buy_md - sell_md) / 1e8
-                    small = (buy_sm - sell_sm) / 1e8
+                    # Tushare moneyflow 的 buy_elg_amount 等单位是万元，转亿用 /1e4（非 /1e8）。
+                    # 旧代码 /1e8 致 main_net_inflow_yi 全是 ~0 小值（万元/亿=1e-4 量级），
+                    # ratio 因分母接近 0 产出 -3909310 等异常值，累计流入也全 0。
+                    super_large = moneyflow_net_yi(buy_elg, sell_elg)
+                    large = moneyflow_net_yi(buy_lg, sell_lg)
+                    medium = moneyflow_net_yi(buy_md, sell_md)
+                    small = moneyflow_net_yi(buy_sm, sell_sm)
                     main_net = super_large + large
 
                     records.append({
@@ -125,7 +143,15 @@ def backfill_moneyflow(pro, db, start_date: str, end_date: str) -> dict:
 
             if records:
                 stmt = mysql_insert(CapitalFlow).values(records)
-                stmt = stmt.on_duplicate_key_update(id=CapitalFlow.id)
+                # 主键 (code, trade_date) 冲突时更新所有字段——旧 on_duplicate_key_update(id=id)
+                # 等于啥也不更新，致已存在行不被新数据覆盖（单位修复后旧 ~0 值残留）。
+                stmt = stmt.on_duplicate_key_update(
+                    main_net_inflow_yi=stmt.inserted.main_net_inflow_yi,
+                    super_large_net_inflow_yi=stmt.inserted.super_large_net_inflow_yi,
+                    large_net_inflow_yi=stmt.inserted.large_net_inflow_yi,
+                    medium_net_inflow_yi=stmt.inserted.medium_net_inflow_yi,
+                    small_net_inflow_yi=stmt.inserted.small_net_inflow_yi,
+                )
                 db.execute(stmt)
                 db.commit()
                 stored += len(records)
@@ -159,14 +185,15 @@ def compute_cumulative_inflows(db):
             cum_5d = sum(items[j].main_net_inflow_yi or 0 for j in range(max(0, i - 4), i + 1))
             cum_10d = sum(items[j].main_net_inflow_yi or 0 for j in range(max(0, i - 9), i + 1))
 
-            # main_net_inflow_ratio = main_net / total trade amount (approximate)
-            # For now, set a placeholder
-            ratio = main_yi / (abs(main_yi) + 0.01) * 0.05 if main_yi != 0 else 0
-
+            # main_net_inflow_ratio = 主力净流入 / 当日成交额（占比，-100~100）。
+            # 旧代码是占位符垃圾公式 x/(|x|+0.01)*0.05≈±0.05，产出无意义值 + 旧 main_yi 单位
+            # 错时放大成 -3909310 异常值。capital_flow 表无成交额字段，ratio 需 join daily_kbars
+            # 才能算——暂置 NULL 诚实标记未算，避免垃圾值误导因子分析。main_net_inflow_yi
+            # 本身（已修单位）才是因子本体，ratio 是衍生指标，未来需要时再补成交额 join。
             item.cumulative_inflow_3d_yi = round(cum_3d, 4)
             item.cumulative_inflow_5d_yi = round(cum_5d, 4)
             item.cumulative_inflow_10d_yi = round(cum_10d, 4)
-            item.main_net_inflow_ratio = round(ratio, 4)
+            item.main_net_inflow_ratio = None
             updated += 1
 
     db.commit()
