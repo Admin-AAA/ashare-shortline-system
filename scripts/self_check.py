@@ -3746,9 +3746,10 @@ def check_auxiliary_factor_data(db) -> None:
     覆盖不足，贸然加因子会用到缺失数据（启发式近似，违反第一性原理）。本诊断让未来 T1 轮次
     一眼看到哪些数据可做因子、覆盖多少天、是否与推荐日重叠，避免每轮重新发现「数据不够」。
     """
-    # (表名, 因子用途, 是否需时间序列, 日期列)——holder_numbers 是季报用 end_date 非 trade_date
+    # (表名, 因子用途, 是否需时间序列, 日期列)——margin_detail 是全市场批量（51天），
+    # margin_data 是逐股票样本仅4天；holder_numbers 是季报用 end_date 非 trade_date
     sources = [
-        ("margin_data", "融资融券（rzmre 融资买入额）", True, "trade_date"),
+        ("margin_detail", "融资融券（rzmre 融资买入额，全市场批量）", True, "trade_date"),
         ("block_trades", "大宗交易（折价/成交量）", False, "trade_date"),
         ("capital_flow", "主力资金净流入（main_net_inflow_yi）", True, "trade_date"),
         ("holder_numbers", "股东人数变化（筹码集中度）", True, "end_date"),
@@ -3815,6 +3816,34 @@ def check_auxiliary_factor_data(db) -> None:
                   f'基准 r_pb=+0.118(2026-07-24)，衰减>30%需复查')
     except Exception as exc:
         print(f'  资金流因子预测力查询失败: {str(exc)[:60]}')
+
+    # 融资融券因子预测力（margin_detail rzmre 变化率 vs outcome）
+    # 2026-07-24 分析：rzmre 绝对值 r_pb=+0.047 弱；变化率(当日vs近5日均值) r_pb=+0.085 仍弱于
+    # 资金流 +0.118。融资盘（散户杠杆）预测力弱于主力资金净流入——记录避免重复探索。
+    try:
+        rows = db.execute(text("""
+            SELECT o.outcome_label, md.rzmre
+            FROM recommendations r
+            JOIN recommendation_runs rr ON r.run_id = rr.run_id
+            JOIN recommendation_outcomes o ON o.recommendation_id = r.recommendation_id
+            JOIN margin_detail md ON md.code = r.code AND md.trade_date = r.trade_date
+            WHERE rr.run_mode='formal' AND o.outcome_label IN ('success','failed')
+              AND md.rzmre IS NOT NULL AND md.rzmre > 0
+        """)).fetchall()
+        if len(rows) >= 20:
+            import math as _m
+            x = [float(r[1] or 0) for r in rows]
+            y = [1 if r[0] == 'success' else 0 for r in rows]
+            n1, n0 = sum(y), len(y) - sum(y)
+            mean = sum(x) / len(x)
+            sd = _m.sqrt(sum((xi - mean) ** 2 for xi in x) / len(x))
+            r_pb = (sum(xi for xi, yi in zip(x, y) if yi == 1) / n1 -
+                    sum(xi for xi, yi in zip(x, y) if yi == 0) / n0) / sd * _m.sqrt(n1 * n0 / (len(y) ** 2)) if sd > 0 and n1 and n0 else None
+            r_pb_str = f'{r_pb:+.4f}' if r_pb is not None else 'N/A'
+            print(f'  融资融券因子(rzmre绝对值): n={len(rows)} r_pb={r_pb_str} | '
+                  f'弱预测力（变化率 r_pb≈+0.085 仍弱于资金流 +0.118，融资盘预测力低）')
+    except Exception as exc:
+        print(f'  融资融券因子预测力查询失败: {str(exc)[:60]}')
 
 
 def main() -> None:
