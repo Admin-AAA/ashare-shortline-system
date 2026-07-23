@@ -329,15 +329,23 @@ async def check_route_availability() -> list[dict]:
                     model_count = len(models) if isinstance(models, list) else 0
                 except Exception:
                     model_count = 0
+            # 401/403 = 鉴权失败（key 无效/过期），base_url 可达但路由不可用；
+            # 5xx = 上游不可用。两者都标 reachable=False，让用户知道路由实际不可用。
+            ok = resp.status_code < 400
+            err_msg = None
+            if resp.status_code in (401, 403):
+                err_msg = f"鉴权失败 HTTP {resp.status_code}（key 无效/过期，需更新路由配置）"
+            elif resp.status_code >= 500:
+                err_msg = f"HTTP {resp.status_code}"
             return {
                 "route_id": route.route_id,
                 "name": route.name,
                 "base_url": base,
                 "model": route.model,
-                "reachable": resp.status_code < 500,
+                "reachable": ok,
                 "status_code": resp.status_code,
                 "model_count": model_count,
-                "error": None if resp.status_code < 500 else f"HTTP {resp.status_code}",
+                "error": err_msg,
             }
         except httpx.TimeoutException:
             return {"route_id": route.route_id, "name": route.name, "base_url": base,
