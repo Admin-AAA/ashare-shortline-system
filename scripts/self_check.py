@@ -2425,6 +2425,22 @@ def check_d_item(db) -> None:
                   f'（07-16 含 soft@震荡+低线+单日regime风险，均已 Contract 拦截），'
                   f'非 D 项退化；待更多交易日结算后复核，勿据此循环加规则。')
 
+        # clean≥72 前瞻样本积累进度（D 项 OOS 前置）：报告距 MIN_OOS_SAMPLE(10) 还差几笔
+        try:
+            fwd_clean_n = int(db.execute(text("""
+                SELECT COUNT(*) FROM recommendations rec
+                JOIN recommendation_runs rr ON rec.run_id = rr.run_id
+                JOIN recommendation_outcomes ro ON rec.recommendation_id = ro.recommendation_id
+                WHERE rr.run_mode = 'formal' AND rec.recommendation_id LIKE 'rec_%'
+                  AND rec.trade_date >= :epoch AND rec.final_score >= 72.0
+                  AND ro.outcome_label IN ('success', 'failed')
+            """), {"epoch": FORWARD_EPOCH}).scalar() or 0)
+            if fwd_clean_n < MIN_OOS_SAMPLE:
+                print(f'  ℹ️ 前瞻 clean≥72 已结算 {fwd_clean_n}/{MIN_OOS_SAMPLE} 笔'
+                      f'（距 OOS 验证还差 {MIN_OOS_SAMPLE - fwd_clean_n} 笔，每天盘后结算）')
+        except Exception:
+            pass
+
     # 前瞻验证护栏：全量高于基线但前瞻窗口空 → 不可 claim 改进（见 _forward_verification_flag）
     flag = _forward_verification_flag(full_res[0] if full_res else None, fwd_res, WIN_RATE_BASELINE)
     if flag:
