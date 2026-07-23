@@ -3739,6 +3739,51 @@ def _rid_trade_date(rid: str) -> str:
     return f'{d[:4]}-{d[4:6]}-{d[6:8]}'
 
 
+def check_auxiliary_factor_data(db) -> None:
+    """T1 新因子数据可用性诊断：扫描辅助数据源表，报告覆盖天数/最新日期/与 formal 推荐日重叠率。
+
+    T1 研发新因子前需确认数据可用——margin/capital_flow/block_trades 等表常因「只补当天不补历史」
+    覆盖不足，贸然加因子会用到缺失数据（启发式近似，违反第一性原理）。本诊断让未来 T1 轮次
+    一眼看到哪些数据可做因子、覆盖多少天、是否与推荐日重叠，避免每轮重新发现「数据不够」。
+    """
+    # (表名, 因子用途, 是否需时间序列, 日期列)——holder_numbers 是季报用 end_date 非 trade_date
+    sources = [
+        ("margin_data", "融资融券（rzmre 融资买入额）", True, "trade_date"),
+        ("block_trades", "大宗交易（折价/成交量）", False, "trade_date"),
+        ("capital_flow", "主力资金净流入（main_net_inflow_yi）", True, "trade_date"),
+        ("holder_numbers", "股东人数变化（筹码集中度）", True, "end_date"),
+    ]
+    # 近 10 个 formal 推荐日（用于算重叠率）
+    formal_dates = db.execute(text("""
+        SELECT DISTINCT r.trade_date FROM recommendations r
+        JOIN recommendation_runs rr ON r.run_id=rr.run_id
+        WHERE rr.run_mode='formal' ORDER BY r.trade_date DESC LIMIT 10
+    """)).fetchall()
+    formal_date_set = {str(r[0]) for r in formal_dates}
+
+    print('T1 新因子数据可用性（辅助数据源覆盖诊断）:')
+    for table, usage, needs_ts, date_col in sources:
+        try:
+            r = db.execute(text(f"""
+                SELECT COUNT(*) AS n, MAX({date_col}) AS last_d, MIN({date_col}) AS first_d,
+                       COUNT(DISTINCT {date_col}) AS days
+                FROM {table}
+                WHERE {date_col} IS NOT NULL
+            """)).fetchone()
+            n, last_d, first_d, days = r[0], r[1], r[2], r[3]
+            # 与近10 formal 推荐日的重叠（数据日 ≠ 推荐日时因子无法对齐 outcome）
+            if formal_date_set:
+                in_list = ",".join(f"'{d}'" for d in formal_date_set)
+                ov = db.execute(text(f"SELECT COUNT(DISTINCT {date_col}) FROM {table} WHERE {date_col} IN ({in_list})")).fetchone()[0]
+            else:
+                ov = 0
+            status = "✅可做因子" if (needs_ts and days and days >= 20) or (not needs_ts and n and n >= 200) else "⚠️覆盖不足"
+            print(f'  {table:16} {usage}: n={n} days={days} {first_d}→{last_d} '
+                  f'重叠formal {ov}/10 {status}')
+        except Exception as exc:
+            print(f'  {table:16} {usage}: 查询失败 {str(exc)[:60]}')
+
+
 def main() -> None:
     global FORWARD_EPOCH
     db = SessionLocal()
@@ -3749,6 +3794,7 @@ def main() -> None:
         hit_skills = check_c_item(db)
         check_e_item(db, hit_skills)
         check_d_item(db)
+        check_auxiliary_factor_data(db)
         check_scheduler_health(db)
         check_backtest_consistency(db)
     finally:
