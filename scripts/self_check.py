@@ -2591,6 +2591,50 @@ def _backtest_consistency_stats(trades: list) -> dict:
     return out
 
 
+def check_scheduler_health(db) -> None:
+    """盘后流水线调度健康（T12 可观测性）：报告 post_sync_formal_recommendation 的
+    last_run_at/last_status，让用户知道流水线是否正常执行。
+
+    根因（2026-07-23 调研）：07-22 推荐未结算（outcome=None），因为盘后流水线
+    post_sync_formal_recommendation last_status=failed（07-21 10:20），07-22 17:35
+    没跑。流水线含 outcome 结算步骤 → 不跑则前瞻样本无法积累（D 项阻塞）。
+    """
+    try:
+        rows = db.execute(text("""
+            SELECT task_id, task_type, cron_expression, enabled, last_run_at, last_status, last_error
+            FROM scheduled_tasks WHERE enabled = 1 ORDER BY task_id
+        """)).fetchall()
+    except Exception as exc:
+        print(f'  ⚠️ 调度健康诊断查询失败: {exc}')
+        return
+    if not rows:
+        return
+    print('  调度健康（enabled tasks）:')
+    from datetime import datetime
+    now = datetime.now()
+    for r in rows:
+        tid, ttype, cron, enabled, last_run, last_status, last_error = r
+        # 盘后流水线 last_status=failed 或超过1交易日没跑 → 警告
+        flag = ""
+        if str(last_status) == "failed":
+            flag = " ⚠️上次失败"
+        if last_run:
+            try:
+                last_dt = last_run if hasattr(last_run, 'date') else datetime.strptime(str(last_run), '%Y-%m-%d %H:%M:%S')
+                days_ago = (now - last_dt).days
+                if days_ago >= 2 and str(ttype) == "recommendation_run":
+                    flag += f" ⚠️{days_ago}天未跑"
+            except Exception:
+                pass
+        err_str = f" err={str(last_error or '')[:60]}" if last_error else ""
+        print(f'    {tid}: cron={cron} last={last_run} status={last_status}{flag}{err_str}')
+    # 特别检查盘后流水线
+    postclose = next((r for r in rows if str(r[0]) == "post_sync_formal_recommendation"), None)
+    if postclose and str(postclose[5]) == "failed":
+        print('    ——盘后流水线上次失败：outcome 结算 + formal 推荐未执行，前瞻样本无法积累（D 项阻塞）。')
+        print('      查 app.log 排查失败原因；手动触发 label_pending_outcomes 结算 pending 推荐。')
+
+
 def check_backtest_consistency(db) -> None:
     """T2 回测一致性诊断：P0 backtest 胜率 vs LIVE formal，标注口径差异。
 
@@ -3640,6 +3684,7 @@ def main() -> None:
         hit_skills = check_c_item(db)
         check_e_item(db, hit_skills)
         check_d_item(db)
+        check_scheduler_health(db)
         check_backtest_consistency(db)
     finally:
         db.close()
