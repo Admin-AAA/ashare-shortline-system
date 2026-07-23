@@ -3811,9 +3811,13 @@ def check_auxiliary_factor_data(db) -> None:
             wr_pos = sum(pos) * 100 / len(pos) if pos else 0
             wr_neg = sum(neg) * 100 / len(neg) if neg else 0
             r_pb_str = f'{r_pb:+.4f}' if r_pb is not None else 'N/A'
+            # Alpha 衰减自动判定：r_pb 较基准衰减>30% 即 ⚠️（T1 要求）
+            _BASELINE_RPB = 0.118  # 2026-07-24 发现时的 r_pb
+            _decay = (1 - r_pb / _BASELINE_RPB) * 100 if r_pb is not None and _BASELINE_RPB > 0 else None
+            _decay_tag = f' ⚠️衰减{_decay:.0f}%(>30%需复查)' if _decay is not None and _decay > 30 else ' ✅无衰减'
             print(f'  资金流因子(3日累计主力净流入): n={len(rows)} r_pb={r_pb_str} | '
                   f'流入>0 WR={wr_pos:.1f}% 流入<=0 WR={wr_neg:.1f}% (Δ{wr_pos-wr_neg:+.1f}pp) | '
-                  f'基准 r_pb=+0.118(2026-07-24)，衰减>30%需复查')
+                  f'基准 r_pb=+{_BASELINE_RPB:.3f}{_decay_tag}')
     except Exception as exc:
         print(f'  资金流因子预测力查询失败: {str(exc)[:60]}')
 
