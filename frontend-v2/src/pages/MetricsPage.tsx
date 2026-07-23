@@ -685,6 +685,13 @@ function CallHealthBlock({
           失败：{latest.top_reasons.map((x) => `${x.reason}=${x.count}`).join(" ")}
         </div>
       )}
+      {latest && latest.sample_errors && latest.sample_errors.length > 0 && (
+        <div style={{ marginTop: "var(--space-1)", fontSize: "var(--text-xs)", color: "var(--text-muted)", lineHeight: 1.5 }}>
+          {latest.sample_errors.map((e, i) => (
+            <div key={i} style={{ opacity: 0.8 }}>• {e}</div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

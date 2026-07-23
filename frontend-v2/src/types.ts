@@ -290,6 +290,7 @@ export type LlmCallHealthRun = {
   rate: number; // 成功率（0-100）
   unhealthy: boolean; // 成功率 <80%
   top_reasons: { reason: string; count: number }[]; // 失败原因 top3
+  sample_errors: string[]; // 失败样本错误文本（最多3个，截120字）
 };
 
 export type LlmCallHealth = {
