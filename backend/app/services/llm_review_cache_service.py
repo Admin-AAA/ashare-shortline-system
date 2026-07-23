@@ -166,7 +166,8 @@ def recent_llm_call_health(db: Session, *, limit: int = 5) -> dict[str, Any]:
                JSON_UNQUOTE(JSON_EXTRACT(result_summary_json, '$.pipeline.skill_review_success_count')) AS succ,
                JSON_UNQUOTE(JSON_EXTRACT(result_summary_json, '$.pipeline.skill_review_failure_audit.failed_count')) AS fail,
                JSON_UNQUOTE(JSON_EXTRACT(result_summary_json, '$.pipeline.skill_review_failure_audit.reason_counts')) AS reasons,
-               JSON_UNQUOTE(JSON_EXTRACT(result_summary_json, '$.pipeline.skill_review_failure_audit.sample_errors')) AS sample_errors
+               JSON_UNQUOTE(JSON_EXTRACT(result_summary_json, '$.pipeline.skill_review_failure_audit.sample_errors')) AS sample_errors,
+               JSON_EXTRACT(result_summary_json, '$.pipeline.skill_review_failure_audit.sample_errors_by_bucket') AS sample_errors_by_bucket
         FROM recommendation_runs
         WHERE run_mode='formal' AND status='completed' AND universe_count > 4000
         ORDER BY started_at DESC LIMIT :lim
@@ -190,6 +191,13 @@ def recent_llm_call_health(db: Session, *, limit: int = 5) -> dict[str, Any]:
         # 的具体内容（如"无法从 Agent 响应中提取 JSON: ..."），快速定位是 JSON 格式问题还是其他。
         sample_errors_raw = json.loads(r[6]) if r[6] and r[6] != "null" else []
         sample_errors = [str(e)[:120] for e in (sample_errors_raw or [])[:3]]
+        # sample_errors_by_bucket：按 bucket 分组各取 2 条，确保 agent_review_error 的真实样本
+        # 不被 timeout/5xx 淹没（07-22 实证：agent_review_error=14 但 sample_errors 全是 timeout/503）
+        seb_raw = json.loads(r[7]) if r[7] and r[7] != "null" else {}
+        sample_errors_by_bucket = {
+            str(k): [str(e)[:120] for e in (v or [])[:2]]
+            for k, v in (seb_raw or {}).items()
+        } if isinstance(seb_raw, dict) else {}
         runs.append({
             "trade_date": str(td),
             "success": succ,
@@ -198,6 +206,7 @@ def recent_llm_call_health(db: Session, *, limit: int = 5) -> dict[str, Any]:
             "unhealthy": unhealthy,
             "top_reasons": [{"reason": k, "count": int(v or 0)} for k, v in top_reasons],
             "sample_errors": sample_errors,
+            "sample_errors_by_bucket": sample_errors_by_bucket,
         })
     return {"runs": runs, "any_unhealthy": any_unhealthy}
 

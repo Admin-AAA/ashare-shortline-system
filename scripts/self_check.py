@@ -587,9 +587,17 @@ def _check_llm_call_health(db) -> None:
         if r.get("top_reasons"):
             reason_str = " " + " ".join(f"{x['reason']}={x['count']}" for x in r["top_reasons"])
         print(f'    {r["trade_date"]}: 成功 {r["success"]}/{r["success"] + r["failed"]} ({r["rate"]:.0f}%){flag}{reason_str}')
-        # 失败样本的具体错误文本（定位 agent_review_error 的根因：JSON 解析失败 vs 其他）
-        for err in (r.get("sample_errors") or [])[:2]:
-            print(f'      样本: {err}')
+        # 失败样本的具体错误文本：优先按 bucket 展示每个非零 bucket 的样本，
+        # 避免 agent_review_error 的真实文本被 timeout/5xx 淹没（07-22 实证：
+        # agent_review_error=14 但 sample_errors 全是 timeout/503，无法定位根因）。
+        by_bucket = r.get("sample_errors_by_bucket") or {}
+        if by_bucket:
+            for bucket, samples in by_bucket.items():
+                for err in samples[:2]:
+                    print(f'      [{bucket}] {err}')
+        else:
+            for err in (r.get("sample_errors") or [])[:2]:
+                print(f'      样本: {err}')
     if result.get("any_unhealthy"):
         print('    ——LLM 成功率 <80%：检查模型路由配置/余额/熔断（model_route_config 页），')
         print('      失败原因 reason_counts：circuit_open=连续失败熔断(查模型可用性/key/余额)、')

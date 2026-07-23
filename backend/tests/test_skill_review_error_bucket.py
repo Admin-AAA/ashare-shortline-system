@@ -11,7 +11,7 @@ BACKEND_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.services.runs.filter_audit import skill_review_error_bucket
+from app.services.runs.filter_audit import skill_review_error_bucket, sample_errors_grouped
 
 
 def test_503_upstream_unavailable_buckets_as_5xx():
@@ -81,3 +81,37 @@ def test_connection_reset_buckets_as_network_error():
 
 def test_remote_protocol_buckets_as_network_error():
     assert skill_review_error_bucket("RemoteProtocolError: Server disconnected") == "model_network_error"
+
+
+def test_sample_errors_grouped_covers_each_bucket():
+    """按 bucket 分组各取样本，确保 agent_review_error 的真实文本不被 timeout/5xx 淹没。
+
+    背景：unique_head 全局取前 3 条，当 errors 前 3 条是 timeout/5xx 时，
+    agent_review_error=N 但 sample 里没有它的样本，无法定位根因（07-22 实证）。
+    """
+    errors = [
+        "Skill '龙虎榜' 审查超时 (>300s)，已跳过",  # model_timeout
+        "Error code: 503 - upstream_unavailable",   # model_upstream_5xx
+        "无法从 Agent 响应中提取 JSON: ...",          # agent_review_error
+        "Skill '基础' 审查超时 (>300s)，已跳过",     # model_timeout (第二条)
+        "另一次 JSON 解析失败: missing bracket",     # agent_review_error (第二条)
+    ]
+    grouped = sample_errors_grouped(errors, per_bucket=2)
+    assert "model_timeout" in grouped
+    assert "model_upstream_5xx" in grouped
+    assert "agent_review_error" in grouped  # 关键：agent_review_error 必有样本
+    assert "无法从 Agent 响应中提取 JSON" in grouped["agent_review_error"][0]
+    assert len(grouped["agent_review_error"]) == 2
+    assert len(grouped["model_timeout"]) == 2  # per_bucket=2
+
+
+def test_sample_errors_grouped_dedupes():
+    """相同错误文本只存一次。"""
+    errors = ["Error code: 503", "Error code: 503", "Error code: 503"]
+    grouped = sample_errors_grouped(errors, per_bucket=2)
+    assert len(grouped["model_upstream_5xx"]) == 1
+
+
+def test_sample_errors_grouped_empty():
+    """空 errors 返回空 dict。"""
+    assert sample_errors_grouped([], per_bucket=2) == {}

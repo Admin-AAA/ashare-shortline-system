@@ -162,6 +162,7 @@ def skill_review_failure_audit(
 
     reason_counts = categorical_distribution(skill_review_error_bucket(error) for error in errors)
     sample_errors = unique_head(errors, limit=3, max_chars=260)
+    sample_errors_by_bucket = sample_errors_grouped(errors, per_bucket=2, max_chars=260)
     return {
         "failed_count": len(errors),
         "affected_stock_count": len(affected_codes),
@@ -169,6 +170,7 @@ def skill_review_failure_audit(
         "api_failure_count": len(api_failures),
         "reason_counts": reason_counts,
         "sample_errors": sample_errors,
+        "sample_errors_by_bucket": sample_errors_by_bucket,
     }
 
 
@@ -189,6 +191,7 @@ def skill_review_failure_audit_from_logs(db: Session, run_id: str) -> dict[str, 
         "api_failure_count": len(logs),
         "reason_counts": reason_counts,
         "sample_errors": unique_head(errors, limit=3, max_chars=260),
+        "sample_errors_by_bucket": sample_errors_grouped(errors, per_bucket=2, max_chars=260),
     }
 
 
@@ -246,6 +249,33 @@ def unique_head(values: list[str], *, limit: int, max_chars: int) -> list[str]:
         if len(result) >= limit:
             break
     return result
+
+
+def sample_errors_grouped(
+    errors: list[str], *, per_bucket: int = 2, max_chars: int = 260
+) -> dict[str, list[str]]:
+    """按 error bucket 分组各取前 N 条去重样本。
+
+    unique_head 全局取前 3 条，当 errors 前 3 条恰好是 timeout/5xx 时，agent_review_error
+    的真实样本被淹没——self_check 报 agent_review_error=N 但 sample 全是别的 bucket，无法
+    定位根因（07-22 实证：agent_review_error=14 但 sample_errors 全是 timeout/503）。
+    按 bucket 分组确保每个非零 bucket 都有样本可见，让 agent_review_error 的真实错误文本
+    （如 JSON 解析失败、数据引用错误）可被直接定位，而非被误归为「查 prompt 格式」。
+    """
+    by_bucket: dict[str, list[str]] = {}
+    seen: set[str] = set()
+    for value in errors:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        bucket = skill_review_error_bucket(text)
+        lst = by_bucket.setdefault(bucket, [])
+        if len(lst) < per_bucket:
+            if len(text) > max_chars:
+                text = text[: max(0, max_chars - 1)] + "…"
+            lst.append(text)
+    return by_bucket
 
 
 # ═════════════════════════════════════════════════════════════════════════════
