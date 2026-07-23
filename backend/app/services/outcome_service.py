@@ -1696,7 +1696,8 @@ def _compute_horizon_metric_records(db: Session, rows: list[Any]) -> dict[str, d
         sig_present = sig_idx < len(row_dates) and row_dates[sig_idx] == td
         future_start = sig_idx + 1 if sig_present else sig_idx
         future_bars = row_bars[future_start:]
-        pre_entry = _resolve_entry_fn(row, row_snapshot, future_bars, max_horizon) if future_bars else None
+        signal_bar = row_bars[sig_idx] if sig_present else None
+        pre_entry = _resolve_entry_fn(row, row_snapshot, future_bars, max_horizon, signal_bar=signal_bar) if future_bars else None
         for horizon_days in BREAKDOWN_HORIZON_DAYS:
             simulation = _simulate_outcome(
                 row,
@@ -1872,6 +1873,7 @@ def _scoped_recommendation_rows(
                 Recommendation.name,
                 Recommendation.recommend_price,
                 Recommendation.final_score,
+                Recommendation.recommended_at,
                 Recommendation.setup_type,
                 Recommendation.feature_snapshot_json,
                 Recommendation.skill_breakdown_json,
@@ -1898,10 +1900,11 @@ def _scoped_recommendation_rows(
         ).all()
     )
     # 已通过 SQL 去重，但仍可能有同 (trade_date, code) 的重复（同分多笔），保留第一次
+    # 下标对应 select 列：trade_date=10, code=2（recommended_at 插入后 trade_date 从 9 移到 10）
     seen: set[tuple] = set()
     deduped: list[Any] = []
     for row in rows:
-        key = (row[9], row[2])  # (trade_date, code)
+        key = (row[10], row[2])  # (trade_date, code)
         if key in seen:
             continue
         seen.add(key)
