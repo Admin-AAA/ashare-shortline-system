@@ -64,3 +64,46 @@ def test_maxloss_just_beyond_tolerance_is_worsening():
     """maxloss 比基线差超过 0.5pp 报"恶化"——容差边界精确。"""
     label = self_check._classify_maxloss(-6.31, BASELINE)  # 差 0.51pp，超容差
     assert label == "⚠️ 恶化"
+
+
+def test_maxloss_day_attribution_finds_worst_day():
+    """全量 maxloss 最差笔的单日归因：返回最差笔所在 trade_date + 该日 failed 笔数。
+
+    背景: 07-09 跨 run 板块去重修复前 16 笔半导体集中跳空，全量 maxloss -12.22% 全来自
+    该日。归因让用户区分历史遗留 vs 当前退化，避免「⚠️ 恶化」误读为策略退化。
+    rows = [(code, trade_date, label, executed_return)]
+    """
+    rows = [
+        ("600001", "2026-07-09", "failed", -12.22),
+        ("600002", "2026-07-09", "failed", -10.50),
+        ("600003", "2026-07-16", "failed", -8.49),
+        ("600004", "2026-07-23", "success", 5.20),
+    ]
+    attr = self_check._maxloss_day_attribution(rows)
+    assert attr is not None
+    assert attr["worst_day"] == "2026-07-09"
+    assert attr["worst_ret"] == -12.22
+    assert attr["day_n"] == 2  # 07-09 有 2 笔 failed
+
+
+def test_maxloss_day_attribution_no_failed_returns_none():
+    """无 failed 样本时返回 None（无法归因）。"""
+    rows = [
+        ("600001", "2026-07-09", "success", 5.20),
+        ("600002", "2026-07-16", "success", 3.10),
+    ]
+    assert self_check._maxloss_day_attribution(rows) is None
+
+
+def test_maxloss_day_attribution_ignores_none_return():
+    """executed_return 为 None 的 failed 笔不参与归因（数据缺失不污染最差值）。"""
+    rows = [
+        ("600001", "2026-07-09", "failed", None),
+        ("600002", "2026-07-09", "failed", -8.40),
+        ("600003", "2026-07-16", "failed", -9.10),
+    ]
+    attr = self_check._maxloss_day_attribution(rows)
+    assert attr is not None
+    assert attr["worst_day"] == "2026-07-16"
+    assert attr["worst_ret"] == -9.10
+    assert attr["day_n"] == 1

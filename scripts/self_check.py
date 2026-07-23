@@ -1413,6 +1413,26 @@ def _compute_d_window(rows: list, *, since_date: str | None = None,
     return wr, n, ml
 
 
+def _maxloss_day_attribution(rows: list) -> dict | None:
+    """纯函数：全量 maxloss 最差笔的单日归因。
+
+    maxloss 是极端值，对单一样本敏感。全量 maxloss 常被某个历史单日（如跨 run 板块
+    去重修复前 07-09 半导体集中跳空）拖累，报「⚠️ 恶化」会误读为当前策略退化。
+    返回最差笔所在 trade_date + 该日 failed 笔数 + 该日最差收益，供报告标注历史遗留。
+    """
+    failed = [r for r in rows if r[2] == 'failed' and r[3] is not None]
+    if not failed:
+        return None
+    worst = min(failed, key=lambda r: r[3])
+    worst_day = str(worst[1])
+    day_failed = [r for r in failed if str(r[1]) == worst_day]
+    return {
+        "worst_day": worst_day,
+        "worst_ret": round(worst[3], 2),
+        "day_n": len(day_failed),
+    }
+
+
 def _classify_maxloss(ml: float, baseline_loss: float) -> str:
     """分类 maxloss 相对基线的状态。
 
@@ -2380,6 +2400,14 @@ def check_d_item(db) -> None:
     full_res = _compute_d_window(rows)
     _fmt_d('D 项(全量)', full_res, WIN_RATE_BASELINE, MAX_LOSS_BASELINE)
     _fmt_d_cost('D 项(全量)', _compute_d_cost(rows), WIN_RATE_BASELINE, PL_RATIO_BASELINE)
+    # maxloss 单日归因：全量最差笔常被历史单日（跨 run 板块去重修复前的板块集中跳空）
+    # 拖累，报「恶化」会误读为当前策略退化。标注最差笔所在日 + 该日失败数，让用户区分
+    # 历史遗留 vs 当前退化（07-16 跨 run 去重修复后的样本才反映当前策略真实 maxloss）。
+    _ml_attr = _maxloss_day_attribution(rows)
+    if _ml_attr is not None and full_res is not None and _ml_attr["worst_ret"] <= full_res[2] + 0.01:
+        print(f'     ——全量 maxloss {_ml_attr["worst_ret"]}% 来自 {_ml_attr["worst_day"]} '
+              f'单日（该日 {_ml_attr["day_n"]} 笔 failed）。若该日早于跨 run 板块去重修复'
+              f'（2026-07-16）则为历史遗留，当前策略 maxloss 见近10日/前瞻口径，勿据此判退化')
 
     # 近 10 交易日窗口：看近期趋势（自然老化修复前历史污染）。
     dates = sorted({str(r[1]) for r in rows})
