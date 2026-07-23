@@ -51,10 +51,11 @@ cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && pyt
 ### 选任务规则
 
 1. **A 项断档**（最近 5 个交易日有 interrupted formal run 或 0 推荐）→ **强制选 T12**，D 让位。pipeline 不通谈不上 D。
-2. **A 未断档时，首选 D 攻击**——按 **准确度类（T1/T2/T3/T8）: 可见类（T7/T9/T10/T12）= 2:1** 轮转。看 `git log --oneline -3`：最近 3 轮若 ≥2 轮是可见类，强制切准确度类；准确度类不因轮转比例被压缩，可连续多轮。
-3. **E 项触发**（自检发现曝光公平度 H_norm<0.5 或 ≥1 策略样本 <20，或 ≥1 策略胜率 <45%）→ 在 T3 下执行「策略曝光与低胜率标记」子任务（见 T3.6），优先级高于普通 T3（它是 D 的样本可信前置）。
-4. 同一任务不连续超过 2 轮（T3 的 D 攻击子任务除外，可连续 3 轮追同一毒区根因）。
-5. 选任务前先 grep 教训库：`grep "\[T{编号}\]" ~/.claude/projects/-Users-wangao/memory/lessons.md`
+2. **D 路径穷尽短路**——自检判定 D 攻击路径穷尽时（条件见 T11 第 5 条），**跳过规则 3**，直接按 2:1 轮转到 T2/T8（验证侧）或可见类，不强行 T3 加 entry。否则按规则 3：
+3. **A 未断档且 D 未穷尽时，首选 D 攻击**——按 **准确度类（T1/T2/T3/T8）: 可见类（T7/T9/T10/T12）= 2:1** 轮转。看 `git log --oneline -3`：最近 3 轮若 ≥2 轮是可见类，强制切准确度类；准确度类不因轮转比例被压缩，可连续多轮。
+4. **E 项触发**（自检发现曝光公平度 H_norm<0.5 或 ≥1 策略样本 <20，或 ≥1 策略胜率 <45%）→ 在 T3 下执行「策略曝光与低胜率标记」子任务（见 T3.6），优先级高于普通 T3（它是 D 的样本可信前置）。
+5. 同一任务不连续超过 2 轮（T3 的 D 攻击子任务除外，可连续 3 轮追同一毒区根因）。
+6. 选任务前先 grep 教训库：`grep "\[T{编号}\]" ~/.claude/projects/-Users-wangao/memory/lessons.md`
 
 ---
 
@@ -77,7 +78,7 @@ cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && pyt
 3. 检查 `feature_builder.py` 估算字段（MACD/RSI 已从 closes 重算，T34 修复）
 4. **失败归因闭环**：对 `failed` 推荐逐条分析（追高/止损没执行/板块退潮/黑天鹅），映射到 strategy.yaml 规则
 5. 每 5 轮至少深度优化一个业务模块（龙头评分/龙虎榜/情绪分阶段/Aggregator 权重/trailing stop/score cap）
-6. **residual triage 先行**：residual 笔数 >0 时**必须先 triage 分层**（污染/伪活跃/单日簇/稀疏），禁止直接当 entry 精确目标。前三类禁止加 entry；稀疏 ≤3 笔或全被现有规则覆盖时判 D 攻击路径穷尽（见 T11 第 5 条）。
+6. **residual triage 先行**：residual 笔数 >0 时**必须先 triage 分层**（污染/伪活跃/单日簇/稀疏），禁止直接当 entry 精确目标。前三类禁止加 entry；稀疏 ≤3 笔或全被现有规则覆盖时即触发 D 路径穷尽（规则 2 短路）。
 ### T3.6 策略曝光公平度与低胜率标记（E 项闭环，触发时执行）
    - 补曝光是为了让胜率可信，不是提高尾部策略胜率。H_norm<0.5 或策略样本 <20 → 盘前曝光补跑（阈值 20）。勿为凑 H_norm 调 universe。
    - 近 60 天 formal 0 命中策略 → 查 filter_audit_json 归因，修复后跑 formal 确认 skill_breakdown 出现。
@@ -116,12 +117,10 @@ cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && pyt
 2. 产出低的任务改描述或合并；反复出现的教训提升为正式规则。
 3. **精简硬约束**：每次 T11 必须删除不少于新增行数的旧规则，净行数不能增长。
 4. **禁止改核心结构**（第一性原理 / 北极星指标表 / 检验清单 / 禁止事项）。
-5. **D 攻击路径穷尽判定**：当 self_check 同时满足以下全部条件时，D 攻击路径已穷尽，应切 T7/T11 而非继续 T3 加规则：
-   - D 全量净盈亏比 ≥ 2.0（达标）
-   - clean≥72 净盈亏比 ≥ 2.0（去污染后仍达标）
+5. **D 攻击路径穷尽判定**（被选任务规则 2 引用）：self_check 同时满足以下全部条件即穷尽，此状态下加 entry 规则 = 过拟合历史噪声：
+   - D 全量净盈亏比 ≥ 2.0 且 clean≥72 净盈亏比 ≥ 2.0（去污染后仍达标）
    - residual triage 中 sparse ≤ 3 笔或全被现有规则覆盖
-   - 前瞻窗口仍受 07-16 单日污染主导（n<10 或 93% 污染）
-   此状态下加 entry 规则 = 过拟合历史噪声，应转向可观测性/一致性/待前瞻样本积累。
+   - 前瞻窗口仍受单日污染主导（n<10 或污染占比 ≥70%），无 OOS 验证条件
 
 ### T12. 推荐 pipeline 稳定性（可见类，A 项断档时才触发）
 formal run 跑不通 = 系统对用户等于没在跑。
