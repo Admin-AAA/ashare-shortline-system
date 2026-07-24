@@ -33,7 +33,7 @@ SKILLS_DIR = os.path.join(os.path.dirname(__file__), '..', 'backend', 'skills')
 # 佣金万1双边(0.02%) + 印花税卖出(0.05%) = 0.07%/笔。executed_return 已含滑点但未扣此成本。
 # 北极星 D 项目标定义为"扣费后须达标"(T2 step4)，故 D 项必须呈净成本口径，不能只看毛值。
 ADDITIONAL_COST_PCT = 0.07
-PL_RATIO_BASELINE = 1.94   # 北极星 D 项盈亏比历史基线（LIVE 1.94）
+PL_RATIO_BASELINE = 3.04   # 北极星 D 项盈亏比历史基线（LIVE 全量去重 n=224，T+1 口径重算后）
 PL_RATIO_TARGET = 2.0      # 北极星 D 项目标（朝 2.0 攻击）
 
 # 策略规则引擎（用于 D 项"规则覆盖前瞻校验"——区分历史污染 vs 真退化）
@@ -2413,8 +2413,8 @@ def check_d_item(db) -> None:
     回测（btrec_）与 experiment 补跑不纳入北极星 D 项——它们会虚高胜率、
     掩盖真实 formal 表现（回测污染曾使 D 项胜率从真实 59% 虚报到 68%）。
     """
-    WIN_RATE_BASELINE = 61.5
-    MAX_LOSS_BASELINE = -5.80
+    WIN_RATE_BASELINE = 75.9
+    MAX_LOSS_BASELINE = -12.22
 
     # 胜率按 (code, trade_date) 去重：同一交易日同一只股票常被多个 formal run 重复推荐
     # （2026-07-08 单日 14 个 run，松发股份被推荐 7 次全部 -5.69% 止损）。去重后反映
