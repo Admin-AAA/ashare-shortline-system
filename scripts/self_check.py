@@ -1082,6 +1082,8 @@ def check_e_item(db, hit_skills: set) -> None:
     """), {"epoch": FORWARD_EPOCH}).fetchall()
 
     print('E 项低覆盖(n<50)或低胜率(<45%)策略:')
+    _e_low_wr_n = 0
+    _e_low_cov_n = 0
     for row in rows:
         n, wins, avg_ret, fwd_n, fwd_wins = row[1], row[2], row[3], row[4], row[5]
         win_rate = round(wins * 100 / n, 1)
@@ -1091,11 +1093,20 @@ def check_e_item(db, hit_skills: set) -> None:
             print(f'  {row[0]}: n={n} wins={wins} avg_ret={avg_ret}% winrate={win_rate}% ←已下线(disabled)，样本冻结仅供追溯')
             continue
         tag = _format_e_coverage_tag(int(n or 0), float(win_rate))
+        if tag == "低胜率":
+            _e_low_wr_n += 1
+        else:
+            _e_low_cov_n += 1
         # 前瞻窗口口径（FORWARD_EPOCH 之后）：区分旧代码污染 vs 真低胜率 vs 样本过少
         # （T18：fwd_n < MIN_OOS_SAMPLE 勿判真低胜率——high-range 3 笔@07-16 污染日误判先例）
         fwd_note = _format_e_forward_note(int(fwd_n or 0), int(fwd_wins or 0), full_n=int(n or 0))
         action = "需标记" if tag == "低胜率" else "需补曝光/观察"
         print(f'  {row[0]}: n={n} wins={wins} avg_ret={avg_ret}% winrate={win_rate}%{fwd_note} ←{tag}·{action}')
+    # E 项总结：低胜率(需标记) vs 低覆盖(补曝光) 一屏可见
+    if _e_low_wr_n == 0:
+        print(f'  → E 项总结: 无低胜率策略(需标记=0)，低覆盖(补曝光)={_e_low_cov_n}个')
+    else:
+        print(f'  → E 项总结: ⚠️低胜率(需标记)={_e_low_wr_n}个，低覆盖(补曝光)={_e_low_cov_n}个')
 
     # 曝光公平度 + 样本置信度（近 30 天 formal+experiment，不含 backtest）
     # 目的：让每个策略胜率统计可信，避免头部策略吃掉 80%+ 曝光、尾部策略样本稀疏不可信。
