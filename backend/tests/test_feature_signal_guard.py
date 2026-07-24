@@ -104,6 +104,30 @@ def test_point_biserial_insufficient_samples_returns_none():
     assert point_biserial([1, 2, 3], [0, 1, 0]) is None
 
 
+def test_point_biserial_boundary_just_below_min_returns_none():
+    """n=POINT_BISERIAL_MIN_N-1（19）返回 None——边界精确。
+
+    防止未来误改 POINT_BISERIAL_MIN_N 阈值（如改成 10）而不更新调用方。
+    """
+    from feature_signal_guard import point_biserial, POINT_BISERIAL_MIN_N
+    n = POINT_BISERIAL_MIN_N - 1
+    x = list(range(1, n + 1))
+    y = [0] * (n // 2) + [1] * (n - n // 2)
+    assert point_biserial(x, y) is None
+
+
+def test_point_biserial_boundary_at_min_returns_value():
+    """n=POINT_BISERIAL_MIN_N（20）返回非 None——边界另一侧。
+
+    与上一个测试共同锁定 MIN_N 边界：n-1→None、n→值。
+    """
+    from feature_signal_guard import point_biserial, POINT_BISERIAL_MIN_N
+    n = POINT_BISERIAL_MIN_N
+    x = list(range(1, n + 1))
+    y = [0] * (n // 2) + [1] * (n - n // 2)
+    assert point_biserial(x, y) is not None
+
+
 def test_point_biserial_all_same_label_returns_none():
     """全 success 或全 failed（n1=0 或 n0=0）返回 None。"""
     from feature_signal_guard import point_biserial
