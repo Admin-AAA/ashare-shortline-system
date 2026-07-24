@@ -339,3 +339,82 @@ def d_diagnostics(db: Session = Depends(get_db)):
         "phase_information": phase_info,
         "forward_epoch": self_check.FORWARD_EPOCH_PINNED,
     }
+
+
+@router.get("/capital-flow-factor")
+def capital_flow_factor(db: Session = Depends(get_db)):
+    """资金流因子预测力分析（T1 新因子研发，前端可见）。
+
+    复用 scripts/analyze_capital_flow_factor.py + feature_signal_guard.point_biserial 逻辑，
+    返回各资金流字段 vs outcome 的 r_pb / 分组胜率 / 最强因子的 feature_signal_guard 判定。
+    只读分析，不改策略。D 路径穷尽时因子是「待前瞻验证候选」非已验证。
+    """
+    import sys
+    from pathlib import Path
+
+    from sqlalchemy import text
+
+    scripts = Path(__file__).resolve().parents[3] / "scripts"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    from feature_signal_guard import point_biserial, evaluate_feature_signal  # type: ignore[import-not-found]
+
+    rows = [dict(r._mapping) for r in db.execute(text("""
+        SELECT r.code, r.trade_date, o.outcome_label, o.executed_return,
+               cf.main_net_inflow_yi, cf.super_large_net_inflow_yi,
+               cf.large_net_inflow_yi, cf.cumulative_inflow_3d_yi,
+               cf.cumulative_inflow_5d_yi
+        FROM recommendations r
+        JOIN recommendation_runs rr ON r.run_id = rr.run_id
+        JOIN recommendation_outcomes o ON o.recommendation_id = r.recommendation_id
+        JOIN capital_flow cf ON cf.code = r.code AND cf.trade_date = r.trade_date
+        WHERE rr.run_mode = 'formal' AND o.outcome_label IN ('success', 'failed')
+          AND cf.main_net_inflow_yi IS NOT NULL AND ABS(cf.main_net_inflow_yi) > 0.001
+    """)).fetchall()]
+
+    if len(rows) < 20:
+        return {"sample_count": len(rows), "factors": [], "best_factor": None,
+                "note": "样本不足 20，不可分析"}
+
+    fields = [
+        ("main_net_inflow_yi", "当日主力净流入"),
+        ("super_large_net_inflow_yi", "超大单净流入"),
+        ("large_net_inflow_yi", "大单净流入"),
+        ("cumulative_inflow_3d_yi", "3日累计主力净流入"),
+        ("cumulative_inflow_5d_yi", "5日累计主力净流入"),
+    ]
+    factors = []
+    best = None
+    for field, name in fields:
+        pairs = [(float(r[field] or 0), 1 if r["outcome_label"] == "success" else 0)
+                 for r in rows if r[field] is not None and abs(float(r[field] or 0)) > 0.001]
+        if len(pairs) < 20:
+            factors.append({"field": field, "name": name, "n": len(pairs), "r_pb": None,
+                            "wr_pos": None, "wr_neg": None, "delta_pp": None, "note": "样本不足"})
+            continue
+        x = [p[0] for p in pairs]
+        y = [p[1] for p in pairs]
+        rpb = point_biserial(x, y)
+        pos = [yi for xi, yi in pairs if xi > 0]
+        neg = [yi for xi, yi in pairs if xi <= 0]
+        wr_pos = round(sum(pos) * 100 / len(pos), 1) if pos else 0
+        wr_neg = round(sum(neg) * 100 / len(neg), 1) if neg else 0
+        factors.append({"field": field, "name": name, "n": len(pairs), "r_pb": round(rpb, 4) if rpb else None,
+                        "wr_pos": wr_pos, "wr_neg": wr_neg, "delta_pp": round(wr_pos - wr_neg, 1),
+                        "note": None})
+        if rpb is not None and (best is None or rpb > best["r_pb"]):
+            best = {"field": field, "name": name, "n": len(pairs), "r_pb": round(rpb, 4)}
+
+    # 最强因子的 feature_signal_guard 判定
+    best_factor = None
+    if best:
+        pos_dates = sorted({
+            str(r["trade_date"]) for r in rows
+            if r[best["field"]] is not None and float(r[best["field"]] or 0) > 0.001
+            and r["outcome_label"] == "success"
+        })
+        guard = evaluate_feature_signal(pos_dates)
+        best_factor = {**best, "guard": guard}
+
+    return {"sample_count": len(rows), "factors": factors, "best_factor": best_factor,
+            "note": "D 路径穷尽时因子是待前瞻验证候选非已验证；扣费样本外有效才加 strategy.yaml"}

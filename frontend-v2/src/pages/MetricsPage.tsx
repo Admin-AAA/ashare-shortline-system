@@ -6,6 +6,7 @@ import type {
   AlphaDecayResponse,
   DateRangeMeta,
   DDiagnostics,
+  CapitalFlowFactorResponse,
   DNetBreakdown,
   FilterEffectiveness,
   LlmReviewHealth,
@@ -17,7 +18,7 @@ import type {
   SetupStatsRow,
   TemporalConsistency,
 } from "../types";
-import type { ReactNode } from "react";
+import type { ReactNode, CSSProperties } from "react";
 import { PageSkeleton, ErrorPage, EmptyState, CardSkeleton } from "../components/StateViews";
 import { SkillsCatalogPanel } from "../components/SkillsCatalogPanel";
 import { Panel } from "../components/Panel";
@@ -210,6 +211,10 @@ function SystemHealthPanel() {
     () => api.dDiagnostics(),
     [],
   );
+  const { data: capFactor, loading: lCF, error: eCF } = useApi<CapitalFlowFactorResponse>(
+    () => api.capitalFlowFactor(),
+    [],
+  );
 
   return (
     <MetricCard
@@ -232,6 +237,7 @@ function SystemHealthPanel() {
         <RouteHealthBlock data={routes} loading={lRoutes} error={eRoutes} />
         <TemporalConsistencyBlock data={temporal} loading={lT} error={eT} />
         <DDiagnosticsBlock data={dDiag} loading={lD} error={eD} />
+        <CapitalFlowFactorBlock data={capFactor} loading={lCF} error={eCF} />
         <PhaseInformationBlock data={dDiag} loading={lD} error={eD} />
       </div>
     </MetricCard>
@@ -484,6 +490,86 @@ function DDiagnosticsBlock({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** 资金流因子预测力块（T1 新因子，待前瞻验证候选）—— /api/metrics/capital-flow-factor */
+function CapitalFlowFactorBlock({
+  data,
+  loading,
+  error,
+}: {
+  data: CapitalFlowFactorResponse | null | undefined;
+  loading: boolean;
+  error: unknown;
+}) {
+  if (loading) return <CardSkeleton count={3} />;
+  if (error) return <HealthErrorNote msg="资金流因子获取失败" />;
+  if (!data || data.factors.length === 0) {
+    return (
+      <div style={{ background: "var(--surface-1)", border: "1px solid var(--line)", borderRadius: "var(--radius-sm, 6px)", padding: "var(--space-3)" }}>
+        <div style={{ fontWeight: 600, marginBottom: "var(--space-2)" }}>资金流因子预测力</div>
+        <div className="text-muted" style={{ fontSize: "var(--text-sm)" }}>{data?.note ?? "样本不足"}</div>
+      </div>
+    );
+  }
+  const best = data.best_factor;
+  const thS: CSSProperties = { padding: "var(--space-1) var(--space-2)", textAlign: "right", fontWeight: 500, fontSize: "var(--text-xs)" };
+  const tdS: CSSProperties = { padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-sm)" };
+  return (
+    <div style={{ background: "var(--surface-1)", border: "1px solid var(--line)", borderRadius: "var(--radius-sm, 6px)", padding: "var(--space-3)" }}>
+      <div style={{ fontWeight: 600, marginBottom: "var(--space-2)" }}>资金流因子预测力（T1 候选 · n={data.sample_count}）</div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid var(--line)" }}>
+              <th style={{ ...thS, textAlign: "left" }}>因子</th>
+              <th style={thS}>n</th>
+              <th style={thS}>r_pb</th>
+              <th style={thS}>流入&gt;0 WR</th>
+              <th style={thS}>流入≤0 WR</th>
+              <th style={thS}>Δ</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.factors.map((f) => (
+              <tr key={f.field} style={{ borderBottom: "1px solid var(--line)" }}>
+                <td style={{ ...tdS, fontVariantNumeric: "tabular-nums" }}>
+                  {f.name}
+                  {best && f.field === best.field && (
+                    <span style={{ color: "var(--accent-strong)", marginLeft: 4 }} title="最强预测力">★</span>
+                  )}
+                </td>
+                <td style={{ ...tdS, fontVariantNumeric: "tabular-nums" }} className="text-muted">{f.n}</td>
+                <td style={{ ...tdS, fontVariantNumeric: "tabular-nums", color: f.r_pb && f.r_pb > 0.1 ? "var(--market-down)" : "var(--text)" }}>
+                  {f.r_pb == null ? "—" : f.r_pb.toFixed(4)}
+                </td>
+                <td style={{ ...tdS, fontVariantNumeric: "tabular-nums" }}>{f.wr_pos == null ? "—" : `${f.wr_pos}%`}</td>
+                <td style={{ ...tdS, fontVariantNumeric: "tabular-nums" }}>{f.wr_neg == null ? "—" : `${f.wr_neg}%`}</td>
+                <td style={{ ...tdS, fontVariantNumeric: "tabular-nums", color: (f.delta_pp ?? 0) > 5 ? "var(--market-down)" : "var(--text-muted)" }}>
+                  {f.delta_pp == null ? "—" : `+${f.delta_pp}pp`}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {best && best.guard && (
+        <div style={{ marginTop: "var(--space-2)", fontSize: "var(--text-sm)" }}>
+          <span style={{ color: best.guard.trustworthy ? "var(--market-down)" : "var(--text-muted)" }}>
+            {best.guard.trustworthy ? "✅" : "❌"} feature_signal_guard
+          </span>
+          <span className="text-muted" style={{ marginLeft: "var(--space-2)" }}>
+            {best.guard.trustworthy
+              ? `跨${best.guard.independent_days}日 top=${best.guard.top_day}(${(best.guard.top_day_ratio * 100).toFixed(0)}%)`
+              : best.guard.reason}
+          </span>
+          <div className="text-muted" style={{ marginTop: 4, fontSize: "var(--text-xs)" }}>
+            待前瞻验证候选（D 路径穷尽时不直接加 strategy.yaml）
+          </div>
+        </div>
+      )}
     </div>
   );
 }

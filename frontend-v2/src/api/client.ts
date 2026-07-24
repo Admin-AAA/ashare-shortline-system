@@ -16,6 +16,7 @@ import type {
   LlmRouteHealthItem,
   TemporalConsistency,
   DDiagnostics,
+  CapitalFlowFactorResponse,
   DNetBreakdown,
   ReplayAnalysisResult,
   DataSourceHealthRow,
@@ -391,6 +392,8 @@ export const api = {
       timeoutMs: options?.timeoutMs ?? 30_000,
       signal: options?.signal,
     }),
+  /** 资金流因子预测力分析（T1 新因子，待前瞻验证候选） */
+  capitalFlowFactor: () => request<CapitalFlowFactorResponse>(`/api/metrics/capital-flow-factor`),
   /** D 项净成本 + 板块(20cm/10cm)分解（指标页透出，与 self_check 板块拆分同源口径） */
   dNetBreakdown: (windowDays: number = 10, options?: RequestOptions) =>
     request<DNetBreakdown>(`/api/metrics/d-net?window_days=${windowDays}`, undefined, {

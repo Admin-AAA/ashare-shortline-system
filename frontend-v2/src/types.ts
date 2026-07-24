@@ -343,6 +343,39 @@ export type TemporalConsistency = {
 };
 
 /** D 项诊断摘要（/api/metrics/d-diagnostics）：真残留毒区 + 伪活跃 + phase 信息量，与 self_check 同源。 */
+/** 资金流因子预测力分析 —— /api/metrics/capital-flow-factor 返回。
+ * T1 新因子研发，待前瞻验证候选（D 路径穷尽时不直接加 strategy.yaml）。 */
+export type CapitalFlowFactorFactor = {
+  field: string;
+  name: string;
+  n: number;
+  r_pb: number | null;
+  wr_pos: number | null;
+  wr_neg: number | null;
+  delta_pp: number | null;
+  note: string | null;
+};
+
+export type CapitalFlowFactorResponse = {
+  sample_count: number;
+  factors: CapitalFlowFactorFactor[];
+  best_factor: {
+    field: string;
+    name: string;
+    n: number;
+    r_pb: number;
+    guard: {
+      support: number;
+      independent_days: number;
+      top_day: string;
+      top_day_ratio: number;
+      trustworthy: boolean;
+      reason: string;
+    };
+  } | null;
+  note: string;
+};
+
 export type DDiagnostics = {
   residual_n: number;
   modes: Array<{ mode: string; n: number; avg_return: number }>;
