@@ -14,7 +14,6 @@ capital_flow 数据 2026-07-24 修复后（单位 /1e4、ratio 改 NULL、upsert
 """
 import os
 import sys
-import math
 
 BACKEND_DIR = os.path.join(os.path.dirname(__file__), '..', 'backend')
 sys.path.insert(0, os.path.abspath(BACKEND_DIR))
@@ -23,25 +22,9 @@ sys.path.insert(0, os.path.abspath(SCRIPTS_DIR))
 
 from app.db.session import SessionLocal
 from sqlalchemy import text
-from feature_signal_guard import evaluate_feature_signal
+from feature_signal_guard import evaluate_feature_signal, point_biserial
 
 
-def _point_biserial(x: list[float], y: list[int]) -> float | None:
-    """point-biserial 相关系数：y 是 0/1 二值，x 是连续值。"""
-    n = len(x)
-    if n < 20:
-        return None
-    n1 = sum(y)
-    n0 = n - n1
-    if n1 == 0 or n0 == 0:
-        return None
-    mean = sum(x) / n
-    sd = math.sqrt(sum((xi - mean) ** 2 for xi in x) / n)
-    if sd == 0:
-        return None
-    x_s = [xi for xi, yi in zip(x, y) if yi == 1]
-    x_f = [xi for xi, yi in zip(x, y) if yi == 0]
-    return (sum(x_s) / n1 - sum(x_f) / n0) / sd * math.sqrt(n1 * n0 / (n * n))
 
 
 def main() -> None:
@@ -83,7 +66,7 @@ def main() -> None:
                 continue
             x = [p[0] for p in pairs]
             y = [p[1] for p in pairs]
-            rpb = _point_biserial(x, y)
+            rpb = point_biserial(x, y)
             pos = [yi for xi, yi in pairs if xi > 0]
             neg = [yi for xi, yi in pairs if xi <= 0]
             wr_pos = sum(pos) * 100 / len(pos) if pos else 0

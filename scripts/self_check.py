@@ -18,6 +18,10 @@ from pathlib import Path
 # 让 backend/ 下的 app 包可被导入
 BACKEND_DIR = os.path.join(os.path.dirname(__file__), '..', 'backend')
 sys.path.insert(0, os.path.abspath(BACKEND_DIR))
+# scripts/ 下的 feature_signal_guard 等共享模块
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from feature_signal_guard import point_biserial
 
 from app.db.session import SessionLocal
 from app.services.feature_builder import market_regime_score
@@ -3811,14 +3815,9 @@ def check_auxiliary_factor_data(db) -> None:
               AND cf.cumulative_inflow_3d_yi IS NOT NULL AND ABS(cf.cumulative_inflow_3d_yi) > 0.001
         """)).fetchall()
         if len(rows) >= 20:
-            import math as _m
             y = [1 if r[0] == 'success' else 0 for r in rows]
             x = [float(r[1] or 0) for r in rows]
-            n1, n0 = sum(y), len(y) - sum(y)
-            mean = sum(x) / len(x)
-            sd = _m.sqrt(sum((xi - mean) ** 2 for xi in x) / len(x))
-            r_pb = (sum(xi for xi, yi in zip(x, y) if yi == 1) / n1 -
-                    sum(xi for xi, yi in zip(x, y) if yi == 0) / n0) / sd * _m.sqrt(n1 * n0 / (len(y) ** 2)) if sd > 0 and n1 and n0 else None
+            r_pb = point_biserial(x, y)
             pos = [yi for xi, yi in zip(x, y) if xi > 0]
             neg = [yi for xi, yi in zip(x, y) if xi <= 0]
             wr_pos = sum(pos) * 100 / len(pos) if pos else 0
@@ -3848,14 +3847,9 @@ def check_auxiliary_factor_data(db) -> None:
               AND md.rzmre IS NOT NULL AND md.rzmre > 0
         """)).fetchall()
         if len(rows) >= 20:
-            import math as _m
             x = [float(r[1] or 0) for r in rows]
             y = [1 if r[0] == 'success' else 0 for r in rows]
-            n1, n0 = sum(y), len(y) - sum(y)
-            mean = sum(x) / len(x)
-            sd = _m.sqrt(sum((xi - mean) ** 2 for xi in x) / len(x))
-            r_pb = (sum(xi for xi, yi in zip(x, y) if yi == 1) / n1 -
-                    sum(xi for xi, yi in zip(x, y) if yi == 0) / n0) / sd * _m.sqrt(n1 * n0 / (len(y) ** 2)) if sd > 0 and n1 and n0 else None
+            r_pb = point_biserial(x, y)
             r_pb_str = f'{r_pb:+.4f}' if r_pb is not None else 'N/A'
             print(f'  融资融券因子(rzmre绝对值): n={len(rows)} r_pb={r_pb_str} | '
                   f'弱预测力（变化率 r_pb≈+0.085 仍弱于资金流 +0.118，融资盘预测力低）')

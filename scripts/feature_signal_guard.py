@@ -35,6 +35,31 @@ MIN_SUPPORT = 12          # 正例样本 <12 → 统计噪声，不足以为之�
 TOP_DAY_RATIO = 0.40      # 正例 top 单日占比 >=40% → 单日 regime 驱动
 INDEPENDENT_DAYS_MIN = 3  # 正例独立日 <3 → 样本时间跨度过窄，即使 top<40% 也不可信
 
+# point-biserial 最小样本量（<20 算不出可信相关）
+POINT_BISERIAL_MIN_N = 20
+
+
+def point_biserial(x: list[float], y: list[int]) -> float | None:
+    """point-biserial 相关系数：y 是 0/1 二值（如 outcome success=1/failed=0），x 是连续因子值。
+
+    返回 [-1, +1] 的相关系数；样本 <20 或全 0/全 1 或 sd=0 时返回 None。
+    提取为共享纯函数，self_check 资金流因子摘要 + analyze_capital_flow_factor.py 共用，
+    避免两处内联计算漂移。负值=因子高对应失败，正值=因子高对应成功。
+    """
+    n = len(x)
+    if n < POINT_BISERIAL_MIN_N:
+        return None
+    n1 = sum(y)
+    n0 = n - n1
+    if n1 == 0 or n0 == 0:
+        return None
+    mean = sum(x) / n
+    sd = (sum((xi - mean) ** 2 for xi in x) / n) ** 0.5
+    if sd == 0:
+        return None
+    return (sum(xi for xi, yi in zip(x, y) if yi == 1) / n1 -
+            sum(xi for xi, yi in zip(x, y) if yi == 0) / n0) / sd * ((n1 * n0) ** 0.5 / n)
+
 
 def evaluate_feature_signal(dates: list[str]) -> dict:
     """评估一个 point-biserial 特征候选是否可信到足以为之加规则。

@@ -78,3 +78,41 @@ def test_boundary_min_support():
     assert r["support"] == MIN_SUPPORT
     # n 达标且 top<40% → 应可信
     assert r["trustworthy"] is True
+
+
+def test_point_biserial_positive_correlation():
+    """因子值越高对应 success（y=1）越多 → r_pb > 0（资金流因子 r_pb=+0.118 同构）。"""
+    from feature_signal_guard import point_biserial
+    x = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+    y = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]  # 高 x=成功
+    r = point_biserial(x, y)
+    assert r is not None and r > 0.5  # 强正相关
+
+
+def test_point_biserial_negative_correlation():
+    """因子值越高对应 failed（y=0）越多 → r_pb < 0。"""
+    from feature_signal_guard import point_biserial
+    x = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+    y = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]  # 高 x=失败
+    r = point_biserial(x, y)
+    assert r is not None and r < -0.5
+
+
+def test_point_biserial_insufficient_samples_returns_none():
+    """样本 <20 返回 None（POINT_BISERIAL_MIN_N 守卫）。"""
+    from feature_signal_guard import point_biserial
+    assert point_biserial([1, 2, 3], [0, 1, 0]) is None
+
+
+def test_point_biserial_all_same_label_returns_none():
+    """全 success 或全 failed（n1=0 或 n0=0）返回 None。"""
+    from feature_signal_guard import point_biserial
+    x = list(range(1, 25))
+    assert point_biserial(x, [1] * 24) is None  # 全 success
+    assert point_biserial(x, [0] * 24) is None  # 全 failed
+
+
+def test_point_biserial_zero_variance_returns_none():
+    """x 全相同（sd=0）返回 None——因子无变化无相关可言。"""
+    from feature_signal_guard import point_biserial
+    assert point_biserial([5.0] * 24, [0] * 12 + [1] * 12) is None
