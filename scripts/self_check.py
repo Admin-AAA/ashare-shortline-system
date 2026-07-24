@@ -3750,7 +3750,7 @@ def check_auxiliary_factor_data(db) -> None:
     # margin_data 是逐股票样本仅4天；holder_numbers 是季报用 end_date 非 trade_date
     sources = [
         ("margin_detail", "融资融券（rzmre 融资买入额，全市场批量）", True, "trade_date"),
-        ("block_trades", "大宗交易（折价/成交量）", False, "trade_date"),
+        ("block_trades", "大宗交易（稀疏事件，formal重叠仅10笔<20，不适合做因子）", False, "trade_date"),
         ("capital_flow", "主力资金净流入（main_net_inflow_yi）", True, "trade_date"),
         ("holder_numbers", "股东人数变化（筹码集中度）", True, "end_date"),
     ]
