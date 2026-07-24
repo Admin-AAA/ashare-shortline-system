@@ -9,7 +9,7 @@ import { useUrlRoute } from "../app/useUrlRoute";
 import { queryParam } from "../app/nav";
 import { RecommendationDetailCard } from "../components/RecommendationDetailCard";
 import { fmtPrice } from "../components/Shared";
-import { bucketLabel, exitReasonLabel, BUCKET_LABELS } from "../utils/display";
+import { bucketLabel, exitReasonLabel, setupLabel, BUCKET_LABELS } from "../utils/display";
 
 /**
  * 复盘页 —— 正式运行推荐历史（跨 run，按 trade_date 倒序，带 outcome）。
@@ -378,7 +378,19 @@ export function HistoryPage() {
                       <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>
                         <div style={stackStyle}>
                           <span style={{ color: "var(--text)", fontFamily: "var(--font-mono)" }}>{bucketLabel(it.bucket)}</span>
-                          <span>{it.setup_type || "未命中买点"}</span>
+                          {(() => {
+                            const setup = setupLabel(it.setup_type);
+                            return setup.isPlaceholder ? (
+                              <span
+                                title="没有任何策略在此票上命中入场买点，属未触发买点的复盘标记，不建议据此进场"
+                                style={{ fontStyle: "italic", opacity: 0.7 }}
+                              >
+                                {setup.label}
+                              </span>
+                            ) : (
+                              <span>{setup.label}</span>
+                            );
+                          })()}
                           {matchedVersion && (
                             <span title={matchedVersion.version_id} style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)" }}>
                               版本 {shortVersionId(matchedVersion.version_id)}

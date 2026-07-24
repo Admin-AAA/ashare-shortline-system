@@ -126,6 +126,13 @@ export function bucketLabel(value: unknown, fallback = "—") {
   return BUCKET_LABELS[raw] ?? raw;
 }
 
+// setup_type 为空时的兜底文案。空值 = 没有任何策略命中入场 setup，
+// 是"未触发买点"的复盘标记，不是一种买点类型；文案要避免被误读成买入信号。
+export function setupLabel(value: unknown) {
+  const raw = String(value ?? "").trim();
+  return { label: raw || "无明确买点 · 等待确认", isPlaceholder: !raw };
+}
+
 export function exitReasonLabel(value: unknown, fallback = "—", executedReturn?: number | null) {
   const raw = String(value ?? "").trim();
   if (!raw) return fallback;
