@@ -690,6 +690,22 @@ _history_cache_lock = threading.Lock()
 _HISTORY_CACHE_TTL = 30.0
 
 
+def _list_recommendation_setup_types(db: Session) -> list[str]:
+    """返回正式推荐历史中的全部非空买点值，供前端构建筛选下拉框。"""
+    values = db.scalars(
+        select(Recommendation.setup_type)
+        .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
+        .where(
+            RecommendationRun.run_mode == "formal",
+            Recommendation.setup_type.is_not(None),
+            func.trim(Recommendation.setup_type) != "",
+        )
+        .distinct()
+        .order_by(Recommendation.setup_type.asc())
+    ).all()
+    return [str(value).strip() for value in values if str(value or "").strip()]
+
+
 def list_recommendation_history(
     db: Session,
     *,
@@ -719,6 +735,9 @@ def list_recommendation_history(
         entry = _history_cache.get(cache_key)
         if entry is not None and (now - entry[0]) < _HISTORY_CACHE_TTL:
             return entry[1]
+
+    facets = {"setup_types": _list_recommendation_setup_types(db)}
+
     # 第 1 步：轻量查询——只取去重所需列（不取 feature_snapshot_json 等大字段）
     id_stmt = (
         select(
@@ -791,7 +810,14 @@ def list_recommendation_history(
     summary = _build_recommendation_history_summary(all_outcomes)
     page_ids = deduped_ids[offset : offset + limit]
     if not page_ids:
-        return {"items": [], "total": total, "offset": offset, "limit": limit, "summary": summary}
+        return {
+            "items": [],
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "summary": summary,
+            "facets": facets,
+        }
 
     # 第 2 步：只对分页的 id 批量取详情（推荐 + outcome）
     page_recs = db.scalars(
@@ -810,7 +836,14 @@ def list_recommendation_history(
         rec_id = item.get("recommendation_id")
         item["outcome"] = _serialize_outcome(outcome_map.get(rec_id)) if rec_id else None
 
-    result = {"items": items, "total": total, "offset": offset, "limit": limit, "summary": summary}
+    result = {
+        "items": items,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "summary": summary,
+        "facets": facets,
+    }
     with _history_cache_lock:
         _history_cache[cache_key] = (time.time(), result)
     return result

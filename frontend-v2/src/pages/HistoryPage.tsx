@@ -51,13 +51,11 @@ export function HistoryPage() {
     return { from: from.toISOString().slice(0, 10), to };
   }, [datePreset, dateFrom, dateTo]);
 
-  // code/setupType 只在用户提交时触发查询（避免每键都请求）；用本地 state 控制
-  // bucket 用下拉框，选择即查询
+  // 股票代码保留输入后提交；策略桶和买点均选择即查询。
   const [codeInput, setCodeInput] = useState("");
   const [codeQuery, setCodeQuery] = useState("");
   const [bucket, setBucket] = useState("");
-  const [setupTypeInput, setSetupTypeInput] = useState("");
-  const [setupTypeQuery, setSetupTypeQuery] = useState("");
+  const [setupType, setSetupType] = useState("");
 
   const { data, loading, error } = useApi<RecommendationHistoryResponse>(
     () =>
@@ -67,25 +65,31 @@ export function HistoryPage() {
         date_from: effectiveDateRange.from || undefined,
         date_to: effectiveDateRange.to || undefined,
         bucket: bucket || undefined,
-        setup_type: setupTypeQuery || undefined,
+        setup_type: setupType || undefined,
         strategy_id: strategyId || undefined,
         strategy_version_id: strategyVersionId || undefined,
         limit: pageSize,
         offset: page * pageSize,
       }),
-    [label, codeQuery, bucket, setupTypeQuery, effectiveDateRange, page, strategyId, strategyVersionId],
+    [label, codeQuery, bucket, setupType, effectiveDateRange, page, strategyId, strategyVersionId],
   );
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
   const summary = data?.summary;
+  const setupTypeOptions = useMemo(
+    () =>
+      (data?.facets?.setup_types ?? [])
+        .map((value) => ({ value, label: setupLabel(value).label }))
+        .sort((left, right) => left.label.localeCompare(right.label, "zh-CN")),
+    [data?.facets?.setup_types],
+  );
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   const resetPage = () => setPage(0);
 
   const submitText = () => {
     setCodeQuery(codeInput.trim());
-    setSetupTypeQuery(setupTypeInput.trim());
     resetPage();
   };
 
@@ -97,8 +101,7 @@ export function HistoryPage() {
     setCodeInput("");
     setCodeQuery("");
     setBucket("");
-    setSetupTypeInput("");
-    setSetupTypeQuery("");
+    setSetupType("");
     resetPage();
   };
 
@@ -249,17 +252,23 @@ export function HistoryPage() {
           </select>
         </div>
 
-        {/* 买点类型 */}
+        {/* 买点类型（数据库完整枚举，中文展示、原始值筛选） */}
         <div className="records-filterbar__group">
           <label className="records-filterbar__label">买点</label>
-          <input
+          <select
             className="cfg-input records-filterbar__select"
-            value={setupTypeInput}
-            onChange={(e) => setSetupTypeInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && submitText()}
-            placeholder="setup_type"
-            style={{ width: 130, fontFamily: "var(--font-mono)" }}
-          />
+            value={setupType}
+            onChange={(e) => {
+              setSetupType(e.target.value);
+              resetPage();
+            }}
+            style={{ minWidth: 168 }}
+          >
+            <option value="">全部</option>
+            {setupTypeOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
         </div>
 
         {/* 操作按钮区 */}
@@ -327,13 +336,13 @@ export function HistoryPage() {
               <tr>
                 <th style={thStyle}>日期</th>
                 <th style={thStyle}>股票</th>
-                <th style={{ ...thStyle, textAlign: "right" }}>分数</th>
+                <th style={thStyle}>分数</th>
                 <th style={thStyle}>策略/买点</th>
                 <th style={thStyle}>价格/风控</th>
                 <th style={thStyle}>执行规则</th>
                 <th style={thStyle}>结果</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>收益</th>
-                <th style={thStyle}>退出/持仓</th>
+                <th style={{ ...thStyle, textAlign: "right", minWidth: 128 }}>退出/持仓</th>
               </tr>
             </thead>
             <tbody>
@@ -363,16 +372,19 @@ export function HistoryPage() {
                       style={rowStyle}
                       title="点击展开完整决策详情"
                     >
-                      <td style={tdStyle}>
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}>
+                      <td style={{ ...tdStyle, whiteSpace: "nowrap", overflowWrap: "normal" }}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)", whiteSpace: "nowrap" }}>
                           {expandedId === it.recommendation_id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                          {it.trade_date}
+                          <span style={{ whiteSpace: "nowrap", flexShrink: 0 }}>{it.trade_date}</span>
                         </span>
                       </td>
-                      <td style={{ ...tdStyle, fontFamily: "var(--font-mono)" }}>
-                        {it.code} <span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }}>{it.name}</span>
+                      <td style={tdStyle}>
+                        <div style={stockCellStyle}>
+                          <span style={stockCodeStyle}>{it.code}</span>
+                          <span style={stockNameStyle}>{it.name}</span>
+                        </div>
                       </td>
-                      <td style={{ ...tdStyle, textAlign: "right", fontFamily: "var(--font-mono)" }}>
+                      <td style={{ ...tdStyle, fontFamily: "var(--font-mono)", whiteSpace: "nowrap", overflowWrap: "normal" }}>
                         {it.final_score.toFixed(1)}
                       </td>
                       <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>
@@ -388,7 +400,7 @@ export function HistoryPage() {
                                 {setup.label}
                               </span>
                             ) : (
-                              <span>{setup.label}</span>
+                              <span title={setup.rawValue ? `原始标识：${setup.rawValue}` : undefined}>{setup.label}</span>
                             );
                           })()}
                           {matchedVersion && (
@@ -449,8 +461,16 @@ export function HistoryPage() {
                           )}
                         </div>
                       </td>
-                      <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>
-                        <div style={stackStyle}>
+                      <td
+                        style={{
+                          ...tdStyle,
+                          color: "var(--muted)",
+                          fontSize: "var(--text-sm)",
+                          textAlign: "right",
+                          minWidth: 128,
+                        }}
+                      >
+                        <div style={{ ...stackStyle, alignItems: "flex-end" }}>
                           <span>{exitReasonLabel(o?.exit_reason, "—", ret)}</span>
                           <span>{o?.holding_days != null ? `持仓 ${o.holding_days} 天` : "—"}</span>
                         </div>
@@ -509,6 +529,24 @@ export function HistoryPage() {
   );
 }
 
+const stockCellStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 2,
+  minWidth: 0,
+};
+
+const stockCodeStyle: React.CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  whiteSpace: "nowrap",
+};
+
+const stockNameStyle: React.CSSProperties = {
+  color: "var(--muted)",
+  fontSize: "var(--text-sm)",
+  whiteSpace: "nowrap",
+};
+
 const detailStateStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -542,22 +580,25 @@ const outcomeLabel = (value: string | null | undefined) => {
 
 const tableStyle: React.CSSProperties = {
   width: "100%",
+  tableLayout: "auto",
   borderCollapse: "collapse",
   fontSize: "var(--text-base)",
 };
 
 const thStyle: React.CSSProperties = {
   textAlign: "left",
-  padding: "var(--space-2) var(--space-3)",
+  padding: "var(--space-2)",
   color: "var(--muted)",
   fontWeight: 500,
   fontSize: "var(--text-sm)",
+  whiteSpace: "nowrap",
   borderBottom: "1px solid var(--border)",
 };
 
 const tdStyle: React.CSSProperties = {
-  padding: "var(--space-2) var(--space-3)",
+  padding: "var(--space-2)",
   borderBottom: "1px solid var(--border)",
+  overflowWrap: "break-word",
 };
 
 const rowStyle: React.CSSProperties = {
