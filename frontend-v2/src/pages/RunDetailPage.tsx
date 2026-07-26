@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, Loader2, PlayCircle, RotateCw, Search, Sparkles } from "lucide-react";
+import { ArrowLeft, History, Loader2, PlayCircle, RotateCw, Search, Sparkles } from "lucide-react";
 import { api } from "../api/client";
-import type { Preset, RunDetail, SingleStockAnalysis, SingleStockSkillReview, ReplayAnalysisResult } from "../types";
+import type { Preset, RunDetail, SingleStockAnalysis, SingleStockSkillReview, ReplayAnalysisResult, StockMatrixHistoryItem } from "../types";
 import { ErrorPage } from "../components/StateViews";
 import { Panel } from "../components/Panel";
 import { useUrlRoute } from "../app/useUrlRoute";
@@ -310,6 +310,39 @@ function SingleStockScorePanel({ presets }: { presets: Preset[] }) {
   const [result, setResult] = useState<SingleStockAnalysis | null>(null);
   const [error, setError] = useState("");
 
+  // 历史列表：按当前 code 拉 analysis_type=single_stock 的评分历史
+  const [history, setHistory] = useState<StockMatrixHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyCode, setHistoryCode] = useState("");
+  // 回放某条历史：加载其完整 result_json 后渲染
+  const [replayId, setReplayId] = useState<number | null>(null);
+
+  async function loadHistory(codeToFetch: string) {
+    const trimmed = codeToFetch.trim();
+    if (!trimmed) {
+      setHistory([]);
+      setHistoryCode("");
+      return;
+    }
+    setHistoryLoading(true);
+    setHistoryCode(trimmed);
+    try {
+      const res = await api.singleStockHistory(trimmed, 1, 20);
+      setHistory(res.items);
+    } catch {
+      setHistory([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  // code 变化时（失焦或评分后）拉历史；这里用输入即时拉取会过于频繁，
+  // 改为：code 非空且与已加载历史不同时，在评分/失焦触发。下面 effect 兜底首次进入。
+  useEffect(() => {
+    void loadHistory(code);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function runScore() {
     const trimmed = code.trim();
     if (!trimmed) {
@@ -319,6 +352,7 @@ function SingleStockScorePanel({ presets }: { presets: Preset[] }) {
     setLoading(true);
     setError("");
     setResult(null);
+    setReplayId(null);
     try {
       const res = await api.analyzeStock({
         code: trimmed,
@@ -329,11 +363,31 @@ function SingleStockScorePanel({ presets }: { presets: Preset[] }) {
         setError(res.message || "分析失败");
       } else {
         setResult(res);
+        void loadHistory(trimmed); // 评分成功后刷新历史
       }
     } catch (e) {
       setError((e as Error).message || "单股票评分失败");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadReplay(id: number) {
+    setReplayId(id);
+    setResult(null);
+    setError("");
+    try {
+      const detail = await api.matrixRecordDetail(id);
+      const replayed = detail.result as unknown as SingleStockAnalysis;
+      if (replayed && replayed.status === "ok") {
+        setResult(replayed);
+      } else {
+        setError("该历史记录无法回放");
+        setReplayId(null);
+      }
+    } catch (e) {
+      setError((e as Error).message || "历史回放失败");
+      setReplayId(null);
     }
   }
 
@@ -358,6 +412,9 @@ function SingleStockScorePanel({ presets }: { presets: Preset[] }) {
           value={code}
           onChange={(e) => setCode(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") runScore(); }}
+          onBlur={(e) => {
+            if (e.target.value.trim() && e.target.value.trim() !== historyCode) void loadHistory(e.target.value.trim());
+          }}
           placeholder="股票代码，如 000001"
           style={{
             background: "var(--surface-soft)",
@@ -412,7 +469,103 @@ function SingleStockScorePanel({ presets }: { presets: Preset[] }) {
       )}
 
       {result && <SingleStockScoreResult result={result} />}
+
+      <SingleStockHistoryList
+        items={history}
+        loading={historyLoading}
+        code={historyCode}
+        replayId={replayId}
+        onReplay={loadReplay}
+      />
     </Panel>
+  );
+}
+
+function SingleStockHistoryList({
+  items,
+  loading,
+  code,
+  replayId,
+  onReplay,
+}: {
+  items: StockMatrixHistoryItem[];
+  loading: boolean;
+  code: string;
+  replayId: number | null;
+  onReplay: (id: number) => void;
+}) {
+  if (!code) return null;
+  if (loading && items.length === 0) {
+    return (
+      <div style={{ marginTop: "var(--space-2)" }}>
+        <div className="panel__kicker" style={{ marginBottom: "var(--space-2)" }}>
+          <History size={14} style={{ verticalAlign: "-2px", marginRight: 4 }} />
+          评分历史
+        </div>
+        <div className="text-muted" style={{ fontSize: "var(--text-sm)" }}>加载历史…</div>
+      </div>
+    );
+  }
+  if (items.length === 0) {
+    return (
+      <div style={{ marginTop: "var(--space-2)" }}>
+        <div className="panel__kicker" style={{ marginBottom: "var(--space-2)" }}>
+          <History size={14} style={{ verticalAlign: "-2px", marginRight: 4 }} />
+          评分历史
+        </div>
+        <div className="text-muted" style={{ fontSize: "var(--text-sm)" }}>暂无历史评分记录</div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: "var(--space-2)" }}>
+      <div className="panel__kicker" style={{ marginBottom: "var(--space-2)" }}>
+        <History size={14} style={{ verticalAlign: "-2px", marginRight: 4 }} />
+        评分历史 · {code}（{items.length}）
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
+        {items.map((h) => {
+          const active = replayId === h.id;
+          return (
+            <button
+              key={h.id}
+              onClick={() => onReplay(h.id)}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "auto 1fr auto auto",
+                gap: "var(--space-3)",
+                alignItems: "center",
+                textAlign: "left",
+                padding: "var(--space-2) var(--space-3)",
+                background: active ? "var(--surface)" : "var(--surface-soft)",
+                border: `1px solid ${active ? "var(--accent)" : "var(--line)"}`,
+                borderRadius: "var(--radius-sm)",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                color: "var(--ink)",
+              }}
+            >
+              <span className="text-muted" style={{ fontSize: "var(--text-xs)" }}>
+                {h.trade_date}
+              </span>
+              <span className="text-muted" style={{ fontSize: "var(--text-xs)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {h.created_at ? new Date(h.created_at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"}
+              </span>
+              <span className="text-mono" style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--accent)" }}>
+                {h.final_score != null ? h.final_score.toFixed(1) : "—"}
+              </span>
+              <span className="text-muted text-mono" style={{ fontSize: "var(--text-xs)" }}>
+                {h.skill_count > 1 ? `${h.skill_count}skill` : "规则"}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="text-muted" style={{ fontSize: "var(--text-xs)", marginTop: "var(--space-2)" }}>
+        点击历史记录可回放该次完整评分结果。
+      </div>
+    </div>
   );
 }
 

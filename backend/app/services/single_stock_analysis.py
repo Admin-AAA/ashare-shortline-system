@@ -308,7 +308,50 @@ def analyze_stock(
             llm_result = _run_llm_analysis(db, code, stock_result, skill_id, snapshot)
         result["llm_analysis"] = llm_result
 
+    _persist_single_stock_history(db, code, trade_date, result)
+
     return result
+
+
+def _persist_single_stock_history(db: Session, code: str, trade_date: str, result: dict[str, Any]) -> None:
+    """落库单股票评分历史（复用 stock_matrix_history 表，analysis_type="single_stock"）。
+
+    失败仅记日志、不阻塞主流程（与 stock_matrix_service 同款约定）。
+    """
+    try:
+        from app.models.tables import StockMatrixHistory
+
+        scoring = result.get("scoring") or {}
+        # 规则评分总和作为 final_score（与面板展示的「评分」口径一致）
+        rule_score_keys = [
+            "dsa_signal_score", "dsa_trend_score", "dsa_bias_score",
+            "dsa_volume_score", "dsa_support_score", "dsa_macd_score",
+            "dsa_rsi_score",
+        ]
+        final_score = sum(
+            (float(scoring.get(k) or 0)) for k in rule_score_keys
+        ) or None
+
+        # skill_count：preset 模式取有效 skill 数，单 skill 模式=1
+        llm = result.get("llm_analysis")
+        skill_count = 1
+        if llm and isinstance(llm.get("skill_reviews"), list):
+            valid = [r for r in llm["skill_reviews"] if r.get("status") == "ok"]
+            skill_count = len(valid) if valid else len(llm["skill_reviews"])
+
+        db.add(StockMatrixHistory(
+            code=code,
+            trade_date=trade_date,
+            analysis_type="single_stock",
+            final_score=final_score,
+            skill_count=skill_count,
+            result_json=json.dumps(result, ensure_ascii=False, default=str),
+            elapsed_ms=result.get("elapsed_ms"),
+        ))
+        db.commit()
+    except Exception as hist_exc:
+        logger.warning("写入单股票评分历史失败 (code=%s): %s", code, hist_exc)
+        db.rollback()
 
 
 def _run_preset_skill_analysis(

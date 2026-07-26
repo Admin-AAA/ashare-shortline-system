@@ -238,16 +238,21 @@ def list_matrix_records(
     page: int = 1,
     page_size: int = 20,
     code: str | None = None,
+    analysis_type: str | None = None,
 ) -> dict[str, Any]:
     """矩阵分析历史记录列表（分页，按 created_at 倒序）。
 
     与 stock_matrix.py 的 /history 不同：这里跨所有 code，按时间倒序。
+    analysis_type 可选过滤（如 "analysis" / "backtest" / "single_stock"）。
     """
     stmt = select(StockMatrixHistory)
     count_stmt = select(func.count()).select_from(StockMatrixHistory)
     if code:
         stmt = stmt.where(StockMatrixHistory.code == code)
         count_stmt = count_stmt.where(StockMatrixHistory.code == code)
+    if analysis_type:
+        stmt = stmt.where(StockMatrixHistory.analysis_type == analysis_type)
+        count_stmt = count_stmt.where(StockMatrixHistory.analysis_type == analysis_type)
 
     total = db.scalar(count_stmt) or 0
     offset = (page - 1) * page_size
