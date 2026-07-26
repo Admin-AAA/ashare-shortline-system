@@ -12,8 +12,23 @@ class Settings(BaseSettings):
     app_name: str = "AShare Shortline System"
     database_url: str = "mysql+pymysql://aowang:1279990918@127.0.0.1:3306/ashare_workbench?charset=utf8mb4"
     data_provider: str = "tushare"
-    tushare_token: str = "eqyrJ71eIKjLoM12OeDLQOwRMUTuETs2ItnXAJitOhjTE8sLIjm8UuihObjXEs3zOFDKUI1PMrTmMp1yO9Tjl19"
-    tushare_rate_limit_per_minute: int = 0  # 0 = 不限速（代理服务器）
+    # Deprecated compatibility fields. New upstream credentials use provider-specific settings.
+    tushare_token: str = ""
+    tushare_rate_limit_per_minute: int = 0
+    tushare_fastapic_url: str = "https://fastapic.stockai888.top/"
+    tushare_fastapic_token: str = ""
+    tushare_fastapic_rate_limit_per_minute: int = 30
+    tushare_fastapic_max_concurrency: int = 1
+    tushare_ai_tool_url: str = "https://ai-tool.indevs.in/tushare/pro"
+    tushare_ai_tool_api_key: str = ""
+    tushare_ai_tool_rate_limit_per_minute: int = 90
+    tushare_ai_tool_rt_min_rate_limit_per_minute: int = 72
+    tushare_ai_tool_stk_mins_rate_limit_per_minute: int = 48
+    tushare_provider_failure_threshold: int = 3
+    tushare_provider_recovery_seconds: float = 60.0
+    tushare_provider_max_attempts: int = 2
+    tushare_connect_timeout_seconds: float = 5.0
+    tushare_read_timeout_seconds: float = 120.0
     quote_sources: str = "tushare"
     kline_sources: str = "tushare"
     market_scan_size: int = 5200
@@ -83,10 +98,10 @@ class Settings(BaseSettings):
     def _validate_critical_config(self):
         # 注：ASHARE_AGENT_SKILL_API_KEY 已弃用。模型路由由数据库
         # model_route_config 表驱动，每条路由自带独立 key，不再依赖全局 env key。
-        if not self.tushare_token:
+        if not self.tushare_fastapic_token and not self.tushare_ai_tool_api_key:
             import logging
             logging.getLogger(__name__).warning(
-                "ASHARE_TUSHARE_TOKEN 未配置 — Tushare 数据源将不可用。"
+                "Fastapic Token 与 ai-tool API Key 均未配置 — 上游同步和盘中实时分钟将不可用。"
             )
         return self
 

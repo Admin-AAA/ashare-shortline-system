@@ -13,86 +13,33 @@ Tushare 稳定数据源客户端。
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
 import logging
-import random
-import threading
-import time
-from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, timedelta
-import hashlib
+from datetime import date, datetime, timedelta
 from types import MappingProxyType
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 import pandas as pd
-import requests
 
+from app.core.config import get_settings
 from app.engine.trading_calendar import normalize_trade_date as _normalize_trade_date
-
-_TOKEN = "eqyrJ71eIKjLoM12OeDLQOwRMUTuETs2ItnXAJitOhjTE8sLIjm8UuihObjXEs3zOFDKUI1PMrTmMp1yO9Tjl19"
-_CUSTOM_URL = "https://fastapic.stockai888.top/"
-
-# ═════════════════════════════════════════════════════════════════════════════
-# 全局令牌桶限速器（代理服务器每分钟100次上限）
-# ═════════════════════════════════════════════════════════════════════════════
-
-_RATE_LIMIT_LOCK = threading.Lock()
-_RATE_TIMESTAMPS: deque[float] = deque()
-_RATE_LIMIT_PER_MINUTE = 90  # 留 10 次 buffer，避免边界 429
-
-
-# ═════════════════════════════════════════════════════════════════
-# 失败重试 + 指数退避（缓解代理服务器不稳定 / Read timed out）
-# ═════════════════════════════════════════════════════════════════
-
-_MAX_RETRIES = 4           # 最多尝试次数（1 次 + 3 次重试）
-_BASE_BACKOFF = 2.0        # 基础退避秒数
-_MAX_BACKOFF = 30.0        # 单次退避上限
-# 服务端过载 / 限流状态码可重试
-_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
-# 仅网络层瞬时错误可重试；业务错误（权限/积分）由 caller 单独抛出
-_RETRYABLE_EXC = (
-    requests.exceptions.Timeout,
-    requests.exceptions.ConnectionError,
-    requests.exceptions.ProxyError,
-    requests.exceptions.ChunkedEncodingError,
+from app.services.tushare_transport import (
+    AuthMode,
+    ProviderConfig,
+    TushareHttpProvider,
+    TushareProviderRouter,
 )
 
-
-def _backoff_sleep(api_name: str, attempt: int, reason: str) -> None:
-    """指数退避 + 抖动，避免代理/限流时请求尖峰。"""
-    backoff = min(_MAX_BACKOFF, _BASE_BACKOFF * (2 ** attempt)) + random.uniform(0, 0.5)
-    logger.warning(
-        "Tushare %s 第%d次请求失败(%s)，%.1fs 后退避重试",
-        api_name, attempt + 1, reason, backoff,
-    )
-    time.sleep(backoff)
-
-
-def _rate_limit_wait() -> None:
-    """令牌桶：确保最近 60s 内请求数不超过 _RATE_LIMIT_PER_MINUTE。"""
-    with _RATE_LIMIT_LOCK:
-        now = time.monotonic()
-        # 清理 60s 前的时间戳
-        while _RATE_TIMESTAMPS and _RATE_TIMESTAMPS[0] < now - 60:
-            _RATE_TIMESTAMPS.popleft()
-        if len(_RATE_TIMESTAMPS) >= _RATE_LIMIT_PER_MINUTE:
-            # 需要等到最老的时间戳过期
-            wait = _RATE_TIMESTAMPS[0] + 60 - now + 0.1
-            if wait > 0:
-                time.sleep(wait)
-                now = time.monotonic()
-                while _RATE_TIMESTAMPS and _RATE_TIMESTAMPS[0] < now - 60:
-                    _RATE_TIMESTAMPS.popleft()
-        _RATE_TIMESTAMPS.append(now)
+logger = logging.getLogger(__name__)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 客户端 — requests.Session 直连，杜绝 tushare 库的 TCP 悬挂问题
+# Canonical client contract. Provider authentication, limiting, retry, and
+# circuit breaking live in ``tushare_transport``; the local MySQL pool remains
+# the recommendation query plane.
 # ═════════════════════════════════════════════════════════════════════════════
 
 
@@ -223,16 +170,19 @@ class TushareRawEnvelope:
 
 
 class _TushareSession:
-    """Tushare pro_api 兼容接口，底层用 requests.Session 池化连接。"""
+    """Tushare ``pro_api`` compatible facade over the provider router."""
 
-    def __init__(self, token: str, timeout: tuple[float, float] = (5, 120)):
-        self._token = token
-        self._url = _CUSTOM_URL
-        self._session = requests.Session()
-        self._timeout = timeout
+    def __init__(self, router: TushareProviderRouter, *, http_url: str = "") -> None:
+        self._router = router
+        # Tushare ``pro_bar`` inspects this private SDK attribute.  The actual
+        # transport remains routed and does not read it.
+        self._DataApi__http_url = http_url
 
     def close(self) -> None:
-        self._session.close()
+        self._router.close()
+
+    def provider_health_snapshot(self) -> list[dict[str, Any]]:
+        return self._router.health_snapshot()
 
     def fetch_raw(
         self,
@@ -241,124 +191,243 @@ class _TushareSession:
         params: Mapping[str, Any] | None = None,
         fields: str = "",
     ) -> TushareRawEnvelope:
-        """Fetch one successful raw envelope without altering legacy DataFrame callers."""
+        """Fetch one successful raw envelope without altering legacy callers."""
         if not api_name.strip() or api_name.startswith("_"):
             raise TushareRawEnvelopeError("tushare_raw_invalid_api", "raw API name is invalid")
         if not isinstance(fields, str):
             raise TushareRawEnvelopeError(
                 "tushare_raw_invalid_request", "raw fields request must be a string"
             )
-        request_params = dict(params or {})
-        last_exc: Exception | None = None
-        for attempt in range(_MAX_RETRIES):
-            response: requests.Response | None = None
-            try:
-                _rate_limit_wait()
-                response = self._session.post(
-                    f"{self._url}{api_name}",
-                    json={
-                        "api_name": api_name,
-                        "token": self._token,
-                        "params": request_params,
-                        "fields": fields,
-                    },
-                    timeout=self._timeout,
-                )
-                status = response.status_code
-                if status != 200:
-                    if status in _RETRYABLE_STATUS and attempt < _MAX_RETRIES - 1:
-                        _backoff_sleep(api_name, attempt, f"HTTP {status}")
-                        continue
-                    response.raise_for_status()
-                envelope = response.json()
-                if not isinstance(envelope, Mapping):
-                    raise TushareRawEnvelopeError(
-                        "tushare_raw_invalid_envelope", "raw provider envelope must be a mapping"
-                    )
-                if envelope.get("code") != 0:
-                    raise TushareRawEnvelopeError(
-                        "tushare_raw_provider_error", "raw provider reported a request error"
-                    )
-                return TushareRawEnvelope.from_envelope(
-                    api_name=api_name,
-                    requested_fields=fields,
-                    envelope=envelope,
-                )
-            except _RETRYABLE_EXC as exc:
-                last_exc = exc
-                if attempt < _MAX_RETRIES - 1:
-                    _backoff_sleep(api_name, attempt, type(exc).__name__)
-                    continue
-                logger.error("Tushare %s 重试 %d 次仍失败: %s", api_name, _MAX_RETRIES, exc)
-                raise
-            finally:
-                if response is not None:
-                    response.close()
-        if last_exc:
-            raise last_exc
-        raise TushareRawEnvelopeError("tushare_raw_unknown_error", "raw provider request did not finish")
+        envelope = self._router.request(
+            api_name,
+            params=dict(params or {}),
+            fields=fields,
+        )
+        return TushareRawEnvelope.from_envelope(
+            api_name=api_name,
+            requested_fields=fields,
+            envelope=envelope,
+        )
+
+    def _call(self, api_name: str, *, fields: str = "", params: Mapping[str, Any]) -> pd.DataFrame:
+        envelope = self._router.request(api_name, params=params, fields=fields)
+        data = envelope.get("data")
+        if not data:
+            return pd.DataFrame()
+        raw = TushareRawEnvelope.from_envelope(
+            api_name=api_name,
+            requested_fields=fields,
+            envelope=envelope,
+        )
+        if not raw.items:
+            return pd.DataFrame(columns=list(raw.fields))
+        return pd.DataFrame.from_records(raw.items, columns=list(raw.fields))
+
+    def query(self, api_name: str, fields: str = "", **params: Any) -> pd.DataFrame:
+        """Compatibility with ``tushare.pro_bar(api=...)`` query calls."""
+        if not api_name or api_name.startswith("_"):
+            raise AttributeError(api_name)
+        return self._call(api_name, fields=fields or "", params=params)
 
     def __getattr__(self, api_name: str):
         if api_name.startswith("_"):
             raise AttributeError(api_name)
 
         def caller(**params: Any) -> pd.DataFrame:
-            last_exc: Exception | None = None
-            for attempt in range(_MAX_RETRIES):
-                try:
-                    _rate_limit_wait()
-                    r = self._session.post(
-                        f"{self._url}{api_name}",
-                        json={
-                            "api_name": api_name,
-                            "token": self._token,
-                            "params": params,
-                            "fields": "",
-                        },
-                        timeout=self._timeout,
-                    )
-                    status = r.status_code
-                    if status != 200:
-                        r.close()
-                        # 429/5xx 视为可重试的服务端/限流错误；其余 4xx 直接抛出
-                        if status in _RETRYABLE_STATUS and attempt < _MAX_RETRIES - 1:
-                            _backoff_sleep(api_name, attempt, f"HTTP {status}")
-                            continue
-                        r.raise_for_status()
-                    d = r.json()
-                    if d.get("code") != 0:
-                        # 业务错误（权限/积分不足等）不可重试，立即抛出
-                        raise RuntimeError(f"Tushare {api_name}: {d.get('msg', 'Unknown error')}")
-                    data = d.get("data")
-                    if not data or "items" not in data or not data["items"]:
-                        return pd.DataFrame()
-                    return pd.DataFrame(data["items"], columns=data["fields"])
-                except _RETRYABLE_EXC as e:
-                    # 网络超时 / 连接 / 代理错误：指数退避重试
-                    last_exc = e
-                    if attempt < _MAX_RETRIES - 1:
-                        _backoff_sleep(api_name, attempt, type(e).__name__)
-                        continue
-                    logger.error("Tushare %s 重试 %d 次仍失败: %s", api_name, _MAX_RETRIES, e)
-                    raise
-            if last_exc:
-                raise last_exc
-            return pd.DataFrame()  # 理论不可达
+            request_params = dict(params)
+            fields = request_params.pop("fields", "")
+            if not isinstance(fields, str):
+                raise TushareRawEnvelopeError(
+                    "tushare_raw_invalid_request", "fields request must be a string"
+                )
+            return self._call(api_name, fields=fields, params=request_params)
 
         return caller
 
 
+def _build_provider_router() -> tuple[TushareProviderRouter, str]:
+    settings = get_settings()
+    timeout = (
+        max(0.1, float(settings.tushare_connect_timeout_seconds)),
+        max(0.1, float(settings.tushare_read_timeout_seconds)),
+    )
+    common = {
+        "timeout": timeout,
+        "max_attempts": max(1, int(settings.tushare_provider_max_attempts)),
+        "failure_threshold": max(1, int(settings.tushare_provider_failure_threshold)),
+        "recovery_seconds": max(0.1, float(settings.tushare_provider_recovery_seconds)),
+    }
+    providers: list[TushareHttpProvider] = []
+
+    fastapic_token = settings.tushare_fastapic_token.strip()
+    if fastapic_token:
+        providers.append(
+            TushareHttpProvider(
+                ProviderConfig(
+                    name="fastapic",
+                    base_url=settings.tushare_fastapic_url,
+                    credential=fastapic_token,
+                    auth_mode=AuthMode.JSON_TOKEN,
+                    rate_limit_per_minute=max(
+                        0, int(settings.tushare_fastapic_rate_limit_per_minute)
+                    ),
+                    max_concurrency=max(0, int(settings.tushare_fastapic_max_concurrency)),
+                    append_api_path=True,
+                    **common,
+                )
+            )
+        )
+
+    ai_tool_api_key = settings.tushare_ai_tool_api_key.strip()
+    if ai_tool_api_key:
+        providers.append(
+            TushareHttpProvider(
+                ProviderConfig(
+                    name="ai_tool",
+                    base_url=settings.tushare_ai_tool_url,
+                    credential=ai_tool_api_key,
+                    auth_mode=AuthMode.API_KEY_HEADER,
+                    rate_limit_per_minute=max(
+                        0, int(settings.tushare_ai_tool_rate_limit_per_minute)
+                    ),
+                    api_rate_limits={
+                        "rt_min": max(
+                            0, int(settings.tushare_ai_tool_rt_min_rate_limit_per_minute)
+                        ),
+                        "stk_mins": max(
+                            0, int(settings.tushare_ai_tool_stk_mins_rate_limit_per_minute)
+                        ),
+                    },
+                    append_api_path=False,
+                    **common,
+                )
+            )
+        )
+
+    if not providers:
+        raise RuntimeError(
+            "Tushare 上游未配置：请设置 Fastapic Token 或 ai-tool API Key。"
+        )
+    return TushareProviderRouter(providers), settings.tushare_fastapic_url
+
+
 @functools.lru_cache(maxsize=1)
 def get_pro() -> _TushareSession:
-    """获取 Tushare 客户端实例（单例缓存，requests.Session 直连）。"""
-    pro = _TushareSession(_TOKEN, timeout=(5, 120))
-    pro._DataApi__http_url = _CUSTOM_URL
-    return pro
+    """Return the cached ingestion/realtime provider facade."""
+    router, fastapic_url = _build_provider_router()
+    return _TushareSession(router, http_url=fastapic_url)
 
 
 def clear_pro_cache() -> None:
-    """清除缓存的客户端实例。"""
+    """Close provider sessions and clear cached routing/breaker state."""
+    if get_pro.cache_info().currsize:
+        try:
+            get_pro().close()
+        except Exception:
+            logger.debug("closing cached Tushare providers failed", exc_info=True)
     get_pro.cache_clear()
+
+
+def get_tushare_provider_health() -> list[dict[str, Any]]:
+    """Project configured Providers and process-local telemetry to the health API."""
+    settings = get_settings()
+    specs = (
+        {
+            "name": "fastapic",
+            "source": "fastapic",
+            "enabled": bool(settings.tushare_fastapic_token.strip()),
+            "priority": 0,
+            "note": "通用同步主源；ai-tool 可在故障时接管",
+            "auth_mode": AuthMode.JSON_TOKEN.value,
+            "rate_limit_per_minute": max(
+                0, int(settings.tushare_fastapic_rate_limit_per_minute)
+            ),
+            "api_rate_limits": {},
+            "max_concurrency": max(0, int(settings.tushare_fastapic_max_concurrency)),
+        },
+        {
+            "name": "ai_tool",
+            "source": "ai-tool",
+            "enabled": bool(settings.tushare_ai_tool_api_key.strip()),
+            "priority": 1,
+            "note": "分钟/公告主源；通用同步备用源",
+            "auth_mode": AuthMode.API_KEY_HEADER.value,
+            "rate_limit_per_minute": max(
+                0, int(settings.tushare_ai_tool_rate_limit_per_minute)
+            ),
+            "api_rate_limits": {
+                "rt_min": max(
+                    0, int(settings.tushare_ai_tool_rt_min_rate_limit_per_minute)
+                ),
+                "stk_mins": max(
+                    0, int(settings.tushare_ai_tool_stk_mins_rate_limit_per_minute)
+                ),
+            },
+            "max_concurrency": 0,
+        },
+    )
+
+    snapshots: dict[str, dict[str, Any]] = {}
+    initialization_failed = False
+    if any(bool(spec["enabled"]) for spec in specs):
+        try:
+            snapshots = {
+                str(item.get("name")): item
+                for item in get_pro().provider_health_snapshot()
+            }
+        except Exception:
+            initialization_failed = True
+            logger.warning("tushare provider health initialization failed", exc_info=True)
+
+    rows: list[dict[str, Any]] = []
+    for spec in specs:
+        enabled = bool(spec["enabled"])
+        snapshot = snapshots.get(str(spec["name"]), {})
+        status = str(snapshot.get("status") or ("untested" if enabled else "disabled"))
+        failure_count = int(snapshot.get("failure_count") or 0)
+        last_error = snapshot.get("last_error")
+        if enabled and initialization_failed and not snapshot:
+            status = "degraded"
+            failure_count = max(1, failure_count)
+            last_error = "provider initialization failed (configuration)"
+        rows.append(
+            {
+                "source": spec["source"],
+                "provider_name": spec["name"],
+                "source_type": "tushare_provider",
+                "layer": "provider",
+                "enabled": enabled,
+                "configured": enabled,
+                "priority": spec["priority"],
+                "note": spec["note"],
+                "success_count": int(snapshot.get("success_count") or 0),
+                "failure_count": failure_count,
+                "empty_count": int(snapshot.get("empty_count") or 0),
+                "success_rate": snapshot.get("success_rate"),
+                "latency_ms": snapshot.get("latency_ms"),
+                "last_success_at": snapshot.get("last_success_at"),
+                "last_failure_at": snapshot.get("last_failure_at"),
+                "last_error": last_error,
+                "last_api": snapshot.get("last_api"),
+                "status": status if enabled else "disabled",
+                "updated_at": snapshot.get("updated_at"),
+                "auth_mode": snapshot.get("auth_mode") or spec["auth_mode"],
+                "rate_limit_per_minute": snapshot.get("rate_limit_per_minute")
+                if snapshot
+                else spec["rate_limit_per_minute"],
+                "api_rate_limits": snapshot.get("api_rate_limits")
+                if snapshot
+                else spec["api_rate_limits"],
+                "max_concurrency": snapshot.get("max_concurrency")
+                if snapshot
+                else spec["max_concurrency"],
+                "breaker_state": snapshot.get("breaker_state")
+                or ("closed" if enabled else "disabled"),
+                "open_circuits": snapshot.get("open_circuits") or [],
+                "health_scope": "process_runtime",
+            }
+        )
+    return rows
 
 
 def ts_code(code: str) -> str:
@@ -1378,7 +1447,7 @@ def fetch_broker_recommend(month: str | None = None) -> list[dict[str, Any]]:
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-_TUSHARE_STK_MINS_PERMISSION_DENIED_REASON: str | None = None
+_REALTIME_MINUTE_FREQS = frozenset({"1MIN", "5MIN", "15MIN", "30MIN", "60MIN"})
 
 
 def fetch_minute_kbars(
@@ -1465,6 +1534,35 @@ def fetch_index_minute_kbars(
     ]
 
 
+_STK_MINS_MAX_ROWS = 8000
+_STK_MINS_WINDOW_DAYS = 20
+
+
+def _minute_query_windows(start_time: str, end_time: str) -> list[tuple[str, str]]:
+    """Slice long 1-minute ranges well below the provider's 8,000-row cap."""
+    try:
+        start_value = datetime.fromisoformat(start_time)
+        end_value = datetime.fromisoformat(end_time)
+    except ValueError:
+        return [(start_time, end_time)]
+    if start_value > end_value:
+        return []
+
+    windows: list[tuple[str, str]] = []
+    current_day = start_value.date()
+    end_day = end_value.date()
+    while current_day <= end_day:
+        window_end_day = min(
+            current_day + timedelta(days=_STK_MINS_WINDOW_DAYS - 1),
+            end_day,
+        )
+        window_start = start_time if current_day == start_value.date() else f"{current_day.isoformat()} 09:00:00"
+        window_end = end_time if window_end_day == end_day else f"{window_end_day.isoformat()} 15:30:00"
+        windows.append((window_start, window_end))
+        current_day = window_end_day + timedelta(days=1)
+    return windows
+
+
 def _fetch_tushare_minute_kbars(
     code: str,
     *,
@@ -1473,29 +1571,44 @@ def _fetch_tushare_minute_kbars(
     trace: list[dict[str, Any]] | None = None,
     is_index: bool = False,
 ) -> list[dict[str, Any]]:
-    global _TUSHARE_STK_MINS_PERMISSION_DENIED_REASON
-    if _TUSHARE_STK_MINS_PERMISSION_DENIED_REASON:
+    windows = _minute_query_windows(start_time, end_time)
+    if not windows:
         _record_minute_source_trace(
             trace,
             source="tushare_stk_mins",
             code=code,
-            status="skipped",
+            status="error",
             row_count=0,
-            reason=_TUSHARE_STK_MINS_PERMISSION_DENIED_REASON,
+            reason="minute range start is after end",
         )
         return []
+
+    frames: list[pd.DataFrame] = []
     try:
-        df = get_pro().stk_mins(
-            ts_code=_minute_ts_code(code, is_index=is_index),
-            freq="1min",
-            start_date=start_time,
-            end_date=end_time,
-        )
+        pro = get_pro()
+        for window_start, window_end in windows:
+            frame = pro.stk_mins(
+                ts_code=_minute_ts_code(code, is_index=is_index),
+                freq="1min",
+                start_date=window_start,
+                end_date=window_end,
+            )
+            if frame is None or frame.empty:
+                continue
+            if len(frame) >= _STK_MINS_MAX_ROWS:
+                _record_minute_source_trace(
+                    trace,
+                    source="tushare_stk_mins",
+                    code=code,
+                    status="truncated",
+                    row_count=len(frame),
+                    reason="stk_mins response reached the 8000-row safety limit",
+                )
+                return []
+            frames.append(frame)
     except Exception as exc:
         reason = str(exc)
         status = "permission_denied" if _is_tushare_permission_error(reason) else "error"
-        if status == "permission_denied":
-            _TUSHARE_STK_MINS_PERMISSION_DENIED_REASON = reason
         _record_minute_source_trace(
             trace,
             source="tushare_stk_mins",
@@ -1505,7 +1618,7 @@ def _fetch_tushare_minute_kbars(
             reason=reason,
         )
         return []
-    if df is None or df.empty:
+    if not frames:
         _record_minute_source_trace(
             trace,
             source="tushare_stk_mins",
@@ -1515,31 +1628,30 @@ def _fetch_tushare_minute_kbars(
         )
         return []
 
-    rows: list[dict[str, Any]] = []
-    for _, row in df.iterrows():
+    rows_by_time: dict[str, dict[str, Any]] = {}
+    for _, row in pd.concat(frames, ignore_index=True).iterrows():
         trade_time = str(row.get("trade_time") or row.get("datetime") or row.get("date") or "").strip()
         trade_date = _normalize_trade_date(trade_time)
         if not trade_time or not trade_date:
             continue
+        normalized_time = trade_time if len(trade_time) >= 19 else f"{trade_time}:00"
         close_price = _f(row.get("close"))
         open_price = _f(row.get("open"), close_price)
         high_price = _f(row.get("high"), max(open_price, close_price))
         low_price = _f(row.get("low"), min(open_price, close_price))
-        rows.append(
-            {
-                "code": code,
-                "trade_date": trade_date,
-                "trade_time": trade_time if len(trade_time) >= 19 else f"{trade_time}:00",
-                "open": round(open_price, 3),
-                "close": round(close_price, 3),
-                "high": round(max(high_price, open_price, close_price), 3),
-                "low": round(min(v for v in (low_price, open_price, close_price) if v > 0) if any(v > 0 for v in (low_price, open_price, close_price)) else close_price, 3),
-                "volume": _f(row.get("vol") if "vol" in row else row.get("volume")),
-                "amount": _f(row.get("amount")),
-                "source": "tushare_stk_mins",
-            }
-        )
-    rows = _attach_pre_close(rows)
+        rows_by_time[normalized_time] = {
+            "code": code,
+            "trade_date": trade_date,
+            "trade_time": normalized_time,
+            "open": round(open_price, 3),
+            "close": round(close_price, 3),
+            "high": round(max(high_price, open_price, close_price), 3),
+            "low": round(min(v for v in (low_price, open_price, close_price) if v > 0) if any(v > 0 for v in (low_price, open_price, close_price)) else close_price, 3),
+            "volume": _f(row.get("vol") if "vol" in row else row.get("volume")),
+            "amount": _f(row.get("amount")),
+            "source": "tushare_stk_mins",
+        }
+    rows = _attach_pre_close([rows_by_time[key] for key in sorted(rows_by_time)])
     _record_minute_source_trace(
         trace,
         source="tushare_stk_mins",
@@ -1548,6 +1660,65 @@ def _fetch_tushare_minute_kbars(
         row_count=len(rows),
     )
     return rows
+
+
+def _normalize_realtime_minute_freq(freq: str | int) -> str:
+    normalized = str(freq).strip().upper()
+    if normalized.isdigit():
+        normalized = f"{normalized}MIN"
+    if normalized not in _REALTIME_MINUTE_FREQS:
+        supported = ", ".join(sorted(_REALTIME_MINUTE_FREQS))
+        raise ValueError(f"实时分钟频率仅支持: {supported}")
+    return normalized
+
+
+def fetch_realtime_minute_kbar(code: str, freq: str | int = "1MIN") -> dict[str, Any] | None:
+    """Fetch one current intraday minute bar for a final candidate.
+
+    Historical bars remain sourced from local ``MinuteKbar``. This helper is an
+    intraday overlay and must not be used to scan the full A-share universe.
+    """
+    normalized_freq = _normalize_realtime_minute_freq(freq)
+    df = get_pro().rt_min(ts_code=ts_code(code), freq=normalized_freq)
+    if df is None or df.empty:
+        return None
+    row = df.iloc[0]
+    bar_time = str(row.get("time") or row.get("trade_time") or row.get("period_end") or "").strip()
+    trade_date = _normalize_trade_date(row.get("trade_date") or bar_time)
+    return {
+        "code": code,
+        "ts_code": str(row.get("ts_code") or ts_code(code)),
+        "freq": str(row.get("freq") or normalized_freq).upper(),
+        "trade_date": trade_date,
+        "trade_time": bar_time,
+        "period_start": str(row.get("period_start") or ""),
+        "period_end": str(row.get("period_end") or ""),
+        "open": _f(row.get("open")),
+        "high": _f(row.get("high")),
+        "low": _f(row.get("low")),
+        "close": _f(row.get("close")),
+        "volume": _f(row.get("vol") if "vol" in row else row.get("volume")),
+        "amount": _f(row.get("amount")),
+        "is_complete": str(row.get("is_complete") or "").strip().lower() in {"1", "true", "yes"},
+        "source": "ai_tool_rt_min",
+    }
+
+
+def fetch_realtime_k_snapshot(code: str) -> dict[str, Any] | None:
+    """Fetch an intraday aggregate snapshot; this is not a minute-bar series."""
+    df = get_pro().rt_k(ts_code=ts_code(code))
+    if df is None or df.empty:
+        return None
+    row = dict(df.iloc[0])
+    return {
+        **row,
+        "code": code,
+        "ts_code": str(row.get("ts_code") or ts_code(code)),
+        "trade_date": _normalize_trade_date(
+            row.get("trade_date") or row.get("date") or row.get("time")
+        ),
+        "source": "ai_tool_rt_k",
+    }
 
 
 def _record_minute_source_trace(
@@ -1573,7 +1744,12 @@ def _record_minute_source_trace(
 
 
 def _is_tushare_permission_error(reason: str) -> bool:
-    return "没有该接口权限" in reason or "接口权限" in reason
+    normalized = reason.lower()
+    return (
+        "没有该接口权限" in reason
+        or "接口权限" in reason
+        or "permission" in normalized
+    )
 
 
 def _minute_ts_code(code: str, *, is_index: bool = False) -> str:

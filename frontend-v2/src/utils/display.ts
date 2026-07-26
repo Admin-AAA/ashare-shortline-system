@@ -91,19 +91,22 @@ export const EXIT_REASON_LABELS: Record<string, string> = {
   take_profit_gap: "开盘跳空止盈",
   stop_loss_hit: "盘中触发止损",
   stop_loss_gap: "开盘跳空止损",
-  stop_loss_intraday_both_hit: "同日触止盈止损(保守止损)",
+  stop_loss_intraday_both_hit: "同日触止盈止损（保守按止损）",
+  horizon: "持有到观察期结束",
   horizon_close: "持有到观察期结束",
-  limit_down_locked_horizon_mark: "一字跌停/无流动性(期末标记)",
-  horizon_close_after_locked_limit_down: "递延至观察期末",
+  horizon_close_t1_locked: "受 T+1 限制继续持有",
+  limit_down_locked_horizon_mark: "一字跌停或无流动性（期末标记）",
+  horizon_close_after_locked_limit_down: "跌停后递延至观察期结束",
   trailing_stop_hit: "移动止盈触发",
   trailing_stop_gap: "开盘跳空移动止盈",
-  not_triggered: "未触发",
+  not_triggered: "未触发买点",
+  entry_not_filled: "委托未成交",
   recommendation_execution_blocked: "推荐不可真实成交",
-  gap_up_blocked: "高开未达成交",
+  gap_up_blocked: "高开未达成交条件",
   next_morning_exit: "次日开盘退出",
-  one_word_limit_up_hold: "一字涨停持有",
-  shrinking_limit_up_hold: "缩量涨停持有",
-  deferred_after_limit_up: "涨停后递延",
+  one_word_limit_up_hold: "一字涨停继续持有",
+  shrinking_limit_up_hold: "缩量涨停继续持有",
+  deferred_after_limit_up: "涨停后递延退出",
 };
 
 // 策略 bucket（英文 kebab-case 标识）→ 中文名。
@@ -112,8 +115,12 @@ export const BUCKET_LABELS: Record<string, string> = {
   "daily-stock-analysis-skill": "基础短线策略",
   "chao-gu-yang-jia-skill": "炒股养家大局观",
   "chen-xiaoqun-skill": "陈小群龙头战法",
+  "chip-single-peak-breakout": "筹码单峰突破",
+  "high-position-volume-stall-warning": "高位放量滞涨预警",
   "high-range-breakout-momentum": "阶段新高放量突破",
+  "small-cap-thematic-momentum": "小盘题材动量",
   "trend-pullback-continuation": "强趋势缩量回踩",
+  "weak-market-strong-stock-reversal": "弱市强势股确认回撤",
   "sector-relative-strength-leader": "主线相对强度龙头",
   "overnight-holding-method": "隔夜持股法",
   "limit-up-reseal-relay": "涨停回封接力",
@@ -128,24 +135,40 @@ export function bucketLabel(value: unknown, fallback = "—") {
 
 // setup_type 为空时的兜底文案。空值 = 没有任何策略命中入场 setup，
 // 是"未触发买点"的复盘标记，不是一种买点类型；文案要避免被误读成买入信号。
+// 历史数据曾将 Skill ID 误写入 setup_type：已知 ID 使用统一策略中文名；未知机器码
+// 不直接暴露给用户，但保留 rawValue 供页面通过 title 辅助排查。
+const MACHINE_CODE_PATTERN = /^[a-z0-9]+(?:[-_][a-z0-9]+)+$/i;
+
 export function setupLabel(value: unknown) {
   const raw = String(value ?? "").trim();
-  return { label: raw || "无明确买点 · 等待确认", isPlaceholder: !raw };
+  if (!raw) {
+    return { label: "无明确买点 · 等待确认", isPlaceholder: true, rawValue: "" };
+  }
+  const strategyLabel = BUCKET_LABELS[raw];
+  if (strategyLabel) {
+    return { label: strategyLabel, isPlaceholder: false, rawValue: "" };
+  }
+  if (MACHINE_CODE_PATTERN.test(raw)) {
+    return { label: "策略信号待确认", isPlaceholder: false, rawValue: raw };
+  }
+  return { label: raw, isPlaceholder: false, rawValue: "" };
 }
 
 export function exitReasonLabel(value: unknown, fallback = "—", executedReturn?: number | null) {
   const raw = String(value ?? "").trim();
   if (!raw) return fallback;
-  const label = EXIT_REASON_LABELS[raw] ?? raw;
+  const key = raw.toLowerCase();
+  const label = EXIT_REASON_LABELS[key];
   // trailing_stop 是「移动止盈/止损」机制：激活条件是浮盈≥2%，但跳空低开+扣费后
   // 实际收益可能为负。根据真实收益动态调整文案，避免"止盈"却亏钱的矛盾感。
   if (
-    (raw === "trailing_stop_hit" || raw === "trailing_stop_gap") &&
+    (key === "trailing_stop_hit" || key === "trailing_stop_gap") &&
     executedReturn != null && !Number.isNaN(executedReturn) && executedReturn < 0
   ) {
-    return raw === "trailing_stop_hit" ? "移动止损触发" : "开盘跳空移动止损";
+    return key === "trailing_stop_hit" ? "移动止损触发" : "开盘跳空移动止损";
   }
-  return label;
+  // 后端新增枚举时，不能将机器码直接暴露在用户界面；若后端已给出中文则原样保留。
+  return label ?? (/^[\u4e00-\u9fff]/.test(raw) ? raw : "退出原因待确认");
 }
 
 export function businessStatusLabel(value: unknown, fallback = "状态待确认") {

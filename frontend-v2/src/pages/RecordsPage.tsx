@@ -190,16 +190,16 @@ function RunRecordsList() {
     [],
   );
 
-  // —— 筛选条件（默认 status=completed，避开大量 failed/interrupted 噪声）——
+  // —— 筛选条件（默认近30天内已完成的实盘记录，且推荐数 > 0）——
   // datePreset：近7天/近30天/本月/全部/自定义；自定义时用 dateFrom/dateTo 手选
   const [datePreset, setDatePreset] = useState<"7d" | "30d" | "month" | "all" | "custom">("30d");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("completed");
   const [presetFilter, setPresetFilter] = useState<string>("__all__");
-  const [modeFilter, setModeFilter] = useState<string>("__all__");
+  const [modeFilter, setModeFilter] = useState<string>("formal");
   // 推荐数下限：空 = 不筛选（任意推荐数）；填数字 = recommended_count > N
-  const [minRecsFilter, setMinRecsFilter] = useState<string>("");
+  const [minRecsFilter, setMinRecsFilter] = useState<string>("0");
 
   // —— 排序 ——
   const [sortKey, setSortKey] = useState<RunSortKey>("trade_date");
@@ -296,8 +296,8 @@ function RunRecordsList() {
     setDateTo("");
     setStatusFilter("completed");
     setPresetFilter("__all__");
-    setModeFilter("__all__");
-    setMinRecsFilter("");
+    setModeFilter("formal");
+    setMinRecsFilter("0");
     resetPage();
   };
 

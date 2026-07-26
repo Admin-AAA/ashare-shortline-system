@@ -195,6 +195,7 @@ export function DataHealthSection() {
             className="btn btn--primary"
             disabled={isRunning || remediationStarting}
             onClick={handleStartRemediation}
+            title="按数据域通过 Provider Router 修复：通用/日线优先 Fastapic，分钟/公告优先 ai-tool；不会触发三年分钟回填"
           >
             {isRunning || remediationStarting ? <Loader2 size={14} className="spin" /> : <PlayCircle size={14} />}
             {isRunning ? "修复中…" : remediationStarting ? "提交中…" : "触发数据修复"}
@@ -328,8 +329,12 @@ export function DataHealthSection() {
               <span className="text-muted" style={{ fontSize: "var(--text-sm)" }}>
                 评分 −{dsSummary.score_penalty}
               </span>
+            ) : dsSummary.untested_count ? (
+              <span style={{ fontSize: "var(--text-sm)", color: "var(--warning)" }}>
+                {dsSummary.untested_count} 个待观测 · 不扣分
+              </span>
             ) : (
-              <span style={{ fontSize: "var(--text-sm)", color: "var(--market-down)" }}>全部通畅</span>
+              <span style={{ fontSize: "var(--text-sm)", color: "var(--market-up)" }}>无已知故障</span>
             )
           }
         >
@@ -392,6 +397,7 @@ function RemediationStatusBanner({
       <Banner tone="info">
         <Loader2 size={14} className="spin" />
         修复任务运行中 · {taskRun.task_name}
+        <span className="text-muted">— Provider Router：Fastapic / ai-tool</span>
         {taskRun.summary && <span className="text-muted"> — {taskRun.summary}</span>}
       </Banner>
     );
@@ -399,6 +405,7 @@ function RemediationStatusBanner({
   if (status === "completed" || status === "partial_completed") {
     const cmp = result?.comparison;
     const summary = result?.action_summary;
+    const usedProviders = result?.provider_activity?.used_providers ?? [];
     return (
       <Banner tone="up">
         <CheckCircle2 size={14} />
@@ -407,6 +414,9 @@ function RemediationStatusBanner({
           <span className="text-muted">
             {" "}（计划 {summary.planned_count ?? 0} · 成功 {summary.completed_count ?? 0} · 失败 {summary.failed_count ?? 0}）
           </span>
+        )}
+        {usedProviders.length > 0 && (
+          <span className="text-muted">上游 {usedProviders.join(" + ")}</span>
         )}
         {cmp && cmp.score_delta != null && (
           <span className="text-mono" style={{ marginLeft: 8 }}>
@@ -502,17 +512,44 @@ function IssueList({
 }
 
 // ─── 数据源接入分组 ───────────────────────────────────────────────
+const SOURCE_TYPE_LABELS: Record<string, string> = {
+  tushare_provider: "Tushare 上游",
+  quote: "实时行情",
+  kline: "日 K 线",
+  capital_flow: "资金流",
+  concept_sector: "概念板块",
+  dragon_tiger: "龙虎榜",
+  limit_up: "涨停板",
+  news: "新闻公告",
+};
+
+function sourceTypeLabel(sourceType: string) {
+  return SOURCE_TYPE_LABELS[sourceType] ?? sourceType;
+}
+
 type SourceEntry = {
   source: string;
   source_type: string;
   status: string;
   enabled?: boolean;
+  note?: string | null;
   last_error?: string | null;
+  last_api?: string | null;
+  breaker_state?: string | null;
+  rate_limit_per_minute?: number | null;
 };
 
 function SourceRow({ entry, tone }: { entry: SourceEntry; tone: "up" | "down" | "warn" | "muted" }) {
   const color =
     tone === "up" ? "#16a34a" : tone === "down" ? "#dc2626" : tone === "warn" ? "#d97706" : "var(--text-muted)";
+  const providerDetail = entry.source_type === "tushare_provider"
+    ? [
+        entry.last_api ? `最近 ${entry.last_api}` : "待首次调用",
+        entry.rate_limit_per_minute != null ? `${entry.rate_limit_per_minute} QPM` : null,
+        entry.breaker_state ? `熔断 ${entry.breaker_state}` : null,
+      ].filter(Boolean).join(" · ")
+    : "";
+  const detail = entry.last_error && tone === "down" ? entry.last_error : providerDetail;
   return (
     <div
       style={{
@@ -530,14 +567,15 @@ function SourceRow({ entry, tone }: { entry: SourceEntry; tone: "up" | "down" | 
       <span className="text-mono" style={{ fontWeight: 600 }}>
         {entry.source}
       </span>
-      <span className="text-muted">{entry.source_type}</span>
-      {entry.last_error && tone === "down" && (
+      <span className="text-muted">{sourceTypeLabel(entry.source_type)}</span>
+      {entry.note && <span className="text-muted">· {entry.note}</span>}
+      {detail && (
         <span
           className="text-muted"
-          style={{ marginLeft: "auto", maxWidth: "55%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-          title={entry.last_error}
+          style={{ marginLeft: "auto", maxWidth: "38%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          title={detail}
         >
-          {entry.last_error}
+          {detail}
         </span>
       )}
     </div>
@@ -569,11 +607,19 @@ function DataSourceSection({ summary }: { summary: DataSourceHealthSummary }) {
         共 {summary.total ?? 0} 个数据源接入策略：
         <span style={{ color: "#16a34a" }}> {summary.working_count ?? 0} 个通畅</span>
         {summary.broken_count ? (
-          <>,<span style={{ color: "#dc2626" }}> {summary.broken_count} 个不通（已扣分）</span></>
+          <>,<span style={{ color: "#dc2626" }}> {summary.broken_count} 个不通</span></>
         ) : null}
-        {summary.untested_count ? <>, {summary.untested_count} 个未测试</> : null}
+        {summary.untested_count ? <>, {summary.untested_count} 个待观测</> : null}
         {summary.disabled_count ? <>, {summary.disabled_count} 个未启用</> : null}。
+        {summary.score_policy && <span> {summary.score_policy}</span>}
       </div>
+      {summary.provider_redundancy && (
+        <div className="text-muted" style={{ fontSize: "var(--text-sm)", marginBottom: "var(--space-2)" }}>
+          Tushare Provider：已配置 {summary.provider_redundancy.configured_count ?? 0} ·
+          健康 {summary.provider_redundancy.healthy_count ?? 0} ·
+          降级 {summary.provider_redundancy.degraded_count ?? 0}
+        </div>
+      )}
       <SourceGroup label="通" tone="up" items={summary.working_sources} />
       <SourceGroup label="不通" tone="down" items={summary.broken_sources} />
       <SourceGroup label="未测试" tone="warn" items={summary.untested_sources} />
@@ -709,11 +755,12 @@ function RealtimeDataSourcePanel() {
     (a, b) => a.source_type.localeCompare(b.source_type) || a.priority - b.priority || a.source.localeCompare(b.source),
   );
   const degraded = rows.filter((r) => r.status === "degraded" || (r.success_rate != null && r.success_rate < 0.9)).length;
+  const providerCount = rows.filter((r) => r.source_type === "tushare_provider").length;
 
   return (
     <Panel
       kicker="数据源实时健康"
-      title={`共 ${rows.length} 个数据源`}
+      title={`共 ${rows.length} 个数据源${providerCount ? ` · ${providerCount} 个独立 Provider` : ""}`}
       actions={
         <span style={{ fontSize: "var(--text-sm)", color: degraded ? "#dc2626" : "#16a34a" }}>
           {degraded ? `${degraded} 个降级` : "全部正常"}
@@ -721,7 +768,8 @@ function RealtimeDataSourcePanel() {
       }
     >
       <div className="text-muted" style={{ fontSize: "var(--text-sm)", marginBottom: "var(--space-3)" }}>
-        运行时累积统计（每次 API 调用更新）。成功率 = 成功 / (成功 + 失败)，空返回不计入分母。
+        逻辑数据源显示历史累计统计；Fastapic/ai-tool 显示当前后端进程的 Router 实时统计与熔断状态。
+        成功率 = 成功 / (成功 + 失败)，空返回不计入分母。
       </div>
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-sm)" }}>
@@ -748,11 +796,19 @@ function RealtimeDataSourcePanel() {
                   <td style={{ padding: "var(--space-2)" }}>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-1)" }}>
                       <span style={{ width: 7, height: 7, borderRadius: "50%", background: meta.color, flex: "0 0 auto" }} />
-                      <span className="text-muted">{r.source_type}</span>
+                      <span className="text-muted">{sourceTypeLabel(r.source_type)}</span>
                     </span>
                   </td>
-                  <td style={{ padding: "var(--space-2)" }} className="text-mono">
-                    {r.source}
+                  <td style={{ padding: "var(--space-2)", minWidth: r.source_type === "tushare_provider" ? 260 : undefined }}>
+                    <div className="text-mono">{r.source}</div>
+                    {r.source_type === "tushare_provider" && (
+                      <div className="text-muted" style={{ fontSize: 11, marginTop: 2 }}>
+                        {r.note || "Tushare Provider"}
+                        {r.rate_limit_per_minute != null ? ` · ${r.rate_limit_per_minute} QPM` : ""}
+                        {r.last_api ? ` · 最近 ${r.last_api}` : " · 待首次调用"}
+                        {r.breaker_state ? ` · 熔断 ${r.breaker_state}` : ""}
+                      </div>
+                    )}
                   </td>
                   <td style={{ padding: "var(--space-2)", textAlign: "right", fontVariantNumeric: "tabular-nums", color: srColor, fontWeight: 600 }}>
                     {sr == null ? "—" : `${Math.round(sr * 100)}%`}

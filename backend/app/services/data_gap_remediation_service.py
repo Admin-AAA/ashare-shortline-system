@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from collections import Counter, OrderedDict
@@ -19,7 +20,7 @@ from app.services.market_pool.history_maturity import (
     is_natural_short_history as _is_natural_short_history,
     load_history_maturity_map as _load_history_maturity_map,
 )
-from app.models.tables import DailyKbar, IndexDaily, LimitUpBoard, MinuteKbar, Recommendation, RecommendationRun, StockQuote
+from app.models.tables import DailyKbar, IndexDaily, LimitUpBoard, MinuteKbar, NewsAnnouncement, Recommendation, RecommendationRun, StockQuote
 from app.services.data_health_service import clear_data_health_cache, diagnose_all
 from app.services.feature_builder import _compute_authenticity, _enrich_with_auxiliary_data, _tag_features
 from app.services.auxiliary.application import (
@@ -46,7 +47,12 @@ from app.services.data_sources import enabled_sources
 from app.services.remediation import transaction as remediation_transaction
 from app.adapters.market_source import TushareMarketSourceAdapter
 from app.services.market_source.port import DailyBarRequest, MarketSourcePort, QuoteRef
-from app.services.tushare_client import fetch_index_daily, fetch_minute_kbars
+from app.services.tushare_client import (
+    fetch_index_daily,
+    fetch_minute_kbars,
+    get_pro,
+    get_tushare_provider_health,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +116,113 @@ def _refresh_auxiliary_dataset(
     return item.coverage.record_count, dict(result.audit_payload[dataset])
 
 
+def _backfill_news_announcements(
+    db: Session,
+    *,
+    trade_date: str,
+    codes: list[str] | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    row_limit: int = 1000,
+) -> dict[str, Any]:
+    """Fetch a provably bounded announcement range per target symbol and upsert it.
+
+    The current ai-tool gateway caps global ``anns_d`` responses at 1,000 rows and
+    ignores ``offset``. Per-symbol month ranges stay below that cap and therefore avoid
+    treating a repeated full page as complete.
+    """
+    target_start = _normalize_trade_date(start_date or trade_date)
+    target_end = _normalize_trade_date(end_date or trade_date)
+    target_codes = list(OrderedDict.fromkeys(
+        str(code or "").strip() for code in (codes or []) if str(code or "").strip()
+    ))
+    if not target_start or not target_end or target_start > target_end or not target_codes:
+        return {
+            "row_count": 0,
+            "query_count": 0,
+            "provider_row_count": 0,
+            "failed_code_count": 0,
+            "failed_codes": [],
+        }
+
+    effective_limit = max(1, min(1000, int(row_limit or 1000)))
+    compact_start = target_start.replace("-", "")
+    compact_end = target_end.replace("-", "")
+    payload_by_id: dict[str, dict[str, Any]] = {}
+    provider_row_count = 0
+    failed_codes: list[str] = []
+    pro = get_pro()
+
+    for code in target_codes:
+        suffix = "BJ" if code.startswith(("4", "8")) else "SH" if code.startswith(("5", "6", "9")) else "SZ"
+        try:
+            frame = pro.anns_d(
+                ts_code=f"{code}.{suffix}",
+                start_date=compact_start,
+                end_date=compact_end,
+                limit=effective_limit,
+            )
+        except Exception:
+            failed_codes.append(code)
+            continue
+        if frame is None or frame.empty:
+            continue
+        if len(frame) >= effective_limit:
+            failed_codes.append(code)
+            continue
+        provider_row_count += len(frame)
+        for _, row in frame.iterrows():
+            announce_date = _normalize_trade_date(row.get("ann_date"))
+            if not announce_date or not (target_start <= announce_date <= target_end):
+                continue
+            raw_code = str(row.get("ts_code") or row.get("symbol") or "").strip()
+            row_code = raw_code.split(".")[0]
+            title = str(row.get("title") or "").strip()
+            url = str(row.get("url") or "").strip()
+            if len(row_code) != 6 or not title:
+                continue
+            identity = f"{url}|{raw_code}|{announce_date}|{title}"
+            article_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+            category = str(row.get("ann_type") or "announcement").strip()[:40]
+            risk_warning = any(
+                keyword in title
+                for keyword in ("风险", "退市", "处罚", "立案", "亏损", "减持", "质押", "诉讼")
+            )
+            payload_by_id[article_id] = {
+                "source": "tushare_anns_d",
+                "article_id": article_id,
+                "code": row_code,
+                "announce_date": announce_date,
+                "title": title,
+                "summary": None,
+                "category": category or "announcement",
+                "sentiment": "neutral",
+                "is_risk_warning": risk_warning,
+            }
+
+    payload = list(payload_by_id.values())
+    if payload:
+        stmt = mysql_insert(NewsAnnouncement).values(payload)
+        db.execute(
+            stmt.on_duplicate_key_update(
+                code=stmt.inserted.code,
+                announce_date=stmt.inserted.announce_date,
+                title=stmt.inserted.title,
+                category=stmt.inserted.category,
+                sentiment=stmt.inserted.sentiment,
+                is_risk_warning=stmt.inserted.is_risk_warning,
+            )
+        )
+        db.commit()
+    return {
+        "row_count": len(payload),
+        "query_count": len(target_codes),
+        "provider_row_count": provider_row_count,
+        "failed_code_count": len(failed_codes),
+        "failed_codes": failed_codes[:10],
+    }
+
+
 def _resolve_market_source(market_source: MarketSourcePort | None) -> MarketSourcePort:
     """Use the typed production adapter unless a Port is explicitly injected."""
 
@@ -138,6 +251,66 @@ def _market_source_audit_payload(batch: Any) -> dict[str, Any]:
             }
             for error in batch.errors
         ],
+    }
+
+
+def _provider_health_snapshot() -> dict[str, dict[str, Any]]:
+    try:
+        return {
+            str(item.get("provider_name") or item.get("source")): item
+            for item in get_tushare_provider_health()
+        }
+    except Exception:
+        logger.warning("provider health snapshot failed during remediation", exc_info=True)
+        return {}
+
+
+def _provider_activity_delta(
+    before: dict[str, dict[str, Any]],
+    after: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    providers: list[dict[str, Any]] = []
+    used_providers: list[str] = []
+    for name in sorted(set(before) | set(after)):
+        before_row = before.get(name, {})
+        after_row = after.get(name, {})
+        success_delta = max(
+            0,
+            int(after_row.get("success_count") or 0)
+            - int(before_row.get("success_count") or 0),
+        )
+        failure_delta = max(
+            0,
+            int(after_row.get("failure_count") or 0)
+            - int(before_row.get("failure_count") or 0),
+        )
+        empty_delta = max(
+            0,
+            int(after_row.get("empty_count") or 0)
+            - int(before_row.get("empty_count") or 0),
+        )
+        request_count = success_delta + failure_delta + empty_delta
+        source = str(after_row.get("source") or before_row.get("source") or name)
+        if request_count:
+            used_providers.append(source)
+        providers.append(
+            {
+                "source": source,
+                "provider_name": name,
+                "request_count": request_count,
+                "success_count": success_delta,
+                "failure_count": failure_delta,
+                "empty_count": empty_delta,
+                "last_api": after_row.get("last_api"),
+                "status": after_row.get("status"),
+                "breaker_state": after_row.get("breaker_state"),
+            }
+        )
+    return {
+        "used_providers": used_providers,
+        "providers": providers,
+        "route_policy": "通用/日线优先 Fastapic；分钟/公告优先 ai-tool；允许安全 fallback。",
+        "minute_scope": "仅修复诊断窗口内缺失交易日，默认最多 300 只；不触发三年回填。",
     }
 
 
@@ -171,9 +344,14 @@ def remediate_data_health_gaps(
         minute_kbar_code_limit=minute_kbar_code_limit,
     )
 
+    provider_before = _provider_health_snapshot()
     actions = [_with_rollback_hint(_mark_planned(item)) for item in plan]
     if not dry_run:
         actions = [_with_rollback_hint(_execute_plan_item_safely(db, item)) for item in plan]
+    provider_activity = _provider_activity_delta(
+        provider_before,
+        _provider_health_snapshot(),
+    )
 
     after_diagnosis_skipped = bool(not dry_run and not post_diagnosis)
     post_diagnosis_failed = False
@@ -224,6 +402,7 @@ def remediate_data_health_gaps(
         "actions": actions,
         "operation_log": _operation_log(actions),
         "action_summary": remediation_transaction.action_summary(plan, actions),
+        "provider_activity": provider_activity,
         "comparison": comparison,
         "rollback_guidance": _rollback_guidance(dry_run=dry_run, actions=actions),
         "remaining_issues": remaining_issues,
@@ -1370,14 +1549,36 @@ def _execute_plan_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
                 "reason": "目标交易日缺少活跃股票样本，未执行新闻公告补数。",
                 "row_count": 0,
             }
-        row_count, _audit = _refresh_auxiliary_dataset(
-            db, dataset="news_announcement", trade_date=item["trade_date"], codes=list(codes)
-        )
+        fallback: dict[str, Any] | None = None
+        try:
+            row_count, _audit = _refresh_auxiliary_dataset(
+                db, dataset="news_announcement", trade_date=item["trade_date"], codes=list(codes)
+            )
+        except RuntimeError as contract_error:
+            # The immutable event contract deliberately rejects unknown all-field schemas.
+            # Roll back that attempt, then use the canonical Router's explicit pagination
+            # to keep the operational NewsAnnouncement table fresh.
+            db.rollback()
+            logger.warning(
+                "news event snapshot unavailable; using paginated anns_d remediation: %s",
+                contract_error,
+            )
+            fallback = _backfill_news_announcements(
+                db,
+                trade_date=item["trade_date"],
+                codes=list(codes),
+            )
+            row_count = int(fallback.get("row_count") or 0)
         return {
             **item,
             "status": "completed" if row_count else "empty",
             "row_count": row_count,
             "requested_code_count": len(codes),
+            "fallback": "bounded_symbol_anns_d" if fallback is not None else None,
+            "provider_row_count": fallback.get("provider_row_count") if fallback else None,
+            "query_count": fallback.get("query_count") if fallback else None,
+            "failed_code_count": fallback.get("failed_code_count") if fallback else None,
+            "failed_codes": fallback.get("failed_codes") if fallback else None,
         }
     return {**item, "status": "skipped", "reason": "unsupported_table"}
 
