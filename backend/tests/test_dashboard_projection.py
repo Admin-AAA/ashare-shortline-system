@@ -533,6 +533,58 @@ def test_serialize_recommendation_exposes_risk_level_for_run_candidate_filters()
     assert result["risk_level"] == "high"
 
 
+def test_serialize_recommendation_slim_keeps_key_price_levels_for_history_rules():
+    rec = SimpleNamespace(
+        recommendation_id="rec-key-levels",
+        run_id="run-key-levels",
+        trade_date="2026-07-24",
+        recommended_at=datetime(2026, 7, 24, 15, 0),
+        code="601606",
+        name="长城军工",
+        industry="军工",
+        recommend_price=32.05,
+        bucket="chen-xiaoqun-skill",
+        final_score=69.2,
+        consensus_score=68.0,
+        setup_type="分歧转一致",
+        entry_rule="放量突破昨日高点或20日平台，且不冲高回落",
+        invalid_rule="跌回突破平台并收不回",
+        rationale="测试",
+        risk_tags_json="[]",
+        info_tags_json="[]",
+        status="pending",
+        recent_repeat=False,
+        feature_snapshot_json=json.dumps(
+            {
+                "price": 32.05,
+                "ma10": 27.03,
+                "ma20": 27.40,
+                "yesterday_high": 29.14,
+                "yesterday_low": 26.33,
+                "platform_high_20d": 29.14,
+                "platform_high_60d": 42.08,
+                "support_levels": [27.40],
+                "resistance_levels": [32.53],
+            }
+        ),
+        market_context_json="{}",
+        agent_summary_json="{}",
+    )
+
+    result = serialize_recommendation(rec, slim=True)
+
+    assert result["key_levels"] == {
+        "ma10": 27.03,
+        "ma20": 27.40,
+        "yesterday_high": 29.14,
+        "yesterday_low": 26.33,
+        "platform_high_20d": 29.14,
+        "platform_high_60d": 42.08,
+        "support_levels": [27.40],
+        "resistance_levels": [32.53],
+    }
+
+
 def test_build_run_progress_marks_stale_and_resumable():
     run = {
         "run_id": "run-1",

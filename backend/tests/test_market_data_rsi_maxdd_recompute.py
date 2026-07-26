@@ -82,3 +82,16 @@ def test_max_dd_recomputed_from_closes_not_cached():
     assert stock["max_dd60"] == expected_dd60
     assert stock["max_dd20"] <= -15.0, f"深度回撤 max_dd20 应 <= -15，实际 {stock['max_dd20']}"
     assert stock["max_dd20"] != -1.0, "绝不能信任失真的 _indicator.max_dd20 缓存列"
+
+
+def test_platform_highs_exclude_the_signal_bar_breakout():
+    bars = _make_bars()
+    prior_high = max(bar["high"] for bar in bars[:-1])
+    bars[-1].update({"open": 125.0, "high": 130.0, "low": 124.0, "close": 130.0})
+    quote = {**_quote(), "price": 130.0, "pct": 9.9}
+
+    stock = _build_stock_from_bars(quote, bars, "test", "test")
+
+    assert stock["platform_high_20d"] == prior_high
+    assert stock["platform_high_60d"] == prior_high
+    assert stock["high_20d"] == 130.0

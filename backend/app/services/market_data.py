@@ -924,6 +924,7 @@ def _build_stock_from_bars(
     min_low20 = min(lows[-20:]) if len(highs) >= 20 else min(lows)
     previous_high20 = max(highs[-21:-1]) if len(highs) >= 21 else max(highs[:-1] or highs)
     max_high60 = max(highs[-60:]) if len(highs) >= 60 else max(highs)
+    previous_high60 = max(highs[-61:-1]) if len(highs) >= 61 else max(highs[:-1] or highs)
     yesterday_high = highs[-2] if len(highs) >= 2 else highs[-1]
     yesterday_low = lows[-2] if len(lows) >= 2 else lows[-1]
 
@@ -989,7 +990,7 @@ def _build_stock_from_bars(
     # Breakout — 用原始 highs 重算(backfill 缓存的 breakout 可能为 0 误判,
     # 且依赖 previous_high60 等需 ma60 正确;直接重算避免连锁错误)
     breakout20 = int(price >= previous_high20 * 0.995) if previous_high20 else 0
-    breakout60 = int(price >= max(highs[-61:-1] or highs) * 0.995) if len(highs) >= 2 else 0
+    breakout60 = int(price >= previous_high60 * 0.995) if len(highs) >= 2 else 0
 
     # Upper shadow count — prefer cached
     upper_shadow_count20 = latest_indicator.get("upper_shadow_count20")
@@ -1038,6 +1039,8 @@ def _build_stock_from_bars(
         "breakout60": breakout60,
         "yesterday_high": round(yesterday_high, 3),
         "yesterday_low": round(yesterday_low, 3),
+        "platform_high_20d": round(previous_high20, 3),
+        "platform_high_60d": round(previous_high60, 3),
         "high_20d": round(max_high20, 3),
         "low_20d": round(min_low20, 3),
         "off_high_pct": round((price - max_high20) / max_high20 * 100, 3) if max_high20 else 0.0,

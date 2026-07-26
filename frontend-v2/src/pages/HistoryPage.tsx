@@ -10,6 +10,7 @@ import { queryParam } from "../app/nav";
 import { RecommendationDetailCard } from "../components/RecommendationDetailCard";
 import { fmtPrice } from "../components/Shared";
 import { bucketLabel, exitReasonLabel, setupLabel, BUCKET_LABELS } from "../utils/display";
+import { ruleKeyLevelLabels, rulesMentionKeyLevel } from "../utils/ruleKeyLevels";
 
 /**
  * 复盘页 —— 正式运行推荐历史（跨 run，按 trade_date 倒序，带 outcome）。
@@ -365,6 +366,9 @@ export function HistoryPage() {
                       ? "var(--market-down)"
                       : "var(--muted)";
                 const matchedVersion = it.strategy_versions?.find((version) => version.strategy_id === strategyId);
+                const keyLevelLabels = ruleKeyLevelLabels(it.entry_rule, it.invalid_rule, it.key_levels);
+                const hasUnresolvedKeyLevel = keyLevelLabels.length === 0
+                  && rulesMentionKeyLevel(it.entry_rule, it.invalid_rule);
                 return (
                   <Fragment key={it.recommendation_id}>
                     <tr
@@ -435,10 +439,23 @@ export function HistoryPage() {
                           )}
                         </div>
                       </td>
-                      <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)", maxWidth: 320 }}>
+                      <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)", maxWidth: 360 }}>
                         <div style={stackStyle}>
                           <span title={it.entry_rule || ""}>入场: {clip(it.entry_rule || "—", 32)}</span>
                           <span title={it.invalid_rule || ""}>失效: {clip(it.invalid_rule || "—", 32)}</span>
+                          {keyLevelLabels.length > 0 && (
+                            <span
+                              title={`规则引用价位：${keyLevelLabels.join(" · ")}`}
+                              style={{ color: "var(--accent-strong)", fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}
+                            >
+                              价位: {keyLevelLabels.join(" · ")}
+                            </span>
+                          )}
+                          {hasUnresolvedKeyLevel && (
+                            <span title="这笔旧记录没有保存规则所引用的支撑或平台价位" style={{ color: "var(--market-down)" }}>
+                              价位: 历史快照未留存
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td style={{ ...tdStyle, color: labelColor, fontWeight: 600 }}>

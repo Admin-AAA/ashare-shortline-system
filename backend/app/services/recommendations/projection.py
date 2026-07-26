@@ -69,6 +69,41 @@ def _build_skill_breakdown_items(skill_breakdown: list[dict[str, Any]]) -> list[
     return items
 
 
+_KEY_LEVEL_FIELDS = (
+    "ma5",
+    "ma10",
+    "ma20",
+    "ma60",
+    "yesterday_high",
+    "yesterday_low",
+    "platform_high_20d",
+    "platform_high_60d",
+    "high_20d",
+    "low_20d",
+    "support_levels",
+    "resistance_levels",
+)
+
+
+def _key_levels(feature_snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Project the small set of prices needed to interpret execution rules."""
+    levels = {
+        key: feature_snapshot[key]
+        for key in _KEY_LEVEL_FIELDS
+        if feature_snapshot.get(key) is not None
+    }
+
+    # Older snapshots stored only the distance from the 60-day high. Rebuild the
+    # displayed reference price without loading the full snapshot into list rows.
+    if "platform_high_60d" not in levels:
+        price = _as_float_or_none(feature_snapshot.get("price"))
+        distance = _as_float_or_none(feature_snapshot.get("off_high60_pct"))
+        denominator = 1 + distance / 100 if distance is not None else 0
+        if price is not None and price > 0 and denominator > 0:
+            levels["high_60d"] = round(price / denominator, 2)
+    return levels
+
+
 def build_cockpit_recommendation(rec: Any, watch: Any = None) -> CockpitRecommendation:
     feature_snapshot = _loads_recommendation_field(rec, "feature_snapshot_json", "feature_snapshot", {})
     skill_breakdown = _loads_recommendation_field(rec, "skill_breakdown_json", "skill_breakdown", [])
@@ -310,6 +345,7 @@ def serialize_recommendation(
         "preset_name": preset_name,
         "preset_id": _get(run, "preset_id") if run else None,
         "run_name": _get(run, "run_name") if run else None,
+        "key_levels": _key_levels(feature_snapshot),
     }
     if slim:
         # 列表路径只补 LLM 态度顶层快捷字段（轻量），其余大字段留给详情接口。

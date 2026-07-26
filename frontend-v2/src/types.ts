@@ -1236,6 +1236,8 @@ export type FeatureSnapshot = {
   // Key levels
   yesterday_high?: number;
   yesterday_low?: number;
+  platform_high_20d?: number;
+  platform_high_60d?: number;
   high_20d?: number;
   low_20d?: number;
   off_high_pct?: number;
@@ -1294,6 +1296,24 @@ export type FeatureSnapshot = {
   [key: string]: unknown;
 };
 
+export type KeyPriceLevels = Pick<
+  FeatureSnapshot,
+  | "ma5"
+  | "ma10"
+  | "ma20"
+  | "ma60"
+  | "yesterday_high"
+  | "yesterday_low"
+  | "high_20d"
+  | "low_20d"
+  | "support_levels"
+  | "resistance_levels"
+> & {
+  platform_high_20d?: number | null;
+  platform_high_60d?: number | null;
+  high_60d?: number | null;
+};
+
 export type RecommendationCard = {
   recommendation_id: string;
   run_id: string;
@@ -1313,6 +1333,8 @@ export type RecommendationCard = {
   setup_type?: string | null;
   entry_rule?: string | null;
   invalid_rule?: string | null;
+  /** 历史列表保留的轻量关键价位，用来把规则里的“支撑/平台”落到具体价格。 */
+  key_levels?: KeyPriceLevels;
   rationale?: string | null;
   /** 后端按风险标签统一归类，供候选池低/中/高风险筛选使用。 */
   risk_level?: "low" | "medium" | "high" | "unknown";

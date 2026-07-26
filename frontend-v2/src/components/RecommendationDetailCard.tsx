@@ -2,6 +2,7 @@ import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../api/client";
 import type { AgentLog, RecommendationCard, RecommendationDetail, SkillSignal, StrategyPerfSummary } from "../types";
+import { ruleKeyLevelLabels, rulesMentionKeyLevel } from "../utils/ruleKeyLevels";
 
 /**
  * 推荐详情卡片 —— 展示完整决策信息（交易参数/买点原因/市场阶段/评分分解/规则/风险）。
@@ -90,6 +91,8 @@ type DetailItem = Pick<
   | "rationale"
   | "entry_rule"
   | "invalid_rule"
+  | "key_levels"
+  | "feature_snapshot"
   | "risk_tags"
   | "info_tags"
   | "skill_breakdown"
@@ -106,6 +109,10 @@ type DetailItem = Pick<
 export function RecommendationDetailCard({ item }: { item: DetailItem }) {
   const hasTradeParams =
     item.recommend_price != null || item.stop_loss != null || item.take_profit != null;
+  const keyLevels = { ...(item.feature_snapshot ?? {}), ...(item.key_levels ?? {}) };
+  const keyLevelLabels = ruleKeyLevelLabels(item.entry_rule, item.invalid_rule, keyLevels);
+  const hasUnresolvedKeyLevel = keyLevelLabels.length === 0
+    && rulesMentionKeyLevel(item.entry_rule, item.invalid_rule);
 
   return (
     <div style={cardContainerStyle}>
@@ -158,6 +165,25 @@ export function RecommendationDetailCard({ item }: { item: DetailItem }) {
         <SkillBreakdownSection skillBreakdown={item.skill_breakdown} />
         <AgentReviewSection agentLogs={item.agent_logs} />
         <StrategyPerfSection strategyPerf={item.strategy_perf} />
+
+        {(keyLevelLabels.length > 0 || hasUnresolvedKeyLevel) && (
+          <div style={{ marginBottom: "var(--space-3)" }}>
+            <div className="panel__kicker" style={{ marginBottom: "var(--space-2)" }}>规则关键价位</div>
+            {keyLevelLabels.length > 0 ? (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)" }}>
+                {keyLevelLabels.map((label) => (
+                  <span key={label} className="tag" style={{ color: "var(--accent-strong)", fontFamily: "var(--font-mono)" }}>
+                    {label}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <span style={{ color: "var(--market-down)", fontSize: "var(--text-xs)" }}>
+                这笔旧记录没有保存规则引用的支撑或平台价位
+              </span>
+            )}
+          </div>
+        )}
 
         {(item.entry_rule || item.invalid_rule) && (
           <div style={{ marginBottom: "var(--space-3)", fontSize: "var(--text-xs)", lineHeight: 1.6 }}>
