@@ -8,6 +8,7 @@ import type {
   DataHealthDiagnostic,
   RecommendationCard,
   RecommendationDetail,
+  ExecutionConfirmation,
   RecommendationHistoryResponse,
   RecommendationOutcome,
   OutcomeSummary,
@@ -214,6 +215,12 @@ export const api = {
   matrixRunStatus: () => request<{ task_run: ScheduledTaskRun | null }>("/api/runs/matrix/status"),
 
   recommendationDetail: (id: string) => request<RecommendationDetail>(`/api/recommendations/${id}`),
+  confirmRecommendationExecution: (id: string) =>
+    requestWithTimeout<ExecutionConfirmation>(
+      `/api/recommendations/${id}/execution-confirmation`,
+      300_000,
+      json("POST", { include_agent: true }),
+    ),
   recommendationHistory: (query?: {
     code?: string;
     label?: string;

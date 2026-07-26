@@ -1529,6 +1529,72 @@ export type RecommendationDetail = RecommendationCard & {
   strategy_perf?: StrategyPerfSummary | null;
 };
 
+export type ExecutionDecision = {
+  code: "buy" | "wait" | "cancel" | "expired" | "not_ready" | "hold" | "reduce" | "exit" | "observe" | string;
+  label: string;
+  reason: string;
+};
+
+export type ExecutionConfirmation = {
+  status: "ok" | "not_ready" | "error" | string;
+  recommendation_id: string;
+  code?: string;
+  name?: string;
+  strategy_id?: string;
+  strategy_name?: string;
+  checked_at?: string;
+  data_as_of?: string;
+  quote_time?: string | null;
+  snapshot_generated_at?: string | null;
+  data_source?: string | null;
+  fresh?: boolean;
+  signal_age_trade_days?: number;
+  current_price?: number;
+  message?: string;
+  entry_decision?: ExecutionDecision;
+  holding_decision?: ExecutionDecision;
+  original?: {
+    trade_date?: string;
+    recommend_price?: number;
+    stop_loss?: number | null;
+    entry_rule?: string | null;
+    invalid_rule?: string | null;
+  };
+  market?: {
+    regime?: string | null;
+    up_count?: number;
+    down_count?: number;
+    limit_up_count?: number;
+    limit_down_count?: number;
+    main_industries?: string[];
+  };
+  strategy_signal?: {
+    phase?: string;
+    score?: number;
+    setup_match?: string;
+    entry_rule?: string;
+    invalid_rule?: string;
+    hard_veto?: boolean;
+    veto_reason?: string;
+    risk_flags?: string[];
+    evidence?: string[];
+    prefilter_ok?: boolean;
+    prefilter_reason?: string;
+  };
+  agent_review?: {
+    status?: string;
+    stance?: string;
+    action?: string;
+    confidence?: number;
+    summary?: string;
+    evidence?: string[];
+    risks?: string[];
+    invalidation_conditions?: string[];
+    next_day_plan?: string[];
+    error?: string;
+  } | null;
+};
+
 /** 单策略历史表现摘要 —— strategy_perf_summary 轻量 SQL 输出 */
 export type StrategyPerfSummary = {
   strategy_id: string;

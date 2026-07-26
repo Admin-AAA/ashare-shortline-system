@@ -3,9 +3,10 @@
  * StockAnalysisDetailView + FeatureSnapshotSection + OutcomeSection +
  * ScoreBreakdownSection + ReviewNoteSection + numOr。
  */
-import { ArrowLeft } from "lucide-react";
+import { useState } from "react";
+import { ArrowLeft, Loader2, RefreshCw } from "lucide-react";
 import { api } from "../api/client";
-import type { RecommendationDetail, RecommendationOutcome } from "../types";
+import type { ExecutionConfirmation, ExecutionDecision, RecommendationDetail, RecommendationOutcome } from "../types";
 import { ErrorPage, PageSkeleton } from "./StateViews";
 import { RecommendationDetailCard } from "./RecommendationDetailCard";
 import { TicketScoreBadge } from "./ScoreLineCell";
@@ -30,6 +31,21 @@ export function StockAnalysisDetailView({ recId, onBack }: { recId: string; onBa
     () => api.recommendationDetail(recId),
     [recId],
   );
+  const [confirmation, setConfirmation] = useState<ExecutionConfirmation | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [confirmationError, setConfirmationError] = useState("");
+
+  async function runExecutionConfirmation() {
+    setConfirming(true);
+    setConfirmationError("");
+    try {
+      setConfirmation(await api.confirmRecommendationExecution(recId));
+    } catch (e) {
+      setConfirmationError((e as Error).message || "次日执行确认失败");
+    } finally {
+      setConfirming(false);
+    }
+  }
 
   if (loading) return <PageSkeleton title="股票分析记录" hint="加载决策详情与收益复盘" rowCount={10} />;
   if (error) return <ErrorPage title="分析记录加载失败" message={error} onRetry={onBack} />;
@@ -55,7 +71,13 @@ export function StockAnalysisDetailView({ recId, onBack }: { recId: string; onBa
               </span>
             </h3>
           </div>
-          {data.status && <StatusBadge status={data.status} />}
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
+            {data.status && <StatusBadge status={data.status} />}
+            <button className="btn btn--primary" onClick={runExecutionConfirmation} disabled={confirming}>
+              {confirming ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+              {confirming ? "策略确认中…" : confirmation ? "重新确认" : "次日执行确认"}
+            </button>
+          </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "var(--space-3)" }}>
           <Metric label="推荐日" value={data.trade_date} mono />
@@ -71,6 +93,11 @@ export function StockAnalysisDetailView({ recId, onBack }: { recId: string; onBa
           <Metric label="风险等级" value={data.risk_tags?.[0] || "—"} />
         </div>
       </section>
+
+      {confirmationError && (
+        <div style={{ color: "var(--market-down)", fontSize: "var(--text-sm)" }}>{confirmationError}</div>
+      )}
+      {confirmation && <ExecutionConfirmationSection result={confirmation} />}
 
       <section className="panel">
         <div className="panel__header">
@@ -95,6 +122,84 @@ export function StockAnalysisDetailView({ recId, onBack }: { recId: string; onBa
         <ReviewNoteSection note={review_note} />
       )}
     </div>
+  );
+}
+
+function decisionColor(decision: ExecutionDecision | undefined) {
+  if (!decision) return "var(--muted)";
+  if (["buy", "hold"].includes(decision.code)) return "var(--market-up)";
+  if (["cancel", "exit", "expired"].includes(decision.code)) return "var(--market-down)";
+  return "var(--accent)";
+}
+
+function DecisionCard({ title, decision }: { title: string; decision?: ExecutionDecision }) {
+  const color = decisionColor(decision);
+  return (
+    <div style={{ padding: "var(--space-3)", border: "1px solid var(--line)", borderRadius: "var(--radius-md)", background: "var(--surface-soft)" }}>
+      <div style={{ color: "var(--muted)", fontSize: "var(--text-xs)", marginBottom: 4 }}>{title}</div>
+      <div style={{ color, fontWeight: 700, fontSize: "var(--text-lg)", marginBottom: 4 }}>{decision?.label || "—"}</div>
+      <div style={{ color: "var(--ink-secondary)", fontSize: "var(--text-sm)", lineHeight: 1.55 }}>{decision?.reason || "暂无结论"}</div>
+    </div>
+  );
+}
+
+function ExecutionConfirmationSection({ result }: { result: ExecutionConfirmation }) {
+  const signal = result.strategy_signal;
+  const review = result.agent_review;
+  const market = result.market;
+  return (
+    <section className="panel">
+      <div className="panel__header">
+        <div>
+          <div className="panel__kicker">当前策略复核</div>
+          <h3 className="panel__title">次日执行确认</h3>
+        </div>
+        <span style={{ color: result.fresh ? "var(--market-up)" : "var(--market-down)", fontSize: "var(--text-sm)" }}>
+          {result.fresh
+            ? `数据截至 ${result.data_as_of}${result.quote_time || result.snapshot_generated_at ? ` · ${formatTime(result.quote_time || result.snapshot_generated_at)}` : ""}`
+            : `数据未就绪 · ${result.data_as_of || "—"}`}
+        </span>
+      </div>
+
+      {result.message ? (
+        <div style={{ color: "var(--market-down)", fontSize: "var(--text-sm)" }}>{result.message}</div>
+      ) : (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "var(--space-3)" }}>
+            <DecisionCard title="如果还没有买" decision={result.entry_decision} />
+            <DecisionCard title="如果已经持有" decision={result.holding_decision} />
+          </div>
+
+          <div style={{ display: "flex", gap: "var(--space-4)", flexWrap: "wrap", marginTop: "var(--space-3)", fontSize: "var(--text-sm)", color: "var(--ink-secondary)" }}>
+            <span>策略 <b>{result.strategy_name || result.strategy_id || "—"}</b></span>
+            <span>现价 <b className="text-mono">{result.current_price != null ? result.current_price.toFixed(2) : "—"}</b></span>
+            <span>阶段 <b>{signal?.phase || "—"}</b></span>
+            <span>规则分 <b className="text-mono">{signal?.score != null ? signal.score.toFixed(1) : "—"}</b></span>
+            <span>当前买点 <b>{signal?.setup_match || "未命中"}</b></span>
+            <span>市场 <b>{market?.regime || "—"}</b></span>
+          </div>
+
+          <div style={{ marginTop: "var(--space-3)", paddingTop: "var(--space-3)", borderTop: "1px solid var(--border)", fontSize: "var(--text-sm)", lineHeight: 1.6 }}>
+            <div><span style={{ color: "var(--muted)" }}>原入场条件 · </span>{result.original?.entry_rule || "—"}</div>
+            <div><span style={{ color: "var(--muted)" }}>原失效条件 · </span>{result.original?.invalid_rule || "—"}</div>
+            <div><span style={{ color: "var(--muted)" }}>当前主线 · </span>{market?.main_industries?.join(" / ") || "—"}</div>
+            {review?.summary && <div><span style={{ color: "var(--muted)" }}>策略审查 · </span>{review.summary}</div>}
+            {review?.status === "fallback" && (
+              <div style={{ color: "var(--accent)" }}>Agent 暂不可用，本次结论仅使用确定性规则。</div>
+            )}
+          </div>
+
+          {signal?.risk_flags && signal.risk_flags.length > 0 && (
+            <ul style={{ margin: "var(--space-3) 0 0 var(--space-4)", padding: 0, color: "var(--market-down)", fontSize: "var(--text-sm)" }}>
+              {signal.risk_flags.slice(0, 4).map((risk, index) => <li key={index}>{risk}</li>)}
+            </ul>
+          )}
+          <div style={{ marginTop: "var(--space-3)", color: "var(--muted)", fontSize: "var(--text-xs)" }}>
+            仅使用数据截至时点已经可见的信息；原推荐超过首个交易日后，入场信号自动过期。买入当日仍受 T+1 限制。
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 

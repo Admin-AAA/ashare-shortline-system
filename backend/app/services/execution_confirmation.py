@@ -1,0 +1,231 @@
+"""推荐次日执行确认：用当前全市场快照重跑原推荐主策略。"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from datetime import datetime, timezone
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.engine.skill_loader import load_skills
+from app.engine.strategy_runner import evaluate_skill_prefilter, run_strategy
+from app.engine.trading_calendar import latest_allowed_quote_date
+from app.models.tables import DailyKbar, Recommendation
+
+
+def _decision(code: str, label: str, reason: str) -> dict[str, str]:
+    return {"code": code, "label": label, "reason": reason}
+
+
+def _json_mapping(raw: str | None) -> dict[str, Any]:
+    try:
+        value = json.loads(raw or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _derive_decisions(
+    *,
+    fresh: bool,
+    signal_age_trade_days: int,
+    entry_window_closed: bool,
+    prefilter_ok: bool,
+    signal: dict[str, Any],
+    review: dict[str, Any] | None,
+    current_price: float,
+    stop_loss: float,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """把规则信号与策略审查投影为未入场/已持仓两套动作。"""
+    if not fresh:
+        reason = "当前行情快照不是最新交易日，等待数据更新后再确认"
+        return _decision("not_ready", "数据未就绪", reason), _decision("observe", "等待最新数据", reason)
+
+    stance = str((review or {}).get("stance") or "")
+    action = str((review or {}).get("action") or "")
+    review_available = bool(review and review.get("status") == "ok")
+    hard_veto = bool(signal.get("hard_veto"))
+    strategy_vetoed = hard_veto or stance in {"oppose", "veto"} or action == "不做"
+    entry_blocked = strategy_vetoed or not prefilter_ok
+    stop_broken = stop_loss > 0 and current_price > 0 and current_price <= stop_loss
+    rule_supportive = bool(signal.get("setup_match")) and float(signal.get("score") or 0) >= 72
+    supportive = stance in {"strong_support", "support"} or (not review_available and rule_supportive)
+
+    if signal_age_trade_days < 1:
+        entry = _decision("not_ready", "尚未到次日确认", "推荐日之后还没有新的交易日快照")
+    elif signal_age_trade_days > 1:
+        entry = _decision("expired", "原入场信号已过期", "已超过推荐后的首个交易日，需要等待新的推荐信号")
+    elif entry_window_closed:
+        entry = _decision("expired", "今日入场窗口已结束", "当前交易日已收盘，不再追认盘中买点")
+    elif stop_broken:
+        entry = _decision("cancel", "取消买入", "当前价格已经跌破原推荐止损位")
+    elif entry_blocked:
+        reason = str(
+            signal.get("veto_reason")
+            or (signal.get("prefilter_reason") if not prefilter_ok else "")
+            or (review or {}).get("summary")
+            or "原策略当前不再支持入场"
+        )
+        entry = _decision("cancel", "取消买入", reason)
+    elif signal.get("setup_match") and float(signal.get("score") or 0) >= 60 and supportive:
+        entry = _decision("buy", "允许按策略轻仓执行", str((review or {}).get("summary") or signal.get("entry_rule") or "当前买点仍成立"))
+    else:
+        entry = _decision("wait", "继续观察", str((review or {}).get("summary") or "没有形成足够明确的当前入场确认"))
+
+    if stop_broken:
+        holding = _decision("exit", "退出持仓", "当前价格已经跌破原推荐止损位")
+    elif strategy_vetoed:
+        reason = str(signal.get("veto_reason") or (review or {}).get("summary") or "原策略逻辑已经失效")
+        holding = _decision("exit", "退出或显著降低仓位", reason)
+    elif not prefilter_ok:
+        holding = _decision("reduce", "降低仓位并观察", "当前已不满足原策略候选条件")
+    elif supportive:
+        holding = _decision("hold", "继续持有并执行保护位", str((review or {}).get("summary") or "原策略逻辑仍成立"))
+    else:
+        holding = _decision("reduce", "收紧保护并观察", str((review or {}).get("summary") or "策略未给出继续加仓确认"))
+    return entry, holding
+
+
+def _run_agent_review(skill: Any, stock: dict[str, Any], snapshot: dict[str, Any], signal: dict[str, Any]) -> dict[str, Any]:
+    from app.agents.agno_skill_agent import drain_api_costs, run_skill_agent_direct
+
+    try:
+        output = asyncio.run(
+            run_skill_agent_direct(skill=skill, stock=stock, snapshot=snapshot, rule_signal=signal)
+        )
+        raw = output.model_dump() if hasattr(output, "model_dump") else dict(output)
+        raw["status"] = "ok"
+        costs = drain_api_costs()
+        raw["elapsed_cost_calls"] = len(costs)
+        return raw
+    except Exception as exc:  # Agent 只增强解释，失败不能阻断规则确认
+        return {"status": "fallback", "error": str(exc)}
+
+
+def confirm_recommendation_execution(
+    db: Session,
+    recommendation_id: str,
+    *,
+    include_agent: bool = True,
+) -> dict[str, Any] | None:
+    rec = db.get(Recommendation, recommendation_id)
+    if rec is None:
+        return None
+
+    from app.core.config import get_settings
+    from app.services.auxiliary.application import (
+        inject_auxiliary_prefilter_flags,
+        load_auxiliary_feature_views,
+    )
+    from app.services.feature_builder import build_features
+    from app.services.factors.registry import bootstrap_default_factor_registry
+    from app.services.market_data import get_market_universe
+
+    bootstrap_default_factor_registry()
+    stocks, snapshot = get_market_universe()
+    code = str(rec.code)
+    target = next((stock for stock in stocks if str(stock.get("code")) == code), None)
+    if target is None:
+        return {
+            "status": "error",
+            "recommendation_id": recommendation_id,
+            "message": f"当前可交易股票池中找不到 {code}",
+        }
+
+    data_as_of = str(snapshot.get("trade_date") or target.get("latest_trade_date") or "")
+    auxiliary = load_auxiliary_feature_views(db, [code], trade_date=data_as_of)
+    inject_auxiliary_prefilter_flags([target], auxiliary)
+    enriched = build_features(stocks, snapshot)
+    current = next(stock for stock in enriched if str(stock.get("code")) == code)
+
+    skills = {skill.skill_id: skill for skill in load_skills(get_settings().skills_dir)}
+    strategy_id = str(rec.bucket or "daily-stock-analysis-skill")
+    skill = skills.get(strategy_id)
+    if skill is None:
+        return {
+            "status": "error",
+            "recommendation_id": recommendation_id,
+            "message": f"原推荐策略 {strategy_id} 已不存在",
+        }
+
+    prefilter_ok, prefilter_reason = evaluate_skill_prefilter(skill, current)
+    signal = dict(run_strategy(skill, current, list(snapshot.get("main_industries") or [])))
+    signal["prefilter_ok"] = prefilter_ok
+    signal["prefilter_reason"] = prefilter_reason
+
+    later_dates = set(
+        str(value)
+        for value in db.scalars(
+            select(DailyKbar.trade_date).where(
+                DailyKbar.code == code,
+                DailyKbar.trade_date > str(rec.trade_date),
+                DailyKbar.trade_date <= data_as_of,
+            )
+        ).all()
+    )
+    if data_as_of > str(rec.trade_date):
+        later_dates.add(data_as_of)
+    signal_age_trade_days = len(later_dates)
+
+    local_now = datetime.now()
+    expected_quote_date = latest_allowed_quote_date()
+    fresh = data_as_of == expected_quote_date
+    entry_window_closed = data_as_of == local_now.date().isoformat() and local_now.hour >= 15
+    review = _run_agent_review(skill, current, snapshot, signal) if include_agent and fresh else None
+    current_price = float(current.get("price") or current.get("close") or 0)
+    original_snapshot = _json_mapping(rec.feature_snapshot_json)
+    stop_loss = float(original_snapshot.get("stop_loss") or 0)
+    entry_decision, holding_decision = _derive_decisions(
+        fresh=fresh,
+        signal_age_trade_days=signal_age_trade_days,
+        entry_window_closed=entry_window_closed,
+        prefilter_ok=prefilter_ok,
+        signal=signal,
+        review=review,
+        current_price=current_price,
+        stop_loss=stop_loss,
+    )
+
+    return {
+        "status": "ok" if fresh else "not_ready",
+        "recommendation_id": recommendation_id,
+        "code": code,
+        "name": rec.name,
+        "strategy_id": strategy_id,
+        "strategy_name": skill.name,
+        "checked_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        "data_as_of": data_as_of,
+        "quote_time": current.get("quote_time"),
+        "snapshot_generated_at": (snapshot.get("breadth") or {}).get("generated_at"),
+        "data_source": current.get("quote_source") or (snapshot.get("breadth") or {}).get("quote_source"),
+        "fresh": fresh,
+        "signal_age_trade_days": signal_age_trade_days,
+        "current_price": current_price,
+        "entry_decision": entry_decision,
+        "holding_decision": holding_decision,
+        "original": {
+            "trade_date": str(rec.trade_date),
+            "recommend_price": float(rec.recommend_price or 0),
+            "stop_loss": stop_loss or None,
+            "entry_rule": rec.entry_rule,
+            "invalid_rule": rec.invalid_rule,
+        },
+        "market": {
+            "regime": (snapshot.get("breadth") or {}).get("regime"),
+            "up_count": snapshot.get("up_count"),
+            "down_count": snapshot.get("down_count"),
+            "limit_up_count": snapshot.get("limit_up_count"),
+            "limit_down_count": snapshot.get("limit_down_count"),
+            "main_industries": list(snapshot.get("main_industries") or []),
+        },
+        "strategy_signal": {
+            **signal,
+        },
+        "agent_review": review,
+    }
+
+
+__all__ = ["confirm_recommendation_execution"]

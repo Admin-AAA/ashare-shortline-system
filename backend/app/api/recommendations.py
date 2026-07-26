@@ -138,6 +138,24 @@ def detail(recommendation_id: str, db: Session = Depends(get_db)):
     return rec
 
 
+@router.post("/{recommendation_id}/execution-confirmation")
+def execution_confirmation(recommendation_id: str, payload: dict | None = None, db: Session = Depends(get_db)):
+    """用当前市场快照重跑原推荐主策略，分别给出未入场与已持仓建议。"""
+    from app.services.execution_confirmation import confirm_recommendation_execution
+
+    try:
+        result = confirm_recommendation_execution(
+            db,
+            recommendation_id,
+            include_agent=bool((payload or {}).get("include_agent", True)),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="recommendation not found")
+    return result
+
+
 @router.post("/{recommendation_id}/watch")
 def watch(recommendation_id: str, payload: dict, db: Session = Depends(get_db)):
     result = set_watch_status(
