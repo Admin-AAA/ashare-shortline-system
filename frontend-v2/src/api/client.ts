@@ -409,12 +409,16 @@ export const api = {
     return request<RunSummary[]>(`/api/records/runs${str ? `?${str}` : ""}`);
   },
   runRecordDetail: (runId: string) => request<RunRecordDetail>(`/api/records/runs/${runId}`),
-  matrixRecords: (params?: { page?: number; page_size?: number; code?: string }) => {
+  matrixRecords: (params?: { page?: number; page_size?: number; code?: string; analysis_type?: string }) => {
     const qs = new URLSearchParams();
     if (params?.page) qs.set("page", String(params.page));
     if (params?.page_size) qs.set("page_size", String(params.page_size));
     if (params?.code) qs.set("code", params.code);
+    if (params?.analysis_type) qs.set("analysis_type", params.analysis_type);
     return request<MatrixRecordsResponse>(`/api/records/matrix?${qs.toString()}`);
   },
   matrixRecordDetail: (id: number) => request<MatrixRecordDetail>(`/api/records/matrix/${id}`),
+  /** 单股票评分历史（analysis_type=single_stock 隔离，按 code 倒序） */
+  singleStockHistory: (code: string, page = 1, pageSize = 20) =>
+    api.matrixRecords({ code, analysis_type: "single_stock", page, page_size: pageSize }),
 };

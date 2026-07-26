@@ -89,6 +89,7 @@ def stock_matrix_history(
     code: str = Query(..., description="股票代码"),
     page: int = Query(1, ge=1, description="页码，从 1 开始"),
     page_size: int = Query(10, ge=1, le=50, description="每页条数"),
+    analysis_type: str | None = Query(default=None, description="按分析类型筛选：analysis | backtest | single_stock"),
     db: Session = Depends(get_db),
 ):
     """查询单股票矩阵分析历史记录（分页）。"""
@@ -96,18 +97,17 @@ def stock_matrix_history(
     if not code:
         raise HTTPException(status_code=400, detail="code is required")
 
-    total = db.scalar(
-        select(func.count()).select_from(StockMatrixHistory)
-        .where(StockMatrixHistory.code == code)
-    ) or 0
+    stmt = select(StockMatrixHistory).where(StockMatrixHistory.code == code)
+    count_stmt = select(func.count()).select_from(StockMatrixHistory).where(StockMatrixHistory.code == code)
+    if analysis_type:
+        stmt = stmt.where(StockMatrixHistory.analysis_type == analysis_type)
+        count_stmt = count_stmt.where(StockMatrixHistory.analysis_type == analysis_type)
+
+    total = db.scalar(count_stmt) or 0
 
     offset = (page - 1) * page_size
     rows = db.scalars(
-        select(StockMatrixHistory)
-        .where(StockMatrixHistory.code == code)
-        .order_by(desc(StockMatrixHistory.created_at))
-        .offset(offset)
-        .limit(page_size)
+        stmt.order_by(desc(StockMatrixHistory.created_at)).offset(offset).limit(page_size)
     ).all()
 
     items = [
