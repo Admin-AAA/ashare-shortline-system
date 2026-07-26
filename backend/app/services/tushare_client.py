@@ -28,8 +28,10 @@ from app.core.config import get_settings
 from app.engine.trading_calendar import normalize_trade_date as _normalize_trade_date
 from app.services.tushare_transport import (
     AuthMode,
+    FailureCategory,
     ProviderConfig,
     TushareHttpProvider,
+    TushareProviderError,
     TushareProviderRouter,
 )
 
@@ -1608,7 +1610,7 @@ def _fetch_tushare_minute_kbars(
             frames.append(frame)
     except Exception as exc:
         reason = str(exc)
-        status = "permission_denied" if _is_tushare_permission_error(reason) else "error"
+        status = "permission_denied" if _is_tushare_permission_error(exc) else "error"
         _record_minute_source_trace(
             trace,
             source="tushare_stk_mins",
@@ -1743,7 +1745,21 @@ def _record_minute_source_trace(
     )
 
 
-def _is_tushare_permission_error(reason: str) -> bool:
+def _is_tushare_permission_error(exc: BaseException) -> bool:
+    """判断异常是否为 Tushare 权限拒绝。
+
+    优先用结构化证据：Router 聚合的 ``TushareProviderError`` 会在
+    ``failures[*].category`` 里携带 ``FailureCategory.PERMISSION``。直接
+    读 category 而非对 ``str(exc)`` 做子串匹配，避免异常文本格式变化时
+    （provider 名/category 值改名）判断静默失效。
+    字符串匹配仅作兜底，兼容旧式中文 ``RuntimeError`` 假对象/调用方。
+    """
+    if isinstance(exc, TushareProviderError):
+        return any(
+            failure.category is FailureCategory.PERMISSION
+            for failure in exc.failures
+        )
+    reason = str(exc)
     normalized = reason.lower()
     return (
         "没有该接口权限" in reason

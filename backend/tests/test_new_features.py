@@ -255,6 +255,71 @@ def test_fetch_recent_minute_kbars_records_tushare_permission_denied(monkeypatch
     assert any(item["source"] == "tushare_stk_mins" and item["status"] == "permission_denied" for item in trace)
 
 
+def test_fetch_recent_minute_kbars_permission_from_structured_router_error(monkeypatch):
+    """权限判定用结构化 FailureCategory，不依赖 str(exc) 子串巧合。"""
+    from app.services import tushare_client
+    from app.services.tushare_client import fetch_recent_minute_kbars
+    from app.services.tushare_transport import (
+        FailureCategory,
+        ProviderFailure,
+        TushareProviderError,
+    )
+
+    tushare_client._TUSHARE_STK_MINS_PERMISSION_DENIED_REASON = None
+
+    class FakePro:
+        def stk_mins(self, **kwargs):
+            failure = ProviderFailure(
+                provider="ai_tool",
+                api_name="stk_mins",
+                category=FailureCategory.PERMISSION,
+                retryable=False,
+                fallback_allowed=True,
+            )
+            raise TushareProviderError("stk_mins", [failure])
+
+    monkeypatch.setattr("app.services.tushare_client.get_pro", lambda: FakePro())
+
+    trace: list[dict] = []
+    bars = fetch_recent_minute_kbars("000001", ndays=1, trace=trace)
+
+    assert bars == []
+    assert any(item["source"] == "tushare_stk_mins" and item["status"] == "permission_denied" for item in trace)
+
+
+def test_fetch_recent_minute_kbars_network_error_is_not_permission(monkeypatch):
+    """非权限类聚合异常（如网络）不得误判成 permission_denied。"""
+    from app.services import tushare_client
+    from app.services.tushare_client import fetch_recent_minute_kbars
+    from app.services.tushare_transport import (
+        FailureCategory,
+        ProviderFailure,
+        TushareProviderError,
+    )
+
+    tushare_client._TUSHARE_STK_MINS_PERMISSION_DENIED_REASON = None
+
+    class FakePro:
+        def stk_mins(self, **kwargs):
+            failure = ProviderFailure(
+                provider="ai_tool",
+                api_name="stk_mins",
+                category=FailureCategory.NETWORK,
+                retryable=True,
+                fallback_allowed=True,
+            )
+            raise TushareProviderError("stk_mins", [failure])
+
+    monkeypatch.setattr("app.services.tushare_client.get_pro", lambda: FakePro())
+
+    trace: list[dict] = []
+    bars = fetch_recent_minute_kbars("000001", ndays=1, trace=trace)
+
+    assert bars == []
+    assert any(item["source"] == "tushare_stk_mins" and item["status"] == "error" for item in trace)
+    assert not any(item["status"] == "permission_denied" for item in trace)
+
+
 # ═══════════════════════════════════════════════════════════════════
 # 新数据模型
 # ═══════════════════════════════════════════════════════════════════
