@@ -590,6 +590,10 @@ def _data_source_health(db: Session) -> dict[str, Any]:
             "success_rate": s.get("success_rate"),
             "last_error": s.get("last_error"),
             "last_success_at": s.get("last_success_at"),
+            "note": s.get("note"),
+            "last_api": s.get("last_api"),
+            "breaker_state": s.get("breaker_state"),
+            "rate_limit_per_minute": s.get("rate_limit_per_minute"),
         }
         if status == "healthy":
             working.append(entry)
@@ -600,8 +604,27 @@ def _data_source_health(db: Session) -> dict[str, Any]:
         else:  # untested / unknown
             untested.append(entry)
 
-    # 评分扣减：enabled 且 degraded 的每个 -5（上限 15）；enabled 且 untested 的每个 -1（上限 5）
-    penalty = min(15, len(broken) * 5) + min(5, len([u for u in untested if u["enabled"]]) * 1)
+    # 评分只扣明确失败。未测试代表“尚无观测证据”，继续展示但不扣分；
+    # 数据是否真的缺失已由 data_domains / recent_coverage 单独计分，避免重复惩罚。
+    # Fastapic 与 ai-tool 属于同一逻辑 Tushare 源下的两个独立故障域：只要其中
+    # 一个健康，Router 仍有可用路径，单个 Provider 降级不再重复扣分。
+    all_entries = working + broken + untested + disabled
+    provider_entries = [
+        item for item in all_entries if item.get("source_type") == "tushare_provider"
+    ]
+    non_provider_broken = [
+        item for item in broken if item.get("source_type") != "tushare_provider"
+    ]
+    penalty = min(15, len(non_provider_broken) * 5)
+    enabled_providers = [item for item in provider_entries if item.get("enabled")]
+    healthy_providers = [item for item in enabled_providers if item.get("status") == "healthy"]
+    degraded_providers = [item for item in enabled_providers if item.get("status") == "degraded"]
+    provider_penalty = 0
+    if provider_entries and not enabled_providers:
+        provider_penalty = 5
+    elif enabled_providers and not healthy_providers and degraded_providers:
+        provider_penalty = 5
+    penalty = min(15, penalty + provider_penalty)
 
     return {
         "sources": sources,
@@ -615,6 +638,14 @@ def _data_source_health(db: Session) -> dict[str, Any]:
         "untested_sources": untested,
         "disabled_sources": disabled,
         "score_penalty": penalty,
+        "score_policy": "仅明确失败且没有可用同组容灾时扣分；未测试仅提示，不扣分。",
+        "provider_redundancy": {
+            "configured_count": len(enabled_providers),
+            "healthy_count": len(healthy_providers),
+            "degraded_count": len(degraded_providers),
+            "fallback_available": bool(healthy_providers),
+            "score_penalty": provider_penalty,
+        },
     }
 
 

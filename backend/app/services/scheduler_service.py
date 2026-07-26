@@ -32,7 +32,7 @@ from app.models.tables import (
 from app.services.cost_service import finish_task_run, serialize_scheduled_task_run, start_task_run
 from app.engine.trading_calendar import latest_allowed_bar_date as _latest_allowed_bar_date
 from app.services.registry.data_source import (
-    DATA_SOURCE_LOCAL_POOL_PREFERRED,
+    DATA_SOURCE_LOCAL_POOL,
     DEFAULT_RECOMMENDATION_DATA_SOURCE,
 )
 
@@ -151,7 +151,9 @@ def _postclose_pipeline_payload(existing: dict[str, Any] | None = None) -> dict[
             "preset_id": payload.get("preset_id") or "preset_formal_opening",
             "run_name": payload.get("run_name") or "盘后全量同步后正式推荐",
             "run_mode": "formal",
-            "data_source": DATA_SOURCE_LOCAL_POOL_PREFERRED,
+            # 同步和健康闸门已在推荐前完成；正式推荐只读本地池，
+            # 避免 local_pool_preferred 在查询阶段再次访问上游。
+            "data_source": DATA_SOURCE_LOCAL_POOL,
             "risk_template": payload.get("risk_template") or "balanced",
             "score_line": float(payload.get("score_line") or 72),
             "output_count": int(payload.get("output_count") or 6),
@@ -1439,7 +1441,15 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
     # 已完成的 sync/auxiliary/readiness/outcome 中间结果，failed run 的 result_json
     # 只剩一句 error，无法诊断数据同步是否成功。这里捕获并把中间结果一并返回。
     try:
-        recommendation = await _run_recommendation(db, payload)
+        # readiness 已确认最新已收盘数据完整；即使旧调度记录或手工调用
+        # 携带了 local_pool_preferred/auto，也必须在正式推荐阶段强制纯本地。
+        # 同步阶段已覆盖辅助数据；这里同时禁止 workbench 再次刷新辅助源。
+        recommendation_payload = {
+            **payload,
+            "data_source": DATA_SOURCE_LOCAL_POOL,
+            "skip_aux_refresh": True,
+        }
+        recommendation = await _run_recommendation(db, recommendation_payload)
         run_id = str(recommendation.get("related_run_id") or "")
         if not run_id:
             raise RuntimeError("盘后正式推荐未返回关联 Run ID")

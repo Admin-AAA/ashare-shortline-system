@@ -87,7 +87,20 @@ def list_data_sources(db: Session) -> list[dict[str, Any]]:
                 "updated_at": config.updated_at.isoformat() if config and config.updated_at else None,
             }
         )
-    return rows
+
+    # Fastapic 与 ai-tool 是 Tushare 逻辑源下的独立故障域。它们的实时状态
+    # 来自 Router 进程内遥测，不写入旧的可编辑注册表，也不会被孤儿清理删除。
+    from app.services.tushare_client import get_tushare_provider_health
+
+    rows.extend(get_tushare_provider_health())
+    return sorted(
+        rows,
+        key=lambda item: (
+            str(item.get("source_type") or ""),
+            int(item.get("priority") or 0),
+            str(item.get("source") or ""),
+        ),
+    )
 
 
 def get_local_pool_status(

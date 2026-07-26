@@ -107,7 +107,13 @@ def test_postclose_pipeline_orders_sync_health_gate_and_recommendation(monkeypat
     )
 
     async def fake_recommendation(_db, payload):
-        calls.append(("recommendation", payload["data_source"]))
+        calls.append(
+            (
+                "recommendation",
+                payload["data_source"],
+                payload["skip_aux_refresh"],
+            )
+        )
         return {"related_run_id": "run_postclose", "queued": True}
 
     async def fake_wait(_db, run_id, **_kwargs):
@@ -120,7 +126,11 @@ def test_postclose_pipeline_orders_sync_health_gate_and_recommendation(monkeypat
     result = asyncio.run(
         scheduler_service._run_postclose_pipeline(
             object(),
-            {"preset_id": "preset_formal_opening", "data_source": "local_pool_preferred"},
+            {
+                "preset_id": "preset_formal_opening",
+                "data_source": "local_pool_preferred",
+                "skip_aux_refresh": False,
+            },
         )
     )
 
@@ -128,7 +138,7 @@ def test_postclose_pipeline_orders_sync_health_gate_and_recommendation(monkeypat
         ("sync", "all"),
         ("health", "2026-07-16"),
         ("outcome", 5),
-        ("recommendation", "local_pool_preferred"),
+        ("recommendation", "local_pool", True),
         ("wait", "run_postclose"),
     ]
     assert result["status"] == "completed"

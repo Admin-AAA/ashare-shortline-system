@@ -721,6 +721,22 @@ export type DataHealthRemediationResult = {
     skipped_count?: number;
     failed_count?: number;
   };
+  provider_activity?: {
+    used_providers?: string[];
+    route_policy?: string;
+    minute_scope?: string;
+    providers?: Array<{
+      source?: string;
+      provider_name?: string;
+      request_count?: number;
+      success_count?: number;
+      failure_count?: number;
+      empty_count?: number;
+      last_api?: string | null;
+      status?: string | null;
+      breaker_state?: string | null;
+    }>;
+  };
   comparison?: {
     status?: string;
     reason?: string;
@@ -855,7 +871,10 @@ export type DataSourceStatus = "healthy" | "degraded" | "disabled" | "untested";
 export type DataSourceHealthRow = {
   source: string;
   source_type: DataSourceType;
+  provider_name?: string;
+  layer?: string;
   enabled: boolean;
+  configured?: boolean;
   priority: number;
   note?: string | null;
   success_count: number;
@@ -866,7 +885,15 @@ export type DataSourceHealthRow = {
   last_success_at?: string | null;
   last_failure_at?: string | null;
   last_error?: string | null;
+  last_api?: string | null;
   status: DataSourceStatus;
+  breaker_state?: string | null;
+  open_circuits?: string[];
+  auth_mode?: string | null;
+  rate_limit_per_minute?: number | null;
+  api_rate_limits?: Record<string, number>;
+  max_concurrency?: number | null;
+  health_scope?: string | null;
   updated_at?: string | null;
 };
 
@@ -874,7 +901,10 @@ export type DataSourceHealthRow = {
 export type DiagnosticDataSource = {
   source: string;
   source_type: string;
+  provider_name?: string;
+  layer?: string;
   enabled: boolean;
+  configured?: boolean;
   priority: number;
   note?: string | null;
   success_count: number;
@@ -885,7 +915,10 @@ export type DiagnosticDataSource = {
   last_success_at?: string | null;
   last_failure_at?: string | null;
   last_error?: string | null;
+  last_api?: string | null;
   status: string;
+  breaker_state?: string | null;
+  rate_limit_per_minute?: number | null;
   updated_at?: string | null;
 };
 
@@ -896,11 +929,19 @@ export type DataSourceHealthSummary = {
   untested_count?: number;
   disabled_count?: number;
   total?: number;
-  working_sources?: Array<{ source: string; source_type: string; status: string; enabled?: boolean; last_error?: string | null }>;
-  broken_sources?: Array<{ source: string; source_type: string; status: string; enabled?: boolean; last_error?: string | null }>;
-  untested_sources?: Array<{ source: string; source_type: string; status: string; enabled?: boolean; last_error?: string | null }>;
-  disabled_sources?: Array<{ source: string; source_type: string; status: string; enabled?: boolean; last_error?: string | null }>;
+  working_sources?: DiagnosticDataSource[];
+  broken_sources?: DiagnosticDataSource[];
+  untested_sources?: DiagnosticDataSource[];
+  disabled_sources?: DiagnosticDataSource[];
   score_penalty?: number;
+  score_policy?: string;
+  provider_redundancy?: {
+    configured_count?: number;
+    healthy_count?: number;
+    degraded_count?: number;
+    fallback_available?: boolean;
+    score_penalty?: number;
+  };
 };
 
 /** 数据域（指标级）覆盖明细 —— 对应后端 _data_domain_coverage 单个域。 */
@@ -1410,6 +1451,9 @@ export type RecommendationHistoryResponse = {
   total: number;
   offset: number;
   limit: number;
+  facets: {
+    setup_types: string[];
+  };
   summary: {
     trade_count: number;
     win_count: number;
