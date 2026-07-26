@@ -19,6 +19,7 @@ import { ErrorPage } from "../components/StateViews";
 import { PoolExpandedRow } from "../components/PoolExpandedRow";
 import { StockTicker } from "../components/StockTicker";
 import { LlmStanceBadge } from "../components/LlmStanceBadge";
+import { MultiStrategyBadge } from "../components/MultiStrategyBadge";
 import { useUrlRoute } from "../app/useUrlRoute";
 import { useApi } from "../app/useApi";
 import { queryParam } from "../app/nav";
@@ -485,6 +486,7 @@ function RecommendationResults({ run }: { run: RunSummary }) {
                 <TradeParamsInline item={item} />
                 <span className="text-mono" style={{ fontWeight: 700, color: "var(--accent-strong)", fontSize: "var(--text-lg)" }}>{item.final_score.toFixed(0)}</span>
                 <LlmStanceBadge stance={item.llm_stance} delta={item.llm_delta} />
+                <MultiStrategyBadge skillBreakdown={item.skill_breakdown} />
                 <RiskTag level={item.risk_level} setup={item.setup_type} />
                 {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
               </div>
