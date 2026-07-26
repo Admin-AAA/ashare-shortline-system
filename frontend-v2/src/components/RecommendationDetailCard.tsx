@@ -3,6 +3,7 @@ import { useState } from "react";
 import { api } from "../api/client";
 import type { AgentLog, RecommendationCard, RecommendationDetail, SkillSignal, StrategyPerfSummary } from "../types";
 import { ruleKeyLevelLabels, rulesMentionKeyLevel } from "../utils/ruleKeyLevels";
+import { MultiStrategyBadge } from "./MultiStrategyBadge";
 
 /**
  * 推荐详情卡片 —— 展示完整决策信息（交易参数/买点原因/市场阶段/评分分解/规则/风险）。
@@ -155,6 +156,7 @@ export function RecommendationDetailCard({ item }: { item: DetailItem }) {
             >
               {item.setup_type}
             </span>
+            <MultiStrategyBadge skillBreakdown={item.skill_breakdown} />
           </div>
         )}
 

@@ -29,6 +29,7 @@ import {
 import { StockTicker } from "../components/StockTicker";
 import { Panel } from "../components/Panel";
 import { LlmStanceBadge } from "../components/LlmStanceBadge";
+import { MultiStrategyBadge } from "../components/MultiStrategyBadge";
 import { useUrlRoute } from "../app/useUrlRoute";
 
 /**
@@ -770,6 +771,7 @@ function CandidateCard({
       </div>
       <div style={{ display: "flex", gap: "var(--space-1)", flexWrap: "wrap", alignItems: "center" }}>
         {item.setup_type && <span className="tag">{item.setup_type}</span>}
+        <MultiStrategyBadge skillBreakdown={item.skill_breakdown} />
         <span className={`tag ${toneClass}`} style={{ color: riskTone }}>
           {item.risk_level}
         </span>
