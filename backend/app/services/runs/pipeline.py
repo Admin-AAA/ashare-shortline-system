@@ -1,27 +1,51 @@
 """Run the full recommendation pipeline through the staged RunCoordinator.
 
-This module provides the new execution path that drives all 8 stages through
-``RunCoordinator.execute_next_stage_async``, replacing the monolithic
-``run_workbench`` function body.  The old function remains available as a
-fallback until the coordinator path is proven in production.
+This is the only production execution path. Every API, worker, scheduler and
+recovery entry point reaches the same eight coordinator stages.
 """
 from __future__ import annotations
 
 import logging
+import time
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from .contracts import RunPhase, RunRequest, RunStatus
-from .coordinator import RunCoordinator, RunCoordinatorDependencies, RunResourceLeases, StageData
+from .contracts import RunActor, RunPhase, RunRequest, RunStatus, RunTrigger
+from .coordinator import RunCoordinator, RunCoordinatorDependencies, StageData
+from .repository import TransitionCommit
 from .sqlalchemy_repository import SQLAlchemyRunRepository
+from .state_machine import RunStateMachine
 from .stages.assembly import assemble_pipeline_stages
 from .stages.contracts import StageOutput
 
 logger = logging.getLogger(__name__)
 
 RUN_HEARTBEAT_STALE_SECONDS = 1200
+
+
+def _stage_cardinality(phase: RunPhase, data: StageData) -> tuple[int, int]:
+    """Return stable logical input/output counts for one completed stage."""
+    if phase is RunPhase.PREPARE:
+        return 1, len(data.selected_skills)
+    if phase is RunPhase.MARKET_DATA:
+        return len(data.stocks), len(data.prefiltered_stocks)
+    if phase is RunPhase.AUXILIARY_DATA:
+        return len(data.prefiltered_stocks), len(data.prefiltered_stocks)
+    if phase is RunPhase.FEATURES:
+        return len(data.prefiltered_stocks), len(data.features)
+    if phase is RunPhase.STRATEGY_EVALUATION:
+        return len(data.research_contexts), len(data.skill_candidates)
+    if phase is RunPhase.REVIEW:
+        return len(data.skill_candidates), len(data.candidate_results)
+    if phase is RunPhase.AGGREGATION:
+        return len(data.candidate_results), len(data.cards)
+    if phase is RunPhase.PERSISTENCE:
+        return len(data.cards), len(data.saved_recommendations)
+    return 0, 0
 
 
 async def run_staged_pipeline(
@@ -38,12 +62,15 @@ async def run_staged_pipeline(
     This function transitions it to RUNNING, acquires a worker lease, and then
     iterates ``execute_next_stage_async`` until all 8 phases are committed.
     """
-    from app.models.tables import RecommendationRun
-    from app.services.runs.request_persistence import load_canonical_run_request
+    from app.models.tables import AgentDecisionLog, Recommendation, RecommendationRun
     from app.services.workbench_service import (
         _update_run_progress,
         _build_run_summary,
         _dumps,
+        _serialize_recommendation,
+        _serialize_run_summary,
+        _slim_market_snapshot,
+        _strip_audit_rows,
         invalidate_bootstrap_cache,
     )
     from app.agents.session_registry import AgentSessionRegistry
@@ -51,8 +78,63 @@ async def run_staged_pipeline(
     from app.services.registry.skills import sync_skills
 
     lifecycle_repository = SQLAlchemyRunRepository(db)
-    is_resume = bool(existing_run_id)
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    persisted = lifecycle_repository.get_run(run_id)
+    if persisted is None:
+        raise RuntimeError(f"Run {run_id} 在 lifecycle repository 中不存在")
+    if persisted.status is RunStatus.COMPLETED:
+        run = db.get(RecommendationRun, run_id)
+        saved = list(
+            db.scalars(
+                select(Recommendation)
+                .where(Recommendation.run_id == run_id)
+                .order_by(Recommendation.final_score.desc())
+            ).all()
+        )
+        return {
+            "run": _serialize_run_summary(db, run),
+            "recommendations": [
+                _serialize_recommendation(db, recommendation)
+                for recommendation in saved
+            ],
+        }
+    # Compatibility callers may still pass existing_run_id. It is never used to
+    # infer recovery: durable status is the only lifecycle source of truth.
+    persistence_already_committed = (
+        persisted.status is RunStatus.INTERRUPTED
+        and persisted.last_committed_phase is RunPhase.PERSISTENCE
+    )
+    if persisted.status is RunStatus.INTERRUPTED and not persistence_already_committed:
+        replay = RunStateMachine.transition(
+            current_status=RunStatus.INTERRUPTED,
+            trigger=RunTrigger.REPLAY,
+            actor=RunActor.WORKER,
+        )
+        replayed = lifecycle_repository.compare_and_set_transition(
+            run_id,
+            TransitionCommit(
+                expected_revision=persisted.revision,
+                transition=replay,
+                now=now,
+            ),
+        )
+        if not replayed.applied:
+            db.rollback()
+            raise RuntimeError("中断 Run 完整重放 CAS 冲突")
+        # The immutable canonical request is retained. Only run-owned, pre-commit
+        # recommendation effects are cleared; provider/API audit is intentionally
+        # preserved so cost history remains truthful.
+        db.execute(delete(AgentDecisionLog).where(AgentDecisionLog.run_id == run_id))
+        db.execute(delete(Recommendation).where(Recommendation.run_id == run_id))
+        replay_row = db.get(RecommendationRun, run_id)
+        if replay_row is not None:
+            replay_row.checkpoint_phase = None
+            replay_row.recommended_count = 0
+        db.commit()
+        persisted = lifecycle_repository.get_run(run_id)
+        if persisted is None:
+            raise RuntimeError(f"Run {run_id} 重放准备后丢失")
+    is_resume = persistence_already_committed
 
     # --- Assemble coordinator with all stages ---
     stages = assemble_pipeline_stages(db, run_id=run_id)
@@ -76,7 +158,7 @@ async def run_staged_pipeline(
         if lifecycle_repository.get_run(run_id) is not None and lease is None:
             raise RuntimeError("该 Run 已被另一个 worker 接管或缺少可用生命周期 lease")
     else:
-        # Fresh run: transition from QUEUED to RUNNING and acquire lease.
+        # Fresh queued run: transition to RUNNING and acquire one worker lease.
         if not coordinator.start_dispatch(run_id, now=now):
             record = lifecycle_repository.get_run(run_id)
             if record is None:
@@ -88,6 +170,36 @@ async def run_staged_pipeline(
         )
         if lease is None:
             raise RuntimeError(f"Run {run_id} 无法获取 worker lease")
+
+    if persistence_already_committed:
+        completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        if not coordinator.complete(run_id, now=completed_at):
+            raise RuntimeError("持久化后恢复的 completion CAS 失败")
+        db.expire_all()
+        saved = list(
+            db.scalars(
+                select(Recommendation)
+                .where(Recommendation.run_id == run_id)
+                .order_by(Recommendation.final_score.desc())
+            ).all()
+        )
+        run = db.get(RecommendationRun, run_id)
+        if run is None:
+            raise RuntimeError(f"Run {run_id} 在恢复完成后不存在")
+        run.recommended_count = len(saved)
+        run.progress_phase = "completed"
+        run.progress_current = len(saved)
+        run.progress_total = len(saved)
+        run.progress_message = "已核对持久化结果并完成恢复"
+        db.commit()
+        invalidate_bootstrap_cache()
+        return {
+            "run": _serialize_run_summary(db, run),
+            "recommendations": [
+                _serialize_recommendation(db, recommendation)
+                for recommendation in saved
+            ],
+        }
 
     # --- Execute stage loop ---
     agent_session_id = f"sess_{run_id}"
@@ -105,7 +217,10 @@ async def run_staged_pipeline(
             snapshot=snapshot_ref,
         )
 
+        stage_timings_ms: dict[str, float] = {}
+        stage_audit: dict[str, dict[str, Any]] = {}
         while True:
+            stage_started = time.perf_counter()
             step_result = await coordinator.execute_next_stage_async(
                 run_id, now=datetime.now(timezone.utc).replace(tzinfo=None), data=data,
             )
@@ -114,6 +229,22 @@ async def run_staged_pipeline(
             output: StageOutput
             output, _context = step_result
             data = output.data
+            stage_timings_ms[output.result.phase.value] = round(
+                (time.perf_counter() - stage_started) * 1000, 2,
+            )
+            stage_input_count, stage_output_count = _stage_cardinality(
+                output.result.phase, data,
+            )
+            stage_audit[output.result.phase.value] = {
+                "duration_ms": stage_timings_ms[output.result.phase.value],
+                "input_count": stage_input_count,
+                "output_count": stage_output_count,
+                "side_effect_key": output.result.side_effect_key,
+            }
+            data = data.with_updates(
+                stage_timings_ms=dict(stage_timings_ms),
+                stage_audit=dict(stage_audit),
+            )
 
             # Update the legacy snapshot reference so Agent session can access it.
             if data.snapshot is not None:
@@ -129,6 +260,10 @@ async def run_staged_pipeline(
                 message=f"阶段 {output.result.phase.value} 完成",
                 status="running",
             )
+            progress_run = db.get(RecommendationRun, run_id)
+            if progress_run is not None:
+                progress_run.checkpoint_phase = output.result.phase.value
+                db.flush()
             logger.info(
                 "run %s stage %s completed (side_effect_key=%s)",
                 run_id,
@@ -150,25 +285,72 @@ async def run_staged_pipeline(
         run = db.get(RecommendationRun, run_id)
         if run is not None:
             run.recommended_count = len(data.saved_recommendations)
+            run.universe_count = len(data.research_contexts)
             run.progress_phase = "completed"
+            run.checkpoint_phase = "completed"
             run.progress_current = len(data.saved_recommendations)
             run.progress_total = len(data.saved_recommendations)
             run.progress_message = "运行完成"
             snapshot_dict = dict(data.snapshot or {})
+            run.market_snapshot_json = _dumps(_slim_market_snapshot(snapshot_dict))
+            run.filter_audit_json = _dumps(dict(data.filter_audit or {}))
             summary = _build_run_summary(
                 list(data.scored_cards), list(data.saved_recommendations),
-                snapshot_dict, None,
+                snapshot_dict, _strip_audit_rows(dict(data.pipeline_audit or {})),
+            )
+            summary["agent_runtime"] = (
+                "rule_only"
+                if bool((data.params or {}).get("disable_agent_review"))
+                else summary.get("agent_runtime")
             )
             summary["execution"] = dict(data.execution_audit or {})
+            summary["stage_timings_ms"] = dict(data.stage_timings_ms or {})
+            summary["stages"] = dict(data.stage_audit or {})
+            summary["degraded_watch_count"] = len(data.degraded_watchlist)
+            summary["degraded_watchlist"] = [
+                {
+                    "code": card.get("code"),
+                    "name": card.get("name"),
+                    "industry": card.get("industry"),
+                    "final_score": card.get("final_score"),
+                    "review_status": "degraded",
+                    "note": "Skill Agent 全部失败，仅作降级观察，不进入正式收益统计",
+                }
+                for card in data.degraded_watchlist
+            ]
+            if data.climax_watchlist:
+                summary["climax_watchlist"] = [
+                    {
+                        "code": card.get("code"),
+                        "name": card.get("name"),
+                        "industry": card.get("industry"),
+                        "final_score": card.get("final_score"),
+                        "effective_score_line": (card.get("score_line_meta") or {}).get("effective_score_line"),
+                        "watchlist_gap": card.get("watchlist_gap"),
+                        "hit_strategies": card.get("watchlist_hit_strategies"),
+                        "note": card.get("watchlist_note"),
+                    }
+                    for card in data.climax_watchlist
+                ]
+            status_counts = Counter(
+                str(card.get("review_status") or "") for card in data.scored_cards
+            )
+            summary["review_status_counts"] = {
+                status: int(status_counts.get(status, 0))
+                for status in ("verified", "partial", "degraded", "rule_only")
+            }
             run.result_summary_json = _dumps(summary)
             db.commit()
 
         invalidate_bootstrap_cache()
 
+        run = db.get(RecommendationRun, run_id)
         return {
-            "run_id": run_id,
-            "status": "completed",
-            "recommended_count": len(data.saved_recommendations),
+            "run": _serialize_run_summary(db, run),
+            "recommendations": [
+                _serialize_recommendation(db, recommendation)
+                for recommendation in data.saved_recommendations
+            ],
         }
 
     except Exception as exc:

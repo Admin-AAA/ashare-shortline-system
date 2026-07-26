@@ -483,7 +483,10 @@ def test_declared_standard_adapter_runs_new_dataset_without_custom_handler():
     orchestrator = build_production_auxiliary_orchestrator(
         {
             fixture.key: StandardAuxiliaryDatasetAdapters(
-                fetcher=FakeFetcher([{"code": "000001", "value": 1}]),
+                fetcher=FakeFetcher([
+                    {"code": "000001", "value": 1},
+                    {"code": "600000", "value": 2},
+                ]),
                 normalizer=FakeNormalizer(),
                 repository=repository,
                 loader=FakeLoader(fixture.view_key),
@@ -504,7 +507,10 @@ def test_declared_standard_adapter_runs_new_dataset_without_custom_handler():
     assert result.is_usable
     assert result.view_key == "fixture.view"
     assert result.persistence is not None
-    assert repository.persisted == ({"code": "000001", "value": 1, "trade_date": TRADE_DATE},)
+    assert repository.persisted == (
+        {"code": "000001", "value": 1, "trade_date": TRADE_DATE},
+        {"code": "600000", "value": 2, "trade_date": TRADE_DATE},
+    )
 
 
 def test_unverified_schema_gate_blocks_production_assembly_without_database_access():
@@ -731,7 +737,10 @@ def test_s4_inventory_exercises_every_state_descriptor_with_no_connection_fakes(
     readiness = NoConnectionSchemaReadiness()
     adapters = {
         entry.key: StandardAuxiliaryDatasetAdapters(
-            fetcher=FakeFetcher([{"code": "000001", "value": entry.key}]),
+            fetcher=FakeFetcher([
+                {"code": "000001", "value": entry.key},
+                {"code": "600000", "value": entry.key},
+            ]),
             normalizer=FakeNormalizer(),
             repository=FakeRepository(AuxiliaryRepositorySnapshot(0)),
             loader=FakeLoader(entry.view_key),

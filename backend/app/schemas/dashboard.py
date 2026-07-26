@@ -87,6 +87,7 @@ class CockpitRecommendation(BaseModel):
     entry_rule: str | None = None
     invalid_rule: str | None = None
     degraded_reason: str | None = None
+    review_status: Literal["verified", "partial", "degraded", "rule_only"] | None = None
     market_context: dict[str, Any] = Field(default_factory=dict)
     skill_breakdown: list[SkillBreakdownItem] = Field(default_factory=list)
     # LLM 审查顶层快捷字段（B 项：候选池卡片不展开即可见 LLM 态度）

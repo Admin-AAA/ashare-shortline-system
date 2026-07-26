@@ -47,6 +47,13 @@ class MarketPersistencePort(Protocol):
         persist_bars: bool,
     ) -> None: ...
 
+    def persist_run_market_context(
+        self,
+        snapshot: StageMapping,
+        *,
+        universe_count: int,
+    ) -> None: ...
+
 
 @runtime_checkable
 class MarketScopePort(Protocol):
@@ -100,6 +107,9 @@ class MarketDataStage:
         breadth = dict(snapshot_dict.get("breadth") or {})
         breadth["run_data_source_mode"] = data_source
         breadth["market_source_audit"] = market_audit
+        execution_audit = dict(data.execution_audit or {})
+        if execution_audit.get("factor_plan"):
+            breadth["factor_execution_plan"] = execution_audit["factor_plan"]
         snapshot_dict["breadth"] = breadth
 
         # 2. Persist market snapshot.
@@ -108,6 +118,10 @@ class MarketDataStage:
             should_persist_bars = data_source in ("realtime", "local_pool_realtime")
             if should_persist_bars:
                 self.market_persistence.persist_stocks_and_bars(stocks, persist_bars=True)
+            self.market_persistence.persist_run_market_context(
+                snapshot_dict,
+                universe_count=len(stocks),
+            )
 
         # 3. Apply market scope.
         if self.market_scope is not None:

@@ -1121,6 +1121,7 @@ def _degraded_card(code, final_score):
         "strategy_signals": [
             {"strategy_id": "s1", "agent_review_unavailable": True, "runtime": "agent_skill_fallback_prelim"}
         ],
+        "review_status": "degraded",
     }
 
 
@@ -1140,9 +1141,8 @@ def _normal_card(code, final_score):
     }
 
 
-def test_agent_unavailable_climax_emits_recommendation():
-    """回归 07-03 空跑：强牛·高潮 + LLM 暂不可用，旧逻辑有效线 113.5 → 0 推荐。
-    修复后应在降级模式下以规则层最高分兜底，至少出 1 条。"""
+def test_agent_unavailable_climax_becomes_watch_only():
+    """Agent 全失败的候选保持可见，但不得伪装成正式推荐。"""
     from app.engine.aggregator import apply_pool_rules
 
     cards = [
@@ -1158,22 +1158,12 @@ def test_agent_unavailable_climax_emits_recommendation():
         return_watchlist=True,
     )
     recs = out["recommendations"] if isinstance(out, dict) else out
-    assert len(recs) >= 1, "LLM 暂不可用时不得零推荐（北极星 A 项）"
-    # 最高分候选应被兜底选出
-    assert max(c["final_score"] for c in recs) == pytest.approx(67.85, abs=0.01)
-    # 降级标记应透出，供前端标注「规则层降级输出」
-    assert any(
-        (c.get("score_line_meta") or {}).get("degraded_agent_unavailable")
-        for c in recs
-    )
+    assert recs == []
+    assert out["degraded_watchlist"][0]["code"] == "600001"
 
 
-def test_agent_unavailable_non_climax_emits_recommendation():
-    """非高潮/强牛/震荡阶段 + LLM 暂不可用，软降线应兜底出票。
-
-    注意：_neutral_snapshot 是震荡（up_ratio=0.45），震荡 soft 已禁；
-    本测用弱势快照验证「允许 soft 的非 climax regime」降级兜底仍在。
-    """
+def test_agent_unavailable_non_climax_becomes_watch_only():
+    """市场阶段不能改变全失败候选的非正式语义。"""
     from app.engine.aggregator import apply_pool_rules
 
     cards = [
@@ -1191,7 +1181,8 @@ def test_agent_unavailable_non_climax_emits_recommendation():
         return_watchlist=True,
     )
     recs = out["recommendations"] if isinstance(out, dict) else out
-    assert len(recs) >= 1, "弱势阶段 LLM 暂不可用时也应兜底出票"
+    assert recs == []
+    assert [c["code"] for c in out["degraded_watchlist"]] == ["600001", "600002"]
 
 
 def test_agent_available_climax_risk_control_preserved():

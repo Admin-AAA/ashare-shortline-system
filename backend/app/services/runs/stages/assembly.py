@@ -46,7 +46,7 @@ def assemble_pipeline_stages(db: Session, *, run_id: str) -> tuple[AnyStage, ...
         ),
         MarketDataStage(
             market_universe=ProductionMarketUniverse(db),
-            market_persistence=ProductionMarketPersistence(db),
+            market_persistence=ProductionMarketPersistence(db, run_id),
             market_scope=ProductionMarketScope(db),
         ),
         AuxiliaryDataStage(
@@ -63,7 +63,7 @@ def assemble_pipeline_stages(db: Session, *, run_id: str) -> tuple[AnyStage, ...
             cost_recording=ProductionCostRecording(db, run_id),
         ),
         AggregationStage(
-            recommendation_assembly=ProductionRecommendationAssembly(db),
+            recommendation_assembly=ProductionRecommendationAssembly(db, run_id),
         ),
         PersistenceStage(
             recommendation_persistence=ProductionRecommendationPersistence(db),

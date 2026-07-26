@@ -14,7 +14,7 @@ import threading
 import time
 from typing import Any
 
-CacheKey = tuple[str, str]
+CacheKey = tuple[str, ...]
 
 _bootstrap_cache_lock = threading.Lock()
 _bootstrap_cache: dict[CacheKey, dict[str, Any]] = {}

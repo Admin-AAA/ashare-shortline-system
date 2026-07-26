@@ -118,8 +118,9 @@ class ProductionMarketUniverse(MarketUniversePort):
 class ProductionMarketPersistence(MarketPersistencePort):
     """Delegate market persistence to existing _persist_market / _persist_stocks_and_bars."""
 
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: Session, run_id: str) -> None:
         self._db = db
+        self._run_id = run_id
 
     def persist_snapshot(self, snapshot: StageMapping) -> None:
         from app.services.workbench_service import _persist_market
@@ -133,6 +134,23 @@ class ProductionMarketPersistence(MarketPersistencePort):
     ) -> None:
         from app.services.workbench_service import _persist_stocks_and_bars
         _persist_stocks_and_bars(self._db, list(stocks), persist_bars=persist_bars)
+
+    def persist_run_market_context(
+        self,
+        snapshot: StageMapping,
+        *,
+        universe_count: int,
+    ) -> None:
+        from app.models.tables import RecommendationRun
+        from app.services.workbench_service import _dumps, _slim_market_snapshot
+
+        run = self._db.get(RecommendationRun, self._run_id)
+        if run is None:
+            raise RuntimeError(f"Run {self._run_id} 不存在")
+        run.trade_date = str(snapshot.get("trade_date") or run.trade_date)
+        run.universe_count = universe_count
+        run.market_snapshot_json = _dumps(_slim_market_snapshot(dict(snapshot)))
+        self._db.flush()
 
 
 class ProductionMarketScope(MarketScopePort):
@@ -225,7 +243,8 @@ class ProductionFeatureBuild(FeatureBuildPort):
         stocks: Sequence[StageMapping],
         snapshot: StageMapping,
     ) -> tuple[tuple[StageMapping, ...], tuple[Any, ...]]:
-        from app.services.feature_builder import build_features, build_research_contexts
+        from app.services.feature_builder import build_features
+        from app.services.research_context import build_research_contexts
         from app.services.workbench_service import _load_calibrated_dsa_weights
 
         features = build_features(
@@ -255,6 +274,7 @@ class ProductionStrategyEvaluation(StrategyEvaluationPort):
         selected_skills: Sequence[StageMapping],
         snapshot: StageMapping,
         params: StageMapping,
+        prefilter_audit: StageMapping,
     ) -> tuple[tuple[StageMapping, ...], tuple[StageMapping, ...], StageMapping, StageMapping]:
         from app.engine.strategy import build_registry_from_skills, StrategyContext
         from app.services.runs.skill_gate import build_skill_rule_gate, finalize_skill_gate_audit
@@ -325,7 +345,7 @@ class ProductionStrategyEvaluation(StrategyEvaluationPort):
             skill_review_limit=skill_review_limit,
             skill_review_concurrency=max(1, int(params.get("agent_review_concurrency") or 1)),
             skill_demo_limited=explicit_review_limit_skipped > 0,
-            prefilter_audit={},
+            prefilter_audit=dict(prefilter_audit),
         )
 
         return tuple(prelim_entries), tuple(skill_candidates), skill_gate_audit, pipeline_audit
@@ -357,7 +377,7 @@ class ProductionReviewExecutor(ReviewExecutorPort):
                 for entry in candidates
             )
 
-        semaphore = asyncio.Semaphore(concurrency)
+        request_limiter = asyncio.Semaphore(concurrency)
 
         async def _process(entry: dict[str, Any]) -> dict[str, Any]:
             stock = entry["stock"]
@@ -367,14 +387,14 @@ class ProductionReviewExecutor(ReviewExecutorPort):
                 for selected in selected_skills
                 if selected["skill_id"] in review_skill_ids
             ]
-            async with semaphore:
-                skill_reviews = await run_skill_reviews(
-                    stock=stock,
-                    skills=review_skills,
-                    snapshot=dict(snapshot),
-                    rule_signals_by_skill=entry["rule_signals"],
-                    session_id=session_id,
-                )
+            skill_reviews = await run_skill_reviews(
+                stock=stock,
+                skills=review_skills,
+                snapshot=dict(snapshot),
+                rule_signals_by_skill=entry["rule_signals"],
+                session_id=session_id,
+                request_limiter=request_limiter,
+            )
             return {**entry, "skill_reviews": skill_reviews}
 
         results = []
@@ -391,13 +411,14 @@ class ProductionCostRecording(CostRecordingPort):
         self._db = db
         self._run_id = run_id
 
-    def record_costs(self, run_id: str) -> None:
+    def record_costs(self, run_id: str) -> tuple[StageMapping, ...]:
         from app.agents.agno_skill_agent import drain_api_costs
         from app.services.cost_service import record_api_call
 
         api_costs = drain_api_costs()
         for cost in api_costs:
             record_api_call(self._db, run_id=run_id, **cost)
+        return tuple(api_costs)
 
 
 # ---------------------------------------------------------------------------
@@ -407,8 +428,9 @@ class ProductionCostRecording(CostRecordingPort):
 class ProductionRecommendationAssembly(RecommendationAssemblyPort):
     """Delegate card building and pool rules to existing helpers."""
 
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: Session, run_id: str) -> None:
         self._db = db
+        self._run_id = run_id
 
     def aggregate(
         self,
@@ -428,11 +450,13 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
         )
         from app.engine.aggregator import apply_pool_rules
         from app.services.feature_builder import market_regime_score
+        from app.services.model_router_service import has_active_model_routes
 
         skill_map = {s["skill_id"]: s["skill"] for s in selected_skills}
         recent_codes = _recent_recommended_codes(self._db, str(snapshot.get("trade_date") or ""))
-        same_day_codes = _same_day_recommended_codes(self._db, str(snapshot.get("trade_date") or ""), None)
-        same_day_industry_counts = _same_day_industry_counts(self._db, str(snapshot.get("trade_date") or ""), None)
+        same_day_codes = _same_day_recommended_codes(
+            self._db, str(snapshot.get("trade_date") or ""), self._run_id,
+        )
         market_score = market_regime_score(dict(snapshot)) or 50.0  # 防御：市场分未就绪时回退中性值
         calibrated_weights = _load_calibrated_agg_weights(self._db)
 
@@ -461,7 +485,25 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
             cards.append(card)
 
         scored_cards = list(cards)
-        return tuple(cards), tuple(scored_cards), {}
+        same_day_industry_counts = _same_day_industry_counts(
+            self._db, str(snapshot.get("trade_date") or ""), self._run_id,
+        )
+        pool_result = apply_pool_rules(
+            scored_cards,
+            output_count=int(params.get("output_count") or 0),
+            score_line=float(params.get("score_line") or 72.0),
+            market_snapshot=dict(snapshot),
+            risk_template=str(params.get("risk_template") or "balanced"),
+            return_watchlist=True,
+            same_day_industry_counts=same_day_industry_counts,
+            agent_available=has_active_model_routes(),
+        )
+        formal_cards = list(pool_result.get("recommendations") or [])
+        pipeline_updates: dict[str, Any] = {
+            "watchlist": list(pool_result.get("watchlist") or []),
+            "degraded_watchlist": list(pool_result.get("degraded_watchlist") or []),
+        }
+        return tuple(formal_cards), tuple(scored_cards), pipeline_updates
 
 
 # ---------------------------------------------------------------------------

@@ -49,14 +49,21 @@ def market_benchmark(db, run_mode: str = "formal") -> dict:
           FROM recommendations rec
           JOIN recommendation_runs ru ON ru.run_id = rec.run_id
           WHERE ru.run_mode = :mode
+        ), price_pairs AS (
+          SELECT code,
+                 trade_date,
+                 close AS entry_close,
+                 LEAD(close, 5) OVER (PARTITION BY code ORDER BY trade_date) AS exit_close
+          FROM daily_kbars
         )
         SELECT
           COUNT(*) AS total,
-          SUM(CASE WHEN dk.pct_chg > 0 THEN 1 ELSE 0 END) AS up,
-          ROUND(AVG(dk.pct_chg), 2) AS avg_pct
-        FROM daily_kbars dk
-        WHERE dk.trade_date IN (SELECT trade_date FROM rec_dates)
-          AND dk.pct_chg IS NOT NULL
+          SUM(CASE WHEN pp.exit_close > pp.entry_close THEN 1 ELSE 0 END) AS up,
+          ROUND(AVG((pp.exit_close / pp.entry_close - 1) * 100), 2) AS avg_pct
+        FROM price_pairs pp
+        WHERE pp.trade_date IN (SELECT trade_date FROM rec_dates)
+          AND pp.entry_close > 0
+          AND pp.exit_close > 0
     """), {"mode": run_mode}).fetchone()
     total = int(row[0] or 0)
     up = int(row[1] or 0)
@@ -64,6 +71,7 @@ def market_benchmark(db, run_mode: str = "formal") -> dict:
         "total": total,
         "win_rate": round(up / total * 100, 1) if total else 0,
         "avg_return": float(row[2] or 0),
+        "horizon_days": 5,
     }
 
 

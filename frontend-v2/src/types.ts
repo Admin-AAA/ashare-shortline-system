@@ -229,6 +229,7 @@ export type CockpitRecommendation = {
   entry_rule?: string | null;
   invalid_rule?: string | null;
   degraded_reason?: string | null;
+  review_status?: "verified" | "partial" | "degraded" | "rule_only" | null;
   market_context?: {
     main_industries?: string[];
     breadth?: Record<string, unknown>;

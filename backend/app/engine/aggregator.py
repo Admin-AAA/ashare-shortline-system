@@ -507,7 +507,7 @@ def _extract_skill_agent_score(signals: list[dict[str, Any]]) -> float:
     skill_scores: list[tuple[float, float]] = []  # (score, weight)
     for signal in signals:
         review = signal.get("agent_skill_review")
-        if not isinstance(review, dict):
+        if not isinstance(review, dict) or str(review.get("runtime") or "") == "agent_skill_fallback_prelim":
             continue
         stance = review.get("stance", "neutral")
         weight = float(signal.get("weight", 1.0))
@@ -699,11 +699,14 @@ def aggregate(
 
     # --- 检测是否无 Agent 审查（回测/纯规则模式）---
     has_agent_reviews = any(
-        isinstance(s.get("agent_skill_review"), dict) for s in signals
+        isinstance(s.get("agent_skill_review"), dict)
+        and str((s.get("agent_skill_review") or {}).get("runtime") or "") != "agent_skill_fallback_prelim"
+        for s in signals
     )
     agent_review_count = sum(
         1 for s in signals
         if isinstance(s.get("agent_skill_review"), dict)
+        and str((s.get("agent_skill_review") or {}).get("runtime") or "") != "agent_skill_fallback_prelim"
     )
 
     # --- 加权聚合（校准权重为基底 + 阶段动态调整） ---
@@ -922,8 +925,14 @@ def apply_pool_rules(
     _ctx_base = score_line_context.get("market_base")
     _ctx_sentiment = score_line_context.get("market_sentiment")
     _disable_soft_floor = _ctx_sentiment == "高潮" or _ctx_base == "强牛"
+    degraded_watchlist = sorted(
+        (card for card in cards if card.get("review_status") == "degraded"),
+        key=lambda card: float(card.get("final_score", 0)),
+        reverse=True,
+    )[: max(1, int(output_count or watchlist_top_n))]
+    formal_cards = [card for card in cards if card.get("review_status") != "degraded"]
     ordered = sorted(
-        cards,
+        formal_cards,
         key=lambda card: float(card.get("final_score", 0)),
         reverse=True,
     )
@@ -1159,7 +1168,11 @@ def apply_pool_rules(
         )
         watchlist = watchlist[:watchlist_top_n]
         _recs = result[:display_limit] if (display_limit and display_limit > 0) else result
-        return {"recommendations": _recs, "watchlist": watchlist}
+        return {
+            "recommendations": _recs,
+            "watchlist": watchlist,
+            "degraded_watchlist": degraded_watchlist,
+        }
     if display_limit is None:
         return result
     if display_limit <= 0:

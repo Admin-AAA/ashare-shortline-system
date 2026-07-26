@@ -86,8 +86,11 @@ def readiness_check(db: Session) -> dict[str, Any]:
     from app.core.config import get_settings
 
     settings = get_settings()
+    from app.services.data_health_service import _resolve_reference_trade_date
+
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    today = now.strftime("%Y-%m-%d")
+    reference_info = _resolve_reference_trade_date(db)
+    reference_trade_date = str(reference_info.get("reference_trade_date") or "")
 
     checks = {}
 
@@ -109,7 +112,7 @@ def readiness_check(db: Session) -> dict[str, Any]:
     bar_count = db.scalar(select(func.count()).select_from(DailyKbar)) or 0
     today_bars = db.scalar(
         select(func.count()).select_from(DailyKbar).where(
-            DailyKbar.trade_date >= today
+            DailyKbar.trade_date == reference_trade_date
         )
     ) or 0
     checks["daily_bar"] = {
@@ -122,7 +125,7 @@ def readiness_check(db: Session) -> dict[str, Any]:
     # 概念板块
     concept_count = db.scalar(
         select(func.count()).select_from(ConceptSector).where(
-            ConceptSector.trade_date == today
+            ConceptSector.trade_date == reference_trade_date
         )
     ) or 0
     checks["concept_sector"] = {
@@ -132,7 +135,14 @@ def readiness_check(db: Session) -> dict[str, Any]:
     }
 
     # 龙虎榜（最近 5 天）
-    dt_cutoff = (now - timedelta(days=5)).strftime("%Y-%m-%d")
+    recent_trade_dates = list(db.scalars(
+        select(DailyKbar.trade_date)
+        .where(DailyKbar.trade_date <= reference_trade_date)
+        .distinct()
+        .order_by(DailyKbar.trade_date.desc())
+        .limit(5)
+    )) if reference_trade_date else []
+    dt_cutoff = min(recent_trade_dates) if recent_trade_dates else reference_trade_date
     dt_count = db.scalar(
         select(func.count()).select_from(DragonTiger).where(
             DragonTiger.trade_date >= dt_cutoff
@@ -147,7 +157,7 @@ def readiness_check(db: Session) -> dict[str, Any]:
     # 资金流向（今日）
     flow_count = db.scalar(
         select(func.count()).select_from(CapitalFlow).where(
-            CapitalFlow.trade_date == today
+            CapitalFlow.trade_date == reference_trade_date
         )
     ) or 0
     checks["capital_flow"] = {
@@ -185,6 +195,8 @@ def readiness_check(db: Session) -> dict[str, Any]:
 
     return {
         "checked_at": now.isoformat(),
+        "reference_trade_date": reference_trade_date or None,
+        "reference_trade_date_source": reference_info.get("source"),
         "overall_status": overall,
         "can_run_recommendation": can_run,
         "checks": checks,

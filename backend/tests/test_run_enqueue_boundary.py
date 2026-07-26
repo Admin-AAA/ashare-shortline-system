@@ -307,12 +307,12 @@ def test_scheduler_enqueue_and_worker_load_use_only_canonical_run_identity(monke
             assert run_id == "run-scheduler"
             return SimpleNamespace(request=expected_request)
 
-    async def run_workbench(received_db, request, *, existing_run_id: str):
-        captured.update({"db": received_db, "request": request, "run_id": existing_run_id})
+    async def staged_pipeline(received_db, *, run_id: str, request):
+        captured.update({"db": received_db, "request": request, "run_id": run_id})
 
     monkeypatch.setattr(run_workbench_subprocess, "SessionLocal", lambda: db)
     monkeypatch.setattr(run_workbench_subprocess, "SQLAlchemyRunRepository", Repository)
-    monkeypatch.setattr(run_workbench_subprocess, "run_workbench", run_workbench)
+    monkeypatch.setattr(run_workbench_subprocess, "run_staged_pipeline", staged_pipeline)
     monkeypatch.setattr(db, "close", lambda: setattr(db, "closed", True))
 
     asyncio.run(run_workbench_subprocess._run("run-scheduler"))
@@ -341,8 +341,25 @@ def test_resume_dispatches_only_run_id_after_reloading_canonical_request(monkeyp
         assert result["queued"] is True
         assert dispatched == [run_id]
         assert record is not None
-        assert record.status is RunStatus.RUNNING
+        # The worker, not the HTTP process, owns the replay/resume transition.
+        assert record.status is RunStatus.INTERRUPTED
         assert record.request.run_mode is RunMode.EXPERIMENT
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_dispatcher_keeps_interrupted_state_for_worker_recovery():
+    engine, session = _sqlite_session()
+    run_id = "run-dispatch-interrupted"
+    repository = _make_interrupted_run(session, run_id)
+
+    try:
+        assert workbench_service._mark_run_dispatched(session, run_id) is True
+        session.commit()
+        record = repository.get_run(run_id)
+        assert record is not None
+        assert record.status is RunStatus.INTERRUPTED
     finally:
         session.close()
         engine.dispose()
@@ -395,12 +412,12 @@ def test_worker_restart_and_recovery_preserve_each_canonical_run_mode(monkeypatc
                 assert received_run_id == run_id
                 return SimpleNamespace(request=expected_request)
 
-        async def worker_run(received_db, request, *, existing_run_id: str):
-            captured.update({"db": received_db, "request": request, "run_id": existing_run_id})
+        async def worker_run(received_db, *, run_id: str, request):
+            captured.update({"db": received_db, "request": request, "run_id": run_id})
 
         monkeypatch.setattr(run_workbench_subprocess, "SessionLocal", lambda: worker_db)
         monkeypatch.setattr(run_workbench_subprocess, "SQLAlchemyRunRepository", WorkerRepository)
-        monkeypatch.setattr(run_workbench_subprocess, "run_workbench", worker_run)
+        monkeypatch.setattr(run_workbench_subprocess, "run_staged_pipeline", worker_run)
 
         asyncio.run(run_workbench_subprocess._run(run_id))
 

@@ -29,11 +29,7 @@
 `outcome_service.py`，只是内部改为调用本模块的模拟函数——`outcome_service` 因此瘦成
 "只读上报 + 调度" 层，模拟逻辑收口到这里。
 
-`_ADDITIONAL_COST_PCT`（佣金+印花税成本常量）仍定义在 `outcome_service.py`
-（不是模拟引擎配置，是指标/口径常量，被 `outcome_service` 内多个非模拟函数复用），
-`_simulate_outcome` 对它使用**函数内延迟 import**，避免与 `outcome_service`
-形成模块级循环依赖（`outcome_service` 需要从本模块 re-export `_simulate_outcome`
-等名字）。
+佣金与印花税口径由 `app.engine.trading_costs` 统一提供，模拟和指标共享同一纯函数。
 """
 from __future__ import annotations
 
@@ -43,6 +39,7 @@ from datetime import time
 from typing import Any
 
 from app.engine.board_rules import is_one_word_limit_down_bar, limit_pct_for_code
+from app.engine.trading_costs import is_net_profitable
 from app.models.tables import DailyKbar, Recommendation
 
 # A 股 T+1 交收：买入当日不能卖出。推荐时点决定入场日与最早可离场日：
@@ -91,7 +88,7 @@ STOP_LOSS_GAP_CAP_PCT = -15.0  # 跳空止损最大亏损上限：open 远低于
 MAX_ENTRY_GAP_PCT = 10.0       # 跳空高开 > 10% 则放弃入场（历史数据：gap>10% 胜率 0%）
 
 # 条件 trailing stop（移动止盈）：仅在既未触及 stop_loss 也未触及 take_profit 的 bar 上激活
-# 回测验证（235 笔 formal 样本，min 时序口径，扣费 0.10%/笔）：
+# 回测验证（235 笔 formal 样本，min 时序口径，扣费口径现统一为 0.07%/笔）：
 #   胜率 49.4%→66.8%、盈亏比 1.38→1.89、总收益 +232→+685、最大亏损 -15.19%→-7.17%
 # 时间分割验证（防过拟合）：前半 盈亏比 1.97→2.40，后半（样本外）1.51→1.67，两半均正向
 # 网格搜索结论：activate=2.0 主导（更早锁利避开回吐），callback=0.8 次要；高 activate(4+/5+) 有跳空尾部风险
@@ -136,10 +133,6 @@ def _simulate_outcome(
     *,
     pre_resolved_entry: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    # _ADDITIONAL_COST_PCT 仍定义在 outcome_service（口径常量，非模拟引擎配置），
-    # 延迟 import 避免模块级循环依赖（outcome_service 需要从本模块 re-export 名字）。
-    from app.services.outcome_service import _ADDITIONAL_COST_PCT
-
     if not bars:
         return None
 
@@ -329,8 +322,8 @@ def _simulate_outcome(
     # outcome_label 与 accuracy policy 对齐：扣费滑点后净收益 > 0 即为准确推荐
     # SUCCESS_RETURN_PCT (3%) 是"优质推荐"阈值，不作为 outcome 硬门槛
     # executed_return 已含滑点但未扣佣金+印花税（_ADDITIONAL_COST_PCT，佣金万1双边+印花税0.05%卖出），
-    # 阈值必须覆盖这部分成本，否则 0~0.10% 的微利交易被标 success 但实际亏损
-    outcome_label = OUTCOME_SUCCESS if (executed_return > _ADDITIONAL_COST_PCT and not hit_invalid) else OUTCOME_FAILED
+    # 阈值必须覆盖这部分成本，否则 0~0.07% 的微利交易被标 success 但实际亏损
+    outcome_label = OUTCOME_SUCCESS if (is_net_profitable(executed_return) and not hit_invalid) else OUTCOME_FAILED
 
     return {
         **static_metrics,

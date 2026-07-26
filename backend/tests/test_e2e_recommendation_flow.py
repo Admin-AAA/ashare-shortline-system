@@ -300,6 +300,9 @@ class TestE2ERecommendationFlow:
 
         # Build features
         from app.services.feature_builder import build_features
+        from app.services.factors.registry import bootstrap_default_factor_registry
+
+        bootstrap_default_factor_registry()
         features = build_features(stocks, snapshot)
         assert len(features) == 30
 
@@ -1181,12 +1184,51 @@ class TestE2ERecommendationFlow:
             ],
         )
 
-        assert audit["failed_count"] == 2
+        assert audit["requested_count"] == 1
+        assert audit["success_count"] == 0
+        assert audit["failed_count"] == 1
         assert audit["affected_stock_count"] == 1
         assert audit["affected_skill_count"] == 1
         assert audit["api_failure_count"] == 1
-        assert audit["reason_counts"] == {"model_payment_required": 2}
+        assert audit["provider_attempt_failure_count"] == 1
+        assert audit["reason_counts"] == {"model_payment_required": 1}
         assert "Payment Required" in audit["sample_errors"][0]
+
+    def test_skill_review_failure_audit_counts_planned_review_without_result_row(self):
+        audit = _skill_review_failure_audit(
+            [{
+                "stock": {"code": "600000"},
+                "review_skill_ids": ["skill-a", "skill-b"],
+                "skill_reviews": [{
+                    "skill_id": "skill-a",
+                    "review": {"score": 80},
+                    "error": None,
+                }],
+            }],
+            [],
+        )
+
+        assert audit["requested_count"] == 2
+        assert audit["success_count"] == 1
+        assert audit["failed_count"] == 1
+        assert audit["success_count"] + audit["failed_count"] == audit["requested_count"]
+
+    def test_skill_review_failure_audit_treats_cache_hit_as_successful_provider_event(self):
+        audit = _skill_review_failure_audit(
+            [{
+                "review_skill_ids": ["skill-a"],
+                "skill_reviews": [{
+                    "skill_id": "skill-a",
+                    "review": {"score": 80},
+                    "error": None,
+                }],
+            }],
+            [{"status": "cache_hit", "error_message": None}],
+        )
+
+        assert audit["success_count"] == 1
+        assert audit["failed_count"] == 0
+        assert audit["provider_attempt_failure_count"] == 0
 
     def test_bootstrap_handles_empty_pool(self, db, monkeypatch):
         """17.1: bootstrap should not crash when the market pool is empty."""
@@ -1283,7 +1325,7 @@ class TestE2ERecommendationFlow:
 
         monkeypatch.setattr(workbench_service, "bootstrap_workbench_state", fake_bootstrap)
         monkeypatch.setattr(workbench_service, "list_presets", lambda _db: [{"preset_id": "p1"}])
-        monkeypatch.setattr(workbench_service, "list_runs", lambda _db: [{"run_id": "r1"}])
+        monkeypatch.setattr(workbench_service, "list_runs", lambda _db, **_kwargs: [{"run_id": "r1"}])
         monkeypatch.setattr(workbench_service, "list_skills", lambda _db: [{"skill_id": "s1"}])
 
         import app.services.data_sources as data_sources_service
@@ -1340,6 +1382,7 @@ class TestE2ERecommendationFlow:
     def test_sync_run_market_failure_persists_failed_run(self, db, monkeypatch):
         """Synchronous runs should be visible and failed if market loading fails early."""
         from app.services import workbench_service
+        from app.services.market_source import local_pool_adapter
 
         run_name = f"同步失败测试-{uuid.uuid4().hex[:8]}"
         _seed_skill_registry(db)
@@ -1349,7 +1392,7 @@ class TestE2ERecommendationFlow:
         def fail_market(_db, *, data_source, as_of_date=None):
             raise RuntimeError("market pool timeout")
 
-        monkeypatch.setattr(workbench_service, "load_legacy_market_universe", fail_market)
+        monkeypatch.setattr(local_pool_adapter, "load_legacy_market_universe", fail_market)
 
         persisted = None
         try:

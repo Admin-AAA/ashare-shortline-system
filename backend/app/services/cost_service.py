@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.models.tables import ApiCallLog, RecommendationRun, ScheduledTask, ScheduledTaskRun
 
@@ -185,14 +185,41 @@ def list_scheduled_task_runs(
     limit: int = 100,
     *,
     task_id: str | None = None,
+    include_result: bool = True,
 ) -> list[dict[str, Any]]:
     stmt = select(ScheduledTaskRun)
+    if not include_result:
+        stmt = stmt.options(
+            defer(ScheduledTaskRun.result_json),
+            defer(ScheduledTaskRun.payload_json),
+        )
     if task_id:
         stmt = stmt.where(ScheduledTaskRun.task_id == task_id)
     runs = db.scalars(
         stmt.order_by(ScheduledTaskRun.started_at.desc()).limit(limit)
     ).all()
-    return [_serialize_task_run(run) for run in runs]
+    related_run_ids: dict[str, str | None] = {}
+    if not include_result and runs:
+        dialect = str(db.bind.dialect.name if db.bind is not None else "")
+        related_expr = func.json_extract(ScheduledTaskRun.result_json, "$.related_run_id")
+        if dialect == "mysql":
+            related_expr = func.json_unquote(related_expr)
+        rows = db.execute(
+            select(ScheduledTaskRun.task_run_id, related_expr)
+            .where(ScheduledTaskRun.task_run_id.in_([run.task_run_id for run in runs]))
+        ).all()
+        related_run_ids = {
+            str(task_run_id): str(related_run_id) if related_run_id else None
+            for task_run_id, related_run_id in rows
+        }
+    return [
+        _serialize_task_run(
+            run,
+            include_result=include_result,
+            related_run_id=related_run_ids.get(run.task_run_id),
+        )
+        for run in runs
+    ]
 
 
 def serialize_scheduled_task_run(run: ScheduledTaskRun) -> dict[str, Any]:
@@ -384,9 +411,14 @@ def _daily_trigger_time(cron_expression: str | None) -> str | None:
         return None
 
 
-def _serialize_task_run(run: ScheduledTaskRun) -> dict[str, Any]:
-    payload = _loads(run.payload_json, {})
-    result = _loads(run.result_json, {})
+def _serialize_task_run(
+    run: ScheduledTaskRun,
+    *,
+    include_result: bool = True,
+    related_run_id: str | None = None,
+) -> dict[str, Any]:
+    payload = _loads(run.payload_json, {}) if include_result else None
+    result = _loads(run.result_json, {}) if include_result else {}
     duration_seconds = None
     if run.started_at and run.finished_at:
         duration_seconds = max(0, int((run.finished_at - run.started_at).total_seconds()))
@@ -400,12 +432,12 @@ def _serialize_task_run(run: ScheduledTaskRun) -> dict[str, Any]:
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
         "status": run.status,
         "summary": run.summary,
-        "summary_text": _task_run_summary_text(run, result),
+        "summary_text": _task_run_summary_text(run, result) if include_result else (run.summary or run.error_message or ""),
         "error_message": run.error_message,
         "duration_seconds": duration_seconds,
         "payload": payload,
-        "result": result,
-        "related_run_id": result.get("related_run_id"),
+        "result": result if include_result else None,
+        "related_run_id": result.get("related_run_id") if include_result else related_run_id,
     }
 
 

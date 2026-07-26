@@ -124,6 +124,7 @@ class RunTrigger(str, Enum):
     HEARTBEAT_TIMEOUT = "heartbeat_timeout"
     CANCEL = "cancel"
     RESUME = "resume"
+    REPLAY = "replay"
 
 
 class RunErrorCode(str, Enum):

@@ -46,12 +46,21 @@ class StageData:
     skill_candidates: tuple[StageMapping, ...] = ()
     skill_gate_audit: StageMapping | None = None
     pipeline_audit: StageMapping | None = None
+    filter_audit: StageMapping | None = None
     candidate_results: tuple[StageMapping, ...] = ()
+    api_costs: tuple[StageMapping, ...] = ()
+    skill_review_failure_audit: StageMapping | None = None
 
     # aggregation / persistence
     cards: tuple[StageMapping, ...] = ()
     scored_cards: tuple[StageMapping, ...] = ()
+    degraded_watchlist: tuple[StageMapping, ...] = ()
+    climax_watchlist: tuple[StageMapping, ...] = ()
     saved_recommendations: tuple[object, ...] = ()
+
+    # orchestration audit
+    stage_timings_ms: StageMapping | None = None
+    stage_audit: StageMapping | None = None
 
     def with_updates(self, **changes: object) -> "StageData":
         """Return a new stage hand-off without mutating prior-stage output."""

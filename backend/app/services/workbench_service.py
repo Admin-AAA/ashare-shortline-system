@@ -1,18 +1,11 @@
-import hashlib
 import json
 import logging
-import os
-import queue
-import shutil
-import subprocess
-import sys
 import threading
 import time
 import uuid
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-import asyncio
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -26,6 +19,7 @@ from app.agents.session_registry import AgentSessionRegistry
 from app.db.session import SessionLocal
 from app.core.config import get_settings
 from app.engine.agent_skill_runner import agent_only_signal, enrich_signal_with_agent_review
+from app.engine.trading_costs import is_net_profitable
 from app.services.model_router_service import has_active_model_routes
 from app.engine.aggregator import (
     aggregate,
@@ -175,92 +169,6 @@ RUN_RESUMABLE_STATUSES = {"interrupted"}
 PROGRESS_COMMIT_INTERVAL_SECONDS = 10.0
 UPSERT_BATCH_SIZE = 1000
 
-# 断点阶段常量，按执行顺序排列
-CHECKPOINT_ORDER = [
-    "prepare",
-    "market_data",
-    "scope_filter",
-    "auxiliary_data",
-    "feature_build",
-    "rule_scan",
-    "skill_gate",
-    "skill_review",
-    "aggregate",
-    "persist",
-]
-def _select_aux_prefetch_codes(stocks: list[dict[str, Any]], count: int) -> list[str]:
-    if count <= 0 or not stocks:
-        return []
-
-    ordered = [item for item in stocks if str(item.get("code") or "")]
-    if count >= len(ordered):
-        return [str(item["code"]) for item in ordered]
-
-    def _num_field(item: dict[str, Any], field: str) -> float:
-        return float(item.get(field) or 0)
-
-    def _small_mid_cap_score(item: dict[str, Any]) -> tuple[float, float]:
-        free_mv = _num_field(item, "free_mv_yi")
-        if free_mv <= 0:
-            return (-1.0, _num_field(item, "amount_yi"))
-        if free_mv <= 300:
-            return (300.0 - free_mv, _num_field(item, "amount_yi"))
-        return (-free_mv, _num_field(item, "amount_yi"))
-
-    ranking_groups = [
-        sorted(ordered, key=lambda item: (_num_field(item, "amount_yi"), _num_field(item, "pct")), reverse=True),
-        sorted(ordered, key=lambda item: (_num_field(item, "turnover_rate"), _num_field(item, "pct")), reverse=True),
-        sorted(ordered, key=lambda item: (_num_field(item, "pct"), _num_field(item, "amount_yi")), reverse=True),
-        sorted(ordered, key=_small_mid_cap_score, reverse=True),
-    ]
-
-    industry_best: list[dict[str, Any]] = []
-    seen_industries: set[str] = set()
-    industry_quota = max(1, min(6, count // 3))
-    for item in ranking_groups[0]:
-        industry = str(item.get("industry") or "")
-        if not industry or industry == "未分类" or industry in seen_industries:
-            continue
-        seen_industries.add(industry)
-        industry_best.append(item)
-        if len(industry_best) >= industry_quota:
-            break
-
-    selected: list[str] = []
-    seen_codes: set[str] = set()
-
-    def _append(item: dict[str, Any]) -> None:
-        code = str(item.get("code") or "")
-        if not code or code in seen_codes:
-            return
-        seen_codes.add(code)
-        selected.append(code)
-
-    for item in industry_best:
-        _append(item)
-        if len(selected) >= count:
-            return selected
-
-    pointers = [0 for _ in ranking_groups]
-    while len(selected) < count:
-        progressed = False
-        for idx, group in enumerate(ranking_groups):
-            while pointers[idx] < len(group):
-                item = group[pointers[idx]]
-                pointers[idx] += 1
-                code = str(item.get("code") or "")
-                if not code or code in seen_codes:
-                    continue
-                _append(item)
-                progressed = True
-                break
-            if len(selected) >= count:
-                return selected
-        if not progressed:
-            break
-    return selected
-
-
 def _resolve_aux_prefetch_count(
     prefiltered_count: int,
     min_prefilter_count: int,
@@ -386,7 +294,12 @@ def _mark_run_dispatched(db: Session, run_id: str) -> bool:
     repository = SQLAlchemyRunRepository(db)
     coordinator = LegacyWorkbenchRunCoordinator(repository)
     managed = repository.get_run(run_id) is not None
-    started = coordinator.start_dispatch(run_id, now=now) if managed else False
+    record = repository.get_run(run_id) if managed else None
+    # Recovery must remain INTERRUPTED across the process boundary.  The child
+    # pipeline decides whether to replay from PREPARE or only verify a committed
+    # persistence checkpoint, then performs the appropriate lifecycle CAS.
+    recovering = record is not None and record.status is RunStatus.INTERRUPTED
+    started = recovering or (coordinator.start_dispatch(run_id, now=now) if managed else False)
     if managed and not started:
         logger.warning("dispatcher did not acquire queued Run lifecycle transition: %s", run_id)
         return False
@@ -461,11 +374,12 @@ def _auto_backfill_outcomes(db: Session, horizon_days: int = 5, min_interval_sec
         logger.exception("automatic outcome backfill failed")
 
 
-def get_initial_workbench_state(db: Session) -> dict[str, Any]:
+def get_initial_workbench_state(db: Session, *, detail: str = "summary") -> dict[str, Any]:
     from app.services.cost_service import list_scheduled_task_runs
 
     settings = get_settings()
-    cache_key = (settings.database_url, str(settings.skills_dir.resolve()))
+    include_full_detail = detail == "full"
+    cache_key = (settings.database_url, str(settings.skills_dir.resolve()), detail)
     cached = get_initial_state_cache(cache_key, INITIAL_STATE_CACHE_TTL_SECONDS)
     if cached is not None:
         return cached
@@ -479,9 +393,13 @@ def get_initial_workbench_state(db: Session) -> dict[str, Any]:
     t1 = time.perf_counter()
     presets = list_presets(db)
     t2 = time.perf_counter()
-    runs = list_runs(db)
+    runs = list_runs(db, limit=100 if include_full_detail else 20)
     t3 = time.perf_counter()
-    task_runs = list_scheduled_task_runs(db)
+    task_runs = list_scheduled_task_runs(
+        db,
+        limit=100 if include_full_detail else 20,
+        include_result=include_full_detail,
+    )
     t35 = time.perf_counter()
     skills = list_skills(db)
     t4 = time.perf_counter()
@@ -509,7 +427,12 @@ def get_initial_workbench_state(db: Session) -> dict[str, Any]:
     return payload
 
 
-def enqueue_workbench_run(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+def enqueue_workbench_run(
+    db: Session,
+    payload: dict[str, Any],
+    *,
+    dispatch: bool = True,
+) -> dict[str, Any]:
     """Persist a canonical queued request before the dispatcher may spawn a worker."""
     skills = sync_skills(db)
     skill_map = {skill.skill_id: skill for skill in skills}
@@ -553,7 +476,8 @@ def enqueue_workbench_run(db: Session, payload: dict[str, Any]) -> dict[str, Any
     )
     db.commit()
     invalidate_bootstrap_cache()
-    _run_dispatcher.enqueue(run_id)
+    if dispatch:
+        _run_dispatcher.enqueue(run_id)
     return {
         "run": _serialize_run_summary(db, run),
         "recommendations": [],
@@ -574,14 +498,14 @@ def dispatch_workbench_run(db: Session, run_id: str) -> None:
     record = SQLAlchemyRunRepository(db).get_run(normalized_run_id)
     if record is None:
         raise RuntimeError(f"Run {normalized_run_id} 没有可用的 canonical request")
-    if record.status not in {RunStatus.QUEUED, RunStatus.RUNNING}:
+    if record.status not in {RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.INTERRUPTED}:
         raise RuntimeError(f"Run {normalized_run_id} 当前状态不可派发: {record.status.value}")
     # The caller owns the preceding CAS commit.  No request payload is allowed to
     # cross this boundary; the dispatcher carries only run_id.
     _run_dispatcher.enqueue(normalized_run_id)
 
 
-def list_runs(db: Session, limit: int = 100) -> list[dict[str, Any]]:
+def list_runs(db: Session, limit: int = 100, *, run_mode: str | None = None) -> list[dict[str, Any]]:
     # 列表序列化（serialize_run_summary）只用标量列 + result_summary_json + selected_skills_json，
     # 不用 params_json/market_snapshot_json/filter_audit_json/request_json（每个几十~几百 KB）。
     # defer 这4个大字段避免 500 run 传输几十 MB JSON + ORM 实例化（list_runs 1.26s 主因）。
@@ -592,12 +516,10 @@ def list_runs(db: Session, limit: int = 100) -> list[dict[str, Any]]:
         RecommendationRun.filter_audit_json,
         RecommendationRun.request_json,
     )
-    stmt = (
-        select(RecommendationRun)
-        .options(*[defer(c) for c in _LIST_DEFERRED])
-        .order_by(RecommendationRun.started_at.desc())
-        .limit(limit)
-    )
+    stmt = select(RecommendationRun).options(*[defer(c) for c in _LIST_DEFERRED])
+    if run_mode:
+        stmt = stmt.where(RecommendationRun.run_mode == run_mode)
+    stmt = stmt.order_by(RecommendationRun.started_at.desc()).limit(limit)
     runs = db.scalars(stmt).all()
     _auto_recover_stale_runs(db, runs)
     return _serialize_run_summaries_batched(db, runs)
@@ -1114,36 +1036,6 @@ def recover_interrupted_runs(db: Session, run_ids: list[str] | None = None) -> i
     return recovered
 
 
-def _save_checkpoint(db: Session, run_id: str, phase: str) -> None:
-    """Commit the legacy checkpoint and, when present, its canonical lifecycle twin."""
-    run = db.get(RecommendationRun, run_id)
-    if run is None:
-        return
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    run.checkpoint_phase = phase
-    run.heartbeat_at = now
-    # New runs have an opaque lease and receive monotonic RunPhase checkpoints.
-    # Renew in the same worker turn so a long stage can never commit after expiry.
-    lifecycle_repository = SQLAlchemyRunRepository(db)
-    lifecycle = LegacyWorkbenchRunCoordinator(lifecycle_repository)
-    lifecycle_record = lifecycle_repository.get_run(run_id)
-    if lifecycle_record is not None and lifecycle_record.lease is not None:
-        if not lifecycle.renew_worker_lease(
-            run_id,
-            now=now,
-            ttl=timedelta(seconds=RUN_HEARTBEAT_STALE_SECONDS),
-        ):
-            raise RuntimeError("Run lifecycle lease 已丢失或过期，不能提交 checkpoint")
-    # Old runs keep their original resume behavior without a forced backfill.
-    lifecycle.sync_checkpoint(
-        run_id,
-        legacy_phase=phase,
-        now=now,
-    )
-    db.commit()
-    _record_progress_commit(run)
-
-
 def _should_commit_progress(
     run_id: str,
     phase: str,
@@ -1178,14 +1070,6 @@ def _record_progress_commit(run: RecommendationRun) -> None:
             }
         else:
             _progress_commit_state.pop(run.run_id, None)
-
-
-def _phase_index(phase: str) -> int:
-    """返回阶段在 CHECKPOINT_ORDER 中的索引，未知阶段返回 -1。"""
-    try:
-        return CHECKPOINT_ORDER.index(phase)
-    except ValueError:
-        return -1
 
 
 def _persist_run_start(
@@ -1249,708 +1133,36 @@ def _persist_run_start(
     return run
 
 
-async def run_workbench(db: Session, payload: dict[str, Any], existing_run_id: str | None = None) -> dict[str, Any]:
-    run_id = existing_run_id or _new_run_id()
-    is_resume = bool(existing_run_id)
+async def run_workbench(
+    db: Session,
+    payload: dict[str, Any] | RunRequest,
+    existing_run_id: str | None = None,
+) -> dict[str, Any]:
+    """Compatibility entry point delegating to the canonical eight-stage pipeline."""
+    from app.services.runs.pipeline import run_staged_pipeline
 
-    # 读取断点信息；已有 run 必须先通过 canonical request cutover guard。
-    checkpoint_phase: str | None = None
-    existing_run: RecommendationRun | None = None
-    existing_request: RunRequest | None = None
-    if is_resume:
-        existing_run = db.get(RecommendationRun, run_id)
-        if existing_run is None:
-            raise RuntimeError(f"Run {run_id} 不存在")
-        existing_request = load_canonical_run_request(existing_run)
-        if existing_run.checkpoint_phase:
-            checkpoint_phase = existing_run.checkpoint_phase
-        logger.info("resume run %s from checkpoint %s", run_id, checkpoint_phase or "start")
-
-    def _should_run(phase: str) -> bool:
-        """断点之前的阶段跳过，从断点下一阶段开始执行。"""
-        if not checkpoint_phase:
-            return True
-        return _phase_index(phase) > _phase_index(checkpoint_phase)
-
-    lifecycle_repository = SQLAlchemyRunRepository(db)
-    lifecycle = LegacyWorkbenchRunCoordinator(lifecycle_repository)
-    if existing_run is not None:
-        lifecycle_now = datetime.now(timezone.utc).replace(tzinfo=None)
-        if existing_run.status == "interrupted" and not lifecycle.resume(run_id, now=lifecycle_now):
-            raise RuntimeError("Run interrupted resume 缺少有效 checkpoint、存在活跃 lease 或 CAS 冲突")
-        lease = lifecycle.acquire_worker_lease(
-            run_id,
-            now=lifecycle_now,
-            ttl=timedelta(seconds=RUN_HEARTBEAT_STALE_SECONDS),
-        )
-        if lifecycle_repository.get_run(run_id) is not None and lease is None:
-            raise RuntimeError("该 Run 已被另一个 worker 接管或缺少可用生命周期 lease")
-
-    if not is_resume or _should_run("prepare"):
-        _update_run_progress(
+    if existing_run_id:
+        record = SQLAlchemyRunRepository(db).get_run(existing_run_id)
+        if record is None:
+            raise RuntimeError(f"Run {existing_run_id} 不存在或缺少 canonical request")
+        return await run_staged_pipeline(
             db,
-            existing_run_id,
-            phase="prepare",
-            current=0,
-            total=0,
-            message="同步 Skill 与运行参数",
-            status="running",
-        )
-        skills = sync_skills(db)
-        skill_map = {skill.skill_id: skill for skill in skills}
-        if existing_request is not None:
-            # A resumed run never re-merges caller payload/preset defaults.  The
-            # persisted canonical request is the sole execution input.
-            run_request = existing_request
-            params = run_request.model_dump(mode="json")
-            preset = db.get(Preset, run_request.preset_id) if run_request.preset_id else None
-        else:
-            preset = db.get(Preset, payload["preset_id"]) if payload.get("preset_id") else None
-            if payload.get("preset_id") and preset is None:
-                raise ValueError("预设不存在，请刷新后重试")
-            params = _merge_run_params(db, preset, payload)
-            run_request = _canonical_workbench_request(params, payload)
-            params["run_mode"] = run_request.run_mode.value
-        selected_skills = _select_skills_for_run(db, skill_map, params["skills"])
-        if not selected_skills:
-            raise ValueError("没有可运行的 Skill，请检查预设配置或 Skill 状态")
-        execution_version, _execution_audit = _execution_version_identity(run_request, selected_skills)
-        run = _persist_run_start(
-            db,
-            run_id,
-            params,
-            selected_skills,
-            request=run_request,
-            execution_version=execution_version,
-        )
-        _save_checkpoint(db, run_id, "prepare")
-    else:
-        # 从已有 Run 重建状态；params_json 仅保留为历史投影，不能驱动恢复。
-        run = existing_run
-        assert run is not None
-        run_request = existing_request or load_canonical_run_request(run)
-        params = run_request.model_dump(mode="json")
-        skills = sync_skills(db)
-        skill_map = {skill.skill_id: skill for skill in skills}
-        selected_skills = _select_skills_for_run(db, skill_map, params["skills"])
-        if not selected_skills:
-            raise ValueError("恢复任务时没有可运行的 Skill，请检查 Skill 状态后重新发起运行")
-        preset = db.get(Preset, run.preset_id) if run.preset_id else None
-
-    # Re-read and validate the persisted canonical pair after the prepare branch.
-    # This also protects direct/scheduler callers that create the row themselves.
-    run_request = load_canonical_run_request(run)
-    params = run_request.model_dump(mode="json")
-    execution_version, execution_audit = _execution_version_identity(run_request, selected_skills)
-    factor_plan_audit = execution_audit["factor_plan"]
-    _persist_execution_version(run, execution_version)
-    persisted_execution_audit = _execution_audit_from_result_summary(run.result_summary_json)
-    if persisted_execution_audit is None:
-        persisted_execution_audit = {**execution_audit, "execution_version": run.execution_version}
-        result_summary = _loads(run.result_summary_json, {})
-        if not isinstance(result_summary, dict):
-            result_summary = {}
-        result_summary["execution"] = persisted_execution_audit
-        run.result_summary_json = _dumps(result_summary)
-    db.commit()
-
-    data_source = normalize_data_source(params.get("data_source"))
-    trade_date_override = params.get("trade_date_override") or None
-    if trade_date_override:
-        logger.info("run %s using trade_date_override=%s", run_id, trade_date_override)
-        # 覆盖 run 记录的 trade_date，确保推荐入库的 trade_date 与历史日期一致
-        existing_run = db.get(RecommendationRun, run_id)
-        if existing_run:
-            existing_run.trade_date = trade_date_override
-            db.commit()
-    _update_run_progress(
-        db,
-        run_id,
-        phase="market_data",
-        current=0,
-        total=0,
-        message="拉取并校验市场股票池",
-        status="running",
-    )
-    try:
-        stocks, snapshot, market_source_audit = load_legacy_market_universe(
-            db,
-            data_source=data_source,
-            as_of_date=trade_date_override,
-        )
-    except Exception as exc:
-        _mark_run_failed(db, run_id, exc)
-        raise
-    snapshot.setdefault("breadth", {})["run_data_source_mode"] = data_source
-    snapshot["breadth"]["market_source_audit"] = market_source_audit
-    snapshot["breadth"]["factor_execution_plan"] = factor_plan_audit
-    _update_run_progress(
-        db,
-        run_id,
-        phase="market_data",
-        current=len(stocks),
-        total=len(stocks),
-        message=f"股票池已就绪，共 {len(stocks)} 只",
-        status="running",
-    )
-    _persist_market(db, snapshot)
-    # 仅在实时行情模式下写回股票元数据；本地池模式数据本就从 DB 读出，写入为冗余操作，
-    # 且全市场扫描时 6000+ 行批量 INSERT 会在远程 MySQL 高负载下阻塞推荐管道。
-    if data_source == DATA_SOURCE_REALTIME:
-        _persist_stocks_and_bars(db, stocks, persist_bars=True)
-    elif data_source == DATA_SOURCE_LOCAL_POOL_REALTIME:
-        _persist_stocks_and_bars(db, stocks, persist_bars=True)
-    else:
-        logger.info("skip stock/bar persistence for local-pool run %s; mode=%s stocks=%d", run_id, data_source, len(stocks))
-    scoped_stocks = _apply_market_scope_to_stocks(db, stocks, params)
-    if not scoped_stocks:
-        raise ValueError("当前市场范围内没有可运行的股票，请调整预设范围后重试")
-    snapshot.setdefault("breadth", {})["scoped_candidate_count"] = len(scoped_stocks)
-    # Prefilter uses current state plus active event pointers through the same S4
-    # application boundary.  This is pointer-only/current-state loading: no network.
-    prefilter_auxiliary = load_auxiliary_feature_views(
-        db,
-        [str(stock.get("code") or "") for stock in scoped_stocks if stock.get("code")],
-        trade_date=str(snapshot.get("trade_date") or ""),
-    )
-    prefilter_hits = inject_auxiliary_prefilter_flags(scoped_stocks, prefilter_auxiliary)
-    if prefilter_hits:
-        logger.info("prefilter 前注入 S4 auxiliary state: %d field hits (run=%s)", prefilter_hits, run_id)
-    min_prefilter_count = resolve_prefilter_target_count(params, selected_skill_count=len(selected_skills))
-    prefiltered_stocks, prefilter_audit = apply_prefilters(
-        scoped_stocks,
-        selected_skills,
-        min_candidate_count=min_prefilter_count,
-    )
-    if not prefiltered_stocks:
-        raise ValueError("前置预过滤后没有可运行的股票，请放宽候选条件后重试")
-    snapshot["breadth"]["prefilter_candidate_count"] = len(prefiltered_stocks)
-    snapshot["breadth"]["prefilter_audit"] = _strip_audit_rows(prefilter_audit)
-    _save_checkpoint(db, run_id, "scope_filter")
-    _update_run_progress(
-        db,
-        run_id,
-        phase="scope_filter",
-        current=len(prefiltered_stocks),
-        total=len(stocks),
-        message=f"市场范围与前置预过滤完成，候选 {len(prefiltered_stocks)} 只",
-        status="running",
-    )
-
-    # S4 owns one application/composition boundary for all frozen auxiliary
-    # descriptors.  ``skip_aux_refresh`` is deliberately pointer/current-state
-    # loading only; it never acquires a provider or force-refreshes missing rows.
-    skip_aux_refresh = bool(params.get("skip_aux_refresh"))
-    auxiliary_codes = [str(stock.get("code") or "") for stock in prefiltered_stocks if stock.get("code")]
-    _update_run_progress(
-        db,
-        run_id,
-        phase="auxiliary_data",
-        current=0,
-        total=18,
-        message="通过 S4 registry 准备 18 个辅助数据集",
-        status="running",
-    )
-    auxiliary_result = run_auxiliary_application(
-        db,
-        instruments=auxiliary_codes,
-        trade_date=str(snapshot["trade_date"]),
-        refresh=not skip_aux_refresh,
-    )
-    _update_run_progress(
-        db,
-        run_id,
-        phase="auxiliary_data",
-        current=18,
-        total=18,
-        message="S4 auxiliary registry 已完成当前状态/活动快照处理",
-        status="running",
-    )
-    snapshot.setdefault("breadth", {})["auxiliary_data_audit"] = dict(auxiliary_result.audit_payload)
-    snapshot["breadth"]["auxiliary_orchestration"] = {
-        "usable": auxiliary_result.orchestrated.is_usable,
-        "inventory": tuple(item.dataset_key for item in auxiliary_result.orchestrated.results),
-        "datasets": dict(auxiliary_result.audit_payload),
-        "skip_aux_refresh": skip_aux_refresh,
-    }
-    _save_checkpoint(db, run_id, "auxiliary_data")
-
-    _update_run_progress(
-        db,
-        run_id,
-        phase="feature_build",
-        current=0,
-        total=len(prefiltered_stocks),
-        message=f"构建 {len(prefiltered_stocks)} 只股票的特征与研究上下文",
-        status="running",
-    )
-    features = build_features(
-        prefiltered_stocks, snapshot, _load_calibrated_dsa_weights(db), db=db,
-        on_progress=lambda current, total: _update_run_progress(
-            db, run_id, phase="feature_build",
-            current=current, total=total,
-            message=f"构建特征 {current}/{total}",
-            status="running",
-        ),
-    )
-    research_contexts = build_research_contexts(features, snapshot)
-    _save_checkpoint(db, run_id, "feature_build")
-
-    run = db.get(RecommendationRun, run_id)
-    if run is None:
-        run = RecommendationRun(run_id=run_id)
-        db.add(run)
-    run.preset_id = params.get("preset_id")
-    run.run_name = params["run_name"]
-    run.run_mode = run_request.run_mode.value
-    run.trade_date = snapshot["trade_date"]
-    if not run.started_at:
-        run.started_at = datetime.now(timezone.utc).replace(tzinfo=None)
-    run.finished_at = None
-    run.universe_count = len(research_contexts)
-    run.recommended_count = 0
-    run.market_scope = params["market_scope"]
-    run.market_scope_value = params.get("market_scope_value")
-    run.risk_template = params["risk_template"]
-    run.score_line = float(params["score_line"])
-    run.output_count = params["output_count"]
-    run.selected_skills_json = _dumps(_selected_skill_rows(selected_skills))
-    run.params_json = _dumps(params)
-    # Keep the legacy projection for historical queries, but always refresh the
-    # canonical pair from the same validated RunRequest used by execution.
-    run.request_schema_version = run_request.schema_version
-    run.request_json = run_request.to_canonical_json()
-    run.market_snapshot_json = _dumps(_slim_market_snapshot(snapshot))
-    run.result_summary_json = _dumps({"execution": persisted_execution_audit})
-    run.status = "running"
-    run.error_message = None
-    run.heartbeat_at = datetime.now(timezone.utc).replace(tzinfo=None)
-    run.progress_phase = "feature_build"
-    run.progress_current = len(research_contexts)
-    run.progress_total = len(research_contexts)
-    run.progress_message = f"特征构建完成，进入规则扫描：{len(research_contexts)} 只"
-    run.interrupted_at = None
-    assert_run_request_index_consistency(run, run_request)
-    db.flush()
-    db.commit()  # Persist immediately so the run record survives failures
-    invalidate_bootstrap_cache()
-
-    agent_session_id = f"sess_{run_id}"
-    all_skill_objs = [s["skill"] for s in selected_skills]
-    # 策略分发只经 descriptor-backed registry：命令式与声明式实现都先由同一
-    # bootstrap 装配，再统一调用 `registry.get(skill_id).evaluate(stock, ctx)`。
-    # Adapter 负责把命令式 StrategyDecision 投影为规范 Signal，调用方不得读取
-    # 实现类身份字段或绕过 manifest/Descriptor。
-    strategy_registry = build_registry_from_skills(all_skill_objs)
-
-    try:
-        AgentSessionRegistry.register(
-            session_id=agent_session_id,
-            session_factory=lambda: SessionLocal(),
-            skills=all_skill_objs,
-            snapshot=snapshot,
+            run_id=existing_run_id,
+            request=record.request,
+            existing_run_id=existing_run_id,
         )
 
-        recent_codes = _recent_recommended_codes(db, snapshot["trade_date"])
-        same_day_codes = _same_day_recommended_codes(db, snapshot["trade_date"], run.run_id)
-        same_day_industry_counts = _same_day_industry_counts(db, snapshot["trade_date"], run.run_id)
-        market_score = market_regime_score(snapshot)
-        calibrated_weights = _load_calibrated_agg_weights(db)
-        cards: list[dict[str, Any]] = []
+    if isinstance(payload, RunRequest):
+        raise ValueError("直接执行 RunRequest 时必须提供 existing_run_id")
+    queued = enqueue_workbench_run(db, payload, dispatch=False)
+    run_id = str((queued.get("run") or {}).get("run_id") or "")
+    if not run_id:
+        raise RuntimeError("同步运行未能持久化 queued canonical request")
+    record = SQLAlchemyRunRepository(db).get_run(run_id)
+    if record is None:
+        raise RuntimeError(f"Run {run_id} 不存在或缺少 canonical request")
+    return await run_staged_pipeline(db, run_id=run_id, request=record.request)
 
-        # ═══ 阶段一：策略规则全市场扫描（所有基础过滤合格股票，无 LLM） ═══
-        settings = get_settings()
-        agent_review_disabled = bool(params.get("disable_agent_review"))
-        skill_review_limit = resolve_skill_review_limit(params, settings, selected_skill_count=len(selected_skills))
-        skill_review_concurrency = max(1, int(params.get("agent_review_concurrency") or settings.market_skill_review_concurrency or 1))
-        prelim_entries: list[dict[str, Any]] = []
-        total_contexts = len(research_contexts)
-        _update_run_progress(
-            db,
-            run_id,
-            phase="rule_scan",
-            current=0,
-            total=total_contexts,
-            message=f"开始规则扫描：{total_contexts} 只",
-            status="running",
-        )
-
-        for i, context in enumerate(research_contexts, start=1):
-            if i % 50 == 0:
-                await asyncio.sleep(0)
-            stock = context.to_skill_input()
-            prefilter_skill_ids = {
-                str(skill_id)
-                for skill_id in (stock.get("prefilter_skill_ids") or [])
-                if skill_id
-            }
-            prefilter_source = str(stock.get("prefilter_source") or "")
-            rule_signals_by_skill: dict[str, Any] = {}
-            for selected in selected_skills:
-                skill_obj = selected["skill"]
-                if prefilter_source == "skill_pass" and prefilter_skill_ids and skill_obj.skill_id not in prefilter_skill_ids:
-                    signal = None
-                else:
-                    skip_universe = prefilter_source == "skill_pass" and skill_obj.skill_id in prefilter_skill_ids
-                    ctx = StrategyContext(main_industries=snapshot["main_industries"], skip_universe_check=skip_universe)
-                    signal = strategy_registry.get(skill_obj.skill_id).evaluate(stock, ctx) if skill_obj.executable else None
-                rule_signals_by_skill[skill_obj.skill_id] = signal
-
-            prelim_entries.append(
-                {
-                    "prelim_score": _prelim_rule_score(stock, rule_signals_by_skill, snapshot),
-                    "context": context,
-                    "rule_signals": rule_signals_by_skill,
-                    "stock": stock,
-                }
-            )
-            if i == 1 or i % 100 == 0 or i == total_contexts:
-                _update_run_progress(
-                    db,
-                    run_id,
-                    phase="rule_scan",
-                    current=i,
-                    total=total_contexts,
-                    message=f"规则扫描 {i}/{total_contexts}",
-                    status="running",
-                )
-
-        prelim_entries.sort(key=lambda item: float(item.get("prelim_score") or 0), reverse=True)
-        gate_result = build_skill_rule_gate(prelim_entries, selected_skills, settings)
-        skill_candidates = gate_result["skill_candidates"]
-        non_skill_entries = gate_result["non_skill_entries"]
-        explicit_review_limit_skipped = 0
-        if skill_review_limit > 0 and len(skill_candidates) > skill_review_limit:
-            explicit_review_limit_skipped = len(skill_candidates) - skill_review_limit
-            non_skill_entries = skill_candidates[skill_review_limit:] + non_skill_entries
-            skill_candidates = skill_candidates[:skill_review_limit]
-            skill_demo_limited = True
-        else:
-            skill_demo_limited = False
-        skill_gate_audit = finalize_skill_gate_audit(
-            gate_result["audit"],
-            skill_candidates,
-            explicit_review_limit_skipped=explicit_review_limit_skipped,
-        )
-        if agent_review_disabled:
-            skill_gate_audit["agent_review_disabled"] = True
-            skill_gate_audit["skill_agent_call_count"] = 0
-            for stats in (skill_gate_audit.get("per_skill") or {}).values():
-                stats["llm_reviewed"] = 0
-        skill_agent_call_count = (
-            0
-            if agent_review_disabled
-            else sum(len(entry.get("review_skill_ids") or []) for entry in skill_candidates)
-        )
-
-        pipeline_audit = _build_pipeline_audit(
-            snapshot=snapshot,
-            params=params,
-            total_contexts=len(research_contexts),
-            prelim_count=len(prelim_entries),
-            skill_input_count=len(skill_candidates),
-            skill_agent_call_count=skill_agent_call_count,
-            skill_gate_audit=skill_gate_audit,
-            skill_review_limit=skill_review_limit,
-            skill_review_concurrency=skill_review_concurrency,
-            skill_demo_limited=skill_demo_limited,
-            prefilter_audit=prefilter_audit,
-        )
-        pipeline_audit["agent_review_disabled"] = agent_review_disabled
-        snapshot.setdefault("breadth", {})["recommendation_pipeline"] = _strip_audit_rows(pipeline_audit)
-        _save_checkpoint(db, run_id, "rule_scan")
-        _update_run_progress(
-            db,
-            run_id,
-            phase="skill_gate",
-            current=len(skill_candidates),
-            total=len(prelim_entries),
-            message=(
-                f"规则门完成，Agent 深审已禁用，进入规则聚合 {len(skill_candidates)} 只"
-                if agent_review_disabled
-                else f"规则门完成，进入 Skill 深审 {len(skill_candidates)} 只"
-            ),
-            status="running",
-        )
-
-        # ═══ 阶段二：Agent / Skill 深度审查（显式扫描集） ═══
-        _save_checkpoint(db, run_id, "skill_gate")
-        semaphore = asyncio.Semaphore(skill_review_concurrency)
-
-        async def _process_candidate(entry):
-            stock = entry["stock"]
-            review_skill_ids = set(entry.get("review_skill_ids") or [])
-            review_skills = [
-                selected["skill"]
-                for selected in selected_skills
-                if selected["skill_id"] in review_skill_ids
-            ]
-            async with semaphore:
-                skill_reviews = await run_skill_reviews(
-                    stock=stock,
-                    skills=review_skills,
-                    snapshot=snapshot,
-                    rule_signals_by_skill=entry["rule_signals"],
-                    session_id=agent_session_id,
-                )
-            return {
-                **entry,
-                "skill_reviews": skill_reviews,
-            }
-
-        candidate_results: list[dict[str, Any]] = []
-        review_total = len(skill_candidates)
-        _update_run_progress(
-            db,
-            run_id,
-            phase="skill_review",
-            current=review_total if agent_review_disabled else 0,
-            total=review_total,
-            message=(
-                f"Skill 深审已按参数禁用，使用规则预审聚合 {review_total} 只"
-                if agent_review_disabled
-                else f"Skill 深审启动：{review_total} 只，最多并发 {skill_review_concurrency}"
-            ),
-            status="running",
-        )
-        if agent_review_disabled:
-            candidate_results = [
-                {
-                    **entry,
-                    "review_skill_ids": [],
-                    "agent_review_disabled": True,
-                    "skill_reviews": [],
-                }
-                for entry in skill_candidates
-            ]
-        elif skill_candidates:
-            tasks = [asyncio.create_task(_process_candidate(entry)) for entry in skill_candidates]
-            for i, task in enumerate(asyncio.as_completed(tasks), start=1):
-                candidate_results.append(await task)
-                _update_run_progress(
-                    db,
-                    run_id,
-                    phase="skill_review",
-                    current=i,
-                    total=review_total,
-                    message=f"Skill 深审 {i}/{review_total}",
-                    status="running",
-                )
-
-        # 将 Agent API 调用成本写入数据库
-        from app.agents.agno_skill_agent import drain_api_costs
-        from app.services.cost_service import record_api_call
-        _save_checkpoint(db, run_id, "skill_review")
-        api_costs = drain_api_costs()
-        for cost in api_costs:
-            record_api_call(db, run_id=run_id, **cost)
-
-        # ═══ 阶段三：聚合（Skill 输入集有 Agent 审查，非输入集仅作显式降权补充） ═══
-        _update_run_progress(
-            db,
-            run_id,
-            phase="aggregate",
-            current=0,
-            total=max(len(candidate_results), 1),
-            message="聚合 Skill 结论并生成候选卡片",
-            status="running",
-        )
-        # 处理 Skill 输入集（有 Agent 审查）— 这些是主力推荐
-        candidate_success_count = 0
-        for entry in candidate_results:
-            skill_reviews = entry.get("skill_reviews") or []
-            card = _build_recommendation_card(
-                entry,
-                skill_reviews,
-                skill_map=skill_map,
-                selected_skills=selected_skills,
-                market_score=market_score,
-                risk_template=params["risk_template"],
-                calibrated_weights=calibrated_weights,
-                snapshot=snapshot,
-                recent_codes=recent_codes,
-                same_day_codes=same_day_codes,
-            )
-            if card.get("agent_logs"):
-                candidate_success_count += 1
-            if _drop_as_repeat_card(
-                card,
-                params,
-                recent_repeat=bool(card.get("recent_repeat")),
-                same_day_repeat=bool(card.get("same_day_repeat")),
-            ):
-                continue
-            cards.append(card)
-
-        logger.info(
-            "Agent review: %d/%d skill inputs got at least one successful review",
-            candidate_success_count, len(candidate_results),
-        )
-        pipeline_audit["skill_review_success_count"] = candidate_success_count
-        review_failure_audit = _skill_review_failure_audit(candidate_results, api_costs)
-        if review_failure_audit["failed_count"]:
-            pipeline_audit["skill_review_failure_audit"] = review_failure_audit
-        pipeline_audit["rule_only_fallback_count"] = 0
-        scored_cards = list(cards)
-        # 实时刷新同日跨 run 行业计数：1454 行在 run start 时算一次缓存，但 run_workbench
-        # 主循环（特征构建/skill 评估/LLM 审查）耗时数分钟，期间同日其他 formal run 的推荐
-        # 已落库。用缓存值会漏算前 run 推荐（基数偏低），导致 _apply_sector_diversity 的
-        # 跨 run 行业硬上限失效——2026-07-09 实例：06:30 run start 时 01:39 run 已落库 5 只
-        # 科技硬件，但缓存基数未计入，06:30 又推 3 只半导体，跨 run 累积当日 26 只科技硬件
-        # 集中止损（D 项 07-09 半导体板块退潮 7/13 失败）。apply_pool_rules 前实时重查，
-        # 确保基数含所有已落库的同日 formal 推荐。
-        same_day_industry_counts = _same_day_industry_counts(
-            db, snapshot["trade_date"], run.run_id
-        )
-        pool_result = apply_pool_rules(
-            scored_cards,
-            output_count=int(params["output_count"]),
-            score_line=float(params["score_line"]),
-            market_snapshot=snapshot,
-            risk_template=params["risk_template"],
-            return_watchlist=True,
-            same_day_industry_counts=same_day_industry_counts,
-            # 配置级降级信号：未配置任何有效模型路由（自带 key）时系统整体降级，
-            # 高潮/强牛阶段也启用软降线兜底，保证「每天可见推荐」。
-            # 注意：基于数据库 model_route_config 表，不再依赖已弃用的全局 env key。
-            agent_available=has_active_model_routes(),
-        )
-        if isinstance(pool_result, dict):
-            cards = pool_result.get("recommendations", [])
-            climax_watchlist = pool_result.get("watchlist", [])
-        else:
-            cards = pool_result
-            climax_watchlist = []
-        pipeline_audit["filter_audit"] = _build_filter_audit(
-            prefilter_audit=prefilter_audit,
-            skill_gate_audit=skill_gate_audit,
-            scored_cards=scored_cards,
-            recommended_cards=cards,
-            pipeline=pipeline_audit,
-        )
-        _save_checkpoint(db, run_id, "aggregate")
-        _update_run_progress(
-            db,
-            run_id,
-            phase="persist",
-            current=0,
-            total=len(cards),
-            message=f"候选池裁剪完成，开始保存 {len(cards)} 条推荐",
-            status="running",
-        )
-        saved = persist_recommendation_cards(
-            db,
-            run_id=run_id,
-            trade_date=snapshot["trade_date"],
-            cards=cards,
-            dump_json=_dumps,
-            on_progress=lambda index, total: _update_run_progress(
-                db,
-                run_id,
-                phase="persist",
-                current=index,
-                total=total,
-                message=f"保存推荐 {index}/{total}",
-                status="running",
-                commit=False,
-            ),
-        )
-
-        _save_checkpoint(db, run_id, "persist")
-
-        run.recommended_count = len(saved)
-        completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        managed_record = lifecycle_repository.get_run(run_id)
-        if managed_record is not None:
-            if managed_record.lease is None:
-                raise RuntimeError("Run lifecycle completion requires an active worker lease")
-            db.flush()
-            if not lifecycle.complete(run_id, now=completed_at):
-                raise RuntimeError("Run lifecycle completion CAS failed")
-            db.expire_all()
-            run = db.get(RecommendationRun, run_id)
-            if run is None:
-                raise RuntimeError("Run disappeared during lifecycle completion")
-        else:
-            # Historical/direct runs without canonical lifecycle columns retain the
-            # old projection-only completion path.
-            run.finished_at = completed_at
-            run.status = "completed"
-            run.heartbeat_at = completed_at
-        run.progress_phase = "completed"
-        run.progress_current = len(saved)
-        run.progress_total = len(saved)
-        run.progress_message = "运行完成"
-        run.filter_audit_json = _dumps(pipeline_audit.get("filter_audit") or {})
-        summary = _build_run_summary(cards, saved, snapshot, _strip_audit_rows(pipeline_audit))
-        summary["execution"] = persisted_execution_audit
-        summary["score_line_meta"] = resolve_score_line_context(
-            float(params["score_line"]),
-            market_snapshot=snapshot,
-            risk_template=params["risk_template"],
-        )
-        summary["top_candidate_score"] = round(
-            max((float(c.get("final_score") or 0) for c in scored_cards), default=0.0), 2
-        )
-        if climax_watchlist:
-            summary["climax_watchlist"] = [
-                {
-                    "code": c.get("code"),
-                    "name": c.get("name"),
-                    "industry": c.get("industry"),
-                    "final_score": c.get("final_score"),
-                    "effective_score_line": (c.get("score_line_meta") or {}).get("effective_score_line"),
-                    "watchlist_gap": c.get("watchlist_gap"),
-                    "hit_strategies": c.get("watchlist_hit_strategies"),
-                    "note": c.get("watchlist_note"),
-                }
-                for c in climax_watchlist
-            ]
-        if params.get("matrix_batch_id"):
-            summary["matrix_batch_id"] = params.get("matrix_batch_id")
-            summary["matrix_batch_name"] = params.get("matrix_batch_name") or "盘后预设矩阵"
-            summary["matrix_run"] = True
-        run.result_summary_json = _dumps(summary)
-        db.commit()
-        invalidate_bootstrap_cache()
-        return {
-            "run": _serialize_run_summary(db, run),
-            "recommendations": [_serialize_recommendation(db, rec) for rec in saved],
-        }
-    except Exception as exc:
-        # A prior flush failure (e.g. Data too long) poisons the session into
-        # PendingRollbackError.  Roll back first so lifecycle operations can
-        # succeed — otherwise get_run / fail / commit all cascade-fail and the
-        # run is stuck in "running" forever.
-        try:
-            db.rollback()
-        except Exception:
-            pass
-        failed_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        managed_record = lifecycle_repository.get_run(run_id)
-        if managed_record is not None:
-            if not lifecycle.fail(run_id, now=failed_at, message=str(exc)):
-                db.rollback()
-                logger.warning("run failure CAS lost for %s; refusing direct status overwrite", run_id)
-                raise
-            db.expire_all()
-            run = db.get(RecommendationRun, run_id) or run
-            # Lifecycle status, error code, timestamp and durable lease cleanup are
-            # owned by the CAS.  Only the legacy progress projection is updated.
-            run.progress_phase = "failed"
-            run.progress_message = str(exc)
-        else:
-            run.status = "failed"
-            run.error_message = str(exc)
-            run.finished_at = failed_at
-            run.heartbeat_at = failed_at
-            run.progress_phase = "failed"
-            run.progress_message = str(exc)
-        db.commit()
-        invalidate_bootstrap_cache()
-        raise
-    finally:
-        AgentSessionRegistry.unregister(agent_session_id)
 
 
 def get_recommendation_detail(db: Session, recommendation_id: str) -> dict[str, Any] | None:
@@ -2195,7 +1407,9 @@ def _hit_rate_from_outcome_tuples(outcomes: list[tuple | None]) -> float:
     success_count = sum(
         1
         for exec_ret, close_ret in executed_returns
-        if (float(exec_ret) if exec_ret is not None else float(close_ret or 0)) > _ADDITIONAL_COST_PCT
+        if is_net_profitable(
+            float(exec_ret) if exec_ret is not None else float(close_ret or 0)
+        )
     )
     return round(success_count / len(executed_returns), 3)
 
@@ -2360,40 +1574,28 @@ def _build_recommendation_card(
     selected_skill_lookup = {str(item["skill_id"]): item for item in selected_skills}
     signals = []
 
+    from app.engine.review_status import classify_review_results
+    from app.services.runs.filter_audit import skill_review_error_bucket
+
     for review_result in skill_reviews:
         skill_id = str(review_result["skill_id"])
         review_data = review_result.get("review")
         hc = review_result.get("hallucination_check")
         rule_signal = rule_signals_by_skill.get(skill_id)
-        is_agent_fallback = False
-
-        if review_data is None and rule_signal is not None:
-            is_agent_fallback = True
-            prelim_score = float(entry.get("prelim_score") or rule_signal.get("score") or 50.0)
-            fallback_review = {
-                "stance": "support" if prelim_score >= 72 else "neutral_support" if prelim_score >= 60 else "neutral",
-                "score_delta": round(max(-18.0, min(16.0, prelim_score - 50.0)), 2),
-                "score": round(prelim_score, 2),
-                "confidence": 0.35 if prelim_score >= 70 else 0.25,
-                "supports": [f"规则预审分 {prelim_score:.1f}"],
-                "risks": [str(review_result.get("error") or "Skill Agent 暂不可用，已降级为规则预审")],
-                "summary": "Skill Agent 暂不可用，本次仅保留规则预审结果",
-                "market_regime_judgment": "规则预审降级模式",
-                "action": "观察" if prelim_score < 72 else "轻仓试错",
-                "position_range": "0-5%" if prelim_score < 72 else "5-15%",
-                "entry_style": "先看承接与分歧修复",
-                "invalidation_conditions": [
-                    "若规则预审未能转强，继续观察",
-                    "若主线和承接没有改善，撤回降级推荐",
-                ],
-                "next_day_plan": [
-                    "等待 Agent 恢复后重新复核",
-                    "仅在主线继续强化时跟踪承接变化",
-                ],
-                "summary_is_warning": True,
-                "runtime": "agent_skill_fallback_prelim",
-            }
-            review_data = fallback_review
+        if review_data is None:
+            if rule_signal is not None:
+                signal = dict(rule_signal)
+                signal["runtime"] = "strategy_yaml_rule_only_agent_unavailable"
+                signal["agent_review_unavailable"] = {
+                    "reason": str(review_result.get("error") or "Skill Agent 暂不可用"),
+                    "failure_category": skill_review_error_bucket(review_result.get("error")),
+                    "runtime_note": "agent_review_unavailable",
+                }
+                selected = selected_skill_lookup.get(skill_id)
+                if selected is not None:
+                    signal["weight"] = selected["weight"]
+                signals.append(signal)
+            continue
 
         agent_review = {
             "stance": review_data.get("stance", "neutral"),
@@ -2433,13 +1635,6 @@ def _build_recommendation_card(
             signal = agent_only_signal(skill_obj, stock, agent_review)
         else:
             signal = enrich_signal_with_agent_review(rule_signal, agent_review)
-
-        if is_agent_fallback:
-            signal["runtime"] = "strategy_yaml_rule_only_agent_unavailable"
-            signal["agent_review_unavailable"] = {
-                "reason": str(review_result.get("error") or "Skill Agent 暂不可用"),
-                "runtime_note": "agent_review_unavailable",
-            }
 
         if hc:
             signal["hallucination_flags"] = hc.get("flags", [])
@@ -2504,6 +1699,11 @@ def _build_recommendation_card(
     card["take_profit"] = card["feature_snapshot"].get("take_profit")
     card["market_snapshot"] = snapshot
     card["agent_logs"] = review_log["logs"]
+    card["review_status"] = classify_review_results(
+        skill_reviews,
+        agent_review_disabled=bool(entry.get("agent_review_disabled")),
+    )
+    feature_snapshot["review_status"] = card["review_status"]
     card["recent_repeat"] = stock["code"] in (recent_codes or set())
     card["same_day_repeat"] = stock["code"] in (same_day_codes or set())
     return card
@@ -2914,11 +2114,6 @@ def _select_skills_for_run(
     return sorted(selected, key=lambda row: row["skill_id"])
 
 
-def _apply_market_scope(db: Session, features: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
-    scoped_codes = {item["code"] for item in _apply_market_scope_to_stocks(db, features, params)}
-    return [item for item in features if item["code"] in scoped_codes]
-
-
 def _recent_recommended_codes(db: Session, trade_date: str) -> set[str]:
     # 近 7 天已推荐过的 code（含当天 trade_date）。
     # 含当天是为了兜底 dedup_same_day 的竞态：多个 formal run 在同一天 trade_date 上先后跑时，
@@ -3010,54 +2205,6 @@ def _drop_as_repeat_card(
     if params.get("dedup_same_day", True) and same_day_repeat:
         return True
     return False
-
-
-def _agent_history_context(db: Session, skill_id: str, stock: dict[str, Any]) -> dict[str, Any]:
-    same_stock_rows = db.scalars(
-        select(Recommendation)
-        .where(Recommendation.code == stock["code"])
-        .order_by(Recommendation.recommended_at.desc())
-        .limit(6)
-    ).all()
-    same_stock_history = []
-    for rec in same_stock_rows:
-        outcome = db.get(RecommendationOutcome, rec.recommendation_id)
-        same_stock_history.append(
-            {
-                "trade_date": rec.trade_date,
-                "bucket": rec.bucket or "",
-                "final_score": rec.final_score,
-                "setup_type": rec.setup_type,
-                "outcome_label": normalized_outcome_label(outcome) if outcome else rec.status,
-                "close_return": resolved_trade_return(outcome) if outcome else None,
-                "max_drawdown": outcome.max_drawdown if outcome else None,
-            }
-        )
-
-    matched_recs = []
-    for rec in db.scalars(select(Recommendation).order_by(Recommendation.recommended_at.desc()).limit(300)).all():
-        if any(signal.get("strategy_id") == skill_id for signal in _loads(rec.skill_breakdown_json, [])):
-            matched_recs.append(rec)
-    outcomes = [
-        db.get(RecommendationOutcome, rec.recommendation_id)
-        for rec in matched_recs
-        if db.get(RecommendationOutcome, rec.recommendation_id) is not None
-    ]
-    labeled = [outcome for outcome in outcomes if is_outcome_labeled(outcome)]
-    executed = [outcome for outcome in labeled if is_trade_executed(outcome)]
-    success = [outcome for outcome in executed if is_accurate_recommendation(outcome)]
-    return {
-        "same_stock_history": same_stock_history,
-        "skill_recent_performance": {
-            "sample_count": len(matched_recs),
-            "labeled_count": len(labeled),
-            "triggered_count": len(executed),
-            "success_count": len(success),
-            "trigger_rate": round(len(executed) / len(labeled), 3) if labeled else 0.0,
-            "hit_rate": round(len(success) / len(executed), 3) if executed else 0.0,
-            "avg_close_return": round(sum(resolved_trade_return(outcome) for outcome in executed) / len(executed), 2) if executed else 0.0,
-        },
-    }
 
 
 def _build_run_summary(

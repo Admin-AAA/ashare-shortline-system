@@ -145,12 +145,53 @@ def check_runs_no_vendor_imports() -> list[str]:
     return violations
 
 
+def check_production_uses_staged_pipeline() -> list[str]:
+    """Production workers must enter through the coordinator-backed pipeline."""
+    violations: list[str] = []
+    workbench = SERVICES_DIR / "workbench_service.py"
+    worker = ROOT / "scripts" / "run_workbench_subprocess.py"
+
+    workbench_tree = ast.parse(workbench.read_text(encoding="utf-8"), filename=str(workbench))
+    public_entry = next(
+        (
+            node
+            for node in workbench_tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "run_workbench"
+        ),
+        None,
+    )
+    if public_entry is None or not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "run_staged_pipeline"
+        for node in ast.walk(public_entry)
+    ):
+        violations.append("app/services/workbench_service.py: run_workbench must delegate to run_staged_pipeline")
+
+    legacy_callers = [
+        node
+        for node in ast.walk(workbench_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_run_workbench_legacy"
+    ]
+    if legacy_callers:
+        violations.append("app/services/workbench_service.py: production code calls _run_workbench_legacy")
+
+    worker_text = worker.read_text(encoding="utf-8")
+    if "run_staged_pipeline" not in worker_text or "await run_staged_pipeline" not in worker_text:
+        violations.append("scripts/run_workbench_subprocess.py: worker bypasses run_staged_pipeline")
+    return violations
+
+
 def main() -> int:
     checks = [
         ("engine → no services/adapters/ORM", check_engine_no_services),
         ("no market_pool private imports", check_no_market_pool_private_imports),
         ("no fetch_bars_for_quote outside core", check_no_fetch_bars_for_quote),
         ("runs → no vendor imports", check_runs_no_vendor_imports),
+        ("production → staged pipeline", check_production_uses_staged_pipeline),
     ]
 
     all_violations: list[str] = []

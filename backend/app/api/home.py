@@ -21,9 +21,11 @@ def bootstrap(db: Session = Depends(get_db)):
 
 
 @router.get("/initial")
-def initial(db: Session = Depends(get_db)):
+def initial(detail: str = "summary", db: Session = Depends(get_db)):
     try:
-        return get_initial_workbench_state(db)
+        if detail not in {"summary", "full"}:
+            raise HTTPException(status_code=422, detail="detail must be summary or full")
+        return get_initial_workbench_state(db, detail=detail)
     except MarketDataError as exc:
         logger.exception("initial bootstrap failed")
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -24,13 +24,13 @@ from __future__ import annotations
 
 import statistics
 
-# 扣费后净收益阈值：executed_return 含滑点但未扣佣金+印花税（0.10%）
-# 与 outcome_service._ADDITIONAL_COST_PCT 保持一致
-_ACCURACY_COST_THRESHOLD = 0.10
 from collections import Counter, defaultdict
 from typing import Any, Protocol
 
+from app.engine.trading_costs import ADDITIONAL_COST_PCT, is_net_profitable
 from app.services.failure_attribution import classify_false_positive
+
+_ACCURACY_COST_THRESHOLD = ADDITIONAL_COST_PCT
 
 # ── 常量 ───────────────────────────────────────────────────────────────────
 
@@ -521,11 +521,11 @@ def _is_valid_signal_record(item: dict[str, Any]) -> bool:
 
 def _is_accurate_record(item: dict[str, Any]) -> bool:
     # 与 outcome_service.is_accurate_recommendation 保持一致：
-    # executed_return 含滑点但未扣佣金+印花税（0.10%），阈值 >0.10% 才算扣费后真盈利
+    # executed_return 含滑点但未扣佣金+印花税（0.07%），必须严格覆盖成本。
     return (
         _is_valid_signal_record(item)
         and _is_executed_record(item)
-        and float(item.get("net_return_pct", 0)) > _ACCURACY_COST_THRESHOLD
+        and is_net_profitable(float(item.get("net_return_pct", 0)))
     )
 
 

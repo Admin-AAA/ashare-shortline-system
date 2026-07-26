@@ -152,6 +152,13 @@ TRANSITION_RULES: Final[tuple[TransitionRule, ...]] = (
     ),
     TransitionRule(
         RunStatus.INTERRUPTED,
+        RunTrigger.REPLAY,
+        RunStatus.QUEUED,
+        frozenset({RunActor.WORKER, RunActor.OPERATOR}),
+        recovery_condition="immutable_request_full_replay",
+    ),
+    TransitionRule(
+        RunStatus.INTERRUPTED,
         RunTrigger.CANCEL,
         RunStatus.CANCELLED,
         frozenset({RunActor.API, RunActor.OPERATOR}),

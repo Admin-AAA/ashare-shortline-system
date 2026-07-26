@@ -74,6 +74,7 @@ def test_run_skill_reviews_uses_direct_path_and_primes_session(monkeypatch):
         )
 
     monkeypatch.setattr("app.agents.review_runner.run_skill_agent_direct", fake_run_skill_agent_direct)
+    monkeypatch.setattr("app.agents.review_runner.load_cached_skill_review", lambda **_kwargs: None)
 
     try:
         results = asyncio.run(
@@ -117,6 +118,75 @@ def test_user_prompt_requires_minimum_tool_sequence():
     assert 'audit_data_quality("600000")' in prompt
     assert 'query_skill_signals("600000", "bank-skill")' in prompt
     assert "不要跳过前四步" in prompt
+
+
+def test_request_limiter_caps_real_skill_calls(monkeypatch):
+    skills = [_skill(f"skill-{index}") for index in range(4)]
+    snapshot = {"trade_date": "2026-05-15", "breadth": {"regime": "多头"}}
+    session_id = "sess_test_review_limit"
+    AgentSessionRegistry.register(
+        session_id=session_id,
+        session_factory=lambda: None,
+        skills=skills,
+        snapshot=snapshot,
+    )
+    active = 0
+    peak = 0
+
+    async def fake_direct(**_kwargs):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.5)
+        active -= 1
+        return SkillReviewOutput(stance="support", score=75, confidence=0.8)
+
+    monkeypatch.setattr("app.agents.review_runner.run_skill_agent_direct", fake_direct)
+    monkeypatch.setattr("app.agents.review_runner.load_cached_skill_review", lambda **_kwargs: None)
+    try:
+        asyncio.run(run_skill_reviews(
+            stock={"code": "000001"},
+            skills=skills,
+            snapshot=snapshot,
+            rule_signals_by_skill={skill.skill_id: {"score": 70} for skill in skills},
+            session_id=session_id,
+            request_limiter=asyncio.Semaphore(2),
+        ))
+    finally:
+        AgentSessionRegistry.unregister(session_id)
+
+    assert peak == 2
+
+
+def test_cache_hit_bypasses_request_limiter_and_upstream(monkeypatch):
+    skill = _skill()
+    cached = SkillReviewOutput(stance="support", score=82, confidence=0.9)
+    monkeypatch.setattr(
+        "app.agents.review_runner.load_cached_skill_review",
+        lambda **_kwargs: cached,
+    )
+
+    async def forbidden_upstream(**_kwargs):
+        raise AssertionError("cache hit must not call upstream")
+
+    monkeypatch.setattr("app.agents.review_runner.run_skill_agent_direct", forbidden_upstream)
+
+    async def run():
+        return await asyncio.wait_for(
+            run_skill_reviews(
+                stock={"code": "000001"},
+                skills=[skill],
+                snapshot={"trade_date": "2026-05-15"},
+                rule_signals_by_skill={skill.skill_id: {"score": 70}},
+                session_id="cache-hit-no-session",
+                request_limiter=asyncio.Semaphore(0),
+            ),
+            timeout=1,
+        )
+
+    result = asyncio.run(run())
+    assert result[0]["review"]["score"] == 82
+    assert result[0]["error"] is None
 
 
 def test_parse_to_output_fills_trading_plan_defaults():

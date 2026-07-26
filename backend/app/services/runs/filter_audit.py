@@ -151,23 +151,38 @@ def skill_review_failure_audit(
             if skill_id:
                 affected_skills.add(skill_id)
 
+    # The logical denominator is fixed before provider routing starts. A missing
+    # result row is still one failed stock×Skill review; retries/failovers are
+    # represented only by provider_attempt_failure_count below.
+    requested_count = sum(
+        len(entry.get("review_skill_ids") or [])
+        if "review_skill_ids" in entry
+        else len(entry.get("skill_reviews") or [])
+        for entry in candidate_results
+    )
+    success_count = sum(
+        1
+        for entry in candidate_results
+        for review in (entry.get("skill_reviews") or [])
+        if review.get("review") is not None and not review.get("error")
+    )
+    failed_count = max(0, requested_count - success_count)
     api_failures = [
         cost for cost in (api_costs or [])
-        if str(cost.get("status") or "success") != "success" or cost.get("error_message")
+        if str(cost.get("status") or "success") not in {"success", "cache_hit"}
+        or cost.get("error_message")
     ]
-    for cost in api_failures:
-        error = str(cost.get("error_message") or "").strip()
-        if error:
-            errors.append(error)
-
     reason_counts = categorical_distribution(skill_review_error_bucket(error) for error in errors)
     sample_errors = unique_head(errors, limit=3, max_chars=260)
     sample_errors_by_bucket = sample_errors_grouped(errors, per_bucket=2, max_chars=260)
     return {
-        "failed_count": len(errors),
+        "requested_count": requested_count,
+        "success_count": success_count,
+        "failed_count": failed_count,
         "affected_stock_count": len(affected_codes),
         "affected_skill_count": len(affected_skills),
         "api_failure_count": len(api_failures),
+        "provider_attempt_failure_count": len(api_failures),
         "reason_counts": reason_counts,
         "sample_errors": sample_errors,
         "sample_errors_by_bucket": sample_errors_by_bucket,

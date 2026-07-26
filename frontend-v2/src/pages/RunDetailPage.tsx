@@ -772,6 +772,9 @@ function RunProgressPanel({ detail, onResume }: { detail: RunDetail; onResume?: 
   const barWidth = effectivePct != null ? `${Math.max(2, Math.min(100, effectivePct))}%` : "100%";
   const stale = !!detail.is_stale;
   const resumable = detail.status === "interrupted" || detail.status === "failed";
+  const degradedWatchlist = Array.isArray(detail.result_summary?.degraded_watchlist)
+    ? detail.result_summary.degraded_watchlist as Array<Record<string, unknown>>
+    : [];
 
   return (
     <Panel
@@ -808,6 +811,24 @@ function RunProgressPanel({ detail, onResume }: { detail: RunDetail; onResume?: 
         <div className="text-mono text-muted" style={{ fontSize: "var(--text-sm)", minHeight: 18 }}>
           {active ? (detail.progress_message || "运行中…") : (detail.progress_message || "暂无消息")}
         </div>
+
+        {degradedWatchlist.length > 0 && (
+          <div style={{ border: "1px solid var(--warning)", borderRadius: "var(--radius-md)", padding: "var(--space-3)", background: "var(--surface-soft)" }}>
+            <div style={{ color: "var(--warning)", fontWeight: 700, fontSize: "var(--text-sm)", marginBottom: "var(--space-2)" }}>
+              降级观察 · 非正式推荐
+            </div>
+            <div className="text-muted" style={{ fontSize: "var(--text-xs)", marginBottom: "var(--space-2)" }}>
+              Skill Agent 全部失败，以下候选仅保留规则结果，不进入推荐收益统计。
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)" }}>
+              {degradedWatchlist.map((item, index) => (
+                <span key={`${String(item.code ?? "unknown")}-${index}`} className="text-mono" style={{ fontSize: "var(--text-xs)" }}>
+                  {String(item.code ?? "—")} {String(item.name ?? "")} · {Number(item.final_score ?? 0).toFixed(1)}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-3)", alignItems: "center", fontSize: "var(--text-xs)" }}>
           {detail.heartbeat_at && (

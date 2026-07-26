@@ -23,7 +23,7 @@ load_dotenv(BASE_DIR / ".env")
 from app.db.session import SessionLocal  # noqa: E402
 from app.models.tables import RecommendationRun  # noqa: E402
 from app.services.runs.sqlalchemy_repository import SQLAlchemyRunRepository  # noqa: E402
-from app.services.workbench_service import run_workbench  # noqa: E402
+from app.services.runs.pipeline import run_staged_pipeline  # noqa: E402
 
 
 async def _run(run_id: str) -> None:
@@ -34,7 +34,7 @@ async def _run(run_id: str) -> None:
         record = SQLAlchemyRunRepository(db).get_run(run_id)
         if record is None:
             raise RuntimeError(f"Run {run_id} not found or has no valid canonical request")
-        await run_workbench(db, record.request, existing_run_id=run_id)
+        await run_staged_pipeline(db, run_id=run_id, request=record.request)
     finally:
         db.close()
 

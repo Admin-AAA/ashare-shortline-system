@@ -33,7 +33,7 @@ from app.agents.tools import (
     query_stock_history,
 )
 from app.services.model_router_service import get_active_model_routes
-from app.services.llm_review_cache_service import build_review_cache_key
+from app.services.llm_review_cache_service import build_review_cache_key, semantic_market_snapshot
 
 
 # ── 结构化输出模型 ────────────────────────────────────────────────────
@@ -528,12 +528,7 @@ def _compact_stock(stock: dict[str, Any]) -> dict[str, Any]:
 
 def _compact_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     """精简市场快照。"""
-    keys = [
-        "trade_date", "sample_count",
-        "up_count", "down_count", "limit_up_count", "limit_down_count",
-        "main_industries", "breadth",
-    ]
-    return {key: snapshot.get(key) for key in keys if key in snapshot}
+    return semantic_market_snapshot(snapshot)
 
 
 def _compact_signal(signal: dict[str, Any]) -> dict[str, Any]:
@@ -929,28 +924,8 @@ async def run_skill_agent_direct(
 
     settings = get_settings()
 
-    # ── 跨 run 结果缓存查询（命中则 0 LLM 调用）──
-    cache_key = build_review_cache_key(
-        skill_hash=skill.skill_hash,
-        stock=stock,
-        snapshot=snapshot,
-        rule_signal=rule_signal,
-    )
     code = str(stock.get("code") or "")
     trade_date = str(snapshot.get("trade_date") or "") or None
-    cached_review = _load_cached_review(cache_key)
-    if cached_review is not None:
-        _append_api_cost(
-            route=None,
-            prompt_chars=0,
-            completion_chars=0,
-            latency_ms=0,
-            status="cache_hit",
-            error_message=None,
-            skill_id=skill.skill_id,
-        )
-        return _parse_to_output(cached_review)
-
     routes = get_active_model_routes()
     if not routes:
         raise RuntimeError("Skill Agent 未配置可用模型路由，请先在数据源页配置模型与 Key")
@@ -963,6 +938,28 @@ async def run_skill_agent_direct(
     route_errors: list[str] = []
 
     for route in routes:
+        cache_key = build_review_cache_key(
+            skill_hash=skill.skill_hash,
+            stock=stock,
+            snapshot=snapshot,
+            rule_signal=rule_signal,
+            provider=route.provider,
+            model=route.model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+        cached_review = _load_cached_review(cache_key)
+        if cached_review is not None:
+            _append_api_cost(
+                route=route,
+                prompt_chars=0,
+                completion_chars=0,
+                latency_ms=0,
+                status="cache_hit",
+                error_message=None,
+                skill_id=skill.skill_id,
+            )
+            return _parse_to_output(cached_review)
         route_key = route.circuit_key
         try:
             check_circuit(route_key)
@@ -1060,6 +1057,46 @@ async def run_skill_agent_direct(
     tried_count = len(routes)
     tail = " | ".join(route_errors[-3:]) if route_errors else "无可用错误详情"
     raise RuntimeError(f"Skill Agent 直接审查失败：已尝试 {tried_count} 个模型路由；{tail}")
+
+
+def load_cached_skill_review(
+    *,
+    skill: StrategySkill,
+    stock: dict[str, Any],
+    snapshot: dict[str, Any],
+    rule_signal: dict[str, Any] | None,
+) -> SkillReviewOutput | None:
+    """Probe semantic cache keys without consuming an upstream request permit."""
+    routes = get_active_model_routes()
+    if not routes:
+        return None
+    system_prompt = _build_direct_system(skill)
+    user_prompt = _build_direct_prompt(stock, snapshot, rule_signal, skill)
+    for route in routes:
+        cache_key = build_review_cache_key(
+            skill_hash=skill.skill_hash,
+            stock=stock,
+            snapshot=snapshot,
+            rule_signal=rule_signal,
+            provider=route.provider,
+            model=route.model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+        cached_review = _load_cached_review(cache_key)
+        if cached_review is None:
+            continue
+        _append_api_cost(
+            route=route,
+            prompt_chars=0,
+            completion_chars=0,
+            latency_ms=0,
+            status="cache_hit",
+            error_message=None,
+            skill_id=skill.skill_id,
+        )
+        return _parse_to_output(cached_review)
+    return None
 
 
 # system prompt 进程级缓存：key=skill_hash，value=拼接好的 system prompt。

@@ -28,6 +28,28 @@ _LLM_REVIEW_STALE_HOURS = 24
 # 元数据字段：同一股票不同 run 来源不同，但不影响 LLM 判断，从 cache_key 排除。
 # data_quality 保留（数据缺口会影响 LLM 评分）。
 _CACHE_KEY_EXCLUDE_STOCK_FIELDS = {"data_source", "quote_source", "kline_source", "latest_trade_date"}
+_CACHE_SCHEMA_VERSION = "v2"
+_SEMANTIC_BREADTH_FIELDS = (
+    "regime", "risk", "up_ratio", "down_ratio", "up_limit_ratio",
+    "limit_down_ratio", "leadership_height", "broken_board_rate", "hot_theme",
+)
+
+
+def semantic_market_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """只保留真正进入审查判断的稳定市场事实。"""
+    source = snapshot or {}
+    breadth = source.get("breadth") if isinstance(source.get("breadth"), dict) else {}
+    values = {
+        "trade_date": source.get("trade_date"),
+        "sample_count": source.get("sample_count"),
+        "up_count": source.get("up_count"),
+        "down_count": source.get("down_count"),
+        "limit_up_count": source.get("limit_up_count"),
+        "limit_down_count": source.get("limit_down_count"),
+        "main_industries": source.get("main_industries"),
+        "breadth": {key: breadth.get(key) for key in _SEMANTIC_BREADTH_FIELDS if key in breadth},
+    }
+    return {key: value for key, value in values.items() if value not in (None, {}, [])}
 
 
 def _stable_json(value: Any) -> str:
@@ -41,6 +63,10 @@ def build_review_cache_key(
     stock: dict[str, Any],
     snapshot: dict[str, Any],
     rule_signal: dict[str, Any] | None,
+    provider: str | None = None,
+    model: str | None = None,
+    system_prompt: str | None = None,
+    user_prompt: str | None = None,
 ) -> str:
     """生成 LLM 审查结果缓存 key。只含影响判断的字段。"""
     stock_clean = {
@@ -48,10 +74,15 @@ def build_review_cache_key(
         if k not in _CACHE_KEY_EXCLUDE_STOCK_FIELDS
     }
     payload = {
+        "schema_version": _CACHE_SCHEMA_VERSION,
         "skill_hash": skill_hash or "",
-        "stock": stock_clean,
-        "snapshot": snapshot or {},
-        "rule_signal": rule_signal or {},
+        "provider": provider or "",
+        "model": model or "",
+        "system_prompt": system_prompt or "",
+        "user_prompt": user_prompt or "",
+        "stock": {} if user_prompt is not None else stock_clean,
+        "snapshot": {} if user_prompt is not None else semantic_market_snapshot(snapshot),
+        "rule_signal": {} if user_prompt is not None else (rule_signal or {}),
     }
     raw = _stable_json(payload)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()

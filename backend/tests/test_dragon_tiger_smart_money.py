@@ -255,7 +255,9 @@ def test_e2e_signal_reaches_skill_breakdown(db):
     阶段永远 0 命中，信号无法进入 skill_breakdown_json。
     """
     code = "609999"
-    dt_date = "2099-07-06"
+    from app.engine.trading_calendar import latest_allowed_bar_date
+
+    dt_date = latest_allowed_bar_date()
     # 在 dragon_tiger 表注入一只龙虎榜股（测试后随事务回滚，不影响生产数据）
     existing = db.scalar(
         select(DragonTiger).where(DragonTiger.code == code, DragonTiger.trade_date == dt_date)
@@ -346,4 +348,3 @@ def test_dragon_tiger_in_formal_opening_preset(db):
         "发现孤儿 preset_id='formal_opening'（无前缀），应为 'preset_formal_opening'。"
         "这是手动 INSERT 用错 preset_id 的残留，会导致 dragon-tiger 关联到不存在的 preset。"
     )
-

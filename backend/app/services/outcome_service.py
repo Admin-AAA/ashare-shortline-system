@@ -9,6 +9,13 @@ logger = logging.getLogger(__name__)
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
+from app.engine.trading_costs import (
+    ADDITIONAL_COST_PCT as _ADDITIONAL_COST_PCT,
+    COMMISSION_RATE_PCT as _COMMISSION_RATE_PCT,
+    STAMP_TAX_RATE_PCT as _STAMP_TAX_RATE_PCT,
+    is_net_profitable,
+)
+
 from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun, SkillRegistry
 from app.services.evaluation_metrics import compute_full_metrics as _compute_full_metrics
 
@@ -204,7 +211,7 @@ def is_accurate_recommendation(outcome: RecommendationOutcome | Any | None) -> b
     executed_return 已含滑点但未扣佣金+印花税（_ADDITIONAL_COST_PCT，佣金万1双边+印花税0.05%卖出），
     阈值必须覆盖这部分成本，与 outcome_label 判定保持一致。
     """
-    return bool(is_trade_executed(outcome) and resolved_trade_return(outcome) > _ADDITIONAL_COST_PCT)
+    return bool(is_trade_executed(outcome) and is_net_profitable(resolved_trade_return(outcome)))
 
 
 def _apply_outcome_simulation(
@@ -399,6 +406,49 @@ def recompute_stale_outcomes(
     if recomputed:
         invalidate_outcome_metrics_cache()
     return {"recomputed": recomputed, "errors": errors, "flipped": flipped}
+
+
+def audit_trading_cost_boundary_labels(db: Session) -> dict[str, Any]:
+    """Idempotently repair only labels affected by the former 0.10% threshold.
+
+    Manual labels are never overwritten. The bounded 0.07%–0.10% scan avoids a
+    full historical simulation and is a no-op when the database has no affected
+    samples.
+    """
+    rows = list(
+        db.scalars(
+            select(RecommendationOutcome).where(
+                RecommendationOutcome.entry_triggered.is_(True),
+                RecommendationOutcome.executed_return > _ADDITIONAL_COST_PCT,
+                RecommendationOutcome.executed_return <= 0.10,
+                RecommendationOutcome.outcome_label.in_(EXECUTED_OUTCOME_LABELS),
+                RecommendationOutcome.label_source != "manual",
+            )
+        ).all()
+    )
+    updated = 0
+    for outcome in rows:
+        expected = (
+            OUTCOME_SUCCESS
+            if is_net_profitable(resolved_trade_return(outcome)) and not outcome.hit_invalid
+            else OUTCOME_FAILED
+        )
+        if outcome.outcome_label == expected and outcome.outcome_label_legacy == expected:
+            continue
+        outcome.outcome_label = expected
+        outcome.outcome_label_legacy = expected
+        outcome.label_source = "cost_policy_v2"
+        outcome.labeled_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        updated += 1
+    if updated:
+        db.commit()
+        invalidate_outcome_metrics_cache()
+    return {
+        "policy_version": "v2",
+        "additional_cost_pct": _ADDITIONAL_COST_PCT,
+        "scanned_count": len(rows),
+        "updated_count": updated,
+    }
 
 
 def overview_metrics(
@@ -1303,13 +1353,6 @@ def _alpha_decay_detection(db: Session) -> dict[str, Any]:
         "recent_period": f"{recent_rows[0][0].trade_date} to {recent_rows[-1][0].trade_date}",
         "factors": factors_result,
     }
-
-
-# A 股短线真实交易成本（在 slippage 之外的额外成本）
-# 佣金：万 1 双边（单边 0.01% × 2 = 0.02%）。印花税：0.05% 仅卖出。
-_COMMISSION_RATE_PCT = 0.02   # 佣金万 1 双边（0.01% × 2）
-_STAMP_TAX_RATE_PCT = 0.05    # 印花税卖出（0.05%，单边）
-_ADDITIONAL_COST_PCT = _COMMISSION_RATE_PCT + _STAMP_TAX_RATE_PCT
 
 
 def cost_adjusted_metrics(db: Session) -> dict[str, Any]:

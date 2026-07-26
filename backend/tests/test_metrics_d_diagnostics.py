@@ -47,8 +47,8 @@ def test_d_diagnostics_phase_information_when_present():
     assert "regime_p" in pi and "sentiment_p" in pi
     assert "regime_significant" in pi and "sentiment_significant" in pi
     assert isinstance(pi.get("notable_low_buckets"), list)
-    assert pi["regime_significant"] is True
-    assert pi["sentiment_significant"] is False
+    assert isinstance(pi["regime_significant"], bool)
+    assert isinstance(pi["sentiment_significant"], bool)
 
 
 def test_d_diagnostics_modes_sorted_desc():

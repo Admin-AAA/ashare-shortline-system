@@ -344,6 +344,21 @@ class SQLAlchemyRunRepository:
         elif commit.transition.target_status is RunStatus.RUNNING:
             values["finished_at"] = None
             values["interrupted_at"] = None
+        elif commit.transition.trigger is RunTrigger.REPLAY:
+            values.update(
+                {
+                    "lifecycle_phase": None,
+                    "checkpoint_side_effect_key": None,
+                    "finished_at": None,
+                    "interrupted_at": None,
+                    "error_message": None,
+                    "stable_error_code": None,
+                    "progress_phase": RunStatus.QUEUED.value,
+                    "progress_current": 0,
+                    "progress_total": 0,
+                    "progress_message": "中断任务从 PREPARE 完整重放",
+                }
+            )
 
         conditions = [
             RecommendationRun.run_id == run_id,

@@ -42,8 +42,8 @@ class ReviewExecutorPort(Protocol):
 class CostRecordingPort(Protocol):
     """Record API call costs after the review batch completes."""
 
-    def record_costs(self, run_id: str) -> None:
-        """Drain and persist accumulated API costs for the run."""
+    def record_costs(self, run_id: str) -> tuple[StageMapping, ...]:
+        """Drain/persist accumulated API costs and return the audit rows."""
 
 
 # ---------------------------------------------------------------------------
@@ -80,8 +80,25 @@ class ReviewStage:
         else:
             raise RuntimeError("ReviewStage requires a ReviewExecutorPort")
 
+        api_costs: tuple[StageMapping, ...] = ()
         if self.cost_recording is not None:
-            self.cost_recording.record_costs(context.run_id)
+            api_costs = self.cost_recording.record_costs(context.run_id)
+
+        from app.services.runs.filter_audit import skill_review_failure_audit
+
+        review_failure_audit = skill_review_failure_audit(
+            [dict(entry) for entry in candidate_results],
+            [dict(cost) for cost in api_costs],
+        )
+        pipeline_audit = dict(data.pipeline_audit or {})
+        pipeline_audit.update(
+            {
+                "skill_agent_call_count": review_failure_audit["requested_count"],
+                "skill_review_success_count": review_failure_audit["success_count"],
+                "skill_review_failure_audit": review_failure_audit,
+                "rule_only_fallback_count": 0,
+            }
+        )
 
         result = RunStageResult(
             phase=RunPhase.REVIEW,
@@ -89,6 +106,9 @@ class ReviewStage:
         )
         updated = data.with_updates(
             candidate_results=candidate_results,
+            api_costs=api_costs,
+            skill_review_failure_audit=review_failure_audit,
+            pipeline_audit=pipeline_audit,
         )
         return StageOutput(result=result, data=updated)
 

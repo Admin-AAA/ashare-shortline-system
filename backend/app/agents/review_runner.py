@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.agents.session_registry import AgentSessionRegistry
-from app.agents.agno_skill_agent import run_skill_agent_direct
+from app.agents.agno_skill_agent import load_cached_skill_review, run_skill_agent_direct
 from app.agents.hallucination_check import verify_review_output
 from app.engine.skill_loader import StrategySkill
 
@@ -39,6 +39,7 @@ async def run_skill_reviews(
     snapshot: dict[str, Any],
     rule_signals_by_skill: dict[str, dict[str, Any]],
     session_id: str,
+    request_limiter: asyncio.Semaphore | None = None,
 ) -> list[dict[str, Any]]:
     """
     对一只股票，并发调用所有已启用的 Skill Agent。
@@ -79,15 +80,28 @@ async def run_skill_reviews(
         try:
             rule_signal = rule_signals_by_skill.get(skill.skill_id)
 
-            review = await asyncio.wait_for(
-                run_skill_agent_direct(
-                    skill=skill,
-                    stock=stock,
-                    snapshot=snapshot,
-                    rule_signal=rule_signal,
-                ),
-                timeout=SKILL_TIMEOUT_SECONDS,
+            # A cache hit completes before the limiter, so it cannot reduce real
+            # model-call capacity or wait behind slow provider requests.
+            review = load_cached_skill_review(
+                skill=skill,
+                stock=stock,
+                snapshot=snapshot,
+                rule_signal=rule_signal,
             )
+
+            async def _call():
+                return await asyncio.wait_for(
+                    run_skill_agent_direct(
+                        skill=skill,
+                        stock=stock,
+                        snapshot=snapshot,
+                        rule_signal=rule_signal,
+                    ),
+                    timeout=SKILL_TIMEOUT_SECONDS,
+                )
+
+            if review is None:
+                review = await _call() if request_limiter is None else await _limited_call(request_limiter, _call)
             raw = review.model_dump() if hasattr(review, 'model_dump') else review
 
             # 验证输出（在字段名标准化之前，hallucination_check 读取 evidence）
@@ -116,6 +130,12 @@ async def run_skill_reviews(
     tasks = [review_one(s, i) for i, s in enumerate(active_skills)]
     results = await asyncio.gather(*tasks, return_exceptions=False)
     return list(results)
+
+
+async def _limited_call(limiter: asyncio.Semaphore, call):
+    """把许可覆盖完整逻辑审查，重试和路由切换不会放大上游并发。"""
+    async with limiter:
+        return await call()
 
 
 async def run_full_review(

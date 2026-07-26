@@ -169,6 +169,7 @@ def build_cockpit_recommendation(rec: Any, watch: Any = None) -> CockpitRecommen
         entry_rule=_get(rec, "entry_rule"),
         invalid_rule=_get(rec, "invalid_rule"),
         degraded_reason=_detect_degradation(info_tags, _get(rec, "rationale", "") or ""),
+        review_status=_get(feature_snapshot, "review_status"),
         market_context=market_context,
         skill_breakdown=_build_skill_breakdown_items(skill_breakdown),
         # LLM 审查顶层快捷字段（B 项：候选池卡片不展开即可见 LLM 态度）

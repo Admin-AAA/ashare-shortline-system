@@ -32,6 +32,7 @@ class StrategyEvaluationPort(Protocol):
         selected_skills: Sequence[StageMapping],
         snapshot: StageMapping,
         params: StageMapping,
+        prefilter_audit: StageMapping,
     ) -> tuple[
         tuple[StageMapping, ...],  # prelim_entries
         tuple[StageMapping, ...],  # skill_candidates
@@ -60,10 +61,16 @@ class StrategyEvaluationStage:
                     selected_skills=data.selected_skills,
                     snapshot=data.snapshot or {},
                     params=data.params or {},
+                    prefilter_audit=data.prefilter_audit or {},
                 )
             )
         else:
             raise RuntimeError("StrategyEvaluationStage requires a StrategyEvaluationPort")
+
+        pipeline_audit = dict(pipeline_audit)
+        pipeline_audit["agent_review_disabled"] = bool(
+            (data.params or {}).get("disable_agent_review")
+        )
 
         result = RunStageResult(
             phase=RunPhase.STRATEGY_EVALUATION,

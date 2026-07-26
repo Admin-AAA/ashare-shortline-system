@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.services.outcome_service import recompute_stale_outcomes
+from app.services.outcome_service import audit_trading_cost_boundary_labels, recompute_stale_outcomes
 from app.services.workbench_service import label_outcome_manually, label_pending_outcomes
 
 router = APIRouter(prefix="/api/outcomes", tags=["outcomes"])
@@ -35,3 +35,8 @@ def recompute(
     用于 _resolve_exit / _simulate_outcome 逻辑变更后让历史 outcome 反映新逻辑。
     """
     return recompute_stale_outcomes(db, horizon_days=horizon_days, limit=limit)
+
+
+@router.post("/audit-trading-cost-policy")
+def audit_trading_cost_policy(db: Session = Depends(get_db)):
+    return audit_trading_cost_boundary_labels(db)

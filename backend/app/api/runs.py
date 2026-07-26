@@ -1,6 +1,4 @@
 import logging
-
-import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -9,7 +7,6 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.engine.strategy_backtest_adapter import run_strategy_backtest_adapter
 from app.services.market_data import MarketDataError
-from app.services.runs.coordinator import LegacyWorkbenchRunCoordinator
 from app.services.runs.sqlalchemy_repository import SQLAlchemyRunRepository
 from app.services.workbench_service import (
     delete_run,
@@ -265,9 +262,10 @@ def backtest_detail(backtest_id: str, db: Session = Depends(get_db)):
 @router.get("")
 def get_runs(
     limit: int = Query(default=100, ge=1, le=500),
+    run_mode: str | None = Query(default=None, pattern="^(formal|experiment|backtest)$"),
     db: Session = Depends(get_db),
 ):
-    return list_runs(db, limit=limit)
+    return list_runs(db, limit=limit, run_mode=run_mode)
 
 
 @router.get("/{run_id}")
@@ -296,20 +294,15 @@ async def resume(run_id: str, db: Session = Depends(get_db)):
     repository = SQLAlchemyRunRepository(db)
     canonical_record = repository.get_run(run_id)
     if canonical_record is not None:
-        try:
-            resumed = LegacyWorkbenchRunCoordinator(repository).resume(
-                run_id,
-                now=datetime.now(timezone.utc).replace(tzinfo=None),
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if not resumed:
+        if canonical_record.has_active_lease(datetime.now(timezone.utc).replace(tzinfo=None)):
             raise HTTPException(
                 status_code=409,
-                detail="run cannot resume because its checkpoint, lease, or lifecycle revision is invalid",
+                detail="run cannot resume while another worker lease is active",
             )
-        # Persist the RESUME CAS before worker-owned code begins acquiring a lease.
-        db.commit()
+        # Keep the durable INTERRUPTED state intact until the worker reloads the
+        # canonical request.  The pipeline owns the replay/resume transition;
+        # changing it to RUNNING here would erase the only reliable recovery
+        # signal before the worker can inspect the persistence checkpoint.
         try:
             dispatch_workbench_run(db, run_id)
         except (ValueError, RuntimeError) as exc:

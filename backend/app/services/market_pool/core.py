@@ -1623,73 +1623,105 @@ def _load_cached_bars_batch(
         return {}
     latest_allowed_date = as_of_date or _latest_allowed_bar_date()
 
-    all_rows = db.scalars(
-        select(DailyKbar)
-        .where(DailyKbar.code.in_(codes), DailyKbar.trade_date <= latest_allowed_date)
-        .order_by(DailyKbar.code, DailyKbar.trade_date.desc())
-    ).all()
-
-    bars_by_code: dict[str, list] = defaultdict(list)
-    for row in all_rows:
-        if len(bars_by_code[row.code]) >= limit:
-            continue
-        bars_by_code[row.code].append(row)
+    selected_columns = tuple(
+        getattr(DailyKbar, name)
+        for name in (
+            "code", "trade_date", "open", "high", "low", "close", "volume", "amount",
+            "pct_chg", "turnover_rate", "ma5", "ma10", "ma20", "ma60", "vol_ratio_5",
+            "chip_winner_rate", "chip_weight_avg", "chip_cost_15", "chip_cost_50", "chip_cost_85",
+            "holder_pct", "profit_efficiency", "rsi_6", "rsi_12", "rsi_24", "macd_dif",
+            "macd_dea", "macd_bar", "bias_5", "bias_10", "bias_20", "breakout20",
+            "breakout60", "upper_shadow_count20", "max_dd20", "max_dd60",
+        )
+    )
+    bars_by_code: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    # Rank only a narrow common-calendar window first. Suspended/new listings
+    # that produce fewer than ``limit`` rows are repaired below with an exact
+    # per-code fallback, so historical replay remains byte-for-byte equivalent.
+    safety_sessions = max(limit + 20, limit)
+    broad_cutoff = db.scalar(
+        select(DailyKbar.trade_date)
+        .where(DailyKbar.trade_date <= latest_allowed_date)
+        .distinct()
+        .order_by(DailyKbar.trade_date.desc())
+        .offset(max(0, safety_sessions - 1))
+        .limit(1)
+    )
+    chunk_size = 500
+    for start in range(0, len(codes), chunk_size):
+        code_chunk = codes[start : start + chunk_size]
+        ranked = (
+            select(
+                *selected_columns,
+                func.row_number().over(
+                    partition_by=DailyKbar.code,
+                    order_by=DailyKbar.trade_date.desc(),
+                ).label("row_number"),
+            )
+            .where(
+                DailyKbar.code.in_(code_chunk),
+                DailyKbar.trade_date <= latest_allowed_date,
+                *(
+                    (DailyKbar.trade_date >= broad_cutoff,)
+                    if broad_cutoff is not None
+                    else ()
+                ),
+            )
+            .subquery()
+        )
+        rows = db.execute(
+            select(ranked).where(ranked.c.row_number <= limit)
+            .order_by(ranked.c.code, ranked.c.trade_date.asc())
+        ).mappings()
+        for row in rows:
+            chip_cost_15 = row["chip_cost_15"]
+            chip_cost_85 = row["chip_cost_85"]
+            bars_by_code[str(row["code"])].append({
+                "code": row["code"],
+                "trade_date": _normalize_trade_date(row["trade_date"]),
+                "open": float(row["open"] or 0),
+                "high": float(row["high"] or 0),
+                "low": float(row["low"] or 0),
+                "close": float(row["close"] or 0),
+                "volume": float(row["volume"] or 0),
+                "amount": float(row["amount"] or 0),
+                "pct_chg": float(row["pct_chg"] or 0),
+                "turnover_rate": float(row["turnover_rate"] or 0),
+                "ma5": row["ma5"], "ma10": row["ma10"], "ma20": row["ma20"], "ma60": row["ma60"],
+                "volume_ratio_5d": row["vol_ratio_5"],
+                "chip_winner_rate": row["chip_winner_rate"], "chip_weight_avg": row["chip_weight_avg"],
+                "chip_cost_15": chip_cost_15, "chip_cost_50": row["chip_cost_50"], "chip_cost_85": chip_cost_85,
+                "holder_pct": row["holder_pct"], "profit_efficiency": row["profit_efficiency"],
+                "chip_concentration": round((float(chip_cost_85) - float(chip_cost_15)) / float(chip_cost_15) * 100, 2) if chip_cost_15 and float(chip_cost_15) > 0 and chip_cost_85 else None,
+                "_indicator": {
+                    "rsi_6": row["rsi_6"], "rsi_12": row["rsi_12"], "rsi_24": row["rsi_24"],
+                    "macd_dif": row["macd_dif"], "macd_dea": row["macd_dea"], "macd_bar": row["macd_bar"],
+                    "bias_ma5": row["bias_5"], "bias_ma10": row["bias_10"], "bias_ma20": row["bias_20"],
+                    "breakout20": row["breakout20"], "breakout60": row["breakout60"],
+                    "upper_shadow_count20": row["upper_shadow_count20"],
+                    "max_dd20": row["max_dd20"], "max_dd60": row["max_dd60"],
+                },
+            })
 
     result: dict[str, list[dict[str, Any]]] = {}
     for code in codes:
-        rows = sorted(bars_by_code.get(code, []), key=lambda r: r.trade_date)
-        bars = []
-        for row in rows:
-            bar = {
-                "code": row.code,
-                "trade_date": _normalize_trade_date(row.trade_date),
-                "open": float(row.open or 0),
-                "high": float(row.high or 0),
-                "low": float(row.low or 0),
-                "close": float(row.close or 0),
-                "volume": float(row.volume or 0),
-                "amount": float(row.amount or 0),
-                "pct_chg": float(row.pct_chg or 0),
-                "turnover_rate": float(row.turnover_rate or 0),
-                "ma5": row.ma5,
-                "ma10": row.ma10,
-                "ma20": row.ma20,
-                "ma60": row.ma60,
-                "volume_ratio_5d": row.vol_ratio_5,
-                # 筹码分布字段（Tushare 真实数据）
-                "chip_winner_rate": row.chip_winner_rate,
-                "chip_weight_avg": row.chip_weight_avg,
-                "chip_cost_15": row.chip_cost_15,
-                "chip_cost_50": row.chip_cost_50,
-                "chip_cost_85": row.chip_cost_85,
-                "holder_pct": row.holder_pct,
-                "profit_efficiency": row.profit_efficiency,
-                # 筹码集中度（前移计算，供 prefilter 阶段使用，避免 chip-single-peak 策略 prefilter 死锁）
-                "chip_concentration": round((float(row.chip_cost_85) - float(row.chip_cost_15)) / float(row.chip_cost_15) * 100, 2) if row.chip_cost_15 and float(row.chip_cost_15) > 0 and row.chip_cost_85 else None,
-                "_indicator": {
-                    "rsi_6": row.rsi_6,
-                    "rsi_12": row.rsi_12,
-                    "rsi_24": row.rsi_24,
-                    "macd_dif": row.macd_dif,
-                    "macd_dea": row.macd_dea,
-                    "macd_bar": row.macd_bar,
-                    "bias_ma5": row.bias_5,
-                    "bias_ma10": row.bias_10,
-                    "bias_ma20": row.bias_20,
-                    "breakout20": row.breakout20,
-                    "breakout60": row.breakout60,
-                    "upper_shadow_count20": row.upper_shadow_count20,
-                    "max_dd20": row.max_dd20,
-                    "max_dd60": row.max_dd60,
-                },
-            }
-            bars.append(bar)
-        result[code] = bars
+        rows = bars_by_code.get(code, [])
+        result[code] = (
+            rows
+            if len(rows) >= limit
+            else _load_cached_bars(db, code, limit, as_of_date=latest_allowed_date)
+        )
     return result
 
 
-def _load_cached_bars(db: Session, code: str, limit: int) -> list[dict[str, Any]]:
-    latest_allowed_date = _latest_allowed_bar_date()
+def _load_cached_bars(
+    db: Session,
+    code: str,
+    limit: int,
+    *,
+    as_of_date: str | None = None,
+) -> list[dict[str, Any]]:
+    latest_allowed_date = as_of_date or _latest_allowed_bar_date()
     rows = db.scalars(
         select(DailyKbar)
         .where(DailyKbar.code == code, DailyKbar.trade_date <= latest_allowed_date)
