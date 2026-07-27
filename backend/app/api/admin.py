@@ -88,6 +88,40 @@ def get_data_health(force_refresh: bool = False, db: Session = Depends(get_db)):
     return diagnose_all(db, force_refresh=bool(force_refresh))
 
 
+# ── 数据源管理（配置页 Tab）：provider 列表 / 启停 / 测试 ──
+
+
+@router.get("/data-sources")
+def list_data_sources_api(db: Session = Depends(get_db)):
+    """列出全部 tushare provider（fastapic/xiaodefa/ai_tool/realtime_quote）的运行状态。"""
+    from app.services.tushare_client import get_tushare_provider_health
+
+    return {"providers": get_tushare_provider_health()}
+
+
+@router.post("/data-sources/{provider_name}/enabled")
+def set_provider_enabled_api(provider_name: str, payload: dict, db: Session = Depends(get_db)):
+    """启停某 provider（运行时即时生效，不动 config）。payload: {"enabled": true/false}"""
+    from app.services.data_sources import set_provider_enabled
+
+    enabled = bool(payload.get("enabled", True))
+    result = set_provider_enabled(db, provider_name, enabled)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"provider 未接入: {provider_name}")
+    return result
+
+
+@router.post("/data-sources/{provider_name}/test")
+def test_provider_api(provider_name: str, db: Session = Depends(get_db)):
+    """探针测试某 provider 当前是否可用，返回 {ok, latency_ms, status, error}。"""
+    from app.services.data_sources import test_provider
+
+    try:
+        return test_provider(db, provider_name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"provider 未接入: {provider_name}")
+
+
 @router.post("/data-health/remediate")
 def remediate_data_health(payload: dict | None = None, db: Session = Depends(get_db)):
     payload = payload or {}

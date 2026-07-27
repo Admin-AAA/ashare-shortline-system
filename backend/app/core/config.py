@@ -24,6 +24,16 @@ class Settings(BaseSettings):
     tushare_ai_tool_rate_limit_per_minute: int = 90
     tushare_ai_tool_rt_min_rate_limit_per_minute: int = 72
     tushare_ai_tool_stk_mins_rate_limit_per_minute: int = 48
+    # xiaodefa：第三方 tushare pro 协议数据源（pro_http），作为通用同步的补充 fallback。
+    tushare_xiaodefa_url: str = "https://t.xiaodefa.top/"
+    tushare_xiaodefa_token: str = ""
+    tushare_xiaodefa_rate_limit_per_minute: int = 60
+    # 实时报价爬虫接口（tushare realtime_quote，走 realtime.stockai888.top）。
+    # 独立于 ai-tool/fastapic 的 pro HTTP 协议：多代码批量、含现价/最高/最低/昨收，
+    # 用于未结算推荐的盘中实时浮盈。token 复用 fastapic token。
+    tushare_realtime_quote_url: str = "https://realtime.stockai888.top"
+    tushare_realtime_quote_batch_size: int = 60
+    tushare_realtime_quote_ttl_seconds: float = 20.0
     tushare_provider_failure_threshold: int = 3
     tushare_provider_recovery_seconds: float = 60.0
     tushare_provider_max_attempts: int = 2

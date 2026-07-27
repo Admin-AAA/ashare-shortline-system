@@ -1,17 +1,18 @@
 import { useState } from "react";
-import { BarChart3, Clock, Database, Layers, Plug } from "lucide-react";
+import { BarChart3, Clock, Database, Layers, Plug, Server } from "lucide-react";
 import { ModelRoutesSection } from "../components/ModelRoutesSection";
 import { PresetsSection } from "../components/PresetsSection";
 import { SchedulerTasksSection } from "../components/SchedulerTasksSection";
+import { DataSourcesSection } from "../components/DataSourcesSection";
 import { DataHealthSection } from "./DataHealthPage";
 import { SystemStatsSection } from "../components/SystemStatsSection";
 
-type ConfigTab = "scheduler" | "llm" | "presets" | "data-health" | "stats";
+type ConfigTab = "scheduler" | "llm" | "presets" | "data-health" | "data-sources" | "stats";
 
 export function ConfigPage() {
   const [tab, setTab] = useState<ConfigTab>(() => {
     const q = new URLSearchParams(window.location.search).get("tab");
-    return q === "scheduler" || q === "llm" || q === "presets" || q === "stats" ? q : "data-health";
+    return q === "scheduler" || q === "llm" || q === "presets" || q === "stats" || q === "data-sources" ? q : "data-health";
   });
 
   return (
@@ -20,6 +21,10 @@ export function ConfigPage() {
         <SubTab active={tab === "data-health"} onClick={() => setTab("data-health")}>
           <Database size={14} />
           数据健康
+        </SubTab>
+        <SubTab active={tab === "data-sources"} onClick={() => setTab("data-sources")}>
+          <Server size={14} />
+          数据源
         </SubTab>
         <SubTab active={tab === "stats"} onClick={() => setTab("stats")}>
           <BarChart3 size={14} />
@@ -43,6 +48,7 @@ export function ConfigPage() {
       {tab === "llm" && <ModelRoutesSection />}
       {tab === "presets" && <PresetsSection />}
       {tab === "data-health" && <DataHealthSection />}
+      {tab === "data-sources" && <DataSourcesSection />}
       {tab === "stats" && <SystemStatsSection />}
     </div>
   );

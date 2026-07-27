@@ -64,6 +64,9 @@ class ProviderConfig:
     failure_threshold: int = 3
     recovery_seconds: float = 60.0
     api_rate_limits: Mapping[str, int] = field(default_factory=dict)
+    # 路由优先级：数值越小越优先。ai_tool_primary_apis 命中的 API 会整体偏向 ai_tool，
+    # 其余按 priority 升序尝试；同优先级按注册顺序。enabled 覆盖见 TushareProviderRouter。
+    priority: int = 100
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -631,16 +634,30 @@ class TushareHttpProvider:
 class TushareProviderRouter:
     """API-aware routing over independently protected providers."""
 
+    # 默认 per-API 选路链：{api_name: [provider 名按尝试顺序]}。
+    # 未列出的 API 回落到按 provider priority 升序。rt_k 首选 xiaodefa（fastapic 无权限、
+    # ai_tool 需独立付费且常 504），stk_mins/rt_min/anns_d 维持 ai_tool 优先。
+    DEFAULT_API_ROUTES: Mapping[str, tuple[str, ...]] = {
+        "rt_k": ("xiaodefa", "fastapic", "ai_tool"),
+        "stk_mins": ("ai_tool", "fastapic", "xiaodefa"),
+        "rt_min": ("ai_tool", "fastapic", "xiaodefa"),
+        "anns_d": ("ai_tool", "fastapic", "xiaodefa"),
+    }
+
     def __init__(
         self,
         providers: list[TushareHttpProvider],
         *,
-        ai_tool_primary_apis: frozenset[str] | None = None,
+        api_routes: Mapping[str, tuple[str, ...]] | None = None,
+        enabled_override: Any = None,
     ) -> None:
         self._providers = {provider.name: provider for provider in providers}
-        self._ai_tool_primary_apis = ai_tool_primary_apis or frozenset(
-            {"stk_mins", "rt_min", "rt_k", "anns_d"}
-        )
+        # per-API 选路链：api_name -> [provider 名按尝试顺序]。默认 DEFAULT_API_ROUTES，
+        # 可由 api_routes 覆盖（数据源管理/未来新源在此调链序，与业务解耦）。
+        self._api_routes = dict(api_routes) if api_routes is not None else dict(self.DEFAULT_API_ROUTES)
+        # enabled_override: 可选可调用 () -> Mapping[str, bool]，提供 provider 运行时启停
+        # （DB 覆盖 config）。为 None 时全部启用。每次选路时读取，使启停即时生效。
+        self._enabled_override = enabled_override
 
     def close(self) -> None:
         for provider in self._providers.values():
@@ -650,13 +667,28 @@ class TushareProviderRouter:
         """Return non-sensitive runtime telemetry for every configured Provider."""
         return [provider.health_snapshot() for provider in self._providers.values()]
 
+    def _is_enabled(self, name: str) -> bool:
+        if self._enabled_override is None:
+            return True
+        try:
+            overrides = self._enabled_override() or {}
+        except Exception:
+            # 覆盖读取失败（如 DB 暂不可用）→ 保守视为全部启用，不阻断同步链路
+            logger.debug("provider enabled_override read failed", exc_info=True)
+            return True
+        return bool(overrides.get(name, True))
+
     def _ordered_providers(self, api_name: str) -> list[TushareHttpProvider]:
-        names = (
-            ("ai_tool", "fastapic")
-            if api_name in self._ai_tool_primary_apis
-            else ("fastapic", "ai_tool")
-        )
-        return [self._providers[name] for name in names if name in self._providers]
+        enabled = [p for p in self._providers.values() if self._is_enabled(p.name)]
+        route = self._api_routes.get(api_name)
+        if route:
+            # 显式链序：按 route 顺序挑选已启用且已注册的 provider
+            by_name = {p.name: p for p in enabled}
+            ordered = [by_name[name] for name in route if name in by_name]
+            # 链里没列出但已启用的 provider 追加在末尾（按 priority），避免漏掉 fallback
+            rest = sorted((p for p in enabled if p.name not in route), key=lambda p: p.config.priority)
+            return ordered + rest
+        return sorted(enabled, key=lambda p: p.config.priority)
 
     def request(
         self,
