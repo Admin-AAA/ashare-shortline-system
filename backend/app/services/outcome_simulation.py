@@ -132,7 +132,16 @@ def _simulate_outcome(
     feature_snapshot: dict[str, Any] | None = None,
     *,
     pre_resolved_entry: dict[str, Any] | None = None,
+    exit_resolver: Any = None,
 ) -> dict[str, Any] | None:
+    """模拟单笔推荐 outcome。
+
+    exit_resolver 默认 None → 用生产两轮扫描的 _resolve_exit。
+    传入自定义解析器（签名同 _resolve_exit：holding_bars, stop_loss, take_profit,
+    *, code, entry_price）可替换退出逻辑，用于动态退出状态机反事实验证。
+    入场时序、holding_bars 起点、executed_entry_price（含滑点）、除权重算等全部
+    复用生产路径，只替换 exit 环节。
+    """
     if not bars:
         return None
 
@@ -258,7 +267,8 @@ def _simulate_outcome(
     if not holding_bars:
         return None
 
-    exit_price, exit_date, exit_reason = _resolve_exit(
+    resolver = exit_resolver if exit_resolver is not None else _resolve_exit
+    exit_price, exit_date, exit_reason = resolver(
         holding_bars,
         stop_loss_price,
         take_profit_price,
@@ -682,6 +692,133 @@ def _resolve_exit_with_trailing(
     return _as_float(last_bar.close), str(last_bar.trade_date), "horizon_close"
 
 
+def _resolve_exit_causal(
+    holding_bars: list[DailyKbar],
+    stop_loss_price: float,
+    take_profit_price: float,
+    *,
+    code: str = "",
+    entry_price: float = 0.0,
+    dynamic_trailing: bool = True,
+) -> tuple[float, str, str]:
+    """单路径因果退出函数（动态退出状态机 MVP）。
+
+    与生产 `_resolve_exit` 的关键差异：trailing 保护价严格按交易日推进，**只用截至上一
+    交易日收盘已知的信息**生成下一交易日生效的保护价，当日新形成的最高价只能更新下一
+    交易日的保护价，不得反过来触发当日退出（日 K 无法证明当日 high/low 先后顺序）。
+
+    holding_bars[0] 是入场日，当天禁止退出（T+1）。入场日 close 用于初始化次日计划：
+    - entry_close_return = (entry_close / entry_price - 1) * 100
+    - 若 ≥ TRAILING_STOP_ACTIVATE_PCT(2.0%)，从次日起激活移动保护
+    - 次日保护价 = entry_price * (1 + (entry_close_return - callback) / 100)
+      不得低于 hard_stop，也不得低于上一版保护价（单调上移）
+
+    对 holding_bars[1:] 逐日按 Spec §4 的 10 条顺序判断；当 5、6（low 触止损）与 7、8
+    （low/high 触 trailing/tp）同日并存时，按 Spec §4.5/§4.6/§4.7 的保守顺序：固定止损 >
+    已确定的移动保护价 > 固定止盈。窗口结束未退出按最后一日收盘。
+
+    dynamic_trailing=False 时退化为纯单路径固定止盈止损（与 _resolve_exit_base 在
+    holding_bars[1:] 上的语义一致），用于反事实验证的因果基线。
+    """
+    if not holding_bars:
+        return 0.0, "", "horizon_close"
+    if len(holding_bars) <= 1:
+        # 入场日即 horizon 末：T+1 锁仓，按入场日收盘标记
+        last = holding_bars[-1]
+        return _as_float(last.close or 0), str(last.trade_date), "horizon_close_t1_locked"
+
+    entry_bar = holding_bars[0]
+    scan_bars = holding_bars[1:]
+    hard_stop = stop_loss_price
+    take_profit = take_profit_price
+
+    # ── 入场日收盘初始化次日计划（因果：只用 entry_bar.close，不用 high）──
+    trailing_active = False
+    observed_high_return = 0.0  # 截至上一交易日收盘已知的最高浮盈（%）
+    next_trailing_stop = 0.0    # 下一交易日生效的移动保护价
+    if dynamic_trailing and entry_price > 0:
+        entry_close = _as_float(entry_bar.close)
+        if entry_close > 0:
+            entry_close_return = (entry_close / entry_price - 1) * 100
+            observed_high_return = max(0.0, entry_close_return)
+            if entry_close_return >= TRAILING_STOP_ACTIVATE_PCT:
+                trailing_active = True
+                prot = entry_price * (1 + (entry_close_return - TRAILING_STOP_CALLBACK_PCT) / 100.0)
+                prot = max(prot, hard_stop)
+                next_trailing_stop = prot
+
+    locked_limit_down_bars = 0
+    for bar in scan_bars:
+        sellable = _exit_execution_block_reason(code, bar) is None
+        if not sellable:
+            locked_limit_down_bars += 1
+        bar_open = _as_float(bar.open)
+        high = _as_float(bar.high)
+        low = _as_float(bar.low)
+        has_ohlc = bar_open > 0 and low > 0 and high > 0
+
+        if sellable and has_ohlc:
+            # 2. 开盘不高于固定止损 → stop_loss_gap（隔夜止损单口径）
+            if bar_open <= hard_stop:
+                if entry_price > 0:
+                    min_exit_price = entry_price * (1 + STOP_LOSS_GAP_CAP_PCT / 100.0)
+                    gap_exit = max(bar_open, min_exit_price)
+                else:
+                    gap_exit = bar_open
+                return gap_exit, str(bar.trade_date), "stop_loss_gap"
+            # 3. 已激活移动保护且开盘不高于保护价 → trailing_stop_gap
+            if (
+                dynamic_trailing
+                and trailing_active
+                and next_trailing_stop > 0
+                and bar_open <= next_trailing_stop
+            ):
+                return bar_open, str(bar.trade_date), "trailing_stop_gap"
+            # 4. 开盘不低于固定止盈 → take_profit_gap
+            if bar_open >= take_profit:
+                return bar_open, str(bar.trade_date), "take_profit_gap"
+            # 5. 同日 low 触止损且 high 触止盈 → 保守按止损
+            if low <= hard_stop and high >= take_profit:
+                return hard_stop, str(bar.trade_date), "stop_loss_intraday_both_hit"
+            # 6. low 触及固定止损 → stop_loss_hit
+            if low <= hard_stop:
+                return hard_stop, str(bar.trade_date), "stop_loss_hit"
+            # 7. 已存在上一日确定的移动保护价，且 low 触及 → 按保护价退出
+            if (
+                dynamic_trailing
+                and trailing_active
+                and next_trailing_stop > 0
+                and low <= next_trailing_stop
+            ):
+                return next_trailing_stop, str(bar.trade_date), "trailing_stop_hit"
+            # 8. high 触及固定止盈 → take_profit_hit
+            if high >= take_profit:
+                return take_profit, str(bar.trade_date), "take_profit_hit"
+
+        # 9. 当日未退出（含不可卖日），收盘后用当日 high 更新下一交易日的计划。
+        #    因果关键：当日 high 只更新 next_trailing_stop，绝不反过来触发当日退出。
+        if dynamic_trailing and entry_price > 0 and high > 0:
+            bar_high_return = (high / entry_price - 1) * 100
+            if bar_high_return > observed_high_return:
+                observed_high_return = bar_high_return
+            if not trailing_active and observed_high_return >= TRAILING_STOP_ACTIVATE_PCT:
+                trailing_active = True
+            if trailing_active:
+                prot = entry_price * (1 + (observed_high_return - TRAILING_STOP_CALLBACK_PCT) / 100.0)
+                prot = max(prot, hard_stop)
+                # 保护价单调上移：不得低于上一版
+                if prot > next_trailing_stop:
+                    next_trailing_stop = prot
+
+    # 10. 持有窗口结束仍未退出 → 最后一日收盘
+    last_bar = holding_bars[-1]
+    if locked_limit_down_bars and locked_limit_down_bars == len(scan_bars):
+        return _as_float(last_bar.close), str(last_bar.trade_date), "limit_down_locked_horizon_mark"
+    if locked_limit_down_bars:
+        return _as_float(last_bar.close), str(last_bar.trade_date), "horizon_close_after_locked_limit_down"
+    return _as_float(last_bar.close), str(last_bar.trade_date), "horizon_close"
+
+
 def _resolve_stop_loss_price(raw_entry_price: float | None, feature_snapshot: dict[str, Any]) -> float:
     """解析止损价，加入归一化逻辑防止过紧的止损。
 
@@ -803,6 +940,8 @@ def _build_outcome_reason(
         "stop_loss_intraday_both_hit": "同日同时触发止盈止损，按保守止损处理",
         "stop_loss_hit": "盘中触发止损",
         "take_profit_hit": "盘中触发止盈",
+        "trailing_stop_hit": "盘中触发移动保护",
+        "trailing_stop_gap": "开盘跳空触发移动保护",
         "horizon_close": "持有到观察期结束",
         "limit_down_locked_horizon_mark": "观察期内一字跌停或无流动性，按期末价格保守标记",
         "horizon_close_after_locked_limit_down": "出现一字跌停或无流动性后递延至观察期末",
