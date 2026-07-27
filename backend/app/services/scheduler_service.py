@@ -50,7 +50,10 @@ MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID = "manual_data_health_remediation"
 SAFETY_NET_TASK_ID = "formal_run_safety_net"
 SAFETY_NET_MAX_ATTEMPTS = 3
 POSTCLOSE_PIPELINE_TASK_ID = "post_sync_formal_recommendation"
-POSTCLOSE_PIPELINE_CRON = "35 17 * * 1-5"
+# 工作日必须写 mon-fri 而不是数字 1-5：APScheduler 的 day_of_week 是 0=Monday，
+# 与标准 crontab 的 0=Sunday 差一天，"1-5" 会被解析成「周二到周六」——周一永不触发、
+# 周六反而跑。名称形式在两种语义下都无歧义，是唯一安全写法。见 _normalize_cron。
+POSTCLOSE_PIPELINE_CRON = "35 17 * * mon-fri"
 LEGACY_POSTCLOSE_TASK_IDS = (
     "postclose_quote_refresh",
     "postclose_daily_kbar_batch",
@@ -61,7 +64,7 @@ LEGACY_POSTCLOSE_TASK_IDS = (
 # 策略曝光补跑调度任务（E 项样本可信前置）：盘前对近30天样本不足的策略单独补跑。
 # 任务 ID 固定，start_scheduler 时幂等注册（已存在则不覆盖用户手动调整的 cron/payload）。
 EXPOSURE_TASK_ID = "strategy_exposure_run"
-EXPOSURE_CRON = "3 8 * * 1-5"  # 周一到周五 08:03（盘前，避免与盘后结算/回填争抢资源）
+EXPOSURE_CRON = "3 8 * * mon-fri"  # 周一到周五 08:03（盘前，避免与盘后结算/回填争抢资源）
 # 曝光补跑默认阈值：近30天已兑现样本 < 此值的 enabled 策略才补跑。
 # 取 20 与北极星 E 项样本置信度下限对齐——样本 <20 时胜率统计不可信（置信区间过宽），
 # 补跑持续喂到此值才让每个策略胜率可被信任，进而能按胜率选策略。
@@ -306,6 +309,43 @@ def stop_scheduler() -> None:
         logger.info("调度器已停止")
 
 
+# 标准 crontab 的 day_of_week 是 0/7=Sunday，APScheduler 是 0=Monday。用户按 crontab
+# 习惯写的数字星期会整体偏移一天（"1-5" → 周二至周六，周一漏跑、周六误跑）。
+# 这里把数字星期按 crontab 语义翻译成 APScheduler 的名称形式，让两种写法都得到
+# 用户预期的日期。已是名称形式（mon-fri）的表达式原样透传。
+_CRON_DOW_NAMES = ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
+
+
+def _normalize_cron(cron_expression: str) -> str:
+    """把 cron 表达式的数字星期字段按标准 crontab 语义转成 APScheduler 名称形式。"""
+    parts = cron_expression.strip().split()
+    if len(parts) != 5:
+        return cron_expression
+    dow = parts[4]
+    if dow == "*" or not any(ch.isdigit() for ch in dow):
+        return cron_expression
+
+    def to_name(token: str) -> str:
+        if not token.isdigit():
+            return token
+        # crontab 里 0 和 7 都表示周日
+        return _CRON_DOW_NAMES[int(token) % 7]
+
+    translated = []
+    for item in dow.split(","):
+        step = ""
+        if "/" in item:
+            item, _, step = item.partition("/")
+            step = f"/{step}"
+        if "-" in item:
+            start, _, end = item.partition("-")
+            translated.append(f"{to_name(start)}-{to_name(end)}{step}")
+        else:
+            translated.append(f"{to_name(item)}{step}")
+    parts[4] = ",".join(translated)
+    return " ".join(parts)
+
+
 def _load_and_schedule() -> None:
     """从数据库加载已启用的任务并注册到调度器。"""
     if _scheduler is None:
@@ -314,11 +354,19 @@ def _load_and_schedule() -> None:
         db = SessionLocal()
         tasks = db.query(ScheduledTask).filter(ScheduledTask.enabled == True).all()
         for task in tasks:
+            normalized = _normalize_cron(task.cron_expression or "")
             try:
-                trigger = CronTrigger.from_crontab(task.cron_expression, timezone="Asia/Shanghai")
+                trigger = CronTrigger.from_crontab(normalized, timezone="Asia/Shanghai")
             except Exception:
                 logger.warning("无效 cron 表达式 '%s'，任务 %s 跳过", task.cron_expression, task.task_id)
                 continue
+            if normalized != task.cron_expression:
+                logger.info(
+                    "cron 星期字段按 crontab 语义归一化: 任务 %s '%s' → '%s'",
+                    task.task_id,
+                    task.cron_expression,
+                    normalized,
+                )
 
             _scheduler.add_job(
                 _execute_task,

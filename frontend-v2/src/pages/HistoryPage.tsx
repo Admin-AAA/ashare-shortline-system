@@ -375,7 +375,6 @@ export function HistoryPage() {
                 <th style={thStyle}>价格/风控</th>
                 <th style={thStyle}>执行规则</th>
                 <th style={thStyle}>结果</th>
-                <th style={{ ...thStyle, textAlign: "right" }}>实时盈亏</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>收益</th>
                 <th style={{ ...thStyle, textAlign: "right", minWidth: 128 }}>退出/持仓</th>
               </tr>
@@ -498,9 +497,6 @@ export function HistoryPage() {
                       <td style={{ ...tdStyle, color: labelColor, fontWeight: 600 }}>
                         {outcomeLabel(o?.outcome_label)}
                       </td>
-                      <td style={{ ...tdStyle, textAlign: "right", fontFamily: "var(--font-mono)" }}>
-                        {renderRealtimePnl(pnlMap[it.recommendation_id])}
-                      </td>
                       <td
                         style={{
                           ...tdStyle,
@@ -509,12 +505,20 @@ export function HistoryPage() {
                           color: ret == null ? "var(--muted)" : ret >= 0 ? "var(--market-up)" : "var(--market-down)",
                         }}
                       >
-                        <div style={stackStyle}>
-                          <span>{ret == null ? "—" : `${ret >= 0 ? "+" : ""}${ret.toFixed(2)}%`}</span>
-                          {ret != null && isGapEntry && (
-                            <span style={{ color: "var(--muted)", fontSize: "var(--text-xs)", opacity: 0.8 }}>
-                              基于实入场
-                            </span>
+                        <div style={{ ...stackStyle, alignItems: "flex-end" }}>
+                          {ret != null ? (
+                            // 已结算：显示真实净收益（基于实入场口径）
+                            <>
+                              <span>{`${ret >= 0 ? "+" : ""}${ret.toFixed(2)}%`}</span>
+                              {isGapEntry && (
+                                <span style={{ color: "var(--muted)", fontSize: "var(--text-xs)", opacity: 0.8 }}>
+                                  基于实入场
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            // 未结算：回落到实时浮盈，标注「未结算」与「收益」区分
+                            renderRealtimePnl(pnlMap[it.recommendation_id])
                           )}
                         </div>
                       </td>
@@ -535,7 +539,7 @@ export function HistoryPage() {
                     </tr>
                     {expandedId === it.recommendation_id && (
                       <tr>
-                        <td colSpan={10} style={{ padding: 0, borderBottom: "1px solid var(--border)" }}>
+                        <td colSpan={9} style={{ padding: 0, borderBottom: "1px solid var(--border)" }}>
                           {detailLoadingId === it.recommendation_id ? (
                             <div style={detailStateStyle}>
                               <Loader2 size={16} className="spin" /> 加载完整决策详情…
@@ -627,23 +631,33 @@ const clip = (value: string, max: number) => {
 
 const shortVersionId = (value: string) => value.length <= 14 ? value : `${value.slice(0, 14)}…`;
 
-// 实时盈亏单元格：holding 显示浮盈%（红涨绿跌），watching 显示距买点，已结算/无数据显示 —。
+// 实时盈亏单元格（未结算占位）：holding 显示浮盈%（红涨绿跌），watching 显示距买点，
+// 无数据显示 —。统一在下方标注「未结算」，与已结算的「收益」区分。
 const renderRealtimePnl = (item: RealtimePnlItem | undefined) => {
+  const unsettledTag = (
+    <span style={{ color: "var(--muted)", fontSize: "var(--text-xs)", opacity: 0.8 }}>未结算</span>
+  );
   if (!item) return <span style={{ color: "var(--muted)" }}>—</span>;
   if (item.status === "holding" && item.pnl_pct != null) {
     const up = item.pnl_pct >= 0;
     return (
-      <span style={{ color: up ? "var(--market-up)" : "var(--market-down)", fontWeight: 600 }} title={`入场 ${item.entry_price} · 现价 ${item.now_price}`}>
-        {up ? "+" : ""}{item.pnl_pct.toFixed(2)}%
-      </span>
+      <>
+        <span style={{ color: up ? "var(--market-up)" : "var(--market-down)", fontWeight: 600 }} title={`入场 ${item.entry_price} · 现价 ${item.now_price}`}>
+          {up ? "+" : ""}{item.pnl_pct.toFixed(2)}%
+        </span>
+        {unsettledTag}
+      </>
     );
   }
   if (item.status === "watching") {
     const dist = item.distance_to_target_pct;
     return (
-      <span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }} title={item.reason || "买点未触发"}>
-        距买点 {dist != null ? `${dist >= 0 ? "+" : ""}${dist.toFixed(1)}%` : "—"}
-      </span>
+      <>
+        <span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }} title={item.reason || "买点未触发"}>
+          距买点 {dist != null ? `${dist >= 0 ? "+" : ""}${dist.toFixed(1)}%` : "—"}
+        </span>
+        {unsettledTag}
+      </>
     );
   }
   return <span style={{ color: "var(--muted)" }} title={item.reason || "实时行情不可用"}>—</span>;

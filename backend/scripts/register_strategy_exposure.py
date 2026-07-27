@@ -28,14 +28,14 @@ def main() -> None:
             task_id="strategy_exposure_run",
             name="盘前低曝光策略补跑",
             task_type=TASK_TYPE_STRATEGY_EXPOSURE_RUN,
-            cron_expression="3 8 * * 1-5",
+            cron_expression="3 8 * * mon-fri",
             # 阈值与 scheduler_service.DEFAULT_EXPOSURE_MIN_SAMPLE 对齐（=20），
             # 确保近30天样本 <20 的策略都会被补跑、胜率统计可信（T3.6 曝光公平度）。
             # 旧值 8 使 8~19 样本策略永远不被喂、永远卡在「不可信」区间。
             payload={"window_days": 30, "min_sample_threshold": DEFAULT_EXPOSURE_MIN_SAMPLE},
             enabled=True,
         )
-        print(f"✅ 已注册 strategy_exposure_run 调度任务 (cron=3 8 * * 1-5, 阈值={DEFAULT_EXPOSURE_MIN_SAMPLE})")
+        print(f"✅ 已注册 strategy_exposure_run 调度任务 (cron=3 8 * * mon-fri, 阈值={DEFAULT_EXPOSURE_MIN_SAMPLE})")
     finally:
         db.close()
 

@@ -298,9 +298,11 @@ def _daily_cron(trigger_time: str) -> str:
 
 def _validate_cron(cron_expression: str) -> None:
     from apscheduler.triggers.cron import CronTrigger
+    from app.services.scheduler_service import _normalize_cron
 
     try:
-        CronTrigger.from_crontab(cron_expression, timezone="Asia/Shanghai")
+        # 校验归一化后的表达式：调度器注册时同样会归一化，两处口径必须一致
+        CronTrigger.from_crontab(_normalize_cron(cron_expression), timezone="Asia/Shanghai")
     except Exception as exc:
         raise HTTPException(status_code=400, detail="cron_expression is invalid") from exc
 
