@@ -108,6 +108,10 @@ OUTCOME_PENDING = "pending"
 OUTCOME_SUCCESS = "success"
 OUTCOME_FAILED = "failed"
 OUTCOME_MISSED = "missed"
+# 临时态：入场后尚无任何可卖 bar（holding_bars 仅入场日 1 根），被迫按入场日收盘临时标记。
+# 数据仅至入场日，结果待下一交易日更新。不计入 EXECUTED_OUTCOME_LABELS（不算已结算），
+# 故所有 IN ('success','failed') 的胜率/收益统计自动排除，避免中间态污染成败口径。
+OUTCOME_PROVISIONAL = "provisional"
 EXECUTED_OUTCOME_LABELS = {OUTCOME_SUCCESS, OUTCOME_FAILED}
 
 
@@ -332,11 +336,18 @@ def _simulate_outcome(
     weighted_return = round(executed_return * position_size, 2)
     hit_invalid = exit_reason.startswith("stop_loss")
     hit_target = exit_reason.startswith("take_profit") or executed_return >= SUCCESS_RETURN_PCT
+    # 临时态：holding_bars 仅入场日 1 根（horizon_close_t1_locked），入场后尚无可卖 bar，
+    # 当前 executed_return 只是入场日收盘临时标记，下一交易日数据到位后会重新结算。
+    # 不进 success/failed 口径，避免中间态被计入胜负统计或前端误读为最终结论。
+    is_provisional = exit_reason == "horizon_close_t1_locked"
     # outcome_label 与 accuracy policy 对齐：扣费滑点后净收益 > 0 即为准确推荐
     # SUCCESS_RETURN_PCT (3%) 是"优质推荐"阈值，不作为 outcome 硬门槛
     # executed_return 已含滑点但未扣佣金+印花税（_ADDITIONAL_COST_PCT，佣金万1双边+印花税0.05%卖出），
     # 阈值必须覆盖这部分成本，否则 0~0.07% 的微利交易被标 success 但实际亏损
-    outcome_label = OUTCOME_SUCCESS if (is_net_profitable(executed_return) and not hit_invalid) else OUTCOME_FAILED
+    if is_provisional:
+        outcome_label = OUTCOME_PROVISIONAL
+    else:
+        outcome_label = OUTCOME_SUCCESS if (is_net_profitable(executed_return) and not hit_invalid) else OUTCOME_FAILED
 
     return {
         **static_metrics,
@@ -357,6 +368,8 @@ def _simulate_outcome(
         "hit_target": hit_target,
         "hit_invalid": hit_invalid,
         "outcome_label": outcome_label,
+        # 临时态时 legacy 口径同样不可用（窗口仅入场日 1 根），与主 label 保持一致
+        "outcome_label_legacy": outcome_label if is_provisional else static_metrics.get("outcome_label_legacy", OUTCOME_FAILED),
         "outcome_reason": _build_outcome_reason(
             exit_reason, executed_return, static_metrics["close_return"],
             max_return=static_metrics.get("max_return"), max_drawdown=static_metrics.get("max_drawdown"),
@@ -991,6 +1004,7 @@ def _build_outcome_reason(
         "trailing_stop_hit": "盘中触发移动保护",
         "trailing_stop_gap": "开盘跳空触发移动保护",
         "horizon_close": "持有到观察期结束",
+        "horizon_close_t1_locked": "数据仅至入场日，结果待今日更新（买入当日受限，无可卖 bar）",
         "limit_down_locked_horizon_mark": "观察期内一字跌停或无流动性，按期末价格保守标记",
         "horizon_close_after_locked_limit_down": "出现一字跌停或无流动性后递延至观察期末",
     }.get(exit_reason, exit_reason)

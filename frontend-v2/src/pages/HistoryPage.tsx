@@ -9,7 +9,7 @@ import { useUrlRoute } from "../app/useUrlRoute";
 import { queryParam } from "../app/nav";
 import { RecommendationDetailCard } from "../components/RecommendationDetailCard";
 import { fmtPrice } from "../components/Shared";
-import { bucketLabel, exitReasonLabel, setupLabel, BUCKET_LABELS } from "../utils/display";
+import { bucketLabel, exitReasonLabel, outcomeLabel, outcomeTone, setupLabel, BUCKET_LABELS } from "../utils/display";
 import { ruleKeyLevelLabels, rulesMentionKeyLevel } from "../utils/ruleKeyLevels";
 
 /**
@@ -393,12 +393,15 @@ export function HistoryPage() {
                   ? (o.entry_price - recPrice) / recPrice * 100
                   : null;
                 const isGapEntry = overnightGap != null && Math.abs(overnightGap) > 3;
+                const labelTone = outcomeTone(o?.outcome_label);
                 const labelColor =
-                  o?.outcome_label === "success"
+                  labelTone === "positive"
                     ? "var(--market-up)"
-                    : o?.outcome_label === "failed"
+                    : labelTone === "danger"
                       ? "var(--market-down)"
-                      : "var(--muted)";
+                      : labelTone === "warning"
+                        ? "var(--market-gold, #b8860b)"
+                        : "var(--muted)";
                 const matchedVersion = it.strategy_versions?.find((version) => version.strategy_id === strategyId);
                 const keyLevelLabels = ruleKeyLevelLabels(it.entry_rule, it.invalid_rule, it.key_levels);
                 const hasUnresolvedKeyLevel = keyLevelLabels.length === 0
@@ -644,14 +647,6 @@ const renderRealtimePnl = (item: RealtimePnlItem | undefined) => {
     );
   }
   return <span style={{ color: "var(--muted)" }} title={item.reason || "实时行情不可用"}>—</span>;
-};
-
-const outcomeLabel = (value: string | null | undefined) => {
-  if (value === "success") return "成功";
-  if (value === "failed") return "失败";
-  if (value === "missed") return "未触发";
-  if (value === "pending") return "待标注";
-  return value || "—";
 };
 
 const tableStyle: React.CSSProperties = {

@@ -38,6 +38,7 @@ from app.services.outcome_simulation import (  # noqa: F401 - re-export for back
     OUTCOME_FAILED,
     OUTCOME_MISSED,
     OUTCOME_PENDING,
+    OUTCOME_PROVISIONAL,
     OUTCOME_SUCCESS,
     STOP_LOSS_GAP_CAP_PCT,
     SUCCESS_RETURN_PCT,
@@ -176,6 +177,10 @@ def normalized_outcome_label(outcome: RecommendationOutcome | Any | None) -> str
     raw_label = str(getattr(outcome, "outcome_label", OUTCOME_PENDING) or OUTCOME_PENDING).lower()
     if raw_label == OUTCOME_PENDING:
         return OUTCOME_PENDING
+    if raw_label == OUTCOME_PROVISIONAL:
+        # 临时态（数据仅至入场日）保持自身，不 fall through 到 failed；
+        # rec.status 与所有走 normalized 口径的统计据此排除中间态
+        return OUTCOME_PROVISIONAL
     if raw_label in {OUTCOME_MISSED, "not_triggered"}:
         return OUTCOME_MISSED
     if raw_label == "risk_hit":
@@ -298,6 +303,9 @@ def label_pending_outcomes(
                 or_(
                     RecommendationOutcome.recommendation_id.is_(None),
                     RecommendationOutcome.outcome_label == OUTCOME_PENDING,
+                    # 临时态（数据仅至入场日）需在新交易日数据到位后重算为 success/failed，
+                    # 否则永远停在 provisional 不会被翻新
+                    RecommendationOutcome.outcome_label == OUTCOME_PROVISIONAL,
                     Recommendation.status == OUTCOME_PENDING,
                 )
             )
@@ -369,7 +377,7 @@ def recompute_stale_outcomes(
             RecommendationOutcome,
             RecommendationOutcome.recommendation_id == Recommendation.recommendation_id,
         )
-        .where(RecommendationOutcome.outcome_label.in_(EXECUTED_OUTCOME_LABELS | {OUTCOME_MISSED}))
+        .where(RecommendationOutcome.outcome_label.in_(EXECUTED_OUTCOME_LABELS | {OUTCOME_MISSED, OUTCOME_PROVISIONAL}))
     )
     stmt = stmt.order_by(Recommendation.trade_date.asc())
     if limit:
@@ -473,7 +481,12 @@ def _overview_metrics(
     rows = _scoped_recommendation_rows(db, start_date, end_date)
     total_recs = len(rows)
 
-    labeled = [row for row in rows if normalized_outcome_label(row) != OUTCOME_PENDING]
+    # labeled = 已结算样本（success/failed/missed）；排除 provisional（数据仅至入场日的临时态，
+    # executed_return 只是入场日收盘临时标记，不计入胜负统计，待新交易日数据到位后翻新）
+    labeled = [
+        row for row in rows
+        if normalized_outcome_label(row) in {OUTCOME_SUCCESS, OUTCOME_FAILED, OUTCOME_MISSED}
+    ]
     triggered = [row for row in labeled if is_trade_executed(row)]
     success_count = sum(1 for row in labeled if is_accurate_recommendation(row))
     failed_count = sum(1 for row in triggered if not is_accurate_recommendation(row))
@@ -1561,7 +1574,7 @@ def _precision_at_k(
         success_count = 0
         for rows in by_run.values():
             top_rows = rows[:k]
-            labeled_rows = [row for row in top_rows if normalized_outcome_label(row) != OUTCOME_PENDING]
+            labeled_rows = [row for row in top_rows if normalized_outcome_label(row) not in (OUTCOME_PENDING, OUTCOME_PROVISIONAL)]
             if not labeled_rows:
                 continue
             sample_runs += 1
@@ -1642,7 +1655,7 @@ def _metric_records_from_rows(
             benchmark_by_recommendation.get(str(getattr(row, "recommendation_id", "") or ""), 0.0),
         )
         for row in rows
-        if normalized_outcome_label(row) != OUTCOME_PENDING
+        if normalized_outcome_label(row) not in (OUTCOME_PENDING, OUTCOME_PROVISIONAL)
     ]
 
 
@@ -1684,7 +1697,7 @@ def _compute_horizon_metric_records(db: Session, rows: list[Any]) -> dict[str, d
     labeled_rows = [
         row
         for row in rows
-        if normalized_outcome_label(row) != OUTCOME_PENDING
+        if normalized_outcome_label(row) not in (OUTCOME_PENDING, OUTCOME_PROVISIONAL)
     ]
     if not labeled_rows:
         return {}
@@ -1816,7 +1829,7 @@ def _benchmark_returns_by_recommendation(db: Session, rows: list[Any]) -> dict[s
     all_dates: set[str] = set()
     executable_rows = []
     for row in rows:
-        if normalized_outcome_label(row) == OUTCOME_PENDING or not is_trade_executed(row):
+        if normalized_outcome_label(row) in (OUTCOME_PENDING, OUTCOME_PROVISIONAL) or not is_trade_executed(row):
             continue
         entry_date = str(getattr(row, "entry_date", "") or getattr(row, "trade_date", ""))
         exit_date = str(getattr(row, "exit_date", "") or getattr(row, "trade_date", ""))

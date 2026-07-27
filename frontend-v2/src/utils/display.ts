@@ -94,7 +94,7 @@ export const EXIT_REASON_LABELS: Record<string, string> = {
   stop_loss_intraday_both_hit: "同日触止盈止损（保守按止损）",
   horizon: "持有到观察期结束",
   horizon_close: "持有到观察期结束",
-  horizon_close_t1_locked: "受 T+1 限制继续持有",
+  horizon_close_t1_locked: "数据仅至入场日，待今日更新",
   limit_down_locked_horizon_mark: "一字跌停或无流动性（期末标记）",
   horizon_close_after_locked_limit_down: "跌停后递延至观察期结束",
   trailing_stop_hit: "移动止盈触发",
@@ -169,6 +169,32 @@ export function exitReasonLabel(value: unknown, fallback = "—", executedReturn
   }
   // 后端新增枚举时，不能将机器码直接暴露在用户界面；若后端已给出中文则原样保留。
   return label ?? (/^[\u4e00-\u9fff]/.test(raw) ? raw : "退出原因待确认");
+}
+
+// outcome_label 原始码 → 中文。统一详情页与历史页的标签文案，避免两处各自硬编码。
+// provisional 是临时态：数据仅至入场日，executed_return 只是入场日收盘临时标记，
+// 下一交易日数据到位后会重新结算为 success/failed，故显示「结算中」而非「失败」。
+export function outcomeLabel(value: unknown, fallback = "—") {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) return fallback;
+  const labels: Record<string, string> = {
+    success: "成功",
+    failed: "失败",
+    missed: "未触发",
+    pending: "待标注",
+    provisional: "结算中",
+  };
+  return labels[raw] ?? raw;
+}
+
+// outcome_label 对应的语气色：provisional 用中性金（区别于 success 绿 / failed 红），
+// 让「结算中」在视觉上不被误读成最终结论。
+export function outcomeTone(value: unknown): Tone {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (raw === "success") return "positive";
+  if (raw === "failed") return "danger";
+  if (raw === "provisional") return "warning";
+  return "neutral";
 }
 
 export function businessStatusLabel(value: unknown, fallback = "状态待确认") {

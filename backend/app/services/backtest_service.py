@@ -1089,7 +1089,7 @@ def _backtest_breakdown(
     total_recs = len(recs)
     for score_line in [55, 60, 65, 70, 75, 80]:
         selected = [rec for rec in recs if float(rec.final_score or 0) >= score_line]
-        labeled = [rec for rec in selected if normalized_outcome_label(outcomes.get(rec.recommendation_id)) != "pending"]
+        labeled = [rec for rec in selected if normalized_outcome_label(outcomes.get(rec.recommendation_id)) not in ("pending", "provisional")]
         executed = [rec for rec in labeled if is_trade_executed(outcomes.get(rec.recommendation_id))]
         missed = max(0, len(labeled) - len(executed))
         success_count = sum(1 for rec in executed if is_accurate_recommendation(outcomes.get(rec.recommendation_id)))
