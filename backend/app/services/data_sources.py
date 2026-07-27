@@ -703,3 +703,123 @@ def _unified_quote_rows_from_rows(all_rows: list, limit: int = 50, offset: int =
         _unified_quote_payload(db, row, precomputed_metrics=local_metrics.get(row.code))
         for row in paged
     ]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Tushare provider 管理（配置页「数据源管理」Tab）：启停 + 测试
+# ═════════════════════════════════════════════════════════════════════════════
+
+_PROVIDER_SOURCE_TYPE = "tushare_provider"
+
+
+def _known_provider_names() -> set[str]:
+    """当前进程已接入（configured）的 provider 名集合，从 health 投影读取。"""
+    from app.services.tushare_client import get_tushare_provider_health
+
+    return {str(r["provider_name"]) for r in get_tushare_provider_health()}
+
+
+def set_provider_enabled(db: Session, provider_name: str, enabled: bool) -> dict[str, Any] | None:
+    """启停某个 tushare provider（写 DB 覆盖，运行时即时生效，不动 config）。
+
+    返回更新后的 provider 条目；provider 未接入返回 None。
+    """
+    if provider_name not in _known_provider_names():
+        return None
+    row = db.get(DataSourceConfig, {"source": provider_name, "source_type": _PROVIDER_SOURCE_TYPE})
+    if row is None:
+        row = DataSourceConfig(source=provider_name, source_type=_PROVIDER_SOURCE_TYPE, enabled=enabled, priority=100)
+        db.add(row)
+    else:
+        row.enabled = enabled
+    row.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    db.commit()
+
+    from app.services.tushare_client import invalidate_provider_enabled_override
+
+    invalidate_provider_enabled_override()
+    return next(
+        (r for r in _provider_health_rows() if r["provider_name"] == provider_name),
+        None,
+    )
+
+
+def _provider_health_rows() -> list[dict[str, Any]]:
+    from app.services.tushare_client import get_tushare_provider_health
+
+    return get_tushare_provider_health()
+
+
+def test_provider(db: Session, provider_name: str) -> dict[str, Any]:
+    """探针测试某 provider 当前是否可用，结果写入 data_source_health。
+
+    - pro_http 源（fastapic/xiaodefa/ai_tool）：直连该 provider 调 stock_basic(limit=1)，
+      绕过 Router 选路，专测这一源的连通 + 鉴权。
+    - realtime_quote：调 fetch_realtime_quotes(["000001"]) 测爬虫端点。
+    返回 {ok, latency_ms, status, error}；provider 未接入抛 KeyError。
+    """
+    started = time.perf_counter()
+    ok = False
+    error: str | None = None
+    try:
+        if provider_name == "realtime_quote":
+            from app.services.realtime_quote_client import fetch_realtime_quotes
+
+            rows = fetch_realtime_quotes(["000001"], use_cache=False)
+            ok = bool(rows)
+            if not ok:
+                error = "realtime_quote 返回空（端点不可达或无数据）"
+        else:
+            ok, error = _probe_pro_provider(provider_name)
+    except KeyError:
+        raise
+    except Exception as exc:  # 探针本身异常也算失败
+        ok = False
+        error = f"{type(exc).__name__}: {str(exc)[:200]}"
+    latency_ms = round((time.perf_counter() - started) * 1000, 1)
+
+    _record_provider_test(db, provider_name, ok=ok, latency_ms=latency_ms, error=error)
+    return {
+        "provider_name": provider_name,
+        "ok": ok,
+        "latency_ms": latency_ms,
+        "status": "healthy" if ok else "degraded",
+        "error": error,
+    }
+
+
+def _probe_pro_provider(provider_name: str) -> tuple[bool, str | None]:
+    """绕过 Router，用目标 provider 自己的 config 直连调 stock_basic 测连通。"""
+    from app.services.tushare_client import get_pro
+
+    router = get_pro()._router
+    provider = router._providers.get(provider_name)
+    if provider is None:
+        raise KeyError(provider_name)
+    try:
+        envelope = provider.request("stock_basic", params={"limit": 1})
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {str(exc)[:200]}"
+    items = (envelope.get("data") or {}).get("items") if isinstance(envelope, dict) else None
+    if items:
+        return True, None
+    return False, "stock_basic 返回空"
+
+
+def _record_provider_test(db: Session, provider_name: str, *, ok: bool, latency_ms: float, error: str | None) -> None:
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    row = db.get(DataSourceHealth, {"source": provider_name, "source_type": _PROVIDER_SOURCE_TYPE})
+    if row is None:
+        row = DataSourceHealth(source=provider_name, source_type=_PROVIDER_SOURCE_TYPE)
+        db.add(row)
+    if ok:
+        row.success_count = int(row.success_count or 0) + 1
+        row.last_success_at = now
+        row.last_error = None
+    else:
+        row.failure_count = int(row.failure_count or 0) + 1
+        row.last_failure_at = now
+        row.last_error = error
+    row.latency_ms = latency_ms
+    row.updated_at = now
+    db.commit()

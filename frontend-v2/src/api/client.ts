@@ -21,8 +21,12 @@ import type {
   DNetBreakdown,
   ReplayAnalysisResult,
   DataSourceHealthRow,
+  DataSourceProvider,
+  DataSourceProvidersResponse,
   ModelRoute,
   ModelRouteTestResult,
+  ProviderTestResult,
+  RealtimePnlResponse,
   LocalPoolGapSyncResult,
   LocalPoolStatus,
   PoolRefreshResult,
@@ -215,6 +219,8 @@ export const api = {
   matrixRunStatus: () => request<{ task_run: ScheduledTaskRun | null }>("/api/runs/matrix/status"),
 
   recommendationDetail: (id: string) => request<RecommendationDetail>(`/api/recommendations/${id}`),
+  recommendationRealtimePnl: (refresh = false) =>
+    request<RealtimePnlResponse>(`/api/recommendations/realtime-pnl${refresh ? "?refresh=true" : ""}`),
   confirmRecommendationExecution: (id: string) =>
     requestWithTimeout<ExecutionConfirmation>(
       `/api/recommendations/${id}/execution-confirmation`,
@@ -303,6 +309,13 @@ export const api = {
     request<{ deleted: string }>(`/api/admin/model-routes/${routeId}`, json("DELETE")),
   reorderModelRoutes: (routeIds: string[]) =>
     request<ModelRoute[]>("/api/admin/model-routes/reorder", json("POST", { route_ids: routeIds })),
+
+  dataSourceProviders: () =>
+    request<DataSourceProvidersResponse>("/api/admin/data-sources", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
+  setProviderEnabled: (providerName: string, enabled: boolean) =>
+    request<DataSourceProvider>(`/api/admin/data-sources/${providerName}/enabled`, json("POST", { enabled })),
+  testProvider: (providerName: string) =>
+    request<ProviderTestResult>(`/api/admin/data-sources/${providerName}/test`, json("POST"), { timeoutMs: 35_000 }),
 
   scheduledTasks: () => request<ScheduledTask[]>("/api/admin/tasks", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   scheduledTaskRuns: (limit = 100, taskId?: string) =>

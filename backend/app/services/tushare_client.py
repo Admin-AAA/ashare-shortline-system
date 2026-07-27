@@ -16,6 +16,7 @@ import functools
 import hashlib
 import json
 import logging
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -23,6 +24,7 @@ from types import MappingProxyType
 from typing import Any
 
 import pandas as pd
+from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.engine.trading_calendar import normalize_trade_date as _normalize_trade_date
@@ -275,6 +277,26 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
                     ),
                     max_concurrency=max(0, int(settings.tushare_fastapic_max_concurrency)),
                     append_api_path=True,
+                    priority=0,
+                    **common,
+                )
+            )
+        )
+
+    xiaodefa_token = settings.tushare_xiaodefa_token.strip()
+    if xiaodefa_token:
+        providers.append(
+            TushareHttpProvider(
+                ProviderConfig(
+                    name="xiaodefa",
+                    base_url=settings.tushare_xiaodefa_url,
+                    credential=xiaodefa_token,
+                    auth_mode=AuthMode.JSON_TOKEN,
+                    rate_limit_per_minute=max(
+                        0, int(settings.tushare_xiaodefa_rate_limit_per_minute)
+                    ),
+                    append_api_path=False,
+                    priority=1,
                     **common,
                 )
             )
@@ -301,6 +323,7 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
                         ),
                     },
                     append_api_path=False,
+                    priority=2,
                     **common,
                 )
             )
@@ -310,7 +333,52 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
         raise RuntimeError(
             "Tushare 上游未配置：请设置 Fastapic Token 或 ai-tool API Key。"
         )
-    return TushareProviderRouter(providers), settings.tushare_fastapic_url
+    return (
+        TushareProviderRouter(providers, enabled_override=_provider_enabled_override),
+        settings.tushare_fastapic_url,
+    )
+
+
+def _provider_enabled_override() -> dict[str, bool]:
+    """从 data_source_config 读 provider 运行时启停覆盖（管理面 Tab 写入）。
+
+    返回 {provider_name: enabled}；查不到/出错返回 {}（视为全部启用）。
+    独立 Session 查询，避免污染调用方事务；进程内短缓存减少每次选路都查库。
+    """
+    now = time.monotonic()
+    cached = _ENABLED_OVERRIDE_CACHE
+    if cached["expires_at"] > now:
+        return cached["value"]
+    value: dict[str, bool] = {}
+    try:
+        from app.db.session import SessionLocal
+        from app.models.tables import DataSourceConfig
+
+        db = SessionLocal()
+        try:
+            rows = db.scalars(
+                select(DataSourceConfig).where(
+                    DataSourceConfig.source_type == "tushare_provider"
+                )
+            ).all()
+            value = {str(r.source): bool(r.enabled) for r in rows}
+        finally:
+            db.close()
+    except Exception:
+        logger.debug("provider enabled override query failed", exc_info=True)
+        value = {}
+    _ENABLED_OVERRIDE_CACHE["value"] = value
+    _ENABLED_OVERRIDE_CACHE["expires_at"] = now + _ENABLED_OVERRIDE_TTL_SECONDS
+    return value
+
+
+_ENABLED_OVERRIDE_TTL_SECONDS = 5.0
+_ENABLED_OVERRIDE_CACHE: dict[str, Any] = {"value": {}, "expires_at": 0.0}
+
+
+def invalidate_provider_enabled_override() -> None:
+    """启停操作后调用，立即清空覆盖缓存，下一次选路即生效。"""
+    _ENABLED_OVERRIDE_CACHE["expires_at"] = 0.0
 
 
 @functools.lru_cache(maxsize=1)
@@ -333,13 +401,16 @@ def clear_pro_cache() -> None:
 def get_tushare_provider_health() -> list[dict[str, Any]]:
     """Project configured Providers and process-local telemetry to the health API."""
     settings = get_settings()
+    # configured = config 有 token（已接入）；enabled = 运行时实际生效（configured AND DB 启停覆盖）。
+    # 管理面 Tab 的「禁用」只改 DB override，不动 config，实现不重启启停。
+    overrides = _provider_enabled_override()
     specs = (
         {
             "name": "fastapic",
             "source": "fastapic",
-            "enabled": bool(settings.tushare_fastapic_token.strip()),
+            "configured": bool(settings.tushare_fastapic_token.strip()),
             "priority": 0,
-            "note": "通用同步主源；ai-tool 可在故障时接管",
+            "note": "通用同步主源；其余源可在故障时接管",
             "auth_mode": AuthMode.JSON_TOKEN.value,
             "rate_limit_per_minute": max(
                 0, int(settings.tushare_fastapic_rate_limit_per_minute)
@@ -348,10 +419,23 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
             "max_concurrency": max(0, int(settings.tushare_fastapic_max_concurrency)),
         },
         {
+            "name": "xiaodefa",
+            "source": "xiaodefa",
+            "configured": bool(settings.tushare_xiaodefa_token.strip()),
+            "priority": 1,
+            "note": "第三方 pro 协议源；通用同步补充 fallback",
+            "auth_mode": AuthMode.JSON_TOKEN.value,
+            "rate_limit_per_minute": max(
+                0, int(settings.tushare_xiaodefa_rate_limit_per_minute)
+            ),
+            "api_rate_limits": {},
+            "max_concurrency": 0,
+        },
+        {
             "name": "ai_tool",
             "source": "ai-tool",
-            "enabled": bool(settings.tushare_ai_tool_api_key.strip()),
-            "priority": 1,
+            "configured": bool(settings.tushare_ai_tool_api_key.strip()),
+            "priority": 2,
             "note": "分钟/公告主源；通用同步备用源",
             "auth_mode": AuthMode.API_KEY_HEADER.value,
             "rate_limit_per_minute": max(
@@ -371,7 +455,7 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
 
     snapshots: dict[str, dict[str, Any]] = {}
     initialization_failed = False
-    if any(bool(spec["enabled"]) for spec in specs):
+    if any(bool(spec["configured"]) for spec in specs):
         try:
             snapshots = {
                 str(item.get("name")): item
@@ -383,12 +467,15 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
 
     rows: list[dict[str, Any]] = []
     for spec in specs:
-        enabled = bool(spec["enabled"])
+        configured = bool(spec["configured"])
+        enabled = configured and bool(overrides.get(spec["name"], True))
         snapshot = snapshots.get(str(spec["name"]), {})
-        status = str(snapshot.get("status") or ("untested" if enabled else "disabled"))
+        status = str(snapshot.get("status") or ("untested" if configured else "disabled"))
         failure_count = int(snapshot.get("failure_count") or 0)
         last_error = snapshot.get("last_error")
-        if enabled and initialization_failed and not snapshot:
+        if not enabled and configured:
+            status = "disabled"
+        elif configured and initialization_failed and not snapshot:
             status = "degraded"
             failure_count = max(1, failure_count)
             last_error = "provider initialization failed (configuration)"
@@ -399,7 +486,7 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
                 "source_type": "tushare_provider",
                 "layer": "provider",
                 "enabled": enabled,
-                "configured": enabled,
+                "configured": configured,
                 "priority": spec["priority"],
                 "note": spec["note"],
                 "success_count": int(snapshot.get("success_count") or 0),
@@ -429,6 +516,14 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
                 "health_scope": "process_runtime",
             }
         )
+    # realtime_quote 实时报价爬虫（独立于 pro HTTP provider，单独进程内统计）。
+    # 追加为第三个 provider 条目，复用数据源面板的 provider 渲染。
+    try:
+        from app.services.realtime_quote_client import get_realtime_quote_health
+
+        rows.append(get_realtime_quote_health())
+    except Exception:
+        logger.warning("realtime_quote health projection failed", exc_info=True)
     return rows
 
 

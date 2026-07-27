@@ -1014,6 +1014,42 @@ export type ModelRouteTestResult = {
   message: string;
 };
 
+export type DataSourceProvider = {
+  provider_name: string;
+  source: string;
+  source_type: string;
+  layer?: string;
+  configured: boolean;
+  enabled: boolean;
+  priority: number;
+  note?: string | null;
+  status: string; // healthy / degraded / untested / disabled
+  success_count?: number;
+  failure_count?: number;
+  empty_count?: number;
+  success_rate?: number | null;
+  latency_ms?: number | null;
+  last_success_at?: string | null;
+  last_failure_at?: string | null;
+  last_error?: string | null;
+  last_api?: string | null;
+  auth_mode?: string;
+  rate_limit_per_minute?: number;
+  breaker_state?: string;
+};
+
+export type DataSourceProvidersResponse = {
+  providers: DataSourceProvider[];
+};
+
+export type ProviderTestResult = {
+  provider_name: string;
+  ok: boolean;
+  latency_ms?: number | null;
+  status: string;
+  error?: string | null;
+};
+
 export type PoolSourceSummary = {
   source: string;
   row_count: number;
@@ -1492,6 +1528,33 @@ export type RecommendationHistoryQuery = {
   label?: "success" | "failed" | "missed" | "pending";
   limit?: number;
   offset?: number;
+};
+
+export type RealtimePnlItem = {
+  recommendation_id: string;
+  code: string;
+  trade_date: string;
+  recommend_price: number;
+  status: "holding" | "watching" | "unavailable";
+  reason?: string;
+  // holding（已入场）
+  entry_price?: number;
+  entry_date?: string;
+  now_price?: number;
+  pnl_pct?: number;
+  // watching（未触发买点）
+  nearest_buy_target?: number;
+  distance_to_target_pct?: number | null;
+  // 共有
+  day_high?: number;
+  day_low?: number;
+  pre_close?: number;
+};
+
+export type RealtimePnlResponse = {
+  computed_at: string;
+  cached: boolean;
+  items: RealtimePnlItem[];
 };
 
 export type RecommendationDetail = RecommendationCard & {
