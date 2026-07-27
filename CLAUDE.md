@@ -21,13 +21,11 @@
 
 # 数据库策略
 
-**本地 MySQL 为主，云端为只读副本。**
+**本地 MySQL。**
 
 - 本地 Homebrew MySQL 9.6 @ 127.0.0.1:3306，库 `ashare_workbench`
 - 用户名/密码：`aowang` / `1279990918`
-- 云端 MySQL (139.196.242.53:4407) 仅作 Web 展示查询
 - 数据同步、推荐管道的重读写操作全部在本地执行
-- 云端 1GB 服务器不承载推荐管道（会 OOM）
 
 # 前端体验
 
@@ -54,15 +52,6 @@
 - 新闻公告：Tushare `anns_d` + eastmoney `np-anotice` 双源
 - 筹码分布：Tushare `cyq_perf`（若接口不可用则标记"数据源不可用"）
 
-# 部署同步策略
-
-云端部署目标：
-- 服务器：`139.196.242.53`，SSH 别名：`ashare-server`
-- 项目目录：`/opt/ashare-shortline-system`
-- 对外地址：`http://139.196.242.53:18000`
-- 后端：`ashare-backend` (systemd)
-- 部署：`scp` 推送 → `systemctl restart ashare-backend` → `curl` 验证
-
 # Python 测试
 
 优先使用项目虚拟环境 `.venv`。允许直接使用生产 MySQL 做验证测试，禁止清库/删表/重建等不可恢复操作。
@@ -70,7 +59,6 @@
 # 日志位置
 
 - 本地：`backend/logs/app.log`、`backend/logs/access.log`
-- 云端：`journalctl -u ashare-backend`
 
 # 凭据规则
 

@@ -1,7 +1,6 @@
 """补齐空表：概念成分股、龙虎榜、资金流向、新闻公告、集合竞价。
 
 运行时机：任意时间（周日也可拉取历史交易日数据）。
-运行环境：云端服务器（MySQL 直连）。
 用法: python3 scripts/backfill_empty_aux.py
 """
 
@@ -20,7 +19,7 @@ from app.services.tushare_client import get_pro, clear_pro_cache
 
 DB = {
     "host": "127.0.0.1",
-    "port": 4407,
+    "port": 3306,
     "user": "aowang",
     "password": "1279990918",
     "database": "ashare_workbench",

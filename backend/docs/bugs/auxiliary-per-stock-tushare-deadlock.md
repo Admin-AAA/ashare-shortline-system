@@ -127,4 +127,4 @@ def pledge_stat(self, request):
 
 - 改动文件：`backend/app/services/auxiliary/state_adapters.py`、`backend/app/services/scheduler_service.py`、新增测试 + 本 bug 报告。
 - 回滚点：保留原 `capital_flow` 累计窗口语义已迁移到每日同步；如需还原只需 revert 这两个文件 + 删测试文件。
-- 本路径不涉及云端（云端不跑推荐管道）；本地后端需重启使 scheduler 改动生效。
+- 本地后端需重启使 scheduler 改动生效。
