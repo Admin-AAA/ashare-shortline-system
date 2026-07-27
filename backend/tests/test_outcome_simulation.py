@@ -13,6 +13,8 @@ import json
 from datetime import datetime
 from types import SimpleNamespace
 
+import pytest
+
 from app.models.tables import DailyKbar
 from app.services.outcome_simulation import (
     DEFAULT_STOP_LOSS_PCT,
@@ -288,66 +290,46 @@ def test_resolve_exit_take_profit_path_preserved():
 
 
 def test_resolve_exit_trailing_uses_min_open_on_gap_down():
-    """trailing 触发价取 min(open, 触发价)——跳空低开时以 open 成交（更差）。
+    """利润地板生效后次日跳空跌穿保护价，以 open 成交并标记 gap。
 
     回归测试：之前用 max 会虚假高估出场价（86 笔虚假 100% 胜率）。
     """
-    # entry=10.0, bar1（入场日，不触发）；bar2 high=10.3（+3%，激活 trailing），触发价=10*(1+(3-0.8)/100)=10.22
-    # bar2 low=10.25 > 10.22 不触发；bar3 跳空低开 open=9.8, low=9.7 ≤ 10.22 → trailing 触发
-    # exit=min(9.8, 10.22)=9.8（跨 bar 触发：跳空低开以 open 成交）
+    # entry=10.0；bar2 high=10.3（+3%）生成次日 +1.5% 利润地板 10.15。
+    # bar2 当日不能用新保护价退出；bar3 跳空低开 open=9.8 ≤ 10.15，按 open 成交。
     bars = [
         _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.9, close=10.0, pct_chg=0.0),
         _bar_trailing(trade_date="2026-07-02", open=10.25, high=10.3, low=10.25, close=10.28, pct_chg=3.0),
         _bar_trailing(trade_date="2026-07-03", open=9.8, high=9.9, low=9.7, close=9.8, pct_chg=-5.0),
     ]
     result = _resolve_exit(bars, stop_loss_price=9.0, take_profit_price=12.0, code="000001", entry_price=10.0)
-    assert result[2] == "trailing_stop_hit"
+    assert result[2] == "trailing_stop_gap"
     assert result[0] == 9.8  # 跨 bar 触发：跳空低开以 open 成交
 
 
-def test_resolve_exit_trailing_same_bar_uses_trigger_price():
-    """同 bar 触发（trailing 在本 bar 刚激活且 low 跌破触发价）：取触发价成交。
-
-    因果必然：trailing 激活前提是 high 先达 hwm，故同 bar 触发时 high 必先于 low，
-    价格路径是 high 见顶后回落到触发价成交。旧口径 min(open,触发价) 把"平开冲高回落"
-    （open≈entry < 触发价）误判成跳空，以 open 出场，把盈利单标成 -0.20% 微亏假失败
-    （D 项 28 笔 trailing failed 全落在 -0.5%~0 区间的根因）。
-
-    复现 000962 2026-07-08 真实场景：entry=64.08，当天 open≈平开，high 冲到 +4%，
-    low 回落到触发价下方 → 应以触发价成交（+3% 附近），不是 open（-0.1%）。
-    """
-    # entry=10.0, bar1（入场日，不触发）；bar2: open=10.0（平开）, high=10.4（+4%，激活 trailing），
-    # 触发价=10*(1+(4-0.8)/100)=10.32，bar2 low=10.1 ≤ 10.32 → 同 bar 触发。
-    # 旧口径 min(10.0, 10.32)=10.0（-0.2% 假亏）；修复后取触发价 10.32（+3.2% 真盈）。
+def test_resolve_exit_same_day_new_high_only_updates_next_day():
+    """生产因果口径禁止用当日新高生成的保护价在同一根日 K 退出。"""
+    # bar2 high=10.4（+4%）只能生成下一交易日 +2% 的利润地板；窗口在 bar2 结束，
+    # 即使当日 low=10.1，也只能按 horizon close=10.2 标记。
     bars = [
         _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.9, close=10.0, pct_chg=0.0),
         _bar_trailing(trade_date="2026-07-02", open=10.0, high=10.4, low=10.1, close=10.2, pct_chg=2.0),
     ]
     result = _resolve_exit(bars, stop_loss_price=9.5, take_profit_price=12.0, code="000001", entry_price=10.0)
-    assert result[2] == "trailing_stop_hit"
-    assert result[0] == 10.32  # 同 bar 触发：以触发价成交，不以平开 open 成交
+    assert result == (10.2, "2026-07-02", "horizon_close")
 
 
-def test_resolve_exit_stop_loss_priority_over_trailing():
-    """固定止损优先于 trailing：low 触及 stop_loss 时返回 stop_loss_hit，不走 trailing。
-
-    护栏原因（第 162 轮反事实验证）：002674 @ 2026-07-08 持有期 max_return +13.89% 却
-    exit_reason=stop_loss_hit（-5.7%）。看似 trailing 没锁利，实则 max 与 exit 同日 → 同 bar
-    high 冲高激活 trailing 又 low 触止损，日线时序无法确定 high/low 谁先到。让 trailing 优先
-    的反事实变体在 191 笔样本上"胜率 74.9%→85.9%"，但全部 21 笔改善来自同 bar 乐观假设
-    （high 先到激活 trailing 再 low 触发）——跨 bar 保守口径下 0 笔改善，证明是过拟合。
-    故 stop_loss 优先是保守口径，禁止改成 trailing 优先（除非有分钟级时序数据）。
-    """
-    # bar1（入场日，不触发）；bar2 high=10.3（激活 trailing），low=10.25 > 触发价 10.22 不触发
-    # bar3 low=9.5 触及 stop_loss → stop_loss 优先于 trailing 返回 stop_loss_hit
+def test_resolve_exit_gap_profit_floor_precedes_intraday_hard_stop():
+    """开盘先跌穿已生效的利润地板时，应在盘中固定止损前按开盘退出。"""
+    # bar2 high=10.3（+3%）生成次日利润地板 10.15；bar3 open=9.6 跌穿利润地板但仍高于
+    # hard stop=9.5，因此开盘先按 trailing_stop_gap 卖出，不等待盘中触发硬止损。
     bars = [
         _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.9, close=10.0, pct_chg=0.0),
         _bar_trailing(trade_date="2026-07-02", open=10.25, high=10.3, low=10.25, close=10.28, pct_chg=3.0),
         _bar_trailing(trade_date="2026-07-03", open=9.6, high=9.7, low=9.5, close=9.6, pct_chg=-5.0),
     ]
     result = _resolve_exit(bars, stop_loss_price=9.5, take_profit_price=12.0, code="000001", entry_price=10.0)
-    assert result[2] == "stop_loss_hit"
-    assert result[0] == 9.5
+    assert result[2] == "trailing_stop_gap"
+    assert result[0] == 9.6
 
 
 def test_resolve_exit_same_bar_high_surge_then_stop_loss_uses_stop_loss():
@@ -703,7 +685,8 @@ def test_simulate_outcome_take_profit_min_return_truncated():
         feature_snapshot_json=json.dumps(snapshot_dict, ensure_ascii=False),
     )
     bars = [
-        _bar(trade_date="2026-07-09", open=30.5, high=31.0, low=29.8, close=30.8, pct_chg=0.0),
+        # 收盘相对实际入场不足 +2%，避免激活利润地板；本测试只验证 TP 后统计截断。
+        _bar(trade_date="2026-07-09", open=30.5, high=31.0, low=29.8, close=30.5, pct_chg=0.0),
         # 07-10: 入场次日，high=33.5 触及 tp=33（take_profit_hit）
         _bar(trade_date="2026-07-10", open=31.0, high=33.5, low=29.5, close=33.2, pct_chg=7.8),
         # exit 后温和下跌（pct_chg 与 price_jump 一致，不触发除权检测），但 low=28 低于 exit 日 low
@@ -941,3 +924,92 @@ def test_causal_dynamic_trailing_false_gives_strict_fixed_only_path():
         dynamic_trailing=True,
     )
     assert reason_dyn.startswith("trailing")
+
+
+def test_causal_profit_floor_locks_fraction_of_prior_peak_profit():
+    """利润地板只锁住前一日最高浮盈的一部分，给龙头正常波动留空间。
+
+    07-02 最高浮盈 4%，25% 锁利比例生成 07-03 生效的 +1% 保护价 10.10；
+    07-03 盘中回落到 10.05 时，应按 10.10 退出，而不是旧 callback 的 10.32。
+    """
+    bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.98, close=10.0, pct_chg=0.0),
+        _bar_trailing(trade_date="2026-07-02", open=10.1, high=10.4, low=10.05, close=10.3, pct_chg=3.0),
+        _bar_trailing(trade_date="2026-07-03", open=10.2, high=10.25, low=10.05, close=10.1, pct_chg=-1.9),
+    ]
+
+    price, date, reason = _resolve_exit_causal(
+        bars,
+        stop_loss_price=9.5,
+        take_profit_price=11.0,
+        code="000001",
+        entry_price=10.0,
+        trailing_policy="profit_floor",
+        profit_lock_ratio=0.25,
+    )
+
+    assert (price, date, reason) == (10.10, "2026-07-03", "trailing_stop_hit")
+
+
+def test_causal_rejects_unknown_trailing_policy():
+    """配置错误必须立即失败，不能静默退回旧 callback 口径污染反事实结果。"""
+    bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.98, close=10.0, pct_chg=0.0),
+        _bar_trailing(trade_date="2026-07-02", open=10.1, high=10.4, low=10.05, close=10.3, pct_chg=3.0),
+    ]
+
+    with pytest.raises(ValueError, match="trailing_policy"):
+        _resolve_exit_causal(
+            bars,
+            stop_loss_price=9.5,
+            take_profit_price=11.0,
+            code="000001",
+            entry_price=10.0,
+            trailing_policy="unknown",
+        )
+
+
+def test_production_exit_uses_next_day_profit_floor_50_policy():
+    """生产默认退出必须是单路径因果的 50% 利润地板，而不是旧两轮事后择优。"""
+    bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.98, close=10.0, pct_chg=0.0),
+        # 当日最高浮盈 4%，只生成次日 +2% 的利润地板；当日不得退出。
+        _bar_trailing(trade_date="2026-07-02", open=10.1, high=10.4, low=10.05, close=10.3, pct_chg=3.0),
+        # 次日保护价 10.20 生效，盘中触及退出。
+        _bar_trailing(trade_date="2026-07-03", open=10.25, high=10.3, low=10.15, close=10.2, pct_chg=-1.0),
+    ]
+
+    price, date, reason = _resolve_exit(
+        bars,
+        stop_loss_price=9.5,
+        take_profit_price=11.0,
+        code="000001",
+        entry_price=10.0,
+    )
+
+    assert (price, date, reason) == (10.20, "2026-07-03", "trailing_stop_hit")
+
+
+def test_simulate_outcome_defaults_to_production_profit_floor_policy():
+    """核心模拟入口未注入 resolver 时，也必须走生产利润地板。"""
+    rec = SimpleNamespace(
+        code="000001",
+        trade_date="2026-07-01",
+        recommend_price=10.0,
+        recommended_at=datetime(2026, 7, 1, 2, 0),
+        feature_snapshot_json=json.dumps(
+            {"ideal_buy": 10.0, "stop_loss": 9.5, "take_profit": 11.0},
+            ensure_ascii=False,
+        ),
+    )
+    bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.98, close=10.0, pct_chg=0.0),
+        _bar_trailing(trade_date="2026-07-02", open=10.1, high=10.4, low=10.05, close=10.3, pct_chg=3.0),
+        _bar_trailing(trade_date="2026-07-03", open=10.25, high=10.3, low=10.15, close=10.2, pct_chg=-1.0),
+    ]
+
+    sim = _simulate_outcome(rec, bars, [str(bar.trade_date) for bar in bars], horizon_days=3)
+
+    assert sim is not None
+    assert sim["exit_reason"] == "trailing_stop_hit"
+    assert sim["exit_date"] == "2026-07-03"

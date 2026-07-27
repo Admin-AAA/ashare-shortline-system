@@ -546,6 +546,7 @@ class TestE2ERecommendationFlow:
             recommendation_id=rec_id,
             run_id=run.run_id,
             trade_date="2026-05-12",
+            recommended_at=datetime(2026, 5, 12, 8, 0),  # UTC 08:00 = 北京 16:00，固定为盘后推荐
             code=code,
             name="测试股",
             industry="电子",
