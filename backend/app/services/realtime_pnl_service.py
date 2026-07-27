@@ -19,7 +19,12 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun
-from app.services.outcome_simulation import OUTCOME_PENDING, _loads, _resolve_entry
+from app.services.outcome_simulation import (
+    MAX_ENTRY_GAP_PCT,
+    OUTCOME_PENDING,
+    _loads,
+    _resolve_entry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +82,15 @@ def list_pending_realtime_pnl(db: Session, *, use_cache: bool = True) -> dict[st
 
     quotes = _fetch_rtk_quotes(codes)
     signal_bars = _load_signal_bars(db, recs)
+    intermediate_bars = _load_intermediate_bars(db, recs)
 
     items = [
-        _compute_one(rec, quotes.get(str(rec.code)), signal_bars.get((str(rec.code), str(rec.trade_date))))
+        _compute_one(
+            rec,
+            quotes.get(str(rec.code)),
+            signal_bars.get((str(rec.code), str(rec.trade_date))),
+            intermediate_bars.get(str(rec.code)),
+        )
         for rec in recs
     ]
     result = {
@@ -160,14 +171,50 @@ def _load_signal_bars(db: Session, recs: list[Recommendation]) -> dict[tuple[str
     return {(str(b.code), str(b.trade_date)): b for b in bars}
 
 
+def _load_intermediate_bars(db: Session, recs: list[Recommendation]) -> dict[str, list[DailyKbar]]:
+    """加载每个推荐 trade_date 之后（不含）到今天的真实日K。
+
+    实时浮盈此前只喂一根今日合成 bar 给 _resolve_entry，pending 滞留 2+ 个交易日（结算漏跑
+    /日K同步滞后等真实复发状态）时，真实入场日（T+1）被误当成今日，入场价/浮盈系统性失真。
+    加载这段真实日K让 _resolve_entry 用真实入场日判定；今日仍用 rt_k 合成 bar（当日尚未收盘落库）。
+    """
+    pairs = [(str(r.code), str(r.trade_date)) for r in recs]
+    if not pairs:
+        return {}
+    today_str = date.today().isoformat()
+    rows: dict[str, list[DailyKbar]] = {}
+    # 按 (code, signal_date) 批量取区间，避免逐股查询
+    codes = sorted({c for c, _ in pairs})
+    bars = db.scalars(
+        select(DailyKbar).where(
+            DailyKbar.code.in_(codes),
+            DailyKbar.trade_date > min(d for _, d in pairs),
+            DailyKbar.trade_date < today_str,
+        )
+    ).all()
+    by_code: dict[str, list[DailyKbar]] = {}
+    for b in bars:
+        by_code.setdefault(str(b.code), []).append(b)
+    for code, signal_date in pairs:
+        code_bars = sorted(
+            (b for b in by_code.get(code, []) if str(b.trade_date) > signal_date),
+            key=lambda b: str(b.trade_date),
+        )
+        rows[code] = code_bars
+    return rows
+
+
 def _compute_one(
     rec: Recommendation,
     quote: dict[str, Any] | None,
     signal_bar: DailyKbar | None,
+    intermediate_bars: list[DailyKbar] | None = None,
 ) -> dict[str, Any]:
     """对单笔 pending 推荐实盘算实时浮盈。
 
     quote 为 rt_k 当日实时 OHLC；为 None 时降级 unavailable。
+    intermediate_bars 为 trade_date 次日到今日（不含）的真实日K，避免滞留 pending
+    把真实入场日误判为今日（#5）。
     """
     base = {
         "recommendation_id": rec.recommendation_id,
@@ -179,7 +226,10 @@ def _compute_one(
         return {**base, "status": "unavailable", "reason": "实时行情不可用（rt_k 无数据）"}
 
     today_str = date.today().isoformat()
-    # 用 rt_k 当日 OHLC 合成当日临时日K，作为 future_bars 喂给 _resolve_entry
+    # rt_k 已带 pre_close：据此反推 pct_chg，补齐 is_one_word_limit_up_bar 反推前收所需
+    # （此前合成 bar 缺 pct_chg，使一字涨停「买不进」拦截恒失效，#2）。
+    pre_close = _f(quote.get("pre_close"))
+    pct_chg = round((quote["close"] - pre_close) / pre_close * 100, 4) if pre_close > 0 else 0.0
     today_bar = DailyKbar(
         code=str(rec.code),
         trade_date=today_str,
@@ -189,11 +239,15 @@ def _compute_one(
         close=quote["close"],
         volume=quote.get("vol", 0.0),
         amount=quote.get("amount", 0.0),  # 真实成交量额，流动性检查需要 vol/amount>0
+        pct_chg=pct_chg,
     )
+    # future_bars：trade_date 之后到今日的全部 bar（真实历史 + 今日合成），让 _resolve_entry
+    # 按真实入场日判定，而非把今日当入场日。
+    future_bars = list(intermediate_bars or []) + [today_bar]
     feature_snapshot = _loads(getattr(rec, "feature_snapshot_json", None), {})
 
     try:
-        entry = _resolve_entry(rec, feature_snapshot, [today_bar], 5, signal_bar=signal_bar)
+        entry = _resolve_entry(rec, feature_snapshot, future_bars, 5, signal_bar=signal_bar)
     except Exception as exc:
         logger.warning("实时盈亏入场判定失败 %s: %s", rec.code, str(exc)[:160])
         return {**base, "status": "unavailable", "reason": f"入场判定异常: {str(exc)[:80]}"}
@@ -224,7 +278,26 @@ def _compute_one(
     if entry_price <= 0:
         return {**base, "status": "unavailable", "reason": "入场价无效"}
 
-    pnl_pct = round((now_price - entry_price) / entry_price * 100, 2)
+    # 跳空高开 > MAX_ENTRY_GAP_PCT 放弃入场：_simulate_outcome 的 gap 拦截在 _resolve_entry 之外，
+    # 实时路径只调 _resolve_entry 会绕过它（#3）。此处复用同一阈值补齐。
+    recommend_price = _f(getattr(rec, "recommend_price", None))
+    if recommend_price > 0 and entry_price > 0:
+        gap_pct = (entry_price - recommend_price) / recommend_price * 100
+        if gap_pct > MAX_ENTRY_GAP_PCT:
+            return {
+                **base,
+                "status": "watching",
+                "reason": f"跳空高开 {gap_pct:.1f}% > {MAX_ENTRY_GAP_PCT:.0f}% 阈值，放弃入场",
+                "now_price": now_price,
+                "day_high": quote["high"],
+                "day_low": quote["low"],
+                "pre_close": quote.get("pre_close"),
+            }
+
+    # 跨除权修正：entry_price 来自推荐日附近，now_price 是今日现价，二者之间若发生除权，
+    # 原始价格比值会算出虚假盈亏（10送10 显示 -50%）。用 pre_close 比值修正除权跳变（#4）。
+    pnl_pct = _adjusted_pnl_pct(entry_price, now_price, future_bars, pre_close)
+
     return {
         **base,
         "status": "holding",
@@ -237,3 +310,42 @@ def _compute_one(
         "day_low": quote["low"],
         "pre_close": quote.get("pre_close"),
     }
+
+
+def _adjusted_pnl_pct(
+    entry_price: float,
+    now_price: float,
+    future_bars: list[DailyKbar],
+    today_pre_close: float,
+) -> float:
+    """跨除权日的浮盈修正：用 pct_chg 链累乘替代裸价比值（#4）。
+
+    若 entry 日到今日之间无除权，pct_chg 链与裸价比值近似相等；若发生除权（10送10 等），
+    pct_chg 已含除权调整，累乘即真实收益。entry 当日（若在 future_bars 中）的 pct_chg
+    计 entry→close 的当日部分，其余日累乘到今日现价。
+
+    实时展示口径与 _simulate_outcome 的除权 pct_chg 链重算对齐（outcome_simulation.py:300-330），
+    保证盘中显示与盘后真实结算不在除权日分叉。
+    """
+    raw = (now_price - entry_price) / entry_price * 100
+    if not future_bars or entry_price <= 0 or now_price <= 0:
+        return round(raw, 2)
+    # 检测除权日：相邻 bar 的 open/prev_close 跳变 > 20% 但 pct_chg 在涨停幅度内
+    has_ex_right = False
+    prev_close = entry_price
+    for bar in future_bars:
+        cur_open = _f(getattr(bar, "open", 0))
+        cur_pct = _f(getattr(bar, "pct_chg", 0))
+        if prev_close > 0 and cur_open > 0:
+            price_jump = (cur_open / prev_close - 1) * 100
+            if abs(price_jump) > 20 and abs(cur_pct) < 12:  # 12% 覆盖主板/创业/科创涨停
+                has_ex_right = True
+                break
+        prev_close = _f(getattr(bar, "close", 0)) or prev_close
+    if not has_ex_right:
+        return round(raw, 2)
+    # pct_chg 链累乘（含今日合成 bar 的 pct_chg）
+    cum = 1.0
+    for bar in future_bars:
+        cum *= (1 + _f(getattr(bar, "pct_chg", 0)) / 100.0)
+    return round((cum - 1) * 100, 2)
