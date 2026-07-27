@@ -429,12 +429,13 @@ export const api = {
     return request<RunSummary[]>(`/api/records/runs${str ? `?${str}` : ""}`);
   },
   runRecordDetail: (runId: string) => request<RunRecordDetail>(`/api/records/runs/${runId}`),
-  matrixRecords: (params?: { page?: number; page_size?: number; code?: string; analysis_type?: string }) => {
+  matrixRecords: (params?: { page?: number; page_size?: number; code?: string; analysis_type?: string; exclude_analysis_type?: string }) => {
     const qs = new URLSearchParams();
     if (params?.page) qs.set("page", String(params.page));
     if (params?.page_size) qs.set("page_size", String(params.page_size));
     if (params?.code) qs.set("code", params.code);
     if (params?.analysis_type) qs.set("analysis_type", params.analysis_type);
+    if (params?.exclude_analysis_type) qs.set("exclude_analysis_type", params.exclude_analysis_type);
     return request<MatrixRecordsResponse>(`/api/records/matrix?${qs.toString()}`);
   },
   matrixRecordDetail: (id: number) => request<MatrixRecordDetail>(`/api/records/matrix/${id}`),

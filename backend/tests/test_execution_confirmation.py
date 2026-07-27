@@ -1,4 +1,15 @@
-from app.services.execution_confirmation import _derive_decisions
+from datetime import datetime
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.models.tables import DailyKbar
+from app.services.execution_confirmation import (
+    _adjust_stop_loss_for_ex_right,
+    _derive_decisions,
+    _entry_window_closed,
+)
 
 
 def _signal(**overrides):
@@ -107,3 +118,68 @@ def test_agent_failure_uses_high_confidence_rule_signal():
 
     assert entry["code"] == "buy"
     assert holding["code"] == "hold"
+
+
+# ── #6: 周末入场窗口不应重开 ────────────────────────────────────────────────
+
+def test_entry_window_closed_when_snapshot_before_today():
+    """周末快照 data_as_of=周五 < 今天=周六：窗口必须关闭，否则周末会重出 buy。"""
+    saturday = datetime(2026, 7, 25, 10, 0)  # 周六
+    assert _entry_window_closed("2026-07-24", saturday) is True
+
+
+def test_entry_window_open_on_same_day_before_close():
+    """当日盘前/盘中（<15:00）且快照=今天：窗口未关。"""
+    weekday_noon = datetime(2026, 7, 27, 11, 30)  # 周一盘中
+    assert _entry_window_closed("2026-07-27", weekday_noon) is False
+
+
+def test_entry_window_closed_same_day_after_close():
+    """当日盘后（≥15:00）且快照=今天：窗口关闭。"""
+    weekday_evening = datetime(2026, 7, 27, 16, 0)  # 周一盘后
+    assert _entry_window_closed("2026-07-27", weekday_evening) is True
+
+
+# ── #7: 止损基准跨除权修正 ──────────────────────────────────────────────────
+
+@pytest.fixture()
+def db_session():
+    engine = create_engine("sqlite:///:memory:")
+    DailyKbar.__table__.create(engine)
+    Session = sessionmaker(bind=engine)
+    db = Session()
+    yield db
+    db.close()
+
+
+def test_stop_loss_adjusted_for_ex_right_day(db_session):
+    """推荐日止损 18.0，期间 10送10 除权（pct_chg=0，价格腰斩），
+    复权因子=0.5，止损基准缩放到 9.0；裸价 15.0 不再误判跌破。"""
+    db_session.add(DailyKbar(code="600000", trade_date="2026-06-02", open=30.0, high=30.5,
+                             low=29.5, close=30.0, volume=1000, amount=1e6, pct_chg=0.0))
+    db_session.commit()
+    # 除权日：价格腰斩，pct_chg≈0（除权调整）
+    db_session.add(DailyKbar(code="600000", trade_date="2026-06-03", open=15.0, high=15.1,
+                             low=14.9, close=15.0, volume=1000, amount=1e6, pct_chg=0.0))
+    db_session.commit()
+
+    adjusted = _adjust_stop_loss_for_ex_right(db_session, "600000", "2026-06-01", "2026-06-03", 18.0)
+    assert adjusted == pytest.approx(9.0, abs=0.01)
+
+
+def test_stop_loss_unchanged_without_ex_right(db_session):
+    """无除权（正常涨跌，无 >20% 跳变）：因子=1，止损基准不变。"""
+    db_session.add(DailyKbar(code="600000", trade_date="2026-06-02", open=20.0, high=20.5,
+                             low=19.5, close=20.2, volume=1000, amount=1e6, pct_chg=1.0))
+    db_session.add(DailyKbar(code="600000", trade_date="2026-06-01", open=19.0, high=20.0,
+                             low=18.8, close=20.0, volume=1000, amount=1e6, pct_chg=0.0))
+    db_session.commit()
+
+    adjusted = _adjust_stop_loss_for_ex_right(db_session, "600000", "2026-06-01", "2026-06-02", 18.0)
+    assert adjusted == pytest.approx(18.0, abs=0.01)  # 无除权跳变，基准不变
+
+
+def test_stop_loss_unchanged_when_no_bars(db_session):
+    """无中间日K：无法判断除权，原样返回止损基准。"""
+    adjusted = _adjust_stop_loss_for_ex_right(db_session, "600000", "2026-06-01", "2026-06-03", 18.0)
+    assert adjusted == 18.0

@@ -45,10 +45,14 @@ def matrix_records(
     page_size: int = Query(20, ge=1, le=100),
     code: str | None = Query(default=None, description="按股票代码筛选"),
     analysis_type: str | None = Query(default=None, description="按分析类型筛选：analysis | backtest | single_stock"),
+    exclude_analysis_type: str | None = Query(default=None, description="排除某分析类型（矩阵 tab 排除 single_stock）"),
     db: Session = Depends(get_db),
 ):
     """矩阵分析历史记录列表（分页，按 created_at 倒序）。"""
-    return list_matrix_records(db, page=page, page_size=page_size, code=code, analysis_type=analysis_type)
+    return list_matrix_records(
+        db, page=page, page_size=page_size, code=code,
+        analysis_type=analysis_type, exclude_analysis_type=exclude_analysis_type,
+    )
 
 
 @router.get("/matrix/{record_id}")

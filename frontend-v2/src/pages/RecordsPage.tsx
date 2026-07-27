@@ -486,7 +486,7 @@ function MatrixRecordsList() {
   const [page, setPage] = useState(1);
   const pageSize = 20;
   const { data, loading, error } = useApi<MatrixRecordsResponse>(
-    () => api.matrixRecords({ page, page_size: pageSize }),
+    () => api.matrixRecords({ page, page_size: pageSize, exclude_analysis_type: "single_stock" }),
     [page],
   );
 

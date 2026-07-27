@@ -239,11 +239,14 @@ def list_matrix_records(
     page_size: int = 20,
     code: str | None = None,
     analysis_type: str | None = None,
+    exclude_analysis_type: str | None = None,
 ) -> dict[str, Any]:
     """矩阵分析历史记录列表（分页，按 created_at 倒序）。
 
     与 stock_matrix.py 的 /history 不同：这里跨所有 code，按时间倒序。
     analysis_type 可选过滤（如 "analysis" / "backtest" / "single_stock"）。
+    exclude_analysis_type 可选排除（记录中心矩阵 tab 用以排除 single_stock，避免单股票
+    评分历史稀释矩阵分析历史——二者虽共用 stock_matrix_history 表但口径不同）。
     """
     stmt = select(StockMatrixHistory)
     count_stmt = select(func.count()).select_from(StockMatrixHistory)
@@ -253,6 +256,9 @@ def list_matrix_records(
     if analysis_type:
         stmt = stmt.where(StockMatrixHistory.analysis_type == analysis_type)
         count_stmt = count_stmt.where(StockMatrixHistory.analysis_type == analysis_type)
+    if exclude_analysis_type:
+        stmt = stmt.where(StockMatrixHistory.analysis_type != exclude_analysis_type)
+        count_stmt = count_stmt.where(StockMatrixHistory.analysis_type != exclude_analysis_type)
 
     total = db.scalar(count_stmt) or 0
     offset = (page - 1) * page_size

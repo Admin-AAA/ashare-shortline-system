@@ -100,3 +100,33 @@ def test_compute_returns_zero_price():
     r = _compute_returns(0.0, bars, "2026-06-02")
     assert r["return_1d"] is None
     assert r["return_to_date"] is None
+
+
+# ── #9: 矩阵记录列表排除 single_stock ──────────────────────────────────────
+
+def test_list_matrix_records_excludes_single_stock():
+    """记录中心矩阵 tab 须排除 single_stock，避免单股票评分历史稀释矩阵分析历史。"""
+    from datetime import datetime
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.models.tables import StockMatrixHistory
+    from app.services.records_service import list_matrix_records
+
+    engine = create_engine("sqlite:///:memory:")
+    StockMatrixHistory.__table__.create(engine)
+    Session = sessionmaker(bind=engine)
+    db = Session()
+    db.add(StockMatrixHistory(code="000001", trade_date="2026-07-25", analysis_type="analysis",
+                              final_score=80.0, skill_count=1, result_json="{}", elapsed_ms=10))
+    db.add(StockMatrixHistory(code="000002", trade_date="2026-07-25", analysis_type="single_stock",
+                              final_score=38.0, skill_count=1, result_json="{}", elapsed_ms=10))
+    db.commit()
+
+    out = list_matrix_records(db, page=1, page_size=20, exclude_analysis_type="single_stock")
+    assert out["total"] == 1
+    assert out["items"][0]["analysis_type"] == "analysis"
+
+    # 不传 exclude 时仍返回全部（兼容其它调用方）
+    out_all = list_matrix_records(db, page=1, page_size=20)
+    assert out_all["total"] == 2

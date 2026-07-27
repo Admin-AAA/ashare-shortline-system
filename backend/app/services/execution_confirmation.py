@@ -28,6 +28,63 @@ def _json_mapping(raw: str | None) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _entry_window_closed(data_as_of: str, local_now: datetime) -> bool:
+    """入场窗口是否已关闭（不再追认盘中买点）。
+
+    data_as_of 落在今天且已收盘（≥15:00），或快照早于今天（周末 latest_allowed_quote_date
+    回退到周五，fresh=True 但 data_as_of < 今天，此前窗口判定恒 False 致周末重新输出 buy）。
+    """
+    today_iso = local_now.date().isoformat()
+    return (data_as_of == today_iso and local_now.hour >= 15) or data_as_of < today_iso
+
+
+def _adjust_stop_loss_for_ex_right(
+    db: Session,
+    code: str,
+    signal_date: str,
+    data_as_of: str,
+    stop_loss: float,
+) -> float:
+    """把推荐日裸价止损基准按除权因子缩放到 data_as_of 口径，规避除权误判。
+
+    stop_loss 存的是推荐日裸价（market_data.py 由 ma20*0.95 算出）。若推荐日到今日发生
+    除权（10送10 价格腰斩），裸价比 current_price <= stop_loss 会把翻倍的复权后股价误判
+    为跌破止损。Tushare 的 pct_chg 在除权日已调整前收（≈0），无法用它捕捉价格跳变；
+    这里直接用「除权日 open / 前日 close」累乘出除权因子，缩放止损基准。无除权时因子=1。
+    """
+    if stop_loss <= 0 or not signal_date or not data_as_of or data_as_of <= signal_date:
+        return stop_loss
+    bars = db.scalars(
+        select(DailyKbar).where(
+            DailyKbar.code == code,
+            DailyKbar.trade_date > signal_date,
+            DailyKbar.trade_date <= data_as_of,
+        ).order_by(DailyKbar.trade_date)
+    ).all()
+    if not bars:
+        return stop_loss
+    # 取 signal_date 当日 close 作除权跳变的前收基准；缺失则用首根 bar 的 open 兜底
+    signal_close = db.scalar(
+        select(DailyKbar.close).where(
+            DailyKbar.code == code, DailyKbar.trade_date == signal_date,
+        )
+    )
+    factor = 1.0
+    prev_close = float(signal_close or 0) or float(getattr(bars[0], "open", 0) or 0)
+    for bar in bars:
+        cur_open = float(getattr(bar, "open", 0) or 0)
+        cur_pct = float(getattr(bar, "pct_chg", 0) or 0)
+        if prev_close > 0 and cur_open > 0:
+            price_jump = (cur_open / prev_close - 1) * 100
+            # 除权日：价格跳变 > 20% 但 pct_chg 在涨停幅度内（pct_chg 已除权调整）
+            if abs(price_jump) > 20 and abs(cur_pct) < 12:
+                factor *= cur_open / prev_close
+        prev_close = float(getattr(bar, "close", 0) or 0) or prev_close
+    if factor <= 0:
+        return stop_loss
+    return round(stop_loss * factor, 2)
+
+
 def _derive_decisions(
     *,
     fresh: bool,
@@ -173,11 +230,14 @@ def confirm_recommendation_execution(
     local_now = datetime.now()
     expected_quote_date = latest_allowed_quote_date()
     fresh = data_as_of == expected_quote_date
-    entry_window_closed = data_as_of == local_now.date().isoformat() and local_now.hour >= 15
+    entry_window_closed = _entry_window_closed(data_as_of, local_now)
     review = _run_agent_review(skill, current, snapshot, signal) if include_agent and fresh else None
     current_price = float(current.get("price") or current.get("close") or 0)
     original_snapshot = _json_mapping(rec.feature_snapshot_json)
     stop_loss = float(original_snapshot.get("stop_loss") or 0)
+    # 止损基准跨除权修正：stop_loss 是推荐日裸价，若推荐日到今日发生除权（10送10 等），
+    # 裸价比会误判跌破止损。用 pct_chg 链累乘出复权因子，把止损基准缩放到今日口径。
+    adjusted_stop_loss = _adjust_stop_loss_for_ex_right(db, code, str(rec.trade_date), data_as_of, stop_loss)
     entry_decision, holding_decision = _derive_decisions(
         fresh=fresh,
         signal_age_trade_days=signal_age_trade_days,
@@ -186,7 +246,7 @@ def confirm_recommendation_execution(
         signal=signal,
         review=review,
         current_price=current_price,
-        stop_loss=stop_loss,
+        stop_loss=adjusted_stop_loss,
     )
 
     return {
