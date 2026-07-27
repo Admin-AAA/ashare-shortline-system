@@ -24,7 +24,7 @@ import {
   rowStyle,
 } from "./recordsShared";
 import { useApi } from "../app/useApi";
-import { bucketLabel, exitReasonLabel } from "../utils/display";
+import { bucketLabel, exitReasonLabel, outcomeLabel, outcomeTone } from "../utils/display";
 
 export function StockAnalysisDetailView({ recId, onBack }: { recId: string; onBack: () => void }) {
   const { data, loading, error } = useApi<RecommendationDetail>(
@@ -244,11 +244,21 @@ function OutcomeSection({
       <div className="panel__header">
         <div><div className="panel__kicker">收益与复盘</div><h3 className="panel__title">分析日 → 今天</h3></div>
         {outcome?.outcome_label && (
-          <span style={{
-            padding: "2px 8px", borderRadius: 4, fontSize: "var(--text-sm)",
-            color: outcome.hit_target ? "var(--market-up)" : "var(--market-down)",
-            background: `color-mix(in srgb, ${outcome.hit_target ? "var(--market-up)" : "var(--market-down)"} 12%, transparent)`,
-          }}>{outcome.outcome_label}</span>
+          (() => {
+            const tone = outcomeTone(outcome.outcome_label);
+            const toneColor =
+              tone === "positive" ? "var(--market-up)"
+                : tone === "danger" ? "var(--market-down)"
+                : tone === "warning" ? "var(--market-gold, #b8860b)"
+                : "var(--muted)";
+            return (
+              <span style={{
+                padding: "2px 8px", borderRadius: 4, fontSize: "var(--text-sm)",
+                color: toneColor,
+                background: `color-mix(in srgb, ${toneColor} 12%, transparent)`,
+              }}>{outcomeLabel(outcome.outcome_label)}</span>
+            );
+          })()
         )}
       </div>
       {outcome && (
