@@ -20,11 +20,11 @@ def main() -> None:
             task_id="formal_run_safety_net",
             name="盘前 formal 推荐安全网",
             task_type="formal_safety_net",
-            cron_expression="30 8 * * 1-5",
+            cron_expression="30 8 * * mon-fri",
             payload={},
             enabled=True,
         )
-        print("✅ 已注册 formal_run_safety_net 调度任务 (cron=30 8 * * 1-5)")
+        print("✅ 已注册 formal_run_safety_net 调度任务 (cron=30 8 * * mon-fri)")
     finally:
         db.close()
 
