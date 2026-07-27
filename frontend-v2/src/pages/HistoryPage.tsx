@@ -535,7 +535,7 @@ export function HistoryPage() {
                     </tr>
                     {expandedId === it.recommendation_id && (
                       <tr>
-                        <td colSpan={9} style={{ padding: 0, borderBottom: "1px solid var(--border)" }}>
+                        <td colSpan={10} style={{ padding: 0, borderBottom: "1px solid var(--border)" }}>
                           {detailLoadingId === it.recommendation_id ? (
                             <div style={detailStateStyle}>
                               <Loader2 size={16} className="spin" /> 加载完整决策详情…

@@ -251,6 +251,13 @@ def main() -> int:
     development_dates = sorted({fixed_samples[i]["trade_date"] for i in development_idx})
     validation_dates = sorted({fixed_samples[i]["trade_date"] for i in validation_idx})
 
+    if not development_dates or not validation_dates:
+        print(
+            f"样本: total={len(fixed_samples)}, skipped={skipped}; "
+            "唯一交易日不足（≤1 个），无法划分开发/验证段，退出（不产生结论）。"
+        )
+        return 1
+
     print(
         f"样本: total={len(fixed_samples)}, skipped={skipped}, "
         f"development={len(development_idx)} ({development_dates[0]}..{development_dates[-1]}), "
