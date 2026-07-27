@@ -38,6 +38,10 @@ from app.engine.trading_calendar import (
     previous_weekday as _previous_weekday,
 )
 
+# Tushare provider 管理（配置页「数据源管理」Tab）：运行时启停覆盖 + 探针 health 所用的
+# source_type。置于模块顶部：sync_data_source_configs 的孤儿清理需引用它做豁免。
+_PROVIDER_SOURCE_TYPE = "tushare_provider"
+
 
 def _compact_trade_date(value: Any) -> str:
     digits = "".join(ch for ch in str(value or "") if ch.isdigit())
@@ -362,8 +366,13 @@ def sync_data_source_configs(db: Session) -> None:
                     row.priority = index
                     row.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
                     changed = True
-        # 清理孤儿：注册表只保留 desired 中声明的 source×type，删除其余 config + 对应 health
+        # 清理孤儿：注册表只保留 desired 中声明的 source×type，删除其余 config + 对应 health。
+        # 豁免 tushare_provider：provider 的运行时启停覆盖（set_provider_enabled）与探针
+        # health 都写在这个 source_type 下，不属于 quote/kline/... 七类注册表；若一并按孤儿
+        # 删除，会把「禁用脏数据源」的覆盖行秒删、被禁源静默回流（spec: 孤儿清理对 provider 豁免）。
         for row in db.scalars(select(DataSourceConfig)).all():
+            if row.source_type == _PROVIDER_SOURCE_TYPE:
+                continue
             if (row.source, row.source_type) not in desired_set:
                 health_row = db.get(DataSourceHealth, {"source": row.source, "source_type": row.source_type})
                 if health_row is not None:
@@ -708,9 +717,6 @@ def _unified_quote_rows_from_rows(all_rows: list, limit: int = 50, offset: int =
 # ═════════════════════════════════════════════════════════════════════════════
 # Tushare provider 管理（配置页「数据源管理」Tab）：启停 + 测试
 # ═════════════════════════════════════════════════════════════════════════════
-
-_PROVIDER_SOURCE_TYPE = "tushare_provider"
-
 
 def _known_provider_names() -> set[str]:
     """当前进程已接入（configured）的 provider 名集合，从 health 投影读取。"""

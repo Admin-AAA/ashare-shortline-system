@@ -56,6 +56,22 @@ def _f(value: Any) -> float:
         return 0.0
 
 
+def _enabled_override() -> bool:
+    """读管理面 Tab 写入的运行时启停覆盖（source_type=tushare_provider）。
+
+    与 fastapic/xiaodefa/ai_tool 走 Router._is_enabled 不同，realtime_quote 直连爬虫端点、
+    不在 Router 的 provider 链里，需自行消费同一份 DB 覆盖，否则「禁用」对它失效（返回 200
+    但照跑）。查不到/出错视为启用（与 Router overrides.get(name, True) 同款默认）。
+    """
+    try:
+        from app.services.tushare_client import _provider_enabled_override
+
+        return bool(_provider_enabled_override().get("realtime_quote", True))
+    except Exception:
+        logger.debug("realtime_quote enabled override query failed", exc_info=True)
+        return True
+
+
 def _normalize_rows(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
     """把 realtime_quote 的 DataFrame 归一化成 {code6: quote}。
 
@@ -111,6 +127,11 @@ def fetch_realtime_quotes(codes: list[str], *, use_cache: bool = True) -> dict[s
     ttl = max(0.0, float(settings.tushare_realtime_quote_ttl_seconds))
     batch_size = max(1, int(settings.tushare_realtime_quote_batch_size))
 
+    # 管理面禁用 → 直接降级为空，不发爬虫请求（与 fastapic 等源的「禁用即时生效」对齐）
+    if not _enabled_override():
+        logger.info("realtime_quote 已被管理面禁用，跳过拉取")
+        return {}
+
     if use_cache and ttl > 0:
         with _cache_lock:
             age = time.time() - _cache["fetched_at"]
@@ -162,7 +183,8 @@ def fetch_realtime_quotes(codes: list[str], *, use_cache: bool = True) -> dict[s
 def get_realtime_quote_health() -> dict[str, Any]:
     """向数据源健康面板汇报 realtime_quote 的进程内状态。"""
     settings = get_settings()
-    enabled = bool(settings.tushare_fastapic_token.strip())
+    configured = bool(settings.tushare_fastapic_token.strip())
+    enabled = configured and _enabled_override()
     with _cache_lock:
         fetched_at = _cache["fetched_at"]
         row_count = len(_cache["rows"])
@@ -175,7 +197,7 @@ def get_realtime_quote_health() -> dict[str, Any]:
         "source_type": "tushare_provider",
         "layer": "provider",
         "enabled": enabled,
-        "configured": enabled,
+        "configured": configured,
         "priority": 2,
         "note": "实时报价爬虫（realtime.stockai888.top）；未结算推荐盘中浮盈",
         "success_count": 0,

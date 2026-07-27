@@ -106,3 +106,70 @@ def test_test_provider_unknown_raises_keyerror(db_session, monkeypatch):
 
     with pytest.raises(KeyError):
         ds.test_provider(db_session, "nonexist")
+
+
+def _empty_sources(monkeypatch):
+    """让 sync 的 desired（quote/kline/... 七类）全为空，desired_set 为空集。
+    这样所有非豁免 config 行都是孤儿，专门测豁免逻辑。"""
+    for name in ("_quote_sources", "_kline_sources"):
+        monkeypatch.setattr(ds, name, lambda settings: [])
+    from app.services import market_auxiliary as ma
+    for name in (
+        "_capital_flow_sources", "_concept_sector_sources",
+        "_dragon_tiger_sources", "_limit_up_sources", "_news_sources",
+    ):
+        monkeypatch.setattr(ma, name, lambda settings: [])
+
+
+def test_sync_orphan_cleanup_spares_tushare_provider_rows(db_session, monkeypatch):
+    """孤儿清理必须豁免 tushare_provider：set_provider_enabled 写的运行时启停覆盖行
+    不在 quote/kline/... 七类 desired 中，若被按孤儿删除，「禁用脏源」会静默回滚。
+    """
+    _empty_sources(monkeypatch)
+
+    # 预置：一个 provider 覆盖行（模拟 set_provider_enabled 禁用 fastapic）+ 一个孤儿 config
+    db_session.add(DataSourceConfig(source="fastapic", source_type="tushare_provider", enabled=False, priority=100))
+    db_session.add(DataSourceConfig(source="ghost", source_type="quote", enabled=True, priority=99))
+    db_session.commit()
+
+    ds.sync_data_source_configs(db_session)
+
+    # provider 覆盖行保留（豁免）；非 provider 孤儿行被删
+    provider_row = db_session.get(DataSourceConfig, {"source": "fastapic", "source_type": "tushare_provider"})
+    assert provider_row is not None
+    assert provider_row.enabled is False  # 禁用状态未被回滚
+    assert db_session.get(DataSourceConfig, {"source": "ghost", "source_type": "quote"}) is None
+
+
+def test_realtime_quote_disabled_override_blocks_fetch(monkeypatch):
+    """realtime_quote 的禁用开关必须被 fetch 消费：禁用时直接降级为空，不发爬虫请求。"""
+    import app.services.realtime_quote_client as rq
+
+    called = {"realtime": False}
+
+    def _boom(*a, **k):  # 若走到真实 ts.realtime_quote 会抛
+        called["realtime"] = True
+        raise AssertionError("禁用后不应调用 ts.realtime_quote")
+
+    import tushare as ts
+    monkeypatch.setattr(ts, "realtime_quote", _boom)
+    monkeypatch.setattr(rq, "_enabled_override", lambda: False)
+
+    rows = rq.fetch_realtime_quotes(["000001"], use_cache=False)
+    assert rows == {}
+    assert called["realtime"] is False
+
+
+def test_realtime_quote_health_reads_disabled_override(monkeypatch):
+    """get_realtime_quote_health 的 enabled/status 必须反映 DB 覆盖，而非只看 token。"""
+    import app.services.realtime_quote_client as rq
+
+    class _S:
+        tushare_fastapic_token = "fake-token"  # token 在 → configured=True，但运行时禁用
+    monkeypatch.setattr(rq, "get_settings", lambda: _S())
+    monkeypatch.setattr(rq, "_enabled_override", lambda: False)
+
+    health = rq.get_realtime_quote_health()
+    assert health["enabled"] is False
+    assert health["configured"] is True
+    assert health["status"] == "disabled"
