@@ -43,6 +43,8 @@ from app.services.outcome_simulation import (  # noqa: F401 - re-export for back
     SUCCESS_RETURN_PCT,
     TRAILING_STOP_ACTIVATE_PCT,
     TRAILING_STOP_CALLBACK_PCT,
+    TRAILING_STOP_MIN_LOCK_PCT,
+    TRAILING_STOP_PROFIT_LOCK_RATIO,
     _as_float,
     _build_outcome_reason,
     _entry_execution_block_reason,

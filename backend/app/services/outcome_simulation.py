@@ -87,7 +87,8 @@ MAX_TAKE_PROFIT_PCT = 15.0     # 止盈上限（+15%），防止 feature_builder
 STOP_LOSS_GAP_CAP_PCT = -15.0  # 跳空止损最大亏损上限：open 远低于止损价时，模拟"隔夜止损单"的极限（科创板 20cm 跌停场景）
 MAX_ENTRY_GAP_PCT = 10.0       # 跳空高开 > 10% 则放弃入场（历史数据：gap>10% 胜率 0%）
 
-# 条件 trailing stop（移动止盈）：仅在既未触及 stop_loss 也未触及 take_profit 的 bar 上激活
+# 历史 callback trailing stop：保留给 `_resolve_exit_legacy_noncausal` 做有偏上界对照，
+# 不再作为生产默认退出。以下历史结论不能替代 2026-07-27 利润地板的因果验证。
 # 回测验证（235 笔 formal 样本，min 时序口径，扣费口径现统一为 0.07%/笔）：
 #   胜率 49.4%→66.8%、盈亏比 1.38→1.89、总收益 +232→+685、最大亏损 -15.19%→-7.17%
 # 时间分割验证（防过拟合）：前半 盈亏比 1.97→2.40，后半（样本外）1.51→1.67，两半均正向
@@ -100,6 +101,8 @@ MAX_ENTRY_GAP_PCT = 10.0       # 跳空高开 > 10% 则放弃入场（历史数�
 # 时序口径：触发价取 min(open, 触发价)——跳空低开时以 open 成交（更差），max 会虚假高估出场价
 TRAILING_STOP_ACTIVATE_PCT = 2.0   # high 达 entry +2% 激活（原 3.0；2.0 让更多交易在亏损前以小赚离场）
 TRAILING_STOP_CALLBACK_PCT = 0.8   # 自峰值 high 回撤 0.8% 触发退出（原 1.5；更紧锁利，loss 3.67→3.13）
+TRAILING_STOP_MIN_LOCK_PCT = 0.3   # 利润地板最低锁定 +0.3%，覆盖滑点和交易成本后仍保留小幅净利润
+TRAILING_STOP_PROFIT_LOCK_RATIO = 0.50  # 生产动态退出锁住前一日最高浮盈的 50%，其余空间留给正常波动
 
 OUTCOME_PENDING = "pending"
 OUTCOME_SUCCESS = "success"
@@ -136,7 +139,7 @@ def _simulate_outcome(
 ) -> dict[str, Any] | None:
     """模拟单笔推荐 outcome。
 
-    exit_resolver 默认 None → 用生产两轮扫描的 _resolve_exit。
+    exit_resolver 默认 None → 用生产单路径因果利润地板 `_resolve_exit`。
     传入自定义解析器（签名同 _resolve_exit：holding_bars, stop_loss, take_profit,
     *, code, entry_price）可替换退出逻辑，用于动态退出状态机反事实验证。
     入场时序、holding_bars 起点、executed_entry_price（含滑点）、除权重算等全部
@@ -529,7 +532,7 @@ def _resolve_entry(
     }
 
 
-def _resolve_exit(
+def _resolve_exit_legacy_noncausal(
     holding_bars: list[DailyKbar],
     stop_loss_price: float,
     take_profit_price: float,
@@ -537,7 +540,7 @@ def _resolve_exit(
     code: str = "",
     entry_price: float = 0.0,
 ) -> tuple[float, str, str]:
-    """模拟退出逻辑：固定止损/止盈优先，条件 trailing stop 兜底。
+    """历史两轮退出逻辑，仅用于有偏上界对照，不得作为生产默认解析器。
 
     A 股 T+1 交收：买入当日不能卖出。holding_bars[0] 是入场日，**当天不触发任何离场**
     （含开盘跳空止损、盘中 high/low 触及止盈止损），从 holding_bars[1:]（入场日次日起）起扫。
@@ -692,6 +695,16 @@ def _resolve_exit_with_trailing(
     return _as_float(last_bar.close), str(last_bar.trade_date), "horizon_close"
 
 
+def _trailing_stop_return(
+    observed_high_return: float,
+    trailing_policy: str,
+    profit_lock_ratio: float,
+) -> float:
+    if trailing_policy == "profit_floor":
+        return max(TRAILING_STOP_MIN_LOCK_PCT, observed_high_return * profit_lock_ratio)
+    return observed_high_return - TRAILING_STOP_CALLBACK_PCT
+
+
 def _resolve_exit_causal(
     holding_bars: list[DailyKbar],
     stop_loss_price: float,
@@ -700,18 +713,21 @@ def _resolve_exit_causal(
     code: str = "",
     entry_price: float = 0.0,
     dynamic_trailing: bool = True,
+    trailing_policy: str = "peak_callback",
+    profit_lock_ratio: float = 0.25,
 ) -> tuple[float, str, str]:
     """单路径因果退出函数（动态退出状态机 MVP）。
 
-    与生产 `_resolve_exit` 的关键差异：trailing 保护价严格按交易日推进，**只用截至上一
-    交易日收盘已知的信息**生成下一交易日生效的保护价，当日新形成的最高价只能更新下一
-    交易日的保护价，不得反过来触发当日退出（日 K 无法证明当日 high/low 先后顺序）。
+    与历史 `_resolve_exit_legacy_noncausal` 的关键差异：trailing 保护价严格按交易日推进，
+    **只用截至上一交易日收盘已知的信息**生成下一交易日生效的保护价，当日新形成的最高价
+    只能更新下一交易日的保护价，不得反过来触发当日退出（日 K 无法证明当日 high/low 先后顺序）。
 
     holding_bars[0] 是入场日，当天禁止退出（T+1）。入场日 close 用于初始化次日计划：
     - entry_close_return = (entry_close / entry_price - 1) * 100
     - 若 ≥ TRAILING_STOP_ACTIVATE_PCT(2.0%)，从次日起激活移动保护
-    - 次日保护价 = entry_price * (1 + (entry_close_return - callback) / 100)
-      不得低于 hard_stop，也不得低于上一版保护价（单调上移）
+    - `peak_callback`：次日保护收益 = 最高浮盈 - callback
+    - `profit_floor`：次日保护收益 = max(最低锁利, 最高浮盈 × profit_lock_ratio)
+    - 保护价不得低于 hard_stop，也不得低于上一版保护价（单调上移）
 
     对 holding_bars[1:] 逐日按 Spec §4 的 10 条顺序判断；当 5、6（low 触止损）与 7、8
     （low/high 触 trailing/tp）同日并存时，按 Spec §4.5/§4.6/§4.7 的保守顺序：固定止损 >
@@ -720,6 +736,11 @@ def _resolve_exit_causal(
     dynamic_trailing=False 时退化为纯单路径固定止盈止损（与 _resolve_exit_base 在
     holding_bars[1:] 上的语义一致），用于反事实验证的因果基线。
     """
+    if dynamic_trailing and trailing_policy not in {"peak_callback", "profit_floor"}:
+        raise ValueError(f"unknown trailing_policy: {trailing_policy}")
+    if dynamic_trailing and trailing_policy == "profit_floor" and not 0 < profit_lock_ratio <= 1:
+        raise ValueError(f"profit_lock_ratio must be in (0, 1], got {profit_lock_ratio}")
+
     if not holding_bars:
         return 0.0, "", "horizon_close"
     if len(holding_bars) <= 1:
@@ -743,7 +764,8 @@ def _resolve_exit_causal(
             observed_high_return = max(0.0, entry_close_return)
             if entry_close_return >= TRAILING_STOP_ACTIVATE_PCT:
                 trailing_active = True
-                prot = entry_price * (1 + (entry_close_return - TRAILING_STOP_CALLBACK_PCT) / 100.0)
+                stop_return = _trailing_stop_return(entry_close_return, trailing_policy, profit_lock_ratio)
+                prot = entry_price * (1 + stop_return / 100.0)
                 prot = max(prot, hard_stop)
                 next_trailing_stop = prot
 
@@ -804,7 +826,8 @@ def _resolve_exit_causal(
             if not trailing_active and observed_high_return >= TRAILING_STOP_ACTIVATE_PCT:
                 trailing_active = True
             if trailing_active:
-                prot = entry_price * (1 + (observed_high_return - TRAILING_STOP_CALLBACK_PCT) / 100.0)
+                stop_return = _trailing_stop_return(observed_high_return, trailing_policy, profit_lock_ratio)
+                prot = entry_price * (1 + stop_return / 100.0)
                 prot = max(prot, hard_stop)
                 # 保护价单调上移：不得低于上一版
                 if prot > next_trailing_stop:
@@ -817,6 +840,31 @@ def _resolve_exit_causal(
     if locked_limit_down_bars:
         return _as_float(last_bar.close), str(last_bar.trade_date), "horizon_close_after_locked_limit_down"
     return _as_float(last_bar.close), str(last_bar.trade_date), "horizon_close"
+
+
+def _resolve_exit(
+    holding_bars: list[DailyKbar],
+    stop_loss_price: float,
+    take_profit_price: float,
+    *,
+    code: str = "",
+    entry_price: float = 0.0,
+) -> tuple[float, str, str]:
+    """生产退出：单路径因果状态机 + 50% 利润地板。
+
+    保护价只使用上一交易日结束时已知的最高浮盈，并从下一交易日起生效；
+    不再根据完整持有期是否最终触及固定止盈来事后选择退出路径。
+    """
+    return _resolve_exit_causal(
+        holding_bars,
+        stop_loss_price,
+        take_profit_price,
+        code=code,
+        entry_price=entry_price,
+        dynamic_trailing=True,
+        trailing_policy="profit_floor",
+        profit_lock_ratio=TRAILING_STOP_PROFIT_LOCK_RATIO,
+    )
 
 
 def _resolve_stop_loss_price(raw_entry_price: float | None, feature_snapshot: dict[str, Any]) -> float:
