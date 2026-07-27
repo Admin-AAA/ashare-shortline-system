@@ -7,7 +7,7 @@
   3. 输出数据健康报告
 
 安装 crontab（每天 9:30 开盘前执行）：
-    30 9 * * 1-5 cd /opt/ashare-shortline-system/backend && python scripts/daily_data_cron.py >> logs/daily_cron.log 2>&1
+    30 9 * * 1-5 cd /Users/wangao/Desktop/ashare-shortline-system/backend && python scripts/daily_data_cron.py >> logs/daily_cron.log 2>&1
 """
 import sys
 from pathlib import Path

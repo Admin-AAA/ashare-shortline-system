@@ -7,7 +7,7 @@
 #   ./cron_data_health.sh --json       # JSON 输出
 #
 # 建议 crontab 配置（每天早上 9:05 执行）:
-#   5 9 * * 1-5 /opt/ashare-shortline-system/backend/scripts/cron_data_health.sh >> /var/log/data_health.log 2>&1
+#   5 9 * * 1-5 /Users/wangao/Desktop/ashare-shortline-system/backend/scripts/cron_data_health.sh >> /var/log/data_health.log 2>&1
 # =============================================================================
 
 set -euo pipefail
