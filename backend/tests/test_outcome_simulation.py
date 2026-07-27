@@ -17,9 +17,12 @@ from app.models.tables import DailyKbar
 from app.services.outcome_simulation import (
     DEFAULT_STOP_LOSS_PCT,
     MAX_STOP_LOSS_PCT,
+    TRAILING_STOP_ACTIVATE_PCT,
+    TRAILING_STOP_CALLBACK_PCT,
     _bar_tradeable,
     _resolve_entry,
     _resolve_exit,
+    _resolve_exit_causal,
     _resolve_stop_loss_price,
     _resolve_take_profit_price,
     _simulate_outcome,
@@ -715,3 +718,226 @@ def test_simulate_outcome_take_profit_min_return_truncated():
     # exit 日 07-10 low=29.5 vs entry≈30 → 约 -1.7%，远高于 -10%
     assert sim["min_return"] > -5.0, f"止盈后窗口未截断，min_return 虚构回撤 got {sim['min_return']}"
     assert sim["executed_return"] > 0  # take_profit 正收益
+
+
+# --- 动态退出状态机（_resolve_exit_causal）MVP 测试 ---
+# Spec: docs/superpowers/specs/2026-07-26-dynamic-exit-state-machine.md
+# 与生产 _resolve_exit 的核心差异：trailing 保护价只用截至上一交易日收盘已知的信息，
+# 当日新形成的最高价只能更新下一交易日的保护价，不得反过来触发当日退出。
+# entry=10.0、sl=9.5(-5%)、tp=11.0(+10%) 为基准场景；2% 激活阈值对应 high≥10.2。
+
+
+def test_causal_entry_day_never_exits_even_if_tp_or_sl_touched():
+    """测试 1：入场日 holding_bars[0] 触及止盈或止损仍不退出（T+1）。
+
+    入场日 high=11.5（触 tp=11.0）、low=9.4（触 sl=9.5），但当日不退出；
+    次日 horizon_close 按次日收盘退出。
+    """
+    bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=11.5, low=9.4, close=10.0, pct_chg=0.0),
+        _bar_trailing(trade_date="2026-07-02", open=10.0, high=10.1, low=9.9, close=10.05, pct_chg=0.5),
+    ]
+    price, date, reason = _resolve_exit_causal(
+        bars, stop_loss_price=9.5, take_profit_price=11.0, code="000001", entry_price=10.0,
+    )
+    assert reason == "horizon_close"
+    assert date == "2026-07-02"
+    assert price == 10.05
+
+
+def test_causal_entry_day_high_over_2pct_but_close_below_2pct_no_activation():
+    """测试 2：入场日 high 超 2% 但收盘浮盈不足 2%，次日不激活移动保护。
+
+    入场日 high=10.3(+3%) 但 close=10.1(+1%)——只用 close 判激活，high 不算。
+    次日 trailing 不激活，low 跌穿 10.1 也不触发 trailing（仅可能触发 sl/tp/horizon_close）。
+    """
+    bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.3, low=9.95, close=10.1, pct_chg=1.0),
+        # 次日：trailing 未激活，low=10.0 > sl 9.5，high=10.1 < tp 11.0 → horizon_close
+        _bar_trailing(trade_date="2026-07-02", open=10.05, high=10.1, low=10.0, close=10.02, pct_chg=-0.8),
+    ]
+    price, date, reason = _resolve_exit_causal(
+        bars, stop_loss_price=9.5, take_profit_price=11.0, code="000001", entry_price=10.0,
+    )
+    assert reason == "horizon_close"
+    assert not reason.startswith("trailing")
+
+
+def test_causal_entry_day_close_over_2pct_activates_next_day_protection():
+    """测试 3：入场日收盘浮盈超 2%，次日移动保护生效。
+
+    入场日 close=10.3(+3%) → 激活，次日保护价 = 10*(1+(3-0.8)/100) = 10.22。
+    次日 low=10.20 ≤ 10.22 → trailing_stop_hit @ 10.22。
+    """
+    bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.4, low=9.98, close=10.3, pct_chg=3.0),
+        _bar_trailing(trade_date="2026-07-02", open=10.3, high=10.35, low=10.20, close=10.25, pct_chg=-0.5),
+    ]
+    price, date, reason = _resolve_exit_causal(
+        bars, stop_loss_price=9.5, take_profit_price=11.0, code="000001", entry_price=10.0,
+    )
+    assert reason == "trailing_stop_hit"
+    assert date == "2026-07-02"
+    assert price == 10.22  # 入场日收盘确定的次日保护价
+
+
+def test_causal_same_day_surge_cannot_exit_with_same_day_protection():
+    """测试 4：当日冲高激活后又回落，不允许用当日新保护价退出；保护价只能下一日生效。
+
+    入场日 close=10.0（不激活）。次日 high=10.4(+4%) 激活 trailing，次日新保护价应为
+    10*(1+(4-0.8)/100)=10.32，但**当日不得用这个新保护价退出**——即使次日 low=10.1
+    < 10.32，也不能在次日 trailing 出场（次日保护价要到第三日才生效）。
+    若 trailing 因果被破坏（用当日 high 当场判 trailing），会错误在次日 trailing 退出。
+    """
+    bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.99, close=10.0, pct_chg=0.0),
+        # 次日冲高又回落：high=10.4(+4%) 激活，low=10.1。当日不该 trailing 退出。
+        _bar_trailing(trade_date="2026-07-02", open=10.05, high=10.4, low=10.1, close=10.15, pct_chg=1.5),
+        # 第三日：保护价 10.32 已在次日收盘后生成，open=10.40 > 10.32（不跳空），
+        # low=10.20 ≤ 10.32 → trailing_stop_hit @ 10.32
+        _bar_trailing(trade_date="2026-07-03", open=10.40, high=10.45, low=10.20, close=10.25, pct_chg=-0.5),
+    ]
+    price, date, reason = _resolve_exit_causal(
+        bars, stop_loss_price=9.5, take_profit_price=11.0, code="000001", entry_price=10.0,
+    )
+    # 关键：不能在 07-02（冲高当日）trailing 退出；应在 07-03（保护价生效次日）退出
+    assert reason == "trailing_stop_hit"
+    assert date == "2026-07-03"
+    assert price == 10.32
+
+
+def test_causal_prior_day_protection_triggers_intraday_next_day():
+    """测试 5：前一日已生成保护价，次日盘中触及时正确退出。
+
+    入场日 close=10.3(+3%) → 次日(07-02)保护价 10.22 生成。
+    07-02 未触及（low=10.25 > 10.22），收盘后 high=10.5(+5%) 更新次日保护价 10*(1+(5-0.8)/100)=10.42。
+    07-03 low=10.40 ≤ 10.42 → trailing_stop_hit @ 10.42。
+    验证保护价跨日生效、且按最新峰值更新。
+    """
+    bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.4, low=9.98, close=10.3, pct_chg=3.0),
+        _bar_trailing(trade_date="2026-07-02", open=10.3, high=10.5, low=10.25, close=10.45, pct_chg=1.5),
+        _bar_trailing(trade_date="2026-07-03", open=10.45, high=10.48, low=10.40, close=10.41, pct_chg=-0.4),
+    ]
+    price, date, reason = _resolve_exit_causal(
+        bars, stop_loss_price=9.5, take_profit_price=11.0, code="000001", entry_price=10.0,
+    )
+    assert reason == "trailing_stop_hit"
+    assert date == "2026-07-03"
+    assert price == 10.42  # 07-02 收盘后按 high=10.5(+5%) 更新的保护价
+
+
+def test_causal_gap_down_through_protection_uses_open_as_trailing_stop_gap():
+    """测试 6：次日跳空跌穿移动保护价时按开盘价退出，标记 trailing_stop_gap。
+
+    入场日 close=10.3(+3%) → 次日保护价 10.22。
+    次日 open=10.0 ≤ 10.22 → 跳空跌穿保护价，按 open 成交，标记 trailing_stop_gap。
+    """
+    bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.4, low=9.98, close=10.3, pct_chg=3.0),
+        _bar_trailing(trade_date="2026-07-02", open=10.0, high=10.1, low=9.95, close=10.02, pct_chg=-2.7),
+    ]
+    price, date, reason = _resolve_exit_causal(
+        bars, stop_loss_price=9.5, take_profit_price=11.0, code="000001", entry_price=10.0,
+    )
+    assert reason == "trailing_stop_gap"
+    assert date == "2026-07-02"
+    assert price == 10.0  # 跳空以 open 成交（min(open, 保护价) = open）
+
+
+def test_causal_same_day_both_sl_and_tp_triggered_uses_stop_loss():
+    """测试 7：同日固定止损与固定止盈都触发时，固定止损优先。
+
+    次日 low=9.4（触 sl=9.5）、high=11.2（触 tp=11.0）→ 按 Spec §4.5 保守止损。
+    """
+    bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.99, close=10.0, pct_chg=0.0),
+        _bar_trailing(trade_date="2026-07-02", open=10.0, high=11.2, low=9.4, close=9.6, pct_chg=-4.0),
+    ]
+    price, date, reason = _resolve_exit_causal(
+        bars, stop_loss_price=9.5, take_profit_price=11.0, code="000001", entry_price=10.0,
+    )
+    assert reason == "stop_loss_intraday_both_hit"
+    assert price == 9.5
+    assert date == "2026-07-02"
+
+
+def test_causal_stop_and_trailing_protection_only_move_up():
+    """测试 8：止损价和移动保护价在持仓期间只能上移，不能下调。
+
+    跨日因果 + 单调性：保护价由「截至上一交易日收盘已知最高浮盈」生成，下一交易日生效。
+    场景严格 4 日：第二日形成较低候选值（不超前高）→ 保护价维持不动；第三日继续不退出；
+    第四日 low 触及「此前较高的保护价」→ 退出。若保护价被错误下调，第四日不会以该高价退出。
+
+    构造（entry=10.0, sl=9.5, tp=15.0）：
+      07-01: close=10.5(+5%) → 激活，observed=5%，次日保护价=10*(1+(5-0.8)/100)=10.42
+      07-02: high=10.45(+4.5%, 低于前高 5%) → 候选保护价 10.37 < 10.42，但**不得下调**；
+             low=10.43 > 10.42 不退出；收盘后保护价仍维持 10.42
+      07-03: open=10.44 > 10.42（不跳空），high=10.48(+4.8% 仍 < 5% 不更新)，low=10.43 > 10.42 不退出
+      07-04: open=10.44 > 10.42（不跳空），low=10.40 ≤ 10.42 → trailing_stop_hit @ 10.42
+    所有 bar 的 OHLC 合法（open∈[low,high]、close∈[low,high]）。
+    """
+    bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.6, low=9.98, close=10.5, pct_chg=5.0),
+        _bar_trailing(trade_date="2026-07-02", open=10.45, high=10.45, low=10.43, close=10.44, pct_chg=-0.6),
+        _bar_trailing(trade_date="2026-07-03", open=10.44, high=10.48, low=10.43, close=10.45, pct_chg=0.1),
+        _bar_trailing(trade_date="2026-07-04", open=10.44, high=10.46, low=10.40, close=10.42, pct_chg=-0.3),
+    ]
+    price, date, reason = _resolve_exit_causal(
+        bars, stop_loss_price=9.5, take_profit_price=15.0, code="000001", entry_price=10.0,
+    )
+    assert reason == "trailing_stop_hit"
+    assert price == 10.42  # 维持入场日 close 生成的较高保护价，未因 07-02/03 未创新高而下调
+    assert date == "2026-07-04"  # 第四日才触发此前较高的保护价
+
+    # 对照：若保护价被错误下调到 07-02 候选值 10.32，则 07-03 low=10.25 ≤ 10.32 会在 07-03 退出
+    # 此处断言 07-04 退出即证明保护价未下调
+
+
+def test_causal_one_word_limit_down_unsellable_defers():
+    """测试 9：一字跌停不可卖时继续递延。
+
+    次日一字跌停（OHLC 全 9.0，pct_chg=-10%）不可卖，跳过退出判断；
+    第三日恢复可卖并触及 stop_loss → 退出。
+    """
+    bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.99, close=10.0, pct_chg=0.0),
+        # 一字跌停：OHLC 齐 9.0，不可卖
+        _bar_trailing(trade_date="2026-07-02", open=9.0, high=9.0, low=9.0, close=9.0, pct_chg=-10.0, volume=0, amount=0),
+        # 第三日跳空低开 open=8.8 ≤ sl 9.5 → stop_loss_gap
+        _bar_trailing(trade_date="2026-07-03", open=8.8, high=9.2, low=8.7, close=8.9, pct_chg=-1.1),
+    ]
+    price, date, reason = _resolve_exit_causal(
+        bars, stop_loss_price=9.5, take_profit_price=11.0, code="000001", entry_price=10.0,
+    )
+    assert date == "2026-07-03"
+    assert reason == "stop_loss_gap"
+    # 跳空止损 cap：max(open, entry*(1-15/100)=8.5) = max(8.8, 8.5) = 8.8
+    assert price == 8.8
+
+
+def test_causal_dynamic_trailing_false_gives_strict_fixed_only_path():
+    """测试 10：dynamic_trailing=False 时得到严格单路径的固定止盈止损结果。
+
+    入场日 close=10.5(+5%，本应激活 trailing），但 dynamic_trailing=False → 不激活移动保护。
+    次日 low=10.1（若 trailing 激活本应触保护价 10.42），但固定口径下不触发；
+    horizon_close 按末日收盘。
+    """
+    bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.6, low=9.98, close=10.5, pct_chg=5.0),
+        _bar_trailing(trade_date="2026-07-02", open=10.5, high=10.7, low=10.1, close=10.4, pct_chg=-1.0),
+        _bar_trailing(trade_date="2026-07-03", open=10.4, high=10.5, low=10.2, close=10.3, pct_chg=-1.0),
+    ]
+    price, date, reason = _resolve_exit_causal(
+        bars, stop_loss_price=9.5, take_profit_price=11.0, code="000001", entry_price=10.0,
+        dynamic_trailing=False,
+    )
+    assert reason == "horizon_close"
+    assert date == "2026-07-03"
+    assert price == 10.3
+    # 同样输入，dynamic_trailing=True 应走 trailing 路径（对照：差异来自 trailing）
+    _, _, reason_dyn = _resolve_exit_causal(
+        bars, stop_loss_price=9.5, take_profit_price=11.0, code="000001", entry_price=10.0,
+        dynamic_trailing=True,
+    )
+    assert reason_dyn.startswith("trailing")
