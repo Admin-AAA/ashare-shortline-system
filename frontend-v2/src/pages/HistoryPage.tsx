@@ -1,7 +1,7 @@
-import { ChevronDown, ChevronRight, History, Layers, Loader2, RotateCcw, Search } from "lucide-react";
-import { Fragment, useCallback, useMemo, useState } from "react";
+import { ChevronDown, ChevronRight, History, Layers, Loader2, RotateCcw, Search, Zap } from "lucide-react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
-import type { RecommendationDetail, RecommendationHistoryResponse } from "../types";
+import type { RecommendationDetail, RecommendationHistoryResponse, RealtimePnlItem } from "../types";
 import { PageSkeleton, ErrorPage, EmptyState } from "../components/StateViews";
 import { Panel } from "../components/Panel";
 import { useApi } from "../app/useApi";
@@ -37,6 +37,10 @@ export function HistoryPage() {
   const [details, setDetails] = useState<Record<string, RecommendationDetail>>({});
   const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<Record<string, string>>({});
+  // 实时盈亏：pending 推荐的实盘浮盈（rt_k 现价 - _resolve_entry 入场价），纯展示不改结算。
+  const [pnlMap, setPnlMap] = useState<Record<string, RealtimePnlItem>>({});
+  const [pnlLoading, setPnlLoading] = useState(false);
+  const [pnlComputedAt, setPnlComputedAt] = useState<string | null>(null);
   const pageSize = 50;
 
   // 日期预设 → 实际 dateFrom/dateTo（基于今天）。custom 用手选，all 不限。
@@ -105,6 +109,24 @@ export function HistoryPage() {
     setSetupType("");
     resetPage();
   };
+
+  const loadRealtimePnl = useCallback(async (refresh = false) => {
+    setPnlLoading(true);
+    try {
+      const res = await api.recommendationRealtimePnl(refresh);
+      setPnlMap(Object.fromEntries(res.items.map((it) => [it.recommendation_id, it])));
+      setPnlComputedAt(res.computed_at);
+    } catch {
+      // 实时盈亏是增量展示，失败不打断页面，保留旧数据
+    } finally {
+      setPnlLoading(false);
+    }
+  }, []);
+
+  // 首次进入自动拉一次实时盈亏
+  useEffect(() => {
+    loadRealtimePnl();
+  }, [loadRealtimePnl]);
 
   const handleToggle = useCallback(
     async (id: string) => {
@@ -281,6 +303,17 @@ export function HistoryPage() {
           <RotateCcw size={13} /> 重置
         </button>
 
+        {/* 刷新实时盈亏：对 pending 推荐用 rt_k 现价算浮盈（纯展示，不改结算） */}
+        <button
+          className="btn btn--ghost"
+          onClick={() => loadRealtimePnl(true)}
+          disabled={pnlLoading}
+          title={pnlComputedAt ? `对未结算推荐用实时价算浮盈 · 上次 ${pnlComputedAt}` : "对未结算推荐用实时价算浮盈"}
+          style={{ padding: "6px 12px", fontSize: "var(--text-sm)" }}
+        >
+          {pnlLoading ? <Loader2 size={13} className="spin" /> : <Zap size={13} />} 实时盈亏
+        </button>
+
         {/* 总计数（轻量） */}
         <span className="records-filterbar__total">
           正式 · 共 {total} 笔
@@ -342,6 +375,7 @@ export function HistoryPage() {
                 <th style={thStyle}>价格/风控</th>
                 <th style={thStyle}>执行规则</th>
                 <th style={thStyle}>结果</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>实时盈亏</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>收益</th>
                 <th style={{ ...thStyle, textAlign: "right", minWidth: 128 }}>退出/持仓</th>
               </tr>
@@ -460,6 +494,9 @@ export function HistoryPage() {
                       </td>
                       <td style={{ ...tdStyle, color: labelColor, fontWeight: 600 }}>
                         {outcomeLabel(o?.outcome_label)}
+                      </td>
+                      <td style={{ ...tdStyle, textAlign: "right", fontFamily: "var(--font-mono)" }}>
+                        {renderRealtimePnl(pnlMap[it.recommendation_id])}
                       </td>
                       <td
                         style={{
@@ -586,6 +623,28 @@ const clip = (value: string, max: number) => {
 };
 
 const shortVersionId = (value: string) => value.length <= 14 ? value : `${value.slice(0, 14)}…`;
+
+// 实时盈亏单元格：holding 显示浮盈%（红涨绿跌），watching 显示距买点，已结算/无数据显示 —。
+const renderRealtimePnl = (item: RealtimePnlItem | undefined) => {
+  if (!item) return <span style={{ color: "var(--muted)" }}>—</span>;
+  if (item.status === "holding" && item.pnl_pct != null) {
+    const up = item.pnl_pct >= 0;
+    return (
+      <span style={{ color: up ? "var(--market-up)" : "var(--market-down)", fontWeight: 600 }} title={`入场 ${item.entry_price} · 现价 ${item.now_price}`}>
+        {up ? "+" : ""}{item.pnl_pct.toFixed(2)}%
+      </span>
+    );
+  }
+  if (item.status === "watching") {
+    const dist = item.distance_to_target_pct;
+    return (
+      <span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }} title={item.reason || "买点未触发"}>
+        距买点 {dist != null ? `${dist >= 0 ? "+" : ""}${dist.toFixed(1)}%` : "—"}
+      </span>
+    );
+  }
+  return <span style={{ color: "var(--muted)" }} title={item.reason || "实时行情不可用"}>—</span>;
+};
 
 const outcomeLabel = (value: string | null | undefined) => {
   if (value === "success") return "成功";
