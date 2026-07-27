@@ -67,12 +67,22 @@ def main() -> None:
     parser.add_argument("--apply", action="store_true", help="Write calibration results to DB")
     parser.add_argument("--steps", type=int, default=5, help="Grid search steps (default: 5, only used when sample_count < 50)")
     parser.add_argument("--walk-forward", type=int, default=0, metavar="N", help="Run walk-forward calibration with N windows (e.g. --walk-forward 3)")
+    parser.add_argument(
+        "--formal-only",
+        action="store_true",
+        help="仅用 formal 样本校准聚合权重（排除 experiment/backtest 噪音，AUC 更诚实）；DSA 子分权重只用 daily-stock-analysis-skill 样本",
+    )
     args = parser.parse_args()
+
+    run_mode = "formal" if args.formal_only else None
+    dsa_bucket = "daily-stock-analysis-skill" if args.formal_only else None
 
     db = SessionLocal()
     try:
+        if args.formal_only:
+            print("\n  [formal-only] 聚合权重仅 formal 样本；DSA 子分仅 daily-stock-analysis-skill 样本")
         print("\n  Running aggregation weight calibration...")
-        agg_result = calibrate_aggregation_weights(db, steps=args.steps)
+        agg_result = calibrate_aggregation_weights(db, steps=args.steps, run_mode=run_mode)
         print(f"  Total samples: {agg_result['total_sample_count']}")
         print(f"  Train/Test: {agg_result['train_sample_count']}/{agg_result['test_sample_count']}")
         print(f"  Search method: {agg_result.get('search_method', 'N/A')} ({agg_result.get('search_iterations', 0)} combos)")
@@ -89,7 +99,7 @@ def main() -> None:
         )
 
         print("\n  Running 基础短线策略 weight calibration...")
-        dsa_result = calibrate_dsa_weights(db)
+        dsa_result = calibrate_dsa_weights(db, bucket=dsa_bucket)
         print(f"  Samples: {dsa_result['sample_count']}")
         if "error" in dsa_result:
             print(f"  WARNING: {dsa_result['error']}")
@@ -105,7 +115,7 @@ def main() -> None:
 
         if args.walk_forward > 0:
             print(f"\n  Running walk-forward calibration ({args.walk_forward} windows)...")
-            wf_result = walk_forward_calibrate(db, n_windows=args.walk_forward)
+            wf_result = walk_forward_calibrate(db, n_windows=args.walk_forward, run_mode=run_mode)
             if "error" in wf_result:
                 print(f"  WARNING: {wf_result['error']}")
             else:

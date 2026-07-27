@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.engine.aggregator import AGG_WEIGHT_KEYS, COMPONENT_KEYS, DEFAULT_AGG_WEIGHTS
-from app.models.tables import Recommendation, RecommendationOutcome
+from app.models.tables import Recommendation, RecommendationOutcome, RecommendationRun
 from app.services.outcome_service import is_accurate_recommendation
 
 
@@ -58,11 +58,17 @@ WEIGHT_MAX = 0.50
 TOP_PERCENTILE = 0.2
 
 
-def _load_labeled_samples(db: Session) -> list[dict[str, Any]]:
+def _load_labeled_samples(db: Session, run_mode: str | None = None, bucket: str | None = None) -> list[dict[str, Any]]:
     """Load all recommendations that have outcomes labeled.
 
     Includes trade_date for time-based splitting and close_return for
     enhanced composite scoring.
+
+    可选过滤（默认不过滤，保持历史行为）：
+    - run_mode: 限定 run 模式（如 "formal"）。校准聚合权重时建议用 "formal"，
+      排除 experiment/backtest 噪音——这两类样本会虚高表观 AUC（formal-only AUC 更低更诚实）。
+    - bucket: 限定策略桶（如 "daily-stock-analysis-skill"）。校准某策略子分权重时
+      必须只取该策略样本，否则跨策略混杂会把真实相关性稀释到接近 0。
     """
     stmt = (
         select(Recommendation, RecommendationOutcome)
@@ -72,6 +78,12 @@ def _load_labeled_samples(db: Session) -> list[dict[str, Any]]:
             RecommendationOutcome.entry_triggered.is_(True),
         )
     )
+    if run_mode is not None:
+        stmt = stmt.join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id).where(
+            RecommendationRun.run_mode == run_mode
+        )
+    if bucket is not None:
+        stmt = stmt.where(Recommendation.bucket == bucket)
     rows = db.execute(stmt).all()
     samples = []
     for rec, outcome in rows:
@@ -216,7 +228,7 @@ def _split_by_date(samples: list[dict[str, Any]], train_ratio: float = 0.7) -> t
     return train, test
 
 
-def calibrate_aggregation_weights(db: Session, steps: int = 5) -> dict[str, Any]:
+def calibrate_aggregation_weights(db: Session, steps: int = 5, run_mode: str | None = None) -> dict[str, Any]:
     """Calibrate aggregation weights using Random Search to maximize composite score.
 
     Splits data by trade_date into train/test. Searches weight space via
@@ -224,10 +236,13 @@ def calibrate_aggregation_weights(db: Session, steps: int = 5) -> dict[str, Any]
     composite metric (Win Rate x (1 + Avg Close Return)). Falls back to
     grid search when labeled samples are below 50.
 
+    run_mode=None 取全量（历史行为）；run_mode="formal" 只取 formal 样本——
+    experiment/backtest 会虚高表观 AUC，formal-only 才是真实有效性口径。
+
     Returns dict with optimal_weights, composite_score, roc_auc,
     sample counts, and default comparison.
     """
-    samples = _load_labeled_samples(db)
+    samples = _load_labeled_samples(db, run_mode=run_mode)
     n_total = len(samples)
 
     if n_total < 10:
@@ -358,8 +373,12 @@ def _point_biserial_corr(scores: list[float], labels: list[int]) -> float:
     return (mean1 - mean0) / sd * math.sqrt(n1 * n0 / (n * n))
 
 
-def calibrate_dsa_weights(db: Session) -> dict[str, Any]:
+def calibrate_dsa_weights(db: Session, bucket: str | None = None) -> dict[str, Any]:
     """Calibrate 基础短线策略 sub-score weights using point-biserial correlation with success.
+
+    bucket=None 取全量（历史行为，跨策略混杂会把真实相关性稀释到接近0——
+    所有策略快照都有 dsa_* 字段）。bucket="daily-stock-analysis-skill" 只取 DSA 样本，
+    相关性能反映 DSA 子分在该策略上的真实预测力。
 
     Returns dict with optimal_weights, correlations, and sample_count.
     """
@@ -371,6 +390,8 @@ def calibrate_dsa_weights(db: Session) -> dict[str, Any]:
             RecommendationOutcome.entry_triggered.is_(True),
         )
     )
+    if bucket is not None:
+        stmt = stmt.where(Recommendation.bucket == bucket)
     rows = db.execute(stmt).all()
 
     dsa_data = {key: [] for key in DSA_SCORE_KEYS}
@@ -392,7 +413,6 @@ def calibrate_dsa_weights(db: Session) -> dict[str, Any]:
             for key in DSA_SCORE_KEYS:
                 if dsa_data[key]:
                     dsa_data[key].pop()
-
     if len(labels) < 10:
         return {
             "optimal_weights": dict(DEFAULT_DSA_WEIGHTS),
@@ -426,7 +446,7 @@ def calibrate_dsa_weights(db: Session) -> dict[str, Any]:
     }
 
 
-def walk_forward_calibrate(db: Session, n_windows: int = 3) -> dict[str, Any]:
+def walk_forward_calibrate(db: Session, n_windows: int = 3, run_mode: str | None = None) -> dict[str, Any]:
     """Walk-forward calibration across rolling time windows.
 
     Splits labeled samples into n_windows chronological folds, performs
@@ -436,12 +456,13 @@ def walk_forward_calibrate(db: Session, n_windows: int = 3) -> dict[str, Any]:
     Args:
         db: Database session.
         n_windows: Number of chronological windows (default 3).
+        run_mode: 限定 run 模式（如 "formal"）；None 取全量（历史行为）。
 
     Returns:
         dict with keys: n_windows, windows (list of per-window results),
         avg_test_composite_score, avg_test_roc_auc.
     """
-    samples = _load_labeled_samples(db)
+    samples = _load_labeled_samples(db, run_mode=run_mode)
     sorted_samples = sorted(samples, key=lambda s: s.get("trade_date", ""))
 
     if len(sorted_samples) < 10 * n_windows:
