@@ -9,6 +9,7 @@ client hits the runs list endpoint.
 from __future__ import annotations
 
 import uuid
+import time
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -92,6 +93,41 @@ def test_recover_interrupted_runs_noop_when_all_fresh():
             db.delete(row)
         db.commit()
         db.close()
+
+
+def test_recovery_skips_worker_locked_run_without_waiting_for_lock_timeout():
+    """A live worker transaction must not make the watchdog wait 50s and raise 1205."""
+    run_id = f"__test_locked_{uuid.uuid4().hex[:12]}"
+    worker_db = SessionLocal()
+    watchdog_db = SessionLocal()
+    try:
+        worker_db.add(_make_run(run_id, heartbeat_at=_utc_naive(-timedelta(hours=2))))
+        worker_db.commit()
+
+        locked = worker_db.scalar(
+            select(RecommendationRun)
+            .where(RecommendationRun.run_id == run_id)
+            .with_for_update()
+        )
+        assert locked is not None
+        locked.progress_message = "worker external review in progress"
+        worker_db.flush()
+
+        started = time.monotonic()
+        recovered = recover_interrupted_runs(watchdog_db, run_ids=[run_id])
+        elapsed = time.monotonic() - started
+
+        assert recovered == 0
+        assert elapsed < 2.0
+    finally:
+        watchdog_db.rollback()
+        watchdog_db.close()
+        worker_db.rollback()
+        row = worker_db.get(RecommendationRun, run_id)
+        if row is not None:
+            worker_db.delete(row)
+            worker_db.commit()
+        worker_db.close()
 
 
 def test_recover_interrupted_runs_redispatches_stale_queued_not_interrupted():

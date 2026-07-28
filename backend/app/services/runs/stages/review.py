@@ -63,9 +63,12 @@ class ReviewStage:
     cost_recording: CostRecordingPort | None = None
 
     async def execute(self, context: RunContext, data: StageData) -> StageOutput:
+        from app.core.config import get_settings
+        from app.services.runs.skill_gate import resolve_skill_review_concurrency
+
         params = data.params or {}
         agent_review_disabled = bool(params.get("disable_agent_review"))
-        concurrency = max(1, int(params.get("agent_review_concurrency") or 1))
+        concurrency = resolve_skill_review_concurrency(dict(params), get_settings())
         session_id = f"sess_{context.run_id}"
 
         if self.review_executor is not None:

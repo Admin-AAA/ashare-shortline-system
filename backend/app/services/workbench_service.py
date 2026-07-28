@@ -1006,7 +1006,11 @@ def recover_interrupted_runs(db: Session, run_ids: list[str] | None = None) -> i
     只有 running 才走 heartbeat_timeout → interrupted。
     """
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    stmt = select(RecommendationRun).where(RecommendationRun.status.in_(tuple(RUN_ACTIVE_STATUSES)))
+    stmt = (
+        select(RecommendationRun)
+        .where(RecommendationRun.status.in_(tuple(RUN_ACTIVE_STATUSES)))
+        .with_for_update(skip_locked=True)
+    )
     if run_ids is not None:
         stmt = stmt.where(RecommendationRun.run_id.in_(run_ids))
     runs = db.scalars(stmt).all()
@@ -1056,15 +1060,20 @@ def recover_interrupted_runs(db: Session, run_ids: list[str] | None = None) -> i
         if not run.progress_message:
             run.progress_message = "任务未正常结束"
         recovered += 1
-    if recovered:
+    changed = bool(recovered or redispatched)
+    if changed:
         db.commit()
         invalidate_bootstrap_cache()
+    else:
+        # Release FOR UPDATE locks immediately. In particular, do not let a
+        # watchdog session hold fresh run rows until its caller happens to close.
+        db.rollback()
+    if recovered:
         for run in runs:
             if run.status == "interrupted":
                 _record_progress_commit(run)
         logger.warning("marked %d stale recommendation runs as interrupted on startup", recovered)
     if redispatched:
-        db.commit()
         for run_id in redispatched:
             _run_dispatcher.enqueue(run_id)
         logger.info("redispatched %d stale queued runs (heartbeat timeout while waiting for worker)", len(redispatched))

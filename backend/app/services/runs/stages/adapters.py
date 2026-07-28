@@ -277,7 +277,11 @@ class ProductionStrategyEvaluation(StrategyEvaluationPort):
         prefilter_audit: StageMapping,
     ) -> tuple[tuple[StageMapping, ...], tuple[StageMapping, ...], StageMapping, StageMapping]:
         from app.engine.strategy import build_registry_from_skills, StrategyContext
-        from app.services.runs.skill_gate import build_skill_rule_gate, finalize_skill_gate_audit
+        from app.services.runs.skill_gate import (
+            build_skill_rule_gate,
+            finalize_skill_gate_audit,
+            resolve_skill_review_concurrency,
+        )
         from app.services.runs.filter_audit import build_pipeline_audit
         from app.services.workbench_service import (
             _prelim_rule_score,
@@ -343,7 +347,7 @@ class ProductionStrategyEvaluation(StrategyEvaluationPort):
             skill_agent_call_count=0,
             skill_gate_audit=skill_gate_audit,
             skill_review_limit=skill_review_limit,
-            skill_review_concurrency=max(1, int(params.get("agent_review_concurrency") or 1)),
+            skill_review_concurrency=resolve_skill_review_concurrency(dict(params), settings),
             skill_demo_limited=explicit_review_limit_skipped > 0,
             prefilter_audit=dict(prefilter_audit),
         )
