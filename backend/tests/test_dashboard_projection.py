@@ -30,6 +30,7 @@ from app.api.dashboard import (
 )
 from app.services.dashboard_quality_service import build_quality_scorecard, _pick_latest_backtest
 from app.services.candidates.trace import candidate_trace_row
+from app.services.workbench_service import list_dashboard_recommendations
 from app.services.recommendations.projection import (
     build_cockpit_recommendation,
     build_market_temperature,
@@ -302,6 +303,93 @@ def test_dashboard_recommendations_use_latest_completed_formal_trade_date(db):
 
     assert selected is not None
     assert selected.run_id == "dash_rec_latest_completed_formal"
+
+
+def test_dashboard_recommendations_aggregate_formal_runs_sort_and_dedupe(db):
+    from app.models.tables import Recommendation, RecommendationRun
+
+    trade_date = "2099-06-01"
+    runs = [
+        RecommendationRun(
+            run_id="dash_aggregate_formal_a",
+            run_name="正式运行 A",
+            run_mode="formal",
+            trade_date=trade_date,
+            status="completed",
+            started_at=datetime(2099, 6, 1, 9, 30),
+            finished_at=datetime(2099, 6, 1, 9, 40),
+            recommended_count=2,
+        ),
+        RecommendationRun(
+            run_id="dash_aggregate_formal_b",
+            run_name="正式运行 B",
+            run_mode="formal",
+            trade_date=trade_date,
+            status="completed",
+            started_at=datetime(2099, 6, 1, 10, 30),
+            finished_at=datetime(2099, 6, 1, 10, 40),
+            recommended_count=2,
+        ),
+        RecommendationRun(
+            run_id="dash_aggregate_experiment",
+            run_name="实验运行",
+            run_mode="experiment",
+            trade_date=trade_date,
+            status="completed",
+            started_at=datetime(2099, 6, 1, 11, 30),
+            finished_at=datetime(2099, 6, 1, 11, 40),
+            recommended_count=1,
+        ),
+    ]
+    db.add_all(runs)
+    db.add_all([
+        Recommendation(
+            recommendation_id="dash_rec_score_70",
+            run_id="dash_aggregate_formal_a",
+            trade_date=trade_date,
+            code="990001",
+            name="候选一",
+            final_score=70,
+        ),
+        Recommendation(
+            recommendation_id="dash_rec_duplicate_75",
+            run_id="dash_aggregate_formal_a",
+            trade_date=trade_date,
+            code="990002",
+            name="重复候选低分",
+            final_score=75,
+        ),
+        Recommendation(
+            recommendation_id="dash_rec_score_90",
+            run_id="dash_aggregate_formal_b",
+            trade_date=trade_date,
+            code="990003",
+            name="候选三",
+            final_score=90,
+        ),
+        Recommendation(
+            recommendation_id="dash_rec_duplicate_80",
+            run_id="dash_aggregate_formal_b",
+            trade_date=trade_date,
+            code="990002",
+            name="重复候选高分",
+            final_score=80,
+        ),
+        Recommendation(
+            recommendation_id="dash_rec_experiment_99",
+            run_id="dash_aggregate_experiment",
+            trade_date=trade_date,
+            code="990004",
+            name="实验候选",
+            final_score=99,
+        ),
+    ])
+    db.commit()
+
+    recommendations = list_dashboard_recommendations(db, trade_date)
+
+    assert [item["code"] for item in recommendations] == ["990003", "990002", "990001"]
+    assert [item["final_score"] for item in recommendations] == [90, 80, 70]
 
 
 def test_dashboard_market_snapshot_prefers_newer_local_quote_pool(db, monkeypatch):

@@ -606,6 +606,41 @@ def list_run_recommendations(db: Session, run_id: str) -> list[dict[str, Any]]:
     return _serialize_recommendations_batched(db, recs)
 
 
+def list_dashboard_recommendations(
+    db: Session,
+    trade_date: str,
+    *,
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    """聚合同交易日全部正式运行的驾驶舱候选，并按最高分全局排序。"""
+    recs = db.scalars(
+        select(Recommendation)
+        .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
+        .where(
+            RecommendationRun.trade_date == trade_date,
+            RecommendationRun.status == "completed",
+            RecommendationRun.run_mode == "formal",
+        )
+        .order_by(
+            Recommendation.final_score.desc(),
+            Recommendation.recommended_at.desc(),
+            Recommendation.recommendation_id.desc(),
+        )
+    ).all()
+
+    # 同一股票被多个预设或重复运行命中时，排序后的第一条就是最高分版本。
+    unique_recs: list[Recommendation] = []
+    seen_codes: set[str] = set()
+    for rec in recs:
+        if rec.code in seen_codes:
+            continue
+        seen_codes.add(rec.code)
+        unique_recs.append(rec)
+        if len(unique_recs) >= limit:
+            break
+    return _serialize_recommendations_batched(db, unique_recs)
+
+
 # 推荐历史短时缓存：历史数据不频繁变化（新 run 后才变），30s TTL 足够
 _history_cache: dict[str, tuple[float, Any]] = {}
 _history_cache_lock = threading.Lock()
