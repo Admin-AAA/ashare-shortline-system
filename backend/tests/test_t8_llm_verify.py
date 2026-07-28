@@ -9,10 +9,37 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from verify_t8_llm import (  # noqa: E402
+    _parse_args,
+    _reported_usage,
     aggregate_reviews,
     check_stance_action,
     review_quality_signals,
 )
+
+
+def test_cli_defaults_to_zero_live_requests():
+    args = _parse_args([])
+
+    assert args.live is False
+    assert args.max_live_requests == 1
+
+
+def test_reported_usage_preserves_missing_provider_fields():
+    assert _reported_usage([{"prompt_tokens_est": 100}]) == {
+        "prompt_tokens": None,
+        "completion_tokens": None,
+        "cache_hit_tokens": None,
+        "total_tokens": None,
+    }
+    assert _reported_usage([
+        {"prompt_tokens": 100, "completion_tokens": 20, "cache_hit_tokens": 80},
+        {"prompt_tokens": 40, "completion_tokens": 10, "cache_hit_tokens": 0},
+    ]) == {
+        "prompt_tokens": 140,
+        "completion_tokens": 30,
+        "cache_hit_tokens": 80,
+        "total_tokens": 170,
+    }
 
 
 def test_check_stance_action_consistency():
