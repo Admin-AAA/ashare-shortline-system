@@ -198,18 +198,18 @@ function PresetTable({ rows }: { rows: PresetStatsRow[] }) {
             return (
               <tr key={r.preset_id ?? r.preset_name} style={{ borderTop: "1px solid var(--border)", fontSize: "var(--text-sm)" }}>
                 <td style={{ textAlign: "left", padding: "var(--space-3) var(--space-3)", color: "var(--text)" }}>{r.preset_name}</td>
-                <td style={{ padding: "var(--space-3) var(--space-3)", color: "var(--muted)" }}>{r.run_count}</td>
-                <td style={{ padding: "var(--space-3) var(--space-3)", color: lowSample ? "var(--warning, #b45309)" : "var(--muted)" }}>
+                <td style={{ textAlign: "right", padding: "var(--space-3) var(--space-3)", color: "var(--muted)" }}>{r.run_count}</td>
+                <td style={{ textAlign: "right", padding: "var(--space-3) var(--space-3)", color: lowSample ? "var(--warning, #b45309)" : "var(--muted)" }}>
                   {r.recommendation_count}
                   {lowSample ? " ⚠" : ""}
                 </td>
-                <td style={{ padding: "var(--space-3) var(--space-3)", fontWeight: 700, color: winColor }}>
+                <td style={{ textAlign: "right", padding: "var(--space-3) var(--space-3)", fontWeight: 700, color: winColor }}>
                   {win == null ? "—" : `${(win * 100).toFixed(1)}%`}
                 </td>
-                <td style={{ padding: "var(--space-3) var(--space-3)", fontWeight: 600, color: retColor }}>
+                <td style={{ textAlign: "right", padding: "var(--space-3) var(--space-3)", fontWeight: 600, color: retColor }}>
                   {ret == null ? "—" : `${ret >= 0 ? "+" : ""}${ret.toFixed(2)}%`}
                 </td>
-                <td style={{ padding: "var(--space-3) var(--space-3)", color: "var(--muted)" }}>
+                <td style={{ textAlign: "right", padding: "var(--space-3) var(--space-3)", color: "var(--muted)" }}>
                   {r.avg_score == null ? "—" : r.avg_score.toFixed(1)}
                 </td>
                 <td style={{ textAlign: "left", padding: "var(--space-3) var(--space-3)", color: "var(--muted)" }}>
