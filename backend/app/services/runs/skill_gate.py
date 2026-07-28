@@ -30,6 +30,19 @@ def resolve_skill_review_limit(params: dict[str, Any], settings: Any, selected_s
     return min(max(base, 8), 60)
 
 
+def resolve_skill_review_concurrency(params: dict[str, Any], settings: Any) -> int:
+    """Resolve ``0`` as the configured default, not serial execution.
+
+    ``RunRequest.agent_review_concurrency`` deliberately uses zero to mean
+    "unspecified". The staged pipeline previously converted that zero to one,
+    ignoring ``market_skill_review_concurrency`` and making a normal formal batch
+    exceed the one-hour scheduler budget.
+    """
+    explicit = int(params.get("agent_review_concurrency") or 0)
+    configured = int(getattr(settings, "market_skill_review_concurrency", 1) or 1)
+    return min(100, max(1, explicit or configured))
+
+
 def build_skill_rule_gate(
     prelim_entries: list[dict[str, Any]],
     selected_skills: list[dict[str, Any]],

@@ -46,13 +46,31 @@
 4. max single loss 不能代替组合最大回撤；策略层与组合层风险都要报。无法计算组合回撤时必须明确标记指标缺失，优先补测量能力。
 5. 准确度提高后，优先增加与现有策略低相关、扣费后高盈亏比或高净收益的策略；不得单纯最大化历史 CAGR/收益率。
 
+### 验证等级与 LLM 额度
+
+每轮开始先声明验证等级、选择理由和额度预算。原则是使用**最便宜但足以推翻本轮主假设的证据**；默认不调用真实 LLM，验证等级由改动触及的最高风险决定，不因“已经若干轮没跑 LLM”自动升级。
+
+| 等级 | 适用改动 | 必要证据 | 真实 LLM 预算 |
+|---|---|---|---|
+| L0 无模型 | 数据口径、SQL/DB、调度/锁/租约、缓存、性能、前端样式、纯规则、统计报告 | pytest、固定快照/确定性重放、只读 DB 查询、基准或构建 | 0 请求 / 0 token |
+| L1 Stub/Recorded | 涉及 LLM 周边但不改变模型语义：并发、超时、熔断、生命周期、持久化、成本记录 | fake/mock provider 集成测试；覆盖成功、失败和并发边界 | 0 请求 / 0 token |
+| L2 Mini Canary | prompt、模型路由、响应解析、`agent_summary`、stance/delta/LLM score 语义变化 | L0/L1 先通过，再用单股 `analyze-stock(include_llm=true)`；最多 1-3 只，失败即停止扩量 | 开始前声明请求上限（≤3）和 token 上限 |
+| L3 Full Formal | 生产发布批次中全市场选择语义或组合输出改变，且只有全市场交互能验证；或 L2 通过后仍存在无法缩小的系统性交互风险 | 同批多轮改动合并后只跑一次真实 formal，并检查状态、输出、成本和性能 | 开始前声明总请求/token/费用上限；不得每轮运行 |
+
+**升级规则**：
+1. 纯工程、证据修复或候选否证任务停在 L0/L1，不得为了“端到端”调用真实 LLM；稳定性验收优先 `disable_agent_review=true`、fake provider 或固定记录重放。
+2. `include_llm=false`、`scripts/verify_t8_llm.py` 的默认缓存聚合、单股评分、experiment/小股票池是低成本入口；只有 L2 才显式打开 `--live`/`include_llm=true`。
+3. L2/L3 开始前必须确认低一级已通过。任何失败、达到请求/token/费用预算、或 provider 未返回用量且无法确认预算时，立即停止扩量并记录缺失，不得“再跑一次看看”。
+4. 每轮日志必须记录计划预算与实际 `真实 LLM 请求数 / prompt token / completion token / cache-hit token / 费用`；provider 未返回的字段写“缺失”，不能记为 0。L0/L1 明确写 `请求 0 / prompt 0 / completion 0 / cache-hit 0 / 费用 0`。
+5. L3 不是常规回归测试。多个相邻改动合并为一个发布批次后最多验收一次；若固定快照、stub 或单股 canary 已提供充分证据，不升级。
+
 ### 每轮自检（选任务前必做）
 
 ```bash
 cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && python3 ../scripts/self_check.py
 ```
 
-脚本当前输出的 A/B/C/D/E 是遗留诊断信号，不再直接等同于北极星结论。将其映射为：D/E→G1 诊断，A→G2 诊断，B/C→产品护栏；同时补查数据新鲜度、失败运行、性能基线，形成 G0-G4 快照。后续应逐步把 `self_check.py` 输出原生迁移到 G0-G4。
+脚本首先原生输出 G0-G4 状态和 `NEXT_ACTION`，这是任务选择的唯一入口；随后保留的 A/B/C/D/E 仅作深度诊断，不得越过 G0/G2/G3 门禁单独触发策略调优。
 
 ### 选任务规则
 
@@ -100,7 +118,7 @@ cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && pyt
 
 ### T3.6 策略覆盖与低质量标记（G1 诊断，触发时执行）
    - 补 exposure 的目的只是获得证据。H_norm<0.5 不等于故障；只通过隔离的 experiment/影子运行补样本，勿为凑熵调 production universe。
-   - 近 60 天 formal 0 命中策略 → 查 filter_audit_json 归因，修复后跑 formal 确认 skill_breakdown 出现。
+   - 近 60 天 formal 0 命中策略 → 查 filter_audit_json 归因；修复后先用固定快照或 `disable_agent_review=true` 的 experiment 确认 `skill_breakdown_json` 出现。只有该改动进入生产发布批次且全市场组合交互是待验证对象时才升级 L3 formal。
    - 当前版本 OOS `n≥30` 且扣费后净期望≤0 或 PF<1，才标记“低质量待处置”；只因 winrate<45% 不下线高盈亏比策略。n<30 标记“证据不足”，不得强判。
    - 低质量结论看**同版本 LIVE/隔离 OOS**，曝光诊断可看近30天 formal+experiment，但两者不可混为同一统计总体。仅在状态变化时更新 `low-winrate-strategies.md`，禁止为了留痕每轮改文档。
 
@@ -122,15 +140,16 @@ cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && pyt
 **C. 填缺口**——读后端 API 端点，找"后端有数据前端没页面"的 gap。
 **审美硬约束**：留白 8/16/24/32 倍数；暗色主题；默认值优先；零弹窗确认；等宽数字+涨红跌绿+右对齐；禁止 AI slop；bold 集中一处。
 
-### T8. LLM 层验证（模型内化，消耗 API 额度）
-1. `POST /api/runs/analyze-stock`（include_llm=true）对比 LLM 增强评分 vs 纯规则评分
+### T8. LLM 层验证（按语义变化触发，L2/L3）
+1. 仅当 prompt、模型路由、响应解析、`agent_summary`、stance/delta/LLM score 语义发生变化时，才用 `POST /api/runs/analyze-stock`（`include_llm=true`）对比 LLM 增强评分与纯规则评分
 2. 统计各 skill 的 LLM token/耗时相对净期望、PF、覆盖率的边际价值，不能只看胜率
 3. 检查 agent_summary 输出质量（幻觉/错误数据引用）
 4. 验证 prompt cache 是否生效
-5. **每 5 轮至少 1 次**，每轮最多 1-3 只股票，日志记录 token 消耗
+5. 先运行 `python scripts/verify_t8_llm.py` 做缓存聚合（默认零额度）；确需 L2 时显式传 `--live`，最多 1-3 只股票，并设置请求/token 停止预算
+6. 不设按轮数触发频率；没有模型语义变化就不调用真实 LLM
 
 ### T9. SKILL.md Prompt 优化（用户可见）
-读 `backend/skills/*/SKILL.md`，评估每个 skill：角色定义/分析框架/输出格式约束/负面约束。对比 agent_summary 输出与指令——LLM 有没有偏离？用第一性原理：每条指令是否必要？**改动后必须通过 T8 验证确认效果**。
+读 `backend/skills/*/SKILL.md`，评估每个 skill：角色定义/分析框架/输出格式约束/负面约束。对比 agent_summary 输出与指令——LLM 有没有偏离？用第一性原理：每条指令是否必要？改动先过 L0/L1，再按 L2 Mini Canary 验证；不得直接跑 L3 formal。
 
 ### T10. 前端重构（用户可见）
 结构性重构（不是微调样式）：组件拆分（>300 行拆）、状态管理（prop drilling >3 层引 context/zustand）、死代码清理、重复逻辑合并。遵循 T7 审美硬约束。**只改 `frontend-v2/`**。
@@ -152,7 +171,7 @@ formal 跑不通、输入数据不可信或同输入不能重放一致，系统�
 
 **验收**：
 - 用固定输入快照重放两次，推荐集合、分数和原因一致；
-- 跑真实 formal，`status=completed`，有推荐或有可解释且符合策略的保护性 abstain；
+- 默认用 `disable_agent_review=true` 的确定性阶段重放或 experiment 验收，`status=completed`，有推荐或有可解释且符合策略的保护性 abstain；只有生产发布批次涉及全市场选择/组合语义，且低等级证据不足时才跑一次 L3 formal；
 - 数据日期正确、关键字段完整，运行有心跳和阶段耗时；
 - 修复覆盖失败路径的自动化测试，并确认性能未超过 G3 预算。
 
@@ -217,10 +236,10 @@ tail -20 ~/Desktop/ashare-shortline-system/backend/logs/app.log 2>/dev/null
 cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && \
   python -m pytest tests/ -x -q --tb=short -k "改动的模块名" 2>&1 | tail -20
 ```
-**改完后端要重启才生效**：`launchctl kickstart -k gui/$(id -u)/com.wangao.ashare-backend`（重启前先查 formal run 是否在跑，见 T12）。
+**需要验证已部署进程时才重启**：代码级 L0/L1 验收无需重启。确需部署验收时执行 `launchctl kickstart -k gui/$(id -u)/com.wangao.ashare-backend`；重启前先查 formal run 是否在跑，见 T12。
 
 ### 2. 深入研究
-读相关源码（`grep -n` 定位 → `Read` 精确段落）；策略研发先找原始论文/作者材料，论坛只作线索；回测查 DB；性能用 `EXPLAIN ANALYZE`；前端读 `frontend-v2/src/`。研究开始前先写主假设和冻结的验证设计，结论立即写入日志 `**调研结论**` 字段（防崩溃丢上下文）。
+读相关源码（`grep -n` 定位 → `Read` 精确段落）；策略研发先找原始论文/作者材料，论坛只作线索；回测查 DB；性能用 `EXPLAIN ANALYZE`；前端读 `frontend-v2/src/`。研究开始前先写主假设、冻结的验证设计，以及 `验证等级 / 理由 / 真实 LLM 请求、token、费用预算`，结论立即写入日志 `**调研结论**` 字段（防崩溃丢上下文）。
 
 ### 3. 实施改动
 你在 §0 创建的独立 worktree 里（分支 `self-improve/si-*`）。直接改当前 worktree 的文件即可——工作目录隔离，不会和其他并行的 self-improve 冲突。只有验证设计支持改动时才实施；候选被否证则不改生产代码。策略改 `strategy.yaml`；代码改 Python/TS；DB 只做 additive（加索引/列）；前端只改 `frontend-v2/`。**每次改动后运行测试**确认无回归（`.venv`/`node_modules` 是 §0 软链接的主仓环境，pytest/npm build 直接用）。**一个完整功能在一个 commit 里完成**（实现+测试+验证），禁止拆成"实现/测试/验证"三个 commit。
@@ -228,9 +247,9 @@ merge 回 main + 清理 worktree 是你自己的收尾步骤（见 §0），不�
 
 ### 4. 验证
 **基础**：pytest 无回归；改策略跑 champion/challenger 同场回测并报告 G1；改稳定性验证固定快照重放；改性能报告基线对比；改前端 `npm run build` 无报错。
-**端到端**（用户可见任务必做）：T1 先跑 experiment/影子推荐出现在 `skill_breakdown_json`，通过晋级门禁后才进入 formal；T7 截图对比；T9 触发 LLM 确认输出。
+**端到端**（用户可见任务必做）：T1 先跑零 LLM experiment/影子推荐出现在 `skill_breakdown_json`，通过晋级门禁且进入发布批次后才考虑 L3 formal；T7 截图对比；T9 使用 L2 Mini Canary 确认输出。
 **UX 三项**（T7 必做）：信息完整度扫描（推荐价/止损/止盈/入场/失效/评分分解一屏可见）；API 耗时（`time curl`，>2s 加缓存）；截图自检。
-**LLM 层**（每 5 轮）：触发 1-3 只股票 skill agent 分析，记录 token 消耗。
+**LLM 层**：只有改动触及模型语义才升级 L2/L3；达到预算或首次失败立即停止。其余任务使用 L0/L1，真实调用数为 0。
 
 ### 5. Git 提交（有仓库改动时必做）
 ```bash
@@ -251,9 +270,10 @@ open(p,'a').write('''
 **状态**: 已完成
 **任务类型**: T{编号} {简短描述}
 **计划**: - 要改什么、预期效果
+**验证预算**: L{0-3}；选择理由；真实 LLM 请求上限 / token 上限 / 费用上限
 **调研结论**: - 关键发现
 **具体改动**: - 实际改了什么
-**验证结果**: G0-G4 快照 / champion-challenger 对比 / pytest / 端到端结果
+**验证结果**: G0-G4 快照 / champion-challenger 对比 / pytest / 端到端结果；实际真实 LLM 请求数 / prompt token / completion token / cache-hit token / 费用（未知字段写“缺失”）
 **Git**: commit {hash} — T{编号} {简短描述}
 **下一步**: next_focus = T{下一个编号}
 ''')
@@ -282,6 +302,7 @@ open(p,'a').write('''
 - 不要修改 `.env` 中的 token/key
 - 不要在没跑测试的情况下提交改动
 - 不要跳过验证步骤——用户可见任务必须端到端验收
+- **不要把真实 LLM 当通用回归测试**——L0/L1 默认 0 额度；候选否证、纯工程和统计口径任务禁止调用；L2/L3 超预算立即停止
 - **不要问用户问题**——自己调研、决策、执行
 - **不要留下脏 worktree**——任何退出路径（异常/被打断/失败）都要按 §0 末尾清理 worktree + 删分支。轮失败不丢日志（在 app.log / self-improve-log.md），不需要保留 worktree 排查
 - **不要打断正在跑的 formal run**——重启后端前先查 `recommendation_runs` 是否有 `status=running` 的 formal run，有就等它完成

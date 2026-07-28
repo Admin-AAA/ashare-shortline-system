@@ -2,7 +2,8 @@
 """T8 — LLM 层验证（模型内化，消耗 API 额度）。
 
 两套验证，互补：
-  A. 实时对比（T8.1）：对给定股票调用 /api/runs/analyze-stock(include_llm=true)。
+  A. 实时对比（T8.1，显式 --live 才启用）：对给定股票调用
+     /api/runs/analyze-stock(include_llm=true)。
      缓存命中即秒回（llm_review_cache 已落库）；未命中才触发 grok-4.5 实时调用。
      提取 rule_score vs LLM score、决策是否翻转、token 消耗、prompt cache 命中。
   B. 缓存聚合（T8.2/T8.3）：遍历 llm_review_cache 全量，逐 skill 统计
@@ -13,8 +14,9 @@
 不依赖 IO；DB 聚合与实时对比走 IO，仅在 __main__ 触发。
 
 用法:
-    python scripts/verify_t8_llm.py [--codes 603757,002241,002292] [--date 2026-07-16]
-    python scripts/verify_t8_llm.py --no-live   # 仅跑缓存聚合（零额度、零挂起风险）
+    python scripts/verify_t8_llm.py             # 仅跑缓存聚合（默认零额度）
+    python scripts/verify_t8_llm.py --live --codes 603757 --max-live-requests 1 \
+      --max-reported-tokens 20000 --date 2026-07-16
 
 输出: output/t8_llm_verification_<date>.json
 """
@@ -32,6 +34,7 @@ from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent.parent
 BACKEND = "http://127.0.0.1:8765"
+MAX_LIVE_CODES = 3
 
 # SKILL.md 强约束：stance → action 强制映射（违反即无效）
 STANCE_ACTION_OK = {
@@ -169,6 +172,22 @@ def _post(path: str, payload: dict, timeout: int = 200) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _reported_usage(api_costs: list[dict]) -> dict[str, int | None]:
+    """Aggregate provider-reported usage without turning missing fields into zero."""
+    out: dict[str, int | None] = {}
+    for field in ("prompt_tokens", "completion_tokens", "cache_hit_tokens"):
+        values = [item.get(field) for item in api_costs if item.get(field) is not None]
+        out[field] = sum(int(value) for value in values) if values else None
+    prompt = out["prompt_tokens"]
+    completion = out["completion_tokens"]
+    out["total_tokens"] = (
+        int(prompt or 0) + int(completion or 0)
+        if prompt is not None or completion is not None
+        else None
+    )
+    return out
+
+
 def verify_live(code: str, trade_date: str | None) -> dict:
     """实时对比：缓存命中秒回，未命中触发 grok-4.5。"""
     payload = {"code": code, "trade_date": trade_date, "include_llm": True}
@@ -177,6 +196,7 @@ def verify_live(code: str, trade_date: str | None) -> dict:
     except Exception as exc:  # 超时/网络 → 降级记录，不中断整体
         return {"code": code, "live_error": str(exc)[:160], "from_cache": None}
     la = resp.get("llm_analysis", {}) or {}
+    usage = _reported_usage(la.get("api_costs") or [])
     return {
         "code": code,
         "name": resp.get("name"),
@@ -186,8 +206,10 @@ def verify_live(code: str, trade_date: str | None) -> dict:
         "llm_adjustment": la.get("llm_adjustment"),
         "stance": la.get("stance"),
         "confidence": la.get("confidence"),
-        "tokens_real": la.get("total_tokens_real", 0),
-        "cache_hit_tokens": la.get("total_cache_hit_tokens", 0),
+        "prompt_tokens": usage["prompt_tokens"],
+        "completion_tokens": usage["completion_tokens"],
+        "tokens_real": usage["total_tokens"],
+        "cache_hit_tokens": usage["cache_hit_tokens"],
         "prompt_cache_active": la.get("prompt_cache_active", False),
         "status": la.get("status"),
     }
@@ -217,12 +239,37 @@ def fetch_cached_reviews() -> list[dict]:
         db.close()
 
 
-def main() -> int:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     ap.add_argument("--codes", default="603757,002241,002292")
     ap.add_argument("--date", default=None)
-    ap.add_argument("--no-live", action="store_true", help="仅跑缓存聚合（零额度）")
-    args = ap.parse_args()
+    ap.add_argument(
+        "--live",
+        action="store_true",
+        help="显式启用真实 LLM Mini Canary；默认只分析已有缓存，零真实额度",
+    )
+    ap.add_argument(
+        "--max-live-requests",
+        type=int,
+        default=1,
+        choices=range(1, MAX_LIVE_CODES + 1),
+        metavar="1..3",
+        help="真实单股请求硬上限（默认 1，最大 3）",
+    )
+    ap.add_argument(
+        "--max-reported-tokens",
+        type=int,
+        default=20000,
+        help="provider 已报告 token 达到该值后停止后续请求（默认 20000）",
+    )
+    args = ap.parse_args(argv)
+    if args.max_reported_tokens <= 0:
+        ap.error("--max-reported-tokens must be > 0")
+    return args
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
 
     trade_date = args.date
     report: dict = {"task": "T8", "generated_at": _date.today().isoformat()}
@@ -232,17 +279,68 @@ def main() -> int:
     report["cache_total"] = len(reviews)
     report["models"] = sorted({r.get("_model") for r in reviews if r.get("_model")})
     report["per_skill"] = aggregate_reviews(reviews)
+    report["live_budget"] = {
+        "enabled": args.live,
+        "request_limit": args.max_live_requests if args.live else 0,
+        "reported_token_stop_limit": args.max_reported_tokens if args.live else 0,
+    }
+    report["live_usage"] = {
+        "requests_started": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "tokens_reported": 0,
+        "cache_hit_tokens": 0,
+        "token_usage_missing_requests": 0,
+        "cost": 0,
+    }
 
-    # A. 实时对比（T8.1，默认开；--no-live 跳过）
-    if not args.no_live:
+    # A. 实时对比（T8.1，显式 --live 才打开；默认零真实额度）
+    if args.live:
         codes = [c.strip() for c in args.codes.split(",") if c.strip()]
+        codes = list(dict.fromkeys(codes))[: min(args.max_live_requests, MAX_LIVE_CODES)]
         live = []
+        reported_tokens = 0
+        missing_token_usage = 0
         for code in codes:
             try:
-                live.append(verify_live(code, trade_date))
+                item = verify_live(code, trade_date)
             except Exception as exc:
-                live.append({"code": code, "live_error": str(exc)[:160]})
+                item = {"code": code, "live_error": str(exc)[:160]}
+            live.append(item)
+            tokens = item.get("tokens_real")
+            if isinstance(tokens, (int, float)):
+                reported_tokens += int(tokens)
+            else:
+                missing_token_usage += 1
+            if item.get("live_error") or reported_tokens >= args.max_reported_tokens:
+                break
         report["live_comparison"] = live
+        report["live_budget"] = {
+            "enabled": True,
+            "request_limit": args.max_live_requests,
+            "reported_token_stop_limit": args.max_reported_tokens,
+        }
+        report["live_usage"] = {
+            "requests_started": len(live),
+            "prompt_tokens": (
+                sum(int(item["prompt_tokens"]) for item in live)
+                if live and all(item.get("prompt_tokens") is not None for item in live)
+                else None
+            ),
+            "completion_tokens": (
+                sum(int(item["completion_tokens"]) for item in live)
+                if live and all(item.get("completion_tokens") is not None for item in live)
+                else None
+            ),
+            "tokens_reported": reported_tokens if not missing_token_usage else None,
+            "cache_hit_tokens": (
+                sum(int(item["cache_hit_tokens"]) for item in live)
+                if live and all(item.get("cache_hit_tokens") is not None for item in live)
+                else None
+            ),
+            "token_usage_missing_requests": missing_token_usage,
+            "cost": None,
+        }
 
     out = ROOT / "output" / f"t8_llm_verification_{_date.today().isoformat()}.json"
     out.parent.mkdir(exist_ok=True)

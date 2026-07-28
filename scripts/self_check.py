@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""self-improve 每轮自检脚本：输出 A/B/C/D/E 五项北极星指标摘要。
+"""self-improve 每轮自检脚本：先输出 G0-G4 北极星门禁，再输出遗留诊断明细。
 
 用法：
     cd backend && source .venv/bin/activate && python3 ../scripts/self_check.py
@@ -22,8 +22,21 @@ sys.path.insert(0, os.path.abspath(BACKEND_DIR))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from feature_signal_guard import point_biserial
+from north_star_snapshot import (
+    choose_next_action,
+    evaluate_g0,
+    evaluate_g1,
+    evaluate_g2,
+    evaluate_g3,
+    evaluate_g4,
+)
 
 from app.db.session import SessionLocal
+from app.services.capital_flow_factor_evidence import (
+    CAPITAL_FLOW_DISCOVERY_DATE,
+    fetch_dedup_live_formal_capital_flow,
+    summarize_discovery_oos,
+)
 from app.services.feature_builder import market_regime_score
 from sqlalchemy import text
 
@@ -3812,41 +3825,34 @@ def check_auxiliary_factor_data(db) -> None:
         except Exception as exc:
             print(f'  {table:16} {usage}: 查询失败 {str(exc)[:60]}')
 
-    # 资金流因子预测力摘要（T1 Alpha 衰减监控）：3日累计主力净流入 vs outcome
-    # 2026-07-24 发现 r_pb=+0.118 通过 feature_signal_guard，待前瞻验证。本段每轮
-    # 报告当前预测力，监控 Alpha 衰减（T1 要求衰减>30% 标记）。
+    # 资金流因子预测力摘要：统一去重探索口径，并单列发现日之后的 untouched OOS。
+    # 旧 r_pb 基线受重复 formal run 放大，不能继续用于“衰减/提升”判断。
     try:
-        rows = db.execute(text("""
-            SELECT o.outcome_label, cf.cumulative_inflow_3d_yi
-            FROM recommendations r
-            JOIN recommendation_runs rr ON r.run_id = rr.run_id
-            JOIN recommendation_outcomes o ON o.recommendation_id = r.recommendation_id
-            JOIN capital_flow cf ON cf.code = r.code AND cf.trade_date = r.trade_date
-            WHERE rr.run_mode='formal' AND o.outcome_label IN ('success','failed')
-              AND cf.cumulative_inflow_3d_yi IS NOT NULL AND ABS(cf.cumulative_inflow_3d_yi) > 0.001
-        """)).fetchall()
+        rows = fetch_dedup_live_formal_capital_flow(db)
+        rows = [r for r in rows if r['cumulative_inflow_3d_yi'] is not None
+                and abs(float(r['cumulative_inflow_3d_yi'] or 0)) > 0.001]
         if len(rows) >= 20:
-            y = [1 if r[0] == 'success' else 0 for r in rows]
-            x = [float(r[1] or 0) for r in rows]
+            y = [1 if r['outcome_label'] == 'success' else 0 for r in rows]
+            x = [float(r['cumulative_inflow_3d_yi'] or 0) for r in rows]
             r_pb = point_biserial(x, y)
             pos = [yi for xi, yi in zip(x, y) if xi > 0]
             neg = [yi for xi, yi in zip(x, y) if xi <= 0]
             wr_pos = sum(pos) * 100 / len(pos) if pos else 0
             wr_neg = sum(neg) * 100 / len(neg) if neg else 0
             r_pb_str = f'{r_pb:+.4f}' if r_pb is not None else 'N/A'
-            # Alpha 衰减自动判定：r_pb 较基准衰减>30% 即 ⚠️（T1 要求）
-            _BASELINE_RPB = 0.118  # 2026-07-24 发现时的 r_pb
-            _decay = (1 - r_pb / _BASELINE_RPB) * 100 if r_pb is not None and _BASELINE_RPB > 0 else None
-            _decay_tag = f' ⚠️衰减{_decay:.0f}%(>30%需复查)' if _decay is not None and _decay > 30 else ' ✅无衰减'
             print(f'  资金流因子(3日累计主力净流入): n={len(rows)} r_pb={r_pb_str} | '
                   f'流入>0 WR={wr_pos:.1f}% 流入<=0 WR={wr_neg:.1f}% (Δ{wr_pos-wr_neg:+.1f}pp) | '
-                  f'基准 r_pb=+{_BASELINE_RPB:.3f}{_decay_tag}')
+                  f'[code+trade_date去重；探索窗口，不与受重复样本污染的旧基线比较]')
+        oos = summarize_discovery_oos(rows)
+        signal = oos['positive']
+        print(f'  资金流独立OOS(发现日{CAPITAL_FLOW_DISCOVERY_DATE}后, 3日流入>0): '
+              f'n={signal["n"]} days={signal["trade_days"]} WR={signal["win_rate"]}% '
+              f'净期望={signal["net_expectancy"]}% PF={signal["profit_factor"]} | {oos["verdict"]}')
     except Exception as exc:
         print(f'  资金流因子预测力查询失败: {str(exc)[:60]}')
 
     # 融资融券因子预测力（margin_detail rzmre 变化率 vs outcome）
-    # 2026-07-24 分析：rzmre 绝对值 r_pb=+0.047 弱；变化率(当日vs近5日均值) r_pb=+0.085 仍弱于
-    # 资金流 +0.118。融资盘（散户杠杆）预测力弱于主力资金净流入——记录避免重复探索。
+    # 融资盘（散户杠杆）仅作探索诊断；与资金流一样，未通过独立 OOS 前不得晋级。
     try:
         rows = db.execute(text("""
             SELECT o.outcome_label, md.rzmre
@@ -3863,9 +3869,117 @@ def check_auxiliary_factor_data(db) -> None:
             r_pb = point_biserial(x, y)
             r_pb_str = f'{r_pb:+.4f}' if r_pb is not None else 'N/A'
             print(f'  融资融券因子(rzmre绝对值): n={len(rows)} r_pb={r_pb_str} | '
-                  f'弱预测力（变化率 r_pb≈+0.085 仍弱于资金流 +0.118，融资盘预测力低）')
+                  f'探索窗口（未切独立 OOS，不作与资金流的晋级比较）')
     except Exception as exc:
         print(f'  融资融券因子预测力查询失败: {str(exc)[:60]}')
+
+
+def _nearest_rank_p95(values: list[int]) -> int | None:
+    """小样本 p95（nearest-rank），避免引入 numpy 依赖。"""
+    if not values:
+        return None
+    ordered = sorted(values)
+    rank = max(1, math.ceil(len(ordered) * 0.95))
+    return ordered[rank - 1]
+
+
+def build_north_star_snapshot(db) -> dict[str, dict]:
+    """收集并判定 G0-G4；只读，不调用真实 LLM。
+
+    遗留 A-E/D 仍保留为深度诊断，但任务选择只读本快照和 NEXT_ACTION。
+    """
+    latest_core_date = db.execute(text("SELECT MAX(trade_date) FROM daily_kbars")).scalar()
+    core_rows = 0
+    if latest_core_date:
+        core_rows = int(db.execute(text(
+            "SELECT COUNT(*) FROM daily_kbars WHERE trade_date=:d"
+        ), {"d": latest_core_date}).scalar() or 0)
+    latest_formal_date = db.execute(text("""
+        SELECT MAX(r.trade_date) FROM recommendations r
+        JOIN recommendation_runs u ON u.run_id=r.run_id AND u.run_mode='formal'
+    """)).scalar()
+    orphan_outcomes = int(db.execute(text("""
+        SELECT COUNT(*) FROM recommendation_outcomes o
+        LEFT JOIN recommendations r ON r.recommendation_id=o.recommendation_id
+        WHERE r.recommendation_id IS NULL
+    """)).scalar() or 0)
+    factor_rows = fetch_dedup_live_formal_capital_flow(db)
+    factor_keys = [(str(r["code"]), str(r["trade_date"])) for r in factor_rows]
+    g0 = evaluate_g0(
+        core_rows=core_rows,
+        latest_core_date=str(latest_core_date) if latest_core_date else None,
+        latest_formal_date=str(latest_formal_date) if latest_formal_date else None,
+        orphan_outcomes=orphan_outcomes,
+        evidence_keys_unique=len(factor_keys) == len(set(factor_keys)),
+    )
+
+    outcome_rows = _fetch_dedup_live_formal(db)
+    full = _compute_d_cost(outcome_rows)
+    forward = _compute_d_cost(outcome_rows, since_date=FORWARD_EPOCH) if FORWARD_EPOCH else None
+    forward_days = len({str(r[1]) for r in outcome_rows
+                        if FORWARD_EPOCH and str(r[1]) >= FORWARD_EPOCH})
+    version_rows = db.execute(text("""
+        SELECT COUNT(DISTINCT u.execution_version),
+               SUM(CASE WHEN u.execution_version IS NULL THEN 1 ELSE 0 END)
+        FROM recommendations r
+        JOIN recommendation_runs u ON u.run_id=r.run_id AND u.run_mode='formal'
+        JOIN recommendation_outcomes o ON o.recommendation_id=r.recommendation_id
+        WHERE o.outcome_label IN ('success','failed')
+          AND (:epoch IS NULL OR r.trade_date>=:epoch)
+    """), {"epoch": FORWARD_EPOCH}).one()
+    version_isolated = int(version_rows[0] or 0) == 1 and int(version_rows[1] or 0) == 0
+    g1 = evaluate_g1(
+        full=full,
+        forward=forward,
+        forward_trade_days=forward_days,
+        version_isolated=version_isolated,
+    )
+
+    trade_dates = [str(r[0]) for r in db.execute(text("""
+        SELECT DISTINCT trade_date FROM daily_kbars ORDER BY trade_date DESC LIMIT 5
+    """)).fetchall()]
+    completed_dates = {str(r[0]) for r in db.execute(text("""
+        SELECT DISTINCT trade_date FROM recommendation_runs
+        WHERE run_mode='formal' AND status='completed'
+          AND trade_date IN (SELECT d.trade_date FROM (
+              SELECT DISTINCT trade_date FROM daily_kbars ORDER BY trade_date DESC LIMIT 5
+          ) d)
+    """)).fetchall()}
+    missing_formal_dates = [d for d in trade_dates if d not in completed_dates]
+    failed_scheduler_tasks = [str(r[0]) for r in db.execute(text("""
+        SELECT task_id FROM scheduled_tasks WHERE enabled=1 AND last_status='failed'
+    """)).fetchall()]
+    stale_running_runs = int(db.execute(text("""
+        SELECT COUNT(*) FROM recommendation_runs
+        WHERE status='running' AND COALESCE(heartbeat_at, started_at)<DATE_SUB(NOW(), INTERVAL 20 MINUTE)
+    """)).scalar() or 0)
+    g2 = evaluate_g2(
+        missing_formal_dates=missing_formal_dates,
+        failed_scheduler_tasks=failed_scheduler_tasks,
+        stale_running_runs=stale_running_runs,
+    )
+
+    runtimes = [int(r[0]) for r in db.execute(text("""
+        SELECT TIMESTAMPDIFF(SECOND, started_at, finished_at)
+        FROM recommendation_runs
+        WHERE run_mode='formal' AND status='completed' AND finished_at IS NOT NULL
+          AND universe_count>=3000
+        ORDER BY started_at DESC LIMIT 20
+    """)).fetchall() if r[0] is not None]
+    g3 = evaluate_g3(formal_p95_seconds=_nearest_rank_p95(runtimes), api_p95_seconds=None)
+
+    candidate_oos = summarize_discovery_oos(factor_rows).get("positive")
+    g4 = evaluate_g4(prerequisites=[g0, g2, g3], candidate_oos=candidate_oos)
+    return {"G0": g0, "G1": g1, "G2": g2, "G3": g3, "G4": g4}
+
+
+def print_north_star_snapshot(snapshot: dict[str, dict]) -> None:
+    print('=== G0-G4 北极星快照（任务选择入口，L0只读/0 LLM）===')
+    for key in ("G0", "G1", "G2", "G3", "G4"):
+        item = snapshot[key]
+        print(f'{key} [{item["status"]}]: {item["summary"]}')
+    print(f'NEXT_ACTION: {choose_next_action(snapshot)}')
+    print('--- 以下 A-E/D 为遗留深度诊断，不单独决定任务 ---')
 
 
 def main() -> None:
@@ -3873,6 +3987,7 @@ def main() -> None:
     db = SessionLocal()
     try:
         FORWARD_EPOCH = _resolve_forward_epoch(db)
+        print_north_star_snapshot(build_north_star_snapshot(db))
         check_a_item(db)
         check_b_item(db)
         hit_skills = check_c_item(db)

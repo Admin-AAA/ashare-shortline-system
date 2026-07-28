@@ -48,6 +48,31 @@ def _stage_cardinality(phase: RunPhase, data: StageData) -> tuple[int, int]:
     return 0, 0
 
 
+def _commit_stage_progress(db: Session, run_id: str, phase: str) -> None:
+    """Commit lifecycle and legacy checkpoint projections before the next stage.
+
+    The old ordering committed progress, then flushed ``checkpoint_phase`` in a new
+    transaction. During the following LLM stage that uncommitted UPDATE held the
+    ``recommendation_runs`` row lock, so the watchdog blocked and eventually raised
+    MySQL 1205. Put the legacy projection into the same progress commit instead.
+    """
+    from app.models.tables import RecommendationRun
+    from app.services.workbench_service import _update_run_progress
+
+    progress_run = db.get(RecommendationRun, run_id)
+    if progress_run is not None:
+        progress_run.checkpoint_phase = phase
+    _update_run_progress(
+        db,
+        run_id,
+        phase=phase,
+        current=1,
+        total=1,
+        message=f"阶段 {phase} 完成",
+        status="running",
+    )
+
+
 async def run_staged_pipeline(
     db: Session,
     *,
@@ -64,7 +89,6 @@ async def run_staged_pipeline(
     """
     from app.models.tables import AgentDecisionLog, Recommendation, RecommendationRun
     from app.services.workbench_service import (
-        _update_run_progress,
         _build_run_summary,
         _dumps,
         _serialize_recommendation,
@@ -251,19 +275,7 @@ async def run_staged_pipeline(
                 snapshot_ref.clear()
                 snapshot_ref.update(data.snapshot)
 
-            _update_run_progress(
-                db,
-                run_id,
-                phase=output.result.phase.value,
-                current=1,
-                total=1,
-                message=f"阶段 {output.result.phase.value} 完成",
-                status="running",
-            )
-            progress_run = db.get(RecommendationRun, run_id)
-            if progress_run is not None:
-                progress_run.checkpoint_phase = output.result.phase.value
-                db.flush()
+            _commit_stage_progress(db, run_id, output.result.phase.value)
             logger.info(
                 "run %s stage %s completed (side_effect_key=%s)",
                 run_id,
