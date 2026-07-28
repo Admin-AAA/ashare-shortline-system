@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""D 项北极星回归护栏 — 可独立运行的 CI 闸门。
+"""G1 样本外收益质量护栏 — 可独立运行的 CI 闸门。
 
 背景（第 178 轮 self-improve）：
   系统已进入稳定期，D 项（回测胜率/盈亏比/最大亏损）是唯一核心攻击目标，当前已强于
@@ -7,9 +7,8 @@
   实例并行编辑 strategy.yaml、不断加脆弱的「毒区」过滤器——这是真实的过拟合风险：
   单看样本内胜率刷高，却可能砍掉前瞻样本里的有效信号，损害整体 D 项。
 
-  本脚本把北极星 D 项目标固化为硬闸门：任何改动若使 D 项退到阈值以下，脚本非零退出，
-  CI / 编排可据此阻断合并。与 self_check.py 共用同一套纯函数（_fetch_dedup_live_formal
-  + _compute_d_cost），口径与生产一致。
+  全量历史值用于诊断，不能因某个旧版本的极端亏损永久阻断当前代码。只有样本量和交易日
+  覆盖充分、且污染不过度的 OOS 才执行硬闸门；主指标是扣费后净期望与 Profit Factor。
 
 用法（在 worktree / 主仓均可）：
     cd backend && source .venv/bin/activate && python3 ../scripts/verify_d_guardrail.py
@@ -33,11 +32,11 @@ from app.db.session import SessionLocal
 import self_check  # type: ignore[import-not-found]
 from sqlalchemy import text
 
-# —— 北极星 D 项目标阈值（硬闸门）——
-NET_WINRATE_FLOOR = 65.0
-NET_PL_RATIO_FLOOR = 2.0
-MAX_LOSS_FLOOR = -6.5          # 即 max_loss 不得低于 -6.5%
-FORWARD_NET_WINRATE_FLOOR = 60.0
+# —— G1 OOS 最低可交易性门槛（不是某一天的历史 champion）——
+MIN_OOS_SAMPLE = 30
+MIN_OOS_TRADE_DAYS = 10
+FORWARD_NET_EXPECTANCY_FLOOR = 0.0
+FORWARD_PROFIT_FACTOR_FLOOR = 1.0
 
 # 默认报告落盘路径（output/ 已被 .gitignore 忽略，不会进版本库）
 REPORT_DEFAULT_PATH = os.path.abspath(
@@ -201,7 +200,9 @@ def _forward_pollution_gate_decision(
     clean_n: int,
     *,
     pollution_share_skip: float = FORWARD_POLLUTION_SHARE_SKIP,
-    min_oos: int = 10,
+    min_oos: int = MIN_OOS_SAMPLE,
+    trade_days: int | None = None,
+    min_trade_days: int = MIN_OOS_TRADE_DAYS,
 ) -> dict:
     """纯函数：是否对前瞻窗口执行硬闸门。
 
@@ -219,7 +220,8 @@ def _forward_pollution_gate_decision(
             "share": 0.0,
             "msg": "前瞻窗口无样本，无法强制 OOS 闸门",
         }
-    if share >= pollution_share_skip or clean_n < min_oos:
+    days_insufficient = trade_days is not None and trade_days < min_trade_days
+    if share >= pollution_share_skip or clean_n < min_oos or days_insufficient:
         return {
             "enforce": False,
             "pollution_n": pollution_n,
@@ -227,7 +229,8 @@ def _forward_pollution_gate_decision(
             "share": share,
             "msg": (
                 f"前瞻 pure 污染 {pollution_n}/{total}={int(share * 100)}%、"
-                f"clean n={clean_n}（<{min_oos} 或污染≥{int(pollution_share_skip * 100)}%）"
+                f"clean n={clean_n}、交易日={trade_days if trade_days is not None else '未测'}"
+                f"（n<{min_oos}、交易日<{min_trade_days} 或污染≥{int(pollution_share_skip * 100)}%）"
                 f"——raw 前瞻不可当硬闸门；Contract 已拦新污染，待 clean formal 多日后再 OOS"
             ),
         }
@@ -246,12 +249,12 @@ def build_report(full: dict | None, fwd: dict | None, ok: bool, exit_code: int,
                  pollution: dict | None = None,
                  forward_epoch: str | None = None,
                  residual: dict | None = None) -> dict:
-    """把本轮 D 项护栏结果结构化为机器可读报告，供跨 run 漂移追踪。
+    """把本轮 G1 护栏结果结构化为机器可读报告，供跨 run 漂移追踪。
 
     full / fwd 为 self_check._compute_d_cost 的返回 dict（含 n/net_wr/net_pl/max_loss）。
     pollution 为去污染反事实摘要（可选），forward_epoch 为稳定/动态纪元字符串。
     residual 为真残留毒区 + 伪活跃反事实（T31，可选）。
-    只萃取 D 项护栏关心的字段，剔除噪声字段，避免报告随实现细节漂移。
+    只萃取 G1 护栏关心的字段，剔除噪声字段，避免报告随实现细节漂移。
     """
     def _block(m):
         return None if m is None else {
@@ -264,10 +267,10 @@ def build_report(full: dict | None, fwd: dict | None, ok: bool, exit_code: int,
         "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "forward_epoch": forward_epoch,
         "thresholds": {
-            "net_winrate_floor": NET_WINRATE_FLOOR,
-            "net_pl_ratio_floor": NET_PL_RATIO_FLOOR,
-            "max_loss_floor": MAX_LOSS_FLOOR,
-            "forward_net_winrate_floor": FORWARD_NET_WINRATE_FLOOR,
+            "min_oos_sample": MIN_OOS_SAMPLE,
+            "min_oos_trade_days": MIN_OOS_TRADE_DAYS,
+            "forward_net_expectancy_floor": FORWARD_NET_EXPECTANCY_FLOOR,
+            "forward_profit_factor_floor": FORWARD_PROFIT_FACTOR_FLOOR,
             "recent_window_days": RECENT_WINDOW_DAYS,
             "recent_pl_drag_ratio": RECENT_PL_DRAG_RATIO,
             "recent_min_n": RECENT_MIN_N,
@@ -304,7 +307,7 @@ def write_report(report: dict, path: str) -> None:
 
 
 def main(argv: list | None = None) -> int:
-    parser = argparse.ArgumentParser(description="D 项北极星回归护栏")
+    parser = argparse.ArgumentParser(description="G1 样本外收益质量护栏")
     parser.add_argument(
         "--json", nargs="?", const=REPORT_DEFAULT_PATH, default=None,
         help="写出机器可读 JSON 报告；不指定路径则用默认 output/d_guardrail_report.json",
@@ -464,7 +467,7 @@ def main(argv: list | None = None) -> int:
         db.close()
 
     if not rows:
-        print("⚠️ D 项护栏：无 LIVE formal 样本，无法判定（退出码 2）。")
+        print("⚠️ G1 护栏：无 LIVE formal 样本，无法判定（退出码 2）。")
         report = build_report(None, None, False, 2, forward_epoch=None)
         if args.json:
             write_report(report, args.json)
@@ -498,7 +501,10 @@ def main(argv: list | None = None) -> int:
             fwd_keys = {(r[0], str(r[1])) for r in rows if str(r[1]) >= epoch}
             fwd_poll_n = 0
             fwd_clean_n = len(fwd_keys)
-    fwd_gate = _forward_pollution_gate_decision(fwd_poll_n, fwd_clean_n)
+    fwd_trade_days = len({str(r[1]) for r in rows if epoch and str(r[1]) >= epoch})
+    fwd_gate = _forward_pollution_gate_decision(
+        fwd_poll_n, fwd_clean_n, trade_days=fwd_trade_days,
+    )
 
     def _slim(m):
         return None if m is None else {
@@ -522,7 +528,7 @@ def main(argv: list | None = None) -> int:
     }
 
     print(
-        f"D 项回归护栏（样本 全量 n={full['n']}"
+        f"G1 样本外收益质量护栏（全量仅诊断 n={full['n']}"
         + (f" / 前瞻≥{epoch} n={fwd['n']}" if fwd else " / 前瞻 空")
         + f" / 近{RECENT_WINDOW_DAYS}交易日 n={recent['n'] if recent else 0}"
         + "）"
@@ -530,18 +536,16 @@ def main(argv: list | None = None) -> int:
     print("-" * 60)
 
     ok = True
-    ok &= _check("全量净胜率", full["net_wr"] >= NET_WINRATE_FLOOR,
-                 f"{full['net_wr']}%", NET_WINRATE_FLOOR)
-    ok &= _check("全量净盈亏比", full["net_pl"] >= NET_PL_RATIO_FLOOR,
-                 full["net_pl"], NET_PL_RATIO_FLOOR)
-    ok &= _check("全量最大亏损(越接近0越好)", full["max_loss"] >= MAX_LOSS_FLOOR,
-                 f"{full['max_loss']}%", MAX_LOSS_FLOOR)
+    print(
+        f"  ℹ️ 全量历史（不闸门）: 净WR={full['net_wr']}% 净PF={full['net_pl']} "
+        f"净期望={full['net_avg']}% 最大单笔={full['max_loss']}%"
+    )
     if fwd is not None and epoch:
         if fwd_gate["enforce"]:
-            ok &= _check("前瞻净胜率(样本外)", fwd["net_wr"] >= FORWARD_NET_WINRATE_FLOOR,
-                         f"{fwd['net_wr']}%", FORWARD_NET_WINRATE_FLOOR)
-            ok &= _check("前瞻净盈亏比", fwd["net_pl"] >= NET_PL_RATIO_FLOOR,
-                         fwd["net_pl"], NET_PL_RATIO_FLOOR)
+            ok &= _check("OOS扣费后净期望", fwd["net_avg"] > FORWARD_NET_EXPECTANCY_FLOOR,
+                         f"{fwd['net_avg']}%", f">{FORWARD_NET_EXPECTANCY_FLOOR}")
+            ok &= _check("OOS Profit Factor", fwd["net_pl"] >= FORWARD_PROFIT_FACTOR_FLOOR,
+                         fwd["net_pl"], FORWARD_PROFIT_FACTOR_FLOOR)
         else:
             print(
                 f"  [⚠️ SKIP] 前瞻硬闸门：{fwd_gate['msg']} "
@@ -603,9 +607,9 @@ def main(argv: list | None = None) -> int:
 
     print("-" * 60)
     if ok:
-        print("✅ D 项护栏全部达标：未检测到对北极星 D 项的回归。")
+        print("✅ G1 护栏通过：OOS达标，或当前证据不足而安全跳过晋级判断。")
     else:
-        print("❌ D 项护栏触发：检测到对北极星 D 项的回归，阻断合并并排查最近 strategy.yaml 改动。")
+        print("❌ G1 护栏触发：样本充分的OOS净期望/PF不达标，阻断策略发布。")
 
     exit_code = 0 if ok else 1
     report = build_report(

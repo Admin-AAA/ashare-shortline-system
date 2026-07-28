@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""self-improve 每轮自检脚本：输出 A/B/C/D/E 五项北极星指标摘要。
+"""self-improve 每轮自检脚本：先输出 G0-G4 北极星门禁，再输出遗留诊断明细。
 
 用法：
     cd backend && source .venv/bin/activate && python3 ../scripts/self_check.py
@@ -22,6 +22,14 @@ sys.path.insert(0, os.path.abspath(BACKEND_DIR))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from feature_signal_guard import point_biserial
+from north_star_snapshot import (
+    choose_next_action,
+    evaluate_g0,
+    evaluate_g1,
+    evaluate_g2,
+    evaluate_g3,
+    evaluate_g4,
+)
 
 from app.db.session import SessionLocal
 from app.services.capital_flow_factor_evidence import (
@@ -3866,11 +3874,120 @@ def check_auxiliary_factor_data(db) -> None:
         print(f'  融资融券因子预测力查询失败: {str(exc)[:60]}')
 
 
+def _nearest_rank_p95(values: list[int]) -> int | None:
+    """小样本 p95（nearest-rank），避免引入 numpy 依赖。"""
+    if not values:
+        return None
+    ordered = sorted(values)
+    rank = max(1, math.ceil(len(ordered) * 0.95))
+    return ordered[rank - 1]
+
+
+def build_north_star_snapshot(db) -> dict[str, dict]:
+    """收集并判定 G0-G4；只读，不调用真实 LLM。
+
+    遗留 A-E/D 仍保留为深度诊断，但任务选择只读本快照和 NEXT_ACTION。
+    """
+    latest_core_date = db.execute(text("SELECT MAX(trade_date) FROM daily_kbars")).scalar()
+    core_rows = 0
+    if latest_core_date:
+        core_rows = int(db.execute(text(
+            "SELECT COUNT(*) FROM daily_kbars WHERE trade_date=:d"
+        ), {"d": latest_core_date}).scalar() or 0)
+    latest_formal_date = db.execute(text("""
+        SELECT MAX(r.trade_date) FROM recommendations r
+        JOIN recommendation_runs u ON u.run_id=r.run_id AND u.run_mode='formal'
+    """)).scalar()
+    orphan_outcomes = int(db.execute(text("""
+        SELECT COUNT(*) FROM recommendation_outcomes o
+        LEFT JOIN recommendations r ON r.recommendation_id=o.recommendation_id
+        WHERE r.recommendation_id IS NULL
+    """)).scalar() or 0)
+    factor_rows = fetch_dedup_live_formal_capital_flow(db)
+    factor_keys = [(str(r["code"]), str(r["trade_date"])) for r in factor_rows]
+    g0 = evaluate_g0(
+        core_rows=core_rows,
+        latest_core_date=str(latest_core_date) if latest_core_date else None,
+        latest_formal_date=str(latest_formal_date) if latest_formal_date else None,
+        orphan_outcomes=orphan_outcomes,
+        evidence_keys_unique=len(factor_keys) == len(set(factor_keys)),
+    )
+
+    outcome_rows = _fetch_dedup_live_formal(db)
+    full = _compute_d_cost(outcome_rows)
+    forward = _compute_d_cost(outcome_rows, since_date=FORWARD_EPOCH) if FORWARD_EPOCH else None
+    forward_days = len({str(r[1]) for r in outcome_rows
+                        if FORWARD_EPOCH and str(r[1]) >= FORWARD_EPOCH})
+    version_rows = db.execute(text("""
+        SELECT COUNT(DISTINCT u.execution_version),
+               SUM(CASE WHEN u.execution_version IS NULL THEN 1 ELSE 0 END)
+        FROM recommendations r
+        JOIN recommendation_runs u ON u.run_id=r.run_id AND u.run_mode='formal'
+        JOIN recommendation_outcomes o ON o.recommendation_id=r.recommendation_id
+        WHERE o.outcome_label IN ('success','failed')
+          AND (:epoch IS NULL OR r.trade_date>=:epoch)
+    """), {"epoch": FORWARD_EPOCH}).one()
+    version_isolated = int(version_rows[0] or 0) == 1 and int(version_rows[1] or 0) == 0
+    g1 = evaluate_g1(
+        full=full,
+        forward=forward,
+        forward_trade_days=forward_days,
+        version_isolated=version_isolated,
+    )
+
+    trade_dates = [str(r[0]) for r in db.execute(text("""
+        SELECT DISTINCT trade_date FROM daily_kbars ORDER BY trade_date DESC LIMIT 5
+    """)).fetchall()]
+    completed_dates = {str(r[0]) for r in db.execute(text("""
+        SELECT DISTINCT trade_date FROM recommendation_runs
+        WHERE run_mode='formal' AND status='completed'
+          AND trade_date IN (SELECT d.trade_date FROM (
+              SELECT DISTINCT trade_date FROM daily_kbars ORDER BY trade_date DESC LIMIT 5
+          ) d)
+    """)).fetchall()}
+    missing_formal_dates = [d for d in trade_dates if d not in completed_dates]
+    failed_scheduler_tasks = [str(r[0]) for r in db.execute(text("""
+        SELECT task_id FROM scheduled_tasks WHERE enabled=1 AND last_status='failed'
+    """)).fetchall()]
+    stale_running_runs = int(db.execute(text("""
+        SELECT COUNT(*) FROM recommendation_runs
+        WHERE status='running' AND COALESCE(heartbeat_at, started_at)<DATE_SUB(NOW(), INTERVAL 20 MINUTE)
+    """)).scalar() or 0)
+    g2 = evaluate_g2(
+        missing_formal_dates=missing_formal_dates,
+        failed_scheduler_tasks=failed_scheduler_tasks,
+        stale_running_runs=stale_running_runs,
+    )
+
+    runtimes = [int(r[0]) for r in db.execute(text("""
+        SELECT TIMESTAMPDIFF(SECOND, started_at, finished_at)
+        FROM recommendation_runs
+        WHERE run_mode='formal' AND status='completed' AND finished_at IS NOT NULL
+          AND universe_count>=3000
+        ORDER BY started_at DESC LIMIT 20
+    """)).fetchall() if r[0] is not None]
+    g3 = evaluate_g3(formal_p95_seconds=_nearest_rank_p95(runtimes), api_p95_seconds=None)
+
+    candidate_oos = summarize_discovery_oos(factor_rows).get("positive")
+    g4 = evaluate_g4(prerequisites=[g0, g2, g3], candidate_oos=candidate_oos)
+    return {"G0": g0, "G1": g1, "G2": g2, "G3": g3, "G4": g4}
+
+
+def print_north_star_snapshot(snapshot: dict[str, dict]) -> None:
+    print('=== G0-G4 北极星快照（任务选择入口，L0只读/0 LLM）===')
+    for key in ("G0", "G1", "G2", "G3", "G4"):
+        item = snapshot[key]
+        print(f'{key} [{item["status"]}]: {item["summary"]}')
+    print(f'NEXT_ACTION: {choose_next_action(snapshot)}')
+    print('--- 以下 A-E/D 为遗留深度诊断，不单独决定任务 ---')
+
+
 def main() -> None:
     global FORWARD_EPOCH
     db = SessionLocal()
     try:
         FORWARD_EPOCH = _resolve_forward_epoch(db)
+        print_north_star_snapshot(build_north_star_snapshot(db))
         check_a_item(db)
         check_b_item(db)
         hit_skills = check_c_item(db)

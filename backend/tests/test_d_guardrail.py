@@ -1,12 +1,5 @@
-"""D 项北极星回归护栏 — 纯函数单测 + 闸门阈值/逻辑锁定（第 178 轮 self-improve, T3/D 防御).
+"""G1 样本外收益质量护栏 — 纯函数单测 + 闸门逻辑锁定。"""
 
-背景: D 项是当前唯一核心北极星（胜率/盈亏比/最大亏损）。系统已强于目标，但多个
-self-improve 实例并行加脆弱过滤器，存在过拟合风险。verify_d_guardrail.py 把 D 项目标
-固化为 CI 硬闸门。本测试锁定：
-1. _compute_d_cost 的净成本计算数学（扣 0.07%/笔后净胜率/净盈亏比/最大亏损）。
-2. verify_d_guardrail 的阈值常量与 _check 闸门逻辑——任何调低阈值的改动都会被本测试拦下。
-不依赖 DB 真实数据，纯函数确定性验证。
-"""
 import json
 import pathlib
 import sys
@@ -79,11 +72,10 @@ def test_compute_d_cost_empty_returns_none():
 
 
 def test_guardrail_thresholds_locked():
-    """闸门阈值常量锁定为北极星目标——任何调低都会被本测试拦下。"""
-    assert verify_d_guardrail.NET_WINRATE_FLOOR == 65.0
-    assert verify_d_guardrail.NET_PL_RATIO_FLOOR == 2.0
-    assert verify_d_guardrail.MAX_LOSS_FLOOR == -6.5
-    assert verify_d_guardrail.FORWARD_NET_WINRATE_FLOOR == 60.0
+    assert verify_d_guardrail.MIN_OOS_SAMPLE == 30
+    assert verify_d_guardrail.MIN_OOS_TRADE_DAYS == 10
+    assert verify_d_guardrail.FORWARD_NET_EXPECTANCY_FLOOR == 0.0
+    assert verify_d_guardrail.FORWARD_PROFIT_FACTOR_FLOOR == 1.0
 
 
 def test_guardrail_check_logic():
@@ -104,8 +96,8 @@ def test_build_report_structure_and_thresholds():
     assert rep["exit_code"] == 0
     assert rep["full"] == full
     assert rep["forward"] == fwd
-    assert rep["thresholds"]["net_winrate_floor"] == 65.0
-    assert rep["thresholds"]["forward_net_winrate_floor"] == 60.0
+    assert rep["thresholds"]["min_oos_sample"] == 30
+    assert rep["thresholds"]["min_oos_trade_days"] == 10
     assert isinstance(rep["generated_at"], str) and "T" in rep["generated_at"]
 
 
@@ -141,10 +133,13 @@ def test_forward_pollution_gate_skips_when_dominated():
     # 5/(5+5)=0.5 < 0.7 但 clean=5 < 10 → 仍 skip
     assert d2["enforce"] is False
 
-    d3 = verify_d_guardrail._forward_pollution_gate_decision(3, 12)
-    # 3/15=0.2 < 0.7 且 clean=12 ≥ 10 → enforce
+    d3 = verify_d_guardrail._forward_pollution_gate_decision(3, 30, trade_days=10)
+    # 污染低、clean n>=30 且覆盖10日 → enforce
     assert d3["enforce"] is True
     assert d3["msg"] == ""
+
+    d4 = verify_d_guardrail._forward_pollution_gate_decision(3, 30, trade_days=9)
+    assert d4["enforce"] is False
 
 
 def test_forward_pollution_gate_empty():

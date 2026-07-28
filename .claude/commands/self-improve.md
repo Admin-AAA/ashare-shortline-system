@@ -70,7 +70,7 @@
 cd ~/Desktop/ashare-shortline-system/backend && source .venv/bin/activate && python3 ../scripts/self_check.py
 ```
 
-脚本当前输出的 A/B/C/D/E 是遗留诊断信号，不再直接等同于北极星结论。将其映射为：D/E→G1 诊断，A→G2 诊断，B/C→产品护栏；同时补查数据新鲜度、失败运行、性能基线，形成 G0-G4 快照。后续应逐步把 `self_check.py` 输出原生迁移到 G0-G4。
+脚本首先原生输出 G0-G4 状态和 `NEXT_ACTION`，这是任务选择的唯一入口；随后保留的 A/B/C/D/E 仅作深度诊断，不得越过 G0/G2/G3 门禁单独触发策略调优。
 
 ### 选任务规则
 
