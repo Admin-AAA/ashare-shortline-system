@@ -9,7 +9,7 @@ import { useUrlRoute } from "../app/useUrlRoute";
 import { queryParam } from "../app/nav";
 import { RecommendationDetailCard } from "../components/RecommendationDetailCard";
 import { fmtPrice } from "../components/Shared";
-import { bucketLabel, exitReasonLabel, isOutcomeSettled, outcomeLabel, outcomeTone, setupLabel, BUCKET_LABELS } from "../utils/display";
+import { bucketLabel, exitReasonLabel, formatApiDateTime, isOutcomeSettled, outcomeLabel, outcomeTone, setupLabel, BUCKET_LABELS } from "../utils/display";
 import { ruleKeyLevelLabels, rulesMentionKeyLevel } from "../utils/ruleKeyLevels";
 
 /**
@@ -419,7 +419,17 @@ export function HistoryPage() {
                         <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)", whiteSpace: "nowrap" }}>
                           <span className="history-row__rail" aria-hidden />
                           {expandedId === it.recommendation_id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                          <span style={{ whiteSpace: "nowrap", flexShrink: 0 }}>{it.trade_date}</span>
+                          <span style={{ display: "inline-flex", flexDirection: "column", gap: 1, whiteSpace: "nowrap", flexShrink: 0 }}>
+                            <span style={{ whiteSpace: "nowrap" }}>{it.trade_date}</span>
+                            {it.recommended_at && (
+                              <span
+                                style={{ color: "var(--muted)", fontSize: "var(--text-xs)", fontFamily: "var(--font-mono)", lineHeight: 1.3 }}
+                                title={`推荐生成时间（北京时间）：${formatApiDateTime(it.recommended_at)}`}
+                              >
+                                {formatApiDateTime(it.recommended_at, { hour: "2-digit", minute: "2-digit" })}
+                              </span>
+                            )}
+                          </span>
                         </span>
                       </td>
                       <td style={tdStyle}>
