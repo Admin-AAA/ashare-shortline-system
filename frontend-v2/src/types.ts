@@ -652,7 +652,7 @@ export type DataHealthRemediationSnapshot = {
   diagnosis_skipped?: boolean;
   diagnosis_stage?: string;
   error_type?: string;
-  error?: string;
+  error?: string | null;
   recent_summary?: {
     max_missing_days?: number;
     high_impact_tables?: string[];
@@ -2534,7 +2534,7 @@ export type SingleStockLlmAnalysis = {
   agent_review_score?: number | null;
   skill_reviews?: SingleStockSkillReview[];
   // 公共字段
-  error?: string;
+  error?: string | null;
   total_tokens_est?: number;
   total_tokens_real?: number;
   total_cache_hit_tokens?: number;
@@ -2550,6 +2550,7 @@ export type SingleStockAnalysis = {
   bar_count: number;
   elapsed_ms: number;
   price: number | null;
+  final_score: number | null;
   dsa_profile: {
     macd_status: string | null;
     macd_dif: number | null;

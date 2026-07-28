@@ -305,7 +305,7 @@ function ReplayStatusTag({ label, tone }: { label: string; tone: "up" | "down" |
 function SingleStockScorePanel({ presets }: { presets: Preset[] }) {
   const [code, setCode] = useState("");
   const [selectedPreset, setSelectedPreset] = useState<string>("");
-  const [includeLlm, setIncludeLlm] = useState(false);
+  const [includeLlm, setIncludeLlm] = useState(true);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<SingleStockAnalysis | null>(null);
   const [error, setError] = useState("");
@@ -316,6 +316,10 @@ function SingleStockScorePanel({ presets }: { presets: Preset[] }) {
   const [historyCode, setHistoryCode] = useState("");
   // 回放某条历史：加载其完整 result_json 后渲染
   const [replayId, setReplayId] = useState<number | null>(null);
+
+  useEffect(() => {
+    setSelectedPreset((current) => current || presets[0]?.preset_id || "");
+  }, [presets]);
 
   async function loadHistory(codeToFetch: string) {
     const trimmed = codeToFetch.trim();
@@ -705,6 +709,7 @@ function SingleStockLlmSection({ llm }: { llm: NonNullable<SingleStockAnalysis["
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: "var(--space-3)", marginBottom: "var(--space-3)" }}>
+        <ScoreMetric label="最终评分" value={llm.final_score} />
         <ScoreMetric label="LLM评分" value={llm.score} />
         <ScoreMetric label="规则基线" value={llm.rule_score} />
         <ScoreMetric label="LLM调整" value={llm.llm_adjustment} />

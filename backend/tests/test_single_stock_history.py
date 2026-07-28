@@ -63,7 +63,7 @@ def _make_result(*, final_scores=None, elapsed_ms=120.0, llm=None):
 
 
 def test_persist_writes_single_stock_history():
-    """规则评分模式：落库 analysis_type=single_stock，final_score=规则分总和，skill_count=1。"""
+    """规则评分模式：final_score 使用已归一化的信号总分，不重复累加子分。"""
     db = _FakeDB()
     result = _make_result()
 
@@ -77,8 +77,7 @@ def test_persist_writes_single_stock_history():
     assert row.code == "000001"
     assert row.trade_date == "2026-07-16"
     assert row.analysis_type == "single_stock"
-    # 7 个规则分总和 = 10+8+6+5+4+3+2 = 38
-    assert row.final_score == pytest.approx(38.0)
+    assert row.final_score == pytest.approx(10.0)
     assert row.skill_count == 1
     assert row.elapsed_ms == 120.0
     assert '"status": "ok"' in row.result_json
@@ -86,7 +85,7 @@ def test_persist_writes_single_stock_history():
 
 
 def test_preset_mode_skill_count_from_skill_reviews():
-    """预设多 skill 模式：skill_count 取有效 skill 数。"""
+    """预设多 skill 模式：历史评分与推荐管线聚合最终分一致。"""
     db = _FakeDB()
     llm = {
         "status": "ok",
@@ -103,8 +102,28 @@ def test_preset_mode_skill_count_from_skill_reviews():
     _persist_single_stock_history(db, "002241", "2026-07-16", result)
 
     row = db.added[0]
+    assert row.final_score == pytest.approx(72.5)
     assert row.skill_count == 2  # 两个 ok
     assert row.analysis_type == "single_stock"
+
+
+def test_persist_rule_score_never_exceeds_100_by_readding_components():
+    """回归：dsa_signal_score 已是六个子项归一化总分，不能再相加成 158。"""
+    db = _FakeDB()
+    result = _make_result(final_scores={
+        "dsa_signal_score": 79.0,
+        "dsa_trend_score": 26.0,
+        "dsa_bias_score": 20.0,
+        "dsa_volume_score": 10.0,
+        "dsa_support_score": 10.0,
+        "dsa_macd_score": 5.0,
+        "dsa_rsi_score": 8.0,
+    })
+
+    _persist_single_stock_history(db, "000001", "2026-07-16", result)
+
+    assert db.added[0].final_score == pytest.approx(79.0)
+    assert 0 <= db.added[0].final_score <= 100
 
 
 def test_persist_swallows_failure_without_raising():

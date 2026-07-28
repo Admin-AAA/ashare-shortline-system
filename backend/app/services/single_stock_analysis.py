@@ -237,7 +237,14 @@ def analyze_stock(
     snapshot, snapshot_source = _resolve_analysis_market_snapshot(db, trade_date, quote)
     prefilter_auxiliary = load_auxiliary_feature_views(db, [code], trade_date=trade_date)
     inject_auxiliary_prefilter_flags([stock_result], prefilter_auxiliary)
-    enriched_list = build_features([stock_result], snapshot)
+    from app.services.workbench_service import _load_calibrated_dsa_weights
+
+    enriched_list = build_features(
+        [stock_result],
+        snapshot,
+        _load_calibrated_dsa_weights(db),
+        db=db,
+    )
     if enriched_list:
         stock_result = enriched_list[0]
 
@@ -308,6 +315,8 @@ def analyze_stock(
             llm_result = _run_llm_analysis(db, code, stock_result, skill_id, snapshot)
         result["llm_analysis"] = llm_result
 
+    result["final_score"] = _resolve_single_stock_final_score(result)
+
     _persist_single_stock_history(db, code, trade_date, result)
 
     return result
@@ -321,16 +330,7 @@ def _persist_single_stock_history(db: Session, code: str, trade_date: str, resul
     try:
         from app.models.tables import StockMatrixHistory
 
-        scoring = result.get("scoring") or {}
-        # 规则评分总和作为 final_score（与面板展示的「评分」口径一致）
-        rule_score_keys = [
-            "dsa_signal_score", "dsa_trend_score", "dsa_bias_score",
-            "dsa_volume_score", "dsa_support_score", "dsa_macd_score",
-            "dsa_rsi_score",
-        ]
-        final_score = sum(
-            (float(scoring.get(k) or 0)) for k in rule_score_keys
-        ) or None
+        final_score = _resolve_single_stock_final_score(result)
 
         # skill_count：preset 模式取有效 skill 数，单 skill 模式=1
         llm = result.get("llm_analysis")
@@ -354,6 +354,45 @@ def _persist_single_stock_history(db: Session, code: str, trade_date: str, resul
         db.rollback()
 
 
+def _resolve_single_stock_final_score(result: dict[str, Any]) -> float | None:
+    """返回单股记录唯一总分，口径与页面实际评分一致且限定为 0–100。
+
+    preset 模式优先使用推荐管线聚合分；否则使用已经归一化的
+    ``dsa_signal_score``。后者本身就是六个技术子分的总分，不能再次求和。
+    """
+    explicit = result.get("final_score")
+    llm = result.get("llm_analysis") or {}
+    value = explicit if explicit is not None else llm.get("final_score")
+    if value is None:
+        value = (result.get("scoring") or {}).get("dsa_signal_score")
+    if value is None:
+        return None
+    try:
+        return round(max(0.0, min(100.0, float(value))), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _evaluate_single_stock_rule_signals(
+    stock: dict[str, Any],
+    selected_skills: list[dict[str, Any]],
+    snapshot: dict[str, Any],
+) -> dict[str, dict[str, Any] | None]:
+    """使用正式推荐管线的 StrategyRegistry 逐 Skill 计算规则信号。"""
+    from app.engine.strategy import StrategyContext, build_registry_from_skills
+
+    registry = build_registry_from_skills([item["skill"] for item in selected_skills])
+    context = StrategyContext(main_industries=list(snapshot.get("main_industries") or []))
+    signals: dict[str, dict[str, Any] | None] = {}
+    for selected in selected_skills:
+        skill = selected["skill"]
+        signal = registry.get(skill.skill_id).evaluate(stock, context) if skill.executable else None
+        if signal is not None:
+            signal["weight"] = selected["weight"]
+        signals[skill.skill_id] = signal
+    return signals
+
+
 def _run_preset_skill_analysis(
     db: Session,
     code: str,
@@ -363,7 +402,7 @@ def _run_preset_skill_analysis(
 ) -> dict[str, Any]:
     """预设多 skill 聚合评分：加载预设 skills → 并发 LLM 审查 → 聚合评分。
 
-    复用推荐管线的 run_skill_reviews + aggregate，让单股票也能走完整评分流程。
+    复用推荐管线的规则评估、run_skill_reviews 与卡片构建入口。
     """
     import asyncio
 
@@ -371,9 +410,14 @@ def _run_preset_skill_analysis(
         from app.core.config import get_settings
         from app.engine.skill_loader import load_skills
         from app.agents.review_runner import run_skill_reviews
-        from app.engine.agent_skill_runner import agent_only_signal
-        from app.engine.aggregator import aggregate
-        from app.services.workbench_service import _select_skills_for_run
+        from app.services.feature_builder import market_regime_score
+        from app.services.research_context import build_research_context
+        from app.services.workbench_service import (
+            _build_recommendation_card,
+            _load_calibrated_agg_weights,
+            _prelim_rule_score,
+            _select_skills_for_run,
+        )
 
         settings = get_settings()
         all_skills = load_skills(settings.skills_dir)
@@ -395,13 +439,13 @@ def _run_preset_skill_analysis(
         if not selected_skills:
             return {"status": "error", "error": f"预设 {preset.name} 没有可运行的 Skill"}
 
-        # 构建 rule_signals_by_skill（用基础短线策略特征作为所有 skill 的规则信号）
-        rule_signal = {
-            "dsa_signal_score": stock_result.get("dsa_signal_score"),
-            "trend_status": stock_result.get("trend_status"),
-            "macd_status": stock_result.get("macd_status"),
-        }
-        rule_signals_by_skill = {s["skill_id"]: rule_signal for s in selected_skills}
+        # 与正式推荐管线一致：ResearchContext → StrategyRegistry → strategy.yaml
+        # 逐 Skill 规则信号。旧实现把同一个 dsa 字典冒充所有策略信号，导致规则层失真。
+        research_context = build_research_context(stock_result, snapshot)
+        pipeline_stock = research_context.to_skill_input()
+        rule_signals_by_skill = _evaluate_single_stock_rule_signals(
+            pipeline_stock, selected_skills, snapshot,
+        )
 
         # 并发调用所有 Skill Agent
         skills_list = [s["skill"] for s in selected_skills]
@@ -409,29 +453,13 @@ def _run_preset_skill_analysis(
 
         t0 = time.perf_counter()
         skill_reviews = asyncio.run(run_skill_reviews(
-            stock=stock_result,
+            stock=pipeline_stock,
             skills=skills_list,
             snapshot=snapshot,
             rule_signals_by_skill=rule_signals_by_skill,
             session_id=session_id,
         ))
         elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
-
-        # 构建 signals（用 agent_only_signal，因为没有完整策略规则引擎）
-        signals: list[dict[str, Any]] = []
-        for r in skill_reviews:
-            sid = r.get("skill_id")
-            review = r.get("review")
-            if review is None:
-                continue
-            skill_obj = skill_map.get(sid)
-            if skill_obj is None:
-                continue
-            signal = agent_only_signal(skill_obj, stock_result, review)
-            selected = next((s for s in selected_skills if s["skill_id"] == sid), None)
-            if selected:
-                signal["weight"] = selected["weight"]
-            signals.append(signal)
 
         # 计算 agent_review_score（置信度加权平均）
         valid_reviews = [r for r in skill_reviews if r.get("review") and not r.get("error")]
@@ -442,15 +470,24 @@ def _run_preset_skill_analysis(
         else:
             agent_review_score = 50.0
 
-        # 聚合评分（复用推荐管线的 aggregate）
-        market_score = 50.0  # 单股票分析无完整市场快照，用中性值
-        card = aggregate(
-            stock=stock_result,
-            signals=signals,
-            market_score=market_score,
-            agent_review_score=round(agent_review_score, 2),
+        # 复用正式推荐管线的卡片构建入口：真实市场分、校准权重、规则信号
+        # 与 Agent 审查的融合方式均保持一致。
+        entry = {
+            "prelim_score": _prelim_rule_score(pipeline_stock, rule_signals_by_skill, snapshot),
+            "context": research_context,
+            "rule_signals": rule_signals_by_skill,
+            "review_skill_ids": [item["skill_id"] for item in selected_skills],
+            "stock": pipeline_stock,
+        }
+        card = _build_recommendation_card(
+            entry,
+            skill_reviews,
+            skill_map=skill_map,
+            selected_skills=selected_skills,
+            market_score=market_regime_score(snapshot) or 50.0,
             risk_template=preset.risk_template,
-            market_snapshot=snapshot,
+            calibrated_weights=_load_calibrated_agg_weights(db),
+            snapshot=snapshot,
         )
 
         # 收集 API 消耗
@@ -499,13 +536,20 @@ def _run_preset_skill_analysis(
 def _run_llm_analysis(
     db: Session, code: str, stock_result: dict[str, Any], skill_id: str, snapshot: dict[str, Any] | None = None
 ) -> dict[str, Any]:
-    """触发 LLM skill agent 分析单只股票。消耗 API 额度。"""
+    """触发单 Skill 深审，并用正式推荐管线聚合最终分。"""
     import asyncio
 
     try:
-        from app.agents.agno_skill_agent import run_skill_agent_direct
+        from app.agents.review_runner import run_skill_reviews
         from app.engine.skill_loader import load_skills
         from app.core.config import get_settings
+        from app.services.feature_builder import market_regime_score
+        from app.services.research_context import build_research_context
+        from app.services.workbench_service import (
+            _build_recommendation_card,
+            _load_calibrated_agg_weights,
+            _prelim_rule_score,
+        )
 
         settings = get_settings()
         all_skills = load_skills(settings.skills_dir)
@@ -517,22 +561,50 @@ def _run_llm_analysis(
         # 避免 LLM 拿 mock regime=未知 影响判断 + cache trade_date=NULL 无法追溯。
         if snapshot is None:
             snapshot = {"sample_count": 1, "breadth": {"regime": "未知"}, "main_industries": []}
-        rule_signal = {
-            "dsa_signal_score": stock_result.get("dsa_signal_score"),
-            "trend_status": stock_result.get("trend_status"),
-            "macd_status": stock_result.get("macd_status"),
-        }
+        selected_skills = [{
+            "skill_id": skill.skill_id,
+            "name": skill.name,
+            "weight": 1.0,
+            "skill": skill,
+        }]
+        research_context = build_research_context(stock_result, snapshot)
+        pipeline_stock = research_context.to_skill_input()
+        rule_signals_by_skill = _evaluate_single_stock_rule_signals(
+            pipeline_stock, selected_skills, snapshot,
+        )
+        rule_signal = rule_signals_by_skill.get(skill_id)
 
         t0 = time.perf_counter()
-        review = asyncio.run(run_skill_agent_direct(
-            skill=skill,
-            stock=stock_result,
+        skill_reviews = asyncio.run(run_skill_reviews(
+            stock=pipeline_stock,
+            skills=[skill],
             snapshot=snapshot,
-            rule_signal=rule_signal,
+            rule_signals_by_skill=rule_signals_by_skill,
+            session_id=f"single-stock-{code}-{skill_id}",
         ))
         elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
 
-        raw = review.model_dump() if hasattr(review, "model_dump") else (review if isinstance(review, dict) else {})
+        review_result = skill_reviews[0] if skill_reviews else {}
+        raw = review_result.get("review") or {}
+        entry = {
+            "prelim_score": _prelim_rule_score(pipeline_stock, rule_signals_by_skill, snapshot),
+            "context": research_context,
+            "rule_signals": rule_signals_by_skill,
+            "review_skill_ids": [skill_id],
+            "stock": pipeline_stock,
+        }
+        card = _build_recommendation_card(
+            entry,
+            skill_reviews,
+            skill_map={skill_id: skill},
+            selected_skills=selected_skills,
+            market_score=market_regime_score(snapshot) or 50.0,
+            risk_template="balanced",
+            calibrated_weights=_load_calibrated_agg_weights(db),
+            snapshot=snapshot,
+        )
+        rule_score = float((rule_signal or {}).get("score") or 0.0)
+        final_score = round(float(card.get("final_score") or 0.0), 2)
         # 收集 API 消耗
         try:
             from app.agents.agno_skill_agent import drain_api_costs
@@ -540,22 +612,23 @@ def _run_llm_analysis(
         except Exception:
             api_costs = []
         return {
-            "status": "ok",
+            "status": "fallback" if review_result.get("error") or not raw else "ok",
+            "error": review_result.get("error"),
             "elapsed_ms": elapsed_ms,
             "skill_id": skill_id,
             "score": raw.get("score"),
             "score_delta": round(float(raw.get("score", 50)) - 50.0, 2),
-            # 规则层基础短线策略评分作为基线，让用户能看到 LLM 减分/加分幅度
-            # T8 第70轮验证：LLM 净价值 +84.24%（过滤 27 笔 WR=14.8% 的垃圾推荐）
-            "rule_score": stock_result.get("scoring", {}).get("dsa_signal_score") if isinstance(stock_result.get("scoring"), dict) else stock_result.get("dsa_signal_score"),
-            "llm_adjustment": round(float(raw.get("score", 50)) - float(stock_result.get("scoring", {}).get("dsa_signal_score", 50) if isinstance(stock_result.get("scoring"), dict) else stock_result.get("dsa_signal_score", 50)), 2),
-            "stance": raw.get("stance"),
-            "confidence": raw.get("confidence"),
-            "summary": raw.get("summary"),
-            "action": raw.get("action"),
+            "rule_score": round(rule_score, 2),
+            "final_score": final_score,
+            "component_scores": card.get("component_scores", {}),
+            "llm_adjustment": round(final_score - rule_score, 2),
+            "stance": raw.get("stance") or ("support" if rule_score >= 72 else "neutral_support" if rule_score >= 60 else "neutral"),
+            "confidence": raw.get("confidence") if raw else 0.25,
+            "summary": raw.get("summary") or review_result.get("error") or "Skill Agent 暂不可用，已按正式规则信号聚合",
+            "action": raw.get("action") or "观察",
             "market_regime_judgment": raw.get("market_regime_judgment"),
             "supports": raw.get("evidence") or raw.get("supports") or [],
-            "risks": raw.get("risks") or [],
+            "risks": raw.get("risks") or card.get("risk_flags") or [],
             "api_costs": api_costs,
             # 估算用量（chars/1.8 回退，用于 provider 未返回 usage 时的展示）
             "total_tokens_est": sum((c.get("prompt_tokens_est") or 0) + (c.get("completion_tokens_est") or 0) for c in api_costs),
