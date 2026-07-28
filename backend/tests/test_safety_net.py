@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Formal Run 安全网测试：断档检测 + 补跑逻辑。"""
+"""Formal Run 安全网测试：跨交易日断档检测 + 可恢复补跑。"""
+import asyncio
+import json
 import os
 import sys
+from types import SimpleNamespace
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.services.scheduler_service import (
-    check_formal_recommendation_gap,
-    SAFETY_NET_MAX_ATTEMPTS,
-)
+from app.services import scheduler_service
+from app.services.scheduler_service import check_formal_recommendation_gap
 
 
 def test_check_gap_no_runs(db):
@@ -27,25 +28,145 @@ def test_check_gap_no_runs(db):
 
 
 def test_check_gap_already_has_recommendations(db):
-    """已有成功推荐 → needs_retry=False。
-
-    当前 DB 状态：7/7 有 1 条 completed formal 推荐。
-    """
+    """已有 completed formal 的日期不会因为推荐数为 0 而反复重跑。"""
     result = check_formal_recommendation_gap(db)
-    # 7/7 已有 completed formal rec_n=1，所以应该不需要重试
-    # 但如果最近 5 天的最新 trade_date 没有成功推荐，则需要
     assert isinstance(result["needs_retry"], bool)
-    if result["ok_count"] > 0:
+    if not result["missing_dates"]:
         assert result["needs_retry"] is False
-        assert "已有" in result["reason"]
+        assert "completed formal" in result["reason"]
 
 
-def test_check_gap_max_attempts(db):
-    """已尝试 >= MAX_ATTEMPTS 次 → needs_retry=False。"""
+class _Rows:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+
+class _GapDb:
+    def __init__(self, trade_dates, run_rows):
+        self._responses = iter((_Rows([(d,) for d in trade_dates]), _Rows(run_rows)))
+        self.statements = []
+
+    def execute(self, statement, params=None):
+        self.statements.append((str(statement), params))
+        return next(self._responses)
+
+
+def test_check_gap_finds_older_hole_after_newer_success(monkeypatch):
+    """7/28 成功不能遮住 7/27 缺口；按最早缺口收敛。"""
+    monkeypatch.setattr(scheduler_service, "_latest_allowed_bar_date", lambda: "2026-07-28")
+    db = _GapDb(
+        ["2026-07-28", "2026-07-27", "2026-07-24", "2026-07-23", "2026-07-22"],
+        [
+            ("2026-07-28", 1, 1, 0, 3),
+            ("2026-07-24", 1, 0, 0, 1),
+            ("2026-07-23", 1, 1, 0, 1),
+            ("2026-07-22", 1, 1, 0, 1),
+        ],
+    )
+
     result = check_formal_recommendation_gap(db)
-    if result["total_count"] >= SAFETY_NET_MAX_ATTEMPTS and result["ok_count"] == 0:
-        assert result["needs_retry"] is False
-        assert "放弃" in result["reason"]
+
+    assert result["needs_retry"] is True
+    assert result["trade_date"] == "2026-07-27"
+    assert result["missing_dates"] == ["2026-07-27"]
+    assert "run_mode='formal'" in db.statements[1][0]
+
+
+def test_check_gap_accepts_completed_protective_zero_and_suppresses_inflight(monkeypatch):
+    monkeypatch.setattr(scheduler_service, "_latest_allowed_bar_date", lambda: "2026-07-28")
+    complete_db = _GapDb(
+        ["2026-07-28"],
+        [("2026-07-28", 1, 0, 0, 1)],
+    )
+    complete = check_formal_recommendation_gap(complete_db)
+    assert complete["needs_retry"] is False
+    assert complete["productive_count"] == 0
+
+    inflight_db = _GapDb(
+        ["2026-07-28"],
+        [("2026-07-28", 0, 0, 1, 4)],
+    )
+    inflight = check_formal_recommendation_gap(inflight_db)
+    assert inflight["needs_retry"] is False
+    assert "在途" in inflight["reason"]
+
+
+def test_safety_net_replays_target_date_and_waits_for_terminal_state(monkeypatch):
+    check = {
+        "needs_retry": True,
+        "trade_date": "2026-07-27",
+        "ok_count": 0,
+        "total_count": 1,
+        "missing_dates": ["2026-07-27"],
+        "reason": "missing",
+    }
+    task = SimpleNamespace(payload_json=json.dumps({
+        "preset_id": "preset_formal_opening",
+        "data_source": "local_pool_preferred",
+        "skip_aux_refresh": False,
+        "run_mode": "formal",
+    }))
+
+    class _Db:
+        def get(self, _model, _task_id):
+            return task
+
+    captured = {}
+
+    async def fake_run(_db, payload):
+        captured["payload"] = dict(payload)
+        return {"related_run_id": "run_recovery", "queued": True}
+
+    async def fake_wait(_db, run_id, **kwargs):
+        captured["wait"] = (run_id, kwargs)
+        return {"status": "completed", "recommended_count": 0}
+
+    monkeypatch.setattr(scheduler_service, "check_formal_recommendation_gap", lambda _db: check)
+    monkeypatch.setattr(scheduler_service, "_run_recommendation", fake_run)
+    monkeypatch.setattr(scheduler_service, "_wait_for_recommendation_run", fake_wait)
+
+    result = asyncio.run(scheduler_service._safety_net_run(_Db(), {}))
+
+    assert captured["payload"]["trade_date_override"] == "2026-07-27"
+    assert captured["payload"]["data_source"] == "local_pool"
+    assert captured["payload"]["skip_aux_refresh"] is True
+    assert captured["wait"][0] == "run_recovery"
+    assert result["status"] == "completed"
+    assert result["recommended_count"] == 0
+
+
+def test_safety_net_failed_worker_converges_to_failed_result(monkeypatch):
+    check = {
+        "needs_retry": True,
+        "trade_date": "2026-07-27",
+        "ok_count": 0,
+        "total_count": 2,
+        "missing_dates": ["2026-07-27"],
+        "reason": "missing",
+    }
+
+    class _Db:
+        def get(self, _model, _task_id):
+            return None
+
+    async def fake_run(_db, _payload):
+        return {"related_run_id": "run_failed", "queued": True}
+
+    async def fake_wait(_db, _run_id, **_kwargs):
+        return {"status": "failed", "error": "worker boom", "recommended_count": 0}
+
+    monkeypatch.setattr(scheduler_service, "check_formal_recommendation_gap", lambda _db: check)
+    monkeypatch.setattr(scheduler_service, "_run_recommendation", fake_run)
+    monkeypatch.setattr(scheduler_service, "_wait_for_recommendation_run", fake_wait)
+
+    result = asyncio.run(scheduler_service._safety_net_run(_Db(), {}))
+
+    assert result["status"] == "failed"
+    assert result["error"] == "worker boom"
+    assert scheduler_service._task_result_error(result) == "worker boom"
 
 
 def test_safety_net_task_type_constant():

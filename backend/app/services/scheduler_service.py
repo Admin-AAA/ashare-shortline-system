@@ -48,6 +48,9 @@ TASK_TYPE_OUTCOME_LABEL = "outcome_label"
 MANUAL_PRESET_MATRIX_TASK_ID = "manual_preset_matrix_run"
 MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID = "manual_data_health_remediation"
 SAFETY_NET_TASK_ID = "formal_run_safety_net"
+# Kept as a compatibility/export constant for callers that display the old
+# retry budget.  Missing trading sessions are no longer abandoned permanently
+# after this many failed runs; the safety net suppresses only an in-flight retry.
 SAFETY_NET_MAX_ATTEMPTS = 3
 POSTCLOSE_PIPELINE_TASK_ID = "post_sync_formal_recommendation"
 # 工作日必须写 mon-fri 而不是数字 1-5：APScheduler 的 day_of_week 是 0=Monday，
@@ -458,6 +461,7 @@ def _execute_task(task_id: str, *, force: bool = False, trigger_source: str = "s
             db,
             task_run_id,
             status=_task_result_status(result),
+            error=_task_result_error(result),
             summary=str(result.get("summary_text") or ""),
             result=result,
         )
@@ -961,6 +965,26 @@ def _task_result_status(result: dict | None) -> str:
     if any(_action_summary_count(result.get(key), "empty_count") for key in ("daily_kbar_batch", "health_remediation", "auxiliary")):
         return "partial_completed"
     return "completed"
+
+
+def _task_result_error(result: dict | None) -> str | None:
+    """Preserve a returned failure's cause in scheduler lifecycle columns.
+
+    Pipeline stages intentionally return structured ``status=failed`` results so
+    completed sync/readiness evidence is not lost.  Treating that as a normal
+    return previously left ``scheduled_tasks.last_error`` empty, making the next
+    recovery pass unable to distinguish a data gate from a worker timeout.
+    """
+    if _task_result_status(result) not in {
+        "failed",
+        "partial_failed",
+        "diagnosis_failed",
+        "post_diagnosis_failed",
+    }:
+        return None
+    if not isinstance(result, dict):
+        return None
+    return str(result.get("error") or result.get("summary_text") or "调度任务返回失败")
 
 
 def _sync_step_summary(label: str, result: dict) -> str:
@@ -1658,35 +1682,92 @@ async def _run_recommendation(db, payload: dict) -> dict:
 # ═══════════════════════════════════════════════════════════════
 
 def check_formal_recommendation_gap(db) -> dict:
-    """检查最近交易日是否有成功的 formal 推荐（completed + recommended_count>0）。
+    """检查最近 5 个已收盘交易日是否都有 completed formal。
 
-    返回 {needs_retry, trade_date, ok_count, total_count, reason}。
+    旧实现只分组读取 ``recommendation_runs`` 的最新一个 ``trade_date``，因此后一天
+    一旦有成功运行，夹在中间的历史缺口就永久不可见；SQL 还未限定 ``run_mode``，
+    experiment/backtest 也可能误阻止 formal 补跑。现在以 ``daily_kbars`` 的真实交易日
+    为基准逐日核对，并返回最早缺口供历史只读行情重放。completed 的保护性 0 推荐也
+    视为 pipeline 完成，质量原因由 filter audit 门禁负责，不通过反复重跑刷推荐数量。
     """
     from sqlalchemy import text as _text
-    r = db.execute(_text("""
-        SELECT trade_date,
-               SUM(CASE WHEN status='completed' AND COALESCE(recommended_count,0) > 0 THEN 1 ELSE 0 END) as ok_count,
-               COUNT(*) as total_count
-        FROM recommendation_runs
-        WHERE trade_date >= DATE_SUB(CURDATE(), INTERVAL 5 DAY)
-        GROUP BY trade_date
+    latest_allowed = _latest_allowed_bar_date()
+    trade_dates = [str(r[0]) for r in db.execute(_text("""
+        SELECT DISTINCT trade_date
+        FROM daily_kbars
+        WHERE trade_date <= :latest_allowed
         ORDER BY trade_date DESC
-        LIMIT 1
-    """)).fetchone()
-
-    if not r:
+        LIMIT 5
+    """), {"latest_allowed": latest_allowed}).fetchall()]
+    if not trade_dates:
         return {"needs_retry": True, "trade_date": None, "ok_count": 0, "total_count": 0,
-                "reason": "最近 5 天无 formal run"}
+                "missing_dates": [], "reason": "最近无已收盘交易日数据"}
 
-    trade_date, ok_count, total_count = str(r[0]), int(r[1] or 0), int(r[2] or 0)
-    if ok_count > 0:
-        return {"needs_retry": False, "trade_date": trade_date, "ok_count": ok_count,
-                "total_count": total_count, "reason": f"{trade_date} 已有 {ok_count} 次成功推荐"}
-    if total_count >= SAFETY_NET_MAX_ATTEMPTS:
-        return {"needs_retry": False, "trade_date": trade_date, "ok_count": ok_count,
-                "total_count": total_count, "reason": f"{trade_date} 已尝试 {total_count} 次，放弃"}
-    return {"needs_retry": True, "trade_date": trade_date, "ok_count": ok_count,
-            "total_count": total_count, "reason": f"{trade_date} 无成功推荐（{total_count} 次尝试）"}
+    run_rows = db.execute(_text("""
+        SELECT trade_date,
+               SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS completed_count,
+               SUM(CASE WHEN status='completed' AND COALESCE(recommended_count,0)>0 THEN 1 ELSE 0 END) AS productive_count,
+               SUM(CASE WHEN status IN ('queued','running') THEN 1 ELSE 0 END) AS inflight_count,
+               COUNT(*) AS total_count
+        FROM recommendation_runs
+        WHERE run_mode='formal'
+          AND trade_date IN (
+              SELECT d.trade_date FROM (
+                  SELECT DISTINCT trade_date FROM daily_kbars
+                  WHERE trade_date <= :latest_allowed
+                  ORDER BY trade_date DESC LIMIT 5
+              ) d
+          )
+        GROUP BY trade_date
+    """), {"latest_allowed": latest_allowed}).fetchall()
+    by_date = {
+        str(r[0]): {
+            "completed_count": int(r[1] or 0),
+            "productive_count": int(r[2] or 0),
+            "inflight_count": int(r[3] or 0),
+            "total_count": int(r[4] or 0),
+        }
+        for r in run_rows
+    }
+    missing_dates = [d for d in trade_dates if by_date.get(d, {}).get("completed_count", 0) == 0]
+    if not missing_dates:
+        latest = trade_dates[0]
+        stats = by_date.get(latest, {})
+        return {
+            "needs_retry": False,
+            "trade_date": latest,
+            "ok_count": int(stats.get("completed_count", 0)),
+            "productive_count": int(stats.get("productive_count", 0)),
+            "total_count": int(stats.get("total_count", 0)),
+            "missing_dates": [],
+            "reason": "最近 5 个交易日均有 completed formal",
+        }
+
+    # Oldest first: one invocation repairs one session, so repeated startup/cron
+    # passes converge without leaving an older hole behind newer successful days.
+    target = missing_dates[-1]
+    target_stats = by_date.get(target, {})
+    inflight = int(target_stats.get("inflight_count", 0))
+    total = int(target_stats.get("total_count", 0))
+    if inflight:
+        return {
+            "needs_retry": False,
+            "trade_date": target,
+            "ok_count": 0,
+            "productive_count": 0,
+            "total_count": total,
+            "missing_dates": missing_dates,
+            "reason": f"{target} formal 补跑已在途（{inflight} 个），跳过重复派发",
+        }
+    return {
+        "needs_retry": True,
+        "trade_date": target,
+        "ok_count": 0,
+        "productive_count": 0,
+        "total_count": total,
+        "missing_dates": missing_dates,
+        "reason": f"最近 5 个交易日缺 formal：{','.join(missing_dates)}；先补 {target}",
+    }
 
 
 async def _safety_net_run(db, payload: dict) -> dict:
@@ -1729,6 +1810,15 @@ async def _safety_net_run(db, payload: dict) -> dict:
     if not check["needs_retry"]:
         logger.info("安全网跳过: %s", check["reason"])
         return {"skipped": True, **check, "outcome": outcome_result, "summary_text": f"安全网跳过: {check['reason']}"}
+    if not check.get("trade_date"):
+        return {
+            "status": "failed",
+            "skipped": False,
+            **check,
+            "outcome": outcome_result,
+            "error": "无已收盘交易日，无法派发 formal 补跑",
+            "summary_text": "formal 安全网失败：无已收盘交易日数据",
+        }
 
     logger.info("安全网触发补跑: %s", check["reason"])
     # 复用 post_sync_formal_recommendation 的 payload，确保参数一致
@@ -1746,9 +1836,63 @@ async def _safety_net_run(db, payload: dict) -> dict:
             "skip_aux_refresh": True,
         }
     run_payload["run_name"] = f"安全网补跑 {datetime.now(timezone.utc).replace(tzinfo=None).strftime('%m%d_%H%M')}"
+    # Historical recovery must read the target session's persisted quotes/bars,
+    # never today's pool.  MarketDataStage treats trade_date_override as read-only
+    # and disables upstream refresh for that snapshot.
+    run_payload["trade_date_override"] = check["trade_date"]
+    run_payload["data_source"] = DATA_SOURCE_LOCAL_POOL
+    run_payload["skip_aux_refresh"] = True
+    run_payload["run_mode"] = "formal"
 
     result = await _run_recommendation(db, run_payload)
-    return {"skipped": False, **check, **result}
+    run_id = str(result.get("related_run_id") or "")
+    if not run_id:
+        return {
+            "status": "failed",
+            "skipped": False,
+            **check,
+            **result,
+            "error": "formal 安全网未返回关联 Run ID",
+            "summary_text": "formal 安全网补跑派发失败：未返回关联 Run ID",
+        }
+    try:
+        final_run = await _wait_for_recommendation_run(
+            db,
+            run_id,
+            timeout_seconds=int(run_payload.get("recommendation_wait_timeout_seconds") or 3600),
+        )
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "skipped": False,
+            **check,
+            **result,
+            "related_run_id": run_id,
+            "error": str(exc),
+            "summary_text": f"formal 安全网补跑 {check['trade_date']} 未收敛：{str(exc)[:120]}",
+        }
+    if str(final_run.get("status")) != "completed":
+        error = str(final_run.get("error") or f"Run 最终状态 {final_run.get('status')}")
+        return {
+            "status": "failed",
+            "skipped": False,
+            **check,
+            **result,
+            "related_run_id": run_id,
+            "final_run": final_run,
+            "error": error,
+            "summary_text": f"formal 安全网补跑 {check['trade_date']} 失败：{error[:120]}",
+        }
+    return {
+        "status": "completed",
+        "skipped": False,
+        **check,
+        **result,
+        "related_run_id": run_id,
+        "final_run": final_run,
+        "recommended_count": int(final_run.get("recommended_count") or 0),
+        "summary_text": f"formal 安全网已补齐 {check['trade_date']}，Run {run_id} completed",
+    }
 
 
 # ═══════════════════════════════════════════════════════════════
