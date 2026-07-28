@@ -94,7 +94,7 @@ export const EXIT_REASON_LABELS: Record<string, string> = {
   stop_loss_intraday_both_hit: "同日触止盈止损（保守按止损）",
   horizon: "持有到观察期结束",
   horizon_close: "持有到观察期结束",
-  horizon_close_t1_locked: "数据仅至入场日，待今日更新",
+  horizon_close_t1_locked: "待今日收盘结算",
   limit_down_locked_horizon_mark: "一字跌停或无流动性（期末标记）",
   horizon_close_after_locked_limit_down: "跌停后递延至观察期结束",
   trailing_stop_hit: "移动止盈触发",
@@ -195,6 +195,11 @@ export function outcomeTone(value: unknown): Tone {
   if (raw === "failed") return "danger";
   if (raw === "provisional") return "warning";
   return "neutral";
+}
+
+export function isOutcomeSettled(value: unknown) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  return raw === "success" || raw === "failed" || raw === "missed";
 }
 
 export function businessStatusLabel(value: unknown, fallback = "状态待确认") {

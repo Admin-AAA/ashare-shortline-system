@@ -59,7 +59,7 @@ def realtime_pnl(
     refresh: bool = Query(default=False, description="true 跳过 20s 缓存强制重新拉取 rt_k"),
     db: Session = Depends(get_db),
 ):
-    """未结算（pending）推荐的实盘实时盈亏。
+    """未最终结算（pending / provisional）推荐的实盘实时盈亏。
 
     用 rt_k 当日实时 OHLC 合成当日临时日K，复用 outcome 结算同款 _resolve_entry
     判定入场价，以 rt_k 现价算浮盈。纯展示，不落库、不改真实结算。

@@ -1,6 +1,6 @@
-"""未结算推荐实时盈亏（实盘计算）。
+"""未最终结算推荐实时盈亏（实盘计算）。
 
-对 pending（未结算）推荐，用 rt_k 当日实时 OHLC 合成一根当日临时日K，
+对 pending / provisional（未最终结算）推荐，用 rt_k 当日实时 OHLC 合成一根当日临时日K，
 复用 outcome 结算同款的 ``_resolve_entry`` 判定入场价（含买点命中/开盘回退/
 gap 过滤/一字跌停 block 等边界），再以 rt_k 现价算浮盈。**纯展示，不落库、
 不改真实结算**——盘后 ``label_pending_outcomes`` 口径不受影响。
@@ -22,6 +22,7 @@ from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, 
 from app.services.outcome_simulation import (
     MAX_ENTRY_GAP_PCT,
     OUTCOME_PENDING,
+    OUTCOME_PROVISIONAL,
     _loads,
     _resolve_entry,
 )
@@ -56,7 +57,7 @@ def _exchange_from_code(code: str) -> str:
 
 
 def list_pending_realtime_pnl(db: Session, *, use_cache: bool = True) -> dict[str, Any]:
-    """对全部 pending 推荐实盘计算实时浮盈，返回按 run/trade_date 分组前的扁平列表。
+    """对全部未最终结算推荐实盘计算实时浮盈，返回按 run/trade_date 分组前的扁平列表。
 
     返回::
         {
@@ -106,7 +107,7 @@ def list_pending_realtime_pnl(db: Session, *, use_cache: bool = True) -> dict[st
 
 
 def _load_pending_recs(db: Session) -> list[Recommendation]:
-    """全部正式 run 的 pending 推荐（无 outcome 行 或 outcome_label=pending）。"""
+    """全部正式 run 的未最终结算推荐（无 outcome 行、pending 或 provisional）。"""
     stmt = (
         select(Recommendation)
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
@@ -118,7 +119,7 @@ def _load_pending_recs(db: Session) -> list[Recommendation]:
             RecommendationRun.run_mode == "formal",
             or_(
                 RecommendationOutcome.recommendation_id.is_(None),
-                RecommendationOutcome.outcome_label == OUTCOME_PENDING,
+                RecommendationOutcome.outcome_label.in_((OUTCOME_PENDING, OUTCOME_PROVISIONAL)),
             ),
         )
         .order_by(Recommendation.trade_date.desc(), Recommendation.final_score.desc())
