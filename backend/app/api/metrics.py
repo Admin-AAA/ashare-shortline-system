@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api/metrics", tags=["metrics"])
 
 
 # 时间窗口通用参数（每个端点必须用独立 Query() 实例，FastAPI 不允许复用同一对象）。
-# - window_days: 滚动窗口天数（如 30/90）。设置后自动 start=today-N, end=today-SETTLE_LAG(20天)，
+# - window_days: 滚动窗口天数（如 30/90）。设置后自动 start=today-N, end=today-SETTLE_LAG，
 #   保证窗口内推荐均已走完 horizon 结算，避免 pending 污染样本。
 # - start_date / end_date: 显式 ISO 日期（YYYY-MM-DD），优先级低于 window_days。
 #   不传则统计全部历史累计。
@@ -48,10 +48,14 @@ def overview(
 @router.get("/d-net")
 def d_net(
     db: Session = Depends(get_db),
-    window_days: int = Query(default=10, ge=1, le=365, description="滚动窗口交易日数，默认 10"),
+    window_days: int | None = _window_days_q(),
+    start_date: str | None = _start_date_q(),
+    end_date: str | None = _end_date_q(),
 ):
     """D 项净成本 + 板块(20cm/10cm)分解（北极星 D 项 observability）。"""
-    return board_and_net_breakdown(db, window_trade_days=window_days)
+    return board_and_net_breakdown(
+        db, window_days=window_days, start_date=start_date, end_date=end_date,
+    )
 
 
 @router.get("/by-strategy")

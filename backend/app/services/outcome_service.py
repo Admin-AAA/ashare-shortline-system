@@ -76,6 +76,11 @@ BREAKDOWN_HORIZON_DAYS = (3, 5, 10)
 # （曾出现 window_days=30 时有效区间被截到仅 10 天，最近补跑的策略样本全部消失）。
 SETTLE_LAG_DAYS = 7
 
+# 产品侧“正式表现”的唯一数据范围。实验补跑仍可由调用方显式传入
+# run_mode=("formal", "experiment")，但不得默认混入胜率/KPI。
+OFFICIAL_RUN_MODE = "formal"
+OFFICIAL_RECOMMENDATION_PREFIX = "rec_"
+
 
 def _resolve_window(
     window_days: int | None = None,
@@ -466,10 +471,17 @@ def overview_metrics(
     window_days: int | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
+    live_only: bool = True,
 ) -> dict[str, Any]:
     start, end = _resolve_window(window_days, start_date, end_date)
-    key = f"overview:{start or ''}:{end or ''}"
-    return _cached(key, lambda: _overview_metrics(db, start, end, window_days))
+    key = f"overview:{start or ''}:{end or ''}:{run_mode or 'all'}:{int(live_only)}"
+    return _cached(
+        key,
+        lambda: _overview_metrics(
+            db, start, end, window_days, run_mode=run_mode, live_only=live_only,
+        ),
+    )
 
 
 def _overview_metrics(
@@ -477,8 +489,16 @@ def _overview_metrics(
     start_date: str | None = None,
     end_date: str | None = None,
     window_days: int | None = None,
+    run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
+    live_only: bool = True,
 ) -> dict[str, Any]:
-    rows = _scoped_recommendation_rows(db, start_date, end_date)
+    rows = _scoped_recommendation_rows(
+        db,
+        start_date,
+        end_date,
+        run_mode=run_mode,
+        live_only=live_only,
+    )
     total_recs = len(rows)
 
     # labeled = 已结算样本（success/failed/missed）；排除 provisional（数据仅至入场日的临时态，
@@ -605,11 +625,17 @@ def metrics_by_strategy(
     window_days: int | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
-    run_mode: str | tuple[str, ...] | list[str] | None = None,
+    run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
+    live_only: bool = True,
 ) -> list[dict[str, Any]]:
     start, end = _resolve_window(window_days, start_date, end_date)
-    key = f"by_strategy:{start or ''}:{end or ''}:{run_mode or 'all'}"
-    return _cached(key, lambda: _metrics_by_strategy(db, start, end, window_days, run_mode=run_mode))
+    key = f"by_strategy:{start or ''}:{end or ''}:{run_mode or 'all'}:{int(live_only)}"
+    return _cached(
+        key,
+        lambda: _metrics_by_strategy(
+            db, start, end, window_days, run_mode=run_mode, live_only=live_only,
+        ),
+    )
 
 
 def exposure_sample_counts(
@@ -658,9 +684,12 @@ def _metrics_by_strategy(
     start_date: str | None = None,
     end_date: str | None = None,
     window_days: int | None = None,
-    run_mode: str | tuple[str, ...] | list[str] | None = None,
+    run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
+    live_only: bool = True,
 ) -> list[dict[str, Any]]:
-    rows = _scoped_recommendation_rows(db, start_date, end_date, run_mode=run_mode)
+    rows = _scoped_recommendation_rows(
+        db, start_date, end_date, run_mode=run_mode, live_only=live_only,
+    )
     benchmark_by_rec = _benchmark_returns_by_recommendation(db, rows)
     horizon_records = _horizon_metric_records_by_recommendation(db, rows)
     registry = {row.skill_id: row for row in db.scalars(select(SkillRegistry)).all()}
@@ -729,35 +758,38 @@ def strategy_perf_summary(
     """
     if not strategy_id:
         return None
-    start, _ = _resolve_window(window_days, None, None)
-    # JSON_CONTAINS 在 MySQL 上对字符串数组可行；strategy_id 来自 bucket/skill_breakdown
-    stmt = (
-        select(
-            Recommendation.recommendation_id,
-            Recommendation.trade_date,
-            RecommendationOutcome.outcome_label,
-            RecommendationOutcome.executed_return,
-        )
-        .select_from(Recommendation)
-        .join(RecommendationRun, Recommendation.run_id == RecommendationRun.run_id)
-        .outerjoin(RecommendationOutcome, Recommendation.recommendation_id == RecommendationOutcome.recommendation_id)
-        .where(
-            Recommendation.skill_breakdown_json.like(f'%"{strategy_id}"%'),
-        )
+    start, end = _resolve_window(window_days, None, None)
+    scoped_rows = _scoped_recommendation_rows(
+        db,
+        start,
+        end,
+        run_mode=OFFICIAL_RUN_MODE,
+        live_only=True,
     )
-    if start:
-        stmt = stmt.where(Recommendation.recommended_at >= start)
-    rows = db.execute(stmt).all()
+    rows = [
+        row
+        for row in scoped_rows
+        if any(
+            str(signal.get("strategy_id") or "") == strategy_id
+            for signal in _loads(row.skill_breakdown_json, [])
+        )
+    ]
 
     sample_count = len(rows)
     if sample_count == 0:
         return None
-    labeled = [r for r in rows if r.outcome_label in ("success", "failed")]
+    labeled = [
+        row
+        for row in rows
+        if normalized_outcome_label(row) in {OUTCOME_SUCCESS, OUTCOME_FAILED}
+        and is_trade_executed(row)
+    ]
     labeled_count = len(labeled)
-    wins = [r for r in labeled if r.outcome_label == "success"]
-    losses = [r for r in labeled if r.outcome_label == "failed"]
-    win_avg = sum(r.executed_return or 0 for r in wins) / len(wins) if wins else 0.0
-    loss_avg = sum(abs(r.executed_return or 0) for r in losses) / len(losses) if losses else 0.0
+    net_returns = [resolved_trade_return(row) - _ADDITIONAL_COST_PCT for row in labeled]
+    wins = [value for value in net_returns if value > 0]
+    losses = [abs(value) for value in net_returns if value < 0]
+    win_avg = sum(wins) / len(wins) if wins else 0.0
+    loss_avg = sum(losses) / len(losses) if losses else 0.0
     last_rec_date = max((str(r.trade_date or "") for r in rows), default=None) or None
     return {
         "strategy_id": strategy_id,
@@ -765,7 +797,7 @@ def strategy_perf_summary(
         "labeled_count": labeled_count,
         "success_count": len(wins),
         "hit_rate": round(len(wins) * 100 / labeled_count, 1) if labeled_count else None,
-        "avg_return": round(sum(r.executed_return or 0 for r in labeled) / labeled_count, 2) if labeled_count else None,
+        "avg_return": round(sum(net_returns) / labeled_count, 2) if labeled_count else None,
         "profit_loss_ratio": round(win_avg / loss_avg, 2) if loss_avg else None,
         "last_recommendation_date": last_rec_date,
         "window_days": window_days,
@@ -959,52 +991,54 @@ def _is_20cm_code(code: str) -> bool:
     return str(code).startswith(("300", "301", "688", "689"))
 
 
-def board_and_net_breakdown(db: Session, window_trade_days: int = 10) -> dict[str, Any]:
+def board_and_net_breakdown(
+    db: Session,
+    window_days: int | None = 30,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, Any]:
     """D 项净成本 + 板块(20cm/10cm)分解 —— 北极星 D 项 observability，供前端指标页透出。
 
     净口径与 self_check._compute_d_cost 一致（扣 0.07%/笔）；板块判定与 self_check._is_20cm_code
-    一致。复用 recent_formal_win_rate 的窗口口径（仅 LIVE rec_ + run_mode=formal + 已结算）。
+    一致。与指标页核心 KPI 共用日历窗口、去重规则和正式实盘样本范围。
     """
-    cache_key = f"board_and_net_breakdown:{window_trade_days}"
-    return _cached(cache_key, lambda: _board_and_net_breakdown(db, window_trade_days))
-
-
-def _board_and_net_breakdown(db: Session, window_trade_days: int) -> dict[str, Any]:
-    td_rows = (
-        db.execute(
-            select(RecommendationRun.trade_date)
-            .where(RecommendationRun.run_mode == "formal", RecommendationRun.status == "completed")
-            .distinct()
-            .order_by(RecommendationRun.trade_date.desc())
-            .limit(window_trade_days)
-        )
-        .scalars()
-        .all()
+    start, end = _resolve_window(window_days, start_date, end_date)
+    cache_key = f"board_and_net_breakdown:{start or ''}:{end or ''}"
+    return _cached(
+        cache_key,
+        lambda: _board_and_net_breakdown(db, start, end, window_days),
     )
-    trade_dates = [str(d) for d in td_rows]
-    if not trade_dates:
+
+
+def _board_and_net_breakdown(
+    db: Session,
+    start_date: str | None,
+    end_date: str | None,
+    window_days: int | None,
+) -> dict[str, Any]:
+    rows = _scoped_recommendation_rows(
+        db,
+        start_date,
+        end_date,
+        run_mode=OFFICIAL_RUN_MODE,
+        live_only=True,
+    )
+    executed_rows = [
+        row
+        for row in rows
+        if normalized_outcome_label(row) in {OUTCOME_SUCCESS, OUTCOME_FAILED}
+        and is_trade_executed(row)
+    ]
+    rets = [resolved_trade_return(row) for row in executed_rows]
+    n = len(rets)
+    if n == 0:
         return {
-            "window_trade_days": window_trade_days,
+            "window_days": window_days,
             "sample_count": 0,
             "net": None,
             "board": {"20cm": None, "10cm": None},
+            "date_range": _window_meta(window_days, start_date, end_date, len(rows), 0),
         }
-
-    from sqlalchemy import bindparam
-
-    stmt = text("""
-        SELECT r.code, o.outcome_label, o.executed_return
-        FROM recommendation_outcomes o
-        JOIN recommendations r ON r.recommendation_id = o.recommendation_id
-        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
-        WHERE r.recommendation_id LIKE 'rec_%'
-          AND r.trade_date IN :tds
-          AND o.outcome_label IN ('success', 'failed')
-    """).bindparams(bindparam("tds", expanding=True))
-    rows = db.execute(stmt, {"tds": trade_dates}).all()
-
-    rets = [float(r.executed_return or 0) for r in rows]
-    n = len(rets)
     wins = [x for x in rets if x > 0]
     losses = [abs(x) for x in rets if x < 0]
     net = [x - _ADDITIONAL_COST_PCT for x in rets]
@@ -1024,7 +1058,11 @@ def _board_and_net_breakdown(db: Session, window_trade_days: int) -> dict[str, A
 
     board: dict[str, Any] = {}
     for label in ("20cm", "10cm"):
-        grp = [x for r, x in zip(rows, rets) if _is_20cm_code(r.code) == (label == "20cm")]
+        grp = [
+            value
+            for row, value in zip(executed_rows, rets)
+            if _is_20cm_code(row.code) == (label == "20cm")
+        ]
         gn = len(grp)
         if gn == 0:
             board[label] = None
@@ -1045,11 +1083,11 @@ def _board_and_net_breakdown(db: Session, window_trade_days: int) -> dict[str, A
         }
 
     return {
-        "window_trade_days": window_trade_days,
-        "trade_dates": trade_dates,
+        "window_days": window_days,
         "sample_count": n,
         "net": net_summary,
         "board": board,
+        "date_range": _window_meta(window_days, start_date, end_date, len(rows), n),
     }
 
 
@@ -1058,10 +1096,17 @@ def metrics_by_setup(
     window_days: int | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
+    live_only: bool = True,
 ) -> list[dict[str, Any]]:
     start, end = _resolve_window(window_days, start_date, end_date)
-    key = f"by_setup:{start or ''}:{end or ''}"
-    return _cached(key, lambda: _metrics_by_setup(db, start, end, window_days))
+    key = f"by_setup:{start or ''}:{end or ''}:{run_mode or 'all'}:{int(live_only)}"
+    return _cached(
+        key,
+        lambda: _metrics_by_setup(
+            db, start, end, window_days, run_mode=run_mode, live_only=live_only,
+        ),
+    )
 
 
 def _metrics_by_setup(
@@ -1069,8 +1114,12 @@ def _metrics_by_setup(
     start_date: str | None = None,
     end_date: str | None = None,
     window_days: int | None = None,
+    run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
+    live_only: bool = True,
 ) -> list[dict[str, Any]]:
-    rows = _scoped_recommendation_rows(db, start_date, end_date)
+    rows = _scoped_recommendation_rows(
+        db, start_date, end_date, run_mode=run_mode, live_only=live_only,
+    )
     benchmark_by_rec = _benchmark_returns_by_recommendation(db, rows)
     horizon_records = _horizon_metric_records_by_recommendation(db, rows)
     buckets: dict[str, dict[str, Any]] = {}
@@ -1431,14 +1480,26 @@ def filter_effectiveness(
     window_days: int | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
+    live_only: bool = True,
 ) -> dict[str, Any]:
     """三规则过滤效果分析：pos20<50、avg_cost>200、结构性强势×support_ma5。
 
     返回被过滤 vs 保留交易的 WR/avg/笔数，用于监控过滤策略效果。
     """
     w_start, w_end = _resolve_window(window_days, start_date, end_date)
-    key = f"filter_eff:{w_start or ''}:{w_end or ''}"
-    return _cached(key, lambda: _filter_effectiveness_impl(db, w_start, w_end, window_days))
+    key = f"filter_eff:{w_start or ''}:{w_end or ''}:{run_mode or 'all'}:{int(live_only)}"
+    return _cached(
+        key,
+        lambda: _filter_effectiveness_impl(
+            db,
+            w_start,
+            w_end,
+            window_days,
+            run_mode=run_mode,
+            live_only=live_only,
+        ),
+    )
 
 
 def _filter_effectiveness_impl(
@@ -1446,22 +1507,23 @@ def _filter_effectiveness_impl(
     w_start: str | None,
     w_end: str | None,
     window_days: int | None = None,
+    run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
+    live_only: bool = True,
 ) -> dict[str, Any]:
     import json as _json
 
-    stmt = (
-        select(Recommendation, RecommendationOutcome)
-        .join(RecommendationOutcome, RecommendationOutcome.recommendation_id == Recommendation.recommendation_id)
-        .where(
-            RecommendationOutcome.entry_triggered == True,
-            RecommendationOutcome.outcome_label.in_([OUTCOME_SUCCESS, OUTCOME_FAILED]),
+    rows = [
+        row
+        for row in _scoped_recommendation_rows(
+            db,
+            w_start,
+            w_end,
+            run_mode=run_mode,
+            live_only=live_only,
         )
-    )
-    if w_start:
-        stmt = stmt.where(Recommendation.trade_date >= w_start)
-    if w_end:
-        stmt = stmt.where(Recommendation.trade_date <= w_end)
-    rows = db.execute(stmt).all()
+        if normalized_outcome_label(row) in {OUTCOME_SUCCESS, OUTCOME_FAILED}
+        and is_trade_executed(row)
+    ]
     if not rows:
         return {
             "count": 0,
@@ -1472,9 +1534,9 @@ def _filter_effectiveness_impl(
     kept = []
     filtered_by_rule: dict[str, list[float]] = {"pos20_low": [], "avg_cost_high": [], "regime_ma5": []}
 
-    for rec, outcome in rows:
-        snap = _json.loads(rec.feature_snapshot_json) if rec.feature_snapshot_json else {}
-        ret = float(outcome.executed_return or 0)
+    for row in rows:
+        snap = _json.loads(row.feature_snapshot_json) if row.feature_snapshot_json else {}
+        ret = resolved_trade_return(row)
         pos20 = snap.get("pos20")
         avg_cost = snap.get("avg_cost")
         regime = snap.get("market_regime", "")
@@ -1512,8 +1574,12 @@ def _filter_effectiveness_impl(
         "filtered_by_rule": {
             name: {
                 "count": len(rets),
-                "win_rate": round(sum(1 for r in rets if r > 0) / len(rets), 4) if rets else 0,
-                "avg_return": round(sum(rets) / len(rets), 2) if rets else 0,
+                "win_rate": round(
+                    sum(1 for value in rets if value > _ADDITIONAL_COST_PCT) / len(rets), 4,
+                ) if rets else 0,
+                "avg_return": round(
+                    sum(value - _ADDITIONAL_COST_PCT for value in rets) / len(rets), 2,
+                ) if rets else 0,
             }
             for name, rets in filtered_by_rule.items()
         },
@@ -1527,10 +1593,23 @@ def precision_at_k(
     window_days: int | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
+    live_only: bool = True,
 ) -> list[dict[str, Any]]:
     w_start, w_end = _resolve_window(window_days, start_date, end_date)
-    key = f"precision_at_k:{','.join(str(k) for k in ks)}:{w_start or ''}:{w_end or ''}"
-    return _cached(key, lambda: _precision_at_k(db, ks, w_start, w_end, window_days))
+    key = f"precision_at_k:{','.join(str(k) for k in ks)}:{w_start or ''}:{w_end or ''}:{run_mode or 'all'}:{int(live_only)}"
+    return _cached(
+        key,
+        lambda: _precision_at_k(
+            db,
+            ks,
+            w_start,
+            w_end,
+            window_days,
+            run_mode=run_mode,
+            live_only=live_only,
+        ),
+    )
 
 
 def _precision_at_k(
@@ -1539,6 +1618,8 @@ def _precision_at_k(
     start_date: str | None = None,
     end_date: str | None = None,
     window_days: int | None = None,
+    run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
+    live_only: bool = True,
 ) -> list[dict[str, Any]]:
     stmt = (
         select(
@@ -1555,6 +1636,16 @@ def _precision_at_k(
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
         .outerjoin(RecommendationOutcome, RecommendationOutcome.recommendation_id == Recommendation.recommendation_id)
     )
+    if run_mode:
+        if isinstance(run_mode, (list, tuple, set)):
+            stmt = stmt.where(RecommendationRun.run_mode.in_(tuple(str(m) for m in run_mode)))
+        else:
+            stmt = stmt.where(RecommendationRun.run_mode == str(run_mode))
+    if live_only:
+        stmt = stmt.where(
+            Recommendation.recommendation_id.like(f"{OFFICIAL_RECOMMENDATION_PREFIX}%")
+        )
+    stmt = stmt.where(RecommendationRun.status == "completed")
     if start_date:
         stmt = stmt.where(Recommendation.trade_date >= start_date)
     if end_date:
@@ -1599,10 +1690,23 @@ def metrics_by_score_line(
     window_days: int | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
+    live_only: bool = True,
 ) -> list[dict[str, Any]]:
     start, end = _resolve_window(window_days, start_date, end_date)
-    key = f"by_score_line:{','.join(str(line) for line in score_lines)}:{start or ''}:{end or ''}"
-    return _cached(key, lambda: _metrics_by_score_line(db, score_lines, start, end, window_days))
+    key = f"by_score_line:{','.join(str(line) for line in score_lines)}:{start or ''}:{end or ''}:{run_mode or 'all'}:{int(live_only)}"
+    return _cached(
+        key,
+        lambda: _metrics_by_score_line(
+            db,
+            score_lines,
+            start,
+            end,
+            window_days,
+            run_mode=run_mode,
+            live_only=live_only,
+        ),
+    )
 
 
 def _metrics_by_score_line(
@@ -1611,8 +1715,12 @@ def _metrics_by_score_line(
     start_date: str | None = None,
     end_date: str | None = None,
     window_days: int | None = None,
+    run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
+    live_only: bool = True,
 ) -> list[dict[str, Any]]:
-    rows = _scoped_recommendation_rows(db, start_date, end_date)
+    rows = _scoped_recommendation_rows(
+        db, start_date, end_date, run_mode=run_mode, live_only=live_only,
+    )
     if not rows:
         return []
     benchmark_by_rec = _benchmark_returns_by_recommendation(db, rows)
@@ -1870,7 +1978,8 @@ def _scoped_recommendation_rows(
     db: Session,
     start_date: str | None = None,
     end_date: str | None = None,
-    run_mode: str | tuple[str, ...] | list[str] | None = None,
+    run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
+    live_only: bool = True,
 ) -> list[Any]:
     # 两步查询：先 SQL 去重拿 (trade_date, code) 分组下 final_score 最高的 recommendation_id（235 个），
     # 再按 id 取详情。避免查全部 1479 行大字段（feature_snapshot_json/market_context_json）再 Python 去重。
@@ -1878,6 +1987,7 @@ def _scoped_recommendation_rows(
     # 时间窗口：start_date/end_date 为 ISO 日期字符串（YYYY-MM-DD），按 trade_date 过滤；
     # window_days 模式下调用方应先用 _resolve_window 转成 start/end 再传入。
     # run_mode：可选，按 recommendation_runs.run_mode 过滤（如 ('formal','experiment') 排除 backtest 合成回测）。
+    # live_only：产品指标默认只认 rec_*；实验/回测分析必须显式扩大范围。
     dedup_ids_stmt = (
         select(
             Recommendation.recommendation_id,
@@ -1897,6 +2007,11 @@ def _scoped_recommendation_rows(
             dedup_ids_stmt = dedup_ids_stmt.where(RecommendationRun.run_mode.in_(_modes))
         else:
             dedup_ids_stmt = dedup_ids_stmt.where(RecommendationRun.run_mode == str(run_mode))
+    if live_only:
+        dedup_ids_stmt = dedup_ids_stmt.where(
+            Recommendation.recommendation_id.like(f"{OFFICIAL_RECOMMENDATION_PREFIX}%")
+        )
+    dedup_ids_stmt = dedup_ids_stmt.where(RecommendationRun.status == "completed")
     # 用子查询取每组 final_score 最大的 id（GROUP BY + MAX 定位，再 JOIN 回表）
     dedup_subq = dedup_ids_stmt.subquery()
     max_score_subq = (
@@ -1958,11 +2073,10 @@ def _scoped_recommendation_rows(
         ).all()
     )
     # 已通过 SQL 去重，但仍可能有同 (trade_date, code) 的重复（同分多笔），保留第一次
-    # 下标对应 select 列：trade_date=10, code=2（recommended_at 插入后 trade_date 从 9 移到 10）
     seen: set[tuple] = set()
     deduped: list[Any] = []
     for row in rows:
-        key = (row[10], row[2])  # (trade_date, code)
+        key = (row.trade_date, row.code)
         if key in seen:
             continue
         seen.add(key)

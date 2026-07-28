@@ -16,7 +16,7 @@ export function SystemStatsSection() {
     { label: "命中", value: String(data.success_count), mono: true },
     { label: "失败", value: String(data.failed_count), mono: true },
     { label: "待结算", value: String(data.pending_count), mono: true },
-    { label: "命中率", value: `${data.hit_rate.toFixed(1)}%`, mono: true },
+    { label: "命中率", value: `${(data.hit_rate * 100).toFixed(1)}%`, mono: true },
     { label: "平均收益", value: `${data.avg_return.toFixed(2)}%`, mono: true },
     { label: "平均最高浮盈", value: `${data.avg_max_return.toFixed(2)}%`, mono: true },
     { label: "平均回撤", value: `${data.avg_drawdown.toFixed(2)}%`, mono: true },

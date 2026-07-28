@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import case
 from sqlalchemy.orm import Session  # noqa: F401 (Query used in endpoints)
 
 from app.db.session import get_db
+from app.engine.trading_costs import ADDITIONAL_COST_PCT, is_net_profitable
 from app.services.outcome_service import recent_formal_win_rate
 from app.services.workbench_service import (
     delete_recommendation,
@@ -80,8 +80,7 @@ def outcome_summary(
     替换前端 ConfidenceMeter 的 score_gap/20 启发式。仅统计实盘推荐（recommendation_id 以 rec_ 开头），
     回测 btrec_* 为模拟数据，不计入「跑出来结果如何」。
     """
-    from app.models.tables import Recommendation, RecommendationOutcome
-    from sqlalchemy import func
+    from app.models.tables import Recommendation, RecommendationOutcome, RecommendationRun
 
     # 规范化：支持逗号分隔与重复参数
     normalized: list[str] = []
@@ -96,27 +95,49 @@ def outcome_summary(
     rows = (
         db.query(
             Recommendation.code,
-            func.count(RecommendationOutcome.recommendation_id).label("settled"),
-            func.sum(case((RecommendationOutcome.outcome_label == "success", 1), else_=0)).label("wins"),
-            func.avg(RecommendationOutcome.executed_return).label("avg_return"),
+            Recommendation.trade_date,
+            Recommendation.recommendation_id,
+            RecommendationOutcome.executed_return,
+            RecommendationOutcome.close_return,
         )
+        .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
         .join(RecommendationOutcome, RecommendationOutcome.recommendation_id == Recommendation.recommendation_id)
         .filter(Recommendation.code.in_(normalized))
         .filter(Recommendation.recommendation_id.like("rec_%"))
+        .filter(RecommendationRun.run_mode == "formal")
+        .filter(RecommendationRun.status == "completed")
         .filter(RecommendationOutcome.outcome_label.in_(["success", "failed"]))
-        .group_by(Recommendation.code)
+        .filter(RecommendationOutcome.entry_triggered == True)  # noqa: E712
+        .order_by(
+            Recommendation.code,
+            Recommendation.trade_date,
+            Recommendation.final_score.desc(),
+            Recommendation.recommendation_id,
+        )
         .all()
     )
 
+    returns_by_code: dict[str, list[float]] = {}
+    seen: set[tuple[str, str]] = set()
+    for code, trade_date, _recommendation_id, executed_return, close_return in rows:
+        key = (str(code), str(trade_date))
+        if key in seen:
+            continue
+        seen.add(key)
+        gross_return = float(executed_return if executed_return is not None else close_return or 0)
+        returns_by_code.setdefault(str(code), []).append(gross_return)
+
     result: dict[str, dict] = {}
-    for code, settled, wins, avg_return in rows:
-        settled = int(settled or 0)
-        wins = int(wins or 0)
+    for code, returns in returns_by_code.items():
+        settled = len(returns)
+        wins = sum(is_net_profitable(value) for value in returns)
         result[code] = {
             "settled": settled,
             "wins": wins,
             "win_rate": round(wins * 100.0 / settled, 1) if settled else 0.0,
-            "avg_return": round(float(avg_return or 0.0), 2),
+            "avg_return": round(
+                sum(value - ADDITIONAL_COST_PCT for value in returns) / settled, 2,
+            ) if settled else 0.0,
         }
     # 补齐「请求了但无历史」的代码，前端据此区分「无历史」与「未查询」
     for code in normalized:

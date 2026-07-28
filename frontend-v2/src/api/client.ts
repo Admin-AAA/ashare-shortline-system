@@ -354,6 +354,8 @@ export const api = {
       source: string;
       runs_backtest: boolean;
       sample_count: number;
+      triggered_count: number;
+      success_count: number;
       hit_rate: number;
       avg_return: number;
       errors: string[];
@@ -365,7 +367,7 @@ export const api = {
   deleteRecommendation: (id: string) => request<{ deleted: string }>(`/api/recommendations/${id}`, json("DELETE")),
   deletePreset: (id: string) => request<{ deleted: string }>(`/api/presets/${id}`, json("DELETE")),
 
-  // 时间窗口：windowDays=N 取最近 N 天且已结算（today-N ~ today-20）的推荐；不传则全部历史累计。
+  // 时间窗口：windowDays=N 取最近 N 天并截到统一结算截止日；不传则全部历史累计。
   metricsOverview: (windowDays?: number, options?: RequestOptions) =>
     request<MetricsOverview>(`/api/metrics/overview${windowDays ? `?window_days=${windowDays}` : ""}`, undefined, {
       timeoutMs: options?.timeoutMs ?? 30_000,
@@ -415,8 +417,8 @@ export const api = {
   /** 资金流因子预测力分析（T1 新因子，待前瞻验证候选） */
   capitalFlowFactor: () => request<CapitalFlowFactorResponse>(`/api/metrics/capital-flow-factor`),
   /** D 项净成本 + 板块(20cm/10cm)分解（指标页透出，与 self_check 板块拆分同源口径） */
-  dNetBreakdown: (windowDays: number = 10, options?: RequestOptions) =>
-    request<DNetBreakdown>(`/api/metrics/d-net?window_days=${windowDays}`, undefined, {
+  dNetBreakdown: (windowDays?: number, options?: RequestOptions) =>
+    request<DNetBreakdown>(`/api/metrics/d-net${windowDays ? `?window_days=${windowDays}` : ""}`, undefined, {
       timeoutMs: options?.timeoutMs ?? 30_000,
       signal: options?.signal,
     }),

@@ -4,7 +4,7 @@ import type { SkillSummary } from "../types";
 import { Panel } from "./Panel";
 
 /**
- * 策略清单面板 —— 展示 8 个策略的名称/模式/独立性/回测胜率。
+ * 策略清单面板 —— 展示 8 个策略的名称/模式/独立性/正式实盘胜率。
  * 填补北极星 B 表红色缺口"策略清单页"。
  * 嵌入 MetricsPage 底部，与策略胜率视图（StrategyPanel）互补：
  * StrategyPanel 显示回测数据，SkillsCatalogPanel 显示策略元信息。
@@ -14,6 +14,8 @@ interface PerfSummary {
   skill_id: string;
   status: string;
   sample_count: number;
+  triggered_count: number;
+  success_count: number;
   hit_rate: number;
   avg_return: number;
   errors: string[];
@@ -121,7 +123,7 @@ export function SkillsCatalogPanel() {
                 {s.has_agent_contract ? "Agent" : "规则"}
               </div>
 
-              {/* 回测胜率 */}
+              {/* 正式实盘胜率 */}
               <div style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 16, fontWeight: 600, color: wrColor }}>
                 {wr == null ? "—" : `${wr.toFixed(1)}%`}
               </div>
@@ -143,14 +145,14 @@ export function SkillsCatalogPanel() {
 
       {/* 汇总 */}
       <div style={{ display: "flex", gap: "var(--space-6)", marginTop: "var(--space-3)", paddingTop: "var(--space-3)", borderTop: "1px solid var(--border, var(--line))" }}>
-        <SummaryItem label="总推荐" value={Object.values(perfMap).reduce((s, p) => s + (p?.sample_count ?? 0), 0)} />
+        <SummaryItem label="策略样本" value={Object.values(perfMap).reduce((s, p) => s + (p?.sample_count ?? 0), 0)} />
         <SummaryItem
           label="综合胜率"
           value={(() => {
             const totals = Object.values(perfMap).reduce(
               (acc, p) => {
-                acc.n += p?.sample_count ?? 0;
-                acc.w += (p?.sample_count ?? 0) * (p?.hit_rate ?? 0);
+                acc.n += p?.triggered_count ?? 0;
+                acc.w += p?.success_count ?? 0;
                 return acc;
               },
               { n: 0, w: 0 },

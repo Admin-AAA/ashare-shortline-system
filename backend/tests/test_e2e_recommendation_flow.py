@@ -37,7 +37,14 @@ from app.models.tables import (
     SkillRegistry,
     Stock,
 )
-from app.services.outcome_service import label_pending_outcomes, metrics_by_score_line, metrics_by_setup, precision_at_k
+from app.services.outcome_service import (
+    board_and_net_breakdown,
+    label_pending_outcomes,
+    metrics_by_score_line,
+    metrics_by_setup,
+    overview_metrics,
+    precision_at_k,
+)
 from app.services.stats_service import get_overview_stats
 from app.services.workbench_service import (
     DATA_SOURCE_LOCAL_POOL,
@@ -742,6 +749,7 @@ class TestE2ERecommendationFlow:
         
     def test_metrics_helpers_respect_mode_and_thresholds(self, db):
         suffix = uuid.uuid4().hex[:8]
+        scope_date = "2099-01-01"
         run_formal_id = f"run_metrics_formal_{suffix}"
         run_experiment_id = f"run_metrics_experiment_{suffix}"
         rec_ids = [f"rec_metrics_{index:03d}_{suffix}" for index in range(1, 5)]
@@ -749,7 +757,8 @@ class TestE2ERecommendationFlow:
             run_formal = RecommendationRun(
                 run_id=run_formal_id,
                 run_name="正式统计测试",
-                trade_date="2026-05-12",
+                run_mode="formal",
+                trade_date=scope_date,
                 universe_count=10,
                 market_scope="all",
                 risk_template="balanced",
@@ -766,7 +775,8 @@ class TestE2ERecommendationFlow:
             run_experiment = RecommendationRun(
                 run_id=run_experiment_id,
                 run_name="实验统计测试",
-                trade_date="2026-05-12",
+                run_mode="experiment",
+                trade_date=scope_date,
                 universe_count=10,
                 market_scope="all",
                 risk_template="balanced",
@@ -787,7 +797,7 @@ class TestE2ERecommendationFlow:
                 Recommendation(
                     recommendation_id=rec_ids[0],
                     run_id=run_formal_id,
-                    trade_date="2026-05-12",
+                    trade_date=scope_date,
                     code="600519",
                     name="测试A",
                     bucket="",
@@ -802,7 +812,7 @@ class TestE2ERecommendationFlow:
                 Recommendation(
                     recommendation_id=rec_ids[1],
                     run_id=run_formal_id,
-                    trade_date="2026-05-12",
+                    trade_date=scope_date,
                     code="000001",
                     name="测试B",
                     bucket="",
@@ -817,7 +827,7 @@ class TestE2ERecommendationFlow:
                 Recommendation(
                     recommendation_id=rec_ids[2],
                     run_id=run_formal_id,
-                    trade_date="2026-05-12",
+                    trade_date=scope_date,
                     code="600036",
                     name="测试C",
                     bucket="",
@@ -832,7 +842,7 @@ class TestE2ERecommendationFlow:
                 Recommendation(
                     recommendation_id=rec_ids[3],
                     run_id=run_experiment_id,
-                    trade_date="2026-05-12",
+                    trade_date=scope_date,
                     code="601318",
                     name="实验票",
                     bucket="",
@@ -856,6 +866,16 @@ class TestE2ERecommendationFlow:
             ]
             db.add_all(outcomes)
             db.flush()
+
+            overview = overview_metrics(db, start_date=scope_date, end_date=scope_date)
+            d_net = board_and_net_breakdown(
+                db, window_days=None, start_date=scope_date, end_date=scope_date,
+            )
+            assert overview["total_recommendations"] == 3
+            assert overview["executed_trade_count"] == 2
+            assert overview["hit_rate"] == 0.5
+            assert d_net["sample_count"] == 2
+            assert d_net["net"]["net_win_rate"] == 50.0
 
             setup_rows = metrics_by_setup(db)
             assert len(setup_rows) >= 2

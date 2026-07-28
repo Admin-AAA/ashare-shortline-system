@@ -401,6 +401,8 @@ def skill_performance_summary(db: Session, skill_id: str) -> dict[str, Any] | No
         "source": "recommendation_outcomes",
         "runs_backtest": False,
         "sample_count": performance["sample_count"],
+        "triggered_count": performance["triggered_count"],
+        "success_count": performance["success_count"],
         "hit_rate": performance["hit_rate"],
         "avg_return": performance["avg_return"],
         "errors": errors,
@@ -424,6 +426,8 @@ def batch_skill_performance_summaries(db: Session) -> list[dict[str, Any]]:
             "source": "recommendation_outcomes",
             "runs_backtest": False,
             "sample_count": performance["sample_count"],
+            "triggered_count": performance["triggered_count"],
+            "success_count": performance["success_count"],
             "hit_rate": performance["hit_rate"],
             "avg_return": performance["avg_return"],
             "errors": errors,
@@ -492,92 +496,30 @@ def _write_install_manifest(target: Path, skill_id: str, source: str) -> None:
 
 
 def skill_performance(db: Session, skill_id: str) -> dict[str, Any]:
-    from sqlalchemy import text
-
-    from app.services.outcome_service import _ADDITIONAL_COST_PCT
+    from app.services.outcome_service import metrics_by_strategy
 
     _EMPTY: dict[str, Any] = {
-        "sample_count": 0, "triggered_count": 0, "trigger_rate": 0.0,
+        "sample_count": 0, "triggered_count": 0, "success_count": 0, "trigger_rate": 0.0,
         "hit_rate": 0.0, "avg_return": 0.0, "avg_score": 0.0, "failure_reasons": [],
     }
-    # JSON_TABLE 把 skill_breakdown_json 展开为行，过滤下推到 MySQL，
-    # 避免拉取全量 runs → recs → Python JSON 解析（~1.2s/call → <50ms）。
-    agg_sql = text("""
-        WITH matched AS (
-            SELECT
-                COALESCE(jt.scr, 0)                              AS signal_score,
-                COALESCE(o.entry_triggered, 0)                   AS entry_triggered,
-                COALESCE(o.executed_return, o.close_return, 0)   AS resolved_return
-            FROM recommendation_runs rr
-            JOIN recommendations r          ON r.run_id = rr.run_id
-            JOIN JSON_TABLE(
-                r.skill_breakdown_json,
-                '$[*]' COLUMNS (
-                    sid VARCHAR(100) PATH '$.strategy_id',
-                    scr DOUBLE        PATH '$.score'
-                )
-            ) jt
-            LEFT JOIN recommendation_outcomes o
-                ON o.recommendation_id = r.recommendation_id
-            WHERE jt.sid = :skill_id
-        )
-        SELECT
-            COUNT(*)                                                      AS sample_count,
-            SUM(entry_triggered)                                          AS triggered_count,
-            SUM(CASE WHEN entry_triggered THEN resolved_return ELSE 0 END) AS total_return,
-            SUM(CASE WHEN entry_triggered AND resolved_return > :cost
-                     THEN 1 ELSE 0 END)                                   AS success_count,
-            SUM(signal_score)                                             AS total_score
-        FROM matched
-    """)
-    row = db.execute(agg_sql, {
-        "skill_id": skill_id, "cost": _ADDITIONAL_COST_PCT,
-    }).first()
-    if not row or (row.sample_count or 0) == 0:
+    metric = next(
+        (
+            item
+            for item in metrics_by_strategy(db)
+            if item.get("strategy_id") == skill_id
+        ),
+        None,
+    )
+    if metric is None:
         return _EMPTY
 
-    sample_count: int = int(row.sample_count)
-    triggered_count: int = int(row.triggered_count or 0)
-    success_count: int = int(row.success_count or 0)
-    total_return: float = float(row.total_return or 0)
-    total_score: float = float(row.total_score or 0)
-
-    # 失败原因明细：仅在有失败记录时执行第二次查询
-    failures: dict[str, int] = {}
-    if triggered_count > success_count:
-        fail_sql = text("""
-            SELECT COALESCE(o.outcome_reason, '未达标') AS reason, COUNT(*) AS cnt
-            FROM recommendation_runs rr
-            JOIN recommendations r          ON r.run_id = rr.run_id
-            JOIN JSON_TABLE(
-                r.skill_breakdown_json,
-                '$[*]' COLUMNS (
-                    sid VARCHAR(100) PATH '$.strategy_id'
-                )
-            ) jt
-            JOIN recommendation_outcomes o  ON o.recommendation_id = r.recommendation_id
-            WHERE jt.sid = :skill_id
-              AND o.entry_triggered = 1
-              AND COALESCE(o.executed_return, o.close_return, 0) <= :cost
-            GROUP BY reason
-            ORDER BY cnt DESC
-            LIMIT 5
-        """)
-        for frow in db.execute(fail_sql, {
-            "skill_id": skill_id, "cost": _ADDITIONAL_COST_PCT,
-        }):
-            failures[frow.reason] = frow.cnt
-
     return {
-        "sample_count": sample_count,
-        "triggered_count": triggered_count,
-        "trigger_rate": round(triggered_count / sample_count, 3) if sample_count else 0.0,
-        "hit_rate": round(success_count / triggered_count, 3) if triggered_count else 0.0,
-        "avg_return": round(total_return / max(1, triggered_count), 2) if triggered_count else 0.0,
-        "avg_score": round(total_score / sample_count, 2) if sample_count else 0.0,
-        "failure_reasons": sorted(
-            [{"reason": key, "count": count} for key, count in failures.items()],
-            key=lambda item: item["count"],
-            reverse=True,
-        )[:5],
+        "sample_count": int(metric.get("sample_count") or 0),
+        "triggered_count": int(metric.get("triggered_count") or 0),
+        "success_count": int(metric.get("success_count") or 0),
+        "trigger_rate": float(metric.get("trigger_rate") or 0.0),
+        "hit_rate": float(metric.get("hit_rate") or 0.0),
+        "avg_return": float(metric.get("avg_return") or 0.0),
+        "avg_score": float(metric.get("avg_score") or 0.0),
+        "failure_reasons": [],
     }

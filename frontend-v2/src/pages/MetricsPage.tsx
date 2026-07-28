@@ -148,7 +148,7 @@ export function MetricsPage() {
         <AlphaDecayPanel data={alphaDecay} />
         <SkillsCatalogPanel />
       </div>
-      <DNetPanel />
+      <DNetPanel windowDays={windowDays} />
     </div>
   );
 }
@@ -247,10 +247,9 @@ function SystemHealthPanel() {
 
 /** D 项净成本 + 板块(20cm/10cm)分解面板：北极星 D 项「净盈亏比≥2.0」目标一屏可见，
  * 并定位拖后腿的板块（如 10cm 净盈亏比 < 20cm）。与 self_check 板块拆分同源口径。 */
-function DNetPanel() {
-  const [windowDays, setWindowDays] = useState<number>(DEFAULT_WINDOW_DAYS);
+function DNetPanel({ windowDays }: { windowDays: number | null }) {
   const { data, loading, error } = useApi<DNetBreakdown>(
-    () => api.dNetBreakdown(windowDays),
+    () => api.dNetBreakdown(windowDays ?? undefined),
     [windowDays],
   );
 
@@ -258,31 +257,7 @@ function DNetPanel() {
     <MetricCard
       kicker="北极星 D 项"
       title="净成本 + 板块(20cm/10cm)分解"
-      actions={
-        <div style={{ display: "flex", gap: "var(--space-1)" }}>
-          {[10, 30].map((w) => {
-            const active = windowDays === w;
-            return (
-              <button
-                key={w}
-                onClick={() => setWindowDays(w)}
-                style={{
-                  padding: "3px 10px",
-                  fontSize: 12,
-                  borderRadius: 4,
-                  border: "1px solid var(--border)",
-                  background: active ? "var(--color-accent, #2563eb)" : "var(--surface-1)",
-                  color: active ? "#fff" : "var(--text-secondary)",
-                  cursor: "pointer",
-                  fontWeight: active ? 600 : 400,
-                }}
-              >
-                近 {w} 日
-              </button>
-            );
-          })}
-        </div>
-      }
+      actions={<span style={{ fontSize: 12, color: "var(--text-muted)" }}>跟随页面时间窗口</span>}
     >
       {loading ? (
         <CardSkeleton count={3} />
@@ -1001,7 +976,7 @@ function OverviewKpiPanel({ data }: { data: MetricsOverview | null | undefined }
       label: "胜率",
       value: data.hit_rate != null ? `${(data.hit_rate * 100).toFixed(1)}%` : "—",
       tone: data.hit_rate >= 0.6 ? "up" : data.hit_rate >= 0.5 ? "neutral" : "down",
-      sub: `${data.success_count}/${data.labeled_count} 笔`,
+      sub: `${data.success_count}/${data.executed_trade_count} 笔已成交`,
     },
     {
       label: "盈亏比",

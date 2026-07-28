@@ -17,8 +17,13 @@ from app.models.tables import (
     SkillRegistry,
     WatchItem,
 )
-from app.services.evaluation_metrics import compute_full_metrics
-from app.services.outcome_service import is_accurate_recommendation, is_trade_executed, resolved_trade_return
+from app.services.outcome_service import (
+    is_accurate_recommendation,
+    is_trade_executed,
+    metrics_by_strategy,
+    overview_metrics,
+    resolved_trade_return,
+)
 from app.services.outcome_service import is_outcome_labeled, normalized_outcome_label
 
 import logging
@@ -54,87 +59,70 @@ def _get_overview_stats(db: Session) -> dict[str, Any]:
     if not run_ids:
         return _empty_overview()
 
-    rec_rows = db.execute(
-        select(Recommendation.recommendation_id, Recommendation.run_id, Recommendation.final_score)
-        .where(Recommendation.run_id.in_(run_ids))
+    raw_rec_rows = db.execute(
+        select(
+            Recommendation.recommendation_id,
+            Recommendation.run_id,
+            Recommendation.final_score,
+            Recommendation.trade_date,
+            Recommendation.code,
+        )
+        .where(
+            Recommendation.run_id.in_(run_ids),
+            Recommendation.recommendation_id.like("rec_%"),
+        )
+        .order_by(
+            Recommendation.trade_date,
+            Recommendation.code,
+            Recommendation.final_score.desc(),
+            Recommendation.recommendation_id,
+        )
     ).all()
+    seen: set[tuple[str, str]] = set()
+    rec_rows = []
+    for rec in raw_rec_rows:
+        key = (str(rec.trade_date), str(rec.code))
+        if key in seen:
+            continue
+        seen.add(key)
+        rec_rows.append(rec)
 
     rec_ids = [row.recommendation_id for row in rec_rows]
-    outcome_rows: list[Any] = []
-    outcome_map: dict[str, Any] = {}
-    if rec_ids:
-        outcome_rows = list(db.execute(
-            select(
-                RecommendationOutcome.recommendation_id,
-                RecommendationOutcome.outcome_label,
-                RecommendationOutcome.entry_triggered,
-                RecommendationOutcome.executed_return,
-                RecommendationOutcome.weighted_return,
-                RecommendationOutcome.close_return,
-                RecommendationOutcome.max_return,
-                RecommendationOutcome.max_drawdown,
-            )
-            .where(RecommendationOutcome.recommendation_id.in_(rec_ids))
-        ).all())
-        outcome_map = {row.recommendation_id: row for row in outcome_rows}
-
-    labeled = [row for row in outcome_rows if is_outcome_labeled(row)]
-    triggered = [row for row in labeled if is_trade_executed(row)]
-    success_count = sum(1 for row in labeled if is_accurate_recommendation(row))
-    failed_count = sum(1 for row in triggered if not is_accurate_recommendation(row))
-    missed_count = max(0, len(labeled) - len(triggered))
     reviewed_count = _reviewed_count(db, rec_ids)
     watched_count = _watched_count(db, run_ids)
-
-    # 构建 TradeRecord 列表用于 9-KPI 计算
-    trade_records = []
-    for row in triggered:
-        exec_ret = resolved_trade_return(row)
-        trade_records.append({
-            "resolved": True,
-            "net_return_pct": exec_ret,
-            "gross_return_pct": float(row.max_return or 0),
-            "achievable_return_pct": float(row.close_return or 0),
-            "morning_drawdown_pct": float(row.max_drawdown or 0),
-            "holding_days": 5,
-            "benchmark_return_pct": 0.0,
-            "accurate": exec_ret > 0,
-            "trade_date": "",
-            "code": "",
-        })
-    full_metrics = compute_full_metrics(trade_records) if trade_records else {}
+    official = overview_metrics(db)
 
     return {
         "run_count": len(runs),
-        "recommendation_count": len(rec_rows),
-        "labeled_count": len(labeled),
-        "triggered_count": len(triggered),
-        "success_count": success_count,
-        "failed_count": failed_count,
-        "missed_count": missed_count,
-        "pending_count": max(0, len(rec_rows) - len(labeled)),
+        "recommendation_count": official["total_recommendations"],
+        "labeled_count": official["labeled_count"],
+        "triggered_count": official["executed_trade_count"],
+        "success_count": official["success_count"],
+        "failed_count": official["failed_count"],
+        "missed_count": official["missed_count"],
+        "pending_count": official["pending_count"],
         "watch_count": watched_count,
         "reviewed_count": reviewed_count,
-        "trigger_rate": round(len(triggered) / len(labeled), 3) if labeled else 0.0,
-        "hit_rate": round(success_count / len(triggered), 3) if triggered else 0.0,
-        "avg_return": _mean([resolved_trade_return(row) for row in triggered]),
-        "avg_executed_return": _mean([resolved_trade_return(row) for row in triggered]),
-        "avg_weighted_return": _mean([row.weighted_return for row in triggered]),
-        "avg_close_return": _mean([row.close_return for row in labeled]),
-        "avg_max_return": _mean([row.max_return for row in labeled]),
-        "avg_drawdown": _mean([row.max_drawdown for row in labeled]),
+        "trigger_rate": official["trigger_rate"],
+        "hit_rate": official["hit_rate"],
+        "avg_return": official["avg_return"],
+        "avg_executed_return": official["avg_executed_return"],
+        "avg_weighted_return": official["avg_weighted_return"],
+        "avg_close_return": official["avg_close_return"],
+        "avg_max_return": official["avg_mfe"],
+        "avg_drawdown": official["avg_mae"],
         "avg_score": _mean([row.final_score for row in rec_rows]),
         "latest_run_at": runs[0].finished_at.isoformat() if runs and runs[0].finished_at else None,
         # ── 9-KPI 评估指标 ──
-        "recommendation_accuracy": full_metrics.get("recommendation_accuracy", 0.0),
-        "average_net_return": full_metrics.get("average_net_return", 0.0),
-        "median_net_return": full_metrics.get("median_net_return", 0.0),
-        "profit_loss_ratio": full_metrics.get("profit_loss_ratio", 0.0),
-        "max_drawdown": full_metrics.get("max_drawdown", 0.0),
-        "positive_month_ratio": full_metrics.get("positive_month_ratio", 0.0),
-        "benchmark_excess_return": full_metrics.get("benchmark_excess_return", 0.0),
-        "sample_confidence": full_metrics.get("sample_confidence", "low"),
-        "false_positive_notes": full_metrics.get("false_positive_notes", []),
+        "recommendation_accuracy": official.get("recommendation_accuracy", 0.0),
+        "average_net_return": official.get("average_net_return", 0.0),
+        "median_net_return": official.get("median_net_return", 0.0),
+        "profit_loss_ratio": official.get("profit_loss_ratio", 0.0),
+        "max_drawdown": official.get("max_drawdown", 0.0),
+        "positive_month_ratio": official.get("positive_month_ratio", 0.0),
+        "benchmark_excess_return": official.get("benchmark_excess_return", 0.0),
+        "sample_confidence": official.get("sample_confidence", "low"),
+        "false_positive_notes": official.get("false_positive_notes", []),
     }
 
 
@@ -165,7 +153,10 @@ def _get_skill_stats(db: Session) -> list[dict[str, Any]]:
             Recommendation.skill_breakdown_json,
             Recommendation.setup_type,
             Recommendation.recommended_at,
-        ).where(Recommendation.run_id.in_(run_ids))
+        ).where(
+            Recommendation.run_id.in_(run_ids),
+            Recommendation.recommendation_id.like("rec_%"),
+        )
     ).all()
     t2 = time.perf_counter()
 
@@ -237,29 +228,44 @@ def _get_skill_stats(db: Session) -> list[dict[str, Any]]:
                         row["success_count"] += 1
 
     t5 = time.perf_counter()
+    official_by_skill = {
+        item["strategy_id"]: item for item in metrics_by_strategy(db)
+    }
     result: list[dict[str, Any]] = []
     for row in buckets.values():
-        sample_count = max(1, int(row["sample_count"]))
-        labeled_count = int(row["labeled_count"])
-        triggered_count = int(row["triggered_count"])
+        official = official_by_skill.get(row["skill_id"])
+        sample_count = max(1, int((official or row)["sample_count"]))
+        labeled_count = int(
+            official["labeled_count"] if official else row["labeled_count"]
+        )
+        triggered_count = int(
+            official["triggered_count"] if official else row["triggered_count"]
+        )
+        success_count = int(
+            official["success_count"] if official else row["success_count"]
+        )
         result.append(
             {
                 "skill_id": row["skill_id"],
                 "name": row["name"],
                 "current_mode": row["current_mode"],
-                "sample_count": row["sample_count"],
+                "sample_count": official["sample_count"] if official else row["sample_count"],
                 "run_count": len(row["runs"]),
                 "labeled_count": labeled_count,
                 "triggered_count": triggered_count,
-                "failed_count": max(0, triggered_count - row["success_count"]),
+                "failed_count": max(0, triggered_count - success_count),
                 "missed_count": max(0, labeled_count - triggered_count),
                 "pending_count": max(0, row["sample_count"] - labeled_count),
-                "success_count": row["success_count"],
+                "success_count": success_count,
                 "trigger_rate": round(triggered_count / labeled_count, 3) if labeled_count else 0.0,
-                "hit_rate": round(row["success_count"] / triggered_count, 3) if triggered_count else 0.0,
+                "hit_rate": official["hit_rate"] if official else (
+                    round(success_count / triggered_count, 3) if triggered_count else 0.0
+                ),
                 "avg_signal_score": round(row["avg_signal_score"] / sample_count, 2),
                 "avg_final_score": round(row["avg_final_score"] / sample_count, 2),
-                "avg_return": round(row["avg_return"] / triggered_count, 2) if triggered_count else 0.0,
+                "avg_return": official["avg_return"] if official else (
+                    round(row["avg_return"] / triggered_count, 2) if triggered_count else 0.0
+                ),
                 "last_seen_at": row["last_seen_at"],
                 "top_market_regimes": _counter_rows(row["market_regimes"]),
                 "top_industries": _counter_rows(row["industries"]),
@@ -285,10 +291,33 @@ def _get_preset_stats(db: Session) -> list[dict[str, Any]]:
         return []
 
     run_ids = [run.run_id for run in runs]
-    rec_rows = db.execute(
-        select(Recommendation.recommendation_id, Recommendation.run_id, Recommendation.final_score)
-        .where(Recommendation.run_id.in_(run_ids))
+    raw_rec_rows = db.execute(
+        select(
+            Recommendation.recommendation_id,
+            Recommendation.run_id,
+            Recommendation.final_score,
+            Recommendation.trade_date,
+            Recommendation.code,
+        )
+        .where(
+            Recommendation.run_id.in_(run_ids),
+            Recommendation.recommendation_id.like("rec_%"),
+        )
+        .order_by(
+            Recommendation.trade_date,
+            Recommendation.code,
+            Recommendation.final_score.desc(),
+            Recommendation.recommendation_id,
+        )
     ).all()
+    seen: set[tuple[str, str]] = set()
+    rec_rows = []
+    for rec in raw_rec_rows:
+        key = (str(rec.trade_date), str(rec.code))
+        if key in seen:
+            continue
+        seen.add(key)
+        rec_rows.append(rec)
 
     rec_map: dict[str, list[Any]] = {}
     for row in rec_rows:
@@ -400,7 +429,11 @@ def _empty_overview() -> dict[str, Any]:
     }
 
 
-def _runs_for_mode(db: Session, extra_cols: list | None = None) -> list[RecommendationRun]:
+def _runs_for_mode(
+    db: Session,
+    extra_cols: list | None = None,
+    run_mode: str = "formal",
+) -> list[RecommendationRun]:
     # 仅加载各 stats 函数实际使用的列，避免物化每条 run 的 4 个大型 JSON 列
     # （market_snapshot_json / result_summary_json / filter_audit_json / selected_skills_json）。
     # 全量加载 890 条 run 会产生 ~2.4GB 传输，冷调用 4.5s+；按列裁剪后 <0.05s（~200x）。
@@ -415,7 +448,13 @@ def _runs_for_mode(db: Session, extra_cols: list | None = None) -> list[Recommen
     if extra_cols:
         cols = cols + list(extra_cols)
     return db.scalars(
-        select(RecommendationRun).options(load_only(*cols)).order_by(RecommendationRun.started_at.desc())
+        select(RecommendationRun)
+        .where(
+            RecommendationRun.run_mode == run_mode,
+            RecommendationRun.status == "completed",
+        )
+        .options(load_only(*cols))
+        .order_by(RecommendationRun.started_at.desc())
     ).all()
 
 

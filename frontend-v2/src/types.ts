@@ -458,10 +458,9 @@ export type DDiagnostics = {
   note?: string | null;
 };
 
-/** D 项净成本 + 板块(20cm/10cm)分解（指标页透出，与 self_check 板块拆分同源口径）。 */
+/** D 项净成本 + 板块(20cm/10cm)分解（与核心 KPI 共用正式实盘口径）。 */
 export type DNetBreakdown = {
-  window_trade_days: number;
-  trade_dates: string[];
+  window_days: number | null;
   sample_count: number;
   net: {
     sample_count: number;
@@ -493,6 +492,7 @@ export type DNetBreakdown = {
       net_profit_loss_ratio: number | null;
     } | null;
   };
+  date_range?: DateRangeMeta;
 };
 
 export type RiskRadar = {

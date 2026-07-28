@@ -195,7 +195,7 @@ export function LatestRunCard({
       </div>
       <div style={{ display: "flex", gap: "var(--space-4)" }}>
         <RunStat label="推荐数" value={String(run.recommended_count)} />
-        <RunStat label="命中率" value={run.hit_rate > 0 ? `${run.hit_rate.toFixed(1)}%` : "—"} />
+        <RunStat label="命中率" value={run.hit_rate > 0 ? `${(run.hit_rate * 100).toFixed(1)}%` : "—"} />
         <div>
           <div style={{ fontSize: 11, color: "var(--muted)" }}>分数线</div>
           <div style={{ fontSize: 18, fontWeight: 600 }}>

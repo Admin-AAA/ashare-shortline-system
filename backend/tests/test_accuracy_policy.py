@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from app.services.outcome_service import (
+    _board_and_net_breakdown,
     _metrics_by_score_line,
     _metrics_by_setup,
     _metrics_by_strategy,
@@ -104,6 +105,31 @@ def test_overview_metrics_do_not_trust_success_label_when_net_return_is_negative
     assert metrics["accuracy_policy"]["failure_breakdown"] == [
         {"gate": "net_return_positive", "label": "成本后净收益不为正", "count": 2}
     ]
+
+
+def test_overview_and_d_net_use_identical_official_winrate_scope(monkeypatch):
+    rows = [
+        _row(rec_id="rec_win", outcome_label="success", entry_triggered=True, executed_return=2.0),
+        _row(rec_id="rec_below_cost", outcome_label="success", entry_triggered=True, executed_return=0.05),
+        _row(rec_id="rec_loss", outcome_label="failed", entry_triggered=True, executed_return=-1.0),
+    ]
+    calls: list[dict] = []
+
+    def scoped(_db, _start=None, _end=None, **kwargs):
+        calls.append(kwargs)
+        return rows
+
+    monkeypatch.setattr("app.services.outcome_service._scoped_recommendation_rows", scoped)
+    monkeypatch.setattr("app.services.benchmark_service.get_benchmark_close_map", lambda _db, _dates: {})
+    monkeypatch.setattr("app.services.benchmark_service.compute_benchmark_return", lambda _close_map, _entry, _exit: 0.0)
+
+    overview = _overview_metrics(MagicMock(), "2026-05-01", "2026-05-31", 30)
+    d_net = _board_and_net_breakdown(MagicMock(), "2026-05-01", "2026-05-31", 30)
+
+    assert overview["hit_rate"] == 0.333
+    assert d_net["net"]["net_win_rate"] == 33.3
+    assert overview["executed_trade_count"] == d_net["sample_count"] == 3
+    assert all(call == {"run_mode": "formal", "live_only": True} for call in calls)
 
 
 def test_precision_at_k_uses_strict_accuracy_policy():

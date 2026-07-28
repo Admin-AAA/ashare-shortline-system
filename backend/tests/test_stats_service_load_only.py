@@ -66,12 +66,11 @@ def test_preset_stats_structure_and_integrity():
         # 临时运行 bucket 必须存在（adhoc runs 归并）
         names = {p["preset_name"] for p in presets}
         assert "临时运行" in names
-        # 内部一致性：各 bucket 推荐数之和 == 实际 recommendations 行数（跨所有 run）
-        from sqlalchemy import func, select
-        from app.models.tables import Recommendation
-        total = db.scalar(select(func.count()).select_from(Recommendation)) or 0
+        # 产品统计与 metrics overview 共用正式实盘 + (trade_date, code) 去重口径。
+        from app.services.outcome_service import overview_metrics
+        total = overview_metrics(db)["total_recommendations"]
         s = sum(p["recommendation_count"] for p in presets)
-        assert s == total, f"preset 推荐数之和 {s} 应等于 recommendations 总行数 {total}"
+        assert s == total, f"preset 推荐数之和 {s} 应等于正式实盘 recommendations 行数 {total}"
     finally:
         db.close()
 

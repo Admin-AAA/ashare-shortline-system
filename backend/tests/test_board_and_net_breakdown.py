@@ -1,8 +1,7 @@
 """D 项净成本 + 板块(20cm/10cm)分解 —— 指标页透出净盈亏比/净胜率/板块拆分的数据源。
 
-因果：只读 recommendation_runs(已完成 formal) + recommendations(rec_) + recommendation_outcomes(已结算)，
-净口径与 self_check._compute_d_cost 一致（扣 0.07%/笔）；板块判定与 self_check._is_20cm_code 一致
-（300/301/688/689 = 20cm）。纯只读，不改任何规则，不污染样本。
+因果：与核心 KPI 共用正式实盘、日历窗口、去重及结算口径；净口径扣 0.07%/笔，
+板块判定仍与 self_check._is_20cm_code 一致（300/301/688/689 = 20cm）。
 """
 from app.services.outcome_service import (
     _is_20cm_code,
@@ -25,10 +24,10 @@ def test_is_20cm_code_classification():
 
 def test_board_and_net_breakdown_keys_and_shape(db):
     """返回结构完整且字段类型正确。"""
-    res = board_and_net_breakdown(db, window_trade_days=10)
+    res = board_and_net_breakdown(db, window_days=10)
     assert isinstance(res, dict)
-    assert res["window_trade_days"] == 10
-    assert isinstance(res["trade_dates"], list)
+    assert res["window_days"] == 10
+    assert res["date_range"]["window_days"] == 10
     assert isinstance(res["sample_count"], int)
     assert "net" in res and "board" in res
     assert set(res["board"].keys()) == {"20cm", "10cm"}
@@ -36,7 +35,7 @@ def test_board_and_net_breakdown_keys_and_shape(db):
 
 def test_board_and_net_breakdown_sane_when_data_present(db):
     """有已结算样本时：净胜率∈[0,100]、净盈亏比为正浮点、板块样本之和=总样本。"""
-    res = board_and_net_breakdown(db, window_trade_days=10)
+    res = board_and_net_breakdown(db, window_days=10)
     if res["sample_count"] == 0 or res["net"] is None:
         # 该窗口无已结算 formal 推荐：诚实返回 net=None，不虚构
         assert res["net"] is None
@@ -57,7 +56,7 @@ def test_board_and_net_breakdown_net_matches_gross_minus_cost(db):
 
     结构性护栏：净口径不为虚构——当两侧均有盈亏时 net_pl < gross_pl 的差由交易成本驱动。
     """
-    res = board_and_net_breakdown(db, window_trade_days=30)
+    res = board_and_net_breakdown(db, window_days=30)
     if res["net"] is None:
         return
     net = res["net"]
