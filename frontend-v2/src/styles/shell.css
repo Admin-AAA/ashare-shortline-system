@@ -320,6 +320,45 @@
   transition: transform var(--motion-instant), color var(--motion-instant);
 }
 
+/* ── 复盘页：可展开详情行（推荐历史 → 决策详情）──
+   在 .records-row--clickable 的 hover 背景基础上，加左侧竖条 + 收尾「展开」箭头，
+   让“这行能点开”一眼可辨，而不必等悬停。 */
+.history-row--expandable {
+  cursor: pointer;
+  transition: background var(--motion-instant);
+}
+
+.history-row--expandable:hover {
+  background: var(--surface-soft);
+}
+
+/* 左侧竖条：每行的点击锚点；hover / 展开时点亮成主题色 */
+.history-row__rail {
+  display: inline-block;
+  width: 3px;
+  height: 20px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+  flex-shrink: 0;
+  transition: background var(--motion-instant);
+}
+
+.history-row--expandable:hover .history-row__rail,
+.history-row--expanded .history-row__rail {
+  background: var(--accent);
+}
+
+/* 收尾「展开」箭头：默认很淡，hover 时点亮 + 外推，作为行级动作提示 */
+.history-row__expand {
+  color: color-mix(in srgb, var(--muted) 65%, transparent);
+  transition: transform var(--motion-instant), color var(--motion-instant);
+}
+
+.history-row--expandable:hover .history-row__expand {
+  color: var(--accent);
+  transform: translateX(2px);
+}
+
 /* ── 记录中心：运行推荐记录列表筛选条（极地海洋玻璃态） ── */
 .records-filterbar {
   display: flex;
