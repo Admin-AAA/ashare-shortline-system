@@ -24,6 +24,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from feature_signal_guard import point_biserial
 
 from app.db.session import SessionLocal
+from app.services.capital_flow_factor_evidence import (
+    CAPITAL_FLOW_DISCOVERY_DATE,
+    fetch_dedup_live_formal_capital_flow,
+    summarize_discovery_oos,
+)
 from app.services.feature_builder import market_regime_score
 from sqlalchemy import text
 
@@ -3812,41 +3817,34 @@ def check_auxiliary_factor_data(db) -> None:
         except Exception as exc:
             print(f'  {table:16} {usage}: 查询失败 {str(exc)[:60]}')
 
-    # 资金流因子预测力摘要（T1 Alpha 衰减监控）：3日累计主力净流入 vs outcome
-    # 2026-07-24 发现 r_pb=+0.118 通过 feature_signal_guard，待前瞻验证。本段每轮
-    # 报告当前预测力，监控 Alpha 衰减（T1 要求衰减>30% 标记）。
+    # 资金流因子预测力摘要：统一去重探索口径，并单列发现日之后的 untouched OOS。
+    # 旧 r_pb 基线受重复 formal run 放大，不能继续用于“衰减/提升”判断。
     try:
-        rows = db.execute(text("""
-            SELECT o.outcome_label, cf.cumulative_inflow_3d_yi
-            FROM recommendations r
-            JOIN recommendation_runs rr ON r.run_id = rr.run_id
-            JOIN recommendation_outcomes o ON o.recommendation_id = r.recommendation_id
-            JOIN capital_flow cf ON cf.code = r.code AND cf.trade_date = r.trade_date
-            WHERE rr.run_mode='formal' AND o.outcome_label IN ('success','failed')
-              AND cf.cumulative_inflow_3d_yi IS NOT NULL AND ABS(cf.cumulative_inflow_3d_yi) > 0.001
-        """)).fetchall()
+        rows = fetch_dedup_live_formal_capital_flow(db)
+        rows = [r for r in rows if r['cumulative_inflow_3d_yi'] is not None
+                and abs(float(r['cumulative_inflow_3d_yi'] or 0)) > 0.001]
         if len(rows) >= 20:
-            y = [1 if r[0] == 'success' else 0 for r in rows]
-            x = [float(r[1] or 0) for r in rows]
+            y = [1 if r['outcome_label'] == 'success' else 0 for r in rows]
+            x = [float(r['cumulative_inflow_3d_yi'] or 0) for r in rows]
             r_pb = point_biserial(x, y)
             pos = [yi for xi, yi in zip(x, y) if xi > 0]
             neg = [yi for xi, yi in zip(x, y) if xi <= 0]
             wr_pos = sum(pos) * 100 / len(pos) if pos else 0
             wr_neg = sum(neg) * 100 / len(neg) if neg else 0
             r_pb_str = f'{r_pb:+.4f}' if r_pb is not None else 'N/A'
-            # Alpha 衰减自动判定：r_pb 较基准衰减>30% 即 ⚠️（T1 要求）
-            _BASELINE_RPB = 0.118  # 2026-07-24 发现时的 r_pb
-            _decay = (1 - r_pb / _BASELINE_RPB) * 100 if r_pb is not None and _BASELINE_RPB > 0 else None
-            _decay_tag = f' ⚠️衰减{_decay:.0f}%(>30%需复查)' if _decay is not None and _decay > 30 else ' ✅无衰减'
             print(f'  资金流因子(3日累计主力净流入): n={len(rows)} r_pb={r_pb_str} | '
                   f'流入>0 WR={wr_pos:.1f}% 流入<=0 WR={wr_neg:.1f}% (Δ{wr_pos-wr_neg:+.1f}pp) | '
-                  f'基准 r_pb=+{_BASELINE_RPB:.3f}{_decay_tag}')
+                  f'[code+trade_date去重；探索窗口，不与受重复样本污染的旧基线比较]')
+        oos = summarize_discovery_oos(rows)
+        signal = oos['positive']
+        print(f'  资金流独立OOS(发现日{CAPITAL_FLOW_DISCOVERY_DATE}后, 3日流入>0): '
+              f'n={signal["n"]} days={signal["trade_days"]} WR={signal["win_rate"]}% '
+              f'净期望={signal["net_expectancy"]}% PF={signal["profit_factor"]} | {oos["verdict"]}')
     except Exception as exc:
         print(f'  资金流因子预测力查询失败: {str(exc)[:60]}')
 
     # 融资融券因子预测力（margin_detail rzmre 变化率 vs outcome）
-    # 2026-07-24 分析：rzmre 绝对值 r_pb=+0.047 弱；变化率(当日vs近5日均值) r_pb=+0.085 仍弱于
-    # 资金流 +0.118。融资盘（散户杠杆）预测力弱于主力资金净流入——记录避免重复探索。
+    # 融资盘（散户杠杆）仅作探索诊断；与资金流一样，未通过独立 OOS 前不得晋级。
     try:
         rows = db.execute(text("""
             SELECT o.outcome_label, md.rzmre
@@ -3863,7 +3861,7 @@ def check_auxiliary_factor_data(db) -> None:
             r_pb = point_biserial(x, y)
             r_pb_str = f'{r_pb:+.4f}' if r_pb is not None else 'N/A'
             print(f'  融资融券因子(rzmre绝对值): n={len(rows)} r_pb={r_pb_str} | '
-                  f'弱预测力（变化率 r_pb≈+0.085 仍弱于资金流 +0.118，融资盘预测力低）')
+                  f'探索窗口（未切独立 OOS，不作与资金流的晋级比较）')
     except Exception as exc:
         print(f'  融资融券因子预测力查询失败: {str(exc)[:60]}')
 

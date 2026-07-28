@@ -21,44 +21,29 @@ SCRIPTS_DIR = os.path.dirname(__file__)
 sys.path.insert(0, os.path.abspath(SCRIPTS_DIR))
 
 from app.db.session import SessionLocal
-from sqlalchemy import text
 from feature_signal_guard import evaluate_feature_signal, point_biserial
-
-
-
+from app.services.capital_flow_factor_evidence import (
+    CAPITAL_FLOW_DISCOVERY_DATE,
+    CAPITAL_FLOW_FIELDS,
+    fetch_dedup_live_formal_capital_flow,
+    summarize_discovery_oos,
+    summarize_factor_groups,
+)
 
 def main() -> None:
     db = SessionLocal()
     try:
-        rows = [dict(r._mapping) for r in db.execute(text("""
-            SELECT r.code, r.trade_date, o.outcome_label, o.executed_return,
-                   cf.main_net_inflow_yi, cf.super_large_net_inflow_yi,
-                   cf.large_net_inflow_yi, cf.cumulative_inflow_3d_yi,
-                   cf.cumulative_inflow_5d_yi
-            FROM recommendations r
-            JOIN recommendation_runs rr ON r.run_id = rr.run_id
-            JOIN recommendation_outcomes o ON o.recommendation_id = r.recommendation_id
-            JOIN capital_flow cf ON cf.code = r.code AND cf.trade_date = r.trade_date
-            WHERE rr.run_mode = 'formal' AND o.outcome_label IN ('success', 'failed')
-              AND cf.main_net_inflow_yi IS NOT NULL AND ABS(cf.main_net_inflow_yi) > 0.001
-        """)).fetchall()]
+        rows = fetch_dedup_live_formal_capital_flow(db)
 
-        print(f"资金流因子预测力分析（LIVE formal 已结算，匹配推荐日当天资金流）")
-        print(f"样本: {len(rows)} 笔\n")
+        print("资金流因子预测力分析（LIVE formal 已结算；按 code+trade_date 去重）")
+        print(f"独立样本: {len(rows)} 笔，覆盖 {len({str(r['trade_date']) for r in rows})} 个交易日\n")
         if len(rows) < 20:
             print("样本不足 20，不可分析")
             return
 
-        fields = [
-            ("main_net_inflow_yi", "当日主力净流入"),
-            ("super_large_net_inflow_yi", "超大单净流入"),
-            ("large_net_inflow_yi", "大单净流入"),
-            ("cumulative_inflow_3d_yi", "3日累计主力净流入"),
-            ("cumulative_inflow_5d_yi", "5日累计主力净流入"),
-        ]
         best_field = None
         best_rpb = 0
-        for field, name in fields:
+        for field, name in CAPITAL_FLOW_FIELDS:
             pairs = [(float(r[field] or 0), 1 if r['outcome_label'] == 'success' else 0)
                      for r in rows if r[field] is not None and abs(float(r[field] or 0)) > 0.001]
             if len(pairs) < 20:
@@ -81,10 +66,10 @@ def main() -> None:
             field, name = best_field
             print(f"\n最强因子: {name} (r_pb={best_rpb:+.4f})")
             # feature_signal_guard 判正例时间分布（防单日伪影）
-            pos_dates = sorted({
+            pos_dates = sorted([
                 str(r['trade_date']) for r in rows
                 if r[field] is not None and float(r[field] or 0) > 0.001 and r['outcome_label'] == 'success'
-            })
+            ])
             guard = evaluate_feature_signal(pos_dates)
             if guard["trustworthy"]:
                 print(f"  feature_signal_guard: ✅ trustworthy（跨 {guard['independent_days']} 日，"
@@ -94,32 +79,25 @@ def main() -> None:
                 print(f"  feature_signal_guard: ❌ {guard['reason']}")
                 print(f"  → 禁止据此加规则（单日伪影风险）")
 
-            # 反事实：剔除最强因子<=0 的票后 D 项净盈亏比变化（量化因子边际价值）
-            # 只读分析，不加规则。代价=损失被剔除的样本量，需权衡信息增益 vs 样本损失。
-            def _net_pl(lst):
-                rets = [float(r['executed_return'] or 0) - 0.07 for r in lst if r['executed_return'] is not None]
-                if not rets: return None, 0, 0
-                win = sum(x for x in rets if x > 0)
-                lose = abs(sum(x for x in rets if x < 0))
-                pl = win / lose if lose > 0 else float('inf')
-                wr = sum(1 for r in lst if r['outcome_label'] == 'success') * 100 / len(lst)
-                avg = sum(rets) / len(rets)
-                return pl, wr, avg
-
-            all_rows = [r for r in rows if r[field] is not None and abs(float(r[field] or 0)) > 0.001]
-            kept = [r for r in all_rows if float(r[field] or 0) > 0]
-            dropped = [r for r in all_rows if float(r[field] or 0) <= 0]
-            pl_all, wr_all, avg_all = _net_pl(all_rows)
-            pl_kept, wr_kept, avg_kept = _net_pl(kept)
-            pl_drop, wr_drop, avg_drop = _net_pl(dropped)
-            if pl_all and pl_kept:
-                drop_pct = len(dropped) * 100 / len(all_rows) if all_rows else 0
+            groups = summarize_factor_groups(rows, field)
+            all_metrics = groups["sample"]
+            kept_metrics = groups["positive"]
+            dropped_metrics = groups["non_positive"]
+            if all_metrics["n"] and kept_metrics["n"]:
+                drop_pct = dropped_metrics["n"] * 100 / all_metrics["n"]
                 print(f"\n  反事实（剔除 {name}<=0 的票）:")
-                print(f"    全量:        n={len(all_rows)} WR={wr_all:.1f}% avg={avg_all:.2f}% 净PL={pl_all:.2f}")
-                print(f"    剔除后(>0):  n={len(kept)} WR={wr_kept:.1f}% avg={avg_kept:.2f}% 净PL={pl_kept:.2f}")
-                print(f"    被剔除(<=0): n={len(dropped)} WR={wr_drop:.1f}% avg={avg_drop:.2f}% 净PL={pl_drop:.2f}")
-                print(f"    边际: WR {wr_all:.1f}→{wr_kept:.1f} ({wr_kept-wr_all:+.1f}pp) | "
-                      f"净PL {pl_all:.2f}→{pl_kept:.2f} ({pl_kept-pl_all:+.2f}) | 代价=损失{drop_pct:.0f}%样本")
+                for label, metrics in (("全量", all_metrics), ("剔除后(>0)", kept_metrics), ("被剔除(<=0)", dropped_metrics)):
+                    print(f"    {label:12} n={metrics['n']} days={metrics['trade_days']} "
+                          f"WR={metrics['win_rate']}% 净期望={metrics['net_expectancy']}% "
+                          f"PF={metrics['profit_factor']}")
+                print(f"    代价=损失{drop_pct:.0f}%样本；此处仅为探索窗口，不能作为晋级证据")
+
+        oos = summarize_discovery_oos(rows)
+        signal = oos["positive"]
+        print(f"\n独立 OOS（因子发现于 {CAPITAL_FLOW_DISCOVERY_DATE} 收盘后，{oos['window']}）:")
+        print(f"  3日资金流>0: n={signal['n']} days={signal['trade_days']} "
+              f"WR={signal['win_rate']}% 净期望={signal['net_expectancy']}% PF={signal['profit_factor']}")
+        print(f"  结论: {oos['verdict']}")
     finally:
         db.close()
 
