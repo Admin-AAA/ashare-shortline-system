@@ -479,16 +479,22 @@ def _rsi_score(rsi: float) -> int:
 
 
 def _capital_flow_score(item: dict[str, Any]) -> float:
+    """资金流向评分（0-100）。
+
+    修正历史问题（2026-07-28）：
+    - inflow_5d_yi 字段不存在（view 提供的是 cumulative_inflow_5d_yi），旧代码恒走 -10 分支。
+    - sector_fund_rank 字段不存在（view 里无此字段），旧代码默认 99 恒走 -8 分支。
+    - 两项死因子共 -18 分噪声，导致 capital_flow_score 只有 32/46 两值且无区分度。
+    - main_net_inflow_ratio 已废弃（旧公式垃圾 + 单位错致异常值），置 None。
+
+    修正后公式：
+    - 主力净流入当日（main_net_inflow_yi）±18 分（量级-6~+7 亿 → [-18,+21]）
+    - 累计5日流入（cumulative_inflow_5d_yi）±14 分（>0 给 +14，<=0 给 -10）
+    - 去掉 sector_fund_rank（从未工作过，恒 -8 分噪声）
+    """
     score = 50.0
     score += min(22, max(-18, _num(item.get("main_net_inflow_yi")) * 3))
-    score += 14 if _num(item.get("inflow_5d_yi")) > 0 else -10
-    rank = int(_num(item.get("sector_fund_rank"), 99))
-    if rank <= 5:
-        score += 14
-    elif rank <= 15:
-        score += 6
-    else:
-        score -= 8
+    score += 14 if _num(item.get("cumulative_inflow_5d_yi")) > 0 else -10
     return round(min(100, max(0, score)), 2)
 
 
