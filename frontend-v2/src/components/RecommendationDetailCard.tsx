@@ -3,6 +3,7 @@ import { useState } from "react";
 import { api } from "../api/client";
 import type { AgentLog, RecommendationCard, RecommendationDetail, SkillSignal, StrategyPerfSummary } from "../types";
 import { ruleKeyLevelLabels, rulesMentionKeyLevel } from "../utils/ruleKeyLevels";
+import { formatApiDateTime } from "../utils/display";
 import { MultiStrategyBadge } from "./MultiStrategyBadge";
 
 /**
@@ -100,6 +101,8 @@ type DetailItem = Pick<
   | "market_context"
   | "setup_type"
 > & {
+  trade_date?: string | null;
+  recommended_at?: string | null;
   ideal_buy?: number | null;
   secondary_buy?: number | null;
   agent_logs?: AgentLog[];
@@ -118,6 +121,28 @@ export function RecommendationDetailCard({ item }: { item: DetailItem }) {
   return (
     <div style={cardContainerStyle}>
       <div>
+        {(item.trade_date || item.recommended_at) && (
+          <div
+            style={{
+              marginBottom: "var(--space-3)",
+              fontSize: "var(--text-xs)",
+              color: "var(--text-muted)",
+              display: "flex",
+              alignItems: "center",
+              gap: "var(--space-2)",
+            }}
+          >
+            <span className="panel__kicker" style={{ marginBottom: 0 }}>推荐时间</span>
+            <span style={{ fontFamily: "var(--font-mono)", color: "var(--ink-secondary)" }}>
+              {item.recommended_at
+                ? formatApiDateTime(item.recommended_at)
+                : item.trade_date}
+            </span>
+            {item.recommended_at && (
+              <span style={{ opacity: 0.75 }}>北京时间 · 盘后推荐次日入场</span>
+            )}
+          </div>
+        )}
         {hasTradeParams && (
           <div style={{ marginBottom: "var(--space-3)" }}>
             <div className="panel__kicker" style={{ marginBottom: "var(--space-2)" }}>交易参数</div>
