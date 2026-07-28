@@ -2551,6 +2551,18 @@ export type SingleStockAnalysis = {
   elapsed_ms: number;
   price: number | null;
   final_score: number | null;
+  recommended?: boolean;
+  pipeline_decision?: string;
+  pipeline?: {
+    decision: string;
+    recommended: boolean;
+    preset_id?: string | null;
+    preset_name?: string | null;
+    score_line: number;
+    selected_skill_count: number;
+    skill_gate_passed: boolean;
+    reviewed: boolean;
+  };
   dsa_profile: {
     macd_status: string | null;
     macd_dif: number | null;

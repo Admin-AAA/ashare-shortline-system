@@ -126,6 +126,17 @@ def test_persist_rule_score_never_exceeds_100_by_readding_components():
     assert 0 <= db.added[0].final_score <= 100
 
 
+def test_pipeline_rejection_persists_no_score_instead_of_dsa_fallback():
+    """正式管线未产出评分卡时，不能拿 DSA 特征分冒充最终推荐分。"""
+    db = _FakeDB()
+    result = _make_result()
+    result["final_score"] = None
+
+    _persist_single_stock_history(db, "000001", "2026-07-16", result)
+
+    assert db.added[0].final_score is None
+
+
 def test_persist_swallows_failure_without_raising():
     """落库异常不影响主流程：commit 抛错时仅 rollback，不向外抛。"""
     class _BoomDB(_FakeDB):

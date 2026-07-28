@@ -407,7 +407,7 @@ function SingleStockScorePanel({ presets }: { presets: Preset[] }) {
       bodyStyle={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}
     >
       <div className="text-muted" style={{ fontSize: "var(--text-sm)" }}>
-        输入股票代码，对单只股票运行基础短线策略特征构建 + 评分流程。可选选择预设并触发 LLM 多 Skill 聚合评分（与推荐管线一致，消耗 API 额度）。
+        输入股票代码，以该股票作为唯一输入执行正式推荐管线；预筛、技能门控、深审、聚合与入池规则均与批量推荐一致。
       </div>
 
       <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "center", flexWrap: "wrap" }}>
@@ -603,6 +603,13 @@ function SingleStockScoreResult({ result }: { result: SingleStockAnalysis }) {
           <span className="tag">{result.trade_date}</span>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: "var(--space-3)" }}>
+          <ScoreMetric label="管线最终分" value={result.final_score} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <span className="text-muted" style={{ fontSize: "var(--text-xs)" }}>推荐结果</span>
+            <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: result.recommended ? "var(--market-up)" : "var(--ink-secondary)" }}>
+              {result.recommended ? "已入选" : "未入选"}
+            </span>
+          </div>
           <ScoreMetric label="最新价" value={result.price} />
           <ScoreMetric label="K线条数" value={result.bar_count} />
           <ScoreMetric label="耗时(ms)" value={result.elapsed_ms} />
@@ -689,8 +696,8 @@ function SingleStockLlmSection({ llm }: { llm: NonNullable<SingleStockAnalysis["
     );
   }
 
-  // 预设多 skill 聚合评分模式
-  if (llm.final_score != null && llm.skill_reviews && llm.skill_reviews.length > 0) {
+  // 正式管线 Skill 深审结果（即使后续因去重/分数线未入池，也应完整展示）
+  if (llm.skill_reviews && llm.skill_reviews.length > 0) {
     return <PresetLlmSection llm={llm} />;
   }
 
@@ -772,7 +779,7 @@ function PresetLlmSection({ llm }: { llm: NonNullable<SingleStockAnalysis["llm_a
       {/* 聚合评分总览 */}
       <section className="panel" style={{ margin: 0, padding: "var(--space-3)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-2)" }}>
-          <div className="panel__kicker">预设聚合评分 · {llm.preset_name || llm.preset_id}</div>
+          <div className="panel__kicker">管线聚合评分{llm.preset_name ? ` · ${llm.preset_name}` : ""}</div>
           {llm.elapsed_ms != null && (
             <span className="text-muted text-mono" style={{ fontSize: "var(--text-xs)" }}>{llm.elapsed_ms}ms</span>
           )}
