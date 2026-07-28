@@ -26,7 +26,7 @@ from app.services.recommendations.projection import (
     build_run_progress,
 )
 from app.services.runs.progress import progress_pct
-from app.services.workbench_service import list_run_recommendations
+from app.services.workbench_service import list_dashboard_recommendations, list_run_recommendations
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +195,14 @@ def _build_overview_payload(db: Session) -> DashboardOverview:
     recommendation_run_row = _select_dashboard_recommendation_run(db)
     run_recommendations = []
     if recommendation_run_row is not None:
-        run_recommendations = list_run_recommendations(db, str(recommendation_run_row.run_id))[:12]
+        if recommendation_run_row.run_mode == "formal":
+            run_recommendations = list_dashboard_recommendations(
+                db,
+                str(recommendation_run_row.trade_date),
+            )
+        else:
+            # 保留没有正式运行时的历史兜底语义。
+            run_recommendations = list_run_recommendations(db, str(recommendation_run_row.run_id))[:12]
 
     pool_status = load_dashboard_pool_status(db)
     data_health = summarize_pool_status(pool_status)
