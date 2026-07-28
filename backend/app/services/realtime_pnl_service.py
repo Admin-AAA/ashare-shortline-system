@@ -128,34 +128,53 @@ def _load_pending_recs(db: Session) -> list[Recommendation]:
 
 
 def _fetch_rtk_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
-    """经统一 Router 批量拉 rt_k 当日实时 OHLC，返回 {code6: {open,high,low,close,...}}。"""
+    """批量拉当日实时 OHLC；rt_k 缺失时用 realtime_quote 补齐。"""
     if not codes:
         return {}
     from app.services.tushare_client import get_pro
 
     ts_codes = [f"{c}.{_exchange_from_code(c)}" for c in codes]
+    quotes: dict[str, dict[str, Any]] = {}
     try:
         df = get_pro().rt_k(ts_code=",".join(ts_codes))
     except Exception as exc:
         logger.warning("rt_k 实时盈亏拉取失败: %s", str(exc)[:200])
-        return {}
-    if df is None or df.empty:
-        return {}
-    quotes: dict[str, dict[str, Any]] = {}
-    for _, row in df.iterrows():
-        code6 = str(row.get("ts_code") or "").split(".")[0]
-        if not code6:
-            continue
-        quotes[code6] = {
-            "open": _f(row.get("open")),
-            "high": _f(row.get("high")),
-            "low": _f(row.get("low")),
-            "close": _f(row.get("close")),  # rt_k close = 现价
-            "pre_close": _f(row.get("pre_close")),
-            "vol": _f(row.get("vol")),
-            "amount": _f(row.get("amount")),
-            "name": str(row.get("name") or "").strip(),
-        }
+        df = None
+    if df is not None and not df.empty:
+        for _, row in df.iterrows():
+            code6 = str(row.get("ts_code") or "").split(".")[0]
+            if not code6:
+                continue
+            quotes[code6] = {
+                "open": _f(row.get("open")),
+                "high": _f(row.get("high")),
+                "low": _f(row.get("low")),
+                "close": _f(row.get("close")),  # rt_k close = 现价
+                "pre_close": _f(row.get("pre_close")),
+                "vol": _f(row.get("vol")),
+                "amount": _f(row.get("amount")),
+                "name": str(row.get("name") or "").strip(),
+            }
+
+    missing_codes = [code for code in codes if code not in quotes]
+    if missing_codes:
+        from app.services.realtime_quote_client import fetch_realtime_quotes
+
+        fallback_rows = fetch_realtime_quotes(missing_codes, use_cache=False)
+        for code6, row in fallback_rows.items():
+            close = _f(row.get("price") or row.get("close"))
+            if close <= 0:
+                continue
+            quotes[code6] = {
+                "open": _f(row.get("open")),
+                "high": _f(row.get("high")),
+                "low": _f(row.get("low")),
+                "close": close,
+                "pre_close": _f(row.get("pre_close")),
+                "vol": _f(row.get("volume") or row.get("vol")),
+                "amount": _f(row.get("amount")),
+                "name": str(row.get("name") or "").strip(),
+            }
     return quotes
 
 

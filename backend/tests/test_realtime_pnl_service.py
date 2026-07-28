@@ -118,6 +118,46 @@ def test_unavailable_when_quote_close_zero():
     assert out["status"] == "unavailable"
 
 
+def test_fetch_rtk_quotes_falls_back_to_realtime_quote_when_rt_k_fails(monkeypatch):
+    """rt_k 主链失败时，结算中记录仍应从批量实时报价拿到现价。"""
+    from app.services import realtime_quote_client, tushare_client
+
+    class _FailingPro:
+        def rt_k(self, **_kwargs):
+            raise RuntimeError("rt_k unavailable")
+
+    monkeypatch.setattr(tushare_client, "get_pro", lambda: _FailingPro())
+    monkeypatch.setattr(
+        realtime_quote_client,
+        "fetch_realtime_quotes",
+        lambda codes, use_cache=False: {
+            "600775": {
+                "name": "南京熊猫",
+                "price": 10.35,
+                "open": 9.80,
+                "high": 10.35,
+                "low": 9.70,
+                "pre_close": 9.41,
+                "volume": 1234,
+                "amount": 5678,
+            }
+        },
+    )
+
+    quotes = svc._fetch_rtk_quotes(["600775"])
+
+    assert quotes["600775"] == {
+        "open": 9.80,
+        "high": 10.35,
+        "low": 9.70,
+        "close": 10.35,
+        "pre_close": 9.41,
+        "vol": 1234,
+        "amount": 5678,
+        "name": "南京熊猫",
+    }
+
+
 def test_watching_when_target_not_touched(monkeypatch):
     # low 远高于买点 → 买点未触发 → watching + 距买点
     rec = _Rec("000011", fs={"ideal_buy": 7.0, "secondary_buy": 6.8})
