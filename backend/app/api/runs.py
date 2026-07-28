@@ -102,12 +102,12 @@ def create_backtest_comparison(payload: dict, db: Session = Depends(get_db)):
 
 @router.post("/analyze-stock")
 def analyze_single_stock(payload: dict, db: Session = Depends(get_db)):
-    """单股票分析：加载历史K线 → 构建特征 → 计算基础短线策略评分 → 可选触发 LLM agent。
+    """单股票分析：以一只股票为输入，执行正式推荐管线的完整评分阶段。
 
     请求体:
         code: str           # 股票代码（必填）
         trade_date: str     # 分析日期 YYYY-MM-DD（默认最近交易日）
-        include_llm: bool   # 是否触发 LLM skill agent 分析（默认 False，会消耗 LLM 额度）
+        include_llm: bool   # 是否允许正式管线触发 LLM skill 深审（会消耗 LLM 额度）
         skill_id: str       # 指定 skill（默认 daily-stock-analysis-skill）
     """
     from app.services.single_stock_analysis import analyze_stock

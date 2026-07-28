@@ -30,6 +30,7 @@ const WINDOW_OPTIONS: Array<{ label: string; value: number | null }> = [
   { label: "近 30 天", value: 30 },
   { label: "近 90 天", value: 90 },
 ];
+const DEFAULT_WINDOW_DAYS = 30;
 
 /** 英文因子名 → 中文小字翻译（Alpha 衰减面板的因子列）。 */
 const FACTOR_LABELS_ZH: Record<string, string> = {
@@ -76,7 +77,7 @@ function TermWithZh({ en, zhMap }: { en: string; zhMap: Record<string, string> }
  * 5. Setup 胜率：哪个 setup 类型最有效
  */
 export function MetricsPage() {
-  const [windowDays, setWindowDays] = useState<number | null>(null);
+  const [windowDays, setWindowDays] = useState<number | null>(DEFAULT_WINDOW_DAYS);
 
   const { data: scoreLines, loading: l1, error: e1 } = useApi<ScoreLineStatsRow[]>(
     () => api.metricsByScoreLine(windowDays ?? undefined),
@@ -247,7 +248,7 @@ function SystemHealthPanel() {
 /** D 项净成本 + 板块(20cm/10cm)分解面板：北极星 D 项「净盈亏比≥2.0」目标一屏可见，
  * 并定位拖后腿的板块（如 10cm 净盈亏比 < 20cm）。与 self_check 板块拆分同源口径。 */
 function DNetPanel() {
-  const [windowDays, setWindowDays] = useState<number>(10);
+  const [windowDays, setWindowDays] = useState<number>(DEFAULT_WINDOW_DAYS);
   const { data, loading, error } = useApi<DNetBreakdown>(
     () => api.dNetBreakdown(windowDays),
     [windowDays],

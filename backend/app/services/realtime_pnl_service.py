@@ -1,6 +1,6 @@
-"""未结算推荐实时盈亏（实盘计算）。
+"""未最终结算推荐实时盈亏（实盘计算）。
 
-对 pending（未结算）推荐，用 rt_k 当日实时 OHLC 合成一根当日临时日K，
+对 pending / provisional（未最终结算）推荐，用 rt_k 当日实时 OHLC 合成一根当日临时日K，
 复用 outcome 结算同款的 ``_resolve_entry`` 判定入场价（含买点命中/开盘回退/
 gap 过滤/一字跌停 block 等边界），再以 rt_k 现价算浮盈。**纯展示，不落库、
 不改真实结算**——盘后 ``label_pending_outcomes`` 口径不受影响。
@@ -22,6 +22,7 @@ from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, 
 from app.services.outcome_simulation import (
     MAX_ENTRY_GAP_PCT,
     OUTCOME_PENDING,
+    OUTCOME_PROVISIONAL,
     _loads,
     _resolve_entry,
 )
@@ -56,7 +57,7 @@ def _exchange_from_code(code: str) -> str:
 
 
 def list_pending_realtime_pnl(db: Session, *, use_cache: bool = True) -> dict[str, Any]:
-    """对全部 pending 推荐实盘计算实时浮盈，返回按 run/trade_date 分组前的扁平列表。
+    """对全部未最终结算推荐实盘计算实时浮盈，返回按 run/trade_date 分组前的扁平列表。
 
     返回::
         {
@@ -106,7 +107,7 @@ def list_pending_realtime_pnl(db: Session, *, use_cache: bool = True) -> dict[st
 
 
 def _load_pending_recs(db: Session) -> list[Recommendation]:
-    """全部正式 run 的 pending 推荐（无 outcome 行 或 outcome_label=pending）。"""
+    """全部正式 run 的未最终结算推荐（无 outcome 行、pending 或 provisional）。"""
     stmt = (
         select(Recommendation)
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
@@ -118,7 +119,7 @@ def _load_pending_recs(db: Session) -> list[Recommendation]:
             RecommendationRun.run_mode == "formal",
             or_(
                 RecommendationOutcome.recommendation_id.is_(None),
-                RecommendationOutcome.outcome_label == OUTCOME_PENDING,
+                RecommendationOutcome.outcome_label.in_((OUTCOME_PENDING, OUTCOME_PROVISIONAL)),
             ),
         )
         .order_by(Recommendation.trade_date.desc(), Recommendation.final_score.desc())
@@ -127,34 +128,53 @@ def _load_pending_recs(db: Session) -> list[Recommendation]:
 
 
 def _fetch_rtk_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
-    """经统一 Router 批量拉 rt_k 当日实时 OHLC，返回 {code6: {open,high,low,close,...}}。"""
+    """批量拉当日实时 OHLC；rt_k 缺失时用 realtime_quote 补齐。"""
     if not codes:
         return {}
     from app.services.tushare_client import get_pro
 
     ts_codes = [f"{c}.{_exchange_from_code(c)}" for c in codes]
+    quotes: dict[str, dict[str, Any]] = {}
     try:
         df = get_pro().rt_k(ts_code=",".join(ts_codes))
     except Exception as exc:
         logger.warning("rt_k 实时盈亏拉取失败: %s", str(exc)[:200])
-        return {}
-    if df is None or df.empty:
-        return {}
-    quotes: dict[str, dict[str, Any]] = {}
-    for _, row in df.iterrows():
-        code6 = str(row.get("ts_code") or "").split(".")[0]
-        if not code6:
-            continue
-        quotes[code6] = {
-            "open": _f(row.get("open")),
-            "high": _f(row.get("high")),
-            "low": _f(row.get("low")),
-            "close": _f(row.get("close")),  # rt_k close = 现价
-            "pre_close": _f(row.get("pre_close")),
-            "vol": _f(row.get("vol")),
-            "amount": _f(row.get("amount")),
-            "name": str(row.get("name") or "").strip(),
-        }
+        df = None
+    if df is not None and not df.empty:
+        for _, row in df.iterrows():
+            code6 = str(row.get("ts_code") or "").split(".")[0]
+            if not code6:
+                continue
+            quotes[code6] = {
+                "open": _f(row.get("open")),
+                "high": _f(row.get("high")),
+                "low": _f(row.get("low")),
+                "close": _f(row.get("close")),  # rt_k close = 现价
+                "pre_close": _f(row.get("pre_close")),
+                "vol": _f(row.get("vol")),
+                "amount": _f(row.get("amount")),
+                "name": str(row.get("name") or "").strip(),
+            }
+
+    missing_codes = [code for code in codes if code not in quotes]
+    if missing_codes:
+        from app.services.realtime_quote_client import fetch_realtime_quotes
+
+        fallback_rows = fetch_realtime_quotes(missing_codes, use_cache=False)
+        for code6, row in fallback_rows.items():
+            close = _f(row.get("price") or row.get("close"))
+            if close <= 0:
+                continue
+            quotes[code6] = {
+                "open": _f(row.get("open")),
+                "high": _f(row.get("high")),
+                "low": _f(row.get("low")),
+                "close": close,
+                "pre_close": _f(row.get("pre_close")),
+                "vol": _f(row.get("volume") or row.get("vol")),
+                "amount": _f(row.get("amount")),
+                "name": str(row.get("name") or "").strip(),
+            }
     return quotes
 
 

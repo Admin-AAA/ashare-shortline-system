@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
-from app.models.tables import DailyKbar
+from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun
 from app.services import realtime_pnl_service as svc
 
 
@@ -25,6 +27,63 @@ class _Rec:
 def _quote(open_p, high, low, close, vol=1000, amount=1e6):
     return {"open": open_p, "high": high, "low": low, "close": close,
             "pre_close": close, "vol": vol, "amount": amount, "name": "测试"}
+
+
+def test_load_pending_recs_includes_provisional_and_excludes_settled(db):
+    """provisional 仍未最终结算，应与 pending 一起进入实时盈亏。"""
+    run_id = "test_realtime_pnl_provisional_run"
+    provisional_id = "test_realtime_pnl_provisional_rec"
+    settled_id = "test_realtime_pnl_settled_rec"
+    db.add(
+        RecommendationRun(
+            run_id=run_id,
+            run_name="实时盈亏 provisional 回归测试",
+            run_mode="formal",
+            trade_date="2026-07-24",
+        )
+    )
+    db.add_all(
+        [
+            Recommendation(
+                recommendation_id=provisional_id,
+                run_id=run_id,
+                trade_date="2026-07-24",
+                code="000001",
+                name="测试临时态",
+                final_score=80,
+                status="provisional",
+            ),
+            Recommendation(
+                recommendation_id=settled_id,
+                run_id=run_id,
+                trade_date="2026-07-24",
+                code="000002",
+                name="测试已结算",
+                final_score=80,
+                status="success",
+            ),
+        ]
+    )
+    db.add_all(
+        [
+            RecommendationOutcome(
+                recommendation_id=provisional_id,
+                outcome_label="provisional",
+                outcome_label_legacy="provisional",
+            ),
+            RecommendationOutcome(
+                recommendation_id=settled_id,
+                outcome_label="success",
+                outcome_label_legacy="success",
+            ),
+        ]
+    )
+    db.flush()
+
+    loaded_ids = {rec.recommendation_id for rec in svc._load_pending_recs(db)}
+
+    assert provisional_id in loaded_ids
+    assert settled_id not in loaded_ids
 
 
 def test_holding_pnl_buy_target_touched(monkeypatch):
@@ -59,6 +118,46 @@ def test_unavailable_when_quote_close_zero():
     assert out["status"] == "unavailable"
 
 
+def test_fetch_rtk_quotes_falls_back_to_realtime_quote_when_rt_k_fails(monkeypatch):
+    """rt_k 主链失败时，结算中记录仍应从批量实时报价拿到现价。"""
+    from app.services import realtime_quote_client, tushare_client
+
+    class _FailingPro:
+        def rt_k(self, **_kwargs):
+            raise RuntimeError("rt_k unavailable")
+
+    monkeypatch.setattr(tushare_client, "get_pro", lambda: _FailingPro())
+    monkeypatch.setattr(
+        realtime_quote_client,
+        "fetch_realtime_quotes",
+        lambda codes, use_cache=False: {
+            "600775": {
+                "name": "南京熊猫",
+                "price": 10.35,
+                "open": 9.80,
+                "high": 10.35,
+                "low": 9.70,
+                "pre_close": 9.41,
+                "volume": 1234,
+                "amount": 5678,
+            }
+        },
+    )
+
+    quotes = svc._fetch_rtk_quotes(["600775"])
+
+    assert quotes["600775"] == {
+        "open": 9.80,
+        "high": 10.35,
+        "low": 9.70,
+        "close": 10.35,
+        "pre_close": 9.41,
+        "vol": 1234,
+        "amount": 5678,
+        "name": "南京熊猫",
+    }
+
+
 def test_watching_when_target_not_touched(monkeypatch):
     # low 远高于买点 → 买点未触发 → watching + 距买点
     rec = _Rec("000011", fs={"ideal_buy": 7.0, "secondary_buy": 6.8})
@@ -74,8 +173,14 @@ def test_watching_when_target_not_touched(monkeypatch):
     assert out["distance_to_target_pct"] is not None
 
 
-def test_signal_bar_used_for_intraday_judgement():
+def test_signal_bar_used_for_intraday_judgement(monkeypatch):
     # 提供 signal_bar（trade_date 当日日K）时 _resolve_entry 能区分盘中/盘后
+    class _FixedDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 7, 27)
+
+    monkeypatch.setattr(svc, "date", _FixedDate)
     rec = _Rec("601606", recommend_price=30.5)
     sig = DailyKbar(code="601606", trade_date="2026-07-24", open=30.0, high=31.0, low=29.5,
                     close=30.5, volume=1000, amount=1e6)

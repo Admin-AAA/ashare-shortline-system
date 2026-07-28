@@ -9,7 +9,7 @@ import { useUrlRoute } from "../app/useUrlRoute";
 import { queryParam } from "../app/nav";
 import { RecommendationDetailCard } from "../components/RecommendationDetailCard";
 import { fmtPrice } from "../components/Shared";
-import { bucketLabel, exitReasonLabel, outcomeLabel, outcomeTone, setupLabel, BUCKET_LABELS } from "../utils/display";
+import { bucketLabel, exitReasonLabel, isOutcomeSettled, outcomeLabel, outcomeTone, setupLabel, BUCKET_LABELS } from "../utils/display";
 import { ruleKeyLevelLabels, rulesMentionKeyLevel } from "../utils/ruleKeyLevels";
 
 /**
@@ -37,7 +37,7 @@ export function HistoryPage() {
   const [details, setDetails] = useState<Record<string, RecommendationDetail>>({});
   const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<Record<string, string>>({});
-  // 实时盈亏：pending 推荐的实盘浮盈（rt_k 现价 - _resolve_entry 入场价），纯展示不改结算。
+  // 实时盈亏：pending / provisional 推荐的实盘浮盈，纯展示不改结算。
   const [pnlMap, setPnlMap] = useState<Record<string, RealtimePnlItem>>({});
   const [pnlLoading, setPnlLoading] = useState(false);
   const [pnlComputedAt, setPnlComputedAt] = useState<string | null>(null);
@@ -303,12 +303,12 @@ export function HistoryPage() {
           <RotateCcw size={13} /> 重置
         </button>
 
-        {/* 刷新实时盈亏：对 pending 推荐用 rt_k 现价算浮盈（纯展示，不改结算） */}
+        {/* 刷新实时盈亏：对未最终结算推荐用 rt_k 现价算浮盈（纯展示，不改结算） */}
         <button
           className="btn btn--ghost"
           onClick={() => loadRealtimePnl(true)}
           disabled={pnlLoading}
-          title={pnlComputedAt ? `对未结算推荐用实时价算浮盈 · 上次 ${pnlComputedAt}` : "对未结算推荐用实时价算浮盈"}
+          title={pnlComputedAt ? `对未最终结算推荐用实时价算浮盈 · 上次 ${pnlComputedAt}` : "对未最终结算推荐用实时价算浮盈"}
           style={{ padding: "6px 12px", fontSize: "var(--text-sm)" }}
         >
           {pnlLoading ? <Loader2 size={13} className="spin" /> : <Zap size={13} />} 实时盈亏
@@ -382,7 +382,9 @@ export function HistoryPage() {
             <tbody>
               {items.map((it) => {
                 const o = it.outcome;
-                const ret = o?.executed_return;
+                // provisional 的 executed_return 只是入场日收盘临时标记，不是可实现的最终收益；
+                // 未最终结算时改用实时盈亏，避免今日行情已更新却仍展示昨日临时值。
+                const ret = isOutcomeSettled(o?.outcome_label) ? o?.executed_return : undefined;
                 // 盈亏口径：executed_return 基于「次日开盘买入」（行业标准，A股 T+1 盘后推荐
                 // 只能次日买）。推荐价(recommend_price)是信号日收盘参考价，不是用户真实成本——
                 // 跳空低开时两者背离会让用户误以为「按推荐价算亏了」，故此处只展示真实口径，
