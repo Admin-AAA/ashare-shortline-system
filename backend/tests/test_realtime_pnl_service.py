@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
@@ -140,6 +140,7 @@ def test_fetch_rtk_quotes_falls_back_to_realtime_quote_when_rt_k_fails(monkeypat
                 "pre_close": 9.41,
                 "volume": 1234,
                 "amount": 5678,
+                "trade_date": "2026-07-28",
             }
         },
     )
@@ -155,6 +156,7 @@ def test_fetch_rtk_quotes_falls_back_to_realtime_quote_when_rt_k_fails(monkeypat
         "vol": 1234,
         "amount": 5678,
         "name": "南京熊猫",
+        "trade_date": "2026-07-28",
     }
 
 
@@ -188,6 +190,70 @@ def test_signal_bar_used_for_intraday_judgement(monkeypatch):
     out = svc._compute_one(rec, q, signal_bar=sig)
     assert out["status"] == "holding"
     assert out["entry_date"] == "2026-07-27"
+
+
+def test_same_day_after_close_recommendation_waits_for_next_trade_day(monkeypatch):
+    """盘后才生成的推荐不能用推荐前的当日 OHLC 虚构持仓和浮盈。"""
+
+    class _FixedDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 7, 28)
+
+    monkeypatch.setattr(svc, "date", _FixedDate)
+    rec = _Rec(
+        "002195",
+        trade_date="2026-07-28",
+        recommend_price=6.83,
+        fs={"ideal_buy": 6.11, "secondary_buy": 6.03},
+    )
+    rec.recommended_at = datetime(2026, 7, 28, 10, 34, 25)  # UTC，对应北京时间 18:34
+
+    out = svc._compute_one(rec, _quote(6.11, 6.83, 6.10, 6.83), signal_bar=None)
+
+    assert out["status"] == "waiting"
+    assert "下一交易日" in out["reason"]
+    assert "entry_price" not in out
+    assert "pnl_pct" not in out
+
+
+def test_same_day_intraday_recommendation_uses_recommendation_price(monkeypatch):
+    """盘中推荐按推荐时点快照价入场，不能使用当天更早的开盘价或最低价。"""
+
+    class _FixedDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 7, 28)
+
+    monkeypatch.setattr(svc, "date", _FixedDate)
+    rec = _Rec(
+        "600775",
+        trade_date="2026-07-28",
+        recommend_price=10.00,
+        fs={"ideal_buy": 9.80, "secondary_buy": 9.70},
+    )
+    rec.recommended_at = datetime(2026, 7, 28, 5, 2, 12)  # UTC，对应北京时间 13:02
+    full_day_bar = DailyKbar(
+        code="600775",
+        trade_date="2026-07-28",
+        open=9.50,
+        high=10.50,
+        low=9.40,
+        close=10.35,
+        volume=1000,
+        amount=1e6,
+    )
+
+    out = svc._compute_one(
+        rec,
+        _quote(9.50, 10.50, 9.40, 10.35),
+        signal_bar=full_day_bar,
+    )
+
+    assert out["status"] == "holding"
+    assert out["entry_date"] == "2026-07-28"
+    assert out["entry_price"] == pytest.approx(10.00)
+    assert out["pnl_pct"] == pytest.approx(3.5)
 
 
 def test_one_word_limit_up_blocks_entry(monkeypatch):

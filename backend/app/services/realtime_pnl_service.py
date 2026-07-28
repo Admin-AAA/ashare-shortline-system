@@ -1,9 +1,9 @@
 """未最终结算推荐实时盈亏（实盘计算）。
 
-对 pending / provisional（未最终结算）推荐，用 rt_k 当日实时 OHLC 合成一根当日临时日K，
-复用 outcome 结算同款的 ``_resolve_entry`` 判定入场价（含买点命中/开盘回退/
-gap 过滤/一字跌停 block 等边界），再以 rt_k 现价算浮盈。**纯展示，不落库、
-不改真实结算**——盘后 ``label_pending_outcomes`` 口径不受影响。
+对 pending / provisional（未最终结算）推荐，以 rt_k 现价计算浮盈。盘中推荐按生成时
+保存的实时推荐价入场，避免全天 OHLC 倒灌推荐前行情；盘后推荐从下一交易日开始才复用
+outcome 结算同款的 ``_resolve_entry`` 判定入场价。**纯展示，不落库、不改真实结算**——
+盘后 ``label_pending_outcomes`` 口径不受影响。
 
 数据源：rt_k 经统一 Router（首选 xiaodefa），见 ``TushareProviderRouter.DEFAULT_API_ROUTES``。
 """
@@ -18,11 +18,13 @@ from typing import Any
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.engine.trading_calendar import latest_allowed_quote_date, normalize_trade_date
 from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun
 from app.services.outcome_simulation import (
     MAX_ENTRY_GAP_PCT,
     OUTCOME_PENDING,
     OUTCOME_PROVISIONAL,
+    _is_intraday_recommendation,
     _loads,
     _resolve_entry,
 )
@@ -141,6 +143,7 @@ def _fetch_rtk_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
         logger.warning("rt_k 实时盈亏拉取失败: %s", str(exc)[:200])
         df = None
     if df is not None and not df.empty:
+        quote_date = latest_allowed_quote_date(date.today())
         for _, row in df.iterrows():
             code6 = str(row.get("ts_code") or "").split(".")[0]
             if not code6:
@@ -154,6 +157,9 @@ def _fetch_rtk_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
                 "vol": _f(row.get("vol")),
                 "amount": _f(row.get("amount")),
                 "name": str(row.get("name") or "").strip(),
+                # rt_k 不返回行情日期；按本地最新可用报价日标记，避免周末把周五
+                # 收盘快照合成为周六行情。
+                "trade_date": quote_date,
             }
 
     missing_codes = [code for code in codes if code not in quotes]
@@ -174,6 +180,7 @@ def _fetch_rtk_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
                 "vol": _f(row.get("volume") or row.get("vol")),
                 "amount": _f(row.get("amount")),
                 "name": str(row.get("name") or "").strip(),
+                "trade_date": normalize_trade_date(row.get("trade_date")),
             }
     return quotes
 
@@ -232,7 +239,8 @@ def _compute_one(
 ) -> dict[str, Any]:
     """对单笔 pending 推荐实盘算实时浮盈。
 
-    quote 为 rt_k 当日实时 OHLC；为 None 时降级 unavailable。
+    quote 为 rt_k 当日实时 OHLC；为 None 时降级 unavailable。盘后推荐在下一交易日
+    行情出现前返回 waiting；盘中推荐按 recommend_price 作为推荐时点的因果入场价。
     intermediate_bars 为 trade_date 次日到今日（不含）的真实日K，避免滞留 pending
     把真实入场日误判为今日（#5）。
     """
@@ -245,14 +253,33 @@ def _compute_one(
     if not quote or quote.get("close", 0) <= 0:
         return {**base, "status": "unavailable", "reason": "实时行情不可用（rt_k 无数据）"}
 
-    today_str = date.today().isoformat()
+    signal_date = str(rec.trade_date)
+    quote_date = (
+        normalize_trade_date(quote.get("trade_date"))
+        or latest_allowed_quote_date(date.today())
+    )
+    intraday = _is_intraday_recommendation(rec)
+
+    # 盘后推荐只能从下一交易日开始入场。rt_k 在盘后仍返回推荐日前已经完成的
+    # 当日 OHLC；若把它作为 future_bar，会虚构“推荐前已入场”和实时盈亏。
+    if not intraday and quote_date <= signal_date:
+        return {
+            **base,
+            "status": "waiting",
+            "reason": "盘后推荐，等待下一交易日入场",
+            "now_price": quote["close"],
+            "day_high": quote["high"],
+            "day_low": quote["low"],
+            "pre_close": quote.get("pre_close"),
+        }
+
     # rt_k 已带 pre_close：据此反推 pct_chg，补齐 is_one_word_limit_up_bar 反推前收所需
     # （此前合成 bar 缺 pct_chg，使一字涨停「买不进」拦截恒失效，#2）。
     pre_close = _f(quote.get("pre_close"))
     pct_chg = round((quote["close"] - pre_close) / pre_close * 100, 4) if pre_close > 0 else 0.0
     today_bar = DailyKbar(
         code=str(rec.code),
-        trade_date=today_str,
+        trade_date=quote_date,
         open=quote["open"],
         high=quote["high"],
         low=quote["low"],
@@ -263,14 +290,31 @@ def _compute_one(
     )
     # future_bars：trade_date 之后到今日的全部 bar（真实历史 + 今日合成），让 _resolve_entry
     # 按真实入场日判定，而非把今日当入场日。
-    future_bars = list(intermediate_bars or []) + [today_bar]
+    future_bars = [
+        bar
+        for bar in (intermediate_bars or [])
+        if signal_date < str(bar.trade_date) < quote_date
+    ] + [today_bar]
     feature_snapshot = _loads(getattr(rec, "feature_snapshot_json", None), {})
 
-    try:
-        entry = _resolve_entry(rec, feature_snapshot, future_bars, 5, signal_bar=signal_bar)
-    except Exception as exc:
-        logger.warning("实时盈亏入场判定失败 %s: %s", rec.code, str(exc)[:160])
-        return {**base, "status": "unavailable", "reason": f"入场判定异常: {str(exc)[:80]}"}
+    if intraday:
+        # 盘中推荐唯一具备时点因果性的成交依据是生成推荐时保存的实时价。
+        # 全天 signal_bar 的 open/low 可能发生在推荐之前，不能用于倒推更低入场价。
+        entry_price = _f(getattr(rec, "recommend_price", None))
+        if entry_price <= 0:
+            return {**base, "status": "unavailable", "reason": "盘中推荐价无效"}
+        entry = {
+            "triggered": True,
+            "price": entry_price,
+            "date": signal_date,
+            "reason": "intraday_recommend_price_entry",
+        }
+    else:
+        try:
+            entry = _resolve_entry(rec, feature_snapshot, future_bars, 5, signal_bar=signal_bar)
+        except Exception as exc:
+            logger.warning("实时盈亏入场判定失败 %s: %s", rec.code, str(exc)[:160])
+            return {**base, "status": "unavailable", "reason": f"入场判定异常: {str(exc)[:80]}"}
 
     now_price = quote["close"]
     if not entry.get("triggered"):
@@ -323,7 +367,7 @@ def _compute_one(
         "status": "holding",
         "reason": str(entry.get("reason") or ""),
         "entry_price": entry_price,
-        "entry_date": str(entry.get("date") or today_str),
+        "entry_date": str(entry.get("date") or quote_date),
         "now_price": now_price,
         "pnl_pct": pnl_pct,
         "day_high": quote["high"],
