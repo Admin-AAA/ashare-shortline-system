@@ -634,7 +634,7 @@ const clip = (value: string, max: number) => {
 const shortVersionId = (value: string) => value.length <= 14 ? value : `${value.slice(0, 14)}…`;
 
 // 实时盈亏单元格（未结算占位）：holding 显示浮盈%（红涨绿跌），watching 显示距买点，
-// 无数据显示 —。统一在下方标注「未结算」，与已结算的「收益」区分。
+// waiting 显示待下一交易日入场，无数据显示 —。统一标注「未结算」，与已结算收益区分。
 const renderRealtimePnl = (item: RealtimePnlItem | undefined) => {
   const unsettledTag = (
     <span style={{ color: "var(--muted)", fontSize: "var(--text-xs)", opacity: 0.8 }}>未结算</span>
@@ -657,6 +657,16 @@ const renderRealtimePnl = (item: RealtimePnlItem | undefined) => {
       <>
         <span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }} title={item.reason || "买点未触发"}>
           距买点 {dist != null ? `${dist >= 0 ? "+" : ""}${dist.toFixed(1)}%` : "—"}
+        </span>
+        {unsettledTag}
+      </>
+    );
+  }
+  if (item.status === "waiting") {
+    return (
+      <>
+        <span style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }} title={item.reason}>
+          待下一交易日入场
         </span>
         {unsettledTag}
       </>

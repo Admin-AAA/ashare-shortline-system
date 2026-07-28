@@ -61,8 +61,8 @@ def realtime_pnl(
 ):
     """未最终结算（pending / provisional）推荐的实盘实时盈亏。
 
-    用 rt_k 当日实时 OHLC 合成当日临时日K，复用 outcome 结算同款 _resolve_entry
-    判定入场价，以 rt_k 现价算浮盈。纯展示，不落库、不改真实结算。
+    盘中推荐按生成时的实时推荐价入场；盘后推荐等待下一交易日后，再复用 outcome
+    结算口径判定入场价并以 rt_k 现价算浮盈。纯展示，不落库、不改真实结算。
     """
     from app.services.realtime_pnl_service import list_pending_realtime_pnl
 

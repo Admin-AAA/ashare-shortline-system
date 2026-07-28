@@ -1535,7 +1535,7 @@ export type RealtimePnlItem = {
   code: string;
   trade_date: string;
   recommend_price: number;
-  status: "holding" | "watching" | "unavailable";
+  status: "holding" | "watching" | "waiting" | "unavailable";
   reason?: string;
   // holding（已入场）
   entry_price?: number;
@@ -1545,6 +1545,7 @@ export type RealtimePnlItem = {
   // watching（未触发买点）
   nearest_buy_target?: number;
   distance_to_target_pct?: number | null;
+  // waiting（盘后推荐，尚未到下一交易日入场）
   // 共有
   day_high?: number;
   day_low?: number;
