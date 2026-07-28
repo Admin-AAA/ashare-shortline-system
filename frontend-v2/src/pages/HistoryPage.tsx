@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, History, Layers, Loader2, RotateCcw, Search, Zap } from "lucide-react";
+import { ChevronDown, ChevronRight, History, Layers, Loader2, Maximize2, RotateCcw, Search, Zap } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import type { RecommendationDetail, RecommendationHistoryResponse, RealtimePnlItem } from "../types";
@@ -377,6 +377,7 @@ export function HistoryPage() {
                 <th style={thStyle}>结果</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>收益</th>
                 <th style={{ ...thStyle, textAlign: "right", minWidth: 128 }}>退出/持仓</th>
+                <th style={{ ...thStyle, width: 44 }} aria-hidden />
               </tr>
             </thead>
             <tbody>
@@ -410,12 +411,13 @@ export function HistoryPage() {
                 return (
                   <Fragment key={it.recommendation_id}>
                     <tr
+                      className={`history-row--expandable${expandedId === it.recommendation_id ? " history-row--expanded" : ""}`}
                       onClick={() => handleToggle(it.recommendation_id)}
-                      style={rowStyle}
                       title="点击展开完整决策详情"
                     >
                       <td style={{ ...tdStyle, whiteSpace: "nowrap", overflowWrap: "normal" }}>
                         <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)", whiteSpace: "nowrap" }}>
+                          <span className="history-row__rail" aria-hidden />
                           {expandedId === it.recommendation_id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                           <span style={{ whiteSpace: "nowrap", flexShrink: 0 }}>{it.trade_date}</span>
                         </span>
@@ -538,10 +540,13 @@ export function HistoryPage() {
                           <span>{o?.holding_days != null ? `持仓 ${o.holding_days} 天` : "—"}</span>
                         </div>
                       </td>
+                      <td style={{ ...tdStyle, textAlign: "right", width: 44 }}>
+                        <Maximize2 size={13} className="history-row__expand" aria-hidden />
+                      </td>
                     </tr>
                     {expandedId === it.recommendation_id && (
                       <tr>
-                        <td colSpan={9} style={{ padding: 0, borderBottom: "1px solid var(--border)" }}>
+                        <td colSpan={10} style={{ padding: 0, borderBottom: "1px solid var(--border)" }}>
                           {detailLoadingId === it.recommendation_id ? (
                             <div style={detailStateStyle}>
                               <Loader2 size={16} className="spin" /> 加载完整决策详情…
@@ -686,10 +691,6 @@ const tdStyle: React.CSSProperties = {
   padding: "var(--space-2)",
   borderBottom: "1px solid var(--border)",
   overflowWrap: "break-word",
-};
-
-const rowStyle: React.CSSProperties = {
-  cursor: "pointer",
 };
 
 const pageBtnStyle = (disabled: boolean): React.CSSProperties => ({
