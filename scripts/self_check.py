@@ -29,6 +29,7 @@ from north_star_snapshot import (
     evaluate_g2,
     evaluate_g3,
     evaluate_g4,
+    split_recovered_scheduler_failures,
 )
 
 from app.db.session import SessionLocal
@@ -3946,17 +3947,32 @@ def build_north_star_snapshot(db) -> dict[str, dict]:
           ) d)
     """)).fetchall()}
     missing_formal_dates = [d for d in trade_dates if d not in completed_dates]
-    failed_scheduler_tasks = [str(r[0]) for r in db.execute(text("""
-        SELECT task_id FROM scheduled_tasks WHERE enabled=1 AND last_status='failed'
+    failed_task_rows = [(str(r[0]), r[1]) for r in db.execute(text("""
+        SELECT task_id, last_run_at
+        FROM scheduled_tasks
+        WHERE enabled=1 AND last_status='failed'
     """)).fetchall()]
     stale_running_runs = int(db.execute(text("""
         SELECT COUNT(*) FROM recommendation_runs
         WHERE status='running' AND COALESCE(heartbeat_at, started_at)<DATE_SUB(NOW(), INTERVAL 20 MINUTE)
     """)).scalar() or 0)
+    safety_net = db.execute(text("""
+        SELECT last_status, last_run_at
+        FROM scheduled_tasks
+        WHERE task_id='formal_run_safety_net'
+    """)).one_or_none()
+    failed_scheduler_tasks, recovered_scheduler_tasks = split_recovered_scheduler_failures(
+        failed_tasks=failed_task_rows,
+        missing_formal_dates=missing_formal_dates,
+        stale_running_runs=stale_running_runs,
+        safety_net_status=str(safety_net[0]) if safety_net else None,
+        safety_net_last_run_at=safety_net[1] if safety_net else None,
+    )
     g2 = evaluate_g2(
         missing_formal_dates=missing_formal_dates,
         failed_scheduler_tasks=failed_scheduler_tasks,
         stale_running_runs=stale_running_runs,
+        recovered_scheduler_tasks=recovered_scheduler_tasks,
     )
 
     runtimes = [int(r[0]) for r in db.execute(text("""

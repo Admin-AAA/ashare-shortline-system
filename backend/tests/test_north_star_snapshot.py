@@ -13,6 +13,7 @@ from north_star_snapshot import (  # noqa: E402
     evaluate_g2,
     evaluate_g3,
     evaluate_g4,
+    split_recovered_scheduler_failures,
 )
 
 
@@ -80,6 +81,39 @@ def test_g2_and_next_action_prioritize_stability_after_g0():
         "G4": {"status": "BLOCKED"},
     }
     assert choose_next_action(snapshot) == "T12 pipeline稳定性"
+
+
+def test_g2_accepts_postclose_failure_recovered_by_newer_safety_net():
+    unresolved, recovered = split_recovered_scheduler_failures(
+        failed_tasks=[("post_sync_formal_recommendation", "2026-07-28 11:02:22")],
+        missing_formal_dates=[],
+        stale_running_runs=0,
+        safety_net_status="completed",
+        safety_net_last_run_at="2026-07-29 00:30:00",
+    )
+    result = evaluate_g2(
+        missing_formal_dates=[],
+        failed_scheduler_tasks=unresolved,
+        stale_running_runs=0,
+        recovered_scheduler_tasks=recovered,
+    )
+    assert result["status"] == "PASS"
+    assert result["metrics"]["recovered_scheduler_tasks"] == ["post_sync_formal_recommendation"]
+
+
+def test_g2_does_not_hide_unrecovered_or_unrelated_scheduler_failure():
+    unresolved, recovered = split_recovered_scheduler_failures(
+        failed_tasks=[
+            ("post_sync_formal_recommendation", "2026-07-29 01:00:00"),
+            ("other_task", "2026-07-28 01:00:00"),
+        ],
+        missing_formal_dates=[],
+        stale_running_runs=0,
+        safety_net_status="completed",
+        safety_net_last_run_at="2026-07-29 00:30:00",
+    )
+    assert unresolved == ["post_sync_formal_recommendation", "other_task"]
+    assert recovered == []
 
 
 def test_g3_does_not_pass_when_measurement_is_missing():

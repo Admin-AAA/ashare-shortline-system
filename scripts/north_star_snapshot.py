@@ -90,7 +90,9 @@ def evaluate_g2(
     missing_formal_dates: list[str],
     failed_scheduler_tasks: list[str],
     stale_running_runs: int,
+    recovered_scheduler_tasks: list[str] | None = None,
 ) -> dict[str, Any]:
+    recovered_scheduler_tasks = recovered_scheduler_tasks or []
     problems: list[str] = []
     if missing_formal_dates:
         problems.append(f"缺formal交易日={','.join(missing_formal_dates)}")
@@ -98,13 +100,45 @@ def evaluate_g2(
         problems.append(f"失败调度={','.join(failed_scheduler_tasks)}")
     if stale_running_runs:
         problems.append(f"失联running={stale_running_runs}")
+    summary = "；".join(problems) if problems else "最近交易日formal与调度生命周期正常"
+    if not problems and recovered_scheduler_tasks:
+        summary += f"（历史失败已由后续安全网恢复：{','.join(recovered_scheduler_tasks)}）"
     return _result(
         "FAIL" if problems else "PASS",
-        "；".join(problems) if problems else "最近交易日formal与调度生命周期正常",
+        summary,
         missing_formal_dates=missing_formal_dates,
         failed_scheduler_tasks=failed_scheduler_tasks,
+        recovered_scheduler_tasks=recovered_scheduler_tasks,
         stale_running_runs=stale_running_runs,
     )
+
+
+def split_recovered_scheduler_failures(
+    *,
+    failed_tasks: list[tuple[str, Any]],
+    missing_formal_dates: list[str],
+    stale_running_runs: int,
+    safety_net_status: str | None,
+    safety_net_last_run_at: Any,
+) -> tuple[list[str], list[str]]:
+    """区分当前调度失败与已被后续 formal 安全网完整恢复的历史失败。"""
+    unresolved: list[str] = []
+    recovered: list[str] = []
+    recovery_healthy = (
+        safety_net_status == "completed"
+        and safety_net_last_run_at is not None
+        and not missing_formal_dates
+        and stale_running_runs == 0
+    )
+    for task_id, failed_at in failed_tasks:
+        repaired = False
+        if task_id == "post_sync_formal_recommendation" and recovery_healthy and failed_at is not None:
+            try:
+                repaired = safety_net_last_run_at > failed_at
+            except TypeError:
+                repaired = str(safety_net_last_run_at) > str(failed_at)
+        (recovered if repaired else unresolved).append(task_id)
+    return unresolved, recovered
 
 
 def evaluate_g3(
