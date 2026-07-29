@@ -77,6 +77,7 @@ from app.services.outcome_service import (
     resolved_trade_return,
     strategy_perf_summary,
 )
+from app.services.official_sample_scope import official_sample_conditions
 from app.services.prefilter_service import apply_prefilters
 from app.services.research_context import build_research_contexts
 from app.services.registry.data_source import (
@@ -663,7 +664,7 @@ def _list_recommendation_setup_types(db: Session) -> list[str]:
         select(Recommendation.setup_type)
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
         .where(
-            RecommendationRun.run_mode == "formal",
+            *official_sample_conditions(),
             Recommendation.setup_type.is_not(None),
             func.trim(Recommendation.setup_type) != "",
         )
@@ -714,7 +715,7 @@ def list_recommendation_history(
             Recommendation.final_score,
         )
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
-        .where(RecommendationRun.run_mode == "formal")
+        .where(*official_sample_conditions())
         .order_by(Recommendation.trade_date.desc(), Recommendation.final_score.desc())
     )
     if code:

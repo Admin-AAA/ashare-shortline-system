@@ -26,6 +26,7 @@ from app.models.tables import (
 )
 from app.services.evaluation_metrics import compute_full_metrics as _compute_full_metrics
 from app.services.execution_outcome_policy import apply_execution_outcome_policy
+from app.services.official_sample_scope import official_sample_conditions
 
 # ── 结果模拟引擎：权威实现已收口到 outcome_simulation.py（任务 6.1），
 # 以下为兼容 re-export，保持 `from app.services.outcome_service import _simulate_outcome`
@@ -913,27 +914,21 @@ def _net_pl_ratio(rets: list[float]) -> float | None:
 
 
 def _recent_formal_win_rate(db: Session, window_trade_days: int) -> dict[str, Any]:
-    td_rows = (
-        db.execute(
-            select(Recommendation.trade_date)
-            .join(RecommendationRun, Recommendation.run_id == RecommendationRun.run_id)
-            .join(
-                RecommendationOutcome,
-                Recommendation.recommendation_id == RecommendationOutcome.recommendation_id,
-            )
-            .where(
-                RecommendationRun.run_mode == "formal",
-                Recommendation.recommendation_id.like("rec_%"),
-                RecommendationOutcome.outcome_label.in_(("success", "failed")),
-            )
-            .distinct()
-            .order_by(Recommendation.trade_date.desc())
-            .limit(window_trade_days)
-        )
-        .scalars()
-        .all()
+    scoped_rows = _scoped_recommendation_rows(
+        db,
+        run_mode=OFFICIAL_RUN_MODE,
+        live_only=True,
     )
-    trade_dates = list(td_rows)
+    settled_rows = [
+        row
+        for row in scoped_rows
+        if normalized_outcome_label(row) in {OUTCOME_SUCCESS, OUTCOME_FAILED}
+        and is_trade_executed(row)
+    ]
+    trade_dates = sorted(
+        {str(row.trade_date) for row in settled_rows},
+        reverse=True,
+    )[:window_trade_days]
     empty = {
         "window_trade_days": window_trade_days,
         "trade_dates": trade_dates,
@@ -957,7 +952,11 @@ def _recent_formal_win_rate(db: Session, window_trade_days: int) -> dict[str, An
     # 带污染诊断字段：run.score_line + feature_snapshot 里 soft/mbase
     # 用原生 SQL + expanding IN，避免 text().label() 在部分 SA 版本不可用
     from sqlalchemy import bindparam
-    td_strs = [str(d) for d in trade_dates]
+    selected_ids = [
+        str(row.recommendation_id)
+        for row in settled_rows
+        if str(row.trade_date) in trade_dates
+    ]
     stmt = text("""
         SELECT r.code, r.trade_date, o.outcome_label, o.executed_return,
                u.score_line,
@@ -969,10 +968,10 @@ def _recent_formal_win_rate(db: Session, window_trade_days: int) -> dict[str, An
         JOIN recommendations r ON r.recommendation_id = o.recommendation_id
         JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
         WHERE r.recommendation_id LIKE 'rec_%'
-          AND r.trade_date IN :tds
+          AND r.recommendation_id IN :recommendation_ids
           AND o.outcome_label IN ('success', 'failed')
-    """).bindparams(bindparam("tds", expanding=True))
-    rows = db.execute(stmt, {"tds": td_strs}).all()
+    """).bindparams(bindparam("recommendation_ids", expanding=True))
+    rows = db.execute(stmt, {"recommendation_ids": selected_ids}).all()
 
     sample_count = len(rows)
     if sample_count == 0:
@@ -2057,17 +2056,21 @@ def _scoped_recommendation_rows(
         dedup_ids_stmt = dedup_ids_stmt.where(Recommendation.trade_date >= start_date)
     if end_date:
         dedup_ids_stmt = dedup_ids_stmt.where(Recommendation.trade_date <= end_date)
-    if run_mode:
+    uses_official_scope = run_mode == OFFICIAL_RUN_MODE and live_only
+    if uses_official_scope:
+        dedup_ids_stmt = dedup_ids_stmt.where(*official_sample_conditions())
+    elif run_mode:
         if isinstance(run_mode, (list, tuple, set)):
             _modes = tuple(str(m) for m in run_mode)
             dedup_ids_stmt = dedup_ids_stmt.where(RecommendationRun.run_mode.in_(_modes))
         else:
             dedup_ids_stmt = dedup_ids_stmt.where(RecommendationRun.run_mode == str(run_mode))
-    if live_only:
+    if live_only and not uses_official_scope:
         dedup_ids_stmt = dedup_ids_stmt.where(
             Recommendation.recommendation_id.like(f"{OFFICIAL_RECOMMENDATION_PREFIX}%")
         )
-    dedup_ids_stmt = dedup_ids_stmt.where(RecommendationRun.status == "completed")
+    if not uses_official_scope:
+        dedup_ids_stmt = dedup_ids_stmt.where(RecommendationRun.status == "completed")
     # 用子查询取每组 final_score 最大的 id（GROUP BY + MAX 定位，再 JOIN 回表）
     dedup_subq = dedup_ids_stmt.subquery()
     max_score_subq = (

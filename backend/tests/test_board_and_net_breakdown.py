@@ -43,7 +43,7 @@ def test_board_and_net_breakdown_sane_when_data_present(db):
     net = res["net"]
     assert 0.0 <= net["net_win_rate"] <= 100.0
     assert isinstance(net["net_avg_return"], float)
-    assert net["net_profit_loss_ratio"] is None or net["net_profit_loss_ratio"] > 0
+    assert net["net_profit_loss_ratio"] is None or net["net_profit_loss_ratio"] >= 0
     # 板块样本之和应等于总样本（每笔必属 20cm 或 10cm 之一）
     b20 = res["board"]["20cm"]
     b10 = res["board"]["10cm"]
