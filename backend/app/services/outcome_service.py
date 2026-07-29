@@ -435,6 +435,7 @@ def recompute_stale_outcomes(
     horizon_days: int = 5,
     limit: int | None = None,
     official_only: bool = False,
+    batch_size: int = 50,
 ) -> dict[str, Any]:
     """重算所有已标注 outcome（simulation 逻辑变更后的数据一致性维护）。
 
@@ -443,6 +444,12 @@ def recompute_stale_outcomes(
     让历史 outcome 反映新逻辑（如 trailing stop 上线后让 exit_reason/executed_return 刷新）。
 
     label_source 标记为 "recompute" 以区分自动 backfill。
+
+    batch_size 控制事务粒度：每处理 batch_size 笔 commit 一次，避免一个大事务持锁数十秒、
+    期间 GET /api/* 与 metric 写入抢 MySQL 行锁产生 110s 离群拖高 G3 p95（2026-07-30
+    实证：07-29 15:48 recompute 时段 /api/strategies 出现 110.7s/91.0s 离群，本地端点
+    冷启动仅 523ms）。分批提交保留幂等性——recompute 可重跑，已提交批次与未提交批次
+    结果一致。
     """
     stmt = (
         select(Recommendation)
@@ -468,6 +475,8 @@ def recompute_stale_outcomes(
     recomputed = 0
     errors = 0
     flipped: dict[str, int] = {}
+    batch = max(1, int(batch_size))
+    pending_in_batch = 0
     for rec in recs:
         before_label = None
         existing = db.get(RecommendationOutcome, rec.recommendation_id)
@@ -495,8 +504,13 @@ def recompute_stale_outcomes(
                 key = f"{before_label}->{after_label}"
                 flipped[key] = flipped.get(key, 0) + 1
             recomputed += 1
+            pending_in_batch += 1
         else:
             errors += 1
+        # 每 batch_size 笔提交一次，缩短持锁；尾部不足一批时循环结束统一提交
+        if pending_in_batch >= batch:
+            db.commit()
+            pending_in_batch = 0
 
     db.commit()
     if recomputed:

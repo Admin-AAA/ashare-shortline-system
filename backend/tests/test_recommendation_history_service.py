@@ -208,3 +208,30 @@ def test_recompute_stale_outcomes_idempotent():
         assert second["errors"] == 0
     finally:
         db.close()
+
+
+def test_recompute_stale_outcomes_batched_commit_idempotent():
+    """分批 commit：batch_size 小于样本量时，每批独立提交，结果仍幂等且无错误。
+
+    回归根因（2026-07-30）：recompute 循环 131 笔在一个大事务里，持锁期间 GET
+    /api/strategies 与写 metric 抢 MySQL 行锁，产生 110s 离群拖高 G3 p95。改为
+    每 batch_size 笔 commit 一次缩短持锁。分批提交不能破坏幂等性——第二次重算
+    flipped 应仍全空（已提交批次与未提交批次结果一致）。
+    """
+    from app.services.outcome_service import recompute_stale_outcomes
+
+    db = _db()
+    try:
+        # batch_size=1 是最严格压力：每笔一个事务，验证边界正确性
+        first = recompute_stale_outcomes(db, horizon_days=5, limit=20, batch_size=1)
+        second = recompute_stale_outcomes(db, horizon_days=5, limit=20, batch_size=1)
+
+        assert first["errors"] == 0, f"分批重算出错: {first}"
+        assert second["errors"] == 0, f"分批重算第二次出错: {second}"
+        assert second["flipped"] == {}, (
+            f"分批 commit 破坏幂等性，第二次仍有翻转: {second['flipped']}"
+        )
+        # 第一次重算数应等于第二次（同一批 rec，分批不影响处理范围）
+        assert first["recomputed"] == second["recomputed"]
+    finally:
+        db.close()
