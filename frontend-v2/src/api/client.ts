@@ -323,6 +323,8 @@ export const api = {
     request<DataSourceProvider>(`/api/admin/data-sources/${providerName}/enabled`, json("POST", { enabled })),
   testProvider: (providerName: string) =>
     request<ProviderTestResult>(`/api/admin/data-sources/${providerName}/test`, json("POST"), { timeoutMs: 35_000 }),
+  reorderProviders: (providerNames: string[]) =>
+    request<DataSourceProvidersResponse>(`/api/admin/data-sources/reorder`, json("POST", { provider_names: providerNames })),
 
   scheduledTasks: () => request<ScheduledTask[]>("/api/admin/tasks", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   scheduledTaskRuns: (limit = 100, taskId?: string) =>
