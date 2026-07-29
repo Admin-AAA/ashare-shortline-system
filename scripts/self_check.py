@@ -3989,6 +3989,21 @@ def build_north_star_snapshot(db) -> dict[str, dict]:
           ) d)
     """)).fetchall()}
     missing_formal_dates = [d for d in trade_dates if d not in completed_dates]
+    # 安全网补跑漏跑日产出 historical_replay completed run：闭合 G2 断档
+    # （与 check_formal_recommendation_gap 同口径，否则安全网认为已修而 G2 永远
+    # FAIL 成不可清除假警报），但 replay 不入 OOS（OFFICIAL_SAMPLE_SQL 仍只认
+    # live_forward），日期在 G2 summary 中标注保留可见性。
+    replay_recovered_dates: list[str] = []
+    if missing_formal_dates:
+        from sqlalchemy import bindparam
+        replay_recovered_dates = [str(r[0]) for r in db.execute(text("""
+            SELECT DISTINCT trade_date FROM recommendation_runs
+            WHERE run_mode='formal' AND status='completed'
+              AND evaluation_scope='historical_replay'
+              AND trade_date IN :dates
+        """).bindparams(bindparam("dates", expanding=True)),
+            {"dates": list(missing_formal_dates)}).fetchall()]
+        missing_formal_dates = [d for d in missing_formal_dates if d not in replay_recovered_dates]
     failed_task_rows = [(str(r[0]), r[1]) for r in db.execute(text("""
         SELECT task_id, last_run_at
         FROM scheduled_tasks
@@ -4015,6 +4030,7 @@ def build_north_star_snapshot(db) -> dict[str, dict]:
         failed_scheduler_tasks=failed_scheduler_tasks,
         stale_running_runs=stale_running_runs,
         recovered_scheduler_tasks=recovered_scheduler_tasks,
+        replay_recovered_dates=replay_recovered_dates,
     )
 
     runtimes = [int(r[0]) for r in db.execute(text("""
