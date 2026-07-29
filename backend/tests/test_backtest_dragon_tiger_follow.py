@@ -197,7 +197,8 @@ def test_integration_runs_and_no_future_func():
     # 无未来函数：每笔交易的 signal_date 在其 by_code 序列中应有 T+1
     for t in trades:
         assert t["ret"] is not None
-        assert -0.3 < t["ret"] < 0.3, f"收益异常: {t}"
+        # 北交所/科创板多日持有收益可合法超过 30%；这里只拦截价格口径爆炸值。
+        assert -1.0 < t["ret"] < 1.0, f"收益异常: {t}"
         assert t["net_buy_yi"] >= net_min
     # 分桶完整切分
     lines = _bucket_by_net_buy(trades)

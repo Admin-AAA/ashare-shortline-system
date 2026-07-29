@@ -216,8 +216,8 @@ def test_same_day_after_close_recommendation_waits_for_next_trade_day(monkeypatc
     assert "pnl_pct" not in out
 
 
-def test_same_day_intraday_recommendation_uses_recommendation_price(monkeypatch):
-    """盘中推荐按推荐时点快照价入场，不能使用当天更早的开盘价或最低价。"""
+def test_same_day_intraday_recommendation_waits_for_next_open(monkeypatch):
+    """盘中推荐也不得在推荐当日成交，统一等待下一交易日开盘。"""
 
     class _FixedDate(date):
         @classmethod
@@ -249,10 +249,8 @@ def test_same_day_intraday_recommendation_uses_recommendation_price(monkeypatch)
         signal_bar=full_day_bar,
     )
 
-    assert out["status"] == "holding"
-    assert out["entry_date"] == "2026-07-28"
-    assert out["entry_price"] == pytest.approx(10.00)
-    assert out["pnl_pct"] == pytest.approx(3.5)
+    assert out["status"] == "waiting"
+    assert "等待下一交易日" in out["reason"]
 
 
 def test_one_word_limit_up_blocks_entry(monkeypatch):
