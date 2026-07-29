@@ -751,7 +751,7 @@ def set_provider_enabled(db: Session, provider_name: str, enabled: bool) -> dict
 
 
 # 参与路由调序的 tushare pro provider（realtime_quote 是独立爬虫，不在 Router 链里，不调序）。
-_ROUTABLE_PROVIDERS = ("fastapic", "xiaodefa", "ai_tool")
+_ROUTABLE_PROVIDERS = ("fastapic", "xiaodefa", "ai_tool", "tushare_official")
 
 
 def set_provider_priorities(db: Session, ordered_names: list[str]) -> list[dict[str, Any]]:

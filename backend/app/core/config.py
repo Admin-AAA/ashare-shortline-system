@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     tushare_xiaodefa_url: str = "https://t.xiaodefa.top/"
     tushare_xiaodefa_token: str = ""
     tushare_xiaodefa_rate_limit_per_minute: int = 60
+    # tushare_official：Tushare 官方 api.tushare.pro。核心批量接口（daily/daily_basic/
+    # moneyflow/adj_factor/top_list）有权限且低延迟；stk_factor/cyq_perf/rt_k/stk_mins/
+    # anns_d 无权限（40203 权限错误会自动 fallback 到下一源）。
+    tushare_official_url: str = "https://api.tushare.pro"
+    tushare_official_token: str = ""
+    tushare_official_rate_limit_per_minute: int = 120
     # 实时报价爬虫接口（tushare realtime_quote，走 realtime.stockai888.top）。
     # 独立于 ai-tool/fastapic 的 pro HTTP 协议：多代码批量、含现价/最高/最低/昨收，
     # 用于未结算推荐的盘中实时浮盈。token 复用 fastapic token。

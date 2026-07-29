@@ -329,6 +329,25 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
             )
         )
 
+    official_token = settings.tushare_official_token.strip()
+    if official_token:
+        providers.append(
+            TushareHttpProvider(
+                ProviderConfig(
+                    name="tushare_official",
+                    base_url=settings.tushare_official_url,
+                    credential=official_token,
+                    auth_mode=AuthMode.JSON_TOKEN,
+                    rate_limit_per_minute=max(
+                        0, int(settings.tushare_official_rate_limit_per_minute)
+                    ),
+                    append_api_path=False,
+                    priority=3,
+                    **common,
+                )
+            )
+        )
+
     if not providers:
         raise RuntimeError(
             "Tushare 上游未配置：请设置 Fastapic Token 或 ai-tool API Key。"
@@ -496,6 +515,19 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
                     0, int(settings.tushare_ai_tool_stk_mins_rate_limit_per_minute)
                 ),
             },
+            "max_concurrency": 0,
+        },
+        {
+            "name": "tushare_official",
+            "source": "tushare-official",
+            "configured": bool(settings.tushare_official_token.strip()),
+            "priority": 3,
+            "note": "Tushare 官方 api.tushare.pro；日K/资金流/复权主源（stk_factor/cyq_perf/rt_k 无权限自动 fallback）",
+            "auth_mode": AuthMode.JSON_TOKEN.value,
+            "rate_limit_per_minute": max(
+                0, int(settings.tushare_official_rate_limit_per_minute)
+            ),
+            "api_rate_limits": {},
             "max_concurrency": 0,
         },
     )

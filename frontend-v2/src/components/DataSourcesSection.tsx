@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import type { DataSourceProvider, ProviderTestResult } from "../types";
 
 // 参与路由调序的 pro provider（realtime_quote 是独立爬虫，不在路由链，不调序）。
-const ROUTABLE = new Set(["fastapic", "xiaodefa", "ai_tool"]);
+const ROUTABLE = new Set(["fastapic", "xiaodefa", "ai_tool", "tushare_official"]);
 
 /**
  * 数据源管理 —— 配置页 Tab。
