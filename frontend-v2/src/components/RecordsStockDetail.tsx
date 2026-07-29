@@ -166,8 +166,8 @@ function ExecutionConfirmationSection({ result }: { result: ExecutionConfirmatio
       ) : (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "var(--space-3)" }}>
-            <DecisionCard title="如果还没有买" decision={result.entry_decision} />
-            <DecisionCard title="如果已经持有" decision={result.holding_decision} />
+            <DecisionCard title="如果还未买入" decision={result.entry_decision} />
+            <DecisionCard title="如果已经持仓" decision={result.holding_decision} />
           </div>
 
           <div style={{ display: "flex", gap: "var(--space-4)", flexWrap: "wrap", marginTop: "var(--space-3)", fontSize: "var(--text-sm)", color: "var(--ink-secondary)" }}>

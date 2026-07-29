@@ -935,7 +935,7 @@ function renderSavedExecution(state: RecommendationExecutionState) {
   const price = state.latest_price != null && state.latest_price > 0
     ? ` · ¥${state.latest_price.toFixed(2)}`
     : "";
-  return `最后判断：${state.latest_decision_label || state.latest_decision_code}${price}`;
+  return `最近一次有效判断：${state.latest_decision_label || state.latest_decision_code}${price}`;
 }
 
 function savedExecutionTitle(state: RecommendationExecutionState) {

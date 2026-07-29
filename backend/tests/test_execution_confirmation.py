@@ -73,8 +73,8 @@ def test_intraday_recommendation_expires_after_signal_day_closes():
 
     assert entry == {
         "code": "expired",
-        "label": "今日入场窗口已结束",
-        "reason": "当前交易日已收盘，不再追认盘中买点",
+        "label": "盘中买点已过执行窗口",
+        "reason": "今日已收盘，本次买点不再有效，请勿追入",
     }
 
 
@@ -94,8 +94,8 @@ def test_intraday_recommendation_does_not_reopen_next_day():
 
     assert entry == {
         "code": "expired",
-        "label": "原入场信号已过期",
-        "reason": "盘中推荐仅在推荐当日确认买点",
+        "label": "盘中买点已过期",
+        "reason": "盘中买点仅在推荐当日有效，请勿追入",
     }
 
 
@@ -115,8 +115,8 @@ def test_after_hours_recommendation_waits_on_signal_day():
 
     assert entry == {
         "code": "not_ready",
-        "label": "等待下一交易日确认",
-        "reason": "盘后推荐需等待下一交易日实时确认",
+        "label": "盘后候选，下一交易日确认",
+        "reason": "盘后生成，当前不可买；请在下一交易日按实时条件确认",
     }
 
 
