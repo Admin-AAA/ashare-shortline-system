@@ -645,6 +645,51 @@ def test_cache_hit_on_refresh_false_recompute_on_refresh_true(db, monkeypatch):
     assert compute_calls["n"] == 2
 
 
+def test_page_reload_reuses_result_for_three_minutes(db, monkeypatch):
+    """自动请求在 3 分钟内复用结果，超过 3 分钟才重新判断。"""
+    run_id = _make_run(db, "test_batch_three_minute_cache_run")
+    rec = _make_rec(db, "test_batch_three_minute_cache_rec", run_id, "999993")
+    db.flush()
+    clock = {"now": 1_000.0}
+    compute_calls = {"n": 0}
+
+    def _fake_compute(_db, eligible, *, requested_count, settled_skipped):
+        compute_calls["n"] += 1
+        return {
+            "computed_at": "2026-07-29T10:00:00",
+            "data_as_of": "2026-07-29",
+            "cached": False,
+            "summary": {
+                "requested_count": requested_count,
+                "eligible_count": len(eligible),
+                "settled_skipped_count": settled_skipped,
+                "expired_count": 0,
+                "success_count": 0,
+                "error_count": 0,
+            },
+            "items": [],
+            "errors": [],
+            "pnl_items": [],
+        }
+
+    monkeypatch.setattr(svc, "_compute_batch", _fake_compute)
+    monkeypatch.setattr(svc.time, "time", lambda: clock["now"])
+    svc._cache["value"] = None
+
+    svc.confirm_batch_executions(db, [rec], refresh=True)
+    clock["now"] = 1_179.0
+    cached = svc.confirm_batch_executions(db, [rec], refresh=False)
+
+    assert compute_calls["n"] == 1
+    assert cached["cached"] is True
+
+    clock["now"] = 1_181.0
+    refreshed = svc.confirm_batch_executions(db, [rec], refresh=False)
+
+    assert compute_calls["n"] == 2
+    assert refreshed["cached"] is False
+
+
 def test_cached_eligible_result_keeps_current_request_summary(db, monkeypatch):
     """相同未结算集合可共享结果，但请求数和跳过数必须属于当前请求。"""
     run_id = _make_run(db, "test_batch_cache_summary_run")

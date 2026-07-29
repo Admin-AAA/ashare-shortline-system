@@ -40,7 +40,7 @@ from app.services.execution_confirmation import (
 logger = logging.getLogger(__name__)
 
 MAX_BATCH_IDS = 50
-_CACHE_TTL_SECONDS = 20.0
+_CACHE_TTL_SECONDS = 3 * 60.0
 _cache_lock: threading.Lock | None = None
 _cache: dict[str, Any] = {"fetched_at": 0.0, "key": None, "value": None}
 _inflight: dict[str, dict[str, Any]] = {}
