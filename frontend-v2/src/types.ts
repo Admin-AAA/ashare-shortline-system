@@ -1672,6 +1672,47 @@ export type StrategyPerfSummary = {
   window_days: number | null;
 };
 
+/** 批量次日买入确认的单条结果（执行规则单元格顶部状态标签用） */
+export type ExecutionConfirmationItem = {
+  recommendation_id: string;
+  code: string;
+  trade_date: string;
+  status: "ok" | "error" | "not_ready" | string;
+  fresh?: boolean;
+  data_as_of?: string;
+  quote_time?: string | null;
+  data_source?: string | null;
+  current_price?: number;
+  entry_decision?: ExecutionDecision;
+  strategy_signal?: {
+    phase?: string;
+    score?: number;
+    setup_match?: string;
+    hard_veto?: boolean;
+    risk_flags?: string[];
+  };
+  message?: string;
+};
+
+export type ExecutionConfirmationSummary = {
+  requested_count: number;
+  eligible_count: number;
+  settled_skipped_count: number;
+  expired_count: number;
+  success_count: number;
+  error_count: number;
+};
+
+export type ExecutionConfirmationResponse = {
+  computed_at: string;
+  data_as_of?: string;
+  cached?: boolean;
+  error?: string;
+  summary: ExecutionConfirmationSummary;
+  items: ExecutionConfirmationItem[];
+  errors: { recommendation_id: string; code: string; message: string }[];
+};
+
 export type ReplayAnalysisRow = {
   recommendation_id: string;
   run_id: string;

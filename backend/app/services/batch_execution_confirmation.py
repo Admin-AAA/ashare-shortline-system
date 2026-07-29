@@ -1,0 +1,549 @@
+"""批量次日执行确认：对历史页当前页未结算正式推荐一次性实时确认。
+
+与单票 ``confirm_recommendation_execution`` 共享 ``confirm_with_prepared_context``，
+保证两套入口不会产生两套规则。批量入口不调用 LLM/Agent（review=None），按高置信
+规则兜底决策；不写库、不改结算、不影响胜率与收益统计。
+
+实时行情共享方式（Spec 第 14 条 DoD 记录）：
+- 一次 ``get_market_universe()`` 拉全市场快照作为公共市场上下文（广度/主线行业/样本数），
+  目标股票的 quote 字段（price/turnover_rate/amount_yi 等）也从该快照复用。
+- 一次批量 ``rt_k``（复用 realtime_pnl_service._fetch_rtk_quotes）取目标股票当日实时
+  OHLCV，合成临时日 K 追加（或替换同日）到历史 bars 后重算 MA/RSI/MACD/量比/突破等
+  当前策略字段——满足 Spec 8.3 严格语义，禁止仅更新 close 而沿用昨日指标。
+- 一次 ``build_features`` 对目标股票子集做辅助数据注入与标签。
+- 逐记录用各自原策略执行确定性 prefilter + 运行，共享决策状态机。
+
+不变量：N 只未结算股票最多触发一次批量 rt_k、一次公共市场上下文加载、一次公共特征
+准备；已结算 ID 不进入 items；过滤后为空时不调行情数据源。
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+from datetime import datetime
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.engine.skill_loader import load_skills
+from app.engine.trading_calendar import latest_allowed_quote_date
+from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun
+from app.services.execution_confirmation import (
+    _build_signal_for_strategy,
+    _entry_window_closed,
+    confirm_with_prepared_context,
+    is_unsettled_formal_rec,
+)
+
+logger = logging.getLogger(__name__)
+
+MAX_BATCH_IDS = 50
+_CACHE_TTL_SECONDS = 20.0
+_cache_lock: threading.Lock | None = None
+_cache: dict[str, Any] = {"fetched_at": 0.0, "key": None, "value": None}
+
+
+def _get_lock() -> threading.Lock:
+    global _cache_lock
+    if _cache_lock is None:
+        _cache_lock = threading.Lock()
+    return _cache_lock
+
+
+def _f(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _load_eligible_recs(
+    db: Session, recommendation_ids: list[str]
+) -> tuple[list[tuple[Recommendation, RecommendationOutcome | None]], int]:
+    """一次 SQL 查 Recommendation + Run + Outcome，过滤非 formal 与已结算。
+
+    返回 (未结算 formal 记录列表, 已结算/非 formal 跳过数)。不存在或非 formal 的 ID
+    一律计入跳过，不向调用方泄露其存在性（Spec 7 安全约定）。
+    """
+    if not recommendation_ids:
+        return [], 0
+    rows = list(
+        db.execute(
+            select(Recommendation, RecommendationOutcome, RecommendationRun)
+            .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
+            .outerjoin(
+                RecommendationOutcome,
+                RecommendationOutcome.recommendation_id == Recommendation.recommendation_id,
+            )
+            .where(Recommendation.recommendation_id.in_(recommendation_ids))
+        ).all()
+    )
+    eligible: list[tuple[Recommendation, RecommendationOutcome | None]] = []
+    skipped = 0
+    seen: set[str] = set()
+    for rec, outcome, run in rows:
+        rid = str(rec.recommendation_id)
+        if rid in seen:
+            continue
+        seen.add(rid)
+        # 非 formal run 或已最终结算都跳过。run_mode 由 SQL 层判，outcome 维度复用
+        # is_unsettled_formal_rec，保证与单票/实时盈亏同口径。
+        if str(getattr(run, "run_mode", "") or "") != "formal" or not is_unsettled_formal_rec(rec, outcome):
+            skipped += 1
+            continue
+        eligible.append((rec, outcome))
+    # 请求中存在但 DB 查不到的 ID 也计入跳过（不泄露存在性）
+    skipped += len(set(recommendation_ids) - seen)
+    return eligible, skipped
+
+
+def _signal_age_trade_days(bars: list[dict[str, Any]], signal_date: str, data_as_of: str) -> int:
+    """推荐日之后到 data_as_of（含）之间的真实交易日数（基于合成后的完整 K 序列）。
+
+    保留给单测验证合成 K 的年龄口径；生产路径用 _load_signal_ages 一次 SQL 批量算。
+    """
+    later = {
+        str(b.get("trade_date"))
+        for b in bars
+        if str(b.get("trade_date")) > signal_date and str(b.get("trade_date")) <= data_as_of
+    }
+    if data_as_of > signal_date:
+        later.add(data_as_of)
+    return len(later)
+
+
+def _load_signal_ages(
+    db: Session, codes: list[str], signal_dates_by_code: dict[str, str], data_as_of: str
+) -> dict[str, int]:
+    """一次 SQL 批量算每只股票推荐日之后的真实交易日数。
+
+    与单票入口的 later_dates 语义一致：trade_date > signal_date 且 <= data_as_of 的
+    distinct trade_date 数，再加 data_as_of 自身（若 > signal_date）。避免逐股查询。
+    """
+    if not codes or not data_as_of:
+        return {code: 0 for code in codes}
+    pairs = [(c, d) for c, d in signal_dates_by_code.items() if d and data_as_of > d]
+    if not pairs:
+        return {code: (0 if data_as_of <= signal_dates_by_code.get(code, "") else 1) for code in codes}
+    min_signal = min(d for _, d in pairs)
+    rows = db.execute(
+        select(DailyKbar.code, DailyKbar.trade_date).where(
+            DailyKbar.code.in_([c for c, _ in pairs]),
+            DailyKbar.trade_date > min_signal,
+            DailyKbar.trade_date <= data_as_of,
+        )
+    ).all()
+    by_code: dict[str, set[str]] = {code: set() for code in codes}
+    for code, trade_date in rows:
+        signal_date = signal_dates_by_code.get(str(code))
+        if signal_date and str(trade_date) > signal_date:
+            by_code.setdefault(str(code), set()).add(str(trade_date))
+    ages: dict[str, int] = {}
+    for code in codes:
+        signal_date = signal_dates_by_code.get(code, "")
+        later = by_code.get(code, set())
+        if data_as_of > signal_date:
+            later = set(later)
+            later.add(data_as_of)
+        ages[code] = len(later)
+    return ages
+
+
+def _build_today_bar(code: str, quote_date: str, rt: dict[str, Any]) -> dict[str, Any]:
+    """用 rt_k 当日实时 OHLCV 合成临时日 K（筹码/指标字段留空，由重算兜底）。
+
+    rt_k close 即现价；pre_close 反推 pct_chg（与 realtime_pnl_service 同口径）。筹码
+    分布是 T+1 数据，rt_k 不含，留 None 让 _build_stock_from_bars 走中性估算兜底——
+    符合 Spec 8.3.6「无法可靠计算的字段标为缺失，不能沿用昨日值伪装实时」。
+    """
+    pre_close = _f(rt.get("pre_close"))
+    close = _f(rt.get("close"))
+    pct_chg = round((close - pre_close) / pre_close * 100, 4) if pre_close > 0 else 0.0
+    return {
+        "code": code,
+        "trade_date": quote_date,
+        "open": _f(rt.get("open")),
+        "high": _f(rt.get("high")),
+        "low": _f(rt.get("low")),
+        "close": close,
+        "volume": _f(rt.get("vol")),
+        "amount": _f(rt.get("amount")),
+        "pct_chg": pct_chg,
+        "turnover_rate": 0.0,  # rt_k 不含换手率，盘中累计换手率由 quote.turnover_rate 顶层字段兜底
+        "ma5": None, "ma10": None, "ma20": None, "ma60": None,
+        "volume_ratio_5d": None,
+        "chip_winner_rate": None, "chip_weight_avg": None,
+        "chip_cost_15": None, "chip_cost_50": None, "chip_cost_85": None,
+        "holder_pct": None, "profit_efficiency": None,
+        "chip_concentration": None,
+        "_indicator": {},
+    }
+
+
+def _rebuild_stock_with_rt_k(
+    stock: dict[str, Any],
+    rt: dict[str, Any],
+    quote_date: str,
+    *,
+    build_stock_from_bars: Any,
+) -> dict[str, Any] | None:
+    """用 rt_k 合成当日临时日 K，拼接到历史 bars 后重算技术指标。
+
+    Spec 8.3.4：当本地最后一根 K 与实时 K 日期相同时用实时 K 替换，不重复追加。
+    返回新的 stock dict（含今日 OHLCV 重算的 MA/RSI/MACD/量比/突破等），失败返回 None。
+    """
+    bars = list(stock.get("_bars") or [])
+    if not bars:
+        return None
+    bars = sorted(bars, key=lambda b: str(b.get("trade_date")))
+    today_bar = _build_today_bar(str(stock.get("code")), quote_date, rt)
+    if bars and str(bars[-1].get("trade_date")) == quote_date:
+        bars[-1] = today_bar  # 替换同日历史 K，不重复追加
+    else:
+        bars.append(today_bar)
+
+    # _build_stock_from_bars 需要的 quote 字段：从已 enriched stock 复用（get_market_universe
+    # 的快照在盘中已含当日实时 price/turnover_rate/amount_yi 等）。
+    quote = {
+        "code": stock.get("code"),
+        "name": stock.get("name"),
+        "exchange": stock.get("exchange"),
+        "industry": stock.get("industry"),
+        "price": _f(rt.get("close")) or _f(stock.get("price")),
+        "pct": _f(rt.get("pct")) if rt.get("pct") else _f(stock.get("pct")),
+        "amount_yi": _f(stock.get("amount_yi")),
+        "turnover_rate": _f(stock.get("turnover_rate")),
+        "free_mv_yi": _f(stock.get("free_mv_yi")),
+        "total_mv_yi": _f(stock.get("total_mv_yi")),
+        "pe_ttm": _f(stock.get("pe_ttm")),
+        "main_net_inflow_yi": _f(stock.get("main_net_inflow_yi")),
+        "is_st": bool(stock.get("is_st")),
+        "quote_time": rt.get("quote_time") or stock.get("quote_time"),
+    }
+    rebuilt = build_stock_from_bars(
+        quote,
+        bars,
+        quote_source=str(stock.get("quote_source") or "rt_k"),
+        kline_source=str(stock.get("kline_source") or "local_pool+rt_k"),
+    )
+    # 保留原 stock 的 dsa_profile 等已被 _build_stock_from_bars 重算覆盖；quote_time 用 rt 实际时间
+    rebuilt["quote_time"] = rt.get("quote_time") or stock.get("quote_time")
+    return rebuilt
+
+
+def _expired_item(rec: Recommendation, reason: str) -> dict[str, Any]:
+    return {
+        "recommendation_id": str(rec.recommendation_id),
+        "code": str(rec.code),
+        "trade_date": str(rec.trade_date),
+        "status": "ok",
+        "fresh": False,
+        "data_as_of": "",
+        "quote_time": None,
+        "data_source": None,
+        "current_price": 0.0,
+        "entry_decision": {"code": "expired", "label": "信号已过期", "reason": reason},
+        "strategy_signal": {},
+    }
+
+
+def _compute_batch(
+    db: Session,
+    eligible: list[tuple[Recommendation, RecommendationOutcome | None]],
+    *,
+    requested_count: int,
+    settled_skipped: int,
+) -> dict[str, Any]:
+    """批量实时确认主流程（无缓存）。eligible 为已过滤的未结算 formal 记录。"""
+    started = time.time()
+
+    if not eligible:
+        # 过滤后无可计算记录：直接返回，不调行情数据源（Spec 4.2）。
+        return _empty_response(requested_count, settled_skipped, started)
+
+    local_now = datetime.now()
+    expected_quote_date = latest_allowed_quote_date()
+
+    # 3. 预判 expired：用 expected_quote_date 作为 data_as_of 上界，一次 SQL 批量算
+    #    真实交易日年龄。年龄 > 1 的直接 expired，不拉该票 rt_k（Spec 8.4.4）。
+    #    age == 0（推荐日 >= expected_quote_date）说明推荐日之后尚无新交易日 → not_ready，
+    #    仍进入 pending 拉行情确认 fresh。窗口是否已关闭需结合真实 data_as_of 判断，
+    #    留给拉行情后用 _entry_window_closed。
+    all_codes = sorted({str(rec.code) for rec, _ in eligible})
+    signal_dates_by_code: dict[str, str] = {}
+    for rec, _ in eligible:
+        signal_dates_by_code.setdefault(str(rec.code), str(rec.trade_date))
+    ages = _load_signal_ages(db, all_codes, signal_dates_by_code, expected_quote_date)
+
+    pending: list[tuple[Recommendation, RecommendationOutcome | None]] = []
+    items: list[dict[str, Any]] = []
+    expired_count = 0
+    for rec, outcome in eligible:
+        age = ages.get(str(rec.code), 0)
+        if age > 1:
+            items.append(_expired_item(rec, "已超过推荐后的首个交易日，需要等待新的推荐信号"))
+            expired_count += 1
+            continue
+        pending.append((rec, outcome))
+
+    if not pending:
+        return _assemble_response(
+            requested_count=requested_count,
+            eligible_count=len(eligible),
+            settled_skipped_count=settled_skipped,
+            expired_count=expired_count,
+            items=items,
+            errors=[],
+            data_as_of=expected_quote_date,
+            started=started,
+            cached=False,
+        )
+
+    # 4. 一次公共市场上下文（get_market_universe 拉全市场快照 + 实时 quote）。
+    from app.core.config import get_settings
+    from app.services.feature_builder import build_features
+    from app.services.factors.registry import bootstrap_default_factor_registry
+    from app.services.market_data import _build_stock_from_bars, get_market_universe
+    from app.services.realtime_pnl_service import _fetch_rtk_quotes
+
+    bootstrap_default_factor_registry()
+    try:
+        stocks, snapshot = get_market_universe()
+    except Exception as exc:
+        # 批次公共行情完全失败 → 请求级错误（Spec 7），不伪装成「未命中」。
+        logger.warning("批量执行确认公共行情失败: %s", str(exc)[:200])
+        return {
+            "computed_at": _now_str(),
+            "data_as_of": expected_quote_date,
+            "cached": False,
+            "error": f"公共行情数据源失败: {str(exc)[:120]}",
+            "summary": {
+                "requested_count": requested_count,
+                "eligible_count": len(eligible),
+                "settled_skipped_count": settled_skipped,
+                "expired_count": expired_count,
+                "success_count": 0,
+                "error_count": len(pending),
+            },
+            "items": items,
+            "errors": [
+                {"recommendation_id": str(rec.recommendation_id), "code": str(rec.code), "message": "实时行情不可用"}
+                for rec, _ in pending
+            ],
+        }
+
+    data_as_of = str(snapshot.get("trade_date") or expected_quote_date)
+    stocks_by_code = {str(s.get("code")): s for s in stocks}
+
+    # 5. 一次批量 rt_k（仅 pending 涉及的代码）。
+    pending_codes = sorted({str(rec.code) for rec, _ in pending if str(rec.code) in stocks_by_code})
+    rt_quotes = _fetch_rtk_quotes(pending_codes) if pending_codes else {}
+    rt_fetch_missing = len(pending_codes) - len(rt_quotes)
+
+    # 6. 重建目标股票特征（合成今日临时日 K + 重算），一次 build_features。
+    rebuilt_stocks: list[dict[str, Any]] = []
+    rebuilt_by_code: dict[str, dict[str, Any]] = {}
+    missing_rt_codes: list[str] = []
+    for code in pending_codes:
+        stock = stocks_by_code.get(code)
+        rt = rt_quotes.get(code)
+        if not stock or not rt or _f(rt.get("close")) <= 0:
+            missing_rt_codes.append(code)
+            continue
+        rebuilt = _rebuild_stock_with_rt_k(stock, rt, data_as_of, build_stock_from_bars=_build_stock_from_bars)
+        if rebuilt is None:
+            missing_rt_codes.append(code)
+            continue
+        rebuilt_stocks.append(rebuilt)
+        rebuilt_by_code[code] = rebuilt
+
+    # 一次辅助数据注入 + 标签（公共特征准备）。
+    if rebuilt_stocks:
+        build_features(rebuilt_stocks, snapshot, db=db)
+
+    # 7. 一次加载策略目录。
+    skills = {skill.skill_id: skill for skill in load_skills(get_settings().skills_dir)}
+
+    # 8. 逐记录执行确定性规则（review=None），共享决策状态机。
+    errors: list[dict[str, Any]] = []
+    for rec, _outcome in pending:
+        code = str(rec.code)
+        current = rebuilt_by_code.get(code)
+        if current is None:
+            errors.append({"recommendation_id": str(rec.recommendation_id), "code": code, "message": "实时行情不可用"})
+            continue
+        strategy_id = str(rec.bucket or "daily-stock-analysis-skill")
+        skill = skills.get(strategy_id)
+        if skill is None:
+            errors.append({"recommendation_id": str(rec.recommendation_id), "code": code, "message": f"原推荐策略 {strategy_id} 已不存在"})
+            continue
+        try:
+            age = ages.get(code, 0)
+            # 用真实 data_as_of 判窗口是否已关闭（Spec 4.3：首个交易日已收盘 → expired）。
+            # age>1 已在预判阶段 expired；这里处理 age==1 但窗口已关闭的情形。
+            if _entry_window_closed(data_as_of, local_now):
+                items.append(_expired_item(rec, "当前交易日已收盘，不再追认盘中买点"))
+                expired_count += 1
+                continue
+            signal, prefilter_ok, _reason = _build_signal_for_strategy(skill, current, snapshot)
+            result = confirm_with_prepared_context(
+                db,
+                rec,
+                snapshot=snapshot,
+                current=current,
+                skill=skill,
+                signal=signal,
+                prefilter_ok=prefilter_ok,
+                signal_age_trade_days=age,
+                review=None,
+            )
+            items.append(_to_batch_item(result))
+        except Exception as exc:
+            logger.warning("批量确认单票失败 %s: %s", code, str(exc)[:160])
+            errors.append({"recommendation_id": str(rec.recommendation_id), "code": code, "message": str(exc)[:80]})
+
+    success_count = sum(1 for it in items if it.get("status") == "ok")
+    elapsed = time.time() - started
+    logger.info(
+        "批量执行确认 requested=%d eligible=%d settled_skipped=%d expired=%d success=%d error=%d "
+        "rt_codes=%d rt_missing=%d elapsed=%.2fs",
+        requested_count, len(eligible), settled_skipped, expired_count, success_count, len(errors),
+        len(pending_codes), rt_fetch_missing + len(missing_rt_codes), elapsed,
+    )
+    return _assemble_response(
+        requested_count=requested_count,
+        eligible_count=len(eligible),
+        settled_skipped_count=settled_skipped,
+        expired_count=expired_count,
+        items=items,
+        errors=errors,
+        data_as_of=data_as_of,
+        started=started,
+        cached=False,
+    )
+
+
+def _to_batch_item(result: dict[str, Any]) -> dict[str, Any]:
+    """把 confirm_with_prepared_context 的完整结果投影为批量 API 的 item 结构。"""
+    return {
+        "recommendation_id": result.get("recommendation_id"),
+        "code": result.get("code"),
+        "trade_date": result.get("original", {}).get("trade_date") or "",
+        "status": result.get("status"),
+        "fresh": result.get("fresh"),
+        "data_as_of": result.get("data_as_of"),
+        "quote_time": result.get("quote_time"),
+        "data_source": result.get("data_source"),
+        "current_price": result.get("current_price"),
+        "entry_decision": result.get("entry_decision"),
+        "strategy_signal": _slim_strategy_signal(result.get("strategy_signal") or {}),
+    }
+
+
+def _slim_strategy_signal(signal: dict[str, Any]) -> dict[str, Any]:
+    """批量 item 只暴露前端展示所需的策略信号摘要，不泄露完整 evidence/evidence 列表。"""
+    return {
+        "phase": signal.get("phase"),
+        "score": signal.get("score"),
+        "setup_match": signal.get("setup_match"),
+        "hard_veto": signal.get("hard_veto"),
+        "risk_flags": list(signal.get("risk_flags") or []),
+    }
+
+
+def _now_str() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _empty_response(requested_count: int, settled_skipped: int, started: float) -> dict[str, Any]:
+    return {
+        "computed_at": _now_str(),
+        "data_as_of": latest_allowed_quote_date(),
+        "cached": False,
+        "summary": {
+            "requested_count": requested_count,
+            "eligible_count": 0,
+            "settled_skipped_count": settled_skipped,
+            "expired_count": 0,
+            "success_count": 0,
+            "error_count": 0,
+        },
+        "items": [],
+        "errors": [],
+    }
+
+
+def _assemble_response(
+    *,
+    requested_count: int,
+    eligible_count: int,
+    settled_skipped_count: int,
+    expired_count: int,
+    items: list[dict[str, Any]],
+    errors: list[dict[str, Any]],
+    data_as_of: str,
+    started: float,
+    cached: bool,
+) -> dict[str, Any]:
+    success_count = sum(1 for it in items if it.get("status") == "ok")
+    return {
+        "computed_at": _now_str(),
+        "data_as_of": data_as_of,
+        "cached": cached,
+        "summary": {
+            "requested_count": requested_count,
+            "eligible_count": eligible_count,
+            "settled_skipped_count": settled_skipped_count,
+            "expired_count": expired_count,
+            "success_count": success_count,
+            "error_count": len(errors),
+        },
+        "items": items,
+        "errors": errors,
+    }
+
+
+def confirm_batch_executions(
+    db: Session,
+    recommendation_ids: list[str],
+    *,
+    refresh: bool = False,
+) -> dict[str, Any]:
+    """对一批未结算正式推荐做批量实时买入确认。
+
+    Spec 8.5：缓存 key 至少包含排序后的未结算 recommendation IDs；settled ID 不纳入
+    有效 key（后端不信任前端的未结算判断，先过滤再用未结算 ID 算 key）。同 key 并发
+    请求由锁保护避免击穿上游。refresh=True 绕过结果缓存。
+    """
+    ids = sorted(set(recommendation_ids))
+    requested_count = len(ids)
+    # 先按数据库真实状态过滤非 formal 与已结算，用未结算 ID 算缓存 key（Spec 8.5）。
+    eligible, settled_skipped = _load_eligible_recs(db, ids)
+    eligible_ids = sorted({str(rec.recommendation_id) for rec, _ in eligible})
+    cache_key = ",".join(eligible_ids)
+
+    if not refresh:
+        with _get_lock():
+            cached = _cache["value"]
+            if (
+                cached is not None
+                and _cache["key"] == cache_key
+                and (time.time() - _cache["fetched_at"]) < _CACHE_TTL_SECONDS
+            ):
+                result = dict(cached)
+                result["cached"] = True
+                return result
+
+    result = _compute_batch(db, eligible, requested_count=requested_count, settled_skipped=settled_skipped)
+
+    with _get_lock():
+        _cache["fetched_at"] = time.time()
+        _cache["key"] = cache_key
+        _cache["value"] = result
+    return result
+
+
+__all__ = ["confirm_batch_executions", "MAX_BATCH_IDS"]

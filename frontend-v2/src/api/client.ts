@@ -9,6 +9,7 @@ import type {
   RecommendationCard,
   RecommendationDetail,
   ExecutionConfirmation,
+  ExecutionConfirmationResponse,
   RecommendationHistoryResponse,
   RecommendationOutcome,
   OutcomeSummary,
@@ -221,6 +222,12 @@ export const api = {
   recommendationDetail: (id: string) => request<RecommendationDetail>(`/api/recommendations/${id}`),
   recommendationRealtimePnl: (refresh = false) =>
     request<RealtimePnlResponse>(`/api/recommendations/realtime-pnl${refresh ? "?refresh=true" : ""}`),
+  // 批量次日买入确认：对历史页当前页未结算推荐一次性实时确认，不调用 LLM/Agent
+  confirmExecutionBatch: (recommendationIds: string[], refresh = false) =>
+    request<ExecutionConfirmationResponse>(
+      "/api/recommendations/execution-confirmations",
+      json("POST", { recommendation_ids: recommendationIds, refresh }),
+    ),
   confirmRecommendationExecution: (id: string) =>
     requestWithTimeout<ExecutionConfirmation>(
       `/api/recommendations/${id}/execution-confirmation`,

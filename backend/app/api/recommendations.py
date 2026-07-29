@@ -69,6 +69,36 @@ def realtime_pnl(
     return list_pending_realtime_pnl(db, use_cache=not refresh)
 
 
+@router.post("/execution-confirmations")
+def execution_confirmations(payload: dict | None = None, db: Session = Depends(get_db)):
+    """未结算正式推荐的批量次日买入确认（历史页当前页一次性实时确认）。
+
+    只对当前页未结算 formal 推荐发起一次批量确认：后端重新校验未结算资格，一次批量
+    rt_k + 一次公共市场上下文 + 一次公共特征准备，按各自原策略重跑确定性规则，返回
+    允许执行 / 继续观察 / 取消买入 / 行情未就绪 / 信号已过期。不调用 LLM/Agent、不写库、
+    不改结算。已结算 ID 不进入 items，只计入 settled_skipped_count。
+    """
+    from app.services.batch_execution_confirmation import MAX_BATCH_IDS, confirm_batch_executions
+
+    raw_ids = (payload or {}).get("recommendation_ids") or []
+    if not isinstance(raw_ids, list):
+        raise HTTPException(status_code=422, detail="recommendation_ids must be an array")
+    # 去重 + 限长：超过 50 个返回 422，不静默截断（Spec 7）
+    ids = list(dict.fromkeys(str(item) for item in raw_ids if str(item).strip()))
+    if not ids:
+        raise HTTPException(status_code=422, detail="recommendation_ids must contain 1-50 non-empty ids")
+    if len(ids) > MAX_BATCH_IDS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"recommendation_ids exceeds maximum of {MAX_BATCH_IDS}",
+        )
+    refresh = bool((payload or {}).get("refresh", False))
+    try:
+        return confirm_batch_executions(db, ids, refresh=refresh)
+    except Exception as exc:  # noqa: BLE001 - 批次公共源失败已在服务层封装为 errors
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.get("/outcome-summary")
 def outcome_summary(
     codes: list[str] = Query(default=[], description="股票代码列表，支持逗号分隔或重复参数"),

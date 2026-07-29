@@ -1,7 +1,13 @@
 import { ChevronDown, ChevronRight, History, Layers, Loader2, Maximize2, RotateCcw, Search, Zap } from "lucide-react";
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client";
-import type { RecommendationDetail, RecommendationHistoryResponse, RealtimePnlItem } from "../types";
+import type {
+  ExecutionConfirmationItem,
+  ExecutionConfirmationResponse,
+  RecommendationDetail,
+  RecommendationHistoryResponse,
+  RealtimePnlItem,
+} from "../types";
 import { PageSkeleton, ErrorPage, EmptyState } from "../components/StateViews";
 import { Panel } from "../components/Panel";
 import { useApi } from "../app/useApi";
@@ -11,6 +17,7 @@ import { RecommendationDetailCard } from "../components/RecommendationDetailCard
 import { fmtPrice } from "../components/Shared";
 import { bucketLabel, exitReasonLabel, formatApiDateTime, isOutcomeSettled, outcomeLabel, outcomeTone, setupLabel, BUCKET_LABELS } from "../utils/display";
 import { ruleKeyLevelLabels, rulesMentionKeyLevel } from "../utils/ruleKeyLevels";
+import { collectUnsettledIds, executionDecisionCode } from "../utils/executionConfirmation";
 
 /**
  * 复盘页 —— 正式运行推荐历史（跨 run，按 trade_date 倒序，带 outcome）。
@@ -41,6 +48,13 @@ export function HistoryPage() {
   const [pnlMap, setPnlMap] = useState<Record<string, RealtimePnlItem>>({});
   const [pnlLoading, setPnlLoading] = useState(false);
   const [pnlComputedAt, setPnlComputedAt] = useState<string | null>(null);
+  // 批量次日买入确认：未结算推荐的当前可执行状态，纯展示不改结算。
+  const [confirmationMap, setConfirmationMap] = useState<Record<string, ExecutionConfirmationItem>>({});
+  const [confirmationErrors, setConfirmationErrors] = useState<Record<string, string>>({});
+  const [confirmationLoadingIds, setConfirmationLoadingIds] = useState<Set<string>>(new Set());
+  const [confirmationComputedAt, setConfirmationComputedAt] = useState<string | null>(null);
+  // 请求序号：分页/筛选变化时旧请求晚到不覆盖新页面（Spec 6.1.5）
+  const confirmationReqRef = useRef(0);
   const pageSize = 50;
 
   // 日期预设 → 实际 dateFrom/dateTo（基于今天）。custom 用手选，all 不限。
@@ -127,6 +141,56 @@ export function HistoryPage() {
   useEffect(() => {
     loadRealtimePnl();
   }, [loadRealtimePnl]);
+
+  // 当前页未结算推荐 ID（去重 + 排序成稳定 key，避免重渲染重复请求 Spec 9.2）
+  const unsettledIds = useMemo(() => collectUnsettledIds(items), [items]);
+  const unsettledIdsKey = unsettledIds.join(",");
+
+  // 批量买入确认：自动加载 + 手动刷新共用。只有存在未结算行时才请求（Spec 9.2）。
+  const loadExecutionConfirmations = useCallback(
+    async (ids: string[], refresh = false) => {
+      if (ids.length === 0) {
+        setConfirmationMap({});
+        setConfirmationErrors({});
+        setConfirmationLoadingIds(new Set());
+        setConfirmationComputedAt(null);
+        return;
+      }
+      const reqSeq = ++confirmationReqRef.current;
+      setConfirmationLoadingIds(new Set(ids));
+      try {
+        const res: ExecutionConfirmationResponse = await api.confirmExecutionBatch(ids, refresh);
+        // 旧请求晚到必须丢弃，不能把上一页/旧筛选结果写入当前列表（Spec 6.1.5）
+        if (reqSeq !== confirmationReqRef.current) return;
+        const itemMap: Record<string, ExecutionConfirmationItem> = {};
+        for (const it of res.items) itemMap[it.recommendation_id] = it;
+        const errMap: Record<string, string> = {};
+        for (const e of res.errors) errMap[e.recommendation_id] = e.message;
+        setConfirmationMap(itemMap);
+        setConfirmationErrors(errMap);
+        setConfirmationComputedAt(res.computed_at);
+      } catch {
+        // 批量确认失败不打断历史列表，保留旧结果（Spec 6.1 / 10.3）
+      } finally {
+        if (reqSeq === confirmationReqRef.current) {
+          setConfirmationLoadingIds(new Set());
+        }
+      }
+    },
+    [],
+  );
+
+  // 历史数据加载成功且当前页存在未结算行时自动请求（Spec 6.1）
+  useEffect(() => {
+    loadExecutionConfirmations(unsettledIds);
+    // 依赖 unsettledIdsKey（稳定字符串）而非数组引用，避免重渲染重复请求
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unsettledIdsKey, loadExecutionConfirmations]);
+
+  // 统一刷新实时状态：同时刷新未结算实时盈亏与买入确认（Spec 6.3）
+  const refreshRealtimeState = useCallback(async () => {
+    await Promise.all([loadRealtimePnl(true), loadExecutionConfirmations(unsettledIds, true)]);
+  }, [loadRealtimePnl, loadExecutionConfirmations, unsettledIds]);
 
   const handleToggle = useCallback(
     async (id: string) => {
@@ -303,15 +367,19 @@ export function HistoryPage() {
           <RotateCcw size={13} /> 重置
         </button>
 
-        {/* 刷新实时盈亏：对未最终结算推荐用 rt_k 现价算浮盈（纯展示，不改结算） */}
+        {/* 刷新实时状态：同时刷新未结算实时盈亏与买入确认（Spec 6.3 统一刷新入口） */}
         <button
           className="btn btn--ghost"
-          onClick={() => loadRealtimePnl(true)}
-          disabled={pnlLoading}
-          title={pnlComputedAt ? `对未最终结算推荐用实时价算浮盈 · 上次 ${pnlComputedAt}` : "对未最终结算推荐用实时价算浮盈"}
+          onClick={() => refreshRealtimeState()}
+          disabled={pnlLoading || confirmationLoadingIds.size > 0}
+          title={
+            pnlComputedAt || confirmationComputedAt
+              ? `未结算推荐实时盈亏与买入确认 · 上次 ${confirmationComputedAt || pnlComputedAt}`
+              : "未结算推荐实时盈亏与买入确认"
+          }
           style={{ padding: "6px 12px", fontSize: "var(--text-sm)" }}
         >
-          {pnlLoading ? <Loader2 size={13} className="spin" /> : <Zap size={13} />} 实时盈亏
+          {pnlLoading || confirmationLoadingIds.size > 0 ? <Loader2 size={13} className="spin" /> : <Zap size={13} />} 刷新实时状态
         </button>
 
         {/* 总计数（轻量） */}
@@ -491,6 +559,12 @@ export function HistoryPage() {
                       </td>
                       <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)", maxWidth: 360 }}>
                         <div style={stackStyle}>
+                          {/* 未结算行顶部显示实时买入确认状态标签（Spec 6.2）；已结算行不显示 */}
+                          {!isOutcomeSettled(o?.outcome_label) && (
+                            <span style={executionDecisionTagStyle(confirmationLoadingIds.has(it.recommendation_id) ? "loading" : executionDecisionCode(it.recommendation_id, confirmationMap, confirmationErrors))}>
+                              {renderExecutionDecision(it.recommendation_id, confirmationMap, confirmationErrors, confirmationLoadingIds)}
+                            </span>
+                          )}
                           <span title={it.entry_rule || ""}>入场: {clip(it.entry_rule || "—", 32)}</span>
                           <span title={it.invalid_rule || ""}>失效: {clip(it.invalid_rule || "—", 32)}</span>
                           {keyLevelLabels.length > 0 && (
@@ -647,6 +721,67 @@ const clip = (value: string, max: number) => {
 };
 
 const shortVersionId = (value: string) => value.length <= 14 ? value : `${value.slice(0, 14)}…`;
+
+// 状态标签色彩语义（Spec 6.2 表）：buy 涨色积极、wait 警示、cancel 跌色危险、
+// not_ready/expired 中性、error 中性带危险描边。
+const EXECUTION_DECISION_TONE: Record<string, { color: string; border?: string }> = {
+  buy: { color: "var(--market-up)" },
+  wait: { color: "var(--market-gold, #b8860b)" },
+  cancel: { color: "var(--market-down)" },
+  not_ready: { color: "var(--muted)" },
+  expired: { color: "var(--muted)" },
+  error: { color: "var(--muted)", border: "1px solid var(--market-down)" },
+  loading: { color: "var(--muted)" },
+};
+
+function executionDecisionTagStyle(code: "buy" | "wait" | "cancel" | "not_ready" | "expired" | "error" | "loading" | null): React.CSSProperties {
+  const tone = (code && EXECUTION_DECISION_TONE[code]) || EXECUTION_DECISION_TONE.not_ready;
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "var(--space-2)",
+    padding: "1px 6px",
+    fontSize: "var(--text-xs)",
+    fontWeight: 600,
+    borderRadius: 4,
+    background: "var(--surface-soft)",
+    border: tone.border || "1px solid var(--border)",
+    color: tone.color,
+    whiteSpace: "nowrap",
+  };
+}
+
+// 渲染执行规则单元格顶部的实时确认状态（Spec 6.2）：动作语言标签 + 当前价 + 简短原因。
+function renderExecutionDecision(
+  id: string,
+  confirmationMap: Record<string, ExecutionConfirmationItem>,
+  confirmationErrors: Record<string, string>,
+  loadingIds: Set<string>,
+) {
+  if (loadingIds.has(id)) {
+    return (<><Loader2 size={11} className="spin" /> 实时判断中…</>);
+  }
+  const errMsg = confirmationErrors[id];
+  if (errMsg) {
+    return (<>判断失败 <span style={{ color: "var(--muted)", fontWeight: 400 }}>{clip(errMsg, 24)}</span></>);
+  }
+  const item = confirmationMap[id];
+  if (!item) return "等待实时确认";
+  if (item.status === "error") {
+    return (<>{clip(item.message || "判断失败", 24)}</>);
+  }
+  const dec = item.entry_decision;
+  const label = dec?.label || "等待实时确认";
+  const price = item.current_price != null ? `¥${item.current_price.toFixed(2)}` : "";
+  const reason = dec?.reason ? clip(dec.reason, 20) : "";
+  return (
+    <>
+      <span>{label}</span>
+      {price && <span style={{ color: "var(--muted)", fontWeight: 400, fontFamily: "var(--font-mono)" }}>{price}</span>}
+      {reason && <span style={{ color: "var(--muted)", fontWeight: 400, overflow: "hidden", textOverflow: "ellipsis" }}>{reason}</span>}
+    </>
+  );
+}
 
 // 实时盈亏单元格（未结算占位）：holding 显示浮盈%（红涨绿跌），watching 显示距买点，
 // waiting 显示待下一交易日入场，无数据显示 —。统一标注「未结算」，与已结算收益区分。
