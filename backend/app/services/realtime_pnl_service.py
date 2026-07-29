@@ -266,11 +266,9 @@ def _compute_one(
         normalize_trade_date(quote.get("trade_date"))
         or latest_allowed_quote_date(date.today())
     )
-    intraday = _is_intraday_recommendation(rec)
-
-    # 盘后推荐只能从下一交易日开始入场。rt_k 在盘后仍返回推荐日前已经完成的
+    # 所有推荐统一从下一交易日开始入场。rt_k 在推荐日仍返回当天 OHLC；
     # 当日 OHLC；若把它作为 future_bar，会虚构“推荐前已入场”和实时盈亏。
-    if not intraday and quote_date <= signal_date:
+    if quote_date <= signal_date:
         return {
             **base,
             "status": "waiting",
@@ -305,24 +303,11 @@ def _compute_one(
     ] + [today_bar]
     feature_snapshot = _loads(getattr(rec, "feature_snapshot_json", None), {})
 
-    if intraday:
-        # 盘中推荐唯一具备时点因果性的成交依据是生成推荐时保存的实时价。
-        # 全天 signal_bar 的 open/low 可能发生在推荐之前，不能用于倒推更低入场价。
-        entry_price = _f(getattr(rec, "recommend_price", None))
-        if entry_price <= 0:
-            return {**base, "status": "unavailable", "reason": "盘中推荐价无效"}
-        entry = {
-            "triggered": True,
-            "price": entry_price,
-            "date": signal_date,
-            "reason": "intraday_recommend_price_entry",
-        }
-    else:
-        try:
-            entry = _resolve_entry(rec, feature_snapshot, future_bars, 5, signal_bar=signal_bar)
-        except Exception as exc:
-            logger.warning("实时盈亏入场判定失败 %s: %s", rec.code, str(exc)[:160])
-            return {**base, "status": "unavailable", "reason": f"入场判定异常: {str(exc)[:80]}"}
+    try:
+        entry = _resolve_entry(rec, feature_snapshot, future_bars, 5, signal_bar=signal_bar)
+    except Exception as exc:
+        logger.warning("实时盈亏入场判定失败 %s: %s", rec.code, str(exc)[:160])
+        return {**base, "status": "unavailable", "reason": f"入场判定异常: {str(exc)[:80]}"}
 
     now_price = quote["close"]
     if not entry.get("triggered"):

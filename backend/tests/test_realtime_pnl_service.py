@@ -86,14 +86,13 @@ def test_load_pending_recs_includes_provisional_and_excludes_settled(db):
     assert settled_id not in loaded_ids
 
 
-def test_holding_pnl_buy_target_touched(monkeypatch):
-    # low 触及买点 18.23 → 入场价 min(open,18.23)，现价低于入场价 → 浮亏
+def test_next_open_gap_filter_does_not_backfill_target_touch(monkeypatch):
+    # 次日高开超过阈值应放弃，不因日内 low 触及目标价而回填更优成交。
     monkeypatch.setattr(svc, "_fetch_rtk_quotes", lambda codes: {"600539": _quote(20.36, 20.36, 16.88, 17.78)})
     rec = _Rec("600539", recommend_price=18.5)
     out = svc._compute_one(rec, svc._fetch_rtk_quotes([])["600539"], signal_bar=None)
-    assert out["status"] == "holding"
-    assert out["entry_price"] == pytest.approx(18.23)
-    assert out["pnl_pct"] == pytest.approx(round((17.78 - 18.23) / 18.23 * 100, 2))
+    assert out["status"] == "watching"
+    assert "跳空高开" in out["reason"]
 
 
 def test_holding_pnl_profit(monkeypatch):

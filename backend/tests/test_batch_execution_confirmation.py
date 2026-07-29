@@ -24,6 +24,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.tables import (
@@ -95,12 +96,21 @@ def _add_outcome(db: Session, rec_id: str, label: str) -> None:
 
 
 def _add_kbar(db: Session, code: str, trade_date: str, close: float = 10.0, **kw: Any) -> None:
-    db.add(DailyKbar(
-        code=code, trade_date=trade_date,
-        open=kw.get("open", close), high=kw.get("high", close), low=kw.get("low", close),
-        close=close, volume=kw.get("volume", 100), amount=kw.get("amount", 1000),
-        pct_chg=kw.get("pct_chg", 0.0), turnover_rate=kw.get("turnover_rate", 1.0),
+    bar = db.scalar(select(DailyKbar).where(
+        DailyKbar.code == code,
+        DailyKbar.trade_date == trade_date,
     ))
+    if bar is None:
+        bar = DailyKbar(code=code, trade_date=trade_date)
+        db.add(bar)
+    bar.open = kw.get("open", close)
+    bar.high = kw.get("high", close)
+    bar.low = kw.get("low", close)
+    bar.close = close
+    bar.volume = kw.get("volume", 100)
+    bar.amount = kw.get("amount", 1000)
+    bar.pct_chg = kw.get("pct_chg", 0.0)
+    bar.turnover_rate = kw.get("turnover_rate", 1.0)
 
 
 def _fake_stock(code: str, bars: list[dict[str, Any]] | None = None, price: float = 10.5) -> dict[str, Any]:
