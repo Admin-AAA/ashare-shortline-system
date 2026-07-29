@@ -41,6 +41,7 @@ from typing import Any
 from app.engine.board_rules import is_one_word_limit_down_bar, limit_pct_for_code
 from app.engine.trading_costs import is_net_profitable
 from app.models.tables import DailyKbar, Recommendation
+from app.services.entry_policy import EntryPolicy, LEGACY_MIXED_ENTRY, NEXT_TRADING_DAY_OPEN
 
 # A 股 T+1 交收：买入当日不能卖出。推荐时点决定入场日与最早可离场日：
 # - 盘后推荐（recommended_at 落在非交易时段）：推荐价≈当日收盘，T+1 才能买入 → 离场最早 T+2
@@ -144,6 +145,7 @@ def _simulate_outcome(
     *,
     pre_resolved_entry: dict[str, Any] | None = None,
     exit_resolver: Any = None,
+    entry_policy: EntryPolicy = NEXT_TRADING_DAY_OPEN,
 ) -> dict[str, Any] | None:
     """模拟单笔推荐 outcome。
 
@@ -170,6 +172,7 @@ def _simulate_outcome(
     if recommendation_block_reason:
         return {
             **static_metrics,
+            "entry_policy_id": entry_policy.policy_id,
             "entry_triggered": False,
             "entry_date": None,
             "entry_price": None,
@@ -196,12 +199,14 @@ def _simulate_outcome(
     # pre_resolved_entry 由 _compute_horizon_metric_records 预解析传入，省 2/3 _resolve_entry 调用（占模拟 77%）。
     entry_result = pre_resolved_entry if pre_resolved_entry is not None else _resolve_entry(
         rec, feature_snapshot, future_bars, horizon_days, signal_bar=signal_bar,
+        entry_policy=entry_policy,
     )
     position_size = _resolve_position_size(feature_snapshot)
 
     if not entry_result.get("triggered"):
         return {
             **static_metrics,
+            "entry_policy_id": entry_policy.policy_id,
             "entry_triggered": False,
             "entry_date": None,
             "entry_price": None,
@@ -234,6 +239,7 @@ def _simulate_outcome(
         if gap_pct > MAX_ENTRY_GAP_PCT:
             return {
                 **static_metrics,
+                "entry_policy_id": entry_policy.policy_id,
                 "entry_triggered": False,
                 "entry_date": None,
                 "entry_price": None,
@@ -355,6 +361,7 @@ def _simulate_outcome(
 
     return {
         **static_metrics,
+        "entry_policy_id": entry_policy.policy_id,
         "entry_triggered": True,
         "entry_date": entry_date,
         "entry_price": round(executed_entry_price, 2),
@@ -462,6 +469,7 @@ def _resolve_entry(
     horizon_days: int,
     *,
     signal_bar: DailyKbar | None = None,
+    entry_policy: EntryPolicy = NEXT_TRADING_DAY_OPEN,
 ) -> dict[str, Any]:
     """解析入场日与入场价。
 
@@ -472,8 +480,26 @@ def _resolve_entry(
 
     - 盘后推荐：目标买点（ideal_buy/secondary_buy 的 low 触及）> 次日开盘市价回退。
     """
+    if entry_policy == NEXT_TRADING_DAY_OPEN:
+        if not future_bars:
+            return {"triggered": False, "reason": "下一交易日行情缺失，无法确认成交"}
+        bar = future_bars[0]
+        block_reason = _entry_execution_block_reason(str(rec.code), bar)
+        if block_reason:
+            return {"triggered": False, "reason": block_reason}
+        raw_entry_price = _as_float(bar.open)
+        if raw_entry_price <= 0:
+            return {"triggered": False, "reason": "下一交易日开盘价无效，无法真实成交"}
+        return {
+            "triggered": True,
+            "bar_index": 0,
+            "price": raw_entry_price,
+            "date": str(bar.trade_date),
+            "reason": "next_trading_day_open_entry",
+        }
+
     intraday = _is_intraday_recommendation(rec)
-    if intraday:
+    if intraday and entry_policy == LEGACY_MIXED_ENTRY:
         recommend_price = _as_float(getattr(rec, "recommend_price", None))
         if recommend_price <= 0:
             return {"triggered": False, "reason": "盘中推荐价无效，无法确认成交"}
@@ -491,7 +517,7 @@ def _resolve_entry(
         )
         if value > 0
     ]
-    lookahead = max(1, min(ENTRY_LOOKAHEAD_DAYS, horizon_days, len(future_bars)))
+    lookahead = max(1, min(entry_policy.max_entry_trade_days, horizon_days, len(future_bars)))
     # 盘中推荐：signal_bar 作首候选（T 当天），后接 future_bars 前 lookahead 根
     if intraday and signal_bar is not None:
         entry_window = [signal_bar] + future_bars[:lookahead]

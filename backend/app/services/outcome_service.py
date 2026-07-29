@@ -1,6 +1,8 @@
 import logging
+import json
 import threading
 import time
+import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -21,6 +23,7 @@ from app.models.tables import (
     Recommendation,
     RecommendationExecutionState,
     RecommendationOutcome,
+    RecommendationOutcomeVersion,
     RecommendationRun,
     SkillRegistry,
 )
@@ -249,6 +252,18 @@ def _apply_outcome_simulation(
     savepoint = db.begin_nested()
     try:
         simulation = apply_execution_outcome_policy(simulation, execution_state)
+        version_id = f"outv_{uuid.uuid4().hex}"
+        calculation_version = "outcome_simulation_v1"
+        entry_policy_id = str(simulation.get("entry_policy_id") or "legacy_mixed_entry_v1")
+        db.add(RecommendationOutcomeVersion(
+            version_id=version_id,
+            recommendation_id=rec.recommendation_id,
+            calculation_version=calculation_version,
+            entry_policy_id=entry_policy_id,
+            horizon_days=horizon_days,
+            label_source=label_source,
+            result_json=json.dumps(simulation, ensure_ascii=False, sort_keys=True, default=str),
+        ))
         existing = db.get(RecommendationOutcome, rec.recommendation_id)
         if existing is not None:
             outcome = existing
@@ -256,6 +271,8 @@ def _apply_outcome_simulation(
             outcome = RecommendationOutcome(recommendation_id=rec.recommendation_id)
             db.add(outcome)
 
+        outcome.calculation_version_id = version_id
+        outcome.entry_policy_id = entry_policy_id
         outcome.horizon_days = horizon_days
         outcome.entry_triggered = bool(simulation["entry_triggered"])
         outcome.entry_date = simulation["entry_date"]
