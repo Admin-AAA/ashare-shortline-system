@@ -650,6 +650,7 @@ class TushareProviderRouter:
         *,
         api_routes: Mapping[str, tuple[str, ...]] | None = None,
         enabled_override: Any = None,
+        priority_override: Any = None,
     ) -> None:
         self._providers = {provider.name: provider for provider in providers}
         # per-API 选路链：api_name -> [provider 名按尝试顺序]。默认 DEFAULT_API_ROUTES，
@@ -658,6 +659,9 @@ class TushareProviderRouter:
         # enabled_override: 可选可调用 () -> Mapping[str, bool]，提供 provider 运行时启停
         # （DB 覆盖 config）。为 None 时全部启用。每次选路时读取，使启停即时生效。
         self._enabled_override = enabled_override
+        # priority_override: 可选可调用 () -> Mapping[str, int]，提供 provider 运行时优先级
+        # 覆盖（管理面拖拽调序写 DB）。为 None 时用代码默认 priority。每次选路时读取。
+        self._priority_override = priority_override
 
     def close(self) -> None:
         for provider in self._providers.values():
@@ -678,6 +682,18 @@ class TushareProviderRouter:
             return True
         return bool(overrides.get(name, True))
 
+    def _effective_priority(self, provider: TushareHttpProvider) -> int:
+        if self._priority_override is not None:
+            try:
+                overrides = self._priority_override() or {}
+            except Exception:
+                # 覆盖读取失败 → 回退代码默认 priority，不阻断同步链路
+                logger.debug("provider priority_override read failed", exc_info=True)
+                overrides = {}
+            if provider.name in overrides:
+                return int(overrides[provider.name])
+        return provider.config.priority
+
     def _ordered_providers(self, api_name: str) -> list[TushareHttpProvider]:
         enabled = [p for p in self._providers.values() if self._is_enabled(p.name)]
         route = self._api_routes.get(api_name)
@@ -686,9 +702,9 @@ class TushareProviderRouter:
             by_name = {p.name: p for p in enabled}
             ordered = [by_name[name] for name in route if name in by_name]
             # 链里没列出但已启用的 provider 追加在末尾（按 priority），避免漏掉 fallback
-            rest = sorted((p for p in enabled if p.name not in route), key=lambda p: p.config.priority)
+            rest = sorted((p for p in enabled if p.name not in route), key=self._effective_priority)
             return ordered + rest
-        return sorted(enabled, key=lambda p: p.config.priority)
+        return sorted(enabled, key=self._effective_priority)
 
     def request(
         self,

@@ -1023,6 +1023,7 @@ export type DataSourceProvider = {
   enabled: boolean;
   priority: number;
   note?: string | null;
+  apis?: string[]; // 该源承接的数据类型/在路由链中的角色
   status: string; // healthy / degraded / untested / disabled
   success_count?: number;
   failure_count?: number;
@@ -1748,6 +1749,7 @@ export type ExecutionConfirmationItem = {
   data_source?: string | null;
   current_price?: number;
   entry_decision?: ExecutionDecision;
+  holding_decision?: ExecutionDecision;
   condition_summary?: ExecutionConditionSummary;
   strategy_signal?: {
     phase?: string;

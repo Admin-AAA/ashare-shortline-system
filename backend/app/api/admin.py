@@ -99,6 +99,21 @@ def list_data_sources_api(db: Session = Depends(get_db)):
     return {"providers": get_tushare_provider_health()}
 
 
+@router.post("/data-sources/reorder")
+def reorder_providers_api(payload: dict, db: Session = Depends(get_db)):
+    """重排 tushare pro provider 的路由优先级（运行时即时生效，不动 config）。
+
+    payload: {"provider_names": ["xiaodefa", "fastapic", "ai_tool"]}（主源在前）。
+    realtime_quote 是独立爬虫、不在路由链里，传入会被忽略。
+    """
+    from app.services.data_sources import set_provider_priorities
+
+    names = payload.get("provider_names")
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        raise HTTPException(status_code=400, detail="provider_names must be a list of strings")
+    return {"providers": set_provider_priorities(db, names)}
+
+
 @router.post("/data-sources/{provider_name}/enabled")
 def set_provider_enabled_api(provider_name: str, payload: dict, db: Session = Depends(get_db)):
     """启停某 provider（运行时即时生效，不动 config）。payload: {"enabled": true/false}"""

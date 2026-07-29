@@ -750,6 +750,46 @@ def set_provider_enabled(db: Session, provider_name: str, enabled: bool) -> dict
     )
 
 
+# 参与路由调序的 tushare pro provider（realtime_quote 是独立爬虫，不在 Router 链里，不调序）。
+_ROUTABLE_PROVIDERS = ("fastapic", "xiaodefa", "ai_tool")
+
+
+def set_provider_priorities(db: Session, ordered_names: list[str]) -> list[dict[str, Any]]:
+    """按给定顺序重排三个 tushare pro provider 的路由优先级（写 DB 覆盖，运行时即时生效）。
+
+    ordered_names 为期望的路由顺序（主源在前）。未提及的 provider 追加在末尾，保持原相对序。
+    持久化为 0/1/2（与代码默认 priority 同标尺）；同时确保这些 provider 存在启停覆盖行，
+    让孤儿清理豁免 tushare_provider。返回重排后的 provider 列表。
+    """
+    known = {name for name in _known_provider_names() if name in _ROUTABLE_PROVIDERS}
+    # 期望顺序（仅保留可路由 provider，去重保序）+ 未提及的按 _ROUTABLE_PROVIDERS 默认序补尾
+    seen: set[str] = set()
+    merged: list[str] = []
+    for name in ordered_names:
+        if name in known and name not in seen:
+            seen.add(name)
+            merged.append(name)
+    for name in _ROUTABLE_PROVIDERS:
+        if name in known and name not in seen:
+            merged.append(name)
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    for idx, name in enumerate(merged):
+        row = db.get(DataSourceConfig, {"source": name, "source_type": _PROVIDER_SOURCE_TYPE})
+        if row is None:
+            row = DataSourceConfig(source=name, source_type=_PROVIDER_SOURCE_TYPE, enabled=True, priority=idx)
+            db.add(row)
+        else:
+            row.priority = idx
+        row.updated_at = now
+    db.commit()
+
+    from app.services.tushare_client import invalidate_provider_enabled_override
+
+    invalidate_provider_enabled_override()
+    return _provider_health_rows()
+
+
 def _provider_health_rows() -> list[dict[str, Any]]:
     from app.services.tushare_client import get_tushare_provider_health
 

@@ -200,6 +200,7 @@ def get_realtime_quote_health() -> dict[str, Any]:
         "configured": configured,
         "priority": 2,
         "note": "实时报价爬虫（realtime.stockai888.top）；未结算推荐盘中浮盈",
+        "apis": ["realtime_quote:实时报价爬虫", "不参与路由调序"],
         "success_count": 0,
         "failure_count": 0,
         "empty_count": 0,

@@ -334,7 +334,11 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
             "Tushare 上游未配置：请设置 Fastapic Token 或 ai-tool API Key。"
         )
     return (
-        TushareProviderRouter(providers, enabled_override=_provider_enabled_override),
+        TushareProviderRouter(
+            providers,
+            enabled_override=_provider_enabled_override,
+            priority_override=_provider_priority_override,
+        ),
         settings.tushare_fastapic_url,
     )
 
@@ -345,11 +349,30 @@ def _provider_enabled_override() -> dict[str, bool]:
     返回 {provider_name: enabled}；查不到/出错返回 {}（视为全部启用）。
     独立 Session 查询，避免污染调用方事务；进程内短缓存减少每次选路都查库。
     """
+    cached = _read_provider_override_cache()
+    return dict(cached["enabled"])
+
+
+def _provider_priority_override() -> dict[str, int]:
+    """从 data_source_config 读 provider 路由优先级覆盖（管理面 Tab 拖拽写入）。
+
+    返回 {provider_name: priority}；查不到/出错返回 {}（用代码默认 priority）。
+    与 enabled 同一份 DB 行、同一份进程内缓存。
+    """
+    cached = _read_provider_override_cache()
+    return dict(cached["priority"])
+
+
+def _read_provider_override_cache() -> dict[str, dict]:
+    """读取 provider 运行时覆盖（enabled + priority），进程内短缓存。
+
+    缓存结构 {"enabled": {name: bool}, "priority": {name: int}}，5s TTL。
+    """
     now = time.monotonic()
     cached = _ENABLED_OVERRIDE_CACHE
     if cached["expires_at"] > now:
         return cached["value"]
-    value: dict[str, bool] = {}
+    value: dict[str, dict] = {"enabled": {}, "priority": {}}
     try:
         from app.db.session import SessionLocal
         from app.models.tables import DataSourceConfig
@@ -361,23 +384,24 @@ def _provider_enabled_override() -> dict[str, bool]:
                     DataSourceConfig.source_type == "tushare_provider"
                 )
             ).all()
-            value = {str(r.source): bool(r.enabled) for r in rows}
+            value["enabled"] = {str(r.source): bool(r.enabled) for r in rows}
+            value["priority"] = {str(r.source): int(r.priority) for r in rows}
         finally:
             db.close()
     except Exception:
-        logger.debug("provider enabled override query failed", exc_info=True)
-        value = {}
+        logger.debug("provider override query failed", exc_info=True)
+        value = {"enabled": {}, "priority": {}}
     _ENABLED_OVERRIDE_CACHE["value"] = value
     _ENABLED_OVERRIDE_CACHE["expires_at"] = now + _ENABLED_OVERRIDE_TTL_SECONDS
     return value
 
 
 _ENABLED_OVERRIDE_TTL_SECONDS = 5.0
-_ENABLED_OVERRIDE_CACHE: dict[str, Any] = {"value": {}, "expires_at": 0.0}
+_ENABLED_OVERRIDE_CACHE: dict[str, Any] = {"value": {"enabled": {}, "priority": {}}, "expires_at": 0.0}
 
 
 def invalidate_provider_enabled_override() -> None:
-    """启停操作后调用，立即清空覆盖缓存，下一次选路即生效。"""
+    """启停/调序操作后调用，立即清空覆盖缓存，下一次选路即生效。"""
     _ENABLED_OVERRIDE_CACHE["expires_at"] = 0.0
 
 
@@ -398,12 +422,35 @@ def clear_pro_cache() -> None:
     get_pro.cache_clear()
 
 
+def _provider_api_roles(provider_name: str) -> list[str]:
+    """该 provider 在各 API 路由链中的角色，用于面板展示「这个源承接哪些数据」。
+
+    返回该源参与的 API（primary 在前，其余按字母序），格式 "api:角色"。
+    通用同步 API（daily/daily_basic/stk_factor/cyq_perf 等未显式列链的）按 priority
+    兜底，所有 pro 源都参与，故对每个 pro 源都标注 "通用同步"。
+    """
+    routes = TushareProviderRouter.DEFAULT_API_ROUTES
+    roles: list[str] = []
+    for api_name, chain in routes.items():
+        if provider_name not in chain:
+            continue
+        position = chain.index(provider_name)
+        if position == 0:
+            roles.append(f"{api_name}:主源")
+        else:
+            roles.append(f"{api_name}:备用{position}")
+    # 通用同步（未显式列链的 pro API，按 priority 兜底）：所有 pro 源都参与
+    roles.insert(0, "通用同步(daily/stk_factor/cyq_perf等)")
+    return roles
+
+
 def get_tushare_provider_health() -> list[dict[str, Any]]:
     """Project configured Providers and process-local telemetry to the health API."""
     settings = get_settings()
     # configured = config 有 token（已接入）；enabled = 运行时实际生效（configured AND DB 启停覆盖）。
     # 管理面 Tab 的「禁用」只改 DB override，不动 config，实现不重启启停。
     overrides = _provider_enabled_override()
+    priority_overrides = _provider_priority_override()
     specs = (
         {
             "name": "fastapic",
@@ -469,6 +516,8 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
     for spec in specs:
         configured = bool(spec["configured"])
         enabled = configured and bool(overrides.get(spec["name"], True))
+        # 面板 priority 显示实际生效值（DB 覆盖优先于代码默认），与路由一致。
+        effective_priority = int(priority_overrides.get(spec["name"], spec["priority"]))
         snapshot = snapshots.get(str(spec["name"]), {})
         status = str(snapshot.get("status") or ("untested" if configured else "disabled"))
         failure_count = int(snapshot.get("failure_count") or 0)
@@ -487,8 +536,9 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
                 "layer": "provider",
                 "enabled": enabled,
                 "configured": configured,
-                "priority": spec["priority"],
+                "priority": effective_priority,
                 "note": spec["note"],
+                "apis": _provider_api_roles(spec["name"]),
                 "success_count": int(snapshot.get("success_count") or 0),
                 "failure_count": failure_count,
                 "empty_count": int(snapshot.get("empty_count") or 0),
