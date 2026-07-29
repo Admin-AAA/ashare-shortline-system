@@ -47,6 +47,9 @@ def official_sample_conditions() -> tuple:
         RecommendationRun.run_mode == "formal",
         RecommendationRun.evaluation_scope == LIVE_FORWARD_SCOPE,
         RecommendationRun.status == "completed",
+        RecommendationRun.data_as_of.is_not(None),
+        RecommendationRun.data_as_of <= Recommendation.trade_date,
+        RecommendationRun.source_snapshot_id.is_not(None),
         Recommendation.recommendation_id.like(f"{OFFICIAL_RECOMMENDATION_PREFIX}%"),
         beijing_generation_date == Recommendation.trade_date,
     )

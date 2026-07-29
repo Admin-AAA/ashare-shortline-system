@@ -274,8 +274,9 @@ def test_existing_schema_baseline_applies_owned_p0_research_schema_forward_only(
         "V025_strategy_version_snapshots",
         "V026_recommendation_execution_states",
         "V027_cancelled_before_entry",
-        "V028_recommendation_evaluation_scope",
-    )
+            "V028_recommendation_evaluation_scope",
+            "V029_recommendation_source_evidence",
+        )
     assert result.applied_versions == expected_versions
     assert [migration.version for migration in all_migrations()] == list(expected_versions)
     with engine.connect() as connection:

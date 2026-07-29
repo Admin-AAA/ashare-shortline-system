@@ -499,6 +499,31 @@ class MigrationContext:
         )
         return int(value or 0)
 
+    def select_rows(
+        self,
+        table: str,
+        columns: Sequence[str],
+        *,
+        where_sql: str | None = None,
+        params: Mapping[str, Any] | None = None,
+    ) -> tuple[Mapping[str, Any], ...]:
+        """Read a bounded projection for evidence-preserving data migrations."""
+        safe_table = self._validate_identifier(table)
+        safe_columns = tuple(self._validate_identifier(column) for column in columns)
+        if not safe_columns:
+            raise MigrationSafetyError("select_rows requires at least one column")
+        where = ""
+        if where_sql is not None:
+            where = f" WHERE {self._validate_predicate(where_sql)}"
+        result = self.__connection.execute(
+            text(
+                f"SELECT {', '.join(self._quote(column) for column in safe_columns)} "
+                f"FROM {self._quote(safe_table)}{where}"
+            ),
+            params or {},
+        )
+        return tuple(dict(row) for row in result.mappings())
+
     @staticmethod
     def _base_type(value: str) -> str:
         normalized = re.sub(r"\s+", " ", str(value).strip().lower())

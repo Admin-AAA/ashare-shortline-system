@@ -36,6 +36,7 @@ def _add_settled_recommendation(
     code: str = "999991",
     final_score: float = 80.0,
     executed_return: float = 1.0,
+    data_as_of: str | None = None,
 ) -> None:
     run_id = f"test_official_scope_run_{suffix}"
     recommendation_id = f"rec_test_official_scope_{suffix}"
@@ -46,6 +47,8 @@ def _add_settled_recommendation(
             run_mode="formal",
             evaluation_scope="live_forward",
             trade_date=trade_date,
+            data_as_of=data_as_of or trade_date,
+            source_snapshot_id=f"snapshot_{suffix}",
             status=run_status,
         )
     )
@@ -164,3 +167,25 @@ def test_history_excludes_recommendations_generated_after_the_claimed_trade_date
 
     assert result["total"] == 0
     assert result["summary"]["trade_count"] == 0
+
+
+def test_history_excludes_runs_whose_market_data_is_newer_than_signal_date(db):
+    _add_settled_recommendation(
+        db,
+        suffix="future_market_data",
+        run_status="completed",
+        trade_date="2099-01-04",
+        recommended_at=datetime(2099, 1, 4, 6, 0),
+        data_as_of="2099-01-05",
+    )
+    invalidate_recommendation_history_cache()
+
+    result = list_recommendation_history(
+        db,
+        code="999991",
+        date_from="2099-01-04",
+        date_to="2099-01-04",
+        limit=50,
+    )
+
+    assert result["total"] == 0

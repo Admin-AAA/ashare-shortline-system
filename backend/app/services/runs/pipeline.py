@@ -304,6 +304,8 @@ async def run_staged_pipeline(
             run.progress_total = len(data.saved_recommendations)
             run.progress_message = "运行完成"
             snapshot_dict = dict(data.snapshot or {})
+            run.data_as_of = str(snapshot_dict.get("trade_date") or "") or None
+            run.source_snapshot_id = str(snapshot_dict.get("snapshot_id") or "") or None
             run.market_snapshot_json = _dumps(_slim_market_snapshot(snapshot_dict))
             run.filter_audit_json = _dumps(dict(data.filter_audit or {}))
             summary = _build_run_summary(

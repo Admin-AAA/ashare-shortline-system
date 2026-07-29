@@ -744,6 +744,8 @@ class RecommendationRun(Base):
         default="historical_replay",
         server_default="historical_replay",
     )
+    data_as_of: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
+    source_snapshot_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
