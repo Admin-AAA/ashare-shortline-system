@@ -160,10 +160,17 @@ def test_fresh_cancel_fills_reference_fields_for_migration_backfill():
             recommendation_id="rec_state_1",
             latest_decision_code="cancel",
             latest_checked_at=datetime(2026, 7, 29, 10, 0),
+            latest_price=8.20,
+            latest_reason="迁移前最后一次取消",
             cancelled_before_entry=True,
             ever_buy_confirmed=False,
         ))
         db.commit()
+
+        legacy_projection = load_execution_state_map(db, ["rec_state_1"])["rec_state_1"]
+        assert legacy_projection["first_cancelled_at"] == "2026-07-29T10:00:00"
+        assert legacy_projection["first_cancelled_price"] == 8.20
+        assert legacy_projection["first_cancel_reason"] == "迁移前最后一次取消"
 
         persist_execution_assessments(
             db,

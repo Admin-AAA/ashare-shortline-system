@@ -100,6 +100,20 @@ def serialize_execution_state(state: RecommendationExecutionState) -> dict[str, 
         condition = {}
     if not isinstance(condition, dict):
         condition = {}
+    legacy_cancel_reference = bool(
+        state.cancelled_before_entry
+        and not state.ever_buy_confirmed
+        and state.latest_decision_code == "cancel"
+    )
+    first_cancelled_at = state.first_cancelled_at or (
+        state.latest_checked_at if legacy_cancel_reference else None
+    )
+    first_cancelled_price = state.first_cancelled_price
+    if first_cancelled_price is None and legacy_cancel_reference:
+        first_cancelled_price = state.latest_price
+    first_cancel_reason = state.first_cancel_reason or (
+        state.latest_reason if legacy_cancel_reference else None
+    )
     return {
         "latest_decision_code": state.latest_decision_code,
         "latest_decision_label": state.latest_decision_label,
@@ -115,9 +129,9 @@ def serialize_execution_state(state: RecommendationExecutionState) -> dict[str, 
         "first_buy_confirmed_at": _isoformat(state.first_buy_confirmed_at),
         "first_buy_confirmed_price": state.first_buy_confirmed_price,
         "cancelled_before_entry": bool(state.cancelled_before_entry),
-        "first_cancelled_at": _isoformat(state.first_cancelled_at),
-        "first_cancelled_price": state.first_cancelled_price,
-        "first_cancel_reason": state.first_cancel_reason,
+        "first_cancelled_at": _isoformat(first_cancelled_at),
+        "first_cancelled_price": first_cancelled_price,
+        "first_cancel_reason": first_cancel_reason,
     }
 
 
