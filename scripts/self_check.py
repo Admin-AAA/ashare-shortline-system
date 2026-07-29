@@ -3923,10 +3923,13 @@ def _nearest_rank_p95(values: list[int]) -> int | None:
     return ordered[rank - 1]
 
 
-def _fetch_api_p95_seconds(db) -> float | None:
-    """从 api_request_metrics 计算近期 /api/ GET 端点 p95（秒）。
+def _fetch_api_p95_seconds(db) -> dict[str, float | int | None] | None:
+    """从 api_request_metrics 计算近期 /api/ GET 端点 p95（秒）及伴随诊断量。
 
     样本不足（<30 条）时返回 None，保持 G3「测量不完整」提示而非小样本误判。
+    同时返回样本数与 p99，供 evaluate_g3 判定单点噪声（p99/p95 比值过大）时
+    降级为 WARN 而非 FAIL——api_request_metrics 是被动记录前端访问，样本常集中在
+    用户浏览的几分钟内，nearest-rank p95 在小样本下对单个异常值极敏感。
     """
     try:
         rows = db.execute(text("""
@@ -3940,7 +3943,18 @@ def _fetch_api_p95_seconds(db) -> float | None:
     if len(values) < 30:
         return None
     p95_ms = _nearest_rank_p95([int(round(v)) for v in values])
-    return round(p95_ms / 1000.0, 3) if p95_ms is not None else None
+    if p95_ms is None:
+        return None
+    import math as _math
+    arr = sorted(int(round(v)) for v in values)
+    n = len(arr)
+    p99_rank = max(1, _math.ceil(0.99 * n))
+    p99_ms = arr[min(p99_rank, n) - 1]
+    return {
+        "p95_seconds": round(p95_ms / 1000.0, 3),
+        "sample": n,
+        "p99_seconds": round(p99_ms / 1000.0, 3),
+    }
 
 
 def build_north_star_snapshot(db) -> dict[str, dict]:
@@ -4062,7 +4076,13 @@ def build_north_star_snapshot(db) -> dict[str, dict]:
           AND universe_count>=3000
         ORDER BY started_at DESC LIMIT 20
     """)).fetchall() if r[0] is not None]
-    g3 = evaluate_g3(formal_p95_seconds=_nearest_rank_p95(runtimes), api_p95_seconds=_fetch_api_p95_seconds(db))
+    api_metrics = _fetch_api_p95_seconds(db) or {}
+    g3 = evaluate_g3(
+        formal_p95_seconds=_nearest_rank_p95(runtimes),
+        api_p95_seconds=api_metrics.get("p95_seconds"),
+        api_p95_sample=api_metrics.get("sample"),
+        api_p99_seconds=api_metrics.get("p99_seconds"),
+    )
 
     candidate_oos = summarize_discovery_oos(factor_rows).get("positive")
     g4 = evaluate_g4(prerequisites=[g0, g2, g3], candidate_oos=candidate_oos)
