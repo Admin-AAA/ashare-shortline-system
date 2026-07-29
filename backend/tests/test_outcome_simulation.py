@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.models.tables import DailyKbar
+from app.services.entry_policy import LEGACY_MIXED_ENTRY, NEXT_TRADING_DAY_OPEN
 from app.services.outcome_simulation import (
     DEFAULT_STOP_LOSS_PCT,
     MAX_STOP_LOSS_PCT,
@@ -102,7 +103,7 @@ def test_resolve_entry_blocks_no_liquidity_bar():
     assert "无成交量" in result["reason"]
 
 
-def test_resolve_entry_defers_blocked_limit_up_to_next_executable_bar():
+def test_resolve_entry_does_not_defer_after_next_open_is_unexecutable():
     rec = SimpleNamespace(code="000001")
     one_word_limit_up = _bar(
         trade_date="2026-05-13",
@@ -126,11 +127,28 @@ def test_resolve_entry_defers_blocked_limit_up_to_next_executable_bar():
         {"ideal_buy": 11.0},
         [one_word_limit_up, executable_pullback],
         horizon_days=3,
+        entry_policy=NEXT_TRADING_DAY_OPEN,
+    )
+
+    assert result["triggered"] is False
+    assert "一字涨停" in result["reason"]
+
+
+def test_resolve_entry_uses_next_open_even_when_later_low_touches_target():
+    rec = SimpleNamespace(code="000001", trade_date="2026-05-12")
+    next_day = _bar(
+        trade_date="2026-05-13", open=10.8, high=11.0, low=9.8,
+        close=10.1, pct_chg=0.0,
+    )
+
+    result = _resolve_entry(
+        rec, {"ideal_buy": 10.0}, [next_day], horizon_days=3,
+        entry_policy=NEXT_TRADING_DAY_OPEN,
     )
 
     assert result["triggered"] is True
-    assert result["date"] == "2026-05-14"
-    assert result["price"] == 10.9
+    assert result["price"] == 10.8
+    assert result["reason"] == "next_trading_day_open_entry"
 
 
 def test_simulate_outcome_respects_recommendation_time_execution_block():
@@ -594,7 +612,7 @@ def test_simulate_outcome_20cm_limit_up_not_misjudged_as_ex_right():
         _bar(trade_date="2026-07-15", open=21.22, high=21.88, low=19.4, close=19.56, pct_chg=-7.21),
     ]
     dates = [str(b.trade_date) for b in bars]
-    sim = _simulate_outcome(rec, bars, dates, horizon_days=5)
+    sim = _simulate_outcome(rec, bars, dates, horizon_days=5, entry_policy=LEGACY_MIXED_ENTRY)
     # take_profit 在涨停日 07-10 触及，exit_reason=take_profit_hit，正收益
     assert sim["exit_reason"] == "take_profit_hit"
     assert sim["executed_return"] > 0, f"涨停日不应触发除权误判覆盖 take_profit 收益，got {sim['executed_return']}"
@@ -625,7 +643,9 @@ def test_simulate_outcome_real_ex_right_day_still_corrected():
         _bar(trade_date="2026-06-03", open=7.0, high=7.1, low=6.8, close=6.9, pct_chg=-1.4),
     ]
     dates = [str(b.trade_date) for b in bars]
-    sim = _simulate_outcome(rec, bars, dates, horizon_days=5)
+    sim = _simulate_outcome(
+        rec, bars, dates, horizon_days=5, entry_policy=LEGACY_MIXED_ENTRY,
+    )
     # 除权日 price_jump=-32% > 20 且 pct_chg=-5 < 20*0.6=12 → has_ex_right_day=True，
     # 触发 pct_chg 链重算（不被本次 +2pp 容差修复破坏）
     assert sim is not None
@@ -660,7 +680,9 @@ def test_simulate_outcome_min_return_truncated_to_exit_not_horizon():
         _bar(trade_date="2026-07-17", open=30.5, high=30.6, low=27.04, close=27.1, pct_chg=-11.0),
     ]
     dates = [str(b.trade_date) for b in bars]
-    sim = _simulate_outcome(rec, bars, dates, horizon_days=5)
+    sim = _simulate_outcome(
+        rec, bars, dates, horizon_days=5, entry_policy=LEGACY_MIXED_ENTRY,
+    )
     assert sim["exit_reason"] == "stop_loss_hit"
     assert str(sim["exit_date"]) == "2026-07-13"
     # 旧 bug：min_return 算到 07-17 low=27.04 → (27.04-40)/40=-32%；修复后只算到 07-13 low=37.0
@@ -671,8 +693,8 @@ def test_simulate_outcome_min_return_truncated_to_exit_not_horizon():
     assert sim["max_return"] < 5.0, f"max_return 不应含 exit 后的 bar，got {sim['max_return']}"
 
 
-def test_intraday_outcome_cannot_use_prices_before_recommendation():
-    """盘中推荐只能按推荐时点快照价入场，不能倒推当天开盘价或最低价。"""
+def test_intraday_outcome_uses_recommendation_snapshot_price():
+    """盘中推荐按推荐时点快照价入场，不能使用此前的开盘价或最低价。"""
     rec = SimpleNamespace(
         code="600775",
         trade_date="2026-07-28",
@@ -695,8 +717,27 @@ def test_intraday_outcome_cannot_use_prices_before_recommendation():
     assert sim is not None
     assert sim["entry_date"] == "2026-07-28"
     assert sim["entry_price"] == pytest.approx(10.36)
+    assert sim["entry_policy_id"] == "causal_strategy_entry_v1"
     assert sim["executed_return"] < 0
     assert sim["outcome_label"] == "failed"
+
+
+def test_postclose_unhit_strategy_target_is_not_forced_into_next_open():
+    rec = SimpleNamespace(
+        code="000001",
+        trade_date="2026-07-28",
+        recommend_price=10.0,
+        recommended_at=datetime(2026, 7, 28, 8, 0),  # 北京时间 16:00
+    )
+    bars = [
+        _bar(trade_date="2026-07-29", open=10.5, high=10.8, low=10.2, close=10.6, pct_chg=6.0),
+        _bar(trade_date="2026-07-30", open=10.7, high=10.9, low=10.3, close=10.8, pct_chg=1.9),
+    ]
+
+    result = _resolve_entry(rec, {"ideal_buy": 9.8}, bars, horizon_days=5)
+
+    assert result["triggered"] is False
+    assert "未触发目标买点" in result["reason"]
 
 
 def test_simulate_outcome_take_profit_min_return_truncated():
@@ -722,7 +763,7 @@ def test_simulate_outcome_take_profit_min_return_truncated():
         _bar(trade_date="2026-07-14", open=29.0, high=29.5, low=27.0, close=27.5, pct_chg=-5.17),
     ]
     dates = [str(b.trade_date) for b in bars]
-    sim = _simulate_outcome(rec, bars, dates, horizon_days=4)
+    sim = _simulate_outcome(rec, bars, dates, horizon_days=4, entry_policy=LEGACY_MIXED_ENTRY)
     assert sim["exit_reason"].startswith("take_profit"), f"应在 07-10 触及 tp，got {sim['exit_reason']}"
     assert str(sim["exit_date"]) == "2026-07-10"
     # 旧 bug：min_return 算到 07-13/14 low=27-28 → 约 -10%；修复后只算 entry→exit（07-10 low=29.5）
@@ -1036,7 +1077,10 @@ def test_simulate_outcome_defaults_to_production_profit_floor_policy():
         _bar_trailing(trade_date="2026-07-03", open=10.25, high=10.3, low=10.15, close=10.2, pct_chg=-1.0),
     ]
 
-    sim = _simulate_outcome(rec, bars, [str(bar.trade_date) for bar in bars], horizon_days=3)
+    sim = _simulate_outcome(
+        rec, bars, [str(bar.trade_date) for bar in bars], horizon_days=3,
+        entry_policy=LEGACY_MIXED_ENTRY,
+    )
 
     assert sim is not None
     assert sim["exit_reason"] == "trailing_stop_hit"

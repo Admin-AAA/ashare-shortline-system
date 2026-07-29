@@ -83,6 +83,35 @@ def test_g2_and_next_action_prioritize_stability_after_g0():
     assert choose_next_action(snapshot) == "T12 pipeline稳定性"
 
 
+def test_g2_replay_recovered_gap_passes_but_stays_visible():
+    """安全网 historical_replay 补跑闭合 G2 断档（与安全网缺口判定同口径），
+    但补跑日期必须在 summary/metrics 中保留可见，且不冒充 live_forward。"""
+    result = evaluate_g2(
+        missing_formal_dates=["2026-07-27"],
+        failed_scheduler_tasks=[],
+        stale_running_runs=0,
+        replay_recovered_dates=["2026-07-27"],
+    )
+    assert result["status"] == "PASS"
+    assert "2026-07-27" in result["summary"]
+    assert "replay不计入OOS" in result["summary"]
+    assert result["metrics"]["missing_formal_dates"] == []
+    assert result["metrics"]["replay_recovered_dates"] == ["2026-07-27"]
+
+
+def test_g2_unrecovered_gap_still_fails_alongside_replay_recovered():
+    """只被部分补跑时，未修复的缺口日仍必须 FAIL。"""
+    result = evaluate_g2(
+        missing_formal_dates=["2026-07-24", "2026-07-27"],
+        failed_scheduler_tasks=[],
+        stale_running_runs=0,
+        replay_recovered_dates=["2026-07-27"],
+    )
+    assert result["status"] == "FAIL"
+    assert "2026-07-24" in result["summary"]
+    assert result["metrics"]["missing_formal_dates"] == ["2026-07-24"]
+
+
 def test_g2_accepts_postclose_failure_recovered_by_newer_safety_net():
     unresolved, recovered = split_recovered_scheduler_failures(
         failed_tasks=[("post_sync_formal_recommendation", "2026-07-28 11:02:22")],

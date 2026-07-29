@@ -91,22 +91,38 @@ def evaluate_g2(
     failed_scheduler_tasks: list[str],
     stale_running_runs: int,
     recovered_scheduler_tasks: list[str] | None = None,
+    replay_recovered_dates: list[str] | None = None,
 ) -> dict[str, Any]:
+    """G2 衡量 pipeline 生命周期，不衡量样本资格。
+
+    安全网对漏跑交易日的补跑是 historical_replay completed run——它闭合 G2 的
+    断档（与 check_formal_recommendation_gap 同口径，否则安全网认为已修、G2
+    永远 FAIL，形成不可清除的假警报），但绝不计入 OOS/G1（OFFICIAL_SAMPLE_SQL
+    仍只认 live_forward）。补跑修复的日期在 summary 中标注保留可见性。
+    """
     recovered_scheduler_tasks = recovered_scheduler_tasks or []
+    replay_recovered_dates = replay_recovered_dates or []
+    unresolved_dates = [d for d in missing_formal_dates if d not in replay_recovered_dates]
     problems: list[str] = []
-    if missing_formal_dates:
-        problems.append(f"缺formal交易日={','.join(missing_formal_dates)}")
+    if unresolved_dates:
+        problems.append(f"缺formal交易日={','.join(unresolved_dates)}")
     if failed_scheduler_tasks:
         problems.append(f"失败调度={','.join(failed_scheduler_tasks)}")
     if stale_running_runs:
         problems.append(f"失联running={stale_running_runs}")
     summary = "；".join(problems) if problems else "最近交易日formal与调度生命周期正常"
+    notes: list[str] = []
+    if replay_recovered_dates:
+        notes.append(f"漏跑日已由安全网补跑修复（replay不计入OOS）：{','.join(replay_recovered_dates)}")
     if not problems and recovered_scheduler_tasks:
-        summary += f"（历史失败已由后续安全网恢复：{','.join(recovered_scheduler_tasks)}）"
+        notes.append(f"历史失败已由后续安全网恢复：{','.join(recovered_scheduler_tasks)}")
+    if notes:
+        summary += f"（{'；'.join(notes)}）"
     return _result(
         "FAIL" if problems else "PASS",
         summary,
-        missing_formal_dates=missing_formal_dates,
+        missing_formal_dates=unresolved_dates,
+        replay_recovered_dates=replay_recovered_dates,
         failed_scheduler_tasks=failed_scheduler_tasks,
         recovered_scheduler_tasks=recovered_scheduler_tasks,
         stale_running_runs=stale_running_runs,

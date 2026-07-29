@@ -77,6 +77,10 @@ from app.services.outcome_service import (
     resolved_trade_return,
     strategy_perf_summary,
 )
+from app.services.official_sample_scope import (
+    evaluation_scope_for_run,
+    official_sample_conditions,
+)
 from app.services.prefilter_service import apply_prefilters
 from app.services.research_context import build_research_contexts
 from app.services.registry.data_source import (
@@ -663,7 +667,7 @@ def _list_recommendation_setup_types(db: Session) -> list[str]:
         select(Recommendation.setup_type)
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
         .where(
-            RecommendationRun.run_mode == "formal",
+            *official_sample_conditions(),
             Recommendation.setup_type.is_not(None),
             func.trim(Recommendation.setup_type) != "",
         )
@@ -714,7 +718,7 @@ def list_recommendation_history(
             Recommendation.final_score,
         )
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
-        .where(RecommendationRun.run_mode == "formal")
+        .where(*official_sample_conditions())
         .order_by(Recommendation.trade_date.desc(), Recommendation.final_score.desc())
     )
     if code:
@@ -856,6 +860,13 @@ def _build_recommendation_history_summary(
         "average_net_return": round(total_net_return / trade_count, 2) if trade_count else None,
         "total_net_return": round(total_net_return, 2),
         "additional_cost_pct": _ADDITIONAL_COST_PCT,
+        "methodology": {
+            "sample_scope": "official_live_forward_v1",
+            "entry_policy": "causal_strategy_entry_v1",
+            "win_definition": "executed_net_return_gt_zero",
+            "deduplication": "trade_date_and_code_highest_score",
+            "return_unit": "percentage_points_per_trade",
+        },
     }
 
 
@@ -1169,6 +1180,11 @@ def _persist_run_start(
     # The indexed column and the canonical request are written from the same
     # validated value; a later worker can therefore reject drift deterministically.
     run.run_mode = request.run_mode.value
+    run.evaluation_scope = evaluation_scope_for_run(
+        run_mode=request.run_mode.value,
+        trade_date_override=request.trade_date_override,
+        matrix_run=request.matrix_run,
+    )
     run.trade_date = run.trade_date or _latest_trade_date(db)
     run.finished_at = None
     run.universe_count = 0
@@ -1793,6 +1809,8 @@ def _serialize_outcome(outcome: RecommendationOutcome | None) -> dict[str, Any] 
         return None
     normalized_label = normalized_outcome_label(outcome)
     return {
+        "calculation_version_id": outcome.calculation_version_id,
+        "entry_policy_id": outcome.entry_policy_id,
         "horizon_days": outcome.horizon_days,
         "entry_triggered": outcome.entry_triggered,
         "entry_date": outcome.entry_date,

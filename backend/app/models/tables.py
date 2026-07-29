@@ -739,6 +739,13 @@ class RecommendationRun(Base):
     preset_id: Mapped[str | None] = mapped_column(String(80), index=True)
     run_name: Mapped[str] = mapped_column(String(120), default="")
     run_mode: Mapped[str] = mapped_column(String(20), default="formal")
+    evaluation_scope: Mapped[str] = mapped_column(
+        String(32),
+        default="historical_replay",
+        server_default="historical_replay",
+    )
+    data_as_of: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
+    source_snapshot_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
@@ -812,6 +819,8 @@ class RecommendationOutcome(Base):
     __tablename__ = "recommendation_outcomes"
 
     recommendation_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    calculation_version_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    entry_policy_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     horizon_days: Mapped[int] = mapped_column(Integer, default=5)
     entry_triggered: Mapped[bool] = mapped_column(Boolean, default=True)
     entry_date: Mapped[str | None] = mapped_column(String(10))
@@ -839,6 +848,21 @@ class RecommendationOutcome(Base):
     outcome_reason: Mapped[str | None] = mapped_column(Text)
     label_source: Mapped[str] = mapped_column(String(20), default="auto")
     labeled_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class RecommendationOutcomeVersion(Base):
+    """Append-only calculation evidence; RecommendationOutcome is only the current projection."""
+
+    __tablename__ = "recommendation_outcome_versions"
+
+    version_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    recommendation_id: Mapped[str] = mapped_column(String(80), index=True)
+    calculation_version: Mapped[str] = mapped_column(String(80))
+    entry_policy_id: Mapped[str] = mapped_column(String(80))
+    horizon_days: Mapped[int] = mapped_column(Integer)
+    label_source: Mapped[str] = mapped_column(String(20))
+    result_json: Mapped[str] = mapped_column(LONGTEXT().with_variant(Text(), "sqlite"))
+    computed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
 class RecommendationExecutionState(Base):

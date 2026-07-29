@@ -25,6 +25,7 @@ from app.services.outcome_service import (
     resolved_trade_return,
 )
 from app.services.outcome_service import is_outcome_labeled, normalized_outcome_label
+from app.services.official_sample_scope import official_sample_conditions
 
 import logging
 logger = logging.getLogger(__name__)
@@ -67,9 +68,10 @@ def _get_overview_stats(db: Session) -> dict[str, Any]:
             Recommendation.trade_date,
             Recommendation.code,
         )
+        .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
         .where(
             Recommendation.run_id.in_(run_ids),
-            Recommendation.recommendation_id.like("rec_%"),
+            *official_sample_conditions(),
         )
         .order_by(
             Recommendation.trade_date,
@@ -153,9 +155,11 @@ def _get_skill_stats(db: Session) -> list[dict[str, Any]]:
             Recommendation.skill_breakdown_json,
             Recommendation.setup_type,
             Recommendation.recommended_at,
-        ).where(
+        )
+        .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
+        .where(
             Recommendation.run_id.in_(run_ids),
-            Recommendation.recommendation_id.like("rec_%"),
+            *official_sample_conditions(),
         )
     ).all()
     t2 = time.perf_counter()
@@ -299,9 +303,10 @@ def _get_preset_stats(db: Session) -> list[dict[str, Any]]:
             Recommendation.trade_date,
             Recommendation.code,
         )
+        .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
         .where(
             Recommendation.run_id.in_(run_ids),
-            Recommendation.recommendation_id.like("rec_%"),
+            *official_sample_conditions(),
         )
         .order_by(
             Recommendation.trade_date,

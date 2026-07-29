@@ -42,6 +42,7 @@ from app.services.runs.repository import (
     TransitionCommit,
 )
 from app.services.runs.state_machine import RunStateMachine, RunStateTransitionError
+from app.services.official_sample_scope import evaluation_scope_for_run
 
 
 class SQLAlchemyRunRepository:
@@ -63,6 +64,11 @@ class SQLAlchemyRunRepository:
             preset_id=request.preset_id,
             run_name=request.run_name,
             run_mode=request.run_mode.value,
+            evaluation_scope=evaluation_scope_for_run(
+                run_mode=request.run_mode.value,
+                trade_date_override=request.trade_date_override,
+                matrix_run=request.matrix_run,
+            ),
             trade_date=request.trade_date_override or command.created_at.date().isoformat(),
             started_at=command.created_at,
             universe_count=0,

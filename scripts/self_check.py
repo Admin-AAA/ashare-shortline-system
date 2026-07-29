@@ -252,7 +252,7 @@ def check_b_item(db) -> None:
     只看 formal run 的推荐：experiment 曝光补跑（skip_aux_refresh=True）的
     agent_summary 是空骨架，本就不走 LLM deep review，不应触发 LLM delta 缺失告警。
     """
-    row = db.execute(text("""
+    row = db.execute(text(f"""
         SELECT r.final_score, r.bucket, r.setup_type, r.entry_rule, r.invalid_rule,
                JSON_EXTRACT(r.feature_snapshot_json, '$.avg_cost')   AS avg_cost,
                JSON_EXTRACT(r.agent_summary_json,  '$.score_delta')  AS llm_delta,
@@ -1352,6 +1352,19 @@ FORWARD_EPOCH_PINNED = "2026-07-14"
 # 动态 epoch 之后需至少这么多已结算样本才切换为纯窗口；否则回退稳定基线。
 MIN_OOS_SAMPLE = 10
 
+# 与 backend/app/services/official_sample_scope.py 同一契约。self_check 使用原生 SQL，
+# 因此在这里保留固定别名版本；任何缺失来源证据、回放或未完成运行都不能冒充 OOS。
+OFFICIAL_SAMPLE_SQL = """
+    u.run_mode = 'formal'
+    AND u.evaluation_scope = 'live_forward'
+    AND u.status = 'completed'
+    AND u.data_as_of IS NOT NULL
+    AND u.data_as_of <= r.trade_date
+    AND u.source_snapshot_id IS NOT NULL
+    AND DATE(DATE_ADD(r.recommended_at, INTERVAL 8 HOUR)) = r.trade_date
+    AND r.recommendation_id LIKE 'rec_%'
+"""
+
 
 def _last_rule_change_epoch(db) -> str | None:
     """原动态逻辑：最近一次改动 strategy.yaml/aggregator.py 的 commit 之后首个
@@ -1360,11 +1373,11 @@ def _last_rule_change_epoch(db) -> str | None:
     if t is None:
         return None
     # 该 commit 时间之后首个有 LIVE formal 推荐的交易日
-    row = db.execute(text("""
+    row = db.execute(text(f"""
         SELECT MIN(r.trade_date) AS d
         FROM recommendations r
-        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
-        WHERE r.recommendation_id LIKE 'rec_%'
+        JOIN recommendation_runs u ON r.run_id = u.run_id
+        WHERE {OFFICIAL_SAMPLE_SQL}
           AND u.started_at >= :t
     """), {"t": t}).first()
     d = row[0] if row else None
@@ -1398,10 +1411,10 @@ def _resolve_forward_epoch(db) -> str:
     dyn = _last_rule_change_epoch(db)
     n = 0
     if dyn is not None:
-        n = db.execute(text("""
+        n = db.execute(text(f"""
             SELECT COUNT(*) c FROM recommendations r
-            JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
-            WHERE r.recommendation_id LIKE 'rec_%' AND r.trade_date >= :d
+            JOIN recommendation_runs u ON r.run_id = u.run_id
+            WHERE {OFFICIAL_SAMPLE_SQL} AND r.trade_date >= :d
               AND r.recommendation_id IN (SELECT recommendation_id FROM recommendation_outcomes o
                   WHERE o.outcome_label IN ('success','failed'))
         """), {"d": dyn}).scalar() or 0
@@ -1417,14 +1430,14 @@ def _fetch_dedup_live_formal(db) -> list:
     """LIVE formal 成功/失败样本，按 (code, trade_date) 去重。
     返回 [(code, trade_date_str, label, executed_return), ...]。
     """
-    return db.execute(text("""
+    return db.execute(text(f"""
         SELECT r.code, r.trade_date, MAX(o.outcome_label) AS label,
                ROUND(MIN(o.executed_return), 2) AS min_ret
         FROM recommendation_outcomes o
         JOIN recommendations r ON r.recommendation_id = o.recommendation_id
-        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+        JOIN recommendation_runs u ON r.run_id = u.run_id
         WHERE o.outcome_label IN ('success', 'failed')
-          AND r.recommendation_id LIKE 'rec_%'
+          AND {OFFICIAL_SAMPLE_SQL}
         GROUP BY r.code, r.trade_date
     """)).fetchall()
 
@@ -2496,7 +2509,11 @@ def check_d_item(db) -> None:
                 SELECT COUNT(*) FROM recommendations rec
                 JOIN recommendation_runs rr ON rec.run_id = rr.run_id
                 JOIN recommendation_outcomes ro ON rec.recommendation_id = ro.recommendation_id
-                WHERE rr.run_mode = 'formal' AND rec.recommendation_id LIKE 'rec_%'
+                WHERE rr.run_mode = 'formal' AND rr.evaluation_scope = 'live_forward'
+                  AND rr.status = 'completed' AND rr.data_as_of IS NOT NULL
+                  AND rr.data_as_of <= rec.trade_date AND rr.source_snapshot_id IS NOT NULL
+                  AND DATE(DATE_ADD(rec.recommended_at, INTERVAL 8 HOUR)) = rec.trade_date
+                  AND rec.recommendation_id LIKE 'rec_%'
                   AND rec.trade_date >= :epoch AND rec.final_score >= 72.0
                   AND ro.outcome_label IN ('success', 'failed')
             """), {"epoch": FORWARD_EPOCH}).scalar() or 0)
@@ -3917,7 +3934,11 @@ def build_north_star_snapshot(db) -> dict[str, dict]:
         ), {"d": latest_core_date}).scalar() or 0)
     latest_formal_date = db.execute(text("""
         SELECT MAX(r.trade_date) FROM recommendations r
-        JOIN recommendation_runs u ON u.run_id=r.run_id AND u.run_mode='formal'
+        JOIN recommendation_runs u ON u.run_id=r.run_id
+        WHERE u.run_mode='formal' AND u.evaluation_scope='live_forward'
+          AND u.status='completed' AND u.data_as_of IS NOT NULL
+          AND u.data_as_of<=r.trade_date AND u.source_snapshot_id IS NOT NULL
+          AND DATE(DATE_ADD(r.recommended_at, INTERVAL 8 HOUR))=r.trade_date
     """)).scalar()
     orphan_outcomes = int(db.execute(text("""
         SELECT COUNT(*) FROM recommendation_outcomes o
@@ -3943,11 +3964,12 @@ def build_north_star_snapshot(db) -> dict[str, dict]:
         SELECT COUNT(DISTINCT u.execution_version),
                SUM(CASE WHEN u.execution_version IS NULL THEN 1 ELSE 0 END)
         FROM recommendations r
-        JOIN recommendation_runs u ON u.run_id=r.run_id AND u.run_mode='formal'
+        JOIN recommendation_runs u ON u.run_id=r.run_id
         JOIN recommendation_outcomes o ON o.recommendation_id=r.recommendation_id
         WHERE o.outcome_label IN ('success','failed')
+          AND {official_scope}
           AND (:epoch IS NULL OR r.trade_date>=:epoch)
-    """), {"epoch": FORWARD_EPOCH}).one()
+    """.format(official_scope=OFFICIAL_SAMPLE_SQL)), {"epoch": FORWARD_EPOCH}).one()
     version_isolated = int(version_rows[0] or 0) == 1 and int(version_rows[1] or 0) == 0
     g1 = evaluate_g1(
         full=full,
@@ -3961,12 +3983,27 @@ def build_north_star_snapshot(db) -> dict[str, dict]:
     """)).fetchall()]
     completed_dates = {str(r[0]) for r in db.execute(text("""
         SELECT DISTINCT trade_date FROM recommendation_runs
-        WHERE run_mode='formal' AND status='completed'
+        WHERE run_mode='formal' AND evaluation_scope='live_forward' AND status='completed'
           AND trade_date IN (SELECT d.trade_date FROM (
               SELECT DISTINCT trade_date FROM daily_kbars ORDER BY trade_date DESC LIMIT 5
           ) d)
     """)).fetchall()}
     missing_formal_dates = [d for d in trade_dates if d not in completed_dates]
+    # 安全网补跑漏跑日产出 historical_replay completed run：闭合 G2 断档
+    # （与 check_formal_recommendation_gap 同口径，否则安全网认为已修而 G2 永远
+    # FAIL 成不可清除假警报），但 replay 不入 OOS（OFFICIAL_SAMPLE_SQL 仍只认
+    # live_forward），日期在 G2 summary 中标注保留可见性。
+    replay_recovered_dates: list[str] = []
+    if missing_formal_dates:
+        from sqlalchemy import bindparam
+        replay_recovered_dates = [str(r[0]) for r in db.execute(text("""
+            SELECT DISTINCT trade_date FROM recommendation_runs
+            WHERE run_mode='formal' AND status='completed'
+              AND evaluation_scope='historical_replay'
+              AND trade_date IN :dates
+        """).bindparams(bindparam("dates", expanding=True)),
+            {"dates": list(missing_formal_dates)}).fetchall()]
+        missing_formal_dates = [d for d in missing_formal_dates if d not in replay_recovered_dates]
     failed_task_rows = [(str(r[0]), r[1]) for r in db.execute(text("""
         SELECT task_id, last_run_at
         FROM scheduled_tasks
@@ -3993,6 +4030,7 @@ def build_north_star_snapshot(db) -> dict[str, dict]:
         failed_scheduler_tasks=failed_scheduler_tasks,
         stale_running_runs=stale_running_runs,
         recovered_scheduler_tasks=recovered_scheduler_tasks,
+        replay_recovered_dates=replay_recovered_dates,
     )
 
     runtimes = [int(r[0]) for r in db.execute(text("""

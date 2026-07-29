@@ -148,6 +148,8 @@ class ProductionMarketPersistence(MarketPersistencePort):
         if run is None:
             raise RuntimeError(f"Run {self._run_id} 不存在")
         run.trade_date = str(snapshot.get("trade_date") or run.trade_date)
+        run.data_as_of = str(snapshot.get("trade_date") or "") or None
+        run.source_snapshot_id = str(snapshot.get("snapshot_id") or "") or None
         run.universe_count = universe_count
         run.market_snapshot_json = _dumps(_slim_market_snapshot(dict(snapshot)))
         self._db.flush()

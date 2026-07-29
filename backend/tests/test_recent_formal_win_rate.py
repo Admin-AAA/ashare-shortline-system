@@ -4,6 +4,8 @@
 按交易日取最近 N 个有 success/failed outcome 的日期聚合；零推荐和 pending 日期不占窗口。
 去污染字段：pure 低线 + pure soft@震荡 的 clean_net_profit_loss_ratio / pollution_n（主口径不变）。
 """
+from datetime import datetime
+
 from app.services.outcome_service import (
     _net_pl_ratio,
     _pure_pollution_keys_from_rows,
@@ -34,13 +36,17 @@ def _add_formal_recommendation(db, *, trade_date, suffix, outcome_label=None, ex
         run_id=run_id,
         run_name="近期胜率窗口测试",
         run_mode="formal",
+        evaluation_scope="live_forward",
         trade_date=trade_date,
+        data_as_of=trade_date,
+        source_snapshot_id=f"snapshot_recent_{suffix}",
         status="completed",
     ))
     db.add(Recommendation(
         recommendation_id=recommendation_id,
         run_id=run_id,
         trade_date=trade_date,
+        recommended_at=datetime.fromisoformat(f"{trade_date}T06:00:00"),
         code=f"{int(suffix):06d}",
         name="测试股票",
         final_score=80,
