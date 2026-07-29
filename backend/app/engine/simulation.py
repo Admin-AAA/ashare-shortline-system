@@ -221,6 +221,12 @@ def build_equity_curve(trades: Iterable[Trade], *, initial_equity: float = 1.0) 
     for trade_date in sorted(returns_by_date):
         daily_return_pct = returns_by_date[trade_date]
         equity *= 1 + daily_return_pct / 100
+        # 同日多笔 trade 的 portfolio_return 线性累加是聚合展示用的简化模型：
+        # 极端弱势日（多笔止损叠加）可能让累加 < -100%，使 equity 数值变负。
+        # 这是聚合口径的数值边界，并非单笔 trade 真实亏光——clamp 到下界避免
+        # EquityPoint 校验 fatal，保留 drawdown=100% 的信号而非让整个回测失败。
+        if equity < 0:
+            equity = 0.0
         peak = max(peak, equity)
         drawdown_pct = (peak - equity) / peak * 100 if peak else 0.0
         points.append(
