@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.responses import ORJSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from app.api import admin, backtests, dashboard, data_sources, frontend_logs, home, llm, metrics, outcomes, presets, records, recommendations, runs, skills, stats, strategies
 from app.core.config import get_settings
@@ -61,6 +62,49 @@ def _request_is_authorized(request: Request) -> bool:
     return secrets.compare_digest(token, _access_token())
 
 
+def _normalize_api_path(path: str) -> str:
+    """折叠路径参数，避免 run_id / 股票代码等造成高基数。
+
+    例：/api/runs/run_20260729_095923_e475f7 → /api/runs/{id}
+        /api/recommendations/600519 → /api/recommendations/{id}
+    """
+    parts = []
+    for seg in path.split("/"):
+        if not seg:
+            continue
+        if seg.isdigit() or seg.startswith("run_") or (len(seg) == 6 and seg[:6].isdigit()):
+            parts.append("{id}")
+        else:
+            parts.append(seg)
+    return "/" + "/".join(parts)
+
+
+def _record_api_metric(method: str, path: str, status_code: int, duration_ms: float) -> None:
+    """持久化 /api/ GET 只读端点延迟，供 self_check 计算 api_p95。
+
+    只采样 GET（驾驶舱只读路径，POST/写操作延迟语义不同）；失败静默，绝不阻断请求。
+    """
+    if method != "GET" or not path.startswith("/api/") or path == "/api/health":
+        return
+    try:
+        from app.db.session import SessionLocal
+        from app.models.tables import ApiRequestMetric
+
+        db = SessionLocal()
+        try:
+            db.add(ApiRequestMetric(
+                method=method,
+                path=_normalize_api_path(path),
+                status_code=status_code,
+                duration_ms=round(duration_ms, 1),
+            ))
+            db.commit()
+        finally:
+            db.close()
+    except Exception:  # noqa: BLE001 - 监控写库失败不能影响业务请求
+        pass
+
+
 @app.middleware("http")
 async def catch_unhandled_exceptions(request: Request, call_next):
     start = __import__("time").time()
@@ -78,11 +122,13 @@ async def catch_unhandled_exceptions(request: Request, call_next):
             access_logger.warning("%s %s → %s (%.0fms) [SLOW]", request.method, request.url.path, response.status_code, elapsed)
         else:
             access_logger.info("%s %s → %s (%.0fms)", request.method, request.url.path, response.status_code, elapsed)
+        await run_in_threadpool(_record_api_metric, request.method, request.url.path, response.status_code, elapsed)
         return response
     except Exception:
         elapsed = (__import__("time").time() - start) * 1000
         access_logger.error("%s %s → 500 (%.0fms) [ERROR]", request.method, request.url.path, elapsed)
         logger.exception("Unhandled request exception: %s %s", request.method, request.url.path)
+        await run_in_threadpool(_record_api_metric, request.method, request.url.path, 500, elapsed)
         return JSONResponse(
             status_code=500,
             content={"detail": "Internal server error"},

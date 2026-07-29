@@ -3884,6 +3884,26 @@ def _nearest_rank_p95(values: list[int]) -> int | None:
     return ordered[rank - 1]
 
 
+def _fetch_api_p95_seconds(db) -> float | None:
+    """从 api_request_metrics 计算近期 /api/ GET 端点 p95（秒）。
+
+    样本不足（<30 条）时返回 None，保持 G3「测量不完整」提示而非小样本误判。
+    """
+    try:
+        rows = db.execute(text("""
+            SELECT duration_ms FROM api_request_metrics
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+            ORDER BY created_at DESC LIMIT 2000
+        """)).fetchall()
+    except Exception:
+        return None  # 表尚未创建（旧部署）时静默降级为测量不完整
+    values = [float(r[0]) for r in rows if r[0] is not None]
+    if len(values) < 30:
+        return None
+    p95_ms = _nearest_rank_p95([int(round(v)) for v in values])
+    return round(p95_ms / 1000.0, 3) if p95_ms is not None else None
+
+
 def build_north_star_snapshot(db) -> dict[str, dict]:
     """收集并判定 G0-G4；只读，不调用真实 LLM。
 
@@ -3982,7 +4002,7 @@ def build_north_star_snapshot(db) -> dict[str, dict]:
           AND universe_count>=3000
         ORDER BY started_at DESC LIMIT 20
     """)).fetchall() if r[0] is not None]
-    g3 = evaluate_g3(formal_p95_seconds=_nearest_rank_p95(runtimes), api_p95_seconds=None)
+    g3 = evaluate_g3(formal_p95_seconds=_nearest_rank_p95(runtimes), api_p95_seconds=_fetch_api_p95_seconds(db))
 
     candidate_oos = summarize_discovery_oos(factor_rows).get("positive")
     g4 = evaluate_g4(prerequisites=[g0, g2, g3], candidate_oos=candidate_oos)

@@ -966,6 +966,23 @@ class ApiCallLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class ApiRequestMetric(Base):
+    """HTTP 端点请求延迟采样（G3 性能门禁数据源）。
+
+    只记录 /api/ 的 GET 只读端点（驾驶舱关键路径），由 main.py 的请求计时
+    middleware 顺手持久化；用于 self_check 计算 api_p95，替代硬编码 None。
+    path 已归一化（路径参数折叠为 {}），避免高基数。
+    """
+    __tablename__ = "api_request_metrics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    method: Mapped[str] = mapped_column(String(8))
+    path: Mapped[str] = mapped_column(String(200))
+    status_code: Mapped[int] = mapped_column(Integer, default=200)
+    duration_ms: Mapped[float] = mapped_column(Float, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
 class LLMReviewCache(Base):
     """LLM Skill 审查结果缓存。
 
