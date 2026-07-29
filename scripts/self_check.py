@@ -47,7 +47,7 @@ SKILLS_DIR = os.path.join(os.path.dirname(__file__), '..', 'backend', 'skills')
 # 佣金万1双边(0.02%) + 印花税卖出(0.05%) = 0.07%/笔。executed_return 已含滑点但未扣此成本。
 # 北极星 D 项目标定义为"扣费后须达标"(T2 step4)，故 D 项必须呈净成本口径，不能只看毛值。
 ADDITIONAL_COST_PCT = 0.07
-PL_RATIO_BASELINE = 3.04   # 北极星 D 项盈亏比历史基线（LIVE 全量去重 n=224，T+1 口径重算后）
+PL_RATIO_BASELINE: float | None = None  # 旧盈亏比基线受历史成交口径污染，禁止继续作为 champion
 PL_RATIO_TARGET = 2.0      # 北极星 D 项目标（朝 2.0 攻击）
 
 # 策略规则引擎（用于 D 项"规则覆盖前瞻校验"——区分历史污染 vs 真退化）
@@ -1499,11 +1499,20 @@ def _classify_maxloss(ml: float, baseline_loss: float) -> str:
     return '优于基线'
 
 
-def _fmt_d(tag: str, res: tuple | None, baseline_wr: float, baseline_loss: float) -> None:
+def _fmt_d(
+    tag: str,
+    res: tuple | None,
+    baseline_wr: float | None,
+    baseline_loss: float | None,
+) -> None:
     if res is None:
         print(f'  {tag}: 样本不足（前瞻窗口需等修复后新 run 结算）')
         return
     wr, n, ml = res
+    if baseline_wr is None or baseline_loss is None:
+        print(f'  {tag}: 胜率 {wr}% (n={n}) | 最大亏损 {ml}% '
+              f'| 同口径 champion 待重放（旧历史基线已失效，不计算 Δ）')
+        return
     d = round(wr - baseline_wr, 1)
     tag_w = f'⚠️ 下滑 {abs(d)}pp' if d < 0 else f'↑ 高于基线 {d}pp'
     tag_l = _classify_maxloss(ml, baseline_loss)
@@ -1552,10 +1561,23 @@ def _compute_d_cost(rows: list, *, since_date: str | None = None,
     }
 
 
-def _fmt_d_cost(tag: str, m: dict | None, baseline_wr: float, baseline_pl: float) -> None:
+def _fmt_d_cost(
+    tag: str,
+    m: dict | None,
+    baseline_wr: float | None,
+    baseline_pl: float | None,
+) -> None:
     """打印净成本 D 项块（盈亏比 + 净胜率 + 净平均收益）。"""
     if m is None:
         print(f'  {tag}(净成本): 样本不足')
+        return
+    if baseline_wr is None or baseline_pl is None:
+        tag_p = (f'✅ 净盈亏比达标(≥{PL_RATIO_TARGET})'
+                 if m["net_pl"] >= PL_RATIO_TARGET else '同口径 champion 待重放')
+        print(f'  {tag}(净成本,扣{ADDITIONAL_COST_PCT}%): 净胜率 {m["net_wr"]}% '
+              f'(毛 {m["gross_wr"]}%) | 盈亏比 净 {m["net_pl"]}/毛 {m["gross_pl"]} '
+              f'({tag_p}；旧历史基线已失效，不计算 Δ) '
+              f'| 平均收益 净 {m["net_avg"]}%/毛 {m["gross_avg"]}%')
         return
     d_w = round(m["net_wr"] - baseline_wr, 1)
     tag_w = (f'⚠️ 净胜率下滑 {abs(d_w)}pp' if d_w < 0
@@ -1842,7 +1864,7 @@ def _print_low_score_line_pollution(db, last10: set | None = None) -> None:
     _fmt_d_cost(
         f'D 项(clean≥{floor:g} 全量)',
         _compute_d_cost(clean_rows),
-        61.5,
+        None,
         PL_RATIO_BASELINE,
     )
     if last10:
@@ -1850,17 +1872,11 @@ def _print_low_score_line_pollution(db, last10: set | None = None) -> None:
         _fmt_d_cost(
             f'D 项(clean≥{floor:g} 近10交易日)',
             clean_l10,
-            61.5,
+            None,
             PL_RATIO_BASELINE,
         )
         # clean 近10日仍低于基线 → 低线污染+soft 不是主因，禁止停在污染叙事
         # T39：排除 soft 后 clean 口径已修正——07-16 "clean WR 23%" 是 soft@震荡混入假象
-        if clean_l10 is not None and clean_l10["net_pl"] < PL_RATIO_BASELINE:
-            print(
-                f'  ⚠️ 护栏: clean≥{floor:g}(excl soft) 近10日净盈亏比 {clean_l10["net_pl"]} '
-                f'仍低于基线 {PL_RATIO_BASELINE}（n={clean_l10["n"]}）'
-                f'——排除低线+soft 后仍差，查 regime/策略真问题'
-            )
 
 
 def _soft_regime_pollution(
@@ -2440,8 +2456,10 @@ def check_d_item(db) -> None:
     回测（btrec_）与 experiment 补跑不纳入北极星 D 项——它们会虚高胜率、
     掩盖真实 formal 表现（回测污染曾使 D 项胜率从真实 59% 虚报到 68%）。
     """
-    WIN_RATE_BASELINE = 75.9
-    MAX_LOSS_BASELINE = -12.22
+    # 旧 WR/PF/max-loss 基线来自已废弃的成交口径。
+    # 在当前执行模型下重放 production champion 前，不得计算 Δ 或据此阻断改动。
+    WIN_RATE_BASELINE: float | None = None
+    MAX_LOSS_BASELINE: float | None = None
 
     # 胜率按 (code, trade_date) 去重：同一交易日同一只股票常被多个 formal run 重复推荐
     # （2026-07-08 单日 14 个 run，松发股份被推荐 7 次全部 -5.69% 止损）。去重后反映
@@ -2524,7 +2542,11 @@ def check_d_item(db) -> None:
             pass
 
     # 前瞻验证护栏：全量高于基线但前瞻窗口空 → 不可 claim 改进（见 _forward_verification_flag）
-    flag = _forward_verification_flag(full_res[0] if full_res else None, fwd_res, WIN_RATE_BASELINE)
+    flag = (
+        _forward_verification_flag(full_res[0] if full_res else None, fwd_res, WIN_RATE_BASELINE)
+        if WIN_RATE_BASELINE is not None
+        else None
+    )
     if flag:
         print(f'  {flag}')
 
@@ -2600,7 +2622,10 @@ def check_d_item(db) -> None:
     _check_exit_reason_breakdown(db)
 
     # 规则覆盖前瞻校验：区分"历史污染"vs"真退化"
-    check_d_rule_coverage(db, WIN_RATE_BASELINE)
+    if WIN_RATE_BASELINE is not None:
+        check_d_rule_coverage(db, WIN_RATE_BASELINE)
+    else:
+        print('D 项规则覆盖：同口径 champion 尚未重放，跳过旧基线反事实判定')
 
 
 def _exit_reason_breakdown_stats(items: list) -> dict[str, dict]:
@@ -3738,10 +3763,7 @@ def _print_forward_veto_counterfactual(rows, skills, win_rate_baseline: float) -
     stats = _forward_veto_kept_stats(fwd_rows, blocked_rids)
     if stats is None:
         return
-    pl_tag = (
-        "✅" if stats["pl"] >= PL_RATIO_TARGET
-        else ("⚠️" if stats["pl"] < PL_RATIO_BASELINE else "")
-    )
+    pl_tag = "✅" if stats["pl"] >= PL_RATIO_TARGET else ""
     print(
         f'D 项前瞻规则覆盖反事实：前瞻窗口剔除 {stats["blocked_n"]} 笔被覆盖失败'
         f'（veto/prefilter/soft@震荡）后 '

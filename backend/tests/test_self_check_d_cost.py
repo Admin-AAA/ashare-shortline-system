@@ -29,6 +29,19 @@ _ROWS = [
 ]
 
 
+def test_invalidated_historical_baseline_does_not_emit_delta(capsys):
+    """成交口径变化后，旧 WR/PF/max-loss 不得继续充当 champion 阻断改动。"""
+    self_check._fmt_d("D 项", (50.0, 20, -1.99), None, None)
+    self_check._fmt_d_cost("D 项", self_check._compute_d_cost(_ROWS), None, None)
+
+    output = capsys.readouterr().out
+    assert "同口径 champion 待重放" in output
+    assert "旧历史基线已失效，不计算 Δ" in output
+    assert "75.9" not in output
+    assert "3.04" not in output
+    assert "-12.22" not in output
+
+
 def test_all_time_cost_metrics():
     m = self_check._compute_d_cost(_ROWS)
     assert m is not None
