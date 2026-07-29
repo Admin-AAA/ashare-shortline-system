@@ -273,6 +273,7 @@ def test_existing_schema_baseline_applies_owned_p0_research_schema_forward_only(
         "V024_auxiliary_partition_snapshots",
         "V025_strategy_version_snapshots",
         "V026_recommendation_execution_states",
+        "V027_cancelled_before_entry",
     )
     assert result.applied_versions == expected_versions
     assert [migration.version for migration in all_migrations()] == list(expected_versions)
@@ -287,6 +288,15 @@ def test_existing_schema_baseline_applies_owned_p0_research_schema_forward_only(
         assert connection.scalar(
             text("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = 'recommendation_execution_states'")
         ) == 1
+        execution_columns = {
+            column["name"] for column in inspect(connection).get_columns("recommendation_execution_states")
+        }
+        assert {
+            "cancelled_before_entry",
+            "first_cancelled_at",
+            "first_cancelled_price",
+            "first_cancel_reason",
+        } <= execution_columns
 
 
 def test_init_db_uses_create_all_only_for_sqlite(monkeypatch) -> None:

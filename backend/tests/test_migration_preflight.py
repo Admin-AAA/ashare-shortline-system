@@ -169,6 +169,27 @@ def test_mysql_preflight_reports_blockers_and_duplicate_conflict_samples_without
     assert all("DROP" not in sql.upper() and "TRUNCATE" not in sql.upper() for sql in connection.executed)
 
 
+def test_mysql_preflight_allows_online_inplace_add_column() -> None:
+    connection = _FakeMysqlConnection(rows=10)
+    target = DdlTarget(
+        migration_version="V027_cancelled_before_entry",
+        operation=DdlOperation.ADD_COLUMN,
+        table="fixture_table",
+        column="cancelled_before_entry",
+        expected_data_types=("boolean", "tinyint"),
+        expected_nullable=False,
+        expected_default="0",
+        algorithm="INPLACE",
+        lock="NONE",
+        minimum_free_bytes=0,
+    )
+
+    report = DdlPreflight(connection).run(target)
+
+    checks = {check.name: check for check in report.checks}
+    assert checks["online_capability"].status is PreflightStatus.PASS
+
+
 def test_mysql_preflight_blocks_table_scale_and_long_transactions() -> None:
     connection = _FakeMysqlConnection(long_transactions=1, rows=101)
     target = DdlTarget(

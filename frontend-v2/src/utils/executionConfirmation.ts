@@ -1,7 +1,7 @@
 // 批量次日买入确认的前端纯逻辑（无 React/JSX，便于 node:test 单测）。
 // HistoryPage 引用本模块；渲染相关的 JSX 留在 HistoryPage。
 
-import type { ExecutionConfirmationItem } from "../types.ts";
+import type { CancelObservation, ExecutionConfirmationItem } from "../types.ts";
 import { isOutcomeSettled } from "./display.ts";
 
 // 决策 code 联合类型（Spec 6.2 六种状态 + 错误 + 加载）
@@ -23,6 +23,18 @@ const PLACEHOLDER_ENTRY_RULES = new Set([
 export function isPlaceholderEntryRule(value?: string | null): boolean {
   const normalized = String(value || "").trim();
   return normalized === "" || PLACEHOLDER_ENTRY_RULES.has(normalized);
+}
+
+/** 取消后的反事实观察只展示已经形成的交易日，不用 0 填充未来窗口。 */
+export function cancelObservationText(observation?: CancelObservation | null): string {
+  if (!observation) return "";
+  const parts = ([1, 3, 5] as const).flatMap((days) => {
+    const point = observation.horizons[`${days}d`];
+    if (!point) return [];
+    const value = point.net_return_pct;
+    return [`${days}日 ${value >= 0 ? "+" : ""}${value.toFixed(2)}%`];
+  });
+  return parts.length > 0 ? parts.join(" · ") : "观察收益待后续交易日";
 }
 
 // 从当前页行筛出未结算推荐 ID（去重 + 排序成稳定 key，避免重渲染重复请求）。

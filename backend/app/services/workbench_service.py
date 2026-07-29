@@ -60,6 +60,7 @@ from app.services.auxiliary.application import (
 from app.services.market_source.local_pool_adapter import load_legacy_market_universe
 from app.services.failure_attribution import classify_false_positive
 from app.services.execution_confirmation_state import load_execution_state_map
+from app.services.execution_outcome_policy import build_cancel_observations
 from app.services.market_data import MarketDataError, get_market_universe
 from app.services.market_pool import (
     get_market_snapshot_from_pool,
@@ -762,18 +763,31 @@ def list_recommendation_history(
 
     seen: set[tuple[str, str]] = set()
     deduped_ids: list[str] = []
+    deduped_refs: list[dict[str, str]] = []
     for rec_id, td, c, _score in id_rows:
         key = (str(td), str(c))
         if key in seen:
             continue
         seen.add(key)
         deduped_ids.append(rec_id)
+        deduped_refs.append({"recommendation_id": str(rec_id), "code": str(c)})
 
     total = len(deduped_ids)
     all_outcomes = list(db.scalars(
         select(RecommendationOutcome).where(RecommendationOutcome.recommendation_id.in_(deduped_ids))
     ).all()) if deduped_ids else []
-    summary = _build_recommendation_history_summary(all_outcomes)
+    all_execution_states = load_execution_state_map(db, deduped_ids)
+    cancelled_before_entry_ids = {
+        recommendation_id
+        for recommendation_id, state in all_execution_states.items()
+        if state.get("cancelled_before_entry") and not state.get("ever_buy_confirmed")
+    }
+    summary = _build_recommendation_history_summary(
+        all_outcomes,
+        excluded_recommendation_ids=cancelled_before_entry_ids,
+    )
+    cancel_report = build_cancel_observations(db, deduped_refs, all_execution_states)
+    summary["cancel_observation"] = cancel_report["summary"]
     page_ids = deduped_ids[offset : offset + limit]
     if not page_ids:
         return {
@@ -794,7 +808,6 @@ def list_recommendation_history(
         select(RecommendationOutcome).where(RecommendationOutcome.recommendation_id.in_(page_ids))
     ).all()
     outcome_map = {o.recommendation_id: o for o in page_outcomes}
-    execution_state_map = load_execution_state_map(db, page_ids)
 
     # 按去重后的 id 顺序排序（保证 trade_date DESC, final_score DESC）
     ordered_recs = [rec_by_id[rid] for rid in page_ids if rid in rec_by_id]
@@ -802,7 +815,8 @@ def list_recommendation_history(
     for item in items:
         rec_id = item.get("recommendation_id")
         item["outcome"] = _serialize_outcome(outcome_map.get(rec_id)) if rec_id else None
-        item["execution_state"] = execution_state_map.get(str(rec_id)) if rec_id else None
+        item["execution_state"] = all_execution_states.get(str(rec_id)) if rec_id else None
+        item["cancel_observation"] = cancel_report["items"].get(str(rec_id)) if rec_id else None
 
     result = {
         "items": items,
@@ -817,12 +831,19 @@ def list_recommendation_history(
     return result
 
 
-def _build_recommendation_history_summary(outcomes: list[Any]) -> dict[str, Any]:
+def _build_recommendation_history_summary(
+    outcomes: list[Any],
+    *,
+    excluded_recommendation_ids: set[str] | None = None,
+) -> dict[str, Any]:
     """按统一的已成交净收益口径汇总复盘指标。"""
+    excluded = excluded_recommendation_ids or set()
     settled = [
         outcome
         for outcome in outcomes
-        if is_trade_executed(outcome) and normalized_outcome_label(outcome) in {"success", "failed"}
+        if str(getattr(outcome, "recommendation_id", "") or "") not in excluded
+        and is_trade_executed(outcome)
+        and normalized_outcome_label(outcome) in {"success", "failed"}
     ]
     net_returns = [resolved_trade_return(outcome) - _ADDITIONAL_COST_PCT for outcome in settled]
     win_count = sum(value > 0 for value in net_returns)
