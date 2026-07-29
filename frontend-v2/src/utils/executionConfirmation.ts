@@ -14,6 +14,13 @@ export type ExecutionDecisionCode =
   | "error"
   | null;
 
+export type HoldingDecisionPresentation = {
+  code: string;
+  text: string;
+  reason: string;
+  title: string;
+};
+
 const PLACEHOLDER_ENTRY_RULES = new Set([
   "等待买点确认后再参与",
   "等待 Skill 方法论中的关键买点被盘面确认后再参与",
@@ -70,4 +77,20 @@ export function executionDecisionCode(
     return code;
   }
   return null;
+}
+
+/** 把后端已有的持仓决策投影成明确的条件式提示，避免暗示系统知道用户是否真实成交。 */
+export function holdingDecisionPresentation(
+  item?: ExecutionConfirmationItem,
+): HoldingDecisionPresentation | null {
+  const decision = item?.holding_decision;
+  if (!decision) return null;
+  const label = String(decision.label || "持仓判断待确认").trim();
+  const reason = String(decision.reason || "").trim();
+  return {
+    code: String(decision.code || "observe"),
+    text: `如果已持有：${label}`,
+    reason,
+    title: reason ? `${label} · ${reason}` : label,
+  };
 }

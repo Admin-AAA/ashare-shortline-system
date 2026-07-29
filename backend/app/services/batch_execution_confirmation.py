@@ -564,6 +564,7 @@ def _to_batch_item(result: dict[str, Any]) -> dict[str, Any]:
         "data_source": result.get("data_source"),
         "current_price": result.get("current_price"),
         "entry_decision": result.get("entry_decision"),
+        "holding_decision": result.get("holding_decision"),
         "condition_summary": result.get("condition_summary") or {},
         "strategy_signal": _slim_strategy_signal(result.get("strategy_signal") or {}),
     }

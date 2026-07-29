@@ -19,7 +19,7 @@ import { RecommendationDetailCard } from "../components/RecommendationDetailCard
 import { fmtPrice } from "../components/Shared";
 import { bucketLabel, exitReasonLabel, formatApiDateTime, isOutcomeSettled, outcomeLabel, outcomeTone, setupLabel, BUCKET_LABELS } from "../utils/display";
 import { ruleKeyLevelLabels, rulesMentionKeyLevel } from "../utils/ruleKeyLevels";
-import { cancelObservationText, collectUnsettledIds, executionDecisionCode, isPlaceholderEntryRule } from "../utils/executionConfirmation";
+import { cancelObservationText, collectUnsettledIds, executionDecisionCode, holdingDecisionPresentation, isPlaceholderEntryRule } from "../utils/executionConfirmation";
 
 /**
  * 复盘页 —— 正式运行推荐历史（跨 run，按 trade_date 倒序，带 outcome）。
@@ -495,6 +495,9 @@ export function HistoryPage() {
                 const currentCondition = settled
                   ? savedExecution?.condition_summary
                   : confirmationMap[it.recommendation_id]?.condition_summary || savedExecution?.condition_summary;
+                const holdingDecision = settled
+                  ? null
+                  : holdingDecisionPresentation(confirmationMap[it.recommendation_id]);
                 const missingEntryRule = isPlaceholderEntryRule(it.entry_rule);
                 // provisional 的 executed_return 只是入场日收盘临时标记，不是可实现的最终收益；
                 // 未最终结算时改用实时盈亏，避免今日行情已更新却仍展示昨日临时值。
@@ -611,6 +614,19 @@ export function HistoryPage() {
                               title={executionDecisionTitle(it.recommendation_id, confirmationMap, confirmationErrors)}
                             >
                               {renderExecutionDecision(it.recommendation_id, confirmationMap, confirmationErrors, confirmationLoadingIds)}
+                            </span>
+                          )}
+                          {holdingDecision && (
+                            <span
+                              style={executionDecisionTagStyle(holdingDecision.code)}
+                              title={holdingDecision.title}
+                            >
+                              <span>{holdingDecision.text}</span>
+                              {holdingDecision.reason && (
+                                <span style={{ color: "var(--muted)", fontWeight: 400, overflow: "hidden", textOverflow: "ellipsis" }}>
+                                  {clip(holdingDecision.reason, 24)}
+                                </span>
+                              )}
                             </span>
                           )}
                           {settled && savedExecution && (
@@ -828,15 +844,19 @@ const shortVersionId = (value: string) => value.length <= 14 ? value : `${value.
 // not_ready/expired 中性、error 中性带危险描边。
 const EXECUTION_DECISION_TONE: Record<string, { color: string; border?: string }> = {
   buy: { color: "var(--market-up)" },
+  hold: { color: "var(--market-up)" },
   wait: { color: "var(--market-gold, #b8860b)" },
+  reduce: { color: "var(--market-gold, #b8860b)" },
   cancel: { color: "var(--market-down)" },
+  exit: { color: "var(--market-down)" },
+  observe: { color: "var(--muted)" },
   not_ready: { color: "var(--muted)" },
   expired: { color: "var(--muted)" },
   error: { color: "var(--muted)", border: "1px solid var(--market-down)" },
   loading: { color: "var(--muted)" },
 };
 
-function executionDecisionTagStyle(code: "buy" | "wait" | "cancel" | "not_ready" | "expired" | "error" | "loading" | null): React.CSSProperties {
+function executionDecisionTagStyle(code: string | null): React.CSSProperties {
   const tone = (code && EXECUTION_DECISION_TONE[code]) || EXECUTION_DECISION_TONE.not_ready;
   return {
     display: "inline-flex",
