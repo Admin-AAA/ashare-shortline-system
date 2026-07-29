@@ -19,13 +19,20 @@ from __future__ import annotations
 import json
 import threading
 import time
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from sqlalchemy.orm import Session
 
-from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun
+from app.models.tables import (
+    DailyKbar,
+    Recommendation,
+    RecommendationExecutionState,
+    RecommendationOutcome,
+    RecommendationRun,
+)
 from app.services import batch_execution_confirmation as svc
 
 
@@ -56,6 +63,8 @@ def _make_rec(
         recommend_price=recommend_price,
         bucket=bucket,
         final_score=80,
+        # 默认构造盘后推荐（UTC 08:00 = 北京 16:00），需要盘中语义的测试显式覆盖。
+        recommended_at=datetime.fromisoformat(f"{trade_date}T08:00:00"),
         feature_snapshot_json=json.dumps({"stop_loss": stop_loss}),
     ))
     return rec_id
@@ -144,6 +153,7 @@ def _setup_decision_mocks(
     monkeypatch.setattr("app.services.execution_confirmation._adjust_stop_loss_for_ex_right", lambda db, code, sd, da, sl: sl)
     monkeypatch.setattr("app.services.execution_confirmation.latest_allowed_quote_date", lambda: expected_date)
     monkeypatch.setattr("app.services.execution_confirmation._entry_window_closed", lambda d, n: entry_window_closed)
+    monkeypatch.setattr(svc, "_entry_window_closed", lambda d, n: entry_window_closed)
     monkeypatch.setattr("app.services.feature_builder.build_features", lambda stocks, snapshot, **_kw: stocks)
     monkeypatch.setattr("app.services.factors.registry.bootstrap_default_factor_registry", lambda: None)
     return calls
@@ -322,6 +332,40 @@ def test_batch_strategy_uses_enriched_objects_returned_by_build_features(db, mon
     assert result["items"][0]["entry_decision"]["code"] == "buy"
 
 
+def test_fresh_computation_persists_state_but_cache_hit_does_not_rewrite(db, monkeypatch):
+    code = "999992"
+    run_id = _make_run(db, "test_batch_persist_state_run")
+    rec = _make_rec(
+        db,
+        "test_batch_persist_state_rec",
+        run_id,
+        code,
+        bucket=_FAKE_SKILL.skill_id,
+        stop_loss=1.0,
+    )
+    _add_kbar(db, code, "2026-07-29", close=10.5)
+    db.flush()
+    _setup_decision_mocks(
+        monkeypatch,
+        stocks=[_fake_stock(code)],
+        rt_quotes={code: _rt(code)},
+    )
+    svc._cache["value"] = None
+
+    first = svc.confirm_batch_executions(db, [rec], refresh=True)
+    state = db.get(RecommendationExecutionState, rec)
+    first_updated_at = state.updated_at if state else None
+    second = svc.confirm_batch_executions(db, [rec], refresh=False)
+    db.refresh(state)
+
+    assert first["cached"] is False
+    assert second["cached"] is True
+    assert state is not None
+    assert state.latest_decision_code == "buy"
+    assert state.ever_buy_confirmed is True
+    assert state.updated_at == first_updated_at
+
+
 # ── 实时 K 合成 ───────────────────────────────────────────────────────────
 
 def test_rt_bar_replaces_same_day_history_not_appends():
@@ -386,8 +430,15 @@ def test_rt_high_low_volume_enter_strategy_features():
 
 def test_stale_snapshot_never_returns_buy(db, monkeypatch):
     """陈旧行情（data_as_of != expected）绝不返回 buy。"""
-    run_id = _make_run(db, "test_batch_stale_run")
-    rec = _make_rec(db, "test_batch_stale_rec", run_id, "600775", bucket=_FAKE_SKILL.skill_id)
+    run_id = _make_run(db, "test_batch_stale_run", trade_date="2026-07-29")
+    rec = _make_rec(
+        db,
+        "test_batch_stale_rec",
+        run_id,
+        "600775",
+        trade_date="2026-07-29",
+        bucket=_FAKE_SKILL.skill_id,
+    )
     _add_kbar(db, "600775", "2026-07-29", close=10.5)
     db.flush()
 
@@ -538,6 +589,68 @@ def test_same_day_signal_is_not_ready_even_after_entry_window_closes(db, monkeyp
     result = svc.confirm_batch_executions(db, [rec], refresh=True)
 
     assert result["items"][0]["entry_decision"]["code"] == "not_ready"
+
+
+def test_same_day_intraday_recommendation_can_confirm_buy(db, monkeypatch):
+    """盘中生成的推荐在推荐当日直接重跑策略，不再统一等待次日。"""
+    code = "999996"
+    run_id = _make_run(db, "test_batch_intraday_buy_run", trade_date="2026-07-29")
+    rec_id = _make_rec(
+        db,
+        "test_batch_intraday_buy_rec",
+        run_id,
+        code,
+        trade_date="2026-07-29",
+        bucket=_FAKE_SKILL.skill_id,
+        stop_loss=1.0,
+    )
+    db.flush()
+    db.get(Recommendation, rec_id).recommended_at = datetime(2026, 7, 29, 2, 0)
+    db.flush()
+
+    _setup_decision_mocks(
+        monkeypatch,
+        stocks=[_fake_stock(code)],
+        rt_quotes={code: _rt(code)},
+    )
+    svc._cache["value"] = None
+
+    result = svc.confirm_batch_executions(db, [rec_id], refresh=True)
+
+    assert result["items"][0]["entry_decision"]["code"] == "buy"
+
+
+def test_intraday_recommendation_expires_after_close_without_fetching_quote(db, monkeypatch):
+    """盘中推荐收盘后直接过期，不为已关闭的入场窗口拉实时 K。"""
+    code = "999995"
+    run_id = _make_run(db, "test_batch_intraday_closed_run", trade_date="2026-07-29")
+    rec_id = _make_rec(
+        db,
+        "test_batch_intraday_closed_rec",
+        run_id,
+        code,
+        trade_date="2026-07-29",
+        bucket=_FAKE_SKILL.skill_id,
+        stop_loss=1.0,
+    )
+    db.flush()
+    db.get(Recommendation, rec_id).recommended_at = datetime(2026, 7, 29, 2, 0)
+    db.flush()
+
+    calls = _setup_decision_mocks(
+        monkeypatch,
+        stocks=[_fake_stock(code)],
+        rt_quotes={code: _rt(code)},
+        entry_window_closed=True,
+    )
+    svc._cache["value"] = None
+
+    result = svc.confirm_batch_executions(db, [rec_id], refresh=True)
+
+    assert result["items"][0]["entry_decision"]["code"] == "expired"
+    assert result["items"][0]["entry_decision"]["reason"] == "当前交易日已收盘，不再追认盘中买点"
+    assert calls["universe"] == 0
+    assert calls["rtk"] == 0
 
 
 # ── 跌破止损优先 + hard veto ─────────────────────────────────────────────

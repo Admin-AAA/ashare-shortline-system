@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.engine.strategy_runner import evaluate_skill_prefilter
+from app.engine.strategy_runner import evaluate_skill_prefilter, explain_skill_prefilter
 from app.engine.skill_loader import load_skills
 from app.services.prefilter_service import apply_prefilters, common_tradeability_exclusion_reason
 
@@ -165,6 +165,22 @@ def test_limit_up_reseal_rejects_non_limit_up_stock():
     passed, reason = evaluate_skill_prefilter(_limit_up_skill()["skill"], stock, stage="market")
     assert passed is False
     assert reason == "universe_include"
+
+
+def test_prefilter_explanation_contains_failed_expression_and_observed_value():
+    stock = _positive_stock_for_skill("limit-up-reseal-relay")
+    stock["is_limit_up"] = False
+
+    detail = explain_skill_prefilter(_limit_up_skill()["skill"], stock, stage="market")
+
+    assert detail == {
+        "passed": False,
+        "scope": "universe_include",
+        "code": "universe_include",
+        "label": "is_limit_up == true",
+        "expression": "is_limit_up == true",
+        "observed": {"is_limit_up": False},
+    }
 
 
 def test_limit_up_reseal_rejects_low_amount():

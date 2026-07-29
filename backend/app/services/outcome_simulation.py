@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import json
 from bisect import bisect_left
-from datetime import time
+from datetime import time, timedelta
 from typing import Any
 
 from app.engine.board_rules import is_one_word_limit_down_bar, limit_pct_for_code
@@ -61,6 +61,10 @@ def _is_intraday_recommendation(rec: Recommendation) -> bool:
         return False
     t = recommended_at.time() if hasattr(recommended_at, "time") else None
     if t is None:
+        return False
+    trade_date = str(getattr(rec, "trade_date", "") or "")
+    beijing_date = (recommended_at + timedelta(hours=8)).date().isoformat()
+    if trade_date and beijing_date != trade_date:
         return False
     return _INTRADAY_UTC_START <= t <= _INTRADAY_UTC_END
 from app.services.execution_constraints import (

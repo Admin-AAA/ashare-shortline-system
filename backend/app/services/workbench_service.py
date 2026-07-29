@@ -59,6 +59,7 @@ from app.services.auxiliary.application import (
 )
 from app.services.market_source.local_pool_adapter import load_legacy_market_universe
 from app.services.failure_attribution import classify_false_positive
+from app.services.execution_confirmation_state import load_execution_state_map
 from app.services.market_data import MarketDataError, get_market_universe
 from app.services.market_pool import (
     get_market_snapshot_from_pool,
@@ -573,6 +574,7 @@ def delete_run(db: Session, run_id: str) -> bool:
         for rid in rec_ids:
             db.execute(text("DELETE FROM review_notes WHERE recommendation_id = :rid"), {"rid": rid})
             db.execute(text("DELETE FROM watch_items WHERE source_recommendation_id = :rid"), {"rid": rid})
+            db.execute(text("DELETE FROM recommendation_execution_states WHERE recommendation_id = :rid"), {"rid": rid})
             db.execute(text("DELETE FROM recommendation_outcomes WHERE recommendation_id = :rid"), {"rid": rid})
         for rec in recs:
             db.delete(rec)
@@ -592,6 +594,7 @@ def delete_recommendation(db: Session, recommendation_id: str) -> bool:
     db.execute(text("DELETE FROM agent_decision_logs WHERE recommendation_id = :rid"), {"rid": recommendation_id})
     db.execute(text("DELETE FROM review_notes WHERE recommendation_id = :rid"), {"rid": recommendation_id})
     db.execute(text("DELETE FROM watch_items WHERE source_recommendation_id = :rid"), {"rid": recommendation_id})
+    db.execute(text("DELETE FROM recommendation_execution_states WHERE recommendation_id = :rid"), {"rid": recommendation_id})
     db.execute(text("DELETE FROM recommendation_outcomes WHERE recommendation_id = :rid"), {"rid": recommendation_id})
     db.delete(rec)
     db.commit()
@@ -645,6 +648,12 @@ def list_dashboard_recommendations(
 _history_cache: dict[str, tuple[float, Any]] = {}
 _history_cache_lock = threading.Lock()
 _HISTORY_CACHE_TTL = 30.0
+
+
+def invalidate_recommendation_history_cache() -> None:
+    """推荐或执行确认状态变化后清空历史页短缓存。"""
+    with _history_cache_lock:
+        _history_cache.clear()
 
 
 def _list_recommendation_setup_types(db: Session) -> list[str]:
@@ -785,6 +794,7 @@ def list_recommendation_history(
         select(RecommendationOutcome).where(RecommendationOutcome.recommendation_id.in_(page_ids))
     ).all()
     outcome_map = {o.recommendation_id: o for o in page_outcomes}
+    execution_state_map = load_execution_state_map(db, page_ids)
 
     # 按去重后的 id 顺序排序（保证 trade_date DESC, final_score DESC）
     ordered_recs = [rec_by_id[rid] for rid in page_ids if rid in rec_by_id]
@@ -792,6 +802,7 @@ def list_recommendation_history(
     for item in items:
         rec_id = item.get("recommendation_id")
         item["outcome"] = _serialize_outcome(outcome_map.get(rec_id)) if rec_id else None
+        item["execution_state"] = execution_state_map.get(str(rec_id)) if rec_id else None
 
     result = {
         "items": items,

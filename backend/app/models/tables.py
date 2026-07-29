@@ -841,6 +841,29 @@ class RecommendationOutcome(Base):
     labeled_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class RecommendationExecutionState(Base):
+    """推荐实时买入确认的最新状态与首次命中事实。"""
+
+    __tablename__ = "recommendation_execution_states"
+
+    recommendation_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    latest_decision_code: Mapped[str] = mapped_column(String(20))
+    latest_decision_label: Mapped[str] = mapped_column(String(80), default="")
+    latest_reason: Mapped[str | None] = mapped_column(Text)
+    latest_checked_at: Mapped[datetime] = mapped_column(DateTime)
+    latest_quote_time: Mapped[str | None] = mapped_column(String(40))
+    latest_data_as_of: Mapped[str | None] = mapped_column(String(10))
+    latest_price: Mapped[float | None] = mapped_column(Float)
+    latest_strategy_id: Mapped[str | None] = mapped_column(String(80))
+    latest_setup_match: Mapped[str | None] = mapped_column(String(120))
+    latest_condition_json: Mapped[str] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"), default="{}")
+    ever_buy_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    first_buy_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    first_buy_confirmed_price: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class ReviewNote(Base):
     __tablename__ = "review_notes"
     __table_args__ = (UniqueConstraint("recommendation_id", name="uq_review_note_recommendation"),)

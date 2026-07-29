@@ -838,7 +838,9 @@ def aggregate(
         "final_score": round(final_score, 2),
         "consensus_score": round(consensus_score, 2),
         "setup_type": best_setup.get("setup_match") or "",
-        "entry_rule": best_setup.get("entry_rule") or "等待买点确认后再参与",
+        # 没有策略给出明确入场规则时保持为空；前端会诚实标注“未保存明确买点”，
+        # 避免“等待买点确认”这种无法执行、也无法验证的循环提示。
+        "entry_rule": best_setup.get("entry_rule") or "",
         "invalid_rule": best_setup.get("invalid_rule") or "跌破关键支撑且收不回",
         "rationale": _rationale(signals),
         "risk_flags": final_risk_flags,

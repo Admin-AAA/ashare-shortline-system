@@ -17,9 +17,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.engine.skill_loader import load_skills, StrategySkill
-from app.engine.strategy_runner import evaluate_skill_prefilter, run_strategy
+from app.engine.strategy_runner import explain_skill_prefilter, run_strategy
 from app.engine.trading_calendar import latest_allowed_quote_date
 from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome
+from app.services.outcome_simulation import _is_intraday_recommendation
 
 
 def _decision(code: str, label: str, reason: str) -> dict[str, str]:
@@ -120,6 +121,7 @@ def _derive_decisions(
     review: dict[str, Any] | None,
     current_price: float,
     stop_loss: float,
+    is_intraday_recommendation: bool = False,
 ) -> tuple[dict[str, str], dict[str, str]]:
     """把规则信号与策略审查投影为未入场/已持仓两套动作。"""
     if not fresh:
@@ -136,9 +138,11 @@ def _derive_decisions(
     rule_supportive = bool(signal.get("setup_match")) and float(signal.get("score") or 0) >= 72
     supportive = stance in {"strong_support", "support"} or (not review_available and rule_supportive)
 
-    if signal_age_trade_days < 1:
-        entry = _decision("not_ready", "尚未到次日确认", "推荐日之后还没有新的交易日快照")
-    elif signal_age_trade_days > 1:
+    if signal_age_trade_days < 1 and not is_intraday_recommendation:
+        entry = _decision("not_ready", "等待下一交易日确认", "盘后推荐需等待下一交易日实时确认")
+    elif is_intraday_recommendation and signal_age_trade_days > 0:
+        entry = _decision("expired", "原入场信号已过期", "盘中推荐仅在推荐当日确认买点")
+    elif not is_intraday_recommendation and signal_age_trade_days > 1:
         entry = _decision("expired", "原入场信号已过期", "已超过推荐后的首个交易日，需要等待新的推荐信号")
     elif entry_window_closed:
         entry = _decision("expired", "今日入场窗口已结束", "当前交易日已收盘，不再追认盘中买点")
@@ -146,8 +150,8 @@ def _derive_decisions(
         entry = _decision("cancel", "取消买入", "当前价格已经跌破原推荐止损位")
     elif entry_blocked:
         reason = str(
-            signal.get("veto_reason")
-            or (signal.get("prefilter_reason") if not prefilter_ok else "")
+            (signal.get("prefilter_reason") if not prefilter_ok else "")
+            or signal.get("veto_reason")
             or (review or {}).get("summary")
             or "原策略当前不再支持入场"
         )
@@ -193,10 +197,13 @@ def _build_signal_for_strategy(
     snapshot: dict[str, Any],
 ) -> tuple[dict[str, Any], bool, str]:
     """对单只已 enriched 的 stock 跑原策略 prefilter + 运行，返回带 prefilter 元数据的 signal。"""
-    prefilter_ok, prefilter_reason = evaluate_skill_prefilter(skill, current)
+    prefilter_detail = explain_skill_prefilter(skill, current)
+    prefilter_ok = bool(prefilter_detail["passed"])
+    prefilter_reason = "pass" if prefilter_ok else str(prefilter_detail["label"])
     signal = dict(run_strategy(skill, current, list(snapshot.get("main_industries") or [])))
     signal["prefilter_ok"] = prefilter_ok
     signal["prefilter_reason"] = prefilter_reason
+    signal["prefilter_detail"] = prefilter_detail
     return signal, prefilter_ok, prefilter_reason
 
 
@@ -244,7 +251,9 @@ def confirm_with_prepared_context(
         review=review,
         current_price=current_price,
         stop_loss=adjusted_stop_loss,
+        is_intraday_recommendation=_is_intraday_recommendation(rec),
     )
+    condition_summary = _condition_summary(signal, prefilter_ok, entry_decision)
 
     strategy_id = str(rec.bucket or "daily-stock-analysis-skill")
     return {
@@ -264,6 +273,7 @@ def confirm_with_prepared_context(
         "current_price": current_price,
         "entry_decision": entry_decision,
         "holding_decision": holding_decision,
+        "condition_summary": condition_summary,
         "original": {
             "trade_date": str(rec.trade_date),
             "recommend_price": float(rec.recommend_price or 0),
@@ -283,6 +293,27 @@ def confirm_with_prepared_context(
             **signal,
         },
         "agent_review": review,
+    }
+
+
+def _condition_summary(
+    signal: dict[str, Any],
+    prefilter_ok: bool,
+    entry_decision: dict[str, str],
+) -> dict[str, Any]:
+    if not prefilter_ok:
+        detail = signal.get("prefilter_detail")
+        if isinstance(detail, dict):
+            return {**detail, "status": "failed"}
+    setup_match = str(signal.get("setup_match") or "").strip()
+    return {
+        "passed": entry_decision.get("code") == "buy",
+        "status": "passed" if entry_decision.get("code") == "buy" else "failed",
+        "scope": "setup" if setup_match else "strategy",
+        "code": entry_decision.get("code") or "unknown",
+        "label": setup_match or entry_decision.get("reason") or "未形成明确买点",
+        "expression": str(signal.get("entry_rule") or ""),
+        "observed": {"score": float(signal.get("score") or 0)},
     }
 
 
@@ -352,7 +383,7 @@ def confirm_recommendation_execution(
     fresh = data_as_of == expected_quote_date
     review = _run_agent_review(skill, current, snapshot, signal) if include_agent and fresh else None
 
-    return confirm_with_prepared_context(
+    result = confirm_with_prepared_context(
         db,
         rec,
         snapshot=snapshot,
@@ -363,6 +394,13 @@ def confirm_recommendation_execution(
         signal_age_trade_days=signal_age_trade_days,
         review=review,
     )
+    from app.services.execution_confirmation_state import persist_execution_assessments
+    from app.services.workbench_service import invalidate_recommendation_history_cache
+
+    if persist_execution_assessments(db, [result]):
+        db.commit()
+        invalidate_recommendation_history_cache()
+    return result
 
 
 __all__ = [

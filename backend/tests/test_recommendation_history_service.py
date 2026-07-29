@@ -135,12 +135,13 @@ def test_history_pagination():
 
 
 def test_history_items_have_outcome_field():
-    """每个 item 应有 outcome 字段（可能为 None）。"""
+    """每个 item 应有 outcome 和 execution_state 字段（均可能为 None）。"""
     db = _db()
     try:
         result = list_recommendation_history(db, limit=5)
         for item in result["items"]:
             assert "outcome" in item
+            assert "execution_state" in item
     finally:
         db.close()
 
