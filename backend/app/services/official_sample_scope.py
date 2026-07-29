@@ -12,6 +12,24 @@ from app.models.tables import Recommendation, RecommendationRun
 
 
 OFFICIAL_RECOMMENDATION_PREFIX = "rec_"
+LIVE_FORWARD_SCOPE = "live_forward"
+
+
+def evaluation_scope_for_run(
+    *,
+    run_mode: str,
+    trade_date_override: str | None,
+    matrix_run: bool = False,
+) -> str:
+    """Classify a newly requested run without inferring from its display name."""
+    normalized_mode = str(run_mode or "formal").lower()
+    if normalized_mode == "experiment":
+        return "experiment"
+    if normalized_mode == "backtest":
+        return "backtest"
+    if trade_date_override or matrix_run:
+        return "historical_replay"
+    return LIVE_FORWARD_SCOPE
 
 
 def official_sample_conditions() -> tuple:
@@ -27,10 +45,16 @@ def official_sample_conditions() -> tuple:
     )
     return (
         RecommendationRun.run_mode == "formal",
+        RecommendationRun.evaluation_scope == LIVE_FORWARD_SCOPE,
         RecommendationRun.status == "completed",
         Recommendation.recommendation_id.like(f"{OFFICIAL_RECOMMENDATION_PREFIX}%"),
         beijing_generation_date == Recommendation.trade_date,
     )
 
 
-__all__ = ["OFFICIAL_RECOMMENDATION_PREFIX", "official_sample_conditions"]
+__all__ = [
+    "LIVE_FORWARD_SCOPE",
+    "OFFICIAL_RECOMMENDATION_PREFIX",
+    "evaluation_scope_for_run",
+    "official_sample_conditions",
+]

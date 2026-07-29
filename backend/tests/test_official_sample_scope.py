@@ -8,6 +8,22 @@ from app.services.workbench_service import (
     list_recommendation_history,
 )
 from app.services.outcome_service import invalidate_outcome_metrics_cache, recent_formal_win_rate
+from app.services.official_sample_scope import evaluation_scope_for_run
+
+
+def test_new_run_scope_is_explicitly_derived_from_execution_intent():
+    assert evaluation_scope_for_run(
+        run_mode="formal", trade_date_override=None, matrix_run=False
+    ) == "live_forward"
+    assert evaluation_scope_for_run(
+        run_mode="formal", trade_date_override="2026-07-01", matrix_run=False
+    ) == "historical_replay"
+    assert evaluation_scope_for_run(
+        run_mode="formal", trade_date_override=None, matrix_run=True
+    ) == "historical_replay"
+    assert evaluation_scope_for_run(
+        run_mode="experiment", trade_date_override=None
+    ) == "experiment"
 
 
 def _add_settled_recommendation(
@@ -28,6 +44,7 @@ def _add_settled_recommendation(
             run_id=run_id,
             run_name="official sample scope contract",
             run_mode="formal",
+            evaluation_scope="live_forward",
             trade_date=trade_date,
             status=run_status,
         )

@@ -274,6 +274,7 @@ def test_existing_schema_baseline_applies_owned_p0_research_schema_forward_only(
         "V025_strategy_version_snapshots",
         "V026_recommendation_execution_states",
         "V027_cancelled_before_entry",
+        "V028_recommendation_evaluation_scope",
     )
     assert result.applied_versions == expected_versions
     assert [migration.version for migration in all_migrations()] == list(expected_versions)
@@ -297,6 +298,10 @@ def test_existing_schema_baseline_applies_owned_p0_research_schema_forward_only(
             "first_cancelled_price",
             "first_cancel_reason",
         } <= execution_columns
+        run_columns = {
+            column["name"] for column in inspect(connection).get_columns("recommendation_runs")
+        }
+        assert "evaluation_scope" in run_columns
 
 
 def test_init_db_uses_create_all_only_for_sqlite(monkeypatch) -> None:

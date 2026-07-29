@@ -77,7 +77,10 @@ from app.services.outcome_service import (
     resolved_trade_return,
     strategy_perf_summary,
 )
-from app.services.official_sample_scope import official_sample_conditions
+from app.services.official_sample_scope import (
+    evaluation_scope_for_run,
+    official_sample_conditions,
+)
 from app.services.prefilter_service import apply_prefilters
 from app.services.research_context import build_research_contexts
 from app.services.registry.data_source import (
@@ -1170,6 +1173,11 @@ def _persist_run_start(
     # The indexed column and the canonical request are written from the same
     # validated value; a later worker can therefore reject drift deterministically.
     run.run_mode = request.run_mode.value
+    run.evaluation_scope = evaluation_scope_for_run(
+        run_mode=request.run_mode.value,
+        trade_date_override=request.trade_date_override,
+        matrix_run=request.matrix_run,
+    )
     run.trade_date = run.trade_date or _latest_trade_date(db)
     run.finished_at = None
     run.universe_count = 0
