@@ -34,7 +34,7 @@ def persist_execution_assessments(db: Session, assessments: list[dict[str, Any]]
 
         state = db.get(RecommendationExecutionState, recommendation_id)
         is_first_buy = decision_code == "buy" and not bool(
-            state and state.ever_buy_confirmed
+            state and (state.ever_buy_confirmed or state.cancelled_before_entry)
         )
         if state is None:
             state = RecommendationExecutionState(
@@ -57,11 +57,17 @@ def persist_execution_assessments(db: Session, assessments: list[dict[str, Any]]
         state.latest_condition_json = json.dumps(
             assessment.get("condition_summary") or {}, ensure_ascii=False, default=str
         )
-        if decision_code == "buy":
+        if decision_code == "buy" and not bool(state.cancelled_before_entry):
             state.ever_buy_confirmed = True
         if is_first_buy:
             state.first_buy_confirmed_at = checked_at
             state.first_buy_confirmed_price = _optional_float(assessment.get("current_price"))
+        if decision_code == "cancel" and not bool(state.ever_buy_confirmed):
+            state.cancelled_before_entry = True
+            if state.first_cancelled_at is None:
+                state.first_cancelled_at = checked_at
+                state.first_cancelled_price = _optional_float(assessment.get("current_price"))
+                state.first_cancel_reason = str(decision.get("reason") or "") or None
         persisted += 1
 
     db.flush()
@@ -108,6 +114,10 @@ def serialize_execution_state(state: RecommendationExecutionState) -> dict[str, 
         "ever_buy_confirmed": bool(state.ever_buy_confirmed),
         "first_buy_confirmed_at": _isoformat(state.first_buy_confirmed_at),
         "first_buy_confirmed_price": state.first_buy_confirmed_price,
+        "cancelled_before_entry": bool(state.cancelled_before_entry),
+        "first_cancelled_at": _isoformat(state.first_cancelled_at),
+        "first_cancelled_price": state.first_cancelled_price,
+        "first_cancel_reason": state.first_cancel_reason,
     }
 
 

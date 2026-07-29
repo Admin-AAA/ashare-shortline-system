@@ -16,8 +16,16 @@ from app.engine.trading_costs import (
     is_net_profitable,
 )
 
-from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun, SkillRegistry
+from app.models.tables import (
+    DailyKbar,
+    Recommendation,
+    RecommendationExecutionState,
+    RecommendationOutcome,
+    RecommendationRun,
+    SkillRegistry,
+)
 from app.services.evaluation_metrics import compute_full_metrics as _compute_full_metrics
+from app.services.execution_outcome_policy import apply_execution_outcome_policy
 
 # ── 结果模拟引擎：权威实现已收口到 outcome_simulation.py（任务 6.1），
 # 以下为兼容 re-export，保持 `from app.services.outcome_service import _simulate_outcome`
@@ -232,12 +240,14 @@ def _apply_outcome_simulation(
     simulation: dict[str, Any],
     horizon_days: int,
     label_source: str = "auto",
+    execution_state: RecommendationExecutionState | None = None,
 ) -> bool:
     """把 _simulate_outcome 结果写入 RecommendationOutcome（已存在则 update）。
     返回 True 表示成功，False 表示出错（已 rollback savepoint）。
     """
     savepoint = db.begin_nested()
     try:
+        simulation = apply_execution_outcome_policy(simulation, execution_state)
         existing = db.get(RecommendationOutcome, rec.recommendation_id)
         if existing is not None:
             outcome = existing
@@ -320,6 +330,7 @@ def label_pending_outcomes(
             return {"labeled": 0}
 
         bars_by_code, dates_by_code = _load_outcome_bars(db, recs)
+        execution_states = _load_execution_states(db, recs)
         labeled = 0
         errors = 0
         for rec in recs:
@@ -331,7 +342,14 @@ def label_pending_outcomes(
             )
             if simulation is None:
                 continue
-            if _apply_outcome_simulation(db, rec, simulation, horizon_days, label_source="auto"):
+            if _apply_outcome_simulation(
+                db,
+                rec,
+                simulation,
+                horizon_days,
+                label_source="auto",
+                execution_state=execution_states.get(str(rec.recommendation_id)),
+            ):
                 labeled += 1
             else:
                 errors += 1
@@ -363,6 +381,21 @@ def _load_outcome_bars(
     return bars_by_code, dates_by_code
 
 
+def _load_execution_states(
+    db: Session,
+    recs: list[Recommendation],
+) -> dict[str, RecommendationExecutionState]:
+    ids = [str(rec.recommendation_id) for rec in recs]
+    if not ids:
+        return {}
+    states = db.scalars(
+        select(RecommendationExecutionState).where(
+            RecommendationExecutionState.recommendation_id.in_(ids)
+        )
+    ).all()
+    return {str(state.recommendation_id): state for state in states}
+
+
 def recompute_stale_outcomes(
     db: Session,
     horizon_days: int = 5,
@@ -392,6 +425,7 @@ def recompute_stale_outcomes(
         return {"recomputed": 0, "errors": 0}
 
     bars_by_code, dates_by_code = _load_outcome_bars(db, recs)
+    execution_states = _load_execution_states(db, recs)
     recomputed = 0
     errors = 0
     flipped: dict[str, int] = {}
@@ -408,8 +442,16 @@ def recompute_stale_outcomes(
         )
         if simulation is None:
             continue
-        if _apply_outcome_simulation(db, rec, simulation, horizon_days, label_source="recompute"):
-            after_label = str(simulation["outcome_label"])
+        if _apply_outcome_simulation(
+            db,
+            rec,
+            simulation,
+            horizon_days,
+            label_source="recompute",
+            execution_state=execution_states.get(str(rec.recommendation_id)),
+        ):
+            refreshed = db.get(RecommendationOutcome, rec.recommendation_id)
+            after_label = str(refreshed.outcome_label) if refreshed is not None else str(simulation["outcome_label"])
             if before_label and before_label != after_label:
                 key = f"{before_label}->{after_label}"
                 flipped[key] = flipped.get(key, 0) + 1
@@ -1825,6 +1867,7 @@ def _compute_horizon_metric_records(db: Session, rows: list[Any]) -> dict[str, d
     trade_dates = [str(getattr(row, "trade_date", "")) for row in labeled_rows if getattr(row, "trade_date", None)]
     if not codes or not trade_dates:
         return {}
+    execution_states = _load_execution_states(db, labeled_rows)
 
     # 只取 _simulate_outcome 需要的 7 列（code/trade_date/open/high/low/close/pct_chg），
     # 不加载完整 DailyKbar 实体（19778 bars × 全列 ORM 实例化 = 0.86s 主因，T4 优化）。
@@ -1884,6 +1927,10 @@ def _compute_horizon_metric_records(db: Session, rows: list[Any]) -> dict[str, d
             )
             if simulation is None:
                 continue
+            simulation = apply_execution_outcome_policy(
+                simulation,
+                execution_states.get(rec_id),
+            )
             records.setdefault(rec_id, {})[horizon_days] = _metric_record_from_simulation(row, simulation)
     return records
 

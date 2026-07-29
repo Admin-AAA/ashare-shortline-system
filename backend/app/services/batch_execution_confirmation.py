@@ -266,10 +266,12 @@ def _persist_fresh_assessments(db: Session, assessments: list[dict[str, Any]]) -
     if not assessments:
         return
     from app.services.execution_confirmation_state import persist_execution_assessments
+    from app.services.outcome_service import invalidate_outcome_metrics_cache
     from app.services.workbench_service import invalidate_recommendation_history_cache
 
     if persist_execution_assessments(db, assessments):
         db.commit()
+        invalidate_outcome_metrics_cache()
         invalidate_recommendation_history_cache()
 
 

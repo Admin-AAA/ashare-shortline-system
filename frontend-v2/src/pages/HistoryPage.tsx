@@ -19,7 +19,7 @@ import { RecommendationDetailCard } from "../components/RecommendationDetailCard
 import { fmtPrice } from "../components/Shared";
 import { bucketLabel, exitReasonLabel, formatApiDateTime, isOutcomeSettled, outcomeLabel, outcomeTone, setupLabel, BUCKET_LABELS } from "../utils/display";
 import { ruleKeyLevelLabels, rulesMentionKeyLevel } from "../utils/ruleKeyLevels";
-import { collectUnsettledIds, executionDecisionCode, isPlaceholderEntryRule } from "../utils/executionConfirmation";
+import { cancelObservationText, collectUnsettledIds, executionDecisionCode, isPlaceholderEntryRule } from "../utils/executionConfirmation";
 
 /**
  * 复盘页 —— 正式运行推荐历史（跨 run，按 trade_date 倒序，带 outcome）。
@@ -96,6 +96,7 @@ export function HistoryPage() {
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
   const summary = data?.summary;
+  const cancelSummary = summary?.cancel_observation;
   const setupTypeOptions = useMemo(
     () =>
       (data?.facets?.setup_types ?? [])
@@ -428,6 +429,38 @@ export function HistoryPage() {
             <span className="return-badge__value">{summary.total_net_return >= 0 ? "+" : ""}{summary.total_net_return.toFixed(2)}%</span>
           </div>
         )}
+
+        {cancelSummary && cancelSummary.cancelled_count > 0 && (
+          <div
+            className="return-badge"
+            title="买入条件从未命中、随后被系统取消的推荐；这些票不进入交易成功率、失败率或实际交易收益"
+          >
+            <span className="return-badge__label">买入前取消</span>
+            <span className="return-badge__value">{cancelSummary.cancelled_count} 笔</span>
+          </div>
+        )}
+
+        {cancelSummary?.average_5d_return != null && (
+          <div
+            className={`return-badge return-badge--${cancelSummary.average_5d_return >= 0 ? "up" : "down"}`}
+            title={`假设忽略取消并按首次取消价买入，观察后第 5 个交易日收盘的平均净收益；共 ${cancelSummary.observed_5d_count} 笔，非实际收益`}
+          >
+            <span className="return-badge__label">取消后 5 日观察</span>
+            <span className="return-badge__value">
+              {cancelSummary.average_5d_return >= 0 ? "+" : ""}{cancelSummary.average_5d_return.toFixed(2)}%
+            </span>
+          </div>
+        )}
+
+        {cancelSummary?.avoided_loss_rate_5d != null && (
+          <div
+            className="return-badge"
+            title="取消后第 5 个交易日假设净收益小于或等于 0 的比例"
+          >
+            <span className="return-badge__label">5 日避免亏损率</span>
+            <span className="return-badge__value">{cancelSummary.avoided_loss_rate_5d.toFixed(1)}%</span>
+          </div>
+        )}
       </div>
 
       {loading ? (
@@ -458,6 +491,7 @@ export function HistoryPage() {
                 const o = it.outcome;
                 const settled = isOutcomeSettled(o?.outcome_label);
                 const savedExecution = it.execution_state;
+                const cancelObservation = it.cancel_observation;
                 const currentCondition = settled
                   ? savedExecution?.condition_summary
                   : confirmationMap[it.recommendation_id]?.condition_summary || savedExecution?.condition_summary;
@@ -601,32 +635,51 @@ export function HistoryPage() {
                                 : ""}
                             </span>
                           )}
+                          {savedExecution?.cancelled_before_entry && !savedExecution.ever_buy_confirmed && (
+                            <span
+                              style={{ color: "var(--market-gold, #b8860b)", fontSize: "var(--text-xs)", fontWeight: 600 }}
+                              title={savedExecution.first_cancel_reason || "系统在买入条件命中前取消了本次推荐"}
+                            >
+                              买入前已取消 · 未计入交易胜负
+                              {savedExecution.first_cancelled_price != null
+                                ? ` · ¥${savedExecution.first_cancelled_price.toFixed(2)}`
+                                : ""}
+                            </span>
+                          )}
+                          {savedExecution?.cancelled_before_entry && cancelObservation && (
+                            <span
+                              style={{ color: "var(--muted)", fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)" }}
+                              title={`假设忽略取消并按首次取消价买入，观察后续交易日收盘；已扣 ${cancelObservation.cost_pct.toFixed(2)}% 成本，非实际收益`}
+                            >
+                              取消后观察: {cancelObservationText(cancelObservation)}（非实际收益）
+                            </span>
+                          )}
                           {currentCondition?.label && (
                             <span
                               title={executionConditionTitle(currentCondition)}
                               style={{ color: currentCondition.passed ? "var(--market-up)" : "var(--muted)" }}
                             >
-                              {currentCondition.passed ? "已满足" : "判断条件"}: {clip(currentCondition.label, 32)}
+                              {currentCondition.passed ? "当前买入条件已满足" : "当前买入判断条件"}: {clip(currentCondition.label, 32)}
                             </span>
                           )}
                           <span
                             title={missingEntryRule ? "这笔旧推荐没有保存可直接执行的买点条件" : it.entry_rule || ""}
                             style={missingEntryRule ? { color: "var(--muted)", fontStyle: "italic" } : undefined}
                           >
-                            入场: {missingEntryRule ? "原推荐未保存明确买点" : clip(it.entry_rule || "—", 32)}
+                            原始入场计划: {missingEntryRule ? "原推荐未保存明确买点" : clip(it.entry_rule || "—", 32)}
                           </span>
-                          <span title={it.invalid_rule || ""}>失效: {clip(it.invalid_rule || "—", 32)}</span>
+                          <span title={it.invalid_rule || ""}>原始失效条件: {clip(it.invalid_rule || "—", 32)}</span>
                           {keyLevelLabels.length > 0 && (
                             <span
                               title={`规则引用价位：${keyLevelLabels.join(" · ")}`}
                               style={{ color: "var(--accent-strong)", fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}
                             >
-                              价位: {keyLevelLabels.join(" · ")}
+                              规则引用价位: {keyLevelLabels.join(" · ")}
                             </span>
                           )}
                           {hasUnresolvedKeyLevel && (
                             <span title="这笔旧记录没有保存规则所引用的支撑或平台价位" style={{ color: "var(--market-down)" }}>
-                              价位: 历史快照未留存
+                              规则引用价位: 历史快照未留存
                             </span>
                           )}
                         </div>

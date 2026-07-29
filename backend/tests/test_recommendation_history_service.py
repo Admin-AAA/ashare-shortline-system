@@ -65,6 +65,35 @@ def test_history_summary_uses_settled_net_returns_only():
     }
 
 
+def test_history_summary_excludes_cancelled_before_entry_trade():
+    outcomes = [
+        SimpleNamespace(
+            recommendation_id="rec_cancelled",
+            entry_triggered=True,
+            outcome_label="success",
+            label_source="auto",
+            executed_return=5.0,
+        ),
+        SimpleNamespace(
+            recommendation_id="rec_executed",
+            entry_triggered=True,
+            outcome_label="failed",
+            label_source="auto",
+            executed_return=-2.0,
+        ),
+    ]
+
+    summary = _build_recommendation_history_summary(
+        outcomes,
+        excluded_recommendation_ids={"rec_cancelled"},
+    )
+
+    assert summary["trade_count"] == 1
+    assert summary["win_count"] == 0
+    assert summary["win_rate"] == 0.0
+    assert summary["average_net_return"] == -2.07
+
+
 def test_history_summary_does_not_change_between_pages():
     db = _db()
     try:
@@ -135,13 +164,15 @@ def test_history_pagination():
 
 
 def test_history_items_have_outcome_field():
-    """每个 item 应有 outcome 和 execution_state 字段（均可能为 None）。"""
+    """每个 item 应有 outcome、execution_state 和取消观察字段。"""
     db = _db()
     try:
         result = list_recommendation_history(db, limit=5)
         for item in result["items"]:
             assert "outcome" in item
             assert "execution_state" in item
+            assert "cancel_observation" in item
+        assert "cancel_observation" in result["summary"]
     finally:
         db.close()
 

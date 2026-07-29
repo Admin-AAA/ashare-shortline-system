@@ -108,3 +108,70 @@ def test_history_projection_exposes_condition_and_first_buy_fact():
         assert projected["ever_buy_confirmed"] is True
         assert projected["first_buy_confirmed_at"] == "2026-07-29T10:05:01"
         assert projected["first_buy_confirmed_price"] == 8.41
+
+
+def test_cancel_before_any_buy_persists_terminal_cancel_fact():
+    engine = create_engine("sqlite:///:memory:")
+    RecommendationExecutionState.__table__.create(engine)
+
+    with Session(engine) as db:
+        persist_execution_assessments(
+            db,
+            [_assessment("cancel", checked_at="2026-07-29T10:20:00", price=8.10)],
+        )
+        db.commit()
+
+        projected = load_execution_state_map(db, ["rec_state_1"])["rec_state_1"]
+
+        assert projected["cancelled_before_entry"] is True
+        assert projected["first_cancelled_at"] == "2026-07-29T10:20:00"
+        assert projected["first_cancelled_price"] == 8.10
+        assert projected["first_cancel_reason"] == "测试原因"
+
+
+def test_cancel_after_buy_is_not_classified_as_cancelled_before_entry():
+    engine = create_engine("sqlite:///:memory:")
+    RecommendationExecutionState.__table__.create(engine)
+
+    with Session(engine) as db:
+        persist_execution_assessments(
+            db,
+            [_assessment("buy", checked_at="2026-07-29T10:05:01", price=8.41)],
+        )
+        persist_execution_assessments(
+            db,
+            [_assessment("cancel", checked_at="2026-07-29T10:20:00", price=8.10)],
+        )
+        db.commit()
+
+        projected = load_execution_state_map(db, ["rec_state_1"])["rec_state_1"]
+
+        assert projected["ever_buy_confirmed"] is True
+        assert projected["cancelled_before_entry"] is False
+        assert projected["first_cancelled_at"] is None
+
+
+def test_fresh_cancel_fills_reference_fields_for_migration_backfill():
+    engine = create_engine("sqlite:///:memory:")
+    RecommendationExecutionState.__table__.create(engine)
+
+    with Session(engine) as db:
+        db.add(RecommendationExecutionState(
+            recommendation_id="rec_state_1",
+            latest_decision_code="cancel",
+            latest_checked_at=datetime(2026, 7, 29, 10, 0),
+            cancelled_before_entry=True,
+            ever_buy_confirmed=False,
+        ))
+        db.commit()
+
+        persist_execution_assessments(
+            db,
+            [_assessment("cancel", checked_at="2026-07-29T10:20:00", price=8.10)],
+        )
+        db.commit()
+        projected = load_execution_state_map(db, ["rec_state_1"])["rec_state_1"]
+
+        assert projected["cancelled_before_entry"] is True
+        assert projected["first_cancelled_at"] == "2026-07-29T10:20:00"
+        assert projected["first_cancelled_price"] == 8.10

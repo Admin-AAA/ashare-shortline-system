@@ -1529,12 +1529,35 @@ export type RecommendationExecutionState = {
   ever_buy_confirmed: boolean;
   first_buy_confirmed_at?: string | null;
   first_buy_confirmed_price?: number | null;
+  cancelled_before_entry: boolean;
+  first_cancelled_at?: string | null;
+  first_cancelled_price?: number | null;
+  first_cancel_reason?: string | null;
+};
+
+export type CancelObservationPoint = {
+  trade_date: string;
+  close: number;
+  net_return_pct: number;
+};
+
+export type CancelObservation = {
+  status: "pending" | "partial" | "complete" | string;
+  reference_at?: string | null;
+  reference_price?: number | null;
+  cost_pct: number;
+  horizons: {
+    "1d": CancelObservationPoint | null;
+    "3d": CancelObservationPoint | null;
+    "5d": CancelObservationPoint | null;
+  };
 };
 
 export type RecommendationHistoryResponse = {
   items: (RecommendationCard & {
     outcome: RecommendationOutcome | null;
     execution_state: RecommendationExecutionState | null;
+    cancel_observation: CancelObservation | null;
   })[];
   total: number;
   offset: number;
@@ -1549,6 +1572,18 @@ export type RecommendationHistoryResponse = {
     average_net_return: number | null;
     total_net_return: number;
     additional_cost_pct: number;
+    cancel_observation: {
+      cancelled_count: number;
+      observed_1d_count: number;
+      average_1d_return: number | null;
+      observed_3d_count: number;
+      average_3d_return: number | null;
+      observed_5d_count: number;
+      average_5d_return: number | null;
+      avoided_loss_count_5d: number;
+      avoided_loss_rate_5d: number | null;
+      missed_gain_count_5d: number;
+    };
   };
 };
 

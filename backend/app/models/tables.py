@@ -860,6 +860,10 @@ class RecommendationExecutionState(Base):
     ever_buy_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
     first_buy_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime)
     first_buy_confirmed_price: Mapped[float | None] = mapped_column(Float)
+    cancelled_before_entry: Mapped[bool] = mapped_column(Boolean, default=False)
+    first_cancelled_at: Mapped[datetime | None] = mapped_column(DateTime)
+    first_cancelled_price: Mapped[float | None] = mapped_column(Float)
+    first_cancel_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

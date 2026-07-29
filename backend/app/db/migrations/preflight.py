@@ -300,7 +300,11 @@ class DdlPreflight:
         supported = (
             server_version >= (8, 0)
             and (
-                (target.operation is DdlOperation.ADD_COLUMN and target.algorithm == "INSTANT" and target.lock == "NONE")
+                (
+                    target.operation is DdlOperation.ADD_COLUMN
+                    and target.algorithm in {"INSTANT", "INPLACE"}
+                    and target.lock == "NONE"
+                )
                 or (
                     target.operation in {DdlOperation.ADD_INDEX, DdlOperation.ADD_UNIQUE}
                     and target.algorithm == "INPLACE"

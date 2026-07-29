@@ -11,6 +11,7 @@ from .v005_add_model_route_timeout_seconds import migrations as model_route_time
 from .v024_auxiliary_partition_snapshots import migrations as auxiliary_partition_snapshot_migrations
 from .v025_strategy_version_snapshots import migrations as strategy_version_snapshot_migrations
 from .v026_recommendation_execution_states import migrations as recommendation_execution_state_migrations
+from .v027_cancelled_before_entry import migrations as cancelled_before_entry_migrations
 from .workbench_run_lifecycle import migrations as workbench_run_lifecycle_migrations
 
 
@@ -26,4 +27,5 @@ def all_migrations() -> tuple[Migration, ...]:
         *auxiliary_partition_snapshot_migrations(),
         *strategy_version_snapshot_migrations(),
         *recommendation_execution_state_migrations(),
+        *cancelled_before_entry_migrations(),
     )
