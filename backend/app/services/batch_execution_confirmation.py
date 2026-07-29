@@ -2,7 +2,7 @@
 
 与单票 ``confirm_recommendation_execution`` 共享 ``confirm_with_prepared_context``，
 保证两套入口不会产生两套规则。批量入口不调用 LLM/Agent（review=None），按高置信
-规则兜底决策；不写库、不改结算、不影响胜率与收益统计。
+规则兜底决策；只写独立的执行确认状态，不改结算、不影响胜率与收益统计。
 
 实时行情共享方式（Spec 第 14 条 DoD 记录）：
 - 一次 ``get_market_universe()`` 拉全市场快照作为公共市场上下文（广度/主线行业/样本数），
@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -33,9 +33,11 @@ from app.engine.trading_calendar import latest_allowed_quote_date, normalize_tra
 from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun
 from app.services.execution_confirmation import (
     _build_signal_for_strategy,
+    _entry_window_closed,
     confirm_with_prepared_context,
     is_unsettled_formal_rec,
 )
+from app.services.outcome_simulation import _is_intraday_recommendation
 
 logger = logging.getLogger(__name__)
 
@@ -232,20 +234,43 @@ def _rebuild_stock_with_rt_k(
     return rebuilt
 
 
-def _expired_item(rec: Recommendation, reason: str) -> dict[str, Any]:
+def _expired_item(rec: Recommendation, reason: str, *, data_as_of: str) -> dict[str, Any]:
     return {
         "recommendation_id": str(rec.recommendation_id),
         "code": str(rec.code),
         "trade_date": str(rec.trade_date),
         "status": "ok",
-        "fresh": False,
-        "data_as_of": "",
+        "fresh": True,
+        "checked_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        "data_as_of": data_as_of,
         "quote_time": None,
         "data_source": None,
         "current_price": 0.0,
         "entry_decision": {"code": "expired", "label": "信号已过期", "reason": reason},
+        "strategy_id": str(rec.bucket or "daily-stock-analysis-skill"),
+        "condition_summary": {
+            "passed": False,
+            "status": "failed",
+            "scope": "entry_window",
+            "code": "expired",
+            "label": reason,
+            "expression": "",
+            "observed": {"signal_age_trade_days": None},
+        },
         "strategy_signal": {},
     }
+
+
+def _persist_fresh_assessments(db: Session, assessments: list[dict[str, Any]]) -> None:
+    """一次提交本批有效状态，并让历史页立即读到最新结果。"""
+    if not assessments:
+        return
+    from app.services.execution_confirmation_state import persist_execution_assessments
+    from app.services.workbench_service import invalidate_recommendation_history_cache
+
+    if persist_execution_assessments(db, assessments):
+        db.commit()
+        invalidate_recommendation_history_cache()
 
 
 def _not_ready_item(
@@ -323,16 +348,29 @@ def _compute_batch(
 
     pending: list[tuple[Recommendation, RecommendationOutcome | None]] = []
     items: list[dict[str, Any]] = []
+    expired_assessments: list[dict[str, Any]] = []
     expired_count = 0
     for rec, outcome in eligible:
         age = ages.get(str(rec.recommendation_id), 0)
-        if age > 1:
-            items.append(_expired_item(rec, "已超过推荐后的首个交易日，需要等待新的推荐信号"))
+        intraday = _is_intraday_recommendation(rec)
+        reason = ""
+        if intraday and age > 0:
+            reason = "盘中推荐仅在推荐当日确认买点"
+        elif not intraday and age > 1:
+            reason = "已超过推荐后的首个交易日，需要等待新的推荐信号"
+        elif intraday and age == 0 and _entry_window_closed(expected_quote_date, local_now):
+            reason = "当前交易日已收盘，不再追认盘中买点"
+        if reason:
+            expired = _expired_item(rec, reason, data_as_of=expected_quote_date)
+            expired["condition_summary"]["observed"]["signal_age_trade_days"] = age
+            items.append(expired)
+            expired_assessments.append(expired)
             expired_count += 1
             continue
         pending.append((rec, outcome))
 
     if not pending:
+        _persist_fresh_assessments(db, expired_assessments)
         return _assemble_response(
             requested_count=requested_count,
             eligible_count=len(eligible),
@@ -358,6 +396,7 @@ def _compute_batch(
     except Exception as exc:
         # 批次公共行情完全失败 → 请求级错误（Spec 7），不伪装成「未命中」。
         logger.warning("批量执行确认公共行情失败: %s", str(exc)[:200])
+        _persist_fresh_assessments(db, expired_assessments)
         return {
             "computed_at": _now_str(),
             "data_as_of": expected_quote_date,
@@ -442,6 +481,7 @@ def _compute_batch(
 
     # 8. 逐记录执行确定性规则（review=None），共享决策状态机。
     errors: list[dict[str, Any]] = []
+    assessments: list[dict[str, Any]] = []
     for rec, _outcome in pending:
         code = str(rec.code)
         current = rebuilt_by_code.get(code)
@@ -479,10 +519,13 @@ def _compute_batch(
                 signal_age_trade_days=age,
                 review=None,
             )
+            assessments.append(result)
             items.append(_to_batch_item(result))
         except Exception as exc:
             logger.warning("批量确认单票失败 %s: %s", code, str(exc)[:160])
             errors.append({"recommendation_id": str(rec.recommendation_id), "code": code, "message": str(exc)[:80]})
+
+    _persist_fresh_assessments(db, [*expired_assessments, *assessments])
 
     success_count = sum(1 for it in items if it.get("status") == "ok")
     elapsed = time.time() - started
@@ -519,6 +562,7 @@ def _to_batch_item(result: dict[str, Any]) -> dict[str, Any]:
         "data_source": result.get("data_source"),
         "current_price": result.get("current_price"),
         "entry_decision": result.get("entry_decision"),
+        "condition_summary": result.get("condition_summary") or {},
         "strategy_signal": _slim_strategy_signal(result.get("strategy_signal") or {}),
     }
 

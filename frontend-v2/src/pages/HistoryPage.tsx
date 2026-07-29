@@ -4,7 +4,9 @@ import { api } from "../api/client";
 import type {
   ExecutionConfirmationItem,
   ExecutionConfirmationResponse,
+  ExecutionConditionSummary,
   RecommendationDetail,
+  RecommendationExecutionState,
   RecommendationHistoryResponse,
   RealtimePnlItem,
 } from "../types";
@@ -17,7 +19,7 @@ import { RecommendationDetailCard } from "../components/RecommendationDetailCard
 import { fmtPrice } from "../components/Shared";
 import { bucketLabel, exitReasonLabel, formatApiDateTime, isOutcomeSettled, outcomeLabel, outcomeTone, setupLabel, BUCKET_LABELS } from "../utils/display";
 import { ruleKeyLevelLabels, rulesMentionKeyLevel } from "../utils/ruleKeyLevels";
-import { collectUnsettledIds, executionDecisionCode } from "../utils/executionConfirmation";
+import { collectUnsettledIds, executionDecisionCode, isPlaceholderEntryRule } from "../utils/executionConfirmation";
 
 /**
  * 复盘页 —— 正式运行推荐历史（跨 run，按 trade_date 倒序，带 outcome）。
@@ -454,9 +456,15 @@ export function HistoryPage() {
             <tbody>
               {items.map((it) => {
                 const o = it.outcome;
+                const settled = isOutcomeSettled(o?.outcome_label);
+                const savedExecution = it.execution_state;
+                const currentCondition = settled
+                  ? savedExecution?.condition_summary
+                  : confirmationMap[it.recommendation_id]?.condition_summary || savedExecution?.condition_summary;
+                const missingEntryRule = isPlaceholderEntryRule(it.entry_rule);
                 // provisional 的 executed_return 只是入场日收盘临时标记，不是可实现的最终收益；
                 // 未最终结算时改用实时盈亏，避免今日行情已更新却仍展示昨日临时值。
-                const ret = isOutcomeSettled(o?.outcome_label) ? o?.executed_return : undefined;
+                const ret = settled ? o?.executed_return : undefined;
                 // 盈亏口径：executed_return 基于「次日开盘买入」（行业标准，A股 T+1 盘后推荐
                 // 只能次日买）。推荐价(recommend_price)是信号日收盘参考价，不是用户真实成本——
                 // 跳空低开时两者背离会让用户误以为「按推荐价算亏了」，故此处只展示真实口径，
@@ -562,8 +570,8 @@ export function HistoryPage() {
                       </td>
                       <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)", maxWidth: 360 }}>
                         <div style={stackStyle}>
-                          {/* 未结算行顶部显示实时买入确认状态标签（Spec 6.2）；已结算行不显示 */}
-                          {!isOutcomeSettled(o?.outcome_label) && (
+                          {/* 未结算显示实时状态；已结算只展示当时持久化的最后有效判断。 */}
+                          {!settled && (
                             <span
                               style={executionDecisionTagStyle(confirmationLoadingIds.has(it.recommendation_id) ? "loading" : executionDecisionCode(it.recommendation_id, confirmationMap, confirmationErrors))}
                               title={executionDecisionTitle(it.recommendation_id, confirmationMap, confirmationErrors)}
@@ -571,7 +579,42 @@ export function HistoryPage() {
                               {renderExecutionDecision(it.recommendation_id, confirmationMap, confirmationErrors, confirmationLoadingIds)}
                             </span>
                           )}
-                          <span title={it.entry_rule || ""}>入场: {clip(it.entry_rule || "—", 32)}</span>
+                          {settled && savedExecution && (
+                            <span
+                              style={executionDecisionTagStyle(savedExecutionDecisionCode(savedExecution))}
+                              title={savedExecutionTitle(savedExecution)}
+                            >
+                              {renderSavedExecution(savedExecution)}
+                            </span>
+                          )}
+                          {savedExecution?.ever_buy_confirmed && (
+                            <span
+                              style={{ color: "var(--market-up)", fontSize: "var(--text-xs)" }}
+                              title="这表示系统曾在有效确认窗口内判断买点成立，不等同于用户已经成交"
+                            >
+                              曾命中买入条件
+                              {savedExecution.first_buy_confirmed_at
+                                ? ` · ${formatApiDateTime(savedExecution.first_buy_confirmed_at, { hour: "2-digit", minute: "2-digit" })}`
+                                : ""}
+                              {savedExecution.first_buy_confirmed_price != null
+                                ? ` · ¥${savedExecution.first_buy_confirmed_price.toFixed(2)}`
+                                : ""}
+                            </span>
+                          )}
+                          {currentCondition?.label && (
+                            <span
+                              title={executionConditionTitle(currentCondition)}
+                              style={{ color: currentCondition.passed ? "var(--market-up)" : "var(--muted)" }}
+                            >
+                              {currentCondition.passed ? "已满足" : "判断条件"}: {clip(currentCondition.label, 32)}
+                            </span>
+                          )}
+                          <span
+                            title={missingEntryRule ? "这笔旧推荐没有保存可直接执行的买点条件" : it.entry_rule || ""}
+                            style={missingEntryRule ? { color: "var(--muted)", fontStyle: "italic" } : undefined}
+                          >
+                            入场: {missingEntryRule ? "原推荐未保存明确买点" : clip(it.entry_rule || "—", 32)}
+                          </span>
                           <span title={it.invalid_rule || ""}>失效: {clip(it.invalid_rule || "—", 32)}</span>
                           {keyLevelLabels.length > 0 && (
                             <span
@@ -804,6 +847,37 @@ function executionDecisionTitle(
   const reason = item.entry_decision?.reason || item.message || "";
   const quoteTime = item.quote_time ? ` · 数据截至 ${formatApiDateTime(item.quote_time)}` : "";
   return `${item.entry_decision?.label || "实时确认"}${reason ? ` · ${reason}` : ""}${quoteTime}`;
+}
+
+function savedExecutionDecisionCode(
+  state: RecommendationExecutionState,
+): "buy" | "wait" | "cancel" | "expired" | null {
+  const code = state.latest_decision_code;
+  return code === "buy" || code === "wait" || code === "cancel" || code === "expired"
+    ? code
+    : null;
+}
+
+function renderSavedExecution(state: RecommendationExecutionState) {
+  const price = state.latest_price != null && state.latest_price > 0
+    ? ` · ¥${state.latest_price.toFixed(2)}`
+    : "";
+  return `最后判断：${state.latest_decision_label || state.latest_decision_code}${price}`;
+}
+
+function savedExecutionTitle(state: RecommendationExecutionState) {
+  const checkedAt = state.latest_checked_at
+    ? ` · 判断于 ${formatApiDateTime(state.latest_checked_at)}`
+    : "";
+  return `${state.latest_decision_label || state.latest_decision_code}${state.latest_reason ? ` · ${state.latest_reason}` : ""}${checkedAt}`;
+}
+
+function executionConditionTitle(condition: ExecutionConditionSummary) {
+  const expression = condition.expression ? `规则：${condition.expression}` : "";
+  const observed = condition.observed && Object.keys(condition.observed).length > 0
+    ? `当前值：${Object.entries(condition.observed).map(([key, value]) => `${key}=${String(value)}`).join("，")}`
+    : "";
+  return [condition.label || "买点判断条件", expression, observed].filter(Boolean).join(" · ");
 }
 
 // 实时盈亏单元格（未结算占位）：holding 显示浮盈%（红涨绿跌），watching 显示距买点，

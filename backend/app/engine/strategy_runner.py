@@ -1,3 +1,4 @@
+import re
 from typing import Any
 
 from app.engine.evaluator import evaluate
@@ -158,6 +159,16 @@ def evaluate_skill_prefilter(
     stock: dict[str, Any],
     stage: str = "market",
 ) -> tuple[bool, str]:
+    detail = explain_skill_prefilter(skill, stock, stage=stage)
+    return bool(detail["passed"]), str(detail["code"])
+
+
+def explain_skill_prefilter(
+    skill: StrategySkill,
+    stock: dict[str, Any],
+    stage: str = "market",
+) -> dict[str, Any]:
+    """返回首条未通过的策略条件及当时观测值，供执行确认解释。"""
     contract = skill.contract or {}
     context = dict(stock)
     universe = contract.get("universe", {}) or {}
@@ -170,24 +181,57 @@ def evaluate_skill_prefilter(
     # 均由 _build_stock_from_bars 必然赋值，不会缺失，故 exclude 行为不变。
     for rule in universe.get("include", []) or []:
         if not evaluate(_rule_expr(rule), context, strict_missing=True):
-            return False, _rule_reason(rule, "universe_include")
+            return _prefilter_detail(rule, context, "universe_include")
     for rule in universe.get("exclude", []) or []:
         if evaluate(_rule_expr(rule), context, strict_missing=True):
-            return False, _rule_reason(rule, "universe_exclude")
+            return _prefilter_detail(rule, context, "universe_exclude")
 
     for rule in prefilter.get("include", []) or []:
         if not evaluate(_rule_expr(rule), context, strict_missing=True):
-            return False, _rule_reason(rule, "prefilter_include")
+            return _prefilter_detail(rule, context, "prefilter_include")
 
     include_any = prefilter.get("include_any", []) or []
     if include_any and not any(evaluate(_rule_expr(rule), context, strict_missing=True) for rule in include_any):
-        return False, "prefilter_include_any"
+        expressions = [_rule_expr(rule) for rule in include_any]
+        return _prefilter_detail(
+            {"when": " or ".join(f"({expression})" for expression in expressions)},
+            context,
+            "prefilter_include_any",
+        )
 
     for rule in prefilter.get("exclude", []) or []:
         if evaluate(_rule_expr(rule), context, strict_missing=True):
-            return False, _rule_reason(rule, "prefilter_exclude")
+            return _prefilter_detail(rule, context, "prefilter_exclude")
 
-    return True, "pass"
+    return {
+        "passed": True,
+        "scope": "pass",
+        "code": "pass",
+        "label": "全部前置条件通过",
+        "expression": "",
+        "observed": {},
+    }
+
+
+def _prefilter_detail(rule: Any, context: dict[str, Any], scope: str) -> dict[str, Any]:
+    expression = _rule_expr(rule)
+    code = _rule_reason(rule, scope)
+    explicit_label = ""
+    if isinstance(rule, dict):
+        explicit_label = str(rule.get("reason") or rule.get("name") or "").strip()
+    fields = [
+        name
+        for name in dict.fromkeys(re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", expression))
+        if name in context
+    ]
+    return {
+        "passed": False,
+        "scope": scope,
+        "code": code,
+        "label": explicit_label or expression or code,
+        "expression": expression,
+        "observed": {field: context.get(field) for field in fields},
+    }
 
 
 def _rule_expr(rule: Any) -> str:

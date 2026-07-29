@@ -40,6 +40,86 @@ def test_fresh_next_day_support_allows_entry_and_holding():
     assert holding["code"] == "hold"
 
 
+def test_intraday_recommendation_can_confirm_buy_on_signal_day():
+    """盘中推荐无需等待次日；推荐当日实时策略仍命中即可确认买入。"""
+    entry, _holding = _derive_decisions(
+        fresh=True,
+        signal_age_trade_days=0,
+        entry_window_closed=False,
+        prefilter_ok=True,
+        signal=_signal(),
+        review=None,
+        current_price=15.2,
+        stop_loss=14.5,
+        is_intraday_recommendation=True,
+    )
+
+    assert entry["code"] == "buy"
+
+
+def test_intraday_recommendation_expires_after_signal_day_closes():
+    """盘中推荐只在推荐当日有效，收盘后不追认买点。"""
+    entry, _holding = _derive_decisions(
+        fresh=True,
+        signal_age_trade_days=0,
+        entry_window_closed=True,
+        prefilter_ok=True,
+        signal=_signal(),
+        review=None,
+        current_price=15.2,
+        stop_loss=14.5,
+        is_intraday_recommendation=True,
+    )
+
+    assert entry == {
+        "code": "expired",
+        "label": "今日入场窗口已结束",
+        "reason": "当前交易日已收盘，不再追认盘中买点",
+    }
+
+
+def test_intraday_recommendation_does_not_reopen_next_day():
+    """盘中推荐到了下一交易日也不能重新变成可买。"""
+    entry, _holding = _derive_decisions(
+        fresh=True,
+        signal_age_trade_days=1,
+        entry_window_closed=False,
+        prefilter_ok=True,
+        signal=_signal(),
+        review=None,
+        current_price=15.2,
+        stop_loss=14.5,
+        is_intraday_recommendation=True,
+    )
+
+    assert entry == {
+        "code": "expired",
+        "label": "原入场信号已过期",
+        "reason": "盘中推荐仅在推荐当日确认买点",
+    }
+
+
+def test_after_hours_recommendation_waits_on_signal_day():
+    """盘后推荐在推荐日只提示等待，不能误报 buy。"""
+    entry, _holding = _derive_decisions(
+        fresh=True,
+        signal_age_trade_days=0,
+        entry_window_closed=False,
+        prefilter_ok=True,
+        signal=_signal(),
+        review=None,
+        current_price=15.2,
+        stop_loss=14.5,
+        is_intraday_recommendation=False,
+    )
+
+    assert entry == {
+        "code": "not_ready",
+        "label": "等待下一交易日确认",
+        "reason": "盘后推荐需等待下一交易日实时确认",
+    }
+
+
 def test_strategy_veto_cancels_entry_and_exits_holding():
     entry, holding = _derive_decisions(
         fresh=True,
@@ -54,6 +134,25 @@ def test_strategy_veto_cancels_entry_and_exits_holding():
 
     assert entry == {"code": "cancel", "label": "取消买入", "reason": "非主线热点"}
     assert holding["code"] == "exit"
+
+
+def test_prefilter_failure_explains_specific_condition_instead_of_generic_pool_reason():
+    entry, _holding = _derive_decisions(
+        fresh=True,
+        signal_age_trade_days=1,
+        entry_window_closed=False,
+        prefilter_ok=False,
+        signal=_signal(
+            hard_veto=True,
+            veto_reason="不在策略股票池",
+            prefilter_reason="当日涨幅需为非负",
+        ),
+        review=None,
+        current_price=8.34,
+        stop_loss=8.0,
+    )
+
+    assert entry == {"code": "cancel", "label": "取消买入", "reason": "当日涨幅需为非负"}
 
 
 def test_stale_snapshot_never_emits_actionable_buy_or_sell():

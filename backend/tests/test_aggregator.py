@@ -256,6 +256,7 @@ def test_aggregate_empty_signals():
     stock = _stock()
     card = aggregate(stock, [], market_score=70, agent_review_score=50)
     assert card["final_score"] == 0.0
+    assert card["entry_rule"] == ""
 
 
 def test_aggregate_stance_summary():

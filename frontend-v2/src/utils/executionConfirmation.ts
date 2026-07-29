@@ -14,6 +14,17 @@ export type ExecutionDecisionCode =
   | "error"
   | null;
 
+const PLACEHOLDER_ENTRY_RULES = new Set([
+  "等待买点确认后再参与",
+  "等待 Skill 方法论中的关键买点被盘面确认后再参与",
+]);
+
+/** 旧推荐中没有保存可执行条件时，避免继续把循环表述伪装成买点规则。 */
+export function isPlaceholderEntryRule(value?: string | null): boolean {
+  const normalized = String(value || "").trim();
+  return normalized === "" || PLACEHOLDER_ENTRY_RULES.has(normalized);
+}
+
 // 从当前页行筛出未结算推荐 ID（去重 + 排序成稳定 key，避免重渲染重复请求）。
 // 已结算行（success/failed/missed 等最终标签）不进入请求体。
 export function collectUnsettledIds(

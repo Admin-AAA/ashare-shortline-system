@@ -1505,8 +1505,37 @@ export type RecommendationHistoryRow = {
   status: string;
 };
 
+export type ExecutionConditionSummary = {
+  passed?: boolean;
+  status?: "passed" | "failed" | string;
+  scope?: string;
+  code?: string;
+  label?: string;
+  expression?: string;
+  observed?: Record<string, unknown>;
+};
+
+export type RecommendationExecutionState = {
+  latest_decision_code: "buy" | "wait" | "cancel" | "expired" | string;
+  latest_decision_label: string;
+  latest_reason?: string | null;
+  latest_checked_at: string;
+  latest_quote_time?: string | null;
+  latest_data_as_of?: string | null;
+  latest_price?: number | null;
+  latest_strategy_id?: string | null;
+  latest_setup_match?: string | null;
+  condition_summary?: ExecutionConditionSummary;
+  ever_buy_confirmed: boolean;
+  first_buy_confirmed_at?: string | null;
+  first_buy_confirmed_price?: number | null;
+};
+
 export type RecommendationHistoryResponse = {
-  items: (RecommendationCard & { outcome: RecommendationOutcome | null })[];
+  items: (RecommendationCard & {
+    outcome: RecommendationOutcome | null;
+    execution_state: RecommendationExecutionState | null;
+  })[];
   total: number;
   offset: number;
   limit: number;
@@ -1684,6 +1713,7 @@ export type ExecutionConfirmationItem = {
   data_source?: string | null;
   current_price?: number;
   entry_decision?: ExecutionDecision;
+  condition_summary?: ExecutionConditionSummary;
   strategy_signal?: {
     phase?: string;
     score?: number;

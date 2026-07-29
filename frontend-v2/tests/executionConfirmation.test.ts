@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   collectUnsettledIds,
   executionDecisionCode,
+  isPlaceholderEntryRule,
 } from "../src/utils/executionConfirmation.ts";
 
 // ── collectUnsettledIds ────────────────────────────────────────────────────
@@ -76,4 +77,10 @@ test("无结果或未知 code 返回 null", () => {
     executionDecisionCode("rec_x", { rec_x: item("hold") }, {}), // hold 不在批量白名单
     null,
   );
+});
+
+test("模糊买点文案按未保存明确规则处理", () => {
+  assert.equal(isPlaceholderEntryRule("等待买点确认后再参与"), true);
+  assert.equal(isPlaceholderEntryRule("等待 Skill 方法论中的关键买点被盘面确认后再参与"), true);
+  assert.equal(isPlaceholderEntryRule("放量突破 8.50 元后回踩不破"), false);
 });
