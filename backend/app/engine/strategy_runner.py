@@ -224,14 +224,67 @@ def _prefilter_detail(rule: Any, context: dict[str, Any], scope: str) -> dict[st
         for name in dict.fromkeys(re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", expression))
         if name in context
     ]
+    observed = {field: context.get(field) for field in fields}
+    label = explicit_label if re.search(r"[\u4e00-\u9fff]", explicit_label) else ""
     return {
         "passed": False,
         "scope": scope,
         "code": code,
-        "label": explicit_label or expression or code,
+        "label": label or _humanize_simple_condition(expression, observed) or explicit_label or expression or code,
         "expression": expression,
-        "observed": {field: context.get(field) for field in fields},
+        "observed": observed,
     }
+
+
+_CONDITION_FIELD_LABELS = {
+    "amount_yi": "成交额（亿元）",
+    "free_mv_yi": "流通市值（亿元）",
+    "is_limit_up": "涨停状态",
+    "is_main_theme": "主线题材状态",
+    "is_st": "ST 状态",
+    "max_dd20": "20 日最大回撤（%）",
+    "pct": "当日涨幅（%）",
+    "pos60": "60 日价格位置（%）",
+    "turnover_rate": "换手率（%）",
+    "upper_shadow_count20": "20 日长上影次数",
+}
+_CONDITION_OPERATOR_LABELS = {
+    "<=": "需不高于",
+    ">=": "需不低于",
+    "<": "需低于",
+    ">": "需高于",
+    "==": "需为",
+}
+
+
+def _humanize_simple_condition(expression: str, observed: dict[str, Any]) -> str:
+    """把常见单字段比较转成可直接执行的中文条件；复杂表达式保留原文。"""
+    match = re.fullmatch(
+        r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*(<=|>=|==|<|>)\s*(true|false|-?\d+(?:\.\d+)?)\s*",
+        expression,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return ""
+    field, operator, raw_target = match.groups()
+    field_label = _CONDITION_FIELD_LABELS.get(field, field)
+    target = _display_condition_value(raw_target)
+    current = _display_condition_value(observed.get(field))
+    current_suffix = f"（当前 {current}）" if field in observed else ""
+    return f"{field_label}{_CONDITION_OPERATOR_LABELS[operator]} {target}{current_suffix}"
+
+
+def _display_condition_value(value: Any) -> str:
+    if value is None:
+        return "缺失"
+    if isinstance(value, bool):
+        return "是" if value else "否"
+    raw = str(value).strip()
+    if raw.lower() == "true":
+        return "是"
+    if raw.lower() == "false":
+        return "否"
+    return raw
 
 
 def _rule_expr(rule: Any) -> str:

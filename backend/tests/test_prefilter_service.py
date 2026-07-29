@@ -177,10 +177,26 @@ def test_prefilter_explanation_contains_failed_expression_and_observed_value():
         "passed": False,
         "scope": "universe_include",
         "code": "universe_include",
-        "label": "is_limit_up == true",
+        "label": "涨停状态需为 是（当前 否）",
         "expression": "is_limit_up == true",
         "observed": {"is_limit_up": False},
     }
+
+
+def test_prefilter_machine_reason_is_replaced_by_readable_condition():
+    selected = next(
+        item for item in _selected_skills()
+        if item["skill_id"] == "chao-gu-yang-jia-skill"
+    )
+    detail = explain_skill_prefilter(
+        selected["skill"],
+        _tradeable_stock(turnover_rate=11.58),
+        stage="market",
+    )
+
+    assert detail["code"] == "turnover_too_high"
+    assert detail["label"] == "换手率（%）需不高于 10（当前 11.58）"
+    assert detail["observed"] == {"turnover_rate": 11.58}
 
 
 def test_limit_up_reseal_rejects_low_amount():

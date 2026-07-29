@@ -100,8 +100,9 @@ def execution_confirmations(payload: ExecutionConfirmationsRequest, db: Session 
 
     只对当前页未结算 formal 推荐发起一次批量确认：后端重新校验未结算资格，一次批量
     rt_k + 一次公共市场上下文 + 一次公共特征准备，按各自原策略重跑确定性规则，返回
-    允许执行 / 继续观察 / 取消买入 / 行情未就绪 / 信号已过期。不调用 LLM/Agent、不写库、
-    不改结算。已结算 ID 不进入 items，只计入 settled_skipped_count。
+    允许执行 / 继续观察 / 取消买入 / 行情未就绪 / 信号已过期。不调用 LLM/Agent；只
+    持久化独立的执行确认状态，不改结算。已结算 ID 不进入 items，只计入
+    settled_skipped_count。
     """
     from app.services.batch_execution_confirmation import confirm_batch_executions
 
