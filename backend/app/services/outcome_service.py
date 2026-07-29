@@ -252,6 +252,23 @@ def _apply_outcome_simulation(
     savepoint = db.begin_nested()
     try:
         simulation = apply_execution_outcome_policy(simulation, execution_state)
+        existing = db.get(RecommendationOutcome, rec.recommendation_id)
+        if existing is not None and not existing.calculation_version_id:
+            legacy_version_id = f"outv_{uuid.uuid4().hex}"
+            legacy_result = {
+                column.name: getattr(existing, column.name)
+                for column in RecommendationOutcome.__table__.columns
+                if column.name not in {"calculation_version_id", "entry_policy_id"}
+            }
+            db.add(RecommendationOutcomeVersion(
+                version_id=legacy_version_id,
+                recommendation_id=rec.recommendation_id,
+                calculation_version="legacy_projection_snapshot_v1",
+                entry_policy_id=existing.entry_policy_id or "legacy_mixed_entry_v1",
+                horizon_days=int(existing.horizon_days or horizon_days),
+                label_source=str(existing.label_source or "legacy"),
+                result_json=json.dumps(legacy_result, ensure_ascii=False, sort_keys=True, default=str),
+            ))
         version_id = f"outv_{uuid.uuid4().hex}"
         calculation_version = "outcome_simulation_v1"
         entry_policy_id = str(simulation.get("entry_policy_id") or "legacy_mixed_entry_v1")
@@ -264,7 +281,6 @@ def _apply_outcome_simulation(
             label_source=label_source,
             result_json=json.dumps(simulation, ensure_ascii=False, sort_keys=True, default=str),
         ))
-        existing = db.get(RecommendationOutcome, rec.recommendation_id)
         if existing is not None:
             outcome = existing
         else:
@@ -418,6 +434,7 @@ def recompute_stale_outcomes(
     db: Session,
     horizon_days: int = 5,
     limit: int | None = None,
+    official_only: bool = False,
 ) -> dict[str, Any]:
     """重算所有已标注 outcome（simulation 逻辑变更后的数据一致性维护）。
 
@@ -435,6 +452,10 @@ def recompute_stale_outcomes(
         )
         .where(RecommendationOutcome.outcome_label.in_(EXECUTED_OUTCOME_LABELS | {OUTCOME_MISSED, OUTCOME_PROVISIONAL}))
     )
+    if official_only:
+        stmt = stmt.join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id).where(
+            *official_sample_conditions()
+        )
     stmt = stmt.order_by(Recommendation.trade_date.asc())
     if limit:
         stmt = stmt.limit(limit)
