@@ -21,11 +21,19 @@ def apply_execution_outcome_policy(
 ) -> dict[str, Any]:
     """将行情模拟投影为可计入交易统计的结果。
 
-    买入前已取消的推荐没有真实执行资格：静态行情指标仍保留用于复盘，但所有交易
-    字段归零，并投影为 missed，从 success/failed 和实际收益中排除。
+    买入前已取消，或从未确认买入且最终过期的推荐没有真实执行资格：静态行情指标
+    仍保留用于复盘，但所有交易字段归零，并投影为 missed，从 success/failed 和实际
+    收益中排除。
     """
-    if not _cancelled_before_entry(execution_state):
+    if not _excluded_before_entry(execution_state):
         return simulation
+    expired = str(getattr(execution_state, "latest_decision_code", "") or "") == "expired"
+    exit_reason = "execution_expired_before_entry" if expired else "execution_cancelled_before_entry"
+    outcome_reason = (
+        "实时买入确认从未命中且信号已过期，本票未计入交易胜负"
+        if expired
+        else "实时买入确认在入场前已取消，本票未计入交易胜负"
+    )
     return {
         **simulation,
         "entry_triggered": False,
@@ -39,20 +47,23 @@ def apply_execution_outcome_policy(
         "holding_days": 0,
         "entry_slippage_bps": 0.0,
         "exit_slippage_bps": 0.0,
-        "exit_reason": "execution_cancelled_before_entry",
+        "exit_reason": exit_reason,
         "hit_target": False,
         "hit_invalid": False,
         "outcome_label": "missed",
         "outcome_label_legacy": "missed",
-        "outcome_reason": "实时买入确认在入场前已取消，本票未计入交易胜负",
+        "outcome_reason": outcome_reason,
     }
 
 
-def _cancelled_before_entry(state: Any | None) -> bool:
+def _excluded_before_entry(state: Any | None) -> bool:
     return bool(
         state is not None
-        and getattr(state, "cancelled_before_entry", False)
         and not getattr(state, "ever_buy_confirmed", False)
+        and (
+            getattr(state, "cancelled_before_entry", False)
+            or str(getattr(state, "latest_decision_code", "") or "") == "expired"
+        )
     )
 
 

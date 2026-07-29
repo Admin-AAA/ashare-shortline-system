@@ -671,6 +671,34 @@ def test_simulate_outcome_min_return_truncated_to_exit_not_horizon():
     assert sim["max_return"] < 5.0, f"max_return 不应含 exit 后的 bar，got {sim['max_return']}"
 
 
+def test_intraday_outcome_cannot_use_prices_before_recommendation():
+    """盘中推荐只能按推荐时点快照价入场，不能倒推当天开盘价或最低价。"""
+    rec = SimpleNamespace(
+        code="600775",
+        trade_date="2026-07-28",
+        recommend_price=10.35,
+        recommended_at=datetime(2026, 7, 28, 5, 2, 12),  # 北京时间 13:02
+        feature_snapshot_json=json.dumps({
+            "ideal_buy": 10.19,
+            "secondary_buy": 10.04,
+            "stop_loss": 9.78,
+            "take_profit": 10.87,
+        }),
+    )
+    bars = [
+        _bar(trade_date="2026-07-28", open=9.80, high=10.35, low=9.70, close=10.35, pct_chg=9.99),
+        _bar(trade_date="2026-07-29", open=9.90, high=9.98, low=9.46, close=9.63, pct_chg=-6.96),
+    ]
+
+    sim = _simulate_outcome(rec, bars, [str(bar.trade_date) for bar in bars], horizon_days=5)
+
+    assert sim is not None
+    assert sim["entry_date"] == "2026-07-28"
+    assert sim["entry_price"] == pytest.approx(10.36)
+    assert sim["executed_return"] < 0
+    assert sim["outcome_label"] == "failed"
+
+
 def test_simulate_outcome_take_profit_min_return_truncated():
     """take_profit_hit 后 min_return 也只算 entry→exit，不算 exit 后的回撤。
 

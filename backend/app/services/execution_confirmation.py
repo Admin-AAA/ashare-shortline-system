@@ -139,13 +139,13 @@ def _derive_decisions(
     supportive = stance in {"strong_support", "support"} or (not review_available and rule_supportive)
 
     if signal_age_trade_days < 1 and not is_intraday_recommendation:
-        entry = _decision("not_ready", "等待下一交易日确认", "盘后推荐需等待下一交易日实时确认")
+        entry = _decision("not_ready", "盘后候选，下一交易日确认", "盘后生成，当前不可买；请在下一交易日按实时条件确认")
     elif is_intraday_recommendation and signal_age_trade_days > 0:
-        entry = _decision("expired", "原入场信号已过期", "盘中推荐仅在推荐当日确认买点")
+        entry = _decision("expired", "盘中买点已过期", "盘中买点仅在推荐当日有效，请勿追入")
     elif not is_intraday_recommendation and signal_age_trade_days > 1:
-        entry = _decision("expired", "原入场信号已过期", "已超过推荐后的首个交易日，需要等待新的推荐信号")
+        entry = _decision("expired", "次日确认窗口已过期", "已错过推荐后的首个交易日，请等待新的推荐信号")
     elif entry_window_closed:
-        entry = _decision("expired", "今日入场窗口已结束", "当前交易日已收盘，不再追认盘中买点")
+        entry = _decision("expired", "盘中买点已过执行窗口", "今日已收盘，本次买点不再有效，请勿追入")
     elif stop_broken:
         entry = _decision("cancel", "取消买入", "当前价格已经跌破原推荐止损位")
     elif entry_blocked:
@@ -165,13 +165,13 @@ def _derive_decisions(
         holding = _decision("exit", "退出持仓", "当前价格已经跌破原推荐止损位")
     elif strategy_vetoed:
         reason = str(signal.get("veto_reason") or (review or {}).get("summary") or "原策略逻辑已经失效")
-        holding = _decision("exit", "退出或显著降低仓位", reason)
+        holding = _decision("exit", "原策略已失效，建议退出", reason)
     elif not prefilter_ok:
-        holding = _decision("reduce", "降低仓位并观察", "当前已不满足原策略候选条件")
+        holding = _decision("reduce", "禁止加仓，降低仓位观察", "当前已不满足原策略候选条件")
     elif supportive:
-        holding = _decision("hold", "继续持有并执行保护位", str((review or {}).get("summary") or "原策略逻辑仍成立"))
+        holding = _decision("hold", "继续持有，严格执行保护位", str((review or {}).get("summary") or "原策略逻辑仍成立"))
     else:
-        holding = _decision("reduce", "收紧保护并观察", str((review or {}).get("summary") or "策略未给出继续加仓确认"))
+        holding = _decision("reduce", "禁止加仓，收紧保护位观察", str((review or {}).get("summary") or "当前策略未明确支持继续持有"))
     return entry, holding
 
 

@@ -466,13 +466,24 @@ def _resolve_entry(
     """解析入场日与入场价。
 
     推荐时点决定入场候选窗口：
-    - 盘中推荐（_is_intraday_recommendation）：signal_bar（推荐日 T 当天）作为首个候选，
-      推荐价为盘中实时价可当日成交；之后才是 future_bars（T+1、T+2）。
+    - 盘中推荐（_is_intraday_recommendation）：直接使用生成推荐时保存的实时推荐价；
+      全天 signal_bar 的 open/low 可能早于推荐时点，不能作为成交依据。
     - 盘后推荐：signal_bar 不作为候选（盘后只能 T+1 买入），维持 future_bars[:2] 原窗口。
 
-    入场优先级：目标买点（ideal_buy/secondary_buy 的 low 触及）> 次日开盘市价回退。
+    - 盘后推荐：目标买点（ideal_buy/secondary_buy 的 low 触及）> 次日开盘市价回退。
     """
     intraday = _is_intraday_recommendation(rec)
+    if intraday:
+        recommend_price = _as_float(getattr(rec, "recommend_price", None))
+        if recommend_price <= 0:
+            return {"triggered": False, "reason": "盘中推荐价无效，无法确认成交"}
+        return {
+            "triggered": True,
+            "bar_index": 0,
+            "price": recommend_price,
+            "date": str(rec.trade_date),
+            "reason": "intraday_recommend_price_entry",
+        }
     entry_targets = [
         value for value in (
             _as_float(feature_snapshot.get("ideal_buy")),

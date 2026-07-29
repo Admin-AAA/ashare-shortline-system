@@ -47,6 +47,20 @@ def test_cancelled_before_entry_is_excluded_from_trade_outcome():
     assert projected["close_return"] == 8.0
 
 
+def test_expired_without_buy_confirmation_is_excluded_from_trade_outcome():
+    state = SimpleNamespace(
+        cancelled_before_entry=False,
+        ever_buy_confirmed=False,
+        latest_decision_code="expired",
+    )
+
+    projected = apply_execution_outcome_policy(_successful_simulation(), state)
+
+    assert projected["entry_triggered"] is False
+    assert projected["outcome_label"] == "missed"
+    assert projected["executed_return"] == 0.0
+
+
 def test_cancel_after_confirmed_buy_keeps_trade_outcome():
     simulation = _successful_simulation()
     state = SimpleNamespace(cancelled_before_entry=False, ever_buy_confirmed=True)
