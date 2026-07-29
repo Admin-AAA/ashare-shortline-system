@@ -862,7 +862,7 @@ def _build_recommendation_history_summary(
         "additional_cost_pct": _ADDITIONAL_COST_PCT,
         "methodology": {
             "sample_scope": "official_live_forward_v1",
-            "entry_policy": "next_trading_day_open_v1",
+            "entry_policy": "causal_strategy_entry_v1",
             "win_definition": "executed_net_return_gt_zero",
             "deduplication": "trade_date_and_code_highest_score",
             "return_unit": "percentage_points_per_trade",

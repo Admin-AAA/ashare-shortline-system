@@ -10,6 +10,7 @@ class EntryPolicy:
     price_source: str
     max_entry_trade_days: int
     allow_target_touch: bool
+    fallback_to_open_when_targets_miss: bool
 
 
 NEXT_TRADING_DAY_OPEN = EntryPolicy(
@@ -17,6 +18,15 @@ NEXT_TRADING_DAY_OPEN = EntryPolicy(
     price_source="open",
     max_entry_trade_days=1,
     allow_target_touch=False,
+    fallback_to_open_when_targets_miss=True,
+)
+
+CAUSAL_STRATEGY_ENTRY = EntryPolicy(
+    policy_id="causal_strategy_entry_v1",
+    price_source="intraday_snapshot_or_postclose_target",
+    max_entry_trade_days=2,
+    allow_target_touch=True,
+    fallback_to_open_when_targets_miss=False,
 )
 
 LEGACY_MIXED_ENTRY = EntryPolicy(
@@ -24,7 +34,11 @@ LEGACY_MIXED_ENTRY = EntryPolicy(
     price_source="target_then_open",
     max_entry_trade_days=2,
     allow_target_touch=True,
+    fallback_to_open_when_targets_miss=True,
 )
 
 
-__all__ = ["EntryPolicy", "LEGACY_MIXED_ENTRY", "NEXT_TRADING_DAY_OPEN"]
+__all__ = [
+    "CAUSAL_STRATEGY_ENTRY", "EntryPolicy", "LEGACY_MIXED_ENTRY",
+    "NEXT_TRADING_DAY_OPEN",
+]

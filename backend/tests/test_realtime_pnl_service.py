@@ -86,13 +86,13 @@ def test_load_pending_recs_includes_provisional_and_excludes_settled(db):
     assert settled_id not in loaded_ids
 
 
-def test_next_open_gap_filter_does_not_backfill_target_touch(monkeypatch):
-    # 次日高开超过阈值应放弃，不因日内 low 触及目标价而回填更优成交。
+def test_postclose_strategy_target_touch_uses_target_price(monkeypatch):
+    # 盘后推荐在后续交易日 low 命中策略买点，按可成交的目标价入场。
     monkeypatch.setattr(svc, "_fetch_rtk_quotes", lambda codes: {"600539": _quote(20.36, 20.36, 16.88, 17.78)})
     rec = _Rec("600539", recommend_price=18.5)
     out = svc._compute_one(rec, svc._fetch_rtk_quotes([])["600539"], signal_bar=None)
-    assert out["status"] == "watching"
-    assert "跳空高开" in out["reason"]
+    assert out["status"] == "holding"
+    assert out["entry_price"] == pytest.approx(18.23)
 
 
 def test_holding_pnl_profit(monkeypatch):
@@ -175,7 +175,7 @@ def test_watching_when_target_not_touched(monkeypatch):
 
 
 def test_signal_bar_used_for_intraday_judgement(monkeypatch):
-    # 提供 signal_bar（trade_date 当日日K）时 _resolve_entry 能区分盘中/盘后
+    # recommended_at 缺失按盘后处理；后续行情未命中策略买点时保持观察。
     class _FixedDate(date):
         @classmethod
         def today(cls):
@@ -187,8 +187,8 @@ def test_signal_bar_used_for_intraday_judgement(monkeypatch):
                     close=30.5, volume=1000, amount=1e6)
     q = _quote(32.26, 35.5, 32.25, 35.26)
     out = svc._compute_one(rec, q, signal_bar=sig)
-    assert out["status"] == "holding"
-    assert out["entry_date"] == "2026-07-27"
+    assert out["status"] == "watching"
+    assert "未触发目标买点" in out["reason"]
 
 
 def test_same_day_after_close_recommendation_waits_for_next_trade_day(monkeypatch):
@@ -216,8 +216,8 @@ def test_same_day_after_close_recommendation_waits_for_next_trade_day(monkeypatc
     assert "pnl_pct" not in out
 
 
-def test_same_day_intraday_recommendation_waits_for_next_open(monkeypatch):
-    """盘中推荐也不得在推荐当日成交，统一等待下一交易日开盘。"""
+def test_same_day_intraday_recommendation_uses_recommendation_price(monkeypatch):
+    """盘中推荐按推荐时点快照价成交，不能读取此前的开盘价或最低价。"""
 
     class _FixedDate(date):
         @classmethod
@@ -249,8 +249,10 @@ def test_same_day_intraday_recommendation_waits_for_next_open(monkeypatch):
         signal_bar=full_day_bar,
     )
 
-    assert out["status"] == "waiting"
-    assert "等待下一交易日" in out["reason"]
+    assert out["status"] == "holding"
+    assert out["entry_date"] == "2026-07-28"
+    assert out["entry_price"] == pytest.approx(10.00)
+    assert out["pnl_pct"] == pytest.approx(3.5)
 
 
 def test_one_word_limit_up_blocks_entry(monkeypatch):
@@ -274,7 +276,7 @@ def test_gap_up_blocked_watching_not_holding():
          "pre_close": 10.0, "vol": 1000, "amount": 1e6, "name": "测试"}
     out = svc._compute_one(rec, q, signal_bar=None)
     assert out["status"] == "watching"
-    assert "跳空高开" in out["reason"]
+    assert "未触发目标买点" in out["reason"]
 
 
 def test_ex_right_day_pnl_not_falsified():

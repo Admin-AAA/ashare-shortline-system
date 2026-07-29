@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.models.tables import DailyKbar
-from app.services.entry_policy import LEGACY_MIXED_ENTRY
+from app.services.entry_policy import LEGACY_MIXED_ENTRY, NEXT_TRADING_DAY_OPEN
 from app.services.outcome_simulation import (
     DEFAULT_STOP_LOSS_PCT,
     MAX_STOP_LOSS_PCT,
@@ -127,6 +127,7 @@ def test_resolve_entry_does_not_defer_after_next_open_is_unexecutable():
         {"ideal_buy": 11.0},
         [one_word_limit_up, executable_pullback],
         horizon_days=3,
+        entry_policy=NEXT_TRADING_DAY_OPEN,
     )
 
     assert result["triggered"] is False
@@ -140,7 +141,10 @@ def test_resolve_entry_uses_next_open_even_when_later_low_touches_target():
         close=10.1, pct_chg=0.0,
     )
 
-    result = _resolve_entry(rec, {"ideal_buy": 10.0}, [next_day], horizon_days=3)
+    result = _resolve_entry(
+        rec, {"ideal_buy": 10.0}, [next_day], horizon_days=3,
+        entry_policy=NEXT_TRADING_DAY_OPEN,
+    )
 
     assert result["triggered"] is True
     assert result["price"] == 10.8
@@ -689,8 +693,8 @@ def test_simulate_outcome_min_return_truncated_to_exit_not_horizon():
     assert sim["max_return"] < 5.0, f"max_return 不应含 exit 后的 bar，got {sim['max_return']}"
 
 
-def test_intraday_outcome_uses_next_trading_day_open():
-    """盘中推荐也按下一交易日开盘入场，不使用推荐前价格或当日快照价。"""
+def test_intraday_outcome_uses_recommendation_snapshot_price():
+    """盘中推荐按推荐时点快照价入场，不能使用此前的开盘价或最低价。"""
     rec = SimpleNamespace(
         code="600775",
         trade_date="2026-07-28",
@@ -711,11 +715,29 @@ def test_intraday_outcome_uses_next_trading_day_open():
     sim = _simulate_outcome(rec, bars, [str(bar.trade_date) for bar in bars], horizon_days=5)
 
     assert sim is not None
-    assert sim["entry_date"] == "2026-07-29"
-    assert sim["entry_price"] == pytest.approx(9.91)
-    assert sim["entry_policy_id"] == "next_trading_day_open_v1"
+    assert sim["entry_date"] == "2026-07-28"
+    assert sim["entry_price"] == pytest.approx(10.36)
+    assert sim["entry_policy_id"] == "causal_strategy_entry_v1"
     assert sim["executed_return"] < 0
-    assert sim["outcome_label"] == "provisional"
+    assert sim["outcome_label"] == "failed"
+
+
+def test_postclose_unhit_strategy_target_is_not_forced_into_next_open():
+    rec = SimpleNamespace(
+        code="000001",
+        trade_date="2026-07-28",
+        recommend_price=10.0,
+        recommended_at=datetime(2026, 7, 28, 8, 0),  # 北京时间 16:00
+    )
+    bars = [
+        _bar(trade_date="2026-07-29", open=10.5, high=10.8, low=10.2, close=10.6, pct_chg=6.0),
+        _bar(trade_date="2026-07-30", open=10.7, high=10.9, low=10.3, close=10.8, pct_chg=1.9),
+    ]
+
+    result = _resolve_entry(rec, {"ideal_buy": 9.8}, bars, horizon_days=5)
+
+    assert result["triggered"] is False
+    assert "未触发目标买点" in result["reason"]
 
 
 def test_simulate_outcome_take_profit_min_return_truncated():

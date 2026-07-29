@@ -41,7 +41,12 @@ from typing import Any
 from app.engine.board_rules import is_one_word_limit_down_bar, limit_pct_for_code
 from app.engine.trading_costs import is_net_profitable
 from app.models.tables import DailyKbar, Recommendation
-from app.services.entry_policy import EntryPolicy, LEGACY_MIXED_ENTRY, NEXT_TRADING_DAY_OPEN
+from app.services.entry_policy import (
+    CAUSAL_STRATEGY_ENTRY,
+    EntryPolicy,
+    LEGACY_MIXED_ENTRY,
+    NEXT_TRADING_DAY_OPEN,
+)
 
 # A 股 T+1 交收：买入当日不能卖出。推荐时点决定入场日与最早可离场日：
 # - 盘后推荐（recommended_at 落在非交易时段）：推荐价≈当日收盘，T+1 才能买入 → 离场最早 T+2
@@ -145,7 +150,7 @@ def _simulate_outcome(
     *,
     pre_resolved_entry: dict[str, Any] | None = None,
     exit_resolver: Any = None,
-    entry_policy: EntryPolicy = NEXT_TRADING_DAY_OPEN,
+    entry_policy: EntryPolicy = CAUSAL_STRATEGY_ENTRY,
 ) -> dict[str, Any] | None:
     """模拟单笔推荐 outcome。
 
@@ -469,7 +474,7 @@ def _resolve_entry(
     horizon_days: int,
     *,
     signal_bar: DailyKbar | None = None,
-    entry_policy: EntryPolicy = NEXT_TRADING_DAY_OPEN,
+    entry_policy: EntryPolicy = CAUSAL_STRATEGY_ENTRY,
 ) -> dict[str, Any]:
     """解析入场日与入场价。
 
@@ -499,7 +504,7 @@ def _resolve_entry(
         }
 
     intraday = _is_intraday_recommendation(rec)
-    if intraday and entry_policy == LEGACY_MIXED_ENTRY:
+    if intraday and entry_policy in {CAUSAL_STRATEGY_ENTRY, LEGACY_MIXED_ENTRY}:
         recommend_price = _as_float(getattr(rec, "recommend_price", None))
         if recommend_price <= 0:
             return {"triggered": False, "reason": "盘中推荐价无效，无法确认成交"}
@@ -542,6 +547,11 @@ def _resolve_entry(
                 }
 
     if entry_targets:
+        if not entry_policy.fallback_to_open_when_targets_miss:
+            return {
+                "triggered": False,
+                "reason": _entry_not_triggered_reason(blocked_reasons, has_targets=True),
+            }
         # 买点未在窗口内命中 → 回退到次日开盘市价入场，而不是直接放弃
         for bar_index, bar in enumerate(entry_window):
             block_reason = _entry_execution_block_reason(str(rec.code), bar)
