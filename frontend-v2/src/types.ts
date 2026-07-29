@@ -259,7 +259,7 @@ export type OutcomeSummary = {
   avg_return: number; // 平均净收益 %
 };
 
-/** 近 N 个交易日 formal 推荐聚合表现（后端 /api/recommendations/win-rate 返回），驾驶舱状态条「近 N 日胜率」真实数据源 */
+/** 近 N 个已结算交易日 formal 推荐聚合表现；零推荐/pending 日期不占窗口 */
 export type WinRateSummary = {
   window_trade_days: number;
   trade_dates: string[];

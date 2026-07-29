@@ -47,7 +47,7 @@ export function HomePage() {
   const [healthDiag, setHealthDiag] = useState<DataHealthDiagnostic | null>(null);
   const [healthLoading, setHealthLoading] = useState(false);
 
-  // 近 5 交易日 formal 推荐聚合胜率（驾驶舱状态条「近 5 日胜率」真实数据源，替代原硬编码占位 —）
+  // 近 5 个已结算交易日 formal 推荐聚合胜率；零推荐/pending 日期不占窗口
   const [winRate, setWinRate] = useState<WinRateSummary | null>(null);
   // LLM 审查层健康度（驾驶舱状态条「AI 审查」徽章 — 北极星 B 项可见性缺口修复）
   const [llmHealth, setLlmHealth] = useState<LlmReviewHealth | null>(null);
@@ -262,13 +262,13 @@ function StatusBar({
       <span className="text-muted">候选：</span>
       <strong className="text-mono" style={{ color: "var(--ink)" }}>{candidateCount} 只</strong>
       <Sep />
-      <span className="text-muted">近 5 日胜率：</span>
+      <span className="text-muted">近 5 个已结算日胜率：</span>
       {winRate && winRate.win_rate != null ? (
         <strong
           className="text-mono"
           title={
             winRate.sample_count > 0
-              ? `近 ${winRate.window_trade_days} 个已完成 formal 交易日 · 已结算 ${winRate.sample_count} 笔\n均收益 ${winRate.avg_return?.toFixed(2)}% (净 ${(winRate.net_avg_return ?? 0).toFixed(2)}%) · 盈亏比 ${winRate.profit_loss_ratio ?? "—"} (净 ${winRate.net_profit_loss_ratio ?? "—"})\n净口径扣 0.07%/笔（佣金万1双边 + 印花税卖出）`
+              ? `近 ${winRate.trade_dates.length} 个有已结算结果的 formal 交易日 · 已结算 ${winRate.sample_count} 笔\n日期 ${winRate.trade_dates.join("、")}\n均收益 ${winRate.avg_return?.toFixed(2)}% (净 ${(winRate.net_avg_return ?? 0).toFixed(2)}%) · 盈亏比 ${winRate.profit_loss_ratio ?? "—"} (净 ${winRate.net_profit_loss_ratio ?? "—"})\n净口径扣 0.07%/笔（佣金万1双边 + 印花税卖出）`
               : "暂无已结算样本"
           }
           style={{

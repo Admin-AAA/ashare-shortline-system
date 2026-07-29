@@ -805,10 +805,10 @@ def strategy_perf_summary(
 
 
 def recent_formal_win_rate(db: Session, window_trade_days: int = 5) -> dict[str, Any]:
-    """近 N 个交易日 formal 推荐聚合胜率（北极星 B/C：驾驶舱状态条一眼可见系统近期战绩）。
+    """近 N 个有已结算 formal 推荐的交易日聚合胜率。
 
     口径（与 R133/R148 一致，只用实盘 rec_ 推荐、已结算 outcome）：
-    - trade_date 取最近 N 个 status=completed 的 formal 交易日（按交易日而非日历日，避免空窗虚算）。
+    - trade_date 取最近 N 个实际存在 success/failed outcome 的 formal 交易日；零推荐和 pending 日不占窗口。
     - 仅统计 outcome_label∈{success,failed} 的已结算推荐；未结算不计入分母（诚实，不虚构胜率）。
     - 内连接 recommendation_outcomes 天然排除回测 btrec_*；再叠加 rec_ 前缀过滤双保险。
     - 去污染反事实（2026-07-21 T18）：剔除 pure 低线(<72) + pure soft@震荡 后的净盈亏比，
@@ -873,10 +873,19 @@ def _net_pl_ratio(rets: list[float]) -> float | None:
 def _recent_formal_win_rate(db: Session, window_trade_days: int) -> dict[str, Any]:
     td_rows = (
         db.execute(
-            select(RecommendationRun.trade_date)
-            .where(RecommendationRun.run_mode == "formal", RecommendationRun.status == "completed")
+            select(Recommendation.trade_date)
+            .join(RecommendationRun, Recommendation.run_id == RecommendationRun.run_id)
+            .join(
+                RecommendationOutcome,
+                Recommendation.recommendation_id == RecommendationOutcome.recommendation_id,
+            )
+            .where(
+                RecommendationRun.run_mode == "formal",
+                Recommendation.recommendation_id.like("rec_%"),
+                RecommendationOutcome.outcome_label.in_(("success", "failed")),
+            )
             .distinct()
-            .order_by(RecommendationRun.trade_date.desc())
+            .order_by(Recommendation.trade_date.desc())
             .limit(window_trade_days)
         )
         .scalars()

@@ -260,7 +260,7 @@ export const api = {
     return request<Record<string, OutcomeSummary>>(`/api/recommendations/outcome-summary?${params.toString()}`);
   },
   replayAnalysis: (runId: string) => request<ReplayAnalysisResult>(`/api/recommendations/runs/${runId}/replay-analysis`),
-  // 近 N 交易日 formal 推荐聚合胜率（驾驶舱状态条「近 N 日胜率」），无样本返回 null 字段
+  // 近 N 个已结算交易日 formal 推荐聚合胜率；零推荐/pending 日期不占窗口
   recommendationWinRate: (windowDays = 5) =>
     request<WinRateSummary>(`/api/recommendations/win-rate?window_days=${windowDays}`),
   // LLM 审查层健康度（驾驶舱状态条「AI 审查」徽章）—— 北极星 B 项可见性缺口修复

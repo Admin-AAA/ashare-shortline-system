@@ -147,13 +147,13 @@ def outcome_summary(
 
 @router.get("/win-rate")
 def win_rate(
-    window_days: int = Query(default=5, ge=1, le=60, description="近 N 个已完成 formal 交易日"),
+    window_days: int = Query(default=5, ge=1, le=60, description="近 N 个有已结算结果的 formal 交易日"),
     db: Session = Depends(get_db),
 ):
-    """近 N 个交易日 formal 推荐聚合胜率/均收益（驾驶舱状态条「近 N 日胜率」真实数据源）。
+    """近 N 个已结算交易日的 formal 推荐聚合胜率/均收益。
 
-    只统计实盘 rec_ 推荐中已结算的 outcome，未结算不计入分母（诚实，不虚构胜率）；
-    按交易日而非日历日取最近 N 个已完成 formal 交易日，避免空窗虚算。
+    只统计实盘 rec_ 推荐中 success/failed outcome；零推荐日与只有 pending outcome 的日期
+    既不进入分母，也不占用窗口名额。
     """
     return recent_formal_win_rate(db, window_trade_days=window_days)
 

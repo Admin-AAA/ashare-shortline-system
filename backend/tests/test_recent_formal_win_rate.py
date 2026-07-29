@@ -1,14 +1,16 @@
-"""近 N 交易日 formal 推荐聚合胜率 —— 驾驶舱状态条「近 N 日胜率」真实数据源。
+"""近 N 个已结算交易日 formal 推荐聚合胜率。
 
 因果：只读 recommendation_runs(已完成 formal) + recommendations(rec_) + recommendation_outcomes(已结算)，
-按交易日取最近 N 个完成 formal 交易日聚合，未结算不计入分母（诚实不虚构胜率）。
+按交易日取最近 N 个有 success/failed outcome 的日期聚合；零推荐和 pending 日期不占窗口。
 去污染字段：pure 低线 + pure soft@震荡 的 clean_net_profit_loss_ratio / pollution_n（主口径不变）。
 """
 from app.services.outcome_service import (
     _net_pl_ratio,
     _pure_pollution_keys_from_rows,
+    invalidate_outcome_metrics_cache,
     recent_formal_win_rate,
 )
+from app.models.tables import Recommendation, RecommendationOutcome, RecommendationRun
 
 EXPECTED_KEYS = {
     "window_trade_days",
@@ -23,6 +25,60 @@ EXPECTED_KEYS = {
     "pollution_n",
     "pollution_pl_delta",
 }
+
+
+def _add_formal_recommendation(db, *, trade_date, suffix, outcome_label=None, executed_return=0.0):
+    run_id = f"run_recent_window_{suffix}"
+    recommendation_id = f"rec_recent_window_{suffix}"
+    db.add(RecommendationRun(
+        run_id=run_id,
+        run_name="近期胜率窗口测试",
+        run_mode="formal",
+        trade_date=trade_date,
+        status="completed",
+    ))
+    db.add(Recommendation(
+        recommendation_id=recommendation_id,
+        run_id=run_id,
+        trade_date=trade_date,
+        code=f"{int(suffix):06d}",
+        name="测试股票",
+        final_score=80,
+    ))
+    if outcome_label is not None:
+        db.add(RecommendationOutcome(
+            recommendation_id=recommendation_id,
+            outcome_label=outcome_label,
+            outcome_label_legacy=outcome_label,
+            executed_return=executed_return,
+        ))
+
+
+def test_recent_formal_win_rate_window_uses_only_settled_trade_dates(db):
+    """零推荐日和只有 pending outcome 的日期不得占用近期窗口名额。"""
+    _add_formal_recommendation(
+        db, trade_date="2099-01-02", suffix="2", outcome_label="success", executed_return=2.0,
+    )
+    db.add(RecommendationRun(
+        run_id="run_recent_window_zero",
+        run_name="保护性零推荐",
+        run_mode="formal",
+        trade_date="2099-01-03",
+        status="completed",
+    ))
+    _add_formal_recommendation(
+        db, trade_date="2099-01-04", suffix="4", outcome_label="pending",
+    )
+    _add_formal_recommendation(
+        db, trade_date="2099-01-05", suffix="5", outcome_label="failed", executed_return=-1.0,
+    )
+    db.flush()
+    invalidate_outcome_metrics_cache()
+
+    result = recent_formal_win_rate(db, window_trade_days=2)
+
+    assert result["trade_dates"] == ["2099-01-05", "2099-01-02"]
+    assert result["sample_count"] == 2
 
 
 def test_recent_formal_win_rate_keys_and_shape(db):
