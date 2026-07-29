@@ -151,6 +151,45 @@ def test_g3_does_not_pass_when_measurement_is_missing():
     assert "不完整" in result["summary"]
 
 
+def test_g3_downgrades_small_sample_p95_to_warn_not_fail():
+    """小样本（<500）单点噪声不应把 G3 判 FAIL 连锁阻断 G4。
+
+    实测：07-29 api_request_metrics n=186，第 177 名恰好 2078ms，差 78ms 过阈，
+    nearest-rank p95 把 G3 误判 FAIL、NEXT_ACTION 误导到 T4。
+    """
+    result = evaluate_g3(
+        formal_p95_seconds=1000,
+        api_p95_seconds=2.202,
+        api_p95_sample=186,
+        api_p99_seconds=25.395,
+    )
+    assert result["status"] == "WARN"
+    assert "样本不足" in result["summary"]
+
+
+def test_g3_downgrades_single_point_noise_p95_to_warn():
+    """样本充足但 p99/p95 比值过大（单点异常拉高 p95）也降级 WARN。"""
+    result = evaluate_g3(
+        formal_p95_seconds=1000,
+        api_p95_seconds=2.1,
+        api_p95_sample=800,
+        api_p99_seconds=12.0,  # 比值 5.7x > 3x
+    )
+    assert result["status"] == "WARN"
+    assert "单点噪声" in result["summary"]
+
+
+def test_g3_fails_when_p95_genuinely_over_slo_with_healthy_sample():
+    """样本充足且分布正常时，p95 真过阈仍应 FAIL（护栏不掩盖真退化）。"""
+    result = evaluate_g3(
+        formal_p95_seconds=1000,
+        api_p95_seconds=2.5,
+        api_p95_sample=800,
+        api_p99_seconds=3.2,  # 比值 1.28x < 3x，分布正常
+    )
+    assert result["status"] == "FAIL"
+
+
 def test_g4_is_blocked_by_engineering_gate_and_requires_oos():
     blocked = evaluate_g4(
         prerequisites=[{"status": "PASS"}, {"status": "FAIL"}, {"status": "WARN"}],

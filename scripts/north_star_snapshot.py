@@ -14,6 +14,16 @@ MIN_OOS_TRADE_DAYS = 10
 MIN_PROFIT_FACTOR = 1.0
 FORMAL_RUNTIME_SLO_SECONDS = 3600
 API_P95_SLO_SECONDS = 2.0
+# G3 API p95 判定的最低样本量。api_request_metrics 是被动记录前端访问，样本天然稀疏
+# 且常集中在用户浏览的几分钟内（如 07-29 15:46~16:17 的 /api/strategies 全表扫描）。
+# nearest-rank p95 在小样本下对单个异常值极敏感：n=186 时第 177 名恰好 2078ms，
+# 差 78ms 过阈就把 G3 判 FAIL、连锁 G4 BLOCKED、误导 NEXT_ACTION 到 T4。
+# 样本不足时降级为 WARN（测量不完整）而非 FAIL，避免单点噪声触发策略扩张阻断。
+MIN_API_P95_SAMPLE = 500
+# p99/p95 比值超过此阈值说明 p95 是单点/少数异常拉高的（p50/p90 都正常），
+# 同样降级为 WARN 而非 FAIL。3x 覆盖实测：07-29 噪声日 p99=25s/p95=2.078s≈12x，
+# 正常日 p99/p95 应接近 1.3~1.5。
+API_P95_NOISE_RATIO = 3.0
 
 
 def _result(status: str, summary: str, **metrics: Any) -> dict[str, Any]:
@@ -161,18 +171,39 @@ def evaluate_g3(
     *,
     formal_p95_seconds: int | None,
     api_p95_seconds: float | None,
+    api_p95_sample: int | None = None,
+    api_p99_seconds: float | None = None,
 ) -> dict[str, Any]:
     if formal_p95_seconds is not None and formal_p95_seconds > FORMAL_RUNTIME_SLO_SECONDS:
         return _result("FAIL", f"formal p95={formal_p95_seconds}s超过{FORMAL_RUNTIME_SLO_SECONDS}s",
                        formal_p95_seconds=formal_p95_seconds, api_p95_seconds=api_p95_seconds)
-    if api_p95_seconds is not None and api_p95_seconds > API_P95_SLO_SECONDS:
+    api_is_noise = False
+    noise_reason = ""
+    if api_p95_seconds is not None and api_p95_sample is not None and api_p95_sample < MIN_API_P95_SAMPLE:
+        api_is_noise = True
+        noise_reason = f"API p95={api_p95_seconds}s样本不足{api_p95_sample}<{MIN_API_P95_SAMPLE}"
+    elif (
+        api_p95_seconds is not None
+        and api_p99_seconds is not None
+        and api_p95_seconds > 0
+        and api_p99_seconds / api_p95_seconds > API_P95_NOISE_RATIO
+    ):
+        api_is_noise = True
+        noise_reason = (f"API p95={api_p95_seconds}s疑单点噪声"
+                        f"（p99={api_p99_seconds}s/p95比{api_p99_seconds / api_p95_seconds:.1f}x>{API_P95_NOISE_RATIO}）")
+    if api_p95_seconds is not None and api_p95_seconds > API_P95_SLO_SECONDS and not api_is_noise:
         return _result("FAIL", f"API p95={api_p95_seconds}s超过{API_P95_SLO_SECONDS}s",
                        formal_p95_seconds=formal_p95_seconds, api_p95_seconds=api_p95_seconds)
+    if api_is_noise:
+        return _result("WARN", f"性能测量不可信（{noise_reason}），降级不阻断",
+                       formal_p95_seconds=formal_p95_seconds, api_p95_seconds=api_p95_seconds,
+                       api_p95_sample=api_p95_sample, api_p99_seconds=api_p99_seconds)
     if formal_p95_seconds is None or api_p95_seconds is None:
         return _result("WARN", "性能测量不完整（formal或API p95缺失）",
                        formal_p95_seconds=formal_p95_seconds, api_p95_seconds=api_p95_seconds)
     return _result("PASS", "formal/API p95满足预算",
-                   formal_p95_seconds=formal_p95_seconds, api_p95_seconds=api_p95_seconds)
+                   formal_p95_seconds=formal_p95_seconds, api_p95_seconds=api_p95_seconds,
+                   api_p95_sample=api_p95_sample, api_p99_seconds=api_p99_seconds)
 
 
 def evaluate_g4(
