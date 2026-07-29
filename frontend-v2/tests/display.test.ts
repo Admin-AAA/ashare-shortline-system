@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isOutcomeSettled } from "../src/utils/display.ts";
+import { exitReasonLabel, isOutcomeSettled } from "../src/utils/display.ts";
+
+test("not-triggered exits use the settled outcome wording", () => {
+  assert.equal(exitReasonLabel("not_triggered"), "未触发");
+  assert.equal(exitReasonLabel("entry_not_triggered"), "未触发");
+});
 
 test("provisional outcome remains unsettled for realtime pnl", () => {
   assert.equal(isOutcomeSettled("success"), true);
