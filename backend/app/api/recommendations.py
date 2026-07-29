@@ -1,4 +1,7 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy.orm import Session  # noqa: F401 (Query used in endpoints)
 
 from app.db.session import get_db
@@ -13,7 +16,29 @@ from app.services.workbench_service import (
     set_watch_status,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/recommendations", tags=["recommendations"])
+
+
+class ExecutionConfirmationsRequest(BaseModel):
+    """批量实时确认的严格请求契约。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+
+    recommendation_ids: list[str]
+    refresh: bool = False
+
+    @field_validator("recommendation_ids")
+    @classmethod
+    def normalize_recommendation_ids(cls, raw_ids: list[str]) -> list[str]:
+        from app.services.batch_execution_confirmation import MAX_BATCH_IDS
+
+        ids = list(dict.fromkeys(item.strip() for item in raw_ids if item.strip()))
+        if not ids:
+            raise ValueError("recommendation_ids must contain 1-50 non-empty ids")
+        if len(ids) > MAX_BATCH_IDS:
+            raise ValueError(f"recommendation_ids exceeds maximum of {MAX_BATCH_IDS}")
+        return ids
 
 
 @router.get("/history")
@@ -67,6 +92,24 @@ def realtime_pnl(
     from app.services.realtime_pnl_service import list_pending_realtime_pnl
 
     return list_pending_realtime_pnl(db, use_cache=not refresh)
+
+
+@router.post("/execution-confirmations")
+def execution_confirmations(payload: ExecutionConfirmationsRequest, db: Session = Depends(get_db)):
+    """未结算正式推荐的批量次日买入确认（历史页当前页一次性实时确认）。
+
+    只对当前页未结算 formal 推荐发起一次批量确认：后端重新校验未结算资格，一次批量
+    rt_k + 一次公共市场上下文 + 一次公共特征准备，按各自原策略重跑确定性规则，返回
+    允许执行 / 继续观察 / 取消买入 / 行情未就绪 / 信号已过期。不调用 LLM/Agent、不写库、
+    不改结算。已结算 ID 不进入 items，只计入 settled_skipped_count。
+    """
+    from app.services.batch_execution_confirmation import confirm_batch_executions
+
+    try:
+        return confirm_batch_executions(db, payload.recommendation_ids, refresh=payload.refresh)
+    except Exception as exc:  # noqa: BLE001 - 批次公共源失败已在服务层封装为 errors
+        logger.exception("批量实时确认发生未处理异常")
+        raise HTTPException(status_code=500, detail="批量实时确认失败") from exc
 
 
 @router.get("/outcome-summary")

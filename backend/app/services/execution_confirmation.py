@@ -1,4 +1,10 @@
-"""推荐次日执行确认：用当前全市场快照重跑原推荐主策略。"""
+"""推荐次日执行确认：用当前全市场快照重跑原推荐主策略。
+
+单票入口（confirm_recommendation_execution）保留 Agent 增强能力；批量入口
+（app.services.batch_execution_confirmation）传入 review=None，按高置信规则
+兜底决策。两者共享 confirm_with_prepared_context——"已准备上下文下确认单笔"
+的纯函数，避免实时判断与单票确认产生两套规则。
+"""
 
 from __future__ import annotations
 
@@ -10,10 +16,10 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.engine.skill_loader import load_skills
+from app.engine.skill_loader import load_skills, StrategySkill
 from app.engine.strategy_runner import evaluate_skill_prefilter, run_strategy
 from app.engine.trading_calendar import latest_allowed_quote_date
-from app.models.tables import DailyKbar, Recommendation
+from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome
 
 
 def _decision(code: str, label: str, reason: str) -> dict[str, str]:
@@ -26,6 +32,25 @@ def _json_mapping(raw: str | None) -> dict[str, Any]:
     except (TypeError, ValueError, json.JSONDecodeError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+# 未最终结算的 outcome label：无 outcome 行、pending、provisional 都视为未结算，
+# 仍可进入实时确认。success/failed/missed 及未来新增的最终结算标签都视为已结算。
+# 复用 outcome_simulation 的口径，不在前后端各维护一份容易分叉的硬编码列表。
+_UNSETTLED_OUTCOME_LABELS = frozenset({"pending", "provisional"})
+
+
+def is_unsettled_formal_rec(rec: Recommendation, outcome: RecommendationOutcome | None) -> bool:
+    """推荐是否仍未最终结算且属于 formal run（可进入实时确认）。
+
+    复用 realtime_pnl_service._load_pending_recs 的未结算 SQL 语义：无 outcome
+    行、或 outcome_label 为 pending / provisional。任何最终标签（success/failed/
+    missed 及未来新增）都返回 False。run_mode 由调用方在 SQL 层保证，此处只判
+    outcome 维度，便于单票与批量共用。
+    """
+    if outcome is None:
+        return True
+    return str(getattr(outcome, "outcome_label", "") or "").lower() in _UNSETTLED_OUTCOME_LABELS
 
 
 def _entry_window_closed(data_as_of: str, local_now: datetime) -> bool:
@@ -162,6 +187,105 @@ def _run_agent_review(skill: Any, stock: dict[str, Any], snapshot: dict[str, Any
         return {"status": "fallback", "error": str(exc)}
 
 
+def _build_signal_for_strategy(
+    skill: StrategySkill,
+    current: dict[str, Any],
+    snapshot: dict[str, Any],
+) -> tuple[dict[str, Any], bool, str]:
+    """对单只已 enriched 的 stock 跑原策略 prefilter + 运行，返回带 prefilter 元数据的 signal。"""
+    prefilter_ok, prefilter_reason = evaluate_skill_prefilter(skill, current)
+    signal = dict(run_strategy(skill, current, list(snapshot.get("main_industries") or [])))
+    signal["prefilter_ok"] = prefilter_ok
+    signal["prefilter_reason"] = prefilter_reason
+    return signal, prefilter_ok, prefilter_reason
+
+
+def confirm_with_prepared_context(
+    db: Session,
+    rec: Recommendation,
+    *,
+    snapshot: dict[str, Any],
+    current: dict[str, Any],
+    skill: StrategySkill,
+    signal: dict[str, Any],
+    prefilter_ok: bool,
+    signal_age_trade_days: int,
+    review: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """在已准备好的市场上下文（snapshot/enriched stock/策略 signal）下确认一笔推荐。
+
+    单票确认（含 Agent）与批量确认（review=None）共用此函数，保证两套入口不会
+    产生两套规则。调用方负责准备 snapshot、enriched stock、signal 和交易日年龄，
+    本函数只做决策投影与元数据组装，不写库、不拉行情。
+
+    signal_age_trade_days 由调用方按各自的数据加载方式计算（单票用 SQL，批量用
+    已加载的历史 K），但语义一致：推荐日之后到 data_as_of（含）之间的真实交易日数。
+    """
+    code = str(rec.code)
+    data_as_of = str(snapshot.get("trade_date") or current.get("latest_trade_date") or "")
+
+    local_now = datetime.now()
+    expected_quote_date = latest_allowed_quote_date()
+    fresh = data_as_of == expected_quote_date
+    entry_window_closed = _entry_window_closed(data_as_of, local_now)
+
+    current_price = float(current.get("price") or current.get("close") or 0)
+    original_snapshot = _json_mapping(rec.feature_snapshot_json)
+    stop_loss = float(original_snapshot.get("stop_loss") or 0)
+    # 止损基准跨除权修正：stop_loss 是推荐日裸价，若推荐日到今日发生除权（10送10 等），
+    # 裸价比会误判跌破止损。用 pct_chg 链累乘出复权因子，把止损基准缩放到今日口径。
+    adjusted_stop_loss = _adjust_stop_loss_for_ex_right(db, code, str(rec.trade_date), data_as_of, stop_loss)
+    entry_decision, holding_decision = _derive_decisions(
+        fresh=fresh,
+        signal_age_trade_days=signal_age_trade_days,
+        entry_window_closed=entry_window_closed,
+        prefilter_ok=prefilter_ok,
+        signal=signal,
+        review=review,
+        current_price=current_price,
+        stop_loss=adjusted_stop_loss,
+    )
+
+    strategy_id = str(rec.bucket or "daily-stock-analysis-skill")
+    return {
+        "status": "ok" if fresh else "not_ready",
+        "recommendation_id": rec.recommendation_id,
+        "code": code,
+        "name": rec.name,
+        "strategy_id": strategy_id,
+        "strategy_name": skill.name,
+        "checked_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        "data_as_of": data_as_of,
+        "quote_time": current.get("quote_time"),
+        "snapshot_generated_at": (snapshot.get("breadth") or {}).get("generated_at"),
+        "data_source": current.get("quote_source") or (snapshot.get("breadth") or {}).get("quote_source"),
+        "fresh": fresh,
+        "signal_age_trade_days": signal_age_trade_days,
+        "current_price": current_price,
+        "entry_decision": entry_decision,
+        "holding_decision": holding_decision,
+        "original": {
+            "trade_date": str(rec.trade_date),
+            "recommend_price": float(rec.recommend_price or 0),
+            "stop_loss": stop_loss or None,
+            "entry_rule": rec.entry_rule,
+            "invalid_rule": rec.invalid_rule,
+        },
+        "market": {
+            "regime": (snapshot.get("breadth") or {}).get("regime"),
+            "up_count": snapshot.get("up_count"),
+            "down_count": snapshot.get("down_count"),
+            "limit_up_count": snapshot.get("limit_up_count"),
+            "limit_down_count": snapshot.get("limit_down_count"),
+            "main_industries": list(snapshot.get("main_industries") or []),
+        },
+        "strategy_signal": {
+            **signal,
+        },
+        "agent_review": review,
+    }
+
+
 def confirm_recommendation_execution(
     db: Session,
     recommendation_id: str,
@@ -208,10 +332,7 @@ def confirm_recommendation_execution(
             "message": f"原推荐策略 {strategy_id} 已不存在",
         }
 
-    prefilter_ok, prefilter_reason = evaluate_skill_prefilter(skill, current)
-    signal = dict(run_strategy(skill, current, list(snapshot.get("main_industries") or [])))
-    signal["prefilter_ok"] = prefilter_ok
-    signal["prefilter_reason"] = prefilter_reason
+    signal, prefilter_ok, _prefilter_reason = _build_signal_for_strategy(skill, current, snapshot)
 
     later_dates = set(
         str(value)
@@ -227,65 +348,25 @@ def confirm_recommendation_execution(
         later_dates.add(data_as_of)
     signal_age_trade_days = len(later_dates)
 
-    local_now = datetime.now()
     expected_quote_date = latest_allowed_quote_date()
     fresh = data_as_of == expected_quote_date
-    entry_window_closed = _entry_window_closed(data_as_of, local_now)
     review = _run_agent_review(skill, current, snapshot, signal) if include_agent and fresh else None
-    current_price = float(current.get("price") or current.get("close") or 0)
-    original_snapshot = _json_mapping(rec.feature_snapshot_json)
-    stop_loss = float(original_snapshot.get("stop_loss") or 0)
-    # 止损基准跨除权修正：stop_loss 是推荐日裸价，若推荐日到今日发生除权（10送10 等），
-    # 裸价比会误判跌破止损。用 pct_chg 链累乘出复权因子，把止损基准缩放到今日口径。
-    adjusted_stop_loss = _adjust_stop_loss_for_ex_right(db, code, str(rec.trade_date), data_as_of, stop_loss)
-    entry_decision, holding_decision = _derive_decisions(
-        fresh=fresh,
-        signal_age_trade_days=signal_age_trade_days,
-        entry_window_closed=entry_window_closed,
-        prefilter_ok=prefilter_ok,
+
+    return confirm_with_prepared_context(
+        db,
+        rec,
+        snapshot=snapshot,
+        current=current,
+        skill=skill,
         signal=signal,
+        prefilter_ok=prefilter_ok,
+        signal_age_trade_days=signal_age_trade_days,
         review=review,
-        current_price=current_price,
-        stop_loss=adjusted_stop_loss,
     )
 
-    return {
-        "status": "ok" if fresh else "not_ready",
-        "recommendation_id": recommendation_id,
-        "code": code,
-        "name": rec.name,
-        "strategy_id": strategy_id,
-        "strategy_name": skill.name,
-        "checked_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
-        "data_as_of": data_as_of,
-        "quote_time": current.get("quote_time"),
-        "snapshot_generated_at": (snapshot.get("breadth") or {}).get("generated_at"),
-        "data_source": current.get("quote_source") or (snapshot.get("breadth") or {}).get("quote_source"),
-        "fresh": fresh,
-        "signal_age_trade_days": signal_age_trade_days,
-        "current_price": current_price,
-        "entry_decision": entry_decision,
-        "holding_decision": holding_decision,
-        "original": {
-            "trade_date": str(rec.trade_date),
-            "recommend_price": float(rec.recommend_price or 0),
-            "stop_loss": stop_loss or None,
-            "entry_rule": rec.entry_rule,
-            "invalid_rule": rec.invalid_rule,
-        },
-        "market": {
-            "regime": (snapshot.get("breadth") or {}).get("regime"),
-            "up_count": snapshot.get("up_count"),
-            "down_count": snapshot.get("down_count"),
-            "limit_up_count": snapshot.get("limit_up_count"),
-            "limit_down_count": snapshot.get("limit_down_count"),
-            "main_industries": list(snapshot.get("main_industries") or []),
-        },
-        "strategy_signal": {
-            **signal,
-        },
-        "agent_review": review,
-    }
 
-
-__all__ = ["confirm_recommendation_execution"]
+__all__ = [
+    "confirm_recommendation_execution",
+    "confirm_with_prepared_context",
+    "is_unsettled_formal_rec",
+]
