@@ -860,6 +860,13 @@ def _build_recommendation_history_summary(
         "average_net_return": round(total_net_return / trade_count, 2) if trade_count else None,
         "total_net_return": round(total_net_return, 2),
         "additional_cost_pct": _ADDITIONAL_COST_PCT,
+        "methodology": {
+            "sample_scope": "official_live_forward_v1",
+            "entry_policy": "next_trading_day_open_v1",
+            "win_definition": "executed_net_return_gt_zero",
+            "deduplication": "trade_date_and_code_highest_score",
+            "return_unit": "percentage_points_per_trade",
+        },
     }
 
 
@@ -1802,6 +1809,8 @@ def _serialize_outcome(outcome: RecommendationOutcome | None) -> dict[str, Any] 
         return None
     normalized_label = normalized_outcome_label(outcome)
     return {
+        "calculation_version_id": outcome.calculation_version_id,
+        "entry_policy_id": outcome.entry_policy_id,
         "horizon_days": outcome.horizon_days,
         "entry_triggered": outcome.entry_triggered,
         "entry_date": outcome.entry_date,
