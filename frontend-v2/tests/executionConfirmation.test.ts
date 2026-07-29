@@ -8,6 +8,7 @@ import {
   cancelObservationText,
   collectUnsettledIds,
   executionDecisionCode,
+  holdingDecisionPresentation,
   isPlaceholderEntryRule,
 } from "../src/utils/executionConfirmation.ts";
 
@@ -100,4 +101,27 @@ test("取消观察收益只显示已经形成的交易日", () => {
   });
 
   assert.equal(text, "1日 -10.07%");
+});
+
+test("未结算记录把后端持仓判断展示为条件式卖出提示", () => {
+  assert.deepEqual(
+    holdingDecisionPresentation({
+      ...item("buy"),
+      holding_decision: {
+        code: "exit",
+        label: "退出持仓",
+        reason: "当前价格已经跌破原推荐止损位",
+      },
+    }),
+    {
+      code: "exit",
+      text: "如果已持有：退出持仓",
+      reason: "当前价格已经跌破原推荐止损位",
+      title: "退出持仓 · 当前价格已经跌破原推荐止损位",
+    },
+  );
+});
+
+test("没有持仓判断时不展示卖出提示", () => {
+  assert.equal(holdingDecisionPresentation(item("wait")), null);
 });

@@ -38,6 +38,24 @@ from app.services import batch_execution_confirmation as svc
 
 # ── fixtures ──────────────────────────────────────────────────────────────
 
+def test_batch_item_keeps_existing_holding_decision_for_history_page():
+    holding_decision = {
+        "code": "exit",
+        "label": "退出持仓",
+        "reason": "当前价格已经跌破原推荐止损位",
+    }
+
+    item = svc._to_batch_item({
+        "recommendation_id": "rec_holding_decision",
+        "code": "600775",
+        "status": "ok",
+        "original": {"trade_date": "2026-07-29"},
+        "entry_decision": {"code": "cancel", "label": "取消买入", "reason": "止损已破"},
+        "holding_decision": holding_decision,
+    })
+
+    assert item["holding_decision"] == holding_decision
+
 def _make_run(db: Session, run_id: str, trade_date: str = "2026-07-28") -> str:
     db.add(RecommendationRun(run_id=run_id, run_name="批量确认测试", run_mode="formal", trade_date=trade_date))
     return run_id
