@@ -1711,6 +1711,7 @@ export type ExecutionConfirmationResponse = {
   summary: ExecutionConfirmationSummary;
   items: ExecutionConfirmationItem[];
   errors: { recommendation_id: string; code: string; message: string }[];
+  pnl_items: RealtimePnlItem[];
 };
 
 export type ReplayAnalysisRow = {

@@ -29,11 +29,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.engine.skill_loader import load_skills
-from app.engine.trading_calendar import latest_allowed_quote_date
+from app.engine.trading_calendar import latest_allowed_quote_date, normalize_trade_date
 from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun
 from app.services.execution_confirmation import (
     _build_signal_for_strategy,
-    _entry_window_closed,
     confirm_with_prepared_context,
     is_unsettled_formal_rec,
 )
@@ -44,6 +43,7 @@ MAX_BATCH_IDS = 50
 _CACHE_TTL_SECONDS = 20.0
 _cache_lock: threading.Lock | None = None
 _cache: dict[str, Any] = {"fetched_at": 0.0, "key": None, "value": None}
+_inflight: dict[str, dict[str, Any]] = {}
 
 
 def _get_lock() -> threading.Lock:
@@ -116,39 +116,37 @@ def _signal_age_trade_days(bars: list[dict[str, Any]], signal_date: str, data_as
 
 
 def _load_signal_ages(
-    db: Session, codes: list[str], signal_dates_by_code: dict[str, str], data_as_of: str
+    db: Session,
+    recs: list[tuple[Recommendation, RecommendationOutcome | None]],
+    data_as_of: str,
 ) -> dict[str, int]:
-    """一次 SQL 批量算每只股票推荐日之后的真实交易日数。
+    """一次 SQL 按 recommendation 计算推荐日之后的市场交易日数。
 
-    与单票入口的 later_dates 语义一致：trade_date > signal_date 且 <= data_as_of 的
-    distinct trade_date 数，再加 data_as_of 自身（若 > signal_date）。避免逐股查询。
+    年龄属于一笔推荐而不是股票代码；同一股票不同推荐日必须得到不同结果。交易日使用
+    全市场日 K 的 distinct 日期，而不是依赖个股是否有 K（停牌/数据缺口不应延长信号）。
+    data_as_of 尚未落库时仍作为当前交易日补入。
     """
-    if not codes or not data_as_of:
-        return {code: 0 for code in codes}
-    pairs = [(c, d) for c, d in signal_dates_by_code.items() if d and data_as_of > d]
-    if not pairs:
-        return {code: (0 if data_as_of <= signal_dates_by_code.get(code, "") else 1) for code in codes}
-    min_signal = min(d for _, d in pairs)
-    rows = db.execute(
-        select(DailyKbar.code, DailyKbar.trade_date).where(
-            DailyKbar.code.in_([c for c, _ in pairs]),
-            DailyKbar.trade_date > min_signal,
-            DailyKbar.trade_date <= data_as_of,
-        )
-    ).all()
-    by_code: dict[str, set[str]] = {code: set() for code in codes}
-    for code, trade_date in rows:
-        signal_date = signal_dates_by_code.get(str(code))
-        if signal_date and str(trade_date) > signal_date:
-            by_code.setdefault(str(code), set()).add(str(trade_date))
+    if not recs:
+        return {}
+    signal_dates = [str(rec.trade_date) for rec, _ in recs if str(rec.trade_date)]
+    if not signal_dates or not data_as_of:
+        return {str(rec.recommendation_id): 0 for rec, _ in recs}
+    min_signal = min(signal_dates)
+    market_dates = {
+        str(value)
+        for value in db.scalars(
+            select(DailyKbar.trade_date)
+            .where(DailyKbar.trade_date > min_signal, DailyKbar.trade_date <= data_as_of)
+            .distinct()
+        ).all()
+    }
     ages: dict[str, int] = {}
-    for code in codes:
-        signal_date = signal_dates_by_code.get(code, "")
-        later = by_code.get(code, set())
+    for rec, _ in recs:
+        signal_date = str(rec.trade_date)
+        later = {trade_date for trade_date in market_dates if trade_date > signal_date}
         if data_as_of > signal_date:
-            later = set(later)
             later.add(data_as_of)
-        ages[code] = len(later)
+        ages[str(rec.recommendation_id)] = len(later)
     return ages
 
 
@@ -250,6 +248,55 @@ def _expired_item(rec: Recommendation, reason: str) -> dict[str, Any]:
     }
 
 
+def _not_ready_item(
+    rec: Recommendation,
+    reason: str,
+    *,
+    data_as_of: str,
+    quote_time: str | None = None,
+    current_price: float = 0.0,
+) -> dict[str, Any]:
+    return {
+        "recommendation_id": str(rec.recommendation_id),
+        "code": str(rec.code),
+        "trade_date": str(rec.trade_date),
+        "status": "not_ready",
+        "fresh": False,
+        "data_as_of": data_as_of,
+        "quote_time": quote_time,
+        "data_source": None,
+        "current_price": current_price,
+        "entry_decision": {"code": "not_ready", "label": "行情未就绪", "reason": reason},
+        "strategy_signal": {},
+    }
+
+
+def _realtime_bar_issue(
+    rt: dict[str, Any],
+    *,
+    data_as_of: str,
+    expected_quote_date: str,
+    local_now: datetime,
+) -> str | None:
+    """返回实时 K 不可用于买入判断的原因；None 表示可用。"""
+    quote_date = normalize_trade_date(rt.get("trade_date"))
+    if data_as_of != expected_quote_date or quote_date != expected_quote_date:
+        return f"行情日期未就绪（快照 {data_as_of or '—'}，实时 K {quote_date or '—'}）"
+    if expected_quote_date == local_now.date().isoformat() and (local_now.hour, local_now.minute) < (9, 25):
+        return "集合竞价尚未结束，实时 K 尚未形成"
+    open_price = _f(rt.get("open"))
+    high = _f(rt.get("high"))
+    low = _f(rt.get("low"))
+    close = _f(rt.get("close"))
+    volume = _f(rt.get("vol"))
+    amount = _f(rt.get("amount"))
+    if min(open_price, high, low, close) <= 0 or volume <= 0 or amount <= 0:
+        return "实时 K 的 OHLCV 尚不完整"
+    if high < max(open_price, low, close) or low > min(open_price, high, close):
+        return "实时 K 的高低价关系无效"
+    return None
+
+
 def _compute_batch(
     db: Session,
     eligible: list[tuple[Recommendation, RecommendationOutcome | None]],
@@ -270,19 +317,15 @@ def _compute_batch(
     # 3. 预判 expired：用 expected_quote_date 作为 data_as_of 上界，一次 SQL 批量算
     #    真实交易日年龄。年龄 > 1 的直接 expired，不拉该票 rt_k（Spec 8.4.4）。
     #    age == 0（推荐日 >= expected_quote_date）说明推荐日之后尚无新交易日 → not_ready，
-    #    仍进入 pending 拉行情确认 fresh。窗口是否已关闭需结合真实 data_as_of 判断，
-    #    留给拉行情后用 _entry_window_closed。
-    all_codes = sorted({str(rec.code) for rec, _ in eligible})
-    signal_dates_by_code: dict[str, str] = {}
-    for rec, _ in eligible:
-        signal_dates_by_code.setdefault(str(rec.code), str(rec.trade_date))
-    ages = _load_signal_ages(db, all_codes, signal_dates_by_code, expected_quote_date)
+    #    仍进入 pending 拉行情确认 fresh。窗口判断统一留给共享决策状态机，避免在
+    #    not_ready 之前误判 expired。
+    ages = _load_signal_ages(db, eligible, expected_quote_date)
 
     pending: list[tuple[Recommendation, RecommendationOutcome | None]] = []
     items: list[dict[str, Any]] = []
     expired_count = 0
     for rec, outcome in eligible:
-        age = ages.get(str(rec.code), 0)
+        age = ages.get(str(rec.recommendation_id), 0)
         if age > 1:
             items.append(_expired_item(rec, "已超过推荐后的首个交易日，需要等待新的推荐信号"))
             expired_count += 1
@@ -307,7 +350,7 @@ def _compute_batch(
     from app.services.feature_builder import build_features
     from app.services.factors.registry import bootstrap_default_factor_registry
     from app.services.market_data import _build_stock_from_bars, get_market_universe
-    from app.services.realtime_pnl_service import _fetch_rtk_quotes
+    from app.services.realtime_pnl_service import _fetch_rtk_quotes, compute_realtime_pnl_items
 
     bootstrap_default_factor_registry()
     try:
@@ -329,6 +372,7 @@ def _compute_batch(
                 "error_count": len(pending),
             },
             "items": items,
+            "pnl_items": [],
             "errors": [
                 {"recommendation_id": str(rec.recommendation_id), "code": str(rec.code), "message": "实时行情不可用"}
                 for rec, _ in pending
@@ -339,7 +383,7 @@ def _compute_batch(
     stocks_by_code = {str(s.get("code")): s for s in stocks}
 
     # 5. 一次批量 rt_k（仅 pending 涉及的代码）。
-    pending_codes = sorted({str(rec.code) for rec, _ in pending if str(rec.code) in stocks_by_code})
+    pending_codes = sorted({str(rec.code) for rec, _ in pending})
     rt_quotes = _fetch_rtk_quotes(pending_codes) if pending_codes else {}
     rt_fetch_missing = len(pending_codes) - len(rt_quotes)
 
@@ -347,22 +391,51 @@ def _compute_batch(
     rebuilt_stocks: list[dict[str, Any]] = []
     rebuilt_by_code: dict[str, dict[str, Any]] = {}
     missing_rt_codes: list[str] = []
+    not_ready_by_code: dict[str, str] = {}
+    usable_rt_quotes: dict[str, dict[str, Any]] = {}
     for code in pending_codes:
         stock = stocks_by_code.get(code)
         rt = rt_quotes.get(code)
-        if not stock or not rt or _f(rt.get("close")) <= 0:
+        if not rt or _f(rt.get("close")) <= 0:
             missing_rt_codes.append(code)
             continue
-        rebuilt = _rebuild_stock_with_rt_k(stock, rt, data_as_of, build_stock_from_bars=_build_stock_from_bars)
+        issue = _realtime_bar_issue(
+            rt,
+            data_as_of=data_as_of,
+            expected_quote_date=expected_quote_date,
+            local_now=local_now,
+        )
+        if issue:
+            not_ready_by_code[code] = issue
+            continue
+        usable_rt_quotes[code] = rt
+        if not stock:
+            missing_rt_codes.append(code)
+            continue
+        quote_date = normalize_trade_date(rt.get("trade_date"))
+        try:
+            rebuilt = _rebuild_stock_with_rt_k(
+                stock,
+                rt,
+                quote_date,
+                build_stock_from_bars=_build_stock_from_bars,
+            )
+        except Exception as exc:
+            logger.warning("批量确认实时 K 重建失败 %s: %s", code, str(exc)[:160])
+            missing_rt_codes.append(code)
+            continue
         if rebuilt is None:
             missing_rt_codes.append(code)
             continue
         rebuilt_stocks.append(rebuilt)
         rebuilt_by_code[code] = rebuilt
 
+    pnl_items = compute_realtime_pnl_items(db, [rec for rec, _ in pending], usable_rt_quotes)
+
     # 一次辅助数据注入 + 标签（公共特征准备）。
     if rebuilt_stocks:
-        build_features(rebuilt_stocks, snapshot, db=db)
+        enriched_stocks = build_features(rebuilt_stocks, snapshot, db=db)
+        rebuilt_by_code = {str(stock.get("code")): stock for stock in enriched_stocks}
 
     # 7. 一次加载策略目录。
     skills = {skill.skill_id: skill for skill in load_skills(get_settings().skills_dir)}
@@ -373,6 +446,18 @@ def _compute_batch(
         code = str(rec.code)
         current = rebuilt_by_code.get(code)
         if current is None:
+            if code in not_ready_by_code:
+                rt = rt_quotes.get(code) or {}
+                items.append(
+                    _not_ready_item(
+                        rec,
+                        not_ready_by_code[code],
+                        data_as_of=data_as_of,
+                        quote_time=rt.get("quote_time"),
+                        current_price=_f(rt.get("close")),
+                    )
+                )
+                continue
             errors.append({"recommendation_id": str(rec.recommendation_id), "code": code, "message": "实时行情不可用"})
             continue
         strategy_id = str(rec.bucket or "daily-stock-analysis-skill")
@@ -381,13 +466,7 @@ def _compute_batch(
             errors.append({"recommendation_id": str(rec.recommendation_id), "code": code, "message": f"原推荐策略 {strategy_id} 已不存在"})
             continue
         try:
-            age = ages.get(code, 0)
-            # 用真实 data_as_of 判窗口是否已关闭（Spec 4.3：首个交易日已收盘 → expired）。
-            # age>1 已在预判阶段 expired；这里处理 age==1 但窗口已关闭的情形。
-            if _entry_window_closed(data_as_of, local_now):
-                items.append(_expired_item(rec, "当前交易日已收盘，不再追认盘中买点"))
-                expired_count += 1
-                continue
+            age = ages.get(str(rec.recommendation_id), 0)
             signal, prefilter_ok, _reason = _build_signal_for_strategy(skill, current, snapshot)
             result = confirm_with_prepared_context(
                 db,
@@ -420,6 +499,7 @@ def _compute_batch(
         expired_count=expired_count,
         items=items,
         errors=errors,
+        pnl_items=pnl_items,
         data_as_of=data_as_of,
         started=started,
         cached=False,
@@ -473,6 +553,7 @@ def _empty_response(requested_count: int, settled_skipped: int, started: float) 
         },
         "items": [],
         "errors": [],
+        "pnl_items": [],
     }
 
 
@@ -484,6 +565,7 @@ def _assemble_response(
     expired_count: int,
     items: list[dict[str, Any]],
     errors: list[dict[str, Any]],
+    pnl_items: list[dict[str, Any]] | None = None,
     data_as_of: str,
     started: float,
     cached: bool,
@@ -503,6 +585,7 @@ def _assemble_response(
         },
         "items": items,
         "errors": errors,
+        "pnl_items": pnl_items or [],
     }
 
 
@@ -525,25 +608,73 @@ def confirm_batch_executions(
     eligible_ids = sorted({str(rec.recommendation_id) for rec, _ in eligible})
     cache_key = ",".join(eligible_ids)
 
-    if not refresh:
-        with _get_lock():
+    with _get_lock():
+        if not refresh:
             cached = _cache["value"]
             if (
                 cached is not None
                 and _cache["key"] == cache_key
                 and (time.time() - _cache["fetched_at"]) < _CACHE_TTL_SECONDS
             ):
-                result = dict(cached)
-                result["cached"] = True
-                return result
+                return _response_for_request(
+                    cached,
+                    requested_count=requested_count,
+                    settled_skipped=settled_skipped,
+                    cached=True,
+                )
+        flight = _inflight.get(cache_key)
+        if flight is None:
+            flight = {"event": threading.Event(), "result": None, "error": None}
+            _inflight[cache_key] = flight
+            owns_flight = True
+        else:
+            owns_flight = False
 
-    result = _compute_batch(db, eligible, requested_count=requested_count, settled_skipped=settled_skipped)
+    if not owns_flight:
+        flight["event"].wait()
+        if flight["error"] is not None:
+            raise flight["error"]
+        return _response_for_request(
+            flight["result"],
+            requested_count=requested_count,
+            settled_skipped=settled_skipped,
+            cached=True,
+        )
 
-    with _get_lock():
-        _cache["fetched_at"] = time.time()
-        _cache["key"] = cache_key
-        _cache["value"] = result
-    return result
+    try:
+        result = _compute_batch(db, eligible, requested_count=requested_count, settled_skipped=settled_skipped)
+        with _get_lock():
+            _cache["fetched_at"] = time.time()
+            _cache["key"] = cache_key
+            _cache["value"] = result
+            flight["result"] = result
+        return result
+    except Exception as exc:
+        with _get_lock():
+            flight["error"] = exc
+        raise
+    finally:
+        with _get_lock():
+            _inflight.pop(cache_key, None)
+            flight["event"].set()
+
+
+def _response_for_request(
+    result: dict[str, Any],
+    *,
+    requested_count: int,
+    settled_skipped: int,
+    cached: bool,
+) -> dict[str, Any]:
+    """复用 eligible 计算结果，同时保留本次请求自己的 summary 计数。"""
+    response = dict(result)
+    response["summary"] = {
+        **dict(result.get("summary") or {}),
+        "requested_count": requested_count,
+        "settled_skipped_count": settled_skipped,
+    }
+    response["cached"] = cached
+    return response
 
 
 __all__ = ["confirm_batch_executions", "MAX_BATCH_IDS"]

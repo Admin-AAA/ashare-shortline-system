@@ -84,18 +84,7 @@ def list_pending_realtime_pnl(db: Session, *, use_cache: bool = True) -> dict[st
                 return cached_value
 
     quotes = _fetch_rtk_quotes(codes)
-    signal_bars = _load_signal_bars(db, recs)
-    intermediate_bars = _load_intermediate_bars(db, recs)
-
-    items = [
-        _compute_one(
-            rec,
-            quotes.get(str(rec.code)),
-            signal_bars.get((str(rec.code), str(rec.trade_date))),
-            intermediate_bars.get(str(rec.code)),
-        )
-        for rec in recs
-    ]
+    items = compute_realtime_pnl_items(db, recs, quotes)
     result = {
         "computed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "cached": False,
@@ -106,6 +95,25 @@ def list_pending_realtime_pnl(db: Session, *, use_cache: bool = True) -> dict[st
         _cache["key"] = cache_key
         _cache["value"] = result
     return result
+
+
+def compute_realtime_pnl_items(
+    db: Session,
+    recs: list[Recommendation],
+    quotes: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """使用调用方已取得的实时行情计算未结算推荐盈亏，不再次访问行情源。"""
+    signal_bars = _load_signal_bars(db, recs)
+    intermediate_bars = _load_intermediate_bars(db, recs)
+    return [
+        _compute_one(
+            rec,
+            quotes.get(str(rec.code)),
+            signal_bars.get((str(rec.code), str(rec.trade_date))),
+            intermediate_bars.get(str(rec.code)),
+        )
+        for rec in recs
+    ]
 
 
 def _load_pending_recs(db: Session) -> list[Recommendation]:

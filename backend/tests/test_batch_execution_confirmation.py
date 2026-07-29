@@ -17,6 +17,8 @@ mock 策略：monkeypatch get_market_universe / _fetch_rtk_quotes / _build_signa
 from __future__ import annotations
 
 import json
+import threading
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -97,7 +99,9 @@ def _fake_snapshot(trade_date: str = "2026-07-29") -> dict[str, Any]:
 
 def _rt(code: str, close: float = 10.5, high: float | None = None, low: float | None = None, vol: float = 200) -> dict[str, Any]:
     return {
-        "open": 10.2, "high": high if high is not None else close, "low": low if low is not None else close,
+        "open": 10.2,
+        "high": high if high is not None else max(10.2, close),
+        "low": low if low is not None else min(10.2, close),
         "close": close, "pre_close": 10.0, "vol": vol, "amount": 2000, "name": "测试股",
         "trade_date": "2026-07-29", "quote_time": "2026-07-29T10:06:08",
     }
@@ -130,7 +134,6 @@ def _setup_decision_mocks(
         return rt_quotes or {}
 
     monkeypatch.setattr(svc, "latest_allowed_quote_date", lambda: expected_date)
-    monkeypatch.setattr(svc, "_entry_window_closed", lambda d, n: entry_window_closed)
     monkeypatch.setattr("app.services.market_data.get_market_universe", _universe)
     monkeypatch.setattr("app.services.realtime_pnl_service._fetch_rtk_quotes", _rtk)
     monkeypatch.setattr(svc, "load_skills", lambda *_a, **_kw: [_FAKE_SKILL])
@@ -252,6 +255,73 @@ def test_single_market_universe_and_rtk_call_for_multiple_recs(db, monkeypatch):
     assert len(result["items"]) == 2
 
 
+def test_batch_response_reuses_realtime_quotes_for_pnl(db, monkeypatch):
+    """一次批量 rt_k 同时产出买入确认和实时盈亏，不再由前端发第二个行情请求。"""
+    code = "999996"
+    run_id = _make_run(db, "test_batch_shared_pnl_run")
+    rec = _make_rec(
+        db,
+        "test_batch_shared_pnl_rec",
+        run_id,
+        code,
+        bucket=_FAKE_SKILL.skill_id,
+        stop_loss=1.0,
+    )
+    _add_kbar(db, code, "2026-07-28", close=10.0)
+    _add_kbar(db, code, "2026-07-29", close=10.5)
+    db.flush()
+
+    calls = _setup_decision_mocks(
+        monkeypatch,
+        stocks=[_fake_stock(code)],
+        rt_quotes={code: _rt(code)},
+    )
+    svc._cache["value"] = None
+
+    result = svc.confirm_batch_executions(db, [rec], refresh=True)
+
+    assert calls["rtk"] == 1
+    assert result["items"][0]["recommendation_id"] == rec
+    assert result["pnl_items"][0]["recommendation_id"] == rec
+
+
+def test_batch_strategy_uses_enriched_objects_returned_by_build_features(db, monkeypatch):
+    """策略必须读取 build_features 返回的新对象，不能继续使用重建前的映射。"""
+    run_id = _make_run(db, "test_batch_enriched_return_run")
+    rec = _make_rec(
+        db,
+        "test_batch_enriched_return_rec",
+        run_id,
+        "600775",
+        bucket=_FAKE_SKILL.skill_id,
+        stop_loss=1.0,
+    )
+    _add_kbar(db, "600775", "2026-07-29", close=10.5)
+    db.flush()
+
+    _setup_decision_mocks(
+        monkeypatch,
+        stocks=[_fake_stock("600775")],
+        rt_quotes={"600775": _rt("600775")},
+    )
+    monkeypatch.setattr(
+        "app.services.feature_builder.build_features",
+        lambda stocks, snapshot, **_kw: [dict(stock, enriched_marker=True) for stock in stocks],
+    )
+
+    def _signal_from_enriched(skill, current, snapshot):
+        assert current.get("enriched_marker") is True
+        return dict(_FAKE_SIGNAL), True, ""
+
+    monkeypatch.setattr(svc, "_build_signal_for_strategy", _signal_from_enriched)
+    svc._cache["value"] = None
+
+    result = svc.confirm_batch_executions(db, [rec], refresh=True)
+
+    assert result["summary"]["error_count"] == 0
+    assert result["items"][0]["entry_decision"]["code"] == "buy"
+
+
 # ── 实时 K 合成 ───────────────────────────────────────────────────────────
 
 def test_rt_bar_replaces_same_day_history_not_appends():
@@ -338,6 +408,36 @@ def test_stale_snapshot_never_returns_buy(db, monkeypatch):
     assert item["entry_decision"]["code"] != "buy"  # 陈旧行情不返回 buy
 
 
+def test_incomplete_realtime_bar_returns_not_ready_instead_of_buy(db, monkeypatch):
+    """实时 OHLCV 不完整时只能 not_ready，不能仅凭 close 运行买入规则。"""
+    code = "999995"
+    run_id = _make_run(db, "test_batch_incomplete_rt_run")
+    rec = _make_rec(
+        db,
+        "test_batch_incomplete_rt_rec",
+        run_id,
+        code,
+        bucket=_FAKE_SKILL.skill_id,
+        stop_loss=1.0,
+    )
+    _add_kbar(db, code, "2026-07-29", close=10.5)
+    db.flush()
+
+    incomplete = _rt(code, close=10.5)
+    incomplete.update({"open": 0.0, "high": 0.0, "low": 0.0, "vol": 0.0, "amount": 0.0})
+    _setup_decision_mocks(
+        monkeypatch,
+        stocks=[_fake_stock(code)],
+        rt_quotes={code: incomplete},
+        signal={"phase": "确认", "score": 90, "setup_match": "分歧回封", "hard_veto": False, "risk_flags": []},
+    )
+    svc._cache["value"] = None
+
+    result = svc.confirm_batch_executions(db, [rec], refresh=True)
+
+    assert result["items"][0]["entry_decision"]["code"] == "not_ready"
+
+
 # ── expired 状态 ───────────────────────────────────────────────────────────
 
 def test_expired_when_age_greater_than_one(db, monkeypatch):
@@ -349,7 +449,11 @@ def test_expired_when_age_greater_than_one(db, monkeypatch):
     rtk_calls = {"n": 0}
     monkeypatch.setattr(svc, "latest_allowed_quote_date", lambda: "2026-07-29")
     # age>1 直接预判 expired；mock _load_signal_ages 返回 age=2，避免写真实 K 线撞生产主键
-    monkeypatch.setattr(svc, "_load_signal_ages", lambda db, codes, sd_map, da: {c: 2 for c in codes})
+    monkeypatch.setattr(
+        svc,
+        "_load_signal_ages",
+        lambda db, recs, da: {str(rec.recommendation_id): 2 for rec, _ in recs},
+    )
     monkeypatch.setattr("app.services.market_data.get_market_universe", lambda: ([], _fake_snapshot()))
     monkeypatch.setattr(
         "app.services.realtime_pnl_service._fetch_rtk_quotes",
@@ -362,6 +466,78 @@ def test_expired_when_age_greater_than_one(db, monkeypatch):
     assert result["items"][0]["entry_decision"]["code"] == "expired"
     assert result["summary"]["expired_count"] == 1
     assert rtk_calls["n"] == 0  # 过期票不拉 rt_k
+
+
+def test_same_stock_recommendations_use_their_own_signal_dates(db, monkeypatch):
+    """同股不同推荐日分别计算年龄：旧信号过期，昨日信号仍可确认。"""
+    code = "999998"
+    run_id = _make_run(db, "test_batch_same_code_dates_run", trade_date="2026-07-28")
+    old_rec = _make_rec(
+        db,
+        "test_batch_same_code_old",
+        run_id,
+        code,
+        trade_date="2026-07-25",
+        bucket=_FAKE_SKILL.skill_id,
+        stop_loss=1.0,
+    )
+    recent_rec = _make_rec(
+        db,
+        "test_batch_same_code_recent",
+        run_id,
+        code,
+        trade_date="2026-07-28",
+        bucket=_FAKE_SKILL.skill_id,
+        stop_loss=1.0,
+    )
+    _add_kbar(db, code, "2026-07-28", close=10.2)
+    _add_kbar(db, code, "2026-07-29", close=10.5)
+    db.flush()
+
+    calls = _setup_decision_mocks(
+        monkeypatch,
+        stocks=[_fake_stock(code)],
+        rt_quotes={code: _rt(code)},
+    )
+    svc._cache["value"] = None
+
+    result = svc.confirm_batch_executions(db, [old_rec, recent_rec], refresh=True)
+    decisions = {
+        item["recommendation_id"]: item["entry_decision"]["code"]
+        for item in result["items"]
+    }
+
+    assert decisions[old_rec] == "expired"
+    assert decisions[recent_rec] == "buy"
+    assert calls["rtk"] == 1
+
+
+def test_same_day_signal_is_not_ready_even_after_entry_window_closes(db, monkeypatch):
+    """推荐后尚无新交易日时优先 not_ready，不能因当前已收盘改成 expired。"""
+    code = "999997"
+    run_id = _make_run(db, "test_batch_same_day_not_ready_run", trade_date="2026-07-29")
+    rec = _make_rec(
+        db,
+        "test_batch_same_day_not_ready_rec",
+        run_id,
+        code,
+        trade_date="2026-07-29",
+        bucket=_FAKE_SKILL.skill_id,
+        stop_loss=1.0,
+    )
+    db.flush()
+
+    _setup_decision_mocks(
+        monkeypatch,
+        stocks=[_fake_stock(code)],
+        rt_quotes={code: _rt(code)},
+        entry_window_closed=True,
+    )
+    svc._cache["value"] = None
+
+    result = svc.confirm_batch_executions(db, [rec], refresh=True)
+
+    assert result["items"][0]["entry_decision"]["code"] == "not_ready"
 
 
 # ── 跌破止损优先 + hard veto ─────────────────────────────────────────────
@@ -467,3 +643,87 @@ def test_cache_hit_on_refresh_false_recompute_on_refresh_true(db, monkeypatch):
     # refresh=true：重新计算
     svc.confirm_batch_executions(db, [rec], refresh=True)
     assert compute_calls["n"] == 2
+
+
+def test_cached_eligible_result_keeps_current_request_summary(db, monkeypatch):
+    """相同未结算集合可共享结果，但请求数和跳过数必须属于当前请求。"""
+    run_id = _make_run(db, "test_batch_cache_summary_run")
+    rec = _make_rec(db, "test_batch_cache_summary_rec", run_id, "999994")
+    db.flush()
+    compute_calls = {"n": 0}
+
+    def _fake_compute(_db, eligible, *, requested_count, settled_skipped):
+        compute_calls["n"] += 1
+        return {
+            "computed_at": "2026-07-29T10:00:00",
+            "data_as_of": "2026-07-29",
+            "cached": False,
+            "summary": {
+                "requested_count": requested_count,
+                "eligible_count": len(eligible),
+                "settled_skipped_count": settled_skipped,
+                "expired_count": 0,
+                "success_count": 0,
+                "error_count": 0,
+            },
+            "items": [],
+            "errors": [],
+            "pnl_items": [],
+        }
+
+    monkeypatch.setattr(svc, "_compute_batch", _fake_compute)
+    svc._cache["value"] = None
+    svc.confirm_batch_executions(db, [rec], refresh=True)
+
+    cached = svc.confirm_batch_executions(db, [rec, "rec_missing_for_cache_summary"], refresh=False)
+
+    assert compute_calls["n"] == 1
+    assert cached["cached"] is True
+    assert cached["summary"]["requested_count"] == 2
+    assert cached["summary"]["settled_skipped_count"] == 1
+
+
+def test_same_key_concurrent_requests_share_one_computation(monkeypatch):
+    """同 key 并发 miss 必须 single-flight，不能重复击穿行情上游。"""
+    rec = SimpleNamespace(recommendation_id="rec_concurrent")
+    monkeypatch.setattr(svc, "_load_eligible_recs", lambda db, ids: ([(rec, None)], 0))
+    compute_started = threading.Event()
+    release_compute = threading.Event()
+    compute_calls = {"n": 0}
+
+    def _fake_compute(_db, eligible, *, requested_count, settled_skipped):
+        compute_calls["n"] += 1
+        compute_started.set()
+        release_compute.wait(timeout=2)
+        return {
+            "computed_at": "2026-07-29T10:00:00",
+            "data_as_of": "2026-07-29",
+            "cached": False,
+            "summary": {"requested_count": 1, "eligible_count": 1, "settled_skipped_count": 0, "expired_count": 0, "success_count": 1, "error_count": 0},
+            "items": [],
+            "errors": [],
+            "pnl_items": [],
+        }
+
+    monkeypatch.setattr(svc, "_compute_batch", _fake_compute)
+    svc._cache["value"] = None
+    results: list[dict[str, Any]] = []
+    threads = [
+        threading.Thread(
+            target=lambda: results.append(
+                svc.confirm_batch_executions(object(), ["rec_concurrent"], refresh=False)
+            )
+        )
+        for _ in range(2)
+    ]
+
+    threads[0].start()
+    assert compute_started.wait(timeout=1)
+    threads[1].start()
+    time.sleep(0.05)
+    release_compute.set()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert compute_calls["n"] == 1
+    assert len(results) == 2

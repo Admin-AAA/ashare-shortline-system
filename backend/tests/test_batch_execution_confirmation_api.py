@@ -47,6 +47,7 @@ def _ok_response(ids: list[str]) -> dict[str, Any]:
             }
             for rid in ids
         ],
+        "pnl_items": [],
         "errors": [],
     }
 
@@ -215,3 +216,79 @@ def test_refresh_flag_passed_through(monkeypatch):
     )
     assert resp.status_code == 200
     assert captured["refresh"] is True
+
+
+def test_refresh_string_is_rejected_instead_of_coerced(monkeypatch):
+    """refresh 必须是 JSON boolean，字符串 "false" 不能被 Python bool() 误判为 true。"""
+    called = {"value": False}
+
+    def _fake_confirm(db, ids, *, refresh=False):
+        called["value"] = True
+        return _ok_response(ids)
+
+    monkeypatch.setattr("app.services.batch_execution_confirmation.confirm_batch_executions", _fake_confirm)
+    client = TestClient(app)
+    resp = client.post(
+        "/api/recommendations/execution-confirmations",
+        json={"recommendation_ids": ["rec_a"], "refresh": "false"},
+    )
+
+    assert resp.status_code == 422
+    assert called["value"] is False
+
+
+def test_unknown_request_fields_are_rejected(monkeypatch):
+    """请求契约禁止额外字段，避免前后端对过滤范围产生不同理解。"""
+    called = {"value": False}
+
+    def _fake_confirm(db, ids, *, refresh=False):
+        called["value"] = True
+        return _ok_response(ids)
+
+    monkeypatch.setattr("app.services.batch_execution_confirmation.confirm_batch_executions", _fake_confirm)
+    client = TestClient(app)
+    resp = client.post(
+        "/api/recommendations/execution-confirmations",
+        json={"recommendation_ids": ["rec_a"], "include_agent": True},
+    )
+
+    assert resp.status_code == 422
+    assert called["value"] is False
+
+
+def test_ids_are_trimmed_then_deduplicated(monkeypatch):
+    """ID 先去首尾空白再去重，避免同一记录以不同字符串重复计算。"""
+    captured: dict[str, Any] = {}
+
+    def _fake_confirm(db, ids, *, refresh=False):
+        captured["ids"] = list(ids)
+        return _ok_response(ids)
+
+    monkeypatch.setattr("app.services.batch_execution_confirmation.confirm_batch_executions", _fake_confirm)
+    client = TestClient(app)
+    resp = client.post(
+        "/api/recommendations/execution-confirmations",
+        json={"recommendation_ids": [" rec_a ", "rec_a", "rec_b"]},
+    )
+
+    assert resp.status_code == 200
+    assert captured["ids"] == ["rec_a", "rec_b"]
+
+
+def test_limit_is_checked_after_deduplication(monkeypatch):
+    """Spec 规定先去重再校验 50 上限，51 个相同 ID 仍是合法的一笔请求。"""
+    captured: dict[str, Any] = {}
+
+    def _fake_confirm(db, ids, *, refresh=False):
+        captured["ids"] = list(ids)
+        return _ok_response(ids)
+
+    monkeypatch.setattr("app.services.batch_execution_confirmation.confirm_batch_executions", _fake_confirm)
+    client = TestClient(app)
+    resp = client.post(
+        "/api/recommendations/execution-confirmations",
+        json={"recommendation_ids": ["rec_a"] * 51},
+    )
+
+    assert resp.status_code == 200
+    assert captured["ids"] == ["rec_a"]

@@ -46,8 +46,6 @@ export function HistoryPage() {
   const [detailError, setDetailError] = useState<Record<string, string>>({});
   // 实时盈亏：pending / provisional 推荐的实盘浮盈，纯展示不改结算。
   const [pnlMap, setPnlMap] = useState<Record<string, RealtimePnlItem>>({});
-  const [pnlLoading, setPnlLoading] = useState(false);
-  const [pnlComputedAt, setPnlComputedAt] = useState<string | null>(null);
   // 批量次日买入确认：未结算推荐的当前可执行状态，纯展示不改结算。
   const [confirmationMap, setConfirmationMap] = useState<Record<string, ExecutionConfirmationItem>>({});
   const [confirmationErrors, setConfirmationErrors] = useState<Record<string, string>>({});
@@ -124,24 +122,6 @@ export function HistoryPage() {
     resetPage();
   };
 
-  const loadRealtimePnl = useCallback(async (refresh = false) => {
-    setPnlLoading(true);
-    try {
-      const res = await api.recommendationRealtimePnl(refresh);
-      setPnlMap(Object.fromEntries(res.items.map((it) => [it.recommendation_id, it])));
-      setPnlComputedAt(res.computed_at);
-    } catch {
-      // 实时盈亏是增量展示，失败不打断页面，保留旧数据
-    } finally {
-      setPnlLoading(false);
-    }
-  }, []);
-
-  // 首次进入自动拉一次实时盈亏
-  useEffect(() => {
-    loadRealtimePnl();
-  }, [loadRealtimePnl]);
-
   // 当前页未结算推荐 ID（去重 + 排序成稳定 key，避免重渲染重复请求 Spec 9.2）
   const unsettledIds = useMemo(() => collectUnsettledIds(items), [items]);
   const unsettledIdsKey = unsettledIds.join(",");
@@ -149,15 +129,17 @@ export function HistoryPage() {
   // 批量买入确认：自动加载 + 手动刷新共用。只有存在未结算行时才请求（Spec 9.2）。
   const loadExecutionConfirmations = useCallback(
     async (ids: string[], refresh = false) => {
+      const reqSeq = ++confirmationReqRef.current;
       if (ids.length === 0) {
-        setConfirmationMap({});
-        setConfirmationErrors({});
         setConfirmationLoadingIds(new Set());
-        setConfirmationComputedAt(null);
         return;
       }
-      const reqSeq = ++confirmationReqRef.current;
       setConfirmationLoadingIds(new Set(ids));
+      setConfirmationErrors((previous) => {
+        const next = { ...previous };
+        for (const id of ids) delete next[id];
+        return next;
+      });
       try {
         const res: ExecutionConfirmationResponse = await api.confirmExecutionBatch(ids, refresh);
         // 旧请求晚到必须丢弃，不能把上一页/旧筛选结果写入当前列表（Spec 6.1.5）
@@ -166,11 +148,32 @@ export function HistoryPage() {
         for (const it of res.items) itemMap[it.recommendation_id] = it;
         const errMap: Record<string, string> = {};
         for (const e of res.errors) errMap[e.recommendation_id] = e.message;
-        setConfirmationMap(itemMap);
-        setConfirmationErrors(errMap);
+        setConfirmationMap((previous) => {
+          const next = { ...previous };
+          for (const id of ids) delete next[id];
+          return Object.assign(next, itemMap);
+        });
+        setConfirmationErrors((previous) => {
+          const next = { ...previous };
+          for (const id of ids) delete next[id];
+          return Object.assign(next, errMap);
+        });
+        setPnlMap((previous) => {
+          const next = { ...previous };
+          for (const id of ids) delete next[id];
+          return Object.assign(
+            next,
+            Object.fromEntries(res.pnl_items.map((item) => [item.recommendation_id, item])),
+          );
+        });
         setConfirmationComputedAt(res.computed_at);
-      } catch {
-        // 批量确认失败不打断历史列表，保留旧结果（Spec 6.1 / 10.3）
+      } catch (error) {
+        if (reqSeq !== confirmationReqRef.current) return;
+        const message = (error as Error).message || "实时判断失败";
+        setConfirmationErrors((previous) => ({
+          ...previous,
+          ...Object.fromEntries(ids.map((id) => [id, message])),
+        }));
       } finally {
         if (reqSeq === confirmationReqRef.current) {
           setConfirmationLoadingIds(new Set());
@@ -189,8 +192,8 @@ export function HistoryPage() {
 
   // 统一刷新实时状态：同时刷新未结算实时盈亏与买入确认（Spec 6.3）
   const refreshRealtimeState = useCallback(async () => {
-    await Promise.all([loadRealtimePnl(true), loadExecutionConfirmations(unsettledIds, true)]);
-  }, [loadRealtimePnl, loadExecutionConfirmations, unsettledIds]);
+    await loadExecutionConfirmations(unsettledIds, true);
+  }, [loadExecutionConfirmations, unsettledIds]);
 
   const handleToggle = useCallback(
     async (id: string) => {
@@ -371,15 +374,15 @@ export function HistoryPage() {
         <button
           className="btn btn--ghost"
           onClick={() => refreshRealtimeState()}
-          disabled={pnlLoading || confirmationLoadingIds.size > 0}
+          disabled={confirmationLoadingIds.size > 0}
           title={
-            pnlComputedAt || confirmationComputedAt
-              ? `未结算推荐实时盈亏与买入确认 · 上次 ${confirmationComputedAt || pnlComputedAt}`
+            confirmationComputedAt
+              ? `未结算推荐实时盈亏与买入确认 · 上次 ${confirmationComputedAt}`
               : "未结算推荐实时盈亏与买入确认"
           }
           style={{ padding: "6px 12px", fontSize: "var(--text-sm)" }}
         >
-          {pnlLoading || confirmationLoadingIds.size > 0 ? <Loader2 size={13} className="spin" /> : <Zap size={13} />} 刷新实时状态
+          {confirmationLoadingIds.size > 0 ? <Loader2 size={13} className="spin" /> : <Zap size={13} />} 刷新实时状态
         </button>
 
         {/* 总计数（轻量） */}
@@ -561,7 +564,10 @@ export function HistoryPage() {
                         <div style={stackStyle}>
                           {/* 未结算行顶部显示实时买入确认状态标签（Spec 6.2）；已结算行不显示 */}
                           {!isOutcomeSettled(o?.outcome_label) && (
-                            <span style={executionDecisionTagStyle(confirmationLoadingIds.has(it.recommendation_id) ? "loading" : executionDecisionCode(it.recommendation_id, confirmationMap, confirmationErrors))}>
+                            <span
+                              style={executionDecisionTagStyle(confirmationLoadingIds.has(it.recommendation_id) ? "loading" : executionDecisionCode(it.recommendation_id, confirmationMap, confirmationErrors))}
+                              title={executionDecisionTitle(it.recommendation_id, confirmationMap, confirmationErrors)}
+                            >
                               {renderExecutionDecision(it.recommendation_id, confirmationMap, confirmationErrors, confirmationLoadingIds)}
                             </span>
                           )}
@@ -772,15 +778,32 @@ function renderExecutionDecision(
   }
   const dec = item.entry_decision;
   const label = dec?.label || "等待实时确认";
-  const price = item.current_price != null ? `¥${item.current_price.toFixed(2)}` : "";
+  const price = item.current_price != null && item.current_price > 0 ? `¥${item.current_price.toFixed(2)}` : "";
   const reason = dec?.reason ? clip(dec.reason, 20) : "";
+  const quoteTime = item.quote_time
+    ? formatApiDateTime(item.quote_time, { hour: "2-digit", minute: "2-digit" })
+    : "";
   return (
     <>
       <span>{label}</span>
       {price && <span style={{ color: "var(--muted)", fontWeight: 400, fontFamily: "var(--font-mono)" }}>{price}</span>}
       {reason && <span style={{ color: "var(--muted)", fontWeight: 400, overflow: "hidden", textOverflow: "ellipsis" }}>{reason}</span>}
+      {quoteTime && <span style={{ color: "var(--muted)", fontWeight: 400 }}>截至 {quoteTime}</span>}
     </>
   );
+}
+
+function executionDecisionTitle(
+  id: string,
+  confirmationMap: Record<string, ExecutionConfirmationItem>,
+  confirmationErrors: Record<string, string>,
+) {
+  if (confirmationErrors[id]) return confirmationErrors[id];
+  const item = confirmationMap[id];
+  if (!item) return "等待实时确认";
+  const reason = item.entry_decision?.reason || item.message || "";
+  const quoteTime = item.quote_time ? ` · 数据截至 ${formatApiDateTime(item.quote_time)}` : "";
+  return `${item.entry_decision?.label || "实时确认"}${reason ? ` · ${reason}` : ""}${quoteTime}`;
 }
 
 // 实时盈亏单元格（未结算占位）：holding 显示浮盈%（红涨绿跌），watching 显示距买点，
