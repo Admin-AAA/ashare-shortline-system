@@ -17,5 +17,6 @@ baostock==0.9.1
 agno>=2.6.0
 openai>=1.68.0
 tickflow
+vectorbt==0.28.5
 PyMySQL>=1.1.0
 cryptography>=42.0.0
