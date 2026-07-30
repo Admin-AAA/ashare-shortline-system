@@ -10,8 +10,6 @@ const HomeScreenPage = lazy(() => import("../pages/HomeScreenPage").then((m) => 
 const HomePage = lazy(() => import("../pages/HomePage").then((m) => ({ default: m.HomePage })));
 const PoolPage = lazy(() => import("../pages/PoolPage").then((m) => ({ default: m.PoolPage })));
 const HistoryPage = lazy(() => import("../pages/HistoryPage").then((m) => ({ default: m.HistoryPage })));
-const HistoryPageDemoA = lazy(() => import("../pages/HistoryPageDemoA").then((m) => ({ default: m.HistoryPageDemoA })));
-const HistoryPageDemoB = lazy(() => import("../pages/HistoryPageDemoB").then((m) => ({ default: m.HistoryPageDemoB })));
 const RecordsPage = lazy(() => import("../pages/RecordsPage").then((m) => ({ default: m.RecordsPage })));
 const MatrixPage = lazy(() => import("../pages/MatrixPage").then((m) => ({ default: m.MatrixPage })));
 const MetricsPage = lazy(() => import("../pages/MetricsPage").then((m) => ({ default: m.MetricsPage })));
@@ -61,8 +59,6 @@ export function AppShell() {
   // /run 子路由单独走 RunDetailPage；/data-health 已并入配置页 tab，重定向过去
   const isRunDetail = pathname === "/run";
   const isStrategyDetail = pathname.startsWith("/strategies/");
-  const isHistoryDemoA = pathname === "/history-demo-a";
-  const isHistoryDemoB = pathname === "/history-demo-b";
 
   useEffect(() => {
     if (pathname === "/data-health") {
@@ -133,14 +129,6 @@ export function AppShell() {
           ) : isStrategyDetail ? (
             <Suspense fallback={<PageFallback />}>
               <StrategyDetailPage refreshSignal={refreshSignal} />
-            </Suspense>
-          ) : isHistoryDemoA ? (
-            <Suspense fallback={<PageFallback />}>
-              <HistoryPageDemoA />
-            </Suspense>
-          ) : isHistoryDemoB ? (
-            <Suspense fallback={<PageFallback />}>
-              <HistoryPageDemoB />
             </Suspense>
           ) : (
             <Suspense fallback={<PageFallback />}>

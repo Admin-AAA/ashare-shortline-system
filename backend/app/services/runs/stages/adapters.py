@@ -455,6 +455,7 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
             _drop_as_repeat_card,
         )
         from app.engine.aggregator import apply_pool_rules
+        from app.core.config import get_settings
         from app.services.feature_builder import market_regime_score
         from app.services.model_router_service import has_active_model_routes
 
@@ -503,6 +504,7 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
             return_watchlist=True,
             same_day_industry_counts=same_day_industry_counts,
             agent_available=has_active_model_routes(),
+            board_universe=get_settings().formal_board_universe,
         )
         formal_cards = list(pool_result.get("recommendations") or [])
         pipeline_updates: dict[str, Any] = {

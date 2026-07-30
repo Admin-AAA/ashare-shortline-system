@@ -6,7 +6,7 @@ import asyncio
 from prefect import flow, task
 
 
-@task(retries=2, retry_delay_seconds=[10, 60])
+@task(retries=2, retry_delay_seconds=[300, 900])
 def execute_scheduled_task(task_id: str, trigger_source: str) -> None:
     from app.services.scheduler_service import _execute_task
 
@@ -67,3 +67,58 @@ def manual_strategy_exposure_flow(task_run_id: str, payload: dict) -> None:
     from app.services.scheduler_service import _execute_manual_strategy_exposure
 
     _execute_manual_strategy_exposure(task_run_id, payload)
+
+
+@task(retries=0)
+def poll_intraday_lock() -> dict:
+    """Prefect-scheduled intraday lock polling (replaces in-process interval job)."""
+    from app.services.intraday_lock_service import poll_once
+    from app.services.tushare_client import get_pro
+    from app.db.session import SessionLocal
+    import logging
+
+    logger = logging.getLogger(__name__)
+    try:
+        db = SessionLocal()
+        try:
+            stats = poll_once(db, get_pro())
+            if stats.get("triggered") or stats.get("errors"):
+                logger.info("盘中锁利轮询: %s", stats)
+            return stats
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("盘中锁利轮询失败")
+        return {"error": True}
+
+
+@flow(name="intraday-lock-poll")
+def intraday_lock_poll_flow() -> None:
+    poll_intraday_lock()
+
+
+@task(retries=0)
+def recover_stale_runs() -> int:
+    """Prefect-scheduled stale run recovery (replaces in-process interval job)."""
+    from app.services.workbench_service import recover_interrupted_runs
+    from app.db.session import SessionLocal
+    import logging
+
+    logger = logging.getLogger(__name__)
+    try:
+        db = SessionLocal()
+        try:
+            recovered = recover_interrupted_runs(db)
+            if recovered:
+                logger.warning("周期巡检回收 %d 个失联运行", recovered)
+            return recovered
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("周期巡检回收失联运行失败")
+        return 0
+
+
+@flow(name="stale-run-recovery")
+def stale_run_recovery_flow() -> None:
+    recover_stale_runs()

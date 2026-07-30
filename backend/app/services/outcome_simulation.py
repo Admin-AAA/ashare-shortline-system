@@ -84,10 +84,10 @@ ENTRY_LOOKAHEAD_DAYS = 2
 ENTRY_SLIPPAGE_BPS = 10.0
 EXIT_SLIPPAGE_BPS = 10.0
 SUCCESS_RETURN_PCT = 3.0
-DEFAULT_STOP_LOSS_PCT = -5.5  # 回测：止损 -5.5% 盈亏比 1.25→1.64，胜率 54.3%→57.0%
-DEFAULT_TAKE_PROFIT_PCT = 5.0  # 回测：horizon_close 65/92 峰值不达 6.5%，TP=5.0% 模拟 WR 57.2%→71.7%（+14.5pp, 22 saved）
+DEFAULT_STOP_LOSS_PCT = -4.5  # 止损 -4.5%，20cm-only 诚实配对回测 n=33 avg_net +0.203pp PF +0.177（正常回调中提前下车省亏损优于硬扛到-5.5%）
+DEFAULT_TAKE_PROFIT_PCT = 6.0  # 回测：horizon_close 65/92 峰值不达 6.5%，TP=5.0% 模拟 WR 57.2%→71.7%（+14.5pp, 22 saved）
                                  # avg peak 4.27%，33/65 峰值在 3-5%，TP 下修捕获更多止盈窗口
-MAX_STOP_LOSS_PCT = -5.7  # 止损最宽 -5.7%（与 DEFAULT -5.5% 几乎重合，仅留 0.2pp 缓冲）
+MAX_STOP_LOSS_PCT = -4.7  # 止损最宽 -4.7%（与 DEFAULT -4.5% 留 0.2pp 缓冲）
                                  # 第164轮 D 项修复：原 -9% 在实践中只对"高开入场"场景生效
                                  # （正常入场止损都在 -5.7% 以内），且让该场景亏损从 -5.7% 放大到 -9%
                                  # 反事实验证：184 formal 样本仅长裕集团(entry=85>>rec_price 79.32 高开
@@ -112,7 +112,7 @@ MAX_ENTRY_GAP_PCT = 10.0       # 跳空高开 > 10% 则放弃入场（历史数�
 TRAILING_STOP_ACTIVATE_PCT = 2.0   # high 达 entry +2% 激活（原 3.0；2.0 让更多交易在亏损前以小赚离场）
 TRAILING_STOP_CALLBACK_PCT = 0.8   # 自峰值 high 回撤 0.8% 触发退出（原 1.5；更紧锁利，loss 3.67→3.13）
 TRAILING_STOP_MIN_LOCK_PCT = 0.3   # 利润地板最低锁定 +0.3%，覆盖滑点和交易成本后仍保留小幅净利润
-TRAILING_STOP_PROFIT_LOCK_RATIO = 0.90  # 生产动态退出锁住前一日最高浮盈的 90%（self-improve si-trailing-lock-090 发布：profit_floor 锁利比例 0.50→0.90，让利润地板更贴近峰值，在回撤时锁住更多浮盈；clean≥72 配对回测 n=78 四核心全改善 WR44.9→47.4/avg_net-0.646→-0.40/PF0.76→0.84/max_loss 持平，覆盖零损失）
+TRAILING_STOP_PROFIT_LOCK_RATIO = 0.30  # 生产动态退出锁住前一日最高浮盈的 30%（0.50→0.30，20cm-only 诚实配对回测 n=33 avg_net +0.113pp PF +0.057，给足波动空间让更多交易穿越正常回调抵达止盈段）
 
 OUTCOME_PENDING = "pending"
 OUTCOME_SUCCESS = "success"

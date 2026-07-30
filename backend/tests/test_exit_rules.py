@@ -98,9 +98,10 @@ def test_horizon_truncation_changes_outcome():
     r2 = simulate_outcome_with_horizon(rec, bars, dates, horizon_days=2)
     r5 = simulate_outcome_with_horizon(rec, bars, dates, horizon_days=5)
     assert r2 is not None and r5 is not None
-    # 持仓上限截断：2 天持仓窗口=2，5 天=5
+    # holding_days 记录真实退出日：horizon=2 持有 2 天；horizon=5 虽窗口更长，
+    # 但第 3 个持仓日已触发止损，因此不能把退出后的两根 K 线计入持仓期。
     assert r2.holding_days == 2
-    assert r5.holding_days == 5
+    assert r5.holding_days == 3
     # 同一笔推荐：紧持仓上限(2天)小赚成功，松持仓上限(5天)被回吐打回净亏失败
     assert r2.outcome_label == "success"
     assert r5.outcome_label == "failed"

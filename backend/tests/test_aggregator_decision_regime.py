@@ -1,8 +1,8 @@
 """L-013 回归：决策时 regime 标签必须持久化进 score_line_meta。
 
 背景：下游 regime 否决 / χ² 分桶 / 最差桶归因 一律应以「决策时实际施加的 regime」
-为准，禁止读 feature_snapshot_json.market_regime 或 run.market_snapshot_json
-（feature_builder 可能按 trade_date 回溯重算，导致标签与决策时不一致）。
+为准。旧记录允许读取逐笔 market_context_json（它保存了送入 apply_pool_rules 的同一份
+snapshot）；禁止读可能被事后重建的 feature_snapshot_json.market_regime。
 
 本测试锁定 aggregator 在构建 score_line_meta 时显式落：
   - decision_regime      = 聚合时实际使用的 _snapshot_regime

@@ -1083,25 +1083,65 @@ def recommendation_readiness_from_diagnosis(
     *,
     expected_trade_date: str | None = None,
 ) -> dict[str, Any]:
-    """把全面诊断投影为盘后本地推荐的硬闸门。"""
+    """把全面诊断投影为盘后本地推荐的硬闸门。
+
+    ``blockers`` 保留面向用户的中文摘要；``blocker_details`` 提供稳定的结构化
+    契约，供调度层区分可恢复的当日辅助数据滞后与不可重试的行情/历史缺口。
+    """
     reference = _fmt_date(expected_trade_date or diagnosis.get("reference_trade_date"))
     tables = diagnosis.get("tables") or {}
     recent = (diagnosis.get("recent_trade_day_coverage") or {}).get("tables") or {}
     blockers: list[str] = []
+    blocker_details: list[dict[str, Any]] = []
     warnings: list[str] = []
 
+    def add_blocker(code: str, message: str, **details: Any) -> None:
+        blockers.append(message)
+        blocker_details.append({"code": code, "message": message, **details})
+
     if not reference:
-        blockers.append("无法确定最新已收盘交易日")
+        add_blocker("missing_reference_trade_date", "无法确定最新已收盘交易日")
     for key in _RECOMMENDATION_REQUIRED_TABLES:
         info = tables.get(key) or {}
+        label = str(info.get("label") or key)
         max_date = _fmt_date(info.get("max_date"))
         if info.get("error"):
-            blockers.append(f"{info.get('label') or key}诊断失败")
+            add_blocker(
+                "table_diagnosis_failed",
+                f"{label}诊断失败",
+                table=key,
+                expected_trade_date=reference,
+            )
         elif reference and max_date != reference:
-            blockers.append(f"{info.get('label') or key}未覆盖 {reference}（最新 {max_date or '无'}）")
+            add_blocker(
+                "table_not_current",
+                f"{label}未覆盖 {reference}（最新 {max_date or '无'}）",
+                table=key,
+                expected_trade_date=reference,
+                latest_trade_date=max_date or None,
+            )
+
         coverage = recent.get(key) or {}
-        if int(coverage.get("effective_gap_count") or 0) > 0:
-            blockers.append(f"{coverage.get('label') or key}近期仍有缺口")
+        if coverage.get("error"):
+            add_blocker(
+                "recent_coverage_diagnosis_failed",
+                f"{coverage.get('label') or label}近期覆盖诊断失败",
+                table=key,
+                expected_trade_date=reference,
+            )
+            continue
+        gap_count = _coverage_gap_count(coverage, reference)
+        if gap_count > 0:
+            missing_dates, incomplete_dates = _effective_coverage_dates(coverage, reference)
+            add_blocker(
+                "recent_coverage_gap",
+                f"{coverage.get('label') or label}近期仍有缺口",
+                table=key,
+                expected_trade_date=reference,
+                missing_dates=sorted(set(missing_dates)),
+                incomplete_dates=sorted(set(incomplete_dates)),
+                gap_count=gap_count,
+            )
 
     for issue in diagnosis.get("issues") or []:
         if issue.get("severity") in {"medium", "low"}:
@@ -1112,6 +1152,7 @@ def recommendation_readiness_from_diagnosis(
         "can_run_local_recommendation": not blockers,
         "reference_trade_date": reference,
         "blockers": blockers,
+        "blocker_details": blocker_details,
         "warnings": warnings,
     }
 

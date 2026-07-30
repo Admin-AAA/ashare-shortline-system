@@ -211,7 +211,7 @@ def main() -> None:
         print(f"   - +4 门槛在现行代码中确实存在且生效(regime_penalty=4.0), 但它是'在动态 base effective_score_line 上 +4',")
         print(f"     不是绝对 76; 故 final<76 的结构性强势票是否过线取决于运行时的市场条件(动态 base)。")
         print(f"   - 因此回测 champion(n=69, 含这 6 笔)忠实反映生产实际行为; 结构性强势硬否决是'超越生产当前行为'的前向候选,")
-        print(f"     而非重复计数 +4 门槛。否决假设仍需 OOS 证据(struct-strong 子样本 n>=30, >=2 OOS 窗口)。")
+        print("     而非重复计数 +4 门槛。样本数与 OOS 窗口照常报告，但不形成发布门槛。")
         print(f"  realness_bug(生产写路径未施加+4门槛, 需修): {realness_bug}")
 
         # 落盘 JSON (可跨轮追踪)

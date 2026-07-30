@@ -1,10 +1,11 @@
 """Regression tests for stale (orphaned) recommendation-run recovery.
 
 These cover the logic exercised by the periodic watchdog
-``_periodic_recover_stale_runs`` registered in ``scheduler_service.start_scheduler``,
-which calls ``recover_interrupted_runs`` on a timer so that runs whose background
-subprocess died (e.g. on a backend restart) are marked ``interrupted`` even when no
-client hits the runs list endpoint.
+``recover_stale_runs`` Prefect flow (replaces the old in-process
+``_periodic_recover_stale_runs``), which calls ``recover_interrupted_runs``
+on a timer so that runs whose background process died (e.g. on a backend
+restart) are marked ``interrupted`` even when no client hits the runs list
+endpoint.
 """
 from __future__ import annotations
 
