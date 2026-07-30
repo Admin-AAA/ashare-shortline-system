@@ -375,7 +375,7 @@ def _simulate_outcome(
         "executed_return": executed_return,
         "weighted_return": weighted_return,
         "position_size": position_size,
-        "holding_days": len(holding_bars),
+        "holding_days": exit_bar_count,
         "entry_slippage_bps": ENTRY_SLIPPAGE_BPS,
         "exit_slippage_bps": EXIT_SLIPPAGE_BPS,
         "stop_loss_price": round(stop_loss_price, 2),

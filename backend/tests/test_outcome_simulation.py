@@ -770,6 +770,7 @@ def test_simulate_outcome_take_profit_min_return_truncated():
     # exit 日 07-10 low=29.5 vs entry≈30 → 约 -1.7%，远高于 -10%
     assert sim["min_return"] > -5.0, f"止盈后窗口未截断，min_return 虚构回撤 got {sim['min_return']}"
     assert sim["executed_return"] > 0  # take_profit 正收益
+    assert sim["holding_days"] == 2  # 入场日 + 止盈退出日，不得写成整个 4 日 horizon
 
 
 # --- 动态退出状态机（_resolve_exit_causal）MVP 测试 ---
