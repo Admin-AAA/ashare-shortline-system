@@ -306,20 +306,15 @@ def test_existing_schema_baseline_applies_owned_p0_research_schema_forward_only(
         assert "evaluation_scope" in run_columns
 
 
-def test_init_db_uses_create_all_only_for_sqlite(monkeypatch) -> None:
+def test_init_db_always_uses_alembic_runtime(monkeypatch) -> None:
     import importlib
 
     init_db_module = importlib.import_module("app.db.init_db")
     calls: list[str] = []
-    monkeypatch.setattr(init_db_module.Base.metadata, "create_all", lambda **_: calls.append("create_all"))
-    monkeypatch.setattr(init_db_module, "run_migrations", lambda _: calls.append("migrate"))
-
-    monkeypatch.setattr(init_db_module, "_is_sqlite", True)
-    init_db_module.init_db()
-    monkeypatch.setattr(init_db_module, "_is_sqlite", False)
+    monkeypatch.setattr(init_db_module, "upgrade_database", lambda _: calls.append("upgrade"))
     init_db_module.init_db()
 
-    assert calls == ["create_all", "migrate", "migrate"]
+    assert calls == ["upgrade"]
 
 
 def test_health_distinguishes_migration_error_from_database_unavailable(monkeypatch) -> None:
@@ -358,14 +353,12 @@ def test_init_db_bootstraps_an_in_memory_sqlite_schema(monkeypatch) -> None:
     init_db_module = importlib.import_module("app.db.init_db")
     sqlite_engine = create_engine("sqlite:///:memory:")
     monkeypatch.setattr(init_db_module, "engine", sqlite_engine)
-    monkeypatch.setattr(init_db_module, "_is_sqlite", True)
 
     init_db_module.init_db()
 
     with sqlite_engine.connect() as connection:
-        assert connection.scalar(text("SELECT COUNT(*) FROM schema_migrations WHERE version = 'V000'")) == 1
-        assert connection.scalar(text("SELECT COUNT(*) FROM schema_migrations WHERE version = 'V001_p0_research'")) == 1
-        assert connection.scalar(text("SELECT COUNT(*) FROM schema_migrations WHERE version = 'V002_workbench_run_lifecycle'")) == 1
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0001_demo_baseline"
+        assert inspect(connection).has_table("recommendation_runs")
 
 
 def test_runner_configures_bounded_mysql_wait_and_query_limits() -> None:
