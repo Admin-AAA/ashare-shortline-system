@@ -22,6 +22,7 @@ from typing import Any
 
 import pandas as pd
 
+from app.adapters.market_source.dataframe_contracts import MarketFrameContractError, validate_market_frame
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -171,6 +172,11 @@ def fetch_realtime_quotes(codes: list[str], *, use_cache: bool = True) -> dict[s
             continue
 
     merged = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    try:
+        validate_market_frame("realtime_quote", merged, provider="tushare-realtime")
+    except MarketFrameContractError:
+        logger.exception("realtime_quote contract violation")
+        raise
     rows = _normalize_rows(merged)
 
     if rows:

@@ -50,3 +50,44 @@ def test_empty_provider_result_keeps_its_declared_schema() -> None:
     frame = pd.DataFrame(columns=["ts_code", "trade_date", "open", "high", "low", "close", "vol", "amount"])
 
     assert validate_market_frame("daily", frame) is frame
+
+
+@pytest.mark.parametrize(
+    ("kind", "required"),
+    [
+        ("daily_basic", {"ts_code", "trade_date", "turnover_rate"}),
+        ("stk_factor_pro", {"ts_code", "trade_date"}),
+        ("cyq_perf", {"ts_code", "trade_date", "cost_50pct"}),
+        ("moneyflow", {"ts_code", "trade_date"}),
+        ("stk_limit", {"ts_code", "trade_date", "up_limit", "down_limit"}),
+        ("index_daily", {"ts_code", "trade_date", "close"}),
+        ("realtime_quote", {"TS_CODE", "PRICE"}),
+        ("minute_kbar", {"ts_code", "trade_time", "close"}),
+        ("holder_number", {"ts_code", "end_date"}),
+        ("pledge_stat", {"ts_code", "end_date"}),
+        ("institutional_survey", {"ts_code", "surv_date"}),
+        ("block_trade", {"ts_code", "trade_date", "price"}),
+    ],
+)
+def test_empty_frames_are_normalized_to_declared_columns(kind: str, required: set[str]) -> None:
+    frame = validate_market_frame(kind, pd.DataFrame())
+
+    assert required <= set(frame.columns)
+
+
+def test_contract_error_identifies_provider_kind_and_column() -> None:
+    frame = pd.DataFrame([{"ts_code": "bad", "trade_date": "2026-07-30"}])
+
+    with pytest.raises(MarketFrameContractError) as caught:
+        validate_market_frame("moneyflow", frame, provider="auxiliary-tushare")
+
+    assert caught.value.provider == "auxiliary-tushare"
+    assert caught.value.kind == "moneyflow"
+    assert {"ts_code", "trade_date"} <= set(caught.value.failure_columns)
+
+
+def test_price_contract_rejects_negative_values() -> None:
+    frame = pd.DataFrame([{"ts_code": "000001.SZ", "trade_date": "20260730", "price": -1}])
+
+    with pytest.raises(MarketFrameContractError, match="block_trade"):
+        validate_market_frame("block_trade", frame)

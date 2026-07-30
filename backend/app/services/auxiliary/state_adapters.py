@@ -19,6 +19,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 
+from app.adapters.market_source.dataframe_contracts import validate_market_frame
 from app.models.tables import (
     AuctionData,
     BrokerRecommend,
@@ -370,6 +371,7 @@ class TushareStateProvider:
         frame = self._client.moneyflow(trade_date=target)
         if frame is None or frame.empty:
             return ()
+        validate_market_frame("moneyflow", frame, provider="tushare-auxiliary")
         records: list[dict[str, Any]] = []
         for _, latest in frame.iterrows():
             code = str(latest.get("ts_code") or "").split(".")[0]
@@ -493,6 +495,7 @@ class TushareStateProvider:
                 break
         if frame is None:
             return ()
+        validate_market_frame("pledge_stat", frame, provider="tushare-auxiliary")
         wanted = set(request.requested_codes)
         rows: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -603,6 +606,7 @@ class TushareStateProvider:
         frame = self._client.stk_holdernumber(end_date=target)
         if frame is None or frame.empty:
             return ()
+        validate_market_frame("holder_number", frame, provider="tushare-auxiliary")
         iso_cutoff = request.trade_date.isoformat()
         wanted = set(request.requested_codes)
         rows: list[dict[str, Any]] = []

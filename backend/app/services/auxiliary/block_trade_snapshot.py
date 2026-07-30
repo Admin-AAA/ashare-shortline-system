@@ -15,6 +15,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from sqlalchemy.engine import Connection
 
+from app.adapters.market_source.dataframe_contracts import validate_market_frame
 from app.services.tushare_client import (
     TushareRawEnvelope,
     TushareRawEnvelopeError,
@@ -252,6 +253,7 @@ class DataFrameBlockTradeProviderClient:
                 "block_trade_provider_empty_response",
                 "block_trade provider returned no response",
             )
+        validate_market_frame("block_trade", frame, provider="tushare-auxiliary")
         try:
             fields = tuple(str(column) for column in frame.columns)
             # Full mappings are captured here, before any legacy scalar/date/string

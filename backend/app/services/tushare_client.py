@@ -672,6 +672,7 @@ def fetch_daily_kbars(
     try:
         basic = pro.daily_basic(ts_code=tsc, start_date=sd, end_date=ed)
         if basic is not None and not basic.empty:
+            validate_market_frame("daily_basic", basic)
             for _, r in basic.iterrows():
                 basic_map[str(r["trade_date"])] = dict(r)
     except Exception:
@@ -682,6 +683,7 @@ def fetch_daily_kbars(
     try:
         chips = pro.cyq_perf(ts_code=tsc, start_date=sd, end_date=ed)
         if chips is not None and not chips.empty:
+            validate_market_frame("cyq_perf", chips)
             for _, r in chips.iterrows():
                 chip_map[str(r["trade_date"])] = dict(r)
     except Exception:
@@ -692,6 +694,7 @@ def fetch_daily_kbars(
     try:
         fp = pro.stk_factor_pro(ts_code=tsc, start_date=sd, end_date=ed)
         if fp is not None and not fp.empty:
+            validate_market_frame("stk_factor_pro", fp)
             for _, r in fp.iterrows():
                 factor_pro_map[str(r["trade_date"])] = dict(r)
     except Exception:
@@ -822,6 +825,7 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
             fields="ts_code,trade_date,turnover_rate,pe_ttm,total_mv",
         )
         if basic is not None and not basic.empty:
+            validate_market_frame("daily_basic", basic)
             for _, row in basic.iterrows():
                 basic_map[str(row.get("ts_code") or "")] = dict(row)
     except Exception:
@@ -850,6 +854,7 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
             fields="ts_code,trade_date,cost_15pct,cost_50pct,cost_85pct,weight_avg,winner_rate",
         )
         if chips is not None and not chips.empty:
+            validate_market_frame("cyq_perf", chips)
             for _, row in chips.iterrows():
                 chip_map[str(row.get("ts_code") or "")] = dict(row)
     except Exception:
@@ -967,6 +972,7 @@ def fetch_moneyflow(code: str, days: int = 10, trade_date: str | None = None) ->
         df = pro.moneyflow(ts_code=tsc, limit=days)
     if df is None or df.empty:
         return None
+    validate_market_frame("moneyflow", df)
 
     df = df.sort_values("trade_date", ascending=False)
     if target:
@@ -1263,6 +1269,7 @@ def fetch_stk_limit(code: str, days: int = 5, trade_date: str | None = None) -> 
         return []
     if df is None or df.empty:
         return []
+    validate_market_frame("stk_limit", df)
     if target:
         df = df[df["trade_date"].astype(str) <= target]
     result = []
@@ -1372,6 +1379,7 @@ def fetch_index_daily(
         return []
     if df is None or df.empty:
         return []
+    validate_market_frame("index_daily", df)
     result: list[dict[str, Any]] = []
     for _, row in df.iterrows():
         trade_date_raw = str(row.get("trade_date") or "")
@@ -1441,6 +1449,7 @@ def fetch_factor_pro(code: str, days: int = 90, trade_date: str | None = None) -
         return []
     if df is None or df.empty:
         return []
+    validate_market_frame("stk_factor_pro", df)
     df = df.sort_values("trade_date")
     if days and len(df) > days:
         df = df.tail(days)
@@ -1816,8 +1825,10 @@ def _fetch_tushare_minute_kbars(
         )
         return []
 
+    combined = pd.concat(frames, ignore_index=True)
+    validate_market_frame("minute_kbar", combined)
     rows_by_time: dict[str, dict[str, Any]] = {}
-    for _, row in pd.concat(frames, ignore_index=True).iterrows():
+    for _, row in combined.iterrows():
         trade_time = str(row.get("trade_time") or row.get("datetime") or row.get("date") or "").strip()
         trade_date = _normalize_trade_date(trade_time)
         if not trade_time or not trade_date:
