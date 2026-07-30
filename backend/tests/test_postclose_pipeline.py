@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from app.db.session import SessionLocal
 from app.models.tables import RecommendationRun, ScheduledTask
@@ -233,7 +234,16 @@ def test_postclose_readiness_blocks_when_required_table_misses_closed_session():
             "index_daily": {"label": "指数日线", "max_date": "2026-07-16"},
             "limit_up_board": {"label": "涨停板", "max_date": "2026-07-15"},
         },
-        "recent_trade_day_coverage": {"tables": {}},
+        "recent_trade_day_coverage": {
+            "tables": {
+                "limit_up_board": {
+                    "label": "涨停板",
+                    "effective_missing_dates": ["2026-07-16"],
+                    "effective_incomplete_dates": [],
+                    "effective_gap_count": 1,
+                }
+            }
+        },
         "issues": [],
     }
 
@@ -242,6 +252,9 @@ def test_postclose_readiness_blocks_when_required_table_misses_closed_session():
     assert readiness["can_run_local_recommendation"] is False
     assert readiness["status"] == "blocked"
     assert any("涨停板" in blocker for blocker in readiness["blockers"])
+    detail = next(item for item in readiness["blocker_details"] if item.get("table") == "limit_up_board")
+    assert detail["code"] == "table_not_current"
+    assert detail["expected_trade_date"] == "2026-07-16"
 
 
 def test_auxiliary_gap_refresh_commits_successful_write(monkeypatch):
@@ -270,3 +283,140 @@ def test_auxiliary_gap_refresh_commits_successful_write(monkeypatch):
 
     assert count == 100
     assert fake_db.committed is True
+
+
+def _recoverable_readiness(trade_date: str = "2026-07-16") -> dict:
+    current_message = f"涨停板未覆盖 {trade_date}（最新 2026-07-15）"
+    gap_message = "涨停板近期仍有缺口"
+    return {
+        "can_run_local_recommendation": False,
+        "status": "blocked",
+        "blockers": [current_message, gap_message],
+        "blocker_details": [
+            {
+                "code": "table_not_current",
+                "message": current_message,
+                "table": "limit_up_board",
+                "expected_trade_date": trade_date,
+                "latest_trade_date": "2026-07-15",
+            },
+            {
+                "code": "recent_coverage_gap",
+                "message": gap_message,
+                "table": "limit_up_board",
+                "expected_trade_date": trade_date,
+                "missing_dates": [trade_date],
+                "incomplete_dates": [],
+                "gap_count": 1,
+            },
+        ],
+    }
+
+
+def _patch_postclose_success_path(monkeypatch, *, health):
+    monkeypatch.setattr(scheduler_service, "_latest_allowed_bar_date", lambda: "2026-07-16")
+    monkeypatch.setattr(
+        scheduler_service,
+        "_run_data_sync",
+        lambda _db, _payload: {"status": "completed"},
+    )
+    monkeypatch.setattr(scheduler_service, "_diagnose_postclose_readiness", health)
+    monkeypatch.setattr(scheduler_service, "_run_outcome_label", lambda _db, _payload: {"labeled": 0})
+
+    async def fake_recommendation(_db, _payload):
+        return {"related_run_id": "run_postclose", "queued": True}
+
+    async def fake_wait(_db, _run_id, **_kwargs):
+        return {"status": "completed", "recommended_count": 2}
+
+    monkeypatch.setattr(scheduler_service, "_run_recommendation", fake_recommendation)
+    monkeypatch.setattr(scheduler_service, "_wait_for_recommendation_run", fake_wait)
+
+
+def test_postclose_refreshes_recoverable_aux_gap_then_continues(monkeypatch):
+    diagnoses = [_recoverable_readiness(), {"can_run_local_recommendation": True, "status": "ready"}]
+    _patch_postclose_success_path(monkeypatch, health=lambda _db, _td: diagnoses.pop(0))
+    refreshes = []
+    monkeypatch.setattr(
+        scheduler_service,
+        "_refresh_recoverable_postclose_aux",
+        lambda _db, *, trade_date, tables: refreshes.append((trade_date, tables))
+        or {"limit_up_board": {"status": "completed", "record_count": 10}},
+    )
+
+    result = asyncio.run(scheduler_service._run_postclose_pipeline(object(), {}))
+
+    assert result["status"] == "completed"
+    assert result["recommended_count"] == 2
+    assert refreshes == [("2026-07-16", ["limit_up_board"])]
+
+
+def test_postclose_propagates_persistent_aux_gap_for_prefect_retry(monkeypatch):
+    _patch_postclose_success_path(monkeypatch, health=lambda _db, _td: _recoverable_readiness())
+    refreshes = []
+    monkeypatch.setattr(
+        scheduler_service,
+        "_refresh_recoverable_postclose_aux",
+        lambda _db, *, trade_date, tables: refreshes.append((trade_date, tables)) or {},
+    )
+
+    with pytest.raises(scheduler_service.RetryablePostcloseReadinessError) as captured:
+        asyncio.run(scheduler_service._run_postclose_pipeline(object(), {}))
+
+    assert captured.value.result["retryable"] is True
+    assert captured.value.result["retry_reason"] == "postclose_aux_upstream_lag"
+    assert refreshes == [("2026-07-16", ["limit_up_board"])]
+
+
+def test_postclose_mixed_blockers_fail_without_aux_retry(monkeypatch):
+    recoverable = _recoverable_readiness()
+    hard_message = "日K线未覆盖 2026-07-16（最新 2026-07-15）"
+    recoverable["blockers"].append(hard_message)
+    recoverable["blocker_details"].append(
+        {
+            "code": "table_not_current",
+            "message": hard_message,
+            "table": "daily_kbar",
+            "expected_trade_date": "2026-07-16",
+            "latest_trade_date": "2026-07-15",
+        }
+    )
+    _patch_postclose_success_path(monkeypatch, health=lambda _db, _td: recoverable)
+
+    def unexpected_refresh(*_args, **_kwargs):
+        raise AssertionError("混合硬阻断不得刷新辅助表")
+
+    monkeypatch.setattr(scheduler_service, "_refresh_recoverable_postclose_aux", unexpected_refresh)
+
+    result = asyncio.run(scheduler_service._run_postclose_pipeline(object(), {}))
+
+    assert result["status"] == "failed"
+    assert result["retryable"] is False
+    assert result["blocker_classification"]["recoverable_tables"] == ["limit_up_board"]
+    assert result["blocker_classification"]["hard_blockers"][0]["table"] == "daily_kbar"
+
+
+def test_postclose_refresh_error_is_not_mislabeled_as_upstream_lag(monkeypatch):
+    _patch_postclose_success_path(monkeypatch, health=lambda _db, _td: _recoverable_readiness())
+
+    def broken_refresh(*_args, **_kwargs):
+        raise RuntimeError("database connection lost")
+
+    monkeypatch.setattr(scheduler_service, "_refresh_recoverable_postclose_aux", broken_refresh)
+
+    with pytest.raises(RuntimeError, match="database connection lost"):
+        asyncio.run(scheduler_service._run_postclose_pipeline(object(), {}))
+
+
+def test_postclose_stale_aux_table_without_single_day_gap_evidence_is_hard_blocker():
+    readiness = _recoverable_readiness()
+    readiness["blockers"] = readiness["blockers"][:1]
+    readiness["blocker_details"] = readiness["blocker_details"][:1]
+
+    classification = scheduler_service._classify_postclose_blockers(
+        readiness,
+        trade_date="2026-07-16",
+    )
+
+    assert classification["recoverable_tables"] == []
+    assert classification["hard_blockers"][0]["code"] == "table_not_current"
