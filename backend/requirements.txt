@@ -11,6 +11,7 @@ python-multipart==0.0.28
 httpx==0.28.1
 tushare==1.4.29
 pandas==2.2.3
+pandera[pandas]==0.32.1
 pytest==9.0.3
 baostock==0.9.1
 agno>=2.6.0

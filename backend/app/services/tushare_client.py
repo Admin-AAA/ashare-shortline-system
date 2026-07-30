@@ -26,6 +26,7 @@ from typing import Any
 import pandas as pd
 from sqlalchemy import select
 
+from app.adapters.market_source.dataframe_contracts import MarketFrameContractError, validate_market_frame
 from app.core.config import get_settings
 from app.engine.trading_calendar import normalize_trade_date as _normalize_trade_date
 from app.services.tushare_transport import (
@@ -647,6 +648,7 @@ def fetch_daily_kbars(
     daily = pro.daily(ts_code=tsc, start_date=sd, end_date=ed)
     if daily is None or daily.empty:
         return []
+    validate_market_frame("daily", daily)
     daily = daily.sort_values("trade_date")
     if start_date is None:
         daily = daily.tail(days)
@@ -657,8 +659,11 @@ def fetch_daily_kbars(
     try:
         factor = pro.stk_factor(ts_code=tsc, start_date=sd, end_date=ed)
         if factor is not None and not factor.empty:
+            validate_market_frame("stk_factor", factor)
             for _, r in factor.iterrows():
                 factor_map[str(r["trade_date"])] = dict(r)
+    except MarketFrameContractError:
+        raise
     except Exception:
         pass
 
@@ -808,6 +813,7 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
     daily = pro.daily(trade_date=target)
     if daily is None or daily.empty:
         return []
+    validate_market_frame("daily", daily)
 
     basic_map: dict[str, dict[str, Any]] = {}
     try:
@@ -825,8 +831,11 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
     try:
         factor = pro.stk_factor(trade_date=target)
         if factor is not None and not factor.empty:
+            validate_market_frame("stk_factor", factor)
             for _, row in factor.iterrows():
                 factor_map[str(row.get("ts_code") or "")] = dict(row)
+    except MarketFrameContractError:
+        raise
     except Exception:
         pass
 
