@@ -112,7 +112,7 @@ MAX_ENTRY_GAP_PCT = 10.0       # 跳空高开 > 10% 则放弃入场（历史数�
 TRAILING_STOP_ACTIVATE_PCT = 2.0   # high 达 entry +2% 激活（原 3.0；2.0 让更多交易在亏损前以小赚离场）
 TRAILING_STOP_CALLBACK_PCT = 0.8   # 自峰值 high 回撤 0.8% 触发退出（原 1.5；更紧锁利，loss 3.67→3.13）
 TRAILING_STOP_MIN_LOCK_PCT = 0.3   # 利润地板最低锁定 +0.3%，覆盖滑点和交易成本后仍保留小幅净利润
-TRAILING_STOP_PROFIT_LOCK_RATIO = 0.50  # 生产动态退出锁住前一日最高浮盈的 50%，其余空间留给正常波动
+TRAILING_STOP_PROFIT_LOCK_RATIO = 0.30  # 生产动态退出锁住前一日最高浮盈的 30%（0.50→0.30，20cm-only 诚实配对回测 n=33 avg_net +0.113pp PF +0.057，给足波动空间让更多交易穿越正常回调抵达止盈段）
 
 OUTCOME_PENDING = "pending"
 OUTCOME_SUCCESS = "success"
