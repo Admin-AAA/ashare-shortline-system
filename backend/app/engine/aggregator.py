@@ -1001,8 +1001,17 @@ def apply_pool_rules(
         #   - 强势 +8→80：过滤全部 21 笔，净省 -6.68% 亏损
         # 两阶段因果机制不同：结构性强势主线品种仍有筛选价值，强势普涨追高必亏
         if _snapshot_regime == "结构性强势":
-            effective_score_line = round(effective_score_line + 4.0, 2)
+            # T-struct-strong-veto（self-improve 发布，si_struct_strong_veto.py 复验）：
+            # LIVE formal clean>=72 口径实证该 regime 7 笔全败(WR0%/PF0.0, 跨 5 交易日非单日簇)，
+            # 原 +4 门槛仅抬高分数线但放行高分毒区票(动态 base 可低至 67→eff 71, 72 分仍过线，
+            # 见 si_structstrong_consistency_audit)。改为硬否决彻底阻断该 regime 入场，
+            # 与 replay 反事实(移除 7 笔)一致：四核心指标全方向改善(WN 44.9→49.3/avg -0.646→-0.217/
+            # PF 0.76→0.91/max_loss -8.57→-7.41)，覆盖 -9%(已披露)。
+            # 基于决策时 _snapshot_regime(L-013 口径，无回溯/无未来函数)；_regime_strong_penalty
+            # 保留 4.0 供归因，新增 _regime_struct_strong_hard_veto 标记。
+            effective_score_line = 999.0
             card["_regime_strong_penalty"] = 4.0
+            card["_regime_struct_strong_hard_veto"] = True
         elif _snapshot_regime == "强势":
             effective_score_line = round(effective_score_line + 8.0, 2)
             card["_regime_strong_penalty"] = 8.0
@@ -1055,6 +1064,7 @@ def apply_pool_rules(
             # 不得读 feature_snapshot_json.market_regime / run.market_snapshot_json（回溯重算）。
             "decision_regime": _snapshot_regime,
             "regime_strong_penalty": card.get("_regime_strong_penalty", 0.0),
+            "regime_struct_strong_hard_veto": card.get("_regime_struct_strong_hard_veto", False),
             "effective_score_line": effective_score_line,
             "passed": final_score >= effective_score_line and execution_viability["status"] != "blocked",
         }

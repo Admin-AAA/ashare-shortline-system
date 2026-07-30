@@ -27,17 +27,17 @@ def _card(code: str, final_score: float = 90.0) -> dict:
 
 
 @pytest.mark.parametrize(
-    "regime,expected_penalty",
+    "regime,expected_penalty,expected_vetoed",
     [
-        ("结构性强势", 4.0),
-        ("强势", 8.0),
-        ("震荡", 0.0),
-        ("弱势", 0.0),
-        ("", 0.0),
+        ("结构性强势", 4.0, True),   # T-struct-strong-veto：硬否决，不进推荐
+        ("强势", 8.0, False),
+        ("震荡", 0.0, False),
+        ("弱势", 0.0, False),
+        ("", 0.0, False),
     ],
 )
 def test_score_line_meta_persists_decision_regime_and_strong_penalty(
-    regime, expected_penalty
+    regime, expected_penalty, expected_vetoed
 ):
     snapshot = {
         "sample_count": 100,
@@ -50,8 +50,11 @@ def test_score_line_meta_persists_decision_regime_and_strong_penalty(
     result = apply_pool_rules(
         cards, output_count=6, score_line=72, market_snapshot=snapshot
     )
-    assert result, "至少应有卡片产出以校验 score_line_meta"
-    for card in result:
+    if expected_vetoed:
+        assert not result, "结构性强势必须硬否决，高分票也不得进推荐"
+    else:
+        assert result, "至少应有卡片产出以校验 score_line_meta"
+    for card in cards:
         meta = card["score_line_meta"]
         assert "decision_regime" in meta, "decision_regime 必须持久化进 score_line_meta"
         assert (
@@ -61,6 +64,9 @@ def test_score_line_meta_persists_decision_regime_and_strong_penalty(
         assert (
             meta["regime_strong_penalty"] == expected_penalty
         ), "regime_strong_penalty 必须与 regime 分支一致"
+        assert (
+            meta.get("regime_struct_strong_hard_veto", False) is expected_vetoed
+        ), "结构性强势必须携带硬否决标记"
 
 
 def test_decision_regime_matches_breadth_regime_source():
