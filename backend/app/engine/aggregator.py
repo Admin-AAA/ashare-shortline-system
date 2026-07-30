@@ -952,7 +952,16 @@ def apply_pool_rules(
             for card in ordered
             if _is_20cm_board(str(card.get("code") or ""))
         ]
-    # 代码去重：同一只股票只保留最高分的推荐
+        # 20cm 策略过滤：daily-stock-analysis-skill 在 20cm 表现显著弱于其他策略
+        # （clean≥72 n=19 WR=42% avg=-1.17% vs 其他 n=14 WR=71% avg=+5.84%），
+        # 其"多头顺势等回踩"逻辑在高波动 20cm 股票上失效。在 20cm universe 中
+        # 过滤掉该策略的推荐，但保留其 10cm 推荐不受影响。
+        EXCLUDED_20CM_BUCKETS = frozenset({"daily-stock-analysis-skill"})
+        ordered = [
+            card
+            for card in ordered
+            if str(card.get("bucket") or "") not in EXCLUDED_20CM_BUCKETS
+        ]
     seen_codes: set[str] = set()
     deduped: list[dict[str, Any]] = []
     for card in ordered:
