@@ -978,6 +978,12 @@ def apply_pool_rules(
             or ((market_snapshot or {}).get("breadth") or {}).get("regime")
             or ""
         )
+        # L-013：决策时 regime 标签必须持久化，禁止读回溯 market_regime 做归因。
+        # _snapshot_regime 即聚合时实际使用的决策时 regime，此处显式落进 score_line_meta，
+        # 经 persistence 写入 feature_snapshot_json，供下游 regime 否决/χ² 分桶/最差桶归因
+        # 以决策时口径读取，不受任何回溯重标影响。regime_strong_penalty 默认 0.0，
+        # 仅在结构性强势(+4)/强势(+8) 分支被覆盖（见下方 if/elif）。
+        card["_regime_strong_penalty"] = 0.0
         # 涨停股豁免 support_ma5 交叉惩罚：涨停=+10% 必然贴近/高于 MA5，
         # 这是动能副产品而非"回落均线追弱"信号。惩罚误伤 limit-up-reseal-relay
         # 等涨停动能策略（1186 outcomes 中 0 笔，根因：92 分候选被 82+8+6=96 拒绝）。
@@ -995,8 +1001,17 @@ def apply_pool_rules(
         #   - 强势 +8→80：过滤全部 21 笔，净省 -6.68% 亏损
         # 两阶段因果机制不同：结构性强势主线品种仍有筛选价值，强势普涨追高必亏
         if _snapshot_regime == "结构性强势":
-            effective_score_line = round(effective_score_line + 4.0, 2)
+            # T-struct-strong-veto（self-improve 发布，si_struct_strong_veto.py 复验）：
+            # LIVE formal clean>=72 口径实证该 regime 7 笔全败(WR0%/PF0.0, 跨 5 交易日非单日簇)，
+            # 原 +4 门槛仅抬高分数线但放行高分毒区票(动态 base 可低至 67→eff 71, 72 分仍过线，
+            # 见 si_structstrong_consistency_audit)。改为硬否决彻底阻断该 regime 入场，
+            # 与 replay 反事实(移除 7 笔)一致：四核心指标全方向改善(WN 44.9→49.3/avg -0.646→-0.217/
+            # PF 0.76→0.91/max_loss -8.57→-7.41)，覆盖 -9%(已披露)。
+            # 基于决策时 _snapshot_regime(L-013 口径，无回溯/无未来函数)；_regime_strong_penalty
+            # 保留 4.0 供归因，新增 _regime_struct_strong_hard_veto 标记。
+            effective_score_line = 999.0
             card["_regime_strong_penalty"] = 4.0
+            card["_regime_struct_strong_hard_veto"] = True
         elif _snapshot_regime == "强势":
             effective_score_line = round(effective_score_line + 8.0, 2)
             card["_regime_strong_penalty"] = 8.0
@@ -1045,6 +1060,11 @@ def apply_pool_rules(
             "regime_oscillation_low_pos_penalty": card.get("_regime_oscillation_low_pos_penalty", 0.0),
             "regime_weak_low_chg20_penalty": card.get("_regime_weak_low_chg20_penalty", 0.0),
             "panic_day_penalty": card.get("_panic_day_penalty", 0.0),
+            # L-013：决策时 regime 标签（honest label）——下游归因一律以此为准，
+            # 不得读 feature_snapshot_json.market_regime / run.market_snapshot_json（回溯重算）。
+            "decision_regime": _snapshot_regime,
+            "regime_strong_penalty": card.get("_regime_strong_penalty", 0.0),
+            "regime_struct_strong_hard_veto": card.get("_regime_struct_strong_hard_veto", False),
             "effective_score_line": effective_score_line,
             "passed": final_score >= effective_score_line and execution_viability["status"] != "blocked",
         }

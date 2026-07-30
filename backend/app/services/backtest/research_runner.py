@@ -86,6 +86,7 @@ from app.services.backtest.research_repository import (
     ResearchRecordNotFound,
     ResearchRepositoryError,
 )
+from app.services.backtest.vectorbt_validation import cross_validate_trades
 from app.services.factors.registry import bootstrap_default_factor_registry
 from app.services.runs.contracts import (
     CanonicalExecutionVersionBuilder,
@@ -1009,6 +1010,7 @@ class ResearchBacktestRunner:
         self._repository.persist_attributions(backtest_id, attribution_rows)
         metrics = compute_metrics(persisted_trades)
         equity_curve = build_equity_curve(persisted_trades)
+        cross_validation = cross_validate_trades(tuple(persisted_trades), request.execution_policy)
         return {
             "schema_version": 1,
             "status": BacktestStatus.COMPLETED.value,
@@ -1026,6 +1028,7 @@ class ResearchBacktestRunner:
             "metrics": metrics.canonical_payload(),
             "equity_curve": [point.canonical_payload() for point in equity_curve],
             "failure_attribution_count": len(attribution_rows),
+            "cross_validation": cross_validation.as_dict(),
             "artifact_refs": {
                 signal_date: [ref.canonical_payload() for ref in bundle.snapshot.artifacts_for(signal_date)]
                 for signal_date in signal_dates

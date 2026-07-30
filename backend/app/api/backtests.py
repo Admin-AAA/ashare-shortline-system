@@ -19,7 +19,8 @@ from importlib import import_module
 from typing import Annotated, Any, Literal, Protocol, TypeAlias, runtime_checkable
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import Depends, HTTPException, Path, Query
+from app.api.contracts import ContractRouter as APIRouter
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 

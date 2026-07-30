@@ -11,9 +11,8 @@ from sqlalchemy.dialects.mysql import (
 )
 from sqlalchemy.ext.compiler import compiles
 
-from app.db.migrations import run_migrations
-from app.db.session import Base, engine, _is_sqlite
-from app.models import tables  # noqa: F401 - registers ORM metadata for SQLite/unit-test databases
+from app.db.alembic_runtime import upgrade_database
+from app.db.session import engine
 
 
 @compiles(LONGTEXT, "sqlite")
@@ -35,7 +34,5 @@ def _compile_mysql_blob_for_sqlite(type_, compiler, **kwargs) -> str:
 
 
 def init_db() -> None:
-    """Initialize only temporary SQLite schemas with ORM metadata; migrate all schemas."""
-    if _is_sqlite:
-        Base.metadata.create_all(bind=engine)
-    run_migrations(engine)
+    """Bring the configured database to the Alembic head revision."""
+    upgrade_database(engine)

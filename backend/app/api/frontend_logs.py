@@ -1,7 +1,7 @@
 import logging
 from typing import Any
 
-from fastapi import APIRouter
+from app.api.contracts import ContractRouter as APIRouter
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)

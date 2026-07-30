@@ -1224,6 +1224,7 @@ class BacktestResult(CanonicalValue):
     metrics: BacktestMetrics | None = None
     failure_attributions: tuple[FailureAttribution, ...] = ()
     error_code: BacktestErrorCode | None = None
+    cross_validation: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -1254,6 +1255,8 @@ class BacktestResult(CanonicalValue):
         if self.error_code is not None:
             code = self.error_code if isinstance(self.error_code, BacktestErrorCode) else BacktestErrorCode(str(self.error_code))
             object.__setattr__(self, "error_code", code)
+        if self.cross_validation is not None:
+            object.__setattr__(self, "cross_validation", _freeze_mapping(self.cross_validation))
         object.__setattr__(self, "status", status)
         object.__setattr__(self, "trades", trades)
         object.__setattr__(self, "equity_curve", points)

@@ -158,7 +158,7 @@ from app.services.runs.request_persistence import (
 from app.services.runs.coordinator import LegacyWorkbenchRunCoordinator
 from app.services.runs.repository import CreateQueuedRun
 from app.services.runs.sqlalchemy_repository import SQLAlchemyRunRepository
-from app.services.runs.queue import BackgroundRunDispatcher, spawn_run_subprocess
+from app.orchestration import trigger_recommendation
 from app.services.runs.skill_gate import (
     build_skill_rule_gate,
     finalize_skill_gate_audit,
@@ -194,15 +194,7 @@ _progress_commit_state_lock = threading.Lock()
 _progress_commit_state: dict[str, dict[str, Any]] = {}
 _outcome_backfill_lock = threading.Lock()
 _outcome_backfill_ts = 0.0
-# Kept as a module-level injection point for callers/tests; the dispatcher resolves
-# it at spawn time so a test can safely suppress child-process creation.
-_spawn_run_subprocess = spawn_run_subprocess
-_run_dispatcher = BackgroundRunDispatcher(
-    session_factory=SessionLocal,
-    mark_running=lambda db, run_id: _mark_run_dispatched(db, run_id),
-    mark_failed=lambda db, run_id, exc: _mark_run_failed(db, run_id, exc),
-    spawn=lambda run_id: _spawn_run_subprocess(run_id),
-)
+_trigger_recommendation = trigger_recommendation
 
 
 def _canonical_workbench_request(params: dict[str, Any], payload: dict[str, Any]) -> RunRequest:
@@ -317,7 +309,7 @@ def _mark_run_dispatched(db: Session, run_id: str) -> bool:
         total=0,
         message="后台任务已接管，开始准备运行",
         status=None if managed else "running",
-        # ``BackgroundRunDispatcher`` commits this lifecycle/progress pair before
+        # The Prefect task commits this lifecycle/progress pair before
         # spawning the child.  Keep both facts in its one explicit transaction.
         commit=False,
     )
@@ -483,7 +475,7 @@ def enqueue_workbench_run(
     db.commit()
     invalidate_bootstrap_cache()
     if dispatch:
-        _run_dispatcher.enqueue(run_id)
+        _trigger_recommendation(run_id)
     return {
         "run": _serialize_run_summary(db, run),
         "recommendations": [],
@@ -508,7 +500,7 @@ def dispatch_workbench_run(db: Session, run_id: str) -> None:
         raise RuntimeError(f"Run {normalized_run_id} 当前状态不可派发: {record.status.value}")
     # The caller owns the preceding CAS commit.  No request payload is allowed to
     # cross this boundary; the dispatcher carries only run_id.
-    _run_dispatcher.enqueue(normalized_run_id)
+    _trigger_recommendation(normalized_run_id)
 
 
 def list_runs(db: Session, limit: int = 100, *, run_mode: str | None = None) -> list[dict[str, Any]]:
@@ -1118,7 +1110,13 @@ def recover_interrupted_runs(db: Session, run_ids: list[str] | None = None) -> i
         logger.warning("marked %d stale recommendation runs as interrupted on startup", recovered)
     if redispatched:
         for run_id in redispatched:
-            _run_dispatcher.enqueue(run_id)
+            try:
+                _trigger_recommendation(run_id)
+            except Exception:
+                # Recovery runs during API startup too. A temporarily unavailable
+                # Prefect server/deployment must not prevent the application from
+                # starting; the next watchdog pass will retry the queued run.
+                logger.exception("failed to redispatch queued run %s through Prefect", run_id)
         logger.info("redispatched %d stale queued runs (heartbeat timeout while waiting for worker)", len(redispatched))
     return recovered
 

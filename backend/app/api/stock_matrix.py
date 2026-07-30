@@ -2,7 +2,8 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import Depends, HTTPException, Query
+from app.api.contracts import ContractRouter as APIRouter
 from sqlalchemy import select, func, desc
 from sqlalchemy.orm import Session
 

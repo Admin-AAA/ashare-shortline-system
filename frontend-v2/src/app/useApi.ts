@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { queryKeys } from "../api/queryKeys";
 
 /**
- * 通用数据获取 hook，合并 3+ 页面的重复 useEffect 模式：
- * AbortController + setLoading/setError + api.X().then.catch.finally
+ * 兼容现有页面返回形状的 TanStack Query adapter。
  *
  * 用法：
  *   const { data, loading, error, refetch } = useApi(
@@ -16,37 +16,15 @@ export function useApi<T>(
   fetcher: (signal: AbortSignal) => Promise<T>,
   deps: React.DependencyList = [],
 ): { data: T | null; loading: boolean; error: string; refetch: () => void } {
-  const [data, setData] = useState<T | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [refreshSignal, setRefreshSignal] = useState(0);
-  const fetcherRef = useRef(fetcher);
-  fetcherRef.current = fetcher;
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setLoading(true);
-    setError("");
-    fetcherRef
-      .current(controller.signal)
-      .then((result) => {
-        if (!controller.signal.aborted) setData(result);
-      })
-      .catch((err: unknown) => {
-        if (!controller.signal.aborted) {
-          const name = (err as { name?: string })?.name;
-          if (name !== "AbortError") {
-            setError((err as { message?: string })?.message || "加载失败");
-          }
-        }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [...deps, refreshSignal]);
-
-  const refetch = () => setRefreshSignal((n) => n + 1);
-  return { data, loading, error, refetch };
+  const resource = fetcher.toString().replace(/\s+/g, " ");
+  const query = useQuery({
+    queryKey: queryKeys.legacy(resource, deps),
+    queryFn: ({ signal }) => fetcher(signal),
+  });
+  return {
+    data: query.data ?? null,
+    loading: query.isLoading,
+    error: query.error?.message ?? "",
+    refetch: () => { void query.refetch(); },
+  };
 }

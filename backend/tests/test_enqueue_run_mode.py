@@ -31,7 +31,7 @@ def test_enqueue_persists_each_explicit_run_mode_in_all_projections(monkeypatch,
         assert json.loads(persisted.request_json)["run_mode"] == run_mode
         dispatched.append(run_id)
 
-    monkeypatch.setattr(workbench_service._run_dispatcher, "enqueue", capture_handoff)
+    monkeypatch.setattr(workbench_service, "_trigger_recommendation", capture_handoff)
     payload = {
         "single_skill_id": "chip-single-peak-breakout",
         "run_mode": run_mode,
@@ -59,7 +59,7 @@ def test_enqueue_persists_each_explicit_run_mode_in_all_projections(monkeypatch,
 
 def test_enqueue_defaults_to_formal_only_in_run_request_parser(monkeypatch, db):
     """An omitted mode receives the parser default and stays consistent everywhere."""
-    monkeypatch.setattr(workbench_service._run_dispatcher, "enqueue", lambda _run_id: None)
+    monkeypatch.setattr(workbench_service, "_trigger_recommendation", lambda _run_id: None)
     response = enqueue_workbench_run(
         db,
         {

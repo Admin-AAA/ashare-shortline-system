@@ -351,7 +351,11 @@ def test_start_preset_matrix_now_returns_running_task_without_blocking(monkeypat
             "payload": {"matrix_batch_name": "测试手工矩阵"},
         },
     )
-    monkeypatch.setattr(scheduler_service.threading, "Thread", FakeThread)
+    orchestration_runs = []
+    monkeypatch.setattr(
+        "app.orchestration.trigger_manual_matrix",
+        lambda task_run_id, payload: orchestration_runs.append((task_run_id, payload)),
+    )
 
     result = scheduler_service.start_preset_matrix_now({"matrix_batch_name": "测试手工矩阵"})
 
@@ -359,7 +363,8 @@ def test_start_preset_matrix_now_returns_running_task_without_blocking(monkeypat
     assert result["task_run"]["status"] == "running"
     assert result["task_run"]["task_type"] == scheduler_service.TASK_TYPE_PRESET_MATRIX_RUN
     assert result["task_run"]["payload"]["matrix_batch_name"] == "测试手工矩阵"
-    assert len(started_threads) == 1
+    assert orchestration_runs[0][0] == task_run.task_run_id
+    assert orchestration_runs[0][1]["matrix_batch_name"] == "测试手工矩阵"
 
     scheduler_service._mark_done_memory(scheduler_service.MANUAL_PRESET_MATRIX_TASK_ID)
 
@@ -454,14 +459,19 @@ def test_start_data_health_remediation_now_returns_running_task_without_blocking
             "payload": {"post_diagnosis": True},
         },
     )
-    monkeypatch.setattr(scheduler_service.threading, "Thread", FakeThread)
+    orchestration_runs = []
+    monkeypatch.setattr(
+        "app.orchestration.trigger_manual_remediation",
+        lambda task_run_id, payload: orchestration_runs.append((task_run_id, payload)),
+    )
 
     result = scheduler_service.start_data_health_remediation_now({"post_diagnosis": True})
 
     assert result["started"] is True
     assert result["task_run"]["status"] == "running"
     assert result["task_run"]["task_id"] == scheduler_service.MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID
-    assert len(started_threads) == 1
+    assert orchestration_runs[0][0] == task_run.task_run_id
+    assert orchestration_runs[0][1]["post_diagnosis"] is True
 
     scheduler_service._mark_done_memory(scheduler_service.MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID)
 

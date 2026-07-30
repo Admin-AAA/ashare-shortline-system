@@ -6,7 +6,8 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import Depends
+from app.api.contracts import ContractRouter as APIRouter
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db

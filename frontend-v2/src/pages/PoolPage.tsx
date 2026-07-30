@@ -21,6 +21,7 @@ import { StockTicker } from "../components/StockTicker";
 import { LlmStanceBadge } from "../components/LlmStanceBadge";
 import { MultiStrategyBadge } from "../components/MultiStrategyBadge";
 import { useUrlRoute } from "../app/useUrlRoute";
+import { useRunsQuery } from "../api/queries/useRunQueries";
 import { useApi } from "../app/useApi";
 import { queryParam } from "../app/nav";
 import { describePoolRun, formatPoolRunTime, poolRunDate, summarizePoolRuns, type PoolRunKind } from "./poolRunView";
@@ -44,7 +45,7 @@ export function PoolPage() {
   const [expandedRuns, setExpandedRuns] = useState<Set<string>>(new Set());
   const [experimentsOpen, setExperimentsOpen] = useState(false);
   const initializedDate = useRef("");
-  const { data: runs, loading, error, refetch } = useApi<RunSummary[]>(() => api.runs(100), []);
+  const { data: runs, isLoading: loading, error, refetch } = useRunsQuery(100);
 
   const allRuns = runs ?? [];
   const linkedRun = runId ? allRuns.find((run) => run.run_id === runId) : undefined;
@@ -76,8 +77,6 @@ export function PoolPage() {
   const dateIndex = availableDates.indexOf(effectiveDate);
   const olderDate = dateIndex >= 0 ? availableDates[dateIndex + 1] : undefined;
   const newerDate = dateIndex > 0 ? availableDates[dateIndex - 1] : undefined;
-  const hasActiveRun = allRuns.some((run) => describePoolRun(run).kind === "active");
-
   useEffect(() => {
     if (!linkedRun) return;
     setSelectedDate(poolRunDate(linkedRun));
@@ -90,12 +89,6 @@ export function PoolPage() {
     setExpandedRuns(new Set(defaults));
     initializedDate.current = effectiveDate;
   }, [runs, dayRuns, effectiveDate]);
-
-  useEffect(() => {
-    if (!hasActiveRun) return;
-    const timer = window.setInterval(refetch, 300_000);
-    return () => window.clearInterval(timer);
-  }, [hasActiveRun, refetch]);
 
   const chooseDate = (date: string) => {
     initializedDate.current = "";
@@ -123,7 +116,7 @@ export function PoolPage() {
       </div>
     );
   }
-  if (error) return <ErrorPage title="运行记录加载失败" message={error} onRetry={refetch} />;
+  if (error) return <ErrorPage title="运行记录加载失败" message={error.message} onRetry={() => void refetch()} />;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>

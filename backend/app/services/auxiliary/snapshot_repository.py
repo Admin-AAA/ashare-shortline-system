@@ -1,9 +1,8 @@
 """Transaction-bound SQLAlchemy repository for immutable auxiliary snapshots.
 
-The repository never opens, commits, or rolls back a transaction.  A caller supplies
-one SQLAlchemy ``Connection`` already bound to the desired transaction.  These Core
-table declarations are DML metadata only; production schema creation remains owned by
-V024 and no ``create_all`` path is provided.
+The repository never opens, commits, or rolls back a transaction. A caller supplies
+one SQLAlchemy ``Connection`` already bound to the desired transaction. These Core
+table declarations share the canonical metadata used by Alembic.
 """
 from __future__ import annotations
 
@@ -20,7 +19,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Integer,
     LargeBinary,
-    MetaData,
+    Index,
     PrimaryKeyConstraint,
     String,
     Table,
@@ -33,11 +32,7 @@ from sqlalchemy import (
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 
-from app.db.migrations.versions.v024_auxiliary_partition_snapshots import (
-    BATCH_TABLE,
-    POINTER_TABLE,
-    ROW_TABLE,
-)
+from app.db.session import Base
 from app.services.auxiliary.provider_results import (
     ResponseCompletenessEvidence,
     SnapshotPublishBlockedError,
@@ -70,6 +65,9 @@ class SnapshotAuditOnlyAccessError(SnapshotPublishBlockedError):
 
 
 _AUDIT_ONLY_DATASETS = frozenset({"institutional_survey"})
+BATCH_TABLE = "auxiliary_snapshot_batches"
+ROW_TABLE = "auxiliary_snapshot_rows"
+POINTER_TABLE = "auxiliary_active_partition_snapshots"
 
 
 def _require_pointer_capability(dataset: str) -> None:
@@ -100,7 +98,7 @@ class ImmutablePartitionSnapshotRepositoryPort(Protocol):
     ) -> ImmutablePartitionSnapshot | None: ...
 
 
-snapshot_metadata = MetaData()
+snapshot_metadata = Base.metadata
 
 snapshot_batches = Table(
     BATCH_TABLE,
@@ -136,6 +134,15 @@ snapshot_batches = Table(
     ),
     CheckConstraint("row_count >= 0", name="ck_aux_snapshot_batch_row_count"),
 )
+Index(
+    "idx_aux_snapshot_batches_partition_time",
+    snapshot_batches.c.dataset,
+    snapshot_batches.c.provider,
+    snapshot_batches.c.endpoint,
+    snapshot_batches.c.partition_hash,
+    snapshot_batches.c.fetched_at,
+)
+Index("idx_aux_snapshot_batches_status", snapshot_batches.c.status, snapshot_batches.c.created_at)
 
 snapshot_rows = Table(
     ROW_TABLE,
@@ -154,6 +161,7 @@ snapshot_rows = Table(
     ),
     CheckConstraint("row_ordinal >= 0", name="ck_aux_snapshot_row_ordinal"),
 )
+Index("idx_aux_snapshot_rows_payload_hash", snapshot_rows.c.payload_hash)
 
 active_partition_snapshots = Table(
     POINTER_TABLE,

@@ -654,15 +654,15 @@ class TestE2ERecommendationFlow:
         result = label_pending_outcomes(db, horizon_days=5)
         outcome = db.get(RecommendationOutcome, rec_id)
 
-        # entry fallback: 买点未命中时回退到次日市价入场
+        # 因果策略口径不允许买点未命中后回退到次日市价追入。
         # labeled 计数放宽为 >=1：与生产共享 MySQL，库内现存 pending/provisional 会被一并捞起。
         assert result["labeled"] >= 1
         assert outcome is not None
-        assert outcome.entry_triggered is True
-        assert outcome.exit_reason in ("take_profit_hit", "trailing_stop_gap", "trailing_stop_hit")
-        assert outcome.outcome_label == "success"
-        assert outcome.outcome_label_legacy == "success"
-        assert outcome.executed_return > 0
+        assert outcome.entry_triggered is False
+        assert outcome.exit_reason == "not_triggered"
+        assert outcome.outcome_label == "missed"
+        assert outcome.outcome_label_legacy == "missed"
+        assert outcome.executed_return == 0
 
     def test_stats_consistency(self, db, monkeypatch):
         """17.6: Stats overview returns correct counts."""
@@ -1383,8 +1383,8 @@ class TestE2ERecommendationFlow:
 
         queued: list[str] = []
         monkeypatch.setattr(
-            workbench_service._run_dispatcher,
-            "enqueue",
+            workbench_service,
+            "_trigger_recommendation",
             lambda run_id: queued.append(run_id),
         )
 

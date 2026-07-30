@@ -1090,18 +1090,6 @@ _BACKTEST_LONGTEXT = LONGTEXT().with_variant(Text(), "sqlite")
 _BACKTEST_LONGBLOB = LONGBLOB().with_variant(LargeBinary(), "sqlite")
 
 
-class SchemaMigration(Base):
-    """前向 schema migration 的不可变执行账本。"""
-
-    __tablename__ = "schema_migrations"
-
-    version: Mapped[str] = mapped_column(String(64), primary_key=True)
-    description: Mapped[str] = mapped_column(String(255))
-    checksum: Mapped[str] = mapped_column(CHAR(64))
-    applied_at: Mapped[datetime] = mapped_column(_BACKTEST_DATETIME, default=datetime.utcnow)
-    execution_ms: Mapped[int] = mapped_column(Integer)
-
-
 class BacktestDataSnapshot(Base):
     """一次研究回测实际读取数据分区的不可变清单。"""
 
