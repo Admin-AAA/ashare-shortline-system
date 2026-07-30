@@ -978,6 +978,12 @@ def apply_pool_rules(
             or ((market_snapshot or {}).get("breadth") or {}).get("regime")
             or ""
         )
+        # L-013：决策时 regime 标签必须持久化，禁止读回溯 market_regime 做归因。
+        # _snapshot_regime 即聚合时实际使用的决策时 regime，此处显式落进 score_line_meta，
+        # 经 persistence 写入 feature_snapshot_json，供下游 regime 否决/χ² 分桶/最差桶归因
+        # 以决策时口径读取，不受任何回溯重标影响。regime_strong_penalty 默认 0.0，
+        # 仅在结构性强势(+4)/强势(+8) 分支被覆盖（见下方 if/elif）。
+        card["_regime_strong_penalty"] = 0.0
         # 涨停股豁免 support_ma5 交叉惩罚：涨停=+10% 必然贴近/高于 MA5，
         # 这是动能副产品而非"回落均线追弱"信号。惩罚误伤 limit-up-reseal-relay
         # 等涨停动能策略（1186 outcomes 中 0 笔，根因：92 分候选被 82+8+6=96 拒绝）。
@@ -1045,6 +1051,10 @@ def apply_pool_rules(
             "regime_oscillation_low_pos_penalty": card.get("_regime_oscillation_low_pos_penalty", 0.0),
             "regime_weak_low_chg20_penalty": card.get("_regime_weak_low_chg20_penalty", 0.0),
             "panic_day_penalty": card.get("_panic_day_penalty", 0.0),
+            # L-013：决策时 regime 标签（honest label）——下游归因一律以此为准，
+            # 不得读 feature_snapshot_json.market_regime / run.market_snapshot_json（回溯重算）。
+            "decision_regime": _snapshot_regime,
+            "regime_strong_penalty": card.get("_regime_strong_penalty", 0.0),
             "effective_score_line": effective_score_line,
             "passed": final_score >= effective_score_line and execution_viability["status"] != "blocked",
         }
