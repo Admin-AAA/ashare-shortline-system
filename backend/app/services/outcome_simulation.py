@@ -84,10 +84,10 @@ ENTRY_LOOKAHEAD_DAYS = 2
 ENTRY_SLIPPAGE_BPS = 10.0
 EXIT_SLIPPAGE_BPS = 10.0
 SUCCESS_RETURN_PCT = 3.0
-DEFAULT_STOP_LOSS_PCT = -5.5  # 回测：止损 -5.5% 盈亏比 1.25→1.64，胜率 54.3%→57.0%
+DEFAULT_STOP_LOSS_PCT = -4.5  # 止损 -4.5%，20cm-only 诚实配对回测 n=33 avg_net +0.203pp PF +0.177（正常回调中提前下车省亏损优于硬扛到-5.5%）
 DEFAULT_TAKE_PROFIT_PCT = 5.0  # 回测：horizon_close 65/92 峰值不达 6.5%，TP=5.0% 模拟 WR 57.2%→71.7%（+14.5pp, 22 saved）
                                  # avg peak 4.27%，33/65 峰值在 3-5%，TP 下修捕获更多止盈窗口
-MAX_STOP_LOSS_PCT = -5.7  # 止损最宽 -5.7%（与 DEFAULT -5.5% 几乎重合，仅留 0.2pp 缓冲）
+MAX_STOP_LOSS_PCT = -4.7  # 止损最宽 -4.7%（与 DEFAULT -4.5% 留 0.2pp 缓冲）
                                  # 第164轮 D 项修复：原 -9% 在实践中只对"高开入场"场景生效
                                  # （正常入场止损都在 -5.7% 以内），且让该场景亏损从 -5.7% 放大到 -9%
                                  # 反事实验证：184 formal 样本仅长裕集团(entry=85>>rec_price 79.32 高开
