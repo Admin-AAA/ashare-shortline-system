@@ -1826,22 +1826,30 @@ def _extract_clean_dedup_rows(
     return list(clean_best.values())
 
 
+# D 项低 score_line 污染 + clean 口径净成本查询。与 _fetch_dedup_live_formal 一致，
+# 必须套用 OFFICIAL_SAMPLE_SQL 全套口径（live_forward / completed / data_as_of<=td /
+# source_snapshot_id / 生成日==交易日）。漏掉口径会把 historical_replay 等非前瞻
+# formal outcome 计入 clean≥72 总体，虚高 champion 基线（2026-07-30 实测
+# 漏口径 → clean≥72 WR 由真值 ~48.6% 被抬到 58.6%）。
+LIVE_FORMAL_CLEAN_POLLUTION_SQL = f"""
+    SELECT r.code, r.trade_date, o.outcome_label, o.executed_return, u.score_line,
+           JSON_EXTRACT(r.feature_snapshot_json,
+                        '$.score_line_meta.dynamic_soft_floor_applied') AS soft
+    FROM recommendation_outcomes o
+    JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+    JOIN recommendation_runs u ON r.run_id = u.run_id
+    WHERE o.outcome_label IN ('success', 'failed')
+      AND {OFFICIAL_SAMPLE_SQL}
+"""
+
+
 def _print_low_score_line_pollution(db, last10: set | None = None) -> None:
     """D 项：低 score_line formal run 污染诊断 + clean 口径净成本（接 DB）。
 
     除既有「污染笔数/WR 差」外，额外打印 clean≥floor 全量/近10日净盈亏比——
     让运营者一眼区分「修污染能救多少」vs「clean 口径仍差（regime/策略真问题）」。
     """
-    rows = db.execute(text("""
-        SELECT r.code, r.trade_date, o.outcome_label, o.executed_return, u.score_line,
-               JSON_EXTRACT(r.feature_snapshot_json,
-                            '$.score_line_meta.dynamic_soft_floor_applied') AS soft
-        FROM recommendation_outcomes o
-        JOIN recommendations r ON r.recommendation_id = o.recommendation_id
-        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
-        WHERE o.outcome_label IN ('success', 'failed')
-          AND r.recommendation_id LIKE 'rec_%'
-    """)).fetchall()
+    rows = db.execute(text(LIVE_FORMAL_CLEAN_POLLUTION_SQL)).fetchall()
     result = _low_score_line_pollution(list(rows))
     if result is not None:
         print(
