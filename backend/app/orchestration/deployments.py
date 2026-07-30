@@ -18,6 +18,7 @@ from app.orchestration.flows import (
 
 
 SCHEDULED_DEPLOYMENT_PREFIX = "scheduled-task"
+WORK_POOL_NAME = "ashare-local"
 RECOMMENDATION_DEPLOYMENT_NAME = "recommendation-run/default"
 MANUAL_MATRIX_DEPLOYMENT_NAME = "manual-preset-matrix/default"
 MANUAL_REMEDIATION_DEPLOYMENT_NAME = "manual-data-health-remediation/default"
@@ -35,14 +36,15 @@ def schedule_all_enabled_tasks() -> DeploymentSyncResult:
         name = f"{SCHEDULED_DEPLOYMENT_PREFIX}/{item.task_id}"
         deployment = scheduled_task_flow.to_deployment(
             name=item.task_id,
+            work_pool_name=WORK_POOL_NAME,
             schedules=[Cron(item.cron_expression, timezone="Asia/Shanghai")],
             parameters={"task_id": item.task_id, "trigger_source": "schedule"},
             tags=["ashare", "scheduled-task", item.task_type],
         )
         deployment.apply()
         names.append(name)
-    recommendation_flow.to_deployment(name="default", tags=["ashare", "recommendation"]).apply()
-    manual_preset_matrix_flow.to_deployment(name="default", tags=["ashare", "matrix"]).apply()
-    manual_data_health_remediation_flow.to_deployment(name="default", tags=["ashare", "remediation"]).apply()
-    manual_strategy_exposure_flow.to_deployment(name="default", tags=["ashare", "exposure"]).apply()
+    recommendation_flow.to_deployment(name="default", work_pool_name=WORK_POOL_NAME, tags=["ashare", "recommendation"]).apply()
+    manual_preset_matrix_flow.to_deployment(name="default", work_pool_name=WORK_POOL_NAME, tags=["ashare", "matrix"]).apply()
+    manual_data_health_remediation_flow.to_deployment(name="default", work_pool_name=WORK_POOL_NAME, tags=["ashare", "remediation"]).apply()
+    manual_strategy_exposure_flow.to_deployment(name="default", work_pool_name=WORK_POOL_NAME, tags=["ashare", "exposure"]).apply()
     return DeploymentSyncResult(len(tasks), tuple(sorted(names)))

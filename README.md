@@ -158,12 +158,23 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+alembic upgrade head
 uvicorn app.main:app --reload --port 8765
 ```
 
+调度与后台执行由 Prefect 独立进程承载，另开两个终端启动本地 server 和 process worker：
+
+```bash
+cd backend
+.venv/bin/python -m scripts.run_prefect_server
+.venv/bin/python -m scripts.run_prefect_worker
+```
+
+worker 启动时会创建 `ashare-local` work pool、同步数据库中已启用的定时任务及全部手动 deployment。FastAPI 只负责提交 flow run，不再内置调度器。
+
 ### 本地后端常驻服务（launchd）
 
-本机通过用户级 LaunchAgent 常驻运行后端，确保 FastAPI 启动时内置的 APScheduler 能按数据库中的 `ScheduledTask` 自动触发盘后任务。当前已安装：
+本机通过用户级 LaunchAgent 常驻运行 FastAPI。定时任务需要同时常驻 Prefect server 与 worker；FastAPI 本身不执行调度。当前已安装：
 
 ```bash
 ~/Library/LaunchAgents/com.wangao.ashare-backend.plist

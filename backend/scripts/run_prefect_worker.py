@@ -8,6 +8,10 @@ from app.orchestration import schedule_all_enabled_tasks
 
 
 def main() -> None:
+    subprocess.run(
+        [sys.executable, "-m", "prefect", "work-pool", "create", "--type", "process", "ashare-local"],
+        check=False,
+    )
     schedule_all_enabled_tasks()
     raise SystemExit(
         subprocess.call([sys.executable, "-m", "prefect", "worker", "start", "--pool", "ashare-local"])
