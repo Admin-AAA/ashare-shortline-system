@@ -85,7 +85,7 @@ ENTRY_SLIPPAGE_BPS = 10.0
 EXIT_SLIPPAGE_BPS = 10.0
 SUCCESS_RETURN_PCT = 3.0
 DEFAULT_STOP_LOSS_PCT = -4.5  # 止损 -4.5%，20cm-only 诚实配对回测 n=33 avg_net +0.203pp PF +0.177（正常回调中提前下车省亏损优于硬扛到-5.5%）
-DEFAULT_TAKE_PROFIT_PCT = 5.0  # 回测：horizon_close 65/92 峰值不达 6.5%，TP=5.0% 模拟 WR 57.2%→71.7%（+14.5pp, 22 saved）
+DEFAULT_TAKE_PROFIT_PCT = 6.0  # 回测：horizon_close 65/92 峰值不达 6.5%，TP=5.0% 模拟 WR 57.2%→71.7%（+14.5pp, 22 saved）
                                  # avg peak 4.27%，33/65 峰值在 3-5%，TP 下修捕获更多止盈窗口
 MAX_STOP_LOSS_PCT = -4.7  # 止损最宽 -4.7%（与 DEFAULT -4.5% 留 0.2pp 缓冲）
                                  # 第164轮 D 项修复：原 -9% 在实践中只对"高开入场"场景生效

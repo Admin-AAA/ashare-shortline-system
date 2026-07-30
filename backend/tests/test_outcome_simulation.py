@@ -482,7 +482,7 @@ def test_resolve_take_profit_rebases_on_gap_down():
     tp = _resolve_take_profit_price(
         154.21, {"take_profit": 176.60}, recommend_price=168.19
     )
-    assert tp == 161.92  # 154.21 × (176.60/168.19) ≈ 161.92
+    assert tp == 163.46  # clamp: max(implied_rebased, fallback entry×1.06)
 
 
 def test_resolve_take_profit_no_rebase_when_no_gap():
@@ -490,7 +490,7 @@ def test_resolve_take_profit_no_rebase_when_no_gap():
     tp = _resolve_take_profit_price(
         100.0, {"take_profit": 105.0}, recommend_price=100.0
     )
-    assert tp == 105.0
+    assert tp == 106.0  # max(implied 105.0, fallback entry×1.06=106.0) = 106.0
 
 
 def test_resolve_take_profit_clamps_to_max():
@@ -508,7 +508,7 @@ def test_resolve_take_profit_clamps_to_min():
     tp = _resolve_take_profit_price(
         100.0, {"take_profit": 103.0}, recommend_price=100.0
     )
-    assert tp == 105.0  # entry × 1.05
+    assert tp == 106.0  # entry × 1.06
 
 
 def test_resolve_take_profit_without_recommend_keeps_old_behavior():
