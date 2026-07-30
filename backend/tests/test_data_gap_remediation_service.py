@@ -19,12 +19,21 @@ from app.services.data_gap_remediation_service import (
     _daily_kbar_target_codes,
     _is_natural_short_history,
     _local_pool_gap_comparison,
+    _provider_activity_delta,
     _upsert_daily_kbar_payload,
     remediate_data_health_gaps,
     remediate_recommendation_run_auxiliary_data,
     sync_local_pool_kline_gaps,
 )
 from scripts.backfill_latest_days import get_missing_trade_dates
+
+
+def test_provider_activity_route_policy_does_not_claim_hard_coded_primary_provider():
+    activity = _provider_activity_delta({}, {})
+
+    assert activity["route_policy"] == "通用接口按数据源配置优先级路由；特殊 API 按能力路由；失败时安全 fallback。"
+    assert "Fastapic" not in activity["route_policy"]
+    assert "ai-tool" not in activity["route_policy"]
 
 
 def test_remediate_data_health_gaps_executes_targeted_plan(monkeypatch):

@@ -195,7 +195,7 @@ export function DataHealthSection() {
             className="btn btn--primary"
             disabled={isRunning || remediationStarting}
             onClick={handleStartRemediation}
-            title="按数据域通过 Provider Router 修复：通用/日线优先 Fastapic，分钟/公告优先 ai-tool；不会触发三年分钟回填"
+            title="按数据域通过 Provider Router 修复：通用接口按数据源配置优先级路由，特殊 API 按能力路由；不会触发三年分钟回填"
           >
             {isRunning || remediationStarting ? <Loader2 size={14} className="spin" /> : <PlayCircle size={14} />}
             {isRunning ? "修复中…" : remediationStarting ? "提交中…" : "触发数据修复"}
@@ -397,7 +397,7 @@ function RemediationStatusBanner({
       <Banner tone="info">
         <Loader2 size={14} className="spin" />
         修复任务运行中 · {taskRun.task_name}
-        <span className="text-muted">— Provider Router：Fastapic / ai-tool</span>
+        <span className="text-muted">— Provider Router：按数据源优先级与 API 能力路由</span>
         {taskRun.summary && <span className="text-muted"> — {taskRun.summary}</span>}
       </Banner>
     );
