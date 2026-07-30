@@ -37,7 +37,6 @@ from app.services.registry.data_source import (
 
 logger = logging.getLogger("scheduler")
 
-_scheduler: Any | None = None
 _running_lock = threading.Lock()
 _running_tasks: set[str] = set()
 TASK_TYPE_PRESET_MATRIX_RUN = "preset_matrix_run"
@@ -54,7 +53,7 @@ SAFETY_NET_MAX_ATTEMPTS = 3
 POSTCLOSE_PIPELINE_TASK_ID = "post_sync_formal_recommendation"
 # 工作日使用 mon-fri，避免不同 cron 实现对数字星期的解释差异。
 # 与标准 crontab 的 0=Sunday 差一天，"1-5" 会被解析成「周二到周六」——周一永不触发、
-# 周六反而跑。名称形式在两种语义下都无歧义，是唯一安全写法。见 _normalize_cron。
+# 周六反而跑。名称形式在两种语义下都无歧义，是唯一安全写法。
 POSTCLOSE_PIPELINE_CRON = "35 17 * * mon-fri"
 LEGACY_POSTCLOSE_TASK_IDS = (
     "postclose_quote_refresh",
@@ -77,7 +76,7 @@ class RetryablePostcloseReadinessError(RuntimeError):
 
 
 # 策略曝光补跑调度任务（E 项样本可信前置）：盘前对近30天样本不足的策略单独补跑。
-# 任务 ID 固定，start_scheduler 时幂等注册（已存在则不覆盖用户手动调整的 cron/payload）。
+# 任务 ID 固定，由 Prefect deployments 幂等同步（已存在则不覆盖用户手动调整的 cron/payload）。
 EXPOSURE_TASK_ID = "strategy_exposure_run"
 EXPOSURE_CRON = "3 8 * * mon-fri"  # 周一到周五 08:03（盘前，避免与盘后结算/回填争抢资源）
 
@@ -87,7 +86,7 @@ EXPOSURE_CRON = "3 8 * * mon-fri"  # 周一到周五 08:03（盘前，避免与�
 # outcome 暂记 provisional=今收占位）→ T+2 才是首个可卖日。因此：
 #   create  每日 09:20 盘前建监控，目标=trade_date 为前天（T+2）的已入场持仓
 #           —— 昨天入场、今天首个可卖日，正是盘中冲高回落的高发日；
-#   poll    交易时段每 5min 由 interval job 轮询（见 _register_periodic_jobs），
+#   poll    交易时段每 5min 由 Prefect intraday-lock-poll flow 轮询，
 #           内部自判交易时段+交易日，跨过午休，无需 cron 罗列交易时刻；
 #   settle  每日 17:40 盘后回填今日触发信号的 post_trigger 走势 + 当时实际出场占位
 #           （持仓未结时占位=provisional 今收；待 outcome 翻新为真实 exit 后重算 lock_delta）。
@@ -149,35 +148,6 @@ def _try_mark_running_memory(task_id: str) -> bool:
 def _mark_done_memory(task_id: str) -> None:
     with _running_lock:
         _running_tasks.discard(task_id)
-
-
-def start_scheduler() -> Any:
-    """启动调度器，从数据库加载已启用任务。"""
-    raise RuntimeError("in-process scheduler was removed; start the Prefect worker")
-    global _scheduler
-    if _scheduler is not None:
-        return _scheduler
-
-    # 补跑容错：错过 cron 时刻后 1 小时内恢复运行仍补跑一次（coalesce 合并为单次）。
-    # 历史进程内 scheduler 用 time.sleep 轮询，系统休眠会让
-    # 调度线程挂起而错过触发点；默认 misfire_grace_time=1s 会把错过的 cron 永久丢弃。
-    # 两类已证实的错过都被 1h 覆盖：
-    #   ① launchd 每日 08:50 kickstart 重启 → 错过 08:03 盘前曝光 / 08:30 安全网(差 47/20min)；
-    #   ② 显示器休眠挂起 → 错过 17:35 盘后 post_sync（睡眠醒来距 cron 通常 <1h）。
-    # 1h 是上限而非越大越好：更大的宽限会把隔夜/跨时段任务在错误时间点补跑（如清晨补跑
-    # 前一日盘后同步），反而制造脏数据。隔夜 misfire 远超 1h 仍会被正确丢弃。
-    _scheduler = Any(
-        timezone="Asia/Shanghai",
-        job_defaults={"misfire_grace_time": 3600, "coalesce": True},
-    )
-    _ensure_postclose_pipeline_task()
-    _ensure_strategy_exposure_task()
-    _ensure_intraday_lock_tasks()
-    _load_and_schedule()
-    _scheduler.start()
-    _register_periodic_jobs()
-    logger.info("调度器已启动，已加载 %d 个任务", len(_scheduler.get_jobs()))
-    return _scheduler
 
 
 def _postclose_pipeline_payload(existing: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -264,7 +234,7 @@ def _ensure_strategy_exposure_task() -> None:
     使其胜率统计可信（样本 ≥20 才能按胜率选策略、低胜率策略才敢标记）。
 
     ⚠️ 历史根因：本函数曾缺失（仅 manual 触发路径 + _run_strategy_exposure 实现存在，
-    但 start_scheduler 从不注册定时任务），导致 exposure cron 从未被排程——4 个低频
+    原进程内 scheduler 从不注册定时任务），导致 exposure cron 从未被排程——4 个低频
     策略（chip/high-range/small-cap/trend-pullback）长期卡在 n<20，胜率统计不可信，
     E 项持续误触发。此处使用幂等注册修复该盲区。
 
@@ -302,7 +272,7 @@ def _ensure_intraday_lock_tasks() -> None:
     """确保盘中锁利影子链路的两个表驱动任务存在（建监控 / 盘后回填）。
 
     盘中 poll 不走 ScheduledTask 表（cron 无法干净表达跨午休的交易时段轮询），
-    由 _register_periodic_jobs 的 interval job 承担。幂等注册：已存在则不覆盖
+    由 Prefect intraday-lock-poll deployment 承担。幂等注册：已存在则不覆盖
     用户手动调整的 cron/payload。
     """
     try:
@@ -340,165 +310,6 @@ def _ensure_intraday_lock_tasks() -> None:
             db.close()
     except Exception:
         logger.exception("注册盘中锁利调度任务失败")
-
-
-def _register_periodic_jobs() -> None:
-    """注册与业务调度任务无关的周期巡检任务（如失联运行回收）。"""
-    if _scheduler is None:
-        return
-    _scheduler.add_job(
-        _periodic_recover_stale_runs,
-        trigger="interval",
-        seconds=300,
-        id="periodic_stale_run_recovery",
-        name="失联运行周期回收",
-        replace_existing=True,
-        next_run_time=datetime.now() + timedelta(seconds=60),
-    )
-    logger.info("已注册失联运行周期回收任务（间隔 300s）")
-    _scheduler.add_job(
-        _periodic_intraday_lock_poll,
-        trigger="interval",
-        seconds=LOCK_POLL_INTERVAL_SECONDS,
-        id="periodic_intraday_lock_poll",
-        name="盘中锁利影子轮询",
-        replace_existing=True,
-    )
-    logger.info("已注册盘中锁利影子轮询（间隔 %ds，交易时段生效）", LOCK_POLL_INTERVAL_SECONDS)
-
-
-def _is_trade_session_now(now: datetime) -> bool:
-    """是否处于 A 股连续竞价时段（周一至五，09:30-11:30 / 13:00-15:00，节假日由日历兜底）。
-
-    盘中锁利轮询的执行闸门：interval job 全天候触发，靠此自判只在交易时段真正拉数。
-    节假日误判为交易日只是空跑一次 poll（stk_mins 无当日数据 → 无触发），代价可忽略。
-    """
-    if now.weekday() >= 5:
-        return False
-    hm = now.hour * 60 + now.minute
-    return (9 * 60 + 30) <= hm < (11 * 60 + 30) or (13 * 60) <= hm < (15 * 60)
-
-
-def _periodic_intraday_lock_poll() -> None:
-    """盘中每 5min 轮询一次锁利监控，触及目标即记录信号（只记录不交易）。"""
-    if not _is_trade_session_now(datetime.now()):
-        return
-    try:
-        from app.services.intraday_lock_service import poll_once
-        from app.services.tushare_client import get_pro
-
-        db = SessionLocal()
-        try:
-            stats = poll_once(db, get_pro())
-            if stats.get("triggered") or stats.get("errors"):
-                logger.info("盘中锁利轮询: %s", stats)
-        finally:
-            db.close()
-    except Exception:
-        logger.exception("盘中锁利轮询失败")
-
-
-def _periodic_recover_stale_runs() -> None:
-    """周期巡检：回收心跳超时的失联运行，避免孤儿 run 长期滞留 running 状态。
-
-    与启动期 recover_interrupted_runs 互补：后者仅在进程启动时执行一次。
-    若两次重启之间无人访问 runs 列表接口，失联运行不会被回收（列表接口的
-    _auto_recover_stale_runs 依赖客户端请求触发）。此周期任务保证即使前端
-    未打开，孤儿运行也会在心跳超时后（默认 1200s）被标记为 interrupted。
-    """
-    try:
-        from app.services.workbench_service import recover_interrupted_runs
-
-        db = SessionLocal()
-        try:
-            recovered = recover_interrupted_runs(db)
-            if recovered:
-                logger.warning("周期巡检回收 %d 个失联运行", recovered)
-        finally:
-            db.close()
-    except Exception:
-        logger.exception("周期巡检回收失联运行失败")
-
-
-def stop_scheduler() -> None:
-    global _scheduler
-    if _scheduler:
-        _scheduler.shutdown(wait=False)
-        _scheduler = None
-        logger.info("调度器已停止")
-
-
-# 标准 crontab 的 day_of_week 是 0/7=Sunday。用户按 crontab
-# 习惯写的数字星期会整体偏移一天（"1-5" → 周二至周六，周一漏跑、周六误跑）。
-# 这里把数字星期按 crontab 语义翻译成名称形式，让两种写法都得到
-# 用户预期的日期。已是名称形式（mon-fri）的表达式原样透传。
-_CRON_DOW_NAMES = ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
-
-
-def _normalize_cron(cron_expression: str) -> str:
-    """把 cron 表达式的数字星期字段按标准 crontab 语义转成名称形式。"""
-    parts = cron_expression.strip().split()
-    if len(parts) != 5:
-        return cron_expression
-    dow = parts[4]
-    if dow == "*" or not any(ch.isdigit() for ch in dow):
-        return cron_expression
-
-    def to_name(token: str) -> str:
-        if not token.isdigit():
-            return token
-        # crontab 里 0 和 7 都表示周日
-        return _CRON_DOW_NAMES[int(token) % 7]
-
-    translated = []
-    for item in dow.split(","):
-        step = ""
-        if "/" in item:
-            item, _, step = item.partition("/")
-            step = f"/{step}"
-        if "-" in item:
-            start, _, end = item.partition("-")
-            translated.append(f"{to_name(start)}-{to_name(end)}{step}")
-        else:
-            translated.append(f"{to_name(item)}{step}")
-    parts[4] = ",".join(translated)
-    return " ".join(parts)
-
-
-def _load_and_schedule() -> None:
-    """从数据库加载已启用的任务并注册到调度器。"""
-    if _scheduler is None:
-        return
-    try:
-        db = SessionLocal()
-        tasks = db.query(ScheduledTask).filter(ScheduledTask.enabled == True).all()
-        for task in tasks:
-            normalized = _normalize_cron(task.cron_expression or "")
-            try:
-                from prefect.schedules import Cron
-                trigger = Cron(normalized, timezone="Asia/Shanghai")
-            except Exception:
-                logger.warning("无效 cron 表达式 '%s'，任务 %s 跳过", task.cron_expression, task.task_id)
-                continue
-            if normalized != task.cron_expression:
-                logger.info(
-                    "cron 星期字段按 crontab 语义归一化: 任务 %s '%s' → '%s'",
-                    task.task_id,
-                    task.cron_expression,
-                    normalized,
-                )
-
-            _scheduler.add_job(
-                _execute_task,
-                trigger=trigger,
-                args=[task.task_id],
-                id=task.task_id,
-                name=task.name,
-                replace_existing=True,
-            )
-        db.close()
-    except Exception:
-        logger.exception("加载调度任务失败")
 
 
 # 预设下的 Skill 全部被禁用时，enqueue_workbench_run 抛出的错误文案。
@@ -1005,7 +816,7 @@ def _run_outcome_label(db, payload: dict) -> dict:
 def _run_intraday_lock_shadow(db, payload: dict) -> dict:
     """盘中锁利影子链路调度入口（只记录不交易）。
 
-    按 payload.action 分发两个表驱动入口（盘中 poll 走 _register_periodic_jobs 的
+    按 payload.action 分发两个表驱动入口（盘中 poll 走 Prefect deployment 的
     interval job，不经此 handler）：
       - create: 盘前为「前天推荐、昨天入场、今天首个可卖日」的持仓建监控。
                 trade_date 缺省取前一工作日（推荐日）——昨天是 T+1 入场日、今天 T+2 可卖；
@@ -2547,85 +2358,3 @@ async def _run_preset_matrix(db, payload: dict, task_run_id: str | None = None) 
     }
 
 
-def run_task_now(task_id: str) -> None:
-    """立即执行一个调度任务，用于页面上的手动触发。"""
-    _execute_task(task_id, force=True, trigger_source="manual")
-
-
-def reload_tasks() -> int:
-    """重新加载全部调度任务（用于热更新 Cron 配置后）。"""
-    global _scheduler
-    if _scheduler is None:
-        return 0
-    for job in _scheduler.get_jobs():
-        _scheduler.remove_job(job.id)
-    _load_and_schedule()
-    count = len(_scheduler.get_jobs())
-    logger.info("调度任务已重新加载: %d 个", count)
-    return count
-
-
-def _default_sync_scope(task_type: str) -> str:
-    if task_type == "data_backfill":
-        return "daily_bars"
-    if task_type == "pool_refresh":
-        return "quotes"
-    return "all"
-
-
-def _parse_backfill_stdout(stdout: str) -> dict:
-    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
-    parsed_scope = _parse_stats_line(next((line for line in lines if line.startswith("scope=")), ""))
-    parsed_result = _parse_stats_line(next((line for line in reversed(lines) if line.startswith("processed=")), ""))
-    processed = _to_int(parsed_result.get("processed"))
-    persisted = _to_int(parsed_result.get("persisted"))
-    short_history = _to_int(parsed_result.get("short_history"))
-    failed = _to_int(parsed_result.get("failed"))
-    summary_text = (
-        f"处理 {processed}，入库 {persisted}，短历史 {short_history}，失败 {failed}"
-        if processed is not None
-        else (lines[-1] if lines else "日K回填完成")
-    )
-    return {
-        "scope": parsed_scope.get("scope"),
-        "universe": _to_int(parsed_scope.get("universe")),
-        "ready_or_progress": _to_int(parsed_scope.get("ready_or_progress")),
-        "pending": _to_int(parsed_scope.get("pending")),
-        "processed": processed,
-        "persisted": persisted,
-        "short_history": short_history,
-        "failed": failed,
-        "elapsed_seconds": _to_float(parsed_result.get("elapsed")),
-        "stdout_tail": "\n".join(lines[-10:]),
-        "summary_text": summary_text,
-    }
-
-
-def _parse_stats_line(line: str) -> dict[str, str]:
-    if not line:
-        return {}
-    parts: dict[str, str] = {}
-    for token in line.replace("|", " ").split():
-        if "=" not in token:
-            continue
-        key, value = token.split("=", 1)
-        parts[key.strip()] = value.strip()
-    return parts
-
-
-def _to_int(value: str | None) -> int | None:
-    if value is None or value == "":
-        return None
-    try:
-        return int(float(value))
-    except ValueError:
-        return None
-
-
-def _to_float(value: str | None) -> float | None:
-    if value is None or value == "":
-        return None
-    try:
-        return float(value.rstrip("s"))
-    except ValueError:
-        return None
