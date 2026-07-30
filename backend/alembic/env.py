@@ -29,11 +29,20 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     connection = config.attributes.get("connection")
-    if connection is None:
-        raise RuntimeError("Alembic runtime requires an injected SQLAlchemy connection")
-    context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
-    with context.begin_transaction():
-        context.run_migrations()
+    if connection is not None:
+        context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
+        with context.begin_transaction():
+            context.run_migrations()
+        return
+
+    # Standard Alembic CLI path. Application startup injects its transaction,
+    # while operators running `alembic current/upgrade` use the configured engine.
+    from app.db.session import engine
+
+    with engine.connect() as cli_connection:
+        context.configure(connection=cli_connection, target_metadata=target_metadata, compare_type=True)
+        with context.begin_transaction():
+            context.run_migrations()
 
 
 if context.is_offline_mode():
