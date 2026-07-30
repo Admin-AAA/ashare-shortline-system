@@ -125,6 +125,7 @@ SENTIMENT_ACTIVE_LU_LD_RATIO = 1.2
 BASE_UP_RATIO_BULL = 0.65               # 上涨比 >= 65% → 强牛
 BASE_UP_RATIO_BULLISH = 0.50            # 上涨比 >= 50% → 偏多
 BASE_UP_RATIO_RANGE = 0.35              # 上涨比 >= 35% → 震荡
+STRUCTURAL_STRONG_HARD_VETO_REGIME = "结构性强势"
 
 
 def _market_sentiment(snapshot: dict[str, Any] | None) -> str:
@@ -892,6 +893,12 @@ def aggregate(
     }
 
 
+def _is_20cm_board(code: str) -> bool:
+    """Return whether a code belongs to the 20% daily-limit universe."""
+
+    return str(code or "").startswith(("300", "301", "688", "689"))
+
+
 def apply_pool_rules(
     cards: list[dict[str, Any]],
     output_count: int | None = None,
@@ -906,6 +913,7 @@ def apply_pool_rules(
     watchlist_min_hit: int = 3,
     same_day_industry_counts: dict[str, int] | None = None,
     agent_available: bool = True,
+    board_universe: str | None = None,
 ) -> list[dict[str, Any]] | dict[str, Any]:
     """按分数线过滤正式推荐，展示上限不参与核心选股决策。
 
@@ -938,6 +946,12 @@ def apply_pool_rules(
         key=lambda card: float(card.get("final_score", 0)),
         reverse=True,
     )
+    if board_universe == "20cm":
+        ordered = [
+            card
+            for card in ordered
+            if _is_20cm_board(str(card.get("code") or ""))
+        ]
     # 代码去重：同一只股票只保留最高分的推荐
     seen_codes: set[str] = set()
     deduped: list[dict[str, Any]] = []
@@ -1000,15 +1014,10 @@ def apply_pool_rules(
         #   - 强势 +4→76：放过 1 笔(score=77.5, 仍亏 -6.68%)，需更激进
         #   - 强势 +8→80：过滤全部 21 笔，净省 -6.68% 亏损
         # 两阶段因果机制不同：结构性强势主线品种仍有筛选价值，强势普涨追高必亏
-        if _snapshot_regime == "结构性强势":
-            # T-struct-strong-veto（self-improve 发布，si_struct_strong_veto.py 复验）：
-            # LIVE formal clean>=72 口径实证该 regime 7 笔全败(WR0%/PF0.0, 跨 5 交易日非单日簇)，
-            # 原 +4 门槛仅抬高分数线但放行高分毒区票(动态 base 可低至 67→eff 71, 72 分仍过线，
-            # 见 si_structstrong_consistency_audit)。改为硬否决彻底阻断该 regime 入场，
-            # 与 replay 反事实(移除 7 笔)一致：四核心指标全方向改善(WN 44.9→49.3/avg -0.646→-0.217/
-            # PF 0.76→0.91/max_loss -8.57→-7.41)，覆盖 -9%(已披露)。
-            # 基于决策时 _snapshot_regime(L-013 口径，无回溯/无未来函数)；_regime_strong_penalty
-            # 保留 4.0 供归因，新增 _regime_struct_strong_hard_veto 标记。
+        if _snapshot_regime == STRUCTURAL_STRONG_HARD_VETO_REGIME:
+            # Relative to 20cm-only production, the sequential replay improves
+            # avg net, cumulative net, WR, PF and MDD. Labels come from
+            # score_line_meta or the exact persisted decision-time context.
             effective_score_line = 999.0
             card["_regime_strong_penalty"] = 4.0
             card["_regime_struct_strong_hard_veto"] = True
@@ -1194,6 +1203,7 @@ def apply_pool_rules(
             "recommendations": _recs,
             "watchlist": watchlist,
             "degraded_watchlist": degraded_watchlist,
+            "board_universe": board_universe,
         }
     if display_limit is None:
         return result
