@@ -6,6 +6,7 @@ import { ErrorPage } from "../components/StateViews";
 import { Panel } from "../components/Panel";
 import { useUrlRoute } from "../app/useUrlRoute";
 import { queryParam } from "../app/nav";
+import { useCreateRunMutation, usePresetsQuery, useRunQuery } from "../api/queries/useRunQueries";
 
 /**
  * 运行详情页 —— 从驾驶舱主 CTA 进入
@@ -16,72 +17,30 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
   const runId = queryParam("run_id");
   const presetId = queryParam("preset_id");
 
-  const [presets, setPresets] = useState<Preset[]>([]);
   const [selectedPreset, setSelectedPreset] = useState<string>("");
-  const [running, setRunning] = useState(false);
   const [message, setMessage] = useState("");
-  const [detail, setDetail] = useState<RunDetail | null>(null);
-  const [error, setError] = useState("");
+  const presetsQuery = usePresetsQuery();
+  const runQuery = useRunQuery(runId, refreshSignal);
+  const createRunMutation = useCreateRunMutation();
+  const presets = presetsQuery.data ?? [];
+  const detail = runQuery.data ?? null;
+  const error = runQuery.error?.message ?? "";
+  const running = createRunMutation.isPending;
 
   useEffect(() => {
-    api.presets().then((p) => {
-      setPresets(p);
-      setSelectedPreset((current) => {
-        if (current) return current;
-        if (presetId && p.some((item) => item.preset_id === presetId)) return presetId;
-        return p[0]?.preset_id || "";
-      });
-    }).catch(() => {});
-  }, [presetId]);
-
-  // 首次进入 / 刷新 / 顶部刷新按钮：拉取运行详情并重置
-  useEffect(() => {
-    if (!runId) return;
-    let alive = true;
-    setDetail(null);
-    setError("");
-    api.runDetail(runId)
-      .then((d) => { if (alive) setDetail(d); })
-      .catch((e) => { if (alive) setError((e as Error).message || "运行详情加载失败"); });
-    return () => { alive = false; };
-  }, [runId, refreshSignal]);
-
-  // 实时轮询：运行进行中（queued / running）持续刷新进度。
-  // 这样无论是首次进入还是页面刷新后，只要后台任务还在跑，都能看到实时进度。
-  useEffect(() => {
-    if (!runId) return;
-    if (!detail) return;
-    if (detail.status !== "queued" && detail.status !== "running") return;
-    const timer = window.setInterval(() => {
-      api.runDetail(runId)
-        .then((d) => {
-          setDetail((prev) => {
-            if (!prev) return d;
-            // 仅当关键进度字段变化时才更新，避免每 2s 无谓重渲染
-            const changed =
-              prev.status !== d.status ||
-              prev.progress_pct !== d.progress_pct ||
-              prev.progress_current !== d.progress_current ||
-              prev.progress_total !== d.progress_total ||
-              prev.progress_phase !== d.progress_phase ||
-              prev.progress_message !== d.progress_message ||
-              prev.heartbeat_at !== d.heartbeat_at ||
-              prev.recommended_count !== d.recommended_count ||
-              prev.is_stale !== d.is_stale;
-            return changed ? d : prev;
-          });
-        })
-        .catch(() => {});
-    }, 2000);
-    return () => window.clearInterval(timer);
-  }, [runId, detail?.status]);
+    if (!presets.length) return;
+    setSelectedPreset((current) => {
+      if (current) return current;
+      if (presetId && presets.some((item) => item.preset_id === presetId)) return presetId;
+      return presets[0]?.preset_id || "";
+    });
+  }, [presetId, presets]);
 
   async function startRun() {
     if (!selectedPreset) return;
-    setRunning(true);
     setMessage("正在触发推荐运行…");
     try {
-      const result = await api.createRun({
+      const result = await createRunMutation.mutateAsync({
         preset_id: selectedPreset,
         run_name: `驾驶舱 · 手动推荐`,
       });
@@ -89,8 +48,6 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
       navigate("/run", { params: { run_id: result.run.run_id } });
     } catch (e) {
       setMessage(`运行失败：${(e as Error).message}`);
-    } finally {
-      setRunning(false);
     }
   }
 

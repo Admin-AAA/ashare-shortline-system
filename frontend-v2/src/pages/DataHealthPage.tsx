@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -23,6 +23,11 @@ import type {
 import { CardSkeleton, EmptyState, ErrorPage } from "../components/StateViews";
 import { Panel } from "../components/Panel";
 import { formatApiDateTime } from "../utils/display";
+import {
+  useDataHealthQuery,
+  useDataHealthRemediationQuery,
+  useStartDataHealthRemediationMutation,
+} from "../api/queries/useDataHealthQuery";
 
 /**
  * 数据健康度 —— 配置页「数据健康」Tab（与预设管理平级）。
@@ -31,92 +36,33 @@ import { formatApiDateTime } from "../utils/display";
  * 并提供「触发修复」按钮（异步任务 + 状态轮询，复用调度任务的 result 字段）。
  */
 export function DataHealthSection() {
-  const [diag, setDiag] = useState<DataHealthDiagnostic | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  // 修复任务运行状态（startDataHealthRemediation 返回 task_run；轮询 status）
-  const [remediationTaskRun, setRemediationTaskRun] = useState<ScheduledTaskRun | null>(null);
-  const [remediationStarting, setRemediationStarting] = useState(false);
   const [remediationError, setRemediationError] = useState("");
   const [remediationResult, setRemediationResult] = useState<DataHealthRemediationResult | null>(null);
-  const pollRef = useRef<number | null>(null);
-
-  const loadDiag = useCallback((opts?: { forceRefresh?: boolean }, signal?: AbortSignal) => {
-    setLoading(true);
-    setError("");
-    api
-      .dataHealth({ signal, forceRefresh: opts?.forceRefresh })
-      .then((d) => setDiag(d))
-      .catch((err) => {
-        if (err.name !== "AbortError") setError(err.message || "诊断失败");
-      })
-      .finally(() => setLoading(false));
-  }, []);
+  const diagQuery = useDataHealthQuery();
+  const remediationQuery = useDataHealthRemediationQuery();
+  const remediationMutation = useStartDataHealthRemediationMutation();
+  const diag = diagQuery.data ?? null;
+  const loading = diagQuery.isLoading;
+  const error = diagQuery.error?.message ?? "";
+  const remediationTaskRun = remediationQuery.data?.task_run ?? null;
+  const remediationStarting = remediationMutation.isPending;
 
   useEffect(() => {
-    const controller = new AbortController();
-    loadDiag(undefined, controller.signal);
-    // 进入页面时同步一下是否有进行中的修复任务
-    api
-      .dataHealthRemediationStatus()
-      .then(({ task_run }) => {
-        if (task_run && (task_run.status === "running" || task_run.status === "pending")) {
-          setRemediationTaskRun(task_run);
-        }
-      })
-      .catch(() => {});
-    return () => {
-      controller.abort();
-      if (pollRef.current) window.clearTimeout(pollRef.current);
-    };
-  }, [loadDiag]);
-
-  // 修复任务轮询
-  useEffect(() => {
-    if (!remediationTaskRun) return;
-    if (remediationTaskRun.status !== "running" && remediationTaskRun.status !== "pending") return;
-    pollRef.current = window.setTimeout(async () => {
-      try {
-        const { task_run } = await api.dataHealthRemediationStatus();
-        if (task_run && task_run.task_run_id === remediationTaskRun.task_run_id) {
-          setRemediationTaskRun(task_run);
-          // 完成后从 result 里取修复对比结果 + 刷新诊断
-          if (task_run.status === "completed" || task_run.status === "failed" || task_run.status === "partial_completed") {
-            const result = task_run.result as unknown as DataHealthRemediationResult | undefined;
-            if (result && typeof result === "object" && result.status) {
-              setRemediationResult(result);
-            }
-            // 修复已写入数据，强制刷新缓存（后端 remediate 也已 clear，双保险）
-            loadDiag({ forceRefresh: true });
-          }
-        }
-      } catch {
-        /* 轮询失败静默，下一轮重试 */
-      }
-    }, 3000);
-    return () => {
-      if (pollRef.current) window.clearTimeout(pollRef.current);
-    };
-  }, [remediationTaskRun, loadDiag]);
+    if (!remediationTaskRun || !["completed", "failed", "partial_completed"].includes(remediationTaskRun.status)) return;
+    const result = remediationTaskRun.result as unknown as DataHealthRemediationResult | undefined;
+    if (result && typeof result === "object" && result.status) setRemediationResult(result);
+    void diagQuery.refetch();
+  }, [remediationTaskRun?.task_run_id, remediationTaskRun?.status]);
 
   const handleStartRemediation = async () => {
-    setRemediationStarting(true);
     setRemediationError("");
     setRemediationResult(null);
     try {
-      const { task_run } = await api.startDataHealthRemediation({ post_diagnosis: true });
-      if (task_run) {
-        setRemediationTaskRun(task_run);
-      } else {
-        // 同步完成的极短情况：强制刷新诊断
-        loadDiag({ forceRefresh: true });
-      }
+      const { task_run } = await remediationMutation.mutateAsync();
+      if (!task_run) void diagQuery.refetch();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "触发修复失败";
       setRemediationError(msg);
-    } finally {
-      setRemediationStarting(false);
     }
   };
 
@@ -128,7 +74,7 @@ export function DataHealthSection() {
       <ErrorPage
         title="数据健康度诊断失败"
         message={error}
-        onRetry={() => loadDiag({ forceRefresh: true })}
+        onRetry={() => void diagQuery.refetch()}
       />
     );
   }
@@ -238,7 +184,7 @@ export function DataHealthSection() {
           kicker="数据表覆盖"
           title={`共 ${tableRows.length} 张表`}
           actions={
-            <button className="btn btn--ghost" onClick={() => loadDiag({ forceRefresh: true })} title="重新诊断（跳过缓存）">
+            <button className="btn btn--ghost" onClick={() => void diagQuery.refetch()} title="重新诊断">
               <RefreshCw size={14} />
             </button>
           }

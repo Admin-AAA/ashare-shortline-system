@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { CSSProperties } from "react";
 import { LayoutGrid, PlayCircle, Eye, Flame, Loader2 } from "lucide-react";
-import { api } from "../api/client";
+import { useMatrixQuery, useStartMatrixMutation } from "../api/queries/useMatrixQuery";
 import { EmptyState } from "../components/StateViews";
 
 /**
@@ -66,56 +66,24 @@ const AMBER_INK = "var(--accent-strong)";
 const AMBER_MUTED = "var(--text-muted)";
 
 export function MatrixPage() {
-  const [starting, setStarting] = useState(false);
   const [status, setStatus] = useState("");
-  const [taskRun, setTaskRun] = useState<Record<string, unknown> | null>(null);
-  const [polling, setPolling] = useState(false);
   const [error, setError] = useState("");
-
-  const pull = async () => {
-    try {
-      const res = await api.matrixRunStatus();
-      if (res.task_run) setTaskRun(res.task_run as unknown as Record<string, unknown>);
-    } catch {
-      /* 空闲拉取失败不阻塞页面 */
-    }
-  };
-
-  useEffect(() => {
-    pull();
-  }, []);
-
-  useEffect(() => {
-    if (!polling) return;
-    const timer = setInterval(async () => {
-      try {
-        const res = await api.matrixRunStatus();
-        const tr = res.task_run;
-        if (tr) setTaskRun(tr as unknown as Record<string, unknown>);
-        if (tr && (tr.status === "completed" || tr.status === "failed" || tr.status === "error")) {
-          setPolling(false);
-        }
-      } catch {
-        /* 轮询容错 */
-      }
-    }, 2000);
-    return () => clearInterval(timer);
-  }, [polling]);
+  const matrixQuery = useMatrixQuery();
+  const startMutation = useStartMatrixMutation();
+  const taskRun = matrixQuery.data?.task_run as unknown as Record<string, unknown> | null;
+  const starting = startMutation.isPending;
 
   const startMatrix = () => {
-    setStarting(true);
     setStatus("");
     setError("");
-    api
-      .startMatrixRun({})
+    startMutation
+      .mutateAsync()
       .then((res) => {
         setStatus(res.started ? "矩阵已启动，正在串行执行全部启用预设…" : "已有任务运行中");
-        if (res.started) setPolling(true);
       })
       .catch((err) => {
         setError(err.message || "启动失败");
       })
-      .finally(() => setStarting(false));
   };
 
   const result = (taskRun?.result || {}) as unknown as MatrixResult;

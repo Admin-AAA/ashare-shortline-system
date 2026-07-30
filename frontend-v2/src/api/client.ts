@@ -174,24 +174,6 @@ async function requestWithTimeout<T>(path: string, timeoutMs: number, init?: Req
   return request<T>(path, init, { timeoutMs });
 }
 
-/** 当前活跃的轮询 AbortController，用于取消 */
-let activePollController: AbortController | null = null;
-
-export function cancelActivePoll() {
-  if (activePollController) {
-    logger.info("poll", "取消活跃轮询");
-    activePollController.abort();
-    activePollController = null;
-  }
-}
-
-export function createPollController(): AbortController {
-  cancelActivePoll();
-  activePollController = new AbortController();
-  logger.debug("poll", "创建新轮询控制器");
-  return activePollController;
-}
-
 export const api = {
   authStatus: () => request<AuthStatus>("/api/auth/status"),
   login: (password: string) => request<{ ok: boolean }>("/api/auth/login", json("POST", { password })),
