@@ -31,6 +31,7 @@ from app.models.tables import (
 )
 from app.services.cost_service import finish_task_run, serialize_scheduled_task_run, start_task_run
 from app.engine.trading_calendar import latest_allowed_bar_date as _latest_allowed_bar_date
+from app.engine.trading_calendar import previous_weekday
 from app.services.registry.data_source import (
     DATA_SOURCE_LOCAL_POOL,
     DEFAULT_RECOMMENDATION_DATA_SOURCE,
@@ -68,6 +69,24 @@ LEGACY_POSTCLOSE_TASK_IDS = (
 # 任务 ID 固定，start_scheduler 时幂等注册（已存在则不覆盖用户手动调整的 cron/payload）。
 EXPOSURE_TASK_ID = "strategy_exposure_run"
 EXPOSURE_CRON = "3 8 * * mon-fri"  # 周一到周五 08:03（盘前，避免与盘后结算/回填争抢资源）
+
+# ── 盘中锁利影子链路（只记录不交易，见 intraday_lock_service）────────────────
+# 调度时机由 outcome 出入场时序决定（见 outcome_simulation.py §51-53 + T+1 锁仓）：
+# 盘后推荐（post_sync_formal_recommendation 17:35）→ T+1 入场（当天锁仓不可卖，
+# outcome 暂记 provisional=今收占位）→ T+2 才是首个可卖日。因此：
+#   create  每日 09:20 盘前建监控，目标=trade_date 为前天（T+2）的已入场持仓
+#           —— 昨天入场、今天首个可卖日，正是盘中冲高回落的高发日；
+#   poll    交易时段每 5min 由 interval job 轮询（见 _register_periodic_jobs），
+#           内部自判交易时段+交易日，跨过午休，无需 cron 罗列交易时刻；
+#   settle  每日 17:40 盘后回填今日触发信号的 post_trigger 走势 + 当时实际出场占位
+#           （持仓未结时占位=provisional 今收；待 outcome 翻新为真实 exit 后重算 lock_delta）。
+TASK_TYPE_INTRADAY_LOCK_SHADOW = "intraday_lock_shadow"
+LOCK_CREATE_TASK_ID = "intraday_lock_create_monitors"
+LOCK_CREATE_CRON = "20 9 * * mon-fri"   # 盘前 09:20 建监控（当天首个可卖日持仓）
+LOCK_SETTLE_TASK_ID = "intraday_lock_settle_signals"
+LOCK_SETTLE_CRON = "40 17 * * mon-fri"  # 盘后 17:40 回填（当日K已就绪，outcome 占位可读）
+# 盘中轮询间隔（秒）：与 stk_mins 5min 频率对齐。
+LOCK_POLL_INTERVAL_SECONDS = 300
 # 曝光补跑默认阈值：近30天已兑现样本 < 此值的 enabled 策略才补跑。
 # 取 20 与北极星 E 项样本置信度下限对齐——样本 <20 时胜率统计不可信（置信区间过宽），
 # 补跑持续喂到此值才让每个策略胜率可被信任，进而能按胜率选策略。
@@ -141,6 +160,7 @@ def start_scheduler() -> BackgroundScheduler:
     )
     _ensure_postclose_pipeline_task()
     _ensure_strategy_exposure_task()
+    _ensure_intraday_lock_tasks()
     _load_and_schedule()
     _scheduler.start()
     _register_periodic_jobs()
@@ -266,6 +286,50 @@ def _ensure_strategy_exposure_task() -> None:
         logger.exception("注册策略曝光补跑任务失败")
 
 
+def _ensure_intraday_lock_tasks() -> None:
+    """确保盘中锁利影子链路的两个表驱动任务存在（建监控 / 盘后回填）。
+
+    盘中 poll 不走 ScheduledTask 表（cron 无法干净表达跨午休的交易时段轮询），
+    由 _register_periodic_jobs 的 interval job 承担。幂等注册：已存在则不覆盖
+    用户手动调整的 cron/payload。
+    """
+    try:
+        db = SessionLocal()
+        try:
+            for task_id, name, cron, payload in (
+                (
+                    LOCK_CREATE_TASK_ID,
+                    "盘中锁利建监控（盘前，首个可卖日持仓）",
+                    LOCK_CREATE_CRON,
+                    {"action": "create"},
+                ),
+                (
+                    LOCK_SETTLE_TASK_ID,
+                    "盘中锁利盘后回填（触发后走势+实际出场）",
+                    LOCK_SETTLE_CRON,
+                    {"action": "settle"},
+                ),
+            ):
+                if db.get(ScheduledTask, task_id):
+                    continue
+                db.add(
+                    ScheduledTask(
+                        task_id=task_id,
+                        name=name,
+                        task_type=TASK_TYPE_INTRADAY_LOCK_SHADOW,
+                        cron_expression=cron,
+                        payload_json=json.dumps(payload),
+                        enabled=True,
+                    )
+                )
+                logger.info("已注册盘中锁利调度任务: %s (cron=%s)", task_id, cron)
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("注册盘中锁利调度任务失败")
+
+
 def _register_periodic_jobs() -> None:
     """注册与业务调度任务无关的周期巡检任务（如失联运行回收）。"""
     if _scheduler is None:
@@ -280,6 +344,46 @@ def _register_periodic_jobs() -> None:
         next_run_time=datetime.now() + timedelta(seconds=60),
     )
     logger.info("已注册失联运行周期回收任务（间隔 300s）")
+    _scheduler.add_job(
+        _periodic_intraday_lock_poll,
+        trigger="interval",
+        seconds=LOCK_POLL_INTERVAL_SECONDS,
+        id="periodic_intraday_lock_poll",
+        name="盘中锁利影子轮询",
+        replace_existing=True,
+    )
+    logger.info("已注册盘中锁利影子轮询（间隔 %ds，交易时段生效）", LOCK_POLL_INTERVAL_SECONDS)
+
+
+def _is_trade_session_now(now: datetime) -> bool:
+    """是否处于 A 股连续竞价时段（周一至五，09:30-11:30 / 13:00-15:00，节假日由日历兜底）。
+
+    盘中锁利轮询的执行闸门：interval job 全天候触发，靠此自判只在交易时段真正拉数。
+    节假日误判为交易日只是空跑一次 poll（stk_mins 无当日数据 → 无触发），代价可忽略。
+    """
+    if now.weekday() >= 5:
+        return False
+    hm = now.hour * 60 + now.minute
+    return (9 * 60 + 30) <= hm < (11 * 60 + 30) or (13 * 60) <= hm < (15 * 60)
+
+
+def _periodic_intraday_lock_poll() -> None:
+    """盘中每 5min 轮询一次锁利监控，触及目标即记录信号（只记录不交易）。"""
+    if not _is_trade_session_now(datetime.now()):
+        return
+    try:
+        from app.services.intraday_lock_service import poll_once
+        from app.services.tushare_client import get_pro
+
+        db = SessionLocal()
+        try:
+            stats = poll_once(db, get_pro())
+            if stats.get("triggered") or stats.get("errors"):
+                logger.info("盘中锁利轮询: %s", stats)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("盘中锁利轮询失败")
 
 
 def _periodic_recover_stale_runs() -> None:
@@ -452,6 +556,8 @@ def _execute_task(task_id: str, *, force: bool = False, trigger_source: str = "s
             result = asyncio.run(_run_strategy_exposure(db, payload, task_run_id=task_run_id))
         elif task_type == TASK_TYPE_OUTCOME_LABEL:
             result = _run_outcome_label(db, payload)
+        elif task_type == TASK_TYPE_INTRADAY_LOCK_SHADOW:
+            result = _run_intraday_lock_shadow(db, payload)
         elif task_type in ("data_sync", "pool_refresh", "data_backfill"):
             result = _run_data_sync(db, payload, task_type=task_type)
         else:
@@ -878,6 +984,50 @@ def _run_outcome_label(db, payload: dict) -> dict:
         "labeled": labeled,
         "horizon_days": horizon_days,
     }
+
+
+def _run_intraday_lock_shadow(db, payload: dict) -> dict:
+    """盘中锁利影子链路调度入口（只记录不交易）。
+
+    按 payload.action 分发两个表驱动入口（盘中 poll 走 _register_periodic_jobs 的
+    interval job，不经此 handler）：
+      - create: 盘前为「前天推荐、昨天入场、今天首个可卖日」的持仓建监控。
+                trade_date 缺省取前一工作日（推荐日）——昨天是 T+1 入场日、今天 T+2 可卖；
+                outcome 入场的 17:30 数据闸门由 service 内 create_monitors_for_trade_date
+                空结果兜底（未确认入场则不建，幂等，下一可卖日补建）。
+      - settle: 盘后回填今日触发信号的 post_trigger 走势 + 当时实际出场占位。
+    """
+    from app.services.intraday_lock_service import (
+        create_monitors_for_trade_date,
+        settle_signals,
+    )
+    from app.services.tushare_client import get_pro
+
+    action = str(payload.get("action") or "").strip().lower()
+    if action == "create":
+        trade_date = str(
+            payload.get("trade_date") or previous_weekday(datetime.now().date()).isoformat()
+        )
+        created = create_monitors_for_trade_date(db, trade_date)
+        logger.info("盘中锁利建监控完成: trade_date=%s 新建 %d 个", trade_date, created)
+        return {
+            "summary_text": f"建监控 {created} 个（{trade_date}）",
+            "action": action,
+            "trade_date": trade_date,
+            "created": created,
+        }
+    if action == "settle":
+        stats = settle_signals(db, get_pro())
+        logger.info("盘中锁利盘后回填完成: %s", stats)
+        return {
+            "summary_text": (
+                f"回填 {stats.get('settled', 0)} 个信号"
+                f"（跳过 {stats.get('skipped', 0)} / 错误 {stats.get('errors', 0)}）"
+            ),
+            "action": action,
+            **stats,
+        }
+    raise RuntimeError(f"未知盘中锁利 action: {action!r}（支持 create/settle）")
 
 
 def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
