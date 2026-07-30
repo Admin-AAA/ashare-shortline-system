@@ -14,8 +14,8 @@ from app.api import admin, backtests, dashboard, data_sources, frontend_logs, ho
 from app.core.config import get_settings
 from app.core.logger import setup_logging
 from app.db.init_db import init_db
+from app.db.alembic_runtime import get_alembic_health
 from app.services.factors import bootstrap_default_factor_registry
-from app.db.migrations import get_migration_health
 
 logger = logging.getLogger(__name__)
 access_logger = logging.getLogger("app.access")
@@ -269,7 +269,7 @@ def on_shutdown() -> None:
 
 @app.get("/api/health")
 def health():
-    migration = get_migration_health()
+    migration = get_alembic_health()
     if migration.status == "error":
         database = "migration_error"
     elif _startup_db_error:

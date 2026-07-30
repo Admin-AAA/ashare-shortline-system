@@ -6,8 +6,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import create_engine, func, select
 
-from app.db.migrations.runner import MigrationRunner
-from app.db.migrations.versions.v024_auxiliary_partition_snapshots import migration
+from app.db.session import Base
 from app.services.auxiliary.provider_results import (
     FieldSetEvidence,
     LimitEvidence,
@@ -37,7 +36,7 @@ PARTITION = CanonicalRequestPartition.from_value(
 
 def _engine():
     engine = create_engine("sqlite:///:memory:")
-    MigrationRunner(engine, (migration,)).run()
+    Base.metadata.create_all(engine)
     return engine
 
 

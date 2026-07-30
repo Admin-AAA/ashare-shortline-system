@@ -669,8 +669,6 @@ class NoConnectionSchemaReadiness:
 
 def test_s4_inventory_declares_unique_plans_only_for_state_datasets_and_registers_them():
     """State datasets have discovered UNIQUE migrations; event datasets never do."""
-    from app.db.migrations.auxiliary_unique import AuxiliaryUniqueConstraintDeclaration
-    from app.db.migrations.versions import all_migrations
     from app.services.auxiliary.production import (
         AUXILIARY_DATASET_COMPLETION,
         AUXILIARY_DATASET_INVENTORY,
@@ -681,20 +679,19 @@ def test_s4_inventory_declares_unique_plans_only_for_state_datasets_and_register
         AuxiliaryMigrationRegistrationState,
         AuxiliarySnapshotDatasetCompletion,
         AuxiliaryStateDatasetCompletion,
+        AuxiliaryUniqueConstraintDeclaration,
         MySQLVerificationRequirement,
         validate_auxiliary_migration_inventory,
     )
 
     validate_auxiliary_migration_inventory()
     inventory_keys = {entry.key for entry in AUXILIARY_DATASET_INVENTORY}
-    registered_versions = {migration.version for migration in all_migrations()}
     unique_versions = {plan.version for plan in AUXILIARY_UNIQUE_MIGRATION_PLANS.values()}
 
     assert set(AUXILIARY_UNIQUE_MIGRATION_PLANS) == STATE_ATOMIC_UPSERT_DATASET_KEYS
     assert not (set(AUXILIARY_UNIQUE_MIGRATION_PLANS) & IMMUTABLE_PARTITION_SNAPSHOT_DATASET_KEYS)
     assert set(AUXILIARY_DATASET_COMPLETION) == inventory_keys
     assert len(unique_versions) == 13
-    assert unique_versions <= registered_versions
 
     for dataset_key in STATE_ATOMIC_UPSERT_DATASET_KEYS:
         entry = next(item for item in AUXILIARY_DATASET_INVENTORY if item.key == dataset_key)

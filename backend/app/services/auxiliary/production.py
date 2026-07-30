@@ -15,7 +15,6 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, Protocol, runtime_checkable
 
-from app.db.migrations.auxiliary_unique import FORBIDDEN_PER_ROW_UNIQUE_DATASETS
 from app.models.tables import (
     AuctionData,
     BlockTrade,
@@ -52,6 +51,28 @@ from app.services.auxiliary.registry import AuxiliaryDatasetRegistry, build_auxi
 
 class AuxiliaryInventoryError(ValueError):
     """Raised when a frozen inventory declaration is incomplete or contradictory."""
+
+
+FORBIDDEN_PER_ROW_UNIQUE_DATASETS = frozenset(
+    {"block_trade", "share_float", "holder_trade", "institutional_survey", "news_announcement"}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class AuxiliaryUniqueConstraintDeclaration:
+    """Expected deployed unique-key capability for a mutable state dataset."""
+
+    version: str
+    dataset_key: str
+    table: str
+    index: str
+    natural_key: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if self.dataset_key in FORBIDDEN_PER_ROW_UNIQUE_DATASETS:
+            raise AuxiliaryInventoryError(f"snapshot dataset cannot use a row unique key: {self.dataset_key}")
+        if not self.table or not self.index or not self.natural_key:
+            raise AuxiliaryInventoryError("unique-key capability requires table, index and natural_key")
 
 
 class AuxiliarySchemaMigrationBlockedError(RuntimeError):
@@ -476,8 +497,6 @@ class AuxiliaryUniqueMigrationPlan:
     )
 
     def __post_init__(self) -> None:
-        from app.db.migrations.auxiliary_unique import AuxiliaryUniqueConstraintDeclaration
-
         if not isinstance(self.declaration, AuxiliaryUniqueConstraintDeclaration):
             raise AuxiliaryInventoryError(
                 "auxiliary UNIQUE migration plan 必须使用 AuxiliaryUniqueConstraintDeclaration"
@@ -563,9 +582,8 @@ class AuxiliarySnapshotDatasetCompletion:
 AuxiliaryDatasetCompletion = AuxiliaryStateDatasetCompletion | AuxiliarySnapshotDatasetCompletion
 
 
-# Every tuple entry is an independent, forward-only migration version registered by
-# ``app.db.migrations.versions.all_migrations``.  This inventory module still does
-# not open a connection or execute a migration while it declares the restricted plans.
+# The names are retained as schema capability identifiers for audit output. Alembic
+# owns deployment; this inventory never opens a connection or executes DDL.
 _AUXILIARY_UNIQUE_MIGRATION_SPECS: tuple[tuple[str, str, str], ...] = (
     ("limit_up_board", "V006_auxiliary_limit_up_board_unique", "uq_limit_up_board_code_date"),
     ("concept_sector", "V007_auxiliary_concept_sector_unique", "uq_concept_sector_code_date"),
@@ -591,8 +609,6 @@ def _build_unique_migration_plan(
 ) -> AuxiliaryUniqueMigrationPlan:
     # The declaration is materialized by normal migration discovery only when the
     # runner requests its version list; inventory import itself never executes DDL.
-    from app.db.migrations.auxiliary_unique import AuxiliaryUniqueConstraintDeclaration
-
     return AuxiliaryUniqueMigrationPlan(
         declaration=AuxiliaryUniqueConstraintDeclaration(
             version=version,

@@ -14,7 +14,7 @@ from types import MappingProxyType
 from typing import Any
 import uuid
 
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 
@@ -57,9 +57,8 @@ class _PointerOnlyRawProvider:
 class S4SchemaReadiness:
     """Check S4 state unique-key evidence at the composition boundary.
 
-    MySQL execution checks both the recorded migration version and the deployed unique
-    shape.  SQLite is only a local parity mode used by injected tests; it relies on the
-    model metadata and does not claim production MySQL acceptance.
+    Production readiness is based on the deployed schema capability. Alembic is the
+    only migration ledger, so this boundary never reads a framework-specific ledger.
     """
 
     def __init__(self, connection: Connection) -> None:
@@ -72,14 +71,6 @@ class S4SchemaReadiness:
         if self._connection.dialect.name != "mysql":
             self._assert_metadata_shape(entry)
             return
-        applied = self._connection.scalar(
-            text("SELECT COUNT(*) FROM schema_migrations WHERE version = :version"),
-            {"version": plan.version},
-        )
-        if int(applied or 0) != 1:
-            raise AuxiliaryInventoryError(
-                f"S4 state migration is not recorded for {entry.key}: {plan.version}"
-            )
         inspector = inspect(self._connection)
         shapes = {
             (str(item.get("name") or ""), tuple(item.get("column_names") or ()), bool(item.get("unique")))

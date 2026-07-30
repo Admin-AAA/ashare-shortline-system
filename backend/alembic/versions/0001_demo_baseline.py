@@ -5,6 +5,7 @@ from alembic import op
 
 from app.db.session import Base
 from app.models import tables  # noqa: F401 - register all ORM metadata
+from app.services.auxiliary import snapshot_repository  # noqa: F401 - register Core metadata
 
 
 revision = "0001_demo_baseline"
