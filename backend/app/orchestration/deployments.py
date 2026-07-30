@@ -47,4 +47,17 @@ def schedule_all_enabled_tasks() -> DeploymentSyncResult:
     manual_preset_matrix_flow.to_deployment(name="default", work_pool_name=WORK_POOL_NAME, tags=["ashare", "matrix"]).apply()
     manual_data_health_remediation_flow.to_deployment(name="default", work_pool_name=WORK_POOL_NAME, tags=["ashare", "remediation"]).apply()
     manual_strategy_exposure_flow.to_deployment(name="default", work_pool_name=WORK_POOL_NAME, tags=["ashare", "exposure"]).apply()
+    # Periodic housekeeping (no DB ScheduledTask rows — these are infrastructure flows)
+    intraday_lock_poll_flow.to_deployment(
+        name="default",
+        work_pool_name=WORK_POOL_NAME,
+        schedules=[Cron("*/5 9-11,13-14 * * mon-fri", timezone="Asia/Shanghai")],
+        tags=["ashare", "periodic"],
+    ).apply()
+    stale_run_recovery_flow.to_deployment(
+        name="default",
+        work_pool_name=WORK_POOL_NAME,
+        schedules=[Cron("*/5 * * * mon-fri", timezone="Asia/Shanghai")],
+        tags=["ashare", "periodic"],
+    ).apply()
     return DeploymentSyncResult(len(tasks), tuple(sorted(names)))

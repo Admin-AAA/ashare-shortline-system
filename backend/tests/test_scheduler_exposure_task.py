@@ -1,10 +1,7 @@
 """T3.6 策略曝光补跑定时任务注册（E 项样本可信前置）。
 
-回归背景：_run_strategy_exposure 实现 + manual 触发路径早已存在，但 start_scheduler
-从不注册 strategy_exposure_run 定时任务（缺 _ensure_* 函数，scheduled_tasks 表也无该
-行），导致曝光 cron 从未被排程——4 个低频策略（chip/high-range/small-cap/trend-pullback）
-长期卡在 n<20，胜率统计不可信，E 项持续误触发。本文件锁住「调度器启动时幂等注册该 cron」
-这一核心修复。
+_ensure_strategy_exposure_task 幂等注册 exposure cron 到 ScheduledTask 表；
+Prefect deployments 从 DB 行同步 cron。本文件锁住幂等性 + 补跑只选低曝光策略。
 """
 
 import asyncio
@@ -44,17 +41,17 @@ def test_ensure_strategy_exposure_task_registers_and_idempotent(monkeypatch, db)
     assert payload.get("min_sample_threshold") == DEFAULT_EXPOSURE_MIN_SAMPLE
 
 
-def test_start_scheduler_registers_exposure_task(monkeypatch, db):
+def test_exposure_task_registered_on_startup(monkeypatch, db):
     monkeypatch.setattr(scheduler_service, "SessionLocal", lambda: db)
     db.execute(delete(ScheduledTask).where(ScheduledTask.task_id == EXPOSURE_TASK_ID))
     db.commit()
 
-    # 模拟调度器启动时的注册链（不真正启动 APScheduler，避免后台线程）
+    # Simulate Prefect worker startup registration chain
     scheduler_service._ensure_postclose_pipeline_task()
     scheduler_service._ensure_strategy_exposure_task()
 
     task = db.get(ScheduledTask, EXPOSURE_TASK_ID)
-    assert task is not None, "start_scheduler 应注册 strategy_exposure_run"
+    assert task is not None, "Prefect worker startup should register strategy_exposure_run"
     assert task.enabled is True
     assert task.task_type == TASK_TYPE_STRATEGY_EXPOSURE_RUN
 

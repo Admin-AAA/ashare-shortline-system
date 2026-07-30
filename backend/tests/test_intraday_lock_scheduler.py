@@ -1,7 +1,6 @@
 """盘中锁利影子链路调度接线的 L1 单元测试。
 
 聚焦 scheduler_service 侧（不动真实 Tushare/生产库）：
-- _is_trade_session_now 交易时段闸门（开盘/午休/收盘/周末边界）
 - _run_intraday_lock_shadow 的 action 分发、create 默认 trade_date 时机、未知 action 报错
 - _ensure_intraday_lock_tasks 幂等注册两个表驱动任务
 
@@ -17,27 +16,6 @@ from sqlalchemy.orm import sessionmaker
 
 from app.models.tables import Base, ScheduledTask
 from app.services import scheduler_service as sched
-
-
-# ── _is_trade_session_now 交易时段闸门 ────────────────────────────────────────
-
-@pytest.mark.parametrize(
-    "dt, expected",
-    [
-        (datetime(2026, 7, 30, 9, 29), False),   # 盘前
-        (datetime(2026, 7, 30, 9, 30), True),    # 开盘
-        (datetime(2026, 7, 30, 10, 15), True),   # 上午连续竞价
-        (datetime(2026, 7, 30, 11, 30), False),  # 午休起
-        (datetime(2026, 7, 30, 12, 59), False),  # 午休
-        (datetime(2026, 7, 30, 13, 0), True),    # 下午开盘
-        (datetime(2026, 7, 30, 14, 59), True),   # 尾盘
-        (datetime(2026, 7, 30, 15, 0), False),   # 收盘
-        (datetime(2026, 8, 1, 10, 0), False),    # 周六
-        (datetime(2026, 8, 2, 10, 0), False),    # 周日
-    ],
-)
-def test_is_trade_session_now(dt, expected):
-    assert sched._is_trade_session_now(dt) is expected
 
 
 # ── _run_intraday_lock_shadow 分发与时机 ─────────────────────────────────────
