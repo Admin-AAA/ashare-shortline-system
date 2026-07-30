@@ -1473,6 +1473,18 @@ export type RecommendationOutcome = {
   outcome_label_raw?: string | null;
   outcome_label_legacy?: string;
   outcome_reason?: string | null;
+  /** 未触发时按推荐价虚拟持有至退出条件的只读观察结果，不计入实际交易统计。 */
+  missed_observation?: {
+    baseline_price: number;
+    observation_start_date: string;
+    exit_date: string;
+    exit_price: number;
+    return_pct: number;
+    holding_days: number;
+    stop_loss_price: number;
+    take_profit_price: number;
+    exit_reason: string;
+  } | null;
   label_source: string;
   labeled_at?: string | null;
 };

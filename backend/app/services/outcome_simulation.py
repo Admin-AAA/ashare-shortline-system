@@ -393,6 +393,86 @@ def _simulate_outcome(
     }
 
 
+def build_missed_observation(
+    rec: Recommendation,
+    bars: list[DailyKbar],
+    dates: list[str],
+    horizon_days: int,
+    feature_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """为未触发推荐生成推荐价基准的退出观察结果。
+
+    这不是实际成交收益：买点未触发时仍保持 ``executed_return=0``。本函数只回答
+    「若从推荐价开始观察，并沿用原止损、止盈和因果移动保护，何时会满足退出条件、
+    收益是多少」，用于验证未触发推荐本身的方向是否准确。
+
+    盘中推荐可从信号日开始观察；盘后推荐从下一交易日开始。两种情形均复用生产
+    ``_resolve_exit`` 的 T+1 约束和退出优先级，但不计滑点、佣金或印花税。
+    """
+    if not bars or horizon_days < 1:
+        return None
+
+    signal_index = bisect_left(dates, str(rec.trade_date))
+    signal_bar = (
+        bars[signal_index]
+        if signal_index < len(bars) and dates[signal_index] == str(rec.trade_date)
+        else None
+    )
+    future_start = signal_index + 1 if signal_bar is not None else signal_index
+    future_bars = bars[future_start:]
+    if _is_intraday_recommendation(rec) and signal_bar is not None:
+        observation_bars = [signal_bar, *future_bars]
+    else:
+        observation_bars = future_bars
+    observation_bars = observation_bars[: max(1, horizon_days)]
+    if not observation_bars:
+        return None
+
+    baseline_price = _as_float(getattr(rec, "recommend_price", None))
+    if baseline_price <= 0 and signal_bar is not None:
+        baseline_price = _as_float(signal_bar.close)
+    if baseline_price <= 0:
+        baseline_price = _as_float(observation_bars[0].open) or _as_float(observation_bars[0].close)
+    if baseline_price <= 0:
+        return None
+
+    snapshot = feature_snapshot if feature_snapshot is not None else _loads(
+        getattr(rec, "feature_snapshot_json", None), {}
+    )
+    stop_loss_price = _resolve_stop_loss_price(baseline_price, snapshot)
+    take_profit_price = _resolve_take_profit_price(
+        baseline_price,
+        snapshot,
+        recommend_price=baseline_price,
+    )
+    exit_price, exit_date, exit_reason = _resolve_exit(
+        observation_bars,
+        stop_loss_price,
+        take_profit_price,
+        code=str(getattr(rec, "code", "") or ""),
+        entry_price=baseline_price,
+    )
+    exit_index = next(
+        (
+            index
+            for index, bar in enumerate(observation_bars)
+            if str(bar.trade_date) == str(exit_date)
+        ),
+        len(observation_bars) - 1,
+    )
+    return {
+        "baseline_price": round(baseline_price, 2),
+        "observation_start_date": str(observation_bars[0].trade_date),
+        "exit_date": exit_date,
+        "exit_price": round(exit_price, 2),
+        "return_pct": round((exit_price - baseline_price) / baseline_price * 100, 2),
+        "holding_days": exit_index + 1,
+        "stop_loss_price": stop_loss_price,
+        "take_profit_price": take_profit_price,
+        "exit_reason": exit_reason,
+    }
+
+
 def _bar_tradeable(bar: DailyKbar) -> bool:
     """bar 是否为真实交易日（OHLC 均 > 0）。
 

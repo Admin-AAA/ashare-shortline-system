@@ -501,7 +501,11 @@ export function HistoryPage() {
                 const missingEntryRule = isPlaceholderEntryRule(it.entry_rule);
                 // provisional 的 executed_return 只是入场日收盘临时标记，不是可实现的最终收益；
                 // 未最终结算时改用实时盈亏，避免今日行情已更新却仍展示昨日临时值。
-                const ret = settled ? o?.executed_return : undefined;
+                // missed 没有真实成交，仍保留 executed_return=0；优先展示从推荐价按退出
+                // 条件模拟出的观察收益，供复核这类未触发推荐本身的方向是否准确。
+                const missedObservation = o?.missed_observation;
+                const showingMissedObservation = o?.outcome_label === "missed" && missedObservation?.return_pct != null;
+                const ret = showingMissedObservation ? missedObservation.return_pct : settled ? o?.executed_return : undefined;
                 // 盈亏口径：executed_return 基于「次日开盘买入」（行业标准，A股 T+1 盘后推荐
                 // 只能次日买）。推荐价(recommend_price)是信号日收盘参考价，不是用户真实成本——
                 // 跳空低开时两者背离会让用户误以为「按推荐价算亏了」，故此处只展示真实口径，
@@ -713,15 +717,28 @@ export function HistoryPage() {
                       >
                         <div style={{ ...stackStyle, alignItems: "flex-end" }}>
                           {ret != null ? (
-                            // 已结算：显示真实净收益（基于实入场口径）
-                            <>
-                              <span>{`${ret >= 0 ? "+" : ""}${ret.toFixed(2)}%`}</span>
-                              {isGapEntry && (
-                                <span style={{ color: "var(--muted)", fontSize: "var(--text-xs)", opacity: 0.8 }}>
-                                  基于实入场
+                            showingMissedObservation && missedObservation ? (
+                              <>
+                                <span
+                                  title={`按推荐价 ¥${missedObservation.baseline_price.toFixed(2)} 虚拟持有至 ${missedObservation.exit_date} 的 ${exitReasonLabel(missedObservation.exit_reason, "退出")}; 不含滑点、佣金或印花税，非实际成交收益`}
+                                >
+                                  {`${ret >= 0 ? "+" : ""}${ret.toFixed(2)}%`}
                                 </span>
-                              )}
-                            </>
+                                <span style={{ color: "var(--muted)", fontSize: "var(--text-xs)", opacity: 0.8 }}>
+                                  观察收益 · 未成交
+                                </span>
+                              </>
+                            ) : (
+                              // 已结算：显示真实净收益（基于实入场口径）
+                              <>
+                                <span>{`${ret >= 0 ? "+" : ""}${ret.toFixed(2)}%`}</span>
+                                {isGapEntry && (
+                                  <span style={{ color: "var(--muted)", fontSize: "var(--text-xs)", opacity: 0.8 }}>
+                                    基于实入场
+                                  </span>
+                                )}
+                              </>
+                            )
                           ) : (
                             // 未结算：回落到实时浮盈，标注「未结算」与「收益」区分
                             renderRealtimePnl(pnlMap[it.recommendation_id])
@@ -738,8 +755,16 @@ export function HistoryPage() {
                         }}
                       >
                         <div style={{ ...stackStyle, alignItems: "flex-end" }}>
-                          <span>{exitReasonLabel(o?.exit_reason, "—", ret)}</span>
-                          <span>{o?.holding_days != null ? `持仓 ${o.holding_days} 天` : "—"}</span>
+                          <span>
+                            {showingMissedObservation && missedObservation
+                              ? `观察 · ${exitReasonLabel(missedObservation.exit_reason, "退出", missedObservation.return_pct)}`
+                              : exitReasonLabel(o?.exit_reason, "—", ret)}
+                          </span>
+                          <span>
+                            {showingMissedObservation && missedObservation
+                              ? `观察 ${missedObservation.holding_days} 天 · 至 ${missedObservation.exit_date}`
+                              : o?.holding_days != null ? `持仓 ${o.holding_days} 天` : "—"}
+                          </span>
                         </div>
                       </td>
                       <td style={{ ...tdStyle, textAlign: "right", width: 44 }}>

@@ -807,10 +807,49 @@ def list_recommendation_history(
 
     # 按去重后的 id 顺序排序（保证 trade_date DESC, final_score DESC）
     ordered_recs = [rec_by_id[rid] for rid in page_ids if rid in rec_by_id]
+
+    # 未触发推荐没有真实成交，executed_return 必须保持 0。为方便复核方向，额外按
+    # 推荐价和生产退出规则计算只读的「观察收益」；结果不写库，也不进入交易胜率/收益汇总。
+    missed_recs = [
+        rec
+        for rec in ordered_recs
+        if normalized_outcome_label(outcome_map.get(rec.recommendation_id)) == "missed"
+    ]
+    missed_observation_map: dict[str, dict[str, Any]] = {}
+    if missed_recs:
+        from app.services.outcome_simulation import build_missed_observation
+
+        missed_codes = {str(rec.code) for rec in missed_recs}
+        earliest_trade_date = min(str(rec.trade_date) for rec in missed_recs)
+        missed_bars = db.scalars(
+            select(DailyKbar)
+            .where(DailyKbar.code.in_(missed_codes), DailyKbar.trade_date >= earliest_trade_date)
+            .order_by(DailyKbar.code.asc(), DailyKbar.trade_date.asc())
+        ).all()
+        bars_by_code: dict[str, list[DailyKbar]] = {}
+        dates_by_code: dict[str, list[str]] = {}
+        for bar in missed_bars:
+            bar_code = str(bar.code)
+            bars_by_code.setdefault(bar_code, []).append(bar)
+            dates_by_code.setdefault(bar_code, []).append(str(bar.trade_date))
+        for rec in missed_recs:
+            outcome = outcome_map.get(rec.recommendation_id)
+            observation = build_missed_observation(
+                rec,
+                bars_by_code.get(str(rec.code), []),
+                dates_by_code.get(str(rec.code), []),
+                horizon_days=max(1, int(getattr(outcome, "horizon_days", 5) or 5)),
+            )
+            if observation is not None:
+                missed_observation_map[rec.recommendation_id] = observation
+
     items = _serialize_recommendations_batched(db, ordered_recs, slim=True)
     for item in items:
         rec_id = item.get("recommendation_id")
-        item["outcome"] = _serialize_outcome(outcome_map.get(rec_id)) if rec_id else None
+        serialized_outcome = _serialize_outcome(outcome_map.get(rec_id)) if rec_id else None
+        if serialized_outcome is not None and rec_id in missed_observation_map:
+            serialized_outcome["missed_observation"] = missed_observation_map[rec_id]
+        item["outcome"] = serialized_outcome
         item["execution_state"] = all_execution_states.get(str(rec_id)) if rec_id else None
         item["cancel_observation"] = cancel_report["items"].get(str(rec_id)) if rec_id else None
 
