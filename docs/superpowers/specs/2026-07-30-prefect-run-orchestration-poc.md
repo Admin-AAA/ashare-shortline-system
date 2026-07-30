@@ -1,7 +1,9 @@
 # Prefect 运行编排 PoC Spec
 
 日期：2026-07-30
-状态：待实现
+状态：已被《开源框架全量切换 Spec》取代
+
+> 本文保留最初的低风险 PoC 设计记录，不再作为实现依据。当前系统按 demo 处理，不保留 shadow、legacy orchestrator 或运行时回退；实际实施以 `2026-07-30-open-source-framework-full-cutover.md` 为唯一规范。
 
 ## 1. 背景
 
