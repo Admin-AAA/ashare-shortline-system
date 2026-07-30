@@ -309,7 +309,7 @@ def _provider_activity_delta(
     return {
         "used_providers": used_providers,
         "providers": providers,
-        "route_policy": "通用/日线优先 Fastapic；分钟/公告优先 ai-tool；允许安全 fallback。",
+        "route_policy": "通用接口按数据源配置优先级路由；特殊 API 按能力路由；失败时安全 fallback。",
         "minute_scope": "仅修复诊断窗口内缺失交易日，默认最多 300 只；不触发三年回填。",
     }
 
