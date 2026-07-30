@@ -129,10 +129,10 @@ def _range_payload() -> dict[str, object]:
 def test_main_composes_the_agent_research_gateway() -> None:
     from app.main import app
 
-    routes = {(route.path, tuple(sorted(route.methods or ()))) for route in app.routes}
-    assert ("/api/backtests", ("POST",)) in routes
-    assert ("/api/backtests/preflight", ("POST",)) in routes
-    assert ("/api/backtest-experiments", ("POST",)) in routes
+    operations = app.openapi()["paths"]
+    assert "post" in operations["/api/backtests"]
+    assert "post" in operations["/api/backtests/preflight"]
+    assert "post" in operations["/api/backtest-experiments"]
 
 
 def test_real_declarative_strategy_gateway_vertical_slice_is_research_only(gateway) -> None:

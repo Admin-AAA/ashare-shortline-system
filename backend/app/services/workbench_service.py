@@ -1110,7 +1110,13 @@ def recover_interrupted_runs(db: Session, run_ids: list[str] | None = None) -> i
         logger.warning("marked %d stale recommendation runs as interrupted on startup", recovered)
     if redispatched:
         for run_id in redispatched:
-            _trigger_recommendation(run_id)
+            try:
+                _trigger_recommendation(run_id)
+            except Exception:
+                # Recovery runs during API startup too. A temporarily unavailable
+                # Prefect server/deployment must not prevent the application from
+                # starting; the next watchdog pass will retry the queued run.
+                logger.exception("failed to redispatch queued run %s through Prefect", run_id)
         logger.info("redispatched %d stale queued runs (heartbeat timeout while waiting for worker)", len(redispatched))
     return recovered
 

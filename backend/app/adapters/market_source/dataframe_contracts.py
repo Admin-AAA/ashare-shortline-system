@@ -91,7 +91,6 @@ _SCHEMAS: dict[MarketFrameKind, pa.DataFrameSchema] = {
     ),
     "holder_number": pa.DataFrameSchema(
         {"ts_code": _TS_CODE, "end_date": _TRADE_DATE}, strict=False,
-        unique=["ts_code", "end_date"],
     ),
     "pledge_stat": pa.DataFrameSchema(
         {"ts_code": _TS_CODE, "end_date": _TRADE_DATE}, strict=False,
