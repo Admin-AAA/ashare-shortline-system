@@ -1,6 +1,6 @@
-"""APScheduler 调度执行器 — 按 Cron 表达式执行 ScheduledTask。
+"""ScheduledTask 业务执行函数；进程编排由 Prefect 独占。
 
-在 FastAPI 启动时创建 BackgroundScheduler，从数据库加载已启用的任务。
+本模块不创建 scheduler、worker 或后台调度线程。
 支持任务类型:
   - data_sync: 同步行情数据（刷新报价池 + 按日批量日K + 健康补数 + 辅助数据）
   - recommendation_run: 执行推荐流水线
@@ -18,8 +18,6 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 
 from app.db.session import SessionLocal
@@ -39,7 +37,7 @@ from app.services.registry.data_source import (
 
 logger = logging.getLogger("scheduler")
 
-_scheduler: BackgroundScheduler | None = None
+_scheduler: Any | None = None
 _running_lock = threading.Lock()
 _running_tasks: set[str] = set()
 TASK_TYPE_PRESET_MATRIX_RUN = "preset_matrix_run"
@@ -54,7 +52,7 @@ SAFETY_NET_TASK_ID = "formal_run_safety_net"
 # after this many failed runs; the safety net suppresses only an in-flight retry.
 SAFETY_NET_MAX_ATTEMPTS = 3
 POSTCLOSE_PIPELINE_TASK_ID = "post_sync_formal_recommendation"
-# 工作日必须写 mon-fri 而不是数字 1-5：APScheduler 的 day_of_week 是 0=Monday，
+# 工作日使用 mon-fri，避免不同 cron 实现对数字星期的解释差异。
 # 与标准 crontab 的 0=Sunday 差一天，"1-5" 会被解析成「周二到周六」——周一永不触发、
 # 周六反而跑。名称形式在两种语义下都无歧义，是唯一安全写法。见 _normalize_cron。
 POSTCLOSE_PIPELINE_CRON = "35 17 * * mon-fri"
@@ -140,21 +138,22 @@ def _mark_done_memory(task_id: str) -> None:
         _running_tasks.discard(task_id)
 
 
-def start_scheduler() -> BackgroundScheduler:
+def start_scheduler() -> Any:
     """启动调度器，从数据库加载已启用任务。"""
+    raise RuntimeError("in-process scheduler was removed; start the Prefect worker")
     global _scheduler
     if _scheduler is not None:
         return _scheduler
 
     # 补跑容错：错过 cron 时刻后 1 小时内恢复运行仍补跑一次（coalesce 合并为单次）。
-    # 根因：BackgroundScheduler 用 time.sleep 轮询，macOS 显示器休眠 / launchd 重启会让
+    # 历史进程内 scheduler 用 time.sleep 轮询，系统休眠会让
     # 调度线程挂起而错过触发点；默认 misfire_grace_time=1s 会把错过的 cron 永久丢弃。
     # 两类已证实的错过都被 1h 覆盖：
     #   ① launchd 每日 08:50 kickstart 重启 → 错过 08:03 盘前曝光 / 08:30 安全网(差 47/20min)；
     #   ② 显示器休眠挂起 → 错过 17:35 盘后 post_sync（睡眠醒来距 cron 通常 <1h）。
     # 1h 是上限而非越大越好：更大的宽限会把隔夜/跨时段任务在错误时间点补跑（如清晨补跑
     # 前一日盘后同步），反而制造脏数据。隔夜 misfire 远超 1h 仍会被正确丢弃。
-    _scheduler = BackgroundScheduler(
+    _scheduler = Any(
         timezone="Asia/Shanghai",
         job_defaults={"misfire_grace_time": 3600, "coalesce": True},
     )
@@ -416,15 +415,15 @@ def stop_scheduler() -> None:
         logger.info("调度器已停止")
 
 
-# 标准 crontab 的 day_of_week 是 0/7=Sunday，APScheduler 是 0=Monday。用户按 crontab
+# 标准 crontab 的 day_of_week 是 0/7=Sunday。用户按 crontab
 # 习惯写的数字星期会整体偏移一天（"1-5" → 周二至周六，周一漏跑、周六误跑）。
-# 这里把数字星期按 crontab 语义翻译成 APScheduler 的名称形式，让两种写法都得到
+# 这里把数字星期按 crontab 语义翻译成名称形式，让两种写法都得到
 # 用户预期的日期。已是名称形式（mon-fri）的表达式原样透传。
 _CRON_DOW_NAMES = ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
 
 
 def _normalize_cron(cron_expression: str) -> str:
-    """把 cron 表达式的数字星期字段按标准 crontab 语义转成 APScheduler 名称形式。"""
+    """把 cron 表达式的数字星期字段按标准 crontab 语义转成名称形式。"""
     parts = cron_expression.strip().split()
     if len(parts) != 5:
         return cron_expression
@@ -463,7 +462,8 @@ def _load_and_schedule() -> None:
         for task in tasks:
             normalized = _normalize_cron(task.cron_expression or "")
             try:
-                trigger = CronTrigger.from_crontab(normalized, timezone="Asia/Shanghai")
+                from prefect.schedules import Cron
+                trigger = Cron(normalized, timezone="Asia/Shanghai")
             except Exception:
                 logger.warning("无效 cron 表达式 '%s'，任务 %s 跳过", task.cron_expression, task.task_id)
                 continue
@@ -618,13 +618,8 @@ def start_preset_matrix_now(payload: dict | None = None) -> dict:
     finally:
         db.close()
 
-    thread = threading.Thread(
-        target=_execute_manual_preset_matrix,
-        args=[task_run_id, run_payload],
-        name=f"preset-matrix-{task_run_id}",
-        daemon=True,
-    )
-    thread.start()
+    from app.orchestration import trigger_manual_matrix
+    trigger_manual_matrix(task_run_id, run_payload)
     latest = get_latest_preset_matrix_task_run()
     return {"started": True, "task_run": latest}
 
@@ -712,13 +707,8 @@ def start_data_health_remediation_now(payload: dict | None = None) -> dict:
     finally:
         db.close()
 
-    thread = threading.Thread(
-        target=_execute_manual_data_health_remediation,
-        args=[task_run_id, run_payload],
-        name=f"data-health-remediation-{task_run_id}",
-        daemon=True,
-    )
-    thread.start()
+    from app.orchestration import trigger_manual_remediation
+    trigger_manual_remediation(task_run_id, run_payload)
     latest = get_latest_data_health_remediation_task_run()
     return {"started": True, "task_run": latest}
 
@@ -906,13 +896,8 @@ def start_strategy_exposure_now(payload: dict | None = None) -> dict:
     finally:
         db.close()
 
-    thread = threading.Thread(
-        target=_execute_manual_strategy_exposure,
-        args=[task_run_id, run_payload],
-        name=f"strategy-exposure-{task_run_id}",
-        daemon=True,
-    )
-    thread.start()
+    from app.orchestration import trigger_manual_exposure
+    trigger_manual_exposure(task_run_id, run_payload)
     return {"started": True, "task_run": get_latest_strategy_exposure_task_run()}
 
 

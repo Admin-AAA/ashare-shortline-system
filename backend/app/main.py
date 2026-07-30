@@ -157,40 +157,9 @@ def on_startup() -> None:
         recover_scheduled_task_runs(db)
     finally:
         db.close()
-    from app.services.scheduler_service import start_scheduler
-    start_scheduler()
     _warmup_initial_state()
     _warmup_data_health_cache()
     _warmup_pool_cache(delay_seconds=2.0)
-
-    # 安全网：启动时检查 formal 推荐断档并自动补跑（后台线程，不阻塞启动）
-    import threading as _threading
-    def _safety_net_on_startup() -> None:
-        import time as _time
-        _time.sleep(8)  # 等待调度器和缓存预热完成
-        from app.services.scheduler_service import ensure_formal_recommendation_safely
-        ensure_formal_recommendation_safely()
-    _threading.Thread(target=_safety_net_on_startup, daemon=True).start()
-
-    # outcome 补结算：后端不 7x24 运行，cron 18:20 可能被错过（如机器睡眠/重启）。
-    # 启动时补跑 label_pending_outcomes——自动只结算 T+1 K线已同步的 pending 推荐
-    # （_simulate_outcome 对缺 K 线的返回 None 跳过，安全）。D 项前瞻验证前置。
-    def _outcome_label_on_startup() -> None:
-        import time as _time
-        _time.sleep(12)  # 等安全网 + 缓存预热，避免与 startup 抢资源
-        try:
-            from app.db.session import SessionLocal
-            from app.services.outcome_service import label_pending_outcomes
-            db = SessionLocal()
-            try:
-                result = label_pending_outcomes(db, horizon_days=5)
-                labeled = int(result.get("labeled") or 0)
-                logger.info("启动补结算 outcome: 结算 %d 笔（缺 T+1 K线的 pending 自动跳过）", labeled)
-            finally:
-                db.close()
-        except Exception:
-            logger.exception("启动补结算 outcome 失败")
-    _threading.Thread(target=_outcome_label_on_startup, daemon=True).start()
 
 
 def _warmup_initial_state() -> None:
@@ -260,12 +229,6 @@ def _warmup_pool_cache(delay_seconds: float = 0.0) -> None:
         finally:
             db.close()
     threading.Thread(target=_warm, daemon=True).start()
-
-
-@app.on_event("shutdown")
-def on_shutdown() -> None:
-    from app.services.scheduler_service import stop_scheduler
-    stop_scheduler()
 
 
 @app.get("/api/health", response_model=HealthResponse)

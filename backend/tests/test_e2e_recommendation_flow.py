@@ -1383,8 +1383,8 @@ class TestE2ERecommendationFlow:
 
         queued: list[str] = []
         monkeypatch.setattr(
-            workbench_service._run_dispatcher,
-            "enqueue",
+            workbench_service,
+            "_trigger_recommendation",
             lambda run_id: queued.append(run_id),
         )
 

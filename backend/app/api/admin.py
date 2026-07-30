@@ -253,10 +253,10 @@ def delete_task(task_id: str, db: Session = Depends(get_db)):
 def run_task_now(task_id: str, db: Session = Depends(get_db)):
     if not any(task["task_id"] == task_id for task in list_scheduled_tasks(db)):
         raise HTTPException(status_code=404, detail="task not found")
-    from app.services.scheduler_service import run_task_now
+    from app.orchestration import trigger_scheduled_task
 
-    run_task_now(task_id)
-    return {"ok": True}
+    ref = trigger_scheduled_task(task_id)
+    return {"ok": True, "orchestration_run_id": ref.run_id}
 
 
 @router.post("/tasks/{task_id}/_record")
@@ -313,17 +313,15 @@ def _daily_cron(trigger_time: str) -> str:
 
 
 def _validate_cron(cron_expression: str) -> None:
-    from apscheduler.triggers.cron import CronTrigger
-    from app.services.scheduler_service import _normalize_cron
+    from prefect.schedules import Cron
 
     try:
-        # 校验归一化后的表达式：调度器注册时同样会归一化，两处口径必须一致
-        CronTrigger.from_crontab(_normalize_cron(cron_expression), timezone="Asia/Shanghai")
+        Cron(cron_expression, timezone="Asia/Shanghai")
     except Exception as exc:
         raise HTTPException(status_code=400, detail="cron_expression is invalid") from exc
 
 
 def _reload_scheduler() -> int:
-    from app.services.scheduler_service import reload_tasks
+    from app.orchestration import schedule_all_enabled_tasks
 
-    return reload_tasks()
+    return schedule_all_enabled_tasks().scheduled_task_count

@@ -140,12 +140,12 @@ def test_recover_interrupted_runs_redispatches_stale_queued_not_interrupted():
     import app.services.workbench_service as ws_mod
 
     enqueued: list[str] = []
-    real_enqueue = ws_mod._run_dispatcher.enqueue
+    real_enqueue = ws_mod._trigger_recommendation
 
     def _capture_enqueue(run_id: str) -> None:
         enqueued.append(run_id)
 
-    ws_mod._run_dispatcher.enqueue = _capture_enqueue
+    ws_mod._trigger_recommendation = _capture_enqueue
     run_id_queued = f"__test_queued_{uuid.uuid4().hex[:12]}"
     run_id_running = f"__test_running_{uuid.uuid4().hex[:12]}"
     db = SessionLocal()
@@ -176,7 +176,7 @@ def test_recover_interrupted_runs_redispatches_stale_queued_not_interrupted():
         assert run_id_queued in enqueued
         assert run_id_running not in enqueued
     finally:
-        ws_mod._run_dispatcher.enqueue = real_enqueue
+        ws_mod._trigger_recommendation = real_enqueue
         db.rollback()
         for rid in (run_id_queued, run_id_running):
             row = db.get(RecommendationRun, rid)

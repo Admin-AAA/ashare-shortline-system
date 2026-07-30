@@ -1,0 +1,24 @@
+name: ashare-shortline-system
+prefect-version: 3.8.0
+pull: []
+deployments:
+  - name: default
+    entrypoint: backend/app/orchestration/flows.py:recommendation_flow
+    work_pool:
+      name: ashare-local
+  - name: scheduled-task
+    entrypoint: backend/app/orchestration/flows.py:scheduled_task_flow
+    work_pool:
+      name: ashare-local
+  - name: default
+    entrypoint: backend/app/orchestration/flows.py:manual_preset_matrix_flow
+    work_pool:
+      name: ashare-local
+  - name: default
+    entrypoint: backend/app/orchestration/flows.py:manual_data_health_remediation_flow
+    work_pool:
+      name: ashare-local
+  - name: default
+    entrypoint: backend/app/orchestration/flows.py:manual_strategy_exposure_flow
+    work_pool:
+      name: ashare-local
