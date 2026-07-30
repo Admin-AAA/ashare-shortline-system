@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import type { AgentLog, RecommendationCard, RecommendationDetail, SkillSignal, StrategyPerfSummary } from "../types";
 import { ruleKeyLevelLabels, rulesMentionKeyLevel } from "../utils/ruleKeyLevels";
 import { formatApiDateTime } from "../utils/display";
+import { isPlaceholderEntryRule } from "../utils/executionConfirmation";
 import { MultiStrategyBadge } from "./MultiStrategyBadge";
 
 /**
@@ -117,6 +118,7 @@ export function RecommendationDetailCard({ item }: { item: DetailItem }) {
   const keyLevelLabels = ruleKeyLevelLabels(item.entry_rule, item.invalid_rule, keyLevels);
   const hasUnresolvedKeyLevel = keyLevelLabels.length === 0
     && rulesMentionKeyLevel(item.entry_rule, item.invalid_rule);
+  const missingEntryRule = isPlaceholderEntryRule(item.entry_rule);
 
   return (
     <div style={cardContainerStyle}>
@@ -212,14 +214,19 @@ export function RecommendationDetailCard({ item }: { item: DetailItem }) {
           </div>
         )}
 
-        {(item.entry_rule || item.invalid_rule) && (
+        {(missingEntryRule || item.entry_rule || item.invalid_rule) && (
           <div style={{ marginBottom: "var(--space-3)", fontSize: "var(--text-xs)", lineHeight: 1.6 }}>
-            {item.entry_rule && (
+            {missingEntryRule ? (
+              <div style={{ marginBottom: "var(--space-1)" }}>
+                <span style={{ color: "var(--text-muted)" }}>入场规则 · </span>
+                <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>原推荐未保存明确买点</span>
+              </div>
+            ) : item.entry_rule ? (
               <div style={{ marginBottom: "var(--space-1)" }}>
                 <span style={{ color: "var(--text-muted)" }}>入场规则 · </span>
                 <span style={{ color: "var(--ink-secondary)" }}>{item.entry_rule}</span>
               </div>
-            )}
+            ) : null}
             {item.invalid_rule && (
               <div>
                 <span style={{ color: "var(--text-muted)" }}>失效规则 · </span>

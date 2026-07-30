@@ -6,7 +6,7 @@ import asyncio
 from prefect import flow, task
 
 
-@task(retries=2, retry_delay_seconds=[10, 60])
+@task(retries=2, retry_delay_seconds=[300, 900])
 def execute_scheduled_task(task_id: str, trigger_source: str) -> None:
     from app.services.scheduler_service import _execute_task
 

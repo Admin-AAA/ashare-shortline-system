@@ -63,6 +63,19 @@ LEGACY_POSTCLOSE_TASK_IDS = (
     "postclose_auxiliary_data_sync",
     "postclose_outcome_label",
 )
+# 仅这两类当日辅助数据存在盘后上游延迟，允许交给 Prefect 有界重试。
+# daily_kbar/stock_quote 以及历史覆盖缺口都属于硬阻断，不能靠重复刷新掩盖。
+_RECOVERABLE_POSTCLOSE_AUX_TABLES = frozenset({"index_daily", "limit_up_board"})
+
+
+class RetryablePostcloseReadinessError(RuntimeError):
+    """盘后辅助数据尚未发布；由 Prefect 在新短会话中有界重试。"""
+
+    def __init__(self, result: dict[str, Any]):
+        self.result = result
+        super().__init__(str(result.get("summary_text") or "盘后辅助数据暂未就绪"))
+
+
 # 策略曝光补跑调度任务（E 项样本可信前置）：盘前对近30天样本不足的策略单独补跑。
 # 任务 ID 固定，start_scheduler 时幂等注册（已存在则不覆盖用户手动调整的 cron/payload）。
 EXPOSURE_TASK_ID = "strategy_exposure_run"
@@ -572,6 +585,24 @@ def _execute_task(task_id: str, *, force: bool = False, trigger_source: str = "s
             result=result,
         )
         logger.info("调度任务完成: %s", task_id)
+    except RetryablePostcloseReadinessError as exc:
+        # 只把结构化确认的当日辅助数据滞后传播给 Prefect。每次重试都会重新进入
+        # _execute_task、创建新 Session；这里先完整落盘本次同步/刷新证据。
+        logger.warning("盘后辅助数据暂未就绪，等待 Prefect 重试: %s", exc)
+        db.rollback()
+        try:
+            if task_run_id:
+                finish_task_run(
+                    db,
+                    task_run_id,
+                    status="failed",
+                    error=str(exc),
+                    summary=str(exc),
+                    result=exc.result,
+                )
+        except Exception:
+            logger.exception("记录盘后可重试失败状态时出错: %s", task_id)
+        raise
     except Exception as e:
         logger.exception("调度任务失败: %s", task_id)
         db.rollback()
@@ -1621,23 +1652,161 @@ async def _wait_for_recommendation_run(
     raise TimeoutError(f"推荐 Run {run_id} 在 {timeout_seconds} 秒内未结束")
 
 
+def _classify_postclose_blockers(
+    readiness: dict[str, Any],
+    *,
+    trade_date: str,
+) -> dict[str, Any]:
+    """按结构化契约区分可恢复的当日辅助缺口与硬阻断。
+
+    仅 ``table_not_current`` 不足以证明是发布滞后；同一辅助表还必须有最近覆盖
+    诊断，且明确显示唯一缺失日期就是本次 ``trade_date``。
+    """
+    details = list(readiness.get("blocker_details") or [])
+    if not details:
+        return {
+            "recoverable_tables": [],
+            "hard_blockers": [
+                {
+                    "code": "unstructured_blocker",
+                    "message": message,
+                }
+                for message in (readiness.get("blockers") or ["未知数据健康问题"])
+            ],
+        }
+
+    by_table: dict[str, list[dict[str, Any]]] = {}
+    hard_blockers: list[dict[str, Any]] = []
+    for detail in details:
+        table = str(detail.get("table") or "")
+        if not table:
+            hard_blockers.append(detail)
+            continue
+        by_table.setdefault(table, []).append(detail)
+
+    recoverable_tables: list[str] = []
+    for table, table_details in by_table.items():
+        current_detail = next(
+            (
+                detail
+                for detail in table_details
+                if detail.get("code") == "table_not_current"
+                and str(detail.get("expected_trade_date") or "") == trade_date
+            ),
+            None,
+        )
+        coverage_detail = next(
+            (
+                detail
+                for detail in table_details
+                if detail.get("code") == "recent_coverage_gap"
+                and str(detail.get("expected_trade_date") or "") == trade_date
+                and set(detail.get("missing_dates") or []) == {trade_date}
+                and not detail.get("incomplete_dates")
+            ),
+            None,
+        )
+        allowed_codes = {"table_not_current", "recent_coverage_gap"}
+        only_expected_codes = all(detail.get("code") in allowed_codes for detail in table_details)
+        if (
+            table in _RECOVERABLE_POSTCLOSE_AUX_TABLES
+            and current_detail is not None
+            and coverage_detail is not None
+            and only_expected_codes
+        ):
+            recoverable_tables.append(table)
+        else:
+            hard_blockers.extend(table_details)
+
+    return {
+        "recoverable_tables": sorted(recoverable_tables),
+        "hard_blockers": hard_blockers,
+    }
+
+
+def _refresh_recoverable_postclose_aux(
+    db,
+    *,
+    trade_date: str,
+    tables: list[str],
+) -> dict[str, Any]:
+    """逐表短事务刷新；先检查 provider 错误，成功后才提交。
+
+    刷新本身抛错代表数据库、程序或 provider 故障，必须保留原异常与 traceback，
+    不能伪装成“数据尚未发布”。只有刷新正常返回但闸门仍只缺当天时才允许退避。
+    """
+    from app.services.data_gap_remediation_service import _refresh_auxiliary_dataset
+    from app.services.data_health_service import clear_data_health_cache
+
+    results: dict[str, Any] = {}
+    try:
+        for table in tables:
+            count, audit = _refresh_auxiliary_dataset(
+                db,
+                dataset=table,
+                trade_date=trade_date,
+            )
+            results[table] = {"status": "completed", "record_count": count, "audit": audit}
+    finally:
+        clear_data_health_cache()
+    return results
+
+
 async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
-    """单一盘后流水线：全量同步 → 健康闸门 → outcome → 正式推荐。"""
+    """单一盘后流水线：全量同步 → 健康闸门 → outcome → 正式推荐。
+
+    当且仅当结构化闸门表明 ``index_daily``/``limit_up_board`` 只缺当前交易日时，
+    先以短事务立即刷新一次；仍未就绪则抛出可重试异常，由 Prefect 在新 Session 中
+    有界退避。任何行情、诊断、历史覆盖或混合缺口均立即硬失败。
+    """
     trade_date = _latest_allowed_bar_date()
     sync_payload = dict(payload)
     sync_payload.update({"sync_scope": "all", "trade_date": trade_date})
     sync_result = _run_data_sync(db, sync_payload)
 
     readiness = _diagnose_postclose_readiness(db, trade_date)
+    aux_refresh: dict[str, Any] = {}
     if not readiness.get("can_run_local_recommendation"):
-        blockers = "；".join(readiness.get("blockers") or ["未知数据健康问题"])
-        return {
-            "status": "failed",
-            "trade_date": trade_date,
-            "sync": sync_result,
-            "readiness": readiness,
-            "summary_text": f"盘后同步完成，但健康闸门阻止推荐：{blockers}",
-        }
+        classification = _classify_postclose_blockers(readiness, trade_date=trade_date)
+        recoverable_tables = classification["recoverable_tables"]
+        retry_window_open = _latest_allowed_bar_date() == trade_date
+        if recoverable_tables and not classification["hard_blockers"] and retry_window_open:
+            aux_refresh = _refresh_recoverable_postclose_aux(
+                db,
+                trade_date=trade_date,
+                tables=recoverable_tables,
+            )
+            readiness = _diagnose_postclose_readiness(db, trade_date)
+            if not readiness.get("can_run_local_recommendation"):
+                classification = _classify_postclose_blockers(readiness, trade_date=trade_date)
+                recoverable_tables = classification["recoverable_tables"]
+                retry_window_open = _latest_allowed_bar_date() == trade_date
+
+        if not readiness.get("can_run_local_recommendation"):
+            blockers = "；".join(readiness.get("blockers") or ["未知数据健康问题"])
+            retryable = bool(
+                recoverable_tables
+                and not classification["hard_blockers"]
+                and retry_window_open
+            )
+            result = {
+                "status": "failed",
+                "retryable": retryable,
+                "retry_reason": "postclose_aux_upstream_lag" if retryable else None,
+                "trade_date": trade_date,
+                "sync": sync_result,
+                "readiness": readiness,
+                "blocker_classification": classification,
+                "aux_refresh": aux_refresh,
+                "summary_text": (
+                    f"盘后辅助数据尚未就绪，等待有界重试：{blockers}"
+                    if retryable
+                    else f"盘后同步完成，但健康闸门存在硬阻断：{blockers}"
+                ),
+            }
+            if retryable:
+                raise RetryablePostcloseReadinessError(result)
+            return result
 
     outcome = _run_outcome_label(
         db,
@@ -1672,6 +1841,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
             "trade_date": trade_date,
             "sync": sync_result,
             "readiness": readiness,
+            "aux_refresh": aux_refresh,
             "outcome": outcome,
             "recommendation": recommendation if "recommendation" in locals() else None,
             "related_run_id": run_id if "run_id" in locals() else "",
@@ -1686,6 +1856,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
             "trade_date": trade_date,
             "sync": sync_result,
             "readiness": readiness,
+            "aux_refresh": aux_refresh,
             "outcome": outcome,
             "recommendation": recommendation,
             "final_run": final_run,
@@ -1699,6 +1870,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         "trade_date": trade_date,
         "sync": sync_result,
         "readiness": readiness,
+        "aux_refresh": aux_refresh,
         "outcome": outcome,
         "recommendation": recommendation,
         "final_run": final_run,
