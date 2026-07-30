@@ -15,6 +15,7 @@ from .v027_cancelled_before_entry import migrations as cancelled_before_entry_mi
 from .v028_recommendation_evaluation_scope import migrations as recommendation_evaluation_scope_migrations
 from .v029_recommendation_source_evidence import migrations as recommendation_source_evidence_migrations
 from .v030_outcome_version_ledger import migrations as outcome_version_ledger_migrations
+from .v031_intraday_lock_shadow import migrations as intraday_lock_shadow_migrations
 from .workbench_run_lifecycle import migrations as workbench_run_lifecycle_migrations
 
 
@@ -34,4 +35,5 @@ def all_migrations() -> tuple[Migration, ...]:
         *recommendation_evaluation_scope_migrations(),
         *recommendation_source_evidence_migrations(),
         *outcome_version_ledger_migrations(),
+        *intraday_lock_shadow_migrations(),
     )

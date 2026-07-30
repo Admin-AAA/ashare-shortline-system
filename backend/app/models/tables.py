@@ -1264,3 +1264,45 @@ class BacktestExperiment(Base):
     created_at: Mapped[datetime] = mapped_column(_BACKTEST_DATETIME, default=datetime.utcnow)
     frozen_at: Mapped[datetime | None] = mapped_column(_BACKTEST_DATETIME)
     finished_at: Mapped[datetime | None] = mapped_column(_BACKTEST_DATETIME)
+
+
+class IntradayLockMonitor(Base):
+    """盘中锁利影子监控任务(只记录不交易)。每个精选持仓一条监控任务。"""
+
+    __tablename__ = "intraday_lock_monitors"
+
+    monitor_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    recommendation_id: Mapped[str] = mapped_column(String(80), index=True)
+    code: Mapped[str] = mapped_column(String(6))
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    entry_date: Mapped[str] = mapped_column(String(10))
+    entry_price: Mapped[float] = mapped_column(Float)
+    target_pct: Mapped[float] = mapped_column(Float)
+    lock_ratio: Mapped[float] = mapped_column(Float, default=0.5)
+    status: Mapped[str] = mapped_column(String(20), index=True, default="monitoring")
+    triggered_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class IntradayLockSignal(Base):
+    """盘中锁利信号。触及锁利目标时记录,盘后回填走势并与实际出场对比。"""
+
+    __tablename__ = "intraday_lock_signals"
+
+    signal_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    monitor_id: Mapped[str] = mapped_column(String(80), index=True)
+    code: Mapped[str] = mapped_column(String(6))
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    target_pct: Mapped[float] = mapped_column(Float)
+    lock_ratio: Mapped[float] = mapped_column(Float, default=0.5)
+    trigger_time: Mapped[str] = mapped_column(String(40))
+    trigger_price: Mapped[float] = mapped_column(Float)
+    post_trigger_max_pct: Mapped[float | None] = mapped_column(Float)
+    post_trigger_min_pct: Mapped[float | None] = mapped_column(Float)
+    actual_exit_price: Mapped[float | None] = mapped_column(Float)
+    actual_exit_return: Mapped[float | None] = mapped_column(Float)
+    lock_delta_pct: Mapped[float | None] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String(20), index=True, default="open")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
