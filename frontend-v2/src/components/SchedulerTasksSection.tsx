@@ -69,8 +69,8 @@ const ALL_TASK_TYPES: ScheduledTaskType[] = [
 
 // ── cron ↔ HH:MM 互转 ────────────────────────────────────────────
 // 现有任务均为 "M H * * mon-fri"（工作日）或 "M H * * *"（每日）。
-// 工作日一律写 mon-fri：APScheduler 的 day_of_week 是 0=Monday，写数字 1-5 会被当成
-// 周二到周六（周一漏跑、周六误跑）。历史遗留的 1-5 仍按工作日识别以正确回显。
+// 工作日统一写 mon-fri，避免不同 cron 实现把数字 1-5 解释成周二到周六。
+// 历史遗留的 1-5 仍按工作日识别以正确回显。
 function cronToTriggerTime(cron: string): { time: string; weekdaysOnly: boolean } {
   const parts = cron.trim().split(/\s+/);
   if (parts.length < 5) return { time: "17:30", weekdaysOnly: false };
