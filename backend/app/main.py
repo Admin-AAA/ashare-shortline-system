@@ -16,6 +16,7 @@ from app.core.logger import setup_logging
 from app.db.init_db import init_db
 from app.db.alembic_runtime import get_alembic_health
 from app.services.factors import bootstrap_default_factor_registry
+from app.schemas.common import AuthStatusResponse, HealthResponse, OkResponse
 
 logger = logging.getLogger(__name__)
 access_logger = logging.getLogger("app.access")
@@ -267,7 +268,7 @@ def on_shutdown() -> None:
     stop_scheduler()
 
 
-@app.get("/api/health")
+@app.get("/api/health", response_model=HealthResponse)
 def health():
     migration = get_alembic_health()
     if migration.status == "error":
@@ -284,12 +285,12 @@ def health():
     }
 
 
-@app.get("/api/auth/status")
+@app.get("/api/auth/status", response_model=AuthStatusResponse)
 def auth_status(request: Request):
     return {"enabled": _auth_enabled(), "authenticated": _request_is_authorized(request)}
 
 
-@app.post("/api/auth/login")
+@app.post("/api/auth/login", response_model=OkResponse)
 async def auth_login(request: Request):
     payload = await request.json()
     password = str(payload.get("password", ""))
@@ -308,7 +309,7 @@ async def auth_login(request: Request):
     return JSONResponse(status_code=401, content={"detail": "密码不正确"})
 
 
-@app.post("/api/auth/logout")
+@app.post("/api/auth/logout", response_model=OkResponse)
 def auth_logout():
     response = JSONResponse({"ok": True})
     response.delete_cookie(settings.access_cookie_name)

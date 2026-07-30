@@ -7,7 +7,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Depends, HTTPException
+from app.api.contracts import ContractRouter as APIRouter
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 

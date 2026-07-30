@@ -3,7 +3,8 @@ import time
 import threading
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Depends, HTTPException
+from app.api.contracts import ContractRouter as APIRouter
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db

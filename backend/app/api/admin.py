@@ -1,6 +1,7 @@
 """运维管理 API：成本追踪、系统健康、调度任务、数据源监控。"""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Depends, HTTPException
+from app.api.contracts import ContractRouter as APIRouter
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db

@@ -2149,6 +2149,13 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AuthStatusResponse */
+        AuthStatusResponse: {
+            /** Authenticated */
+            authenticated: boolean;
+            /** Enabled */
+            enabled: boolean;
+        };
         /**
          * BacktestDataPolicyRequest
          * @description Research Gateway can never widen the local, read-only data boundary.
@@ -2502,6 +2509,25 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** HealthResponse */
+        HealthResponse: {
+            /** Application */
+            application: string;
+            /** Database */
+            database: string;
+            /** Migration */
+            migration: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Ok */
+            ok: boolean;
+        };
+        /**
+         * JsonResponse
+         * @description Explicit JSON response boundary; never emits an untyped OpenAPI response.
+         */
+        JsonResponse: components["schemas"]["JsonValue"];
+        JsonValue: unknown;
         /** LogEntry */
         LogEntry: {
             /**
@@ -2570,6 +2596,11 @@ export interface components {
              * @default 0
              */
             up_ratio: number;
+        };
+        /** OkResponse */
+        OkResponse: {
+            /** Ok */
+            ok: boolean;
         };
         /**
          * PreflightBacktestRequest
@@ -2748,7 +2779,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -2770,7 +2801,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2801,7 +2832,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2836,7 +2867,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2865,7 +2896,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -2885,7 +2916,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -2911,7 +2942,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2948,7 +2979,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2979,7 +3010,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3008,7 +3039,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -3028,7 +3059,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -3054,7 +3085,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3089,7 +3120,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3124,7 +3155,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3155,7 +3186,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3192,7 +3223,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3221,7 +3252,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -3241,7 +3272,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -3264,7 +3295,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3293,7 +3324,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -3319,7 +3350,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3348,7 +3379,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -3370,7 +3401,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3407,7 +3438,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3444,7 +3475,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3475,7 +3506,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3504,7 +3535,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -3524,7 +3555,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["OkResponse"];
                 };
             };
         };
@@ -3544,7 +3575,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["OkResponse"];
                 };
             };
         };
@@ -3564,7 +3595,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["AuthStatusResponse"];
                 };
             };
         };
@@ -3588,9 +3619,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3622,9 +3651,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3657,9 +3684,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3692,9 +3717,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3726,9 +3749,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3762,9 +3783,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3796,9 +3815,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3834,9 +3851,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3868,9 +3883,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3919,7 +3932,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -3946,7 +3959,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3975,7 +3988,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -3995,7 +4008,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -4015,7 +4028,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -4035,7 +4048,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -4061,7 +4074,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4098,7 +4111,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4136,7 +4149,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4169,7 +4182,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4198,7 +4211,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["HealthResponse"];
                 };
             };
         };
@@ -4218,7 +4231,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -4240,7 +4253,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4269,9 +4282,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -4291,9 +4302,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -4320,7 +4329,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4356,7 +4365,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4392,7 +4401,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4421,7 +4430,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -4441,7 +4450,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -4468,7 +4477,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4504,7 +4513,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4540,7 +4549,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4576,7 +4585,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4605,7 +4614,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -4627,7 +4636,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4659,7 +4668,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4696,7 +4705,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4725,7 +4734,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -4751,7 +4760,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4782,7 +4791,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4819,7 +4828,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4852,7 +4861,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4894,7 +4903,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4926,7 +4935,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4958,7 +4967,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4989,7 +4998,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5021,7 +5030,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5052,7 +5061,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5083,7 +5092,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5120,7 +5129,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5157,7 +5166,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5194,7 +5203,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5231,7 +5240,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5269,7 +5278,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5300,7 +5309,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5331,7 +5340,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5362,7 +5371,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5394,7 +5403,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5429,7 +5438,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5464,7 +5473,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5499,7 +5508,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5534,7 +5543,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5572,7 +5581,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5604,7 +5613,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5635,7 +5644,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5670,7 +5679,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5699,7 +5708,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -5721,7 +5730,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5752,7 +5761,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5783,7 +5792,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5814,7 +5823,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5845,7 +5854,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5874,7 +5883,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -5900,7 +5909,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5929,7 +5938,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -5951,7 +5960,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5982,7 +5991,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6019,7 +6028,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6056,7 +6065,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6087,7 +6096,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6116,7 +6125,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -6136,7 +6145,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -6156,7 +6165,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -6176,7 +6185,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -6202,7 +6211,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6237,7 +6246,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6275,7 +6284,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6311,7 +6320,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6345,7 +6354,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
             /** @description Validation Error */

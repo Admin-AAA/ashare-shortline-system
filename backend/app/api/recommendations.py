@@ -1,6 +1,7 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import Depends, HTTPException, Query
+from app.api.contracts import ContractRouter as APIRouter
 from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy.orm import Session  # noqa: F401 (Query used in endpoints)
 

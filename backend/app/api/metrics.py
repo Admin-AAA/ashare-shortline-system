@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import Depends, Query
+from app.api.contracts import ContractRouter as APIRouter
 from sqlalchemy.orm import Session
 import logging
 

@@ -1,7 +1,8 @@
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import Depends, HTTPException, Query
+from app.api.contracts import ContractRouter as APIRouter
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
