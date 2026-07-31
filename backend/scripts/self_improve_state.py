@@ -334,7 +334,14 @@ def _allocate_direction(
     oos_windows = _list_unchecked_oos_windows(scanned)
     for win in oos_windows[:4]:
         d = f"oos_validation:{win}"
-        if d not in excluded and d not in archived:
+        # archived 条目可能带后缀原因（如 oos_validation:2024-H1:数据不足），
+        # 需前缀匹配：d 本身或 d + ":" 开头都视为已归档。
+        archived_prefix = f"{d}:"
+        if (
+            d not in excluded
+            and d not in archived
+            and not any(a.startswith(archived_prefix) for a in archived)
+        ):
             candidates.append((4, d, f"OOS窗口验证: {win}"))
 
     # Priority 4b: new factor hypotheses
