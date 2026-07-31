@@ -954,9 +954,17 @@ def apply_pool_rules(
         ]
         # 20cm 策略过滤：daily-stock-analysis-skill 在 20cm 表现显著弱于其他策略
         # （clean≥72 n=19 WR=42% avg=-1.17% vs 其他 n=14 WR=71% avg=+5.84%），
-        # 其"多头顺势等回踩"逻辑在高波动 20cm 股票上失效。在 20cm universe 中
-        # 过滤掉该策略的推荐，但保留其 10cm 推荐不受影响。
-        EXCLUDED_20CM_BUCKETS = frozenset({"daily-stock-analysis-skill"})
+        # 其"多头顺势等回踩"逻辑在高波动 20cm 股票上失效。
+        #
+        # chen-xiaoqun-skill 在 20cm PATH-A 回测中同样系统性地不及格：
+        # 参与 9 笔交易 WR=11.1% avg=-6.28% PF=0.09，含两笔灾难性（-18.0%、-15.2%）；
+        # 排除这 9 笔后胜率 +3.7pp、均净 +0.48pp、PF +0.17、MDD +5.5pp。
+        # 均净与累计必须改善（L-010 回报条件），胜率、PF、MDD 也必须改善（辅助条件）。
+        # 在 20cm universe 中过滤掉该策略的推荐，但保留其 10cm 推荐不受影响。
+        EXCLUDED_20CM_BUCKETS = frozenset({
+            "daily-stock-analysis-skill",
+            "chen-xiaoqun-skill",
+        })
         ordered = [
             card
             for card in ordered
