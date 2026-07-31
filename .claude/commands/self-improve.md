@@ -21,6 +21,7 @@
 - 唯一生产判定器：`backend/app/services/backtest/challenger_decision.py`
 - 串行重放：`backend/scripts/si_sequential_champion_replay.py`
 - 原子状态工具：`backend/scripts/self_improve_state.py`
+- PATH-A 网格工具：`backend/scripts/si_path_a_signal_backtest.py`（主）、`backend/scripts/si_path_a_score_line_grid.py`（score_line 网格）、`backend/scripts/si_stop_loss_width_grid.py`、`backend/scripts/si_position_sizing_grid.py`——同一参数类只扫一次，结果记 `scanned_grids`（详见 OPERATIONS.md）
 - 教训注册表：`~/.claude/projects/-Users-wangao/memory/self-improve-LESSONS.md`（全局共享，所有 worktree/窗口读同一份）
 - **操作手册（子命令/状态字段/记录格式/发布流程）**：`.claude/self-improve/OPERATIONS.md`——涉及具体命令时先查阅它
 

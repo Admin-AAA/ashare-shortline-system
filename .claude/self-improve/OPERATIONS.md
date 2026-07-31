@@ -97,6 +97,14 @@ python self_improve_state.py with-publish-lock --cmd 'git -C <主仓库> pull --
 
 LIVE formal 样本做 regime 分层时用 `score_line_meta.market_base`（决策时持久化）分组，禁止读回溯的 `feature_snapshot_json.market_regime`（L-013）。
 
+### PATH-A 参数网格研究工具
+
+同一类参数（score_line / stop_loss / take_profit / trailing / horizon / position_sizing）的网格扫描**每类只扫一次**，结果记入状态文件 `scanned_grids`，后续轮次即便 champion 未变也不得重复扫描（主命令 §3.3 护栏）。已扫过的 score_line 类见 `scanned_grids.score_line_on_2025_2026`（72→76 与 72→68 均 FALSIFIED，结论"score_line 72 是 path A 最优点"）。
+
+- **`backend/scripts/si_path_a_signal_backtest.py`**：PATH-A 策略信号回测（全历史重建候选集 + production pipeline 过滤 + 因果退出）。`CHAMPION_CONFIG` 必须与当前生产 champion 同步（当前 `score_line=72`、`stop_loss=-4.5`、`take_profit=6.0`、`trailing_profit_lock_ratio=0.50`）；这是参数网格的主证据路径。
+- **`backend/scripts/si_path_a_score_line_grid.py`**：score_line 低带网格 [65,62,60,58,55,52]，组合级 abstain-as-cash 测量（challenger 弃权日 champion 该日视为现金）+ 分年验证 + 配对 bootstrap。**基于 `btrec_%` 物化推荐**，不是 signal_backtest 的重建候选集，两口径不可混比。champion 退出参数必须与本文件头部注释里的生产 rules 保持一致（trailing 已同步为 0.50）；改参前先核对 `self-improve-state.json` 的 `canonical_production.rules`，防止幽灵 champion 测量（L-009）。
+- 运行用 `backend/.venv/bin/python backend/scripts/<script>`；输出 JSON 落 `output/`。
+
 ## 提交信息格式
 
 FINDING / MEASUREMENT_FIX 轮的研究工具、脚本、测试、测量修复**合并回 main**（不改变生产策略语义；改生产策略必须走 PRODUCTION + `evaluate_challenger`）。代码、测试和验证放同一提交：
