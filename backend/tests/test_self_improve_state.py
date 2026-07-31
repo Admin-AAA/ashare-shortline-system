@@ -309,6 +309,7 @@ def test_publish_finding_appends_and_does_not_mutate_champion(tmp_memory_dir):
             "direction": "grid_scan:stop_loss",
             "summary": "stop_loss 扫完后无改善",
             "metrics": {"n": 33, "avg_net": 1.5},
+            "decision": "FALSIFIED",
         },
         {"run_id": "run-1", "decision": "FINDING"},
         memory_dir=tmp_memory_dir,
