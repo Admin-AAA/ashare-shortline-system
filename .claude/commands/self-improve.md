@@ -373,8 +373,9 @@ PRODUCTION 发布时的合并规则见 §5.1。
 核心纪律（不因瘦身而省略）：
 
 - **PRODUCTION 发布**：候选验证通过并 `publish-champion` 后，合并回 `main` 并推送。多窗口并发时合并必须在 `with-publish-lock` 下执行（防互相覆盖）。若合并时 main 已前进且冲突涉及策略语义/实验口径/凭据，停下来报告；纯机械冲突可自行解决。
+- **FINDING / MEASUREMENT_FIX 合并**：FINDING 轮产生的**研究工具、脚本、测试、测量修复**同样合并回 `main`——它们是全系统科研基础设施，供所有窗口复用，不合并只会让工具烂在孤立 worktree 里、后续轮次重复造轮子。合并内容**不得改变生产策略语义**（champion 的 rules/参数不变；改生产策略必须走 PRODUCTION 路径 + `evaluate_challenger`）。合并同样走 `with-publish-lock`。
 - **记录**：每轮通过 `publish-champion`/`publish-finding` 追加 `self-improve-runs.jsonl`（字段见 OPERATIONS.md）。禁止直接写状态文件。教训只写入全局注册表 `~/.claude/projects/-Users-wangao/memory/self-improve-LESSONS.md`，不维护任何 worktree 内副本。
-- **提交**：候选否证不改生产代码；代码+测试+验证同一提交，信息格式 `self-improve: T{编号} {简述}`。禁止 force push、禁止 `git reset --hard`。
+- **提交**：研究工具/脚本/测试/测量修复的代码改动，与对应测试、验证放同一提交，信息格式 `self-improve: T{编号} {简述}`。禁止 force push、禁止 `git reset --hard`。
 
 ---
 
