@@ -1039,12 +1039,12 @@ def test_causal_rejects_unknown_trailing_policy():
         )
 
 
-def test_production_exit_uses_next_day_profit_floor_30_policy():
-    """生产默认退出必须是单路径因果的 30% 利润地板，而不是旧两轮事后择优。
+def test_production_exit_uses_next_day_profit_floor_50_policy():
+    """生产默认退出必须是单路径因果的 50% 利润地板，而不是旧两轮事后择优。
 
-    利润地板 0.30：entry=10.0，entry_close=10.0(ret 0%)<2%→trailing 不激活。
-    07-02 high=10.4→hwm=4%≥2%→激活，profit_floor max(0.3,4*0.3)=1.2%→prot=10.12。
-    07-03 low=10.15>10.12→不触发，最终 horizon_close@10.20。
+    利润地板 0.50：entry=10.0，entry_close=10.0(ret 0%)<2%→trailing 不激活。
+    07-02 high=10.4→hwm=4%≥2%→激活，profit_floor max(0.3,4*0.5)=2.0%→prot=10.20。
+    07-03 low=10.15<10.20→trailing_stop_hit@10.20。
     """
     bars = [
         _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.98, close=10.0, pct_chg=0.0),
@@ -1060,14 +1060,14 @@ def test_production_exit_uses_next_day_profit_floor_30_policy():
         entry_price=10.0,
     )
 
-    assert (price, date, reason) == (10.20, "2026-07-03", "horizon_close")
+    assert (price, date, reason) == (10.20, "2026-07-03", "trailing_stop_hit")
 
 
 def test_simulate_outcome_defaults_to_production_profit_floor_policy():
-    """核心模拟入口未注入 resolver 时，也必须走生产利润地板（profit_floor@0.30）。
+    """核心模拟入口未注入 resolver 时，也必须走生产利润地板（profit_floor@0.50）。
 
-    利润地板 0.30：entry=10.0，07-02 high=10.4→hwm=4%→profit_floor max(0.3,4*0.3)=1.2%
-    →次日保护价 10.12。07-03 low=10.15>10.12→不触发，horizon_close@10.20。
+    利润地板 0.50：entry=10.0，07-02 high=10.4→hwm=4%→profit_floor max(0.3,4*0.5)=2.0%
+    →次日保护价 10.20。07-03 low=10.15<10.20→trailing_stop_hit@10.20。
     """
     rec = SimpleNamespace(
         code="000001",
@@ -1091,5 +1091,5 @@ def test_simulate_outcome_defaults_to_production_profit_floor_policy():
     )
 
     assert sim is not None
-    assert sim["exit_reason"] == "horizon_close"
+    assert sim["exit_reason"] == "trailing_stop_hit"
     assert sim["exit_date"] == "2026-07-03"

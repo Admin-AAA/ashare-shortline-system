@@ -24,7 +24,7 @@ from app.services.outcome_simulation import (
     _resolve_exit_causal,
 )
 
-PUBLISHED_RATIO = 0.30
+PUBLISHED_RATIO = 0.50
 ENTRY_PRICE = 100.0
 STOP_LOSS_PRICE = ENTRY_PRICE * (1 - 0.055)  # 生产固定止损约 -5.5%
 TAKE_PROFIT_PRICE = 200.0  # 远高于测试窗口，避免止盈路径干扰
