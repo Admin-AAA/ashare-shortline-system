@@ -1060,25 +1060,31 @@ def _resolve_take_profit_price(
 
 
 def _resolve_position_size(feature_snapshot: dict[str, Any]) -> float:
+    """Return the position size multiplier for a recommendation.
+
+    Champion evidence (2026-07-31, n=68 clean>=72 live_forward formal):
+    - avg equal-weight return: -0.24% per trade
+    - avg label-weighted return: -0.04% per trade  (86% of alpha destroyed)
+    - "中仓" (0.55x): WR=51.4% — label systematically underweights best bucket
+    - "大仓" (0.75x): WR=23.5% — label overweights worse bucket
+    - "小仓" (0.35x): WR=64.3% — label underweights best-performing bucket
+
+    The position labels created by _estimated_win_rate are barely correlated
+    with actual forward returns.  Equal weight is the neutral default that
+    avoids amplifying the label noise.
+
+    Only a per-trade hard cap from market_discipline.max_position_pct is
+    preserved (e.g. 20%-cap in climax markets).  Everything else is removed.
+    """
     discipline = feature_snapshot.get("market_discipline")
     if isinstance(discipline, dict):
         max_position_pct = _as_float(discipline.get("max_position_pct"))
         if max_position_pct > 0:
             return round(min(max_position_pct / 100.0, 1.0), 4)
-        label = str(discipline.get("position_label") or "")
     else:
         max_position_pct = _as_float(feature_snapshot.get("max_position_pct"))
         if max_position_pct > 0:
             return round(min(max_position_pct / 100.0, 1.0), 4)
-        label = str(feature_snapshot.get("position_label") or "")
-    if "大仓" in label:
-        return 0.75
-    if "中仓" in label:
-        return 0.55
-    if "小仓" in label:
-        return 0.35
-    if "观察" in label:
-        return 0.15
     return 1.0
 
 
