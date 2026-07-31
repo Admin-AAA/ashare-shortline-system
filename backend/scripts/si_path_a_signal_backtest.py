@@ -99,6 +99,8 @@ class SignalRecord:
     is_limit_up: bool = False
     signal_gap_pct: float = 0.0
     industry_momentum: float = 0.5
+    vol5_20: float = 1.0
+    day_pct_chg: float = 0.0
 
 
 @dataclass
@@ -318,6 +320,8 @@ class PathABacktestRunner:
                         is_limit_up=bool(stock_dict.get("is_limit_up", False)),
                         signal_gap_pct=float(stock_dict.get("signal_gap_pct", 0)),
                         industry_momentum=float(stock_dict.get("industry_momentum", 0.5)),
+                        vol5_20=float(stock_dict.get("vol5_20", 1.0)),
+                        day_pct_chg=float(stock_dict.get("pct", 0)),
                     )
                     day_signals.append(sr)
 
@@ -595,6 +599,15 @@ class PathABacktestRunner:
             deduped = [
                 sr for sr in deduped
                 if sr.industry_momentum >= min_industry_mom
+            ]
+
+        # 量价背离过滤（volume_price_divergence 假设：价涨量缩 → 上涨动能衰竭
+        # → 后续弱）。config: exclude_volume_price_divergence=True 时剔除
+        # 「当日上涨但量能萎缩（vol5_20 < 0.8）」的信号；默认 False 保持 champion。
+        if config.get("exclude_volume_price_divergence"):
+            deduped = [
+                sr for sr in deduped
+                if not (sr.day_pct_chg > 0 and sr.vol5_20 < 0.8)
             ]
 
         # 应用 score_line 和 regime 调整
