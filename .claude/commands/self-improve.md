@@ -96,15 +96,15 @@ backend/.venv/bin/python backend/scripts/self_improve_state.py publish-finding \
 - 不碰 champion，纯追加发现。
 - 即使无法发布 PRODUCTION（候选未通过整体改善、或 champion 已过期），仍可发布 FINDING。FINDING 不是失败，是正常的科研产出。
 
-### 0.5 直接调用模式的工作目录约束
+### 0.5 工作目录约束
 
-`/loop N /self-improve` 会在你当前的工作树里运行，**没有 worktree 隔离**。因此：
+所有模式（直接调用和启动器）共享以下 Git 规则：
 
 - **禁止直接改 `main`**：先 `git switch -c self-improve/si-<时间戳>` 开分支再改代码
-- **禁止 `git push origin main`**：发布 PRODUCTION 时只提交到分支并推分支，由用户决定何时合并
+- **禁止 force push**：任何时候不得 `git push --force`
 - 状态文件（`self-improve-state.json` / `self-improve-runs.jsonl`）仍照常写，那是共享的实验记录，不是代码
 
-启动器模式（`SELF_IMPROVE_ISOLATED_RUN=1`）下不受此限制，可按 §5 规则合并回 main。
+PRODUCTION 发布时的合并规则见 §5.1。
 
 ---
 
@@ -307,20 +307,20 @@ backend/.venv/bin/python backend/scripts/self_improve_state.py publish-finding \
 
 ## 5. 隔离、记录与发布
 
-### 5.1 两种运行模式的发布权限
+### 5.1 发布与合并规则
 
-**启动器模式**（`SELF_IMPROVE_ISOLATED_RUN=1`，由 `scripts/run-self-improve.sh` 启动）：
-- 在独立 detached worktree 中运行，不影响调用者工作树
-- 验证通过的单一候选可以合入 `main` 并推送
-- 发布前确认 `main` 仍等于本轮起始 commit；若已前进，先重放到新 `main` 再重跑测试
+**所有模式通用**：PRODUCTION 候选验证通过并 publish-champion 后，自动合并回 `main` 并推送。
 
-**直接调用模式**（`/loop N /self-improve` 或手工 `/self-improve`）：
-- 在当前工作树运行，**没有 worktree 隔离**
-- 代码改动必须先开分支：`git switch -c self-improve/si-<时间戳>`
-- **禁止 `git push origin main`**，只推自己的分支：`git push -u origin self-improve/si-<时间戳>`
-- 合并权交给用户，在最终报告里说明分支名和合并建议
+合并流程：
+1. `publish-champion` 成功后，确认当前分支已推送
+2. 切回 `main`，`git pull --ff-only origin main` 拉最新
+3. `git merge --no-ff <feature-branch>` 合并
+4. `git push origin main` 推送
+5. 切回 feature 分支（或保持 main 均可）
 
-两种模式共通：champion 发布必须用 `publish-champion` 子命令（含 CAS），禁止用 `commit` 子命令直接覆盖 champion。发布前确认当前 champion commit 等于 claim 时返回的 `champion_commit`。
+如果合并时 main 已前进（非本轮起始 commit），且冲突涉及策略语义/实验口径/凭据，停下来报告；纯机械冲突可自行解决。
+
+**禁止 force push、禁止 `git reset --hard`。**
 
 ### 5.2 记录
 
