@@ -99,7 +99,7 @@ LIVE formal 样本做 regime 分层时用 `score_line_meta.market_base`（决策
 
 ## 提交信息格式
 
-候选被否证时不改生产代码。代码、测试和验证放同一提交：
+FINDING / MEASUREMENT_FIX 轮的研究工具、脚本、测试、测量修复**合并回 main**（不改变生产策略语义；改生产策略必须走 PRODUCTION + `evaluate_challenger`）。代码、测试和验证放同一提交：
 ```text
 self-improve: T{编号} {简短描述}
 
