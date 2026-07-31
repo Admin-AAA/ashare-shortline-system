@@ -410,14 +410,24 @@ _OOS_WINDOWS = [
 def _list_unscanned_factor_directions(
     archived: set[str], excluded: set[str]
 ) -> list[str]:
-    """Return factor hypotheses not yet falsified or claimed."""
-    falsified = {d for d in archived if "factor" in d or "因子" in d}
+    """Return factor hypotheses not yet falsified or claimed.
+
+    A factor is falsified when any archived entry starts with
+    ``new_strategy:{factor}:`` (archived 字符串可能带后缀原因说明)。旧实现用
+    "factor"/"因子" 子串匹配会漏掉 new_strategy:capital_flow_momentum:... 这类
+    已否证方向，让方向池反复分配。
+    """
     candidates = [
         "chip_concentration", "capital_flow_momentum",
         "northbound_flow", "institutional_ownership",
         "short_squeeze_pattern", "volume_price_divergence",
         "gap_fill_pattern", "sector_rotation_momentum",
     ]
+    falsified = {
+        d.split(":", 2)[1]
+        for d in archived
+        if d.startswith("new_strategy:") and len(d.split(":", 2)) >= 2
+    }
     return [
         c for c in candidates
         if c not in falsified and f"new_strategy:{c}" not in excluded
