@@ -817,30 +817,26 @@ def test_apply_pool_rules_limit_up_exempt_from_support_ma5_penalty():
 
 
 def test_apply_pool_rules_oscillation_low_pos60_penalty():
-    """震荡 regime × pos60<50 交叉否决（+12 门槛）。
+    """震荡 regime 全局 hard veto。
 
-    第148轮 T3 失败归因：震荡 pos60<50 WR=0%（44笔全败 avg=-3.94%），
-    pos60>=70 WR=83.4%。因果：震荡市场超跌股继续跌（无反弹动能）。
-    弱势 regime pos60<50 WR=100%（超跌反弹有效）——pos60<50 效果是 regime-dependent。
-    门槛 +12（72→84）过滤 pos60<50 全部 44/44（最高分 72），不误伤 pos60>=50。
+    LIVE formal causal replay (n=55→37): 震荡 n=14 WR=29% avg=-2.94% PF=0.25
+    全局 hard veto 后五项全改善 (avg +0.62%→+2.20%, PF 1.26→2.25, MDD -21.9%→-15.2%)
+    取代此前仅 low pos60<50 的 +12 门槛（实证不足过滤震荡污染: DS 高 pos60 全败）。
     """
     snapshot = {
         "sample_count": 100, "up_count": 45, "down_count": 55,
         "limit_up_count": 1, "limit_down_count": 0,
         "market_regime": "震荡",
     }
-    # 同分 80（> 震荡·活跃有效线 75，硬过线不依赖 soft floor——震荡 soft 已禁）。
-    # LOW_POS 加 +12 → effective 87 > 80 被过滤；HIGH_POS 无惩罚通过。
+    # 全局 hard veto: 震荡日所有推荐被拒（effective_score_line=999）
     cards = [
         {**_card("LOW_POS", 80), "pos60": 40, "is_limit_up": False, "support_ma5": True},
         {**_card("HIGH_POS", 80), "pos60": 80, "is_limit_up": False, "support_ma5": True},
     ]
     result = apply_pool_rules(cards, score_line=72, market_snapshot=snapshot)
-    by_code = {c["code"]: c for c in result}
-    # 高 pos60 通过（无惩罚），低 pos60 被过滤（+12 门槛→effective 87 > 80）
-    assert "HIGH_POS" in by_code, "pos60>=50 应通过震荡 regime"
-    assert "LOW_POS" not in by_code, "震荡 × pos60<50 应被 +12 门槛过滤"
-    assert by_code["HIGH_POS"]["score_line_meta"]["regime_oscillation_low_pos_penalty"] == 0.0
+    # 全局 hard veto: 震荡日零推荐
+    assert len(result) == 0, "震荡 regime 全局 hard veto 应拒绝所有推荐"
+
 
 
 def test_apply_pool_rules_oscillation_low_pos60_exemption():
@@ -893,24 +889,20 @@ def test_apply_pool_rules_weak_low_chg20_penalty():
 
 
 def test_apply_pool_rules_weak_low_chg20_not_in_strong_regime():
-    """非弱势 regime × chg20<15 不触发弱势惩罚（效果 regime-dependent）。
+    """震荡 regime 全局 hard veto: 所有推荐被拒。
 
-    强势市场普涨，低位补涨股弹性更大（6月 chg20<10 WR=71%）。
-    惩罚只在弱势 regime 触发；震荡 regime 只触发 pos60<50 惩罚，不触发 chg20 惩罚。
+    LIVE formal causal replay: 震荡日 WR=29% avg=-2.94%, hard veto 后五项全改善。
+    此前仅 低 pos60<50 的 +12 门槛不足以过滤震荡污染 (DS 高 pos60 全败)。
     """
     snapshot_oscillation = {
         "sample_count": 100, "up_count": 45, "down_count": 55,
         "limit_up_count": 1, "limit_down_count": 0,
         "market_regime": "震荡",
     }
-    # 分数 80 > 震荡·活跃有效线 75（硬过线，不依赖已禁的震荡 soft floor）
-    # pos60=60 不触发震荡低 pos 惩罚；chg20=8 在非弱势不触发 chg20 惩罚
+    # 震荡全局 hard veto: 所有推荐被拒
     cards = [{**_card("LOW_CHG_OSC", 80), "pos60": 60, "chg20": 8, "is_limit_up": False, "support_ma5": True}]
     result = apply_pool_rules(cards, score_line=72, market_snapshot=snapshot_oscillation)
-    by_code = {c["code"]: c for c in result}
-    # 震荡 regime 不触发弱势低 chg20 惩罚
-    assert "LOW_CHG_OSC" in by_code, "震荡 × chg20<15（pos60正常）应通过"
-    assert by_code["LOW_CHG_OSC"]["score_line_meta"]["regime_weak_low_chg20_penalty"] == 0.0
+    assert len(result) == 0, "震荡 regime 全局 hard veto 应拒绝所有推荐"
 
 
 def test_apply_pool_rules_sorted_by_score():
