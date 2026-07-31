@@ -1112,7 +1112,7 @@ def recommendation_readiness_from_diagnosis(
                 table=key,
                 expected_trade_date=reference,
             )
-        elif reference and max_date != reference:
+        elif reference and max_date < reference:
             add_blocker(
                 "table_not_current",
                 f"{label}未覆盖 {reference}（最新 {max_date or '无'}）",
