@@ -165,3 +165,24 @@
 - 永久规则：`published_candidates` 只是缓存，不是事实来源。每轮必须校验 production commit 的祖先关系与实际配置值；不在同一 `main` 历史且未出现在生产配置中的候选必须标为 invalidated 或 falsified。
 - 发布规则：一个候选合入后立即重放剩余候选；严禁根据多个候选分别优于旧 champion 推断组合后仍优。
 - 自动护栏：隔离启动器、`challenger_decision.evaluate_challenger`、`si_sequential_champion_replay.py` 和原子状态写入器。
+
+## L-018 formal 重放不能代替策略信号回测
+
+- 状态：active
+- 适用：所有参数优化、新策略研究、champion/challenger 对比
+- 证据：self-improve 第 31–52 轮所有网格搜索都在 live_forward formal 重放（路径 B）上进行，窗口仅 15 个交易日/78 笔交易/2026-06-03~2026-07-29。参数网格（止损/止盈/trailing/horizon/策略过滤）在这么小的单窗口上被扫到局部最优，然后所有后续轮次宣告 `ALL-GRIDS-EXHAUSTED`。本地 daily_kbars 实际覆盖 2021-05-26~2026-07-30 共 1257 个交易日 5603 只股票，但从未被用于策略信号回测。
+- 永久规则：参数优化和新策略研究的缺省证据路径必须是**策略信号回测**（路径 A）——在全历史上重建每个交易日候选集，用生产级逻辑模拟完整 pipeline。路径 B（formal 重放）仅用于 outcome 一致性检查和 LIVE 同场配对验证。禁止在路径 B 的单窗口小样本上扫参数网格然后宣告穷举。
+- 证据口径：local daily_kbars 1257 个交易日覆盖 2021-2026 五种不同 regime 阶段，足以提供独立窗口验证。
+- 吸收位置：主提示词“选择证据路径”。
+
+## L-019 小样本 champion 不能宣告局部最优
+
+- 状态：active
+- 适用：所有 champion 发布后状态维护和后续轮次选题
+- 证据：bf509b8 champion n=14（20cm-only + no-DS 过滤后）来自同一样本的两步修剪，WR71.43%/avg_net5.84% 是幸存者偏差，不是策略 alpha。但提示词没有 champion 有效性门槛，网格穷举后系统只能输出 `ALL-GRIDS-EXHAUSTED → AWAIT LIVE OOS`，形成死锁。
+- 永久规则：
+  1. Champion n < 30：禁止宣告 `ALL-GRIDS-EXHAUSTED` 或等价结论；必须继续在新数据窗口验证或转向独立研究。
+  2. Champion n < 50：状态文件必须标注 `provisional: true`，下一轮优先寻找异窗口证据。
+  3. 仅当 champion 在至少两个独立不重叠的时间窗口上都表现为正期望（各窗口独立计算 avg_net>0/PF>1.0），才允许宣告“champion 已稳定”。
+  4. 同一（champion 参数，回测窗口）组合上，每类参数的网格扫描只能做一次；做完后记录到 `scanned_grids`。连续两轮在同一组合上扫不同参数 = 自动切换方向。
+- 吸收位置：主提示词“Champion 有效性门槛”和“选择证据路径”。
