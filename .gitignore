@@ -37,5 +37,6 @@ package.json
 # UX 审计临时产物（截图/JSON/脚本，可重新生成）
 ux-audit/
 .git-self-improve.lock
+.git-self-improve-publish.lock
 backend/scripts/.failure_attr_baseline.json
 .ai-tracker/

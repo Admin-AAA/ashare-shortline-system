@@ -15,11 +15,16 @@ from scripts.self_improve_state import (
     _now_iso,
     claim_direction,
     commit_update,
+    daemon_heartbeat,
     heartbeat,
+    prune_claimed_directions,
     publish_champion,
     publish_finding,
     read_state,
     release_direction,
+    setup_worktree,
+    release_worktree,
+    with_publish_lock,
 )
 
 
@@ -39,6 +44,22 @@ def test_read_state_empty(tmp_memory_dir):
     assert state == {}
 
 
+def test_state_schema_version_stamped_on_write(tmp_memory_dir):
+    """Every state write stamps the schema_version so tools can detect layout."""
+    claim_direction("r1", max_workers=3, memory_dir=tmp_memory_dir)
+    state = read_state(tmp_memory_dir)
+    assert state.get("schema_version") == 2
+
+    # Legacy file without schema_version is readable and gets upgraded on write.
+    (tmp_memory_dir / "self-improve-state.json").write_text(
+        json.dumps({"canonical_production": {"commit": "abc"}}), encoding="utf-8"
+    )
+    commit_update({"x": 1}, memory_dir=tmp_memory_dir)
+    state = read_state(tmp_memory_dir)
+    assert state["schema_version"] == 2
+    assert state["x"] == 1
+
+
 def test_commit_update_preserves_existing_state_and_appends_valid_jsonl(tmp_memory_dir):
     (tmp_memory_dir / "self-improve-state.json").write_text(
         json.dumps({"champion": "old", "keep": True}), encoding="utf-8"
@@ -48,7 +69,7 @@ def test_commit_update_preserves_existing_state_and_appends_valid_jsonl(tmp_memo
         {"run_id": "run-1", "decision": "FALSIFIED"},
         tmp_memory_dir,
     )
-    assert result == {"champion": "new", "keep": True}
+    assert result == {"champion": "new", "keep": True, "schema_version": 2}
     assert read_state(tmp_memory_dir) == result
     records = [
         json.loads(line)
@@ -70,7 +91,9 @@ def test_concurrent_commits_never_corrupt_state_or_jsonl(tmp_memory_dir):
         list(executor.map(write, range(20)))
 
     state = read_state(tmp_memory_dir)
-    assert state == {f"writer_{index}": index for index in range(20)}
+    expected = {f"writer_{index}": index for index in range(20)}
+    expected["schema_version"] = 2
+    assert state == expected
     records = [
         json.loads(line)
         for line in
@@ -435,3 +458,233 @@ def test_claim_direction_purges_stale_workers(tmp_memory_dir):
     active = state["researcher_registry"]["active_researchers"]
     assert "r1" not in active
     assert "r2" in active
+
+
+# ── 方向泄漏修复 ───────────────────────────────────────────────────────
+
+
+def _age_heartbeat(tmp_memory_dir, researcher_id: str) -> None:
+    """Artificially age a researcher's heartbeat beyond the timeout."""
+    from datetime import datetime, timedelta, timezone
+    state = read_state(tmp_memory_dir)
+    active = state["researcher_registry"]["active_researchers"]
+    old = datetime.now(timezone.utc) - timedelta(
+        seconds=HEARTBEAT_TIMEOUT_SECONDS + 60
+    )
+    active[researcher_id]["last_heartbeat"] = old.isoformat()
+    commit_update(
+        {"researcher_registry": state["researcher_registry"]},
+        memory_dir=tmp_memory_dir,
+    )
+
+
+def test_purge_stale_releases_claimed_direction(tmp_memory_dir):
+    """Purged worker's direction must be reclaimable, not leaked."""
+    claim_direction("r1", max_workers=1, memory_dir=tmp_memory_dir)
+    direction = read_state(tmp_memory_dir)["researcher_registry"][
+        "active_researchers"
+    ]["r1"]["claimed_direction"]
+
+    # Age r1 beyond timeout, then a new claim purges it and must be able to
+    # reallocate the very same direction.
+    _age_heartbeat(tmp_memory_dir, "r1")
+    r = claim_direction("r2", max_workers=1, memory_dir=tmp_memory_dir)
+    assert r["ok"] is True
+    assert r["direction"] == direction, (
+        "purge did not release the stale worker's direction"
+    )
+
+
+def test_force_stale_releases_displaced_direction(tmp_memory_dir):
+    """Force-stale displacement must release the displaced direction."""
+    claim_direction("r1", max_workers=1, memory_dir=tmp_memory_dir)
+    direction = read_state(tmp_memory_dir)["researcher_registry"][
+        "active_researchers"
+    ]["r1"]["claimed_direction"]
+
+    r = claim_direction(
+        "r2", max_workers=1, force_stale=True, memory_dir=tmp_memory_dir
+    )
+    assert r["ok"] is True
+    assert r["direction"] == direction, (
+        "force_stale did not release the displaced direction"
+    )
+
+
+def test_prune_claimed_directions_reclaims_orphaned(tmp_memory_dir):
+    """prune-claimed releases directions whose worker is gone."""
+    claim_direction("r1", max_workers=3, memory_dir=tmp_memory_dir)
+    claim_direction("r2", max_workers=3, memory_dir=tmp_memory_dir)
+    claimed = read_state(tmp_memory_dir)["researcher_registry"][
+        "claimed_directions"
+    ]
+    assert len(claimed) == 2
+
+    # Simulate r2's window being killed without release: remove r2 from active
+    # while its direction stays in claimed_directions.
+    state = read_state(tmp_memory_dir)
+    del state["researcher_registry"]["active_researchers"]["r2"]
+    commit_update(
+        {"researcher_registry": state["researcher_registry"]},
+        memory_dir=tmp_memory_dir,
+    )
+
+    result = prune_claimed_directions(tmp_memory_dir)
+    assert result["ok"] is True
+    assert len(result["released"]) == 1
+
+    remaining = read_state(tmp_memory_dir)["researcher_registry"][
+        "claimed_directions"
+    ]
+    assert "r1's direction" not in remaining
+    assert len(remaining) == 1
+
+
+# ── daemon-heartbeat ────────────────────────────────────────────────────
+
+
+def test_daemon_heartbeat_registers_and_release_stops(tmp_memory_dir):
+    """Daemon registers its pid; release-direction terminates it."""
+    claim_direction("r1", max_workers=3, memory_dir=tmp_memory_dir)
+
+    # Run the daemon in a subprocess (its own process) so we can inspect the
+    # registered pid and terminate it via release-direction.
+    import os
+    import subprocess
+    import sys
+    state_tool = os.path.join(
+        os.path.dirname(__file__), "..", "scripts", "self_improve_state.py"
+    )
+    scripts_dir = os.path.dirname(os.path.abspath(state_tool))
+    daemon_py = (
+        "import sys, os; sys.path.insert(0, '%s'); "
+        "from self_improve_state import daemon_heartbeat; "
+        "open('%s/daemon-ok','w').write(str(os.getpid())); "
+        "sys.exit(daemon_heartbeat('r1', interval_seconds=60, "
+        "max_duration_seconds=3600, memory_dir='%s'))"
+        % (scripts_dir, tmp_memory_dir, tmp_memory_dir)
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", daemon_py],
+        cwd=scripts_dir,
+    )
+    try:
+        # Wait for the daemon to register its pid.
+        daemon_ok = tmp_memory_dir / "daemon-ok"
+        deadline = time.time() + 10
+        while not daemon_ok.exists() and time.time() < deadline:
+            time.sleep(0.1)
+
+        state = read_state(tmp_memory_dir)
+        info = state["researcher_registry"]["active_researchers"]["r1"]
+        assert "heartbeat_daemon_pid" in info, "daemon did not register pid"
+        assert info["heartbeat_daemon_pid"] == proc.pid
+
+        # release-direction must terminate the daemon.
+        release_direction("r1", memory_dir=tmp_memory_dir)
+        proc.wait(timeout=10)
+        assert proc.returncode == 0
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            proc.wait(timeout=5)
+
+
+# ── worktree 隔离 ───────────────────────────────────────────────────────
+
+
+def test_setup_and_release_worktree(tmp_memory_dir):
+    """setup-worktree creates a detached worktree and registers its path;
+    release-worktree --remove removes it."""
+    claim_direction("r1", max_workers=3, memory_dir=tmp_memory_dir)
+
+    r = setup_worktree("r1", memory_dir=tmp_memory_dir)
+    assert r.get("ok") is True
+    wt = Path(r["worktree_path"])
+    assert wt.exists()
+    assert (wt / ".git").exists()  # detached worktree marker
+
+    # registered in the researcher record
+    state = read_state(tmp_memory_dir)
+    info = state["researcher_registry"]["active_researchers"]["r1"]
+    assert info.get("worktree_path") == str(wt)
+
+    # release without remove keeps the dir (agent may still need it)
+    rel = release_worktree("r1", memory_dir=tmp_memory_dir)
+    assert rel.get("ok") is True
+    assert rel.get("removed") is False
+    assert wt.exists()
+
+    # remove cleans it up
+    rel2 = release_worktree("r1", remove=True, memory_dir=tmp_memory_dir)
+    assert rel2.get("ok") is True
+    assert rel2.get("removed") is True
+    assert not wt.exists()
+
+
+def test_setup_worktree_registers_in_researcher(tmp_memory_dir):
+    """Re-setup is idempotent: same worktree path re-registered."""
+    claim_direction("r1", max_workers=3, memory_dir=tmp_memory_dir)
+    r1 = setup_worktree("r1", memory_dir=tmp_memory_dir)
+    r2 = setup_worktree("r1", memory_dir=tmp_memory_dir)
+    assert r1["worktree_path"] == r2["worktree_path"]
+    assert r2.get("ok") is True
+
+    # cleanup
+    release_worktree("r1", remove=True, memory_dir=tmp_memory_dir)
+
+
+# ── git 发布锁 ──────────────────────────────────────────────────────────
+
+
+def test_publish_lock_serializes_concurrent_commands(tmp_memory_dir):
+    """Two concurrent with_publish_lock commands run serially (not in
+    parallel), proven by a combined sleep that stays >= 2x single."""
+    import subprocess
+    import sys
+    import os
+    scripts_dir = os.path.join(
+        os.path.dirname(__file__), "..", "scripts"
+    )
+    # Use a tmp repo to avoid touching the real repo's lockfile.
+    env = dict(os.environ)
+    start = time.time()
+    procs = []
+    for _ in range(2):
+        p = subprocess.Popen(
+            [sys.executable, "-c",
+             "import sys; sys.path.insert(0, '%s'); "
+             "from self_improve_state import with_publish_lock; "
+             "print(with_publish_lock(['/bin/sh','-c','sleep 0.5'], "
+             "repo=__import__('pathlib').Path('%s')))"
+             % (scripts_dir, tmp_memory_dir)],
+            cwd=scripts_dir, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        procs.append(p)
+    outs = [p.communicate(timeout=30)[0] for p in procs]
+    elapsed = time.time() - start
+    for out in outs:
+        assert "'ok': True" in out
+    # 2 * 0.5s serialized should take >= ~1s; parallel would be ~0.5s.
+    assert elapsed >= 0.9, f"commands did not serialize: {elapsed:.2f}s"
+
+
+def test_publish_lock_runs_command(tmp_memory_dir):
+    import subprocess
+    import sys
+    import os
+    scripts_dir = os.path.join(
+        os.path.dirname(__file__), "..", "scripts"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.path.insert(0, '%s'); "
+         "from self_improve_state import with_publish_lock; "
+         "print(with_publish_lock(['/bin/sh','-c','echo hi'], "
+         "repo=__import__('pathlib').Path('%s')))"
+         % (scripts_dir, tmp_memory_dir)],
+        cwd=scripts_dir, capture_output=True, text=True, timeout=30,
+    )
+    assert "'ok': True" in proc.stdout
+    assert "hi" in proc.stdout
