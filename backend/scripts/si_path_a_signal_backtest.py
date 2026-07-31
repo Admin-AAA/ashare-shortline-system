@@ -54,6 +54,7 @@ CHAMPION_CONFIG = {
     "stop_loss_pct": -4.5,
     "take_profit_pct": 6.0,
     "trailing_profit_lock_ratio": 0.50,
+    "trailing_activate_pct": None,  # None → 生产默认 TRAILING_STOP_ACTIVATE_PCT (2.0)
     "structural_strong_hard_veto": True,
     "excluded_20cm_strategies": frozenset({"daily-stock-analysis-skill"}),
     "horizon_days": 5,
@@ -666,6 +667,7 @@ class PathABacktestRunner:
                 dynamic_trailing=True,
                 trailing_policy="profit_floor",
                 profit_lock_ratio=config["trailing_profit_lock_ratio"],
+                activate_pct=config.get("trailing_activate_pct"),
             )
         except Exception:
             return None

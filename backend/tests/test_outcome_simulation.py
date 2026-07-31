@@ -1159,3 +1159,41 @@ def test_simulate_outcome_injects_final_score_from_rec_for_position_sizing():
     assert sim_low is not None
     # 78 < 85 → 全仓
     assert sim_low["position_size"] == 1.0
+
+
+def test_resolve_exit_causal_activate_pct_parameter():
+    """_resolve_exit_causal 的 activate_pct 参数控制 trailing 激活阈值。
+
+    默认 None → 用模块常量 TRAILING_STOP_ACTIVATE_PCT(2.0)，行为与生产一致；
+    覆盖值改变激活时机：activate 高 → 更晚/不激活。
+    """
+    # entry=10.0; bar2 high=10.4(+4%) 生成次日利润地板；bar3 low 触及地板 → trailing_stop_hit
+    bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.9, close=10.0, pct_chg=0.0),
+        _bar_trailing(trade_date="2026-07-02", open=10.0, high=10.4, low=10.05, close=10.2, pct_chg=2.0),
+        _bar_trailing(trade_date="2026-07-03", open=10.0, high=10.05, low=9.9, close=9.95, pct_chg=-2.0),
+    ]
+    # 默认（None → 2.0）：bar2 high +4% 激活 → 利润地板 0.5*4=2% → 保护价 10.2；
+    # bar3 open=10.0 ≤ 10.2 → 跳空低开按 open 成交（trailing_stop_gap）
+    default_result = _resolve_exit_causal(
+        bars, stop_loss_price=9.0, take_profit_price=12.0, code="000001", entry_price=10.0,
+        trailing_policy="profit_floor", profit_lock_ratio=0.5,
+    )
+    assert default_result[2] == "trailing_stop_gap"
+    assert default_result[0] == 10.0
+
+    # activate=5.0（高于 bar2 +4% 最高浮盈）：trailing 永不激活 → 窗口结束按收盘 9.95 标记
+    high_activate = _resolve_exit_causal(
+        bars, stop_loss_price=9.0, take_profit_price=12.0, code="000001", entry_price=10.0,
+        trailing_policy="profit_floor", profit_lock_ratio=0.5, activate_pct=5.0,
+    )
+    assert high_activate[2] == "horizon_close"
+    assert high_activate[0] == 9.95
+
+    # activate=1.0（低于默认 2.0）：bar2 high +4% 仍激活，保护价同 10.2 → gap 退出不变
+    low_activate = _resolve_exit_causal(
+        bars, stop_loss_price=9.0, take_profit_price=12.0, code="000001", entry_price=10.0,
+        trailing_policy="profit_floor", profit_lock_ratio=0.5, activate_pct=1.0,
+    )
+    assert low_activate[2] == "trailing_stop_gap"
+    assert low_activate[0] == 10.0
