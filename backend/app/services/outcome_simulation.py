@@ -1094,11 +1094,11 @@ def _resolve_position_size(feature_snapshot: dict[str, Any]) -> float:
     if isinstance(discipline, dict):
         max_position_pct = _as_float(discipline.get("max_position_pct"))
         if max_position_pct > 0:
-            return round(min(max_position_pct / 100.0, 1.0), 4)
+            return round(min(max_position_pct / 100.0, size), 4)
     else:
         max_position_pct = _as_float(feature_snapshot.get("max_position_pct"))
         if max_position_pct > 0:
-            return round(min(max_position_pct / 100.0, 1.0), 4)
+            return round(min(max_position_pct / 100.0, size), 4)
     return size
 
 
