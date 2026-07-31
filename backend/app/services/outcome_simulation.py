@@ -1079,19 +1079,15 @@ def _resolve_take_profit_price(
 def _resolve_position_size(feature_snapshot: dict[str, Any]) -> float:
     """Return the position size multiplier for a recommendation.
 
-    Production policy (2026-07-31, n=70 clean>=72 20cm formal, equity-curve MDD):
-    - avg equal-weight return: +1.295% per trade
-    - score < 85: full weight 1.0 (WR 57.1%, this is where the alpha lives)
-    - score >= 85: half weight 0.5 (score>=85 bucket avg_net=-1.46%, negative EV)
-
-    Rationale: final_score is inverted for high-score buckets on 20cm — the
-    top bucket (90+) has avg_net=-1.46% while the 72-84 range is positive.
-    Equal weight (1.0) is the champion; reducing weight on the negative-EV
-    top bucket improves avg_net (+0.11pp), cumulative (+2.02pp), PF (+0.22)
-    and MDD (+2.26pp) with WR unchanged — evaluate_challenger PRODUCTION.
-
-    A per-trade hard cap from market_discipline.max_position_pct is preserved
-    (e.g. 20%-cap in climax markets).
+    Production policy (2026-08-01, n=33 official 20cm clean>=72 live_forward):
+    - score < 85: full weight 1.0 (WR 57.6%, this is where the alpha lives)
+    - score >= 85: half weight 0.5 (score>=85 bucket negative EV)
+    - 弱势 regime: 放宽 market_discipline cap（弱势 20cm clean>=72 本身正期望
+      WR 64% avg +2.49%，cap 压到 0.2-0.3 摧毁 77% alpha；剔除 07-08 单日后
+      仍 +2.73%）。保留 score-bucket 减半仓（size 仍约束）。
+    - 非弱势 regime: 保留 cap 风控（震荡/结构性强势 cap 有防御价值）。
+    - A per-trade hard cap from market_discipline.max_position_pct is preserved
+      for non-weak regimes (e.g. 20%-cap in climax markets).
     """
     # Score-bucket sizing: reduce weight on negative-EV high-score bucket
     final_score = _as_float(feature_snapshot.get("final_score"))
@@ -1102,6 +1098,9 @@ def _resolve_position_size(feature_snapshot: dict[str, Any]) -> float:
 
     discipline = feature_snapshot.get("market_discipline")
     if isinstance(discipline, dict):
+        market_regime = str(discipline.get("market_regime") or "")
+        if market_regime.startswith("弱势"):
+            return round(size, 4)
         max_position_pct = _as_float(discipline.get("max_position_pct"))
         if max_position_pct > 0:
             return round(min(max_position_pct / 100.0, size), 4)
