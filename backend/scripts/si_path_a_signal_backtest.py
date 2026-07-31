@@ -97,6 +97,7 @@ class SignalRecord:
     pos60: float = 50.0
     chg20: float = 0.0
     is_limit_up: bool = False
+    signal_gap_pct: float = 0.0
 
 
 @dataclass
@@ -314,6 +315,7 @@ class PathABacktestRunner:
                         pos60=float(stock_dict.get("pos60", 50)),
                         chg20=float(stock_dict.get("chg20", 0)),
                         is_limit_up=bool(stock_dict.get("is_limit_up", False)),
+                        signal_gap_pct=float(stock_dict.get("signal_gap_pct", 0)),
                     )
                     day_signals.append(sr)
 
@@ -403,6 +405,11 @@ class PathABacktestRunner:
         if close <= 0:
             return None
 
+        # 信号日跳空缺口（gap_fill 形态）：当日 open vs 前一日 close。
+        # gap>0 向上跳空（未回补缺口有上方套牢盘压力），gap<0 向下跳空。
+        prev_close = closes[-2] if len(closes) >= 2 else closes[-1]
+        signal_gap_pct = (float(bar.open or 0) / prev_close - 1) * 100 if prev_close > 0 else 0.0
+
         lookback20 = closes[-20:]
         lookback60 = closes[-60:]
         recent_high20 = max(highs[-20:] or [close])
@@ -467,6 +474,7 @@ class PathABacktestRunner:
             "high": float(bar.high or 0),
             "low": float(bar.low or 0),
             "pct": float(bar.pct_chg or 0),
+            "signal_gap_pct": signal_gap_pct,
             "amount_yi": float(bar.amount or 0) / 100_000_000,
             "turnover_rate": float(bar.turnover_rate or 0),
             "volume": float(bar.volume or 0),
@@ -548,6 +556,16 @@ class PathABacktestRunner:
                 continue
             seen.add(sr.code)
             deduped.append(sr)
+
+        # 信号日向上跳空缺口过滤（gap_fill 假设：未回补缺口有上方套牢盘压力）
+        # config: max_signal_gap_pct 设为 N 时剔除信号日跳空高开 >= N% 的信号；
+        # None 时不启用（保持 champion 语义）。
+        max_signal_gap = config.get("max_signal_gap_pct")
+        if max_signal_gap is not None:
+            deduped = [
+                sr for sr in deduped
+                if sr.signal_gap_pct < max_signal_gap
+            ]
 
         # 应用 score_line 和 regime 调整
         result: list[SignalRecord] = []
