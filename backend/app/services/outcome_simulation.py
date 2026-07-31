@@ -171,6 +171,13 @@ def _simulate_outcome(
         return None
 
     feature_snapshot = feature_snapshot if feature_snapshot is not None else _loads(getattr(rec, "feature_snapshot_json", None), {})
+    # LIVE formal 持久化不把 final_score 写入 feature_snapshot_json，但它落在
+    # Recommendation.final_score 列。仓位策略依赖 final_score，缺失时注入，
+    # 使 _resolve_position_size 的 score-bucket 逻辑对 LIVE 与回测一致生效。
+    if "final_score" not in feature_snapshot:
+        rec_final_score = _as_float(getattr(rec, "final_score", None))
+        if rec_final_score > 0:
+            feature_snapshot = {**feature_snapshot, "final_score": rec_final_score}
     static_metrics = _static_window_metrics(rec, signal_bar, future_bars, horizon_days)
 
     recommendation_block_reason = _recommendation_execution_block_reason(feature_snapshot)
@@ -1062,20 +1069,27 @@ def _resolve_take_profit_price(
 def _resolve_position_size(feature_snapshot: dict[str, Any]) -> float:
     """Return the position size multiplier for a recommendation.
 
-    Champion evidence (2026-07-31, n=68 clean>=72 live_forward formal):
-    - avg equal-weight return: -0.24% per trade
-    - avg label-weighted return: -0.04% per trade  (86% of alpha destroyed)
-    - "中仓" (0.55x): WR=51.4% — label systematically underweights best bucket
-    - "大仓" (0.75x): WR=23.5% — label overweights worse bucket
-    - "小仓" (0.35x): WR=64.3% — label underweights best-performing bucket
+    Production policy (2026-07-31, n=70 clean>=72 20cm formal, equity-curve MDD):
+    - avg equal-weight return: +1.295% per trade
+    - score < 85: full weight 1.0 (WR 57.1%, this is where the alpha lives)
+    - score >= 85: half weight 0.5 (score>=85 bucket avg_net=-1.46%, negative EV)
 
-    The position labels created by _estimated_win_rate are barely correlated
-    with actual forward returns.  Equal weight is the neutral default that
-    avoids amplifying the label noise.
+    Rationale: final_score is inverted for high-score buckets on 20cm — the
+    top bucket (90+) has avg_net=-1.46% while the 72-84 range is positive.
+    Equal weight (1.0) is the champion; reducing weight on the negative-EV
+    top bucket improves avg_net (+0.11pp), cumulative (+2.02pp), PF (+0.22)
+    and MDD (+2.26pp) with WR unchanged — evaluate_challenger PRODUCTION.
 
-    Only a per-trade hard cap from market_discipline.max_position_pct is
-    preserved (e.g. 20%-cap in climax markets).  Everything else is removed.
+    A per-trade hard cap from market_discipline.max_position_pct is preserved
+    (e.g. 20%-cap in climax markets).
     """
+    # Score-bucket sizing: reduce weight on negative-EV high-score bucket
+    final_score = _as_float(feature_snapshot.get("final_score"))
+    if final_score >= 85.0:
+        size = 0.5
+    else:
+        size = 1.0
+
     discipline = feature_snapshot.get("market_discipline")
     if isinstance(discipline, dict):
         max_position_pct = _as_float(discipline.get("max_position_pct"))
@@ -1085,7 +1099,7 @@ def _resolve_position_size(feature_snapshot: dict[str, Any]) -> float:
         max_position_pct = _as_float(feature_snapshot.get("max_position_pct"))
         if max_position_pct > 0:
             return round(min(max_position_pct / 100.0, 1.0), 4)
-    return 1.0
+    return size
 
 
 def _entry_execution_block_reason(code: str, bar: DailyKbar) -> str | None:
