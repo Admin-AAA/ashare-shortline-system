@@ -658,17 +658,32 @@ class PathABacktestRunner:
 
         # 使用因果退出引擎
         try:
-            exit_px, exit_date_str, exit_reason = _resolve_exit_causal(
-                holding_bars,
-                stop_loss_price=stop_loss_price,
-                take_profit_price=take_profit_price,
-                code=code,
-                entry_price=entry_price,
-                dynamic_trailing=True,
-                trailing_policy="profit_floor",
-                profit_lock_ratio=config["trailing_profit_lock_ratio"],
-                activate_pct=config.get("trailing_activate_pct"),
-            )
+            trailing_policy = config.get("trailing_policy", "profit_floor")
+            if trailing_policy == "peak_callback":
+                exit_px, exit_date_str, exit_reason = _resolve_exit_causal(
+                    holding_bars,
+                    stop_loss_price=stop_loss_price,
+                    take_profit_price=take_profit_price,
+                    code=code,
+                    entry_price=entry_price,
+                    dynamic_trailing=True,
+                    trailing_policy="peak_callback",
+                    profit_lock_ratio=config["trailing_profit_lock_ratio"],
+                    trailing_callback=config.get("trailing_callback"),
+                    activate_pct=config.get("trailing_activate_pct"),
+                )
+            else:
+                exit_px, exit_date_str, exit_reason = _resolve_exit_causal(
+                    holding_bars,
+                    stop_loss_price=stop_loss_price,
+                    take_profit_price=take_profit_price,
+                    code=code,
+                    entry_price=entry_price,
+                    dynamic_trailing=True,
+                    trailing_policy="profit_floor",
+                    profit_lock_ratio=config["trailing_profit_lock_ratio"],
+                    activate_pct=config.get("trailing_activate_pct"),
+                )
         except Exception:
             return None
 
