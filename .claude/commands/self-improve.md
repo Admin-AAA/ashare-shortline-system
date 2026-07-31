@@ -282,6 +282,7 @@ PRODUCTION 发布时的合并规则见 §5.1。
 - 数据源：`daily_kbars`（2021-05-26 ~ 今，1257 个交易日，5603 只股票），加上可用的辅助因子表
 - 对比口径：同一交易日、同一 universe、同一成交引擎，champion 参数 vs challenger 参数
 - 报告内容：按年/按 regime/按板块拆分，标注 `backtest`；窗口至少跨一年或两个以上不重叠 regime 阶段
+- **窗口选择**：优先选覆盖不同 regime 的窗口——先用全历史跑一遍看 `regime_breakdown`，确认强势周期（强牛/偏多）和弱势周期（弱势）都有足够样本；若某周期样本不足，显式补跑该周期的历史窗口段（如 2024 熊市段、2025 震荡段）。regime 分组用 path A 的 `regime_breakdown` 字段（n、win_rate、avg_net、pf）
 
 **路径 B — formal 重放**：对已落地数据库的 LIVE formal 推荐做 causally-compatible 离场重放。**仅用于**验证存储 outcome 与当前代码一致性，或快速诊断特定已知问题。**不得作为参数优化或新策略研究的主证据路径。**
 
@@ -305,6 +306,15 @@ PRODUCTION 发布时的合并规则见 §5.1。
 
 冻结 champion，使用时间序列 walk-forward、purge/embargo 和 untouched holdout。任何新过滤条件同时报告：过滤的亏损、误杀的盈利、覆盖率变化、净期望增量和跨 regime 稳定性。
 
+**regime 分层验证（必做，不是可选项）**：
+
+一个候选"整体改善"可能是强势周期的改善淹没了弱势周期的恶化。验证时把结果按 regime 切开看，回答"这个候选到底更适合哪个市场周期"：
+
+- **用 path A 回测的 `regime_breakdown`**（按 强牛/偏多/震荡/弱势 分组，含 n、win_rate、avg_net、pf）或 LIVE formal 按决策时 `market_base`×`market_sentiment` 分组。
+- **至少覆盖"强势周期"和"弱势周期"两类**；若候选机制与某 regime 强相关（追高动能→强势验证、低吸/超跌→弱势验证），以该 regime 为主窗口，另一类作对照。
+- 输出 **regime 指纹**：challenger 相对 champion 在每组的方向（改善/退化/持平）+ 每组 n、avg_net、WR、PF。
+- **regime 指纹用于解释与选题，不构成发布否决门槛**——整体改善（`evaluate_challenger`）照旧是唯一发布判定；但若候选在弱势周期显著退化（如 avg_net 由正转负、WR 降幅 >10pp），应在报告中明确标注"该候选不适合弱势周期"，这直接影响后续选题是否围绕它深挖。
+
 每次实验必须输出：
 
 - 样本数、交易日数、窗口和数据源
@@ -312,6 +322,7 @@ PRODUCTION 发布时的合并规则见 §5.1。
 - 平均盈利、平均亏损、最大单笔亏损
 - 组合最大回撤、覆盖率和 abstain 数
 - 分策略、regime 和板块结果
+- **regime 指纹**：challenger 相对 champion 在每个 regime 的方向与关键指标
 - champion/challenger 配对差值及 paired 95% CI
 - 所有尝试过的主要变体
 

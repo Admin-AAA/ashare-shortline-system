@@ -81,6 +81,22 @@ python self_improve_state.py with-publish-lock --cmd 'git -C <主仓库> pull --
 
 每轮追加一条合法 JSON（`run_id`、`researcher_id`、`claimed_direction`、`started_at`、`input_fingerprint`、`champion`、`hypothesis`、`data_source`、`windows`、`metrics`、`decision`、`commit`、`rollback_point`、`lesson_ids`、`blocked_live_until`、`next_live_event`）。状态和运行记录必须通过 `publish-champion`/`publish-finding` 在同一文件锁下更新，禁止直接写状态文件。
 
+## 回测输出字段（path A 信号回测）
+
+`backend/scripts/si_path_a_signal_backtest.py` 的每个回测结果自带以下字段，做 regime 分层验证时直接用：
+
+- `regime_breakdown`：按 regime 分组 `{regime: {n, win_rate, avg_net, pf}}`。regime 取值：`强牛`/`偏多`/`震荡`/`弱势`（强势/结构性强势 由当日的市场结构叠加）。
+- `strategy_breakdown`：按策略 ID 分组 `{strategy_id: {n, win_rate, avg_net, pf}}`——用于"多策略分工"分析，看哪个策略在哪个 regime 有效。
+- `year_breakdown`：按年分组（跨窗口验证用）。
+
+**regime 分层验证动作**：
+1. 跑 path A 拿到 `regime_breakdown`；
+2. 确认强势周期（强牛/偏多）和弱势周期（弱势）都有足够样本（每组 n≥10）；
+3. 若某周期样本不足，用 `--windows`（或脚本支持的窗口参数）补跑该周期的历史段；
+4. 对比 challenger vs champion 在每个 regime 的 avg_net/WR/PF，输出 regime 指纹。
+
+LIVE formal 样本做 regime 分层时用 `score_line_meta.market_base`（决策时持久化）分组，禁止读回溯的 `feature_snapshot_json.market_regime`（L-013）。
+
 ## 提交信息格式
 
 候选被否证时不改生产代码。代码、测试和验证放同一提交：
