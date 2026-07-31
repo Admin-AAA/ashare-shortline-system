@@ -1021,6 +1021,44 @@ def test_causal_profit_floor_locks_fraction_of_prior_peak_profit():
     assert (price, date, reason) == (10.10, "2026-07-03", "trailing_stop_hit")
 
 
+def test_causal_peak_callback_respects_trailing_callback_override():
+    """peak_callback 模式可用 trailing_callback 覆盖全局回调值（path A 网格用）。
+
+    默认 callback=0.8 时 07-03 保护价 = 4% - 0.8% = 3.2% → 10.32；
+    覆盖 trailing_callback=1.5 时保护价 = 4% - 1.5% = 2.5% → 10.25。
+    07-03 开盘 10.35 高于保护价（非 gap），low 穿透保护价 → trailing_stop_hit。
+    """
+    bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.98, close=10.0, pct_chg=0.0),
+        _bar_trailing(trade_date="2026-07-02", open=10.1, high=10.4, low=10.05, close=10.3, pct_chg=3.0),
+        _bar_trailing(trade_date="2026-07-03", open=10.35, high=10.4, low=10.05, close=10.2, pct_chg=-1.9),
+    ]
+
+    # 默认 callback（0.8）：保护价 10.32
+    price, date, reason = _resolve_exit_causal(
+        bars,
+        stop_loss_price=9.5,
+        take_profit_price=11.0,
+        code="000001",
+        entry_price=10.0,
+        trailing_policy="peak_callback",
+    )
+    assert (price, date, reason) == (10.32, "2026-07-03", "trailing_stop_hit")
+
+    # 覆盖 trailing_callback=1.5：保护价 10.25
+    price2, date2, reason2 = _resolve_exit_causal(
+        bars,
+        stop_loss_price=9.5,
+        take_profit_price=11.0,
+        code="000001",
+        entry_price=10.0,
+        trailing_policy="peak_callback",
+        trailing_callback=1.5,
+    )
+    assert price2 == pytest.approx(10.25, abs=1e-9)
+    assert (date2, reason2) == ("2026-07-03", "trailing_stop_hit")
+
+
 def test_causal_rejects_unknown_trailing_policy():
     """配置错误必须立即失败，不能静默退回旧 callback 口径污染反事实结果。"""
     bars = [

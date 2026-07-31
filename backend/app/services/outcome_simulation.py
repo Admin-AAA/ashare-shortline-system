@@ -850,10 +850,13 @@ def _trailing_stop_return(
     observed_high_return: float,
     trailing_policy: str,
     profit_lock_ratio: float,
+    *,
+    callback_pct: float | None = None,
 ) -> float:
     if trailing_policy == "profit_floor":
         return max(TRAILING_STOP_MIN_LOCK_PCT, observed_high_return * profit_lock_ratio)
-    return observed_high_return - TRAILING_STOP_CALLBACK_PCT
+    cb = TRAILING_STOP_CALLBACK_PCT if callback_pct is None else callback_pct
+    return observed_high_return - cb
 
 
 def _resolve_exit_causal(
@@ -866,6 +869,7 @@ def _resolve_exit_causal(
     dynamic_trailing: bool = True,
     trailing_policy: str = "peak_callback",
     profit_lock_ratio: float = 0.25,
+    trailing_callback: float | None = None,
 ) -> tuple[float, str, str]:
     """单路径因果退出函数（动态退出状态机 MVP）。
 
@@ -915,7 +919,7 @@ def _resolve_exit_causal(
             observed_high_return = max(0.0, entry_close_return)
             if entry_close_return >= TRAILING_STOP_ACTIVATE_PCT:
                 trailing_active = True
-                stop_return = _trailing_stop_return(entry_close_return, trailing_policy, profit_lock_ratio)
+                stop_return = _trailing_stop_return(entry_close_return, trailing_policy, profit_lock_ratio, callback_pct=trailing_callback)
                 prot = entry_price * (1 + stop_return / 100.0)
                 prot = max(prot, hard_stop)
                 next_trailing_stop = prot
@@ -977,7 +981,7 @@ def _resolve_exit_causal(
             if not trailing_active and observed_high_return >= TRAILING_STOP_ACTIVATE_PCT:
                 trailing_active = True
             if trailing_active:
-                stop_return = _trailing_stop_return(observed_high_return, trailing_policy, profit_lock_ratio)
+                stop_return = _trailing_stop_return(observed_high_return, trailing_policy, profit_lock_ratio, callback_pct=trailing_callback)
                 prot = entry_price * (1 + stop_return / 100.0)
                 prot = max(prot, hard_stop)
                 # 保护价单调上移：不得低于上一版
