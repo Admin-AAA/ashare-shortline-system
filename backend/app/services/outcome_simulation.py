@@ -850,9 +850,11 @@ def _trailing_stop_return(
     observed_high_return: float,
     trailing_policy: str,
     profit_lock_ratio: float,
+    min_lock_pct: float | None = None,
 ) -> float:
     if trailing_policy == "profit_floor":
-        return max(TRAILING_STOP_MIN_LOCK_PCT, observed_high_return * profit_lock_ratio)
+        effective_min_lock = min_lock_pct if min_lock_pct is not None else TRAILING_STOP_MIN_LOCK_PCT
+        return max(effective_min_lock, observed_high_return * profit_lock_ratio)
     return observed_high_return - TRAILING_STOP_CALLBACK_PCT
 
 
@@ -867,6 +869,7 @@ def _resolve_exit_causal(
     trailing_policy: str = "peak_callback",
     profit_lock_ratio: float = 0.25,
     activate_pct: float | None = None,
+    min_lock_pct: float | None = None,
 ) -> tuple[float, str, str]:
     """单路径因果退出函数（动态退出状态机 MVP）。
 
@@ -918,7 +921,7 @@ def _resolve_exit_causal(
             observed_high_return = max(0.0, entry_close_return)
             if entry_close_return >= trailing_activate_pct:
                 trailing_active = True
-                stop_return = _trailing_stop_return(entry_close_return, trailing_policy, profit_lock_ratio)
+                stop_return = _trailing_stop_return(entry_close_return, trailing_policy, profit_lock_ratio, min_lock_pct=min_lock_pct)
                 prot = entry_price * (1 + stop_return / 100.0)
                 prot = max(prot, hard_stop)
                 next_trailing_stop = prot
@@ -980,7 +983,7 @@ def _resolve_exit_causal(
             if not trailing_active and observed_high_return >= trailing_activate_pct:
                 trailing_active = True
             if trailing_active:
-                stop_return = _trailing_stop_return(observed_high_return, trailing_policy, profit_lock_ratio)
+                stop_return = _trailing_stop_return(observed_high_return, trailing_policy, profit_lock_ratio, min_lock_pct=min_lock_pct)
                 prot = entry_price * (1 + stop_return / 100.0)
                 prot = max(prot, hard_stop)
                 # 保护价单调上移：不得低于上一版
