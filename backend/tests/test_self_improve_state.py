@@ -497,6 +497,34 @@ def test_claim_does_not_reallocate_falsified_factor_direction(tmp_memory_dir):
     assert "new_strategy:capital_flow_momentum" not in claimed
 
 
+def test_claim_does_not_reallocate_archived_oos_window(tmp_memory_dir):
+    """An OOS window archived with a reason suffix must not be re-allocated.
+
+    Regression: oos_validation:2024-H1 was archived as
+    "oos_validation:2024-H1:2024-H1仅300只股票且0只20cm..." but the exact-match
+    check `d not in archived` missed the suffixed entry and the pool handed it
+    out again.
+    """
+    commit_update(
+        {
+            "canonical_production": {"commit": "abc", "n": 5},
+            "archived_falsified_directions": [
+                "oos_validation:2024-H1:2024-H1仅300只股票且0只20cm, 数据不足不可用",
+            ],
+        },
+        memory_dir=tmp_memory_dir,
+    )
+
+    claimed = set()
+    for i in range(5):
+        r = claim_direction(f"r{i}", max_workers=3, memory_dir=tmp_memory_dir)
+        if r.get("ok"):
+            claimed.add(r["direction"])
+        release_direction(f"r{i}", memory_dir=tmp_memory_dir)
+
+    assert "oos_validation:2024-H1" not in claimed
+
+
 # ── 并发安全 ───────────────────────────────────────────────────────────
 
 
