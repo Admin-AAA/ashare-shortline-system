@@ -25,6 +25,18 @@ def test_portfolio_metrics_treats_same_exit_day_as_equal_weight_portfolio():
     assert details["exit_days"] == 2
 
 
+def test_portfolio_metrics_empty_population_returns_n0_placeholder():
+    """Empty population returns n=0 placeholder instead of crashing, so
+    regime slices with no trades can be reported as 'no samples'."""
+    snapshot, details = _portfolio_metrics([])
+
+    assert details["n"] == 0
+    assert details["trade_days"] == 0
+    assert snapshot.average_net_return_pct == 0.0
+    assert snapshot.win_rate_pct == 0.0
+    assert snapshot.profit_factor == 0.0
+
+
 def test_production_universe_filter_uses_current_20cm_setting():
     assert _in_production_universe("300001") is True
     assert _in_production_universe("688001") is True
