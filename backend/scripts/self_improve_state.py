@@ -786,6 +786,35 @@ def stop_daemon_process(pid: int) -> bool:
         return False
 
 
+def _encode_provisional_guard(
+    state_patch: dict,
+    current_champion: dict,
+) -> tuple[str, str] | None:
+    """Encode L-019: small-sample champions must stay marked provisional.
+
+    Returns (key, message) when a publish would clear the provisional flag on
+    a champion whose n < PROVISIONAL_MIN_N.  The caller refuses the publish so
+    a tiny champion can never be declared stable/optimal by clearing the flag.
+    """
+    PROVISIONAL_MIN_N = 50
+    new_cp = state_patch.get("canonical_production")
+    if not isinstance(new_cp, dict):
+        return None
+    n = new_cp.get("metrics", {}).get("n") if isinstance(new_cp.get("metrics"), dict) else None
+    was_provisional = current_champion.get("provisional", True)
+    if (
+        isinstance(n, int)
+        and n < PROVISIONAL_MIN_N
+        and new_cp.get("provisional") is False
+        and was_provisional
+    ):
+        return (
+            "SMALL_SAMPLE_PROVISIONAL_GUARD",
+            f"champion n={n} < {PROVISIONAL_MIN_N}，禁止清除 provisional 标志（L-019）",
+        )
+    return None
+
+
 def publish_champion(
     researcher_id: str,
     expected_champion_commit: str,
@@ -812,6 +841,13 @@ def publish_champion(
                 "new_champion": state.get("canonical_production"),
             }
 
+        guard = _encode_provisional_guard(
+            state_patch, state.get("canonical_production", {})
+        )
+        if guard is not None:
+            key, message = guard
+            return {"error": key, "message": message}
+
         state.update(state_patch)
 
         active = (
@@ -836,6 +872,25 @@ def publish_champion(
         return {"ok": True}
 
 
+def _finding_has_substance(finding: dict) -> str | None:
+    """Return a reason string when a finding is an empty round, else None.
+
+    Encodes the "每轮必须交付研究产出" rule: a finding without a summary,
+    without metrics, and without a decision is just a heartbeat — it must not
+    be recorded as a finding (which would let an idle round masquerade as
+    work).
+    """
+    if not isinstance(finding.get("summary"), str) or not finding["summary"].strip():
+        return "finding 缺 summary（空轮次）"
+    metrics = finding.get("metrics")
+    if not isinstance(metrics, dict) or not metrics:
+        return "finding 缺 metrics（空轮次）"
+    decision = finding.get("decision")
+    if not decision or not str(decision).strip():
+        return "finding 缺 decision（空轮次）"
+    return None
+
+
 def publish_finding(
     researcher_id: str,
     state_patch: dict,
@@ -852,6 +907,10 @@ def publish_finding(
         raise ValueError(
             "publish_finding must not mutate canonical_production"
         )
+
+    empty_reason = _finding_has_substance(finding)
+    if empty_reason is not None:
+        return {"error": "EMPTY_FINDING", "message": empty_reason}
 
     directory = memory_dir or _memory_dir()
     state_path = directory / "self-improve-state.json"
