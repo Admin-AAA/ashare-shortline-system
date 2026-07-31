@@ -322,7 +322,12 @@ def claim_direction(
             if isinstance(d, str):
                 excluded.add(d)
 
-        direction = _allocate_direction(state, preferred, excluded)
+        # A preferred direction is an explicit reservation after the worker
+        # has inspected state; still reject archived/active duplicates.
+        if preferred and preferred not in excluded and preferred not in archived:
+            direction = preferred
+        else:
+            direction = _allocate_direction(state, preferred, excluded)
         if direction is None:
             return {"error": "all_exhausted",
                     "excluded_count": len(excluded)}
@@ -360,19 +365,19 @@ def release_direction(
             state.get("researcher_registry", {})
             .get("active_researchers", {})
         )
-        if researcher_id in active:
-            del active[researcher_id]
-        # Also remove from claimed_directions list
+        info = active.pop(researcher_id, None)
         claimed = (
             state.get("researcher_registry", {})
             .get("claimed_directions", [])
         )
-        # Clean direction string from any active researcher entry that was there
-        if researcher_id in active:
-            direction_to_drop = active.get(researcher_id, {}).get("claimed_direction", "")
-            if direction_to_drop and direction_to_drop in claimed:
-                claimed = [d for d in claimed if d != direction_to_drop]
-                state["researcher_registry"]["claimed_directions"] = claimed
+        direction_to_drop = (
+            info.get("claimed_direction", "") if isinstance(info, dict) else ""
+        )
+        if direction_to_drop:
+            state["researcher_registry"]["claimed_directions"] = [
+                direction for direction in claimed
+                if direction != direction_to_drop
+            ]
 
         _atomic_write_json(state_path, state)
         return {"ok": True}

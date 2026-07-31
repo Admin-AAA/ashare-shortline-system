@@ -133,13 +133,24 @@ def test_claim_direction_force_stale_replaces_oldest(tmp_memory_dir):
 
 
 def test_release_direction_removes_researcher(tmp_memory_dir):
-    claim_direction("r1", max_workers=3, memory_dir=tmp_memory_dir)
+    claimed = claim_direction("r1", max_workers=3, memory_dir=tmp_memory_dir)
     r = release_direction("r1", memory_dir=tmp_memory_dir)
     assert r["ok"] is True
 
     state = read_state(tmp_memory_dir)
-    active = state.get("researcher_registry", {}).get("active_researchers", {})
+    registry = state.get("researcher_registry", {})
+    active = registry.get("active_researchers", {})
     assert "r1" not in active
+    assert claimed["direction"] not in registry.get("claimed_directions", [])
+
+    reclaimed = claim_direction(
+        "r2",
+        preferred=claimed["direction"],
+        max_workers=3,
+        memory_dir=tmp_memory_dir,
+    )
+    assert reclaimed["ok"] is True
+    assert reclaimed["direction"] == claimed["direction"]
 
 
 def test_heartbeat_updates_timestamp(tmp_memory_dir):

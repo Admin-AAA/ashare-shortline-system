@@ -20,42 +20,65 @@
 
 ---
 
-## 0. 多研究员并发模式
+## 0. 研究员生命周期（自管理）
 
-当 `SELF_IMPROVE_MULTI_WORKER=1` 时，你是多个并发研究员之一。启动时启动器已通过 `claim-direction` 为你分配了唯一研究方向。本节规则与后续各节叠加使用；冲突时本节优先。
+无论你是被 `/loop N /self-improve` 直接调用，还是被 `run-self-improve.sh --workers N` 启动，你都必须自己管理研究员生命周期。区别仅在于：启动器模式下环境变量已预设，直接调用模式下你自己生成。
 
-### 0.1 研究方向锁定
+### 0.1 开局：确定身份并 claim 方向
 
-- 你的研究方向在 `SELF_IMPROVE_CLAIMED_DIRECTION` 环境变量中。
-- **禁止**在工作期间自行切换到其他方向。需要变更时：先 `publish-finding` 归档当前结果，再 `release-direction` 释放，然后手动 `claim-direction` 重新分配。
-- 研究方向字符串全局去重。不要在 `archived_falsified_directions` 或 `scanned_grids` 中已存在的方向上重复工作。
+**第一步（必做）**：确定 researcher_id。
 
-### 0.2 心跳与存活性
+- 如果 `SELF_IMPROVE_RESEARCHER_ID` 环境变量存在 → 直接用它（启动器模式）
+- 否则 → 用 `si-<当前时间戳>` 自己生成一个（直接调用模式），例如 `si-20260731-143022`
 
-- 每 15 分钟或在每次状态更新时，执行一次心跳：
-  ```
-  backend/.venv/bin/python backend/scripts/self_improve_state.py heartbeat \
-    --researcher-id "$SELF_IMPROVE_RESEARCHER_ID"
-  ```
-- 超过 30 分钟无心跳会被标记为失活，研究方向会被其他 worker 回收。
-- 启动器自带心跳看门狗，你只需定期调用 `heartbeat` 子命令。
+**第二步（必做）**：claim 一个研究方向。
 
-### 0.3 Champion 过期检测
+```
+backend/.venv/bin/python backend/scripts/self_improve_state.py claim-direction \
+  --researcher-id "<你的 researcher_id>" --max-workers 3
+```
 
-- 每次调用 `heartbeat` 后检查返回值。如果 `stale_champion: true` 或 `status: invalidated`：
-  1. 立即停止当前实验
-  2. 有部分结果则 `publish-finding` 归档
-  3. `release-direction` 释放
-  4. 以 exit code 42 退出（启动器会自动重新分配方向并重启你）
-- 这也是 `commit_update` 返回 `stale_champion: true` 时的行为。
+- 返回 `ok: true` → 记下 `direction` 和 `champion_commit`，这是你本轮的工作范围和 CAS 基准
+- 返回 `error: capacity_full` → 说明已有 3 个研究员在跑。加 `--force-stale` 抢占最老的失活槽位，或改用更大的 `--max-workers`
+- 返回 `error: all_exhausted` → 所有方向都被 claim 或已归档。此时读 `archived_falsified_directions` 找一个全新的独立假设，用 `--preferred-direction "<你的新方向>"` 强制 claim
+
+**方向就是你本轮的唯一主假设范围。** 拿到什么方向就研究什么，不要中途换。
+
+### 0.2 收尾：必须 release
+
+**本轮结束前（无论成功失败）必须执行**：
+
+```
+backend/.venv/bin/python backend/scripts/self_improve_state.py release-direction \
+  --researcher-id "<你的 researcher_id>"
+```
+
+漏掉 release 会让方向被占用 30 分钟（直到心跳超时回收），下一轮的你会拿不到方向。
+
+### 0.3 心跳（长实验时）
+
+如果单轮工作超过 15 分钟（例如跑全历史回测），中途执行一次心跳，避免被判失活：
+
+```
+backend/.venv/bin/python backend/scripts/self_improve_state.py heartbeat \
+  --researcher-id "<你的 researcher_id>"
+```
+
+返回 `stale_champion: true` 或 `status: invalidated` → 说明另一个研究员刚发布了新 champion，你的基准已失效：
+1. 立即停止当前实验
+2. 有部分结果就 `publish-finding` 归档
+3. `release-direction` 释放
+4. 结束本轮（不要硬撑着用旧 champion 出结论）
+
+短实验（< 15 分钟）可以跳过心跳。
 
 ### 0.4 发布路径分两种
 
 **发布 PRODUCTION（修改 champion）：**
 ```
 backend/.venv/bin/python backend/scripts/self_improve_state.py publish-champion \
-  --researcher-id "$SELF_IMPROVE_RESEARCHER_ID" \
-  --expected-champion-commit "<claim 时的 commit>" \
+  --researcher-id "<你的 researcher_id>" \
+  --expected-champion-commit "<claim 时返回的 champion_commit>" \
   --state-patch '{"canonical_production":{...},"scanned_grids":{...}}' \
   --run-record '{"run_id":"...","decision":"PRODUCTION",...}'
 ```
@@ -65,7 +88,7 @@ backend/.venv/bin/python backend/scripts/self_improve_state.py publish-champion 
 **发布 FINDING（不修改 champion）：**
 ```
 backend/.venv/bin/python backend/scripts/self_improve_state.py publish-finding \
-  --researcher-id "$SELF_IMPROVE_RESEARCHER_ID" \
+  --researcher-id "<你的 researcher_id>" \
   --state-patch '{"archived_falsified_directions":[...],"scanned_grids":{...}}' \
   --finding '{"finding_id":"...","direction":"...","summary":"...","metrics":{}}' \
   --run-record '{"run_id":"...","decision":"FINDING",...}'
@@ -73,10 +96,15 @@ backend/.venv/bin/python backend/scripts/self_improve_state.py publish-finding \
 - 不碰 champion，纯追加发现。
 - 即使无法发布 PRODUCTION（候选未通过整体改善、或 champion 已过期），仍可发布 FINDING。FINDING 不是失败，是正常的科研产出。
 
-### 0.5 单实例兼容
+### 0.5 直接调用模式的工作目录约束
 
-- 当 `SELF_IMPROVE_MULTI_WORKER` 未设置时，行为与之前完全相同。
-- `commit` 子命令和旧版发布路径继续可用。
+`/loop N /self-improve` 会在你当前的工作树里运行，**没有 worktree 隔离**。因此：
+
+- **禁止直接改 `main`**：先 `git switch -c self-improve/si-<时间戳>` 开分支再改代码
+- **禁止 `git push origin main`**：发布 PRODUCTION 时只提交到分支并推分支，由用户决定何时合并
+- 状态文件（`self-improve-state.json` / `self-improve-runs.jsonl`）仍照常写，那是共享的实验记录，不是代码
+
+启动器模式（`SELF_IMPROVE_ISOLATED_RUN=1`）下不受此限制，可按 §5 规则合并回 main。
 
 ---
 
@@ -250,13 +278,13 @@ backend/.venv/bin/python backend/scripts/self_improve_state.py publish-finding \
 - champion/challenger 配对差值及 paired 95% CI
 - 所有尝试过的主要变体
 
-决策只有四种：
+决策只有五种：
 
 - `PRODUCTION`：满足整体改善条件，使用 `publish-champion` 发布、记录回滚点并生成新 champion。
 - `FALSIFIED`：不满足整体改善条件，归档本次具体假设，不在同一数据上继续扫阈值。
-- `FINDING`（多 worker 模式）：候选不满足整体改善或 champion 已过期。使用 `publish-finding` 记录实验结果。不算失败，是正常科研产出。
+- `FINDING`：候选不满足整体改善、或 champion 在你实验期间已被其他研究员更新。使用 `publish-finding` 记录实验结果。不算失败，是正常科研产出。
 - `MEASUREMENT_FIX`：只能证明修复了真实性或测量能力，不能声称提高收益。
-- `BLOCKED`：基础数据和验证设施均不可用，且本轮修复尝试失败；必须附失败命令和证据，不能用”等待 LIVE 样本”作为理由。
+- `BLOCKED`：基础数据和验证设施均不可用，且本轮修复尝试失败；必须附失败命令和证据，不能用"等待 LIVE 样本"作为理由。
 
 ---
 
@@ -279,17 +307,30 @@ backend/.venv/bin/python backend/scripts/self_improve_state.py publish-finding \
 
 ## 5. 隔离、记录与发布
 
-定时生产发布只能由 `scripts/run-self-improve.sh` 启动，且必须看到 `SELF_IMPROVE_ISOLATED_RUN=1`。多 worker 模式下每个 worker 有独立 worktree 和独立研究方向，共享状态文件但研究方向不重叠。
+### 5.1 两种运行模式的发布权限
 
-发布前再次确认 `main` 仍等于本轮起始 commit，且当前 champion commit 等于 claim 时的 `champion_commit_at_claim`。**多 worker 模式必须使用 `publish-champion` 子命令（含 CAS），禁止用 `commit` 子命令直接覆盖 champion。**
+**启动器模式**（`SELF_IMPROVE_ISOLATED_RUN=1`，由 `scripts/run-self-improve.sh` 启动）：
+- 在独立 detached worktree 中运行，不影响调用者工作树
+- 验证通过的单一候选可以合入 `main` 并推送
+- 发布前确认 `main` 仍等于本轮起始 commit；若已前进，先重放到新 `main` 再重跑测试
+
+**直接调用模式**（`/loop N /self-improve` 或手工 `/self-improve`）：
+- 在当前工作树运行，**没有 worktree 隔离**
+- 代码改动必须先开分支：`git switch -c self-improve/si-<时间戳>`
+- **禁止 `git push origin main`**，只推自己的分支：`git push -u origin self-improve/si-<时间戳>`
+- 合并权交给用户，在最终报告里说明分支名和合并建议
+
+两种模式共通：champion 发布必须用 `publish-champion` 子命令（含 CAS），禁止用 `commit` 子命令直接覆盖 champion。发布前确认当前 champion commit 等于 claim 时返回的 `champion_commit`。
+
+### 5.2 记录
 
 每轮结束向 `self-improve-runs.jsonl` 追加一条合法 JSON，字段至少包括：
 
 ```json
-{"run_id":"...","started_at":"...","input_fingerprint":"...","champion":"...","hypothesis":"...","data_source":"LIVE formal|backtest","windows":[],"metrics":{},"decision":"PRODUCTION|FALSIFIED|MEASUREMENT_FIX|BLOCKED","commit":null,"rollback_point":null,"lesson_ids":[],"blocked_live_until":null,"next_live_event":null}
+{"run_id":"...","researcher_id":"...","claimed_direction":"...","started_at":"...","input_fingerprint":"...","champion":"...","hypothesis":"...","data_source":"LIVE formal|backtest","windows":[],"metrics":{},"decision":"PRODUCTION|FALSIFIED|FINDING|MEASUREMENT_FIX|BLOCKED","commit":null,"rollback_point":null,"lesson_ids":[],"blocked_live_until":null,"next_live_event":null}
 ```
 
-状态和运行记录必须通过 `backend/scripts/self_improve_state.py commit` 在同一把文件锁下更新；禁止直接写 `self-improve-state.json` 或 `self-improve-runs.jsonl`。不要再向旧 Markdown 日志追加。只有产生可跨轮复用、会改变未来决策的新知识时，才更新 `LESSONS.md`；状态变化和单次实验结果不是教训。
+状态和运行记录必须通过 `publish-champion` 或 `publish-finding` 在同一把文件锁下更新；禁止直接写 `self-improve-state.json` 或 `self-improve-runs.jsonl`。旧 `commit` 子命令仅供单实例兼容，不用于新研究轮次。不要再向旧 Markdown 日志追加。只有产生可跨轮复用、会改变未来决策的新知识时，才更新 `LESSONS.md`；状态变化和单次实验结果不是教训。
 
 候选被否证时不改生产代码。代码、测试和验证放在同一提交。提交信息：
 
@@ -313,6 +354,7 @@ self-improve: T{编号} {简短描述}
 3. 唯一主要变量改了什么？
 4. 净收益、胜率、PF、回撤如何变化？
 5. CI、样本量、跨窗口和覆盖率数字是什么？
-6. 决定是 `PRODUCTION`、`FALSIFIED`、`MEASUREMENT_FIX` 还是 `BLOCKED`？
+6. 决定是 `PRODUCTION`、`FALSIFIED`、`FINDING`、`MEASUREMENT_FIX` 还是 `BLOCKED`？
+7. `release-direction` 是否执行成功？
 
 无法回答第 4、5 项时只能判定为 `MEASUREMENT_FIX`。不要用代码行数、提交数、页面数或任务数量衡量进展。
