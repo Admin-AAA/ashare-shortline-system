@@ -437,10 +437,13 @@ class PathABacktestRunner:
         rsi = float(bar.rsi_12 or 50)
         dsa_rsi = 10 if 40 <= rsi <= 70 else 4
 
-        # chip_concentration
+        # chip_concentration — 与生产 feature_builder 一致：90% 筹码集中度 =
+        # (85%成本 - 15%成本) / 15%成本 * 100。值越小越集中（生产 memory：
+        # 低 chip(≤18) 更集中 WR 59.4%）。旧实现用 100 - 价差/close*100 方向相反，
+        # 使策略层 chip_concentration>=20 在 path A 里几乎恒真失真。
         chip_low = float(bar.chip_cost_15 or 0)
         chip_high = float(bar.chip_cost_85 or 0)
-        chip_concentration = max(0.0, min(100.0, 100 - (chip_high - chip_low) / close * 100)) if chip_low > 0 and chip_high > chip_low else 0.0
+        chip_concentration = (chip_high - chip_low) / chip_low * 100 if chip_low > 0 and chip_high > chip_low else 22.0
 
         # max_dd20
         peak = 0.0
