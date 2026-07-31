@@ -1093,3 +1093,65 @@ def test_simulate_outcome_defaults_to_production_profit_floor_policy():
     assert sim is not None
     assert sim["exit_reason"] == "trailing_stop_hit"
     assert sim["exit_date"] == "2026-07-03"
+
+
+def test_resolve_position_size_score_bucket_policy():
+    """生产仓位策略：final_score>=85 → 0.5，<85 → 1.0（负EV高分桶减仓）。"""
+    from app.services.outcome_simulation import _resolve_position_size
+
+    assert _resolve_position_size({"final_score": 72.0}) == 1.0
+    assert _resolve_position_size({"final_score": 84.9}) == 1.0
+    assert _resolve_position_size({"final_score": 85.0}) == 0.5
+    assert _resolve_position_size({"final_score": 100.0}) == 0.5
+    # 缺失 final_score 时回退等权 1.0
+    assert _resolve_position_size({}) == 1.0
+    # market_discipline 硬上限仍生效
+    assert _resolve_position_size({"final_score": 90.0, "market_discipline": {"max_position_pct": 20.0}}) == 0.2
+
+
+def test_simulate_outcome_injects_final_score_from_rec_for_position_sizing():
+    """LIVE formal 的 feature_snapshot_json 不含 final_score，但 rec.final_score 列有值，
+    仓位策略应通过注入读到它（score>=85 减半仓）。"""
+    rec = SimpleNamespace(
+        code="000001",
+        trade_date="2026-07-01",
+        recommend_price=10.0,
+        final_score=88.0,
+        recommended_at=datetime(2026, 7, 1, 2, 0),
+        feature_snapshot_json=json.dumps(
+            {"ideal_buy": 10.0, "stop_loss": 9.5, "take_profit": 11.0},
+            ensure_ascii=False,
+        ),
+    )
+    bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.98, close=10.0, pct_chg=0.0),
+        _bar_trailing(trade_date="2026-07-02", open=10.1, high=10.4, low=10.05, close=10.3, pct_chg=3.0),
+        _bar_trailing(trade_date="2026-07-03", open=10.25, high=10.3, low=10.15, close=10.2, pct_chg=-1.0),
+    ]
+
+    sim = _simulate_outcome(
+        rec, bars, [str(bar.trade_date) for bar in bars], horizon_days=3,
+        entry_policy=LEGACY_MIXED_ENTRY,
+    )
+    assert sim is not None
+    # 88 >= 85 → 半仓
+    assert sim["position_size"] == 0.5
+
+    rec_low = SimpleNamespace(
+        code="000001",
+        trade_date="2026-07-01",
+        recommend_price=10.0,
+        final_score=78.0,
+        recommended_at=datetime(2026, 7, 1, 2, 0),
+        feature_snapshot_json=json.dumps(
+            {"ideal_buy": 10.0, "stop_loss": 9.5, "take_profit": 11.0},
+            ensure_ascii=False,
+        ),
+    )
+    sim_low = _simulate_outcome(
+        rec_low, bars, [str(bar.trade_date) for bar in bars], horizon_days=3,
+        entry_policy=LEGACY_MIXED_ENTRY,
+    )
+    assert sim_low is not None
+    # 78 < 85 → 全仓
+    assert sim_low["position_size"] == 1.0
