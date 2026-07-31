@@ -16,6 +16,67 @@
 - 运行状态：`/Users/wangao/.claude/projects/-Users-wangao/memory/self-improve-state.json`
 - 结构化记录：`/Users/wangao/.claude/projects/-Users-wangao/memory/self-improve-runs.jsonl`
 - 旧日志：`/Users/wangao/.claude/projects/-Users-wangao/memory/self-improve-log.md`（只读历史档案，不再追加）
+- 状态工具新子命令：`claim-direction`、`publish-champion`、`publish-finding`、`release-direction`、`heartbeat`
+
+---
+
+## 0. 多研究员并发模式
+
+当 `SELF_IMPROVE_MULTI_WORKER=1` 时，你是多个并发研究员之一。启动时启动器已通过 `claim-direction` 为你分配了唯一研究方向。本节规则与后续各节叠加使用；冲突时本节优先。
+
+### 0.1 研究方向锁定
+
+- 你的研究方向在 `SELF_IMPROVE_CLAIMED_DIRECTION` 环境变量中。
+- **禁止**在工作期间自行切换到其他方向。需要变更时：先 `publish-finding` 归档当前结果，再 `release-direction` 释放，然后手动 `claim-direction` 重新分配。
+- 研究方向字符串全局去重。不要在 `archived_falsified_directions` 或 `scanned_grids` 中已存在的方向上重复工作。
+
+### 0.2 心跳与存活性
+
+- 每 15 分钟或在每次状态更新时，执行一次心跳：
+  ```
+  backend/.venv/bin/python backend/scripts/self_improve_state.py heartbeat \
+    --researcher-id "$SELF_IMPROVE_RESEARCHER_ID"
+  ```
+- 超过 30 分钟无心跳会被标记为失活，研究方向会被其他 worker 回收。
+- 启动器自带心跳看门狗，你只需定期调用 `heartbeat` 子命令。
+
+### 0.3 Champion 过期检测
+
+- 每次调用 `heartbeat` 后检查返回值。如果 `stale_champion: true` 或 `status: invalidated`：
+  1. 立即停止当前实验
+  2. 有部分结果则 `publish-finding` 归档
+  3. `release-direction` 释放
+  4. 以 exit code 42 退出（启动器会自动重新分配方向并重启你）
+- 这也是 `commit_update` 返回 `stale_champion: true` 时的行为。
+
+### 0.4 发布路径分两种
+
+**发布 PRODUCTION（修改 champion）：**
+```
+backend/.venv/bin/python backend/scripts/self_improve_state.py publish-champion \
+  --researcher-id "$SELF_IMPROVE_RESEARCHER_ID" \
+  --expected-champion-commit "<claim 时的 commit>" \
+  --state-patch '{"canonical_production":{...},"scanned_grids":{...}}' \
+  --run-record '{"run_id":"...","decision":"PRODUCTION",...}'
+```
+- 必须用 `publish-champion`（含 CAS 检查），不能用 `commit` 子命令直接覆盖 champion。
+- 如果返回 `CHAMPION_STALE`：读取新 champion → 重新运行 challenger 对比 → 仍优于则用新 commit 重试 → 不再优于则改为 `publish-finding`。
+
+**发布 FINDING（不修改 champion）：**
+```
+backend/.venv/bin/python backend/scripts/self_improve_state.py publish-finding \
+  --researcher-id "$SELF_IMPROVE_RESEARCHER_ID" \
+  --state-patch '{"archived_falsified_directions":[...],"scanned_grids":{...}}' \
+  --finding '{"finding_id":"...","direction":"...","summary":"...","metrics":{}}' \
+  --run-record '{"run_id":"...","decision":"FINDING",...}'
+```
+- 不碰 champion，纯追加发现。
+- 即使无法发布 PRODUCTION（候选未通过整体改善、或 champion 已过期），仍可发布 FINDING。FINDING 不是失败，是正常的科研产出。
+
+### 0.5 单实例兼容
+
+- 当 `SELF_IMPROVE_MULTI_WORKER` 未设置时，行为与之前完全相同。
+- `commit` 子命令和旧版发布路径继续可用。
 
 ---
 
@@ -112,6 +173,10 @@
 - `blocked_until` 只阻止重复检查对应的 LIVE 数据事件，不能阻止其他证据路径；
 - 同一假设没有新窗口时归档该假设，选择新的独立假设，不得原地等待。
 
+**多 worker 模式额外 PRECHECK：**
+- 启动时执行一次 `heartbeat`。如果返回 `status: invalidated`：champion 已在你启动前被其他 worker 更新，立即退出（exit code 42）。
+- 确认 `RESEARCHER_ID` 对应的研究方向仍在状态文件中，且未被标记为 `invalidated`。
+
 每次执行至少交付以下一项，才算完成：
 
 - 一次新的 champion/challenger 配对回测或 LIVE 验证；
@@ -187,10 +252,11 @@
 
 决策只有四种：
 
-- `PRODUCTION`：满足整体改善条件，直接发布、记录回滚点并生成新 champion。
+- `PRODUCTION`：满足整体改善条件，使用 `publish-champion` 发布、记录回滚点并生成新 champion。
 - `FALSIFIED`：不满足整体改善条件，归档本次具体假设，不在同一数据上继续扫阈值。
+- `FINDING`（多 worker 模式）：候选不满足整体改善或 champion 已过期。使用 `publish-finding` 记录实验结果。不算失败，是正常科研产出。
 - `MEASUREMENT_FIX`：只能证明修复了真实性或测量能力，不能声称提高收益。
-- `BLOCKED`：基础数据和验证设施均不可用，且本轮修复尝试失败；必须附失败命令和证据，不能用“等待 LIVE 样本”作为理由。
+- `BLOCKED`：基础数据和验证设施均不可用，且本轮修复尝试失败；必须附失败命令和证据，不能用”等待 LIVE 样本”作为理由。
 
 ---
 
@@ -213,9 +279,9 @@
 
 ## 5. 隔离、记录与发布
 
-定时生产发布只能由 `scripts/run-self-improve.sh` 启动，且必须看到 `SELF_IMPROVE_ISOLATED_RUN=1`。启动器会从本地 `main` 创建 detached 临时 worktree；在其中创建 `self-improve/si-*` 分支，禁止修改调用者原工作树。手工直接运行命令可以研究和验证，但不得更新 `main` 或对外发布。
+定时生产发布只能由 `scripts/run-self-improve.sh` 启动，且必须看到 `SELF_IMPROVE_ISOLATED_RUN=1`。多 worker 模式下每个 worker 有独立 worktree 和独立研究方向，共享状态文件但研究方向不重叠。
 
-发布前再次确认 `main` 仍等于本轮起始 commit；若已前进，先把候选重放到新 `main` 并重跑测试。只有验证通过的单一候选可以快进合入 `main` 并推送；不得把其他工作树上的候选提交顺带合并。
+发布前再次确认 `main` 仍等于本轮起始 commit，且当前 champion commit 等于 claim 时的 `champion_commit_at_claim`。**多 worker 模式必须使用 `publish-champion` 子命令（含 CAS），禁止用 `commit` 子命令直接覆盖 champion。**
 
 每轮结束向 `self-improve-runs.jsonl` 追加一条合法 JSON，字段至少包括：
 
