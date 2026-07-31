@@ -866,6 +866,7 @@ def _resolve_exit_causal(
     dynamic_trailing: bool = True,
     trailing_policy: str = "peak_callback",
     profit_lock_ratio: float = 0.25,
+    activate_pct: float | None = None,
 ) -> tuple[float, str, str]:
     """单路径因果退出函数（动态退出状态机 MVP）。
 
@@ -875,7 +876,7 @@ def _resolve_exit_causal(
 
     holding_bars[0] 是入场日，当天禁止退出（T+1）。入场日 close 用于初始化次日计划：
     - entry_close_return = (entry_close / entry_price - 1) * 100
-    - 若 ≥ TRAILING_STOP_ACTIVATE_PCT(2.0%)，从次日起激活移动保护
+    - 若 ≥ TRAILING_STOP_ACTIVATE_PCT(2.0%)（或 activate_pct 覆盖值），从次日起激活移动保护
     - `peak_callback`：次日保护收益 = 最高浮盈 - callback
     - `profit_floor`：次日保护收益 = max(最低锁利, 最高浮盈 × profit_lock_ratio)
     - 保护价不得低于 hard_stop，也不得低于上一版保护价（单调上移）
@@ -891,6 +892,8 @@ def _resolve_exit_causal(
         raise ValueError(f"unknown trailing_policy: {trailing_policy}")
     if dynamic_trailing and trailing_policy == "profit_floor" and not 0 < profit_lock_ratio <= 1:
         raise ValueError(f"profit_lock_ratio must be in (0, 1], got {profit_lock_ratio}")
+
+    trailing_activate_pct = activate_pct if activate_pct is not None else TRAILING_STOP_ACTIVATE_PCT
 
     if not holding_bars:
         return 0.0, "", "horizon_close"
@@ -913,7 +916,7 @@ def _resolve_exit_causal(
         if entry_close > 0:
             entry_close_return = (entry_close / entry_price - 1) * 100
             observed_high_return = max(0.0, entry_close_return)
-            if entry_close_return >= TRAILING_STOP_ACTIVATE_PCT:
+            if entry_close_return >= trailing_activate_pct:
                 trailing_active = True
                 stop_return = _trailing_stop_return(entry_close_return, trailing_policy, profit_lock_ratio)
                 prot = entry_price * (1 + stop_return / 100.0)
@@ -974,7 +977,7 @@ def _resolve_exit_causal(
             bar_high_return = (high / entry_price - 1) * 100
             if bar_high_return > observed_high_return:
                 observed_high_return = bar_high_return
-            if not trailing_active and observed_high_return >= TRAILING_STOP_ACTIVATE_PCT:
+            if not trailing_active and observed_high_return >= trailing_activate_pct:
                 trailing_active = True
             if trailing_active:
                 stop_return = _trailing_stop_return(observed_high_return, trailing_policy, profit_lock_ratio)
