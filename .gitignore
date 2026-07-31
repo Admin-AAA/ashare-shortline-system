@@ -23,6 +23,7 @@ backend/logs/
 
 .claude/*
 !.claude/commands/
+!.claude/self-improve/
 .worktrees/
 .idea/
 output/

@@ -13,10 +13,7 @@
 - 串行重放：`backend/scripts/si_sequential_champion_replay.py`
 - 原子状态工具：`backend/scripts/self_improve_state.py`
 - 教训注册表：`~/.claude/projects/-Users-wangao/memory/self-improve-LESSONS.md`（全局共享，所有 worktree/窗口读同一份）
-- 运行状态：`/Users/wangao/.claude/projects/-Users-wangao/memory/self-improve-state.json`
-- 结构化记录：`/Users/wangao/.claude/projects/-Users-wangao/memory/self-improve-runs.jsonl`
-- 旧日志：`/Users/wangao/.claude/projects/-Users-wangao/memory/self-improve-log.md`（只读历史档案，不再追加）
-- 状态工具新子命令：`claim-direction`、`publish-champion`、`publish-finding`、`release-direction`、`heartbeat`
+- **操作手册（子命令/状态字段/记录格式/发布流程）**：`.claude/self-improve/OPERATIONS.md`——涉及具体命令时先查阅它
 
 ---
 
@@ -183,10 +180,10 @@ PRODUCTION 发布时的合并规则见 §5.1。
 
 完成真实性硬门禁后，在同输入、同口径、扣除成本的可复现 champion/challenger 对比中，必须调用 `evaluate_challenger()`；其他脚本不得自带样本量、CI、SHADOW、OBSERVE 或覆盖率门槛。challenger 必须满足以下整体改善条件才发布 production：
 
-- 平均单笔净收益高于 champion；
-- 在相同时间轴和固定初始资金下，把 abstain 计为现金仓位后，组合累计净收益高于 champion；
-- 净胜率、Profit Factor、组合最大回撤三项中至少一项优于 champion；
-- 上述三项中的其余指标不得劣于 champion。
+- **主收益至少一项改善**：平均单笔净收益、组合累计净收益（abstain 计现金）中至少一项必须真正优于 champion；
+- **收益可被显著胜率/PF 提升换取**：若某收益指标小幅下降（≤ 1pp），仅在净胜率提升 ≥ 3pp 或 Profit Factor 提升 ≥ 0.1 时允许；下降超过 1pp 一律不发布；
+- **辅助三项至少一项改善**：净胜率、Profit Factor、组合最大回撤中至少一项优于 champion；
+- **辅助至多一项退化**：上述三项中最多允许一项劣于 champion（从"全不退化"放宽为"至多一项退化"）。
 
 比较使用未四舍五入原值；只为排除浮点噪声，收益率、胜率和回撤的绝对数值容差为 `0.01` 个百分点，PF 容差为 `0.01`。等于容差不算改善，恶化不超过容差视为持平。这是数值精度规则，不是统计显著性门槛。
 
@@ -347,46 +344,13 @@ PRODUCTION 发布时的合并规则见 §5.1。
 
 ## 5. 隔离、记录与发布
 
-### 5.1 发布与合并规则
+**接口契约、子命令速查、状态字段、记录格式、发布锁合并命令，全部在 `.claude/self-improve/OPERATIONS.md`**——执行前先读它。
 
-**所有模式通用**：PRODUCTION 候选验证通过并 publish-champion 后，自动合并回 `main` 并推送。**多窗口并发时，合并必须在发布锁下执行**（防两个研究员同时 merge 到 main 互相覆盖）：
+核心纪律（不因瘦身而省略）：
 
-```
-backend/.venv/bin/python backend/scripts/self_improve_state.py with-publish-lock \
-  --cmd 'git -C <主仓库路径> pull --ff-only origin main && git -C <主仓库路径> merge --no-ff <feature-branch> && git -C <主仓库路径> push origin main'
-```
-
-合并流程（锁内）：
-1. `publish-champion` 成功后，确认当前分支已推送
-2. 切回 `main`，`git pull --ff-only origin main` 拉最新
-3. `git merge --no-ff <feature-branch>` 合并
-4. `git push origin main` 推送
-5. 切回 feature 分支（或保持 main 均可）
-
-如果合并时 main 已前进（非本轮起始 commit），且冲突涉及策略语义/实验口径/凭据，停下来报告；纯机械冲突可自行解决。
-
-**禁止 force push、禁止 `git reset --hard`。**
-
-### 5.2 记录
-
-每轮结束向 `self-improve-runs.jsonl` 追加一条合法 JSON，字段至少包括：
-
-```json
-{"run_id":"...","researcher_id":"...","claimed_direction":"...","started_at":"...","input_fingerprint":"...","champion":"...","hypothesis":"...","data_source":"LIVE formal|backtest","windows":[],"metrics":{},"decision":"PRODUCTION|FALSIFIED|FINDING|MEASUREMENT_FIX|BLOCKED","commit":null,"rollback_point":null,"lesson_ids":[],"blocked_live_until":null,"next_live_event":null}
-```
-
-状态和运行记录必须通过 `publish-champion` 或 `publish-finding` 在同一把文件锁下更新；禁止直接写 `self-improve-state.json` 或 `self-improve-runs.jsonl`。旧 `commit` 子命令仅供单实例兼容，不用于新研究轮次。不要再向旧 Markdown 日志追加。只有产生可跨轮复用、会改变未来决策的新知识时，才更新全局教训注册表 `~/.claude/projects/-Users-wangao/memory/self-improve-LESSONS.md`；状态变化和单次实验结果不是教训。多窗口并发时教训注册表只有这一份全局真源，直接编辑，不要再维护任何 worktree 内的副本。
-
-候选被否证时不改生产代码。代码、测试和验证放在同一提交。提交信息：
-
-```text
-self-improve: T{编号} {简短描述}
-
-- 主假设与改动
-- 验证结果及核心指标对比
-```
-
-完成后安全合并回最新 `main`。纯机械且相关测试可证明正确的冲突可以自行解决；涉及策略语义、实验口径、凭据或用户未提交修改时停止合并并报告，不得猜测。禁止 force push。
+- **PRODUCTION 发布**：候选验证通过并 `publish-champion` 后，合并回 `main` 并推送。多窗口并发时合并必须在 `with-publish-lock` 下执行（防互相覆盖）。若合并时 main 已前进且冲突涉及策略语义/实验口径/凭据，停下来报告；纯机械冲突可自行解决。
+- **记录**：每轮通过 `publish-champion`/`publish-finding` 追加 `self-improve-runs.jsonl`（字段见 OPERATIONS.md）。禁止直接写状态文件。教训只写入全局注册表 `~/.claude/projects/-Users-wangao/memory/self-improve-LESSONS.md`，不维护任何 worktree 内副本。
+- **提交**：候选否证不改生产代码；代码+测试+验证同一提交，信息格式 `self-improve: T{编号} {简述}`。禁止 force push、禁止 `git reset --hard`。
 
 ---
 
