@@ -155,6 +155,8 @@ class PathABacktestRunner:
         self._session = session
         self._config = dict(CHAMPION_CONFIG, **(config or {}))
         self._skills = skills or self._load_skills()
+        # 每次 run() 的模拟交易按 window_label 保存，供 paired bootstrap 使用
+        self.trades: dict[str, list[SimulatedTrade]] = {}
 
         # 预加载 stock 元数据
         stock_rows = list(session.scalars(select(Stock)))
@@ -325,6 +327,7 @@ class PathABacktestRunner:
                     all_trades.append(trade)
 
         # ── 4. 计算指标 ──
+        self.trades[window_label] = list(all_trades)
         return self._compute_metrics(
             all_trades, all_signals, window_label,
             start_date, end_date, trade_dates,
@@ -1005,6 +1008,10 @@ def main() -> int:
         help="仅运行 challenger 参数"
     )
     parser.add_argument(
+        "--challenger-args", type=str, default=None,
+        help='JSON dict 覆盖 challenger 参数，例如 \'{"max_entry_gap_pct": 3.0}\''
+    )
+    parser.add_argument(
         "--output", type=str, default=None,
         help="JSON 输出文件路径"
     )
@@ -1013,6 +1020,9 @@ def main() -> int:
     window_labels = [w.strip() for w in args.windows.split(",")]
     run_champion = not args.challenger_only
     run_challenger = not args.champion_only
+    challenger_overrides: dict[str, Any] = {}
+    if args.challenger_args:
+        challenger_overrides = json.loads(args.challenger_args)
 
     db = SessionLocal()
     try:
@@ -1036,15 +1046,32 @@ def main() -> int:
                 # returns only aggregated metrics. For the comparison report
                 # we reconstruct from the stored state.
                 champion_metrics[label] = metrics
+                champion_trades[label] = runner.trades.get(label, [])
                 print_window_report(metrics)
 
         # ── Challenger 运行（如果有的话）──
         challenger_metrics: dict[str, WindowMetrics] = {}
         challenger_trades_dict: dict[str, list[SimulatedTrade]] = {}
-        if run_challenger:
-            # 目前没有 active challenger 假设需要回测
-            # 本轮焦点是验证 champion 在独立窗口上的表现
-            print("\n📋 无 active challenger——本轮仅验证 champion 跨窗口稳定性")
+        if run_challenger and challenger_overrides:
+            print("\n🏆 运行 CHALLENGER 参数回测:", json.dumps(challenger_overrides))
+            challenger_config = dict(CHAMPION_CONFIG)
+            challenger_config.update(challenger_overrides)
+            challenger_runner = PathABacktestRunner(db, config=challenger_config)
+
+            for label in window_labels:
+                w = BACKTEST_WINDOWS.get(label)
+                if not w:
+                    continue
+                print(f"  📅 窗口 {label}: {w[0]} → {w[1]}")
+                metrics = challenger_runner.run(w[0], w[1], window_label=label)
+                challenger_metrics[label] = metrics
+                challenger_trades_dict[label] = challenger_runner.trades.get(label, [])
+                print_window_report(metrics)
+
+            print_comparison(
+                champion_metrics, challenger_metrics,
+                champion_trades, challenger_trades_dict,
+            )
 
         # ── 跨窗口汇总 ──
         print(f"\n\n{'='*80}")
