@@ -22,16 +22,15 @@
 
 ## 0. 研究员生命周期（自管理）
 
-无论你是被 `/loop N /self-improve` 直接调用，还是被 `run-self-improve.sh --workers N` 启动，你都必须自己管理研究员生命周期。区别仅在于：启动器模式下环境变量已预设、心跳由脚本自动接管；直接调用模式下你自己生成、并按 §0.3 自管心跳 daemon。
+你以 `/loop N /self-improve` 直接调用方式运行，必须自己管理研究员生命周期：自己生成 researcher_id、自管心跳 daemon、自己收尾 release。
 
-多窗口 `/loop` 直接调用是本项目主要使用方式：多个终端窗口各自 `/loop 30m /self-improve`，共享同一份 `self-improve-state.json`（claim/prune/publish 由 fcntl 锁串行化）。并发保护全部在状态层完成；git 层面各窗口仍在同一 checkout，遵守 §0.5 的分支规则即可，禁止并行改同一文件。
+多窗口 `/loop` 直接调用是本项目唯一使用方式：多个终端窗口各自 `/loop 30m /self-improve`，共享同一份 `self-improve-state.json`（claim/prune/publish 由 fcntl 锁串行化）。并发保护全部在状态层完成；git 层面各窗口在同一 checkout，遵守 §0.5 的 worktree 隔离规则，禁止并行改同一文件。
 
 ### 0.1 开局：确定身份并 claim 方向
 
 **第一步（必做）**：确定 researcher_id。
 
-- 如果 `SELF_IMPROVE_RESEARCHER_ID` 环境变量存在 → 直接用它（启动器模式）
-- 否则 → 用 `si-<当前时间戳>` 自己生成一个（直接调用模式），例如 `si-20260731-143022`
+- 用 `si-<当前时间戳>` 自己生成一个，例如 `si-20260731-143022`
 
 **第二步（必做）**：claim 一个研究方向。
 
@@ -61,9 +60,9 @@ backend/.venv/bin/python backend/scripts/self_improve_state.py release-worktree 
 
 漏掉 release 会让方向被占用 30 分钟（直到心跳超时回收），下一轮的你会拿不到方向。release 会顺带终止你该 researcher_id 的心跳 daemon（若有），无需单独清理。`release-worktree --remove` 清理你 §0.5 建的隔离 worktree（内含已提交分支时 git 拒绝删除则保留）。
 
-### 0.3 心跳（多窗口 /loop 必做）
+### 0.3 心跳（每轮必做）
 
-**直接调用模式（多终端窗口 `/loop N /self-improve`）下，claim 成功后必须立刻起一个后台心跳 daemon，不要依赖你自己记得心跳**：
+**claim 成功后必须立刻起一个后台心跳 daemon，不要依赖你自己记得心跳**：
 
 ```
 backend/.venv/bin/python backend/scripts/self_improve_state.py daemon-heartbeat \
@@ -139,8 +138,6 @@ cd <worktree_path>
     --researcher-id "<你的 researcher_id>" --remove
   ```
   （release-direction 不会自动删 worktree，只清注册；worktree 内含已提交分支时 git 会拒绝删除，保留即可，不会污染其他窗口。）
-
-**启动器模式（run-self-improve.sh）已经自带隔离 worktree**，不需要手动 setup。
 
 通用规则：
 - **禁止直接改 `main`**：先 `git switch -c self-improve/si-<时间戳>` 开分支再改代码
@@ -244,8 +241,8 @@ PRODUCTION 发布时的合并规则见 §5.1。
 - `blocked_until` 只阻止重复检查对应的 LIVE 数据事件，不能阻止其他证据路径；
 - 同一假设没有新窗口时归档该假设，选择新的独立假设，不得原地等待。
 
-**多 worker 模式额外 PRECHECK：**
-- 启动时执行一次 `heartbeat`。如果返回 `status: invalidated`：champion 已在你启动前被其他 worker 更新，立即退出（exit code 42）。
+**并发 PRECHECK：**
+- claim 成功后按 §0.3 起心跳 daemon，启动时执行一次 `heartbeat`。如果返回 `status: invalidated`：champion 已在你的窗口启动前被其他研究员更新，立即退出本轮。
 - 确认 `RESEARCHER_ID` 对应的研究方向仍在状态文件中，且未被标记为 `invalidated`。
 
 每次执行至少交付以下一项，才算完成：
