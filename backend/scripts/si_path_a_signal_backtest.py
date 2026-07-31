@@ -98,6 +98,7 @@ class SignalRecord:
     chg20: float = 0.0
     is_limit_up: bool = False
     signal_gap_pct: float = 0.0
+    industry_momentum: float = 0.5
 
 
 @dataclass
@@ -316,6 +317,7 @@ class PathABacktestRunner:
                         chg20=float(stock_dict.get("chg20", 0)),
                         is_limit_up=bool(stock_dict.get("is_limit_up", False)),
                         signal_gap_pct=float(stock_dict.get("signal_gap_pct", 0)),
+                        industry_momentum=float(stock_dict.get("industry_momentum", 0.5)),
                     )
                     day_signals.append(sr)
 
@@ -369,6 +371,20 @@ class PathABacktestRunner:
         else:
             regime = "弱势"
 
+        # 板块轮动动能：按 industry 统计当日上涨比例（板块内动能）。
+        # sector_rotation_momentum 假设：强势板块中的个股更易延续上涨。
+        industry_momentum: dict[str, float] = {}
+        industry_counts: dict[str, int] = {}
+        for r in rows:
+            code = str(r.code)
+            meta = self._stock_meta.get(code, {})
+            industry = str(meta.get("industry") or "未分类")
+            industry_counts[industry] = industry_counts.get(industry, 0) + 1
+        for industry, cnt in industry_counts.items():
+            ind_rows = [r for r in rows if str(self._stock_meta.get(str(r.code), {}).get("industry") or "未分类") == industry]
+            ind_up = sum(1 for r in ind_rows if (r.pct_chg or 0) > 0)
+            industry_momentum[industry] = ind_up / max(1, cnt)
+
         return {
             "sample_count": sample_count,
             "up_count": up_count,
@@ -377,6 +393,7 @@ class PathABacktestRunner:
             "limit_down_count": limit_down_count,
             "up_ratio": round(up_ratio, 4),
             "regime": regime,
+            "industry_momentum": industry_momentum,
         }
 
     def _bar_to_stock_dict(
@@ -461,11 +478,14 @@ class PathABacktestRunner:
                 max_dd = min(max_dd, (c / peak - 1) * 100)
 
         meta = self._stock_meta.get(code, {})
+        industry = str(meta.get("industry") or "未分类")
+        ind_mom = market_context.get("industry_momentum", {}).get(industry, 0.5)
 
         return {
             "code": code,
             "name": str(meta.get("name") or code),
-            "industry": str(meta.get("industry") or "未分类"),
+            "industry": industry,
+            "industry_momentum": round(ind_mom, 4),
             "is_st": bool(meta.get("is_st", False)),
             "trade_date": signal_date,
             "price": close,
@@ -565,6 +585,16 @@ class PathABacktestRunner:
             deduped = [
                 sr for sr in deduped
                 if sr.signal_gap_pct < max_signal_gap
+            ]
+
+        # 板块轮动动能过滤（sector_rotation_momentum 假设：强势板块中的个股
+        # 更易延续上涨）。config: min_industry_momentum 设为 N 时剔除所属板块
+        # 当日上涨比例 < N 的信号；None 时不启用（保持 champion 语义）。
+        min_industry_mom = config.get("min_industry_momentum")
+        if min_industry_mom is not None:
+            deduped = [
+                sr for sr in deduped
+                if sr.industry_momentum >= min_industry_mom
             ]
 
         # 应用 score_line 和 regime 调整
