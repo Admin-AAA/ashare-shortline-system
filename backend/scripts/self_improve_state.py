@@ -362,6 +362,18 @@ def release_direction(
         )
         if researcher_id in active:
             del active[researcher_id]
+        # Also remove from claimed_directions list
+        claimed = (
+            state.get("researcher_registry", {})
+            .get("claimed_directions", [])
+        )
+        # Clean direction string from any active researcher entry that was there
+        if researcher_id in active:
+            direction_to_drop = active.get(researcher_id, {}).get("claimed_direction", "")
+            if direction_to_drop and direction_to_drop in claimed:
+                claimed = [d for d in claimed if d != direction_to_drop]
+                state["researcher_registry"]["claimed_directions"] = claimed
+
         _atomic_write_json(state_path, state)
         return {"ok": True}
 
