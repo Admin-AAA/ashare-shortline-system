@@ -17,7 +17,11 @@ import argparse
 import fcntl
 import json
 import os
+import shutil
+import signal
+import subprocess
 import tempfile
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +32,12 @@ DEFAULT_MEMORY_DIR = Path(
 )
 
 HEARTBEAT_TIMEOUT_SECONDS = 30 * 60  # 30 min
+DEFAULT_DAEMON_INTERVAL_SECONDS = 900  # 15 min
+DEFAULT_DAEMON_MAX_DURATION_SECONDS = 3 * 3600  # bound abandoned daemons
+
+# Bump when the shape of self-improve-state.json changes meaningfully, so
+# older tools/researchers can detect that they read a newer layout.
+STATE_SCHEMA_VERSION = 2
 
 
 def _now_iso() -> str:
@@ -36,6 +46,64 @@ def _now_iso() -> str:
 
 def _memory_dir() -> Path:
     return Path(os.environ.get("SELF_IMPROVE_MEMORY_DIR", DEFAULT_MEMORY_DIR))
+
+
+def _acquire_publish_lock(
+    lock_path: Path, timeout_seconds: float = 180
+) -> int:
+    """Try to acquire the publish lock exclusively within the timeout.
+
+    Returns the held fd (flock locks are bound to the open file description,
+    so release = closing this fd).  Returns -1 on timeout.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+        except OSError:
+            return -1
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except (BlockingIOError, OSError):
+            os.close(fd)
+            if time.monotonic() >= deadline:
+                return -1
+            time.sleep(2)
+
+
+def with_publish_lock(
+    command: list[str],
+    timeout_seconds: float = 180,
+    repo: Path | None = None,
+) -> dict:
+    """Run a shell command under an exclusive cross-worktree lock.
+
+    Serialises concurrent ``git merge --no-ff`` + push against main across
+    multiple /loop windows.  Uses a lockfile at the repo root
+    (``.git-self-improve-publish.lock``) so every worktree shares it.
+
+    The lockfile is left in place (empty); the lock lives on the held fd and
+    is released by closing it.  Removing the file while another process may
+    be waiting would let two processes lock different inodes — do not unlink.
+    """
+    repo_root = Path(repo) if repo else _repo_root()
+    lock_path = repo_root / ".git-self-improve-publish.lock"
+    fd = _acquire_publish_lock(lock_path, timeout_seconds)
+    if fd == -1:
+        return {"error": "publish_lock_timeout", "lock_path": str(lock_path)}
+    try:
+        proc = subprocess.run(
+            command, capture_output=True, text=True, cwd=str(repo_root)
+        )
+        return {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "stdout": proc.stdout,
+            "stderr": proc.stderr,
+        }
+    finally:
+        os.close(fd)
 
 
 @contextmanager
@@ -74,6 +142,7 @@ def _read_json(path: Path) -> dict:
 
 
 def _atomic_write_json(path: Path, value: dict) -> None:
+    value.setdefault("schema_version", STATE_SCHEMA_VERSION)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
@@ -143,7 +212,14 @@ def _ensure_active(registry: dict) -> dict:
 
 
 def _purge_stale_workers(active: dict) -> dict[str, str]:
-    """Remove stale workers and return their researcher-to-direction mapping."""
+    """Remove stale workers and return their researcher-to-direction mapping.
+
+    A stale worker's claimed direction is returned in the mapping so the
+    caller can also release it from ``claimed_directions``.  Without this a
+    direction claimed by a crashed/forgotten worker would stay permanently
+    excluded from allocation and the direction pool would slowly leak until
+    ``all_exhausted``.
+    """
     now_dt = datetime.now(timezone.utc)
     stale: dict[str, str] = {}
     for rid, info in list(active.items()):
@@ -158,6 +234,25 @@ def _purge_stale_workers(active: dict) -> dict[str, str]:
     for rid in stale:
         del active[rid]
     return stale
+
+
+def _release_claimed_directions(
+    state: dict, directions: list[str]
+) -> None:
+    """Drop released direction strings from claimed_directions (in place)."""
+    claimed = (
+        state.get("researcher_registry", {})
+        .get("claimed_directions", [])
+    )
+    if not directions or not claimed:
+        return
+    stale_dirs = {d for d in directions if d}
+    if not stale_dirs:
+        return
+    state["researcher_registry"]["claimed_directions"] = [
+        d for d in claimed
+        if not (isinstance(d, str) and d in stale_dirs)
+    ]
 
 
 def _allocate_direction(
@@ -297,7 +392,9 @@ def claim_direction(
         active = _ensure_active(registry)
         max_w = max_workers or registry.get("max_concurrent_workers", 1)
 
-        _purge_stale_workers(active)
+        _release_claimed_directions(
+            state, list(_purge_stale_workers(active).values())
+        )
 
         if not force_stale and len(active) >= max_w:
             return {"error": "capacity_full",
@@ -311,6 +408,11 @@ def claim_direction(
             oldest_id = oldest.get("researcher_id", "")
             if oldest_id in active:
                 del active[oldest_id]
+                # The displaced worker's direction must be released too,
+                # otherwise it stays permanently excluded from allocation.
+                _release_claimed_directions(
+                    state, [str(oldest.get("claimed_direction", ""))]
+                )
 
         excluded: set[str] = set(
             state.get("archived_falsified_directions", [])
@@ -367,6 +469,7 @@ def release_direction(
             .get("active_researchers", {})
         )
         info = active.pop(researcher_id, None)
+        _terminate_researcher_daemon(info)
         claimed = (
             state.get("researcher_registry", {})
             .get("claimed_directions", [])
@@ -382,6 +485,132 @@ def release_direction(
 
         _atomic_write_json(state_path, state)
         return {"ok": True}
+
+
+# -- worktree isolation ---------------------------------------------------
+#
+# /loop windows share one checkout; every `git switch -c` in one window swaps
+# the files other windows are reading.  setup-worktree / release-worktree give
+# each researcher its own detached worktree under <repo>/.worktrees/si-*, and
+# register the path in the researcher record so release can clean it up.
+
+
+def _repo_root() -> Path:
+    """Absolute path of the main working tree (the checkout with .git)."""
+    common = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    git_dir = Path(common)
+    if git_dir.name == ".git":
+        return git_dir.parent
+    # Linked worktree: <repo>/.git/worktrees/<name> -> common dir is the
+    # main repo's .git, parent is still the repo root.
+    return git_dir.parent
+
+
+def setup_worktree(
+    researcher_id: str,
+    base_ref: str = "main",
+    memory_dir: Path | None = None,
+) -> dict:
+    """Create a detached worktree for a researcher and register its path.
+
+    The worktree is placed under the main repo's ``.worktrees/si-<suffix>``
+    (gitignored).  The researcher record gains a ``worktree_path`` field so
+    release-direction can remove it later.
+    """
+    repo = _repo_root()
+    run_id = researcher_id.replace("/", "_")
+    wt_dir = repo / ".worktrees" / f"si-{run_id}"
+    wt_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    if wt_dir.exists() and (wt_dir / ".git").exists():
+        # Already set up (e.g. resume) — just re-register.
+        pass
+    else:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "worktree", "add", "--detach",
+             str(wt_dir), base_ref],
+            capture_output=True, text=True,
+        )
+        if proc.returncode != 0:
+            return {
+                "error": "worktree_add_failed",
+                "stderr": proc.stderr.strip(),
+            }
+
+    directory = memory_dir or _memory_dir()
+    state_path = directory / "self-improve-state.json"
+    with _locked(directory):
+        state = _read_json(state_path)
+        info = (
+            state.get("researcher_registry", {})
+            .get("active_researchers", {})
+            .get(researcher_id)
+        )
+        if not isinstance(info, dict):
+            return {"error": "not_registered", "researcher_id": researcher_id}
+        info["worktree_path"] = str(wt_dir)
+        _atomic_write_json(state_path, state)
+
+    return {"ok": True, "worktree_path": str(wt_dir)}
+
+
+def release_worktree(
+    researcher_id: str,
+    remove: bool = False,
+    memory_dir: Path | None = None,
+) -> dict:
+    """Remove the registered worktree for a researcher (optional).
+
+    By default only clears the ``worktree_path`` from the researcher record
+    and returns it (so a subsequent ``--remove`` still knows where to look).
+    With ``--remove`` also deletes the worktree directory (the agent should
+    already have committed / merged its branch — git refuses if it is dirty).
+    """
+    directory = memory_dir or _memory_dir()
+    state_path = directory / "self-improve-state.json"
+
+    with _locked(directory):
+        state = _read_json(state_path)
+        info = (
+            state.get("researcher_registry", {})
+            .get("active_researchers", {})
+            .get(researcher_id)
+        )
+        path = info.get("worktree_path") if isinstance(info, dict) else None
+        if isinstance(info, dict):
+            info.pop("worktree_path", None)
+            _atomic_write_json(state_path, state)
+
+    if remove:
+        # Fall back to the deterministic path even when the registry entry
+        # was already cleared by an earlier (non-remove) release call.
+        if not path:
+            path = str(_repo_root() / ".worktrees" / f"si-{researcher_id.replace('/', '_')}")
+        wt = Path(path)
+        if (wt / ".git").exists():
+            repo = _repo_root()
+            proc = subprocess.run(
+                ["git", "-C", str(repo), "worktree", "remove", str(wt)],
+                capture_output=True, text=True,
+            )
+            if proc.returncode != 0:
+                return {
+                    "ok": True,
+                    "removed": False,
+                    "worktree_path": str(wt),
+                    "stderr": proc.stderr.strip(),
+                }
+            shutil.rmtree(wt, ignore_errors=True)
+        elif wt.exists():
+            shutil.rmtree(wt, ignore_errors=True)
+        return {"ok": True, "removed": True, "worktree_path": str(wt)}
+
+    return {"ok": True, "removed": False, "worktree_path": path}
 
 
 def heartbeat(
@@ -407,6 +636,154 @@ def heartbeat(
         _atomic_write_json(state_path, state)
         return {"ok": True, "stale_champion": status == "invalidated",
                 "status": status}
+
+
+def prune_claimed_directions(memory_dir: Path | None = None) -> dict:
+    """Release claimed directions whose worker is no longer active.
+
+    Guards against the direction-pool leak when a worker is force-replaced
+    or purged as stale without a release-direction (crashed terminal window,
+    interrupted /loop session).  Every claim appends to claimed_directions;
+    entries whose researcher is gone from active_researchers are reclaimed.
+    """
+    directory = memory_dir or _memory_dir()
+    state_path = directory / "self-improve-state.json"
+
+    with _locked(directory):
+        state = _read_json(state_path)
+        registry = state.setdefault("researcher_registry", {})
+        active = registry.setdefault("active_researchers", {})
+        claimed = registry.setdefault("claimed_directions", [])
+        if not claimed:
+            return {"ok": True, "released": []}
+
+        active_dirs = {
+            str(info.get("claimed_direction", ""))
+            for info in active.values()
+            if isinstance(info, dict)
+        }
+        released = [
+            d for d in claimed
+            if isinstance(d, str) and d not in active_dirs
+        ]
+        if released:
+            registry["claimed_directions"] = [
+                d for d in claimed
+                if not (isinstance(d, str) and d in set(released))
+            ]
+            _atomic_write_json(state_path, state)
+        return {"ok": True, "released": released}
+
+
+def daemon_heartbeat(
+    researcher_id: str,
+    interval_seconds: int = DEFAULT_DAEMON_INTERVAL_SECONDS,
+    max_duration_seconds: int = DEFAULT_DAEMON_MAX_DURATION_SECONDS,
+    memory_dir: Path | None = None,
+) -> int:
+    """Run a foreground heartbeat daemon until stopped or abandoned.
+
+    Repeatedly calls :func:`heartbeat` so a long-running researcher stays
+    claim-eligible without relying on the agent remembering to heartbeat.
+    The daemon registers its own PID in the researcher's record so that
+    release-direction can terminate it immediately.
+
+    Terminates when:
+
+    - the researcher is no longer registered (released / purged), or
+    - the researcher is invalidated (another worker published a champion), or
+    - the session leader (the terminal running the /loop window) is gone, or
+    - the daemon exceeds ``max_duration_seconds``.
+
+    Exit codes: 0 = clean stop, 42 = champion invalidated.
+    """
+    interval = max(1, int(interval_seconds))
+    max_duration = max(interval, int(max_duration_seconds))
+    memory_dir = Path(memory_dir) if memory_dir else None
+    _register_daemon_pid(researcher_id, memory_dir)
+    # Default SIGTERM kills the process outright; translate it into a clean
+    # stop so release-direction can shut the daemon down with exit code 0.
+    def _handle_term(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _handle_term)
+    start = time.monotonic()
+    try:
+        while True:
+            if (time.monotonic() - start) > max_duration:
+                return 0
+            result = heartbeat(researcher_id, memory_dir)
+            status = result.get("status")
+            if status in ("not_registered", None):
+                return 0
+            if status == "invalidated":
+                return 42
+            if not _session_leader_alive():
+                return 0
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        # SIGINT / SIGTERM raised as KeyboardInterrupt by the default
+        # handler — treat as a clean stop, not a failure.
+        return 0
+
+
+def _register_daemon_pid(
+    researcher_id: str, memory_dir: Path | None = None
+) -> None:
+    """Record the daemon's PID in the researcher's active record."""
+    directory = Path(memory_dir) if memory_dir else _memory_dir()
+    state_path = directory / "self-improve-state.json"
+    with _locked(directory):
+        state = _read_json(state_path)
+        info = (
+            state.get("researcher_registry", {})
+            .get("active_researchers", {})
+            .get(researcher_id)
+        )
+        if isinstance(info, dict):
+            info["heartbeat_daemon_pid"] = os.getpid()
+            _atomic_write_json(state_path, state)
+
+
+def _terminate_researcher_daemon(info) -> None:
+    """Best-effort SIGTERM to the heartbeat daemon of a researcher record."""
+    pid = info.get("heartbeat_daemon_pid") if isinstance(info, dict) else None
+    if isinstance(pid, int) and pid > 0:
+        stop_daemon_process(pid)
+
+
+def _session_leader_alive() -> bool:
+    """True while the daemon's controlling-session leader is still alive.
+
+    A /loop window runs inside a terminal session; when that window is
+    closed its session leader dies even though this daemon (spawned with
+    ``&``) gets reparented to launchd.  Detecting the session leader avoids
+    daemons lingering after their window is gone.
+    """
+    try:
+        sid = os.getsid(0)
+    except OSError:
+        return True  # no session info (headless) — do not self-terminate
+    if sid <= 1:
+        return False
+    try:
+        os.kill(sid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def stop_daemon_process(pid: int) -> bool:
+    """Terminate a heartbeat daemon (registered under a researcher id)."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
 
 
 def publish_champion(
@@ -529,6 +906,31 @@ def main() -> None:
         "--researcher-id", required=True
     )
 
+    setup_wt = subparsers.add_parser("setup-worktree")
+    setup_wt.add_argument("--researcher-id", required=True)
+    setup_wt.add_argument("--base-ref", default="main")
+
+    release_wt = subparsers.add_parser("release-worktree")
+    release_wt.add_argument("--researcher-id", required=True)
+    release_wt.add_argument("--remove", action="store_true")
+
+    pub_lock = subparsers.add_parser("with-publish-lock")
+    pub_lock.add_argument(
+        "--cmd", required=True,
+        help="shell command to run under the lock; pass as ONE quoted argument",
+    )
+    pub_lock.add_argument("--timeout", type=int, default=180)
+
+    subparsers.add_parser("prune-claimed")
+
+    daemon_parser = subparsers.add_parser("daemon-heartbeat")
+    daemon_parser.add_argument("--researcher-id", required=True)
+    daemon_parser.add_argument("--interval", type=int, default=None)
+    daemon_parser.add_argument("--max-duration", type=int, default=None)
+
+    stop_parser = subparsers.add_parser("stop-daemon")
+    stop_parser.add_argument("--pid", type=int, required=True)
+
     subparsers.add_parser("heartbeat").add_argument(
         "--researcher-id", required=True
     )
@@ -566,6 +968,28 @@ def main() -> None:
         )
     elif args.command == "release-direction":
         result = release_direction(args.researcher_id)
+    elif args.command == "setup-worktree":
+        result = setup_worktree(args.researcher_id, args.base_ref)
+    elif args.command == "release-worktree":
+        result = release_worktree(args.researcher_id, args.remove)
+    elif args.command == "with-publish-lock":
+        result = with_publish_lock(
+            ["/bin/sh", "-c", args.cmd], timeout_seconds=args.timeout
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+    elif args.command == "prune-claimed":
+        result = prune_claimed_directions()
+    elif args.command == "daemon-heartbeat":
+        result = daemon_heartbeat(
+            args.researcher_id,
+            args.interval or DEFAULT_DAEMON_INTERVAL_SECONDS,
+            args.max_duration or DEFAULT_DAEMON_MAX_DURATION_SECONDS,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+    elif args.command == "stop-daemon":
+        result = {"ok": stop_daemon_process(args.pid)}
     elif args.command == "heartbeat":
         result = heartbeat(args.researcher_id)
     elif args.command == "publish-champion":
