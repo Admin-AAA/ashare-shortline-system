@@ -1033,15 +1033,15 @@ def apply_pool_rules(
         elif _snapshot_regime == "强势":
             effective_score_line = round(effective_score_line + 8.0, 2)
             card["_regime_strong_penalty"] = 8.0
-        # 震荡 regime × pos60<50 交叉否决（第148轮 T3 失败归因闭环）：
-        # 实盘去重 BACKTEST 311 笔：震荡 pos60<50 WR=0%（44笔全败 avg=-3.94%），
-        # pos60>=70 WR=83.4%（229笔 avg=2.91%）。因果：震荡市场超跌股继续跌（无反弹动能），
-        # 弱势市场超跌股反弹（pos60<50 WR=100%）——pos60<50 效果是 regime-dependent。
-        # 门槛 +12（72→84）精确过滤 pos60<50 全部 44/44（最高分 72），不误伤 pos60>=50。
+        # 震荡 regime 全局 hard veto（第021轮 LIVE formal 因果重放闭环）：
+        # LIVE formal 20cm clean≥72: 震荡 n=14 WR=29% avg=-2.94% PF=0.25
+        # causal replay: hard veto 后 n=55→37 avg_net +0.62%→+2.20% cum -4.57%→+7.61%
+        # WR 50.9%→62.2% PF 1.26→2.25 MDD -21.92%→-15.18%
+        # evaluate_challenger 五项全改善零退化→PRODUCTION
         _card_pos60 = float(card.get("pos60") or card.get("feature_snapshot", {}).get("pos60") or 0)
-        if _snapshot_regime == "震荡" and 0 < _card_pos60 < 50 and not _is_limit_up_card:
-            effective_score_line = round(effective_score_line + 12.0, 2)
-            card["_regime_oscillation_low_pos_penalty"] = 12.0
+        if _snapshot_regime == "震荡":
+            effective_score_line = 999.0
+            card["_regime_oscillation_hard_veto"] = True
         # 弱势 regime × chg20<15 交叉惩罚（第150轮 T3 失败归因闭环）：
         # 实盘去重 LIVE formal 96 笔（弱势 regime 全历史）：chg20<15 WR=33.3%（33笔 avg=-0.58%），
         # chg20>=15 WR=65.5%（55笔 avg=2.10%），差距 32pp，且 [0,10)/[10,15)/[15,20)/[20,30)/[30,+)
