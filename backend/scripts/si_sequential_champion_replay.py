@@ -24,6 +24,7 @@ from app.core.config import get_settings  # noqa: E402
 from app.engine.aggregator import STRUCTURAL_STRONG_HARD_VETO_REGIME  # noqa: E402
 from app.models.tables import DailyKbar, Recommendation, RecommendationRun  # noqa: E402
 from app.services.backtest.challenger_decision import (  # noqa: E402
+    ChallengerDecision,
     PerformanceSnapshot,
     evaluate_challenger,
 )
@@ -155,7 +156,12 @@ def _replay(
 def _portfolio_metrics(records: list[dict]) -> tuple[PerformanceSnapshot, dict]:
     returns = [record["net_return"] for record in records]
     if not returns:
-        raise ValueError("cannot evaluate an empty replay population")
+        # Empty population (e.g. a regime slice with no trades).  Return a
+        # n=0 placeholder instead of crashing so regime-layered validation can
+        # report "this slice has no samples" and move on.  Callers must skip
+        # evaluate_challenger when n == 0 (an empty slice is not comparable).
+        empty_snapshot = PerformanceSnapshot(0.0, 0.0, 0.0, 0.0, 0.0)
+        return empty_snapshot, {"n": 0, "trade_days": 0, "exit_days": 0}
     wins = [value for value in returns if value > 0]
     losses = [value for value in returns if value < 0]
     profit_factor = sum(wins) / -sum(losses) if losses else float("inf")
@@ -236,16 +242,21 @@ def main() -> None:
                 trailing_ratio=CHAMPION_TRAILING_RATIO,
             )
             structural_snapshot, structural_metrics = _portfolio_metrics(structural_records)
-            structural_decision = evaluate_challenger(
-                champion_snapshot,
-                structural_snapshot,
-            )
-            structural_evidence.update(
-                {
-                    "challenger": structural_metrics,
-                    "decision": structural_decision.to_dict(),
-                }
-            )
+            structural_evidence.update({"challenger": structural_metrics})
+            if structural_metrics["n"] > 0:
+                structural_decision = evaluate_challenger(
+                    champion_snapshot,
+                    structural_snapshot,
+                )
+                structural_evidence["decision"] = structural_decision.to_dict()
+            else:
+                structural_evidence["decision"] = ChallengerDecision(
+                    should_publish=False,
+                    decision="FALSIFIED",
+                    improvements=(),
+                    regressions=(),
+                    deltas={},
+                ).to_dict()
             # The veto is part of current production. The decision indicates
             # whether it should be kept or rolled back; later challengers must
             # always be measured on the production-filtered population.
@@ -260,10 +271,19 @@ def main() -> None:
         )
         _, effective_champion_metrics = _portfolio_metrics(effective_champion_records)
         trailing_snapshot, trailing_metrics = _portfolio_metrics(trailing_records)
-        trailing_decision = evaluate_challenger(
-            effective_champion_snapshot,
-            trailing_snapshot,
-        )
+        if trailing_metrics["n"] > 0 and effective_champion_metrics["n"] > 0:
+            trailing_decision = evaluate_challenger(
+                effective_champion_snapshot,
+                trailing_snapshot,
+            )
+        else:
+            trailing_decision = ChallengerDecision(
+                should_publish=False,
+                decision="FALSIFIED",
+                improvements=(),
+                regressions=(),
+                deltas={},
+            )
 
     result = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
