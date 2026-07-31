@@ -12,7 +12,7 @@
 - 唯一生产判定器：`backend/app/services/backtest/challenger_decision.py`
 - 串行重放：`backend/scripts/si_sequential_champion_replay.py`
 - 原子状态工具：`backend/scripts/self_improve_state.py`
-- 教训注册表：`.claude/self-improve/LESSONS.md`
+- 教训注册表：`~/.claude/projects/-Users-wangao/memory/self-improve-LESSONS.md`（全局共享，所有 worktree/窗口读同一份）
 - 运行状态：`/Users/wangao/.claude/projects/-Users-wangao/memory/self-improve-state.json`
 - 结构化记录：`/Users/wangao/.claude/projects/-Users-wangao/memory/self-improve-runs.jsonl`
 - 旧日志：`/Users/wangao/.claude/projects/-Users-wangao/memory/self-improve-log.md`（只读历史档案，不再追加）
@@ -22,7 +22,9 @@
 
 ## 0. 研究员生命周期（自管理）
 
-无论你是被 `/loop N /self-improve` 直接调用，还是被 `run-self-improve.sh --workers N` 启动，你都必须自己管理研究员生命周期。区别仅在于：启动器模式下环境变量已预设，直接调用模式下你自己生成。
+无论你是被 `/loop N /self-improve` 直接调用，还是被 `run-self-improve.sh --workers N` 启动，你都必须自己管理研究员生命周期。区别仅在于：启动器模式下环境变量已预设、心跳由脚本自动接管；直接调用模式下你自己生成、并按 §0.3 自管心跳 daemon。
+
+多窗口 `/loop` 直接调用是本项目主要使用方式：多个终端窗口各自 `/loop 30m /self-improve`，共享同一份 `self-improve-state.json`（claim/prune/publish 由 fcntl 锁串行化）。并发保护全部在状态层完成；git 层面各窗口仍在同一 checkout，遵守 §0.5 的分支规则即可，禁止并行改同一文件。
 
 ### 0.1 开局：确定身份并 claim 方向
 
@@ -34,12 +36,14 @@
 **第二步（必做）**：claim 一个研究方向。
 
 ```
+backend/.venv/bin/python backend/scripts/self_improve_state.py prune-claimed
 backend/.venv/bin/python backend/scripts/self_improve_state.py claim-direction \
   --researcher-id "<你的 researcher_id>" --max-workers 3
 ```
 
-- 返回 `ok: true` → 记下 `direction` 和 `champion_commit`，这是你本轮的工作范围和 CAS 基准
-- 返回 `error: capacity_full` → 说明已有 3 个研究员在跑。加 `--force-stale` 抢占最老的失活槽位，或改用更大的 `--max-workers`
+- 先 `prune-claimed` 释放方向池里失活研究员残留的方向，再 claim，避免 `all_exhausted`。
+- 返回 `ok: true` → 记下 `direction` 和 `champion_commit`，这是你本轮的工作范围和 CAS 基准；随后按 §0.3 启动心跳 daemon。
+- 返回 `error: capacity_full` → 说明已有 3 个研究员在跑。加 `--force-stale` 抢占最老的失活槽位，或改用更大的 `--max-workers`（多窗口建议把 `--max-workers` 设为你的窗口数）。
 - 返回 `error: all_exhausted` → 所有方向都被 claim 或已归档。此时读 `archived_falsified_directions` 找一个全新的独立假设，用 `--preferred-direction "<你的新方向>"` 强制 claim
 
 **方向就是你本轮的唯一主假设范围。** 拿到什么方向就研究什么，不要中途换。
@@ -51,26 +55,41 @@ backend/.venv/bin/python backend/scripts/self_improve_state.py claim-direction \
 ```
 backend/.venv/bin/python backend/scripts/self_improve_state.py release-direction \
   --researcher-id "<你的 researcher_id>"
+backend/.venv/bin/python backend/scripts/self_improve_state.py release-worktree \
+  --researcher-id "<你的 researcher_id>" --remove
 ```
 
-漏掉 release 会让方向被占用 30 分钟（直到心跳超时回收），下一轮的你会拿不到方向。
+漏掉 release 会让方向被占用 30 分钟（直到心跳超时回收），下一轮的你会拿不到方向。release 会顺带终止你该 researcher_id 的心跳 daemon（若有），无需单独清理。`release-worktree --remove` 清理你 §0.5 建的隔离 worktree（内含已提交分支时 git 拒绝删除则保留）。
 
-### 0.3 心跳（长实验时）
+### 0.3 心跳（多窗口 /loop 必做）
 
-如果单轮工作超过 15 分钟（例如跑全历史回测），中途执行一次心跳，避免被判失活：
+**直接调用模式（多终端窗口 `/loop N /self-improve`）下，claim 成功后必须立刻起一个后台心跳 daemon，不要依赖你自己记得心跳**：
 
 ```
-backend/.venv/bin/python backend/scripts/self_improve_state.py heartbeat \
-  --researcher-id "<你的 researcher_id>"
+backend/.venv/bin/python backend/scripts/self_improve_state.py daemon-heartbeat \
+  --researcher-id "<你的 researcher_id>" \
+  --interval 900 \
+  --max-duration 10800 \
+  &
 ```
 
-返回 `stale_champion: true` 或 `status: invalidated` → 说明另一个研究员刚发布了新 champion，你的基准已失效：
+- daemon 会自动每 15 分钟调一次 heartbeat，你的窗口（会话 leader）退出、researcher 被 release、或 champion 被其他研究员更新时自动退出。
+- `--max-duration 10800`（3 小时）上限防止异常残留；单轮通常 20–60 分钟，可自行调整。
+- 后台用 `&` 起，本进程继续干活，不阻塞。
+
+**心跳检查**：如果 daemon 返回 `stale_champion: true` 或 `status: invalidated` → 说明另一个研究员刚发布了新 champion，你的基准已失效：
 1. 立即停止当前实验
 2. 有部分结果就 `publish-finding` 归档
-3. `release-direction` 释放
+3. `release-direction` 释放（会顺带终止你的心跳 daemon）
 4. 结束本轮（不要硬撑着用旧 champion 出结论）
 
-短实验（< 15 分钟）可以跳过心跳。
+短实验（< 15 分钟）可以不启动 daemon，但 release 前自行 heartbeat 一次。
+
+**方向泄漏护栏**：每次 claim 前先跑一次
+```
+backend/.venv/bin/python backend/scripts/self_improve_state.py prune-claimed
+```
+把已失活 researcher 残留的方向释放回池子（崩溃窗口、被 force 抢占、漏 release 都会残留）。泄漏一旦发生，方向池会逐渐枯竭到 `all_exhausted`。
 
 ### 0.4 发布路径分两种
 
@@ -96,10 +115,34 @@ backend/.venv/bin/python backend/scripts/self_improve_state.py publish-finding \
 - 不碰 champion，纯追加发现。
 - 即使无法发布 PRODUCTION（候选未通过整体改善、或 champion 已过期），仍可发布 FINDING。FINDING 不是失败，是正常的科研产出。
 
-### 0.5 工作目录约束
+### 0.5 工作目录约束（多窗口必读）
 
-所有模式（直接调用和启动器）共享以下 Git 规则：
+**直接调用模式（/loop 多窗口）下，claim 后必须先进独立 worktree 再工作**，否则多个窗口共享同一 checkout，每个窗口 `git switch -c` 都会互相换掉对方正在读的文件：
 
+```
+# claim 成功后（§0.2）
+backend/.venv/bin/python backend/scripts/self_improve_state.py setup-worktree \
+  --researcher-id "<你的 researcher_id>" --base-ref main
+# 输出 worktree_path，例如 /Users/wangao/Desktop/ashare-shortline-system/.worktrees/si-<id>
+cd <worktree_path>
+```
+
+- worktree 是 detached HEAD（基于 main），与主 checkout 完全隔离；你在这个目录里 `git switch -c self-improve/si-<时间戳>` 不影响任何其他窗口。
+- **`.venv` 不随 worktree 复制**，worktree 内请用主仓库的 venv 绝对路径执行 Python：
+  ```
+  /Users/wangao/Desktop/ashare-shortline-system/backend/.venv/bin/python scripts/self_check.py
+  ```
+  或设 `export VENV_PY=/Users/wangao/Desktop/ashare-shortline-system/backend/.venv/bin/python`。
+- 结束 release 后清理 worktree：
+  ```
+  backend/.venv/bin/python backend/scripts/self_improve_state.py release-worktree \
+    --researcher-id "<你的 researcher_id>" --remove
+  ```
+  （release-direction 不会自动删 worktree，只清注册；worktree 内含已提交分支时 git 会拒绝删除，保留即可，不会污染其他窗口。）
+
+**启动器模式（run-self-improve.sh）已经自带隔离 worktree**，不需要手动 setup。
+
+通用规则：
 - **禁止直接改 `main`**：先 `git switch -c self-improve/si-<时间戳>` 开分支再改代码
 - **禁止 force push**：任何时候不得 `git push --force`
 - 状态文件（`self-improve-state.json` / `self-improve-runs.jsonl`）仍照常写，那是共享的实验记录，不是代码
@@ -309,9 +352,14 @@ PRODUCTION 发布时的合并规则见 §5.1。
 
 ### 5.1 发布与合并规则
 
-**所有模式通用**：PRODUCTION 候选验证通过并 publish-champion 后，自动合并回 `main` 并推送。
+**所有模式通用**：PRODUCTION 候选验证通过并 publish-champion 后，自动合并回 `main` 并推送。**多窗口并发时，合并必须在发布锁下执行**（防两个研究员同时 merge 到 main 互相覆盖）：
 
-合并流程：
+```
+backend/.venv/bin/python backend/scripts/self_improve_state.py with-publish-lock \
+  --cmd 'git -C <主仓库路径> pull --ff-only origin main && git -C <主仓库路径> merge --no-ff <feature-branch> && git -C <主仓库路径> push origin main'
+```
+
+合并流程（锁内）：
 1. `publish-champion` 成功后，确认当前分支已推送
 2. 切回 `main`，`git pull --ff-only origin main` 拉最新
 3. `git merge --no-ff <feature-branch>` 合并
@@ -330,7 +378,7 @@ PRODUCTION 发布时的合并规则见 §5.1。
 {"run_id":"...","researcher_id":"...","claimed_direction":"...","started_at":"...","input_fingerprint":"...","champion":"...","hypothesis":"...","data_source":"LIVE formal|backtest","windows":[],"metrics":{},"decision":"PRODUCTION|FALSIFIED|FINDING|MEASUREMENT_FIX|BLOCKED","commit":null,"rollback_point":null,"lesson_ids":[],"blocked_live_until":null,"next_live_event":null}
 ```
 
-状态和运行记录必须通过 `publish-champion` 或 `publish-finding` 在同一把文件锁下更新；禁止直接写 `self-improve-state.json` 或 `self-improve-runs.jsonl`。旧 `commit` 子命令仅供单实例兼容，不用于新研究轮次。不要再向旧 Markdown 日志追加。只有产生可跨轮复用、会改变未来决策的新知识时，才更新 `LESSONS.md`；状态变化和单次实验结果不是教训。
+状态和运行记录必须通过 `publish-champion` 或 `publish-finding` 在同一把文件锁下更新；禁止直接写 `self-improve-state.json` 或 `self-improve-runs.jsonl`。旧 `commit` 子命令仅供单实例兼容，不用于新研究轮次。不要再向旧 Markdown 日志追加。只有产生可跨轮复用、会改变未来决策的新知识时，才更新全局教训注册表 `~/.claude/projects/-Users-wangao/memory/self-improve-LESSONS.md`；状态变化和单次实验结果不是教训。多窗口并发时教训注册表只有这一份全局真源，直接编辑，不要再维护任何 worktree 内的副本。
 
 候选被否证时不改生产代码。代码、测试和验证放在同一提交。提交信息：
 
