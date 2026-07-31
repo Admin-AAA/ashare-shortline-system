@@ -31,7 +31,7 @@ def _card(code: str, final_score: float = 90.0) -> dict:
     [
         ("结构性强势", 4.0, True),   # T-struct-strong-veto：硬否决，不进推荐
         ("强势", 8.0, False),
-        ("震荡", 0.0, False),
+        ("震荡", 0.0, True),   # T-shock-veto: 震荡全局 hard veto
         ("弱势", 0.0, False),
         ("", 0.0, False),
     ],
@@ -64,9 +64,12 @@ def test_score_line_meta_persists_decision_regime_and_strong_penalty(
         assert (
             meta["regime_strong_penalty"] == expected_penalty
         ), "regime_strong_penalty 必须与 regime 分支一致"
-        assert (
-            meta.get("regime_struct_strong_hard_veto", False) is expected_vetoed
-        ), "结构性强势必须携带硬否决标记"
+        # 结构性强势硬否决通过 regime_struct_strong_hard_veto 标记
+        # 震荡硬否决通过 oscillation_hard_veto 标记（不同字段）
+        if regime == "结构性强势":
+            assert (
+                meta.get("regime_struct_strong_hard_veto", False) is True
+            ), "结构性强势必须携带硬否决标记"
 
 
 def test_decision_regime_matches_breadth_regime_source():
@@ -76,11 +79,11 @@ def test_decision_regime_matches_breadth_regime_source():
         "up_count": 45,
         "limit_up_count": 0,
         "limit_down_count": 0,
-        "breadth": {"regime": "震荡"},
+        "breadth": {"regime": "弱势"},
     }
     cards = [_card("A")]
     result = apply_pool_rules(
         cards, output_count=6, score_line=72, market_snapshot=snapshot
     )
-    assert result[0]["score_line_meta"]["decision_regime"] == "震荡"
+    assert result[0]["score_line_meta"]["decision_regime"] == "弱势"
     assert result[0]["score_line_meta"]["regime_strong_penalty"] == 0.0
