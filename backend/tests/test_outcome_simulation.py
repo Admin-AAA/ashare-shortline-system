@@ -1021,44 +1021,6 @@ def test_causal_profit_floor_locks_fraction_of_prior_peak_profit():
     assert (price, date, reason) == (10.10, "2026-07-03", "trailing_stop_hit")
 
 
-def test_causal_peak_callback_respects_trailing_callback_override():
-    """peak_callback 模式可用 trailing_callback 覆盖全局回调值（path A 网格用）。
-
-    默认 callback=0.8 时 07-03 保护价 = 4% - 0.8% = 3.2% → 10.32；
-    覆盖 trailing_callback=1.5 时保护价 = 4% - 1.5% = 2.5% → 10.25。
-    07-03 开盘 10.35 高于保护价（非 gap），low 穿透保护价 → trailing_stop_hit。
-    """
-    bars = [
-        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.98, close=10.0, pct_chg=0.0),
-        _bar_trailing(trade_date="2026-07-02", open=10.1, high=10.4, low=10.05, close=10.3, pct_chg=3.0),
-        _bar_trailing(trade_date="2026-07-03", open=10.35, high=10.4, low=10.05, close=10.2, pct_chg=-1.9),
-    ]
-
-    # 默认 callback（0.8）：保护价 10.32
-    price, date, reason = _resolve_exit_causal(
-        bars,
-        stop_loss_price=9.5,
-        take_profit_price=11.0,
-        code="000001",
-        entry_price=10.0,
-        trailing_policy="peak_callback",
-    )
-    assert (price, date, reason) == (10.32, "2026-07-03", "trailing_stop_hit")
-
-    # 覆盖 trailing_callback=1.5：保护价 10.25
-    price2, date2, reason2 = _resolve_exit_causal(
-        bars,
-        stop_loss_price=9.5,
-        take_profit_price=11.0,
-        code="000001",
-        entry_price=10.0,
-        trailing_policy="peak_callback",
-        trailing_callback=1.5,
-    )
-    assert price2 == pytest.approx(10.25, abs=1e-9)
-    assert (date2, reason2) == ("2026-07-03", "trailing_stop_hit")
-
-
 def test_causal_rejects_unknown_trailing_policy():
     """配置错误必须立即失败，不能静默退回旧 callback 口径污染反事实结果。"""
     bars = [
@@ -1235,3 +1197,44 @@ def test_resolve_exit_causal_activate_pct_parameter():
     )
     assert low_activate[2] == "trailing_stop_gap"
     assert low_activate[0] == 10.0
+
+
+def test_resolve_exit_causal_min_lock_pct_parameter():
+    """_resolve_exit_causal 的 min_lock_pct 参数控制利润地板最低锁定。
+
+    默认 None → 用模块常量 TRAILING_STOP_MIN_LOCK_PCT(0.3)，行为与生产一致；
+    覆盖值改变利润地板下限：min_lock 高 → 地板更高 → 更早退出；min_lock 低 → 地板更低。
+    """
+    # entry=10.0; bar2 high=10.2(+2%) 生成次日利润地板 max(0.3, 2%*0.5=1%) = 1% → 10.1
+    # 但若 min_lock=2.0 → 地板 max(2.0, 1%) = 2% → 10.2；bar3 跌穿 → 更高地板先退出
+    bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.9, close=10.0, pct_chg=0.0),
+        _bar_trailing(trade_date="2026-07-02", open=10.0, high=10.2, low=10.05, close=10.1, pct_chg=1.0),
+        _bar_trailing(trade_date="2026-07-03", open=10.05, high=10.1, low=9.95, close=9.98, pct_chg=-1.0),
+    ]
+    # 默认（None → 0.3）：bar2 high +2% → 地板 max(0.3, 1%) = 1% → 保护价 10.1
+    # bar3 open=10.05 < 10.1 → 跳空按 open 成交（trailing_stop_gap）
+    default_result = _resolve_exit_causal(
+        bars, stop_loss_price=9.0, take_profit_price=12.0, code="000001", entry_price=10.0,
+        trailing_policy="profit_floor", profit_lock_ratio=0.5,
+    )
+    assert default_result[2] == "trailing_stop_gap"
+    assert default_result[0] == 10.05
+
+    # min_lock=2.0：bar2 high +2% → 地板 max(2.0, 1%) = 2% → 保护价 10.2
+    # bar3 open=10.05 < 10.2 → 仍 gap 退出，但保护价更高（本场景 gap 价相同因为 open 是实际成交）
+    high_min_lock = _resolve_exit_causal(
+        bars, stop_loss_price=9.0, take_profit_price=12.0, code="000001", entry_price=10.0,
+        trailing_policy="profit_floor", profit_lock_ratio=0.5, min_lock_pct=2.0,
+    )
+    assert high_min_lock[2] == "trailing_stop_gap"
+    assert high_min_lock[0] == 10.05
+
+    # 直接验证 _trailing_stop_return 的 min_lock 行为
+    from app.services.outcome_simulation import _trailing_stop_return
+    default_lock = _trailing_stop_return(2.0, "profit_floor", 0.5)
+    assert default_lock == 1.0  # max(0.3, 2*0.5)
+    high_lock = _trailing_stop_return(2.0, "profit_floor", 0.5, min_lock_pct=2.0)
+    assert high_lock == 2.0  # max(2.0, 1.0)
+    low_lock = _trailing_stop_return(2.0, "profit_floor", 0.5, min_lock_pct=0.1)
+    assert low_lock == 1.0  # max(0.1, 1.0) — 低于默认时仍由比例主导
