@@ -177,6 +177,11 @@ def run_backtest(
                 "error": str(exc),
                 "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
             })
+            # 防止单日异常造成 transaction 脏状态阻断后续 date 的 label_pending_outcomes
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
     labeled = label_pending_outcomes(db, horizon_days=horizon_days)
 

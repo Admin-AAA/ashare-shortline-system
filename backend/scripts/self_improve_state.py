@@ -142,18 +142,19 @@ def _ensure_active(registry: dict) -> dict:
     return registry.setdefault("active_researchers", {})
 
 
-def _purge_stale_workers(active: dict) -> list[str]:
-    """Remove workers whose heartbeat is too old. Returns purged IDs."""
+def _purge_stale_workers(active: dict) -> dict[str, str]:
+    """Remove stale workers and return their researcher-to-direction mapping."""
     now_dt = datetime.now(timezone.utc)
-    stale: list[str] = []
+    stale: dict[str, str] = {}
     for rid, info in list(active.items()):
         hb = info.get("last_heartbeat", "")
         try:
             hb_dt = datetime.fromisoformat(hb)
-            if (now_dt - hb_dt).total_seconds() > HEARTBEAT_TIMEOUT_SECONDS:
-                stale.append(rid)
+            is_stale = (now_dt - hb_dt).total_seconds() > HEARTBEAT_TIMEOUT_SECONDS
         except (ValueError, TypeError):
-            stale.append(rid)
+            is_stale = True
+        if is_stale:
+            stale[rid] = str(info.get("claimed_direction", ""))
     for rid in stale:
         del active[rid]
     return stale
@@ -324,7 +325,7 @@ def claim_direction(
 
         # A preferred direction is an explicit reservation after the worker
         # has inspected state; still reject archived/active duplicates.
-        if preferred and preferred not in excluded and preferred not in archived:
+        if preferred and preferred not in excluded and preferred not in set(state.get("archived_falsified_directions", [])):
             direction = preferred
         else:
             direction = _allocate_direction(state, preferred, excluded)
