@@ -340,6 +340,101 @@ def test_publish_finding_rejects_champion_mutation(tmp_memory_dir):
         )
 
 
+def test_state_patch_deep_merges_scanned_grids_and_unions_lists(tmp_memory_dir):
+    """Publishing a partial scanned_grids patch must not drop prior scans.
+
+    Regression for the state.update() shallow-replace bug that erased the
+    completed entry_gap grid scan when a later finding patched
+    scanned_grids with only its own keys, letting the direction pool
+    re-allocate an already-falsified grid.
+    """
+    # Seed state with an existing completed grid scan + archived direction.
+    commit_update(
+        {
+            "canonical_production": {"commit": "abc", "n": 5},
+            "scanned_grids": {
+                "entry_gap_filter_on_current_champion": {
+                    "decision": "FALSIFIED_ALL",
+                    "status": "COMPLETED",
+                }
+            },
+            "archived_falsified_directions": ["grid_scan:entry_gap_filter"],
+        },
+        memory_dir=tmp_memory_dir,
+    )
+    claim_direction("r1", max_workers=3, memory_dir=tmp_memory_dir)
+
+    # Publish a finding that patches only its own scanned_grids key.
+    r = publish_finding(
+        "r1",
+        {
+            "scanned_grids": {
+                "profit_floor_ratio_on_2025_2026": {
+                    "decision": "FALSIFIED_ALL",
+                    "status": "COMPLETED",
+                }
+            },
+            "archived_falsified_directions": ["grid_scan:profit_floor_ratio"],
+        },
+        {
+            "finding_id": "f_002",
+            "direction": "grid_scan:profit_floor_ratio",
+            "summary": "profit_floor_ratio 网格扫完",
+            "metrics": {"n": 33},
+            "decision": "FALSIFIED",
+        },
+        memory_dir=tmp_memory_dir,
+    )
+    assert r["ok"] is True
+
+    state = read_state(tmp_memory_dir)
+    scanned = state["scanned_grids"]
+    # Both the pre-existing and the new grid scan must survive.
+    assert "entry_gap_filter_on_current_champion" in scanned
+    assert "profit_floor_ratio_on_2025_2026" in scanned
+    # Archived list must union both entries.
+    archived = state["archived_falsified_directions"]
+    assert "grid_scan:entry_gap_filter" in archived
+    assert "grid_scan:profit_floor_ratio" in archived
+    # Champion untouched.
+    assert state["canonical_production"]["commit"] == "abc"
+    # Finding appended.
+    assert len(state["published_findings"]) == 1
+
+
+def test_publish_champion_patch_deep_merges_scanned_grids(tmp_memory_dir):
+    """publish_champion with a scanned_grids patch must merge, not replace."""
+    commit_update(
+        {
+            "canonical_production": {"commit": "abc", "n": 5},
+            "scanned_grids": {
+                "stop_loss_grid": {"decision": "FALSIFIED", "status": "COMPLETED"}
+            },
+        },
+        memory_dir=tmp_memory_dir,
+    )
+    claim_direction("r1", max_workers=3, memory_dir=tmp_memory_dir)
+
+    r = publish_champion(
+        "r1",
+        "abc",
+        {
+            "canonical_production": {"commit": "def", "n": 10},
+            "scanned_grids": {
+                "take_profit_grid": {"decision": "FALSIFIED", "status": "COMPLETED"}
+            },
+        },
+        memory_dir=tmp_memory_dir,
+    )
+    assert r["ok"] is True
+
+    state = read_state(tmp_memory_dir)
+    scanned = state["scanned_grids"]
+    assert "stop_loss_grid" in scanned
+    assert "take_profit_grid" in scanned
+    assert state["canonical_production"]["commit"] == "def"
+
+
 # ── 并发安全 ───────────────────────────────────────────────────────────
 
 

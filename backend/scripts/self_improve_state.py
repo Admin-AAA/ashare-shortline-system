@@ -169,6 +169,40 @@ def read_state(memory_dir: Path | None = None) -> dict:
         return _read_json(directory / "self-improve-state.json")
 
 
+# State-patch merge semantics. Shallow `state.update(patch)` replaces whole
+# sub-dictionaries, so a finding that patches `scanned_grids` with only its own
+# keys silently drops every prior completed grid scan — which then lets the
+# direction pool re-allocate an already-falsified grid. These accumulation
+# fields are merged/union'd instead of replaced.
+_MERGE_DICT_KEYS = ("scanned_grids",)
+_UNION_LIST_KEYS = ("archived_falsified_directions", "published_findings")
+
+
+def _apply_state_patch(state: dict, patch: dict) -> None:
+    """Apply a state patch with merge semantics for accumulation fields.
+
+    Everything else keeps replace semantics (canonical_production,
+    researcher_registry, blocked_until, next_event, ...).
+    """
+    for key, value in patch.items():
+        if key in _MERGE_DICT_KEYS and isinstance(value, dict):
+            target = state.setdefault(key, {})
+            if not isinstance(target, dict):
+                target = {}
+                state[key] = target
+            target.update(value)
+        elif key in _UNION_LIST_KEYS and isinstance(value, list):
+            target = state.setdefault(key, [])
+            if not isinstance(target, list):
+                target = []
+                state[key] = target
+            for item in value:
+                if item not in target:
+                    target.append(item)
+        else:
+            state[key] = value
+
+
 def commit_update(
     state_patch: dict,
     run_record: dict | None = None,
@@ -189,7 +223,7 @@ def commit_update(
     runs_path = directory / "self-improve-runs.jsonl"
     with _locked(directory):
         state = _read_json(state_path)
-        state.update(state_patch)
+        _apply_state_patch(state, state_patch)
         _atomic_write_json(state_path, state)
         if run_record is not None:
             encoded = json.dumps(run_record, ensure_ascii=False, separators=(",", ":"))
@@ -848,7 +882,7 @@ def publish_champion(
             key, message = guard
             return {"error": key, "message": message}
 
-        state.update(state_patch)
+        _apply_state_patch(state, state_patch)
 
         active = (
             state.get("researcher_registry", {})
@@ -918,7 +952,7 @@ def publish_finding(
 
     with _locked(directory):
         state = _read_json(state_path)
-        state.update(state_patch)
+        _apply_state_patch(state, state_patch)
         findings: list = state.setdefault("published_findings", [])
         findings.append(finding)
         _atomic_write_json(state_path, state)
