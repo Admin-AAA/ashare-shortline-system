@@ -1107,6 +1107,10 @@ def test_resolve_position_size_score_bucket_policy():
     assert _resolve_position_size({}) == 1.0
     # market_discipline 硬上限仍生效
     assert _resolve_position_size({"final_score": 90.0, "market_discipline": {"max_position_pct": 20.0}}) == 0.2
+    # cap 高于 score-bucket 时，减半仓语义在 cap 之上叠加（min(cap, size)）
+    # —— 修复幽灵 champion：原实现 min(cap, 1.0) 使 score>=85 的 0.5 分支在 cap 存在时永远不可达
+    assert _resolve_position_size({"final_score": 90.0, "market_discipline": {"max_position_pct": 80.0}}) == 0.5
+    assert _resolve_position_size({"final_score": 72.0, "market_discipline": {"max_position_pct": 80.0}}) == 0.8
 
 
 def test_simulate_outcome_injects_final_score_from_rec_for_position_sizing():
