@@ -435,6 +435,41 @@ def test_publish_champion_patch_deep_merges_scanned_grids(tmp_memory_dir):
     assert state["canonical_production"]["commit"] == "def"
 
 
+def test_claim_does_not_reallocate_scanned_grid_direction(tmp_memory_dir):
+    """A grid param whose scan is recorded under its topic word must not be
+    re-allocated.
+
+    Regression: score_line_on_2025_2026 recorded the score_line scan, but the
+    param list uses 'score_line_threshold' — the substring check missed it and
+    the direction pool repeatedly handed out an already-falsified grid.
+    """
+    commit_update(
+        {
+            "canonical_production": {"commit": "abc", "n": 5},
+            "scanned_grids": {
+                "score_line_on_2025_2026": {
+                    "decision": "FALSIFIED", "status": "COMPLETED"
+                },
+                "stop_loss_on_2025_2026": {
+                    "decision": "FALSIFIED", "status": "COMPLETED"
+                },
+            },
+        },
+        memory_dir=tmp_memory_dir,
+    )
+
+    claimed = set()
+    for i in range(3):
+        r = claim_direction(f"r{i}", max_workers=3, memory_dir=tmp_memory_dir)
+        if r.get("ok"):
+            claimed.add(r["direction"])
+        release_direction(f"r{i}", memory_dir=tmp_memory_dir)
+
+    # score_line_threshold and stop_loss were both scanned → must not be claimed.
+    assert "grid_scan:score_line_threshold" not in claimed
+    assert "grid_scan:stop_loss" not in claimed
+
+
 # ── 并发安全 ───────────────────────────────────────────────────────────
 
 

@@ -358,18 +358,33 @@ def _allocate_direction(
     return candidates[0][1]
 
 
+# 参数名 → 扫描键主题词映射。历史 scanned_grids 记录键用主题词命名
+# （score_line_on_2025_2026 而非 score_line_threshold_...），直接用参数名做
+# 子串匹配会漏判已扫描网格，让方向池反复分配已 FALSIFIED 的方向。
+# 主题词取自记录键的核心标识；匹配策略：任一主题词是扫描键子串即视为已扫。
+_GRID_PARAM_TOPICS = {
+    "stop_loss": ["stop_loss"],
+    "take_profit": ["take_profit", "tp"],
+    "trailing_activate": ["trailing_activate", "activate"],
+    "trailing_callback": ["trailing_callback", "callback"],
+    "trailing_min_lock": ["trailing_min_lock", "min_lock"],
+    "horizon": ["horizon"],
+    "profit_floor_ratio": ["profit_floor_ratio", "profit_floor"],
+    "strategy_filter": ["strategy_filter", "strategy_filtering"],
+    "position_sizing": ["position_sizing"],
+    "entry_gap_filter": ["entry_gap_filter", "entry_gap"],
+    "score_line_threshold": ["score_line_threshold", "score_line"],
+}
+
+
 def _list_unscanned_grid_params(exhausted: set[str]) -> list[str]:
     """Return param names not yet scanned for the current champion."""
-    all_params = [
-        "stop_loss", "take_profit", "trailing_activate",
-        "trailing_callback", "trailing_min_lock", "horizon",
-        "profit_floor_ratio", "strategy_filter", "position_sizing",
-        "entry_gap_filter", "score_line_threshold",
-    ]
+    all_params = list(_GRID_PARAM_TOPICS.keys())
     available = []
     for p in all_params:
         if f"grid_scan:{p}" not in exhausted:
-            found = any(p in k for k in exhausted)
+            topics = _GRID_PARAM_TOPICS[p]
+            found = any(t in k for k in exhausted for t in topics)
             if not found:
                 available.append(p)
     return available
