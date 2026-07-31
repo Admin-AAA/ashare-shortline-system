@@ -470,6 +470,33 @@ def test_claim_does_not_reallocate_scanned_grid_direction(tmp_memory_dir):
     assert "grid_scan:stop_loss" not in claimed
 
 
+def test_claim_does_not_reallocate_falsified_factor_direction(tmp_memory_dir):
+    """A factor falsified under new_strategy:<factor>:... must not be re-allocated.
+
+    Regression: capital_flow_momentum was archived as
+    "new_strategy:capital_flow_momentum:做多资金流入被否证..." but the old
+    "factor"/"因子" substring check missed it, so the pool kept handing it out.
+    """
+    commit_update(
+        {
+            "canonical_production": {"commit": "abc", "n": 5},
+            "archived_falsified_directions": [
+                "new_strategy:capital_flow_momentum:做多资金流入被否证(787笔已结算)",
+            ],
+        },
+        memory_dir=tmp_memory_dir,
+    )
+
+    claimed = set()
+    for i in range(5):
+        r = claim_direction(f"r{i}", max_workers=3, memory_dir=tmp_memory_dir)
+        if r.get("ok"):
+            claimed.add(r["direction"])
+        release_direction(f"r{i}", memory_dir=tmp_memory_dir)
+
+    assert "new_strategy:capital_flow_momentum" not in claimed
+
+
 # ── 并发安全 ───────────────────────────────────────────────────────────
 
 
