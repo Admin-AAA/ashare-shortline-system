@@ -30,6 +30,7 @@ import { StockTicker } from "../components/StockTicker";
 import { Panel } from "../components/Panel";
 import { LlmStanceBadge } from "../components/LlmStanceBadge";
 import { MultiStrategyBadge } from "../components/MultiStrategyBadge";
+import { runStatusLabel } from "../utils/display";
 import { useUrlRoute } from "../app/useUrlRoute";
 
 /**
@@ -224,8 +225,8 @@ function StatusBar({
     ? run.status === "completed"
       ? `今日已运行`
       : run.status === "running"
-      ? "运行中"
-      : run.status
+        ? "运行中"
+        : runStatusLabel(run.status)
     : "今日未运行";
 
   // 健康度指示器数据
@@ -539,21 +540,42 @@ function RunStatusPanel({
   onRun: () => void;
   onViewHistory: () => void;
 }) {
+  // 运行异常（失败/被打断）：与龙头候选面板（CandidateEmptyState）保持一致，
+  // 展示失败状态 + 可读错误 + 复盘入口，而不是矛盾地显示「今日未运行 + 运行今日推荐」。
+  const abnormal = run.status === "failed" || run.status === "interrupted";
+  const title = hasRun
+    ? "今日已运行"
+    : abnormal
+      ? "今日推荐运行异常"
+      : run.status === "running"
+        ? "运行中"
+        : "今日未运行";
+
   return (
     <Panel
       kicker="运行状态"
       title={
         <>
           <Activity size={16} />
-          {hasRun ? "今日已运行" : run.status === "running" ? "运行中" : "今日未运行"}
+          {title}
         </>
       }
     >
       <div style={{ fontSize: "var(--text-sm)", color: "var(--ink-secondary)", marginBottom: "var(--space-4)" }}>
-        {run.message || "暂无运行消息"}
+        {abnormal ? (run.error_message || run.message || "最近一次推荐运行未正常完成。") : run.message || "暂无运行消息"}
       </div>
 
-      {!hasRun && (
+      {abnormal ? (
+        <div style={{ display: "flex", gap: "var(--space-2)" }}>
+          <button className="btn btn--ghost" onClick={onViewHistory} style={{ flex: 1, justifyContent: "center" }}>
+            查看运行复盘
+          </button>
+          <button className="btn" onClick={onRun} style={{ flex: 1, justifyContent: "center" }}>
+            <PlayCircle size={14} />
+            重新运行
+          </button>
+        </div>
+      ) : !hasRun ? (
         <button
           className="btn btn--primary"
           disabled={!canRun}
@@ -563,9 +585,7 @@ function RunStatusPanel({
           <PlayCircle size={16} />
           {canRun ? "运行今日推荐" : "数据不足，无法运行"}
         </button>
-      )}
-
-      {hasRun && (
+      ) : (
         <div style={{ display: "flex", gap: "var(--space-2)" }}>
           <button className="btn" onClick={onRun} style={{ flex: 1, justifyContent: "center" }}>
             <PlayCircle size={14} />
