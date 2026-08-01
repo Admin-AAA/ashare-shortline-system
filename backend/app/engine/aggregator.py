@@ -952,11 +952,15 @@ def apply_pool_rules(
             for card in ordered
             if _is_20cm_board(str(card.get("code") or ""))
         ]
-        # 20cm 策略过滤：daily-stock-analysis-skill 在 20cm 表现显著弱于其他策略
-        # （clean≥72 n=19 WR=42% avg=-1.17% vs 其他 n=14 WR=71% avg=+5.84%），
-        # 其"多头顺势等回踩"逻辑在高波动 20cm 股票上失效。在 20cm universe 中
-        # 过滤掉该策略的推荐，但保留其 10cm 推荐不受影响。
-        EXCLUDED_20CM_BUCKETS = frozenset({"daily-stock-analysis-skill"})
+        # 20cm 策略过滤：daily-stock-analysis-skill / chao-gu-yang-jia-skill 在 20cm
+        # 表现显著弱于其他策略（DSA clean≥72 n=19 WR=42% avg=-1.17%；炒股养家
+        # clean≥72 n=15 WR=33% avg=-1.43%，跨9交易日分散非单日聚集），其逻辑在
+        # 高波动 20cm 股票上失效。在 20cm universe 中过滤掉这些策略的推荐，
+        # 但保留其 10cm 推荐不受影响。
+        EXCLUDED_20CM_BUCKETS = frozenset({
+            "daily-stock-analysis-skill",
+            "chao-gu-yang-jia-skill",
+        })
         ordered = [
             card
             for card in ordered
