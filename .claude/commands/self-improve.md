@@ -18,6 +18,7 @@
 - 后端：`backend/`（Python 3.12、FastAPI、MySQL）
 - 前端：`frontend-v2/`（React 19、TypeScript、Vite）
 - 自检：`backend/.venv/bin/python scripts/self_check.py`
+- 正式双臂实验入口：`backend/scripts/run_canonical_backtest_experiment.py`（不可变共享快照 + 统一 evidence artifact）
 - 唯一生产判定器：`backend/app/services/backtest/challenger_decision.py`
 - 串行重放：`backend/scripts/si_sequential_champion_replay.py`
 - 原子状态工具：`backend/scripts/self_improve_state.py`
@@ -169,6 +170,8 @@ PRODUCTION 发布时的合并规则见 §5.1。
 覆盖率、样本量、平均盈利、平均亏损、最大单笔亏损和持仓天数照常报告，但不参与发布否决。
 
 每轮冻结当前 production 为 champion，在相同股票池、交易日、成交引擎、成本、持有期、去重规则和数据可得时点下与 challenger 配对比较。
+
+单策略参数或策略版本的 Champion/Challenger 实验必须优先调用 `run_canonical_backtest_experiment.py`，以其 `evidence_fingerprint`、`truth_validation` 和 `decision` 作为正式 evidence。仍依赖完整多策略 production pipeline 的 PATH-A 工具在迁移完成前保留为特定研究 adapter，但不得自行替换 `evaluate_challenger()` 或声称两次独立运行天然共享输入。
 
 ### Champion 有效性门槛
 

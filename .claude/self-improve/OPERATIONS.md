@@ -7,6 +7,7 @@
 - 后端：`backend/`（Python 3.12、FastAPI、MySQL）
 - 前端：`frontend-v2/`
 - 自检：`backend/.venv/bin/python scripts/self_check.py`
+- 正式双臂实验：`backend/scripts/run_canonical_backtest_experiment.py`
 - 唯一生产判定器：`backend/app/services/backtest/challenger_decision.py`
 - 串行重放：`backend/scripts/si_sequential_champion_replay.py`
 - 原子状态工具：`backend/scripts/self_improve_state.py`
@@ -82,6 +83,23 @@ python self_improve_state.py with-publish-lock --cmd 'git -C <主仓库> pull --
 每轮追加一条合法 JSON（`run_id`、`researcher_id`、`claimed_direction`、`started_at`、`input_fingerprint`、`champion`、`hypothesis`、`data_source`、`windows`、`metrics`、`decision`、`commit`、`rollback_point`、`lesson_ids`、`blocked_live_until`、`next_live_event`）。状态和运行记录必须通过 `publish-champion`/`publish-finding` 在同一文件锁下更新，禁止直接写状态文件。
 
 ## 回测输出字段（path A 信号回测）
+
+### Canonical 单策略双臂实验
+
+策略参数/版本可以由 Research Runner 表达时，使用唯一正式入口：
+
+```bash
+cd backend
+.venv/bin/python scripts/run_canonical_backtest_experiment.py \
+  --start 2026-01-01 --end 2026-06-30 \
+  --strategy-id daily-stock-analysis-skill \
+  --champion-params '{"minimum_signal_score":72}' \
+  --challenger-params '{"minimum_signal_score":65}' \
+  --execution-policy '{"horizon_days":5}' \
+  --hypothesis '降低评分线是否改善正式净收益'
+```
+
+stdout 是 schema v1 canonical evidence artifact。`truth_validation.passed=false` 或进程非零退出时只能修复真实性/工具；通过后 `decision.decision` 是唯一 PRODUCTION/FALSIFIED 结论。`split_metrics` 只作时间稳定性诊断，不增加发布门槛。完整多策略 production pipeline 尚未迁移到单策略 Runner 的方向继续使用下方 PATH-A adapter。
 
 `backend/scripts/si_path_a_signal_backtest.py` 的每个回测结果自带以下字段，做 regime 分层验证时直接用：
 
