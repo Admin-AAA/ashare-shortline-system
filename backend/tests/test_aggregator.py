@@ -401,6 +401,36 @@ def test_apply_pool_rules_output_count_no_longer_decides_recommendations():
     assert [card["code"] for card in result] == ["A", "B", "C", "D", "E"]
 
 
+def test_apply_pool_rules_excludes_negative_ev_buckets_in_20cm():
+    """chao-gu-yang-jia-skill（负期望）在 20cm universe 被过滤，10cm 保留。
+
+    Regression for the 20cm strategy-filter extension: daily-stock-analysis-skill
+    已在 excluded；chao-gu-yang-jia-skill 因 clean≥72 n=15 WR=33% avg=-1.43%
+    （跨 9 交易日分散非单日聚集）加入。过滤只针对 20cm board。
+    """
+    snapshot = _neutral_snapshot()
+    dsa_card = {**_card("300001", 78), "is_20cm_stock": True, "bucket": "daily-stock-analysis-skill"}
+    cgy_card = {**_card("300002", 78), "is_20cm_stock": True, "bucket": "chao-gu-yang-jia-skill"}
+    good_card = {**_card("300003", 78), "is_20cm_stock": True, "bucket": "dragon-tiger-smart-money"}
+    # 10cm 的炒股养家应保留（过滤只针对 20cm）
+    cgy_10cm = {**_card("600001", 78), "is_20cm_stock": False, "bucket": "chao-gu-yang-jia-skill"}
+
+    result = apply_pool_rules(
+        [dsa_card, cgy_card, good_card],
+        score_line=72, market_snapshot=snapshot, board_universe="20cm",
+    )
+    codes = [card["code"] for card in result]
+    assert "300001" not in codes  # DSA 排除
+    assert "300002" not in codes  # 炒股养家 20cm 排除
+    assert "300003" in codes      # 正常策略保留
+
+    # 非 20cm board（10cm 池）：炒股养家 10cm 推荐应保留（过滤只针对 20cm）
+    result_10cm = apply_pool_rules(
+        [cgy_10cm], score_line=72, market_snapshot=snapshot,
+    )
+    assert "600001" in [card["code"] for card in result_10cm]
+
+
 def test_apply_pool_rules_score_line_and_display_limit_are_separate():
     cards = [
         _card(c, s)
