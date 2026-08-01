@@ -150,3 +150,43 @@ def test_task_run_summary_text_for_preset_matrix_run():
     summary = _task_run_summary_text(run, result)
 
     assert summary == "预设矩阵 3/4 完成，失败 1，推荐 9 条"
+
+
+def test_recover_scheduled_task_runs_marks_stuck_idle_task_interrupted(db):
+    """L-044 卡死残留：is_running=True 但 last_status 停在旧值 idle 的任务，
+    重启恢复时必须标记 interrupted（原逻辑只在 last_status in {None, running}
+    时标记，卡死任务 last_status=idle 漏标，last_error 无法区分新旧故障）。"""
+    import uuid
+    from datetime import datetime, timezone
+
+    from app.models.tables import ScheduledTask
+    from app.services.cost_service import recover_scheduled_task_runs
+
+    task_id = f"__test_stuck_{uuid.uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    task = ScheduledTask(
+        task_id=task_id,
+        name="__test_stuck__",
+        task_type="recommendation_run",
+        cron_expression="35 17 * * mon-fri",
+        payload_json="{}",
+        enabled=True,
+        is_running=True,          # 卡死残留
+        last_status="idle",       # 旧值非 running
+        last_error="post_sync 卡死在 news 补数",
+        last_run_at=now,
+    )
+    db.add(task)
+    db.commit()
+
+    try:
+        recovered = recover_scheduled_task_runs(db)
+        db.refresh(task)
+        assert recovered >= 1
+        assert task.is_running is False
+        assert task.last_status == "interrupted"
+        # 原 last_error 诊断痕迹应保留（不覆盖）
+        assert "news 补数" in (task.last_error or "")
+    finally:
+        db.delete(db.get(ScheduledTask, task_id))
+        db.commit()
