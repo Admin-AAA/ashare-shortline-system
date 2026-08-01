@@ -223,6 +223,8 @@ def test_dashboard_run_selector_uses_latest_formal_run(db):
         result_summary_json="{}",
         filter_audit_json="{}",
         status="completed",
+        run_mode="formal",
+        evaluation_scope="live_forward",
     )
     latest_formal = SimpleNamespace(
         **{**older_formal.__dict__, "run_id": "dash_formal_latest", "started_at": datetime(2099, 5, 27, 9, 30)}
@@ -244,6 +246,63 @@ def test_dashboard_run_selector_uses_latest_formal_run(db):
 
     assert selected is not None
     assert selected.run_id == "dash_experiment_latest"
+
+
+def test_dashboard_run_selector_ignores_replay_run_over_today_live(db):
+    """REPLAY/历史补跑 run（evaluation_scope=historical_replay）不得抢占当日正式推荐。
+
+    回归防护：REPLAY 验证 run（trade_date=历史回放日）started_at 更晚时会按旧逻辑
+    （只按 started_at DESC）顶到运行状态面板最前，用户误以为系统在跑历史验证。
+    修复后：live_forward（正式推荐）优先，REPLAY 再新也不占位。
+    """
+    from app.models.tables import RecommendationRun
+
+    formal_base = {
+        "run_name": "运行状态选择",
+        "universe_count": 0,
+        "recommended_count": 0,
+        "market_scope": "all",
+        "risk_template": "balanced",
+        "score_line": 72.0,
+        "output_count": 6,
+        "selected_skills_json": "[]",
+        "params_json": "{}",
+        "market_snapshot_json": "{}",
+        "result_summary_json": "{}",
+        "filter_audit_json": "{}",
+    }
+    db.add_all([
+        # 当日正式推荐（live_forward），started_at 较晚（昨晚盘后）
+        RecommendationRun(
+            **formal_base,
+            run_id="dash_live_formal_today",
+            run_mode="formal",
+            evaluation_scope="live_forward",
+            trade_date="2099-05-28",
+            status="completed",
+            started_at=datetime(2099, 5, 28, 9, 30),
+            finished_at=datetime(2099, 5, 28, 9, 45),
+        ),
+        # REPLAY 验证 run（historical_replay），started_at 更新，trade_date 是历史回放日
+        RecommendationRun(
+            **formal_base,
+            run_id="dash_replay_latest",
+            run_mode="formal",
+            evaluation_scope="historical_replay",
+            trade_date="2099-05-18",
+            status="completed",
+            started_at=datetime(2099, 5, 28, 15, 30),
+            finished_at=datetime(2099, 5, 28, 15, 45),
+        ),
+    ])
+    db.commit()
+
+    selected = _select_dashboard_run(db)
+
+    assert selected is not None
+    assert selected.run_id == "dash_live_formal_today", (
+        "当日 live_forward 正式推荐应优先于 REPLAY 验证 run（即使 REPLAY started_at 更晚）"
+    )
 
 
 def test_dashboard_recommendations_use_latest_completed_formal_trade_date(db):
