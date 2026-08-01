@@ -363,11 +363,19 @@ def recover_scheduled_task_runs(db: Session) -> int:
 
     stale_tasks = db.scalars(select(ScheduledTask).where(ScheduledTask.is_running == True)).all()
     for task in stale_tasks:
+        # is_running=True 本身就是「上次运行未正常结束」的强证据（正常路径
+        # finish_task_run 后 finally 必清 is_running）。卡死任务 last_status 可能停在
+        # 任意旧值（如 idle，L-044 卡死场景），不能用 last_status 是否 running 判定残留
+        # ——否则卡死任务漏标 interrupted，last_error 无法区分新旧故障。
         task.is_running = False
-        if task.last_status in {None, "running"}:
-            task.last_status = "interrupted"
-            task.last_error = stale_message
-            task.last_run_at = task.last_run_at or now
+        task.last_status = "interrupted"
+        # 保留原 last_error 追溯信息（如卡死原因），仅补充中断标记，不覆盖诊断痕迹。
+        task.last_error = (
+            f"{task.last_error or ''}；{stale_message}".strip("；")
+            if task.last_error
+            else stale_message
+        )
+        task.last_run_at = task.last_run_at or now
         task.updated_at = now
         recovered += 1
 
