@@ -59,7 +59,10 @@ CHAMPION_CONFIG = {
     "trailing_activate_pct": None,  # None → 生产默认 TRAILING_STOP_ACTIVATE_PCT (2.0)
     "trailing_min_lock_pct": None,  # None → 生产默认 TRAILING_STOP_MIN_LOCK_PCT (0.3)
     "structural_strong_hard_veto": True,
-    "excluded_20cm_strategies": frozenset({"daily-stock-analysis-skill"}),
+    "excluded_20cm_strategies": frozenset({
+        "daily-stock-analysis-skill",
+        "chao-gu-yang-jia-skill",
+    }),
     "horizon_days": 5,
     "score_line": 72.0,
     "commission_rate": 0.0001,
