@@ -225,7 +225,9 @@ function StatusBar({
     ? run.status === "completed"
       ? `今日已运行`
       : run.status === "running"
-        ? "运行中"
+        ? run.heartbeat_stale
+          ? "运行疑似卡住"
+          : "运行中"
         : runStatusLabel(run.status)
     : "今日未运行";
 
@@ -543,13 +545,17 @@ function RunStatusPanel({
   // 运行异常（失败/被打断）：与龙头候选面板（CandidateEmptyState）保持一致，
   // 展示失败状态 + 可读错误 + 复盘入口，而不是矛盾地显示「今日未运行 + 运行今日推荐」。
   const abnormal = run.status === "failed" || run.status === "interrupted";
+  // 心跳陈旧（running/queued 但心跳超时）：系统可能已卡死，不能显示「运行中」误导用户。
+  const staleRunning = !!run.heartbeat_stale && (run.status === "running" || run.status === "queued");
   const title = hasRun
     ? "今日已运行"
     : abnormal
       ? "今日推荐运行异常"
-      : run.status === "running"
-        ? "运行中"
-        : "今日未运行";
+      : staleRunning
+        ? "运行疑似卡住"
+        : run.status === "running"
+          ? "运行中"
+          : "今日未运行";
 
   return (
     <Panel
@@ -562,10 +568,24 @@ function RunStatusPanel({
       }
     >
       <div style={{ fontSize: "var(--text-sm)", color: "var(--ink-secondary)", marginBottom: "var(--space-4)" }}>
-        {abnormal ? (run.error_message || run.message || "最近一次推荐运行未正常完成。") : run.message || "暂无运行消息"}
+        {abnormal
+          ? (run.error_message || run.message || "最近一次推荐运行未正常完成。")
+          : staleRunning
+            ? "运行心跳已长时间未更新，系统可能已中断。可查看运行复盘或重新运行。"
+            : run.message || "暂无运行消息"}
       </div>
 
       {abnormal ? (
+        <div style={{ display: "flex", gap: "var(--space-2)" }}>
+          <button className="btn btn--ghost" onClick={onViewHistory} style={{ flex: 1, justifyContent: "center" }}>
+            查看运行复盘
+          </button>
+          <button className="btn" onClick={onRun} style={{ flex: 1, justifyContent: "center" }}>
+            <PlayCircle size={14} />
+            重新运行
+          </button>
+        </div>
+      ) : staleRunning ? (
         <div style={{ display: "flex", gap: "var(--space-2)" }}>
           <button className="btn btn--ghost" onClick={onViewHistory} style={{ flex: 1, justifyContent: "center" }}>
             查看运行复盘
@@ -725,13 +745,14 @@ function CandidateEmptyState({
     );
   }
 
-  // 运行中 / 尚未运行
+  // 运行中 / 尚未运行（心跳陈旧时提示可能卡死，勿显示「运行中」误导用户）
   const running = status === "running";
+  const staleRunning = !!currentRun?.heartbeat_stale && (status === "running" || status === "queued");
   return (
     <EmptyState
       icon={<AlertTriangle size={28} />}
-      title={running ? "推荐运行中" : "今日尚未运行推荐"}
-      reason={running ? "正在扫描候选，请稍候刷新。" : "运行推荐后这里会展示今日达标龙头候选。"}
+      title={staleRunning ? "运行疑似卡住" : running ? "推荐运行中" : "今日尚未运行推荐"}
+      reason={staleRunning ? "运行心跳已长时间未更新，系统可能已中断。可查看运行复盘或重新运行。" : running ? "正在扫描候选，请稍候刷新。" : "运行推荐后这里会展示今日达标龙头候选。"}
       action={
         <button className="btn btn--primary" onClick={onViewAll}>
           去候选池
