@@ -32,6 +32,8 @@ from app.db.session import SessionLocal
 from app.engine.aggregator import (
     STRUCTURAL_STRONG_HARD_VETO_REGIME,
     _is_20cm_board,
+    _market_base,
+    _market_sentiment,
 )
 from app.engine.skill_loader import load_skills
 from app.engine.strategy import StrategyContext, StrategySkill
@@ -356,7 +358,16 @@ class PathABacktestRunner:
     def _market_context_for_date(
         self, td: str, bars_by_date: dict[str, list[DailyKbar]]
     ) -> dict[str, Any]:
-        """用当日的全市场 bars 重建 regime（与 production 同源实现）。"""
+        """用当日的全市场 bars 重建 regime（与 production 同源实现）。
+
+        MEASUREMENT_FIX (2026-08-01): 原实现用自带阈值（0.62/0.55/0.42）判 regime，
+        与生产 `_market_base`（0.65/0.50/0.35）不一致——强牛/偏多被降级为结构性
+        强势/震荡，导致 PATH-A 弱势信号 ≠ 生产弱势（曾致误回滚弱势放宽 cap）。
+        现复用生产 `_market_base`/`_market_sentiment`，映射到 PATH-A 语义：
+          - 强牛/偏多 → "强势"（生产对强牛+6/偏多+0，path A 强势+8 偏严但方向一致）
+          - 震荡 → "震荡"；弱势 → "弱势"
+          - "结构性强势" 由 sentiment 高潮×强牛组合保留（生产无此标签，path A 特有）
+        """
         rows = bars_by_date.get(td, [])
         sample_count = len(rows)
         up_count = sum(1 for r in rows if (r.pct_chg or 0) > 0)
@@ -366,14 +377,23 @@ class PathABacktestRunner:
         up_ratio = up_count / max(1, sample_count)
         limit_up_ratio = limit_up_count / max(1, sample_count)
 
-        if up_ratio >= 0.62 and limit_up_ratio >= 0.03:
+        # 生产统一判定：_market_base (强牛/偏多/震荡/弱势) + _market_sentiment
+        snapshot = {
+            "sample_count": sample_count,
+            "up_count": up_count,
+            "down_count": down_count,
+            "limit_up_count": limit_up_count,
+            "limit_down_count": limit_down_count,
+        }
+        market_base = _market_base(snapshot)
+        sentiment = _market_sentiment(snapshot)
+
+        if market_base in ("强牛", "偏多"):
             regime = "强势"
-        elif up_ratio >= 0.55:
-            regime = "结构性强势"
-        elif up_ratio >= 0.42:
-            regime = "震荡"
-        else:
+        elif market_base == "弱势":
             regime = "弱势"
+        else:
+            regime = "震荡"
 
         # 板块轮动动能：按 industry 统计当日上涨比例（板块内动能）。
         # sector_rotation_momentum 假设：强势板块中的个股更易延续上涨。
@@ -397,6 +417,8 @@ class PathABacktestRunner:
             "limit_down_count": limit_down_count,
             "up_ratio": round(up_ratio, 4),
             "regime": regime,
+            "market_base": market_base,
+            "market_sentiment": sentiment,
             "industry_momentum": industry_momentum,
         }
 
