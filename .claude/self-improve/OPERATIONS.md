@@ -102,7 +102,7 @@ LIVE formal 样本做 regime 分层时用 `score_line_meta.market_base`（决策
 同一类参数（score_line / stop_loss / take_profit / trailing / horizon / position_sizing）的网格扫描**每类只扫一次**，结果记入状态文件 `scanned_grids`，后续轮次即便 champion 未变也不得重复扫描（主命令 §3.3 护栏）。已扫过的 score_line 类见 `scanned_grids.score_line_on_2025_2026`（72→76 与 72→68 均 FALSIFIED，结论"score_line 72 是 path A 最优点"）。
 
 - **`backend/scripts/si_path_a_signal_backtest.py`**：PATH-A 策略信号回测（全历史重建候选集 + production pipeline 过滤 + 因果退出）。`CHAMPION_CONFIG` 必须与当前生产 champion 同步（当前 `score_line=72`、`stop_loss=-4.5`、`take_profit=6.0`、`trailing_profit_lock_ratio=0.50`）；这是参数网格的主证据路径。
-- **`backend/scripts/si_path_a_score_line_grid.py`**：score_line 低带网格 [65,62,60,58,55,52]，组合级 abstain-as-cash 测量（challenger 弃权日 champion 该日视为现金）+ 分年验证 + 配对 bootstrap。**基于 `btrec_%` 物化推荐**，不是 signal_backtest 的重建候选集，两口径不可混比。champion 退出参数必须与本文件头部注释里的生产 rules 保持一致（trailing 已同步为 0.50）；改参前先核对 `self-improve-state.json` 的 `canonical_production.rules`，防止幽灵 champion 测量（L-009）。
+- **`backend/scripts/si_path_a_score_line_grid.py`**：**已归档（测量失真，不可用）**。基于 `btrec_%` 物化推荐（废弃证据源，`backtest_service.py` 已标注移除）+ `_filter_by_score_line` 叠加 effective（regime/风险惩罚后）门槛，导致测的不是"score_line 阈值"这个唯一变量：champion 负期望失真（-0.73% vs 生产正期望）、低带样本几乎为零、bootstrap 全零方差。score_line 方向已由主回测 `signal_backtest` 完整闭环（72→65/68/75/78 全 FALSIFIED，见 `scanned_grids.score_line_on_2025_2026`），72 为 path A 最优。**不要**用此脚本做任何参数结论。
 - 运行用 `backend/.venv/bin/python backend/scripts/<script>`；输出 JSON 落 `output/`。
 
 ## 提交信息格式
