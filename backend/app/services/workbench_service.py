@@ -10,7 +10,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import case, func, or_, select, text
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.orm import Session, defer
 
@@ -316,6 +316,30 @@ def _mark_run_dispatched(db: Session, run_id: str) -> bool:
     return True
 
 
+def _select_latest_bootstrap_run(db: Session) -> RecommendationRun | None:
+    """驾驶舱「最近产出」卡片选中的 run：正式推荐（live_forward）优先。
+
+    与 dashboard._select_dashboard_run 同语义（L-045）：REPLAY/历史补跑 run
+    （evaluation_scope=historical_replay）按 started_at 会排在当日正式推荐之前，
+    若只取 started_at 最新会顶掉正式 run，用户看到「最近产出」是回放验证而非当日
+    正式推荐。排序：live_forward 优先 → trade_date 新优先 → completed 优先 → started_at。
+    """
+    return db.scalar(
+        select(RecommendationRun)
+        .order_by(
+            case((RecommendationRun.evaluation_scope == "live_forward", 0), else_=1),
+            RecommendationRun.trade_date.desc(),
+            case(
+                (RecommendationRun.status == "completed", 0),
+                (RecommendationRun.status.in_(RUN_ACTIVE_STATUSES), 1),
+                else_=2,
+            ),
+            RecommendationRun.started_at.desc(),
+        )
+        .limit(1)
+    )
+
+
 def bootstrap_workbench_state(db: Session) -> dict[str, Any]:
     settings = get_settings()
     cache_key = (settings.database_url, str(settings.skills_dir.resolve()))
@@ -330,8 +354,12 @@ def bootstrap_workbench_state(db: Session) -> dict[str, Any]:
     t1 = time.perf_counter()
     presets = list_presets(db)
     t2 = time.perf_counter()
-    recent_runs = list_runs(db, limit=20)
-    latest_run = recent_runs[0] if recent_runs else None
+    latest_row = _select_latest_bootstrap_run(db)
+    if latest_row is not None:
+        _auto_recover_stale_runs(db, [latest_row])
+        latest_run = _serialize_run_summaries_batched(db, [latest_row])[0]
+    else:
+        latest_run = None
     t3 = time.perf_counter()
     try:
         market_snapshot = get_market_snapshot_from_pool(db)
