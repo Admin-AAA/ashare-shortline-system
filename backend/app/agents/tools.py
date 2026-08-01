@@ -831,7 +831,13 @@ def _detect_missing(quote_data: dict, bars: list) -> list[str]:
         missing.append("valuation")
     if not bars or len(bars) < 30:
         missing.append("kline_history")
-    missing.append("capital_flow")
+    # 仅当实际数据缺失时才标记 capital_flow（2026-08-01 修复：无条件标记导致
+    # 即使全市场 capital_flow 已补齐仍永远缺失 → evidence 压分 → effective_line=999
+    # → data_quality_blocked → formal run 0 推荐，D 项前瞻样本阻塞）。
+    if quote_data.get("main_net_inflow_yi") is None:
+        missing.append("capital_flow")
+    # news/dragon_tiger 是稀疏数据源，缺失是常态，保持无条件标记（由
+    # _evidence_score_cap 的轻惩罚处理，不阻塞产出）。
     missing.append("news")
     missing.append("dragon_tiger")
     return sorted(missing)
