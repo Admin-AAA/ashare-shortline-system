@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 from collections import Counter, OrderedDict
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -152,7 +153,6 @@ def _backfill_news_announcements(
     provider_row_count = 0
     failed_codes: list[str] = []
     pro = get_pro()
-    import time as _time
 
     # 逐股票 Tushare 调用必须限速（L-044：盘后流水线曾因逐股票 anns_d 无界
     # 调用卡死数小时，阻塞 outcome 结算 → 前瞻样本 → D 项闭环）。
@@ -164,6 +164,9 @@ def _backfill_news_announcements(
     for code in target_codes:
         if consecutive_failures >= NEWS_BACKFILL_MAX_FAILURES:
             break
+        # 循环顶部 sleep：无论成功/失败/空返回，每笔调用后都限速，
+        # 避免 provider 快速失败时以无限循环速率打爆上游限流。
+        time.sleep(NEWS_BACKFILL_SLEEP)
         suffix = "BJ" if code.startswith(("4", "8")) else "SH" if code.startswith(("5", "6", "9")) else "SZ"
         try:
             frame = pro.anns_d(
@@ -212,7 +215,6 @@ def _backfill_news_announcements(
                 "sentiment": "neutral",
                 "is_risk_warning": risk_warning,
             }
-        _time.sleep(NEWS_BACKFILL_SLEEP)
 
     payload = list(payload_by_id.values())
     if payload:

@@ -15,6 +15,7 @@ from app.services.data_gap_remediation_service import (
     _backfill_daily_kbar_date,
     _backfill_index_daily_dates,
     _backfill_minute_kbar_date,
+    _backfill_news_announcements,
     _candidate_quote_date,
     _daily_kbar_target_codes,
     _is_natural_short_history,
@@ -1279,3 +1280,37 @@ def test_natural_short_history_requires_latest_bar_and_listing_start():
         first_bar_date="2026-05-01",
         list_date="2026-04-24",
     )
+
+
+def test_backfill_news_announcements_rate_limits_and_aborts_on_many_failures(monkeypatch):
+    """L-044 regression: per-symbol anns_d must sleep between calls (both success
+    and failure paths) and abort after NEWS_BACKFILL_MAX_FAILURES consecutive
+    failures (was unbounded and stalled the post-close pipeline for hours)."""
+    import app.services.data_gap_remediation_service as dgr
+    import time
+
+    sleep_calls = {"n": 0}
+
+    def fake_sleep(_s):
+        sleep_calls["n"] += 1
+
+    # 源码用模块级 time.sleep，这里整体替换模块的 time 为 fake 包装。
+    monkeypatch.setattr(dgr.time, "sleep", fake_sleep)
+
+    def fake_pro():
+        return type("P", (), {
+            "anns_d": lambda **kw: None,  # 全部返回空 → 全部计为连续失败
+        })()
+
+    monkeypatch.setattr(dgr, "get_pro", fake_pro)
+
+    # 200+ 只全部失败的场景：应在 MAX_FAILURES(200) 处中止，不再无限空转。
+    codes = [f"{i:06d}" for i in range(500)]
+    result = _backfill_news_announcements(
+        MagicMock(), trade_date="2026-07-30", codes=codes,
+    )
+    # 失败累计到 200 后中止，绝不应等于 500。
+    assert result["failed_code_count"] < 500
+    assert result["failed_code_count"] <= 200
+    # 循环顶部 sleep：失败路径也每笔限速（每笔一次，含触发 break 前的最后一笔）。
+    assert sleep_calls["n"] == result["failed_code_count"]
