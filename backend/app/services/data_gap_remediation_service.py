@@ -152,8 +152,18 @@ def _backfill_news_announcements(
     provider_row_count = 0
     failed_codes: list[str] = []
     pro = get_pro()
+    import time as _time
 
+    # 逐股票 Tushare 调用必须限速（L-044：盘后流水线曾因逐股票 anns_d 无界
+    # 调用卡死数小时，阻塞 outcome 结算 → 前瞻样本 → D 项闭环）。
+    # 每笔间隔 0.35s（约 3 req/s，低于 Tushare 公开限速），累计失败超过
+    # NEWS_BACKFILL_MAX_FAILURES 中止，避免全市场网络异常时无限空转。
+    NEWS_BACKFILL_SLEEP = 0.35
+    NEWS_BACKFILL_MAX_FAILURES = 200
+    consecutive_failures = 0
     for code in target_codes:
+        if consecutive_failures >= NEWS_BACKFILL_MAX_FAILURES:
+            break
         suffix = "BJ" if code.startswith(("4", "8")) else "SH" if code.startswith(("5", "6", "9")) else "SZ"
         try:
             frame = pro.anns_d(
@@ -164,9 +174,12 @@ def _backfill_news_announcements(
             )
         except Exception:
             failed_codes.append(code)
+            consecutive_failures += 1
             continue
         if frame is None or frame.empty:
+            consecutive_failures += 1
             continue
+        consecutive_failures = 0
         if len(frame) >= effective_limit:
             failed_codes.append(code)
             continue
@@ -199,6 +212,7 @@ def _backfill_news_announcements(
                 "sentiment": "neutral",
                 "is_risk_warning": risk_warning,
             }
+        _time.sleep(NEWS_BACKFILL_SLEEP)
 
     payload = list(payload_by_id.values())
     if payload:
