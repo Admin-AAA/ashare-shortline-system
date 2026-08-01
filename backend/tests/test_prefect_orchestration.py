@@ -29,6 +29,7 @@ def test_manual_scheduled_task_trigger_uses_one_prefect_deployment(monkeypatch) 
                 "trigger_source": "manual",
             },
             "timeout": 0,
+            "_sync": True,
         }
     ]
 
@@ -47,6 +48,32 @@ def test_recommendation_trigger_carries_only_durable_run_id(monkeypatch) -> None
     assert ref.run_id == str(flow_run_id)
     assert calls[0]["parameters"] == {"run_id": "run_20260730_demo"}
     assert calls[0]["timeout"] == 0
+    assert calls[0]["_sync"] is True
+
+
+def test_trigger_forces_sync_path_in_async_context(monkeypatch) -> None:
+    """L-046 redispatch 静默失败回归：trigger 在 async event loop 中被调用时，
+    run_deployment 的 async_dispatch 会派发到 arun_deployment 返回未 await 的
+    coroutine（'arun_deployment was never awaited'），调度实际未执行。
+    _sync=True 强制同步路径，确保 redispatch 真实发生。"""
+    import asyncio
+
+    calls = []
+
+    def fake_run_deployment(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(id=uuid4())
+
+    monkeypatch.setattr(api, "run_deployment", fake_run_deployment)
+
+    async def _run():
+        ref = api.trigger_recommendation("run_async_ctx")
+        return ref
+
+    ref = asyncio.run(_run())
+
+    assert ref.run_id
+    assert calls[0]["_sync"] is True
 
 
 def test_schedule_all_enabled_tasks_registers_every_flow(monkeypatch) -> None:
