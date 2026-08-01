@@ -1111,14 +1111,12 @@ def test_resolve_position_size_score_bucket_policy():
     # —— 修复幽灵 champion：原实现 min(cap, 1.0) 使 score>=85 的 0.5 分支在 cap 存在时永远不可达
     assert _resolve_position_size({"final_score": 90.0, "market_discipline": {"max_position_pct": 80.0}}) == 0.5
     assert _resolve_position_size({"final_score": 72.0, "market_discipline": {"max_position_pct": 80.0}}) == 0.8
-    # 弱势 regime: 放宽 cap（弱势 20cm clean72 正期望，cap 摧毁 alpha）
-    assert _resolve_position_size({"final_score": 72.0, "market_discipline": {"market_regime": "弱势·活跃", "max_position_pct": 20.0}}) == 1.0
-    assert _resolve_position_size({"final_score": 90.0, "market_discipline": {"market_regime": "弱势·高潮", "max_position_pct": 20.0}}) == 0.5
-    # 非弱势 regime: cap 保留（震荡/结构性强势 cap 有防御价值）
+    # cap-first 保留（2026-08-01 回滚）：跨窗口否证后弱势放宽被移除，所有 regime cap 生效
+    assert _resolve_position_size({"final_score": 72.0, "market_discipline": {"market_regime": "弱势·活跃", "max_position_pct": 20.0}}) == 0.2
+    assert _resolve_position_size({"final_score": 90.0, "market_discipline": {"market_regime": "弱势·高潮", "max_position_pct": 20.0}}) == 0.2
     assert _resolve_position_size({"final_score": 72.0, "market_discipline": {"market_regime": "震荡·活跃", "max_position_pct": 50.0}}) == 0.5
     assert _resolve_position_size({"final_score": 72.0, "market_discipline": {"market_regime": "偏多·活跃", "max_position_pct": 80.0}}) == 0.8
-    # 弱势但 score>=85: score-bucket 减半仓仍生效
-    assert _resolve_position_size({"final_score": 87.0, "market_discipline": {"market_regime": "弱势·活跃", "max_position_pct": 20.0}}) == 0.5
+    assert _resolve_position_size({"final_score": 87.0, "market_discipline": {"market_regime": "弱势·活跃", "max_position_pct": 20.0}}) == 0.2
 
 
 def test_simulate_outcome_injects_final_score_from_rec_for_position_sizing():
