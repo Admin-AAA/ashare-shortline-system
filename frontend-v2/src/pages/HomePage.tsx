@@ -151,6 +151,7 @@ export function HomePage() {
         healthLoading={healthLoading}
         winRate={winRate}
         llmHealth={llmHealth}
+        qualityScorecard={data.quality_scorecard}
         onViewHealthDetail={() => navigate("/data-health")}
       />
 
@@ -207,6 +208,7 @@ function StatusBar({
   healthLoading,
   winRate,
   llmHealth,
+  qualityScorecard,
   onViewHealthDetail,
 }: {
   canRun: boolean;
@@ -217,6 +219,7 @@ function StatusBar({
   healthLoading: boolean;
   winRate: WinRateSummary | null;
   llmHealth: LlmReviewHealth | null;
+  qualityScorecard?: DashboardOverview["quality_scorecard"];
   onViewHealthDetail: () => void;
 }) {
   const dot = canRun ? "🟢" : healthStatus === "blocked" ? "🔴" : "🟡";
@@ -454,7 +457,50 @@ function StatusBar({
       })()}
 
       {/* 右侧：数据健康度指示器（弹性推到最右） */}
-      <div style={{ marginLeft: "auto", flexShrink: 0 }}>
+      <div style={{ marginLeft: "auto", flexShrink: 0, display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+        {/* 系统质量综合评分（quality_scorecard：数据/验证/执行/研究 四维加权）——后端已算，前端此前未展示 */}
+        {qualityScorecard?.overall_score != null && (
+          <button
+            onClick={onViewHealthDetail}
+            className="btn"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "var(--space-2)",
+              padding: "4px 12px",
+              borderRadius: "var(--radius-full)",
+              fontSize: "var(--text-xs)",
+              fontWeight: 600,
+              background:
+                qualityScorecard.overall_score >= 90
+                  ? "color-mix(in srgb, var(--market-down) 10%, transparent)"
+                  : qualityScorecard.overall_score >= 70
+                    ? "color-mix(in srgb, var(--warning) 10%, transparent)"
+                    : "color-mix(in srgb, var(--market-up) 10%, transparent)",
+              border:
+                "1px solid " +
+                (qualityScorecard.overall_score >= 90
+                  ? "color-mix(in srgb, var(--market-down) 25%, transparent)"
+                  : qualityScorecard.overall_score >= 70
+                    ? "color-mix(in srgb, var(--warning) 25%, transparent)"
+                    : "color-mix(in srgb, var(--market-up) 25%, transparent)"),
+              color: "var(--ink)",
+              cursor: "pointer",
+              transition: "all 150ms ease",
+            }}
+            title={`系统质量 ${qualityScorecard.overall_score}（${qualityScorecard.overall_status}）\n${(qualityScorecard.highlights ?? []).slice(0, 3).join("\n")}`}
+          >
+            <ShieldCheck size={13} style={{ color: qualityScorecard.overall_score >= 90 ? "var(--market-down)" : qualityScorecard.overall_score >= 70 ? "var(--warning)" : "var(--market-up)", flexShrink: 0 }} />
+            <span style={{ color: "var(--ink-secondary)", fontWeight: 600 }}>系统质量</span>
+            <span style={{ width: 1, height: 12, background: "var(--line-strong)", display: "inline-block" }} />
+            <span className="text-mono" style={{ fontWeight: 700, color: qualityScorecard.overall_score >= 90 ? "var(--market-down)" : qualityScorecard.overall_score >= 70 ? "var(--warning)" : "var(--market-up)", letterSpacing: "-0.02em" }}>
+              {qualityScorecard.overall_score}
+            </span>
+            <span style={{ color: qualityScorecard.overall_score >= 90 ? "var(--market-down)" : qualityScorecard.overall_score >= 70 ? "var(--warning)" : "var(--market-up)", fontWeight: 600 }}>
+              {qualityScorecard.overall_status === "healthy" ? "健康" : qualityScorecard.overall_status === "warning" ? "需关注" : "风险"}
+            </span>
+          </button>
+        )}
         <button
           onClick={onViewHealthDetail}
           className="btn"
