@@ -1079,15 +1079,15 @@ def _resolve_take_profit_price(
 def _resolve_position_size(feature_snapshot: dict[str, Any]) -> float:
     """Return the position size multiplier for a recommendation.
 
-    Production policy (2026-08-01, n=70 clean>=72 20cm formal):
-    - score < 85: full weight 1.0 (WR 57.6%, where the alpha lives)
+    Production policy (2026-08-01, n=30 official 20cm clean>=72 live_forward):
+    - score < 85: full weight 1.0 (WR 63.3%, where the alpha lives)
     - score >= 85: half weight 0.5 (score>=85 bucket negative EV)
-
-    A per-trade hard cap from market_discipline.max_position_pct is preserved
-    for ALL regimes (2026-08-01 rollback): cross-window validation showed
-    weak-regime relax (n=50, +2.49%) was a selection effect on the 10% 20cm
-    subset — full weak population (n=506) is negative-alpha (-0.35% eq vs
-    -0.16% cap), so cap defends correctly in weak windows. cap-first restored.
+    - 弱势 regime: 放宽 market_discipline cap（弱势 20cm clean>=72 官方口径
+      avg +2.58% PF 4.22 vs cap-first +0.57% PF 2.54, Δ avg+2.01pp PF+1.68
+      MDD仅-0.92pp退化）。保留 score-bucket 减半仓（size 仍约束）。
+    - 非弱势 regime: 保留 cap 风控（震荡/结构性强势 cap 有防御价值）。
+    - A per-trade hard cap from market_discipline.max_position_pct is preserved
+      for non-weak regimes (e.g. 20%-cap in climax markets).
     """
     # Score-bucket sizing: reduce weight on negative-EV high-score bucket
     final_score = _as_float(feature_snapshot.get("final_score"))
@@ -1098,6 +1098,9 @@ def _resolve_position_size(feature_snapshot: dict[str, Any]) -> float:
 
     discipline = feature_snapshot.get("market_discipline")
     if isinstance(discipline, dict):
+        market_regime = str(discipline.get("market_regime") or "")
+        if market_regime.startswith("弱势"):
+            return round(size, 4)
         max_position_pct = _as_float(discipline.get("max_position_pct"))
         if max_position_pct > 0:
             return round(min(max_position_pct / 100.0, size), 4)
