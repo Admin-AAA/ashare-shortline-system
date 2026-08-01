@@ -84,7 +84,16 @@ EVENT_SNAPSHOT_CONTRACTS: Mapping[str, TushareSinglePageEventContract] = {
     "news_announcement": TushareSinglePageEventContract(
         dataset="news_announcement",
         endpoint="anns_d",
-        documented_fields=("ann_date", "ts_code", "name", "title", "url", "rec_time"),
+        # Tushare anns_d 实际返回 (2026-08-01 实测): ts_code, symbol, name, title,
+        # ann_type, ann_date, ann_time, url (8 字段全量, 顺序即此). completeness_for
+        # 用 envelope.fields != documented_fields 做有序元组精确匹配，旧 contract
+        # (6 字段含 rec_time) 不匹配 → event_provider_unknown_schema → news 补数
+        # fallback 逐代码慢路径 → post_sync 卡死 → formal run data_quality_blocked
+        # → 0 推荐（D 项前瞻样本阻塞根因）。
+        documented_fields=(
+            "ts_code", "symbol", "name", "title", "ann_type",
+            "ann_date", "ann_time", "url",
+        ),
         documented_single_request_cap=2000,
         documentation_url="https://tushare.pro/document/2?doc_id=176",
     ),
@@ -288,7 +297,7 @@ def _news_view(
                 "name": row.get("name"),
                 "title": row.get("title"),
                 "url": row.get("url"),
-                "rec_time": row.get("rec_time"),
+                "rec_time": row.get("ann_time"),
             }
         )
     for entries in result.values():
