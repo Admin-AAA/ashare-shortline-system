@@ -403,6 +403,7 @@ def serialize_run_summary(
         "preset_name": _get(preset, "name", "临时运行") if preset else "临时运行",
         "trade_date": _get(run, "trade_date"),
         "run_mode": _get(run, "run_mode"),
+        "evaluation_scope": _get(run, "evaluation_scope") or "historical_replay",
         "started_at": _isoformat_or_none(_get(run, "started_at")),
         "finished_at": _isoformat_or_none(_get(run, "finished_at")),
         "market_scope": _get(run, "market_scope"),
