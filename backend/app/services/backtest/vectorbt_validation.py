@@ -127,7 +127,10 @@ def cross_validate_trades(
         for trade in trades
         if trade.executed
     )
-    exclusions = {"t_plus_one_and_limit_fill_rules_are_domain_owned"}
+    exclusions = {
+        "t_plus_one_and_limit_fill_rules_are_domain_owned",
+        "slippage_is_already_reflected_in_realized_entry_and_exit_prices",
+    }
     exclusions.update(
         f"{trade.trade_id}:{trade.exit_reason}"
         for trade in trades
@@ -136,28 +139,35 @@ def cross_validate_trades(
     comparisons: list[TradeCrossValidation] = []
     vectorbt_total = 0.0
     domain_total = 0.0
-    fee_rate = float(policy.commission_rate) + float(policy.stamp_tax_rate) / 2
-    slippage_rate = (float(policy.entry_slippage_bps) + float(policy.exit_slippage_bps)) / 20_000
     executed_by_id = {trade.trade_id or "": trade for trade in trades if trade.executed}
     for stream in streams:
         index = pd.DatetimeIndex([stream.entry_date, stream.exit_date])
+        trade = executed_by_id[stream.trade_id]
         report = cross_validate_signals(
             close=pd.Series([stream.entry_price, stream.exit_price], index=index),
             entries=pd.Series([True, False], index=index),
             exits=pd.Series([False, True], index=index),
-            domain_total_return=executed_by_id[stream.trade_id].net_return_pct / 100,
-            fee_rate=fee_rate,
-            slippage_rate=slippage_rate,
+            domain_total_return=trade.gross_return_pct / 100,
+            fee_rate=0.0,
+            slippage_rate=0.0,
             tolerance=tolerance,
         )
-        trade = executed_by_id[stream.trade_id]
+        # Trade.entry_price/exit_price are realized prices and already include
+        # execution slippage.  Re-applying vectorbt slippage would double-count
+        # it.  Domain fees are an additive round-trip percentage, whereas
+        # vectorbt models per-order cash debits; subtract the authoritative
+        # domain fee after independently validating the realized-price return.
+        vectorbt_net_return = report.vectorbt_total_return - policy.fee_pct / 100
         comparison = TradeCrossValidation(
             trade_id=stream.trade_id,
             entry_index=0,
             exit_index=1,
             domain_net_return=trade.net_return_pct / 100,
-            vectorbt_net_return=report.vectorbt_total_return,
-            absolute_difference=report.absolute_difference,
+            vectorbt_net_return=round(vectorbt_net_return, 12),
+            absolute_difference=round(
+                abs(vectorbt_net_return - trade.net_return_pct / 100),
+                12,
+            ),
         )
         comparisons.append(comparison)
         domain_total += comparison.domain_net_return * trade.position_size
