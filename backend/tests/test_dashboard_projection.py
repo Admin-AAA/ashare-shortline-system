@@ -30,7 +30,7 @@ from app.api.dashboard import (
 )
 from app.services.dashboard_quality_service import build_quality_scorecard, _pick_latest_backtest
 from app.services.candidates.trace import candidate_trace_row
-from app.services.workbench_service import list_dashboard_recommendations
+from app.services.workbench_service import _select_latest_bootstrap_run, list_dashboard_recommendations
 from app.services.recommendations.projection import (
     build_cockpit_recommendation,
     build_market_temperature,
@@ -302,6 +302,64 @@ def test_dashboard_run_selector_ignores_replay_run_over_today_live(db):
     assert selected is not None
     assert selected.run_id == "dash_live_formal_today", (
         "当日 live_forward 正式推荐应优先于 REPLAY 验证 run（即使 REPLAY started_at 更晚）"
+    )
+
+
+def test_bootstrap_latest_run_prioritizes_live_forward_over_replay(db):
+    """驾驶舱「最近产出」latest 也必须 live_forward 优先，防 REPLAY run 抢占。
+
+    回归防护：bootstrap_workbench_state 的 recent_runs.latest 此前用 list_runs(db)[0]
+    （按 started_at DESC），REPLAY/历史补跑 run 会顶掉当日正式推荐（与
+    test_dashboard_run_selector_ignores_replay_run_over_today_live 同类，L-045）。
+    修复后 _select_latest_bootstrap_run 复用同一排序语义。
+    """
+    from app.models.tables import RecommendationRun
+
+    formal_base = {
+        "run_name": "最近产出选择",
+        "universe_count": 0,
+        "recommended_count": 0,
+        "market_scope": "all",
+        "risk_template": "balanced",
+        "score_line": 72.0,
+        "output_count": 6,
+        "selected_skills_json": "[]",
+        "params_json": "{}",
+        "market_snapshot_json": "{}",
+        "result_summary_json": "{}",
+        "filter_audit_json": "{}",
+    }
+    db.add_all([
+        # 当日正式推荐（live_forward）
+        RecommendationRun(
+            **formal_base,
+            run_id="boot_live_formal",
+            run_mode="formal",
+            evaluation_scope="live_forward",
+            trade_date="2099-06-01",
+            status="completed",
+            started_at=datetime(2099, 6, 1, 9, 30),
+            finished_at=datetime(2099, 6, 1, 9, 45),
+        ),
+        # REPLAY 验证 run（historical_replay），started_at 更新
+        RecommendationRun(
+            **formal_base,
+            run_id="boot_replay_newer",
+            run_mode="formal",
+            evaluation_scope="historical_replay",
+            trade_date="2099-05-18",
+            status="completed",
+            started_at=datetime(2099, 6, 1, 15, 30),
+            finished_at=datetime(2099, 6, 1, 15, 45),
+        ),
+    ])
+    db.commit()
+
+    selected = _select_latest_bootstrap_run(db)
+
+    assert selected is not None
+    assert selected.run_id == "boot_live_formal", (
+        "最近产出 latest 应优先当日 live_forward 正式推荐，而非 started_at 更晚的 REPLAY run"
     )
 
 
