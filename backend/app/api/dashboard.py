@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import Depends, HTTPException
 from app.api.contracts import ContractRouter as APIRouter
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, get_db
@@ -288,9 +288,23 @@ def _overview_refresh_worker() -> None:
 
 
 def _select_dashboard_run(db: Session) -> RecommendationRun | None:
+    # 运行状态面板优先展示「正式推荐」run，而不是机械按 started_at 取最新。
+    # 背景：REPLAY/历史补跑 run（evaluation_scope=historical_replay，如
+    # REPLAY-20260618 验证 run）按 started_at 会排在当日正式推荐之前，把它们顶到
+    # 面板最前，用户误以为系统在跑历史验证而非当日正式推荐。
+    # 排序：正式推荐（live_forward）优先 → trade_date 新优先 → completed 优先 → started_at。
     return db.scalar(
         select(RecommendationRun)
-        .order_by(RecommendationRun.started_at.desc())
+        .order_by(
+            case((RecommendationRun.evaluation_scope == "live_forward", 0), else_=1),
+            RecommendationRun.trade_date.desc(),
+            case(
+                (RecommendationRun.status == "completed", 0),
+                (RecommendationRun.status.in_({"running", "queued"}), 1),
+                else_=2,
+            ),
+            RecommendationRun.started_at.desc(),
+        )
         .limit(1)
     )
 
