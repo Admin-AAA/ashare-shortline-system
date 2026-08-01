@@ -1243,7 +1243,11 @@ def main() -> int:
                 "independent_windows_positive": independent_windows_positive,
                 "independent_windows_total": independent_windows_total,
             }
-            with open(args.output, "w") as f:
+            # 自动创建输出目录：worktree/CI 环境可能没有 output/，直接 open 会
+            # FileNotFoundError 导致回测结果无法落盘（主证据路径丢失）。
+            out_path = Path(args.output)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(out_path, "w") as f:
                 json.dump(output_data, f, indent=2, ensure_ascii=False)
             print(f"\n  📄 输出已写入: {args.output}")
 
