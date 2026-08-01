@@ -436,7 +436,7 @@ function RunRecordsList() {
                   <td style={tdStyle} className="text-mono">
                     <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}>
                       {run.trade_date}
-                      <RunModeBadge runMode={run.run_mode} />
+                      <RunModeBadge runMode={run.run_mode} evaluationScope={run.evaluation_scope} />
                     </span>
                   </td>
                   <td style={tdStyle}>{run.run_name || run.run_id.slice(0, 12)}</td>

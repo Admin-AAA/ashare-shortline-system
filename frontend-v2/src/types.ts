@@ -79,6 +79,8 @@ export type RunSummary = {
   preset_name: string;
   trade_date: string;
   run_mode?: string;
+  /** 评估范围：live_forward=正式推荐（实盘），historical_replay=历史回放/补跑 */
+  evaluation_scope?: string;
   started_at?: string | null;
   finished_at?: string | null;
   market_scope: string;

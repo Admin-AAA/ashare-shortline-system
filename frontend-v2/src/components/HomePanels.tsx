@@ -177,7 +177,7 @@ export function LatestRunCard({
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
         <span style={{ fontSize: 13, color: "var(--muted)", display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
           {run.trade_date}
-          <RunModeBadge runMode={run.run_mode} />
+          <RunModeBadge runMode={run.run_mode} evaluationScope={run.evaluation_scope} />
         </span>
         <span
           style={{
