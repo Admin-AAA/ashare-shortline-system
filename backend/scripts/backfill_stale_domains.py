@@ -192,11 +192,14 @@ def backfill_margin(db, pro, trade_days: list[str]) -> int:
             rows.append({
                 "code": code,
                 "trade_date": _fmt_date(td),
-                "rzye": _safe_float(r.get("rzye")),
-                "rqye": _safe_float(r.get("rqye")),
-                "rzmre": _safe_float(r.get("rzmre")),
-                "rzche": _safe_float(r.get("rzche")),
-                "rzrqye": _safe_float(r.get("rzrqye")),
+                # 与 fetch_margin_detail_batch 一致存「亿元」(/1e8)。此前这里写原始「元」，
+                # 与 state_adapters/margin_detail 的亿元契约不符（07-16 前 17.9 万行数据单位错，
+                # 07-16 起 fetch_margin_detail_batch 写亿元才正确）。
+                "rzye": _safe_float(r.get("rzye")) / 1e8 if r.get("rzye") is not None else None,
+                "rqye": _safe_float(r.get("rqye")) / 1e8 if r.get("rqye") is not None else None,
+                "rzmre": _safe_float(r.get("rzmre")) / 1e8 if r.get("rzmre") is not None else None,
+                "rzche": _safe_float(r.get("rzche")) / 1e8 if r.get("rzche") is not None else None,
+                "rzrqye": _safe_float(r.get("rzrqye")) / 1e8 if r.get("rzrqye") is not None else None,
                 "rqyl": _safe_float(r.get("rqyl")),
             })
         if not rows:

@@ -3868,23 +3868,22 @@ def check_auxiliary_factor_data(db) -> None:
                     status = "⚠️数据质量异常"
                 else:
                     quality_tag = f" 质量✅(max_abs={max_abs:.1f})" if max_abs is not None else ""
-            # margin_detail 数据质量校验：rzye(融资余额,亿) 健康时应为千万~百亿级。
-            # 2026-08-01 发现 07-16 起 99.5% 股票 rzye 骤降到 <100（7 个量级单位错），
-            # 仅 0.5% 股票保留正常量级，生产推荐 margin 因子 07-16 后 92% 变 0。
-            # capital_flow 有 max_abs 护栏但 margin 没有，此护栏防同类单位回归。
-            # 用「近 14 天异常占比」而非全表 max——少数正常值会掩盖大面积污染。
-            # 近 14 天窗口=07-16 起污染期全覆盖；阈值>50% 告警。
+            # margin_detail 数据质量校验：rzye(融资余额,亿) 契约=亿元量级（千万~百亿）。
+            # 2026-08-01 发现两段数据单位不一致：07-16 前 17.9 万行存「元」（avg 6.4e8 元
+            # 应为 6.4 亿元），07-16 起存「亿元」（正确）。源头是 backfill_margin 曾写原始值
+            # 未 /1e8。本护栏检测近 14 天「元」单位占比（rzye>1e8 即 >10 亿的异常量级，
+            # 正常亿元契约下极少），与 capital_flow max_abs 同类防单位回归。
             if table == "margin_detail" and n and n > 0:
-                small_ratio = db.execute(text(
-                    "SELECT SUM(CASE WHEN ABS(rzye) < 100 THEN 1 ELSE 0 END) / COUNT(*) "
+                raw_ratio = db.execute(text(
+                    "SELECT SUM(CASE WHEN ABS(rzye) > 100000000 THEN 1 ELSE 0 END) / COUNT(*) "
                     "FROM margin_detail WHERE rzye IS NOT NULL "
                     "AND trade_date >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)"
                 )).fetchone()[0]
-                if small_ratio is None or float(small_ratio) > 0.5:
-                    quality_tag = f" ⚠️数据质量异常(近14天{r'%.0f%%' % (float(small_ratio or 0)*100)}股票rzye<100，疑单位错误/缩放)"
+                if raw_ratio is None or float(raw_ratio) > 0.5:
+                    quality_tag = f" ⚠️数据质量异常(近14天{r'%.0f%%' % (float(raw_ratio or 0)*100)}股票rzye>1e8，疑单位错误/未缩放)"
                     status = "⚠️数据质量异常"
                 else:
-                    quality_tag = f" 质量✅(近14天{r'%.0f%%' % (float(small_ratio or 0)*100)}股票rzye<100)" if small_ratio is not None else ""
+                    quality_tag = f" 质量✅(近14天{r'%.0f%%' % (float(raw_ratio or 0)*100)}股票rzye>1e8)" if raw_ratio is not None else ""
             print(f'  {table:16} {usage}: n={n} days={days} {first_d}→{last_d} '
                   f'重叠formal {ov}/10 {status}{quality_tag}')
         except Exception as exc:
