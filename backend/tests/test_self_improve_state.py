@@ -528,6 +528,46 @@ def test_release_state_machine_requires_real_deployment_fingerprint(tmp_memory_d
     assert completed["status"] == "completed"
 
 
+def test_canary_failure_rolls_back_local_candidate_pointer(tmp_memory_dir):
+    evidence = {
+        "schema_version": 2,
+        "experiment_kind": "production_policy",
+        "status": "completed",
+        "evidence_fingerprint": "f" * 64,
+        "challenger_policy_fingerprint": "candidate",
+        "decision": {"should_publish": True, "decision": "PRODUCTION_CANDIDATE"},
+    }
+    advance_release(
+        "verify_evidence",
+        {"evidence_id": "exp-rollback"},
+        tmp_memory_dir,
+        evidence_loader=lambda _id: evidence,
+    )
+    from app.services.backtest.deployment_adapter import LocalPolicyDeploymentAdapter
+
+    root = tmp_memory_dir / "deployment"
+    adapter = LocalPolicyDeploymentAdapter(root)
+    receipt = adapter.stage(policy_fingerprint="candidate")
+    advance_release(
+        "deployment_confirmed",
+        {**receipt, "receipt": receipt, "deployment_root": str(root)},
+        tmp_memory_dir,
+    )
+    failed = advance_release(
+        "canary_failed",
+        {"reason": "fingerprint mismatch"},
+        tmp_memory_dir,
+    )
+    assert failed["status"] == "rollback_required"
+    assert not adapter.candidate_pointer.exists()
+    rolled_back = advance_release(
+        "rollback_confirmed",
+        {"rollback_receipt": failed["rollback_receipt"]},
+        tmp_memory_dir,
+    )
+    assert rolled_back["status"] == "rolled_back"
+
+
 def test_policy_health_freezes_after_five_opportunity_days_all_policy_blocked(tmp_memory_dir):
     audit = json.dumps(
         {

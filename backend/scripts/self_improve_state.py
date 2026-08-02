@@ -1013,6 +1013,8 @@ def transition_release_state(current: dict, event: str, details: dict | None = N
         expected = str(state.get("policy_fingerprint") or "")
         if expected and canary.get("observed_policy_fingerprint") != expected:
             raise ValueError("canary observed policy fingerprint mismatch")
+    if event == "rollback_confirmed" and not details:
+        raise ValueError("rollback_confirmed requires rollback receipt")
     updated = {
         **state,
         "status": next_status,
@@ -1052,6 +1054,19 @@ def advance_release(
                     "should_publish": decision.get("should_publish") is True,
                 }
             )
+        if event == "canary_failed":
+            release = state.get("release_state") or {}
+            receipt = release.get("receipt")
+            if receipt:
+                from app.services.backtest.deployment_adapter import LocalPolicyDeploymentAdapter
+
+                adapter = LocalPolicyDeploymentAdapter(
+                    Path(str(release.get("deployment_root") or ""))
+                    if release.get("deployment_root")
+                    else None
+                )
+                normalized_details["rollback_receipt"] = adapter.rollback(receipt)
+                normalized_details["rollback_confirmed"] = True
         release = transition_release_state(
             state.get("release_state") or {}, event, normalized_details
         )
