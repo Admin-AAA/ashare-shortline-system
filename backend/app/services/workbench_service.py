@@ -2414,7 +2414,31 @@ def _build_run_summary(
         "scan_limited": pipeline.get("scan_limited", False),
         "skill_limited": pipeline.get("skill_limited", False),
         "skip_reasons": pipeline.get("skip_reasons", {}),
+        # 空仓/无机会语义（2026-08-02 修复）：7 月 formal 连续 0 推荐且无任何
+        # 显式说明，前端无法区分"系统运行正常但无机会"与"系统故障"。此处显式
+        # 标注 opportunity 状态与原因，供前端展示空仓/观望结论。
+        "opportunity": "has_recommendations" if saved else "empty",
+        "no_opportunity_reason": _no_opportunity_reason(cards, score_line),
     }
+
+
+def _no_opportunity_reason(cards: list[dict[str, Any]], score_line: dict[str, Any]) -> str:
+    """0 推荐时的可读原因：最高分 / 有效线 / 软降线状态。"""
+    top = max((float(c.get("final_score") or 0) for c in cards), default=0.0)
+    effective = score_line.get("effective_score_line")
+    soft_applied = bool(score_line.get("dynamic_soft_floor_applied"))
+    market_base = score_line.get("market_base") or ""
+    if top <= 0:
+        return "无候选通过规则门（全部低于 Skill 门槛）"
+    parts = [f"最高分 {top:.1f}"]
+    if effective:
+        parts.append(f"有效分数线 {effective:.1f}")
+    parts.append(f"市场阶段 {market_base or '未知'}")
+    if soft_applied:
+        parts.append("已启用软降线兜底仍无票过线")
+    else:
+        parts.append("软降线未触发")
+    return "；".join(parts)
 
 
 def _persist_market(db: Session, snapshot: dict[str, Any]) -> None:

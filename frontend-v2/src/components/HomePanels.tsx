@@ -203,6 +203,11 @@ export function LatestRunCard({
           </div>
         </div>
       </div>
+      {run.recommended_count === 0 && run.status === "completed" && (
+        <div style={{ fontSize: 12, color: "var(--warning)", marginTop: "var(--space-2)" }}>
+          ⚠ 空仓/无机会（运行正常，全部候选未过分数线）
+        </div>
+      )}
       <button onClick={onOpen} className="btn btn--ghost" style={{ alignSelf: "flex-start" }}>
         查看驾驶舱
       </button>

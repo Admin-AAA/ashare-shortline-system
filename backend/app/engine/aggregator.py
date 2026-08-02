@@ -273,6 +273,12 @@ def resolve_score_line_context(
     minimum = float(getattr(selection_policy, "score_line_minimum", 35.0))
     maximum = float(getattr(selection_policy, "score_line_maximum", 120.0))
     effective = round(max(minimum, min(maximum, base + market_adjustment + sentiment_adjustment + risk_adjustment)), 2)
+    # 弱势 regime 分数线封顶（2026-08-02 修复）：弱市 gate 分普遍偏低，72 硬地板
+    # + 弱势 +2 调整导致 7 月 formal 连续 0 产出；按 policy 的 weak_regime_score_cap
+    # 把线压回 60 档，让弱市反转信号有产出机会。
+    weak_cap = getattr(selection_policy, "weak_regime_score_cap", None)
+    if weak_cap is not None and market_base == "弱势":
+        effective = round(min(effective, float(weak_cap)), 2)
     return {
         "base_score_line": round(base, 2),
         "market_base": market_base,
@@ -1219,8 +1225,16 @@ def apply_pool_rules(
             top_final_score - float(getattr(selection_policy, "dynamic_soft_floor_offset", 1.0)), 2
         )
         base_floor = round(
-            score_line_context["base_score_line"]
-            - float(getattr(selection_policy, "dynamic_soft_floor_base_discount", 8.0)),
+            min(
+                score_line_context["base_score_line"]
+                - float(getattr(selection_policy, "dynamic_soft_floor_base_discount", 8.0)),
+                # 弱势 regime 封顶联动（2026-08-02 修复）：cap 生效时（弱势 60），
+                # base_floor 若仍按 72-8=64 会让 top<64 的弱市候选永远无法软降线
+                # 放行（7 月零推荐链路：gate<58 → top<60 → 线 64 > top）。
+                # 取 effective（已含 cap）减 discount，仅在 cap 压低时生效。
+                score_line_context["effective_score_line"]
+                - float(getattr(selection_policy, "dynamic_soft_floor_base_discount", 8.0)),
+            ),
             2,
         )
         dynamic_line = max(
