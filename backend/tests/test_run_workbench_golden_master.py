@@ -27,7 +27,10 @@ def _market_snapshot() -> dict:
         "limit_down_count": 0,
         "main_industries": ["半导体"],
         "breadth": {
-            "regime": "震荡",
+            # This golden fixture exercises the successful recommendation
+            # projection. Oscillation is a production hard-veto regime and is
+            # covered by dedicated policy tests, so it cannot be used here.
+            "regime": "未知",
             "data_source": "in_memory",
             "unified_quote_total": 2,
             "base_filter_eligible_count": 2,

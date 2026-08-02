@@ -364,6 +364,7 @@ def score_line_reject_reason(
     hard_veto: bool = False,
     veto_reason: str | None = None,
     risk_flags: list | None = None,
+    policy_drop_owner: str | None = None,
 ) -> str:
     """纯函数：score_line 阶段拒绝/通过原因文案。
 
@@ -375,6 +376,8 @@ def score_line_reject_reason(
     """
     if execution_blocked:
         return str(block_reason or "入场不可成交，未纳入正式推荐")
+    if policy_drop_owner:
+        return f"production_policy: {policy_drop_owner}"
     if passed:
         return "达到正式分数线"
     if hard_veto:
@@ -421,6 +424,23 @@ def _data_quality_empty_reason(
         f"data_quality_blocked: {len(blocked)}/{len(evaluated)} 个已评分候选的质量上限低于有效线；"
         f"主要缺失字段：{top_missing}"
     )
+
+
+def _production_policy_empty_reason(
+    score_rows: list[dict[str, Any]], recommended_count: int
+) -> str | None:
+    if recommended_count or not score_rows:
+        return None
+    owners = Counter(
+        str(row.get("policy_drop_owner") or "")
+        for row in score_rows
+        if row.get("policy_drop_owner")
+    )
+    if not owners:
+        return None
+    blocked = sum(owners.values())
+    detail = ", ".join(f"{owner}={count}" for owner, count in owners.most_common())
+    return f"production_policy_blocked: {blocked}/{len(score_rows)}；{detail}"
 
 
 def build_filter_audit(
@@ -561,7 +581,11 @@ def build_filter_audit(
         # 「最终分 0.0 低于有效线 0.0」噪声（07-21 formal 34/60 实证），淹没真门线拒绝。
         has_eff = score_line_meta.get("effective_score_line") is not None
         effective_line = float(score_line_meta["effective_score_line"]) if has_eff else None
-        passed = code in recommended_codes or bool(score_line_meta.get("passed"))
+        passed = (
+            code in recommended_codes
+            if card.get("policy_drop_owner")
+            else code in recommended_codes or bool(score_line_meta.get("passed"))
+        )
         score_gap = (
             round(final_score - effective_line, 2)
             if effective_line is not None
@@ -576,6 +600,7 @@ def build_filter_audit(
             hard_veto=bool(card.get("hard_veto")),
             veto_reason=card.get("veto_reason"),
             risk_flags=card.get("risk_flags") or card.get("risk_tags"),
+            policy_drop_owner=card.get("policy_drop_owner"),
         )
         score_row = {
             "code": code,
@@ -605,6 +630,8 @@ def build_filter_audit(
             "execution_viability": execution_viability,
             "skill_disagreement": card.get("skill_disagreement") or {},
             "strategy_signal_count": len(card.get("strategy_signals") or []),
+            "policy_drop_owner": card.get("policy_drop_owner"),
+            "policy_verdict_steps": card.get("policy_verdict_steps") or [],
         }
         score_rows.append(score_row)
         row = rows_by_code.setdefault(
@@ -683,7 +710,9 @@ def build_filter_audit(
         "reason_counts": reason_counts,
         "rows": rows,
     }
-    empty_reason = _data_quality_empty_reason(score_rows, len(recommended_cards))
+    empty_reason = _production_policy_empty_reason(
+        score_rows, len(recommended_cards)
+    ) or _data_quality_empty_reason(score_rows, len(recommended_cards))
     if empty_reason:
         audit["empty_reason"] = empty_reason
     return audit

@@ -454,8 +454,12 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
             _load_calibrated_agg_weights,
             _drop_as_repeat_card,
         )
-        from app.engine.aggregator import apply_pool_rules
-        from app.core.config import get_settings
+        from dataclasses import asdict
+        from app.engine.production_policy import (
+            DEFAULT_PRODUCTION_SELECTION_POLICY,
+            SelectionPolicyContext,
+            evaluate_selection_policy,
+        )
         from app.services.feature_builder import market_regime_score
         from app.services.model_router_service import has_active_model_routes
 
@@ -495,21 +499,25 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
         same_day_industry_counts = _same_day_industry_counts(
             self._db, str(snapshot.get("trade_date") or ""), self._run_id,
         )
-        pool_result = apply_pool_rules(
+        policy_result = evaluate_selection_policy(
             scored_cards,
-            output_count=int(params.get("output_count") or 0),
-            score_line=float(params.get("score_line") or 72.0),
-            market_snapshot=dict(snapshot),
-            risk_template=str(params.get("risk_template") or "balanced"),
-            return_watchlist=True,
-            same_day_industry_counts=same_day_industry_counts,
-            agent_available=has_active_model_routes(),
-            board_universe=get_settings().formal_board_universe,
+            SelectionPolicyContext(
+                output_count=int(params.get("output_count") or 0),
+                score_line=float(params.get("score_line") or 72.0),
+                market_snapshot=dict(snapshot),
+                risk_template=str(params.get("risk_template") or "balanced"),
+                agent_available=has_active_model_routes(),
+                same_day_industry_counts=same_day_industry_counts,
+            ),
+            DEFAULT_PRODUCTION_SELECTION_POLICY,
         )
-        formal_cards = list(pool_result.get("recommendations") or [])
+        formal_cards = list(policy_result.recommendations)
         pipeline_updates: dict[str, Any] = {
-            "watchlist": list(pool_result.get("watchlist") or []),
-            "degraded_watchlist": list(pool_result.get("degraded_watchlist") or []),
+            "watchlist": list(policy_result.watchlist),
+            "degraded_watchlist": list(policy_result.degraded_watchlist),
+            "production_policy_fingerprint": policy_result.policy_fingerprint,
+            "policy_verdict_summary": dict(policy_result.verdict_summary),
+            "policy_verdicts": [asdict(item) for item in policy_result.verdicts],
         }
         return tuple(formal_cards), tuple(scored_cards), pipeline_updates
 
