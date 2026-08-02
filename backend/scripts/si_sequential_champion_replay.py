@@ -7,6 +7,7 @@ trades that the current production universe would never admit.
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from collections import defaultdict
@@ -198,7 +199,23 @@ def _portfolio_metrics(records: list[dict]) -> tuple[PerformanceSnapshot, dict]:
     return snapshot, details
 
 
-def main() -> None:
+def baseline_artifact_status(metrics: dict) -> str:
+    return "COMPLETED" if int(metrics.get("n") or 0) > 0 else "INVALID_BASELINE"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=OUTPUT_DIR / "sequential_champion_replay.json",
+        help="Write only a valid completed replay artifact to this path.",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     with SessionLocal() as db:
         population, bars_by_code = _load_population(db)
         regime_counts: dict[str, int] = defaultdict(int)
@@ -286,6 +303,7 @@ def main() -> None:
             )
 
     result = {
+        "status": baseline_artifact_status(effective_champion_metrics),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "production_config": {
             "board_universe": PRODUCTION_BOARD_UNIVERSE,
@@ -302,12 +320,16 @@ def main() -> None:
             "decision": trailing_decision.to_dict(),
         },
     }
-    OUTPUT_DIR.mkdir(exist_ok=True)
-    output_path = OUTPUT_DIR / "sequential_champion_replay.json"
-    output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2))
     print(json.dumps(result, ensure_ascii=False, indent=2))
+    if result["status"] == "INVALID_BASELINE":
+        print("[not-persisted] production_champion n=0", file=sys.stderr)
+        return 2
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2))
     print(f"[persist] {output_path}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

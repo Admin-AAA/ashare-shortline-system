@@ -31,7 +31,9 @@
 | `daemon-heartbeat` | 后台心跳 daemon（阻塞） | `--researcher-id`、`--interval`、`--max-duration` |
 | `stop-daemon` | 终止心跳 daemon | `--pid` |
 | `heartbeat` | 单次心跳 | `--researcher-id` |
-| `publish-champion` | CAS 发布新 champion | `--researcher-id`、`--expected-champion-commit`、`--state-patch`、`--run-record` |
+| `refresh-policy-health` | 从 formal DB 计算最近 5 个 opportunity days 的策略活性 | 无 |
+| `advance-release` | 推进 evidence/deploy/canary/rollback 状态机 | `--event`、`--details` |
+| `publish-champion` | CAS 发布新 champion；selection 变更必须读 DB evidence | `--researcher-id`、`--expected-champion-commit`、`--canonical-evidence-id`、`--state-patch`、`--run-record` |
 | `publish-finding` | 追加 finding | `--researcher-id`、`--state-patch`、`--finding`、`--run-record` |
 | `with-publish-lock` | 发布锁下执行命令 | `--cmd`（单个引用参数）、`--timeout` |
 
@@ -48,7 +50,8 @@ cd <worktree_path>
 
 **收尾**（每轮必做）：
 ```
-python self_improve_state.py publish-champion / publish-finding   # 发布
+python self_improve_state.py refresh-policy-health
+python self_improve_state.py publish-finding   # audit-only 默认只发布 finding
 python self_improve_state.py release-direction --researcher-id si-<时间戳>
 python self_improve_state.py release-worktree --researcher-id si-<时间戳> --remove
 ```
@@ -70,7 +73,9 @@ python self_improve_state.py with-publish-lock --cmd 'git -C <主仓库> pull --
 
 `self-improve-state.json` 顶层：
 - `schema_version`：布局版本（当前 2）
-- `canonical_production`：当前 champion（commit、metrics{n,win_rate_pct,average_net_return_pct,profit_factor}、provisional、rules）
+- `canonical_production`：当前 champion；selection policy 只保存 id/version/fingerprint，不复制 rules
+- `selection_policy_governance`：`audit_only`、`strategy_inactive`、最近 opportunity days、健康检查时间
+- `release_state`：evidence/deploy/canary/rollback 状态与真实回执 fingerprint
 - `researcher_registry.active_researchers`：活跃研究员（researcher_id、claimed_direction、last_heartbeat、heartbeat_daemon_pid、worktree_path、status）
 - `researcher_registry.claimed_directions`：已被 claim 的方向
 - `archived_falsified_directions`：已归档否证方向
@@ -82,7 +87,7 @@ python self_improve_state.py with-publish-lock --cmd 'git -C <主仓库> pull --
 
 每轮追加一条合法 JSON（`run_id`、`researcher_id`、`claimed_direction`、`started_at`、`input_fingerprint`、`champion`、`hypothesis`、`data_source`、`windows`、`metrics`、`decision`、`commit`、`rollback_point`、`lesson_ids`、`blocked_live_until`、`next_live_event`）。状态和运行记录必须通过 `publish-champion`/`publish-finding` 在同一文件锁下更新，禁止直接写状态文件。
 
-## 回测输出字段（path A 信号回测）
+## 正式回测与探索工具
 
 ### Canonical 单策略双臂实验
 
@@ -99,7 +104,21 @@ cd backend
   --hypothesis '降低评分线是否改善正式净收益'
 ```
 
-stdout 是 schema v1 canonical evidence artifact。`truth_validation.passed=false` 或进程非零退出时只能修复真实性/工具；通过后 `decision.decision` 是唯一 PRODUCTION/FALSIFIED 结论。`split_metrics` 只作时间稳定性诊断，不增加发布门槛。完整多策略 production pipeline 尚未迁移到单策略 Runner 的方向继续使用下方 PATH-A adapter。
+selection policy 使用 schema v2 正式路径：
+
+```bash
+cd backend
+.venv/bin/python scripts/run_canonical_backtest_experiment.py \
+  --experiment-kind production-policy \
+  --candidate-source production-rule-replay \
+  --candidate-snapshot-file <frozen_scored_candidates.json> \
+  --champion-policy-id production-selection \
+  --challenger-policy-patch '{"structural_strong_hard_veto":false}' \
+  --execution-policy '{"horizon_days":5}' \
+  --hypothesis '撤销结构性强势 veto 是否恢复正期望机会'
+```
+
+证据同时写入 `backtest_data_snapshots`、`backtest_input_artifacts`、`backtest_runs_v2`、`backtest_candidates`、`backtest_trades` 和 `backtest_experiments`。正式判定只看 purged OOS，并强制 executed trade、opportunity capture、连续 opportunity abstain、单规则差异和 vectorbt gates。当前 selection governance 是 audit-only；即使 `should_publish=true` 也只能记录 FINDING。
 
 `backend/scripts/si_path_a_signal_backtest.py` 的每个回测结果自带以下字段，做 regime 分层验证时直接用：
 
@@ -109,7 +128,7 @@ stdout 是 schema v1 canonical evidence artifact。`truth_validation.passed=fals
 
 **regime 分层验证动作**：
 1. 跑 path A 拿到 `regime_breakdown`；
-2. 确认强势周期（强牛/偏多）和弱势周期（弱势）都有足够样本（每组 n≥10）；
+2. 如实报告强势周期与弱势周期的样本和指标，不用任意最小 n 替代正式 OOS gates；
 3. 若某周期样本不足，用 `--windows`（或脚本支持的窗口参数）补跑该周期的历史段；
 4. 对比 challenger vs champion 在每个 regime 的 avg_net/WR/PF，输出 regime 指纹。
 
@@ -119,7 +138,7 @@ LIVE formal 样本做 regime 分层时用 `score_line_meta.market_base`（决策
 
 同一类参数（score_line / stop_loss / take_profit / trailing / horizon / position_sizing）的网格扫描**每类只扫一次**，结果记入状态文件 `scanned_grids`，后续轮次即便 champion 未变也不得重复扫描（主命令 §3.3 护栏）。已扫过的 score_line 类见 `scanned_grids.score_line_on_2025_2026`（72→76 与 72→68 均 FALSIFIED，结论"score_line 72 是 path A 最优点"）。
 
-- **`backend/scripts/si_path_a_signal_backtest.py`**：PATH-A 策略信号回测（全历史重建候选集 + production pipeline 过滤 + 因果退出）。`CHAMPION_CONFIG` 必须与当前生产 champion 同步（当前 `score_line=72`、`stop_loss=-4.5`、`take_profit=6.0`、`trailing_profit_lock_ratio=0.50`）；这是参数网格的主证据路径。
+- **`backend/scripts/si_path_a_signal_backtest.py`**：PATH-A 探索性 candidate-source adapter。最终删票委托 production policy evaluator，但历史特征重建仍是探索口径；输出固定 `evidence_scope=EXPLORATORY`、`production_eligible=false`，不得作为 publish-champion 证据。
 - **`backend/scripts/si_path_a_score_line_grid.py`**：**已归档（测量失真，不可用）**。基于 `btrec_%` 物化推荐（废弃证据源，`backtest_service.py` 已标注移除）+ `_filter_by_score_line` 叠加 effective（regime/风险惩罚后）门槛，导致测的不是"score_line 阈值"这个唯一变量：champion 负期望失真（-0.73% vs 生产正期望）、低带样本几乎为零、bootstrap 全零方差。score_line 方向已由主回测 `signal_backtest` 完整闭环（72→65/68/75/78 全 FALSIFIED，见 `scanned_grids.score_line_on_2025_2026`），72 为 path A 最优。**不要**用此脚本做任何参数结论。
 - 运行用 `backend/.venv/bin/python backend/scripts/<script>`；输出 JSON 落 `output/`。
 
