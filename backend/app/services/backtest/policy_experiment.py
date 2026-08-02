@@ -471,7 +471,16 @@ class ProductionPolicyBacktestRunner:
                     claim.backtest_id,
                     [
                         {
-                            "trade_id": trade.trade_id,
+                            "trade_id": (
+                                "btt_"
+                                + canonical_fingerprint(
+                                    {
+                                        "backtest_id": claim.backtest_id,
+                                        "simulation_trade_id": trade.trade_id,
+                                        "trade": trade.canonical_payload(),
+                                    }
+                                )[:48]
+                            ),
                             "signal_date": trade.signal_date,
                             "code": trade.code,
                             "entry_date": trade.entry_date,

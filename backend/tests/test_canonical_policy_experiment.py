@@ -180,3 +180,54 @@ def test_policy_experiment_persists_snapshot_arms_verdicts_trades_and_evidence()
     finally:
         session.close()
         engine.dispose()
+
+
+def test_policy_experiment_namespaces_equal_simulated_trades_by_backtest_arm() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            BacktestDataSnapshot.__table__,
+            BacktestInputArtifact.__table__,
+            BacktestRequestClaim.__table__,
+            BacktestRunV2.__table__,
+            BacktestCandidate.__table__,
+            BacktestTrade.__table__,
+            BacktestFailureAttribution.__table__,
+            BacktestExperiment.__table__,
+        ],
+    )
+    session = sessionmaker(bind=engine, expire_on_commit=False)()
+    try:
+        payload = _snapshot().canonical_payload()
+        for day in payload["days"]:
+            day["market_snapshot"]["market_regime"] = "弱势"
+            day["cards"][0]["chg20"] = 20.0
+        snapshot = ScoredCandidateSnapshot.from_payload(payload)
+        artifact = ProductionPolicyBacktestRunner(
+            ResearchBacktestRepository(session)
+        ).run(
+            CanonicalPolicyExperimentSpec(
+                experiment_id="policy_overlapping_arm_trades",
+                hypothesis="两臂相同交易仍须作为独立研究记录持久化",
+                candidate_snapshot=snapshot,
+                champion_policy=DEFAULT_PRODUCTION_SELECTION_POLICY,
+                challenger_policy=DEFAULT_PRODUCTION_SELECTION_POLICY.with_rule_patch(
+                    "strong_score_penalty", 7.0
+                ),
+                changed_rule_id="strong_score_penalty",
+                score_line=72.0,
+                output_count=6,
+                execution_policy=ExecutionPolicy(horizon_days=2),
+            )
+        )
+
+        rows = session.query(BacktestTrade).all()
+        assert artifact["status"] == "completed"
+        assert len(rows) == 48
+        assert len({row.trade_id for row in rows}) == 48
+        assert len({row.backtest_id for row in rows}) == 2
+        assert all('"trade_id"' in row.trade_json for row in rows)
+    finally:
+        session.close()
+        engine.dispose()
