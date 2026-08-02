@@ -2423,10 +2423,9 @@ def _build_run_summary(
 
 
 def _no_opportunity_reason(cards: list[dict[str, Any]], score_line: dict[str, Any]) -> str:
-    """0 推荐时的可读原因：最高分 / 有效线 / 软降线状态。"""
+    """0 推荐时的可读原因：最高分 / 有效线 / 市场阶段。"""
     top = max((float(c.get("final_score") or 0) for c in cards), default=0.0)
     effective = score_line.get("effective_score_line")
-    soft_applied = bool(score_line.get("dynamic_soft_floor_applied"))
     market_base = score_line.get("market_base") or ""
     if top <= 0:
         return "无候选通过规则门（全部低于 Skill 门槛）"
@@ -2434,10 +2433,6 @@ def _no_opportunity_reason(cards: list[dict[str, Any]], score_line: dict[str, An
     if effective:
         parts.append(f"有效分数线 {effective:.1f}")
     parts.append(f"市场阶段 {market_base or '未知'}")
-    if soft_applied:
-        parts.append("已启用软降线兜底仍无票过线")
-    else:
-        parts.append("软降线未触发")
     return "；".join(parts)
 
 

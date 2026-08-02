@@ -5,7 +5,7 @@ from app.services.workbench_service import _build_run_summary, _no_opportunity_r
 def test_build_run_summary_marks_empty_opportunity():
     summary = _build_run_summary(cards=[], saved=[], snapshot={})
     assert summary["opportunity"] == "empty"
-    assert "未通过" in summary["no_opportunity_reason"] or summary["no_opportunity_reason"]
+    assert "无候选" in summary["no_opportunity_reason"]
 
 
 def test_build_run_summary_marks_has_recommendations():

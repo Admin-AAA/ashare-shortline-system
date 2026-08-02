@@ -31,6 +31,16 @@ from app.models.tables import ApiCallLog
 from app.services.candidates import trace as candidate_trace
 
 
+def _load_policy_guarded() -> Any:
+    """加载生产选择策略；失败回退 None（保持旧行为：cap 不生效）。"""
+    try:
+        from app.engine.production_policy import load_production_selection_policy
+
+        return load_production_selection_policy()
+    except Exception:  # noqa: BLE001 - audit 展示不应因策略加载失败而崩溃
+        return None
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Pipeline audit（单次运行的漏斗审计骨架）
 # ═════════════════════════════════════════════════════════════════════════════
@@ -58,6 +68,10 @@ def build_pipeline_audit(
         float(params.get("score_line") or 72.0),
         market_snapshot=snapshot,
         risk_template=str(params.get("risk_template") or "balanced"),
+        # 2026-08-02 修复：必须传 production policy，否则 weak_regime_score_cap
+        # 不生效，audit 显示的有效线（74）与实际决策线（弱势 60）不一致，
+        # 误导前端空仓原因展示（review 发现，spec 审查 2026-08-02）。
+        selection_policy=_load_policy_guarded(),
     )
     display_limit = resolve_display_limit(int(params.get("output_count") or 0), snapshot)
     market_candidate_count = (
