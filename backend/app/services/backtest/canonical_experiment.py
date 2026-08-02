@@ -73,7 +73,20 @@ class CanonicalBacktestExperiment:
         self._repository = repository
         self._runner = runner
 
-    def run(self, spec: CanonicalExperimentSpec) -> dict[str, Any]:
+    def run(self, spec: CanonicalExperimentSpec | Any) -> dict[str, Any]:
+        # Import lazily: policy_experiment reuses the canonical performance
+        # adapter, so a top-level import would create a cycle.
+        from app.services.backtest.policy_experiment import (
+            CanonicalPolicyExperimentSpec,
+            ProductionPolicyBacktestRunner,
+        )
+
+        if isinstance(spec, CanonicalPolicyExperimentSpec):
+            return ProductionPolicyBacktestRunner(self._repository).run(spec)
+        if not isinstance(spec, CanonicalExperimentSpec):
+            raise CanonicalExperimentValidationError(
+                "spec must be CanonicalExperimentSpec or CanonicalPolicyExperimentSpec"
+            )
         champion = self._runner.resolve_request(spec.champion)
         challenger = self._runner.resolve_request(spec.challenger)
         _validate_comparable_requests(champion, challenger)
