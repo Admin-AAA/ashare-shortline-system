@@ -78,6 +78,8 @@ def main(argv: list[str] | None = None) -> int:
                     score_line=args.score_line,
                     output_count=args.output_count,
                     execution_policy=ExecutionPolicy(**execution_overrides),
+                    holdout_fingerprint=snapshot.fingerprint,
+                    holdout_scope="validation",
                 )
             )
             oos = (artifact.get("arms") or {}).get("challenger", {}).get("split_metrics", {}).get("out_of_sample", {})

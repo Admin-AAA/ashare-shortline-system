@@ -23,6 +23,7 @@
 | 子命令 | 用途 | 关键参数 |
 |---|---|---|
 | `read` | 读当前状态 | 无 |
+| `migrate-state` | 幂等迁移旧 state、绑定 repo policy fingerprint、初始化 holdout ledger | 无 |
 | `claim-direction` | 原子 claim 一个方向 | `--researcher-id`（必填）、`--max-workers`、`--preferred-direction`、`--force-stale` |
 | `release-direction` | 释放方向 + 终止心跳 daemon | `--researcher-id` |
 | `prune-claimed` | 清理失活研究员残留方向 | 无 |
@@ -41,6 +42,7 @@
 
 **开局**（每轮必做）：
 ```
+python self_improve_state.py migrate-state
 python self_improve_state.py prune-claimed
 python self_improve_state.py claim-direction --researcher-id si-<时间戳> --max-workers 3
 python self_improve_state.py setup-worktree --researcher-id si-<时间戳> --base-ref main
@@ -72,7 +74,7 @@ python self_improve_state.py with-publish-lock --cmd 'git -C <主仓库> pull --
 ## 状态文件字段
 
 `self-improve-state.json` 顶层：
-- `schema_version`：布局版本（当前 2）
+- `schema_version`：布局版本（当前 3）
 - `canonical_production`：当前 champion；selection policy 只保存 id/version/fingerprint，不复制 rules
 - `selection_policy_governance`：`audit_only`、`strategy_inactive`、最近 opportunity days、健康检查时间
 - `release_state`：evidence/deploy/canary/rollback 状态与真实回执 fingerprint
@@ -81,6 +83,7 @@ python self_improve_state.py with-publish-lock --cmd 'git -C <主仓库> pull --
 - `archived_falsified_directions`：已归档否证方向
 - `scanned_grids`：已扫描参数网格
 - `published_findings`：已发布 findings
+- `holdout_ledger.consumed`：按 untouched holdout fingerprint 记录 claim、hypothesis、experiment kind 和消费时间；冲突 claim 必须拒绝
 - `blocked_until`、`next_event`：LIVE 事件窗口
 
 ## 记录格式（self-improve-runs.jsonl）
@@ -129,7 +132,9 @@ cd backend
   --hypothesis '撤销结构性强势 veto 是否恢复正期望机会'
 ```
 
-证据同时写入 `backtest_data_snapshots`、`backtest_input_artifacts`、`backtest_runs_v2`、`backtest_candidates`、`backtest_trades` 和 `backtest_experiments`。正式判定只看 purged OOS，并强制 executed trade、opportunity capture、连续 opportunity abstain、单规则差异和 vectorbt gates。当前 selection governance 是 audit-only；即使 `should_publish=true` 也只能记录 FINDING。
+证据同时写入 `backtest_data_snapshots`、`backtest_input_artifacts`、`backtest_runs_v2`、`backtest_candidates`、`backtest_trades` 和 `backtest_experiments`。正式判定只看 purged OOS，并强制 executed trade、productive days、opportunity capture、连续 opportunity abstain、单规则差异、机会成本和 vectorbt gates。当前 selection governance 是 audit-only；即使 `should_publish=true` 也只能记录 FINDING。
+
+正式 production-policy runner 需要有效 untouched-holdout claim；claim 在切分有效后才消费。相同 `holdout fingerprint + hypothesis + experiment kind` 幂等复用，其他 hypothesis 不能重复消费同一 untouched holdout，消费后该窗口只能作为 validation 使用。
 
 没有冻结文件时使用 `--start/--end --candidate-snapshot-output <path>`；CLI 会以只读 production stages 生成 rule-only snapshot，不创建 recommendation run、不写 LIVE 表、不调用网络或 LLM。
 

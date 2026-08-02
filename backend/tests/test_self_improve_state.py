@@ -14,10 +14,13 @@ from scripts.self_improve_state import (
     HEARTBEAT_TIMEOUT_SECONDS,
     _now_iso,
     claim_direction,
-    commit_update,
+    commit_update as _safe_commit_update,
+    _apply_state_patch,
+    _atomic_write_json,
     advance_release,
     daemon_heartbeat,
     heartbeat,
+    migrate_state,
     prune_claimed_directions,
     publish_champion,
     publish_finding,
@@ -30,6 +33,7 @@ from scripts.self_improve_state import (
     release_worktree,
     with_publish_lock,
 )
+from app.services.backtest.policy_experiment import RELEASE_POLICY_FINGERPRINT
 
 
 def _canonical_policy_evidence(champion: str, challenger: str) -> dict:
@@ -37,20 +41,42 @@ def _canonical_policy_evidence(champion: str, challenger: str) -> dict:
         "schema_version": 2,
         "experiment_kind": "production_policy",
         "status": "completed",
+        "release_policy_fingerprint": RELEASE_POLICY_FINGERPRINT,
         "champion_policy_fingerprint": champion,
         "challenger_policy_fingerprint": challenger,
         "changed_rule_id": "structural_strong_hard_veto",
         "decision": {
+            "decision": "PRODUCTION_CANDIDATE",
             "should_publish": True,
+            "release_policy": "release-policy:v2",
             "gates": {
                 "oos_executed_trade_required": True,
+                "oos_productive_day_required": True,
+                "productive_day_retention": True,
                 "opportunity_capture_retention": True,
                 "max_consecutive_opportunity_abstain": True,
                 "single_rule_change": True,
+                "changed_rule_no_dropped_positive_trade": True,
+                "counterfactual_outcomes_complete": True,
                 "vectorbt_truth": True,
             },
         },
     }
+
+
+def _seed_update(state_patch, run_record=None, memory_dir=None):
+    """Test-only fixture writer for initializing protected state fields."""
+    if any(
+        key in state_patch
+        for key in ("canonical_production", "selection_policy_governance", "release_state", "researcher_registry")
+    ):
+        directory = memory_dir
+        state_path = directory / "self-improve-state.json"
+        state = read_state(directory)
+        _apply_state_patch(state, state_patch)
+        _atomic_write_json(state_path, state)
+        return state
+    return _safe_commit_update(state_patch, run_record, memory_dir)
 
 
 @pytest.fixture
@@ -69,19 +95,71 @@ def test_read_state_empty(tmp_memory_dir):
     assert state == {}
 
 
+def test_migrate_state_replaces_legacy_rules_with_policy_identity(tmp_memory_dir):
+    (tmp_memory_dir / "self-improve-state.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "canonical_production": {
+                    "commit": "old-commit",
+                    "rules": {"structural_strong_hard_veto": True},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = migrate_state(
+        tmp_memory_dir,
+        policy_loader=lambda: {
+            "policy_id": "production-selection",
+            "version": 1,
+            "fingerprint": "a" * 64,
+        },
+    )
+    assert state["schema_version"] == 3
+    assert state["canonical_production"]["commit"] == "old-commit"
+    assert state["canonical_production"]["selection_policy"] == {
+        "policy_id": "production-selection",
+        "version": 1,
+        "fingerprint": "a" * 64,
+    }
+    assert "rules" not in state["canonical_production"]
+    assert state["selection_policy_governance"]["audit_only"] is True
+    assert state["holdout_ledger"] == {"consumed": {}}
+
+
+def test_direct_state_mutation_paths_are_rejected(tmp_memory_dir):
+    with pytest.raises(ValueError, match="direct state mutation"):
+        _safe_commit_update(
+            {"canonical_production": {"commit": "new"}},
+            memory_dir=tmp_memory_dir,
+        )
+    with pytest.raises(ValueError, match="selection_policy_governance"):
+        publish_finding(
+            "r1",
+            {"selection_policy_governance": {"audit_only": False}},
+            {
+                "summary": "治理绕过应被拒绝",
+                "metrics": {"n": 1},
+                "decision": "FINDING",
+            },
+            memory_dir=tmp_memory_dir,
+        )
+
+
 def test_state_schema_version_stamped_on_write(tmp_memory_dir):
     """Every state write stamps the schema_version so tools can detect layout."""
     claim_direction("r1", max_workers=3, memory_dir=tmp_memory_dir)
     state = read_state(tmp_memory_dir)
-    assert state.get("schema_version") == 2
+    assert state.get("schema_version") == 3
 
     # Legacy file without schema_version is readable and gets upgraded on write.
     (tmp_memory_dir / "self-improve-state.json").write_text(
         json.dumps({"canonical_production": {"commit": "abc"}}), encoding="utf-8"
     )
-    commit_update({"x": 1}, memory_dir=tmp_memory_dir)
+    _seed_update({"x": 1}, memory_dir=tmp_memory_dir)
     state = read_state(tmp_memory_dir)
-    assert state["schema_version"] == 2
+    assert state["schema_version"] == 3
     assert state["x"] == 1
 
 
@@ -89,12 +167,12 @@ def test_commit_update_preserves_existing_state_and_appends_valid_jsonl(tmp_memo
     (tmp_memory_dir / "self-improve-state.json").write_text(
         json.dumps({"champion": "old", "keep": True}), encoding="utf-8"
     )
-    result = commit_update(
+    result = _seed_update(
         {"champion": "new"},
         {"run_id": "run-1", "decision": "FALSIFIED"},
         tmp_memory_dir,
     )
-    assert result == {"champion": "new", "keep": True, "schema_version": 2}
+    assert result == {"champion": "new", "keep": True, "schema_version": 3}
     assert read_state(tmp_memory_dir) == result
     records = [
         json.loads(line)
@@ -106,7 +184,7 @@ def test_commit_update_preserves_existing_state_and_appends_valid_jsonl(tmp_memo
 
 def test_concurrent_commits_never_corrupt_state_or_jsonl(tmp_memory_dir):
     def write(index: int) -> None:
-        commit_update(
+        _seed_update(
             {f"writer_{index}": index},
             {"run_id": f"run-{index}"},
             tmp_memory_dir,
@@ -117,7 +195,7 @@ def test_concurrent_commits_never_corrupt_state_or_jsonl(tmp_memory_dir):
 
     state = read_state(tmp_memory_dir)
     expected = {f"writer_{index}": index for index in range(20)}
-    expected["schema_version"] = 2
+    expected["schema_version"] = 3
     assert state == expected
     records = [
         json.loads(line)
@@ -217,8 +295,14 @@ def test_heartbeat_detects_stale_champion(tmp_memory_dir):
     # First need a champion to publish against
     state = read_state(tmp_memory_dir)
     state["canonical_production"] = {"commit": "abc123", "n": 5}
-    commit_update(
-        {"canonical_production": state["canonical_production"]},
+    _seed_update(
+        {
+            "canonical_production": state["canonical_production"],
+            "selection_policy_governance": {
+                "audit_only": False,
+                "policy_artifact_fingerprint": "champion",
+            },
+        },
         memory_dir=tmp_memory_dir,
     )
 
@@ -247,8 +331,11 @@ def test_heartbeat_not_registered(tmp_memory_dir):
 
 
 def test_publish_champion_succeeds_with_correct_commit(tmp_memory_dir):
-    commit_update(
-        {"canonical_production": {"commit": "abc", "n": 5}},
+    _seed_update(
+        {
+            "canonical_production": {"commit": "abc", "n": 5},
+            "selection_policy_governance": {"audit_only": False},
+        },
         memory_dir=tmp_memory_dir,
     )
     claim_direction("r1", max_workers=3, memory_dir=tmp_memory_dir)
@@ -274,8 +361,11 @@ def test_publish_champion_succeeds_with_correct_commit(tmp_memory_dir):
 
 
 def test_publish_champion_fails_on_stale_commit(tmp_memory_dir):
-    commit_update(
-        {"canonical_production": {"commit": "abc", "n": 5}},
+    _seed_update(
+        {
+            "canonical_production": {"commit": "abc", "n": 5},
+            "selection_policy_governance": {"audit_only": False},
+        },
         memory_dir=tmp_memory_dir,
     )
     claim_direction("r1", max_workers=3, memory_dir=tmp_memory_dir)
@@ -291,8 +381,11 @@ def test_publish_champion_fails_on_stale_commit(tmp_memory_dir):
 
 
 def test_publish_champion_invalidates_other_researchers(tmp_memory_dir):
-    commit_update(
-        {"canonical_production": {"commit": "abc", "n": 5}},
+    _seed_update(
+        {
+            "canonical_production": {"commit": "abc", "n": 5},
+            "selection_policy_governance": {"audit_only": False},
+        },
         memory_dir=tmp_memory_dir,
     )
     claim_direction("r1", max_workers=3, memory_dir=tmp_memory_dir)
@@ -317,7 +410,7 @@ def test_publish_champion_invalidates_other_researchers(tmp_memory_dir):
 
 
 def test_selection_policy_publish_is_audit_only_by_default(tmp_memory_dir):
-    commit_update(
+    _seed_update(
         {
             "canonical_production": {
                 "commit": "abc",
@@ -343,13 +436,16 @@ def test_selection_policy_publish_is_audit_only_by_default(tmp_memory_dir):
 
 
 def test_selection_policy_publish_requires_db_evidence_and_canary_pass(tmp_memory_dir):
-    commit_update(
+    _seed_update(
         {
             "canonical_production": {
                 "commit": "abc",
                 "selection_policy": {"policy_id": "production-selection", "version": 1, "fingerprint": "champion"},
             },
-            "selection_policy_governance": {"audit_only": False},
+            "selection_policy_governance": {
+                "audit_only": False,
+                "policy_artifact_fingerprint": "champion",
+            },
             "release_state": {
                 "status": "canary_passed",
                 "evidence_id": "exp-1",
@@ -387,25 +483,91 @@ def test_selection_policy_publish_requires_db_evidence_and_canary_pass(tmp_memor
 def test_release_state_machine_requires_real_deployment_fingerprint(tmp_memory_dir):
     verified = advance_release(
         "verify_evidence",
-        {"evidence_id": "exp-1", "policy_fingerprint": "candidate"},
+        {"evidence_id": "exp-1"},
         tmp_memory_dir,
+        evidence_loader=lambda _id: {
+            "schema_version": 2,
+            "experiment_kind": "production_policy",
+            "status": "completed",
+            "evidence_fingerprint": "e" * 64,
+            "challenger_policy_fingerprint": "candidate",
+            "decision": {
+                "should_publish": True,
+                "decision": "PRODUCTION_CANDIDATE",
+            },
+        },
     )
     assert verified["status"] == "evidence_verified"
     with pytest.raises(ValueError, match="deployment_fingerprint"):
         transition_release_state(verified, "deployment_confirmed", {})
+    from app.services.backtest.deployment_adapter import LocalPolicyDeploymentAdapter
+
+    receipt = LocalPolicyDeploymentAdapter(tmp_memory_dir / "deployments").stage(
+        policy_fingerprint="candidate", repo_commit="abc"
+    )
     canary = advance_release(
         "deployment_confirmed",
         {
-            "deployment_adapter": "test-adapter",
-            "deployment_fingerprint": "deployment-receipt",
-            "deployed_policy_fingerprint": "candidate",
+            **receipt,
+            "receipt": receipt,
         },
         tmp_memory_dir,
     )
     assert canary["status"] == "canary_running"
-    rollback = advance_release("canary_failed", {"reason": "zero output"}, tmp_memory_dir)
-    assert rollback["status"] == "rollback_required"
-    assert advance_release("rollback_confirmed", {}, tmp_memory_dir)["status"] == "rolled_back"
+    passed = advance_release(
+        "canary_passed",
+        {
+            "canary_evidence_id": "canary-1",
+            "observed_policy_fingerprint": "candidate",
+            "error_count": 0,
+            "coverage_gate_passed": True,
+            "productive_day_gate_passed": True,
+        },
+        tmp_memory_dir,
+    )
+    assert passed["status"] == "canary_passed"
+    completed = advance_release("champion_published", {}, tmp_memory_dir)
+    assert completed["status"] == "completed"
+
+
+def test_canary_failure_rolls_back_local_candidate_pointer(tmp_memory_dir):
+    evidence = {
+        "schema_version": 2,
+        "experiment_kind": "production_policy",
+        "status": "completed",
+        "evidence_fingerprint": "f" * 64,
+        "challenger_policy_fingerprint": "candidate",
+        "decision": {"should_publish": True, "decision": "PRODUCTION_CANDIDATE"},
+    }
+    advance_release(
+        "verify_evidence",
+        {"evidence_id": "exp-rollback"},
+        tmp_memory_dir,
+        evidence_loader=lambda _id: evidence,
+    )
+    from app.services.backtest.deployment_adapter import LocalPolicyDeploymentAdapter
+
+    root = tmp_memory_dir / "deployment"
+    adapter = LocalPolicyDeploymentAdapter(root)
+    receipt = adapter.stage(policy_fingerprint="candidate")
+    advance_release(
+        "deployment_confirmed",
+        {**receipt, "receipt": receipt, "deployment_root": str(root)},
+        tmp_memory_dir,
+    )
+    failed = advance_release(
+        "canary_failed",
+        {"reason": "fingerprint mismatch"},
+        tmp_memory_dir,
+    )
+    assert failed["status"] == "rollback_required"
+    assert not adapter.candidate_pointer.exists()
+    rolled_back = advance_release(
+        "rollback_confirmed",
+        {"rollback_receipt": failed["rollback_receipt"]},
+        tmp_memory_dir,
+    )
+    assert rolled_back["status"] == "rolled_back"
 
 
 def test_policy_health_freezes_after_five_opportunity_days_all_policy_blocked(tmp_memory_dir):
@@ -447,8 +609,11 @@ def test_no_opportunity_day_does_not_count_toward_inactive_window() -> None:
 
 
 def test_publish_finding_appends_and_does_not_mutate_champion(tmp_memory_dir):
-    commit_update(
-        {"canonical_production": {"commit": "abc", "n": 5}},
+    _seed_update(
+        {
+            "canonical_production": {"commit": "abc", "n": 5},
+            "selection_policy_governance": {"audit_only": False},
+        },
         memory_dir=tmp_memory_dir,
     )
     claim_direction("r1", max_workers=3, memory_dir=tmp_memory_dir)
@@ -501,9 +666,10 @@ def test_state_patch_deep_merges_scanned_grids_and_unions_lists(tmp_memory_dir):
     re-allocate an already-falsified grid.
     """
     # Seed state with an existing completed grid scan + archived direction.
-    commit_update(
+    _seed_update(
         {
             "canonical_production": {"commit": "abc", "n": 5},
+            "selection_policy_governance": {"audit_only": False},
             "scanned_grids": {
                 "entry_gap_filter_on_current_champion": {
                     "decision": "FALSIFIED_ALL",
@@ -556,9 +722,10 @@ def test_state_patch_deep_merges_scanned_grids_and_unions_lists(tmp_memory_dir):
 
 def test_publish_champion_patch_deep_merges_scanned_grids(tmp_memory_dir):
     """publish_champion with a scanned_grids patch must merge, not replace."""
-    commit_update(
+    _seed_update(
         {
             "canonical_production": {"commit": "abc", "n": 5},
+            "selection_policy_governance": {"audit_only": False},
             "scanned_grids": {
                 "stop_loss_grid": {"decision": "FALSIFIED", "status": "COMPLETED"}
             },
@@ -595,7 +762,7 @@ def test_claim_does_not_reallocate_scanned_grid_direction(tmp_memory_dir):
     param list uses 'score_line_threshold' — the substring check missed it and
     the direction pool repeatedly handed out an already-falsified grid.
     """
-    commit_update(
+    _seed_update(
         {
             "canonical_production": {"commit": "abc", "n": 5},
             "scanned_grids": {
@@ -629,7 +796,7 @@ def test_claim_does_not_reallocate_falsified_factor_direction(tmp_memory_dir):
     "new_strategy:capital_flow_momentum:做多资金流入被否证..." but the old
     "factor"/"因子" substring check missed it, so the pool kept handing it out.
     """
-    commit_update(
+    _seed_update(
         {
             "canonical_production": {"commit": "abc", "n": 5},
             "archived_falsified_directions": [
@@ -657,7 +824,7 @@ def test_claim_does_not_reallocate_archived_oos_window(tmp_memory_dir):
     check `d not in archived` missed the suffixed entry and the pool handed it
     out again.
     """
-    commit_update(
+    _seed_update(
         {
             "canonical_production": {"commit": "abc", "n": 5},
             "archived_falsified_directions": [
@@ -700,8 +867,11 @@ def test_concurrent_claims_never_allocate_duplicate_directions(tmp_memory_dir):
 
 def test_concurrent_publish_champion_only_first_wins(tmp_memory_dir):
     """When two researchers try to publish, only the first CAS succeeds."""
-    commit_update(
-        {"canonical_production": {"commit": "abc", "n": 5}},
+    _seed_update(
+        {
+            "canonical_production": {"commit": "abc", "n": 5},
+            "selection_policy_governance": {"audit_only": False},
+        },
         memory_dir=tmp_memory_dir,
     )
     claim_direction("r1", max_workers=3, memory_dir=tmp_memory_dir)
@@ -747,7 +917,7 @@ def test_concurrent_reads_and_writes_coexist(tmp_memory_dir):
 
     def writer(i: int) -> None:
         try:
-            commit_update(
+            _seed_update(
                 {f"key_{i}": i},
                 {"run_id": f"run-{i}"},
                 tmp_memory_dir,
@@ -786,7 +956,7 @@ def test_claim_direction_purges_stale_workers(tmp_memory_dir):
     active["r1"]["last_heartbeat"] = old.isoformat()
 
     # Write back the aged state
-    commit_update({"researcher_registry": state["researcher_registry"]}, memory_dir=tmp_memory_dir)
+    _seed_update({"researcher_registry": state["researcher_registry"]}, memory_dir=tmp_memory_dir)
 
     # Now a new claim should succeed (r1 purged as stale)
     r = claim_direction("r2", max_workers=1, memory_dir=tmp_memory_dir)
@@ -810,7 +980,7 @@ def _age_heartbeat(tmp_memory_dir, researcher_id: str) -> None:
         seconds=HEARTBEAT_TIMEOUT_SECONDS + 60
     )
     active[researcher_id]["last_heartbeat"] = old.isoformat()
-    commit_update(
+    _seed_update(
         {"researcher_registry": state["researcher_registry"]},
         memory_dir=tmp_memory_dir,
     )
@@ -862,7 +1032,7 @@ def test_prune_claimed_directions_reclaims_orphaned(tmp_memory_dir):
     # while its direction stays in claimed_directions.
     state = read_state(tmp_memory_dir)
     del state["researcher_registry"]["active_researchers"]["r2"]
-    commit_update(
+    _seed_update(
         {"researcher_registry": state["researcher_registry"]},
         memory_dir=tmp_memory_dir,
     )

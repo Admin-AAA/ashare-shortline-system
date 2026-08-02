@@ -51,6 +51,14 @@
 
 ## 3. 研究员生命周期
 
+每轮研究的第一条状态命令必须是幂等迁移；它会把旧 state 的复制规则迁移为当前 repo policy 的 `id/version/fingerprint`，初始化 holdout ledger，并保持 `audit_only=true`：
+
+```bash
+backend/.venv/bin/python backend/scripts/self_improve_state.py migrate-state
+```
+
+`commit` 已退役；`publish-finding` 只能追加研究结果，不能修改 `canonical_production`、selection governance、release state 或 researcher registry。所有 selection 变更都必须经过 canonical evidence、ReleasePolicy v2 和发布状态机。
+
 每轮生成唯一 `researcher_id=si-<timestamp>`，然后：
 
 ```bash
@@ -165,6 +173,8 @@ Evidence schema v2 至少包含：
 - split policy、decision scope；
 - 每臂全窗口与 split metrics；
 - `PortfolioCoverageEvidence`；
+- productive days、opportunity capture、productive-day capture、连续 opportunity abstain；
+- paired opportunity-cost：仅统计 champion 选中而 challenger 因 changed rule 新增拒绝的候选，包含新增拒绝执行数、盈利数、丢失正收益/净收益、drop owner、regime 和缺失 outcome bars；
 - rule verdict summary；
 - vectorbt cross-validation；
 - evidence fingerprint。
@@ -175,10 +185,12 @@ Challenger 只有同时满足以下条件才可成为发布候选：
 
 - 原收益/PF/回撤比较条件在 purged OOS 成立；
 - OOS 至少一笔 executed trade，零票 challenger 一律拒绝；
+- OOS 至少一个 productive day，且 productive days 不低于 champion 的 50%（至少 1 天）；
 - opportunity capture rate ≥ `max(20%, champion 的 50%)`；
 - 最大连续 opportunity abstain ≤ 5 个交易日；
 - 恰好一个 changed rule；
 - 两臂 vectorbt truth 通过。
+- changed rule 在 OOS 不得新增丢弃任何 positive executed trade；新增拒绝的 counterfactual outcome 不得缺失；
 
 零票 champion 不阻止非零恢复 challenger；但 challenger 必须通过全部收益和 liveness gates。禁止用覆盖下降、abstain 增加或删除亏损交易来解释为“准确率提升”。任何 filter 必须报告删掉的盈利/亏损、drop owner、机会成本和跨 regime 表现。
 
@@ -218,6 +230,7 @@ backend/.venv/bin/python backend/scripts/self_improve_state.py advance-release \
 ## 9. 记录、提交与安全
 
 - FINDING 用 `publish-finding`；不得通过 `commit` 改 `canonical_production`。
+- untouched holdout 必须先 claim；同一 fingerprint + hypothesis + experiment kind 幂等复用，其他 hypothesis 不能重复消费；消费后自动降级为 validation。
 - selection policy 的 state 只保存 policy id/version/fingerprint，不复制规则。
 - 记录 hypothesis id、input fingerprint、candidate snapshot fingerprint、evidence id/fingerprint、changed rule、OOS metrics、coverage、decision 和回滚点。
 - 测量修复及测试可以合并；生产策略语义变更必须经过上述完整状态机。

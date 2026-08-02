@@ -76,6 +76,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--candidate-snapshot-output",
         help="Optional path to write the generated immutable candidate snapshot.",
     )
+    parser.add_argument(
+        "--holdout-fingerprint",
+        help="Untouched holdout fingerprint; required for formal production-policy evidence.",
+    )
     parser.add_argument("--score-line", type=float, default=72.0)
     parser.add_argument("--output-count", type=int, default=6)
     return parser
@@ -159,6 +163,8 @@ def build_spec(
             score_line=float(args.score_line),
             output_count=int(args.output_count),
             execution_policy=execution_policy,
+            holdout_fingerprint=args.holdout_fingerprint,
+            holdout_scope="untouched_holdout",
         )
 
     start = _required_arg(args, "start")
