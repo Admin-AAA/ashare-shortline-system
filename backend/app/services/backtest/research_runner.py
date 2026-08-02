@@ -753,6 +753,13 @@ class ResearchBacktestRunner:
         self._strategy_registry = strategy_registry
         self._snapshot_builder = snapshot_builder or LocalResearchSnapshotBuilder(self._session)
 
+    def resolve_request(self, request: BacktestRequest) -> BacktestRequest:
+        """Freeze the installed strategy version and its validated parameters."""
+
+        descriptor, _strategy = self._resolve_strategy(request)
+        validated_request = self._request_with_validated_parameters(request, descriptor)
+        return replace(validated_request, strategy_version=descriptor.effective_version)
+
     def preflight(self, request: BacktestRequest) -> dict[str, Any]:
         descriptor, _strategy = self._resolve_strategy(request)
         resolved_request = self._request_with_validated_parameters(request, descriptor)
@@ -782,6 +789,21 @@ class ResearchBacktestRunner:
             resolved_request,
             data_requirement=descriptor.data_requirement,
         )
+        return self._execute(resolved_request, descriptor, strategy, bundle)
+
+    def run_on_snapshot(self, request: BacktestRequest, snapshot_id: str) -> dict[str, Any]:
+        """Execute a new request against one previously captured immutable snapshot."""
+
+        if not isinstance(snapshot_id, str) or not snapshot_id.strip():
+            raise BacktestValidationError(
+                BacktestErrorCode.INVALID_REQUEST,
+                "snapshot_id must be a non-empty string",
+            )
+        descriptor, strategy = self._resolve_strategy(request)
+        validated_request = self._request_with_validated_parameters(request, descriptor)
+        resolved_request = replace(validated_request, strategy_version=descriptor.effective_version)
+        bundle = self._load_snapshot_bundle(snapshot_id.strip())
+        _validate_snapshot_selector(resolved_request, bundle.signal_dates)
         return self._execute(resolved_request, descriptor, strategy, bundle)
 
     def replay(self, backtest_id: str, *, force_rerun: bool = True) -> dict[str, Any]:
@@ -1374,6 +1396,26 @@ def _selector_dates(request: BacktestRequest) -> tuple[str | None, str | None, s
     if isinstance(request.date_selector, SingleDate):
         return request.date_selector.signal_date, None, None
     return None, request.date_selector.start_date, request.date_selector.end_date
+
+
+def _validate_snapshot_selector(request: BacktestRequest, signal_dates: Sequence[str]) -> None:
+    dates = tuple(signal_dates)
+    if isinstance(request.date_selector, SingleDate):
+        compatible = dates == (request.date_selector.signal_date,)
+    else:
+        compatible = bool(dates) and all(
+            request.date_selector.start_date <= signal_date <= request.date_selector.end_date
+            for signal_date in dates
+        )
+    if not compatible:
+        raise BacktestValidationError(
+            BacktestErrorCode.INVALID_REQUEST,
+            "snapshot signal dates are incompatible with the request date selector",
+            details={
+                "snapshot_signal_dates": list(dates),
+                "request_date_selector": request.date_selector.canonical_payload(),
+            },
+        )
 
 
 def _snapshot_ready(snapshot: DataSnapshot) -> bool:

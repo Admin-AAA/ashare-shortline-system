@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-from app.engine.backtest import ExecutionPolicy, Trade, TradeOutcome
+from app.engine.backtest import BarInput, ExecutionPolicy, RecommendationInput, Trade, TradeOutcome
+from app.engine.simulation import simulate
 from app.services.backtest.vectorbt_validation import cross_validate_signals, cross_validate_trades
 
 
@@ -87,3 +88,25 @@ def test_real_trade_projection_reports_first_divergence() -> None:
     assert report.passed is False
     assert report.first_divergence is not None
     assert report.first_divergence.trade_id.startswith("trade_")
+
+
+def test_real_trade_projection_does_not_double_count_slippage_and_fees() -> None:
+    policy = ExecutionPolicy(
+        horizon_days=2,
+        stop_loss_pct=None,
+        take_profit_pct=None,
+    )
+    trade = simulate(
+        RecommendationInput("000001", "2026-01-01", 10.0),
+        (
+            BarInput("000001", "2026-01-02", 10.0, 10.5, 9.8, 10.2, 1000),
+            BarInput("000001", "2026-01-03", 10.2, 11.0, 10.0, 10.8, 1000),
+        ),
+        policy,
+    ).trade
+
+    report = cross_validate_trades((trade,), policy)
+
+    assert report.passed is True
+    assert report.absolute_difference <= report.tolerance
+    assert "slippage_is_already_reflected_in_realized_entry_and_exit_prices" in report.semantic_exclusions

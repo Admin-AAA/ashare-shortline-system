@@ -1,8 +1,11 @@
-"""PATH-A 策略信号回测：在全历史上用 production 参数验证 20cm-only champion。
+"""PATH-A 探索性候选源：在全历史生成规则候选并委托 production policy 删票。
 
 对每个交易日重建候选集，用 run_strategy() 生成信号 →
 apply_pool_rules 级聚合过滤（20cm board/DS 排除/结构性强势 veto/regime 惩罚）→
-因果退出引擎模拟离场 → 扣费后比较 champion vs challenger 参数。
+因果退出引擎模拟离场 → 扣费后比较 exploratory champion/challenger 参数。
+
+本脚本不得生成 PRODUCTION evidence；正式发布只接受 canonical
+``production_policy`` experiment 的数据库证据。
 
 生产 champion (bf509b8):
   board_universe=20cm, stop_loss=-4.5%, take_profit=6.0%,
@@ -30,15 +33,18 @@ from sqlalchemy.orm import Session, load_only
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.engine.aggregator import (
-    STRUCTURAL_STRONG_HARD_VETO_REGIME,
     _is_20cm_board,
-    _market_base,
-    _market_sentiment,
+)
+from app.engine.production_policy import (
+    DEFAULT_PRODUCTION_SELECTION_POLICY,
+    SelectionPolicyContext,
+    evaluate_selection_policy,
 )
 from app.engine.skill_loader import load_skills
 from app.engine.strategy import StrategyContext, StrategySkill
 from app.engine.strategy_runner import run_strategy
 from app.models.tables import DailyKbar, Stock
+from app.services.market_source.snapshot import _breadth_from_counts
 from app.services.outcome_simulation import (
     STOP_LOSS_GAP_CAP_PCT,
     TRAILING_STOP_ACTIVATE_PCT,
@@ -361,16 +367,7 @@ class PathABacktestRunner:
     def _market_context_for_date(
         self, td: str, bars_by_date: dict[str, list[DailyKbar]]
     ) -> dict[str, Any]:
-        """用当日的全市场 bars 重建 regime（与 production 同源实现）。
-
-        MEASUREMENT_FIX (2026-08-01): 原实现用自带阈值（0.62/0.55/0.42）判 regime，
-        与生产 `_market_base`（0.65/0.50/0.35）不一致——强牛/偏多被降级为结构性
-        强势/震荡，导致 PATH-A 弱势信号 ≠ 生产弱势（曾致误回滚弱势放宽 cap）。
-        现复用生产 `_market_base`/`_market_sentiment`，映射到 PATH-A 语义：
-          - 强牛/偏多 → "强势"（生产对强牛+6/偏多+0，path A 强势+8 偏严但方向一致）
-          - 震荡 → "震荡"；弱势 → "弱势"
-          - "结构性强势" 由 sentiment 高潮×强牛组合保留（生产无此标签，path A 特有）
-        """
+        """用行情快照模块的权威 breadth classifier 重建决策时 regime。"""
         rows = bars_by_date.get(td, [])
         sample_count = len(rows)
         up_count = sum(1 for r in rows if (r.pct_chg or 0) > 0)
@@ -378,25 +375,14 @@ class PathABacktestRunner:
         limit_up_count = sum(1 for r in rows if (r.pct_chg or 0) >= 9.8)
         limit_down_count = sum(1 for r in rows if (r.pct_chg or 0) <= -9.8)
         up_ratio = up_count / max(1, sample_count)
-        limit_up_ratio = limit_up_count / max(1, sample_count)
-
-        # 生产统一判定：_market_base (强牛/偏多/震荡/弱势) + _market_sentiment
-        snapshot = {
-            "sample_count": sample_count,
-            "up_count": up_count,
-            "down_count": down_count,
-            "limit_up_count": limit_up_count,
-            "limit_down_count": limit_down_count,
-        }
-        market_base = _market_base(snapshot)
-        sentiment = _market_sentiment(snapshot)
-
-        if market_base in ("强牛", "偏多"):
-            regime = "强势"
-        elif market_base == "弱势":
-            regime = "弱势"
-        else:
-            regime = "震荡"
+        breadth = _breadth_from_counts(
+            sample_count,
+            up_count,
+            down_count,
+            limit_up_count,
+            limit_down_count,
+        )
+        regime = str(breadth["regime"])
 
         # 板块轮动动能：按 industry 统计当日上涨比例（板块内动能）。
         # sector_rotation_momentum 假设：强势板块中的个股更易延续上涨。
@@ -420,8 +406,8 @@ class PathABacktestRunner:
             "limit_down_count": limit_down_count,
             "up_ratio": round(up_ratio, 4),
             "regime": regime,
-            "market_base": market_base,
-            "market_sentiment": sentiment,
+            "market_regime": regime,
+            "breadth": breadth,
             "industry_momentum": industry_momentum,
         }
 
@@ -587,10 +573,8 @@ class PathABacktestRunner:
         market_context: dict[str, Any],
         score_line: float,
     ) -> list[SignalRecord]:
-        """应用与 production aggregator apply_pool_rules 一致的过滤逻辑。"""
+        """PATH-A 只生成候选；正式删票语义委托给唯一 production policy。"""
         config = self._config
-        regime = market_context["regime"]
-        limit_down_count = market_context["limit_down_count"]
 
         # 按 score 降序排列
         ordered = sorted(signals, key=lambda s: s.score, reverse=True)
@@ -635,50 +619,48 @@ class PathABacktestRunner:
                 if not (sr.day_pct_chg > 0 and sr.vol5_20 < 0.8)
             ]
 
-        # 应用 score_line 和 regime 调整
-        result: list[SignalRecord] = []
-        for sr in deduped:
-            effective_sl = score_line
-            passed = True
-
-            # 结构性强势 hard veto
-            if config.get("structural_strong_hard_veto") and regime == STRUCTURAL_STRONG_HARD_VETO_REGIME:
-                passed = False
-            # 强势 +8 惩罚
-            if regime == "强势":
-                effective_sl = round(effective_sl + 8.0, 2)
-            # 震荡 × pos60<50 交叉否决
-            if regime == "震荡" and 0 < sr.pos60 < 50 and not sr.is_limit_up:
-                effective_sl = round(effective_sl + 12.0, 2)
-            # 弱势 × chg20<15 交叉惩罚
-            if regime == "弱势" and 0 <= sr.chg20 < 15 and not sr.is_limit_up:
-                effective_sl = round(effective_sl + 12.0, 2)
-
-            # 恐慌日否决
-            if limit_down_count > 100:
-                effective_sl = round(effective_sl + 12.0, 2)
-
-            if passed and sr.score >= effective_sl:
-                result.append(sr)
-
-        # 日输出上限：模拟生产不无限刷屏，限制与 resolve_display_limit 对称
-        # 结构性强势 0 票，强势不限、弱市/冰点限制 2、高潮折半、普通日最多 15
-        sentiment = market_context.get("up_ratio", 0.5)
-        if regime == STRUCTURAL_STRONG_HARD_VETO_REGIME and config.get("structural_strong_hard_veto"):
-            max_output = 0
-        elif regime == "弱势" and sentiment < 0.2:
-            max_output = 2
-        elif sentiment >= 0.62:
-            max_output = len(result)  # 强势日不限
-        else:
-            max_output = 15
-
-        # 高潮折半
-        limit_up_ratio = market_context.get("limit_up_count", 0) / max(1, market_context.get("sample_count", 1))
-        if limit_up_ratio >= 0.03 and sentiment >= 0.62:
-            max_output = max(1, len(result) // 2)
-
-        return result[:max_output]
+        policy = replace(
+            DEFAULT_PRODUCTION_SELECTION_POLICY,
+            board_universe=str(config.get("board_universe") or "all"),
+            excluded_20cm_buckets=tuple(
+                sorted(config.get("excluded_20cm_strategies") or ())
+            ),
+            structural_strong_hard_veto=bool(
+                config.get("structural_strong_hard_veto", True)
+            ),
+        )
+        cards = [
+            {
+                "code": sr.code,
+                "bucket": sr.strategy_id,
+                "final_score": sr.score,
+                "recommend_price": sr.close,
+                "hard_veto": sr.hard_veto,
+                "pos60": sr.pos60,
+                "chg20": sr.chg20,
+                "is_limit_up": sr.is_limit_up,
+                "evidence_quality_score": 100.0,
+                "data_completeness_score": 100.0,
+                "data_authenticity": 1.0,
+                "data_quality": {"missing_fields": []},
+            }
+            for sr in deduped
+        ]
+        evaluated = evaluate_selection_policy(
+            cards,
+            SelectionPolicyContext(
+                score_line=score_line,
+                output_count=int(config.get("output_count") or 6),
+                market_snapshot=market_context,
+                agent_available=False,
+            ),
+            policy,
+        )
+        selected = {
+            (str(card.get("code") or ""), str(card.get("bucket") or ""))
+            for card in evaluated.recommendations
+        }
+        return [sr for sr in deduped if (sr.code, sr.strategy_id) in selected]
 
     def _simulate_trade(
         self,
@@ -1220,6 +1202,9 @@ def main() -> int:
         # ── JSON 输出 ──
         if args.output:
             output_data = {
+                "evidence_scope": "EXPLORATORY",
+                "production_eligible": False,
+                "candidate_source": "path-a-adapter",
                 "champion_metrics": {
                     label: {
                         "n_trades": m.n_trades,

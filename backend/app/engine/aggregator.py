@@ -229,16 +229,18 @@ def resolve_score_line_context(
     base_score_line: float,
     market_snapshot: dict[str, Any] | None = None,
     risk_template: str = "balanced",
+    selection_policy: Any | None = None,
 ) -> dict[str, Any]:
     base = float(base_score_line or 0)
     market_base = _market_base(market_snapshot)
     sentiment = _market_sentiment(market_snapshot)
-    market_adjustment = {
+    market_adjustments = dict(getattr(selection_policy, "market_base_score_adjustments", ())) or {
         "强牛": 6.0,  # 回测：强势 12 笔 0% WR，-6.01% avg（从+3.0提到+6.0，彻底过滤）
         "偏多": 0.0,
         "震荡": 0.0,
         "弱势": 2.0,
-    }.get(market_base, 0.0)
+    }
+    market_adjustment = market_adjustments.get(market_base, 0.0)
     # 验证（第103轮 T3，148 笔去重，score_line_meta.market_base）：
     #   弱势·高潮 78.1% 胜率（32 笔，反转信号，+7 不抑制 ✅）
     #   弱势·活跃 76.7% 胜率（30 笔，+4.3 不抑制 ✅）
@@ -247,13 +249,19 @@ def resolve_score_line_context(
     # 结论：参数方向正确（弱势放宽、强势过滤），印证第92轮教训（弱势是反转信号）
     # 高潮阶段分数线调整：强牛/偏多/震荡·高潮胜率 < 50%（43-47%），需提高门槛
     # 弱势·高潮是反转信号（75.9% 胜率），保持 +5
-    _climax_extra = 8.0 if market_base in ("强牛", "偏多", "震荡") else 0.0
-    sentiment_adjustment = {
-        "高潮": 5.0 + _climax_extra,
+    _climax_extra_value = float(getattr(selection_policy, "climax_nonweak_extra", 8.0))
+    _climax_extra = _climax_extra_value if market_base in ("强牛", "偏多", "震荡") else 0.0
+    sentiment_adjustments = dict(getattr(selection_policy, "sentiment_score_adjustments", ())) or {
+        "高潮": 5.0,
         "活跃": 3.0,  # 回测验证：+5.0 导致更多低质量交易（124笔 vs 111笔），WR 下降 4.5pp
         "平淡": 0.0,
         "冰点": -3.0 if market_base == "弱势" else 0.0,
-    }.get(sentiment, 0.0)
+    }
+    sentiment_adjustment = sentiment_adjustments.get(sentiment, 0.0)
+    if sentiment == "高潮":
+        sentiment_adjustment += _climax_extra
+    if sentiment == "冰点" and market_base != "弱势":
+        sentiment_adjustment = 0.0
     risk_adjustment = {
         "conservative": 2.0,
         "balanced": 0.0,
@@ -262,7 +270,9 @@ def resolve_score_line_context(
     # 上限对齐生产部署：生产版本无 95 硬上限，强牛·高潮阶段分数线可达 ~119。
     # 旧值 95 会让高潮阶段线被压低、与回测/生产不一致；提到 120 仅放开上限，
     # 不影响线 < 95 的常态场景。下限 35 保持不变。
-    effective = round(max(35.0, min(120.0, base + market_adjustment + sentiment_adjustment + risk_adjustment)), 2)
+    minimum = float(getattr(selection_policy, "score_line_minimum", 35.0))
+    maximum = float(getattr(selection_policy, "score_line_maximum", 120.0))
+    effective = round(max(minimum, min(maximum, base + market_adjustment + sentiment_adjustment + risk_adjustment)), 2)
     return {
         "base_score_line": round(base, 2),
         "market_base": market_base,
@@ -276,7 +286,10 @@ def resolve_score_line_context(
 def resolve_display_limit(
     output_count: int | None,
     market_snapshot: dict[str, Any] | None = None,
+    selection_policy: Any | None = None,
 ) -> int | None:
+    if selection_policy is not None and not bool(selection_policy.output_limit_enabled):
+        return None
     if output_count is None:
         return None
     count = int(output_count or 0)
@@ -285,9 +298,10 @@ def resolve_display_limit(
     market_base = _market_base(market_snapshot)
     sentiment = _market_sentiment(market_snapshot)
     if sentiment == "高潮":
-        return max(1, min(count, int((count + 1) // 2)))
+        divisor = max(1, int(getattr(selection_policy, "climax_output_divisor", 2)))
+        return max(1, min(count, int((count + divisor - 1) // divisor)))
     if market_base == "弱势" and sentiment == "冰点":
-        return min(count, 2)
+        return min(count, int(getattr(selection_policy, "weak_ice_output_limit", 2)))
     return None
 
 
@@ -914,6 +928,7 @@ def apply_pool_rules(
     same_day_industry_counts: dict[str, int] | None = None,
     agent_available: bool = True,
     board_universe: str | None = None,
+    selection_policy: Any | None = None,
 ) -> list[dict[str, Any]] | dict[str, Any]:
     """按分数线过滤正式推荐，展示上限不参与核心选股决策。
 
@@ -924,11 +939,12 @@ def apply_pool_rules(
     配置级缺失不会被单次 review 异常吞掉，避免任何瞬时故障都必然零推荐。
     """
     if display_limit is None and output_count is not None:
-        display_limit = resolve_display_limit(output_count, market_snapshot)
+        display_limit = resolve_display_limit(output_count, market_snapshot, selection_policy)
     score_line_context = resolve_score_line_context(
         score_line if score_line is not None else min_score,
         market_snapshot=market_snapshot,
         risk_template=risk_template,
+        selection_policy=selection_policy,
     )
     # 高潮/强牛阶段禁用动态降线：此阶段宁可零推荐也不降线，避免追高陷阱。
     # 观察池仅在禁用降线的阶段（即真正的高潮/强牛）作为兜底，其余阶段由软降线处理。
@@ -946,26 +962,43 @@ def apply_pool_rules(
         key=lambda card: float(card.get("final_score", 0)),
         reverse=True,
     )
+    if selection_policy is not None:
+        board_universe = selection_policy.board_universe
     if board_universe == "20cm":
-        ordered = [
-            card
-            for card in ordered
-            if _is_20cm_board(str(card.get("code") or ""))
-        ]
+        kept_by_board: list[dict[str, Any]] = []
+        for card in ordered:
+            if _is_20cm_board(str(card.get("code") or "")):
+                kept_by_board.append(card)
+                continue
+            card["policy_drop_owner"] = "board_universe"
+            card.setdefault("policy_verdict_steps", []).append({
+                "rule_id": "board_universe",
+                "action": "drop",
+                "reason": "formal universe 仅允许 20cm 板块",
+            })
+        ordered = kept_by_board
         # 20cm 策略过滤：daily-stock-analysis-skill / chao-gu-yang-jia-skill 在 20cm
         # 表现显著弱于其他策略（DSA clean≥72 n=19 WR=42% avg=-1.17%；炒股养家
         # clean≥72 n=15 WR=33% avg=-1.43%，跨9交易日分散非单日聚集），其逻辑在
         # 高波动 20cm 股票上失效。在 20cm universe 中过滤掉这些策略的推荐，
         # 但保留其 10cm 推荐不受影响。
-        EXCLUDED_20CM_BUCKETS = frozenset({
-            "daily-stock-analysis-skill",
-            "chao-gu-yang-jia-skill",
-        })
-        ordered = [
-            card
-            for card in ordered
-            if str(card.get("bucket") or "") not in EXCLUDED_20CM_BUCKETS
-        ]
+        EXCLUDED_20CM_BUCKETS = frozenset(
+            selection_policy.excluded_20cm_buckets
+            if selection_policy is not None
+            else {"daily-stock-analysis-skill", "chao-gu-yang-jia-skill"}
+        )
+        kept_by_bucket: list[dict[str, Any]] = []
+        for card in ordered:
+            if str(card.get("bucket") or "") not in EXCLUDED_20CM_BUCKETS:
+                kept_by_bucket.append(card)
+                continue
+            card["policy_drop_owner"] = "excluded_strategy_bucket"
+            card.setdefault("policy_verdict_steps", []).append({
+                "rule_id": "excluded_strategy_bucket",
+                "action": "drop",
+                "reason": f"20cm 排除策略桶 {card.get('bucket') or ''}",
+            })
+        ordered = kept_by_bucket
     seen_codes: set[str] = set()
     deduped: list[dict[str, Any]] = []
     for card in ordered:
@@ -1015,10 +1048,14 @@ def apply_pool_rules(
         # 这是动能副产品而非"回落均线追弱"信号。惩罚误伤 limit-up-reseal-relay
         # 等涨停动能策略（1186 outcomes 中 0 笔，根因：92 分候选被 82+8+6=96 拒绝）。
         _is_limit_up_card = bool(card.get("is_limit_up"))
+        _support_penalty = (
+            float(selection_policy.strong_support_ma5_penalty)
+            if selection_policy is not None else 6.0
+        )
         if _snapshot_regime in ("结构性强势", "强势") and card.get("support_ma5") and not _is_limit_up_card:
             # 提高门槛 6 分（约等于 21pp 胜率差距对应的合理惩罚）
-            effective_score_line = round(effective_score_line + 6.0, 2)
-            card["_regime_support_ma5_penalty"] = 6.0
+            effective_score_line = round(effective_score_line + _support_penalty, 2)
+            card["_regime_support_ma5_penalty"] = _support_penalty
         # 结构性强势/强势阶段全局门槛：实盘去重 90 笔验证
         # 强势 WR=14.3%(21笔,avg=-2.23%)，结构性强势 WR=28.6%(14笔,avg=-2.15%)
         # 第一性原理：强势阶段已涨完，次日均值回归；任何分数都难盈利
@@ -1027,7 +1064,15 @@ def apply_pool_rules(
         #   - 强势 +4→76：放过 1 笔(score=77.5, 仍亏 -6.68%)，需更激进
         #   - 强势 +8→80：过滤全部 21 笔，净省 -6.68% 亏损
         # 两阶段因果机制不同：结构性强势主线品种仍有筛选价值，强势普涨追高必亏
-        if _snapshot_regime == STRUCTURAL_STRONG_HARD_VETO_REGIME:
+        _structural_veto = (
+            bool(selection_policy.structural_strong_hard_veto)
+            if selection_policy is not None else True
+        )
+        _strong_penalty = (
+            float(selection_policy.strong_score_penalty)
+            if selection_policy is not None else 8.0
+        )
+        if _snapshot_regime == STRUCTURAL_STRONG_HARD_VETO_REGIME and _structural_veto:
             # Relative to 20cm-only production, the sequential replay improves
             # avg net, cumulative net, WR, PF and MDD. Labels come from
             # score_line_meta or the exact persisted decision-time context.
@@ -1035,15 +1080,19 @@ def apply_pool_rules(
             card["_regime_strong_penalty"] = 4.0
             card["_regime_struct_strong_hard_veto"] = True
         elif _snapshot_regime == "强势":
-            effective_score_line = round(effective_score_line + 8.0, 2)
-            card["_regime_strong_penalty"] = 8.0
+            effective_score_line = round(effective_score_line + _strong_penalty, 2)
+            card["_regime_strong_penalty"] = _strong_penalty
         # 震荡 regime 全局 hard veto（第021轮 LIVE formal 因果重放闭环）：
         # LIVE formal 20cm clean≥72: 震荡 n=14 WR=29% avg=-2.94% PF=0.25
         # causal replay: hard veto 后 n=55→37 avg_net +0.62%→+2.20% cum -4.57%→+7.61%
         # WR 50.9%→62.2% PF 1.26→2.25 MDD -21.92%→-15.18%
         # evaluate_challenger 五项全改善零退化→PRODUCTION
         _card_pos60 = float(card.get("pos60") or card.get("feature_snapshot", {}).get("pos60") or 0)
-        if _snapshot_regime == "震荡":
+        _oscillation_veto = (
+            bool(selection_policy.oscillation_hard_veto)
+            if selection_policy is not None else True
+        )
+        if _snapshot_regime == "震荡" and _oscillation_veto:
             effective_score_line = 999.0
             card["_regime_oscillation_hard_veto"] = True
         # 弱势 regime × chg20<15 交叉惩罚（第150轮 T3 失败归因闭环）：
@@ -1055,9 +1104,17 @@ def apply_pool_rules(
         # 不靠 chg20，且炸板回封 chg20 可能为负/低，惩罚会误伤）。
         # 门槛 +12（72→84）模拟：过滤 31 笔（WR=35.5%），放行 10 笔，整体 WR 56.6%→63.1%。
         _card_chg20 = float(card.get("chg20") or card.get("feature_snapshot", {}).get("chg20") or 0)
-        if _snapshot_regime == "弱势" and 0 <= _card_chg20 < 15 and not _is_limit_up_card:
-            effective_score_line = round(effective_score_line + 12.0, 2)
-            card["_regime_weak_low_chg20_penalty"] = 12.0
+        _weak_threshold = (
+            float(selection_policy.weak_low_chg20_threshold)
+            if selection_policy is not None else 15.0
+        )
+        _weak_penalty = (
+            float(selection_policy.weak_low_chg20_penalty)
+            if selection_policy is not None else 12.0
+        )
+        if _snapshot_regime == "弱势" and 0 <= _card_chg20 < _weak_threshold and not _is_limit_up_card:
+            effective_score_line = round(effective_score_line + _weak_penalty, 2)
+            card["_regime_weak_low_chg20_penalty"] = _weak_penalty
         # 全局恐慌日否决（第146轮 T3 D项攻击，LIVE formal 全策略 May-Jul 302笔去重）：
         # limit_down_count>100 = 系统性恐慌蔓延日，全市场强平传染，均值回归与趋势跟踪齐失效。
         #   ≤50: WR 65.2% / 51-80: WR 67.5% / 81-100: WR 46.4% / >100: WR 11.1%（完全单调）
@@ -1068,9 +1125,17 @@ def apply_pool_rules(
         #   （ld 81-100 dragon-tiger/chen-xiaoqun 仍 WR 90%+，留策略层处理），是硬不可交易条件，
         #   符合「全局只保留 ST/停牌/无数据 等硬性不可交易过滤」原则。
         _panic_limit_down = int((market_snapshot or {}).get("limit_down_count") or 0)
-        if _panic_limit_down > 100:
-            effective_score_line = round(effective_score_line + 12.0, 2)
-            card["_panic_day_penalty"] = 12.0
+        _panic_threshold = (
+            int(selection_policy.panic_limit_down_threshold)
+            if selection_policy is not None else 100
+        )
+        _panic_penalty = (
+            float(selection_policy.panic_score_penalty)
+            if selection_policy is not None else 12.0
+        )
+        if _panic_limit_down > _panic_threshold:
+            effective_score_line = round(effective_score_line + _panic_penalty, 2)
+            card["_panic_day_penalty"] = _panic_penalty
         card["score_line_meta"] = {
             **score_line_context,
             **card_adjustment,
@@ -1080,6 +1145,7 @@ def apply_pool_rules(
             "block_reason": execution_viability["block_reason"],
             "regime_support_ma5_penalty": card.get("_regime_support_ma5_penalty", 0.0),
             "regime_oscillation_low_pos_penalty": card.get("_regime_oscillation_low_pos_penalty", 0.0),
+            "regime_oscillation_hard_veto": card.get("_regime_oscillation_hard_veto", False),
             "regime_weak_low_chg20_penalty": card.get("_regime_weak_low_chg20_penalty", 0.0),
             "panic_day_penalty": card.get("_panic_day_penalty", 0.0),
             # L-013：决策时 regime 标签（honest label）——下游归因一律以此为准，
@@ -1142,12 +1208,26 @@ def apply_pool_rules(
     # 因果：震荡市无延续、soft 降线放行半吊子票 → 入场即套/硬止损；与高潮/活跃无关，
     # 是 regime=震荡 本身。弱势·高潮 soft 反转信号（9 笔 100%）必须保留；
     # 强牛·高潮 soft 偏正且是 A 项断档兜底，不动。
-    _osc_regime = _ctx_base == "震荡"
-    _soft_floor_allowed = ((not _disable_soft_floor) or _degraded) and (not _osc_regime)
+    _disabled_soft_regimes = set(
+        getattr(selection_policy, "dynamic_soft_floor_disabled_regimes", ("震荡",))
+    )
+    _osc_regime = _ctx_base in _disabled_soft_regimes
+    _soft_enabled = bool(getattr(selection_policy, "dynamic_soft_floor_enabled", True))
+    _soft_floor_allowed = _soft_enabled and ((not _disable_soft_floor) or _degraded) and (not _osc_regime)
     if not result and ordered and top_final_score > 0 and _soft_floor_allowed:
-        soft_floor = round(top_final_score - 1.0, 2)
-        base_floor = round(score_line_context["base_score_line"] - 8.0, 2)
-        dynamic_line = max(soft_floor, base_floor, 35.0)
+        soft_floor = round(
+            top_final_score - float(getattr(selection_policy, "dynamic_soft_floor_offset", 1.0)), 2
+        )
+        base_floor = round(
+            score_line_context["base_score_line"]
+            - float(getattr(selection_policy, "dynamic_soft_floor_base_discount", 8.0)),
+            2,
+        )
+        dynamic_line = max(
+            soft_floor,
+            base_floor,
+            float(getattr(selection_policy, "score_line_minimum", 35.0)),
+        )
         # top 相对市场级有效线的差距：
         #   gap > 0 → top 低于市场线；gap <= 0 → top 已达/超过市场线
         # 旧条件 `0 < gap <= 20` 会漏掉 gap<=0：top 已过市场线，但 per-card
@@ -1158,9 +1238,10 @@ def apply_pool_rules(
         # 仍跳过，不放松 D 项毒区。
         gap = score_line_context["effective_score_line"] - top_final_score
         # 降级模式（LLM 不可用）放宽上限，作为最后兜底避免零推荐
-        _degraded_gap = _degraded and gap > 20.0
+        _max_soft_gap = float(getattr(selection_policy, "dynamic_soft_floor_max_gap", 20.0))
+        _degraded_gap = _degraded and gap > _max_soft_gap
         # gap<=20 含 gap<=0（top 已过市场线但被软惩罚挡光）；gap>20 仅降级模式
-        if gap <= 20.0 or _degraded_gap:
+        if gap <= _max_soft_gap or _degraded_gap:
             score_line_context["dynamic_soft_floor_applied"] = True
             score_line_context["dynamic_soft_floor"] = dynamic_line
             score_line_context["soft_floor_gap"] = round(gap, 2)
@@ -1180,6 +1261,8 @@ def apply_pool_rules(
                 # 震荡 × pos60<50 硬否决：不参与软降线（否则惩罚被降线覆盖，WR=0% 的股票又混进来）
                 if sm.get("regime_oscillation_low_pos_penalty"):
                     continue
+                if sm.get("regime_oscillation_hard_veto"):
+                    continue
                 # 弱势 × chg20<15 硬否决：同上，惩罚不被降线覆盖（WR=33% 的半强股不兜底出票）
                 if sm.get("regime_weak_low_chg20_penalty"):
                     continue
@@ -1194,6 +1277,8 @@ def apply_pool_rules(
                 if sm.get("regime_support_ma5_penalty"):
                     continue
                 if sm.get("regime_strong_penalty"):
+                    continue
+                if sm.get("regime_struct_strong_hard_veto"):
                     continue
                 old_effective = sm.get("effective_score_line", 99)
                 new_effective = min(old_effective, dynamic_line)
