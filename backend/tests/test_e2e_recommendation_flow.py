@@ -687,6 +687,11 @@ class TestE2ERecommendationFlow:
             recommended_count=3,
             result_summary_json="{}",
             finished_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            # official 样本口径（official_sample_conditions）：live_forward +
+            # data_as_of + source_snapshot_id，否则 stats 按 official 口径统计为 0。
+            evaluation_scope="live_forward",
+            data_as_of="2026-05-12",
+            source_snapshot_id="snap_stats_test",
         )
         db.add(run)
         db.flush()
@@ -698,6 +703,8 @@ class TestE2ERecommendationFlow:
                 run_id=run_id,
                 trade_date="2026-05-12",
                 code=code,
+                # official 口径要求：recommended_at 北京时间（+8h）日期 == trade_date
+                recommended_at=datetime(2026, 5, 12, 8, 0, 0),  # 北京 16:00 = UTC 08:00
                 name=f"测试股{i}",
                 bucket="",
                 final_score=85.0 - i * 5,
