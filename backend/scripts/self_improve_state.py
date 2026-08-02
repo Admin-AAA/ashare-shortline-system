@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+from hashlib import sha256
 import json
 import os
 import shutil
@@ -37,7 +38,7 @@ DEFAULT_DAEMON_MAX_DURATION_SECONDS = 3 * 3600  # bound abandoned daemons
 
 # Bump when the shape of self-improve-state.json changes meaningfully, so
 # older tools/researchers can detect that they read a newer layout.
-STATE_SCHEMA_VERSION = 2
+STATE_SCHEMA_VERSION = 3
 
 RELEASE_TRANSITIONS = {
     ("draft", "verify_evidence"): "evidence_verified",
@@ -178,6 +179,82 @@ def read_state(memory_dir: Path | None = None) -> dict:
         return _read_json(directory / "self-improve-state.json")
 
 
+_FORBIDDEN_RESEARCH_STATE_KEYS = frozenset(
+    {"canonical_production", "selection_policy_governance", "release_state", "researcher_registry"}
+)
+
+
+def _current_policy_identity() -> dict[str, Any]:
+    """Resolve the repo-owned policy identity without copying policy rules."""
+    from app.engine.production_policy import DEFAULT_PRODUCTION_SELECTION_POLICY
+
+    policy = DEFAULT_PRODUCTION_SELECTION_POLICY
+    return {
+        "policy_id": policy.policy_id,
+        "version": policy.version,
+        "fingerprint": policy.fingerprint,
+    }
+
+
+def migrate_state(
+    memory_dir: Path | None = None,
+    *,
+    policy_loader: Callable[[], dict[str, Any]] | None = None,
+) -> dict:
+    """Idempotently migrate legacy self-improve state to schema v3.
+
+    The migration only replaces copied policy rules with the identity of the
+    repository artifact and enables audit-only governance.  It never changes
+    the champion commit or publishes a strategy.
+    """
+    directory = memory_dir or _memory_dir()
+    state_path = directory / "self-improve-state.json"
+    with _locked(directory):
+        state = _read_json(state_path)
+        identity = dict((policy_loader or _current_policy_identity)())
+        if set(identity) != {"policy_id", "version", "fingerprint"}:
+            raise ValueError("policy_loader must return policy_id/version/fingerprint")
+        champion = dict(state.get("canonical_production") or {})
+        legacy_rules = champion.pop("rules", None)
+        if legacy_rules is not None:
+            legacy_payload = json.dumps(
+                legacy_rules, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+            state["state_migration"] = {
+                "from_schema_version": state.get("schema_version", 0),
+                "migrated_at": _now_iso(),
+                "legacy_rules_fingerprint": sha256(legacy_payload).hexdigest(),
+            }
+        existing = champion.get("selection_policy")
+        if not isinstance(existing, dict) or set(existing) != set(identity):
+            champion["selection_policy"] = identity
+        else:
+            state.setdefault("state_migration", {"migrated_at": _now_iso()})
+        state["canonical_production"] = champion
+        governance = dict(state.get("selection_policy_governance") or {})
+        governance.setdefault("audit_only", True)
+        governance.setdefault("strategy_inactive", False)
+        governance.setdefault("policy_artifact_fingerprint", identity["fingerprint"])
+        governance["policy_artifact_mismatch"] = (
+            governance.get("policy_artifact_fingerprint") != identity["fingerprint"]
+            or champion.get("selection_policy", {}).get("fingerprint") != identity["fingerprint"]
+        )
+        state["selection_policy_governance"] = governance
+        state.setdefault("release_state", {"status": "draft"})
+        state.setdefault("holdout_ledger", {"consumed": {}})
+        state["schema_version"] = STATE_SCHEMA_VERSION
+        _atomic_write_json(state_path, state)
+        return state
+
+
+def _reject_direct_research_state_patch(state_patch: dict) -> None:
+    forbidden = sorted(_FORBIDDEN_RESEARCH_STATE_KEYS.intersection(state_patch))
+    if forbidden:
+        raise ValueError(
+            "direct state mutation is disabled for " + ", ".join(forbidden)
+        )
+
+
 # State-patch merge semantics. Shallow `state.update(patch)` replaces whole
 # sub-dictionaries, so a finding that patches `scanned_grids` with only its own
 # keys silently drops every prior completed grid scan — which then lets the
@@ -226,6 +303,7 @@ def commit_update(
         raise TypeError("state_patch must be a JSON object")
     if run_record is not None and not isinstance(run_record, dict):
         raise TypeError("run_record must be a JSON object")
+    _reject_direct_research_state_patch(state_patch)
 
     directory = memory_dir or _memory_dir()
     state_path = directory / "self-improve-state.json"
@@ -897,6 +975,14 @@ def transition_release_state(current: dict, event: str, details: dict | None = N
     next_status = RELEASE_TRANSITIONS.get((status, str(event)))
     if next_status is None:
         raise ValueError(f"invalid release transition: {status} --{event}-->")
+    if event == "verify_evidence":
+        evidence = details or {}
+        required = ("evidence_id", "evidence_fingerprint", "policy_fingerprint")
+        missing = [key for key in required if not str(evidence.get(key) or "")]
+        if missing:
+            raise ValueError("verify_evidence requires " + ", ".join(missing))
+        if evidence.get("evidence_status") != "completed" or evidence.get("should_publish") is not True:
+            raise ValueError("only completed should_publish canonical evidence can be verified")
     if event == "deployment_confirmed":
         deployment = details or {}
         required = ("deployment_adapter", "deployment_fingerprint", "deployed_policy_fingerprint")
@@ -905,13 +991,25 @@ def transition_release_state(current: dict, event: str, details: dict | None = N
             raise ValueError(
                 "deployment_confirmed requires " + ", ".join(missing)
             )
+        from app.services.backtest.deployment_adapter import LocalPolicyDeploymentAdapter
+
+        receipt = deployment.get("receipt") or deployment
+        verified_receipt = LocalPolicyDeploymentAdapter.verify_receipt(receipt)
+        if deployment.get("deployment_fingerprint") != verified_receipt["deployment_fingerprint"]:
+            raise ValueError("deployment receipt fingerprint mismatch")
         expected = str(state.get("policy_fingerprint") or "")
         if expected and deployment["deployed_policy_fingerprint"] != expected:
             raise ValueError("deployed policy fingerprint does not match verified evidence")
     if event == "canary_passed":
         canary = details or {}
-        if not str(canary.get("canary_evidence_id") or ""):
-            raise ValueError("canary_passed requires canary_evidence_id")
+        required = ("canary_evidence_id", "observed_policy_fingerprint")
+        missing = [key for key in required if not str(canary.get(key) or "")]
+        if missing:
+            raise ValueError("canary_passed requires " + ", ".join(missing))
+        if int(canary.get("error_count") or 0) != 0:
+            raise ValueError("canary error_count must be zero")
+        if canary.get("coverage_gate_passed") is not True or canary.get("productive_day_gate_passed") is not True:
+            raise ValueError("canary coverage and productive-day gates must pass")
         expected = str(state.get("policy_fingerprint") or "")
         if expected and canary.get("observed_policy_fingerprint") != expected:
             raise ValueError("canary observed policy fingerprint mismatch")
@@ -930,12 +1028,33 @@ def advance_release(
     event: str,
     details: dict | None = None,
     memory_dir: Path | None = None,
+    evidence_loader: Callable[[str], dict] | None = None,
 ) -> dict:
     directory = memory_dir or _memory_dir()
     state_path = directory / "self-improve-state.json"
     with _locked(directory):
         state = _read_json(state_path)
-        release = transition_release_state(state.get("release_state") or {}, event, details)
+        normalized_details = dict(details or {})
+        if event == "verify_evidence":
+            evidence_id = str(normalized_details.get("evidence_id") or "")
+            if not evidence_id:
+                raise ValueError("verify_evidence requires evidence_id")
+            evidence = (evidence_loader or _load_canonical_evidence_from_db)(evidence_id)
+            decision = evidence.get("decision") or {}
+            normalized_details.update(
+                {
+                    "evidence_id": evidence_id,
+                    "evidence_fingerprint": str(evidence.get("evidence_fingerprint") or ""),
+                    "policy_fingerprint": str(
+                        evidence.get("challenger_policy_fingerprint") or ""
+                    ),
+                    "evidence_status": str(evidence.get("status") or ""),
+                    "should_publish": decision.get("should_publish") is True,
+                }
+            )
+        release = transition_release_state(
+            state.get("release_state") or {}, event, normalized_details
+        )
         state["release_state"] = release
         _atomic_write_json(state_path, state)
         return release
@@ -1071,19 +1190,30 @@ def _validate_selection_policy_publish(
         return {"error": "CANONICAL_EVIDENCE_NOT_FOUND", "message": str(exc)}
     decision = evidence.get("decision") or {}
     gates = decision.get("gates") or {}
+    from app.services.backtest.release_policy import REQUIRED_RELEASE_GATES
     current_policy = (
         state.get("canonical_production", {}).get("selection_policy") or {}
+    )
+    governance_policy_fingerprint = str(
+        governance.get("policy_artifact_fingerprint") or ""
     )
     checks = {
         "schema_v2": evidence.get("schema_version") == 2,
         "production_policy_kind": evidence.get("experiment_kind") == "production_policy",
         "completed": evidence.get("status") == "completed",
         "should_publish": decision.get("should_publish") is True,
+        "candidate_decision": decision.get("decision") == "PRODUCTION_CANDIDATE",
         "single_rule_change": gates.get("single_rule_change") is True,
         "all_release_gates": bool(gates) and all(value is True for value in gates.values()),
+        "release_gate_schema": set(gates) == set(REQUIRED_RELEASE_GATES),
         "champion_fingerprint": evidence.get("champion_policy_fingerprint") == current_policy.get("fingerprint"),
+        "policy_artifact_identity": (
+            not bool(governance.get("policy_artifact_mismatch"))
+            and current_policy.get("fingerprint") == governance_policy_fingerprint
+        ),
         "challenger_fingerprint": evidence.get("challenger_policy_fingerprint") == proposed_policy.get("fingerprint"),
         "changed_rule_id": bool(evidence.get("changed_rule_id")),
+        "release_policy_fingerprint": bool(decision.get("release_policy")),
     }
     failed = [name for name, passed in checks.items() if not passed]
     if failed:
@@ -1127,6 +1257,14 @@ def publish_champion(
                 "actual": current,
                 "new_champion": state.get("canonical_production"),
             }
+
+        if "canonical_production" in state_patch:
+            governance = state.get("selection_policy_governance") or {}
+            if bool(governance.get("audit_only", True)):
+                return {
+                    "error": "SELECTION_POLICY_AUDIT_ONLY",
+                    "message": "audit-only 下禁止任何 production champion 变更；请发布 FINDING",
+                }
 
         proposed_policy = _selection_policy_from_patch(state_patch)
         if proposed_policy is not None:
@@ -1212,6 +1350,14 @@ def publish_finding(
         raise ValueError(
             "publish_finding must not mutate canonical_production"
         )
+    forbidden = sorted(
+        _FORBIDDEN_RESEARCH_STATE_KEYS.intersection(state_patch)
+        - {"canonical_production"}
+    )
+    if forbidden:
+        raise ValueError(
+            "publish_finding cannot mutate " + ", ".join(forbidden)
+        )
 
     empty_reason = _finding_has_substance(finding)
     if empty_reason is not None:
@@ -1254,6 +1400,7 @@ def main() -> None:
 
     subparsers.add_parser("read")
     subparsers.add_parser("refresh-policy-health")
+    subparsers.add_parser("migrate-state")
 
     commit_parser = subparsers.add_parser("commit")
     commit_parser.add_argument(
@@ -1335,8 +1482,13 @@ def main() -> None:
         result = read_state()
     elif args.command == "refresh-policy-health":
         result = refresh_policy_health()
+    elif args.command == "migrate-state":
+        result = migrate_state()
     elif args.command == "commit":
-        result = commit_update(args.state_patch, args.run_record)
+        result = {
+            "error": "DIRECT_STATE_MUTATION_DISABLED",
+            "message": "commit 已退役；请使用 publish-finding 或受控发布状态机",
+        }
     elif args.command == "claim-direction":
         result = claim_direction(
             args.researcher_id, args.preferred_direction,
