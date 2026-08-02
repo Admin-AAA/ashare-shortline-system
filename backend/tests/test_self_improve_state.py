@@ -15,17 +15,42 @@ from scripts.self_improve_state import (
     _now_iso,
     claim_direction,
     commit_update,
+    advance_release,
     daemon_heartbeat,
     heartbeat,
     prune_claimed_directions,
     publish_champion,
     publish_finding,
     read_state,
+    refresh_policy_health,
     release_direction,
     setup_worktree,
+    summarize_policy_health,
+    transition_release_state,
     release_worktree,
     with_publish_lock,
 )
+
+
+def _canonical_policy_evidence(champion: str, challenger: str) -> dict:
+    return {
+        "schema_version": 2,
+        "experiment_kind": "production_policy",
+        "status": "completed",
+        "champion_policy_fingerprint": champion,
+        "challenger_policy_fingerprint": challenger,
+        "changed_rule_id": "structural_strong_hard_veto",
+        "decision": {
+            "should_publish": True,
+            "gates": {
+                "oos_executed_trade_required": True,
+                "opportunity_capture_retention": True,
+                "max_consecutive_opportunity_abstain": True,
+                "single_rule_change": True,
+                "vectorbt_truth": True,
+            },
+        },
+    }
 
 
 @pytest.fixture
@@ -289,6 +314,133 @@ def test_publish_champion_invalidates_other_researchers(tmp_memory_dir):
     # r1 should still be working (publisher is not invalidated)
     hb1 = heartbeat("r1", memory_dir=tmp_memory_dir)
     assert hb1["stale_champion"] is False
+
+
+def test_selection_policy_publish_is_audit_only_by_default(tmp_memory_dir):
+    commit_update(
+        {
+            "canonical_production": {
+                "commit": "abc",
+                "selection_policy": {"policy_id": "production-selection", "version": 1, "fingerprint": "champion"},
+            }
+        },
+        memory_dir=tmp_memory_dir,
+    )
+    result = publish_champion(
+        "r1",
+        "abc",
+        {
+            "canonical_production": {
+                "commit": "def",
+                "selection_policy": {"policy_id": "production-selection", "version": 2, "fingerprint": "challenger"},
+            }
+        },
+        canonical_evidence_id="exp-1",
+        evidence_loader=lambda _id: _canonical_policy_evidence("champion", "challenger"),
+        memory_dir=tmp_memory_dir,
+    )
+    assert result["error"] == "SELECTION_POLICY_AUDIT_ONLY"
+
+
+def test_selection_policy_publish_requires_db_evidence_and_canary_pass(tmp_memory_dir):
+    commit_update(
+        {
+            "canonical_production": {
+                "commit": "abc",
+                "selection_policy": {"policy_id": "production-selection", "version": 1, "fingerprint": "champion"},
+            },
+            "selection_policy_governance": {"audit_only": False},
+            "release_state": {
+                "status": "canary_passed",
+                "evidence_id": "exp-1",
+                "policy_fingerprint": "challenger",
+                "deployment_fingerprint": "deployment-receipt",
+                "canary_evidence_id": "canary-1",
+            },
+        },
+        memory_dir=tmp_memory_dir,
+    )
+    patch = {
+        "canonical_production": {
+            "commit": "def",
+            "selection_policy": {"policy_id": "production-selection", "version": 2, "fingerprint": "challenger"},
+        }
+    }
+    missing = publish_champion(
+        "r1", "abc", patch, memory_dir=tmp_memory_dir
+    )
+    assert missing["error"] == "CANONICAL_EVIDENCE_REQUIRED"
+
+    result = publish_champion(
+        "r1",
+        "abc",
+        patch,
+        canonical_evidence_id="exp-1",
+        evidence_loader=lambda _id: _canonical_policy_evidence("champion", "challenger"),
+        memory_dir=tmp_memory_dir,
+    )
+    assert result == {"ok": True}
+    state = read_state(tmp_memory_dir)
+    assert state["release_state"]["status"] == "completed"
+
+
+def test_release_state_machine_requires_real_deployment_fingerprint(tmp_memory_dir):
+    verified = advance_release(
+        "verify_evidence",
+        {"evidence_id": "exp-1", "policy_fingerprint": "candidate"},
+        tmp_memory_dir,
+    )
+    assert verified["status"] == "evidence_verified"
+    with pytest.raises(ValueError, match="deployment_fingerprint"):
+        transition_release_state(verified, "deployment_confirmed", {})
+    canary = advance_release(
+        "deployment_confirmed",
+        {
+            "deployment_adapter": "test-adapter",
+            "deployment_fingerprint": "deployment-receipt",
+            "deployed_policy_fingerprint": "candidate",
+        },
+        tmp_memory_dir,
+    )
+    assert canary["status"] == "canary_running"
+    rollback = advance_release("canary_failed", {"reason": "zero output"}, tmp_memory_dir)
+    assert rollback["status"] == "rollback_required"
+    assert advance_release("rollback_confirmed", {}, tmp_memory_dir)["status"] == "rolled_back"
+
+
+def test_policy_health_freezes_after_five_opportunity_days_all_policy_blocked(tmp_memory_dir):
+    audit = json.dumps(
+        {
+            "empty_reason": "production_policy_blocked: oscillation_hard_veto=3",
+            "stage_summary": [
+                {"stage": "score_line", "input_count": 3, "pass_count": 0}
+            ],
+        }
+    )
+    rows = [(f"2026-07-{day:02d}", 0, audit) for day in range(1, 6)]
+    assert summarize_policy_health(rows)["strategy_inactive"] is True
+
+    governance = refresh_policy_health(
+        tmp_memory_dir,
+        health_loader=lambda: summarize_policy_health(rows),
+    )
+    assert governance["audit_only"] is True
+    assert governance["strategy_inactive"] is True
+
+
+def test_no_opportunity_day_does_not_count_toward_inactive_window() -> None:
+    blocked = json.dumps(
+        {
+            "empty_reason": "production_policy_blocked: structural_strong_hard_veto=1",
+            "stage_summary": [{"stage": "score_line", "input_count": 1, "pass_count": 0}],
+        }
+    )
+    no_opportunity = json.dumps(
+        {"stage_summary": [{"stage": "score_line", "input_count": 0, "pass_count": 0}]}
+    )
+    rows = [(f"2026-07-{day:02d}", 0, blocked) for day in range(1, 5)]
+    rows.append(("2026-07-05", 0, no_opportunity))
+    assert summarize_policy_health(rows)["strategy_inactive"] is False
 
 
 # ── publish_finding ────────────────────────────────────────────────────

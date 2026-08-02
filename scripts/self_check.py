@@ -68,18 +68,50 @@ def _load_skills_once() -> dict:
     return _SKILLS_CACHE
 
 
-def _zero_rec_day_is_protective(stage_summaries_list: list[list[dict]]) -> bool:
-    """判断一个 0 推荐日是否"保护性 0 推荐"（D 项 score_line 拦截，非 pipeline 故障）。
+def classify_zero_output_health(filter_audits: list[dict]) -> str:
+    """Classify a completed zero-output day without labelling every veto healthy."""
+    if not filter_audits:
+        return "pipeline_fault"
+    saw_score_line = False
+    saw_opportunity = False
+    saw_plain_abstain = False
+    for audit in filter_audits:
+        if not isinstance(audit, dict):
+            continue
+        reason = str(audit.get("empty_reason") or "")
+        stages = audit.get("stage_summary") or []
+        score_line = next(
+            (stage for stage in stages if stage.get("stage") == "score_line"),
+            None,
+        )
+        if score_line is None:
+            continue
+        saw_score_line = True
+        input_count = int(score_line.get("input_count") or 0)
+        pass_count = int(score_line.get("pass_count") or 0)
+        if input_count <= 0:
+            continue
+        saw_opportunity = True
+        if reason.startswith("production_policy_blocked:"):
+            return "policy_blocked"
+        if pass_count == 0:
+            saw_plain_abstain = True
+    if saw_plain_abstain:
+        return "reasonable_abstain"
+    if saw_score_line and not saw_opportunity:
+        return "no_opportunity"
+    return "pipeline_fault"
 
-    保护性：至少一个 completed run 的 filter_audit 显示 score_line 阶段 input>0 且 pass=0
-    （候选进入分数线但最高分低于有效线，regime 有效线过高 / 恐慌日 veto / 强势 penalty）。
-    故障性：所有 completed run 都未到 score_line（prefilter/skill_gate 卡住）或无 completed run。
-    """
-    for stages in stage_summaries_list:
-        sl = next((s for s in stages if s.get("stage") == "score_line"), None)
-        if sl and (sl.get("input_count") or 0) > 0 and (sl.get("pass_count") or 0) == 0:
-            return True
-    return False
+
+def strategy_inactive_from_recent_zero_days(classifications: list[str]) -> bool:
+    """Five latest opportunity days all policy-blocked means strategy inactivity."""
+    return len(classifications) >= 5 and classifications[-5:] == ["policy_blocked"] * 5
+
+
+def _zero_rec_day_is_protective(stage_summaries_list: list[list[dict]]) -> bool:
+    """Backward-compatible helper: only plain threshold abstention is protective."""
+    audits = [{"stage_summary": stages} for stages in stage_summaries_list]
+    return classify_zero_output_health(audits) == "reasonable_abstain"
 
 
 def check_a_item(db) -> None:
@@ -139,7 +171,12 @@ def check_a_item(db) -> None:
     except Exception:
         pass
     if gap_dates:
-        protective: list[str] = []
+        opportunity_health_by_date: dict[str, str] = {
+            day: "active" for day in ok_dates
+        }
+        reasonable_abstain: list[str] = []
+        no_opportunity: list[str] = []
+        policy_blocked: list[str] = []
         faulty: list[str] = []
         non_trade: list[str] = []
         for td in gap_dates:
@@ -153,19 +190,36 @@ def check_a_item(db) -> None:
                 FROM recommendation_runs
                 WHERE trade_date = :td AND run_mode='formal' AND status='completed'
             """).bindparams(td=td)).fetchall()
-            stage_summaries_list: list[list[dict]] = []
+            filter_audits: list[dict] = []
             for sr in stage_rows:
                 try:
                     fa = json.loads(sr[0]) if sr[0] else {}
                 except (TypeError, ValueError):
                     fa = {}
-                stage_summaries_list.append(fa.get("stage_summary") or [])
-            if _zero_rec_day_is_protective(stage_summaries_list):
-                protective.append(td)
+                filter_audits.append(fa)
+            classification = classify_zero_output_health(filter_audits)
+            if classification == "reasonable_abstain":
+                reasonable_abstain.append(td)
+                opportunity_health_by_date[td] = classification
+            elif classification == "no_opportunity":
+                no_opportunity.append(td)
+            elif classification == "policy_blocked":
+                policy_blocked.append(td)
+                opportunity_health_by_date[td] = classification
             else:
                 faulty.append(td)
-        if protective:
-            print(f'  ℹ️ {len(protective)} 个交易日保护性 0 推荐（score_line 拦截，regime 有效线过高，非 pipeline 故障，不触发 T12）: {protective}')
+        if reasonable_abstain:
+            print(f'  ℹ️ {len(reasonable_abstain)} 个交易日合理空仓（普通有效线未通过）: {reasonable_abstain}')
+        if no_opportunity:
+            print(f'  ℹ️ {len(no_opportunity)} 个交易日无基础机会（没有达到基础分数线的可成交候选）: {no_opportunity}')
+        if policy_blocked:
+            print(f'  ⚠️ {len(policy_blocked)} 个交易日 production policy 全拦截（不再称为保护性静默）: {policy_blocked}')
+            recent_opportunity_health = [
+                status
+                for _day, status in sorted(opportunity_health_by_date.items())
+            ][-5:]
+            if strategy_inactive_from_recent_zero_days(recent_opportunity_health):
+                print('    🛑 strategy_inactive：最近窗口至少 5 个机会日被 policy 全拦截，冻结 Champion 发布')
         if non_trade:
             print(f'  ℹ️ {len(non_trade)} 个非交易日 0 推荐（周末/节假日无 K 线，本就该 0 推荐，不触发 T12）: {non_trade}')
         if faulty:

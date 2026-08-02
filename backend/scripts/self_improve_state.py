@@ -25,7 +25,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Callable, Iterator
 
 DEFAULT_MEMORY_DIR = Path(
     "/Users/wangao/.claude/projects/-Users-wangao/memory"
@@ -38,6 +38,15 @@ DEFAULT_DAEMON_MAX_DURATION_SECONDS = 3 * 3600  # bound abandoned daemons
 # Bump when the shape of self-improve-state.json changes meaningfully, so
 # older tools/researchers can detect that they read a newer layout.
 STATE_SCHEMA_VERSION = 2
+
+RELEASE_TRANSITIONS = {
+    ("draft", "verify_evidence"): "evidence_verified",
+    ("evidence_verified", "deployment_confirmed"): "canary_running",
+    ("canary_running", "canary_passed"): "canary_passed",
+    ("canary_running", "canary_failed"): "rollback_required",
+    ("rollback_required", "rollback_confirmed"): "rolled_back",
+    ("canary_passed", "champion_published"): "completed",
+}
 
 
 def _now_iso() -> str:
@@ -881,12 +890,224 @@ def _encode_provisional_guard(
     return None
 
 
+def transition_release_state(current: dict, event: str, details: dict | None = None) -> dict:
+    """Pure release/deploy/canary/rollback state transition."""
+    state = dict(current or {"status": "draft"})
+    status = str(state.get("status") or "draft")
+    next_status = RELEASE_TRANSITIONS.get((status, str(event)))
+    if next_status is None:
+        raise ValueError(f"invalid release transition: {status} --{event}-->")
+    if event == "deployment_confirmed":
+        deployment = details or {}
+        required = ("deployment_adapter", "deployment_fingerprint", "deployed_policy_fingerprint")
+        missing = [key for key in required if not str(deployment.get(key) or "")]
+        if missing:
+            raise ValueError(
+                "deployment_confirmed requires " + ", ".join(missing)
+            )
+        expected = str(state.get("policy_fingerprint") or "")
+        if expected and deployment["deployed_policy_fingerprint"] != expected:
+            raise ValueError("deployed policy fingerprint does not match verified evidence")
+    if event == "canary_passed":
+        canary = details or {}
+        if not str(canary.get("canary_evidence_id") or ""):
+            raise ValueError("canary_passed requires canary_evidence_id")
+        expected = str(state.get("policy_fingerprint") or "")
+        if expected and canary.get("observed_policy_fingerprint") != expected:
+            raise ValueError("canary observed policy fingerprint mismatch")
+    updated = {
+        **state,
+        "status": next_status,
+        "updated_at": _now_iso(),
+        "last_event": str(event),
+    }
+    if details:
+        updated.update(details)
+    return updated
+
+
+def advance_release(
+    event: str,
+    details: dict | None = None,
+    memory_dir: Path | None = None,
+) -> dict:
+    directory = memory_dir or _memory_dir()
+    state_path = directory / "self-improve-state.json"
+    with _locked(directory):
+        state = _read_json(state_path)
+        release = transition_release_state(state.get("release_state") or {}, event, details)
+        state["release_state"] = release
+        _atomic_write_json(state_path, state)
+        return release
+
+
+def summarize_policy_health(rows: list[tuple[Any, Any, Any]]) -> dict:
+    """Derive liveness from latest formal runs without treating no-opportunity as zero."""
+    by_date: dict[str, dict[str, bool]] = {}
+    for trade_date, recommended_count, raw_audit in rows:
+        day = str(trade_date)
+        state = by_date.setdefault(
+            day, {"opportunity": False, "active": False, "policy_blocked": False}
+        )
+        state["active"] = state["active"] or int(recommended_count or 0) > 0
+        try:
+            audit = json.loads(raw_audit) if isinstance(raw_audit, str) else (raw_audit or {})
+        except (TypeError, json.JSONDecodeError):
+            audit = {}
+        score_line = next(
+            (
+                item
+                for item in (audit.get("stage_summary") or [])
+                if item.get("stage") == "score_line"
+            ),
+            None,
+        )
+        if score_line and int(score_line.get("input_count") or 0) > 0:
+            state["opportunity"] = True
+        if str(audit.get("empty_reason") or "").startswith("production_policy_blocked:"):
+            state["policy_blocked"] = True
+    opportunity_days = [
+        (day, values)
+        for day, values in sorted(by_date.items(), reverse=True)
+        if values["opportunity"]
+    ][:5]
+    inactive = len(opportunity_days) == 5 and all(
+        not values["active"] and values["policy_blocked"]
+        for _day, values in opportunity_days
+    )
+    return {
+        "strategy_inactive": inactive,
+        "recent_opportunity_days": [
+            {"trade_date": day, **values} for day, values in opportunity_days
+        ],
+    }
+
+
+def _load_policy_health_from_db() -> dict:
+    from sqlalchemy import text
+    from app.db.session import SessionLocal
+
+    with SessionLocal() as db:
+        rows = db.execute(text("""
+            SELECT trade_date, recommended_count, filter_audit_json
+            FROM recommendation_runs
+            WHERE run_mode='formal' AND status='completed'
+            ORDER BY trade_date DESC, finished_at DESC
+            LIMIT 200
+        """)).fetchall()
+    return summarize_policy_health(list(rows))
+
+
+def refresh_policy_health(
+    memory_dir: Path | None = None,
+    health_loader: Callable[[], dict] | None = None,
+) -> dict:
+    health = (health_loader or _load_policy_health_from_db)()
+    directory = memory_dir or _memory_dir()
+    state_path = directory / "self-improve-state.json"
+    with _locked(directory):
+        state = _read_json(state_path)
+        governance = dict(state.get("selection_policy_governance") or {})
+        governance.setdefault("audit_only", True)
+        governance.update(health)
+        governance["health_checked_at"] = _now_iso()
+        state["selection_policy_governance"] = governance
+        _atomic_write_json(state_path, state)
+        return governance
+
+
+def _selection_policy_from_patch(state_patch: dict) -> dict | None:
+    production = state_patch.get("canonical_production")
+    if not isinstance(production, dict):
+        return None
+    policy = production.get("selection_policy")
+    return policy if isinstance(policy, dict) else None
+
+
+def _load_canonical_evidence_from_db(experiment_id: str) -> dict:
+    """Read authoritative evidence; callers cannot supply a replacement JSON."""
+    from app.db.session import SessionLocal
+    from app.models.tables import BacktestExperiment
+
+    with SessionLocal() as db:
+        row = db.get(BacktestExperiment, experiment_id)
+        if row is None or not row.conclusion_json:
+            raise ValueError("canonical evidence not found")
+        value = json.loads(str(row.conclusion_json))
+        if not isinstance(value, dict):
+            raise ValueError("canonical evidence conclusion must be an object")
+        return value
+
+
+def _validate_selection_policy_publish(
+    *,
+    state: dict,
+    proposed_policy: dict,
+    evidence_id: str | None,
+    evidence_loader: Callable[[str], dict] | None,
+) -> dict | None:
+    required_policy_keys = {"policy_id", "version", "fingerprint"}
+    if set(proposed_policy) != required_policy_keys:
+        return {
+            "error": "SELECTION_POLICY_STATE_CONTRACT",
+            "message": "state 只能保存 policy_id/version/fingerprint",
+        }
+    governance = state.get("selection_policy_governance") or {}
+    if bool(governance.get("audit_only", True)):
+        return {
+            "error": "SELECTION_POLICY_AUDIT_ONLY",
+            "message": "selection policy 处于 audit-only；只允许 FINDING，不允许发布",
+        }
+    if bool(governance.get("strategy_inactive")):
+        return {
+            "error": "STRATEGY_INACTIVE",
+            "message": "最近 5 个 opportunity days 全部零票，Champion 发布已冻结",
+        }
+    if not evidence_id:
+        return {"error": "CANONICAL_EVIDENCE_REQUIRED"}
+    try:
+        evidence = (evidence_loader or _load_canonical_evidence_from_db)(evidence_id)
+    except Exception as exc:
+        return {"error": "CANONICAL_EVIDENCE_NOT_FOUND", "message": str(exc)}
+    decision = evidence.get("decision") or {}
+    gates = decision.get("gates") or {}
+    current_policy = (
+        state.get("canonical_production", {}).get("selection_policy") or {}
+    )
+    checks = {
+        "schema_v2": evidence.get("schema_version") == 2,
+        "production_policy_kind": evidence.get("experiment_kind") == "production_policy",
+        "completed": evidence.get("status") == "completed",
+        "should_publish": decision.get("should_publish") is True,
+        "single_rule_change": gates.get("single_rule_change") is True,
+        "all_release_gates": bool(gates) and all(value is True for value in gates.values()),
+        "champion_fingerprint": evidence.get("champion_policy_fingerprint") == current_policy.get("fingerprint"),
+        "challenger_fingerprint": evidence.get("challenger_policy_fingerprint") == proposed_policy.get("fingerprint"),
+        "changed_rule_id": bool(evidence.get("changed_rule_id")),
+    }
+    failed = [name for name, passed in checks.items() if not passed]
+    if failed:
+        return {"error": "CANONICAL_EVIDENCE_REJECTED", "failed_checks": failed}
+    release = state.get("release_state") or {}
+    if (
+        release.get("status") != "canary_passed"
+        or release.get("evidence_id") != evidence_id
+        or release.get("policy_fingerprint") != proposed_policy.get("fingerprint")
+        or not release.get("deployment_fingerprint")
+        or not release.get("canary_evidence_id")
+    ):
+        return {"error": "CANARY_PASS_REQUIRED"}
+    return None
+
+
 def publish_champion(
     researcher_id: str,
     expected_champion_commit: str,
     state_patch: dict,
     run_record: dict | None = None,
     memory_dir: Path | None = None,
+    canonical_evidence_id: str | None = None,
+    evidence_loader: Callable[[str], dict] | None = None,
 ) -> dict:
     """CAS-guarded champion publish. Returns error on commit mismatch."""
     if not isinstance(state_patch, dict):
@@ -907,6 +1128,17 @@ def publish_champion(
                 "new_champion": state.get("canonical_production"),
             }
 
+        proposed_policy = _selection_policy_from_patch(state_patch)
+        if proposed_policy is not None:
+            evidence_error = _validate_selection_policy_publish(
+                state=state,
+                proposed_policy=proposed_policy,
+                evidence_id=canonical_evidence_id,
+                evidence_loader=evidence_loader,
+            )
+            if evidence_error is not None:
+                return evidence_error
+
         guard = _encode_provisional_guard(
             state_patch, state.get("canonical_production", {})
         )
@@ -915,6 +1147,13 @@ def publish_champion(
             return {"error": key, "message": message}
 
         _apply_state_patch(state, state_patch)
+
+        if proposed_policy is not None:
+            state["release_state"] = transition_release_state(
+                state.get("release_state") or {},
+                "champion_published",
+                {"published_by": researcher_id},
+            )
 
         active = (
             state.get("researcher_registry", {})
@@ -1014,6 +1253,7 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("read")
+    subparsers.add_parser("refresh-policy-health")
 
     commit_parser = subparsers.add_parser("commit")
     commit_parser.add_argument(
@@ -1069,6 +1309,15 @@ def main() -> None:
         "--state-patch", required=True, type=_json_object
     )
     pub_champ.add_argument("--run-record", type=_json_object)
+    pub_champ.add_argument("--canonical-evidence-id")
+
+    release = subparsers.add_parser("advance-release")
+    release.add_argument(
+        "--event",
+        required=True,
+        choices=sorted({event for _status, event in RELEASE_TRANSITIONS}),
+    )
+    release.add_argument("--details", type=_json_object, default={})
 
     pub_find = subparsers.add_parser("publish-finding")
     pub_find.add_argument("--researcher-id", required=True)
@@ -1084,6 +1333,8 @@ def main() -> None:
 
     if args.command == "read":
         result = read_state()
+    elif args.command == "refresh-policy-health":
+        result = refresh_policy_health()
     elif args.command == "commit":
         result = commit_update(args.state_patch, args.run_record)
     elif args.command == "claim-direction":
@@ -1121,7 +1372,10 @@ def main() -> None:
         result = publish_champion(
             args.researcher_id, args.expected_champion_commit,
             args.state_patch, args.run_record,
+            canonical_evidence_id=args.canonical_evidence_id,
         )
+    elif args.command == "advance-release":
+        result = advance_release(args.event, args.details)
     elif args.command == "publish-finding":
         result = publish_finding(
             args.researcher_id, args.state_patch,
