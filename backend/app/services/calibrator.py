@@ -78,6 +78,8 @@ def _load_labeled_samples(db: Session, run_mode: str | None = None, bucket: str 
             RecommendationOutcome.entry_triggered.is_(True),
         )
     )
+    # 排除非 6 位数字 code 的假/诊断记录（2026-08-02 诊断：diag/diag2 假 formal 被结算为 success）
+    stmt = stmt.where(Recommendation.code.regexp_match(r"^(?:[03468][0-9]{5}|92[0-9]{4})$"))
     if run_mode is not None:
         stmt = stmt.join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id).where(
             RecommendationRun.run_mode == run_mode
@@ -390,6 +392,8 @@ def calibrate_dsa_weights(db: Session, bucket: str | None = None) -> dict[str, A
             RecommendationOutcome.entry_triggered.is_(True),
         )
     )
+    # 排除非 6 位数字 code 的假/诊断记录（2026-08-02 诊断：diag/diag2 假 formal 被结算为 success）
+    stmt = stmt.where(Recommendation.code.regexp_match(r"^(?:[03468][0-9]{5}|92[0-9]{4})$"))
     if bucket is not None:
         stmt = stmt.where(Recommendation.bucket == bucket)
     rows = db.execute(stmt).all()
