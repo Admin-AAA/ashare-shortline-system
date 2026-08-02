@@ -1,7 +1,7 @@
 import logging
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import get_settings
@@ -35,6 +35,20 @@ else:
 
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+# 防御：任何路径（含外部脚本/工具连入）写入中文前强制 utf8mb4。
+# 背景（2026-08-02 诊断）：MySQL 服务器级 character_set_client/connection 为
+# latin1，曾导致 7 月 REPLAY run 的 run_name/filter_audit_json 中文被写坏
+# （"REPLAY-全量重放" 落库为 "REPLAY-????"，读库出现非法字节）。
+@event.listens_for(engine, "connect")
+def _force_utf8mb4(dbapi_connection, connection_record) -> None:  # noqa: ANN001
+    try:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("SET NAMES utf8mb4")
+        cursor.close()
+    except Exception:  # pragma: no cover - 非 MySQL 后端（如 SQLite）忽略
+        pass
 
 
 def get_db() -> Generator[Session, None, None]:
