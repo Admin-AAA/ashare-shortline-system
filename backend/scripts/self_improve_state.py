@@ -1205,6 +1205,7 @@ def _validate_selection_policy_publish(
         return {"error": "CANONICAL_EVIDENCE_NOT_FOUND", "message": str(exc)}
     decision = evidence.get("decision") or {}
     gates = decision.get("gates") or {}
+    from app.services.backtest.policy_experiment import RELEASE_POLICY_FINGERPRINT
     from app.services.backtest.release_policy import REQUIRED_RELEASE_GATES
     current_policy = (
         state.get("canonical_production", {}).get("selection_policy") or {}
@@ -1228,7 +1229,9 @@ def _validate_selection_policy_publish(
         ),
         "challenger_fingerprint": evidence.get("challenger_policy_fingerprint") == proposed_policy.get("fingerprint"),
         "changed_rule_id": bool(evidence.get("changed_rule_id")),
-        "release_policy_fingerprint": bool(decision.get("release_policy")),
+        "release_policy_fingerprint": (
+            evidence.get("release_policy_fingerprint") == RELEASE_POLICY_FINGERPRINT
+        ),
     }
     failed = [name for name, passed in checks.items() if not passed]
     if failed:

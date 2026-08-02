@@ -33,6 +33,7 @@ from scripts.self_improve_state import (
     release_worktree,
     with_publish_lock,
 )
+from app.services.backtest.policy_experiment import RELEASE_POLICY_FINGERPRINT
 
 
 def _canonical_policy_evidence(champion: str, challenger: str) -> dict:
@@ -40,6 +41,7 @@ def _canonical_policy_evidence(champion: str, challenger: str) -> dict:
         "schema_version": 2,
         "experiment_kind": "production_policy",
         "status": "completed",
+        "release_policy_fingerprint": RELEASE_POLICY_FINGERPRINT,
         "champion_policy_fingerprint": champion,
         "challenger_policy_fingerprint": challenger,
         "changed_rule_id": "structural_strong_hard_veto",

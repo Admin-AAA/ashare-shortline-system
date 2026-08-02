@@ -26,6 +26,9 @@ from app.services.backtest.vectorbt_validation import cross_validate_trades
 
 POLICY_EVIDENCE_SCHEMA_VERSION = 2
 RELEASE_POLICY_VERSION = DEFAULT_RELEASE_POLICY.identity
+RELEASE_POLICY_FINGERPRINT = canonical_fingerprint(
+    {"release_policy": RELEASE_POLICY_VERSION}
+)
 SPLIT_POLICY_VERSION = "chronological_60_20_20_purged:v2"
 
 
@@ -217,6 +220,7 @@ class ProductionPolicyBacktestRunner:
                 "experiment_id": spec.experiment_id,
                 "status": "invalid_evidence",
                 "candidate_snapshot_fingerprint": spec.candidate_snapshot.fingerprint,
+                "release_policy_fingerprint": RELEASE_POLICY_FINGERPRINT,
                 "decision": {
                     "decision": "INVALID_EVIDENCE",
                     "should_publish": False,
@@ -228,12 +232,6 @@ class ProductionPolicyBacktestRunner:
                 {key: value for key, value in artifact.items() if key not in {"experiment_id"}}
             )
             return artifact
-        if self._repository is not None and spec.holdout_fingerprint and spec.holdout_scope == "untouched_holdout":
-            self._repository.claim_holdout(
-                holdout_fingerprint=spec.holdout_fingerprint,
-                experiment_id=spec.experiment_id,
-                phase=spec.holdout_scope,
-            )
         try:
             split = _purged_split(
                 tuple(day.signal_date for day in spec.candidate_snapshot.days),
@@ -253,6 +251,7 @@ class ProductionPolicyBacktestRunner:
                 "candidate_snapshot_fingerprint": spec.candidate_snapshot.fingerprint,
                 "champion_policy_fingerprint": spec.champion_policy.fingerprint,
                 "challenger_policy_fingerprint": spec.challenger_policy.fingerprint,
+                "release_policy_fingerprint": RELEASE_POLICY_FINGERPRINT,
                 "changed_rule_id": spec.changed_rule_id,
                 "split_policy": SPLIT_POLICY_VERSION,
                 "decision_scope": "out_of_sample",
@@ -268,6 +267,13 @@ class ProductionPolicyBacktestRunner:
                 {key: value for key, value in artifact.items() if key not in {"experiment_id", "hypothesis"}}
             )
             return artifact
+        # An invalid split must not consume an untouched holdout claim.
+        if self._repository is not None and spec.holdout_fingerprint and spec.holdout_scope == "untouched_holdout":
+            self._repository.claim_holdout(
+                holdout_fingerprint=spec.holdout_fingerprint,
+                experiment_id=spec.experiment_id,
+                phase=spec.holdout_scope,
+            )
         champion, champion_records = self._run_arm(
             spec, spec.champion_policy, split
         )
@@ -300,6 +306,7 @@ class ProductionPolicyBacktestRunner:
             "candidate_snapshot_fingerprint": spec.candidate_snapshot.fingerprint,
             "champion_policy_fingerprint": spec.champion_policy.fingerprint,
             "challenger_policy_fingerprint": spec.challenger_policy.fingerprint,
+            "release_policy_fingerprint": RELEASE_POLICY_FINGERPRINT,
             "changed_rule_id": spec.changed_rule_id,
             "split_policy": SPLIT_POLICY_VERSION,
             "split": split,
@@ -311,6 +318,7 @@ class ProductionPolicyBacktestRunner:
             },
             "opportunity_cost_evidence": opportunity_cost_by_split["out_of_sample"],
             "split_opportunity_cost_evidence": opportunity_cost_by_split,
+            "changed_rule_delta": opportunity_cost_by_split["out_of_sample"],
             "rule_verdict_summary": {
                 "champion": champion["rule_verdict_summary"],
                 "challenger": challenger["rule_verdict_summary"],

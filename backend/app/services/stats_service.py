@@ -111,8 +111,11 @@ def _get_overview_stats(db: Session) -> dict[str, Any]:
         "avg_executed_return": official["avg_executed_return"],
         "avg_weighted_return": official["avg_weighted_return"],
         "avg_close_return": official["avg_close_return"],
-        "avg_max_return": official["avg_mfe"],
-        "avg_drawdown": official["avg_mae"],
+        # Older/partially populated databases may return the empty metrics
+        # shape without the optional MFE/MAE aliases.  Keep the overview
+        # contract total instead of turning a zero-sample dashboard into 500.
+        "avg_max_return": official.get("avg_mfe", 0.0),
+        "avg_drawdown": official.get("avg_mae", 0.0),
         "avg_score": _mean([row.final_score for row in rec_rows]),
         "latest_run_at": runs[0].finished_at.isoformat() if runs and runs[0].finished_at else None,
         # ── 9-KPI 评估指标 ──

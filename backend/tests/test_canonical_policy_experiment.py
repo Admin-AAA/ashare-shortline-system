@@ -98,6 +98,8 @@ def test_policy_experiment_recovers_from_zero_champion_on_one_shared_snapshot() 
     assert artifact["schema_version"] == 2
     assert artifact["experiment_kind"] == "production_policy"
     assert artifact["candidate_snapshot_fingerprint"] == snapshot.fingerprint
+    assert artifact["release_policy_fingerprint"]
+    assert artifact["changed_rule_delta"] == artifact["opportunity_cost_evidence"]
     assert artifact["arms"]["champion"]["coverage_evidence"]["active_days"] == 0
     assert artifact["arms"]["challenger"]["coverage_evidence"]["active_days"] > 0
     assert artifact["decision_scope"] == "out_of_sample"
