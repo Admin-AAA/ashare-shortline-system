@@ -843,59 +843,42 @@ def _metrics_by_strategy(
 def strategy_perf_summary(
     db: Session,
     strategy_id: str,
-    window_days: int | None = 180,
 ) -> dict[str, Any] | None:
-    """单策略历史表现摘要（轻量 SQL，供推荐详情卡片展示"历史同策略胜率"）。
-
-    北极星 B 项：每条推荐一屏可见该策略历史战绩（样本/胜率/盈亏比/最近命中日）。
-    与 metrics_by_strategy 的区别：只查一个策略、不构建完整 horizon_metrics，响应快。
-    按 strategy_breakdown_json 命中该 strategy_id 的推荐归因（与 metrics_by_strategy 一致口径）。
-    """
+    """Return the exact current-version six-month canonical backtest profile."""
     if not strategy_id:
         return None
-    start, end = _resolve_window(window_days, None, None)
-    scoped_rows = _scoped_recommendation_rows(
-        db,
-        start,
-        end,
-        run_mode=OFFICIAL_RUN_MODE,
-        live_only=True,
+    from app.services.backtest.strategy_profile import (
+        STRATEGY_PROFILE_WINDOW_DAYS,
+        StrategyBacktestProfiles,
     )
-    rows = [
-        row
-        for row in scoped_rows
-        if any(
-            str(signal.get("strategy_id") or "") == strategy_id
-            for signal in _loads(row.skill_breakdown_json, [])
-        )
-    ]
 
-    sample_count = len(rows)
-    if sample_count == 0:
+    profiles = StrategyBacktestProfiles(db)
+    target = profiles.current_target(strategy_id)
+    if target is None:
         return None
-    labeled = [
-        row
-        for row in rows
-        if normalized_outcome_label(row) in {OUTCOME_SUCCESS, OUTCOME_FAILED}
-        and is_trade_executed(row)
-    ]
-    labeled_count = len(labeled)
-    net_returns = [resolved_trade_return(row) - _ADDITIONAL_COST_PCT for row in labeled]
-    wins = [value for value in net_returns if value > 0]
-    losses = [abs(value) for value in net_returns if value < 0]
-    win_avg = sum(wins) / len(wins) if wins else 0.0
-    loss_avg = sum(losses) / len(losses) if losses else 0.0
-    last_rec_date = max((str(r.trade_date or "") for r in rows), default=None) or None
+    profile = profiles.read(target)
+    if profile is None:
+        return None
     return {
         "strategy_id": strategy_id,
-        "sample_count": sample_count,
-        "labeled_count": labeled_count,
-        "success_count": len(wins),
-        "hit_rate": round(len(wins) * 100 / labeled_count, 1) if labeled_count else None,
-        "avg_return": round(sum(net_returns) / labeled_count, 2) if labeled_count else None,
-        "profit_loss_ratio": round(win_avg / loss_avg, 2) if loss_avg else None,
-        "last_recommendation_date": last_rec_date,
-        "window_days": window_days,
+        "source": "canonical_backtest",
+        "strategy_version": profile["strategy_version"],
+        "profile_fingerprint": profile["profile_fingerprint"],
+        "backtest_id": profile["backtest_id"],
+        "portfolio_model": profile["portfolio_model"],
+        "sample_count": profile["sample_count"],
+        "labeled_count": profile["executed_trade_count"],
+        "success_count": profile["win_count"],
+        "hit_rate": profile["win_rate_pct"],
+        "avg_return": profile["average_net_return_pct"],
+        "profit_loss_ratio": profile["profit_loss_ratio"],
+        "total_return_pct": profile["total_return_pct"],
+        "max_drawdown_pct": profile["max_drawdown_pct"],
+        "monthly_returns": profile["monthly_returns"],
+        "date_from": profile["date_from"],
+        "date_to": profile["date_to"],
+        "generated_at": profile["generated_at"],
+        "window_days": STRATEGY_PROFILE_WINDOW_DAYS,
     }
 
 

@@ -110,19 +110,44 @@ export function StrategyDetailPage({ refreshSignal = 0 }: { refreshSignal?: numb
           </header>
 
           <div className="strategy-detail__metrics">
-            <Metric label="历史运行" value={`${selectedUsage?.run_count ?? 0} 次`} />
-            <Metric label="版本推荐" value={`${selectedUsage?.recommendation_count ?? 0} 笔`} />
+            <Metric label="当前版回测样本" value={data.performance ? `${data.performance.sample_count} 笔` : "—"} />
             <Metric
-              label="当前胜率"
+              label="半年胜率"
               value={data.performance?.hit_rate == null ? "—" : `${(data.performance.hit_rate * 100).toFixed(1)}%`}
               tone={data.performance?.hit_rate != null && data.performance.hit_rate >= 0.5 ? "up" : undefined}
             />
             <Metric
-              label="平均收益"
-              value={data.performance?.avg_return == null ? "—" : `${data.performance.avg_return >= 0 ? "+" : ""}${data.performance.avg_return.toFixed(2)}%`}
-              tone={data.performance?.avg_return == null ? undefined : data.performance.avg_return >= 0 ? "up" : "down"}
+              label="半年收益"
+              value={data.performance == null ? "—" : `${data.performance.total_return_pct >= 0 ? "+" : ""}${data.performance.total_return_pct.toFixed(2)}%`}
+              tone={data.performance == null ? undefined : data.performance.total_return_pct >= 0 ? "up" : "down"}
             />
+            <Metric label="最大回撤" value={data.performance == null ? "—" : `${data.performance.max_drawdown_pct.toFixed(2)}%`} tone="down" />
           </div>
+
+          {data.performance ? (
+            <div style={{ marginTop: 12, padding: 12, border: "1px solid var(--border)", borderRadius: 10 }}>
+              <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 8 }} title={data.performance.strategy_version}>
+                当前版本 canonical 回测 · {data.performance.date_from} ~ {data.performance.date_to} · 更新 {data.performance.generated_at?.slice(0, 16).replace("T", " ") || "—"}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(80px, 1fr))", gap: 8 }}>
+                {data.performance.monthly_returns.map((month) => (
+                  <div key={month.month} style={{ background: "var(--surface-soft)", borderRadius: 8, padding: 8, textAlign: "center" }}>
+                    <div style={{ color: "var(--muted)", fontSize: 11 }}>{month.month}</div>
+                    <div style={{ fontFamily: "var(--font-mono)", fontWeight: 650, color: month.return_pct >= 0 ? "var(--market-up)" : "var(--market-down)" }}>
+                      {month.return_pct >= 0 ? "+" : ""}{month.return_pct.toFixed(2)}%
+                    </div>
+                    <div style={{ color: "var(--muted)", fontSize: 10 }}>{month.executed_trade_count} 笔</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div style={{ marginTop: 12, color: "var(--muted)", fontSize: 12 }}>
+              {data.performance_status === "selected_version_not_current"
+                ? "历史版本不复用当前画像；这里只展示当前可执行版本的半年回测。"
+                : "当前版本半年回测画像待生成；未使用跨版本真实收益补位。"}
+            </div>
+          )}
 
           <StrategyFingerprint strategyId={data.strategy_id} />
 

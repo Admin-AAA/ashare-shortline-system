@@ -619,6 +619,7 @@ class ResearchBacktestRepository:
         run = self.get_run(backtest_id)
         rows: list[Any] = []
         seen: set[tuple[str, str]] = set()
+        verified_artifacts: dict[str, Any] = {}
         for item in candidates:
             value = _as_mapping(item)
             signal_date = _require_value(value, "signal_date")
@@ -627,8 +628,11 @@ class ResearchBacktestRepository:
             if key in seen:
                 raise ImmutableRecordConflict("同一批 candidate 含重复自然键。", details={"key": key})
             seen.add(key)
-            artifact_id = _require_value(value, "input_artifact_id")
-            artifact = self.get_artifact(str(artifact_id))
+            artifact_id = str(_require_value(value, "input_artifact_id"))
+            artifact = verified_artifacts.get(artifact_id)
+            if artifact is None:
+                artifact = self.get_artifact(artifact_id)
+                verified_artifacts[artifact_id] = artifact
             if artifact.snapshot_id != run.snapshot_id:
                 raise ArtifactIntegrityError(
                     "candidate input artifact 不属于该 backtest snapshot。",
@@ -651,7 +655,7 @@ class ResearchBacktestRepository:
                     decision_status=decision_status,
                     signal_json=signal_json,
                     audit_json=audit_json,
-                    input_artifact_id=str(artifact_id),
+                    input_artifact_id=artifact_id,
                 ):
                     rows.append(existing)
                     continue
@@ -669,7 +673,7 @@ class ResearchBacktestRepository:
                 decision_status=decision_status,
                 signal_json=signal_json,
                 audit_json=audit_json,
-                input_artifact_id=str(artifact_id),
+                input_artifact_id=artifact_id,
             )
             self._session.add(row)
             rows.append(row)

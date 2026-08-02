@@ -108,6 +108,7 @@ type DetailItem = Pick<
   secondary_buy?: number | null;
   agent_logs?: AgentLog[];
   strategy_perf?: StrategyPerfSummary | null;
+  strategy_perf_status?: "ready" | "pending_backtest" | "unavailable";
 };
 
 /** 完整决策详情卡片 —— 交易参数 + 买点原因 + 市场阶段 + 评分分解 + 规则 + 风险标签 */
@@ -193,7 +194,10 @@ export function RecommendationDetailCard({ item }: { item: DetailItem }) {
         <MarketContextSection marketContext={item.market_context} />
         <SkillBreakdownSection skillBreakdown={item.skill_breakdown} />
         <AgentReviewSection agentLogs={item.agent_logs} />
-        <StrategyPerfSection strategyPerf={item.strategy_perf} />
+        <StrategyPerfSection
+          strategyPerf={item.strategy_perf}
+          status={item.strategy_perf_status}
+        />
 
         {(keyLevelLabels.length > 0 || hasUnresolvedKeyLevel) && (
           <div style={{ marginBottom: "var(--space-3)" }}>
@@ -392,11 +396,33 @@ function AgentReviewSection({ agentLogs }: { agentLogs?: AgentLog[] }) {
   );
 }
 
-/** 同策略历史战绩区块 —— 北极星 B 项：一屏可见该策略历史胜率/盈亏比/最近命中日。
- * 让用户不用跳到策略页就知道"这个策略历史表现如何"。 */
-function StrategyPerfSection({ strategyPerf }: { strategyPerf?: StrategyPerfSummary | null }) {
-  if (!strategyPerf) return null;
-  const { sample_count, labeled_count, hit_rate, profit_loss_ratio, avg_return, last_recommendation_date, window_days } = strategyPerf;
+/** 当前版本半年 canonical 回测画像；不存在时明确 pending，禁止混用历史实盘。 */
+function StrategyPerfSection({
+  strategyPerf,
+  status,
+}: {
+  strategyPerf?: StrategyPerfSummary | null;
+  status?: "ready" | "pending_backtest" | "unavailable";
+}) {
+  if (!strategyPerf) {
+    if (status !== "pending_backtest") return null;
+    return (
+      <div style={{ marginBottom: "var(--space-3)", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+        <div className="panel__kicker" style={{ marginBottom: "var(--space-1)" }}>当前策略 · 半年回测</div>
+        当前版本画像待生成；未使用旧版本真实收益补位。
+      </div>
+    );
+  }
+  const {
+    labeled_count,
+    hit_rate,
+    profit_loss_ratio,
+    avg_return,
+    total_return_pct,
+    date_from,
+    date_to,
+    strategy_version,
+  } = strategyPerf;
   // 样本 <10 不稳健，降级提示
   const thinSample = labeled_count < 10;
   const wrColor =
@@ -411,7 +437,7 @@ function StrategyPerfSection({ strategyPerf }: { strategyPerf?: StrategyPerfSumm
   return (
     <div style={{ marginBottom: "var(--space-3)", fontSize: "var(--text-xs)", lineHeight: 1.6 }}>
       <div className="panel__kicker" style={{ marginBottom: "var(--space-1)" }}>
-        同策略历史 {window_days ? `· 近${window_days}天` : ""}
+        当前策略 · 半年 canonical 回测
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-3)", alignItems: "baseline" }}>
         {hit_rate != null && (
@@ -441,12 +467,15 @@ function StrategyPerfSection({ strategyPerf }: { strategyPerf?: StrategyPerfSumm
             </span>
           </span>
         )}
-        {last_recommendation_date && (
-          <span>
-            <span style={{ color: "var(--text-muted)" }}>最近命中 </span>
-            <span style={{ color: "var(--ink-secondary)" }}>{last_recommendation_date}</span>
+        <span>
+          <span style={{ color: "var(--text-muted)" }}>半年收益 </span>
+          <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, color: total_return_pct >= 0 ? "var(--market-up)" : "var(--market-down)" }}>
+            {total_return_pct >= 0 ? "+" : ""}{total_return_pct.toFixed(2)}%
           </span>
-        )}
+        </span>
+      </div>
+      <div style={{ color: "var(--text-muted)", marginTop: "var(--space-1)", fontFamily: "var(--font-mono)" }} title={strategy_version}>
+        {date_from} ~ {date_to} · 版本 {strategy_version.slice(0, 18)}
       </div>
       {thinSample && (
         <div style={{ color: "var(--text-muted)", marginTop: "var(--space-1)" }}>
