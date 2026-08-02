@@ -19,6 +19,7 @@ merge_reason_counts/build_stage_summary/fallback_filter_audit）已经在
 """
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from typing import Any
 
@@ -30,14 +31,21 @@ from app.engine.aggregator import resolve_display_limit, resolve_score_line_cont
 from app.models.tables import ApiCallLog
 from app.services.candidates import trace as candidate_trace
 
+logger = logging.getLogger(__name__)
+
 
 def _load_policy_guarded() -> Any:
-    """加载生产选择策略；失败回退 None（保持旧行为：cap 不生效）。"""
+    """加载生产选择策略；失败回退 None（保持旧行为：cap 不生效）。
+
+    失败必须记日志：静默回退会让空仓原因显示的有效线回到 74，
+    与决策线（弱势 60）再次不一致，排障困难（review 2026-08-02）。
+    """
     try:
         from app.engine.production_policy import load_production_selection_policy
 
         return load_production_selection_policy()
     except Exception:  # noqa: BLE001 - audit 展示不应因策略加载失败而崩溃
+        logger.warning("生产选择策略加载失败，audit 有效线回退（weak_regime_score_cap 不生效）", exc_info=True)
         return None
 
 
