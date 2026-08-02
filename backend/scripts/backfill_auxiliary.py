@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -29,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("backfill_auxiliary")
 
 
-def backfill_limit_up(db: Session, start_date: str, end_date: str) -> dict[str, int]:
+def backfill_limit_up(db: Session, start_date: str, end_date: str, sleep_seconds: float = 0.0) -> dict[str, int]:
     """Run the frozen limit_up_board descriptor for each locally known trading day."""
     dates = list(
         db.scalars(
@@ -42,6 +43,8 @@ def backfill_limit_up(db: Session, start_date: str, end_date: str) -> dict[str, 
     stored = 0
     errors = 0
     for trade_date in dates:
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
         try:
             result = run_auxiliary_application(
                 db,
