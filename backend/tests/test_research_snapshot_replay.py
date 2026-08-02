@@ -99,6 +99,8 @@ def test_replay_reads_original_artifact_after_source_rows_change(captured_snapsh
     session.commit()
 
     replay_bundle = runner._load_snapshot_bundle(bundle.snapshot.snapshot_id)
+    assert replay_bundle.captured_locally is False
+    assert replay_bundle.payloads_by_artifact_id == {}
     replay_ref = replay_bundle.snapshot.artifacts_for(signal_date, ArtifactScope.SIGNAL_INPUT)[0]
     replay = ArtifactSignalDateDataReader(repository, replay_ref).read(
         signal_date,

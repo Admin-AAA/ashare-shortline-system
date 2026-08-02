@@ -84,9 +84,12 @@ backend/.venv/bin/python backend/scripts/self_improve_state.py release-worktree 
 先运行：
 
 ```bash
+backend/.venv/bin/python backend/scripts/refresh_strategy_backtest_profiles.py --max-runs 1
 backend/.venv/bin/python scripts/self_check.py
 backend/.venv/bin/python backend/scripts/self_improve_state.py refresh-policy-health
 ```
+
+第一条命令维护策略页唯一允许展示的“当前版本最近 180 天 canonical 回测画像”。它按当前 `strategy_version + 默认参数 + ExecutionPolicy + 可结算窗口` 精确复用；同一天重复运行不会重算，版本、参数或窗口变化时旧画像自动失效。每轮最多补一个缺失画像，利用本命令一天多次运行逐步补齐，禁止用跨版本 LIVE 推荐收益作为兜底。
 
 零票必须分成四类，禁止统称“保护性静默”：
 

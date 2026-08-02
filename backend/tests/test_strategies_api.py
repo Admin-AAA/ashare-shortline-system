@@ -3,8 +3,8 @@
 验证：
 - 返回 200 且为列表
 - 每个元素含 skill_id / name / performance 等关键字段
-- 已调用策略 performance 非空且含胜率；从未调用的 performance=None（覆盖 3/8 缺口的显式呈现）
-- 已调用策略排在未调用之前
+- 只有当前版本半年 canonical 回测完成后 performance 才非空
+- 未完成时明确 pending_backtest，禁止回退到跨版本历史推荐收益
 - mode 校验：非法 mode 返回 400
 """
 
@@ -23,6 +23,8 @@ def test_strategies_endpoint_basic_shape():
     for item in data:
         assert "skill_id" in item and "name" in item
         assert "performance" in item
+        assert "performance_status" in item
+        assert "current_strategy_version" in item
         assert "enabled" in item
         assert "assigned_presets" in item
 
@@ -32,11 +34,8 @@ def test_strategies_endpoint_called_before_dormant():
     data = client.get("/api/strategies").json()
     called = [d for d in data if d["performance"] is not None]
     dormant = [d for d in data if d["performance"] is None]
-    # 至少存在已调用与未调用两类（覆盖 3/8 的真实数据形态）
-    assert called, "应有至少一个已调用策略"
-    # 合并 mode 后所有策略都可能有推荐，不再强制要求存在未覆盖策略
-    # assert dormant, "应有至少一个未覆盖（从未调用）策略"
-    # 排序：已调用的排前面
+    assert called or dormant
+    # 排序：有当前版本回测画像的排前面
     first_dormant_idx = next((i for i, d in enumerate(data) if d["performance"] is None), None)
     if first_dormant_idx is not None:
         for d in data[:first_dormant_idx]:
@@ -49,8 +48,13 @@ def test_strategies_endpoint_called_has_metrics():
     called = [d for d in data if d["performance"] is not None]
     for d in called:
         p = d["performance"]
-        assert isinstance(p["sample_count"], int) and p["sample_count"] > 0
+        assert p["source"] == "canonical_backtest"
+        assert p["strategy_version"] == d["current_strategy_version"]
+        assert isinstance(p["sample_count"], int) and p["sample_count"] >= 0
         assert p["hit_rate"] is not None
+    for d in data:
+        if d["performance"] is None and d["enabled"]:
+            assert d["performance_status"] in {"pending_backtest", "unavailable"}
 
 
 def test_strategies_endpoint_invalid_mode():
@@ -60,22 +64,24 @@ def test_strategies_endpoint_invalid_mode():
     assert resp.status_code == 200
 
 
-def test_strategies_endpoint_traceable_fields_present():
-    """北极星 C 项回归：已调用策略的 performance 必须携带盈亏比与最近命中日期。
-
-    此前 strategies.py 在构造 perf 时遗漏这两个字段（metrics_by_strategy 已计算），
-    导致前端策略卡片恒显 "盈亏比 —" / "最近命中 —"，策略可追溯断链。
-    """
+def test_strategies_endpoint_backtest_identity_fields_are_traceable():
+    """画像必须暴露策略版本、窗口、证据 ID 和按月收益。"""
     client = TestClient(app)
     data = client.get("/api/strategies").json()
     called = [d for d in data if d["performance"] is not None]
-    assert called, "应有至少一个已调用策略"
     for d in called:
         p = d["performance"]
-        assert "profit_loss_ratio" in p, f"{d['skill_id']} 缺 profit_loss_ratio"
-        assert "last_recommendation_date" in p, f"{d['skill_id']} 缺 last_recommendation_date"
-    with_dates = [d for d in called if d["performance"]["last_recommendation_date"]]
-    assert with_dates, "已调用策略中至少应有一条带最近命中日期"
+        for key in (
+            "profit_loss_ratio",
+            "strategy_version",
+            "profile_fingerprint",
+            "backtest_id",
+            "date_from",
+            "date_to",
+            "generated_at",
+            "monthly_returns",
+        ):
+            assert key in p, f"{d['skill_id']} 缺 {key}"
 
 
 def test_strategies_reliable_flag_consistent_with_sample_count():
@@ -87,7 +93,6 @@ def test_strategies_reliable_flag_consistent_with_sample_count():
     client = TestClient(app)
     data = client.get("/api/strategies").json()
     called = [d for d in data if d["performance"] is not None]
-    assert called, "应有至少一个已调用策略"
     for d in called:
         p = d["performance"]
         assert isinstance(p["reliable"], bool), f"{d['skill_id']} reliable 须为布尔"
@@ -95,9 +100,6 @@ def test_strategies_reliable_flag_consistent_with_sample_count():
         assert p["reliable"] == expected, (
             f"{d['skill_id']} reliable={p['reliable']} 与 sample_count={p['sample_count']} 阈值 20 不一致"
         )
-    # 端到端真值：当前生产库至少存在 1 个 n<20 的低样本策略（reliable=False）
-    low = [d for d in called if not d["performance"]["reliable"]]
-    assert low, "当前生产库应有样本<20 的策略使其 reliable=False（否则阈值无意义）"
 
 
 def test_strategies_exposure_30d_present_and_nonnegative():

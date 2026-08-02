@@ -39,5 +39,6 @@ package.json
 ux-audit/
 .git-self-improve.lock
 .git-self-improve-publish.lock
+.strategy-profile-refresh.lock
 backend/scripts/.failure_attr_baseline.json
 .ai-tracker/

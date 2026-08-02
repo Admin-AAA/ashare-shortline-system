@@ -1,18 +1,11 @@
 import { useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, FileText, History, Layers, Target } from "lucide-react";
 import { api } from "../api/client";
-import type { DateRangeMeta, PresetStatsRow, StrategyListItem, StrategyPerformance } from "../types";
+import type { PresetStatsRow, StrategyListItem, StrategyPerformance } from "../types";
 import { ErrorPage, EmptyState, PageSkeleton } from "../components/StateViews";
 import { Panel } from "../components/Panel";
 import { useApi } from "../app/useApi";
 import { useUrlRoute } from "../app/useUrlRoute";
-
-/** 时间窗口选项：null=全部历史累计，N=最近 N 天且已结算。与指标页保持一致。 */
-const WINDOW_OPTIONS: Array<{ label: string; value: number | null }> = [
-  { label: "全部", value: null },
-  { label: "近 30 天", value: 30 },
-  { label: "近 90 天", value: 90 },
-];
 
 /**
  * 策略清单页 —— 系统全部策略的"驾驶舱视图"。
@@ -24,18 +17,10 @@ const WINDOW_OPTIONS: Array<{ label: string; value: number | null }> = [
  * 设计：克制优先。bold 只落在胜率一个数字上；其余保持安静。A 股语义：涨/胜=红，跌/亏=绿，低饱和。
  */
 
-const HORIZONS = [
-  { key: "3", label: "3日" },
-  { key: "5", label: "5日" },
-  { key: "10", label: "10日" },
-];
-
 export function StrategiesPage() {
   const [tab, setTab] = useState<"skills" | "presets">("skills");
-  const [windowDays, setWindowDays] = useState<number | null>(null);
   const skills = useApi<StrategyListItem[]>(
-    () => api.strategies(windowDays ?? undefined),
-    [windowDays],
+    () => api.strategies(),
   );
   // 预设表现：后端 /api/stats/by-preset 已有完整数据，此前无任何页面消费（T7-C 缺口）。
   const presets = useApi<PresetStatsRow[]>(() => api.statsByPreset());
@@ -52,7 +37,7 @@ export function StrategiesPage() {
       }
     >
       {tab === "skills" ? (
-        <SkillsView skills={skills} windowDays={windowDays} setWindowDays={setWindowDays} />
+        <SkillsView skills={skills} />
       ) : (
         <PresetsView presets={presets} />
       )}
@@ -84,12 +69,8 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
 /** 原策略清单视图（已调用/未调用卡片网格 + 时间窗口） */
 function SkillsView({
   skills,
-  windowDays,
-  setWindowDays,
 }: {
   skills: { data: StrategyListItem[] | null; loading: boolean; error: string };
-  windowDays: number | null;
-  setWindowDays: (v: number | null) => void;
 }) {
   if (skills.loading) return <PageSkeleton title="策略清单" hint="加载策略与胜率" rowCount={8} />;
   if (skills.error) return <ErrorPage title="策略加载失败" message={skills.error} />;
@@ -98,54 +79,20 @@ function SkillsView({
     return <EmptyState icon={<Layers size={32} />} title="暂无策略" reason="系统尚未注册任何策略" />;
   }
 
-  const called = data.filter((s) => s.performance);
-  const dormant = data.filter((s) => !s.performance);
-  const coverage = Math.round((called.length / data.length) * 100);
+  const ready = data.filter((s) => s.performance);
+  const pending = data.filter((s) => !s.performance);
 
   return (
     <>
-      {/* 时间窗口 */}
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", padding: "var(--space-2) 0 var(--space-4)", flexWrap: "wrap" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
-          <span style={{ color: "var(--muted)", fontSize: "var(--text-base)", marginRight: "var(--space-1)" }}>时间窗口</span>
-          {WINDOW_OPTIONS.map((opt) => {
-            const active = windowDays === opt.value;
-            return (
-              <button
-                key={String(opt.value)}
-                onClick={() => setWindowDays(opt.value)}
-                style={{
-                  padding: "4px 10px",
-                  fontSize: 12,
-                  borderRadius: 4,
-                  border: "1px solid var(--border)",
-                  background: active ? "var(--accent, #2563eb)" : "var(--surface-soft)",
-                  color: active ? "#fff" : "var(--muted)",
-                  cursor: "pointer",
-                  fontWeight: active ? 600 : 400,
-                }}
-              >
-                {opt.label}
-              </button>
-            );
-          })}
-        </div>
-        <span style={{ color: "var(--muted)", fontSize: 11 }}>
-          {(() => {
-            const dr: DateRangeMeta | undefined = called.find((s) => s.performance?.date_range)?.performance?.date_range;
-            if (dr && dr.window_days) {
-              return `窗口 ${dr.start_date} ~ ${dr.end_date}（已结算截止 ${dr.settle_cutoff}，已结算 ${dr.labeled_in_window} 笔）`;
-            }
-            return "统计范围：全部历史累计";
-          })()}
-        </span>
+      <div style={{ color: "var(--muted)", fontSize: 12, padding: "var(--space-2) 0 var(--space-4)" }}>
+        当前版本最近 180 天 canonical 回测 · 按退出日归属自然月 · 不混入旧版本真实收益
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: "var(--space-4)" }}>
-        {called.map((s) => (
+        {ready.map((s) => (
           <CalledCard key={s.skill_id} item={s} />
         ))}
-        {dormant.map((s) => (
+        {pending.map((s) => (
           <DormantCard key={s.skill_id} item={s} />
         ))}
       </div>
@@ -224,22 +171,20 @@ function PresetTable({ rows }: { rows: PresetStatsRow[] }) {
   );
 }
 
-/** 已调用策略：胜率 + 样本 + 收益，可展开看 3/5/10 日表现 */
+/** 当前版本策略画像：胜率 + 盈亏比 + 半年组合收益，可展开看自然月收益。 */
 function CalledCard({ item }: { item: StrategyListItem }) {
   const perf = item.performance as StrategyPerformance;
   const { navigate } = useUrlRoute();
   const [open, setOpen] = useState(false);
   const win = perf.hit_rate;
   const winColor = win == null ? "var(--muted)" : win >= 0.6 ? "var(--market-up)" : win >= 0.5 ? "var(--market-up)" : "var(--market-down)";
-  const retColor = perf.avg_return == null ? "var(--muted)" : perf.avg_return >= 0 ? "var(--market-up)" : "var(--market-down)";
+  const retColor = perf.total_return_pct >= 0 ? "var(--market-up)" : "var(--market-down)";
   const pf = perf.profit_loss_ratio;
   const pfColor = pf == null ? "var(--muted)" : pf >= 1.4 ? "var(--market-up)" : pf >= 1.0 ? "var(--text)" : "var(--market-down)";
   // 统计可信度：后端 reliable=false（样本<20）时胜率属噪声，须显式提示，防过度信任
   const lowSample = !perf.reliable;
   // 最新补跑门线明细（T27：与 self_check gate_blocked 同源）
   const gate = item.last_exp_gate ?? perf.last_exp_gate;
-  // 最近命中交易日（YYYY-MM-DD），北极星 C 项：策略可追溯
-  const lastDate = perf.last_recommendation_date;
 
   return (
     <div className="strat-card" style={cardStyle}>
@@ -255,21 +200,23 @@ function CalledCard({ item }: { item: StrategyListItem }) {
         {item.description || "（无简介）"}
       </p>
 
-      {/* 核心三指标等权：胜率 / 盈亏比 / 均收益。
+      {/* 核心三指标等权：胜率 / 盈亏比 / 半年收益。
           克制原则——不让胜率独占 hero：盈亏比 <1 的高胜率策略风险调整后并不优，
           skill 明确「不要只盯胜率，判 regime 必须看盈亏比」。三个 D 项指标平级、右对齐、等宽字体。 */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "var(--space-3)", marginTop: "var(--space-4)", paddingTop: "var(--space-3)", borderTop: "1px solid var(--border)" }}>
         <Metric label="胜率" value={win == null ? "—" : `${(win * 100).toFixed(1)}%`} color={winColor} />
         <Metric label="盈亏比" value={pf == null ? "—" : pf.toFixed(2)} color={pfColor} />
         <Metric
-          label="均收益"
-          value={perf.avg_return == null ? "—" : `${perf.avg_return >= 0 ? "+" : ""}${perf.avg_return.toFixed(2)}%`}
+          label="半年收益"
+          value={`${perf.total_return_pct >= 0 ? "+" : ""}${perf.total_return_pct.toFixed(2)}%`}
           color={retColor}
         />
       </div>
       <div style={{ marginTop: "var(--space-2)", fontSize: "var(--text-xs)", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
-        样本 {perf.sample_count} 笔 · 最近命中{" "}
-        <span style={{ color: lastDate ? "var(--text)" : "var(--muted)" }}>{lastDate || "—"}</span>
+        {perf.date_from} ~ {perf.date_to} · 成交 {perf.sample_count} 笔 · 均收益 {perf.avg_return == null ? "—" : `${perf.avg_return >= 0 ? "+" : ""}${perf.avg_return.toFixed(2)}%`}
+      </div>
+      <div style={{ marginTop: 4, fontSize: "var(--text-xs)", color: "var(--muted)", fontFamily: "var(--font-mono)" }} title={perf.strategy_version}>
+        当前版本 {perf.strategy_version.slice(0, 18)} · 更新 {perf.generated_at?.slice(0, 16).replace("T", " ") || "—"}
       </div>
 
         {lowSample && (
@@ -347,25 +294,20 @@ function CalledCard({ item }: { item: StrategyListItem }) {
         }}
       >
         {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        {open ? "收起" : "多周期表现"}
+        {open ? "收起" : "按月收益"}
       </button>
 
       {open && (
         <div style={{ marginTop: "var(--space-3)", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "var(--space-2)" }}>
-          {HORIZONS.map((h) => {
-            const m = (perf.horizon_metrics as Record<string, any> | undefined)?.[h.key];
-            const hWin = m?.hit_rate;
-            const hRet = m?.average_executed_return;
-            const c = hRet == null ? "var(--muted)" : hRet >= 0 ? "var(--market-up)" : "var(--market-down)";
+          {perf.monthly_returns.map((month) => {
+            const c = month.return_pct >= 0 ? "var(--market-up)" : "var(--market-down)";
             return (
-              <div key={h.key} style={{ background: "var(--surface)", borderRadius: 8, padding: "var(--space-2)", textAlign: "center" }}>
-                <div style={{ fontSize: "var(--text-xs)", color: "var(--muted)" }}>{h.label}</div>
-                <div style={{ fontSize: "var(--text-base)", fontWeight: 650, fontFamily: "var(--font-mono)", color: hWin == null ? "var(--muted)" : hWin >= 0.5 ? "var(--market-up)" : "var(--market-down)" }}>
-                  {hWin == null ? "—" : `${(hWin * 100).toFixed(0)}%`}
-                </div>
+              <div key={month.month} style={{ background: "var(--surface)", borderRadius: 8, padding: "var(--space-2)", textAlign: "center" }}>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--muted)" }}>{month.month}</div>
                 <div style={{ fontSize: "var(--text-xs)", fontFamily: "var(--font-mono)", color: c }}>
-                  {hRet == null ? "—" : `${hRet >= 0 ? "+" : ""}${hRet.toFixed(1)}%`}
+                  {month.return_pct >= 0 ? "+" : ""}{month.return_pct.toFixed(2)}%
                 </div>
+                <div style={{ fontSize: 10, color: "var(--muted)" }}>{month.executed_trade_count} 笔</div>
               </div>
             );
           })}
@@ -409,7 +351,7 @@ function Metric({ label, value, color }: { label: string; value: string; color: 
   );
 }
 
-/** 从未被调用的策略：明确标注"未覆盖"，不伪装成有数据 */
+/** 当前版本画像未生成：明确 pending，不用旧版本真实收益补位。 */
 function DormantCard({ item }: { item: StrategyListItem }) {
   return (
     <div className="strat-card" style={{ ...cardStyle, opacity: 0.82 }}>
@@ -418,7 +360,7 @@ function DormantCard({ item }: { item: StrategyListItem }) {
           <div style={{ fontWeight: 650, fontSize: "var(--text-lg)", color: "var(--text)", lineHeight: 1.2 }}>{item.name}</div>
           <div style={{ color: "var(--muted)", fontSize: "var(--text-sm)", marginTop: 2, fontFamily: "var(--font-mono)" }}>{item.skill_id}</div>
         </div>
-        <span style={pillStyle("var(--muted)", "color-mix(in srgb, var(--muted) 14%, transparent)")}>未覆盖</span>
+        <span style={pillStyle("var(--muted)", "color-mix(in srgb, var(--muted) 14%, transparent)")}>待回测</span>
       </div>
 
       <p style={{ margin: "var(--space-3) 0 0", color: "var(--muted)", fontSize: "var(--text-sm)", lineHeight: 1.5, minHeight: 38 }}>
@@ -427,7 +369,7 @@ function DormantCard({ item }: { item: StrategyListItem }) {
 
       <div style={{ marginTop: "var(--space-4)", paddingTop: "var(--space-3)", borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", gap: "var(--space-2)", color: "var(--muted)", fontSize: "var(--text-sm)" }}>
         <Target size={14} />
-        已注册，但推荐管线尚未触发此策略
+        当前版本半年画像尚未生成；不会展示跨版本混合收益
       </div>
 
       <StrategyDetailLink item={item} />

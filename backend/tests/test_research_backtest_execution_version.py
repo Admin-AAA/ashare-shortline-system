@@ -118,6 +118,7 @@ def test_p0_execution_version_is_canonical_and_tracks_real_runtime_inputs(monkey
                 settings={
                     **request.execution_policy.canonical_payload(),
                     "minimum_signal_score": 70.0,
+                    "candidate_evidence_scope": "all",
                 },
             ),
             strategy_fingerprints=(StrategyExecutionFingerprint.from_descriptor(descriptor),),
@@ -139,6 +140,14 @@ def test_p0_execution_version_is_canonical_and_tracks_real_runtime_inputs(monkey
     minimum_score_changed_request = replace(request, parameter_set={"minimum_signal_score": 80.0})
     assert _research_execution_version(changed_policy_request, descriptor) != version
     assert _research_execution_version(minimum_score_changed_request, descriptor) != version
+    assert (
+        _research_execution_version(
+            request,
+            descriptor,
+            candidate_evidence_scope="actionable",
+        )
+        != version
+    )
 
 
 class _Session:

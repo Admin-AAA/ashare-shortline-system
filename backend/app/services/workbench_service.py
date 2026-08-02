@@ -1347,8 +1347,13 @@ def get_recommendation_detail(db: Session, recommendation_id: str) -> dict[str, 
         }
     data["history"] = _historical_recommendations(db, rec.code, rec.recommendation_id)
     data["replay_summary"] = _build_replay_summary(data)
-    # 北极星 B 项：该推荐所属策略的历史战绩（样本/胜率/盈亏比/最近命中日）
+    # 当前策略版本最近半年 canonical 回测；缺失时绝不回退到跨版本实盘收益。
     data["strategy_perf"] = strategy_perf_summary(db, rec.bucket or "")
+    data["strategy_perf_status"] = (
+        "ready"
+        if data["strategy_perf"] is not None
+        else ("pending_backtest" if rec.bucket else "unavailable")
+    )
     return data
 
 

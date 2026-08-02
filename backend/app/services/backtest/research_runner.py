@@ -11,6 +11,7 @@ It never calls the legacy ``run_backtest`` service and never writes
 """
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import defaultdict
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
@@ -99,6 +100,11 @@ from app.services.runs.contracts import (
 
 MINIMUM_SIGNAL_SCORE = 70.0
 MAX_SIGNAL_DATES = 250
+CANDIDATE_EVIDENCE_ALL = "all"
+CANDIDATE_EVIDENCE_ACTIONABLE = "actionable"
+_CANDIDATE_EVIDENCE_SCOPES = frozenset(
+    {CANDIDATE_EVIDENCE_ALL, CANDIDATE_EVIDENCE_ACTIONABLE}
+)
 # Trading calendars contain weekends and holidays; two calendar days per
 # required bar plus a 120-day floor provides enough buffer for a 60-bar rule
 # without loading years
@@ -106,7 +112,12 @@ MAX_SIGNAL_DATES = 250
 MIN_LOOKBACK_CALENDAR_DAYS = 120
 
 
-def _research_execution_version(request: BacktestRequest, descriptor: StrategyDescriptor) -> str:
+def _research_execution_version(
+    request: BacktestRequest,
+    descriptor: StrategyDescriptor,
+    *,
+    candidate_evidence_scope: str = CANDIDATE_EVIDENCE_ALL,
+) -> str:
     """Build the complete, secret-free audit identity for one P0 attempt."""
     factor_plan = bootstrap_default_factor_registry()
     version_input = ExecutionVersionInput(
@@ -118,6 +129,7 @@ def _research_execution_version(request: BacktestRequest, descriptor: StrategyDe
             settings={
                 **request.execution_policy.canonical_payload(),
                 "minimum_signal_score": _minimum_signal_score(request),
+                "candidate_evidence_scope": candidate_evidence_scope,
             },
         ),
         strategy_fingerprints=(StrategyExecutionFingerprint.from_descriptor(descriptor),),
@@ -150,6 +162,7 @@ class SnapshotBundle:
 
     snapshot: DataSnapshot
     payloads_by_artifact_id: Mapping[str, bytes]
+    captured_locally: bool = True
 
     @property
     def signal_dates(self) -> tuple[str, ...]:
@@ -278,6 +291,7 @@ class LocalDataReadinessAdapter:
 
     def __init__(self, session: Session) -> None:
         self._session = session
+        self._valid_trade_dates_cache: dict[int, tuple[str, ...]] = {}
 
     def assess(
         self,
@@ -306,19 +320,21 @@ class LocalDataReadinessAdapter:
         )
         for code in normalized_codes:
             rows = tuple(daily_rows_by_code.get(code, ()))
-            history = tuple(
-                row
-                for row in rows
-                if str(row.trade_date) <= signal_date and _has_valid_ohlc(row)
-            )
-            future = tuple(
-                row
-                for row in rows
-                if str(row.trade_date) > signal_date and _has_valid_ohlc(row)
-            )
-            if not data_requirement.requires_daily_bars or len(history) >= data_requirement.lookback_bars:
+            cache_key = id(daily_rows_by_code.get(code))
+            valid_dates = self._valid_trade_dates_cache.get(cache_key)
+            if valid_dates is None:
+                valid_dates = tuple(
+                    str(row.trade_date) for row in rows if _has_valid_ohlc(row)
+                )
+                self._valid_trade_dates_cache[cache_key] = valid_dates
+            history_count = bisect_right(valid_dates, signal_date)
+            future_count = len(valid_dates) - history_count
+            if (
+                not data_requirement.requires_daily_bars
+                or history_count >= data_requirement.lookback_bars
+            ):
                 daily_ready.append(code)
-            if len(future) >= required_future_bars:
+            if future_count >= required_future_bars:
                 future_ready.append(code)
 
         total = len(normalized_codes)
@@ -531,6 +547,10 @@ class LocalResearchSnapshotBuilder:
         rows_by_code: dict[str, list[DailyKbar]] = defaultdict(list)
         for row in all_rows:
             rows_by_code[str(row.code)].append(row)
+        row_dates_by_code = {
+            code: tuple(str(row.trade_date) for row in rows)
+            for code, rows in rows_by_code.items()
+        }
         rows_at_date: dict[str, list[DailyKbar]] = defaultdict(list)
         for row in signal_rows:
             rows_at_date[str(row.trade_date)].append(row)
@@ -549,15 +569,24 @@ class LocalResearchSnapshotBuilder:
                 execution_policy=request.execution_policy,
             )
             signal_stocks: list[dict[str, Any]] = []
+            outcome_rows_by_code: dict[str, Sequence[DailyKbar]] = {}
             invalid_signal_rows = 0
             market_context = market_context_by_date.get(signal_date, _historical_market_context(()))
             for row in raw_signal_rows:
                 try:
+                    code = str(row.code)
+                    history = rows_by_code.get(code, ())
+                    cutoff = bisect_right(row_dates_by_code.get(code, ()), signal_date)
+                    feature_lookback = max(60, requirement.lookback_bars)
+                    feature_history = history[
+                        max(0, cutoff - feature_lookback):cutoff
+                    ]
+                    outcome_rows_by_code[code] = history[cutoff:]
                     signal_stocks.append(
                         _stock_as_of(
                             row,
-                            rows_by_code.get(str(row.code), ()),
-                            stock_meta.get(str(row.code), {}),
+                            feature_history,
+                            stock_meta.get(code, {}),
                             signal_date,
                             market_context,
                         )
@@ -578,7 +607,7 @@ class LocalResearchSnapshotBuilder:
                 "signal_date": signal_date,
                 "bars_by_code": {
                     stock["code"]: _outcome_bars(
-                        rows_by_code.get(str(stock["code"]), ()),
+                        outcome_rows_by_code.get(str(stock["code"]), ()),
                         signal_date,
                         request.execution_policy,
                     )
@@ -747,11 +776,17 @@ class ResearchBacktestRunner:
         session: Session | None = None,
         strategy_registry: StrategyRegistry | None = None,
         snapshot_builder: LocalResearchSnapshotBuilder | None = None,
+        candidate_evidence_scope: str = CANDIDATE_EVIDENCE_ALL,
     ) -> None:
+        if candidate_evidence_scope not in _CANDIDATE_EVIDENCE_SCOPES:
+            raise ValueError(
+                "candidate_evidence_scope must be 'all' or 'actionable'"
+            )
         self._repository = repository
         self._session = session or repository.session
         self._strategy_registry = strategy_registry
         self._snapshot_builder = snapshot_builder or LocalResearchSnapshotBuilder(self._session)
+        self._candidate_evidence_scope = candidate_evidence_scope
 
     def resolve_request(self, request: BacktestRequest) -> BacktestRequest:
         """Freeze the installed strategy version and its validated parameters."""
@@ -837,7 +872,11 @@ class ResearchBacktestRunner:
         bundle: SnapshotBundle,
     ) -> dict[str, Any]:
         self._persist_bundle(bundle)
-        execution_version = _research_execution_version(request, descriptor)
+        execution_version = _research_execution_version(
+            request,
+            descriptor,
+            candidate_evidence_scope=self._candidate_evidence_scope,
+        )
         request_fingerprint = request.request_fingerprint(
             snapshot_id=bundle.snapshot.snapshot_id,
             effective_strategy_version=descriptor.effective_version,
@@ -920,6 +959,7 @@ class ResearchBacktestRunner:
         execution_version: str,
     ) -> dict[str, Any]:
         candidate_rows: list[dict[str, Any]] = []
+        evaluated_candidate_count = 0
         persisted_trades: list[Trade] = []
         attribution_rows: list[dict[str, Any]] = []
         signal_dates = bundle.signal_dates
@@ -941,6 +981,7 @@ class ResearchBacktestRunner:
                 code = str(stock.get("code") or "")
                 if not code:
                     continue
+                evaluated_candidate_count += 1
                 try:
                     signal = dict(strategy.evaluate(stock, StrategyContext()))
                 except Exception as exc:  # preserve individual evidence without promoting it to a trade
@@ -960,21 +1001,25 @@ class ResearchBacktestRunner:
                     )
                     continue
                 actionable = _is_actionable_signal(signal, minimum_score=minimum_signal_score)
-                candidate_rows.append(
-                    {
-                        "signal_date": signal_date,
-                        "code": code,
-                        "decision_status": "signal" if actionable else ("vetoed" if signal.get("hard_veto") else "no_signal"),
-                        "signal_json": signal,
-                        "audit_json": {
-                            "score": signal.get("score", 0),
-                            "minimum_signal_score": minimum_signal_score,
-                            "strategy_version": descriptor.effective_version,
-                            "selected": actionable,
-                        },
-                        "input_artifact_id": signal_ref.artifact_id,
-                    }
-                )
+                if (
+                    self._candidate_evidence_scope == CANDIDATE_EVIDENCE_ALL
+                    or actionable
+                ):
+                    candidate_rows.append(
+                        {
+                            "signal_date": signal_date,
+                            "code": code,
+                            "decision_status": "signal" if actionable else ("vetoed" if signal.get("hard_veto") else "no_signal"),
+                            "signal_json": signal,
+                            "audit_json": {
+                                "score": signal.get("score", 0),
+                                "minimum_signal_score": minimum_signal_score,
+                                "strategy_version": descriptor.effective_version,
+                                "selected": actionable,
+                            },
+                            "input_artifact_id": signal_ref.artifact_id,
+                        }
+                    )
                 if not actionable:
                     continue
                 outcome = ArtifactOutcomeDataReader(
@@ -1045,7 +1090,9 @@ class ResearchBacktestRunner:
             "execution_policy_fingerprint": request.execution_policy.fingerprint(),
             "signal_dates": list(signal_dates),
             "diagnostic_scope": request.diagnostic_scope,
-            "candidate_count": len(candidate_rows),
+            "candidate_count": evaluated_candidate_count,
+            "persisted_candidate_count": len(candidate_rows),
+            "candidate_evidence_scope": self._candidate_evidence_scope,
             "trade_count": len(persisted_trades),
             "metrics": metrics.canonical_payload(),
             "equity_curve": [point.canonical_payload() for point in equity_curve],
@@ -1059,6 +1106,12 @@ class ResearchBacktestRunner:
 
     def _persist_bundle(self, bundle: SnapshotBundle) -> None:
         snapshot = bundle.snapshot
+        if not bundle.captured_locally:
+            # A rehydrated bundle already belongs to the immutable repository.
+            # Signal/outcome readers verify each payload hash when it is used;
+            # loading and hashing every large BLOB here would duplicate that I/O.
+            self._repository.get_snapshot(snapshot.snapshot_id)
+            return
         immutable_manifest = {
             "schema_version": 2,
             "partitions": [partition.canonical_payload() for partition in snapshot.partitions],
@@ -1117,7 +1170,6 @@ class ResearchBacktestRunner:
             raise SnapshotCaptureError("stored snapshot coverage JSON is malformed", details={"snapshot_id": snapshot_id})
 
         artifacts_by_date: dict[str, tuple[ArtifactRef, ...]] = {}
-        payloads: dict[str, bytes] = {}
         for signal_date, ref_payloads in artifact_payload.items():
             if not isinstance(signal_date, str) or not isinstance(ref_payloads, list):
                 raise SnapshotCaptureError("stored artifact reference manifest is malformed", details={"snapshot_id": snapshot_id})
@@ -1129,8 +1181,7 @@ class ResearchBacktestRunner:
                 )
             artifacts_by_date[signal_date] = refs
             for ref in refs:
-                artifact = _read_referenced_artifact(self._repository, ref)
-                payloads[ref.artifact_id] = bytes(artifact.payload)
+                _read_referenced_artifact(self._repository, ref)
 
         partitions = tuple(_partition_from_payload(value) for value in partitions_payload)
         coverage = {
@@ -1146,7 +1197,11 @@ class ResearchBacktestRunner:
             coverage_by_signal_date=coverage,
             missing_requirements=gaps,
         )
-        return SnapshotBundle(snapshot=snapshot, payloads_by_artifact_id=payloads)
+        return SnapshotBundle(
+            snapshot=snapshot,
+            payloads_by_artifact_id={},
+            captured_locally=False,
+        )
 
     def _resolve_strategy(self, request: BacktestRequest) -> tuple[StrategyDescriptor, Strategy]:
         registry = self._strategy_registry or self._build_default_registry(request.strategy_id)
@@ -1192,7 +1247,7 @@ def _stock_as_of(
     signal_date: str,
     market_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    prior = [item for item in history if str(item.trade_date) <= signal_date]
+    prior = list(history)
     close = _positive_number(row.close, "close")
     closes = [_positive_number(item.close, "close") for item in prior if _number(item.close) > 0]
     highs = [_positive_number(item.high, "high") for item in prior if _number(item.high) > 0]

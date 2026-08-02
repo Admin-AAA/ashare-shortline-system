@@ -89,6 +89,17 @@ python self_improve_state.py with-publish-lock --cmd 'git -C <主仓库> pull --
 
 ## 正式回测与探索工具
 
+### 当前策略半年画像
+
+策略清单、策略详情和推荐详情只展示当前可执行策略版本最近 180 天的 canonical 回测画像，不读取跨版本 LIVE 推荐收益。高频 self-improve 每轮最多增量补一个：
+
+```bash
+cd backend
+.venv/bin/python scripts/refresh_strategy_backtest_profiles.py --max-runs 1
+```
+
+画像身份绑定 `strategy_id + strategy_version + 默认参数 fingerprint + ExecutionPolicy fingerprint + 可结算起止日 + portfolio model`。相同身份直接复用 `backtest_runs_v2/backtest_trades`；任一身份字段变化都会产生新画像。月收益按 `exit_date` 归属自然月；同日退出组合按仓位加权，当总暴露超过 100% 时归一化到 100%，再逐日复合。无画像时前端显示“待回测”，禁止回退到旧策略真实收益。
+
 ### Canonical 单策略双臂实验
 
 策略参数/版本可以由 Research Runner 表达时，使用唯一正式入口：

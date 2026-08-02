@@ -1,12 +1,12 @@
-"""策略清单 API —— 全部策略的元数据 + 实盘/回测胜率，单次返回。
+"""策略清单 API —— 全部策略元数据 + 当前版本半年 canonical 回测画像。
 
 填补前端"策略清单页"缺口：用户在一个页面看到系统全部策略（中文名 + 简介 + 启用状态 +
-调用覆盖 + 胜率），一眼看清哪些策略在 work、哪些从未被调用（覆盖 3/8 → 8/8 的入口）。
+调用覆盖 + 胜率），一眼看清哪些策略在 work、哪些尚未完成当前版本回测。
 
 数据来源：
 - 策略元信息：workbench_service.list_skills（SkillRegistry + manifest，含中文名/简介/预设/回测能力）
-- 胜率指标：outcome_service.metrics_by_strategy（按 skill_breakdown_json 聚合的胜率/样本/收益）
-两者在 strategy_id 上 join；从未被调用的策略 performance=None（明确标记为"未覆盖"）。
+- 表现画像：backtest_runs_v2/backtest_trades 中精确匹配当前版本、参数、成交政策和半年窗口的结果
+绝不回退到跨版本混合的真实推荐收益。
 """
 
 import logging
@@ -19,7 +19,8 @@ from app.api.contracts import ContractRouter as APIRouter
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.services.outcome_service import exposure_sample_counts, metrics_by_strategy
+from app.services.backtest.strategy_profile import StrategyBacktestProfiles
+from app.services.outcome_service import exposure_sample_counts
 from app.services.strategy_center_service import (
     StrategyVersionNotFoundError,
     get_strategy_center_detail,
@@ -50,30 +51,40 @@ router = APIRouter(prefix="/api/strategies", tags=["strategies"])
 
 
 def _performance_payload(
-    metric: dict | None,
+    profile: dict | None,
     *,
     exposure_30d: int = 0,
     last_exp_gate: dict | None = None,
 ) -> dict | None:
-    if not metric or (metric.get("sample_count") or 0) <= 0:
+    if not profile:
         return None
+    sample_count = int(profile.get("executed_trade_count") or 0)
+    all_trades = int(profile.get("sample_count") or 0)
     payload = {
-        "sample_count": metric["sample_count"],
-        "labeled_count": metric.get("labeled_count", 0),
-        "triggered_count": metric.get("triggered_count", 0),
-        "missed_count": metric.get("missed_count", 0),
-        "success_count": metric.get("success_count", 0),
-        "trigger_rate": metric.get("trigger_rate"),
-        "hit_rate": metric.get("hit_rate"),
-        "avg_score": metric.get("avg_score"),
-        "avg_return": metric.get("avg_return"),
-        "profit_loss_ratio": metric.get("profit_loss_ratio"),
-        "last_recommendation_date": metric.get("last_recommendation_date"),
-        "reliable": (metric.get("sample_count") or 0) >= MIN_SAMPLE_FOR_RELIABLE,
+        "source": "canonical_backtest",
+        "strategy_version": profile.get("strategy_version"),
+        "profile_fingerprint": profile.get("profile_fingerprint"),
+        "backtest_id": profile.get("backtest_id"),
+        "portfolio_model": profile.get("portfolio_model"),
+        "sample_count": sample_count,
+        "labeled_count": sample_count,
+        "triggered_count": sample_count,
+        "missed_count": max(0, all_trades - sample_count),
+        "success_count": int(profile.get("win_count") or 0),
+        "trigger_rate": sample_count / all_trades if all_trades else 0.0,
+        "hit_rate": float(profile.get("win_rate_pct") or 0) / 100,
+        "avg_score": None,
+        "avg_return": profile.get("average_net_return_pct"),
+        "profit_loss_ratio": profile.get("profit_loss_ratio"),
+        "total_return_pct": profile.get("total_return_pct"),
+        "max_drawdown_pct": profile.get("max_drawdown_pct"),
+        "monthly_returns": profile.get("monthly_returns") or [],
+        "date_from": profile.get("date_from"),
+        "date_to": profile.get("date_to"),
+        "generated_at": profile.get("generated_at"),
+        "reliable": sample_count >= MIN_SAMPLE_FOR_RELIABLE,
         "exposure_30d": int(exposure_30d or 0),
         "exposure_floor": EXPOSURE_SAMPLE_FLOOR,
-        "horizon_metrics": metric.get("horizon_metrics"),
-        "date_range": metric.get("date_range"),
     }
     if last_exp_gate is not None:
         payload["last_exp_gate"] = last_exp_gate
@@ -146,22 +157,20 @@ def _last_exp_gate_for(db: Session, skill_id: str) -> dict | None:
 @router.get("")
 def list_strategies(
     db: Session = Depends(get_db),
-    window_days: int | None = Query(default=None, ge=1, le=365, description="滚动窗口天数，如 30/90；设置后自动截到已结算截止日"),
-    start_date: str | None = Query(default=None, description="显式起始日期 YYYY-MM-DD（window_days 优先）"),
-    end_date: str | None = Query(default=None, description="显式截止日期 YYYY-MM-DD（window_days 优先）"),
 ):
-    """全部策略清单（含调用覆盖与胜率指标）。
+    """全部策略清单（当前版本半年 canonical 回测，缺失时明确 pending）。
 
     返回固定顺序：已调用（有样本）的策略在前、按胜率降序；从未调用的策略在后。
-    performance=None 表示该项目前无任何推荐历史（未覆盖）。
-    时间窗口：window_days/start_date/end_date 透传给 metrics_by_strategy，
-    与 /api/metrics/by-strategy 口径一致，便于策略清单页与指标页跨页对照。
+    performance=None 表示当前版本、参数与窗口尚无正式画像；不会读取历史推荐补位。
     """
     skills = list_skills(db)
-    metrics_by_id = {
-        m["strategy_id"]: m
-        for m in metrics_by_strategy(db, window_days=window_days, start_date=start_date, end_date=end_date)
-    }
+    profiles = StrategyBacktestProfiles(db)
+    try:
+        targets = profiles.current_targets()
+    except ValueError:
+        targets = ()
+    target_by_id = {target.strategy_id: target for target in targets}
+    profiles_by_id = profiles.read_many(targets)
     exposure_30d = exposure_sample_counts(db, window_days=30)
 
     # T4：低曝光策略门线明细**批量**查询（1 次索引扫描替代 N 次全扫）
@@ -184,11 +193,12 @@ def list_strategies(
     result = []
     for s in skills:
         sid = s["skill_id"]
-        m = metrics_by_id.get(sid)
+        target = target_by_id.get(sid)
+        profile = profiles_by_id.get(sid)
         exp_n = int(exposure_30d.get(sid) or 0)
         # 仅低曝光策略展示门线明细（gate_map 已批量查出，非 N 次全扫）
         gate = gate_map.get(sid) if exp_n < EXPOSURE_SAMPLE_FLOOR else None
-        perf = _performance_payload(m, exposure_30d=exp_n, last_exp_gate=gate)
+        perf = _performance_payload(profile, exposure_30d=exp_n, last_exp_gate=gate)
         item = {
             "skill_id": sid,
             "name": s["name"],
@@ -199,6 +209,14 @@ def list_strategies(
             "has_backtest_adapter": s.get("has_backtest_adapter", False),
             "exposure_30d": exp_n,
             "exposure_floor": EXPOSURE_SAMPLE_FLOOR,
+            "performance_status": (
+                "ready"
+                if perf is not None
+                else ("pending_backtest" if target is not None else "unavailable")
+            ),
+            "current_strategy_version": (
+                target.strategy_version if target is not None else None
+            ),
             "performance": perf,
         }
         if gate is not None:
@@ -207,7 +225,7 @@ def list_strategies(
 
     result.sort(
         key=lambda x: (
-            x["performance"] is not None,
+            x["performance_status"] == "ready",
             x["performance"]["hit_rate"]
             if x["performance"] and x["performance"]["hit_rate"] is not None
             else -1,
@@ -229,13 +247,25 @@ def strategy_detail(
         raise HTTPException(status_code=404, detail="strategy version not found") from exc
     if detail is None:
         raise HTTPException(status_code=404, detail="strategy not found")
-    metric = next(
-        (item for item in metrics_by_strategy(db) if item.get("strategy_id") == strategy_id),
-        None,
+    profiles = StrategyBacktestProfiles(db)
+    target = profiles.current_target(strategy_id)
+    profile = (
+        profiles.read(target)
+        if target is not None and detail.get("selected_is_current")
+        else None
     )
     exp_n = int(exposure_sample_counts(db, window_days=30).get(strategy_id) or 0)
     gate = _last_exp_gate_for(db, strategy_id) if exp_n < EXPOSURE_SAMPLE_FLOOR else None
-    detail["performance"] = _performance_payload(metric, exposure_30d=exp_n, last_exp_gate=gate)
+    detail["performance"] = _performance_payload(profile, exposure_30d=exp_n, last_exp_gate=gate)
+    detail["performance_status"] = (
+        "ready"
+        if profile is not None
+        else (
+            "pending_backtest"
+            if target is not None and detail.get("selected_is_current")
+            else "selected_version_not_current"
+        )
+    )
     detail["exposure_30d"] = exp_n
     detail["exposure_floor"] = EXPOSURE_SAMPLE_FLOOR
     if gate is not None:

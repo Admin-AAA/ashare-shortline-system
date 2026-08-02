@@ -1670,6 +1670,7 @@ export type RecommendationDetail = RecommendationCard & {
   };
   /** 该推荐所属策略的历史战绩（北极星 B 项：一屏可见同策略胜率） */
   strategy_perf?: StrategyPerfSummary | null;
+  strategy_perf_status?: "ready" | "pending_backtest" | "unavailable";
 };
 
 export type ExecutionDecision = {
@@ -1741,13 +1742,23 @@ export type ExecutionConfirmation = {
 /** 单策略历史表现摘要 —— strategy_perf_summary 轻量 SQL 输出 */
 export type StrategyPerfSummary = {
   strategy_id: string;
+  source: "canonical_backtest";
+  strategy_version: string;
+  profile_fingerprint: string;
+  backtest_id: string;
+  portfolio_model: "capped_daily_exit_cohort_v1";
   sample_count: number;
   labeled_count: number;
   success_count: number;
   hit_rate: number | null;
   avg_return: number | null;
   profit_loss_ratio: number | null;
-  last_recommendation_date: string | null;
+  total_return_pct: number;
+  max_drawdown_pct: number;
+  monthly_returns: StrategyMonthlyReturn[];
+  date_from: string;
+  date_to: string;
+  generated_at: string | null;
   window_days: number | null;
 };
 
@@ -1971,8 +1982,19 @@ export type SkillSummary = {
   assigned_presets: string[];
 };
 
-/** 单个策略的实盘/回测表现（来自 /api/metrics/by-strategy，按 strategy_id join） */
+export type StrategyMonthlyReturn = {
+  month: string;
+  return_pct: number;
+  executed_trade_count: number;
+};
+
+/** 当前策略版本最近半年 canonical 回测画像。 */
 export type StrategyPerformance = {
+  source: "canonical_backtest";
+  strategy_version: string;
+  profile_fingerprint: string;
+  backtest_id: string;
+  portfolio_model: "capped_daily_exit_cohort_v1";
   sample_count: number;
   labeled_count: number;
   triggered_count: number;
@@ -1983,7 +2005,12 @@ export type StrategyPerformance = {
   avg_score: number | null;
   avg_return: number | null;
   profit_loss_ratio: number | null;
-  last_recommendation_date: string | null;
+  total_return_pct: number;
+  max_drawdown_pct: number;
+  monthly_returns: StrategyMonthlyReturn[];
+  date_from: string;
+  date_to: string;
+  generated_at: string | null;
   /** 统计可信度：样本数 < 20 时为 false（胜率属噪声，前端标「样本不足·统计参考」） */
   reliable: boolean;
   /** 近 30 天 formal+experiment 曝光（与 self_check E 项 / 补跑判定一致） */
@@ -2003,8 +2030,6 @@ export type StrategyPerformance = {
     regime?: string | null;
     trade_date?: string | null;
   };
-  horizon_metrics?: Record<string, unknown> | null;
-  date_range?: DateRangeMeta;
 };
 
 /** 策略清单页单行（策略元数据 + 表现，单次请求返回） */
@@ -2021,6 +2046,8 @@ export type StrategyListItem = {
   exposure_30d?: number;
   exposure_floor?: number;
   last_exp_gate?: StrategyPerformance["last_exp_gate"];
+  performance_status: "ready" | "pending_backtest" | "unavailable";
+  current_strategy_version: string | null;
   performance: StrategyPerformance | null;
 };
 
@@ -2080,6 +2107,7 @@ export type StrategyCenterDetail = {
     target_version_id: string;
     changes: StrategyVersionChange[];
   };
+  performance_status: "ready" | "pending_backtest" | "selected_version_not_current";
   performance: StrategyPerformance | null;
 };
 
