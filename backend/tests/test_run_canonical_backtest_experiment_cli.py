@@ -4,6 +4,7 @@ import json
 
 from app.engine.backtest import BarInput
 from app.services.backtest.policy_experiment import CanonicalPolicyExperimentSpec
+from app.services.backtest.policy_experiment import ScoredCandidateSnapshot
 from scripts.run_canonical_backtest_experiment import build_parser, build_spec
 
 
@@ -85,3 +86,53 @@ def test_cli_builds_one_rule_production_policy_spec(tmp_path) -> None:
 
     assert isinstance(spec, CanonicalPolicyExperimentSpec)
     assert spec.changed_rule_id == "structural_strong_hard_veto"
+
+
+def test_cli_can_build_rule_replay_snapshot_without_live_persistence(
+    tmp_path, monkeypatch
+) -> None:
+    payload = {
+        "schema_version": 1,
+        "source": "production-rule-replay",
+        "days": [
+            {
+                "signal_date": f"2026-03-{day:02d}",
+                "market_snapshot": {"sample_count": 1, "market_regime": "弱势"},
+                "cards": [],
+                "outcome_bars": {},
+            }
+            for day in range(1, 25)
+        ],
+    }
+    frozen = ScoredCandidateSnapshot.from_payload(payload)
+    calls = []
+
+    class FakeBuilder:
+        def __init__(self, db):
+            calls.append(db)
+
+        def build(self, **kwargs):
+            calls.append(kwargs)
+            return frozen
+
+    monkeypatch.setattr(
+        "scripts.run_canonical_backtest_experiment.ProductionRuleReplayCandidateBuilder",
+        FakeBuilder,
+    )
+    output = tmp_path / "generated.json"
+    args = build_parser().parse_args(
+        [
+            "--experiment-kind", "production-policy",
+            "--start", "2026-03-01",
+            "--end", "2026-03-24",
+            "--candidate-snapshot-output", str(output),
+            "--challenger-policy-patch", '{"oscillation_hard_veto":false}',
+            "--hypothesis", "恢复震荡机会",
+        ]
+    )
+    db = object()
+    spec = build_spec(args, db)
+
+    assert spec.candidate_snapshot.fingerprint == frozen.fingerprint
+    assert calls[0] is db
+    assert output.exists()

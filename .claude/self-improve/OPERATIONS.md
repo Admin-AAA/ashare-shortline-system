@@ -120,6 +120,8 @@ cd backend
 
 证据同时写入 `backtest_data_snapshots`、`backtest_input_artifacts`、`backtest_runs_v2`、`backtest_candidates`、`backtest_trades` 和 `backtest_experiments`。正式判定只看 purged OOS，并强制 executed trade、opportunity capture、连续 opportunity abstain、单规则差异和 vectorbt gates。当前 selection governance 是 audit-only；即使 `should_publish=true` 也只能记录 FINDING。
 
+没有冻结文件时使用 `--start/--end --candidate-snapshot-output <path>`；CLI 会以只读 production stages 生成 rule-only snapshot，不创建 recommendation run、不写 LIVE 表、不调用网络或 LLM。
+
 `backend/scripts/si_path_a_signal_backtest.py` 的每个回测结果自带以下字段，做 regime 分层验证时直接用：
 
 - `regime_breakdown`：按 regime 分组 `{regime: {n, win_rate, avg_net, pf}}`。regime 取值：`强牛`/`偏多`/`震荡`/`弱势`（强势/结构性强势 由当日的市场结构叠加）。

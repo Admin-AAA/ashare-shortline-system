@@ -149,6 +149,8 @@ backend/.venv/bin/python backend/scripts/run_canonical_backtest_experiment.py \
   --hypothesis '<预注册假设>'
 ```
 
+若尚无冻结文件，可省略 `--candidate-snapshot-file`，改传 `--start/--end` 与 `--candidate-snapshot-output`；CLI 会用只读 `ProductionRuleReplayCandidateBuilder` 生成并冻结快照。
+
 策略自身参数实验使用 `--experiment-kind strategy`，不得用 PATH-A 的聚合结果冒充 canonical evidence。LLM prompt/model 变化只能用冻结 recorded-review snapshot 单独实验。
 
 ## 7. 正式 evidence 与发布判定
