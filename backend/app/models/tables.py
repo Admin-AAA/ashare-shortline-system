@@ -1107,6 +1107,18 @@ class BacktestDataSnapshot(Base):
     created_at: Mapped[datetime] = mapped_column(_BACKTEST_DATETIME, default=datetime.utcnow, index=True)
 
 
+class BacktestHoldoutClaim(Base):
+    """Concurrency-safe consumption ledger for research holdout partitions."""
+
+    __tablename__ = "backtest_holdout_claims"
+
+    holdout_fingerprint: Mapped[str] = mapped_column(CHAR(64), primary_key=True)
+    experiment_id: Mapped[str] = mapped_column(String(80), index=True)
+    phase: Mapped[str] = mapped_column(String(24), default="untouched_holdout")
+    status: Mapped[str] = mapped_column(String(24), default="consumed")
+    claimed_at: Mapped[datetime] = mapped_column(_BACKTEST_DATETIME, default=datetime.utcnow)
+
+
 class BacktestInputArtifact(Base):
     """按信号日保存的、带摘要校验的不可变策略/结果输入。"""
 

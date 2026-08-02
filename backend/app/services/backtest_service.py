@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.engine.aggregator import apply_pool_rules
+from app.engine.production_policy import DEFAULT_PRODUCTION_SELECTION_POLICY
 from app.engine.skill_loader import load_skills
 from app.engine.strategy import StrategyContext, build_registry_from_skills
 from app.models.tables import (
@@ -529,6 +530,7 @@ def _backtest_single_date(
         score_line=score_line,
         market_snapshot=snapshot,
         risk_template="balanced",
+        selection_policy=DEFAULT_PRODUCTION_SELECTION_POLICY,
     )
 
     run_id = _persist_backtest_run(

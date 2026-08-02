@@ -154,6 +154,8 @@ class CanonicalPolicyExperimentSpec:
     score_line: float
     output_count: int
     execution_policy: ExecutionPolicy
+    holdout_fingerprint: str | None = None
+    holdout_scope: str = "untouched_holdout"
 
     def __post_init__(self) -> None:
         if not self.experiment_id or not self.hypothesis:
@@ -167,6 +169,8 @@ class CanonicalPolicyExperimentSpec:
             raise ValueError(
                 f"production-policy experiment must change exactly one rule: {expected}"
             )
+        if self.holdout_scope not in {"discovery", "validation", "untouched_holdout"}:
+            raise ValueError("holdout_scope must be discovery, validation or untouched_holdout")
 
 
 @dataclass(frozen=True)
@@ -174,8 +178,10 @@ class PortfolioCoverageEvidence:
     eligible_days: int
     opportunity_days: int
     active_days: int
+    productive_days: int
     executed_trades: int
     opportunity_capture_rate_pct: float
+    productive_day_capture_rate_pct: float
     abstain_days: int
     max_consecutive_opportunity_abstain_days: int
 
@@ -184,8 +190,10 @@ class PortfolioCoverageEvidence:
             "eligible_days": self.eligible_days,
             "opportunity_days": self.opportunity_days,
             "active_days": self.active_days,
+            "productive_days": self.productive_days,
             "executed_trades": self.executed_trades,
             "opportunity_capture_rate_pct": self.opportunity_capture_rate_pct,
+            "productive_day_capture_rate_pct": self.productive_day_capture_rate_pct,
             "abstain_days": self.abstain_days,
             "max_consecutive_opportunity_abstain_days": self.max_consecutive_opportunity_abstain_days,
         }
@@ -198,6 +206,34 @@ class ProductionPolicyBacktestRunner:
         self._repository = repository
 
     def run(self, spec: CanonicalPolicyExperimentSpec) -> dict[str, Any]:
+        if (
+            self._repository is not None
+            and spec.holdout_scope == "untouched_holdout"
+            and not spec.holdout_fingerprint
+        ):
+            artifact = {
+                "schema_version": POLICY_EVIDENCE_SCHEMA_VERSION,
+                "experiment_kind": "production_policy",
+                "experiment_id": spec.experiment_id,
+                "status": "invalid_evidence",
+                "candidate_snapshot_fingerprint": spec.candidate_snapshot.fingerprint,
+                "decision": {
+                    "decision": "INVALID_EVIDENCE",
+                    "should_publish": False,
+                    "release_policy": RELEASE_POLICY_VERSION,
+                    "failed_gates": ["untouched_holdout_claim_required"],
+                },
+            }
+            artifact["evidence_fingerprint"] = canonical_fingerprint(
+                {key: value for key, value in artifact.items() if key not in {"experiment_id"}}
+            )
+            return artifact
+        if self._repository is not None and spec.holdout_fingerprint and spec.holdout_scope == "untouched_holdout":
+            self._repository.claim_holdout(
+                holdout_fingerprint=spec.holdout_fingerprint,
+                experiment_id=spec.experiment_id,
+                phase=spec.holdout_scope,
+            )
         try:
             split = _purged_split(
                 tuple(day.signal_date for day in spec.candidate_snapshot.days),
@@ -238,12 +274,21 @@ class ProductionPolicyBacktestRunner:
         challenger, challenger_records = self._run_arm(
             spec, spec.challenger_policy, split
         )
+        opportunity_cost_by_split = {
+            name: _paired_opportunity_cost(
+                champion_records,
+                challenger_records,
+                dates,
+            )
+            for name, dates in split.items()
+        }
         decision = DEFAULT_RELEASE_POLICY.evaluate(
             champion=champion,
             challenger=challenger,
             changed_rule_ids=_changed_rule_ids(
                 spec.champion_policy, spec.challenger_policy
             ),
+            opportunity_cost=opportunity_cost_by_split["out_of_sample"],
         )
         artifact: dict[str, Any] = {
             "schema_version": POLICY_EVIDENCE_SCHEMA_VERSION,
@@ -264,6 +309,8 @@ class ProductionPolicyBacktestRunner:
                 "champion": champion["coverage_evidence"],
                 "challenger": challenger["coverage_evidence"],
             },
+            "opportunity_cost_evidence": opportunity_cost_by_split["out_of_sample"],
+            "split_opportunity_cost_evidence": opportunity_cost_by_split,
             "rule_verdict_summary": {
                 "champion": champion["rule_verdict_summary"],
                 "challenger": challenger["rule_verdict_summary"],
@@ -291,8 +338,12 @@ class ProductionPolicyBacktestRunner:
         trades: list[Trade] = []
         candidate_rows: list[dict[str, Any]] = []
         active_dates: set[str] = set()
+        productive_dates: set[str] = set()
         opportunity_dates: set[str] = set()
         verdict_summary: Counter[str] = Counter()
+        selected_keys: set[str] = set()
+        outcomes: dict[str, dict[str, Any]] = {}
+        regimes: dict[str, str] = {}
         for day in spec.candidate_snapshot.days:
             cards = _thaw_json(day.cards)
             if _is_opportunity_day(cards, spec.score_line):
@@ -316,7 +367,22 @@ class ProductionPolicyBacktestRunner:
                 code = str(card.get("code") or "")
                 if not code:
                     continue
+                key = _candidate_key(day.signal_date, code)
+                if code in selected_codes:
+                    selected_keys.add(key)
+                outcome = _simulate_card(day, card, spec.execution_policy)
+                outcome["drop_owner"] = verdict_by_code[code].drop_owner
+                outcomes[key] = outcome
+                regimes[key] = str(
+                    day.market_snapshot.get("market_regime")
+                    or day.market_snapshot.get("regime")
+                    or "unknown"
+                )
                 verdict = verdict_by_code[code]
+                audit_json = asdict(verdict)
+                audit_json["counterfactual_status"] = outcome["status"]
+                if outcome.get("trade") is not None:
+                    audit_json["counterfactual_trade"] = outcome["trade"].canonical_payload()
                 candidate_rows.append(
                     {
                         "signal_date": day.signal_date,
@@ -325,31 +391,20 @@ class ProductionPolicyBacktestRunner:
                             "recommended" if code in selected_codes else "rejected"
                         ),
                         "signal_json": dict(card),
-                        "audit_json": asdict(verdict),
+                        "audit_json": audit_json,
                     }
                 )
             if result.recommendations:
                 active_dates.add(day.signal_date)
             for card in result.recommendations:
                 code = str(card.get("code") or "")
-                price = float(
-                    card.get("recommend_price")
-                    or card.get("price")
-                    or card.get("close")
-                    or 0
-                )
-                if not code or price <= 0:
+                outcome = outcomes.get(_candidate_key(day.signal_date, code)) or {}
+                trade = outcome.get("trade")
+                if not code or trade is None:
                     continue
-                outcome = simulate(
-                    RecommendationInput(
-                        code=code,
-                        signal_date=day.signal_date,
-                        signal_price=price,
-                    ),
-                    day.outcome_bars.get(code, ()),
-                    spec.execution_policy,
-                )
-                trades.append(outcome.trade)
+                trades.append(trade)
+                if trade.executed:
+                    productive_dates.add(day.signal_date)
 
         split_metrics = {}
         split_coverage = {}
@@ -360,6 +415,7 @@ class ProductionPolicyBacktestRunner:
             split_coverage[name] = _coverage(
                 dates,
                 active_dates=active_dates,
+                productive_dates=productive_dates,
                 opportunity_dates=opportunity_dates,
                 executed_trades=sum(1 for trade in subset if trade.executed),
             ).to_dict()
@@ -371,6 +427,7 @@ class ProductionPolicyBacktestRunner:
             "coverage_evidence": _coverage(
                 [day.signal_date for day in spec.candidate_snapshot.days],
                 active_dates=active_dates,
+                productive_dates=productive_dates,
                 opportunity_dates=opportunity_dates,
                 executed_trades=sum(1 for trade in trades if trade.executed),
             ).to_dict(),
@@ -378,7 +435,13 @@ class ProductionPolicyBacktestRunner:
             "rule_verdict_summary": dict(sorted(verdict_summary.items())),
             "cross_validation": validation,
         }
-        records = {"candidates": candidate_rows, "trades": trades}
+        records = {
+            "candidates": candidate_rows,
+            "trades": trades,
+            "selected_keys": frozenset(selected_keys),
+            "outcomes": outcomes,
+            "regimes": regimes,
+        }
         return public, records
 
     def _persist(
@@ -592,10 +655,101 @@ def _is_opportunity_day(cards: Sequence[Mapping[str, Any]], score_line: float) -
     return False
 
 
+def _candidate_key(signal_date: str, code: str) -> str:
+    return f"{signal_date}:{code}"
+
+
+def _simulate_card(
+    day: ScoredCandidateDay,
+    card: Mapping[str, Any],
+    execution_policy: ExecutionPolicy,
+) -> dict[str, Any]:
+    code = str(card.get("code") or "")
+    price = float(
+        card.get("recommend_price")
+        or card.get("price")
+        or card.get("close")
+        or 0
+    )
+    if not code or price <= 0:
+        return {"status": "invalid_candidate", "trade": None}
+    bars = tuple(day.outcome_bars.get(code, ()))
+    if not bars:
+        return {"status": "missing_outcome_bars", "trade": None}
+    result = simulate(
+        RecommendationInput(
+            code=code,
+            signal_date=day.signal_date,
+            signal_price=price,
+        ),
+        bars,
+        execution_policy,
+    )
+    return {"status": "simulated", "trade": result.trade}
+
+
+def _paired_opportunity_cost(
+    champion_records: Mapping[str, Any],
+    challenger_records: Mapping[str, Any],
+    dates: Sequence[str],
+) -> dict[str, Any]:
+    date_set = frozenset(str(day) for day in dates)
+    champion_selected = set(champion_records.get("selected_keys") or ())
+    challenger_selected = set(challenger_records.get("selected_keys") or ())
+    newly_rejected = sorted(
+        key for key in (champion_selected - challenger_selected)
+        if key.split(":", 1)[0] in date_set
+    )
+    challenger_outcomes = challenger_records.get("outcomes") or {}
+    champion_outcomes = champion_records.get("outcomes") or {}
+    dropped_executed = 0
+    dropped_positive = 0
+    dropped_positive_return = 0.0
+    dropped_net_return = 0.0
+    missing = 0
+    by_owner: Counter[str] = Counter()
+    by_regime: Counter[str] = Counter()
+    for key in newly_rejected:
+        signal_date = key.split(":", 1)[0]
+        outcome = challenger_outcomes.get(key) or champion_outcomes.get(key) or {}
+        if outcome.get("status") != "simulated":
+            missing += 1
+            continue
+        trade = outcome.get("trade")
+        if trade is None:
+            missing += 1
+            continue
+        by_owner[str(outcome.get("drop_owner") or "changed_rule")] += 1
+        regime = str(
+            (challenger_records.get("regimes") or {}).get(key)
+            or (champion_records.get("regimes") or {}).get(key)
+            or "unknown"
+        )
+        by_regime[regime] += 1
+        if trade.executed:
+            dropped_executed += 1
+            dropped_net_return += float(trade.net_return_pct)
+            if trade.net_return_pct > 0:
+                dropped_positive += 1
+                dropped_positive_return += float(trade.net_return_pct)
+    return {
+        "newly_rejected_candidates": len(newly_rejected),
+        "newly_rejected_executed_trades": dropped_executed,
+        "newly_rejected_positive_trades": dropped_positive,
+        "dropped_positive_return_pct": round(dropped_positive_return, 6),
+        "dropped_net_return_pct": round(dropped_net_return, 6),
+        "opportunity_cost_pct": round(max(0.0, dropped_positive_return), 6),
+        "missing_counterfactual_outcomes": missing,
+        "by_drop_owner": dict(sorted(by_owner.items())),
+        "by_regime": dict(sorted(by_regime.items())),
+    }
+
+
 def _coverage(
     dates: Sequence[str],
     *,
     active_dates: set[str],
+    productive_dates: set[str],
     opportunity_dates: set[str],
     executed_trades: int,
 ) -> PortfolioCoverageEvidence:
@@ -613,9 +767,13 @@ def _coverage(
         eligible_days=len(ordered),
         opportunity_days=len(opportunities),
         active_days=sum(1 for day in ordered if day in active_dates),
+        productive_days=sum(1 for day in ordered if day in productive_dates),
         executed_trades=executed_trades,
         opportunity_capture_rate_pct=round(
             active_opportunities * 100 / len(opportunities), 4
+        ) if opportunities else 0.0,
+        productive_day_capture_rate_pct=round(
+            sum(1 for day in opportunities if day in productive_dates) * 100 / len(opportunities), 4
         ) if opportunities else 0.0,
         abstain_days=sum(1 for day in ordered if day not in active_dates),
         max_consecutive_opportunity_abstain_days=longest,

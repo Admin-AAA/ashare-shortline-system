@@ -10,6 +10,9 @@ from typing import Any, Mapping
 from app.engine.backtest import canonical_fingerprint
 
 
+_POLICY_METADATA_FIELDS = frozenset({"policy_id", "version"})
+
+
 @dataclass(frozen=True)
 class ProductionSelectionPolicy:
     """All production rules that can remove an otherwise scored candidate."""
@@ -88,7 +91,10 @@ class ProductionSelectionPolicy:
             "oscillation_hard_veto": "oscillation_hard_veto",
         }
         field_name = aliases.get(str(rule_id), str(rule_id))
-        if field_name in {"policy_id", "version"} or field_name not in self.__dataclass_fields__:
+        if (
+            field_name in _POLICY_METADATA_FIELDS
+            or field_name not in PATCHABLE_PRODUCTION_RULE_IDS
+        ):
             raise ValueError(f"unsupported production selection rule: {rule_id}")
         tuple_string_fields = {
             "excluded_20cm_buckets",
@@ -103,6 +109,16 @@ class ProductionSelectionPolicy:
                 raise ValueError(f"{rule_id} patch must be a list")
             value = tuple((str(key), float(amount)) for key, amount in value)
         return replace(self, version=self.version + 1, **{field_name: value})
+
+
+# Explicitly document and constrain the fields that a one-rule experiment may
+# change.  This prevents a caller from using a policy patch as an escape hatch
+# for identity/fingerprint metadata or future non-selection fields.
+PATCHABLE_PRODUCTION_RULE_IDS = frozenset(
+    field_name
+    for field_name in ProductionSelectionPolicy.__dataclass_fields__
+    if field_name not in _POLICY_METADATA_FIELDS
+)
 
 
 _POLICY_ARTIFACT_DIR = Path(__file__).resolve().parents[1] / "policies"
@@ -313,6 +329,7 @@ __all__ = [
     "DEFAULT_PRODUCTION_SELECTION_POLICY",
     "PolicyEvaluationResult",
     "PolicyVerdictStep",
+    "PATCHABLE_PRODUCTION_RULE_IDS",
     "ProductionSelectionPolicy",
     "SelectionPolicyContext",
     "evaluate_selection_policy",

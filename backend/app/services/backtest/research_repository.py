@@ -94,6 +94,7 @@ class BacktestORMModels:
     trade: type[Any]
     failure_attribution: type[Any]
     experiment: type[Any]
+    holdout_claim: type[Any] | None = None
 
     @classmethod
     def from_tables(cls) -> "BacktestORMModels":
@@ -111,14 +112,24 @@ class BacktestORMModels:
             "trade": "BacktestTrade",
             "failure_attribution": "BacktestFailureAttribution",
             "experiment": "BacktestExperiment",
+            "holdout_claim": "BacktestHoldoutClaim",
         }
-        missing = [name for name in expected.values() if not hasattr(tables, name)]
+        missing = [
+            name for key, name in expected.items()
+            if key != "holdout_claim" and not hasattr(tables, name)
+        ]
         if missing:
             raise RepositoryConfigurationError(
                 "P0 research backtest ORM 映射尚未安装；请先应用对应的 forward migration 并添加映射。",
                 details={"missing_models": missing},
             )
-        return cls(**{field: getattr(tables, model_name) for field, model_name in expected.items()})
+        return cls(
+            **{
+                field: getattr(tables, model_name)
+                for field, model_name in expected.items()
+                if hasattr(tables, model_name)
+            }
+        )
 
 
 @dataclass(frozen=True)
@@ -204,6 +215,49 @@ class ResearchBacktestRepository:
     def session(self) -> Session:
         """The caller-owned transaction scope used by this repository."""
         return self._session
+
+    def claim_holdout(
+        self,
+        *,
+        holdout_fingerprint: str,
+        experiment_id: str,
+        phase: str = "untouched_holdout",
+    ) -> Any:
+        """Atomically claim an untouched holdout, or reject reuse by another experiment."""
+        model = self._models.holdout_claim
+        if model is None:
+            raise RepositoryConfigurationError(
+                "正式 holdout ledger 尚未安装；请先应用 backtest_holdout_claims migration。"
+            )
+        if len(str(holdout_fingerprint)) != 64:
+            raise ExperimentValidationError("holdout_fingerprint 必须是 SHA-256 fingerprint。")
+        existing = self._session.get(model, holdout_fingerprint)
+        if existing is not None:
+            if str(existing.experiment_id) == str(experiment_id):
+                return existing
+            raise ImmutableRecordConflict(
+                "untouched holdout 已被其他 experiment 消费。",
+                details={
+                    "holdout_fingerprint": holdout_fingerprint,
+                    "existing_experiment_id": str(existing.experiment_id),
+                },
+            )
+        row = model(
+            holdout_fingerprint=str(holdout_fingerprint),
+            experiment_id=str(experiment_id),
+            phase=str(phase),
+            status="consumed",
+        )
+        self._session.add(row)
+        try:
+            self._session.flush()
+        except IntegrityError as exc:
+            self._session.rollback()
+            raise ImmutableRecordConflict(
+                "untouched holdout 并发 claim 冲突。",
+                details={"holdout_fingerprint": holdout_fingerprint},
+            ) from exc
+        return row
 
     # -- Snapshot and immutable input artifacts ---------------------------------
 

@@ -12,6 +12,7 @@ from app.engine.production_policy import DEFAULT_PRODUCTION_SELECTION_POLICY
 from app.models.tables import (
     BacktestCandidate,
     BacktestDataSnapshot,
+    BacktestHoldoutClaim,
     BacktestExperiment,
     BacktestFailureAttribution,
     BacktestInputArtifact,
@@ -26,6 +27,7 @@ from app.services.backtest.policy_experiment import (
     ScoredCandidateSnapshot,
 )
 from app.services.backtest.research_repository import ResearchBacktestRepository
+from app.services.backtest.research_repository import ImmutableRecordConflict
 
 
 def _snapshot() -> ScoredCandidateSnapshot:
@@ -99,7 +101,7 @@ def test_policy_experiment_recovers_from_zero_champion_on_one_shared_snapshot() 
     assert artifact["arms"]["champion"]["coverage_evidence"]["active_days"] == 0
     assert artifact["arms"]["challenger"]["coverage_evidence"]["active_days"] > 0
     assert artifact["decision_scope"] == "out_of_sample"
-    assert artifact["decision"]["decision"] == "PRODUCTION"
+    assert artifact["decision"]["decision"] == "PRODUCTION_CANDIDATE"
     assert artifact["decision"]["liveness_passed"] is True
 
 
@@ -133,12 +135,46 @@ def test_zero_challenger_is_rejected_even_when_financial_metrics_are_cash() -> N
     assert "oos_executed_trade_required" in artifact["decision"]["failed_gates"]
 
 
+def test_newly_dropped_positive_trade_fails_opportunity_cost_gate() -> None:
+    snapshot = _snapshot()
+    payload = snapshot.canonical_payload()
+    for day in payload["days"]:
+        day["market_snapshot"]["market_regime"] = "弱势"
+        day["cards"][0]["code"] = "600001"
+        day["outcome_bars"] = {
+            "600001": [
+                {**bar, "code": "600001"}
+                for bar in day["outcome_bars"]["300001"]
+            ]
+        }
+    snapshot = ScoredCandidateSnapshot.from_payload(payload)
+    champion = DEFAULT_PRODUCTION_SELECTION_POLICY.with_rule_patch("board_universe", "all")
+    artifact = ProductionPolicyBacktestRunner().run(
+        CanonicalPolicyExperimentSpec(
+            experiment_id="policy_drop_winner",
+            hypothesis="扩大到 all board 后再收回 20cm 不得靠丢赢家获胜",
+            candidate_snapshot=snapshot,
+            champion_policy=champion,
+            challenger_policy=DEFAULT_PRODUCTION_SELECTION_POLICY,
+            changed_rule_id="board_universe",
+            score_line=72.0,
+            output_count=6,
+            execution_policy=ExecutionPolicy(horizon_days=2),
+        )
+    )
+
+    cost = artifact["opportunity_cost_evidence"]
+    assert cost["newly_rejected_positive_trades"] > 0
+    assert "changed_rule_no_dropped_positive_trade" in artifact["decision"]["failed_gates"]
+
+
 def test_policy_experiment_persists_snapshot_arms_verdicts_trades_and_evidence() -> None:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         engine,
         tables=[
-            BacktestDataSnapshot.__table__,
+                BacktestDataSnapshot.__table__,
+                BacktestHoldoutClaim.__table__,
             BacktestInputArtifact.__table__,
             BacktestRequestClaim.__table__,
             BacktestRunV2.__table__,
@@ -165,8 +201,10 @@ def test_policy_experiment_persists_snapshot_arms_verdicts_trades_and_evidence()
                 changed_rule_id="structural_strong_hard_veto",
                 score_line=72.0,
                 output_count=6,
-                execution_policy=ExecutionPolicy(horizon_days=2),
-            )
+                    execution_policy=ExecutionPolicy(horizon_days=2),
+                    holdout_fingerprint=snapshot.fingerprint,
+                    holdout_scope="untouched_holdout",
+                )
         )
 
         experiment = session.get(BacktestExperiment, "policy_persisted")
@@ -187,7 +225,8 @@ def test_policy_experiment_namespaces_equal_simulated_trades_by_backtest_arm() -
     Base.metadata.create_all(
         engine,
         tables=[
-            BacktestDataSnapshot.__table__,
+                BacktestDataSnapshot.__table__,
+                BacktestHoldoutClaim.__table__,
             BacktestInputArtifact.__table__,
             BacktestRequestClaim.__table__,
             BacktestRunV2.__table__,
@@ -218,8 +257,10 @@ def test_policy_experiment_namespaces_equal_simulated_trades_by_backtest_arm() -
                 changed_rule_id="strong_score_penalty",
                 score_line=72.0,
                 output_count=6,
-                execution_policy=ExecutionPolicy(horizon_days=2),
-            )
+                    execution_policy=ExecutionPolicy(horizon_days=2),
+                    holdout_fingerprint=snapshot.fingerprint,
+                    holdout_scope="untouched_holdout",
+                )
         )
 
         rows = session.query(BacktestTrade).all()
@@ -228,6 +269,32 @@ def test_policy_experiment_namespaces_equal_simulated_trades_by_backtest_arm() -
         assert len({row.trade_id for row in rows}) == 48
         assert len({row.backtest_id for row in rows}) == 2
         assert all('"trade_id"' in row.trade_json for row in rows)
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_holdout_ledger_is_idempotent_for_same_experiment_and_rejects_reuse() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[BacktestHoldoutClaim.__table__])
+    session = sessionmaker(bind=engine, expire_on_commit=False)()
+    try:
+        repository = ResearchBacktestRepository(session)
+        fingerprint = "b" * 64
+        first = repository.claim_holdout(
+            holdout_fingerprint=fingerprint,
+            experiment_id="exp-one",
+        )
+        same = repository.claim_holdout(
+            holdout_fingerprint=fingerprint,
+            experiment_id="exp-one",
+        )
+        assert same.holdout_fingerprint == first.holdout_fingerprint
+        with pytest.raises(ImmutableRecordConflict):
+            repository.claim_holdout(
+                holdout_fingerprint=fingerprint,
+                experiment_id="exp-two",
+            )
     finally:
         session.close()
         engine.dispose()
