@@ -114,6 +114,8 @@ export type RunSummary = {
   result_summary: {
     top_codes?: string[];
     avg_score?: number;
+    opportunity?: string;
+    no_opportunity_reason?: string;
     data_source_mode?: string;
     data_source?: string;
     quote_source?: string;

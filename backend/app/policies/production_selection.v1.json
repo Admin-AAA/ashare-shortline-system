@@ -19,6 +19,7 @@
   "climax_nonweak_extra": 8.0,
   "score_line_minimum": 35.0,
   "score_line_maximum": 120.0,
+  "weak_regime_score_cap": 60.0,
   "dynamic_soft_floor_enabled": true,
   "dynamic_soft_floor_offset": 1.0,
   "dynamic_soft_floor_base_discount": 8.0,

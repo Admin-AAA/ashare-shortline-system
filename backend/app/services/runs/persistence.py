@@ -1,11 +1,34 @@
 from __future__ import annotations
 
+import logging
+import re
 import uuid
 from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
 from app.models.tables import AgentDecisionLog, Recommendation
+
+logger = logging.getLogger(__name__)
+
+_STOCK_CODE_RE = re.compile(r"^(?:[03468][0-9]{5}|92[0-9]{4})$")
+_DIAG_NAME_MARKERS = ("diag", "诊断")
+
+
+def is_legal_stock_code(code: str, name: str | None = None) -> bool:
+    """推荐写入层的股票合法性校验。
+
+    背景（系统深度诊断报告 2026-08-02）：库里存在 code=977483/967711、
+    name=diag/diag2 的假 formal 推荐被结算为 success，污染正式统计与
+    校准样本。此后写入必须通过 6 位数字 code + 名称非诊断标记。
+    """
+    if not isinstance(code, str) or not _STOCK_CODE_RE.fullmatch(code):
+        return False
+    if name:
+        lowered = str(name).lower()
+        if any(marker in lowered for marker in _DIAG_NAME_MARKERS):
+            return False
+    return True
 
 
 ProgressCallback = Callable[[int, int], None]
@@ -131,7 +154,18 @@ def persist_recommendation_cards(
 ) -> list[Recommendation]:
     saved: list[Recommendation] = []
     total = len(cards)
+    skipped_illegal = 0
     for index, card in enumerate(cards, start=1):
+        if not is_legal_stock_code(str(card.get("code") or ""), card.get("name")):
+            skipped_illegal += 1
+            logger.warning(
+                "persist_recommendation_cards 跳过非法股票 code=%r name=%r",
+                card.get("code"),
+                card.get("name"),
+            )
+            if on_progress is not None:
+                on_progress(index, total)
+            continue
         recommendation_id = f"rec_{trade_date.replace('-', '')}_{index:03d}_{uuid.uuid4().hex[:4]}"
         rec = Recommendation(
             recommendation_id=recommendation_id,

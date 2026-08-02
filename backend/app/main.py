@@ -39,9 +39,20 @@ _AUTH_PROTECTED_PATHS = {
 app = FastAPI(title="AShare Shortline System", default_response_class=ORJSONResponse)
 _startup_db_error: str | None = None
 
+# CORS 收紧（2026-08-02 修复）：原 allow_origins=["*"] + allow_credentials=True
+# 违反浏览器同源安全最佳实践（且该组合实际不被浏览器支持）。本系统前端
+# 经 vite proxy 同源访问（5174 → 8765），跨域仅影响本机直连场景，显式
+# 列出本机 origin 即可，无需开放任意来源。
+_LOCAL_ORIGINS = [
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://localhost:8765",
+    "http://127.0.0.1:8765",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_LOCAL_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -150,6 +161,7 @@ def on_startup() -> None:
     _startup_db_error = None
     from app.db.session import SessionLocal
     from app.services.cost_service import recover_scheduled_task_runs
+    from app.services.scheduler_service import ensure_scheduled_task_registrations
     from app.services.workbench_service import recover_interrupted_runs
     db = SessionLocal()
     try:
@@ -157,9 +169,52 @@ def on_startup() -> None:
         recover_scheduled_task_runs(db)
     finally:
         db.close()
+    # 调度任务注册接线（2026-08-02 修复）：此前 4+1 个关键任务的注册函数零调用点，
+    # 新部署依赖人工建行；此处统一幂等注册（盘后流水线/策略曝光/锁利/安全网）。
+    ensure_scheduled_task_registrations()
+    # 日志清理（2026-08-02 修复）：run_*.log 与脚本日志此前无轮转（数百个文件），
+    # 启动时清理过期运行日志，避免磁盘无限增长。
+    try:
+        from app.core.config import get_settings
+
+        _cleanup_logs(str(get_settings().log_dir))
+    except Exception:  # noqa: BLE001 - 日志清理失败不阻塞启动
+        logger.exception("日志清理失败")
     _warmup_initial_state()
     _warmup_data_health_cache()
     _warmup_pool_cache(delay_seconds=2.0)
+
+
+def _cleanup_logs(log_dir: str) -> None:
+    """清理过期运行日志（run_*.log 14 天、脚本日志 30 天）。"""
+    import os
+    import re
+    import time
+    from pathlib import Path
+
+    root = Path(log_dir)
+    if not root.is_dir():
+        return
+    now = time.time()
+    run_re = re.compile(r"^run_.*\.log$")
+    script_re = re.compile(r"^[a-z_]+\.log$")
+    kept = {"app.log", "access.log", "backend-local.log"}
+    for path in root.iterdir():
+        if not path.is_file():
+            continue
+        name = path.name
+        if run_re.match(name):
+            keep_days = 14.0
+        elif script_re.match(name) and name not in kept:
+            keep_days = 30.0
+        else:
+            continue
+        age_days = (now - path.stat().st_mtime) / 86400.0
+        if age_days > keep_days:
+            try:
+                os.remove(path)
+            except OSError:
+                logger.debug("清理日志失败: %s", path)
 
 
 def _warmup_initial_state() -> None:
@@ -265,7 +320,10 @@ async def auth_login(request: Request):
             _access_token(),
             httponly=True,
             samesite="lax",
-            secure=False,
+            # secure=True（2026-08-02 修复）：localhost/127.0.0.1 属浏览器
+            # trustworthy origin（secure context），HTTP 下 Secure cookie 仍可
+            # 正常工作，同时杜绝经 HTTP 明文链路被窃取的风险。
+            secure=True,
             expires=expires,
         )
         return response

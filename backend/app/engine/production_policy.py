@@ -41,6 +41,11 @@ class ProductionSelectionPolicy:
     climax_nonweak_extra: float = 8.0
     score_line_minimum: float = 35.0
     score_line_maximum: float = 120.0
+    # 弱势 regime 分数线封顶（2026-08-02 修复）：7 月弱市 formal 0 产出根因之一为
+    # FORMAL_SCORE_LINE_FLOOR=72 + 弱势 +2 调整把线抬到 74，而弱市 gate 分普遍
+    # 偏低（<58）——降线到 60 档让弱市反转信号有产出（诊断：弱势·高潮 78.1% WR）。
+    # None = 不封顶（保持历史行为）。
+    weak_regime_score_cap: float | None = 60.0
     dynamic_soft_floor_enabled: bool = True
     dynamic_soft_floor_offset: float = 1.0
     dynamic_soft_floor_base_discount: float = 8.0
@@ -69,6 +74,7 @@ class ProductionSelectionPolicy:
             "climax_nonweak_extra": self.climax_nonweak_extra,
             "score_line_minimum": self.score_line_minimum,
             "score_line_maximum": self.score_line_maximum,
+            "weak_regime_score_cap": self.weak_regime_score_cap,
             "dynamic_soft_floor_enabled": self.dynamic_soft_floor_enabled,
             "dynamic_soft_floor_offset": self.dynamic_soft_floor_offset,
             "dynamic_soft_floor_base_discount": self.dynamic_soft_floor_base_discount,

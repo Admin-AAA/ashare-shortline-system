@@ -13,7 +13,7 @@ def execute_scheduled_task(task_id: str, trigger_source: str) -> None:
     _execute_task(task_id, force=trigger_source == "manual", trigger_source=trigger_source)
 
 
-@flow(name="scheduled-task")
+@flow(name="scheduled-task", timeout_seconds=7200)
 def scheduled_task_flow(task_id: str, trigger_source: str = "schedule") -> None:
     execute_scheduled_task(task_id, trigger_source)
 
@@ -43,26 +43,26 @@ def execute_recommendation_run(run_id: str) -> None:
         db.close()
 
 
-@flow(name="recommendation-run")
+@flow(name="recommendation-run", timeout_seconds=5400)
 def recommendation_flow(run_id: str) -> None:
     execute_recommendation_run(run_id)
 
 
-@flow(name="manual-preset-matrix")
+@flow(name="manual-preset-matrix", timeout_seconds=10800)
 def manual_preset_matrix_flow(task_run_id: str, payload: dict) -> None:
     from app.services.scheduler_service import _execute_manual_preset_matrix
 
     _execute_manual_preset_matrix(task_run_id, payload)
 
 
-@flow(name="manual-data-health-remediation")
+@flow(name="manual-data-health-remediation", timeout_seconds=7200)
 def manual_data_health_remediation_flow(task_run_id: str, payload: dict) -> None:
     from app.services.scheduler_service import _execute_manual_data_health_remediation
 
     _execute_manual_data_health_remediation(task_run_id, payload)
 
 
-@flow(name="manual-strategy-exposure")
+@flow(name="manual-strategy-exposure", timeout_seconds=7200)
 def manual_strategy_exposure_flow(task_run_id: str, payload: dict) -> None:
     from app.services.scheduler_service import _execute_manual_strategy_exposure
 
@@ -92,7 +92,7 @@ def poll_intraday_lock() -> dict:
         return {"error": True}
 
 
-@flow(name="intraday-lock-poll")
+@flow(name="intraday-lock-poll", timeout_seconds=900)
 def intraday_lock_poll_flow() -> None:
     poll_intraday_lock()
 
@@ -119,6 +119,6 @@ def recover_stale_runs() -> int:
         return 0
 
 
-@flow(name="stale-run-recovery")
+@flow(name="stale-run-recovery", timeout_seconds=900)
 def stale_run_recovery_flow() -> None:
     recover_stale_runs()

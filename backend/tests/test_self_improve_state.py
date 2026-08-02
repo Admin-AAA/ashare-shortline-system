@@ -45,6 +45,12 @@ def _canonical_policy_evidence(champion: str, challenger: str) -> dict:
         "champion_policy_fingerprint": champion,
         "challenger_policy_fingerprint": challenger,
         "changed_rule_id": "structural_strong_hard_veto",
+        # 2026-08-02 软冻结闸门：OOS 前瞻段已结算执行笔数必须 ≥ MIN_FORWARD_SAMPLES(20)
+        "split_coverage_evidence": {
+            "train": {"executed_trades": 120, "active_dates": 30, "productive_dates": 22, "opportunity_dates": 25},
+            "validation": {"executed_trades": 35, "active_dates": 12, "productive_dates": 8, "opportunity_dates": 10},
+            "out_of_sample": {"executed_trades": 25, "active_dates": 8, "productive_dates": 5, "opportunity_dates": 6},
+        },
         "decision": {
             "decision": "PRODUCTION_CANDIDATE",
             "should_publish": True,

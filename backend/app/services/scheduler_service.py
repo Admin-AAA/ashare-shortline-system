@@ -312,6 +312,54 @@ def _ensure_intraday_lock_tasks() -> None:
         logger.exception("注册盘中锁利调度任务失败")
 
 
+# 安全网任务 cron（每日 08:30 检查最近 5 个交易日的 formal 缺口并补跑）。
+SAFETY_NET_CRON = "30 8 * * mon-fri"
+
+
+def _ensure_formal_safety_net_task() -> None:
+    """确保 formal 安全网任务存在（启动注册接线，2026-08-02 修复）。
+
+    此前 safety_net 无 _ensure 注册函数，全新部署只能人工建行；本函数幂等
+    注册：已存在则不覆盖用户手动调整的 cron/payload。
+    """
+    try:
+        db = SessionLocal()
+        try:
+            if db.get(ScheduledTask, SAFETY_NET_TASK_ID):
+                return
+            db.add(
+                ScheduledTask(
+                    task_id=SAFETY_NET_TASK_ID,
+                    name="正式推荐安全网（缺口补跑 + outcome 结算兜底）",
+                    task_type=TASK_TYPE_FORMAL_SAFETY_NET,
+                    cron_expression=SAFETY_NET_CRON,
+                    payload_json=json.dumps({}),
+                    enabled=True,
+                )
+            )
+            db.commit()
+            logger.info("已注册 formal 安全网调度任务: %s (cron=%s)", SAFETY_NET_TASK_ID, SAFETY_NET_CRON)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("注册 formal 安全网任务失败")
+
+
+def ensure_scheduled_task_registrations() -> None:
+    """启动接线入口：注册全部关键调度任务（幂等）。
+
+    2026-08-02 系统诊断发现：_ensure_postclose_pipeline_task /
+    _ensure_strategy_exposure_task / _ensure_intraday_lock_tasks /
+    _configure_postclose_pipeline_tasks 在生产代码中零调用点，全新部署依赖
+    人工建行；safety_net 连 _ensure 函数都没有。此处统一接线，由 FastAPI
+    startup 调用，确保新部署自动获得完整调度。
+    """
+    _ensure_postclose_pipeline_task()
+    _ensure_strategy_exposure_task()
+    _ensure_intraday_lock_tasks()
+    _ensure_formal_safety_net_task()
+
+
 # 预设下的 Skill 全部被禁用时，enqueue_workbench_run 抛出的错误文案。
 # 这是「预期跳过」而非「故障」：定时任务不应因此污染 ERROR 日志或标记为 failed。
 _NO_RUNNABLE_SKILL_MSG = "没有可运行的 Skill"

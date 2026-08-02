@@ -42,3 +42,8 @@ ux-audit/
 .strategy-profile-refresh.lock
 backend/scripts/.failure_attr_baseline.json
 .ai-tracker/
+
+# 本地备份/工具目录（不提交）
+backup_replay_20260801/
+.golutra/
+.reasonix/

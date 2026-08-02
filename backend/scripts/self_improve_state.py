@@ -36,6 +36,11 @@ HEARTBEAT_TIMEOUT_SECONDS = 30 * 60  # 30 min
 DEFAULT_DAEMON_INTERVAL_SECONDS = 900  # 15 min
 DEFAULT_DAEMON_MAX_DURATION_SECONDS = 3 * 3600  # bound abandoned daemons
 
+# 前瞻（OOS）段最小已结算执行笔数（2026-08-02 软冻结修复）：publish 证据闸门
+# 要求 canonical experiment 的 out_of_sample 段执行笔数 ≥ 此值，否则"改进"视为
+# 小样本噪声禁止发布。对应系统诊断 Top1 行动项（self-improve 前瞻验证闸门）。
+MIN_FORWARD_SAMPLES = 20
+
 # Bump when the shape of self-improve-state.json changes meaningfully, so
 # older tools/researchers can detect that they read a newer layout.
 STATE_SCHEMA_VERSION = 3
@@ -1233,6 +1238,20 @@ def _validate_selection_policy_publish(
             evidence.get("release_policy_fingerprint") == RELEASE_POLICY_FINGERPRINT
         ),
     }
+    # 前瞻样本最小量门槛（2026-08-02 软冻结修复）：OOS 段已结算执行笔数必须
+    # ≥ MIN_FORWARD_SAMPLES，否则"改进"只是小样本噪声，禁止发布。与
+    # oos_executed_trade_required（>0）互补：存在性之外还要有统计意义。
+    # 读取路径兼容 policy_experiment 实际落库结构（arms.challenger.split_coverage_evidence）
+    # 与旧顶层结构（split_coverage_evidence）。
+    _challenger_arm = (evidence.get("arms") or {}).get("challenger") or {}
+    _oos_coverage = (
+        ((_challenger_arm.get("split_coverage_evidence") or {})
+         .get("out_of_sample") or {})
+        or ((evidence.get("split_coverage_evidence") or {}).get("out_of_sample") or {})
+    )
+    checks["forward_samples_minimum"] = (
+        int(_oos_coverage.get("executed_trades") or 0) >= MIN_FORWARD_SAMPLES
+    )
     failed = [name for name, passed in checks.items() if not passed]
     if failed:
         return {"error": "CANONICAL_EVIDENCE_REJECTED", "failed_checks": failed}

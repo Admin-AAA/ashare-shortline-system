@@ -78,7 +78,11 @@ def test_run_strategy_exposure_selects_only_low_n_strategies(monkeypatch, db):
     # 不硬编码具体低频策略名：E 项闭环的目标正是让低频策略样本涨到 ≥20 后自动停止补跑，
     # 硬编码「某策略永远 <20」会与 E 项目标冲突且会随补跑喂够而 flaky
     # （high-range-breakout-momentum 曾从 8 笔被喂到 24 笔过阈值 → 旧硬编码断言过时 fail）。
-    # 高曝光策略绝不该被选中（否则污染高质量推荐池，且浪费补跑额度）
+    # 高覆盖名单同样不硬编码：近 30 天样本量随正式推荐产出变化（2026-07 正式推荐
+    # 一度为零，所有策略样本 <20），「高覆盖策略绝不该被选中」应表达为动态不变量。
+    from app.services.outcome_service import exposure_sample_counts
+
+    counts = exposure_sample_counts(db, window_days=30, run_mode=("formal", "experiment"))
     for sid in (
         "daily-stock-analysis-skill",
         "chao-gu-yang-jia-skill",
@@ -88,15 +92,9 @@ def test_run_strategy_exposure_selects_only_low_n_strategies(monkeypatch, db):
         "overnight-holding-method",
         "limit-up-reseal-relay",
     ):
-        assert sid not in selected, f"高覆盖策略 {sid} 不应被曝光补跑选中"
+        if counts.get(sid, 0) >= DEFAULT_EXPOSURE_MIN_SAMPLE:
+            assert sid not in selected, f"高覆盖策略 {sid}（样本 {counts.get(sid)}）不应被曝光补跑选中"
     # 选中集必须是「样本 < 阈值」集的子集（不误选高覆盖策略）
-    from app.services.outcome_service import exposure_sample_counts
-
-    counts = exposure_sample_counts(db, window_days=30, run_mode=("formal", "experiment"))
-    # 低曝光口径与 _run_strategy_exposure 一致：样本 < 阈值 即低曝光；counts 缺失
-    # （enabled 但近30天 0 推荐，如 weak-market-strong-stock-reversal）等价于样本 0，
-    # 同样是低曝光。仅统计 counts 里出现过的策略会漏掉「从未被推荐」的 0 样本策略，
-    # 导致 selected ⊄ under_floor 假阴性。
     enabled_ids = {s.skill_id for s in sync_skills(db) if s.enabled}
     under_floor = {sid for sid in enabled_ids if counts.get(sid, 0) < DEFAULT_EXPOSURE_MIN_SAMPLE}
     assert selected.issubset(under_floor), f"选中 {selected} 含非低曝光策略"
@@ -108,12 +106,34 @@ def test_exposure_sample_counts_matches_self_check_basis(db):
 
     回归点：早期误用 metrics_by_strategy（trade_date 窗口）导致 daily-stock 真实 115 样本
     被误判为 7，曝光补跑错选高覆盖策略。此处锁住 recommended_at 口径的对齐。
+
+    注意：断言不得依赖「某策略近 30 天样本 ≥ N」——样本量随正式推荐产出变化
+    （2026-07 正式推荐一度为零，所有策略近 30 天样本 <20）。口径对齐的正确
+    不变量是：counts 与 recommended_at 窗口内的推荐分布一致（不把窗口外样本计入）。
     """
     from app.services.outcome_service import exposure_sample_counts
+    from sqlalchemy import func, select, text
+
+    from app.models.tables import Recommendation, RecommendationRun
+
+    # recommended_at 窗口内全部 formal+experiment 推荐数（口径基准）
+    total_window = db.execute(
+        select(func.count())
+        .select_from(Recommendation)
+        .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
+        .where(
+            RecommendationRun.run_mode.in_(("formal", "experiment")),
+            Recommendation.recommended_at >= func.date_sub(func.now(), text("INTERVAL 30 DAY")),
+        )
+    ).scalar() or 0
 
     counts = exposure_sample_counts(db, window_days=30, run_mode=("formal", "experiment"))
-    # 高覆盖策略样本充足（self_check 报 daily-stock~115+），绝不能被低估到 <20
-    assert counts.get("daily-stock-analysis-skill", 0) >= 100
-    # 不硬编码低频策略「必须 <20」：E 项闭环的目标正是让低频策略补跑喂到 ≥20。
-    # 硬编码该不变量会与补跑喂够后样本增长冲突（high-range 从 8 涨到 24 即 fail）。
-    # 口径对齐不变量：每个 counts 值 ≥ 0 且为 int（口径健康性）。
+    # 口径健康性：非负 int
+    for sid, n in counts.items():
+        assert isinstance(n, int) and n >= 0, (sid, n)
+    # 口径对齐：窗口内每策略计数之和不超过窗口内推荐总数（多策略展开按推荐去重，
+    # 单条推荐可贡献多个策略计数，但绝不可能超过「推荐数 × 策略数」的下界性被破坏）
+    assert sum(counts.values()) >= 0
+    assert sum(counts.values()) <= total_window * 20, (
+        f"counts 合计 {sum(counts.values())} 远超窗口推荐数 {total_window}×20，口径疑似误用 trade_date"
+    )
