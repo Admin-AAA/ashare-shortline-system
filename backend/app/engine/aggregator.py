@@ -1072,19 +1072,21 @@ def apply_pool_rules(
         # 两阶段因果机制不同：结构性强势主线品种仍有筛选价值，强势普涨追高必亏
         _structural_veto = (
             bool(selection_policy.structural_strong_hard_veto)
-            if selection_policy is not None else True
+            if selection_policy is not None else False
         )
         _strong_penalty = (
             float(selection_policy.strong_score_penalty)
             if selection_policy is not None else 8.0
         )
-        if _snapshot_regime == STRUCTURAL_STRONG_HARD_VETO_REGIME and _structural_veto:
-            # Relative to 20cm-only production, the sequential replay improves
-            # avg net, cumulative net, WR, PF and MDD. Labels come from
-            # score_line_meta or the exact persisted decision-time context.
-            effective_score_line = 999.0
+        if _snapshot_regime == STRUCTURAL_STRONG_HARD_VETO_REGIME:
+            # 结构性强势：+4 提线（历史验证的筛选价值）与 veto（999 全拦）解耦——
+            # 2026-08-02 用户决策默认关闭 veto，但 +4 门槛仍保留。
             card["_regime_strong_penalty"] = 4.0
-            card["_regime_struct_strong_hard_veto"] = True
+            if _structural_veto:
+                effective_score_line = 999.0
+                card["_regime_struct_strong_hard_veto"] = True
+            else:
+                effective_score_line = round(effective_score_line + 4.0, 2)
         elif _snapshot_regime == "强势":
             effective_score_line = round(effective_score_line + _strong_penalty, 2)
             card["_regime_strong_penalty"] = _strong_penalty
@@ -1096,7 +1098,7 @@ def apply_pool_rules(
         _card_pos60 = float(card.get("pos60") or card.get("feature_snapshot", {}).get("pos60") or 0)
         _oscillation_veto = (
             bool(selection_policy.oscillation_hard_veto)
-            if selection_policy is not None else True
+            if selection_policy is not None else False
         )
         if _snapshot_regime == "震荡" and _oscillation_veto:
             effective_score_line = 999.0

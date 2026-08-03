@@ -26,8 +26,10 @@ from app.services.backtest.research_repository import ResearchBacktestRepository
 def recovery_policy_patches() -> tuple[tuple[str, str, Any], ...]:
     excluded = list(DEFAULT_PRODUCTION_SELECTION_POLICY.excluded_20cm_buckets)
     return (
-        ("structural_strong_veto_off", "structural_strong_hard_veto", False),
-        ("oscillation_veto_off", "oscillation_hard_veto", False),
+        # 2026-08-02 用户决策：veto 默认已关闭 → counterfactual 反转语义，
+        # 度量"若重新开启 veto 会损失多少交易"（机会成本）。
+        ("structural_strong_veto_on", "structural_strong_hard_veto", True),
+        ("oscillation_veto_on", "oscillation_hard_veto", True),
         ("all_boards", "board_universe", "all"),
         (
             "restore_daily_stock_analysis_bucket",
