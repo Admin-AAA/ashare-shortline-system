@@ -751,26 +751,10 @@ def list_recommendation_history(
     )
     if code:
         id_stmt = id_stmt.where(Recommendation.code == code)
-    # 候选池按运行开始日归类，复盘行按信号交易日展示。全量重放可能今天运行、但重放旧交易日，
-    # 因此日期筛选同时匹配信号日和运行开始日，确保候选池里的票进入同一个复盘 List。
-    run_started_date = func.date(
-        func.date_add(RecommendationRun.started_at, text("INTERVAL 8 HOUR"))
-    )
-    if date_from and date_to:
-        id_stmt = id_stmt.where(
-            or_(
-                and_(Recommendation.trade_date >= date_from, Recommendation.trade_date <= date_to),
-                and_(run_started_date >= date_from, run_started_date <= date_to),
-            )
-        )
-    elif date_from:
-        id_stmt = id_stmt.where(
-            or_(Recommendation.trade_date >= date_from, run_started_date >= date_from)
-        )
-    elif date_to:
-        id_stmt = id_stmt.where(
-            or_(Recommendation.trade_date <= date_to, run_started_date <= date_to)
-        )
+    if date_from:
+        id_stmt = id_stmt.where(Recommendation.trade_date >= date_from)
+    if date_to:
+        id_stmt = id_stmt.where(Recommendation.trade_date <= date_to)
     if bucket:
         id_stmt = id_stmt.where(Recommendation.bucket == bucket)
     if setup_type:
