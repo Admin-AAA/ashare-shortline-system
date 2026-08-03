@@ -183,6 +183,8 @@ function TabButton({
 
 type RunSortKey = "trade_date" | "recommended_count" | "score_line" | "return_1d" | "return_3d" | "return_5d" | "finished_at";
 
+const FULL_REPLAY_RUN_NAME = "REPLAY-全量重放";
+
 function RunRecordsList() {
   const { navigate } = useUrlRoute();
   const { data, loading, error } = useApi<RunSummary[]>(
@@ -190,7 +192,7 @@ function RunRecordsList() {
     [],
   );
 
-  // —— 筛选条件（默认近30天内已完成的实盘记录，且推荐数 > 0）——
+  // —— 筛选条件（默认近30天内已完成的 formal 运行；正常记录推荐数 > 0，另保留全量重放）——
   // datePreset：近7天/近30天/本月/全部/自定义；自定义时用 dateFrom/dateTo 手选
   const [datePreset, setDatePreset] = useState<"7d" | "30d" | "month" | "all" | "custom">("30d");
   const [dateFrom, setDateFrom] = useState("");
@@ -198,7 +200,8 @@ function RunRecordsList() {
   const [statusFilter, setStatusFilter] = useState<string>("completed");
   const [presetFilter, setPresetFilter] = useState<string>("__all__");
   const [modeFilter, setModeFilter] = useState<string>("formal");
-  // 推荐数下限：空 = 不筛选（任意推荐数）；填数字 = recommended_count > N
+  // 推荐数下限：空 = 不筛选（任意推荐数）；填数字 = recommended_count > N。
+  // 默认 N=0 时，保留全量重放的零推荐记录，便于复盘完整筛选过程。
   const [minRecsFilter, setMinRecsFilter] = useState<string>("0");
 
   // —— 排序 ——
@@ -250,10 +253,11 @@ function RunRecordsList() {
     if (statusFilter !== "__all__" && r.status !== statusFilter) return false;
     if (presetFilter !== "__all__" && (r.preset_name || "(未命名)") !== presetFilter) return false;
     if (modeFilter !== "__all__" && r.run_mode !== modeFilter) return false;
-    // 推荐数：空 = 不筛选；否则 recommended_count > N
+    // 推荐数：空 = 不筛选；否则 recommended_count > N。默认 N=0 时全量重放例外保留。
     if (minRecsFilter.trim() !== "") {
       const min = Number(minRecsFilter);
-      if (!Number.isNaN(min) && !(r.recommended_count > min)) return false;
+      const keepsFullReplay = min === 0 && r.run_name === FULL_REPLAY_RUN_NAME;
+      if (!Number.isNaN(min) && !(r.recommended_count > min) && !keepsFullReplay) return false;
     }
     return true;
   });
