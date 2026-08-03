@@ -24,8 +24,11 @@ class ProductionSelectionPolicy:
         "daily-stock-analysis-skill",
         "chao-gu-yang-jia-skill",
     )
-    structural_strong_hard_veto: bool = True
-    oscillation_hard_veto: bool = True
+    # 2026-08-02 用户决策：不保留 regime hard_veto（8/1 引入后 7 月 14 天被
+    # 999 线全拦，候选最高分 88.7~100 零产出）。关闭后结构性强势/震荡日按
+    # 普通分数线评估；如需恢复置 True（改 JSON 即生效，无需改代码）。
+    structural_strong_hard_veto: bool = False
+    oscillation_hard_veto: bool = False
     strong_score_penalty: float = 8.0
     strong_support_ma5_penalty: float = 6.0
     weak_low_chg20_threshold: float = 15.0
