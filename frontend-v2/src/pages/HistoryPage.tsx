@@ -9,7 +9,6 @@ import type {
   RecommendationExecutionState,
   RecommendationHistoryResponse,
   RealtimePnlItem,
-  RunSummary,
 } from "../types";
 import { PageSkeleton, ErrorPage, EmptyState } from "../components/StateViews";
 import { Panel } from "../components/Panel";
@@ -21,8 +20,6 @@ import { fmtPrice } from "../components/Shared";
 import { bucketLabel, exitReasonLabel, formatApiDateTime, isOutcomeSettled, outcomeLabel, outcomeTone, setupLabel, BUCKET_LABELS } from "../utils/display";
 import { ruleKeyLevelLabels, rulesMentionKeyLevel } from "../utils/ruleKeyLevels";
 import { cancelObservationText, collectUnsettledIds, executionDecisionCode, holdingDecisionPresentation, isPlaceholderEntryRule } from "../utils/executionConfirmation";
-
-const FULL_REPLAY_RUN_NAME = "REPLAY-全量重放";
 
 /**
  * 复盘页 —— 正式运行推荐历史（跨 run，按 trade_date 倒序，带 outcome）。
@@ -94,24 +91,6 @@ export function HistoryPage() {
         offset: page * pageSize,
       }),
     [label, codeQuery, bucket, setupType, effectiveDateRange, page, strategyId, strategyVersionId],
-  );
-
-  // 全量重放按运行维度展示：即使当次无推荐股票，也能在复盘页检查筛选结果。
-  // 不传入推荐历史接口，避免零推荐运行被“股票推荐”模型丢弃。
-  const { data: replayRunsData, loading: replayRunsLoading, error: replayRunsError } = useApi<RunSummary[]>(
-    () => api.runRecords({ limit: 500 }),
-    [],
-  );
-  const fullReplayRuns = useMemo(
-    () =>
-      (replayRunsData ?? [])
-        .filter((run) => run.run_name === FULL_REPLAY_RUN_NAME)
-        .filter((run) => (
-          (!effectiveDateRange.from || run.trade_date >= effectiveDateRange.from)
-          && (!effectiveDateRange.to || run.trade_date <= effectiveDateRange.to)
-        ))
-        .sort((left, right) => right.trade_date.localeCompare(left.trade_date)),
-    [replayRunsData, effectiveDateRange],
   );
 
   const items = data?.items ?? [];
@@ -484,15 +463,6 @@ export function HistoryPage() {
         )}
       </div>
 
-      {!strategyId && !strategyVersionId && (
-        <FullReplayRunsSection
-          runs={fullReplayRuns}
-          loading={replayRunsLoading}
-          error={replayRunsError}
-          onOpenRun={(runId) => navigate("/records", { params: { tab: "run", run_id: runId } })}
-        />
-      )}
-
       {loading ? (
         <PageSkeleton title="复盘" hint="加载推荐历史" rowCount={10} />
       ) : error ? (
@@ -851,97 +821,6 @@ export function HistoryPage() {
         </>
       )}
     </Panel>
-  );
-}
-
-function FullReplayRunsSection({
-  runs,
-  loading,
-  error,
-  onOpenRun,
-}: {
-  runs: RunSummary[];
-  loading: boolean;
-  error: string | null;
-  onOpenRun: (runId: string) => void;
-}) {
-  return (
-    <section
-      style={{
-        marginTop: "var(--space-4)",
-        marginBottom: "var(--space-4)",
-        padding: "var(--space-4)",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius-md)",
-        background: "var(--surface-soft)",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "flex-start", gap: "var(--space-3)", flexWrap: "wrap", marginBottom: "var(--space-3)" }}>
-        <div>
-          <div className="panel__kicker">运行复盘</div>
-          <h3 style={{ margin: 0, fontSize: "var(--text-lg)" }}>全量重放运行</h3>
-        </div>
-        <span className="tag" style={{ marginLeft: "auto", fontFamily: "var(--font-mono)" }}>
-          {loading ? "加载中" : `${runs.length} 次`}
-        </span>
-      </div>
-      <p style={{ margin: "0 0 var(--space-3)", color: "var(--muted)", fontSize: "var(--text-sm)" }}>
-        跟随当前日期范围展示 REPLAY-全量重放；零推荐运行也会保留，且不计入上方正式推荐的笔数、胜率或收益。
-      </p>
-
-      {loading ? (
-        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", color: "var(--muted)", fontSize: "var(--text-sm)" }}>
-          <Loader2 size={14} className="spin" /> 加载全量重放运行…
-        </div>
-      ) : error ? (
-        <div style={{ color: "var(--market-down)", fontSize: "var(--text-sm)" }}>全量重放运行加载失败：{error}</div>
-      ) : runs.length === 0 ? (
-        <div style={{ color: "var(--muted)", fontSize: "var(--text-sm)" }}>当前日期范围没有全量重放运行。</div>
-      ) : (
-        <div style={{ maxHeight: 360, overflow: "auto", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)" }}>
-          <table style={tableStyle}>
-            <thead>
-              <tr>
-                <th style={thStyle}>日期</th>
-                <th style={thStyle}>运行名</th>
-                <th style={{ ...thStyle, textAlign: "right" }}>推荐数</th>
-                <th style={thStyle}>状态</th>
-                <th style={thStyle}>完成时间</th>
-                <th style={{ ...thStyle, width: 96 }} aria-label="查看运行详情" />
-              </tr>
-            </thead>
-            <tbody>
-              {runs.map((run) => {
-                const statusColor = run.status === "completed"
-                  ? "var(--market-up)"
-                  : run.status === "failed"
-                    ? "var(--market-down)"
-                    : "var(--muted)";
-                return (
-                  <tr key={run.run_id}>
-                    <td style={{ ...tdStyle, fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>{run.trade_date}</td>
-                    <td style={tdStyle}>
-                      <span style={{ fontWeight: 600 }}>{run.run_name}</span>
-                      <span style={{ marginLeft: 8, color: "var(--muted)", fontSize: "var(--text-xs)" }}>历史重放</span>
-                    </td>
-                    <td style={{ ...tdStyle, textAlign: "right", fontFamily: "var(--font-mono)" }}>{run.recommended_count}</td>
-                    <td style={{ ...tdStyle, color: statusColor }}>{run.status}</td>
-                    <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)", whiteSpace: "nowrap" }}>
-                      {run.finished_at ? formatApiDateTime(run.finished_at, { hour: "2-digit", minute: "2-digit" }) : "—"}
-                    </td>
-                    <td style={{ ...tdStyle, textAlign: "right" }}>
-                      <button className="btn btn--ghost" onClick={() => onOpenRun(run.run_id)} style={{ padding: "4px 8px", fontSize: "var(--text-sm)" }}>
-                        查看详情
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
   );
 }
 

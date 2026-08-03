@@ -10,7 +10,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from sqlalchemy import case, func, or_, select, text
+from sqlalchemy import and_, case, func, or_, select, text
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.orm import Session, defer
 
@@ -738,7 +738,15 @@ def list_recommendation_history(
             Recommendation.final_score,
         )
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
-        .where(*official_sample_conditions())
+        .where(
+            or_(
+                and_(*official_sample_conditions()),
+                and_(
+                    RecommendationRun.run_name == "REPLAY-全量重放",
+                    RecommendationRun.status == "completed",
+                ),
+            )
+        )
         .order_by(Recommendation.trade_date.desc(), Recommendation.final_score.desc())
     )
     if code:
