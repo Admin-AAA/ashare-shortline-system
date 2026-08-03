@@ -846,7 +846,7 @@ def test_apply_pool_rules_limit_up_exempt_from_support_ma5_penalty():
     assert by_code["NORMAL"]["score_line_meta"]["regime_support_ma5_penalty"] == 6.0
 
 
-def test_apply_pool_rules_oscillation_low_pos60_penalty():
+def test_apply_pool_rules_oscillation_no_veto_plain_line():
     """震荡 regime：veto 关闭后按普通线评估（2026-08-02 适配）。
 
     原语义为震荡全局 hard veto（999 全拦）；用户决策关闭后，震荡日卡片按
@@ -920,7 +920,7 @@ def test_apply_pool_rules_weak_low_chg20_penalty():
     assert by_code["LIMIT_LOW_CHG"]["score_line_meta"]["regime_weak_low_chg20_penalty"] == 0.0
 
 
-def test_apply_pool_rules_weak_low_chg20_not_in_strong_regime():
+def test_apply_pool_rules_oscillation_no_veto_plain_line_high_score():
     """震荡 regime：veto 关闭后按普通线评估（2026-08-02 适配）。
 
     原语义为震荡全局 hard veto（999 全拦）；用户决策关闭后，震荡日卡片按

@@ -64,7 +64,7 @@ CHAMPION_CONFIG = {
     "trailing_profit_lock_ratio": 0.50,
     "trailing_activate_pct": None,  # None → 生产默认 TRAILING_STOP_ACTIVATE_PCT (2.0)
     "trailing_min_lock_pct": None,  # None → 生产默认 TRAILING_STOP_MIN_LOCK_PCT (0.3)
-    "structural_strong_hard_veto": True,
+    "structural_strong_hard_veto": True,  # 历史 champion 复现口径（8/1 生产行为）；2026-08-02 用户决策后生产默认已关闭
     "excluded_20cm_strategies": frozenset({
         "daily-stock-analysis-skill",
         "chao-gu-yang-jia-skill",
