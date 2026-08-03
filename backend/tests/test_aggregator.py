@@ -847,25 +847,27 @@ def test_apply_pool_rules_limit_up_exempt_from_support_ma5_penalty():
 
 
 def test_apply_pool_rules_oscillation_low_pos60_penalty():
-    """震荡 regime 全局 hard veto。
+    """震荡 regime：veto 关闭后按普通线评估（2026-08-02 适配）。
 
-    LIVE formal causal replay (n=55→37): 震荡 n=14 WR=29% avg=-2.94% PF=0.25
-    全局 hard veto 后五项全改善 (avg +0.62%→+2.20%, PF 1.26→2.25, MDD -21.9%→-15.2%)
-    取代此前仅 low pos60<50 的 +12 门槛（实证不足过滤震荡污染: DS 高 pos60 全败）。
+    原语义为震荡全局 hard veto（999 全拦）；用户决策关闭后，震荡日卡片按
+    普通线评估。注：regime_oscillation_low_pos_penalty 当前仅有 meta 字段
+    无惩罚实现（原由 veto 999 覆盖），此处锁定 veto 关闭后的真实行为。
     """
     snapshot = {
         "sample_count": 100, "up_count": 45, "down_count": 55,
         "limit_up_count": 1, "limit_down_count": 0,
         "market_regime": "震荡",
     }
-    # 全局 hard veto: 震荡日所有推荐被拒（effective_score_line=999）
+    # veto 关闭：两张 80 分卡均按 72 线产出，无 veto 标记
     cards = [
         {**_card("LOW_POS", 80), "pos60": 40, "is_limit_up": False, "support_ma5": True},
         {**_card("HIGH_POS", 80), "pos60": 80, "is_limit_up": False, "support_ma5": True},
     ]
     result = apply_pool_rules(cards, score_line=72, market_snapshot=snapshot)
-    # 全局 hard veto: 震荡日零推荐
-    assert len(result) == 0, "震荡 regime 全局 hard veto 应拒绝所有推荐"
+    by_code = {c["code"]: c for c in result}
+    assert "LOW_POS" in by_code and "HIGH_POS" in by_code, "veto 关闭后震荡日应按线产出"
+    assert by_code["LOW_POS"]["score_line_meta"]["regime_oscillation_hard_veto"] is False
+    assert by_code["LOW_POS"]["score_line_meta"]["regime_oscillation_low_pos_penalty"] == 0.0
 
 
 
@@ -919,20 +921,22 @@ def test_apply_pool_rules_weak_low_chg20_penalty():
 
 
 def test_apply_pool_rules_weak_low_chg20_not_in_strong_regime():
-    """震荡 regime 全局 hard veto: 所有推荐被拒。
+    """震荡 regime：veto 关闭后按普通线评估（2026-08-02 适配）。
 
-    LIVE formal causal replay: 震荡日 WR=29% avg=-2.94%, hard veto 后五项全改善。
-    此前仅 低 pos60<50 的 +12 门槛不足以过滤震荡污染 (DS 高 pos60 全败)。
+    原语义为震荡全局 hard veto（999 全拦）；用户决策关闭后，震荡日卡片按
+    普通线评估——pos60>=50 且无其他惩罚的高分卡正常产出。
     """
     snapshot_oscillation = {
         "sample_count": 100, "up_count": 45, "down_count": 55,
         "limit_up_count": 1, "limit_down_count": 0,
         "market_regime": "震荡",
     }
-    # 震荡全局 hard veto: 所有推荐被拒
+    # veto 关闭：80 分卡过 72 线产出，且无 veto 标记
     cards = [{**_card("LOW_CHG_OSC", 80), "pos60": 60, "chg20": 8, "is_limit_up": False, "support_ma5": True}]
     result = apply_pool_rules(cards, score_line=72, market_snapshot=snapshot_oscillation)
-    assert len(result) == 0, "震荡 regime 全局 hard veto 应拒绝所有推荐"
+    by_code = {c["code"]: c for c in result}
+    assert "LOW_CHG_OSC" in by_code, "震荡日 veto 关闭后应按线产出"
+    assert by_code["LOW_CHG_OSC"]["score_line_meta"]["regime_oscillation_hard_veto"] is False
 
 
 def test_apply_pool_rules_sorted_by_score():

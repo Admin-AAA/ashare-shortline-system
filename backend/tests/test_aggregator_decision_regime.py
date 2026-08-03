@@ -8,7 +8,10 @@ snapshot）；禁止读可能被事后重建的 feature_snapshot_json.market_reg
   - decision_regime      = 聚合时实际使用的 _snapshot_regime
   - regime_strong_penalty = 结构性强势 +4 / 强势 +8 / 其他 0.0
 
-覆盖中性/结构性强势/强势/震荡/弱势 五分支，确保两个字段始终存在且自洽。
+2026-08-02 用户决策适配：结构性强势/震荡 hard_veto 默认关闭——
+结构性强势仅 +4 提线（不再 999 全拦）、震荡走普通线；veto 开启时的
+回归行为由 test_aggregator_struct_strong_veto.py / test_struct_strong_plus4_decoupled.py
+用 with_rule_patch 显式覆盖。
 """
 import pytest
 
@@ -29,9 +32,9 @@ def _card(code: str, final_score: float = 90.0) -> dict:
 @pytest.mark.parametrize(
     "regime,expected_penalty,expected_vetoed",
     [
-        ("结构性强势", 4.0, True),   # T-struct-strong-veto：硬否决，不进推荐
+        ("结构性强势", 4.0, False),  # 2026-08-02：veto 默认关闭，仅 +4 提线
         ("强势", 8.0, False),
-        ("震荡", 0.0, True),   # T-shock-veto: 震荡全局 hard veto
+        ("震荡", 0.0, False),  # 2026-08-02：veto 默认关闭，走普通线
         ("弱势", 0.0, False),
         ("", 0.0, False),
     ],
@@ -64,12 +67,12 @@ def test_score_line_meta_persists_decision_regime_and_strong_penalty(
         assert (
             meta["regime_strong_penalty"] == expected_penalty
         ), "regime_strong_penalty 必须与 regime 分支一致"
-        # 结构性强势硬否决通过 regime_struct_strong_hard_veto 标记
-        # 震荡硬否决通过 oscillation_hard_veto 标记（不同字段）
+        # 结构性强势默认关闭 veto：无 hard_veto 标记（开启时的标记由
+        # test_aggregator_struct_strong_veto.py 显式 patch 覆盖）
         if regime == "结构性强势":
             assert (
-                meta.get("regime_struct_strong_hard_veto", False) is True
-            ), "结构性强势必须携带硬否决标记"
+                meta.get("regime_struct_strong_hard_veto", False) is False
+            ), "veto 默认关闭，结构性强势不应携带硬否决标记"
 
 
 def test_decision_regime_matches_breadth_regime_source():
