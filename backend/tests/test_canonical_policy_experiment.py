@@ -70,16 +70,18 @@ def _snapshot() -> ScoredCandidateSnapshot:
 
 def test_policy_experiment_recovers_from_zero_champion_on_one_shared_snapshot() -> None:
     snapshot = _snapshot()
-    challenger = DEFAULT_PRODUCTION_SELECTION_POLICY.with_rule_patch(
-        "structural_strong_hard_veto", False
+    # 2026-08-02 用户决策：默认关闭结构性强势 hard_veto → 收紧版（patch True）
+    # 制造 0 票 champion，默认版为 challenger（恢复产出），验证 zero champion 恢复。
+    champion = DEFAULT_PRODUCTION_SELECTION_POLICY.with_rule_patch(
+        "structural_strong_hard_veto", True
     )
     artifact = ProductionPolicyBacktestRunner().run(
         CanonicalPolicyExperimentSpec(
             experiment_id="policy_recovery",
             hypothesis="撤销结构性强势硬否决能否恢复正期望交易",
             candidate_snapshot=snapshot,
-            champion_policy=DEFAULT_PRODUCTION_SELECTION_POLICY,
-            challenger_policy=challenger,
+            champion_policy=champion,
+            challenger_policy=DEFAULT_PRODUCTION_SELECTION_POLICY,
             changed_rule_id="structural_strong_hard_veto",
             score_line=72.0,
             output_count=6,
@@ -124,9 +126,9 @@ def test_zero_challenger_is_rejected_even_when_financial_metrics_are_cash() -> N
             candidate_snapshot=snapshot,
             champion_policy=DEFAULT_PRODUCTION_SELECTION_POLICY,
             challenger_policy=DEFAULT_PRODUCTION_SELECTION_POLICY.with_rule_patch(
-                "oscillation_hard_veto", False
+                "structural_strong_hard_veto", True
             ),
-            changed_rule_id="oscillation_hard_veto",
+            changed_rule_id="structural_strong_hard_veto",
             score_line=72.0,
             output_count=6,
             execution_policy=ExecutionPolicy(horizon_days=2),
@@ -198,7 +200,7 @@ def test_policy_experiment_persists_snapshot_arms_verdicts_trades_and_evidence()
                 candidate_snapshot=snapshot,
                 champion_policy=DEFAULT_PRODUCTION_SELECTION_POLICY,
                 challenger_policy=DEFAULT_PRODUCTION_SELECTION_POLICY.with_rule_patch(
-                    "structural_strong_hard_veto", False
+                    "structural_strong_hard_veto", True
                 ),
                 changed_rule_id="structural_strong_hard_veto",
                 score_line=72.0,

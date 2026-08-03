@@ -76,9 +76,9 @@ def test_cli_builds_one_rule_production_policy_spec(tmp_path) -> None:
             "--candidate-snapshot-file",
             str(snapshot),
             "--challenger-policy-patch",
-            '{"structural_strong_hard_veto":false}',
+            '{"structural_strong_hard_veto":true}',
             "--hypothesis",
-            "恢复结构性强势机会",
+            "收紧结构性强势 veto",
         ]
     )
 
@@ -126,8 +126,8 @@ def test_cli_can_build_rule_replay_snapshot_without_live_persistence(
             "--start", "2026-03-01",
             "--end", "2026-03-24",
             "--candidate-snapshot-output", str(output),
-            "--challenger-policy-patch", '{"oscillation_hard_veto":false}',
-            "--hypothesis", "恢复震荡机会",
+            "--challenger-policy-patch", '{"oscillation_hard_veto":true}',
+            "--hypothesis", "收紧震荡 veto",
         ]
     )
     db = object()

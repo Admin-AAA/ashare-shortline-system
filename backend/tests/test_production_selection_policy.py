@@ -22,7 +22,7 @@ def _card(code: str, score: float = 90.0, *, bucket: str = "chen-xiaoqun-skill")
 
 def test_default_policy_returns_versioned_result_and_explains_every_drop() -> None:
     assert DEFAULT_PRODUCTION_SELECTION_POLICY.fingerprint == (
-        "c56de0298e24b2c8a70b5747f3b5c0865368e55bb95bc6a7b559cff96c599b39"
+        "b2b46f4eb2fe8e995022e216e98a19783e88adbff66b9b9f4fdaccbe8857eb45"
     )
     cards = [
         _card("300001"),
@@ -46,11 +46,12 @@ def test_default_policy_returns_versioned_result_and_explains_every_drop() -> No
     )
 
     assert result.policy_fingerprint == DEFAULT_PRODUCTION_SELECTION_POLICY.fingerprint
-    assert result.recommendations == ()
     verdicts = {item.code: item for item in result.verdicts}
     assert verdicts["600001"].drop_owner == "board_universe"
     assert verdicts["300002"].drop_owner == "excluded_strategy_bucket"
-    assert verdicts["300001"].drop_owner == "structural_strong_hard_veto"
+    # 2026-08-02 用户决策：默认不保留结构性强势 hard_veto，高分候选按线通过
+    assert verdicts["300001"].drop_owner is None
+    assert [card["code"] for card in result.recommendations] == ["300001"]
     assert all(item.steps for item in result.verdicts)
 
 
@@ -70,16 +71,18 @@ def test_one_rule_patch_changes_only_structural_veto_and_keeps_same_input_cards(
         market_snapshot=snapshot,
     )
 
+    # 2026-08-02 用户决策：默认关闭 hard_veto → 默认 policy 产出；
+    # patch 开启 veto 后全拦（验证单规则 patch 只影响 veto 开关）。
     champion = evaluate_selection_policy(champion_cards, context)
     challenger_policy = DEFAULT_PRODUCTION_SELECTION_POLICY.with_rule_patch(
-        "structural_strong_hard_veto", False
+        "structural_strong_hard_veto", True
     )
     challenger = evaluate_selection_policy(
         challenger_cards, context, challenger_policy
     )
 
-    assert champion.recommendations == ()
-    assert [card["code"] for card in challenger.recommendations] == ["300001"]
+    assert [card["code"] for card in champion.recommendations] == ["300001"]
+    assert challenger.recommendations == ()
     assert champion.policy_fingerprint != challenger.policy_fingerprint
 
 
@@ -110,6 +113,11 @@ def test_filter_audit_names_policy_drop_owner_instead_of_missing_metadata() -> N
 
 def test_regime_hard_veto_is_persisted_as_policy_drop_owner() -> None:
     cards = [_card("300001", 99.0)]
+    # 2026-08-02 用户决策：默认关闭震荡 hard_veto；归因代码仍须可用，
+    # 用 with_rule_patch 开启后验证 drop_owner 归因链路。
+    policy = DEFAULT_PRODUCTION_SELECTION_POLICY.with_rule_patch(
+        "oscillation_hard_veto", True
+    )
     result = evaluate_selection_policy(
         cards,
         SelectionPolicyContext(
@@ -120,6 +128,7 @@ def test_regime_hard_veto_is_persisted_as_policy_drop_owner() -> None:
                 "market_regime": "震荡",
             },
         ),
+        policy,
     )
     audit = build_filter_audit(
         prefilter_audit={},
