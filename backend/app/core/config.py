@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     tushare_official_url: str = "https://api.tushare.pro"
     tushare_official_token: str = ""
     tushare_official_rate_limit_per_minute: int = 120
+    # quantdata：第三方 tushare pro 协议数据源（JSON token，POST 根路径不带 api 路径）。
+    # 探测权限：日线/基本面/筹码/资金流/涨跌停/龙虎榜/同花顺概念全量可用（数据到当天）；
+    # anns_d/rt_k/stk_mins 未购买（走 per-API 路由链自动 fallback）。平滑限速，稳态 6rps 无限制。
+    tushare_quantdata_url: str = "https://quantdata888.duckdns.org"
+    tushare_quantdata_token: str = ""
+    tushare_quantdata_rate_limit_per_minute: int = 120
     # 实时报价爬虫接口（tushare realtime_quote，走 realtime.stockai888.top）。
     # 独立于 ai-tool/fastapic 的 pro HTTP 协议：多代码批量、含现价/最高/最低/昨收，
     # 用于未结算推荐的盘中实时浮盈。token 复用 fastapic token。

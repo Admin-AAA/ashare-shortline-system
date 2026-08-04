@@ -638,10 +638,10 @@ class TushareProviderRouter:
     # 未列出的 API 回落到按 provider priority 升序。rt_k 首选 xiaodefa（fastapic 无权限、
     # ai_tool 需独立付费且常 504），stk_mins/rt_min/anns_d 维持 ai_tool 优先。
     DEFAULT_API_ROUTES: Mapping[str, tuple[str, ...]] = {
-        "rt_k": ("xiaodefa", "fastapic", "ai_tool"),
-        "stk_mins": ("ai_tool", "fastapic", "xiaodefa"),
-        "rt_min": ("ai_tool", "fastapic", "xiaodefa"),
-        "anns_d": ("ai_tool", "fastapic", "xiaodefa"),
+        "rt_k": ("xiaodefa", "fastapic", "ai_tool", "quantdata"),
+        "stk_mins": ("ai_tool", "fastapic", "quantdata", "xiaodefa"),
+        "rt_min": ("ai_tool", "fastapic", "quantdata", "xiaodefa"),
+        "anns_d": ("ai_tool", "fastapic", "quantdata", "xiaodefa"),
     }
 
     def __init__(
