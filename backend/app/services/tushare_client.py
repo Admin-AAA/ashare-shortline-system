@@ -303,6 +303,25 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
             )
         )
 
+    quantdata_token = settings.tushare_quantdata_token.strip()
+    if quantdata_token:
+        providers.append(
+            TushareHttpProvider(
+                ProviderConfig(
+                    name="quantdata",
+                    base_url=settings.tushare_quantdata_url,
+                    credential=quantdata_token,
+                    auth_mode=AuthMode.JSON_TOKEN,
+                    rate_limit_per_minute=max(
+                        0, int(settings.tushare_quantdata_rate_limit_per_minute)
+                    ),
+                    append_api_path=False,
+                    priority=1,
+                    **common,
+                )
+            )
+        )
+
     ai_tool_api_key = settings.tushare_ai_tool_api_key.strip()
     if ai_tool_api_key:
         providers.append(
@@ -527,6 +546,19 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
             "auth_mode": AuthMode.JSON_TOKEN.value,
             "rate_limit_per_minute": max(
                 0, int(settings.tushare_official_rate_limit_per_minute)
+            ),
+            "api_rate_limits": {},
+            "max_concurrency": 0,
+        },
+        {
+            "name": "quantdata",
+            "source": "quantdata",
+            "configured": bool(settings.tushare_quantdata_token.strip()),
+            "priority": 1,
+            "note": "第三方 pro 协议源；日线/基本面/筹码/资金流全量高吞吐（anns_d/rt_k/stk_mins 无权限走链 fallback）",
+            "auth_mode": AuthMode.JSON_TOKEN.value,
+            "rate_limit_per_minute": max(
+                0, int(settings.tushare_quantdata_rate_limit_per_minute)
             ),
             "api_rate_limits": {},
             "max_concurrency": 0,
