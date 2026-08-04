@@ -16,6 +16,7 @@ import functools
 import hashlib
 import json
 import logging
+import threading
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -1672,6 +1673,164 @@ def fetch_broker_recommend(month: str | None = None) -> list[dict[str, Any]]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# 分钟K线备用源：Baostock（5/15/30/60min）
+# 全部 tushare 源 stk_mins 无权限时，用 baostock 补齐 5m+ 分钟K。
+# 防封纪律（用户硬性要求，实测连续多次查询会触发限速挂起）：
+#   - 单进程全局锁串行，进程内复用一次 login；
+#   - 每次查询间隔 >= _BAOSTOCK_MIN_INTERVAL_S（默认 3.5s）；
+#   - 查询异常/空结果重 login 后最多重试 2 次；
+#   - baostock 不支持 1min（frequency='1' 恒返回空）。
+# ═════════════════════════════════════════════════════════════════════════════
+
+_BAOSTOCK_MIN_INTERVAL_S = 3.5
+_BAOSTOCK_MAX_RETRIES = 2
+_baostock_lock = threading.Lock()
+_baostock_logged_in = False
+_baostock_last_query = 0.0
+
+# 本模块 freq 字符串 → baostock frequency 参数
+_BAOSTOCK_FREQ_MAP = {"5min": "5", "15min": "15", "30min": "30", "60min": "60"}
+
+
+def _baostock_to_bs_code(code: str, *, is_index: bool = False) -> str:
+    """6位代码 → baostock 格式（sh.600000 / sz.000001）。指数 399→sz 其余→sh。"""
+    bare = str(code or "").split(".")[0]
+    if is_index:
+        return f"sz.{bare}" if bare.startswith("399") else f"sh.{bare}"
+    return f"sh.{bare}" if bare.startswith(("6", "9")) else f"sz.{bare}"
+
+
+def _baostock_ensure_login() -> Any:
+    global _baostock_logged_in
+    import baostock as bs
+
+    if not _baostock_logged_in:
+        lg = bs.login()
+        if lg.error_code != "0":
+            raise RuntimeError(f"baostock login failed: {lg.error_msg}")
+        _baostock_logged_in = True
+    return bs
+
+
+def _baostock_relogin() -> Any:
+    global _baostock_logged_in
+    import baostock as bs
+
+    try:
+        bs.logout()
+    except Exception:
+        pass
+    _baostock_logged_in = False
+    return _baostock_ensure_login()
+
+
+def _fetch_baostock_minute_kbars(
+    code: str,
+    freq: str,
+    start_date: str,
+    end_date: str,
+    *,
+    is_index: bool = False,
+    trace: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """用 baostock 抓 5/15/30/60min 历史分钟K，返回与 tushare 分钟行同构的 dict 列表。
+
+    严格串行 + 限速 + 失败重 login 重试。不支持的 freq（如 1min）直接返回 []。
+    """
+    global _baostock_last_query
+
+    bs_freq = _BAOSTOCK_FREQ_MAP.get(str(freq or "").lower())
+    if bs_freq is None:
+        _record_minute_source_trace(
+            trace, source="baostock", code=code, status="unsupported_freq", row_count=0,
+            reason=f"baostock 不支持 freq={freq}（仅 5/15/30/60min）",
+        )
+        return []
+
+    start_day = _normalize_trade_date(start_date)
+    end_day = _normalize_trade_date(end_date)
+    if not start_day or not end_day:
+        return []
+
+    bs_code = _baostock_to_bs_code(code, is_index=is_index)
+    fields = "date,time,open,high,low,close,volume,amount"
+
+    with _baostock_lock:
+        rs = None
+        last_err: str | None = None
+        for attempt in range(_BAOSTOCK_MAX_RETRIES + 1):
+            try:
+                # 限速：距上次查询至少 _BAOSTOCK_MIN_INTERVAL_S
+                wait = _BAOSTOCK_MIN_INTERVAL_S - (time.monotonic() - _baostock_last_query)
+                if wait > 0:
+                    time.sleep(wait)
+                bs = _baostock_ensure_login()
+                rs = bs.query_history_k_data_plus(
+                    bs_code, fields,
+                    start_date=start_day, end_date=end_day,
+                    frequency=bs_freq, adjustflag="3",
+                )
+                _baostock_last_query = time.monotonic()
+                if rs.error_code == "0":
+                    break
+                last_err = f"error_code={rs.error_code} {rs.error_msg}"
+                logger.warning("baostock minute query failed code=%s freq=%s attempt=%d: %s", code, freq, attempt + 1, last_err)
+            except Exception as exc:  # 网络/COM 异常 → 重 login 重试
+                last_err = f"{type(exc).__name__}: {str(exc)[:120]}"
+                logger.warning("baostock minute query exception code=%s freq=%s attempt=%d: %s", code, freq, attempt + 1, last_err)
+            if attempt < _BAOSTOCK_MAX_RETRIES:
+                try:
+                    _baostock_relogin()
+                except Exception as exc:
+                    last_err = f"relogin failed: {exc}"
+        if rs is None or getattr(rs, "error_code", "1") != "0":
+            _record_minute_source_trace(
+                trace, source="baostock", code=code, status="error", row_count=0,
+                reason=last_err or "unknown",
+            )
+            return []
+
+        rows: list[dict[str, Any]] = []
+        while rs.next():
+            data = rs.get_row_data()
+            if len(data) < 8:
+                continue
+            raw_date, raw_time = str(data[0]).strip(), str(data[1]).strip()
+            trade_date = _normalize_trade_date(raw_date or raw_time)
+            # baostock time 为 'YYYYMMDDHHMMSSmmm'（14位+毫秒），截到 'YYYY-MM-DD HH:MM:SS'
+            trade_time = ""
+            if len(raw_time) >= 14:
+                trade_time = (
+                    f"{raw_time[0:4]}-{raw_time[4:6]}-{raw_time[6:8]} "
+                    f"{raw_time[8:10]}:{raw_time[10:12]}:{raw_time[12:14]}"
+                )
+            if not trade_date or not trade_time:
+                continue
+            open_price = _f(data[2])
+            high_price = _f(data[3])
+            low_price = _f(data[4])
+            close_price = _f(data[5])
+            rows.append({
+                "code": code,
+                "trade_date": trade_date,
+                "trade_time": trade_time,
+                "open": round(open_price, 3),
+                "high": round(max(high_price, open_price, close_price), 3),
+                "low": round(min(v for v in (low_price, open_price, close_price) if v > 0) if any(v > 0 for v in (low_price, open_price, close_price)) else close_price, 3),
+                "close": round(close_price, 3),
+                "volume": _f(data[6]),
+                "amount": _f(data[7]),
+                "source": "baostock",
+            })
+
+    _record_minute_source_trace(
+        trace, source="baostock", code=code,
+        status="success" if rows else "empty", row_count=len(rows),
+    )
+    return rows
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # 分钟K线（Tushare stk_mins）
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -1683,9 +1842,32 @@ def fetch_minute_kbars(
     code: str,
     trade_date: str | None = None,
     trace: list[dict[str, Any]] | None = None,
+    freq: str = "1min",
 ) -> list[dict[str, Any]]:
-    """获取个股 1 分钟 K 线。仅使用 Tushare stk_mins。"""
+    """获取个股分钟 K 线。
+
+    freq="1min"（默认）：仅使用 Tushare stk_mins。
+    freq="5min"/"15min"/"30min"/"60min"：Tushare 源均无权限，改用 Baostock 备用源
+      （严格限速，见 _fetch_baostock_minute_kbars）。须配合 trade_date 使用；
+      未传 trade_date 时回落到「最近一个有数据的交易日」。
+    """
     target_trade_date = _normalize_trade_date(trade_date)
+    normalized_freq = str(freq or "1min").lower()
+
+    if normalized_freq != "1min":
+        if target_trade_date:
+            return _fetch_baostock_minute_kbars(
+                code, normalized_freq, target_trade_date, target_trade_date, trace=trace,
+            )
+        # 未指定日期：抓近 10 天窗口，取最近一个有数据的交易日
+        end_day = date.today()
+        start_day = end_day - timedelta(days=10)
+        rows = _fetch_baostock_minute_kbars(
+            code, normalized_freq, start_day.isoformat(), end_day.isoformat(), trace=trace,
+        )
+        latest = max((row["trade_date"] for row in rows), default="")
+        return [row for row in rows if row["trade_date"] == latest]
+
     if target_trade_date:
         rows = _fetch_tushare_minute_kbars(
             code,

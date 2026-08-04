@@ -1962,9 +1962,15 @@ def _backfill_index_daily_dates(
     }
 
 
-def _backfill_minute_kbar_date(db: Session, trade_date: str, codes: list[str]) -> dict[str, Any]:
+def _backfill_minute_kbar_date(
+    db: Session,
+    trade_date: str,
+    codes: list[str],
+    freq: str = "1min",
+) -> dict[str, Any]:
     target = _normalize_trade_date(trade_date)
     target_codes = [str(code or "").strip() for code in codes if str(code or "").strip()]
+    normalized_freq = str(freq or "1min").lower()
     if not target or not target_codes:
         return {"row_count": 0, "requested_code_count": len(target_codes), "target_hit_count": 0}
 
@@ -1973,7 +1979,7 @@ def _backfill_minute_kbar_date(db: Session, trade_date: str, codes: list[str]) -
     failed_codes: list[str] = []
     for code in target_codes:
         try:
-            rows = fetch_minute_kbars(code, trade_date=target) or []
+            rows = fetch_minute_kbars(code, trade_date=target, freq=normalized_freq) or []
         except Exception:
             rows = []
             failed_codes.append(code)
@@ -1988,7 +1994,7 @@ def _backfill_minute_kbar_date(db: Session, trade_date: str, codes: list[str]) -
             payload.append(
                 {
                     "code": code,
-                    "freq": str(row.get("freq") or "1min"),
+                    "freq": normalized_freq,
                     "trade_date": trade_date_value,
                     "trade_time": trade_time,
                     "open": _float(row.get("open")),

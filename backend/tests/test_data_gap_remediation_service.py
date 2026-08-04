@@ -1004,7 +1004,7 @@ def test_remediate_data_health_gaps_executes_minute_kbar_plan(monkeypatch):
 def test_backfill_minute_kbar_date_filters_target_date_and_upserts(monkeypatch):
     db = MagicMock()
 
-    def _fake_fetch(code, trade_date=None):
+    def _fake_fetch(code, trade_date=None, freq="1min"):
         return [
             {
                 "trade_date": trade_date,
