@@ -843,7 +843,9 @@ def _probe_pro_provider(provider_name: str) -> tuple[bool, str | None]:
     if provider is None:
         raise KeyError(provider_name)
     try:
-        envelope = provider.request("stock_basic", params={"limit": 1})
+        # 不传 limit：部分第三方源（如 quantdata）不支持 limit 参数，传了会被判 invalid_request。
+        # stock_basic 全量返回也仅数千行，探针直接取全集判断非空即可。
+        envelope = provider.request("stock_basic", params={})
     except Exception as exc:
         return False, f"{type(exc).__name__}: {str(exc)[:200]}"
     items = (envelope.get("data") or {}).get("items") if isinstance(envelope, dict) else None
