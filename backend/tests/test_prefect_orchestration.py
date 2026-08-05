@@ -21,17 +21,14 @@ def test_manual_scheduled_task_trigger_uses_one_prefect_deployment(monkeypatch) 
 
     assert ref.run_id == str(flow_run_id)
     assert ref.deployment_name == "scheduled-task/post_sync_formal_recommendation"
-    assert calls == [
-        {
-            "name": "scheduled-task/post_sync_formal_recommendation",
-            "parameters": {
-                "task_id": "post_sync_formal_recommendation",
-                "trigger_source": "manual",
-            },
-            "timeout": 0,
-            "_sync": True,
-        }
-    ]
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["name"] == "scheduled-task/post_sync_formal_recommendation"
+    assert call["parameters"]["task_id"] == "post_sync_formal_recommendation"
+    assert call["parameters"]["trigger_source"] == "manual"
+    assert len(call["parameters"]["correlation_id"]) == 32
+    assert call["timeout"] == 0
+    assert call["_sync"] is True
 
 
 def test_recommendation_trigger_carries_only_durable_run_id(monkeypatch) -> None:
@@ -46,7 +43,8 @@ def test_recommendation_trigger_carries_only_durable_run_id(monkeypatch) -> None
     ref = api.trigger_recommendation("run_20260730_demo")
 
     assert ref.run_id == str(flow_run_id)
-    assert calls[0]["parameters"] == {"run_id": "run_20260730_demo"}
+    assert calls[0]["parameters"]["run_id"] == "run_20260730_demo"
+    assert len(calls[0]["parameters"]["correlation_id"]) == 32
     assert calls[0]["timeout"] == 0
     assert calls[0]["_sync"] is True
 

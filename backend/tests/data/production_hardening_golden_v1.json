@@ -1,0 +1,959 @@
+{
+  "schema_version": 1,
+  "fixture_id": "production-evidence-risk-hardening-v1",
+  "snapshot_id": "golden-production-evidence-risk-v1",
+  "execution_policy": {
+    "schema_version": 1,
+    "entry_lookahead_days": 1,
+    "horizon_days": 2,
+    "commission_rate": 0.0001,
+    "stamp_tax_rate": 0.0005,
+    "entry_slippage_bps": 0.0,
+    "exit_slippage_bps": 0.0,
+    "position_size": 0.25,
+    "stop_loss_pct": 5.0,
+    "take_profit_pct": 10.0,
+    "max_entry_gap_pct": 10.0,
+    "skip_untradable_entry_bars": true,
+    "intraday_exit_priority": "stop_loss"
+  },
+  "partition": {
+    "dataset": "daily_kbars",
+    "start_date": "2026-06-01",
+    "end_date": "2026-06-03",
+    "source_version": "golden-local-daily-kbars/v1",
+    "row_count": 15
+  },
+  "artifacts": [
+    {
+      "artifact_id": "golden-signal-20260601-v1",
+      "signal_date": "2026-06-01",
+      "artifact_scope": "signal_input",
+      "artifact_type": "daily_kbars_strategy_input",
+      "schema_version": 1,
+      "row_count": 5,
+      "payload": {
+        "schema_version": 1,
+        "signal_date": "2026-06-01",
+        "visible_at": "2026-06-01",
+        "stocks": [
+          {
+            "recommendation_id": "golden-cost-horizon",
+            "scenario_id": "cost_horizon",
+            "code": "000001",
+            "name": "固定成本样本",
+            "price": 10.0,
+            "close": 10.0,
+            "final_score": 80.0,
+            "requested_position_size": 0.4,
+            "position_caps": {
+              "market_regime": 0.35,
+              "portfolio_single_name": 0.25,
+              "risk_template": 0.3,
+              "score": 0.5,
+              "strategy": 0.4
+            }
+          },
+          {
+            "recommendation_id": "golden-t1-both-hit",
+            "scenario_id": "t_plus_one_same_day_both_hit",
+            "code": "000002",
+            "name": "T加一同日双触发样本",
+            "price": 100.0,
+            "close": 100.0,
+            "final_score": 81.0,
+            "requested_position_size": 0.4,
+            "position_caps": {
+              "strategy": 0.4,
+              "score": 0.5,
+              "risk_template": 0.3,
+              "portfolio_single_name": 0.25,
+              "market_regime": 0.35
+            }
+          },
+          {
+            "recommendation_id": "golden-gap-entry",
+            "scenario_id": "gap_entry_rejection",
+            "code": "000003",
+            "name": "跳空入场样本",
+            "price": 90.0,
+            "close": 90.0,
+            "final_score": 82.0,
+            "requested_position_size": 0.4,
+            "position_caps": {
+              "score": 0.5,
+              "market_regime": 0.35,
+              "risk_template": 0.3,
+              "strategy": 0.4,
+              "portfolio_single_name": 0.25
+            }
+          },
+          {
+            "recommendation_id": "golden-one-word-limit-up",
+            "scenario_id": "one_word_limit_up",
+            "code": "000004",
+            "name": "一字涨停不可成交样本",
+            "price": 10.0,
+            "close": 10.0,
+            "final_score": 83.0,
+            "requested_position_size": 0.4,
+            "position_caps": {
+              "risk_template": 0.3,
+              "score": 0.5,
+              "portfolio_single_name": 0.25,
+              "market_regime": 0.35,
+              "strategy": 0.4
+            }
+          },
+          {
+            "recommendation_id": "golden-limit-down-gap",
+            "scenario_id": "limit_down_gap",
+            "code": "000005",
+            "name": "一字跌停风险样本",
+            "price": 10.0,
+            "close": 10.0,
+            "final_score": 84.0,
+            "requested_position_size": 0.4,
+            "position_caps": {
+              "portfolio_single_name": 0.25,
+              "risk_template": 0.3,
+              "strategy": 0.4,
+              "market_regime": 0.35,
+              "score": 0.5
+            }
+          }
+        ],
+        "risk_context": {
+          "decision": "reduce",
+          "requested_size": 0.4,
+          "approved_size": 0.25,
+          "reason_codes": [
+            "portfolio_single_name_cap",
+            "gross_exposure_cap"
+          ],
+          "policy_fingerprint": "2222222222222222222222222222222222222222222222222222222222222222",
+          "state_fingerprint": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "evidence_context": {
+          "data_as_of": "2026-06-01",
+          "strategy_policy_fingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+          "code_revision": "golden-revision-v1",
+          "reconstruction_batch_id": "golden-reconstruction-batch-v1",
+          "actual_generated_at_by_role": {
+            "historical_reconstruction": "2026-06-05T08:00:00+08:00",
+            "backtest": "2026-06-05T08:00:00+08:00",
+            "formal": "2026-06-01T08:30:00+08:00"
+          }
+        }
+      }
+    },
+    {
+      "artifact_id": "golden-outcome-20260601-v1",
+      "signal_date": "2026-06-01",
+      "artifact_scope": "outcome_input",
+      "artifact_type": "daily_kbars_execution_input",
+      "schema_version": 1,
+      "row_count": 10,
+      "payload": {
+        "schema_version": 1,
+        "signal_date": "2026-06-01",
+        "bars_by_code": {
+          "000001": [
+            {
+              "code": "000001",
+              "trade_date": "2026-06-02",
+              "open": 10.0,
+              "high": 10.2,
+              "low": 9.8,
+              "close": 10.1,
+              "volume": 1000000.0,
+              "amount": 10100000.0,
+              "pct_chg": 1.0,
+              "tradable": true
+            },
+            {
+              "code": "000001",
+              "trade_date": "2026-06-03",
+              "open": 10.1,
+              "high": 10.8,
+              "low": 10.0,
+              "close": 10.5,
+              "volume": 1100000.0,
+              "amount": 11550000.0,
+              "pct_chg": 3.96,
+              "tradable": true
+            }
+          ],
+          "000002": [
+            {
+              "code": "000002",
+              "trade_date": "2026-06-02",
+              "open": 100.0,
+              "high": 112.0,
+              "low": 94.0,
+              "close": 105.0,
+              "volume": 900000.0,
+              "amount": 94500000.0,
+              "pct_chg": 5.0,
+              "tradable": true
+            },
+            {
+              "code": "000002",
+              "trade_date": "2026-06-03",
+              "open": 101.0,
+              "high": 103.0,
+              "low": 99.0,
+              "close": 102.0,
+              "volume": 950000.0,
+              "amount": 96900000.0,
+              "pct_chg": -2.86,
+              "tradable": true
+            }
+          ],
+          "000003": [
+            {
+              "code": "000003",
+              "trade_date": "2026-06-02",
+              "open": 100.0,
+              "high": 101.0,
+              "low": 99.0,
+              "close": 100.0,
+              "volume": 800000.0,
+              "amount": 80000000.0,
+              "pct_chg": 11.11,
+              "tradable": true
+            },
+            {
+              "code": "000003",
+              "trade_date": "2026-06-03",
+              "open": 95.0,
+              "high": 97.0,
+              "low": 94.0,
+              "close": 96.0,
+              "volume": 820000.0,
+              "amount": 78720000.0,
+              "pct_chg": -4.0,
+              "tradable": true
+            }
+          ],
+          "000004": [
+            {
+              "code": "000004",
+              "trade_date": "2026-06-02",
+              "open": 11.0,
+              "high": 11.0,
+              "low": 11.0,
+              "close": 11.0,
+              "volume": 1000.0,
+              "amount": 11000.0,
+              "pct_chg": 10.0,
+              "tradable": false
+            },
+            {
+              "code": "000004",
+              "trade_date": "2026-06-03",
+              "open": 10.5,
+              "high": 10.8,
+              "low": 10.3,
+              "close": 10.6,
+              "volume": 600000.0,
+              "amount": 6360000.0,
+              "pct_chg": -3.64,
+              "tradable": true
+            }
+          ],
+          "000005": [
+            {
+              "code": "000005",
+              "trade_date": "2026-06-02",
+              "open": 10.0,
+              "high": 10.2,
+              "low": 9.8,
+              "close": 10.0,
+              "volume": 700000.0,
+              "amount": 7000000.0,
+              "pct_chg": 0.0,
+              "tradable": true
+            },
+            {
+              "code": "000005",
+              "trade_date": "2026-06-03",
+              "open": 9.0,
+              "high": 9.0,
+              "low": 9.0,
+              "close": 9.0,
+              "volume": 500.0,
+              "amount": 4500.0,
+              "pct_chg": -10.0,
+              "tradable": false
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "cross_module_projection_golden": {
+    "schema_version": 1,
+    "evidence_eligibility": {
+      "cases": [
+        {
+          "case_id": "formal-live-eligible",
+          "input": {
+            "case_id": "formal-live-eligible",
+            "run_source": "formal",
+            "signal_date": "2026-06-01",
+            "actual_generated_at": "2026-06-01T08:30:00+08:00",
+            "data_as_of": "2026-06-01",
+            "source_snapshot_id": "golden-production-evidence-risk-v1",
+            "strategy_policy_fingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+            "code_revision": "golden-revision-v1",
+            "reconstruction_batch_id": null
+          },
+          "expected": {
+            "case_id": "formal-live-eligible",
+            "run_source": "formal",
+            "signal_date": "2026-06-01",
+            "evidence_class": "live_forward",
+            "is_live_eligible": true,
+            "generated_on_signal_business_date": true,
+            "data_as_of_on_or_before_signal": true,
+            "source_snapshot_id_verified": true,
+            "code_revision_verified": true,
+            "identity_hash": "07ddc6c07aaee821441c1319e9b8f782a78a57da02eddf7402b5dcb4752366fd",
+            "layer": "layer_1",
+            "schema_version": 1
+          }
+        },
+        {
+          "case_id": "formal-late-generation",
+          "input": {
+            "case_id": "formal-late-generation",
+            "run_source": "formal",
+            "signal_date": "2026-06-01",
+            "actual_generated_at": "2026-06-05T08:00:00+08:00",
+            "data_as_of": "2026-06-01",
+            "source_snapshot_id": "golden-production-evidence-risk-v1",
+            "strategy_policy_fingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+            "code_revision": "golden-revision-v1",
+            "reconstruction_batch_id": null
+          },
+          "expected": {
+            "case_id": "formal-late-generation",
+            "run_source": "formal",
+            "signal_date": "2026-06-01",
+            "evidence_class": "unverified",
+            "is_live_eligible": false,
+            "generated_on_signal_business_date": false,
+            "data_as_of_on_or_before_signal": true,
+            "source_snapshot_id_verified": true,
+            "code_revision_verified": true,
+            "identity_hash": "bb1432df3e86aef583a3f7ac7d531a971d2b9e16a8d7b97b1ff21c1e4bf3acc9",
+            "layer": "layer_1",
+            "schema_version": 1
+          }
+        },
+        {
+          "case_id": "formal-future-data-as-of",
+          "input": {
+            "case_id": "formal-future-data-as-of",
+            "run_source": "formal",
+            "signal_date": "2026-06-01",
+            "actual_generated_at": "2026-06-01T08:30:00+08:00",
+            "data_as_of": "2026-06-02",
+            "source_snapshot_id": "golden-production-evidence-risk-v1",
+            "strategy_policy_fingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+            "code_revision": "golden-revision-v1",
+            "reconstruction_batch_id": null
+          },
+          "expected": {
+            "case_id": "formal-future-data-as-of",
+            "run_source": "formal",
+            "signal_date": "2026-06-01",
+            "evidence_class": "unverified",
+            "is_live_eligible": false,
+            "generated_on_signal_business_date": true,
+            "data_as_of_on_or_before_signal": false,
+            "source_snapshot_id_verified": true,
+            "code_revision_verified": true,
+            "identity_hash": "5f3fc71a80ede32718259e3d22468fa04e73a45e3f11236fa1232abf8e638986",
+            "layer": "layer_1",
+            "schema_version": 1
+          }
+        },
+        {
+          "case_id": "formal-unverified-snapshot-id",
+          "input": {
+            "case_id": "formal-unverified-snapshot-id",
+            "run_source": "formal",
+            "signal_date": "2026-06-01",
+            "actual_generated_at": "2026-06-01T08:30:00+08:00",
+            "data_as_of": "2026-06-01",
+            "source_snapshot_id": "unknown",
+            "strategy_policy_fingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+            "code_revision": "golden-revision-v1",
+            "reconstruction_batch_id": null
+          },
+          "expected": {
+            "case_id": "formal-unverified-snapshot-id",
+            "run_source": "formal",
+            "signal_date": "2026-06-01",
+            "evidence_class": "unverified",
+            "is_live_eligible": false,
+            "generated_on_signal_business_date": true,
+            "data_as_of_on_or_before_signal": true,
+            "source_snapshot_id_verified": false,
+            "code_revision_verified": true,
+            "identity_hash": "cda8f5122f181a2ed1cbcddabed37ea7a04b1d49fd69a0aaa5e6727da4f14500",
+            "layer": "layer_1",
+            "schema_version": 1
+          }
+        },
+        {
+          "case_id": "formal-unverified-code-revision",
+          "input": {
+            "case_id": "formal-unverified-code-revision",
+            "run_source": "formal",
+            "signal_date": "2026-06-01",
+            "actual_generated_at": "2026-06-01T08:30:00+08:00",
+            "data_as_of": "2026-06-01",
+            "source_snapshot_id": "golden-production-evidence-risk-v1",
+            "strategy_policy_fingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+            "code_revision": "unknown",
+            "reconstruction_batch_id": null
+          },
+          "expected": {
+            "case_id": "formal-unverified-code-revision",
+            "run_source": "formal",
+            "signal_date": "2026-06-01",
+            "evidence_class": "unverified",
+            "is_live_eligible": false,
+            "generated_on_signal_business_date": true,
+            "data_as_of_on_or_before_signal": true,
+            "source_snapshot_id_verified": true,
+            "code_revision_verified": false,
+            "identity_hash": "80280cdf9e7b65529e4ffd4de3992f813f24f96463450595ba6e22a4fdc9fbd7",
+            "layer": "layer_1",
+            "schema_version": 1
+          }
+        },
+        {
+          "case_id": "historical-replay-reconstruction",
+          "input": {
+            "case_id": "historical-replay-reconstruction",
+            "run_source": "historical_replay",
+            "signal_date": "2026-06-01",
+            "actual_generated_at": "2026-06-05T08:00:00+08:00",
+            "data_as_of": "2026-06-01",
+            "source_snapshot_id": "golden-production-evidence-risk-v1",
+            "strategy_policy_fingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+            "code_revision": "golden-revision-v1",
+            "reconstruction_batch_id": "golden-reconstruction-batch-v1"
+          },
+          "expected": {
+            "case_id": "historical-replay-reconstruction",
+            "run_source": "historical_replay",
+            "signal_date": "2026-06-01",
+            "evidence_class": "historical_reconstruction",
+            "is_live_eligible": false,
+            "generated_on_signal_business_date": false,
+            "data_as_of_on_or_before_signal": true,
+            "source_snapshot_id_verified": true,
+            "code_revision_verified": true,
+            "identity_hash": "ba7622706ec8fa88aaf4f33e2d5a6a44f662173cea540398b4eed8311d4180f0",
+            "layer": "layer_1",
+            "schema_version": 1
+          }
+        },
+        {
+          "case_id": "backtest-research",
+          "input": {
+            "case_id": "backtest-research",
+            "run_source": "backtest",
+            "signal_date": "2026-06-01",
+            "actual_generated_at": "2026-06-05T08:00:00+08:00",
+            "data_as_of": "2026-06-01",
+            "source_snapshot_id": "golden-production-evidence-risk-v1",
+            "strategy_policy_fingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+            "code_revision": "golden-revision-v1",
+            "reconstruction_batch_id": null
+          },
+          "expected": {
+            "case_id": "backtest-research",
+            "run_source": "backtest",
+            "signal_date": "2026-06-01",
+            "evidence_class": "research_backtest",
+            "is_live_eligible": false,
+            "generated_on_signal_business_date": false,
+            "data_as_of_on_or_before_signal": true,
+            "source_snapshot_id_verified": true,
+            "code_revision_verified": true,
+            "identity_hash": "6dc15de0023611aed0e3e42e0bb51ba1c62aee05e0f29b229b1142377d1b4155",
+            "layer": "layer_1",
+            "schema_version": 1
+          }
+        }
+      ]
+    },
+    "execution": {
+      "expected_by_recommendation_id": {
+        "golden-cost-horizon": {
+          "recommendation_id": "golden-cost-horizon",
+          "entry_triggered": true,
+          "entry_date": "2026-06-02",
+          "entry_price": "10.00000000",
+          "exit_date": "2026-06-03",
+          "exit_price": "10.50000000",
+          "exit_reason": "horizon_close",
+          "gross_return_pct": "5.00000000",
+          "cost_pct": "0.07000000",
+          "position_size": "0.25000000",
+          "net_return_pct": "4.93000000",
+          "t_plus_one_entry_bar_excluded": true,
+          "layer": "layer_1",
+          "schema_version": 1
+        },
+        "golden-gap-entry": {
+          "recommendation_id": "golden-gap-entry",
+          "entry_triggered": false,
+          "entry_date": null,
+          "entry_price": null,
+          "exit_date": null,
+          "exit_price": null,
+          "exit_reason": "entry_not_filled",
+          "gross_return_pct": "0.00000000",
+          "cost_pct": "0.00000000",
+          "position_size": "0.00000000",
+          "net_return_pct": "0.00000000",
+          "t_plus_one_entry_bar_excluded": true,
+          "layer": "layer_1",
+          "schema_version": 1
+        },
+        "golden-limit-down-gap": {
+          "recommendation_id": "golden-limit-down-gap",
+          "entry_triggered": true,
+          "entry_date": "2026-06-02",
+          "entry_price": "10.00000000",
+          "exit_date": "2026-06-03",
+          "exit_price": "9.00000000",
+          "exit_reason": "limit_down_locked_horizon_mark",
+          "gross_return_pct": "-10.00000000",
+          "cost_pct": "0.07000000",
+          "position_size": "0.25000000",
+          "net_return_pct": "-10.07000000",
+          "t_plus_one_entry_bar_excluded": true,
+          "layer": "layer_1",
+          "schema_version": 1
+        },
+        "golden-one-word-limit-up": {
+          "recommendation_id": "golden-one-word-limit-up",
+          "entry_triggered": false,
+          "entry_date": null,
+          "entry_price": null,
+          "exit_date": null,
+          "exit_price": null,
+          "exit_reason": "entry_not_filled",
+          "gross_return_pct": "0.00000000",
+          "cost_pct": "0.00000000",
+          "position_size": "0.00000000",
+          "net_return_pct": "0.00000000",
+          "t_plus_one_entry_bar_excluded": true,
+          "layer": "layer_1",
+          "schema_version": 1
+        },
+        "golden-t1-both-hit": {
+          "recommendation_id": "golden-t1-both-hit",
+          "entry_triggered": true,
+          "entry_date": "2026-06-02",
+          "entry_price": "100.00000000",
+          "exit_date": "2026-06-03",
+          "exit_price": "101.00000000",
+          "exit_reason": "trailing_stop_gap",
+          "gross_return_pct": "1.00000000",
+          "cost_pct": "0.07000000",
+          "position_size": "0.25000000",
+          "net_return_pct": "0.93000000",
+          "t_plus_one_entry_bar_excluded": true,
+          "layer": "layer_1",
+          "schema_version": 1
+        }
+      }
+    },
+    "outcome_identity": {
+      "cases": [
+        {
+          "case_id": "outcome-cost-horizon",
+          "input": {
+            "case_id": "outcome-cost-horizon",
+            "recommendation_id": "golden-cost-horizon",
+            "identity_components": {
+              "source_snapshot_id": "golden-production-evidence-risk-v1",
+              "strategy_policy_fingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+              "execution_policy_fingerprint": "78d9ac5e08dd4b9c08d932602d3c405769f5dd67d7a0e271515a2c6467c36c1f",
+              "code_revision": "golden-revision-v1"
+            },
+            "versions": [
+              {
+                "version": 1,
+                "outcome_label": "success",
+                "calculation_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "result_fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "recorded_at": "2026-06-04T09:00:00+08:00"
+              },
+              {
+                "version": 2,
+                "outcome_label": "success",
+                "calculation_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                "result_fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                "recorded_at": "2026-06-05T09:00:00+08:00"
+              },
+              {
+                "version": 2,
+                "outcome_label": "success",
+                "calculation_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                "result_fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                "recorded_at": "2026-06-05T09:00:00+08:00"
+              }
+            ]
+          },
+          "expected": {
+            "case_id": "outcome-cost-horizon",
+            "recommendation_id": "golden-cost-horizon",
+            "outcome_identity_hash": "597fc78597286e752b8293695b9c34886a9e3b2506a9f1bf9ae5ad9c5ef12834",
+            "version_count": 2,
+            "current_version": 2,
+            "current_version_fingerprint": "7895bcf183d043b8453bc9289ce8c18826f8b19b580903e0a419d88ab3b14d88",
+            "versions": [
+              {
+                "version": 1,
+                "outcome_label": "success",
+                "calculation_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "result_fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "recorded_at": "2026-06-04T01:00:00.000000Z",
+                "version_fingerprint": "8c0dfe40cfcccba1aec6d1b2d5787b2e989f92d01607873444d8fa77b05bc101",
+                "is_current": false,
+                "schema_version": 1
+              },
+              {
+                "version": 2,
+                "outcome_label": "success",
+                "calculation_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                "result_fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                "recorded_at": "2026-06-05T01:00:00.000000Z",
+                "version_fingerprint": "7895bcf183d043b8453bc9289ce8c18826f8b19b580903e0a419d88ab3b14d88",
+                "is_current": true,
+                "schema_version": 1
+              }
+            ],
+            "layer": "layer_1",
+            "schema_version": 1
+          }
+        },
+        {
+          "case_id": "outcome-limit-down-gap",
+          "input": {
+            "case_id": "outcome-limit-down-gap",
+            "recommendation_id": "golden-limit-down-gap",
+            "identity_components": {
+              "source_snapshot_id": "golden-production-evidence-risk-v1",
+              "strategy_policy_fingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+              "execution_policy_fingerprint": "78d9ac5e08dd4b9c08d932602d3c405769f5dd67d7a0e271515a2c6467c36c1f",
+              "code_revision": "golden-revision-v1"
+            },
+            "versions": [
+              {
+                "version": 1,
+                "outcome_label": "failed",
+                "calculation_fingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                "result_fingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "recorded_at": "2026-06-04T10:00:00+08:00"
+              }
+            ]
+          },
+          "expected": {
+            "case_id": "outcome-limit-down-gap",
+            "recommendation_id": "golden-limit-down-gap",
+            "outcome_identity_hash": "f037e9e287ae60d6d3231cd8bbfe6603f21acf679c7dcdcafaaf4596dbac7f8d",
+            "version_count": 1,
+            "current_version": 1,
+            "current_version_fingerprint": "05a70e1c4d68a550f2adfa63b25f4941bb71832bbf36646a554bf5ebc49d7898",
+            "versions": [
+              {
+                "version": 1,
+                "outcome_label": "failed",
+                "calculation_fingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                "result_fingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "recorded_at": "2026-06-04T02:00:00.000000Z",
+                "version_fingerprint": "05a70e1c4d68a550f2adfa63b25f4941bb71832bbf36646a554bf5ebc49d7898",
+                "is_current": true,
+                "schema_version": 1
+              }
+            ],
+            "layer": "layer_1",
+            "schema_version": 1
+          }
+        }
+      ]
+    },
+    "risk_decision": {
+      "cases": [
+        {
+          "case_id": "risk-allow-full-request",
+          "input": {
+            "case_id": "risk-allow-full-request",
+            "policy": {
+              "max_single_name_fraction": 0.25,
+              "max_gross_exposure_fraction": 0.8,
+              "max_daily_loss_pct": 3.0,
+              "max_drawdown_pct": 8.0
+            },
+            "state": {
+              "current_gross_exposure_fraction": 0.5,
+              "daily_loss_pct": 0.2,
+              "drawdown_pct": 1.0,
+              "halted": false
+            },
+            "request": {
+              "recommendation_id": "golden-cost-horizon",
+              "requested_size": 0.25
+            }
+          },
+          "expected": {
+            "case_id": "risk-allow-full-request",
+            "recommendation_id": "golden-cost-horizon",
+            "decision": "allow",
+            "requested_size": "0.25000000",
+            "approved_size": "0.25000000",
+            "binding_cap": "requested_size",
+            "reason_codes": [],
+            "policy_fingerprint": "399bf7a5fb7c8783a0e04eb531bd552d1055bd765653fc05c4863abdbeb6e001",
+            "state_fingerprint": "079529dd781e33a228b90752872a2439d248a9ba69fcfa061f7e11b55972c306",
+            "layer": "layer_1",
+            "schema_version": 1
+          }
+        },
+        {
+          "case_id": "risk-reduce-single-name",
+          "input": {
+            "case_id": "risk-reduce-single-name",
+            "policy": {
+              "max_single_name_fraction": 0.25,
+              "max_gross_exposure_fraction": 0.8,
+              "max_daily_loss_pct": 3.0,
+              "max_drawdown_pct": 8.0
+            },
+            "state": {
+              "current_gross_exposure_fraction": 0.5,
+              "daily_loss_pct": 0.2,
+              "drawdown_pct": 1.0,
+              "halted": false
+            },
+            "request": {
+              "recommendation_id": "golden-t1-both-hit",
+              "requested_size": 0.4
+            }
+          },
+          "expected": {
+            "case_id": "risk-reduce-single-name",
+            "recommendation_id": "golden-t1-both-hit",
+            "decision": "reduce",
+            "requested_size": "0.40000000",
+            "approved_size": "0.25000000",
+            "binding_cap": "single_name",
+            "reason_codes": [
+              "single_name_cap"
+            ],
+            "policy_fingerprint": "399bf7a5fb7c8783a0e04eb531bd552d1055bd765653fc05c4863abdbeb6e001",
+            "state_fingerprint": "079529dd781e33a228b90752872a2439d248a9ba69fcfa061f7e11b55972c306",
+            "layer": "layer_1",
+            "schema_version": 1
+          }
+        },
+        {
+          "case_id": "risk-reduce-gross-headroom",
+          "input": {
+            "case_id": "risk-reduce-gross-headroom",
+            "policy": {
+              "max_single_name_fraction": 0.25,
+              "max_gross_exposure_fraction": 0.8,
+              "max_daily_loss_pct": 3.0,
+              "max_drawdown_pct": 8.0
+            },
+            "state": {
+              "current_gross_exposure_fraction": 0.7,
+              "daily_loss_pct": 0.2,
+              "drawdown_pct": 1.0,
+              "halted": false
+            },
+            "request": {
+              "recommendation_id": "golden-gap-entry",
+              "requested_size": 0.4
+            }
+          },
+          "expected": {
+            "case_id": "risk-reduce-gross-headroom",
+            "recommendation_id": "golden-gap-entry",
+            "decision": "reduce",
+            "requested_size": "0.40000000",
+            "approved_size": "0.10000000",
+            "binding_cap": "gross_exposure_headroom",
+            "reason_codes": [
+              "gross_exposure_headroom_cap"
+            ],
+            "policy_fingerprint": "399bf7a5fb7c8783a0e04eb531bd552d1055bd765653fc05c4863abdbeb6e001",
+            "state_fingerprint": "caffbf4b93167dcce423581f2a61aa26955c9a87d0b1b9c84022509226e01ac2",
+            "layer": "layer_1",
+            "schema_version": 1
+          }
+        },
+        {
+          "case_id": "risk-reject-zero-headroom",
+          "input": {
+            "case_id": "risk-reject-zero-headroom",
+            "policy": {
+              "max_single_name_fraction": 0.25,
+              "max_gross_exposure_fraction": 0.8,
+              "max_daily_loss_pct": 3.0,
+              "max_drawdown_pct": 8.0
+            },
+            "state": {
+              "current_gross_exposure_fraction": 0.8,
+              "daily_loss_pct": 0.2,
+              "drawdown_pct": 1.0,
+              "halted": false
+            },
+            "request": {
+              "recommendation_id": "golden-one-word-limit-up",
+              "requested_size": 0.4
+            }
+          },
+          "expected": {
+            "case_id": "risk-reject-zero-headroom",
+            "recommendation_id": "golden-one-word-limit-up",
+            "decision": "reject",
+            "requested_size": "0.40000000",
+            "approved_size": "0.00000000",
+            "binding_cap": "gross_exposure_headroom",
+            "reason_codes": [
+              "gross_exposure_headroom_cap"
+            ],
+            "policy_fingerprint": "399bf7a5fb7c8783a0e04eb531bd552d1055bd765653fc05c4863abdbeb6e001",
+            "state_fingerprint": "e5677ef7ea25390637fa2ccc6f2ec454bb541fec9081aa237752437d55ccc0aa",
+            "layer": "layer_1",
+            "schema_version": 1
+          }
+        },
+        {
+          "case_id": "risk-halt-daily-loss",
+          "input": {
+            "case_id": "risk-halt-daily-loss",
+            "policy": {
+              "max_single_name_fraction": 0.25,
+              "max_gross_exposure_fraction": 0.8,
+              "max_daily_loss_pct": 3.0,
+              "max_drawdown_pct": 8.0
+            },
+            "state": {
+              "current_gross_exposure_fraction": 0.5,
+              "daily_loss_pct": 3.0,
+              "drawdown_pct": 1.0,
+              "halted": false
+            },
+            "request": {
+              "recommendation_id": "golden-limit-down-gap",
+              "requested_size": 0.4
+            }
+          },
+          "expected": {
+            "case_id": "risk-halt-daily-loss",
+            "recommendation_id": "golden-limit-down-gap",
+            "decision": "halt",
+            "requested_size": "0.40000000",
+            "approved_size": "0.00000000",
+            "binding_cap": "risk_state",
+            "reason_codes": [
+              "daily_loss_breach"
+            ],
+            "policy_fingerprint": "399bf7a5fb7c8783a0e04eb531bd552d1055bd765653fc05c4863abdbeb6e001",
+            "state_fingerprint": "027b0d688e1922b66f44dd73436b0525cf1f6038ced47f941738ec9aab494e43",
+            "layer": "layer_1",
+            "schema_version": 1
+          }
+        },
+        {
+          "case_id": "risk-halt-drawdown",
+          "input": {
+            "case_id": "risk-halt-drawdown",
+            "policy": {
+              "max_single_name_fraction": 0.25,
+              "max_gross_exposure_fraction": 0.8,
+              "max_daily_loss_pct": 3.0,
+              "max_drawdown_pct": 8.0
+            },
+            "state": {
+              "current_gross_exposure_fraction": 0.5,
+              "daily_loss_pct": 0.2,
+              "drawdown_pct": 8.0,
+              "halted": false
+            },
+            "request": {
+              "recommendation_id": "golden-cost-horizon",
+              "requested_size": 0.4
+            }
+          },
+          "expected": {
+            "case_id": "risk-halt-drawdown",
+            "recommendation_id": "golden-cost-horizon",
+            "decision": "halt",
+            "requested_size": "0.40000000",
+            "approved_size": "0.00000000",
+            "binding_cap": "risk_state",
+            "reason_codes": [
+              "drawdown_breach"
+            ],
+            "policy_fingerprint": "399bf7a5fb7c8783a0e04eb531bd552d1055bd765653fc05c4863abdbeb6e001",
+            "state_fingerprint": "1f3d5bd79773bd8b2fd33f0551117e454d69f587d2f54eabe894121c99f98a99",
+            "layer": "layer_1",
+            "schema_version": 1
+          }
+        },
+        {
+          "case_id": "risk-halt-state-halted",
+          "input": {
+            "case_id": "risk-halt-state-halted",
+            "policy": {
+              "max_single_name_fraction": 0.25,
+              "max_gross_exposure_fraction": 0.8,
+              "max_daily_loss_pct": 3.0,
+              "max_drawdown_pct": 8.0
+            },
+            "state": {
+              "current_gross_exposure_fraction": 0.5,
+              "daily_loss_pct": 0.2,
+              "drawdown_pct": 1.0,
+              "halted": true
+            },
+            "request": {
+              "recommendation_id": "golden-t1-both-hit",
+              "requested_size": 0.4
+            }
+          },
+          "expected": {
+            "case_id": "risk-halt-state-halted",
+            "recommendation_id": "golden-t1-both-hit",
+            "decision": "halt",
+            "requested_size": "0.40000000",
+            "approved_size": "0.00000000",
+            "binding_cap": "risk_state",
+            "reason_codes": [
+              "state_halted"
+            ],
+            "policy_fingerprint": "399bf7a5fb7c8783a0e04eb531bd552d1055bd765653fc05c4863abdbeb6e001",
+            "state_fingerprint": "8d3cfee07547ba979df324e751e83cb26ff42c0580d7e90e7302b36dab3780f8",
+            "layer": "layer_1",
+            "schema_version": 1
+          }
+        }
+      ]
+    }
+  }
+}

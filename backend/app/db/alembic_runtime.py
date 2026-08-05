@@ -60,8 +60,12 @@ def _config(connection) -> Config:
     return config
 
 
-def upgrade_database(engine: Engine) -> AlembicUpgradeResult:
-    """Upgrade an empty database or stamp the current demo schema as the baseline."""
+def upgrade_database(
+    engine: Engine,
+    *,
+    target_revision: str = "head",
+) -> AlembicUpgradeResult:
+    """Upgrade an empty database or stamp an existing schema to a target revision."""
     _set_health(AlembicHealth(status="running"))
     adopted = False
     try:
@@ -71,17 +75,25 @@ def upgrade_database(engine: Engine) -> AlembicUpgradeResult:
             if tables and "alembic_version" not in tables:
                 command.stamp(config, BASELINE_REVISION)
                 adopted = True
-            command.upgrade(config, "head")
+            command.upgrade(config, target_revision)
             revision = MigrationContext.configure(connection).get_current_revision()
             script = config.attributes.get("script")
             if script is None:
                 from alembic.script import ScriptDirectory
 
                 script = ScriptDirectory.from_config(config)
-            heads = script.get_heads()
-        if len(heads) != 1 or revision != heads[0]:
-            raise RuntimeError(f"database revision {revision!r} does not match Alembic head {heads!r}")
-        head = heads[0]
+            if target_revision == "head":
+                heads = script.get_heads()
+                if len(heads) != 1:
+                    raise RuntimeError(f"Alembic must have exactly one head, got {heads!r}")
+                expected_revision = heads[0]
+            else:
+                expected_revision = script.get_revision(target_revision).revision
+        if revision != expected_revision:
+            raise RuntimeError(
+                f"database revision {revision!r} does not match target {expected_revision!r}"
+            )
+        head = expected_revision
         _set_health(AlembicHealth(status="ok", current_revision=revision, head_revision=head))
         return AlembicUpgradeResult(revision, head, adopted)
     except Exception as error:

@@ -39,6 +39,17 @@ from datetime import time, timedelta
 from typing import Any
 
 from app.engine.board_rules import is_one_word_limit_down_bar, limit_pct_for_code
+from app.engine.execution_core import (
+    CausalExitConfig,
+    ExecutionBar,
+    compose_position_caps,
+    resolve_causal_exit,
+)
+from app.engine.execution_policy import (
+    DEFAULT_EXECUTION_POLICY,
+    ExecutionPolicy,
+    PositionCapComposition,
+)
 from app.engine.trading_costs import is_net_profitable
 from app.models.tables import DailyKbar, Recommendation
 from app.services.entry_policy import (
@@ -80,22 +91,23 @@ from app.services.execution_constraints import (
 )
 
 # ── 模拟引擎配置常量 ─────────────────────────────────────────────────────
-ENTRY_LOOKAHEAD_DAYS = 2
-ENTRY_SLIPPAGE_BPS = 10.0
-EXIT_SLIPPAGE_BPS = 10.0
+_EXECUTION_RUNTIME = DEFAULT_EXECUTION_POLICY.runtime_constant_projection()
+ENTRY_LOOKAHEAD_DAYS = int(_EXECUTION_RUNTIME["ENTRY_LOOKAHEAD_DAYS"])
+ENTRY_SLIPPAGE_BPS = float(_EXECUTION_RUNTIME["ENTRY_SLIPPAGE_BPS"])
+EXIT_SLIPPAGE_BPS = float(_EXECUTION_RUNTIME["EXIT_SLIPPAGE_BPS"])
 SUCCESS_RETURN_PCT = 3.0
-DEFAULT_STOP_LOSS_PCT = -4.5  # 止损 -4.5%，20cm-only 诚实配对回测 n=33 avg_net +0.203pp PF +0.177（正常回调中提前下车省亏损优于硬扛到-5.5%）
-DEFAULT_TAKE_PROFIT_PCT = 6.0  # 回测：horizon_close 65/92 峰值不达 6.5%，TP=5.0% 模拟 WR 57.2%→71.7%（+14.5pp, 22 saved）
+DEFAULT_STOP_LOSS_PCT = float(_EXECUTION_RUNTIME["DEFAULT_STOP_LOSS_PCT"])
+DEFAULT_TAKE_PROFIT_PCT = float(_EXECUTION_RUNTIME["DEFAULT_TAKE_PROFIT_PCT"])
                                  # avg peak 4.27%，33/65 峰值在 3-5%，TP 下修捕获更多止盈窗口
-MAX_STOP_LOSS_PCT = -4.7  # 止损最宽 -4.7%（与 DEFAULT -4.5% 留 0.2pp 缓冲）
+MAX_STOP_LOSS_PCT = float(_EXECUTION_RUNTIME["MAX_STOP_LOSS_PCT"])
                                  # 第164轮 D 项修复：原 -9% 在实践中只对"高开入场"场景生效
                                  # （正常入场止损都在 -5.7% 以内），且让该场景亏损从 -5.7% 放大到 -9%
                                  # 反事实验证：184 formal 样本仅长裕集团(entry=85>>rec_price 79.32 高开
                                  # 接力)1 票受影响，min -9.18%→-5.79%(达标基线-5.8%)，盈亏比 1.44→1.49，0 误伤
                                  # 因果：高开入场已透支上涨空间，止损不该比正常入场更宽；-9% 反向放大尾部风险
-MAX_TAKE_PROFIT_PCT = 15.0     # 止盈上限（+15%），防止 feature_builder 设置过高的止盈
-STOP_LOSS_GAP_CAP_PCT = -15.0  # 跳空止损最大亏损上限：open 远低于止损价时，模拟"隔夜止损单"的极限（科创板 20cm 跌停场景）
-MAX_ENTRY_GAP_PCT = 10.0       # 跳空高开 > 10% 则放弃入场（历史数据：gap>10% 胜率 0%）
+MAX_TAKE_PROFIT_PCT = float(_EXECUTION_RUNTIME["MAX_TAKE_PROFIT_PCT"])
+STOP_LOSS_GAP_CAP_PCT = float(_EXECUTION_RUNTIME["STOP_LOSS_GAP_CAP_PCT"])
+MAX_ENTRY_GAP_PCT = float(_EXECUTION_RUNTIME["MAX_ENTRY_GAP_PCT"])
 
 # 历史 callback trailing stop：保留给 `_resolve_exit_legacy_noncausal` 做有偏上界对照，
 # 不再作为生产默认退出。以下历史结论不能替代 2026-07-27 利润地板的因果验证。
@@ -109,10 +121,10 @@ MAX_ENTRY_GAP_PCT = 10.0       # 跳空高开 > 10% 则放弃入场（历史数�
 #   结论：trailing 大亏是市场风险，不要盲目按行业差异化 callback——会破坏整体盈亏比
 # 关键约束：trailing 优先级低于 take_profit，故不破坏原有 TP 路径（take_profit_hit 完整保留）
 # 时序口径：触发价取 min(open, 触发价)——跳空低开时以 open 成交（更差），max 会虚假高估出场价
-TRAILING_STOP_ACTIVATE_PCT = 2.0   # high 达 entry +2% 激活（原 3.0；2.0 让更多交易在亏损前以小赚离场）
-TRAILING_STOP_CALLBACK_PCT = 0.8   # 自峰值 high 回撤 0.8% 触发退出（原 1.5；更紧锁利，loss 3.67→3.13）
-TRAILING_STOP_MIN_LOCK_PCT = 0.3   # 利润地板最低锁定 +0.3%，覆盖滑点和交易成本后仍保留小幅净利润
-TRAILING_STOP_PROFIT_LOCK_RATIO = 0.50  # 生产动态退出锁住前一日最高浮盈的 50%（0.30→0.50，PATH-A 四窗口合并 n=108 五项全改善：avg_net +0.159pp, cum +1.714pp, WR +1.852pp, PF +0.052, MDD +1.601pp；CI[-0.016,+0.355]；唯一判定器 evaluate_challenger 通过）
+TRAILING_STOP_ACTIVATE_PCT = float(_EXECUTION_RUNTIME["TRAILING_STOP_ACTIVATE_PCT"])
+TRAILING_STOP_CALLBACK_PCT = float(_EXECUTION_RUNTIME["TRAILING_STOP_CALLBACK_PCT"])
+TRAILING_STOP_MIN_LOCK_PCT = float(_EXECUTION_RUNTIME["TRAILING_STOP_MIN_LOCK_PCT"])
+TRAILING_STOP_PROFIT_LOCK_RATIO = float(_EXECUTION_RUNTIME["TRAILING_STOP_PROFIT_LOCK_RATIO"])
 
 OUTCOME_PENDING = "pending"
 OUTCOME_SUCCESS = "success"
@@ -875,133 +887,76 @@ def _resolve_exit_causal(
     min_lock_pct: float | None = None,
     trailing_callback: float | None = None,
 ) -> tuple[float, str, str]:
-    """单路径因果退出函数（动态退出状态机 MVP）。
+    """Compatibility adapter to the single causal execution core.
 
-    与历史 `_resolve_exit_legacy_noncausal` 的关键差异：trailing 保护价严格按交易日推进，
-    **只用截至上一交易日收盘已知的信息**生成下一交易日生效的保护价，当日新形成的最高价
-    只能更新下一交易日的保护价，不得反过来触发当日退出（日 K 无法证明当日 high/low 先后顺序）。
-
-    holding_bars[0] 是入场日，当天禁止退出（T+1）。入场日 close 用于初始化次日计划：
-    - entry_close_return = (entry_close / entry_price - 1) * 100
-    - 若 ≥ TRAILING_STOP_ACTIVATE_PCT(2.0%)（或 activate_pct 覆盖值），从次日起激活移动保护
-    - `peak_callback`：次日保护收益 = 最高浮盈 - callback
-    - `profit_floor`：次日保护收益 = max(最低锁利, 最高浮盈 × profit_lock_ratio)
-    - 保护价不得低于 hard_stop，也不得低于上一版保护价（单调上移）
-
-    对 holding_bars[1:] 逐日按 Spec §4 的 10 条顺序判断；当 5、6（low 触止损）与 7、8
-    （low/high 触 trailing/tp）同日并存时，按 Spec §4.5/§4.6/§4.7 的保守顺序：固定止损 >
-    已确定的移动保护价 > 固定止盈。窗口结束未退出按最后一日收盘。
-
-    dynamic_trailing=False 时退化为纯单路径固定止盈止损（与 _resolve_exit_base 在
-    holding_bars[1:] 上的语义一致），用于反事实验证的因果基线。
+    ORM-shaped bars and legacy counterfactual parameters are translated here;
+    T+1, exit ordering, trailing state, gap fills, and locked-bar semantics are
+    owned by :func:`app.engine.execution_core.resolve_causal_exit`.
     """
-    if dynamic_trailing and trailing_policy not in {"peak_callback", "profit_floor"}:
+    if dynamic_trailing and trailing_policy not in {
+        "peak_callback",
+        "callback",
+        "profit_floor",
+    }:
         raise ValueError(f"unknown trailing_policy: {trailing_policy}")
-    if dynamic_trailing and trailing_policy == "profit_floor" and not 0 < profit_lock_ratio <= 1:
-        raise ValueError(f"profit_lock_ratio must be in (0, 1], got {profit_lock_ratio}")
-
-    trailing_activate_pct = activate_pct if activate_pct is not None else TRAILING_STOP_ACTIVATE_PCT
-
-    if not holding_bars:
-        return 0.0, "", "horizon_close"
-    if len(holding_bars) <= 1:
-        # 入场日即 horizon 末：T+1 锁仓，按入场日收盘标记
+    core_bars = tuple(
+        ExecutionBar(
+            code=str(getattr(bar, "code", "") or code),
+            trade_date=str(bar.trade_date),
+            open=_as_float(bar.open),
+            high=_as_float(bar.high),
+            low=_as_float(bar.low),
+            close=_as_float(bar.close),
+            tradable=True,
+            sellable=_exit_execution_block_reason(code, bar) is None,
+        )
+        for bar in holding_bars
+    )
+    result = resolve_causal_exit(
+        core_bars,
+        CausalExitConfig(
+            stop_loss_price=stop_loss_price,
+            take_profit_price=take_profit_price,
+            entry_price=entry_price,
+            t_plus_one=True,
+            dynamic_trailing=dynamic_trailing,
+            trailing_mode=trailing_policy,
+            profit_lock_ratio=profit_lock_ratio,
+            activation_gain_pct=(
+                TRAILING_STOP_ACTIVATE_PCT
+                if activate_pct is None
+                else activate_pct
+            ),
+            callback_pct=(
+                TRAILING_STOP_CALLBACK_PCT
+                if trailing_callback is None
+                else trailing_callback
+            ),
+            minimum_lock_gain_pct=(
+                TRAILING_STOP_MIN_LOCK_PCT
+                if min_lock_pct is None
+                else min_lock_pct
+            ),
+            stop_gap_loss_cap_pct=abs(STOP_LOSS_GAP_CAP_PCT),
+            stop_gap_fill_mode=DEFAULT_EXECUTION_POLICY.gap_risk.stop_gap_fill_mode,
+            take_profit_gap_fill_mode=(
+                DEFAULT_EXECUTION_POLICY.gap_risk.take_profit_gap_fill_mode
+            ),
+            intraday_exit_priority=(
+                DEFAULT_EXECUTION_POLICY.intraday_exit_priority
+            ),
+        ),
+    )
+    if result is None:
+        if not holding_bars:
+            return 0.0, "", "horizon_close"
         last = holding_bars[-1]
-        return _as_float(last.close or 0), str(last.trade_date), "horizon_close_t1_locked"
-
-    entry_bar = holding_bars[0]
-    scan_bars = holding_bars[1:]
-    hard_stop = stop_loss_price
-    take_profit = take_profit_price
-
-    # ── 入场日收盘初始化次日计划（因果：只用 entry_bar.close，不用 high）──
-    trailing_active = False
-    observed_high_return = 0.0  # 截至上一交易日收盘已知的最高浮盈（%）
-    next_trailing_stop = 0.0    # 下一交易日生效的移动保护价
-    if dynamic_trailing and entry_price > 0:
-        entry_close = _as_float(entry_bar.close)
-        if entry_close > 0:
-            entry_close_return = (entry_close / entry_price - 1) * 100
-            observed_high_return = max(0.0, entry_close_return)
-            if entry_close_return >= trailing_activate_pct:
-                trailing_active = True
-                stop_return = _trailing_stop_return(entry_close_return, trailing_policy, profit_lock_ratio, callback_pct=trailing_callback, min_lock_pct=min_lock_pct)
-                prot = entry_price * (1 + stop_return / 100.0)
-                prot = max(prot, hard_stop)
-                next_trailing_stop = prot
-
-    locked_limit_down_bars = 0
-    for bar in scan_bars:
-        sellable = _exit_execution_block_reason(code, bar) is None
-        if not sellable:
-            locked_limit_down_bars += 1
-        bar_open = _as_float(bar.open)
-        high = _as_float(bar.high)
-        low = _as_float(bar.low)
-        has_ohlc = bar_open > 0 and low > 0 and high > 0
-
-        if sellable and has_ohlc:
-            # 2. 开盘不高于固定止损 → stop_loss_gap（隔夜止损单口径）
-            if bar_open <= hard_stop:
-                if entry_price > 0:
-                    min_exit_price = entry_price * (1 + STOP_LOSS_GAP_CAP_PCT / 100.0)
-                    gap_exit = max(bar_open, min_exit_price)
-                else:
-                    gap_exit = bar_open
-                return gap_exit, str(bar.trade_date), "stop_loss_gap"
-            # 3. 已激活移动保护且开盘不高于保护价 → trailing_stop_gap
-            if (
-                dynamic_trailing
-                and trailing_active
-                and next_trailing_stop > 0
-                and bar_open <= next_trailing_stop
-            ):
-                return bar_open, str(bar.trade_date), "trailing_stop_gap"
-            # 4. 开盘不低于固定止盈 → take_profit_gap
-            if bar_open >= take_profit:
-                return bar_open, str(bar.trade_date), "take_profit_gap"
-            # 5. 同日 low 触止损且 high 触止盈 → 保守按止损
-            if low <= hard_stop and high >= take_profit:
-                return hard_stop, str(bar.trade_date), "stop_loss_intraday_both_hit"
-            # 6. low 触及固定止损 → stop_loss_hit
-            if low <= hard_stop:
-                return hard_stop, str(bar.trade_date), "stop_loss_hit"
-            # 7. 已存在上一日确定的移动保护价，且 low 触及 → 按保护价退出
-            if (
-                dynamic_trailing
-                and trailing_active
-                and next_trailing_stop > 0
-                and low <= next_trailing_stop
-            ):
-                return next_trailing_stop, str(bar.trade_date), "trailing_stop_hit"
-            # 8. high 触及固定止盈 → take_profit_hit
-            if high >= take_profit:
-                return take_profit, str(bar.trade_date), "take_profit_hit"
-
-        # 9. 当日未退出（含不可卖日），收盘后用当日 high 更新下一交易日的计划。
-        #    因果关键：当日 high 只更新 next_trailing_stop，绝不反过来触发当日退出。
-        if dynamic_trailing and entry_price > 0 and high > 0:
-            bar_high_return = (high / entry_price - 1) * 100
-            if bar_high_return > observed_high_return:
-                observed_high_return = bar_high_return
-            if not trailing_active and observed_high_return >= trailing_activate_pct:
-                trailing_active = True
-            if trailing_active:
-                stop_return = _trailing_stop_return(observed_high_return, trailing_policy, profit_lock_ratio, callback_pct=trailing_callback, min_lock_pct=min_lock_pct)
-                prot = entry_price * (1 + stop_return / 100.0)
-                prot = max(prot, hard_stop)
-                # 保护价单调上移：不得低于上一版
-                if prot > next_trailing_stop:
-                    next_trailing_stop = prot
-
-    # 10. 持有窗口结束仍未退出 → 最后一日收盘
-    last_bar = holding_bars[-1]
-    if locked_limit_down_bars and locked_limit_down_bars == len(scan_bars):
-        return _as_float(last_bar.close), str(last_bar.trade_date), "limit_down_locked_horizon_mark"
-    if locked_limit_down_bars:
-        return _as_float(last_bar.close), str(last_bar.trade_date), "horizon_close_after_locked_limit_down"
-    return _as_float(last_bar.close), str(last_bar.trade_date), "horizon_close"
-
+        return (
+            _as_float(last.close),
+            str(last.trade_date),
+            "horizon_close_t1_locked",
+        )
+    return result.raw_price, result.trade_date, result.reason
 
 def _resolve_exit(
     holding_bars: list[DailyKbar],
@@ -1029,12 +984,7 @@ def _resolve_exit(
 
 
 def _resolve_stop_loss_price(raw_entry_price: float | None, feature_snapshot: dict[str, Any]) -> float:
-    """解析止损价，加入归一化逻辑防止过紧的止损。
-
-    止损价必须在 [min_stop, max_stop] 范围内：
-    - max_stop = entry * (1 + DEFAULT_STOP_LOSS_PCT/100) = 最紧 -5.5%
-    - min_stop = entry * (1 + MAX_STOP_LOSS_PCT/100) = 最宽 -5.7%
-    """
+    """Resolve a stop price using the canonical default and maximum loss bounds."""
     raw_stop = _as_float(feature_snapshot.get("stop_loss"))
     if raw_entry_price is None or raw_entry_price <= 0:
         return round(raw_stop, 2) if raw_stop > 0 else 0.0
@@ -1052,13 +1002,11 @@ def _resolve_take_profit_price(
     feature_snapshot: dict[str, Any],
     recommend_price: float | None = None,
 ) -> float:
-    """解析止盈价，与 _resolve_stop_loss_price 对称：实际入场价偏离推荐价时按比例重算。
+    """Resolve take profit relative to actual entry and canonical policy bounds.
 
-    设计止盈比例隐含在推荐时（take_profit / recommend_price − 1）。次日实际入场价因跳空
-    偏离推荐价时，旧实现只做上限裁剪、不按比例重算，导致跳空低开后设计的 +5% 止盈目标被
-    相对抬高（如 603991 推荐价 168.19、入场价 154.21，止盈 176.60 相对入场变 +14.5% 而非 +5%），
-    固定止盈路径失效 → 全推给 trailing 兜底、且被错标 success。
-    修复：用隐含比例重算 entry × (1 + implied_tp_pct)，再 clamp 到 [entry×1.05, entry×1.15]。
+    When the actual entry gaps away from the recommendation price, preserve the
+    recommendation's implied target ratio before applying the versioned minimum
+    and maximum target bounds.
     """
     raw_target = _as_float(feature_snapshot.get("take_profit"))
     if raw_entry_price is None or raw_entry_price <= 0:
@@ -1076,39 +1024,112 @@ def _resolve_take_profit_price(
     return round(normalized, 2)
 
 
-def _resolve_position_size(feature_snapshot: dict[str, Any]) -> float:
-    """Return the position size multiplier for a recommendation.
+def _resolve_position_size(
+    feature_snapshot: dict[str, Any],
+    execution_policy: ExecutionPolicy = DEFAULT_EXECUTION_POLICY,
+) -> float:
+    """Resolve final size as the minimum of every applicable cap.
 
-    Production policy (2026-08-01, n=30 official 20cm clean>=72 live_forward):
-    - score < 85: full weight 1.0 (WR 63.3%, where the alpha lives)
-    - score >= 85: half weight 0.5 (score>=85 bucket negative EV)
-    - 弱势 regime: 放宽 market_discipline cap（弱势 20cm clean>=72 官方口径
-      avg +2.58% PF 4.22 vs cap-first +0.57% PF 2.54, Δ avg+2.01pp PF+1.68
-      MDD仅-0.92pp退化）。保留 score-bucket 减半仓（size 仍约束）。
-    - 非弱势 regime: 保留 cap 风控（震荡/结构性强势 cap 有防御价值）。
-    - A per-trade hard cap from market_discipline.max_position_pct is preserved
-      for non-weak regimes (e.g. 20%-cap in climax markets).
+    Current v2 always uses ``MIN_ALL_APPLICABLE``.  The historical weak-regime
+    exception is reachable only by explicitly supplying the registered v1
+    policy for shadow/replay compatibility; display metadata cannot enable it.
     """
-    # Score-bucket sizing: reduce weight on negative-EV high-score bucket
+    position = execution_policy.position
     final_score = _as_float(feature_snapshot.get("final_score"))
-    if final_score >= 85.0:
-        size = 0.5
-    else:
-        size = 1.0
+    score_size = (
+        position.high_score_cap
+        if final_score >= position.high_score_threshold
+        else position.default_fraction
+    )
 
     discipline = feature_snapshot.get("market_discipline")
+    market_regime = (
+        str(discipline.get("market_regime") or "")
+        if isinstance(discipline, dict)
+        else ""
+    )
+    if (
+        position.cap_composition
+        is PositionCapComposition.LEGACY_WEAK_REGIME_BYPASS
+        and market_regime.startswith(position.weak_regime_prefix)
+    ):
+        return round(score_size, 4)
+
+    caps: dict[str, Any] = {
+        "score_cap": score_size,
+        **{
+            name: getattr(position, name)
+            for name in position._OPTIONAL_CAP_FIELDS
+        },
+    }
+
+    def add_fraction(name: str, raw: Any, *, percent: bool = False) -> None:
+        if raw is None or raw == "":
+            return
+        if percent and isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            caps[name] = float(raw) / 100.0
+        else:
+            caps[name] = raw
+
     if isinstance(discipline, dict):
-        market_regime = str(discipline.get("market_regime") or "")
-        if market_regime.startswith("弱势"):
-            return round(size, 4)
-        max_position_pct = _as_float(discipline.get("max_position_pct"))
-        if max_position_pct > 0:
-            return round(min(max_position_pct / 100.0, size), 4)
-    else:
-        max_position_pct = _as_float(feature_snapshot.get("max_position_pct"))
-        if max_position_pct > 0:
-            return round(min(max_position_pct / 100.0, size), 4)
-    return size
+        if position.market_regime_cap_enabled:
+            add_fraction(
+                "market_discipline_cap",
+                discipline.get("max_position_pct"),
+                percent=True,
+            )
+            add_fraction(
+                "market_regime_cap",
+                discipline.get("market_position_cap_pct"),
+                percent=True,
+            )
+        add_fraction(
+            "risk_template_cap",
+            discipline.get("risk_template_cap_pct"),
+            percent=True,
+        )
+    elif position.market_regime_cap_enabled:
+        add_fraction(
+            "market_discipline_cap",
+            feature_snapshot.get("max_position_pct"),
+            percent=True,
+        )
+
+    risk_template = str(feature_snapshot.get("risk_template") or "").lower()
+    if risk_template:
+        template_cap = {
+            "conservative": 0.45,
+            "balanced": 0.65,
+            "aggressive": 0.80,
+        }.get(risk_template)
+        if template_cap is not None:
+            caps["risk_template_declared_cap"] = template_cap
+
+    for cap_name in position._OPTIONAL_CAP_FIELDS:
+        add_fraction(
+            f"runtime_{cap_name}",
+            feature_snapshot.get(cap_name),
+        )
+        add_fraction(
+            f"runtime_{cap_name}_pct",
+            feature_snapshot.get(f"{cap_name}_pct"),
+            percent=True,
+        )
+
+    for container_name in ("applicable_position_caps", "position_caps"):
+        container = feature_snapshot.get(container_name)
+        if not isinstance(container, dict):
+            continue
+        for raw_name, raw_value in container.items():
+            cap_name = str(raw_name)
+            add_fraction(
+                f"{container_name}.{cap_name}",
+                raw_value,
+                percent=cap_name.endswith("_pct"),
+            )
+
+    decision = compose_position_caps(position.default_fraction, caps)
+    return round(decision.approved_size, 4)
 
 
 def _entry_execution_block_reason(code: str, bar: DailyKbar) -> str | None:

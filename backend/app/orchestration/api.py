@@ -14,27 +14,43 @@ from app.orchestration.deployments import (
     RECOMMENDATION_DEPLOYMENT_NAME,
     SCHEDULED_DEPLOYMENT_PREFIX,
 )
+from app.services.observability import current_correlation_id, log_observation
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 
-def trigger_scheduled_task(task_id: str, trigger_source: str = "manual") -> OrchestrationRunRef:
+def trigger_scheduled_task(
+    task_id: str,
+    trigger_source: str = "manual",
+    correlation_id: str | None = None,
+) -> OrchestrationRunRef:
     name = f"{SCHEDULED_DEPLOYMENT_PREFIX}/{task_id}"
+    correlation_id = correlation_id or current_correlation_id()
+    log_observation(logger, stage="scheduler", reason_code="PREFECT_TRIGGER", identity=task_id)
     # _sync=True 强制同步路径：这些 trigger 在 sync def 内调用，但可能运行在
     # FastAPI async event loop 中（如 on_startup 启动事件）。async_dispatch 会
     # 在 async 上下文把 run_deployment 派发到 arun_deployment 返回未 await 的
     # coroutine —— 调度静默失败（'arun_deployment was never awaited'）。
     run = run_deployment(
         name=name,
-        parameters={"task_id": task_id, "trigger_source": trigger_source},
+        parameters={"task_id": task_id, "trigger_source": trigger_source, "correlation_id": correlation_id},
         timeout=0,
         _sync=True,
     )
     return OrchestrationRunRef(str(run.id), name)
 
 
-def trigger_recommendation(run_id: str) -> OrchestrationRunRef:
+def trigger_recommendation(
+    run_id: str,
+    correlation_id: str | None = None,
+) -> OrchestrationRunRef:
+    correlation_id = correlation_id or current_correlation_id()
+    log_observation(logger, stage="scheduler", reason_code="PREFECT_TRIGGER", identity=run_id)
     run = run_deployment(
         name=RECOMMENDATION_DEPLOYMENT_NAME,
-        parameters={"run_id": run_id},
+        parameters={"run_id": run_id, "correlation_id": correlation_id},
         timeout=0,
         _sync=True,
     )

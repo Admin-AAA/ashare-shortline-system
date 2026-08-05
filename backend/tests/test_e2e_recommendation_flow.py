@@ -591,8 +591,9 @@ class TestE2ERecommendationFlow:
         assert outcome.exit_reason in ("take_profit_hit", "trailing_stop_gap", "trailing_stop_hit")
         assert outcome.outcome_label == "success"
         assert outcome.executed_return > 3.0
-        assert outcome.position_size == pytest.approx(0.55)
-        assert outcome.weighted_return == pytest.approx(round(outcome.executed_return * 0.55, 2))
+        # v2 MIN_ALL_APPLICABLE: min(market 0.55, single-name 0.35, ...)=0.35
+        assert outcome.position_size == pytest.approx(0.35)
+        assert outcome.weighted_return == pytest.approx(round(outcome.executed_return * 0.35, 2))
 
     def test_label_pending_outcomes_marks_untriggered_buy_point_as_missed(self, db):
         suffix = uuid.uuid4().hex[:8]

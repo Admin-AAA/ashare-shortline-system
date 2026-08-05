@@ -33,6 +33,10 @@ from app.engine.backtest.contracts import (
     ExecutionPolicy,
     SingleDate,
 )
+from app.engine.execution_policy import (
+    DEFAULT_EXECUTION_POLICY,
+    execution_policy_from_config_projection,
+)
 from app.services.backtest.research_repository import (
     BacktestStateConflict,
     ImmutableRecordConflict,
@@ -108,6 +112,7 @@ ExperimentId = Annotated[
 Sha256 = Annotated[str, Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")]
 StockCode = Annotated[str, Field(min_length=6, max_length=6, pattern=r"^\d{6}$")]
 IsoDate = Annotated[str, Field(min_length=10, max_length=10)]
+_EXECUTION_POLICY_REQUEST_DEFAULTS = dict(DEFAULT_EXECUTION_POLICY.config_projection())
 
 
 def _validate_single_strategy_id(value: str) -> str:
@@ -131,24 +136,24 @@ def _validate_iso_date(value: str, field_name: str) -> str:
 
 
 class ExecutionPolicyRequest(_StrictModel):
-    """Explicit, bounded execution economics passed to the immutable domain DTO."""
+    """Flat API projection whose defaults come from the current immutable artifact."""
 
-    schema_version: Literal[1] = 1
-    entry_lookahead_days: int = Field(default=1, ge=1, le=10)
-    horizon_days: int = Field(default=5, ge=1, le=60)
-    commission_rate: float = Field(default=0.0001, ge=0, le=0.01)
-    stamp_tax_rate: float = Field(default=0.0005, ge=0, le=0.01)
-    entry_slippage_bps: float = Field(default=10.0, ge=0, le=500)
-    exit_slippage_bps: float = Field(default=10.0, ge=0, le=500)
-    position_size: float = Field(default=1.0, gt=0, le=1)
-    stop_loss_pct: float | None = Field(default=5.0, gt=0, lt=100)
-    take_profit_pct: float | None = Field(default=10.0, gt=0, lt=100)
-    max_entry_gap_pct: float | None = Field(default=10.0, ge=0, lt=100)
-    skip_untradable_entry_bars: bool = True
-    intraday_exit_priority: Literal["stop_loss", "take_profit"] = "stop_loss"
+    schema_version: Literal[1] = int(_EXECUTION_POLICY_REQUEST_DEFAULTS["schema_version"])
+    entry_lookahead_days: int = Field(default=int(_EXECUTION_POLICY_REQUEST_DEFAULTS["entry_lookahead_days"]), ge=1, le=10)
+    horizon_days: int = Field(default=int(_EXECUTION_POLICY_REQUEST_DEFAULTS["horizon_days"]), ge=1, le=60)
+    commission_rate: float = Field(default=float(_EXECUTION_POLICY_REQUEST_DEFAULTS["commission_rate"]), ge=0, le=0.01)
+    stamp_tax_rate: float = Field(default=float(_EXECUTION_POLICY_REQUEST_DEFAULTS["stamp_tax_rate"]), ge=0, le=0.01)
+    entry_slippage_bps: float = Field(default=float(_EXECUTION_POLICY_REQUEST_DEFAULTS["entry_slippage_bps"]), ge=0, le=500)
+    exit_slippage_bps: float = Field(default=float(_EXECUTION_POLICY_REQUEST_DEFAULTS["exit_slippage_bps"]), ge=0, le=500)
+    position_size: float = Field(default=float(_EXECUTION_POLICY_REQUEST_DEFAULTS["position_size"]), gt=0, le=1)
+    stop_loss_pct: float | None = Field(default=_EXECUTION_POLICY_REQUEST_DEFAULTS["stop_loss_pct"], gt=0, lt=100)
+    take_profit_pct: float | None = Field(default=_EXECUTION_POLICY_REQUEST_DEFAULTS["take_profit_pct"], gt=0, lt=100)
+    max_entry_gap_pct: float | None = Field(default=_EXECUTION_POLICY_REQUEST_DEFAULTS["max_entry_gap_pct"], ge=0, lt=100)
+    skip_untradable_entry_bars: bool = bool(_EXECUTION_POLICY_REQUEST_DEFAULTS["skip_untradable_entry_bars"])
+    intraday_exit_priority: Literal["stop_loss", "take_profit"] = str(_EXECUTION_POLICY_REQUEST_DEFAULTS["intraday_exit_priority"])
 
     def to_domain(self) -> ExecutionPolicy:
-        return ExecutionPolicy(**self.model_dump())
+        return execution_policy_from_config_projection(self.model_dump())
 
 
 class BacktestDataPolicyRequest(_StrictModel):

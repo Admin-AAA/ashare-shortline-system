@@ -1802,6 +1802,7 @@ def _market_discipline(
         "max_position_pct": max_position_pct,
         "action": action,
         "market_position_cap_pct": round(market_position_cap * 100, 1),
+        "risk_template_cap_pct": round(template_cap * 100, 1),
         "risk_reward": {
             "downside_pct": downside_pct,
             "upside_pct": upside_pct,

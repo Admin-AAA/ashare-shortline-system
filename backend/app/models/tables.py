@@ -11,7 +11,20 @@
 
 from datetime import datetime
 
-from sqlalchemy import CHAR, Boolean, DateTime, Float, Index, Integer, LargeBinary, String, Text, UniqueConstraint
+from sqlalchemy import (
+    CHAR,
+    BigInteger,
+    Boolean,
+    DateTime,
+    Float,
+    Index,
+    Integer,
+    LargeBinary,
+    SmallInteger,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.mysql import DATETIME, LONGBLOB, LONGTEXT, MEDIUMTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -734,6 +747,16 @@ class PresetSkill(Base):
 
 class RecommendationRun(Base):
     __tablename__ = "recommendation_runs"
+    __table_args__ = (
+        Index(
+            "ix_rec_runs_evidence_trade_generated",
+            "evidence_class",
+            "trade_date",
+            "actual_generated_at",
+        ),
+        Index("ix_rec_runs_reconstruction_batch", "reconstruction_batch_id"),
+        Index("ix_rec_runs_evidence_identity_hash", "evidence_identity_hash"),
+    )
 
     run_id: Mapped[str] = mapped_column(String(60), primary_key=True)
     preset_id: Mapped[str | None] = mapped_column(String(80), index=True)
@@ -746,6 +769,27 @@ class RecommendationRun(Base):
     )
     data_as_of: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
     source_snapshot_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    # Nullable during the compatibility phase. Task 1.3+ owns explicit writes and
+    # task 1.4 owns reviewed legacy classification/backfill; this schema migration
+    # never infers provenance or rewrites legacy scope/timestamps.
+    evidence_class: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    actual_generated_at: Mapped[datetime | None] = mapped_column(
+        DateTime().with_variant(DATETIME(fsp=6), "mysql"),
+        nullable=True,
+    )
+    evidence_identity_hash: Mapped[str | None] = mapped_column(CHAR(64), nullable=True)
+    strategy_policy_fingerprint: Mapped[str | None] = mapped_column(CHAR(64), nullable=True)
+    execution_policy_fingerprint: Mapped[str | None] = mapped_column(CHAR(64), nullable=True)
+    code_revision: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reconstruction_batch_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    provenance_schema_version: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    classification_reason: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    legacy_scope_json: Mapped[str | None] = mapped_column(
+        LONGTEXT().with_variant(Text(), "sqlite"),
+        nullable=True,
+    )
+
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
@@ -785,6 +829,63 @@ class RecommendationRun(Base):
     lease_acquired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     stable_error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+
+
+class RecommendationEvidenceClassificationAudit(Base):
+    """Reviewed, append-only storage for legacy evidence classification facts."""
+
+    __tablename__ = "recommendation_evidence_classification_audits"
+    __table_args__ = (
+        Index(
+            "ix_rec_evidence_audit_plan_class",
+            "plan_hash",
+            "planned_evidence_class",
+        ),
+    )
+
+    # Declaration order preserves the reviewed composite primary-key order.
+    plan_hash: Mapped[str] = mapped_column(CHAR(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(60), primary_key=True)
+    planned_evidence_class: Mapped[str] = mapped_column(String(40))
+    classification_reason: Mapped[str] = mapped_column(String(80))
+    legacy_evaluation_scope: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    legacy_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime().with_variant(DATETIME(fsp=6), "mysql"),
+        nullable=True,
+    )
+    legacy_trade_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    legacy_recommended_at_min: Mapped[datetime | None] = mapped_column(
+        DateTime().with_variant(DATETIME(fsp=6), "mysql"),
+        nullable=True,
+    )
+    legacy_recommended_at_max: Mapped[datetime | None] = mapped_column(
+        DateTime().with_variant(DATETIME(fsp=6), "mysql"),
+        nullable=True,
+    )
+    recommendation_count: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    outcome_count: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    planned_at: Mapped[datetime] = mapped_column(
+        DateTime().with_variant(DATETIME(fsp=6), "mysql"),
+        nullable=False,
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime().with_variant(DATETIME(fsp=6), "mysql"),
+        nullable=True,
+    )
+    applied_at: Mapped[datetime | None] = mapped_column(
+        DateTime().with_variant(DATETIME(fsp=6), "mysql"),
+        nullable=True,
+    )
 
 
 class Recommendation(Base):

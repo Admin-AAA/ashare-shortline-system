@@ -21,7 +21,7 @@ DB = {
     "host": "127.0.0.1",
     "port": 3306,
     "user": "aowang",
-    "password": "1279990918",
+    "password": os.environ.get("ASHARE_DB_PASSWORD", ""),
     "database": "ashare_workbench",
     "charset": "utf8mb4",
     "autocommit": False,

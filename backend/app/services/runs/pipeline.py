@@ -14,6 +14,8 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.services.evidence import apply_formal_run_provenance
+
 from .contracts import RunActor, RunPhase, RunRequest, RunStatus, RunTrigger
 from .coordinator import RunCoordinator, RunCoordinatorDependencies, StageData
 from .repository import TransitionCommit
@@ -215,6 +217,9 @@ async def run_staged_pipeline(
         run.progress_current = len(saved)
         run.progress_total = len(saved)
         run.progress_message = "已核对持久化结果并完成恢复"
+        # S1-b: finalize formal-run Complete_Provenance in the same commit as
+        # recovery completion; replay-scoped runs are skipped by the adapter.
+        apply_formal_run_provenance(run)
         db.commit()
         invalidate_bootstrap_cache()
         return {
@@ -354,6 +359,10 @@ async def run_staged_pipeline(
                 for status in ("verified", "partial", "degraded", "rule_only")
             }
             run.result_summary_json = _dumps(summary)
+            # S1-b: derive Complete_Provenance for formal live runs so it
+            # commits atomically with status/data_as_of/result_summary.  The
+            # adapter derives RunSource.FORMAL itself and skips replay runs.
+            apply_formal_run_provenance(run)
             db.commit()
 
         invalidate_bootstrap_cache()

@@ -32,7 +32,7 @@ from app.agents.tools import (
     query_stock_detail,
     query_stock_history,
 )
-from app.services.model_router_service import get_active_model_routes
+from app.services.model_router_service import OPENAI_CLIENT_HEADERS, get_active_model_routes
 from app.services.llm_review_cache_service import build_review_cache_key, semantic_market_snapshot
 
 
@@ -986,6 +986,7 @@ async def run_skill_agent_direct(
             api_key=route.api_key,
             base_url=route.base_url,
             timeout=route_timeout * 3,
+            default_headers=OPENAI_CLIENT_HEADERS,
         ) as client:
             for attempt in range(max_retries + 1):
                 t0 = asyncio.get_event_loop().time()

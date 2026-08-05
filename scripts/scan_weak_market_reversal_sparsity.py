@@ -5,10 +5,12 @@
 """
 from __future__ import annotations
 
+import os
+
 import pymysql
 from collections import defaultdict
 
-CONN = dict(host="127.0.0.1", port=3306, user="aowang", password="1279990918",
+CONN = dict(host="127.0.0.1", port=3306, user="aowang", password=os.environ.get("ASHARE_DB_PASSWORD", ""),
             db="ashare_workbench", cursorclass=pymysql.cursors.DictCursor)
 
 # 近60天非恐慌弱势日（limit_down_count<=100），含 05-27(ld39)/06-02(21)/06-03(13)/

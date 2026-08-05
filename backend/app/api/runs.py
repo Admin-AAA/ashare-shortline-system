@@ -142,7 +142,11 @@ def create_backtest(payload: dict, db: Session = Depends(get_db)):
     delete or relabel legacy Recommendation/RecommendationOutcome evidence.
     Strategy-declared named actions remain on their dedicated action adapters.
     """
-    from app.engine.backtest import BacktestRequest, DateRange, ExecutionPolicy, SingleDate
+    from app.engine.backtest import BacktestRequest, DateRange, SingleDate
+    from app.engine.execution_policy import (
+        DEFAULT_EXECUTION_POLICY,
+        execution_policy_from_config_projection,
+    )
     from app.services.backtest.research_repository import ResearchBacktestRepository
     from app.services.backtest.research_runner import ResearchBacktestRunner
 
@@ -187,12 +191,14 @@ def create_backtest(payload: dict, db: Session = Depends(get_db)):
         raw_policy = payload.get("execution_policy") or {}
         if not isinstance(raw_policy, dict):
             raise ValueError("execution_policy must be an object when supplied")
-        policy = dict(raw_policy)
-        policy.setdefault("horizon_days", horizon_days)
+        policy_config = dict(DEFAULT_EXECUTION_POLICY.config_projection())
+        policy_config.update(raw_policy)
+        if "horizon_days" not in raw_policy:
+            policy_config["horizon_days"] = horizon_days
         request = BacktestRequest(
             strategy_id=strategy_id,
             date_selector=SingleDate(start_date) if start_date == end_date else DateRange(start_date, end_date),
-            execution_policy=ExecutionPolicy(**policy),
+            execution_policy=execution_policy_from_config_projection(policy_config),
             target_codes=target_codes,
             parameter_set={"minimum_signal_score": score_line},
         )

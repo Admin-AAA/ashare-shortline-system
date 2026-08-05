@@ -7,7 +7,11 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from app.engine.backtest import BacktestRequest, DateRange, ExecutionPolicy, SingleDate
+from app.engine.backtest import BacktestRequest, DateRange, SingleDate
+from app.engine.execution_policy import (
+    DEFAULT_EXECUTION_POLICY,
+    execution_policy_from_config_projection,
+)
 from app.services.backtest.canonical_experiment import (
     CanonicalBacktestExperiment,
     CanonicalExperimentSpec,
@@ -29,7 +33,9 @@ def run_p0_comparison(
 
     started_at = time.perf_counter()
     selector = SingleDate(start_date) if start_date == end_date else DateRange(start_date, end_date)
-    execution_policy = ExecutionPolicy(horizon_days=horizon_days)
+    policy_config = dict(DEFAULT_EXECUTION_POLICY.config_projection())
+    policy_config["horizon_days"] = horizon_days
+    execution_policy = execution_policy_from_config_projection(policy_config)
     repository = ResearchBacktestRepository(db)
     artifact = CanonicalBacktestExperiment(
         repository,

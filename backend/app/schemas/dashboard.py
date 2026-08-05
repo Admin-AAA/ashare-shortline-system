@@ -140,3 +140,5 @@ class DashboardOverview(BaseModel):
     task_health: dict[str, Any] = Field(default_factory=dict)
     validation: dict[str, Any] = Field(default_factory=dict)
     quality_scorecard: dict[str, Any] = Field(default_factory=dict)
+    # S8 additive shadow projection. It does not replace the production read selector.
+    hardening: dict[str, Any] = Field(default_factory=dict)

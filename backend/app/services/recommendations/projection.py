@@ -346,6 +346,11 @@ def serialize_recommendation(
         "preset_name": preset_name,
         "preset_id": _get(run, "preset_id") if run else None,
         "run_name": _get(run, "run_name") if run else None,
+        # 证据身份透传（None 安全）：历史页/详情页据此区分 LIVE 与历史重建，
+        # 不改变任何既有字段语义。
+        "evidence_class": _get(run, "evidence_class") if run else None,
+        "actual_generated_at": _isoformat_or_none(_get(run, "actual_generated_at")) if run else None,
+        "reconstruction_batch_id": _get(run, "reconstruction_batch_id") if run else None,
         "key_levels": _key_levels(feature_snapshot),
     }
     if slim:
@@ -404,6 +409,9 @@ def serialize_run_summary(
         "trade_date": _get(run, "trade_date"),
         "run_mode": _get(run, "run_mode"),
         "evaluation_scope": _get(run, "evaluation_scope") or "historical_replay",
+        "evidence_class": _get(run, "evidence_class"),
+        "actual_generated_at": _isoformat_or_none(_get(run, "actual_generated_at")),
+        "reconstruction_batch_id": _get(run, "reconstruction_batch_id"),
         "started_at": _isoformat_or_none(_get(run, "started_at")),
         "finished_at": _isoformat_or_none(_get(run, "finished_at")),
         "market_scope": _get(run, "market_scope"),

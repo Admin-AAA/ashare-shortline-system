@@ -25,6 +25,8 @@ Usage:
 
 from __future__ import annotations
 
+import os
+
 import json
 import sys
 from collections import defaultdict
@@ -41,7 +43,7 @@ from app.services.outcome_simulation import (  # noqa: E402
     _as_float,
 )
 
-DATABASE_URL = "mysql+pymysql://aowang:1279990918@127.0.0.1:3306/ashare_workbench"
+DATABASE_URL = os.environ.get("ASHARE_DATABASE_URL", "")
 SCORE_LINE_FLOOR = 72.0
 NET_COST_PCT = 0.07
 OUTPUT_DIR = BACKEND_ROOT.parent / "output"

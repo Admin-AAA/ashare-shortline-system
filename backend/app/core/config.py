@@ -1,16 +1,29 @@
 from functools import lru_cache
+import os
 from pathlib import Path
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.production_hardening_flags import RolloutMode
+from app.governance.scope_guard import assert_no_brokerage_access
 
 
 BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 class Settings(BaseSettings):
+    # Production hardening paths are deliberately independent. Safe defaults
+    # compute/observe new behavior without making it authoritative.
+    hardening_evidence_projection_mode: RolloutMode = RolloutMode.SHADOW
+    hardening_canonical_execution_mode: RolloutMode = RolloutMode.SHADOW
+    hardening_release_gate_mode: RolloutMode = RolloutMode.AUDIT
+    hardening_portfolio_risk_mode: RolloutMode = RolloutMode.SHADOW
+    hardening_scheduler_claim_mode: RolloutMode = RolloutMode.SHADOW
+    hardening_dashboard_refresh_mode: RolloutMode = RolloutMode.SHADOW
+
     app_name: str = "AShare Shortline System"
-    database_url: str = "mysql+pymysql://aowang:1279990918@127.0.0.1:3306/ashare_workbench?charset=utf8mb4"
+    database_url: str = "mysql+pymysql://aowang@127.0.0.1:3306/ashare_workbench?charset=utf8mb4"
     data_provider: str = "tushare"
     # Deprecated compatibility fields. New upstream credentials use provider-specific settings.
     tushare_token: str = ""
@@ -118,6 +131,20 @@ class Settings(BaseSettings):
     access_session_days: int = 7
 
     model_config = SettingsConfigDict(env_prefix="ASHARE_", env_file=str(BACKEND_ENV_FILE), extra="ignore")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_brokerage_config_section(cls, values):
+        # Scope_Guard（S0 任务 0.10）：D3 券商实盘为延期范围。brokerage_* 配置段
+        # 在 Settings 解析阶段即 fail-closed 拒绝（仅扫描 key 名，绝不记录值），
+        # 先于任何 secret 使用。extra="ignore" 会静默丢弃的 kwargs / ASHARE_ env
+        # key 也在这里显式拦截。
+        keys: list[str] = []
+        if isinstance(values, dict):
+            keys.extend(str(key) for key in values)
+        keys.extend(key for key in os.environ if key.startswith("ASHARE_"))
+        assert_no_brokerage_access(keys, context="app.core.config.Settings")
+        return values
 
     @model_validator(mode="after")
     def _validate_critical_config(self):

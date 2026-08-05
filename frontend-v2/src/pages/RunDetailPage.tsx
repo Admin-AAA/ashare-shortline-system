@@ -964,7 +964,7 @@ function RunProgressPanel({ detail, onResume }: { detail: RunDetail; onResume?: 
               产出候选：<strong className="text-mono">{detail.recommended_count}</strong> 只
             </span>
           )}
-          {detail.recommended_count === 0 && (
+          {!active && detail.recommended_count === 0 && (
             <span style={{ fontSize: "var(--text-sm)", color: "var(--warning)" }}>
               ⚠ 空仓/无机会：{detail.result_summary?.no_opportunity_reason ?? "全部候选未过分数线"}
             </span>

@@ -158,7 +158,7 @@ def test_simulation_is_deterministic_and_conservative_stop_loss_drives_failure_a
     assert result_one == result_two
     assert result_one.entry_triggered is True
     assert result_one.trade.outcome_label is TradeOutcome.FAILED
-    assert result_one.trade.exit_reason == "stop_loss"
+    assert result_one.trade.exit_reason == "stop_loss_hit"
     assert result_one.trade.net_return_pct == -5.0
     attributions = attribute_failures((result_one.trade,))
     assert attributions[0].reason_code is FailureReasonCode.STOP_LOSS
@@ -191,16 +191,15 @@ def test_default_max_entry_gap_pct_aligns_with_production_engine() -> None:
     # 破坏 T1/T2 回测（D 项核心工具）与生产胜率的可比性。
     assert ExecutionPolicy().max_entry_gap_pct == 10.0
 
-    # 次日开盘跳空 +11.1% 高于信号价 90 → 放弃入场（生产 gap_up_blocked，
-    # 整笔丢弃，不进入失败归因）。entry_lookahead_days=1 与生产“丢弃整笔”语义一致。
+    # 注册 policy 的 entry window 为 2 日：首日跳空超过阈值会跳过，
+    # 第二日若回到阈值内仍可入场；这与 artifact 的显式窗口一致。
     gapped = simulate(
         RecommendationInput(code="000001", signal_date="2024-01-01", signal_price=90),
         _bars(),
-        ExecutionPolicy(),  # 默认 entry_lookahead_days=1, max_entry_gap_pct=10.0
+        ExecutionPolicy(),
     )
-    assert gapped.entry_triggered is False
-    assert gapped.trade.outcome_label is TradeOutcome.NOT_EXECUTED
-    assert attribute_failures((gapped.trade,)) == ()
+    assert gapped.entry_triggered is True
+    assert gapped.trade.outcome_label is not TradeOutcome.NOT_EXECUTED
 
     # 无跳空（信号价=开盘价）→ 正常入场，证明默认仅拦跳空、不误杀正常候选。
     normal = simulate(
@@ -235,8 +234,10 @@ def test_metrics_and_equity_curve_are_deterministic_and_exclude_unexecuted_sampl
     assert metrics.unexecuted_count == 1
     assert metrics.win_count == 1
     assert metrics.loss_count == 1
-    assert metrics.max_drawdown_pct > 0
-    assert len(curve) == 2
+    # T+1 后两笔都在 2024-01-03 退出，日聚合净收益相抵；不再用
+    # 入场日伪退出人为制造一条单独的回撤点。
+    assert metrics.max_drawdown_pct == 0
+    assert len(curve) == 1
 
 
 def test_engine_domain_has_no_orm_or_service_imports() -> None:

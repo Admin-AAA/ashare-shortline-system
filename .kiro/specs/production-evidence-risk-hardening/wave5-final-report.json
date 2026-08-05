@@ -1,0 +1,339 @@
+{
+  "code_revision": "9d81483b295532e12ed23b1a8e60fa5ffbab78f9",
+  "final_evidence_report": {
+    "deferred_initiatives": [
+      {
+        "disposition": "DEFERRED_OUT_OF_SCOPE_REQUIRES_INDEPENDENT_GOVERNANCE",
+        "initiative": "D1_FULL_HISTORICAL_BACKFILL"
+      },
+      {
+        "disposition": "DEFERRED_OUT_OF_SCOPE_REQUIRES_INDEPENDENT_GOVERNANCE",
+        "initiative": "D2_NEW_ALPHA"
+      },
+      {
+        "disposition": "DEFERRED_OUT_OF_SCOPE_REQUIRES_INDEPENDENT_GOVERNANCE",
+        "initiative": "D3_BROKERAGE_LIVE_TRADING"
+      }
+    ],
+    "excluded_terminal_operations": [],
+    "feature_flags": [
+      {
+        "activation_state": "NOT_AUTHORIZED",
+        "flag_id": "canonical_execution",
+        "runtime_mode": "SHADOW"
+      },
+      {
+        "activation_state": "NOT_AUTHORIZED",
+        "flag_id": "dashboard_refresh",
+        "runtime_mode": "SHADOW"
+      },
+      {
+        "activation_state": "NOT_AUTHORIZED",
+        "flag_id": "evidence_projection",
+        "runtime_mode": "SHADOW"
+      },
+      {
+        "activation_state": "NOT_AUTHORIZED",
+        "flag_id": "portfolio_risk",
+        "runtime_mode": "SHADOW"
+      },
+      {
+        "activation_state": "NOT_AUTHORIZED",
+        "flag_id": "release_gate",
+        "runtime_mode": "AUDIT"
+      },
+      {
+        "activation_state": "NOT_AUTHORIZED",
+        "flag_id": "scheduler_claim",
+        "runtime_mode": "SHADOW"
+      }
+    ],
+    "history_conservation": {
+      "after_n": 8218,
+      "before_n": 8218,
+      "collections": [
+        {
+          "after_n": 752,
+          "before_n": 752,
+          "collection": "classification_audits",
+          "missing_fact_ids": [],
+          "mutated_fact_ids": [],
+          "preserved": true,
+          "preserved_n": 752
+        },
+        {
+          "after_n": 1,
+          "before_n": 1,
+          "collection": "holdout_claims",
+          "missing_fact_ids": [],
+          "mutated_fact_ids": [],
+          "preserved": true,
+          "preserved_n": 1
+        },
+        {
+          "after_n": 7462,
+          "before_n": 7462,
+          "collection": "outcome_versions",
+          "missing_fact_ids": [],
+          "mutated_fact_ids": [],
+          "preserved": true,
+          "preserved_n": 7462
+        },
+        {
+          "after_n": 1,
+          "before_n": 1,
+          "collection": "risk_decisions",
+          "missing_fact_ids": [],
+          "mutated_fact_ids": [],
+          "preserved": true,
+          "preserved_n": 1
+        },
+        {
+          "after_n": 1,
+          "before_n": 1,
+          "collection": "risk_reservations",
+          "missing_fact_ids": [],
+          "mutated_fact_ids": [],
+          "preserved": true,
+          "preserved_n": 1
+        },
+        {
+          "after_n": 1,
+          "before_n": 1,
+          "collection": "scheduled_occurrences",
+          "missing_fact_ids": [],
+          "mutated_fact_ids": [],
+          "preserved": true,
+          "preserved_n": 1
+        }
+      ],
+      "preserved": true
+    },
+    "known_unknowns": [
+      "CURRENT_POLICY_POSITIVE_EXPECTATION_UNVERIFIED",
+      "auxiliary missingness has no paired counterfactual",
+      "current champion identity is not validated against current git/policy identity",
+      "projection cutover blocked: shadow sample 3 < required 100",
+      "six activations not attempted because cutover dependency failed"
+    ],
+    "operations": [
+      {
+        "operation_execution_state": "ACCEPTED",
+        "operation_id": "classification_backfill.provenance_v1"
+      },
+      {
+        "operation_execution_state": "NOT_AUTHORIZED",
+        "operation_id": "enforcement.canonical_execution"
+      },
+      {
+        "operation_execution_state": "NOT_AUTHORIZED",
+        "operation_id": "enforcement.dashboard_refresh"
+      },
+      {
+        "operation_execution_state": "NOT_AUTHORIZED",
+        "operation_id": "enforcement.evidence_projection"
+      },
+      {
+        "operation_execution_state": "NOT_AUTHORIZED",
+        "operation_id": "enforcement.portfolio_risk"
+      },
+      {
+        "operation_execution_state": "NOT_AUTHORIZED",
+        "operation_id": "enforcement.release_gate"
+      },
+      {
+        "operation_execution_state": "NOT_AUTHORIZED",
+        "operation_id": "enforcement.scheduler_claim"
+      },
+      {
+        "operation_execution_state": "ACCEPTED",
+        "operation_id": "migration_apply.task_1_3_schema_v1"
+      },
+      {
+        "operation_execution_state": "FAILED",
+        "operation_id": "projection_cutover.production_read_v1"
+      }
+    ],
+    "production_readiness": {
+      "blockers": [
+        "ACTIVATION_NOT_ACTIVE:canonical_execution:NOT_AUTHORIZED",
+        "ACTIVATION_NOT_ACTIVE:dashboard_refresh:NOT_AUTHORIZED",
+        "ACTIVATION_NOT_ACTIVE:evidence_projection:NOT_AUTHORIZED",
+        "ACTIVATION_NOT_ACTIVE:portfolio_risk:NOT_AUTHORIZED",
+        "ACTIVATION_NOT_ACTIVE:release_gate:NOT_AUTHORIZED",
+        "ACTIVATION_NOT_ACTIVE:scheduler_claim:NOT_AUTHORIZED",
+        "RUNTIME_MODE_NOT_ENFORCE:canonical_execution:SHADOW",
+        "RUNTIME_MODE_NOT_ENFORCE:dashboard_refresh:SHADOW",
+        "RUNTIME_MODE_NOT_ENFORCE:evidence_projection:SHADOW",
+        "RUNTIME_MODE_NOT_ENFORCE:portfolio_risk:SHADOW",
+        "RUNTIME_MODE_NOT_ENFORCE:release_gate:AUDIT",
+        "RUNTIME_MODE_NOT_ENFORCE:scheduler_claim:SHADOW"
+      ],
+      "production_ready": false
+    },
+    "provenance_clean_true_forward": {
+      "n": 0,
+      "positive_expectation_claim": "NOT_CLAIMED",
+      "status": "UNVERIFIED_CURRENT_POLICY"
+    },
+    "schema_version": 1,
+    "scope": {
+      "registry_snapshot_id": "registry_snapshot:sha256:c5cf11f0e46330b6ac2ff457423c514b256b680254ff03b888095189c2b2bfee",
+      "release_scope_manifest_identity": "release_scope_manifest:sha256:3e9303ba174345046d5073f955c8b105fdc95c3336cd206420fce5257e4c5e77"
+    },
+    "unactivated_flags": [
+      {
+        "activation_state": "NOT_AUTHORIZED",
+        "flag_id": "canonical_execution",
+        "runtime_mode": "SHADOW"
+      },
+      {
+        "activation_state": "NOT_AUTHORIZED",
+        "flag_id": "dashboard_refresh",
+        "runtime_mode": "SHADOW"
+      },
+      {
+        "activation_state": "NOT_AUTHORIZED",
+        "flag_id": "evidence_projection",
+        "runtime_mode": "SHADOW"
+      },
+      {
+        "activation_state": "NOT_AUTHORIZED",
+        "flag_id": "portfolio_risk",
+        "runtime_mode": "SHADOW"
+      },
+      {
+        "activation_state": "NOT_AUTHORIZED",
+        "flag_id": "release_gate",
+        "runtime_mode": "AUDIT"
+      },
+      {
+        "activation_state": "NOT_AUTHORIZED",
+        "flag_id": "scheduler_claim",
+        "runtime_mode": "SHADOW"
+      }
+    ]
+  },
+  "full_regression": {
+    "architecture": "passed",
+    "backend": "2468 passed, 5 skipped, 0 failed",
+    "build": "passed",
+    "frontend": "39 passed, 0 failed"
+  },
+  "object_id": "wave5_final_decision:sha256:685ab22635ed593ac719411d95dbf96aa385b87b729363ad74488e628bd0d63d",
+  "replay_parity_follow_up": {
+    "architecture": "passed",
+    "cutover": "BLOCKED; old read path remains authoritative",
+    "diagnosis": "historical replay reaches aggregation; zero recommendations are current production_policy board_universe/score_line blocks under mutable historical inputs/LLM cache drift, not missing market universe",
+    "diff_check": "passed",
+    "final_targeted_regression": "67 passed",
+    "legacy_canonical_latest": {
+      "decision": "BLOCKED",
+      "legacy_adapter_version": "engine-simulation@HEAD-9d81483",
+      "mismatch_counts": {
+        "cost": 0,
+        "exit_date": 47,
+        "exit_price": 51,
+        "exit_reason": 52,
+        "net_return": 51
+      },
+      "old_read_path_authoritative": true,
+      "sample_count": 100,
+      "semantic_gaps": [
+        "legacy entry-bar exit vs canonical T+1",
+        "legacy exit resolver lacks canonical causal trailing"
+      ],
+      "summary_object_id": "shadow_parity_collection:sha256:3a6df76eb7bdf90d8c89d751896eadb7daad34d2fc3be2e5c0d8a09a3fa0dfff",
+      "unique_groups": 100
+    },
+    "real_shadow_parity": {
+      "decision": "BLOCKED",
+      "mismatch_counts": {
+        "cost": 100,
+        "exit_date": 47,
+        "exit_price": 51,
+        "net_return": 51,
+        "reason": 96
+      },
+      "sample_count": 100,
+      "summary_object_id": "shadow_parity_collection:sha256:37b6d87de8c660f68553d192f491a879b9717f83291a7ae32e928c838f3130d7",
+      "unique_groups": 100
+    },
+    "real_shadow_parity_latest": {
+      "compatibility_normalization_applied": true,
+      "decision": "BLOCKED",
+      "mismatch_counts": {
+        "cost": 0,
+        "exit_date": 47,
+        "exit_price": 51,
+        "exit_reason": 0,
+        "net_return": 51
+      },
+      "old_read_path_authoritative": true,
+      "sample_count": 100,
+      "summary_object_id": "shadow_parity_collection:sha256:8e8891225fc50bcb0507775f36e2252f4f27d7bda94c4f1c5809aa40510b68e7",
+      "unique_groups": 100
+    },
+    "semantic_migration_audit": {
+      "categories": {
+        "canonical_causal_trailing_migration": 40,
+        "no_change_or_legacy_reason_alias": 45,
+        "t1_entry_bar_migration": 15
+      },
+      "cutover_still_blocked": true,
+      "object_id": "execution_semantic_migration_audit:sha256:e2ea2d90ed42d7dc85f813ff101cc812d374874266d62a1335664055cf2d31f9",
+      "old_read_path_authoritative": true,
+      "sample_count": 100,
+      "unexplained": 0
+    },
+    "successful_smoke": {
+      "evidence_uri": "evidence://sha256/b877fbeb9c3dd703f5345dd3cc9abca82852048048b0add2110b85563b68c26a",
+      "historical_query_count": 4,
+      "live_selector_count": 0,
+      "recommendation_count": 4,
+      "run_id": "run_20260804_155418_9d7ee3",
+      "trade_date": "2026-07-22"
+    }
+  },
+  "task_9_29": {
+    "blockers": [
+      "NOT_ACCEPTED:projection_cutover.production_read_v1:FAILED"
+    ],
+    "required_work_set": [
+      "0.21",
+      "1.3",
+      "2.10",
+      "3.8",
+      "4.10",
+      "5.9",
+      "6.8",
+      "7.8",
+      "7.9",
+      "8.6",
+      "architecture_check",
+      "backend_full_regression",
+      "classification_backfill.provenance_v1",
+      "frontend_test_build",
+      "migration_apply.task_1_3_schema_v1",
+      "projection_cutover.production_read_v1"
+    ],
+    "spec_completion_state": "BLOCKED"
+  },
+  "task_9_30": {
+    "blockers": [
+      "ACTIVATION_NOT_ACTIVE:canonical_execution:NOT_AUTHORIZED",
+      "ACTIVATION_NOT_ACTIVE:dashboard_refresh:NOT_AUTHORIZED",
+      "ACTIVATION_NOT_ACTIVE:evidence_projection:NOT_AUTHORIZED",
+      "ACTIVATION_NOT_ACTIVE:portfolio_risk:NOT_AUTHORIZED",
+      "ACTIVATION_NOT_ACTIVE:release_gate:NOT_AUTHORIZED",
+      "ACTIVATION_NOT_ACTIVE:scheduler_claim:NOT_AUTHORIZED",
+      "RUNTIME_MODE_NOT_ENFORCE:canonical_execution:SHADOW",
+      "RUNTIME_MODE_NOT_ENFORCE:dashboard_refresh:SHADOW",
+      "RUNTIME_MODE_NOT_ENFORCE:evidence_projection:SHADOW",
+      "RUNTIME_MODE_NOT_ENFORCE:portfolio_risk:SHADOW",
+      "RUNTIME_MODE_NOT_ENFORCE:release_gate:AUDIT",
+      "RUNTIME_MODE_NOT_ENFORCE:scheduler_claim:SHADOW"
+    ],
+    "production_ready": false
+  }
+}

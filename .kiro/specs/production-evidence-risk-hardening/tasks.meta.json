@@ -1,0 +1,449 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "0.1 固化整改前事实基线": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758427853
+      },
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758442775
+      },
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785759031326
+      }
+    ],
+    "0.2 建立需求追踪矩阵与 feature flags": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758427893
+      }
+    ],
+    "0.3 设计并预检 forward-only migrations": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758427931
+      }
+    ],
+    "0.4 建立跨模块 golden test harness": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758427961
+      }
+    ],
+    "1.1 定义 `EvidenceClass` 与 `RecommendationEvidenceIdentity`": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758427992
+      }
+    ],
+    "1.2 添加 evidence provenance schema": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428018
+      }
+    ],
+    "1.3 将授权历史回放改为显式历史重建写入": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428045
+      }
+    ],
+    "1.4 建立既有记录只读分类计划与非破坏回填": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428083
+      }
+    ],
+    "1.5 重建 official LIVE 与历史查询 projections": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428128
+      }
+    ],
+    "1.6 验证历史能力保留与 LIVE 排除": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428152
+      }
+    ],
+    "2.1 定义不可变 `ExecutionPolicy` 和 Registry": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428178
+      }
+    ],
+    "2.2 收口 pure Simulation Core": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428205
+      }
+    ],
+    "2.3 修复 T+1 与 entry/exit 语义": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428235
+      }
+    ],
+    "2.4 统一仓位 cap 组合": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428265
+      }
+    ],
+    "2.5 建立 backtest/formal parity harness": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428292
+      }
+    ],
+    "2.6 Shadow 计算与安全切换": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428319
+      }
+    ],
+    "3.1 为全部 active 策略生成独立 canonical profile": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428346
+      }
+    ],
+    "3.2 建立 append-only true-forward ledger/projection": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428377
+      }
+    ],
+    "3.3 重构 Champion State Machine": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428404
+      }
+    ],
+    "3.4 建立 Evidence Package 与分层报告": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428435
+      }
+    ],
+    "3.5 验证 release gate 边界": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428462
+      }
+    ],
+    "4.1 建立 canonical Holdout Population Identity": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428504
+      }
+    ],
+    "4.2 重构 holdout claim 与 research family freeze": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428529
+      }
+    ],
+    "4.3 区分证据阶段并贯穿 evidence scope": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428552
+      }
+    ],
+    "4.4 扩展 Challenger Decision 统计输入": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428581
+      }
+    ],
+    "4.5 收紧 publish identity 与分权": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428610
+      }
+    ],
+    "4.6 验证窥探防护与发布拒绝": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428637
+      }
+    ],
+    "5.1 建立策略声明驱动的 DataQualityDecision": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428664
+      }
+    ],
+    "5.2 建立 Outcome Calculation Fingerprint": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428695
+      }
+    ],
+    "5.3 重构 current projection 与 stale recompute": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428724
+      }
+    ],
+    "5.4 建立 duplicate/orphan/missing audit": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428750
+      }
+    ],
+    "5.5 实现辅助数据成对反事实报告": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428778
+      }
+    ],
+    "5.6 验证数据质量与 outcome 幂等": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428808
+      }
+    ],
+    "6.1 定义并持久化 `PortfolioRiskPolicy`": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428846
+      }
+    ],
+    "6.2 建立 `PortfolioRiskState` 与 valuation": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428868
+      }
+    ],
+    "6.3 实现原子 Risk Gate 与 exposure reservation": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428893
+      }
+    ],
+    "6.4 接入单一仓位 cap 与 kill switches": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428947
+      }
+    ],
+    "6.5 建立 shadow/paper 风险验证": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758428973
+      }
+    ],
+    "6.6 执行组合压力与并发测试": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429001
+      }
+    ],
+    "7.1 固化当前控制面和 occurrence 基线": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429055
+      }
+    ],
+    "7.2 实现单 control-plane owner lease": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429081
+      }
+    ],
+    "7.3 配置明确的 work pool/queue concurrency": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429134
+      }
+    ],
+    "7.4 建立数据库级 ScheduledOccurrence Claim": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429159
+      }
+    ],
+    "7.5 修复异常传播、retry 与 reconciliation": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429191
+      }
+    ],
+    "7.6 定义并实现显式 Misfire Policy": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429229
+      }
+    ],
+    "7.7 修复事务可见性与 CLI poll": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429260
+      }
+    ],
+    "7.8 验证多进程、lease、retry 和 misfire": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429289
+      }
+    ],
+    "8.1 扩展 Dashboard evidence/risk projection": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429316
+      }
+    ],
+    "8.2 实现 HomePage 有限轮询或 SSE": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429344
+      }
+    ],
+    "8.3 建立 correlation ID 与结构化事件": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429372
+      }
+    ],
+    "8.4 配置告警与健康投影": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429399
+      }
+    ],
+    "8.5 迁移 FastAPI lifespan": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429437
+      }
+    ],
+    "8.6 验证 Dashboard 与可观测性": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429463
+      }
+    ],
+    "9.1 执行 evidence projection cutover": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429488
+      }
+    ],
+    "9.2 执行 canonical execution cutover": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429543
+      }
+    ],
+    "9.3 启用 release governance 与 risk gate": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429567
+      }
+    ],
+    "9.4 启用 scheduler 与 Dashboard 新路径": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429598
+      }
+    ],
+    "9.5 运行完整回归与真实 MySQL 验收": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429627
+      }
+    ],
+    "9.6 完成需求追踪与最终报告": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429656
+      }
+    ],
+    "D1 补齐 2021—2024 全市场历史截面": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429683
+      }
+    ],
+    "D2 新 alpha、策略阈值和选股规则优化": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429712
+      }
+    ],
+    "D3 券商账户与真实下单风控": [
+      {
+        "executionId": "5041834d-0aed-4fdf-8e32-e0bd77e5926c",
+        "chatSessionId": "sess_fdfc9b17-56c8-46a9-abc3-10a9bac412b9",
+        "timestamp": 1785758429739
+      }
+    ]
+  }
+}

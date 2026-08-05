@@ -23,7 +23,14 @@ from app.engine.backtest.contracts import (
     SampleConfidence,
     Trade,
     TradeOutcome,
-    canonical_fingerprint,
+)
+from app.engine.execution_core import (
+    CanonicalExecutionError,
+    ExecutionBar,
+    ExecutionIntent,
+    ExecutionRequest,
+    ExecutionStatus,
+    execute_trade,
 )
 
 
@@ -37,7 +44,9 @@ class SimulationResult:
 
     @property
     def status(self) -> str:
-        return "executed" if self.entry_triggered else "not_executed"
+        if self.trade.executed:
+            return "executed"
+        return "open_t1_locked" if self.entry_triggered else "not_executed"
 
 
 # Naming this alias keeps the simulation boundary explicit while retaining one
@@ -45,68 +54,37 @@ class SimulationResult:
 SimulationPolicy = ExecutionPolicy
 
 
-def _ordered_bars(recommendation: RecommendationInput, bars: Iterable[BarInput]) -> tuple[BarInput, ...]:
+def _to_execution_request(
+    recommendation: RecommendationInput,
+    bars: tuple[BarInput, ...] | Iterable[BarInput],
+) -> ExecutionRequest:
     normalized = tuple(bars)
     if not all(isinstance(bar, BarInput) for bar in normalized):
         raise BacktestValidationError(
             BacktestErrorCode.INVALID_SIMULATION_INPUT,
             "bars must contain only BarInput values",
         )
-    filtered = tuple(bar for bar in normalized if bar.code == recommendation.code and bar.trade_date > recommendation.signal_date)
-    dates = tuple(bar.trade_date for bar in filtered)
-    if len(set(dates)) != len(dates):
-        raise BacktestValidationError(
-            BacktestErrorCode.INVALID_SIMULATION_INPUT,
-            "bars must not contain duplicate dates for the recommendation code",
-        )
-    # Sorting means adapter query order can never change a historical result.
-    return tuple(sorted(filtered, key=lambda bar: bar.trade_date))
-
-
-def _entry_bar(
-    recommendation: RecommendationInput,
-    bars: tuple[BarInput, ...],
-    policy: ExecutionPolicy,
-) -> tuple[int, BarInput] | None:
-    for index, bar in enumerate(bars[: policy.entry_lookahead_days]):
-        if not bar.tradable:
-            if policy.skip_untradable_entry_bars:
-                continue
-            return None
-        if policy.max_entry_gap_pct is not None:
-            gap_pct = (bar.open / recommendation.signal_price - 1) * 100
-            if gap_pct > policy.max_entry_gap_pct:
-                continue
-        return index, bar
-    return None
-
-
-def _exit_for_bar(
-    bar: BarInput,
-    *,
-    entry_price: float,
-    policy: ExecutionPolicy,
-) -> tuple[float, str] | None:
-    stop_price = entry_price * (1 - policy.stop_loss_pct / 100) if policy.stop_loss_pct is not None else None
-    take_profit_price = entry_price * (1 + policy.take_profit_pct / 100) if policy.take_profit_pct is not None else None
-
-    stop_exit: tuple[float, str] | None = None
-    if stop_price is not None:
-        if bar.open <= stop_price:
-            stop_exit = (bar.open, "stop_loss_gap")
-        elif bar.low <= stop_price:
-            stop_exit = (stop_price, "stop_loss")
-
-    take_profit_exit: tuple[float, str] | None = None
-    if take_profit_price is not None:
-        if bar.open >= take_profit_price:
-            take_profit_exit = (bar.open, "take_profit_gap")
-        elif bar.high >= take_profit_price:
-            take_profit_exit = (take_profit_price, "take_profit")
-
-    if stop_exit is not None and take_profit_exit is not None:
-        return stop_exit if policy.intraday_exit_priority.value == "stop_loss" else take_profit_exit
-    return stop_exit or take_profit_exit
+    return ExecutionRequest(
+        intent=ExecutionIntent(
+            code=recommendation.code,
+            signal_date=recommendation.signal_date,
+            signal_price=recommendation.signal_price,
+            recommendation_id=recommendation.recommendation_id,
+        ),
+        bars=tuple(
+            ExecutionBar(
+                code=bar.code,
+                trade_date=bar.trade_date,
+                open=bar.open,
+                high=bar.high,
+                low=bar.low,
+                close=bar.close,
+                tradable=bar.tradable,
+                sellable=bar.tradable,
+            )
+            for bar in normalized
+        ),
+    )
 
 
 def simulate(
@@ -114,14 +92,7 @@ def simulate(
     bars: tuple[BarInput, ...] | Iterable[BarInput],
     policy: SimulationPolicy,
 ) -> SimulationResult:
-    """Simulate one recommendation using only future OHLC bars supplied by the caller.
-
-    Entry occurs at an eligible next-bar open plus entry slippage.  Stops/take
-    profits are evaluated in a documented conservative order, and final exits
-    use the horizon bar close.  Returns are percentage points; commission and
-    stamp tax are deducted after execution slippage.
-    """
-
+    """Adapt research DTOs to the single canonical execution core."""
     if not isinstance(recommendation, RecommendationInput):
         raise BacktestValidationError(
             BacktestErrorCode.INVALID_SIMULATION_INPUT,
@@ -132,13 +103,20 @@ def simulate(
             BacktestErrorCode.INVALID_EXECUTION_POLICY,
             "policy must be an ExecutionPolicy",
         )
+    try:
+        result = execute_trade(_to_execution_request(recommendation, bars), policy)
+    except CanonicalExecutionError as exc:
+        raise BacktestValidationError(
+            BacktestErrorCode.INVALID_SIMULATION_INPUT,
+            str(exc),
+        ) from exc
 
-    ordered = _ordered_bars(recommendation, bars)
-    entry = _entry_bar(recommendation, ordered, policy)
-    input_fingerprint = canonical_fingerprint(
-        {"recommendation": recommendation, "bars": ordered, "policy": policy}
-    )
-    if entry is None:
+    if result.status is not ExecutionStatus.CLOSED:
+        reason = (
+            "horizon_close_t1_locked"
+            if result.status is ExecutionStatus.OPEN_T1_LOCKED
+            else result.entry.reason
+        )
         return SimulationResult(
             trade=Trade(
                 code=recommendation.code,
@@ -152,50 +130,37 @@ def simulate(
                 position_size=0.0,
                 holding_days=0,
                 outcome_label=TradeOutcome.NOT_EXECUTED,
-                exit_reason="entry_not_filled",
+                exit_reason=reason,
             ),
-            entry_triggered=False,
-            input_fingerprint=input_fingerprint,
+            entry_triggered=result.entry.triggered,
+            input_fingerprint=result.input_fingerprint,
         )
 
-    entry_index, entry_bar = entry
-    entry_price = round(entry_bar.open * (1 + policy.entry_slippage_bps / 10_000), 10)
-    holding_bars = ordered[entry_index : entry_index + policy.horizon_days]
-    # An entry bar is always part of the selected horizon.
-    raw_exit_price = holding_bars[-1].close
-    exit_date = holding_bars[-1].trade_date
-    exit_reason = "horizon"
-    holding_days = len(holding_bars)
-    for offset, bar in enumerate(holding_bars):
-        resolution = _exit_for_bar(bar, entry_price=entry_price, policy=policy)
-        if resolution is None:
-            continue
-        raw_exit_price, exit_reason = resolution
-        exit_date = bar.trade_date
-        holding_days = offset + 1
-        break
-
-    exit_price = round(raw_exit_price * (1 - policy.exit_slippage_bps / 10_000), 10)
-    gross_return_pct = round((exit_price / entry_price - 1) * 100, 10)
-    net_return_pct = round(gross_return_pct - policy.fee_pct, 10)
-    outcome = TradeOutcome.SUCCESS if net_return_pct > 0 else TradeOutcome.FAILED
+    assert result.entry.trade_date is not None
+    assert result.entry.executed_price is not None
+    assert result.exit is not None
+    outcome = (
+        TradeOutcome.SUCCESS
+        if result.net_return_pct > 0
+        else TradeOutcome.FAILED
+    )
     return SimulationResult(
         trade=Trade(
             code=recommendation.code,
             signal_date=recommendation.signal_date,
-            entry_date=entry_bar.trade_date,
-            exit_date=exit_date,
-            entry_price=entry_price,
-            exit_price=exit_price,
-            gross_return_pct=gross_return_pct,
-            net_return_pct=net_return_pct,
-            position_size=policy.position_size,
-            holding_days=holding_days,
+            entry_date=result.entry.trade_date,
+            exit_date=result.exit.trade_date,
+            entry_price=result.entry.executed_price,
+            exit_price=result.exit.executed_price,
+            gross_return_pct=result.gross_return_pct,
+            net_return_pct=result.net_return_pct,
+            position_size=result.position_size,
+            holding_days=result.exit.holding_days,
             outcome_label=outcome,
-            exit_reason=exit_reason,
+            exit_reason=result.exit.reason,
         ),
         entry_triggered=True,
-        input_fingerprint=input_fingerprint,
+        input_fingerprint=result.input_fingerprint,
     )
 
 

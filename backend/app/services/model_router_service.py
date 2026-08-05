@@ -19,6 +19,11 @@ from app.models.tables import ModelRouteConfig
 
 DEFAULT_ROUTE_ID = "route_env_default"
 
+# 部分中转网关（如 toolcode.top）的 WAF 会拦截 openai SDK 默认的
+# "OpenAI/Python x.y.z" User-Agent（403 "Your request was blocked"），
+# 统一覆盖为自定义 UA 规避误拦；对不拦截的网关无副作用。
+OPENAI_CLIENT_HEADERS = {"User-Agent": "ashare-workbench/1.0"}
+
 
 def _extract_json_object(text: str) -> object | None:
     """容错解析 JSON：剥离 ```json 围栏，并尝试提取首个 JSON 对象。
@@ -200,6 +205,7 @@ async def test_model_route(db: Session, payload: dict) -> dict:
             api_key=route.api_key,
             base_url=route.base_url,
             timeout=timeout_seconds,
+            default_headers=OPENAI_CLIENT_HEADERS,
         ) as client:
             response = await client.chat.completions.create(
                 model=route.model,

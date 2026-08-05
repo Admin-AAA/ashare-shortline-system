@@ -4,10 +4,12 @@
 """
 from __future__ import annotations
 
+import os
+
 import pymysql
 from collections import defaultdict, Counter
 
-CONN = dict(host="127.0.0.1", port=3306, user="aowang", password="1279990918",
+CONN = dict(host="127.0.0.1", port=3306, user="aowang", password=os.environ.get("ASHARE_DB_PASSWORD", ""),
             db="ashare_workbench", cursorclass=pymysql.cursors.DictCursor)
 
 WEAK_DATES = {

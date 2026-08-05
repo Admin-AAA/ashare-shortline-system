@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
+from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY
 from app.engine.trading_costs import (
     ADDITIONAL_COST_PCT as _ADDITIONAL_COST_PCT,
     COMMISSION_RATE_PCT as _COMMISSION_RATE_PCT,
@@ -30,6 +31,19 @@ from app.models.tables import (
 from app.services.evaluation_metrics import compute_full_metrics as _compute_full_metrics
 from app.services.execution_outcome_policy import apply_execution_outcome_policy
 from app.services.official_sample_scope import official_sample_conditions
+# S5 Layer 1 contracts intentionally re-export from the existing outcome service.
+# Production persistence remains RecommendationOutcomeVersion + RecommendationOutcome;
+# no parallel repository or projection table is introduced.
+from app.services.quality_outcome import (  # noqa: F401
+    CurrentProjection,
+    OutcomeCalculationIdentity,
+    OutcomeRecomputeCandidate,
+    OutcomeVersionRecord,
+    audit_outcome_history,
+    cas_current,
+    select_stale_outcomes,
+    upsert_outcome_version,
+)
 
 # ── 结果模拟引擎：权威实现已收口到 outcome_simulation.py（任务 6.1），
 # 以下为兼容 re-export，保持 `from app.services.outcome_service import _simulate_outcome`
@@ -78,7 +92,8 @@ from app.services.outcome_simulation import (  # noqa: F401 - re-export for back
     _static_window_metrics,
 )
 
-BREAKDOWN_HORIZON_DAYS = (3, 5, 10)
+DEFAULT_OUTCOME_HORIZON_DAYS = DEFAULT_EXECUTION_POLICY.horizon_days
+BREAKDOWN_HORIZON_DAYS = (3, DEFAULT_OUTCOME_HORIZON_DAYS, 10)
 
 # outcome 结算滞后天数：每日推荐需等 K 线走完 horizon（盘后 cron 默认 horizon_days=5）才会被
 # label_pending_outcomes 标注为 success/failed/missed。滚动窗口模式下自动把
@@ -327,7 +342,7 @@ def _apply_outcome_simulation(
 
 def label_pending_outcomes(
     db: Session,
-    horizon_days: int = 5,
+    horizon_days: int = DEFAULT_OUTCOME_HORIZON_DAYS,
 ) -> dict[str, Any]:
     """对 pending 推荐做执行口径标注。
 
@@ -432,7 +447,7 @@ def _load_execution_states(
 
 def recompute_stale_outcomes(
     db: Session,
-    horizon_days: int = 5,
+    horizon_days: int = DEFAULT_OUTCOME_HORIZON_DAYS,
     limit: int | None = None,
     official_only: bool = False,
     batch_size: int = 50,

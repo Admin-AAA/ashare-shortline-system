@@ -1,3 +1,4 @@
+import os
 #!/usr/bin/env python3
 """最小化隔夜持股法回测：2026-04-01 ~ 2026-05-26"""
 import json, sys, os, time
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.services.overnight_holding_service import run_overnight_holding_backtest
 
-DB_URL = "mysql+pymysql://aowang:1279990918@127.0.0.1:4407/ashare_workbench"
+DB_URL = os.environ.get("ASHARE_OVERNIGHT_DATABASE_URL", os.environ.get("ASHARE_DATABASE_URL", ""))
 
 def main():
     engine = create_engine(DB_URL, pool_pre_ping=True)

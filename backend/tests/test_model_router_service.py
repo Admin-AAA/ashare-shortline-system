@@ -82,7 +82,8 @@ def test_model_route_uses_stored_key_when_editing_without_new_key(monkeypatch):
             )
 
     class FakeAsyncOpenAI:
-        def __init__(self, *, api_key, base_url, timeout):
+        # 与 committed 客户端签名对齐：服务会额外传 default_headers（OPENAI_CLIENT_HEADERS）
+        def __init__(self, *, api_key, base_url, timeout, default_headers=None):
             assert api_key == "stored-key"
             assert base_url == "https://api.deepseek.com"
             assert timeout == 12.0

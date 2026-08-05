@@ -9,6 +9,8 @@ no_follow_through 定义（self_check._classify_failure_mode_inline）：
 """
 from __future__ import annotations
 
+import os
+
 import json
 import sys
 from collections import Counter
@@ -24,7 +26,7 @@ from sqlalchemy import create_engine, text
 import self_check as sc  # noqa: E402
 
 ENGINE = create_engine(
-    "mysql+pymysql://aowang:1279990918@127.0.0.1:3306/ashare_workbench?charset=utf8mb4"
+    os.environ.get("ASHARE_DATABASE_URL", "")
 )
 
 FEATS = ["chg20", "pos60", "rsi_12", "vol5_20", "turnover_rate", "off_high_pct",

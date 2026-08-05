@@ -6,14 +6,21 @@ but strategy evaluation and simulation only receive these value objects.
 """
 from __future__ import annotations
 
-import hashlib
-import json
 import math
-from dataclasses import dataclass, field, fields, is_dataclass
-from datetime import date, datetime
+from dataclasses import dataclass, field
+from datetime import date
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
+
+from app.engine.canonical import (
+    CanonicalValue,
+    canonical_fingerprint,
+    canonical_json,
+    content_hash,
+    fingerprint,
+)
+from app.engine.execution_policy import ExecutionPolicy, IntradayExitPriority
 
 
 class BacktestErrorCode(str, Enum):
@@ -105,67 +112,6 @@ def _freeze_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
     return MappingProxyType({str(key): _freeze_value(item) for key, item in value.items()})
 
 
-def _canonicalize(value: Any) -> Any:
-    """Convert supported domain values into deterministic JSON-compatible primitives."""
-
-    if isinstance(value, Enum):
-        return _canonicalize(value.value)
-    if is_dataclass(value) and not isinstance(value, type):
-        return {item.name: _canonicalize(getattr(value, item.name)) for item in fields(value)}
-    if isinstance(value, Mapping):
-        normalized: dict[str, Any] = {}
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise TypeError("canonical JSON mapping keys must be strings")
-            normalized[key] = _canonicalize(item)
-        return normalized
-    if isinstance(value, (tuple, list)):
-        return [_canonicalize(item) for item in value]
-    if isinstance(value, (set, frozenset)):
-        return sorted((_canonicalize(item) for item in value), key=canonical_json)
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            raise TypeError("canonical JSON datetime values must be timezone-aware")
-        return value.isoformat()
-    if isinstance(value, date):
-        return value.isoformat()
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise ValueError("canonical JSON does not support non-finite floats")
-        return 0.0 if value == 0 else value
-    if isinstance(value, (str, int, bool)) or value is None:
-        return value
-    raise TypeError(f"unsupported canonical JSON value: {type(value).__name__}")
-
-
-def canonical_json(value: Any) -> str:
-    """Return canonical UTF-8 JSON: recursive key sorting and no formatting variance."""
-
-    return json.dumps(
-        _canonicalize(value),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
-
-
-def canonical_fingerprint(value: Any) -> str:
-    """SHA-256 fingerprint of :func:`canonical_json`."""
-
-    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
-
-
-# Short alias for callers that use the domain term rather than the implementation term.
-fingerprint = canonical_fingerprint
-
-
-def content_hash(payload: bytes) -> str:
-    """SHA-256 hash for immutable binary artifact content."""
-
-    return hashlib.sha256(payload).hexdigest()
-
-
 def _require_non_empty_string(value: object, field_name: str, code: BacktestErrorCode) -> str:
     if not isinstance(value, str) or not value.strip():
         raise BacktestValidationError(code, f"{field_name} must be a non-empty string")
@@ -206,22 +152,6 @@ def _require_finite_number(value: object, field_name: str, code: BacktestErrorCo
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
         raise BacktestValidationError(code, f"{field_name} must be a finite number")
     return float(value)
-
-
-class CanonicalValue:
-    """Mixin for immutable domain values that can be persisted/fingerprinted safely."""
-
-    def canonical_payload(self) -> dict[str, Any]:
-        payload = _canonicalize(self)
-        if not isinstance(payload, dict):  # Defensive: all users are dataclasses.
-            raise TypeError("canonical domain payload must be an object")
-        return payload
-
-    def to_canonical_json(self) -> str:
-        return canonical_json(self.canonical_payload())
-
-    def fingerprint(self) -> str:
-        return canonical_fingerprint(self.canonical_payload())
 
 
 @dataclass(frozen=True)
@@ -266,91 +196,6 @@ class DateRange(CanonicalValue):
 
 
 DateSelector = SingleDate | DateRange
-
-
-class IntradayExitPriority(str, Enum):
-    """Deterministic resolution when stop loss and take profit hit in one bar."""
-
-    STOP_LOSS = "stop_loss"
-    TAKE_PROFIT = "take_profit"
-
-
-@dataclass(frozen=True)
-class ExecutionPolicy(CanonicalValue):
-    """All execution economics and exit rules for a backtest.
-
-    Percentage fields (`stop_loss_pct`, `take_profit_pct`, `max_entry_gap_pct`) use
-    percentage points (``5.0`` means five percent).  Fee rates use fractional
-    rates (``0.0001`` means one basis point).  No module-level mutable policy is
-    consulted by simulation.
-    """
-
-    schema_version: int = 1
-    entry_lookahead_days: int = 1
-    horizon_days: int = 5
-    commission_rate: float = 0.0001
-    stamp_tax_rate: float = 0.0005
-    entry_slippage_bps: float = 10.0
-    exit_slippage_bps: float = 10.0
-    position_size: float = 1.0
-    stop_loss_pct: float | None = 5.0
-    take_profit_pct: float | None = 10.0
-    # 与生产 outcome 引擎 MAX_ENTRY_GAP_PCT=10 对齐：跳空高开 >10% 放弃入场
-    # （历史 12/12 全部失败、均亏 -4.5%）。默认激活，使回测引擎与生产
-    # 执行模型一致——否则回测会纳入生产已丢弃的 0 胜率跳空票，
-    # 破坏 T1/T2 回测（D 项核心工具）与生产胜率的可比性。
-    max_entry_gap_pct: float | None = 10.0
-    skip_untradable_entry_bars: bool = True
-    intraday_exit_priority: IntradayExitPriority = IntradayExitPriority.STOP_LOSS
-
-    def __post_init__(self) -> None:
-        _require_positive_int(self.schema_version, "schema_version", BacktestErrorCode.INVALID_EXECUTION_POLICY)
-        _require_positive_int(
-            self.entry_lookahead_days,
-            "entry_lookahead_days",
-            BacktestErrorCode.INVALID_EXECUTION_POLICY,
-        )
-        _require_positive_int(self.horizon_days, "horizon_days", BacktestErrorCode.INVALID_EXECUTION_POLICY)
-        for name in ("commission_rate", "stamp_tax_rate", "entry_slippage_bps", "exit_slippage_bps"):
-            if _require_finite_number(getattr(self, name), name, BacktestErrorCode.INVALID_EXECUTION_POLICY) < 0:
-                raise BacktestValidationError(BacktestErrorCode.INVALID_EXECUTION_POLICY, f"{name} must be non-negative")
-        position_size = _require_finite_number(
-            self.position_size,
-            "position_size",
-            BacktestErrorCode.INVALID_EXECUTION_POLICY,
-        )
-        if not 0 < position_size <= 1:
-            raise BacktestValidationError(
-                BacktestErrorCode.INVALID_EXECUTION_POLICY,
-                "position_size must be in (0, 1]",
-            )
-        object.__setattr__(self, "position_size", position_size)
-        for name, allow_zero in (("stop_loss_pct", False), ("take_profit_pct", False), ("max_entry_gap_pct", True)):
-            value = getattr(self, name)
-            if value is None:
-                continue
-            normalized = _require_finite_number(value, name, BacktestErrorCode.INVALID_EXECUTION_POLICY)
-            if normalized < 0 or (not allow_zero and normalized == 0) or normalized >= 100:
-                raise BacktestValidationError(
-                    BacktestErrorCode.INVALID_EXECUTION_POLICY,
-                    f"{name} must be {'non-negative' if allow_zero else 'positive'} and less than 100",
-                )
-            object.__setattr__(self, name, normalized)
-        priority = self.intraday_exit_priority
-        try:
-            priority = priority if isinstance(priority, IntradayExitPriority) else IntradayExitPriority(str(priority))
-        except ValueError as exc:
-            raise BacktestValidationError(
-                BacktestErrorCode.INVALID_EXECUTION_POLICY,
-                "intraday_exit_priority is invalid",
-            ) from exc
-        object.__setattr__(self, "intraday_exit_priority", priority)
-
-    @property
-    def fee_pct(self) -> float:
-        """Round-trip fees expressed in percentage points, excluding slippage."""
-
-        return (self.commission_rate * 2 + self.stamp_tax_rate) * 100
 
 
 @dataclass(frozen=True)

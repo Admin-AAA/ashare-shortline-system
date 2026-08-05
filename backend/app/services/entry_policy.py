@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY
+
 
 @dataclass(frozen=True)
 class EntryPolicy:
@@ -21,12 +23,13 @@ NEXT_TRADING_DAY_OPEN = EntryPolicy(
     fallback_to_open_when_targets_miss=True,
 )
 
+_CANONICAL_ENTRY = DEFAULT_EXECUTION_POLICY.entry
 CAUSAL_STRATEGY_ENTRY = EntryPolicy(
-    policy_id="causal_strategy_entry_v1",
-    price_source="intraday_snapshot_or_postclose_target",
-    max_entry_trade_days=2,
-    allow_target_touch=True,
-    fallback_to_open_when_targets_miss=False,
+    policy_id=_CANONICAL_ENTRY.policy_id,
+    price_source=_CANONICAL_ENTRY.price_source.value,
+    max_entry_trade_days=_CANONICAL_ENTRY.max_entry_trade_days,
+    allow_target_touch=_CANONICAL_ENTRY.allow_target_touch,
+    fallback_to_open_when_targets_miss=_CANONICAL_ENTRY.fallback_to_open_when_targets_miss,
 )
 
 LEGACY_MIXED_ENTRY = EntryPolicy(

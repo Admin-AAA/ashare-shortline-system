@@ -591,6 +591,41 @@ export type ValidationSummary = {
   };
 };
 
+export type DashboardHardeningEvidence = {
+  run_id: string;
+  evidence_section: "LIVE_FORWARD" | "HISTORICAL_RECONSTRUCTION" | "RESEARCH";
+  evidence_class: string;
+  actual_generated_at: string | null;
+  business_date: string;
+  signal_date: string;
+  trade_date: string;
+  reconstruction_label: string | null;
+  data_quality_decision: string;
+  data_quality_reasons: string[];
+  risk_gate: string;
+  risk_reasons: string[];
+  last_updated_at: string | null;
+  status: string;
+};
+
+export type DashboardHardening = {
+  generated_at: string;
+  last_updated_at: string | null;
+  stale_threshold_seconds: number;
+  stale: boolean;
+  current_run: DashboardHardeningEvidence | null;
+  current_label: string;
+  today_live_completed: boolean;
+  data_quality_decision: string;
+  risk_gate: string;
+  evidence: Record<"LIVE_FORWARD" | "HISTORICAL_RECONSTRUCTION" | "RESEARCH", DashboardHardeningEvidence[]>;
+  observability?: {
+    registered: string[];
+    conditions: Array<{ kind: string; threshold: number | null; enabled: boolean; severity: string }>;
+    active_alerts: Array<{ kind: string; severity: string; reason_code: string }>;
+  };
+};
+
 export type DashboardOverview = {
   market: MarketTemperature;
   recommendations: CockpitRecommendation[];
@@ -600,6 +635,7 @@ export type DashboardOverview = {
   task_health: TaskHealthSummary;
   validation: ValidationSummary;
   quality_scorecard: QualityScorecard;
+  hardening?: DashboardHardening;
 };
 
 export type DataHealthTableDiagnostic = {

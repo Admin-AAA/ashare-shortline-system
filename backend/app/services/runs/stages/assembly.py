@@ -84,8 +84,18 @@ def assemble_scoring_pipeline_stages(
     )
 
 
-def assemble_pipeline_stages(db: Session, *, run_id: str) -> tuple[AnyStage, ...]:
-    """Build the ordered tuple of recommendation-pipeline stages with production adapters."""
+def assemble_pipeline_stages(
+    db: Session,
+    *,
+    run_id: str,
+    risk_audit: Any | None = None,
+) -> tuple[AnyStage, ...]:
+    """Build production stages; risk_audit is audit-only and never enforcement.
+
+    The optional port is intentionally injected at the existing recommendation
+    persistence boundary.  SQL composition remains disabled until the additive
+    0007 migration has separate authorization and is applied.
+    """
     scoring_stages = assemble_scoring_pipeline_stages(
         skill_resolution=ProductionSkillResolution(db),
         run_start=ProductionRunStart(db),
@@ -104,6 +114,7 @@ def assemble_pipeline_stages(db: Session, *, run_id: str) -> tuple[AnyStage, ...
         *scoring_stages,
         PersistenceStage(
             recommendation_persistence=ProductionRecommendationPersistence(db),
+            risk_audit=risk_audit,
         ),
     )
 

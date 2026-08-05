@@ -17,6 +17,7 @@ from app.engine.backtest import (
     Trade,
     canonical_fingerprint,
 )
+from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY
 from app.engine.simulation import compute_metrics
 from app.engine.strategy import build_registry_from_skills, validate_backtest_parameter_set
 from app.models.tables import BacktestRunV2, BacktestTrade, DailyKbar
@@ -70,7 +71,7 @@ class StrategyBacktestProfiles:
         *,
         as_of: str | None = None,
     ) -> tuple[StrategyBacktestProfileTarget, ...]:
-        policy = ExecutionPolicy()
+        policy = DEFAULT_EXECUTION_POLICY
         signal_end = self._latest_fully_settleable_signal_date(policy, as_of=as_of)
         signal_start = (
             date.fromisoformat(signal_end) - timedelta(days=STRATEGY_PROFILE_WINDOW_DAYS - 1)

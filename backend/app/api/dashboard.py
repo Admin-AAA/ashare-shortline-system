@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
-import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import Depends, HTTPException
@@ -12,12 +10,14 @@ from app.api.contracts import ContractRouter as APIRouter
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
-from app.db.session import SessionLocal, get_db
+from app.db.session import get_db
 from app.engine.trading_calendar import normalize_trade_date as _normalize_trade_date
 from app.models.tables import MarketSnapshot, RecommendationRun, StockQuote
 from app.schemas.dashboard import DashboardOverview
 from app.services.cost_service import list_scheduled_tasks
+from app.services.dashboard_hardening import project_dashboard_hardening
 from app.services.dashboard_quality_service import build_dashboard_quality_scorecard
+from app.services.observability import AlertRegistry
 from app.services.data_pool.health_projection import summarize_alerts, summarize_tasks
 from app.services.data_pool.readiness import summarize_pool_status
 from app.services.recommendations.projection import (
@@ -33,14 +33,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
-# ── 概览响应缓存（stale-while-revalidate）──
-# 驾驶舱概览在每次页面加载/轮询时调用，且包含一次本地池状态全量扫描（冷缓存时约 1.8s）
-# 与若干 run 查询。缓存整包响应，使重复请求在 TTL 内直接命中（<50ms）；过期时先返回
-# 旧值并在后台异步刷新，用户永不阻塞在重计算上。T4：Dashboard 延迟 695ms → <300ms。
-_OVERVIEW_CACHE: dict = {"ts": 0.0, "data": None}
-_OVERVIEW_LOCK = threading.Lock()
-_OVERVIEW_REFRESHING = False
-_OVERVIEW_TTL_SECONDS = 30.0
+# S8: overview owns no response cache.  It reuses the authoritative local-pool
+# cache below; frontend request coalescing lives in the existing QueryClient.
+DASHBOARD_STALE_THRESHOLD_SECONDS = 300
+DASHBOARD_EVIDENCE_LIMIT = 100
 RUN_ACTIVE_STATUSES = {"queued", "running"}
 RUN_HEARTBEAT_STALE_SECONDS = 1200
 DASHBOARD_POOL_PREVIEW_LIMIT = 0
@@ -59,6 +55,7 @@ def compose_overview(
     task_health: dict[str, Any],
     validation: dict[str, Any],
     quality_scorecard: dict[str, Any],
+    hardening: dict[str, Any] | None = None,
 ) -> DashboardOverview:
     cards = [
         item if hasattr(item, "risk_level") else build_cockpit_recommendation(item)
@@ -73,6 +70,7 @@ def compose_overview(
         task_health=task_health,
         validation=validation,
         quality_scorecard=quality_scorecard,
+        hardening=hardening or {},
     )
 
 
@@ -189,7 +187,7 @@ def _latest_stock_quote_trade_date(db: Session) -> str:
 
 
 def _build_overview_payload(db: Session) -> DashboardOverview:
-    """组合概览响应（重计算路径）。抽离出来供首次同步计算与后台刷新复用。"""
+    """组合概览响应；不持有第二份响应缓存。"""
     market_snapshot = _select_dashboard_market_snapshot(db)
     recent_run_row = _select_dashboard_run(db)
     recent_run = serialize_run_progress_row(recent_run_row)
@@ -214,6 +212,13 @@ def _build_overview_payload(db: Session) -> DashboardOverview:
         task_health=task_health,
         current_run=recent_run,
     )
+    hardening = _build_dashboard_hardening(
+        db,
+        market_snapshot=market_snapshot,
+        data_health=data_health,
+        task_health=task_health,
+        recent_run=recent_run,
+    )
     return compose_overview(
         market_snapshot=market_snapshot,
         recent_run=recent_run,
@@ -222,68 +227,85 @@ def _build_overview_payload(db: Session) -> DashboardOverview:
         task_health=task_health,
         validation=build_validation_summary(pool_status, quality_scorecard=quality_scorecard),
         quality_scorecard=quality_scorecard,
+        hardening=hardening,
     )
+
+
+def _build_dashboard_hardening(
+    db: Session,
+    *,
+    market_snapshot: dict[str, Any],
+    data_health: dict[str, Any],
+    task_health: dict[str, Any],
+    recent_run: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Read-only shadow projection; failures never replace the production selector."""
+    try:
+        rows = db.scalars(
+            select(RecommendationRun)
+            .order_by(
+                case(
+                    (RecommendationRun.evidence_class == "live_forward", 0),
+                    (RecommendationRun.evidence_class == "historical_reconstruction", 1),
+                    else_=2,
+                ),
+                RecommendationRun.trade_date.desc(),
+                RecommendationRun.actual_generated_at.desc(),
+                RecommendationRun.started_at.desc(),
+            )
+            .limit(DASHBOARD_EVIDENCE_LIMIT)
+        ).all()
+        projection = project_dashboard_hardening(
+            rows,
+            now=datetime.now(timezone.utc),
+            current_business_date=str(market_snapshot.get("trade_date") or ""),
+            stale_threshold=timedelta(seconds=DASHBOARD_STALE_THRESHOLD_SECONDS),
+            fallback_data_quality=str(data_health.get("status") or "unknown"),
+            fallback_risk_gate="unknown",
+        )
+    except Exception:
+        logger.exception("S8 dashboard hardening shadow projection failed")
+        projection = project_dashboard_hardening(
+            (),
+            now=datetime.now(timezone.utc),
+            current_business_date=str(market_snapshot.get("trade_date") or ""),
+            stale_threshold=timedelta(seconds=DASHBOARD_STALE_THRESHOLD_SECONDS),
+            fallback_data_quality=str(data_health.get("status") or "unknown"),
+            fallback_risk_gate="unknown",
+        )
+    invalid_live_claim = any(
+        item.get("evidence_class") == "live_forward"
+        for item in projection["evidence"]["RESEARCH"]
+    )
+    risk_halted = str(projection.get("risk_gate") or "").lower() in {"halt", "halted"}
+    alert_registry = AlertRegistry.defaults()
+    projection["observability"] = {
+        **alert_registry.to_dict(),
+        "active_alerts": alert_registry.evaluate(
+            {
+                "heartbeat_age_seconds": (
+                    RUN_HEARTBEAT_STALE_SECONDS + 1
+                    if (recent_run or {}).get("is_stale")
+                    else 0
+                ),
+                "flow_failed": bool(task_health.get("failed_count"))
+                or (recent_run or {}).get("status") == "failed",
+                "quality_blocked": str(data_health.get("status") or "").lower()
+                == "blocked",
+                "identity_mismatch": invalid_live_claim,
+                "risk_halted": risk_halted,
+            }
+        ),
+    }
+    return projection
 
 
 @router.get("/overview", response_model=DashboardOverview)
 def overview(db: Session = Depends(get_db)) -> DashboardOverview:
-    now = time.monotonic()
-    schedule_refresh = False
-    with _OVERVIEW_LOCK:
-        cached = _OVERVIEW_CACHE["data"]
-        if cached is not None and (now - _OVERVIEW_CACHE["ts"]) < _OVERVIEW_TTL_SECONDS:
-            return cached  # 命中：直接返回，不触碰 DB
-        if cached is not None:
-            # 过期但存在：标记后「出锁」再调度后台刷新。
-            # 注意：不能在持锁时调用 _schedule_overview_refresh —— 它内部会再次获取
-            # 同一把非重入 _OVERVIEW_LOCK，导致死锁（旧 bug：/api/dashboard/overview 卡死 10s）。
-            schedule_refresh = True
-        # 冷缓存：退出锁后同步计算
-    if schedule_refresh:
-        _schedule_overview_refresh()  # 锁外调度，后台线程自行获取 _OVERVIEW_LOCK 写缓存
-        return cached
-    # 冷缓存（首次/进程重启后）：同步计算一次并写入缓存
     try:
-        payload = _build_overview_payload(db)
+        return _build_overview_payload(db)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    with _OVERVIEW_LOCK:
-        _OVERVIEW_CACHE["data"] = payload
-        _OVERVIEW_CACHE["ts"] = time.monotonic()
-    return payload
-
-
-def _schedule_overview_refresh() -> None:
-    """后台异步刷新概览缓存，避免刷新期间请求阻塞。带去重，防止并发堆叠。"""
-    global _OVERVIEW_REFRESHING
-    with _OVERVIEW_LOCK:
-        if _OVERVIEW_REFRESHING:
-            return
-        _OVERVIEW_REFRESHING = True
-    try:
-        threading.Thread(target=_overview_refresh_worker, daemon=True).start()
-    except Exception:
-        with _OVERVIEW_LOCK:
-            _OVERVIEW_REFRESHING = False
-        logger.exception("概览缓存后台刷新调度失败")
-
-
-def _overview_refresh_worker() -> None:
-    global _OVERVIEW_REFRESHING
-    db = None
-    try:
-        db = SessionLocal()
-        payload = _build_overview_payload(db)
-        with _OVERVIEW_LOCK:
-            _OVERVIEW_CACHE["data"] = payload
-            _OVERVIEW_CACHE["ts"] = time.monotonic()
-    except Exception:
-        logger.exception("概览缓存后台刷新失败")
-    finally:
-        if db is not None:
-            db.close()
-        with _OVERVIEW_LOCK:
-            _OVERVIEW_REFRESHING = False
 
 
 

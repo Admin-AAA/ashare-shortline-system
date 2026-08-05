@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 from sqlalchemy import create_engine, text
 from app.services.indicator_computer import rsi as compute_rsi
 
-DB_URL = "mysql+pymysql://aowang:1279990918@127.0.0.1:3306/ashare_workbench"
+DB_URL = os.environ.get("ASHARE_DATABASE_URL", "")
 
 AFFECTED_DATES = ["2026-07-02", "2026-07-07"]
 

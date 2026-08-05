@@ -1,0 +1,63 @@
+"""Recommendation evidence domain contracts."""
+
+from app.services.evidence.classification_backfill import (
+    ALLOWED_BACKFILL_EVIDENCE_CLASSES,
+    RUN_WRITE_ALLOWLIST,
+    REVIEWED_CLASSIFICATION_PLAN_HASH,
+    ClassificationAssignment,
+    ClassificationBackfillError,
+    ClassificationBackfillReport,
+    PreservationReport,
+    VerifiedClassificationPlan,
+    canonical_plan_hash,
+    capture_preservation_snapshot,
+    derive_plan_payload,
+    execute_backfill,
+    load_and_verify_plan,
+    verify_preservation,
+)
+from app.services.evidence.identity import (
+    PROVENANCE_SCHEMA_VERSION,
+    EvidenceClass,
+    EvidenceIdentityBuilder,
+    EvidenceIdentityError,
+    EvidenceSnapshotIdentity,
+    RecommendationEvidenceIdentity,
+    RunSource,
+    build_recommendation_evidence_identity,
+)
+from app.services.evidence.provenance_writer import (
+    FORMAL_PROVENANCE_REASON,
+    INCOMPLETE_PROVENANCE_REASON,
+    apply_formal_run_provenance,
+    resolve_code_revision,
+)
+
+__all__ = [
+    "ALLOWED_BACKFILL_EVIDENCE_CLASSES",
+    "ClassificationAssignment",
+    "ClassificationBackfillError",
+    "ClassificationBackfillReport",
+    "EvidenceClass",
+    "EvidenceIdentityBuilder",
+    "EvidenceIdentityError",
+    "EvidenceSnapshotIdentity",
+    "FORMAL_PROVENANCE_REASON",
+    "INCOMPLETE_PROVENANCE_REASON",
+    "PROVENANCE_SCHEMA_VERSION",
+    "PreservationReport",
+    "RUN_WRITE_ALLOWLIST",
+    "REVIEWED_CLASSIFICATION_PLAN_HASH",
+    "RecommendationEvidenceIdentity",
+    "RunSource",
+    "VerifiedClassificationPlan",
+    "apply_formal_run_provenance",
+    "build_recommendation_evidence_identity",
+    "canonical_plan_hash",
+    "capture_preservation_snapshot",
+    "derive_plan_payload",
+    "execute_backfill",
+    "load_and_verify_plan",
+    "resolve_code_revision",
+    "verify_preservation",
+]

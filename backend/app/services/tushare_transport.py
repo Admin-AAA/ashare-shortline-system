@@ -18,6 +18,8 @@ from typing import Any
 
 import requests
 
+from app.services.observability import log_observation
+
 logger = logging.getLogger(__name__)
 
 _RETRYABLE_HTTP_STATUS = frozenset({429, 500, 502, 503, 504})
@@ -713,6 +715,13 @@ class TushareProviderRouter:
         params: Mapping[str, Any] | None = None,
         fields: str = "",
     ) -> Mapping[str, Any]:
+        log_observation(
+            logger,
+            stage="provider",
+            reason_code="PROVIDER_REQUEST",
+            identity=api_name,
+            level=logging.DEBUG,
+        )
         providers = self._ordered_providers(api_name)
         if not providers:
             raise TushareProviderError(api_name, [])

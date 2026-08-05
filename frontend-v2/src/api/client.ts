@@ -179,7 +179,7 @@ export const api = {
   login: (password: string) => request<{ ok: boolean }>("/api/auth/login", json("POST", { password })),
   dashboard: createDashboardApi(request),
 
-  bootstrap: () => request<HomeBootstrap>("/api/home/bootstrap"),
+  bootstrap: (options?: RequestOptions) => request<HomeBootstrap>("/api/home/bootstrap", undefined, options),
 
   presets: () => request<Preset[]>("/api/presets", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   createPreset: (payload: PresetPayload) =>
@@ -242,18 +242,19 @@ export const api = {
     return request<RecommendationHistoryResponse>(`/api/recommendations/history?${params.toString()}`);
   },
   // 每只股票已结算推荐的真实历史表现（胜率/均收益），供实时候选卡「历史验证」使用
-  recommendationOutcomeSummary: (codes: string[]) => {
+  recommendationOutcomeSummary: (codes: string[], options?: RequestOptions) => {
     if (codes.length === 0) return Promise.resolve<Record<string, OutcomeSummary>>({});
     const params = new URLSearchParams();
     codes.forEach((c) => params.append("codes", c));
-    return request<Record<string, OutcomeSummary>>(`/api/recommendations/outcome-summary?${params.toString()}`);
+    return request<Record<string, OutcomeSummary>>(`/api/recommendations/outcome-summary?${params.toString()}`, undefined, options);
   },
   replayAnalysis: (runId: string) => request<ReplayAnalysisResult>(`/api/recommendations/runs/${runId}/replay-analysis`),
   // 近 N 个已结算交易日 formal 推荐聚合胜率；零推荐/pending 日期不占窗口
-  recommendationWinRate: (windowDays = 5) =>
-    request<WinRateSummary>(`/api/recommendations/win-rate?window_days=${windowDays}`),
+  recommendationWinRate: (windowDays = 5, options?: RequestOptions) =>
+    request<WinRateSummary>(`/api/recommendations/win-rate?window_days=${windowDays}`, undefined, options),
   // LLM 审查层健康度（驾驶舱状态条「AI 审查」徽章）—— 北极星 B 项可见性缺口修复
-  llmReviewHealth: () => request<LlmReviewHealth>("/api/llm/review-health"),
+  llmReviewHealth: (options?: RequestOptions) =>
+    request<LlmReviewHealth>("/api/llm/review-health", undefined, options),
   llmRouteHealth: () => request<LlmRouteHealthItem[]>("/api/llm/route-health"),
   watchRecommendation: (id: string, payload: { watch_status?: string; note?: string | null }) =>
     request<{ recommendation_id: string; watch_status: string; note?: string | null }>(`/api/recommendations/${id}/watch`, json("POST", payload)),

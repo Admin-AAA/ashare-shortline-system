@@ -322,7 +322,7 @@ skill-name/
 
 | 环境变量 | 默认值 | 说明 |
 |---------|--------|------|
-| `ASHARE_DATABASE_URL` | `mysql+pymysql://aowang:1279990918@127.0.0.1:3306/ashare_workbench` | 数据库连接 |
+| `ASHARE_DATABASE_URL` | `mysql+pymysql://aowang:${ASHARE_DB_PASSWORD}@127.0.0.1:3306/ashare_workbench` | 数据库连接 |
 | `ASHARE_QUOTE_SOURCES` | `tushare,akshare,eastmoney,tencent,sina` | 报价源优先级 |
 | `ASHARE_KLINE_SOURCES` | `tushare,tencent,eastmoney,akshare` | K线源优先级 |
 | `ASHARE_MARKET_CANDIDATE_COUNT` | `0` | 候选数量上限，`0`=全量召回 |

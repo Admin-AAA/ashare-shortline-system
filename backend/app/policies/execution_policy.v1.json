@@ -1,0 +1,79 @@
+{
+  "artifact_schema_version": 1,
+  "policy_fingerprint": "e0ba29df487228c25628297e8d70fbc64928504f980de10abfaf5851c94a60c5",
+  "policy": {
+    "schema_version": 1,
+    "policy_id": "a-share-shortline",
+    "version": "1.0.0",
+    "entry": {
+      "policy_id": "causal_strategy_entry_v1",
+      "price_source": "intraday_snapshot_or_postclose_target",
+      "max_entry_trade_days": 2,
+      "allow_target_touch": true,
+      "fallback_to_open_when_targets_miss": false,
+      "skip_untradable_bars": true
+    },
+    "t_plus_one": true,
+    "horizon_days": 5,
+    "fees": {
+      "commission_rate_per_side": 0.0001,
+      "stamp_tax_rate_on_exit": 0.0005
+    },
+    "slippage": {
+      "entry_bps": 10.0,
+      "exit_bps": 10.0
+    },
+    "board_limits": {
+      "main_board_pct": 10.0,
+      "growth_board_pct": 20.0,
+      "star_market_pct": 20.0,
+      "beijing_exchange_pct": 30.0,
+      "st_pct": 5.0,
+      "limit_detection_tolerance_ratio": 0.005,
+      "block_one_word_limit_up_entry": true,
+      "defer_one_word_limit_down_exit": true
+    },
+    "liquidity": {
+      "require_positive_open": true,
+      "require_positive_close": true,
+      "require_positive_volume": true,
+      "require_positive_amount": true,
+      "untradable_entry_action": "skip",
+      "untradable_exit_action": "defer"
+    },
+    "position": {
+      "default_fraction": 1.0,
+      "high_score_threshold": 85.0,
+      "high_score_cap": 0.5,
+      "market_regime_cap_enabled": true,
+      "cap_composition": "legacy_weak_regime_bypass",
+      "weak_regime_prefix": "弱势"
+    },
+    "stop_loss": {
+      "enabled": true,
+      "default_loss_pct": 4.5,
+      "maximum_loss_pct": 4.7
+    },
+    "take_profit": {
+      "enabled": true,
+      "default_gain_pct": 6.0,
+      "maximum_gain_pct": 15.0
+    },
+    "trailing": {
+      "enabled": true,
+      "mode": "profit_floor",
+      "activation_gain_pct": 2.0,
+      "callback_pct": 0.8,
+      "minimum_lock_gain_pct": 0.3,
+      "profit_lock_ratio": 0.5,
+      "take_profit_precedence": true
+    },
+    "gap_risk": {
+      "max_entry_gap_up_pct": 10.0,
+      "stop_gap_loss_cap_pct": 15.0,
+      "stop_gap_fill_mode": "capped_open",
+      "take_profit_gap_fill_mode": "open"
+    },
+    "intraday_exit_priority": "stop_loss"
+  }
+}

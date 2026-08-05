@@ -4,7 +4,7 @@
 
 # 项目开发策略
 
-当前项目按最合适的架构来做，不保留向后兼容；不为了旧接口、旧文件结构或临时实现额外迁就。
+当前项目按最合适的架构来做，不保留向历史兼容；不为了旧接口、旧文件结构或临时实现额外迁就。
 
 - 缺什么数据就补什么数据；本地数据池按增量方式维护，可以为完成系统目标主动补充、更新、校验本地数据。
 - 代码结构不合理时可以直接重构，不需要为了保留旧实现而绕路。
@@ -24,7 +24,7 @@
 **本地 MySQL。**
 
 - 本地 Homebrew MySQL 9.6 @ 127.0.0.1:3306，库 `ashare_workbench`
-- 用户名/密码：`aowang` / `1279990918`
+- 用户名/密码：`aowang` / `${ASHARE_DB_PASSWORD}`
 - 数据同步、推荐管道的重读写操作全部在本地执行
 
 # 前端体验
@@ -71,7 +71,7 @@
 
 - 按改动主题切分 commit：单一主题一个 commit，跨主题分多个；不为分而分，也不机械全塞一个。
 - commit message 首行 `type: 简述`（fix/feat/chore/refactor/docs），空行后中文正文，末尾加 `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`。
-- 提交前扫一遍未跟踪新文件，命中 `password|secret|api_key|token|1279990918|aowang` 则停下问用户，不要提交凭据。
+- 提交前扫一遍未跟踪新文件，命中 `password|secret|api_key|token|${ASHARE_DB_PASSWORD}|aowang` 则停下问用户，不要提交凭据。
 - 在 main 分支上有新改动时，先开 feature 分支再提交，不直接往 main 提交。
 - push 用 `git push -u origin <分支>`（首次设 upstream）。
 - **如果在 worktree 里**（`git rev-parse --git-common-dir` 返回绝对路径）：当前分支提交 + push 后，切到主仓库 main、`git pull --ff-only origin main`、`git merge --no-ff <当前分支>`、`git push origin main`，把改动合并回 main。冲突不要硬解，停下问用户。

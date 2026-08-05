@@ -25,6 +25,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY
+
 __all__ = [
     "MAIN_BOARD_LIMIT_UP_PCT",
     "limit_pct_for_code",
@@ -42,27 +44,30 @@ __all__ = [
     "is_twenty_cm_stock",
 ]
 
-# 主板涨跌停幅度（10%）。创业板 / 科创板 20%、北交所 30% 由 limit_pct_for_code 按代码前缀判定。
-MAIN_BOARD_LIMIT_UP_PCT = 0.10
+_BOARD_LIMITS = DEFAULT_EXECUTION_POLICY.board_limits
+_LIMIT_TOLERANCE = _BOARD_LIMITS.limit_detection_tolerance_ratio
+MAIN_BOARD_LIMIT_UP_PCT = _BOARD_LIMITS.main_board_pct / 100.0
 
 
 def limit_pct_for_code(code: str) -> float:
-    """按证券代码前缀返回涨跌停幅度（百分数）：创业 / 科创 20，北交 30，其余主板 10。"""
+    """按证券代码前缀返回 canonical policy 的板位涨跌停幅度。"""
     normalized = str(code or "")
-    if normalized.startswith(("300", "301", "688", "689")):
-        return 20.0
+    if normalized.startswith(("300", "301")):
+        return _BOARD_LIMITS.growth_board_pct
+    if normalized.startswith(("688", "689")):
+        return _BOARD_LIMITS.star_market_pct
     if normalized.startswith(("8", "4")):
-        return 30.0
-    return 10.0
+        return _BOARD_LIMITS.beijing_exchange_pct
+    return _BOARD_LIMITS.main_board_pct
 
 
 def limit_pct_for_stock(stock: dict[str, Any]) -> float:
     """按股票完整身份返回涨跌停幅度；ST 优先，其次北交所和代码板位。"""
     name = str(stock.get("name") or "").upper()
     if bool(stock.get("is_st")) or "ST" in name:
-        return 5.0
+        return _BOARD_LIMITS.st_pct
     if str(stock.get("exchange") or "").upper() == "BJ" or str(stock.get("market") or "") == "北交所":
-        return 30.0
+        return _BOARD_LIMITS.beijing_exchange_pct
     return limit_pct_for_code(str(stock.get("code") or ""))
 
 
@@ -158,10 +163,10 @@ def is_one_word_limit_up_values(
         return False
     up_limit = limit_price(prev_close, limit_pct_for_code(code), up=True)
     return (
-        _as_float(open_price) >= up_limit * 0.995
-        and _as_float(low) >= up_limit * 0.995
-        and _as_float(high) >= up_limit * 0.995
-        and _as_float(close) >= up_limit * 0.995
+        _as_float(open_price) >= up_limit * (1 - _LIMIT_TOLERANCE)
+        and _as_float(low) >= up_limit * (1 - _LIMIT_TOLERANCE)
+        and _as_float(high) >= up_limit * (1 - _LIMIT_TOLERANCE)
+        and _as_float(close) >= up_limit * (1 - _LIMIT_TOLERANCE)
     )
 
 
@@ -179,10 +184,10 @@ def is_one_word_limit_down_values(
         return False
     down_limit = limit_price(prev_close, limit_pct_for_code(code), up=False)
     return (
-        _as_float(open_price) <= down_limit * 1.005
-        and _as_float(high) <= down_limit * 1.005
-        and _as_float(low) <= down_limit * 1.005
-        and _as_float(close) <= down_limit * 1.005
+        _as_float(open_price) <= down_limit * (1 + _LIMIT_TOLERANCE)
+        and _as_float(high) <= down_limit * (1 + _LIMIT_TOLERANCE)
+        and _as_float(low) <= down_limit * (1 + _LIMIT_TOLERANCE)
+        and _as_float(close) <= down_limit * (1 + _LIMIT_TOLERANCE)
     )
 
 
@@ -195,7 +200,10 @@ def is_one_word_limit_up_open_low(bar: Any, up_limit: float) -> bool:
         不按当日 pct_chg 反推；
     (2) 只看 open / low 两点，不看 high / close（缩量封板等由调用方另行判定）。
     """
-    return _as_float(bar.open) >= up_limit * 0.995 and _as_float(bar.low) >= up_limit * 0.995
+    return (
+        _as_float(bar.open) >= up_limit * (1 - _LIMIT_TOLERANCE)
+        and _as_float(bar.low) >= up_limit * (1 - _LIMIT_TOLERANCE)
+    )
 
 
 def is_twenty_cm_stock(stock: dict[str, Any]) -> tuple[bool, str]:

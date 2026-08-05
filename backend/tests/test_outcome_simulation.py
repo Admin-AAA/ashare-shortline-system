@@ -13,6 +13,7 @@ import json
 from datetime import datetime
 from types import SimpleNamespace
 
+from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY_REGISTRY
 import pytest
 
 from app.models.tables import DailyKbar
@@ -1095,30 +1096,79 @@ def test_simulate_outcome_defaults_to_production_profit_floor_policy():
     assert sim["exit_date"] == "2026-07-03"
 
 
-def test_resolve_position_size_score_bucket_policy():
-    """生产仓位策略：final_score>=85 → 0.5，<85 → 1.0（负EV高分桶减仓）。"""
+def test_resolve_position_size_uses_minimum_of_every_applicable_cap():
     from app.services.outcome_simulation import _resolve_position_size
 
-    assert _resolve_position_size({"final_score": 72.0}) == 1.0
-    assert _resolve_position_size({"final_score": 84.9}) == 1.0
-    assert _resolve_position_size({"final_score": 85.0}) == 0.5
-    assert _resolve_position_size({"final_score": 100.0}) == 0.5
-    # 缺失 final_score 时回退等权 1.0
-    assert _resolve_position_size({}) == 1.0
-    # market_discipline 硬上限仍生效
-    assert _resolve_position_size({"final_score": 90.0, "market_discipline": {"max_position_pct": 20.0}}) == 0.2
-    # cap 高于 score-bucket 时，减半仓语义在 cap 之上叠加（min(cap, size)）
-    # —— 修复幽灵 champion：原实现 min(cap, 1.0) 使 score>=85 的 0.5 分支在 cap 存在时永远不可达
-    assert _resolve_position_size({"final_score": 90.0, "market_discipline": {"max_position_pct": 80.0}}) == 0.5
-    assert _resolve_position_size({"final_score": 72.0, "market_discipline": {"max_position_pct": 80.0}}) == 0.8
-    # 弱势 regime: 放宽 cap（官方 LIVE 口径确认弱势 20cm clean72 正期望）
-    assert _resolve_position_size({"final_score": 72.0, "market_discipline": {"market_regime": "弱势·活跃", "max_position_pct": 20.0}}) == 1.0
-    assert _resolve_position_size({"final_score": 90.0, "market_discipline": {"market_regime": "弱势·高潮", "max_position_pct": 20.0}}) == 0.5
-    # 非弱势 regime: cap 保留（震荡/结构性强势 cap 有防御价值）
-    assert _resolve_position_size({"final_score": 72.0, "market_discipline": {"market_regime": "震荡·活跃", "max_position_pct": 50.0}}) == 0.5
-    assert _resolve_position_size({"final_score": 72.0, "market_discipline": {"market_regime": "偏多·活跃", "max_position_pct": 80.0}}) == 0.8
-    # 弱势但 score>=85: score-bucket 减半仓仍生效
-    assert _resolve_position_size({"final_score": 87.0, "market_discipline": {"market_regime": "弱势·活跃", "max_position_pct": 20.0}}) == 0.5
+    # v2 global single-name cap (0.35) binds even when score/default allow more.
+    assert _resolve_position_size({"final_score": 72.0}) == 0.35
+    assert _resolve_position_size({"final_score": 85.0}) == 0.35
+    assert _resolve_position_size({}) == 0.35
+
+    # Market/risk discipline can only reduce, never bypass, the global caps.
+    assert _resolve_position_size(
+        {
+            "final_score": 90.0,
+            "market_discipline": {
+                "market_regime": "弱势·活跃",
+                "max_position_pct": 20.0,
+            },
+        }
+    ) == 0.2
+    assert _resolve_position_size(
+        {
+            "final_score": 72.0,
+            "market_discipline": {
+                "market_regime": "偏多·活跃",
+                "max_position_pct": 80.0,
+                "risk_template_cap_pct": 25.0,
+            },
+        }
+    ) == 0.25
+
+    # Runtime portfolio/strategy remaining budgets join the exact same min set.
+    assert _resolve_position_size(
+        {
+            "final_score": 72.0,
+            "strategy_cap": 0.22,
+            "industry_cap_pct": 18.0,
+            "position_caps": {"remaining_gross_cap": 0.15},
+        }
+    ) == 0.15
+    assert _resolve_position_size(
+        {
+            "final_score": 72.0,
+            "applicable_position_caps": {"kill_switch_cap": 0.0},
+        }
+    ) == 0.0
+
+    # Invalid caps fail closed instead of being ignored as if not applicable.
+    with pytest.raises(ValueError, match="position cap"):
+        _resolve_position_size(
+            {"position_caps": {"invalid_cap": 1.5}}
+        )
+
+    # Historical bypass is available only by explicitly selecting registered v1.
+    v1 = DEFAULT_EXECUTION_POLICY_REGISTRY.get("a-share-shortline", "1.0.0")
+    assert _resolve_position_size(
+        {
+            "final_score": 72.0,
+            "market_discipline": {
+                "market_regime": "弱势·活跃",
+                "max_position_pct": 20.0,
+            },
+        },
+        v1,
+    ) == 1.0
+    assert _resolve_position_size(
+        {
+            "final_score": 72.0,
+            "market_discipline": {
+                "market_regime": "震荡·活跃",
+                "max_position_pct": 20.0,
+            },
+        },
+        v1,
+    ) == 0.2
 
 
 def test_simulate_outcome_injects_final_score_from_rec_for_position_sizing():
@@ -1146,8 +1196,8 @@ def test_simulate_outcome_injects_final_score_from_rec_for_position_sizing():
         entry_policy=LEGACY_MIXED_ENTRY,
     )
     assert sim is not None
-    # 88 >= 85 → 半仓
-    assert sim["position_size"] == 0.5
+    # score cap 与 v2 全局 caps 组合后，single-name 0.35 为绑定上限。
+    assert sim["position_size"] == 0.35
 
     rec_low = SimpleNamespace(
         code="000001",
@@ -1165,8 +1215,8 @@ def test_simulate_outcome_injects_final_score_from_rec_for_position_sizing():
         entry_policy=LEGACY_MIXED_ENTRY,
     )
     assert sim_low is not None
-    # 78 < 85 → 全仓
-    assert sim_low["position_size"] == 1.0
+    # 低分 requested=1.0，仍不得绕过 single-name 0.35。
+    assert sim_low["position_size"] == 0.35
 
 
 def test_resolve_exit_causal_activate_pct_parameter():

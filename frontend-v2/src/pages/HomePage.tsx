@@ -10,6 +10,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { api } from "../api/client";
+import { useDashboardQuery } from "../api/queries/useDashboardQuery";
 import type {
   CockpitRecommendation,
   DashboardOverview,
@@ -38,9 +39,10 @@ import { useUrlRoute } from "../app/useUrlRoute";
  */
 export function HomePage() {
   const { navigate, navigateSection } = useUrlRoute();
-  const [data, setData] = useState<DashboardOverview | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const dashboardQuery = useDashboardQuery();
+  const data = dashboardQuery.data ?? null;
+  const loading = dashboardQuery.isLoading;
+  const error = dashboardQuery.error?.message ?? "";
 
   // 合并自着陆页的独有数据：最近 run + 策略开关状态 + 市场宽度
   const [boot, setBoot] = useState<HomeBootstrap | null>(null);
@@ -57,25 +59,13 @@ export function HomePage() {
 
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(true);
-    setError("");
-    api.dashboard
-      .overview({ signal: controller.signal })
-      .then((d) => setData(d))
-      .catch((err) => {
-        if (err.name !== "AbortError") setError(err.message || "加载失败");
-      })
-      .finally(() => setLoading(false));
-    return () => controller.abort();
-  }, []);
-
-  useEffect(() => {
     api
-      .bootstrap()
+      .bootstrap({ signal: controller.signal })
       .then((d) => setBoot(d))
       .catch(() => {
         /* 着陆页数据非关键，失败则静默降级，不阻塞驾驶舱 */
       });
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
@@ -94,7 +84,7 @@ export function HomePage() {
   useEffect(() => {
     const controller = new AbortController();
     api
-      .recommendationWinRate(5)
+      .recommendationWinRate(5, { signal: controller.signal })
       .then((d) => setWinRate(d))
       .catch(() => {
         /* 胜率非阻塞，失败则保持 null（状态条显示 —），不阻塞驾驶舱 */
@@ -106,7 +96,7 @@ export function HomePage() {
   useEffect(() => {
     const controller = new AbortController();
     api
-      .llmReviewHealth()
+      .llmReviewHealth({ signal: controller.signal })
       .then((d) => setLlmHealth(d))
       .catch(() => {
         /* 审查健康度非阻塞，失败则静默降级 */
@@ -121,19 +111,17 @@ export function HomePage() {
       setOutcomeMap({});
       return;
     }
-    let cancelled = false;
-    api.recommendationOutcomeSummary(codes).then((m) => {
-      if (!cancelled) setOutcomeMap(m);
+    const controller = new AbortController();
+    api.recommendationOutcomeSummary(codes, { signal: controller.signal }).then((m) => {
+      setOutcomeMap(m);
     }).catch(() => {
       /* 历史胜率非阻塞，失败则候选卡不显示徽章 */
     });
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, [data?.recommendations]);
 
   if (loading) return <HomePageSkeleton />;
-  if (error) return <ErrorPage title="驾驶舱加载失败" message={error} onRetry={() => window.location.reload()} />;
+  if (error) return <ErrorPage title="驾驶舱加载失败" message={error} onRetry={() => { void dashboardQuery.refetch(); }} />;
   if (!data) return <EmptyState title="暂无驾驶舱数据" reason="后端可能尚未完成今日数据准备" />;
 
   const { market, risk_radar, current_run, data_health, recommendations } = data;
@@ -152,6 +140,7 @@ export function HomePage() {
         winRate={winRate}
         llmHealth={llmHealth}
         qualityScorecard={data.quality_scorecard}
+        hardening={data.hardening}
         onViewHealthDetail={() => navigate("/data-health")}
       />
 
@@ -209,6 +198,7 @@ function StatusBar({
   winRate,
   llmHealth,
   qualityScorecard,
+  hardening,
   onViewHealthDetail,
 }: {
   canRun: boolean;
@@ -220,6 +210,7 @@ function StatusBar({
   winRate: WinRateSummary | null;
   llmHealth: LlmReviewHealth | null;
   qualityScorecard?: DashboardOverview["quality_scorecard"];
+  hardening?: DashboardOverview["hardening"];
   onViewHealthDetail: () => void;
 }) {
   const dot = canRun ? "🟢" : healthStatus === "blocked" ? "🔴" : "🟡";
@@ -264,6 +255,24 @@ function StatusBar({
       <Sep />
       <span className="text-muted">运行：</span>
       <strong style={{ color: "var(--ink)" }}>{runLabel}</strong>
+      {hardening?.current_run && (
+        <>
+          <Sep />
+          <span className="text-muted">证据：</span>
+          <strong
+            className="text-mono"
+            title={`actual_generated_at: ${hardening.current_run.actual_generated_at ?? "—"}\nlast_updated: ${hardening.last_updated_at ?? "—"}`}
+            style={{ color: hardening.stale ? "var(--warning)" : "var(--ink)" }}
+          >
+            {hardening.current_label}{hardening.stale ? " · STALE" : ""}
+          </strong>
+          <Sep />
+          <span className="text-muted">DQ/Risk：</span>
+          <strong className="text-mono" style={{ color: hardening.risk_gate.toLowerCase().includes("halt") ? "var(--market-down)" : "var(--ink)" }}>
+            {hardening.data_quality_decision}/{hardening.risk_gate}
+          </strong>
+        </>
+      )}
       <Sep />
       <span className="text-muted">候选：</span>
       <strong className="text-mono" style={{ color: "var(--ink)" }}>{candidateCount} 只</strong>

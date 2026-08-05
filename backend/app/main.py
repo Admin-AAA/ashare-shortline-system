@@ -1,5 +1,7 @@
+import json
 import logging
 import secrets
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from time import perf_counter
@@ -15,7 +17,13 @@ from app.core.config import get_settings
 from app.core.logger import setup_logging
 from app.db.init_db import init_db
 from app.db.alembic_runtime import get_alembic_health
+from app.governance.scope_guard import ScopeViolation, assert_no_brokerage_access
 from app.services.factors import bootstrap_default_factor_registry
+from app.services.observability import (
+    ApplicationLifespan,
+    correlation_scope,
+    log_observation,
+)
 from app.schemas.common import AuthStatusResponse, HealthResponse, OkResponse
 
 logger = logging.getLogger(__name__)
@@ -33,10 +41,41 @@ _AUTH_PROTECTED_PATHS = {
     "/redoc",
 }
 
+@asynccontextmanager
+async def application_lifespan(_app: FastAPI):
+    """Own process resources without changing application read authority."""
+    lifecycle = ApplicationLifespan()
+
+    def close_database_pool() -> None:
+        from app.db.session import engine
+
+        engine.dispose()
+
+    def close_provider_sessions() -> None:
+        from app.services.tushare_client import clear_pro_cache
+
+        clear_pro_cache()
+
+    # Reverse shutdown order: providers first, then the database pool.
+    lifecycle.add_cleanup("database_pool", close_database_pool)
+    lifecycle.add_cleanup("provider_sessions", close_provider_sessions)
+    lifecycle.startup(on_startup)
+    try:
+        yield
+    finally:
+        failures = lifecycle.shutdown()
+        if failures:
+            logger.error("application shutdown cleanup failures: %s", ",".join(failures))
+
+
 # ORJSONResponse 作为默认 response_class：orjson 序列化比标准 json 快 2-3x，
 # 全局加速所有 API 端点的 JSON 响应（/api/strategies 1.49s 中 ~0.55s 是序列化）。
 # 现有显式 JSONResponse 返回（密码检查等）不受影响。
-app = FastAPI(title="AShare Shortline System", default_response_class=ORJSONResponse)
+app = FastAPI(
+    title="AShare Shortline System",
+    default_response_class=ORJSONResponse,
+    lifespan=application_lifespan,
+)
 _startup_db_error: str | None = None
 
 # CORS 收紧（2026-08-02 修复）：原 allow_origins=["*"] + allow_credentials=True
@@ -147,7 +186,61 @@ async def catch_unhandled_exceptions(request: Request, call_next):
         )
 
 
-@app.on_event("startup")
+_BROKERAGE_GUARD_METHODS = frozenset({"POST", "PUT", "PATCH"})
+
+
+@app.middleware("http")
+async def brokerage_scope_guard(request: Request, call_next):
+    """Scope_Guard（S0 任务 0.10）：券商资源访问在任何 secret 解析语义之前 4xx 拒绝。
+
+    最外层中间件（后注册先执行），只扫描 /api/ 写请求的 JSON payload；
+    违规时返回 403 与安全拒绝事件（仅 identity/hash/reason），正常流量原样放行。
+    """
+    if (
+        request.method in _BROKERAGE_GUARD_METHODS
+        and request.url.path.startswith("/api/")
+        and "application/json" in request.headers.get("content-type", "").lower()
+    ):
+        body = await request.body()
+        try:
+            payload = json.loads(body) if body else None
+        except json.JSONDecodeError:
+            payload = None
+        try:
+            assert_no_brokerage_access(
+                payload, context=f"http:{request.method} {request.url.path}"
+            )
+        except ScopeViolation as exc:
+            return JSONResponse(status_code=403, content={"detail": str(exc), "event": exc.event})
+        # 重新装配 receive 通道，让下游端点仍能读取请求体。
+        body_replayed = False
+
+        async def _replay_receive() -> dict:
+            nonlocal body_replayed
+            if body_replayed:
+                return {"type": "http.request", "body": b"", "more_body": False}
+            body_replayed = True
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        request = Request(request.scope, _replay_receive)
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def correlation_identity(request: Request, call_next):
+    """Propagate one sanitized correlation identity across the request boundary."""
+    with correlation_scope(request.headers.get("X-Correlation-ID")) as correlation_id:
+        log_observation(
+            logger,
+            stage="api",
+            reason_code="REQUEST_ACCEPTED",
+            identity=f"{request.method}:{_normalize_api_path(request.url.path)}",
+        )
+        response = await call_next(request)
+        response.headers["X-Correlation-ID"] = correlation_id
+        return response
+
+
 def on_startup() -> None:
     global _startup_db_error
     setup_logging()

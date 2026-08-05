@@ -1,17 +1,24 @@
-"""Canonical eligibility rules for user-facing live performance samples.
+"""Canonical eligibility rules for user-facing recommendation samples.
 
 Callers remain responsible for their projection and date/filter clauses.  This
 module owns the facts that make a recommendation eligible to be described as a
-completed, forward-generated formal sample.
+completed forward sample or an explicitly authorized historical reconstruction.
+
+The historical-reconstruction branch is not defined here: its single source of
+truth is ``app.services.evidence.selectors``, re-exported below so existing
+callers keep working without a second copy of the expression.
 """
 from __future__ import annotations
 
-from sqlalchemy import func, text
+from sqlalchemy import and_, func, or_, text
 
 from app.models.tables import Recommendation, RecommendationRun
+from app.services.evidence.selectors import (
+    OFFICIAL_RECOMMENDATION_PREFIX,
+    historical_reconstruction_run_conditions,
+)
 
 
-OFFICIAL_RECOMMENDATION_PREFIX = "rec_"
 LIVE_FORWARD_SCOPE = "live_forward"
 
 
@@ -55,9 +62,30 @@ def official_sample_conditions() -> tuple:
     )
 
 
+def historical_reconstruction_sample_conditions() -> tuple:
+    """Backward-compatible alias; the canonical definition lives in selectors.
+
+    Kept so existing imports of this name resolve to the same expression owned
+    by ``app.services.evidence.selectors``.
+    """
+    return historical_reconstruction_run_conditions()
+
+
+def recommendation_history_conditions() -> tuple:
+    """Return current history-page rows without changing official LIVE scope."""
+    return (
+        or_(
+            and_(*official_sample_conditions()),
+            and_(*historical_reconstruction_run_conditions()),
+        ),
+    )
+
+
 __all__ = [
     "LIVE_FORWARD_SCOPE",
     "OFFICIAL_RECOMMENDATION_PREFIX",
     "evaluation_scope_for_run",
+    "historical_reconstruction_sample_conditions",
     "official_sample_conditions",
+    "recommendation_history_conditions",
 ]

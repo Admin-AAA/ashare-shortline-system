@@ -1,0 +1,623 @@
+"""Canonical, side-effect-free single-trade execution core.
+
+Adapters may translate DTO/ORM objects into these immutable values, but entry,
+T+1, exit ordering, gap, trailing, slippage, fee, and result invariants live
+only here.  This module imports no ORM, service, configuration, or I/O code.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Iterable, Mapping
+
+from app.engine.canonical import CanonicalValue, canonical_fingerprint
+from app.engine.execution_policy import (
+    ExecutionPolicy,
+    GapStopFillMode,
+    GapTakeProfitFillMode,
+    IntradayExitPriority,
+    TrailingMode,
+)
+
+
+class CanonicalExecutionError(ValueError):
+    """Stable error raised for invalid canonical execution inputs."""
+
+
+class ExecutionStatus(StrEnum):
+    NOT_EXECUTED = "not_executed"
+    OPEN_T1_LOCKED = "open_t1_locked"
+    CLOSED = "closed"
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionBar(CanonicalValue):
+    code: str
+    trade_date: str
+    open: float
+    high: float
+    low: float
+    close: float
+    tradable: bool = True
+    sellable: bool = True
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.code, str) or not self.code:
+            raise CanonicalExecutionError("bar code must be non-empty")
+        if not isinstance(self.trade_date, str) or not self.trade_date:
+            raise CanonicalExecutionError("bar trade_date must be non-empty")
+        for name in ("open", "high", "low", "close"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise CanonicalExecutionError(f"bar {name} must be numeric")
+            object.__setattr__(self, name, float(value))
+        if not isinstance(self.tradable, bool) or not isinstance(self.sellable, bool):
+            raise CanonicalExecutionError("bar tradable/sellable flags must be boolean")
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionIntent(CanonicalValue):
+    code: str
+    signal_date: str
+    signal_price: float
+    recommendation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.code, str) or not self.code:
+            raise CanonicalExecutionError("intent code must be non-empty")
+        if not isinstance(self.signal_date, str) or not self.signal_date:
+            raise CanonicalExecutionError("intent signal_date must be non-empty")
+        if (
+            isinstance(self.signal_price, bool)
+            or not isinstance(self.signal_price, (int, float))
+            or self.signal_price <= 0
+        ):
+            raise CanonicalExecutionError("intent signal_price must be positive")
+        object.__setattr__(self, "signal_price", float(self.signal_price))
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionRequest(CanonicalValue):
+    intent: ExecutionIntent
+    bars: tuple[ExecutionBar, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.intent, ExecutionIntent):
+            raise CanonicalExecutionError("request intent must be ExecutionIntent")
+        if not isinstance(self.bars, tuple) or not all(
+            isinstance(bar, ExecutionBar) for bar in self.bars
+        ):
+            raise CanonicalExecutionError("request bars must be ExecutionBar tuple")
+
+
+@dataclass(frozen=True, slots=True)
+class EntryDecision(CanonicalValue):
+    triggered: bool
+    bar_index: int | None
+    trade_date: str | None
+    raw_price: float | None
+    executed_price: float | None
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class ExitDecision(CanonicalValue):
+    trade_date: str
+    raw_price: float
+    executed_price: float
+    reason: str
+    holding_days: int
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionResult(CanonicalValue):
+    status: ExecutionStatus
+    entry: EntryDecision
+    exit: ExitDecision | None
+    gross_return_pct: float
+    fee_pct: float
+    net_return_pct: float
+    position_size: float
+    policy_fingerprint: str
+    input_fingerprint: str
+    t_plus_one: bool
+
+    def __post_init__(self) -> None:
+        status = (
+            self.status
+            if isinstance(self.status, ExecutionStatus)
+            else ExecutionStatus(str(self.status))
+        )
+        object.__setattr__(self, "status", status)
+        if status is ExecutionStatus.NOT_EXECUTED:
+            if self.entry.triggered or self.exit is not None:
+                raise CanonicalExecutionError(
+                    "not-executed result cannot carry execution"
+                )
+        elif status is ExecutionStatus.OPEN_T1_LOCKED:
+            if not self.entry.triggered or self.exit is not None or not self.t_plus_one:
+                raise CanonicalExecutionError(
+                    "open T+1 result has inconsistent fields"
+                )
+        else:
+            if not self.entry.triggered or self.exit is None:
+                raise CanonicalExecutionError(
+                    "closed result requires entry and exit"
+                )
+            if (
+                self.t_plus_one
+                and self.entry.trade_date is not None
+                and self.exit.trade_date <= self.entry.trade_date
+            ):
+                raise CanonicalExecutionError(
+                    "T+1 closed result requires exit_date after entry_date"
+                )
+
+
+@dataclass(frozen=True, slots=True)
+class PositionSizingDecision(CanonicalValue):
+    requested_size: float
+    approved_size: float
+    applicable_caps: tuple[tuple[str, float], ...]
+    binding_caps: tuple[str, ...]
+
+
+def compose_position_caps(
+    requested_size: float,
+    applicable_caps: Mapping[str, float | None],
+) -> PositionSizingDecision:
+    """Return the minimum of requested size and every applicable cap.
+
+    ``None`` means not applicable. Zero is an explicit reject cap. Invalid,
+    non-finite, duplicate-after-normalization, or out-of-range caps fail closed
+    instead of being silently skipped by an adapter.
+    """
+    import math
+
+    if (
+        isinstance(requested_size, bool)
+        or not isinstance(requested_size, (int, float))
+        or not math.isfinite(float(requested_size))
+        or not 0 <= float(requested_size) <= 1
+    ):
+        raise CanonicalExecutionError(
+            "requested position size must be in [0, 1]"
+        )
+    normalized: dict[str, float] = {}
+    for raw_name, raw_value in applicable_caps.items():
+        if raw_value is None:
+            continue
+        name = str(raw_name).strip()
+        if not name or name in normalized:
+            raise CanonicalExecutionError(
+                "position cap names must be unique and non-empty"
+            )
+        if (
+            isinstance(raw_value, bool)
+            or not isinstance(raw_value, (int, float))
+            or not math.isfinite(float(raw_value))
+            or not 0 <= float(raw_value) <= 1
+        ):
+            raise CanonicalExecutionError(
+                f"position cap {name!r} must be in [0, 1]"
+            )
+        normalized[name] = float(raw_value)
+    approved = min([float(requested_size), *normalized.values()])
+    binding = tuple(
+        sorted(name for name, value in normalized.items() if value == approved)
+    )
+    if approved == float(requested_size):
+        binding = ("requested_size", *binding)
+    return PositionSizingDecision(
+        requested_size=float(requested_size),
+        approved_size=approved,
+        applicable_caps=tuple(sorted(normalized.items())),
+        binding_caps=binding,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class CausalExitConfig(CanonicalValue):
+    stop_loss_price: float
+    take_profit_price: float
+    entry_price: float
+    t_plus_one: bool = True
+    dynamic_trailing: bool = True
+    trailing_mode: str = "profit_floor"
+    profit_lock_ratio: float = 0.5
+    activation_gain_pct: float = 2.0
+    callback_pct: float = 0.8
+    minimum_lock_gain_pct: float = 0.3
+    stop_gap_loss_cap_pct: float = 15.0
+    stop_gap_fill_mode: GapStopFillMode = GapStopFillMode.CAPPED_OPEN
+    take_profit_gap_fill_mode: GapTakeProfitFillMode = GapTakeProfitFillMode.OPEN
+    intraday_exit_priority: IntradayExitPriority = IntradayExitPriority.STOP_LOSS
+
+    def __post_init__(self) -> None:
+        if self.dynamic_trailing and self.trailing_mode not in {
+            "peak_callback",
+            "callback",
+            "profit_floor",
+        }:
+            raise CanonicalExecutionError(
+                f"unknown trailing_mode: {self.trailing_mode}"
+            )
+        if (
+            self.dynamic_trailing
+            and self.trailing_mode == "profit_floor"
+            and not 0 < self.profit_lock_ratio <= 1
+        ):
+            raise CanonicalExecutionError(
+                "profit_lock_ratio must be in (0, 1]"
+            )
+        object.__setattr__(
+            self,
+            "stop_gap_fill_mode",
+            self.stop_gap_fill_mode
+            if isinstance(self.stop_gap_fill_mode, GapStopFillMode)
+            else GapStopFillMode(str(self.stop_gap_fill_mode)),
+        )
+        object.__setattr__(
+            self,
+            "take_profit_gap_fill_mode",
+            self.take_profit_gap_fill_mode
+            if isinstance(self.take_profit_gap_fill_mode, GapTakeProfitFillMode)
+            else GapTakeProfitFillMode(str(self.take_profit_gap_fill_mode)),
+        )
+        object.__setattr__(
+            self,
+            "intraday_exit_priority",
+            self.intraday_exit_priority
+            if isinstance(self.intraday_exit_priority, IntradayExitPriority)
+            else IntradayExitPriority(str(self.intraday_exit_priority)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CausalExitResult(CanonicalValue):
+    raw_price: float
+    trade_date: str
+    reason: str
+    holding_days: int
+
+
+def _ordered_bars(request: ExecutionRequest) -> tuple[ExecutionBar, ...]:
+    bars = tuple(
+        bar
+        for bar in request.bars
+        if bar.code == request.intent.code
+        and bar.trade_date > request.intent.signal_date
+    )
+    dates = tuple(bar.trade_date for bar in bars)
+    if len(set(dates)) != len(dates):
+        raise CanonicalExecutionError(
+            "bars must not contain duplicate dates for the intent code"
+        )
+    return tuple(sorted(bars, key=lambda bar: bar.trade_date))
+
+
+def _resolve_entry(
+    intent: ExecutionIntent,
+    bars: tuple[ExecutionBar, ...],
+    policy: ExecutionPolicy,
+) -> EntryDecision:
+    for index, bar in enumerate(bars[: policy.entry_lookahead_days]):
+        if not bar.tradable:
+            if policy.skip_untradable_entry_bars:
+                continue
+            return EntryDecision(False, None, None, None, None, "entry_rejected_untradable")
+        if policy.max_entry_gap_pct is not None:
+            gap_pct = (bar.open / intent.signal_price - 1) * 100
+            if gap_pct > policy.max_entry_gap_pct:
+                continue
+        raw_price = bar.open
+        executed_price = round(
+            raw_price * (1 + policy.entry_slippage_bps / 10_000), 10
+        )
+        return EntryDecision(
+            True,
+            index,
+            bar.trade_date,
+            raw_price,
+            executed_price,
+            "next_open_entry",
+        )
+    return EntryDecision(False, None, None, None, None, "entry_not_filled")
+
+
+def _trailing_stop_return(
+    observed_high_return: float,
+    config: CausalExitConfig,
+) -> float:
+    if config.trailing_mode == "profit_floor":
+        return max(
+            config.minimum_lock_gain_pct,
+            observed_high_return * config.profit_lock_ratio,
+        )
+    return observed_high_return - config.callback_pct
+
+
+def resolve_causal_exit(
+    holding_bars: Iterable[ExecutionBar],
+    config: CausalExitConfig,
+) -> CausalExitResult | None:
+    """Resolve one causal exit; an entry bar is never scanned under T+1.
+
+    Trailing protection uses information known through the previous close.
+    A high formed during a bar can only update the following bar's protection.
+    """
+    bars = tuple(holding_bars)
+    if not bars:
+        return None
+    if config.t_plus_one and len(bars) <= 1:
+        return None
+
+    entry_bar = bars[0]
+    scan_bars = bars[1:] if config.t_plus_one else bars
+    hard_stop = config.stop_loss_price
+    take_profit = config.take_profit_price
+    trailing_active = False
+    observed_high_return = 0.0
+    next_trailing_stop = 0.0
+
+    if config.dynamic_trailing and config.t_plus_one and config.entry_price > 0:
+        entry_close = entry_bar.close
+        if entry_close > 0:
+            entry_close_return = (entry_close / config.entry_price - 1) * 100
+            observed_high_return = max(0.0, entry_close_return)
+            if entry_close_return >= config.activation_gain_pct:
+                trailing_active = True
+                stop_return = _trailing_stop_return(entry_close_return, config)
+                next_trailing_stop = max(
+                    config.entry_price * (1 + stop_return / 100), hard_stop
+                )
+
+    locked_bars = 0
+    for offset, bar in enumerate(scan_bars):
+        if not bar.sellable:
+            locked_bars += 1
+        bar_open = bar.open
+        high = bar.high
+        low = bar.low
+        has_ohlc = bar_open > 0 and low > 0 and high > 0
+        holding_days = (
+            offset + 2 if config.t_plus_one else offset + 1
+        )
+
+        if bar.sellable and has_ohlc:
+            if bar_open <= hard_stop:
+                if config.stop_gap_fill_mode is GapStopFillMode.CAPPED_OPEN:
+                    minimum_exit = config.entry_price * (
+                        1 - config.stop_gap_loss_cap_pct / 100
+                    )
+                    price = max(bar_open, minimum_exit)
+                else:
+                    price = bar_open
+                return CausalExitResult(
+                    price, bar.trade_date, "stop_loss_gap", holding_days
+                )
+            if (
+                config.dynamic_trailing
+                and trailing_active
+                and next_trailing_stop > 0
+                and bar_open <= next_trailing_stop
+            ):
+                return CausalExitResult(
+                    bar_open,
+                    bar.trade_date,
+                    "trailing_stop_gap",
+                    holding_days,
+                )
+            if bar_open >= take_profit:
+                price = (
+                    bar_open
+                    if config.take_profit_gap_fill_mode
+                    is GapTakeProfitFillMode.OPEN
+                    else take_profit
+                )
+                return CausalExitResult(
+                    price, bar.trade_date, "take_profit_gap", holding_days
+                )
+            stop_hit = low <= hard_stop
+            take_profit_hit = high >= take_profit
+            if stop_hit and take_profit_hit:
+                if (
+                    config.intraday_exit_priority
+                    is IntradayExitPriority.TAKE_PROFIT
+                ):
+                    return CausalExitResult(
+                        take_profit,
+                        bar.trade_date,
+                        "take_profit_intraday_both_hit",
+                        holding_days,
+                    )
+                return CausalExitResult(
+                    hard_stop,
+                    bar.trade_date,
+                    "stop_loss_intraday_both_hit",
+                    holding_days,
+                )
+            if stop_hit:
+                return CausalExitResult(
+                    hard_stop, bar.trade_date, "stop_loss_hit", holding_days
+                )
+            if (
+                config.dynamic_trailing
+                and trailing_active
+                and next_trailing_stop > 0
+                and low <= next_trailing_stop
+            ):
+                return CausalExitResult(
+                    next_trailing_stop,
+                    bar.trade_date,
+                    "trailing_stop_hit",
+                    holding_days,
+                )
+            if take_profit_hit:
+                return CausalExitResult(
+                    take_profit,
+                    bar.trade_date,
+                    "take_profit_hit",
+                    holding_days,
+                )
+
+        if config.dynamic_trailing and config.entry_price > 0 and high > 0:
+            bar_high_return = (high / config.entry_price - 1) * 100
+            observed_high_return = max(observed_high_return, bar_high_return)
+            if (
+                not trailing_active
+                and observed_high_return >= config.activation_gain_pct
+            ):
+                trailing_active = True
+            if trailing_active:
+                stop_return = _trailing_stop_return(observed_high_return, config)
+                protection = max(
+                    config.entry_price * (1 + stop_return / 100), hard_stop
+                )
+                next_trailing_stop = max(next_trailing_stop, protection)
+
+    last_bar = bars[-1]
+    if locked_bars and locked_bars == len(scan_bars):
+        reason = "limit_down_locked_horizon_mark"
+    elif locked_bars:
+        reason = "horizon_close_after_locked_limit_down"
+    else:
+        reason = "horizon_close"
+    return CausalExitResult(
+        last_bar.close,
+        last_bar.trade_date,
+        reason,
+        len(bars),
+    )
+
+
+def execute_trade(
+    request: ExecutionRequest,
+    policy: ExecutionPolicy,
+) -> ExecutionResult:
+    """Execute one next-open trade under the canonical policy."""
+    if not isinstance(request, ExecutionRequest):
+        raise CanonicalExecutionError("request must be ExecutionRequest")
+    if not isinstance(policy, ExecutionPolicy):
+        raise CanonicalExecutionError("policy must be ExecutionPolicy")
+    ordered = _ordered_bars(request)
+    normalized_request = ExecutionRequest(intent=request.intent, bars=ordered)
+    input_fingerprint = canonical_fingerprint(
+        {"request": normalized_request, "policy": policy}
+    )
+    entry = _resolve_entry(request.intent, ordered, policy)
+    if not entry.triggered:
+        return ExecutionResult(
+            ExecutionStatus.NOT_EXECUTED,
+            entry,
+            None,
+            0.0,
+            policy.fee_pct,
+            0.0,
+            0.0,
+            policy.fingerprint(),
+            input_fingerprint,
+            policy.t_plus_one,
+        )
+
+    assert entry.bar_index is not None
+    assert entry.executed_price is not None
+    sizing = compose_position_caps(
+        policy.position_size,
+        {
+            name: getattr(policy.position, name)
+            for name in policy.position._OPTIONAL_CAP_FIELDS
+        },
+    )
+    holding_bars = ordered[
+        entry.bar_index : entry.bar_index + policy.horizon_days
+    ]
+    stop_price = (
+        entry.executed_price * (1 - policy.stop_loss_pct / 100)
+        if policy.stop_loss_pct is not None
+        else 0.0
+    )
+    take_profit_price = (
+        entry.executed_price * (1 + policy.take_profit_pct / 100)
+        if policy.take_profit_pct is not None
+        else 1e308
+    )
+    exit_config = CausalExitConfig(
+        stop_loss_price=stop_price,
+        take_profit_price=take_profit_price,
+        entry_price=entry.executed_price,
+        t_plus_one=policy.t_plus_one,
+        dynamic_trailing=policy.trailing.enabled,
+        trailing_mode=(
+            "profit_floor"
+            if policy.trailing.mode is TrailingMode.PROFIT_FLOOR
+            else "callback"
+        ),
+        profit_lock_ratio=policy.trailing.profit_lock_ratio,
+        activation_gain_pct=policy.trailing.activation_gain_pct,
+        callback_pct=policy.trailing.callback_pct,
+        minimum_lock_gain_pct=policy.trailing.minimum_lock_gain_pct,
+        stop_gap_loss_cap_pct=policy.gap_risk.stop_gap_loss_cap_pct,
+        stop_gap_fill_mode=policy.gap_risk.stop_gap_fill_mode,
+        take_profit_gap_fill_mode=policy.gap_risk.take_profit_gap_fill_mode,
+        intraday_exit_priority=policy.intraday_exit_priority,
+    )
+    exit_result = resolve_causal_exit(holding_bars, exit_config)
+    if exit_result is None:
+        return ExecutionResult(
+            ExecutionStatus.OPEN_T1_LOCKED,
+            entry,
+            None,
+            0.0,
+            policy.fee_pct,
+            0.0,
+            sizing.approved_size,
+            policy.fingerprint(),
+            input_fingerprint,
+            policy.t_plus_one,
+        )
+
+    executed_exit = round(
+        exit_result.raw_price * (1 - policy.exit_slippage_bps / 10_000), 10
+    )
+    gross_return = round(
+        (executed_exit / entry.executed_price - 1) * 100, 10
+    )
+    net_return = round(gross_return - policy.fee_pct, 10)
+    exit_decision = ExitDecision(
+        exit_result.trade_date,
+        exit_result.raw_price,
+        executed_exit,
+        exit_result.reason,
+        exit_result.holding_days,
+    )
+    return ExecutionResult(
+        ExecutionStatus.CLOSED,
+        entry,
+        exit_decision,
+        gross_return,
+        policy.fee_pct,
+        net_return,
+        sizing.approved_size,
+        policy.fingerprint(),
+        input_fingerprint,
+        policy.t_plus_one,
+    )
+
+
+__all__ = [
+    "CanonicalExecutionError",
+    "CausalExitConfig",
+    "CausalExitResult",
+    "EntryDecision",
+    "ExecutionBar",
+    "ExecutionIntent",
+    "ExecutionRequest",
+    "ExecutionResult",
+    "ExecutionStatus",
+    "ExitDecision",
+    "PositionSizingDecision",
+    "compose_position_caps",
+    "execute_trade",
+    "resolve_causal_exit",
+]

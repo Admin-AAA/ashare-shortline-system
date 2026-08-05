@@ -1,5 +1,6 @@
 export const queryKeys = {
   home: () => ["home"] as const,
+  dashboard: () => ["dashboard", "overview"] as const,
   presets: () => ["presets"] as const,
   runs: (limit?: number) => ["runs", { limit: limit ?? null }] as const,
   run: (id: string) => ["runs", id] as const,

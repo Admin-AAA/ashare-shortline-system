@@ -55,6 +55,7 @@ from app.engine.backtest import (
     canonical_fingerprint,
     canonical_json,
 )
+from app.engine.execution_policy import execution_policy_from_payload
 from app.engine.simulation import attribute_failures, build_equity_curve, compute_metrics, simulate
 from app.engine.skill_loader import load_skills
 from app.engine.strategy import (
@@ -1432,12 +1433,19 @@ def _request_from_canonical_json(raw: str, *, force_rerun: bool) -> BacktestRequ
         date_selector = SingleDate(str(selector["signal_date"]))
     else:
         date_selector = DateRange(str(selector.get("start_date") or ""), str(selector.get("end_date") or ""))
+    policy_payload = dict(payload.get("execution_policy") or {})
+    if isinstance(policy_payload.get("entry"), Mapping):
+        # Nested canonical payload persisted by current CanonicalValue contracts.
+        execution_policy = execution_policy_from_payload(policy_payload)
+    else:
+        # Legacy flat API projection retained for pre-refactor stored rows.
+        execution_policy = ExecutionPolicy(**policy_payload)
     return BacktestRequest(
         schema_version=int(payload.get("schema_version", 1)),
         strategy_id=str(payload.get("strategy_id") or ""),
         strategy_version=str(payload.get("strategy_version") or "") or None,
         date_selector=date_selector,
-        execution_policy=ExecutionPolicy(**dict(payload.get("execution_policy") or {})),
+        execution_policy=execution_policy,
         data_policy=BacktestDataPolicy(**dict(payload.get("data_policy") or {})),
         target_codes=tuple(payload.get("target_codes") or ()),
         parameter_set=payload.get("parameter_set"),
