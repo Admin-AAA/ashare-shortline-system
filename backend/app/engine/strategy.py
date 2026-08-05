@@ -33,9 +33,11 @@ class StrategyError(Exception):
 class StrategyNotFoundError(StrategyError, KeyError):
     """The requested strategy_id is not registered."""
 
-    def __init__(self, strategy_id: str) -> None:
+    def __init__(self, strategy_id: str, available_values: tuple[str, ...] = ()) -> None:
         self.strategy_id = strategy_id
-        super().__init__(f"未注册的策略：'{strategy_id}'。")
+        self.available_values = tuple(sorted({str(value) for value in available_values}))
+        hint = f"可用值：{', '.join(self.available_values)}" if self.available_values else "可用值：（无）"
+        super().__init__(f"未注册的策略：'{strategy_id}'；{hint}。")
 
 
 class StrategyUnavailableError(StrategyError):
@@ -431,13 +433,13 @@ class StrategyRegistry:
         try:
             return self._strategies[strategy_id]
         except KeyError:
-            raise StrategyNotFoundError(strategy_id) from None
+            raise StrategyNotFoundError(strategy_id, self.ids()) from None
 
     def get_descriptor(self, strategy_id: str) -> StrategyDescriptor:
         try:
             return self._descriptors[strategy_id]
         except KeyError:
-            raise StrategyNotFoundError(strategy_id) from None
+            raise StrategyNotFoundError(strategy_id, self.ids()) from None
 
     def resolve(
         self,

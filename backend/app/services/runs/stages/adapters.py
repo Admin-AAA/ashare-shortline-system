@@ -38,13 +38,21 @@ class ProductionSkillResolution(SkillResolutionPort):
         self,
         *,
         skill_ids: Sequence[dict[str, Any]],
+        run_mode: str | None = None,
+        preset_id: str | None = None,
     ) -> tuple[tuple[StageMapping, ...], dict[str, Any]]:
         from app.services.registry.skills import sync_skills
         from app.services.workbench_service import _select_skills_for_run
 
         skills = sync_skills(self._db)
         skill_map = {skill.skill_id: skill for skill in skills}
-        selected = _select_skills_for_run(self._db, skill_map, list(skill_ids))
+        selected = _select_skills_for_run(
+            self._db,
+            skill_map,
+            list(skill_ids),
+            run_mode=run_mode,
+            preset_id=preset_id,
+        )
         return tuple(selected), skill_map
 
 

@@ -96,6 +96,7 @@ from app.services.registry.data_source import (
     DATA_SOURCE_LOCAL_POOL_PREFERRED,
     DATA_SOURCE_LOCAL_POOL_REALTIME,
     DATA_SOURCE_REALTIME,
+    DEFAULT_PRESETS,
     DEFAULT_RECOMMENDATION_DATA_SOURCE,
     normalize_data_source,
 )
@@ -105,6 +106,10 @@ from app.services.registry.presets import (
     delete_preset,
     list_presets,
     update_preset,
+)
+from app.services.registry.diagnostics import (
+    UnknownRegistryValueError,
+    build_registry_diagnostics,
 )
 from app.services.registry.skills import (
     backtest_skill,
@@ -482,14 +487,32 @@ def enqueue_workbench_run(
     skill_map = {skill.skill_id: skill for skill in skills}
     preset = db.get(Preset, payload["preset_id"]) if payload.get("preset_id") else None
     if payload.get("preset_id") and preset is None:
-        raise ValueError("预设不存在，请刷新后重试")
+        available_preset_ids = tuple(
+            sorted(
+                {
+                    *(
+                        str(value)
+                        for value in db.scalars(select(Preset.preset_id)).all()
+                        if value
+                    ),
+                    *(str(item["preset_id"]) for item in DEFAULT_PRESETS if item.get("preset_id")),
+                }
+            )
+        )
+        raise UnknownRegistryValueError("preset", str(payload["preset_id"]), available_preset_ids)
     params = _merge_run_params(db, preset, payload)
     request = _canonical_workbench_request(params, payload)
     # ``params_json`` remains a legacy display projection, so keep its mode
     # aligned with the canonical request instead of leaving an implicit formal
     # default that would misdescribe experiment/backtest runs.
     params["run_mode"] = request.run_mode.value
-    selected_skills = _select_skills_for_run(db, skill_map, params["skills"])
+    selected_skills = _select_skills_for_run(
+        db,
+        skill_map,
+        params["skills"],
+        run_mode=request.run_mode.value,
+        preset_id=params.get("preset_id"),
+    )
     if not selected_skills:
         raise ValueError("没有可运行的 Skill，请检查预设配置或 Skill 状态")
 
@@ -2275,10 +2298,23 @@ def _select_skills_for_run(
     db: Session,
     skill_map: dict[str, StrategySkill],
     requested_skills: list[dict[str, Any]],
+    *,
+    run_mode: str | None = None,
+    preset_id: str | None = None,
 ) -> list[dict[str, Any]]:
+    if str(run_mode or "").lower() == "formal":
+        report = build_registry_diagnostics(
+            tuple(skill_map.values()),
+            list_presets(db),
+        )
+        report.require_executable(preset_id or "preset_formal_opening")
+
     selected: list[dict[str, Any]] = []
+    available_strategy_ids = tuple(sorted(skill_map))
     for item in requested_skills:
-        skill_id = str(item.get("skill_id"))
+        skill_id = str(item.get("skill_id") or "").strip()
+        if skill_id not in skill_map:
+            raise UnknownRegistryValueError("strategy", skill_id, available_strategy_ids)
         registry = db.get(SkillRegistry, skill_id)
         skill = skill_map.get(skill_id)
         if registry is None or skill is None or not registry.enabled:

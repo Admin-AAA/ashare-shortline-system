@@ -31,6 +31,8 @@ class SkillResolutionPort(Protocol):
         self,
         *,
         skill_ids: Sequence[dict[str, Any]],
+        run_mode: str | None = None,
+        preset_id: str | None = None,
     ) -> tuple[tuple[StageMapping, ...], dict[str, Any]]:
         """Return (selected_skills, skill_map) for the given request skills.
 
@@ -88,6 +90,8 @@ class PrepareStage:
         if self.skill_resolution is not None:
             selected_skills, _skill_map = self.skill_resolution.sync_and_select(
                 skill_ids=params.get("skills") or [],
+                run_mode=str(params.get("run_mode") or ""),
+                preset_id=str(params.get("preset_id") or "") or None,
             )
         else:
             # Fallback: no skill resolution wired — produce empty set.
