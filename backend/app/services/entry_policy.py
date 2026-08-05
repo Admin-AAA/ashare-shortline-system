@@ -32,16 +32,6 @@ CAUSAL_STRATEGY_ENTRY = EntryPolicy(
     fallback_to_open_when_targets_miss=_CANONICAL_ENTRY.fallback_to_open_when_targets_miss,
 )
 
-LEGACY_MIXED_ENTRY = EntryPolicy(
-    policy_id="legacy_mixed_entry_v1",
-    price_source="target_then_open",
-    max_entry_trade_days=2,
-    allow_target_touch=True,
-    fallback_to_open_when_targets_miss=True,
-)
-
-
 __all__ = [
-    "CAUSAL_STRATEGY_ENTRY", "EntryPolicy", "LEGACY_MIXED_ENTRY",
-    "NEXT_TRADING_DAY_OPEN",
+    "CAUSAL_STRATEGY_ENTRY", "EntryPolicy", "NEXT_TRADING_DAY_OPEN",
 ]

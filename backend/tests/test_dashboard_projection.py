@@ -225,6 +225,15 @@ def test_dashboard_run_selector_uses_latest_formal_run(db):
         status="completed",
         run_mode="formal",
         evaluation_scope="live_forward",
+        evidence_class="live_forward",
+        data_as_of="2099-05-26",
+        source_snapshot_id="dash-selector-snapshot",
+        actual_generated_at=datetime(2099, 5, 26, 8, 0),
+        evidence_identity_hash="d" * 64,
+        strategy_policy_fingerprint="a" * 64,
+        execution_policy_fingerprint="b" * 64,
+        code_revision="c" * 40,
+        provenance_schema_version=1,
     )
     latest_formal = SimpleNamespace(
         **{**older_formal.__dict__, "run_id": "dash_formal_latest", "started_at": datetime(2099, 5, 27, 9, 30)}
@@ -239,7 +248,23 @@ def test_dashboard_run_selector_uses_latest_formal_run(db):
 
     from app.models.tables import RecommendationRun
 
-    db.add_all([RecommendationRun(**older_formal.__dict__), RecommendationRun(**latest_formal.__dict__), RecommendationRun(**latest_experiment.__dict__)])
+    unverified_newer = RecommendationRun(
+        run_id="dash_unverified_newer",
+        run_name="未验证新run",
+        run_mode="formal",
+        trade_date="2099-05-29",
+        status="completed",
+        started_at=datetime(2099, 5, 29, 9, 30),
+        finished_at=datetime(2099, 5, 29, 9, 45),
+    )
+    db.add_all(
+        [
+            RecommendationRun(**older_formal.__dict__),
+            RecommendationRun(**latest_formal.__dict__),
+            RecommendationRun(**latest_experiment.__dict__),
+            unverified_newer,
+        ]
+    )
     db.commit()
 
     selected = _select_dashboard_run(db)
@@ -270,6 +295,15 @@ def test_dashboard_run_selector_ignores_replay_run_over_today_live(db):
         "market_snapshot_json": "{}",
         "result_summary_json": "{}",
         "filter_audit_json": "{}",
+        "evidence_class": "live_forward",
+        "data_as_of": "2099-05-28",
+        "source_snapshot_id": "dash-live-snapshot",
+        "actual_generated_at": datetime(2099, 5, 28, 8, 0),
+        "evidence_identity_hash": "d" * 64,
+        "strategy_policy_fingerprint": "a" * 64,
+        "execution_policy_fingerprint": "b" * 64,
+        "code_revision": "c" * 40,
+        "provenance_schema_version": 1,
     }
     db.add_all([
         # 当日正式推荐（live_forward），started_at 较晚（昨晚盘后）
@@ -328,6 +362,15 @@ def test_bootstrap_latest_run_prioritizes_live_forward_over_replay(db):
         "market_snapshot_json": "{}",
         "result_summary_json": "{}",
         "filter_audit_json": "{}",
+        "evidence_class": "live_forward",
+        "data_as_of": "2099-06-01",
+        "source_snapshot_id": "bootstrap-live-snapshot",
+        "actual_generated_at": datetime(2099, 6, 1, 8, 0),
+        "evidence_identity_hash": "d" * 64,
+        "strategy_policy_fingerprint": "a" * 64,
+        "execution_policy_fingerprint": "b" * 64,
+        "code_revision": "c" * 40,
+        "provenance_schema_version": 1,
     }
     db.add_all([
         # 当日正式推荐（live_forward）
@@ -379,11 +422,21 @@ def test_dashboard_recommendations_use_latest_completed_formal_trade_date(db):
         "market_snapshot_json": "{}",
         "result_summary_json": "{}",
         "filter_audit_json": "{}",
+        "run_mode": "formal",
+        "evidence_class": "live_forward",
+        "data_as_of": "2099-05-27",
+        "source_snapshot_id": "dashboard-recommendation-snapshot",
+        "actual_generated_at": datetime(2099, 5, 27, 8, 0),
+        "evidence_identity_hash": "d" * 64,
+        "strategy_policy_fingerprint": "a" * 64,
+        "execution_policy_fingerprint": "b" * 64,
+        "code_revision": "c" * 40,
+        "provenance_schema_version": 1,
     }
     db.add_all([
         RecommendationRun(
             **formal_base,
-            run_id="dash_rec_old_completed",
+            run_id="rec_dash_rec_old_completed",
             trade_date="2099-05-27",
             status="completed",
             started_at=datetime(2099, 5, 27, 9, 30),
@@ -391,7 +444,7 @@ def test_dashboard_recommendations_use_latest_completed_formal_trade_date(db):
         ),
         RecommendationRun(
             **formal_base,
-            run_id="dash_rec_latest_failed",
+            run_id="rec_dash_rec_latest_failed",
             trade_date="2099-05-28",
             status="failed",
             started_at=datetime(2099, 5, 28, 9, 30),
@@ -399,7 +452,7 @@ def test_dashboard_recommendations_use_latest_completed_formal_trade_date(db):
         ),
         RecommendationRun(
             **formal_base,
-            run_id="dash_rec_latest_completed_exp",
+            run_id="rec_dash_rec_latest_completed_exp",
             trade_date="2099-05-28",
             status="completed",
             started_at=datetime(2099, 5, 28, 10, 30),
@@ -407,11 +460,20 @@ def test_dashboard_recommendations_use_latest_completed_formal_trade_date(db):
         ),
         RecommendationRun(
             **formal_base,
-            run_id="dash_rec_latest_completed_formal",
+            run_id="rec_dash_rec_latest_completed_formal",
             trade_date="2099-05-28",
             status="completed",
             started_at=datetime(2099, 5, 28, 11, 30),
             finished_at=datetime(2099, 5, 28, 11, 45),
+        ),
+        RecommendationRun(
+            run_id="dashboard_unverified_newer",
+            run_name="未验证新行",
+            run_mode="formal",
+            trade_date="2099-06-02",
+            status="completed",
+            started_at=datetime(2099, 6, 2, 11, 30),
+            finished_at=datetime(2099, 6, 2, 11, 45),
         ),
     ])
     db.commit()
@@ -419,7 +481,7 @@ def test_dashboard_recommendations_use_latest_completed_formal_trade_date(db):
     selected = _select_dashboard_recommendation_run(db)
 
     assert selected is not None
-    assert selected.run_id == "dash_rec_latest_completed_formal"
+    assert selected.run_id == "rec_dash_rec_latest_completed_formal"
 
 
 def test_dashboard_recommendations_aggregate_formal_runs_sort_and_dedupe(db):
@@ -433,6 +495,15 @@ def test_dashboard_recommendations_aggregate_formal_runs_sort_and_dedupe(db):
             run_mode="formal",
             trade_date=trade_date,
             status="completed",
+            evidence_class="live_forward",
+            data_as_of=trade_date,
+            source_snapshot_id="dash-aggregate-snapshot",
+            actual_generated_at=datetime(2099, 6, 1, 8, 0),
+            evidence_identity_hash="d" * 64,
+            strategy_policy_fingerprint="a" * 64,
+            execution_policy_fingerprint="b" * 64,
+            code_revision="c" * 40,
+            provenance_schema_version=1,
             started_at=datetime(2099, 6, 1, 9, 30),
             finished_at=datetime(2099, 6, 1, 9, 40),
             recommended_count=2,
@@ -443,6 +514,15 @@ def test_dashboard_recommendations_aggregate_formal_runs_sort_and_dedupe(db):
             run_mode="formal",
             trade_date=trade_date,
             status="completed",
+            evidence_class="live_forward",
+            data_as_of=trade_date,
+            source_snapshot_id="dash-aggregate-snapshot",
+            actual_generated_at=datetime(2099, 6, 1, 8, 0),
+            evidence_identity_hash="d" * 64,
+            strategy_policy_fingerprint="a" * 64,
+            execution_policy_fingerprint="b" * 64,
+            code_revision="c" * 40,
+            provenance_schema_version=1,
             started_at=datetime(2099, 6, 1, 10, 30),
             finished_at=datetime(2099, 6, 1, 10, 40),
             recommended_count=2,
@@ -453,15 +533,34 @@ def test_dashboard_recommendations_aggregate_formal_runs_sort_and_dedupe(db):
             run_mode="experiment",
             trade_date=trade_date,
             status="completed",
+            evidence_class="live_forward",
+            data_as_of=trade_date,
+            source_snapshot_id="dash-aggregate-snapshot",
+            actual_generated_at=datetime(2099, 6, 1, 8, 0),
+            evidence_identity_hash="d" * 64,
+            strategy_policy_fingerprint="a" * 64,
+            execution_policy_fingerprint="b" * 64,
+            code_revision="c" * 40,
+            provenance_schema_version=1,
             started_at=datetime(2099, 6, 1, 11, 30),
             finished_at=datetime(2099, 6, 1, 11, 40),
+            recommended_count=1,
+        ),
+        RecommendationRun(
+            run_id="dash_aggregate_unverified",
+            run_name="未验证正式运行",
+            run_mode="formal",
+            trade_date=trade_date,
+            status="completed",
+            started_at=datetime(2099, 6, 1, 12, 30),
+            finished_at=datetime(2099, 6, 1, 12, 40),
             recommended_count=1,
         ),
     ]
     db.add_all(runs)
     db.add_all([
         Recommendation(
-            recommendation_id="dash_rec_score_70",
+            recommendation_id="rec_dash_rec_score_70",
             run_id="dash_aggregate_formal_a",
             trade_date=trade_date,
             code="990001",
@@ -469,7 +568,7 @@ def test_dashboard_recommendations_aggregate_formal_runs_sort_and_dedupe(db):
             final_score=70,
         ),
         Recommendation(
-            recommendation_id="dash_rec_duplicate_75",
+            recommendation_id="rec_dash_rec_duplicate_75",
             run_id="dash_aggregate_formal_a",
             trade_date=trade_date,
             code="990002",
@@ -477,7 +576,7 @@ def test_dashboard_recommendations_aggregate_formal_runs_sort_and_dedupe(db):
             final_score=75,
         ),
         Recommendation(
-            recommendation_id="dash_rec_score_90",
+            recommendation_id="rec_dash_rec_score_90",
             run_id="dash_aggregate_formal_b",
             trade_date=trade_date,
             code="990003",
@@ -485,7 +584,7 @@ def test_dashboard_recommendations_aggregate_formal_runs_sort_and_dedupe(db):
             final_score=90,
         ),
         Recommendation(
-            recommendation_id="dash_rec_duplicate_80",
+            recommendation_id="rec_dash_rec_duplicate_80",
             run_id="dash_aggregate_formal_b",
             trade_date=trade_date,
             code="990002",
@@ -493,12 +592,20 @@ def test_dashboard_recommendations_aggregate_formal_runs_sort_and_dedupe(db):
             final_score=80,
         ),
         Recommendation(
-            recommendation_id="dash_rec_experiment_99",
+            recommendation_id="rec_dash_rec_experiment_99",
             run_id="dash_aggregate_experiment",
             trade_date=trade_date,
             code="990004",
             name="实验候选",
             final_score=99,
+        ),
+        Recommendation(
+            recommendation_id="rec_dash_unverified_100",
+            run_id="dash_aggregate_unverified",
+            trade_date=trade_date,
+            code="990005",
+            name="未验证候选",
+            final_score=100,
         ),
     ])
     db.commit()

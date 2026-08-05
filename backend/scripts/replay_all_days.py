@@ -70,7 +70,21 @@ def _base_payload() -> dict:
             )
         ).scalar()
         if not row:
-            raise RuntimeError("找不到可复用的已完成正式 LIVE run 参数")
+            return {
+                "run_name": "REPLAY-历史推荐重建",
+                "preset_id": "preset_formal_opening",
+                "run_mode": "formal",
+                "matrix_run": False,
+                "trade_date_override": None,
+                "data_source": DATA_SOURCE_LOCAL_POOL,
+                "skip_aux_refresh": True,
+                "market_scope": "all",
+                "market_scope_value": None,
+                "risk_template": "balanced",
+                "score_line": 72.0,
+                "output_count": 6,
+                "hide_recent_repeats": False,
+            }
         params = json.loads(row)
         params["run_name"] = "REPLAY-历史推荐重建"
         params["preset_id"] = "preset_formal_opening"

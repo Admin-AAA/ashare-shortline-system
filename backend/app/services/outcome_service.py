@@ -45,13 +45,10 @@ from app.services.quality_outcome import (  # noqa: F401
     upsert_outcome_version,
 )
 
-# ── 结果模拟引擎：权威实现已收口到 outcome_simulation.py（任务 6.1），
-# 以下为兼容 re-export，保持 `from app.services.outcome_service import _simulate_outcome`
-# 等既有导入路径不失效（见 stock_backtest_service.py / scripts/exit_rules.py /
-# scripts/failure_attribution.py / scripts/verify_trailing_stop_params.py /
-# tests/test_failure_attribution.py；对模拟引擎本身的单测已迁移至
-# tests/test_outcome_simulation.py，直接 import 权威实现，不留双份覆盖）。
-from app.services.outcome_simulation import (  # noqa: F401 - re-export for backward compatibility
+# Canonical outcome simulation surface. Persistence/orchestration remains in this
+# module; execution semantics are owned exclusively by outcome_simulation and
+# app.engine.execution_core.
+from app.services.outcome_simulation import (  # noqa: F401
     DEFAULT_STOP_LOSS_PCT,
     DEFAULT_TAKE_PROFIT_PCT,
     ENTRY_LOOKAHEAD_DAYS,
@@ -75,7 +72,6 @@ from app.services.outcome_simulation import (  # noqa: F401 - re-export for back
     _as_float,
     _build_outcome_reason,
     _entry_execution_block_reason,
-    _entry_not_triggered_reason,
     _exit_execution_block_reason,
     _has_no_liquidity,
     _is_one_word_limit_down,
@@ -83,8 +79,6 @@ from app.services.outcome_simulation import (  # noqa: F401 - re-export for back
     _recommendation_execution_block_reason,
     _resolve_entry,
     _resolve_exit,
-    _resolve_exit_base,
-    _resolve_exit_with_trailing,
     _resolve_position_size,
     _resolve_stop_loss_price,
     _resolve_take_profit_price,
@@ -268,25 +262,9 @@ def _apply_outcome_simulation(
     try:
         simulation = apply_execution_outcome_policy(simulation, execution_state)
         existing = db.get(RecommendationOutcome, rec.recommendation_id)
-        if existing is not None and not existing.calculation_version_id:
-            legacy_version_id = f"outv_{uuid.uuid4().hex}"
-            legacy_result = {
-                column.name: getattr(existing, column.name)
-                for column in RecommendationOutcome.__table__.columns
-                if column.name not in {"calculation_version_id", "entry_policy_id"}
-            }
-            db.add(RecommendationOutcomeVersion(
-                version_id=legacy_version_id,
-                recommendation_id=rec.recommendation_id,
-                calculation_version="legacy_projection_snapshot_v1",
-                entry_policy_id=existing.entry_policy_id or "legacy_mixed_entry_v1",
-                horizon_days=int(existing.horizon_days or horizon_days),
-                label_source=str(existing.label_source or "legacy"),
-                result_json=json.dumps(legacy_result, ensure_ascii=False, sort_keys=True, default=str),
-            ))
         version_id = f"outv_{uuid.uuid4().hex}"
         calculation_version = "outcome_simulation_v1"
-        entry_policy_id = str(simulation.get("entry_policy_id") or "legacy_mixed_entry_v1")
+        entry_policy_id = str(simulation["entry_policy_id"])
         db.add(RecommendationOutcomeVersion(
             version_id=version_id,
             recommendation_id=rec.recommendation_id,
@@ -483,7 +461,7 @@ def recompute_stale_outcomes(
         stmt = stmt.limit(limit)
     recs = db.scalars(stmt).unique().all()
     if not recs:
-        return {"recomputed": 0, "errors": 0}
+        return {"recomputed": 0, "errors": 0, "flipped": {}}
 
     bars_by_code, dates_by_code = _load_outcome_bars(db, recs)
     execution_states = _load_execution_states(db, recs)
@@ -1736,16 +1714,24 @@ def _precision_at_k(
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
         .outerjoin(RecommendationOutcome, RecommendationOutcome.recommendation_id == Recommendation.recommendation_id)
     )
-    if run_mode:
+    uses_official_scope = run_mode == OFFICIAL_RUN_MODE and live_only
+    if uses_official_scope:
+        stmt = stmt.where(*official_sample_conditions())
+    elif run_mode:
         if isinstance(run_mode, (list, tuple, set)):
-            stmt = stmt.where(RecommendationRun.run_mode.in_(tuple(str(m) for m in run_mode)))
+            stmt = stmt.where(
+                RecommendationRun.run_mode.in_(tuple(str(m) for m in run_mode))
+            )
         else:
             stmt = stmt.where(RecommendationRun.run_mode == str(run_mode))
-    if live_only:
+    if live_only and not uses_official_scope:
         stmt = stmt.where(
-            Recommendation.recommendation_id.like(f"{OFFICIAL_RECOMMENDATION_PREFIX}%")
+            Recommendation.recommendation_id.like(
+                f"{OFFICIAL_RECOMMENDATION_PREFIX}%"
+            )
         )
-    stmt = stmt.where(RecommendationRun.status == "completed")
+    if not uses_official_scope:
+        stmt = stmt.where(RecommendationRun.status == "completed")
     if start_date:
         stmt = stmt.where(Recommendation.trade_date >= start_date)
     if end_date:

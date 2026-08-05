@@ -4,15 +4,11 @@
 """
 from __future__ import annotations
 
-import logging
-import warnings
 from datetime import datetime
 from types import SimpleNamespace
 
 from sqlalchemy import select
-from sqlalchemy.exc import SAWarning
 
-from app.core.production_hardening_flags import RolloutMode
 from app.models.tables import Recommendation, RecommendationRun
 from app.services.evidence.identity import PROVENANCE_SCHEMA_VERSION, EvidenceClass
 from app.services.evidence.selectors import (
@@ -24,7 +20,6 @@ from app.services.recommendations.projection import (
     serialize_recommendation,
     serialize_run_summary,
 )
-from app.services.workbench_service import _maybe_log_evidence_projection_shadow
 
 
 def _complete_live_values(**overrides):
@@ -211,57 +206,3 @@ def test_projection_serializes_evidence_identity_in_slim_full_and_run_summary():
     assert summary["evidence_class"] == EvidenceClass.HISTORICAL_RECONSTRUCTION.value
     assert summary["actual_generated_at"] == "2098-01-08T02:03:04.567890"
     assert summary["reconstruction_batch_id"] == "batch-s1-projection"
-
-
-def test_shadow_divergence_uses_filtered_join_without_cartesian_product(db, caplog):
-    code = "989003"
-    legacy_only = _run(
-        "run_s1_shadow_legacy_only",
-        evidence_class=None,
-        actual_generated_at=None,
-        evidence_identity_hash=None,
-        strategy_policy_fingerprint=None,
-        execution_policy_fingerprint=None,
-        code_revision=None,
-        provenance_schema_version=None,
-    )
-    unified_only = _run(
-        "run_s1_shadow_unified_only",
-        evaluation_scope="experiment",
-    )
-    both = _run("run_s1_shadow_both")
-    rows = [
-        legacy_only,
-        unified_only,
-        both,
-        _recommendation("rec_s1_shadow_legacy", legacy_only.run_id, code=code),
-        _recommendation("rec_s1_shadow_unified", unified_only.run_id, code=code),
-        _recommendation("rec_s1_shadow_both", both.run_id, code=code),
-    ]
-    db.add_all(rows)
-    db.flush()
-    base_stmt = (
-        select(Recommendation.recommendation_id)
-        .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
-        .where(Recommendation.code == code)
-    )
-
-    caplog.set_level(logging.INFO, logger="app.services.workbench_service")
-    with warnings.catch_warnings(record=True) as captured:
-        warnings.simplefilter("always", SAWarning)
-        _maybe_log_evidence_projection_shadow(db, RolloutMode.SHADOW, base_stmt)
-
-    assert not [
-        warning
-        for warning in captured
-        if "cartesian product" in str(warning.message).lower()
-    ]
-    message = next(
-        record.getMessage()
-        for record in caplog.records
-        if "history predicate divergence" in record.getMessage()
-    )
-    assert "divergence=2" in message
-    assert "legacy_hits=2" in message
-    assert "unified_hits=2" in message
-    assert "both_hits=1" in message

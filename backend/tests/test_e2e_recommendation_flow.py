@@ -691,8 +691,15 @@ class TestE2ERecommendationFlow:
             # official 样本口径（official_sample_conditions）：live_forward +
             # data_as_of + source_snapshot_id，否则 stats 按 official 口径统计为 0。
             evaluation_scope="live_forward",
+            evidence_class="live_forward",
             data_as_of="2026-05-12",
             source_snapshot_id="snap_stats_test",
+            actual_generated_at=datetime(2026, 5, 12, 8, 0, 0),
+            evidence_identity_hash="d" * 64,
+            strategy_policy_fingerprint="a" * 64,
+            execution_policy_fingerprint="b" * 64,
+            code_revision="c" * 40,
+            provenance_schema_version=1,
         )
         db.add(run)
         db.flush()
@@ -742,8 +749,10 @@ class TestE2ERecommendationFlow:
         db.commit()
 
         import app.services.stats_service as stats_service
+        from app.services.outcome_service import invalidate_outcome_metrics_cache
 
         stats_service._stats_cache.clear()
+        invalidate_outcome_metrics_cache()
         stats = get_overview_stats(db)
         assert stats is not None
         assert stats["run_count"] >= 1
@@ -767,9 +776,16 @@ class TestE2ERecommendationFlow:
                 run_name="正式统计测试",
                 run_mode="formal",
                 evaluation_scope="live_forward",
+                evidence_class="live_forward",
                 trade_date=scope_date,
                 data_as_of=scope_date,
                 source_snapshot_id=f"snapshot_{suffix}",
+                actual_generated_at=datetime(2099, 1, 1, 6, 0),
+                evidence_identity_hash="d" * 64,
+                strategy_policy_fingerprint="a" * 64,
+                execution_policy_fingerprint="b" * 64,
+                code_revision="c" * 40,
+                provenance_schema_version=1,
                 universe_count=10,
                 market_scope="all",
                 risk_template="balanced",

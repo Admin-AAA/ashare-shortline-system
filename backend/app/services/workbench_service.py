@@ -82,12 +82,8 @@ from app.services.official_sample_scope import (
     official_sample_conditions,
     recommendation_history_conditions,
 )
-from app.core.production_hardening_flags import (
-    ProductionHardeningFeature,
-    ProductionHardeningFlags,
-    RolloutMode,
-)
 from app.services.evidence.selectors import (
+    historical_reconstruction_provenance_conditions,
     historical_reconstruction_run_conditions,
     live_forward_run_conditions,
 )
@@ -327,23 +323,35 @@ def _mark_run_dispatched(db: Session, run_id: str) -> bool:
 
 
 def _select_latest_bootstrap_run(db: Session) -> RecommendationRun | None:
-    """驾驶舱「最近产出」卡片选中的 run：正式推荐（live_forward）优先。
-
-    与 dashboard._select_dashboard_run 同语义（L-045）：REPLAY/历史补跑 run
-    （evaluation_scope=historical_replay）按 started_at 会排在当日正式推荐之前，
-    若只取 started_at 最新会顶掉正式 run，用户看到「最近产出」是回放验证而非当日
-    正式推荐。排序：live_forward 优先 → trade_date 新优先 → completed 优先 → started_at。
-    """
+    """Prefer active formal work, otherwise the newest canonical completed run."""
+    canonical_completed = or_(
+        and_(
+            RecommendationRun.run_mode == "formal",
+            RecommendationRun.status == "completed",
+            *live_forward_run_conditions(),
+        ),
+        and_(
+            RecommendationRun.run_mode == "formal",
+            RecommendationRun.status == "completed",
+            *historical_reconstruction_provenance_conditions(),
+            RecommendationRun.data_as_of <= RecommendationRun.trade_date,
+        ),
+    )
     return db.scalar(
         select(RecommendationRun)
+        .where(
+            or_(
+                and_(
+                    RecommendationRun.run_mode == "formal",
+                    RecommendationRun.status.in_(RUN_ACTIVE_STATUSES),
+                ),
+                canonical_completed,
+            )
+        )
         .order_by(
-            case((RecommendationRun.evaluation_scope == "live_forward", 0), else_=1),
+            case((RecommendationRun.status.in_(RUN_ACTIVE_STATUSES), 0), else_=1),
+            case((RecommendationRun.evidence_class == "live_forward", 0), else_=1),
             RecommendationRun.trade_date.desc(),
-            case(
-                (RecommendationRun.status == "completed", 0),
-                (RecommendationRun.status.in_(RUN_ACTIVE_STATUSES), 1),
-                else_=2,
-            ),
             RecommendationRun.started_at.desc(),
         )
         .limit(1)
@@ -656,8 +664,7 @@ def list_dashboard_recommendations(
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
         .where(
             RecommendationRun.trade_date == trade_date,
-            RecommendationRun.status == "completed",
-            RecommendationRun.run_mode == "formal",
+            *recommendation_history_conditions(),
         )
         .order_by(
             Recommendation.final_score.desc(),
@@ -707,51 +714,6 @@ def _list_recommendation_setup_types(db: Session) -> list[str]:
     return [str(value).strip() for value in values if str(value or "").strip()]
 
 
-def _maybe_log_evidence_projection_shadow(
-    db: Session,
-    mode: RolloutMode,
-    base_stmt,
-) -> None:
-    """evidence_projection shadow/audit 对比：只写 divergence 日志，不改变任何结果。
-
-    ``base_stmt`` 是已施加用户筛选（code/date/bucket/setup_type/strategy/label）
-    但未施加任何证据资格条件的候选集；legacy 历史页条件命中数、统一 predicate
-    命中数及两者交集在同一条聚合查询中计算。legacy 结果始终权威；本函数只在
-    shadow/audit 模式下被调用，legacy 模式零额外查询。
-    """
-    if mode not in (RolloutMode.SHADOW, RolloutMode.AUDIT):
-        return
-    legacy_condition = and_(*recommendation_history_conditions())
-    unified_condition = or_(
-        and_(*live_forward_run_conditions()),
-        and_(*historical_reconstruction_run_conditions()),
-    )
-    both_condition = and_(legacy_condition, unified_condition)
-    count_stmt = base_stmt.with_only_columns(
-        func.coalesce(func.sum(case((legacy_condition, 1), else_=0)), 0),
-        func.coalesce(func.sum(case((unified_condition, 1), else_=0)), 0),
-        func.coalesce(func.sum(case((both_condition, 1), else_=0)), 0),
-        maintain_column_froms=True,
-    ).order_by(None)
-    legacy_hits, unified_hits, both_hits = (
-        int(value or 0) for value in db.execute(count_stmt).one()
-    )
-    legacy_only = legacy_hits - both_hits
-    unified_only = unified_hits - both_hits
-    divergence = legacy_only + unified_only
-    logger.info(
-        "evidence_projection %s: history predicate divergence=%d "
-        "(legacy_hits=%d unified_hits=%d both_hits=%d legacy_only=%d unified_only=%d)",
-        mode.value if isinstance(mode, RolloutMode) else str(mode),
-        divergence,
-        legacy_hits,
-        unified_hits,
-        both_hits,
-        legacy_only,
-        unified_only,
-    )
-
-
 def list_recommendation_history(
     db: Session,
     *,
@@ -765,7 +727,6 @@ def list_recommendation_history(
     strategy_version_id: str | None = None,
     limit: int = 50,
     offset: int = 0,
-    hardening_flags: ProductionHardeningFlags | None = None,
 ) -> dict[str, Any]:
     """正式运行推荐历史（带 outcome），支持分页 + 筛选。
 
@@ -838,33 +799,11 @@ def list_recommendation_history(
             Recommendation.final_score,
         )
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
-        .where(
-            or_(
-                and_(*recommendation_history_conditions()),
-                and_(
-                    RecommendationRun.run_name == "REPLAY-全量重放",
-                    RecommendationRun.status == "completed",
-                ),
-            )
-        )
+        .where(*recommendation_history_conditions())
         .order_by(Recommendation.trade_date.desc(), Recommendation.final_score.desc())
     )
 
     id_rows = db.execute(id_stmt).all()
-
-    # evidence_projection shadow/audit：并行计算统一 predicate 命中集合，仅写
-    # divergence 日志；legacy（历史页既有条件）结果保持权威。legacy/enforced
-    # 模式直接短路，不产生任何额外查询。
-    evidence_projection_mode = (
-        hardening_flags or ProductionHardeningFlags.from_settings(get_settings())
-    ).mode_for(ProductionHardeningFeature.EVIDENCE_PROJECTION)
-    if evidence_projection_mode in (RolloutMode.SHADOW, RolloutMode.AUDIT):
-        shadow_base_stmt = _apply_history_filters(
-            select(Recommendation.recommendation_id).join(
-                RecommendationRun, RecommendationRun.run_id == Recommendation.run_id
-            )
-        )
-        _maybe_log_evidence_projection_shadow(db, evidence_projection_mode, shadow_base_stmt)
 
     seen: set[tuple[str, str]] = set()
     deduped_ids: list[str] = []

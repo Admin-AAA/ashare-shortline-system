@@ -37,6 +37,7 @@ def _add_settled_recommendation(
     final_score: float = 80.0,
     executed_return: float = 1.0,
     data_as_of: str | None = None,
+    evidence_class: str = "live_forward",
 ) -> None:
     run_id = f"test_official_scope_run_{suffix}"
     recommendation_id = f"rec_test_official_scope_{suffix}"
@@ -49,6 +50,13 @@ def _add_settled_recommendation(
             trade_date=trade_date,
             data_as_of=data_as_of or trade_date,
             source_snapshot_id=f"snapshot_{suffix}",
+            evidence_class=evidence_class,
+            actual_generated_at=recommended_at,
+            evidence_identity_hash="d" * 64,
+            strategy_policy_fingerprint="a" * 64,
+            execution_policy_fingerprint="b" * 64,
+            code_revision="c" * 40,
+            provenance_schema_version=1,
             status=run_status,
         )
     )
@@ -154,6 +162,7 @@ def test_history_excludes_recommendations_generated_after_the_claimed_trade_date
         run_status="completed",
         trade_date="2099-01-04",
         recommended_at=datetime(2099, 1, 5, 6, 0),
+        evidence_class="unverified",
     )
     invalidate_recommendation_history_cache()
 

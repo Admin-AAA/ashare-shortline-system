@@ -16,6 +16,7 @@ from app.models.tables import Recommendation, RecommendationRun
 from app.services.evidence.selectors import (
     OFFICIAL_RECOMMENDATION_PREFIX,
     historical_reconstruction_run_conditions,
+    live_forward_run_conditions,
 )
 
 
@@ -40,25 +41,12 @@ def evaluation_scope_for_run(
 
 
 def official_sample_conditions() -> tuple:
-    """Return the complete eligibility contract for official live metrics.
-
-    ``recommended_at`` is stored as naive UTC.  A historical replay commonly
-    reuses an earlier ``trade_date`` while being generated days later.  Such a
-    row is useful for research, but it is not forward evidence and must not
-    enter a user-facing live win rate.
-    """
-    beijing_generation_date = func.date(
-        func.date_add(Recommendation.recommended_at, text("INTERVAL 8 HOUR"))
-    )
+    """Canonical LIVE_FORWARD eligibility for current demo metrics."""
     return (
         RecommendationRun.run_mode == "formal",
-        RecommendationRun.evaluation_scope == LIVE_FORWARD_SCOPE,
         RecommendationRun.status == "completed",
-        RecommendationRun.data_as_of.is_not(None),
-        RecommendationRun.data_as_of <= Recommendation.trade_date,
-        RecommendationRun.source_snapshot_id.is_not(None),
+        *live_forward_run_conditions(),
         Recommendation.recommendation_id.like(f"{OFFICIAL_RECOMMENDATION_PREFIX}%"),
-        beijing_generation_date == Recommendation.trade_date,
     )
 
 

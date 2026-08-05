@@ -10,6 +10,8 @@ import pytest
 
 from app.engine.backtest import BarInput, ExecutionPolicy, RecommendationInput
 from app.engine.execution_core import (
+    CausalEntryBar,
+    CausalEntryConfig,
     CausalExitConfig,
     CausalExitResult,
     ExecutionBar,
@@ -18,6 +20,7 @@ from app.engine.execution_core import (
     ExecutionStatus,
     compose_position_caps,
     execute_trade,
+    resolve_causal_entry,
     resolve_causal_exit,
 )
 from app.engine.execution_policy import (
@@ -53,6 +56,85 @@ def _request(*bars: ExecutionBar) -> ExecutionRequest:
         intent=ExecutionIntent("000001", "2026-06-01", 100.0, "rec-core-t1"),
         bars=tuple(bars),
     )
+
+
+
+
+def _entry_config(**overrides) -> CausalEntryConfig:
+    values = {
+        "policy_id": "causal_strategy_entry_v1",
+        "price_source": "intraday_snapshot_or_postclose_target",
+        "signal_date": "2026-06-01",
+        "recommendation_price": 10.0,
+        "intraday": False,
+        "target_prices": (9.8,),
+        "max_entry_trade_days": 2,
+        "horizon_days": 5,
+        "allow_target_touch": True,
+        "fallback_to_open_when_targets_miss": False,
+        "entry_slippage_bps": 10.0,
+    }
+    values.update(overrides)
+    return CausalEntryConfig(**values)
+
+
+def test_canonical_entry_core_owns_target_touch_and_slippage():
+    decision = resolve_causal_entry(
+        (
+            CausalEntryBar("000001", "2026-06-02", 10.0, 9.7, 9.9),
+            CausalEntryBar("000001", "2026-06-03", 10.1, 9.9, 10.0),
+        ),
+        _entry_config(),
+    )
+
+    assert decision.triggered is True
+    assert decision.trade_date == "2026-06-02"
+    assert decision.raw_price == pytest.approx(9.8)
+    assert decision.executed_price == pytest.approx(9.8098)
+    assert decision.reason == "buy_target_touched"
+
+
+def test_canonical_entry_core_owns_intraday_snapshot_entry():
+    decision = resolve_causal_entry(
+        (),
+        _entry_config(
+            intraday=True,
+            recommendation_price=10.35,
+            target_prices=(),
+        ),
+    )
+
+    assert decision.triggered is True
+    assert decision.trade_date == "2026-06-01"
+    assert decision.raw_price == pytest.approx(10.35)
+    assert decision.executed_price == pytest.approx(10.36035)
+    assert decision.reason == "intraday_recommend_price_entry"
+
+
+def test_canonical_entry_core_rejects_unreached_target_without_fallback():
+    decision = resolve_causal_entry(
+        (CausalEntryBar("000001", "2026-06-02", 10.2, 10.1, 10.15),),
+        _entry_config(),
+    )
+
+    assert decision.triggered is False
+    assert "未触发目标买点" in decision.reason
+
+
+def test_canonical_entry_core_owns_max_entry_gap_rejection():
+    decision = resolve_causal_entry(
+        (CausalEntryBar("000001", "2026-06-02", 11.2, 11.1, 11.15),),
+        _entry_config(
+            target_prices=(),
+            fallback_to_open_when_targets_miss=True,
+            recommendation_price=10.0,
+            max_entry_gap_pct=10.0,
+        ),
+    )
+
+    assert decision.triggered is False
+    assert decision.reason == "gap_up_blocked"
+    assert decision.observed_gap_pct == pytest.approx(12.0)
 
 
 def _bar(date: str, *, open=100.0, high=101.0, low=99.0, close=100.0, sellable=True):

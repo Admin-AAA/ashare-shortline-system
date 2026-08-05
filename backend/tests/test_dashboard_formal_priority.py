@@ -2,7 +2,7 @@
 
 回归防护：_select_dashboard_recommendation_run 旧逻辑按 finished_at 排序、不区分
 run_mode，导致 experiment run 完成更晚的交易日(07-07/07-03)落地页展示 experiment
-推荐而非官方 formal 推送。修复后：formal 优先，无 formal 才回退到任意 completed run。
+推荐而非官方 canonical formal 推送。修复后：只在 canonical completed run 集合中选择。
 """
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -36,23 +36,23 @@ def test_select_prefers_formal_over_later_experiment(monkeypatch):
     assert db.scalar.call_count == 1, "formal 命中后不应再发起回退查询"
 
 
-def test_fallback_to_any_completed_when_no_formal(monkeypatch):
-    """该交易日无 formal 完成时才回退到最新的 completed run（experiment）。"""
+def test_fallback_to_canonical_empty_run_when_no_run_has_recommendations(monkeypatch):
+    """无有推荐run时，可返回同一canonical集合中的空结果run。"""
     monkeypatch.setattr(dashboard_mod, "_latest_dashboard_trade_date", lambda db: "2026-07-07")
-    experiment = _fake_run("run_exp", "experiment", "2026-07-07 02:42:47")
+    canonical_empty = _fake_run("run_formal_empty", "formal", "2026-07-07 02:42:47")
     db = MagicMock()
-    db.scalar = MagicMock(side_effect=[None, experiment])
+    db.scalar = MagicMock(side_effect=[None, canonical_empty])
 
     result = dashboard_mod._select_dashboard_recommendation_run(db)
 
-    assert result is experiment, "无 formal 时应回退到最新的 completed run"
+    assert result is canonical_empty
     assert db.scalar.call_count == 2
 
 
 def test_returns_none_when_no_completed_run(monkeypatch):
     monkeypatch.setattr(dashboard_mod, "_latest_dashboard_trade_date", lambda db: "2026-07-07")
     db = MagicMock()
-    db.scalar = MagicMock(side_effect=[None, None, None])
+    db.scalar = MagicMock(side_effect=[None, None])
 
     assert dashboard_mod._select_dashboard_recommendation_run(db) is None
-    assert db.scalar.call_count == 3
+    assert db.scalar.call_count == 2

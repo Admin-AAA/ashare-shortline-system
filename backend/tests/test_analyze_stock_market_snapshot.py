@@ -6,9 +6,14 @@ LLM 系统性把主线票判 veto/冰点。修复后同 trade_date 的 formal sn
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from types import SimpleNamespace
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
 from app.services.single_stock_analysis import _resolve_analysis_market_snapshot
+from app.models.tables import RecommendationRun
 
 
 class _FakeResult:
@@ -76,3 +81,61 @@ def test_resolve_rejects_tiny_formal_snapshot():
     )
     assert source == "minimal_fallback"
     assert out["breadth"]["regime"] == "未知"
+
+
+def test_resolve_snapshot_sql_excludes_newer_unverified_run():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    RecommendationRun.__table__.create(engine)
+    canonical_snapshot = {
+        "sample_count": 500,
+        "breadth": {"regime": "偏多"},
+        "trade_date": "2099-03-01",
+    }
+    unverified_snapshot = {
+        "sample_count": 999,
+        "breadth": {"regime": "伪造"},
+        "trade_date": "2099-03-01",
+    }
+    with Session(engine) as db:
+        db.add_all(
+            [
+                RecommendationRun(
+                    run_id="single_snapshot_canonical",
+                    run_name="canonical snapshot",
+                    run_mode="formal",
+                    trade_date="2099-03-01",
+                    status="completed",
+                    evidence_class="live_forward",
+                    data_as_of="2099-03-01",
+                    source_snapshot_id="single-snapshot",
+                    actual_generated_at=datetime(2099, 3, 1, 6, 0),
+                    evidence_identity_hash="d" * 64,
+                    strategy_policy_fingerprint="a" * 64,
+                    execution_policy_fingerprint="b" * 64,
+                    code_revision="c" * 40,
+                    provenance_schema_version=1,
+                    market_snapshot_json=json.dumps(canonical_snapshot),
+                    started_at=datetime(2099, 3, 1, 6, 0),
+                ),
+                RecommendationRun(
+                    run_id="single_snapshot_unverified",
+                    run_name="unverified snapshot",
+                    run_mode="formal",
+                    trade_date="2099-03-01",
+                    status="completed",
+                    market_snapshot_json=json.dumps(unverified_snapshot),
+                    started_at=datetime(2099, 3, 1, 7, 0),
+                ),
+            ]
+        )
+        db.commit()
+
+        snapshot, source = _resolve_analysis_market_snapshot(
+            db,
+            "2099-03-01",
+            {"code": "002241", "price": 10.0},
+        )
+
+    assert source == "formal_run_snapshot"
+    assert snapshot["sample_count"] == 500
+    assert snapshot["breadth"]["regime"] == "偏多"

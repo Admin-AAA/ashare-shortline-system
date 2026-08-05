@@ -98,6 +98,63 @@ class EntryDecision(CanonicalValue):
     raw_price: float | None
     executed_price: float | None
     reason: str
+    observed_gap_pct: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CausalEntryBar(CanonicalValue):
+    code: str
+    trade_date: str
+    open: float
+    low: float
+    close: float
+    block_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.code or not self.trade_date:
+            raise CanonicalExecutionError("entry bar identity must be non-empty")
+        for name in ("open", "low", "close"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise CanonicalExecutionError(f"entry bar {name} must be numeric")
+            object.__setattr__(self, name, float(value))
+
+
+@dataclass(frozen=True, slots=True)
+class CausalEntryConfig(CanonicalValue):
+    policy_id: str
+    price_source: str
+    signal_date: str
+    recommendation_price: float
+    intraday: bool
+    target_prices: tuple[float, ...]
+    max_entry_trade_days: int
+    horizon_days: int
+    allow_target_touch: bool
+    fallback_to_open_when_targets_miss: bool
+    entry_slippage_bps: float
+    max_entry_gap_pct: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.price_source not in {
+            "open",
+            "intraday_snapshot_or_postclose_target",
+        }:
+            raise CanonicalExecutionError(
+                f"unsupported canonical entry price_source: {self.price_source}"
+            )
+        if not self.policy_id or not self.signal_date:
+            raise CanonicalExecutionError(
+                "entry policy_id and signal_date must be non-empty"
+            )
+        if self.max_entry_trade_days < 1 or self.horizon_days < 1:
+            raise CanonicalExecutionError("entry windows must be positive")
+        if self.recommendation_price < 0:
+            raise CanonicalExecutionError("recommendation_price cannot be negative")
+        if self.max_entry_gap_pct is not None and self.max_entry_gap_pct < 0:
+            raise CanonicalExecutionError("max_entry_gap_pct cannot be negative")
+        targets = tuple(float(value) for value in self.target_prices if value > 0)
+        object.__setattr__(self, "target_prices", targets)
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,6 +351,133 @@ def _ordered_bars(request: ExecutionRequest) -> tuple[ExecutionBar, ...]:
             "bars must not contain duplicate dates for the intent code"
         )
     return tuple(sorted(bars, key=lambda bar: bar.trade_date))
+
+
+def _entry_not_triggered_reason(
+    blocked_reasons: list[str], *, has_targets: bool
+) -> str:
+    unique_reasons = list(dict.fromkeys(blocked_reasons))
+    if unique_reasons:
+        return "；".join(unique_reasons[:2])
+    if has_targets:
+        return "观察期内未触发目标买点，未建仓"
+    return "观察期内无可成交行情，未建仓"
+
+
+def resolve_causal_entry(
+    candidate_bars: Iterable[CausalEntryBar],
+    config: CausalEntryConfig,
+) -> EntryDecision:
+    """Resolve the canonical entry decision for formal outcome projection."""
+    bars = tuple(candidate_bars)
+    if any(bar.code != bars[0].code for bar in bars[1:]):
+        raise CanonicalExecutionError("entry bars must belong to one code")
+
+    def decision(index: int, trade_date: str, raw_price: float, reason: str) -> EntryDecision:
+        if config.recommendation_price > 0 and config.max_entry_gap_pct is not None:
+            gap_pct = (
+                (raw_price - config.recommendation_price)
+                / config.recommendation_price
+                * 100
+            )
+            if gap_pct > config.max_entry_gap_pct:
+                return EntryDecision(
+                    False,
+                    None,
+                    None,
+                    None,
+                    None,
+                    "gap_up_blocked",
+                    gap_pct,
+                )
+        executed_price = round(
+            raw_price * (1 + config.entry_slippage_bps / 10_000), 10
+        )
+        return EntryDecision(
+            True,
+            index,
+            trade_date,
+            raw_price,
+            executed_price,
+            reason,
+        )
+
+    if config.price_source == "open":
+        if not bars:
+            return EntryDecision(
+                False, None, None, None, None,
+                "下一交易日行情缺失，无法确认成交",
+            )
+        bar = bars[0]
+        if bar.block_reason:
+            return EntryDecision(False, None, None, None, None, bar.block_reason)
+        raw_price = bar.open
+        if raw_price <= 0:
+            return EntryDecision(
+                False, None, None, None, None,
+                "下一交易日开盘价无效，无法真实成交",
+            )
+        return decision(0, bar.trade_date, raw_price, "next_trading_day_open_entry")
+
+    if config.intraday:
+        if config.recommendation_price <= 0:
+            return EntryDecision(
+                False, None, None, None, None,
+                "盘中推荐价无效，无法确认成交",
+            )
+        return decision(
+            0,
+            config.signal_date,
+            config.recommendation_price,
+            "intraday_recommend_price_entry",
+        )
+
+    lookahead = max(
+        1,
+        min(config.max_entry_trade_days, config.horizon_days, len(bars)),
+    )
+    entry_window = bars[:lookahead]
+    blocked_reasons: list[str] = []
+    if config.allow_target_touch:
+        for index, bar in enumerate(entry_window):
+            for target in config.target_prices:
+                if bar.low <= target:
+                    if bar.block_reason:
+                        blocked_reasons.append(bar.block_reason)
+                        continue
+                    raw_price = min(bar.open, target) if bar.open > 0 else target
+                    return decision(index, bar.trade_date, raw_price, "buy_target_touched")
+
+    has_targets = bool(config.target_prices)
+    if has_targets and not config.fallback_to_open_when_targets_miss:
+        return EntryDecision(
+            False,
+            None,
+            None,
+            None,
+            None,
+            _entry_not_triggered_reason(blocked_reasons, has_targets=True),
+        )
+
+    for index, bar in enumerate(entry_window):
+        if bar.block_reason:
+            blocked_reasons.append(bar.block_reason)
+            continue
+        raw_price = bar.open or bar.close
+        if raw_price <= 0:
+            blocked_reasons.append("入场日价格无效，无法真实成交")
+            continue
+        reason = "next_open_fallback_entry（买点未命中，市价入场）" if has_targets else "next_open_entry"
+        return decision(index, bar.trade_date, raw_price, reason)
+
+    return EntryDecision(
+        False,
+        None,
+        None,
+        None,
+        None,
+        _entry_not_triggered_reason(blocked_reasons, has_targets=has_targets),
+    )
 
 
 def _resolve_entry(

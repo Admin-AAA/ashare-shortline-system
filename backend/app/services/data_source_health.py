@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.tables import (
@@ -21,6 +21,10 @@ from app.models.tables import (
     RecommendationRun,
     SkillRegistry,
     StockQuote,
+)
+from app.services.evidence.selectors import (
+    historical_reconstruction_provenance_conditions,
+    live_forward_run_conditions,
 )
 
 
@@ -56,7 +60,17 @@ def active_alerts(db: Session) -> list[dict[str, Any]]:
     # 最近一次推荐运行是否在 24 小时内
     latest_run = db.scalar(
         select(RecommendationRun)
-        .where(RecommendationRun.status == "completed")
+        .where(
+            RecommendationRun.run_mode == "formal",
+            RecommendationRun.status == "completed",
+            or_(
+                and_(*live_forward_run_conditions()),
+                and_(
+                    *historical_reconstruction_provenance_conditions(),
+                    RecommendationRun.data_as_of <= RecommendationRun.trade_date,
+                ),
+            ),
+        )
         .order_by(RecommendationRun.finished_at.desc())
     )
     if latest_run and latest_run.finished_at:

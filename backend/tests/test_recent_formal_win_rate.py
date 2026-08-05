@@ -40,6 +40,13 @@ def _add_formal_recommendation(db, *, trade_date, suffix, outcome_label=None, ex
         trade_date=trade_date,
         data_as_of=trade_date,
         source_snapshot_id=f"snapshot_recent_{suffix}",
+        evidence_class="live_forward",
+        actual_generated_at=datetime.fromisoformat(f"{trade_date}T06:00:00"),
+        evidence_identity_hash="d" * 64,
+        strategy_policy_fingerprint="a" * 64,
+        execution_policy_fingerprint="b" * 64,
+        code_revision="c" * 40,
+        provenance_schema_version=1,
         status="completed",
     ))
     db.add(Recommendation(

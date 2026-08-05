@@ -15,12 +15,12 @@ BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 class Settings(BaseSettings):
     # Production hardening paths are deliberately independent. Safe defaults
     # compute/observe new behavior without making it authoritative.
-    hardening_evidence_projection_mode: RolloutMode = RolloutMode.SHADOW
-    hardening_canonical_execution_mode: RolloutMode = RolloutMode.SHADOW
-    hardening_release_gate_mode: RolloutMode = RolloutMode.AUDIT
-    hardening_portfolio_risk_mode: RolloutMode = RolloutMode.SHADOW
-    hardening_scheduler_claim_mode: RolloutMode = RolloutMode.SHADOW
-    hardening_dashboard_refresh_mode: RolloutMode = RolloutMode.SHADOW
+    hardening_evidence_projection_mode: RolloutMode = RolloutMode.ENFORCED
+    hardening_canonical_execution_mode: RolloutMode = RolloutMode.ENFORCED
+    hardening_release_gate_mode: RolloutMode = RolloutMode.ENFORCED
+    hardening_portfolio_risk_mode: RolloutMode = RolloutMode.ENFORCED
+    hardening_scheduler_claim_mode: RolloutMode = RolloutMode.ENFORCED
+    hardening_dashboard_refresh_mode: RolloutMode = RolloutMode.ENFORCED
 
     app_name: str = "AShare Shortline System"
     database_url: str = "mysql+pymysql://aowang@127.0.0.1:3306/ashare_workbench?charset=utf8mb4"

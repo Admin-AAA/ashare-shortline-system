@@ -41,12 +41,12 @@ class HardeningFlagSettings(Protocol):
 class ProductionHardeningFlags:
     """Immutable snapshot of independently deployable hardening paths."""
 
-    evidence_projection: RolloutMode = RolloutMode.SHADOW
-    canonical_execution: RolloutMode = RolloutMode.SHADOW
-    release_gate: RolloutMode = RolloutMode.AUDIT
-    portfolio_risk: RolloutMode = RolloutMode.SHADOW
-    scheduler_claim: RolloutMode = RolloutMode.SHADOW
-    dashboard_refresh: RolloutMode = RolloutMode.SHADOW
+    evidence_projection: RolloutMode = RolloutMode.ENFORCED
+    canonical_execution: RolloutMode = RolloutMode.ENFORCED
+    release_gate: RolloutMode = RolloutMode.ENFORCED
+    portfolio_risk: RolloutMode = RolloutMode.ENFORCED
+    scheduler_claim: RolloutMode = RolloutMode.ENFORCED
+    dashboard_refresh: RolloutMode = RolloutMode.ENFORCED
 
     @classmethod
     def from_settings(cls, settings: HardeningFlagSettings) -> Self:

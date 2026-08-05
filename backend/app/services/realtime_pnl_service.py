@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.engine.trading_calendar import latest_allowed_quote_date, normalize_trade_date
 from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun
+from app.services.official_sample_scope import official_sample_conditions
 from app.services.outcome_simulation import (
     MAX_ENTRY_GAP_PCT,
     OUTCOME_PENDING,
@@ -126,7 +127,7 @@ def _load_pending_recs(db: Session) -> list[Recommendation]:
             RecommendationOutcome.recommendation_id == Recommendation.recommendation_id,
         )
         .where(
-            RecommendationRun.run_mode == "formal",
+            *official_sample_conditions(),
             or_(
                 RecommendationOutcome.recommendation_id.is_(None),
                 RecommendationOutcome.outcome_label.in_((OUTCOME_PENDING, OUTCOME_PROVISIONAL)),
@@ -304,22 +305,17 @@ def _compute_one(
     ] + [today_bar]
     feature_snapshot = _loads(getattr(rec, "feature_snapshot_json", None), {})
 
-    if intraday:
-        entry_price = _f(getattr(rec, "recommend_price", None))
-        if entry_price <= 0:
-            return {**base, "status": "unavailable", "reason": "盘中推荐价无效"}
-        entry = {
-            "triggered": True,
-            "price": entry_price,
-            "date": signal_date,
-            "reason": "intraday_recommend_price_entry",
-        }
-    else:
-        try:
-            entry = _resolve_entry(rec, feature_snapshot, future_bars, 5, signal_bar=signal_bar)
-        except Exception as exc:
-            logger.warning("实时盈亏入场判定失败 %s: %s", rec.code, str(exc)[:160])
-            return {**base, "status": "unavailable", "reason": f"入场判定异常: {str(exc)[:80]}"}
+    try:
+        entry = _resolve_entry(
+            rec,
+            feature_snapshot,
+            future_bars,
+            5,
+            signal_bar=signal_bar,
+        )
+    except Exception as exc:
+        logger.warning("实时盈亏入场判定失败 %s: %s", rec.code, str(exc)[:160])
+        return {**base, "status": "unavailable", "reason": f"入场判定异常: {str(exc)[:80]}"}
 
     now_price = quote["close"]
     if not entry.get("triggered"):
@@ -329,10 +325,16 @@ def _compute_one(
             if t > 0
         ]
         nearest = min(targets, key=lambda t: abs(t - now_price)) if targets else None
+        reason = str(entry.get("reason") or "买点未触发")
+        if reason == "gap_up_blocked":
+            gap_pct = float(entry.get("observed_gap_pct") or 0.0)
+            reason = (
+                f"跳空高开 {gap_pct:.1f}% > {MAX_ENTRY_GAP_PCT:.0f}% 阈值，放弃入场"
+            )
         return {
             **base,
             "status": "watching",
-            "reason": str(entry.get("reason") or "买点未触发"),
+            "reason": reason,
             "now_price": now_price,
             "nearest_buy_target": nearest,
             "distance_to_target_pct": (
@@ -343,25 +345,9 @@ def _compute_one(
             "pre_close": quote.get("pre_close"),
         }
 
-    entry_price = _f(entry.get("price"))
+    entry_price = _f(entry.get("executed_price"))
     if entry_price <= 0:
         return {**base, "status": "unavailable", "reason": "入场价无效"}
-
-    # 跳空高开 > MAX_ENTRY_GAP_PCT 放弃入场：_simulate_outcome 的 gap 拦截在 _resolve_entry 之外，
-    # 实时路径只调 _resolve_entry 会绕过它（#3）。此处复用同一阈值补齐。
-    recommend_price = _f(getattr(rec, "recommend_price", None))
-    if recommend_price > 0 and entry_price > 0:
-        gap_pct = (entry_price - recommend_price) / recommend_price * 100
-        if gap_pct > MAX_ENTRY_GAP_PCT:
-            return {
-                **base,
-                "status": "watching",
-                "reason": f"跳空高开 {gap_pct:.1f}% > {MAX_ENTRY_GAP_PCT:.0f}% 阈值，放弃入场",
-                "now_price": now_price,
-                "day_high": quote["high"],
-                "day_low": quote["low"],
-                "pre_close": quote.get("pre_close"),
-            }
 
     # 跨除权修正：entry_price 来自推荐日附近，now_price 是今日现价，二者之间若发生除权，
     # 原始价格比值会算出虚假盈亏（10送10 显示 -50%）。用 pre_close 比值修正除权跳变（#4）。

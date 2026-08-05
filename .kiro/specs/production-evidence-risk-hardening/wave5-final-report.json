@@ -1,5 +1,75 @@
 {
   "code_revision": "9d81483b295532e12ed23b1a8e60fa5ffbab78f9",
+  "demo_canonical_only": {
+    "activated_at": "2026-08-05",
+    "scope": "LOCAL_DEMO_ONLY",
+    "decision_object_id": "demo_canonical_only_decision:sha256:8abebde2ae37ae416c86b69eaf46a67f10ab4a3a1525721520374d4174636e57",
+    "cleanup": {
+      "object_id": "demo_canonical_only_cleanup:sha256:b5a5a53e96e663f456f266d233982efd88961e7912c8ef53c7f06e4142c8c933",
+      "initial_cleanup_object_id": "demo_canonical_only_cleanup:sha256:113d7c42ccac03bd25d7571bafe57b6955fc3fd725f0312821fa3ae270bc81ab",
+      "scoped_audit_object_id": "demo_canonical_only_cleanup:sha256:00357dfea4e50748e9a318d42b829947eedbf19f83682a06a37276fcae69d9f5",
+      "scoped_api_call_logs_verification": {"before": 96, "after": 0, "unrelated_preserved": 8600},
+      "cleared": {
+        "recommendation_runs": 771,
+        "recommendations": 619,
+        "recommendation_outcomes": 619,
+        "recommendation_outcome_versions": 7967,
+        "classification_audits": 752,
+        "execution_states": 10,
+        "llm_review_cache": 7926
+      },
+      "preserved": {
+        "daily_kbars": 2140999,
+        "stock_quotes": 280115,
+        "market_snapshots": 710,
+        "backtest_runs_v2": 101,
+        "backtest_input_artifacts": 970,
+        "backtest_trades": 27166,
+        "alembic_version": 1
+      }
+    },
+    "canonical_rebuild": {
+      "run_id": "run_20260805_085515_e498ef",
+      "trade_date": "2026-07-22",
+      "status": "completed",
+      "recommendation_count": 5,
+      "historical_query_count": 5,
+      "live_selector_count": 0,
+      "evidence_class": "historical_reconstruction",
+      "provenance_complete": true
+    },
+    "flags": [
+      {"flag_id": "evidence_projection", "runtime_mode": "ENFORCED", "activation_state": "ACTIVE", "object_id": "demo_flag_activation:sha256:983c7c8218e721376035638d4f069adad277d145376150fcbf71cf392d35a0ad"},
+      {"flag_id": "canonical_execution", "runtime_mode": "ENFORCED", "activation_state": "ACTIVE", "object_id": "demo_flag_activation:sha256:997b58f8cc34d06e36392cd30b73303e9a0744e0160cafd71377ddc188e6a9c4"},
+      {"flag_id": "release_gate", "runtime_mode": "ENFORCED", "activation_state": "ACTIVE", "object_id": "demo_flag_activation:sha256:6f7218fc03289a6d30a8d1e3d31fb522e899eb418aed83c5bad431c6fe4f6075"},
+      {"flag_id": "portfolio_risk", "runtime_mode": "ENFORCED", "activation_state": "ACTIVE", "object_id": "demo_flag_activation:sha256:8624d8d9443cf03e30953cc81202c3ec892c5d76458b09acadbcb50aea8d225c"},
+      {"flag_id": "scheduler_claim", "runtime_mode": "ENFORCED", "activation_state": "ACTIVE", "object_id": "demo_flag_activation:sha256:42d1f4582c38c72dd3c6af9e293684f973a1e600b72dedfb20dafabca06f0cf7"},
+      {"flag_id": "dashboard_refresh", "runtime_mode": "ENFORCED", "activation_state": "ACTIVE", "object_id": "demo_flag_activation:sha256:0bbc66771431d0d1e2b46b3cff155bf33b3bce80651716f16adf14b984f1742b"}
+    ],
+    "runtime_contract": {
+      "read_write_path": "CANONICAL_ONLY",
+      "execution_core": "CANONICAL_EXECUTION_CORE_ONLY",
+      "legacy_history_compatibility": false,
+      "legacy_execution_compatibility": false
+    },
+    "validation": {
+      "backend": "2472 passed, 7 skipped, 0 failed",
+      "frontend": "39 passed, 0 failed",
+      "frontend_build": "passed",
+      "compileall": "passed",
+      "architecture": "passed",
+      "diff_check": "passed",
+      "high_confidence_nonfixture_secret_hits": 0
+    },
+    "governance_recalculation": {
+      "production_task_9_29": "BLOCKED_UNCHANGED",
+      "production_task_9_30_production_ready": false,
+      "demo_canonical_only_state": "ACTIVE"
+    },
+    "production_layer2_acceptance_claim": false,
+    "production_ready_claim": false,
+    "positive_expectation_claim": "NOT_CLAIMED"
+  },
   "final_evidence_report": {
     "deferred_initiatives": [
       {
@@ -216,7 +286,7 @@
   },
   "full_regression": {
     "architecture": "passed",
-    "backend": "2468 passed, 5 skipped, 0 failed",
+    "backend": "2472 passed, 7 skipped, 0 failed",
     "build": "passed",
     "frontend": "39 passed, 0 failed"
   },

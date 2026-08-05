@@ -9,11 +9,15 @@ import time
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.engine.trading_calendar import normalize_trade_date, latest_allowed_bar_date
 from app.models.tables import Preset, RecommendationRun, Stock
+from app.services.evidence.selectors import (
+    historical_reconstruction_provenance_conditions,
+    live_forward_run_conditions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +43,14 @@ def _resolve_analysis_market_snapshot(
             .where(
                 RecommendationRun.run_mode == "formal",
                 RecommendationRun.status == "completed",
+                or_(
+                    and_(*live_forward_run_conditions()),
+                    and_(
+                        *historical_reconstruction_provenance_conditions(),
+                        RecommendationRun.data_as_of
+                        <= RecommendationRun.trade_date,
+                    ),
+                ),
                 RecommendationRun.trade_date == trade_date,
                 RecommendationRun.market_snapshot_json.is_not(None),
                 RecommendationRun.market_snapshot_json != "",

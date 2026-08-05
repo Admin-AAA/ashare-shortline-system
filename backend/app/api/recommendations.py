@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session  # noqa: F401 (Query used in endpoints)
 from app.db.session import get_db
 from app.engine.trading_costs import ADDITIONAL_COST_PCT, is_net_profitable
 from app.services.outcome_service import recent_formal_win_rate
+from app.services.official_sample_scope import recommendation_history_conditions
 from app.services.workbench_service import (
     delete_recommendation,
     get_recommendation_detail,
@@ -148,9 +149,7 @@ def outcome_summary(
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
         .join(RecommendationOutcome, RecommendationOutcome.recommendation_id == Recommendation.recommendation_id)
         .filter(Recommendation.code.in_(normalized))
-        .filter(Recommendation.recommendation_id.like("rec_%"))
-        .filter(RecommendationRun.run_mode == "formal")
-        .filter(RecommendationRun.status == "completed")
+        .filter(*recommendation_history_conditions())
         .filter(RecommendationOutcome.outcome_label.in_(["success", "failed"]))
         .filter(RecommendationOutcome.entry_triggered == True)  # noqa: E712
         .order_by(

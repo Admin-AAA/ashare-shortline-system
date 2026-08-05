@@ -32,14 +32,34 @@ def _quote(open_p, high, low, close, vol=1000, amount=1e6):
 def test_load_pending_recs_includes_provisional_and_excludes_settled(db):
     """provisional 仍未最终结算，应与 pending 一起进入实时盈亏。"""
     run_id = "test_realtime_pnl_provisional_run"
-    provisional_id = "test_realtime_pnl_provisional_rec"
-    settled_id = "test_realtime_pnl_settled_rec"
+    provisional_id = "rec_test_realtime_pnl_provisional"
+    settled_id = "rec_test_realtime_pnl_settled"
+    unverified_id = "rec_test_realtime_pnl_unverified"
     db.add(
         RecommendationRun(
             run_id=run_id,
             run_name="实时盈亏 provisional 回归测试",
             run_mode="formal",
             trade_date="2026-07-24",
+            status="completed",
+            evidence_class="live_forward",
+            data_as_of="2026-07-24",
+            source_snapshot_id="realtime-pnl-snapshot",
+            actual_generated_at=datetime(2026, 7, 24, 6, 0),
+            evidence_identity_hash="d" * 64,
+            strategy_policy_fingerprint="a" * 64,
+            execution_policy_fingerprint="b" * 64,
+            code_revision="c" * 40,
+            provenance_schema_version=1,
+        )
+    )
+    db.add(
+        RecommendationRun(
+            run_id="test_realtime_pnl_unverified_run",
+            run_name="未验证实时盈亏行",
+            run_mode="formal",
+            trade_date="2026-07-25",
+            status="completed",
         )
     )
     db.add_all(
@@ -61,6 +81,15 @@ def test_load_pending_recs_includes_provisional_and_excludes_settled(db):
                 name="测试已结算",
                 final_score=80,
                 status="success",
+            ),
+            Recommendation(
+                recommendation_id=unverified_id,
+                run_id="test_realtime_pnl_unverified_run",
+                trade_date="2026-07-25",
+                code="000003",
+                name="未验证待结算",
+                final_score=80,
+                status="pending",
             ),
         ]
     )
@@ -84,6 +113,7 @@ def test_load_pending_recs_includes_provisional_and_excludes_settled(db):
 
     assert provisional_id in loaded_ids
     assert settled_id not in loaded_ids
+    assert unverified_id not in loaded_ids
 
 
 def test_postclose_strategy_target_touch_uses_target_price(monkeypatch):
@@ -92,7 +122,7 @@ def test_postclose_strategy_target_touch_uses_target_price(monkeypatch):
     rec = _Rec("600539", recommend_price=18.5)
     out = svc._compute_one(rec, svc._fetch_rtk_quotes([])["600539"], signal_bar=None)
     assert out["status"] == "holding"
-    assert out["entry_price"] == pytest.approx(18.23)
+    assert out["entry_price"] == pytest.approx(18.24823)
 
 
 def test_holding_pnl_profit(monkeypatch):
@@ -251,8 +281,8 @@ def test_same_day_intraday_recommendation_uses_recommendation_price(monkeypatch)
 
     assert out["status"] == "holding"
     assert out["entry_date"] == "2026-07-28"
-    assert out["entry_price"] == pytest.approx(10.00)
-    assert out["pnl_pct"] == pytest.approx(3.5)
+    assert out["entry_price"] == pytest.approx(10.01)
+    assert out["pnl_pct"] == pytest.approx(3.4)
 
 
 def test_one_word_limit_up_blocks_entry(monkeypatch):
@@ -268,15 +298,13 @@ def test_one_word_limit_up_blocks_entry(monkeypatch):
 
 
 def test_gap_up_blocked_watching_not_holding():
-    """#3: 20cm 板跳空高开 >10%（合法涨幅、非一字）应放弃入场，watching 而非幻影 holding。
-    创业板 300539，recommend_price=10.0，今日开盘 11.5（+15%，未触 20% 涨停），
-    low 11.4 > 买点 10.0 不触发买点 → 走开盘回退入场价 11.5 → gap=15% > 10% → watching。"""
-    rec = _Rec("300539", recommend_price=10.0, fs={"ideal_buy": 10.0, "secondary_buy": 9.9})
+    """Core 对已触发目标价的 >10% 高开执行统一拒绝，realtime 仅投影结果。"""
+    rec = _Rec("300539", recommend_price=10.0, fs={"ideal_buy": 11.5})
     q = {"open": 11.5, "high": 11.6, "low": 11.4, "close": 11.5,
          "pre_close": 10.0, "vol": 1000, "amount": 1e6, "name": "测试"}
     out = svc._compute_one(rec, q, signal_bar=None)
     assert out["status"] == "watching"
-    assert "未触发目标买点" in out["reason"]
+    assert "跳空高开 15.0%" in out["reason"]
 
 
 def test_ex_right_day_pnl_not_falsified():

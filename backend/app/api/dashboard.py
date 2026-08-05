@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import Depends, HTTPException
 from app.api.contracts import ContractRouter as APIRouter
-from sqlalchemy import case, func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -16,6 +16,10 @@ from app.models.tables import MarketSnapshot, RecommendationRun, StockQuote
 from app.schemas.dashboard import DashboardOverview
 from app.services.cost_service import list_scheduled_tasks
 from app.services.dashboard_hardening import project_dashboard_hardening
+from app.services.evidence.selectors import (
+    historical_reconstruction_provenance_conditions,
+    live_forward_run_conditions,
+)
 from app.services.dashboard_quality_service import build_dashboard_quality_scorecard
 from app.services.observability import AlertRegistry
 from app.services.data_pool.health_projection import summarize_alerts, summarize_tasks
@@ -35,6 +39,23 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 # S8: overview owns no response cache.  It reuses the authoritative local-pool
 # cache below; frontend request coalescing lives in the existing QueryClient.
+
+
+def _canonical_completed_run_conditions() -> tuple:
+    """Completed dashboard evidence from canonical provenance only."""
+    return (
+        RecommendationRun.run_mode == "formal",
+        RecommendationRun.status == "completed",
+        or_(
+            and_(*live_forward_run_conditions()),
+            and_(
+                *historical_reconstruction_provenance_conditions(),
+                RecommendationRun.data_as_of <= RecommendationRun.trade_date,
+            ),
+        ),
+    )
+
+
 DASHBOARD_STALE_THRESHOLD_SECONDS = 300
 DASHBOARD_EVIDENCE_LIMIT = 100
 RUN_ACTIVE_STATUSES = {"queued", "running"}
@@ -239,10 +260,11 @@ def _build_dashboard_hardening(
     task_health: dict[str, Any],
     recent_run: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Read-only shadow projection; failures never replace the production selector."""
+    """Build the canonical dashboard evidence projection."""
     try:
         rows = db.scalars(
             select(RecommendationRun)
+            .where(*_canonical_completed_run_conditions())
             .order_by(
                 case(
                     (RecommendationRun.evidence_class == "live_forward", 0),
@@ -264,7 +286,7 @@ def _build_dashboard_hardening(
             fallback_risk_gate="unknown",
         )
     except Exception:
-        logger.exception("S8 dashboard hardening shadow projection failed")
+        logger.exception("S8 canonical dashboard projection failed")
         projection = project_dashboard_hardening(
             (),
             now=datetime.now(timezone.utc),
@@ -310,21 +332,22 @@ def overview(db: Session = Depends(get_db)) -> DashboardOverview:
 
 
 def _select_dashboard_run(db: Session) -> RecommendationRun | None:
-    # 运行状态面板优先展示「正式推荐」run，而不是机械按 started_at 取最新。
-    # 背景：REPLAY/历史补跑 run（evaluation_scope=historical_replay，如
-    # REPLAY-20260618 验证 run）按 started_at 会排在当日正式推荐之前，把它们顶到
-    # 面板最前，用户误以为系统在跑历史验证而非当日正式推荐。
-    # 排序：正式推荐（live_forward）优先 → trade_date 新优先 → completed 优先 → started_at。
+    """Prefer active formal work, otherwise the newest canonical completed run."""
     return db.scalar(
         select(RecommendationRun)
+        .where(
+            or_(
+                and_(
+                    RecommendationRun.run_mode == "formal",
+                    RecommendationRun.status.in_(RUN_ACTIVE_STATUSES),
+                ),
+                and_(*_canonical_completed_run_conditions()),
+            )
+        )
         .order_by(
-            case((RecommendationRun.evaluation_scope == "live_forward", 0), else_=1),
+            case((RecommendationRun.status.in_(RUN_ACTIVE_STATUSES), 0), else_=1),
+            case((RecommendationRun.evidence_class == "live_forward", 0), else_=1),
             RecommendationRun.trade_date.desc(),
-            case(
-                (RecommendationRun.status == "completed", 0),
-                (RecommendationRun.status.in_({"running", "queued"}), 1),
-                else_=2,
-            ),
             RecommendationRun.started_at.desc(),
         )
         .limit(1)
@@ -335,45 +358,27 @@ def _select_dashboard_recommendation_run(db: Session) -> RecommendationRun | Non
     latest_trade_date = _latest_dashboard_trade_date(db)
     if not latest_trade_date:
         return None
-    # 北极星 A 项：落地页（候选池/驾驶舱）必须展示官方每日 formal 推送，而非 experiment/backtest。
-    # 优先级：formal+有推荐 > formal+无推荐 > 任意 completed（兜底）。
-    # 背景：覆盖度补跑会在手动推荐之后完成，其 recommended_count=0；若只按 finished_at DESC
-    # 选第一条，会拿到空 run，导致候选池一片空白（07-10 触发）。
-    base_formal = (
+    base = (
         select(RecommendationRun)
         .where(
-            RecommendationRun.status == "completed",
-            RecommendationRun.run_mode == "formal",
+            *_canonical_completed_run_conditions(),
             RecommendationRun.trade_date == latest_trade_date,
         )
-        .order_by(RecommendationRun.finished_at.desc(), RecommendationRun.started_at.desc())
-    )
-    # 1st choice: formal with actual recommendations
-    formal_with_recs = db.scalar(
-        base_formal.where(RecommendationRun.recommended_count > 0).limit(1)
-    )
-    if formal_with_recs is not None:
-        return formal_with_recs
-    # 2nd choice: any formal (even empty, covers edge case where all recs were filtered)
-    formal_any = db.scalar(base_formal.limit(1))
-    if formal_any is not None:
-        return formal_any
-    # 3rd choice: fallback to any completed run on that date
-    return db.scalar(
-        select(RecommendationRun)
-        .where(
-            RecommendationRun.status == "completed",
-            RecommendationRun.trade_date == latest_trade_date,
+        .order_by(
+            RecommendationRun.finished_at.desc(),
+            RecommendationRun.started_at.desc(),
         )
-        .order_by(RecommendationRun.finished_at.desc(), RecommendationRun.started_at.desc())
-        .limit(1)
     )
+    with_recommendations = db.scalar(
+        base.where(RecommendationRun.recommended_count > 0).limit(1)
+    )
+    return with_recommendations or db.scalar(base.limit(1))
 
 
 def _latest_dashboard_trade_date(db: Session) -> str | None:
     return db.scalar(
         select(RecommendationRun.trade_date)
-        .where(RecommendationRun.status == "completed")
+        .where(*_canonical_completed_run_conditions())
         .order_by(RecommendationRun.trade_date.desc())
         .limit(1)
     )

@@ -1,35 +1,10 @@
-"""结果模拟引擎（任务 6.1）：给定推荐 + 该股票日K数据，模拟出场景（是否触发入场、
-出场价格、退出原因、各类收益率），供 `outcome_service` 写入 `RecommendationOutcome`。
+"""Canonical outcome simulation adapter.
 
-## 迁移说明
-本文件是从 `outcome_service.py` 原地搬迁的**权威实现**（module extraction，不改变
-任何函数逻辑/参数/返回值/默认值）：`_simulate_outcome`（核心模拟入口）及其依赖的全部
-辅助函数——`_static_window_metrics` / `_resolve_entry` / `_resolve_exit` /
-`_resolve_exit_base` / `_resolve_exit_with_trailing` / `_resolve_stop_loss_price` /
-`_resolve_take_profit_price` / `_resolve_position_size` /
-`_entry_execution_block_reason` / `_exit_execution_block_reason` /
-`_recommendation_execution_block_reason` / `_entry_not_triggered_reason` /
-`_has_no_liquidity` / `_is_one_word_limit_down` / `_build_outcome_reason` /
-`_as_float` / `_loads`，以及这套模拟引擎的配置常量（`ENTRY_LOOKAHEAD_DAYS` /
-`ENTRY_SLIPPAGE_BPS` / `EXIT_SLIPPAGE_BPS` / `SUCCESS_RETURN_PCT` /
-`DEFAULT_STOP_LOSS_PCT` / `DEFAULT_TAKE_PROFIT_PCT` / `MAX_STOP_LOSS_PCT` /
-`MAX_TAKE_PROFIT_PCT` / `STOP_LOSS_GAP_CAP_PCT` / `MAX_ENTRY_GAP_PCT` /
-`TRAILING_STOP_ACTIVATE_PCT` / `TRAILING_STOP_CALLBACK_PCT` / `OUTCOME_*` 标签常量）。
-`outcome_service.py` 改为从本模块 re-export 这些名字（保持
-`from app.services.outcome_service import _simulate_outcome` 等既有导入路径不失效，
-包括 `stock_backtest_service.py` / `scripts/exit_rules.py` /
-`scripts/failure_attribution.py` / `scripts/verify_trailing_stop_params.py` /
-`tests/test_outcome_execution_constraints.py` / `tests/test_failure_attribution.py`
-等既有调用点），不再保留重复实现。
-
-这些函数构成设计 §8 所称"结果模拟引擎"：**纯计算（in-process）**——只依赖传入的
-`bars`/`dates`/`feature_snapshot`，不查询数据库，因此可脱离 DB 独立单测。真正涉及
-数据库读写的调度层（`_apply_outcome_simulation` 写 DB、`label_pending_outcomes` /
-`recompute_stale_outcomes` 查 DB + 调度模拟 + 写 DB + 加锁）继续留在
-`outcome_service.py`，只是内部改为调用本模块的模拟函数——`outcome_service` 因此瘦成
-"只读上报 + 调度" 层，模拟逻辑收口到这里。
-
-佣金与印花税口径由 `app.engine.trading_costs` 统一提供，模拟和指标共享同一纯函数。
+The service converts ORM-shaped recommendations and bars into the canonical
+execution-core contract, then projects the result for ``RecommendationOutcome``
+persistence. Entry selection, T+1 exits, trailing state, gap fills, costs and
+position caps are owned by the current canonical policy/core; no legacy exit
+implementation or historical execution compatibility path lives here.
 """
 from __future__ import annotations
 
@@ -40,9 +15,12 @@ from typing import Any
 
 from app.engine.board_rules import is_one_word_limit_down_bar, limit_pct_for_code
 from app.engine.execution_core import (
+    CausalEntryBar,
+    CausalEntryConfig,
     CausalExitConfig,
     ExecutionBar,
     compose_position_caps,
+    resolve_causal_entry,
     resolve_causal_exit,
 )
 from app.engine.execution_policy import (
@@ -55,7 +33,6 @@ from app.models.tables import DailyKbar, Recommendation
 from app.services.entry_policy import (
     CAUSAL_STRATEGY_ENTRY,
     EntryPolicy,
-    LEGACY_MIXED_ENTRY,
     NEXT_TRADING_DAY_OPEN,
 )
 
@@ -109,18 +86,7 @@ MAX_TAKE_PROFIT_PCT = float(_EXECUTION_RUNTIME["MAX_TAKE_PROFIT_PCT"])
 STOP_LOSS_GAP_CAP_PCT = float(_EXECUTION_RUNTIME["STOP_LOSS_GAP_CAP_PCT"])
 MAX_ENTRY_GAP_PCT = float(_EXECUTION_RUNTIME["MAX_ENTRY_GAP_PCT"])
 
-# 历史 callback trailing stop：保留给 `_resolve_exit_legacy_noncausal` 做有偏上界对照，
-# 不再作为生产默认退出。以下历史结论不能替代 2026-07-27 利润地板的因果验证。
-# 回测验证（235 笔 formal 样本，min 时序口径，扣费口径现统一为 0.07%/笔）：
-#   胜率 49.4%→66.8%、盈亏比 1.38→1.89、总收益 +232→+685、最大亏损 -15.19%→-7.17%
-# 时间分割验证（防过拟合）：前半 盈亏比 1.97→2.40，后半（样本外）1.51→1.67，两半均正向
-# 网格搜索结论：activate=2.0 主导（更早锁利避开回吐），callback=0.8 次要；高 activate(4+/5+) 有跳空尾部风险
-# 失败归因闭环（第 94 轮）：248 笔 trailing 失败中 22 笔大亏(<-3%)，集中在半导体/通信设备板块
-#   反事实验证：半导体差异化 callback(1.5/2.0) 无改善（盈亏比 1.84→1.83→1.81）
-#   根因：板块系统性跳空低开，参数调整无法改善，min(open,触发价) 已是保守口径
-#   结论：trailing 大亏是市场风险，不要盲目按行业差异化 callback——会破坏整体盈亏比
-# 关键约束：trailing 优先级低于 take_profit，故不破坏原有 TP 路径（take_profit_hit 完整保留）
-# 时序口径：触发价取 min(open, 触发价)——跳空低开时以 open 成交（更差），max 会虚假高估出场价
+# Canonical trailing constants are immutable projections of the current execution policy.
 TRAILING_STOP_ACTIVATE_PCT = float(_EXECUTION_RUNTIME["TRAILING_STOP_ACTIVATE_PCT"])
 TRAILING_STOP_CALLBACK_PCT = float(_EXECUTION_RUNTIME["TRAILING_STOP_CALLBACK_PCT"])
 TRAILING_STOP_MIN_LOCK_PCT = float(_EXECUTION_RUNTIME["TRAILING_STOP_MIN_LOCK_PCT"])
@@ -228,6 +194,15 @@ def _simulate_outcome(
     position_size = _resolve_position_size(feature_snapshot)
 
     if not entry_result.get("triggered"):
+        entry_reason = str(entry_result.get("reason") or "未触发买点，未建仓")
+        exit_reason = "gap_up_blocked" if entry_reason == "gap_up_blocked" else "not_triggered"
+        if exit_reason == "gap_up_blocked":
+            observed_gap = float(entry_result.get("observed_gap_pct") or 0.0)
+            outcome_reason = (
+                f"跳空高开 {observed_gap:.1f}% > {MAX_ENTRY_GAP_PCT:.0f}% 阈值，放弃入场"
+            )
+        else:
+            outcome_reason = f"{entry_reason}；静态窗口结果仅作旁路参考"
         return {
             **static_metrics,
             "entry_policy_id": entry_policy.policy_id,
@@ -244,48 +219,20 @@ def _simulate_outcome(
             "exit_slippage_bps": EXIT_SLIPPAGE_BPS,
             "stop_loss_price": _resolve_stop_loss_price(None, feature_snapshot),
             "take_profit_price": _resolve_take_profit_price(None, feature_snapshot),
-            "exit_reason": "not_triggered",
+            "exit_reason": exit_reason,
             "hit_target": False,
             "hit_invalid": False,
             "outcome_label": OUTCOME_MISSED,
             "outcome_label_legacy": OUTCOME_MISSED,
-            "outcome_reason": f"{entry_result.get('reason') or '未触发买点，未建仓'}；静态窗口结果仅作旁路参考",
+            "outcome_reason": outcome_reason,
         }
 
     raw_entry_price = float(entry_result["price"])
     entry_date = str(entry_result["date"])
 
-    # 跳空高开过滤：gap > MAX_ENTRY_GAP_PCT 则放弃入场
-    # 历史数据表明 gap > 10% 的交易胜率为 0%（12/12 全部失败，平均亏损 -4.5%）
     recommend_price = _as_float(rec.recommend_price) or 0
-    if recommend_price > 0 and raw_entry_price > 0:
-        gap_pct = (raw_entry_price - recommend_price) / recommend_price * 100
-        if gap_pct > MAX_ENTRY_GAP_PCT:
-            return {
-                **static_metrics,
-                "entry_policy_id": entry_policy.policy_id,
-                "entry_triggered": False,
-                "entry_date": None,
-                "entry_price": None,
-                "exit_date": None,
-                "exit_price": None,
-                "executed_return": 0.0,
-                "weighted_return": 0.0,
-                "position_size": _resolve_position_size(feature_snapshot),
-                "holding_days": 0,
-                "entry_slippage_bps": ENTRY_SLIPPAGE_BPS,
-                "exit_slippage_bps": EXIT_SLIPPAGE_BPS,
-                "stop_loss_price": _resolve_stop_loss_price(None, feature_snapshot),
-                "take_profit_price": _resolve_take_profit_price(None, feature_snapshot),
-                "exit_reason": "gap_up_blocked",
-                "hit_target": False,
-                "hit_invalid": False,
-                "outcome_label": OUTCOME_MISSED,
-                "outcome_label_legacy": OUTCOME_MISSED,
-                "outcome_reason": f"跳空高开 {gap_pct:.1f}% > {MAX_ENTRY_GAP_PCT:.0f}% 阈值，放弃入场",
-            }
 
-    executed_entry_price = round(raw_entry_price * (1 + ENTRY_SLIPPAGE_BPS / 10000.0), 4)
+    executed_entry_price = round(float(entry_result["executed_price"]), 4)
     stop_loss_price = _resolve_stop_loss_price(raw_entry_price, feature_snapshot)
     take_profit_price = _resolve_take_profit_price(
         raw_entry_price, feature_snapshot, recommend_price=recommend_price
@@ -575,287 +522,58 @@ def _resolve_entry(
     signal_bar: DailyKbar | None = None,
     entry_policy: EntryPolicy = CAUSAL_STRATEGY_ENTRY,
 ) -> dict[str, Any]:
-    """解析入场日与入场价。
-
-    推荐时点决定入场候选窗口：
-    - 盘中推荐（_is_intraday_recommendation）：直接使用生成推荐时保存的实时推荐价；
-      全天 signal_bar 的 open/low 可能早于推荐时点，不能作为成交依据。
-    - 盘后推荐：signal_bar 不作为候选（盘后只能 T+1 买入），维持 future_bars[:2] 原窗口。
-
-    - 盘后推荐：目标买点（ideal_buy/secondary_buy 的 low 触及）> 次日开盘市价回退。
-    """
-    if entry_policy == NEXT_TRADING_DAY_OPEN:
-        if not future_bars:
-            return {"triggered": False, "reason": "下一交易日行情缺失，无法确认成交"}
-        bar = future_bars[0]
-        block_reason = _entry_execution_block_reason(str(rec.code), bar)
-        if block_reason:
-            return {"triggered": False, "reason": block_reason}
-        raw_entry_price = _as_float(bar.open)
-        if raw_entry_price <= 0:
-            return {"triggered": False, "reason": "下一交易日开盘价无效，无法真实成交"}
-        return {
-            "triggered": True,
-            "bar_index": 0,
-            "price": raw_entry_price,
-            "date": str(bar.trade_date),
-            "reason": "next_trading_day_open_entry",
-        }
-
-    intraday = _is_intraday_recommendation(rec)
-    if intraday and entry_policy in {CAUSAL_STRATEGY_ENTRY, LEGACY_MIXED_ENTRY}:
-        recommend_price = _as_float(getattr(rec, "recommend_price", None))
-        if recommend_price <= 0:
-            return {"triggered": False, "reason": "盘中推荐价无效，无法确认成交"}
-        return {
-            "triggered": True,
-            "bar_index": 0,
-            "price": recommend_price,
-            "date": str(rec.trade_date),
-            "reason": "intraday_recommend_price_entry",
-        }
-    entry_targets = [
-        value for value in (
+    """Translate ORM-shaped inputs to the canonical entry-core contract."""
+    del signal_bar  # Recommendation timestamp owns intraday causality.
+    candidate_bars = tuple(
+        CausalEntryBar(
+            code=str(getattr(bar, "code", "") or rec.code),
+            trade_date=str(bar.trade_date),
+            open=_as_float(bar.open),
+            low=_as_float(bar.low),
+            close=_as_float(bar.close),
+            block_reason=_entry_execution_block_reason(str(rec.code), bar),
+        )
+        for bar in future_bars
+    )
+    target_prices = tuple(
+        value
+        for value in (
             _as_float(feature_snapshot.get("ideal_buy")),
             _as_float(feature_snapshot.get("secondary_buy")),
         )
         if value > 0
-    ]
-    lookahead = max(1, min(entry_policy.max_entry_trade_days, horizon_days, len(future_bars)))
-    # 盘中推荐：signal_bar 作首候选（T 当天），后接 future_bars 前 lookahead 根
-    if intraday and signal_bar is not None:
-        entry_window = [signal_bar] + future_bars[:lookahead]
-    else:
-        entry_window = future_bars[:lookahead]
-    blocked_reasons: list[str] = []
-    for bar_index, bar in enumerate(entry_window):
-        low = _as_float(bar.low)
-        bar_open = _as_float(bar.open)
-        for target in entry_targets:
-            if low <= target:
-                block_reason = _entry_execution_block_reason(str(rec.code), bar)
-                if block_reason:
-                    blocked_reasons.append(block_reason)
-                    continue
-                return {
-                    "triggered": True,
-                    "bar_index": bar_index,
-                    "price": min(bar_open, target) if bar_open > 0 else target,
-                    "date": str(bar.trade_date),
-                    "reason": "buy_target_touched",
-                }
-
-    if entry_targets:
-        if not entry_policy.fallback_to_open_when_targets_miss:
-            return {
-                "triggered": False,
-                "reason": _entry_not_triggered_reason(blocked_reasons, has_targets=True),
-            }
-        # 买点未在窗口内命中 → 回退到次日开盘市价入场，而不是直接放弃
-        for bar_index, bar in enumerate(entry_window):
-            block_reason = _entry_execution_block_reason(str(rec.code), bar)
-            if block_reason:
-                blocked_reasons.append(block_reason)
-                continue
-            raw_entry_price = _as_float(bar.open) or _as_float(bar.close)
-            if raw_entry_price <= 0:
-                blocked_reasons.append("入场日价格无效，无法真实成交")
-                continue
-            return {
-                "triggered": True,
-                "bar_index": bar_index,
-                "price": raw_entry_price,
-                "date": str(bar.trade_date),
-                "reason": "next_open_fallback_entry（买点未命中，市价入场）",
-            }
-        return {
-            "triggered": False,
-            "reason": _entry_not_triggered_reason(blocked_reasons, has_targets=True),
-        }
-
-    for bar_index, bar in enumerate(entry_window):
-        block_reason = _entry_execution_block_reason(str(rec.code), bar)
-        if block_reason:
-            blocked_reasons.append(block_reason)
-            continue
-        raw_entry_price = _as_float(bar.open) or _as_float(bar.close)
-        if raw_entry_price <= 0:
-            blocked_reasons.append("入场日价格无效，无法真实成交")
-            continue
-        return {
-            "triggered": True,
-            "bar_index": bar_index,
-            "price": raw_entry_price,
-            "date": str(bar.trade_date),
-            "reason": "next_open_entry",
-        }
-    return {
-        "triggered": False,
-        "reason": _entry_not_triggered_reason(blocked_reasons, has_targets=False),
-    }
-
-
-def _resolve_exit_legacy_noncausal(
-    holding_bars: list[DailyKbar],
-    stop_loss_price: float,
-    take_profit_price: float,
-    *,
-    code: str = "",
-    entry_price: float = 0.0,
-) -> tuple[float, str, str]:
-    """历史两轮退出逻辑，仅用于有偏上界对照，不得作为生产默认解析器。
-
-    A 股 T+1 交收：买入当日不能卖出。holding_bars[0] 是入场日，**当天不触发任何离场**
-    （含开盘跳空止损、盘中 high/low 触及止盈止损），从 holding_bars[1:]（入场日次日起）起扫。
-    若仅 1 根 bar（入场日即 horizon 末），强制 horizon_close——持仓但未到可卖日，按入场日收盘标记。
-
-    两轮扫描（在 holding_bars[1:] 上）：
-      1. 第一轮用原 stop_loss/take_profit 逻辑找出基准 exit；
-         若基准是 take_profit_*（含 both_hit），直接返回——trailing 不抢跑 TP 路径。
-      2. 若基准是 stop_loss_*/horizon_close（即 holding 期内未触及 TP），
-         第二轮应用 trailing stop 重模拟：high 达 entry+2% 激活，自峰值回撤 0.8% 锁利。
-
-    时序口径：触发价取 min(open, 触发价)，跳空低开时以 open 成交（max 会虚假高估）。
-    """
-    # T+1 约束：入场日 holding_bars[0] 不参与离场，从次日起扫
-    if len(holding_bars) <= 1:
-        last = holding_bars[-1]
-        return _as_float(last.close or 0), str(last.trade_date), "horizon_close_t1_locked"
-    scan_bars = holding_bars[1:]
-
-    # 第一轮：基准 exit（原 stop_loss/take_profit 逻辑）
-    base_exit = _resolve_exit_base(scan_bars, stop_loss_price, take_profit_price,
-                                    code=code, entry_price=entry_price)
-    base_reason = base_exit[2]
-    # take_profit 路径不应用 trailing（避免抢跑 TP，回测显示抢跑导致 -1897% 损失）
-    if base_reason.startswith("take_profit"):
-        return base_exit
-
-    # 第二轮：基准是 stop_loss_*/horizon_close，应用条件 trailing stop
-    trailing_exit = _resolve_exit_with_trailing(
-        scan_bars, stop_loss_price, take_profit_price,
-        code=code, entry_price=entry_price,
     )
-    return trailing_exit
-
-
-def _resolve_exit_base(
-    holding_bars: list[DailyKbar],
-    stop_loss_price: float,
-    take_profit_price: float,
-    *,
-    code: str = "",
-    entry_price: float = 0.0,
-) -> tuple[float, str, str]:
-    """原 stop_loss/take_profit 退出逻辑（无 trailing）。"""
-    locked_limit_down_bars = 0
-    for bar in holding_bars:
-        if _exit_execution_block_reason(code, bar):
-            locked_limit_down_bars += 1
-            continue
-        bar_open = _as_float(bar.open)
-        high = _as_float(bar.high)
-        low = _as_float(bar.low)
-        if bar_open > 0 and low > 0:
-            if bar_open <= stop_loss_price:
-                if entry_price > 0:
-                    min_exit_price = entry_price * (1 + STOP_LOSS_GAP_CAP_PCT / 100.0)
-                    gap_exit = max(bar_open, min_exit_price)
-                else:
-                    gap_exit = bar_open
-                return gap_exit, str(bar.trade_date), "stop_loss_gap"
-            if bar_open >= take_profit_price:
-                return bar_open, str(bar.trade_date), "take_profit_gap"
-        if low <= stop_loss_price and high >= take_profit_price:
-            return stop_loss_price, str(bar.trade_date), "stop_loss_intraday_both_hit"
-        if low <= stop_loss_price:
-            return stop_loss_price, str(bar.trade_date), "stop_loss_hit"
-        if high >= take_profit_price:
-            return take_profit_price, str(bar.trade_date), "take_profit_hit"
-
-    last_bar = holding_bars[-1]
-    if locked_limit_down_bars and locked_limit_down_bars == len(holding_bars):
-        return _as_float(last_bar.close), str(last_bar.trade_date), "limit_down_locked_horizon_mark"
-    if locked_limit_down_bars:
-        return _as_float(last_bar.close), str(last_bar.trade_date), "horizon_close_after_locked_limit_down"
-    return _as_float(last_bar.close), str(last_bar.trade_date), "horizon_close"
-
-
-def _resolve_exit_with_trailing(
-    holding_bars: list[DailyKbar],
-    stop_loss_price: float,
-    take_profit_price: float,
-    *,
-    code: str = "",
-    entry_price: float = 0.0,
-) -> tuple[float, str, str]:
-    """应用条件 trailing stop 重模拟。
-
-    调用前已确认基准 exit 非 take_profit_*，故 holding 期内 high 从未达 take_profit_price。
-    trailing 在 high≥entry+2% 激活，自峰值 high 回撤 0.8% 锁利。
-    时序口径分同 bar / 跨 bar 触发（见触发处注释）：同 bar 触发取触发价（high 先达 hwm
-    是激活前提，时序确定）；跨 bar 触发取 min(open, 触发价)（可能跳空低开透单，保守）。
-    """
-    locked_limit_down_bars = 0
-    hwm = 0.0
-    trailing_activated = False
-    for bar in holding_bars:
-        if _exit_execution_block_reason(code, bar):
-            locked_limit_down_bars += 1
-            continue
-        bar_open = _as_float(bar.open)
-        high = _as_float(bar.high)
-        low = _as_float(bar.low)
-        if bar_open > 0 and low > 0:
-            # 跳空止损仍按原逻辑（cap 极端亏损）
-            if bar_open <= stop_loss_price:
-                if entry_price > 0:
-                    min_exit_price = entry_price * (1 + STOP_LOSS_GAP_CAP_PCT / 100.0)
-                    gap_exit = max(bar_open, min_exit_price)
-                else:
-                    gap_exit = bar_open
-                return gap_exit, str(bar.trade_date), "stop_loss_gap"
-        # 更新 trailing hwm；记录 trailing 是否在当前 bar 刚激活（区分同 bar 触发 vs 跨 bar 触发）
-        activated_this_bar = False
-        if entry_price > 0 and high > 0:
-            bar_high_ret = (high / entry_price - 1) * 100
-            if bar_high_ret > hwm:
-                hwm = bar_high_ret
-            if not trailing_activated and hwm >= TRAILING_STOP_ACTIVATE_PCT:
-                trailing_activated = True
-                activated_this_bar = True
-        # 固定止损仍优先于已激活 trailing（low 触及 stop_loss 即返回 stop_loss_hit）。
-        # 护栏（第 162 轮反事实验证）：同 bar 内 high 冲高激活 trailing 后 low 触止损，日线
-        # 时序无法确定 high/low 谁先到。让 trailing 优先的变体在 191 笔样本上虚假 +11pp 胜率，
-        # 但 21 笔改善全来自同 bar 乐观假设（high 先到）——跨 bar 保守口径下 0 笔改善，纯过拟合。
-        # 故 stop_loss 优先是保守口径，禁止改 trailing 优先（除非接入分钟级时序数据）。
-        # 见 scripts/verify_trailing_priority.py 与 test_resolve_exit_same_bar_high_surge_then_stop_loss_uses_stop_loss。
-        if low > 0 and low <= stop_loss_price:
-            return stop_loss_price, str(bar.trade_date), "stop_loss_hit"
-        # 条件 trailing 触发
-        if trailing_activated and entry_price > 0 and low > 0:
-            trailing_stop_ret = hwm - TRAILING_STOP_CALLBACK_PCT
-            trailing_stop_price = entry_price * (1 + trailing_stop_ret / 100.0)
-            if low <= trailing_stop_price:
-                # 时序口径分两种情况（因果必然性，不是保守估计）：
-                # - 同 bar 触发（trailing 在本 bar 刚激活）：激活前提是 high 先达 hwm，
-                #   故时序上 high 必先于 low，价格路径是 high 见顶后回落到触发价成交。
-                #   成交价 = 触发价（trailing limit 的本意）。min(open,触发价) 会把平开冲高
-                #   回落（open≈entry < 触发价）误判成跳空，以 open 出场，把盈利单变微亏（D 项 28 笔 -0.20% 假失败根因）。
-                # - 跨 bar 触发（trailing 之前 bar 已激活，本 bar 才触发）：本 bar 开盘可能跳空低开
-                #   穿透触发价，以 open 成交（更差）。维持 min(open, 触发价) 保守口径。
-                if activated_this_bar:
-                    exit_px = trailing_stop_price
-                else:
-                    exit_px = min(bar_open, trailing_stop_price) if bar_open > 0 else trailing_stop_price
-                return exit_px, str(bar.trade_date), "trailing_stop_hit"
-
-    last_bar = holding_bars[-1]
-    if locked_limit_down_bars and locked_limit_down_bars == len(holding_bars):
-        return _as_float(last_bar.close), str(last_bar.trade_date), "limit_down_locked_horizon_mark"
-    if locked_limit_down_bars:
-        return _as_float(last_bar.close), str(last_bar.trade_date), "horizon_close_after_locked_limit_down"
-    return _as_float(last_bar.close), str(last_bar.trade_date), "horizon_close"
+    decision = resolve_causal_entry(
+        candidate_bars,
+        CausalEntryConfig(
+            policy_id=entry_policy.policy_id,
+            price_source=entry_policy.price_source,
+            signal_date=str(
+                getattr(rec, "trade_date", "")
+                or (candidate_bars[0].trade_date if candidate_bars else "unknown")
+            ),
+            recommendation_price=_as_float(getattr(rec, "recommend_price", None)),
+            intraday=_is_intraday_recommendation(rec),
+            target_prices=target_prices,
+            max_entry_trade_days=entry_policy.max_entry_trade_days,
+            horizon_days=horizon_days,
+            allow_target_touch=entry_policy.allow_target_touch,
+            fallback_to_open_when_targets_miss=(
+                entry_policy.fallback_to_open_when_targets_miss
+            ),
+            entry_slippage_bps=ENTRY_SLIPPAGE_BPS,
+            max_entry_gap_pct=MAX_ENTRY_GAP_PCT,
+        ),
+    )
+    return {
+        "triggered": decision.triggered,
+        "bar_index": decision.bar_index,
+        "price": decision.raw_price,
+        "executed_price": decision.executed_price,
+        "date": decision.trade_date,
+        "reason": decision.reason,
+        "observed_gap_pct": decision.observed_gap_pct,
+    }
 
 
 def _trailing_stop_return(
@@ -1151,13 +869,6 @@ def _recommendation_execution_block_reason(feature_snapshot: dict[str, Any]) -> 
         or execution_viability.get("label")
         or "推荐时执行可成交性判定为不可成交"
     )
-
-
-def _entry_not_triggered_reason(blocked_reasons: list[str], *, has_targets: bool) -> str:
-    if blocked_reasons:
-        unique = list(dict.fromkeys(blocked_reasons))
-        return "；".join(unique[:2])
-    return "未触发目标买点，未建仓" if has_targets else "观察窗口内无可执行入场日"
 
 
 def _has_no_liquidity(bar: DailyKbar) -> bool:

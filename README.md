@@ -32,6 +32,21 @@ A股短线交易驾驶舱，支持多数据源行情采集、多技能策略打�
 
 ---
 
+## Demo Canonical-only 治理决策
+
+本仓库当前是**本地 demo/研究复盘系统**，不是已发布的生产交易系统。自 2026-08-05 起，demo 采用以下明确决策：
+
+- **唯一 canonical read/write path**：正式推荐、结果计算、历史查询和 dashboard 只使用当前 canonical schema、Canonical Execution Core 和 provenance-aware selectors。
+- **不保留历史兼容承诺**：旧 projection、旧 replay 兼容分支、旧 execution 实现和旧结果不再作为 demo 的兼容目标；允许在本地 demo 数据库中清理旧推荐/旧 outcome 结果后重建。
+- **清理范围**：只清理 demo 的推荐运行、推荐、旧 outcome/current projection 和相关运行审计结果；行情池、日 K、策略定义、治理 CAS evidence、migration 状态和配置审计不清理。
+- **canonical-only flags**：六个 hardening runtime flags 在 demo 中可以直接进入 `ENFORCED`，并以治理对象记录 `ACTIVE`；这不等同于真实生产发布。
+- **不宣称生产有效性**：即使 demo flags 全部激活，也不宣称策略具有正期望、不构成投资建议，也不代表完成真实生产环境发布。
+- **生产验收仍独立**：真实 MySQL/Prefect evidence、Shadow Threshold、Projection Cutover 和 production-ready 判定保留为治理证据；demo canonical-only 切换不得伪造 Layer 2 ACCEPTED。
+
+因此，demo 的目标是验证当前 canonical 系统能否干净运行，而不是继续兼容旧历史结果。
+
+---
+
 ## 目录结构
 
 ```

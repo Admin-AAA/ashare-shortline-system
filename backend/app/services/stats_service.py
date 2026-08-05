@@ -26,6 +26,7 @@ from app.services.outcome_service import (
 )
 from app.services.outcome_service import is_outcome_labeled, normalized_outcome_label
 from app.services.official_sample_scope import official_sample_conditions
+from app.services.evidence.selectors import live_forward_run_conditions
 
 import logging
 logger = logging.getLogger(__name__)
@@ -460,6 +461,7 @@ def _runs_for_mode(
         .where(
             RecommendationRun.run_mode == run_mode,
             RecommendationRun.status == "completed",
+            *live_forward_run_conditions(),
         )
         .options(load_only(*cols))
         .order_by(RecommendationRun.started_at.desc())

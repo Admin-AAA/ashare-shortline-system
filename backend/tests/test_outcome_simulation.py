@@ -17,7 +17,7 @@ from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY_REGISTRY
 import pytest
 
 from app.models.tables import DailyKbar
-from app.services.entry_policy import LEGACY_MIXED_ENTRY, NEXT_TRADING_DAY_OPEN
+from app.services.entry_policy import CAUSAL_STRATEGY_ENTRY, NEXT_TRADING_DAY_OPEN
 from app.services.outcome_simulation import (
     DEFAULT_STOP_LOSS_PCT,
     MAX_STOP_LOSS_PCT,
@@ -355,8 +355,8 @@ def test_resolve_exit_same_bar_high_surge_then_stop_loss_uses_stop_loss():
     """同 bar high 冲高激活 trailing 又 low 触止损 → 仍 stop_loss_hit（不 trailing 锁利）。
 
     回归锁定 002674 @ 2026-07-08 场景：单日 high 冲到 +14%（激活 trailing），同日 low 触 -5.7%
-    止损。日线无法判断 high/low 时序，stop_loss 优先是保守口径。未来轮次若被此类"浮盈 14%
-    却止损"案例诱导想加 trailing 优先规则，本测试挡住——见 verify_trailing_priority.py
+    止损。日线无法判断 high/low 时序，stop_loss 优先是保守口径；该顺序由
+    Canonical Execution Core 的因果日线语义锁定。
     反事实验证：同 bar trailing 优先变体 +11pp 胜率全是过拟合，跨 bar 保守口径 0 改善。
     """
     # entry=10.0, bar1（入场日，不触发）；bar2 单 bar: high=11.4（+14% 激活 trailing，hwm=14），
@@ -613,7 +613,7 @@ def test_simulate_outcome_20cm_limit_up_not_misjudged_as_ex_right():
         _bar(trade_date="2026-07-15", open=21.22, high=21.88, low=19.4, close=19.56, pct_chg=-7.21),
     ]
     dates = [str(b.trade_date) for b in bars]
-    sim = _simulate_outcome(rec, bars, dates, horizon_days=5, entry_policy=LEGACY_MIXED_ENTRY)
+    sim = _simulate_outcome(rec, bars, dates, horizon_days=5, entry_policy=CAUSAL_STRATEGY_ENTRY)
     # take_profit 在涨停日 07-10 触及，exit_reason=take_profit_hit，正收益
     assert sim["exit_reason"] == "take_profit_hit"
     assert sim["executed_return"] > 0, f"涨停日不应触发除权误判覆盖 take_profit 收益，got {sim['executed_return']}"
@@ -645,7 +645,7 @@ def test_simulate_outcome_real_ex_right_day_still_corrected():
     ]
     dates = [str(b.trade_date) for b in bars]
     sim = _simulate_outcome(
-        rec, bars, dates, horizon_days=5, entry_policy=LEGACY_MIXED_ENTRY,
+        rec, bars, dates, horizon_days=5, entry_policy=CAUSAL_STRATEGY_ENTRY,
     )
     # 除权日 price_jump=-32% > 20 且 pct_chg=-5 < 20*0.6=12 → has_ex_right_day=True，
     # 触发 pct_chg 链重算（不被本次 +2pp 容差修复破坏）
@@ -682,7 +682,7 @@ def test_simulate_outcome_min_return_truncated_to_exit_not_horizon():
     ]
     dates = [str(b.trade_date) for b in bars]
     sim = _simulate_outcome(
-        rec, bars, dates, horizon_days=5, entry_policy=LEGACY_MIXED_ENTRY,
+        rec, bars, dates, horizon_days=5, entry_policy=CAUSAL_STRATEGY_ENTRY,
     )
     assert sim["exit_reason"] == "stop_loss_hit"
     assert str(sim["exit_date"]) == "2026-07-13"
@@ -764,7 +764,7 @@ def test_simulate_outcome_take_profit_min_return_truncated():
         _bar(trade_date="2026-07-14", open=29.0, high=29.5, low=27.0, close=27.5, pct_chg=-5.17),
     ]
     dates = [str(b.trade_date) for b in bars]
-    sim = _simulate_outcome(rec, bars, dates, horizon_days=4, entry_policy=LEGACY_MIXED_ENTRY)
+    sim = _simulate_outcome(rec, bars, dates, horizon_days=4, entry_policy=CAUSAL_STRATEGY_ENTRY)
     assert sim["exit_reason"].startswith("take_profit"), f"应在 07-10 触及 tp，got {sim['exit_reason']}"
     assert str(sim["exit_date"]) == "2026-07-10"
     # 旧 bug：min_return 算到 07-13/14 low=27-28 → 约 -10%；修复后只算 entry→exit（07-10 low=29.5）
@@ -1088,7 +1088,7 @@ def test_simulate_outcome_defaults_to_production_profit_floor_policy():
 
     sim = _simulate_outcome(
         rec, bars, [str(bar.trade_date) for bar in bars], horizon_days=3,
-        entry_policy=LEGACY_MIXED_ENTRY,
+        entry_policy=CAUSAL_STRATEGY_ENTRY,
     )
 
     assert sim is not None
@@ -1193,7 +1193,7 @@ def test_simulate_outcome_injects_final_score_from_rec_for_position_sizing():
 
     sim = _simulate_outcome(
         rec, bars, [str(bar.trade_date) for bar in bars], horizon_days=3,
-        entry_policy=LEGACY_MIXED_ENTRY,
+        entry_policy=CAUSAL_STRATEGY_ENTRY,
     )
     assert sim is not None
     # score cap 与 v2 全局 caps 组合后，single-name 0.35 为绑定上限。
@@ -1212,7 +1212,7 @@ def test_simulate_outcome_injects_final_score_from_rec_for_position_sizing():
     )
     sim_low = _simulate_outcome(
         rec_low, bars, [str(bar.trade_date) for bar in bars], horizon_days=3,
-        entry_policy=LEGACY_MIXED_ENTRY,
+        entry_policy=CAUSAL_STRATEGY_ENTRY,
     )
     assert sim_low is not None
     # 低分 requested=1.0，仍不得绕过 single-name 0.35。
