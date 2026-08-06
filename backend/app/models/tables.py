@@ -921,6 +921,13 @@ class RecommendationOutcome(Base):
 
     recommendation_id: Mapped[str] = mapped_column(String(80), primary_key=True)
     calculation_version_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    current_calculation_fingerprint: Mapped[str | None] = mapped_column(
+        CHAR(64), nullable=True, index=True
+    )
+    projection_revision: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    projected_at: Mapped[datetime | None] = mapped_column(
+        DateTime().with_variant(DATETIME(fsp=6), "mysql"), nullable=True
+    )
     entry_policy_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     horizon_days: Mapped[int] = mapped_column(Integer, default=5)
     entry_triggered: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -964,6 +971,31 @@ class RecommendationOutcomeVersion(Base):
     label_source: Mapped[str] = mapped_column(String(20))
     result_json: Mapped[str] = mapped_column(LONGTEXT().with_variant(Text(), "sqlite"))
     computed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    calculation_fingerprint: Mapped[str | None] = mapped_column(
+        CHAR(64), nullable=True, unique=True
+    )
+    result_hash: Mapped[str | None] = mapped_column(CHAR(64), nullable=True)
+    recommendation_identity_hash: Mapped[str | None] = mapped_column(
+        CHAR(64), nullable=True
+    )
+    market_snapshot_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    market_artifact_hash: Mapped[str | None] = mapped_column(CHAR(64), nullable=True)
+    execution_policy_fingerprint: Mapped[str | None] = mapped_column(
+        CHAR(64), nullable=True
+    )
+    calculation_code_revision: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    label_policy_fingerprint: Mapped[str | None] = mapped_column(
+        CHAR(64), nullable=True
+    )
+    calculation_schema_version: Mapped[int | None] = mapped_column(
+        SmallInteger, nullable=True
+    )
+    validity_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    legacy_verification_status: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
+    )
 
 
 class RecommendationExecutionState(Base):
@@ -1088,6 +1120,10 @@ class ApiCallLog(Base):
     latency_ms: Mapped[float] = mapped_column(Float, default=0)
     status: Mapped[str] = mapped_column(String(30), default="success")
     error_message: Mapped[str | None] = mapped_column(Text)
+    # prompt context 投影/裁剪审计摘要（结构化 JSON，不含完整 prompt 原文）
+    context_audit_json: Mapped[str | None] = mapped_column(
+        LONGTEXT().with_variant(Text(), "sqlite")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

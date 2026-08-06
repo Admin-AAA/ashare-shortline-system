@@ -14,6 +14,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY_REGISTRY
+from app.engine.execution_core import IntradayFirstHit
 import pytest
 
 from app.models.tables import DailyKbar
@@ -1094,6 +1095,48 @@ def test_simulate_outcome_defaults_to_production_profit_floor_policy():
     assert sim is not None
     assert sim["exit_reason"] == "trailing_stop_hit"
     assert sim["exit_date"] == "2026-07-03"
+    assert sim["canonical_exit_evidence"] is True
+    assert sim["intraday_exit_evidence"] == {
+        "applied_priority": None,
+        "first_hit": IntradayFirstHit.TRAILING_STOP.value,
+        "same_bar_stop_take_profit_hit": False,
+    }
+    assert sim["net_return_pct"] == pytest.approx(
+        sim["executed_return"] - DEFAULT_EXECUTION_POLICY_REGISTRY.current.fees.round_trip_pct
+    )
+
+
+def test_custom_exit_resolver_is_explicitly_noncanonical():
+    rec = SimpleNamespace(
+        code="000001",
+        trade_date="2026-07-01",
+        recommend_price=10.0,
+        recommended_at=datetime(2026, 7, 1, 2, 0),
+        feature_snapshot_json=json.dumps(
+            {"ideal_buy": 10.0, "stop_loss": 9.5, "take_profit": 11.0}
+        ),
+    )
+    bars = [
+        _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.98, close=10.0, pct_chg=0.0),
+        _bar_trailing(trade_date="2026-07-02", open=10.0, high=11.2, low=9.4, close=9.6, pct_chg=-4.0),
+    ]
+
+    sim = _simulate_outcome(
+        rec,
+        bars,
+        [str(bar.trade_date) for bar in bars],
+        horizon_days=2,
+        exit_resolver=lambda *_args, **_kwargs: (
+            9.5,
+            "2026-07-02",
+            "stop_loss_intraday_both_hit",
+        ),
+    )
+
+    assert sim is not None
+    assert sim["exit_reason"] == "stop_loss_intraday_both_hit"
+    assert sim["canonical_exit_evidence"] is False
+    assert sim["intraday_exit_evidence"] is None
 
 
 def test_resolve_position_size_uses_minimum_of_every_applicable_cap():

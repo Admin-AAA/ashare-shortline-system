@@ -18,6 +18,7 @@ from app.engine.execution_core import (
     CausalEntryBar,
     CausalEntryConfig,
     CausalExitConfig,
+    CausalExitResult,
     ExecutionBar,
     compose_position_caps,
     resolve_causal_entry,
@@ -28,7 +29,7 @@ from app.engine.execution_policy import (
     ExecutionPolicy,
     PositionCapComposition,
 )
-from app.engine.trading_costs import is_net_profitable
+from app.engine.trading_costs import ADDITIONAL_COST_PCT, is_net_profitable
 from app.models.tables import DailyKbar, Recommendation
 from app.services.entry_policy import (
     CAUSAL_STRATEGY_ENTRY,
@@ -169,9 +170,12 @@ def _simulate_outcome(
             "exit_date": None,
             "exit_price": None,
             "executed_return": 0.0,
+            "net_return_pct": None,
             "weighted_return": 0.0,
             "position_size": _resolve_position_size(feature_snapshot),
             "holding_days": 0,
+            "canonical_exit_evidence": False,
+            "intraday_exit_evidence": None,
             "entry_slippage_bps": ENTRY_SLIPPAGE_BPS,
             "exit_slippage_bps": EXIT_SLIPPAGE_BPS,
             "stop_loss_price": _resolve_stop_loss_price(None, feature_snapshot),
@@ -212,9 +216,12 @@ def _simulate_outcome(
             "exit_date": None,
             "exit_price": None,
             "executed_return": 0.0,
+            "net_return_pct": None,
             "weighted_return": 0.0,
             "position_size": position_size,
             "holding_days": 0,
+            "canonical_exit_evidence": False,
+            "intraday_exit_evidence": None,
             "entry_slippage_bps": ENTRY_SLIPPAGE_BPS,
             "exit_slippage_bps": EXIT_SLIPPAGE_BPS,
             "stop_loss_price": _resolve_stop_loss_price(None, feature_snapshot),
@@ -255,14 +262,39 @@ def _simulate_outcome(
     if not holding_bars:
         return None
 
-    resolver = exit_resolver if exit_resolver is not None else _resolve_exit
-    exit_price, exit_date, exit_reason = resolver(
-        holding_bars,
-        stop_loss_price,
-        take_profit_price,
-        code=str(rec.code),
-        entry_price=executed_entry_price,
-    )
+    if exit_resolver is None:
+        exit_result = _resolve_exit_result(
+            holding_bars,
+            stop_loss_price,
+            take_profit_price,
+            code=str(rec.code),
+            entry_price=executed_entry_price,
+        )
+        if exit_result is None:
+            last = holding_bars[-1]
+            exit_price = _as_float(last.close)
+            exit_date = str(last.trade_date)
+            exit_reason = "horizon_close_t1_locked"
+            canonical_exit_evidence = False
+            intraday_exit_evidence = None
+        else:
+            exit_price = exit_result.raw_price
+            exit_date = exit_result.trade_date
+            exit_reason = exit_result.reason
+            canonical_exit_evidence = True
+            intraday_exit_evidence = (
+                exit_result.intraday_exit_evidence.canonical_payload()
+            )
+    else:
+        exit_price, exit_date, exit_reason = exit_resolver(
+            holding_bars,
+            stop_loss_price,
+            take_profit_price,
+            code=str(rec.code),
+            entry_price=executed_entry_price,
+        )
+        canonical_exit_evidence = False
+        intraday_exit_evidence = None
     # 真实持仓期统计：min/max_return/close_return 只算 entry→exit 之间的 bar，而非整个 horizon。
     # 旧实现用 future_bars[:horizon]（_static_window_metrics 在 entry/exit 解析前调用），
     # 把止损/止盈后的 bar 也计入 → stop_loss_hit @ -5.7% 的票 min_return 算到 horizon 末 -34.83%
@@ -315,6 +347,7 @@ def _simulate_outcome(
         executed_exit_price = round(executed_entry_price * (1 + executed_return / 100.0), 4)
 
     weighted_return = round(executed_return * position_size, 2)
+    net_return_pct = round(executed_return - ADDITIONAL_COST_PCT, 10)
     hit_invalid = exit_reason.startswith("stop_loss")
     hit_target = exit_reason.startswith("take_profit") or executed_return >= SUCCESS_RETURN_PCT
     # 临时态：holding_bars 仅入场日 1 根（horizon_close_t1_locked），入场后尚无可卖 bar，
@@ -339,9 +372,14 @@ def _simulate_outcome(
         "exit_date": exit_date,
         "exit_price": round(executed_exit_price, 2),
         "executed_return": executed_return,
+        "net_return_pct": net_return_pct if not is_provisional else None,
         "weighted_return": weighted_return,
         "position_size": position_size,
         "holding_days": exit_bar_count,
+        "canonical_exit_evidence": canonical_exit_evidence and not is_provisional,
+        "intraday_exit_evidence": (
+            intraday_exit_evidence if not is_provisional else None
+        ),
         "entry_slippage_bps": ENTRY_SLIPPAGE_BPS,
         "exit_slippage_bps": EXIT_SLIPPAGE_BPS,
         "stop_loss_price": round(stop_loss_price, 2),
@@ -591,7 +629,7 @@ def _trailing_stop_return(
     return observed_high_return - cb
 
 
-def _resolve_exit_causal(
+def _resolve_exit_causal_result(
     holding_bars: list[DailyKbar],
     stop_loss_price: float,
     take_profit_price: float,
@@ -604,13 +642,8 @@ def _resolve_exit_causal(
     activate_pct: float | None = None,
     min_lock_pct: float | None = None,
     trailing_callback: float | None = None,
-) -> tuple[float, str, str]:
-    """Compatibility adapter to the single causal execution core.
-
-    ORM-shaped bars and legacy counterfactual parameters are translated here;
-    T+1, exit ordering, trailing state, gap fills, and locked-bar semantics are
-    owned by :func:`app.engine.execution_core.resolve_causal_exit`.
-    """
+) -> CausalExitResult | None:
+    """Translate ORM-shaped bars to the typed canonical exit contract."""
     if dynamic_trailing and trailing_policy not in {
         "peak_callback",
         "callback",
@@ -630,7 +663,7 @@ def _resolve_exit_causal(
         )
         for bar in holding_bars
     )
-    result = resolve_causal_exit(
+    return resolve_causal_exit(
         core_bars,
         CausalExitConfig(
             stop_loss_price=stop_loss_price,
@@ -660,10 +693,38 @@ def _resolve_exit_causal(
             take_profit_gap_fill_mode=(
                 DEFAULT_EXECUTION_POLICY.gap_risk.take_profit_gap_fill_mode
             ),
-            intraday_exit_priority=(
-                DEFAULT_EXECUTION_POLICY.intraday_exit_priority
-            ),
+            intraday_exit_priority=DEFAULT_EXECUTION_POLICY.intraday_exit_priority,
         ),
+    )
+
+
+def _resolve_exit_causal(
+    holding_bars: list[DailyKbar],
+    stop_loss_price: float,
+    take_profit_price: float,
+    *,
+    code: str = "",
+    entry_price: float = 0.0,
+    dynamic_trailing: bool = True,
+    trailing_policy: str = "peak_callback",
+    profit_lock_ratio: float = 0.25,
+    activate_pct: float | None = None,
+    min_lock_pct: float | None = None,
+    trailing_callback: float | None = None,
+) -> tuple[float, str, str]:
+    """Tuple projection for research counterfactual resolvers."""
+    result = _resolve_exit_causal_result(
+        holding_bars,
+        stop_loss_price,
+        take_profit_price,
+        code=code,
+        entry_price=entry_price,
+        dynamic_trailing=dynamic_trailing,
+        trailing_policy=trailing_policy,
+        profit_lock_ratio=profit_lock_ratio,
+        activate_pct=activate_pct,
+        min_lock_pct=min_lock_pct,
+        trailing_callback=trailing_callback,
     )
     if result is None:
         if not holding_bars:
@@ -676,20 +737,16 @@ def _resolve_exit_causal(
         )
     return result.raw_price, result.trade_date, result.reason
 
-def _resolve_exit(
+
+def _resolve_exit_result(
     holding_bars: list[DailyKbar],
     stop_loss_price: float,
     take_profit_price: float,
     *,
     code: str = "",
     entry_price: float = 0.0,
-) -> tuple[float, str, str]:
-    """生产退出：单路径因果状态机 + 50% 利润地板。
-
-    保护价只使用上一交易日结束时已知的最高浮盈，并从下一交易日起生效；
-    不再根据完整持有期是否最终触及固定止盈来事后选择退出路径。
-    """
-    return _resolve_exit_causal(
+) -> CausalExitResult | None:
+    return _resolve_exit_causal_result(
         holding_bars,
         stop_loss_price,
         take_profit_price,
@@ -699,6 +756,34 @@ def _resolve_exit(
         trailing_policy="profit_floor",
         profit_lock_ratio=TRAILING_STOP_PROFIT_LOCK_RATIO,
     )
+
+
+def _resolve_exit(
+    holding_bars: list[DailyKbar],
+    stop_loss_price: float,
+    take_profit_price: float,
+    *,
+    code: str = "",
+    entry_price: float = 0.0,
+) -> tuple[float, str, str]:
+    """Tuple projection of the production exit for research callers."""
+    result = _resolve_exit_result(
+        holding_bars,
+        stop_loss_price,
+        take_profit_price,
+        code=code,
+        entry_price=entry_price,
+    )
+    if result is None:
+        if not holding_bars:
+            return 0.0, "", "horizon_close"
+        last = holding_bars[-1]
+        return (
+            _as_float(last.close),
+            str(last.trade_date),
+            "horizon_close_t1_locked",
+        )
+    return result.raw_price, result.trade_date, result.reason
 
 
 def _resolve_stop_loss_price(raw_entry_price: float | None, feature_snapshot: dict[str, Any]) -> float:

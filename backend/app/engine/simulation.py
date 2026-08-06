@@ -30,6 +30,7 @@ from app.engine.execution_core import (
     ExecutionIntent,
     ExecutionRequest,
     ExecutionStatus,
+    IntradayExitEvidence,
     execute_trade,
 )
 
@@ -41,6 +42,7 @@ class SimulationResult:
     trade: Trade
     entry_triggered: bool
     input_fingerprint: str
+    intraday_exit_evidence: IntradayExitEvidence | None
 
     @property
     def status(self) -> str:
@@ -134,6 +136,7 @@ def simulate(
             ),
             entry_triggered=result.entry.triggered,
             input_fingerprint=result.input_fingerprint,
+            intraday_exit_evidence=None,
         )
 
     assert result.entry.trade_date is not None
@@ -161,6 +164,7 @@ def simulate(
         ),
         entry_triggered=True,
         input_fingerprint=result.input_fingerprint,
+        intraday_exit_evidence=result.exit.intraday_exit_evidence,
     )
 
 

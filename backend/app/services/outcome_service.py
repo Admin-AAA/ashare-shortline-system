@@ -2,7 +2,6 @@ import logging
 import json
 import threading
 import time
-import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -11,6 +10,8 @@ logger = logging.getLogger(__name__)
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
+from app.engine.canonical import canonical_fingerprint, canonical_json
+from app.engine.execution_core import IntradayExitEvidence
 from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY
 from app.engine.trading_costs import (
     ADDITIONAL_COST_PCT as _ADDITIONAL_COST_PCT,
@@ -28,15 +29,28 @@ from app.models.tables import (
     RecommendationRun,
     SkillRegistry,
 )
-from app.services.evaluation_metrics import compute_full_metrics as _compute_full_metrics
+from app.services.evaluation_metrics import (
+    compute_exit_ambiguity_statistics,
+    compute_full_metrics as _compute_full_metrics,
+)
+from app.services.evidence.provenance_writer import resolve_code_revision
+from app.services.evidence.selectors import is_live_forward_run
 from app.services.execution_outcome_policy import apply_execution_outcome_policy
 from app.services.official_sample_scope import official_sample_conditions
+from app.services.outcome_identity import (
+    bounded_outcome_bars,
+    label_policy_fingerprint,
+    outcome_market_artifact_hash,
+    outcome_market_artifact_payload,
+    recommendation_identity_hash,
+)
 # S5 Layer 1 contracts intentionally re-export from the existing outcome service.
 # Production persistence remains RecommendationOutcomeVersion + RecommendationOutcome;
 # no parallel repository or projection table is introduced.
 from app.services.quality_outcome import (  # noqa: F401
     CurrentProjection,
     OutcomeCalculationIdentity,
+    OutcomeContractError,
     OutcomeRecomputeCandidate,
     OutcomeVersionRecord,
     audit_outcome_history,
@@ -247,6 +261,228 @@ def is_accurate_recommendation(outcome: RecommendationOutcome | Any | None) -> b
     return bool(is_trade_executed(outcome) and is_net_profitable(resolved_trade_return(outcome)))
 
 
+OUTCOME_CALCULATION_VERSION = "outcome_simulation_v2"
+NON_VALID_OUTCOME_STATUS = "NON_VALID"
+INCOMPLETE_PROVENANCE_STATUS = "INCOMPLETE_PROVENANCE"
+
+
+def _orm_outcome_version(row: RecommendationOutcomeVersion) -> OutcomeVersionRecord:
+    computed_at = row.computed_at
+    if computed_at is not None and computed_at.tzinfo is None:
+        computed_at = computed_at.replace(tzinfo=timezone.utc)
+    return OutcomeVersionRecord(
+        version_id=str(row.version_id),
+        recommendation_id=str(row.recommendation_id),
+        calculation_fingerprint=row.calculation_fingerprint,
+        result_hash=row.result_hash,
+        result_json=str(row.result_json),
+        recommendation_identity_hash=row.recommendation_identity_hash,
+        market_snapshot_id=row.market_snapshot_id,
+        market_artifact_hash=row.market_artifact_hash,
+        execution_policy_fingerprint=row.execution_policy_fingerprint,
+        calculation_code_revision=row.calculation_code_revision,
+        label_policy_fingerprint=row.label_policy_fingerprint,
+        calculation_schema_version=row.calculation_schema_version,
+        validity_status=str(row.validity_status or NON_VALID_OUTCOME_STATUS),
+        computed_at=computed_at,
+    )
+
+
+def _complete_outcome_provenance(run: RecommendationRun | None, rec: Recommendation) -> bool:
+    if run is None or str(run.status or "") != "completed" or str(run.run_mode or "") != "formal":
+        return False
+    evidence_class = str(run.evidence_class or "")
+    if evidence_class == "live_forward":
+        return is_live_forward_run(run)
+    if evidence_class != "historical_reconstruction":
+        return False
+    data_as_of = str(run.data_as_of or "")
+    return bool(
+        run.actual_generated_at is not None
+        and data_as_of
+        and data_as_of <= str(rec.trade_date)
+        and str(run.source_snapshot_id or "") not in {"", "unknown"}
+        and run.evidence_identity_hash
+        and run.strategy_policy_fingerprint
+        and run.execution_policy_fingerprint
+        and run.code_revision
+        and run.provenance_schema_version
+        and run.reconstruction_batch_id
+    )
+
+
+def _validated_outcome_result(simulation: dict[str, Any]) -> dict[str, Any]:
+    result = {**simulation, "calculation_schema_version": 2}
+    label = str(result.get("outcome_label") or "")
+    is_closed = label in EXECUTED_OUTCOME_LABELS
+    if is_closed and result.get("net_return_pct") is None:
+        raise OutcomeContractError("closed outcome requires canonical net_return_pct")
+    canonical_evidence = result.get("canonical_exit_evidence") is True
+    evidence_payload = result.get("intraday_exit_evidence")
+    if is_closed and not canonical_evidence:
+        raise OutcomeContractError("closed v2 outcome requires canonical typed exit evidence")
+    if canonical_evidence:
+        required_fields = {
+            "first_hit",
+            "same_bar_stop_take_profit_hit",
+            "applied_priority",
+        }
+        if not isinstance(evidence_payload, dict) or set(evidence_payload) != required_fields:
+            raise OutcomeContractError("canonical closed outcome requires exact typed exit evidence")
+        IntradayExitEvidence(
+            first_hit=evidence_payload.get("first_hit"),
+            same_bar_stop_take_profit_hit=evidence_payload.get(
+                "same_bar_stop_take_profit_hit"
+            ),
+            applied_priority=evidence_payload.get("applied_priority"),
+        )
+    elif evidence_payload is not None:
+        raise OutcomeContractError("non-canonical outcome must not carry typed exit evidence")
+    if label == OUTCOME_PROVISIONAL and canonical_evidence:
+        raise OutcomeContractError("provisional outcome cannot declare canonical exit evidence")
+    return result
+
+
+def _append_legacy_outcome_version(
+    db: Session,
+    rec: Recommendation,
+    result: dict[str, Any],
+    horizon_days: int,
+    label_source: str,
+) -> RecommendationOutcomeVersion:
+    result_json = canonical_json(result)
+    result_hash = canonical_fingerprint(result)
+    version_id = f"outv_legacy_{canonical_fingerprint({'recommendation_id': str(rec.recommendation_id), 'result_hash': result_hash})}"
+    existing = db.get(RecommendationOutcomeVersion, version_id)
+    if existing is not None:
+        if (
+            existing.recommendation_id != rec.recommendation_id
+            or existing.result_json != result_json
+            or existing.result_hash != result_hash
+            or existing.validity_status != NON_VALID_OUTCOME_STATUS
+        ):
+            raise OutcomeContractError("legacy outcome version identity conflicts with stored result")
+        return existing
+    row = RecommendationOutcomeVersion(
+        version_id=version_id,
+        recommendation_id=rec.recommendation_id,
+        calculation_version=OUTCOME_CALCULATION_VERSION,
+        entry_policy_id=str(result["entry_policy_id"]),
+        horizon_days=horizon_days,
+        label_source=label_source,
+        result_json=result_json,
+        result_hash=result_hash,
+        validity_status=NON_VALID_OUTCOME_STATUS,
+        legacy_verification_status=INCOMPLETE_PROVENANCE_STATUS,
+    )
+    db.add(row)
+    return row
+
+
+def _append_valid_outcome_version(
+    db: Session,
+    identity: OutcomeCalculationIdentity,
+    result: dict[str, Any],
+    horizon_days: int,
+    label_source: str,
+) -> OutcomeVersionRecord:
+    rows = db.scalars(
+        select(RecommendationOutcomeVersion).where(
+            RecommendationOutcomeVersion.recommendation_id == identity.recommendation_id
+        )
+    ).all()
+    decision = upsert_outcome_version(
+        tuple(_orm_outcome_version(row) for row in rows),
+        identity,
+        result,
+        computed_at=datetime.now(timezone.utc),
+    )
+    version = decision.version
+    if decision.appended:
+        db.add(RecommendationOutcomeVersion(
+            version_id=version.version_id,
+            recommendation_id=version.recommendation_id,
+            calculation_version=OUTCOME_CALCULATION_VERSION,
+            entry_policy_id=str(result["entry_policy_id"]),
+            horizon_days=horizon_days,
+            label_source=label_source,
+            result_json=version.result_json,
+            computed_at=version.computed_at.replace(tzinfo=None) if version.computed_at else datetime.utcnow(),
+            calculation_fingerprint=version.calculation_fingerprint,
+            result_hash=version.result_hash,
+            recommendation_identity_hash=version.recommendation_identity_hash,
+            market_snapshot_id=version.market_snapshot_id,
+            market_artifact_hash=version.market_artifact_hash,
+            execution_policy_fingerprint=version.execution_policy_fingerprint,
+            calculation_code_revision=version.calculation_code_revision,
+            label_policy_fingerprint=version.label_policy_fingerprint,
+            calculation_schema_version=version.calculation_schema_version,
+            validity_status=version.validity_status,
+            legacy_verification_status=None,
+        ))
+        db.flush()
+    return version
+
+
+def _current_projection(outcome: RecommendationOutcome | None) -> CurrentProjection | None:
+    if (
+        outcome is None
+        or not outcome.calculation_version_id
+        or not outcome.current_calculation_fingerprint
+        or outcome.projection_revision is None
+        or outcome.projected_at is None
+    ):
+        return None
+    projected_at = outcome.projected_at
+    if projected_at.tzinfo is None:
+        projected_at = projected_at.replace(tzinfo=timezone.utc)
+    return CurrentProjection(
+        recommendation_id=str(outcome.recommendation_id),
+        calculation_version_id=str(outcome.calculation_version_id),
+        current_calculation_fingerprint=str(outcome.current_calculation_fingerprint),
+        projection_revision=int(outcome.projection_revision),
+        projected_at=projected_at,
+    )
+
+
+def _project_outcome_fields(
+    outcome: RecommendationOutcome,
+    rec: Recommendation,
+    result: dict[str, Any],
+    horizon_days: int,
+    label_source: str,
+) -> None:
+    outcome.entry_policy_id = str(result["entry_policy_id"])
+    outcome.horizon_days = horizon_days
+    outcome.entry_triggered = bool(result["entry_triggered"])
+    outcome.entry_date = result["entry_date"]
+    outcome.entry_price = result["entry_price"]
+    outcome.exit_date = result["exit_date"]
+    outcome.exit_price = result["exit_price"]
+    outcome.executed_return = result["executed_return"]
+    outcome.weighted_return = result["weighted_return"]
+    outcome.position_size = result["position_size"]
+    outcome.holding_days = result["holding_days"]
+    outcome.entry_slippage_bps = result["entry_slippage_bps"]
+    outcome.exit_slippage_bps = result["exit_slippage_bps"]
+    outcome.stop_loss_price = result["stop_loss_price"]
+    outcome.take_profit_price = result["take_profit_price"]
+    outcome.exit_reason = result["exit_reason"]
+    outcome.max_return = result["max_return"]
+    outcome.min_return = result["min_return"]
+    outcome.close_return = result["close_return"]
+    outcome.achievable_return = result["achievable_return"]
+    outcome.max_drawdown = result["max_drawdown"]
+    outcome.hit_target = bool(result["hit_target"])
+    outcome.hit_invalid = bool(result["hit_invalid"])
+    outcome.outcome_label = str(result["outcome_label"])
+    outcome.outcome_label_legacy = str(result["outcome_label_legacy"])
+    outcome.outcome_reason = str(result["outcome_reason"])
+    outcome.label_source = label_source
+    outcome.labeled_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    rec.status = normalized_outcome_label(outcome)
+
+
 def _apply_outcome_simulation(
     db: Session,
     rec: Recommendation,
@@ -254,62 +490,76 @@ def _apply_outcome_simulation(
     horizon_days: int,
     label_source: str = "auto",
     execution_state: RecommendationExecutionState | None = None,
+    market_bars: list[DailyKbar] | None = None,
 ) -> bool:
-    """把 _simulate_outcome 结果写入 RecommendationOutcome（已存在则 update）。
-    返回 True 表示成功，False 表示出错（已 rollback savepoint）。
-    """
+    """Append immutable calculation evidence and update the display projection."""
     savepoint = db.begin_nested()
     try:
-        simulation = apply_execution_outcome_policy(simulation, execution_state)
-        existing = db.get(RecommendationOutcome, rec.recommendation_id)
-        version_id = f"outv_{uuid.uuid4().hex}"
-        calculation_version = "outcome_simulation_v1"
-        entry_policy_id = str(simulation["entry_policy_id"])
-        db.add(RecommendationOutcomeVersion(
-            version_id=version_id,
-            recommendation_id=rec.recommendation_id,
-            calculation_version=calculation_version,
-            entry_policy_id=entry_policy_id,
-            horizon_days=horizon_days,
-            label_source=label_source,
-            result_json=json.dumps(simulation, ensure_ascii=False, sort_keys=True, default=str),
-        ))
-        if existing is not None:
-            outcome = existing
+        db.scalar(
+            select(Recommendation)
+            .where(Recommendation.recommendation_id == rec.recommendation_id)
+            .with_for_update()
+        )
+        result = _validated_outcome_result(
+            apply_execution_outcome_policy(simulation, execution_state)
+        )
+        outcome = db.scalar(
+            select(RecommendationOutcome)
+            .where(RecommendationOutcome.recommendation_id == rec.recommendation_id)
+            .with_for_update()
+        )
+        run = db.get(RecommendationRun, rec.run_id)
+        if _complete_outcome_provenance(run, rec):
+            if market_bars is None:
+                raise OutcomeContractError("valid outcome requires bounded market bars")
+            market_payload = outcome_market_artifact_payload(
+                rec, market_bars, horizon_days, entry_lookahead_days=ENTRY_LOOKAHEAD_DAYS
+            )
+            identity = OutcomeCalculationIdentity(
+                recommendation_id=str(rec.recommendation_id),
+                recommendation_identity_hash=recommendation_identity_hash(rec, execution_state),
+                market_snapshot_id=str(run.source_snapshot_id),
+                market_artifact_hash=outcome_market_artifact_hash(market_payload),
+                execution_policy_fingerprint=DEFAULT_EXECUTION_POLICY.fingerprint(),
+                calculation_code_revision=resolve_code_revision(),
+                label_policy_fingerprint=label_policy_fingerprint(),
+            )
+            version = _append_valid_outcome_version(
+                db, identity, result, horizon_days, label_source
+            )
+            current = _current_projection(outcome)
+            projection_decision = cas_current(
+                current,
+                version,
+                expected_revision=current.projection_revision if current else None,
+                projected_at=datetime.now(timezone.utc),
+            )
+            projection = projection_decision.projection
+            if outcome is None:
+                outcome = RecommendationOutcome(recommendation_id=rec.recommendation_id)
+                db.add(outcome)
+            if projection_decision.updated:
+                _project_outcome_fields(outcome, rec, result, horizon_days, label_source)
+                outcome.calculation_version_id = projection.calculation_version_id
+                outcome.current_calculation_fingerprint = projection.current_calculation_fingerprint
+                outcome.projection_revision = projection.projection_revision
+                outcome.projected_at = projection.projected_at.replace(tzinfo=None)
         else:
-            outcome = RecommendationOutcome(recommendation_id=rec.recommendation_id)
-            db.add(outcome)
-
-        outcome.calculation_version_id = version_id
-        outcome.entry_policy_id = entry_policy_id
-        outcome.horizon_days = horizon_days
-        outcome.entry_triggered = bool(simulation["entry_triggered"])
-        outcome.entry_date = simulation["entry_date"]
-        outcome.entry_price = simulation["entry_price"]
-        outcome.exit_date = simulation["exit_date"]
-        outcome.exit_price = simulation["exit_price"]
-        outcome.executed_return = simulation["executed_return"]
-        outcome.weighted_return = simulation["weighted_return"]
-        outcome.position_size = simulation["position_size"]
-        outcome.holding_days = simulation["holding_days"]
-        outcome.entry_slippage_bps = simulation["entry_slippage_bps"]
-        outcome.exit_slippage_bps = simulation["exit_slippage_bps"]
-        outcome.stop_loss_price = simulation["stop_loss_price"]
-        outcome.take_profit_price = simulation["take_profit_price"]
-        outcome.exit_reason = simulation["exit_reason"]
-        outcome.max_return = simulation["max_return"]
-        outcome.min_return = simulation["min_return"]
-        outcome.close_return = simulation["close_return"]
-        outcome.achievable_return = simulation["achievable_return"]
-        outcome.max_drawdown = simulation["max_drawdown"]
-        outcome.hit_target = bool(simulation["hit_target"])
-        outcome.hit_invalid = bool(simulation["hit_invalid"])
-        outcome.outcome_label = str(simulation["outcome_label"])
-        outcome.outcome_label_legacy = str(simulation["outcome_label_legacy"])
-        outcome.outcome_reason = str(simulation["outcome_reason"])
-        outcome.label_source = label_source
-        outcome.labeled_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        rec.status = normalized_outcome_label(outcome)
+            if outcome is not None and outcome.current_calculation_fingerprint:
+                raise OutcomeContractError(
+                    "incomplete provenance cannot replace a trusted current projection"
+                )
+            legacy = _append_legacy_outcome_version(
+                db, rec, result, horizon_days, label_source
+            )
+            if outcome is None:
+                outcome = RecommendationOutcome(recommendation_id=rec.recommendation_id)
+                db.add(outcome)
+            _project_outcome_fields(outcome, rec, result, horizon_days, label_source)
+            outcome.calculation_version_id = legacy.version_id
+            outcome.current_calculation_fingerprint = None
+            outcome.projection_revision = None
+            outcome.projected_at = None
         savepoint.commit()
         return True
     except Exception:
@@ -361,10 +611,17 @@ def label_pending_outcomes(
         labeled = 0
         errors = 0
         for rec in recs:
-            simulation = _simulate_outcome(
+            bounded_bars = bounded_outcome_bars(
                 rec,
                 bars_by_code.get(str(rec.code), []),
-                dates_by_code.get(str(rec.code), []),
+                horizon_days,
+                entry_lookahead_days=ENTRY_LOOKAHEAD_DAYS,
+            )
+            bounded_dates = [str(bar.trade_date) for bar in bounded_bars]
+            simulation = _simulate_outcome(
+                rec,
+                bounded_bars,
+                bounded_dates,
                 horizon_days=horizon_days,
             )
             if simulation is None:
@@ -376,6 +633,7 @@ def label_pending_outcomes(
                 horizon_days,
                 label_source="auto",
                 execution_state=execution_states.get(str(rec.recommendation_id)),
+                market_bars=bounded_bars,
             ):
                 labeled += 1
             else:
@@ -471,14 +729,21 @@ def recompute_stale_outcomes(
     batch = max(1, int(batch_size))
     pending_in_batch = 0
     for rec in recs:
+        bounded_bars = bounded_outcome_bars(
+            rec,
+            bars_by_code.get(str(rec.code), []),
+            horizon_days,
+            entry_lookahead_days=ENTRY_LOOKAHEAD_DAYS,
+        )
+        bounded_dates = [str(bar.trade_date) for bar in bounded_bars]
         before_label = None
         existing = db.get(RecommendationOutcome, rec.recommendation_id)
         if existing is not None:
             before_label = str(existing.outcome_label)
         simulation = _simulate_outcome(
             rec,
-            bars_by_code.get(str(rec.code), []),
-            dates_by_code.get(str(rec.code), []),
+            bounded_bars,
+            bounded_dates,
             horizon_days=horizon_days,
         )
         if simulation is None:
@@ -490,6 +755,7 @@ def recompute_stale_outcomes(
             horizon_days,
             label_source="recompute",
             execution_state=execution_states.get(str(rec.recommendation_id)),
+            market_bars=bounded_bars,
         ):
             refreshed = db.get(RecommendationOutcome, rec.recommendation_id)
             after_label = str(refreshed.outcome_label) if refreshed is not None else str(simulation["outcome_label"])
@@ -552,6 +818,65 @@ def audit_trading_cost_boundary_labels(db: Session) -> dict[str, Any]:
         "scanned_count": len(rows),
         "updated_count": updated,
     }
+
+
+def exit_ambiguity_metrics(
+    db: Session,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, Any]:
+    stmt = (
+        select(
+            Recommendation,
+            RecommendationOutcome,
+            RecommendationOutcomeVersion,
+            RecommendationRun,
+        )
+        .join(
+            RecommendationOutcome,
+            RecommendationOutcome.recommendation_id == Recommendation.recommendation_id,
+        )
+        .join(
+            RecommendationOutcomeVersion,
+            RecommendationOutcomeVersion.version_id
+            == RecommendationOutcome.calculation_version_id,
+        )
+        .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
+        .where(
+            RecommendationOutcome.current_calculation_fingerprint
+            == RecommendationOutcomeVersion.calculation_fingerprint,
+            RecommendationOutcomeVersion.validity_status == "VALID",
+            RecommendationOutcomeVersion.calculation_schema_version == 2,
+        )
+    )
+    if start_date:
+        stmt = stmt.where(Recommendation.trade_date >= start_date)
+    if end_date:
+        stmt = stmt.where(Recommendation.trade_date <= end_date)
+    records: list[dict[str, Any]] = []
+    for rec, outcome, version, run in db.execute(stmt).all():
+        try:
+            result = json.loads(version.result_json)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise OutcomeContractError("valid outcome version contains invalid result_json") from exc
+        if canonical_json(result) != version.result_json:
+            raise OutcomeContractError("valid outcome version result_json is not canonical")
+        if canonical_fingerprint(result) != version.result_hash:
+            raise OutcomeContractError("valid outcome version result hash mismatches")
+        strategy_ids = sorted({
+            str(signal.get("strategy_id") or "").strip()
+            for signal in _loads(rec.skill_breakdown_json, [])
+            if isinstance(signal, dict) and str(signal.get("strategy_id") or "").strip()
+        })
+        records.append({
+            **result,
+            "calculation_schema_version": version.calculation_schema_version,
+            "strategy_ids": strategy_ids,
+            "exit_date": outcome.exit_date,
+            "trade_date": rec.trade_date,
+            "evaluation_scope": run.evaluation_scope,
+        })
+    return compute_exit_ambiguity_statistics(records)
 
 
 def overview_metrics(

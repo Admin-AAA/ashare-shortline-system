@@ -25,10 +25,16 @@ from __future__ import annotations
 import statistics
 
 from collections import Counter, defaultdict
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
+from app.engine.execution_core import (
+    CanonicalExecutionError,
+    IntradayExitEvidence,
+    IntradayFirstHit,
+)
 from app.engine.trading_costs import ADDITIONAL_COST_PCT, is_net_profitable
 from app.services.failure_attribution import classify_false_positive
+from app.services.quality_outcome import OUTCOME_CALCULATION_SCHEMA_VERSION
 
 _ACCURACY_COST_THRESHOLD = ADDITIONAL_COST_PCT
 
@@ -61,6 +67,122 @@ class TradeRecord(Protocol):
     缺失的字段将使用安全默认值（通常是 0 或 False）。
     """
     def get(self, key: str, default: Any = None) -> Any: ...
+
+
+class ExitAmbiguityContractError(ValueError):
+    """新口径 outcome 声明 canonical evidence，但证据结构不合法。"""
+
+
+def compute_exit_ambiguity_statistics(
+    records: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """统计 canonical closed outcome 的同根止盈/止损二义性。
+
+    旧 schema、未结算、missed/provisional 和 non-canonical 记录不会进入分母；
+    当前 schema 一旦声明 canonical evidence，就必须提供完整 typed payload。
+    """
+    dimensions = {
+        "strategy": defaultdict(list),
+        "month": defaultdict(list),
+        "evaluation_scope": defaultdict(list),
+    }
+    overall: list[IntradayExitEvidence] = []
+    for record in records:
+        evidence = _eligible_exit_evidence(record)
+        if evidence is None:
+            continue
+        overall.append(evidence)
+        strategy_values = record.get("strategy_ids")
+        if isinstance(strategy_values, (list, tuple, set, frozenset)):
+            strategies = sorted(
+                {str(item).strip() for item in strategy_values if str(item).strip()}
+            ) or ["unknown"]
+        else:
+            strategies = [
+                str(record.get("strategy_id") or record.get("skill_id") or "unknown")
+            ]
+        for strategy in strategies:
+            dimensions["strategy"][strategy].append(evidence)
+        trade_date = str(
+            record.get("exit_date")
+            or record.get("trade_date")
+            or record.get("signal_date")
+            or ""
+        )
+        month = trade_date[:7] if len(trade_date) >= 7 else "unknown"
+        evaluation_scope = str(record.get("evaluation_scope") or "unknown")
+        dimensions["month"][month].append(evidence)
+        dimensions["evaluation_scope"][evaluation_scope].append(evidence)
+    return {
+        "schema_version": OUTCOME_CALCULATION_SCHEMA_VERSION,
+        "overall": _ambiguity_summary(overall),
+        "by_strategy": {
+            key: _ambiguity_summary(value)
+            for key, value in sorted(dimensions["strategy"].items())
+        },
+        "by_month": {
+            key: _ambiguity_summary(value)
+            for key, value in sorted(dimensions["month"].items())
+        },
+        "by_evaluation_scope": {
+            key: _ambiguity_summary(value)
+            for key, value in sorted(dimensions["evaluation_scope"].items())
+        },
+    }
+
+
+def _eligible_exit_evidence(
+    record: Mapping[str, Any],
+) -> IntradayExitEvidence | None:
+    try:
+        schema_version = int(record.get("calculation_schema_version") or 0)
+    except (TypeError, ValueError):
+        return None
+    if schema_version != OUTCOME_CALCULATION_SCHEMA_VERSION:
+        return None
+    label = str(record.get("outcome_label") or record.get("label") or "")
+    if label not in {"success", "failed"}:
+        return None
+    if record.get("canonical_exit_evidence") is not True:
+        return None
+    payload = record.get("intraday_exit_evidence")
+    if not isinstance(payload, Mapping):
+        raise ExitAmbiguityContractError(
+            "canonical schema outcome requires intraday_exit_evidence mapping"
+        )
+    required = {
+        "first_hit",
+        "same_bar_stop_take_profit_hit",
+        "applied_priority",
+    }
+    if set(payload) != required:
+        raise ExitAmbiguityContractError(
+            "intraday_exit_evidence fields do not match the canonical contract"
+        )
+    try:
+        return IntradayExitEvidence(
+            first_hit=payload["first_hit"],
+            same_bar_stop_take_profit_hit=payload["same_bar_stop_take_profit_hit"],
+            applied_priority=payload["applied_priority"],
+        )
+    except CanonicalExecutionError as exc:
+        raise ExitAmbiguityContractError(
+            "malformed canonical intraday_exit_evidence"
+        ) from exc
+
+
+def _ambiguity_summary(evidence: list[IntradayExitEvidence]) -> dict[str, Any]:
+    ambiguous_count = sum(
+        item.first_hit is IntradayFirstHit.AMBIGUOUS for item in evidence
+    )
+    eligible_count = len(evidence)
+    return {
+        "eligible_count": eligible_count,
+        "ambiguous_count": ambiguous_count,
+        "ambiguity_rate": (
+            round(ambiguous_count / eligible_count, 6) if eligible_count else None
+        ),
+    }
 
 
 # ── 核心指标函数 ──────────────────────────────────────────────────────────

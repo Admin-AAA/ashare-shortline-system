@@ -16,7 +16,9 @@ import pytest
 
 from app.models.tables import BacktestRun, Recommendation, RecommendationOutcome, RecommendationRun
 from app.services.evaluation_metrics import (
+    ExitAmbiguityContractError,
     MIN_SIGNAL_SAMPLE,
+    compute_exit_ambiguity_statistics,
     compute_full_metrics,
     _empty_metrics,
     _positive_month_ratio,
@@ -357,6 +359,107 @@ class TestComputeFullMetrics:
         })
         result = compute_full_metrics(trades)
         assert result["sample_confidence"] == "normal"  # 30 >= 30
+
+
+class TestExitAmbiguityStatistics:
+    @staticmethod
+    def _record(**overrides: Any) -> dict[str, Any]:
+        record = {
+            "calculation_schema_version": 2,
+            "outcome_label": "success",
+            "canonical_exit_evidence": True,
+            "intraday_exit_evidence": {
+                "first_hit": "not_applicable",
+                "same_bar_stop_take_profit_hit": False,
+                "applied_priority": None,
+            },
+            "strategy_id": "strategy_a",
+            "exit_date": "2026-08-03",
+            "evaluation_scope": "live_forward",
+        }
+        record.update(overrides)
+        return record
+
+    def test_empty_and_ineligible_records_keep_rate_null(self):
+        report = compute_exit_ambiguity_statistics([
+            self._record(calculation_schema_version=1),
+            self._record(outcome_label="provisional"),
+            self._record(outcome_label="missed"),
+            self._record(canonical_exit_evidence=False),
+        ])
+
+        assert report["overall"] == {
+            "eligible_count": 0,
+            "ambiguous_count": 0,
+            "ambiguity_rate": None,
+        }
+        assert report["by_strategy"] == {}
+        assert compute_exit_ambiguity_statistics([])["overall"]["ambiguity_rate"] is None
+
+    def test_canonical_closed_evidence_counts_and_groups(self):
+        report = compute_exit_ambiguity_statistics([
+            self._record(
+                intraday_exit_evidence={
+                    "first_hit": "ambiguous",
+                    "same_bar_stop_take_profit_hit": True,
+                    "applied_priority": "stop_loss",
+                },
+            ),
+            self._record(
+                outcome_label="failed",
+                strategy_id="strategy_b",
+                exit_date="2026-09-02",
+                evaluation_scope="experiment",
+                intraday_exit_evidence={
+                    "first_hit": "stop_loss",
+                    "same_bar_stop_take_profit_hit": False,
+                    "applied_priority": None,
+                },
+            ),
+            self._record(
+                strategy_ids=["strategy_a", "strategy_c"],
+                intraday_exit_evidence={
+                    "first_hit": "trailing_stop",
+                    "same_bar_stop_take_profit_hit": False,
+                    "applied_priority": None,
+                },
+            ),
+        ])
+
+        assert report["overall"] == {
+            "eligible_count": 3,
+            "ambiguous_count": 1,
+            "ambiguity_rate": pytest.approx(1 / 3, abs=1e-6),
+        }
+        assert report["by_strategy"]["strategy_a"]["eligible_count"] == 2
+        assert report["by_strategy"]["strategy_a"]["ambiguity_rate"] == 0.5
+        assert report["by_strategy"]["strategy_c"]["eligible_count"] == 1
+        assert report["overall"]["eligible_count"] == 3
+        assert report["by_month"]["2026-09"]["ambiguity_rate"] == 0.0
+        assert report["by_evaluation_scope"]["experiment"]["eligible_count"] == 1
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            None,
+            {"first_hit": "ambiguous"},
+            {
+                "first_hit": "ambiguous",
+                "same_bar_stop_take_profit_hit": False,
+                "applied_priority": "stop_loss",
+            },
+            {
+                "first_hit": "stop_loss",
+                "same_bar_stop_take_profit_hit": False,
+                "applied_priority": "take_profit",
+            },
+        ],
+    )
+    def test_current_schema_malformed_canonical_evidence_fails_closed(self, payload):
+        with pytest.raises(ExitAmbiguityContractError):
+            compute_exit_ambiguity_statistics([
+                self._record(intraday_exit_evidence=payload),
+            ])
 
 
 # ═════════════════════════════════════════════════════════════════════════════

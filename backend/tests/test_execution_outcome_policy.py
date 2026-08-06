@@ -18,9 +18,16 @@ def _successful_simulation() -> dict:
         "exit_date": "2026-08-03",
         "exit_price": 10.8,
         "executed_return": 7.8,
+        "net_return_pct": 7.73,
         "weighted_return": 3.9,
         "position_size": 0.5,
         "holding_days": 3,
+        "canonical_exit_evidence": True,
+        "intraday_exit_evidence": {
+            "first_hit": "not_applicable",
+            "same_bar_stop_take_profit_hit": False,
+            "applied_priority": None,
+        },
         "entry_slippage_bps": 5.0,
         "exit_slippage_bps": 5.0,
         "exit_reason": "horizon_close",
@@ -40,8 +47,11 @@ def test_cancelled_before_entry_is_excluded_from_trade_outcome():
     assert projected["entry_date"] is None
     assert projected["entry_price"] is None
     assert projected["executed_return"] == 0.0
+    assert projected["net_return_pct"] is None
     assert projected["weighted_return"] == 0.0
     assert projected["position_size"] == 0.0
+    assert projected["canonical_exit_evidence"] is False
+    assert projected["intraday_exit_evidence"] is None
     assert projected["outcome_label"] == "missed"
     assert projected["exit_reason"] == "execution_cancelled_before_entry"
     assert projected["close_return"] == 8.0

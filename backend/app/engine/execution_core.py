@@ -30,6 +30,58 @@ class ExecutionStatus(StrEnum):
     CLOSED = "closed"
 
 
+class IntradayFirstHit(StrEnum):
+    STOP_LOSS = "stop_loss"
+    TAKE_PROFIT = "take_profit"
+    TRAILING_STOP = "trailing_stop"
+    AMBIGUOUS = "ambiguous"
+    NOT_APPLICABLE = "not_applicable"
+
+
+@dataclass(frozen=True, slots=True)
+class IntradayExitEvidence(CanonicalValue):
+    first_hit: IntradayFirstHit
+    same_bar_stop_take_profit_hit: bool
+    applied_priority: IntradayExitPriority | None
+
+    def __post_init__(self) -> None:
+        try:
+            first_hit = (
+                self.first_hit
+                if isinstance(self.first_hit, IntradayFirstHit)
+                else IntradayFirstHit(str(self.first_hit))
+            )
+        except ValueError as exc:
+            raise CanonicalExecutionError("invalid intraday first_hit") from exc
+        if not isinstance(self.same_bar_stop_take_profit_hit, bool):
+            raise CanonicalExecutionError(
+                "same_bar_stop_take_profit_hit must be boolean"
+            )
+        priority = self.applied_priority
+        if priority is not None:
+            try:
+                priority = (
+                    priority
+                    if isinstance(priority, IntradayExitPriority)
+                    else IntradayExitPriority(str(priority))
+                )
+            except ValueError as exc:
+                raise CanonicalExecutionError(
+                    "invalid applied intraday exit priority"
+                ) from exc
+        is_ambiguous = first_hit is IntradayFirstHit.AMBIGUOUS
+        if self.same_bar_stop_take_profit_hit is not is_ambiguous:
+            raise CanonicalExecutionError(
+                "same-bar stop/target flag must agree with first_hit"
+            )
+        if (priority is not None) is not is_ambiguous:
+            raise CanonicalExecutionError(
+                "applied_priority is required only for ambiguous evidence"
+            )
+        object.__setattr__(self, "first_hit", first_hit)
+        object.__setattr__(self, "applied_priority", priority)
+
+
 @dataclass(frozen=True, slots=True)
 class ExecutionBar(CanonicalValue):
     code: str
@@ -164,6 +216,7 @@ class ExitDecision(CanonicalValue):
     executed_price: float
     reason: str
     holding_days: int
+    intraday_exit_evidence: IntradayExitEvidence
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,6 +389,20 @@ class CausalExitResult(CanonicalValue):
     trade_date: str
     reason: str
     holding_days: int
+    intraday_exit_evidence: IntradayExitEvidence
+
+
+def _intraday_exit_evidence(
+    first_hit: IntradayFirstHit,
+    *,
+    applied_priority: IntradayExitPriority | None = None,
+) -> IntradayExitEvidence:
+    ambiguous = first_hit is IntradayFirstHit.AMBIGUOUS
+    return IntradayExitEvidence(
+        first_hit=first_hit,
+        same_bar_stop_take_profit_hit=ambiguous,
+        applied_priority=applied_priority,
+    )
 
 
 def _ordered_bars(request: ExecutionRequest) -> tuple[ExecutionBar, ...]:
@@ -578,7 +645,11 @@ def resolve_causal_exit(
                 else:
                     price = bar_open
                 return CausalExitResult(
-                    price, bar.trade_date, "stop_loss_gap", holding_days
+                    price,
+                    bar.trade_date,
+                    "stop_loss_gap",
+                    holding_days,
+                    _intraday_exit_evidence(IntradayFirstHit.NOT_APPLICABLE),
                 )
             if (
                 config.dynamic_trailing
@@ -591,6 +662,7 @@ def resolve_causal_exit(
                     bar.trade_date,
                     "trailing_stop_gap",
                     holding_days,
+                    _intraday_exit_evidence(IntradayFirstHit.NOT_APPLICABLE),
                 )
             if bar_open >= take_profit:
                 price = (
@@ -600,7 +672,11 @@ def resolve_causal_exit(
                     else take_profit
                 )
                 return CausalExitResult(
-                    price, bar.trade_date, "take_profit_gap", holding_days
+                    price,
+                    bar.trade_date,
+                    "take_profit_gap",
+                    holding_days,
+                    _intraday_exit_evidence(IntradayFirstHit.NOT_APPLICABLE),
                 )
             stop_hit = low <= hard_stop
             take_profit_hit = high >= take_profit
@@ -614,16 +690,28 @@ def resolve_causal_exit(
                         bar.trade_date,
                         "take_profit_intraday_both_hit",
                         holding_days,
+                        _intraday_exit_evidence(
+                            IntradayFirstHit.AMBIGUOUS,
+                            applied_priority=config.intraday_exit_priority,
+                        ),
                     )
                 return CausalExitResult(
                     hard_stop,
                     bar.trade_date,
                     "stop_loss_intraday_both_hit",
                     holding_days,
+                    _intraday_exit_evidence(
+                        IntradayFirstHit.AMBIGUOUS,
+                        applied_priority=config.intraday_exit_priority,
+                    ),
                 )
             if stop_hit:
                 return CausalExitResult(
-                    hard_stop, bar.trade_date, "stop_loss_hit", holding_days
+                    hard_stop,
+                    bar.trade_date,
+                    "stop_loss_hit",
+                    holding_days,
+                    _intraday_exit_evidence(IntradayFirstHit.STOP_LOSS),
                 )
             if (
                 config.dynamic_trailing
@@ -636,6 +724,7 @@ def resolve_causal_exit(
                     bar.trade_date,
                     "trailing_stop_hit",
                     holding_days,
+                    _intraday_exit_evidence(IntradayFirstHit.TRAILING_STOP),
                 )
             if take_profit_hit:
                 return CausalExitResult(
@@ -643,6 +732,7 @@ def resolve_causal_exit(
                     bar.trade_date,
                     "take_profit_hit",
                     holding_days,
+                    _intraday_exit_evidence(IntradayFirstHit.TAKE_PROFIT),
                 )
 
         if config.dynamic_trailing and config.entry_price > 0 and high > 0:
@@ -672,6 +762,7 @@ def resolve_causal_exit(
         last_bar.trade_date,
         reason,
         len(bars),
+        _intraday_exit_evidence(IntradayFirstHit.NOT_APPLICABLE),
     )
 
 
@@ -774,6 +865,7 @@ def execute_trade(
         executed_exit,
         exit_result.reason,
         exit_result.holding_days,
+        exit_result.intraday_exit_evidence,
     )
     return ExecutionResult(
         ExecutionStatus.CLOSED,
@@ -800,6 +892,8 @@ __all__ = [
     "ExecutionResult",
     "ExecutionStatus",
     "ExitDecision",
+    "IntradayExitEvidence",
+    "IntradayFirstHit",
     "PositionSizingDecision",
     "compose_position_caps",
     "execute_trade",

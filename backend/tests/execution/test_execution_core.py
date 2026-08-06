@@ -18,6 +18,8 @@ from app.engine.execution_core import (
     ExecutionIntent,
     ExecutionRequest,
     ExecutionStatus,
+    IntradayExitEvidence,
+    IntradayFirstHit,
     compose_position_caps,
     execute_trade,
     resolve_causal_entry,
@@ -156,6 +158,9 @@ def test_t_plus_one_never_scans_entry_bar_even_when_stop_and_target_both_hit():
     assert result.exit is not None
     assert result.exit.trade_date == "2026-06-03"
     assert result.exit.reason == "horizon_close"
+    assert result.exit.intraday_exit_evidence.first_hit is IntradayFirstHit.NOT_APPLICABLE
+    assert result.exit.intraday_exit_evidence.same_bar_stop_take_profit_hit is False
+    assert result.exit.intraday_exit_evidence.applied_priority is None
     assert result.exit.trade_date > result.entry.trade_date
 
 
@@ -174,8 +179,20 @@ def test_t_plus_one_false_can_exit_entry_bar_using_registered_priority():
     assert stop_first.exit is not None
     assert stop_first.exit.trade_date == stop_first.entry.trade_date
     assert stop_first.exit.reason == "stop_loss_intraday_both_hit"
+    assert stop_first.exit.raw_price == 95.0
+    assert stop_first.exit.intraday_exit_evidence == IntradayExitEvidence(
+        IntradayFirstHit.AMBIGUOUS,
+        True,
+        IntradayExitPriority.STOP_LOSS,
+    )
     assert target_first.exit is not None
     assert target_first.exit.reason == "take_profit_intraday_both_hit"
+    assert target_first.exit.raw_price == 105.0
+    assert target_first.exit.intraday_exit_evidence == IntradayExitEvidence(
+        IntradayFirstHit.AMBIGUOUS,
+        True,
+        IntradayExitPriority.TAKE_PROFIT,
+    )
 
 
 def test_single_entry_bar_is_open_t1_locked_not_a_same_day_final_trade():
@@ -193,6 +210,7 @@ def test_single_entry_bar_is_open_t1_locked_not_a_same_day_final_trade():
     assert core_result.exit is None
     assert adapter_result.entry_triggered is True
     assert adapter_result.status == "open_t1_locked"
+    assert adapter_result.intraday_exit_evidence is None
     assert adapter_result.trade.entry_date is None
     assert adapter_result.trade.exit_date is None
     assert adapter_result.trade.exit_reason == "horizon_close_t1_locked"
@@ -211,6 +229,8 @@ def test_research_adapter_is_order_invariant_and_has_zero_t1_same_day_exits():
     assert forward == reverse
     assert forward.trade.entry_date == "2026-06-02"
     assert forward.trade.exit_date == "2026-06-03"
+    assert forward.intraday_exit_evidence is not None
+    assert forward.intraday_exit_evidence.first_hit is IntradayFirstHit.NOT_APPLICABLE
     assert forward.trade.entry_date != forward.trade.exit_date
 
 
@@ -233,6 +253,64 @@ def test_untradable_exit_is_deferred_and_attributed_at_horizon():
     assert result is not None
     assert result.trade_date == "2026-06-04"
     assert result.reason == "horizon_close_after_locked_limit_down"
+    assert result.intraday_exit_evidence.first_hit is IntradayFirstHit.NOT_APPLICABLE
+
+
+def test_canonical_exit_evidence_covers_single_hits_trailing_gap_and_horizon():
+    only_stop = resolve_causal_exit(
+        (_bar("2026-06-02"), _bar("2026-06-03", high=104.0, low=94.0)),
+        CausalExitConfig(95.0, 105.0, 100.0, dynamic_trailing=False),
+    )
+    only_target = resolve_causal_exit(
+        (_bar("2026-06-02"), _bar("2026-06-03", high=106.0, low=96.0)),
+        CausalExitConfig(95.0, 105.0, 100.0, dynamic_trailing=False),
+    )
+    gap = resolve_causal_exit(
+        (_bar("2026-06-02"), _bar("2026-06-03", open=94.0, high=96.0, low=93.0)),
+        CausalExitConfig(95.0, 105.0, 100.0, dynamic_trailing=False),
+    )
+    trailing = resolve_causal_exit(
+        (
+            _bar("2026-06-02", close=103.0),
+            _bar("2026-06-03", open=103.0, high=104.0, low=101.0),
+        ),
+        CausalExitConfig(
+            95.0,
+            110.0,
+            100.0,
+            trailing_mode="profit_floor",
+            profit_lock_ratio=0.5,
+        ),
+    )
+
+    assert only_stop is not None
+    assert only_stop.intraday_exit_evidence.first_hit is IntradayFirstHit.STOP_LOSS
+    assert only_target is not None
+    assert only_target.intraday_exit_evidence.first_hit is IntradayFirstHit.TAKE_PROFIT
+    assert gap is not None
+    assert gap.intraday_exit_evidence.first_hit is IntradayFirstHit.NOT_APPLICABLE
+    assert trailing is not None
+    assert trailing.reason == "trailing_stop_hit"
+    assert trailing.intraday_exit_evidence.first_hit is IntradayFirstHit.TRAILING_STOP
+
+
+def test_default_numerical_execution_is_unchanged_with_typed_evidence():
+    result = execute_trade(
+        _request(
+            _bar("2026-06-02"),
+            _bar("2026-06-03", high=110.0, low=90.0),
+        ),
+        _policy(),
+    )
+
+    assert result.exit is not None
+    assert result.exit.reason == "stop_loss_intraday_both_hit"
+    assert result.exit.raw_price == 95.0
+    assert result.exit.executed_price == 95.0
+    assert result.gross_return_pct == -5.0
+    assert result.net_return_pct == -5.0
+    assert result.position_size == 1.0
+    assert result.exit.intraday_exit_evidence.first_hit is IntradayFirstHit.AMBIGUOUS
 
 
 def test_formal_outcome_exit_is_only_an_adapter_to_execution_core(monkeypatch):
@@ -241,7 +319,17 @@ def test_formal_outcome_exit_is_only_an_adapter_to_execution_core(monkeypatch):
     def fake_resolve(bars, config):
         observed["bars"] = bars
         observed["config"] = config
-        return CausalExitResult(101.0, "2026-06-03", "horizon_close", 2)
+        return CausalExitResult(
+            101.0,
+            "2026-06-03",
+            "horizon_close",
+            2,
+            IntradayExitEvidence(
+                IntradayFirstHit.NOT_APPLICABLE,
+                False,
+                None,
+            ),
+        )
 
     monkeypatch.setattr(outcome_simulation, "resolve_causal_exit", fake_resolve)
     bars = [

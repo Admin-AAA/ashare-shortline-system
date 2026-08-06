@@ -6,6 +6,7 @@ import logging
 from app.db.session import get_db
 from app.services.outcome_service import (
     board_and_net_breakdown,
+    exit_ambiguity_metrics,
     filter_effectiveness,
     metrics_by_score_line,
     metrics_by_setup,
@@ -57,6 +58,15 @@ def d_net(
     return board_and_net_breakdown(
         db, window_days=window_days, start_date=start_date, end_date=end_date,
     )
+
+
+@router.get("/exit-ambiguity")
+def exit_ambiguity(
+    db: Session = Depends(get_db),
+    start_date: str | None = _start_date_q(),
+    end_date: str | None = _end_date_q(),
+):
+    return exit_ambiguity_metrics(db, start_date=start_date, end_date=end_date)
 
 
 @router.get("/by-strategy")

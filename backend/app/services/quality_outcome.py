@@ -15,7 +15,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from app.engine.canonical import canonical_fingerprint, canonical_json
 
 
-OUTCOME_CALCULATION_SCHEMA_VERSION = 1
+OUTCOME_CALCULATION_SCHEMA_VERSION = 2
 
 
 class QualityContractError(ValueError):
