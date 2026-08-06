@@ -68,32 +68,15 @@ class GovernanceEventLog:
         )
         lock_path = self._index_path.with_suffix(".lock")
         with file_lock(lock_path):
-            indexed_ids: set[str] = set()
-            if self._index_path.exists():
-                with self._index_path.open("r", encoding="utf-8") as handle:
-                    for line in handle:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            indexed = json.loads(line)
-                        except json.JSONDecodeError as exc:
-                            raise GovernanceError(
-                                "corrupt_event_index",
-                                "governance event index contains invalid JSON",
-                            ) from exc
-                        object_id = indexed.get("object_id")
-                        if not isinstance(object_id, str):
-                            raise GovernanceError(
-                                "corrupt_event_index",
-                                "governance event index entry has no object_id",
-                            )
-                        indexed_ids.add(object_id)
-            if envelope.object_id not in indexed_ids:
-                with self._index_path.open("a", encoding="utf-8") as handle:
-                    handle.write(entry + "\n")
-                    handle.flush()
-                    os.fsync(handle.fileno())
+            # append-only：每一次发生都写一行，即使 object_id 与已有行相同。
+            # 同一逻辑事件的多次合法发生（如重复 freeze 同一 payload）是审计语义
+            # 的一部分，必须各自留痕；对象层 store.put 已保证相同 bytes 幂等不覆盖，
+            # 不同 bytes 拒绝，故 index 无需也不应在此做 object_id 去重。
+            # 是否按 fingerprint/identity 幂等是各业务的语义，由应用层自行判定。
+            with self._index_path.open("a", encoding="utf-8") as handle:
+                handle.write(entry + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
         return envelope
 
     def iter_events(self) -> Iterator[ImmutableEnvelope]:

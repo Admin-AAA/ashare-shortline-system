@@ -147,7 +147,12 @@ class TestEvents:
         assert log.first_event_of_type("BASELINE_FROZEN") is not None
         assert log.count() == 2
 
-    def test_multiprocess_duplicate_append_has_one_index_entry(self, tmp_path):
+    def test_multiprocess_duplicate_append_keeps_one_object_and_appends_each_occurrence(self, tmp_path):
+        # 事件流是 append-only 审计 spine：同一 object_id 的事件被多次 append
+        # （并发重试 / 逻辑上的多次合法发生）每次都留痕，不做 object_id 去重——
+        # 去重会丢失审计信息（见 property_s0 的 freeze_s0 重复冻结语义）。
+        # 不变量：对象层只持久化一个对象（store.put 内容寻址幂等、拒绝覆盖），
+        # index 每次发生各记一行、全部可解析、payload 一致。
         processes = [
             multiprocessing.Process(
                 target=_append_event_process,
@@ -161,9 +166,15 @@ class TestEvents:
             process.join(timeout=10)
             assert process.exitcode == 0
 
-        events = list(GovernanceEventLog(GovernanceObjectStore(tmp_path)).iter_events())
-        assert len(events) == 1
-        assert events[0].payload["payload"] == {"step": 1}
+        log = GovernanceEventLog(GovernanceObjectStore(tmp_path))
+        events = list(log.iter_events())
+        # 8 次发生各留一行，全部可读且内容一致
+        assert len(events) == 8
+        assert all(event.payload["payload"] == {"step": 1} for event in events)
+        # 对象层只有一个不可变对象（同一 object_id 幂等，未被覆盖）
+        assert len({event.object_id for event in events}) == 1
+        stored = list((tmp_path / "governance_event").glob("*.json"))
+        assert len(stored) == 1
 
     def test_multiprocess_distinct_appends_are_complete_and_parseable(self, tmp_path):
         processes = [
