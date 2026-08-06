@@ -123,6 +123,12 @@ class StrategyBacktestProfiles:
     ) -> dict[str, dict[str, Any] | None]:
         return {target.strategy_id: self.read(target) for target in targets}
 
+    def read_many_rolled(
+        self,
+        targets: tuple[StrategyBacktestProfileTarget, ...],
+    ) -> dict[str, dict[str, Any] | None]:
+        return {target.strategy_id: self.read_rolled(target) for target in targets}
+
     def refresh(
         self,
         target: StrategyBacktestProfileTarget,
@@ -185,6 +191,74 @@ class StrategyBacktestProfiles:
         )
         if run is None:
             return None
+        return self._profile_from_run(run, target)
+
+    def read_rolled(
+        self, target: StrategyBacktestProfileTarget
+    ) -> dict[str, Any] | None:
+        """读取当前版本最近的半年画像，窗口随交易日漂移时向后滚动复用。
+
+        优先精确匹配当前目标窗口；窗口已漂移（每来一个新交易日整体平移一天）时，
+        回退到**同一 strategy_version** 下最新完成的画像——版本仍是硬约束，
+        不跨版本混合，满足「不展示跨版本混合收益」。画像附 ``target_date_from/to``
+        与 ``window_rolled``，供前端显式标注真实信号窗口。
+        """
+        exact = self.read(target)
+        if exact is not None:
+            return exact
+        runs = self._db.scalars(
+            select(BacktestRunV2)
+            .where(
+                BacktestRunV2.experiment_id == STRATEGY_PROFILE_EXPERIMENT_ID,
+                BacktestRunV2.strategy_id == target.strategy_id,
+                BacktestRunV2.strategy_version == target.strategy_version,
+                BacktestRunV2.execution_policy_fingerprint
+                == target.execution_policy.fingerprint(),
+                BacktestRunV2.status == "completed",
+                BacktestRunV2.date_to <= target.date_to,
+            )
+            .order_by(
+                BacktestRunV2.date_to.desc(),
+                BacktestRunV2.finished_at.desc(),
+                BacktestRunV2.created_at.desc(),
+            )
+        ).all()
+        for run in runs:
+            profile = self._profile_from_run(run, target, run_window=True)
+            if profile is None:
+                continue
+            profile["window_rolled"] = True
+            return profile
+        return None
+
+    def _profile_from_run(
+        self,
+        run: BacktestRunV2,
+        target: StrategyBacktestProfileTarget,
+        *,
+        run_window: bool = False,
+    ) -> dict[str, Any] | None:
+        """由一条 completed run 重建画像；canonical request 与期望不符时返回 None。
+
+        run_window=True（rolled 复用）时，按 run 实际落库的 date_from/date_to 重建期望
+        request 做校验——版本/参数/成交政策仍锚定当前 target，仅窗口取 run 自身的。
+        画像窗口始终以 run 实际窗口为准，并附 target 窗口供前端标注漂移。
+        """
+        if run_window:
+            expected = StrategyBacktestProfileTarget(
+                strategy_id=target.strategy_id,
+                strategy_version=target.strategy_version,
+                date_from=str(run.date_from),
+                date_to=str(run.date_to),
+                parameter_set=target.parameter_set,
+                execution_policy=target.execution_policy,
+                data_requirement_fingerprint=target.data_requirement_fingerprint,
+            )
+            expected_request = expected.request().to_canonical_json()
+        else:
+            expected_request = target.request().to_canonical_json()
+        if _canonical_json_text(str(run.request_json)) != expected_request:
+            return None
         trades = tuple(
             _trade_from_json(str(row.trade_json))
             for row in self._db.scalars(
@@ -199,6 +273,8 @@ class StrategyBacktestProfiles:
         )
         metrics = compute_metrics(trades)
         portfolio = _portfolio_metrics(trades)
+        date_from = str(run.date_from)
+        date_to = str(run.date_to)
         return {
             "schema_version": STRATEGY_PROFILE_SCHEMA_VERSION,
             "source": "canonical_backtest",
@@ -215,8 +291,11 @@ class StrategyBacktestProfiles:
             "parameter_fingerprint": canonical_fingerprint(dict(target.parameter_set)),
             "execution_policy_fingerprint": target.execution_policy.fingerprint(),
             "portfolio_model": STRATEGY_PROFILE_PORTFOLIO_MODEL,
-            "date_from": target.date_from,
-            "date_to": target.date_to,
+            "date_from": date_from,
+            "date_to": date_to,
+            "target_date_from": target.date_from,
+            "target_date_to": target.date_to,
+            "window_rolled": False,
             "generated_at": run.finished_at.isoformat() if run.finished_at else None,
             "sample_count": metrics.sample_count,
             "executed_trade_count": metrics.executed_trade_count,
@@ -234,8 +313,8 @@ class StrategyBacktestProfiles:
             "confidence": metrics.confidence.value,
             "monthly_returns": _monthly_returns(
                 trades,
-                date_from=target.date_from,
-                date_to=target.date_to,
+                date_from=date_from,
+                date_to=date_to,
             ),
         }
 

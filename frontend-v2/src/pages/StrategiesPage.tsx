@@ -215,6 +215,11 @@ function CalledCard({ item }: { item: StrategyListItem }) {
       <div style={{ marginTop: "var(--space-2)", fontSize: "var(--text-xs)", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
         {perf.date_from} ~ {perf.date_to} · 成交 {perf.sample_count} 笔 · 均收益 {perf.avg_return == null ? "—" : `${perf.avg_return >= 0 ? "+" : ""}${perf.avg_return.toFixed(2)}%`}
       </div>
+      {perf.window_rolled && perf.target_date_to && perf.target_date_to !== perf.date_to && (
+        <div style={{ marginTop: 4, fontSize: "var(--text-xs)", color: "var(--warning, #b45309)", fontFamily: "var(--font-mono)" }} title={`目标窗口 ${perf.target_date_from} ~ ${perf.target_date_to} 随交易日漂移，暂复用同版本最近完成画像`}>
+          信号窗口 {perf.date_from} ~ {perf.date_to}（随交易日滚动复用）
+        </div>
+      )}
       <div style={{ marginTop: 4, fontSize: "var(--text-xs)", color: "var(--muted)", fontFamily: "var(--font-mono)" }} title={perf.strategy_version}>
         当前版本 {perf.strategy_version.slice(0, 18)} · 更新 {perf.generated_at?.slice(0, 16).replace("T", " ") || "—"}
       </div>

@@ -81,6 +81,9 @@ def _performance_payload(
         "monthly_returns": profile.get("monthly_returns") or [],
         "date_from": profile.get("date_from"),
         "date_to": profile.get("date_to"),
+        "target_date_from": profile.get("target_date_from"),
+        "target_date_to": profile.get("target_date_to"),
+        "window_rolled": bool(profile.get("window_rolled")),
         "generated_at": profile.get("generated_at"),
         "reliable": sample_count >= MIN_SAMPLE_FOR_RELIABLE,
         "exposure_30d": int(exposure_30d or 0),
@@ -170,7 +173,10 @@ def list_strategies(
     except ValueError:
         targets = ()
     target_by_id = {target.strategy_id: target for target in targets}
-    profiles_by_id = profiles.read_many(targets)
+    # 窗口随交易日漂移（每来一个新交易日整体平移一天）。read_many_rolled 优先精确匹配
+    # 当前目标窗口，miss 时回退到同一 strategy_version 下最新完成的画像并标注 window_rolled，
+    # 不跨版本混合——避免窗口每天漂移导致页面长期「尚未生成」。
+    profiles_by_id = profiles.read_many_rolled(targets)
     exposure_30d = exposure_sample_counts(db, window_days=30)
 
     # T4：低曝光策略门线明细**批量**查询（1 次索引扫描替代 N 次全扫）
@@ -250,7 +256,7 @@ def strategy_detail(
     profiles = StrategyBacktestProfiles(db)
     target = profiles.current_target(strategy_id)
     profile = (
-        profiles.read(target)
+        profiles.read_rolled(target)
         if target is not None and detail.get("selected_is_current")
         else None
     )

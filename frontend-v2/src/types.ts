@@ -2048,6 +2048,11 @@ export type StrategyPerformance = {
   monthly_returns: StrategyMonthlyReturn[];
   date_from: string;
   date_to: string;
+  /** 当前目标信号窗口（最新可完全结算信号日锚定，随交易日漂移） */
+  target_date_from?: string;
+  target_date_to?: string;
+  /** true=信号窗口已向后滚动复用同版本最新完成画像（date_from/to 为真实窗口）；版本仍不跨混 */
+  window_rolled?: boolean;
   generated_at: string | null;
   /** 统计可信度：样本数 < 20 时为 false（胜率属噪声，前端标「样本不足·统计参考」） */
   reliable: boolean;
