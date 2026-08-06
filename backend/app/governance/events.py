@@ -8,11 +8,13 @@ and freeze events happened *before* any behavior-changing work.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
 from app.governance.envelope import GovernanceError, ImmutableEnvelope
+from app.governance.locking import file_lock
 from app.governance.store import GovernanceObjectStore
 
 
@@ -55,19 +57,43 @@ class GovernanceEventLog:
             referenced_object_ids=referenced_object_ids,
         )
         self._index_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._index_path.open("a", encoding="utf-8") as handle:
-            handle.write(
-                json.dumps(
-                    {
-                        "event_type": event_type,
-                        "object_id": envelope.object_id,
-                        "recorded_at": envelope.to_document()["created_at"],
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                )
-                + "\n"
-            )
+        entry = json.dumps(
+            {
+                "event_type": event_type,
+                "object_id": envelope.object_id,
+                "recorded_at": envelope.to_document()["created_at"],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        lock_path = self._index_path.with_suffix(".lock")
+        with file_lock(lock_path):
+            indexed_ids: set[str] = set()
+            if self._index_path.exists():
+                with self._index_path.open("r", encoding="utf-8") as handle:
+                    for line in handle:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            indexed = json.loads(line)
+                        except json.JSONDecodeError as exc:
+                            raise GovernanceError(
+                                "corrupt_event_index",
+                                "governance event index contains invalid JSON",
+                            ) from exc
+                        object_id = indexed.get("object_id")
+                        if not isinstance(object_id, str):
+                            raise GovernanceError(
+                                "corrupt_event_index",
+                                "governance event index entry has no object_id",
+                            )
+                        indexed_ids.add(object_id)
+            if envelope.object_id not in indexed_ids:
+                with self._index_path.open("a", encoding="utf-8") as handle:
+                    handle.write(entry + "\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
         return envelope
 
     def iter_events(self) -> Iterator[ImmutableEnvelope]:
@@ -75,13 +101,29 @@ class GovernanceEventLog:
 
         if not self._index_path.exists():
             return
-        with self._index_path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                entry = json.loads(line)
-                yield self._store.get(entry["object_id"])
+        object_ids: list[str] = []
+        with file_lock(self._index_path.with_suffix(".lock"), shared=True):
+            with self._index_path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError as exc:
+                        raise GovernanceError(
+                            "corrupt_event_index",
+                            "governance event index contains invalid JSON",
+                        ) from exc
+                    object_id = entry.get("object_id")
+                    if not isinstance(object_id, str):
+                        raise GovernanceError(
+                            "corrupt_event_index",
+                            "governance event index entry has no object_id",
+                        )
+                    object_ids.append(object_id)
+        for object_id in object_ids:
+            yield self._store.get(object_id)
 
     def first_event_of_type(self, event_type: str) -> ImmutableEnvelope | None:
         for envelope in self.iter_events():

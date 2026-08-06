@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import multiprocessing
 
 import pytest
 
@@ -146,6 +147,42 @@ class TestEvents:
         assert log.first_event_of_type("BASELINE_FROZEN") is not None
         assert log.count() == 2
 
+    def test_multiprocess_duplicate_append_has_one_index_entry(self, tmp_path):
+        processes = [
+            multiprocessing.Process(
+                target=_append_event_process,
+                args=(str(tmp_path), 1),
+            )
+            for _ in range(8)
+        ]
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join(timeout=10)
+            assert process.exitcode == 0
+
+        events = list(GovernanceEventLog(GovernanceObjectStore(tmp_path)).iter_events())
+        assert len(events) == 1
+        assert events[0].payload["payload"] == {"step": 1}
+
+    def test_multiprocess_distinct_appends_are_complete_and_parseable(self, tmp_path):
+        processes = [
+            multiprocessing.Process(
+                target=_append_event_process,
+                args=(str(tmp_path), index),
+            )
+            for index in range(12)
+        ]
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join(timeout=10)
+            assert process.exitcode == 0
+
+        events = list(GovernanceEventLog(GovernanceObjectStore(tmp_path)).iter_events())
+        assert len(events) == 12
+        assert {event.payload["payload"]["step"] for event in events} == set(range(12))
+
 
 class TestStateMachines:
     def test_code_state_round_trip_and_stale_invalidation(self):
@@ -259,6 +296,16 @@ class TestRevisionBinding:
         assert len(digest) == 64
         with pytest.raises(GovernanceError):
             digest_file(tmp_path / "missing.py")
+
+
+def _append_event_process(root: str, step: int) -> None:
+    GovernanceEventLog(GovernanceObjectStore(root)).append(
+        event_type="CONCURRENT_EVENT",
+        actor="process-tester",
+        code_revision=_REV,
+        recorded_at=_NOW,
+        payload={"step": step},
+    )
 
 
 def _tmp():

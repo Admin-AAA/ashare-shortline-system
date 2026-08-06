@@ -12,9 +12,11 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
+import tempfile
 from typing import Any, Iterator, Mapping
 
 from app.governance.envelope import GovernanceError, ImmutableEnvelope
+from app.governance.locking import file_lock
 
 
 EVIDENCE_URI_SCHEME = "evidence://sha256/"
@@ -72,27 +74,31 @@ class GovernanceObjectStore:
         )
         path = self._path_for(envelope.object_id)
         document = envelope.to_canonical_json()
-        if path.exists():
-            existing = path.read_bytes()
-            if existing != document.encode("utf-8"):
-                raise GovernanceError(
-                    "immutable_overwrite_refused",
-                    f"object {envelope.object_id} already exists with different bytes",
-                )
-            return envelope
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(document, encoding="utf-8")
-        if path.exists():
-            # Concurrent writer won the race; bytes must be identical.
-            temporary.unlink(missing_ok=True)
-            if path.read_bytes() != document.encode("utf-8"):
-                raise GovernanceError(
-                    "immutable_overwrite_refused",
-                    f"object {envelope.object_id} already exists with different bytes",
-                )
-            return envelope
-        os.replace(temporary, path)
+        encoded = document.encode("utf-8")
+        lock_path = path.parent / f".{path.name}.lock"
+        with file_lock(lock_path):
+            if path.exists():
+                if path.read_bytes() != encoded:
+                    raise GovernanceError(
+                        "immutable_overwrite_refused",
+                        f"object {envelope.object_id} already exists with different bytes",
+                    )
+                return envelope
+            path.parent.mkdir(parents=True, exist_ok=True)
+            file_descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{path.stem}.",
+                suffix=".tmp",
+                dir=path.parent,
+            )
+            temporary = Path(temporary_name)
+            try:
+                with os.fdopen(file_descriptor, "wb") as handle:
+                    handle.write(encoded)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
         return envelope
 
     def get(self, object_id: str) -> ImmutableEnvelope:
