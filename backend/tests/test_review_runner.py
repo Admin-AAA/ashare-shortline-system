@@ -106,7 +106,7 @@ def test_run_skill_reviews_uses_direct_path_and_primes_session(monkeypatch):
 
 def test_user_prompt_requires_minimum_tool_sequence():
     prompt = _build_user_prompt(
-        stock={"code": "600000", "name": "浦发银行"},
+        stock={"code": "600000", "name": "浦发银行", "price": 10.5, "pct": 1.2},
         snapshot={"trade_date": "2026-05-15"},
         rule_signal={"phase": "启动", "score": 65},
         history=None,

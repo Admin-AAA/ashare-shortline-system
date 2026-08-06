@@ -26,6 +26,6 @@ def test_every_operation_has_unique_id_and_typed_success_response() -> None:
             ):
                 missing.append(f"{method.upper()} {path}")
 
-    assert len(operation_ids) == 120
+    assert len(operation_ids) == 124
     assert len(operation_ids) == len(set(operation_ids))
     assert missing == []
