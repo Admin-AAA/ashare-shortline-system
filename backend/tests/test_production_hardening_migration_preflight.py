@@ -40,6 +40,7 @@ def _base_inventory() -> SchemaInventory:
                 "backtest_holdout_claims",
                 "scheduled_tasks",
                 "scheduled_task_runs",
+                "api_call_logs",
             )
         }
     )
@@ -104,6 +105,7 @@ def test_manifest_is_linear_additive_and_checksum_bound() -> None:
         "M-HOLDOUT",
         "M-RISK",
         "M-SCHEDULER",
+        "M-LLM",
     ]
     assert {
         operation.kind

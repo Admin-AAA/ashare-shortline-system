@@ -67,6 +67,7 @@ def build_review_cache_key(
     model: str | None = None,
     system_prompt: str | None = None,
     user_prompt: str | None = None,
+    prompt_context_fingerprint: str | None = None,
 ) -> str:
     """生成 LLM 审查结果缓存 key。只含影响判断的字段。"""
     stock_clean = {
@@ -80,6 +81,9 @@ def build_review_cache_key(
         "model": model or "",
         "system_prompt": system_prompt or "",
         "user_prompt": user_prompt or "",
+        # projected context 指纹：白名单/裁剪/policy 变化 → cache 失效，
+        # 避免旧 prompt 的输出被当作当前 projected prompt 的结果复用。
+        "prompt_context_fingerprint": prompt_context_fingerprint or "",
         "stock": {} if user_prompt is not None else stock_clean,
         "snapshot": {} if user_prompt is not None else semantic_market_snapshot(snapshot),
         "rule_signal": {} if user_prompt is not None else (rule_signal or {}),

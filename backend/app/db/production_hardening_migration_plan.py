@@ -730,12 +730,27 @@ SCHEDULER_BATCH = MigrationBatch(
     ),
 )
 
+_LLM_COLUMNS = (
+    # prompt context 裁剪/指纹审计摘要（不含完整 prompt 原文）
+    _col("context_audit_json", "longtext", nullable=True),
+)
+
+LLM_BATCH = MigrationBatch(
+    batch_id="M-LLM",
+    proposed_revision="0009_llm_context_audit",
+    depends_on=SCHEDULER_BATCH.proposed_revision,
+    purpose="Persist prompt-context projection/truncation audit summaries on LLM call logs without storing full prompts.",
+    implementation_tasks=("R-LLM-4",),
+    operations=_add_columns("M-LLM", "api_call_logs", _LLM_COLUMNS),
+)
+
 MIGRATION_BATCHES = (
     EVIDENCE_BATCH,
     OUTCOME_BATCH,
     HOLDOUT_BATCH,
     RISK_BATCH,
     SCHEDULER_BATCH,
+    LLM_BATCH,
 )
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")

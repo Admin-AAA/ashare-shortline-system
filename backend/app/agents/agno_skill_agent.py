@@ -34,6 +34,14 @@ from app.agents.tools import (
 )
 from app.services.model_router_service import OPENAI_CLIENT_HEADERS, get_active_model_routes
 from app.services.llm_review_cache_service import build_review_cache_key, semantic_market_snapshot
+from app.services.llm.prompt_context import (
+    MARKET_SNAPSHOT_FIELDS,
+    RULE_SIGNAL_FIELDS,
+    STOCK_FIELDS,
+    PromptContextProjection,
+    canonical_section_json,
+    project_prompt_context,
+)
 
 
 # ── 结构化输出模型 ────────────────────────────────────────────────────
@@ -162,6 +170,7 @@ def _enrich_review_with_cost_and_rule(
     prompt_chars: int,
     completion_chars: int,
     rule_signal: dict[str, Any] | None,
+    context_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """持久化前注入真实 token 用量 + 规则基线（additive，不改既有字段）。
 
@@ -184,6 +193,8 @@ def _enrich_review_with_cost_and_rule(
         "total_cache_hit_tokens": cache_hit_tokens or 0,
         "prompt_cache_active": bool(cache_hit_tokens and cache_hit_tokens > 0),
     }
+    if context_audit is not None:
+        out["_prompt_context"] = dict(context_audit)
     if isinstance(rule_signal, dict):
         rs = rule_signal.get("dsa_signal_score")
         if isinstance(rs, (int, float)):
@@ -208,6 +219,7 @@ def _append_api_cost(
     completion_tokens: int | None = None,
     cache_hit_tokens: int | None = None,
     skill_id: str | None = None,
+    context_audit: dict[str, Any] | None = None,
 ) -> None:
     # 估算 token 数：中文约 1.5-2 字符/token，英文约 4 字符/token
     # 混合文本取中间值 1.8 字符/token（仅在 provider 未返回真实用量时作为回退展示）
@@ -228,6 +240,7 @@ def _append_api_cost(
         "latency_ms": round(latency_ms, 1),
         "status": status,
         "error_message": error_message,
+        "context_audit": dict(context_audit) if context_audit is not None else None,
     })
 
 
@@ -404,30 +417,36 @@ def _build_user_prompt(
     rule_signal: dict[str, Any] | None,
     history: dict[str, Any] | None,
     skill_id: str,
+    *,
+    projection: PromptContextProjection | None = None,
 ) -> str:
     """构建 User Prompt。
 
     前缀布局优化：稳定的 market snapshot + rule signal 放最前面，
     变化的 stock 数据放最后。LLM prompt cache 前缀匹配生效。
     """
+    context = projection or project_prompt_context(
+        stock=stock,
+        snapshot=snapshot,
+        rule_signal=rule_signal,
+        research=history,
+        skill_id=skill_id,
+    )
     parts: list[str] = []
 
     # ── 稳定前缀（同一 run 内共享）──
+    parts.append(f"# 上下文策略\n{context.policy_id}\n")
     parts.append("# 市场快照\n")
-    parts.append(json.dumps(_compact_snapshot(snapshot), ensure_ascii=False, indent=2))
+    parts.append(canonical_section_json(context, "market_snapshot"))
 
     parts.append("\n\n# strategy.yaml 规则信号\n")
-    if rule_signal:
-        parts.append(json.dumps(_compact_signal(rule_signal), ensure_ascii=False, indent=2))
-    else:
-        parts.append('{"runtime": "agent_only", "note": "该 Skill 无可执行 strategy.yaml，仅 Agent 审查"}')
+    parts.append(canonical_section_json(context, "rule_signal"))
 
-    # 历史复盘
-    if history:
+    if context.section("research"):
         parts.append("\n\n# 历史参考\n")
-        parts.append(json.dumps(history, ensure_ascii=False, indent=2))
+        parts.append(canonical_section_json(context, "research"))
 
-    code = str(stock.get("code") or "")
+    code = str(context.section("stock").get("code") or "")
 
     parts.append(f"""
 
@@ -446,7 +465,7 @@ def _build_user_prompt(
 ---
 
 # 候选股票数据（以下内容因股票不同而变化）
-{json.dumps(_compact_stock(stock), ensure_ascii=False, indent=2)}
+{canonical_section_json(context, "stock")}
 
 输出 JSON 格式:
 {{
@@ -475,54 +494,7 @@ def _compact_stock(stock: dict[str, Any]) -> dict[str, Any]:
     trend_status/ma_alignment/macd_status/rsi_status）与共享短线因子必须传入，
     防止 Agent 在没有数据情况下凭空推断"MA5支撑确认"等结论。
     """
-    keys = [
-        "code", "name", "industry", "price", "pct",
-        "turnover_rate", "amount_yi", "free_mv_yi",
-        "dist20", "dist60", "ma5", "ma10", "ma20", "ma60",
-        "vol5_20", "off_high_pct", "max_dd20",
-        "upper_shadow_count20", "limit_up_days20",
-        "primary_excess20", "primary_excess60",
-        "industry_capacity_like_count", "industry_positive_excess20_count",
-        "data_source", "quote_source", "kline_source",
-        "latest_trade_date", "data_quality",
-        "is_main_theme", "is_shortline_leader_candidate", "shortline_leader_score",
-        "market_sentiment_phase",
-        "limit_up_overheat_score", "limit_up_overheat_level",
-        "sector_ladder_completeness_score", "sector_ladder_level",
-        "sector_ladder_limit_up_count", "sector_ladder_height",
-        "capital_resonance_score", "capital_resonance_signal", "capital_resonance_source",
-        "is_20cm_stock", "twenty_cm_risk_score", "twenty_cm_risk_gate", "twenty_cm_risk_reason",
-        "dragon_tiger_buy_dispersion", "dragon_tiger_inst_buy_ratio",
-        "shortline_factor_explanations",
-        "is_limit_up",
-        "limit_up_consecutive_days",
-        "limit_up_open_times",
-        "limit_up_fd_amount_yi",
-        "limit_up_limit_amount_yi",
-        "limit_up_turnover_ratio",
-        "limit_up_first_time",
-        "limit_up_last_time",
-        "concept_sector_name", "concept_sector_heat_rank",
-        "dragon_tiger_is_on_list", "dragon_tiger_recent_count",
-        "main_net_inflow_yi", "main_net_inflow_ratio",
-        "super_large_net_inflow_yi", "large_net_inflow_yi", "small_net_inflow_yi",
-        "latest_news", "news_risk_count", "positive_catalyst_count",
-        # 基础短线策略评分关键字段（防止 Agent 幻觉）
-        "support_ma5", "support_ma10", "dsa_support_score",
-        "dsa_trend_score", "dsa_bias_score", "dsa_volume_score",
-        "dsa_macd_score", "dsa_rsi_score", "dsa_signal_score",
-        "trend_status", "ma_alignment",
-        "macd_status", "macd_signal",
-        "macd_dif", "macd_dea", "macd_bar",
-        "rsi_6", "rsi_12", "rsi_24", "rsi_status", "rsi_signal",
-        "bias_ma5", "bias_ma10", "bias_ma20",
-        "volume_status", "volume_trend", "volume_ratio_5d",
-        "volume_ratio_vs_5d", "volume_ratio_vs_20d",
-        "volume_breakout_signal", "volume_shrink_pullback",
-        "pos20", "pos60", "pos120",
-        "chg20", "chg60",
-        "breakout20", "breakout60",
-    ]
+    keys = STOCK_FIELDS
     return {key: stock.get(key) for key in keys if key in stock}
 
 
@@ -533,8 +505,7 @@ def _compact_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 def _compact_signal(signal: dict[str, Any]) -> dict[str, Any]:
     """精简规则信号。"""
-    keys = ["phase", "score", "setup_match", "evidence", "risk_flags",
-            "score_cap", "runtime"]
+    keys = RULE_SIGNAL_FIELDS
     return {key: signal.get(key) for key in keys if key in signal}
 
 
@@ -632,7 +603,23 @@ async def run_skill_agent(
     model_id = routes[0].model if routes else "no_active_route"
     max_retries = settings.agent_retry_count
     backoff = settings.agent_retry_backoff
-    user_prompt = _build_user_prompt(stock, snapshot, rule_signal, None, skill_id)
+    projection = project_prompt_context(
+        stock=stock,
+        snapshot=snapshot,
+        rule_signal=rule_signal,
+        research=None,
+        skill_id=skill_id,
+    )
+    context_audit = projection.audit_summary()
+    user_prompt = _build_user_prompt(
+        stock,
+        snapshot,
+        rule_signal,
+        None,
+        skill_id,
+        projection=projection,
+    )
+    prompt_chars = len(user_prompt)
 
     # 断路器检查 — 在进入重试循环前快速失败
     check_circuit(model_id)
@@ -660,6 +647,15 @@ async def run_skill_agent(
 
             # 成功：重置断路器计数器
             record_result(model_id, success=True)
+            _append_api_cost(
+                route=None,
+                prompt_chars=prompt_chars,
+                completion_chars=len(content),
+                latency_ms=0.0,
+                status="success",
+                skill_id=skill_id,
+                context_audit=context_audit,
+            )
             return output
 
         except Exception as e:
@@ -930,7 +926,21 @@ async def run_skill_agent_direct(
     if not routes:
         raise RuntimeError("Skill Agent 未配置可用模型路由，请先在数据源页配置模型与 Key")
 
-    user_prompt = _build_direct_prompt(stock, snapshot, rule_signal, skill)
+    projection = project_prompt_context(
+        stock=stock,
+        snapshot=snapshot,
+        rule_signal=rule_signal,
+        research=None,
+        skill_id=skill.skill_id,
+    )
+    context_audit = projection.audit_summary()
+    user_prompt = _build_direct_prompt(
+        stock,
+        snapshot,
+        rule_signal,
+        skill,
+        projection=projection,
+    )
     system_prompt = _build_direct_system(skill)
     prompt_chars = len(system_prompt) + len(user_prompt)
     max_retries = settings.agent_retry_count
@@ -947,6 +957,7 @@ async def run_skill_agent_direct(
             model=route.model,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
+            prompt_context_fingerprint=projection.projected_fingerprint,
         )
         cached_review = _load_cached_review(cache_key)
         if cached_review is not None:
@@ -1023,7 +1034,8 @@ async def run_skill_agent_direct(
                     record_result(route_key, success=True)
                     # 持久化前注入真实 token 用量 + 规则基线（T8 跨 run 可追踪）
                     parsed = _enrich_review_with_cost_and_rule(
-                        parsed, _pt, _ct, _ch, prompt_chars, len(content), rule_signal
+                        parsed, _pt, _ct, _ch, prompt_chars, len(content), rule_signal,
+                        context_audit=context_audit,
                     )
                     _persist_review_cache(skill, cache_key, code, trade_date, parsed, route.model)
                     return result
@@ -1072,7 +1084,14 @@ def load_cached_skill_review(
     if not routes:
         return None
     system_prompt = _build_direct_system(skill)
-    user_prompt = _build_direct_prompt(stock, snapshot, rule_signal, skill)
+    projection = project_prompt_context(
+        stock=stock,
+        snapshot=snapshot,
+        rule_signal=rule_signal,
+        research=None,
+        skill_id=skill.skill_id,
+    )
+    user_prompt = _build_direct_prompt(stock, snapshot, rule_signal, skill, projection=projection)
     for route in routes:
         cache_key = build_review_cache_key(
             skill_hash=skill.skill_hash,
@@ -1083,6 +1102,7 @@ def load_cached_skill_review(
             model=route.model,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
+            prompt_context_fingerprint=projection.projected_fingerprint,
         )
         cached_review = _load_cached_review(cache_key)
         if cached_review is None:
@@ -1141,6 +1161,8 @@ def _build_direct_prompt(
     snapshot: dict[str, Any],
     rule_signal: dict[str, Any] | None,
     skill: StrategySkill,
+    *,
+    projection: PromptContextProjection | None = None,
 ) -> str:
     """构建一次性审查 Prompt（包含所有数据，无需工具查询）。
 
@@ -1152,11 +1174,19 @@ def _build_direct_prompt(
     必须放在 stock 数据之前但仍属变化区，避免污染稳定前缀。所有 json.dumps
     用 sort_keys=True 保证 key 顺序稳定，避免 dict 插入顺序差异打断前缀。
     """
+    context = projection or project_prompt_context(
+        stock=stock,
+        snapshot=snapshot,
+        rule_signal=rule_signal,
+        research=None,
+        skill_id=skill.skill_id,
+    )
     parts = []
 
     # ── 稳定前缀（同一 run 内所有股票共享，prompt cache 命中关键）──
+    parts.append(f"# 上下文策略\n{context.policy_id}\n")
     parts.append("# 市场快照\n")
-    parts.append(json.dumps(_compact_snapshot(snapshot), ensure_ascii=False, indent=2, sort_keys=True))
+    parts.append(canonical_section_json(context, "market_snapshot"))
 
     parts.append(f"""
 
@@ -1171,12 +1201,9 @@ def _build_direct_prompt(
 
 # strategy.yaml 规则评分（以下内容因股票不同而变化）
 """)
-    if rule_signal:
-        parts.append(json.dumps(_compact_signal(rule_signal), ensure_ascii=False, indent=2, sort_keys=True))
-    else:
-        parts.append('{"runtime": "agent_only"}')
+    parts.append(canonical_section_json(context, "rule_signal"))
 
     parts.append("\n\n# 候选股票数据\n")
-    parts.append(json.dumps(_compact_stock(stock), ensure_ascii=False, indent=2, sort_keys=True))
+    parts.append(canonical_section_json(context, "stock"))
 
     return "\n\n".join(parts)

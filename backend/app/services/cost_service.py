@@ -32,6 +32,8 @@ def record_api_call(
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
     cache_hit_tokens: int | None = None,
+    # prompt context 投影/裁剪审计摘要（drain_api_costs 传入；不含完整 prompt 原文）
+    context_audit: dict[str, Any] | None = None,
 ) -> ApiCallLog:
     """记录一次 LLM API 调用。
 
@@ -51,6 +53,11 @@ def record_api_call(
         latency_ms=latency_ms,
         status=status,
         error_message=error_message,
+        context_audit_json=(
+            json.dumps(context_audit, ensure_ascii=False, sort_keys=True, default=str)
+            if context_audit is not None
+            else None
+        ),
     )
     db.add(log)
     db.commit()
