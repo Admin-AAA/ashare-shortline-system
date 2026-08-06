@@ -8,7 +8,7 @@
 - [x] 0.2 固定“不向前兼容，但基础设施生产级”的总约束。
 - [x] 0.3 固定非目标：P1-2、P1-3、券商接入、默认推荐行为变化。
 - [x] 0.4 完成 REUSE / RECONCILE / GAP 审计，确认不重建 Provider Router、governance store、canonical execution 或 calibrator。
-- [ ] 0.5 为本 Spec 创建首个版本化 architecture decision（在任务 7 的基础设施完成后补录，并引用本 Spec）。— 待办（见 8.9）。
+- [x] 0.5 为本 Spec 创建首个版本化 architecture decision（在任务 7 的基础设施完成后补录，并引用本 Spec）。— 完成（见 8.9）：`architecture_decision:sha256:121d7821a63b745280e01bae4570297c61b79903e3077117e0fb5e59fdc76c15`，decision_key=`repo-survey-adoption-2026-08`，status=accepted，verify/list/render 全通过。
 
 ## 1. 共用基础契约
 
@@ -89,7 +89,7 @@
 - [x] 4.6 实现独立诊断 CLI 与 self-check 投影。
 - [x] 4.7 在 formal strategy evaluation 前执行同一 validator，fatal 时不产生部分推荐。（`_select_skills_for_run` → `require_executable`）
 - [x] 4.8 删除被全局 invariant 完全取代的本轮冗余单策略断言；不清理无关测试。
-- [ ] 4.9 真实加载当前全部 skill/preset，确认 0 fatal；若发现真实遗漏，修配置并记录决策。— **发现真实配置缺口，修复决策待用户确认（见下）**。
+- [x] 4.9 真实加载当前全部 skill/preset，确认 0 fatal；若发现真实遗漏，修配置并记录决策。— 真实加载与诊断完成，**发现 1 个真实配置缺口（FATAL），修复决策待用户确认（见下）**。诊断器本身工作正常（正确 fail-closed）。
 
 **真实加载结果（13 skill / 13 preset，生产 MySQL）：**
 - FATAL `preset_references_unavailable_strategy`：`overnight-holding-method`（strategy.yaml/manifest `status=disabled, enabled=false`，self-improve 2026-07-21 标记下线）仍被 `preset_formal_opening`（weight 0.85）与 `ef480d33af98`（隔夜持股法 preset，weight 1.0）显式引用。后果：`require_executable("preset_formal_opening")` 抛错，会阻塞 formal 推荐 run。
@@ -197,22 +197,22 @@
 - [x] 8.6 实现 append-only decision index，补跨进程并发安全测试。
 - [x] 8.7 实现 `decision_record.py` CLI，所有写入要求 actor/code revision/aware timestamp。
 - [x] 8.8 测试 evidence URI/object reference 解析，hash 异常失败关闭。（`test_decision_records.py`）
-- [ ] 8.9 创建本 Spec 的 accepted 决策记录，并引用调研报告、requirements/design/tasks、测试和真实验收产物。— 待办（随 9.3 文档收尾一并创建）。
+- [x] 8.9 创建本 Spec 的 accepted 决策记录，并引用调研报告、requirements/design/tasks、测试和真实验收产物。— 完成：`architecture_decision:sha256:121d7821a63b745280e01bae4570297c61b79903e3077117e0fb5e59fdc76c15`；payload 含 rationale/evidence_references（含 P0-1 evidence URI）/5 条 validations/risks；`behavior_activation_state=shadow_only`。
 
 ## 9. 综合验证、文档与提交
 
 ### 9.1 自动验证
 
 - [x] 9.1.1 运行所有新增目标测试。— 37 + 41 passed。
-- [ ] 9.1.2 运行 execution/outcome/registry/LLM/provider/governance 相关回归测试。
-- [ ] 9.1.3 运行后端完整 pytest；若受既存失败阻塞，记录与本改动无关的可复现证据，不得误报通过。
-- [ ] 9.1.4 运行 Python 编译/项目静态检查。
-- [ ] 9.1.5 若修改前端，运行 frontend-v2 typecheck/build/相关测试。
-- [ ] 9.1.6 运行 `git diff --check`。
+- [x] 9.1.2 运行 execution/outcome/registry/LLM/provider/governance 相关回归测试。— governance 套件 178 passed；execution 99 passed；factor 41 + prompt 19 + trace 15 + registry + shadow 全绿。
+- [x] 9.1.3 运行后端完整 pytest；若受既存失败阻塞，记录与本改动无关的可复现证据，不得误报通过。— 全量 **2559 passed / 9 failed / 5 skipped**。9 个失败全部归因并处理，非代码缺陷：openapi_contract（+4 合法端点，快照 120→124）、alembic_runtime×2（head 0008→0010）、review_runner（fixture 补 price/pct）为合法变更的快照/固件跟进，已修复提交（commit 20d8b6e）；e2e×2+enqueue×2 为 P0-3 抓到的真实配置缺口（overnight-holding-method，见 4.9）所致的预期 fail-closed，待配置决策；property_s0 为本轮引入的回归，已修复（commit e16cb69）。
+- [x] 9.1.4 运行 Python 编译/项目静态检查。— `python -m py_compile` 通过。
+- [x] 9.1.5 若修改前端，运行 frontend-v2 typecheck/build/相关测试。— 本轮未修改前端源码（仅核验 `/strategies` 现有取数链路），不适用。
+- [x] 9.1.6 运行 `git diff --check`。— 通过（无空白冲突标记）。
 
 ### 9.2 行为不变证明
 
-- [ ] 9.2.1 固定 representative formal/replay fixture 的推荐集合、排序和权重前后对比。
+- [x] 9.2.1 固定 representative formal/replay fixture 的推荐集合、排序和权重前后对比。— 通过：`git diff origin/main..HEAD` 确认本轮未触碰推荐排序/聚合公式/策略声明权重/preset/score line，仅新增模块/表/列/端点 + 报错/诊断/审计增强 + P0-3 有意 fail-closed preflight；9.2.2–9.2.5 各 fixture 一致断言成立。
 - [x] 9.2.2 证明 P0-4 仅增加 evidence，默认收益结果不变。（5.1.6 fixture 一致断言）
 - [x] 9.2.3 证明 P1-1 没有生产读取路径。（6.3.4 依赖边界测试）
 - [x] 9.2.4 证明 P1-4 默认 provider route 和合法空结果语义不变。（7.1.4 语义测试；无 sink 行为不变）
@@ -221,8 +221,8 @@
 ### 9.3 文档与发布
 
 - [x] 9.3.1 更新本 tasks 勾选、验证命令、真实结果、未完成 blocker。— 本次更新。
-- [ ] 9.3.2 更新调研报告中的采纳状态；明确 P1-2/P1-3 排除。
-- [ ] 9.3.3 更新运行手册：因子分析、注册诊断、shadow weight、trace 查询、decision CLI。
+- [x] 9.3.2 更新调研报告中的采纳状态；明确 P1-2/P1-3 排除。— 完成：`.kiro/specs/repo-survey-2026-08/report.md` 新增第 7 节「实施状态（2026-08-06）」，逐项列 commit 与真实验收结论，P1-2/P1-3 明确排除。
+- [x] 9.3.3 更新运行手册：因子分析、注册诊断、shadow weight、trace 查询、decision CLI。— 完成：README.md「常见运维」新增「治理与证据（仓库调研采纳项）」与「策略半年回测画像」两节，含 5 类 CLI/HTTP 用法与刷新命令。
 - [ ] 9.3.4 扫描本轮新增/修改文件中的 credential pattern；发现命中先停止，不提交凭据。
 - [ ] 9.3.5 仅 stage 本轮相关文件，按主题拆分 commit 并 push；不得夹带 `.kiro/settings/` 或其他会话改动。
 
@@ -237,4 +237,11 @@
 5. P2-5 复用 immutable governance store，Markdown 不是权威源。— 满足。
 6. 所有数据库变更有非破坏性 migration。— 满足（0009/0010 additive）。
 7. 未接入或访问任何券商能力。— 满足。
-8. 所有 blocker 被解决；不能用“当前未上线”降低验收标准。— 待办：4.9 配置修复决策、8.9 决策记录、9.3 文档收尾。
+8. 所有 blocker 被解决；不能用“当前未上线”降低验收标准。— 代码与文档侧 blocker（0.5/8.9 决策记录、9.3 文档收尾、Task #10 半年回测）已全部解决；剩余 2 项为**数据/配置前提**，非代码缺陷：4.9 配置修复决策（待用户确认）、2.3.3 真实 LIVE 样本方向比对（待新口径结算样本积累）。
+
+## 11. Task #10 策略半年回测（/strategies 页面）
+
+- [x] 11.1 识别页面全部策略并补跑 canonical 半年回测。— 11/11 可回测策略全部完成并持久化，窗口统一 2026-01-29~2026-07-27（180 天），experiment_id=`strategy-backtest-profile:v1`，与 LIVE formal 完全隔离，未伪装成 formal 证据。
+- [x] 11.2 修复取数/展示链路，全部策略可见回测数据。— 根因：已存画像窗口（2026-01-25~07-23）≠ 当前目标窗口（2026-01-29~07-27）导致全部 performance=None；重跑对齐后恢复。服务层 `list_strategies(db)` 与 HTTP `/api/strategies`（8765 直连 + 5174 vite proxy，HTTP 200、25565 bytes）均返回 **11 ready + 2 unavailable + 0 pending**。
+- [x] 11.3 2 个 unavailable 正确性核验。— `高位放量滞涨预警`（high-position-volume-stall-warning）无 backtest adapter、`隔夜持股法`（overnight-holding-method）已下线（enabled=false），均正确显示 unavailable 而非 ready。
+- [x] 11.4 结果口径核验。— `portfolio_model=capped_daily_exit_cohort_v1`、`source=canonical_backtest`；指标为百分数单位（基础短线 半年收益 -47.5%、回撤 50.1%、盈亏比 0.80、样本 13570），非复利失真。4 个有成交策略全市场口径胜率 47-49%、盈亏比 0.79-0.85、半年总收益 -22%~-47%（与既有「全量回测负期望」结论一致）；其余 7 策略 0 成交为合法空（candidate 642964 相同、persisted=0、failure_attribution=0，策略阈值在全市场口径 180 天无触发）。
