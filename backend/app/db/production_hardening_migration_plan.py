@@ -744,6 +744,87 @@ LLM_BATCH = MigrationBatch(
     operations=_add_columns("M-LLM", "api_call_logs", _LLM_COLUMNS),
 )
 
+_DATA_SOURCE_TRACE_COLUMNS = (
+    _col("trace_id", "varchar", nullable=False, length=80),
+    _col("correlation_id", "varchar", nullable=False, length=80),
+    _col("operation_name", "varchar", nullable=False, length=80),
+    _col("request_identity_hash", "char", nullable=False, length=64),
+    _col("contract_id", "varchar", nullable=False, length=80),
+    _col("contract_version", "integer", nullable=False),
+    _col("selected_provider", "varchar", nullable=True, length=40),
+    _col("final_outcome", "varchar", nullable=False, length=20),
+    _col("attempt_count", "integer", nullable=False, server_default="1"),
+    _col("fallback_count", "integer", nullable=False, server_default="0"),
+    _col("duration_ms", "bigint", nullable=False, server_default="0"),
+    _col("telemetry_status", "varchar", nullable=False, length=20, server_default="'ok'"),
+    _col("started_at", "datetime", nullable=False, fsp=6),
+    _col("completed_at", "datetime", nullable=False, fsp=6),
+)
+
+_DATA_SOURCE_ATTEMPT_COLUMNS = (
+    _col("attempt_id", "varchar", nullable=False, length=100),
+    _col("trace_id", "varchar", nullable=False, length=80),
+    _col("ordinal", "integer", nullable=False),
+    _col("provider", "varchar", nullable=False, length=40),
+    _col("outcome", "varchar", nullable=False, length=20),
+    _col("duration_ms", "bigint", nullable=False, server_default="0"),
+    _col("failure_category", "varchar", nullable=True, length=40),
+    _col("retryable", "tinyint", nullable=True),
+    _col("fallback_allowed", "tinyint", nullable=True),
+    _col("fallback_from", "varchar", nullable=True, length=40),
+    _col("fallback_to", "varchar", nullable=True, length=40),
+    _col("field_fingerprint", "char", nullable=True, length=64),
+    _col("contract_validation_json", "longtext", nullable=True),
+)
+
+DATASOURCE_BATCH = MigrationBatch(
+    batch_id="M-DATASOURCE",
+    proposed_revision="0010_data_source_trace",
+    depends_on=LLM_BATCH.proposed_revision,
+    purpose="Persist append-only provider-agnostic data source request traces and attempts for unified fallback telemetry.",
+    implementation_tasks=("R-SOURCE-3",),
+    operations=(
+        _table(
+            "M-DATASOURCE",
+            "data_source_request_traces",
+            _DATA_SOURCE_TRACE_COLUMNS,
+            primary_key=("trace_id",),
+        ),
+        _table(
+            "M-DATASOURCE",
+            "data_source_attempts",
+            _DATA_SOURCE_ATTEMPT_COLUMNS,
+            primary_key=("attempt_id",),
+        ),
+        _index(
+            "M-DATASOURCE",
+            "data_source_request_traces",
+            "uq_trace_idempotency",
+            ("correlation_id", "request_identity_hash"),
+            unique=True,
+        ),
+        _index(
+            "M-DATASOURCE",
+            "data_source_request_traces",
+            "ix_trace_operation_time",
+            ("operation_name", "started_at"),
+        ),
+        _index(
+            "M-DATASOURCE",
+            "data_source_attempts",
+            "uq_attempt_trace_ordinal",
+            ("trace_id", "ordinal"),
+            unique=True,
+        ),
+        _index(
+            "M-DATASOURCE",
+            "data_source_attempts",
+            "ix_attempt_provider_outcome",
+            ("provider", "outcome"),
+        ),
+    ),
+)
+
 MIGRATION_BATCHES = (
     EVIDENCE_BATCH,
     OUTCOME_BATCH,
@@ -751,6 +832,7 @@ MIGRATION_BATCHES = (
     RISK_BATCH,
     SCHEDULER_BATCH,
     LLM_BATCH,
+    DATASOURCE_BATCH,
 )
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")

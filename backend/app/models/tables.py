@@ -1127,6 +1127,60 @@ class ApiCallLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class DataSourceRequestTrace(Base):
+    """append-only 数据源请求 trace 摘要（R-SOURCE-3）。
+
+    一行 = 一次最终请求（可能含多次 provider attempt / fallback）。
+    不含 credential / 完整请求 token / 上游原始敏感错误正文。
+    幂等键 (correlation_id, request_identity_hash) 唯一。
+    """
+    __tablename__ = "data_source_request_traces"
+
+    trace_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    correlation_id: Mapped[str] = mapped_column(String(80), index=True)
+    operation_name: Mapped[str] = mapped_column(String(80), index=True)
+    request_identity_hash: Mapped[str] = mapped_column(CHAR(64))
+    contract_id: Mapped[str] = mapped_column(String(80))
+    contract_version: Mapped[int] = mapped_column(Integer)
+    selected_provider: Mapped[str | None] = mapped_column(String(40))
+    final_outcome: Mapped[str] = mapped_column(String(20))
+    attempt_count: Mapped[int] = mapped_column(Integer, default=1)
+    fallback_count: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int] = mapped_column(BigInteger, default=0)
+    telemetry_status: Mapped[str] = mapped_column(String(20), default="ok")
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime().with_variant(DATETIME(fsp=6), "mysql"), index=True
+    )
+    completed_at: Mapped[datetime] = mapped_column(
+        DateTime().with_variant(DATETIME(fsp=6), "mysql")
+    )
+
+
+class DataSourceAttempt(Base):
+    """append-only 单次 provider attempt（R-SOURCE-3）。
+
+    唯一键 (trace_id, ordinal)；同一 trace 的 attempts 原子写入。
+    contract_validation_json 为结构化校验摘要，不含敏感正文。
+    """
+    __tablename__ = "data_source_attempts"
+
+    attempt_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    trace_id: Mapped[str] = mapped_column(String(80), index=True)
+    ordinal: Mapped[int] = mapped_column(Integer)
+    provider: Mapped[str] = mapped_column(String(40), index=True)
+    outcome: Mapped[str] = mapped_column(String(20), index=True)
+    duration_ms: Mapped[int] = mapped_column(BigInteger, default=0)
+    failure_category: Mapped[str | None] = mapped_column(String(40))
+    retryable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    fallback_allowed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    fallback_from: Mapped[str | None] = mapped_column(String(40))
+    fallback_to: Mapped[str | None] = mapped_column(String(40))
+    field_fingerprint: Mapped[str | None] = mapped_column(CHAR(64))
+    contract_validation_json: Mapped[str | None] = mapped_column(
+        LONGTEXT().with_variant(Text(), "sqlite")
+    )
+
+
 class ApiRequestMetric(Base):
     """HTTP 端点请求延迟采样（G3 性能门禁数据源）。
 

@@ -653,6 +653,8 @@ class TushareProviderRouter:
         api_routes: Mapping[str, tuple[str, ...]] | None = None,
         enabled_override: Any = None,
         priority_override: Any = None,
+        trace_sink: Any = None,
+        correlation_id_factory: Any = None,
     ) -> None:
         self._providers = {provider.name: provider for provider in providers}
         # per-API 选路链：api_name -> [provider 名按尝试顺序]。默认 DEFAULT_API_ROUTES，
@@ -664,6 +666,10 @@ class TushareProviderRouter:
         # priority_override: 可选可调用 () -> Mapping[str, int]，提供 provider 运行时优先级
         # 覆盖（管理面拖拽调序写 DB）。为 None 时用代码默认 priority。每次选路时读取。
         self._priority_override = priority_override
+        # trace_sink: 可选 DataSourceTraceSink；为 None 时不持久化 trace（默认行为不变）。
+        # correlation_id_factory: 可选 () -> str，用于关联一次逻辑请求的多次 attempt。
+        self._trace_sink = trace_sink
+        self._correlation_id_factory = correlation_id_factory
 
     def close(self) -> None:
         for provider in self._providers.values():
@@ -727,18 +733,55 @@ class TushareProviderRouter:
             raise TushareProviderError(api_name, [])
 
         failures: list[ProviderFailure] = []
+        attempts: list[dict[str, Any]] = []
+        selected_provider: str | None = None
+        final_outcome = "failure"
         for index, provider in enumerate(providers):
+            ordinal = index + 1
+            fallback_from = providers[index - 1].name if index else None
+            started = time.perf_counter()
             try:
                 envelope = provider.request(api_name, params=params, fields=fields)
+                duration_ms = int((time.perf_counter() - started) * 1000)
+                data = envelope.get("data")
+                items = data.get("items") if isinstance(data, Mapping) else None
+                empty = not bool(items)
+                attempts.append({
+                    "ordinal": ordinal,
+                    "provider": provider.name,
+                    "outcome": "valid_empty" if empty else "success",
+                    "duration_ms": duration_ms,
+                    "fallback_from": fallback_from,
+                })
+                selected_provider = provider.name
+                final_outcome = "valid_empty" if empty else "success"
                 if index:
                     logger.warning(
                         "tushare provider fallback success api=%s provider=%s",
                         api_name,
                         provider.name,
                     )
+                self._persist_trace(api_name, params, attempts, selected_provider, final_outcome)
                 return envelope
             except ProviderFailure as failure:
+                duration_ms = int((time.perf_counter() - started) * 1000)
                 failures.append(failure)
+                is_breaker_skip = failure.category is FailureCategory.CIRCUIT_OPEN
+                attempts.append({
+                    "ordinal": ordinal,
+                    "provider": provider.name,
+                    "outcome": "skipped_breaker" if is_breaker_skip else "failure",
+                    "duration_ms": duration_ms,
+                    "failure_category": failure.category.value,
+                    "retryable": failure.retryable,
+                    "fallback_allowed": failure.fallback_allowed,
+                    "fallback_from": fallback_from,
+                    "fallback_to": (
+                        providers[index + 1].name
+                        if (failure.fallback_allowed and index < len(providers) - 1)
+                        else None
+                    ),
+                })
                 if not failure.fallback_allowed:
                     break
                 if index < len(providers) - 1:
@@ -748,4 +791,71 @@ class TushareProviderRouter:
                         provider.name,
                         failure.category.value,
                     )
+        self._persist_trace(api_name, params, attempts, selected_provider, final_outcome)
         raise TushareProviderError(api_name, failures)
+
+    def _persist_trace(
+        self,
+        api_name: str,
+        params: Mapping[str, Any] | None,
+        attempts: list[dict[str, Any]],
+        selected_provider: str | None,
+        final_outcome: str,
+    ) -> None:
+        """构造并持久化统一 trace。持久化失败不影响已取到的数据（telemetry 降级）。"""
+        if self._trace_sink is None or not attempts:
+            return
+        try:
+            from app.services.data_source_trace import (
+                TRACE_CONTRACT_ID,
+                TRACE_CONTRACT_VERSION,
+                DataSourceAttempt,
+                DataSourceAttemptOutcome,
+                DataSourceRequestTrace,
+                FinalOutcome,
+                request_identity_hash,
+            )
+            import hashlib
+            import uuid
+
+            # 默认 correlation 含唯一成分：每次逻辑请求生成独立 trace（append-only）。
+            # 业务侧可通过 correlation_id_factory 注入 run_id/任务 id 关联同一批请求。
+            correlation_id = (
+                self._correlation_id_factory()
+                if self._correlation_id_factory is not None
+                else f"tushare-{api_name}-{uuid.uuid4().hex[:16]}"
+            )
+            req_hash = request_identity_hash(
+                api_name, params={k: v for k, v in (params or {}).items()}
+            )
+            attempt_contracts = tuple(
+                DataSourceAttempt(
+                    ordinal=a["ordinal"],
+                    provider=a["provider"],
+                    outcome=DataSourceAttemptOutcome(a["outcome"]),
+                    duration_ms=a["duration_ms"],
+                    failure_category=a.get("failure_category"),
+                    retryable=a.get("retryable"),
+                    fallback_allowed=a.get("fallback_allowed"),
+                    fallback_from=a.get("fallback_from"),
+                    fallback_to=a.get("fallback_to"),
+                )
+                for a in attempts
+            )
+            trace_id = "dstr_" + hashlib.sha256(
+                f"{correlation_id}|{req_hash}".encode("utf-8")
+            ).hexdigest()[:48]
+            trace = DataSourceRequestTrace(
+                trace_id=trace_id,
+                correlation_id=correlation_id,
+                operation_name=api_name,
+                request_identity_hash=req_hash,
+                contract_id=TRACE_CONTRACT_ID,
+                contract_version=TRACE_CONTRACT_VERSION,
+                attempts=attempt_contracts,
+                selected_provider=selected_provider,
+                final_outcome=FinalOutcome(final_outcome),
+            )
+            self._trace_sink.persist(trace)
+        except Exception:
+            logger.debug("data source trace persist skipped/failed api=%s", api_name, exc_info=True)

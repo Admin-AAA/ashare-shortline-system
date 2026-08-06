@@ -106,6 +106,7 @@ def test_manifest_is_linear_additive_and_checksum_bound() -> None:
         "M-RISK",
         "M-SCHEDULER",
         "M-LLM",
+        "M-DATASOURCE",
     ]
     assert {
         operation.kind

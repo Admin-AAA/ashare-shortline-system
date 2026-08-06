@@ -447,9 +447,38 @@ def invalidate_provider_enabled_override() -> None:
 
 @functools.lru_cache(maxsize=1)
 def get_pro() -> _TushareSession:
-    """Return the cached ingestion/realtime provider facade."""
+    """Return the cached ingestion/realtime provider facade.
+
+    注入统一 trace sink（R-SOURCE-3）：router 选路循环内单点持久化，
+    业务调用方不重复埋点。sink 惰性构造 session，持久化失败不影响取数。
+    """
+    from app.services.data_source_trace_service import MySQLTraceSink
+
     router, fastapic_url = _build_provider_router()
+    sink = MySQLTraceSink(_trace_session_factory)
+    router._trace_sink = sink
+    router._correlation_id_factory = _trace_correlation_id
     return _TushareSession(router, http_url=fastapic_url)
+
+
+def _trace_session_factory():
+    from app.db.session import SessionLocal
+
+    return SessionLocal()
+
+
+_trace_correlation: dict[str, Any] = {"run_id": None}
+
+
+def set_trace_correlation_id(correlation_id: str | None) -> None:
+    """由 run/任务上下文注入 correlation id，使同一批数据源请求可关联。"""
+    _trace_correlation["run_id"] = correlation_id
+
+
+def _trace_correlation_id() -> str:
+    import uuid
+
+    return _trace_correlation["run_id"] or f"ts-{uuid.uuid4().hex[:16]}"
 
 
 def clear_pro_cache() -> None:
@@ -1739,6 +1768,7 @@ def _fetch_baostock_minute_kbars(
     """
     global _baostock_last_query
 
+    _bs_started = time.perf_counter()
     bs_freq = _BAOSTOCK_FREQ_MAP.get(str(freq or "").lower())
     if bs_freq is None:
         _record_minute_source_trace(
@@ -1788,6 +1818,12 @@ def _fetch_baostock_minute_kbars(
                 trace, source="baostock", code=code, status="error", row_count=0,
                 reason=last_err or "unknown",
             )
+            _persist_baostock_trace(
+                code, freq, status="error",
+                duration_ms=int((time.perf_counter() - _bs_started) * 1000),
+                failure_category="provider_error",
+                fallback_from="tushare_stk_mins",
+            )
             return []
 
         rows: list[dict[str, Any]] = []
@@ -1826,6 +1862,12 @@ def _fetch_baostock_minute_kbars(
     _record_minute_source_trace(
         trace, source="baostock", code=code,
         status="success" if rows else "empty", row_count=len(rows),
+    )
+    _persist_baostock_trace(
+        code, freq,
+        status="success" if rows else "empty",
+        duration_ms=int((time.perf_counter() - _bs_started) * 1000),
+        fallback_from="tushare_stk_mins",
     )
     return rows
 
@@ -2132,6 +2174,75 @@ def fetch_realtime_k_snapshot(code: str) -> dict[str, Any] | None:
         ),
         "source": "ai_tool_rt_k",
     }
+
+
+def _persist_baostock_trace(
+    code: str,
+    freq: str,
+    *,
+    status: str,
+    duration_ms: int,
+    failure_category: str | None = None,
+    fallback_from: str | None = None,
+) -> None:
+    """把 baostock 分钟 K 主备尝试投影到统一 trace（R-SOURCE-2/3）。
+
+    baostock 不经 Tushare router，这里在其 transport 边界构造同一契约。
+    持久化失败不影响取数（telemetry 降级）。
+    """
+    try:
+        import hashlib
+        import time as _time
+
+        from app.services.data_source_trace import (
+            TRACE_CONTRACT_ID,
+            TRACE_CONTRACT_VERSION,
+            DataSourceAttempt,
+            DataSourceAttemptOutcome,
+            DataSourceRequestTrace,
+            FinalOutcome,
+            request_identity_hash,
+        )
+        from app.services.data_source_trace_service import MySQLTraceSink
+
+        outcome_map = {
+            "success": (DataSourceAttemptOutcome.SUCCESS, FinalOutcome.SUCCESS),
+            "empty": (DataSourceAttemptOutcome.VALID_EMPTY, FinalOutcome.VALID_EMPTY),
+        }
+        attempt_outcome, final_outcome = outcome_map.get(
+            status, (DataSourceAttemptOutcome.FAILURE, FinalOutcome.FAILURE)
+        )
+        correlation_id = _trace_correlation_id()
+        req_hash = request_identity_hash(
+            "minute_kbar", code=code, params={"freq": freq, "source": "baostock"}
+        )
+        trace_id = "dstr_" + hashlib.sha256(
+            f"{correlation_id}|{req_hash}|bs|{_time.monotonic_ns()}".encode("utf-8")
+        ).hexdigest()[:48]
+        attempt = DataSourceAttempt(
+            ordinal=1,
+            provider="baostock",
+            outcome=attempt_outcome,
+            duration_ms=max(0, int(duration_ms)),
+            failure_category=failure_category,
+            retryable=False if attempt_outcome is DataSourceAttemptOutcome.FAILURE else None,
+            fallback_allowed=None,
+            fallback_from=fallback_from,
+        )
+        trace = DataSourceRequestTrace(
+            trace_id=trace_id,
+            correlation_id=correlation_id,
+            operation_name="minute_kbar",
+            request_identity_hash=req_hash,
+            contract_id=TRACE_CONTRACT_ID,
+            contract_version=TRACE_CONTRACT_VERSION,
+            attempts=(attempt,),
+            selected_provider="baostock" if final_outcome is not FinalOutcome.FAILURE else None,
+            final_outcome=final_outcome,
+        )
+        MySQLTraceSink(_trace_session_factory).persist(trace)
+    except Exception:
+        logger.debug("baostock minute trace persist failed code=%s", code, exc_info=True)
 
 
 def _record_minute_source_trace(

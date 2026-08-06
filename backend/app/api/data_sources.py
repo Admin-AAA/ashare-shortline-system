@@ -16,6 +16,7 @@ from app.services.data_gap_remediation_service import (
 from app.services.workbench_service import invalidate_bootstrap_cache
 from app.services.auxiliary.application import run_auxiliary_application
 from app.services.market_pool import refresh_quote_pool
+from app.services import data_source_trace_service as trace_service
 
 
 router = APIRouter(prefix="/api/data-sources", tags=["data-sources"])
@@ -26,6 +27,42 @@ logger = logging.getLogger(__name__)
 _pool_status_cache: dict = {}
 _pool_status_lock = threading.Lock()
 _POOL_CACHE_KEY = "__pool__"  # 单一 key，不按分页拆分
+
+
+# ── 统一数据源 fallback trace（R-SOURCE-3/4）。静态段须先于 /{source_type}/... 注册。──
+
+@router.get("/traces")
+def list_traces(
+    operation_name: str | None = None,
+    provider: str | None = None,
+    final_outcome: str | None = None,
+    failure_category: str | None = None,
+    correlation_id: str | None = None,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+):
+    """统一数据源请求 trace 查询（含 fallback attempt 链，安全摘要不含 credential）。"""
+    return trace_service.list_traces(
+        db,
+        operation_name=operation_name,
+        provider=provider,
+        final_outcome=final_outcome,
+        failure_category=failure_category,
+        correlation_id=correlation_id,
+        limit=limit,
+    )
+
+
+@router.get("/traces/fallback-chains")
+def fallback_chains(limit: int = 20, db: Session = Depends(get_db)):
+    """最近发生过 fallback 的请求链（tushare→xiaodefa→... / tushare→baostock）。"""
+    return trace_service.recent_fallback_chains(db, limit=limit)
+
+
+@router.get("/traces/health")
+def trace_health(hours: int = 24, db: Session = Depends(get_db)):
+    """从统一 trace 聚合 success/fallback/valid-empty/breaker-skip/p95。"""
+    return trace_service.health_aggregation(db, hours=hours)
 
 
 @router.get("")
