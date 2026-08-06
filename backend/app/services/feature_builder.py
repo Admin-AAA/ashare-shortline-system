@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from app.services.indicator_computer import bias as _bias
@@ -41,6 +41,7 @@ def build_features(
     dsa_weights: dict[str, float] | None = None,
     db: Any = None,
     on_progress: Callable[[int, int], None] | None = None,
+    auxiliary_views: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     main_industries = set(snapshot.get("main_industries", []))
     enriched = []
@@ -59,7 +60,7 @@ def build_features(
 
     # 从本地辅助数据池丰富特征（涨停板/龙虎榜/新闻/资金流/概念板块）
     if db is not None:
-        _enrich_with_auxiliary_data(enriched, db, snapshot)
+        _enrich_with_auxiliary_data(enriched, db, snapshot, _aux_override=auxiliary_views)
 
     for item in enriched:
         profile = dict(item.pop("dsa_profile", {}) or {})

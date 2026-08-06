@@ -228,6 +228,7 @@ def run_auxiliary_application(
     instruments: Sequence[AuxiliaryInstrument | str],
     trade_date: date | str,
     refresh: bool,
+    as_of_date: date | str | None = None,
     datasets: Sequence[str] | None = None,
     raw_provider: TushareRawProviderPort | None = None,
     state_adapters: Mapping[str, StandardAuxiliaryDatasetAdapters] | None = None,
@@ -268,6 +269,7 @@ def run_auxiliary_application(
             connection=connection,
             session=db,
             provider=state_provider,
+            as_of_date=_date(as_of_date) if as_of_date is not None else None,
         )
     composition = build_auxiliary_production_composition(
         connection=connection,

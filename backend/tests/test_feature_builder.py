@@ -637,6 +637,43 @@ def test_auxiliary_enrichment_marks_checked_empty_as_covered():
     assert stock["theme_tags"] == ["银行"]
 
 
+def test_build_features_uses_injected_auxiliary_views_without_reloading(monkeypatch):
+    import app.services.auxiliary.application as auxiliary_application
+    from app.services.factors.registry import bootstrap_default_factor_registry
+
+    bootstrap_default_factor_registry()
+    historical_views = {
+        "pledges": {"600519": {"pledge_ratio": 8.0, "pledge_count": 3}},
+        "holder_numbers": {
+            "600519": {
+                "holder_num": 1000,
+                "holder_num_change_pct": -16.67,
+                "holder_num_decreasing": True,
+            }
+        },
+    }
+
+    def fail_current_state_reload(*_args, **_kwargs):
+        raise AssertionError("bounded auxiliary feature views must be reused")
+
+    monkeypatch.setattr(
+        auxiliary_application,
+        "load_auxiliary_feature_views",
+        fail_current_state_reload,
+    )
+
+    item = build_features(
+        [_stock()],
+        _snapshot(trade_date="2026-03-31"),
+        db=object(),
+        auxiliary_views=historical_views,
+    )[0]
+
+    assert item["pledge_ratio"] == 8.0
+    assert item["holder_num"] == 1000
+    assert item["holder_num_change_pct"] == -16.67
+
+
 def test_auxiliary_enrichment_accepts_nested_dragon_tiger_partition_coverage():
     from app.services.feature_builder import _enrich_with_auxiliary_data
 

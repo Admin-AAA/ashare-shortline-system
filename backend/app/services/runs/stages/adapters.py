@@ -228,6 +228,7 @@ class ProductionAuxiliaryApplication(AuxiliaryApplicationPort):
         instruments: Sequence[str],
         trade_date: str,
         refresh: bool,
+        as_of_date: str | None,
     ) -> Any:
         from app.services.auxiliary.application import run_auxiliary_application
 
@@ -236,6 +237,7 @@ class ProductionAuxiliaryApplication(AuxiliaryApplicationPort):
             instruments=list(instruments),
             trade_date=trade_date,
             refresh=refresh,
+            as_of_date=as_of_date,
         )
 
 
@@ -253,6 +255,8 @@ class ProductionFeatureBuild(FeatureBuildPort):
         self,
         stocks: Sequence[StageMapping],
         snapshot: StageMapping,
+        *,
+        auxiliary_views: StageMapping | None = None,
     ) -> tuple[tuple[StageMapping, ...], tuple[Any, ...]]:
         from app.services.feature_builder import build_features
         from app.services.research_context import build_research_contexts
@@ -263,6 +267,7 @@ class ProductionFeatureBuild(FeatureBuildPort):
             dict(snapshot),
             _load_calibrated_dsa_weights(self._db),
             db=self._db,
+            auxiliary_views=auxiliary_views,
         )
         contexts = build_research_contexts(features, dict(snapshot))
         return tuple(features), tuple(contexts)
