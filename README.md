@@ -424,6 +424,54 @@ curl -sS http://127.0.0.1:8765/api/health
 ./ashare pool-status --summary-only --pretty
 ```
 
+### 治理与证据（仓库调研采纳项）
+
+以下 CLI 复用 immutable governance store（append-only index + 内容寻址对象），只读或幂等写入，审计留痕。
+
+```bash
+# P0-1 横截面因子评估（IC/RankIC/分层收益/单调性，只读精选 canonical outcome）
+PYTHONPATH=backend backend/.venv/bin/python backend/scripts/analyze_factor_cross_section.py \
+  --factor pos20 --start-date 2026-07-01 --end-date 2026-08-06 --horizon-days 5 \
+  --quantiles 5 --min-cross-section-size 5 --actor <name> --code-revision <sha> \
+  --output output/factor_analysis/pos20.json
+# 样本不足时 evidence_status=insufficient（不强行给结论）；同 request 重跑幂等 reused=true。
+
+# P0-3 策略/preset 注册遗漏诊断（只读；formal run 前 preflight 复用同一 validator，fatal 即 fail-closed）
+./ashare registry-diagnostics --pretty
+./ashare registry-diagnostics --preset-id preset_formal_opening --pretty   # 针对单个 preset 校验可执行性
+
+# P1-1 贝叶斯收缩策略权重建议（shadow-only，不写 YAML、不改 Signal.weight/排序）
+PYTHONPATH=backend backend/.venv/bin/python backend/scripts/produce_strategy_weight_shadow.py \
+  --created-by <name> --code-revision <sha>
+# 样本不足如实标记 insufficient，不放宽门槛。
+
+# P1-4 数据源 fallback trace（统一 append-only trace；复用现有 Provider Router，无第二套）
+curl -sS http://127.0.0.1:8765/api/data-sources/traces --pretty
+curl -sS http://127.0.0.1:8765/api/data-sources/traces/fallback-chains --pretty
+curl -sS http://127.0.0.1:8765/api/data-sources/traces/health --pretty
+
+# P2-5 版本化 architecture decision（Markdown 仅投影，权威源是 store）
+PYTHONPATH=backend backend/.venv/bin/python backend/scripts/decision_record.py \
+  --actor <name> --code-revision <sha> --created-at <ISO-8601 带时区> list --status accepted
+PYTHONPATH=backend backend/.venv/bin/python backend/scripts/decision_record.py \
+  --actor <name> --code-revision <sha> --created-at <ts> show <object_id>
+PYTHONPATH=backend backend/.venv/bin/python backend/scripts/decision_record.py \
+  --actor <name> --code-revision <sha> --created-at <ts> verify <object_id>
+PYTHONPATH=backend backend/.venv/bin/python backend/scripts/decision_record.py \
+  --actor <name> --code-revision <sha> --created-at <ts> render <object_id> --output decision.md
+```
+
+### 策略半年回测画像（/strategies 页面数据源）
+
+页面读取 `StrategyBacktestProfiles`（experiment_id=`strategy-backtest-profile:v1`，与 LIVE formal 完全隔离，窗口=最近可完全结算信号日往前 180 天）。窗口随时间漂移，需幂等刷新以重新对齐：
+
+```bash
+# 幂等：已存在精确画像则 reuse；可 --strategy-id / --as-of / --max-runs 限定
+PYTHONPATH=backend backend/.venv/bin/python backend/scripts/refresh_strategy_backtest_profiles.py
+# 只写 BacktestRunV2/BacktestTrade/DataSnapshot 三表，不碰 recommendations/presets；
+# 同窗口+同数据需求的策略共享 immutable snapshot。
+```
+
 ---
 
 ## 参考项目
