@@ -2833,6 +2833,29 @@ def check_scheduler_health(db) -> None:
         print('      查 app.log 排查失败原因；手动触发 label_pending_outcomes 结算 pending 推荐。')
 
 
+def check_registry_diagnostics(db) -> None:
+    """报告当前加载的策略/preset 注册问题；不修复、不改变推荐选择。"""
+    try:
+        from app.core.config import get_settings
+        from app.engine.skill_loader import load_skills
+        from app.services.registry.data_source import DEFAULT_PRESETS
+        from app.services.registry.diagnostics import build_registry_diagnostics
+        from app.services.registry.presets import list_presets
+
+        report = build_registry_diagnostics(
+            load_skills(get_settings().skills_dir),
+            list_presets(db),
+            canonical_presets=DEFAULT_PRESETS,
+        )
+    except Exception as exc:
+        print(f'  ⚠️ 策略/preset 注册诊断失败: {type(exc).__name__}: {exc}')
+        return
+    print(f'  策略/preset 注册诊断：{("OK" if report.ok else "BLOCKED")}，'
+          f'errors={len(report.errors)} info={len(report.informational)}')
+    for issue in (*report.errors, *report.informational):
+        print(f'    [{issue.severity}] {issue.code}: {issue.message}')
+
+
 def check_backtest_consistency(db) -> None:
     """T2 回测一致性诊断：P0 backtest 胜率 vs LIVE formal，标注口径差异。
 
@@ -4189,6 +4212,7 @@ def main() -> None:
         check_d_item(db)
         check_auxiliary_factor_data(db)
         check_scheduler_health(db)
+        check_registry_diagnostics(db)
         check_backtest_consistency(db)
     finally:
         db.close()

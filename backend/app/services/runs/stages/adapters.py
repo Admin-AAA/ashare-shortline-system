@@ -52,6 +52,7 @@ class ProductionSkillResolution(SkillResolutionPort):
             list(skill_ids),
             run_mode=run_mode,
             preset_id=preset_id,
+            raw_skills=skills,
         )
         return tuple(selected), skill_map
 

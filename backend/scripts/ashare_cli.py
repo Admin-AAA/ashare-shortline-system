@@ -196,6 +196,23 @@ def _list_presets(db: Session, args: argparse.Namespace) -> JsonDict:
     return {"presets": presets, "count": len(presets)}
 
 
+def _registry_diagnostics(db: Session, args: argparse.Namespace) -> JsonDict:
+    from app.engine.skill_loader import load_skills
+    from app.services.registry.data_source import DEFAULT_PRESETS
+    from app.services.registry.diagnostics import build_registry_diagnostics
+    from app.core.config import get_settings
+
+    skills = load_skills(get_settings().skills_dir)
+    report = build_registry_diagnostics(
+        skills,
+        list_presets(db),
+        canonical_presets=DEFAULT_PRESETS,
+    )
+    if args.preset_id:
+        report.require_executable(args.preset_id)
+    return report.to_dict()
+
+
 def _list_runs(db: Session, args: argparse.Namespace) -> JsonDict:
     runs = list_runs(db, run_mode=args.run_mode, limit=args.limit)
     payload = [_compact_run(run) for run in runs] if args.compact else runs
@@ -629,6 +646,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("presets", help="列出预设")
     p.add_argument("--active-only", action="store_true")
     p.set_defaults(func=_list_presets)
+
+    p = sub.add_parser("registry-diagnostics", help="诊断已加载策略与预设注册（只读）")
+    p.add_argument("--preset-id", help="仅校验指定 preset 的 executable closure")
+    p.set_defaults(func=_registry_diagnostics)
 
     p = sub.add_parser("runs", help="列出运行")
     p.add_argument("--run-mode", choices=["formal", "experiment"])

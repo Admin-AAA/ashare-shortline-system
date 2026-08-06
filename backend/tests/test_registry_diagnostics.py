@@ -52,7 +52,28 @@ def _skill(
 _CANONICAL = ({"preset_id": "preset_formal_opening", "skill_groups": ["formal_opening"]},)
 
 
-def test_registry_diagnostics_reports_registration_failures_without_repairing_rows():
+def test_runtime_preflight_preserves_duplicate_skill_ids_before_map_projection(monkeypatch):
+    from app.services import workbench_service
+
+    first = _skill("duplicate")
+    second = _skill("duplicate")
+    calls = []
+
+    monkeypatch.setattr(workbench_service, "build_registry_diagnostics", lambda skills, presets: calls.append(tuple(skills)) or build_registry_diagnostics(skills, presets, canonical_presets=_CANONICAL))
+    monkeypatch.setattr(workbench_service, "list_presets", lambda _db: [{"preset_id": "preset_formal_opening", "skills": [{"strategy_id": "duplicate"}]}])
+
+    with pytest.raises(RegistryDiagnosticsError):
+        workbench_service._select_skills_for_run(
+            object(),
+            {"duplicate": second},
+            [{"skill_id": "duplicate"}],
+            run_mode="formal",
+            preset_id="preset_formal_opening",
+            raw_skills=[first, second],
+        )
+    assert calls and len(calls[0]) == 2
+
+
     skills = [_skill("alpha"), _skill("alpha"), _skill("inactive", groups=("missing_group",), status="disabled")]
     presets = [
         {"preset_id": "preset_formal_opening", "status": "active", "skills": [{"strategy_id": "ghost"}]},

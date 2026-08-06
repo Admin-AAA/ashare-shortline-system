@@ -512,6 +512,7 @@ def enqueue_workbench_run(
         params["skills"],
         run_mode=request.run_mode.value,
         preset_id=params.get("preset_id"),
+        raw_skills=skills,
     )
     if not selected_skills:
         raise ValueError("没有可运行的 Skill，请检查预设配置或 Skill 状态")
@@ -2301,10 +2302,11 @@ def _select_skills_for_run(
     *,
     run_mode: str | None = None,
     preset_id: str | None = None,
+    raw_skills: list[StrategySkill] | tuple[StrategySkill, ...] | None = None,
 ) -> list[dict[str, Any]]:
     if str(run_mode or "").lower() == "formal":
         report = build_registry_diagnostics(
-            tuple(skill_map.values()),
+            tuple(raw_skills) if raw_skills is not None else tuple(skill_map.values()),
             list_presets(db),
         )
         report.require_executable(preset_id or "preset_formal_opening")
