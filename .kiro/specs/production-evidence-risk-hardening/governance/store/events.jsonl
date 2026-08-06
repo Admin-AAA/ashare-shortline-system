@@ -66,3 +66,5 @@
 {"event_type": "SEPARATE_WRITE_APPROVAL_GRANTED", "object_id": "governance_event:sha256:a823d55ff8a7d1d19d5b7914008c232924cc3df329ec7ffcd2218481dbb4e8a9", "recorded_at": "2026-08-04T15:09:29.159886Z"}
 {"event_type": "GATED_OPERATION_ADMISSION", "object_id": "governance_event:sha256:f736a15d83f975718f5935d0291cec739459eef458d51fe28efcfba5a09f853c", "recorded_at": "2026-08-04T15:09:29.159887Z"}
 {"event_type": "architecture_decision_created", "object_id": "governance_event:sha256:724eac351e4d97bb57e532e4cfa5c6769e3ac75ef5b2dea77c9dbb9e2f3a9189", "recorded_at": "2026-08-05T12:00:00.000000Z"}
+{"event_type": "factor_analysis_completed", "object_id": "governance_event:sha256:1e1aa0366815db40a8063e378ba2cde35c7c9b61dde55dcd3d53aedef2061485", "recorded_at": "2026-08-06T02:56:35.137942Z"}
+{"event_type": "architecture_decision_created", "object_id": "governance_event:sha256:a557c64a47754796da75723599ff31c831f28b03aaa37b8477cdcb21a6a04185", "recorded_at": "2026-08-06T04:08:48.502163Z"}

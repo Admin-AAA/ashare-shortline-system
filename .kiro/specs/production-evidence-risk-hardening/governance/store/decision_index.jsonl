@@ -1,1 +1,2 @@
 {"created_at": "2026-08-05T12:00:00.000000Z", "decision_key": "repo-survey-adoption-2026-08/p2-5", "object_id": "architecture_decision:sha256:205a3e9e8ccb3913f527f6f9d56be4225900dbec2f72f97e3d18380f3a5ac8ff", "status": "accepted", "supersedes_id": null}
+{"created_at": "2026-08-06T04:08:48.502163Z", "decision_key": "repo-survey-adoption-2026-08", "object_id": "architecture_decision:sha256:121d7821a63b745280e01bae4570297c61b79903e3077117e0fb5e59fdc76c15", "status": "accepted", "supersedes_id": null}
