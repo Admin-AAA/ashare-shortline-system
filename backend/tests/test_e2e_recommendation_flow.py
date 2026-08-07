@@ -37,6 +37,7 @@ from app.models.tables import (
     SkillRegistry,
     Stock,
 )
+from app.services.evidence import identity_from_persisted_run
 from app.services.outcome_service import (
     board_and_net_breakdown,
     label_pending_outcomes,
@@ -688,8 +689,7 @@ class TestE2ERecommendationFlow:
             recommended_count=3,
             result_summary_json="{}",
             finished_at=datetime.now(timezone.utc).replace(tzinfo=None),
-            # official 样本口径（official_sample_conditions）：live_forward +
-            # data_as_of + source_snapshot_id，否则 stats 按 official 口径统计为 0。
+            # 用户可见 LIVE 统计要求完整字段与精确 canonical identity hash。
             evaluation_scope="live_forward",
             evidence_class="live_forward",
             data_as_of="2026-05-12",
@@ -701,6 +701,7 @@ class TestE2ERecommendationFlow:
             code_revision="c" * 40,
             provenance_schema_version=1,
         )
+        run.evidence_identity_hash = identity_from_persisted_run(run).identity_hash
         db.add(run)
         db.flush()
 
@@ -1402,8 +1403,6 @@ class TestE2ERecommendationFlow:
         from app.services import workbench_service
 
         _seed_skill_registry(db)
-        skill = _real_skill("daily-stock-analysis-skill")
-        monkeypatch.setattr(workbench_service, "sync_skills", lambda _db: [skill])
 
         queued: list[str] = []
         monkeypatch.setattr(
@@ -1441,8 +1440,6 @@ class TestE2ERecommendationFlow:
 
         run_name = f"同步失败测试-{uuid.uuid4().hex[:8]}"
         _seed_skill_registry(db)
-        skill = _real_skill("daily-stock-analysis-skill")
-        monkeypatch.setattr(workbench_service, "sync_skills", lambda _db: [skill])
 
         def fail_market(_db, *, data_source, as_of_date=None):
             raise RuntimeError("market pool timeout")

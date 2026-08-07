@@ -63,7 +63,10 @@ def test_query_deduplicates_repeated_formal_runs_and_excludes_non_live_rows():
         """))
         db.commit()
 
-        rows = fetch_dedup_live_formal_capital_flow(db)
+        rows = fetch_dedup_live_formal_capital_flow(
+            db,
+            ("formal_1", "formal_2"),
+        )
 
         assert [(row["code"], row["recommendation_id"]) for row in rows] == [
             ("000001", "rec_early"),
@@ -71,6 +74,14 @@ def test_query_deduplicates_repeated_formal_runs_and_excludes_non_live_rows():
         ]
         assert rows[0]["outcome_label"] == "success"
         assert rows[0]["executed_return"] == 2.0
+    finally:
+        db.close()
+
+
+def test_query_fails_closed_without_canonical_live_runs():
+    db = _evidence_session()
+    try:
+        assert fetch_dedup_live_formal_capital_flow(db, ()) == []
     finally:
         db.close()
 

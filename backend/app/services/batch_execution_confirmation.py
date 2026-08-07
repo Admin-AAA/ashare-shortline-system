@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 from app.engine.skill_loader import load_skills
 from app.engine.trading_calendar import latest_allowed_quote_date, normalize_trade_date
 from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun
+from app.services.evidence.validation import canonical_live_forward_run_ids
 from app.services.execution_confirmation import (
     _build_signal_for_strategy,
     _entry_window_closed,
@@ -65,13 +66,16 @@ def _f(value: Any) -> float:
 def _load_eligible_recs(
     db: Session, recommendation_ids: list[str]
 ) -> tuple[list[tuple[Recommendation, RecommendationOutcome | None]], int]:
-    """一次 SQL 查 Recommendation + Run + Outcome，过滤非 formal 与已结算。
+    """一次 SQL 查 Recommendation + Run + Outcome，过滤非 canonical LIVE 与已结算。
 
-    返回 (未结算 formal 记录列表, 已结算/非 formal 跳过数)。不存在或非 formal 的 ID
-    一律计入跳过，不向调用方泄露其存在性（Spec 7 安全约定）。
+    返回 (未结算 canonical LIVE 记录列表, 已结算/非 canonical 跳过数)。不存在或
+    不符合资格的 ID 一律计入跳过，不向调用方泄露其存在性（Spec 7 安全约定）。
     """
     if not recommendation_ids:
         return [], 0
+    canonical_run_ids = canonical_live_forward_run_ids(db)
+    if not canonical_run_ids:
+        return [], len(set(recommendation_ids))
     rows = list(
         db.execute(
             select(Recommendation, RecommendationOutcome, RecommendationRun)
@@ -80,7 +84,10 @@ def _load_eligible_recs(
                 RecommendationOutcome,
                 RecommendationOutcome.recommendation_id == Recommendation.recommendation_id,
             )
-            .where(Recommendation.recommendation_id.in_(recommendation_ids))
+            .where(
+                Recommendation.recommendation_id.in_(recommendation_ids),
+                RecommendationRun.run_id.in_(canonical_run_ids),
+            )
         ).all()
     )
     eligible: list[tuple[Recommendation, RecommendationOutcome | None]] = []
@@ -91,9 +98,9 @@ def _load_eligible_recs(
         if rid in seen:
             continue
         seen.add(rid)
-        # 非 formal run 或已最终结算都跳过。run_mode 由 SQL 层判，outcome 维度复用
-        # is_unsettled_formal_rec，保证与单票/实时盈亏同口径。
-        if str(getattr(run, "run_mode", "") or "") != "formal" or not is_unsettled_formal_rec(rec, outcome):
+        # 已最终结算的 canonical LIVE run 也跳过。run 身份已由 exact hash selector
+        # 和 SQL run_id 集合保证，outcome 维度复用单票/实时盈亏的未结算口径。
+        if not is_unsettled_formal_rec(rec, outcome):
             skipped += 1
             continue
         eligible.append((rec, outcome))
