@@ -10,7 +10,7 @@ callers keep working without a second copy of the expression.
 """
 from __future__ import annotations
 
-from sqlalchemy import and_, func, or_, text
+from sqlalchemy import and_, false, or_
 
 from app.models.tables import Recommendation, RecommendationRun
 from app.services.evidence.selectors import (
@@ -61,14 +61,26 @@ def historical_reconstruction_sample_conditions() -> tuple:
     return historical_reconstruction_run_conditions()
 
 
-def recommendation_history_conditions() -> tuple:
-    """Return current history-page rows without changing official LIVE scope."""
-    return (
-        or_(
-            and_(*official_sample_conditions()),
-            and_(*historical_reconstruction_run_conditions()),
-        ),
-    )
+def recommendation_history_conditions(
+    *,
+    live_run_ids: tuple[str, ...] | list[str] = (),
+    historical_run_ids: tuple[str, ...] | list[str] = (),
+) -> tuple:
+    """Return only explicitly validated LIVE or reconstruction run rows."""
+
+    live_branch = false()
+    if live_run_ids:
+        live_branch = and_(
+            *official_sample_conditions(),
+            RecommendationRun.run_id.in_(tuple(live_run_ids)),
+        )
+    historical_branch = false()
+    if historical_run_ids:
+        historical_branch = and_(
+            *historical_reconstruction_run_conditions(),
+            RecommendationRun.run_id.in_(tuple(historical_run_ids)),
+        )
+    return (or_(live_branch, historical_branch),)
 
 
 __all__ = [

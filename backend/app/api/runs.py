@@ -1,5 +1,4 @@
 import logging
-from datetime import datetime, timezone
 
 from fastapi import Depends, HTTPException, Query
 from app.api.contracts import ContractRouter as APIRouter
@@ -8,7 +7,8 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.engine.strategy_backtest_adapter import run_strategy_backtest_adapter
 from app.services.market_data import MarketDataError
-from app.services.runs.sqlalchemy_repository import SQLAlchemyRunRepository
+from app.services.runs.deletion_guard import DownstreamFactDeletionBlocked
+from app.services.runs.recovery import RecoveryCapabilityError
 from app.services.workbench_service import (
     delete_run,
     dispatch_workbench_run,
@@ -285,53 +285,40 @@ def detail(run_id: str, db: Session = Depends(get_db)):
 
 @router.post("/{run_id}/resume")
 async def resume(run_id: str, db: Session = Depends(get_db)):
-    """Resume only an interrupted run with a valid persisted lifecycle checkpoint."""
+    """Dispatch completion of one database-verified persistence collection."""
     run = get_run_detail(db, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
-    status = str(run["status"])
-    if status == "failed":
+    if not bool(run.get("can_resume")):
         raise HTTPException(
             status_code=409,
-            detail="failed run is terminal; create a new retry run instead of resuming it",
+            detail={
+                "code": str(run.get("resume_block_code") or "resume_rejected"),
+                "message": str(
+                    run.get("resume_block_reason") or "运行不满足恢复条件"
+                ),
+            },
         )
-    if status != "interrupted":
-        raise HTTPException(status_code=409, detail=f"run status '{status}' is not resumable")
-
-    repository = SQLAlchemyRunRepository(db)
-    canonical_record = repository.get_run(run_id)
-    if canonical_record is not None:
-        if canonical_record.has_active_lease(datetime.now(timezone.utc).replace(tzinfo=None)):
-            raise HTTPException(
-                status_code=409,
-                detail="run cannot resume while another worker lease is active",
-            )
-        # Keep the durable INTERRUPTED state intact until the worker reloads the
-        # canonical request.  The pipeline owns the replay/resume transition;
-        # changing it to RUNNING here would erase the only reliable recovery
-        # signal before the worker can inspect the persistence checkpoint.
-        try:
-            dispatch_workbench_run(db, run_id)
-        except (ValueError, RuntimeError) as exc:
-            logger.exception("resume run dispatch failed")
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return {
-            "run": get_run_detail(db, run_id),
-            "recommendations": [],
-            "queued": True,
-        }
-    # Historical rows without canonical request columns cannot cross the worker
-    # boundary.  They must be backfilled/repaired explicitly instead of rebuilding
-    # a payload from params_json during recovery.
-    raise HTTPException(
-        status_code=409,
-        detail="run has no canonical request; backfill is required before resume",
-    )
+    try:
+        dispatch_workbench_run(db, run_id)
+    except RecoveryCapabilityError as exc:
+        raise HTTPException(status_code=409, detail=exc.detail()) from exc
+    except (ValueError, RuntimeError) as exc:
+        logger.exception("resume run dispatch failed")
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "run": get_run_detail(db, run_id),
+        "recommendations": [],
+        "queued": True,
+    }
 
 
 @router.delete("/{run_id}")
 def delete(run_id: str, db: Session = Depends(get_db)):
-    ok = delete_run(db, run_id)
+    try:
+        ok = delete_run(db, run_id)
+    except DownstreamFactDeletionBlocked as exc:
+        raise HTTPException(status_code=409, detail=exc.detail()) from exc
     if not ok:
         raise HTTPException(status_code=404, detail="run not found")
     return {"deleted": run_id}

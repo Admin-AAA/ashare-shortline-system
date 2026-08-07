@@ -25,6 +25,9 @@ from app.services.evidence.identity import (
     RecommendationEvidenceIdentity,
     RunSource,
     build_recommendation_evidence_identity,
+    canonical_policy_fingerprint,
+    has_canonical_persisted_identity,
+    identity_from_persisted_run,
 )
 from app.services.evidence.provenance_writer import (
     FORMAL_PROVENANCE_REASON,
@@ -53,10 +56,13 @@ __all__ = [
     "VerifiedClassificationPlan",
     "apply_formal_run_provenance",
     "build_recommendation_evidence_identity",
+    "canonical_policy_fingerprint",
     "canonical_plan_hash",
     "capture_preservation_snapshot",
     "derive_plan_payload",
     "execute_backfill",
+    "has_canonical_persisted_identity",
+    "identity_from_persisted_run",
     "load_and_verify_plan",
     "resolve_code_revision",
     "verify_preservation",

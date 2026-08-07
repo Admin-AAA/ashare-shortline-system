@@ -7,8 +7,10 @@ from sqlalchemy.orm import Session  # noqa: F401 (Query used in endpoints)
 
 from app.db.session import get_db
 from app.engine.trading_costs import ADDITIONAL_COST_PCT, is_net_profitable
+from app.services.evidence.validation import canonical_live_forward_run_ids
 from app.services.outcome_service import recent_formal_win_rate
 from app.services.official_sample_scope import recommendation_history_conditions
+from app.services.runs.deletion_guard import DownstreamFactDeletionBlocked
 from app.services.workbench_service import (
     delete_recommendation,
     get_recommendation_detail,
@@ -62,8 +64,17 @@ def history(
     填补推荐历史记录页缺口：用户查看所有推荐过的股票及其实际表现。
     strategy_id 支持从策略清单页下钻到单策略的全部推荐历史（北极星 C 项）。
     """
-    if label is not None and label not in {"success", "failed", "missed", "pending"}:
-        raise HTTPException(status_code=400, detail="label must be success/failed/missed/pending")
+    if label is not None and label not in {
+        "success",
+        "failed",
+        "missed",
+        "pending",
+        "provisional",
+    }:
+        raise HTTPException(
+            status_code=400,
+            detail="label must be success/failed/missed/pending/provisional",
+        )
     if strategy_version_id and not strategy_id:
         raise HTTPException(status_code=400, detail="strategy_version_id requires strategy_id")
     return list_recommendation_history(
@@ -138,6 +149,7 @@ def outcome_summary(
     if not normalized:
         return {}
 
+    live_run_ids = canonical_live_forward_run_ids(db)
     rows = (
         db.query(
             Recommendation.code,
@@ -149,7 +161,7 @@ def outcome_summary(
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
         .join(RecommendationOutcome, RecommendationOutcome.recommendation_id == Recommendation.recommendation_id)
         .filter(Recommendation.code.in_(normalized))
-        .filter(*recommendation_history_conditions())
+        .filter(*recommendation_history_conditions(live_run_ids=live_run_ids))
         .filter(RecommendationOutcome.outcome_label.in_(["success", "failed"]))
         .filter(RecommendationOutcome.entry_triggered == True)  # noqa: E712
         .order_by(
@@ -264,7 +276,10 @@ def ignore(recommendation_id: str, payload: dict | None = None, db: Session = De
 
 @router.delete("/{recommendation_id}")
 def delete(recommendation_id: str, db: Session = Depends(get_db)):
-    ok = delete_recommendation(db, recommendation_id)
+    try:
+        ok = delete_recommendation(db, recommendation_id)
+    except DownstreamFactDeletionBlocked as exc:
+        raise HTTPException(status_code=409, detail=exc.detail()) from exc
     if not ok:
         raise HTTPException(status_code=404, detail="recommendation not found")
     return {"deleted": recommendation_id}

@@ -9,14 +9,14 @@ import time
 import uuid
 from typing import Any
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.engine.trading_calendar import normalize_trade_date, latest_allowed_bar_date
 from app.models.tables import Preset, RecommendationRun, Stock
-from app.services.evidence.selectors import (
-    historical_reconstruction_provenance_conditions,
-    live_forward_run_conditions,
+from app.services.evidence.validation import (
+    canonical_historical_reconstruction_run_ids,
+    canonical_live_forward_run_ids,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,30 +38,30 @@ def _resolve_analysis_market_snapshot(
     from app.services.market_data import _build_quote_snapshot
 
     try:
-        raw = db.execute(
-            select(RecommendationRun.market_snapshot_json)
-            .where(
-                RecommendationRun.run_mode == "formal",
-                RecommendationRun.status == "completed",
-                or_(
-                    and_(*live_forward_run_conditions()),
-                    and_(
-                        *historical_reconstruction_provenance_conditions(),
-                        RecommendationRun.data_as_of
-                        <= RecommendationRun.trade_date,
-                    ),
-                ),
-                RecommendationRun.trade_date == trade_date,
-                RecommendationRun.market_snapshot_json.is_not(None),
-                RecommendationRun.market_snapshot_json != "",
-                RecommendationRun.market_snapshot_json != "{}",
-            )
-            .order_by(RecommendationRun.started_at.desc())
-            .limit(1)
-        ).scalar_one_or_none()
+        live_run_ids = canonical_live_forward_run_ids(db, trade_date=trade_date)
+        historical_run_ids = canonical_historical_reconstruction_run_ids(
+            db,
+            trade_date=trade_date,
+        )
+        selected_scope = "live_forward" if live_run_ids else "historical_replay"
+        eligible_run_ids = live_run_ids or historical_run_ids
+        raw = None
+        if eligible_run_ids:
+            raw = db.execute(
+                select(RecommendationRun.market_snapshot_json)
+                .where(
+                    RecommendationRun.run_id.in_(eligible_run_ids),
+                    RecommendationRun.market_snapshot_json.is_not(None),
+                    RecommendationRun.market_snapshot_json != "",
+                    RecommendationRun.market_snapshot_json != "{}",
+                )
+                .order_by(RecommendationRun.started_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
     except Exception as exc:  # pragma: no cover - 防御
         logger.warning("load formal market snapshot failed for %s: %s", trade_date, exc)
         raw = None
+        selected_scope = ""
 
     if raw:
         try:
@@ -73,7 +73,11 @@ def _resolve_analysis_market_snapshot(
             snap.setdefault("trade_date", trade_date)
             breadth = snap.get("breadth") if isinstance(snap.get("breadth"), dict) else {}
             snap["breadth"] = breadth
-            return snap, "formal_run_snapshot"
+            return snap, (
+                "formal_run_snapshot"
+                if selected_scope == "live_forward"
+                else "historical_replay_snapshot"
+            )
 
     # fallback：最小单股 snapshot（保留旧行为，但打标）
     snapshot = _build_quote_snapshot([quote], "single", "single", [])

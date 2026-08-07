@@ -6,7 +6,7 @@ import uuid
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,10 @@ from app.services.evidence.selectors import (
     historical_reconstruction_run_conditions,
     live_forward_run_conditions,
 )
+from app.services.evidence.validation import (
+    canonical_historical_reconstruction_run_ids,
+    canonical_live_forward_run_ids,
+)
 from app.services.prefilter_service import apply_prefilters
 from app.services.research_context import build_research_contexts
 from app.services.registry.data_source import (
@@ -166,8 +170,16 @@ from app.services.runs.request_persistence import (
     assert_run_request_index_consistency,
     load_canonical_run_request,
 )
-from app.services.runs.coordinator import LegacyWorkbenchRunCoordinator
+from app.services.runs.coordinator import RunCoordinator
+from app.services.runs.deletion_guard import (
+    assert_recommendation_physically_deletable,
+    assert_run_physically_deletable,
+)
 from app.services.runs.repository import CreateQueuedRun
+from app.services.runs.recovery import (
+    RecoveryCapabilityError,
+    evaluate_recovery_capability,
+)
 from app.services.runs.sqlalchemy_repository import SQLAlchemyRunRepository
 from app.orchestration import trigger_recommendation
 from app.services.runs.skill_gate import (
@@ -301,7 +313,7 @@ def _mark_run_dispatched(db: Session, run_id: str) -> bool:
     """Move canonical queued runs through the state machine before spawning."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     repository = SQLAlchemyRunRepository(db)
-    coordinator = LegacyWorkbenchRunCoordinator(repository)
+    coordinator = RunCoordinator(repository)
     managed = repository.get_run(run_id) is not None
     record = repository.get_run(run_id) if managed else None
     # Recovery must remain INTERRUPTED across the process boundary.  The child
@@ -329,17 +341,21 @@ def _mark_run_dispatched(db: Session, run_id: str) -> bool:
 
 def _select_latest_bootstrap_run(db: Session) -> RecommendationRun | None:
     """Prefer active formal work, otherwise the newest canonical completed run."""
+    live_run_ids = canonical_live_forward_run_ids(db)
+    historical_run_ids = canonical_historical_reconstruction_run_ids(db)
     canonical_completed = or_(
         and_(
             RecommendationRun.run_mode == "formal",
             RecommendationRun.status == "completed",
             *live_forward_run_conditions(),
+            RecommendationRun.run_id.in_(live_run_ids),
         ),
         and_(
             RecommendationRun.run_mode == "formal",
             RecommendationRun.status == "completed",
             *historical_reconstruction_provenance_conditions(),
             RecommendationRun.data_as_of <= RecommendationRun.trade_date,
+            RecommendationRun.run_id.in_(historical_run_ids),
         ),
     )
     return db.scalar(
@@ -349,6 +365,7 @@ def _select_latest_bootstrap_run(db: Session) -> RecommendationRun | None:
                 and_(
                     RecommendationRun.run_mode == "formal",
                     RecommendationRun.status.in_(RUN_ACTIVE_STATUSES),
+                    RecommendationRun.evaluation_scope == "live_forward",
                 ),
                 canonical_completed,
             )
@@ -476,13 +493,11 @@ def get_initial_workbench_state(db: Session, *, detail: str = "summary") -> dict
     return payload
 
 
-def enqueue_workbench_run(
+def _prepare_workbench_run(
     db: Session,
     payload: dict[str, Any],
-    *,
-    dispatch: bool = True,
-) -> dict[str, Any]:
-    """Persist a canonical queued request before the dispatcher may spawn a worker."""
+) -> tuple[dict[str, Any], RunRequest, list[dict[str, Any]], str, dict[str, Any]]:
+    """Resolve the canonical request and execution audit without creating a run."""
     skills = sync_skills(db)
     skill_map = {skill.skill_id: skill for skill in skills}
     preset = db.get(Preset, payload["preset_id"]) if payload.get("preset_id") else None
@@ -495,16 +510,21 @@ def enqueue_workbench_run(
                         for value in db.scalars(select(Preset.preset_id)).all()
                         if value
                     ),
-                    *(str(item["preset_id"]) for item in DEFAULT_PRESETS if item.get("preset_id")),
+                    *(
+                        str(item["preset_id"])
+                        for item in DEFAULT_PRESETS
+                        if item.get("preset_id")
+                    ),
                 }
             )
         )
-        raise UnknownRegistryValueError("preset", str(payload["preset_id"]), available_preset_ids)
+        raise UnknownRegistryValueError(
+            "preset",
+            str(payload["preset_id"]),
+            available_preset_ids,
+        )
     params = _merge_run_params(db, preset, payload)
     request = _canonical_workbench_request(params, payload)
-    # ``params_json`` remains a legacy display projection, so keep its mode
-    # aligned with the canonical request instead of leaving an implicit formal
-    # default that would misdescribe experiment/backtest runs.
     params["run_mode"] = request.run_mode.value
     selected_skills = _select_skills_for_run(
         db,
@@ -516,10 +536,31 @@ def enqueue_workbench_run(
     )
     if not selected_skills:
         raise ValueError("没有可运行的 Skill，请检查预设配置或 Skill 状态")
+    execution_version, execution_audit = _execution_version_identity(
+        request,
+        selected_skills,
+    )
+    return params, request, selected_skills, execution_version, execution_audit
+
+
+def enqueue_workbench_run(
+    db: Session,
+    payload: dict[str, Any],
+    *,
+    dispatch: bool = True,
+    before_commit: Callable[[RecommendationRun], None] | None = None,
+) -> dict[str, Any]:
+    """Persist a canonical queued request before the dispatcher may spawn a worker."""
+    (
+        params,
+        request,
+        selected_skills,
+        execution_version,
+        execution_audit,
+    ) = _prepare_workbench_run(db, payload)
 
     run_id = _new_run_id()
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    execution_version, execution_audit = _execution_version_identity(request, selected_skills)
     repository = SQLAlchemyRunRepository(db)
     created = repository.create_queued_run(
         CreateQueuedRun(
@@ -542,6 +583,8 @@ def enqueue_workbench_run(
             "execution": {**execution_audit, "execution_version": execution_version},
         }
     )
+    if before_commit is not None:
+        before_commit(run)
     db.commit()
     invalidate_bootstrap_cache()
     if dispatch:
@@ -566,10 +609,22 @@ def dispatch_workbench_run(db: Session, run_id: str) -> None:
     record = SQLAlchemyRunRepository(db).get_run(normalized_run_id)
     if record is None:
         raise RuntimeError(f"Run {normalized_run_id} 没有可用的 canonical request")
-    if record.status not in {RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.INTERRUPTED}:
+    if record.status not in {RunStatus.QUEUED, RunStatus.INTERRUPTED}:
         raise RuntimeError(f"Run {normalized_run_id} 当前状态不可派发: {record.status.value}")
-    # The caller owns the preceding CAS commit.  No request payload is allowed to
-    # cross this boundary; the dispatcher carries only run_id.
+    if record.status is RunStatus.INTERRUPTED:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        capability = evaluate_recovery_capability(
+            db,
+            normalized_run_id,
+            now=now,
+        )
+        if not capability.can_resume:
+            raise RecoveryCapabilityError(
+                capability.block_code or "resume_rejected",
+                capability.block_reason or "运行不满足恢复条件",
+            )
+    # The dispatcher carries only run_id. The worker locks and revalidates every
+    # recovery fact before it performs the completion-only lifecycle transaction.
     _trigger_recommendation(normalized_run_id)
 
 
@@ -613,6 +668,14 @@ def get_run_detail(db: Session, run_id: str) -> dict[str, Any] | None:
     if run is None:
         return None
     data = _serialize_run_summary(db, run)
+    capability = evaluate_recovery_capability(
+        db,
+        run_id,
+        now=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    data["can_resume"] = capability.can_resume
+    data["resume_block_code"] = capability.block_code
+    data["resume_block_reason"] = capability.block_reason
     data["params"] = _loads(run.params_json, {})
     if isinstance(data["params"], dict):
         data["params"].pop("output_count", None)
@@ -629,22 +692,18 @@ def get_run_detail(db: Session, run_id: str) -> dict[str, Any] | None:
 def delete_run(db: Session, run_id: str) -> bool:
     run = db.get(RecommendationRun, run_id)
     if run is None:
-        logger.warning("delete_run: run_id=%s not found (already deleted or never existed), treating as idempotent success", run_id)
-        invalidate_bootstrap_cache()
-        return True
-    recs = db.scalars(select(Recommendation).where(Recommendation.run_id == run_id)).all()
-    rec_ids = [rec.recommendation_id for rec in recs]
-    if rec_ids:
-        db.execute(select(AgentDecisionLog).where(AgentDecisionLog.recommendation_id.in_(rec_ids)))
-        for aidl in db.scalars(select(AgentDecisionLog).where(AgentDecisionLog.recommendation_id.in_(rec_ids))).all():
-            db.delete(aidl)
-        for rid in rec_ids:
-            db.execute(text("DELETE FROM review_notes WHERE recommendation_id = :rid"), {"rid": rid})
-            db.execute(text("DELETE FROM watch_items WHERE source_recommendation_id = :rid"), {"rid": rid})
-            db.execute(text("DELETE FROM recommendation_execution_states WHERE recommendation_id = :rid"), {"rid": rid})
-            db.execute(text("DELETE FROM recommendation_outcomes WHERE recommendation_id = :rid"), {"rid": rid})
-        for rec in recs:
-            db.delete(rec)
+        return False
+    recs = assert_run_physically_deletable(db, run)
+    for rec in recs:
+        db.execute(
+            text("DELETE FROM review_notes WHERE recommendation_id = :rid"),
+            {"rid": rec.recommendation_id},
+        )
+        db.execute(
+            text("DELETE FROM watch_items WHERE source_recommendation_id = :rid"),
+            {"rid": rec.recommendation_id},
+        )
+        db.delete(rec)
     db.execute(text("DELETE FROM watch_items WHERE source_run_id = :run_id"), {"run_id": run_id})
     db.delete(run)
     db.commit()
@@ -655,14 +714,10 @@ def delete_run(db: Session, run_id: str) -> bool:
 def delete_recommendation(db: Session, recommendation_id: str) -> bool:
     rec = db.get(Recommendation, recommendation_id)
     if rec is None:
-        logger.warning("delete_recommendation: recommendation_id=%s not found, treating as idempotent success", recommendation_id)
-        invalidate_bootstrap_cache()
-        return True
-    db.execute(text("DELETE FROM agent_decision_logs WHERE recommendation_id = :rid"), {"rid": recommendation_id})
+        return False
+    assert_recommendation_physically_deletable(db, rec)
     db.execute(text("DELETE FROM review_notes WHERE recommendation_id = :rid"), {"rid": recommendation_id})
     db.execute(text("DELETE FROM watch_items WHERE source_recommendation_id = :rid"), {"rid": recommendation_id})
-    db.execute(text("DELETE FROM recommendation_execution_states WHERE recommendation_id = :rid"), {"rid": recommendation_id})
-    db.execute(text("DELETE FROM recommendation_outcomes WHERE recommendation_id = :rid"), {"rid": recommendation_id})
     db.delete(rec)
     db.commit()
     invalidate_bootstrap_cache()
@@ -682,13 +737,15 @@ def list_dashboard_recommendations(
     *,
     limit: int = 12,
 ) -> list[dict[str, Any]]:
-    """聚合同交易日全部正式运行的驾驶舱候选，并按最高分全局排序。"""
+    """聚合同交易日全部已验证 LIVE 正式运行，并按最高分全局排序。"""
+    live_run_ids = canonical_live_forward_run_ids(db, trade_date=trade_date)
     recs = db.scalars(
         select(Recommendation)
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
         .where(
             RecommendationRun.trade_date == trade_date,
-            *recommendation_history_conditions(),
+            *recommendation_history_conditions(live_run_ids=live_run_ids),
+            RecommendationRun.run_id.in_(live_run_ids),
         )
         .order_by(
             Recommendation.final_score.desc(),
@@ -722,18 +779,42 @@ def invalidate_recommendation_history_cache() -> None:
         _history_cache.clear()
 
 
-def _list_recommendation_setup_types(db: Session) -> list[str]:
-    """返回正式推荐历史中的全部非空买点值，供前端构建筛选下拉框。"""
-    values = db.scalars(
-        select(Recommendation.setup_type)
+def _list_recommendation_setup_types(
+    db: Session,
+    *,
+    live_run_ids: tuple[str, ...],
+    historical_run_ids: tuple[str, ...],
+) -> list[str]:
+    """返回 canonical winner 的非空买点值，供前端构建筛选下拉框。"""
+    ranked = (
+        select(
+            Recommendation.setup_type.label("setup_type"),
+            func.row_number().over(
+                partition_by=(Recommendation.trade_date, Recommendation.code),
+                order_by=(
+                    Recommendation.final_score.desc(),
+                    Recommendation.recommendation_id.asc(),
+                ),
+            ).label("winner_rank"),
+        )
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
         .where(
-            *recommendation_history_conditions(),
-            Recommendation.setup_type.is_not(None),
-            func.trim(Recommendation.setup_type) != "",
+            *recommendation_history_conditions(
+                live_run_ids=live_run_ids,
+                historical_run_ids=historical_run_ids,
+            )
+        )
+        .subquery()
+    )
+    values = db.scalars(
+        select(ranked.c.setup_type)
+        .where(
+            ranked.c.winner_rank == 1,
+            ranked.c.setup_type.is_not(None),
+            func.trim(ranked.c.setup_type) != "",
         )
         .distinct()
-        .order_by(Recommendation.setup_type.asc())
+        .order_by(ranked.c.setup_type.asc())
     ).all()
     return [str(value).strip() for value in values if str(value or "").strip()]
 
@@ -768,77 +849,128 @@ def list_recommendation_history(
         if entry is not None and (now - entry[0]) < _HISTORY_CACHE_TTL:
             return entry[1]
 
-    facets = {"setup_types": _list_recommendation_setup_types(db)}
+    live_run_ids = canonical_live_forward_run_ids(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    historical_run_ids = canonical_historical_reconstruction_run_ids(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    facets = {
+        "setup_types": _list_recommendation_setup_types(
+            db,
+            live_run_ids=live_run_ids,
+            historical_run_ids=historical_run_ids,
+        ),
+    }
 
-    # 第 1 步：轻量查询——只取去重所需列（不取 feature_snapshot_json 等大字段）
-    def _apply_history_filters(stmt):
-        if code:
-            stmt = stmt.where(Recommendation.code == code)
-        if date_from:
-            stmt = stmt.where(Recommendation.trade_date >= date_from)
-        if date_to:
-            stmt = stmt.where(Recommendation.trade_date <= date_to)
-        if bucket:
-            stmt = stmt.where(Recommendation.bucket == bucket)
-        if setup_type:
-            stmt = stmt.where(Recommendation.setup_type == setup_type)
-        if strategy_id:
-            # skill_breakdown_json 是 text 列（Python json.dumps 默认 "key": value 带空格），
-            # 用 JSON_SEARCH 做 spacing-agnostic 的 strategy_id 过滤。
-            # 北极星 C 项：策略清单卡可下钻到该策略的全部推荐历史。
-            stmt = stmt.where(
-                text(
-                    "JSON_SEARCH(recommendations.skill_breakdown_json,'one',:sid,NULL,'$[*].strategy_id') IS NOT NULL"
-                ).bindparams(sid=str(strategy_id))
-            )
-        if strategy_version_id:
-            stmt = stmt.where(
-                text(
-                    "JSON_SEARCH(recommendation_runs.selected_skills_json,'one',:strategy_version_id,NULL,'$[*].version_id') IS NOT NULL"
-                ).bindparams(strategy_version_id=str(strategy_version_id))
-            )
-        if label:
-            if label == "pending":
-                stmt = stmt.outerjoin(
-                    RecommendationOutcome,
-                    RecommendationOutcome.recommendation_id == Recommendation.recommendation_id,
-                ).where(
-                    or_(
-                        RecommendationOutcome.outcome_label.is_(None),
-                        RecommendationOutcome.outcome_label == "pending",
-                    )
-                )
-            else:
-                stmt = stmt.join(
-                    RecommendationOutcome,
-                    RecommendationOutcome.recommendation_id == Recommendation.recommendation_id,
-                ).where(RecommendationOutcome.outcome_label == label)
-        return stmt
-
-    id_stmt = _apply_history_filters(
+    # 第 1 步：在 canonical population 内先选定每个 (trade_date, code) 的唯一 winner。
+    # code/date 是去重键或窗口约束，可在排名前缩小候选；label/bucket/setup/strategy
+    # 必须在 winner_rank=1 后过滤，否则低分重复行会因高分行不匹配筛选而被错误晋升。
+    ranked_stmt = (
         select(
-            Recommendation.recommendation_id,
-            Recommendation.trade_date,
-            Recommendation.code,
-            Recommendation.final_score,
+            Recommendation.recommendation_id.label("recommendation_id"),
+            Recommendation.trade_date.label("trade_date"),
+            Recommendation.code.label("code"),
+            Recommendation.final_score.label("final_score"),
+            Recommendation.bucket.label("bucket"),
+            Recommendation.setup_type.label("setup_type"),
+            Recommendation.skill_breakdown_json.label("skill_breakdown_json"),
+            RecommendationRun.selected_skills_json.label("selected_skills_json"),
+            RecommendationOutcome.outcome_label.label("outcome_label"),
+            func.row_number().over(
+                partition_by=(Recommendation.trade_date, Recommendation.code),
+                order_by=(
+                    Recommendation.final_score.desc(),
+                    Recommendation.recommendation_id.asc(),
+                ),
+            ).label("winner_rank"),
         )
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
-        .where(*recommendation_history_conditions())
-        .order_by(Recommendation.trade_date.desc(), Recommendation.final_score.desc())
+        .outerjoin(
+            RecommendationOutcome,
+            RecommendationOutcome.recommendation_id == Recommendation.recommendation_id,
+        )
+        .where(
+            *recommendation_history_conditions(
+                live_run_ids=live_run_ids,
+                historical_run_ids=historical_run_ids,
+            )
+        )
+    )
+    if code:
+        ranked_stmt = ranked_stmt.where(Recommendation.code == code)
+    if date_from:
+        ranked_stmt = ranked_stmt.where(Recommendation.trade_date >= date_from)
+    if date_to:
+        ranked_stmt = ranked_stmt.where(Recommendation.trade_date <= date_to)
+    ranked = ranked_stmt.subquery("history_ranked")
+
+    id_stmt = select(
+        ranked.c.recommendation_id,
+        ranked.c.trade_date,
+        ranked.c.code,
+        ranked.c.final_score,
+    ).where(ranked.c.winner_rank == 1)
+    if bucket:
+        id_stmt = id_stmt.where(ranked.c.bucket == bucket)
+    if setup_type:
+        id_stmt = id_stmt.where(ranked.c.setup_type == setup_type)
+
+    def _guarded_json_array(column):
+        valid_json = case(
+            (func.json_valid(column) == 1, column),
+            else_=func.json_array(),
+        )
+        return case(
+            (func.json_type(valid_json) == "ARRAY", valid_json),
+            else_=func.json_array(),
+        )
+
+    if strategy_id:
+        id_stmt = id_stmt.where(
+            func.json_search(
+                _guarded_json_array(ranked.c.skill_breakdown_json),
+                "one",
+                str(strategy_id),
+                None,
+                "$[*].strategy_id",
+            ).is_not(None)
+        )
+    if strategy_version_id:
+        id_stmt = id_stmt.where(
+            func.json_search(
+                _guarded_json_array(ranked.c.selected_skills_json),
+                "one",
+                str(strategy_version_id),
+                None,
+                "$[*].version_id",
+            ).is_not(None)
+        )
+    if label == "pending":
+        id_stmt = id_stmt.where(
+            or_(ranked.c.outcome_label.is_(None), ranked.c.outcome_label == "pending")
+        )
+    elif label:
+        id_stmt = id_stmt.where(ranked.c.outcome_label == label)
+    id_stmt = id_stmt.order_by(
+        ranked.c.trade_date.desc(),
+        ranked.c.final_score.desc(),
+        ranked.c.recommendation_id.asc(),
     )
 
     id_rows = db.execute(id_stmt).all()
-
-    seen: set[tuple[str, str]] = set()
-    deduped_ids: list[str] = []
-    deduped_refs: list[dict[str, str]] = []
-    for rec_id, td, c, _score in id_rows:
-        key = (str(td), str(c))
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped_ids.append(rec_id)
-        deduped_refs.append({"recommendation_id": str(rec_id), "code": str(c)})
+    deduped_ids = [str(row.recommendation_id) for row in id_rows]
+    deduped_refs = [
+        {
+            "recommendation_id": str(row.recommendation_id),
+            "code": str(row.code),
+        }
+        for row in id_rows
+    ]
 
     total = len(deduped_ids)
     all_outcomes = list(db.scalars(
@@ -964,7 +1096,7 @@ def _build_recommendation_history_summary(
         "total_net_return": round(total_net_return, 2),
         "additional_cost_pct": _ADDITIONAL_COST_PCT,
         "methodology": {
-            "sample_scope": "official_live_forward_v1",
+            "sample_scope": "canonical_history_live_and_reconstruction_v1",
             "entry_policy": "causal_strategy_entry_v1",
             "win_definition": "executed_net_return_gt_zero",
             "deduplication": "trade_date_and_code_highest_score",
@@ -1036,10 +1168,10 @@ def _mark_run_failed(db: Session, run_id: str, exc: Exception) -> None:
             pass
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         repository = SQLAlchemyRunRepository(db)
-        lifecycle = LegacyWorkbenchRunCoordinator(repository)
+        lifecycle = RunCoordinator(repository)
         record = repository.get_run(run_id)
         if record is not None:
-            if record.status in {RunStatus.QUEUED, RunStatus.RUNNING}:
+            if record.status is RunStatus.QUEUED:
                 transition_applied = lifecycle.spawn_failed(run_id, now=now, message=str(exc))
                 if not transition_applied:
                     logger.warning("run failure CAS lost for %s; refusing direct status overwrite", run_id)
@@ -1056,6 +1188,11 @@ def _mark_run_failed(db: Session, run_id: str, exc: Exception) -> None:
                 db.commit()
                 invalidate_bootstrap_cache()
                 _record_progress_commit(run)
+            elif record.status is RunStatus.RUNNING:
+                logger.warning(
+                    "outer failure handler refuses to overwrite worker-owned run %s",
+                    run_id,
+                )
             return
 
         # Historical rows without canonical request columns cannot participate in
@@ -1086,6 +1223,7 @@ def _update_run_progress(
     message: str | None = None,
     status: str | None = None,
     commit: bool = True,
+    renew_lease: bool = False,
 ) -> RecommendationRun | None:
     if not run_id:
         return None
@@ -1093,21 +1231,8 @@ def _update_run_progress(
     if run is None:
         return None
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    lifecycle_repository = SQLAlchemyRunRepository(db)
-    lifecycle_record = lifecycle_repository.get_run(run_id)
-    if lifecycle_record is not None and lifecycle_record.lease is not None:
-        renewed = LegacyWorkbenchRunCoordinator(lifecycle_repository).renew_worker_lease(
-            run_id,
-            now=now,
-            ttl=timedelta(seconds=RUN_HEARTBEAT_STALE_SECONDS),
-        )
-        if not renewed:
-            raise RuntimeError("Run lifecycle lease 已丢失或过期，worker 必须停止写入")
-        # Repository CAS expires the identity map so this legacy progress write
-        # cannot accidentally flush an obsolete status/revision view.
-        run = db.get(RecommendationRun, run_id)
-        if run is None:
-            return None
+    if renew_lease:
+        raise RuntimeError("worker progress lease renewal must use RunCoordinator with caller-owned WorkerLease")
     run.heartbeat_at = now
     run.progress_phase = phase
     if current is not None:
@@ -1161,7 +1286,7 @@ def recover_interrupted_runs(db: Session, run_ids: list[str] | None = None) -> i
         stmt = stmt.where(RecommendationRun.run_id.in_(run_ids))
     runs = db.scalars(stmt).all()
     repository = SQLAlchemyRunRepository(db)
-    lifecycle = LegacyWorkbenchRunCoordinator(repository)
+    lifecycle = RunCoordinator(repository)
     recovered = 0
     redispatched: list[str] = []
     for run in runs:
