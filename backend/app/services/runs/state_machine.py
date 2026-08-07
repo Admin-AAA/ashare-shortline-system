@@ -56,16 +56,17 @@ class TransitionRule:
 
 @dataclass(frozen=True, slots=True)
 class ResumeCheck:
-    """Repository-derived facts required before an interrupted run can resume."""
+    """Database-derived facts for persistence-only lifecycle completion."""
 
     last_committed_phase: RunPhase | None
     side_effect_key: str | None
     has_active_lease: bool
+    collection_seal_verified: bool = False
 
     @property
-    def has_valid_checkpoint(self) -> bool:
+    def has_persistence_checkpoint(self) -> bool:
         return (
-            self.last_committed_phase in RUN_PHASE_ORDER
+            self.last_committed_phase is RunPhase.PERSISTENCE
             and bool(self.side_effect_key and self.side_effect_key.strip())
         )
 
@@ -98,14 +99,6 @@ TRANSITION_RULES: Final[tuple[TransitionRule, ...]] = (
         RunStatus.CANCELLED,
         frozenset({RunActor.API, RunActor.OPERATOR}),
         RunErrorCode.RUN_CANCELLED,
-        terminal=True,
-    ),
-    TransitionRule(
-        RunStatus.RUNNING,
-        RunTrigger.SPAWN_FAILED,
-        RunStatus.FAILED,
-        frozenset({RunActor.DISPATCHER}),
-        RunErrorCode.WORKER_SPAWN_FAILED,
         terminal=True,
     ),
     TransitionRule(
@@ -148,14 +141,7 @@ TRANSITION_RULES: Final[tuple[TransitionRule, ...]] = (
         RunTrigger.RESUME,
         RunStatus.RUNNING,
         frozenset({RunActor.API, RunActor.OPERATOR}),
-        recovery_condition="checkpoint_and_no_active_lease",
-    ),
-    TransitionRule(
-        RunStatus.INTERRUPTED,
-        RunTrigger.REPLAY,
-        RunStatus.QUEUED,
-        frozenset({RunActor.WORKER, RunActor.OPERATOR}),
-        recovery_condition="immutable_request_full_replay",
+        recovery_condition="verified_persistence_seal_and_no_active_lease",
     ),
     TransitionRule(
         RunStatus.INTERRUPTED,
@@ -229,19 +215,24 @@ class RunStateMachine:
             )
 
     @staticmethod
-    def validate_resume(resume: ResumeCheck) -> RunPhase | None:
-        """Validate resume preconditions and return the next executable phase."""
+    def validate_resume(resume: ResumeCheck) -> None:
+        """Allow only completion of an already sealed persistence collection."""
         if resume.has_active_lease:
             raise RunStateTransitionError(
                 RunErrorCode.RESUME_REQUIRES_NO_ACTIVE_LEASE,
                 "仍存在活跃 worker lease，不能并发恢复运行",
             )
-        if not resume.has_valid_checkpoint:
+        if not resume.has_persistence_checkpoint:
             raise RunStateTransitionError(
-                RunErrorCode.RESUME_REQUIRES_VALID_CHECKPOINT,
-                "恢复运行需要已原子提交的阶段和 side_effect_key",
+                RunErrorCode.RESUME_REQUIRES_PERSISTENCE_CHECKPOINT,
+                "恢复只允许已提交 persistence checkpoint 的运行",
             )
-        return RunStateMachine.next_phase(resume.last_committed_phase)
+        if not resume.collection_seal_verified:
+            raise RunStateTransitionError(
+                RunErrorCode.RESUME_REQUIRES_VERIFIED_SEAL,
+                "恢复需要数据库中已验证的 recommendation collection seal",
+            )
+        return None
 
     @staticmethod
     def transition(

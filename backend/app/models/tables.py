@@ -310,7 +310,15 @@ class NewsAnnouncement(Base):
 class MinuteKbar(Base):
     """分钟K线（1min/5min/15min/30min/60min）。数据来源：eastmoney push2his API。"""
     __tablename__ = "minute_kbars"
-    __table_args__ = (UniqueConstraint("code", "freq", "trade_time", name="uq_minute_kbar_code_freq_time"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "code",
+            "freq",
+            "trade_time",
+            name="uq_minute_kbar_code_freq_time",
+        ),
+        Index("idx_mk_td_code", "trade_date", "code"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(6), index=True)
@@ -745,6 +753,47 @@ class PresetSkill(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class RecommendationReconstructionBatch(Base):
+    """A complete, version-bound historical reconstruction cohort."""
+
+    __tablename__ = "recommendation_reconstruction_batches"
+    __table_args__ = (
+        Index(
+            "ix_rec_reconstruction_batches_status_completed",
+            "status",
+            "completed_at",
+        ),
+    )
+
+    batch_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    schema_version: Mapped[int] = mapped_column(SmallInteger, default=1)
+    window_start: Mapped[str] = mapped_column(String(10), index=True)
+    window_end: Mapped[str] = mapped_column(String(10), index=True)
+    expected_trade_dates_json: Mapped[str] = mapped_column(Text)
+    expected_trade_date_count: Mapped[int] = mapped_column(Integer)
+    completed_trade_date_count: Mapped[int] = mapped_column(Integer, default=0)
+    request_template_fingerprint: Mapped[str] = mapped_column(CHAR(64))
+    strategy_policy_fingerprint: Mapped[str] = mapped_column(CHAR(64))
+    execution_policy_fingerprint: Mapped[str] = mapped_column(CHAR(64))
+    code_revision: Mapped[str] = mapped_column(String(64))
+    cohort_identity_hash: Mapped[str | None] = mapped_column(CHAR(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="building")
+    failure_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime().with_variant(DATETIME(fsp=6), "mysql"),
+        default=datetime.utcnow,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime().with_variant(DATETIME(fsp=6), "mysql"),
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime().with_variant(DATETIME(fsp=6), "mysql"),
+        nullable=True,
+    )
+
+
 class RecommendationRun(Base):
     __tablename__ = "recommendation_runs"
     __table_args__ = (
@@ -756,6 +805,12 @@ class RecommendationRun(Base):
         ),
         Index("ix_rec_runs_reconstruction_batch", "reconstruction_batch_id"),
         Index("ix_rec_runs_evidence_identity_hash", "evidence_identity_hash"),
+        Index(
+            "uq_rec_runs_reconstruction_batch_date",
+            "reconstruction_batch_id",
+            "trade_date",
+            unique=True,
+        ),
     )
 
     run_id: Mapped[str] = mapped_column(String(60), primary_key=True)
@@ -885,6 +940,29 @@ class RecommendationEvidenceClassificationAudit(Base):
     applied_at: Mapped[datetime | None] = mapped_column(
         DateTime().with_variant(DATETIME(fsp=6), "mysql"),
         nullable=True,
+    )
+
+
+class RecommendationCollectionSeal(Base):
+    """Immutable identity of the recommendation rows persisted by one run."""
+
+    __tablename__ = "recommendation_collection_seals"
+    __table_args__ = (
+        Index(
+            "uq_rec_collection_seals_side_effect_key",
+            "checkpoint_side_effect_key",
+            unique=True,
+        ),
+    )
+
+    run_id: Mapped[str] = mapped_column(String(60), primary_key=True)
+    schema_version: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    recommendation_row_count: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    collection_digest: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    checkpoint_side_effect_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    sealed_at: Mapped[datetime] = mapped_column(
+        DateTime().with_variant(DATETIME(fsp=6), "mysql"),
+        nullable=False,
     )
 
 

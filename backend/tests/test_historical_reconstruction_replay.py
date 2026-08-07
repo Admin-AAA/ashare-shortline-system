@@ -19,6 +19,7 @@ from scripts.replay_all_days import (
     _finalize_reconstruction_run,
     _historical_payload,
     _initialize_reconstruction_run,
+    _run_exists,
 )
 
 
@@ -151,6 +152,57 @@ def test_replay_rejects_signal_snapshot_newer_than_signal_date():
     assert db.commit_count == 1
 
 
+def test_replay_skip_existing_uses_run_provenance_and_accepts_zero_recommendations(db):
+    trade_date = "2099-02-04"
+    live_run = RecommendationRun(
+        run_id="run_replay_exists_live_only",
+        run_name="LIVE fixture",
+        run_mode="formal",
+        evaluation_scope="live_forward",
+        evidence_class=EvidenceClass.LIVE_FORWARD.value,
+        actual_generated_at=datetime(2099, 2, 4, 2, 0),
+        evidence_identity_hash="d" * 64,
+        strategy_policy_fingerprint="a" * 64,
+        execution_policy_fingerprint="b" * 64,
+        code_revision="c" * 40,
+        provenance_schema_version=PROVENANCE_SCHEMA_VERSION,
+        trade_date=trade_date,
+        data_as_of=trade_date,
+        source_snapshot_id="snapshot-live-only",
+        started_at=datetime(2099, 2, 4, 2, 0),
+        status="completed",
+    )
+    db.add(live_run)
+    db.flush()
+
+    assert _run_exists(db, trade_date) is False
+
+    replay_run = RecommendationRun(
+        run_id="run_replay_exists_zero_recommendations",
+        run_name="REPLAY zero recommendation fixture",
+        run_mode="formal",
+        evaluation_scope="historical_replay",
+        evidence_class=EvidenceClass.HISTORICAL_RECONSTRUCTION.value,
+        actual_generated_at=datetime(2099, 2, 8, 2, 0),
+        evidence_identity_hash="e" * 64,
+        strategy_policy_fingerprint="f" * 64,
+        execution_policy_fingerprint="1" * 64,
+        code_revision="2" * 40,
+        reconstruction_batch_id="replay-zero-recommendations",
+        provenance_schema_version=PROVENANCE_SCHEMA_VERSION,
+        trade_date=trade_date,
+        data_as_of=trade_date,
+        source_snapshot_id="snapshot-replay-zero",
+        started_at=datetime(2099, 2, 8, 2, 0),
+        status="completed",
+        recommended_count=0,
+    )
+    db.add(replay_run)
+    db.flush()
+
+    assert _run_exists(db, trade_date) is True
+
+
 def test_historical_page_queries_reconstruction_by_trade_date_without_rewriting_time(db):
     """**Validates: Requirements 1.1, 1.3, 1.4, 1.6**"""
     run_id = "run_task_1_3_historical_query"
@@ -189,6 +241,7 @@ def test_historical_page_queries_reconstruction_by_trade_date_without_rewriting_
         name="历史重建查询样本",
         recommend_price=10.0,
         final_score=88.0,
+        setup_type="replay_setup_fixture",
     )
     outcome = RecommendationOutcome(
         recommendation_id=recommendation_id,
@@ -212,6 +265,7 @@ def test_historical_page_queries_reconstruction_by_trade_date_without_rewriting_
     assert result["items"][0]["trade_date"] == trade_date
     assert result["items"][0]["recommended_at"] == actual_generated_at.isoformat()
     assert result["items"][0]["outcome"]["outcome_label"] == "success"
+    assert "replay_setup_fixture" in result["facets"]["setup_types"]
     assert json.loads(run.filter_audit_json)["candidate_audit"]["retained"] is True
     assert run.evaluation_scope == "historical_replay"
 

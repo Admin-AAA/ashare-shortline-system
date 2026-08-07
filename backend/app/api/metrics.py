@@ -1,9 +1,12 @@
+import logging
+from typing import Literal
+
 from fastapi import Depends, Query
 from app.api.contracts import ContractRouter as APIRouter
 from sqlalchemy.orm import Session
-import logging
 
 from app.db.session import get_db
+from app.services.official_sample_scope import LIVE_FORWARD_SCOPE
 from app.services.outcome_service import (
     board_and_net_breakdown,
     exit_ambiguity_metrics,
@@ -37,14 +40,28 @@ def _end_date_q() -> "Query":
     return Query(default=None, description="显式截止日期 YYYY-MM-DD（window_days 优先）")
 
 
+def _sample_scope_q() -> "Query":
+    return Query(
+        default=LIVE_FORWARD_SCOPE,
+        description="样本口径：live_forward=前瞻正式证据；historical_replay=显式历史重建研究证据",
+    )
+
+
 @router.get("/overview")
 def overview(
     db: Session = Depends(get_db),
     window_days: int | None = _window_days_q(),
     start_date: str | None = _start_date_q(),
     end_date: str | None = _end_date_q(),
+    sample_scope: Literal["live_forward", "historical_replay"] = _sample_scope_q(),
 ):
-    return overview_metrics(db, window_days=window_days, start_date=start_date, end_date=end_date)
+    return overview_metrics(
+        db,
+        window_days=window_days,
+        start_date=start_date,
+        end_date=end_date,
+        sample_scope=sample_scope,
+    )
 
 
 @router.get("/d-net")
@@ -53,10 +70,15 @@ def d_net(
     window_days: int | None = _window_days_q(),
     start_date: str | None = _start_date_q(),
     end_date: str | None = _end_date_q(),
+    sample_scope: Literal["live_forward", "historical_replay"] = _sample_scope_q(),
 ):
     """D 项净成本 + 板块(20cm/10cm)分解（北极星 D 项 observability）。"""
     return board_and_net_breakdown(
-        db, window_days=window_days, start_date=start_date, end_date=end_date,
+        db,
+        window_days=window_days,
+        start_date=start_date,
+        end_date=end_date,
+        sample_scope=sample_scope,
     )
 
 
@@ -75,8 +97,15 @@ def by_strategy(
     window_days: int | None = _window_days_q(),
     start_date: str | None = _start_date_q(),
     end_date: str | None = _end_date_q(),
+    sample_scope: Literal["live_forward", "historical_replay"] = _sample_scope_q(),
 ):
-    return metrics_by_strategy(db, window_days=window_days, start_date=start_date, end_date=end_date)
+    return metrics_by_strategy(
+        db,
+        window_days=window_days,
+        start_date=start_date,
+        end_date=end_date,
+        sample_scope=sample_scope,
+    )
 
 
 @router.get("/by-setup")
@@ -85,8 +114,15 @@ def by_setup(
     window_days: int | None = _window_days_q(),
     start_date: str | None = _start_date_q(),
     end_date: str | None = _end_date_q(),
+    sample_scope: Literal["live_forward", "historical_replay"] = _sample_scope_q(),
 ):
-    return metrics_by_setup(db, window_days=window_days, start_date=start_date, end_date=end_date)
+    return metrics_by_setup(
+        db,
+        window_days=window_days,
+        start_date=start_date,
+        end_date=end_date,
+        sample_scope=sample_scope,
+    )
 
 
 @router.get("/precision-at-k")
@@ -95,8 +131,15 @@ def metric_precision_at_k(
     window_days: int | None = _window_days_q(),
     start_date: str | None = _start_date_q(),
     end_date: str | None = _end_date_q(),
+    sample_scope: Literal["live_forward", "historical_replay"] = _sample_scope_q(),
 ):
-    return precision_at_k(db, window_days=window_days, start_date=start_date, end_date=end_date)
+    return precision_at_k(
+        db,
+        window_days=window_days,
+        start_date=start_date,
+        end_date=end_date,
+        sample_scope=sample_scope,
+    )
 
 
 @router.get("/by-score-line")
@@ -105,8 +148,15 @@ def by_score_line(
     window_days: int | None = _window_days_q(),
     start_date: str | None = _start_date_q(),
     end_date: str | None = _end_date_q(),
+    sample_scope: Literal["live_forward", "historical_replay"] = _sample_scope_q(),
 ):
-    return metrics_by_score_line(db, window_days=window_days, start_date=start_date, end_date=end_date)
+    return metrics_by_score_line(
+        db,
+        window_days=window_days,
+        start_date=start_date,
+        end_date=end_date,
+        sample_scope=sample_scope,
+    )
 
 
 @router.get("/filter-effectiveness")
@@ -115,8 +165,15 @@ def metric_filter_effectiveness(
     window_days: int | None = _window_days_q(),
     start_date: str | None = _start_date_q(),
     end_date: str | None = _end_date_q(),
+    sample_scope: Literal["live_forward", "historical_replay"] = _sample_scope_q(),
 ):
-    return filter_effectiveness(db, window_days=window_days, start_date=start_date, end_date=end_date)
+    return filter_effectiveness(
+        db,
+        window_days=window_days,
+        start_date=start_date,
+        end_date=end_date,
+        sample_scope=sample_scope,
+    )
 
 
 @router.get("/d-diagnostics")

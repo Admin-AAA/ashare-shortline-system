@@ -19,7 +19,7 @@ from .features import FeatureBuildPort
 from .strategy_evaluation import StrategyEvaluationPort
 from .review import ReviewExecutorPort, CostRecordingPort
 from .aggregation import RecommendationAssemblyPort
-from .persistence import RecommendationPersistencePort
+from .persistence import RecommendationPersistencePort, SealedRecommendationCollection
 
 logger = logging.getLogger(__name__)
 
@@ -547,7 +547,8 @@ class ProductionRecommendationPersistence(RecommendationPersistencePort):
         run_id: str,
         trade_date: str,
         cards: Sequence[StageMapping],
-    ) -> tuple[Any, ...]:
+    ) -> SealedRecommendationCollection:
+        from app.services.runs.collection_seal import seal_recommendation_collection
         from app.services.runs.persistence import persist_recommendation_cards
         from app.services.workbench_service import _dumps
 
@@ -558,7 +559,14 @@ class ProductionRecommendationPersistence(RecommendationPersistencePort):
             cards=list(cards),
             dump_json=_dumps,
         )
-        return tuple(saved)
+        self._db.flush()
+        seal = seal_recommendation_collection(self._db, run_id)
+        return SealedRecommendationCollection(
+            recommendations=tuple(saved),
+            recommendation_row_count=int(seal.recommendation_row_count),
+            collection_digest=str(seal.collection_digest),
+            side_effect_key=str(seal.checkpoint_side_effect_key),
+        )
 
 
 __all__ = [

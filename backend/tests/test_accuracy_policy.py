@@ -129,7 +129,14 @@ def test_overview_and_d_net_use_identical_official_winrate_scope(monkeypatch):
     assert overview["hit_rate"] == 0.333
     assert d_net["net"]["net_win_rate"] == 33.3
     assert overview["executed_trade_count"] == d_net["sample_count"] == 3
-    assert all(call == {"run_mode": "formal", "live_only": True} for call in calls)
+    assert all(
+        call == {
+            "run_mode": "formal",
+            "live_only": True,
+            "sample_scope": None,
+        }
+        for call in calls
+    )
 
 
 def test_precision_at_k_uses_strict_accuracy_policy():

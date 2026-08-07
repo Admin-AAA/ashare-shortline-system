@@ -124,7 +124,6 @@ class RunTrigger(str, Enum):
     HEARTBEAT_TIMEOUT = "heartbeat_timeout"
     CANCEL = "cancel"
     RESUME = "resume"
-    REPLAY = "replay"
 
 
 class RunErrorCode(str, Enum):
@@ -134,6 +133,15 @@ class RunErrorCode(str, Enum):
     INVALID_STATUS_TRANSITION = "invalid_status_transition"
     TRANSITION_ACTOR_NOT_ALLOWED = "transition_actor_not_allowed"
     RESUME_REQUIRES_VALID_CHECKPOINT = "resume_requires_valid_checkpoint"
+    RESUME_REQUIRES_INTERRUPTED_STATUS = "resume_requires_interrupted_status"
+    RESUME_REQUIRES_CANONICAL_REQUEST = "resume_requires_canonical_request"
+    RESUME_REQUIRES_PERSISTENCE_CHECKPOINT = "resume_requires_persistence_checkpoint"
+    RESUME_REQUIRES_VERIFIED_SEAL = "resume_requires_verified_seal"
+    RESUME_SEAL_NOT_FOUND = "resume_seal_not_found"
+    RESUME_SEAL_SCHEMA_UNSUPPORTED = "resume_seal_schema_unsupported"
+    RESUME_SEAL_KEY_MISMATCH = "resume_seal_key_mismatch"
+    RESUME_SEAL_ROW_COUNT_MISMATCH = "resume_seal_row_count_mismatch"
+    RESUME_SEAL_DIGEST_MISMATCH = "resume_seal_digest_mismatch"
     RESUME_REQUIRES_NO_ACTIVE_LEASE = "resume_requires_no_active_lease"
     COMPLETION_REQUIRES_PERSISTENCE_CHECKPOINT = "completion_requires_persistence_checkpoint"
     CHECKPOINT_OUT_OF_ORDER = "checkpoint_out_of_order"

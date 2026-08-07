@@ -36,9 +36,9 @@ export function HistoryPage() {
   const strategyVersionId = queryParam("strategy_version_id");
   const strategyVersion = queryParam("strategy_version");
   const [label, setLabel] = useState<"" | "success" | "failed" | "missed" | "pending">("");
-  // datePreset：近7天/近30天/本月/全部/自定义；custom 时用 dateFrom/dateTo 手选。
-  // 默认近30天，与 records 页一致。
-  const [datePreset, setDatePreset] = useState<"7d" | "30d" | "month" | "all" | "custom">("30d");
+  // datePreset：近7天/近30天/近60天/本月/全部/自定义；custom 时用 dateFrom/dateTo 手选。
+  // 默认近60天，覆盖历史重建的目标观察窗口。
+  const [datePreset, setDatePreset] = useState<"7d" | "30d" | "60d" | "month" | "all" | "custom">("60d");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(0);
@@ -66,6 +66,7 @@ export function HistoryPage() {
     const from = new Date(today);
     if (datePreset === "7d") from.setDate(from.getDate() - 6);
     else if (datePreset === "30d") from.setDate(from.getDate() - 29);
+    else if (datePreset === "60d") from.setDate(from.getDate() - 59);
     else if (datePreset === "month") from.setDate(1);
     return { from: from.toISOString().slice(0, 10), to };
   }, [datePreset, dateFrom, dateTo]);
@@ -115,7 +116,7 @@ export function HistoryPage() {
 
   const resetFilters = () => {
     setLabel("");
-    setDatePreset("30d");
+    setDatePreset("60d");
     setDateFrom("");
     setDateTo("");
     setCodeInput("");
@@ -275,6 +276,7 @@ export function HistoryPage() {
             {([
               { key: "7d", label: "近7天" },
               { key: "30d", label: "近30天" },
+              { key: "60d", label: "近60天" },
               { key: "month", label: "本月" },
               { key: "all", label: "全部" },
               { key: "custom", label: "自定义" },
@@ -389,8 +391,11 @@ export function HistoryPage() {
         </button>
 
         {/* 总计数（轻量） */}
-        <span className="records-filterbar__total">
-          正式 · 共 {total} 笔
+        <span className="records-filterbar__total" title="包含 provenance 完整的 LIVE 前瞻与历史重建记录；汇总不等同 LIVE KPI">
+          当前筛选 · 共 {total} 笔
+        </span>
+        <span className="tag tag--warning" title="历史回放会逐条标识；推荐质量 LIVE KPI 仅在指标页 LIVE 前瞻口径统计">
+          历史记录可含回放 · 非 LIVE KPI
         </span>
 
         {/* 胜率徽标（醒目卡片） */}
@@ -541,6 +546,15 @@ export function HistoryPage() {
                           {expandedId === it.recommendation_id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                           <span style={{ display: "inline-flex", flexDirection: "column", gap: 1, whiteSpace: "nowrap", flexShrink: 0 }}>
                             <span style={{ whiteSpace: "nowrap" }}>{it.trade_date}</span>
+                            {it.evidence_class === "historical_reconstruction" && (
+                              <span
+                                className="tag tag--warning"
+                                style={{ alignSelf: "flex-start", fontSize: 10, padding: "1px 5px" }}
+                                title={`历史回放研究证据${it.reconstruction_batch_id ? ` · 批次 ${it.reconstruction_batch_id}` : ""}；不计入 LIVE KPI`}
+                              >
+                                历史回放
+                              </span>
+                            )}
                             {it.recommended_at && (
                               <span
                                 style={{ color: "var(--muted)", fontSize: "var(--text-xs)", fontFamily: "var(--font-mono)", lineHeight: 1.3 }}

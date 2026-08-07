@@ -21,6 +21,8 @@ from app.services.evidence.selectors import (
 
 
 LIVE_FORWARD_SCOPE = "live_forward"
+HISTORICAL_REPLAY_SCOPE = "historical_replay"
+METRICS_SAMPLE_SCOPES = (LIVE_FORWARD_SCOPE, HISTORICAL_REPLAY_SCOPE)
 
 
 def evaluation_scope_for_run(
@@ -70,7 +72,9 @@ def recommendation_history_conditions() -> tuple:
 
 
 __all__ = [
+    "HISTORICAL_REPLAY_SCOPE",
     "LIVE_FORWARD_SCOPE",
+    "METRICS_SAMPLE_SCOPES",
     "OFFICIAL_RECOMMENDATION_PREFIX",
     "evaluation_scope_for_run",
     "historical_reconstruction_sample_conditions",

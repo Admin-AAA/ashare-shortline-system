@@ -1396,6 +1396,9 @@ export type RecommendationCard = {
   recommendation_id: string;
   run_id: string;
   trade_date: string;
+  evidence_class?: string | null;
+  actual_generated_at?: string | null;
+  reconstruction_batch_id?: string | null;
   recommended_at: string;
   code: string;
   name: string;

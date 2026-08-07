@@ -33,7 +33,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 REPOSITORY_ROOT = BASE_DIR.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from sqlalchemy import text  # noqa: E402
+from sqlalchemy import select, text  # noqa: E402
 from app.db.session import SessionLocal  # noqa: E402
 from app.governance.scope_guard import (  # noqa: E402
     HISTORICAL_RECONSTRUCTION_INITIATIVE,
@@ -283,14 +283,22 @@ def _wait_run(db, run_id: str) -> str:
 
 
 def _run_exists(db, trade_date: str) -> bool:
-    n = db.execute(
-        text(
-            "SELECT COUNT(*) FROM recommendation_runs "
-            "WHERE trade_date = :d AND run_mode='formal'"
-        ),
-        {"d": trade_date},
-    ).scalar()
-    return bool(n)
+    from app.models.tables import RecommendationRun
+    from app.services.evidence.selectors import (
+        historical_reconstruction_provenance_conditions,
+    )
+
+    return db.execute(
+        select(RecommendationRun.run_id)
+        .where(
+            RecommendationRun.trade_date == trade_date,
+            RecommendationRun.run_mode == "formal",
+            RecommendationRun.status == "completed",
+            *historical_reconstruction_provenance_conditions(),
+            RecommendationRun.data_as_of <= RecommendationRun.trade_date,
+        )
+        .limit(1)
+    ).scalar_one_or_none() is not None
 
 
 def main() -> int:

@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useApi } from "../app/useApi";
-import { api } from "../api/client";
+import { api, type MetricsSampleScope } from "../api/client";
 import type {
   AlphaDecayResponse,
   DateRangeMeta,
@@ -31,6 +31,15 @@ const WINDOW_OPTIONS: Array<{ label: string; value: number | null }> = [
   { label: "近 90 天", value: 90 },
 ];
 const DEFAULT_WINDOW_DAYS = 30;
+const DEFAULT_SAMPLE_SCOPE: MetricsSampleScope = "historical_replay";
+
+const SAMPLE_SCOPE_OPTIONS: Array<{
+  label: string;
+  value: MetricsSampleScope;
+}> = [
+  { label: "历史回放（研究）", value: "historical_replay" },
+  { label: "LIVE 前瞻", value: "live_forward" },
+];
 
 /** 英文因子名 → 中文小字翻译（Alpha 衰减面板的因子列）。 */
 const FACTOR_LABELS_ZH: Record<string, string> = {
@@ -78,34 +87,35 @@ function TermWithZh({ en, zhMap }: { en: string; zhMap: Record<string, string> }
  */
 export function MetricsPage() {
   const [windowDays, setWindowDays] = useState<number | null>(DEFAULT_WINDOW_DAYS);
+  const [sampleScope, setSampleScope] = useState<MetricsSampleScope>(DEFAULT_SAMPLE_SCOPE);
 
   const { data: scoreLines, loading: l1, error: e1 } = useApi<ScoreLineStatsRow[]>(
-    () => api.metricsByScoreLine(windowDays ?? undefined),
-    [windowDays],
+    () => api.metricsByScoreLine(windowDays ?? undefined, sampleScope),
+    [windowDays, sampleScope],
   );
   const { data: strategies, loading: l2, error: e2 } = useApi<StrategyStatsRow[]>(
-    () => api.metricsByStrategy(windowDays ?? undefined),
-    [windowDays],
+    () => api.metricsByStrategy(windowDays ?? undefined, sampleScope),
+    [windowDays, sampleScope],
   );
   const { data: setups, loading: l3, error: e3 } = useApi<SetupStatsRow[]>(
-    () => api.metricsBySetup(windowDays ?? undefined),
-    [windowDays],
+    () => api.metricsBySetup(windowDays ?? undefined, sampleScope),
+    [windowDays, sampleScope],
   );
   const { data: precisionAtK, loading: l4, error: e4 } = useApi<PrecisionAtKRow[]>(
-    () => api.precisionAtK(windowDays ?? undefined),
-    [windowDays],
+    () => api.precisionAtK(windowDays ?? undefined, sampleScope),
+    [windowDays, sampleScope],
   );
   const { data: filterEffect, loading: l5, error: e5 } = useApi<FilterEffectiveness>(
-    () => api.filterEffectiveness(windowDays ?? undefined),
-    [windowDays],
+    () => api.filterEffectiveness(windowDays ?? undefined, sampleScope),
+    [windowDays, sampleScope],
   );
   const { data: overview, loading: l6, error: e6 } = useApi<MetricsOverview>(
-    () => api.metricsOverview(windowDays ?? undefined),
-    [windowDays],
+    () => api.metricsOverview(windowDays ?? undefined, sampleScope),
+    [windowDays, sampleScope],
   );
   const { data: alphaDecay, loading: l7, error: e7 } = useApi<AlphaDecayResponse>(
-    () => api.statsAlphaDecay(),
-    [],
+    () => api.statsAlphaDecay(sampleScope),
+    [sampleScope],
   );
 
   const loading = l1 || l2 || l3 || l4 || l5 || l6 || l7;
@@ -119,36 +129,53 @@ export function MetricsPage() {
     ?? precisionAtK?.[0]?.date_range
     ?? setups?.[0]?.date_range;
 
-  if (loading) return <PageSkeleton title="指标分析" hint="加载推荐质量数据" rowCount={6} />;
-  if (error) return <ErrorPage title="指标加载失败" message={error} />;
-  if ((!scoreLines || scoreLines.length === 0) && (!strategies || strategies.length === 0))
-    return <EmptyState icon={<LineChart size={32} />} title="暂无指标数据" reason="还没有足够的推荐 outcome" />;
+  const hasQualityData = Boolean(
+    (scoreLines && scoreLines.length > 0) || (strategies && strategies.length > 0),
+  );
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
       <MetricsWindowBar
         windowDays={windowDays}
         onSelect={setWindowDays}
+        sampleScope={sampleScope}
+        onScopeSelect={setSampleScope}
         dateRange={dateRange}
       />
-      <OverviewKpiPanel data={overview} />
       <SystemHealthPanel />
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-          gap: "var(--space-4)",
-        }}
-      >
-        <PrecisionPanel rows={precisionAtK ?? []} />
-        <FilterEffectivenessPanel data={filterEffect} />
-        <ScoreLinePanel rows={scoreLines ?? []} />
-        <StrategyPanel rows={strategies ?? []} />
-        <SetupPanel rows={setups ?? []} />
-        <AlphaDecayPanel data={alphaDecay} />
-        <SkillsCatalogPanel />
-      </div>
-      <DNetPanel windowDays={windowDays} />
+      {loading ? (
+        <PageSkeleton title="指标分析" hint="加载推荐质量数据" rowCount={6} />
+      ) : error ? (
+        <ErrorPage title="指标加载失败" message={error} />
+      ) : !hasQualityData ? (
+        <EmptyState
+          icon={<LineChart size={32} />}
+          title="当前口径暂无指标数据"
+          reason={sampleScope === "live_forward"
+            ? "尚无已结算的 LIVE 前瞻推荐；可切换到历史回放查看研究样本"
+            : "当前窗口尚无已结算的历史回放推荐"}
+        />
+      ) : (
+        <>
+          <OverviewKpiPanel data={overview} />
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+              gap: "var(--space-4)",
+            }}
+          >
+            <PrecisionPanel rows={precisionAtK ?? []} />
+            <FilterEffectivenessPanel data={filterEffect} />
+            <ScoreLinePanel rows={scoreLines ?? []} />
+            <StrategyPanel rows={strategies ?? []} />
+            <SetupPanel rows={setups ?? []} />
+            <AlphaDecayPanel data={alphaDecay} />
+            <SkillsCatalogPanel />
+          </div>
+          <DNetPanel windowDays={windowDays} sampleScope={sampleScope} />
+        </>
+      )}
     </div>
   );
 }
@@ -247,10 +274,16 @@ function SystemHealthPanel() {
 
 /** D 项净成本 + 板块(20cm/10cm)分解面板：北极星 D 项「净盈亏比≥2.0」目标一屏可见，
  * 并定位拖后腿的板块（如 10cm 净盈亏比 < 20cm）。与 self_check 板块拆分同源口径。 */
-function DNetPanel({ windowDays }: { windowDays: number | null }) {
+function DNetPanel({
+  windowDays,
+  sampleScope,
+}: {
+  windowDays: number | null;
+  sampleScope: MetricsSampleScope;
+}) {
   const { data, loading, error } = useApi<DNetBreakdown>(
-    () => api.dNetBreakdown(windowDays ?? undefined),
-    [windowDays],
+    () => api.dNetBreakdown(windowDays ?? undefined, sampleScope),
+    [windowDays, sampleScope],
   );
 
   return (
@@ -918,14 +951,44 @@ function HealthErrorNote({ msg }: { msg: string }) {
 function MetricsWindowBar({
   windowDays,
   onSelect,
+  sampleScope,
+  onScopeSelect,
   dateRange,
 }: {
   windowDays: number | null;
   onSelect: (v: number | null) => void;
+  sampleScope: MetricsSampleScope;
+  onScopeSelect: (v: MetricsSampleScope) => void;
   dateRange?: DateRangeMeta;
 }) {
+  const isReplay = sampleScope === "historical_replay";
   return (
-    <div className="panel" style={{ padding: "var(--space-3) var(--space-4)" }}>
+    <div className="panel" style={{ padding: "var(--space-3) var(--space-4)", display: "grid", gap: "var(--space-3)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 13, color: "var(--text-muted)", fontWeight: 600 }}>样本口径</span>
+        <div style={{ display: "flex", gap: "var(--space-1)" }}>
+          {SAMPLE_SCOPE_OPTIONS.map((opt) => {
+            const active = sampleScope === opt.value;
+            return (
+              <button
+                key={opt.value}
+                onClick={() => onScopeSelect(opt.value)}
+                style={scopeButtonStyle(active)}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+        <span
+          className={`tag ${isReplay ? "tag--warning" : ""}`}
+          title={isReplay
+            ? "由真实历史生成时间、as-of 快照、策略/执行 policy 与代码版本共同约束，不进入 LIVE KPI"
+            : "只统计 provenance 完整、因果边界成立的 LIVE_FORWARD 推荐"}
+        >
+          {isReplay ? "研究证据 · 不计入 LIVE KPI" : "前瞻正式证据"}
+        </span>
+      </div>
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap" }}>
         <span style={{ fontSize: 13, color: "var(--text-muted)", fontWeight: 600 }}>时间窗口</span>
         <div style={{ display: "flex", gap: "var(--space-1)" }}>
@@ -935,16 +998,7 @@ function MetricsWindowBar({
               <button
                 key={String(opt.value)}
                 onClick={() => onSelect(opt.value)}
-                style={{
-                  padding: "4px 12px",
-                  fontSize: 13,
-                  borderRadius: 4,
-                  border: "1px solid var(--border)",
-                  background: active ? "var(--color-accent, #2563eb)" : "var(--surface-1)",
-                  color: active ? "#fff" : "var(--text-secondary)",
-                  cursor: "pointer",
-                  fontWeight: active ? 600 : 400,
-                }}
+                style={scopeButtonStyle(active)}
               >
                 {opt.label}
               </button>
@@ -964,6 +1018,19 @@ function MetricsWindowBar({
       </div>
     </div>
   );
+}
+
+function scopeButtonStyle(active: boolean): CSSProperties {
+  return {
+    padding: "4px 12px",
+    fontSize: 13,
+    borderRadius: 4,
+    border: "1px solid var(--border)",
+    background: active ? "var(--color-accent, #2563eb)" : "var(--surface-1)",
+    color: active ? "#fff" : "var(--text-secondary)",
+    cursor: "pointer",
+    fontWeight: active ? 600 : 400,
+  };
 }
 
 /** 顶部 KPI 概览 —— 北极星 D 项核心监控指标一屏可见。

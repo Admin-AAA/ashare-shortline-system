@@ -728,7 +728,7 @@ def _list_recommendation_setup_types(db: Session) -> list[str]:
         select(Recommendation.setup_type)
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
         .where(
-            *official_sample_conditions(),
+            *recommendation_history_conditions(),
             Recommendation.setup_type.is_not(None),
             func.trim(Recommendation.setup_type) != "",
         )
