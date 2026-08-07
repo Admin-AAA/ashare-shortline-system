@@ -9,18 +9,32 @@ import pytest
 from sqlalchemy import func, select
 
 from app.models.tables import Recommendation, RecommendationOutcome, RecommendationRun
-from app.services.evidence import EvidenceClass, PROVENANCE_SCHEMA_VERSION
+from app.services.evidence import (
+    EvidenceClass,
+    PROVENANCE_SCHEMA_VERSION,
+    identity_from_persisted_run,
+)
 from app.services.official_sample_scope import official_sample_conditions
 from app.services.workbench_service import (
     invalidate_recommendation_history_cache,
     list_recommendation_history,
 )
+from app.services.evidence.reconstruction_batch import (
+    build_reconstruction_batch_identity,
+    create_or_resume_reconstruction_batch,
+    finalize_reconstruction_run,
+    publish_reconstruction_batch,
+)
 from scripts.replay_all_days import (
-    _finalize_reconstruction_run,
+    _base_payload,
     _historical_payload,
-    _initialize_reconstruction_run,
+    _reserve_reconstruction_run,
     _run_exists,
 )
+
+
+def _seal_run_identity(run: RecommendationRun) -> None:
+    run.evidence_identity_hash = identity_from_persisted_run(run).identity_hash
 
 
 class _FakeSession:
@@ -56,6 +70,31 @@ def _queued_run() -> SimpleNamespace:
         data_as_of=None,
         source_snapshot_id=None,
         result_summary_json="{}",
+    )
+
+
+def _identity(*, trade_date: str = "2026-07-01"):
+    return build_reconstruction_batch_identity(
+        expected_trade_dates=(trade_date,),
+        request_template={
+            "schema_version": 1,
+            "run_mode": "formal",
+            "run_name": "REPLAY-历史推荐重建",
+            "trade_date_override": trade_date,
+        },
+        strategy_policy=[
+            {
+                "strategy_id": "chen_xiaoqun",
+                "strategy_version": "v1",
+                "fingerprint": "a" * 64,
+            }
+        ],
+        execution_policy={
+            "policy_id": "production-recommendation-execution",
+            "policy_version": "v1",
+            "fingerprint": "b" * 64,
+        },
+        code_revision="c" * 40,
     )
 
 
@@ -108,52 +147,82 @@ def test_replay_payload_always_uses_signal_date_as_of_boundary(unsafe_source: st
     assert base["data_source"] == unsafe_source
 
 
-def test_replay_persists_explicit_identity_then_finalizes_canonical_provenance():
-    """**Validates: Requirements 1.1, 1.3, 1.4**"""
+def test_replay_reservation_binds_deterministic_manifest_before_dispatch():
     run = _queued_run()
+    run.request_json = json.dumps(
+        {
+            "schema_version": 1,
+            "run_mode": "formal",
+            "run_name": "REPLAY-历史推荐重建",
+            "trade_date_override": run.trade_date,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    run.result_summary_json = json.dumps(
+        {
+            "execution": {
+                "strategy_fingerprints": [
+                    {
+                        "strategy_id": "chen_xiaoqun",
+                        "strategy_version": "v1",
+                        "fingerprint": "a" * 64,
+                    }
+                ],
+                "execution_policy": {
+                    "policy_id": "production-recommendation-execution",
+                    "policy_version": "v1",
+                    "fingerprint": "b" * 64,
+                },
+            }
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    identity = _identity(trade_date=run.trade_date)
     db = _FakeSession(run)
-    batch_id = "replay-20260701-20260731-20260804T020304Z-deadbeef"
 
-    _initialize_reconstruction_run(db, run.run_id, batch_id)
+    _reserve_reconstruction_run(db, run, identity, run.trade_date)
 
     assert run.evidence_class == EvidenceClass.HISTORICAL_RECONSTRUCTION.value
-    assert run.actual_generated_at == run.started_at
-    assert run.reconstruction_batch_id == batch_id
+    assert run.reconstruction_batch_id == identity.batch_id
     assert run.provenance_schema_version == PROVENANCE_SCHEMA_VERSION
-    assert run.evaluation_scope == "historical_replay"
-    assert db.commit_count == 1
-
-    _complete_run(run)
-    identity = _finalize_reconstruction_run(db, run.run_id, code_revision="c" * 40)
-
-    assert identity.evidence_class is EvidenceClass.HISTORICAL_RECONSTRUCTION
-    assert identity.signal_date == "2026-07-01"
-    assert identity.data_as_of == "2026-07-01"
-    assert identity.reconstruction_batch_id == batch_id
-    assert run.evidence_identity_hash == identity.identity_hash
-    assert run.strategy_policy_fingerprint == identity.strategy_policy_fingerprint
-    assert run.execution_policy_fingerprint == "b" * 64
-    assert run.code_revision == "c" * 40
-    assert run.evaluation_scope == "historical_replay"
-    assert db.commit_count == 2
+    assert run.actual_generated_at is not None
+    assert db.commit_count == 0
 
 
-def test_replay_rejects_signal_snapshot_newer_than_signal_date():
-    """**Validates: Requirements 1.9**"""
+def test_replay_reservation_rejects_execution_policy_drift():
     run = _queued_run()
+    run.request_json = json.dumps(
+        {
+            "schema_version": 1,
+            "run_mode": "formal",
+            "run_name": "REPLAY-历史推荐重建",
+            "trade_date_override": run.trade_date,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    run.result_summary_json = json.dumps(
+        {"execution": {"strategy_fingerprints": [], "execution_policy": {}}},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     db = _FakeSession(run)
-    _initialize_reconstruction_run(db, run.run_id, "replay-asof-boundary")
-    _complete_run(run, data_as_of="2026-07-02")
 
-    with pytest.raises(RuntimeError, match="signal reader 越界"):
-        _finalize_reconstruction_run(db, run.run_id, code_revision="c" * 40)
+    with pytest.raises(Exception, match="policy"):
+        _reserve_reconstruction_run(db, run, _identity(trade_date=run.trade_date), run.trade_date)
 
-    assert run.evidence_identity_hash is None
-    assert db.commit_count == 1
+    assert run.reconstruction_batch_id is None
 
 
-def test_replay_skip_existing_uses_run_provenance_and_accepts_zero_recommendations(db):
+def test_replay_skip_existing_requires_same_manifest_and_accepts_zero_recommendations(db):
     trade_date = "2099-02-04"
+    identity = _identity(trade_date=trade_date)
     live_run = RecommendationRun(
         run_id="run_replay_exists_live_only",
         run_name="LIVE fixture",
@@ -175,7 +244,7 @@ def test_replay_skip_existing_uses_run_provenance_and_accepts_zero_recommendatio
     db.add(live_run)
     db.flush()
 
-    assert _run_exists(db, trade_date) is False
+    assert _run_exists(db, identity, trade_date) is False
 
     replay_run = RecommendationRun(
         run_id="run_replay_exists_zero_recommendations",
@@ -185,11 +254,44 @@ def test_replay_skip_existing_uses_run_provenance_and_accepts_zero_recommendatio
         evidence_class=EvidenceClass.HISTORICAL_RECONSTRUCTION.value,
         actual_generated_at=datetime(2099, 2, 8, 2, 0),
         evidence_identity_hash="e" * 64,
-        strategy_policy_fingerprint="f" * 64,
-        execution_policy_fingerprint="1" * 64,
-        code_revision="2" * 40,
-        reconstruction_batch_id="replay-zero-recommendations",
+        strategy_policy_fingerprint=identity.strategy_policy_fingerprint,
+        execution_policy_fingerprint=identity.execution_policy_fingerprint,
+        code_revision=identity.code_revision,
+        reconstruction_batch_id=identity.batch_id,
         provenance_schema_version=PROVENANCE_SCHEMA_VERSION,
+        request_schema_version=1,
+        request_json=json.dumps(
+            {
+                "schema_version": 1,
+                "run_mode": "formal",
+                "run_name": "REPLAY-历史推荐重建",
+                "trade_date_override": trade_date,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        result_summary_json=json.dumps(
+            {
+                "execution": {
+                    "strategy_fingerprints": [
+                        {
+                            "strategy_id": "chen_xiaoqun",
+                            "strategy_version": "v1",
+                            "fingerprint": "a" * 64,
+                        }
+                    ],
+                    "execution_policy": {
+                        "policy_id": "production-recommendation-execution",
+                        "policy_version": "v1",
+                        "fingerprint": "b" * 64,
+                    },
+                }
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
         trade_date=trade_date,
         data_as_of=trade_date,
         source_snapshot_id="snapshot-replay-zero",
@@ -200,7 +302,63 @@ def test_replay_skip_existing_uses_run_provenance_and_accepts_zero_recommendatio
     db.add(replay_run)
     db.flush()
 
-    assert _run_exists(db, trade_date) is True
+    assert _run_exists(db, identity, trade_date) is False
+
+    _seal_run_identity(replay_run)
+    db.flush()
+
+    assert _run_exists(db, identity, trade_date) is True
+
+
+def test_replay_base_payload_uses_latest_hash_verified_live_run(db):
+    canonical = RecommendationRun(
+        run_id="run_replay_base_canonical_live",
+        run_name="canonical LIVE fixture",
+        run_mode="formal",
+        evaluation_scope="historical_replay",
+        evidence_class=EvidenceClass.LIVE_FORWARD.value,
+        actual_generated_at=datetime(2099, 2, 4, 2, 0),
+        evidence_identity_hash="d" * 64,
+        strategy_policy_fingerprint="a" * 64,
+        execution_policy_fingerprint="b" * 64,
+        code_revision="c" * 40,
+        provenance_schema_version=PROVENANCE_SCHEMA_VERSION,
+        trade_date="2099-02-04",
+        data_as_of="2099-02-04",
+        source_snapshot_id="snapshot-replay-base-canonical",
+        started_at=datetime(2099, 2, 4, 2, 0),
+        status="completed",
+        params_json=json.dumps({"score_line": 73.0, "output_count": 5}),
+    )
+    _seal_run_identity(canonical)
+    forged_newer = RecommendationRun(
+        run_id="run_replay_base_forged_live",
+        run_name="forged LIVE fixture",
+        run_mode="formal",
+        evaluation_scope="live_forward",
+        evidence_class=EvidenceClass.LIVE_FORWARD.value,
+        actual_generated_at=datetime(2099, 2, 5, 2, 0),
+        evidence_identity_hash="0" * 64,
+        strategy_policy_fingerprint="a" * 64,
+        execution_policy_fingerprint="b" * 64,
+        code_revision="c" * 40,
+        provenance_schema_version=PROVENANCE_SCHEMA_VERSION,
+        trade_date="2099-02-05",
+        data_as_of="2099-02-05",
+        source_snapshot_id="snapshot-replay-base-forged",
+        started_at=datetime(2099, 2, 5, 2, 0),
+        status="completed",
+        params_json=json.dumps({"score_line": 99.0, "output_count": 1}),
+    )
+    db.add_all([canonical, forged_newer])
+    db.flush()
+
+    payload = _base_payload(db)
+
+    assert payload["score_line"] == 73.0
+    assert payload["output_count"] == 5
+    assert payload["run_name"] == "REPLAY-历史推荐重建"
+    assert payload["preset_id"] == "preset_formal_opening"
 
 
 def test_historical_page_queries_reconstruction_by_trade_date_without_rewriting_time(db):
@@ -209,6 +367,8 @@ def test_historical_page_queries_reconstruction_by_trade_date_without_rewriting_
     recommendation_id = "rec_task_1_3_historical_query"
     trade_date = "2099-02-03"
     actual_generated_at = datetime(2099, 2, 8, 2, 3, 4, 567890)
+    identity = _identity(trade_date=trade_date)
+    create_or_resume_reconstruction_batch(db, identity)
     run = RecommendationRun(
         run_id=run_id,
         run_name="REPLAY-历史推荐重建",
@@ -220,9 +380,42 @@ def test_historical_page_queries_reconstruction_by_trade_date_without_rewriting_
         strategy_policy_fingerprint="a" * 64,
         execution_policy_fingerprint="b" * 64,
         code_revision="c" * 40,
-        reconstruction_batch_id="replay-task-1-3-query",
+        reconstruction_batch_id=identity.batch_id,
         provenance_schema_version=PROVENANCE_SCHEMA_VERSION,
         classification_reason="trusted_historical_replay_entrypoint",
+        request_schema_version=1,
+        request_json=json.dumps(
+            {
+                "schema_version": 1,
+                "run_mode": "formal",
+                "run_name": "REPLAY-历史推荐重建",
+                "trade_date_override": trade_date,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        result_summary_json=json.dumps(
+            {
+                "execution": {
+                    "strategy_fingerprints": [
+                        {
+                            "strategy_id": "chen_xiaoqun",
+                            "strategy_version": "v1",
+                            "fingerprint": "a" * 64,
+                        }
+                    ],
+                    "execution_policy": {
+                        "policy_id": "production-recommendation-execution",
+                        "policy_version": "v1",
+                        "fingerprint": "b" * 64,
+                    },
+                }
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
         trade_date=trade_date,
         started_at=actual_generated_at,
         finished_at=actual_generated_at,
@@ -231,6 +424,7 @@ def test_historical_page_queries_reconstruction_by_trade_date_without_rewriting_
         filter_audit_json=json.dumps({"candidate_audit": {"retained": True}}),
         status="completed",
     )
+    _seal_run_identity(run)
     recommendation = Recommendation(
         recommendation_id=recommendation_id,
         run_id=run_id,
@@ -251,6 +445,8 @@ def test_historical_page_queries_reconstruction_by_trade_date_without_rewriting_
     )
     db.add_all([run, recommendation, outcome])
     db.flush()
+    finalize_reconstruction_run(db, run_id)
+    publish_reconstruction_batch(db, identity.batch_id)
     invalidate_recommendation_history_cache()
 
     result = list_recommendation_history(
@@ -265,6 +461,9 @@ def test_historical_page_queries_reconstruction_by_trade_date_without_rewriting_
     assert result["items"][0]["trade_date"] == trade_date
     assert result["items"][0]["recommended_at"] == actual_generated_at.isoformat()
     assert result["items"][0]["outcome"]["outcome_label"] == "success"
+    assert result["summary"]["methodology"]["sample_scope"] == (
+        "canonical_history_live_and_reconstruction_v1"
+    )
     assert "replay_setup_fixture" in result["facets"]["setup_types"]
     assert json.loads(run.filter_audit_json)["candidate_audit"]["retained"] is True
     assert run.evaluation_scope == "historical_replay"

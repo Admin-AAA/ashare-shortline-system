@@ -134,6 +134,7 @@ def test_overview_and_d_net_use_identical_official_winrate_scope(monkeypatch):
             "run_mode": "formal",
             "live_only": True,
             "sample_scope": None,
+            "historical_run_ids": None,
         }
         for call in calls
     )

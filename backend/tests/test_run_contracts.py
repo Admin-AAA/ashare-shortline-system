@@ -207,14 +207,60 @@ def test_legacy_credential_keys_are_rejected_before_upgrade_projection():
     assert completed.target_phase is RunPhase.COMPLETED
 
 
-def test_resume_and_checkpoint_sequence_require_exclusive_verified_state():
-    active_resume = ResumeCheck(RunPhase.REVIEW, "review:run-1", has_active_lease=True)
+@pytest.mark.parametrize(
+    "phase",
+    (RunPhase.PREPARE, RunPhase.REVIEW, RunPhase.AGGREGATION),
+)
+def test_resume_rejects_every_non_persistence_checkpoint(phase: RunPhase):
+    resume = ResumeCheck(
+        phase,
+        f"{phase.value}:run-1",
+        has_active_lease=False,
+        collection_seal_verified=True,
+    )
+
+    with pytest.raises(RunStateTransitionError) as exc_info:
+        RunStateMachine.validate_resume(resume)
+
+    assert exc_info.value.code is RunErrorCode.RESUME_REQUIRES_PERSISTENCE_CHECKPOINT
+
+
+def test_resume_requires_exclusive_verified_persistence_seal():
+    active_resume = ResumeCheck(
+        RunPhase.PERSISTENCE,
+        "recommendation-seal:v1:run-1:digest",
+        has_active_lease=True,
+        collection_seal_verified=True,
+    )
     with pytest.raises(RunStateTransitionError) as exc_info:
         RunStateMachine.validate_resume(active_resume)
     assert exc_info.value.code is RunErrorCode.RESUME_REQUIRES_NO_ACTIVE_LEASE
 
-    resume = ResumeCheck(RunPhase.REVIEW, "review:run-1", has_active_lease=False)
-    assert RunStateMachine.validate_resume(resume) is RunPhase.AGGREGATION
+    unsealed_resume = ResumeCheck(
+        RunPhase.PERSISTENCE,
+        "recommendation-seal:v1:run-1:digest",
+        has_active_lease=False,
+        collection_seal_verified=False,
+    )
+    with pytest.raises(RunStateTransitionError) as exc_info:
+        RunStateMachine.validate_resume(unsealed_resume)
+    assert exc_info.value.code is RunErrorCode.RESUME_REQUIRES_VERIFIED_SEAL
+
+    verified_resume = ResumeCheck(
+        RunPhase.PERSISTENCE,
+        "recommendation-seal:v1:run-1:digest",
+        has_active_lease=False,
+        collection_seal_verified=True,
+    )
+    assert RunStateMachine.validate_resume(verified_resume) is None
+
+
+def test_resume_contract_has_no_destructive_replay_trigger():
+    assert "replay" not in {trigger.value for trigger in RunTrigger}
+    assert all(rule.trigger.value != "replay" for rule in RunStateMachine.legal_transitions(RunStatus.INTERRUPTED))
+
+
+def test_checkpoint_sequence_still_rejects_skipped_phases():
     RunStateMachine.require_next_checkpoint(
         last_committed_phase=RunPhase.REVIEW,
         phase=RunPhase.AGGREGATION,

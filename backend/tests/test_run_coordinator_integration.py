@@ -121,6 +121,16 @@ def _start_and_lease(repo: SQLAlchemyRunRepository, session: Session, run_id: st
     return acquired.record
 
 
+def _worker_lease(record) -> WorkerLease:
+    assert record is not None
+    assert record.lease is not None
+    return WorkerLease(
+        run_id=record.run_id,
+        token=record.lease.token,
+        revision=record.revision,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -129,7 +139,7 @@ def test_coordinator_executes_registered_sync_stages():
     """Verify that the coordinator drives each registered sync stage in order."""
     session, repo = _repository()
     try:
-        _start_and_lease(repo, session, "run-sync-stages")
+        lease = _worker_lease(_start_and_lease(repo, session, "run-sync-stages"))
 
         fake_stages = [
             FakeStage(phase=RunPhase.PREPARE),
@@ -150,11 +160,12 @@ def test_coordinator_executes_registered_sync_stages():
             RunPhase.FEATURES, RunPhase.STRATEGY_EVALUATION, RunPhase.REVIEW,
             RunPhase.AGGREGATION, RunPhase.PERSISTENCE,
         ):
-            result = coord.execute_next_stage("run-sync-stages", now=NOW, data=data)
+            result = coord.execute_next_stage(lease, now=NOW, data=data)
             assert result is not None
             output, context = result
             assert output.result.phase is expected_phase
             data = output.data
+            lease = context.worker_lease
 
         # All stages should have been executed exactly once.
         for stage in fake_stages:
@@ -172,16 +183,16 @@ def test_coordinator_execute_next_stage_returns_none_when_no_more_stages():
     """After all stages are committed, execute_next_stage returns None."""
     session, repo = _repository()
     try:
-        _start_and_lease(repo, session, "run-no-more")
+        lease = _worker_lease(_start_and_lease(repo, session, "run-no-more"))
 
         stage = FakeStage(phase=RunPhase.PREPARE)
         deps = RunCoordinatorDependencies(repository=repo, stages=(stage,))
         coord = RunCoordinator.from_dependencies(deps)
 
-        result = coord.execute_next_stage("run-no-more", now=NOW)
+        result = coord.execute_next_stage(lease, now=NOW)
         assert result is not None  # first stage
 
-        result = coord.execute_next_stage("run-no-more", now=NOW)
+        result = coord.execute_next_stage(lease, now=NOW)
         assert result is None  # no more stages registered
     finally:
         session.close()
@@ -191,7 +202,7 @@ def test_stage_data_accumulates_across_stages():
     """Verify that StageData is carried forward between stages."""
     session, repo = _repository()
     try:
-        _start_and_lease(repo, session, "run-data-accum")
+        lease = _worker_lease(_start_and_lease(repo, session, "run-data-accum"))
 
         @dataclass(frozen=True, slots=True)
         class PrepareWithData:
@@ -218,12 +229,12 @@ def test_stage_data_accumulates_across_stages():
         coord = RunCoordinator.from_dependencies(deps)
 
         data = StageData()
-        r1 = coord.execute_next_stage("run-data-accum", now=NOW, data=data)
+        r1 = coord.execute_next_stage(lease, now=NOW, data=data)
         assert r1 is not None
-        output1, _ = r1
+        output1, context1 = r1
         assert output1.data.execution_version == "v1"
 
-        r2 = coord.execute_next_stage("run-data-accum", now=NOW, data=output1.data)
+        r2 = coord.execute_next_stage(context1.worker_lease, now=NOW, data=output1.data)
         assert r2 is not None
         output2, _ = r2
         assert output2.data.execution_version == "v1"
@@ -236,7 +247,7 @@ def test_coordinator_fails_stage_propagates_exception():
     """A failing stage raises; the caller handles the terminal CAS."""
     session, repo = _repository()
     try:
-        _start_and_lease(repo, session, "run-fail-stage")
+        lease = _worker_lease(_start_and_lease(repo, session, "run-fail-stage"))
 
         @dataclass(frozen=True, slots=True)
         class FailingStage:
@@ -249,13 +260,13 @@ def test_coordinator_fails_stage_propagates_exception():
         coord = RunCoordinator.from_dependencies(deps)
 
         try:
-            coord.execute_next_stage("run-fail-stage", now=NOW)
+            coord.execute_next_stage(lease, now=NOW)
             assert False, "should have raised"
         except RuntimeError as exc:
             assert "stage exploded" in str(exc)
 
         # The caller (pipeline) would then call coordinator.fail().
-        assert coord.fail("run-fail-stage", now=NOW, message="stage exploded")
+        assert coord.fail(lease, now=NOW, message="stage exploded")
         session.commit()
 
         record = repo.get_run("run-fail-stage")
@@ -276,7 +287,7 @@ def test_resource_leases_released_on_failure():
             self.release_count += 1
 
     try:
-        _start_and_lease(repo, session, "run-resource-fail")
+        lease = _worker_lease(_start_and_lease(repo, session, "run-resource-fail"))
         leases = [CountedLease(), CountedLease(), CountedLease()]
         resources = RunResourceLeases(
             agent=leases[0], database=leases[1], temporary=leases[2],
@@ -292,12 +303,12 @@ def test_resource_leases_released_on_failure():
         coord = RunCoordinator.from_dependencies(deps)
 
         try:
-            coord.execute_next_stage("run-resource-fail", now=NOW)
+            coord.execute_next_stage(lease, now=NOW)
         except RuntimeError:
             pass
 
         # The pipeline caller would call coordinator.fail(), which releases resources.
-        coord.fail("run-resource-fail", now=NOW, message="boom")
+        coord.fail(lease, now=NOW, message="boom")
         session.commit()
 
         assert [lease.release_count for lease in leases] == [1, 1, 1]
@@ -310,7 +321,7 @@ def test_checkpoint_ordering_is_enforced():
     """A stage that returns the wrong phase is rejected."""
     session, repo = _repository()
     try:
-        _start_and_lease(repo, session, "run-order-check")
+        lease = _worker_lease(_start_and_lease(repo, session, "run-order-check"))
 
         @dataclass(frozen=True, slots=True)
         class WrongPhaseStage:
@@ -324,7 +335,7 @@ def test_checkpoint_ordering_is_enforced():
         coord = RunCoordinator.from_dependencies(deps)
 
         try:
-            coord.execute_next_stage("run-order-check", now=NOW)
+            coord.execute_next_stage(lease, now=NOW)
             assert False, "should have raised"
         except ValueError as exc:
             assert "features" in str(exc).lower()

@@ -1,14 +1,95 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from app.services.runs.contracts import parse_run_request
-from app.services.runs.coordinator import RunContext, StageData, WorkerLease
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+from app.models.tables import RecommendationRun
+from app.services.runs.contracts import (
+    RunActor,
+    RunTrigger,
+    parse_run_request,
+)
+from app.services.runs.coordinator import (
+    RunCoordinator,
+    RunCoordinatorDependencies,
+    RunContext,
+    StageData,
+    WorkerLease,
+)
 from app.services.runs.pipeline import _commit_stage_progress
+from app.services.runs.repository import (
+    CreateQueuedRun,
+    LeaseRequest,
+    TransitionCommit,
+)
 from app.services.runs.skill_gate import resolve_skill_review_concurrency
+from app.services.runs.sqlalchemy_repository import SQLAlchemyRunRepository
 from app.services.runs.stages.adapters import ProductionReviewExecutor
 from app.services.runs.stages.review import ReviewStage
+from app.services.runs.state_machine import RunStateMachine
+
+
+NOW = datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _repository() -> tuple[Session, SQLAlchemyRunRepository]:
+    engine = create_engine("sqlite:///:memory:")
+    RecommendationRun.__table__.create(engine)
+    session = Session(engine)
+    return session, SQLAlchemyRunRepository(session)
+
+
+def _start_and_lease(repo: SQLAlchemyRunRepository, session: Session, run_id: str):
+    created = repo.create_queued_run(
+        CreateQueuedRun(
+            run_id=run_id,
+            request=parse_run_request({"run_mode": "experiment", "run_name": run_id}),
+            execution_version="exec-test-v1",
+            created_at=NOW,
+        )
+    )
+    assert created.applied
+    session.commit()
+    record = repo.get_run(run_id)
+    assert record is not None
+    started = RunStateMachine.transition(
+        current_status=record.status,
+        trigger=RunTrigger.START,
+        actor=RunActor.DISPATCHER,
+    )
+    assert repo.compare_and_set_transition(
+        run_id,
+        TransitionCommit(expected_revision=record.revision, transition=started, now=NOW),
+    ).applied
+    session.commit()
+    record = repo.get_run(run_id)
+    assert record is not None
+    acquired = repo.acquire_lease(
+        run_id,
+        LeaseRequest(
+            owner_id="worker-test",
+            now=NOW + timedelta(seconds=1),
+            ttl=timedelta(seconds=1200),
+            expected_revision=record.revision,
+        ),
+    )
+    assert acquired.applied and acquired.record is not None and acquired.record.lease is not None
+    session.commit()
+    return acquired.record
+
+
+def _worker_lease(record) -> WorkerLease:
+    assert record is not None
+    assert record.lease is not None
+    return WorkerLease(
+        run_id=record.run_id,
+        token=record.lease.token,
+        revision=record.revision,
+    )
 
 
 def test_zero_review_concurrency_uses_configured_default():
@@ -83,21 +164,36 @@ def test_production_review_executor_bounds_fake_provider_concurrency(monkeypatch
 
 
 def test_stage_checkpoint_is_included_before_progress_commit(monkeypatch):
-    run = SimpleNamespace(checkpoint_phase=None)
-    calls = []
+    """Lease is renewed and the checkpoint projection lands before progress."""
+    session, repo = _repository()
+    try:
+        record = _start_and_lease(repo, session, "run-stage")
+        run = db_model = SimpleNamespace(checkpoint_phase=None)
+        calls = []
 
-    class FakeDb:
-        def get(self, _model, _run_id):
-            return run
+        class FakeDb:
+            def get(self, _model, _run_id):
+                return run
 
-    def fake_update(_db, run_id, *, phase, current, total, message, status):
-        assert run.checkpoint_phase == phase
-        calls.append((run_id, phase, current, total, message, status))
+        def fake_update(_db, run_id, *, phase, current, total, message, status, renew_lease):
+            assert run.checkpoint_phase == phase
+            calls.append((run_id, phase, current, total, message, status))
 
-    monkeypatch.setattr("app.services.workbench_service._update_run_progress", fake_update)
+        monkeypatch.setattr("app.services.workbench_service._update_run_progress", fake_update)
 
-    _commit_stage_progress(FakeDb(), "run-stage", "strategy_evaluation")
+        renewed = _commit_stage_progress(
+            FakeDb(),
+            coordinator=RunCoordinator.from_dependencies(
+                RunCoordinatorDependencies(repository=repo)
+            ),
+            worker_lease=_worker_lease(record),
+            phase="strategy_evaluation",
+        )
 
-    assert calls == [
-        ("run-stage", "strategy_evaluation", 1, 1, "阶段 strategy_evaluation 完成", "running")
-    ]
+        assert calls == [
+            ("run-stage", "strategy_evaluation", 1, 1, "阶段 strategy_evaluation 完成", "running")
+        ]
+        assert renewed.run_id == "run-stage"
+        assert db_model.checkpoint_phase == "strategy_evaluation"
+    finally:
+        session.close()
