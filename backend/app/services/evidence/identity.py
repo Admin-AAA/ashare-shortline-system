@@ -8,6 +8,7 @@ imports.  Entry-point adapters map their own trusted execution path to
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import re
 from collections.abc import Mapping
@@ -153,12 +154,28 @@ class RecommendationEvidenceIdentity:
                 "reconstruction_batch_id is only valid for historical reconstruction",
             )
 
+        if self.evidence_class in {
+            EvidenceClass.LIVE_FORWARD,
+            EvidenceClass.HISTORICAL_RECONSTRUCTION,
+        } and data_as_of > signal_date:
+            raise EvidenceIdentityError(
+                "future_data_as_of",
+                f"{self.evidence_class.value} requires data_as_of on or before signal_date",
+            )
+
+        if self.evidence_class in {
+            EvidenceClass.LIVE_FORWARD,
+            EvidenceClass.HISTORICAL_RECONSTRUCTION,
+        } and (
+            not _has_verified_identifier(source_snapshot_id)
+            or not _has_verified_identifier(code_revision)
+        ):
+            raise EvidenceIdentityError(
+                "incomplete_provenance",
+                f"{self.evidence_class.value} requires a verified snapshot id and code revision",
+            )
+
         if self.evidence_class is EvidenceClass.LIVE_FORWARD:
-            if data_as_of > signal_date:
-                raise EvidenceIdentityError(
-                    "live_future_data_as_of",
-                    "LIVE_FORWARD requires data_as_of on or before signal_date",
-                )
             generated_business_date = actual_generated_at.astimezone(
                 _BEIJING_TIMEZONE
             ).date().isoformat()
@@ -166,13 +183,6 @@ class RecommendationEvidenceIdentity:
                 raise EvidenceIdentityError(
                     "live_generation_date_mismatch",
                     "LIVE_FORWARD requires actual generation on the signal business date",
-                )
-            if not _has_verified_identifier(source_snapshot_id) or not _has_verified_identifier(
-                code_revision
-            ):
-                raise EvidenceIdentityError(
-                    "live_incomplete_provenance",
-                    "LIVE_FORWARD requires a verified snapshot id and code revision",
                 )
 
         object.__setattr__(self, "signal_date", signal_date)
@@ -353,6 +363,63 @@ def build_recommendation_evidence_identity(
     )
 
 
+def identity_from_persisted_run(row: Any) -> RecommendationEvidenceIdentity:
+    """Rebuild the canonical identity solely from persisted run provenance."""
+
+    generated_at = _value(row, "actual_generated_at")
+    if isinstance(generated_at, datetime) and (
+        generated_at.tzinfo is None or generated_at.utcoffset() is None
+    ):
+        generated_at = generated_at.replace(tzinfo=timezone.utc)
+    try:
+        evidence_class = EvidenceClass(str(_value(row, "evidence_class") or ""))
+    except ValueError as exc:
+        raise EvidenceIdentityError(
+            "invalid_evidence_class",
+            "persisted evidence_class is not canonical",
+        ) from exc
+    return RecommendationEvidenceIdentity(
+        evidence_class=evidence_class,
+        signal_date=_value(row, "trade_date"),
+        actual_generated_at=generated_at,
+        data_as_of=_value(row, "data_as_of"),
+        source_snapshot_id=_value(row, "source_snapshot_id"),
+        strategy_policy_fingerprint=_value(row, "strategy_policy_fingerprint"),
+        execution_policy_fingerprint=_value(row, "execution_policy_fingerprint"),
+        code_revision=_value(row, "code_revision"),
+        reconstruction_batch_id=_value(row, "reconstruction_batch_id"),
+        provenance_schema_version=_value(row, "provenance_schema_version"),
+    )
+
+
+def has_canonical_persisted_identity(
+    row: Any,
+    *,
+    expected_class: EvidenceClass | None = None,
+) -> bool:
+    """Return whether persisted provenance exactly matches its canonical hash."""
+
+    try:
+        identity = identity_from_persisted_run(row)
+    except (EvidenceIdentityError, TypeError, ValueError):
+        return False
+    if expected_class is not None and identity.evidence_class is not expected_class:
+        return False
+    persisted_hash = _value(row, "evidence_identity_hash")
+    if not isinstance(persisted_hash, str):
+        return False
+    normalized_hash = persisted_hash.lower()
+    if not _SHA256_PATTERN.fullmatch(normalized_hash):
+        return False
+    return hmac.compare_digest(normalized_hash, identity.identity_hash)
+
+
+def _value(row: Any, name: str) -> Any:
+    if isinstance(row, Mapping):
+        return row.get(name)
+    return getattr(row, name, None)
+
+
 def _iso_date(value: object, *, field_name: str) -> str:
     if isinstance(value, datetime):
         raise EvidenceIdentityError(
@@ -426,6 +493,16 @@ def _sha256_fingerprint(value: object, *, field_name: str) -> str:
             f"{field_name} must be a 64-character SHA-256 hex digest",
         )
     return normalized
+
+
+def canonical_policy_fingerprint(
+    policy: object,
+    *,
+    field_name: str = "policy",
+) -> str:
+    """Return the canonical SHA-256 fingerprint used by evidence identities."""
+
+    return _policy_fingerprint(policy, field_name=field_name)
 
 
 def _policy_fingerprint(policy: object, *, field_name: str) -> str:
@@ -550,4 +627,7 @@ __all__ = [
     "RecommendationEvidenceIdentity",
     "RunSource",
     "build_recommendation_evidence_identity",
+    "canonical_policy_fingerprint",
+    "has_canonical_persisted_identity",
+    "identity_from_persisted_run",
 ]

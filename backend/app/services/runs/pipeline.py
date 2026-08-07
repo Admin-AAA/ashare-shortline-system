@@ -11,16 +11,15 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.services.evidence import apply_formal_run_provenance
+from app.services.evidence import EvidenceClass, apply_formal_run_provenance
 
-from .contracts import RunActor, RunPhase, RunRequest, RunStatus, RunTrigger
-from .coordinator import RunCoordinator, RunCoordinatorDependencies, StageData
-from .repository import TransitionCommit
+from .contracts import RunPhase, RunRequest, RunStatus
+from .coordinator import RunCoordinator, RunCoordinatorDependencies, StageData, WorkerLease
+from .recovery import RecoveryCapabilityError, evaluate_recovery_capability
 from .sqlalchemy_repository import SQLAlchemyRunRepository
-from .state_machine import RunStateMachine
 from .stages.assembly import assemble_pipeline_stages
 from .stages.contracts import StageOutput
 
@@ -50,29 +49,199 @@ def _stage_cardinality(phase: RunPhase, data: StageData) -> tuple[int, int]:
     return 0, 0
 
 
-def _commit_stage_progress(db: Session, run_id: str, phase: str) -> None:
-    """Commit lifecycle and legacy checkpoint projections before the next stage.
+def _is_reconstruction_marked(run: Any) -> bool:
+    return (
+        str(getattr(run, "evidence_class", "") or "")
+        == EvidenceClass.HISTORICAL_RECONSTRUCTION.value
+        or bool(getattr(run, "reconstruction_batch_id", None))
+    )
 
-    The old ordering committed progress, then flushed ``checkpoint_phase`` in a new
-    transaction. During the following LLM stage that uncommitted UPDATE held the
-    ``recommendation_runs`` row lock, so the watchdog blocked and eventually raised
-    MySQL 1205. Put the legacy projection into the same progress commit instead.
-    """
+
+def _finalize_completed_run_provenance(db: Session, run_id: str) -> bool:
+    """Seal only explicitly marked reconstruction runs in the completion transaction."""
+    from app.models.tables import RecommendationRun
+    from app.services.evidence.reconstruction_batch import finalize_reconstruction_run
+
+    run = db.get(RecommendationRun, run_id)
+    if run is None:
+        raise RuntimeError(f"Run {run_id} 在完成 provenance 时不存在")
+    apply_formal_run_provenance(run)
+    if _is_reconstruction_marked(run):
+        finalize_reconstruction_run(db, run_id)
+        return True
+    return False
+
+
+def _mark_pipeline_run_failed(
+    db: Session,
+    *,
+    run_id: str,
+    coordinator: RunCoordinator,
+    worker_lease: WorkerLease | None,
+    message: str,
+) -> None:
+    """Rollback uncommitted facts and fail only if this worker still owns the run."""
+    from app.models.tables import RecommendationRun
+    from app.services.evidence.reconstruction_batch import mark_reconstruction_batch_failed
+    from app.services.workbench_service import invalidate_bootstrap_cache
+
+    db.rollback()
+    failed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    managed_record = SQLAlchemyRunRepository(db).get_run(run_id)
+    if managed_record is None:
+        return
+    if managed_record.status is RunStatus.QUEUED and worker_lease is None:
+        transitioned = coordinator.spawn_failed(run_id, now=failed_at, message=message)
+    elif managed_record.status is RunStatus.RUNNING and worker_lease is not None:
+        transitioned = coordinator.fail(worker_lease, now=failed_at, message=message)
+    else:
+        logger.warning("run failure has no current worker lease; refusing mutation for %s", run_id)
+        return
+    if not transitioned:
+        db.rollback()
+        logger.warning("run failure CAS lost for %s", run_id)
+        return
+    db.expire_all()
+    run = db.get(RecommendationRun, run_id)
+    if run is not None:
+        run.progress_phase = "failed"
+        run.progress_message = message
+        if _is_reconstruction_marked(run):
+            mark_reconstruction_batch_failed(
+                db,
+                str(run.reconstruction_batch_id),
+                message,
+            )
+    db.commit()
+    invalidate_bootstrap_cache()
+
+
+def _commit_stage_progress(
+    db: Session,
+    *,
+    coordinator: RunCoordinator,
+    worker_lease: WorkerLease,
+    phase: str,
+) -> WorkerLease:
+    """Renew the caller's lease before committing legacy progress projections."""
     from app.models.tables import RecommendationRun
     from app.services.workbench_service import _update_run_progress
 
-    progress_run = db.get(RecommendationRun, run_id)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    renewed_lease = coordinator.renew_worker_lease(
+        worker_lease,
+        now=now,
+        ttl=timedelta(seconds=RUN_HEARTBEAT_STALE_SECONDS),
+    )
+    if renewed_lease is None:
+        raise RuntimeError("Run lifecycle lease 已丢失或过期，worker 必须停止写入")
+    progress_run = db.get(RecommendationRun, worker_lease.run_id)
     if progress_run is not None:
         progress_run.checkpoint_phase = phase
     _update_run_progress(
         db,
-        run_id,
+        worker_lease.run_id,
         phase=phase,
         current=1,
         total=1,
         message=f"阶段 {phase} 完成",
         status="running",
+        renew_lease=False,
     )
+    return renewed_lease
+
+
+def _complete_sealed_persistence_recovery(
+    db: Session,
+    *,
+    run_id: str,
+    now: datetime,
+) -> dict[str, Any]:
+    """Complete one verified persistence checkpoint without executing a stage."""
+    from app.models.tables import Recommendation, RecommendationRun
+    from app.services.workbench_service import (
+        _serialize_recommendation,
+        _serialize_run_summary,
+        invalidate_bootstrap_cache,
+    )
+
+    repository = SQLAlchemyRunRepository(db)
+    coordinator = RunCoordinator.from_dependencies(
+        RunCoordinatorDependencies(repository=repository)
+    )
+    try:
+        capability = evaluate_recovery_capability(
+            db,
+            run_id,
+            now=now,
+            lock=True,
+        )
+        if not capability.can_resume:
+            raise RecoveryCapabilityError(
+                capability.block_code or "resume_rejected",
+                capability.block_reason or "运行不满足恢复条件",
+            )
+        verified_resume = capability.require_resume_check()
+        if not coordinator.resume(
+            run_id,
+            now=now,
+            verified_resume=verified_resume,
+        ):
+            raise RuntimeError("Run completion-only resume CAS 失败")
+        lease = coordinator.acquire_worker_lease(
+            run_id,
+            now=now,
+            ttl=timedelta(seconds=RUN_HEARTBEAT_STALE_SECONDS),
+        )
+        if lease is None:
+            raise RuntimeError("Run completion-only recovery 无法获取 worker lease")
+        completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        if not coordinator.complete(lease, now=completed_at):
+            raise RuntimeError("Run completion-only recovery completion CAS 失败")
+
+        db.expire_all()
+        saved = list(
+            db.scalars(
+                select(Recommendation)
+                .where(Recommendation.run_id == run_id)
+                .order_by(Recommendation.final_score.desc())
+            ).all()
+        )
+        run = db.get(RecommendationRun, run_id)
+        if run is None:
+            raise RuntimeError(f"Run {run_id} 在恢复完成后不存在")
+        run.recommended_count = len(saved)
+        run.progress_phase = RunStatus.COMPLETED.value
+        run.checkpoint_phase = RunStatus.COMPLETED.value
+        run.progress_current = len(saved)
+        run.progress_total = len(saved)
+        run.progress_message = "已核验封印结果并完成运行"
+        _finalize_completed_run_provenance(db, run_id)
+        db.flush()
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    invalidate_bootstrap_cache()
+    db.expire_all()
+    completed_run = db.get(RecommendationRun, run_id)
+    if completed_run is None:
+        raise RuntimeError(f"Run {run_id} 在恢复提交后不存在")
+    persisted = list(
+        db.scalars(
+            select(Recommendation)
+            .where(Recommendation.run_id == run_id)
+            .order_by(Recommendation.final_score.desc())
+        ).all()
+    )
+    return {
+        "run": _serialize_run_summary(db, completed_run),
+        "recommendations": [
+            _serialize_recommendation(db, recommendation)
+            for recommendation in persisted
+        ],
+    }
 
 
 async def run_staged_pipeline(
@@ -89,7 +258,7 @@ async def run_staged_pipeline(
     This function transitions it to RUNNING, acquires a worker lease, and then
     iterates ``execute_next_stage_async`` until all 8 phases are committed.
     """
-    from app.models.tables import AgentDecisionLog, Recommendation, RecommendationRun
+    from app.models.tables import Recommendation, RecommendationRun
     from app.services.workbench_service import (
         _build_run_summary,
         _dumps,
@@ -126,41 +295,12 @@ async def run_staged_pipeline(
         }
     # Compatibility callers may still pass existing_run_id. It is never used to
     # infer recovery: durable status is the only lifecycle source of truth.
-    persistence_already_committed = (
-        persisted.status is RunStatus.INTERRUPTED
-        and persisted.last_committed_phase is RunPhase.PERSISTENCE
-    )
-    if persisted.status is RunStatus.INTERRUPTED and not persistence_already_committed:
-        replay = RunStateMachine.transition(
-            current_status=RunStatus.INTERRUPTED,
-            trigger=RunTrigger.REPLAY,
-            actor=RunActor.WORKER,
+    if persisted.status is RunStatus.INTERRUPTED:
+        return _complete_sealed_persistence_recovery(
+            db,
+            run_id=run_id,
+            now=now,
         )
-        replayed = lifecycle_repository.compare_and_set_transition(
-            run_id,
-            TransitionCommit(
-                expected_revision=persisted.revision,
-                transition=replay,
-                now=now,
-            ),
-        )
-        if not replayed.applied:
-            db.rollback()
-            raise RuntimeError("中断 Run 完整重放 CAS 冲突")
-        # The immutable canonical request is retained. Only run-owned, pre-commit
-        # recommendation effects are cleared; provider/API audit is intentionally
-        # preserved so cost history remains truthful.
-        db.execute(delete(AgentDecisionLog).where(AgentDecisionLog.run_id == run_id))
-        db.execute(delete(Recommendation).where(Recommendation.run_id == run_id))
-        replay_row = db.get(RecommendationRun, run_id)
-        if replay_row is not None:
-            replay_row.checkpoint_phase = None
-            replay_row.recommended_count = 0
-        db.commit()
-        persisted = lifecycle_repository.get_run(run_id)
-        if persisted is None:
-            raise RuntimeError(f"Run {run_id} 重放准备后丢失")
-    is_resume = persistence_already_committed
 
     # --- Assemble coordinator with all stages ---
     stages = assemble_pipeline_stages(db, run_id=run_id)
@@ -169,72 +309,45 @@ async def run_staged_pipeline(
         stages=stages,
     )
     coordinator = RunCoordinator.from_dependencies(dependencies)
+    lease: WorkerLease | None = None
+    agent_session_id = f"sess_{run_id}"
+    agent_session_registered = False
 
-    # --- Lifecycle setup: start dispatch + acquire lease ---
-    if is_resume:
-        # Resume path: the run is INTERRUPTED with a valid checkpoint.
-        existing_run = db.get(RecommendationRun, run_id)
-        if existing_run is None:
-            raise RuntimeError(f"Run {run_id} 不存在")
-        if not coordinator.resume(run_id, now=now):
-            raise RuntimeError("Run interrupted resume 缺少有效 checkpoint、存在活跃 lease 或 CAS 冲突")
-        lease = coordinator.acquire_worker_lease(
-            run_id, now=now, ttl=timedelta(seconds=RUN_HEARTBEAT_STALE_SECONDS),
-        )
-        if lifecycle_repository.get_run(run_id) is not None and lease is None:
-            raise RuntimeError("该 Run 已被另一个 worker 接管或缺少可用生命周期 lease")
-    else:
-        # Fresh queued run: transition to RUNNING and acquire one worker lease.
-        if not coordinator.start_dispatch(run_id, now=now):
-            record = lifecycle_repository.get_run(run_id)
-            if record is None:
-                raise RuntimeError(f"Run {run_id} 在 lifecycle repository 中不存在")
-            if record.status is not RunStatus.RUNNING:
-                raise RuntimeError(f"Run {run_id} 无法启动，当前状态: {record.status.value}")
+    try:
+        # --- Lifecycle setup: start dispatch + acquire lease ---
+        # Fresh queued runs transition here for direct in-process callers. A
+        # Prefect dispatcher may already own the transition, but that does not
+        # confer worker ownership; only this worker's successful lease does.
+        record = lifecycle_repository.get_run(run_id)
+        if record is None:
+            raise RuntimeError(f"Run {run_id} 在 lifecycle repository 中不存在")
+        if record.status is RunStatus.QUEUED:
+            if not coordinator.start_dispatch(run_id, now=now):
+                raise RuntimeError("Run queued dispatch CAS 冲突")
+        elif record.status is not RunStatus.RUNNING:
+            raise RuntimeError(f"Run {run_id} 无法启动，当前状态: {record.status.value}")
         lease = coordinator.acquire_worker_lease(
             run_id, now=now, ttl=timedelta(seconds=RUN_HEARTBEAT_STALE_SECONDS),
         )
         if lease is None:
             raise RuntimeError(f"Run {run_id} 无法获取 worker lease")
 
-    if persistence_already_committed:
-        completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        if not coordinator.complete(run_id, now=completed_at):
-            raise RuntimeError("持久化后恢复的 completion CAS 失败")
-        db.expire_all()
-        saved = list(
-            db.scalars(
-                select(Recommendation)
-                .where(Recommendation.run_id == run_id)
-                .order_by(Recommendation.final_score.desc())
-            ).all()
+        from app.services.evidence.reconstruction_batch import (
+            bind_reconstruction_worker_revision,
         )
-        run = db.get(RecommendationRun, run_id)
-        if run is None:
-            raise RuntimeError(f"Run {run_id} 在恢复完成后不存在")
-        run.recommended_count = len(saved)
-        run.progress_phase = "completed"
-        run.progress_current = len(saved)
-        run.progress_total = len(saved)
-        run.progress_message = "已核对持久化结果并完成恢复"
-        # S1-b: finalize formal-run Complete_Provenance in the same commit as
-        # recovery completion; replay-scoped runs are skipped by the adapter.
-        apply_formal_run_provenance(run)
+        assert lease is not None
         db.commit()
-        invalidate_bootstrap_cache()
-        return {
-            "run": _serialize_run_summary(db, run),
-            "recommendations": [
-                _serialize_recommendation(db, recommendation)
-                for recommendation in saved
-            ],
-        }
 
-    # --- Execute stage loop ---
-    agent_session_id = f"sess_{run_id}"
-    data = StageData()
+        if bind_reconstruction_worker_revision(
+            db,
+            run_id,
+            worker_lease=lease,
+        ) is not None:
+            db.commit()
 
-    try:
+        # --- Execute stage loop ---
+        data = StageData()
+
         # Register Agent session for review stage.
         skills = sync_skills(db)
         all_skill_objs = [s for s in skills if s.enabled]
@@ -245,18 +358,22 @@ async def run_staged_pipeline(
             skills=all_skill_objs,
             snapshot=snapshot_ref,
         )
+        agent_session_registered = True
 
         stage_timings_ms: dict[str, float] = {}
         stage_audit: dict[str, dict[str, Any]] = {}
         while True:
             stage_started = time.perf_counter()
             step_result = await coordinator.execute_next_stage_async(
-                run_id, now=datetime.now(timezone.utc).replace(tzinfo=None), data=data,
+                lease,
+                now=datetime.now(timezone.utc).replace(tzinfo=None),
+                data=data,
             )
             if step_result is None:
                 break
             output: StageOutput
-            output, _context = step_result
+            output, context = step_result
+            lease = context.worker_lease
             data = output.data
             stage_timings_ms[output.result.phase.value] = round(
                 (time.perf_counter() - stage_started) * 1000, 2,
@@ -280,7 +397,12 @@ async def run_staged_pipeline(
                 snapshot_ref.clear()
                 snapshot_ref.update(data.snapshot)
 
-            _commit_stage_progress(db, run_id, output.result.phase.value)
+            lease = _commit_stage_progress(
+                db,
+                coordinator=coordinator,
+                worker_lease=lease,
+                phase=output.result.phase.value,
+            )
             logger.info(
                 "run %s stage %s completed (side_effect_key=%s)",
                 run_id,
@@ -290,14 +412,11 @@ async def run_staged_pipeline(
 
         # --- Complete ---
         completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        managed_record = lifecycle_repository.get_run(run_id)
-        if managed_record is not None:
-            if managed_record.lease is None:
-                raise RuntimeError("Run lifecycle completion requires an active worker lease")
-            db.flush()
-            if not coordinator.complete(run_id, now=completed_at):
-                raise RuntimeError("Run lifecycle completion CAS failed")
-            db.expire_all()
+        assert lease is not None
+        db.flush()
+        if not coordinator.complete(lease, now=completed_at):
+            raise RuntimeError("Run lifecycle completion CAS failed")
+        db.expire_all()
 
         run = db.get(RecommendationRun, run_id)
         if run is not None:
@@ -359,10 +478,7 @@ async def run_staged_pipeline(
                 for status in ("verified", "partial", "degraded", "rule_only")
             }
             run.result_summary_json = _dumps(summary)
-            # S1-b: derive Complete_Provenance for formal live runs so it
-            # commits atomically with status/data_as_of/result_summary.  The
-            # adapter derives RunSource.FORMAL itself and skips replay runs.
-            apply_formal_run_provenance(run)
+            _finalize_completed_run_provenance(db, run_id)
             db.commit()
 
         invalidate_bootstrap_cache()
@@ -377,32 +493,17 @@ async def run_staged_pipeline(
         }
 
     except Exception as exc:
-        failed_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        managed_record = lifecycle_repository.get_run(run_id)
-        if managed_record is not None:
-            if not coordinator.fail(run_id, now=failed_at, message=str(exc)):
-                db.rollback()
-                logger.warning("run failure CAS lost for %s", run_id)
-                raise
-            db.expire_all()
-            run = db.get(RecommendationRun, run_id)
-            if run is not None:
-                run.progress_phase = "failed"
-                run.progress_message = str(exc)
-        else:
-            run = db.get(RecommendationRun, run_id)
-            if run is not None:
-                run.status = "failed"
-                run.error_message = str(exc)
-                run.finished_at = failed_at
-                run.heartbeat_at = failed_at
-                run.progress_phase = "failed"
-                run.progress_message = str(exc)
-        db.commit()
-        invalidate_bootstrap_cache()
+        _mark_pipeline_run_failed(
+            db,
+            run_id=run_id,
+            coordinator=coordinator,
+            worker_lease=lease,
+            message=str(exc),
+        )
         raise
     finally:
-        AgentSessionRegistry.unregister(agent_session_id)
+        if agent_session_registered:
+            AgentSessionRegistry.unregister(agent_session_id)
 
 
 __all__ = ["run_staged_pipeline"]

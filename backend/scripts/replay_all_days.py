@@ -2,10 +2,10 @@
 """全量逐日历史重建驱动器：对窗口内每个交易日跑一次正式推荐 run。
 
 流程（每交易日）：
-  1. enqueue historical_replay run（preset_formal_opening + trade_date_override）
-  2. 在 dispatch 前写入真实生成时间、HISTORICAL_RECONSTRUCTION 与 batch identity
-  3. dispatch（同步 Prefect 派发）并等待完成
-  4. 用 run 的 as-of snapshot、策略/执行 policy 与代码 revision 补齐 canonical provenance
+  1. 基于固定日期 manifest、请求模板、策略/执行 policy 与 worker revision 创建或恢复 batch
+  2. enqueue historical_replay run，并在同一事务预留 batch/date 与显式 reconstruction 身份
+  3. dispatch（同步 Prefect 派发）并等待 worker 在 completion transaction 内写入 canonical provenance
+  4. 所有日期 sealed 后发布完整 cohort；失败或超时则将 batch 标为 failed
 
 推荐、候选审计与 outcome 仍由既有正式管线负责。本脚本不会改写
 ``evaluation_scope`` 或 ``recommended_at`` 来伪装 LIVE evidence。
@@ -23,7 +23,6 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
 
 # 关键：不设 PREFECT_API_URL 时 run_deployment 会启动临时 server，
 # 任务派发到临时 server 而非主 worker。显式指向主 server。
@@ -33,7 +32,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 REPOSITORY_ROOT = BASE_DIR.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from sqlalchemy import text  # noqa: E402
+from sqlalchemy import select, text  # noqa: E402
 from app.db.session import SessionLocal  # noqa: E402
 from app.governance.scope_guard import (  # noqa: E402
     HISTORICAL_RECONSTRUCTION_INITIATIVE,
@@ -58,17 +57,16 @@ def _trade_dates(db, start: str, end: str) -> list[str]:
     return [str(d) for d in rows]
 
 
-def _base_payload() -> dict:
-    """从最近一个正式 LIVE run 复制完整策略参数，日期与 replay 边界由调用方覆盖。"""
-    db = SessionLocal()
+def _base_payload(db=None) -> dict:
+    """从最近一个 canonical LIVE run 复制策略参数，日期与 replay 边界另行覆盖。"""
+    from app.services.evidence.validation import latest_canonical_live_forward_run
+
+    owns_session = db is None
+    if db is None:
+        db = SessionLocal()
     try:
-        row = db.execute(
-            text(
-                "SELECT params_json FROM recommendation_runs "
-                "WHERE run_mode='formal' AND evaluation_scope='live_forward' AND status='completed' "
-                "ORDER BY started_at DESC LIMIT 1"
-            )
-        ).scalar()
+        run = latest_canonical_live_forward_run(db)
+        row = run.params_json if run is not None else None
         if not row:
             return {
                 "run_name": "REPLAY-历史推荐重建",
@@ -91,7 +89,8 @@ def _base_payload() -> dict:
         params["trade_date_override"] = None  # 每日单独设
         return params
     finally:
-        db.close()
+        if owns_session:
+            db.close()
 
 
 def _historical_payload(base: dict, trade_date: str) -> dict:
@@ -117,16 +116,92 @@ def _historical_payload(base: dict, trade_date: str) -> dict:
     return payload
 
 
-def _new_reconstruction_batch_id(start: str, end: str) -> str:
-    generated = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    return f"replay-{start.replace('-', '')}-{end.replace('-', '')}-{generated}-{uuid4().hex[:8]}"
+def _reconstruction_identity(db, dates: list[str], base: dict):
+    """Freeze the manifest before any batch/date reservation can be committed."""
+    from app.services.evidence.reconstruction_batch import (
+        build_reconstruction_batch_identity,
+    )
+    from app.services.workbench_service import _prepare_workbench_run
+
+    if not dates:
+        raise ValueError("历史重建 batch 至少需要一个交易日")
+    payload = _historical_payload(base, dates[0])
+    _params, request, _selected_skills, _execution_version, execution_audit = (
+        _prepare_workbench_run(db, payload)
+    )
+    strategy_policy = execution_audit.get("strategy_fingerprints")
+    execution_policy = execution_audit.get("execution_policy")
+    if not isinstance(strategy_policy, list) or not strategy_policy:
+        raise RuntimeError("历史重建无法冻结 strategy policy")
+    if not isinstance(execution_policy, dict):
+        raise RuntimeError("历史重建无法冻结 execution policy")
+    return build_reconstruction_batch_identity(
+        expected_trade_dates=dates,
+        request_template=request.to_canonical_json(),
+        strategy_policy=strategy_policy,
+        execution_policy=execution_policy,
+        code_revision=_resolve_code_revision(),
+    )
 
 
-def _validate_reconstruction_batch_id(value: str) -> str:
-    normalized = str(value or "").strip()
-    if not normalized or len(normalized) > 80:
-        raise ValueError("reconstruction_batch_id 必须为 1..80 字符")
-    return normalized
+def _reserve_reconstruction_run(db, run, identity, trade_date: str) -> None:
+    """Bind the queued row to its manifest before it becomes dispatchable."""
+    from app.services.evidence import EvidenceClass, PROVENANCE_SCHEMA_VERSION
+    from app.services.evidence.reconstruction_batch import (
+        ReconstructionBatchError,
+        canonical_request_template_fingerprint,
+    )
+
+    if str(run.status) != "queued":
+        raise ReconstructionBatchError("reconstruction reservation requires a queued run")
+    if str(run.run_mode) != "formal" or str(run.evaluation_scope) != "historical_replay":
+        raise ReconstructionBatchError("reconstruction reservation requires formal historical replay")
+    if run.evidence_class not in (None, EvidenceClass.HISTORICAL_RECONSTRUCTION.value):
+        raise ReconstructionBatchError("reconstruction reservation found conflicting evidence class")
+    if run.reconstruction_batch_id not in (None, identity.batch_id):
+        raise ReconstructionBatchError("reconstruction reservation found conflicting batch")
+    if str(run.trade_date or "") != trade_date:
+        raise ReconstructionBatchError("reconstruction reservation trade date drifted")
+    if trade_date not in identity.expected_trade_dates:
+        raise ReconstructionBatchError("reconstruction reservation date is outside its batch manifest")
+    if canonical_request_template_fingerprint(str(run.request_json or "")) != (
+        identity.request_template_fingerprint
+    ):
+        raise ReconstructionBatchError("reconstruction reservation request template drifted")
+    try:
+        summary = json.loads(run.result_summary_json or "{}")
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ReconstructionBatchError("reconstruction reservation execution audit is invalid") from exc
+    execution = summary.get("execution") if isinstance(summary, dict) else None
+    if not isinstance(execution, dict):
+        raise ReconstructionBatchError("reconstruction reservation lacks execution audit")
+    from app.services.evidence import canonical_policy_fingerprint
+
+    try:
+        strategy_fingerprint = canonical_policy_fingerprint(
+            execution.get("strategy_fingerprints"),
+            field_name="strategy_policy",
+        )
+        execution_fingerprint = canonical_policy_fingerprint(
+            execution.get("execution_policy"),
+            field_name="execution_policy",
+        )
+    except ValueError as exc:
+        raise ReconstructionBatchError(
+            "reconstruction reservation execution policy drifted"
+        ) from exc
+    if (
+        strategy_fingerprint != identity.strategy_policy_fingerprint
+        or execution_fingerprint != identity.execution_policy_fingerprint
+    ):
+        raise ReconstructionBatchError("reconstruction reservation execution policy drifted")
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    run.evidence_class = EvidenceClass.HISTORICAL_RECONSTRUCTION.value
+    run.actual_generated_at = now
+    run.reconstruction_batch_id = identity.batch_id
+    run.provenance_schema_version = PROVENANCE_SCHEMA_VERSION
+    run.classification_reason = _RECONSTRUCTION_REASON
 
 
 def _resolve_code_revision() -> str:
@@ -151,122 +226,6 @@ def _resolve_code_revision() -> str:
     return revision.lower()
 
 
-def _initialize_reconstruction_run(db, run_id: str, reconstruction_batch_id: str) -> None:
-    """Persist trusted replay identity before the run can be dispatched."""
-    from app.models.tables import RecommendationRun
-    from app.services.evidence import EvidenceClass, PROVENANCE_SCHEMA_VERSION
-
-    batch_id = _validate_reconstruction_batch_id(reconstruction_batch_id)
-    run = db.get(RecommendationRun, run_id)
-    if run is None:
-        raise RuntimeError(f"历史重建 run 不存在: {run_id}")
-    if run.evaluation_scope != "historical_replay":
-        raise RuntimeError(
-            f"历史重建入口创建了非 historical_replay scope: {run.evaluation_scope}"
-        )
-    if run.evidence_class not in (None, EvidenceClass.HISTORICAL_RECONSTRUCTION.value):
-        raise RuntimeError(f"run 已具有冲突 evidence_class: {run.evidence_class}")
-    if run.reconstruction_batch_id not in (None, batch_id):
-        raise RuntimeError("run 已属于其他 reconstruction batch")
-    if not isinstance(run.started_at, datetime):
-        raise RuntimeError("历史重建 run 缺少真实 started_at")
-
-    generated_at = run.started_at
-    if generated_at.tzinfo is None:
-        generated_at = generated_at.replace(tzinfo=timezone.utc)
-    generated_at = generated_at.astimezone(timezone.utc)
-
-    run.evidence_class = EvidenceClass.HISTORICAL_RECONSTRUCTION.value
-    run.actual_generated_at = generated_at.replace(tzinfo=None)
-    run.reconstruction_batch_id = batch_id
-    run.provenance_schema_version = PROVENANCE_SCHEMA_VERSION
-    run.classification_reason = _RECONSTRUCTION_REASON
-    db.commit()
-
-
-def _finalize_reconstruction_run(db, run_id: str, *, code_revision: str):
-    """Complete canonical provenance after the as-of snapshot has been persisted."""
-    from app.models.tables import RecommendationRun
-    from app.services.evidence import (
-        EvidenceClass,
-        EvidenceSnapshotIdentity,
-        RunSource,
-        build_recommendation_evidence_identity,
-    )
-    from app.services.workbench_service import invalidate_recommendation_history_cache
-
-    run = db.get(RecommendationRun, run_id)
-    if run is None:
-        raise RuntimeError(f"历史重建 run 不存在: {run_id}")
-    if run.status != "completed":
-        raise RuntimeError(f"仅 completed run 可补齐历史重建 provenance: {run.status}")
-    if run.evidence_class != EvidenceClass.HISTORICAL_RECONSTRUCTION.value:
-        raise RuntimeError(f"run 不是显式历史重建 evidence: {run.evidence_class}")
-    if not isinstance(run.actual_generated_at, datetime):
-        raise RuntimeError("历史重建 run 缺少 actual_generated_at")
-
-    signal_date = str(run.trade_date or "")
-    data_as_of = str(run.data_as_of or "")
-    source_snapshot_id = str(run.source_snapshot_id or "")
-    if not signal_date or not data_as_of or not source_snapshot_id:
-        raise RuntimeError("历史重建完成后缺少 signal date 或 as-of snapshot identity")
-    if data_as_of > signal_date:
-        raise RuntimeError(
-            f"历史重建 signal reader 越界: data_as_of={data_as_of} > signal_date={signal_date}"
-        )
-
-    try:
-        summary = json.loads(run.result_summary_json or "{}")
-    except (TypeError, json.JSONDecodeError) as exc:
-        raise RuntimeError("历史重建 execution audit 不是有效 JSON") from exc
-    execution = summary.get("execution") if isinstance(summary, dict) else None
-    if not isinstance(execution, dict):
-        raise RuntimeError("历史重建缺少 canonical execution audit")
-    strategy_policy = execution.get("strategy_fingerprints")
-    execution_policy = execution.get("execution_policy")
-    execution_policy_fingerprint = (
-        execution_policy.get("fingerprint") if isinstance(execution_policy, dict) else None
-    )
-    if not isinstance(strategy_policy, list) or not strategy_policy:
-        raise RuntimeError("历史重建缺少 strategy policy fingerprints")
-    if not isinstance(execution_policy_fingerprint, str):
-        raise RuntimeError("历史重建缺少 execution policy fingerprint")
-
-    generated_at = run.actual_generated_at
-    if generated_at.tzinfo is None:
-        generated_at = generated_at.replace(tzinfo=timezone.utc)
-    identity = build_recommendation_evidence_identity(
-        run_source=RunSource.HISTORICAL_REPLAY,
-        actual_generated_at=generated_at,
-        signal_date=signal_date,
-        snapshot=EvidenceSnapshotIdentity(
-            source_snapshot_id=source_snapshot_id,
-            data_as_of=data_as_of,
-        ),
-        strategy_policy=strategy_policy,
-        execution_policy=execution_policy_fingerprint,
-        code_revision=code_revision,
-        reconstruction_batch_id=run.reconstruction_batch_id,
-    )
-    if identity.evidence_class is not EvidenceClass.HISTORICAL_RECONSTRUCTION:
-        raise RuntimeError("canonical builder 未生成 HISTORICAL_RECONSTRUCTION")
-
-    run.evidence_class = identity.evidence_class.value
-    run.actual_generated_at = identity.actual_generated_at.replace(tzinfo=None)
-    run.data_as_of = identity.data_as_of
-    run.source_snapshot_id = identity.source_snapshot_id
-    run.evidence_identity_hash = identity.identity_hash
-    run.strategy_policy_fingerprint = identity.strategy_policy_fingerprint
-    run.execution_policy_fingerprint = identity.execution_policy_fingerprint
-    run.code_revision = identity.code_revision
-    run.reconstruction_batch_id = identity.reconstruction_batch_id
-    run.provenance_schema_version = identity.provenance_schema_version
-    run.classification_reason = _RECONSTRUCTION_REASON
-    db.commit()
-    invalidate_recommendation_history_cache()
-    return identity
-
-
 def _wait_run(db, run_id: str) -> str:
     for _ in range(MAX_WAIT_LOOPS):
         time.sleep(POLL_SECONDS)
@@ -282,15 +241,29 @@ def _wait_run(db, run_id: str) -> str:
     return "timeout"
 
 
-def _run_exists(db, trade_date: str) -> bool:
-    n = db.execute(
-        text(
-            "SELECT COUNT(*) FROM recommendation_runs "
-            "WHERE trade_date = :d AND run_mode='formal'"
-        ),
-        {"d": trade_date},
-    ).scalar()
-    return bool(n)
+def _run_exists(db, identity, trade_date: str) -> bool:
+    """Resume only the exact sealed run reserved by this deterministic manifest."""
+    from app.models.tables import RecommendationRun
+    from app.services.evidence import (
+        EvidenceClass,
+        has_canonical_persisted_identity,
+    )
+
+    run = db.scalar(
+        select(RecommendationRun).where(
+            RecommendationRun.reconstruction_batch_id == identity.batch_id,
+            RecommendationRun.trade_date == trade_date,
+        )
+    )
+    return bool(
+        run is not None
+        and str(run.status) == "completed"
+        and str(run.evidence_class) == EvidenceClass.HISTORICAL_RECONSTRUCTION.value
+        and has_canonical_persisted_identity(
+            run,
+            expected_class=EvidenceClass.HISTORICAL_RECONSTRUCTION,
+        )
+    )
 
 
 def main() -> int:
@@ -304,8 +277,6 @@ def main() -> int:
     # 不按日期范围猜测；延期范围（D1 全量回填/D2 新 alpha/D3 券商实盘）一律拒绝。
     assert_initiative_allowed(HISTORICAL_RECONSTRUCTION_INITIATIVE, context="scripts/replay_all_days.py")
 
-    from app.services.workbench_service import dispatch_workbench_run, enqueue_workbench_run
-
     db = SessionLocal()
     try:
         dates = _trade_dates(db, args.start, args.end)
@@ -314,48 +285,106 @@ def main() -> int:
             return 0
         print(f"交易日: {len(dates)} 个 ({dates[0]} ~ {dates[-1]})")
 
-        base = _base_payload()
-        reconstruction_batch_id = _new_reconstruction_batch_id(args.start, args.end)
-        code_revision = _resolve_code_revision()
-        print(
-            f"重建批次: {reconstruction_batch_id} "
-            f"(code_revision={code_revision[:12]})"
+        base = _base_payload(db)
+        identity = _reconstruction_identity(db, dates, base)
+        from app.models.tables import RecommendationRun
+        from app.services.evidence.reconstruction_batch import (
+            ReconstructionBatchError,
+            create_or_resume_reconstruction_batch,
+            mark_reconstruction_batch_failed,
+            publish_reconstruction_batch,
         )
-        results = {"completed": 0, "failed": 0, "timeout": 0}
+        from app.services.workbench_service import dispatch_workbench_run, enqueue_workbench_run
+
+        create_or_resume_reconstruction_batch(db, identity)
+        db.commit()
+        print(
+            f"重建批次: {identity.batch_id} "
+            f"(code_revision={identity.code_revision[:12]})"
+        )
+        results = {"completed": 0, "failed": 0, "timeout": 0, "skipped": 0}
         for i, td in enumerate(dates):
-            if args.skip_existing and _run_exists(db, td):
-                print(f"[{i+1}/{len(dates)}] {td}: 已有 run，跳过")
+            if args.skip_existing and _run_exists(db, identity, td):
+                print(f"[{i+1}/{len(dates)}] {td}: 当前 manifest 已 sealed，跳过")
+                results["skipped"] += 1
                 continue
+
+            existing_status = db.scalar(
+                select(RecommendationRun.status).where(
+                    RecommendationRun.reconstruction_batch_id == identity.batch_id,
+                    RecommendationRun.trade_date == td,
+                )
+            )
+            if existing_status is not None:
+                message = f"{td} 已预留给当前 batch，状态={existing_status}；拒绝替换"
+                mark_reconstruction_batch_failed(db, identity.batch_id, message)
+                db.commit()
+                print(f"[{i+1}/{len(dates)}] {message}", flush=True)
+                return 1
 
             print(f"[{i+1}/{len(dates)}] 重建 {td} ...", flush=True)
             payload = _historical_payload(base, td)
-
-            result = enqueue_workbench_run(db, payload, dispatch=False)
-            run_id = result["run"]["run_id"]
-            _initialize_reconstruction_run(db, run_id, reconstruction_batch_id)
-            dispatch_workbench_run(db, run_id)
-
-            status = _wait_run(db, run_id)
-            print(f"  → {run_id}: {status}", flush=True)
-            key = status if status in results else "failed"
-            results[key] += 1
-
-            if status == "completed":
-                identity = _finalize_reconstruction_run(
+            try:
+                create_or_resume_reconstruction_batch(db, identity)
+                result = enqueue_workbench_run(
                     db,
-                    run_id,
-                    code_revision=code_revision,
+                    payload,
+                    dispatch=False,
+                    before_commit=lambda run: _reserve_reconstruction_run(
+                        db,
+                        run,
+                        identity,
+                        td,
+                    ),
                 )
-                print(
-                    f"  ✓ 历史重建 provenance 已写入 "
-                    f"(identity={identity.identity_hash[:12]})",
-                    flush=True,
-                )
+                run_id = str(result["run"]["run_id"])
+                dispatch_workbench_run(db, run_id)
+                status = _wait_run(db, run_id)
+            except Exception as exc:
+                db.rollback()
+                mark_reconstruction_batch_failed(db, identity.batch_id, str(exc))
+                db.commit()
+                print(f"  → {td}: failed ({exc})", flush=True)
+                return 1
 
-            # 每个 run 结束后清理 session 状态；不会改写推荐生成时间。
+            print(f"  → {run_id}: {status}", flush=True)
+            if status != "completed":
+                results[status if status in results else "failed"] += 1
+                db.rollback()
+                mark_reconstruction_batch_failed(
+                    db,
+                    identity.batch_id,
+                    f"{td} reconstruction {status}",
+                )
+                db.commit()
+                return 1
+
+            if not _run_exists(db, identity, td):
+                db.rollback()
+                mark_reconstruction_batch_failed(
+                    db,
+                    identity.batch_id,
+                    f"{td} completed without a canonical worker seal",
+                )
+                db.commit()
+                print(f"  → {run_id}: completed but canonical seal is missing", flush=True)
+                return 1
+            results["completed"] += 1
             db.rollback()
 
-        print(f"\n完成: {results}")
+        try:
+            cohort = publish_reconstruction_batch(db, identity.batch_id)
+            db.commit()
+        except ReconstructionBatchError as exc:
+            db.rollback()
+            mark_reconstruction_batch_failed(db, identity.batch_id, str(exc))
+            db.commit()
+            print(f"\n批次发布失败: {exc}")
+            return 1
+        print(
+            f"\n完成: {results}; cohort={cohort.cohort_identity_hash[:12]} "
+            f"runs={len(cohort.run_ids)}"
+        )
         return 0
     finally:
         db.close()

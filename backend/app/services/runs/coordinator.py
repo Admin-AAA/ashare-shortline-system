@@ -49,9 +49,19 @@ LEGACY_PHASE_TO_RUN_PHASE: Final[dict[str, RunPhase]] = {
 
 @dataclass(frozen=True, slots=True)
 class WorkerLease:
+    """Opaque ownership proof held by one worker between lifecycle CAS writes."""
+
     run_id: str
     token: str
     revision: int
+
+    def __post_init__(self) -> None:
+        if not self.run_id.strip():
+            raise ValueError("worker lease requires a non-empty run_id")
+        if not self.token.strip():
+            raise ValueError("worker lease requires a non-empty token")
+        if self.revision < 0:
+            raise ValueError("worker lease revision cannot be negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,28 +247,46 @@ class RunCoordinator:
             self._resource_leases.release()
 
     @staticmethod
-    def _context_from_record(record: RunRecord) -> RunContext | None:
-        if record.status is not RunStatus.RUNNING or record.lease is None:
+    def _context_from_record(
+        record: RunRecord,
+        worker_lease: WorkerLease,
+        *,
+        now: datetime,
+    ) -> RunContext | None:
+        """Project a record only when it still belongs to this exact worker lease."""
+        if (
+            record.run_id != worker_lease.run_id
+            or record.status is not RunStatus.RUNNING
+            or record.revision != worker_lease.revision
+            or record.lease is None
+            or record.lease.token != worker_lease.token
+            or not record.lease.is_active_at(now)
+        ):
             return None
         return RunContext(
             run_id=record.run_id,
             request=record.request,
-            worker_lease=WorkerLease(record.run_id, record.lease.token, record.revision),
+            worker_lease=worker_lease,
             checkpoint=record.checkpoint,
         )
 
-    def next_stage(self, run_id: str, *, now: datetime) -> tuple[AnyStage, RunContext] | None:
-        """Load the sole legal next stage for a live worker-owned run.
+    def next_stage(
+        self,
+        worker_lease: WorkerLease,
+        *,
+        now: datetime,
+    ) -> tuple[AnyStage, RunContext] | None:
+        """Load the sole legal next stage owned by the calling worker.
 
         Missing registrations deliberately return ``None``: task 5.1 only installs
         the stage contract, and later tasks migrate legacy phases incrementally. An
         out-of-order durable checkpoint still raises from the state machine rather
         than being silently skipped.
         """
-        record = self._repository.get_run(run_id)
-        if record is None or not record.has_active_lease(now):
+        record = self._repository.get_run(worker_lease.run_id)
+        if record is None:
             return None
-        context = self._context_from_record(record)
+        context = self._context_from_record(record, worker_lease, now=now)
         if context is None:
             return None
         phase = RunStateMachine.next_phase(context.last_committed_phase)
@@ -300,14 +328,19 @@ class RunCoordinator:
         )
         if not committed.applied or committed.record is None:
             return None
-        committed_context = self._context_from_record(committed.record)
-        if committed_context is None:
-            return None
-        return committed_context
+        return self._context_from_record(
+            committed.record,
+            WorkerLease(
+                run_id=context.worker_lease.run_id,
+                token=context.worker_lease.token,
+                revision=committed.record.revision,
+            ),
+            now=now,
+        )
 
     def execute_next_stage(
         self,
-        run_id: str,
+        worker_lease: WorkerLease,
         *,
         now: datetime,
         data: StageData | None = None,
@@ -319,7 +352,7 @@ class RunCoordinator:
         propagate so the caller's failure classification and resource cleanup path
         owns the terminal CAS.
         """
-        pending = self.next_stage(run_id, now=now)
+        pending = self.next_stage(worker_lease, now=now)
         if pending is None:
             return None
         stage, context = pending
@@ -340,13 +373,13 @@ class RunCoordinator:
 
     async def execute_next_stage_async(
         self,
-        run_id: str,
+        worker_lease: WorkerLease,
         *,
         now: datetime,
         data: StageData | None = None,
     ) -> tuple[StageOutput, RunContext] | None:
         """Async variant for :class:`AsyncRunStage` phases such as review."""
-        pending = self.next_stage(run_id, now=now)
+        pending = self.next_stage(worker_lease, now=now)
         if pending is None:
             return None
         stage, context = pending
@@ -365,11 +398,10 @@ class RunCoordinator:
         return output, committed_context
 
     def start_dispatch(self, run_id: str, *, now: datetime) -> bool:
+        """Claim a queued run for one dispatcher before any worker may start."""
         record = self._repository.get_run(run_id)
-        if record is None:
+        if record is None or record.status is not RunStatus.QUEUED:
             return False
-        if record.status is RunStatus.RUNNING:
-            return True
         transition = RunStateMachine.transition(
             current_status=record.status,
             trigger=RunTrigger.START,
@@ -405,27 +437,36 @@ class RunCoordinator:
             return None
         return WorkerLease(run_id, acquired.record.lease.token, acquired.record.revision)
 
-    def renew_worker_lease(self, run_id: str, *, now: datetime, ttl: timedelta) -> bool:
-        """Advance heartbeat only while the exact stored lease is still unexpired."""
-        record = self._repository.get_run(run_id)
-        if record is None or record.status is not RunStatus.RUNNING or record.lease is None:
-            return False
+    def renew_worker_lease(
+        self,
+        worker_lease: WorkerLease,
+        *,
+        now: datetime,
+        ttl: timedelta,
+    ) -> WorkerLease | None:
+        """Renew only the calling worker's lease and return its new revision."""
         renewed = self._repository.renew_lease(
-            run_id,
+            worker_lease.run_id,
             LeaseRenewal(
-                token=record.lease.token,
+                token=worker_lease.token,
                 now=now,
                 ttl=ttl,
-                expected_revision=record.revision,
+                expected_revision=worker_lease.revision,
             ),
         )
-        return renewed.applied
+        if not renewed.applied or renewed.record is None:
+            return None
+        return WorkerLease(
+            run_id=worker_lease.run_id,
+            token=worker_lease.token,
+            revision=renewed.record.revision,
+        )
 
     def spawn_failed(self, run_id: str, *, now: datetime, message: str) -> bool:
-        """Record dispatcher failure with ``worker_spawn_failed`` and release hooks."""
+        """Fail only a queued run whose worker has not acquired ownership."""
         try:
             record = self._repository.get_run(run_id)
-            if record is None or record.status not in {RunStatus.QUEUED, RunStatus.RUNNING}:
+            if record is None or record.status is not RunStatus.QUEUED:
                 return False
             transition = RunStateMachine.transition(
                 current_status=record.status,
@@ -463,20 +504,32 @@ class RunCoordinator:
 
     def cancel(
         self,
-        run_id: str,
+        run_id: str | WorkerLease,
         *,
         now: datetime,
         actor: RunActor = RunActor.API,
         message: str = "run cancelled",
     ) -> bool:
-        """Cancel queued/running/interrupted work through one CAS transition."""
+        """Cancel work through one CAS, requiring proof for worker-originated cancellation."""
         try:
-            record = self._repository.get_run(run_id)
+            worker_lease = run_id if isinstance(run_id, WorkerLease) else None
+            normalized_run_id = worker_lease.run_id if worker_lease is not None else run_id
+            if actor is RunActor.WORKER and worker_lease is None:
+                return False
+            if actor is not RunActor.WORKER and worker_lease is not None:
+                return False
+            record = self._repository.get_run(normalized_run_id)
             if record is None or record.status not in {
                 RunStatus.QUEUED,
                 RunStatus.RUNNING,
                 RunStatus.INTERRUPTED,
             }:
+                return False
+            if worker_lease is not None and self._context_from_record(
+                record,
+                worker_lease,
+                now=now,
+            ) is None:
                 return False
             transition = RunStateMachine.transition(
                 current_status=record.status,
@@ -484,35 +537,43 @@ class RunCoordinator:
                 actor=actor,
                 error_message=message,
             )
-            token = record.lease.token if actor is RunActor.WORKER and record.lease is not None else None
             result = self._repository.compare_and_set_transition(
-                run_id,
+                normalized_run_id,
                 TransitionCommit(
-                    expected_revision=record.revision,
+                    expected_revision=(
+                        worker_lease.revision if worker_lease is not None else record.revision
+                    ),
                     transition=transition,
                     now=now,
-                    lease_token=token,
+                    lease_token=worker_lease.token if worker_lease is not None else None,
                 ),
             )
             return result.applied
         finally:
             self._release_resources()
 
-    def resume(self, run_id: str, *, now: datetime) -> bool:
-        """Validate an interrupted checkpoint before a worker leases it."""
+    def resume(
+        self,
+        run_id: str,
+        *,
+        now: datetime,
+        verified_resume: ResumeCheck,
+    ) -> bool:
+        """Resume only a persistence checkpoint verified by the database capability."""
         record = self._repository.get_run(run_id)
         if record is None or record.status is not RunStatus.INTERRUPTED:
             return False
-        resume = ResumeCheck(
-            last_committed_phase=record.last_committed_phase,
-            side_effect_key=record.side_effect_key,
-            has_active_lease=record.has_active_lease(now),
-        )
+        if (
+            verified_resume.last_committed_phase is not record.last_committed_phase
+            or verified_resume.side_effect_key != record.side_effect_key
+            or record.has_active_lease(now)
+        ):
+            return False
         transition = RunStateMachine.transition(
             current_status=record.status,
             trigger=RunTrigger.RESUME,
             actor=RunActor.OPERATOR,
-            resume=resume,
+            resume=verified_resume,
         )
         result = self._repository.compare_and_set_transition(
             run_id,
@@ -520,43 +581,61 @@ class RunCoordinator:
         )
         return result.applied
 
-    def sync_checkpoint(self, run_id: str, *, legacy_phase: str, now: datetime) -> bool:
-        """Commit only the next distinct RunPhase; repeated legacy subphases are audit-only."""
+    def sync_checkpoint(
+        self,
+        worker_lease: WorkerLease,
+        *,
+        legacy_phase: str,
+        now: datetime,
+    ) -> WorkerLease | None:
+        """Checkpoint a legacy phase only for the caller-owned worker lease."""
         phase = LEGACY_PHASE_TO_RUN_PHASE.get(legacy_phase)
         if phase is None or phase is RunPhase.COMPLETED:
-            return False
-        record = self._repository.get_run(run_id)
-        if record is None or record.status is not RunStatus.RUNNING or record.lease is None:
-            return False
+            return None
+        record = self._repository.get_run(worker_lease.run_id)
+        if record is None or self._context_from_record(record, worker_lease, now=now) is None:
+            return None
         if record.last_committed_phase is phase:
             # Legacy subphases (for example market_data/scope_filter) share one
             # durable phase; they are audit-only after the first atomic commit.
-            return True
+            return worker_lease
         try:
             RunStateMachine.require_next_checkpoint(
                 last_committed_phase=record.last_committed_phase,
                 phase=phase,
             )
         except ValueError:
-            return False
+            return None
         result = self._repository.commit_checkpoint(
-            run_id,
+            worker_lease.run_id,
             CheckpointCommit(
-                expected_revision=record.revision,
-                lease_token=record.lease.token,
+                expected_revision=worker_lease.revision,
+                lease_token=worker_lease.token,
                 checkpoint=RunCheckpoint(
                     phase=phase,
-                    side_effect_key=f"legacy:{run_id}:{legacy_phase}",
+                    side_effect_key=f"legacy:{worker_lease.run_id}:{legacy_phase}",
                     heartbeat_at=now,
                 ),
             ),
         )
-        return result.applied
+        if not result.applied or result.record is None:
+            return None
+        return WorkerLease(
+            run_id=worker_lease.run_id,
+            token=worker_lease.token,
+            revision=result.record.revision,
+        )
 
-    def complete(self, run_id: str, *, now: datetime) -> bool:
+    def complete(self, worker_lease: WorkerLease, *, now: datetime) -> bool:
         try:
-            record = self._repository.get_run(run_id)
-            if record is None or record.status is not RunStatus.RUNNING or record.lease is None:
+            record = self._repository.get_run(worker_lease.run_id)
+            if (
+                record is None
+                or record.status is not RunStatus.RUNNING
+                or record.revision != worker_lease.revision
+                or record.lease is None
+                or record.lease.token != worker_lease.token
+            ):
                 return False
             transition = RunStateMachine.transition(
                 current_status=record.status,
@@ -566,22 +645,28 @@ class RunCoordinator:
                 side_effect_key=record.side_effect_key,
             )
             result = self._repository.compare_and_set_transition(
-                run_id,
+                worker_lease.run_id,
                 TransitionCommit(
-                    expected_revision=record.revision,
+                    expected_revision=worker_lease.revision,
                     transition=transition,
                     now=now,
-                    lease_token=record.lease.token,
+                    lease_token=worker_lease.token,
                 ),
             )
             return result.applied
         finally:
             self._release_resources()
 
-    def fail(self, run_id: str, *, now: datetime, message: str) -> bool:
+    def fail(self, worker_lease: WorkerLease, *, now: datetime, message: str) -> bool:
         try:
-            record = self._repository.get_run(run_id)
-            if record is None or record.status is not RunStatus.RUNNING:
+            record = self._repository.get_run(worker_lease.run_id)
+            if (
+                record is None
+                or record.status is not RunStatus.RUNNING
+                or record.revision != worker_lease.revision
+                or record.lease is None
+                or record.lease.token != worker_lease.token
+            ):
                 return False
             transition = RunStateMachine.transition(
                 current_status=record.status,
@@ -590,29 +675,36 @@ class RunCoordinator:
                 error_message=message,
             )
             result = self._repository.compare_and_set_transition(
-                run_id,
+                worker_lease.run_id,
                 TransitionCommit(
-                    expected_revision=record.revision,
+                    expected_revision=worker_lease.revision,
                     transition=transition,
                     now=now,
-                    lease_token=record.lease.token if record.lease is not None else None,
+                    lease_token=worker_lease.token,
                 ),
             )
             return result.applied
         finally:
             self._release_resources()
 
-    def resume_next_phase(self, run_id: str, *, now: datetime) -> RunPhase | None:
+    def resume_next_phase(
+        self,
+        run_id: str,
+        *,
+        now: datetime,
+        verified_resume: ResumeCheck,
+    ) -> None:
+        """Validate completion-only recovery; no business phase may execute."""
         record = self._repository.get_run(run_id)
-        if record is None:
+        if (
+            record is None
+            or record.status is not RunStatus.INTERRUPTED
+            or record.last_committed_phase is not verified_resume.last_committed_phase
+            or record.side_effect_key != verified_resume.side_effect_key
+            or record.has_active_lease(now)
+        ):
             return None
-        return RunStateMachine.validate_resume(
-            ResumeCheck(
-                last_committed_phase=record.last_committed_phase,
-                side_effect_key=record.side_effect_key,
-                has_active_lease=record.has_active_lease(now),
-            )
-        )
+        return RunStateMachine.validate_resume(verified_resume)
 
 
 class LegacyWorkbenchRunCoordinator(RunCoordinator):

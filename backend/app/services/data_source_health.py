@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.tables import (
@@ -22,10 +22,7 @@ from app.models.tables import (
     SkillRegistry,
     StockQuote,
 )
-from app.services.evidence.selectors import (
-    historical_reconstruction_provenance_conditions,
-    live_forward_run_conditions,
-)
+from app.services.evidence.validation import canonical_live_forward_run_ids
 
 
 def active_alerts(db: Session) -> list[dict[str, Any]]:
@@ -57,24 +54,23 @@ def active_alerts(db: Session) -> list[dict[str, Any]]:
     # 系统级告警
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
-    # 最近一次推荐运行是否在 24 小时内
-    latest_run = db.scalar(
-        select(RecommendationRun)
-        .where(
-            RecommendationRun.run_mode == "formal",
-            RecommendationRun.status == "completed",
-            or_(
-                and_(*live_forward_run_conditions()),
-                and_(
-                    *historical_reconstruction_provenance_conditions(),
-                    RecommendationRun.data_as_of <= RecommendationRun.trade_date,
-                ),
-            ),
+    # 最近一次可信 LIVE 推荐运行是否在 24 小时内；历史回放不刷新生产心跳。
+    live_run_ids = canonical_live_forward_run_ids(db)
+    latest_finished_at = (
+        db.scalar(
+            select(RecommendationRun.finished_at)
+            .where(
+                RecommendationRun.run_id.in_(live_run_ids),
+                RecommendationRun.finished_at.is_not(None),
+            )
+            .order_by(RecommendationRun.finished_at.desc())
+            .limit(1)
         )
-        .order_by(RecommendationRun.finished_at.desc())
+        if live_run_ids
+        else None
     )
-    if latest_run and latest_run.finished_at:
-        hours_since_run = round((now - latest_run.finished_at).total_seconds() / 3600, 1)
+    if latest_finished_at:
+        hours_since_run = round((now - latest_finished_at).total_seconds() / 3600, 1)
         if hours_since_run > 24:
             alerts.append({
                 "source": "system",

@@ -128,7 +128,7 @@ def historical_reconstruction_run_conditions() -> tuple:
         RecommendationRun.run_mode == "formal",
         RecommendationRun.status == "completed",
         *historical_reconstruction_provenance_conditions(),
-        RecommendationRun.data_as_of <= Recommendation.trade_date,
+        RecommendationRun.data_as_of <= RecommendationRun.trade_date,
         Recommendation.recommendation_id.like(f"{OFFICIAL_RECOMMENDATION_PREFIX}%"),
     )
 

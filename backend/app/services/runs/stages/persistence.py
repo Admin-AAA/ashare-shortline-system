@@ -21,6 +21,24 @@ logger = logging.getLogger(__name__)
 # Port
 # ---------------------------------------------------------------------------
 
+@dataclass(frozen=True, slots=True)
+class SealedRecommendationCollection:
+    """Recommendation rows bound to one immutable database collection seal."""
+
+    recommendations: tuple[Any, ...]
+    recommendation_row_count: int
+    collection_digest: str
+    side_effect_key: str
+
+    def __post_init__(self) -> None:
+        if self.recommendation_row_count != len(self.recommendations):
+            raise ValueError("sealed recommendation row count does not match rows")
+        if len(self.collection_digest) != 64:
+            raise ValueError("sealed recommendation collection requires SHA-256 digest")
+        if not self.side_effect_key.strip():
+            raise ValueError("sealed recommendation collection requires side-effect key")
+
+
 @runtime_checkable
 class RecommendationPersistencePort(Protocol):
     """Idempotent recommendation persistence."""
@@ -31,11 +49,8 @@ class RecommendationPersistencePort(Protocol):
         run_id: str,
         trade_date: str,
         cards: Sequence[StageMapping],
-    ) -> tuple[Any, ...]:
-        """Persist recommendation cards and return saved ORM objects.
-
-        The repository must ensure idempotency by run_id / natural-key dedup.
-        """
+    ) -> SealedRecommendationCollection:
+        """Persist cards and return the database-backed immutable collection seal."""
 
 
 @runtime_checkable
@@ -81,7 +96,7 @@ class PersistenceStage:
                 raise RuntimeError("audit-only risk boundary must preserve recommendation count")
 
         if self.recommendation_persistence is not None:
-            saved = self.recommendation_persistence.persist(
+            sealed = self.recommendation_persistence.persist(
                 run_id=context.run_id,
                 trade_date=str(snapshot.get("trade_date") or ""),
                 cards=cards,
@@ -91,10 +106,10 @@ class PersistenceStage:
 
         result = RunStageResult(
             phase=RunPhase.PERSISTENCE,
-            side_effect_key=f"persistence:{context.run_id}",
+            side_effect_key=sealed.side_effect_key,
         )
         updated = data.with_updates(
-            saved_recommendations=saved,
+            saved_recommendations=sealed.recommendations,
         )
         return StageOutput(result=result, data=updated)
 
@@ -103,4 +118,5 @@ __all__ = [
     "PersistenceStage",
     "RecommendationPersistencePort",
     "RecommendationRiskAuditPort",
+    "SealedRecommendationCollection",
 ]

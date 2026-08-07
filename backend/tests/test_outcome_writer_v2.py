@@ -14,6 +14,7 @@ from app.models.tables import (
     RecommendationOutcomeVersion,
     RecommendationRun,
 )
+from app.services.evidence import identity_from_persisted_run
 from app.services.outcome_identity import (
     bounded_outcome_bars,
     outcome_market_artifact_hash,
@@ -63,7 +64,10 @@ def _run(run_id: str, *, complete: bool) -> RecommendationRun:
             code_revision="d" * 40,
             provenance_schema_version=1,
         )
-    return RecommendationRun(**values)
+    run = RecommendationRun(**values)
+    if complete:
+        run.evidence_identity_hash = identity_from_persisted_run(run).identity_hash
+    return run
 
 
 def _recommendation(rec_id: str, run_id: str) -> Recommendation:
@@ -190,6 +194,32 @@ def test_incomplete_provenance_writes_non_valid_legacy_without_trusted_projectio
 
     assert _settle(db, rec, bars)[0] is True
     db.flush()
+    outcome = db.get(RecommendationOutcome, rec.recommendation_id)
+    version = db.scalar(select(RecommendationOutcomeVersion))
+    assert outcome is not None
+    assert outcome.current_calculation_fingerprint is None
+    assert outcome.projection_revision is None
+    assert version is not None
+    assert version.validity_status == "NON_VALID"
+    assert version.legacy_verification_status == "INCOMPLETE_PROVENANCE"
+
+
+def test_forged_provenance_writes_non_valid_version_without_trusted_projection() -> None:
+    db = _database()
+    run = _run("run_forged", complete=True)
+    run.evidence_identity_hash = "0" * 64
+    rec = _recommendation("rec_forged", run.run_id)
+    bars = [
+        _bar("2026-01-05"),
+        _bar("2026-01-06"),
+        _bar("2026-01-07", high=11.0),
+    ]
+    db.add_all([run, rec, *bars])
+    db.commit()
+
+    assert _settle(db, rec, bars)[0] is True
+    db.flush()
+
     outcome = db.get(RecommendationOutcome, rec.recommendation_id)
     version = db.scalar(select(RecommendationOutcomeVersion))
     assert outcome is not None

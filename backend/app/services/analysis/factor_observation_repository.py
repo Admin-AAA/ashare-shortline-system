@@ -20,6 +20,7 @@ from app.models.tables import (
     RecommendationOutcomeVersion,
     RecommendationRun,
 )
+from app.services.evidence.validation import canonical_live_forward_run_ids
 from app.services.official_sample_scope import official_sample_conditions
 from app.services.quality_outcome import OutcomeVersionRecord
 
@@ -74,6 +75,9 @@ class FactorObservationRepository:
                 "database factor repository supports only live_forward evidence"
             )
 
+        live_run_ids = canonical_live_forward_run_ids(self._session)
+        if not live_run_ids:
+            return ()
         statement = (
             select(
                 Recommendation,
@@ -94,6 +98,7 @@ class FactorObservationRepository:
             )
             .where(
                 *official_sample_conditions(),
+                RecommendationRun.run_id.in_(live_run_ids),
                 Recommendation.trade_date >= request.start_date,
                 Recommendation.trade_date <= request.end_date,
             )

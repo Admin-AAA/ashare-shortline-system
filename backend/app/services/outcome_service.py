@@ -33,10 +33,23 @@ from app.services.evaluation_metrics import (
     compute_exit_ambiguity_statistics,
     compute_full_metrics as _compute_full_metrics,
 )
+from app.services.evidence.identity import (
+    EvidenceClass,
+    has_canonical_persisted_identity,
+)
 from app.services.evidence.provenance_writer import resolve_code_revision
-from app.services.evidence.selectors import is_live_forward_run
+from app.services.evidence.selectors import historical_reconstruction_run_conditions
+from app.services.evidence.reconstruction_batch import ValidatedReconstructionCohort
+from app.services.evidence.validation import (
+    canonical_historical_reconstruction_cohort,
+    canonical_live_forward_run_ids,
+)
 from app.services.execution_outcome_policy import apply_execution_outcome_policy
-from app.services.official_sample_scope import official_sample_conditions
+from app.services.official_sample_scope import (
+    HISTORICAL_REPLAY_SCOPE,
+    LIVE_FORWARD_SCOPE,
+    official_sample_conditions,
+)
 from app.services.outcome_identity import (
     bounded_outcome_bars,
     label_policy_fingerprint,
@@ -154,6 +167,49 @@ def _window_meta(
         "labeled_in_window": labeled_count,
         "pending_excluded": max(0, total_count - labeled_count),
     }
+
+def _historical_cohort_for_metrics(
+    db: Session,
+    *,
+    sample_scope: str | None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> ValidatedReconstructionCohort | None:
+    if sample_scope != HISTORICAL_REPLAY_SCOPE:
+        return None
+    return canonical_historical_reconstruction_cohort(
+        db,
+        date_from=start_date,
+        date_to=end_date,
+    )
+
+
+def _metrics_population_token(
+    sample_scope: str | None,
+    cohort: ValidatedReconstructionCohort | None,
+) -> str:
+    if sample_scope != HISTORICAL_REPLAY_SCOPE:
+        return sample_scope or "legacy"
+    return cohort.cohort_identity_hash if cohort is not None else "no-cohort"
+
+
+def _historical_run_ids_for_metrics(
+    sample_scope: str | None,
+    cohort: ValidatedReconstructionCohort | None,
+) -> tuple[str, ...] | None:
+    if sample_scope != HISTORICAL_REPLAY_SCOPE:
+        return None
+    return cohort.run_ids if cohort is not None else ()
+
+
+def _cohort_metadata(
+    sample_scope: str | None,
+    cohort: ValidatedReconstructionCohort | None,
+) -> dict[str, Any] | None:
+    if sample_scope != HISTORICAL_REPLAY_SCOPE or cohort is None:
+        return None
+    return cohort.as_metadata()
+
 
 # 短时缓存
 _metrics_cache: dict[str, tuple[float, Any]] = {}
@@ -292,23 +348,16 @@ def _complete_outcome_provenance(run: RecommendationRun | None, rec: Recommendat
     if run is None or str(run.status or "") != "completed" or str(run.run_mode or "") != "formal":
         return False
     evidence_class = str(run.evidence_class or "")
-    if evidence_class == "live_forward":
-        return is_live_forward_run(run)
-    if evidence_class != "historical_reconstruction":
+    expected_class = {
+        EvidenceClass.LIVE_FORWARD.value: EvidenceClass.LIVE_FORWARD,
+        EvidenceClass.HISTORICAL_RECONSTRUCTION.value:
+            EvidenceClass.HISTORICAL_RECONSTRUCTION,
+    }.get(evidence_class)
+    if expected_class is None:
         return False
-    data_as_of = str(run.data_as_of or "")
-    return bool(
-        run.actual_generated_at is not None
-        and data_as_of
-        and data_as_of <= str(rec.trade_date)
-        and str(run.source_snapshot_id or "") not in {"", "unknown"}
-        and run.evidence_identity_hash
-        and run.strategy_policy_fingerprint
-        and run.execution_policy_fingerprint
-        and run.code_revision
-        and run.provenance_schema_version
-        and run.reconstruction_batch_id
-    )
+    if not has_canonical_persisted_identity(run, expected_class=expected_class):
+        return False
+    return str(run.trade_date or "") == str(rec.trade_date or "")
 
 
 def _validated_outcome_result(simulation: dict[str, Any]) -> dict[str, Any]:
@@ -824,13 +873,36 @@ def exit_ambiguity_metrics(
     db: Session,
     start_date: str | None = None,
     end_date: str | None = None,
+    sample_scope: str = LIVE_FORWARD_SCOPE,
 ) -> dict[str, Any]:
+    if sample_scope not in (LIVE_FORWARD_SCOPE, HISTORICAL_REPLAY_SCOPE):
+        raise ValueError(f"unsupported metrics sample_scope: {sample_scope}")
+
+    if sample_scope == HISTORICAL_REPLAY_SCOPE:
+        cohort = _historical_cohort_for_metrics(
+            db,
+            sample_scope=sample_scope,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        run_ids = cohort.run_ids if cohort is not None else ()
+        scope_conditions = historical_reconstruction_run_conditions()
+    else:
+        run_ids = canonical_live_forward_run_ids(
+            db,
+            date_from=start_date,
+            date_to=end_date,
+        )
+        scope_conditions = official_sample_conditions()
+
+    if not run_ids:
+        return compute_exit_ambiguity_statistics([])
+
     stmt = (
         select(
             Recommendation,
             RecommendationOutcome,
             RecommendationOutcomeVersion,
-            RecommendationRun,
         )
         .join(
             RecommendationOutcome,
@@ -847,6 +919,8 @@ def exit_ambiguity_metrics(
             == RecommendationOutcomeVersion.calculation_fingerprint,
             RecommendationOutcomeVersion.validity_status == "VALID",
             RecommendationOutcomeVersion.calculation_schema_version == 2,
+            *scope_conditions,
+            RecommendationRun.run_id.in_(run_ids),
         )
     )
     if start_date:
@@ -854,7 +928,7 @@ def exit_ambiguity_metrics(
     if end_date:
         stmt = stmt.where(Recommendation.trade_date <= end_date)
     records: list[dict[str, Any]] = []
-    for rec, outcome, version, run in db.execute(stmt).all():
+    for rec, outcome, version in db.execute(stmt).all():
         try:
             result = json.loads(version.result_json)
         except (TypeError, json.JSONDecodeError) as exc:
@@ -874,7 +948,7 @@ def exit_ambiguity_metrics(
             "strategy_ids": strategy_ids,
             "exit_date": outcome.exit_date,
             "trade_date": rec.trade_date,
-            "evaluation_scope": run.evaluation_scope,
+            "evaluation_scope": sample_scope,
         })
     return compute_exit_ambiguity_statistics(records)
 
@@ -886,13 +960,32 @@ def overview_metrics(
     end_date: str | None = None,
     run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
     live_only: bool = True,
+    sample_scope: str | None = None,
 ) -> dict[str, Any]:
     start, end = _resolve_window(window_days, start_date, end_date)
-    key = f"overview:{start or ''}:{end or ''}:{run_mode or 'all'}:{int(live_only)}"
+    cohort = _historical_cohort_for_metrics(
+        db,
+        sample_scope=sample_scope,
+        start_date=start,
+        end_date=end,
+    )
+    population_token = _metrics_population_token(sample_scope, cohort)
+    key = f"overview:{start or ''}:{end or ''}:{run_mode or 'all'}:{int(live_only)}:{population_token}"
     return _cached(
         key,
         lambda: _overview_metrics(
-            db, start, end, window_days, run_mode=run_mode, live_only=live_only,
+            db,
+            start,
+            end,
+            window_days,
+            run_mode=run_mode,
+            live_only=live_only,
+            sample_scope=sample_scope,
+            historical_run_ids=_historical_run_ids_for_metrics(
+                sample_scope,
+                cohort,
+            ),
+            historical_cohort=cohort,
         ),
     )
 
@@ -904,6 +997,9 @@ def _overview_metrics(
     window_days: int | None = None,
     run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
     live_only: bool = True,
+    sample_scope: str | None = None,
+    historical_run_ids: tuple[str, ...] | None = None,
+    historical_cohort: ValidatedReconstructionCohort | None = None,
 ) -> dict[str, Any]:
     rows = _scoped_recommendation_rows(
         db,
@@ -911,6 +1007,8 @@ def _overview_metrics(
         end_date,
         run_mode=run_mode,
         live_only=live_only,
+        sample_scope=sample_scope,
+        historical_run_ids=historical_run_ids,
     )
     total_recs = len(rows)
 
@@ -940,6 +1038,10 @@ def _overview_metrics(
             "pending_count": max(0, total_recs - n),
             "success_count": 0,
             "failed_count": 0,
+            "historical_reconstruction_cohort": _cohort_metadata(
+                sample_scope,
+                historical_cohort,
+            ),
             "date_range": _window_meta(window_days, start_date, end_date, total_recs, 0),
         }
 
@@ -1029,6 +1131,10 @@ def _overview_metrics(
         "accuracy_numerator": full_metrics.get("accuracy_numerator", 0),
         "accuracy_denominator": full_metrics.get("accuracy_denominator", n),
         "accuracy_basis": full_metrics.get("accuracy_basis", "labeled_recommendations"),
+        "historical_reconstruction_cohort": _cohort_metadata(
+            sample_scope,
+            historical_cohort,
+        ),
         "date_range": _window_meta(window_days, start_date, end_date, total_recs, n),
     }
 
@@ -1040,13 +1146,31 @@ def metrics_by_strategy(
     end_date: str | None = None,
     run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
     live_only: bool = True,
+    sample_scope: str | None = None,
 ) -> list[dict[str, Any]]:
     start, end = _resolve_window(window_days, start_date, end_date)
-    key = f"by_strategy:{start or ''}:{end or ''}:{run_mode or 'all'}:{int(live_only)}"
+    cohort = _historical_cohort_for_metrics(
+        db,
+        sample_scope=sample_scope,
+        start_date=start,
+        end_date=end,
+    )
+    population_token = _metrics_population_token(sample_scope, cohort)
+    key = f"by_strategy:{start or ''}:{end or ''}:{run_mode or 'all'}:{int(live_only)}:{population_token}"
     return _cached(
         key,
         lambda: _metrics_by_strategy(
-            db, start, end, window_days, run_mode=run_mode, live_only=live_only,
+            db,
+            start,
+            end,
+            window_days,
+            run_mode=run_mode,
+            live_only=live_only,
+            sample_scope=sample_scope,
+            historical_run_ids=_historical_run_ids_for_metrics(
+                sample_scope,
+                cohort,
+            ),
         ),
     )
 
@@ -1099,12 +1223,22 @@ def _metrics_by_strategy(
     window_days: int | None = None,
     run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
     live_only: bool = True,
+    sample_scope: str | None = None,
+    historical_run_ids: tuple[str, ...] | None = None,
 ) -> list[dict[str, Any]]:
     rows = _scoped_recommendation_rows(
-        db, start_date, end_date, run_mode=run_mode, live_only=live_only,
+        db,
+        start_date,
+        end_date,
+        run_mode=run_mode,
+        live_only=live_only,
+        sample_scope=sample_scope,
+        historical_run_ids=historical_run_ids,
     )
     benchmark_by_rec = _benchmark_returns_by_recommendation(db, rows)
-    horizon_records = _horizon_metric_records_by_recommendation(db, rows)
+    horizon_records = _horizon_metric_records_by_recommendation(
+        db, rows, cache_scope=sample_scope or "legacy",
+    )
     registry = {row.skill_id: row for row in db.scalars(select(SkillRegistry)).all()}
 
     buckets: dict[str, dict[str, Any]] = {}
@@ -1271,6 +1405,7 @@ def _recent_formal_win_rate(db: Session, window_trade_days: int) -> dict[str, An
         db,
         run_mode=OFFICIAL_RUN_MODE,
         live_only=True,
+        sample_scope=LIVE_FORWARD_SCOPE,
     )
     settled_rows = [
         row
@@ -1399,6 +1534,7 @@ def board_and_net_breakdown(
     window_days: int | None = 30,
     start_date: str | None = None,
     end_date: str | None = None,
+    sample_scope: str | None = None,
 ) -> dict[str, Any]:
     """D 项净成本 + 板块(20cm/10cm)分解 —— 北极星 D 项 observability，供前端指标页透出。
 
@@ -1406,10 +1542,27 @@ def board_and_net_breakdown(
     一致。与指标页核心 KPI 共用日历窗口、去重规则和正式实盘样本范围。
     """
     start, end = _resolve_window(window_days, start_date, end_date)
-    cache_key = f"board_and_net_breakdown:{start or ''}:{end or ''}"
+    cohort = _historical_cohort_for_metrics(
+        db,
+        sample_scope=sample_scope,
+        start_date=start,
+        end_date=end,
+    )
+    population_token = _metrics_population_token(sample_scope, cohort)
+    cache_key = f"board_and_net_breakdown:{start or ''}:{end or ''}:{population_token}"
     return _cached(
         cache_key,
-        lambda: _board_and_net_breakdown(db, start, end, window_days),
+        lambda: _board_and_net_breakdown(
+            db,
+            start,
+            end,
+            window_days,
+            sample_scope=sample_scope,
+            historical_run_ids=_historical_run_ids_for_metrics(
+                sample_scope,
+                cohort,
+            ),
+        ),
     )
 
 
@@ -1418,6 +1571,8 @@ def _board_and_net_breakdown(
     start_date: str | None,
     end_date: str | None,
     window_days: int | None,
+    sample_scope: str | None = None,
+    historical_run_ids: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     rows = _scoped_recommendation_rows(
         db,
@@ -1425,6 +1580,8 @@ def _board_and_net_breakdown(
         end_date,
         run_mode=OFFICIAL_RUN_MODE,
         live_only=True,
+        sample_scope=sample_scope,
+        historical_run_ids=historical_run_ids,
     )
     executed_rows = [
         row
@@ -1501,13 +1658,31 @@ def metrics_by_setup(
     end_date: str | None = None,
     run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
     live_only: bool = True,
+    sample_scope: str | None = None,
 ) -> list[dict[str, Any]]:
     start, end = _resolve_window(window_days, start_date, end_date)
-    key = f"by_setup:{start or ''}:{end or ''}:{run_mode or 'all'}:{int(live_only)}"
+    cohort = _historical_cohort_for_metrics(
+        db,
+        sample_scope=sample_scope,
+        start_date=start,
+        end_date=end,
+    )
+    population_token = _metrics_population_token(sample_scope, cohort)
+    key = f"by_setup:{start or ''}:{end or ''}:{run_mode or 'all'}:{int(live_only)}:{population_token}"
     return _cached(
         key,
         lambda: _metrics_by_setup(
-            db, start, end, window_days, run_mode=run_mode, live_only=live_only,
+            db,
+            start,
+            end,
+            window_days,
+            run_mode=run_mode,
+            live_only=live_only,
+            sample_scope=sample_scope,
+            historical_run_ids=_historical_run_ids_for_metrics(
+                sample_scope,
+                cohort,
+            ),
         ),
     )
 
@@ -1519,12 +1694,22 @@ def _metrics_by_setup(
     window_days: int | None = None,
     run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
     live_only: bool = True,
+    sample_scope: str | None = None,
+    historical_run_ids: tuple[str, ...] | None = None,
 ) -> list[dict[str, Any]]:
     rows = _scoped_recommendation_rows(
-        db, start_date, end_date, run_mode=run_mode, live_only=live_only,
+        db,
+        start_date,
+        end_date,
+        run_mode=run_mode,
+        live_only=live_only,
+        sample_scope=sample_scope,
+        historical_run_ids=historical_run_ids,
     )
     benchmark_by_rec = _benchmark_returns_by_recommendation(db, rows)
-    horizon_records = _horizon_metric_records_by_recommendation(db, rows)
+    horizon_records = _horizon_metric_records_by_recommendation(
+        db, rows, cache_scope=sample_scope or "legacy",
+    )
     buckets: dict[str, dict[str, Any]] = {}
     for row in rows:
         setup = str(row.setup_type or "未命中买点")
@@ -1687,44 +1872,89 @@ _ALPHA_DECAY_FACTORS = [
 ]
 
 
-def alpha_decay_detection(db: Session) -> dict[str, Any]:
+def alpha_decay_detection(
+    db: Session,
+    sample_scope: str = LIVE_FORWARD_SCOPE,
+    window_days: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, Any]:
     """Alpha 衰减检测：对比近期 vs 早期各因子的 point-biserial 相关系数。
 
     如果因子的预测力在下降（衰减 > 30%），标记为"衰减中"。
     第一性原理：市场会学习并套利掉公开因子，alpha 必然衰减。
     """
-    # 30s 缓存：alpha-decay 计算重（预解析 ~1594 个 feature_snapshot），
-    # MetricsPage 打开时多次调用，缓存避免重复计算。
-    return _cached("alpha_decay", lambda: _alpha_decay_detection(db))
+    start, end = _resolve_window(window_days, start_date, end_date)
+    cohort = _historical_cohort_for_metrics(
+        db,
+        sample_scope=sample_scope,
+        start_date=start,
+        end_date=end,
+    )
+    population_token = _metrics_population_token(sample_scope, cohort)
+    return _cached(
+        f"alpha_decay:{window_days or ''}:{start or ''}:{end or ''}:{population_token}",
+        lambda: _alpha_decay_detection(
+            db,
+            sample_scope=sample_scope,
+            window_days=window_days,
+            start_date=start,
+            end_date=end,
+            historical_run_ids=_historical_run_ids_for_metrics(
+                sample_scope,
+                cohort,
+            ),
+        ),
+    )
 
 
-def _alpha_decay_detection(db: Session) -> dict[str, Any]:
+def _alpha_decay_detection(
+    db: Session,
+    sample_scope: str = LIVE_FORWARD_SCOPE,
+    window_days: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    historical_run_ids: tuple[str, ...] | None = None,
+) -> dict[str, Any]:
     import math
 
-    stmt = (
-        select(Recommendation, RecommendationOutcome)
-        .join(RecommendationOutcome, RecommendationOutcome.recommendation_id == Recommendation.recommendation_id)
-        .where(
-            RecommendationOutcome.entry_triggered == True,  # noqa: E712
-            RecommendationOutcome.outcome_label.in_([OUTCOME_SUCCESS, OUTCOME_FAILED]),
+    rows = [
+        row
+        for row in _scoped_recommendation_rows(
+            db,
+            start_date=start_date,
+            end_date=end_date,
+            sample_scope=sample_scope,
+            historical_run_ids=historical_run_ids,
         )
-        .order_by(Recommendation.trade_date.asc())
-    )
-    rows = db.execute(stmt).all()
+        if is_trade_executed(row)
+        and normalized_outcome_label(row) in {OUTCOME_SUCCESS, OUTCOME_FAILED}
+    ]
     if len(rows) < 20:
-        return {"factors": [], "error": "insufficient samples", "total": len(rows)}
+        return {
+            "factors": [],
+            "error": "insufficient samples",
+            "total": len(rows),
+            "date_range": _window_meta(
+                window_days,
+                start_date,
+                end_date,
+                len(rows),
+                len(rows),
+            ),
+        }
 
     mid = len(rows) // 2
     early_rows = rows[:mid]
     recent_rows = rows[mid:]
 
-    # 预解析 feature_snapshot_json 一次（T4 性能优化：原 _extract_factor 每因子×2半段
-    # 重新 json.loads，11 因子 × 2 × ~1594 行 = 35068 次解析 → 3883ms。预解析后仅 ~1594 次）
-    def _preload_snapshots(row_pairs: list) -> list[dict[str, Any]]:
+    def _preload_snapshots(scoped_rows: list[Any]) -> list[dict[str, Any]]:
         return [
-            {"snapshot": _loads(getattr(rec, "feature_snapshot_json", None), {}),
-             "return": float(getattr(outcome, "executed_return", 0) or 0)}
-            for rec, outcome in row_pairs
+            {
+                "snapshot": _loads(getattr(row, "feature_snapshot_json", None), {}),
+                "return": float(getattr(row, "executed_return", 0) or 0),
+            }
+            for row in scoped_rows
         ]
 
     early_preloaded = _preload_snapshots(early_rows)
@@ -1816,9 +2046,16 @@ def _alpha_decay_detection(db: Session) -> dict[str, Any]:
     factors_result.sort(key=lambda x: abs(x["delta"]), reverse=True)
     return {
         "total": len(rows),
-        "early_period": f"{early_rows[0][0].trade_date} to {early_rows[-1][0].trade_date}",
-        "recent_period": f"{recent_rows[0][0].trade_date} to {recent_rows[-1][0].trade_date}",
+        "early_period": f"{early_rows[0].trade_date} to {early_rows[-1].trade_date}",
+        "recent_period": f"{recent_rows[0].trade_date} to {recent_rows[-1].trade_date}",
         "factors": factors_result,
+        "date_range": _window_meta(
+            window_days,
+            start_date,
+            end_date,
+            len(rows),
+            len(rows),
+        ),
     }
 
 
@@ -1885,13 +2122,21 @@ def filter_effectiveness(
     end_date: str | None = None,
     run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
     live_only: bool = True,
+    sample_scope: str | None = None,
 ) -> dict[str, Any]:
     """三规则过滤效果分析：pos20<50、avg_cost>200、结构性强势×support_ma5。
 
     返回被过滤 vs 保留交易的 WR/avg/笔数，用于监控过滤策略效果。
     """
     w_start, w_end = _resolve_window(window_days, start_date, end_date)
-    key = f"filter_eff:{w_start or ''}:{w_end or ''}:{run_mode or 'all'}:{int(live_only)}"
+    cohort = _historical_cohort_for_metrics(
+        db,
+        sample_scope=sample_scope,
+        start_date=w_start,
+        end_date=w_end,
+    )
+    population_token = _metrics_population_token(sample_scope, cohort)
+    key = f"filter_eff:{w_start or ''}:{w_end or ''}:{run_mode or 'all'}:{int(live_only)}:{population_token}"
     return _cached(
         key,
         lambda: _filter_effectiveness_impl(
@@ -1901,6 +2146,11 @@ def filter_effectiveness(
             window_days,
             run_mode=run_mode,
             live_only=live_only,
+            sample_scope=sample_scope,
+            historical_run_ids=_historical_run_ids_for_metrics(
+                sample_scope,
+                cohort,
+            ),
         ),
     )
 
@@ -1912,6 +2162,8 @@ def _filter_effectiveness_impl(
     window_days: int | None = None,
     run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
     live_only: bool = True,
+    sample_scope: str | None = None,
+    historical_run_ids: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     import json as _json
 
@@ -1923,6 +2175,8 @@ def _filter_effectiveness_impl(
             w_end,
             run_mode=run_mode,
             live_only=live_only,
+            sample_scope=sample_scope,
+            historical_run_ids=historical_run_ids,
         )
         if normalized_outcome_label(row) in {OUTCOME_SUCCESS, OUTCOME_FAILED}
         and is_trade_executed(row)
@@ -1930,6 +2184,18 @@ def _filter_effectiveness_impl(
     if not rows:
         return {
             "count": 0,
+            "filtered_count": 0,
+            "filter_rate_pct": 0.0,
+            "kept": {
+                "count": 0,
+                "net_win_rate": 0.0,
+                "net_avg_return": 0.0,
+                "net_profit_factor": 0.0,
+            },
+            "filtered_by_rule": {
+                name: {"count": 0, "win_rate": 0.0, "avg_return": 0.0}
+                for name in ("pos20_low", "avg_cost_high", "regime_ma5")
+            },
             "error": "no executed trades",
             "date_range": _window_meta(window_days, w_start, w_end, 0, 0),
         }
@@ -1998,9 +2264,17 @@ def precision_at_k(
     end_date: str | None = None,
     run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
     live_only: bool = True,
+    sample_scope: str | None = None,
 ) -> list[dict[str, Any]]:
     w_start, w_end = _resolve_window(window_days, start_date, end_date)
-    key = f"precision_at_k:{','.join(str(k) for k in ks)}:{w_start or ''}:{w_end or ''}:{run_mode or 'all'}:{int(live_only)}"
+    cohort = _historical_cohort_for_metrics(
+        db,
+        sample_scope=sample_scope,
+        start_date=w_start,
+        end_date=w_end,
+    )
+    population_token = _metrics_population_token(sample_scope, cohort)
+    key = f"precision_at_k:{','.join(str(k) for k in ks)}:{w_start or ''}:{w_end or ''}:{run_mode or 'all'}:{int(live_only)}:{population_token}"
     return _cached(
         key,
         lambda: _precision_at_k(
@@ -2011,6 +2285,11 @@ def precision_at_k(
             window_days,
             run_mode=run_mode,
             live_only=live_only,
+            sample_scope=sample_scope,
+            historical_run_ids=_historical_run_ids_for_metrics(
+                sample_scope,
+                cohort,
+            ),
         ),
     )
 
@@ -2023,7 +2302,11 @@ def _precision_at_k(
     window_days: int | None = None,
     run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
     live_only: bool = True,
+    sample_scope: str | None = None,
+    historical_run_ids: tuple[str, ...] | None = None,
 ) -> list[dict[str, Any]]:
+    if sample_scope not in (None, LIVE_FORWARD_SCOPE, HISTORICAL_REPLAY_SCOPE):
+        raise ValueError(f"unsupported metrics sample_scope: {sample_scope}")
     stmt = (
         select(
             Recommendation.run_id,
@@ -2039,24 +2322,86 @@ def _precision_at_k(
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
         .outerjoin(RecommendationOutcome, RecommendationOutcome.recommendation_id == Recommendation.recommendation_id)
     )
-    uses_official_scope = run_mode == OFFICIAL_RUN_MODE and live_only
-    if uses_official_scope:
-        stmt = stmt.where(*official_sample_conditions())
-    elif run_mode:
-        if isinstance(run_mode, (list, tuple, set)):
-            stmt = stmt.where(
-                RecommendationRun.run_mode.in_(tuple(str(m) for m in run_mode))
+    if sample_scope == HISTORICAL_REPLAY_SCOPE:
+        if historical_run_ids is None:
+            cohort = canonical_historical_reconstruction_cohort(
+                db,
+                date_from=start_date,
+                date_to=end_date,
             )
-        else:
-            stmt = stmt.where(RecommendationRun.run_mode == str(run_mode))
-    if live_only and not uses_official_scope:
+            historical_run_ids = cohort.run_ids if cohort is not None else ()
+        if not historical_run_ids:
+            return [
+                {
+                    "k": k,
+                    "sample_runs": 0,
+                    "evaluated_count": 0,
+                    "success_count": 0,
+                    "precision": 0.0,
+                    "date_range": _window_meta(
+                        window_days,
+                        start_date,
+                        end_date,
+                        0,
+                        0,
+                    ),
+                }
+                for k in ks
+            ]
         stmt = stmt.where(
-            Recommendation.recommendation_id.like(
-                f"{OFFICIAL_RECOMMENDATION_PREFIX}%"
-            )
+            *historical_reconstruction_run_conditions(),
+            RecommendationRun.run_id.in_(historical_run_ids),
         )
-    if not uses_official_scope:
-        stmt = stmt.where(RecommendationRun.status == "completed")
+    elif sample_scope == LIVE_FORWARD_SCOPE:
+        canonical_run_ids = canonical_live_forward_run_ids(
+            db,
+            date_from=start_date,
+            date_to=end_date,
+        )
+        if not canonical_run_ids:
+            return [
+                {
+                    "k": k,
+                    "sample_runs": 0,
+                    "evaluated_count": 0,
+                    "success_count": 0,
+                    "precision": 0.0,
+                    "date_range": _window_meta(
+                        window_days,
+                        start_date,
+                        end_date,
+                        0,
+                        0,
+                    ),
+                }
+                for k in ks
+            ]
+        stmt = stmt.where(
+            *official_sample_conditions(),
+            RecommendationRun.run_id.in_(canonical_run_ids),
+        )
+    else:
+        uses_official_scope = (
+            sample_scope == LIVE_FORWARD_SCOPE
+            or (sample_scope is None and run_mode == OFFICIAL_RUN_MODE and live_only)
+        )
+        if uses_official_scope:
+            stmt = stmt.where(*official_sample_conditions())
+        elif run_mode:
+            if isinstance(run_mode, (list, tuple, set)):
+                stmt = stmt.where(
+                    RecommendationRun.run_mode.in_(tuple(str(m) for m in run_mode))
+                )
+            else:
+                stmt = stmt.where(RecommendationRun.run_mode == str(run_mode))
+        if live_only and not uses_official_scope:
+            stmt = stmt.where(
+                Recommendation.recommendation_id.like(
+                    f"{OFFICIAL_RECOMMENDATION_PREFIX}%"
+                )
+            )
+        if not uses_official_scope:
+            stmt = stmt.where(RecommendationRun.status == "completed")
     if start_date:
         stmt = stmt.where(Recommendation.trade_date >= start_date)
     if end_date:
@@ -2103,9 +2448,17 @@ def metrics_by_score_line(
     end_date: str | None = None,
     run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
     live_only: bool = True,
+    sample_scope: str | None = None,
 ) -> list[dict[str, Any]]:
     start, end = _resolve_window(window_days, start_date, end_date)
-    key = f"by_score_line:{','.join(str(line) for line in score_lines)}:{start or ''}:{end or ''}:{run_mode or 'all'}:{int(live_only)}"
+    cohort = _historical_cohort_for_metrics(
+        db,
+        sample_scope=sample_scope,
+        start_date=start,
+        end_date=end,
+    )
+    population_token = _metrics_population_token(sample_scope, cohort)
+    key = f"by_score_line:{','.join(str(line) for line in score_lines)}:{start or ''}:{end or ''}:{run_mode or 'all'}:{int(live_only)}:{population_token}"
     return _cached(
         key,
         lambda: _metrics_by_score_line(
@@ -2116,6 +2469,11 @@ def metrics_by_score_line(
             window_days,
             run_mode=run_mode,
             live_only=live_only,
+            sample_scope=sample_scope,
+            historical_run_ids=_historical_run_ids_for_metrics(
+                sample_scope,
+                cohort,
+            ),
         ),
     )
 
@@ -2128,14 +2486,24 @@ def _metrics_by_score_line(
     window_days: int | None = None,
     run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
     live_only: bool = True,
+    sample_scope: str | None = None,
+    historical_run_ids: tuple[str, ...] | None = None,
 ) -> list[dict[str, Any]]:
     rows = _scoped_recommendation_rows(
-        db, start_date, end_date, run_mode=run_mode, live_only=live_only,
+        db,
+        start_date,
+        end_date,
+        run_mode=run_mode,
+        live_only=live_only,
+        sample_scope=sample_scope,
+        historical_run_ids=historical_run_ids,
     )
     if not rows:
         return []
     benchmark_by_rec = _benchmark_returns_by_recommendation(db, rows)
-    horizon_records = _horizon_metric_records_by_recommendation(db, rows)
+    horizon_records = _horizon_metric_records_by_recommendation(
+        db, rows, cache_scope=sample_scope or "legacy",
+    )
     result: list[dict[str, Any]] = []
     total_count = len(rows)
     for score_line in score_lines:
@@ -2202,12 +2570,22 @@ def _metric_record_from_row(row: Any, benchmark_return_pct: float = 0.0) -> dict
     }
 
 
-def _horizon_metric_records_by_recommendation(db: Session, rows: list[Any]) -> dict[str, dict[int, dict[str, Any]]]:
-    # 跨 metrics 端点共享缓存：by_score_line/by_strategy/by_setup/overview 各自调用此函数，
-    # 冷启动时重复模拟 4 次（每次 ~526ms）。用行数 + 最新 trade_date 做指纹缓存。
+def _horizon_metric_records_by_recommendation(
+    db: Session,
+    rows: list[Any],
+    *,
+    cache_scope: str = "default",
+) -> dict[str, dict[int, dict[str, Any]]]:
+    # 跨 metrics 端点共享缓存：by_score_line/by_strategy/by_setup 各自调用此函数，
+    # 冷启动时会重复模拟（每次 ~526ms）。推荐 ID 集合指纹既允许同一窗口共享，
+    # 也避免同 scope 下不同窗口恰好行数、末日相同时误复用结果。
     # 30 秒 TTL 与 metrics 缓存一致，label_pending 后会 invalidate。
-    latest_td = max((str(getattr(r, "trade_date", "") or "") for r in rows), default="")
-    cache_key = f"horizon_records:{len(rows)}:{latest_td}"
+    recommendation_ids = sorted(
+        str(getattr(row, "recommendation_id", "") or "")
+        for row in rows
+    )
+    row_set_fingerprint = canonical_fingerprint(recommendation_ids)
+    cache_key = f"horizon_records:{cache_scope}:{row_set_fingerprint}"
     return _cached(cache_key, lambda: _compute_horizon_metric_records(db, rows))
 
 
@@ -2396,7 +2774,11 @@ def _scoped_recommendation_rows(
     end_date: str | None = None,
     run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
     live_only: bool = True,
+    sample_scope: str | None = None,
+    historical_run_ids: tuple[str, ...] | None = None,
 ) -> list[Any]:
+    if sample_scope not in (None, LIVE_FORWARD_SCOPE, HISTORICAL_REPLAY_SCOPE):
+        raise ValueError(f"unsupported metrics sample_scope: {sample_scope}")
     # 两步查询：先 SQL 去重拿 (trade_date, code) 分组下 final_score 最高的 recommendation_id（235 个），
     # 再按 id 取详情。避免查全部 1479 行大字段（feature_snapshot_json/market_context_json）再 Python 去重。
     # MySQL 8+ 窗口函数：ROW_NUMBER() OVER (PARTITION BY trade_date, code ORDER BY final_score DESC)
@@ -2417,21 +2799,51 @@ def _scoped_recommendation_rows(
         dedup_ids_stmt = dedup_ids_stmt.where(Recommendation.trade_date >= start_date)
     if end_date:
         dedup_ids_stmt = dedup_ids_stmt.where(Recommendation.trade_date <= end_date)
-    uses_official_scope = run_mode == OFFICIAL_RUN_MODE and live_only
-    if uses_official_scope:
-        dedup_ids_stmt = dedup_ids_stmt.where(*official_sample_conditions())
-    elif run_mode:
-        if isinstance(run_mode, (list, tuple, set)):
-            _modes = tuple(str(m) for m in run_mode)
-            dedup_ids_stmt = dedup_ids_stmt.where(RecommendationRun.run_mode.in_(_modes))
-        else:
-            dedup_ids_stmt = dedup_ids_stmt.where(RecommendationRun.run_mode == str(run_mode))
-    if live_only and not uses_official_scope:
+    if sample_scope == HISTORICAL_REPLAY_SCOPE:
+        if historical_run_ids is None:
+            cohort = canonical_historical_reconstruction_cohort(
+                db,
+                date_from=start_date,
+                date_to=end_date,
+            )
+            historical_run_ids = cohort.run_ids if cohort is not None else ()
+        if not historical_run_ids:
+            return []
         dedup_ids_stmt = dedup_ids_stmt.where(
-            Recommendation.recommendation_id.like(f"{OFFICIAL_RECOMMENDATION_PREFIX}%")
+            *historical_reconstruction_run_conditions(),
+            RecommendationRun.run_id.in_(historical_run_ids),
         )
-    if not uses_official_scope:
-        dedup_ids_stmt = dedup_ids_stmt.where(RecommendationRun.status == "completed")
+    elif sample_scope == LIVE_FORWARD_SCOPE:
+        canonical_run_ids = canonical_live_forward_run_ids(
+            db,
+            date_from=start_date,
+            date_to=end_date,
+        )
+        if not canonical_run_ids:
+            return []
+        dedup_ids_stmt = dedup_ids_stmt.where(
+            *official_sample_conditions(),
+            RecommendationRun.run_id.in_(canonical_run_ids),
+        )
+    else:
+        uses_official_scope = (
+            sample_scope == LIVE_FORWARD_SCOPE
+            or (sample_scope is None and run_mode == OFFICIAL_RUN_MODE and live_only)
+        )
+        if uses_official_scope:
+            dedup_ids_stmt = dedup_ids_stmt.where(*official_sample_conditions())
+        elif run_mode:
+            if isinstance(run_mode, (list, tuple, set)):
+                _modes = tuple(str(m) for m in run_mode)
+                dedup_ids_stmt = dedup_ids_stmt.where(RecommendationRun.run_mode.in_(_modes))
+            else:
+                dedup_ids_stmt = dedup_ids_stmt.where(RecommendationRun.run_mode == str(run_mode))
+        if live_only and not uses_official_scope:
+            dedup_ids_stmt = dedup_ids_stmt.where(
+                Recommendation.recommendation_id.like(f"{OFFICIAL_RECOMMENDATION_PREFIX}%")
+            )
+        if not uses_official_scope:
+            dedup_ids_stmt = dedup_ids_stmt.where(RecommendationRun.status == "completed")
     # 用子查询取每组 final_score 最大的 id（GROUP BY + MAX 定位，再 JOIN 回表）
     dedup_subq = dedup_ids_stmt.subquery()
     max_score_subq = (

@@ -33,7 +33,8 @@ BACKEND_DIR = os.path.join(os.path.dirname(__file__), "..", "backend")
 sys.path.insert(0, os.path.abspath(BACKEND_DIR))
 
 from app.db.session import SessionLocal  # noqa: E402
-from sqlalchemy import text  # noqa: E402
+from app.services.evidence.validation import canonical_live_forward_run_ids  # noqa: E402
+from sqlalchemy import bindparam, text  # noqa: E402
 
 # 与 self_check / feature_signal_guard 对齐：单桶最小可信样本、显著偏离阈值
 MIN_BUCKET_N = 20          # <20 桶胜率不可信（与 E 项 DEFAULT_EXPOSURE_MIN_SAMPLE=20 同源）
@@ -305,17 +306,32 @@ def evaluate_regime_defense(rep: dict[str, Any], baseline_wr: float = BASELINE_W
     }
 
 
-def _fetch_live_formal_ledger(db) -> list[dict]:
-    """从 DB 取 LIVE formal ledger（rec_* + run_mode=formal），每条带 feature_snapshot + outcome。"""
-    rows = db.execute(text("""
+def _fetch_live_formal_ledger(
+    db,
+    canonical_run_ids: tuple[str, ...] | None = None,
+) -> list[dict]:
+    """从 DB 取 exact canonical LIVE formal ledger。"""
+    run_ids = (
+        canonical_live_forward_run_ids(db)
+        if canonical_run_ids is None
+        else canonical_run_ids
+    )
+    if not run_ids:
+        return []
+    statement = text("""
         SELECT r.recommendation_id, o.outcome_label, o.executed_return,
                r.feature_snapshot_json
         FROM recommendation_outcomes o
         JOIN recommendations r ON r.recommendation_id = o.recommendation_id
         JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
         WHERE o.outcome_label IN ('success', 'failed')
+          AND u.run_id IN :canonical_run_ids
           AND r.recommendation_id LIKE 'rec_%'
-    """)).fetchall()
+    """).bindparams(bindparam("canonical_run_ids", expanding=True))
+    rows = db.execute(
+        statement,
+        {"canonical_run_ids": tuple(run_ids)},
+    ).fetchall()
     records: list[dict] = []
     for rid, label, ret, fsj in rows:
         fs = json.loads(fsj) if fsj else {}

@@ -256,7 +256,7 @@ def build_run_progress(run: Any) -> RunProgress:
         message=_get(run, "progress_message", "") or "",
         error_message=_get(run, "error_message"),
         heartbeat_stale=bool(_get(run, "is_stale", False)),
-        resumable=status in {"interrupted", "failed"},
+        resumable=bool(_get(run, "can_resume", False)),
     )
 
 

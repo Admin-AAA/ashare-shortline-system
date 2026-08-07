@@ -1396,6 +1396,9 @@ export type RecommendationCard = {
   recommendation_id: string;
   run_id: string;
   trade_date: string;
+  evidence_class?: string | null;
+  actual_generated_at?: string | null;
+  reconstruction_batch_id?: string | null;
   recommended_at: string;
   code: string;
   name: string;
@@ -1642,7 +1645,7 @@ export type RecommendationHistoryResponse = {
 
 export type RecommendationHistoryQuery = {
   code?: string;
-  label?: "success" | "failed" | "missed" | "pending";
+  label?: "success" | "failed" | "missed" | "pending" | "provisional";
   limit?: number;
   offset?: number;
 };
@@ -1997,6 +2000,9 @@ export type RunFunnelAudit = {
 };
 
 export type RunDetail = RunSummary & {
+  can_resume: boolean;
+  resume_block_code?: string | null;
+  resume_block_reason?: string | null;
   params: Record<string, unknown>;
   market_snapshot: MarketSnapshot;
   result_summary: Record<string, unknown>;
@@ -2234,9 +2240,11 @@ export type AlphaDecayFactor = {
 
 export type AlphaDecayResponse = {
   total: number;
-  early_period: string;
-  recent_period: string;
+  early_period?: string;
+  recent_period?: string;
   factors: AlphaDecayFactor[];
+  error?: string;
+  date_range: DateRangeMeta;
 };
 
 export type SkillStatsRow = {
@@ -2434,6 +2442,20 @@ export type AccuracyPolicyAudit = {
   }>;
 };
 
+export type HistoricalReconstructionCohort = {
+  batch_id: string;
+  window_start: string;
+  window_end: string;
+  expected_trade_date_count: number;
+  completed_trade_date_count: number;
+  completed_at: string;
+  cohort_identity_hash: string;
+  request_template_fingerprint: string;
+  strategy_policy_fingerprint: string;
+  execution_policy_fingerprint: string;
+  code_revision: string;
+};
+
 /** 9-KPI 评估指标（来自 /api/metrics/overview） */
 export type MetricsOverview = {
   total_recommendations: number;
@@ -2487,6 +2509,7 @@ export type MetricsOverview = {
   }>;
   accuracy_gate_summary: AccuracyGateSummary;
   accuracy_policy: AccuracyPolicyAudit;
+  historical_reconstruction_cohort?: HistoricalReconstructionCohort | null;
   date_range?: DateRangeMeta;
 };
 

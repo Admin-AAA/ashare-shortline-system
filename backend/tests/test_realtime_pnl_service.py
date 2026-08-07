@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from types import SimpleNamespace
 
 import pytest
 
 from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun
+from app.services.evidence import identity_from_persisted_run
 from app.services import realtime_pnl_service as svc
 
 
@@ -35,24 +37,25 @@ def test_load_pending_recs_includes_provisional_and_excludes_settled(db):
     provisional_id = "rec_test_realtime_pnl_provisional"
     settled_id = "rec_test_realtime_pnl_settled"
     unverified_id = "rec_test_realtime_pnl_unverified"
-    db.add(
-        RecommendationRun(
-            run_id=run_id,
-            run_name="实时盈亏 provisional 回归测试",
-            run_mode="formal",
-            trade_date="2026-07-24",
-            status="completed",
-            evidence_class="live_forward",
-            data_as_of="2026-07-24",
-            source_snapshot_id="realtime-pnl-snapshot",
-            actual_generated_at=datetime(2026, 7, 24, 6, 0),
-            evidence_identity_hash="d" * 64,
-            strategy_policy_fingerprint="a" * 64,
-            execution_policy_fingerprint="b" * 64,
-            code_revision="c" * 40,
-            provenance_schema_version=1,
-        )
+    forged_id = "rec_test_realtime_pnl_forged"
+    run = RecommendationRun(
+        run_id=run_id,
+        run_name="实时盈亏 provisional 回归测试",
+        run_mode="formal",
+        trade_date="2026-07-24",
+        status="completed",
+        evidence_class="live_forward",
+        data_as_of="2026-07-24",
+        source_snapshot_id="realtime-pnl-snapshot",
+        actual_generated_at=datetime(2026, 7, 24, 6, 0),
+        evidence_identity_hash="d" * 64,
+        strategy_policy_fingerprint="a" * 64,
+        execution_policy_fingerprint="b" * 64,
+        code_revision="c" * 40,
+        provenance_schema_version=1,
     )
+    run.evidence_identity_hash = identity_from_persisted_run(run).identity_hash
+    db.add(run)
     db.add(
         RecommendationRun(
             run_id="test_realtime_pnl_unverified_run",
@@ -60,6 +63,24 @@ def test_load_pending_recs_includes_provisional_and_excludes_settled(db):
             run_mode="formal",
             trade_date="2026-07-25",
             status="completed",
+        )
+    )
+    db.add(
+        RecommendationRun(
+            run_id="test_realtime_pnl_forged_run",
+            run_name="伪造实时盈亏行",
+            run_mode="formal",
+            trade_date="2026-07-24",
+            status="completed",
+            evidence_class="live_forward",
+            data_as_of="2026-07-24",
+            source_snapshot_id="realtime-pnl-forged-snapshot",
+            actual_generated_at=datetime(2026, 7, 24, 6, 0),
+            evidence_identity_hash="0" * 64,
+            strategy_policy_fingerprint="a" * 64,
+            execution_policy_fingerprint="b" * 64,
+            code_revision="c" * 40,
+            provenance_schema_version=1,
         )
     )
     db.add_all(
@@ -91,6 +112,15 @@ def test_load_pending_recs_includes_provisional_and_excludes_settled(db):
                 final_score=80,
                 status="pending",
             ),
+            Recommendation(
+                recommendation_id=forged_id,
+                run_id="test_realtime_pnl_forged_run",
+                trade_date="2026-07-24",
+                code="000004",
+                name="伪造待结算",
+                final_score=99,
+                status="pending",
+            ),
         ]
     )
     db.add_all(
@@ -114,6 +144,51 @@ def test_load_pending_recs_includes_provisional_and_excludes_settled(db):
     assert provisional_id in loaded_ids
     assert settled_id not in loaded_ids
     assert unverified_id not in loaded_ids
+    assert forged_id not in loaded_ids
+
+
+def test_cache_identity_changes_when_same_code_gets_new_recommendation(monkeypatch):
+    first = SimpleNamespace(
+        recommendation_id="rec_old",
+        run_id="run_old",
+        trade_date="2026-07-24",
+        code="600000",
+    )
+    second = SimpleNamespace(
+        recommendation_id="rec_new",
+        run_id="run_new",
+        trade_date="2026-07-25",
+        code="600000",
+    )
+    loaded = iter(([first], [second]))
+    fetch_calls: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(svc, "_load_pending_recs", lambda _db: next(loaded))
+    monkeypatch.setattr(
+        svc,
+        "_fetch_rtk_quotes",
+        lambda codes: fetch_calls.append(tuple(codes)) or {},
+    )
+    monkeypatch.setattr(
+        svc,
+        "compute_realtime_pnl_items",
+        lambda _db, recs, _quotes: [
+            {"recommendation_id": rec.recommendation_id} for rec in recs
+        ],
+    )
+    monkeypatch.setattr(
+        svc,
+        "_cache",
+        {"fetched_at": 0.0, "key": None, "value": None},
+    )
+
+    first_result = svc.list_pending_realtime_pnl(object())
+    second_result = svc.list_pending_realtime_pnl(object())
+
+    assert first_result["items"] == [{"recommendation_id": "rec_old"}]
+    assert second_result["items"] == [{"recommendation_id": "rec_new"}]
+    assert second_result["cached"] is False
+    assert fetch_calls == [("600000",), ("600000",)]
 
 
 def test_postclose_strategy_target_touch_uses_target_price(monkeypatch):

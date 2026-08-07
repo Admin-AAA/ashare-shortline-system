@@ -17,6 +17,7 @@ sys.path.insert(0, str(BASE_DIR))
 from sqlalchemy import select  # noqa: E402
 from app.db.session import SessionLocal  # noqa: E402
 from app.models.tables import RecommendationRun  # noqa: E402
+from app.services.runs.deletion_guard import DownstreamFactDeletionBlocked  # noqa: E402
 from app.services.workbench_service import delete_run  # noqa: E402
 
 
@@ -40,13 +41,22 @@ def main() -> int:
             return 0
 
         deleted = 0
+        blocked = 0
         for rid in run_ids:
-            ok = delete_run(db, str(rid))
+            try:
+                ok = delete_run(db, str(rid))
+            except DownstreamFactDeletionBlocked as exc:
+                blocked += 1
+                print(f"  ! 删除已阻断: {rid} ({', '.join(exc.blockers)})")
+                continue
             if ok:
                 deleted += 1
             else:
-                print(f"  ! 删除失败: {rid}")
+                print(f"  ! run 不存在: {rid}")
         print(f"已删除 {deleted} 个 run")
+        if blocked:
+            print(f"{blocked} 个 run 含下游事实，未执行删除")
+            return 1
         return 0
     finally:
         db.close()

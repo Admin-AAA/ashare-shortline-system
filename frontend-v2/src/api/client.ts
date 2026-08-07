@@ -68,6 +68,8 @@ export type AuthStatus = {
 const LONG_REQUEST_THRESHOLD_MS = 3000;
 const CONTROL_CONFIG_TIMEOUT_MS = 30_000;
 
+export type MetricsSampleScope = "live_forward" | "historical_replay";
+
 type RequestOptions = {
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -172,6 +174,13 @@ function json(method: string, body?: unknown): RequestInit {
 
 async function requestWithTimeout<T>(path: string, timeoutMs: number, init?: RequestInit): Promise<T> {
   return request<T>(path, init, { timeoutMs });
+}
+
+function metricsQuery(windowDays: number | undefined, sampleScope: MetricsSampleScope): string {
+  const params = new URLSearchParams();
+  if (windowDays !== undefined) params.set("window_days", String(windowDays));
+  params.set("sample_scope", sampleScope);
+  return params.toString();
 }
 
 export const api = {
@@ -360,16 +369,21 @@ export const api = {
   deletePreset: (id: string) => request<{ deleted: string }>(`/api/presets/${id}`, json("DELETE")),
 
   // 时间窗口：windowDays=N 取最近 N 天并截到统一结算截止日；不传则全部历史累计。
-  metricsOverview: (windowDays?: number, options?: RequestOptions) =>
-    request<MetricsOverview>(`/api/metrics/overview${windowDays ? `?window_days=${windowDays}` : ""}`, undefined, {
+  // sampleScope 必须显式传给质量指标，避免 LIVE 与历史回放研究证据混算。
+  metricsOverview: (windowDays?: number, sampleScope: MetricsSampleScope = "live_forward", options?: RequestOptions) => {
+    const params = metricsQuery(windowDays, sampleScope);
+    return request<MetricsOverview>(`/api/metrics/overview?${params}`, undefined, {
       timeoutMs: options?.timeoutMs ?? 30_000,
       signal: options?.signal,
-    }),
-  filterEffectiveness: (windowDays?: number, options?: RequestOptions) =>
-    request<FilterEffectiveness>(`/api/metrics/filter-effectiveness${windowDays ? `?window_days=${windowDays}` : ""}`, undefined, {
+    });
+  },
+  filterEffectiveness: (windowDays?: number, sampleScope: MetricsSampleScope = "live_forward", options?: RequestOptions) => {
+    const params = metricsQuery(windowDays, sampleScope);
+    return request<FilterEffectiveness>(`/api/metrics/filter-effectiveness?${params}`, undefined, {
       timeoutMs: options?.timeoutMs ?? 15_000,
       signal: options?.signal,
-    }),
+    });
+  },
   dataHealth: (options?: RequestOptions & { forceRefresh?: boolean }) =>
     request<DataHealthDiagnostic>(
       `/api/admin/data-health${options?.forceRefresh ? "?force_refresh=true" : ""}`,
@@ -391,15 +405,16 @@ export const api = {
   statsOverview: () => request<StatsOverview>(`/api/stats/overview`),
   statsBySkill: () => request<SkillStatsRow[]>(`/api/stats/by-skill`),
   statsByPreset: () => request<PresetStatsRow[]>(`/api/stats/by-preset`),
-  statsAlphaDecay: () => request<AlphaDecayResponse>(`/api/stats/alpha-decay`),
-  metricsByStrategy: (windowDays?: number) =>
-    request<StrategyStatsRow[]>(`/api/metrics/by-strategy${windowDays ? `?window_days=${windowDays}` : ""}`),
-  metricsBySetup: (windowDays?: number) =>
-    request<SetupStatsRow[]>(`/api/metrics/by-setup${windowDays ? `?window_days=${windowDays}` : ""}`),
-  precisionAtK: (windowDays?: number) =>
-    request<PrecisionAtKRow[]>(`/api/metrics/precision-at-k${windowDays ? `?window_days=${windowDays}` : ""}`),
-  metricsByScoreLine: (windowDays?: number) =>
-    request<ScoreLineStatsRow[]>(`/api/metrics/by-score-line${windowDays ? `?window_days=${windowDays}` : ""}`),
+  statsAlphaDecay: (windowDays?: number, sampleScope: MetricsSampleScope = "live_forward") =>
+    request<AlphaDecayResponse>(`/api/stats/alpha-decay?${metricsQuery(windowDays, sampleScope)}`),
+  metricsByStrategy: (windowDays?: number, sampleScope: MetricsSampleScope = "live_forward") =>
+    request<StrategyStatsRow[]>(`/api/metrics/by-strategy?${metricsQuery(windowDays, sampleScope)}`),
+  metricsBySetup: (windowDays?: number, sampleScope: MetricsSampleScope = "live_forward") =>
+    request<SetupStatsRow[]>(`/api/metrics/by-setup?${metricsQuery(windowDays, sampleScope)}`),
+  precisionAtK: (windowDays?: number, sampleScope: MetricsSampleScope = "live_forward") =>
+    request<PrecisionAtKRow[]>(`/api/metrics/precision-at-k?${metricsQuery(windowDays, sampleScope)}`),
+  metricsByScoreLine: (windowDays?: number, sampleScope: MetricsSampleScope = "live_forward") =>
+    request<ScoreLineStatsRow[]>(`/api/metrics/by-score-line?${metricsQuery(windowDays, sampleScope)}`),
   /** D 项诊断：真残留毒区 + 伪活跃反事实（与 self_check 同源，不改主口径） */
   dDiagnostics: (options?: RequestOptions) =>
     request<DDiagnostics>(`/api/metrics/d-diagnostics`, undefined, {
@@ -409,8 +424,8 @@ export const api = {
   /** 资金流因子预测力分析（T1 新因子，待前瞻验证候选） */
   capitalFlowFactor: () => request<CapitalFlowFactorResponse>(`/api/metrics/capital-flow-factor`),
   /** D 项净成本 + 板块(20cm/10cm)分解（指标页透出，与 self_check 板块拆分同源口径） */
-  dNetBreakdown: (windowDays?: number, options?: RequestOptions) =>
-    request<DNetBreakdown>(`/api/metrics/d-net${windowDays ? `?window_days=${windowDays}` : ""}`, undefined, {
+  dNetBreakdown: (windowDays?: number, sampleScope: MetricsSampleScope = "live_forward", options?: RequestOptions) =>
+    request<DNetBreakdown>(`/api/metrics/d-net?${metricsQuery(windowDays, sampleScope)}`, undefined, {
       timeoutMs: options?.timeoutMs ?? 30_000,
       signal: options?.signal,
     }),

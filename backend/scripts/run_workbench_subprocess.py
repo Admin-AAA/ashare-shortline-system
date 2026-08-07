@@ -11,6 +11,7 @@ import os
 import sys
 import traceback
 from datetime import datetime, timezone
+import logging
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -24,6 +25,8 @@ from app.db.session import SessionLocal  # noqa: E402
 from app.models.tables import RecommendationRun  # noqa: E402
 from app.services.runs.sqlalchemy_repository import SQLAlchemyRunRepository  # noqa: E402
 from app.services.runs.pipeline import run_staged_pipeline  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 
 async def _run(run_id: str) -> None:
@@ -46,16 +49,21 @@ def _mark_failed(run_id: str, exc: BaseException) -> None:
             run = db.get(RecommendationRun, run_id)
             if run is None:
                 return
-            if run.status not in {"queued", "running"}:
+            if run.status != "queued":
+                logger.warning(
+                    "subprocess failure cannot overwrite non-queued run %s", run_id
+                )
                 return
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             repository = SQLAlchemyRunRepository(db)
             managed = repository.get_run(run_id)
             if managed is not None:
-                from app.services.runs.coordinator import LegacyWorkbenchRunCoordinator
+                from app.services.runs.coordinator import RunCoordinator
 
-                LegacyWorkbenchRunCoordinator(repository).fail(run_id, now=now, message=str(exc))
-                db.commit()
+                if RunCoordinator(repository).spawn_failed(run_id, now=now, message=str(exc)):
+                    db.commit()
+                else:
+                    db.rollback()
                 return
             run.status = "failed"
             run.error_message = str(exc)

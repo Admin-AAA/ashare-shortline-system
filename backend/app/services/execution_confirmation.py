@@ -20,6 +20,7 @@ from app.engine.skill_loader import load_skills, StrategySkill
 from app.engine.strategy_runner import explain_skill_prefilter, run_strategy
 from app.engine.trading_calendar import latest_allowed_quote_date
 from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome
+from app.services.evidence.validation import canonical_live_forward_run_ids
 from app.services.outcome_simulation import _is_intraday_recommendation
 
 
@@ -325,6 +326,15 @@ def confirm_recommendation_execution(
 ) -> dict[str, Any] | None:
     rec = db.get(Recommendation, recommendation_id)
     if rec is None:
+        return None
+    canonical_run_ids = canonical_live_forward_run_ids(
+        db,
+        trade_date=str(rec.trade_date),
+    )
+    if str(rec.run_id) not in canonical_run_ids:
+        return None
+    outcome = db.get(RecommendationOutcome, recommendation_id)
+    if not is_unsettled_formal_rec(rec, outcome):
         return None
 
     from app.core.config import get_settings

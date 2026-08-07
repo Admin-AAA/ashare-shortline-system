@@ -3,6 +3,7 @@ import uuid
 
 from app.api.recommendations import outcome_summary
 from app.models.tables import Recommendation, RecommendationOutcome, RecommendationRun
+from app.services.evidence import identity_from_persisted_run
 from app.services.outcome_service import _precision_at_k
 
 
@@ -14,24 +15,28 @@ def test_outcome_summary_excludes_unverified_formal_rows(db) -> None:
     canonical_rec_id = f"rec_summary_canonical_{suffix}"
     unverified_rec_id = f"rec_summary_unverified_{suffix}"
 
+    canonical_run = RecommendationRun(
+        run_id=canonical_run_id,
+        run_name="canonical summary",
+        run_mode="formal",
+        trade_date="2026-07-24",
+        status="completed",
+        evidence_class="live_forward",
+        data_as_of="2026-07-24",
+        source_snapshot_id=f"summary-snapshot-{suffix}",
+        actual_generated_at=datetime(2026, 7, 24, 6, 0),
+        evidence_identity_hash="d" * 64,
+        strategy_policy_fingerprint="a" * 64,
+        execution_policy_fingerprint="b" * 64,
+        code_revision="c" * 40,
+        provenance_schema_version=1,
+    )
+    canonical_run.evidence_identity_hash = identity_from_persisted_run(
+        canonical_run
+    ).identity_hash
     db.add_all(
         [
-            RecommendationRun(
-                run_id=canonical_run_id,
-                run_name="canonical summary",
-                run_mode="formal",
-                trade_date="2026-07-24",
-                status="completed",
-                evidence_class="live_forward",
-                data_as_of="2026-07-24",
-                source_snapshot_id=f"summary-snapshot-{suffix}",
-                actual_generated_at=datetime(2026, 7, 24, 6, 0),
-                evidence_identity_hash="d" * 64,
-                strategy_policy_fingerprint="a" * 64,
-                execution_policy_fingerprint="b" * 64,
-                code_revision="c" * 40,
-                provenance_schema_version=1,
-            ),
+            canonical_run,
             RecommendationRun(
                 run_id=unverified_run_id,
                 run_name="unverified summary",

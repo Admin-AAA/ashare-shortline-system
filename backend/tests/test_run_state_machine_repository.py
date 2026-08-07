@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -15,7 +16,11 @@ from app.services.runs.contracts import (
     RunTrigger,
     parse_run_request,
 )
-from app.services.runs.coordinator import LegacyWorkbenchRunCoordinator, RunResourceLeases
+from app.services.runs.coordinator import (
+    LegacyWorkbenchRunCoordinator,
+    RunResourceLeases,
+    WorkerLease,
+)
 from app.services.runs.repository import (
     CheckpointCommit,
     CompareAndSetOutcome,
@@ -25,7 +30,11 @@ from app.services.runs.repository import (
     TransitionCommit,
 )
 from app.services.runs.sqlalchemy_repository import SQLAlchemyRunRepository
-from app.services.runs.state_machine import RunStateMachine
+from app.services.runs.state_machine import (
+    ResumeCheck,
+    RunStateMachine,
+    RunStateTransitionError,
+)
 
 
 NOW = datetime(2026, 7, 14, 9, 0, 0)
@@ -368,16 +377,25 @@ def test_spawn_failure_failed_cancelled_and_interrupted_resume_are_explicit():
         assert interrupted.lease is None
         assert interrupted.last_committed_phase is RunPhase.PREPARE
 
-        assert coordinator.resume("run-interrupted", now=NOW + timedelta(seconds=21))
-        session.commit()
-        resumed = repo.get_run("run-interrupted")
-        assert resumed is not None and resumed.status is RunStatus.RUNNING
-        assert coordinator.acquire_worker_lease(
-            "run-interrupted",
-            now=NOW + timedelta(seconds=22),
-            ttl=timedelta(seconds=10),
-            owner_id="resumed-worker",
-        ) is not None
+        with pytest.raises(RunStateTransitionError) as exc_info:
+            coordinator.resume(
+                "run-interrupted",
+                now=NOW + timedelta(seconds=21),
+                verified_resume=ResumeCheck(
+                    last_committed_phase=RunPhase.PREPARE,
+                    side_effect_key="prepare:run-interrupted",
+                    has_active_lease=False,
+                    collection_seal_verified=True,
+                ),
+            )
+        assert (
+            exc_info.value.code
+            is RunErrorCode.RESUME_REQUIRES_PERSISTENCE_CHECKPOINT
+        )
+        unchanged = repo.get_run("run-interrupted")
+        assert unchanged is not None
+        assert unchanged.status is RunStatus.INTERRUPTED
+        assert unchanged.last_committed_phase is RunPhase.PREPARE
     finally:
         session.close()
 
@@ -402,8 +420,13 @@ def test_stage_failure_and_terminal_paths_release_counted_agent_db_and_temp_leas
         _create(repo, session, "run-failed-resource-cleanup")
         leased = _start_and_lease(repo, session, "run-failed-resource-cleanup")
         assert leased.lease is not None
+        worker_lease = WorkerLease(
+            run_id="run-failed-resource-cleanup",
+            token=leased.lease.token,
+            revision=leased.revision,
+        )
         assert coordinator.fail(
-            "run-failed-resource-cleanup",
+            worker_lease,
             now=NOW + timedelta(seconds=2),
             message="stage failed",
         )
@@ -413,7 +436,7 @@ def test_stage_failure_and_terminal_paths_release_counted_agent_db_and_temp_leas
 
         # Cleanup is idempotent even if a caller retries terminal handling.
         assert coordinator.fail(
-            "run-failed-resource-cleanup",
+            worker_lease,
             now=NOW + timedelta(seconds=3),
             message="duplicate failure",
         ) is False

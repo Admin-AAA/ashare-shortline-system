@@ -408,7 +408,12 @@ def _decode_skill_breakdown(value: Any) -> list[Mapping[str, Any]]:
 
 
 def _load_shadow_inputs(db: Session) -> tuple[list[dict[str, Any]], dict[str, set[str]], dict[str, list[float]], int, int]:
-    """Read only complete formal LIVE_FORWARD current recommendation outcomes."""
+    """Read only canonical formal LIVE_FORWARD current recommendation outcomes."""
+    from app.services.evidence.validation import canonical_live_forward_run_ids
+
+    live_run_ids = canonical_live_forward_run_ids(db)
+    if not live_run_ids:
+        return [], {}, {}, 0, 0
     stmt = (
         select(Recommendation, RecommendationOutcome)
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
@@ -416,7 +421,10 @@ def _load_shadow_inputs(db: Session) -> tuple[list[dict[str, Any]], dict[str, se
             RecommendationOutcome,
             RecommendationOutcome.recommendation_id == Recommendation.recommendation_id,
         )
-        .where(*_official_live_conditions())
+        .where(
+            *_official_live_conditions(),
+            RecommendationRun.run_id.in_(live_run_ids),
+        )
         .order_by(Recommendation.recommended_at.asc(), Recommendation.recommendation_id.asc())
     )
     rows = db.execute(stmt).all()

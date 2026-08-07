@@ -6,6 +6,7 @@
 """
 from datetime import datetime
 
+from app.services.evidence import identity_from_persisted_run
 from app.services.outcome_service import (
     _net_pl_ratio,
     _pure_pollution_keys_from_rows,
@@ -32,7 +33,7 @@ EXPECTED_KEYS = {
 def _add_formal_recommendation(db, *, trade_date, suffix, outcome_label=None, executed_return=0.0):
     run_id = f"run_recent_window_{suffix}"
     recommendation_id = f"rec_recent_window_{suffix}"
-    db.add(RecommendationRun(
+    run = RecommendationRun(
         run_id=run_id,
         run_name="近期胜率窗口测试",
         run_mode="formal",
@@ -48,7 +49,9 @@ def _add_formal_recommendation(db, *, trade_date, suffix, outcome_label=None, ex
         code_revision="c" * 40,
         provenance_schema_version=1,
         status="completed",
-    ))
+    )
+    run.evidence_identity_hash = identity_from_persisted_run(run).identity_hash
+    db.add(run)
     db.add(Recommendation(
         recommendation_id=recommendation_id,
         run_id=run_id,

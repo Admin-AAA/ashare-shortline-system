@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from app.engine.trading_costs import ADDITIONAL_COST_PCT
 
@@ -45,6 +45,7 @@ DEDUP_LIVE_FORMAL_CAPITAL_FLOW_SQL = text("""
         JOIN recommendation_outcomes o ON o.recommendation_id = r.recommendation_id
         JOIN capital_flow cf ON cf.code = r.code AND cf.trade_date = r.trade_date
         WHERE rr.run_mode = 'formal'
+          AND rr.run_id IN :canonical_run_ids
           AND r.recommendation_id LIKE 'rec_%'
           AND o.outcome_label IN ('success', 'failed')
           AND cf.main_net_inflow_yi IS NOT NULL
@@ -56,12 +57,22 @@ DEDUP_LIVE_FORMAL_CAPITAL_FLOW_SQL = text("""
     FROM ranked
     WHERE sample_rank = 1
     ORDER BY trade_date, code
-""")
+""").bindparams(bindparam("canonical_run_ids", expanding=True))
 
 
-def fetch_dedup_live_formal_capital_flow(db: Any) -> list[dict[str, Any]]:
-    """Return one settled LIVE formal observation per ``(code, trade_date)``."""
-    return [dict(row._mapping) for row in db.execute(DEDUP_LIVE_FORMAL_CAPITAL_FLOW_SQL).fetchall()]
+def fetch_dedup_live_formal_capital_flow(
+    db: Any,
+    canonical_run_ids: Sequence[str],
+) -> list[dict[str, Any]]:
+    """Return one settled canonical LIVE observation per ``(code, trade_date)``."""
+    run_ids = tuple(str(run_id) for run_id in canonical_run_ids if str(run_id))
+    if not run_ids:
+        return []
+    rows = db.execute(
+        DEDUP_LIVE_FORMAL_CAPITAL_FLOW_SQL,
+        {"canonical_run_ids": run_ids},
+    ).fetchall()
+    return [dict(row._mapping) for row in rows]
 
 
 def _metric_block(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:

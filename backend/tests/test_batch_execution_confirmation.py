@@ -34,6 +34,7 @@ from app.models.tables import (
     RecommendationOutcome,
     RecommendationRun,
 )
+from app.services.evidence import identity_from_persisted_run
 from app.services import batch_execution_confirmation as svc
 
 
@@ -58,7 +59,24 @@ def test_batch_item_keeps_existing_holding_decision_for_history_page():
     assert item["holding_decision"] == holding_decision
 
 def _make_run(db: Session, run_id: str, trade_date: str = "2026-07-28") -> str:
-    db.add(RecommendationRun(run_id=run_id, run_name="批量确认测试", run_mode="formal", trade_date=trade_date))
+    run = RecommendationRun(
+        run_id=run_id,
+        run_name="批量确认测试",
+        run_mode="formal",
+        trade_date=trade_date,
+        data_as_of=trade_date,
+        source_snapshot_id=f"snapshot-{run_id}",
+        evidence_class="live_forward",
+        actual_generated_at=datetime.fromisoformat(f"{trade_date}T02:00:00"),
+        strategy_policy_fingerprint="a" * 64,
+        execution_policy_fingerprint="b" * 64,
+        code_revision="c" * 40,
+        provenance_schema_version=1,
+        status="completed",
+    )
+    run.evidence_identity_hash = identity_from_persisted_run(run).identity_hash
+    db.add(run)
+    db.flush()
     return run_id
 
 
@@ -214,6 +232,27 @@ def test_pending_provisional_eligible_settled_excluded(db):
     assert failed not in eligible_ids
     assert missed not in eligible_ids
     assert skipped == 3  # success/failed/missed
+
+
+def test_historical_replay_and_forged_live_are_not_execution_eligible(db):
+    replay_run_id = _make_run(db, "test_batch_replay_run")
+    replay_run = db.get(RecommendationRun, replay_run_id)
+    replay_run.evidence_class = "historical_reconstruction"
+    replay_run.reconstruction_batch_id = "batch-replay"
+    replay_run.actual_generated_at = datetime(2026, 8, 1, 2, 0)
+    replay_run.evidence_identity_hash = identity_from_persisted_run(replay_run).identity_hash
+    replay_rec = _make_rec(db, "test_batch_replay_rec", replay_run_id, "000006")
+
+    forged_run_id = _make_run(db, "test_batch_forged_run")
+    forged_run = db.get(RecommendationRun, forged_run_id)
+    forged_run.evidence_identity_hash = "0" * 64
+    forged_rec = _make_rec(db, "test_batch_forged_rec", forged_run_id, "000007")
+    db.flush()
+
+    eligible, skipped = svc._load_eligible_recs(db, [replay_rec, forged_rec])
+
+    assert eligible == []
+    assert skipped == 2
 
 
 def test_empty_after_filter_does_not_call_quote_provider(db, monkeypatch):

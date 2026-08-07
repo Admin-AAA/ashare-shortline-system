@@ -23,6 +23,51 @@ if str(BACKEND_ROOT) not in sys.path:
 import diagnose_phase_information as dpi  # type: ignore[import-not-found]
 
 
+class _LedgerResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+
+class _LedgerDb:
+    def __init__(self, rows):
+        self.rows = rows
+        self.executions = []
+
+    def execute(self, statement, params):
+        self.executions.append((statement, params))
+        return _LedgerResult(self.rows)
+
+
+def test_fetch_live_formal_ledger_fails_closed_and_binds_canonical_ids(monkeypatch):
+    db = _LedgerDb([
+        ("rec_phase", "success", 2.0, '{"market_regime":"弱势"}'),
+    ])
+    monkeypatch.setattr(
+        dpi,
+        "canonical_live_forward_run_ids",
+        lambda _db: (),
+    )
+
+    assert dpi._fetch_live_formal_ledger(db) == []
+    assert db.executions == []
+
+    records = dpi._fetch_live_formal_ledger(db, ("run_live",))
+
+    assert records == [
+        {
+            "regime": "弱势",
+            "sentiment": "?",
+            "win": True,
+            "ret": 2.0,
+        }
+    ]
+    assert db.executions[0][1] == {"canonical_run_ids": ("run_live",)}
+    assert "IN (__[POSTCOMPILE_canonical_run_ids])" in str(db.executions[0][0])
+
+
 def test_extract_regime_sentiment():
     assert dpi.extract_regime_sentiment(None) == ("?", "?")
     assert dpi.extract_regime_sentiment({}) == ("?", "?")

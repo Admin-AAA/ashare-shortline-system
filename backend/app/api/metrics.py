@@ -1,9 +1,14 @@
+import logging
+from typing import Literal
+
 from fastapi import Depends, Query
 from app.api.contracts import ContractRouter as APIRouter
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
-import logging
 
 from app.db.session import get_db
+from app.services.evidence.validation import canonical_live_forward_run_ids
+from app.services.official_sample_scope import LIVE_FORWARD_SCOPE
 from app.services.outcome_service import (
     board_and_net_breakdown,
     exit_ambiguity_metrics,
@@ -37,14 +42,28 @@ def _end_date_q() -> "Query":
     return Query(default=None, description="显式截止日期 YYYY-MM-DD（window_days 优先）")
 
 
+def _sample_scope_q() -> "Query":
+    return Query(
+        default=LIVE_FORWARD_SCOPE,
+        description="样本口径：live_forward=前瞻正式证据；historical_replay=显式历史重建研究证据",
+    )
+
+
 @router.get("/overview")
 def overview(
     db: Session = Depends(get_db),
     window_days: int | None = _window_days_q(),
     start_date: str | None = _start_date_q(),
     end_date: str | None = _end_date_q(),
+    sample_scope: Literal["live_forward", "historical_replay"] = _sample_scope_q(),
 ):
-    return overview_metrics(db, window_days=window_days, start_date=start_date, end_date=end_date)
+    return overview_metrics(
+        db,
+        window_days=window_days,
+        start_date=start_date,
+        end_date=end_date,
+        sample_scope=sample_scope,
+    )
 
 
 @router.get("/d-net")
@@ -53,10 +72,15 @@ def d_net(
     window_days: int | None = _window_days_q(),
     start_date: str | None = _start_date_q(),
     end_date: str | None = _end_date_q(),
+    sample_scope: Literal["live_forward", "historical_replay"] = _sample_scope_q(),
 ):
     """D 项净成本 + 板块(20cm/10cm)分解（北极星 D 项 observability）。"""
     return board_and_net_breakdown(
-        db, window_days=window_days, start_date=start_date, end_date=end_date,
+        db,
+        window_days=window_days,
+        start_date=start_date,
+        end_date=end_date,
+        sample_scope=sample_scope,
     )
 
 
@@ -65,8 +89,14 @@ def exit_ambiguity(
     db: Session = Depends(get_db),
     start_date: str | None = _start_date_q(),
     end_date: str | None = _end_date_q(),
+    sample_scope: Literal["live_forward", "historical_replay"] = _sample_scope_q(),
 ):
-    return exit_ambiguity_metrics(db, start_date=start_date, end_date=end_date)
+    return exit_ambiguity_metrics(
+        db,
+        start_date=start_date,
+        end_date=end_date,
+        sample_scope=sample_scope,
+    )
 
 
 @router.get("/by-strategy")
@@ -75,8 +105,15 @@ def by_strategy(
     window_days: int | None = _window_days_q(),
     start_date: str | None = _start_date_q(),
     end_date: str | None = _end_date_q(),
+    sample_scope: Literal["live_forward", "historical_replay"] = _sample_scope_q(),
 ):
-    return metrics_by_strategy(db, window_days=window_days, start_date=start_date, end_date=end_date)
+    return metrics_by_strategy(
+        db,
+        window_days=window_days,
+        start_date=start_date,
+        end_date=end_date,
+        sample_scope=sample_scope,
+    )
 
 
 @router.get("/by-setup")
@@ -85,8 +122,15 @@ def by_setup(
     window_days: int | None = _window_days_q(),
     start_date: str | None = _start_date_q(),
     end_date: str | None = _end_date_q(),
+    sample_scope: Literal["live_forward", "historical_replay"] = _sample_scope_q(),
 ):
-    return metrics_by_setup(db, window_days=window_days, start_date=start_date, end_date=end_date)
+    return metrics_by_setup(
+        db,
+        window_days=window_days,
+        start_date=start_date,
+        end_date=end_date,
+        sample_scope=sample_scope,
+    )
 
 
 @router.get("/precision-at-k")
@@ -95,8 +139,15 @@ def metric_precision_at_k(
     window_days: int | None = _window_days_q(),
     start_date: str | None = _start_date_q(),
     end_date: str | None = _end_date_q(),
+    sample_scope: Literal["live_forward", "historical_replay"] = _sample_scope_q(),
 ):
-    return precision_at_k(db, window_days=window_days, start_date=start_date, end_date=end_date)
+    return precision_at_k(
+        db,
+        window_days=window_days,
+        start_date=start_date,
+        end_date=end_date,
+        sample_scope=sample_scope,
+    )
 
 
 @router.get("/by-score-line")
@@ -105,8 +156,15 @@ def by_score_line(
     window_days: int | None = _window_days_q(),
     start_date: str | None = _start_date_q(),
     end_date: str | None = _end_date_q(),
+    sample_scope: Literal["live_forward", "historical_replay"] = _sample_scope_q(),
 ):
-    return metrics_by_score_line(db, window_days=window_days, start_date=start_date, end_date=end_date)
+    return metrics_by_score_line(
+        db,
+        window_days=window_days,
+        start_date=start_date,
+        end_date=end_date,
+        sample_scope=sample_scope,
+    )
 
 
 @router.get("/filter-effectiveness")
@@ -115,8 +173,15 @@ def metric_filter_effectiveness(
     window_days: int | None = _window_days_q(),
     start_date: str | None = _start_date_q(),
     end_date: str | None = _end_date_q(),
+    sample_scope: Literal["live_forward", "historical_replay"] = _sample_scope_q(),
 ):
-    return filter_effectiveness(db, window_days=window_days, start_date=start_date, end_date=end_date)
+    return filter_effectiveness(
+        db,
+        window_days=window_days,
+        start_date=start_date,
+        end_date=end_date,
+        sample_scope=sample_scope,
+    )
 
 
 @router.get("/d-diagnostics")
@@ -129,12 +194,21 @@ def d_diagnostics(db: Session = Depends(get_db)):
     import sys
     from pathlib import Path
 
-    from sqlalchemy import text
-
     scripts = Path(__file__).resolve().parents[3] / "scripts"
     if str(scripts) not in sys.path:
         sys.path.insert(0, str(scripts))
     import self_check  # type: ignore[import-not-found]
+
+    canonical_run_ids = canonical_live_forward_run_ids(db)
+    if not canonical_run_ids:
+        return {
+            "residual_n": 0,
+            "modes": [],
+            "pseudo_active": None,
+            "triage": None,
+            "phase_information": None,
+            "note": "no canonical LIVE runs",
+        }
 
     skills = self_check._load_skills_once()
     if not skills:
@@ -147,19 +221,22 @@ def d_diagnostics(db: Session = Depends(get_db)):
             "note": "no skills loaded",
         }
 
+    cov_statement = text(
+        """
+        SELECT r.recommendation_id, o.outcome_label, o.executed_return,
+               r.feature_snapshot_json, r.skill_breakdown_json,
+               o.exit_reason, o.max_return, r.trade_date, r.final_score
+        FROM recommendation_outcomes o
+        JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+        WHERE o.outcome_label IN ('success', 'failed')
+          AND u.run_id IN :canonical_run_ids
+          AND r.recommendation_id LIKE 'rec_%'
+        """
+    ).bindparams(bindparam("canonical_run_ids", expanding=True))
     cov_rows = db.execute(
-        text(
-            """
-            SELECT r.recommendation_id, o.outcome_label, o.executed_return,
-                   r.feature_snapshot_json, r.skill_breakdown_json,
-                   o.exit_reason, o.max_return, r.trade_date, r.final_score
-            FROM recommendation_outcomes o
-            JOIN recommendations r ON r.recommendation_id = o.recommendation_id
-            JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
-            WHERE o.outcome_label IN ('success', 'failed')
-              AND r.recommendation_id LIKE 'rec_%'
-            """
-        )
+        cov_statement,
+        {"canonical_run_ids": canonical_run_ids},
     ).fetchall()
     uncovered = self_check._collect_uncovered_failures(cov_rows, skills)
 
@@ -241,21 +318,24 @@ def d_diagnostics(db: Session = Depends(get_db)):
         }
 
     # T35：residual triage（污染/伪活跃/单日簇/稀疏）— 与 self_check 同源
+    poll_statement = text(
+        """
+        SELECT r.code, r.trade_date, o.outcome_label, o.executed_return, u.score_line,
+               JSON_EXTRACT(r.feature_snapshot_json,
+                            '$.score_line_meta.dynamic_soft_floor_applied') AS soft,
+               JSON_UNQUOTE(JSON_EXTRACT(r.feature_snapshot_json,
+                            '$.score_line_meta.market_base')) AS mbase
+        FROM recommendation_outcomes o
+        JOIN recommendations r ON r.recommendation_id = o.recommendation_id
+        JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
+        WHERE o.outcome_label IN ('success', 'failed')
+          AND u.run_id IN :canonical_run_ids
+          AND r.recommendation_id LIKE 'rec_%'
+        """
+    ).bindparams(bindparam("canonical_run_ids", expanding=True))
     poll_raw = db.execute(
-        text(
-            """
-            SELECT r.code, r.trade_date, o.outcome_label, o.executed_return, u.score_line,
-                   JSON_EXTRACT(r.feature_snapshot_json,
-                                '$.score_line_meta.dynamic_soft_floor_applied') AS soft,
-                   JSON_UNQUOTE(JSON_EXTRACT(r.feature_snapshot_json,
-                                '$.score_line_meta.market_base')) AS mbase
-            FROM recommendation_outcomes o
-            JOIN recommendations r ON r.recommendation_id = o.recommendation_id
-            JOIN recommendation_runs u ON r.run_id = u.run_id AND u.run_mode = 'formal'
-            WHERE o.outcome_label IN ('success', 'failed')
-              AND r.recommendation_id LIKE 'rec_%'
-            """
-        )
+        poll_statement,
+        {"canonical_run_ids": canonical_run_ids},
     ).fetchall()
     pure_keys = set((self_check._pure_pollution_keys(list(poll_raw)) or {}).get("union") or set())
     triage_raw = (
@@ -306,7 +386,7 @@ def d_diagnostics(db: Session = Depends(get_db)):
         if spec is not None and spec.loader is not None:
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
-            records = mod._fetch_live_formal_ledger(db)
+            records = mod._fetch_live_formal_ledger(db, canonical_run_ids)
             if records and len(records) >= 30:
                 rep = mod.build_phase_report(records)
                 alpha = getattr(mod, "ALPHA", 0.05)
@@ -377,7 +457,10 @@ def capital_flow_factor(db: Session = Depends(get_db)):
         summarize_discovery_oos,
     )
 
-    rows = fetch_dedup_live_formal_capital_flow(db)
+    rows = fetch_dedup_live_formal_capital_flow(
+        db,
+        canonical_live_forward_run_ids(db),
+    )
 
     if len(rows) < 20:
         return {"sample_count": len(rows), "factors": [], "best_factor": None,
