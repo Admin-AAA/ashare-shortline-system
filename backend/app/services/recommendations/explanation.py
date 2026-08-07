@@ -10,13 +10,19 @@ def loads_json(value: Any, default: Any) -> Any:
     if value is None:
         return default
     if isinstance(value, dict | list):
-        return value
-    if isinstance(value, str):
+        parsed = value
+    elif isinstance(value, str):
         try:
-            return json.loads(value)
+            parsed = json.loads(value)
         except json.JSONDecodeError:
             return default
-    return default
+    else:
+        return default
+    if isinstance(default, dict) and not isinstance(parsed, dict):
+        return default
+    if isinstance(default, list) and not isinstance(parsed, list):
+        return default
+    return parsed
 
 
 def risk_level_from_tags(tags: list[str]) -> str:

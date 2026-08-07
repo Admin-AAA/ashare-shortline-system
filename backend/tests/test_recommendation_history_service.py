@@ -63,7 +63,7 @@ def test_history_summary_uses_settled_net_returns_only():
         "total_net_return": 2.86,
         "additional_cost_pct": 0.07,
         "methodology": {
-            "sample_scope": "official_live_forward_v1",
+            "sample_scope": "canonical_history_live_and_reconstruction_v1",
             "entry_policy": "causal_strategy_entry_v1",
             "win_definition": "executed_net_return_gt_zero",
             "deduplication": "trade_date_and_code_highest_score",

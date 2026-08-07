@@ -4,6 +4,8 @@ from __future__ import annotations
 import dataclasses
 from datetime import datetime, timedelta, timezone
 
+from types import SimpleNamespace
+
 import pytest
 
 from app.services.evidence import (
@@ -14,6 +16,7 @@ from app.services.evidence import (
     EvidenceSnapshotIdentity,
     RunSource,
     build_recommendation_evidence_identity,
+    has_canonical_persisted_identity,
 )
 
 
@@ -87,6 +90,11 @@ def test_only_provenance_complete_same_business_day_formal_can_be_live():
     # A replay remains reconstruction even when generated on the signal date.  The
     # display name/scope cannot be supplied to this canonical API to promote it.
     assert _build(RunSource.HISTORICAL_REPLAY).evidence_class is EvidenceClass.HISTORICAL_RECONSTRUCTION
+    with pytest.raises(EvidenceIdentityError, match="on or before signal_date"):
+        _build(
+            RunSource.HISTORICAL_REPLAY,
+            snapshot=_snapshot(data_as_of="2026-07-15"),
+        )
     with pytest.raises(TypeError, match="run_name"):
         _build(RunSource.UNKNOWN, run_name="LIVE_FORWARD")
     with pytest.raises(TypeError, match="evaluation_scope"):
@@ -126,6 +134,28 @@ def test_identity_is_immutable_canonical_and_uses_every_required_fact():
         _build(RunSource.BACKTEST, code_revision="f" * 40),
     )
     assert all(item.identity_hash != baseline.identity_hash for item in changed_identities)
+
+
+def test_persisted_identity_hash_validation_fails_closed_for_non_hex_text():
+    identity = _build(RunSource.FORMAL)
+    row = SimpleNamespace(
+        **identity.canonical_payload(),
+        trade_date=identity.signal_date,
+        evidence_identity_hash="é" * 64,
+    )
+
+    assert has_canonical_persisted_identity(row) is False
+
+
+def test_historical_reconstruction_rejects_placeholder_provenance_identifiers():
+    for snapshot_id in ("unknown", "unavailable", "none"):
+        with pytest.raises(EvidenceIdentityError, match="verified snapshot"):
+            _build(
+                RunSource.HISTORICAL_REPLAY,
+                snapshot=_snapshot(snapshot_id=snapshot_id),
+            )
+    with pytest.raises(EvidenceIdentityError, match="code revision"):
+        _build(RunSource.HISTORICAL_REPLAY, code_revision="unknown")
 
 
 def test_builder_accepts_canonical_policy_objects_and_rejects_invalid_provenance():

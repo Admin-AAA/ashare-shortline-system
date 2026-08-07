@@ -19,6 +19,7 @@ from app.schemas.dashboard import (
 )
 from app.api.dashboard import (
     DASHBOARD_POOL_SCOPE_NOTE,
+    _build_dashboard_hardening,
     _select_dashboard_market_snapshot,
     _select_dashboard_recommendation_run,
     _select_dashboard_run,
@@ -30,6 +31,7 @@ from app.api.dashboard import (
 )
 from app.services.dashboard_quality_service import build_quality_scorecard, _pick_latest_backtest
 from app.services.candidates.trace import candidate_trace_row
+from app.services.evidence import identity_from_persisted_run
 from app.services.workbench_service import _select_latest_bootstrap_run, list_dashboard_recommendations
 from app.services.recommendations.projection import (
     build_cockpit_recommendation,
@@ -41,7 +43,75 @@ from app.services.recommendations.projection import (
     serialize_recommendation,
 )
 from app.services.recommendations.explanation import consensus_label
-from app.services.runs.progress import is_resumable_status, progress_pct
+from app.services.runs.progress import progress_pct
+
+
+def _seal_run_identity(run):
+    run.evidence_identity_hash = identity_from_persisted_run(run).identity_hash
+    return run
+
+
+def test_dashboard_hardening_reports_forged_live_identity_without_promoting_it(db):
+    from app.models.tables import RecommendationRun
+
+    forged = RecommendationRun(
+        run_id="dashboard_forged_live_identity",
+        run_name="forged dashboard live claim",
+        run_mode="formal",
+        trade_date="2099-08-01",
+        data_as_of="2099-08-01",
+        source_snapshot_id="dashboard-forged-snapshot",
+        evidence_class="live_forward",
+        actual_generated_at=datetime(2099, 8, 1, 6, 0),
+        evidence_identity_hash="0" * 64,
+        strategy_policy_fingerprint="a" * 64,
+        execution_policy_fingerprint="b" * 64,
+        code_revision="c" * 40,
+        provenance_schema_version=1,
+        status="completed",
+        started_at=datetime(2099, 8, 1, 6, 0),
+        finished_at=datetime(2099, 8, 1, 6, 5),
+    )
+    db.add(forged)
+    db.flush()
+
+    projection = _build_dashboard_hardening(
+        db,
+        market_snapshot={"trade_date": "2099-08-01"},
+        data_health={"status": "ready"},
+        task_health={"failed_count": 0},
+        recent_run=None,
+    )
+
+    evidence_run_ids = {
+        item["run_id"]
+        for rows in projection["evidence"].values()
+        for item in rows
+    }
+    alert_kinds = {
+        item["kind"]
+        for item in projection["observability"]["active_alerts"]
+    }
+    assert forged.run_id not in evidence_run_ids
+    assert "identity_mismatch" in alert_kinds
+
+
+def test_dashboard_hardening_fails_soft_when_evidence_queries_fail():
+    class FailingSession:
+        def scalars(self, _statement):
+            raise RuntimeError("evidence store unavailable")
+
+    projection = _build_dashboard_hardening(
+        FailingSession(),
+        market_snapshot={"trade_date": "2099-08-01"},
+        data_health={"status": "ready"},
+        task_health={"failed_count": 0},
+        recent_run=None,
+    )
+
+    assert projection["current_run"] is None
+    assert projection["data_quality_decision"] == "ready"
+    assert projection["observability"]["active_alerts"] == []
 
 
 def test_dashboard_overview_contract_accepts_cockpit_sections():
@@ -257,20 +327,59 @@ def test_dashboard_run_selector_uses_latest_formal_run(db):
         started_at=datetime(2099, 5, 29, 9, 30),
         finished_at=datetime(2099, 5, 29, 9, 45),
     )
-    db.add_all(
-        [
-            RecommendationRun(**older_formal.__dict__),
-            RecommendationRun(**latest_formal.__dict__),
-            RecommendationRun(**latest_experiment.__dict__),
-            unverified_newer,
-        ]
-    )
+    canonical_runs = [
+        _seal_run_identity(RecommendationRun(**older_formal.__dict__)),
+        _seal_run_identity(RecommendationRun(**latest_formal.__dict__)),
+        _seal_run_identity(RecommendationRun(**latest_experiment.__dict__)),
+    ]
+    db.add_all([*canonical_runs, unverified_newer])
     db.commit()
 
     selected = _select_dashboard_run(db)
 
     assert selected is not None
     assert selected.run_id == "dash_experiment_latest"
+
+
+def test_dashboard_run_selector_ignores_active_historical_replay(db):
+    from app.models.tables import RecommendationRun
+
+    live = _seal_run_identity(
+        RecommendationRun(
+            run_id="dashboard_active_replay_live_baseline",
+            run_name="LIVE 推荐",
+            run_mode="formal",
+            evaluation_scope="live_forward",
+            trade_date="2099-05-28",
+            status="completed",
+            evidence_class="live_forward",
+            data_as_of="2099-05-28",
+            source_snapshot_id="dashboard-active-replay-live-snapshot",
+            actual_generated_at=datetime(2099, 5, 28, 8, 0),
+            strategy_policy_fingerprint="a" * 64,
+            execution_policy_fingerprint="b" * 64,
+            code_revision="c" * 40,
+            provenance_schema_version=1,
+            started_at=datetime(2099, 5, 28, 9, 30),
+            finished_at=datetime(2099, 5, 28, 9, 45),
+        )
+    )
+    replay = RecommendationRun(
+        run_id="dashboard_active_historical_replay",
+        run_name="历史重建运行中",
+        run_mode="formal",
+        evaluation_scope="historical_replay",
+        trade_date="2099-05-20",
+        status="running",
+        started_at=datetime(2099, 6, 8, 9, 30),
+    )
+    db.add_all([live, replay])
+    db.commit()
+
+    selected = _select_dashboard_run(db)
+
+    assert selected is not None
+    assert selected.run_id == live.run_id
 
 
 def test_dashboard_run_selector_ignores_replay_run_over_today_live(db):
@@ -305,8 +414,7 @@ def test_dashboard_run_selector_ignores_replay_run_over_today_live(db):
         "code_revision": "c" * 40,
         "provenance_schema_version": 1,
     }
-    db.add_all([
-        # 当日正式推荐（live_forward），started_at 较晚（昨晚盘后）
+    live_run = _seal_run_identity(
         RecommendationRun(
             **formal_base,
             run_id="dash_live_formal_today",
@@ -316,19 +424,19 @@ def test_dashboard_run_selector_ignores_replay_run_over_today_live(db):
             status="completed",
             started_at=datetime(2099, 5, 28, 9, 30),
             finished_at=datetime(2099, 5, 28, 9, 45),
-        ),
-        # REPLAY 验证 run（historical_replay），started_at 更新，trade_date 是历史回放日
-        RecommendationRun(
-            **formal_base,
-            run_id="dash_replay_latest",
-            run_mode="formal",
-            evaluation_scope="historical_replay",
-            trade_date="2099-05-18",
-            status="completed",
-            started_at=datetime(2099, 5, 28, 15, 30),
-            finished_at=datetime(2099, 5, 28, 15, 45),
-        ),
-    ])
+        )
+    )
+    replay_run = RecommendationRun(
+        **formal_base,
+        run_id="dash_replay_latest",
+        run_mode="formal",
+        evaluation_scope="historical_replay",
+        trade_date="2099-05-18",
+        status="completed",
+        started_at=datetime(2099, 5, 28, 15, 30),
+        finished_at=datetime(2099, 5, 28, 15, 45),
+    )
+    db.add_all([live_run, replay_run])
     db.commit()
 
     selected = _select_dashboard_run(db)
@@ -372,8 +480,7 @@ def test_bootstrap_latest_run_prioritizes_live_forward_over_replay(db):
         "code_revision": "c" * 40,
         "provenance_schema_version": 1,
     }
-    db.add_all([
-        # 当日正式推荐（live_forward）
+    live_run = _seal_run_identity(
         RecommendationRun(
             **formal_base,
             run_id="boot_live_formal",
@@ -383,19 +490,19 @@ def test_bootstrap_latest_run_prioritizes_live_forward_over_replay(db):
             status="completed",
             started_at=datetime(2099, 6, 1, 9, 30),
             finished_at=datetime(2099, 6, 1, 9, 45),
-        ),
-        # REPLAY 验证 run（historical_replay），started_at 更新
-        RecommendationRun(
-            **formal_base,
-            run_id="boot_replay_newer",
-            run_mode="formal",
-            evaluation_scope="historical_replay",
-            trade_date="2099-05-18",
-            status="completed",
-            started_at=datetime(2099, 6, 1, 15, 30),
-            finished_at=datetime(2099, 6, 1, 15, 45),
-        ),
-    ])
+        )
+    )
+    replay_run = RecommendationRun(
+        **formal_base,
+        run_id="boot_replay_newer",
+        run_mode="formal",
+        evaluation_scope="historical_replay",
+        trade_date="2099-05-18",
+        status="completed",
+        started_at=datetime(2099, 6, 1, 15, 30),
+        finished_at=datetime(2099, 6, 1, 15, 45),
+    )
+    db.add_all([live_run, replay_run])
     db.commit()
 
     selected = _select_latest_bootstrap_run(db)
@@ -404,6 +511,47 @@ def test_bootstrap_latest_run_prioritizes_live_forward_over_replay(db):
     assert selected.run_id == "boot_live_formal", (
         "最近产出 latest 应优先当日 live_forward 正式推荐，而非 started_at 更晚的 REPLAY run"
     )
+
+
+def test_bootstrap_latest_run_ignores_active_historical_replay(db):
+    from app.models.tables import RecommendationRun
+
+    live = _seal_run_identity(
+        RecommendationRun(
+            run_id="bootstrap_active_replay_live_baseline",
+            run_name="LIVE 最近产出",
+            run_mode="formal",
+            evaluation_scope="live_forward",
+            trade_date="2099-06-01",
+            status="completed",
+            evidence_class="live_forward",
+            data_as_of="2099-06-01",
+            source_snapshot_id="bootstrap-active-replay-live-snapshot",
+            actual_generated_at=datetime(2099, 6, 1, 8, 0),
+            strategy_policy_fingerprint="a" * 64,
+            execution_policy_fingerprint="b" * 64,
+            code_revision="c" * 40,
+            provenance_schema_version=1,
+            started_at=datetime(2099, 6, 1, 9, 30),
+            finished_at=datetime(2099, 6, 1, 9, 45),
+        )
+    )
+    replay = RecommendationRun(
+        run_id="bootstrap_active_historical_replay",
+        run_name="历史重建运行中",
+        run_mode="formal",
+        evaluation_scope="historical_replay",
+        trade_date="2099-05-20",
+        status="running",
+        started_at=datetime(2099, 6, 8, 9, 30),
+    )
+    db.add_all([live, replay])
+    db.commit()
+
+    selected = _select_latest_bootstrap_run(db)
+
+    assert selected is not None
+    assert selected.run_id == live.run_id
 
 
 def test_dashboard_recommendations_use_latest_completed_formal_trade_date(db):
@@ -433,14 +581,21 @@ def test_dashboard_recommendations_use_latest_completed_formal_trade_date(db):
         "code_revision": "c" * 40,
         "provenance_schema_version": 1,
     }
-    db.add_all([
-        RecommendationRun(
-            **formal_base,
-            run_id="rec_dash_rec_old_completed",
-            trade_date="2099-05-27",
-            status="completed",
-            started_at=datetime(2099, 5, 27, 9, 30),
-            finished_at=datetime(2099, 5, 27, 9, 45),
+    latest_formal_base = {
+        **formal_base,
+        "data_as_of": "2099-05-28",
+        "actual_generated_at": datetime(2099, 5, 28, 8, 0),
+    }
+    runs = [
+        _seal_run_identity(
+            RecommendationRun(
+                **formal_base,
+                run_id="rec_dash_rec_old_completed",
+                trade_date="2099-05-27",
+                status="completed",
+                started_at=datetime(2099, 5, 27, 9, 30),
+                finished_at=datetime(2099, 5, 27, 9, 45),
+            )
         ),
         RecommendationRun(
             **formal_base,
@@ -450,21 +605,25 @@ def test_dashboard_recommendations_use_latest_completed_formal_trade_date(db):
             started_at=datetime(2099, 5, 28, 9, 30),
             finished_at=datetime(2099, 5, 28, 9, 45),
         ),
-        RecommendationRun(
-            **formal_base,
-            run_id="rec_dash_rec_latest_completed_exp",
-            trade_date="2099-05-28",
-            status="completed",
-            started_at=datetime(2099, 5, 28, 10, 30),
-            finished_at=datetime(2099, 5, 28, 10, 45),
+        _seal_run_identity(
+            RecommendationRun(
+                **latest_formal_base,
+                run_id="rec_dash_rec_latest_completed_exp",
+                trade_date="2099-05-28",
+                status="completed",
+                started_at=datetime(2099, 5, 28, 10, 30),
+                finished_at=datetime(2099, 5, 28, 10, 45),
+            )
         ),
-        RecommendationRun(
-            **formal_base,
-            run_id="rec_dash_rec_latest_completed_formal",
-            trade_date="2099-05-28",
-            status="completed",
-            started_at=datetime(2099, 5, 28, 11, 30),
-            finished_at=datetime(2099, 5, 28, 11, 45),
+        _seal_run_identity(
+            RecommendationRun(
+                **latest_formal_base,
+                run_id="rec_dash_rec_latest_completed_formal",
+                trade_date="2099-05-28",
+                status="completed",
+                started_at=datetime(2099, 5, 28, 11, 30),
+                finished_at=datetime(2099, 5, 28, 11, 45),
+            )
         ),
         RecommendationRun(
             run_id="dashboard_unverified_newer",
@@ -475,13 +634,67 @@ def test_dashboard_recommendations_use_latest_completed_formal_trade_date(db):
             started_at=datetime(2099, 6, 2, 11, 30),
             finished_at=datetime(2099, 6, 2, 11, 45),
         ),
-    ])
+    ]
+    db.add_all(runs)
     db.commit()
 
     selected = _select_dashboard_recommendation_run(db)
 
     assert selected is not None
     assert selected.run_id == "rec_dash_rec_latest_completed_formal"
+
+
+def test_dashboard_recommendation_run_ignores_newer_reconstruction_date(db):
+    from app.models.tables import RecommendationRun
+
+    live = _seal_run_identity(
+        RecommendationRun(
+            run_id="dashboard_recommendation_live",
+            run_name="LIVE 推荐",
+            run_mode="formal",
+            trade_date="2099-05-28",
+            status="completed",
+            evidence_class="live_forward",
+            data_as_of="2099-05-28",
+            source_snapshot_id="dashboard-recommendation-live-snapshot",
+            actual_generated_at=datetime(2099, 5, 28, 8, 0),
+            strategy_policy_fingerprint="a" * 64,
+            execution_policy_fingerprint="b" * 64,
+            code_revision="c" * 40,
+            provenance_schema_version=1,
+            started_at=datetime(2099, 5, 28, 9, 30),
+            finished_at=datetime(2099, 5, 28, 9, 45),
+            recommended_count=1,
+        )
+    )
+    reconstruction = _seal_run_identity(
+        RecommendationRun(
+            run_id="dashboard_recommendation_reconstruction_newer_date",
+            run_name="历史重建",
+            run_mode="formal",
+            trade_date="2099-06-02",
+            status="completed",
+            evidence_class="historical_reconstruction",
+            data_as_of="2099-06-02",
+            source_snapshot_id="dashboard-recommendation-replay-snapshot",
+            actual_generated_at=datetime(2099, 6, 8, 8, 0),
+            strategy_policy_fingerprint="a" * 64,
+            execution_policy_fingerprint="b" * 64,
+            code_revision="c" * 40,
+            reconstruction_batch_id="dashboard-recommendation-replay-batch",
+            provenance_schema_version=1,
+            started_at=datetime(2099, 6, 8, 9, 30),
+            finished_at=datetime(2099, 6, 8, 9, 45),
+            recommended_count=1,
+        )
+    )
+    db.add_all([live, reconstruction])
+    db.commit()
+
+    selected = _select_dashboard_recommendation_run(db)
+
+    assert selected is not None
+    assert selected.run_id == live.run_id
 
 
 def test_dashboard_recommendations_aggregate_formal_runs_sort_and_dedupe(db):
@@ -547,16 +760,27 @@ def test_dashboard_recommendations_aggregate_formal_runs_sort_and_dedupe(db):
             recommended_count=1,
         ),
         RecommendationRun(
-            run_id="dash_aggregate_unverified",
-            run_name="未验证正式运行",
+            run_id="dash_aggregate_forged",
+            run_name="伪造正式运行",
             run_mode="formal",
             trade_date=trade_date,
             status="completed",
+            evidence_class="live_forward",
+            data_as_of=trade_date,
+            source_snapshot_id="dash-aggregate-snapshot",
+            actual_generated_at=datetime(2099, 6, 1, 8, 0),
+            evidence_identity_hash="0" * 64,
+            strategy_policy_fingerprint="a" * 64,
+            execution_policy_fingerprint="b" * 64,
+            code_revision="c" * 40,
+            provenance_schema_version=1,
             started_at=datetime(2099, 6, 1, 12, 30),
             finished_at=datetime(2099, 6, 1, 12, 40),
             recommended_count=1,
         ),
     ]
+    runs[0] = _seal_run_identity(runs[0])
+    runs[1] = _seal_run_identity(runs[1])
     db.add_all(runs)
     db.add_all([
         Recommendation(
@@ -600,11 +824,11 @@ def test_dashboard_recommendations_aggregate_formal_runs_sort_and_dedupe(db):
             final_score=99,
         ),
         Recommendation(
-            recommendation_id="rec_dash_unverified_100",
-            run_id="dash_aggregate_unverified",
+            recommendation_id="rec_dash_forged_100",
+            run_id="dash_aggregate_forged",
             trade_date=trade_date,
             code="990005",
-            name="未验证候选",
+            name="伪造候选",
             final_score=100,
         ),
     ])
@@ -897,21 +1121,26 @@ def test_serialize_recommendation_slim_keeps_key_price_levels_for_history_rules(
     }
 
 
-def test_build_run_progress_marks_stale_and_resumable():
-    run = {
+def test_build_run_progress_uses_backend_recovery_capability():
+    interrupted = {
         "run_id": "run-1",
         "status": "interrupted",
-        "progress_phase": "skill_review",
+        "progress_phase": "persistence",
         "progress_pct": 45,
-        "progress_message": "审查中",
+        "progress_message": "等待完成",
         "is_stale": True,
+        "can_resume": True,
     }
+    blocked = {**interrupted, "can_resume": False}
+    failed = {**interrupted, "status": "failed", "can_resume": False}
 
-    result = build_run_progress(run)
+    result = build_run_progress(interrupted)
 
     assert result.status == "interrupted"
     assert result.heartbeat_stale is True
     assert result.resumable is True
+    assert build_run_progress(blocked).resumable is False
+    assert build_run_progress(failed).resumable is False
 
 
 def test_build_risk_radar_counts_levels():
@@ -1456,8 +1685,6 @@ def test_build_quality_scorecard_separates_immature_history_from_remediable_gaps
 def test_progress_helpers_are_stable():
     assert progress_pct(5, 10) == 50.0
     assert progress_pct(0, 0) is None
-    assert is_resumable_status("interrupted") is True
-    assert is_resumable_status("completed") is False
 
 
 def test_candidate_trace_row_normalizes_metrics():

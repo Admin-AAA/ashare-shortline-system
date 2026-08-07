@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.engine.trading_calendar import latest_allowed_quote_date, normalize_trade_date
 from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun
+from app.services.evidence.validation import canonical_live_forward_run_ids
 from app.services.official_sample_scope import official_sample_conditions
 from app.services.outcome_simulation import (
     MAX_ENTRY_GAP_PCT,
@@ -71,7 +72,17 @@ def list_pending_realtime_pnl(db: Session, *, use_cache: bool = True) -> dict[st
     """
     recs = _load_pending_recs(db)
     codes = sorted({str(r.code) for r in recs})
-    cache_key = ",".join(codes)
+    cache_key = tuple(
+        sorted(
+            (
+                str(rec.recommendation_id),
+                str(rec.run_id),
+                str(rec.trade_date),
+                str(rec.code),
+            )
+            for rec in recs
+        )
+    )
 
     if use_cache:
         with _get_lock():
@@ -118,7 +129,10 @@ def compute_realtime_pnl_items(
 
 
 def _load_pending_recs(db: Session) -> list[Recommendation]:
-    """全部正式 run 的未最终结算推荐（无 outcome 行、pending 或 provisional）。"""
+    """全部已验证 LIVE run 的未最终结算推荐（无 outcome、pending 或 provisional）。"""
+    live_run_ids = canonical_live_forward_run_ids(db)
+    if not live_run_ids:
+        return []
     stmt = (
         select(Recommendation)
         .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
@@ -128,6 +142,7 @@ def _load_pending_recs(db: Session) -> list[Recommendation]:
         )
         .where(
             *official_sample_conditions(),
+            RecommendationRun.run_id.in_(live_run_ids),
             or_(
                 RecommendationOutcome.recommendation_id.is_(None),
                 RecommendationOutcome.outcome_label.in_((OUTCOME_PENDING, OUTCOME_PROVISIONAL)),

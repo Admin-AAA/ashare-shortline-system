@@ -144,7 +144,26 @@ def test_reconstruction_selector_requires_batch_complete_provenance_and_official
     missing_rec = _recommendation(
         "rec_s1_selector_reconstruction_missing_batch", missing_batch.run_id
     )
-    db.add_all([complete, missing_batch, complete_rec, missing_rec])
+    future_as_of = _run(
+        "run_s1_selector_reconstruction_future_as_of",
+        evidence_class=EvidenceClass.HISTORICAL_RECONSTRUCTION.value,
+        reconstruction_batch_id="batch-s1-selector-future",
+        trade_date="2098-01-02",
+        data_as_of="2098-01-03",
+    )
+    future_rec = _recommendation(
+        "rec_s1_selector_reconstruction_future_as_of",
+        future_as_of.run_id,
+        trade_date="2098-01-03",
+    )
+    db.add_all([
+        complete,
+        missing_batch,
+        future_as_of,
+        complete_rec,
+        missing_rec,
+        future_rec,
+    ])
     db.flush()
 
     selected = set(
@@ -157,6 +176,7 @@ def test_reconstruction_selector_requires_batch_complete_provenance_and_official
 
     assert complete.run_id in selected
     assert missing_batch.run_id not in selected
+    assert future_as_of.run_id not in selected
 
 
 def test_projection_serializes_evidence_identity_in_slim_full_and_run_summary():

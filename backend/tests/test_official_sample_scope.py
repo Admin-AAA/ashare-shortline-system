@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from app.services.evidence import EvidenceIdentityError, identity_from_persisted_run
 from app.models.tables import Recommendation, RecommendationOutcome, RecommendationRun
 from app.services.workbench_service import (
     invalidate_recommendation_history_cache,
@@ -41,25 +42,29 @@ def _add_settled_recommendation(
 ) -> None:
     run_id = f"test_official_scope_run_{suffix}"
     recommendation_id = f"rec_test_official_scope_{suffix}"
-    db.add(
-        RecommendationRun(
-            run_id=run_id,
-            run_name="official sample scope contract",
-            run_mode="formal",
-            evaluation_scope="live_forward",
-            trade_date=trade_date,
-            data_as_of=data_as_of or trade_date,
-            source_snapshot_id=f"snapshot_{suffix}",
-            evidence_class=evidence_class,
-            actual_generated_at=recommended_at,
-            evidence_identity_hash="d" * 64,
-            strategy_policy_fingerprint="a" * 64,
-            execution_policy_fingerprint="b" * 64,
-            code_revision="c" * 40,
-            provenance_schema_version=1,
-            status=run_status,
-        )
+    run = RecommendationRun(
+        run_id=run_id,
+        run_name="official sample scope contract",
+        run_mode="formal",
+        evaluation_scope="live_forward",
+        trade_date=trade_date,
+        data_as_of=data_as_of or trade_date,
+        source_snapshot_id=f"snapshot_{suffix}",
+        evidence_class=evidence_class,
+        actual_generated_at=recommended_at,
+        evidence_identity_hash="d" * 64,
+        strategy_policy_fingerprint="a" * 64,
+        execution_policy_fingerprint="b" * 64,
+        code_revision="c" * 40,
+        provenance_schema_version=1,
+        status=run_status,
     )
+    if run_status == "completed":
+        try:
+            run.evidence_identity_hash = identity_from_persisted_run(run).identity_hash
+        except EvidenceIdentityError:
+            pass
+    db.add(run)
     db.add(
         Recommendation(
             recommendation_id=recommendation_id,
@@ -153,6 +158,43 @@ def test_recent_win_rate_uses_the_same_completed_forward_deduplicated_scope(db):
     assert result["sample_count"] == 1
     assert result["success_count"] == 1
     assert result["net_win_rate"] == 100.0
+
+
+def test_history_filters_do_not_promote_lower_scored_duplicate(db):
+    common = {
+        "trade_date": "2099-01-06",
+        "recommended_at": datetime(2099, 1, 6, 6, 0),
+        "code": "999993",
+    }
+    _add_settled_recommendation(
+        db,
+        suffix="history_winner_success",
+        run_status="completed",
+        final_score=90.0,
+        executed_return=1.0,
+        **common,
+    )
+    _add_settled_recommendation(
+        db,
+        suffix="history_lower_failed",
+        run_status="completed",
+        final_score=70.0,
+        executed_return=-1.0,
+        **common,
+    )
+    invalidate_recommendation_history_cache()
+
+    result = list_recommendation_history(
+        db,
+        code="999993",
+        label="failed",
+        date_from="2099-01-06",
+        date_to="2099-01-06",
+        limit=50,
+    )
+
+    assert result["total"] == 0
+    assert result["items"] == []
 
 
 def test_history_excludes_recommendations_generated_after_the_claimed_trade_date(db):

@@ -505,7 +505,10 @@ def skill_performance(db: Session, skill_id: str) -> dict[str, Any]:
     metric = next(
         (
             item
-            for item in metrics_by_strategy(db)
+            for item in metrics_by_strategy(
+                db,
+                sample_scope="live_forward",
+            )
             if item.get("strategy_id") == skill_id
         ),
         None,
