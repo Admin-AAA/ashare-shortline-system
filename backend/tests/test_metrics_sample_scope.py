@@ -6,11 +6,14 @@ from types import SimpleNamespace
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.sql.selectable import Select
 
 from app.api.metrics import router as metrics_router
 from app.api.stats import router as stats_router
 from app.db.session import get_db
 from app.models.tables import (
+    DailyKbar,
     Recommendation,
     RecommendationOutcome,
     RecommendationOutcomeVersion,
@@ -677,3 +680,54 @@ def test_alpha_decay_api_forwards_window_and_scope(monkeypatch):
         "start_date": None,
         "end_date": None,
     }
+
+
+def test_horizon_metric_bars_include_liquidity_columns(db, monkeypatch):
+    """horizon 指标的可成交性判定必须看到 volume/amount（回归）。
+
+    因果：_compute_horizon_metric_records 为省性能只 select 部分列，T4 优化砍列时
+    漏掉 volume/amount——而 entry/exit 可成交性判定（no_liquidity_reason_from_bar）
+    要求 volume>0 且 amount>0，缺失时全部入场被误判「无成交量买不进」→ 3 个 horizon
+    的 triggered_count 恒 0、hit_rate 恒 0，与主口径（_load_outcome_bars 全列实体）
+    的 39 触发/15 胜完全矛盾（recon-v1-61b5c84b 回放 cohort 实证）。
+    """
+    from app.services.outcome_service import _compute_horizon_metric_records
+
+    captured: list[tuple] = []
+
+    class _Result:
+        def all(self):
+            return []
+
+    class _FakeDb:
+        def execute(self, stmt, *args, **kwargs):
+            if isinstance(stmt, Select):
+                column_names = tuple(
+                    col.name
+                    for col in stmt.selected_columns
+                    if getattr(col, "name", None)
+                )
+                if "trade_date" in column_names and "close" in column_names:
+                    captured.append(column_names)
+            return _Result()
+
+        def scalars(self, stmt, *args, **kwargs):
+            return _Result()
+
+    rows = [
+        SimpleNamespace(
+            recommendation_id="rec_horizon_liquidity",
+            code="989101",
+            trade_date="2099-02-10",
+            recommend_price=10.0,
+            feature_snapshot_json="{}",
+            outcome_label="failed",
+        )
+    ]
+    assert _compute_horizon_metric_records(_FakeDb(), rows) == {}
+    assert captured, "horizon 指标未发出日K列查询"
+    bar_columns = captured[0]
+    assert "volume" in bar_columns and "amount" in bar_columns, (
+        f"horizon 指标日K查询缺 volume/amount（实际列: {bar_columns}），"
+        "可成交性判定会把全部入场误判为无成交量 → horizon 指标恒 0"
+    )

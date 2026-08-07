@@ -2607,8 +2607,10 @@ def _compute_horizon_metric_records(db: Session, rows: list[Any]) -> dict[str, d
         return {}
     execution_states = _load_execution_states(db, labeled_rows)
 
-    # 只取 _simulate_outcome 需要的 7 列（code/trade_date/open/high/low/close/pct_chg），
+    # 只取 _simulate_outcome 需要的列（code/trade_date/open/high/low/close/pct_chg/volume/amount），
     # 不加载完整 DailyKbar 实体（19778 bars × 全列 ORM 实例化 = 0.86s 主因，T4 优化）。
+    # volume/amount 必须保留：entry/exit 可成交性判定（no_liquidity_reason_from_bar）
+    # 依赖 volume>0 且 amount>0，缺失会把全部入场误判为「无成交量买不进」→ horizon 指标全 0。
     # Row 对象支持 .code/.open 等属性访问，_simulate_outcome 无需改。
     bar_rows = db.execute(
         select(
@@ -2619,6 +2621,8 @@ def _compute_horizon_metric_records(db: Session, rows: list[Any]) -> dict[str, d
             DailyKbar.low,
             DailyKbar.close,
             DailyKbar.pct_chg,
+            DailyKbar.volume,
+            DailyKbar.amount,
         )
         .where(DailyKbar.code.in_(codes), DailyKbar.trade_date >= min(trade_dates))
         .order_by(DailyKbar.code.asc(), DailyKbar.trade_date.asc())
