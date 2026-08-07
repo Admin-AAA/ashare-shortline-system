@@ -44,13 +44,21 @@ export function cancelObservationText(observation?: CancelObservation | null): s
   return parts.length > 0 ? parts.join(" · ") : "观察收益待后续交易日";
 }
 
-// 从当前页行筛出未结算推荐 ID（去重 + 排序成稳定 key，避免重渲染重复请求）。
-// 已结算行（success/failed/missed 等最终标签）不进入请求体。
+// 从当前页行筛出未结算 canonical LIVE 推荐 ID（去重 + 排序成稳定 key）。
+// 历史回放只供研究展示，不得触发实时执行确认或写入执行状态。
 export function collectUnsettledIds(
-  items: Array<{ recommendation_id: string; outcome?: { outcome_label?: string | null } | null }>,
+  items: Array<{
+    recommendation_id: string;
+    evidence_class?: string | null;
+    outcome?: { outcome_label?: string | null } | null;
+  }>,
 ): string[] {
   const ids = items
-    .filter((it) => !isOutcomeSettled(it.outcome?.outcome_label))
+    .filter(
+      (it) =>
+        it.evidence_class === "live_forward" &&
+        !isOutcomeSettled(it.outcome?.outcome_label),
+    )
     .map((it) => it.recommendation_id);
   return Array.from(new Set(ids)).sort();
 }

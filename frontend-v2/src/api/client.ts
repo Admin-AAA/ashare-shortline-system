@@ -405,8 +405,8 @@ export const api = {
   statsOverview: () => request<StatsOverview>(`/api/stats/overview`),
   statsBySkill: () => request<SkillStatsRow[]>(`/api/stats/by-skill`),
   statsByPreset: () => request<PresetStatsRow[]>(`/api/stats/by-preset`),
-  statsAlphaDecay: (sampleScope: MetricsSampleScope = "live_forward") =>
-    request<AlphaDecayResponse>(`/api/stats/alpha-decay?sample_scope=${sampleScope}`),
+  statsAlphaDecay: (windowDays?: number, sampleScope: MetricsSampleScope = "live_forward") =>
+    request<AlphaDecayResponse>(`/api/stats/alpha-decay?${metricsQuery(windowDays, sampleScope)}`),
   metricsByStrategy: (windowDays?: number, sampleScope: MetricsSampleScope = "live_forward") =>
     request<StrategyStatsRow[]>(`/api/metrics/by-strategy?${metricsQuery(windowDays, sampleScope)}`),
   metricsBySetup: (windowDays?: number, sampleScope: MetricsSampleScope = "live_forward") =>

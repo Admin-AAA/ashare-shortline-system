@@ -17,6 +17,7 @@ from app.models.tables import (
     SkillRegistry,
     WatchItem,
 )
+from app.services.evidence.validation import canonical_live_forward_run_ids
 from app.services.outcome_service import (
     is_accurate_recommendation,
     is_trade_executed,
@@ -93,7 +94,7 @@ def _get_overview_stats(db: Session) -> dict[str, Any]:
     rec_ids = [row.recommendation_id for row in rec_rows]
     reviewed_count = _reviewed_count(db, rec_ids)
     watched_count = _watched_count(db, run_ids)
-    official = overview_metrics(db)
+    official = overview_metrics(db, sample_scope="live_forward")
 
     return {
         "run_count": len(runs),
@@ -237,7 +238,8 @@ def _get_skill_stats(db: Session) -> list[dict[str, Any]]:
 
     t5 = time.perf_counter()
     official_by_skill = {
-        item["strategy_id"]: item for item in metrics_by_strategy(db)
+        item["strategy_id"]: item
+        for item in metrics_by_strategy(db, sample_scope="live_forward")
     }
     result: list[dict[str, Any]] = []
     for row in buckets.values():
@@ -456,12 +458,16 @@ def _runs_for_mode(
     ]
     if extra_cols:
         cols = cols + list(extra_cols)
+    live_run_ids = canonical_live_forward_run_ids(db)
+    if not live_run_ids:
+        return []
     return db.scalars(
         select(RecommendationRun)
         .where(
             RecommendationRun.run_mode == run_mode,
             RecommendationRun.status == "completed",
             *live_forward_run_conditions(),
+            RecommendationRun.run_id.in_(live_run_ids),
         )
         .options(load_only(*cols))
         .order_by(RecommendationRun.started_at.desc())

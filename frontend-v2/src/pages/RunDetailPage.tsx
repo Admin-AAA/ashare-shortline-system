@@ -53,12 +53,12 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
 
   async function resumeRun() {
     if (!runId) return;
-    setMessage("正在触发续跑…");
+    setMessage("正在核验封印结果…");
     try {
       await api.resumeRun(runId);
-      setMessage("已触发续跑，后台恢复运行中…");
+      setMessage("已提交完成请求，后台将再次核验并完成运行…");
     } catch (e) {
-      setMessage(`续跑失败：${(e as Error).message}`);
+      setMessage(`完成失败：${(e as Error).message}`);
     }
   }
 
@@ -893,7 +893,7 @@ function RunProgressPanel({ detail, onResume }: { detail: RunDetail; onResume?: 
   const indeterminate = active && effectivePct == null;
   const barWidth = effectivePct != null ? `${Math.max(2, Math.min(100, effectivePct))}%` : "100%";
   const stale = !!detail.is_stale;
-  const resumable = detail.status === "interrupted" || detail.status === "failed";
+  const resumable = detail.can_resume === true;
   const degradedWatchlist = Array.isArray(detail.result_summary?.degraded_watchlist)
     ? detail.result_summary.degraded_watchlist as Array<Record<string, unknown>>
     : [];
@@ -972,12 +972,25 @@ function RunProgressPanel({ detail, onResume }: { detail: RunDetail; onResume?: 
         </div>
 
         {resumable && (
-          <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "center" }}>
-            <button className="btn btn--primary" onClick={onResume} style={{ padding: "var(--space-2) var(--space-4)" }}>
-              <RotateCw size={15} />
-              续跑此运行
-            </button>
-            <span className="text-muted" style={{ fontSize: "var(--text-xs)" }}>该运行被中断或失败，可尝试从断点恢复。</span>
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+            <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "center" }}>
+              <button className="btn btn--primary" onClick={onResume} style={{ padding: "var(--space-2) var(--space-4)" }}>
+                <RotateCw size={15} />
+                核验封印结果并完成运行
+              </button>
+              <span className="text-muted" style={{ fontSize: "var(--text-xs)" }}>结果已持久封印，仅完成生命周期与溯源，不重跑任何业务阶段。</span>
+            </div>
+          </div>
+        )}
+
+        {!resumable && detail.status === "interrupted" && (
+          <div style={{ border: "1px solid var(--warning)", borderRadius: "var(--radius-md)", padding: "var(--space-3)", background: "var(--surface-soft)" }}>
+            <div style={{ color: "var(--warning)", fontWeight: 700, fontSize: "var(--text-sm)", marginBottom: "var(--space-2)" }}>
+              中断运行无法自动完成
+            </div>
+            <div className="text-muted" style={{ fontSize: "var(--text-xs)" }}>
+              {detail.resume_block_reason || "缺少已封印的推荐集合，无法安全完成该运行。请用新运行替代，不要重放历史。"}
+            </div>
           </div>
         )}
       </div>

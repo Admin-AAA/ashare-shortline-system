@@ -9,6 +9,7 @@ import type {
   CapitalFlowFactorResponse,
   DNetBreakdown,
   FilterEffectiveness,
+  HistoricalReconstructionCohort,
   LlmReviewHealth,
   LlmRouteHealthItem,
   MetricsOverview,
@@ -114,24 +115,23 @@ export function MetricsPage() {
     [windowDays, sampleScope],
   );
   const { data: alphaDecay, loading: l7, error: e7 } = useApi<AlphaDecayResponse>(
-    () => api.statsAlphaDecay(sampleScope),
-    [sampleScope],
+    () => api.statsAlphaDecay(windowDays ?? undefined, sampleScope),
+    [windowDays, sampleScope],
   );
 
   const loading = l1 || l2 || l3 || l4 || l5 || l6 || l7;
   const error = e1 || e2 || e3 || e4 || e5 || e6 || e7;
 
-  // 从任一响应取 date_range 元信息（优先 filterEffect，其次 scoreLines/strategies 首项）
+  // 概览覆盖窗口内全部推荐及 pending/missed；其余端点只作无概览时的降级来源。
   const dateRange: DateRangeMeta | undefined =
-    filterEffect?.date_range
+    overview?.date_range
+    ?? filterEffect?.date_range
     ?? scoreLines?.[0]?.date_range
     ?? strategies?.[0]?.date_range
     ?? precisionAtK?.[0]?.date_range
     ?? setups?.[0]?.date_range;
 
-  const hasQualityData = Boolean(
-    (scoreLines && scoreLines.length > 0) || (strategies && strategies.length > 0),
-  );
+  const hasQualityData = Boolean(overview && overview.labeled_count > 0);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
@@ -141,6 +141,7 @@ export function MetricsPage() {
         sampleScope={sampleScope}
         onScopeSelect={setSampleScope}
         dateRange={dateRange}
+        historicalCohort={overview?.historical_reconstruction_cohort}
       />
       <SystemHealthPanel />
       {loading ? (
@@ -153,7 +154,7 @@ export function MetricsPage() {
           title="当前口径暂无指标数据"
           reason={sampleScope === "live_forward"
             ? "尚无已结算的 LIVE 前瞻推荐；可切换到历史回放查看研究样本"
-            : "当前窗口尚无已结算的历史回放推荐"}
+            : "当前窗口没有完整、同策略 policy、同 execution policy、同代码版本的历史回放 cohort"}
         />
       ) : (
         <>
@@ -288,7 +289,7 @@ function DNetPanel({
 
   return (
     <MetricCard
-      kicker="北极星 D 项"
+      kicker={sampleScope === "historical_replay" ? "历史回放研究" : "北极星 D 项"}
       title="净成本 + 板块(20cm/10cm)分解"
       actions={<span style={{ fontSize: 12, color: "var(--text-muted)" }}>跟随页面时间窗口</span>}
     >
@@ -297,7 +298,9 @@ function DNetPanel({
       ) : error ? (
         <HealthErrorNote msg="D 项净成本分解获取失败" />
       ) : !data || !data.net ? (
-        <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>窗口内无已结算 formal 推荐</div>
+        <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+          窗口内无已结算{sampleScope === "historical_replay" ? "历史回放研究" : " LIVE formal"}推荐
+        </div>
       ) : (
         <div style={{ display: "grid", gap: "var(--space-4)" }}>
           {/* 净成本概要 */}
@@ -309,10 +312,10 @@ function DNetPanel({
             }}
           >
             <DNetKpi label="净胜率" value={data.net.net_win_rate != null ? `${data.net.net_win_rate.toFixed(1)}%` : "—"} tone={(data.net.net_win_rate ?? 0) >= 60 ? "up" : (data.net.net_win_rate ?? 0) >= 50 ? "neutral" : "down"} sub="扣 0.07%/笔" />
-            <DNetKpi label="净盈亏比" value={data.net.net_profit_loss_ratio != null ? data.net.net_profit_loss_ratio.toFixed(2) : "—"} tone={(data.net.net_profit_loss_ratio ?? 0) >= 2.0 ? "up" : (data.net.net_profit_loss_ratio ?? 0) >= 1.4 ? "neutral" : "down"} sub="目标 ≥2.0" />
+            <DNetKpi label="净盈亏比" value={data.net.net_profit_loss_ratio != null ? data.net.net_profit_loss_ratio.toFixed(2) : "—"} tone={(data.net.net_profit_loss_ratio ?? 0) >= 2.0 ? "up" : (data.net.net_profit_loss_ratio ?? 0) >= 1.4 ? "neutral" : "down"} sub={sampleScope === "historical_replay" ? "研究样本" : "目标 ≥2.0"} />
             <DNetKpi label="净均收益" value={data.net.net_avg_return != null ? `${data.net.net_avg_return >= 0 ? "+" : ""}${data.net.net_avg_return.toFixed(2)}%` : "—"} tone={(data.net.net_avg_return ?? 0) >= 0 ? "up" : "down"} sub="扣费后" />
             <DNetKpi label="最大亏损" value={data.net.max_loss != null ? `${data.net.max_loss.toFixed(2)}%` : "—"} tone="down" sub="单笔最差" />
-            <DNetKpi label="样本" value={`${data.net.sample_count}`} tone="neutral" sub="已结算 formal" />
+            <DNetKpi label="样本" value={`${data.net.sample_count}`} tone="neutral" sub={sampleScope === "historical_replay" ? "历史回放研究" : "已结算 LIVE formal"} />
           </div>
           {/* 板块分解 */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "var(--space-3)" }}>
@@ -954,12 +957,14 @@ function MetricsWindowBar({
   sampleScope,
   onScopeSelect,
   dateRange,
+  historicalCohort,
 }: {
   windowDays: number | null;
   onSelect: (v: number | null) => void;
   sampleScope: MetricsSampleScope;
   onScopeSelect: (v: MetricsSampleScope) => void;
   dateRange?: DateRangeMeta;
+  historicalCohort?: HistoricalReconstructionCohort | null;
 }) {
   const isReplay = sampleScope === "historical_replay";
   return (
@@ -989,6 +994,33 @@ function MetricsWindowBar({
           {isReplay ? "研究证据 · 不计入 LIVE KPI" : "前瞻正式证据"}
         </span>
       </div>
+      {isReplay && historicalCohort && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "var(--space-3)",
+            flexWrap: "wrap",
+            fontSize: 12,
+            color: "var(--text-muted)",
+          }}
+          title={`batch ${historicalCohort.batch_id}\ncohort seal ${historicalCohort.cohort_identity_hash}\nstrategy policy ${historicalCohort.strategy_policy_fingerprint}\nexecution policy ${historicalCohort.execution_policy_fingerprint}\ncode ${historicalCohort.code_revision}`}
+        >
+          <span>研究 cohort</span>
+          <span style={{ fontFamily: "var(--font-mono)" }}>
+            {historicalCohort.window_start} ~ {historicalCohort.window_end}
+          </span>
+          <span>
+            {historicalCohort.completed_trade_date_count}/{historicalCohort.expected_trade_date_count} 个交易日
+          </span>
+          <span style={{ fontFamily: "var(--font-mono)" }}>
+            seal {historicalCohort.cohort_identity_hash.slice(0, 12)}
+          </span>
+          <span style={{ fontFamily: "var(--font-mono)" }}>
+            code {historicalCohort.code_revision.slice(0, 12)}
+          </span>
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap" }}>
         <span style={{ fontSize: 13, color: "var(--text-muted)", fontWeight: 600 }}>时间窗口</span>
         <div style={{ display: "flex", gap: "var(--space-1)" }}>

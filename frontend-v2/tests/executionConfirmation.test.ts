@@ -16,29 +16,30 @@ import {
 
 test("全为已结算记录时不提交任何 ID", () => {
   const items = [
-    { recommendation_id: "rec_a", outcome: { outcome_label: "success" } },
-    { recommendation_id: "rec_b", outcome: { outcome_label: "failed" } },
-    { recommendation_id: "rec_c", outcome: { outcome_label: "missed" } },
+    { recommendation_id: "rec_a", evidence_class: "live_forward", outcome: { outcome_label: "success" } },
+    { recommendation_id: "rec_b", evidence_class: "live_forward", outcome: { outcome_label: "failed" } },
+    { recommendation_id: "rec_c", evidence_class: "live_forward", outcome: { outcome_label: "missed" } },
   ];
   assert.deepEqual(collectUnsettledIds(items), []);
 });
 
 test("混合列表只提交未结算 ID", () => {
   const items = [
-    { recommendation_id: "rec_settled", outcome: { outcome_label: "success" } },
-    { recommendation_id: "rec_pending", outcome: { outcome_label: "pending" } },
-    { recommendation_id: "rec_prov", outcome: { outcome_label: "provisional" } },
-    { recommendation_id: "rec_no_outcome", outcome: null },
-    { recommendation_id: "rec_failed", outcome: { outcome_label: "failed" } },
+    { recommendation_id: "rec_settled", evidence_class: "live_forward", outcome: { outcome_label: "success" } },
+    { recommendation_id: "rec_pending", evidence_class: "live_forward", outcome: { outcome_label: "pending" } },
+    { recommendation_id: "rec_prov", evidence_class: "live_forward", outcome: { outcome_label: "provisional" } },
+    { recommendation_id: "rec_no_outcome", evidence_class: "live_forward", outcome: null },
+    { recommendation_id: "rec_failed", evidence_class: "live_forward", outcome: { outcome_label: "failed" } },
+    { recommendation_id: "rec_replay", evidence_class: "historical_reconstruction", outcome: { outcome_label: "pending" } },
   ];
   assert.deepEqual(collectUnsettledIds(items), ["rec_no_outcome", "rec_pending", "rec_prov"]);
 });
 
 test("去重且排序成稳定 key", () => {
   const items = [
-    { recommendation_id: "rec_b", outcome: { outcome_label: "pending" } },
-    { recommendation_id: "rec_a", outcome: { outcome_label: "pending" } },
-    { recommendation_id: "rec_b", outcome: { outcome_label: "pending" } },
+    { recommendation_id: "rec_b", evidence_class: "live_forward", outcome: { outcome_label: "pending" } },
+    { recommendation_id: "rec_a", evidence_class: "live_forward", outcome: { outcome_label: "pending" } },
+    { recommendation_id: "rec_b", evidence_class: "live_forward", outcome: { outcome_label: "pending" } },
   ];
   assert.deepEqual(collectUnsettledIds(items), ["rec_a", "rec_b"]);
 });
