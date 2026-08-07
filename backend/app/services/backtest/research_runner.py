@@ -1231,11 +1231,11 @@ class ResearchBacktestRunner:
         skills = [
             skill
             for skill in load_skills(get_settings().skills_dir)
-            if skill.skill_id == strategy_id and skill.enabled and skill.executable and skill.contract is not None
+            if skill.skill_id == strategy_id and skill.enabled and skill.executable
         ]
         if not skills:
             raise StrategyUnavailableError(
-                "strategy is not an enabled declarative strategy",
+                "strategy is not an enabled executable strategy",
                 details={"strategy_id": strategy_id},
             )
         return build_registry_from_skills(skills)

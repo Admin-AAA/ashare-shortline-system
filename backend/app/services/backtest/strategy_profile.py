@@ -79,7 +79,7 @@ class StrategyBacktestProfiles:
         skills = [
             skill
             for skill in sync_skills(self._db)
-            if skill.enabled and skill.executable and skill.contract is not None
+            if skill.enabled and skill.executable
         ]
         registry = build_registry_from_skills(skills)
         targets = []
