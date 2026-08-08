@@ -111,6 +111,9 @@ def _historical_payload(base: dict, trade_date: str) -> dict:
             "trade_date_override": trade_date,
             "data_source": DATA_SOURCE_LOCAL_POOL,
             "skip_aux_refresh": True,
+            # 回放 run 之间互相独立：同日已有落库结果（如同 batch 前序 run 或历史
+            # 重建）不应触发跨 run 去重自我剔除；实盘去重基数另有 live_forward 过滤。
+            "dedup_same_day": False,
         }
     )
     return payload

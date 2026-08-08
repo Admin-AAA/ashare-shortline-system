@@ -2470,11 +2470,16 @@ def _recent_recommended_codes(db: Session, trade_date: str) -> set[str]:
     # hide_recent_repeats 保险兜住（dedup_same_day 仍为第一道，互为冗余）。
     # 单 run 内按 code 去重（_apply_pool_rules 的 seen_codes），故当前 run 自己当天落库的
     # 同股推荐不会误伤（同股不会在同一 run 内出现第二次）。
+    # 仅统计 live_forward 实盘 run：历史重建/实验 run 的回放结果不是实盘证据，
+    # 不应进入实盘跨 run 去重基数（否则回放会互相剔除，且会污染实盘基数）。
     recent_date = (datetime.fromisoformat(trade_date) - timedelta(days=7)).date().isoformat()
     rows = db.scalars(
-        select(Recommendation).where(
+        select(Recommendation)
+        .join(RecommendationRun, Recommendation.run_id == RecommendationRun.run_id)
+        .where(
             Recommendation.trade_date >= recent_date,
             Recommendation.trade_date <= trade_date,
+            *live_forward_run_conditions(),
         )
     ).all()
     return {row.code for row in rows}
@@ -2490,11 +2495,19 @@ def _same_day_recommended_codes(
     被 7 个 run 各推一次、全部次日止损 -5.69%）。在最终卡片过滤阶段剔除当日已被其他
     formal run 推荐过的 code（本 run 自身推荐不剔除——单 run 内聚合已按 code 去重）。
     这是硬风险控制（不重复集中同一只票），与 hide_recent_repeats（跨日去重）正交。
+
+    仅统计 live_forward 实盘 run：历史重建/实验 run 的回放结果不是实盘证据，
+    不应进入实盘跨 run 去重基数——否则同一重建 batch 的逐日 run 会把前序 run
+    落库的同日回放结果当成「其他 formal run 已推荐」而自我剔除（recon-v1-ca5b6961
+    连续 8 天 0 推荐根因）。
     """
     stmt = (
         select(Recommendation.code)
         .join(RecommendationRun, Recommendation.run_id == RecommendationRun.run_id)
-        .where(RecommendationRun.run_mode == "formal", Recommendation.trade_date == trade_date)
+        .where(
+            RecommendationRun.trade_date == trade_date,
+            *live_forward_run_conditions(),
+        )
     )
     if exclude_run_id is not None:
         stmt = stmt.where(Recommendation.run_id != exclude_run_id)
@@ -2511,13 +2524,17 @@ def _same_day_industry_counts(
     formal run 各推 3-4 只半导体 → 跨 run 累积 16 只半导体（50% 集中），违反组合分散。
     返回当日其他 run 已推荐的 group→count，作为本 run _apply_sector_diversity 的基数。
     用 _industry_group（aggregator）归并关联行业（元器件/半导体/通信设备→科技硬件）。
+    与 _same_day_recommended_codes 一致，仅统计 live_forward 实盘 run（回放不入基数）。
     """
     from app.engine.aggregator import _industry_group
 
     stmt = (
         select(Recommendation.industry)
         .join(RecommendationRun, Recommendation.run_id == RecommendationRun.run_id)
-        .where(RecommendationRun.run_mode == "formal", Recommendation.trade_date == trade_date)
+        .where(
+            RecommendationRun.trade_date == trade_date,
+            *live_forward_run_conditions(),
+        )
     )
     if exclude_run_id is not None:
         stmt = stmt.where(Recommendation.run_id != exclude_run_id)

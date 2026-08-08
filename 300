@@ -1,4 +1,0 @@
-error: pathspec '行拆 规则
-- tsc --noEmit 0 errors，vite build 成功
-
-Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>' did not match any file(s) known to git

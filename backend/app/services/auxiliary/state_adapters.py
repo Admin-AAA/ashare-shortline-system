@@ -630,8 +630,9 @@ class TushareStateProvider:
 class _StateViews:
     """Current ORM loaders, kept typed and independent from legacy auxiliary tables."""
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, *, as_of_date: date | None = None) -> None:
         self._session = session
+        self._as_of_date = as_of_date.isoformat() if as_of_date is not None else None
 
     @staticmethod
     def _target(request: AuxiliaryDatasetRequest) -> str:
@@ -706,7 +707,10 @@ class _StateViews:
         return {"hsgt_top10": {item.code: {"rank": item.rank, "amount": item.amount, "net_amount": item.net_amount, "buy": item.buy} for item in rows}}
 
     def pledge_stat(self, request: AuxiliaryDatasetRequest) -> Mapping[str, Any]:
-        rows = self._session.scalars(select(PledgeStat).where(PledgeStat.code.in_(request.requested_codes))).all()
+        statement = select(PledgeStat).where(PledgeStat.code.in_(request.requested_codes))
+        if self._as_of_date is not None:
+            statement = statement.where(PledgeStat.end_date <= self._as_of_date)
+        rows = self._session.scalars(statement).all()
         latest: dict[str, Any] = {}
         for item in rows:
             if item.code not in latest or str(item.end_date) > str(latest[item.code].end_date):
@@ -746,7 +750,10 @@ class _StateViews:
         return {"auctions": {item.code: _row(item) for item in rows}}
 
     def holder_number(self, request: AuxiliaryDatasetRequest) -> Mapping[str, Any]:
-        rows = self._session.scalars(select(HolderNumber).where(HolderNumber.code.in_(request.requested_codes)).order_by(HolderNumber.end_date.desc())).all()
+        statement = select(HolderNumber).where(HolderNumber.code.in_(request.requested_codes))
+        if self._as_of_date is not None:
+            statement = statement.where(HolderNumber.end_date <= self._as_of_date)
+        rows = self._session.scalars(statement.order_by(HolderNumber.end_date.desc())).all()
         grouped: dict[str, list[Any]] = defaultdict(list)
         for item in rows:
             if len(grouped[item.code]) < 2:
@@ -771,6 +778,7 @@ def build_standard_state_adapters(
     connection: Connection,
     session: Session,
     provider: TushareStateProvider | None,
+    as_of_date: date | None = None,
 ) -> Mapping[str, StandardAuxiliaryDatasetAdapters]:
     """Return the frozen state adapter bundle with no dataset switch at runtime.
 
@@ -778,7 +786,7 @@ def build_standard_state_adapters(
     concrete injected fetch callable, repository, and loader; descriptors and domain
     handlers neither acquire a provider nor inspect a global dispatcher.
     """
-    views = _StateViews(session)
+    views = _StateViews(session, as_of_date=as_of_date)
 
     def unavailable(_: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
         raise RuntimeError("state refresh requested without an application-injected provider")

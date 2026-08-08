@@ -32,6 +32,7 @@ class AuxiliaryApplicationPort(Protocol):
         instruments: Sequence[str],
         trade_date: str,
         refresh: bool,
+        as_of_date: str | None,
     ) -> Any:
         """Return an ``AuxiliaryApplicationResult`` (opaque at this protocol boundary)."""
 
@@ -63,6 +64,7 @@ class AuxiliaryDataStage:
                 instruments=auxiliary_codes,
                 trade_date=str(snapshot.get("trade_date") or ""),
                 refresh=not skip_aux_refresh,
+                as_of_date=str(params.get("trade_date_override") or "") or None,
             )
         else:
             raise RuntimeError("AuxiliaryDataStage requires an AuxiliaryApplicationPort")

@@ -42,6 +42,7 @@ from app.services.auxiliary.snapshot_repository import (
     snapshot_metadata,
 )
 from app.services.tushare_client import TushareRawEnvelope
+from app.models.tables import HolderNumber, PledgeStat
 
 
 NOW = datetime(2026, 7, 15, 9, 30, tzinfo=timezone.utc)
@@ -164,6 +165,72 @@ def _session():
     engine = create_engine("sqlite:///:memory:")
     snapshot_metadata.create_all(engine)
     return sessionmaker(bind=engine)()
+
+
+def _state_session():
+    engine = create_engine("sqlite:///:memory:")
+    PledgeStat.__table__.create(engine)
+    HolderNumber.__table__.create(engine)
+    return sessionmaker(bind=engine)()
+
+
+def test_replay_as_of_date_excludes_future_pledge_and_holder_rows() -> None:
+    db = _state_session()
+    try:
+        db.add_all(
+            [
+                PledgeStat(
+                    code="000001",
+                    end_date="2026-03-31",
+                    pledge_count=3,
+                    unrest_pledge=100.0,
+                    rest_pledge=20.0,
+                    pledge_ratio=8.0,
+                ),
+                PledgeStat(
+                    code="000001",
+                    end_date="2026-06-30",
+                    pledge_count=9,
+                    unrest_pledge=300.0,
+                    rest_pledge=40.0,
+                    pledge_ratio=30.0,
+                ),
+                HolderNumber(code="000001", end_date="2025-12-31", holder_num=1200),
+                HolderNumber(code="000001", end_date="2026-03-31", holder_num=1000),
+                HolderNumber(code="000001", end_date="2026-06-30", holder_num=600),
+            ]
+        )
+        db.flush()
+
+        live = run_auxiliary_application(
+            db,
+            instruments=("000001",),
+            trade_date="2026-07-15",
+            refresh=False,
+            datasets=("pledge_stat", "holder_number"),
+        ).feature_views
+        replay = run_auxiliary_application(
+            db,
+            instruments=("000001",),
+            trade_date="2026-03-31",
+            as_of_date="2026-03-31",
+            refresh=False,
+            datasets=("pledge_stat", "holder_number"),
+        ).feature_views
+
+        assert live["pledges"]["000001"]["end_date"] == "2026-06-30"
+        assert live["holder_numbers"]["000001"]["holder_num"] == 600
+        assert replay["pledges"]["000001"]["end_date"] == "2026-03-31"
+        assert replay["pledges"]["000001"]["pledge_ratio"] == 8.0
+        assert replay["holder_numbers"]["000001"] == {
+            "holder_num": 1000,
+            "holder_num_end_date": "2026-03-31",
+            "holder_num_prev": 1200,
+            "holder_num_change_pct": -16.67,
+            "holder_num_decreasing": True,
+        }
+    finally:
+        db.close()
 
 
 def test_auxiliary_trade_date_never_exceeds_latest_closed_trade_date() -> None:

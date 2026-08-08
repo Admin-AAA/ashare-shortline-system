@@ -29,6 +29,8 @@ class FeatureBuildPort(Protocol):
         self,
         stocks: Sequence[StageMapping],
         snapshot: StageMapping,
+        *,
+        auxiliary_views: StageMapping | None = None,
     ) -> tuple[tuple[StageMapping, ...], tuple[Any, ...]]:
         """Return (features, research_contexts)."""
 
@@ -46,9 +48,11 @@ class FeaturesStage:
 
     def execute(self, context: RunContext, data: StageData) -> StageOutput:
         if self.feature_build is not None:
+            auxiliary_views = getattr(data.auxiliary_result, "feature_views", None)
             features, research_contexts = self.feature_build.build(
                 stocks=data.prefiltered_stocks,
                 snapshot=data.snapshot or {},
+                auxiliary_views=auxiliary_views,
             )
         else:
             raise RuntimeError("FeaturesStage requires a FeatureBuildPort")

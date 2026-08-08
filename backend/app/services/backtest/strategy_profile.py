@@ -20,10 +20,16 @@ from app.engine.backtest import (
 from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY
 from app.engine.simulation import compute_metrics
 from app.engine.strategy import build_registry_from_skills, validate_backtest_parameter_set
-from app.models.tables import BacktestRunV2, BacktestTrade, DailyKbar
+from app.models.tables import (
+    BacktestDataSnapshot,
+    BacktestRunV2,
+    BacktestTrade,
+    DailyKbar,
+)
 from app.services.backtest.research_repository import ResearchBacktestRepository
 from app.services.backtest.research_runner import (
     CANDIDATE_EVIDENCE_ACTIONABLE,
+    RESEARCH_INPUT_SCHEMA_VERSION,
     ResearchBacktestRunner,
 )
 from app.services.registry.skills import sync_skills
@@ -79,7 +85,7 @@ class StrategyBacktestProfiles:
         skills = [
             skill
             for skill in sync_skills(self._db)
-            if skill.enabled and skill.executable and skill.contract is not None
+            if skill.enabled and skill.executable
         ]
         registry = build_registry_from_skills(skills)
         targets = []
@@ -186,6 +192,7 @@ class StrategyBacktestProfiles:
                 item
                 for item in runs
                 if _canonical_json_text(str(item.request_json)) == expected_request
+                and self._snapshot_matches_input_schema(str(item.snapshot_id))
             ),
             None,
         )
@@ -224,6 +231,8 @@ class StrategyBacktestProfiles:
             )
         ).all()
         for run in runs:
+            if not self._snapshot_matches_input_schema(str(run.snapshot_id)):
+                continue
             profile = self._profile_from_run(run, target, run_window=True)
             if profile is None:
                 continue
@@ -367,8 +376,42 @@ class StrategyBacktestProfiles:
                 != target.data_requirement_fingerprint
             ):
                 continue
+            if not self._snapshot_matches_input_schema(str(run.snapshot_id)):
+                continue
             return str(run.snapshot_id)
         return None
+
+    def _snapshot_matches_input_schema(self, snapshot_id: str) -> bool:
+        """候选快照必须由当前 input schema 版本生成。
+
+        ``research_runner.capture`` 把 ``RESEARCH_INPUT_SCHEMA_VERSION`` 编码进
+        partition manifest 的 ``source_version``（local-daily-kbars/vN）。字段面
+        升级（v2：辅助表注入 + 相对特征 + 因子管线输入）后，旧 v1 快照的
+        signal stock 缺少策略依赖字段，直接复用会让 prefilter 拿不到字段 →
+        0 信号。此处校验 manifest 的 source_version，不匹配则拒绝复用。
+        """
+        try:
+            manifest = self._db.scalar(
+                select(BacktestDataSnapshot.partition_manifest_json).where(
+                    BacktestDataSnapshot.snapshot_id == snapshot_id
+                )
+            )
+        except Exception:
+            return False
+        if not manifest:
+            return False
+        try:
+            payload = json.loads(str(manifest))
+        except (TypeError, json.JSONDecodeError):
+            return False
+        # manifest 结构：{"schema_version": 2, "partitions": [PartitionManifest...],
+        # "artifacts_by_signal_date": {...}}；source_version 在 partition 上。
+        partitions = payload.get("partitions") or ()
+        return any(
+            str(partition.get("source_version") or "")
+            == f"local-daily-kbars/v{RESEARCH_INPUT_SCHEMA_VERSION}"
+            for partition in partitions
+        )
 
 
 def _canonical_json_text(raw: str) -> str:
