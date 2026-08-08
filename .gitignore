@@ -45,6 +45,7 @@ backend/scripts/.failure_attr_baseline.json
 
 # 治理 store 运行时文件锁（产物 .json 入库，锁文件不入库）
 .kiro/specs/*/governance/store/**/*.lock
+.kiro/settings/
 
 # 本地备份/工具目录（不提交）
 backup_replay_20260801/
