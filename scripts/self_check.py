@@ -38,6 +38,7 @@ from app.services.capital_flow_factor_evidence import (
     fetch_dedup_live_formal_capital_flow,
     summarize_discovery_oos,
 )
+from app.services.evidence.validation import canonical_live_forward_run_ids
 from app.services.feature_builder import market_regime_score
 from sqlalchemy import text
 
@@ -3969,7 +3970,10 @@ def check_auxiliary_factor_data(db) -> None:
     # 资金流因子预测力摘要：统一去重探索口径，并单列发现日之后的 untouched OOS。
     # 旧 r_pb 基线受重复 formal run 放大，不能继续用于“衰减/提升”判断。
     try:
-        rows = fetch_dedup_live_formal_capital_flow(db)
+        rows = fetch_dedup_live_formal_capital_flow(
+            db,
+            canonical_live_forward_run_ids(db),
+        )
         rows = [r for r in rows if r['cumulative_inflow_3d_yi'] is not None
                 and abs(float(r['cumulative_inflow_3d_yi'] or 0)) > 0.001]
         if len(rows) >= 20:
@@ -4082,7 +4086,10 @@ def build_north_star_snapshot(db) -> dict[str, dict]:
         LEFT JOIN recommendations r ON r.recommendation_id=o.recommendation_id
         WHERE r.recommendation_id IS NULL
     """)).scalar() or 0)
-    factor_rows = fetch_dedup_live_formal_capital_flow(db)
+    factor_rows = fetch_dedup_live_formal_capital_flow(
+        db,
+        canonical_live_forward_run_ids(db),
+    )
     factor_keys = [(str(r["code"]), str(r["trade_date"])) for r in factor_rows]
     g0 = evaluate_g0(
         core_rows=core_rows,
