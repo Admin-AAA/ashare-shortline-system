@@ -40,6 +40,7 @@ from app.services.capital_flow_factor_evidence import (
 )
 from app.services.evidence.validation import canonical_live_forward_run_ids
 from app.services.feature_builder import market_regime_score
+from app.services.runs.opportunity import audit_has_opportunity
 from sqlalchemy import text
 
 SKILLS_DIR = os.path.join(os.path.dirname(__file__), '..', 'backend', 'skills')
@@ -88,14 +89,13 @@ def classify_zero_output_health(filter_audits: list[dict]) -> str:
         if score_line is None:
             continue
         saw_score_line = True
-        input_count = int(score_line.get("input_count") or 0)
         pass_count = int(score_line.get("pass_count") or 0)
-        if input_count <= 0:
-            continue
-        saw_opportunity = True
+        if audit_has_opportunity(audit):
+            saw_opportunity = True
         if reason.startswith("production_policy_blocked:"):
-            return "policy_blocked"
-        if pass_count == 0:
+            if saw_opportunity:
+                return "policy_blocked"
+        if saw_opportunity and pass_count == 0:
             saw_plain_abstain = True
     if saw_plain_abstain:
         return "reasonable_abstain"

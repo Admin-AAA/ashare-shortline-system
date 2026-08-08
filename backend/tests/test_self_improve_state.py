@@ -583,6 +583,17 @@ def test_policy_health_freezes_after_five_opportunity_days_all_policy_blocked(tm
             "stage_summary": [
                 {"stage": "score_line", "input_count": 3, "pass_count": 0}
             ],
+            "rows": [{
+                "final_stage": "score_line",
+                "price": 10.0,
+                "score_line": {
+                    "final_score": 72.0,
+                    "score_line_meta": {
+                        "base_score_line": 72.0,
+                        "execution_status": "tradable",
+                    },
+                },
+            }],
         }
     )
     rows = [(f"2026-07-{day:02d}", 0, audit) for day in range(1, 6)]
@@ -601,6 +612,17 @@ def test_no_opportunity_day_does_not_count_toward_inactive_window() -> None:
         {
             "empty_reason": "production_policy_blocked: structural_strong_hard_veto=1",
             "stage_summary": [{"stage": "score_line", "input_count": 1, "pass_count": 0}],
+            "rows": [{
+                "final_stage": "score_line",
+                "price": 10.0,
+                "score_line": {
+                    "final_score": 72.0,
+                    "score_line_meta": {
+                        "base_score_line": 72.0,
+                        "execution_status": "tradable",
+                    },
+                },
+            }],
         }
     )
     no_opportunity = json.dumps(
@@ -609,6 +631,17 @@ def test_no_opportunity_day_does_not_count_toward_inactive_window() -> None:
     rows = [(f"2026-07-{day:02d}", 0, blocked) for day in range(1, 5)]
     rows.append(("2026-07-05", 0, no_opportunity))
     assert summarize_policy_health(rows)["strategy_inactive"] is False
+
+
+def test_score_line_input_count_does_not_create_opportunity_day() -> None:
+    audit = json.dumps({
+        "empty_reason": "production_policy_blocked: score_line=3",
+        "stage_summary": [{"stage": "score_line", "input_count": 3, "pass_count": 0}],
+    })
+    rows = [(f"2026-07-{day:02d}", 0, audit) for day in range(1, 6)]
+    health = summarize_policy_health(rows)
+    assert health["strategy_inactive"] is False
+    assert health["recent_opportunity_days"] == []
 
 
 # ── publish_finding ────────────────────────────────────────────────────
