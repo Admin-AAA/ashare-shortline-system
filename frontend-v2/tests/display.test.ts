@@ -17,14 +17,17 @@ test("provisional outcome remains unsettled for realtime pnl", () => {
   assert.equal(isOutcomeSettled(undefined), false);
 });
 
+test("queued dashboard runs keep an explicit queued label", () => {
+  assert.equal(
+    dashboardRunLabel({ run_id: "run-queued", status: "queued", heartbeat_stale: false }),
+    "排队中",
+  );
+});
+
 test("stale queued dashboard runs are shown as possibly stuck", () => {
   assert.equal(
     dashboardRunLabel({ run_id: "run-queued", status: "queued", heartbeat_stale: true }),
     "运行疑似卡住",
-  );
-  assert.equal(
-    dashboardRunLabel({ run_id: "run-queued", status: "queued", heartbeat_stale: false }),
-    "排队中",
   );
   assert.equal(
     dashboardRunLabel({ run_id: "run-idle", status: "idle", heartbeat_stale: true }),
