@@ -31,7 +31,9 @@ const WINDOW_OPTIONS: Array<{ label: string; value: number | null }> = [
   { label: "近 30 天", value: 30 },
   { label: "近 90 天", value: 90 },
 ];
-const DEFAULT_WINDOW_DAYS = 30;
+// 历史回放样本按完整、同版本 cohort 发布；默认展示全量，避免 30 个自然日窗口
+// 把已发布的多月研究样本裁到只剩少数交易日。用户仍可主动切回 30/90 天。
+const DEFAULT_WINDOW_DAYS: number | null = null;
 const DEFAULT_SAMPLE_SCOPE: MetricsSampleScope = "historical_replay";
 
 const SAMPLE_SCOPE_OPTIONS: Array<{
