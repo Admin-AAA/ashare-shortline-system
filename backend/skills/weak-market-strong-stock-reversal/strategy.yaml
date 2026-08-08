@@ -10,9 +10,6 @@ meta:
   holding_days: [3, 5]
   strategy_independence: 0.82
   default_preset_groups:
-    experiment_weak_market_reversal:
-      weight: 1.0
-      sort_order: 10
 
 contract:
   type: strategy

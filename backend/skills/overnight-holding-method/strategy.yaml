@@ -22,9 +22,6 @@ meta:
     formal_trend_core:
       weight: 0.90
       sort_order: 80
-    formal_intraday:
-      weight: 1.0
-      sort_order: 10
   backtest_adapter:
     module: app.services.overnight_holding_service
     default_action: run

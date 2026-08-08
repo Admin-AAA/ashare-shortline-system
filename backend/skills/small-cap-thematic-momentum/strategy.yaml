@@ -13,9 +13,6 @@ meta:
     formal_opening:
       weight: 0.80
       sort_order: 66
-    experiment_small_cap:
-      weight: 1.0
-      sort_order: 20
 
 contract:
   type: strategy
