@@ -1202,3 +1202,34 @@ def test_publish_lock_runs_command(tmp_memory_dir):
     )
     assert "'ok': True" in proc.stdout
     assert "hi" in proc.stdout
+
+
+def test_migrate_state_cli_bootstraps_backend_import_from_repo_root(tmp_path):
+    """The documented root-level command must not depend on PYTHONPATH."""
+    import json
+    import os
+    import subprocess
+    import sys
+
+    repo_root = Path(__file__).resolve().parents[2]
+    script = repo_root / "backend" / "scripts" / "self_improve_state.py"
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    env["SELF_IMPROVE_MEMORY_DIR"] = str(tmp_path)
+
+    proc = subprocess.run(
+        [sys.executable, str(script), "migrate-state"],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stderr == ""
+    output = json.loads(proc.stdout)
+    assert output["schema_version"] == 3
+    assert output["canonical_production"]["selection_policy"]["policy_id"] == (
+        "production-selection"
+    )

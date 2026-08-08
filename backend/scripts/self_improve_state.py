@@ -21,12 +21,18 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
+
+
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
 
 DEFAULT_MEMORY_DIR = Path(
     "/Users/wangao/.claude/projects/-Users-wangao/memory"

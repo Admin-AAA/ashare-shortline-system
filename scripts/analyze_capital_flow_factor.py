@@ -29,11 +29,15 @@ from app.services.capital_flow_factor_evidence import (
     summarize_discovery_oos,
     summarize_factor_groups,
 )
+from app.services.evidence.validation import canonical_live_forward_run_ids
 
 def main() -> None:
     db = SessionLocal()
     try:
-        rows = fetch_dedup_live_formal_capital_flow(db)
+        rows = fetch_dedup_live_formal_capital_flow(
+            db,
+            canonical_live_forward_run_ids(db),
+        )
 
         print("资金流因子预测力分析（LIVE formal 已结算；按 code+trade_date 去重）")
         print(f"独立样本: {len(rows)} 笔，覆盖 {len({str(r['trade_date']) for r in rows})} 个交易日\n")
