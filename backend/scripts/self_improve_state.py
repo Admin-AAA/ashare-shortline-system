@@ -1088,6 +1088,8 @@ def advance_release(
 
 def summarize_policy_health(rows: list[tuple[Any, Any, Any]]) -> dict:
     """Derive liveness from latest formal runs without treating no-opportunity as zero."""
+    from app.services.runs.opportunity import audit_has_opportunity
+
     by_date: dict[str, dict[str, bool]] = {}
     for trade_date, recommended_count, raw_audit in rows:
         day = str(trade_date)
@@ -1099,15 +1101,7 @@ def summarize_policy_health(rows: list[tuple[Any, Any, Any]]) -> dict:
             audit = json.loads(raw_audit) if isinstance(raw_audit, str) else (raw_audit or {})
         except (TypeError, json.JSONDecodeError):
             audit = {}
-        score_line = next(
-            (
-                item
-                for item in (audit.get("stage_summary") or [])
-                if item.get("stage") == "score_line"
-            ),
-            None,
-        )
-        if score_line and int(score_line.get("input_count") or 0) > 0:
+        if audit_has_opportunity(audit):
             state["opportunity"] = True
         if str(audit.get("empty_reason") or "").startswith("production_policy_blocked:"):
             state["policy_blocked"] = True
