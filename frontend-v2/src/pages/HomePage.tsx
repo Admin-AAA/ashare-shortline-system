@@ -31,7 +31,7 @@ import { StockTicker } from "../components/StockTicker";
 import { Panel } from "../components/Panel";
 import { LlmStanceBadge } from "../components/LlmStanceBadge";
 import { MultiStrategyBadge } from "../components/MultiStrategyBadge";
-import { runStatusLabel } from "../utils/display";
+import { dashboardRunLabel } from "../utils/display";
 import { useUrlRoute } from "../app/useUrlRoute";
 
 /**
@@ -215,15 +215,7 @@ function StatusBar({
 }) {
   const dot = canRun ? "🟢" : healthStatus === "blocked" ? "🔴" : "🟡";
   const readinessLabel = canRun ? "数据就绪" : healthStatus === "blocked" ? "数据不足" : "数据降级";
-  const runLabel = run.run_id
-    ? run.status === "completed"
-      ? `今日已运行`
-      : run.status === "running"
-        ? run.heartbeat_stale
-          ? "运行疑似卡住"
-          : "运行中"
-        : runStatusLabel(run.status)
-    : "今日未运行";
+  const runLabel = dashboardRunLabel(run);
 
   // 健康度指示器数据
   const score = healthDiag?.score ?? 0;
