@@ -592,6 +592,7 @@ function RunStatusPanel({
   // 运行异常（失败/被打断）：与龙头候选面板（CandidateEmptyState）保持一致，
   // 展示失败状态 + 可读错误 + 复盘入口，而不是矛盾地显示「今日未运行 + 运行今日推荐」。
   const abnormal = run.status === "failed" || run.status === "interrupted";
+  const queued = run.status === "queued";
   // 心跳陈旧（running/queued 但心跳超时）：系统可能已卡死，不能显示「运行中」误导用户。
   const staleRunning = !!run.heartbeat_stale && (run.status === "running" || run.status === "queued");
   const title = hasRun
@@ -600,6 +601,8 @@ function RunStatusPanel({
       ? "今日推荐运行异常"
       : staleRunning
         ? "运行疑似卡住"
+        : queued
+          ? "推荐已排队"
         : run.status === "running"
           ? "运行中"
           : "今日未运行";
@@ -619,6 +622,8 @@ function RunStatusPanel({
           ? (run.error_message || run.message || "最近一次推荐运行未正常完成。")
           : staleRunning
             ? "运行心跳已长时间未更新，系统可能已中断。可查看运行复盘或重新运行。"
+            : queued
+              ? "推荐任务已进入后台队列，等待开始；请勿重复触发。"
             : run.message || "暂无运行消息"}
       </div>
 
@@ -642,6 +647,10 @@ function RunStatusPanel({
             重新运行
           </button>
         </div>
+      ) : queued ? (
+        <button className="btn btn--ghost" onClick={onViewHistory} style={{ width: "100%", justifyContent: "center" }}>
+          查看运行记录
+        </button>
       ) : !hasRun ? (
         <button
           className="btn btn--primary"
@@ -794,16 +803,24 @@ function CandidateEmptyState({
 
   // 运行中 / 尚未运行（心跳陈旧时提示可能卡死，勿显示「运行中」误导用户）
   const running = status === "running";
+  const queued = status === "queued";
   const staleRunning = !!currentRun?.heartbeat_stale && (status === "running" || status === "queued");
   return (
     <EmptyState
       icon={<AlertTriangle size={28} />}
-      title={staleRunning ? "运行疑似卡住" : running ? "推荐运行中" : "今日尚未运行推荐"}
-      reason={staleRunning ? "运行心跳已长时间未更新，系统可能已中断。可查看运行复盘或重新运行。" : running ? "正在扫描候选，请稍候刷新。" : "运行推荐后这里会展示今日达标龙头候选。"}
+      title={staleRunning ? "运行疑似卡住" : queued ? "推荐已排队" : running ? "推荐运行中" : "今日尚未运行推荐"}
+      reason={staleRunning ? "运行心跳已长时间未更新，系统可能已中断。可查看运行复盘或重新运行。" : queued ? "推荐任务已进入后台队列，等待开始；暂不展示候选，请勿重复触发。" : running ? "正在扫描候选，请稍候刷新。" : "运行推荐后这里会展示今日达标龙头候选。"}
       action={
-        <button className="btn btn--primary" onClick={onViewAll}>
-          去候选池
-        </button>
+        queued ? (
+          <button className="btn btn--ghost" onClick={onViewHistory}>
+            查看运行记录
+            <ChevronRight size={14} />
+          </button>
+        ) : (
+          <button className="btn btn--primary" onClick={onViewAll}>
+            去候选池
+          </button>
+        )
       }
     />
   );
