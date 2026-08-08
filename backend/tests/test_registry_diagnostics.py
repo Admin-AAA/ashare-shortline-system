@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.skill_loader import StrategySkill
+from app.engine.skill_loader import StrategySkill, load_skills
+from app.services.registry.data_source import DEFAULT_PRESETS
 from app.services.registry.diagnostics import (
     RegistryDiagnosticsError,
     UnknownRegistryValueError,
@@ -50,6 +51,21 @@ def _skill(
 
 
 _CANONICAL = ({"preset_id": "preset_formal_opening", "skill_groups": ["formal_opening"]},)
+
+
+def test_repository_active_strategy_groups_match_canonical_presets():
+    """策略声明的 active preset group 必须属于当前可执行 preset 契约。"""
+    skills_dir = Path(__file__).resolve().parents[1] / "skills"
+    report = build_registry_diagnostics(
+        load_skills(skills_dir),
+        [],
+        canonical_presets=DEFAULT_PRESETS,
+    )
+
+    assert not any(
+        issue.code == "active_strategy_unknown_declared_group"
+        for issue in report.errors
+    )
 
 
 def test_runtime_preflight_preserves_duplicate_skill_ids_before_map_projection(monkeypatch):

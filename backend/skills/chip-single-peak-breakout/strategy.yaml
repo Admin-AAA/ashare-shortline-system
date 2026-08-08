@@ -13,12 +13,6 @@ meta:
     formal_opening:
       weight: 0.80
       sort_order: 65
-    formal_chip_core:
-      weight: 1.0
-      sort_order: 65
-    experiment_chip:
-      weight: 1.0
-      sort_order: 15
 
 contract:
   type: strategy
