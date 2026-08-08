@@ -1,4 +1,6 @@
 """Tests for 基础短线策略 scoring, risk scoring, shared factors, and authenticity."""
+import pytest
+
 from app.services.feature_builder import (
     TREND_SCORE_MAP,
     VOLUME_SCORE_MAP,
@@ -12,6 +14,13 @@ from app.services.feature_builder import (
     market_regime_score,
 )
 from app.services.factors import default_registry, iter_explainable_factors
+from app.services.factors.registry import bootstrap_default_factor_registry
+
+
+@pytest.fixture(autouse=True)
+def _bootstrap_default_factors():
+    """Keep this module order-independent when run without the full suite."""
+    bootstrap_default_factor_registry()
 
 
 # ---------------------------------------------------------------------------
