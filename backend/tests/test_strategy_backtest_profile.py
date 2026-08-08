@@ -15,7 +15,7 @@ from app.engine.backtest import (
     Trade,
     TradeOutcome,
 )
-from app.models.tables import BacktestRunV2, BacktestTrade
+from app.models.tables import BacktestDataSnapshot, BacktestRunV2, BacktestTrade
 from app.services.backtest.strategy_profile import (
     STRATEGY_PROFILE_EXPERIMENT_ID,
     StrategyBacktestProfileTarget,
@@ -99,6 +99,20 @@ def _persist_run(
             created_at=datetime(2026, 7, 1, 9, 0),
         )
     )
+    session.add(
+        BacktestDataSnapshot(
+            snapshot_id=f"snapshot-{run_id}",
+            snapshot_version=2,
+            manifest_hash=f"m{run_id}"[:64],
+            partition_manifest_json=(
+                '{"schema_version": 2, "partitions": [{"dataset": "daily_kbars", '
+                '"source_version": "local-daily-kbars/v4", "row_count": 0, '
+                '"content_hash": "x"}], "artifacts_by_signal_date": {}}'
+            ),
+            coverage_json="{}",
+            missing_requirements_json="{}",
+        )
+    )
 
 
 def _persist_trade(session, run_id: str, trade: Trade) -> None:
@@ -120,7 +134,11 @@ def test_current_version_profile_excludes_old_version_and_compounds_by_exit_mont
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         engine,
-        tables=[BacktestRunV2.__table__, BacktestTrade.__table__],
+        tables=[
+            BacktestRunV2.__table__,
+            BacktestTrade.__table__,
+            BacktestDataSnapshot.__table__,
+        ],
     )
     session = sessionmaker(bind=engine)()
     try:
@@ -175,7 +193,11 @@ def test_profile_does_not_fall_back_to_a_different_parameter_set() -> None:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         engine,
-        tables=[BacktestRunV2.__table__, BacktestTrade.__table__],
+        tables=[
+            BacktestRunV2.__table__,
+            BacktestTrade.__table__,
+            BacktestDataSnapshot.__table__,
+        ],
     )
     session = sessionmaker(bind=engine)()
     try:
@@ -201,7 +223,11 @@ def test_profile_never_projects_an_interrupted_run_as_completed() -> None:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         engine,
-        tables=[BacktestRunV2.__table__, BacktestTrade.__table__],
+        tables=[
+            BacktestRunV2.__table__,
+            BacktestTrade.__table__,
+            BacktestDataSnapshot.__table__,
+        ],
     )
     session = sessionmaker(bind=engine)()
     try:

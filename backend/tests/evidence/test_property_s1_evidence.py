@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 
 from hypothesis import given, settings, strategies as st
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -21,6 +22,7 @@ from app.services.evidence.classification_backfill import (
 )
 from app.services.evidence.historical_query import query_historical_records
 from app.services.evidence.identity import (
+    EvidenceIdentityError,
     PROVENANCE_SCHEMA_VERSION,
     EvidenceClass,
     EvidenceIdentityBuilder,
@@ -52,26 +54,35 @@ def test_property_6_evidence_classification_is_provenance_derived(
 ):
     """**Property 6: Evidence classification is provenance-derived**"""
     generated_date = _SIGNAL_DATE if same_business_day else _SIGNAL_DATE + timedelta(days=1)
-    identity = EvidenceIdentityBuilder().build(
-        run_source=source,
-        actual_generated_at=datetime.combine(
+    build_kwargs = {
+        "run_source": source,
+        "actual_generated_at": datetime.combine(
             generated_date, datetime.min.time(), tzinfo=timezone.utc
         )
         + timedelta(hours=2),
-        signal_date=_SIGNAL_DATE,
-        snapshot=EvidenceSnapshotIdentity(
+        "signal_date": _SIGNAL_DATE,
+        "snapshot": EvidenceSnapshotIdentity(
             source_snapshot_id="snapshot-ok" if verified_snapshot else "unknown",
             data_as_of=(
                 _SIGNAL_DATE + timedelta(days=1) if future_data else _SIGNAL_DATE
             ),
         ),
-        strategy_policy="a" * 64,
-        execution_policy="b" * 64,
-        code_revision="c" * 40 if verified_revision else "unknown",
-        reconstruction_batch_id=(
+        "strategy_policy": "a" * 64,
+        "execution_policy": "b" * 64,
+        "code_revision": "c" * 40 if verified_revision else "unknown",
+        "reconstruction_batch_id": (
             "batch-property-6" if source is RunSource.HISTORICAL_REPLAY else None
         ),
+    }
+    historical_provenance_invalid = source is RunSource.HISTORICAL_REPLAY and (
+        future_data or not verified_snapshot or not verified_revision
     )
+    if historical_provenance_invalid:
+        with pytest.raises(EvidenceIdentityError):
+            EvidenceIdentityBuilder().build(**build_kwargs)
+        return
+
+    identity = EvidenceIdentityBuilder().build(**build_kwargs)
     if source is RunSource.HISTORICAL_REPLAY:
         expected = EvidenceClass.HISTORICAL_RECONSTRUCTION
     elif source is RunSource.BACKTEST:

@@ -67,7 +67,15 @@ from app.engine.strategy import (
     build_registry_from_skills,
     validate_backtest_parameter_set,
 )
-from app.models.tables import DailyKbar, IndexDaily, MinuteKbar, Stock
+from app.models.tables import (
+    DailyKbar,
+    DragonTiger,
+    IndexDaily,
+    LimitUpBoard,
+    MinuteKbar,
+    Stock,
+    StockQuote,
+)
 
 # 回测快照捕获实际需要的 daily_kbars 列（共 21/80 列）。对 351MB / 80 列大宽表
 # 用 load_only 只取这些列，避免 SELECT * 触发 30s 超时（MySQL 3024）。
@@ -90,6 +98,8 @@ from app.services.backtest.research_repository import (
 )
 from app.services.backtest.vectorbt_validation import cross_validate_trades
 from app.services.factors.registry import bootstrap_default_factor_registry
+from app.services.market_source.snapshot import _apply_relative_features
+from app.services.shortline_factors import apply_shared_shortline_factors
 from app.services.runs.contracts import (
     CanonicalExecutionVersionBuilder,
     ExecutionPolicyIdentity,
@@ -111,6 +121,12 @@ _CANDIDATE_EVIDENCE_SCOPES = frozenset(
 # without loading years
 # of irrelevant full-market history into one immutable research capture.
 MIN_LOOKBACK_CALENDAR_DAYS = 120
+
+# Signal stock 的输入字段面契约版本。每次 _stock_as_of 的字段面或 capture 的
+# 注入逻辑发生向后不兼容变化时递增；strategy_profile._compatible_snapshot_id
+# 用同一常量校验候选快照是否由当前契约生成，避免复用旧字段面快照导致策略
+# prefilter 拿到缺失字段（0 信号）。
+RESEARCH_INPUT_SCHEMA_VERSION = 4
 
 
 def _research_execution_version(
@@ -484,6 +500,11 @@ class LocalResearchSnapshotBuilder:
         # whose per-day payload happens to be identical.
         artifact_namespace = canonical_fingerprint(
             {
+                # v2（2026-08-08）：signal stock 字段面从「日K 子集」扩展为
+                # 「日K + 辅助表注入 + 相对特征 + 因子管线输入」，与
+                # _compatible_snapshot_id 的 INPUT_SCHEMA_VERSION 校验联动——
+                # 旧 namespace 快照不再被复用，避免 0 信号旧快照被新策略误用。
+                "input_schema_version": RESEARCH_INPUT_SCHEMA_VERSION,
                 "date_selector": request.date_selector,
                 "target_codes": request.target_codes,
                 "execution_policy": request.execution_policy,
@@ -560,6 +581,10 @@ class LocalResearchSnapshotBuilder:
         payloads: dict[str, bytes] = {}
         coverage: dict[str, CoverageResult] = {}
         gaps: list[DataGap] = []
+        # 辅助数据按日一次取全：涨停板/龙虎榜/行情快照（free_mv_yi 等）只读本地
+        # 表，回测路径据此复刻生产 build_features 的注入行为。表不存在（本地池
+        # 缺表）时回退为空，不影响纯日K策略。
+        aux_rows_by_date = self._load_research_aux_rows(dates)
         for signal_date in dates:
             raw_signal_rows = rows_at_date.get(signal_date, ())
             readiness = self._data_readiness.assess(
@@ -597,6 +622,10 @@ class LocalResearchSnapshotBuilder:
                     # boundary. Keep it out of the strategy artifact and record
                     # the loss of coverage explicitly below.
                     invalid_signal_rows += 1
+            # 复刻生产 build_features 的辅助数据注入 + 相对特征（industry 热度排名
+            # 依赖同横截面全体股票，不能只对单只股票算）。
+            self._inject_research_aux(signal_stocks, aux_rows_by_date.get(signal_date, {}))
+            _apply_relative_features(signal_stocks)
             signal_payload = {
                 "schema_version": 1,
                 "signal_date": signal_date,
@@ -677,6 +706,7 @@ class LocalResearchSnapshotBuilder:
 
         partition_payload = {
             "dataset": "daily_kbars",
+            "input_schema_version": RESEARCH_INPUT_SCHEMA_VERSION,
             "history_start": history_start,
             "outcome_end": outcome_end,
             "signal_dates": dates,
@@ -695,7 +725,10 @@ class LocalResearchSnapshotBuilder:
         partition = PartitionManifest(
             dataset="daily_kbars",
             query_range=DateRange(history_start, outcome_end),
-            source_version="local-daily-kbars/v1",
+            # source_version 编码 signal-stock 输入字段面版本（与
+            # RESEARCH_INPUT_SCHEMA_VERSION 联动）：字段面升级后旧快照的
+            # source_version 不变，strategy_profile 据此拒绝复用旧快照。
+            source_version=f"local-daily-kbars/v{RESEARCH_INPUT_SCHEMA_VERSION}",
             row_count=len(all_rows),
             content_hash=canonical_fingerprint(partition_payload),
         )
@@ -729,6 +762,103 @@ class LocalResearchSnapshotBuilder:
             .order_by(DailyKbar.trade_date)
         ).all()
         return tuple(str(row[0]) for row in rows)
+
+    def _load_research_aux_rows(self, dates: Sequence[str]) -> dict[str, dict[str, Any]]:
+        """按 signal_date 一次取全本地辅助数据（涨停板/龙虎榜/行情快照）。
+
+        生产路径 build_features 在盘后从 auxiliary 池注入这些字段；回测路径
+        没有 real-time 池，只能读本地表复刻。表缺失（本地池未建表）时返回
+        空 dict，纯日K策略不受影响。
+        """
+        rows_by_date: dict[str, dict[str, Any]] = {d: {} for d in dates}
+        try:
+            limit_up_rows = self._session.scalars(
+                select(LimitUpBoard).where(LimitUpBoard.trade_date.in_(tuple(dates)))
+            ).all()
+        except Exception:
+            limit_up_rows = ()
+        for row in limit_up_rows:
+            rows_by_date.setdefault(str(row.trade_date), {})[
+                str(row.code)
+            ] = {
+                "limit_up_consecutive_days": int(row.limit_times or 1),
+                "limit_up_open_times": int(row.open_times or 0),
+                "limit_up_fd_amount_yi": float(row.fd_amount_yi or 0),
+                "limit_up_seal_time": row.first_time,
+            }
+        try:
+            dragon_tiger_rows = self._session.scalars(
+                select(DragonTiger).where(DragonTiger.trade_date.in_(tuple(dates)))
+            ).all()
+        except Exception:
+            dragon_tiger_rows = ()
+        for row in dragon_tiger_rows:
+            rows_by_date.setdefault(str(row.trade_date), {}).setdefault(str(row.code), {}).update(
+                {
+                    "dragon_tiger_is_on_list": True,
+                    "dragon_tiger_recent_count": 1,
+                    "dragon_tiger_latest_date": str(row.trade_date),
+                    "dragon_tiger_buy_amount_yi": float(row.buy_amount_yi or 0),
+                    "dragon_tiger_sell_amount_yi": float(row.sell_amount_yi or 0),
+                    "dragon_tiger_net_amount_yi": float(row.net_amount_yi or 0),
+                    "dragon_tiger_institution_net_buy_yi": float(row.net_amount_yi or 0),
+                }
+            )
+        try:
+            quote_rows = self._session.scalars(
+                select(StockQuote).where(StockQuote.trade_date.in_(tuple(dates)))
+            ).all()
+        except Exception:
+            quote_rows = ()
+        for row in quote_rows:
+            rows_by_date.setdefault(str(row.trade_date), {}).setdefault(str(row.code), {}).update(
+                {
+                    "free_mv_yi": float(row.free_mv_yi or 0),
+                    "total_mv_yi": float(row.total_mv_yi or 0),
+                }
+            )
+        return rows_by_date
+
+    def _inject_research_aux(
+        self,
+        stocks: list[dict[str, Any]],
+        aux: dict[str, dict[str, Any]],
+    ) -> None:
+        """把本地辅助数据字段合并进当日 signal stocks（回测复刻生产注入）。"""
+        if not aux:
+            return
+        for stock in stocks:
+            code = str(stock.get("code") or "")
+            fields = aux.get(code)
+            if not fields:
+                continue
+            if "limit_up_consecutive_days" in fields:
+                stock["is_limit_up"] = True
+                stock["limit_up_consecutive_days"] = fields["limit_up_consecutive_days"]
+                stock["limit_up_open_times"] = fields["limit_up_open_times"]
+                stock["limit_up_fd_amount_yi"] = fields["limit_up_fd_amount_yi"]
+                if fields.get("limit_up_seal_time"):
+                    stock["limit_up_seal_time"] = fields["limit_up_seal_time"]
+            if fields.get("dragon_tiger_is_on_list"):
+                stock.update(
+                    {
+                        "dragon_tiger_is_on_list": True,
+                        "dragon_tiger_recent_count": 1,
+                        "dragon_tiger_latest_date": fields["dragon_tiger_latest_date"],
+                        "dragon_tiger_buy_amount_yi": fields["dragon_tiger_buy_amount_yi"],
+                        "dragon_tiger_sell_amount_yi": fields["dragon_tiger_sell_amount_yi"],
+                        "dragon_tiger_net_amount_yi": fields["dragon_tiger_net_amount_yi"],
+                        "dragon_tiger_institution_net_buy_yi": fields["dragon_tiger_institution_net_buy_yi"],
+                    }
+                )
+                amount_yi = float(stock.get("amount_yi") or 0)
+                net_amt = fields["dragon_tiger_net_amount_yi"]
+                stock["dragon_tiger_net_buy_ratio"] = (
+                    round(min(1.0, max(-1.0, net_amt / amount_yi)), 4) if amount_yi else 0.0
+                )
+            if fields.get("free_mv_yi"):
+                stock["free_mv_yi"] = fields["free_mv_yi"]
+                stock["total_mv_yi"] = fields["total_mv_yi"]
 
     def _empty_bundle(self, request: BacktestRequest) -> SnapshotBundle:
         selector = request.date_selector
@@ -975,6 +1105,14 @@ class ResearchBacktestRunner:
             stocks = signal_input.payload["stocks"]
             if not isinstance(stocks, Sequence):
                 raise SnapshotCaptureError("signal artifact stocks must be a sequence")
+            # 复刻生产 build_features 的因子管线：跨股聚合一次算好 → 建
+            # FactorContext → run_factors 按 depends_on 拓扑序驱动全部已注册短线
+            # 因子（sector_ladder/capital_resonance/limit_up_overheat/leader/
+            # dragon_tiger/twenty_cm_risk），使策略 prefilter/scoring 在 evaluate
+            # 前拿到与生产一致的衍生字段。纯 local 数据，不改不可变 artifact。
+            stock_list = [dict(raw) for raw in stocks if isinstance(raw, Mapping)]
+            _apply_shared_factors(stock_list, bundle)
+            stocks = stock_list
             for raw_stock in stocks:
                 if not isinstance(raw_stock, Mapping):
                     continue
@@ -1256,10 +1394,13 @@ def _stock_as_of(
     volumes = [max(0.0, _number(item.volume)) for item in prior]
     lookback20 = closes[-20:]
     lookback60 = closes[-60:]
+    lookback120 = closes[-120:]
     recent_high20 = max(highs[-20:] or [close])
     recent_low20 = min(lows[-20:] or [close])
     recent_high60 = max(highs[-60:] or [close])
     recent_low60 = min(lows[-60:] or [close])
+    recent_high120 = max(highs[-120:] or [close])
+    recent_low120 = min(lows[-120:] or [close])
     ma5 = _number(row.ma5) or _mean(closes[-5:])
     ma10 = _number(row.ma10) or _mean(closes[-10:])
     ma20 = _number(row.ma20) or _mean(lookback20)
@@ -1270,12 +1411,21 @@ def _stock_as_of(
     pct = _number(row.pct_chg)
     amount_yi = _number(row.amount) / 100_000_000
     turnover = _number(row.turnover_rate)
+    limit_pct = _limit_pct_for_bar(row, metadata)
+    is_limit_up = pct >= limit_pct - 0.2
     pos20 = _position(close, recent_low20, recent_high20)
     pos60 = _position(close, recent_low60, recent_high60)
+    pos120 = _position(close, recent_low120, recent_high120)
     dist20 = _pct_delta(close, ma20)
     dist60 = _pct_delta(close, ma60)
     chg20 = _pct_delta(close, lookback20[0]) if lookback20 else 0.0
     chg60 = _pct_delta(close, lookback60[0]) if lookback60 else 0.0
+    # 效率系数（Kaufman 口径）与 indicator_computer.efficiency 一致
+    eff20 = 0.0
+    if len(closes) > 20:
+        direction = abs(closes[-1] - closes[-21])
+        noise = sum(abs(closes[index] - closes[index - 1]) for index in range(len(closes) - 20, len(closes)))
+        eff20 = direction / noise if noise else 0.0
     dsa_trend = 10 * int(close >= ma20) + 10 * int(ma5 >= ma10) + 10 * int(ma10 >= ma20)
     dsa_bias = 14 if -2.0 <= _pct_delta(close, ma5) <= 5.0 else 6
     dsa_volume = min(15, int(max(0.0, vol5_20) * 5))
@@ -1313,9 +1463,13 @@ def _stock_as_of(
         "chip_concentration": chip_concentration,
         "pos20": pos20,
         "pos60": pos60,
+        "pos120": pos120,
         "dist20": dist20,
         "dist60": dist60,
-        "off_high_pct": _pct_delta(close, recent_high60),
+        "bias_ma20": dist20,
+        "eff20": eff20,
+        "off_high_pct": _pct_delta(close, recent_high20),
+        "off_high60_pct": _pct_delta(close, recent_high60),
         "chg20": chg20,
         "chg60": chg60,
         "vol5_20": vol5_20,
@@ -1324,7 +1478,26 @@ def _stock_as_of(
         "volume_shrink_pullback": vol5_20 < 0.9 and pct <= 0,
         "volume_breakout_signal": vol5_20 >= 1.1 and close >= recent_high20,
         "resistance_distance_pct": _pct_delta(recent_high20, close),
-        "limit_up_days20": sum(1 for item in prior[-20:] if _number(item.pct_chg) >= 9.5),
+        # 上影线偏长计数（上影/全幅 ≥ 0.45），与 indicator_computer.upper_shadow_count
+        # 及生产 `_build_stock_from_bars` 的 `_upper_shadow_count` 口径一致。
+        "upper_shadow_count20": sum(
+            1
+            for item in prior[-20:]
+            if _upper_shadow_ratio(item) is not None and _upper_shadow_ratio(item) >= 0.45
+        ),
+        "is_limit_up": is_limit_up,
+        "limit_up_consecutive_days": 1 if is_limit_up else 0,
+        "limit_up_open_times": 0,
+        "limit_up_fd_amount_yi": 0.0,
+        "limit_up_days20": sum(1 for item in prior[-20:] if _number(item.pct_chg) >= limit_pct - 0.2),
+        "dragon_tiger_is_on_list": False,
+        "dragon_tiger_recent_count": 0,
+        "dragon_tiger_net_amount_yi": 0.0,
+        "dragon_tiger_institution_net_buy_yi": 0.0,
+        "dragon_tiger_net_buy_ratio": 0.0,
+        "dragon_tiger_buy_seat_count": 0,
+        "dragon_tiger_buy_dispersion": "未上榜",
+        "dragon_tiger_inst_buy_ratio": 0.0,
         "dsa_trend_score": float(dsa_trend),
         "dsa_bias_score": float(dsa_bias),
         "dsa_volume_score": float(dsa_volume),
@@ -1347,8 +1520,52 @@ def _stock_as_of(
         "market_sample_count": int((market_context or {}).get("sample_count") or 0),
         "data_completeness_score": 100.0,
         "evidence_quality_score": 100.0,
+        # 供因子管线复刻生产聚合（_apply_relative_features / build_features）
+        "free_mv_yi": 0.0,
+        "total_mv_yi": 0.0,
+        "main_net_inflow_yi": 0.0,
+        "concept_sector_heat_rank": 999,
+        # 回测无资金流池：声明缺失让 capital_resonance 因子走 price_volume_fallback
+        # degradation 分支（否则 has_flow=True 用全零资金流字段算分，恒 39 无区分度，
+        # 直接卡死依赖 capital_resonance_score>=45 的 setup，如 overnight-holding）。
+        "data_quality": {
+            "missing_fields": ["capital_flow"],
+            "capital_flow_checked": False,
+        },
     }
     return stock
+
+
+def _upper_shadow_ratio(item: DailyKbar) -> float | None:
+    """单根日K的上影线占比（上影 / 全幅）；无效数据返回 None。"""
+    high = _number(item.high)
+    low = _number(item.low)
+    open_ = _number(item.open)
+    close = _number(item.close)
+    spread = high - low
+    if spread <= 0:
+        return None
+    return (high - max(open_, close)) / spread
+
+
+def _limit_pct_for_bar(row: DailyKbar, metadata: Mapping[str, Any]) -> float:
+    """按证券身份返回回测板的涨跌停幅度：ST 优先，其次北交所/代码板位。
+
+    与生产 `board_rules.limit_pct_for_stock` 一致：ST/北交所用更低幅度，
+    创业/科创用 20cm，其余主板 10cm。回测信号行没有 quote 的 exchange
+    字段，用 Stock 元数据里的名字与 ST 标记近似。
+    """
+    name = str(metadata.get("name") or "").upper()
+    if bool(metadata.get("is_st")) or "ST" in name:
+        return 5.0
+    code = str(row.code)
+    if code.startswith(("300", "301")):
+        return 20.0
+    if code.startswith(("688", "689")):
+        return 20.0
+    if code.startswith(("8", "4")):
+        return 30.0
+    return 10.0
 
 
 def _rows_by_trade_date(rows: Sequence[DailyKbar]) -> dict[str, list[DailyKbar]]:
@@ -1356,6 +1573,41 @@ def _rows_by_trade_date(rows: Sequence[DailyKbar]) -> dict[str, list[DailyKbar]]
     for row in rows:
         grouped[str(row.trade_date)].append(row)
     return grouped
+
+
+def _apply_shared_factors(stocks: list[dict[str, Any]], bundle: SnapshotBundle) -> None:
+    """Replica of production ``build_features`` factor orchestration for research.
+
+    Production applies ``apply_shared_shortline_factors`` with the day's quote
+    snapshot; research has no quote snapshot, so it reconstructs the breadth
+    aggregates from the signal artifact itself (industry statistics, sentiment
+    phase, main industries) — the same inputs the capture already embeds in
+    every stock.  Factor outputs are merged in place so the strategy sees
+    sector_ladder / capital_resonance / limit_up_overheat / leader /
+    dragon_tiger / twenty_cm_risk exactly like production.
+    """
+    if not stocks:
+        return
+    if not stocks:
+        return
+    # ``capture`` already computes these breadth values from the full signal-date
+    # market.  Keep them when a caller evaluates a target-code subset; deriving
+    # sentiment from that subset changes the strategy input and breaks parity with
+    # the production feature builder.
+    first = stocks[0]
+    snapshot = {
+        "sample_count": int(first.get("market_sample_count") or len(stocks)),
+        "up_count": int(first.get("up_count") or 0),
+        "down_count": int(first.get("down_count") or 0),
+        "limit_up_count": int(first.get("limit_up_count") or 0),
+        "limit_down_count": int(first.get("limit_down_count") or 0),
+        "main_industries": [
+            str(stock.get("industry") or "")
+            for stock in stocks
+            if stock.get("is_main_theme")
+        ],
+    }
+    apply_shared_shortline_factors(stocks, snapshot)
 
 
 def _historical_market_context(rows: Sequence[DailyKbar]) -> dict[str, Any]:
