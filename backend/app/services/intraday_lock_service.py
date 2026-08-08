@@ -20,6 +20,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.time import utcnow_naive
 from app.models.tables import IntradayLockMonitor, IntradayLockSignal
 
 # 锁利目标/比例的默认扫描网格(影子阶段同时监控多档,便于事后找最优)
@@ -74,7 +75,7 @@ def create_monitors_for_trade_date(
     """为 trade_date 已入场的精选持仓建监控任务(每持仓×每档目标一条)。幂等。"""
     positions = _fetch_positions_for_monitor(db, trade_date)
     created = 0
-    now = datetime.utcnow()
+    now = utcnow_naive()
     for pos in positions:
         for target in target_pcts:
             # 幂等: 同 recommendation_id + target_pct 已存在则跳过
@@ -150,7 +151,7 @@ def poll_once(db: Session, pro, now_str: str | None = None) -> dict[str, int]:
              "FROM intraday_lock_monitors WHERE status = 'monitoring'")
     ).fetchall()
     stats = {"checked": 0, "triggered": 0, "errors": 0}
-    now = datetime.utcnow()
+    now = utcnow_naive()
     for m in monitors:
         monitor_id, code, entry_price, target_pct, lock_ratio, entry_date = (
             str(m[0]), str(m[1]), float(m[2]), float(m[3]), float(m[4]), str(m[5])
@@ -219,7 +220,7 @@ def settle_signals(db: Session, pro) -> dict[str, int]:
              "FROM intraday_lock_signals WHERE status = 'open'")
     ).fetchall()
     stats = {"settled": 0, "errors": 0, "skipped": 0}
-    now = datetime.utcnow()
+    now = utcnow_naive()
     for s in open_signals:
         signal_id, monitor_id, code, trigger_time, trigger_price = (
             str(s[0]), str(s[1]), str(s[2]), str(s[3]), float(s[4])

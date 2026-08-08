@@ -23,6 +23,8 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy.orm import Session
 
+pytestmark = pytest.mark.integration
+
 from app.models.tables import (
     DailyKbar,
     Recommendation,

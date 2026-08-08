@@ -138,7 +138,10 @@ def test_passes_support_trend_decoupled_from_corrupted_column():
 
 def _db_reachable():
     try:
-        from sqlalchemy import create_engine, text
+        from sqlalchemy import text
+        from app.db.session import engine
+        if engine.dialect.name != "mysql":
+            return False
         from app.db.session import SessionLocal
         with SessionLocal() as db:
             db.execute(text("SELECT 1"))

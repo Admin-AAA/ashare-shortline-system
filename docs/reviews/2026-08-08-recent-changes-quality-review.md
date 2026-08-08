@@ -22,6 +22,9 @@
 backend/.venv/bin/python -m compileall backend/app -q       PASS
 backend/.venv/bin/python scripts/check_architecture.py     PASS
 RUN_REAL_MYSQL_S6=0 pytest backend/app/ -q                 68 passed, 1 skipped
+ASHARE_DATABASE_URL=sqlite:// pytest backend/tests/ -m "not integration"  2482 passed, 175 skipped, 43 deselected
+MySQL integration smoke suite                              6 passed
+governance store layout check                              670 objects valid
 frontend-v2: npm test                                      39 passed
 frontend-v2: npm run build                                 PASS
 git diff --check                                           PASS
@@ -40,9 +43,9 @@ git diff --check                                           PASS
 | P0（已修复） | 证据属性 Hypothesis 测试会生成未来数据、未验证快照或未验证 revision 的非法历史重建组合，导致完整回归假失败。 | 测试对非法组合显式断言 `EvidenceIdentityError`，合法组合继续验证证据分类。 |
 | P0/P1（已修复） | 研究回测私有因子实现从目标代码子集计算涨跌停/宽度，可能把同一信号日的市场 regime 改写成子集 regime，且与生产因子编排分叉。 | 复用生产 `apply_shared_shortline_factors`，保留信号日全市场统计；增加回归测试。 |
 | P0/P1（已修复） | 历史回放辅助状态未统一按信号日截断，质押/股东户数等数据可能使用未来观测。 | application、state adapter、run stages 和 feature builder 全链路传递 `as_of_date`/截断视图，并补充回归测试。 |
-| P1（遗留风险） | `.github/workflows/verify.yml` 的 Python 单元任务仅执行 `pytest app/`（约 68 个测试），没有覆盖 `backend/tests/` 的大部分回归；完整套件依赖 MySQL 锁和真实数据配置，CI 当前没有对应服务。 | 本轮不擅自改造 CI 数据库拓扑。建议后续新增隔离的 DB-backed CI job，或把可无 DB 的回归标记并纳入 CI。 |
-| P1（遗留风险） | 完整回归产生约 1491 条 warning，主要是 `datetime.utcnow()` 弃用、FastAPI/Starlette/httpx 弃用提示和未注册的 `integration` mark。 | 记录为后续技术债，未在本轮扩大修改范围。 |
-| P1（维护性） | 基线以来新增治理证据/运行产物较多（约 1069 个文件、+87k 行），审查成本和仓库体积明显上升。 | 保留具有追溯价值的证据；建议后续按发布批次归档并限制运行时产物入库。 |
+| P1（已修复） | `.github/workflows/verify.yml` 的 Python 单元任务仅执行 `pytest app/`（约 68 个测试），没有覆盖 `backend/tests/` 的大部分回归；完整套件依赖 MySQL 锁和真实数据配置，CI 当前没有对应服务。 | 新增 SQLite 无数据库回归 job（覆盖 2482 个测试）和 MySQL 8 集成 smoke job；数据库依赖测试统一注册 `integration` 标记。 |
+| P1（已修复） | 完整回归产生约 1491 条 warning，主要是 `datetime.utcnow()` 弃用、FastAPI/Starlette/httpx 弃用提示和未注册的 `integration` mark。 | 统一 `utcnow_naive()`，注册 `integration` mark，改用 `httpx2`，移除已弃用 ORJSON 默认 response，注册 SQLite 显式 datetime adapter，并移除旧回测写入路径的运行时弃用噪声。当前两套门禁均无 warning。 |
+| P1（已修复） | 基线以来新增治理证据/运行产物较多（约 1069 个文件、+87k 行），审查成本和仓库体积明显上升。 | 保留 670 个不可变审计对象；新增治理产物策略和 `check_governance_store.py` CI 校验，限制对象命名、JSON 完整性、单对象 256 KiB 上限和临时文件进入。 |
 
 ## 分支整合决策
 
@@ -57,8 +60,7 @@ git diff --check                                           PASS
 
 删除分支前会先确认工作树无未提交改动、主分支已更新并完成远程推送；不会删除独立 worktree 目录，也不会改动用户已有的未跟踪文件 `系统深度诊断报告.md`。
 
-## 后续建议
+## 后续建议（已降为 P2）
 
-1. 为完整 `backend/tests` 建立可复现的 CI 数据库服务/fixture，并至少纳入本轮历史回放和证据属性回归。
-2. 注册 `integration` pytest mark，逐步清理 `datetime.utcnow()` 及 FastAPI/Starlette/httpx 弃用警告。
-3. 继续将运行时锁、临时快照和大批量生成证据与长期审计证据分层管理，减少主仓库噪声。
+1. 按数据准备成本逐步扩大 MySQL CI smoke 覆盖，不把依赖本地生产样本的全量回测强行塞入每次 PR。
+2. 继续将运行时锁、临时快照和大批量生成证据与长期审计证据分层管理，减少主仓库噪声。

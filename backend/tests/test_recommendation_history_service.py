@@ -12,12 +12,16 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from app.db.session import SessionLocal
 from app.models.tables import RecommendationRun
 from app.services.workbench_service import (
     _build_recommendation_history_summary,
     list_recommendation_history,
 )
+
+pytestmark = pytest.mark.integration
 
 
 def _db():

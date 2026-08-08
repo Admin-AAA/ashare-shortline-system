@@ -9,6 +9,7 @@ PyYAML==6.0.3
 prefect==3.8.0
 python-multipart==0.0.28
 httpx==0.28.1
+httpx2==2.9.1
 tushare==1.4.29
 pandas==2.2.3
 pandera[pandas]==0.32.1

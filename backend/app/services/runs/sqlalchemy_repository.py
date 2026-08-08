@@ -16,6 +16,7 @@ from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.time import utcnow_naive
 from app.models.tables import RecommendationRun
 from app.services.runs.contracts import (
     RunActor,
@@ -434,7 +435,7 @@ class SQLAlchemyRunRepository:
         phase = _parse_phase(getattr(row, "lifecycle_phase", None))
         checkpoint = None
         side_effect_key = getattr(row, "checkpoint_side_effect_key", None)
-        checkpoint_time = getattr(row, "heartbeat_at", None) or getattr(row, "started_at", None) or datetime.utcnow()
+        checkpoint_time = getattr(row, "heartbeat_at", None) or getattr(row, "started_at", None) or utcnow_naive()
         if phase is not None and phase is not RunPhase.COMPLETED and side_effect_key:
             checkpoint = RunCheckpoint(
                 phase=phase,
@@ -469,7 +470,7 @@ class SQLAlchemyRunRepository:
             heartbeat_at=row.heartbeat_at,
             lease=lease,
             failure=failure,
-            created_at=row.started_at or row.heartbeat_at or datetime.utcnow(),
+            created_at=row.started_at or row.heartbeat_at or utcnow_naive(),
             started_at=row.started_at if status is not RunStatus.QUEUED else None,
             finished_at=row.finished_at,
         )

@@ -18,6 +18,8 @@ from app.db.session import SessionLocal
 from app.services import stats_service as ss
 from app.services.stats_service import RecommendationRun
 
+pytestmark = pytest.mark.integration
+
 
 def _db():
     try:

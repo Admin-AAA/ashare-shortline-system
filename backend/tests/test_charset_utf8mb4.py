@@ -4,9 +4,12 @@
 latin1，SQLAlchemy 通过 connect_args charset 与 connect 事件 SET NAMES utf8mb4
 双重保障中文读写。此测试验证连接字符集与中文往返（写后回滚）。
 """
+import pytest
 from sqlalchemy import text
 
 from app.db.session import SessionLocal
+
+pytestmark = pytest.mark.integration
 
 
 def test_connection_charset_is_utf8mb4():

@@ -172,6 +172,9 @@ def test_build_indicators_ma20_ma60_vol_ratio():
 def _db_reachable():
     try:
         from sqlalchemy import text
+        from app.db.session import engine
+        if engine.dialect.name != "mysql":
+            return False
         from app.db.session import SessionLocal
         with SessionLocal() as db:
             db.execute(text("SELECT 1"))

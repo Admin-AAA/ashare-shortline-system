@@ -854,13 +854,6 @@ def _persist_backtest_recommendations(
     cards: list[dict[str, Any]],
     snapshot: dict[str, Any],
 ) -> None:
-    import warnings
-    warnings.warn(
-        "_persist_backtest_recommendations is deprecated: use ResearchBacktestRepository "
-        "for new backtest evidence. btrec_* writes will be removed in a future release.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     # 清理同 trade_date 的旧 backtest 推荐与 outcome，避免跨 run 累积污染统计
     # 只清理 btrec_（回测推荐），不影响实盘 rec_

@@ -66,6 +66,7 @@ def test_small_cap_skill_when_exprs_use_allowed_names():
     assert bad == set(), f"when 表达式含非白名单字段（将被 evaluator 判为 False，策略变死代码）: {bad}"
 
 
+@pytest.mark.integration
 def test_small_cap_skill_signal_grounded_in_history():
     """回归护栏：核心因子组合必须在历史推荐中显著优于基线（n>=100, lift>=5pp）。"""
     from app.db.session import SessionLocal

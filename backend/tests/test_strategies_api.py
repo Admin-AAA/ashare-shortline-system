@@ -9,8 +9,11 @@
 """
 
 from fastapi.testclient import TestClient
+import pytest
 
 from app.main import app
+
+pytestmark = pytest.mark.integration
 
 
 def test_strategies_endpoint_basic_shape():

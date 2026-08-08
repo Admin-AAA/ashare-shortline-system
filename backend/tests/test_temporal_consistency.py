@@ -63,6 +63,7 @@ class TestSummary:
         assert s["warnings"] == 1
 
 
+@pytest.mark.integration
 class TestCheckRunTemporalConsistency:
     def test_no_data_returns_empty(self):
         from app.db.session import SessionLocal
@@ -88,6 +89,7 @@ class TestCheckRunTemporalConsistency:
             db.close()
 
 
+@pytest.mark.integration
 class TestCheckBacktestTemporalConsistency:
     def test_produces_report(self):
         from app.db.session import SessionLocal

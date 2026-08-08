@@ -9,7 +9,6 @@ from time import perf_counter
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.responses import ORJSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from app.api import admin, backtests, dashboard, data_sources, frontend_logs, home, llm, metrics, outcomes, presets, records, recommendations, runs, skills, stats, strategies
@@ -68,12 +67,8 @@ async def application_lifespan(_app: FastAPI):
             logger.error("application shutdown cleanup failures: %s", ",".join(failures))
 
 
-# ORJSONResponse 作为默认 response_class：orjson 序列化比标准 json 快 2-3x，
-# 全局加速所有 API 端点的 JSON 响应（/api/strategies 1.49s 中 ~0.55s 是序列化）。
-# 现有显式 JSONResponse 返回（密码检查等）不受影响。
 app = FastAPI(
     title="AShare Shortline System",
-    default_response_class=ORJSONResponse,
     lifespan=application_lifespan,
 )
 _startup_db_error: str | None = None

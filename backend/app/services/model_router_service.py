@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.time import utcnow_naive
 from app.db.session import SessionLocal
 from app.models.tables import ModelRouteConfig
 
@@ -113,7 +114,7 @@ def update_model_route(db: Session, route_id: str, payload: dict) -> dict | None
     if route is None:
         return None
     _apply_route_payload(route, payload, creating=False)
-    route.updated_at = datetime.utcnow()
+    route.updated_at = utcnow_naive()
     db.flush()
     rows = db.scalars(
         select(ModelRouteConfig).order_by(ModelRouteConfig.priority.asc(), ModelRouteConfig.updated_at.asc())
@@ -151,7 +152,7 @@ def reorder_model_routes(db: Session, route_ids: list[str]) -> list[dict]:
     for idx, row in enumerate(merged, start=1):
         if row.priority != idx:
             row.priority = idx
-            row.updated_at = datetime.utcnow()
+            row.updated_at = utcnow_naive()
             changed = True
     if changed:
         db.commit()
@@ -426,7 +427,7 @@ def _normalize_priorities(db: Session, rows: list[ModelRouteConfig]) -> None:
     for idx, row in enumerate(rows, start=1):
         if row.priority != idx:
             row.priority = idx
-            row.updated_at = datetime.utcnow()
+            row.updated_at = utcnow_naive()
             changed = True
     if changed:
         db.flush()

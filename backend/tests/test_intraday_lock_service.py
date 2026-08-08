@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.core.time import utcnow_naive
 from app.models.tables import Base, IntradayLockMonitor, IntradayLockSignal
 from app.services.intraday_lock_service import (
     _first_hit_bar,
@@ -29,7 +30,7 @@ def _session():
 
 def _add_monitor(db, monitor_id="ilm_t1", code="600519", entry_price=100.0, target_pct=5.0, status="monitoring"):
     from datetime import datetime
-    now = datetime.utcnow()
+    now = utcnow_naive()
     db.add(IntradayLockMonitor(
         monitor_id=monitor_id, recommendation_id="rec_t1", code=code,
         trade_date="2026-07-29", entry_date="2026-07-29", entry_price=entry_price,

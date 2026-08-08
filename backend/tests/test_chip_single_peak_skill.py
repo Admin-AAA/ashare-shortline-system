@@ -65,6 +65,7 @@ def test_chip_skill_when_exprs_use_allowed_names():
     assert bad == set(), f"when 表达式含非白名单字段（将被 evaluator 判为 False，策略变死代码）: {bad}"
 
 
+@pytest.mark.integration
 def test_chip_skill_signal_grounded_in_history():
     """回归护栏：核心因子 chip_concentration>=20 & 突破 必须在历史 formal 推荐中显著优于基线。"""
     from app.db.session import SessionLocal

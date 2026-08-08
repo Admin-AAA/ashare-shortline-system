@@ -28,6 +28,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.mysql import DATETIME, LONGBLOB, LONGTEXT, MEDIUMTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.time import utcnow_naive
 from app.db.session import Base
 
 
@@ -47,7 +48,7 @@ class Stock(Base):
     market: Mapped[str | None] = mapped_column(String(16))
     list_date: Mapped[str | None] = mapped_column(String(10))
     is_st: Mapped[bool] = mapped_column(Boolean, default=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class DailyKbar(Base):
@@ -158,7 +159,7 @@ class DailyKbar(Base):
 
     # 来源标记
     source: Mapped[str] = mapped_column(String(16), default="tushare")
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class StockQuote(Base):
@@ -192,7 +193,7 @@ class StockQuote(Base):
     source_count: Mapped[int] = mapped_column(Integer, default=1)
     quality_score: Mapped[float] = mapped_column(Float, default=0)
     freshness_status: Mapped[str] = mapped_column(String(16), default="fresh")
-    snapped_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    snapped_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, index=True)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -220,7 +221,7 @@ class LimitUpBoard(Base):
     turnover_ratio: Mapped[float | None] = mapped_column(Float)
     fd_amount_yi: Mapped[float | None] = mapped_column(Float)
     industry: Mapped[str | None] = mapped_column(String(80))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class ConceptSector(Base):
@@ -237,7 +238,7 @@ class ConceptSector(Base):
     list_date: Mapped[str | None] = mapped_column(String(10))
     type: Mapped[str | None] = mapped_column(String(16))
     heat_rank: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class ConceptSectorStock(Base):
@@ -250,7 +251,7 @@ class ConceptSectorStock(Base):
     code: Mapped[str] = mapped_column(String(6), index=True)
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     name: Mapped[str | None] = mapped_column(String(80))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class CapitalFlow(Base):
@@ -270,7 +271,7 @@ class CapitalFlow(Base):
     cumulative_inflow_3d_yi: Mapped[float | None] = mapped_column(Float)
     cumulative_inflow_5d_yi: Mapped[float | None] = mapped_column(Float)
     cumulative_inflow_10d_yi: Mapped[float | None] = mapped_column(Float)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class DragonTiger(Base):
@@ -286,7 +287,7 @@ class DragonTiger(Base):
     buy_amount_yi: Mapped[float | None] = mapped_column(Float)
     sell_amount_yi: Mapped[float | None] = mapped_column(Float)
     net_amount_yi: Mapped[float | None] = mapped_column(Float)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class NewsAnnouncement(Base):
@@ -304,7 +305,7 @@ class NewsAnnouncement(Base):
     category: Mapped[str | None] = mapped_column(String(40))
     sentiment: Mapped[str | None] = mapped_column(String(20))
     is_risk_warning: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class MinuteKbar(Base):
@@ -331,7 +332,7 @@ class MinuteKbar(Base):
     close: Mapped[float] = mapped_column(Float, default=0)
     volume: Mapped[float] = mapped_column(Float, default=0)
     amount: Mapped[float] = mapped_column(Float, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -356,7 +357,7 @@ class IndexDaily(Base):
     high: Mapped[float] = mapped_column(Float, default=0)
     low: Mapped[float] = mapped_column(Float, default=0)
     volume: Mapped[float] = mapped_column(Float, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class MarginData(Base):
@@ -372,7 +373,7 @@ class MarginData(Base):
     rzmre: Mapped[float | None] = mapped_column(Float)  # 融资买入额(亿)
     rzche: Mapped[float | None] = mapped_column(Float)  # 融资偿还额(亿)
     rzrqye: Mapped[float | None] = mapped_column(Float) # 融资融券余额(亿)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class MarginDetail(Base):
@@ -389,7 +390,7 @@ class MarginDetail(Base):
     rzche: Mapped[float | None] = mapped_column(Float)       # 融资偿还额(亿)
     rzrqye: Mapped[float | None] = mapped_column(Float)      # 融资融券余额(亿)
     rqyl: Mapped[float | None] = mapped_column(Float)        # 融券余量(股)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class BlockTrade(Base):
@@ -404,7 +405,7 @@ class BlockTrade(Base):
     amount_yi: Mapped[float | None] = mapped_column(Float)    # 成交额(亿)
     buyer: Mapped[str | None] = mapped_column(String(200))    # 买方营业部
     seller: Mapped[str | None] = mapped_column(String(200))   # 卖方营业部
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class HsgtFlow(Base):
@@ -418,7 +419,7 @@ class HsgtFlow(Base):
     south_money: Mapped[float | None] = mapped_column(Float)  # 南向资金(亿)
     hgt: Mapped[float | None] = mapped_column(Float)          # 沪股通(万元)
     sgt: Mapped[float | None] = mapped_column(Float)          # 深股通(万元)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class HsgtTop10(Base):
@@ -436,7 +437,7 @@ class HsgtTop10(Base):
     amount: Mapped[float | None] = mapped_column(Float)       # 持股数量(股)
     net_amount: Mapped[float | None] = mapped_column(Float)   # 持股变化(股)
     buy: Mapped[float | None] = mapped_column(Float)          # 买入(股)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class HkHolding(Base):
@@ -449,7 +450,7 @@ class HkHolding(Base):
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     vol: Mapped[float | None] = mapped_column(Float)   # 持股数量(股)
     ratio: Mapped[float | None] = mapped_column(Float)  # 持股比例(%)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class HolderNumber(Base):
@@ -461,7 +462,7 @@ class HolderNumber(Base):
     code: Mapped[str] = mapped_column(String(6), index=True)
     end_date: Mapped[str] = mapped_column(String(10), index=True)
     holder_num: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class FinaIndicator(Base):
@@ -484,7 +485,7 @@ class FinaIndicator(Base):
     or_yoy: Mapped[float | None] = mapped_column(Float)                # 营业收入同比 %
     eps: Mapped[float | None] = mapped_column(Float)
     bps: Mapped[float | None] = mapped_column(Float)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, onupdate=utcnow_naive)
 
 
 class StkLimit(Base):
@@ -497,7 +498,7 @@ class StkLimit(Base):
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     up_limit: Mapped[float | None] = mapped_column(Float)
     down_limit: Mapped[float | None] = mapped_column(Float)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class AuctionData(Base):
@@ -515,7 +516,7 @@ class AuctionData(Base):
     turnover_rate: Mapped[float | None] = mapped_column(Float)
     volume_ratio: Mapped[float | None] = mapped_column(Float)
     float_share: Mapped[float | None] = mapped_column(Float)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class BrokerRecommend(Base):
@@ -528,7 +529,7 @@ class BrokerRecommend(Base):
     name: Mapped[str | None] = mapped_column(String(80))
     month: Mapped[str] = mapped_column(String(6), index=True)
     broker: Mapped[str] = mapped_column(String(80))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class HolderTrade(Base):
@@ -545,7 +546,7 @@ class HolderTrade(Base):
     change_ratio: Mapped[float | None] = mapped_column(Float)
     after_ratio: Mapped[float | None] = mapped_column(Float)
     avg_price: Mapped[float | None] = mapped_column(Float)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class InstitutionalSurvey(Base):
@@ -559,7 +560,7 @@ class InstitutionalSurvey(Base):
     fund_visitors: Mapped[int | None] = mapped_column(Integer)
     rece_org: Mapped[str | None] = mapped_column(String(120))
     org_type: Mapped[str | None] = mapped_column(String(40))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class ShareFloat(Base):
@@ -573,7 +574,7 @@ class ShareFloat(Base):
     float_share: Mapped[float | None] = mapped_column(Float)
     float_ratio: Mapped[float | None] = mapped_column(Float)
     holder_name: Mapped[str | None] = mapped_column(String(120))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class PledgeStat(Base):
@@ -588,7 +589,7 @@ class PledgeStat(Base):
     unrest_pledge: Mapped[float | None] = mapped_column(Float)
     rest_pledge: Mapped[float | None] = mapped_column(Float)
     pledge_ratio: Mapped[float | None] = mapped_column(Float)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class Repurchase(Base):
@@ -603,7 +604,7 @@ class Repurchase(Base):
     amount: Mapped[float | None] = mapped_column(Float)
     high_limit: Mapped[float | None] = mapped_column(Float)
     low_limit: Mapped[float | None] = mapped_column(Float)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -623,7 +624,7 @@ class DataSourceHealth(Base):
     last_failure_at: Mapped[datetime | None] = mapped_column(DateTime)
     last_error: Mapped[str | None] = mapped_column(Text)
     latency_ms: Mapped[float] = mapped_column(Float, default=0)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class DataSourceConfig(Base):
@@ -634,7 +635,7 @@ class DataSourceConfig(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     priority: Mapped[int] = mapped_column(Integer, default=100)
     note: Mapped[str | None] = mapped_column(Text)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -654,7 +655,7 @@ class MarketSnapshot(Base):
     limit_down_count: Mapped[int] = mapped_column(Integer, default=0)
     main_industries_json: Mapped[str] = mapped_column(Text, default="[]")
     breadth_json: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class SkillRegistry(Base):
@@ -671,8 +672,8 @@ class SkillRegistry(Base):
     has_executable_contract: Mapped[bool] = mapped_column(Boolean, default=False)
     compatibility_json: Mapped[str] = mapped_column(Text, default="{}")
     manifest_json: Mapped[str] = mapped_column(Text, default="{}")
-    installed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    installed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class SkillVersion(Base):
@@ -686,7 +687,7 @@ class SkillVersion(Base):
     manifest_json: Mapped[str] = mapped_column(Text, default="{}")
     contract_hash: Mapped[str | None] = mapped_column(String(80))
     status: Mapped[str] = mapped_column(String(30), default="active")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class StrategyVersion(Base):
@@ -702,7 +703,7 @@ class StrategyVersion(Base):
     yaml_path: Mapped[str] = mapped_column(String(500))
     yaml_hash: Mapped[str] = mapped_column(String(80))
     manifest_json: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class StrategyVersionSnapshot(Base):
@@ -717,7 +718,7 @@ class StrategyVersionSnapshot(Base):
     strategy_id: Mapped[str] = mapped_column(String(80))
     snapshot_json: Mapped[str] = mapped_column(LONGTEXT().with_variant(Text(), "sqlite"))
     content_hash: Mapped[str] = mapped_column(String(64))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class Preset(Base):
@@ -737,8 +738,8 @@ class Preset(Base):
     data_source: Mapped[str] = mapped_column(String(20), default="local_pool_preferred")
     hide_recent_repeats: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[str] = mapped_column(String(20), default="active")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class PresetSkill(Base):
@@ -750,7 +751,7 @@ class PresetSkill(Base):
     skill_id: Mapped[str] = mapped_column(String(80), index=True)
     weight: Mapped[float] = mapped_column(Float, default=1.0)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class RecommendationReconstructionBatch(Base):
@@ -781,12 +782,12 @@ class RecommendationReconstructionBatch(Base):
     failure_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime().with_variant(DATETIME(fsp=6), "mysql"),
-        default=datetime.utcnow,
+        default=utcnow_naive,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime().with_variant(DATETIME(fsp=6), "mysql"),
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=utcnow_naive,
+        onupdate=utcnow_naive,
     )
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime().with_variant(DATETIME(fsp=6), "mysql"),
@@ -846,7 +847,7 @@ class RecommendationRun(Base):
     )
 
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
     universe_count: Mapped[int] = mapped_column(Integer, default=0)
     recommended_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -972,7 +973,7 @@ class Recommendation(Base):
     recommendation_id: Mapped[str] = mapped_column(String(80), primary_key=True)
     run_id: Mapped[str] = mapped_column(String(60), index=True)
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
-    recommended_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    recommended_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
     code: Mapped[str] = mapped_column(String(6), index=True)
     name: Mapped[str] = mapped_column(String(80))
     industry: Mapped[str | None] = mapped_column(String(80))
@@ -1033,7 +1034,7 @@ class RecommendationOutcome(Base):
     outcome_label_legacy: Mapped[str] = mapped_column(String(30), default="pending")
     outcome_reason: Mapped[str | None] = mapped_column(Text)
     label_source: Mapped[str] = mapped_column(String(20), default="auto")
-    labeled_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    labeled_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class RecommendationOutcomeVersion(Base):
@@ -1048,7 +1049,7 @@ class RecommendationOutcomeVersion(Base):
     horizon_days: Mapped[int] = mapped_column(Integer)
     label_source: Mapped[str] = mapped_column(String(20))
     result_json: Mapped[str] = mapped_column(LONGTEXT().with_variant(Text(), "sqlite"))
-    computed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    computed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, index=True)
     calculation_fingerprint: Mapped[str | None] = mapped_column(
         CHAR(64), nullable=True, unique=True
     )
@@ -1099,8 +1100,8 @@ class RecommendationExecutionState(Base):
     first_cancelled_at: Mapped[datetime | None] = mapped_column(DateTime)
     first_cancelled_price: Mapped[float | None] = mapped_column(Float)
     first_cancel_reason: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, onupdate=utcnow_naive)
 
 
 class ReviewNote(Base):
@@ -1112,8 +1113,8 @@ class ReviewNote(Base):
     user_label: Mapped[str | None] = mapped_column(String(80))
     failure_reason: Mapped[str | None] = mapped_column(String(120))
     review_text: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class WatchItem(Base):
@@ -1126,8 +1127,8 @@ class WatchItem(Base):
     source_recommendation_id: Mapped[str] = mapped_column(String(80), index=True)
     watch_status: Mapped[str] = mapped_column(String(20), default="watching")
     note: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class AgentDecisionLog(Base):
@@ -1138,7 +1139,7 @@ class AgentDecisionLog(Base):
     run_id: Mapped[str | None] = mapped_column(String(60), index=True)
     agent_name: Mapped[str] = mapped_column(String(80))
     output_json: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class BacktestRun(Base):
@@ -1150,7 +1151,7 @@ class BacktestRun(Base):
     date_to: Mapped[str] = mapped_column(String(10))
     status: Mapped[str] = mapped_column(String(30), default="completed")
     result_json: Mapped[str] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"), default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class CalibrationConfig(Base):
@@ -1158,7 +1159,7 @@ class CalibrationConfig(Base):
 
     key: Mapped[str] = mapped_column(String(80), primary_key=True)
     value: Mapped[float] = mapped_column(Float, default=0.0)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class ModelRouteConfig(Base):
@@ -1176,8 +1177,8 @@ class ModelRouteConfig(Base):
     max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     temperature: Mapped[float | None] = mapped_column(Float, nullable=True)
     timeout_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class ApiCallLog(Base):
@@ -1202,7 +1203,7 @@ class ApiCallLog(Base):
     context_audit_json: Mapped[str | None] = mapped_column(
         LONGTEXT().with_variant(Text(), "sqlite")
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class DataSourceRequestTrace(Base):
@@ -1273,7 +1274,7 @@ class ApiRequestMetric(Base):
     path: Mapped[str] = mapped_column(String(200))
     status_code: Mapped[int] = mapped_column(Integer, default=200)
     duration_ms: Mapped[float] = mapped_column(Float, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, index=True)
 
 
 class LLMReviewCache(Base):
@@ -1292,7 +1293,7 @@ class LLMReviewCache(Base):
     code: Mapped[str | None] = mapped_column(String(6), index=True)
     review_json: Mapped[str] = mapped_column(LONGTEXT().with_variant(Text(), "sqlite"))
     model: Mapped[str | None] = mapped_column(String(80))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, index=True)
 
 
 class ScheduledTask(Base):
@@ -1308,8 +1309,8 @@ class ScheduledTask(Base):
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime)
     last_status: Mapped[str | None] = mapped_column(String(30))
     last_error: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class ScheduledTaskRun(Base):
@@ -1320,7 +1321,7 @@ class ScheduledTaskRun(Base):
     task_name: Mapped[str] = mapped_column(String(120))
     task_type: Mapped[str] = mapped_column(String(40))
     trigger_source: Mapped[str] = mapped_column(String(20), default="schedule")
-    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
     status: Mapped[str] = mapped_column(String(30), default="running")
     summary: Mapped[str | None] = mapped_column(Text)
@@ -1343,7 +1344,7 @@ class StockMatrixHistory(Base):
     skill_count: Mapped[int] = mapped_column(Integer, default=0)
     result_json: Mapped[str] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"), default="{}")
     elapsed_ms: Mapped[float | None] = mapped_column(Float)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, index=True)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1373,7 +1374,7 @@ class BacktestDataSnapshot(Base):
     partition_manifest_json: Mapped[str] = mapped_column(_BACKTEST_LONGTEXT)
     coverage_json: Mapped[str] = mapped_column(_BACKTEST_LONGTEXT)
     missing_requirements_json: Mapped[str] = mapped_column(_BACKTEST_LONGTEXT)
-    created_at: Mapped[datetime] = mapped_column(_BACKTEST_DATETIME, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(_BACKTEST_DATETIME, default=utcnow_naive, index=True)
 
 
 class BacktestHoldoutClaim(Base):
@@ -1385,7 +1386,7 @@ class BacktestHoldoutClaim(Base):
     experiment_id: Mapped[str] = mapped_column(String(80), index=True)
     phase: Mapped[str] = mapped_column(String(24), default="untouched_holdout")
     status: Mapped[str] = mapped_column(String(24), default="consumed")
-    claimed_at: Mapped[datetime] = mapped_column(_BACKTEST_DATETIME, default=datetime.utcnow)
+    claimed_at: Mapped[datetime] = mapped_column(_BACKTEST_DATETIME, default=utcnow_naive)
 
 
 class BacktestInputArtifact(Base):
@@ -1412,7 +1413,7 @@ class BacktestInputArtifact(Base):
     content_hash: Mapped[str] = mapped_column(CHAR(64))
     content_encoding: Mapped[str] = mapped_column(String(24))
     payload: Mapped[bytes] = mapped_column(_BACKTEST_LONGBLOB)
-    created_at: Mapped[datetime] = mapped_column(_BACKTEST_DATETIME, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(_BACKTEST_DATETIME, default=utcnow_naive)
 
 
 class BacktestRequestClaim(Base):
@@ -1424,7 +1425,7 @@ class BacktestRequestClaim(Base):
     active_backtest_id: Mapped[str | None] = mapped_column(String(80), index=True)
     completed_backtest_id: Mapped[str | None] = mapped_column(String(80), index=True)
     next_attempt_no: Mapped[int] = mapped_column(Integer)
-    updated_at: Mapped[datetime] = mapped_column(_BACKTEST_DATETIME, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(_BACKTEST_DATETIME, default=utcnow_naive)
 
 
 class BacktestRunV2(Base):
@@ -1454,7 +1455,7 @@ class BacktestRunV2(Base):
     result_json: Mapped[str] = mapped_column(_BACKTEST_LONGTEXT)
     started_at: Mapped[datetime | None] = mapped_column(_BACKTEST_DATETIME)
     finished_at: Mapped[datetime | None] = mapped_column(_BACKTEST_DATETIME)
-    created_at: Mapped[datetime] = mapped_column(_BACKTEST_DATETIME, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(_BACKTEST_DATETIME, default=utcnow_naive, index=True)
 
 
 class BacktestCandidate(Base):
@@ -1509,7 +1510,7 @@ class BacktestFailureAttribution(Base):
     evidence_references_json: Mapped[str] = mapped_column(_BACKTEST_LONGTEXT)
     confidence: Mapped[float] = mapped_column(Float)
     is_unknown: Mapped[bool] = mapped_column(Boolean)
-    created_at: Mapped[datetime] = mapped_column(_BACKTEST_DATETIME, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(_BACKTEST_DATETIME, default=utcnow_naive)
 
 
 class BacktestExperiment(Base):
@@ -1530,7 +1531,7 @@ class BacktestExperiment(Base):
     acceptance_json: Mapped[str] = mapped_column(_BACKTEST_LONGTEXT)
     status: Mapped[str] = mapped_column(String(32), index=True)
     conclusion_json: Mapped[str | None] = mapped_column(_BACKTEST_LONGTEXT)
-    created_at: Mapped[datetime] = mapped_column(_BACKTEST_DATETIME, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(_BACKTEST_DATETIME, default=utcnow_naive)
     frozen_at: Mapped[datetime | None] = mapped_column(_BACKTEST_DATETIME)
     finished_at: Mapped[datetime | None] = mapped_column(_BACKTEST_DATETIME)
 
@@ -1550,8 +1551,8 @@ class IntradayLockMonitor(Base):
     lock_ratio: Mapped[float] = mapped_column(Float, default=0.5)
     status: Mapped[str] = mapped_column(String(20), index=True, default="monitoring")
     triggered_at: Mapped[datetime | None] = mapped_column(DateTime)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
 class IntradayLockSignal(Base):
@@ -1573,5 +1574,5 @@ class IntradayLockSignal(Base):
     actual_exit_return: Mapped[float | None] = mapped_column(Float)
     lock_delta_pct: Mapped[float | None] = mapped_column(Float)
     status: Mapped[str] = mapped_column(String(20), index=True, default="open")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)

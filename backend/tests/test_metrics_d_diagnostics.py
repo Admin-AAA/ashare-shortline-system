@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+import pytest
 
 from app.main import app
+
+pytestmark = pytest.mark.integration
 
 
 def test_d_diagnostics_shape():

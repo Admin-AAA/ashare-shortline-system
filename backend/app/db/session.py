@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Generator
+from datetime import datetime
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -19,6 +20,11 @@ settings = get_settings()
 _is_sqlite = settings.database_url.startswith("sqlite")
 
 if _is_sqlite:
+    import sqlite3
+
+    # Python 3.12 deprecated sqlite3's implicit datetime adapter. Register the
+    # explicit ISO adapter used by our existing naive-UTC DATETIME contract.
+    sqlite3.register_adapter(datetime, lambda value: value.isoformat(" "))
     _connect_args = {"check_same_thread": False}
     _engine_kwargs = {"poolclass": None, "connect_args": _connect_args}
     engine = create_engine(settings.database_url, **_engine_kwargs)

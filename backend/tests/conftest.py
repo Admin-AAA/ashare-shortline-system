@@ -83,7 +83,7 @@ def _init_test_schema(_exclusive_test_db_lock):
 @pytest.fixture
 def production_mysql(_init_test_schema):
     if not _HAS_TEST_DB:
-        raise RuntimeError("production_mysql 需要可用 MySQL 连接；demo 阶段默认直接使用生产库;所有MySQL Redis都连接不上，如果需要测试MySQL，你可以考虑mock或者直接放弃测试")
+        pytest.skip("需要可用 MySQL 连接；当前回归运行在无数据库模式")
     yield
 
 

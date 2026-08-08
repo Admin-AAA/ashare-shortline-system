@@ -13,11 +13,14 @@ import uuid
 import time
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from sqlalchemy import select
 
 from app.db.session import SessionLocal
 from app.models.tables import RecommendationRun
 from app.services.workbench_service import recover_interrupted_runs
+
+pytestmark = pytest.mark.integration
 
 
 def _utc_naive(offset: timedelta) -> datetime:

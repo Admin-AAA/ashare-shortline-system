@@ -27,6 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.time import utcnow_naive
 
 JsonValue = Mapping[str, Any] | Sequence[Any] | str | int | float | bool | None
 
@@ -1349,7 +1350,7 @@ def _new_id(prefix: str) -> str:
 
 
 def _utcnow() -> datetime:
-    return datetime.utcnow()
+    return utcnow_naive()
 
 
 def _is_iso_date(value: str) -> bool:

@@ -74,6 +74,9 @@ def test_compute_indicators_idempotent_shape():
 def _db_reachable():
     try:
         from sqlalchemy import text
+        from app.db.session import engine
+        if engine.dialect.name != "mysql":
+            return False
         from app.db.session import SessionLocal
         with SessionLocal() as db:
             db.execute(text("SELECT 1"))

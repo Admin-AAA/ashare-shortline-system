@@ -14,6 +14,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
+from app.core.time import utcnow_naive
 from app.engine.aggregator import aggregate
 from app.engine.skill_loader import load_skill
 from app.engine.strategy_runner import run_strategy
@@ -270,7 +271,7 @@ def test_e2e_signal_reaches_skill_breakdown(db):
             buy_amount_yi=2.0,
             sell_amount_yi=0.8,
             net_amount_yi=1.2,
-            created_at=datetime.utcnow(),
+            created_at=utcnow_naive(),
         ))
         db.commit()
 

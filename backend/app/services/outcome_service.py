@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.engine.canonical import canonical_fingerprint, canonical_json
 from app.engine.execution_core import IntradayExitEvidence
 from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY
+from app.core.time import utcnow_naive
 from app.engine.trading_costs import (
     ADDITIONAL_COST_PCT as _ADDITIONAL_COST_PCT,
     COMMISSION_RATE_PCT as _COMMISSION_RATE_PCT,
@@ -456,7 +457,7 @@ def _append_valid_outcome_version(
             horizon_days=horizon_days,
             label_source=label_source,
             result_json=version.result_json,
-            computed_at=version.computed_at.replace(tzinfo=None) if version.computed_at else datetime.utcnow(),
+            computed_at=version.computed_at.replace(tzinfo=None) if version.computed_at else utcnow_naive(),
             calculation_fingerprint=version.calculation_fingerprint,
             result_hash=version.result_hash,
             recommendation_identity_hash=version.recommendation_identity_hash,
