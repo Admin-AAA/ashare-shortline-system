@@ -278,10 +278,10 @@ def check_a_item(db) -> None:
 def _failed_run_error_types(messages: list[str]) -> dict[str, int]:
     """纯函数：由 failed run 的 error_message 列表归类错误类型。
 
-    返回 {code_bug, data_missing, llm_timeout, process, other} 计数。
+    返回 {code_bug, data_missing, llm_timeout, process, pipeline_contract, other} 计数。
     code_bug=TypeError/AttributeError/KeyError/IndexError（需修代码）；
     data_missing=数据缺失；llm_timeout=LLM 超时；process=服务重启/进程退出；
-    other=未分类。供 check_a_item 单测，与 DB 解耦。
+    pipeline_contract=注册/重建契约不一致；other=未分类。供 check_a_item 单测，与 DB 解耦。
     """
     types: dict[str, int] = {}
     for msg in messages:
@@ -295,6 +295,13 @@ def _failed_run_error_types(messages: list[str]) -> dict[str, int]:
             t = "llm_timeout"
         elif any(k in m for k in ("服务重启", "进程退出", "dispatcher")):
             t = "process"
+        elif any(k in m for k in (
+            "策略/预设注册诊断失败",
+            "不可执行策略",
+            "reconstruction worker revision",
+            "reconstruction batch manifest",
+        )):
+            t = "pipeline_contract"
         else:
             t = "other"
         types[t] = types.get(t, 0) + 1
