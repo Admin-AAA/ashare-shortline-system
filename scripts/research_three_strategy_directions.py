@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -27,6 +28,9 @@ from run_strategy_attribution_matrix import first_stock, regime_name  # noqa: E4
 COMMISSION_RATE_PER_SIDE = 0.000085  # 万分之0.85
 STAMP_TAX_RATE_ON_EXIT = 0.0005  # 卖出印花税万分之5
 CAPITAL_SCENARIOS = (20_000.0, 50_000.0, 100_000.0)
+DEVELOPMENT_END = "2026-04-30"
+BOOTSTRAP_N = 10_000
+BOOTSTRAP_SEED = 20260809
 
 TARGETS = {
     "limit-up-reseal-relay": {
@@ -152,15 +156,15 @@ def selected(
     *,
     anchor_value: str | None = None,
     regime: str | None = None,
-    high_score: bool = False,
+    score_floor: float | None = None,
 ) -> list[dict[str, Any]]:
     result = rows
     if anchor_value is not None:
         result = [row for row in result if row["phase"] == anchor_value]
     if regime is not None:
         result = [row for row in result if row["regime"] == regime]
-    if high_score:
-        result = [row for row in result if row["score"] is not None and row["score"] >= 85.0]
+    if score_floor is not None:
+        result = [row for row in result if row["score"] is not None and row["score"] >= score_floor]
     return result
 
 
@@ -206,6 +210,44 @@ def exit_metrics(rows: list[dict[str, Any]], capital: float) -> str:
     return "；".join(parts)
 
 
+def stop_gap_metrics(rows: list[dict[str, Any]], capital: float) -> str:
+    gap_rows = [row for row in rows if row["exit"] == "stop_loss_gap"]
+    if not gap_rows:
+        return "n=0"
+    nets = [row["gross"] - actual_fee_pct(capital, row["position_size"]) for row in gap_rows]
+    return f"n={len(gap_rows)} ({len(gap_rows) * 100 / len(rows):.1f}%),均={avg(nets):+.3f}%"
+
+
+def clustered_bootstrap(rows: list[dict[str, Any]], capital: float) -> str:
+    """按信号日重采样，避免同一天多笔交易被当作完全独立。"""
+    clusters: dict[str, list[float]] = defaultdict(list)
+    for row in rows:
+        clusters[row["signal_date"]].append(
+            row["gross"] - actual_fee_pct(capital, row["position_size"])
+        )
+    dates = sorted(clusters)
+    values = [value for group in clusters.values() for value in group]
+    if not values or not dates:
+        return "n=0"
+    rng = random.Random(BOOTSTRAP_SEED)
+    mean_samples: list[float] = []
+    win_rate_samples: list[float] = []
+    for _ in range(BOOTSTRAP_N):
+        sampled_dates = [dates[rng.randrange(len(dates))] for _ in dates]
+        sampled = [value for date in sampled_dates for value in clusters[date]]
+        mean_samples.append(avg(sampled))
+        win_rate_samples.append(sum(value > 0 for value in sampled) * 100 / len(sampled))
+    mean_samples.sort()
+    win_rate_samples.sort()
+    low = int(BOOTSTRAP_N * 0.025)
+    high = int(BOOTSTRAP_N * 0.975) - 1
+    return (
+        f"按日聚类n={len(values)}/日期={len(dates)}；均值95%CI="
+        f"[{mean_samples[low]:+.3f},{mean_samples[high]:+.3f}]%；"
+        f"胜率95%CI=[{win_rate_samples[low]:.1f},{win_rate_samples[high]:.1f}]%"
+    )
+
+
 def main() -> int:
     db = SessionLocal()
     try:
@@ -218,16 +260,23 @@ def main() -> int:
                 rows = observations.get(strategy_id, [])
                 anchor_rows = selected(rows, anchor_value=config["anchor"])
                 regime_rows = selected(rows, anchor_value=config["anchor"], regime=config["regime"])
-                score_rows = selected(rows, anchor_value=config["anchor"], high_score=True)
-                triple_rows = selected(rows, anchor_value=config["anchor"], regime=config["regime"], high_score=True)
+                score_rows = selected(rows, anchor_value=config["anchor"], score_floor=config["score"])
+                triple_rows = selected(rows, anchor_value=config["anchor"], regime=config["regime"], score_floor=config["score"])
                 print(f"\n{config['name']} [{strategy_id}]")
                 print(f"主买点 {config['anchor']}: {metrics(anchor_rows, capital)}")
                 print(f"主买点+周期 {config['regime']}: {metrics(regime_rows, capital)}")
                 print(f"主买点+分数85+: {metrics(score_rows, capital)}")
                 print(f"三者交集: {metrics(triple_rows, capital)}")
                 if capital == 50_000.0:
+                    development = [row for row in triple_rows if row["signal_date"] <= DEVELOPMENT_END]
+                    validation = [row for row in triple_rows if row["signal_date"] > DEVELOPMENT_END]
+                    print(f"三者交集开发期(≤{DEVELOPMENT_END}): {metrics(development, capital)}")
+                    print(f"三者交集后段检验(>{DEVELOPMENT_END}): {metrics(validation, capital)}")
                     print(f"三者交集按月份: {period_metrics(triple_rows, capital)}")
                     print(f"三者交集退出: {exit_metrics(triple_rows, capital)}")
+                    print(f"全主线 stop_loss_gap: {stop_gap_metrics(rows, capital)}")
+                    print(f"三者交集 stop_loss_gap: {stop_gap_metrics(triple_rows, capital)}")
+                    print(f"三者交集置信区间: {clustered_bootstrap(triple_rows, capital)}")
         return 0
     finally:
         db.close()
