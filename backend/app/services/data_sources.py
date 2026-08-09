@@ -808,7 +808,15 @@ def test_provider(db: Session, provider_name: str) -> dict[str, Any]:
     ok = False
     error: str | None = None
     try:
-        if provider_name == "realtime_quote":
+        if provider_name == "xiaoshi":
+            from app.services.xiaoshi_client import get_xiaoshi_client
+
+            payload = get_xiaoshi_client().get_stocks(market="CN", limit=1)
+            items = payload.get("items") if isinstance(payload, dict) else None
+            ok = bool(items)
+            if not ok:
+                error = "xiaoshi stocks 返回空"
+        elif provider_name == "realtime_quote":
             from app.services.realtime_quote_client import fetch_realtime_quotes
 
             rows = fetch_realtime_quotes(["000001"], use_cache=False)
@@ -824,7 +832,11 @@ def test_provider(db: Session, provider_name: str) -> dict[str, Any]:
         error = f"{type(exc).__name__}: {str(exc)[:200]}"
     latency_ms = round((time.perf_counter() - started) * 1000, 1)
 
-    _record_provider_test(db, provider_name, ok=ok, latency_ms=latency_ms, error=error)
+    if provider_name == "xiaoshi":
+        _record_source_test(db, provider_name, "quote", ok=ok, latency_ms=latency_ms, error=error)
+        _record_source_test(db, provider_name, "kline", ok=ok, latency_ms=latency_ms, error=error)
+    else:
+        _record_provider_test(db, provider_name, ok=ok, latency_ms=latency_ms, error=error)
     return {
         "provider_name": provider_name,
         "ok": ok,
@@ -855,10 +867,29 @@ def _probe_pro_provider(provider_name: str) -> tuple[bool, str | None]:
 
 
 def _record_provider_test(db: Session, provider_name: str, *, ok: bool, latency_ms: float, error: str | None) -> None:
+    _record_source_test(
+        db,
+        provider_name,
+        _PROVIDER_SOURCE_TYPE,
+        ok=ok,
+        latency_ms=latency_ms,
+        error=error,
+    )
+
+
+def _record_source_test(
+    db: Session,
+    source: str,
+    source_type: str,
+    *,
+    ok: bool,
+    latency_ms: float,
+    error: str | None,
+) -> None:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    row = db.get(DataSourceHealth, {"source": provider_name, "source_type": _PROVIDER_SOURCE_TYPE})
+    row = db.get(DataSourceHealth, {"source": source, "source_type": source_type})
     if row is None:
-        row = DataSourceHealth(source=provider_name, source_type=_PROVIDER_SOURCE_TYPE)
+        row = DataSourceHealth(source=source, source_type=source_type)
         db.add(row)
     if ok:
         row.success_count = int(row.success_count or 0) + 1
