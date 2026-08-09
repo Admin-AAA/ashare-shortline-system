@@ -214,31 +214,23 @@ def get_market_snapshot() -> dict[str, Any]:
 
 
 def _fetch_first_quotes(sources: list[str], settings: Any) -> tuple[str, list[dict[str, Any]], list[str]]:
-    errors: list[str] = []
-    for source in sources:
-        try:
-            quotes = _fetch_quotes(source, settings)
-            if quotes:
-                return source, quotes, errors
-            errors.append(f"{source}: 返回空")
-        except Exception as exc:  # noqa: BLE001 - returned to the local operator as run evidence
-            errors.append(f"{source}: {exc}")
-    detail = "；".join(errors) if errors else "未配置行情源"
-    raise MarketDataError("真实行情快照获取失败，已停止运行。" + detail)
+    try:
+        quotes = _fetch_quotes("tushare", settings)
+        if quotes:
+            return "tushare", quotes, []
+    except Exception as exc:  # noqa: BLE001 - returned to the local operator as run evidence
+        raise MarketDataError("真实行情快照获取失败，已停止运行。" + str(exc)) from exc
+    raise MarketDataError("真实行情快照获取失败，已停止运行。Tushare 返回空。")
 
 
 def _fetch_first_candidate_quotes(sources: list[str], settings: Any) -> tuple[str, list[dict[str, Any]], list[str]]:
-    errors: list[str] = []
-    for source in sources:
-        try:
-            quotes = _fetch_quotes(source, settings)
-            if _eligible_market_quotes(quotes):
-                return source, quotes, errors
-            errors.append(f"{source}: 返回空或无可交易股票")
-        except Exception as exc:  # noqa: BLE001 - returned to the local operator as run evidence
-            errors.append(f"{source}: {exc}")
-    detail = "；".join(errors) if errors else "未配置行情源"
-    raise MarketDataError("真实行情候选池获取失败，已停止运行。" + detail)
+    try:
+        quotes = _fetch_quotes("tushare", settings)
+        if _eligible_market_quotes(quotes):
+            return "tushare", quotes, []
+    except Exception as exc:  # noqa: BLE001 - returned to the local operator as run evidence
+        raise MarketDataError("真实行情候选池获取失败，已停止运行。" + str(exc)) from exc
+    raise MarketDataError("真实行情候选池获取失败，已停止运行。Tushare 返回空。")
 
 
 def _fetch_first_kline(
@@ -247,26 +239,21 @@ def _fetch_first_kline(
     settings: Any,
     disabled_sources: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], str, list[str]]:
-    """获取单只股票的日K线（local-pool 优先，按配置的数据源顺序兜底）。"""
+    """获取单只股票的日K线（local-pool 优先，Tushare 兜底）。"""
     errors: list[str] = []
-    for source in sources:
-        if disabled_sources and source in disabled_sources:
-            continue
-        try:
-            bars = _fetch_kline(source, quote, settings)
-            if len(bars) >= 30:
-                return bars, source, errors
-            errors.append(f"{source}: 日K不足30条")
-        except Exception as exc:
-            errors.append(f"{source}: {exc}")
+    try:
+        bars = _fetch_kline("tushare", quote, settings)
+        if len(bars) >= 30:
+            return bars, "tushare", errors
+        errors.append("tushare: 日K不足30条")
+    except Exception as exc:
+        errors.append(f"tushare: {exc}")
     return [], "", errors
 
 
 def _fetch_quotes(source: str, settings: Any) -> list[dict[str, Any]]:
     if source == "tushare":
         return _fetch_tushare_quotes(settings)
-    if source == "xiaoshi":
-        return _fetch_xiaoshi_quotes(settings)
     raise MarketDataError(f"未知行情源: {source}")
 
 
@@ -277,54 +264,7 @@ def _fetch_kline(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> list[dict[str, Any]]:
-    if source == "xiaoshi":
-        return _fetch_xiaoshi_kline(quote, settings, start_date=start_date, end_date=end_date)
     return _fetch_tushare_kline(quote, settings, start_date=start_date, end_date=end_date)
-
-
-def _fetch_xiaoshi_quotes(settings: Any) -> list[dict[str, Any]]:
-    """Fetch and normalize one full A-share snapshot through Xiaoshi."""
-    from app.services.market_source.port import QuoteRequest
-    from app.services.xiaoshi_market_source import XiaoshiMarketSourceAdapter
-
-    batch = XiaoshiMarketSourceAdapter().fetch_quotes(
-        QuoteRequest(max_quote_count=getattr(settings, "market_scan_size", 5200))
-    )
-    if batch.errors:
-        raise MarketDataError(batch.errors[0].message)
-    return [row for row in batch.as_legacy_rows() if _num(row.get("price")) > 0]
-
-
-def _fetch_xiaoshi_kline(
-    quote: dict[str, Any],
-    settings: Any,
-    *,
-    start_date: str | None = None,
-    end_date: str | None = None,
-) -> list[dict[str, Any]]:
-    """Fetch one adjusted daily series through Xiaoshi's v3 kline contract."""
-    from app.services.market_source.port import DailyBarRequest, QuoteRef
-    from app.services.xiaoshi_market_source import XiaoshiMarketSourceAdapter
-
-    reference = QuoteRef(str(quote.get("code") or ""), str(quote.get("exchange") or ""))
-    request = DailyBarRequest(
-        instruments=(reference,),
-        start_date=start_date,
-        end_date=end_date,
-    )
-    from app.services.xiaoshi_client import get_xiaoshi_client
-
-    batch = XiaoshiMarketSourceAdapter(
-        client=get_xiaoshi_client(),
-        kline_limit=max(30, int(getattr(settings, "market_kline_days", 90))),
-    ).fetch_daily_bars(request)
-    if batch.errors and not batch.bars_by_instrument.get(reference):
-        raise MarketDataError(batch.errors[0].message)
-    return [
-        row
-        for row in batch.as_legacy_rows_by_code().get(reference.code, [])
-        if _num(row.get("close")) > 0
-    ]
 
 
 def _load_local_stock_basics() -> list[dict[str, Any]]:
@@ -945,19 +885,11 @@ def _quote(**kwargs: Any) -> dict[str, Any]:
 
 
 def _quote_sources(settings: Any) -> list[str]:
-    return _parse_source_list(getattr(settings, "quote_sources", "tushare"))
+    return ["tushare"]
 
 
 def _kline_sources(settings: Any) -> list[str]:
-    return _parse_source_list(getattr(settings, "kline_sources", "tushare"))
-
-
-def _parse_source_list(value: Any) -> list[str]:
-    if isinstance(value, str):
-        sources = [item.strip().lower() for item in value.split(",") if item.strip()]
-    else:
-        sources = [str(item).strip().lower() for item in (value or []) if str(item).strip()]
-    return list(dict.fromkeys(sources)) or ["tushare"]
+    return ["tushare"]
 
 
 def _build_stock_from_bars(
