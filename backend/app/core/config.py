@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     tushare_quantdata_url: str = "https://quantdata888.duckdns.org"
     tushare_quantdata_token: str = ""
     tushare_quantdata_rate_limit_per_minute: int = 120
+    # Xiaoshi v3：独立于 Tushare Pro 协议，提供全市场快照、复权日线、财务与量化数据。
+    xiaoshi_api_base_url: str = "https://api.shizixi.com"
+    xiaoshi_api_key: str = ""
+    xiaoshi_max_qps: int = 30
+    xiaoshi_max_attempts: int = 2
+    xiaoshi_timeout_seconds: float = 30.0
+    xiaoshi_skill_url: str = "https://api.shizixi.com/skills/xiaoshi-quant-expert/SKILL.md"
     # 实时报价爬虫接口（tushare realtime_quote，走 realtime.stockai888.top）。
     # 独立于 ai-tool/fastapic 的 pro HTTP 协议：多代码批量、含现价/最高/最低/昨收，
     # 用于未结算推荐的盘中实时浮盈。token 复用 fastapic token。
@@ -64,8 +71,8 @@ class Settings(BaseSettings):
     tushare_provider_max_attempts: int = 2
     tushare_connect_timeout_seconds: float = 5.0
     tushare_read_timeout_seconds: float = 120.0
-    quote_sources: str = "tushare"
-    kline_sources: str = "tushare"
+    quote_sources: str = "xiaoshi,tushare"
+    kline_sources: str = "xiaoshi,tushare"
     market_scan_size: int = 5200
     market_candidate_count: int = 0  # 0 = 不在首段召回前硬截断，交给宽召回窗口与后续精排控制
     market_broad_recall_count: int = 6000  # 两段召回第一段：让全部可交易股票进入策略层，由各策略 universe 规则自行筛选
