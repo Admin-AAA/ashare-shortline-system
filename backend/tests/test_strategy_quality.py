@@ -123,3 +123,42 @@ def test_quality_profile_keeps_score_calibration_and_release_gate_explicit() -> 
     assert profile["release_ready"] is False
     assert set(profile["score_calibration"]["buckets"]) == {"0-69", "70-79", "80-84", "85+"}
     assert "stop_gap_diagnostics" in profile
+
+
+def test_quality_profile_keeps_unexecuted_trade_zero_and_out_of_portfolio() -> None:
+    trade = Trade(
+        code="000001",
+        signal_date="2026-06-01",
+        entry_date=None,
+        exit_date=None,
+        entry_price=None,
+        exit_price=None,
+        gross_return_pct=0.0,
+        net_return_pct=0.0,
+        position_size=0.5,
+        holding_days=0,
+        outcome_label=TradeOutcome.NOT_EXECUTED,
+        exit_reason="unfilled",
+    )
+    evidence = StrategyTradeEvidence(
+        trade=trade,
+        score=90,
+        regime="强势",
+        setup="小盘主线共振",
+        is_main_theme=True,
+        signal_price=10.0,
+    )
+    config = StrategyQualityConfig(
+        strategy_id="small-cap-thematic-momentum",
+        min_score=85,
+        allowed_regimes=("强势",),
+        require_main_theme=True,
+        required_setup_keywords=("主线",),
+    )
+
+    profile = compute_quality_profile((evidence,), config)
+
+    assert profile["raw_metrics"]["sample_count"] == 0
+    assert profile["raw_metrics"]["total_return_pct"] == 0.0
+    assert profile["gate"]["selected_count"] == 0
+    assert profile["gate"]["rejected_reasons"] == {"not_executed": 1}

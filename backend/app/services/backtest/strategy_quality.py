@@ -194,6 +194,8 @@ def gate_rejection_reason(
     evidence: StrategyTradeEvidence,
     config: StrategyQualityConfig,
 ) -> str | None:
+    if not evidence.trade.executed:
+        return "not_executed"
     if not config.enabled:
         return "research_only"
     if config.min_score is not None and evidence.score < config.min_score:
@@ -308,14 +310,7 @@ def compute_quality_profile(
     evidence_tuple = tuple(
         replace(
             item,
-            trade=replace(
-                item.trade,
-                net_return_pct=round(
-                    item.trade.gross_return_pct
-                    - cost_policy.cost_pct(item.trade.position_size),
-                    10,
-                ),
-            ),
+            trade=_reprice_trade(item.trade, cost_policy),
         )
         for item in evidences
     )
@@ -372,6 +367,18 @@ def compute_quality_profile(
             "theme_proxy_rule": "industry_group_when_theme_missing",
         },
     }
+
+
+def _reprice_trade(trade: Trade, cost_policy: QualityCostPolicy) -> Trade:
+    if not trade.executed:
+        return trade
+    return replace(
+        trade,
+        net_return_pct=round(
+            trade.gross_return_pct - cost_policy.cost_pct(trade.position_size),
+            10,
+        ),
+    )
 
 
 def _release_ready(trades: tuple[Trade, ...], config: StrategyQualityConfig) -> bool:
