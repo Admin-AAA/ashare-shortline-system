@@ -7,6 +7,7 @@ import { Panel } from "../components/Panel";
 import { useUrlRoute } from "../app/useUrlRoute";
 import { queryParam } from "../app/nav";
 import { useCreateRunMutation, usePresetsQuery, useRunQuery } from "../api/queries/useRunQueries";
+import { isActiveRunStatus } from "../utils/display";
 
 /**
  * 运行详情页 —— 从驾驶舱主 CTA 进入
@@ -26,6 +27,16 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
   const detail = runQuery.data ?? null;
   const error = runQuery.error?.message ?? "";
   const running = createRunMutation.isPending;
+  const activeRun = isActiveRunStatus(detail?.status);
+  const existingRunLoading = Boolean(runId) && !detail && !error;
+  const runActionBusy = running || activeRun || existingRunLoading;
+  const runActionLabel = running
+    ? "提交中…"
+    : existingRunLoading
+      ? "正在读取运行状态…"
+      : activeRun
+        ? (String(detail?.status ?? "").trim().toLowerCase() === "queued" ? "已有任务排队中" : "已有任务运行中")
+        : "立即运行";
 
   useEffect(() => {
     if (!presets.length) return;
@@ -105,11 +116,11 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
           <button
             className="btn btn--primary"
             onClick={startRun}
-            disabled={running || !selectedPreset}
+            disabled={runActionBusy || !selectedPreset}
             style={{ padding: "var(--space-3) var(--space-5)" }}
           >
-            {running ? <Loader2 size={16} className="spin" /> : <PlayCircle size={16} />}
-            {running ? "提交中…" : "立即运行"}
+            {runActionBusy ? <Loader2 size={16} className="spin" /> : <PlayCircle size={16} />}
+            {runActionLabel}
           </button>
 
           {message && (
@@ -873,7 +884,7 @@ function formatHeartbeatAge(sec?: number | null): string {
 
 function RunStatusTag({ status }: { status: string }) {
   const meta = RUN_STATUS_META[status] ?? { label: status, color: "var(--muted-strong)" };
-  const active = status === "queued" || status === "running";
+  const active = isActiveRunStatus(status);
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "var(--text-xs)", color: meta.color, fontWeight: 600 }}>
       {active && <span className="run-progress-spin" style={{ width: 7, height: 7, borderRadius: "50%", background: meta.color, display: "inline-block" }} />}
@@ -883,7 +894,7 @@ function RunStatusTag({ status }: { status: string }) {
 }
 
 function RunProgressPanel({ detail, onResume }: { detail: RunDetail; onResume?: () => void }) {
-  const active = detail.status === "queued" || detail.status === "running";
+  const active = isActiveRunStatus(detail.status);
   const pct = detail.progress_pct;
   const hasPct = typeof pct === "number" && pct >= 0;
   const derivedPct = !hasPct && detail.progress_total != null && detail.progress_current != null

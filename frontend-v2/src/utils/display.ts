@@ -226,13 +226,18 @@ export function runStatusLabel(value: unknown, fallback = "状态待确认") {
   return businessStatusLabel(value, fallback);
 }
 
+export function isActiveRunStatus(value: unknown) {
+  const key = String(value ?? "").trim().toLowerCase();
+  return key === "queued" || key === "running";
+}
+
 /**
  * 驾驶舱状态条的运行文案：queued/running 心跳过期时统一提示可能卡住。
  * 与 RunStatusPanel、候选空状态保持同一 stale-run 展示契约。
  */
 export function dashboardRunLabel(run: Pick<RunProgress, "run_id" | "status" | "heartbeat_stale">) {
   if (!run.run_id) return "今日未运行";
-  if (run.heartbeat_stale && (run.status === "running" || run.status === "queued")) {
+  if (run.heartbeat_stale && isActiveRunStatus(run.status)) {
     return "运行疑似卡住";
   }
   if (run.status === "completed") return "今日已运行";
