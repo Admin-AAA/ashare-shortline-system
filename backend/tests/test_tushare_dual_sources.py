@@ -21,6 +21,7 @@ def test_provider_proxy_is_configured_without_exposing_credentials() -> None:
             auth_mode=AuthMode.API_KEY_HEADER,
             rate_limit_per_minute=90,
             proxy="http://user:password@proxy.example:2018",
+            source="tushare_source_1",
         )
     )
     try:
@@ -30,6 +31,7 @@ def test_provider_proxy_is_configured_without_exposing_credentials() -> None:
         }
         snapshot = provider.health_snapshot()
         assert snapshot["proxy_configured"] is True
+        assert snapshot["source"] == "tushare_source_1"
         assert "secret-key" not in str(snapshot)
         assert "password" not in str(snapshot)
     finally:
@@ -79,3 +81,33 @@ def test_default_minute_routes_have_independent_keys_first() -> None:
         "ai_tool_key2",
         "ai_tool",
     )
+
+
+def test_dual_keys_have_distinct_source_identities() -> None:
+    key1 = TushareHttpProvider(
+        ProviderConfig(
+            name="ai_tool_key1",
+            source="tushare_source_1",
+            base_url="https://ai-tool.example/pro",
+            credential="secret-key-1",
+            auth_mode=AuthMode.API_KEY_HEADER,
+            rate_limit_per_minute=90,
+        )
+    )
+    key2 = TushareHttpProvider(
+        ProviderConfig(
+            name="ai_tool_key2",
+            source="tushare_source_2",
+            base_url="https://ai-tool.example/pro",
+            credential="secret-key-2",
+            auth_mode=AuthMode.API_KEY_HEADER,
+            rate_limit_per_minute=90,
+        )
+    )
+    try:
+        assert key1.health_snapshot()["source"] == "tushare_source_1"
+        assert key2.health_snapshot()["source"] == "tushare_source_2"
+        assert key1.health_snapshot()["source"] != key2.health_snapshot()["source"]
+    finally:
+        key1.close()
+        key2.close()
