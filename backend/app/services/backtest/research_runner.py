@@ -1139,6 +1139,25 @@ class ResearchBacktestRunner:
                         }
                     )
                     continue
+                # Keep the signal-side context that the P0-P4 quality layer
+                # needs beside the strategy score.  These fields are all
+                # visible on the signal date and therefore do not expand the
+                # future-data boundary.  Older candidate rows may not contain
+                # them; the quality report marks those rows as unknown rather
+                # than guessing a regime from the outcome.
+                signal.update(
+                    {
+                        "signal_date": signal_date,
+                        "signal_price": float(stock.get("price") or stock.get("close") or 0),
+                        "market_regime": str(stock.get("market_regime") or "unknown"),
+                        "market_sentiment_phase": str(
+                            stock.get("market_sentiment_phase") or "unknown"
+                        ),
+                        "industry": str(stock.get("industry") or ""),
+                        "concept_sector_name": str(stock.get("concept_sector_name") or ""),
+                        "is_main_theme": bool(stock.get("is_main_theme")),
+                    }
+                )
                 actionable = _is_actionable_signal(signal, minimum_score=minimum_signal_score)
                 if (
                     self._candidate_evidence_scope == CANDIDATE_EVIDENCE_ALL

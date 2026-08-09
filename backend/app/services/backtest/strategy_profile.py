@@ -22,6 +22,7 @@ from app.engine.simulation import compute_metrics
 from app.engine.strategy import build_registry_from_skills, validate_backtest_parameter_set
 from app.models.tables import (
     BacktestDataSnapshot,
+    BacktestCandidate,
     BacktestRunV2,
     BacktestTrade,
     DailyKbar,
@@ -33,12 +34,17 @@ from app.services.backtest.research_runner import (
     ResearchBacktestRunner,
 )
 from app.services.registry.skills import sync_skills
+from app.services.backtest.strategy_quality import (
+    StrategyTradeEvidence,
+    compute_quality_profile,
+    quality_config_for,
+)
 
 
-STRATEGY_PROFILE_EXPERIMENT_ID = "strategy-backtest-profile:v1"
+STRATEGY_PROFILE_EXPERIMENT_ID = "strategy-backtest-profile:v2"
 STRATEGY_PROFILE_WINDOW_DAYS = 180
 STRATEGY_PROFILE_WINDOW_OPTIONS = (30, 180)
-STRATEGY_PROFILE_SCHEMA_VERSION = 1
+STRATEGY_PROFILE_SCHEMA_VERSION = 2
 STRATEGY_PROFILE_PORTFOLIO_MODEL = "capped_daily_exit_cohort_v1"
 
 
@@ -281,6 +287,11 @@ class StrategyBacktestProfiles:
                 )
             ).all()
         )
+        quality_evidences = _quality_evidences_for_run(self._db, run, trades)
+        quality = compute_quality_profile(
+            quality_evidences,
+            quality_config_for(target.strategy_id),
+        )
         metrics = compute_metrics(trades)
         portfolio = _portfolio_metrics(trades)
         date_from = str(run.date_from)
@@ -301,6 +312,7 @@ class StrategyBacktestProfiles:
                     "target_fingerprint": target.fingerprint,
                     "schema_version": STRATEGY_PROFILE_SCHEMA_VERSION,
                     "portfolio_model": STRATEGY_PROFILE_PORTFOLIO_MODEL,
+                    "quality_fingerprint": quality.get("quality_fingerprint"),
                 }
             ),
             "backtest_id": str(run.backtest_id),
@@ -330,12 +342,14 @@ class StrategyBacktestProfiles:
             "max_drawdown_pct": portfolio["max_drawdown_pct"],
             "confidence": metrics.confidence.value,
             "window_metrics": window_metrics,
+            "quality": quality,
             "monthly_returns": _monthly_returns(
                 trades,
                 date_from=date_from,
                 date_to=date_to,
             ),
         }
+
 
     def _latest_fully_settleable_signal_date(
         self,
@@ -422,6 +436,73 @@ class StrategyBacktestProfiles:
             == f"local-daily-kbars/v{RESEARCH_INPUT_SCHEMA_VERSION}"
             for partition in partitions
         )
+
+
+def _quality_evidences_for_run(
+    db: Session,
+    run: BacktestRunV2,
+    trades: tuple[Trade, ...],
+) -> tuple[StrategyTradeEvidence, ...]:
+    """Join canonical trades to signal-side candidate metadata only.
+
+    The join intentionally uses ``(signal_date, code)``—the immutable natural
+    key of a backtest trade/candidate pair.  Missing metadata is represented as
+    ``unknown`` and fails closed for the quality gate; it is never recovered
+    from exit outcomes.
+    """
+
+    try:
+        candidates = db.scalars(
+            select(BacktestCandidate).where(BacktestCandidate.backtest_id == run.backtest_id)
+        ).all()
+    except Exception:
+        # Some isolated profile unit tests intentionally create only the run,
+        # trade and snapshot tables.  Missing candidate evidence must degrade
+        # to an empty signal payload, not make the canonical profile unreadable.
+        candidates = ()
+    signal_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in candidates:
+        if not row.signal_json:
+            continue
+        try:
+            payload = json.loads(str(row.signal_json))
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            signal_by_key[(str(row.signal_date), str(row.code))] = payload
+
+    evidences: list[StrategyTradeEvidence] = []
+    for trade in trades:
+        payload = signal_by_key.get((trade.signal_date, trade.code), {})
+        evidence_text = tuple(
+            str(value)
+            for value in (payload.get("evidence") or ())
+            if str(value).strip()
+        )
+        setup = str(payload.get("setup_match") or payload.get("setup_type") or "")
+        inferred_main_theme = bool(payload.get("is_main_theme")) or any(
+            "主线" in value for value in (setup, *evidence_text)
+        )
+        signal_price = payload.get("signal_price") or payload.get("price")
+        try:
+            normalized_signal_price = float(signal_price) if signal_price else None
+        except (TypeError, ValueError):
+            normalized_signal_price = None
+        evidences.append(
+            StrategyTradeEvidence(
+                trade=trade,
+                score=float(payload.get("score") or 0),
+                regime=str(payload.get("market_regime") or "unknown"),
+                sentiment_phase=str(payload.get("market_sentiment_phase") or "unknown"),
+                setup=setup,
+                evidence_text=evidence_text,
+                is_main_theme=inferred_main_theme,
+                industry=str(payload.get("industry") or ""),
+                theme=str(payload.get("concept_sector_name") or payload.get("theme") or ""),
+                signal_price=normalized_signal_price,
+            )
+        )
+    return tuple(evidences)
 
 
 def _canonical_json_text(raw: str) -> str:

@@ -2067,6 +2067,41 @@ export type StrategyPerformance = {
   total_return_pct: number;
   max_drawdown_pct: number;
   window_metrics?: Record<string, StrategyWindowPerformance>;
+  quality?: {
+    spec_version: string;
+    mode: "shadow" | string;
+    quality_fingerprint: string;
+    release_ready: boolean;
+    gate: {
+      candidate_count: number;
+      passed_count: number;
+      selected_count: number;
+      raw_executed_count: number;
+      selected_signal_days: number;
+      rejected_reasons: Record<string, number>;
+      portfolio_rejected: number;
+    };
+    raw_metrics: StrategyQualityMetrics;
+    gated_metrics: StrategyQualityMetrics;
+    regime_metrics: Record<string, StrategyQualityMetrics>;
+    sentiment_metrics: Record<string, StrategyQualityMetrics>;
+    score_calibration: {
+      buckets: Record<string, StrategyQualityMetrics & { score_low: number; score_high: number; reliable: boolean }>;
+      reliable_bucket_count: number;
+      monotonic_avg_return: boolean | null;
+    };
+    stop_gap_diagnostics: {
+      stop_loss_gap_count: number;
+      stop_loss_gap_avg_return: number | null;
+      observed_loss_clip_sensitivity: Record<string, {
+        observed_loss_count: number;
+        observed_avg_return: number | null;
+        clipped_avg_return_proxy: number | null;
+        clipped_total_return_proxy: number;
+        interpretation: string;
+      }>;
+    };
+  } | null;
   monthly_returns: StrategyMonthlyReturn[];
   date_from: string;
   date_to: string;
@@ -2095,6 +2130,18 @@ export type StrategyPerformance = {
     regime?: string | null;
     trade_date?: string | null;
   };
+};
+
+export type StrategyQualityMetrics = {
+  sample_count: number;
+  signal_days: number;
+  win_count: number;
+  loss_count: number;
+  hit_rate: number | null;
+  avg_return: number | null;
+  profit_loss_ratio: number | null;
+  total_return_pct: number;
+  max_drawdown_pct: number;
 };
 
 /** 策略清单页单行（策略元数据 + 表现，单次请求返回） */
