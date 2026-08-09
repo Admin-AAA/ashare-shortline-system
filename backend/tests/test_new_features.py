@@ -21,6 +21,14 @@ class DummySettings:
     data_provider = "tushare"
 
 
+@pytest.fixture(autouse=True)
+def _disable_xiaoshi_minute_fetch_for_legacy_unit_tests(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.tushare_client._fetch_xiaoshi_minute_kbars",
+        lambda *args, **kwargs: [],
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════
 # 新闻恢复
 # ═══════════════════════════════════════════════════════════════════

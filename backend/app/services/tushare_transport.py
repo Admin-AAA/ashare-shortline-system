@@ -66,6 +66,7 @@ class ProviderConfig:
     failure_threshold: int = 3
     recovery_seconds: float = 60.0
     api_rate_limits: Mapping[str, int] = field(default_factory=dict)
+    proxy: str = field(default="", repr=False)
     # 路由优先级：数值越小越优先。ai_tool_primary_apis 命中的 API 会整体偏向 ai_tool，
     # 其余按 priority 升序尝试；同优先级按注册顺序。enabled 覆盖见 TushareProviderRouter。
     priority: int = 100
@@ -266,7 +267,8 @@ class TushareHttpProvider:
         self.config = config
         self._session = requests.Session()
         self._session.trust_env = False
-        self._session.proxies = {"http": "", "https": ""}
+        proxy = config.proxy.strip()
+        self._session.proxies = {"http": proxy, "https": proxy} if proxy else {"http": "", "https": ""}
         self._session.headers.update({"Accept-Encoding": "gzip"})
         if config.auth_mode is AuthMode.API_KEY_HEADER:
             self._session.headers.update({"X-API-Key": config.credential})
@@ -315,6 +317,7 @@ class TushareHttpProvider:
             "rate_limit_per_minute": self.config.rate_limit_per_minute,
             "api_rate_limits": dict(self.config.api_rate_limits),
             "max_concurrency": self.config.max_concurrency,
+            "proxy_configured": bool(self.config.proxy.strip()),
             "breaker_state": breaker_state,
             "open_circuits": open_circuits,
         }
@@ -637,13 +640,12 @@ class TushareProviderRouter:
     """API-aware routing over independently protected providers."""
 
     # 默认 per-API 选路链：{api_name: [provider 名按尝试顺序]}。
-    # 未列出的 API 回落到按 provider priority 升序。rt_k 首选 xiaodefa（fastapic 无权限、
-    # ai_tool 需独立付费且常 504），stk_mins/rt_min/anns_d 维持 ai_tool 优先。
+    # 未列出的 API 回落到按 provider priority 升序；分钟/公告相关 API 优先走双 Key。
     DEFAULT_API_ROUTES: Mapping[str, tuple[str, ...]] = {
-        "rt_k": ("xiaodefa", "fastapic", "ai_tool", "quantdata"),
-        "stk_mins": ("ai_tool", "fastapic", "quantdata", "xiaodefa"),
-        "rt_min": ("ai_tool", "fastapic", "quantdata", "xiaodefa"),
-        "anns_d": ("ai_tool", "fastapic", "quantdata", "xiaodefa"),
+        "rt_k": ("ai_tool_key1", "ai_tool_key2", "ai_tool", "xiaodefa", "fastapic", "quantdata"),
+        "stk_mins": ("ai_tool_key1", "ai_tool_key2", "ai_tool", "fastapic", "quantdata", "xiaodefa"),
+        "rt_min": ("ai_tool_key1", "ai_tool_key2", "ai_tool", "fastapic", "quantdata", "xiaodefa"),
+        "anns_d": ("ai_tool_key1", "ai_tool_key2", "ai_tool", "fastapic", "quantdata", "xiaodefa"),
     }
 
     def __init__(

@@ -265,6 +265,38 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
     }
     providers: list[TushareHttpProvider] = []
 
+    def append_ai_tool_provider(
+        *,
+        name: str,
+        api_key: str,
+        priority: int,
+        rate_limit_per_minute: int,
+        rt_min_rate_limit_per_minute: int,
+        stk_mins_rate_limit_per_minute: int,
+        proxy: str = "",
+    ) -> None:
+        credential = api_key.strip()
+        if not credential:
+            return
+        providers.append(
+            TushareHttpProvider(
+                ProviderConfig(
+                    name=name,
+                    base_url=settings.tushare_ai_tool_url,
+                    credential=credential,
+                    auth_mode=AuthMode.API_KEY_HEADER,
+                    rate_limit_per_minute=max(0, int(rate_limit_per_minute)),
+                    api_rate_limits={
+                        "rt_min": max(0, int(rt_min_rate_limit_per_minute)),
+                        "stk_mins": max(0, int(stk_mins_rate_limit_per_minute)),
+                    },
+                    proxy=proxy,
+                    priority=priority,
+                    **common,
+                )
+            )
+        )
+
     fastapic_token = settings.tushare_fastapic_token.strip()
     if fastapic_token:
         providers.append(
@@ -323,32 +355,35 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
             )
         )
 
-    ai_tool_api_key = settings.tushare_ai_tool_api_key.strip()
-    if ai_tool_api_key:
-        providers.append(
-            TushareHttpProvider(
-                ProviderConfig(
-                    name="ai_tool",
-                    base_url=settings.tushare_ai_tool_url,
-                    credential=ai_tool_api_key,
-                    auth_mode=AuthMode.API_KEY_HEADER,
-                    rate_limit_per_minute=max(
-                        0, int(settings.tushare_ai_tool_rate_limit_per_minute)
-                    ),
-                    api_rate_limits={
-                        "rt_min": max(
-                            0, int(settings.tushare_ai_tool_rt_min_rate_limit_per_minute)
-                        ),
-                        "stk_mins": max(
-                            0, int(settings.tushare_ai_tool_stk_mins_rate_limit_per_minute)
-                        ),
-                    },
-                    append_api_path=False,
-                    priority=2,
-                    **common,
-                )
-            )
-        )
+    has_new_ai_tool_keys = bool(
+        settings.tushare_ai_tool_key1.strip() or settings.tushare_ai_tool_key2.strip()
+    )
+    append_ai_tool_provider(
+        name="ai_tool_key1",
+        api_key=settings.tushare_ai_tool_key1,
+        priority=-3,
+        rate_limit_per_minute=settings.tushare_ai_tool_key1_rate_limit_per_minute,
+        rt_min_rate_limit_per_minute=settings.tushare_ai_tool_key1_rt_min_rate_limit_per_minute,
+        stk_mins_rate_limit_per_minute=settings.tushare_ai_tool_key1_stk_mins_rate_limit_per_minute,
+        proxy=settings.tushare_ai_tool_proxy,
+    )
+    append_ai_tool_provider(
+        name="ai_tool_key2",
+        api_key=settings.tushare_ai_tool_key2,
+        priority=-2,
+        rate_limit_per_minute=settings.tushare_ai_tool_key2_rate_limit_per_minute,
+        rt_min_rate_limit_per_minute=settings.tushare_ai_tool_key2_rt_min_rate_limit_per_minute,
+        stk_mins_rate_limit_per_minute=settings.tushare_ai_tool_key2_stk_mins_rate_limit_per_minute,
+        proxy=settings.tushare_ai_tool_proxy,
+    )
+    append_ai_tool_provider(
+        name="ai_tool",
+        api_key=settings.tushare_ai_tool_api_key,
+        priority=-1 if has_new_ai_tool_keys else 2,
+        rate_limit_per_minute=settings.tushare_ai_tool_rate_limit_per_minute,
+        rt_min_rate_limit_per_minute=settings.tushare_ai_tool_rt_min_rate_limit_per_minute,
+        stk_mins_rate_limit_per_minute=settings.tushare_ai_tool_stk_mins_rate_limit_per_minute,
+    )
 
     official_token = settings.tushare_official_token.strip()
     if official_token:
@@ -522,6 +557,36 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
     priority_overrides = _provider_priority_override()
     specs = (
         {
+            "name": "ai_tool_key1",
+            "source": "ai-tool",
+            "configured": bool(settings.tushare_ai_tool_key1.strip()),
+            "priority": -3,
+            "note": "独立 ai-tool 凭证 1；分钟/公告优先源",
+            "auth_mode": AuthMode.API_KEY_HEADER.value,
+            "rate_limit_per_minute": max(0, int(settings.tushare_ai_tool_key1_rate_limit_per_minute)),
+            "api_rate_limits": {
+                "rt_min": max(0, int(settings.tushare_ai_tool_key1_rt_min_rate_limit_per_minute)),
+                "stk_mins": max(0, int(settings.tushare_ai_tool_key1_stk_mins_rate_limit_per_minute)),
+            },
+            "max_concurrency": 0,
+            "proxy_configured": bool(settings.tushare_ai_tool_proxy.strip()),
+        },
+        {
+            "name": "ai_tool_key2",
+            "source": "ai-tool",
+            "configured": bool(settings.tushare_ai_tool_key2.strip()),
+            "priority": -2,
+            "note": "独立 ai-tool 凭证 2；分钟/公告备用源",
+            "auth_mode": AuthMode.API_KEY_HEADER.value,
+            "rate_limit_per_minute": max(0, int(settings.tushare_ai_tool_key2_rate_limit_per_minute)),
+            "api_rate_limits": {
+                "rt_min": max(0, int(settings.tushare_ai_tool_key2_rt_min_rate_limit_per_minute)),
+                "stk_mins": max(0, int(settings.tushare_ai_tool_key2_stk_mins_rate_limit_per_minute)),
+            },
+            "max_concurrency": 0,
+            "proxy_configured": bool(settings.tushare_ai_tool_proxy.strip()),
+        },
+        {
             "name": "fastapic",
             "source": "fastapic",
             "configured": bool(settings.tushare_fastapic_token.strip()),
@@ -551,7 +616,7 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
             "name": "ai_tool",
             "source": "ai-tool",
             "configured": bool(settings.tushare_ai_tool_api_key.strip()),
-            "priority": 2,
+            "priority": -1 if (settings.tushare_ai_tool_key1.strip() or settings.tushare_ai_tool_key2.strip()) else 2,
             "note": "分钟/公告主源；通用同步备用源",
             "auth_mode": AuthMode.API_KEY_HEADER.value,
             "rate_limit_per_minute": max(
@@ -1896,6 +1961,17 @@ def fetch_minute_kbars(
     target_trade_date = _normalize_trade_date(trade_date)
     normalized_freq = str(freq or "1min").lower()
 
+    if target_trade_date:
+        xiaoshi_rows = _fetch_xiaoshi_minute_kbars(
+            code,
+            start_date=target_trade_date,
+            end_date=target_trade_date,
+            freq=normalized_freq,
+            trace=trace,
+        )
+        if xiaoshi_rows:
+            return _attach_pre_close(xiaoshi_rows)
+
     if normalized_freq != "1min":
         if target_trade_date:
             return _fetch_baostock_minute_kbars(
@@ -1904,6 +1980,16 @@ def fetch_minute_kbars(
         # 未指定日期：抓近 10 天窗口，取最近一个有数据的交易日
         end_day = date.today()
         start_day = end_day - timedelta(days=10)
+        xiaoshi_rows = _fetch_xiaoshi_minute_kbars(
+            code,
+            start_date=start_day.isoformat(),
+            end_date=end_day.isoformat(),
+            freq=normalized_freq,
+            trace=trace,
+        )
+        if xiaoshi_rows:
+            latest = max((row["trade_date"] for row in xiaoshi_rows), default="")
+            return _attach_pre_close([row for row in xiaoshi_rows if row["trade_date"] == latest])
         rows = _fetch_baostock_minute_kbars(
             code, normalized_freq, start_day.isoformat(), end_day.isoformat(), trace=trace,
         )
@@ -1932,6 +2018,15 @@ def fetch_recent_minute_kbars(
     """获取个股近 N 个交易日的 1 分钟数据。仅使用 Tushare stk_mins。"""
     end_day = date.today()
     start_day = end_day - timedelta(days=max(10, int(ndays or 5) * 3))
+    xiaoshi_rows = _fetch_xiaoshi_minute_kbars(
+        code,
+        start_date=start_day.isoformat(),
+        end_date=end_day.isoformat(),
+        freq="1min",
+        trace=trace,
+    )
+    if xiaoshi_rows:
+        return _trim_recent_trade_dates(_attach_pre_close(xiaoshi_rows), ndays)
     tushare_rows = _fetch_tushare_minute_kbars(
         code,
         start_time=f"{start_day.isoformat()} 09:00:00",
@@ -2014,6 +2109,53 @@ def _minute_query_windows(start_time: str, end_time: str) -> list[tuple[str, str
         windows.append((window_start, window_end))
         current_day = window_end_day + timedelta(days=1)
     return windows
+
+
+def _fetch_xiaoshi_minute_kbars(
+    code: str,
+    *,
+    start_date: str,
+    end_date: str,
+    freq: str,
+    trace: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Read completed A-share minute history from Xiaoshi's cached R2 files."""
+    try:
+        from app.services.xiaoshi_client import get_xiaoshi_client
+        from app.services.xiaoshi_minute_source import (
+            XiaoshiMinuteHistorySource,
+            default_xiaoshi_minute_cache_dir,
+        )
+
+        settings = get_settings()
+        with XiaoshiMinuteHistorySource(
+            client=get_xiaoshi_client(),
+            cache_dir=default_xiaoshi_minute_cache_dir(settings),
+        ) as source:
+            rows = source.fetch(
+                code,
+                start_date=start_date,
+                end_date=end_date,
+                freq=freq,
+            )
+        _record_minute_source_trace(
+            trace,
+            source="xiaoshi_min1",
+            code=code,
+            status="success" if rows else "empty",
+            row_count=len(rows),
+        )
+        return rows
+    except Exception as exc:
+        _record_minute_source_trace(
+            trace,
+            source="xiaoshi_min1",
+            code=code,
+            status="error",
+            row_count=0,
+            reason=type(exc).__name__,
+        )
+        return []
 
 
 def _fetch_tushare_minute_kbars(
