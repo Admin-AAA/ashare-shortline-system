@@ -220,6 +220,26 @@ class ArtifactSignalDateDataReader:
         )
 
 
+class _ArtifactOutcomePayloadCache:
+    """Request-local cache populated only after artifact integrity verification."""
+
+    def __init__(self, repository: ResearchBacktestRepository) -> None:
+        self._repository = repository
+        self._payload_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def read(self, artifact: ArtifactRef) -> dict[str, Any]:
+        cache_key = (artifact.artifact_id, artifact.content_hash)
+        payload = self._payload_by_key.get(cache_key)
+        if payload is None:
+            row = _read_referenced_artifact(self._repository, artifact)
+            payload = _decode_artifact_payload(bytes(row.payload), artifact.artifact_id)
+            self._payload_by_key[cache_key] = payload
+        return payload
+
+    def clear(self) -> None:
+        self._payload_by_key.clear()
+
+
 class ArtifactOutcomeDataReader:
     """Outcome-side artifact capability restricted to one candidate code."""
 
@@ -229,17 +249,19 @@ class ArtifactOutcomeDataReader:
         artifact: ArtifactRef,
         *,
         code: str,
+        payload_cache: _ArtifactOutcomePayloadCache | None = None,
     ) -> None:
         self._repository = repository
         self._artifact = artifact
         self._code = code
+        self._payload_cache = payload_cache
 
     def read(self, signal_date: str, policy: ExecutionPolicy) -> OutcomeInput:
         del policy
         if signal_date != self._artifact.signal_date:
             raise SnapshotArtifactUnavailableError(self._artifact.artifact_id)
-        row = _read_referenced_artifact(self._repository, self._artifact)
-        payload = _decode_artifact_payload(bytes(row.payload), self._artifact.artifact_id)
+        cache = self._payload_cache or _ArtifactOutcomePayloadCache(self._repository)
+        payload = cache.read(self._artifact)
         bars_by_code = payload.get("bars_by_code")
         if not isinstance(bars_by_code, Mapping):
             raise SnapshotCaptureError(
@@ -1098,6 +1120,7 @@ class ResearchBacktestRunner:
         for signal_date in signal_dates:
             signal_ref = bundle.artifact_for(signal_date, ArtifactScope.SIGNAL_INPUT)
             outcome_ref = bundle.artifact_for(signal_date, ArtifactScope.OUTCOME_INPUT)
+            outcome_payload_cache = _ArtifactOutcomePayloadCache(self._repository)
             signal_input = ArtifactSignalDateDataReader(self._repository, signal_ref).read(
                 signal_date,
                 SignalInputRequirement(lookback_bars=0, required_datasets=("daily_kbars",)),
@@ -1184,6 +1207,7 @@ class ResearchBacktestRunner:
                     self._repository,
                     outcome_ref,
                     code=code,
+                    payload_cache=outcome_payload_cache,
                 ).read(signal_date, request.execution_policy)
                 trade = simulate(
                     RecommendationInput(
@@ -1215,6 +1239,7 @@ class ResearchBacktestRunner:
                             "is_unknown": attribution.unknown,
                         }
                     )
+            outcome_payload_cache.clear()
 
         self._repository.persist_candidates(backtest_id, candidate_rows)
         self._repository.persist_trades(
