@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     tushare_fastapic_max_concurrency: int = 1
     tushare_ai_tool_url: str = "https://ai-tool.indevs.in/tushare/pro"
     tushare_ai_tool_api_key: str = ""
+    tushare_ai_tool_key1: str = ""
+    tushare_ai_tool_key2: str = ""
+    tushare_ai_tool_proxy: str = ""
+    tushare_ai_tool_key1_rate_limit_per_minute: int = 90
+    tushare_ai_tool_key2_rate_limit_per_minute: int = 90
+    tushare_ai_tool_key1_rt_min_rate_limit_per_minute: int = 72
+    tushare_ai_tool_key2_rt_min_rate_limit_per_minute: int = 72
+    tushare_ai_tool_key1_stk_mins_rate_limit_per_minute: int = 48
+    tushare_ai_tool_key2_stk_mins_rate_limit_per_minute: int = 48
     tushare_ai_tool_rate_limit_per_minute: int = 90
     tushare_ai_tool_rt_min_rate_limit_per_minute: int = 72
     tushare_ai_tool_stk_mins_rate_limit_per_minute: int = 48
@@ -60,6 +69,7 @@ class Settings(BaseSettings):
     xiaoshi_max_attempts: int = 2
     xiaoshi_timeout_seconds: float = 30.0
     xiaoshi_skill_url: str = "https://api.shizixi.com/skills/xiaoshi-quant-expert/SKILL.md"
+    xiaoshi_minute_cache_dir: str = ""
     # 实时报价爬虫接口（tushare realtime_quote，走 realtime.stockai888.top）。
     # 独立于 ai-tool/fastapic 的 pro HTTP 协议：多代码批量、含现价/最高/最低/昨收，
     # 用于未结算推荐的盘中实时浮盈。token 复用 fastapic token。
@@ -157,7 +167,13 @@ class Settings(BaseSettings):
     def _validate_critical_config(self):
         # 注：ASHARE_AGENT_SKILL_API_KEY 已弃用。模型路由由数据库
         # model_route_config 表驱动，每条路由自带独立 key，不再依赖全局 env key。
-        if not self.tushare_fastapic_token and not self.tushare_ai_tool_api_key:
+        if not self.tushare_fastapic_token and not any(
+            (
+                self.tushare_ai_tool_api_key,
+                self.tushare_ai_tool_key1,
+                self.tushare_ai_tool_key2,
+            )
+        ):
             import logging
             logging.getLogger(__name__).warning(
                 "Fastapic Token 与 ai-tool API Key 均未配置 — 上游同步和盘中实时分钟将不可用。"
