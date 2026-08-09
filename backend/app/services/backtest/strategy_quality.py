@@ -307,13 +307,28 @@ def compute_quality_profile(
 ) -> dict[str, Any]:
     """Return a complete, JSON-safe P0-P4 shadow report."""
 
-    evidence_tuple = tuple(
+    evidence_tuple = reprice_quality_evidences(evidences, cost_policy)
+    return _quality_profile_payload(evidence_tuple, config, cost_policy)
+
+
+def reprice_quality_evidences(
+    evidences: Iterable[StrategyTradeEvidence],
+    cost_policy: QualityCostPolicy = DEFAULT_QUALITY_COST_POLICY,
+) -> tuple[StrategyTradeEvidence, ...]:
+    return tuple(
         replace(
             item,
             trade=_reprice_trade(item.trade, cost_policy),
         )
         for item in evidences
     )
+
+
+def _quality_profile_payload(
+    evidence_tuple: tuple[StrategyTradeEvidence, ...],
+    config: StrategyQualityConfig,
+    cost_policy: QualityCostPolicy,
+) -> dict[str, Any]:
     gate = apply_quality_gate(evidence_tuple, config)
     raw_trades = tuple(item.trade for item in evidence_tuple)
     raw_executed = tuple(item for item in evidence_tuple if item.trade.executed)
@@ -342,7 +357,12 @@ def compute_quality_profile(
                 else "已按万0.85+印花税计入比例成本；最低1元需提供账户资金"
             ),
         },
-        "release_ready": _release_ready(gate.selected_trades, config),
+        # A rolling shadow window is descriptive evidence only.  It may show
+        # that a candidate is worth freezing, but it cannot consume an OOS
+        # holdout or authorize production by itself.
+        "release_ready": False,
+        "descriptive_candidate_ready": _release_ready(gate.selected_trades, config),
+        "release_blocker": "frozen_oos_and_forward_canary_required",
         "gate": {
             "candidate_count": len(evidence_tuple),
             "passed_count": len(gate.passed),
@@ -382,12 +402,18 @@ def _reprice_trade(trade: Trade, cost_policy: QualityCostPolicy) -> Trade:
 
 
 def _release_ready(trades: tuple[Trade, ...], config: StrategyQualityConfig) -> bool:
+    metrics = compute_metrics(trades)
+    profit_factor_ready = (
+        metrics.profit_loss_ratio > 1.10
+        if metrics.profit_loss_ratio is not None
+        else metrics.win_count > 0 and metrics.loss_count == 0
+    )
     return (
         len(trades) >= config.min_executed_trades
         and len({trade.signal_date for trade in trades}) >= config.min_signal_days
         and bool(trades)
-        and compute_metrics(trades).average_net_return_pct > 0
-        and (compute_metrics(trades).profit_loss_ratio or 0) > 1.10
+        and metrics.average_net_return_pct > 0
+        and profit_factor_ready
     )
 
 
@@ -490,4 +516,5 @@ __all__ = [
     "gate_rejection_reason",
     "industry_group",
     "quality_config_for",
+    "reprice_quality_evidences",
 ]

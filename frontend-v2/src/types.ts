@@ -2072,6 +2072,8 @@ export type StrategyPerformance = {
     mode: "shadow" | string;
     quality_fingerprint: string;
     release_ready: boolean;
+    descriptive_candidate_ready?: boolean;
+    release_blocker?: string;
     gate: {
       candidate_count: number;
       passed_count: number;

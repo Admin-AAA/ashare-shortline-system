@@ -17,10 +17,11 @@ from dataclasses import dataclass, replace
 from datetime import date, timedelta
 import json
 import math
+import zlib
 from typing import Any, Iterable, Mapping, Protocol, Sequence, runtime_checkable
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, load_only
 
 from app.core.config import get_settings
@@ -54,6 +55,7 @@ from app.engine.backtest import (
     Trade,
     canonical_fingerprint,
     canonical_json,
+    content_hash,
 )
 from app.engine.execution_policy import execution_policy_from_payload
 from app.engine.simulation import attribute_failures, build_equity_curve, compute_metrics, simulate
@@ -111,6 +113,8 @@ from app.services.runs.contracts import (
 
 MINIMUM_SIGNAL_SCORE = 70.0
 MAX_SIGNAL_DATES = 250
+ARTIFACT_CONTENT_ENCODING = "zlib+json"
+_ZLIB_JSON_MAGIC = b"ashare-zlib-json-v1\x00"
 CANDIDATE_EVIDENCE_ALL = "all"
 CANDIDATE_EVIDENCE_ACTIONABLE = "actionable"
 _CANDIDATE_EVIDENCE_SCOPES = frozenset(
@@ -126,7 +130,9 @@ MIN_LOOKBACK_CALENDAR_DAYS = 120
 # 注入逻辑发生向后不兼容变化时递增；strategy_profile._compatible_snapshot_id
 # 用同一常量校验候选快照是否由当前契约生成，避免复用旧字段面快照导致策略
 # prefilter 拿到缺失字段（0 信号）。
-RESEARCH_INPUT_SCHEMA_VERSION = 4
+RESEARCH_INPUT_SCHEMA_VERSION = 5
+RESEARCH_SOURCE_VERSION = f"local-daily-kbars/v{RESEARCH_INPUT_SCHEMA_VERSION}"
+RESEARCH_STOCK_METADATA_TEMPORALITY = "current_static"
 
 
 def _research_execution_version(
@@ -527,6 +533,7 @@ class LocalResearchSnapshotBuilder:
                 # _compatible_snapshot_id 的 INPUT_SCHEMA_VERSION 校验联动——
                 # 旧 namespace 快照不再被复用，避免 0 信号旧快照被新策略误用。
                 "input_schema_version": RESEARCH_INPUT_SCHEMA_VERSION,
+                "stock_metadata_temporality": RESEARCH_STOCK_METADATA_TEMPORALITY,
                 "date_selector": request.date_selector,
                 "target_codes": request.target_codes,
                 "execution_policy": request.execution_policy,
@@ -545,29 +552,33 @@ class LocalResearchSnapshotBuilder:
                 select(DailyKbar)
                 .options(load_only(DailyKbar.code, DailyKbar.trade_date, DailyKbar.pct_chg))
                 .where(DailyKbar.trade_date.in_(dates))
-                .order_by(DailyKbar.trade_date, DailyKbar.code)
             )
         )
         market_context_by_date = {
             signal_date: _historical_market_context(rows)
             for signal_date, rows in _rows_by_trade_date(market_signal_rows).items()
         }
-        # 信号行：完整列（_stock_as_of 需要全部因子），但显式给 target_codes 时
-        # 直接用 code IN 圈定，避免重复拉取全市场再内存过滤。
-        signal_query = select(DailyKbar).where(DailyKbar.trade_date.in_(dates))
+        # 信号行与历史/结果行共享同一 21 列消费契约。这里曾遗漏
+        # load_only，导致长窗全市场快照读取约 80 列大宽表；下游实际不会
+        # 访问其余列，收窄后也避免 SQLAlchemy 逐行 lazy-load。
+        signal_query = (
+            select(DailyKbar)
+            .options(load_only(*RESEARCH_KBAR_LOADED_COLUMNS))
+            .where(DailyKbar.trade_date.in_(dates))
+        )
         requested_codes = set(request.target_codes) if request.target_codes else set()
         if requested_codes:
             signal_query = signal_query.where(DailyKbar.code.in_(tuple(sorted(requested_codes))))
-        signal_rows = list(
-            self._session.scalars(signal_query.order_by(DailyKbar.trade_date, DailyKbar.code))
+        signal_rows = _deterministic_kbar_rows(
+            self._session.scalars(signal_query)
         )
         codes = tuple(sorted({str(row.code) for row in signal_rows}))
         if not codes:
             return self._empty_bundle(request)
 
-        # all_rows 同样只取回测模拟实际需要的列（21/80 列），大幅降低 SELECT *
-        # 的字节传输与 ORM 物化成本；信号棒与历史棒共用同一窄列集。
-        all_rows = list(
+        # signal_rows 已经覆盖完整信号区间，历史/结果查询只读取区间两侧，
+        # 避免把长窗内上百万根 K 线重复传输和物化一次。
+        boundary_rows = list(
             self._session.scalars(
                 select(DailyKbar)
                 .options(load_only(*RESEARCH_KBAR_LOADED_COLUMNS))
@@ -575,10 +586,15 @@ class LocalResearchSnapshotBuilder:
                     DailyKbar.code.in_(codes),
                     DailyKbar.trade_date >= history_start,
                     DailyKbar.trade_date <= outcome_end,
+                    or_(
+                        DailyKbar.trade_date < dates[0],
+                        DailyKbar.trade_date > dates[-1],
+                    ),
                 )
-                .order_by(DailyKbar.code, DailyKbar.trade_date)
             )
         )
+        all_rows = [*boundary_rows, *signal_rows]
+        all_rows.sort(key=lambda row: (str(row.code), str(row.trade_date)))
         stock_rows = list(self._session.scalars(select(Stock).where(Stock.code.in_(codes))))
         stock_meta = {
             str(row.code): {
@@ -652,6 +668,7 @@ class LocalResearchSnapshotBuilder:
                 "schema_version": 1,
                 "signal_date": signal_date,
                 "visible_at": signal_date,
+                "stock_metadata_temporality": RESEARCH_STOCK_METADATA_TEMPORALITY,
                 "stocks": signal_stocks,
             }
             outcome_payload = {
@@ -666,8 +683,8 @@ class LocalResearchSnapshotBuilder:
                     for stock in signal_stocks
                 },
             }
-            signal_bytes = canonical_json(signal_payload).encode("utf-8")
-            outcome_bytes = canonical_json(outcome_payload).encode("utf-8")
+            signal_bytes = _encode_artifact_payload(signal_payload)
+            outcome_bytes = _encode_artifact_payload(outcome_payload)
             signal_ref = ArtifactRef.from_content(
                 artifact_id=_artifact_id("signal", signal_date, signal_bytes, namespace=artifact_namespace),
                 signal_date=signal_date,
@@ -676,6 +693,7 @@ class LocalResearchSnapshotBuilder:
                 schema_version=1,
                 row_count=len(signal_stocks),
                 payload=signal_bytes,
+                content_encoding=ARTIFACT_CONTENT_ENCODING,
             )
             outcome_bar_count = sum(len(bars) for bars in outcome_payload["bars_by_code"].values())
             outcome_ref = ArtifactRef.from_content(
@@ -686,6 +704,7 @@ class LocalResearchSnapshotBuilder:
                 schema_version=1,
                 row_count=outcome_bar_count,
                 payload=outcome_bytes,
+                content_encoding=ARTIFACT_CONTENT_ENCODING,
             )
             artifact_refs[signal_date] = (signal_ref, outcome_ref)
             payloads[signal_ref.artifact_id] = signal_bytes
@@ -729,6 +748,7 @@ class LocalResearchSnapshotBuilder:
         partition_payload = {
             "dataset": "daily_kbars",
             "input_schema_version": RESEARCH_INPUT_SCHEMA_VERSION,
+            "stock_metadata_temporality": RESEARCH_STOCK_METADATA_TEMPORALITY,
             "history_start": history_start,
             "outcome_end": outcome_end,
             "signal_dates": dates,
@@ -750,7 +770,7 @@ class LocalResearchSnapshotBuilder:
             # source_version 编码 signal-stock 输入字段面版本（与
             # RESEARCH_INPUT_SCHEMA_VERSION 联动）：字段面升级后旧快照的
             # source_version 不变，strategy_profile 据此拒绝复用旧快照。
-            source_version=f"local-daily-kbars/v{RESEARCH_INPUT_SCHEMA_VERSION}",
+            source_version=RESEARCH_SOURCE_VERSION,
             row_count=len(all_rows),
             content_hash=canonical_fingerprint(partition_payload),
         )
@@ -993,6 +1013,37 @@ class ResearchBacktestRunner:
         bundle = self._load_snapshot_bundle(snapshot_id.strip())
         _validate_snapshot_selector(resolved_request, bundle.signal_dates)
         return self._execute(resolved_request, descriptor, strategy, bundle)
+
+    def load_snapshot_bundle(self, snapshot_id: str) -> SnapshotBundle:
+        """Load and integrity-check a frozen snapshot and every referenced artifact."""
+
+        return self._load_snapshot_bundle(snapshot_id)
+
+    def snapshot_stock_metadata_temporality(self, snapshot_id: str) -> str:
+        """Read metadata temporality from an integrity-checked snapshot manifest."""
+
+        row = self._repository.get_snapshot(snapshot_id)
+        try:
+            manifest = json.loads(str(row.partition_manifest_json))
+        except json.JSONDecodeError as exc:
+            raise SnapshotCaptureError(
+                "stored snapshot JSON is malformed",
+                details={"snapshot_id": snapshot_id},
+            ) from exc
+        partitions = manifest.get("partitions") if isinstance(manifest, Mapping) else None
+        if not isinstance(partitions, list):
+            raise SnapshotCaptureError(
+                "stored immutable snapshot manifest is malformed",
+                details={"snapshot_id": snapshot_id},
+            )
+        source_versions = {
+            str(item.get("source_version") or "")
+            for item in partitions
+            if isinstance(item, Mapping) and item.get("dataset") == "daily_kbars"
+        }
+        if source_versions == {RESEARCH_SOURCE_VERSION}:
+            return RESEARCH_STOCK_METADATA_TEMPORALITY
+        return "unknown"
 
     def replay(self, backtest_id: str, *, force_rerun: bool = True) -> dict[str, Any]:
         if not force_rerun:
@@ -1258,6 +1309,9 @@ class ResearchBacktestRunner:
             ],
         )
         self._repository.persist_attributions(backtest_id, attribution_rows)
+        output_evidence_fingerprint = self._repository.output_evidence_fingerprint(
+            backtest_id
+        )
         metrics = compute_metrics(persisted_trades)
         equity_curve = build_equity_curve(persisted_trades)
         cross_validation = cross_validate_trades(tuple(persisted_trades), request.execution_policy)
@@ -1280,6 +1334,7 @@ class ResearchBacktestRunner:
             "metrics": metrics.canonical_payload(),
             "equity_curve": [point.canonical_payload() for point in equity_curve],
             "failure_attribution_count": len(attribution_rows),
+            "output_evidence_fingerprint": output_evidence_fingerprint,
             "cross_validation": cross_validation.as_dict(),
             "artifact_refs": {
                 signal_date: [ref.canonical_payload() for ref in bundle.snapshot.artifacts_for(signal_date)]
@@ -1729,7 +1784,7 @@ def _request_from_canonical_json(raw: str, *, force_rerun: bool) -> BacktestRequ
         date_selector = SingleDate(str(selector["signal_date"]))
     else:
         date_selector = DateRange(str(selector.get("start_date") or ""), str(selector.get("end_date") or ""))
-    policy_payload = dict(payload.get("execution_policy") or {})
+    policy_payload = _drop_none_values(dict(payload.get("execution_policy") or {}))
     if isinstance(policy_payload.get("entry"), Mapping):
         # Nested canonical payload persisted by current CanonicalValue contracts.
         execution_policy = execution_policy_from_payload(policy_payload)
@@ -1755,6 +1810,18 @@ def _selector_dates(request: BacktestRequest) -> tuple[str | None, str | None, s
     if isinstance(request.date_selector, SingleDate):
         return request.date_selector.signal_date, None, None
     return None, request.date_selector.start_date, request.date_selector.end_date
+
+
+def _drop_none_values(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _drop_none_values(item)
+            for key, item in value.items()
+            if item is not None
+        }
+    if isinstance(value, list):
+        return [_drop_none_values(item) for item in value]
+    return value
 
 
 def _validate_snapshot_selector(request: BacktestRequest, signal_dates: Sequence[str]) -> None:
@@ -1845,18 +1912,32 @@ def _artifact_id(scope: str, signal_date: str, payload: bytes, *, namespace: str
     """
     return (
         f"bta_{scope}_{signal_date.replace('-', '')}_{namespace}_"
-        f"{canonical_fingerprint(payload.decode('utf-8'))[:36]}"
+        f"{content_hash(payload)[:36]}"
     )
+
+
+def _deterministic_kbar_rows(rows: Iterable[DailyKbar]) -> list[DailyKbar]:
+    return sorted(rows, key=lambda row: (str(row.trade_date), str(row.code)))
 
 
 def _trade_id(backtest_id: str, trade: Trade) -> str:
     return f"btt_{canonical_fingerprint({'backtest_id': backtest_id, 'trade': trade.canonical_payload()})[:48]}"
 
 
+def _encode_artifact_payload(payload: Mapping[str, Any]) -> bytes:
+    raw = canonical_json(payload).encode("utf-8")
+    return _ZLIB_JSON_MAGIC + zlib.compress(raw, level=1)
+
+
 def _decode_artifact_payload(payload: bytes, artifact_id: str) -> dict[str, Any]:
     try:
-        decoded = json.loads(payload.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raw = (
+            zlib.decompress(payload[len(_ZLIB_JSON_MAGIC) :])
+            if payload.startswith(_ZLIB_JSON_MAGIC)
+            else payload
+        )
+        decoded = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, zlib.error) as exc:
         raise SnapshotCaptureError("artifact payload is not canonical UTF-8 JSON", details={"artifact_id": artifact_id}) from exc
     if not isinstance(decoded, dict):
         raise SnapshotCaptureError("artifact payload root must be an object", details={"artifact_id": artifact_id})

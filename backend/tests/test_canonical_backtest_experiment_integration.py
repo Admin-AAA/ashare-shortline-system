@@ -12,6 +12,7 @@ from app.models.tables import (
     BacktestDataSnapshot,
     BacktestExperiment,
     BacktestFailureAttribution,
+    BacktestHoldoutClaim,
     BacktestInputArtifact,
     BacktestRequestClaim,
     BacktestRunV2,
@@ -41,6 +42,7 @@ def test_real_runner_persists_one_shared_snapshot_and_one_evidence_artifact() ->
             BacktestCandidate.__table__,
             BacktestTrade.__table__,
             BacktestFailureAttribution.__table__,
+            BacktestHoldoutClaim.__table__,
             BacktestExperiment.__table__,
         ],
     )
@@ -74,7 +76,7 @@ def test_real_runner_persists_one_shared_snapshot_and_one_evidence_artifact() ->
                 macd_dea=0.0,
                 rsi_12=55.0,
             )
-            for index in range(75)
+            for index in range(180)
         )
         session.commit()
 
@@ -89,7 +91,7 @@ def test_real_runner_persists_one_shared_snapshot_and_one_evidence_artifact() ->
         )
         common = {
             "strategy_id": "daily-stock-analysis-skill",
-            "date_selector": DateRange("2026-03-01", "2026-03-03"),
+            "date_selector": DateRange("2026-03-01", "2026-04-30"),
             "execution_policy": policy,
             "target_codes": ("000001",),
         }
@@ -118,6 +120,9 @@ def test_real_runner_persists_one_shared_snapshot_and_one_evidence_artifact() ->
         assert session.query(BacktestDataSnapshot).count() == 1
         assert artifact["shared_snapshot_id"] == runs[0].snapshot_id
         assert artifact["truth_validation"]["passed"] is True
+        assert artifact["stock_metadata_temporality"] == "current_static"
+        assert artifact["decision"]["gates"]["point_in_time_stock_metadata"] is False
+        assert artifact["decision"]["historically_qualified"] is False
         assert experiment is not None
         assert artifact["evidence_fingerprint"] in str(experiment.conclusion_json)
     finally:

@@ -18,16 +18,20 @@ from app.engine.backtest import (
     canonical_fingerprint,
 )
 from app.engine.simulation import compute_metrics
+from app.governance.holdout import HoldoutPopulationIdentity
 from app.services.backtest.challenger_decision import (
     PerformanceSnapshot,
     evaluate_challenger,
 )
 
 
-EVIDENCE_SCHEMA_VERSION = 1
-DECISION_POLICY = "evaluate_challenger:v1"
-SPLIT_POLICY = "chronological_60_20_20:v1"
+EVIDENCE_SCHEMA_VERSION = 2
+DECISION_POLICY = "canonical_strategy_oos_release:v2"
+SPLIT_POLICY = "purged_chronological_60_20_20:v2"
 UNBOUNDED_PROFIT_FACTOR = 999.0
+MIN_OOS_EXECUTED_TRADES = 100
+MIN_OOS_EXECUTED_SIGNAL_DAYS = 20
+MIN_OOS_PROFIT_FACTOR = 1.10
 
 
 class CanonicalExperimentValidationError(ValueError):
@@ -103,9 +107,26 @@ class CanonicalBacktestExperiment:
         )
         champion_payload = _completed_run_payload(champion_result, arm="champion")
         snapshot_id = _required_text(champion_result, "snapshot_id", arm="champion")
+        stock_metadata_temporality = self._runner.snapshot_stock_metadata_temporality(
+            snapshot_id
+        )
         champion_backtest_id = _required_text(champion_result, "backtest_id", arm="champion")
         signal_dates = _signal_dates(champion_payload, arm="champion")
-        split = _chronological_split(signal_dates)
+        population_split = _chronological_split(signal_dates)
+        purge_signal_days = (
+            champion.execution_policy.entry_lookahead_days
+            + champion.execution_policy.horizon_days
+        )
+        split = _purged_chronological_split(
+            signal_dates,
+            purge_signal_days=purge_signal_days,
+        )
+        holdout_fingerprint = _holdout_population_fingerprint(
+            snapshot_id=snapshot_id,
+            request=champion,
+            out_of_sample_dates=split["out_of_sample"],
+            stock_metadata_temporality=stock_metadata_temporality,
+        )
 
         experiment = self._repository.create_experiment(
             experiment_id=spec.experiment_id,
@@ -113,7 +134,7 @@ class CanonicalBacktestExperiment:
             baseline_backtest_id=champion_backtest_id,
             snapshot_id=snapshot_id,
             execution_policy_fingerprint=champion.execution_policy.fingerprint(),
-            split_json=split,
+            split_json=population_split,
             split_hash=None,
             candidate_strategy_id=challenger.strategy_id,
             candidate_strategy_version=str(challenger.strategy_version),
@@ -121,7 +142,11 @@ class CanonicalBacktestExperiment:
             acceptance={
                 "decision_policy": DECISION_POLICY,
                 "split_policy": SPLIT_POLICY,
-                "additional_release_gates": [],
+                "purge_signal_days": purge_signal_days,
+                "decision_split": split,
+                "holdout_fingerprint": holdout_fingerprint,
+                "holdout_identity_policy": "server_derived_snapshot_population:v1",
+                "release_gates": _release_gate_manifest(),
             },
         )
         self._repository.freeze_experiment(
@@ -131,6 +156,12 @@ class CanonicalBacktestExperiment:
         _commit(self._repository)
 
         try:
+            self._repository.claim_holdout(
+                holdout_fingerprint=holdout_fingerprint,
+                experiment_id=spec.experiment_id,
+                phase="untouched_holdout",
+            )
+            _commit(self._repository)
             challenger_result = self._runner.run_on_snapshot(
                 replace(
                     challenger,
@@ -164,12 +195,11 @@ class CanonicalBacktestExperiment:
         )
         truth_validation = _truth_validation(champion_arm, challenger_arm)
         if truth_validation["passed"]:
-            decision = evaluate_challenger(
-                _performance_snapshot(champion_arm["metrics"]),
-                _performance_snapshot(challenger_arm["metrics"]),
-            ).to_dict()
-            decision["improvements"] = list(decision["improvements"])
-            decision["regressions"] = list(decision["regressions"])
+            decision = _oos_decision(
+                champion_arm,
+                challenger_arm,
+                stock_metadata_temporality=stock_metadata_temporality,
+            )
             terminal_status = "completed"
         else:
             decision = {
@@ -188,6 +218,15 @@ class CanonicalBacktestExperiment:
             "hypothesis": spec.hypothesis,
             "shared_snapshot_id": snapshot_id,
             "split": split,
+            "population_split": population_split,
+            "decision_scope": "out_of_sample",
+            "decision_policy": DECISION_POLICY,
+            "split_policy": SPLIT_POLICY,
+            "purge_signal_days": purge_signal_days,
+            "holdout_fingerprint": holdout_fingerprint,
+            "holdout_identity_policy": "server_derived_snapshot_population:v1",
+            "stock_metadata_temporality": stock_metadata_temporality,
+            "release_gates": _release_gate_manifest(),
             "arms": {
                 "champion": champion_arm,
                 "challenger": challenger_arm,
@@ -221,11 +260,13 @@ class CanonicalBacktestExperiment:
         backtest_id = _required_text(result, "backtest_id", arm="result")
         trades = tuple(_trade_from_row(row) for row in self._repository.list_trades(backtest_id))
         metrics = compute_metrics(trades).canonical_payload()
-        split_metrics = {
-            name: compute_metrics(
-                trade for trade in trades if trade.signal_date in frozenset(dates)
-            ).canonical_payload()
+        split_trades = {
+            name: tuple(trade for trade in trades if trade.signal_date in frozenset(dates))
             for name, dates in split.items()
+        }
+        split_metrics = {
+            name: compute_metrics(values).canonical_payload()
+            for name, values in split_trades.items()
         }
         validation = payload.get("cross_validation")
         if not isinstance(validation, Mapping):
@@ -237,6 +278,10 @@ class CanonicalBacktestExperiment:
             "configuration_fingerprint": configuration_fingerprint,
             "metrics": metrics,
             "split_metrics": split_metrics,
+            "split_executed_signal_days": {
+                name: len({trade.signal_date for trade in values if trade.executed})
+                for name, values in split_trades.items()
+            },
             "cross_validation": dict(validation),
         }
 
@@ -318,6 +363,30 @@ def _chronological_split(signal_dates: tuple[str, ...]) -> dict[str, list[str]]:
     }
 
 
+def _purged_chronological_split(
+    signal_dates: tuple[str, ...],
+    *,
+    purge_signal_days: int,
+) -> dict[str, list[str]]:
+    population = _chronological_split(signal_dates)
+    train_end = len(population["train"])
+    validation_end = train_end + len(population["validation"])
+    split = {
+        "train": population["train"],
+        "validation": list(signal_dates[train_end + purge_signal_days : validation_end]),
+        "out_of_sample": list(signal_dates[validation_end + purge_signal_days :]),
+    }
+    if any(not dates for dates in split.values()):
+        raise CanonicalExperimentValidationError(
+            "purge/embargo left an empty canonical experiment partition",
+            details={
+                "signal_date_count": len(signal_dates),
+                "purge_signal_days": purge_signal_days,
+            },
+        )
+    return split
+
+
 def _validate_shared_snapshot(result: Mapping[str, Any], expected_snapshot_id: str) -> None:
     actual = result.get("snapshot_id")
     if actual != expected_snapshot_id:
@@ -350,6 +419,94 @@ def _truth_validation(
         "challenger_vectorbt": challenger_arm["cross_validation"].get("passed") is True,
     }
     return {"passed": all(validators.values()), "validators": validators}
+
+
+def _oos_decision(
+    champion_arm: Mapping[str, Any],
+    challenger_arm: Mapping[str, Any],
+    *,
+    stock_metadata_temporality: str,
+) -> dict[str, Any]:
+    champion = champion_arm["split_metrics"]["out_of_sample"]
+    challenger = challenger_arm["split_metrics"]["out_of_sample"]
+    financial = evaluate_challenger(
+        _performance_snapshot(champion),
+        _performance_snapshot(challenger),
+    ).to_dict()
+    profit_factor = _performance_snapshot(challenger).profit_factor
+    gates = {
+        "point_in_time_stock_metadata": stock_metadata_temporality == "point_in_time",
+        "minimum_oos_executed_trades": (
+            int(challenger.get("executed_trade_count") or 0) >= MIN_OOS_EXECUTED_TRADES
+        ),
+        "minimum_oos_executed_signal_days": (
+            int(challenger_arm["split_executed_signal_days"]["out_of_sample"])
+            >= MIN_OOS_EXECUTED_SIGNAL_DAYS
+        ),
+        "positive_oos_average_net_return": (
+            float(challenger.get("average_net_return_pct") or 0.0) > 0.0
+        ),
+        "minimum_oos_profit_factor": profit_factor > MIN_OOS_PROFIT_FACTOR,
+        "oos_max_drawdown_no_worse_than_champion": (
+            float(challenger.get("max_drawdown_pct") or 0.0)
+            <= float(champion.get("max_drawdown_pct") or 0.0)
+        ),
+    }
+    historically_qualified = bool(financial["should_publish"] and all(gates.values()))
+    return {
+        **financial,
+        "decision": "FORWARD_CANDIDATE" if historically_qualified else "FALSIFIED",
+        "should_publish": False,
+        "historically_qualified": historically_qualified,
+        "decision_scope": "out_of_sample",
+        "production_blocker": (
+            "forward_canary_required"
+            if gates["point_in_time_stock_metadata"]
+            else "point_in_time_stock_metadata_required"
+        ),
+        "gates": gates,
+        "failed_gates": [name for name, passed in gates.items() if not passed],
+        "improvements": list(financial["improvements"]),
+        "regressions": list(financial["regressions"]),
+    }
+
+
+def _release_gate_manifest() -> dict[str, Any]:
+    return {
+        "min_oos_executed_trades": MIN_OOS_EXECUTED_TRADES,
+        "min_oos_executed_signal_days": MIN_OOS_EXECUTED_SIGNAL_DAYS,
+        "min_oos_average_net_return_pct": 0.0,
+        "min_oos_profit_factor": MIN_OOS_PROFIT_FACTOR,
+        "max_drawdown_rule": "challenger_no_worse_than_champion",
+        "forward_canary_required": True,
+    }
+
+
+def _holdout_population_fingerprint(
+    *,
+    snapshot_id: str,
+    request: BacktestRequest,
+    out_of_sample_dates: Sequence[str],
+    stock_metadata_temporality: str,
+) -> str:
+    identity = HoldoutPopulationIdentity.build(
+        snapshot={
+            "snapshot_id": snapshot_id,
+            "stock_metadata_temporality": stock_metadata_temporality,
+        },
+        actual_dates=out_of_sample_dates,
+        universe=(
+            request.target_codes
+            if request.target_codes
+            else ("__full_snapshot_universe__",)
+        ),
+        label_policy={
+            "entry_lookahead_days": request.execution_policy.entry_lookahead_days,
+            "horizon_days": request.execution_policy.horizon_days,
+        },
+        execution_policy=request.execution_policy.canonical_payload(),
+    )
+    return identity.population_fingerprint
 
 
 def _performance_snapshot(metrics: Mapping[str, Any]) -> PerformanceSnapshot:
@@ -397,6 +554,15 @@ def _semantic_evidence_payload(artifact: Mapping[str, Any]) -> dict[str, Any]:
         "schema_version": artifact["schema_version"],
         "shared_snapshot_id": artifact["shared_snapshot_id"],
         "split": artifact["split"],
+        "population_split": artifact["population_split"],
+        "decision_scope": artifact["decision_scope"],
+        "decision_policy": artifact["decision_policy"],
+        "split_policy": artifact["split_policy"],
+        "purge_signal_days": artifact["purge_signal_days"],
+        "holdout_fingerprint": artifact["holdout_fingerprint"],
+        "holdout_identity_policy": artifact["holdout_identity_policy"],
+        "stock_metadata_temporality": artifact["stock_metadata_temporality"],
+        "release_gates": artifact["release_gates"],
         "arms": {
             name: {
                 "strategy_id": arm["strategy_id"],
@@ -404,6 +570,7 @@ def _semantic_evidence_payload(artifact: Mapping[str, Any]) -> dict[str, Any]:
                 "configuration_fingerprint": arm["configuration_fingerprint"],
                 "metrics": arm["metrics"],
                 "split_metrics": arm["split_metrics"],
+                "split_executed_signal_days": arm["split_executed_signal_days"],
                 "cross_validation": _semantic_cross_validation(arm["cross_validation"]),
             }
             for name, arm in arms.items()

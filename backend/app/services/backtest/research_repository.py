@@ -260,6 +260,36 @@ class ResearchBacktestRepository:
             ) from exc
         return row
 
+    def require_holdout_claim(
+        self,
+        *,
+        holdout_fingerprint: str,
+        experiment_id: str,
+    ) -> Any:
+        """Require an existing canonical claim bound to one frozen experiment."""
+
+        model = self._models.holdout_claim
+        if model is None:
+            raise RepositoryConfigurationError(
+                "正式 holdout ledger 尚未安装；请先应用 backtest_holdout_claims migration。"
+            )
+        row = self._session.get(model, holdout_fingerprint)
+        if row is None:
+            raise ExperimentValidationError(
+                "frozen holdout population 尚未在揭盲前 claim。",
+                details={"holdout_fingerprint": holdout_fingerprint},
+            )
+        if str(row.experiment_id) != str(experiment_id) or str(row.status) != "consumed":
+            raise ExperimentValidationError(
+                "frozen holdout claim 与当前 spec 不一致。",
+                details={
+                    "holdout_fingerprint": holdout_fingerprint,
+                    "expected_experiment_id": experiment_id,
+                    "actual_experiment_id": str(row.experiment_id),
+                },
+            )
+        return row
+
     # -- Snapshot and immutable input artifacts ---------------------------------
 
     def persist_snapshot(
@@ -672,6 +702,7 @@ class ResearchBacktestRepository:
 
     def persist_candidates(self, backtest_id: str, candidates: Sequence[Mapping[str, Any] | Any]) -> list[Any]:
         run = self.get_run(backtest_id)
+        self._assert_output_writable(run)
         rows: list[Any] = []
         seen: set[tuple[str, str]] = set()
         verified_artifacts: dict[str, Any] = {}
@@ -746,7 +777,8 @@ class ResearchBacktestRepository:
         )
 
     def persist_trades(self, backtest_id: str, trades: Sequence[Mapping[str, Any] | Any]) -> list[Any]:
-        self.get_run(backtest_id)
+        run = self.get_run(backtest_id)
+        self._assert_output_writable(run)
         rows: list[Any] = []
         seen: set[tuple[str, str]] = set()
         for item in trades:
@@ -812,7 +844,8 @@ class ResearchBacktestRepository:
     def persist_attributions(
         self, backtest_id: str, attributions: Sequence[Mapping[str, Any] | Any]
     ) -> list[Any]:
-        self.get_run(backtest_id)
+        run = self.get_run(backtest_id)
+        self._assert_output_writable(run)
         rows: list[Any] = []
         seen: set[tuple[str, str]] = set()
         for item in attributions:
@@ -889,6 +922,42 @@ class ResearchBacktestRepository:
             rows.append(row)
         self._session.flush()
         return rows
+
+    def output_evidence_fingerprint(self, backtest_id: str) -> str:
+        """Hash the complete ordered candidate/trade evidence of one attempt."""
+
+        self.get_run(backtest_id)
+        candidates = self.list_candidates(backtest_id)
+        trades = self.list_trades(backtest_id)
+        return _sha256_text(
+            _canonical_json(
+                {
+                    "candidates": [
+                        {
+                            "signal_date": str(row.signal_date),
+                            "code": str(row.code),
+                            "decision_status": str(row.decision_status),
+                            "signal_json": row.signal_json,
+                            "audit_json": str(row.audit_json),
+                            "input_artifact_id": str(row.input_artifact_id),
+                        }
+                        for row in candidates
+                    ],
+                    "trades": [
+                        {
+                            "signal_date": str(row.signal_date),
+                            "code": str(row.code),
+                            "entry_date": row.entry_date,
+                            "exit_date": row.exit_date,
+                            "outcome_label": str(row.outcome_label),
+                            "trade_json": str(row.trade_json),
+                        }
+                        for row in trades
+                    ],
+                },
+                field="output_evidence",
+            )
+        )
 
     def list_attributions(self, backtest_id: str, *, reason_code: str | None = None) -> list[Any]:
         self.get_run(backtest_id)
@@ -1184,6 +1253,14 @@ class ResearchBacktestRepository:
             raise BacktestStateConflict(
                 "attempt 不再是 request 的 current active claim。",
                 details={"backtest_id": run.backtest_id, "active_backtest_id": claim.active_backtest_id},
+            )
+
+    @staticmethod
+    def _assert_output_writable(run: Any) -> None:
+        if str(run.status) not in _ACTIVE_RUN_STATUSES:
+            raise BacktestStateConflict(
+                "终态 attempt 不允许追加或修改 candidate/trade/attribution evidence。",
+                details={"backtest_id": str(run.backtest_id), "status": str(run.status)},
             )
 
     def _assert_snapshot_integrity(self, row: Any) -> None:
