@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { dashboardRunLabel, exitReasonLabel, isOutcomeSettled } from "../src/utils/display.ts";
+import { dashboardRunLabel, exitReasonLabel, isActiveRunStatus, isOutcomeSettled } from "../src/utils/display.ts";
 
 test("not-triggered exits use the settled outcome wording", () => {
   assert.equal(exitReasonLabel("not_triggered"), "未触发");
@@ -15,6 +15,13 @@ test("provisional outcome remains unsettled for realtime pnl", () => {
   assert.equal(isOutcomeSettled("provisional"), false);
   assert.equal(isOutcomeSettled("pending"), false);
   assert.equal(isOutcomeSettled(undefined), false);
+});
+
+test("queued and running statuses block duplicate run starts", () => {
+  assert.equal(isActiveRunStatus("queued"), true);
+  assert.equal(isActiveRunStatus("RUNNING"), true);
+  assert.equal(isActiveRunStatus("completed"), false);
+  assert.equal(isActiveRunStatus(undefined), false);
 });
 
 test("queued dashboard runs keep an explicit queued label", () => {
