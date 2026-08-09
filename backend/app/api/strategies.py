@@ -79,6 +79,7 @@ def _performance_payload(
         "total_return_pct": profile.get("total_return_pct"),
         "max_drawdown_pct": profile.get("max_drawdown_pct"),
         "window_metrics": profile.get("window_metrics") or {},
+        "quality": profile.get("quality"),
         "monthly_returns": profile.get("monthly_returns") or [],
         "date_from": profile.get("date_from"),
         "date_to": profile.get("date_to"),

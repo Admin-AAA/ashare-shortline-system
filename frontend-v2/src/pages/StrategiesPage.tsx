@@ -199,6 +199,8 @@ function CalledCard({ item, windowDays }: { item: StrategyListItem; windowDays: 
   const avgReturn = selectedWindow?.avg_return ?? (windowDays === 180 ? perf.avg_return : null);
   const pfColor = pf == null ? "var(--muted)" : pf >= 1.4 ? "var(--market-up)" : pf >= 1.0 ? "var(--text)" : "var(--market-down)";
   const displaySampleCount = selectedWindow?.sample_count ?? (windowDays === 180 ? perf.sample_count : 0);
+  const quality = perf.quality;
+  const qualityMetrics = quality?.gated_metrics;
   // 统计可信度：所选窗口样本<20 时胜率属噪声，须显式提示，防过度信任
   const lowSample = displaySampleCount < 20;
   // 最新补跑门线明细（T27：与 self_check gate_blocked 同源）
@@ -233,6 +235,31 @@ function CalledCard({ item, windowDays }: { item: StrategyListItem; windowDays: 
       <div style={{ marginTop: "var(--space-2)", fontSize: "var(--text-xs)", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
         {selectedWindow?.date_from ?? perf.date_from} ~ {selectedWindow?.date_to ?? perf.date_to} · 成交 {displaySampleCount} 笔 · 均收益 {avgReturn == null ? "—" : `${avgReturn >= 0 ? "+" : ""}${avgReturn.toFixed(2)}%`}
       </div>
+      {quality && (
+        <div
+          style={{
+            marginTop: "var(--space-3)",
+            padding: "7px 10px",
+            borderRadius: 8,
+            border: "1px solid color-mix(in srgb, var(--accent) 25%, var(--border))",
+            background: "color-mix(in srgb, var(--accent) 7%, transparent)",
+            fontSize: "var(--text-xs)",
+            color: "var(--muted)",
+            fontFamily: "var(--font-mono)",
+          }}
+          title={`质量闸门 ${quality.quality_fingerprint}\n评分单调：${quality.score_calibration.monotonic_avg_return == null ? "样本不足" : quality.score_calibration.monotonic_avg_return ? "是" : "否"}`}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+            <span style={{ color: "var(--text)", fontWeight: 600 }}>优化影子 · P0-P4</span>
+            <span style={{ color: quality.release_ready ? "var(--market-up)" : "var(--warning, #b45309)" }}>
+              {quality.release_ready ? "达到候选门槛" : "尚未达到发布门槛"}
+            </span>
+          </div>
+          <div style={{ marginTop: 3 }}>
+            闸门成交 {quality.gate.selected_count} 笔 · 胜率 {qualityMetrics?.hit_rate == null ? "—" : `${(qualityMetrics.hit_rate * 100).toFixed(1)}%`} · 均收益 {qualityMetrics?.avg_return == null ? "—" : `${qualityMetrics.avg_return >= 0 ? "+" : ""}${qualityMetrics.avg_return.toFixed(2)}%`}
+          </div>
+        </div>
+      )}
       {perf.window_rolled && perf.target_date_to && perf.target_date_to !== perf.date_to && (
         <div style={{ marginTop: 4, fontSize: "var(--text-xs)", color: "var(--warning, #b45309)", fontFamily: "var(--font-mono)" }} title={`目标窗口 ${perf.target_date_from} ~ ${perf.target_date_to} 随交易日漂移，暂复用同版本最近完成画像`}>
           信号窗口 {perf.date_from} ~ {perf.date_to}（随交易日滚动复用）
