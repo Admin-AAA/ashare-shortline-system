@@ -274,6 +274,7 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
         rt_min_rate_limit_per_minute: int,
         stk_mins_rate_limit_per_minute: int,
         proxy: str = "",
+        source: str = "",
     ) -> None:
         credential = api_key.strip()
         if not credential:
@@ -291,6 +292,7 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
                         "stk_mins": max(0, int(stk_mins_rate_limit_per_minute)),
                     },
                     proxy=proxy,
+                    source=source,
                     priority=priority,
                     **common,
                 )
@@ -362,6 +364,7 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
         name="ai_tool_key1",
         api_key=settings.tushare_ai_tool_key1,
         priority=-3,
+        source="tushare_source_1",
         rate_limit_per_minute=settings.tushare_ai_tool_key1_rate_limit_per_minute,
         rt_min_rate_limit_per_minute=settings.tushare_ai_tool_key1_rt_min_rate_limit_per_minute,
         stk_mins_rate_limit_per_minute=settings.tushare_ai_tool_key1_stk_mins_rate_limit_per_minute,
@@ -371,6 +374,7 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
         name="ai_tool_key2",
         api_key=settings.tushare_ai_tool_key2,
         priority=-2,
+        source="tushare_source_2",
         rate_limit_per_minute=settings.tushare_ai_tool_key2_rate_limit_per_minute,
         rt_min_rate_limit_per_minute=settings.tushare_ai_tool_key2_rt_min_rate_limit_per_minute,
         stk_mins_rate_limit_per_minute=settings.tushare_ai_tool_key2_stk_mins_rate_limit_per_minute,
@@ -558,10 +562,10 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
     specs = (
         {
             "name": "ai_tool_key1",
-            "source": "ai-tool",
+            "source": "tushare_source_1",
             "configured": bool(settings.tushare_ai_tool_key1.strip()),
             "priority": -3,
-            "note": "独立 ai-tool 凭证 1；分钟/公告优先源",
+            "note": "独立 Tushare 数据源 1；分钟/公告优先源",
             "auth_mode": AuthMode.API_KEY_HEADER.value,
             "rate_limit_per_minute": max(0, int(settings.tushare_ai_tool_key1_rate_limit_per_minute)),
             "api_rate_limits": {
@@ -573,10 +577,10 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
         },
         {
             "name": "ai_tool_key2",
-            "source": "ai-tool",
+            "source": "tushare_source_2",
             "configured": bool(settings.tushare_ai_tool_key2.strip()),
             "priority": -2,
-            "note": "独立 ai-tool 凭证 2；分钟/公告备用源",
+            "note": "独立 Tushare 数据源 2；分钟/公告备用源",
             "auth_mode": AuthMode.API_KEY_HEADER.value,
             "rate_limit_per_minute": max(0, int(settings.tushare_ai_tool_key2_rate_limit_per_minute)),
             "api_rate_limits": {

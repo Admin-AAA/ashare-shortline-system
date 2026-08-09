@@ -67,6 +67,10 @@ class ProviderConfig:
     recovery_seconds: float = 60.0
     api_rate_limits: Mapping[str, int] = field(default_factory=dict)
     proxy: str = field(default="", repr=False)
+    # Business-facing source identity.  This is intentionally separate from
+    # the provider name so legacy DB overrides remain compatible while two
+    # credentials can be exposed as two independent data sources.
+    source: str = ""
     # 路由优先级：数值越小越优先。ai_tool_primary_apis 命中的 API 会整体偏向 ai_tool，
     # 其余按 priority 升序尝试；同优先级按注册顺序。enabled 覆盖见 TushareProviderRouter。
     priority: int = 100
@@ -312,6 +316,7 @@ class TushareHttpProvider:
         )
         return {
             "name": self.name,
+            "source": self.config.source or self.name,
             **self._health.snapshot(),
             "auth_mode": self.config.auth_mode.value,
             "rate_limit_per_minute": self.config.rate_limit_per_minute,
