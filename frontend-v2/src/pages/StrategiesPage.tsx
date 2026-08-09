@@ -7,6 +7,8 @@ import { Panel } from "../components/Panel";
 import { useApi } from "../app/useApi";
 import { useUrlRoute } from "../app/useUrlRoute";
 
+type StrategyWindowDays = 30 | 180;
+
 /**
  * 策略清单页 —— 系统全部策略的"驾驶舱视图"。
  *
@@ -19,6 +21,7 @@ import { useUrlRoute } from "../app/useUrlRoute";
 
 export function StrategiesPage() {
   const [tab, setTab] = useState<"skills" | "presets">("skills");
+  const [windowDays, setWindowDays] = useState<StrategyWindowDays>(180);
   const skills = useApi<StrategyListItem[]>(
     () => api.strategies(),
   );
@@ -37,7 +40,7 @@ export function StrategiesPage() {
       }
     >
       {tab === "skills" ? (
-        <SkillsView skills={skills} />
+        <SkillsView skills={skills} windowDays={windowDays} onWindowDaysChange={setWindowDays} />
       ) : (
         <PresetsView presets={presets} />
       )}
@@ -69,8 +72,12 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
 /** 原策略清单视图（已调用/未调用卡片网格 + 时间窗口） */
 function SkillsView({
   skills,
+  windowDays,
+  onWindowDaysChange,
 }: {
   skills: { data: StrategyListItem[] | null; loading: boolean; error: string };
+  windowDays: StrategyWindowDays;
+  onWindowDaysChange: (value: StrategyWindowDays) => void;
 }) {
   if (skills.loading) return <PageSkeleton title="策略清单" hint="加载策略与胜率" rowCount={8} />;
   if (skills.error) return <ErrorPage title="策略加载失败" message={skills.error} />;
@@ -84,13 +91,20 @@ function SkillsView({
 
   return (
     <>
-      <div style={{ color: "var(--muted)", fontSize: 12, padding: "var(--space-2) 0 var(--space-4)" }}>
-        当前版本最近 180 天 canonical 回测 · 按退出日归属自然月 · 不混入旧版本真实收益
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--space-3)", padding: "var(--space-2) 0 var(--space-4)" }}>
+        <div style={{ color: "var(--muted)", fontSize: 12 }}>
+          当前版本 canonical 回测 · 按信号日期筛选，收益按退出日聚合 · 不混入旧版本真实收益
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexShrink: 0 }}>
+          <span style={{ color: "var(--muted)", fontSize: 12 }}>窗口</span>
+          <TabButton active={windowDays === 30} onClick={() => onWindowDaysChange(30)}>30天</TabButton>
+          <TabButton active={windowDays === 180} onClick={() => onWindowDaysChange(180)}>180天</TabButton>
+        </div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: "var(--space-4)" }}>
         {ready.map((s) => (
-          <CalledCard key={s.skill_id} item={s} />
+          <CalledCard key={s.skill_id} item={s} windowDays={windowDays} />
         ))}
         {pending.map((s) => (
           <DormantCard key={s.skill_id} item={s} />
@@ -171,18 +185,22 @@ function PresetTable({ rows }: { rows: PresetStatsRow[] }) {
   );
 }
 
-/** 当前版本策略画像：胜率 + 盈亏比 + 半年组合收益，可展开看自然月收益。 */
-function CalledCard({ item }: { item: StrategyListItem }) {
+/** 当前版本策略画像：可切换30/180天窗口的胜率、盈亏比和组合收益。 */
+function CalledCard({ item, windowDays }: { item: StrategyListItem; windowDays: StrategyWindowDays }) {
   const perf = item.performance as StrategyPerformance;
   const { navigate } = useUrlRoute();
   const [open, setOpen] = useState(false);
-  const win = perf.hit_rate;
+  const selectedWindow = perf.window_metrics?.[String(windowDays)];
+  const win = selectedWindow?.hit_rate ?? (windowDays === 180 ? perf.hit_rate : null);
   const winColor = win == null ? "var(--muted)" : win >= 0.6 ? "var(--market-up)" : win >= 0.5 ? "var(--market-up)" : "var(--market-down)";
-  const retColor = perf.total_return_pct >= 0 ? "var(--market-up)" : "var(--market-down)";
-  const pf = perf.profit_loss_ratio;
+  const totalReturn = selectedWindow?.total_return_pct ?? (windowDays === 180 ? perf.total_return_pct : null);
+  const retColor = totalReturn == null ? "var(--muted)" : totalReturn >= 0 ? "var(--market-up)" : "var(--market-down)";
+  const pf = selectedWindow?.profit_loss_ratio ?? (windowDays === 180 ? perf.profit_loss_ratio : null);
+  const avgReturn = selectedWindow?.avg_return ?? (windowDays === 180 ? perf.avg_return : null);
   const pfColor = pf == null ? "var(--muted)" : pf >= 1.4 ? "var(--market-up)" : pf >= 1.0 ? "var(--text)" : "var(--market-down)";
-  // 统计可信度：后端 reliable=false（样本<20）时胜率属噪声，须显式提示，防过度信任
-  const lowSample = !perf.reliable;
+  const displaySampleCount = selectedWindow?.sample_count ?? (windowDays === 180 ? perf.sample_count : 0);
+  // 统计可信度：所选窗口样本<20 时胜率属噪声，须显式提示，防过度信任
+  const lowSample = displaySampleCount < 20;
   // 最新补跑门线明细（T27：与 self_check gate_blocked 同源）
   const gate = item.last_exp_gate ?? perf.last_exp_gate;
 
@@ -204,16 +222,16 @@ function CalledCard({ item }: { item: StrategyListItem }) {
           克制原则——不让胜率独占 hero：盈亏比 <1 的高胜率策略风险调整后并不优，
           skill 明确「不要只盯胜率，判 regime 必须看盈亏比」。三个 D 项指标平级、右对齐、等宽字体。 */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "var(--space-3)", marginTop: "var(--space-4)", paddingTop: "var(--space-3)", borderTop: "1px solid var(--border)" }}>
-        <Metric label="胜率" value={win == null ? "—" : `${(win * 100).toFixed(1)}%`} color={winColor} />
+        <Metric label={`${windowDays}天胜率`} value={win == null ? "—" : `${(win * 100).toFixed(1)}%`} color={winColor} />
         <Metric label="盈亏比" value={pf == null ? "—" : pf.toFixed(2)} color={pfColor} />
         <Metric
-          label="半年收益"
-          value={`${perf.total_return_pct >= 0 ? "+" : ""}${perf.total_return_pct.toFixed(2)}%`}
+          label={`${windowDays}天收益`}
+          value={totalReturn == null ? "—" : `${totalReturn >= 0 ? "+" : ""}${totalReturn.toFixed(2)}%`}
           color={retColor}
         />
       </div>
       <div style={{ marginTop: "var(--space-2)", fontSize: "var(--text-xs)", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
-        {perf.date_from} ~ {perf.date_to} · 成交 {perf.sample_count} 笔 · 均收益 {perf.avg_return == null ? "—" : `${perf.avg_return >= 0 ? "+" : ""}${perf.avg_return.toFixed(2)}%`}
+        {selectedWindow?.date_from ?? perf.date_from} ~ {selectedWindow?.date_to ?? perf.date_to} · 成交 {displaySampleCount} 笔 · 均收益 {avgReturn == null ? "—" : `${avgReturn >= 0 ? "+" : ""}${avgReturn.toFixed(2)}%`}
       </div>
       {perf.window_rolled && perf.target_date_to && perf.target_date_to !== perf.date_to && (
         <div style={{ marginTop: 4, fontSize: "var(--text-xs)", color: "var(--warning, #b45309)", fontFamily: "var(--font-mono)" }} title={`目标窗口 ${perf.target_date_from} ~ ${perf.target_date_to} 随交易日漂移，暂复用同版本最近完成画像`}>
@@ -252,7 +270,7 @@ function CalledCard({ item }: { item: StrategyListItem }) {
                   : `已结算样本 < 20，胜率属噪声，仅供参考。`
             }
           >
-            <span>样本不足（n={perf.sample_count}）· 胜率统计仅供参考</span>
+            <span>样本不足（n={displaySampleCount}）· 胜率统计仅供参考</span>
             {perf.exposure_30d != null && (
               <span style={{ color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
                 近30天曝光 {perf.exposure_30d}
@@ -299,12 +317,12 @@ function CalledCard({ item }: { item: StrategyListItem }) {
         }}
       >
         {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        {open ? "收起" : "按月收益"}
+        {open ? "收起" : `${windowDays}天按月收益`}
       </button>
 
       {open && (
         <div style={{ marginTop: "var(--space-3)", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "var(--space-2)" }}>
-          {perf.monthly_returns.map((month) => {
+          {(selectedWindow?.monthly_returns ?? perf.monthly_returns).map((month) => {
             const c = month.return_pct >= 0 ? "var(--market-up)" : "var(--market-down)";
             return (
               <div key={month.month} style={{ background: "var(--surface)", borderRadius: 8, padding: "var(--space-2)", textAlign: "center" }}>

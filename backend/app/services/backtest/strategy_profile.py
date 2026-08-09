@@ -37,6 +37,7 @@ from app.services.registry.skills import sync_skills
 
 STRATEGY_PROFILE_EXPERIMENT_ID = "strategy-backtest-profile:v1"
 STRATEGY_PROFILE_WINDOW_DAYS = 180
+STRATEGY_PROFILE_WINDOW_OPTIONS = (30, 180)
 STRATEGY_PROFILE_SCHEMA_VERSION = 1
 STRATEGY_PROFILE_PORTFOLIO_MODEL = "capped_daily_exit_cohort_v1"
 
@@ -284,6 +285,14 @@ class StrategyBacktestProfiles:
         portfolio = _portfolio_metrics(trades)
         date_from = str(run.date_from)
         date_to = str(run.date_to)
+        window_metrics = {
+            str(window_days): _window_metrics(
+                trades,
+                anchor_date=date_to,
+                window_days=window_days,
+            )
+            for window_days in STRATEGY_PROFILE_WINDOW_OPTIONS
+        }
         return {
             "schema_version": STRATEGY_PROFILE_SCHEMA_VERSION,
             "source": "canonical_backtest",
@@ -320,6 +329,7 @@ class StrategyBacktestProfiles:
             "total_return_pct": portfolio["total_return_pct"],
             "max_drawdown_pct": portfolio["max_drawdown_pct"],
             "confidence": metrics.confidence.value,
+            "window_metrics": window_metrics,
             "monthly_returns": _monthly_returns(
                 trades,
                 date_from=date_from,
@@ -426,6 +436,57 @@ def _canonical_json_text(raw: str) -> str:
         separators=(",", ":"),
         allow_nan=False,
     )
+
+
+def _window_metrics(
+    trades: tuple[Trade, ...],
+    *,
+    anchor_date: str,
+    window_days: int,
+) -> dict[str, Any]:
+    """Build a rolling signal-date window without changing the canonical run."""
+    if window_days <= 0:
+        raise ValueError("window_days must be positive")
+    anchor = date.fromisoformat(anchor_date)
+    window_start = anchor - timedelta(days=window_days - 1)
+    selected = tuple(
+        trade
+        for trade in trades
+        if window_start.isoformat() <= trade.signal_date <= anchor_date
+    )
+    metrics = compute_metrics(selected)
+    portfolio = _portfolio_metrics(selected)
+    has_executed = metrics.executed_trade_count > 0
+    return {
+        "window_days": window_days,
+        "date_from": window_start.isoformat(),
+        "date_to": anchor_date,
+        "sample_count": metrics.executed_trade_count,
+        "success_count": metrics.win_count,
+        "loss_count": metrics.loss_count,
+        "hit_rate": (
+            round(metrics.win_rate_pct / 100, 6) if has_executed else None
+        ),
+        "avg_return": (
+            round(metrics.average_net_return_pct, 4) if has_executed else None
+        ),
+        "profit_loss_ratio": (
+            round(metrics.profit_loss_ratio, 4)
+            if metrics.profit_loss_ratio is not None
+            else None
+        ),
+        "total_return_pct": (
+            portfolio["total_return_pct"] if has_executed else None
+        ),
+        "max_drawdown_pct": (
+            portfolio["max_drawdown_pct"] if has_executed else None
+        ),
+        "monthly_returns": _monthly_returns(
+            selected,
+            date_from=window_start.isoformat(),
+            date_to=anchor_date,
+        ),
+    }
 
 
 def _trade_from_json(raw: str) -> Trade:

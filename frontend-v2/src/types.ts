@@ -2032,6 +2032,21 @@ export type StrategyMonthlyReturn = {
   executed_trade_count: number;
 };
 
+export type StrategyWindowPerformance = {
+  window_days: number;
+  date_from: string;
+  date_to: string;
+  sample_count: number;
+  success_count: number;
+  loss_count: number;
+  hit_rate: number | null;
+  avg_return: number | null;
+  profit_loss_ratio: number | null;
+  total_return_pct: number | null;
+  max_drawdown_pct: number | null;
+  monthly_returns: StrategyMonthlyReturn[];
+};
+
 /** 当前策略版本最近半年 canonical 回测画像。 */
 export type StrategyPerformance = {
   source: "canonical_backtest";
@@ -2051,6 +2066,7 @@ export type StrategyPerformance = {
   profit_loss_ratio: number | null;
   total_return_pct: number;
   max_drawdown_pct: number;
+  window_metrics?: Record<string, StrategyWindowPerformance>;
   monthly_returns: StrategyMonthlyReturn[];
   date_from: string;
   date_to: string;

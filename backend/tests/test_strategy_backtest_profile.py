@@ -175,6 +175,10 @@ def test_current_version_profile_excludes_old_version_and_compounds_by_exit_mont
         assert profile["backtest_id"] == "run-current"
         assert profile["executed_trade_count"] == 3
         assert profile["win_rate_pct"] == 66.6667
+        assert profile["window_metrics"]["180"]["sample_count"] == 3
+        assert profile["window_metrics"]["180"]["hit_rate"] == 0.666667
+        assert profile["window_metrics"]["30"]["sample_count"] == 0
+        assert profile["window_metrics"]["30"]["hit_rate"] is None
         assert profile["monthly_returns"] == [
             {"month": "2026-01", "return_pct": 0.495, "executed_trade_count": 2},
             {"month": "2026-02", "return_pct": 2.0, "executed_trade_count": 1},

@@ -85,6 +85,12 @@ def test_strategies_endpoint_backtest_identity_fields_are_traceable():
             "monthly_returns",
         ):
             assert key in p, f"{d['skill_id']} 缺 {key}"
+        assert set(p.get("window_metrics", {})) >= {"30", "180"}
+        for window_days in ("30", "180"):
+            window = p["window_metrics"][window_days]
+            assert window["window_days"] == int(window_days)
+            assert window["date_from"] <= window["date_to"]
+            assert window["sample_count"] >= 0
 
 
 def test_strategies_reliable_flag_consistent_with_sample_count():
