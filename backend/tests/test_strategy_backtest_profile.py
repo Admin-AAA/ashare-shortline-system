@@ -21,6 +21,7 @@ from app.services.backtest.strategy_profile import (
     StrategyBacktestProfileTarget,
     StrategyBacktestProfiles,
 )
+from app.services.backtest.research_runner import RESEARCH_SOURCE_VERSION
 
 
 def _trade(
@@ -106,7 +107,7 @@ def _persist_run(
             manifest_hash=f"m{run_id}"[:64],
             partition_manifest_json=(
                 '{"schema_version": 2, "partitions": [{"dataset": "daily_kbars", '
-                '"source_version": "local-daily-kbars/v4", "row_count": 0, '
+                f'"source_version": "{RESEARCH_SOURCE_VERSION}", "row_count": 0, '
                 '"content_hash": "x"}], "artifacts_by_signal_date": {}}'
             ),
             coverage_json="{}",

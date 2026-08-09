@@ -86,14 +86,14 @@ def _legacy_projection(
     selected = challenger if selected_variant == "candidate" else champion
     baseline_label = f"基线版 (score_line={baseline_score_line})"
     candidate_label = f"候选版 (score_line={candidate_score_line})"
-    split = artifact["split"]
+    split = artifact.get("population_split", artifact["split"])
     dates_scanned = sum(len(dates) for dates in split.values())
     baseline_walk = _walk_forward_projection(champion)
     candidate_walk = _walk_forward_projection(challenger)
     baseline_split = _time_split_projection(champion)
     candidate_split = _time_split_projection(challenger)
     validation_profile = {
-        "primary_scope": "aggregate",
+        "primary_scope": "out_of_sample",
         "truth_validation": artifact["truth_validation"],
         "aggregate": {
             "baseline": champion["metrics"],
@@ -147,17 +147,20 @@ def _legacy_projection(
             "selected_variant": selected_variant,
             "selected_variant_label": candidate_label if selected_variant == "candidate" else baseline_label,
             "adoption_reason": (
-                "唯一生产判定器确认 Challenger 整体改善。"
+                "Challenger 已通过冻结 OOS，等待未来 canary。"
                 if selected_variant == "candidate"
-                else "唯一生产判定器未确认 Challenger 整体改善。"
+                else "冻结 OOS 或未来 canary 尚未授权 Challenger。"
             ),
             "decision": decision,
-            "decision_scope": "aggregate",
-            "decision_scope_label": "完整冻结窗口",
-            "guardrail_notes": ["Champion 与 Challenger 共用同一不可变 snapshot。"],
+            "decision_scope": "out_of_sample",
+            "decision_scope_label": "Purged 样本外窗口",
+            "guardrail_notes": [
+                "Champion 与 Challenger 共用同一不可变 snapshot。",
+                "发布判定只读取 purge/embargo 后的 OOS；未来 canary 前保持 Champion。",
+            ],
             "decision_metrics": {
-                "baseline": champion["metrics"],
-                "candidate": challenger["metrics"],
+                "baseline": champion["split_metrics"]["out_of_sample"],
+                "candidate": challenger["split_metrics"]["out_of_sample"],
             },
             "walk_forward": {
                 "baseline": baseline_walk,

@@ -24,7 +24,10 @@ from app.models.tables import (
     DailyKbar,
     Stock,
 )
-from app.services.backtest.research_repository import ResearchBacktestRepository
+from app.services.backtest.research_repository import (
+    BacktestStateConflict,
+    ResearchBacktestRepository,
+)
 
 
 STRATEGY_ID = "daily-stock-analysis-skill"
@@ -199,5 +202,12 @@ def test_real_declarative_strategy_gateway_vertical_slice_is_research_only(gatew
         assert session.query(BacktestTrade).count() >= 3
         assert session.query(BacktestFailureAttribution).count() >= 3
         assert session.query(BacktestExperiment).count() == 1
+        completed = session.query(BacktestRunV2).first()
+        assert completed is not None
+        with pytest.raises(BacktestStateConflict, match="终态 attempt"):
+            ResearchBacktestRepository(session).persist_trades(
+                completed.backtest_id,
+                [],
+            )
     finally:
         session.close()

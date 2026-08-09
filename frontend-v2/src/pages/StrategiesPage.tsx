@@ -251,8 +251,10 @@ function CalledCard({ item, windowDays }: { item: StrategyListItem; windowDays: 
         >
           <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
             <span style={{ color: "var(--text)", fontWeight: 600 }}>优化影子 · P0-P4</span>
-            <span style={{ color: quality.release_ready ? "var(--market-up)" : "var(--warning, #b45309)" }}>
-              {quality.release_ready ? "达到候选门槛" : "尚未达到发布门槛"}
+            <span style={{ color: "var(--warning, #b45309)" }}>
+              {quality.descriptive_candidate_ready
+                ? "描述性候选（待 OOS/Canary）"
+                : "未达到描述性候选门槛"}
             </span>
           </div>
           <div style={{ marginTop: 3 }}>

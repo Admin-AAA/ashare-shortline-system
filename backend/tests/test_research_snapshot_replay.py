@@ -26,6 +26,7 @@ from app.services.backtest.research_runner import (
     ArtifactSignalDateDataReader,
     LocalResearchSnapshotBuilder,
     ResearchBacktestRunner,
+    _request_from_canonical_json,
 )
 
 
@@ -163,3 +164,19 @@ def test_signal_input_denies_future_visible_at() -> None:
             payload={"stocks": []},
         )
     assert forward.value.code == "future_data_access_denied"
+
+
+def test_replay_parser_accepts_default_optional_position_caps() -> None:
+    request = BacktestRequest(
+        strategy_id="daily-stock-analysis-skill",
+        date_selector=SingleDate("2026-01-02"),
+        execution_policy=ExecutionPolicy(),
+    )
+
+    restored = _request_from_canonical_json(
+        request.to_canonical_json(),
+        force_rerun=True,
+    )
+
+    assert restored.execution_policy.fingerprint() == request.execution_policy.fingerprint()
+    assert restored.force_rerun is True

@@ -30,7 +30,7 @@ from app.models.tables import (
 from app.services.backtest.research_repository import ResearchBacktestRepository
 from app.services.backtest.research_runner import (
     CANDIDATE_EVIDENCE_ACTIONABLE,
-    RESEARCH_INPUT_SCHEMA_VERSION,
+    RESEARCH_SOURCE_VERSION,
     ResearchBacktestRunner,
 )
 from app.services.registry.skills import sync_skills
@@ -287,7 +287,7 @@ class StrategyBacktestProfiles:
                 )
             ).all()
         )
-        quality_evidences = _quality_evidences_for_run(self._db, run, trades)
+        quality_evidences = quality_evidences_for_run(self._db, run, trades)
         quality = compute_quality_profile(
             quality_evidences,
             quality_config_for(target.strategy_id),
@@ -433,12 +433,12 @@ class StrategyBacktestProfiles:
         partitions = payload.get("partitions") or ()
         return any(
             str(partition.get("source_version") or "")
-            == f"local-daily-kbars/v{RESEARCH_INPUT_SCHEMA_VERSION}"
+            == RESEARCH_SOURCE_VERSION
             for partition in partitions
         )
 
 
-def _quality_evidences_for_run(
+def quality_evidences_for_run(
     db: Session,
     run: BacktestRunV2,
     trades: tuple[Trade, ...],
@@ -666,4 +666,5 @@ __all__ = [
     "STRATEGY_PROFILE_WINDOW_DAYS",
     "StrategyBacktestProfileTarget",
     "StrategyBacktestProfiles",
+    "quality_evidences_for_run",
 ]

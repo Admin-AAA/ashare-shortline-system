@@ -121,8 +121,27 @@ def test_quality_profile_keeps_score_calibration_and_release_gate_explicit() -> 
     profile = compute_quality_profile((_evidence("000001"),), config)
     assert profile["mode"] == "shadow"
     assert profile["release_ready"] is False
+    assert profile["descriptive_candidate_ready"] is False
+    assert profile["release_blocker"] == "frozen_oos_and_forward_canary_required"
     assert set(profile["score_calibration"]["buckets"]) == {"0-69", "70-79", "80-84", "85+"}
     assert "stop_gap_diagnostics" in profile
+
+
+def test_descriptive_window_never_self_authorizes_release() -> None:
+    config = StrategyQualityConfig(
+        strategy_id="small-cap-thematic-momentum",
+        min_score=85,
+        allowed_regimes=("强势",),
+        require_main_theme=True,
+        required_setup_keywords=("主线",),
+        min_executed_trades=1,
+        min_signal_days=1,
+    )
+
+    profile = compute_quality_profile((_evidence("000001"),), config)
+
+    assert profile["descriptive_candidate_ready"] is True
+    assert profile["release_ready"] is False
 
 
 def test_quality_profile_keeps_unexecuted_trade_zero_and_out_of_portfolio() -> None:
