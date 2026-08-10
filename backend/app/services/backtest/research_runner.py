@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from bisect import bisect_right
 from collections import defaultdict
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 import json
 import math
@@ -98,6 +98,13 @@ from app.services.backtest.research_repository import (
     ResearchRecordNotFound,
     ResearchRepositoryError,
 )
+from app.services.backtest.stock_metadata import (
+    CURRENT_STATIC,
+    POINT_IN_TIME,
+    UNKNOWN,
+    StockMetadataHistoryProvider,
+    StockMetadataProvider,
+)
 from app.services.backtest.vectorbt_validation import cross_validate_trades
 from app.services.factors.registry import bootstrap_default_factor_registry
 from app.services.market_source.snapshot import _apply_relative_features
@@ -132,7 +139,7 @@ MIN_LOOKBACK_CALENDAR_DAYS = 120
 # prefilter 拿到缺失字段（0 信号）。
 RESEARCH_INPUT_SCHEMA_VERSION = 5
 RESEARCH_SOURCE_VERSION = f"local-daily-kbars/v{RESEARCH_INPUT_SCHEMA_VERSION}"
-RESEARCH_STOCK_METADATA_TEMPORALITY = "current_static"
+RESEARCH_STOCK_METADATA_TEMPORALITY = CURRENT_STATIC
 
 
 def _research_execution_version(
@@ -185,6 +192,7 @@ class SnapshotBundle:
 
     snapshot: DataSnapshot
     payloads_by_artifact_id: Mapping[str, bytes]
+    stock_metadata_by_signal_date: Mapping[str, Any] = field(default_factory=dict)
     captured_locally: bool = True
 
     @property
@@ -489,9 +497,11 @@ class LocalResearchSnapshotBuilder:
         session: Session,
         *,
         data_readiness: DataReadinessPort | None = None,
+        stock_metadata_provider: StockMetadataProvider | None = None,
     ) -> None:
         self._session = session
         self._data_readiness = data_readiness or LocalDataReadinessAdapter(session)
+        self._stock_metadata_provider = stock_metadata_provider or StockMetadataHistoryProvider(session)
 
     def capture(
         self,
@@ -596,7 +606,7 @@ class LocalResearchSnapshotBuilder:
         all_rows = [*boundary_rows, *signal_rows]
         all_rows.sort(key=lambda row: (str(row.code), str(row.trade_date)))
         stock_rows = list(self._session.scalars(select(Stock).where(Stock.code.in_(codes))))
-        stock_meta = {
+        static_meta = {
             str(row.code): {
                 "name": str(row.name or row.code),
                 "industry": str(row.industry or "未分类"),
@@ -604,6 +614,37 @@ class LocalResearchSnapshotBuilder:
             }
             for row in stock_rows
         }
+        day_resolutions: dict[str, Any] = {}
+        stock_metadata_by_date: dict[str, Any] = {}
+        for signal_date in dates:
+            try:
+                day_resolution = self._stock_metadata_provider.resolve(codes, signal_date)
+            except Exception:
+                day_resolution = None
+            day_resolutions[signal_date] = day_resolution
+            if day_resolution is not None and day_resolution.temporality == POINT_IN_TIME:
+                stock_metadata_by_date[signal_date] = {
+                    "signal_date": signal_date,
+                    "temporality": day_resolution.temporality,
+                    "source_version": day_resolution.source_version,
+                    "fingerprint": day_resolution.fingerprint,
+                    "missing_code_count": len(day_resolution.missing_codes),
+                }
+            else:
+                stock_metadata_by_date[signal_date] = {
+                    "signal_date": signal_date,
+                    "temporality": CURRENT_STATIC,
+                    "source_version": "stocks/current-static/v1",
+                    "fingerprint": canonical_fingerprint(
+                        {
+                            "signal_date": signal_date,
+                            "temporality": CURRENT_STATIC,
+                            "source_version": "stocks/current-static/v1",
+                            "metadata_by_code": static_meta,
+                        }
+                    ),
+                    "missing_code_count": 0,
+                }
         rows_by_code: dict[str, list[DailyKbar]] = defaultdict(list)
         for row in all_rows:
             rows_by_code[str(row.code)].append(row)
@@ -636,6 +677,14 @@ class LocalResearchSnapshotBuilder:
             outcome_rows_by_code: dict[str, Sequence[DailyKbar]] = {}
             invalid_signal_rows = 0
             market_context = market_context_by_date.get(signal_date, _historical_market_context(()))
+            day_resolution = day_resolutions.get(signal_date)
+            if day_resolution is not None and day_resolution.metadata_by_code:
+                stock_meta = {
+                    str(code): dict(metadata)
+                    for code, metadata in day_resolution.metadata_by_code.items()
+                }
+            else:
+                stock_meta = static_meta
             for row in raw_signal_rows:
                 try:
                     code = str(row.code)
@@ -668,7 +717,26 @@ class LocalResearchSnapshotBuilder:
                 "schema_version": 1,
                 "signal_date": signal_date,
                 "visible_at": signal_date,
-                "stock_metadata_temporality": RESEARCH_STOCK_METADATA_TEMPORALITY,
+                "stock_metadata_temporality": (
+                    stock_metadata_by_date.get(signal_date, {}).get(
+                        "temporality", RESEARCH_STOCK_METADATA_TEMPORALITY
+                    )
+                ),
+                "stock_metadata_source_version": (
+                    stock_metadata_by_date.get(signal_date, {}).get("source_version", "stocks/current-static/v1")
+                ),
+                "stock_metadata_fingerprint": (
+                    stock_metadata_by_date.get(signal_date, {}).get(
+                        "fingerprint",
+                        canonical_fingerprint(
+                            {
+                                "temporality": CURRENT_STATIC,
+                                "source_version": "stocks/current-static/v1",
+                                "signal_date": signal_date,
+                            }
+                        ),
+                    )
+                ),
                 "stocks": signal_stocks,
             }
             outcome_payload = {
@@ -745,10 +813,37 @@ class LocalResearchSnapshotBuilder:
                 ratio = len(signal_stocks) / total_signal_rows if total_signal_rows else 0.0
                 coverage[signal_date] = CoverageResult(signal_date, status, ratio, (gap,))
 
+        metadata_evidence = {
+            "temporality": (
+                POINT_IN_TIME
+                if stock_metadata_by_date
+                and all(
+                    value.get("temporality") == POINT_IN_TIME
+                    for value in stock_metadata_by_date.values()
+                )
+                else CURRENT_STATIC
+            ),
+            "source_versions": sorted(
+                {
+                    str(value.get("source_version") or "")
+                    for value in stock_metadata_by_date.values()
+                }
+            ),
+            "by_signal_date": {
+                signal_date: {
+                    "temporality": str(value.get("temporality") or CURRENT_STATIC),
+                    "source_version": str(value.get("source_version") or "stocks/current-static/v1"),
+                    "fingerprint": str(value.get("fingerprint") or ""),
+                    "missing_code_count": int(value.get("missing_code_count") or 0),
+                }
+                for signal_date, value in stock_metadata_by_date.items()
+            },
+        }
         partition_payload = {
             "dataset": "daily_kbars",
             "input_schema_version": RESEARCH_INPUT_SCHEMA_VERSION,
-            "stock_metadata_temporality": RESEARCH_STOCK_METADATA_TEMPORALITY,
+            "stock_metadata": metadata_evidence,
+            "stock_metadata_temporality": metadata_evidence["temporality"],
             "history_start": history_start,
             "outcome_end": outcome_end,
             "signal_dates": dates,
@@ -791,7 +886,11 @@ class LocalResearchSnapshotBuilder:
             missing_requirements=tuple(gaps),
             input_manifest_hash=provisional.input_manifest_hash,
         )
-        return SnapshotBundle(snapshot=snapshot, payloads_by_artifact_id=payloads)
+        return SnapshotBundle(
+            snapshot=snapshot,
+            payloads_by_artifact_id=payloads,
+            stock_metadata_by_signal_date=stock_metadata_by_date,
+        )
 
     def _signal_dates(self, request: BacktestRequest) -> tuple[str, ...]:
         selector = request.date_selector
@@ -936,6 +1035,21 @@ class LocalResearchSnapshotBuilder:
                 input_manifest_hash=provisional.input_manifest_hash,
             ),
             payloads_by_artifact_id={},
+            stock_metadata_by_signal_date={
+                signal_date: {
+                    "signal_date": signal_date,
+                    "temporality": CURRENT_STATIC,
+                    "source_version": "stocks/current-static/v1",
+                    "fingerprint": canonical_fingerprint(
+                        {
+                            "signal_date": signal_date,
+                            "temporality": CURRENT_STATIC,
+                            "source_version": "stocks/current-static/v1",
+                        }
+                    ),
+                    "missing_code_count": 0,
+                }
+            },
         )
 
 
@@ -1030,6 +1144,11 @@ class ResearchBacktestRunner:
                 "stored snapshot JSON is malformed",
                 details={"snapshot_id": snapshot_id},
             ) from exc
+        metadata = manifest.get("stock_metadata") if isinstance(manifest, Mapping) else None
+        if isinstance(metadata, Mapping):
+            temporality = str(metadata.get("temporality") or UNKNOWN)
+            if temporality in {POINT_IN_TIME, CURRENT_STATIC, UNKNOWN}:
+                return temporality
         partitions = manifest.get("partitions") if isinstance(manifest, Mapping) else None
         if not isinstance(partitions, list):
             raise SnapshotCaptureError(
@@ -1350,9 +1469,31 @@ class ResearchBacktestRunner:
             # loading and hashing every large BLOB here would duplicate that I/O.
             self._repository.get_snapshot(snapshot.snapshot_id)
             return
+        metadata_summary = {
+            signal_date: {
+                "temporality": str(value.get("temporality") or CURRENT_STATIC),
+                "source_version": str(value.get("source_version") or "stocks/current-static/v1"),
+                "fingerprint": str(value.get("fingerprint") or ""),
+                "missing_code_count": int(value.get("missing_code_count") or 0),
+            }
+            for signal_date, value in sorted(bundle.stock_metadata_by_signal_date.items())
+        }
         immutable_manifest = {
-            "schema_version": 2,
+            "schema_version": 3,
             "partitions": [partition.canonical_payload() for partition in snapshot.partitions],
+            "stock_metadata": {
+                "temporality": (
+                    POINT_IN_TIME
+                    if bundle.stock_metadata_by_signal_date
+                    and all(
+                        str(value.get("temporality") or "") == POINT_IN_TIME
+                        for value in bundle.stock_metadata_by_signal_date.values()
+                    )
+                    else CURRENT_STATIC
+                ),
+                "by_signal_date": metadata_summary,
+                "fingerprint": canonical_fingerprint(metadata_summary),
+            },
             "artifacts_by_signal_date": {
                 signal_date: [reference.canonical_payload() for reference in references]
                 for signal_date, references in snapshot.artifacts_by_signal_date.items()
@@ -1396,14 +1537,17 @@ class ResearchBacktestRunner:
             gaps_payload = json.loads(str(row.missing_requirements_json))
         except json.JSONDecodeError as exc:
             raise SnapshotCaptureError("stored snapshot JSON is malformed", details={"snapshot_id": snapshot_id}) from exc
-        if not isinstance(stored_manifest, Mapping) or stored_manifest.get("schema_version") != 2:
+        if not isinstance(stored_manifest, Mapping) or stored_manifest.get("schema_version") not in {2, 3}:
             # A legacy list-only manifest cannot prove which current artifact rows
             # belong to the historical snapshot.  Safe-fail rather than infer.
             raise SnapshotArtifactUnavailableError(f"{snapshot_id}:artifact_manifest")
         partitions_payload = stored_manifest.get("partitions")
         artifact_payload = stored_manifest.get("artifacts_by_signal_date")
+        metadata_payload = stored_manifest.get("stock_metadata") or {}
         if not isinstance(partitions_payload, list) or not isinstance(artifact_payload, Mapping):
             raise SnapshotCaptureError("stored immutable snapshot manifest is malformed", details={"snapshot_id": snapshot_id})
+        if not isinstance(metadata_payload, Mapping):
+            raise SnapshotCaptureError("stored stock metadata manifest is malformed", details={"snapshot_id": snapshot_id})
         if not isinstance(coverage_payload, Mapping) or not isinstance(gaps_payload, list):
             raise SnapshotCaptureError("stored snapshot coverage JSON is malformed", details={"snapshot_id": snapshot_id})
 
@@ -1427,6 +1571,9 @@ class ResearchBacktestRunner:
             for day, value in coverage_payload.items()
         }
         gaps = tuple(_gap_from_payload(value) for value in gaps_payload)
+        metadata_by_date = metadata_payload.get("by_signal_date") or {}
+        if not isinstance(metadata_by_date, Mapping):
+            raise SnapshotCaptureError("stored stock metadata by-date manifest is malformed", details={"snapshot_id": snapshot_id})
         snapshot = DataSnapshot(
             snapshot_id=snapshot_id,
             snapshot_version=int(row.snapshot_version),
@@ -1438,6 +1585,11 @@ class ResearchBacktestRunner:
         return SnapshotBundle(
             snapshot=snapshot,
             payloads_by_artifact_id={},
+            stock_metadata_by_signal_date={
+                str(signal_date): dict(value)
+                for signal_date, value in metadata_by_date.items()
+                if isinstance(value, Mapping)
+            },
             captured_locally=False,
         )
 
