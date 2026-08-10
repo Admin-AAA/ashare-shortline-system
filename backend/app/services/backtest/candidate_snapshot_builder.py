@@ -16,6 +16,10 @@ from app.services.backtest.policy_experiment import (
     ScoredCandidateDay,
     ScoredCandidateSnapshot,
 )
+from app.services.backtest.stock_metadata import (
+    StockMetadataProvider,
+    StockMetadataHistoryProvider,
+)
 from app.services.runs.stages.adapters import (
     ProductionFeatureBuild,
     ProductionMarketScope,
@@ -132,12 +136,25 @@ def _pre_policy_card(card: dict[str, Any]) -> dict[str, Any]:
 class ProductionRuleReplayCandidateBuilder:
     """Build candidate snapshots with zero network calls and zero DB writes."""
 
-    def __init__(self, db: Session) -> None:
+    def __init__(
+        self,
+        db: Session,
+        stock_metadata_provider: StockMetadataProvider | None = None,
+        historical_replay: bool = False,
+    ) -> None:
         self._db = db
         self._market = ProductionMarketUniverse(db)
         self._scope = ProductionMarketScope(db)
         self._features = ProductionFeatureBuild(db)
         self._strategy = ProductionStrategyEvaluation(db)
+        # 时点化股票元数据（研究专用，默认 None 表示不启用，保持生产/旧快照行为）。
+        # 显式传入 provider 时，用 signal_date 解析的 industry/is_st/name 覆盖
+        # stocks 当前态，消除幸存者偏差与 ST 时点过滤失真。生产 LIVE 路径不经过这里。
+        self._stock_metadata_provider = stock_metadata_provider
+        # 历史回放模式：universe 从历史数据池（daily_kbars+daily_basic+时点元数据）
+        # 直接构建，不读 stock_quotes 实时报价池（其历史覆盖不足 ~56 天）。
+        # 需与 stock_metadata_provider 配套使用。
+        self._historical_replay = historical_replay
 
     def build(
         self,
@@ -204,10 +221,23 @@ class ProductionRuleReplayCandidateBuilder:
         days: list[ScoredCandidateDay] = []
         with self._db.no_autoflush:
             for signal_date in trade_dates:
-                stocks, snapshot, _audit = self._market.load_universe(
-                    data_source="local_pool",
-                    as_of_date=signal_date,
-                )
+                if self._historical_replay:
+                    from app.services.backtest.historical_universe import (
+                        load_historical_universe,
+                    )
+
+                    stocks, snapshot = load_historical_universe(
+                        self._db,
+                        signal_date,
+                        stock_metadata_provider=self._stock_metadata_provider,
+                    )
+                    stocks = [dict(s) for s in stocks]
+                else:
+                    stocks, snapshot, _audit = self._market.load_universe(
+                        data_source="local_pool",
+                        as_of_date=signal_date,
+                    )
+                    stocks = self._apply_point_in_time_metadata(stocks, signal_date)
                 snapshot = dict(snapshot)
                 snapshot["trade_date"] = str(snapshot.get("trade_date") or signal_date)
                 snapshot["strategy_versions"] = {
@@ -273,6 +303,40 @@ class ProductionRuleReplayCandidateBuilder:
             source="production-rule-replay",
             days=tuple(days),
         )
+
+    def _apply_point_in_time_metadata(
+        self,
+        stocks: Sequence[Any],
+        signal_date: str,
+    ) -> list[dict[str, Any]]:
+        """按时点元数据覆盖 stocks 的 industry/is_st/name。
+
+        仅在 stock_metadata_provider 显式启用时生效；解析为 point_in_time 的
+        字段覆盖当前态，缺失 code 保持原值（不纳入缺失即当前态，由下游
+        ST/停牌硬过滤处理）。返回可变 dict 列表（不改动原 Mapping）。
+        """
+        rows = [dict(stock) for stock in stocks]
+        provider = self._stock_metadata_provider
+        if provider is None or not rows:
+            return rows
+        codes = [str(stock.get("code") or "") for stock in rows]
+        try:
+            resolution = provider.resolve(codes, signal_date)
+        except Exception:
+            return rows
+        if not resolution.metadata_by_code:
+            return rows
+        for stock in rows:
+            meta = resolution.metadata_by_code.get(str(stock.get("code") or ""))
+            if not meta:
+                continue
+            if meta.get("industry") is not None:
+                stock["industry"] = meta["industry"]
+            if meta.get("is_st") is not None:
+                stock["is_st"] = bool(meta["is_st"])
+            if meta.get("name"):
+                stock["name"] = meta["name"]
+        return rows
 
     def _selected_skills(self, requested: Sequence[str] | None) -> tuple[dict[str, Any], ...]:
         allowed = set(str(value) for value in requested) if requested else None

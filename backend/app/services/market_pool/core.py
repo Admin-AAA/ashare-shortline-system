@@ -157,11 +157,16 @@ def _resolve_snapshot_trade_date(db: Session, trade_date: str | None = None) -> 
     return date.today().isoformat()
 
 
-def get_market_universe_from_pool(db: Session, refresh: bool = False, as_of_date: str | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def get_market_universe_from_pool(db: Session, refresh: bool = False, as_of_date: str | None = None, quotes_override: list[dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     settings = get_settings()
     # as_of_date 指定历史日期时强制走只读路径（不刷新），避免用最新行情覆盖历史日期的语义
-    effective_refresh = refresh and (as_of_date is None)
-    quotes, quote_meta = _load_or_refresh_quotes(db, settings) if effective_refresh else _load_quotes_from_pool(db, settings, skip_metrics=True, as_of_date=as_of_date)
+    effective_refresh = refresh and (as_of_date is None) and quotes_override is None
+    if quotes_override is not None:
+        # 历史回放路径：quotes 由调用方从历史数据池（daily_kbars+daily_basic+时点元数据）
+        # 合成，跳过 stock_quotes 实时报价池（其历史覆盖不足）。其余流程与生产一致。
+        quotes, quote_meta = quotes_override, {"errors": [], "status": "historical_replay", "source_count": 1, "sources": ["historical_pool"]}
+    else:
+        quotes, quote_meta = _load_or_refresh_quotes(db, settings) if effective_refresh else _load_quotes_from_pool(db, settings, skip_metrics=True, as_of_date=as_of_date)
     total_quote_count = len(quotes)
     eligible_quotes = _eligible_market_quotes(quotes)
     filter_summary = _candidate_filter_summary(quotes)
