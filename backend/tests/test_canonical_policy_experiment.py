@@ -27,7 +27,10 @@ from app.services.backtest.policy_experiment import (
     ScoredCandidateSnapshot,
 )
 from app.services.backtest.research_repository import ResearchBacktestRepository
-from app.services.backtest.research_repository import ImmutableRecordConflict
+from app.services.backtest.research_repository import (
+    ExperimentValidationError,
+    ImmutableRecordConflict,
+)
 
 
 def _snapshot() -> ScoredCandidateSnapshot:
@@ -298,6 +301,49 @@ def test_holdout_ledger_is_idempotent_for_same_experiment_and_rejects_reuse() ->
             repository.claim_holdout(
                 holdout_fingerprint=fingerprint,
                 experiment_id="exp-two",
+            )
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_holdout_claim_must_precede_reveal_and_fingerprint_is_immutable() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[BacktestHoldoutClaim.__table__])
+    session = sessionmaker(bind=engine, expire_on_commit=False)()
+    try:
+        repository = ResearchBacktestRepository(session)
+        fingerprint = "c" * 64
+        reveal_a = "d" * 64
+        reveal_b = "e" * 64
+        with pytest.raises(ExperimentValidationError):
+            repository.reveal_holdout(
+                holdout_fingerprint=fingerprint,
+                experiment_id="exp-reveal",
+                reveal_fingerprint=reveal_a,
+            )
+        repository.claim_holdout(
+            holdout_fingerprint=fingerprint,
+            experiment_id="exp-reveal",
+        )
+        row = repository.reveal_holdout(
+            holdout_fingerprint=fingerprint,
+            experiment_id="exp-reveal",
+            reveal_fingerprint=reveal_a,
+        )
+        assert row.status == "revealed"
+        assert row.reveal_fingerprint == reveal_a
+        same = repository.reveal_holdout(
+            holdout_fingerprint=fingerprint,
+            experiment_id="exp-reveal",
+            reveal_fingerprint=reveal_a,
+        )
+        assert same.reveal_fingerprint == reveal_a
+        with pytest.raises(ImmutableRecordConflict):
+            repository.reveal_holdout(
+                holdout_fingerprint=fingerprint,
+                experiment_id="exp-reveal",
+                reveal_fingerprint=reveal_b,
             )
     finally:
         session.close()

@@ -166,6 +166,8 @@ _RETRIABLE_RUN_STATUSES = frozenset(
     }
 )
 _FAILURE_OUTCOME_STATUSES = _RETRIABLE_RUN_STATUSES | frozenset({"cancelled"})
+_HOLDOUT_CLAIMED_STATUS = "claimed"
+_HOLDOUT_REVEALED_STATUS = "revealed"
 _EXPERIMENT_STATUSES = frozenset(
     {
         "draft",
@@ -247,7 +249,7 @@ class ResearchBacktestRepository:
             holdout_fingerprint=str(holdout_fingerprint),
             experiment_id=str(experiment_id),
             phase=str(phase),
-            status="consumed",
+            status=_HOLDOUT_CLAIMED_STATUS,
         )
         self._session.add(row)
         try:
@@ -279,7 +281,14 @@ class ResearchBacktestRepository:
                 "frozen holdout population 尚未在揭盲前 claim。",
                 details={"holdout_fingerprint": holdout_fingerprint},
             )
-        if str(row.experiment_id) != str(experiment_id) or str(row.status) != "consumed":
+        if str(row.experiment_id) != str(experiment_id) or str(row.status) not in {
+            _HOLDOUT_CLAIMED_STATUS,
+            _HOLDOUT_REVEALED_STATUS,
+            # Migration 0015 keeps legacy rows at their original status.  A
+            # legacy "consumed" claim satisfies the same single-use contract
+            # as a modern claimed/revealed one.
+            "consumed",
+        }:
             raise ExperimentValidationError(
                 "frozen holdout claim 与当前 spec 不一致。",
                 details={
@@ -290,7 +299,44 @@ class ResearchBacktestRepository:
             )
         return row
 
-    # -- Snapshot and immutable input artifacts ---------------------------------
+    def reveal_holdout(
+        self,
+        *,
+        holdout_fingerprint: str,
+        experiment_id: str,
+        reveal_fingerprint: str,
+    ) -> Any:
+        """Mark a claimed population revealed exactly once after outcome access."""
+
+        model = self._models.holdout_claim
+        if model is None:
+            raise RepositoryConfigurationError(
+                "正式 holdout ledger 尚未安装；请先应用 backtest_holdout_claims migration。"
+            )
+        if len(str(holdout_fingerprint)) != 64 or len(str(reveal_fingerprint)) != 64:
+            raise ExperimentValidationError("holdout and reveal fingerprints must be SHA-256 values")
+        row = self._session.get(model, holdout_fingerprint)
+        if row is None or str(row.experiment_id) != str(experiment_id):
+            raise ExperimentValidationError(
+                "holdout claim 与当前 reveal experiment 不一致。",
+                details={"holdout_fingerprint": holdout_fingerprint, "experiment_id": experiment_id},
+            )
+        status = str(row.status)
+        if status == _HOLDOUT_REVEALED_STATUS:
+            if str(row.reveal_fingerprint) != str(reveal_fingerprint):
+                raise ImmutableRecordConflict("holdout 已揭示但 reveal fingerprint 不一致。")
+            return row
+        if status != _HOLDOUT_CLAIMED_STATUS:
+            raise ExperimentValidationError(
+                "holdout 必须先处于 claimed 状态才能揭示。",
+                details={"status": status},
+            )
+        row.status = _HOLDOUT_REVEALED_STATUS
+        row.revealed_at = _utcnow()
+        row.reveal_fingerprint = str(reveal_fingerprint)
+        self._session.flush()
+        return row
+
 
     def persist_snapshot(
         self,

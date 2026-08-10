@@ -267,12 +267,18 @@ class ProductionPolicyBacktestRunner:
                 {key: value for key, value in artifact.items() if key not in {"experiment_id", "hypothesis"}}
             )
             return artifact
-        # An invalid split must not consume an untouched holdout claim.
+        holdout_claimed = False
         if self._repository is not None and spec.holdout_fingerprint and spec.holdout_scope == "untouched_holdout":
             self._repository.claim_holdout(
                 holdout_fingerprint=spec.holdout_fingerprint,
                 experiment_id=spec.experiment_id,
                 phase=spec.holdout_scope,
+            )
+            holdout_claimed = True
+        elif self._repository is not None and spec.holdout_scope == "untouched_holdout":
+            return _invalid_policy_evidence(
+                spec,
+                ["untouched_holdout_claim_required"],
             )
         champion, champion_records = self._run_arm(
             spec, spec.champion_policy, split
@@ -296,6 +302,34 @@ class ProductionPolicyBacktestRunner:
             ),
             opportunity_cost=opportunity_cost_by_split["out_of_sample"],
         )
+        if self._repository is not None and holdout_claimed:
+            reveal_fingerprint = canonical_fingerprint(
+                {
+                    "candidate_snapshot_fingerprint": spec.candidate_snapshot.fingerprint,
+                    "champion_outcome_fingerprint": canonical_fingerprint(
+                        [
+                            trade.canonical_payload()
+                            for trade in champion_records.get("trades", ())
+                        ]
+                    ),
+                    "challenger_outcome_fingerprint": canonical_fingerprint(
+                        [
+                            trade.canonical_payload()
+                            for trade in challenger_records.get("trades", ())
+                        ]
+                    ),
+                }
+            )
+            if not hasattr(self._repository, "reveal_holdout"):
+                return _invalid_policy_evidence(
+                    spec,
+                    ["holdout_reveal_adapter_required"],
+                )
+            self._repository.reveal_holdout(
+                holdout_fingerprint=str(spec.holdout_fingerprint),
+                experiment_id=spec.experiment_id,
+                reveal_fingerprint=reveal_fingerprint,
+            )
         artifact: dict[str, Any] = {
             "schema_version": POLICY_EVIDENCE_SCHEMA_VERSION,
             "experiment_kind": "production_policy",
@@ -324,6 +358,7 @@ class ProductionPolicyBacktestRunner:
                 "challenger": challenger["rule_verdict_summary"],
             },
             "decision": decision,
+            "holdout_revealed": bool(holdout_claimed),
         }
         artifact["evidence_fingerprint"] = canonical_fingerprint(
             {key: value for key, value in artifact.items() if key not in {"experiment_id", "hypothesis"}}
@@ -751,6 +786,36 @@ def _paired_opportunity_cost(
         "by_drop_owner": dict(sorted(by_owner.items())),
         "by_regime": dict(sorted(by_regime.items())),
     }
+
+
+def _invalid_policy_evidence(
+    spec: CanonicalPolicyExperimentSpec,
+    failed_gates: Sequence[str],
+) -> dict[str, Any]:
+    artifact: dict[str, Any] = {
+        "schema_version": POLICY_EVIDENCE_SCHEMA_VERSION,
+        "experiment_kind": "production_policy",
+        "experiment_id": spec.experiment_id,
+        "status": "invalid_evidence",
+        "hypothesis": spec.hypothesis,
+        "candidate_source": spec.candidate_snapshot.source,
+        "candidate_snapshot_fingerprint": spec.candidate_snapshot.fingerprint,
+        "champion_policy_fingerprint": spec.champion_policy.fingerprint,
+        "challenger_policy_fingerprint": spec.challenger_policy.fingerprint,
+        "release_policy_fingerprint": RELEASE_POLICY_FINGERPRINT,
+        "changed_rule_id": spec.changed_rule_id,
+        "decision_scope": "out_of_sample",
+        "decision": {
+            "decision": "INVALID_EVIDENCE",
+            "should_publish": False,
+            "release_policy": RELEASE_POLICY_VERSION,
+            "failed_gates": list(failed_gates),
+        },
+    }
+    artifact["evidence_fingerprint"] = canonical_fingerprint(
+        {key: value for key, value in artifact.items() if key not in {"experiment_id", "hypothesis"}}
+    )
+    return artifact
 
 
 def _coverage(

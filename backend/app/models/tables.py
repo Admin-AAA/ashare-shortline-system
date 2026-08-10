@@ -51,6 +51,33 @@ class Stock(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
+class StockMetadataHistory(Base):
+    """Immutable interval history used by point-in-time research snapshots."""
+
+    __tablename__ = "stock_metadata_history"
+    __table_args__ = (
+        UniqueConstraint(
+            "code",
+            "effective_from",
+            "source_version",
+            name="uq_stock_metadata_history_interval",
+        ),
+        Index("ix_stock_metadata_history_lookup", "code", "effective_from", "effective_to"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(6), index=True)
+    name: Mapped[str] = mapped_column(String(80))
+    industry: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    market: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    list_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    is_st: Mapped[bool] = mapped_column(Boolean, default=False)
+    effective_from: Mapped[str] = mapped_column(String(10), index=True)
+    effective_to: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
+    source_version: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+
+
 class DailyKbar(Base):
     """日K线 + 技术指标 + 筹码分布（合并表）。
 
@@ -1385,8 +1412,10 @@ class BacktestHoldoutClaim(Base):
     holdout_fingerprint: Mapped[str] = mapped_column(CHAR(64), primary_key=True)
     experiment_id: Mapped[str] = mapped_column(String(80), index=True)
     phase: Mapped[str] = mapped_column(String(24), default="untouched_holdout")
-    status: Mapped[str] = mapped_column(String(24), default="consumed")
+    status: Mapped[str] = mapped_column(String(24), default="claimed")
     claimed_at: Mapped[datetime] = mapped_column(_BACKTEST_DATETIME, default=utcnow_naive)
+    revealed_at: Mapped[datetime | None] = mapped_column(_BACKTEST_DATETIME, nullable=True)
+    reveal_fingerprint: Mapped[str | None] = mapped_column(CHAR(64), nullable=True)
 
 
 class BacktestInputArtifact(Base):
