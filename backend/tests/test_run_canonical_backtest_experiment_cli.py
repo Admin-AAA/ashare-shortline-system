@@ -108,7 +108,7 @@ def test_cli_can_build_rule_replay_snapshot_without_live_persistence(
     calls = []
 
     class FakeBuilder:
-        def __init__(self, db):
+        def __init__(self, db, stock_metadata_provider=None, historical_replay=False):
             calls.append(db)
 
         def build(self, **kwargs):

@@ -34,6 +34,7 @@ from app.services.backtest.candidate_snapshot_builder import (  # noqa: E402
 )
 from app.services.backtest.research_repository import ResearchBacktestRepository  # noqa: E402
 from app.services.backtest.research_runner import ResearchBacktestRunner  # noqa: E402
+from app.services.backtest.stock_metadata import StockMetadataHistoryProvider  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -79,6 +80,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--holdout-fingerprint",
         help="Untouched holdout fingerprint; required for formal production-policy evidence.",
+    )
+    parser.add_argument(
+        "--point-in-time-metadata",
+        action="store_true",
+        help="Resolve industry/is_st/name as-of each signal_date from stock_metadata_history "
+        "(survivorship-bias-free). Default keeps current-static stocks metadata.",
+    )
+    parser.add_argument(
+        "--historical-replay",
+        action="store_true",
+        help="Build universe from the historical pool (daily_kbars+daily_basic+point-in-time "
+        "metadata) instead of the stock_quotes realtime pool. Required for holdout windows "
+        "older than the realtime pool's ~56 day coverage. Implies point-in-time metadata.",
     )
     parser.add_argument("--score-line", type=float, default=72.0)
     parser.add_argument("--output-count", type=int, default=6)
@@ -129,7 +143,15 @@ def build_spec(
                 raise ValueError(
                     "database session is required to build a production-rule-replay snapshot"
                 )
-            snapshot = ProductionRuleReplayCandidateBuilder(db).build(
+            metadata_provider = None
+            historical = getattr(args, "historical_replay", False)
+            if historical or getattr(args, "point_in_time_metadata", False):
+                metadata_provider = StockMetadataHistoryProvider(db)
+            snapshot = ProductionRuleReplayCandidateBuilder(
+                db,
+                stock_metadata_provider=metadata_provider,
+                historical_replay=historical,
+            ).build(
                 start_date=_required_arg(args, "start"),
                 end_date=_required_arg(args, "end"),
                 execution_policy=execution_policy,

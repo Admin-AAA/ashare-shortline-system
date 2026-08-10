@@ -78,6 +78,27 @@ class StockMetadataHistory(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
+class DailyBasic(Base):
+    """每日估值指标（Tushare daily_basic）：换手率/PE/市值。
+
+    历史回放的估值口径来源。total_mv/circ_mv 单位为万元（与 Tushare 一致），
+    生产/策略使用的 total_mv_yi/free_mv_yi = 对应值 / 1e8（万元→亿元）。
+    """
+
+    __tablename__ = "daily_basic"
+    __table_args__ = (
+        UniqueConstraint("code", "trade_date", name="uq_daily_basic_code_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(6), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    turnover_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pe_ttm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    total_mv: Mapped[float | None] = mapped_column(Float, nullable=True)  # 万元
+    circ_mv: Mapped[float | None] = mapped_column(Float, nullable=True)  # 万元
+
+
 class DailyKbar(Base):
     """日K线 + 技术指标 + 筹码分布（合并表）。
 
