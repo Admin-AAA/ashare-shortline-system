@@ -306,6 +306,14 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False, as_of_date
         }
     )
     snapshot["snapshot_id"] = _new_snapshot_id("snapshot_pool", snapshot["trade_date"])
+    if quotes_override is not None:
+        # 历史回放（研究冻结快照）：剔除 run-owned 非确定性字段，保证同输入可确定性重放
+        # （候选快照 fingerprint 必须稳定）。生产 LIVE 路径不经过这里。
+        trade_date = str(snapshot.get("trade_date") or "")
+        snapshot["snapshot_id"] = f"snapshot_pool_historical_{trade_date}"
+        breadth = snapshot.get("breadth")
+        if isinstance(breadth, dict):
+            breadth["generated_at"] = f"{trade_date}T00:00:00"
     return stocks, snapshot
 
 
