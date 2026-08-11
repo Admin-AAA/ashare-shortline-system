@@ -51,7 +51,31 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--score-line", type=float, default=72.0)
     parser.add_argument("--output-count", type=int, default=6)
     parser.add_argument("--experiment-prefix", default="policy_recovery")
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Skip experiments already persisted as completed (resume after an interrupted run).",
+    )
     return parser
+
+
+def _load_completed_conclusion(session: Any, experiment_id: str) -> dict[str, Any] | None:
+    """Return the persisted conclusion for an already-completed experiment, else None."""
+    from app.models.tables import BacktestExperiment
+
+    row = (
+        session.query(BacktestExperiment)
+        .filter(BacktestExperiment.experiment_id == experiment_id)
+        .first()
+    )
+    if row is None or row.status != "completed":
+        return None
+    conclusion = row.conclusion_json
+    if not conclusion:
+        return None
+    if isinstance(conclusion, str):
+        conclusion = json.loads(conclusion)
+    return conclusion
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -68,22 +92,27 @@ def main(argv: list[str] | None = None) -> int:
         runner = ProductionPolicyBacktestRunner(ResearchBacktestRepository(session))
         findings = []
         for label, rule_id, value in recovery_policy_patches():
-            challenger = DEFAULT_PRODUCTION_SELECTION_POLICY.with_rule_patch(rule_id, value)
-            artifact = runner.run(
-                CanonicalPolicyExperimentSpec(
-                    experiment_id=f"{args.experiment_prefix}_{label}",
-                    hypothesis=f"单独修改 {rule_id} 能否恢复 OOS 正期望与策略活性",
-                    candidate_snapshot=snapshot,
-                    champion_policy=DEFAULT_PRODUCTION_SELECTION_POLICY,
-                    challenger_policy=challenger,
-                    changed_rule_id=rule_id,
-                    score_line=args.score_line,
-                    output_count=args.output_count,
-                    execution_policy=ExecutionPolicy(**execution_overrides),
-                    holdout_fingerprint=snapshot.fingerprint,
-                    holdout_scope="validation",
+            experiment_id = f"{args.experiment_prefix}_{label}"
+            artifact = None
+            if args.skip_existing:
+                artifact = _load_completed_conclusion(session, experiment_id)
+            if artifact is None:
+                challenger = DEFAULT_PRODUCTION_SELECTION_POLICY.with_rule_patch(rule_id, value)
+                artifact = runner.run(
+                    CanonicalPolicyExperimentSpec(
+                        experiment_id=experiment_id,
+                        hypothesis=f"单独修改 {rule_id} 能否恢复 OOS 正期望与策略活性",
+                        candidate_snapshot=snapshot,
+                        champion_policy=DEFAULT_PRODUCTION_SELECTION_POLICY,
+                        challenger_policy=challenger,
+                        changed_rule_id=rule_id,
+                        score_line=args.score_line,
+                        output_count=args.output_count,
+                        execution_policy=ExecutionPolicy(**execution_overrides),
+                        holdout_fingerprint=snapshot.fingerprint,
+                        holdout_scope="validation",
+                    )
                 )
-            )
             oos = (artifact.get("arms") or {}).get("challenger", {}).get("split_metrics", {}).get("out_of_sample", {})
             coverage = (artifact.get("arms") or {}).get("challenger", {}).get("split_coverage_evidence", {}).get("out_of_sample", {})
             findings.append(
