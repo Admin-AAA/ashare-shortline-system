@@ -229,17 +229,22 @@ class ArtifactOutcomeDataReader:
         artifact: ArtifactRef,
         *,
         code: str,
+        payload_cache: "_OutcomeArtifactPayloadCache | None" = None,
     ) -> None:
         self._repository = repository
         self._artifact = artifact
         self._code = code
+        self._payload_cache = payload_cache
 
     def read(self, signal_date: str, policy: ExecutionPolicy) -> OutcomeInput:
         del policy
         if signal_date != self._artifact.signal_date:
             raise SnapshotArtifactUnavailableError(self._artifact.artifact_id)
-        row = _read_referenced_artifact(self._repository, self._artifact)
-        payload = _decode_artifact_payload(bytes(row.payload), self._artifact.artifact_id)
+        if self._payload_cache is None:
+            row = _read_referenced_artifact(self._repository, self._artifact)
+            payload = _decode_artifact_payload(bytes(row.payload), self._artifact.artifact_id)
+        else:
+            payload = self._payload_cache.get(self._artifact)
         bars_by_code = payload.get("bars_by_code")
         if not isinstance(bars_by_code, Mapping):
             raise SnapshotCaptureError(
@@ -258,6 +263,26 @@ class ArtifactOutcomeDataReader:
             bars=bars,
             artifact_refs=(self._artifact.artifact_id,),
         )
+
+
+class _OutcomeArtifactPayloadCache:
+    """Cache one signal-date's verified outcome payloads by immutable identity."""
+
+    def __init__(self, repository: ResearchBacktestRepository) -> None:
+        self._repository = repository
+        self._payloads: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def get(self, artifact: ArtifactRef) -> dict[str, Any]:
+        key = (artifact.artifact_id, artifact.content_hash)
+        payload = self._payloads.get(key)
+        if payload is None:
+            row = _read_referenced_artifact(self._repository, artifact)
+            payload = _decode_artifact_payload(bytes(row.payload), artifact.artifact_id)
+            self._payloads[key] = payload
+        return payload
+
+    def clear(self) -> None:
+        self._payloads.clear()
 
 
 def _read_referenced_artifact(
@@ -1098,6 +1123,7 @@ class ResearchBacktestRunner:
         for signal_date in signal_dates:
             signal_ref = bundle.artifact_for(signal_date, ArtifactScope.SIGNAL_INPUT)
             outcome_ref = bundle.artifact_for(signal_date, ArtifactScope.OUTCOME_INPUT)
+            outcome_payload_cache = _OutcomeArtifactPayloadCache(self._repository)
             signal_input = ArtifactSignalDateDataReader(self._repository, signal_ref).read(
                 signal_date,
                 SignalInputRequirement(lookback_bars=0, required_datasets=("daily_kbars",)),
@@ -1184,6 +1210,7 @@ class ResearchBacktestRunner:
                     self._repository,
                     outcome_ref,
                     code=code,
+                    payload_cache=outcome_payload_cache,
                 ).read(signal_date, request.execution_policy)
                 trade = simulate(
                     RecommendationInput(
@@ -1215,6 +1242,7 @@ class ResearchBacktestRunner:
                             "is_unknown": attribution.unknown,
                         }
                     )
+            outcome_payload_cache.clear()
 
         self._repository.persist_candidates(backtest_id, candidate_rows)
         self._repository.persist_trades(
