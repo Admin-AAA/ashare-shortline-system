@@ -49,10 +49,12 @@ MIN_FORWARD_SAMPLES = 20
 
 # Bump when the shape of self-improve-state.json changes meaningfully, so
 # older tools/researchers can detect that they read a newer layout.
-STATE_SCHEMA_VERSION = 3
+STATE_SCHEMA_VERSION = 4
 
 RELEASE_TRANSITIONS = {
     ("draft", "verify_evidence"): "evidence_verified",
+    ("completed", "verify_evidence"): "evidence_verified",
+    ("rolled_back", "verify_evidence"): "evidence_verified",
     ("evidence_verified", "deployment_confirmed"): "canary_running",
     ("canary_running", "canary_passed"): "canary_passed",
     ("canary_running", "canary_failed"): "rollback_required",
@@ -60,9 +62,240 @@ RELEASE_TRANSITIONS = {
     ("canary_passed", "champion_published"): "completed",
 }
 
+GOVERNANCE_PHASES = frozenset(
+    {
+        "audit",
+        "candidate_ready",
+        "canary_running",
+        "canary_passed",
+        "production",
+        "rollback",
+    }
+)
+
+# ``champion_published`` is an internal transition owned by publish_champion.
+# Exposing it as a CLI event would let a caller skip the CAS/evidence checks.
+CLI_RELEASE_EVENTS = frozenset(
+    event for _status, event in RELEASE_TRANSITIONS
+    if event != "champion_published"
+)
+
+RELEASE_ACTIVE_STATUSES = frozenset(
+    {"evidence_verified", "canary_running", "canary_passed", "rollback_required"}
+)
+RELEASE_TERMINAL_STATUSES = frozenset({"completed", "rolled_back"})
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _set_governance_phase(
+    state: dict,
+    phase: str,
+    details: dict[str, Any] | None = None,
+) -> dict:
+    """Atomically project release progress into the governance phase.
+
+    ``audit_only`` remains in the state file for old readers, but it is no
+    longer an approval input.  The phase is the source of truth and is only
+    changed by this module's release transitions.
+    """
+    if phase not in GOVERNANCE_PHASES:
+        raise ValueError(f"invalid governance phase: {phase}")
+    governance = dict(state.get("selection_policy_governance") or {})
+    governance.setdefault("mode", "autonomous")
+    governance["phase"] = phase
+    governance["audit_only"] = phase != "production"
+    governance["phase_changed_at"] = _now_iso()
+    if details:
+        governance.update(details)
+    state["selection_policy_governance"] = governance
+    return governance
+
+
+def _autonomous_canary_publish_allowed(
+    state: dict,
+    proposed_policy: dict | None,
+    evidence_id: str | None,
+) -> bool:
+    """Return whether a candidate may exit audit through the verified Canary.
+
+    This is intentionally narrow: a researcher cannot flip a boolean.  The
+    release state must already contain the matching evidence, policy and
+    Canary receipt, and governance must be explicitly autonomous.
+    """
+    governance = state.get("selection_policy_governance") or {}
+    release = state.get("release_state") or {}
+    return bool(
+        governance.get("mode") == "autonomous"
+        and governance.get("phase") == "canary_passed"
+        and release.get("status") == "canary_passed"
+        and evidence_id
+        and release.get("evidence_id") == evidence_id
+        and isinstance(proposed_policy, dict)
+        and release.get("candidate_id") == _candidate_identity(
+            str(evidence_id), str(proposed_policy.get("fingerprint") or "")
+        )
+        and release.get("policy_fingerprint") == proposed_policy.get("fingerprint")
+        and release.get("deployment_adapter") == "local-policy-adapter:v1"
+        and release.get("mode") == "active"
+        and release.get("deployment_fingerprint")
+        and release.get("receipt")
+        and release.get("canary_evidence_id")
+    )
+
+
+def _candidate_identity(evidence_id: str, policy_fingerprint: str) -> str:
+    return f"{evidence_id}:{policy_fingerprint}"
+
+
+def _release_summary(release: dict) -> dict:
+    return {
+        key: release.get(key)
+        for key in (
+            "status",
+            "evidence_id",
+            "candidate_id",
+            "policy_fingerprint",
+            "owner_researcher_id",
+            "deployment_fingerprint",
+            "last_event",
+            "updated_at",
+        )
+        if release.get(key) is not None
+    }
+
+
+def _reclaim_stale_release_slot(
+    state: dict,
+    stale_researcher_ids: set[str],
+) -> dict | None:
+    """Rollback and free a release slot whose owner has stopped heartbeating."""
+    release = state.get("release_state") or {}
+    owner = str(release.get("owner_researcher_id") or "")
+    status = str(release.get("status") or "draft")
+    if (
+        status not in RELEASE_ACTIVE_STATUSES
+        or (
+            owner not in stale_researcher_ids
+            and not release.get("reclaim_pending")
+        )
+    ):
+        return None
+
+    receipt = release.get("receipt")
+    if receipt:
+        from app.services.backtest.deployment_adapter import LocalPolicyDeploymentAdapter
+
+        adapter = LocalPolicyDeploymentAdapter(
+            Path(str(release.get("deployment_root") or ""))
+            if release.get("deployment_root")
+            else None
+        )
+        try:
+            rollback_receipt = adapter.rollback(receipt)
+        except Exception as exc:
+            release["reclaim_pending"] = True
+            release["reclaim_error"] = str(exc)
+            state["release_state"] = release
+            return {
+                "error": "RELEASE_RECLAIM_BLOCKED",
+                "owner_researcher_id": owner,
+                "candidate_id": release.get("candidate_id"),
+                "message": str(exc),
+            }
+    else:
+        rollback_receipt = {"ok": True, "rolled_back_to": None}
+
+    state.setdefault("release_history", []).append(_release_summary(release))
+    state["release_state"] = {
+        "status": "rolled_back",
+        "last_event": "lease_expired",
+        "updated_at": _now_iso(),
+        "rollback_reason": "owner heartbeat stale",
+        "rollback_receipt": rollback_receipt,
+    }
+    _set_governance_phase(
+        state,
+        "audit",
+        {
+            "candidate_evidence_id": release.get("evidence_id"),
+            "candidate_policy_fingerprint": release.get("policy_fingerprint"),
+            "last_rollback_reason": "owner heartbeat stale",
+        },
+    )
+    return {
+        "reclaimed": True,
+        "owner_researcher_id": owner,
+        "candidate_id": release.get("candidate_id"),
+    }
+
+
+def _release_transition_guard(
+    state: dict,
+    event: str,
+    details: dict,
+    researcher_id: str | None,
+) -> dict | None:
+    """Guard the single global release slot against concurrent researchers."""
+    release = state.get("release_state") or {}
+    status = str(release.get("status") or "draft")
+    owner = str(researcher_id or details.get("researcher_id") or "")
+    current_owner = str(release.get("owner_researcher_id") or "")
+
+    if event == "verify_evidence":
+        if status in RELEASE_ACTIVE_STATUSES:
+            return {
+                "error": "RELEASE_BUSY",
+                "owner_researcher_id": current_owner or None,
+                "candidate_id": release.get("candidate_id"),
+                "status": status,
+            }
+        if status not in {"draft", *RELEASE_TERMINAL_STATUSES}:
+            return {"error": "RELEASE_STATE_CONFLICT", "status": status}
+        return None
+
+    if status not in RELEASE_ACTIVE_STATUSES:
+        return {"error": "RELEASE_STATE_CONFLICT", "status": status}
+    if not current_owner:
+        # Legacy states can finish their already-created release once. New
+        # CLI transitions always carry a researcher_id and create ownership.
+        return None
+    if not owner:
+        return {
+            "error": "RELEASE_OWNER_REQUIRED",
+            "owner_researcher_id": current_owner,
+        }
+    if owner != current_owner:
+        return {
+            "error": "RELEASE_NOT_OWNER",
+            "owner_researcher_id": current_owner,
+            "candidate_id": release.get("candidate_id"),
+        }
+
+    expected_policy = str(release.get("policy_fingerprint") or "")
+    supplied_policy = str(
+        details.get("candidate_policy_fingerprint")
+        or details.get("deployed_policy_fingerprint")
+        or details.get("observed_policy_fingerprint")
+        or ""
+    )
+    if supplied_policy and expected_policy and supplied_policy != expected_policy:
+        return {
+            "error": "RELEASE_CANDIDATE_MISMATCH",
+            "expected_policy_fingerprint": expected_policy,
+            "actual_policy_fingerprint": supplied_policy,
+        }
+    supplied_evidence = str(details.get("candidate_evidence_id") or "")
+    expected_evidence = str(release.get("evidence_id") or "")
+    if supplied_evidence and expected_evidence and supplied_evidence != expected_evidence:
+        return {
+            "error": "RELEASE_CANDIDATE_MISMATCH",
+            "expected_evidence_id": expected_evidence,
+            "actual_evidence_id": supplied_evidence,
+        }
+    return None
 
 
 def _memory_dir() -> Path:
@@ -215,8 +448,8 @@ def migrate_state(
     """Idempotently migrate legacy self-improve state to schema v3.
 
     The migration only replaces copied policy rules with the identity of the
-    repository artifact and enables audit-only governance.  It never changes
-    the champion commit or publishes a strategy.
+    repository artifact and initializes autonomous governance.  It never
+    changes the champion commit or publishes a strategy.
     """
     directory = memory_dir or _memory_dir()
     state_path = directory / "self-improve-state.json"
@@ -243,7 +476,12 @@ def migrate_state(
             state.setdefault("state_migration", {"migrated_at": _now_iso()})
         state["canonical_production"] = champion
         governance = dict(state.get("selection_policy_governance") or {})
-        governance.setdefault("audit_only", True)
+        governance.setdefault("mode", "autonomous")
+        phase = governance.get("phase")
+        if phase not in GOVERNANCE_PHASES:
+            phase = "production" if governance.get("audit_only") is False else "audit"
+        governance["phase"] = phase
+        governance["audit_only"] = phase != "production"
         governance.setdefault("strategy_inactive", False)
         governance.setdefault("policy_artifact_fingerprint", identity["fingerprint"])
         governance["policy_artifact_mismatch"] = (
@@ -556,9 +794,12 @@ def claim_direction(
         active = _ensure_active(registry)
         max_w = max_workers or registry.get("max_concurrent_workers", 1)
 
-        _release_claimed_directions(
-            state, list(_purge_stale_workers(active).values())
-        )
+        stale_workers = _purge_stale_workers(active)
+        _release_claimed_directions(state, list(stale_workers.values()))
+        reclaim = _reclaim_stale_release_slot(state, set(stale_workers))
+        if reclaim and reclaim.get("error"):
+            _atomic_write_json(state_path, state)
+            return reclaim
 
         if not force_stale and len(active) >= max_w:
             return {"error": "capacity_full",
@@ -628,6 +869,17 @@ def release_direction(
 
     with _locked(directory):
         state = _read_json(state_path)
+        release = state.get("release_state") or {}
+        if (
+            str(release.get("owner_researcher_id") or "") == researcher_id
+            and str(release.get("status") or "") in RELEASE_ACTIVE_STATUSES
+        ):
+            return {
+                "error": "RELEASE_ACTIVE",
+                "status": release.get("status"),
+                "candidate_id": release.get("candidate_id"),
+                "message": "release pipeline 未完成，不能释放 researcher direction",
+            }
         active = (
             state.get("researcher_registry", {})
             .get("active_researchers", {})
@@ -818,8 +1070,12 @@ def prune_claimed_directions(memory_dir: Path | None = None) -> dict:
         registry = state.setdefault("researcher_registry", {})
         active = registry.setdefault("active_researchers", {})
         claimed = registry.setdefault("claimed_directions", [])
-        if not claimed:
-            return {"ok": True, "released": []}
+        stale_workers = _purge_stale_workers(active)
+        _release_claimed_directions(state, list(stale_workers.values()))
+        reclaim = _reclaim_stale_release_slot(state, set(stale_workers))
+        if reclaim and reclaim.get("error"):
+            _atomic_write_json(state_path, state)
+            return reclaim
 
         active_dirs = {
             str(info.get("claimed_direction", ""))
@@ -830,13 +1086,13 @@ def prune_claimed_directions(memory_dir: Path | None = None) -> dict:
             d for d in claimed
             if isinstance(d, str) and d not in active_dirs
         ]
-        if released:
+        if released or reclaim:
             registry["claimed_directions"] = [
                 d for d in claimed
                 if not (isinstance(d, str) and d in set(released))
             ]
             _atomic_write_json(state_path, state)
-        return {"ok": True, "released": released}
+        return {"ok": True, "released": released, "release_reclaimed": bool(reclaim)}
 
 
 def daemon_heartbeat(
@@ -1042,12 +1298,18 @@ def advance_release(
     details: dict | None = None,
     memory_dir: Path | None = None,
     evidence_loader: Callable[[str], dict] | None = None,
+    researcher_id: str | None = None,
 ) -> dict:
     directory = memory_dir or _memory_dir()
     state_path = directory / "self-improve-state.json"
     with _locked(directory):
         state = _read_json(state_path)
         normalized_details = dict(details or {})
+        conflict = _release_transition_guard(
+            state, event, normalized_details, researcher_id
+        )
+        if conflict is not None:
+            return conflict
         if event == "verify_evidence":
             evidence_id = str(normalized_details.get("evidence_id") or "")
             if not evidence_id:
@@ -1065,6 +1327,14 @@ def advance_release(
                     "should_publish": decision.get("should_publish") is True,
                 }
             )
+            policy_fingerprint = str(
+                normalized_details.get("policy_fingerprint") or ""
+            )
+            normalized_details["candidate_id"] = _candidate_identity(
+                evidence_id, policy_fingerprint
+            )
+            if researcher_id:
+                normalized_details["owner_researcher_id"] = researcher_id
         if event == "canary_failed":
             release = state.get("release_state") or {}
             receipt = release.get("receipt")
@@ -1078,10 +1348,49 @@ def advance_release(
                 )
                 normalized_details["rollback_receipt"] = adapter.rollback(receipt)
                 normalized_details["rollback_confirmed"] = True
+        current_release = state.get("release_state") or {}
+        if event == "verify_evidence" and str(current_release.get("status")) in RELEASE_TERMINAL_STATUSES:
+            history = state.setdefault("release_history", [])
+            history.append(
+                {
+                    key: current_release.get(key)
+                    for key in (
+                        "status",
+                        "evidence_id",
+                        "policy_fingerprint",
+                        "owner_researcher_id",
+                        "deployment_fingerprint",
+                        "last_event",
+                        "updated_at",
+                    )
+                    if current_release.get(key) is not None
+                }
+            )
+            current_release = {"status": current_release.get("status")}
         release = transition_release_state(
-            state.get("release_state") or {}, event, normalized_details
+            current_release, event, normalized_details
         )
         state["release_state"] = release
+        phase_by_event = {
+            "verify_evidence": "candidate_ready",
+            "deployment_confirmed": "canary_running",
+            "canary_passed": "canary_passed",
+            "canary_failed": "rollback",
+            "rollback_confirmed": "audit",
+            # Kept for the pure transition helper and old callers; the CLI
+            # does not expose this event, and publish_champion owns it.
+            "champion_published": "production",
+        }
+        phase = phase_by_event.get(event)
+        if phase is not None:
+            _set_governance_phase(
+                state,
+                phase,
+                {
+                    "candidate_evidence_id": release.get("evidence_id"),
+                    "candidate_policy_fingerprint": release.get("policy_fingerprint"),
+                },
+            )
         _atomic_write_json(state_path, state)
         return release
 
@@ -1147,7 +1456,12 @@ def refresh_policy_health(
     with _locked(directory):
         state = _read_json(state_path)
         governance = dict(state.get("selection_policy_governance") or {})
-        governance.setdefault("audit_only", True)
+        governance.setdefault("mode", "autonomous")
+        phase = governance.get("phase")
+        if phase not in GOVERNANCE_PHASES:
+            phase = "production" if governance.get("audit_only") is False else "audit"
+        governance["phase"] = phase
+        governance["audit_only"] = phase != "production"
         governance.update(health)
         governance["health_checked_at"] = _now_iso()
         state["selection_policy_governance"] = governance
@@ -1192,10 +1506,12 @@ def _validate_selection_policy_publish(
             "message": "state 只能保存 policy_id/version/fingerprint",
         }
     governance = state.get("selection_policy_governance") or {}
-    if bool(governance.get("audit_only", True)):
+    if bool(governance.get("audit_only", True)) and not _autonomous_canary_publish_allowed(
+        state, proposed_policy, evidence_id
+    ):
         return {
             "error": "SELECTION_POLICY_AUDIT_ONLY",
-            "message": "selection policy 处于 audit-only；只允许 FINDING，不允许发布",
+            "message": "selection policy 尚未通过 autonomous Canary；只允许 FINDING",
         }
     if bool(governance.get("strategy_inactive")):
         return {
@@ -1260,7 +1576,13 @@ def _validate_selection_policy_publish(
         release.get("status") != "canary_passed"
         or release.get("evidence_id") != evidence_id
         or release.get("policy_fingerprint") != proposed_policy.get("fingerprint")
+        or release.get("candidate_id") != _candidate_identity(
+            str(evidence_id), str(proposed_policy.get("fingerprint") or "")
+        )
+        or release.get("deployment_adapter") != "local-policy-adapter:v1"
+        or release.get("mode") != "active"
         or not release.get("deployment_fingerprint")
+        or not release.get("receipt")
         or not release.get("canary_evidence_id")
     ):
         return {"error": "CANARY_PASS_REQUIRED"}
@@ -1295,15 +1617,25 @@ def publish_champion(
                 "new_champion": state.get("canonical_production"),
             }
 
+        proposed_policy = _selection_policy_from_patch(state_patch)
+        release = state.get("release_state") or {}
+        release_owner = str(release.get("owner_researcher_id") or "")
+        if proposed_policy is not None and release_owner and release_owner != researcher_id:
+            return {
+                "error": "RELEASE_NOT_OWNER",
+                "owner_researcher_id": release_owner,
+                "candidate_id": release.get("candidate_id"),
+            }
         if "canonical_production" in state_patch:
             governance = state.get("selection_policy_governance") or {}
-            if bool(governance.get("audit_only", True)):
+            if bool(governance.get("audit_only", True)) and not _autonomous_canary_publish_allowed(
+                state, proposed_policy, canonical_evidence_id
+            ):
                 return {
                     "error": "SELECTION_POLICY_AUDIT_ONLY",
-                    "message": "audit-only 下禁止任何 production champion 变更；请发布 FINDING",
+                    "message": "audit 阶段禁止 production champion 变更；请先完成 autonomous Canary",
                 }
 
-        proposed_policy = _selection_policy_from_patch(state_patch)
         if proposed_policy is not None:
             evidence_error = _validate_selection_policy_publish(
                 state=state,
@@ -1329,6 +1661,16 @@ def publish_champion(
                 "champion_published",
                 {"published_by": researcher_id},
             )
+            governance = state.get("selection_policy_governance") or {}
+            if governance.get("mode") == "autonomous":
+                _set_governance_phase(
+                    state,
+                    "production",
+                    {
+                        "active_policy_fingerprint": proposed_policy.get("fingerprint"),
+                        "last_auto_promotion_at": _now_iso(),
+                    },
+                )
 
         active = (
             state.get("researcher_registry", {})
@@ -1496,10 +1838,11 @@ def main() -> None:
     pub_champ.add_argument("--canonical-evidence-id")
 
     release = subparsers.add_parser("advance-release")
+    release.add_argument("--researcher-id", required=True)
     release.add_argument(
         "--event",
         required=True,
-        choices=sorted({event for _status, event in RELEASE_TRANSITIONS}),
+        choices=sorted(CLI_RELEASE_EVENTS),
     )
     release.add_argument("--details", type=_json_object, default={})
 
@@ -1564,7 +1907,11 @@ def main() -> None:
             canonical_evidence_id=args.canonical_evidence_id,
         )
     elif args.command == "advance-release":
-        result = advance_release(args.event, args.details)
+        result = advance_release(
+            args.event,
+            args.details,
+            researcher_id=args.researcher_id,
+        )
     elif args.command == "publish-finding":
         result = publish_finding(
             args.researcher_id, args.state_patch,

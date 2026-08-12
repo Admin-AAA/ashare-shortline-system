@@ -122,7 +122,7 @@ def test_migrate_state_replaces_legacy_rules_with_policy_identity(tmp_memory_dir
             "fingerprint": "a" * 64,
         },
     )
-    assert state["schema_version"] == 3
+    assert state["schema_version"] == 4
     assert state["canonical_production"]["commit"] == "old-commit"
     assert state["canonical_production"]["selection_policy"] == {
         "policy_id": "production-selection",
@@ -131,6 +131,8 @@ def test_migrate_state_replaces_legacy_rules_with_policy_identity(tmp_memory_dir
     }
     assert "rules" not in state["canonical_production"]
     assert state["selection_policy_governance"]["audit_only"] is True
+    assert state["selection_policy_governance"]["mode"] == "autonomous"
+    assert state["selection_policy_governance"]["phase"] == "audit"
     assert state["holdout_ledger"] == {"consumed": {}}
 
 
@@ -157,7 +159,7 @@ def test_state_schema_version_stamped_on_write(tmp_memory_dir):
     """Every state write stamps the schema_version so tools can detect layout."""
     claim_direction("r1", max_workers=3, memory_dir=tmp_memory_dir)
     state = read_state(tmp_memory_dir)
-    assert state.get("schema_version") == 3
+    assert state.get("schema_version") == 4
 
     # Legacy file without schema_version is readable and gets upgraded on write.
     (tmp_memory_dir / "self-improve-state.json").write_text(
@@ -165,7 +167,7 @@ def test_state_schema_version_stamped_on_write(tmp_memory_dir):
     )
     _seed_update({"x": 1}, memory_dir=tmp_memory_dir)
     state = read_state(tmp_memory_dir)
-    assert state["schema_version"] == 3
+    assert state["schema_version"] == 4
     assert state["x"] == 1
 
 
@@ -178,7 +180,7 @@ def test_commit_update_preserves_existing_state_and_appends_valid_jsonl(tmp_memo
         {"run_id": "run-1", "decision": "FALSIFIED"},
         tmp_memory_dir,
     )
-    assert result == {"champion": "new", "keep": True, "schema_version": 3}
+    assert result == {"champion": "new", "keep": True, "schema_version": 4}
     assert read_state(tmp_memory_dir) == result
     records = [
         json.loads(line)
@@ -201,7 +203,7 @@ def test_concurrent_commits_never_corrupt_state_or_jsonl(tmp_memory_dir):
 
     state = read_state(tmp_memory_dir)
     expected = {f"writer_{index}": index for index in range(20)}
-    expected["schema_version"] = 3
+    expected["schema_version"] = 4
     assert state == expected
     records = [
         json.loads(line)
@@ -441,6 +443,177 @@ def test_selection_policy_publish_is_audit_only_by_default(tmp_memory_dir):
     assert result["error"] == "SELECTION_POLICY_AUDIT_ONLY"
 
 
+def test_autonomous_canary_passed_publishes_and_exits_audit(tmp_memory_dir):
+    _seed_update(
+        {
+            "canonical_production": {
+                "commit": "abc",
+                "selection_policy": {
+                    "policy_id": "production-selection",
+                    "version": 1,
+                    "fingerprint": "champion",
+                },
+            },
+            "selection_policy_governance": {
+                "mode": "autonomous",
+                "phase": "canary_passed",
+                "audit_only": True,
+                "policy_artifact_fingerprint": "champion",
+                "policy_artifact_mismatch": False,
+            },
+            "release_state": {
+                "status": "canary_passed",
+                "evidence_id": "exp-1",
+                "candidate_id": "exp-1:challenger",
+                "owner_researcher_id": "r1",
+                "policy_fingerprint": "challenger",
+                "deployment_adapter": "local-policy-adapter:v1",
+                "mode": "active",
+                "deployment_fingerprint": "deployment-receipt",
+                "receipt": {"deployment_fingerprint": "deployment-receipt"},
+                "canary_evidence_id": "canary-1",
+            },
+        },
+        memory_dir=tmp_memory_dir,
+    )
+    wrong_owner = publish_champion(
+        "r2",
+        "abc",
+        {
+            "canonical_production": {
+                "commit": "def",
+                "selection_policy": {
+                    "policy_id": "production-selection",
+                    "version": 2,
+                    "fingerprint": "challenger",
+                },
+            }
+        },
+        canonical_evidence_id="exp-1",
+        evidence_loader=lambda _id: _canonical_policy_evidence("champion", "challenger"),
+        memory_dir=tmp_memory_dir,
+    )
+    assert wrong_owner["error"] == "RELEASE_NOT_OWNER"
+    result = publish_champion(
+        "r1",
+        "abc",
+        {
+            "canonical_production": {
+                "commit": "def",
+                "selection_policy": {
+                    "policy_id": "production-selection",
+                    "version": 2,
+                    "fingerprint": "challenger",
+                },
+            }
+        },
+        canonical_evidence_id="exp-1",
+        evidence_loader=lambda _id: _canonical_policy_evidence("champion", "challenger"),
+        memory_dir=tmp_memory_dir,
+    )
+    assert result == {"ok": True}
+    governance = read_state(tmp_memory_dir)["selection_policy_governance"]
+    assert governance["phase"] == "production"
+    assert governance["audit_only"] is False
+    assert governance["active_policy_fingerprint"] == "challenger"
+
+
+def test_release_slot_rejects_concurrent_candidate_and_wrong_owner(tmp_memory_dir):
+    def evidence_loader(evidence_id):
+        return {
+            "schema_version": 2,
+            "experiment_kind": "production_policy",
+            "status": "completed",
+            "evidence_fingerprint": f"fingerprint-{evidence_id}",
+            "challenger_policy_fingerprint": evidence_id,
+            "decision": {"should_publish": True},
+        }
+
+    first = advance_release(
+        "verify_evidence",
+        {"evidence_id": "candidate-a"},
+        tmp_memory_dir,
+        evidence_loader=evidence_loader,
+        researcher_id="r1",
+    )
+    assert first["status"] == "evidence_verified"
+    state = read_state(tmp_memory_dir)
+    assert state["release_state"]["owner_researcher_id"] == "r1"
+    assert state["release_state"]["candidate_id"] == "candidate-a:candidate-a"
+
+    second = advance_release(
+        "verify_evidence",
+        {"evidence_id": "candidate-b"},
+        tmp_memory_dir,
+        evidence_loader=evidence_loader,
+        researcher_id="r2",
+    )
+    assert second["error"] == "RELEASE_BUSY"
+    assert second["owner_researcher_id"] == "r1"
+
+    wrong_owner = advance_release(
+        "deployment_confirmed",
+        {"deployed_policy_fingerprint": "candidate-a"},
+        tmp_memory_dir,
+        researcher_id="r2",
+    )
+    assert wrong_owner["error"] == "RELEASE_NOT_OWNER"
+
+
+def test_stale_release_owner_is_rolled_back_and_slot_reclaimed(tmp_memory_dir):
+    from datetime import datetime, timedelta, timezone
+    from app.services.backtest.deployment_adapter import LocalPolicyDeploymentAdapter
+
+    root = tmp_memory_dir / "deployment"
+    adapter = LocalPolicyDeploymentAdapter(root)
+    receipt = adapter.stage(policy_fingerprint="candidate")
+    stale = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=HEARTBEAT_TIMEOUT_SECONDS + 60)
+    ).isoformat()
+    _seed_update(
+        {
+            "researcher_registry": {
+                "active_researchers": {
+                    "r1": {
+                        "researcher_id": "r1",
+                        "claimed_direction": "grid_scan:stop_loss",
+                        "last_heartbeat": stale,
+                    }
+                },
+                "claimed_directions": ["grid_scan:stop_loss"],
+            },
+            "selection_policy_governance": {
+                "mode": "autonomous",
+                "phase": "canary_running",
+                "audit_only": True,
+            },
+            "release_state": {
+                "status": "canary_running",
+                "evidence_id": "exp-1",
+                "candidate_id": "exp-1:candidate",
+                "policy_fingerprint": "candidate",
+                "owner_researcher_id": "r1",
+                "deployment_adapter": "local-policy-adapter:v1",
+                "deployment_root": str(root),
+                "mode": "dry_run",
+                **receipt,
+                "receipt": receipt,
+            },
+        },
+        memory_dir=tmp_memory_dir,
+    )
+
+    result = prune_claimed_directions(tmp_memory_dir)
+    assert result["ok"] is True
+    assert result["release_reclaimed"] is True
+    state = read_state(tmp_memory_dir)
+    assert state["release_state"]["status"] == "rolled_back"
+    assert state["selection_policy_governance"]["phase"] == "audit"
+    assert state["researcher_registry"]["claimed_directions"] == []
+    assert not adapter.candidate_pointer.exists()
+
+
 def test_selection_policy_publish_requires_db_evidence_and_canary_pass(tmp_memory_dir):
     _seed_update(
         {
@@ -455,8 +628,12 @@ def test_selection_policy_publish_requires_db_evidence_and_canary_pass(tmp_memor
             "release_state": {
                 "status": "canary_passed",
                 "evidence_id": "exp-1",
+                "candidate_id": "exp-1:challenger",
                 "policy_fingerprint": "challenger",
+                "deployment_adapter": "local-policy-adapter:v1",
+                "mode": "active",
                 "deployment_fingerprint": "deployment-receipt",
+                "receipt": {"deployment_fingerprint": "deployment-receipt"},
                 "canary_evidence_id": "canary-1",
             },
         },
@@ -504,6 +681,7 @@ def test_release_state_machine_requires_real_deployment_fingerprint(tmp_memory_d
         },
     )
     assert verified["status"] == "evidence_verified"
+    assert read_state(tmp_memory_dir)["selection_policy_governance"]["phase"] == "candidate_ready"
     with pytest.raises(ValueError, match="deployment_fingerprint"):
         transition_release_state(verified, "deployment_confirmed", {})
     from app.services.backtest.deployment_adapter import LocalPolicyDeploymentAdapter
@@ -520,6 +698,7 @@ def test_release_state_machine_requires_real_deployment_fingerprint(tmp_memory_d
         tmp_memory_dir,
     )
     assert canary["status"] == "canary_running"
+    assert read_state(tmp_memory_dir)["selection_policy_governance"]["phase"] == "canary_running"
     passed = advance_release(
         "canary_passed",
         {
@@ -532,8 +711,12 @@ def test_release_state_machine_requires_real_deployment_fingerprint(tmp_memory_d
         tmp_memory_dir,
     )
     assert passed["status"] == "canary_passed"
+    assert read_state(tmp_memory_dir)["selection_policy_governance"]["phase"] == "canary_passed"
     completed = advance_release("champion_published", {}, tmp_memory_dir)
     assert completed["status"] == "completed"
+    governance = read_state(tmp_memory_dir)["selection_policy_governance"]
+    assert governance["phase"] == "production"
+    assert governance["audit_only"] is False
 
 
 def test_canary_failure_rolls_back_local_candidate_pointer(tmp_memory_dir):
@@ -567,6 +750,7 @@ def test_canary_failure_rolls_back_local_candidate_pointer(tmp_memory_dir):
         tmp_memory_dir,
     )
     assert failed["status"] == "rollback_required"
+    assert read_state(tmp_memory_dir)["selection_policy_governance"]["phase"] == "rollback"
     assert not adapter.candidate_pointer.exists()
     rolled_back = advance_release(
         "rollback_confirmed",
@@ -574,6 +758,9 @@ def test_canary_failure_rolls_back_local_candidate_pointer(tmp_memory_dir):
         tmp_memory_dir,
     )
     assert rolled_back["status"] == "rolled_back"
+    governance = read_state(tmp_memory_dir)["selection_policy_governance"]
+    assert governance["phase"] == "audit"
+    assert governance["audit_only"] is True
 
 
 def test_policy_health_freezes_after_five_opportunity_days_all_policy_blocked(tmp_memory_dir):
@@ -1262,7 +1449,7 @@ def test_migrate_state_cli_bootstraps_backend_import_from_repo_root(tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert proc.stderr == ""
     output = json.loads(proc.stdout)
-    assert output["schema_version"] == 3
+    assert output["schema_version"] == 4
     assert output["canonical_production"]["selection_policy"]["policy_id"] == (
         "production-selection"
     )

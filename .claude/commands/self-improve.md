@@ -4,11 +4,22 @@
 
 ## 0. 当前治理模式
 
-当前 selection policy 处于 **audit-only**：
+selection policy 采用 **autonomous governance**。治理不是等待人工审批的布尔开关，而是由证据、部署回执和 Canary 指标驱动的状态机：
 
-- 可以诊断、修复测量工具、生成冻结候选快照、运行 canonical 双臂实验、发布 `FINDING` 或 `MEASUREMENT_FIX`。
-- 不得发布新的 selection policy，不得改变生产板块、策略桶排除、regime penalty、hard veto、动态分数线、软降线或输出限制。
-- `selection_policy_governance.audit_only` 缺失时按 `true` 处理；只有一次人工治理变更可以关闭它，研究轮不得自行关闭。
+```text
+AUDIT -> CANDIDATE_READY -> CANARY_RUNNING -> PRODUCTION
+  ^             |                  |
+  |             |                  +-> ROLLBACK -> AUDIT
+  +-------------+  (evidence/data failure)
+```
+
+- `selection_policy_governance.phase` 是治理阶段，合法值为 `audit`、`candidate_ready`、`canary_running`、`canary_passed`、`production`、`rollback`。
+- `audit_only` 仅是向后兼容的派生字段：`phase != production` 时为 `true`；研究员和 LLM 都不得直接写它。
+- `audit` 阶段可以诊断、修复测量工具、生成冻结候选快照、运行 canonical 双臂实验并发布 `FINDING` / `MEASUREMENT_FIX`。
+- 只有完成 canonical evidence、ReleasePolicy v2、`active` 模式的真实 deployment receipt 和 Canary gates 后，状态机才允许自动进入 `PRODUCTION`；`dry_run` 只能验证状态机，不能触发生产晋级；不存在人工审批步骤，也不存在按日历时间自动解锁。
+- 数据、测量、部署或 Canary 任一失败，自动回滚并回到 `AUDIT`；同一 candidate 不得在冷却期内重复尝试。
+- 生产板块、策略桶排除、regime penalty、hard veto、动态分数线、软降线或输出限制都不能被研究轮直接改写。
+- `selection_policy_governance` 缺失或 `phase` 缺失时按 `audit` 处理；迁移只在缺失时补默认值，不覆盖已有治理阶段。
 - 止损、止盈、trailing、仓位规则仍由当前 `ExecutionPolicy` 管理，不借本轮 selection 测量改造顺手变更。
 
 目标是在真实可执行、无未来函数、扣除费用的条件下改善 **purged OOS 组合结果**，同时保持策略有生命力。覆盖率、机会捕获和连续机会空仓是发布硬门禁，不是可忽略的展示指标。
@@ -51,7 +62,7 @@
 
 ## 3. 研究员生命周期
 
-每轮研究的第一条状态命令必须是幂等迁移；它会把旧 state 的复制规则迁移为当前 repo policy 的 `id/version/fingerprint`，初始化 holdout ledger，并保持 `audit_only=true`：
+每轮研究的第一条状态命令必须是幂等迁移；它会把旧 state 的复制规则迁移为当前 repo policy 的 `id/version/fingerprint`，初始化 holdout ledger，并在治理阶段缺失时初始化为 `audit`：
 
 ```bash
 backend/.venv/bin/python backend/scripts/self_improve_state.py migrate-state
@@ -125,9 +136,11 @@ backend/.venv/bin/python backend/scripts/self_improve_state.py refresh-policy-he
 
 > 如果 X 是原因，那么只改变 rule/parameter Y，在冻结候选和 ExecutionPolicy 上，purged OOS 的净收益/PF/回撤应满足发布条件，且 opportunity capture 与连续空仓满足 ReleasePolicy v2。
 
-一次实验只允许一个业务 `rule_id` 或一个策略变量变化；版本、备注、experiment id 不算业务变化。selection policy 恢复实验优先依次测试：结构性强势 veto、震荡 veto、20cm-only、两个 bucket 排除；每次只能改一条，输出 FINDING 排名，不自动发布。
+一次实验只允许一个业务 `rule_id` 或一个策略变量变化；版本、备注、experiment id 不算业务变化。selection policy 恢复实验优先依次测试：结构性强势 veto、震荡 veto、20cm-only、两个 bucket 排除；每次只能改一条。
 
-五项预注册恢复实验使用 `backend/scripts/run_policy_recovery_counterfactuals.py --candidate-snapshot-file <snapshot>`；它固定 `audit_only=true`、`auto_publish=false`。
+同一研究方向连续三个独立假设被 `FALSIFIED`，或该方向的预注册实验集合完成后，必须归档该方向并自动 claim 下一个方向。`MEASUREMENT_FIX`、`INVALID_EVIDENCE` 和 `BLOCKED` 不计作业务假设失败，但在问题解决前不得推进到生产晋级。
+
+五项预注册恢复实验使用 `backend/scripts/run_policy_recovery_counterfactuals.py --candidate-snapshot-file <snapshot>`；它们只产生 candidate evidence，不直接改变治理阶段。满足全部自动晋级门禁后，由状态机负责 Canary 和发布。
 
 ## 6. 数据切分与候选冻结
 
@@ -216,12 +229,17 @@ draft -> evidence_verified -> canary_running -> canary_passed -> completed
 - evidence 的 champion/challenger fingerprints、single-rule gate、全部 liveness gates 和 `should_publish` 必须匹配。
 - `deployment_confirmed` 必须带真实 `deployment_fingerprint`；没有部署 adapter/回执时停在 `evidence_verified`，不得伪造部署成功。
 - Canary 监控推荐活性、错误率、policy fingerprint 和已结算 LIVE 指标；失败进入 `rollback_required`。
-- selection policy 当前 audit-only，所以不得把状态推进到生产发布；只验证状态机与输出 FINDING。
+- `canary_passed` 后，`publish-champion` 在同一锁内自动把治理阶段设为 `production` 并发布 candidate；研究员不能通过参数绕过 evidence 或 Canary。
+- `canary_failed` 自动触发 rollback；rollback 完成后治理阶段回到 `audit`，并记录 candidate fingerprint、失败原因和冷却窗口。
+- 多线程共享一个全局 release slot：第一个 `researcher_id` 原子占用 candidate，后续线程收到 `RELEASE_BUSY` 后只能发布 FINDING，不得操作该 candidate；后续 transition 和 `publish-champion` 必须匹配 owner 与 candidate fingerprint。
+- owner heartbeat 过期时，`prune-claimed` / 下一次 claim 会先自动 rollback 并 reclaim release slot；rollback 无法验证时保持 `BLOCKED`，不得把槽位静默让给另一个 candidate。
+- 任何缺失 evidence、快照、指纹、部署回执、Canary 样本或数据健康条件，都只能停留在当前阶段并报告 `BLOCKED` / `INVALID_EVIDENCE`。
 
 状态机命令：
 
 ```bash
 backend/.venv/bin/python backend/scripts/self_improve_state.py advance-release \
+  --researcher-id "$RESEARCHER_ID" \
   --event verify_evidence --details '{"evidence_id":"...","policy_fingerprint":"..."}'
 ```
 
@@ -246,7 +264,7 @@ backend/.venv/bin/python backend/scripts/self_improve_state.py advance-release \
 3. purged OOS 的净收益、胜率、PF、回撤差值；
 4. opportunity/active/executed/capture/连续 abstain；
 5. truth validation 与失败 gates；
-6. `FINDING / FALSIFIED / INVALID_EVIDENCE / MEASUREMENT_FIX / BLOCKED`；audit-only 期间不得报告已发布 selection `PRODUCTION`；
+6. `FINDING / FALSIFIED / INVALID_EVIDENCE / MEASUREMENT_FIX / BLOCKED`，以及当前治理阶段；只有状态机完成自动 Canary 后才能报告 selection `PRODUCTION`；
 7. 是否写入 `backtest_*`、是否有任何 LIVE/网络/LLM 写调用；
 8. release-direction 和 worktree 清理结果。
 

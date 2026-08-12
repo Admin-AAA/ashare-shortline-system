@@ -569,3 +569,50 @@ def test_run_manual_data_health_remediation_summary_surfaces_empty_count(monkeyp
 
     assert result["status"] == "partial_completed"
     assert result["summary_text"] == "数据补数完成 1 项，修复缺口 0/1，仍缺 1，失败 0，空结果待重试 1"
+
+
+def test_execute_manual_data_health_remediation_failure_writes_small_payload(monkeypatch):
+    """失败路径的收尾必须保留原始错误，且二次写库的 payload 必须足够小，
+    不能因为（可能内嵌完整明细的）result 写不进去而再次失败、丢失原始错误。"""
+    from datetime import datetime, timezone
+
+    import json as _json
+
+    from app.services.cost_service import _RESULT_JSON_MAX_BYTES
+
+    captured: dict = {}
+    huge = "x" * ((_RESULT_JSON_MAX_BYTES // 4) + 1)
+
+    def fake_finish_task_run(_db, task_run_id, *, status, error, summary, result):
+        captured["status"] = status
+        captured["error"] = error
+        captured["result"] = result
+        payload = _json.dumps(result, ensure_ascii=False, default=str)
+        assert len(payload.encode("utf-8")) <= _RESULT_JSON_MAX_BYTES
+
+    class FakeDb:
+        def __init__(self):
+            self.committed = False
+
+        def rollback(self):
+            self.committed = True
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(scheduler_service, "SessionLocal", lambda: FakeDb())
+    monkeypatch.setattr(scheduler_service, "finish_task_run", fake_finish_task_run)
+    monkeypatch.setattr(
+        scheduler_service,
+        "_run_manual_data_health_remediation",
+        lambda _db, _payload: (_ for _ in ()).throw(RuntimeError(huge)),
+    )
+
+    scheduler_service._execute_manual_data_health_remediation(
+        "taskrun_failure_path_test", {"target_tables": ["daily_kbar"]}
+    )
+
+    assert captured["status"] == "failed"
+    assert captured["error"] == huge
+    assert captured["result"]["remediation_type"] == "data_health"
+    assert captured["result"]["summary_text"] == huge

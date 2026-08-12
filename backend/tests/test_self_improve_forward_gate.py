@@ -21,6 +21,8 @@ def _state(evidence_id: str = "exp_1") -> dict:
             "selection_policy": {"fingerprint": "fp_champion"},
         },
         "selection_policy_governance": {
+            "mode": "autonomous",
+            "phase": "canary_passed",
             "audit_only": False,
             "strategy_inactive": False,
             "policy_artifact_fingerprint": "fp_champion",
@@ -29,8 +31,12 @@ def _state(evidence_id: str = "exp_1") -> dict:
         "release_state": {
             "status": "canary_passed",
             "evidence_id": evidence_id,
+            "candidate_id": f"{evidence_id}:fp_challenger",
             "policy_fingerprint": "fp_challenger",
+            "deployment_adapter": "local-policy-adapter:v1",
+            "mode": "active",
             "deployment_fingerprint": "dep_1",
+            "receipt": {"deployment_fingerprint": "dep_1"},
             "canary_evidence_id": "canary_1",
         },
     }
