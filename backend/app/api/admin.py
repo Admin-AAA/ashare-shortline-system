@@ -94,7 +94,7 @@ def get_data_health(force_refresh: bool = False, db: Session = Depends(get_db)):
 
 @router.get("/data-sources")
 def list_data_sources_api(db: Session = Depends(get_db)):
-    """列出全部 tushare provider（fastapic/xiaodefa/ai_tool/realtime_quote）的运行状态。"""
+    """列出当前配置并接入的 Tushare Provider 运行状态。"""
     from app.services.tushare_client import get_tushare_provider_health
 
     return {"providers": get_tushare_provider_health()}
@@ -102,9 +102,9 @@ def list_data_sources_api(db: Session = Depends(get_db)):
 
 @router.post("/data-sources/reorder")
 def reorder_providers_api(payload: dict, db: Session = Depends(get_db)):
-    """重排 tushare pro provider 的路由优先级（运行时即时生效，不动 config）。
+    """重排当前 Tushare Pro Provider 的路由优先级（运行时即时生效，不动 config）。
 
-    payload: {"provider_names": ["xiaodefa", "fastapic", "ai_tool"]}（主源在前）。
+    payload: {"provider_names": ["ai_tool_key1", "ai_tool_key2", "quantdata"]}（主源在前）。
     realtime_quote 是独立爬虫、不在路由链里，传入会被忽略。
     """
     from app.services.data_sources import set_provider_priorities
