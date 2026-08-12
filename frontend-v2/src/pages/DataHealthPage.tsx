@@ -714,7 +714,7 @@ function RealtimeDataSourcePanel() {
       }
     >
       <div className="text-muted" style={{ fontSize: "var(--text-sm)", marginBottom: "var(--space-3)" }}>
-        逻辑数据源显示历史累计统计；Fastapic/ai-tool 显示当前后端进程的 Router 实时统计与熔断状态。
+        逻辑数据源显示历史累计统计；Tushare Provider 显示当前后端进程的 Router 实时统计与熔断状态。
         成功率 = 成功 / (成功 + 失败)，空返回不计入分母。
       </div>
       <div style={{ overflowX: "auto" }}>

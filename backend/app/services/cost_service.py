@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# result_json/payload_json 落库上限。MySQL MEDIUMTEXT 上限 16 MiB；保留安全余量，
+# 超过即降级为摘要，避免「结果本身写不进去」把一次任务收尾变成二次失败。
+_RESULT_JSON_MAX_BYTES = 4 * 1024 * 1024
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, defer
@@ -290,6 +297,69 @@ def start_task_run(
     return task_run
 
 
+def _task_result_payload(result: dict[str, Any] | None) -> str:
+    """把任务结果序列化为 result_json；过大时降级为摘要，保证收尾写库永不因超限失败。"""
+    if not result:
+        return "{}"
+    payload = json.dumps(result, ensure_ascii=False, default=str)
+    if len(payload.encode("utf-8")) <= _RESULT_JSON_MAX_BYTES:
+        return payload
+    logger.warning(
+        "task result_json 过大（%d 字节），降级保存为摘要；原因通常是结果内嵌了完整诊断明细",
+        len(payload.encode("utf-8")),
+    )
+    return json.dumps(_task_result_summary(result), ensure_ascii=False, default=str)
+
+
+def _task_result_summary(result: dict[str, Any]) -> dict[str, Any]:
+    """结果降级摘要：保留 status/摘要/错误等复盘与前端渲染所需的字段，丢弃巨型明细。"""
+    summary: dict[str, Any] = {}
+    for key in ("status", "summary_text", "remediation_type", "requested_tables", "target_tables"):
+        if key in result:
+            summary[key] = result[key]
+    for key in ("error", "error_type"):
+        if key in result and result[key] is not None:
+            summary[key] = _bounded_error(result[key])
+    action_summary = result.get("action_summary")
+    if isinstance(action_summary, dict):
+        summary["action_summary"] = action_summary
+    comparison = result.get("comparison")
+    if isinstance(comparison, dict) and comparison.get("status") == "skipped":
+        summary["comparison"] = {
+            key: _bounded_error(comparison[key]) if key in ("message", "error") else comparison[key]
+            for key in ("status", "reason", "message", "error_type", "error")
+            if key in comparison
+        }
+    if isinstance(comparison, dict):
+        summary["comparison"] = {
+            key: comparison[key]
+            for key in (
+                "issue_count_delta",
+                "score_delta",
+                "max_missing_days_delta",
+                "target_missing_day_count",
+                "resolved_missing_day_count",
+                "unresolved_missing_day_count",
+                "remediation_coverage_rate",
+                "tables_fully_remediated",
+                "tables_still_missing",
+            )
+            if key in comparison
+        }
+    if "truncated" not in summary:
+        summary["truncated"] = "result_json_too_large"
+    return summary
+
+
+def _bounded_error(value: Any) -> Any:
+    """错误字符串可能内嵌完整 SQL/参数（如 1406 报错带 result_json 原文），截断防再超限。"""
+    if not isinstance(value, str):
+        return value
+    if len(value) <= 4000:
+        return value
+    return f"{value[:3997]}..."
+
+
 def finish_task_run(
     db: Session,
     task_run_id: str,
@@ -308,7 +378,7 @@ def finish_task_run(
         task_run.status = status
         task_run.summary = summary
         task_run.error_message = error
-        task_run.result_json = json.dumps(result or {}, ensure_ascii=False)
+        task_run.result_json = _task_result_payload(result)
 
     task = db.get(ScheduledTask, task_id) if task_id else None
     if task is not None:
@@ -351,7 +421,7 @@ def record_task_run(
             summary=summary,
             error_message=error,
             payload_json=task.payload_json if task else payload_json,
-            result_json=json.dumps(result or {}, ensure_ascii=False),
+            result_json=_task_result_payload(result),
         )
     )
     if task is not None:

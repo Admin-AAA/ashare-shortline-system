@@ -4,11 +4,11 @@ import { api } from "../api/client";
 import type { DataSourceProvider, ProviderTestResult } from "../types";
 
 // 参与路由调序的 pro provider（realtime_quote 是独立爬虫，不在路由链，不调序）。
-const ROUTABLE = new Set(["fastapic", "xiaodefa", "quantdata", "ai_tool", "tushare_official"]);
+const ROUTABLE = new Set(["ai_tool_key1", "ai_tool_key2", "quantdata", "tushare_official"]);
 
 /**
  * 数据源管理 —— 配置页 Tab。
- * 对已接入的 tushare 系 provider（fastapic / xiaodefa / ai_tool / realtime_quote）
+ * 对已接入的 tushare 系 provider（ai_tool_key1 / ai_tool_key2 / quantdata / tushare_official）
  * 提供操作：启用 / 禁用（运行时即时生效，不动 config）/ 测试连通性 / 调整路由优先级。
  * 接入新数据源仍走开发（注册进代码/config），本页只做管理，不做动态新增。
  */

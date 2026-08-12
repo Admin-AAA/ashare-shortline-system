@@ -173,3 +173,67 @@ def test_realtime_quote_health_reads_disabled_override(monkeypatch):
     assert health["enabled"] is False
     assert health["configured"] is True
     assert health["status"] == "disabled"
+
+
+def test_provider_health_only_projects_configured_sources(monkeypatch):
+    """管理页只展示当前配置的 Provider，旧 Key 为空时不能显示为 disabled。"""
+    import app.services.realtime_quote_client as rq
+    import app.services.tushare_client as tc
+
+    class _Settings:
+        tushare_ai_tool_key1 = "key-1"
+        tushare_ai_tool_key2 = "key-2"
+        tushare_ai_tool_api_key = ""
+        tushare_ai_tool_proxy = ""
+        tushare_ai_tool_key1_rate_limit_per_minute = 90
+        tushare_ai_tool_key2_rate_limit_per_minute = 90
+        tushare_ai_tool_key1_rt_min_rate_limit_per_minute = 72
+        tushare_ai_tool_key2_rt_min_rate_limit_per_minute = 72
+        tushare_ai_tool_key1_stk_mins_rate_limit_per_minute = 48
+        tushare_ai_tool_key2_stk_mins_rate_limit_per_minute = 48
+        tushare_ai_tool_rate_limit_per_minute = 90
+        tushare_ai_tool_rt_min_rate_limit_per_minute = 72
+        tushare_ai_tool_stk_mins_rate_limit_per_minute = 48
+        tushare_fastapic_token = ""
+        tushare_fastapic_rate_limit_per_minute = 30
+        tushare_fastapic_max_concurrency = 1
+        tushare_xiaodefa_token = ""
+        tushare_xiaodefa_rate_limit_per_minute = 60
+        tushare_official_token = "official"
+        tushare_official_rate_limit_per_minute = 120
+        tushare_quantdata_token = "quantdata"
+        tushare_quantdata_rate_limit_per_minute = 120
+
+    class _Pro:
+        def provider_health_snapshot(self):
+            return []
+
+    settings = _Settings()
+    monkeypatch.setattr(tc, "get_settings", lambda: settings)
+    monkeypatch.setattr(tc, "_provider_enabled_override", lambda: {"ai_tool_key2": False})
+    monkeypatch.setattr(tc, "_provider_priority_override", lambda: {})
+    monkeypatch.setattr(tc, "get_pro", lambda: _Pro())
+    monkeypatch.setattr(rq, "get_settings", lambda: settings)
+    monkeypatch.setattr(rq, "_enabled_override", lambda: True)
+
+    rows = tc.get_tushare_provider_health()
+    by_name = {row["provider_name"]: row for row in rows}
+
+    assert set(by_name) == {"ai_tool_key1", "ai_tool_key2", "tushare_official", "quantdata"}
+    assert by_name["ai_tool_key2"]["configured"] is True
+    assert by_name["ai_tool_key2"]["enabled"] is False
+
+
+def test_list_data_sources_excludes_provider_history(db_session, monkeypatch):
+    """历史 tushare_provider 配置/健康行不应污染逻辑数据源列表。"""
+    _empty_sources(monkeypatch)
+    db_session.add(DataSourceConfig(source="fastapic", source_type="tushare_provider", enabled=False, priority=0))
+    db_session.add(DataSourceHealth(source="fastapic", source_type="tushare_provider"))
+    db_session.commit()
+
+    import app.services.tushare_client as tc
+    monkeypatch.setattr(tc, "get_tushare_provider_health", lambda: [])
+
+    rows = ds.list_data_sources(db_session)
+    assert all(row["source_type"] != "tushare_provider" for row in rows)
+    assert all(row["source"] != "fastapic" for row in rows)

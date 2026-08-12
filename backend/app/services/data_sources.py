@@ -54,10 +54,12 @@ def list_data_sources(db: Session) -> list[dict[str, Any]]:
     configs = {
         (row.source, row.source_type): row
         for row in db.scalars(select(DataSourceConfig).order_by(DataSourceConfig.source_type, DataSourceConfig.priority)).all()
+        if row.source_type != _PROVIDER_SOURCE_TYPE
     }
     health = {
         (row.source, row.source_type): row
         for row in db.scalars(select(DataSourceHealth)).all()
+        if row.source_type != _PROVIDER_SOURCE_TYPE
     }
     keys = sorted(set(configs) | set(health), key=lambda item: (item[1], configs.get(item).priority if configs.get(item) else 999, item[0]))
     rows = []
@@ -751,15 +753,24 @@ def set_provider_enabled(db: Session, provider_name: str, enabled: bool) -> dict
 
 
 # 参与路由调序的 tushare pro provider（realtime_quote 是独立爬虫，不在 Router 链里，不调序）。
-_ROUTABLE_PROVIDERS = ("fastapic", "xiaodefa", "quantdata", "ai_tool", "tushare_official")
+# 保留旧 provider 名称以读取历史配置，但当前双 Key provider 也必须可调序。
+_ROUTABLE_PROVIDERS = (
+    "ai_tool_key1",
+    "ai_tool_key2",
+    "fastapic",
+    "xiaodefa",
+    "quantdata",
+    "ai_tool",
+    "tushare_official",
+)
 
 
 def set_provider_priorities(db: Session, ordered_names: list[str]) -> list[dict[str, Any]]:
-    """按给定顺序重排三个 tushare pro provider 的路由优先级（写 DB 覆盖，运行时即时生效）。
+    """按给定顺序重排 tushare pro provider 的路由优先级（写 DB 覆盖，运行时即时生效）。
 
     ordered_names 为期望的路由顺序（主源在前）。未提及的 provider 追加在末尾，保持原相对序。
-    持久化为 0/1/2（与代码默认 priority 同标尺）；同时确保这些 provider 存在启停覆盖行，
-    让孤儿清理豁免 tushare_provider。返回重排后的 provider 列表。
+    持久化为优先级覆盖；同时确保这些 provider 存在启停覆盖行，让孤儿清理豁免
+    tushare_provider。返回重排后的 provider 列表。
     """
     known = {name for name in _known_provider_names() if name in _ROUTABLE_PROVIDERS}
     # 期望顺序（仅保留可路由 provider，去重保序）+ 未提及的按 _ROUTABLE_PROVIDERS 默认序补尾

@@ -107,7 +107,7 @@ export interface paths {
         };
         /**
          * List Data Sources Api
-         * @description 列出全部 tushare provider（fastapic/xiaodefa/ai_tool/realtime_quote）的运行状态。
+         * @description 列出当前配置并接入的 Tushare Provider 运行状态。
          */
         get: operations["list_data_sources_api_api_admin_data_sources_get"];
         put?: never;
@@ -129,9 +129,9 @@ export interface paths {
         put?: never;
         /**
          * Reorder Providers Api
-         * @description 重排 tushare pro provider 的路由优先级（运行时即时生效，不动 config）。
+         * @description 重排当前 Tushare Pro Provider 的路由优先级（运行时即时生效，不动 config）。
          *
-         *     payload: {"provider_names": ["xiaodefa", "fastapic", "ai_tool"]}（主源在前）。
+         *     payload: {"provider_names": ["ai_tool_key1", "ai_tool_key2", "quantdata"]}（主源在前）。
          *     realtime_quote 是独立爬虫、不在路由链里，传入会被忽略。
          */
         post: operations["reorder_providers_api_api_admin_data_sources_reorder_post"];

@@ -679,6 +679,8 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for spec in specs:
         configured = bool(spec["configured"])
+        if not configured:
+            continue
         enabled = configured and bool(overrides.get(spec["name"], True))
         # 面板 priority 显示实际生效值（DB 覆盖优先于代码默认），与路由一致。
         effective_priority = int(priority_overrides.get(spec["name"], spec["priority"]))
@@ -735,7 +737,9 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
     try:
         from app.services.realtime_quote_client import get_realtime_quote_health
 
-        rows.append(get_realtime_quote_health())
+        realtime_health = get_realtime_quote_health()
+        if realtime_health.get("configured"):
+            rows.append(realtime_health)
     except Exception:
         logger.warning("realtime_quote health projection failed", exc_info=True)
     return rows

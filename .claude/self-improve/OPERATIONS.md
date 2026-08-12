@@ -33,8 +33,8 @@
 | `stop-daemon` | 终止心跳 daemon | `--pid` |
 | `heartbeat` | 单次心跳 | `--researcher-id` |
 | `refresh-policy-health` | 从 formal DB 计算最近 5 个 opportunity days 的策略活性 | 无 |
-| `advance-release` | 推进 evidence/deploy/canary/rollback 状态机 | `--event`、`--details` |
-| `publish-champion` | CAS 发布新 champion；selection 变更必须读 DB evidence | `--researcher-id`、`--expected-champion-commit`、`--canonical-evidence-id`、`--state-patch`、`--run-record` |
+| `advance-release` | 由持有 candidate slot 的 researcher 推进 evidence/deploy/canary/rollback 状态机；Canary 失败自动回滚 | `--researcher-id`、`--event`、`--details` |
+| `publish-champion` | CAS 发布新 champion；selection 变更必须读 DB evidence，Canary 通过后自动退出 audit | `--researcher-id`、`--expected-champion-commit`、`--canonical-evidence-id`、`--state-patch`、`--run-record` |
 | `publish-finding` | 追加 finding | `--researcher-id`、`--state-patch`、`--finding`、`--run-record` |
 | `with-publish-lock` | 发布锁下执行命令 | `--cmd`（单个引用参数）、`--timeout` |
 
@@ -53,7 +53,7 @@ cd <worktree_path>
 **收尾**（每轮必做）：
 ```
 python self_improve_state.py refresh-policy-health
-python self_improve_state.py publish-finding   # audit-only 默认只发布 finding
+python self_improve_state.py publish-finding   # audit 阶段发布 finding；Canary 通过后自动 publish-champion
 python self_improve_state.py release-direction --researcher-id si-<时间戳>
 python self_improve_state.py release-worktree --researcher-id si-<时间戳> --remove
 ```
@@ -74,10 +74,12 @@ python self_improve_state.py with-publish-lock --cmd 'git -C <主仓库> pull --
 ## 状态文件字段
 
 `self-improve-state.json` 顶层：
-- `schema_version`：布局版本（当前 3）
+- `schema_version`：布局版本（当前 4）
 - `canonical_production`：当前 champion；selection policy 只保存 id/version/fingerprint，不复制 rules
-- `selection_policy_governance`：`audit_only`、`strategy_inactive`、最近 opportunity days、健康检查时间
-- `release_state`：evidence/deploy/canary/rollback 状态与真实回执 fingerprint
+- `selection_policy_governance`：`mode=autonomous`、`phase`、兼容字段 `audit_only`、`strategy_inactive`、最近 opportunity days、健康检查时间；`audit_only` 不可由研究员直接写入
+- `release_state`：evidence/deploy/canary/rollback 状态、candidate/owner fingerprint 与真实回执；同一时刻只有一个 active release slot
+- `release_history`：已完成或已回滚 candidate 的摘要，供后续 candidate 复用全局 release slot 时审计
+- active release 的 owner heartbeat 过期时，`prune-claimed` 会先 rollback/reclaim；回滚失败则返回 `RELEASE_RECLAIM_BLOCKED`，不能继续发布新 candidate
 - `researcher_registry.active_researchers`：活跃研究员（researcher_id、claimed_direction、last_heartbeat、heartbeat_daemon_pid、worktree_path、status）
 - `researcher_registry.claimed_directions`：已被 claim 的方向
 - `archived_falsified_directions`：已归档否证方向
@@ -132,7 +134,7 @@ cd backend
   --hypothesis '撤销结构性强势 veto 是否恢复正期望机会'
 ```
 
-证据同时写入 `backtest_data_snapshots`、`backtest_input_artifacts`、`backtest_runs_v2`、`backtest_candidates`、`backtest_trades` 和 `backtest_experiments`。正式判定只看 purged OOS，并强制 executed trade、productive days、opportunity capture、连续 opportunity abstain、单规则差异、机会成本和 vectorbt gates。当前 selection governance 是 audit-only；即使 `should_publish=true` 也只能记录 FINDING。
+证据同时写入 `backtest_data_snapshots`、`backtest_input_artifacts`、`backtest_runs_v2`、`backtest_candidates`、`backtest_trades` 和 `backtest_experiments`。正式判定只看 purged OOS，并强制 executed trade、productive days、opportunity capture、连续 opportunity abstain、单规则差异、机会成本和 vectorbt gates。`should_publish=true` 只代表 candidate ready；还必须完成 `active` 模式的真实 deployment receipt 和 Canary gates，`dry_run` 只能验证状态机，之后才由状态机自动发布。
 
 正式 production-policy runner 需要有效 untouched-holdout claim；claim 在切分有效后才消费。相同 `holdout fingerprint + hypothesis + experiment kind` 幂等复用，其他 hypothesis 不能重复消费同一 untouched holdout，消费后该窗口只能作为 validation 使用。
 
