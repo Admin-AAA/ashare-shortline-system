@@ -5,7 +5,7 @@
 _passes_uptrend_alignment / _passes_new_high / _passes_volume）不依赖 DB，始终运行；
 DB 集成测试在 MySQL 不可达时自动 skip。
 
-设计纪律（见 lessons.md [T1]）：本因子诚实样本外回测结果为**净负**（全样本胜率 ~41.8%、
+设计纪律（见 docs/lessons/LESSONS.md 的 L-018、L-004）：本因子诚实样本外回测结果为**净负**（全样本胜率 ~41.8%、
 滚动窗口仅 12% >50% 胜率、净累计 -21.3%），属 regime 依赖噪声，按第一性原理
 「回测证伪噪声」直接丢弃，不纳入 strategy.yaml。集成测试只断言：
   (1) 回测可复现、结构正确、无未来函数（entry_date > t_date）；

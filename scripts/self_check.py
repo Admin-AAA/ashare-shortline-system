@@ -3531,7 +3531,7 @@ def _print_residual_poison_zone(uncovered: list[dict], success_items: list[dict]
 
     # 单日集中度护栏：逐模式判定是否被单一交易日主导。单日（尤其情绪异常日）集中驱动的
     # 毒区，个股 entry 侧不可解，任何据此加的 entry 规则都是对一个交易日噪声的过拟合
-    # （lessons.md 第187轮：no_follow_through 18笔被多角度证伪，活跃档 up_ratio∈[0.50,0.65)
+    # （docs/lessons/LESSONS.md，历史第187轮：no_follow_through 18笔被多角度证伪，活跃档 up_ratio∈[0.50,0.65)
     # 28笔全部来自 07-16 单日，剔除后无其它日期样本）。把判定显式化，防每轮重复加规则。
     try:
         import importlib.util as _ilu

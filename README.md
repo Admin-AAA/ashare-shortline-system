@@ -377,6 +377,19 @@ skill-name/
 - 过滤规则
 - 板块轮动
 
+## 教训与经验沉淀
+
+项目中可跨轮复用、会改变后续决策的教训，统一存放在 [`docs/lessons/LESSONS.md`](docs/lessons/LESSONS.md)，具体格式和边界见 [`docs/lessons/README.md`](docs/lessons/README.md)。
+
+存放边界如下：
+
+- `docs/lessons/LESSONS.md`：唯一教训注册表，只收录有证据、可复用、能改变行动的规则。
+- `docs/bugs/`、`docs/reviews/`、根目录诊断报告、`output/`、回测报告：证据档案；教训条目从这里回链，不在这些位置另建长期规则。
+- `backend/skills/*/strategy.yaml`、`SKILL.md`：策略自身的当前规则；跨策略或跨轮的经验仍回写教训注册表。
+- `.workbuddy/memory/`：本地工作记忆和日志，不是第二个教训库；self-improve 的状态与运行记录继续按操作手册存放。
+
+新增教训前先搜索已有条目，使用唯一 `L-###` 编号，并记录“状态、适用、证据、永久规则、吸收位置”。单次运行数字和普通实验结果不要直接升级为长期教训。
+
 ---
 
 ## 回测

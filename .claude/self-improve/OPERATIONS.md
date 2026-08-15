@@ -11,10 +11,10 @@
 - 唯一生产判定器：`backend/app/services/backtest/challenger_decision.py`
 - 串行重放：`backend/scripts/si_sequential_champion_replay.py`
 - 原子状态工具：`backend/scripts/self_improve_state.py`
-- 教训注册表（全局唯一真源）：`~/.claude/projects/-Users-wangao/memory/self-improve-LESSONS.md`
+- 教训注册表（项目唯一真源）：`docs/lessons/LESSONS.md`
 - 运行状态：`/Users/wangao/.claude/projects/-Users-wangao/memory/self-improve-state.json`
 - 结构化记录：`/Users/wangao/.claude/projects/-Users-wangao/memory/self-improve-runs.jsonl`
-- 旧日志：`/Users/wangao/.claude/projects/-Users-wangao/memory/self-improve-log.md`（只读历史档案，不再追加）
+- 旧日志与旧教训快照：`/Users/wangao/.claude/projects/-Users-wangao/memory/`（只读历史档案，不再追加；新教训回写仓库内注册表）
 
 ## 状态工具子命令
 

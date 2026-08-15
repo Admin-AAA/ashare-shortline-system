@@ -37,6 +37,7 @@ VPI rate = VPI=1 的运行数 / 全部已完成运行数
 - 正式实验：`backend/scripts/run_canonical_backtest_experiment.py`。
 - 正式证据：`backtest_*` 表中的 schema v2 evidence。
 - 状态与发布：`backend/scripts/self_improve_state.py`；禁止直接写状态文件。
+- 教训注册表：`docs/lessons/LESSONS.md`；新教训不得写入项目外 memory 或单次报告。
 - PATH-A 只能生成 `EXPLORATORY` 证据，不能发布生产策略。
 - Python 一律优先使用 `backend/.venv/bin/python`。
 
