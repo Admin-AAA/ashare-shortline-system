@@ -11,10 +11,10 @@
 - 唯一生产判定器：`backend/app/services/backtest/challenger_decision.py`
 - 串行重放：`backend/scripts/si_sequential_champion_replay.py`
 - 原子状态工具：`backend/scripts/self_improve_state.py`
-- 教训注册表（全局唯一真源）：`~/.claude/projects/-Users-wangao/memory/self-improve-LESSONS.md`
+- 教训规范：`docs/lessons/README.md`；教训注册表（项目唯一真源）：`docs/lessons/LESSONS.md`
 - 运行状态：`/Users/wangao/.claude/projects/-Users-wangao/memory/self-improve-state.json`
 - 结构化记录：`/Users/wangao/.claude/projects/-Users-wangao/memory/self-improve-runs.jsonl`
-- 旧日志：`/Users/wangao/.claude/projects/-Users-wangao/memory/self-improve-log.md`（只读历史档案，不再追加）
+- 旧日志与旧教训快照：`/Users/wangao/.claude/projects/-Users-wangao/memory/`（只读历史档案，不再追加；新教训回写仓库内注册表）
 
 ## 状态工具子命令
 
@@ -63,6 +63,14 @@ python self_improve_state.py release-worktree --researcher-id si-<时间戳> --r
 python self_improve_state.py with-publish-lock --cmd 'git -C <主仓库> pull --ff-only origin main && git -C <主仓库> merge --no-ff <branch> && git -C <主仓库> push origin main'
 ```
 
+### 无人值守定时运行
+
+- 默认预算为 45 分钟/3 个独立假设/1 个 release candidate；调度器传入更小预算时以更小值为准，最后 5 分钟只收尾。
+- `migrate-state -> read -> prune-claimed` 后若仍有其他 owner 的 active release，本轮返回 `RELEASE_BUSY`，不得 claim 新方向。
+- 只有 deployment adapter、Canary 输入和剩余预算均就绪时才执行 `verify_evidence`；避免停在无法释放的 `evidence_verified`。
+- 当前 owner 在退出前必须完成 `publish-champion`，或将失败 Canary 推进到 `rollback_required -> rolled_back`；release 非终态时 `release-direction` 会拒绝清理。
+- 瞬时基础设施错误只重试一次；确定性门禁失败不重试。达到预算后记录 `NO_IMPROVEMENT`/`BLOCKED`，不得等待人工输入。
+
 ### worktree 内用 venv
 
 `.venv` 不随 worktree 复制。worktree 内 Python 一律用主仓库绝对路径：
@@ -90,7 +98,7 @@ python self_improve_state.py with-publish-lock --cmd 'git -C <主仓库> pull --
 
 ## 记录格式（self-improve-runs.jsonl）
 
-每轮追加一条合法 JSON（`run_id`、`researcher_id`、`claimed_direction`、`started_at`、`input_fingerprint`、`champion`、`hypothesis`、`data_source`、`windows`、`metrics`、`decision`、`commit`、`rollback_point`、`lesson_ids`、`blocked_live_until`、`next_live_event`）。状态和运行记录必须通过 `publish-champion`/`publish-finding` 在同一文件锁下更新，禁止直接写状态文件。
+每轮追加一条合法 JSON（`run_id`、`researcher_id`、`claimed_direction`、`started_at`、`input_fingerprint`、`champion`、`hypothesis`、`data_source`、`windows`、`metrics`、`decision`、`commit`、`rollback_point`、`lesson_ids`、`blocked_live_until`、`next_live_event`）。`lesson_ids` 只允许引用 `docs/lessons/LESSONS.md` 中已存在的 canonical `L-###`；新教训必须先按 `docs/lessons/README.md` 去重并登记，禁止在运行记录、项目外 memory 或报告中创建第二份教训正文。状态和运行记录必须通过 `publish-champion`/`publish-finding` 在同一文件锁下更新，禁止直接写状态文件。
 
 ## 正式回测与探索工具
 

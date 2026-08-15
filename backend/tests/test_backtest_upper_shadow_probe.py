@@ -4,7 +4,7 @@
 纯逻辑测试（_compute_metrics / _is_upper_probe / _passes_volume_trend / _passes_liquidity）
 不依赖 DB，始终运行；DB 集成测试在 MySQL 不可达时自动 skip。
 
-设计纪律（见 lessons.md [T1]）：本因子与「长下影锤子线」「分歧日低吸」「首板接力」同属
+设计纪律（见 docs/lessons/LESSONS.md 的 L-018、L-004）：本因子与「长下影锤子线」「分歧日低吸」「首板接力」同属
 2023-2026 短线因子样本外坍塌高发区。集成测试只断言回测可复现、无未来函数、结构正确，
 **不断言胜率必须 >50%**——避免把测试变成过拟合锁。若全样本/滚动窗口显示净负或
 regime 依赖噪声，按第一性原理「回测证伪噪声」直接丢弃，不纳入 strategy.yaml。

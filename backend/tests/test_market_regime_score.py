@@ -24,7 +24,7 @@ def _snap(up_count: int, sample_count: int) -> dict:
 def test_contrarian_invariant_strong_bull_stricter_than_weak():
     """核心护栏：强牛(up_ratio=0.90)返分必须 < 弱市(up_ratio=0.10)返分。
 
-    若有人翻转校准（强牛返高分），此断言立即失败——正是 lessons #185 锁定的过拟合陷阱。
+    若有人翻转校准（强牛返高分），此断言立即失败——正是 canonical L-003（历史轮次 #185）锁定的过拟合陷阱。
     """
     weak = market_regime_score(_snap(10, 100))    # up_ratio=0.10 <0.35
     strong = market_regime_score(_snap(90, 100))  # up_ratio=0.90 >=0.65

@@ -4,7 +4,7 @@
 纯逻辑测试（_simulate_trade / _bucket_by_net_buy / _load_dragon_tiger 过滤）不依赖 DB，
 始终运行；DB 集成测试在 MySQL 不可达时自动 skip。
 
-设计纪律（见 lessons.md [T1]）：本因子诚实样本外回测结果为**净负**——
+设计纪律（见 docs/lessons/LESSONS.md 的 L-018、L-004）：本因子诚实样本外回测结果为**净负**——
   全样本 n=754 WR=34.6% 盈亏比 0.76；滚动 20 窗 0 窗 >=50% 胜率；净买分桶虽弱单调
   （28.5%→43.2%）但所有桶均 <50% 胜率且净均为负。属 regime 依赖噪声 + 弱信号，
   按第一性原理「回测证伪噪声」直接丢弃，**不纳入 strategy.yaml**。

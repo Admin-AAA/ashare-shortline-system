@@ -6,7 +6,7 @@
 
 背景：第 7 轮在 n≈200 LIVE 样本上连挖 3 个头部特征（holder_trade / dragon_tiger
 net_buy_ratio / roe）全部被证伪为稀疏×单日伪影。本测试防止未来轮次把同类噪声
-当成「高预测力因子」去加 entry/exit 规则（与 lessons #187 / #350 同构）。
+当成「高预测力因子」去加 entry/exit 规则（对应 canonical L-004；历史轮次 #187 / #350）。
 """
 import pathlib
 import sys

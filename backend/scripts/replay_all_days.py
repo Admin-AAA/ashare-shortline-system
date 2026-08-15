@@ -11,6 +11,7 @@
 ``evaluation_scope`` 或 ``recommended_at`` 来伪装 LIVE evidence。
 
 用法：python scripts/replay_all_days.py [--start 2026-05-22] [--end 2026-07-29]
+      [--rule-only-fallback]
 """
 from __future__ import annotations
 
@@ -93,7 +94,13 @@ def _base_payload(db=None) -> dict:
             db.close()
 
 
-def _historical_payload(base: dict, trade_date: str) -> dict:
+def _historical_payload(
+    base: dict,
+    trade_date: str,
+    *,
+    disable_agent_review: bool = False,
+    attempt_tag: str | None = None,
+) -> dict:
     """Build a replay request whose signal reader is strictly bounded as-of date.
 
     ``local_pool`` + ``trade_date_override`` uses the existing MarketUniversePort
@@ -105,7 +112,11 @@ def _historical_payload(base: dict, trade_date: str) -> dict:
     payload.pop("evaluation_scope", None)
     payload.update(
         {
-            "run_name": "REPLAY-历史推荐重建",
+            "run_name": (
+                f"REPLAY-历史推荐重建/{attempt_tag}"
+                if attempt_tag
+                else "REPLAY-历史推荐重建"
+            ),
             "run_mode": "formal",
             "matrix_run": False,
             "trade_date_override": trade_date,
@@ -114,12 +125,22 @@ def _historical_payload(base: dict, trade_date: str) -> dict:
             # 回放 run 之间互相独立：同日已有落库结果（如同 batch 前序 run 或历史
             # 重建）不应触发跨 run 去重自我剔除；实盘去重基数另有 live_forward 过滤。
             "dedup_same_day": False,
+            # Provider 欠费/熔断时允许历史重建走显式 rule_only 口径；这不是
+            # LIVE 证据，也不会伪装成已完成 LLM 深审。
+            "disable_agent_review": bool(disable_agent_review),
         }
     )
     return payload
 
 
-def _reconstruction_identity(db, dates: list[str], base: dict):
+def _reconstruction_identity(
+    db,
+    dates: list[str],
+    base: dict,
+    *,
+    disable_agent_review: bool = False,
+    attempt_tag: str | None = None,
+):
     """Freeze the manifest before any batch/date reservation can be committed."""
     from app.services.evidence.reconstruction_batch import (
         build_reconstruction_batch_identity,
@@ -128,7 +149,12 @@ def _reconstruction_identity(db, dates: list[str], base: dict):
 
     if not dates:
         raise ValueError("历史重建 batch 至少需要一个交易日")
-    payload = _historical_payload(base, dates[0])
+    payload = _historical_payload(
+        base,
+        dates[0],
+        disable_agent_review=disable_agent_review,
+        attempt_tag=attempt_tag,
+    )
     _params, request, _selected_skills, _execution_version, execution_audit = (
         _prepare_workbench_run(db, payload)
     )
@@ -274,11 +300,23 @@ def main() -> int:
     parser.add_argument("--start", default="2026-05-22")
     parser.add_argument("--end", default="2026-07-29")
     parser.add_argument("--skip-existing", action="store_true", help="跳过已有 run 的交易日")
+    parser.add_argument(
+        "--rule-only-fallback",
+        action="store_true",
+        help="历史重建禁用 LLM 深审，明确记录为 rule_only，适用于模型服务不可用时补样本",
+    )
+    parser.add_argument(
+        "--attempt-tag",
+        help="失败批次的 append-only 重试标识；会写入 run_name 并生成新的 manifest",
+    )
     args = parser.parse_args()
 
     # Scope_Guard（S0 任务 0.10）：本入口声明为允许的历史重建，guard 按声明判定，
     # 不按日期范围猜测；延期范围（D1 全量回填/D2 新 alpha/D3 券商实盘）一律拒绝。
     assert_initiative_allowed(HISTORICAL_RECONSTRUCTION_INITIATIVE, context="scripts/replay_all_days.py")
+    # 主进程在预留 run 时也必须使用与 Prefect worker 相同的部署 revision；
+    # 否则 execution_version 会在入队和执行时产生不同身份。
+    os.environ.setdefault("ASHARE_APPLICATION_REVISION", _resolve_code_revision())
 
     db = SessionLocal()
     try:
@@ -289,7 +327,13 @@ def main() -> int:
         print(f"交易日: {len(dates)} 个 ({dates[0]} ~ {dates[-1]})")
 
         base = _base_payload(db)
-        identity = _reconstruction_identity(db, dates, base)
+        identity = _reconstruction_identity(
+            db,
+            dates,
+            base,
+            disable_agent_review=args.rule_only_fallback,
+            attempt_tag=args.attempt_tag,
+        )
         from app.models.tables import RecommendationRun
         from app.services.evidence.reconstruction_batch import (
             ReconstructionBatchError,
@@ -326,7 +370,12 @@ def main() -> int:
                 return 1
 
             print(f"[{i+1}/{len(dates)}] 重建 {td} ...", flush=True)
-            payload = _historical_payload(base, td)
+            payload = _historical_payload(
+                base,
+                td,
+                disable_agent_review=args.rule_only_fallback,
+                attempt_tag=args.attempt_tag,
+            )
             try:
                 create_or_resume_reconstruction_batch(db, identity)
                 result = enqueue_workbench_run(

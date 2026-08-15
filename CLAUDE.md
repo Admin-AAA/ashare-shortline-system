@@ -56,6 +56,13 @@
 
 优先使用项目虚拟环境 `.venv`。允许直接使用生产 MySQL 做验证测试，禁止清库/删表/重建等不可恢复操作。
 
+# 教训与经验沉淀
+
+- 项目中可跨轮复用、会改变后续决策的教训，唯一写入 `docs/lessons/LESSONS.md`。
+- `docs/bugs/`、`docs/reviews/`、根目录诊断报告、`output/` 和回测报告只保存证据档案；从中提炼出的长期规则必须回写教训注册表，并回链证据。
+- `.workbuddy/memory/MEMORY.md` 是本地记忆导航，不维护第二份教训副本；项目外 self-improve state/run records 只保存运行状态和结构化记录。
+- 新教训必须使用唯一 `L-###` 编号，包含状态、适用范围、证据、永久规则和吸收位置；单次实验数字不要升级成长期教训。
+
 # 日志位置
 
 - 本地：`backend/logs/app.log`、`backend/logs/access.log`
