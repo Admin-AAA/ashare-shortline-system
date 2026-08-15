@@ -27,6 +27,7 @@ from app.services.evidence.reconstruction_batch import (
 )
 from scripts.replay_all_days import (
     _base_payload,
+    _explicit_trade_dates,
     _historical_payload,
     _reserve_reconstruction_run,
     _run_exists,
@@ -120,6 +121,33 @@ def _complete_run(run: SimpleNamespace, *, data_as_of: str = "2026-07-01") -> No
             }
         }
     )
+
+
+def test_explicit_trade_dates_are_sorted_deduplicated_and_index_validated(monkeypatch):
+    from scripts import replay_all_days
+
+    monkeypatch.setattr(
+        replay_all_days,
+        "_trade_dates",
+        lambda _db, start, end: ["2026-05-14", "2026-05-15", "2026-05-18"],
+    )
+
+    assert _explicit_trade_dates(
+        object(), "2026-05-18,2026-05-14,2026-05-18"
+    ) == ["2026-05-14", "2026-05-18"]
+
+
+def test_explicit_trade_dates_reject_unindexed_date(monkeypatch):
+    from scripts import replay_all_days
+
+    monkeypatch.setattr(
+        replay_all_days,
+        "_trade_dates",
+        lambda _db, start, end: ["2026-05-14"],
+    )
+
+    with pytest.raises(ValueError, match="未索引"):
+        _explicit_trade_dates(object(), "2026-05-14,2026-05-15")
 
 
 @pytest.mark.parametrize(
