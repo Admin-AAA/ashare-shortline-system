@@ -63,6 +63,14 @@ python self_improve_state.py release-worktree --researcher-id si-<时间戳> --r
 python self_improve_state.py with-publish-lock --cmd 'git -C <主仓库> pull --ff-only origin main && git -C <主仓库> merge --no-ff <branch> && git -C <主仓库> push origin main'
 ```
 
+### 无人值守定时运行
+
+- 默认预算为 45 分钟/3 个独立假设/1 个 release candidate；调度器传入更小预算时以更小值为准，最后 5 分钟只收尾。
+- `migrate-state -> read -> prune-claimed` 后若仍有其他 owner 的 active release，本轮返回 `RELEASE_BUSY`，不得 claim 新方向。
+- 只有 deployment adapter、Canary 输入和剩余预算均就绪时才执行 `verify_evidence`；避免停在无法释放的 `evidence_verified`。
+- 当前 owner 在退出前必须完成 `publish-champion`，或将失败 Canary 推进到 `rollback_required -> rolled_back`；release 非终态时 `release-direction` 会拒绝清理。
+- 瞬时基础设施错误只重试一次；确定性门禁失败不重试。达到预算后记录 `NO_IMPROVEMENT`/`BLOCKED`，不得等待人工输入。
+
 ### worktree 内用 venv
 
 `.venv` 不随 worktree 复制。worktree 内 Python 一律用主仓库绝对路径：

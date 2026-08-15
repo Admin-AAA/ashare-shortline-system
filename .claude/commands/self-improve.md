@@ -4,6 +4,17 @@
 
 具体 CLI、状态字段和发布命令查 `.claude/self-improve/OPERATIONS.md`，本文件只规定目标、决策顺序和完成标准。
 
+## 0. 无人值守定时运行契约
+
+本命令默认由定时任务非交互运行，不等待人工选择：
+
+- 使用调度器提供的执行预算；未提供时单轮最多 45 分钟、最多验证 3 个独立假设、最多推进 1 个 release candidate，并预留最后 5 分钟收尾；
+- 确定性失败、证据门禁失败不重试；网络、锁或服务瞬时错误只允许重试 1 次，仍失败就记录精确 blocker；
+- `migrate-state` 后先读取状态并执行 `prune-claimed`。若仍有其他 owner 的 active release，报告 `RELEASE_BUSY` 后退出，不 claim 新方向、不建立新 candidate；
+- 只有部署 adapter、Canary 输入和剩余预算都已就绪时，才调用 `verify_evidence` 占用全局 release slot；
+- 当前运行一旦成为 release owner，就必须在预算内推进到 `completed` 或确认回滚到 `rolled_back`，不得遗留 active release 后退出；
+- 距预算结束不足 5 分钟时不再开始实验或部署，只做记录、回滚和资源清理。
+
 ## 1. 北极星：已验证交付改进率
 
 唯一北极星指标是 **VPI（Verified Production Improvement）**：当前最高优先级约束被实际改动消除或显著推进，并完成对应验证与交付。
@@ -98,7 +109,7 @@ backend/.venv/bin/python backend/scripts/self_improve_state.py refresh-policy-he
 3. 策略改动运行 canonical 双臂实验；系统改动重跑同口径 benchmark/诊断。
 4. 重跑 `self_check.py`，得到 after 快照并与 before 比较。
 5. 只有达到预注册门槛且无高阶退化才保留；否则回滚本次改动，发布诚实的 `FALSIFIED`/`FINDING`。
-6. 一次失败实验不是优化完成。只要当前执行窗口仍允许，就归档该假设并自动选择下一个未使用方向；连续三个独立假设失败则归档整个方向。
+6. 一次失败实验不是优化完成。只要剩余预算允许，就归档该假设并自动选择下一个未使用方向；达到单轮预算或连续三个独立假设失败时，归档方向并停止本轮。
 
 这是棘轮，不是“每轮必须提交代码”：坏改动必须回滚，禁止为产生 diff 而提交。
 
@@ -135,7 +146,7 @@ backend/.venv/bin/python backend/scripts/self_improve_state.py refresh-policy-he
 
 每条 `run_record` 必须额外记录 `vpi`、`delivery_status`、最高优先级约束、before/after、验证证据、交付位置和 canonical `lesson_ids`；VPI rate 只从这些结构化记录计算，不从自然语言报告猜测。
 
-无论成功失败，最后都要释放 direction、终止 heartbeat 并清理 worktree。只清理本轮创建的资源；禁止删表、清库、修改 `.env`、force push 或 `git reset --hard`。
+无论成功失败，最后都要确认 release 已是终态，再释放 direction、终止 heartbeat 并清理 worktree。只清理本轮创建的资源；禁止删表、清库、修改 `.env`、force push 或 `git reset --hard`。
 
 ## 6. 反模式黑名单
 
