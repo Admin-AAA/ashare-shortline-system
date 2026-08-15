@@ -14,6 +14,8 @@
 
 本文件由项目外的历史 self-improve 教训快照迁入。历史快照有重复的 `L-045`～`L-050` 编号；迁移时按出现顺序重新分配为唯一的 `L-001`～`L-057`，每条保留“原始编号”字段。后续只能使用本文件的 canonical 编号，新条目追加到文件末尾。
 
+2026-08-15 可靠性核验后，L-020、L-026、L-027、L-029、L-031、L-034、L-035、L-036 因证据不合格或无法同口径复现而从注册表删除。上述编号永久退役，不得复用；删除原因见 [`VALIDATION.md`](./VALIDATION.md)，原文仅通过 Git 历史追溯。
+
 ## L-001 回测与 LIVE 口径污染
 
 - 原始编号：L-001
@@ -232,24 +234,13 @@
 - 自动护栏：`self_improve_state.publish_champion` 拒绝在小样本（n<50）上清除 `provisional` 标志（`SMALL_SAMPLE_PROVISIONAL_GUARD`）。
 - 吸收位置：主提示词“Champion 有效性门槛”和“选择证据路径”。
 
-## L-020 profit_floor_ratio 网格在 path A 上已穷举，0.50 保持最优
-
-- 原始编号：L-020
-
-- 状态：active
-- 适用：trailing/profit_floor 相关参数网格的后续轮次选题
-- 证据：PATH-A 2025_2026 全历史（n=3611，381 交易日）扫 trailing_profit_lock_ratio：0.30 与 0.70 均 FALSIFIED（0.90 早已在 [[trailing-callback-falsified-2026-07]]/L-016 串行重放否证）。0.30 累计净收益 +17pp 但 WR -0.33pp 与 MDD -0.37pp 双退化，违反「至多一项辅助退化」；0.70 累计净收益 -2.79pp 超 1pp cap 且 MDD -3.08pp 退化。两候选 paired bootstrap CI 均含 0。regime 指纹：两候选在强势/弱势周期均微改善，但震荡周期均恶化。
-- 永久规则：profit_floor_ratio ∈ {0.30, 0.50, 0.70, 0.90} 已全部检验，**0.50 是当前 champion 且无已证更优点**。后续不再对该参数扫网格；如需改进出场侧，转向 stop_loss 宽度 / take_profit / horizon 等未穷举维度。
-- 发布判定启示：单指标大幅改善（cum +17pp）不足以发布——只要辅助三项中有两项退化（c030 的 WR+MDD）即违反「至多一项辅助退化」门禁。大额累计收益改善若伴随胜率与回撤双退化，通常是改变了收益分布形状而非提升可执行质量。
-- 吸收位置：主提示词「生产发布条件」的辅助退化门禁。
-
 ## L-021 单指标大幅改善≠可发布：辅助双退化门禁实例
 
 - 原始编号：L-021
 
 - 状态：active
 - 适用：任何候选发布判定，尤其网格扫描中「累计收益变化显著」的候选
-- 证据：profit_floor_ratio 0.30 相对 0.50，累计净收益 +17.00pp（从 -28.31% 到 -11.31%），幅度远超任何容差，但 WR -0.33pp 与 MDD -0.37pp 双退化，evaluate_challenger 判定 FALSIFIED。累计收益改善来自等权日组合的链式累乘——一个极端正日（或日期分布差异）即可放大累计值，不反映单笔质量。
+- 证据：2026-08-15 当前 Path-A 重放中，2025-H1 单笔均值 +0.1247%、PF 1.0609，但累计收益 -40.88%、MDD -51.60%；2026-H1 单笔均值 +0.0047%、PF 1.0021，但累计收益 -61.58%、MDD -63.11%。单笔质量、链式累计收益和组合回撤可以方向相反，不能用一个指标代替整体判定。
 - 永久规则：判定发布时把累计净收益看作「分布形状的副产品」而非独立信号。avg_net（单笔均值）才反映每笔质量；累计收益改善而 avg_net 持平/微变 + 辅助退化时，优先怀疑收益时间分布改变而非质量提升。真正可发布的候选应在 avg_net 和累计收益上同时体现改善，且辅助退化 ≤ 1 项。
 - 吸收位置：主提示词「生产发布条件」。
 
@@ -300,48 +291,16 @@
 - 与 L-023 交叉：L-023 说 path A 无法复现生产仓位语义（sr.score≠final_score）；本课是说**路径 B（formal 重放）里必须用生产语义重放 position_size**，DB 旧值不可信。
 - 吸收位置：主提示词「真实性硬门禁」+ OPERATIONS.md 路径 B 说明。
 
-## L-026 stop_loss 宽度在 path A 全历史上已穷举，-4.5% 保持最优
-
-- 原始编号：L-026
-
-- 状态：active
-- 适用：止损宽度相关参数的后续轮次选题
-- 证据：PATH-A 2025_2026 全历史（n=3611，381 交易日）扫 stop_loss_pct ∈ {-3.5, -6.5}（champion -4.5）：-3.5 收紧全面退化（WR -4.01pp、avg -0.065pp、PF -0.034，辅助两项退化）；-6.5 放宽 avg +0.137pp、WR +5.51pp、PF +0.063 改善但 cum -17.58pp 超 1pp cap 且 MDD -22.07pp 显著退化（等权日组合 MDD -85% vs -63%）。regime 指纹（-6.5）：弱势/强势 avg 改善但震荡恶化，组合回撤灾难性放大。与 L-011（跳空主导损失，止损距离几乎无助）一致。
-- 永久规则：stop_loss ∈ {-3.5, -4.5, -6.5} 已全部检验，**-4.5 是当前 champion 且无已证更优点**。后续不再对止损宽度扫网格。注意「avg/WR/PF 改善但 cum/MDD 恶化」模式：更宽止损摊薄单笔均值但放大极端亏损尾部——avg 层面改善不构成可执行质量提升，必须看组合资金曲线 MDD。
-- 与 L-021 交叉：单指标改善 + 组合回撤退化 = 收益分布形状改变，非质量提升。
-- 吸收位置：主提示词「生产发布条件」+ L-020 的未穷举维度清单（stop_loss 已排除，剩 take_profit）。
-
-## L-027 score_line 网格在 path A 上已穷举，72 保持最优
-
-- 原始编号：L-027
-
-- 状态：active
-- 适用：score_line/分数线相关参数的后续轮次选题
-- 证据：path A 全历史 2025_2026（n=3611）扫 score_line 72→76（提高门槛）：avg -0.030pp、cum -2.96pp、WR -0.46pp、PF -0.012 全面退化，砍 342 笔（-9.5% 覆盖率）但平均收益反降——被砍交易非系统性亏损。regime 指纹：弱势微改善（+0.048pp）但**强势灾难退化**（avg -0.156→-0.483，砍 35% 强势交易，提高门槛在强势周期砍掉追高动能）。结合此前 72→68（si20260731-003 零效应）、Spearman rho=-0.13（si20260731-164955 无排序力），**score_line 高低两侧均 FALSIFIED，72 是 path A 最优点**。
-- 永久规则：score_line ∈ {68, 72, 76} 已全部检验，**72 是当前 champion 且无已证更优点**。后续不再对该参数扫网格。特别注意「提高 score_line 在强势周期灾难退化」模式——追高动能的强势交易分数高，提高门槛系统性误杀。
-- 吸收位置：主提示词「生产发布条件」+ 网格去重护栏。
-
 ## L-028 方向池去重必须用主题词匹配扫描键，非参数名子串
 
 - 原始编号：L-028
 
 - 状态：encoded（已修 + 回归测试 + 合并 main）
 - 适用：方向池分配、网格去重、已 FALSIFIED 方向归档
-- 证据：`_list_unscanned_grid_params` 用参数列表名（`score_line_threshold`、`stop_loss`）做子串匹配 scanned_keys，但历史扫描键用主题词命名（`score_line_on_2025_2026`、`stop_loss_on_2025_2026`）。`"score_line_threshold" in "score_line_on_2025_2026"` → False，导致已 FALSIFIED 的 score_line 网格被方向池反复分配（L-027 发布后，下轮又 claim 到 grid_scan:score_line_threshold）。同理 take_profit/trailing_activate/trailing_callback/trailing_min_lock/strategy_filter 全部无匹配，会被重复扫描。
+- 证据：`_list_unscanned_grid_params` 用参数列表名（`score_line_threshold`、`stop_loss`）做子串匹配 scanned_keys，但历史扫描键用主题词命名（`score_line_on_2025_2026`、`stop_loss_on_2025_2026`）。`"score_line_threshold" in "score_line_on_2025_2026"` → False，导致旧 score-line 扫描记录未被识别，下轮又 claim 到 grid_scan:score_line_threshold。同理 take_profit/trailing_activate/trailing_callback/trailing_min_lock/strategy_filter 全部无匹配，会被重复扫描。
 - 永久规则：scanned_grids 记录键必须用**主题词**命名（score_line_on_...、stop_loss_on_...、horizon_on_...），`_GRID_PARAM_TOPICS` 映射参数名→主题词列表，任一主题词命中扫描键即视为已扫。发布 FINDING 时检查记录键是否会被方向池误判为未扫描。
 - 修复：`_GRID_PARAM_TOPICS` + 回归测试 `test_claim_does_not_reallocate_scanned_grid_direction`。修复后剩余未扫描参数：take_profit / trailing_activate / trailing_callback / trailing_min_lock / strategy_filter。
 - 吸收位置：主提示词「网格参数扫描的去重与防过拟合护栏」+ OPERATIONS.md。
-
-## L-029 take_profit 网格在 path A 上已穷举，6.0% 保持最优
-
-- 原始编号：L-029
-
-- 状态：active
-- 适用：止盈宽度相关参数的后续轮次选题
-- 证据：PATH-A 2025_2026 全历史（n=3611，381 交易日）扫 take_profit_pct ∈ {7.0, 8.0}（champion 6.0）：放宽止盈 avg +0.017/+0.020pp、cum +17.36/+19.59pp 改善但 WR -0.27/-0.52pp 与 MDD -0.77/-3.49pp 双退化（违反「至多一项辅助退化」）。regime 指纹：tp7 三 regime 全微改善（强势 +0.041 最大）、tp8 强势 +0.059 但震荡 -0.026 退化。结合此前缩窄 4/5% FALSIFIED（si20260731-010 两周窗口），**take_profit ∈ {4,5,6,7,8} 已全部检验，6.0 是 path A 最优点**。
-- 永久规则：take_profit 网格高低两侧均证伪，**6.0 保持最优**。后续不再对该参数扫网格。注意「放宽止盈在强势周期让利润跑远（cum 大幅改善）但整体 WR/MDD 双退化」模式——cum 改善由强势周期少数大赢单驱动，不代表可执行质量提升。
-- 与 L-021/L-026 交叉：cum 大幅改善 + WR/MDD 双退化 = 收益分布形状改变，非质量提升。
-- 吸收位置：主提示词「生产发布条件」。
 
 ## L-030 peak_callback trailing 相对生产 profit_floor 不发布（策略切换非调参）
 
@@ -354,24 +313,13 @@
 - 测量工具：`_trailing_stop_return`/`_resolve_exit_causal` 支持 `trailing_callback` 参数化（向后兼容默认全局常量），path A 可扫 callback 网格。与并行研究员 `activate_pct` 参数共存（纯机械合并）。
 - 吸收位置：主提示词「串行 champion 规则」+「生产发布条件」。
 
-## L-031 trailing_min_lock 网格已穷举，0.3 保持最优
-
-- 原始编号：L-031
-
-- 状态：active
-- 适用：trailing 利润地板最低锁定参数后续选题
-- 证据：path A 全历史 2025_2026（n=3611）扫 trailing_min_lock：ml0.8 五项完全无变化（0.8 从未成为 max(0.8, 浮盈×0.5) 的约束，因浮盈>1.6% 时 0.5×浮盈>0.8）；ml1.5 通过 evaluate_challenger（五项全改善：avg +0.0015pp、cum +0.083pp、WR +0.06pp、PF +0.0006、MDD +0.67pp）但改善极其微小——avg/PF 都在容差 0.01 边缘，bootstrap CI=[-0.008, +0.009] 完全含 0，regime 改善集中在强势周期（+0.006pp）其他周期持平。
-- 永久规则：min_lock ∈ {0.3, 0.8, 1.5} 已检验，**0.3 保持最优**（ml1.5 改善远小于容差，判 FINDING 不发布）。注意 min_lock 的「约束盲区」：只有当 浮盈×profit_lock_ratio < min_lock 时参数才生效，而 profit_lock_ratio=0.5 时浮盈需 <2×min_lock，绝大多数交易浮盈超过该值，min_lock 基本不生效。
-- 与 L-024 交叉：改善幅度远小于容差 + bootstrap 含 0 = 判 FINDING 而非机械 PRODUCTION。
-- 吸收位置：主提示词「生产发布条件」。
-
 ## L-032 因子方向去重必须匹配 new_strategy:<factor> 前缀，非 "factor" 子串
 
 - 原始编号：L-032
 
 - 状态：encoded（已修 + 回归测试 + 合并 main）
 - 适用：方向池分配、已否证因子归档
-- 证据：`_list_unscanned_factor_directions` 的 falsified 判断用 `"factor" in d or "因子" in d` 子串匹配 archived，但 archived 条目是 `new_strategy:capital_flow_momentum:做多资金流入被否证(787笔已结算)...`（含 momentum 不含 factor/因子），不被匹配 → 已否证的资金流因子被方向池反复分配（L-031 后 claim 又拿到它）。与 L-028 同类（参数名/记录键命名不一致导致去重失效）。
+- 证据：`_list_unscanned_factor_directions` 的 falsified 判断用 `"factor" in d or "因子" in d` 子串匹配 archived，但 archived 条目是 `new_strategy:capital_flow_momentum:做多资金流入被否证(787笔已结算)...`（含 momentum 不含 factor/因子），不被匹配 → 已否证的资金流因子被方向池反复分配。与 L-028 同类（参数名/记录键命名不一致导致去重失效）。
 - 永久规则：**归档已否证方向时，字符串必须以 `new_strategy:<factor>:` 前缀命名**；方向池用前缀解析已否证集合，不用松散子串。发布 FINDING 归档时检查前缀是否会被方向池误判。
 - 修复：`new_strategy:` 前缀解析 + 回归测试 `test_claim_does_not_reallocate_falsified_factor_direction`。
 - 吸收位置：主提示词「网格参数扫描的去重与防过拟合护栏」+ OPERATIONS.md。
@@ -385,37 +333,6 @@
 - 证据：path A 用 `100 - (chip_85-chip_15)/close*100` 算 chip_concentration（值域 0-100，大=集中），生产 feature_builder 用 `(chip_85-chip_15)/chip_15*100`（concentration_90，值域 0~∞，小=集中）。两公式方向相反，path A 策略层 `chip_concentration>=20` 几乎恒真失真（60-100 都满足），chip 评分条件实际不筛选。修复后 20cm 池 chip 分布从 60-100 高集中 → mean 18.4（67%<20），与生产推荐 chip=18 完全一致；champion 基线交易数 3611→3553。
 - 永久规则：**path A 重建因子时，公式必须与生产 `feature_builder.py` 逐一对齐**——先 grep 生产对应字段的计算，再写 path A 版本；方向相反/量纲不同的公式会让策略层条件静默失真（不报错但结果全错）。si20260731-009 的「20cm 池 chip 无区分力」结论虽巧合一致，但基于错误公式，不可作为依据。
 - 吸收位置：主提示词「回测合规要求」+「真实性硬门禁」。
-
-## L-034 gap_fill（跳空缺口回补）方向已否证，工具已合并
-
-- 原始编号：L-034
-
-- 状态：active
-- 适用：缺口/跳空形态相关的新策略选题
-- 证据：gap_fill 假设（信号日向上跳空未回补缺口→上方套牢盘压力→后续弱）：path A 2025_2026（n=3553）加 `max_signal_gap_pct=3` 剔除跳空高开≥3% 信号：avg +0.007pp、cum +3.90pp、WR +0.11pp、PF +0.003 改善但幅度在容差边缘，砍 37 笔（-1.0% 覆盖率），MDD -0.16pp 微退化。regime 指纹：弱势+0.010/震荡+0.043 改善，**强势 -0.044 退化**（砍 34 笔强势——强势周期跳空高开是追高动能的正常特征，剔除误伤）。bootstrap CI[-0.010,+0.051] 含 0。判定 FINDING 不发布。
-- 永久规则：gap_fill 方向已归档（改善微弱+强势退化+CI含0）。与 entry_gap_filter（入场跳空 T+1）不同机制但结论一致——跳空相关过滤不产生可发布改善。**工具已合并**：path A 支持 `SignalRecord.signal_gap_pct` + `max_signal_gap_pct` 过滤（62e06b6），后续无需重复造。
-- 与 L-024 交叉：改善微弱+单 regime 退化=判 FINDING。
-- 吸收位置：主提示词「新策略研究」。
-
-## L-035 sector_rotation_momentum（板块轮动动能）已被强力否证
-
-- 原始编号：L-035
-
-- 状态：active
-- 适用：板块/行业轮动类新策略选题
-- 证据：板块动能假设（强势板块中个股更易延续上涨）：path A 2025_2026（n=3553）加 `min_industry_momentum=0.45` 剔除所属板块当日上涨比例<0.45 的信号：**全面退化** avg -0.139pp、cum -56.76pp、WR -1.55pp、PF -0.061、MDD -35.25pp，砍 950 笔（-26.7% 覆盖率），bootstrap CI[-0.666, -0.001] **显著为负**。被砍的弱板块推荐含大量正收益低吸机会——弱势板块反而可能是低吸/超跌机会（与「追高动能策略在弱势周期恶化」教训一致）。
-- 永久规则：**板块动能/追高类过滤在 path A 上被强力否证**（CI 显著为负），不要再测板块轮动动能过滤。弱板块≠该回避——它可能是低吸机会。**工具已合并**：path A 支持 `industry_momentum` 特征 + `min_industry_momentum` 过滤（1b308eb），后续无需重复造。
-- 吸收位置：主提示词「新策略研究」。
-
-## L-036 volume_price_divergence（量价背离）已否证
-
-- 原始编号：L-036
-
-- 状态：active
-- 适用：量价关系类新策略选题
-- 证据：量价背离假设（价涨量缩→动能衰竭→后续弱）：path A 2025_2026（n=3553）加 `exclude_volume_price_divergence` 剔除「当日上涨且 vol5_20<0.8」信号：退化 avg -0.001pp、cum -12.43pp、WR -0.04pp、MDD -5.82pp，砍 33 笔（-0.9%）。bootstrap CI[-0.120,+0.104] 含 0。被砍的价涨量缩交易含正收益——**A股短线量缩上涨常是主力控盘/惜售特征，非动能衰竭**。
-- 永久规则：**量价背离（价涨量缩）过滤方向已否证**，不要再测。价涨量缩在 A 股短线是强势控盘信号而非衰竭信号（与教科书背离理论相反）。**工具已合并**：path A 支持 `vol5_20`/`day_pct_chg` 特征 + `exclude_volume_price_divergence` 过滤（d34e0d1）。
-- 吸收位置：主提示词「新策略研究」。
 
 ## L-037 2024 及之前不可作 20cm OOS 窗口（数据深度不足）
 
@@ -446,7 +363,7 @@
 - 适用：ddd5ffd weak-cap-relax champion 的后续监控与回滚决策
 - 证据：新 champion（ddd5ffd，weak 弱势放宽 cap）LIVE 弱势 regime 43 笔中 07-08 单日占 29 笔（67%）。剔除 07-08 后弱势 n=14 avg 2.84%（仍正）但 **WR 从 62.8% 骤降至 42.9%**（-20pp）——avg 靠少数大赢单而非稳定胜率。07-08 当天 WR 72.4%。发布记录（si-20260801-073828）只报 no_0708_avg=2.725 未报 WR 骤降。
 - 永久规则：**发布 PRODUCTION 时若样本高度单日集中（单日占比>50%），必须报告剔除该日后的 WR**，不能只报 avg（avg 靠极端值可掩盖 WR 崩溃）。验证 champion 跨窗口稳定性时，先查按日期分布的单日占比，再算剔除后的 WR/avg 双指标。
-- 与 L-021/L-036 交叉：单日极端值放大 avg 是常见陷阱；本课是 champion 层面（非候选）的同类风险。
+- 与 L-004/L-021 交叉：单日极端值放大 avg 是常见陷阱；本课是 champion 层面（非候选）的同类风险。
 - 吸收位置：主提示词「Champion 有效性门槛」+「串行 champion 规则」。
 
 ## L-040 weak relax 弱势 alpha 近期（07-22 后）转负，衰减信号
@@ -466,8 +383,8 @@
 
 - 状态：active
 - 适用：亏损归因、止损/入场侧选题
-- 证据：clean>=72 20cm failed n=30 归因——stop_loss 家族(hit+gap+both) 12 笔 -61.5% 占总亏损 78%；最大簇=弱势·活跃 stop_loss_hit 4 笔 -22.8%；次之=震荡·高潮 stop_loss -26.5%；跳空(stop_loss_gap avg -6.59%)主导深亏。时间上 07-07~09 三天集中亏损 -90.7%（占 78%）。与 L-011 一致（跳空主导损失、止损距离无法修复）；止损宽度已 FALSIFIED（L-026）。
-- 永久规则：**止损侧已穷举（L-020/L-026）无可解**；亏损归因指向入场侧——弱势·活跃 + 震荡·高潮的止损重灾区是追高结构（但追高/regime 闸门已 archived）。当前最活跃风险信号是弱势近期衰减（L-040），不是止损参数。**改止损/出场前先确认归因**（本课是归因证据）。
+- 证据：clean>=72 20cm failed n=30 归因——stop_loss 家族(hit+gap+both) 12 笔 -61.5% 占总亏损 78%；最大簇=弱势·活跃 stop_loss_hit 4 笔 -22.8%；次之=震荡·高潮 stop_loss -26.5%；跳空(stop_loss_gap avg -6.59%)主导深亏。时间上 07-07~09 三天集中亏损 -90.7%（占 78%）。与 L-011 的“跳空主导损失”方向一致，但历史止损网格结论已因证据不合格退役。
+- 永久规则：不能依据已退役网格宣告“止损侧已穷举”。亏损归因仍应优先定位入场、regime 与跳空结构；改止损/出场前先确认归因，并在当前 scope 下重新做可复现重放。
 - 与 L-040 交叉：弱势·活跃止损重灾区与弱势近期衰减（L-040）互为印证——弱势 regime 是当前亏损核心来源。
 - 吸收位置：主提示词「亏损归因与策略修复」。
 
