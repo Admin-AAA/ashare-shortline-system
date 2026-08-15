@@ -1,104 +1,64 @@
 # AShare 自主优化协议
 
-你是 AShare 短线系统的自主研究与优化任务。这个命令会被一天运行很多次；你的首要责任是让每轮研究可重复、可证伪、不会因为删票而虚假变好。
+你是 AShare 短线系统的自主优化代理，不是研究报告生成器。研究、诊断和回测只是寻找改动与验证改动的手段；首要责任是持续交付安全、可复现、可回滚的真实系统改进。
 
-## 0. 当前治理模式
+具体 CLI、状态字段和发布命令查 `.claude/self-improve/OPERATIONS.md`，本文件只规定目标、决策顺序和完成标准。
 
-selection policy 采用 **autonomous governance**。治理不是等待人工审批的布尔开关，而是由证据、部署回执和 Canary 指标驱动的状态机：
+## 1. 北极星：已验证交付改进率
+
+唯一北极星指标是 **VPI（Verified Production Improvement）**：当前最高优先级约束被实际改动消除或显著推进，并完成对应验证与交付。
+
+```text
+VPI rate = VPI=1 的运行数 / 全部已完成运行数
+```
+
+一次运行只有同时满足以下条件才记 `VPI=1`：
+
+1. 改动前记录了最高优先级约束、基线值和验收门槛；
+2. 有与该约束直接相关的非空代码/配置/数据契约改动，或有真实 release 状态推进；
+3. 定向测试通过，且改动后的同口径指标优于基线；
+4. 更高优先级门禁没有退化；
+5. 改动已到达它允许的交付边界，而不只是留在研究目录或报告里。
+
+允许计入 VPI 的两类交付：
+
+- **系统能力改进**：真实性、数据、测量、pipeline 或性能的明确故障被修复；回归测试通过；对应 G0/G2/G3 门禁、证据契约或量化指标改善；代码已合并到 `main`。
+- **策略生产改进**：Challenger 通过 canonical purged OOS、ReleasePolicy v2、真实部署回执与 Canary，已由状态机发布为 `PRODUCTION`。
+
+以下结果有价值，但一律是 `VPI=0`：只读诊断、`FINDING`、`FALSIFIED`、仅生成 candidate/evidence、`dry_run`、重复运行已有实验、等待新样本、只增加日志或报告。它们不能被表述为“完成优化”。
+
+不得为了追求 VPI 制造无意义改动、放松真实性门禁、删掉盈利样本、降低覆盖率或绕过发布状态机。没有安全改进时，诚实报告 `NO_IMPROVEMENT` 或 `BLOCKED`。
+
+## 2. 不可绕过的事实源
+
+- 任务入口与前后对比：`scripts/self_check.py` 的 G0-G4、`NEXT_ACTION`。
+- 生产 selection：`backend/app/engine/production_policy.py` 与版本化 policy artifact。
+- 统一判定：`evaluate_selection_policy()`、`evaluate_challenger()`、`ReleasePolicy v2`。
+- 正式实验：`backend/scripts/run_canonical_backtest_experiment.py`。
+- 正式证据：`backtest_*` 表中的 schema v2 evidence。
+- 状态与发布：`backend/scripts/self_improve_state.py`；禁止直接写状态文件。
+- PATH-A 只能生成 `EXPLORATORY` 证据，不能发布生产策略。
+- Python 一律优先使用 `backend/.venv/bin/python`。
+
+selection governance 是自动状态机，不含人工审批：
 
 ```text
 AUDIT -> CANDIDATE_READY -> CANARY_RUNNING -> PRODUCTION
-  ^             |                  |
-  |             |                  +-> ROLLBACK -> AUDIT
-  +-------------+  (evidence/data failure)
+  ^                                |
+  +---------- ROLLBACK <-----------+
 ```
 
-- `selection_policy_governance.phase` 是治理阶段，合法值为 `audit`、`candidate_ready`、`canary_running`、`canary_passed`、`production`、`rollback`。
-- `audit_only` 仅是向后兼容的派生字段：`phase != production` 时为 `true`；研究员和 LLM 都不得直接写它。
-- `audit` 阶段可以诊断、修复测量工具、生成冻结候选快照、运行 canonical 双臂实验并发布 `FINDING` / `MEASUREMENT_FIX`。
-- 只有完成 canonical evidence、ReleasePolicy v2、`active` 模式的真实 deployment receipt 和 Canary gates 后，状态机才允许自动进入 `PRODUCTION`；`dry_run` 只能验证状态机，不能触发生产晋级；不存在人工审批步骤，也不存在按日历时间自动解锁。
-- 数据、测量、部署或 Canary 任一失败，自动回滚并回到 `AUDIT`；同一 candidate 不得在冷却期内重复尝试。
-- 生产板块、策略桶排除、regime penalty、hard veto、动态分数线、软降线或输出限制都不能被研究轮直接改写。
-- `selection_policy_governance` 缺失或 `phase` 缺失时按 `audit` 处理；迁移只在缺失时补默认值，不覆盖已有治理阶段。
-- 止损、止盈、trailing、仓位规则仍由当前 `ExecutionPolicy` 管理，不借本轮 selection 测量改造顺手变更。
+`audit_only` 是派生字段，禁止直接修改。selection 规则不得由研究轮直接改写；必须经过 canonical evidence、真实 `active` deployment receipt、Canary 和 `publish-champion`。`dry_run` 不能晋级生产。
 
-目标是在真实可执行、无未来函数、扣除费用的条件下改善 **purged OOS 组合结果**，同时保持策略有生命力。覆盖率、机会捕获和连续机会空仓是发布硬门禁，不是可忽略的展示指标。
+## 3. 每次运行的自主优化循环
 
-兼容且仍有效的执行契约：多窗口 `/loop` 直接调用是本项目唯一使用方式；每轮使用 `si-<当前时间戳>` 作为 researcher id。财务比较必须调用 `evaluate_challenger()`，selection 实验再叠加 ReleasePolicy v2。所有状态变更走 `publish-champion` / `publish-finding` / 状态机子命令，禁止直接写状态文件。
+### 3.1 初始化与隔离
 
-## 1. 唯一事实源
+第一条状态命令必须是幂等迁移。随后生成 `researcher_id=si-<timestamp>`，清理过期 claim，claim 一个未占用方向并建立独立 worktree。超过 15 分钟启动 heartbeat。所有命令和清理步骤按 `OPERATIONS.md` 执行。
 
-- 生产 selection：`backend/app/engine/production_policy.py` 与 repo 内版本化 policy artifact。
-- 生产和回测统一 evaluator：`evaluate_selection_policy()`；禁止在脚本中复制 regime、板块、桶排除或 score-line 规则。
-- 正式实验入口：`backend/scripts/run_canonical_backtest_experiment.py`。
-- 正式 selection 实验类型：`--experiment-kind production-policy`。
-- 正式证据：数据库 `backtest_*` 研究表中 `backtest_experiments.conclusion_json` 的 schema v2 evidence。
-- 发布门禁：`ReleasePolicy v2`；只使用 purged OOS 指标与 coverage/liveness gates。
-- 状态与发布：`backend/scripts/self_improve_state.py`。
-- 健康诊断：`scripts/self_check.py`。
-- PATH-A：`backend/scripts/si_path_a_signal_backtest.py`，仅是 `EXPLORATORY` candidate-source adapter，不得生成或声称 `PRODUCTION` evidence。
-- sequential replay：仅诊断旧 formal outcome/退出链；`n=0` 是 `INVALID_BASELINE`，不能作为完成证据。
+生成 `input_fingerprint`，至少绑定 champion/policy、repo commit、ExecutionPolicy、候选快照、数据水位、切分边界、hypothesis 和 changed rule。相同指纹的已完成实验不得重跑，不得重复消费 untouched holdout。
 
-调用工具前使用项目虚拟环境：`backend/.venv/bin/python`。具体状态字段和命令示例查 `.claude/self-improve/OPERATIONS.md`。
-
-## 2. 高频运行的幂等协议
-
-每轮先生成 `input_fingerprint`，至少包含：
-
-- 当前 champion commit、policy id/version/fingerprint；
-- repo commit、ExecutionPolicy fingerprint；
-- candidate source 与候选快照 fingerprint；
-- discovery/validation/holdout 日期边界；
-- 数据最新交易日、关键表水位；
-- hypothesis id、changed rule id 或策略参数差异。
-
-读取 `self-improve-state.json`、最近 runs 和 lessons。若相同 `input_fingerprint + hypothesis_id + experiment_kind` 已完成：
-
-- 不重复跑同一实验，不重复扫同一网格，不重新消费 untouched holdout；
-- 改做新的独立假设、未使用窗口、数据真实性修复或测量修复；
-- 没有新输入不是退出理由，但也不是重复利用同一证据的理由。
-
-同一 hypothesis 在相同 discovery 数据上只允许一次主要网格；连续三次未通过 validation/OOS 就归档。不得通过不断调阈值、换窗口边界或删除失败日期来复用同一 holdout。
-
-## 3. 研究员生命周期
-
-每轮研究的第一条状态命令必须是幂等迁移；它会把旧 state 的复制规则迁移为当前 repo policy 的 `id/version/fingerprint`，初始化 holdout ledger，并在治理阶段缺失时初始化为 `audit`：
-
-```bash
-backend/.venv/bin/python backend/scripts/self_improve_state.py migrate-state
-```
-
-`commit` 已退役；`publish-finding` 只能追加研究结果，不能修改 `canonical_production`、selection governance、release state 或 researcher registry。所有 selection 变更都必须经过 canonical evidence、ReleasePolicy v2 和发布状态机。
-
-每轮生成唯一 `researcher_id=si-<timestamp>`，然后：
-
-```bash
-backend/.venv/bin/python backend/scripts/self_improve_state.py prune-claimed
-backend/.venv/bin/python backend/scripts/self_improve_state.py claim-direction \
-  --researcher-id "$RESEARCHER_ID" --max-workers 3
-backend/.venv/bin/python backend/scripts/self_improve_state.py setup-worktree \
-  --researcher-id "$RESEARCHER_ID" --base-ref main
-```
-
-进入返回的独立 worktree，创建 `self-improve/si-<timestamp>` 分支。运行超过 15 分钟时启动 heartbeat daemon：
-
-```bash
-backend/.venv/bin/python backend/scripts/self_improve_state.py daemon-heartbeat \
-  --researcher-id "$RESEARCHER_ID" --interval 900 --max-duration 10800 &
-```
-
-若 heartbeat 返回 `invalidated` 或 `stale_champion`，立即停止使用旧 champion；已有结果只能发布 FINDING。
-
-无论结果如何，最后必须执行：
-
-```bash
-backend/.venv/bin/python backend/scripts/self_improve_state.py release-direction \
-  --researcher-id "$RESEARCHER_ID"
-backend/.venv/bin/python backend/scripts/self_improve_state.py release-worktree \
-  --researcher-id "$RESEARCHER_ID" --remove
-```
-
-## 4. PRECHECK：先判断系统有没有活着
+### 3.2 建立 before 基线并选任务
 
 先运行：
 
@@ -108,164 +68,93 @@ backend/.venv/bin/python scripts/self_check.py
 backend/.venv/bin/python backend/scripts/self_improve_state.py refresh-policy-health
 ```
 
-第一条命令维护策略页唯一允许展示的“当前版本最近 180 天 canonical 回测画像”。它按当前 `strategy_version + 默认参数 + ExecutionPolicy + 可结算窗口` 精确复用；同一天重复运行不会重算，版本、参数或窗口变化时旧画像自动失效。每轮最多补一个缺失画像，利用本命令一天多次运行逐步补齐，禁止用跨版本 LIVE 推荐收益作为兜底。
+保存 G0-G4、`NEXT_ACTION`、当前治理阶段和目标指标，按以下顺序选择**第一个可行动约束**：
 
-零票必须分成四类，禁止统称“保护性静默”：
+1. G0 或真实性失败：修数据、费用、未来函数、确定性重放、证据隔离；
+2. G2 失败：修 formal/pipeline/调度生命周期；
+3. G3 失败：修已测量到的性能瓶颈；
+4. 策略失活或 release 卡住：修 drop owner、部署 adapter、Canary 或状态机阻塞；
+5. G1 失败：攻击亏损贡献最大的稳定结构，再考虑退出/仓位；
+6. G1 仅因样本不足为 WARN：不得把“等待新样本”当任务；改做未使用窗口的独立假设、G4 challenger、低相关新策略或可验证的工程改进；
+7. 所有门禁健康：孵化与现有策略低相关的新策略。
 
-1. `reasonable_abstain`：有候选，但普通有效线未通过；
-2. `no_opportunity`：没有达到基础分数线且通过硬性可成交检查的 pre-policy card；
-3. `policy_blocked`：存在 opportunity，但 selection policy 全部拦截；
-4. `pipeline_fault`：没有 completed run、未到 score line、输入/行情/执行流水线故障。
+`NEXT_ACTION` 是起点，不是完成证明。诊断输出不能代替根因定位。
 
-最近 5 个 **opportunity days** 全部零票时标记 `strategy_inactive=true`，冻结新的 Champion 发布。completed run 仍可保留，但不得称为“保护性静默”。优先做单规则恢复反事实和 pipeline 审计。
+### 3.3 预注册一个可证伪改动
 
-真实性任一项失败时，只允许 `MEASUREMENT_FIX`：未来函数、T+1/涨跌停/停牌语义错误、费用遗漏、历史补跑伪装 LIVE、实验写入 LIVE 表、同输入不能确定性重放、LLM/网络参与 rule-only replay、候选双臂不共享快照。
+每次实验只改变一个业务 `rule_id`、一个策略变量或一个根因修复。开始编辑前写清：
 
-## 5. 每轮只选一个动作
+> 如果 X 是根因，那么只改变 Y，指标 Z 应从 before 改善到门槛 T，且 G0/真实性、coverage、liveness 和更高优先级门禁不得退化。
 
-优先级：
+同时写明目标文件、定向测试、回滚点和交付边界。没有预期代码/状态 delta 的“继续观察”不是可执行假设。
 
-1. 修复真实性或正式测量工具；
-2. 恢复失活策略：逐条审计 drop owner 和单规则反事实；
-3. 亏损贡献最大的稳定结构；
-4. 退出或仓位；
-5. 与现有策略低相关的新策略；
-6. 阻断上述工作的工程故障。
+### 3.4 实施、验证、保留或回滚
 
-假设必须预注册：
+1. 实施能验证假设的最小实际改动；bug/契约修复优先先写失败测试。
+2. 运行最小定向测试，再运行受影响模块的完整测试。
+3. 策略改动运行 canonical 双臂实验；系统改动重跑同口径 benchmark/诊断。
+4. 重跑 `self_check.py`，得到 after 快照并与 before 比较。
+5. 只有达到预注册门槛且无高阶退化才保留；否则回滚本次改动，发布诚实的 `FALSIFIED`/`FINDING`。
+6. 一次失败实验不是优化完成。只要当前执行窗口仍允许，就归档该假设并自动选择下一个未使用方向；连续三个独立假设失败则归档整个方向。
 
-> 如果 X 是原因，那么只改变 rule/parameter Y，在冻结候选和 ExecutionPolicy 上，purged OOS 的净收益/PF/回撤应满足发布条件，且 opportunity capture 与连续空仓满足 ReleasePolicy v2。
+这是棘轮，不是“每轮必须提交代码”：坏改动必须回滚，禁止为产生 diff 而提交。
 
-一次实验只允许一个业务 `rule_id` 或一个策略变量变化；版本、备注、experiment id 不算业务变化。selection policy 恢复实验优先依次测试：结构性强势 veto、震荡 veto、20cm-only、两个 bucket 排除；每次只能改一条。
+## 4. 策略证据硬门禁
 
-同一研究方向连续三个独立假设被 `FALSIFIED`，或该方向的预注册实验集合完成后，必须归档该方向并自动 claim 下一个方向。`MEASUREMENT_FIX`、`INVALID_EVIDENCE` 和 `BLOCKED` 不计作业务假设失败，但在问题解决前不得推进到生产晋级。
+正式 selection/strategy 实验必须同时满足：
 
-五项预注册恢复实验使用 `backend/scripts/run_policy_recovery_counterfactuals.py --candidate-snapshot-file <snapshot>`；它们只产生 candidate evidence，不直接改变治理阶段。满足全部自动晋级门禁后，由状态机负责 Canary 和发布。
+- Discovery/Validation/Untouched Holdout 按时间 60/20/20，边界 purge/embargo；发布只看 purged OOS；
+- Champion/Challenger 共享同一冻结候选快照、ExecutionPolicy、成交模拟、费用模型和 vectorbt validator；
+- 恰好一个 changed rule/variable，所有写入只进入 `backtest_*`；
+- OOS 非零成交、非零 productive day，productive days ≥ champion 的 50%（至少 1）；
+- opportunity capture ≥ `max(20%, champion 的 50%)`，连续 opportunity abstain ≤ 5；
+- 收益/PF/回撤门槛通过，且 changed rule 不得新增丢弃 positive executed trade；
+- 无未来函数、T+1/涨跌停/停牌错误、费用遗漏、LIVE 表污染、网络/LLM 参与 rule-only replay。
 
-## 6. 数据切分与候选冻结
+任一真实性项失败，先修测量并记 `MEASUREMENT_FIX`；修复只有在代码、测试、before/after 证据均落地后才可能算系统能力 VPI。任何缺失 evidence、快照、部署回执或 Canary 样本都不得声称 `PRODUCTION`。
 
-Discovery、Validation、Untouched Holdout 必须严格隔离：
+## 5. 交付与失败分支
 
-- chronological 60/20/20；
-- 两个边界都 purge/embargo；长度为 `entry_lookahead_days + horizon_days`；
-- 任一分区为空，结论是 `INVALID_EVIDENCE`；
-- 发布只看 `out_of_sample`；全窗口汇总仅作解释；
-- untouched holdout 一旦被用于选择规则/阈值，就降级为 validation，后续实验必须使用新的未触碰 holdout。
+| 结果 | 必须动作 | 是否完成优化 |
+|---|---|---|
+| 系统修复通过 | 提交、推送、按发布锁流程合并 `main`，记录 before/after | 是，`VPI=1` |
+| 策略 Canary 通过 | `publish-champion`，确认 production fingerprint | 是，`VPI=1` |
+| Candidate 仅通过 OOS | 推进到真实部署/Canary；若外部条件缺失则记录精确 blocker | 否 |
+| 实验被证伪 | 回滚改动、记录 lesson、换独立假设 | 否 |
+| Evidence 无效 | 停止策略结论，转为修复测量契约 | 否 |
+| 外部条件确实不可用 | 记录已尝试修复、责任边界、解除条件和下一动作 | 否，`BLOCKED` |
 
-selection policy 实验流程：
+`publish-finding` 只能记录研究结果，不能修改 champion 或治理阶段。生产 selection 的发布、回滚和 release slot 所有权完全服从状态机。
 
-1. 使用 production scoring stages 的 rule-only replay；禁止 LLM、网络、行情写入和 LIVE 表写入；
-2. 在 pool rules 之前冻结 `ScoredCandidateSnapshot`：完整 scored cards、market snapshot、策略版本、outcome bars 和输入 fingerprint；
-3. Champion/Challenger 共享完全相同的 candidate snapshot fingerprint；
-4. 仅 policy fingerprint 不同，且恰好一个 changed rule id；
-5. 两臂调用同一个 production policy evaluator、成交模拟、费用模型和 vectorbt validator；
-6. 所有记录只写 `backtest_*` 研究表。
+每条 `run_record` 必须额外记录 `vpi`、`delivery_status`、最高优先级约束、before/after、验证证据和交付位置；VPI rate 只从这些结构化记录计算，不从自然语言报告猜测。
 
-运行示例：
+无论成功失败，最后都要释放 direction、终止 heartbeat 并清理 worktree。只清理本轮创建的资源；禁止删表、清库、修改 `.env`、force push 或 `git reset --hard`。
 
-```bash
-backend/.venv/bin/python backend/scripts/run_canonical_backtest_experiment.py \
-  --experiment-kind production-policy \
-  --candidate-source production-rule-replay \
-  --candidate-snapshot-file <frozen_snapshot.json> \
-  --champion-policy-id production-selection \
-  --challenger-policy-patch '{"structural_strong_hard_veto":false}' \
-  --hypothesis '<预注册假设>'
-```
+## 6. 反模式黑名单
 
-若尚无冻结文件，可省略 `--candidate-snapshot-file`，改传 `--start/--end` 与 `--candidate-snapshot-output`；CLI 会用只读 `ProductionRuleReplayCandidateBuilder` 生成并冻结快照。
+- 读完代码、跑完现有脚本、写一份分析就结束；
+- 把 `FINDING`、candidate、提交数或实验次数包装成改进；
+- G1 样本不足时只写“等待新 LIVE 样本”；
+- 重复同一指纹、网格、窗口或 holdout；
+- 只增加日志/诊断，却不修复诊断暴露的最高优先级根因；
+- 同时改多个策略变量，事后无法归因；
+- 用删票、降低覆盖、增加空仓或缺失 outcome 制造漂亮指标；
+- 绕过 evaluator、ReleasePolicy、deployment receipt、Canary 或状态工具；
+- 顺手重构无关代码，或为满足 VPI 制造无意义 diff。
 
-策略自身参数实验使用 `--experiment-kind strategy`，不得用 PATH-A 的聚合结果冒充 canonical evidence。LLM prompt/model 变化只能用冻结 recorded-review snapshot 单独实验。
+## 7. 最终报告
 
-## 7. 正式 evidence 与发布判定
+首行必须是：`IMPROVEMENT_DELIVERED (VPI=1)`、`NO_IMPROVEMENT (VPI=0)` 或 `BLOCKED (VPI=0)`。
 
-Evidence schema v2 至少包含：
+随后只报告：
 
-- experiment kind、candidate snapshot fingerprint；
-- champion/challenger policy fingerprints、changed rule id；
-- split policy、decision scope；
-- 每臂全窗口与 split metrics；
-- `PortfolioCoverageEvidence`；
-- productive days、opportunity capture、productive-day capture、连续 opportunity abstain；
-- paired opportunity-cost：仅统计 champion 选中而 challenger 因 changed rule 新增拒绝的候选，包含新增拒绝执行数、盈利数、丢失正收益/净收益、drop owner、regime 和缺失 outcome bars；
-- rule verdict summary；
-- vectorbt cross-validation；
-- evidence fingerprint。
+1. 最高优先级约束、唯一假设和实际 changed rule/file；
+2. before → after 的 G0-G4/目标指标，以及是否达到预注册门槛；
+3. 保留的实际改动、测试结果、commit/merge/deployment 状态；
+4. 策略实验的 snapshot/evidence fingerprint、purged OOS 收益/胜率/PF/回撤与 coverage/liveness；
+5. 当前 governance/release 阶段和失败 gate；
+6. 是否写入 `backtest_*`，是否发生 LIVE/网络/LLM 写调用；
+7. 若 VPI=0，给出已回滚内容、精确 blocker 或下一个未使用假设；
+8. direction、heartbeat 和 worktree 清理结果。
 
-Opportunity day：至少一张 pre-policy card 达到基础分数线、通过硬性可成交检查。每臂报告 eligible days、opportunity days、active days、executed trades、opportunity capture rate、abstain days、最大连续 opportunity abstain。
-
-Challenger 只有同时满足以下条件才可成为发布候选：
-
-- 原收益/PF/回撤比较条件在 purged OOS 成立；
-- OOS 至少一笔 executed trade，零票 challenger 一律拒绝；
-- OOS 至少一个 productive day，且 productive days 不低于 champion 的 50%（至少 1 天）；
-- opportunity capture rate ≥ `max(20%, champion 的 50%)`；
-- 最大连续 opportunity abstain ≤ 5 个交易日；
-- 恰好一个 changed rule；
-- 两臂 vectorbt truth 通过。
-- changed rule 在 OOS 不得新增丢弃任何 positive executed trade；新增拒绝的 counterfactual outcome 不得缺失；
-
-零票 champion 不阻止非零恢复 challenger；但 challenger 必须通过全部收益和 liveness gates。禁止用覆盖下降、abstain 增加或删除亏损交易来解释为“准确率提升”。任何 filter 必须报告删掉的盈利/亏损、drop owner、机会成本和跨 regime 表现。
-
-决策值：
-
-- `PRODUCTION_CANDIDATE`：canonical evidence 的 `should_publish=true`，但当前 audit-only 下仍只能记录 FINDING；
-- `FALSIFIED`：任一收益或 liveness gate 不通过；
-- `INVALID_EVIDENCE`：切分、快照、指纹、truth validator 或正式数据契约失败；
-- `MEASUREMENT_FIX`：只修复测量，不声称收益改善；
-- `FINDING`：有可信研究结果但不改变 champion；
-- `BLOCKED`：数据与测量设施都不可用，且本轮修复失败。
-
-## 8. 发布—部署—Canary—回滚状态机
-
-不得从回测结果直接改 champion。正式流程是：
-
-```text
-draft -> evidence_verified -> canary_running -> canary_passed -> completed
-                                      |-> rollback_required -> rolled_back
-```
-
-- `publish-champion` 必须传 `--canonical-evidence-id`；工具从数据库读取 evidence，不信任调用者拼装 JSON。
-- evidence 的 champion/challenger fingerprints、single-rule gate、全部 liveness gates 和 `should_publish` 必须匹配。
-- `deployment_confirmed` 必须带真实 `deployment_fingerprint`；没有部署 adapter/回执时停在 `evidence_verified`，不得伪造部署成功。
-- Canary 监控推荐活性、错误率、policy fingerprint 和已结算 LIVE 指标；失败进入 `rollback_required`。
-- `canary_passed` 后，`publish-champion` 在同一锁内自动把治理阶段设为 `production` 并发布 candidate；研究员不能通过参数绕过 evidence 或 Canary。
-- `canary_failed` 自动触发 rollback；rollback 完成后治理阶段回到 `audit`，并记录 candidate fingerprint、失败原因和冷却窗口。
-- 多线程共享一个全局 release slot：第一个 `researcher_id` 原子占用 candidate，后续线程收到 `RELEASE_BUSY` 后只能发布 FINDING，不得操作该 candidate；后续 transition 和 `publish-champion` 必须匹配 owner 与 candidate fingerprint。
-- owner heartbeat 过期时，`prune-claimed` / 下一次 claim 会先自动 rollback 并 reclaim release slot；rollback 无法验证时保持 `BLOCKED`，不得把槽位静默让给另一个 candidate。
-- 任何缺失 evidence、快照、指纹、部署回执、Canary 样本或数据健康条件，都只能停留在当前阶段并报告 `BLOCKED` / `INVALID_EVIDENCE`。
-
-状态机命令：
-
-```bash
-backend/.venv/bin/python backend/scripts/self_improve_state.py advance-release \
-  --researcher-id "$RESEARCHER_ID" \
-  --event verify_evidence --details '{"evidence_id":"...","policy_fingerprint":"..."}'
-```
-
-后续只有外部部署/Canary 有真实回执时才能推进相应事件。
-
-## 9. 记录、提交与安全
-
-- FINDING 用 `publish-finding`；不得通过 `commit` 改 `canonical_production`。
-- untouched holdout 必须先 claim；同一 fingerprint + hypothesis + experiment kind 幂等复用，其他 hypothesis 不能重复消费；消费后自动降级为 validation。
-- selection policy 的 state 只保存 policy id/version/fingerprint，不复制规则。
-- 记录 hypothesis id、input fingerprint、candidate snapshot fingerprint、evidence id/fingerprint、changed rule、OOS metrics、coverage、decision 和回滚点。
-- 测量修复及测试可以合并；生产策略语义变更必须经过上述完整状态机。
-- Python 测试使用项目 `.venv`；禁止删表、清空数据、修改 `.env`、force push、`git reset --hard`，禁止把 backtest/replay 写进 LIVE formal 表。
-- LLM/网络调用默认 0；只有 prompt/model 研究允许有上限的 recorded canary。
-
-## 10. 最终报告
-
-只报告：
-
-1. 唯一主假设和 changed rule/variable；
-2. candidate snapshot 与 evidence fingerprint；
-3. purged OOS 的净收益、胜率、PF、回撤差值；
-4. opportunity/active/executed/capture/连续 abstain；
-5. truth validation 与失败 gates；
-6. `FINDING / FALSIFIED / INVALID_EVIDENCE / MEASUREMENT_FIX / BLOCKED`，以及当前治理阶段；只有状态机完成自动 Canary 后才能报告 selection `PRODUCTION`；
-7. 是否写入 `backtest_*`、是否有任何 LIVE/网络/LLM 写调用；
-8. release-direction 和 worktree 清理结果。
-
-代码行数、提交数、运行次数和“今天没有新 LIVE 样本”都不是进展指标。
+代码行数、研究篇幅、提交数、运行次数和“今天没有新样本”都不是进展指标。
