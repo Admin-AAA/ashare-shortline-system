@@ -12,7 +12,7 @@
 
 教训：n≈200 的 LIVE 样本上，单特征 point-biserial 的「头部」相关几乎都是「稀疏特征 ×
 单日 regime」的乘积。若不显式检验，self-improve 会每轮把这些噪声当成「高预测力因子」
-去加 entry/exit 规则，反复过拟合同一个交易日的噪声（与 lessons #187 / #350 同构）。
+去加 entry/exit 规则，反复过拟合同一个交易日的噪声（对应 canonical L-004；历史轮次 #187 / #350）。
 
 本模块提供 `evaluate_feature_signal`：给定「信号正例」的 (trade_date) 列表，输出该信号
 是否**可信到足以为之加规则**。判定两条（任一命中即不可信）：

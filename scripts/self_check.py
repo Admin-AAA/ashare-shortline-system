@@ -2296,7 +2296,7 @@ def _single_day_pl_drag(rows: list, trade_dates: set) -> dict | None:
     """纯函数：诊断近 N 日窗口内 PF 是否被单一交易日拖累（单日 regime 噪声 vs 真退化）。
 
     背景（第191轮 T3 实证）：D 项近10日净盈亏比低于基线时，需先区分「单日情绪异常日
-    主导」vs「多日普遍低 PF」。前者（如单一冰点被误判活跃日，见 lessons #350 /
+    主导」vs「多日普遍低 PF」。前者（如单一冰点被误判活跃日，对应 canonical L-004 /
     no_follow_through 子簇护栏）个股 entry 侧不可解、禁止加规则；后者才需正常排查。
     若不显式诊断，运营者看到 PF<基线 会误判真退化、循环加 entry 规则过拟合噪声。
 
@@ -2555,7 +2555,7 @@ def check_d_item(db) -> None:
     _fmt_d_cost('D 项(近10交易日)', _compute_d_cost(rows, trade_dates=last10),
                 WIN_RATE_BASELINE, PL_RATIO_BASELINE)
     # 单日 PF 拖累护栏：近10日 PF 低于基线时，诊断是否被单一交易日（情绪异常日）主导。
-    # 是 → 明确「单日 regime 驱动，非策略退化」，禁止据此循环加 entry 规则（lessons #350）。
+    # 是 → 明确「单日 regime 驱动，非策略退化」，禁止据此循环加 entry 规则（canonical L-004）。
     _drag = _single_day_pl_drag(rows, last10)
     if _drag is not None:
         print(f'  ⚠️ 护栏: 近10日盈亏比被单日 {_drag["worst_day"]} 拖累——该日亏损占窗口 '
@@ -2632,7 +2632,7 @@ def check_d_item(db) -> None:
               f'— 后续轮次禁止对 20cm 加风险闸门/降权（会损害 D 项）')
 
     # T5 一致性护栏：market_regime_score 必须保持逆势立场（强牛返分<弱市返分）。
-    # 若被"修正校准"翻转会放行更差票、D 项恶化（过拟合，lessons #185 已锁）。
+    # 若被"修正校准"翻转会放行更差票、D 项恶化（过拟合，canonical L-003 已锁）。
     _calib = _check_market_regime_calibration()
     if _calib:
         print(f'  {_calib}')
@@ -3422,7 +3422,7 @@ def _entry_separability_falsified(fail_items: list[dict], success_items: list[di
     背景（第192轮 T3 实证）：no_follow_through low_vol 失败笔与同窗口成功笔在
     vol5_20(1.18 vs 1.38)、pos60(77.3 vs 78.3) 中位数几乎完全重叠（rel_gap 0.14/0.01）。
     这两个是最干净的维度——量能(vol5_20)与位置(pos60)误伤率低；而 turnover/chg20 虽有
-    中等 gap(0.44/0.36)但 lessons #350 已证伪其阈值误伤 40%+（误删最佳股票），不可用。
+    中等 gap(0.44/0.36)但 canonical L-004 已证伪其阈值误伤 40%+（误删最佳股票），不可用。
     干净维度全重叠 + 中等维度误伤过高 → 无高特异性 entry 规则可加，失败由 regime 驱动
     而非个股特征，entry 侧不可解。
 

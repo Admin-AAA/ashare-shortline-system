@@ -1,4 +1,4 @@
-"""serialize_run_summary 的 evaluation_scope 投影契约（L-047 回归防护）。
+"""serialize_run_summary 的 evaluation_scope 投影契约（L-051 回归防护）。
 
 前端 RunModeBadge 靠 evaluation_scope 区分「实盘正式推荐」与「历史回放/补跑」：
 REPLAY run 的 run_mode=formal 但 evaluation_scope=historical_replay，若后端不暴露该

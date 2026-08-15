@@ -379,7 +379,7 @@ skill-name/
 
 ## 教训与经验沉淀
 
-项目中可跨轮复用、会改变后续决策的教训，统一存放在 [`docs/lessons/LESSONS.md`](docs/lessons/LESSONS.md)，具体格式和边界见 [`docs/lessons/README.md`](docs/lessons/README.md)。
+项目中可跨轮复用、会改变后续决策的教训，统一存放在 [`docs/lessons/LESSONS.md`](docs/lessons/LESSONS.md)，具体格式和边界见 [`docs/lessons/README.md`](docs/lessons/README.md)；可靠性核验见 [`docs/lessons/VALIDATION.md`](docs/lessons/VALIDATION.md)。
 
 存放边界如下：
 

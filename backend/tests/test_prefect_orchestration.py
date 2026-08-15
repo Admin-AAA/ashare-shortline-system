@@ -50,7 +50,7 @@ def test_recommendation_trigger_carries_only_durable_run_id(monkeypatch) -> None
 
 
 def test_trigger_forces_sync_path_in_async_context(monkeypatch) -> None:
-    """L-046 redispatch 静默失败回归：trigger 在 async event loop 中被调用时，
+    """L-052 redispatch 静默失败回归：trigger 在 async event loop 中被调用时，
     run_deployment 的 async_dispatch 会派发到 arun_deployment 返回未 await 的
     coroutine（'arun_deployment was never awaited'），调度实际未执行。
     _sync=True 强制同步路径，确保 redispatch 真实发生。"""

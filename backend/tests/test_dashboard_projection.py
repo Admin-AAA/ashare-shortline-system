@@ -452,7 +452,7 @@ def test_bootstrap_latest_run_prioritizes_live_forward_over_replay(db):
 
     回归防护：bootstrap_workbench_state 的 recent_runs.latest 此前用 list_runs(db)[0]
     （按 started_at DESC），REPLAY/历史补跑 run 会顶掉当日正式推荐（与
-    test_dashboard_run_selector_ignores_replay_run_over_today_live 同类，L-045）。
+    test_dashboard_run_selector_ignores_replay_run_over_today_live 同类，L-046）。
     修复后 _select_latest_bootstrap_run 复用同一排序语义。
     """
     from app.models.tables import RecommendationRun
