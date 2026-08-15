@@ -59,6 +59,8 @@ AUDIT -> CANDIDATE_READY -> CANARY_RUNNING -> PRODUCTION
 
 生成 `input_fingerprint`，至少绑定 champion/policy、repo commit、ExecutionPolicy、候选快照、数据水位、切分边界、hypothesis 和 changed rule。相同指纹的已完成实验不得重跑，不得重复消费 untouched holdout。
 
+选题前必须先读 `docs/lessons/README.md`，并按当前方向、模块和 changed rule 搜索 `docs/lessons/LESSONS.md`。`active`/`encoded` 教训是本轮约束，已证伪方向和已扫描网格不得重新研究；`superseded` 条目只用于追溯。
+
 ### 3.2 建立 before 基线并选任务
 
 先运行：
@@ -100,6 +102,10 @@ backend/.venv/bin/python backend/scripts/self_improve_state.py refresh-policy-he
 
 这是棘轮，不是“每轮必须提交代码”：坏改动必须回滚，禁止为产生 diff 而提交。
 
+### 3.5 沉淀新教训
+
+收尾时按 `docs/lessons/README.md` 判断本轮结论：单次数字和普通实验只进入 `run_record`；有证据、可跨轮复用且会改变后续决策的规则，必须先去重，再以唯一 `L-###` 追加或修订 `docs/lessons/LESSONS.md`，填写状态、适用、证据、永久规则和吸收位置。原始证据留在原目录并由条目回链，不得把教训写入项目外 memory、单次报告或另一份注册表。
+
 ## 4. 策略证据硬门禁
 
 正式 selection/strategy 实验必须同时满足：
@@ -121,13 +127,13 @@ backend/.venv/bin/python backend/scripts/self_improve_state.py refresh-policy-he
 | 系统修复通过 | 提交、推送、按发布锁流程合并 `main`，记录 before/after | 是，`VPI=1` |
 | 策略 Canary 通过 | `publish-champion`，确认 production fingerprint | 是，`VPI=1` |
 | Candidate 仅通过 OOS | 推进到真实部署/Canary；若外部条件缺失则记录精确 blocker | 否 |
-| 实验被证伪 | 回滚改动、记录 lesson、换独立假设 | 否 |
+| 实验被证伪 | 回滚改动；若形成跨轮规则则登记 canonical `L-###`；换独立假设 | 否 |
 | Evidence 无效 | 停止策略结论，转为修复测量契约 | 否 |
 | 外部条件确实不可用 | 记录已尝试修复、责任边界、解除条件和下一动作 | 否，`BLOCKED` |
 
 `publish-finding` 只能记录研究结果，不能修改 champion 或治理阶段。生产 selection 的发布、回滚和 release slot 所有权完全服从状态机。
 
-每条 `run_record` 必须额外记录 `vpi`、`delivery_status`、最高优先级约束、before/after、验证证据和交付位置；VPI rate 只从这些结构化记录计算，不从自然语言报告猜测。
+每条 `run_record` 必须额外记录 `vpi`、`delivery_status`、最高优先级约束、before/after、验证证据、交付位置和 canonical `lesson_ids`；VPI rate 只从这些结构化记录计算，不从自然语言报告猜测。
 
 无论成功失败，最后都要释放 direction、终止 heartbeat 并清理 worktree。只清理本轮创建的资源；禁止删表、清库、修改 `.env`、force push 或 `git reset --hard`。
 
@@ -155,7 +161,7 @@ backend/.venv/bin/python backend/scripts/self_improve_state.py refresh-policy-he
 4. 策略实验的 snapshot/evidence fingerprint、purged OOS 收益/胜率/PF/回撤与 coverage/liveness；
 5. 当前 governance/release 阶段和失败 gate；
 6. 是否写入 `backtest_*`，是否发生 LIVE/网络/LLM 写调用；
-7. 若 VPI=0，给出已回滚内容、精确 blocker 或下一个未使用假设；
+7. 本轮新增/修订的 canonical `L-###`；若 VPI=0，再给出已回滚内容、精确 blocker 或下一个未使用假设；
 8. direction、heartbeat 和 worktree 清理结果。
 
 代码行数、研究篇幅、提交数、运行次数和“今天没有新样本”都不是进展指标。
