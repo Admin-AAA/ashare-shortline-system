@@ -138,27 +138,18 @@ def build_agent_skill_invocation(
 
 
 def enrich_signal_with_agent_review(signal: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
+    """Attach an LLM risk review without changing the strategy rule score.
+
+    Strategy rules own alpha and ranking.  The review remains fully persisted
+    for audit, while its risks/veto/action are consumed as a risk overlay by
+    the downstream aggregator and execution confirmation path.
+    """
     enriched = dict(signal)
     enriched["agent_skill_review"] = review
     enriched["runtime"] = "strategy_yaml+agent_skill"
-    score_cap = float(enriched.get("score_cap") or 100.0)
-    # 兼容两种字段名：score_delta（旧）或 score（SkillReviewOutput 原始）
-    if "score_delta" in review:
-        delta = float(review.get("score_delta", 0))
-    else:
-        delta = float(review.get("score", 50)) - 50.0
-    # T5 一致性（self-improve，2026-07-21）：反对票(oppose)不得为股票加分。
-    # 逻辑：stance=oppose 表示 LLM 明确反对这笔交易，其 score_delta 却可能因
-    # score≥50 而为正，导致"反对票把股票推过 score_line"（self_check 实证 1 笔
-    # oppose 票 WR=0% 因此被推过线）。此处将 oppose 的加分钳到 ≤0——oppose 只能
-    # 中性或减分，绝不能作为股票过线的正向贡献。
-    # 安全性：仅当 stance==oppose 且 delta>0 时行为变化；support/neutral/veto 不变。
-    # 规则分本身已 ≥ 正式地板(72)的股票仍会过线（隐藏强票被保留），只有"靠 oppose
-    # 加分才勉强过线"的边际票被挡下，与"准确>可见"一致，不牺牲真实赢家。
-    if review.get("stance") == "oppose" and delta > 0:
-        delta = 0.0
-    enriched["score"] = max(0.0, min(score_cap, float(enriched.get("score", 0)) + delta))
-    enriched["confidence"] = max(float(enriched.get("confidence", 0)), float(review.get("confidence", 0)))
+    # score_delta is deliberately retained inside agent_skill_review for
+    # audit/ablation, but never written back to the rule-owned score.
+    enriched["llm_influence_mode"] = "risk_overlay"
     enriched.setdefault("evidence", [])
     review_runtime = str(review.get("runtime") or "")
     summary = str(review.get("summary", "")).strip()
@@ -169,21 +160,14 @@ def enrich_signal_with_agent_review(signal: dict[str, Any], review: dict[str, An
     if review.get("stance") == "veto":
         enriched["hard_veto"] = True
         enriched["veto_reason"] = str(review.get("summary") or "Agent Skill 风险否决")
-    if score_cap < 100:
-        enriched["risk_flags"] = list(dict.fromkeys(list(enriched["risk_flags"]) + ["样本或证据覆盖不足，Agent 加分受限"]))
+    if float(enriched.get("score_cap") or 100.0) < 100:
+        enriched["risk_flags"] = list(dict.fromkeys(list(enriched["risk_flags"]) + ["样本或证据覆盖不足，规则评分受限"]))
     return enriched
 
 
 def agent_only_signal(skill: StrategySkill, stock: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
-    if "score_delta" in review:
-        delta = float(review.get("score_delta", 0))
-        # T5 一致性（self-improve，2026-07-21）：oppose 不得加分（与 enrich 路径一致）。
-        # agent_only 无规则基线，oppose 即封顶到中性(50)，绝不赖 oppose 加分过线。
-        if review.get("stance") == "oppose" and delta > 0:
-            delta = 0.0
-        score = 50 + delta
-    else:
-        score = float(review.get("score", 50))
+    # 没有规则信号时，LLM 只能提供风险信息，不能凭审查结果创造 alpha。
+    score = 50.0
     return {
         "strategy_id": skill.skill_id,
         "strategy_name": skill.name,
@@ -194,13 +178,14 @@ def agent_only_signal(skill: StrategySkill, stock: dict[str, Any], review: dict[
         "setup_match": "Skill 方法论匹配" if review.get("stance") in {"support", "strong_support"} else "",
         "entry_rule": _agent_entry_rule(stock, review),
         "invalid_rule": _agent_invalid_rule(review),
-        "setup_quality": 55 + max(0.0, float(review.get("score_delta", 0))),
+        "setup_quality": 50.0,
         "hard_veto": review.get("stance") == "veto",
         "veto_reason": "Agent Skill 风险否决" if review.get("stance") == "veto" else "",
         "risk_flags": review.get("risks", []),
         "evidence": review.get("supports", []) + [review.get("summary", "")],
         "weight": 1.0,
         "runtime": "agent_skill_only",
+        "llm_influence_mode": "risk_overlay",
         "agent_skill_review": review,
     }
 

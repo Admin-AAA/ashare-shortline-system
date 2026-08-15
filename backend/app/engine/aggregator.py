@@ -76,7 +76,7 @@ _RISK_SEVERITY_RULES: list[tuple[list[str], str]] = [
     (["样本或证据覆盖不足", "数据完整度", "证据质量不足"], "info"),
     (["龙虎榜数据缺失", "无龙虎榜数据", "新闻/公告未完整覆盖", "题材标签缺失", "多源报价存在冲突"], "info"),
     (["样本仅", "评分已按覆盖率降权", "评分已降权"], "info"),
-    (["Agent 加分受限"], "info"),
+    (["Agent 加分受限", "规则评分受限"], "info"),
     (["数据为估计值", "可靠性稍低"], "info"),
 ]
 
@@ -104,14 +104,18 @@ DEFAULT_AGG_WEIGHTS = {
 AGG_WEIGHT_KEYS = list(DEFAULT_AGG_WEIGHTS.keys())
 COMPONENT_KEYS = list(DEFAULT_AGG_WEIGHTS.keys())
 
-# 有 Agent 审查时的权重（strategy_rule 降为辅证，skill_agent 主导）
-AGENT_PRESENT_WEIGHTS = {
-    "skill_agent": 0.55,
-    "strategy_rule": 0.15,
-    "market": 0.10,
-    "risk": 0.10,
+# LLM 只作为风险 overlay：规则负责 alpha/排序，LLM 只能通过风险标签、
+# veto 和执行确认影响结果。保留 skill_agent 分量为 0，避免审查分数再次
+# 通过聚合器改变候选排序。
+RISK_OVERLAY_WEIGHTS = {
+    "skill_agent": 0.00,
+    "strategy_rule": 0.55,
+    "market": 0.20,
+    "risk": 0.15,
     "evidence": 0.10,
 }
+# 旧导入名保留，避免外部调用方在迁移期间崩溃；语义已改为 risk overlay。
+AGENT_PRESENT_WEIGHTS = RISK_OVERLAY_WEIGHTS
 
 # --- 市场阶段阈值（涨停率 / 上涨比） ---
 # 基于历史数据回测：高潮胜率 62.2% vs 活跃 55.1%（Δ=+7.2pp, t=3.17）
@@ -609,20 +613,7 @@ def _consensus_boost(
         boost *= 0.90
         consensus_tags.append("multi_oppose_strike")
 
-    # ── 3. 一致方向加成 ──
-    if stance_summary and len(stance_summary) >= 2:
-        bullish_stances = {"strong_support", "support", "neutral_support"}
-        bearish_stances = {"oppose", "veto"}
-        all_bullish = all(s.get("stance") in bullish_stances for s in stance_summary)
-        all_bearish = all(s.get("stance") in bearish_stances for s in stance_summary)
-        if all_bullish:
-            boost *= 1.05
-            consensus_tags.append("all_bullish_aligned")
-        elif all_bearish:
-            boost *= 1.03
-            consensus_tags.append("all_bearish_aligned")
-
-    # ── 4. 严重分歧惩罚 ──
+    # ── 3. 严重分歧惩罚 ──
     if stance_summary:
         has_strong_support = any(s.get("stance") == "strong_support" for s in stance_summary)
         has_veto = any(s.get("stance") == "veto" for s in stance_summary)
@@ -736,9 +727,9 @@ def aggregate(
     else:
         weights = dict(calibrated_weights or DEFAULT_AGG_WEIGHTS)
 
-    # 有 Agent 审查时 skill_agent 主导，策略规则降为辅证
+    # LLM 审查只做风险 overlay；策略规则始终负责 alpha 和排序。
     if has_agent_reviews:
-        weights.update(AGENT_PRESENT_WEIGHTS)
+        weights.update(RISK_OVERLAY_WEIGHTS)
     else:
         weights["skill_agent"] = 0.00
         weights["strategy_rule"] = 0.55
@@ -876,6 +867,7 @@ def aggregate(
             "raw_scores": raw_component_scores,
             "weighted_scores": weighted_component_scores,
             "weights": {key: round(value, 4) for key, value in weights.items()},
+            "llm_influence_mode": "risk_overlay" if has_agent_reviews else "rule_only",
             "consensus_boost": round(consensus_boost, 4),
             "quality_cap": round(quality_cap, 2),
             "final_score": round(final_score, 2),
@@ -889,6 +881,7 @@ def aggregate(
         "stance_summary": stance_summary,
         "authenticity_severe_discount": authenticity_severe_discount,
         "aggregation_weights": weights,
+        "llm_influence_mode": "risk_overlay" if has_agent_reviews else "rule_only",
         "component_scale": round(component_scale, 4),
         "market_regime": _market_regime_label(market_snapshot),
         "skill_disagreement": skill_disagreement_metrics(signals),
@@ -1431,12 +1424,12 @@ def _dedup_info_tags(tags: list[str]) -> list[str]:
     result: list[str] = []
     seen_groups: set[str] = set()
     for tag in tags:
-        group = "coverage" if any(kw in tag for kw in ("样本", "评分已降权", "证据质量不足", "Agent 加分受限")) else tag
+        group = "coverage" if any(kw in tag for kw in ("样本", "评分已降权", "证据质量不足", "Agent 加分受限", "规则评分受限")) else tag
         if group in seen_groups:
             continue
         seen_groups.add(group)
         if group == "coverage":
-            result.append("样本或证据覆盖不足，评分与 Agent 加分已降权")
+            result.append("样本或证据覆盖不足，规则评分与风险 overlay 均受限")
         else:
             result.append(tag)
     return result

@@ -293,8 +293,8 @@ def test_run_workbench_pure_computation_matches_golden_master():
     assert actual == {
         "candidate": {
             "code": "600001",
-            "final_score": 90.11,
-            "consensus_score": 88.6,
+            "final_score": 85.5,
+            "consensus_score": 87.8,
             "setup_type": "突破确认",
             "strategy_ids": ["golden-momentum"],
             "evidence": ["量能放大", "主线共振", "突破后承接稳定"],
@@ -326,7 +326,7 @@ def test_run_workbench_pure_computation_matches_golden_master():
             "recommendation_id": "rec-golden-001",
             "run_id": "run-golden-001",
             "code": "600001",
-            "final_score": 90.11,
+            "final_score": 85.5,
             "watch_status": "watching",
             "llm_stance": "support",
             "llm_delta": 8.0,

@@ -636,7 +636,7 @@ def test_small_market_sample_caps_final_score_honestly():
     card = aggregate(stock, [signal], market_score=100, agent_review_score=100)
 
     assert card["final_score"] == 68.0
-    assert "样本或证据覆盖不足，评分与 Agent 加分已降权" in card["info_tags"]
+    assert "样本或证据覆盖不足，规则评分与风险 overlay 均受限" in card["info_tags"]
 
 def test_authenticity_treats_composite_scores_as_observed_when_inputs_are_real():
     from app.services.feature_builder import build_features
