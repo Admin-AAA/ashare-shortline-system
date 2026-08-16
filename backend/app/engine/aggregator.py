@@ -283,6 +283,16 @@ def resolve_score_line_context(
     weak_cap = getattr(selection_policy, "weak_regime_score_cap", None)
     if weak_cap is not None and market_base == "弱势":
         effective = round(min(effective, float(weak_cap)), 2)
+    # regime×情绪 组合硬覆盖（L-060，最高优先级）：对 policy 声明的组合直接用
+    # 指定分数线，盖过 market_base/sentiment/climax/weak_cap 的一切叠加。用于
+    # 精细放行已 OOS 验证正期望的组合（强牛·高潮/强牛·活跃/震荡·活跃→72），
+    # 而保持负期望组合（偏多·高潮）的拦截。
+    _combo_overrides = dict(getattr(selection_policy, "regime_sentiment_line_overrides", ()) or ())
+    _combo_key = f"{market_base}·{sentiment}"
+    _combo_override_applied = False
+    if _combo_key in _combo_overrides:
+        effective = round(float(_combo_overrides[_combo_key]), 2)
+        _combo_override_applied = True
     return {
         "base_score_line": round(base, 2),
         "market_base": market_base,
@@ -290,6 +300,7 @@ def resolve_score_line_context(
         "market_adjustment": round(market_adjustment + sentiment_adjustment, 2),
         "risk_template_adjustment": round(risk_adjustment, 2),
         "effective_score_line": effective,
+        "regime_sentiment_override_applied": _combo_override_applied,
     }
 
 
@@ -1043,6 +1054,11 @@ def apply_pool_rules(
         # 以决策时口径读取，不受任何回溯重标影响。regime_strong_penalty 默认 0.0，
         # 仅在结构性强势(+4)/强势(+8) 分支被覆盖（见下方 if/elif）。
         card["_regime_strong_penalty"] = 0.0
+        # L-060: 市场级 regime×情绪 override 已放行该组合时,跳过 per-card 的
+        # 强势/结构性强势/support_ma5 regime 惩罚——否则市场级放行会被 per-card
+        # 惩罚(结构性强势+4等)抵消,override 失效。override 组合已经大样本 OOS
+        # 验证正期望,该组合下不再叠加 regime 侧门槛。
+        _combo_relaxed = bool(score_line_context.get("regime_sentiment_override_applied"))
         # 涨停股豁免 support_ma5 交叉惩罚：涨停=+10% 必然贴近/高于 MA5，
         # 这是动能副产品而非"回落均线追弱"信号。惩罚误伤 limit-up-reseal-relay
         # 等涨停动能策略（1186 outcomes 中 0 笔，根因：92 分候选被 82+8+6=96 拒绝）。
@@ -1051,7 +1067,7 @@ def apply_pool_rules(
             float(selection_policy.strong_support_ma5_penalty)
             if selection_policy is not None else 6.0
         )
-        if _snapshot_regime in ("结构性强势", "强势") and card.get("support_ma5") and not _is_limit_up_card:
+        if not _combo_relaxed and _snapshot_regime in ("结构性强势", "强势") and card.get("support_ma5") and not _is_limit_up_card:
             # 提高门槛 6 分（约等于 21pp 胜率差距对应的合理惩罚）
             effective_score_line = round(effective_score_line + _support_penalty, 2)
             card["_regime_support_ma5_penalty"] = _support_penalty
@@ -1074,13 +1090,15 @@ def apply_pool_rules(
         if _snapshot_regime == STRUCTURAL_STRONG_HARD_VETO_REGIME:
             # 结构性强势：+4 提线（历史验证的筛选价值）与 veto（999 全拦）解耦——
             # 2026-08-02 用户决策默认关闭 veto，但 +4 门槛仍保留。
+            # L-060: 市场级 regime×情绪 override 已放行该组合时跳过此 +4（大样本
+            # OOS 验证结构性强势日放行 +1.77%/WR51%,与旧小样本 n=14 结论相反）。
             card["_regime_strong_penalty"] = 4.0
             if _structural_veto:
                 effective_score_line = 999.0
                 card["_regime_struct_strong_hard_veto"] = True
-            else:
+            elif not _combo_relaxed:
                 effective_score_line = round(effective_score_line + 4.0, 2)
-        elif _snapshot_regime == "强势":
+        elif _snapshot_regime == "强势" and not _combo_relaxed:
             effective_score_line = round(effective_score_line + _strong_penalty, 2)
             card["_regime_strong_penalty"] = _strong_penalty
         # 震荡 regime 全局 hard veto（第021轮 LIVE formal 因果重放闭环）：

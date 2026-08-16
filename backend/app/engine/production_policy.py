@@ -57,6 +57,11 @@ class ProductionSelectionPolicy:
     output_limit_enabled: bool = True
     climax_output_divisor: int = 2
     weak_ice_output_limit: int = 2
+    # regime×情绪 组合的分数线硬覆盖（L-060）：优先级高于 market_base/sentiment/
+    # climax 调整叠加。键为 "regime·sentiment"（如 "强牛·高潮"），值为固定分数线。
+    # 用于精细放行已 OOS 验证正期望的组合（强牛·高潮/强牛·活跃/震荡·活跃用72），
+    # 而保持负期望组合（偏多·高潮85）的拦截——单参数叠加无法表达这种二维区分。
+    regime_sentiment_line_overrides: tuple[tuple[str, float], ...] = ()
 
     def canonical_payload(self) -> dict[str, Any]:
         return {
@@ -86,6 +91,7 @@ class ProductionSelectionPolicy:
             "output_limit_enabled": self.output_limit_enabled,
             "climax_output_divisor": self.climax_output_divisor,
             "weak_ice_output_limit": self.weak_ice_output_limit,
+            "regime_sentiment_line_overrides": [list(item) for item in self.regime_sentiment_line_overrides],
         }
 
     @property
@@ -113,7 +119,7 @@ class ProductionSelectionPolicy:
             if not isinstance(value, (list, tuple)):
                 raise ValueError(f"{rule_id} patch must be a list")
             value = tuple(str(item) for item in value)
-        if field_name in {"market_base_score_adjustments", "sentiment_score_adjustments"}:
+        if field_name in {"market_base_score_adjustments", "sentiment_score_adjustments", "regime_sentiment_line_overrides"}:
             if not isinstance(value, (list, tuple)):
                 raise ValueError(f"{rule_id} patch must be a list")
             value = tuple((str(key), float(amount)) for key, amount in value)
@@ -153,6 +159,9 @@ def load_production_selection_policy(
     )
     payload["dynamic_soft_floor_disabled_regimes"] = tuple(
         str(value) for value in payload.get("dynamic_soft_floor_disabled_regimes") or ()
+    )
+    payload["regime_sentiment_line_overrides"] = tuple(
+        (str(key), float(value)) for key, value in payload.get("regime_sentiment_line_overrides") or ()
     )
     policy = ProductionSelectionPolicy(**payload)
     if policy.policy_id != policy_id or policy.version != version:

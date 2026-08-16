@@ -380,12 +380,18 @@ class TushareStateProvider:
             records.append({
                 "code": code,
                 "trade_date": _iso_day(latest.get("trade_date") or target),
-                "main_net_inflow_yi": round(_number(latest.get("net_mf_amount")) / 1e8, 4),
-                "super_large_net_inflow_yi": round((_number(latest.get("buy_elg_amount")) - _number(latest.get("sell_elg_amount"))) / 1e8, 4),
-                "large_net_inflow_yi": round((_number(latest.get("buy_lg_amount")) - _number(latest.get("sell_lg_amount"))) / 1e8, 4),
-                "medium_net_inflow_yi": round((_number(latest.get("buy_md_amount")) - _number(latest.get("sell_md_amount"))) / 1e8, 4),
-                "small_net_inflow_yi": round((_number(latest.get("buy_sm_amount")) - _number(latest.get("sell_sm_amount"))) / 1e8, 4),
+                # 单位契约：Tushare moneyflow 各 amount 字段是万元，转亿用 /1e4
+                # （与 backfill_moneyflow_concept.moneyflow_net_yi 一致）。旧 /1e8
+                # 使 main_net_inflow_yi 小 4 个量级（-0.0002 而非 -1.80），L-059。
+                "main_net_inflow_yi": round(_number(latest.get("net_mf_amount")) / 1e4, 4),
+                "super_large_net_inflow_yi": round((_number(latest.get("buy_elg_amount")) - _number(latest.get("sell_elg_amount"))) / 1e4, 4),
+                "large_net_inflow_yi": round((_number(latest.get("buy_lg_amount")) - _number(latest.get("sell_lg_amount"))) / 1e4, 4),
+                "medium_net_inflow_yi": round((_number(latest.get("buy_md_amount")) - _number(latest.get("sell_md_amount"))) / 1e4, 4),
+                "small_net_inflow_yi": round((_number(latest.get("buy_sm_amount")) - _number(latest.get("sell_sm_amount"))) / 1e4, 4),
                 "main_net_inflow_ratio": round(_number(latest.get("net_mf_vol")), 2),
+                # 累计字段由每日同步 compute_cumulative_inflows 重算覆盖；本 refresh
+                # 兜底路径写 0.0 占位（保持与 upsert update_policy 的数值类型一致，
+                # 避免 NULL 覆盖；每日同步会重算为正确累计值）。
                 "cumulative_inflow_3d_yi": 0.0,
                 "cumulative_inflow_5d_yi": 0.0,
                 "cumulative_inflow_10d_yi": 0.0,
