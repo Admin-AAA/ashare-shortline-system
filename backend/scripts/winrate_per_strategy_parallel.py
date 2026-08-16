@@ -142,8 +142,20 @@ def _eval_strategy(skill_id: str, start: str, end: str, top_n: int, score_line: 
                     continue
                 xp2 = xp * (1 - SLIP / 1e4)
                 net = (xp2 / ep - 1) * 100 - FEE
-                trades.append({"td": td, "net": net, "reason": reason, "score": score,
-                               "regime": mc["regime"], "code": code})
+                # 持仓期内最高价(用于算"没吃到的利润"/追高回落)
+                peak_close = max((float(b.close or 0) for b in holding if float(b.close or 0) > 0), default=ep)
+                trades.append({
+                    "td": td, "net": net, "reason": reason, "score": score,
+                    "regime": mc["regime"], "code": code, "month": td[:7],
+                    # 入场特征(亏损挖掘用)
+                    "pos60": float(sd.get("pos60", 50)), "chg20": float(sd.get("chg20", 0)),
+                    "vol5_20": float(sd.get("vol5_20", 1.0)), "day_pct": float(sd.get("pct", 0)),
+                    "turnover": float(sd.get("turnover_rate", 0)), "amount_yi": float(sd.get("amount_yi", 0)),
+                    "bias5": float(sd.get("bias_5", 0) or 0), "max_dd20": float(sd.get("max_dd20", 0)),
+                    "off_high": float(sd.get("off_high_pct", 0)), "dist20": float(sd.get("dist20", 0)),
+                    "ind_mom": float(sd.get("industry_momentum", 0.5)),
+                    "gap_pct": gap, "peak_ret": (peak_close / ep - 1) * 100,
+                })
 
         if not trades:
             return {"strategy_id": skill_id, "n": 0, "n_signals": n_signals}
@@ -172,6 +184,7 @@ def _eval_strategy(skill_id: str, start: str, end: str, top_n: int, score_line: 
             "profit_factor": round(pf, 3), "pl_ratio": round(abs(avgw / avgl), 2) if avgl else 0,
             "monthly_avg": mon_avg, "monthly_signs": mon_signs,
             "exit_breakdown": dict(byreason),
+            "trades": trades,  # 逐笔(含入场特征)供亏损挖掘; 主进程落盘
         }
     finally:
         db.close()
@@ -199,7 +212,10 @@ def main() -> int:
 
     print(f"并行评估 {len(skill_ids)} 策略 | 窗口 {args.start}~{args.end} | top{args.top_n} 线{args.score_line} | {args.workers} 进程")
     results = []
-    with ProcessPoolExecutor(max_workers=args.workers) as ex:
+    # spawn 而非 fork：避免子进程继承主进程已打开的 SQLAlchemy DB 连接导致死锁。
+    import multiprocessing as mp
+    ctx = mp.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=args.workers, mp_context=ctx) as ex:
         futs = {ex.submit(_eval_strategy, sid, args.start, args.end, args.top_n, args.score_line): sid for sid in skill_ids}
         for fut in as_completed(futs):
             sid = futs[fut]
@@ -221,8 +237,16 @@ def main() -> int:
 
     if args.output:
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.output).write_text(json.dumps(results, ensure_ascii=False, indent=2))
-        print(f"\n已写入 {args.output}")
+        # 汇总(去trades) + 逐笔分开落盘
+        summary = [{k: v for k, v in r.items() if k != "trades"} for r in results]
+        Path(args.output).write_text(json.dumps(summary, ensure_ascii=False, indent=2))
+        all_trades = []
+        for r in results:
+            for t in (r.get("trades") or []):
+                all_trades.append({"strategy_id": r["strategy_id"], **t})
+        trades_path = args.output.replace(".json", "_trades.json")
+        Path(trades_path).write_text(json.dumps(all_trades, ensure_ascii=False))
+        print(f"\n汇总 {args.output} | 逐笔 {trades_path} ({len(all_trades)} 笔)")
     return 0
 
 
