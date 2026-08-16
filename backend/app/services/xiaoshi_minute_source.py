@@ -308,7 +308,7 @@ class XiaoshiMinuteHistorySource:
         last_error: Exception | None = None
         for attempt in range(2):
             try:
-                payload = self.client.get_history_download_urls(
+                payload = self.client.get_history_download_session(
                     dataset="min1",
                     code=code,
                     year=str(year),

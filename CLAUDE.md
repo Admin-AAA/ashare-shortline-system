@@ -47,6 +47,9 @@
 
 # 数据源策略
 
+- A 股全市场实时快照优先使用小石 v3（单次 6000 上限、必须满足 coverage>=95% 且非 partial），失败后回退 Tushare；单股前复权日线同序 fallback
+- 小石分钟/批量历史先读 history manifest，再走 `/api/v3/history/download-session` 获取无鉴权 R2 地址；禁止把全市场任务拆成逐股票请求
+- 小石量化 Skill 固定版本与 SHA-256 后才允许进入本地注册表；新映射先保持 research/禁用，不自动加入正式推荐预设
 - K线/基本面/辅助数据优先使用 Tushare；通用批量同步优先走低延迟 Provider，Promax 作宽覆盖 fallback
 - 实时 `rt_k`/`rt_min`：Promax 优先，仅对候选股按需调用
 - Promax `anns_d` 只接受单日 `ann_date`，`stk_mins` 实测混入秒级快照；两接口在契约修正前不进入 Promax 路由

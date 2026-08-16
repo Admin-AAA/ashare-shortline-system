@@ -97,7 +97,7 @@ def test_xiaoshi_minute_history_downloads_verifies_merges_and_caches(tmp_path: P
     url_calls: list[str] = []
 
     class FakeXiaoshiClient:
-        def get_history_download_urls(self, **params):
+        def get_history_download_session(self, **params):
             url_calls.append(str(params["year"]))
             return {"files": files}
 
@@ -192,7 +192,7 @@ def test_xiaoshi_minute_source_rejects_invalid_ohlc(tmp_path: Path) -> None:
     file_info = _file_info("base", content, "https://r2.test/base")
 
     class FakeXiaoshiClient:
-        def get_history_download_urls(self, **params):
+        def get_history_download_session(self, **params):
             return {"files": [file_info]}
 
     r2_client = httpx.Client(

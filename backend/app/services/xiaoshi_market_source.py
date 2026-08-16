@@ -182,6 +182,9 @@ class XiaoshiMarketSourceAdapter:
         try:
             stock_map = _stock_map(self.client.get_stocks(market="CN", limit=6000))
             payload = self.client.get_market_snapshot(market="CN", limit=6000)
+            coverage = _number(payload.get("coverage"), 1.0)
+            if payload.get("partial") is True or coverage < 0.95:
+                raise ValueError("xiaoshi full-market snapshot is partial")
             rows = _snapshot_rows(payload, stock_map)
         except Exception:
             error = MarketSourceError(
