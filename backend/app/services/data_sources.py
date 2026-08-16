@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -806,7 +807,7 @@ def _xiaoshi_management_row(db: Session) -> dict[str, Any] | None:
             (row.last_error for row in health_rows if row.last_error),
             None,
         ),
-        "last_api": "manifest+skill+quote+kline" if health_rows else None,
+        "last_api": "manifest+quote+kline" if health_rows else None,
         "status": status,
         "auth_mode": "bearer",
         "rate_limit_per_minute": int(getattr(settings, "xiaoshi_max_qps", 30)) * 60,
@@ -980,55 +981,69 @@ def test_provider(db: Session, provider_name: str) -> dict[str, Any]:
 
 
 def _probe_xiaoshi_source() -> dict[str, Any]:
-    """Probe data and pinned Skill contracts without mixing their health states."""
+    """Probe the xiaoshi data path with narrow single-stock calls, run concurrently.
+
+    只测数据通路（manifest + 单股票 quote + 单股票 kline），三者并行以把端到端
+    延迟压到接近单个请求。Skill 契约校验（整份 SKILL.md 下载 + SHA-256）不在此处，
+    它验证的是 Skill 完整性而非数据通路，且每次重下整份文本是延迟大头。
+    """
     from app.services.xiaoshi_client import get_xiaoshi_client
 
-    settings = get_settings()
     client = get_xiaoshi_client()
     details: dict[str, Any] = {}
     errors: list[str] = []
 
-    contract_ok = False
-    try:
-        manifest = client.get_manifest()
-        details["manifest_version"] = str(manifest.get("version") or "")
-        artifact = client.get_quant_skill(
-            version=settings.xiaoshi_skill_version,
-            expected_sha256=settings.xiaoshi_skill_sha256,
-        )
-        details["skill_version"] = artifact.version
-        contract_ok = True
-    except Exception as exc:
-        errors.append(f"contract: {type(exc).__name__}: {str(exc)[:160]}")
+    def _probe_manifest() -> tuple[dict[str, Any], str | None]:
+        try:
+            manifest = client.get_manifest()
+            return ({"manifest_version": str(manifest.get("version") or "")}, None)
+        except Exception as exc:
+            return ({}, f"manifest: {type(exc).__name__}: {str(exc)[:160]}")
 
-    quote_ok = False
-    quote_error: str | None = None
-    try:
-        quote = client.get_quote("000001")
-        symbol = quote.get("symbol") or quote.get("code")
-        quote_ok = bool(str(symbol or "").strip()) and float(quote.get("price") or 0) > 0
-        details["quote_time"] = quote.get("quote_time") or quote.get("observed_at")
-        if not quote_ok:
-            quote_error = "xiaoshi quote 返回空或价格无效"
-    except Exception as exc:
-        quote_error = f"{type(exc).__name__}: {str(exc)[:160]}"
+    def _probe_quote() -> tuple[bool, dict[str, Any], str | None]:
+        try:
+            quote = client.get_quote("000001")
+            symbol = quote.get("symbol") or quote.get("code")
+            ok = bool(str(symbol or "").strip()) and float(quote.get("price") or 0) > 0
+            detail = {"quote_time": quote.get("quote_time") or quote.get("observed_at")}
+            if ok:
+                return (True, detail, None)
+            return (False, detail, "xiaoshi quote 返回空或价格无效")
+        except Exception as exc:
+            return (False, {}, f"{type(exc).__name__}: {str(exc)[:160]}")
+
+    def _probe_kline() -> tuple[bool, dict[str, Any], str | None]:
+        try:
+            payload = client.get_kline("000001", limit=2)
+            bars = payload.get("bars") or payload.get("data") or []
+            kline_count = len(bars) if isinstance(bars, list) else 0
+            ok = kline_count >= 2
+            detail = {"kline_count": kline_count}
+            if ok:
+                return (True, detail, None)
+            return (False, detail, "xiaoshi kline 返回不足 2 条")
+        except Exception as exc:
+            return (False, {}, f"{type(exc).__name__}: {str(exc)[:160]}")
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        manifest_future = pool.submit(_probe_manifest)
+        quote_future = pool.submit(_probe_quote)
+        kline_future = pool.submit(_probe_kline)
+        manifest_detail, manifest_error = manifest_future.result()
+        quote_ok, quote_detail, quote_error = quote_future.result()
+        kline_ok, kline_detail, kline_error = kline_future.result()
+
+    details.update(manifest_detail)
+    details.update(quote_detail)
+    details.update(kline_detail)
+    if manifest_error:
+        errors.append(manifest_error)
     if quote_error:
         errors.append(f"quote: {quote_error}")
-
-    kline_ok = False
-    kline_error: str | None = None
-    try:
-        payload = client.get_kline("000001", limit=2)
-        bars = payload.get("bars") or payload.get("data") or []
-        kline_count = len(bars) if isinstance(bars, list) else 0
-        details["kline_count"] = kline_count
-        kline_ok = kline_count >= 2
-        if not kline_ok:
-            kline_error = "xiaoshi kline 返回不足 2 条"
-    except Exception as exc:
-        kline_error = f"{type(exc).__name__}: {str(exc)[:160]}"
     if kline_error:
         errors.append(f"kline: {kline_error}")
+
+    contract_ok = manifest_error is None
 
     return {
         "ok": contract_ok and quote_ok and kline_ok,
