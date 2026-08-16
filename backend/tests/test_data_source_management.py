@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -312,3 +313,89 @@ def test_list_data_sources_excludes_provider_history(db_session, monkeypatch):
     rows = ds.list_data_sources(db_session)
     assert all(row["source_type"] != "tushare_provider" for row in rows)
     assert all(row["source"] != "fastapic" for row in rows)
+
+
+def test_management_sources_include_xiaoshi_market_source(db_session, monkeypatch):
+    db_session.add_all(
+        [
+            DataSourceConfig(source="xiaoshi", source_type="quote", enabled=True, priority=0),
+            DataSourceConfig(source="xiaoshi", source_type="kline", enabled=True, priority=0),
+            DataSourceHealth(
+                source="xiaoshi",
+                source_type="quote",
+                success_count=3,
+                failure_count=1,
+                latency_ms=800.0,
+                last_success_at=datetime(2026, 8, 16, 10, 0, 0),
+            ),
+            DataSourceHealth(
+                source="xiaoshi",
+                source_type="kline",
+                success_count=2,
+                failure_count=0,
+                latency_ms=900.0,
+                last_success_at=datetime(2026, 8, 16, 10, 1, 0),
+            ),
+        ]
+    )
+    db_session.commit()
+    monkeypatch.setattr(ds, "sync_data_source_configs", lambda _db: None)
+    monkeypatch.setattr(
+        ds,
+        "_provider_health_rows",
+        lambda: [{"provider_name": "promax", "source": "promax", "priority": 0}],
+    )
+    monkeypatch.setattr(
+        ds,
+        "get_settings",
+        lambda: SimpleNamespace(xiaoshi_api_key="configured", xiaoshi_max_qps=30),
+    )
+
+    rows = ds.list_management_sources(db_session)
+    xiaoshi = next(row for row in rows if row["provider_name"] == "xiaoshi")
+
+    assert xiaoshi["source_type"] == "market_data_provider"
+    assert xiaoshi["configured"] is True
+    assert xiaoshi["enabled"] is True
+    assert xiaoshi["status"] == "healthy"
+    assert xiaoshi["success_count"] == 5
+    assert xiaoshi["failure_count"] == 1
+    assert xiaoshi["latency_ms"] == 900.0
+    assert "全市场快照:主源" in xiaoshi["apis"]
+
+
+def test_set_provider_enabled_toggles_xiaoshi_quote_and_kline(db_session, monkeypatch):
+    db_session.add_all(
+        [
+            DataSourceConfig(source="xiaoshi", source_type="quote", enabled=True, priority=0),
+            DataSourceConfig(source="xiaoshi", source_type="kline", enabled=True, priority=0),
+        ]
+    )
+    db_session.commit()
+    monkeypatch.setattr(ds, "sync_data_source_configs", lambda _db: None)
+    monkeypatch.setattr(
+        ds,
+        "get_settings",
+        lambda: SimpleNamespace(xiaoshi_api_key="configured", xiaoshi_max_qps=30),
+    )
+
+    result = ds.set_provider_enabled(db_session, "xiaoshi", False)
+
+    assert result is not None
+    assert result["provider_name"] == "xiaoshi"
+    assert result["enabled"] is False
+    for source_type in ("quote", "kline"):
+        row = db_session.get(
+            DataSourceConfig,
+            {"source": "xiaoshi", "source_type": source_type},
+        )
+        assert row is not None and row.enabled is False
+
+
+def test_admin_management_api_uses_unified_source_projection(db_session, monkeypatch):
+    from app.api import admin
+
+    expected = [{"provider_name": "xiaoshi"}]
+    monkeypatch.setattr(ds, "list_management_sources", lambda _db: expected)
+
+    assert admin.list_data_sources_api(db_session) == {"providers": expected}
