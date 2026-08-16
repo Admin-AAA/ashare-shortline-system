@@ -570,6 +570,7 @@
 - 适用：production selection policy 的分数线调整（market_base/sentiment/climax_nonweak_extra）
 - 证据：frozen snapshot holdout_244d（生产口径 final_score + 因果出场 + 费用）对比——当前规则（含 regime/情绪抬线到85-91）OOS 期 65% 日子 0 出票。按 regime×情绪分解被拦的票：**强牛·高潮 57%胜率+2.60%、震荡·活跃 51%+2.57%、强牛·活跃 61%+1.65%（均被错杀的正期望）**；偏多·高潮 36%-1.88%（真毒区，拦对了）。精细方案（放行强牛·高潮/强牛·活跃/震荡·活跃用72线，其余维持抬线）walk-forward OOS：WR 47.7%→51.4%、均净 +0.767%→+1.785%（2.3倍）、PF 1.31→1.72、出票天数 34→67、0出票 65%→32%。OOS 改善幅度>训练期，非过拟合。
 - 永久规则：**regime 提线不得一刀切**——同一 regime（强牛）在高潮与活跃下期望相反（+2.6 vs +1.6 正），不同 regime 在同一情绪（高潮）下期望相反（强牛+2.6 vs 偏多-1.8）。历史"强牛·高潮58.3%胜率需高门槛"是 n=12 小样本误判，大样本证伪。任何 regime 规则必须按 regime×情绪二维大样本验证。
-- 待办：走 canonical production-policy experiment + Canary + publish-champion 发布为 PRODUCTION；不得凭本回测直接改生产 policy。
+- **诚实修正（本轮）**：①frozen snapshot 的候选分数被 quality_cap 压到 ~60-72（历史回放数据不全），与生产 live（候选最高 78-89）分数尺度不同——故"出票天数翻倍"的绝对数字在快照上不可复现，只有"放行组合正期望/拦截组合负期望"的方向可信。②生产有三层分数线（市场级 resolve_score_line_context + 单票 evidence/execution 惩罚 + per-card 结构性强势+4），且 **_market_base 与 _snapshot_regime 是两套不一致的 regime 判断**（强牛→结构性强势）。override 必须同时豁免 per-card 的 strong/support_ma5 惩罚才生效，否则市场级放行被单票级抵消（已实现 `_combo_relaxed` 跳过）。③强牛·高潮日涨停票(≥60分) OOS n=11 WR82%/+5.33% 强于非涨停，涨停执行惩罚在此场景可能错杀动能票（样本小，仅方向参考，待前瞻）。
+- 待办：走 canonical production-policy experiment + Canary + publish-champion 发布为 PRODUCTION；上线后必须靠 live_forward 真实样本最终确认（当前为零）。override 已落地 feature 分支 feat/winrate-data-pipeline-fix。
 - 复现：`backend/scripts/winrate_scoreline_prod_backtest.py`（分数线对比）+ 本轮会话内 walk-forward 脚本。
 - 相关：L-058（窗口偏差）、[[zero-recommendation-strong-day-2026-08]]（强势日0出票）、[[market-regime-win-rates]]（旧小样本regime胜率，部分被本条证伪）。
