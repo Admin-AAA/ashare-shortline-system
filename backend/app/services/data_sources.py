@@ -808,7 +808,7 @@ def _provider_health_rows() -> list[dict[str, Any]]:
 def test_provider(db: Session, provider_name: str) -> dict[str, Any]:
     """探针测试某 provider 当前是否可用，结果写入 data_source_health。
 
-    - pro_http 源（promax/fastapic/xiaodefa/ai_tool）：直连该 provider 调 stock_basic，
+    - pro_http 源（promax/fastapic/xiaodefa/ai_tool）：直连该 provider 调单股票 stock_basic，
       绕过 Router 选路，专测这一源的连通 + 鉴权。
     - realtime_quote：调 fetch_realtime_quotes(["000001"]) 测爬虫端点。
     返回 {ok, latency_ms, status, error}；provider 未接入抛 KeyError。
@@ -864,9 +864,13 @@ def _probe_pro_provider(provider_name: str) -> tuple[bool, str | None]:
     if provider is None:
         raise KeyError(provider_name)
     try:
-        # 不传 limit：部分第三方源（如 quantdata）不支持 limit 参数，传了会被判 invalid_request。
-        # stock_basic 全量返回也仅数千行，探针直接取全集判断非空即可。
-        envelope = provider.request("stock_basic", params={})
+        # 不传 limit：部分第三方源（如 quantdata）不支持 limit 参数。
+        # 指定单股票和最小字段，避免健康探针为判断连通性下载全市场数据。
+        envelope = provider.request(
+            "stock_basic",
+            params={"ts_code": "000001.SZ"},
+            fields="ts_code",
+        )
     except Exception as exc:
         return False, f"{type(exc).__name__}: {str(exc)[:200]}"
     items = (envelope.get("data") or {}).get("items") if isinstance(envelope, dict) else None

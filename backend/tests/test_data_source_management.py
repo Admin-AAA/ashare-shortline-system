@@ -108,6 +108,35 @@ def test_test_provider_unknown_raises_keyerror(db_session, monkeypatch):
         ds.test_provider(db_session, "nonexist")
 
 
+def test_probe_pro_provider_uses_lightweight_stock_basic_request(monkeypatch):
+    captured = {}
+
+    class _Provider:
+        def request(self, api_name, *, params=None, fields=""):
+            captured.update(api_name=api_name, params=params, fields=fields)
+            return {
+                "code": 0,
+                "data": {"fields": ["ts_code"], "items": [["000001.SZ"]]},
+            }
+
+    class _Router:
+        _providers = {"promax": _Provider()}
+
+    class _Pro:
+        _router = _Router()
+
+    import app.services.tushare_client as tc
+
+    monkeypatch.setattr(tc, "get_pro", lambda: _Pro())
+
+    assert ds._probe_pro_provider("promax") == (True, None)
+    assert captured == {
+        "api_name": "stock_basic",
+        "params": {"ts_code": "000001.SZ"},
+        "fields": "ts_code",
+    }
+
+
 def _empty_sources(monkeypatch):
     """让 sync 的 desired（quote/kline/... 七类）全为空，desired_set 为空集。
     这样所有非豁免 config 行都是孤儿，专门测豁免逻辑。"""
