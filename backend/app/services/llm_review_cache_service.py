@@ -15,14 +15,16 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import func, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
-from app.models.tables import LLMReviewCache
+from app.models.tables import ApiCallLog, LLMReviewCache
 
 # LLM 审查健康度阈值：formal run 每日盘前跑一次，故以 24h 为「新鲜」窗口。
 # 超过 24h 无成功审查即视为 stale（可能 key 失效 / provider 故障），前端据此告警。
 _LLM_REVIEW_STALE_HOURS = 24
+_COMPLETION_EVIDENCE_LOOKBACK_HOURS = 24 * 7
+_COMPLETION_EVIDENCE_SAMPLE_SIZE = 100
 
 
 # 元数据字段：同一股票不同 run 来源不同，但不影响 LLM 判断，从 cache_key 排除。
@@ -244,6 +246,71 @@ def recent_llm_call_health(db: Session, *, limit: int = 5) -> dict[str, Any]:
             "sample_errors_by_bucket": sample_errors_by_bucket,
         })
     return {"runs": runs, "any_unhealthy": any_unhealthy}
+
+
+def model_completion_capability(
+    db: Session,
+    *,
+    now: datetime | None = None,
+    lookback_hours: int = _COMPLETION_EVIDENCE_LOOKBACK_HOURS,
+    sample_size: int = _COMPLETION_EVIDENCE_SAMPLE_SIZE,
+) -> dict[str, Any]:
+    """Project actual chat-completion readiness from persisted call evidence.
+
+    Route configuration is necessary but not sufficient: listing models can
+    succeed while chat completions fail because of auth, balance or an open
+    circuit. Cache hits are reported but do not prove that an upstream model can
+    currently complete a request.
+    """
+    from app.services.model_router_service import has_active_model_routes
+
+    checked_at = now or datetime.now(timezone.utc).replace(tzinfo=None)
+    cutoff = checked_at - timedelta(hours=max(1, int(lookback_hours)))
+    rows = list(
+        db.scalars(
+            select(ApiCallLog)
+            .where(ApiCallLog.created_at >= cutoff)
+            .order_by(ApiCallLog.created_at.desc())
+            .limit(max(1, int(sample_size)))
+        ).all()
+    )
+    configured = has_active_model_routes()
+    cache_hits = [row for row in rows if str(row.status or "") == "cache_hit"]
+    live_attempts = [row for row in rows if str(row.status or "") != "cache_hit"]
+    live_successes = [row for row in live_attempts if str(row.status or "") == "success"]
+    failures = [row for row in live_attempts if str(row.status or "") != "success"]
+
+    if not configured:
+        status, reason = "critical", "no_active_model_route"
+    elif not live_attempts:
+        status, reason = "degraded", "no_recent_live_completion_evidence"
+    elif not live_successes:
+        status, reason = "critical", "recent_completions_all_failed"
+    elif str(live_attempts[0].status or "") == "success":
+        status, reason = "ok", "latest_live_completion_succeeded"
+    else:
+        status, reason = "degraded", "latest_live_completion_failed"
+
+    status_counts: dict[str, int] = {}
+    for row in rows:
+        key = str(row.status or "unknown")
+        status_counts[key] = status_counts.get(key, 0) + 1
+    latest_attempt_at = live_attempts[0].created_at if live_attempts else None
+    latest_success_at = live_successes[0].created_at if live_successes else None
+    return {
+        "status": status,
+        "reason": reason,
+        "configured_route_present": configured,
+        "sample_size": len(rows),
+        "live_attempt_count": len(live_attempts),
+        "live_success_count": len(live_successes),
+        "failure_count": len(failures),
+        "cache_hit_count": len(cache_hits),
+        "status_counts": status_counts,
+        "latest_attempt_at": latest_attempt_at.isoformat() if latest_attempt_at else None,
+        "latest_success_at": latest_success_at.isoformat() if latest_success_at else None,
+        "lookback_hours": max(1, int(lookback_hours)),
+    }
 
 
 def _llm_health_status(
