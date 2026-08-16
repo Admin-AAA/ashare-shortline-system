@@ -563,3 +563,13 @@
 - 回归测试：`tests/test_capital_flow_state_adapter_units.py`（锁定 /1e4 单位 + 各分档量级）。
 - 吸收位置：state_adapters.capital_flow 注释 + 本测试。
 - 相关：L-050 margin_detail 单位方向、[[amount-yi-data-inconsistency]]（同为 Tushare 单位陷阱）。
+
+## L-060 regime/情绪抬线错杀正期望 regime，应按 regime×情绪精细区分而非一刀切
+
+- 状态：active（FINDING + walk-forward OOS 验证通过，待 PRODUCTION 发布流程）
+- 适用：production selection policy 的分数线调整（market_base/sentiment/climax_nonweak_extra）
+- 证据：frozen snapshot holdout_244d（生产口径 final_score + 因果出场 + 费用）对比——当前规则（含 regime/情绪抬线到85-91）OOS 期 65% 日子 0 出票。按 regime×情绪分解被拦的票：**强牛·高潮 57%胜率+2.60%、震荡·活跃 51%+2.57%、强牛·活跃 61%+1.65%（均被错杀的正期望）**；偏多·高潮 36%-1.88%（真毒区，拦对了）。精细方案（放行强牛·高潮/强牛·活跃/震荡·活跃用72线，其余维持抬线）walk-forward OOS：WR 47.7%→51.4%、均净 +0.767%→+1.785%（2.3倍）、PF 1.31→1.72、出票天数 34→67、0出票 65%→32%。OOS 改善幅度>训练期，非过拟合。
+- 永久规则：**regime 提线不得一刀切**——同一 regime（强牛）在高潮与活跃下期望相反（+2.6 vs +1.6 正），不同 regime 在同一情绪（高潮）下期望相反（强牛+2.6 vs 偏多-1.8）。历史"强牛·高潮58.3%胜率需高门槛"是 n=12 小样本误判，大样本证伪。任何 regime 规则必须按 regime×情绪二维大样本验证。
+- 待办：走 canonical production-policy experiment + Canary + publish-champion 发布为 PRODUCTION；不得凭本回测直接改生产 policy。
+- 复现：`backend/scripts/winrate_scoreline_prod_backtest.py`（分数线对比）+ 本轮会话内 walk-forward 脚本。
+- 相关：L-058（窗口偏差）、[[zero-recommendation-strong-day-2026-08]]（强势日0出票）、[[market-regime-win-rates]]（旧小样本regime胜率，部分被本条证伪）。
