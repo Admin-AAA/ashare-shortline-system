@@ -22,7 +22,7 @@ def _card(code: str, score: float = 90.0, *, bucket: str = "chen-xiaoqun-skill")
 
 def test_default_policy_returns_versioned_result_and_explains_every_drop() -> None:
     assert DEFAULT_PRODUCTION_SELECTION_POLICY.fingerprint == (
-        "b2b46f4eb2fe8e995022e216e98a19783e88adbff66b9b9f4fdaccbe8857eb45"
+        "49e0692dfd32467d74c325563079506ef07d610a56f998d789d1b8dbe8db6530"
     )
     cards = [
         _card("300001"),
