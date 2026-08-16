@@ -10,7 +10,7 @@ from app.services.tushare_client import get_pro as _get_pro
 
 
 def get_pro():
-    """Return the shared Fastapic/ai-tool routed client."""
+    """Return the shared multi-provider Tushare client."""
     return _get_pro()
 
 

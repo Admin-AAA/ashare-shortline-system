@@ -181,16 +181,10 @@ def test_provider_health_only_projects_configured_sources(monkeypatch):
     import app.services.tushare_client as tc
 
     class _Settings:
-        tushare_ai_tool_key1 = "key-1"
-        tushare_ai_tool_key2 = "key-2"
+        tushare_promax_api_key = "promax-key"
+        tushare_promax_rate_limit_per_minute = 180
+        tushare_promax_max_concurrency = 4
         tushare_ai_tool_api_key = ""
-        tushare_ai_tool_proxy = ""
-        tushare_ai_tool_key1_rate_limit_per_minute = 90
-        tushare_ai_tool_key2_rate_limit_per_minute = 90
-        tushare_ai_tool_key1_rt_min_rate_limit_per_minute = 72
-        tushare_ai_tool_key2_rt_min_rate_limit_per_minute = 72
-        tushare_ai_tool_key1_stk_mins_rate_limit_per_minute = 48
-        tushare_ai_tool_key2_stk_mins_rate_limit_per_minute = 48
         tushare_ai_tool_rate_limit_per_minute = 90
         tushare_ai_tool_rt_min_rate_limit_per_minute = 72
         tushare_ai_tool_stk_mins_rate_limit_per_minute = 48
@@ -210,7 +204,7 @@ def test_provider_health_only_projects_configured_sources(monkeypatch):
 
     settings = _Settings()
     monkeypatch.setattr(tc, "get_settings", lambda: settings)
-    monkeypatch.setattr(tc, "_provider_enabled_override", lambda: {"ai_tool_key2": False})
+    monkeypatch.setattr(tc, "_provider_enabled_override", lambda: {"promax": False})
     monkeypatch.setattr(tc, "_provider_priority_override", lambda: {})
     monkeypatch.setattr(tc, "get_pro", lambda: _Pro())
     monkeypatch.setattr(rq, "get_settings", lambda: settings)
@@ -219,9 +213,9 @@ def test_provider_health_only_projects_configured_sources(monkeypatch):
     rows = tc.get_tushare_provider_health()
     by_name = {row["provider_name"]: row for row in rows}
 
-    assert set(by_name) == {"ai_tool_key1", "ai_tool_key2", "tushare_official", "quantdata"}
-    assert by_name["ai_tool_key2"]["configured"] is True
-    assert by_name["ai_tool_key2"]["enabled"] is False
+    assert set(by_name) == {"promax", "tushare_official", "quantdata"}
+    assert by_name["promax"]["configured"] is True
+    assert by_name["promax"]["enabled"] is False
 
 
 def test_list_data_sources_excludes_provider_history(db_session, monkeypatch):
