@@ -544,3 +544,22 @@
 - 与 L-047/L-048/L-051/L-053/L-054 交叉：驾驶舱 run 展示层六个 UX 修复（L-047/L-048/L-051/L-053/L-054 run 状态）+ 本课系统质量可观测性（L-057）——驾驶舱「查看/解释」缺口第七个闭环。
 - 回归验证：TSC exit 0、36 前端测试全过、徽章逻辑 4 种状态全正确。
 - 吸收位置：主提示词「前端体验」+ OPERATIONS.md。
+
+## L-058 策略"持续负期望"常是时间窗口选择偏差，须用跨月大样本符号一致性裁决
+
+- 状态：active（FINDING，本轮探索）
+- 适用：策略归因、按策略/特征禁用或调权、regime 分工决策
+- 证据：真实回放(historical_replay, n=223, 仅覆盖 2026-05~08 弱势月)显示 daily-stock-analysis n=141 WR=29.1%、trend-pullback n=17 WR=11.8%，看似"持续负期望策略"。但 PATH-A 大样本(n=3050, 2026_H1 全 7 个月)逐月符号一致性检验显示**全部 4 个策略都是符号混杂**（small-cap `++-+-+-`、trend-pullback `++-+-++`、weak-reversal `++-++--`、chip `+--+++-`），无一逐月稳定负。所有策略共同在 3/7 月（最弱月）转负、4 月（反弹月）全转正——**盈亏由月度 regime 主导，非策略横截面差异**。真实回放的"DSA 差"是因为它恰好在弱势月样本最多。
+- 永久规则：**判定"某策略持续负期望/该禁用"前，必须用覆盖多种 regime 的大样本做逐月符号一致性检验**；只在单一市场阶段（尤其连续弱势月）的小样本结论一律视为窗口偏差伪影，不得作为禁用依据。策略级盈亏归因的正确问题是"该策略相对当月大盘偏离是否稳定"（chip-single-peak 是唯一差月抗跌的正偏离策略），而非"该策略胜率绝对值低"。
+- 与 L-004/chase-bucket-regime-confound/entry-pctchg-oos-falsified 交叉：同一过拟合模式的策略级变体——横截面/策略差异在 pooled 或小窗口数据上极易被 regime 混杂污染。
+- 吸收位置：本轮探索报告（选股胜率调研系列）。
+
+## L-059 同一数据域多条写入路径必须共享单位转换纯函数，否则会出现"一条对一条错"
+
+- 状态：encoded（已修 + 回归测试）
+- 适用：所有辅助数据域（capital_flow/margin/dragon_tiger 等）的多路径写入
+- 证据：`capital_flow` 有两条写入路径——`backfill_moneyflow_concept.backfill_moneyflow`（每日同步，用 `moneyflow_net_yi`=/1e4 正确）与 `state_adapters.TushareStateProvider.capital_flow`（run 时 refresh 兜底，用 /1e8 错误）。2026-08-03 起 refresh 兜底被触发，写入小 4 个量级的错误值（000021 main=-0.0002 而非 -1.80 亿），且把累计字段覆盖。self_check 用 `main_net_inflow_yi` 判质量✅ 是误导——它没发现 refresh 路径的累计字段全 0。实测上游 `pro.moneyflow` 一直正常（返回全市场 5540 只、量级正确）。
+- 永久规则：**同一数据域存在多条写入路径时，单位转换必须抽取为共享纯函数（如 `moneyflow_net_yi`），禁止各路径内联各自的 `/1eN`**。诊断"数据 stale/异常"时，先实测上游接口（绕开本地库）确认是"源断了"还是"本地某条写入路径写错"——两者解法完全不同。self_check 质量护栏要看衍生字段（累计值）而非只看原始字段。
+- 回归测试：`tests/test_capital_flow_state_adapter_units.py`（锁定 /1e4 单位 + 各分档量级）。
+- 吸收位置：state_adapters.capital_flow 注释 + 本测试。
+- 相关：L-050 margin_detail 单位方向、[[amount-yi-data-inconsistency]]（同为 Tushare 单位陷阱）。
