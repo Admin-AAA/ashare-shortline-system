@@ -51,14 +51,30 @@ def active_alerts(db: Session) -> list[dict[str, Any]]:
                 "message": _source_alert_message(src),
             })
 
+    try:
+        from app.services.llm_review_cache_service import model_completion_capability
+
+        model_alert = _model_completion_alert(model_completion_capability(db))
+        if model_alert is not None:
+            alerts.append(model_alert)
+    except Exception:
+        # 数据库局部初始化或迁移期间仍应返回其余告警，同时明确健康投影不可用。
+        alerts.append({
+            "source": "model_completion",
+            "source_type": "llm",
+            "status": "unknown",
+            "alert_level": "warning",
+            "message": "模型真实 completion 健康检查不可用",
+        })
+
     # 系统级告警
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     # 最近一次可信 LIVE 推荐运行是否在 24 小时内；历史回放不刷新生产心跳。
     live_run_ids = canonical_live_forward_run_ids(db)
-    latest_finished_at = (
+    latest_run = (
         db.scalar(
-            select(RecommendationRun.finished_at)
+            select(RecommendationRun)
             .where(
                 RecommendationRun.run_id.in_(live_run_ids),
                 RecommendationRun.finished_at.is_not(None),
@@ -69,15 +85,33 @@ def active_alerts(db: Session) -> list[dict[str, Any]]:
         if live_run_ids
         else None
     )
-    if latest_finished_at:
-        hours_since_run = round((now - latest_finished_at).total_seconds() / 3600, 1)
-        if hours_since_run > 24:
+    if latest_run:
+        hours_since_run = round((now - latest_run.finished_at).total_seconds() / 3600, 1)
+        reference_trade_date: str | None = None
+        try:
+            from app.services.data_health_service import _resolve_reference_trade_date
+
+            reference_trade_date = str(
+                _resolve_reference_trade_date(db).get("reference_trade_date") or ""
+            ) or None
+        except Exception:
+            reference_trade_date = None
+        if _recommendation_is_stale(
+            reference_trade_date=reference_trade_date,
+            latest_trade_date=str(latest_run.trade_date or "") or None,
+            hours_since_run=hours_since_run,
+        ):
+            message = (
+                f"最近可信推荐停在 {latest_run.trade_date}，当前交易日 {reference_trade_date}"
+                if reference_trade_date
+                else f"最近一次推荐运行已超过 {hours_since_run:.0f} 小时"
+            )
             alerts.append({
                 "source": "system",
                 "source_type": "recommendation",
                 "status": "stale",
                 "alert_level": "warning",
-                "message": f"最近一次推荐运行已超过 {hours_since_run:.0f} 小时",
+                "message": message,
             })
     else:
         alerts.append({
@@ -188,8 +222,26 @@ def readiness_check(db: Session) -> dict[str, Any]:
         "min_required": 1,
     }
 
+    from app.services.llm_review_cache_service import model_completion_capability
+
+    checks["model_completion"] = model_completion_capability(db, now=now)
+
     # 整体判定
-    statuses = [c["status"] for c in checks.values()]
+    overall, can_run = _readiness_outcome(checks)
+
+    return {
+        "checked_at": now.isoformat(),
+        "reference_trade_date": reference_trade_date or None,
+        "reference_trade_date_source": reference_info.get("source"),
+        "overall_status": overall,
+        "can_run_recommendation": can_run,
+        "checks": checks,
+    }
+
+
+def _readiness_outcome(checks: dict[str, dict[str, Any]]) -> tuple[str, bool]:
+    """Collapse detailed readiness checks into one conservative run decision."""
+    statuses = [str(check.get("status") or "unknown") for check in checks.values()]
     if "critical" in statuses:
         overall = "not_ready"
         can_run = False
@@ -202,14 +254,45 @@ def readiness_check(db: Session) -> dict[str, Any]:
     else:
         overall = "ready"
         can_run = True
+    return overall, can_run
 
+
+def _recommendation_is_stale(
+    *,
+    reference_trade_date: str | None,
+    latest_trade_date: str | None,
+    hours_since_run: float,
+) -> bool:
+    """Prefer trading-date freshness; wall-clock hours are a fallback only."""
+    if reference_trade_date and latest_trade_date:
+        if latest_trade_date <= reference_trade_date:
+            return latest_trade_date < reference_trade_date
+        # A future/inconsistent run date must not suppress the legacy heartbeat
+        # guard; it is not comparable to the current trading calendar.
+    return hours_since_run > 24
+
+
+def _model_completion_alert(health: dict[str, Any]) -> dict[str, Any] | None:
+    status = str(health.get("status") or "unknown")
+    if status == "ok":
+        return None
+    attempts = int(health.get("live_attempt_count") or 0)
+    successes = int(health.get("live_success_count") or 0)
+    counts = dict(health.get("status_counts") or {})
+    reasons = ", ".join(
+        f"{name}={count}"
+        for name, count in sorted(counts.items(), key=lambda item: (-int(item[1]), item[0]))
+        if name != "cache_hit"
+    )
+    message = f"模型真实 completion 健康异常：成功 {successes}/{attempts}"
+    if reasons:
+        message += f"（{reasons}）"
     return {
-        "checked_at": now.isoformat(),
-        "reference_trade_date": reference_trade_date or None,
-        "reference_trade_date_source": reference_info.get("source"),
-        "overall_status": overall,
-        "can_run_recommendation": can_run,
-        "checks": checks,
+        "source": "model_completion",
+        "source_type": "llm",
+        "status": status,
+        "alert_level": "critical" if status == "critical" else "warning",
+        "message": message,
     }
 
 

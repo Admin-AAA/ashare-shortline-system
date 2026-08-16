@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -29,7 +30,7 @@ from app.services.runs.repository import (
 from app.services.runs.skill_gate import resolve_skill_review_concurrency
 from app.services.runs.sqlalchemy_repository import SQLAlchemyRunRepository
 from app.services.runs.stages.adapters import ProductionReviewExecutor
-from app.services.runs.stages.review import ReviewStage
+from app.services.runs.stages.review import FormalReviewUnavailableError, ReviewStage
 from app.services.runs.state_machine import RunStateMachine
 
 
@@ -121,6 +122,102 @@ def test_review_stage_passes_configured_default_to_executor(monkeypatch):
     asyncio.run(stage.execute(context, StageData(params={"agent_review_concurrency": 0})))
 
     assert seen["concurrency"] == 10
+
+
+def test_formal_review_stage_fails_when_every_model_review_fails(monkeypatch):
+    class Executor:
+        async def review_candidates(self, candidates, **_kwargs):
+            return tuple(
+                {
+                    **candidate,
+                    "skill_reviews": [
+                        {
+                            "skill_id": "fake-skill",
+                            "review": None,
+                            "error": "模型熔断: circuit open",
+                        }
+                    ],
+                }
+                for candidate in candidates
+            )
+
+    class Costs:
+        def record_costs(self, _run_id):
+            return (
+                {
+                    "status": "circuit_open",
+                    "error_message": "模型熔断: circuit open",
+                },
+            )
+
+    monkeypatch.setattr(
+        "app.core.config.get_settings",
+        lambda: SimpleNamespace(market_skill_review_concurrency=2),
+    )
+    context = RunContext(
+        run_id="run-formal-review-unavailable",
+        request=parse_run_request({"run_mode": "formal"}),
+        worker_lease=WorkerLease("run-formal-review-unavailable", "lease", 1),
+    )
+    data = StageData(
+        params={"run_mode": "formal"},
+        skill_candidates=(
+            {
+                "stock": {"code": "600000"},
+                "review_skill_ids": ["fake-skill"],
+            },
+        ),
+    )
+
+    with pytest.raises(FormalReviewUnavailableError, match="0/1"):
+        asyncio.run(
+            ReviewStage(review_executor=Executor(), cost_recording=Costs()).execute(
+                context,
+                data,
+            )
+        )
+
+
+def test_experiment_review_stage_keeps_degraded_result_when_models_fail(monkeypatch):
+    class Executor:
+        async def review_candidates(self, candidates, **_kwargs):
+            return tuple(
+                {
+                    **candidate,
+                    "skill_reviews": [
+                        {
+                            "skill_id": "fake-skill",
+                            "review": None,
+                            "error": "余额不足",
+                        }
+                    ],
+                }
+                for candidate in candidates
+            )
+
+    monkeypatch.setattr(
+        "app.core.config.get_settings",
+        lambda: SimpleNamespace(market_skill_review_concurrency=2),
+    )
+    context = RunContext(
+        run_id="run-experiment-review-unavailable",
+        request=parse_run_request({"run_mode": "experiment"}),
+        worker_lease=WorkerLease("run-experiment-review-unavailable", "lease", 1),
+    )
+    data = StageData(
+        params={"run_mode": "experiment"},
+        skill_candidates=(
+            {
+                "stock": {"code": "600000"},
+                "review_skill_ids": ["fake-skill"],
+            },
+        ),
+    )
+
+    output = asyncio.run(ReviewStage(review_executor=Executor()).execute(context, data))
+
+    assert output.data.skill_review_failure_audit["success_count"] == 0
+    assert output.data.skill_review_failure_audit["failed_count"] == 1
 
 
 def test_production_review_executor_bounds_fake_provider_concurrency(monkeypatch):

@@ -4,10 +4,12 @@ import json
 from datetime import datetime
 
 from app.models.tables import ScheduledTaskRun
+from app.schemas.common import JsonResponse
 from app.services.cost_service import (
     _RESULT_JSON_MAX_BYTES,
     _task_result_payload,
     _task_run_summary_text,
+    system_health,
 )
 
 
@@ -69,6 +71,13 @@ def test_task_result_payload_truncates_oversized_result_to_summary():
 def test_task_result_payload_empty_result():
     assert _task_result_payload(None) == "{}"
     assert _task_result_payload({}) == "{}"
+
+
+def test_system_health_satisfies_json_response_contract(db):
+    payload = system_health(db)
+
+    JsonResponse.model_validate(payload)
+    assert payload["latest_run_at"] is None or isinstance(payload["latest_run_at"], str)
 
 
 def test_finish_task_run_commits_oversized_result_as_summary(production_mysql, db):

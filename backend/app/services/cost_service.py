@@ -153,12 +153,18 @@ def system_health(db: Session) -> dict[str, Any]:
         select(ApiCallLog).where(ApiCallLog.created_at >= week_ago)
     ).all()
     week_calls = len(week_logs)
-    week_errors = sum(1 for log in week_logs if log.status != "success")
+    week_errors = sum(
+        1 for log in week_logs if log.status not in {"success", "cache_hit"}
+    )
 
     # 活跃调度任务
     scheduled = db.scalars(
         select(ScheduledTask).where(ScheduledTask.enabled == True)
     ).all()
+    latest_run_at = max(
+        (r.started_at for r in recent_runs if r.started_at),
+        default=None,
+    )
 
     return {
         "timestamp": now.isoformat(),
@@ -168,7 +174,7 @@ def system_health(db: Session) -> dict[str, Any]:
         "api_error_rate_7d": round(week_errors / max(1, week_calls), 3),
         "scheduled_tasks": len(scheduled),
         "scheduled_tasks_enabled": sum(1 for t in scheduled if t.enabled),
-        "latest_run_at": max((r.started_at for r in recent_runs if r.started_at), default=None),
+        "latest_run_at": latest_run_at.isoformat() if latest_run_at else None,
     }
 
 
