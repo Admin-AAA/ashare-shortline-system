@@ -139,3 +139,30 @@ def test_regime_hard_veto_is_persisted_as_policy_drop_owner() -> None:
     )
     assert cards[0]["policy_drop_owner"] == "oscillation_hard_veto"
     assert audit["empty_reason"].startswith("production_policy_blocked:")
+
+
+def test_regime_sentiment_line_overrides_precision() -> None:
+    """L-060 精细方案回归：强牛·高潮/强牛·活跃/震荡·活跃 放行72，其余组合保持抬线。
+
+    防止 regime_sentiment_line_overrides 被误改导致负期望组合(偏多·高潮)被放行。
+    """
+    from app.engine.aggregator import resolve_score_line_context
+
+    def _snap(up: int, lu: int, ld: int) -> dict:
+        return {
+            "sample_count": 5000, "up_count": up, "down_count": 5000 - up,
+            "limit_up_count": lu, "limit_down_count": ld,
+        }
+
+    policy = DEFAULT_PRODUCTION_SELECTION_POLICY
+    # 强牛·高潮: up 76% + 涨停95 → 原91, override→72
+    c = resolve_score_line_context(72.0, market_snapshot=_snap(3800, 95, 3), selection_policy=policy)
+    assert (c["market_base"], c["market_sentiment"]) == ("强牛", "高潮")
+    assert c["effective_score_line"] == 72.0 and c["regime_sentiment_override_applied"] is True
+    # 偏多·高潮: up 52% + 涨停95 → 不在放行表, 保持抬线85
+    c2 = resolve_score_line_context(72.0, market_snapshot=_snap(2600, 95, 3), selection_policy=policy)
+    assert (c2["market_base"], c2["market_sentiment"]) == ("偏多", "高潮")
+    assert c2["effective_score_line"] == 85.0 and c2["regime_sentiment_override_applied"] is False
+    # 弱势·高潮: 仍受 weak_regime_score_cap=60 约束(组合override未覆盖, 不打扰弱势)
+    c3 = resolve_score_line_context(72.0, market_snapshot=_snap(1500, 95, 3), selection_policy=policy)
+    assert c3["market_base"] == "弱势" and c3["effective_score_line"] == 60.0

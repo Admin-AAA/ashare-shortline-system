@@ -283,6 +283,16 @@ def resolve_score_line_context(
     weak_cap = getattr(selection_policy, "weak_regime_score_cap", None)
     if weak_cap is not None and market_base == "弱势":
         effective = round(min(effective, float(weak_cap)), 2)
+    # regime×情绪 组合硬覆盖（L-060，最高优先级）：对 policy 声明的组合直接用
+    # 指定分数线，盖过 market_base/sentiment/climax/weak_cap 的一切叠加。用于
+    # 精细放行已 OOS 验证正期望的组合（强牛·高潮/强牛·活跃/震荡·活跃→72），
+    # 而保持负期望组合（偏多·高潮）的拦截。
+    _combo_overrides = dict(getattr(selection_policy, "regime_sentiment_line_overrides", ()) or ())
+    _combo_key = f"{market_base}·{sentiment}"
+    _combo_override_applied = False
+    if _combo_key in _combo_overrides:
+        effective = round(float(_combo_overrides[_combo_key]), 2)
+        _combo_override_applied = True
     return {
         "base_score_line": round(base, 2),
         "market_base": market_base,
@@ -290,6 +300,7 @@ def resolve_score_line_context(
         "market_adjustment": round(market_adjustment + sentiment_adjustment, 2),
         "risk_template_adjustment": round(risk_adjustment, 2),
         "effective_score_line": effective,
+        "regime_sentiment_override_applied": _combo_override_applied,
     }
 
 
