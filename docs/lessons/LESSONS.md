@@ -574,3 +574,12 @@
 - 待办：走 canonical production-policy experiment + Canary + publish-champion 发布为 PRODUCTION；上线后必须靠 live_forward 真实样本最终确认（当前为零）。override 已落地 feature 分支 feat/winrate-data-pipeline-fix。
 - 复现：`backend/scripts/winrate_scoreline_prod_backtest.py`（分数线对比）+ 本轮会话内 walk-forward 脚本。
 - 相关：L-058（窗口偏差）、[[zero-recommendation-strong-day-2026-08]]（强势日0出票）、[[market-regime-win-rates]]（旧小样本regime胜率，部分被本条证伪）。
+
+## L-061 收益率改善的入场/出场杠杆已系统性挖尽，跳空止损是 regime 产物非入场可识别
+
+- 状态：active（FINDING，全市场口径 n=11012 大样本逐月符号检验）
+- 适用：收益率/期望优化、止损、入场特征挖掘
+- 证据：全市场 2026_H1（n=11012，全 12 策略、含费用、因果出场）——亏损完全由止损主导（stop_loss 系列 4409 笔 -23232%，其中跳空止损 stop_loss_gap -6.82%/-8424% 是最大单项）。但：①入场特征（score/chg20/pos60/vol5_20/sig_gap）赢亏差异全部≈0，无区分度；②跳空止损占比与月度盈亏强负相关（好月5%、差月15-20%），是弱势市场产物；③"高 chg20(>20) 更差"逐月符号 `++-+---` 混杂伪影（强势月高 chg20 反而更好）。frozen snapshot 候选池（n=12573）所有入场特征 IC 全在 ±0.05 内且逐月符号混杂。
+- 永久规则：**禁止再从入场特征（chg20/pos60/score/量比等）挖收益率 alpha**——全部是月度 regime 混杂伪影，逐月符号从不一致。跳空止损（最大单项亏损）是市场整体跳空所致，无法用入场特征识别或止损参数压缩（L-011）。收益率的真实杠杆只剩：出票率（次数）和 regime 分工（L-060），以及新数据源/新因子（未挖尽的横截面维度）。
+- 与 L-011/L-058/chase-bucket-regime-confound/trailing-stop-not-early-lock-verified 交叉：出场参数与入场特征两条路都已封死，勿重复扫描。
+- 吸收位置：本轮收益率探索报告。
