@@ -344,7 +344,8 @@ skill-name/
 | `ASHARE_MARKET_KLINE_DAYS` | `90` | K线天数 |
 | `ASHARE_MARKET_QUOTE_CACHE_TTL_SECONDS` | `300` | 报价缓存 TTL |
 | `ASHARE_MARKET_KLINE_CACHE_TTL_HOURS` | `20` | K线缓存 TTL |
-| `ASHARE_TUSHARE_TOKEN` | - | Tushare Token |
+| `ASHARE_TUSHARE_PROMAX_API_KEY` | - | Promax 聚合源 API Key（仅放 `backend/.env`） |
+| `ASHARE_TUSHARE_PROMAX_RATE_LIMIT_PER_MINUTE` | `180` | Promax 客户端限速 |
 | `ASHARE_AGENT_SKILL_API_KEY` | - | DeepSeek API Key |
 | `ASHARE_AGENT_SKILL_MODEL` | `deepseek-chat` | LLM 模型 |
 | `ASHARE_LOG_LEVEL` | `INFO` | 日志级别 |
@@ -353,7 +354,7 @@ skill-name/
 
 ## 数据源
 
-- **TuShare**（主源）：日K、技术指标、筹码分布、融资融券、大宗交易、北向资金
+- **TuShare Router**：Promax 等多 Provider 自动路由与容灾，提供日K、技术指标、筹码分布、融资融券、大宗交易、北向资金
 - **AkShare**（补充）：行情数据备用
 - **东方财富**：实时行情备用
 

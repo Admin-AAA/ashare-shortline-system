@@ -33,6 +33,7 @@ from app.engine.trading_calendar import normalize_trade_date as _normalize_trade
 from app.services.tushare_transport import (
     AuthMode,
     FailureCategory,
+    HttpMethod,
     ProviderConfig,
     TushareHttpProvider,
     TushareProviderError,
@@ -265,35 +266,26 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
     }
     providers: list[TushareHttpProvider] = []
 
-    def append_ai_tool_provider(
-        *,
-        name: str,
-        api_key: str,
-        priority: int,
-        rate_limit_per_minute: int,
-        rt_min_rate_limit_per_minute: int,
-        stk_mins_rate_limit_per_minute: int,
-        proxy: str = "",
-        source: str = "",
-    ) -> None:
-        credential = api_key.strip()
-        if not credential:
-            return
+    promax_api_key = settings.tushare_promax_api_key.strip()
+    if promax_api_key:
         providers.append(
             TushareHttpProvider(
                 ProviderConfig(
-                    name=name,
-                    base_url=settings.tushare_ai_tool_url,
-                    credential=credential,
+                    name="promax",
+                    base_url=settings.tushare_promax_url,
+                    credential=promax_api_key,
                     auth_mode=AuthMode.API_KEY_HEADER,
-                    rate_limit_per_minute=max(0, int(rate_limit_per_minute)),
-                    api_rate_limits={
-                        "rt_min": max(0, int(rt_min_rate_limit_per_minute)),
-                        "stk_mins": max(0, int(stk_mins_rate_limit_per_minute)),
-                    },
-                    proxy=proxy,
-                    source=source,
-                    priority=priority,
+                    http_method=HttpMethod.GET,
+                    rate_limit_per_minute=max(
+                        0, int(settings.tushare_promax_rate_limit_per_minute)
+                    ),
+                    max_concurrency=max(0, int(settings.tushare_promax_max_concurrency)),
+                    append_api_path=True,
+                    # 实测 anns_d 只接受 ann_date，而项目使用日期区间；stk_mins
+                    # 返回同一分钟内的秒级重复快照。两者在契约修正前不参与路由。
+                    excluded_apis=frozenset({"anns_d", "stk_mins"}),
+                    source="promax",
+                    priority=4,
                     **common,
                 )
             )
@@ -357,37 +349,31 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
             )
         )
 
-    has_new_ai_tool_keys = bool(
-        settings.tushare_ai_tool_key1.strip() or settings.tushare_ai_tool_key2.strip()
-    )
-    append_ai_tool_provider(
-        name="ai_tool_key1",
-        api_key=settings.tushare_ai_tool_key1,
-        priority=-3,
-        source="tushare_source_1",
-        rate_limit_per_minute=settings.tushare_ai_tool_key1_rate_limit_per_minute,
-        rt_min_rate_limit_per_minute=settings.tushare_ai_tool_key1_rt_min_rate_limit_per_minute,
-        stk_mins_rate_limit_per_minute=settings.tushare_ai_tool_key1_stk_mins_rate_limit_per_minute,
-        proxy=settings.tushare_ai_tool_proxy,
-    )
-    append_ai_tool_provider(
-        name="ai_tool_key2",
-        api_key=settings.tushare_ai_tool_key2,
-        priority=-2,
-        source="tushare_source_2",
-        rate_limit_per_minute=settings.tushare_ai_tool_key2_rate_limit_per_minute,
-        rt_min_rate_limit_per_minute=settings.tushare_ai_tool_key2_rt_min_rate_limit_per_minute,
-        stk_mins_rate_limit_per_minute=settings.tushare_ai_tool_key2_stk_mins_rate_limit_per_minute,
-        proxy=settings.tushare_ai_tool_proxy,
-    )
-    append_ai_tool_provider(
-        name="ai_tool",
-        api_key=settings.tushare_ai_tool_api_key,
-        priority=-1 if has_new_ai_tool_keys else 2,
-        rate_limit_per_minute=settings.tushare_ai_tool_rate_limit_per_minute,
-        rt_min_rate_limit_per_minute=settings.tushare_ai_tool_rt_min_rate_limit_per_minute,
-        stk_mins_rate_limit_per_minute=settings.tushare_ai_tool_stk_mins_rate_limit_per_minute,
-    )
+    ai_tool_api_key = settings.tushare_ai_tool_api_key.strip()
+    if ai_tool_api_key:
+        providers.append(
+            TushareHttpProvider(
+                ProviderConfig(
+                    name="ai_tool",
+                    base_url=settings.tushare_ai_tool_url,
+                    credential=ai_tool_api_key,
+                    auth_mode=AuthMode.API_KEY_HEADER,
+                    rate_limit_per_minute=max(
+                        0, int(settings.tushare_ai_tool_rate_limit_per_minute)
+                    ),
+                    api_rate_limits={
+                        "rt_min": max(
+                            0, int(settings.tushare_ai_tool_rt_min_rate_limit_per_minute)
+                        ),
+                        "stk_mins": max(
+                            0, int(settings.tushare_ai_tool_stk_mins_rate_limit_per_minute)
+                        ),
+                    },
+                    priority=2,
+                    **common,
+                )
+            )
+        )
 
     official_token = settings.tushare_official_token.strip()
     if official_token:
@@ -410,7 +396,7 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
 
     if not providers:
         raise RuntimeError(
-            "Tushare 上游未配置：请设置 Fastapic Token 或 ai-tool API Key。"
+            "Tushare 上游未配置：请至少设置一个 Provider 凭据。"
         )
     return (
         TushareProviderRouter(
@@ -561,34 +547,17 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
     priority_overrides = _provider_priority_override()
     specs = (
         {
-            "name": "ai_tool_key1",
-            "source": "tushare_source_1",
-            "configured": bool(settings.tushare_ai_tool_key1.strip()),
-            "priority": -3,
-            "note": "独立 Tushare 数据源 1；分钟/公告优先源",
+            "name": "promax",
+            "source": "promax",
+            "configured": bool(settings.tushare_promax_api_key.strip()),
+            "priority": 4,
+            "note": "Promax GET 聚合源；通用同步宽覆盖备用、实时行情主源，公告/历史分钟暂不参与",
             "auth_mode": AuthMode.API_KEY_HEADER.value,
-            "rate_limit_per_minute": max(0, int(settings.tushare_ai_tool_key1_rate_limit_per_minute)),
-            "api_rate_limits": {
-                "rt_min": max(0, int(settings.tushare_ai_tool_key1_rt_min_rate_limit_per_minute)),
-                "stk_mins": max(0, int(settings.tushare_ai_tool_key1_stk_mins_rate_limit_per_minute)),
-            },
-            "max_concurrency": 0,
-            "proxy_configured": bool(settings.tushare_ai_tool_proxy.strip()),
-        },
-        {
-            "name": "ai_tool_key2",
-            "source": "tushare_source_2",
-            "configured": bool(settings.tushare_ai_tool_key2.strip()),
-            "priority": -2,
-            "note": "独立 Tushare 数据源 2；分钟/公告备用源",
-            "auth_mode": AuthMode.API_KEY_HEADER.value,
-            "rate_limit_per_minute": max(0, int(settings.tushare_ai_tool_key2_rate_limit_per_minute)),
-            "api_rate_limits": {
-                "rt_min": max(0, int(settings.tushare_ai_tool_key2_rt_min_rate_limit_per_minute)),
-                "stk_mins": max(0, int(settings.tushare_ai_tool_key2_stk_mins_rate_limit_per_minute)),
-            },
-            "max_concurrency": 0,
-            "proxy_configured": bool(settings.tushare_ai_tool_proxy.strip()),
+            "rate_limit_per_minute": max(
+                0, int(settings.tushare_promax_rate_limit_per_minute)
+            ),
+            "api_rate_limits": {},
+            "max_concurrency": max(0, int(settings.tushare_promax_max_concurrency)),
         },
         {
             "name": "fastapic",
@@ -620,8 +589,8 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
             "name": "ai_tool",
             "source": "ai-tool",
             "configured": bool(settings.tushare_ai_tool_api_key.strip()),
-            "priority": -1 if (settings.tushare_ai_tool_key1.strip() or settings.tushare_ai_tool_key2.strip()) else 2,
-            "note": "分钟/公告主源；通用同步备用源",
+            "priority": 2,
+            "note": "历史分钟/公告主源；通用同步备用源",
             "auth_mode": AuthMode.API_KEY_HEADER.value,
             "rate_limit_per_minute": max(
                 0, int(settings.tushare_ai_tool_rate_limit_per_minute)

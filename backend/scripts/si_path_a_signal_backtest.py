@@ -309,6 +309,14 @@ class PathABacktestRunner:
                 for skill in self._skills:
                     if board == "20cm" and not self._strategy_allowed_in_20cm(skill.skill_id):
                         continue
+                    # 探索性扩展：按 regime 禁用指定策略（多策略分工假设）。
+                    # config["regime_excluded_strategies"] = {"弱势": {"small-cap-..."}, ...}
+                    # 仅用于 PATH-A challenger 实验，不改生产策略语义。
+                    _reg_excl = (config.get("regime_excluded_strategies") or {}).get(
+                        market_context.get("regime")
+                    )
+                    if _reg_excl and skill.skill_id in _reg_excl:
+                        continue
                     try:
                         signal = run_strategy(skill, stock_dict, [])
                     except Exception:
@@ -629,6 +637,13 @@ class PathABacktestRunner:
                 config.get("structural_strong_hard_veto", True)
             ),
         )
+        # 探索性扩展：允许 config 通过 "policy_overrides" 覆盖任意可 patch 的
+        # selection 规则（如 climax_nonweak_extra / strong_score_penalty /
+        # weak_low_chg20_penalty），用于 PATH-A 单变量 challenger 实验。
+        # 仅影响本回测的删票口径，不改生产 artifact。
+        policy_overrides = config.get("policy_overrides") or {}
+        if policy_overrides:
+            policy = replace(policy, **dict(policy_overrides))
         cards = [
             {
                 "code": sr.code,
@@ -652,7 +667,10 @@ class PathABacktestRunner:
                 score_line=score_line,
                 output_count=int(config.get("output_count") or 6),
                 market_snapshot=market_context,
-                agent_available=False,
+                # 默认 False（降级模式，强势日走 soft floor 兜底）。设为 True 模拟
+                # 生产 LLM 正常口径：强势/高潮日禁用兜底，复现「宁可零推荐」，
+                # 用于验证强势日提线参数（climax_extra / 强牛调整）的真实影响。
+                agent_available=bool(config.get("agent_available", False)),
             ),
             policy,
         )
@@ -1103,6 +1121,10 @@ def main() -> int:
         help='JSON dict 覆盖 challenger 参数，例如 \'{"max_entry_gap_pct": 3.0}\''
     )
     parser.add_argument(
+        "--champion-args", type=str, default=None,
+        help='JSON dict 覆盖 champion 参数（默认 CHAMPION_CONFIG），用于生产口径对齐实验'
+    )
+    parser.add_argument(
         "--output", type=str, default=None,
         help="JSON 输出文件路径"
     )
@@ -1114,6 +1136,9 @@ def main() -> int:
     challenger_overrides: dict[str, Any] = {}
     if args.challenger_args:
         challenger_overrides = json.loads(args.challenger_args)
+    champion_overrides: dict[str, Any] = {}
+    if args.champion_args:
+        champion_overrides = json.loads(args.champion_args)
 
     db = SessionLocal()
     try:
@@ -1123,6 +1148,7 @@ def main() -> int:
         if run_champion:
             print("🏆 运行 CHAMPION 参数回测...")
             champion_config = dict(CHAMPION_CONFIG)
+            champion_config.update(champion_overrides)
             runner = PathABacktestRunner(db, config=champion_config)
 
             for label in window_labels:

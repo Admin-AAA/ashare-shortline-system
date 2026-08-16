@@ -34,18 +34,15 @@ class Settings(BaseSettings):
     tushare_fastapic_max_concurrency: int = 1
     tushare_ai_tool_url: str = "https://ai-tool.indevs.in/tushare/pro"
     tushare_ai_tool_api_key: str = ""
-    tushare_ai_tool_key1: str = ""
-    tushare_ai_tool_key2: str = ""
-    tushare_ai_tool_proxy: str = ""
-    tushare_ai_tool_key1_rate_limit_per_minute: int = 90
-    tushare_ai_tool_key2_rate_limit_per_minute: int = 90
-    tushare_ai_tool_key1_rt_min_rate_limit_per_minute: int = 72
-    tushare_ai_tool_key2_rt_min_rate_limit_per_minute: int = 72
-    tushare_ai_tool_key1_stk_mins_rate_limit_per_minute: int = 48
-    tushare_ai_tool_key2_stk_mins_rate_limit_per_minute: int = 48
     tushare_ai_tool_rate_limit_per_minute: int = 90
     tushare_ai_tool_rt_min_rate_limit_per_minute: int = 72
     tushare_ai_tool_stk_mins_rate_limit_per_minute: int = 48
+    # Promax：X-API-Key + GET /tushare/pro/{api_name} 聚合网关。
+    # 服务端公开健康信息显示单 IP 200 RPM；客户端保留余量按 180 RPM 限速。
+    tushare_promax_url: str = "https://pcd.mobcvb.cn/tushare/pro"
+    tushare_promax_api_key: str = ""
+    tushare_promax_rate_limit_per_minute: int = 180
+    tushare_promax_max_concurrency: int = 4
     # xiaodefa：第三方 tushare pro 协议数据源（pro_http），作为通用同步的补充 fallback。
     tushare_xiaodefa_url: str = "https://t.xiaodefa.top/"
     tushare_xiaodefa_token: str = ""
@@ -167,16 +164,19 @@ class Settings(BaseSettings):
     def _validate_critical_config(self):
         # 注：ASHARE_AGENT_SKILL_API_KEY 已弃用。模型路由由数据库
         # model_route_config 表驱动，每条路由自带独立 key，不再依赖全局 env key。
-        if not self.tushare_fastapic_token and not any(
+        if not any(
             (
+                self.tushare_fastapic_token,
                 self.tushare_ai_tool_api_key,
-                self.tushare_ai_tool_key1,
-                self.tushare_ai_tool_key2,
+                self.tushare_promax_api_key,
+                self.tushare_xiaodefa_token,
+                self.tushare_official_token,
+                self.tushare_quantdata_token,
             )
         ):
             import logging
             logging.getLogger(__name__).warning(
-                "Fastapic Token 与 ai-tool API Key 均未配置 — 上游同步和盘中实时分钟将不可用。"
+                "Tushare Provider 凭据均未配置 — 上游同步和盘中实时分钟将不可用。"
             )
         return self
 

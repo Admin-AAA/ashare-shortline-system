@@ -94,7 +94,7 @@ def list_data_sources(db: Session) -> list[dict[str, Any]]:
             }
         )
 
-    # Fastapic 与 ai-tool 是 Tushare 逻辑源下的独立故障域。它们的实时状态
+    # 各 Tushare Provider 是同一逻辑源下的独立故障域。它们的实时状态
     # 来自 Router 进程内遥测，不写入旧的可编辑注册表，也不会被孤儿清理删除。
     from app.services.tushare_client import get_tushare_provider_health
 
@@ -753,10 +753,8 @@ def set_provider_enabled(db: Session, provider_name: str, enabled: bool) -> dict
 
 
 # 参与路由调序的 tushare pro provider（realtime_quote 是独立爬虫，不在 Router 链里，不调序）。
-# 保留旧 provider 名称以读取历史配置，但当前双 Key provider 也必须可调序。
 _ROUTABLE_PROVIDERS = (
-    "ai_tool_key1",
-    "ai_tool_key2",
+    "promax",
     "fastapic",
     "xiaodefa",
     "quantdata",
@@ -810,7 +808,7 @@ def _provider_health_rows() -> list[dict[str, Any]]:
 def test_provider(db: Session, provider_name: str) -> dict[str, Any]:
     """探针测试某 provider 当前是否可用，结果写入 data_source_health。
 
-    - pro_http 源（fastapic/xiaodefa/ai_tool）：直连该 provider 调 stock_basic(limit=1)，
+    - pro_http 源（promax/fastapic/xiaodefa/ai_tool）：直连该 provider 调 stock_basic，
       绕过 Router 选路，专测这一源的连通 + 鉴权。
     - realtime_quote：调 fetch_realtime_quotes(["000001"]) 测爬虫端点。
     返回 {ok, latency_ms, status, error}；provider 未接入抛 KeyError。

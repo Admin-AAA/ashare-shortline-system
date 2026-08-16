@@ -51,6 +51,9 @@ class _FakeProvider:
         self._behavior = behavior  # ("success", items) / ("failure", category, retryable, fb_allowed)
         self.calls = 0
 
+    def supports(self, api_name):
+        return True
+
     def request(self, api_name, *, params=None, fields=""):
         self.calls += 1
         kind = self._behavior[0]
