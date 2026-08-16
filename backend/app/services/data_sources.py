@@ -717,8 +717,102 @@ def _unified_quote_rows_from_rows(all_rows: list, limit: int = 50, offset: int =
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Tushare provider 管理（配置页「数据源管理」Tab）：启停 + 测试
+# 数据源管理投影（配置页「数据源管理」Tab）：启停 + 测试
 # ═════════════════════════════════════════════════════════════════════════════
+
+_XIAOSHI_MANAGED_SOURCE_TYPES = ("quote", "kline")
+
+
+def list_management_sources(db: Session) -> list[dict[str, Any]]:
+    """Return one management row per independently operable upstream source."""
+    rows = list(_provider_health_rows())
+    xiaoshi = _xiaoshi_management_row(db)
+    if xiaoshi is not None:
+        rows.append(xiaoshi)
+    return rows
+
+
+def _xiaoshi_management_row(db: Session) -> dict[str, Any] | None:
+    sync_data_source_configs(db)
+    configs = {
+        source_type: db.get(
+            DataSourceConfig,
+            {"source": "xiaoshi", "source_type": source_type},
+        )
+        for source_type in _XIAOSHI_MANAGED_SOURCE_TYPES
+    }
+    settings = get_settings()
+    configured = bool(str(getattr(settings, "xiaoshi_api_key", "") or "").strip())
+    if not configured and not any(configs.values()):
+        return None
+
+    health_rows = [
+        row
+        for source_type in _XIAOSHI_MANAGED_SOURCE_TYPES
+        if (row := db.get(
+            DataSourceHealth,
+            {"source": "xiaoshi", "source_type": source_type},
+        )) is not None
+    ]
+    config_enabled = all(row is not None and bool(row.enabled) for row in configs.values())
+    enabled = configured and config_enabled
+    success_count = sum(int(row.success_count or 0) for row in health_rows)
+    failure_count = sum(int(row.failure_count or 0) for row in health_rows)
+    empty_count = sum(int(row.empty_count or 0) for row in health_rows)
+    effective_total = success_count + failure_count
+    latencies = [float(row.latency_ms) for row in health_rows if row.latency_ms is not None]
+    last_success_at = max(
+        (row.last_success_at for row in health_rows if row.last_success_at is not None),
+        default=None,
+    )
+    last_failure_at = max(
+        (row.last_failure_at for row in health_rows if row.last_failure_at is not None),
+        default=None,
+    )
+    if not enabled:
+        status = "disabled"
+    elif last_success_at is not None and (
+        last_failure_at is None or last_success_at >= last_failure_at
+    ):
+        status = "healthy"
+    elif failure_count:
+        status = "degraded"
+    else:
+        status = "untested"
+
+    return {
+        "source": "xiaoshi",
+        "provider_name": "xiaoshi",
+        "source_type": "market_data_provider",
+        "layer": "source",
+        "enabled": enabled,
+        "configured": configured,
+        "priority": 1000,
+        "note": "小石 v3 独立数据源；全市场快照与前复权日线主源，分钟历史走 R2",
+        "apis": [
+            "全市场快照:主源",
+            "前复权日线:主源",
+            "分钟历史:R2",
+            "量化Skill:research",
+        ],
+        "success_count": success_count,
+        "failure_count": failure_count,
+        "empty_count": empty_count,
+        "success_rate": round(success_count / effective_total, 3) if effective_total else None,
+        "latency_ms": max(latencies) if latencies else None,
+        "last_success_at": last_success_at.isoformat() if last_success_at else None,
+        "last_failure_at": last_failure_at.isoformat() if last_failure_at else None,
+        "last_error": next(
+            (row.last_error for row in health_rows if row.last_error),
+            None,
+        ),
+        "last_api": "manifest+skill+quote+kline" if health_rows else None,
+        "status": status,
+        "auth_mode": "bearer",
+        "rate_limit_per_minute": int(getattr(settings, "xiaoshi_max_qps", 30)) * 60,
+        "breaker_state": "closed",
+        "health_scope": "database_probe",
+    }
 
 def _known_provider_names() -> set[str]:
     """当前进程已接入（configured）的 provider 名集合，从 health 投影读取。"""
@@ -728,10 +822,29 @@ def _known_provider_names() -> set[str]:
 
 
 def set_provider_enabled(db: Session, provider_name: str, enabled: bool) -> dict[str, Any] | None:
-    """启停某个 tushare provider（写 DB 覆盖，运行时即时生效，不动 config）。
+    """启停配置页中的独立上游源（写 DB 覆盖，运行时即时生效）。
 
     返回更新后的 provider 条目；provider 未接入返回 None。
     """
+    if provider_name == "xiaoshi":
+        sync_data_source_configs(db)
+        rows = [
+            db.get(
+                DataSourceConfig,
+                {"source": "xiaoshi", "source_type": source_type},
+            )
+            for source_type in _XIAOSHI_MANAGED_SOURCE_TYPES
+        ]
+        if any(row is None for row in rows):
+            return None
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        for row in rows:
+            assert row is not None
+            row.enabled = enabled
+            row.updated_at = now
+        db.commit()
+        return _xiaoshi_management_row(db)
+
     if provider_name not in _known_provider_names():
         return None
     row = db.get(DataSourceConfig, {"source": provider_name, "source_type": _PROVIDER_SOURCE_TYPE})

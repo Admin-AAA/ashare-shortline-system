@@ -94,10 +94,10 @@ def get_data_health(force_refresh: bool = False, db: Session = Depends(get_db)):
 
 @router.get("/data-sources")
 def list_data_sources_api(db: Session = Depends(get_db)):
-    """列出当前配置并接入的 Tushare Provider 运行状态。"""
-    from app.services.tushare_client import get_tushare_provider_health
+    """列出配置页可管理的 Tushare Provider 与独立市场数据源。"""
+    from app.services.data_sources import list_management_sources
 
-    return {"providers": get_tushare_provider_health()}
+    return {"providers": list_management_sources(db)}
 
 
 @router.post("/data-sources/reorder")
@@ -107,12 +107,13 @@ def reorder_providers_api(payload: dict, db: Session = Depends(get_db)):
     payload: {"provider_names": ["promax", "quantdata", "tushare_official"]}（主源在前）。
     realtime_quote 是独立爬虫、不在路由链里，传入会被忽略。
     """
-    from app.services.data_sources import set_provider_priorities
+    from app.services.data_sources import list_management_sources, set_provider_priorities
 
     names = payload.get("provider_names")
     if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
         raise HTTPException(status_code=400, detail="provider_names must be a list of strings")
-    return {"providers": set_provider_priorities(db, names)}
+    set_provider_priorities(db, names)
+    return {"providers": list_management_sources(db)}
 
 
 @router.post("/data-sources/{provider_name}/enabled")
