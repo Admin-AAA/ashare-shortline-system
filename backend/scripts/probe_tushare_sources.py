@@ -46,7 +46,7 @@ def _probe_params(start_day: str, end_day: str) -> dict[str, dict[str, Any]]:
         "income": {"ts_code": _PROBE_CODE, "period": end_day},
         "balancesheet": {"ts_code": _PROBE_CODE, "period": end_day},
         "cashflow": {"ts_code": _PROBE_CODE, "period": end_day},
-        "anns_d": {"ts_code": _PROBE_CODE, "start_date": start_day, "end_date": end_day},
+        "anns_d": {"ts_code": _PROBE_CODE, "ann_date": end_day},
         "index_daily": {"ts_code": _PROBE_INDEX, "start_date": start_day, "end_date": end_day},
     }
 
@@ -140,16 +140,18 @@ def _probe_api(session: requests.Session, base_url: str, api_name: str, params: 
 def probe_sources(*, start_date: str, end_date: str) -> dict[str, Any]:
     settings = get_settings()
     params_by_api = _probe_params(_compact_day(start_date), _compact_day(end_date))
-    source_keys = {
-        "ai_tool_key1": settings.tushare_ai_tool_key1.strip(),
-        "ai_tool_key2": settings.tushare_ai_tool_key2.strip(),
+    source_configs = {
+        "promax": (
+            settings.tushare_promax_api_key.strip(),
+            settings.tushare_promax_url,
+        ),
     }
     report: dict[str, Any] = {
         "range_requested": {"start_date": start_date, "end_date": end_date},
         "sources": {},
     }
     last_request_at = 0.0
-    for source_name, api_key in source_keys.items():
+    for source_name, (api_key, base_url) in source_configs.items():
         source_report: dict[str, Any] = {"configured": bool(api_key), "apis": {}}
         if not api_key:
             source_report["status"] = "not_configured"
@@ -157,16 +159,13 @@ def probe_sources(*, start_date: str, end_date: str) -> dict[str, Any]:
             continue
         session = requests.Session()
         session.trust_env = False
-        proxy = settings.tushare_ai_tool_proxy.strip()
-        if proxy:
-            session.proxies = {"http": proxy, "https": proxy}
         session.headers.update({"X-API-Key": api_key, "Accept": "application/json"})
         try:
             for api_name, params in params_by_api.items():
                 wait = _PROBE_INTERVAL_SECONDS - (time.monotonic() - last_request_at)
                 if wait > 0:
                     time.sleep(wait)
-                result = _probe_api(session, settings.tushare_ai_tool_url, api_name, params)
+                result = _probe_api(session, base_url, api_name, params)
                 last_request_at = time.monotonic()
                 source_report["apis"][api_name] = result
         finally:

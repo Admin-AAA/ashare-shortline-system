@@ -43,11 +43,13 @@
 - 筹码分布：`pro.cyq_perf(trade_date=)` 一次拉全市场
 - 本地指标（MA/量比/乖离/突破/回撤）：`backfill_indicators.py` 批量计算
 - 逐股票调用只在必须时（如 ths_member）使用，且需限速 `--rate-limit 3`
-- Tushare 代理服务器 `https://fastapic.stockai888.top/`，不限速；全市场 `stock_basic` 查询延迟波动较大（2~50s），客户端读超时已设为 120s
+- Tushare 上游统一走 `TushareProviderRouter`；Promax GET 聚合源按 180 RPM、并发 4 保守限流，客户端读超时为 120s
 
 # 数据源策略
 
-- K线/基本面/辅助数据优先使用 Tushare
+- K线/基本面/辅助数据优先使用 Tushare；通用批量同步优先走低延迟 Provider，Promax 作宽覆盖 fallback
+- 实时 `rt_k`/`rt_min`：Promax 优先，仅对候选股按需调用
+- Promax `anns_d` 只接受单日 `ann_date`，`stk_mins` 实测混入秒级快照；两接口在契约修正前不进入 Promax 路由
 - 概念成分股：Tushare `ths_member`（akshare 有 py_mini_racer 兼容问题）
 - 新闻公告：Tushare `anns_d` + eastmoney `np-anotice` 双源
 - 筹码分布：Tushare `cyq_perf`（若接口不可用则标记"数据源不可用"）

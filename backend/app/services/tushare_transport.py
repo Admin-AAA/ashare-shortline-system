@@ -36,6 +36,11 @@ class AuthMode(StrEnum):
     API_KEY_HEADER = "api_key_header"
 
 
+class HttpMethod(StrEnum):
+    GET = "GET"
+    POST = "POST"
+
+
 class FailureCategory(StrEnum):
     CONFIGURATION = "configuration"
     CIRCUIT_OPEN = "circuit_open"
@@ -67,6 +72,8 @@ class ProviderConfig:
     recovery_seconds: float = 60.0
     api_rate_limits: Mapping[str, int] = field(default_factory=dict)
     proxy: str = field(default="", repr=False)
+    http_method: HttpMethod = HttpMethod.POST
+    excluded_apis: frozenset[str] = frozenset()
     # Business-facing source identity.  This is intentionally separate from
     # the provider name so legacy DB overrides remain compatible while two
     # credentials can be exposed as two independent data sources.
@@ -319,6 +326,7 @@ class TushareHttpProvider:
             "source": self.config.source or self.name,
             **self._health.snapshot(),
             "auth_mode": self.config.auth_mode.value,
+            "http_method": self.config.http_method.value,
             "rate_limit_per_minute": self.config.rate_limit_per_minute,
             "api_rate_limits": dict(self.config.api_rate_limits),
             "max_concurrency": self.config.max_concurrency,
@@ -351,6 +359,9 @@ class TushareHttpProvider:
         if self.config.auth_mode is AuthMode.JSON_TOKEN:
             payload["token"] = self.config.credential
         return payload
+
+    def supports(self, api_name: str) -> bool:
+        return api_name not in self.config.excluded_apis
 
     def _wait_for_capacity(self, api_name: str) -> None:
         self._provider_limiter.acquire()
@@ -478,11 +489,21 @@ class TushareHttpProvider:
     ) -> Mapping[str, Any]:
         response: requests.Response | None = None
         try:
-            response = self._session.post(
-                self._endpoint(api_name),
-                json=self._payload(api_name, params, fields),
-                timeout=self.config.timeout,
-            )
+            if self.config.http_method is HttpMethod.GET:
+                query = dict(params)
+                if fields:
+                    query["fields"] = fields
+                response = self._session.get(
+                    self._endpoint(api_name),
+                    params=query,
+                    timeout=self.config.timeout,
+                )
+            else:
+                response = self._session.post(
+                    self._endpoint(api_name),
+                    json=self._payload(api_name, params, fields),
+                    timeout=self.config.timeout,
+                )
             status = int(response.status_code)
             if status != 200:
                 if status == 429:
@@ -645,12 +666,12 @@ class TushareProviderRouter:
     """API-aware routing over independently protected providers."""
 
     # 默认 per-API 选路链：{api_name: [provider 名按尝试顺序]}。
-    # 未列出的 API 回落到按 provider priority 升序；分钟/公告相关 API 优先走双 Key。
+    # 未列出的 API 回落到按 provider priority 升序。
     DEFAULT_API_ROUTES: Mapping[str, tuple[str, ...]] = {
-        "rt_k": ("ai_tool_key1", "ai_tool_key2", "ai_tool", "xiaodefa", "fastapic", "quantdata"),
-        "stk_mins": ("ai_tool_key1", "ai_tool_key2", "ai_tool", "fastapic", "quantdata", "xiaodefa"),
-        "rt_min": ("ai_tool_key1", "ai_tool_key2", "ai_tool", "fastapic", "quantdata", "xiaodefa"),
-        "anns_d": ("ai_tool_key1", "ai_tool_key2", "ai_tool", "fastapic", "quantdata", "xiaodefa"),
+        "rt_k": ("promax", "ai_tool", "xiaodefa", "fastapic", "quantdata"),
+        "stk_mins": ("ai_tool", "fastapic", "quantdata", "xiaodefa"),
+        "rt_min": ("promax", "ai_tool", "fastapic", "quantdata", "xiaodefa"),
+        "anns_d": ("ai_tool", "fastapic", "quantdata", "xiaodefa"),
     }
 
     def __init__(
@@ -710,7 +731,11 @@ class TushareProviderRouter:
         return provider.config.priority
 
     def _ordered_providers(self, api_name: str) -> list[TushareHttpProvider]:
-        enabled = [p for p in self._providers.values() if self._is_enabled(p.name)]
+        enabled = [
+            p
+            for p in self._providers.values()
+            if self._is_enabled(p.name) and p.supports(api_name)
+        ]
         route = self._api_routes.get(api_name)
         if route:
             # 显式链序：按 route 顺序挑选已启用且已注册的 provider
