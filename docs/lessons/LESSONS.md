@@ -583,3 +583,12 @@
 - 永久规则：**禁止再从入场特征（chg20/pos60/score/量比等）挖收益率 alpha**——全部是月度 regime 混杂伪影，逐月符号从不一致。跳空止损（最大单项亏损）是市场整体跳空所致，无法用入场特征识别或止损参数压缩（L-011）。收益率的真实杠杆只剩：出票率（次数）和 regime 分工（L-060），以及新数据源/新因子（未挖尽的横截面维度）。
 - 与 L-011/L-058/chase-bucket-regime-confound/trailing-stop-not-early-lock-verified 交叉：出场参数与入场特征两条路都已封死，勿重复扫描。
 - 吸收位置：本轮收益率探索报告。
+
+## L-062 PATH-A 回测缺辅助数据字段，会系统性误判依赖它们的策略为"不出票/不行"
+
+- 状态：active（FINDING，评估策略前必查）
+- 适用：用 PATH-A / 任何只重建价格技术指标的回测评估策略
+- 证据：PATH-A `_bar_to_stock_dict` 只从 daily_kbars 重建价格/技术指标，全部 13 个策略的 universe 都依赖辅助字段（`dragon_tiger_is_on_list`/`announcement_negative_count`/`news_risk_count`/`twenty_cm_risk_gate`/`limit_up_overheat_score` 等）。在 PATH-A 里这些字段是空值 → dragon-tiger/sector-relative-strength/high-range-breakout 等对全市场 100% hard_veto"不在策略股票池"，看似"从不出票"。但真实生产（真 feature_builder 加载辅助数据）里 dragon-tiger 出过 32 票占 11.8%。辅助数据(dragon_tiger/capital_flow/limit_up_board)仅覆盖最近 ~4-5 个月。
+- 永久规则：**评估策略表现前，先检查其 universe 依赖的字段是否在回测特征里可得**。依赖辅助数据的策略，PATH-A 结论一律不可信，必须用真 feature_builder 回测或真实生产 outcome 评估。辅助数据只覆盖近 4-5 个月——更早的历史窗口这些策略在生产上也无数据可触发，评估窗口不得超过数据覆盖。
+- 与 L-001/L-005（口径/数据深度披露）交叉：回测结论必须标注"特征数据完备性"，缺辅助数据的回测要声明哪些策略被误判。
+- 吸收位置：本轮策略评估报告。
