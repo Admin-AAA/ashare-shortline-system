@@ -1,0 +1,132 @@
+id: xiaoshi-quant-expert
+name: 小石量化多因子研究
+enabled: false
+weight: 0.0
+
+meta:
+  author: xiaoshi-adapted
+  style: multi-factor-research
+  version: 2026-08-14.1-local.1
+  lifecycle_stage: research
+  holding_days: [3, 5]
+  strategy_independence: 0.75
+  default_preset_groups: {}
+
+contract:
+  type: strategy
+  executable: true
+  schema_version: 1
+
+universe:
+  include:
+    - "amount_yi >= 3"
+    - "turnover_rate >= 1"
+    - "turnover_rate <= 10"
+    - "max_dd20 >= -18"
+    - "pos60 >= 45"
+    - "twenty_cm_risk_gate != 'block'"
+  exclude:
+    - "is_st == true"
+    - "announcement_negative_count > 0"
+    - "news_risk_count > 1"
+
+prefilter:
+  market:
+    include:
+      - when: "off_high_pct >= -15"
+        reason: "trend_damage_too_large"
+      - when: "upper_shadow_count20 <= 5"
+        reason: "selling_pressure_too_high"
+    include_any:
+      - when: "breakout20 == true and vol5_20 >= 1.1"
+        reason: "requires_breakout_confirmation"
+      - when: "pct >= -2 and pct <= 1 and vol5_20 <= 1.0"
+        reason: "requires_pullback_confirmation"
+    exclude:
+      - when: "rsi_12 > 78 and pos20 > 95"
+        reason: "overheated"
+      - when: "vol5_20 >= 1.5 and pct < 0"
+        reason: "distribution_risk"
+
+phases:
+  - name: 数据与趋势风险否决
+    when: "max_dd20 < -18 or off_high_pct < -15 or announcement_negative_count > 0"
+    score_cap: 20
+    hard_veto: true
+    risk_flags: ["趋势或信息风险超出研究基线"]
+
+  - name: 过热观察
+    when: "rsi_12 > 78 and pos20 > 95"
+    score_cap: 45
+    hard_veto: false
+    risk_flags: ["动量与位置同时过热"]
+
+  - name: 多因子研究候选
+    when: "ma5 > ma10 and ma10 > ma20 and pos20 >= 65 and pos20 <= 92 and rsi_12 >= 52 and rsi_12 <= 72"
+    score_cap: 82
+    hard_veto: false
+
+setups:
+  - name: 趋势放量确认
+    when: "breakout20 == true and ma5 > ma10 and ma10 > ma20 and vol5_20 >= 1.1 and vol5_20 <= 2.2"
+    score_delta: 8
+    entry_rule: "研究假设：平台突破并有温和放量，下一交易日验证延续性"
+    invalid_rule: "跌回突破平台、量价背离或市场状态转弱"
+
+  - name: 趋势内缩量回踩
+    when: "ma5 > ma10 and ma10 > ma20 and pct >= -2 and pct <= 1 and vol5_20 <= 1.0 and (support_ma5 == true or support_ma10 == true)"
+    score_delta: 8
+    entry_rule: "研究假设：多头趋势内缩量回踩支撑，等待下一交易日重新转强"
+    invalid_rule: "放量跌破 MA10 或 20 日回撤继续扩大"
+
+require_setup: true
+
+scoring:
+  base: 40
+  rules:
+    - when: "ma5 > ma10 and ma10 > ma20"
+      delta: 10
+      reason: 多头趋势基线
+    - when: "pos20 >= 65 and pos20 <= 92"
+      delta: 8
+      reason: 相对强度健康且未极端过热
+    - when: "rsi_12 >= 52 and rsi_12 <= 72"
+      delta: 6
+      reason: 动量处于研究有效区间
+    - when: "amount_yi >= 5"
+      delta: 5
+      reason: 流动性较充足
+    - when: "turnover_rate >= 2 and turnover_rate <= 8"
+      delta: 5
+      reason: 换手活跃但未过热
+    - when: "is_main_theme == true"
+      delta: 6
+      reason: 主线环境确认
+    - when: "max_dd20 >= -10"
+      delta: 5
+      reason: 近期回撤可控
+    - when: "rsi_12 > 78"
+      delta: -8
+      reason: 动量过热
+    - when: "vol5_20 >= 1.5 and pct < 0"
+      delta: -12
+      reason: 放量下跌风险
+
+risk:
+  rules:
+    - when: "market_regime == '弱势'"
+      level: high
+      flag: 弱市仅保留研究观察
+      score_delta: -10
+    - when: "news_risk_count > 0"
+      level: high
+      flag: 新闻风险未完全排除
+      score_delta: -10
+    - when: "turnover_rate > 10"
+      level: high
+      flag: 换手过热
+      score_delta: -8
+    - when: "twenty_cm_risk_gate == 'caution'"
+      level: medium
+      flag: 20cm 标的波动风险
+      score_delta: -6

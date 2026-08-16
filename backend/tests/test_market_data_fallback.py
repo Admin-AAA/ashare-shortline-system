@@ -43,6 +43,23 @@ def test_fetch_first_quotes_raises_when_tushare_fails(monkeypatch):
     assert "tushare down" in message
 
 
+def test_fetch_first_quotes_calls_each_source_once(monkeypatch):
+    calls: list[str] = []
+
+    def fake_fetch_quotes(source, settings):
+        calls.append(source)
+        return [{"code": "000001", "price": 10.0}]
+
+    monkeypatch.setattr(market_data, "_fetch_quotes", fake_fetch_quotes)
+
+    source, quotes, errors = _fetch_first_quotes(["xiaoshi", "tushare"], DummySettings())
+
+    assert source == "xiaoshi"
+    assert quotes == [{"code": "000001", "price": 10.0}]
+    assert errors == []
+    assert calls == ["xiaoshi"]
+
+
 def test_fetch_first_kline_falls_back_when_tushare_returns_too_few(monkeypatch):
     quote = {"code": "000001", "exchange": "SZ"}
 

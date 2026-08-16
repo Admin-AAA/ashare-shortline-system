@@ -816,15 +816,21 @@ def test_provider(db: Session, provider_name: str) -> dict[str, Any]:
     started = time.perf_counter()
     ok = False
     error: str | None = None
+    details: dict[str, Any] | None = None
+    quote_ok = False
+    quote_error: str | None = None
+    kline_ok = False
+    kline_error: str | None = None
     try:
         if provider_name == "xiaoshi":
-            from app.services.xiaoshi_client import get_xiaoshi_client
-
-            payload = get_xiaoshi_client().get_stocks(market="CN", limit=1)
-            items = payload.get("items") if isinstance(payload, dict) else None
-            ok = bool(items)
-            if not ok:
-                error = "xiaoshi stocks 返回空"
+            probe = _probe_xiaoshi_source()
+            ok = probe["ok"]
+            error = probe["error"]
+            details = probe["details"]
+            quote_ok = probe["quote_ok"]
+            quote_error = probe["quote_error"]
+            kline_ok = probe["kline_ok"]
+            kline_error = probe["kline_error"]
         elif provider_name == "realtime_quote":
             from app.services.realtime_quote_client import fetch_realtime_quotes
 
@@ -842,8 +848,12 @@ def test_provider(db: Session, provider_name: str) -> dict[str, Any]:
     latency_ms = round((time.perf_counter() - started) * 1000, 1)
 
     if provider_name == "xiaoshi":
-        _record_source_test(db, provider_name, "quote", ok=ok, latency_ms=latency_ms, error=error)
-        _record_source_test(db, provider_name, "kline", ok=ok, latency_ms=latency_ms, error=error)
+        _record_source_test(
+            db, provider_name, "quote", ok=quote_ok, latency_ms=latency_ms, error=quote_error
+        )
+        _record_source_test(
+            db, provider_name, "kline", ok=kline_ok, latency_ms=latency_ms, error=kline_error
+        )
     else:
         _record_provider_test(db, provider_name, ok=ok, latency_ms=latency_ms, error=error)
     return {
@@ -852,6 +862,69 @@ def test_provider(db: Session, provider_name: str) -> dict[str, Any]:
         "latency_ms": latency_ms,
         "status": "healthy" if ok else "degraded",
         "error": error,
+        **({"details": details} if details is not None else {}),
+    }
+
+
+def _probe_xiaoshi_source() -> dict[str, Any]:
+    """Probe data and pinned Skill contracts without mixing their health states."""
+    from app.services.xiaoshi_client import get_xiaoshi_client
+
+    settings = get_settings()
+    client = get_xiaoshi_client()
+    details: dict[str, Any] = {}
+    errors: list[str] = []
+
+    contract_ok = False
+    try:
+        manifest = client.get_manifest()
+        details["manifest_version"] = str(manifest.get("version") or "")
+        artifact = client.get_quant_skill(
+            version=settings.xiaoshi_skill_version,
+            expected_sha256=settings.xiaoshi_skill_sha256,
+        )
+        details["skill_version"] = artifact.version
+        contract_ok = True
+    except Exception as exc:
+        errors.append(f"contract: {type(exc).__name__}: {str(exc)[:160]}")
+
+    quote_ok = False
+    quote_error: str | None = None
+    try:
+        quote = client.get_quote("000001")
+        symbol = quote.get("symbol") or quote.get("code")
+        quote_ok = bool(str(symbol or "").strip()) and float(quote.get("price") or 0) > 0
+        details["quote_time"] = quote.get("quote_time") or quote.get("observed_at")
+        if not quote_ok:
+            quote_error = "xiaoshi quote 返回空或价格无效"
+    except Exception as exc:
+        quote_error = f"{type(exc).__name__}: {str(exc)[:160]}"
+    if quote_error:
+        errors.append(f"quote: {quote_error}")
+
+    kline_ok = False
+    kline_error: str | None = None
+    try:
+        payload = client.get_kline("000001", limit=2)
+        bars = payload.get("bars") or payload.get("data") or []
+        kline_count = len(bars) if isinstance(bars, list) else 0
+        details["kline_count"] = kline_count
+        kline_ok = kline_count >= 2
+        if not kline_ok:
+            kline_error = "xiaoshi kline 返回不足 2 条"
+    except Exception as exc:
+        kline_error = f"{type(exc).__name__}: {str(exc)[:160]}"
+    if kline_error:
+        errors.append(f"kline: {kline_error}")
+
+    return {
+        "ok": contract_ok and quote_ok and kline_ok,
+        "error": "; ".join(errors) or None,
+        "details": details,
+        "quote_ok": quote_ok,
+        "quote_error": quote_error,
+        "kline_ok": kline_ok,
+        "kline_error": kline_error,
     }
 
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -106,6 +108,56 @@ def test_test_provider_unknown_raises_keyerror(db_session, monkeypatch):
 
     with pytest.raises(KeyError):
         ds.test_provider(db_session, "nonexist")
+
+
+def test_test_provider_xiaoshi_checks_quote_kline_and_pinned_skill(db_session, monkeypatch):
+    calls: list[str] = []
+
+    class _Client:
+        def get_manifest(self):
+            calls.append("manifest")
+            return {"version": "2026-08-14.1"}
+
+        def get_quant_skill(self, *, version, expected_sha256):
+            calls.append(f"skill:{version}:{expected_sha256}")
+            return SimpleNamespace(version=version, sha256=expected_sha256)
+
+        def get_quote(self, code):
+            calls.append(f"quote:{code}")
+            return {"code": code, "price": 10.0, "quote_time": "2026-08-16T15:00:00+08:00"}
+
+        def get_kline(self, code, *, limit):
+            calls.append(f"kline:{code}:{limit}")
+            return {"count": 2, "bars": [{"date": "2026-08-15"}, {"date": "2026-08-16"}]}
+
+    monkeypatch.setattr("app.services.xiaoshi_client.get_xiaoshi_client", lambda: _Client())
+    monkeypatch.setattr(
+        ds,
+        "get_settings",
+        lambda: SimpleNamespace(
+            xiaoshi_skill_version="2026-08-14.1",
+            xiaoshi_skill_sha256="expected-sha",
+        ),
+    )
+
+    out = ds.test_provider(db_session, "xiaoshi")
+
+    assert out["ok"] is True
+    assert out["details"] == {
+        "manifest_version": "2026-08-14.1",
+        "skill_version": "2026-08-14.1",
+        "quote_time": "2026-08-16T15:00:00+08:00",
+        "kline_count": 2,
+    }
+    assert calls == [
+        "manifest",
+        "skill:2026-08-14.1:expected-sha",
+        "quote:000001",
+        "kline:000001:2",
+    ]
+    for source_type in ("quote", "kline"):
+        health = db_session.get(DataSourceHealth, {"source": "xiaoshi", "source_type": source_type})
+        assert health is not None and health.success_count == 1
 
 
 def test_probe_pro_provider_uses_lightweight_stock_basic_request(monkeypatch):

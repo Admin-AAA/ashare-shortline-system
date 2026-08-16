@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+
 import httpx
 import pytest
 
 from app.services.market_source.port import DailyBarRequest, QuoteRef, QuoteRequest
 from app.services.xiaoshi_client import XiaoshiClient
+from app.services.xiaoshi_client import XiaoshiError
 from app.services.xiaoshi_market_source import XiaoshiMarketSourceAdapter
 
 
@@ -104,5 +107,98 @@ def test_xiaoshi_market_source_normalizes_snapshot_and_qfq_bars() -> None:
         assert bars.audit.status.value == "success"
         assert rows[-1]["trade_date"] == "2026-08-07"
         assert rows[-1]["pct_chg"] == pytest.approx(10.0)
+    finally:
+        http_client.close()
+
+
+def test_xiaoshi_client_uses_current_factor_and_history_contracts() -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"ok": True}, request=request)
+
+    http_client = httpx.Client(transport=httpx.MockTransport(handler))
+    client = XiaoshiClient(
+        base_url="https://api.shizixi.com",
+        api_key="test-key",
+        http_client=http_client,
+    )
+    try:
+        client.get_factor_library()
+        client.get_history_download_session(dataset="min1", code="000001", year="2026")
+    finally:
+        http_client.close()
+
+    assert [request.url.path for request in calls] == [
+        "/api/v3/factors/library",
+        "/api/v3/history/download-session",
+    ]
+
+
+def test_xiaoshi_client_verifies_pinned_quant_skill() -> None:
+    content = "---\nname: xiaoshi-quant-expert\n---\n# Xiaoshi Quant Expert\n"
+    expected_sha256 = hashlib.sha256(content.encode()).hexdigest()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=content, request=request)
+
+    http_client = httpx.Client(transport=httpx.MockTransport(handler))
+    client = XiaoshiClient(
+        base_url="https://api.shizixi.com",
+        api_key="test-key",
+        http_client=http_client,
+    )
+    try:
+        artifact = client.get_quant_skill(
+            version="2026-08-14.1",
+            expected_sha256=expected_sha256,
+        )
+        assert artifact.version == "2026-08-14.1"
+        assert artifact.sha256 == expected_sha256
+        assert artifact.content == content
+
+        with pytest.raises(XiaoshiError, match="校验失败"):
+            client.get_quant_skill(
+                version="2026-08-14.1",
+                expected_sha256="0" * 64,
+            )
+    finally:
+        http_client.close()
+
+
+def test_xiaoshi_market_source_rejects_partial_full_market_snapshot() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/data/stocks"):
+            return httpx.Response(
+                200,
+                json={"items": [{"code": "000001", "name": "平安银行"}]},
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            json={
+                "items": [{"code": "000001", "name": "平安银行", "price": 10}],
+                "count": 1,
+                "expected_total": 5533,
+                "coverage": 0.0002,
+                "partial": True,
+            },
+            request=request,
+        )
+
+    http_client = httpx.Client(transport=httpx.MockTransport(handler))
+    adapter = XiaoshiMarketSourceAdapter(
+        client=XiaoshiClient(
+            base_url="https://api.shizixi.com",
+            api_key="test-key",
+            http_client=http_client,
+        )
+    )
+    try:
+        batch = adapter.fetch_quotes(QuoteRequest())
+        assert batch.audit.status.value == "failure"
+        assert batch.quotes == ()
+        assert batch.errors[0].message == "xiaoshi quote retrieval failed"
     finally:
         http_client.close()

@@ -6,10 +6,12 @@ does not depend on Xiaoshi response details.
 """
 from __future__ import annotations
 
+import hashlib
 import threading
 import time
 from collections import deque
 from collections.abc import Mapping
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
@@ -27,6 +29,15 @@ class XiaoshiError(RuntimeError):
 
 class XiaoshiConfigurationError(XiaoshiError):
     """The Xiaoshi client has no usable API key or endpoint configuration."""
+
+
+@dataclass(frozen=True)
+class XiaoshiSkillArtifact:
+    """Pinned, integrity-checked copy of the upstream quant Skill."""
+
+    version: str
+    sha256: str
+    content: str
 
 
 class _QPSLimiter:
@@ -87,7 +98,7 @@ class XiaoshiClient:
     def __exit__(self, *_: object) -> None:
         self.close()
 
-    def request(
+    def _request_response(
         self,
         method: str,
         path: str,
@@ -95,13 +106,14 @@ class XiaoshiClient:
         params: Mapping[str, Any] | None = None,
         json: Mapping[str, Any] | None = None,
         cache_control: str | None = None,
-    ) -> dict[str, Any]:
+        accept: str = "application/json",
+    ) -> httpx.Response:
         if not self.configured:
             raise XiaoshiConfigurationError("Xiaoshi API Key 或 API 地址未配置")
         normalized_path = "/" + path.lstrip("/")
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "Accept": "application/json",
+            "Accept": accept,
         }
         if cache_control:
             headers["Cache-Control"] = cache_control
@@ -157,24 +169,58 @@ class XiaoshiClient:
                     status_code=status,
                     path=normalized_path,
                 )
-            try:
-                payload = response.json()
-            except ValueError as exc:
-                raise XiaoshiError(
-                    f"Xiaoshi 返回非 JSON: {normalized_path}",
-                    status_code=status,
-                    path=normalized_path,
-                ) from exc
-            if not isinstance(payload, Mapping):
-                raise XiaoshiError(
-                    f"Xiaoshi 返回格式无效: {normalized_path}",
-                    status_code=status,
-                    path=normalized_path,
-                )
-            return dict(payload)
+            return response
 
         assert last_error is not None
         raise last_error
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+        json: Mapping[str, Any] | None = None,
+        cache_control: str | None = None,
+    ) -> dict[str, Any]:
+        response = self._request_response(
+            method,
+            path,
+            params=params,
+            json=json,
+            cache_control=cache_control,
+        )
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise XiaoshiError(
+                f"Xiaoshi 返回非 JSON: {response.request.url.path}",
+                status_code=response.status_code,
+                path=response.request.url.path,
+            ) from exc
+        if not isinstance(payload, Mapping):
+            raise XiaoshiError(
+                f"Xiaoshi 返回格式无效: {response.request.url.path}",
+                status_code=response.status_code,
+                path=response.request.url.path,
+            )
+        return dict(payload)
+
+    def request_text(
+        self,
+        path: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+        cache_control: str | None = None,
+    ) -> str:
+        response = self._request_response(
+            "GET",
+            path,
+            params=params,
+            cache_control=cache_control,
+            accept="text/markdown, text/plain",
+        )
+        return response.text
 
     def get_manifest(self) -> dict[str, Any]:
         return self.request("GET", "/api/v3/manifest", cache_control="no-store, no-cache")
@@ -271,7 +317,7 @@ class XiaoshiClient:
         return self.request("GET", f"/api/v3/quant-data/{dataset}", params=params)
 
     def get_factor_library(self) -> dict[str, Any]:
-        return self.request("GET", "/api/factors/library")
+        return self.request("GET", "/api/v3/factors/library")
 
     def get_market_sentiment(self) -> dict[str, Any]:
         return self.request("GET", "/api/v3/data/market-sentiment")
@@ -279,8 +325,31 @@ class XiaoshiClient:
     def get_history_manifest(self) -> dict[str, Any]:
         return self.request("GET", "/api/v3/history/manifest")
 
-    def get_history_download_urls(self, **params: Any) -> dict[str, Any]:
-        return self.request("GET", "/api/v3/history/download-urls", params=params)
+    def get_history_download_session(self, **params: Any) -> dict[str, Any]:
+        return self.request("GET", "/api/v3/history/download-session", params=params)
+
+    def get_quant_skill(
+        self,
+        *,
+        version: str,
+        expected_sha256: str,
+    ) -> XiaoshiSkillArtifact:
+        content = self.request_text(
+            "/api/v3/skills/xiaoshi-quant-expert/SKILL.md",
+            params={"v": version},
+            cache_control="no-store, no-cache",
+        )
+        actual_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        if actual_sha256 != expected_sha256.strip().lower():
+            raise XiaoshiError(
+                "Xiaoshi 量化 Skill 完整性校验失败",
+                path="/api/v3/skills/xiaoshi-quant-expert/SKILL.md",
+            )
+        return XiaoshiSkillArtifact(
+            version=version,
+            sha256=actual_sha256,
+            content=content,
+        )
 
 
 @lru_cache(maxsize=1)
