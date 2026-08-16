@@ -8,7 +8,12 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import func, select
 
-from app.models.tables import Recommendation, RecommendationOutcome, RecommendationRun
+from app.models.tables import (
+    Recommendation,
+    RecommendationOutcome,
+    RecommendationRun,
+    StockMetadataHistory,
+)
 from app.services.evidence import (
     EvidenceClass,
     PROVENANCE_SCHEMA_VERSION,
@@ -460,10 +465,20 @@ def test_historical_page_queries_reconstruction_by_trade_date_without_rewriting_
         # Real wall-clock generation remains five days after signal date.
         recommended_at=actual_generated_at,
         code="688889",
-        name="历史重建查询样本",
+        name="688889",
+        industry="未分类",
         recommend_price=10.0,
         final_score=88.0,
         setup_type="replay_setup_fixture",
+    )
+    metadata = StockMetadataHistory(
+        code="688889",
+        name="历史重建查询样本",
+        industry="半导体",
+        is_st=False,
+        effective_from="2099-01-01",
+        effective_to=None,
+        source_version="test/history-display-fallback-v1",
     )
     outcome = RecommendationOutcome(
         recommendation_id=recommendation_id,
@@ -471,7 +486,7 @@ def test_historical_page_queries_reconstruction_by_trade_date_without_rewriting_
         executed_return=1.5,
         outcome_label="success",
     )
-    db.add_all([run, recommendation, outcome])
+    db.add_all([run, recommendation, outcome, metadata])
     db.flush()
     finalize_reconstruction_run(db, run_id)
     publish_reconstruction_batch(db, identity.batch_id)
@@ -486,6 +501,8 @@ def test_historical_page_queries_reconstruction_by_trade_date_without_rewriting_
     )
 
     assert result["total"] == 1
+    assert result["items"][0]["name"] == "历史重建查询样本"
+    assert result["items"][0]["industry"] == "半导体"
     assert result["items"][0]["trade_date"] == trade_date
     assert result["items"][0]["recommended_at"] == actual_generated_at.isoformat()
     assert result["items"][0]["outcome"]["outcome_label"] == "success"

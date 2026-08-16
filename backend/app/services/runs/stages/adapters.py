@@ -116,8 +116,13 @@ class ProductionMarketUniverse(MarketUniversePort):
             # Build point-in-time quotes from daily_kbars/daily_basic instead so
             # older dates remain reproducible and causally bounded.
             from app.services.backtest.historical_universe import load_historical_universe
+            from app.services.backtest.stock_metadata import StockMetadataHistoryProvider
 
-            stocks, snapshot = load_historical_universe(self._db, as_of_date)
+            stocks, snapshot = load_historical_universe(
+                self._db,
+                as_of_date,
+                stock_metadata_provider=StockMetadataHistoryProvider(self._db),
+            )
             count = len(stocks)
             return (
                 tuple(stocks),

@@ -1849,7 +1849,7 @@ def _serialize_recommendations_batched(db: Session, recs: list[Recommendation], 
             presets = db.scalars(select(Preset).where(Preset.preset_id.in_(preset_ids))).all()
             for p in presets:
                 preset_map[p.preset_id] = p.name
-    return [
+    items = [
         _serialize_recommendation_cached(
             rec, watch_map.get(rec.recommendation_id),
             run_map.get(rec.run_id),
@@ -1858,6 +1858,49 @@ def _serialize_recommendations_batched(db: Session, recs: list[Recommendation], 
         )
         for rec in recs
     ]
+    _apply_historical_display_metadata(db, recs, items, run_map)
+    return items
+
+
+def _apply_historical_display_metadata(
+    db: Session,
+    recs: list[Recommendation],
+    items: list[dict[str, Any]],
+    run_map: dict[str, RecommendationRun],
+) -> None:
+    """Repair legacy reconstruction fallbacks without mutating sealed evidence."""
+    affected = [
+        rec
+        for rec in recs
+        if getattr(run_map.get(rec.run_id), "evidence_class", None) == "historical_reconstruction"
+        and (
+            not str(rec.name or "").strip()
+            or str(rec.name).strip() == str(rec.code)
+            or not str(rec.industry or "").strip()
+            or str(rec.industry).strip() == "未分类"
+        )
+    ]
+    if not affected:
+        return
+
+    from app.services.backtest.stock_metadata import StockMetadataHistoryProvider
+
+    recs_by_date: dict[str, list[Recommendation]] = {}
+    for rec in affected:
+        recs_by_date.setdefault(str(rec.trade_date), []).append(rec)
+    item_by_id = {str(item.get("recommendation_id")): item for item in items}
+    provider = StockMetadataHistoryProvider(db)
+    for trade_date, date_recs in recs_by_date.items():
+        resolution = provider.resolve([str(rec.code) for rec in date_recs], trade_date)
+        for rec in date_recs:
+            metadata = resolution.metadata_by_code.get(str(rec.code))
+            item = item_by_id.get(str(rec.recommendation_id))
+            if metadata is None or item is None:
+                continue
+            if not str(item.get("name") or "").strip() or str(item["name"]).strip() == str(rec.code):
+                item["name"] = str(metadata.get("name") or rec.code)
+            if not str(item.get("industry") or "").strip() or str(item["industry"]).strip() == "未分类":
+                item["industry"] = str(metadata.get("industry") or "未分类")
 
 
 def _serialize_recommendation_cached(
