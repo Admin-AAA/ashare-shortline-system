@@ -11,7 +11,7 @@
 ``evaluation_scope`` 或 ``recommended_at`` 来伪装 LIVE evidence。
 
 用法：python scripts/replay_all_days.py [--start 2026-05-22] [--end 2026-07-29]
-      [--rule-only-fallback]
+      [--dates 2026-05-14,2026-05-15] [--rule-only-fallback]
 """
 from __future__ import annotations
 
@@ -56,6 +56,28 @@ def _trade_dates(db, start: str, end: str) -> list[str]:
         {"s": start, "e": end},
     ).scalars()
     return [str(d) for d in rows]
+
+
+def _explicit_trade_dates(db, raw: str) -> list[str]:
+    """Validate and return an explicit, deduplicated list of indexed trade dates."""
+    requested = sorted({part.strip() for part in raw.split(",") if part.strip()})
+    if not requested:
+        raise ValueError("--dates 至少需要一个 YYYY-MM-DD 日期")
+
+    invalid = []
+    for value in requested:
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+        except ValueError:
+            invalid.append(value)
+    if invalid:
+        raise ValueError(f"--dates 包含无效日期: {', '.join(invalid)}")
+
+    available = set(_trade_dates(db, requested[0], requested[-1]))
+    missing = [value for value in requested if value not in available]
+    if missing:
+        raise ValueError(f"--dates 包含数据库未索引的交易日: {', '.join(missing)}")
+    return requested
 
 
 def _base_payload(db=None) -> dict:
@@ -299,6 +321,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--start", default="2026-05-22")
     parser.add_argument("--end", default="2026-07-29")
+    parser.add_argument(
+        "--dates",
+        help="逗号分隔的精确交易日列表；指定后覆盖 --start/--end",
+    )
     parser.add_argument("--skip-existing", action="store_true", help="跳过已有 run 的交易日")
     parser.add_argument(
         "--rule-only-fallback",
@@ -320,9 +346,18 @@ def main() -> int:
 
     db = SessionLocal()
     try:
-        dates = _trade_dates(db, args.start, args.end)
+        try:
+            dates = (
+                _explicit_trade_dates(db, args.dates)
+                if args.dates
+                else _trade_dates(db, args.start, args.end)
+            )
+        except ValueError as exc:
+            print(f"日期参数无效: {exc}")
+            return 2
         if not dates:
-            print(f"交易日: 0 个 ({args.start} ~ {args.end})")
+            window = f"{args.start} ~ {args.end}"
+            print(f"交易日: 0 个 ({window})")
             return 0
         print(f"交易日: {len(dates)} 个 ({dates[0]} ~ {dates[-1]})")
 

@@ -29,18 +29,26 @@ def test_oppose_does_not_boost_enrich_path():
     assert out["score"] == 70.0  # 加分被钳到 0，未推过线
 
 
-def test_support_still_boosts_enrich_path():
-    """对照：support(+5) 仍正常加分（70→75）。"""
+def test_support_does_not_change_enrich_path():
+    """support 的正向 score_delta 只保留审计，不改变规则分。"""
     signal = {"score": 70.0, "score_cap": 100.0}
     out = enrich_signal_with_agent_review(signal, _review("support", 5.0))
-    assert out["score"] == 75.0
+    assert out["score"] == 70.0
+
+
+def test_agent_review_overlay_does_not_change_rule_score():
+    """风险 overlay 不得把 LLM 的正向评分写回规则分。"""
+    signal = {"score": 70.0, "score_cap": 100.0}
+    out = enrich_signal_with_agent_review(signal, _review("support", 5.0))
+    assert out["score"] == 70.0
+    assert out["agent_skill_review"]["score_delta"] == 5.0
 
 
 def test_oppose_penalty_still_applied_enrich_path():
-    """oppose(-5) 仍记为减分（70→65）。"""
+    """oppose(-5) 也只保留在审查记录，规则分不被改写。"""
     signal = {"score": 70.0, "score_cap": 100.0}
     out = enrich_signal_with_agent_review(signal, _review("oppose", -5.0))
-    assert out["score"] == 65.0
+    assert out["score"] == 70.0
 
 
 def test_rule_clearing_winner_preserved_enrich_path():
@@ -56,10 +64,10 @@ def test_oppose_does_not_boost_agent_only_path():
     assert out["score"] == 50.0
 
 
-def test_support_still_boosts_agent_only_path():
-    """对照：agent_only 的 support(+5) → 55。"""
+def test_support_does_not_create_agent_only_alpha():
+    """没有规则信号时，LLM support 也不能凭空创造 alpha。"""
     out = agent_only_signal(_skill(), {"code": "000001"}, _review("support", 5.0))
-    assert out["score"] == 55.0
+    assert out["score"] == 50.0
 
 
 def _skill():

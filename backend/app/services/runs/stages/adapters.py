@@ -111,6 +111,34 @@ class ProductionMarketUniverse(MarketUniversePort):
         data_source: str,
         as_of_date: str | None,
     ) -> tuple[tuple[StageMapping, ...], StageMapping, StageMapping]:
+        if as_of_date:
+            # Historical replay must not read the near-term stock_quotes cache.
+            # Build point-in-time quotes from daily_kbars/daily_basic instead so
+            # older dates remain reproducible and causally bounded.
+            from app.services.backtest.historical_universe import load_historical_universe
+            from app.services.backtest.stock_metadata import StockMetadataHistoryProvider
+
+            stocks, snapshot = load_historical_universe(
+                self._db,
+                as_of_date,
+                stock_metadata_provider=StockMetadataHistoryProvider(self._db),
+            )
+            count = len(stocks)
+            return (
+                tuple(stocks),
+                snapshot,
+                {
+                    "source": "historical_pool",
+                    "operation": "quotes",
+                    "status": "success" if count else "empty",
+                    "requested_count": count,
+                    "returned_count": count,
+                    "empty_count": 0 if count else 1,
+                    "failed_count": 0,
+                    "failure_policy": "raise",
+                },
+            )
+
         from app.services.market_source.local_pool_adapter import load_legacy_market_universe
 
         stocks, snapshot, audit = load_legacy_market_universe(

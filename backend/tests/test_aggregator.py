@@ -148,8 +148,8 @@ def test_consensus_boost_all_bullish_aligned():
     signals = [_signal("support", 80), _signal("strong_support", 85)]
     stances = [{"stance": "support"}, {"stance": "strong_support"}]
     boost, tags = _consensus_boost(signals, stances)
-    assert boost >= 1.05  # all_bullish_aligned bonus
-    assert "all_bullish_aligned" in tags
+    assert boost == pytest.approx(1.1)
+    assert "all_bullish_aligned" not in tags
 
 
 def test_consensus_boost_high_controversy():
@@ -203,6 +203,19 @@ def test_aggregate_component_scores():
     assert "market" in cs
     assert "risk" in cs
     assert "evidence" in cs
+
+
+def test_llm_review_score_is_risk_overlay_not_alpha_ranker():
+    stock = _stock(evidence_quality_score=80.0)
+    low_review = [_signal("support", score=78.0, review_score=40.0)]
+    high_review = [_signal("support", score=78.0, review_score=95.0)]
+
+    low_card = aggregate(stock, low_review, market_score=65, agent_review_score=40)
+    high_card = aggregate(stock, high_review, market_score=65, agent_review_score=95)
+
+    assert low_card["final_score"] == high_card["final_score"]
+    assert low_card["llm_influence_mode"] == "risk_overlay"
+    assert low_card["aggregation_weights"]["skill_agent"] == 0.0
 
 
 def test_aggregate_exposes_trade_price_levels():

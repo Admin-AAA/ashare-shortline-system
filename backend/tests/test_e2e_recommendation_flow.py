@@ -434,7 +434,7 @@ class TestE2ERecommendationFlow:
 
         assert count == 24
 
-    def test_build_recommendation_card_uses_agent_dominant_weights_when_reviews_present(self):
+    def test_build_recommendation_card_uses_risk_overlay_weights_when_reviews_present(self):
         skill = _mock_skill("skill-1", "Skill1")
 
         class _Ctx:
@@ -517,7 +517,9 @@ class TestE2ERecommendationFlow:
             recent_codes=set(),
         )
 
-        assert card["aggregation_weights"]["skill_agent"] > card["aggregation_weights"]["strategy_rule"]
+        assert card["aggregation_weights"]["skill_agent"] == 0.0
+        assert card["aggregation_weights"]["strategy_rule"] == 0.55
+        assert card["llm_influence_mode"] == "risk_overlay"
         assert card["agent_logs"]
         assert card["feature_snapshot"]["component_scores"]["skill_agent"] > 0
 
