@@ -4,7 +4,6 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -30,7 +29,7 @@ from app.services.runs.repository import (
 from app.services.runs.skill_gate import resolve_skill_review_concurrency
 from app.services.runs.sqlalchemy_repository import SQLAlchemyRunRepository
 from app.services.runs.stages.adapters import ProductionReviewExecutor
-from app.services.runs.stages.review import FormalReviewUnavailableError, ReviewStage
+from app.services.runs.stages.review import ReviewStage
 from app.services.runs.state_machine import RunStateMachine
 
 
@@ -124,7 +123,7 @@ def test_review_stage_passes_configured_default_to_executor(monkeypatch):
     assert seen["concurrency"] == 10
 
 
-def test_formal_review_stage_fails_when_every_model_review_fails(monkeypatch):
+def test_formal_review_stage_keeps_rule_fallback_when_every_model_review_fails(monkeypatch):
     class Executor:
         async def review_candidates(self, candidates, **_kwargs):
             return tuple(
@@ -169,13 +168,20 @@ def test_formal_review_stage_fails_when_every_model_review_fails(monkeypatch):
         ),
     )
 
-    with pytest.raises(FormalReviewUnavailableError, match="0/1"):
-        asyncio.run(
-            ReviewStage(review_executor=Executor(), cost_recording=Costs()).execute(
-                context,
-                data,
-            )
+    output = asyncio.run(
+        ReviewStage(review_executor=Executor(), cost_recording=Costs()).execute(
+            context,
+            data,
         )
+    )
+
+    assert output.data.candidate_results[0]["skill_reviews"][0]["review"] is None
+    assert output.data.skill_review_failure_audit["requested_count"] == 1
+    assert output.data.skill_review_failure_audit["success_count"] == 0
+    assert output.data.skill_review_failure_audit["reason_counts"] == {
+        "model_circuit_open": 1,
+    }
+    assert output.data.pipeline_audit["rule_only_fallback_count"] == 1
 
 
 def test_experiment_review_stage_keeps_degraded_result_when_models_fail(monkeypatch):

@@ -961,12 +961,10 @@ def apply_pool_rules(
     _ctx_base = score_line_context.get("market_base")
     _ctx_sentiment = score_line_context.get("market_sentiment")
     _disable_soft_floor = _ctx_sentiment == "高潮" or _ctx_base == "强牛"
-    degraded_watchlist = sorted(
-        (card for card in cards if card.get("review_status") == "degraded"),
-        key=lambda card: float(card.get("final_score", 0)),
-        reverse=True,
-    )[: max(1, int(output_count or watchlist_top_n))]
-    formal_cards = [card for card in cards if card.get("review_status") != "degraded"]
+    # LLM 审查是风险 overlay，不是规则选股的硬依赖。深审失败的卡片已经在
+    # _build_recommendation_card 中回退到 strategy.yaml 信号；继续让它们进入
+    # 正式筛选，避免模型熔断/余额不足把整批推荐变成 0 条。
+    formal_cards = list(cards)
     ordered = sorted(
         formal_cards,
         key=lambda card: float(card.get("final_score", 0)),
@@ -1317,6 +1315,18 @@ def apply_pool_rules(
                 if final_score >= new_effective:
                     result.append(card)
     result = _apply_sector_diversity(result, same_day_industry_counts=same_day_industry_counts)
+    # 仅把未进入正式结果的降级卡保留到观察池；已按规则正式出票的降级卡仍会
+    # 带着 review_status=degraded 持久化，前端可见降级提示，不会被重复归为观察票。
+    selected_card_ids = {id(card) for card in result}
+    degraded_watchlist = sorted(
+        (
+            card
+            for card in cards
+            if card.get("review_status") == "degraded" and id(card) not in selected_card_ids
+        ),
+        key=lambda card: float(card.get("final_score", 0)),
+        reverse=True,
+    )[: max(1, int(output_count or watchlist_top_n))]
     if return_watchlist:
         watchlist.sort(
             key=lambda c: (c.get("watchlist_gap", 0.0), float(c.get("final_score") or 0)),

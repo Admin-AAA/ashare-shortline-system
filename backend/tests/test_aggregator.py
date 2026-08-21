@@ -1181,8 +1181,8 @@ def _normal_card(code, final_score):
     }
 
 
-def test_agent_unavailable_climax_becomes_watch_only():
-    """Agent 全失败的候选保持可见，但不得伪装成正式推荐。"""
+def test_agent_unavailable_climax_keeps_rule_recommendation_flow():
+    """Agent 全失败时仍按规则降级出票，并保留降级可观测性。"""
     from app.engine.aggregator import apply_pool_rules
 
     cards = [
@@ -1198,12 +1198,15 @@ def test_agent_unavailable_climax_becomes_watch_only():
         return_watchlist=True,
     )
     recs = out["recommendations"] if isinstance(out, dict) else out
-    assert recs == []
-    assert out["degraded_watchlist"][0]["code"] == "600001"
+    assert [c["code"] for c in recs] == ["600001"]
+    assert [c["code"] for c in out["degraded_watchlist"]] == [
+        "600002", "600003", "600004",
+    ]
+    assert all(c["review_status"] == "degraded" for c in recs)
 
 
-def test_agent_unavailable_non_climax_becomes_watch_only():
-    """市场阶段不能改变全失败候选的非正式语义。"""
+def test_agent_unavailable_non_climax_keeps_rule_recommendation_flow():
+    """非高潮阶段也不能因 LLM 全失败而阻断规则推荐。"""
     from app.engine.aggregator import apply_pool_rules
 
     cards = [
@@ -1221,8 +1224,8 @@ def test_agent_unavailable_non_climax_becomes_watch_only():
         return_watchlist=True,
     )
     recs = out["recommendations"] if isinstance(out, dict) else out
-    assert recs == []
-    assert [c["code"] for c in out["degraded_watchlist"]] == ["600001", "600002"]
+    assert [c["code"] for c in recs] == ["600001"]
+    assert [c["code"] for c in out["degraded_watchlist"]] == ["600002"]
 
 
 def test_agent_available_climax_risk_control_preserved():
