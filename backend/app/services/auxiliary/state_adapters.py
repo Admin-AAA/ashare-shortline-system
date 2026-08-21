@@ -345,6 +345,7 @@ class TushareStateProvider:
             .limit(60)
         ).all()
         rows: list[dict[str, Any]] = []
+        seen_keys: set[tuple[str, str, str]] = set()
         for sector in sectors:
             frame = self._client.ths_member(ts_code=sector.sector_code)
             if frame is None or frame.empty:
@@ -352,11 +353,15 @@ class TushareStateProvider:
             for _, item in frame.iterrows():
                 code = str(item.get("con_code") or "").split(".")[0]
                 if len(code) == 6:
+                    natural_key = (str(sector.sector_code), code, request.trade_date.isoformat())
+                    if natural_key in seen_keys:
+                        continue
+                    seen_keys.add(natural_key)
                     rows.append({
-                        "sector_code": sector.sector_code,
+                        "sector_code": natural_key[0],
                         "code": code,
                         "name": str(item.get("con_name") or ""),
-                        "trade_date": request.trade_date.isoformat(),
+                        "trade_date": natural_key[2],
                     })
         return rows
 

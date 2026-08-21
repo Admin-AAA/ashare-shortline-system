@@ -123,5 +123,7 @@ def test_promax_is_excluded_from_incompatible_api_contracts() -> None:
 def test_default_realtime_routes_have_promax_first() -> None:
     assert TushareProviderRouter.DEFAULT_API_ROUTES["rt_k"][0] == "promax"
     assert TushareProviderRouter.DEFAULT_API_ROUTES["rt_min"][0] == "promax"
+    assert TushareProviderRouter.DEFAULT_API_ROUTES["fina_indicator"][0] == "promax"
+    assert TushareProviderRouter.DEFAULT_API_ROUTES["ths_member"][0] == "promax"
     assert "promax" not in TushareProviderRouter.DEFAULT_API_ROUTES["anns_d"]
     assert "promax" not in TushareProviderRouter.DEFAULT_API_ROUTES["stk_mins"]
