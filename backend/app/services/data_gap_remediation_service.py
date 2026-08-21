@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import Counter, OrderedDict
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -82,6 +83,9 @@ DEFAULT_DAILY_KBAR_CODE_LIMIT = 6000
 DEFAULT_LOCAL_POOL_GAP_CODE_LIMIT = 0
 DEFAULT_LOCAL_POOL_GAP_DAYS = 90
 DEFAULT_LOCAL_POOL_MIN_BARS = 30
+# 分钟补数的外部请求彼此独立；有界并行显著缩短 300 只/交易日的等待时间，
+# 同时避免无限制并发冲击 xiaoshi/Tushare 的上游限流。
+MINUTE_REMEDIATION_WORKERS = 8
 AUXILIARY_GAP_FIELDS = {
     "announcements",
     "capital_flow",
@@ -1977,34 +1981,47 @@ def _backfill_minute_kbar_date(
     payload: list[dict[str, Any]] = []
     provider_row_count = 0
     failed_codes: list[str] = []
-    for code in target_codes:
+
+    def _fetch_code(code: str) -> tuple[str, list[dict[str, Any]], Exception | None]:
         try:
-            rows = fetch_minute_kbars(code, trade_date=target, freq=normalized_freq) or []
-        except Exception:
-            rows = []
-            failed_codes.append(code)
-        provider_row_count += len(rows)
-        for row in rows:
-            trade_date_value = _normalize_trade_date(row.get("trade_date"))
-            if trade_date_value != target:
-                continue
-            trade_time = str(row.get("trade_time") or "").strip()
-            if not trade_time:
-                continue
-            payload.append(
-                {
-                    "code": code,
-                    "freq": normalized_freq,
-                    "trade_date": trade_date_value,
-                    "trade_time": trade_time,
-                    "open": _float(row.get("open")),
-                    "high": _float(row.get("high")),
-                    "low": _float(row.get("low")),
-                    "close": _float(row.get("close")),
-                    "volume": _float(row.get("volume")),
-                    "amount": _float(row.get("amount")),
-                }
-            )
+            return code, fetch_minute_kbars(code, trade_date=target, freq=normalized_freq) or [], None
+        except Exception as exc:  # noqa: BLE001 - one provider failure must not abort the batch
+            return code, [], exc
+
+    # Fetching is I/O-bound and each code is independent. Keep DB work below
+    # single-threaded so the caller's SQLAlchemy Session is never shared across
+    # worker threads.
+    with ThreadPoolExecutor(
+        max_workers=min(MINUTE_REMEDIATION_WORKERS, len(target_codes)),
+        thread_name_prefix="minute-remediation",
+    ) as pool:
+        futures = [pool.submit(_fetch_code, code) for code in target_codes]
+        for future in as_completed(futures):
+            code, rows, error = future.result()
+            if error is not None:
+                failed_codes.append(code)
+            provider_row_count += len(rows)
+            for row in rows:
+                trade_date_value = _normalize_trade_date(row.get("trade_date"))
+                if trade_date_value != target:
+                    continue
+                trade_time = str(row.get("trade_time") or "").strip()
+                if not trade_time:
+                    continue
+                payload.append(
+                    {
+                        "code": code,
+                        "freq": normalized_freq,
+                        "trade_date": trade_date_value,
+                        "trade_time": trade_time,
+                        "open": _float(row.get("open")),
+                        "high": _float(row.get("high")),
+                        "low": _float(row.get("low")),
+                        "close": _float(row.get("close")),
+                        "volume": _float(row.get("volume")),
+                        "amount": _float(row.get("amount")),
+                    }
+                )
 
     if payload:
         stmt = mysql_insert(MinuteKbar).values(payload)

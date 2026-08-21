@@ -23,6 +23,7 @@ import type {
 import { CardSkeleton, EmptyState, ErrorPage } from "../components/StateViews";
 import { Panel } from "../components/Panel";
 import { formatApiDateTime } from "../utils/display";
+import { countDegradedDataSources, countHistoricalLowSuccessSources } from "../utils/dataSourceHealth";
 import {
   useDataHealthQuery,
   useDataHealthRemediationQuery,
@@ -700,7 +701,8 @@ function RealtimeDataSourcePanel() {
   const rows = [...data].sort(
     (a, b) => a.source_type.localeCompare(b.source_type) || a.priority - b.priority || a.source.localeCompare(b.source),
   );
-  const degraded = rows.filter((r) => r.status === "degraded" || (r.success_rate != null && r.success_rate < 0.9)).length;
+  const degraded = countDegradedDataSources(rows);
+  const historicalLowSuccess = countHistoricalLowSuccessSources(rows);
   const providerCount = rows.filter((r) => r.source_type === "tushare_provider").length;
 
   return (
@@ -709,7 +711,11 @@ function RealtimeDataSourcePanel() {
       title={`共 ${rows.length} 个数据源${providerCount ? ` · ${providerCount} 个独立 Provider` : ""}`}
       actions={
         <span style={{ fontSize: "var(--text-sm)", color: degraded ? "#dc2626" : "#16a34a" }}>
-          {degraded ? `${degraded} 个降级` : "全部正常"}
+          {degraded
+            ? `${degraded} 个降级`
+            : historicalLowSuccess
+              ? `${historicalLowSuccess} 个历史成功率偏低`
+              : "全部正常"}
         </span>
       }
     >
