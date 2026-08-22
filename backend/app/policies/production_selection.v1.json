@@ -26,6 +26,7 @@
   "dynamic_soft_floor_max_gap": 20.0,
   "dynamic_soft_floor_disabled_regimes": ["震荡"],
   "output_limit_enabled": true,
+  "daily_output_limit": 10,
   "climax_output_divisor": 2,
   "weak_ice_output_limit": 2,
   "regime_sentiment_line_overrides": [["强牛·高潮", 72.0], ["强牛·活跃", 72.0], ["震荡·活跃", 72.0]]

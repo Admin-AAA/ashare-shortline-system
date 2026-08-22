@@ -22,7 +22,7 @@ def _card(code: str, score: float = 90.0, *, bucket: str = "chen-xiaoqun-skill")
 
 def test_default_policy_returns_versioned_result_and_explains_every_drop() -> None:
     assert DEFAULT_PRODUCTION_SELECTION_POLICY.fingerprint == (
-        "49e0692dfd32467d74c325563079506ef07d610a56f998d789d1b8dbe8db6530"
+        "a62575af99bc28b36689efe790ac1840ceb3b919194b5404d552c433b7fcf063"
     )
     cards = [
         _card("300001"),
@@ -53,6 +53,36 @@ def test_default_policy_returns_versioned_result_and_explains_every_drop() -> No
     assert verdicts["300001"].drop_owner is None
     assert [card["code"] for card in result.recommendations] == ["300001"]
     assert all(item.steps for item in result.verdicts)
+
+
+def test_daily_top10_policy_counts_recommendations_from_earlier_same_day_runs() -> None:
+    cards = [_card(f"300{index:03d}", 90.0) for index in range(12, 0, -1)]
+
+    result = evaluate_selection_policy(
+        cards,
+        SelectionPolicyContext(
+            score_line=72.0,
+            output_count=20,
+            market_snapshot={
+                "sample_count": 100,
+                "up_count": 50,
+                "limit_up_count": 0,
+                "limit_down_count": 0,
+            },
+            same_day_recommendation_count=3,
+        ),
+    )
+
+    assert [card["code"] for card in result.recommendations] == [
+        "300001",
+        "300002",
+        "300003",
+        "300004",
+        "300005",
+        "300006",
+        "300007",
+    ]
+    assert sum(item.drop_owner == "daily_top_n" for item in result.verdicts) == 5
 
 
 def test_one_rule_patch_changes_only_structural_veto_and_keeps_same_input_cards() -> None:

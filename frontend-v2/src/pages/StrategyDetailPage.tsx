@@ -110,33 +110,36 @@ export function StrategyDetailPage({ refreshSignal = 0 }: { refreshSignal?: numb
           </header>
 
           <div className="strategy-detail__metrics">
-            <Metric label="当前版回测样本" value={data.performance ? `${data.performance.sample_count} 笔` : "—"} />
+            <Metric label="原始信号" value={data.performance ? `${data.performance.raw_signal_count} 个` : "—"} />
+            <Metric label="Top10 已结算" value={data.performance ? `${data.performance.sample_count} 个` : "—"} />
             <Metric
-              label="半年胜率"
+              label="Top10 胜率"
               value={data.performance?.hit_rate == null ? "—" : `${(data.performance.hit_rate * 100).toFixed(1)}%`}
               tone={data.performance?.hit_rate != null && data.performance.hit_rate >= 0.5 ? "up" : undefined}
             />
             <Metric
-              label="半年收益"
-              value={data.performance == null ? "—" : `${data.performance.total_return_pct >= 0 ? "+" : ""}${data.performance.total_return_pct.toFixed(2)}%`}
-              tone={data.performance == null ? undefined : data.performance.total_return_pct >= 0 ? "up" : "down"}
+              label="平均单笔收益"
+              value={data.performance?.avg_return == null ? "—" : `${data.performance.avg_return >= 0 ? "+" : ""}${data.performance.avg_return.toFixed(2)}%`}
+              tone={data.performance?.avg_return == null ? undefined : data.performance.avg_return >= 0 ? "up" : "down"}
             />
-            <Metric label="最大回撤" value={data.performance == null ? "—" : `${data.performance.max_drawdown_pct.toFixed(2)}%`} tone="down" />
           </div>
 
           {data.performance ? (
             <div style={{ marginTop: 12, padding: 12, border: "1px solid var(--border)", borderRadius: 10 }}>
               <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 8 }} title={data.performance.strategy_version}>
-                当前版本 canonical 回测 · {data.performance.date_from} ~ {data.performance.date_to} · 更新 {data.performance.generated_at?.slice(0, 16).replace("T", " ") || "—"}
+                当前版本 canonical 回测 · 每日评分 Top {data.performance.daily_selection_limit} · 不含仓位/资金模型 · {data.performance.date_from} ~ {data.performance.date_to} · 更新 {data.performance.generated_at?.slice(0, 16).replace("T", " ") || "—"}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(80px, 1fr))", gap: 8 }}>
-                {data.performance.monthly_returns.map((month) => (
+                {data.performance.monthly_metrics.map((month) => (
                   <div key={month.month} style={{ background: "var(--surface-soft)", borderRadius: 8, padding: 8, textAlign: "center" }}>
                     <div style={{ color: "var(--muted)", fontSize: 11 }}>{month.month}</div>
-                    <div style={{ fontFamily: "var(--font-mono)", fontWeight: 650, color: month.return_pct >= 0 ? "var(--market-up)" : "var(--market-down)" }}>
-                      {month.return_pct >= 0 ? "+" : ""}{month.return_pct.toFixed(2)}%
+                    <div style={{ fontFamily: "var(--font-mono)", fontWeight: 650, color: month.avg_return == null ? "var(--muted)" : month.avg_return >= 0 ? "var(--market-up)" : "var(--market-down)" }}>
+                      胜率 {month.hit_rate == null ? "—" : `${(month.hit_rate * 100).toFixed(1)}%`}
                     </div>
-                    <div style={{ color: "var(--muted)", fontSize: 10 }}>{month.executed_trade_count} 笔</div>
+                    <div style={{ color: "var(--muted)", fontSize: 10 }}>
+                      均收益 {month.avg_return == null ? "—" : `${month.avg_return >= 0 ? "+" : ""}${month.avg_return.toFixed(2)}%`}
+                    </div>
+                    <div style={{ color: "var(--muted)", fontSize: 10 }}>Top10 {month.selected_signal_count} / 原始 {month.raw_signal_count}</div>
                   </div>
                 ))}
               </div>

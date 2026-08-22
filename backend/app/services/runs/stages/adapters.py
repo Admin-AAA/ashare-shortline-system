@@ -550,6 +550,7 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
                 risk_template=str(params.get("risk_template") or "balanced"),
                 agent_available=has_active_model_routes(),
                 same_day_industry_counts=same_day_industry_counts,
+                same_day_recommendation_count=len(same_day_codes),
             ),
             DEFAULT_PRODUCTION_SELECTION_POLICY,
         )

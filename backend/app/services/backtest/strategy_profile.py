@@ -34,18 +34,15 @@ from app.services.backtest.research_runner import (
     ResearchBacktestRunner,
 )
 from app.services.registry.skills import sync_skills
-from app.services.backtest.strategy_quality import (
-    StrategyTradeEvidence,
-    compute_quality_profile,
-    quality_config_for,
-)
+from app.services.backtest.strategy_quality import StrategyTradeEvidence
 
 
 STRATEGY_PROFILE_EXPERIMENT_ID = "strategy-backtest-profile:v2"
 STRATEGY_PROFILE_WINDOW_DAYS = 180
 STRATEGY_PROFILE_WINDOW_OPTIONS = (30, 180)
-STRATEGY_PROFILE_SCHEMA_VERSION = 2
-STRATEGY_PROFILE_PORTFOLIO_MODEL = "capped_daily_exit_cohort_v1"
+STRATEGY_PROFILE_SCHEMA_VERSION = 3
+STRATEGY_PROFILE_SELECTION_POLICY = "daily_score_top_n"
+STRATEGY_PROFILE_DAILY_SELECTION_LIMIT = 10
 
 
 @dataclass(frozen=True)
@@ -287,18 +284,16 @@ class StrategyBacktestProfiles:
                 )
             ).all()
         )
-        quality_evidences = quality_evidences_for_run(self._db, run, trades)
-        quality = compute_quality_profile(
-            quality_evidences,
-            quality_config_for(target.strategy_id),
-        )
-        metrics = compute_metrics(trades)
-        portfolio = _portfolio_metrics(trades)
+        raw_evidences = quality_evidences_for_run(self._db, run, trades)
+        selected_evidences = _select_daily_top_evidences(raw_evidences)
+        selected_trades = tuple(item.trade for item in selected_evidences)
+        metrics = compute_metrics(selected_trades)
         date_from = str(run.date_from)
         date_to = str(run.date_to)
         window_metrics = {
             str(window_days): _window_metrics(
-                trades,
+                raw_evidences,
+                selected_evidences,
                 anchor_date=date_to,
                 window_days=window_days,
             )
@@ -311,8 +306,8 @@ class StrategyBacktestProfiles:
                 {
                     "target_fingerprint": target.fingerprint,
                     "schema_version": STRATEGY_PROFILE_SCHEMA_VERSION,
-                    "portfolio_model": STRATEGY_PROFILE_PORTFOLIO_MODEL,
-                    "quality_fingerprint": quality.get("quality_fingerprint"),
+                    "selection_policy": STRATEGY_PROFILE_SELECTION_POLICY,
+                    "daily_selection_limit": STRATEGY_PROFILE_DAILY_SELECTION_LIMIT,
                 }
             ),
             "backtest_id": str(run.backtest_id),
@@ -320,13 +315,20 @@ class StrategyBacktestProfiles:
             "strategy_version": target.strategy_version,
             "parameter_fingerprint": canonical_fingerprint(dict(target.parameter_set)),
             "execution_policy_fingerprint": target.execution_policy.fingerprint(),
-            "portfolio_model": STRATEGY_PROFILE_PORTFOLIO_MODEL,
+            "selection_policy": STRATEGY_PROFILE_SELECTION_POLICY,
+            "daily_selection_limit": STRATEGY_PROFILE_DAILY_SELECTION_LIMIT,
+            "selection_tiebreaker": "score_desc_code_asc_trade_id_asc",
             "date_from": date_from,
             "date_to": date_to,
             "target_date_from": target.date_from,
             "target_date_to": target.date_to,
             "window_rolled": False,
             "generated_at": run.finished_at.isoformat() if run.finished_at else None,
+            "raw_signal_count": len(raw_evidences),
+            "selected_signal_count": len(selected_evidences),
+            "selected_signal_days": len(
+                {item.trade.signal_date for item in selected_evidences}
+            ),
             "sample_count": metrics.sample_count,
             "executed_trade_count": metrics.executed_trade_count,
             "win_count": metrics.win_count,
@@ -338,13 +340,11 @@ class StrategyBacktestProfiles:
                 if metrics.profit_loss_ratio is not None
                 else None
             ),
-            "total_return_pct": portfolio["total_return_pct"],
-            "max_drawdown_pct": portfolio["max_drawdown_pct"],
             "confidence": metrics.confidence.value,
             "window_metrics": window_metrics,
-            "quality": quality,
-            "monthly_returns": _monthly_returns(
-                trades,
+            "monthly_metrics": _monthly_signal_metrics(
+                raw_evidences,
+                selected_evidences,
                 date_from=date_from,
                 date_to=date_to,
             ),
@@ -519,8 +519,29 @@ def _canonical_json_text(raw: str) -> str:
     )
 
 
+def _select_daily_top_evidences(
+    evidences: tuple[StrategyTradeEvidence, ...],
+) -> tuple[StrategyTradeEvidence, ...]:
+    by_signal_date: dict[str, list[StrategyTradeEvidence]] = defaultdict(list)
+    for evidence in evidences:
+        by_signal_date[evidence.trade.signal_date].append(evidence)
+    selected: list[StrategyTradeEvidence] = []
+    for signal_date in sorted(by_signal_date):
+        ranked = sorted(
+            by_signal_date[signal_date],
+            key=lambda item: (
+                -item.score,
+                item.trade.code,
+                item.trade.trade_id or "",
+            ),
+        )
+        selected.extend(ranked[:STRATEGY_PROFILE_DAILY_SELECTION_LIMIT])
+    return tuple(selected)
+
+
 def _window_metrics(
-    trades: tuple[Trade, ...],
+    raw_evidences: tuple[StrategyTradeEvidence, ...],
+    selected_evidences: tuple[StrategyTradeEvidence, ...],
     *,
     anchor_date: str,
     window_days: int,
@@ -530,18 +551,28 @@ def _window_metrics(
         raise ValueError("window_days must be positive")
     anchor = date.fromisoformat(anchor_date)
     window_start = anchor - timedelta(days=window_days - 1)
-    selected = tuple(
-        trade
-        for trade in trades
-        if window_start.isoformat() <= trade.signal_date <= anchor_date
+    raw_in_window = tuple(
+        item
+        for item in raw_evidences
+        if window_start.isoformat() <= item.trade.signal_date <= anchor_date
     )
-    metrics = compute_metrics(selected)
-    portfolio = _portfolio_metrics(selected)
+    selected_in_window = tuple(
+        item
+        for item in selected_evidences
+        if window_start.isoformat() <= item.trade.signal_date <= anchor_date
+    )
+    selected_trades = tuple(item.trade for item in selected_in_window)
+    metrics = compute_metrics(selected_trades)
     has_executed = metrics.executed_trade_count > 0
     return {
         "window_days": window_days,
         "date_from": window_start.isoformat(),
         "date_to": anchor_date,
+        "raw_signal_count": len(raw_in_window),
+        "selected_signal_count": len(selected_in_window),
+        "selected_signal_days": len(
+            {item.trade.signal_date for item in selected_in_window}
+        ),
         "sample_count": metrics.executed_trade_count,
         "success_count": metrics.win_count,
         "loss_count": metrics.loss_count,
@@ -556,14 +587,9 @@ def _window_metrics(
             if metrics.profit_loss_ratio is not None
             else None
         ),
-        "total_return_pct": (
-            portfolio["total_return_pct"] if has_executed else None
-        ),
-        "max_drawdown_pct": (
-            portfolio["max_drawdown_pct"] if has_executed else None
-        ),
-        "monthly_returns": _monthly_returns(
-            selected,
+        "monthly_metrics": _monthly_signal_metrics(
+            raw_in_window,
+            selected_in_window,
             date_from=window_start.isoformat(),
             date_to=anchor_date,
         ),
@@ -577,72 +603,55 @@ def _trade_from_json(raw: str) -> Trade:
     return Trade(**payload)
 
 
-def _monthly_returns(
-    trades: tuple[Trade, ...],
+def _monthly_signal_metrics(
+    raw_evidences: tuple[StrategyTradeEvidence, ...],
+    selected_evidences: tuple[StrategyTradeEvidence, ...],
     *,
     date_from: str,
     date_to: str,
 ) -> list[dict[str, Any]]:
-    returns_by_month: dict[str, list[float]] = defaultdict(list)
-    trade_count_by_month: dict[str, int] = defaultdict(int)
-    for trade_date, daily_return_pct in _daily_portfolio_returns(trades):
-        returns_by_month[trade_date[:7]].append(daily_return_pct)
-    for trade in trades:
-        if trade.executed and trade.exit_date:
-            trade_count_by_month[trade.exit_date[:7]] += 1
+    raw_count_by_month: dict[str, int] = defaultdict(int)
+    selected_count_by_month: dict[str, int] = defaultdict(int)
+    executed_by_month: dict[str, list[Trade]] = defaultdict(list)
+    for item in raw_evidences:
+        month = (item.trade.exit_date or item.trade.signal_date)[:7]
+        raw_count_by_month[month] += 1
+    for item in selected_evidences:
+        trade = item.trade
+        month = (trade.exit_date or trade.signal_date)[:7]
+        selected_count_by_month[month] += 1
+        if trade.executed:
+            executed_by_month[month].append(trade)
     last_exit_date = max(
-        (trade.exit_date for trade in trades if trade.executed and trade.exit_date),
+        (
+            item.trade.exit_date
+            for item in selected_evidences
+            if item.trade.executed and item.trade.exit_date
+        ),
         default=date_to,
     )
     result = []
     for month in _month_keys(date_from, max(date_to, last_exit_date)):
-        equity = 1.0
-        for daily_return_pct in returns_by_month[month]:
-            equity *= 1 + daily_return_pct / 100
+        metrics = compute_metrics(tuple(executed_by_month[month]))
+        has_executed = metrics.executed_trade_count > 0
         result.append(
             {
                 "month": month,
-                "return_pct": round((equity - 1) * 100, 4),
-                "executed_trade_count": trade_count_by_month[month],
+                "raw_signal_count": raw_count_by_month[month],
+                "selected_signal_count": selected_count_by_month[month],
+                "executed_trade_count": metrics.executed_trade_count,
+                "success_count": metrics.win_count,
+                "hit_rate": (
+                    round(metrics.win_rate_pct / 100, 6) if has_executed else None
+                ),
+                "avg_return": (
+                    round(metrics.average_net_return_pct, 4)
+                    if has_executed
+                    else None
+                ),
             }
         )
     return result
-
-
-def _portfolio_metrics(trades: tuple[Trade, ...]) -> dict[str, float]:
-    equity = 1.0
-    peak = 1.0
-    max_drawdown = 0.0
-    for _trade_date, daily_return_pct in _daily_portfolio_returns(trades):
-        equity *= max(0.0, 1 + daily_return_pct / 100)
-        peak = max(peak, equity)
-        drawdown = (peak - equity) / peak * 100 if peak else 0.0
-        max_drawdown = max(max_drawdown, drawdown)
-    return {
-        "total_return_pct": round((equity - 1) * 100, 4),
-        "max_drawdown_pct": round(max_drawdown, 4),
-    }
-
-
-def _daily_portfolio_returns(
-    trades: tuple[Trade, ...],
-) -> tuple[tuple[str, float], ...]:
-    trades_by_exit: dict[str, list[Trade]] = defaultdict(list)
-    for trade in trades:
-        if trade.executed and trade.exit_date and trade.net_return_pct is not None:
-            trades_by_exit[trade.exit_date].append(trade)
-    result = []
-    for exit_date in sorted(trades_by_exit):
-        cohort = trades_by_exit[exit_date]
-        gross_exposure = sum(max(0.0, trade.position_size) for trade in cohort)
-        allocated_return = sum(
-            trade.net_return_pct * max(0.0, trade.position_size)
-            for trade in cohort
-        )
-        result.append(
-            (exit_date, allocated_return / max(1.0, gross_exposure))
-        )
-    return tuple(result)
 
 
 def _month_keys(date_from: str, date_to: str) -> tuple[str, ...]:

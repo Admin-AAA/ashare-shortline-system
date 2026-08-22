@@ -936,6 +936,7 @@ def apply_pool_rules(
     watchlist_top_n: int = 8,
     watchlist_min_hit: int = 3,
     same_day_industry_counts: dict[str, int] | None = None,
+    same_day_recommendation_count: int = 0,
     agent_available: bool = True,
     board_universe: str | None = None,
     selection_policy: Any | None = None,
@@ -967,8 +968,10 @@ def apply_pool_rules(
     formal_cards = list(cards)
     ordered = sorted(
         formal_cards,
-        key=lambda card: float(card.get("final_score", 0)),
-        reverse=True,
+        key=lambda card: (
+            -float(card.get("final_score", 0)),
+            str(card.get("code") or ""),
+        ),
     )
     if selection_policy is not None:
         board_universe = selection_policy.board_universe
@@ -1315,6 +1318,20 @@ def apply_pool_rules(
                 if final_score >= new_effective:
                     result.append(card)
     result = _apply_sector_diversity(result, same_day_industry_counts=same_day_industry_counts)
+    daily_output_limit = int(getattr(selection_policy, "daily_output_limit", 10))
+    remaining_daily_slots = max(
+        0,
+        daily_output_limit - max(0, int(same_day_recommendation_count)),
+    )
+    for card in result[remaining_daily_slots:]:
+        card["policy_drop_owner"] = "daily_top_n"
+        card.setdefault("policy_verdict_steps", []).append({
+            "rule_id": "daily_top_n",
+            "action": "drop",
+            "reason": f"当日正式推荐最多 {daily_output_limit} 个",
+            "eliminated": True,
+        })
+    result = result[:remaining_daily_slots]
     # 仅把未进入正式结果的降级卡保留到观察池；已按规则正式出票的降级卡仍会
     # 带着 review_status=degraded 持久化，前端可见降级提示，不会被重复归为观察票。
     selected_card_ids = {id(card) for card in result}

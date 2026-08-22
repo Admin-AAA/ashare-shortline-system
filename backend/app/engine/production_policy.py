@@ -55,6 +55,7 @@ class ProductionSelectionPolicy:
     dynamic_soft_floor_max_gap: float = 20.0
     dynamic_soft_floor_disabled_regimes: tuple[str, ...] = ("震荡",)
     output_limit_enabled: bool = True
+    daily_output_limit: int = 10
     climax_output_divisor: int = 2
     weak_ice_output_limit: int = 2
     # regime×情绪 组合的分数线硬覆盖（L-060）：优先级高于 market_base/sentiment/
@@ -89,6 +90,7 @@ class ProductionSelectionPolicy:
             "dynamic_soft_floor_max_gap": self.dynamic_soft_floor_max_gap,
             "dynamic_soft_floor_disabled_regimes": list(self.dynamic_soft_floor_disabled_regimes),
             "output_limit_enabled": self.output_limit_enabled,
+            "daily_output_limit": self.daily_output_limit,
             "climax_output_divisor": self.climax_output_divisor,
             "weak_ice_output_limit": self.weak_ice_output_limit,
             "regime_sentiment_line_overrides": [list(item) for item in self.regime_sentiment_line_overrides],
@@ -181,6 +183,7 @@ class SelectionPolicyContext:
     display_limit: int | None = None
     agent_available: bool = True
     same_day_industry_counts: Mapping[str, int] | None = None
+    same_day_recommendation_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -320,6 +323,7 @@ def evaluate_selection_policy(
             dict(context.same_day_industry_counts)
             if context.same_day_industry_counts is not None else None
         ),
+        same_day_recommendation_count=context.same_day_recommendation_count,
         board_universe=policy.board_universe,
         selection_policy=policy,
     )
