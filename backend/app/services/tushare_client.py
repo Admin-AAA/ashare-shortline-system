@@ -35,12 +35,85 @@ from app.services.tushare_transport import (
     FailureCategory,
     HttpMethod,
     ProviderConfig,
+    ProviderFailure,
     TushareHttpProvider,
     TushareProviderError,
     TushareProviderRouter,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _promax_minute_contract_issue(envelope: Mapping[str, Any]) -> str | None:
+    """Return why a Promax ``stk_mins`` response is not canonical minute K."""
+    data = envelope.get("data")
+    if not isinstance(data, Mapping):
+        return "malformed_envelope"
+    fields = data.get("fields")
+    items = data.get("items")
+    if not isinstance(fields, Sequence) or isinstance(fields, (str, bytes, bytearray)):
+        return "malformed_envelope"
+    if not isinstance(items, Sequence) or isinstance(items, (str, bytes, bytearray)):
+        return "malformed_envelope"
+    if not items:
+        return None
+    try:
+        trade_time_index = list(fields).index("trade_time")
+    except ValueError:
+        return "missing_trade_time"
+
+    seen: set[str] = set()
+    for item in items:
+        if (
+            not isinstance(item, Sequence)
+            or isinstance(item, (str, bytes, bytearray))
+            or trade_time_index >= len(item)
+        ):
+            return "malformed_envelope"
+        raw_trade_time = str(item[trade_time_index] or "").strip()
+        try:
+            parsed = datetime.fromisoformat(raw_trade_time)
+        except ValueError:
+            return "invalid_trade_time"
+        if parsed.second != 0 or parsed.microsecond != 0:
+            return "non_minute_timestamp"
+        session_time = parsed.strftime("%H:%M")
+        if not (
+            "09:30" <= session_time <= "11:30"
+            or "13:00" <= session_time <= "15:00"
+        ):
+            return "outside_continuous_session"
+        minute_key = parsed.strftime("%Y-%m-%d %H:%M")
+        if minute_key in seen:
+            return "duplicate_minute"
+        seen.add(minute_key)
+    return None
+
+
+class _PromaxHttpProvider(TushareHttpProvider):
+    """Promax transport with a strict gate for its asynchronously built minute data."""
+
+    def _request_once(
+        self,
+        api_name: str,
+        *,
+        params: Mapping[str, Any],
+        fields: str,
+    ) -> Mapping[str, Any]:
+        envelope = super()._request_once(api_name, params=params, fields=fields)
+        if api_name != "stk_mins":
+            return envelope
+        issue = _promax_minute_contract_issue(envelope)
+        if issue is None:
+            return envelope
+        logger.warning("promax stk_mins response rejected by minute contract: %s", issue)
+        raise ProviderFailure(
+            provider=self.name,
+            api_name=api_name,
+            category=FailureCategory.MALFORMED_RESPONSE,
+            retryable=False,
+            fallback_allowed=True,
+        )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -269,7 +342,7 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
     promax_api_key = settings.tushare_promax_api_key.strip()
     if promax_api_key:
         providers.append(
-            TushareHttpProvider(
+            _PromaxHttpProvider(
                 ProviderConfig(
                     name="promax",
                     base_url=settings.tushare_promax_url,
@@ -281,9 +354,9 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
                     ),
                     max_concurrency=max(0, int(settings.tushare_promax_max_concurrency)),
                     append_api_path=True,
-                    # 实测 anns_d 只接受 ann_date，而项目使用日期区间；stk_mins
-                    # 返回同一分钟内的秒级重复快照。两者在契约修正前不参与路由。
-                    excluded_apis=frozenset({"anns_d", "stk_mins"}),
+                    # anns_d 只接受 ann_date，而项目使用日期区间，暂不参与路由。
+                    # stk_mins 由 _PromaxHttpProvider 门禁，只接受标准分钟响应。
+                    excluded_apis=frozenset({"anns_d"}),
                     source="promax",
                     priority=4,
                     **common,
@@ -551,7 +624,7 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
             "source": "promax",
             "configured": bool(settings.tushare_promax_api_key.strip()),
             "priority": 4,
-            "note": "Promax GET 聚合源；通用同步宽覆盖备用、实时行情主源，公告/历史分钟暂不参与",
+            "note": "Promax GET 聚合源；实时行情与历史分钟主源；历史分钟仅接受标准分钟响应，202/异常快照自动 fallback",
             "auth_mode": AuthMode.API_KEY_HEADER.value,
             "rate_limit_per_minute": max(
                 0, int(settings.tushare_promax_rate_limit_per_minute)
