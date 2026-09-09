@@ -117,9 +117,8 @@ class Settings(BaseSettings):
     agent_temperature: float = 0.3
     agent_max_tokens: int = 40000
     agent_skill_weight: float = 0.50
-    # Production universe validated by the serial self-improve replay.
-    # Empty string or "all" disables the entry-side board filter.
-    formal_board_universe: str = "20cm"
+    # 正式推荐覆盖全 A 股；"20cm" 仅保留为显式研究实验选项。
+    formal_board_universe: str = "all"
     # 辅助数据源（tushare 优先，eastmoney/akshare 备用）
     limit_up_sources: str = "tushare"
     concept_sector_sources: str = "tushare"

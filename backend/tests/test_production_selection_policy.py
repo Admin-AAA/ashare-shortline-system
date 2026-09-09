@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.engine.production_policy import (
     DEFAULT_PRODUCTION_SELECTION_POLICY,
+    ProductionSelectionPolicy,
     SelectionPolicyContext,
     evaluate_selection_policy,
 )
@@ -20,10 +21,8 @@ def _card(code: str, score: float = 90.0, *, bucket: str = "chen-xiaoqun-skill")
     }
 
 
-def test_default_policy_returns_versioned_result_and_explains_every_drop() -> None:
-    assert DEFAULT_PRODUCTION_SELECTION_POLICY.fingerprint == (
-        "a62575af99bc28b36689efe790ac1840ceb3b919194b5404d552c433b7fcf063"
-    )
+def test_default_policy_covers_main_board_and_20cm_markets() -> None:
+    assert DEFAULT_PRODUCTION_SELECTION_POLICY.board_universe is None
     cards = [
         _card("300001"),
         _card("600001", 99.0),
@@ -47,12 +46,20 @@ def test_default_policy_returns_versioned_result_and_explains_every_drop() -> No
 
     assert result.policy_fingerprint == DEFAULT_PRODUCTION_SELECTION_POLICY.fingerprint
     verdicts = {item.code: item for item in result.verdicts}
-    assert verdicts["600001"].drop_owner == "board_universe"
-    assert verdicts["300002"].drop_owner == "excluded_strategy_bucket"
+    assert verdicts["600001"].drop_owner is None
+    assert verdicts["300002"].drop_owner is None
     # 2026-08-02 用户决策：默认不保留结构性强势 hard_veto，高分候选按线通过
     assert verdicts["300001"].drop_owner is None
-    assert [card["code"] for card in result.recommendations] == ["300001"]
+    assert [card["code"] for card in result.recommendations] == [
+        "600001",
+        "300002",
+        "300001",
+    ]
     assert all(item.steps for item in result.verdicts)
+
+
+def test_policy_constructor_defaults_to_all_a_share_boards() -> None:
+    assert ProductionSelectionPolicy().board_universe is None
 
 
 def test_daily_top10_policy_counts_recommendations_from_earlier_same_day_runs() -> None:
@@ -118,6 +125,9 @@ def test_one_rule_patch_changes_only_structural_veto_and_keeps_same_input_cards(
 
 def test_filter_audit_names_policy_drop_owner_instead_of_missing_metadata() -> None:
     cards = [_card("600001", 99.0)]
+    board_limited_policy = DEFAULT_PRODUCTION_SELECTION_POLICY.with_rule_patch(
+        "board_universe", "20cm"
+    )
     result = evaluate_selection_policy(
         cards,
         SelectionPolicyContext(
@@ -125,6 +135,7 @@ def test_filter_audit_names_policy_drop_owner_instead_of_missing_metadata() -> N
             output_count=6,
             market_snapshot={"sample_count": 100, "market_regime": "弱势"},
         ),
+        board_limited_policy,
     )
 
     audit = build_filter_audit(

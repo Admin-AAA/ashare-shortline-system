@@ -1,7 +1,7 @@
 {
   "policy_id": "production-selection",
   "version": 1,
-  "board_universe": "20cm",
+  "board_universe": null,
   "excluded_20cm_buckets": [
     "daily-stock-analysis-skill",
     "chao-gu-yang-jia-skill"

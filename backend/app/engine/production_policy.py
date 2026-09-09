@@ -19,7 +19,7 @@ class ProductionSelectionPolicy:
 
     policy_id: str = "production-selection"
     version: int = 1
-    board_universe: str | None = "20cm"
+    board_universe: str | None = None
     excluded_20cm_buckets: tuple[str, ...] = (
         "daily-stock-analysis-skill",
         "chao-gu-yang-jia-skill",
