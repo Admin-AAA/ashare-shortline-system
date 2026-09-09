@@ -120,6 +120,44 @@ def test_daily_data_domain_one_day_lag_is_stale():
         db.close()
 
 
+def test_column_data_domain_skips_expensive_exact_row_count():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[DailyKbar.__table__])
+    Session = sessionmaker(bind=engine)
+    db = Session()
+    try:
+        db.add(DailyKbar(code="000001", trade_date="2026-05-27", close=1, chip_cost_50=1.0))
+        db.commit()
+        chip_domain = next(item for item in data_health_service._DATA_DOMAIN_DEFS if item["key"] == "chip")
+
+        with patch.object(data_health_service, "_DATA_DOMAIN_DEFS", [chip_domain]):
+            result = data_health_service._data_domain_coverage(db, "2026-05-27")
+
+        domain = result["categories"][0]["domains"][0]
+        assert domain["status"] == "covered"
+        assert domain["total_rows"] is None
+        assert domain["total_rows_estimated"] is False
+        assert domain["max_date"] == "2026-05-27"
+    finally:
+        db.close()
+
+
+def test_indexed_date_queries_do_not_wrap_trade_date_column():
+    db = MagicMock()
+    db.execute.return_value.one.return_value = ("2026-05-26", "2026-05-27")
+    rows = MagicMock()
+    rows.all.return_value = ["2026-05-27", "2026-05-26"]
+    db.scalars.return_value = rows
+
+    data_health_service._date_bounds(db, DailyKbar.trade_date)
+    bounds_statement = str(db.execute.call_args.args[0]).lower()
+    assert "replace(" not in bounds_statement
+
+    _recent_daily_trade_days(db, "2026-05-27", 2)
+    recent_statement = str(db.scalars.call_args.args[0]).lower()
+    assert "replace(" not in recent_statement
+
+
 def test_domain_inventory_uses_current_margin_source_and_quarterly_hk_hold_cadence():
     domains = {item["key"]: item for item in data_health_service._DATA_DOMAIN_DEFS}
 
@@ -158,7 +196,7 @@ def test_recent_trade_day_coverage_reports_missing_dates():
     assert "daily_kbar" in result["summary"]["warning_tables"]
 
 
-def test_data_health_normalizes_mixed_trade_dates_and_flags_incomplete_daily_kbar():
+def test_data_health_uses_canonical_trade_dates_and_flags_incomplete_daily_kbar():
     engine = create_engine("sqlite:///:memory:")
     tables = [
         DailyKbar.__table__,
@@ -172,13 +210,13 @@ def test_data_health_normalizes_mixed_trade_dates_and_flags_incomplete_daily_kba
     Session = sessionmaker(bind=engine)
     db = Session()
     try:
-        for day in ["20260523", "2026-05-24", "20260525", "2026-05-26"]:
+        for day in ["2026-05-23", "2026-05-24", "2026-05-25", "2026-05-26"]:
             db.add(DailyKbar(code="000001", trade_date=day, open=1, high=1, low=1, close=1))
             db.add(IndexDaily(ts_code="000001.SH", trade_date=day, close=1))
         for idx in range(5):
             db.add(DailyKbar(code=f"30{idx:04d}", trade_date="2026-05-27", open=1, high=1, low=1, close=1))
-        db.add(LimitUpBoard(code="000001", trade_date="20260526", name="样本"))
-        db.add(CapitalFlow(code="000001", trade_date="20260526"))
+        db.add(LimitUpBoard(code="000001", trade_date="2026-05-26", name="样本"))
+        db.add(CapitalFlow(code="000001", trade_date="2026-05-26"))
         db.commit()
 
         stats = _table_stats(db)

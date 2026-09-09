@@ -611,7 +611,9 @@ function DomainRow({ d }: { d: DataDomainCoverage }) {
         {d.max_date || "—"}
       </span>
       <span className="text-mono" style={{ minWidth: 56, textAlign: "right" }}>
-        {d.total_rows.toLocaleString()} 行
+        {d.total_rows == null
+          ? d.status === "empty" ? "0 行" : "有数据"
+          : `${d.total_rows_estimated ? "约 " : ""}${d.total_rows.toLocaleString()} 行`}
       </span>
       {gapText && (
         <span style={{ minWidth: 64, textAlign: "right", color: meta.color }}>{gapText}</span>

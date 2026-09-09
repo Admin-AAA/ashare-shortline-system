@@ -991,7 +991,8 @@ export type DataDomainCoverage = {
   label: string;
   category: string;
   status: "covered" | "stale" | "empty" | "error";
-  total_rows: number;
+  total_rows: number | null;
+  total_rows_estimated?: boolean;
   max_date: string | null;
   critical: boolean;
   fresh_window_days: number | null;
