@@ -136,7 +136,7 @@ def _simulate_outcome(
     传入自定义解析器（签名同 _resolve_exit：holding_bars, stop_loss, take_profit,
     *, code, entry_price）可替换退出逻辑，用于动态退出状态机反事实验证。
     entry_policy 未显式传入时，按推荐快照中的策略 entry_mode 选择；旧快照缺失时
-    回退到原有目标价触碰口径。
+    由持久化 bucket 做确定性迁移，其余策略回退到原有目标价触碰口径。
     入场时序、holding_bars 起点、executed_entry_price（含滑点）、除权重算等全部
     复用生产路径，只替换 exit 环节。
     """
@@ -159,7 +159,8 @@ def _simulate_outcome(
         if rec_final_score > 0:
             feature_snapshot = {**feature_snapshot, "final_score": rec_final_score}
     selected_entry_policy = entry_policy or entry_policy_for_mode(
-        feature_snapshot.get("entry_mode")
+        feature_snapshot.get("entry_mode"),
+        legacy_strategy_id=getattr(rec, "bucket", None),
     )
     static_metrics = _static_window_metrics(rec, signal_bar, future_bars, horizon_days)
 
@@ -487,7 +488,8 @@ def _resolve_entry(
     """Translate ORM-shaped inputs to the canonical entry-core contract."""
     del signal_bar  # Recommendation timestamp owns intraday causality.
     selected_entry_policy = entry_policy or entry_policy_for_mode(
-        feature_snapshot.get("entry_mode")
+        feature_snapshot.get("entry_mode"),
+        legacy_strategy_id=getattr(rec, "bucket", None),
     )
     candidate_bars = tuple(
         CausalEntryBar(

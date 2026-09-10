@@ -784,6 +784,38 @@ def test_postclose_snapshot_next_open_entry_mode_uses_executable_open():
     assert simulation["entry_policy_id"] == "next_trading_day_open_v1"
 
 
+def test_legacy_momentum_bucket_uses_next_open_without_mutating_snapshot():
+    rec = SimpleNamespace(
+        code="000001",
+        bucket="chen-xiaoqun-skill",
+        trade_date="2026-07-28",
+        recommend_price=10.0,
+        recommended_at=datetime(2026, 7, 28, 8, 0),
+    )
+    bars = [
+        _bar(
+            trade_date="2026-07-29",
+            open=10.5,
+            high=10.8,
+            low=10.2,
+            close=10.6,
+            pct_chg=6.0,
+        ),
+    ]
+
+    migrated = _resolve_entry(rec, {"ideal_buy": 9.8}, bars, horizon_days=5)
+    explicit_legacy = _resolve_entry(
+        rec,
+        {"ideal_buy": 9.8, "entry_mode": "target_touch"},
+        bars,
+        horizon_days=5,
+    )
+
+    assert migrated["triggered"] is True
+    assert migrated["reason"] == "next_trading_day_open_entry"
+    assert explicit_legacy["triggered"] is False
+
+
 def test_simulate_outcome_take_profit_min_return_truncated():
     """take_profit_hit 后 min_return 也只算 entry→exit，不算 exit 后的回撤。
 
