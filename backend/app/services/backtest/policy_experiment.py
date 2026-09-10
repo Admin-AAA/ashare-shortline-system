@@ -397,7 +397,6 @@ class ProductionPolicyBacktestRunner:
                     score_line=spec.score_line,
                     output_count=spec.output_count,
                     market_snapshot=day.market_snapshot,
-                    agent_available=False,
                 ),
                 policy,
             )

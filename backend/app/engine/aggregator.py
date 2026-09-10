@@ -6,6 +6,9 @@ from app.engine.agent_skill_runner import enrich_signal_with_agent_review  # noq
 from app.engine.board_rules import (
     is_one_word_limit_up_card as _is_one_word_limit_up_card,
 )
+from app.services.analysis.return_improvement_shadow import (
+    annotate_return_improvement_shadow,
+)
 from app.services.execution_constraints import (
     entry_no_liquidity_reason_from_card as _entry_no_liquidity_reason,
 )
@@ -70,7 +73,7 @@ _RISK_SEVERITY_RULES: list[tuple[list[str], str]] = [
     (["量能中性", "缺乏.*信号", "方向不明"], "medium"),
     (["股价未站上MA", "短线支撑未确认"], "medium"),
     (["市场快照缺失"], "medium"),
-    (["数据缺失", "关键数据缺失", "数据完整性不足", "证据覆盖不足"], "info"),
+    (["数据缺失", "数据未覆盖", "关键数据缺失", "数据完整性不足", "证据覆盖不足"], "info"),
     (["Skill Agent 审查暂不可用", "Skill Agent 直接审查失败", "Agent 审查暂不可用"], "info"),
     # ── info: 数据覆盖/完整性（不扣分） ──
     (["样本或证据覆盖不足", "数据完整度", "证据质量不足"], "info"),
@@ -726,12 +729,6 @@ def aggregate(
         and str((s.get("agent_skill_review") or {}).get("runtime") or "") != "agent_skill_fallback_prelim"
         for s in signals
     )
-    agent_review_count = sum(
-        1 for s in signals
-        if isinstance(s.get("agent_skill_review"), dict)
-        and str((s.get("agent_skill_review") or {}).get("runtime") or "") != "agent_skill_fallback_prelim"
-    )
-
     # --- 加权聚合（校准权重为基底 + 阶段动态调整） ---
     if market_snapshot:
         weights = market_regime_weights(market_snapshot, calibrated=calibrated_weights)
@@ -831,12 +828,15 @@ def aggregate(
         market_snapshot=market_snapshot,
         final_score=final_score,
         risk_template=risk_template,
-        agent_review_count=agent_review_count,
     )
 
     # 将所有候选标记按严重级别分流：high/medium → risk_flags，info → info_tags
     all_candidate_flags = list(dict.fromkeys(
-        all_risks + quality_risks + conflict_risks + market_discipline["risk_flags"] + quality_infos
+        all_risks
+        + quality_risks
+        + conflict_risks
+        + market_discipline["risk_flags"]
+        + quality_infos
     ))
     final_risk_flags: list[str] = []
     info_tags: list[str] = []
@@ -859,6 +859,8 @@ def aggregate(
         "stop_loss": stock.get("stop_loss"),
         "take_profit": stock.get("take_profit"),
         "final_score": round(final_score, 2),
+        "selection_score": round(final_score, 2),
+        "portfolio_rank_score": round(final_score, 2),
         "consensus_score": round(consensus_score, 2),
         "setup_type": best_setup.get("setup_match") or "",
         # 没有策略给出明确入场规则时保持为空；前端会诚实标注“未保存明确买点”，
@@ -937,17 +939,12 @@ def apply_pool_rules(
     watchlist_min_hit: int = 3,
     same_day_industry_counts: dict[str, int] | None = None,
     same_day_recommendation_count: int = 0,
-    agent_available: bool = True,
     board_universe: str | None = None,
     selection_policy: Any | None = None,
 ) -> list[dict[str, Any]] | dict[str, Any]:
     """按分数线过滤正式推荐，展示上限不参与核心选股决策。
 
-    agent_available: LLM Agent 审查是否可用（由调用方按全局配置传入）。
-    False 表示系统处于降级模式（未配置 ASHARE_AGENT_SKILL_API_KEY 等），
-    此时高潮/强牛阶段也启用软降线兜底，保证「每天可见推荐」（北极星 A 项）。
-    与 card 级 ``agent_unavailable_fallback`` 原因等效，但来源更可靠——
-    配置级缺失不会被单次 review 异常吞掉，避免任何瞬时故障都必然零推荐。
+    LLM 运行状态不属于选择策略输入；可用性仅由审查阶段单独记录。
     """
     if display_limit is None and output_count is not None:
         display_limit = resolve_display_limit(output_count, market_snapshot, selection_policy)
@@ -1174,6 +1171,8 @@ def apply_pool_rules(
             "regime_strong_penalty": card.get("_regime_strong_penalty", 0.0),
             "regime_struct_strong_hard_veto": card.get("_regime_struct_strong_hard_veto", False),
             "effective_score_line": effective_score_line,
+            "selection_score": final_score,
+            "portfolio_rank_score": final_score,
             "passed": final_score >= effective_score_line and execution_viability["status"] != "blocked",
         }
         if execution_viability["risk_flags"]:
@@ -1205,21 +1204,8 @@ def apply_pool_rules(
     # 动态降线：无候选过线时，以 top_score - 0.5 为软下界，避免零推荐
     # 高潮/强牛阶段禁用降线：回测验证高潮阶段降线导致 7 笔 0% WR 交易（6/9 偏多·高潮）
     # 高潮阶段宁可零推荐也不降线，避免追高陷阱（_disable_soft_floor 已在函数前部计算）
-    # 检测 LLM 降级：任一候选因 Skill Agent 暂不可用而走回退
-    _agent_unavailable = any(
-        "agent_unavailable_fallback" in ((c.get("score_line_meta") or {}).get("reasons") or [])
-        for c in ordered
-    )
-    # 配置级降级：LLM key 缺失/未配置时系统整体处于降级模式，与 card 级
-    # agent_unavailable_fallback 等效，但来源更可靠（不会被单次 review 异常吞掉）。
-    # 真实部署（本机未配置 ASHARE_AGENT_SKILL_API_KEY）所有 run 均为降级，
-    # 应启用软降线兜底保证「每天可见推荐」（北极星 A 项）。
-    _agent_config_unavailable = not agent_available
-    _degraded = _agent_unavailable or _agent_config_unavailable
     # 常规软降线：非高潮/强牛阶段、top 距有效线 ≤20 分时启用，避免零推荐。
-    # 高潮/强牛阶段默认禁用（宁可零推荐也不追高）；但若 LLM 暂不可用（降级模式，
-    # 配置级或 card 级），放宽上限作为最后兜底，保证「每天可见推荐」——
-    # 降级状态已在前端明确标注（指标页 agent_runtime=llm 但实际走规则预审降级）。
+    # 高潮/强牛阶段禁用（宁可零推荐也不追高）。LLM 可用性不参与该决策。
     #
     # 例外（2026-07-21 T3/T13，LIVE formal 去重）：震荡 全档 soft floor 净负。
     # - 震荡·高潮 soft 12 笔@07-09 WR=33.3% avg=-1.85%（有效线~85→~65）
@@ -1233,7 +1219,7 @@ def apply_pool_rules(
     )
     _osc_regime = _ctx_base in _disabled_soft_regimes
     _soft_enabled = bool(getattr(selection_policy, "dynamic_soft_floor_enabled", True))
-    _soft_floor_allowed = _soft_enabled and ((not _disable_soft_floor) or _degraded) and (not _osc_regime)
+    _soft_floor_allowed = _soft_enabled and (not _disable_soft_floor) and (not _osc_regime)
     if not result and ordered and top_final_score > 0 and _soft_floor_allowed:
         soft_floor = round(
             top_final_score - float(getattr(selection_policy, "dynamic_soft_floor_offset", 1.0)), 2
@@ -1265,19 +1251,13 @@ def apply_pool_rules(
         # 旧逻辑 rec=0；修复后 gap<=20 也启用。硬否决（panic/弱势×chg20/震荡×pos60）
         # 仍跳过，不放松 D 项毒区。
         gap = score_line_context["effective_score_line"] - top_final_score
-        # 降级模式（LLM 不可用）放宽上限，作为最后兜底避免零推荐
         _max_soft_gap = float(getattr(selection_policy, "dynamic_soft_floor_max_gap", 20.0))
-        _degraded_gap = _degraded and gap > _max_soft_gap
-        # gap<=20 含 gap<=0（top 已过市场线但被软惩罚挡光）；gap>20 仅降级模式
-        if gap <= _max_soft_gap or _degraded_gap:
+        # gap<=20 含 gap<=0（top 已过市场线但被软惩罚挡光）。
+        if gap <= _max_soft_gap:
             score_line_context["dynamic_soft_floor_applied"] = True
             score_line_context["dynamic_soft_floor"] = dynamic_line
             score_line_context["soft_floor_gap"] = round(gap, 2)
-            score_line_context["soft_floor_reason"] = (
-                "per_card_penalty" if gap <= 0 else
-                ("degraded_wide_gap" if _degraded_gap else "near_market_line")
-            )
-            score_line_context["degraded_agent_unavailable"] = _degraded
+            score_line_context["soft_floor_reason"] = "per_card_penalty" if gap <= 0 else "near_market_line"
             for card in ordered:
                 final_score = float(card.get("final_score") or 0)
                 if final_score <= 0:
@@ -1313,7 +1293,6 @@ def apply_pool_rules(
                 sm["effective_score_line"] = new_effective
                 sm["dynamic_soft_floor_applied"] = True
                 sm["soft_floor_reason"] = score_line_context["soft_floor_reason"]
-                sm["degraded_agent_unavailable"] = _degraded
                 sm["passed"] = final_score >= new_effective
                 if final_score >= new_effective:
                     result.append(card)
@@ -1332,6 +1311,9 @@ def apply_pool_rules(
             "eliminated": True,
         })
     result = result[:remaining_daily_slots]
+    # 小样本中的名次/形态假设与新增竞价维度只做前瞻 shadow 采集；
+    # 未经冻结 OOS + Canary 前不得改变正式排序、选股或仓位。
+    annotate_return_improvement_shadow(result)
     # 仅把未进入正式结果的降级卡保留到观察池；已按规则正式出票的降级卡仍会
     # 带着 review_status=degraded 持久化，前端可见降级提示，不会被重复归为观察票。
     selected_card_ids = {id(card) for card in result}
@@ -1421,6 +1403,20 @@ def _apply_sector_diversity(
     industry_count = dict(same_day_industry_counts or {})
     capped: list[dict[str, Any]] = []
     for card in cards:
+        selection_score = round(
+            float(card.get("selection_score", card.get("final_score") or 0)),
+            2,
+        )
+        card["selection_score"] = selection_score
+        card["portfolio_rank_score"] = selection_score
+        fs = card.get("feature_snapshot")
+        if isinstance(fs, dict):
+            fs["selection_score"] = selection_score
+            fs["portfolio_rank_score"] = selection_score
+        score_line_meta = card.get("score_line_meta")
+        if isinstance(score_line_meta, dict):
+            score_line_meta["selection_score"] = selection_score
+            score_line_meta["portfolio_rank_score"] = selection_score
         industry = str(card.get("industry") or "")
         if not industry or industry == "unknown":
             capped.append(card)
@@ -1435,12 +1431,16 @@ def _apply_sector_diversity(
         if penalty > 0:
             card["sector_diversity_penalty"] = penalty
             # 同步到 feature_snapshot，避免持久化路径变更时丢失（card 顶层与 snapshot 双写）
-            fs = card.get("feature_snapshot")
             if isinstance(fs, dict):
                 fs["sector_diversity_penalty"] = penalty
-            card["final_score"] = round(float(card.get("final_score") or 0) - penalty, 2)
+            portfolio_rank_score = round(selection_score - penalty, 2)
+            card["portfolio_rank_score"] = portfolio_rank_score
+            if isinstance(fs, dict):
+                fs["portfolio_rank_score"] = portfolio_rank_score
+            if isinstance(score_line_meta, dict):
+                score_line_meta["portfolio_rank_score"] = portfolio_rank_score
         capped.append(card)
-    return sorted(capped, key=lambda c: float(c.get("final_score", 0)), reverse=True)
+    return sorted(capped, key=lambda c: float(c.get("portfolio_rank_score", 0)), reverse=True)
 
 
 def _empty(stock: dict[str, Any], reason: str) -> dict[str, Any]:
@@ -1464,8 +1464,8 @@ def _empty(stock: dict[str, Any], reason: str) -> dict[str, Any]:
 
 def _dedup_info_tags(tags: list[str]) -> list[str]:
     """合并语义相近的 info_tags，避免重复提示。"""
-    if len(tags) <= 1:
-        return tags
+    if not tags:
+        return []
     result: list[str] = []
     seen_groups: set[str] = set()
     for tag in tags:
@@ -1535,7 +1535,7 @@ def _rationale(signals: list[dict[str, Any]]) -> str:
                 evidence.append(str(summary))
         evidence.extend(signal.get("evidence", []) or [])
     if fallback_count and normal_agent_count == 0:
-        return "Skill Agent 暂不可用，本次仅按规则预审与市场数据降级输出，不提供语义审查摘要。请结合分数组成、规则命中和风险标签复核。"
+        return "Skill Agent 暂不可用，本次由规则与市场数据独立输出，不提供语义审查摘要。请结合分数组成、规则命中和风险标签复核。"
     if fallback_count:
         prefix = "部分 Skill Agent 暂不可用，以下摘要仅包含仍可用的审查结论。"
         detail = "；".join(list(dict.fromkeys(evidence))[:5])
@@ -1600,6 +1600,7 @@ def _quality_risks(stock: dict[str, Any], quality_cap: float) -> tuple[list[str]
 
     data_quality = stock.get("data_quality") or {}
     missing_fields = set(data_quality.get("missing_fields") or [])
+    missing_fields.update(data_quality.get("optional_missing_fields") or [])
 
     # 合并多维度数据缺失为一条提示
     data_gap_fields = missing_fields & {"news", "announcements", "theme_tags", "dragon_tiger", "auction"}
@@ -1754,7 +1755,6 @@ def _market_discipline(
     market_snapshot: dict[str, Any] | None,
     final_score: float,
     risk_template: str,
-    agent_review_count: int,
 ) -> dict[str, Any]:
     """Translate the score into short-line position and risk discipline."""
     label = _market_regime_label(market_snapshot)
@@ -1792,7 +1792,7 @@ def _market_discipline(
         market_position_cap = min(market_position_cap, 0.20)
         risk_flags.append("跌停压力不低于涨停，先控制回撤")
 
-    win_rate = _estimated_win_rate(stock, final_score, agent_review_count, up_ratio)
+    win_rate = _estimated_win_rate(stock, final_score, up_ratio)
     if final_score < 40:
         base_position = 0.0
         position_label = "观望"
@@ -1829,9 +1829,6 @@ def _market_discipline(
     rr_ratio = round(upside_pct / max(downside_pct, 0.01), 2) if upside_pct > 0 and downside_pct > 0 else 0.0
     if rr_ratio and rr_ratio < 1.0:
         risk_flags.append("盈亏比低于1:1，除非次日快速确认否则不追")
-    if agent_review_count == 0:
-        risk_flags.append("未进入 Skill Agent 深审，仅按规则信号降权输出")
-
     return {
         "market_regime": label,
         "regime_note": regime_note,
@@ -1853,7 +1850,6 @@ def _market_discipline(
 def _estimated_win_rate(
     stock: dict[str, Any],
     final_score: float,
-    agent_review_count: int,
     up_ratio: float,
 ) -> float:
     evidence = float(stock.get("evidence_quality_score") or 60.0)
@@ -1864,7 +1860,6 @@ def _estimated_win_rate(
     win_rate += (evidence - 60.0) / 400.0
     win_rate += (authenticity - 0.70) * 0.10
     win_rate += min(0.06, max(-0.08, (up_ratio - 0.5) * 0.18))
-    win_rate += min(0.05, agent_review_count * 0.02)
     win_rate -= min(0.12, risk_score / 700.0)
     return max(0.10, min(0.93, win_rate))
 

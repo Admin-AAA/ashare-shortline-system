@@ -37,10 +37,10 @@ def test_portfolio_metrics_empty_population_returns_n0_placeholder():
     assert snapshot.profit_factor == 0.0
 
 
-def test_production_universe_filter_uses_current_20cm_setting():
+def test_production_universe_filter_uses_current_full_a_share_setting():
     assert _in_production_universe("300001") is True
     assert _in_production_universe("688001") is True
-    assert _in_production_universe("600001") is False
+    assert _in_production_universe("600001") is True
 
 
 def test_decision_regime_prefers_score_line_meta_over_market_context():

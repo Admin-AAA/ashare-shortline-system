@@ -181,7 +181,6 @@ class SelectionPolicyContext:
     market_snapshot: Mapping[str, Any]
     risk_template: str = "balanced"
     display_limit: int | None = None
-    agent_available: bool = True
     same_day_industry_counts: Mapping[str, int] | None = None
     same_day_recommendation_count: int = 0
 
@@ -318,7 +317,6 @@ def evaluate_selection_policy(
         risk_template=context.risk_template,
         display_limit=context.display_limit,
         return_watchlist=True,
-        agent_available=context.agent_available,
         same_day_industry_counts=(
             dict(context.same_day_industry_counts)
             if context.same_day_industry_counts is not None else None

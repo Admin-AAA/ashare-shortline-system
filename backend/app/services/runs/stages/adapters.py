@@ -503,7 +503,6 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
             evaluate_selection_policy,
         )
         from app.services.feature_builder import market_regime_score
-        from app.services.model_router_service import has_active_model_routes
 
         skill_map = {s["skill_id"]: s["skill"] for s in selected_skills}
         recent_codes = _recent_recommended_codes(self._db, str(snapshot.get("trade_date") or ""))
@@ -548,7 +547,6 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
                 score_line=float(params.get("score_line") or 72.0),
                 market_snapshot=dict(snapshot),
                 risk_template=str(params.get("risk_template") or "balanced"),
-                agent_available=has_active_model_routes(),
                 same_day_industry_counts=same_day_industry_counts,
                 same_day_recommendation_count=len(same_day_codes),
             ),

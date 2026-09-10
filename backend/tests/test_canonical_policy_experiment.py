@@ -155,14 +155,15 @@ def test_newly_dropped_positive_trade_fails_opportunity_cost_gate() -> None:
             ]
         }
     snapshot = ScoredCandidateSnapshot.from_payload(payload)
-    champion = DEFAULT_PRODUCTION_SELECTION_POLICY.with_rule_patch("board_universe", "all")
+    champion = DEFAULT_PRODUCTION_SELECTION_POLICY
+    challenger = DEFAULT_PRODUCTION_SELECTION_POLICY.with_rule_patch("board_universe", "20cm")
     artifact = ProductionPolicyBacktestRunner().run(
         CanonicalPolicyExperimentSpec(
             experiment_id="policy_drop_winner",
             hypothesis="扩大到 all board 后再收回 20cm 不得靠丢赢家获胜",
             candidate_snapshot=snapshot,
             champion_policy=champion,
-            challenger_policy=DEFAULT_PRODUCTION_SELECTION_POLICY,
+            challenger_policy=challenger,
             changed_rule_id="board_universe",
             score_line=72.0,
             output_count=6,

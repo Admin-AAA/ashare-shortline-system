@@ -435,10 +435,34 @@ def test_enrich_with_auction_data():
     _enrich_with_auxiliary_data(stocks, None, {}, _aux_override=aux)
     s = stocks[0]
     assert s.get("auction_volume_ratio") == 0.74
+    assert s.get("auction_signal_available") is True
+    assert s.get("auction_gap_pct") == 0.0
+    assert "auction" not in s["data_quality"]["missing_fields"]
     assert s.get("pledge_ratio") == 0.13
     assert s.get("broker_rec_count") == 3
     assert s.get("has_upcoming_float") is True
     assert s.get("upcoming_float_ratio") == 5.0
+
+
+def test_enrich_without_auction_data_keeps_signal_unavailable():
+    from app.services.feature_builder import _enrich_with_auxiliary_data
+
+    stocks = [{"code": "000001", "dsa_profile": {}, "data_quality": {}}]
+    aux = {
+        "auctions": {}, "pledges": {}, "broker_recs": {},
+        "share_floats_upcoming": {}, "limit_up": {}, "concept_sectors": {},
+        "capital_flows": {}, "dragon_tigers": {}, "news": {},
+    }
+
+    _enrich_with_auxiliary_data(stocks, None, {}, _aux_override=aux)
+
+    stock = stocks[0]
+    assert stock["auction_signal_available"] is False
+    assert stock["auction_gap_pct"] is None
+    assert stock["auction_price"] is None
+    assert stock["auction_pre_close"] is None
+    assert "auction" not in stock["data_quality"]["missing_fields"]
+    assert "auction" in stock["data_quality"]["optional_missing_fields"]
 
 
 def test_risk_score_includes_pledge_and_float():

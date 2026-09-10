@@ -669,10 +669,6 @@ class PathABacktestRunner:
                 score_line=score_line,
                 output_count=int(config.get("output_count") or 6),
                 market_snapshot=market_context,
-                # 默认 False（降级模式，强势日走 soft floor 兜底）。设为 True 模拟
-                # 生产 LLM 正常口径：强势/高潮日禁用兜底，复现「宁可零推荐」，
-                # 用于验证强势日提线参数（climax_extra / 强牛调整）的真实影响。
-                agent_available=bool(config.get("agent_available", False)),
             ),
             policy,
         )
