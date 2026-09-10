@@ -1180,6 +1180,50 @@ def test_simulate_outcome_defaults_to_production_profit_floor_policy():
     )
 
 
+def test_incomplete_horizon_without_terminal_exit_stays_provisional():
+    rec = SimpleNamespace(
+        code="000001",
+        trade_date="2026-07-01",
+        recommend_price=10.0,
+        recommended_at=datetime(2026, 7, 1, 2, 0),
+        feature_snapshot_json=json.dumps(
+            {"ideal_buy": 10.0, "stop_loss": 9.5, "take_profit": 11.0}
+        ),
+    )
+    bars = [
+        _bar_trailing(
+            trade_date="2026-07-01",
+            open=10.0,
+            high=10.1,
+            low=9.9,
+            close=10.0,
+            pct_chg=0.0,
+        ),
+        _bar_trailing(
+            trade_date="2026-07-02",
+            open=10.0,
+            high=10.2,
+            low=9.9,
+            close=10.1,
+            pct_chg=1.0,
+        ),
+    ]
+
+    sim = _simulate_outcome(
+        rec,
+        bars,
+        [str(bar.trade_date) for bar in bars],
+        horizon_days=5,
+        entry_policy=CAUSAL_STRATEGY_ENTRY,
+    )
+
+    assert sim is not None
+    assert sim["outcome_label"] == "provisional"
+    assert sim["exit_reason"] == "horizon_incomplete"
+    assert sim["net_return_pct"] is None
+    assert sim["canonical_exit_evidence"] is False
+
+
 def test_custom_exit_resolver_is_explicitly_noncanonical():
     rec = SimpleNamespace(
         code="000001",
