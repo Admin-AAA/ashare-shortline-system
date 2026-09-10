@@ -2,7 +2,7 @@ import re
 from typing import Any
 
 from app.engine.evaluator import evaluate
-from app.engine.signal import Signal
+from app.engine.signal import ENTRY_MODE_TARGET_TOUCH, VALID_ENTRY_MODES, Signal
 from app.engine.skill_loader import StrategySkill
 
 
@@ -84,6 +84,7 @@ def run_strategy(
     setup_name = ""
     entry_rule = ""
     invalid_rule = ""
+    entry_mode = ENTRY_MODE_TARGET_TOUCH
     setup_quality = 50.0
     for setup in contract.get("setups", []) or []:
         if evaluate(str(setup.get("when", "")), context):
@@ -92,6 +93,12 @@ def run_strategy(
             setup_quality = min(100.0, 60.0 + float(setup.get("score_delta", 0)))
             entry_rule = str(setup.get("entry_rule", ""))
             invalid_rule = str(setup.get("invalid_rule", ""))
+            entry_mode = str(setup.get("entry_mode") or ENTRY_MODE_TARGET_TOUCH)
+            if entry_mode not in VALID_ENTRY_MODES:
+                raise ValueError(
+                    f"策略 '{skill.skill_id}' setup '{setup_name}' 的 entry_mode "
+                    f"必须是 {sorted(VALID_ENTRY_MODES)}，实际为 {entry_mode!r}"
+                )
             # "观察"类 setup 命中即否决：策略自己标"观察"=不确定，不该入场
             if bool(setup.get("hard_veto", False)):
                 hard_veto = True
@@ -130,6 +137,7 @@ def run_strategy(
         setup_match=setup_name,
         entry_rule=entry_rule,
         invalid_rule=invalid_rule,
+        entry_mode=entry_mode,
         evidence=evidence,
         setup_quality=setup_quality,
         score_cap=score_cap,
@@ -309,6 +317,7 @@ def _signal(
     setup_match: str = "",
     entry_rule: str = "",
     invalid_rule: str = "",
+    entry_mode: str = ENTRY_MODE_TARGET_TOUCH,
     evidence: list[str] | None = None,
     setup_quality: float = 50.0,
     score_cap: float = 100.0,
@@ -328,6 +337,7 @@ def _signal(
         "setup_match": setup_match,
         "entry_rule": entry_rule,
         "invalid_rule": invalid_rule,
+        "entry_mode": entry_mode,
         "setup_quality": setup_quality,
         "hard_veto": hard_veto,
         "veto_reason": veto_reason,

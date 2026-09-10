@@ -8,6 +8,7 @@ import {
   cancelObservationText,
   collectUnsettledIds,
   executionDecisionCode,
+  historyExecutedReturn,
   holdingDecisionPresentation,
   isPlaceholderEntryRule,
 } from "../src/utils/executionConfirmation.ts";
@@ -102,6 +103,26 @@ test("取消观察收益只显示已经形成的交易日", () => {
   });
 
   assert.equal(text, "1日 -10.07%");
+});
+
+test("历史收益只接受真实模拟成交，未触发观察值不得冒充收益", () => {
+  assert.equal(
+    historyExecutedReturn({
+      outcome_label: "missed",
+      entry_triggered: false,
+      executed_return: 0,
+      missed_observation: { return_pct: 14.14 },
+    }),
+    null,
+  );
+  assert.equal(
+    historyExecutedReturn({
+      outcome_label: "success",
+      entry_triggered: true,
+      executed_return: 2.43,
+    }),
+    2.43,
+  );
 });
 
 test("未结算记录把后端持仓判断展示为条件式卖出提示", () => {

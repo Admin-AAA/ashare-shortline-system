@@ -68,7 +68,7 @@ def test_history_summary_uses_settled_net_returns_only():
         "additional_cost_pct": 0.07,
         "methodology": {
             "sample_scope": "canonical_history_live_and_reconstruction_v1",
-            "entry_policy": "causal_strategy_entry_v1",
+            "entry_policy": "strategy_declared_with_legacy_fallback_v1",
             "win_definition": "executed_net_return_gt_zero",
             "deduplication": "trade_date_and_code_highest_score",
             "return_unit": "percentage_points_per_trade",
@@ -175,7 +175,7 @@ def test_history_pagination():
 
 
 def test_history_items_have_outcome_field():
-    """每个 item 应有 outcome、execution_state 和取消观察字段。"""
+    """每个 item 应有执行结果，且未成交不得附带虚拟收益。"""
     db = _db()
     try:
         result = list_recommendation_history(db, limit=5)
@@ -183,6 +183,8 @@ def test_history_items_have_outcome_field():
             assert "outcome" in item
             assert "execution_state" in item
             assert "cancel_observation" in item
+            if item["outcome"] is not None:
+                assert "missed_observation" not in item["outcome"]
         assert "cancel_observation" in result["summary"]
     finally:
         db.close()

@@ -879,6 +879,7 @@ def _persist_backtest_recommendations(
             "setup_type": card.get("setup_type"),
             "entry_rule": card.get("entry_rule"),
             "invalid_rule": card.get("invalid_rule"),
+            "entry_mode": card.get("entry_mode", "target_touch"),
             "score_line_meta": card.get("score_line_meta", {}),
             "execution_viability": card.get("execution_viability", {}),
             "sector_diversity_penalty": card.get("sector_diversity_penalty", 0),

@@ -12,7 +12,7 @@ import inspect
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Mapping, Protocol, cast, runtime_checkable
 
-from app.engine.signal import Signal
+from app.engine.signal import ENTRY_MODE_TARGET_TOUCH, Signal
 from app.engine.strategy_runner import _evidence_score_cap, _passes_universe
 
 if TYPE_CHECKING:
@@ -73,6 +73,7 @@ class StrategyDecision:
     setup_match: str = ""
     entry_rule: str = ""
     invalid_rule: str = ""
+    entry_mode: str = ENTRY_MODE_TARGET_TOUCH
     setup_quality: float = 50.0
     evidence: list[str] = field(default_factory=list)
 
@@ -239,6 +240,7 @@ class DescriptorBoundImperativeStrategy:
             "setup_match": decision.setup_match,
             "entry_rule": decision.entry_rule,
             "invalid_rule": decision.invalid_rule,
+            "entry_mode": decision.entry_mode,
             "setup_quality": decision.setup_quality,
             "hard_veto": decision.hard_veto,
             "veto_reason": decision.veto_reason,

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.engine.signal import ENTRY_MODE_NEXT_OPEN, ENTRY_MODE_TARGET_TOUCH
 from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY
 
 
@@ -32,6 +33,16 @@ CAUSAL_STRATEGY_ENTRY = EntryPolicy(
     fallback_to_open_when_targets_miss=_CANONICAL_ENTRY.fallback_to_open_when_targets_miss,
 )
 
+
+def entry_policy_for_mode(entry_mode: object) -> EntryPolicy:
+    """Map the persisted strategy entry contract to its executable policy."""
+    normalized = str(entry_mode or ENTRY_MODE_TARGET_TOUCH).strip()
+    if normalized == ENTRY_MODE_TARGET_TOUCH:
+        return CAUSAL_STRATEGY_ENTRY
+    if normalized == ENTRY_MODE_NEXT_OPEN:
+        return NEXT_TRADING_DAY_OPEN
+    raise ValueError(f"unknown entry_mode: {normalized}")
+
 __all__ = [
-    "CAUSAL_STRATEGY_ENTRY", "EntryPolicy", "NEXT_TRADING_DAY_OPEN",
+    "CAUSAL_STRATEGY_ENTRY", "EntryPolicy", "NEXT_TRADING_DAY_OPEN", "entry_policy_for_mode",
 ]

@@ -1235,6 +1235,7 @@ export type SkillSignal = {
   setup_match: string;
   entry_rule: string;
   invalid_rule: string;
+  entry_mode: "target_touch" | "next_open";
   setup_quality: number;
   hard_veto: boolean;
   veto_reason: string;
@@ -1302,6 +1303,7 @@ export type SkillDisagreement = {
 };
 
 export type FeatureSnapshot = {
+  entry_mode?: "target_touch" | "next_open";
   // Price & MA
   price?: number;
   ma5?: number;
@@ -1414,6 +1416,7 @@ export type RecommendationCard = {
   setup_type?: string | null;
   entry_rule?: string | null;
   invalid_rule?: string | null;
+  entry_mode?: "target_touch" | "next_open";
   /** 历史列表保留的轻量关键价位，用来把规则里的“支撑/平台”落到具体价格。 */
   key_levels?: KeyPriceLevels;
   rationale?: string | null;
@@ -1516,18 +1519,6 @@ export type RecommendationOutcome = {
   outcome_label_raw?: string | null;
   outcome_label_legacy?: string;
   outcome_reason?: string | null;
-  /** 未触发时按推荐价虚拟持有至退出条件的只读观察结果，不计入实际交易统计。 */
-  missed_observation?: {
-    baseline_price: number;
-    observation_start_date: string;
-    exit_date: string;
-    exit_price: number;
-    return_pct: number;
-    holding_days: number;
-    stop_loss_price: number;
-    take_profit_price: number;
-    exit_reason: string;
-  } | null;
   label_source: string;
   labeled_at?: string | null;
 };
