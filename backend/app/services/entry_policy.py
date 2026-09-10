@@ -33,10 +33,32 @@ CAUSAL_STRATEGY_ENTRY = EntryPolicy(
     fallback_to_open_when_targets_miss=_CANONICAL_ENTRY.fallback_to_open_when_targets_miss,
 )
 
+_LEGACY_NEXT_OPEN_STRATEGY_IDS = frozenset({
+    "chen-xiaoqun-skill",
+    "dragon-tiger-smart-money",
+})
 
-def entry_policy_for_mode(entry_mode: object) -> EntryPolicy:
-    """Map the persisted strategy entry contract to its executable policy."""
-    normalized = str(entry_mode or ENTRY_MODE_TARGET_TOUCH).strip()
+
+def entry_policy_for_mode(
+    entry_mode: object,
+    *,
+    legacy_strategy_id: object = None,
+) -> EntryPolicy:
+    """Map persisted entry metadata to an executable policy.
+
+    New recommendations own an explicit ``entry_mode`` in their sealed snapshot.
+    Historical recommendations predate that field, so the two momentum/relay
+    strategies are deterministically migrated by their persisted bucket without
+    mutating the sealed recommendation evidence.
+    """
+    normalized = str(entry_mode or "").strip()
+    if not normalized:
+        strategy_id = str(legacy_strategy_id or "").strip()
+        normalized = (
+            ENTRY_MODE_NEXT_OPEN
+            if strategy_id in _LEGACY_NEXT_OPEN_STRATEGY_IDS
+            else ENTRY_MODE_TARGET_TOUCH
+        )
     if normalized == ENTRY_MODE_TARGET_TOUCH:
         return CAUSAL_STRATEGY_ENTRY
     if normalized == ENTRY_MODE_NEXT_OPEN:
