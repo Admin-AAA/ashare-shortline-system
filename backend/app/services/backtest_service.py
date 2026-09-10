@@ -37,6 +37,7 @@ from app.engine.aggregator import apply_pool_rules
 from app.engine.production_policy import DEFAULT_PRODUCTION_SELECTION_POLICY
 from app.engine.skill_loader import load_skills
 from app.engine.strategy import StrategyContext, build_registry_from_skills
+from app.engine.trading_costs import net_return_after_cost
 from app.models.tables import (
     BacktestRun,
     DailyKbar,
@@ -1340,6 +1341,7 @@ def _build_trade_detail_list(
     details: list[dict[str, Any]] = []
     for rec, outcome in trade_records:
         executed_return = resolved_trade_return(outcome)
+        net_return = net_return_after_cost(executed_return)
         entry_date = outcome.entry_date or rec.trade_date
         exit_date = outcome.exit_date or rec.trade_date
         benchmark_ret = compute_benchmark_return(close_map, entry_date, exit_date)
@@ -1370,7 +1372,7 @@ def _build_trade_detail_list(
             "exit_date": exit_date,
             "exit_price": float(outcome.exit_price or 0),
             # 收益指标
-            "net_return_pct": float(executed_return),
+            "net_return_pct": net_return,
             "gross_return_pct": float(outcome.close_return or 0),
             "achievable_return_pct": float(outcome.achievable_return or 0),
             "benchmark_return_pct": benchmark_ret,
@@ -1383,11 +1385,13 @@ def _build_trade_detail_list(
             "exit_reason": str(outcome.exit_reason or ""),
             "final_score": float(rec.final_score or 0),
             # 结果判定
-            "accurate": bool(executed_return > 0),
+            "accurate": bool(signal_valid and net_return > 0),
             "signal_valid_at_recommend_time": signal_valid,
             "executed": True,
-            "net_return_positive": bool(executed_return > 0),
-            "false_positive_reason": outcome.outcome_reason if executed_return <= 0 else None,
+            "net_return_positive": bool(net_return > 0),
+            "false_positive_reason": (
+                outcome.outcome_reason if not signal_valid or net_return <= 0 else None
+            ),
             # 信号特征摘要
             "signal_features": signal_features,
             "resolved": True,
@@ -1449,23 +1453,24 @@ def _build_backtest_metric_records(
             continue
         executed = is_trade_executed(outcome)
         executed_return = resolved_trade_return(outcome) if executed else 0.0
+        net_return = net_return_after_cost(executed_return) if executed else 0.0
+        signal_valid = not _outcome_bool_flag(getattr(outcome, "hit_invalid", False))
         benchmark_ret = 0.0
         if executed:
             entry_date = outcome.entry_date or rec.trade_date
             exit_date = outcome.exit_date or rec.trade_date
             benchmark_ret = compute_benchmark_return(close_map, entry_date, exit_date)
-        accurate = bool(executed and executed_return > 0)
+        accurate = bool(signal_valid and executed and net_return > 0)
         false_positive_reason = outcome.outcome_reason if not accurate else None
         if false_positive_reason is None and not executed:
             false_positive_reason = "未触发买点或不可真实成交"
-        signal_valid = not _outcome_bool_flag(getattr(outcome, "hit_invalid", False))
         records.append(
             {
                 "recommendation_id": str(rec.recommendation_id),
                 "trade_date": str(rec.trade_date),
                 "code": str(rec.code),
                 "name": str(rec.name or rec.code),
-                "net_return_pct": float(executed_return),
+                "net_return_pct": net_return,
                 "gross_return_pct": float(outcome.close_return or 0),
                 "achievable_return_pct": float(outcome.achievable_return or 0),
                 "morning_drawdown_pct": float(outcome.max_drawdown or 0),
@@ -1474,7 +1479,7 @@ def _build_backtest_metric_records(
                 "accurate": accurate,
                 "signal_valid_at_recommend_time": signal_valid,
                 "executed": executed,
-                "net_return_positive": bool(executed and executed_return > 0),
+                "net_return_positive": bool(executed and net_return > 0),
                 "false_positive_reason": false_positive_reason,
                 "resolved": True,
             }

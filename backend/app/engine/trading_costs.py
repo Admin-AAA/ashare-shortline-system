@@ -15,9 +15,16 @@ def is_net_profitable(gross_return_pct: float) -> bool:
     return float(gross_return_pct) > ADDITIONAL_COST_PCT
 
 
+def net_return_after_cost(gross_return_pct: float) -> float:
+    """Convert the simulator's slippage-adjusted gross return to canonical net return."""
+
+    return round(float(gross_return_pct) - ADDITIONAL_COST_PCT, 10)
+
+
 __all__ = [
     "ADDITIONAL_COST_PCT",
     "COMMISSION_RATE_PCT",
     "STAMP_TAX_RATE_PCT",
     "is_net_profitable",
+    "net_return_after_cost",
 ]

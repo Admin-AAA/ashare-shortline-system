@@ -1681,27 +1681,32 @@ def _selected_skill_rows(selected_skills: list[dict[str, Any]]) -> list[dict[str
 
 
 def _hit_rate_from_outcome_tuples(outcomes: list[tuple | None]) -> float:
-    """由轻量 outcome 元组 (entry_triggered, executed_return, close_return) 算 hit_rate。
+    """由轻量 outcome 元组算已结算且信号有效交易的 hit_rate。
 
     与 is_trade_executed + is_accurate_recommendation 口径一致：
+    - provisional/pending 不进入统计
     - executed = entry_triggered 为真
-    - accurate = executed 且 resolved_trade_return > _ADDITIONAL_COST_PCT
+    - accurate = signal 未失效且 resolved_trade_return > _ADDITIONAL_COST_PCT
       （resolved_trade_return = executed_return 非 None 否则 close_return）
     hit_rate = accurate / executed，executed 为空时 0.0。
 
     提取为纯函数便于单测，防内联计算回归（口径必须与 outcome_service 一致）。
     """
     executed_returns = [
-        (exec_ret, close_ret)
-        for (entry_trig, exec_ret, close_ret) in (o for o in outcomes if o)
+        (exec_ret, close_ret, hit_invalid)
+        for (entry_trig, exec_ret, close_ret, label, hit_invalid) in (
+            o for o in outcomes if o
+        )
         if entry_trig
+        and str(label or "").lower()
+        in {"success", "failed", "target_hit", "risk_hit"}
     ]
     if not executed_returns:
         return 0.0
     success_count = sum(
         1
-        for exec_ret, close_ret in executed_returns
-        if is_net_profitable(
+        for exec_ret, close_ret, hit_invalid in executed_returns
+        if not hit_invalid and is_net_profitable(
             float(exec_ret) if exec_ret is not None else float(close_ret or 0)
         )
     )
@@ -1734,7 +1739,7 @@ def _serialize_run_summaries_batched(db: Session, runs: list[RecommendationRun])
         recs_by_run.setdefault(run_id, []).append(rid)
         all_rec_ids.append(rid)
 
-    # 批量加载所有 Outcome —— 只取 hit_rate 计算所需列（entry_triggered/executed_return/close_return），
+    # 批量加载所有 Outcome —— 只取 hit_rate 计算所需列，
     # 不加载 outcome_reason/max_return 等明细字段。outcome 表无大 JSON，但仍减列省 ORM 实例化。
     outcome_map: dict[str, tuple] = {}
     if all_rec_ids:
@@ -1744,10 +1749,12 @@ def _serialize_run_summaries_batched(db: Session, runs: list[RecommendationRun])
                 RecommendationOutcome.entry_triggered,
                 RecommendationOutcome.executed_return,
                 RecommendationOutcome.close_return,
+                RecommendationOutcome.outcome_label,
+                RecommendationOutcome.hit_invalid,
             ).where(RecommendationOutcome.recommendation_id.in_(all_rec_ids))
         ).all()
         for o in outcome_rows:
-            outcome_map[o[0]] = (o[1], o[2], o[3])  # (entry_triggered, executed_return, close_return)
+            outcome_map[o[0]] = (o[1], o[2], o[3], o[4], o[5])
 
     results = []
     for run in runs:
