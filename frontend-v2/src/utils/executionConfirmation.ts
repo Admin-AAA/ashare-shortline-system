@@ -32,6 +32,17 @@ export function isPlaceholderEntryRule(value?: string | null): boolean {
   return normalized === "" || PLACEHOLDER_ENTRY_RULES.has(normalized);
 }
 
+/** 历史收益只允许展示真实成交且已结算的净收益。 */
+export function historyExecutedReturn(outcome?: {
+  entry_triggered?: boolean | null;
+  outcome_label?: string | null;
+  executed_return?: number | null;
+  missed_observation?: unknown;
+} | null): number | null {
+  if (!outcome?.entry_triggered || !isOutcomeSettled(outcome.outcome_label)) return null;
+  return outcome.executed_return ?? null;
+}
+
 /** 取消后的反事实观察只展示已经形成的交易日，不用 0 填充未来窗口。 */
 export function cancelObservationText(observation?: CancelObservation | null): string {
   if (!observation) return "";

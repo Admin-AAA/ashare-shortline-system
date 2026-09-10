@@ -32,9 +32,8 @@ from app.engine.execution_policy import (
 from app.engine.trading_costs import ADDITIONAL_COST_PCT, is_net_profitable
 from app.models.tables import DailyKbar, Recommendation
 from app.services.entry_policy import (
-    CAUSAL_STRATEGY_ENTRY,
     EntryPolicy,
-    NEXT_TRADING_DAY_OPEN,
+    entry_policy_for_mode,
 )
 
 # A 股 T+1 交收：买入当日不能卖出。推荐时点决定入场日与最早可离场日：
@@ -129,13 +128,15 @@ def _simulate_outcome(
     *,
     pre_resolved_entry: dict[str, Any] | None = None,
     exit_resolver: Any = None,
-    entry_policy: EntryPolicy = CAUSAL_STRATEGY_ENTRY,
+    entry_policy: EntryPolicy | None = None,
 ) -> dict[str, Any] | None:
     """模拟单笔推荐 outcome。
 
     exit_resolver 默认 None → 用生产单路径因果利润地板 `_resolve_exit`。
     传入自定义解析器（签名同 _resolve_exit：holding_bars, stop_loss, take_profit,
     *, code, entry_price）可替换退出逻辑，用于动态退出状态机反事实验证。
+    entry_policy 未显式传入时，按推荐快照中的策略 entry_mode 选择；旧快照缺失时
+    回退到原有目标价触碰口径。
     入场时序、holding_bars 起点、executed_entry_price（含滑点）、除权重算等全部
     复用生产路径，只替换 exit 环节。
     """
@@ -157,13 +158,16 @@ def _simulate_outcome(
         rec_final_score = _as_float(getattr(rec, "final_score", None))
         if rec_final_score > 0:
             feature_snapshot = {**feature_snapshot, "final_score": rec_final_score}
+    selected_entry_policy = entry_policy or entry_policy_for_mode(
+        feature_snapshot.get("entry_mode")
+    )
     static_metrics = _static_window_metrics(rec, signal_bar, future_bars, horizon_days)
 
     recommendation_block_reason = _recommendation_execution_block_reason(feature_snapshot)
     if recommendation_block_reason:
         return {
             **static_metrics,
-            "entry_policy_id": entry_policy.policy_id,
+            "entry_policy_id": selected_entry_policy.policy_id,
             "entry_triggered": False,
             "entry_date": None,
             "entry_price": None,
@@ -193,7 +197,7 @@ def _simulate_outcome(
     # pre_resolved_entry 由 _compute_horizon_metric_records 预解析传入，省 2/3 _resolve_entry 调用（占模拟 77%）。
     entry_result = pre_resolved_entry if pre_resolved_entry is not None else _resolve_entry(
         rec, feature_snapshot, future_bars, horizon_days, signal_bar=signal_bar,
-        entry_policy=entry_policy,
+        entry_policy=selected_entry_policy,
     )
     position_size = _resolve_position_size(feature_snapshot)
 
@@ -209,7 +213,7 @@ def _simulate_outcome(
             outcome_reason = f"{entry_reason}；静态窗口结果仅作旁路参考"
         return {
             **static_metrics,
-            "entry_policy_id": entry_policy.policy_id,
+            "entry_policy_id": selected_entry_policy.policy_id,
             "entry_triggered": False,
             "entry_date": None,
             "entry_price": None,
@@ -365,7 +369,7 @@ def _simulate_outcome(
 
     return {
         **static_metrics,
-        "entry_policy_id": entry_policy.policy_id,
+        "entry_policy_id": selected_entry_policy.policy_id,
         "entry_triggered": True,
         "entry_date": entry_date,
         "entry_price": round(executed_entry_price, 2),
@@ -394,86 +398,6 @@ def _simulate_outcome(
             exit_reason, executed_return, static_metrics["close_return"],
             max_return=static_metrics.get("max_return"), max_drawdown=static_metrics.get("max_drawdown"),
         ),
-    }
-
-
-def build_missed_observation(
-    rec: Recommendation,
-    bars: list[DailyKbar],
-    dates: list[str],
-    horizon_days: int,
-    feature_snapshot: dict[str, Any] | None = None,
-) -> dict[str, Any] | None:
-    """为未触发推荐生成推荐价基准的退出观察结果。
-
-    这不是实际成交收益：买点未触发时仍保持 ``executed_return=0``。本函数只回答
-    「若从推荐价开始观察，并沿用原止损、止盈和因果移动保护，何时会满足退出条件、
-    收益是多少」，用于验证未触发推荐本身的方向是否准确。
-
-    盘中推荐可从信号日开始观察；盘后推荐从下一交易日开始。两种情形均复用生产
-    ``_resolve_exit`` 的 T+1 约束和退出优先级，但不计滑点、佣金或印花税。
-    """
-    if not bars or horizon_days < 1:
-        return None
-
-    signal_index = bisect_left(dates, str(rec.trade_date))
-    signal_bar = (
-        bars[signal_index]
-        if signal_index < len(bars) and dates[signal_index] == str(rec.trade_date)
-        else None
-    )
-    future_start = signal_index + 1 if signal_bar is not None else signal_index
-    future_bars = bars[future_start:]
-    if _is_intraday_recommendation(rec) and signal_bar is not None:
-        observation_bars = [signal_bar, *future_bars]
-    else:
-        observation_bars = future_bars
-    observation_bars = observation_bars[: max(1, horizon_days)]
-    if not observation_bars:
-        return None
-
-    baseline_price = _as_float(getattr(rec, "recommend_price", None))
-    if baseline_price <= 0 and signal_bar is not None:
-        baseline_price = _as_float(signal_bar.close)
-    if baseline_price <= 0:
-        baseline_price = _as_float(observation_bars[0].open) or _as_float(observation_bars[0].close)
-    if baseline_price <= 0:
-        return None
-
-    snapshot = feature_snapshot if feature_snapshot is not None else _loads(
-        getattr(rec, "feature_snapshot_json", None), {}
-    )
-    stop_loss_price = _resolve_stop_loss_price(baseline_price, snapshot)
-    take_profit_price = _resolve_take_profit_price(
-        baseline_price,
-        snapshot,
-        recommend_price=baseline_price,
-    )
-    exit_price, exit_date, exit_reason = _resolve_exit(
-        observation_bars,
-        stop_loss_price,
-        take_profit_price,
-        code=str(getattr(rec, "code", "") or ""),
-        entry_price=baseline_price,
-    )
-    exit_index = next(
-        (
-            index
-            for index, bar in enumerate(observation_bars)
-            if str(bar.trade_date) == str(exit_date)
-        ),
-        len(observation_bars) - 1,
-    )
-    return {
-        "baseline_price": round(baseline_price, 2),
-        "observation_start_date": str(observation_bars[0].trade_date),
-        "exit_date": exit_date,
-        "exit_price": round(exit_price, 2),
-        "return_pct": round((exit_price - baseline_price) / baseline_price * 100, 2),
-        "holding_days": exit_index + 1,
-        "stop_loss_price": stop_loss_price,
-        "take_profit_price": take_profit_price,
-        "exit_reason": exit_reason,
     }
 
 
@@ -558,10 +482,13 @@ def _resolve_entry(
     horizon_days: int,
     *,
     signal_bar: DailyKbar | None = None,
-    entry_policy: EntryPolicy = CAUSAL_STRATEGY_ENTRY,
+    entry_policy: EntryPolicy | None = None,
 ) -> dict[str, Any]:
     """Translate ORM-shaped inputs to the canonical entry-core contract."""
     del signal_bar  # Recommendation timestamp owns intraday causality.
+    selected_entry_policy = entry_policy or entry_policy_for_mode(
+        feature_snapshot.get("entry_mode")
+    )
     candidate_bars = tuple(
         CausalEntryBar(
             code=str(getattr(bar, "code", "") or rec.code),
@@ -584,8 +511,8 @@ def _resolve_entry(
     decision = resolve_causal_entry(
         candidate_bars,
         CausalEntryConfig(
-            policy_id=entry_policy.policy_id,
-            price_source=entry_policy.price_source,
+            policy_id=selected_entry_policy.policy_id,
+            price_source=selected_entry_policy.price_source,
             signal_date=str(
                 getattr(rec, "trade_date", "")
                 or (candidate_bars[0].trade_date if candidate_bars else "unknown")
@@ -593,11 +520,11 @@ def _resolve_entry(
             recommendation_price=_as_float(getattr(rec, "recommend_price", None)),
             intraday=_is_intraday_recommendation(rec),
             target_prices=target_prices,
-            max_entry_trade_days=entry_policy.max_entry_trade_days,
+            max_entry_trade_days=selected_entry_policy.max_entry_trade_days,
             horizon_days=horizon_days,
-            allow_target_touch=entry_policy.allow_target_touch,
+            allow_target_touch=selected_entry_policy.allow_target_touch,
             fallback_to_open_when_targets_miss=(
-                entry_policy.fallback_to_open_when_targets_miss
+                selected_entry_policy.fallback_to_open_when_targets_miss
             ),
             entry_slippage_bps=ENTRY_SLIPPAGE_BPS,
             max_entry_gap_pct=MAX_ENTRY_GAP_PCT,

@@ -9,6 +9,8 @@ from typing import Any, Mapping
 
 import yaml
 
+from app.engine.signal import ENTRY_MODE_TARGET_TOUCH, VALID_ENTRY_MODES
+
 
 _VALID_MODES = frozenset({"declarative", "imperative"})
 _VALID_STATUSES = frozenset({"active", "disabled", "deprecated"})
@@ -144,6 +146,13 @@ def validate_skill(skill: StrategySkill) -> list[str]:
             errors.append("strategy.yaml missing name")
         if not isinstance(skill.contract.get("scoring", {}).get("rules", []), list):
             errors.append("scoring.rules must be a list")
+        for setup in skill.contract.get("setups", []) or []:
+            entry_mode = str(setup.get("entry_mode") or ENTRY_MODE_TARGET_TOUCH)
+            if entry_mode not in VALID_ENTRY_MODES:
+                errors.append(
+                    f"setup '{setup.get('name', '')}' entry_mode must be one of "
+                    f"{sorted(VALID_ENTRY_MODES)}"
+                )
     return errors
 
 

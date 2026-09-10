@@ -6,11 +6,10 @@
 
 设计取舍——为什么用 ``TypedDict`` 而不是 ``dataclass``：
     ``Signal`` 定义为 ``TypedDict``，因此它在**运行时就是一个普通 ``dict``**。
-    ``strategy_runner._signal(...)`` 原样返回既有的 dict 字面量即可获得静态类型，
-    键集合 / 键顺序 / 每个键的值与迁移前**逐字节一致**——``aggregator`` 及任何
-    ``signal["xxx"]`` 访问零改动、零行为变化。若改用 ``dataclass``，则必须在
-    ``run_strategy`` 返回边界再 ``asdict`` 转回等价 dict 并保持键序，徒增一层转换与漂移
-    风险，收益为零。故这里选择 depth 最高、运行时零成本的 ``TypedDict``。
+    ``strategy_runner._signal(...)`` 返回普通 dict 即可获得静态类型，``aggregator`` 及
+    其他消费者仍可直接使用 ``signal["xxx"]``。若改用 ``dataclass``，则必须在
+    ``run_strategy`` 返回边界再 ``asdict`` 转回 dict 并保持键序，徒增一层转换与漂移
+    风险。故这里选择运行时零成本的 ``TypedDict``。
 
 字段顺序与 ``strategy_runner._signal(...)`` 的 dict 字面量严格一一对应（见
 ``SIGNAL_FIELDS`` 断言用的键序），任何新增/删除/改序都应两处同步。
@@ -18,6 +17,11 @@
 from __future__ import annotations
 
 from typing import TypedDict
+
+
+ENTRY_MODE_TARGET_TOUCH = "target_touch"
+ENTRY_MODE_NEXT_OPEN = "next_open"
+VALID_ENTRY_MODES = frozenset({ENTRY_MODE_TARGET_TOUCH, ENTRY_MODE_NEXT_OPEN})
 
 
 class Signal(TypedDict):
@@ -42,6 +46,7 @@ class Signal(TypedDict):
     setup_match: str
     entry_rule: str
     invalid_rule: str
+    entry_mode: str
     setup_quality: float
     # 风控 / 否决
     hard_veto: bool

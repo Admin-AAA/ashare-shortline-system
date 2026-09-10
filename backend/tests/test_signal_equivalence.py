@@ -51,7 +51,7 @@ _BASE_CONTRACT: dict = {
     },
     "setups": [
         {"when": "breakout20 == true", "name": "突破买点", "score_delta": 6,
-         "entry_rule": "突破确认后进场", "invalid_rule": "跌破 MA20"},
+         "entry_mode": "next_open", "entry_rule": "突破确认后进场", "invalid_rule": "跌破 MA20"},
     ],
     "risk": {
         "rules": [
@@ -121,6 +121,7 @@ _SCENARIOS: list[dict] = [
             "setup_match": "",
             "entry_rule": "",
             "invalid_rule": "",
+            "entry_mode": "target_touch",
             "setup_quality": 50.0,
             "hard_veto": True,
             "veto_reason": "不在策略股票池",
@@ -151,6 +152,7 @@ _SCENARIOS: list[dict] = [
             "setup_match": "突破买点",
             "entry_rule": "突破确认后进场",
             "invalid_rule": "跌破 MA20",
+            "entry_mode": "next_open",
             "setup_quality": 66.0,
             "hard_veto": False,
             "veto_reason": "",
@@ -181,6 +183,7 @@ _SCENARIOS: list[dict] = [
             "setup_match": "",
             "entry_rule": "",
             "invalid_rule": "",
+            "entry_mode": "target_touch",
             "setup_quality": 50.0,
             "hard_veto": True,
             "veto_reason": "未命中任何入场 setup（策略要求 require_setup）",
@@ -212,6 +215,7 @@ _SCENARIOS: list[dict] = [
             "setup_match": "突破买点",
             "entry_rule": "突破确认后进场",
             "invalid_rule": "跌破 MA20",
+            "entry_mode": "next_open",
             "setup_quality": 66.0,
             "hard_veto": False,
             "veto_reason": "",
@@ -245,6 +249,7 @@ _SCENARIOS: list[dict] = [
             "setup_match": "",
             "entry_rule": "",
             "invalid_rule": "",
+            "entry_mode": "target_touch",
             "setup_quality": 50.0,
             "hard_veto": False,
             "veto_reason": "",
@@ -256,8 +261,8 @@ _SCENARIOS: list[dict] = [
 
 
 @pytest.mark.parametrize("scenario", _SCENARIOS, ids=lambda s: s["name"])
-def test_run_strategy_signal_is_byte_for_byte_equivalent(scenario):
-    """逐字段对拍：run_strategy 返回值与迁移前手算期望完全一致。"""
+def test_run_strategy_signal_matches_canonical_contract(scenario):
+    """逐字段对拍：run_strategy 返回值与手算的当前契约完全一致。"""
     skill = _make_skill(scenario["contract"])
 
     result = run_strategy(
@@ -284,4 +289,4 @@ def test_signal_typeddict_matches_runtime_keys():
 
     assert list(SIGNAL_FIELDS) == list(Signal.__annotations__.keys())
     assert list(result.keys()) == list(SIGNAL_FIELDS)
-    assert len(SIGNAL_FIELDS) == 17  # 迁移前 _signal 恰好 17 个字段
+    assert len(SIGNAL_FIELDS) == 18

@@ -742,6 +742,48 @@ def test_postclose_unhit_strategy_target_is_not_forced_into_next_open():
     assert "未触发目标买点" in result["reason"]
 
 
+def test_postclose_snapshot_next_open_entry_mode_uses_executable_open():
+    """动量/接力策略显式声明次日开盘时，不得再套用全局低吸价触碰。"""
+    rec = SimpleNamespace(
+        code="000001",
+        trade_date="2026-07-28",
+        recommend_price=10.0,
+        recommended_at=datetime(2026, 7, 28, 8, 0),
+    )
+    bars = [
+        _bar(
+            trade_date="2026-07-29",
+            open=10.5,
+            high=10.8,
+            low=10.2,
+            close=10.6,
+            pct_chg=6.0,
+        ),
+    ]
+
+    result = _resolve_entry(
+        rec,
+        {"ideal_buy": 9.8, "entry_mode": "next_open"},
+        bars,
+        horizon_days=5,
+    )
+
+    assert result["triggered"] is True
+    assert result["price"] == 10.5
+    assert result["reason"] == "next_trading_day_open_entry"
+
+    simulation = _simulate_outcome(
+        rec,
+        bars,
+        [str(bar.trade_date) for bar in bars],
+        horizon_days=5,
+        feature_snapshot={"ideal_buy": 9.8, "entry_mode": "next_open"},
+    )
+    assert simulation is not None
+    assert simulation["entry_triggered"] is True
+    assert simulation["entry_policy_id"] == "next_trading_day_open_v1"
+
+
 def test_simulate_outcome_take_profit_min_return_truncated():
     """take_profit_hit 后 min_return 也只算 entry→exit，不算 exit 后的回撤。
 

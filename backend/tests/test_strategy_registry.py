@@ -7,7 +7,7 @@ import pytest
 
 from app.engine.imperative_strategy import DescriptorBoundImperativeStrategy, StrategyDecision
 from app.engine.signal import SIGNAL_FIELDS
-from app.engine.skill_loader import StrategySkill
+from app.engine.skill_loader import StrategySkill, validate_skill
 from app.engine.strategy import (
     DeclarativeStrategy,
     DuplicateStrategyError,
@@ -30,7 +30,7 @@ _CONTRACT: dict = {
     "prefilter": {"market": {"exclude": ["avg_cost > 200"]}},
     "phases": [{"when": "pct >= 5", "name": "上涨", "score_cap": 90, "hard_veto": False, "risk_flags": ["涨幅偏高"]}],
     "scoring": {"base": 50, "score_fields": [{"field": "pct", "multiplier": 2.0, "cap": 20, "reason": "涨幅贡献"}], "rules": [{"when": "vol5_20 >= 1", "delta": 10, "reason": "量比放大"}]},
-    "setups": [{"when": "breakout20 == true", "name": "突破买点", "score_delta": 6, "entry_rule": "突破确认后进场", "invalid_rule": "跌破 MA20"}],
+    "setups": [{"when": "breakout20 == true", "name": "突破买点", "score_delta": 6, "entry_mode": "next_open", "entry_rule": "突破确认后进场", "invalid_rule": "跌破 MA20"}],
     "risk": {"rules": [{"when": "bias_ma20 >= 15", "flag": "乖离率偏高", "level": "high"}]},
     "require_setup": False,
 }
@@ -154,7 +154,7 @@ def test_list_and_unregister_preserve_descriptor_registration_order():
     registry.unregister("skill-a")
 
 
-def test_declarative_strategy_direct_use_preserves_legacy_signal_contract():
+def test_declarative_strategy_direct_use_preserves_canonical_signal_contract():
     skill = _make_skill()
     strategy = DeclarativeStrategy(skill)
     ctx = StrategyContext(main_industries=[], skip_universe_check=False)
@@ -163,7 +163,15 @@ def test_declarative_strategy_direct_use_preserves_legacy_signal_contract():
     via_strategy = strategy.evaluate(dict(stock), ctx)
     assert via_strategy == direct
     assert list(via_strategy.keys()) == list(direct.keys()) == list(SIGNAL_FIELDS)
+    assert via_strategy["entry_mode"] == "next_open"
     assert isinstance(strategy, Strategy)
+
+
+def test_declarative_setup_rejects_unknown_entry_mode():
+    contract = {**_CONTRACT, "setups": [{**_CONTRACT["setups"][0], "entry_mode": "guess_open"}]}
+    errors = validate_skill(_make_skill(contract=contract))
+
+    assert any("entry_mode must be one of" in error for error in errors)
 
 
 def test_build_registry_from_skills_binds_every_signal_to_descriptor_version():
