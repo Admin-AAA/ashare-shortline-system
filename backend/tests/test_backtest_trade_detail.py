@@ -118,7 +118,7 @@ def test_build_trade_detail_fields_complete():
     assert detail["code"] == "000001"
     assert detail["entry_price"] == 10.0
     assert detail["exit_price"] == 10.25
-    assert detail["net_return_pct"] == 2.5
+    assert detail["net_return_pct"] == pytest.approx(2.43)
     assert detail["setup_type"] == "尾盘买入"
     assert detail["exit_reason"] == "next_morning_exit"
     assert detail["accurate"] is True
@@ -186,7 +186,7 @@ def test_build_trade_detail_false_positive_trade():
     assert detail["executed"] is True
     assert detail["net_return_positive"] is False
     assert detail["false_positive_reason"] == "次日开盘承接偏弱，隔夜溢价被回吐"
-    assert detail["net_return_pct"] == -1.2
+    assert detail["net_return_pct"] == pytest.approx(-1.27)
     assert detail["signal_features"]["market_regime"] == "震荡"
 
 

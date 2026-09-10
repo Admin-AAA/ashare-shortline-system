@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from app.engine.trading_costs import ADDITIONAL_COST_PCT
 from app.services.outcome_service import (
     _board_and_net_breakdown,
     _metrics_by_score_line,
@@ -68,6 +69,14 @@ def test_accurate_recommendation_requires_executed_positive_net_return():
     )
     assert not is_accurate_recommendation(
         SimpleNamespace(entry_triggered=False, outcome_label="success", executed_return=3.0)
+    )
+    assert not is_accurate_recommendation(
+        SimpleNamespace(
+            entry_triggered=True,
+            outcome_label="failed",
+            executed_return=3.0,
+            hit_invalid=True,
+        )
     )
 
 
@@ -176,7 +185,10 @@ def test_grouped_setup_metrics_include_recommendation_accuracy_denominator(monke
     assert row["hit_rate"] == 0.5
     assert row["recommendation_accuracy"] == 0.333
     assert row["accuracy_denominator"] == 3
-    assert row["average_net_return"] == round((2.0 - 1.0 + 0.0) / 3, 3)
+    assert row["average_net_return"] == round(
+        (2.0 - ADDITIONAL_COST_PCT - 1.0 - ADDITIONAL_COST_PCT + 0.0) / 3,
+        3,
+    )
     assert row["sample_confidence"] == "low"
 
 

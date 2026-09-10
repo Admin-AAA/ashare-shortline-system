@@ -19,6 +19,7 @@ from app.engine.trading_costs import (
     COMMISSION_RATE_PCT as _COMMISSION_RATE_PCT,
     STAMP_TAX_RATE_PCT as _STAMP_TAX_RATE_PCT,
     is_net_profitable,
+    net_return_after_cost,
 )
 
 from app.models.tables import (
@@ -46,6 +47,7 @@ from app.services.evidence.validation import (
     canonical_live_forward_run_ids,
 )
 from app.services.execution_outcome_policy import apply_execution_outcome_policy
+from app.services.entry_policy import execution_policy_fingerprint_for_entry_policy
 from app.services.official_sample_scope import (
     HISTORICAL_REPLAY_SCOPE,
     LIVE_FORWARD_SCOPE,
@@ -310,12 +312,16 @@ def resolved_trade_return(outcome: RecommendationOutcome | Any | None) -> float:
 
 
 def is_accurate_recommendation(outcome: RecommendationOutcome | Any | None) -> bool:
-    """严格准确推荐口径：真实成交，且扣费后净收益为正。
+    """严格准确推荐口径：信号未失效、真实成交，且扣费后净收益为正。
 
     executed_return 已含滑点但未扣佣金+印花税（_ADDITIONAL_COST_PCT，佣金万1双边+印花税0.05%卖出），
     阈值必须覆盖这部分成本，与 outcome_label 判定保持一致。
     """
-    return bool(is_trade_executed(outcome) and is_net_profitable(resolved_trade_return(outcome)))
+    return bool(
+        is_trade_executed(outcome)
+        and not bool(getattr(outcome, "hit_invalid", False))
+        and is_net_profitable(resolved_trade_return(outcome))
+    )
 
 
 OUTCOME_CALCULATION_VERSION = "outcome_simulation_v2"
@@ -570,7 +576,11 @@ def _apply_outcome_simulation(
                 recommendation_identity_hash=recommendation_identity_hash(rec, execution_state),
                 market_snapshot_id=str(run.source_snapshot_id),
                 market_artifact_hash=outcome_market_artifact_hash(market_payload),
-                execution_policy_fingerprint=DEFAULT_EXECUTION_POLICY.fingerprint(),
+                execution_policy_fingerprint=(
+                    execution_policy_fingerprint_for_entry_policy(
+                        result["entry_policy_id"]
+                    )
+                ),
                 calculation_code_revision=resolve_code_revision(),
                 label_policy_fingerprint=label_policy_fingerprint(),
             )
@@ -1068,7 +1078,9 @@ def _overview_metrics(
             entry_date = str(getattr(row, "entry_date", "") or getattr(row, "trade_date", ""))
             exit_date = str(getattr(row, "exit_date", "") or getattr(row, "trade_date", ""))
             benchmark_ret = _bench_return(close_map, entry_date, exit_date)
-        accurate = bool(executed and executed_return > 0)
+        net_return = net_return_after_cost(executed_return) if executed else 0.0
+        signal_valid = not bool(getattr(row, "hit_invalid", False))
+        accurate = bool(signal_valid and executed and net_return > 0)
         false_positive_reason = (
             getattr(row, "outcome_reason", None)
             if not accurate
@@ -1077,13 +1089,14 @@ def _overview_metrics(
         if false_positive_reason is None and not executed:
             false_positive_reason = "未触发买点或不可真实成交"
         metric_records.append({
-            "net_return_pct": float(executed_return),
+            "net_return_pct": net_return,
             "gross_return_pct": float(getattr(row, "close_return", 0) or 0),
             "achievable_return_pct": float(getattr(row, "achievable_return", 0) or 0),
             "morning_drawdown_pct": float(getattr(row, "max_drawdown", 0) or 0),
             "holding_days": float(getattr(row, "holding_days", 0 if not executed else 1) or 0),
             "benchmark_return_pct": benchmark_ret,
             "accurate": accurate,
+            "signal_valid_at_recommend_time": signal_valid,
             "executed": executed,
             "trade_date": str(getattr(row, "trade_date", "")),
             "code": getattr(row, "code", ""),
@@ -2550,18 +2563,21 @@ def _metric_records_from_rows(
 def _metric_record_from_row(row: Any, benchmark_return_pct: float = 0.0) -> dict[str, Any]:
     executed = is_trade_executed(row)
     executed_return = resolved_trade_return(row) if executed else 0.0
-    accurate = bool(executed and executed_return > 0)
+    net_return = net_return_after_cost(executed_return) if executed else 0.0
+    signal_valid = not bool(getattr(row, "hit_invalid", False))
+    accurate = bool(signal_valid and executed and net_return > 0)
     false_positive_reason = getattr(row, "outcome_reason", None) if not accurate else None
     if false_positive_reason is None and not executed:
         false_positive_reason = "未触发买点或不可真实成交"
     return {
-        "net_return_pct": float(executed_return),
+        "net_return_pct": net_return,
         "gross_return_pct": float(getattr(row, "close_return", 0) or 0),
         "achievable_return_pct": float(getattr(row, "achievable_return", 0) or 0),
         "morning_drawdown_pct": float(getattr(row, "max_drawdown", 0) or 0),
         "holding_days": float(getattr(row, "holding_days", 0 if not executed else 1) or 0),
         "benchmark_return_pct": float(benchmark_return_pct or 0.0),
         "accurate": accurate,
+        "signal_valid_at_recommend_time": signal_valid,
         "executed": executed,
         "trade_date": str(getattr(row, "trade_date", "")),
         "code": getattr(row, "code", ""),
@@ -2681,18 +2697,21 @@ def _compute_horizon_metric_records(db: Session, rows: list[Any]) -> dict[str, d
 def _metric_record_from_simulation(row: Any, simulation: dict[str, Any]) -> dict[str, Any]:
     executed = bool(simulation.get("entry_triggered"))
     executed_return = float(simulation.get("executed_return", 0.0) or 0.0) if executed else 0.0
-    accurate = bool(executed and executed_return > 0)
+    net_return = net_return_after_cost(executed_return) if executed else 0.0
+    signal_valid = not bool(simulation.get("hit_invalid", False))
+    accurate = bool(signal_valid and executed and net_return > 0)
     false_positive_reason = None if accurate else simulation.get("outcome_reason")
     if false_positive_reason is None and not executed:
         false_positive_reason = "未触发买点或不可真实成交"
     return {
-        "net_return_pct": executed_return,
+        "net_return_pct": net_return,
         "gross_return_pct": float(simulation.get("close_return", 0.0) or 0.0),
         "achievable_return_pct": float(simulation.get("achievable_return", 0.0) or 0.0),
         "morning_drawdown_pct": float(simulation.get("max_drawdown", 0.0) or 0.0),
         "holding_days": float(simulation.get("holding_days", 0 if not executed else 1) or 0),
         "benchmark_return_pct": 0.0,
         "accurate": accurate,
+        "signal_valid_at_recommend_time": signal_valid,
         "executed": executed,
         "trade_date": str(getattr(row, "trade_date", "")),
         "code": getattr(row, "code", ""),
@@ -2900,6 +2919,7 @@ def _scoped_recommendation_rows(
                 RecommendationOutcome.max_drawdown,
                 RecommendationOutcome.holding_days,
                 RecommendationOutcome.outcome_reason,
+                RecommendationOutcome.hit_invalid,
                 RecommendationOutcome.entry_date,
                 RecommendationOutcome.exit_date,
             )

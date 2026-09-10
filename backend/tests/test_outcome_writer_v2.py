@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app.db.session import Base
+from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY
 from app.models.tables import (
     DailyKbar,
     Recommendation,
@@ -22,6 +23,7 @@ from app.services.outcome_identity import (
 )
 from app.services.outcome_service import _apply_outcome_simulation
 from app.services.outcome_simulation import _simulate_outcome
+from app.services.entry_policy import NEXT_TRADING_DAY_OPEN
 
 
 def _bar(trade_date: str, *, close: float = 10.0, high: float | None = None) -> DailyKbar:
@@ -166,6 +168,37 @@ def test_complete_provenance_appends_one_valid_version_and_reuses_projection() -
     assert outcome.projection_revision == 1
     assert outcome.labeled_at == first_labeled_at
     assert db.scalar(select(func.count()).select_from(RecommendationOutcomeVersion)) == 1
+
+
+def test_valid_version_fingerprint_binds_the_effective_entry_policy() -> None:
+    db = _database()
+    run = _run("run_next_open", complete=True)
+    rec = _recommendation("rec_next_open", run.run_id)
+    snapshot = json.loads(rec.feature_snapshot_json)
+    snapshot["entry_mode"] = "next_open"
+    rec.feature_snapshot_json = json.dumps(snapshot)
+    bars = [
+        _bar("2026-01-05"),
+        _bar("2026-01-06", close=10.2),
+        _bar("2026-01-07", close=10.6),
+    ]
+    db.add_all([run, rec, *bars])
+    db.commit()
+
+    bounded = bounded_outcome_bars(rec, bars, 5)
+    simulation = _simulate_outcome(
+        rec,
+        bounded,
+        [str(bar.trade_date) for bar in bounded],
+        horizon_days=5,
+        entry_policy=NEXT_TRADING_DAY_OPEN,
+    )
+    assert simulation is not None
+    assert _apply_outcome_simulation(db, rec, simulation, 5, market_bars=bounded) is True
+    version = db.scalar(select(RecommendationOutcomeVersion))
+    assert version is not None
+    assert version.entry_policy_id == "next_trading_day_open_v1"
+    assert version.execution_policy_fingerprint != DEFAULT_EXECUTION_POLICY.fingerprint()
 
 
 def test_same_identity_with_different_result_fails_closed() -> None:

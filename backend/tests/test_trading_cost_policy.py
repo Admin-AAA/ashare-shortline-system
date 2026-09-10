@@ -14,9 +14,10 @@ def test_profitability_requires_strictly_covering_all_costs():
 
 
 def test_evaluation_accuracy_uses_the_shared_cost_policy():
+    """Metric records already carry post-fee net returns."""
     base = {"executed": True, "signal_valid": True}
-    assert not _is_accurate_record({**base, "net_return_pct": 0.07})
-    assert _is_accurate_record({**base, "net_return_pct": 0.0701})
+    assert not _is_accurate_record({**base, "net_return_pct": 0.0})
+    assert _is_accurate_record({**base, "net_return_pct": 0.0001})
 
 
 def test_cost_policy_boundary_audit_is_bounded_and_idempotent():

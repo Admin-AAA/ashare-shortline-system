@@ -29,7 +29,7 @@ from app.engine.execution_policy import (
     ExecutionPolicy,
     PositionCapComposition,
 )
-from app.engine.trading_costs import ADDITIONAL_COST_PCT, is_net_profitable
+from app.engine.trading_costs import is_net_profitable, net_return_after_cost
 from app.models.tables import DailyKbar, Recommendation
 from app.services.entry_policy import (
     EntryPolicy,
@@ -352,7 +352,7 @@ def _simulate_outcome(
         executed_exit_price = round(executed_entry_price * (1 + executed_return / 100.0), 4)
 
     weighted_return = round(executed_return * position_size, 2)
-    net_return_pct = round(executed_return - ADDITIONAL_COST_PCT, 10)
+    net_return_pct = net_return_after_cost(executed_return)
     hit_invalid = exit_reason.startswith("stop_loss")
     hit_target = exit_reason.startswith("take_profit") or executed_return >= SUCCESS_RETURN_PCT
     # 临时态：holding_bars 仅入场日 1 根（horizon_close_t1_locked），入场后尚无可卖 bar，

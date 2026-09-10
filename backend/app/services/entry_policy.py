@@ -1,10 +1,14 @@
 """Explicit, versioned entry assumptions used by outcome calculations."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from app.engine.signal import ENTRY_MODE_NEXT_OPEN, ENTRY_MODE_TARGET_TOUCH
-from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY
+from app.engine.execution_policy import (
+    DEFAULT_EXECUTION_POLICY,
+    EntryPriceSource,
+    EntryWindowPolicy,
+)
 
 
 @dataclass(frozen=True)
@@ -65,6 +69,31 @@ def entry_policy_for_mode(
         return NEXT_TRADING_DAY_OPEN
     raise ValueError(f"unknown entry_mode: {normalized}")
 
+
+def execution_policy_fingerprint_for_entry_policy(entry_policy_id: object) -> str:
+    """Fingerprint the complete execution contract actually used for entry."""
+
+    normalized = str(entry_policy_id or "").strip()
+    if normalized == CAUSAL_STRATEGY_ENTRY.policy_id:
+        return DEFAULT_EXECUTION_POLICY.fingerprint()
+    if normalized == NEXT_TRADING_DAY_OPEN.policy_id:
+        next_open_entry = EntryWindowPolicy(
+            policy_id=NEXT_TRADING_DAY_OPEN.policy_id,
+            price_source=EntryPriceSource.NEXT_TRADING_DAY_OPEN,
+            max_entry_trade_days=NEXT_TRADING_DAY_OPEN.max_entry_trade_days,
+            allow_target_touch=NEXT_TRADING_DAY_OPEN.allow_target_touch,
+            fallback_to_open_when_targets_miss=(
+                NEXT_TRADING_DAY_OPEN.fallback_to_open_when_targets_miss
+            ),
+            skip_untradable_bars=DEFAULT_EXECUTION_POLICY.entry.skip_untradable_bars,
+        )
+        return replace(DEFAULT_EXECUTION_POLICY, entry=next_open_entry).fingerprint()
+    raise ValueError(f"unknown entry_policy_id: {normalized}")
+
 __all__ = [
-    "CAUSAL_STRATEGY_ENTRY", "EntryPolicy", "NEXT_TRADING_DAY_OPEN", "entry_policy_for_mode",
+    "CAUSAL_STRATEGY_ENTRY",
+    "EntryPolicy",
+    "NEXT_TRADING_DAY_OPEN",
+    "entry_policy_for_mode",
+    "execution_policy_fingerprint_for_entry_policy",
 ]

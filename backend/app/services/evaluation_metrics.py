@@ -32,11 +32,8 @@ from app.engine.execution_core import (
     IntradayExitEvidence,
     IntradayFirstHit,
 )
-from app.engine.trading_costs import ADDITIONAL_COST_PCT, is_net_profitable
 from app.services.failure_attribution import classify_false_positive
 from app.services.quality_outcome import OUTCOME_CALCULATION_SCHEMA_VERSION
-
-_ACCURACY_COST_THRESHOLD = ADDITIONAL_COST_PCT
 
 # ── 常量 ───────────────────────────────────────────────────────────────────
 
@@ -642,12 +639,11 @@ def _is_valid_signal_record(item: dict[str, Any]) -> bool:
 
 
 def _is_accurate_record(item: dict[str, Any]) -> bool:
-    # 与 outcome_service.is_accurate_recommendation 保持一致：
-    # executed_return 含滑点但未扣佣金+印花税（0.07%），必须严格覆盖成本。
+    # ``net_return_pct`` is already post-fee by the TradeRecord contract.
     return (
         _is_valid_signal_record(item)
         and _is_executed_record(item)
-        and is_net_profitable(float(item.get("net_return_pct", 0)))
+        and float(item.get("net_return_pct", 0)) > 0
     )
 
 
