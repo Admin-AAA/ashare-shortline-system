@@ -69,7 +69,14 @@ class SimulatedTrade:
     exit_reason: str
 
 
-def _bar_obj(bar: dict[str, Any]) -> Any:
+def _bar_obj(bar: dict[str, Any], pct_chg: float = 0.0) -> Any:
+    # 修复：outcome_bars 无 amount 字段，而 no_liquidity_reason_from_bar 要求
+    # volume>0 且 amount>0 才判为可卖出；缺 amount 会让每根 bar 都被当成"无流动性
+    # 卖不出"，导致 resolve_causal_exit 从不触发盘中止损/止盈、全部持有到期末并被
+    # 误标 limit_down_locked_horizon_mark。这里用 volume*close 作为成交额正值代理
+    # （仅用于 >0 流动性闸门，成交价路径只用 OHLC）；pct_chg 由前收计算，供一字板判定。
+    volume = float(bar.get("volume") or 0)
+    close = float(bar.get("close") or 0)
     return type(
         "Bar",
         (),
@@ -80,6 +87,8 @@ def _bar_obj(bar: dict[str, Any]) -> Any:
             "low": bar.get("low"),
             "close": bar.get("close"),
             "volume": bar.get("volume"),
+            "amount": volume * close,
+            "pct_chg": pct_chg,
             "tradable": bar.get("tradable", True),
         },
     )()
@@ -100,7 +109,16 @@ def _simulate_card(day: dict[str, Any], card: dict[str, Any]) -> SimulatedTrade 
     if entry_gap > MAX_ENTRY_GAP_PCT:
         return None
     entry_price = entry_open * (1 + SLIPPAGE_BPS / 1e4)
-    holding = [_bar_obj(bar) for bar in raw_bars[: HORIZON_DAYS + 1]]
+    # 顺序计算每根 bar 的 pct_chg（首根前收用信号日收盘），供一字涨跌停判定
+    holding_raw = raw_bars[: HORIZON_DAYS + 1]
+    holding = []
+    prev_close = signal_close
+    for bar in holding_raw:
+        c = float(bar.get("close") or 0)
+        pct = (c / prev_close - 1) * 100 if prev_close > 0 and c > 0 else 0.0
+        holding.append(_bar_obj(bar, pct))
+        if c > 0:
+            prev_close = c
     try:
         exit_price, _exit_date, exit_reason = _resolve_exit_causal(
             holding,

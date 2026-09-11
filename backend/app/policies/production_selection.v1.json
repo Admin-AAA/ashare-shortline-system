@@ -29,5 +29,5 @@
   "daily_output_limit": 10,
   "climax_output_divisor": 2,
   "weak_ice_output_limit": 2,
-  "regime_sentiment_line_overrides": [["强牛·高潮", 72.0], ["强牛·活跃", 72.0], ["震荡·活跃", 72.0]]
+  "regime_sentiment_line_overrides": [["强牛·高潮", 64.0], ["强牛·活跃", 64.0], ["偏多·活跃", 71.4], ["震荡·活跃", 72.0]]
 }

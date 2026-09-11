@@ -663,4 +663,13 @@
 - 永久规则：**(a) regime×情绪分数线必须在≥2 个独立窗口（尤其含一段调参后真前瞻）同向才允许落地，单窗口（含单一 train/OOS 切分）最优即过拟合（强化 L-058/L-060）。(b)"高潮（涨停潮）只在强牛市可交易"：偏多/震荡/弱势·高潮是见顶/反抽追高陷阱，两窗口全分档为负，必须硬排除到分数线上限，85 这类"抬线但低于满分"会漏高分票，不算拦住。(c) 冲突组合（如偏多·活跃/弱势·活跃：冻结为正、前瞻为负）不做方向性调整，维持 L-060 现值；不为前瞻窗口单独拟合极端值；不显著的微调即使方向正确也不与显著项捆绑落地。**
 - 落地：新增版本化 `app/policies/production_selection.v2.json`（默认；相对 v1 仅把偏多/震荡/弱势·高潮改为 120 硬排除，其余含活跃档 64/71.4 全部不变），v1 保留可复现；loader 支持 version∈{1,2}；回归 `tests/test_production_selection_policy.py`（v2 硬排除 + v1 不可变）。研究脚本 `research_regime_scoreline_map.py`/`research_forward_validation.py`/`research_scoreline_two_window.py`/`research_scoreline_final_confirm.py`，证据 `output/research/final_policy_evidence.json`。
 - 待办：v2 上线后仍须按 L-060 用 live_forward 真实样本持续确认；本结论窗口截至 2026-08-06，且前瞻 run 只保留 score≥70，60/64 放松档未在该窗口复验（沿用冻结结论）。
-- 相关：L-058（窗口偏差）、L-060（regime×情绪分工，本条修正其过拟合部分）、L-065（出票率/regime 分工是仅剩杠杆）、L-015（abstain=现金的组合级度量）。
+- 相关：L-058（窗口偏差）、L-060（regime×情绪分工，本条修正其过拟合部分）、L-065（出票率/regime 分工是仅剩杠杆）、L-015（abstain=现金的组合级度量）、L-071（研究口径必须与生产因果出场同构）。
+
+## L-071 研究回测的可卖性闸门必须与生产同构：冻结快照缺 amount 会让因果出场静默退化为"持有到期"
+
+- 状态：encoded（定位根因 + 修复两个研究脚本 + 用生产 harness 复核 v2）
+- 适用：任何基于 frozen snapshot / 离线 K 线、自己拼 ExecutionBar 再走因果止损止盈的研究脚本；任何用研究 cohort 反推生产分数线/政策的结论
+- 证据：冻结快照 `output/frozen_snapshots/holdout_244d.json` 的 outcome_bars 每根只有 OHLCV+tradable，**没有 amount、没有 pct_chg**。生产/治理路径 `simulation.simulate → _to_execution_request` 直接令 `sellable=bar.tradable`（不查 amount），因果止损/止盈/移动止盈正常；但研究路径 `outcome_simulation._resolve_exit_causal_result` 的可卖性走 `execution_constraints.no_liquidity_reason_from_bar`，要求 **volume>0 且 amount>0** 才可卖——快照 amount 缺失导致每根 bar 被判不可卖，盘中止损/止盈被全部跳过，最终退化为"T+1 开盘买、持有到 T+5 收盘"。用这套退化口径曾让 L-060 的冻结窗口符号发生翻转，并一度错误支持"强牛·活跃/偏多·活跃抬到 72"；改用生产同构 harness（`policy_experiment` 的 `_run_arm`，真实 `simulate`）后，抬活跃线反而让冻结训练段由 +0.064 转 -0.111、砍掉 212 笔正期望活跃票，遂否决该改动（见 L-070 ④）。
+- 永久规则：**(a) 离线 K 线缺字段时必须显式补齐再过流动性闸门（amount≈volume×close 仅用于 >0 判定，成交价只用 OHLC；pct_chg 按前收顺序补，供一字板判定），并在日志打印 exit_reason 分布自检——若只剩 horizon_close 一类即说明因果出场被静默短路。(b) 政策级结论只信与生产同构的 canonical harness（`evaluate_selection_policy`/`simulate.simulate`，sellable=tradable）或 DB canonical run；手写 cohort 只能做探索，不能作为改生产阈值的最终依据。(c) 研究脚本与生产共用同一执行/可卖性逻辑，禁止在研究侧重写一套更严或更松的闸门。**
+- 修复：`scripts/research_intraday_portfolio_levers.py`（`_bar_obj`/`_simulate_card` 补 amount、顺序算 pct_chg）、`scripts/winrate_scoreline_prod_backtest.py`（`_to_bar_obj`/`simulate` 同款修复）；生产同构双窗口证据 `output/research/v2_policy_two_window_evidence.json`（v2 训练段与 v1 逐笔相同、validation/OOS 同升），脚本 `scripts/research_v2_policy_evidence.py`、`scripts/research_canonical_policy_batch.py`、`scripts/research_forward_weakclimax_check.py`。
+- 相关：L-070（v2 高潮硬排除，本条是其口径前提）、L-058（窗口/口径偏差）、L-015（组合级度量）。
