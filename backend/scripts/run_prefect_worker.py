@@ -1,32 +1,22 @@
 """Synchronize deployments and start the local process worker."""
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
-from pathlib import Path
 
+from app.core.deployment_identity import resolve_application_revision
 from app.orchestration import schedule_all_enabled_tasks
 
 
 def _pin_application_revision() -> None:
-    """Keep worker provenance aligned with the code it loaded at startup."""
-    if str(os.environ.get("ASHARE_APPLICATION_REVISION") or "").strip():
-        return
-    repository_root = Path(__file__).resolve().parents[2]
-    try:
-        revision = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=repository_root,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        ).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return
-    if len(revision) >= 7:
-        os.environ["ASHARE_APPLICATION_REVISION"] = revision
+    """Pin worker provenance to the code loaded at startup.
+
+    Uses the same env -> cached git HEAD -> "unknown" resolver as the API so
+    the worker-side execution_version identity can never diverge from the
+    enqueue side purely because of launch-path differences. Resolving here also
+    mirrors the result into ``os.environ`` for the spawned worker subprocess.
+    """
+    resolve_application_revision()
 
 
 def main() -> None:

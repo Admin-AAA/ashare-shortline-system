@@ -636,3 +636,12 @@
 - 永久规则：**用户请求链路不得在索引列外包 `REPLACE/DATE/CAST` 后做 `MIN/MAX/ORDER BY`，也不得为“是否有数据”执行精确 `COUNT(*)`。** 日期写入统一为 `YYYY-MM-DD` 后直接使用索引；状态判断用 `EXISTS/LIMIT 1`；仅展示用的大表行数允许使用明确标注“约”的数据库估算，字段型域无需精确行数时显示“有数据”。
 - 回归验证：`test_data_health_service.py` 锁定索引友好 SQL 与字段型域不计数；相关后端测试 80 passed；前端构建通过；真实 MySQL 和浏览器均低于 3 秒验收线。
 - 吸收位置：`data_health_service.py` 数据域统计契约 + 配置页数据域行数展示。
+
+## L-068 execution_version 的身份分量必须由跨进程同构的单一解析器产生，禁止只在某一种启动路径 pin
+
+- 状态：encoded（已修 + 真实链路复验 + 回归测试）
+- 适用：所有“入队进程（FastAPI）算一次身份指纹、执行进程（Prefect worker）重算并比对”的版本一致性护栏
+- 证据：2026-09-11 驾驶舱手动推荐连续失败（`run_20260911_014741`、`run_20260911_122924`），报错“Run 已持久化的 execution_version 与当前策略/因子/执行策略身份不一致”，进度 0/0=NaN%。根因不是配置漂移：只有 `scripts/run_prefect_worker.py` 在启动时把 `ASHARE_APPLICATION_REVISION` pin 为当时 git HEAD（0114dab），而 launchd 启动的 API 从不设置该变量、恒解析为 `unknown`；两侧 application 身份不同导致 hash 必不相等。脚本内同步运行（入队与执行同进程）反而成功，掩盖了跨进程分叉。
+- 永久规则：**进入 execution_version（或任何跨进程比对指纹）的每个分量，都必须由 API、worker、CLI 共用的同一解析器、同一解析顺序（显式环境变量 → 进程级缓存的 git HEAD → 规范兜底值）产生；禁止只在某一个启动脚本里 pin。** 指纹比对失败时必须能并排输出两侧分量；进程重启换代码后，所有参与比对的进程必须一起重启。
+- 回归验证：新增 `app/core/deployment_identity.py` 统一解析；`test_deployment_identity.py` 锁定“显式 environ 纯函数、默认路径缓存并回写 os.environ、两侧一致”；`test_provenance_writer.py` 同步改造；修复后真实 HTTP 触发的两个 formal Run（`run_20260911_131116`、`run_20260911_131119`）均通过 PREPARE 并 completed，相关 89 个后端测试通过。
+- 吸收位置：`app/core/deployment_identity.py`；`runs/contracts.py::application_identity_from_environment`、`evidence/provenance_writer.py`、`scripts/run_prefect_worker.py` 全部委托该解析器。

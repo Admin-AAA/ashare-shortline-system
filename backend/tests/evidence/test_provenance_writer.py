@@ -18,7 +18,6 @@ from app.services.evidence import (
     apply_formal_run_provenance,
     resolve_code_revision,
 )
-from app.services.evidence import provenance_writer
 
 _CODE_REVISION = "c" * 40
 _STRATEGY_FINGERPRINT = "a" * 64
@@ -264,27 +263,27 @@ def test_run_name_and_scope_metadata_never_influence_classification(run_name: st
     assert late_identity.evidence_class is EvidenceClass.UNVERIFIED
 
 
-def test_resolve_code_revision_prefers_valid_env(monkeypatch):
-    monkeypatch.setattr(
-        provenance_writer.subprocess,
-        "run",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("git must not run")),
-    )
+def test_resolve_code_revision_prefers_valid_env():
+    # An explicit valid env value wins and never needs git.
     assert resolve_code_revision({"ASHARE_APPLICATION_REVISION": "AbC1234"}) == "abc1234"
 
 
-def test_resolve_code_revision_falls_back_to_git_then_unknown(monkeypatch):
-    class _Process:
-        returncode = 0
-        stdout = "deadbeefcafe1234\n"
+def test_resolve_code_revision_explicit_environ_is_pure_and_fails_closed(monkeypatch):
+    import app.core.deployment_identity as deployment_identity
 
-    monkeypatch.setattr(provenance_writer.subprocess, "run", lambda *a, **k: _Process())
-    assert resolve_code_revision({}) == "deadbeefcafe1234"
-
+    # An injected environ mapping stays pure: it must never invoke git.
     monkeypatch.setattr(
-        provenance_writer.subprocess,
-        "run",
-        lambda *a, **k: (_ for _ in ()).throw(OSError("git missing")),
+        deployment_identity,
+        "_cached_git_head_revision",
+        lambda: (_ for _ in ()).throw(AssertionError("explicit environ must not touch git")),
     )
     assert resolve_code_revision({}) == "unknown"
     assert resolve_code_revision({"ASHARE_APPLICATION_REVISION": "not a revision!"}) == "unknown"
+
+
+def test_resolve_code_revision_default_path_uses_cached_git_head(monkeypatch):
+    import app.core.deployment_identity as deployment_identity
+
+    monkeypatch.delenv("ASHARE_APPLICATION_REVISION", raising=False)
+    monkeypatch.setattr(deployment_identity, "_cached_git_head_revision", lambda: "deadbeefcafe1234")
+    assert resolve_code_revision() == "deadbeefcafe1234"

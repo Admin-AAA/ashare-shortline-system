@@ -17,14 +17,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import re
-import subprocess
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
+from app.core.deployment_identity import resolve_application_revision
 from app.services.evidence.identity import (
     PROVENANCE_SCHEMA_VERSION,
     EvidenceClass,
@@ -44,38 +41,18 @@ _FORMAL_RUN_MODE = "formal"
 _LIVE_FORWARD_SCOPE = "live_forward"
 _COMPLETED_STATUS = "completed"
 _UNKNOWN_SNAPSHOT_ID = "unknown"
-_GIT_REVISION_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
-# backend/app/services/evidence/provenance_writer.py -> repository root.
-_REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 
 
 def resolve_code_revision(environ: Mapping[str, str] | None = None) -> str:
     """Resolve the deployed code revision, failing closed to ``"unknown"``.
 
-    Mirrors the replay entrypoint's resolution order (explicit
-    ``ASHARE_APPLICATION_REVISION`` first, then ``git rev-parse HEAD`` with a
-    timeout) but never raises: ``"unknown"`` is a canonical unverified
-    identifier, so the builder classifies the run ``UNVERIFIED``.
+    Delegates to the shared deployment-identity resolver so provenance and the
+    execution-version hash can never diverge: explicit
+    ``ASHARE_APPLICATION_REVISION`` first, then process-cached ``git rev-parse
+    HEAD``; ``"unknown"`` is the canonical unverified identifier, so the
+    builder classifies the run ``UNVERIFIED``.
     """
-    source = os.environ if environ is None else environ
-    configured = str(source.get("ASHARE_APPLICATION_REVISION") or "").strip()
-    if _GIT_REVISION_RE.fullmatch(configured):
-        return configured.lower()
-    try:
-        process = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=_REPOSITORY_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-        revision = process.stdout.strip() if process.returncode == 0 else ""
-    except (OSError, subprocess.SubprocessError):
-        revision = ""
-    if _GIT_REVISION_RE.fullmatch(revision):
-        return revision.lower()
-    return "unknown"
+    return resolve_application_revision(environ)
 
 
 def apply_formal_run_provenance(
