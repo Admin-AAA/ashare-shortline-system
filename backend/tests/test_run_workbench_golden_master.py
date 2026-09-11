@@ -182,7 +182,6 @@ def test_run_workbench_pure_computation_matches_golden_master():
         score_line=35.0,
         market_snapshot=snapshot,
         risk_template="balanced",
-        agent_available=True,
     )
     params = {
         "score_line": 35.0,

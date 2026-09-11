@@ -619,7 +619,62 @@
 - 永久规则：**在日线+横截面选股框架内，禁止再挖新"选股因子"**——已系统性挖尽。新策略只有三条合法出路：①换数据维度（盘口/分时/Level2/北向细节等当前没有的）；②换框架（仓位管理/多策略组合对冲/regime识别，而非横截面选股）；③承认 beta 属性，用 L-060 regime 分工 + 提高出票率放大已有微弱 alpha。任何新"选股因子"必须先过 feature_signal_guard 逐月符号一致性(≥80%同号)才允许进 OOS 实验。
 - 吸收位置：本轮新策略探索总结。
 
-## L-066 入场口径必须由策略显式声明，未成交反事实不得进入收益列
+## L-066 异步生成型行情接口不能按普通 HTTP 成败接入，完成响应仍须过业务契约门禁
+
+- 状态：encoded（已修 + 实源复验 + 回归测试）
+- 适用：Promax `stk_mins` 及其他先触发生成、后返回结果的行情接口
+- 证据：2026-09-09 实测 Promax 同一接口存在三类响应：HTTP 202 `minute_data_pending`；标准 241 根整分钟 K；以及 HTTP 200 但混有秒级时间、午休/收盘后冻结快照、同分钟重复的异常结果。仅按 HTTP 200 判断会把快照当分钟 K，按普通 4xx 判断又会错过异步生成中的数据。
+- 永久规则：**异步生成接口必须把“待生成”建模为可 fallback、非熔断状态；HTTP 200 仍必须通过领域契约门禁后才能落库。** 历史分钟最低门禁包括整分钟时间戳、连续交易时段内、分钟时间唯一；任一失败整批拒绝并尝试下一数据源，禁止靠抹秒或盲目去重伪造分钟 K。
+- 回归验证：`test_tushare_dual_sources.py` 覆盖 202 状态、Promax 路由优先级、标准分钟接受和异常快照拒绝；真实 `000001.SZ@2026-08-31` 返回 241 根且全部整分钟，`2026-09-01` 异常快照被拒绝，`2026-09-08` 202 状态正确 fallback。
+- 吸收位置：`tushare_transport.py` 的 `DATA_PENDING` 状态、`tushare_client.py` 的 Promax 分钟契约门禁、Promax 接入评估和主提示词数据源策略。
+
+## L-067 健康检查请求链路禁止对超大表做函数化日期聚合和精确计数
+
+- 状态：encoded（已修 + 回归测试 + 真实 MySQL 验收）
+- 适用：数据健康、管理后台统计、任何用户请求内的超大表概览
+- 证据：`/api/admin/data-health?force_refresh=true` 的无缓存诊断约 59 秒；其中 5200 万行 `minute_kbars` 的 `MIN/MAX(REPLACE(trade_date, ...))` 单条 18.0 秒，数据域精确 `COUNT(*)` 与函数化 `MAX` 合计再占 36.6 秒。改为规范 ISO 日期列直接走索引、存在性用 `LIMIT 1`、超大整表行数用带标识的 MySQL 估算后，真实无缓存诊断 2.293 秒，重启后 HTTP 强制诊断 2.442 秒，配置页可用 1.039 秒。
+- 永久规则：**用户请求链路不得在索引列外包 `REPLACE/DATE/CAST` 后做 `MIN/MAX/ORDER BY`，也不得为“是否有数据”执行精确 `COUNT(*)`。** 日期写入统一为 `YYYY-MM-DD` 后直接使用索引；状态判断用 `EXISTS/LIMIT 1`；仅展示用的大表行数允许使用明确标注“约”的数据库估算，字段型域无需精确行数时显示“有数据”。
+- 回归验证：`test_data_health_service.py` 锁定索引友好 SQL 与字段型域不计数；相关后端测试 80 passed；前端构建通过；真实 MySQL 和浏览器均低于 3 秒验收线。
+- 吸收位置：`data_health_service.py` 数据域统计契约 + 配置页数据域行数展示。
+
+## L-068 execution_version 的身份分量必须由跨进程同构的单一解析器产生，禁止只在某一种启动路径 pin
+
+- 状态：encoded（已修 + 真实链路复验 + 回归测试）
+- 适用：所有“入队进程（FastAPI）算一次身份指纹、执行进程（Prefect worker）重算并比对”的版本一致性护栏
+- 证据：2026-09-11 驾驶舱手动推荐连续失败（`run_20260911_014741`、`run_20260911_122924`），报错“Run 已持久化的 execution_version 与当前策略/因子/执行策略身份不一致”，进度 0/0=NaN%。根因不是配置漂移：只有 `scripts/run_prefect_worker.py` 在启动时把 `ASHARE_APPLICATION_REVISION` pin 为当时 git HEAD（0114dab），而 launchd 启动的 API 从不设置该变量、恒解析为 `unknown`；两侧 application 身份不同导致 hash 必不相等。脚本内同步运行（入队与执行同进程）反而成功，掩盖了跨进程分叉。
+- 永久规则：**进入 execution_version（或任何跨进程比对指纹）的每个分量，都必须由 API、worker、CLI 共用的同一解析器、同一解析顺序（显式环境变量 → 进程级缓存的 git HEAD → 规范兜底值）产生；禁止只在某一个启动脚本里 pin。** 指纹比对失败时必须能并排输出两侧分量；进程重启换代码后，所有参与比对的进程必须一起重启。
+- 回归验证：新增 `app/core/deployment_identity.py` 统一解析；`test_deployment_identity.py` 锁定“显式 environ 纯函数、默认路径缓存并回写 os.environ、两侧一致”；`test_provenance_writer.py` 同步改造；修复后真实 HTTP 触发的两个 formal Run（`run_20260911_131116`、`run_20260911_131119`）均通过 PREPARE 并 completed，相关 89 个后端测试通过。
+- 吸收位置：`app/core/deployment_identity.py`；`runs/contracts.py::application_identity_from_environment`、`evidence/provenance_writer.py`、`scripts/run_prefect_worker.py` 全部委托该解析器。
+
+## L-069 涨停板微观结构情绪（炸板率/连板高度/梯队宽度）做日级择时五重证伪——仍是当日广度的重包装
+
+- 状态：active（FINDING，否定性）
+- 适用：任何想用 limit_up_board / 日线重建的炸板率、连板高度、梯队、涨停家数做 T 收盘择时或选股过滤的尝试
+- 证据：从 daily_kbars 用精确四舍五入涨停价确定性重建涨停/炸板/连板序列（与官方 limit_up_board 重叠期收盘涨停家数 corr 0.999、MAE 0.75，重建可靠），预注册 10 个情绪特征（炸板率宽/严、封板率、连板高度、梯队宽度、涨停家数、涨跌停比等，均 T 收盘已知、T+1 入场前可用）。五重独立检验一致否定：①生产选中候选池（frozen holdout，生产因果出场）10 特征全部不过门禁（训练/OOS 方向翻转、逐月为正比例 0.25–0.75、Bonferroni 校正 CI 下界全负）；②理论预注册"退潮分数 ebb"的 abstain 反事实是**踏空而非避损**（毒日 OOS 均 +1.224%，abstain 反让累计 +8.08%→+4.98%）；③构念效度：这些特征连**全市场**未来 1/5 日收益都预测不了（|IC|≤0.07、逐月同号 0.29–0.52）；④分 regime 无稳定单调格（高炸板率在震荡市反而最好）；⑤T-1 滞后口径与三段时间窗口方向均翻转。
+- 永久规则：**禁止再用涨停板微观结构情绪（炸板率/连板高度/梯队/涨停家数衍生）做日级择时或 abstain**。它与价格技术特征同构——都是当日市场广度的重包装，方向被 regime 主导、逐月符号从不一致（再次印证 L-061/L-065）。官方 limit_up_board 仅 2026-03 起、且"炸板"口径与日线重建仅 0.55 相关（官方主要记封死后炸开，日线无法区分摸板未封），样本与构念双重不足。情绪维度唯一被双窗口验证有效的用法是 L-070 的"非强牛高潮硬排除"（负向规避，而非正向择时）。
+- 复现：`backend/scripts/research_limit_sentiment_panel.py`（重建+官方校验）、`research_limit_sentiment_timing.py`（主因果检验）、`research_limit_sentiment_followup.py`（构念效度/regime/滞后）；证据 `backend/output/research/limit_sentiment_timing.json`。
+- 相关：L-058（窗口偏差）、L-061/L-063/L-064/L-065（日线 alpha 挖尽）。
+
+## L-070 L-060 组合放松存在窗口过拟合；非强牛的"高潮"组合必须硬排除（production selection v2）
+
+- 状态：encoded（双窗口因果重放 + bootstrap 显著 + 回归测试，已落 v2 artifact）
+- 适用：production selection policy 的 regime_sentiment_line_overrides、任何按 regime×情绪调分数线/出票率的改动
+- 证据：用**修复后的真实因果出场**（非 L-060 当时退化的"持有到期"口径）在两个独立窗口重放——冻结 holdout 244d（2025-01-15~2026-01-16，19980 笔）+ 真前瞻 117d（2026-02-09~08-06，canonical run btr_fa625 26877 笔，L-060 调参时从未见过）。①L-060 的部分放松是**窗口过拟合**：其 artifact 在冻结窗口最优（OOS cum +10.27%），但在真前瞻窗口整体亏损 cum -7.31%/MDD -10.13%，反不如统一 72 线（-4.68%）；用训练段重拟合每格线同样 OOS 退化。②跨两窗口唯一稳健、且 95% 显著的改进是**硬排除非强牛的三个"高潮"组合**：偏多·高潮（日 cohort 冻结 -0.454/前瞻 -0.981）、震荡·高潮（-0.522/-0.781）、弱势·高潮（-0.033/-0.708，逐笔前瞻 -3.10/胜率 29.8%）在**两窗口所有分数档都为负**——旧值 85 想拦但分数可达 100 仍漏高分亏损票，override 设 120（=score_line_maximum，最高分不可达）才补全拦截；唯有强牛·高潮两窗口为正（保留 64 放行）。③效果（日度 top6 等权、无票=现金，仅落地三个高潮硬排除、活跃档维持 L-060 不变）：冻结窗口零代价（cum +12.43%→+12.46%、配对日差 CI[-0.065,+0.060]≈0）；真前瞻 cum -7.31%→**-3.42%**、MDD -10.13%→-6.58%、出票 117→88 天（毒日 abstain），配对日差 **CI[+0.088,+0.520] 下界>0（95%显著）**；两窗口合并 361d cum +4.21%→**+8.62%**、MDD -10.13%→-6.58%。并行线程独立脚本复现同一弱势高潮否决（P0 日均 -0.537 完全一致、弱势高潮逐笔 -3.10/胜率 29.8%）。④敏感性（**未落地**）：若再把强牛·活跃 64→72、偏多·活跃 71.4→72，前瞻可再小幅改善到 -3.16%，但该增量配对 CI 跨 0、不显著，且与独立分析存在分歧，按"只落地双窗口显著项"原则不纳入 v2，留待 live_forward 再判。
+- 永久规则：**(a) regime×情绪分数线必须在≥2 个独立窗口（尤其含一段调参后真前瞻）同向才允许落地，单窗口（含单一 train/OOS 切分）最优即过拟合（强化 L-058/L-060）。(b)"高潮（涨停潮）只在强牛市可交易"：偏多/震荡/弱势·高潮是见顶/反抽追高陷阱，两窗口全分档为负，必须硬排除到分数线上限，85 这类"抬线但低于满分"会漏高分票，不算拦住。(c) 冲突组合（如偏多·活跃/弱势·活跃：冻结为正、前瞻为负）不做方向性调整，维持 L-060 现值；不为前瞻窗口单独拟合极端值；不显著的微调即使方向正确也不与显著项捆绑落地。**
+- 落地：新增版本化 `app/policies/production_selection.v2.json`（默认；相对 v1 仅把偏多/震荡/弱势·高潮改为 120 硬排除，其余含活跃档 64/71.4 全部不变），v1 保留可复现；loader 支持 version∈{1,2}；回归 `tests/test_production_selection_policy.py`（v2 硬排除 + v1 不可变）。研究脚本 `research_regime_scoreline_map.py`/`research_forward_validation.py`/`research_scoreline_two_window.py`/`research_scoreline_final_confirm.py`，证据 `output/research/final_policy_evidence.json`。
+- 待办：v2 上线后仍须按 L-060 用 live_forward 真实样本持续确认；本结论窗口截至 2026-08-06，且前瞻 run 只保留 score≥70，60/64 放松档未在该窗口复验（沿用冻结结论）。
+- 相关：L-058（窗口偏差）、L-060（regime×情绪分工，本条修正其过拟合部分）、L-065（出票率/regime 分工是仅剩杠杆）、L-015（abstain=现金的组合级度量）、L-071（研究口径必须与生产因果出场同构）。
+
+## L-071 研究回测的可卖性闸门必须与生产同构：冻结快照缺 amount 会让因果出场静默退化为"持有到期"
+
+- 状态：encoded（定位根因 + 修复两个研究脚本 + 用生产 harness 复核 v2）
+- 适用：任何基于 frozen snapshot / 离线 K 线、自己拼 ExecutionBar 再走因果止损止盈的研究脚本；任何用研究 cohort 反推生产分数线/政策的结论
+- 证据：冻结快照 `output/frozen_snapshots/holdout_244d.json` 的 outcome_bars 每根只有 OHLCV+tradable，**没有 amount、没有 pct_chg**。生产/治理路径 `simulation.simulate → _to_execution_request` 直接令 `sellable=bar.tradable`（不查 amount），因果止损/止盈/移动止盈正常；但研究路径 `outcome_simulation._resolve_exit_causal_result` 的可卖性走 `execution_constraints.no_liquidity_reason_from_bar`，要求 **volume>0 且 amount>0** 才可卖——快照 amount 缺失导致每根 bar 被判不可卖，盘中止损/止盈被全部跳过，最终退化为"T+1 开盘买、持有到 T+5 收盘"。用这套退化口径曾让 L-060 的冻结窗口符号发生翻转，并一度错误支持"强牛·活跃/偏多·活跃抬到 72"；改用生产同构 harness（`policy_experiment` 的 `_run_arm`，真实 `simulate`）后，抬活跃线反而让冻结训练段由 +0.064 转 -0.111、砍掉 212 笔正期望活跃票，遂否决该改动（见 L-070 ④）。
+- 永久规则：**(a) 离线 K 线缺字段时必须显式补齐再过流动性闸门（amount≈volume×close 仅用于 >0 判定，成交价只用 OHLC；pct_chg 按前收顺序补，供一字板判定），并在日志打印 exit_reason 分布自检——若只剩 horizon_close 一类即说明因果出场被静默短路。(b) 政策级结论只信与生产同构的 canonical harness（`evaluate_selection_policy`/`simulate.simulate`，sellable=tradable）或 DB canonical run；手写 cohort 只能做探索，不能作为改生产阈值的最终依据。(c) 研究脚本与生产共用同一执行/可卖性逻辑，禁止在研究侧重写一套更严或更松的闸门。**
+- 修复：`scripts/research_intraday_portfolio_levers.py`（`_bar_obj`/`_simulate_card` 补 amount、顺序算 pct_chg）、`scripts/winrate_scoreline_prod_backtest.py`（`_to_bar_obj`/`simulate` 同款修复）；生产同构双窗口证据 `output/research/v2_policy_two_window_evidence.json`（v2 训练段与 v1 逐笔相同、validation/OOS 同升），脚本 `scripts/research_v2_policy_evidence.py`、`scripts/research_canonical_policy_batch.py`、`scripts/research_forward_weakclimax_check.py`。
+- 相关：L-070（v2 高潮硬排除，本条是其口径前提）、L-058（窗口/口径偏差）、L-015（组合级度量）。
+
+## L-072 入场口径必须由策略显式声明，未成交反事实不得进入收益列
 
 - 状态：encoded（已修 + 回归测试）
 - 适用：策略信号、历史重建、outcome 模拟、复盘页收益展示

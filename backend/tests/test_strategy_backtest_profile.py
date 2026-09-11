@@ -15,7 +15,12 @@ from app.engine.backtest import (
     Trade,
     TradeOutcome,
 )
-from app.models.tables import BacktestDataSnapshot, BacktestRunV2, BacktestTrade
+from app.models.tables import (
+    BacktestCandidate,
+    BacktestDataSnapshot,
+    BacktestRunV2,
+    BacktestTrade,
+)
 from app.services.backtest.strategy_profile import (
     STRATEGY_PROFILE_EXPERIMENT_ID,
     StrategyBacktestProfileTarget,
@@ -30,10 +35,12 @@ def _trade(
     signal_date: str,
     exit_date: str,
     net_return_pct: float,
+    code: str = "300001",
+    position_size: float = 0.1,
 ) -> Trade:
     return Trade(
         trade_id=trade_id,
-        code="300001",
+        code=code,
         signal_date=signal_date,
         entry_date=signal_date,
         exit_date=exit_date,
@@ -41,7 +48,7 @@ def _trade(
         exit_price=11.0,
         gross_return_pct=net_return_pct,
         net_return_pct=net_return_pct,
-        position_size=0.1,
+        position_size=position_size,
         holding_days=1,
         outcome_label=(
             TradeOutcome.SUCCESS if net_return_pct > 0 else TradeOutcome.FAILED
@@ -131,7 +138,85 @@ def _persist_trade(session, run_id: str, trade: Trade) -> None:
     )
 
 
-def test_current_version_profile_excludes_old_version_and_compounds_by_exit_month() -> None:
+def _persist_candidate(
+    session,
+    run_id: str,
+    *,
+    signal_date: str,
+    code: str,
+    score: float,
+) -> None:
+    session.add(
+        BacktestCandidate(
+            candidate_id=f"{run_id}-{signal_date}-{code}",
+            backtest_id=run_id,
+            signal_date=signal_date,
+            code=code,
+            decision_status="signal",
+            signal_json=json.dumps({"score": score}),
+            audit_json="{}",
+            input_artifact_id=f"artifact-{signal_date}",
+        )
+    )
+
+
+def test_profile_selects_daily_top_10_and_excludes_rank_11_from_metrics() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            BacktestRunV2.__table__,
+            BacktestCandidate.__table__,
+            BacktestTrade.__table__,
+            BacktestDataSnapshot.__table__,
+        ],
+    )
+    session = sessionmaker(bind=engine)()
+    try:
+        target = _target()
+        _persist_run(session, target, version="current-v2", run_id="run-top10")
+        signal_date = "2026-06-01"
+        for index in range(1, 12):
+            code = f"300{index:03d}"
+            _persist_trade(
+                session,
+                "run-top10",
+                _trade(
+                    f"trade-{index}",
+                    signal_date=signal_date,
+                    exit_date="2026-06-02",
+                    net_return_pct=-99 if index == 11 else 1,
+                    code=code,
+                ),
+            )
+            # 第 10、11 名同分，必须由代码升序稳定决定边界。
+            _persist_candidate(
+                session,
+                "run-top10",
+                signal_date=signal_date,
+                code=code,
+                score=100 - min(index, 10),
+            )
+        session.commit()
+
+        profile = StrategyBacktestProfiles(session).read(target)
+
+        assert profile is not None
+        assert profile["selection_policy"] == "daily_score_top_n"
+        assert profile["daily_selection_limit"] == 10
+        assert profile["raw_signal_count"] == 11
+        assert profile["selected_signal_count"] == 10
+        assert profile["selected_signal_days"] == 1
+        assert profile["win_rate_pct"] == 100.0
+        assert profile["average_net_return_pct"] == 1.0
+        assert "total_return_pct" not in profile
+        assert "max_drawdown_pct" not in profile
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_current_version_profile_excludes_old_version_and_reports_signal_metrics_by_exit_month() -> None:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         engine,
@@ -148,12 +233,24 @@ def test_current_version_profile_excludes_old_version_and_compounds_by_exit_mont
         _persist_trade(
             session,
             "run-current",
-            _trade("jan-win", signal_date="2026-01-08", exit_date="2026-01-09", net_return_pct=10),
+            _trade(
+                "jan-win",
+                signal_date="2026-01-08",
+                exit_date="2026-01-09",
+                net_return_pct=10,
+                position_size=0.01,
+            ),
         )
         _persist_trade(
             session,
             "run-current",
-            _trade("jan-loss", signal_date="2026-01-12", exit_date="2026-01-13", net_return_pct=-5),
+            _trade(
+                "jan-loss",
+                signal_date="2026-01-12",
+                exit_date="2026-01-13",
+                net_return_pct=-5,
+                position_size=0.99,
+            ),
         )
         _persist_trade(
             session,
@@ -180,15 +277,39 @@ def test_current_version_profile_excludes_old_version_and_compounds_by_exit_mont
         assert profile["window_metrics"]["180"]["hit_rate"] == 0.666667
         assert profile["window_metrics"]["30"]["sample_count"] == 0
         assert profile["window_metrics"]["30"]["hit_rate"] is None
-        assert profile["monthly_returns"] == [
-            {"month": "2026-01", "return_pct": 0.495, "executed_trade_count": 2},
-            {"month": "2026-02", "return_pct": 2.0, "executed_trade_count": 1},
-            {"month": "2026-03", "return_pct": 0.0, "executed_trade_count": 0},
-            {"month": "2026-04", "return_pct": 0.0, "executed_trade_count": 0},
-            {"month": "2026-05", "return_pct": 0.0, "executed_trade_count": 0},
-            {"month": "2026-06", "return_pct": 0.0, "executed_trade_count": 0},
+        assert profile["monthly_metrics"] == [
+            {
+                "month": "2026-01",
+                "raw_signal_count": 2,
+                "selected_signal_count": 2,
+                "executed_trade_count": 2,
+                "success_count": 1,
+                "hit_rate": 0.5,
+                "avg_return": 2.5,
+            },
+            {
+                "month": "2026-02",
+                "raw_signal_count": 1,
+                "selected_signal_count": 1,
+                "executed_trade_count": 1,
+                "success_count": 1,
+                "hit_rate": 1.0,
+                "avg_return": 20.0,
+            },
+            *[
+                {
+                    "month": month,
+                    "raw_signal_count": 0,
+                    "selected_signal_count": 0,
+                    "executed_trade_count": 0,
+                    "success_count": 0,
+                    "hit_rate": None,
+                    "avg_return": None,
+                }
+                for month in ("2026-03", "2026-04", "2026-05", "2026-06")
+            ],
         ]
-        assert profile["total_return_pct"] == 2.5049
+        assert "total_return_pct" not in profile
     finally:
         session.close()
         engine.dispose()

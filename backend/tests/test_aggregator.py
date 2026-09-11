@@ -1,4 +1,6 @@
 """Tests for signal aggregation, stance mapping, consensus, and scoring."""
+from copy import deepcopy
+
 import pytest
 
 from app.engine.aggregator import (
@@ -216,6 +218,52 @@ def test_llm_review_score_is_risk_overlay_not_alpha_ranker():
     assert low_card["final_score"] == high_card["final_score"]
     assert low_card["llm_influence_mode"] == "risk_overlay"
     assert low_card["aggregation_weights"]["skill_agent"] == 0.0
+
+
+def test_missing_llm_review_does_not_reduce_score_win_rate_or_position():
+    stock = _stock(
+        evidence_quality_score=88.0,
+        data_authenticity=1.0,
+        risk_score=0.0,
+    )
+    reviewed_signal = _signal("support", score=78.0, review_score=78.0)
+    rule_only_signal = deepcopy(reviewed_signal)
+    rule_only_signal.pop("agent_skill_review")
+    snapshot = {
+        "sample_count": 100,
+        "up_count": 55,
+        "limit_up_count": 2,
+        "limit_down_count": 1,
+    }
+
+    reviewed = aggregate(stock, [reviewed_signal], market_score=65, agent_review_score=78, market_snapshot=snapshot)
+    rule_only = aggregate(stock, [rule_only_signal], market_score=65, agent_review_score=78, market_snapshot=snapshot)
+
+    assert rule_only["final_score"] == reviewed["final_score"]
+    assert rule_only["market_discipline"]["estimated_win_rate"] == reviewed["market_discipline"]["estimated_win_rate"]
+    assert rule_only["market_discipline"]["max_position_pct"] == reviewed["market_discipline"]["max_position_pct"]
+    assert all("降权" not in flag for flag in rule_only["risk_flags"])
+
+
+def test_missing_optional_auction_dimension_does_not_reduce_production_score():
+    stock = _stock(evidence_quality_score=88.0, data_authenticity=1.0)
+    with_optional_gap = deepcopy(stock)
+    with_optional_gap["data_quality"] = {
+        "missing_fields": [],
+        "optional_missing_fields": ["auction"],
+    }
+    signal = _signal("support", score=78.0)
+
+    baseline = aggregate(stock, [deepcopy(signal)], market_score=65, agent_review_score=78)
+    optional_gap = aggregate(
+        with_optional_gap,
+        [deepcopy(signal)],
+        market_score=65,
+        agent_review_score=78,
+    )
+
+    assert optional_gap["final_score"] == baseline["final_score"]
+    assert "集合竞价数据未覆盖，相关风险需人工复核" in optional_gap["info_tags"]
 
 
 def test_aggregate_exposes_trade_price_levels():
@@ -506,45 +554,43 @@ def test_apply_pool_rules_climax_watchlist_surfaces_near_miss_candidates():
     assert all(c.get("watchlist") for c in out["watchlist"])
 
 
-def test_apply_pool_rules_climax_degraded_mode_soft_floor_engages():
-    """T12 修复回归：LLM 不可用（降级模式，本机未配 ASHARE_AGENT_SKILL_API_KEY）时，
-    高潮阶段也应启用软降线兜底，保证「每天可见推荐」。
-
-    复现 2026-07-10 断档：有效线≈99、最佳候选 89.01，原逻辑因 _agent_unavailable
-    检测失效（缺失 key 的 review 路径不置该 flag）导致 _soft_floor_allowed=False，
-    60 只 skill 过线候选全被挡、rec_n=0。修复后传入 agent_available=False 即可触发兜底。
-    """
-    cards = [_card(code, score) for code, score in [
-        ("A", 89.01), ("B", 87.0), ("C", 85.0), ("D", 82.0),
+def test_apply_pool_rules_llm_availability_never_changes_formal_selection():
+    """LLM 只做可选语义审查；开关状态不得改变规则选股结果。"""
+    rule_only_cards = [_degraded_card(code, score) for code, score in [
+        ("600001", 105.0), ("600002", 104.0),
     ]]
+    reviewed_cards = [_normal_card(card["code"], card["final_score"]) for card in rule_only_cards]
     snapshot = {"sample_count": 100, "up_count": 72, "limit_up_count": 5, "limit_down_count": 0}
-    result = apply_pool_rules(
-        cards, output_count=6, score_line=80, market_snapshot=snapshot, agent_available=False,
+    without_llm = apply_pool_rules(
+        rule_only_cards, output_count=6, score_line=80, market_snapshot=snapshot,
     )
-    # 降级模式软降线兜底：dynamic_line≈88.01，最佳候选 A 过线，输出非空
-    assert [c["code"] for c in result] == ["A"]
-    assert result[0]["score_line_meta"]["degraded_agent_unavailable"] is True
-    assert result[0]["score_line_meta"]["dynamic_soft_floor_applied"] is True
+    with_llm = apply_pool_rules(
+        reviewed_cards, output_count=6, score_line=80, market_snapshot=snapshot,
+    )
+
+    assert [c["code"] for c in without_llm] == [c["code"] for c in with_llm]
+    assert [c["score_line_meta"]["effective_score_line"] for c in without_llm] == [
+        c["score_line_meta"]["effective_score_line"] for c in with_llm
+    ]
 
 
-def test_apply_pool_rules_climax_full_mode_stays_silent():
-    """对比回归：LLM 可用（完整系统）时，高潮阶段仍保持严格——
-    宁可零推荐也不追高。确保 T12 修复没有放松完整系统的质量闸门（D 项：准确性优先）。"""
+def test_apply_pool_rules_climax_stays_silent_below_score_line():
+    """高潮阶段保持严格：宁可零推荐也不靠 soft floor 追高。"""
     cards = [_card(code, score) for code, score in [("A", 89.01), ("B", 87.0)]]
     snapshot = {"sample_count": 100, "up_count": 72, "limit_up_count": 5, "limit_down_count": 0}
     result = apply_pool_rules(
-        cards, output_count=6, score_line=80, market_snapshot=snapshot, agent_available=True,
+        cards, output_count=6, score_line=80, market_snapshot=snapshot,
     )
     # 完整系统高潮阶段不过线候选 → 空（保留原意图：不追高）
     assert result == []
 
 
-def test_apply_pool_rules_oscillation_climax_degraded_soft_floor_disabled():
-    """2026-07-21 T3：震荡·高潮 + 降级 soft floor 净负，必须禁用。
+def test_apply_pool_rules_oscillation_climax_soft_floor_disabled():
+    """2026-07-21 T3：震荡·高潮 soft floor 净负，必须禁用。
 
     实证：07-09 单日 12 笔 soft 票 WR=33.3% avg=-1.85%（有效线~85 被压到~65）。
-    反事实剔除后全量 WR 71.2%→74.5%。强牛·高潮降级 soft 仍启用（A 项兜底，见上例）。
-    本测：震荡（up_ratio∈[0.35,0.50)）+ 高潮（涨停率高）+ agent_available=False
+    反事实剔除后全量 WR 71.2%→74.5%。
+    本测：震荡（up_ratio∈[0.35,0.50)）+ 高潮（涨停率高）
     → soft floor 不得放行低分票，正式推荐为空。
     """
     # 震荡：up_ratio=0.40；高潮：lu_rate=0.05 > 1.2% 且 ld=0
@@ -559,10 +605,10 @@ def test_apply_pool_rules_oscillation_climax_degraded_soft_floor_disabled():
         ("A", 78.0), ("B", 72.0), ("C", 66.0), ("D", 56.0),
     ]]
     result = apply_pool_rules(
-        cards, output_count=6, score_line=72, market_snapshot=snapshot, agent_available=False,
+        cards, output_count=6, score_line=72, market_snapshot=snapshot,
     )
     assert result == [], (
-        "震荡·高潮降级 soft floor 必须禁用，不得放行 score<有效线 的低分票"
+        "震荡·高潮 soft floor 必须禁用，不得放行 score<有效线 的低分票"
     )
 
 
@@ -582,13 +628,13 @@ def test_apply_pool_rules_oscillation_active_soft_floor_disabled():
     # 有效线 = 72 + 0(震荡) + 3(活跃) = 75；候选 70 < 75，旧逻辑会 soft 放行
     cards = [_card(code, score) for code, score in [("A", 70.0), ("B", 68.0)]]
     result = apply_pool_rules(
-        cards, output_count=6, score_line=72, market_snapshot=snapshot, agent_available=True,
+        cards, output_count=6, score_line=72, market_snapshot=snapshot,
     )
     assert result == [], "震荡·活跃 soft floor 必须禁用"
 
 
-def test_apply_pool_rules_weak_climax_degraded_soft_floor_still_engages():
-    """对照：弱势·高潮 soft floor 是反转信号（历史 9 笔 100% WR），降级仍应兜底。"""
+def test_apply_pool_rules_weak_climax_is_llm_neutral():
+    """弱势·高潮是否启用 soft floor 也不能取决于 LLM 是否可用。"""
     # 弱势：up_ratio=0.20；高潮：lu_rate=0.05
     snapshot = {
         "sample_count": 100,
@@ -596,13 +642,16 @@ def test_apply_pool_rules_weak_climax_degraded_soft_floor_still_engages():
         "limit_up_count": 5,
         "limit_down_count": 0,
     }
-    # 有效线 = 72 + 2(弱势) + 5(高潮无 extra) = 79；候选 74 < 79 靠 soft 放行
-    cards = [_card(code, score) for code, score in [("A", 74.0), ("B", 70.0)]]
-    result = apply_pool_rules(
-        cards, output_count=6, score_line=72, market_snapshot=snapshot, agent_available=False,
+    # 有效线 = 72 + 2(弱势) + 5(高潮无 extra) = 79；候选低于有效线。
+    without_llm = apply_pool_rules(
+        [_degraded_card("600001", 74.0), _degraded_card("600002", 70.0)],
+        output_count=6, score_line=72, market_snapshot=snapshot,
     )
-    assert [c["code"] for c in result] == ["A"]
-    assert result[0]["score_line_meta"]["dynamic_soft_floor_applied"] is True
+    with_llm = apply_pool_rules(
+        [_normal_card("600001", 74.0), _normal_card("600002", 70.0)],
+        output_count=6, score_line=72, market_snapshot=snapshot,
+    )
+    assert [c["code"] for c in without_llm] == [c["code"] for c in with_llm]
 
 
 def test_apply_pool_rules_watchlist_empty_when_not_climax():
@@ -699,7 +748,7 @@ def test_soft_floor_engages_when_top_above_market_line_but_per_card_penalty_bloc
     # 先跑一次拿 meta（会被 soft floor 修改），所以用副本断言 pre-soft 状态无必要——
     # 直接断言修复后输出非空 + soft_floor_reason=per_card_penalty
     result = apply_pool_rules(
-        cards, output_count=6, score_line=72, market_snapshot=snapshot, agent_available=True,
+        cards, output_count=6, score_line=72, market_snapshot=snapshot,
     )
     assert [c["code"] for c in result] == ["000001"], (
         f"gap<=0（top 过市场线但 per-card 执行惩罚挡光）应启用 soft floor 放行 top，"
@@ -733,7 +782,7 @@ def test_soft_floor_gap_le_0_still_skips_hard_veto_panic():
         c["chg20"] = 25.0  # 避免弱势×chg20 再加惩罚，专注 panic
         c["pos60"] = 80.0
     result = apply_pool_rules(
-        cards, output_count=6, score_line=72, market_snapshot=snapshot, agent_available=True,
+        cards, output_count=6, score_line=72, market_snapshot=snapshot,
     )
     assert result == [], "恐慌日硬否决不得被 gap<=0 soft floor 放行"
     for c in cards:
@@ -759,7 +808,7 @@ def test_soft_floor_gap_le_0_rescues_near_top_limit_up_pair():
         _limit_up_risky_card("300003", 79.0),
     ]
     result = apply_pool_rules(
-        cards, output_count=6, score_line=72, market_snapshot=snapshot, agent_available=True,
+        cards, output_count=6, score_line=72, market_snapshot=snapshot,
     )
     codes = [c["code"] for c in result]
     assert codes == ["300001"], (
@@ -1081,6 +1130,12 @@ def test_apply_sector_diversity_penalizes_same_industry():
 
     # feature_snapshot 双写
     assert yuanjian_sorted[1]["feature_snapshot"]["sector_diversity_penalty"] == 5
+    # 分数口径必须可追溯：selection_score 用于过线，portfolio_rank_score 用于组合排序。
+    penalized = next(c for c in yuanjian if c.get("sector_diversity_penalty") == 5)
+    assert penalized["final_score"] == penalized["selection_score"]
+    assert penalized["selection_score"] == penalized["portfolio_rank_score"] + 5
+    assert penalized["feature_snapshot"]["selection_score"] == penalized["selection_score"]
+    assert penalized["feature_snapshot"]["portfolio_rank_score"] == penalized["portfolio_rank_score"]
 
 
 def test_apply_sector_diversity_skips_unknown_industry():
@@ -1134,7 +1189,7 @@ def test_apply_pool_rules_respects_same_day_industry_counts_across_runs():
 
 
 # ---------------------------------------------------------------------------
-# T12 空跑修复：LLM 暂不可用时不得零推荐
+# LLM 可用性与规则选股解耦
 # ---------------------------------------------------------------------------
 
 def _climax_snapshot():
@@ -1181,29 +1236,45 @@ def _normal_card(code, final_score):
     }
 
 
-def test_agent_unavailable_climax_becomes_watch_only():
-    """Agent 全失败的候选保持可见，但不得伪装成正式推荐。"""
+def test_agent_unavailable_climax_matches_reviewed_rule_selection():
+    """同一规则分数下，Agent 是否可用不得改变高潮期正式推荐。"""
     from app.engine.aggregator import apply_pool_rules
 
-    cards = [
+    degraded_cards = [
         _degraded_card("600001", 67.85),
         _degraded_card("600002", 60.78),
         _degraded_card("600003", 59.92),
         _degraded_card("600004", 59.89),
     ]
-    out = apply_pool_rules(
-        cards,
+    reviewed_cards = [
+        _normal_card(card["code"], card["final_score"])
+        for card in degraded_cards
+    ]
+    degraded_out = apply_pool_rules(
+        degraded_cards,
         score_line=72.0,
         market_snapshot=_climax_snapshot(),
         return_watchlist=True,
     )
-    recs = out["recommendations"] if isinstance(out, dict) else out
-    assert recs == []
-    assert out["degraded_watchlist"][0]["code"] == "600001"
+    reviewed_out = apply_pool_rules(
+        reviewed_cards,
+        score_line=72.0,
+        market_snapshot=_climax_snapshot(),
+        return_watchlist=True,
+    )
+    assert [c["code"] for c in degraded_out["recommendations"]] == [
+        c["code"] for c in reviewed_out["recommendations"]
+    ]
+    assert [c["code"] for c in degraded_out["watchlist"]] == [
+        c["code"] for c in reviewed_out["watchlist"]
+    ]
+    assert [c["code"] for c in degraded_out["degraded_watchlist"]] == [
+        "600001", "600002", "600003", "600004",
+    ]
 
 
-def test_agent_unavailable_non_climax_becomes_watch_only():
-    """市场阶段不能改变全失败候选的非正式语义。"""
+def test_agent_unavailable_non_climax_keeps_rule_recommendation_flow():
+    """非高潮阶段也不能因 LLM 全失败而阻断规则推荐。"""
     from app.engine.aggregator import apply_pool_rules
 
     cards = [
@@ -1221,12 +1292,12 @@ def test_agent_unavailable_non_climax_becomes_watch_only():
         return_watchlist=True,
     )
     recs = out["recommendations"] if isinstance(out, dict) else out
-    assert recs == []
-    assert [c["code"] for c in out["degraded_watchlist"]] == ["600001", "600002"]
+    assert [c["code"] for c in recs] == ["600001"]
+    assert [c["code"] for c in out["degraded_watchlist"]] == ["600002"]
 
 
-def test_agent_available_climax_risk_control_preserved():
-    """LLM 正常时，强牛·高潮阶段仍按设计不正式出票（风险控制在位，无回归）。"""
+def test_climax_risk_control_is_preserved_for_reviewed_cards():
+    """强牛·高潮阶段按规则保持严格，不依赖 LLM 是否可用。"""
     from app.engine.aggregator import apply_pool_rules
 
     cards = [
@@ -1240,7 +1311,7 @@ def test_agent_available_climax_risk_control_preserved():
         return_watchlist=True,
     )
     recs = out["recommendations"] if isinstance(out, dict) else out
-    assert len(recs) == 0, "LLM 正常时强牛·高潮阶段不应降级兜底（风险控制和旧行为一致）"
+    assert len(recs) == 0, "强牛·高潮阶段不应降线兜底"
 
 
 def test_no_penalty_inflation_on_agent_unavailable():

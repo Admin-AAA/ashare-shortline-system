@@ -59,28 +59,39 @@ def _performance_payload(
     if not profile:
         return None
     sample_count = int(profile.get("executed_trade_count") or 0)
-    all_trades = int(profile.get("sample_count") or 0)
+    selected_signal_count = int(profile.get("selected_signal_count") or 0)
+    raw_signal_count = int(profile.get("raw_signal_count") or 0)
     payload = {
         "source": "canonical_backtest",
         "strategy_version": profile.get("strategy_version"),
         "profile_fingerprint": profile.get("profile_fingerprint"),
         "backtest_id": profile.get("backtest_id"),
-        "portfolio_model": profile.get("portfolio_model"),
+        "selection_policy": profile.get("selection_policy"),
+        "daily_selection_limit": profile.get("daily_selection_limit"),
+        "selection_tiebreaker": profile.get("selection_tiebreaker"),
+        "raw_signal_count": raw_signal_count,
+        "selected_signal_count": selected_signal_count,
+        "selected_signal_days": int(profile.get("selected_signal_days") or 0),
         "sample_count": sample_count,
         "labeled_count": sample_count,
-        "triggered_count": sample_count,
-        "missed_count": max(0, all_trades - sample_count),
+        "triggered_count": selected_signal_count,
+        "missed_count": max(0, selected_signal_count - sample_count),
         "success_count": int(profile.get("win_count") or 0),
-        "trigger_rate": sample_count / all_trades if all_trades else 0.0,
-        "hit_rate": float(profile.get("win_rate_pct") or 0) / 100,
+        "trigger_rate": (
+            sample_count / selected_signal_count if selected_signal_count else None
+        ),
+        "hit_rate": (
+            float(profile.get("win_rate_pct") or 0) / 100
+            if sample_count
+            else None
+        ),
         "avg_score": None,
-        "avg_return": profile.get("average_net_return_pct"),
+        "avg_return": (
+            profile.get("average_net_return_pct") if sample_count else None
+        ),
         "profit_loss_ratio": profile.get("profit_loss_ratio"),
-        "total_return_pct": profile.get("total_return_pct"),
-        "max_drawdown_pct": profile.get("max_drawdown_pct"),
         "window_metrics": profile.get("window_metrics") or {},
-        "quality": profile.get("quality"),
-        "monthly_returns": profile.get("monthly_returns") or [],
+        "monthly_metrics": profile.get("monthly_metrics") or [],
         "date_from": profile.get("date_from"),
         "date_to": profile.get("date_to"),
         "target_date_from": profile.get("target_date_from"),

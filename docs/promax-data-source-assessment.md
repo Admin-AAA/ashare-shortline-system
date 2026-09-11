@@ -1,10 +1,10 @@
 # Promax 数据源接入评估
 
-评估日期：2026-08-16
+评估日期：2026-08-16；历史分钟复验：2026-09-09
 
 ## 结论
 
-Promax 适合作为 Tushare 通用同步的宽覆盖备用 Provider，并作为候选股实时行情主源。它与现有源属于独立网关，接口目录广、最新交易日数据完整、请求限额明确；但全市场日线实测延迟高于 Quantdata 和 Tushare 官方。公告与历史分钟接口暂不接管现有链路：前者的参数契约不同，后者返回了不符合 1 分钟 K 线语义的秒级快照。
+Promax 适合作为 Tushare 通用同步的宽覆盖备用 Provider，并作为候选股实时行情和历史分钟主源。它与现有源属于独立网关，接口目录广、最新交易日数据完整、请求限额明确；但全市场日线实测延迟高于 Quantdata 和 Tushare 官方。公告接口因参数契约不同暂不接管。历史分钟存在异步生成和异常快照两种非完成状态，必须经过专用状态识别与分钟契约门禁后才能落库。
 
 ## 服务与接口范围
 
@@ -37,7 +37,7 @@ Promax 适合作为 Tushare 通用同步的宽覆盖备用 Provider，并作为�
 ## 已知契约差异
 
 - `anns_d` 强制要求 `ann_date`，而项目当前按 `start_date/end_date` 拉取日期区间。Promax 暂不参与该 API，公告继续走现有 Tushare Provider + 东方财富双源。
-- `stk_mins` 对单个交易日返回 468 条标记为 `1MIN` 的记录，其中混有非整分钟时间（例如 `14:59:31`）。这不满足项目分钟 K 线契约，Promax 暂不参与历史分钟路由。
+- `stk_mins` 复验确认三种响应：未生成日期返回 HTTP 202 + `minute_data_pending`；已完成日期可返回标准 241 根整分钟数据；生成异常时可能返回含秒级时间、午休/收盘后冻结快照和同分钟重复的 200 响应。项目只接受第三方源中通过整分钟、连续交易时段和时间唯一性门禁的响应，其余自动 fallback。
 - `rt_min` 和 `rt_k` 单股票请求实测正常，继续作为候选股按需实时叠加，不用于全市场逐股扫描。
 - 同一交易日全市场 `daily`（5,540 行）实测耗时：Promax 约 6.49 秒、Quantdata 约 0.88 秒、Tushare 官方约 0.56 秒；因此不让 Promax 抢占低延迟批量源。
 
@@ -45,5 +45,6 @@ Promax 适合作为 Tushare 通用同步的宽覆盖备用 Provider，并作为�
 
 - 通用同步 API：按现有低延迟 Provider 优先级执行，Promax（默认优先级 `4`）作为宽覆盖 fallback。
 - `rt_k` / `rt_min`：Promax 优先。
-- `anns_d` / `stk_mins`：排除 Promax，沿用现有 Provider 链。
+- `anns_d`：排除 Promax，沿用现有 Provider 链。
+- `stk_mins`：Promax 优先；HTTP 202 记为 `data_pending` 并 fallback，不触发熔断；200 响应未通过分钟契约时记为 `malformed_response` 并 fallback。
 - 所有推荐和回测仍从本地 MySQL 数据池读取；Promax 只属于上游采集层。

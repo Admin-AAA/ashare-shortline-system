@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from app.adapters.market_source import TushareMarketSourceAdapter
+from app.adapters.market_source import XiaoshiMarketSourceAdapter, TushareMarketSourceAdapter
 from app.services.market_auxiliary import (
     _capital_flow_sources,
     _concept_sector_sources,
@@ -64,6 +64,8 @@ def fetch_quote_batch(source: str, settings: Any, request: QuoteRequest) -> Quot
 
     if source == "tushare":
         return _get_market_source_adapter(settings).fetch_quotes(request)
+    if source == "xiaoshi":
+        return XiaoshiMarketSourceAdapter(settings=settings).fetch_quotes(request)
     raise MarketDataError(f"未知行情源: {source}")
 
 
@@ -76,6 +78,8 @@ def fetch_daily_bar_batch(
 
     if source == "tushare":
         return _get_market_source_adapter(settings).fetch_daily_bars(request)
+    if source == "xiaoshi":
+        return XiaoshiMarketSourceAdapter(settings=settings).fetch_daily_bars(request)
     raise MarketDataError(f"未知行情源: {source}")
 
 

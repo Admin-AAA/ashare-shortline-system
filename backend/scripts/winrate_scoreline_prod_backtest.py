@@ -26,11 +26,19 @@ MAX_ENTRY_GAP = 10.0
 TOP_N = 6  # 生产 output_count
 
 
-def _to_bar_obj(b):
-    """frozen snapshot 的 bar 是 dict；因果出场引擎要属性访问的对象。"""
+def _to_bar_obj(b, pct_chg=0.0):
+    """frozen snapshot 的 bar 是 dict；因果出场引擎要属性访问的对象。
+
+    修复：outcome_bars 无 amount，而出场可卖性闸门(no_liquidity_reason_from_bar)要求
+    volume>0 且 amount>0；缺 amount 会把每根 bar 判为卖不出、因果出场退化为持有到期。
+    用 volume*close 作成交额正值代理（仅过 >0 闸门，成交价只用 OHLC）；pct_chg 供一字板判定。
+    """
+    vol = float(b.get("volume") or 0)
+    cls = float(b.get("close") or 0)
     return type("Bar", (), {
         "trade_date": b.get("trade_date"), "open": b.get("open"), "high": b.get("high"),
         "low": b.get("low"), "close": b.get("close"), "volume": b.get("volume"),
+        "amount": vol * cls, "pct_chg": pct_chg,
         "tradable": b.get("tradable", True),
     })()
 
@@ -56,7 +64,15 @@ def simulate(day, score_line, top_n=TOP_N):
         if gap > MAX_ENTRY_GAP:
             continue
         entry_price = entry_open * (1 + SLIP / 1e4)
-        holding = [_to_bar_obj(b) for b in raw_bars[: HORIZON + 1]]
+        holding_raw = raw_bars[: HORIZON + 1]
+        holding = []
+        prev_close = sig_close if sig_close > 0 else 0.0
+        for b in holding_raw:
+            bc = float(b.get("close") or 0)
+            pct = (bc / prev_close - 1) * 100 if prev_close > 0 and bc > 0 else 0.0
+            holding.append(_to_bar_obj(b, pct))
+            if bc > 0:
+                prev_close = bc
         try:
             exit_px, exit_date, reason = _resolve_exit_causal(
                 holding,

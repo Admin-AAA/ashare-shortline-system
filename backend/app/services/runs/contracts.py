@@ -29,6 +29,11 @@ from pydantic import (
     model_validator,
 )
 
+from app.core.deployment_identity import (
+    resolve_application_revision,
+    resolve_application_version,
+)
+
 
 class RunContractError(ValueError):
     """A stable, caller-safe error raised for run-contract violations."""
@@ -558,13 +563,15 @@ def application_identity_from_environment(
     """Return the deployment identity without reading broad, potentially secret config.
 
     Build/deploy tooling may set only ``ASHARE_APPLICATION_VERSION`` and
-    ``ASHARE_APPLICATION_REVISION``.  The explicit local defaults keep development
-    runs reproducible and do not include hostnames, database URLs, tokens, or paths.
+    ``ASHARE_APPLICATION_REVISION``. When the revision is unset it resolves to
+    cached ``git rev-parse HEAD`` through the shared resolver so that the API
+    enqueue side and the Prefect worker execution side always hash the same
+    identity from one checkout. Hostnames, database URLs, tokens, and paths
+    stay out of the identity.
     """
-    source = os.environ if environ is None else environ
     return ApplicationIdentity(
-        version=str(source.get("ASHARE_APPLICATION_VERSION") or "development"),
-        revision=str(source.get("ASHARE_APPLICATION_REVISION") or "unknown"),
+        version=resolve_application_version(environ),
+        revision=resolve_application_revision(environ),
     )
 
 

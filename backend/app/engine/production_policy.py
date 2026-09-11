@@ -19,7 +19,7 @@ class ProductionSelectionPolicy:
 
     policy_id: str = "production-selection"
     version: int = 1
-    board_universe: str | None = "20cm"
+    board_universe: str | None = None
     excluded_20cm_buckets: tuple[str, ...] = (
         "daily-stock-analysis-skill",
         "chao-gu-yang-jia-skill",
@@ -55,11 +55,12 @@ class ProductionSelectionPolicy:
     dynamic_soft_floor_max_gap: float = 20.0
     dynamic_soft_floor_disabled_regimes: tuple[str, ...] = ("震荡",)
     output_limit_enabled: bool = True
+    daily_output_limit: int = 10
     climax_output_divisor: int = 2
     weak_ice_output_limit: int = 2
     # regime×情绪 组合的分数线硬覆盖（L-060）：优先级高于 market_base/sentiment/
     # climax 调整叠加。键为 "regime·sentiment"（如 "强牛·高潮"），值为固定分数线。
-    # 用于精细放行已 OOS 验证正期望的组合（强牛·高潮/强牛·活跃/震荡·活跃用72），
+    # 用于精细放行已验证正期望且能恢复活跃度的组合；具体阈值由版本化 artifact 持有，
     # 而保持负期望组合（偏多·高潮85）的拦截——单参数叠加无法表达这种二维区分。
     regime_sentiment_line_overrides: tuple[tuple[str, float], ...] = ()
 
@@ -89,6 +90,7 @@ class ProductionSelectionPolicy:
             "dynamic_soft_floor_max_gap": self.dynamic_soft_floor_max_gap,
             "dynamic_soft_floor_disabled_regimes": list(self.dynamic_soft_floor_disabled_regimes),
             "output_limit_enabled": self.output_limit_enabled,
+            "daily_output_limit": self.daily_output_limit,
             "climax_output_divisor": self.climax_output_divisor,
             "weak_ice_output_limit": self.weak_ice_output_limit,
             "regime_sentiment_line_overrides": [list(item) for item in self.regime_sentiment_line_overrides],
@@ -141,12 +143,16 @@ _POLICY_ARTIFACT_DIR = Path(__file__).resolve().parents[1] / "policies"
 
 def load_production_selection_policy(
     policy_id: str = "production-selection",
-    version: int = 1,
+    version: int = 2,
 ) -> ProductionSelectionPolicy:
-    """Load the repository-owned artifact used by production and backtests."""
-    if policy_id != "production-selection" or version != 1:
+    """Load the repository-owned artifact used by production and backtests.
+
+    v1 保留以复现历史；v2 为当前默认（把偏多/震荡/弱势·高潮硬排除到分数线上限，
+    其余组合维持 L-060 不变；依据冻结 244d + 前瞻 117d 双窗口因果重放，见 L-070）。
+    """
+    if policy_id != "production-selection" or version not in (1, 2):
         raise ValueError(f"unknown production selection policy: {policy_id}@{version}")
-    path = _POLICY_ARTIFACT_DIR / "production_selection.v1.json"
+    path = _POLICY_ARTIFACT_DIR / f"production_selection.v{version}.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("production selection policy artifact must be an object")
@@ -179,8 +185,8 @@ class SelectionPolicyContext:
     market_snapshot: Mapping[str, Any]
     risk_template: str = "balanced"
     display_limit: int | None = None
-    agent_available: bool = True
     same_day_industry_counts: Mapping[str, int] | None = None
+    same_day_recommendation_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -315,11 +321,11 @@ def evaluate_selection_policy(
         risk_template=context.risk_template,
         display_limit=context.display_limit,
         return_watchlist=True,
-        agent_available=context.agent_available,
         same_day_industry_counts=(
             dict(context.same_day_industry_counts)
             if context.same_day_industry_counts is not None else None
         ),
+        same_day_recommendation_count=context.same_day_recommendation_count,
         board_universe=policy.board_universe,
         selection_policy=policy,
     )

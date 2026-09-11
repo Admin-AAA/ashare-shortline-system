@@ -52,7 +52,7 @@
 - 小石量化 Skill 固定版本与 SHA-256 后才允许进入本地注册表；新映射先保持 research/禁用，不自动加入正式推荐预设
 - K线/基本面/辅助数据优先使用 Tushare；通用批量同步优先走低延迟 Provider，Promax 作宽覆盖 fallback
 - 实时 `rt_k`/`rt_min`：Promax 优先，仅对候选股按需调用
-- Promax `anns_d` 只接受单日 `ann_date`，`stk_mins` 实测混入秒级快照；两接口在契约修正前不进入 Promax 路由
+- Promax `anns_d` 只接受单日 `ann_date`，暂不进入路由；`stk_mins` 作为历史分钟主源，但 HTTP 202 视为生成中并 fallback，200 响应须通过整分钟/交易时段/时间唯一性门禁
 - 概念成分股：Tushare `ths_member`（akshare 有 py_mini_racer 兼容问题）
 - 新闻公告：Tushare `anns_d` + eastmoney `np-anotice` 双源
 - 筹码分布：Tushare `cyq_perf`（若接口不可用则标记"数据源不可用"）

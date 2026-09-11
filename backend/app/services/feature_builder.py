@@ -681,6 +681,7 @@ _OBSERVABLE_FIELDS.update({
     "holder_trade_count", "holder_trade_increase_count", "holder_trade_decrease_count", "holder_trade_net_ratio",
     "survey_count", "survey_fund_visitors", "survey_latest_date",
     "block_trade_avg_discount_rate",
+    "auction_volume_ratio", "auction_turnover_rate", "auction_price", "auction_pre_close",
     "is_broken_limit_up", "broken_limit_up_open_times", "broken_limit_up_up_stat",
     "has_real_chip_data",
     # 筹码字段（有 cyq_perf 真实数据源时为 OBSERVED，无数据时 _tag_features 经 chip 类别判 FALLBACK）
@@ -731,6 +732,8 @@ for _f in ("survey_count", "survey_fund_visitors", "survey_latest_date"):
     _FIELD_TO_MISSING_CATEGORY[_f] = "survey"
 # 大宗交易折价率 → block_trade 类别
 _FIELD_TO_MISSING_CATEGORY["block_trade_avg_discount_rate"] = "block_trade"
+for _f in ("auction_volume_ratio", "auction_turnover_rate", "auction_price", "auction_pre_close"):
+    _FIELD_TO_MISSING_CATEGORY[_f] = "auction"
 
 # Fields that are always synthetically estimated (no real data source)
 # 注意：avg_cost/profit_ratio/concentration_90 等在有 cyq_perf 数据时已映射为真实值（_OBSERVABLE_FIELDS），
@@ -826,6 +829,7 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
         code = stock["code"]
         data_quality = stock.setdefault("data_quality", {})
         missing_fields = set(data_quality.get("missing_fields") or [])
+        optional_missing_fields = set(data_quality.get("optional_missing_fields") or [])
         fallback_fields = set(data_quality.get("fallback_fields") or [])
         profile = stock.get("dsa_profile", {})
         if not isinstance(profile, dict):
@@ -961,10 +965,35 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
         # ── 集合竞价特征 ──
         auc = auction_map.get(code)
         if auc:
-            stock["auction_volume_ratio"] = auc.get("volume_ratio", 1.0)
-            stock["auction_turnover_rate"] = auc.get("turnover_rate", 0)
-            stock["auction_price"] = auc.get("price", 0)
-            stock["auction_pre_close"] = auc.get("pre_close", 0)
+            auction_price = _num(auc.get("price"))
+            auction_pre_close = _num(auc.get("pre_close"))
+            stock["auction_volume_ratio"] = auc.get("volume_ratio")
+            stock["auction_turnover_rate"] = auc.get("turnover_rate")
+            stock["auction_price"] = auc.get("price")
+            stock["auction_pre_close"] = auc.get("pre_close")
+            if auction_price > 0 and auction_pre_close > 0:
+                stock["auction_signal_available"] = True
+                stock["auction_gap_pct"] = round(
+                    (auction_price / auction_pre_close - 1.0) * 100.0,
+                    4,
+                )
+                missing_fields.discard("auction")
+                optional_missing_fields.discard("auction")
+                data_quality["auction_checked"] = True
+            else:
+                stock["auction_signal_available"] = False
+                stock["auction_gap_pct"] = None
+                optional_missing_fields.add("auction")
+                data_quality["auction_invalid_values"] = True
+        else:
+            # 缺失必须保持不可用，不能用 0 或 1.0 伪造中性竞价信号。
+            stock["auction_volume_ratio"] = None
+            stock["auction_turnover_rate"] = None
+            stock["auction_price"] = None
+            stock["auction_pre_close"] = None
+            stock["auction_signal_available"] = False
+            stock["auction_gap_pct"] = None
+            optional_missing_fields.add("auction")
 
         # ── 股权质押风险 ──
         pledge = pledge_map.get(code)
@@ -1121,6 +1150,7 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
 
         stock["dsa_profile"] = profile
         data_quality["missing_fields"] = sorted(missing_fields)
+        data_quality["optional_missing_fields"] = sorted(optional_missing_fields)
         data_quality["fallback_fields"] = sorted(fallback_fields)
 
 def _checked_codes_from_audit(audit_row: Any) -> set[str]:
@@ -1157,6 +1187,7 @@ def _tag_features(item: dict[str, Any]) -> None:
     data_quality = item.get("data_quality") or {}
     fallback_fields = set(data_quality.get("fallback_fields") or [])
     missing_fields = set(data_quality.get("missing_fields") or [])
+    missing_fields.update(data_quality.get("optional_missing_fields") or [])
     for key in item:
         if key.startswith("_"):
             continue

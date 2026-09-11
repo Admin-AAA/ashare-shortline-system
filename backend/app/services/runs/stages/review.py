@@ -10,28 +10,11 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Protocol, Sequence, runtime_checkable
 
-from ..contracts import RunMode, RunPhase, RunStageResult
+from ..contracts import RunPhase, RunStageResult
 from .contracts import StageData, StageMapping, StageOutput
 from ..coordinator import AsyncRunStage, RunContext
 
 logger = logging.getLogger(__name__)
-
-
-class FormalReviewUnavailableError(RuntimeError):
-    """Formal review had work to do but no model review succeeded."""
-
-    def __init__(self, audit: StageMapping) -> None:
-        self.audit = dict(audit)
-        requested = int(audit.get("requested_count") or 0)
-        succeeded = int(audit.get("success_count") or 0)
-        reasons = dict(audit.get("reason_counts") or {})
-        reason_text = ", ".join(
-            f"{reason}={count}"
-            for reason, count in sorted(reasons.items())
-        ) or "unknown"
-        super().__init__(
-            f"正式推荐 LLM 深审不可用：成功 {succeeded}/{requested}；原因 {reason_text}"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -110,20 +93,27 @@ class ReviewStage:
             [dict(entry) for entry in candidate_results],
             [dict(cost) for cost in api_costs],
         )
-        if (
-            context.request.run_mode is RunMode.FORMAL
-            and not agent_review_disabled
-            and int(review_failure_audit["requested_count"] or 0) > 0
-            and int(review_failure_audit["success_count"] or 0) == 0
-        ):
-            raise FormalReviewUnavailableError(review_failure_audit)
+        # LLM 是可选的风险 overlay：熔断、余额不足或超时只记录审计，候选继续
+        # 交给聚合阶段按 strategy.yaml 规则信号降级处理，不能让正式推荐整批失败。
+        rule_only_fallback_count = 0
+        if not agent_review_disabled:
+            for entry in candidate_results:
+                reviews = list(entry.get("skill_reviews") or [])
+                requested = len(entry.get("review_skill_ids") or reviews)
+                succeeded = sum(
+                    1
+                    for review in reviews
+                    if review.get("review") is not None and not review.get("error")
+                )
+                if requested > 0 and succeeded == 0:
+                    rule_only_fallback_count += 1
         pipeline_audit = dict(data.pipeline_audit or {})
         pipeline_audit.update(
             {
                 "skill_agent_call_count": review_failure_audit["requested_count"],
                 "skill_review_success_count": review_failure_audit["success_count"],
                 "skill_review_failure_audit": review_failure_audit,
-                "rule_only_fallback_count": 0,
+                "rule_only_fallback_count": rule_only_fallback_count,
             }
         )
 
@@ -142,7 +132,6 @@ class ReviewStage:
 
 __all__ = [
     "CostRecordingPort",
-    "FormalReviewUnavailableError",
     "ReviewExecutorPort",
     "ReviewStage",
 ]

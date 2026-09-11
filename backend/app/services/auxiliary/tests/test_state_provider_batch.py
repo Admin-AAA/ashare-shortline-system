@@ -10,6 +10,7 @@ These tests do not hit the network. They inject a recording fake client and asse
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
@@ -191,6 +192,34 @@ def test_fina_indicator_batch_failure_does_not_fan_out_to_per_stock_calls():
     assert calls["batch"] == 1
     assert calls["per_stock"] == 0
     assert rows == ()
+
+
+def test_concept_sector_stock_deduplicates_provider_rows_by_natural_key():
+    frame = pd.DataFrame([
+        {"ts_code": "885001.TI", "con_code": "000001.SZ", "con_name": "平安银行"},
+        {"ts_code": "885001.TI", "con_code": "000001.SZ", "con_name": "平安银行"},
+    ])
+
+    class _Client:
+        def ths_member(self, **kwargs):
+            assert kwargs == {"ts_code": "885001.TI"}
+            return frame
+
+    class _Session:
+        def scalars(self, _statement):
+            return SimpleNamespace(
+                all=lambda: [SimpleNamespace(sector_code="885001.TI")]
+            )
+
+    provider = TushareStateProvider(_Client(), session=_Session())
+    rows = provider.concept_sector_stock(_request((), date(2026, 7, 16)))
+
+    assert rows == [{
+        "sector_code": "885001.TI",
+        "code": "000001",
+        "name": "平安银行",
+        "trade_date": "2026-07-16",
+    }]
 
 
 def test_holder_number_nan_and_duplicate_natural_key_handled():

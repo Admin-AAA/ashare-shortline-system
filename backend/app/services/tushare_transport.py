@@ -49,6 +49,7 @@ class FailureCategory(StrEnum):
     HTTP_RATE_LIMIT = "http_rate_limit"
     HTTP_SERVER = "http_server"
     HTTP_CLIENT = "http_client"
+    DATA_PENDING = "data_pending"
     NON_JSON = "non_json"
     BUSINESS_RATE_LIMIT = "business_rate_limit"
     PERMISSION = "permission"
@@ -470,6 +471,7 @@ class TushareHttpProvider:
                 if failure.fallback_allowed and failure.category not in {
                     FailureCategory.INVALID_REQUEST,
                     FailureCategory.HTTP_CLIENT,
+                    FailureCategory.DATA_PENDING,
                 }:
                     breaker.record_failure(
                         force_open=force_open,
@@ -506,6 +508,14 @@ class TushareHttpProvider:
                 )
             status = int(response.status_code)
             if status != 200:
+                if status == 202:
+                    raise ProviderFailure(
+                        provider=self.name,
+                        api_name=api_name,
+                        category=FailureCategory.DATA_PENDING,
+                        retryable=False,
+                        fallback_allowed=True,
+                    )
                 if status == 429:
                     retry_after = 60.0
                     try:
@@ -669,9 +679,14 @@ class TushareProviderRouter:
     # 未列出的 API 回落到按 provider priority 升序。
     DEFAULT_API_ROUTES: Mapping[str, tuple[str, ...]] = {
         "rt_k": ("promax", "ai_tool", "xiaodefa", "fastapic", "quantdata"),
-        "stk_mins": ("ai_tool", "fastapic", "quantdata", "xiaodefa"),
+        "stk_mins": ("promax", "ai_tool", "fastapic", "quantdata", "xiaodefa"),
         "rt_min": ("promax", "ai_tool", "fastapic", "quantdata", "xiaodefa"),
         "anns_d": ("ai_tool", "fastapic", "quantdata", "xiaodefa"),
+        # Promax supports the batch contracts used by the standard auxiliary
+        # state adapters; put it first so an official-provider validation error
+        # does not prevent valid financial/member data from reaching fallback.
+        "fina_indicator": ("promax", "tushare_official", "quantdata"),
+        "ths_member": ("promax", "tushare_official", "quantdata"),
     }
 
     def __init__(

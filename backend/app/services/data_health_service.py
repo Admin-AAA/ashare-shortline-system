@@ -76,7 +76,8 @@ _MIN_RECENT_DAILY_KBAR_CODES = 3000
 # - table / date_col：存储位置（用于运行时统计行数与最新日期）
 # - fresh_days：判定「接入且新鲜」的容忍滞后天数；为 None 表示事件型
 #   数据（自然稀疏，有数据即视为已接入，不判滞后）
-# - column：可选，非 NULL 计数列（用于部分字段型域，如 筹码峰 chip_cost_50）
+# - column：可选，非 NULL 表示该数据域已有数据（如 筹码峰 chip_cost_50）
+# - estimated_row_count：超大整表只展示 MySQL 估算行数，避免健康检查全表计数
 _DAILY_DATA_FRESH_DAYS = 0
 # 已知 Tushare 盘后延迟出数的数据域：融资融券明细(margin_detail)盘后晚出。
 # hk_hold 是季末持股快照，不是日频数据；按季报/股东人数相同窗口检查。
@@ -85,18 +86,18 @@ _HK_HOLD_FRESH_DAYS = 130
 
 _DATA_DOMAIN_DEFS: list[dict[str, Any]] = [
     # 行情 K 线
-    {"key": "daily_kbar", "label": "日K线(含技术指标)", "category": "行情K线", "table": DailyKbar, "date_col": "trade_date", "critical": True, "fresh_days": _DAILY_DATA_FRESH_DAYS},
+    {"key": "daily_kbar", "label": "日K线(含技术指标)", "category": "行情K线", "table": DailyKbar, "date_col": "trade_date", "critical": True, "fresh_days": _DAILY_DATA_FRESH_DAYS, "estimated_row_count": True},
     {"key": "chip", "label": "筹码分布(筹码峰)", "category": "行情K线", "table": DailyKbar, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS, "column": "chip_cost_50"},
-    {"key": "minute_kbar", "label": "分钟K线", "category": "行情K线", "table": MinuteKbar, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS},
+    {"key": "minute_kbar", "label": "分钟K线", "category": "行情K线", "table": MinuteKbar, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS, "estimated_row_count": True},
     {"key": "index_daily", "label": "指数日线", "category": "行情K线", "table": IndexDaily, "date_col": "trade_date", "critical": True, "fresh_days": _DAILY_DATA_FRESH_DAYS},
-    {"key": "stk_limit", "label": "涨跌停价格", "category": "行情K线", "table": StkLimit, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS},
+    {"key": "stk_limit", "label": "涨跌停价格", "category": "行情K线", "table": StkLimit, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS, "estimated_row_count": True},
     {"key": "auction", "label": "集合竞价", "category": "行情K线", "table": AuctionData, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS},
     # 实时盘口
     {"key": "realtime_quote", "label": "盘中实时快照", "category": "实时盘口", "table": StockQuote, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS},
     # 情绪题材
     {"key": "limit_up", "label": "涨停板", "category": "情绪题材", "table": LimitUpBoard, "date_col": "trade_date", "critical": True, "fresh_days": _DAILY_DATA_FRESH_DAYS},
     {"key": "concept", "label": "概念板块", "category": "情绪题材", "table": ConceptSector, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS},
-    {"key": "concept_member", "label": "概念板块成分", "category": "情绪题材", "table": ConceptSectorStock, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS},
+    {"key": "concept_member", "label": "概念板块成分", "category": "情绪题材", "table": ConceptSectorStock, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS, "estimated_row_count": True},
     {"key": "dragon_tiger", "label": "龙虎榜", "category": "情绪题材", "table": DragonTiger, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS},
     {"key": "broker_recommend", "label": "券商金股", "category": "情绪题材", "table": BrokerRecommend, "date_col": "month", "critical": False, "fresh_days": 45},
     # 资金流向
@@ -348,9 +349,8 @@ def _active_stock_quote_max_date(db: Session) -> str | None:
 
 
 def _active_stock_quote_date_bounds(db: Session) -> tuple[str | None, str | None]:
-    normalized_col = func.replace(StockQuote.trade_date, "-", "")
     min_date, max_date = db.execute(
-        select(func.min(normalized_col), func.max(normalized_col)).where(
+        select(func.min(StockQuote.trade_date), func.max(StockQuote.trade_date)).where(
             StockQuote.trade_date.is_not(None),
             StockQuote.freshness_status != "inactive",
         )
@@ -674,31 +674,39 @@ def _data_domain_coverage(db: Session, reference_trade_date: str | None) -> dict
         critical = bool(ddef.get("critical"))
         column = ddef.get("column")
 
-        total = 0
+        total: int | None = 0
+        total_estimated = False
+        has_data = False
         max_date = None
         try:
-            if column and hasattr(tbl, column):
-                total = int(
-                    db.scalar(select(func.count()).select_from(tbl).where(getattr(tbl, column).is_not(None)))
-                    or 0
-                )
-                # 归一化日期格式（与 _date_bounds 一致），避免 YYYYMMDD / YYYY-MM-DD 混存时
-                # 字符串排序导致 max_date 误判（如 '20260525' > '2026-06-23'）
-                normalized_col = func.replace(getattr(tbl, dc), "-", "")
-                max_date = db.scalar(
-                    select(func.max(normalized_col)).where(getattr(tbl, column).is_not(None))
-                )
+            value_col = getattr(tbl, column) if column and hasattr(tbl, column) else None
+            presence_query = select(1).select_from(tbl)
+            if value_col is not None:
+                presence_query = presence_query.where(value_col.is_not(None))
+            has_data = db.scalar(presence_query.limit(1)) is not None
+
+            if value_col is not None:
+                # 字段型数据域只需要知道是否有值；精确 COUNT 会全表扫描且不参与健康判定。
+                total = None
             else:
-                total = int(db.scalar(select(func.count()).select_from(tbl)) or 0)
-                if hasattr(tbl, dc):
-                    normalized_col = func.replace(getattr(tbl, dc), "-", "")
-                    max_date = db.scalar(select(func.max(normalized_col)).where(getattr(tbl, dc).is_not(None)))
+                total, total_estimated = _table_row_count(
+                    db,
+                    tbl,
+                    prefer_estimate=bool(ddef.get("estimated_row_count")),
+                )
+
+            if hasattr(tbl, dc):
+                date_col = getattr(tbl, dc)
+                latest_query = select(date_col).where(date_col.is_not(None))
+                if value_col is not None:
+                    latest_query = latest_query.where(value_col.is_not(None))
+                max_date = db.scalar(latest_query.order_by(date_col.desc()).limit(1))
         except Exception as exc:
             _rollback_session_safely(db)
             logger.warning("数据域 %s 统计失败: %s", key, exc)
             domains.append({
                 "key": key, "label": label, "category": category, "status": "error",
-                "total_rows": 0, "max_date": None, "critical": critical,
+                "total_rows": 0, "total_rows_estimated": False, "max_date": None, "critical": critical,
                 "fresh_window_days": fresh, "gap_days": None, "note": str(exc),
             })
             continue
@@ -711,7 +719,7 @@ def _data_domain_coverage(db: Session, reference_trade_date: str | None) -> dict
         source_lag_prone = bool(ddef.get("source_lag_prone"))
         gap_days: int | None = None
         note: str | None = None
-        if total == 0:
+        if not has_data:
             status = "empty"
             empty += 1
             penalty += 2
@@ -743,10 +751,11 @@ def _data_domain_coverage(db: Session, reference_trade_date: str | None) -> dict
             "category": category,
             "status": status,
             "total_rows": total,
+            "total_rows_estimated": total_estimated,
             "max_date": max_date,
             "critical": critical,
             "fresh_window_days": fresh,
-            "gap_days": gap_days if (fresh is not None and total > 0) else None,
+            "gap_days": gap_days if (fresh is not None and has_data) else None,
             "note": note,
         })
 
@@ -933,11 +942,6 @@ def _date_diff(d1: str, d2: str) -> int:
         return 999
 
 
-def _compact_date(value: Any) -> str:
-    normalized = _fmt_date(value) or ""
-    return normalized.replace("-", "")
-
-
 def _date_variants(value: Any) -> list[str]:
     normalized = _fmt_date(value)
     if not normalized:
@@ -978,24 +982,21 @@ def _estimated_table_rows(db: Session, table_name: str) -> int | None:
 
 
 def _date_bounds(db: Session, col: Any) -> tuple[str | None, str | None]:
-    normalized_col = func.replace(col, "-", "")
     min_date, max_date = db.execute(
-        select(func.min(normalized_col), func.max(normalized_col)).where(col.is_not(None))
+        select(func.min(col), func.max(col)).where(col.is_not(None))
     ).one()
     return _fmt_date(min_date), _fmt_date(max_date)
 
 
 def _recent_daily_trade_days(db: Session, reference_trade_date: str, window: int) -> list[str]:
-    reference_compact = _compact_date(reference_trade_date)
-    normalized_col = func.replace(DailyKbar.trade_date, "-", "")
+    reference = _fmt_date(reference_trade_date)
     rows = db.scalars(
-        select(func.distinct(normalized_col))
-        .where(DailyKbar.trade_date.is_not(None), normalized_col <= reference_compact)
-        .order_by(normalized_col.desc())
+        select(func.distinct(DailyKbar.trade_date))
+        .where(DailyKbar.trade_date.is_not(None), DailyKbar.trade_date <= reference)
+        .order_by(DailyKbar.trade_date.desc())
         .limit(max(1, window))
     ).all()
     normalized = [_fmt_date(item) for item in rows if _fmt_date(item)]
-    reference = _fmt_date(reference_trade_date)
     if reference and reference not in normalized:
         normalized = [reference, *normalized]
     return list(reversed(normalized[:window]))

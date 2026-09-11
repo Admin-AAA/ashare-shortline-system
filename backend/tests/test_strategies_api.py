@@ -54,7 +54,10 @@ def test_strategies_endpoint_called_has_metrics():
         assert p["source"] == "canonical_backtest"
         assert p["strategy_version"] == d["current_strategy_version"]
         assert isinstance(p["sample_count"], int) and p["sample_count"] >= 0
-        assert p["hit_rate"] is not None
+        if p["sample_count"]:
+            assert p["hit_rate"] is not None
+        else:
+            assert p["hit_rate"] is None
     for d in data:
         if d["performance"] is None and d["enabled"]:
             assert d["performance_status"] in {"pending_backtest", "unavailable"}
@@ -68,7 +71,7 @@ def test_strategies_endpoint_invalid_mode():
 
 
 def test_strategies_endpoint_backtest_identity_fields_are_traceable():
-    """画像必须暴露策略版本、窗口、证据 ID 和按月收益。"""
+    """画像必须暴露策略版本、Top10 口径、窗口、证据 ID 和按月信号表现。"""
     client = TestClient(app)
     data = client.get("/api/strategies").json()
     called = [d for d in data if d["performance"] is not None]
@@ -82,9 +85,18 @@ def test_strategies_endpoint_backtest_identity_fields_are_traceable():
             "date_from",
             "date_to",
             "generated_at",
-            "monthly_returns",
+            "selection_policy",
+            "daily_selection_limit",
+            "raw_signal_count",
+            "selected_signal_count",
+            "monthly_metrics",
         ):
             assert key in p, f"{d['skill_id']} 缺 {key}"
+        assert p["selection_policy"] == "daily_score_top_n"
+        assert p["daily_selection_limit"] == 10
+        assert p["selected_signal_count"] <= p["raw_signal_count"]
+        assert "total_return_pct" not in p
+        assert "max_drawdown_pct" not in p
         assert set(p.get("window_metrics", {})) >= {"30", "180"}
         for window_days in ("30", "180"):
             window = p["window_metrics"][window_days]
