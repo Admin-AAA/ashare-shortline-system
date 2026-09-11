@@ -183,9 +183,10 @@ def test_regime_hard_veto_is_persisted_as_policy_drop_owner() -> None:
 
 
 def test_regime_sentiment_line_overrides_precision() -> None:
-    """L-060 精细方案回归：强牛·高潮/强牛·活跃/震荡·活跃 放行72，其余组合保持抬线。
+    """组合线精细放行，其余组合继续保持抬线（v2：非强牛高潮组合硬排除）。
 
-    防止 regime_sentiment_line_overrides 被误改导致负期望组合(偏多·高潮)被放行。
+    防止 regime_sentiment_line_overrides 被误改导致负期望组合(偏多/震荡/弱势·高潮)被放行。
+    依据双窗口因果重放（L-070）：唯有强牛·高潮两窗口为正，其余高潮组合两窗口皆负。
     """
     from app.engine.aggregator import resolve_score_line_context
 
@@ -196,14 +197,80 @@ def test_regime_sentiment_line_overrides_precision() -> None:
         }
 
     policy = DEFAULT_PRODUCTION_SELECTION_POLICY
-    # 强牛·高潮: up 76% + 涨停95 → 原91, override→72
+    assert policy.version == 2
+    # 强牛·高潮: up 76% + 涨停95 → override 64（唯一保留的高潮放行）
     c = resolve_score_line_context(72.0, market_snapshot=_snap(3800, 95, 3), selection_policy=policy)
     assert (c["market_base"], c["market_sentiment"]) == ("强牛", "高潮")
-    assert c["effective_score_line"] == 72.0 and c["regime_sentiment_override_applied"] is True
-    # 偏多·高潮: up 52% + 涨停95 → 不在放行表, 保持抬线85
+    assert c["effective_score_line"] == 64.0 and c["regime_sentiment_override_applied"] is True
+    # 偏多·高潮: v2 硬排除到 120（最高分 100 不可达），override 生效
     c2 = resolve_score_line_context(72.0, market_snapshot=_snap(2600, 95, 3), selection_policy=policy)
     assert (c2["market_base"], c2["market_sentiment"]) == ("偏多", "高潮")
-    assert c2["effective_score_line"] == 85.0 and c2["regime_sentiment_override_applied"] is False
-    # 弱势·高潮: 仍受 weak_regime_score_cap=60 约束(组合override未覆盖, 不打扰弱势)
+    assert c2["effective_score_line"] == 120.0 and c2["regime_sentiment_override_applied"] is True
+    # 弱势·高潮: v2 同样硬排除到 120（不再受 weak_regime_score_cap=60 放行）
     c3 = resolve_score_line_context(72.0, market_snapshot=_snap(1500, 95, 3), selection_policy=policy)
-    assert c3["market_base"] == "弱势" and c3["effective_score_line"] == 60.0
+    assert c3["market_base"] == "弱势" and c3["effective_score_line"] == 120.0
+    # 震荡·高潮: v2 硬排除到 120（up 40% + 涨停95）
+    c4 = resolve_score_line_context(72.0, market_snapshot=_snap(2000, 95, 3), selection_policy=policy)
+    assert (c4["market_base"], c4["market_sentiment"]) == ("震荡", "高潮")
+    assert c4["effective_score_line"] == 120.0
+
+
+def test_v1_policy_artifact_remains_reproducible() -> None:
+    """v1 artifact 不可变：显式加载仍得到历史阈值，保证旧回测可复现。"""
+    from app.engine.production_policy import load_production_selection_policy
+    from app.engine.aggregator import resolve_score_line_context
+
+    def _snap(up: int, lu: int, ld: int) -> dict:
+        return {"sample_count": 5000, "up_count": up, "down_count": 5000 - up,
+                "limit_up_count": lu, "limit_down_count": ld}
+
+    v1 = load_production_selection_policy(version=1)
+    assert v1.version == 1
+    # v1：偏多·高潮抬线 85（非硬排除）、弱势·高潮被 weak cap 压到 60
+    duo_climax = resolve_score_line_context(72.0, _snap(2600, 95, 3), selection_policy=v1)
+    assert duo_climax["effective_score_line"] == 85.0
+    weak_climax = resolve_score_line_context(72.0, _snap(1500, 95, 3), selection_policy=v1)
+    assert weak_climax["effective_score_line"] == 60.0
+
+
+def test_normal_active_market_overrides_restore_output_without_relaxing_weak_market() -> None:
+    """正常市场放行规则票；弱势规则保持原样，不靠减少出票改善回测。"""
+    from app.engine.aggregator import resolve_score_line_context
+
+    def _snap(up: int, lu: int, ld: int) -> dict:
+        return {
+            "sample_count": 5000,
+            "up_count": up,
+            "down_count": 5000 - up,
+            "limit_up_count": lu,
+            "limit_down_count": ld,
+        }
+
+    policy = DEFAULT_PRODUCTION_SELECTION_POLICY
+    strong_active = resolve_score_line_context(
+        72.0,
+        market_snapshot=_snap(3800, 50, 3),
+        selection_policy=policy,
+    )
+    strong_climax = resolve_score_line_context(
+        72.0,
+        market_snapshot=_snap(3800, 95, 3),
+        selection_policy=policy,
+    )
+    bullish_active = resolve_score_line_context(
+        72.0,
+        market_snapshot=_snap(2600, 50, 3),
+        selection_policy=policy,
+    )
+    weak_active = resolve_score_line_context(
+        72.0,
+        market_snapshot=_snap(1500, 50, 3),
+        selection_policy=policy,
+    )
+
+    # v2 相对 v1 的唯一变化是硬排除偏多/震荡/弱势·高潮；活跃档沿用 L-060 精细放行：
+    # 强牛·活跃 64、强牛·高潮 64、偏多·活跃 71.4；弱势·活跃仍受 weak cap=60 放行。
+    assert strong_active["effective_score_line"] == 64.0
+    assert strong_climax["effective_score_line"] == 64.0
+    assert bullish_active["effective_score_line"] == 71.4
+    assert weak_active["effective_score_line"] == 60.0
