@@ -806,3 +806,14 @@
 - 永久规则：**(a) 板块/行业横截面（动量/广度/涨停拥挤/板块内相对强弱/行业分散已在 L-073）在 v2 选中池无三窗稳定信息，"行业涨停拥挤=高潮崩塌"是 2026 退潮市专属、2025 强势市反向，禁止不做三窗就把近窗规律当 alpha 落地；这与 L-065"板块联动补涨已证伪"、L-080"指数趋势门控三窗翻号"共同关闭板块/择时门控族。(b) daily_kbars 现有列（含筹码分布 chip_winner_rate、holder_pct、上影计数）已逐一筛过，无漏网日线横截面因子；profit_efficiency/atr 是未计算空列，要用先补数据且仍须过三窗。(c) 北向个股级数据当前覆盖不足以研究，hsgt 总量不做选股信号。**
 - 复现：`scripts/research_sector_factor_screen.py`（板块八因子三窗全市场快筛，缓存 sector_factor_panel.pkl，日志 sector_factor_screen.log）、`scripts/research_sector_veto_canonical.py`（拥挤/弱势三窗 canonical，日志 sector_veto_canonical.log）、`scripts/research_daily_residual_screen.py`（残余日线列快筛）。
 - 相关：L-065（日线横截面/板块联动系统性挖尽）、L-061（价格技术因子）、L-080（外部指数趋势门控三窗翻号）、L-072/L-073（regime 门控/行业分散上限/出票结构）、L-058（多窗口防过拟合）、L-064/L-078（全市场→选中池选择效应）、L-071（canonical 口径）。
+
+## L-082 全库三窗覆盖普查：冻结窗可用数据源已穷尽；唯一漏测的 stk_limits（板型/距涨停）三窗翻号证伪；v2 维持不改
+
+- 状态：active（否定性 FINDING + 数据源穷尽地图，防止后续换名重挖无冻结覆盖的表）；生产维持 v2，不出 v3。
+- 动机：L-058~L-081 逐轴证伪后，系统回答"是否还有冻结窗有足量数据、却没筛过的数据源"。对全部 87 张表按日期列统计三窗行数（脚本 `research_coverage_sweep.py`，日志 coverage_sweep.log）。
+- 冻结窗（2025-01-15~2026-01-16）行数>1000、可做三窗 canonical 的表及其归宿：daily_kbars（L-061/063/065/081）、daily_basic（L-075）、stk_limits（本条）、limit_up_board（L-075）、dragon_tiger / margin_detail / auction_data（L-078）、minute_kbars（L-074/079）、index_daily（L-080）、stocks.industry 板块（L-081）。**至此全部筛完。**
+- 唯一漏测的 stk_limits：仅 up_limit/down_limit 两列，衍生①板型宽度 bw=(up-down)/(up+down) 归并 ST5/main10/gemstar20(20cm)/bse30，②收盘距涨停 dist_up=(up_limit/close-1)。三窗全市场：20cm-vs-10cm 均 fwd5 差 冻结 +0.31、前瞻 +0.17、**run3 -0.57 翻号**；dist_up 五分位 Qhi-Qlo 冻结 +0.449（同号.69）、前瞻 -0.200（.43）、run3 -0.018（.50），且 dist_up 本质是 pct_chg 的单调变换（L-061 已证伪价格动量）。板型 beta 全市场存在但跨窗翻号、选中池已被 quality_cap/score 过滤，不落地。
+- 覆盖即死、不回填的表（冻结 0 或单窗/过稀，无法满足三窗 canonical）：capital_flow/concept_sector(_stock)/news_announcement/llm_review_cache/stock_quotes/recommendation(s) 冻结 0（news_announcement 仅 2026-03-10 起、negative 标签全库仅 1114 条≈3.4%）；hk_holdings/hsgt_top10/hsgt_flows 北向（L-081）；institutional_surveys（冻结1120/前瞻342/run3 0，日均≈4 条）、broker_recommends（月度稀疏）、pledge_stats/repurchases/share_floats/stock_fina_indicator/holder_numbers/holder_trades/block_trades 单窗或 run3 0。
+- 永久规则：**(a) 选股因子研究只允许在"冻结窗有足量覆盖"的表上做三窗 canonical；冻结 0 / 单窗 / 日均个位数的表先解决覆盖再谈因子，禁止用近两窗规律绕过冻结窗落地（L-058）。(b) 板型（10/20/30cm）与"距涨停距离"无三窗稳定 alpha，后者是 pct_chg 变换，不再重测。(c) 新增数据源要先过 `research_coverage_sweep.py` 的覆盖门：三窗都得有足量选中池交集，否则直接记覆盖即死。**
+- 复现：`scripts/research_coverage_sweep.py`（全表三窗覆盖普查 + stk_limits 板型/dist_up 快筛，缓存日志 output/research/coverage_sweep.log）。
+- 相关：L-081（板块/残余日线/北向）、L-065（日线横截面挖尽）、L-075（daily_basic/limit_up_board）、L-078（事件三表）、L-061（pct_chg 价格动量）、L-058（多窗口）、L-071（canonical 口径）。
