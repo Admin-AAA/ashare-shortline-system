@@ -1,7 +1,7 @@
 id: limit-up-reseal-relay
 name: 涨停回封接力
 enabled: true
-weight: 0.45
+weight: 0.60
 
 meta:
   author: system
@@ -68,6 +68,15 @@ prefilter:
         reason: "late_emotion_overheat"
 
 phases:
+  # 短线龙头低分降权（2026-09-12 LIVE 去重241验证）：shortline_leader_score<=35 底三分位逐月全差
+  # （5月40/6月0/7月36/8月25/9月21%），对照>52逐月50-69%。非龙头缺接力，软cap62温和降权。
+  # 置于phases最前，not(...) 让位所有 hard_veto（永不架空否决）。
+  - name: 短线龙头低分降权
+    when: "(shortline_leader_score > 0 and shortline_leader_score <= 35) and not (market_sentiment_phase == '冰点' or limit_up_overheat_score >= 82) and not (off_high_pct >= -30 and off_high_pct < -15) and not (market_regime == '弱势') and not (chg20 < 0)"
+    score_cap: 62
+    hard_veto: false
+    risk_flags: ["短线龙头分<=35（非龙头缺接力，低桶逐月全差），温和降权"]
+
   - name: 情绪退潮回避
     when: "market_sentiment_phase == '冰点' or limit_up_overheat_score >= 82"
     score_cap: 35
@@ -134,7 +143,6 @@ phases:
     when: "limit_up_consecutive_days <= 1 and limit_up_fd_amount_yi >= 0.5 and sector_ladder_completeness_score >= 50"
     score_cap: 98
     hard_veto: false
-
 setups:
   - name: 分歧回封接力
     # 排除 fd>=1.0：炸板后超大封单(>=1亿)是情绪陷阱，WR=0%（n=6，全部失败 avg -4.82%）。

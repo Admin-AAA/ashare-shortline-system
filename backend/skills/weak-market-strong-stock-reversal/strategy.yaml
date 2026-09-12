@@ -58,6 +58,15 @@ prefilter:
         reason: "volume_down_not_reversal"
 
 phases:
+  # 短线龙头低分降权（2026-09-12 LIVE 去重241验证）：shortline_leader_score<=35 底三分位逐月全差
+  # （5月40/6月0/7月36/8月25/9月21%），对照>52逐月50-69%。非龙头缺接力，软cap62温和降权。
+  # 置于phases最前，not(...) 让位所有 hard_veto（永不架空否决）。
+  - name: 短线龙头低分降权
+    when: "(shortline_leader_score > 0 and shortline_leader_score <= 35) and not (limit_down_count > 100) and not (market_regime != '弱势')"
+    score_cap: 62
+    hard_veto: false
+    risk_flags: ["短线龙头分<=35（非龙头缺接力，低桶逐月全差），温和降权"]
+
   - name: 系统性恐慌禁入
     when: "limit_down_count > 100"
     score_cap: 0
@@ -74,7 +83,6 @@ phases:
     when: "chg20 >= 15 and pos60 >= 50 and pct >= 0 and pct < 3 and vol5_20 <= 1.1 and (support_ma5 == true or support_ma10 == true)"
     score_cap: 90
     hard_veto: false
-
 setups:
   - name: 强势股缩量止跌确认
     when: "chg20 >= 15 and pos60 >= 50 and pct >= 0 and pct < 3 and vol5_20 <= 1.1 and (support_ma5 == true or support_ma10 == true)"

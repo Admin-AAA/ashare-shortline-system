@@ -78,6 +78,15 @@ prefilter:
         reason: "turnover_too_high"
 
 phases:
+  # 短线龙头低分降权（2026-09-12 LIVE 去重241验证）：shortline_leader_score<=35 底三分位逐月全差
+  # （5月40/6月0/7月36/8月25/9月21%），对照>52逐月50-69%。非龙头缺接力，软cap62温和降权。
+  # 置于phases最前，not(...) 让位所有 hard_veto（永不架空否决）。
+  - name: 短线龙头低分降权
+    when: "(shortline_leader_score > 0 and shortline_leader_score <= 35) and not (market_regime == '弱势') and not (market_regime == '震荡')"
+    score_cap: 62
+    hard_veto: false
+    risk_flags: ["短线龙头分<=35（非龙头缺接力，低桶逐月全差），温和降权"]
+
   # 弱市隔夜毒区硬否决：overnight 入场区间 pct∈[3,5] 恰是弱市半吊子追高毒区
   # LIVE 验证（2026-07 第144轮 D项恶化失败归因闭环，全策略 LIVE formal）：
   #   弱势 & pct∈[3,5]: n=64 WR=23.4% avg=-1.52% PL=0.10（3 个月稳定毒区）
@@ -113,7 +122,6 @@ phases:
     when: "pct >= 3 and pct <= 5"
     score_cap: 100
     hard_veto: false
-
 setups:
   - name: 隔夜尾盘确认
     when: "pct >= 3 and pct <= 5 and turnover_rate >= 5 and turnover_rate <= 10 and capital_resonance_score >= 45"
