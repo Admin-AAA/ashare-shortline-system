@@ -764,3 +764,17 @@
 - 数据管道已知 bug（属 data-pipeline 域，本轮未改生产代码，仅记录）：state_adapters.py limit_up `last_time` 直接 str() 超 tables.py String(8) 会整日回滚；stk_auction adapter 未按(code,trade_date)去重，官方多行触发 duplicate natural key 整日失败（backfill_auction_direct.py 在脚本侧绕过）。
 - 复现：`scripts/backfill_aux_dataset.py`、`scripts/backfill_auction_direct.py`（回填）；`scripts/research_newfactor2_aux.py`（三表全市场双窗口五分位，面板缓存 output/research/newfactor2_aux_panel.pkl，权威日志 newfactor2_aux_now.log）；`scripts/research_aux_veto_canonical.py`（龙虎榜一刀切/bs<1/bs<0.7 + rzmre top5/10% 生产同构终审，日志 aux_veto_canonical_final.log）；`scripts/research_auction_canonical.py`（竞价换手/跳空选中池尾部否决，日志 auction_canonical_now.log）。
 - 相关：L-064（资金流全市场反向、选择效应）、L-075（规模/换手/PE/封板证伪、辅助数据覆盖矩阵）、L-074（开盘跳空/分时在选中池证伪、pm_ret 影子候选）、L-061/L-065/L-073（日线横截面 alpha 挖尽、选中池历史标签无区分度）、L-071（研究口径必须与生产同构）、L-058（多窗口/覆盖防过拟合）。
+
+## L-079 解锁 L-077 分钟缺口后，pm_ret 尾盘追高否决经【第三真前瞻窗】翻号证伪，正式退役 L-074 影子候选；v2 维持不改
+
+- 状态：active（否定性 FINDING，关闭一个挂起的 live_forward 影子候选）；生产维持 v2，不出 v3。
+- 适用：任何想用"信号日午后涨幅 pm_ret（15:00 收/13:15 开-1）在特定 regime·情绪格内过高→尾盘追高→否决"做硬否决/择时的尝试，以及评估 L-074 遗留影子候选是否落地。
+- 数据解锁（完成 L-077 指定的前置任务）：baostock 源对 2026-08-07~09-02 有完整 5min（8 股可行性测试 0 失败）；写 `backfill_5min_codes.py` 只对第三窗 run3(btr_2bec6fed) 全候选 774 只按股幂等回填，共存 704160 行、跳过 1、0 失败、56 分钟。回填后第三窗 1375 个候选对、95 个 v2 选中对的 5min 覆盖率均 100%（每对≥45 根），结论无覆盖伪影。
+- 三窗口 canonical（生产同构 evaluate_selection_policy 两臂：全卡 vs 排序前硬否决 cell∈{弱势·活跃,强牛·高潮} 且 pm_ret>T，第 11 名递补；冻结因果出场、前瞻/run3 join canonical 净）：
+  - 冻结 244d（旧）：T1.25 逐笔 +0.206→+0.269、cohort 日均 +0.061→+0.137、配对 CI[**+0.008**,+0.522]（下界刚过 0），被砍 67 张均 **-1.04（毒）**。
+  - 前瞻 117d（旧）：T1.25 -0.352→-0.249、cohort -0.267→-0.122、CI[**-0.004**,+0.743]（下界刚破 0），被砍 56 张均 **-1.46（毒）**。
+  - **第三窗 19d（本轮新，真前瞻）：T1.25 逐笔 -0.558→-0.961（更差）、win.442→.410、PF.764→.617、cohort 日均 -0.673→-0.986，配对 6 变化日 Δ均-0.628、CI[-2.04,+0.72]跨0、better-day.33、月正 0-2；被砍 10 张均 +3.15、win.70（弱势·活跃 +8.01/n4、强牛·高潮 -0.08/n6）——砍的是赢家。**T1.5/T1.75 同向有害（Δ-0.817/-0.536，被砍均 +3.15/+2.79）。
+- 判读：被砍卡条件均值从冻结/前瞻的 -1.0/-1.46（毒）在最新真前瞻窗翻成 +3.15（赢家），符号反转且跨阈值一致；尤其"弱势·活跃"格内午后拉升的票在 08-09 窗次日强势反弹（+8%），否决正好砍掉最大赢家。冻结/前瞻那点临界 CI 本就贴着 0，是特定 regime 的样本噪声，第三窗证伪。这与 L-058（多窗口防过拟合）、L-076（毒格/状态跨窗翻号）同一性质。
+- 永久规则：**pm_ret 尾盘追高否决（含"午后涨幅过大=追高=次日回落"及其在弱势·活跃/强牛·高潮格内的任何变体）三窗口证伪、正式退役，不再作为 live_forward 影子候选，禁止换名（"尾盘拉升/午后冲高/日内追涨惩罚"）重挖；高 pm_ret 的次日方向是 regime 条件量、无稳定符号。** 至此 L-074 的分时线索全部关闭（其余分时特征 L-074 已证伪，pm_ret 本条证伪）。
+- 复现：`scripts/backfill_5min_codes.py --pairs-pkl output/research/run3_canonical.pkl --start 2026-08-07 --end 2026-09-02`（回填，日志 backfill_5min_run3.log）；`scripts/research_pmret_run3_canonical.py`（第三窗终审，日志 pmret_run3_canonical.log）；旧两窗对照 output/research/intraday_chase_canonical.json；第三窗候选/净收益来自 scripts/research_third_window.py 的 load_run3（run btr_2bec6fed）。
+- 相关：L-074（pm_ret 影子候选出处、其余分时证伪）、L-077（定位本窗分钟缺口）、L-076（第三窗与毒格翻号）、L-058（多窗口防过拟合）、L-071（生产同构）、L-069（涨停微观情绪择时证伪）。
