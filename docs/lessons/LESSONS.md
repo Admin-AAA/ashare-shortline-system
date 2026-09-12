@@ -817,3 +817,13 @@
 - 永久规则：**(a) 选股因子研究只允许在"冻结窗有足量覆盖"的表上做三窗 canonical；冻结 0 / 单窗 / 日均个位数的表先解决覆盖再谈因子，禁止用近两窗规律绕过冻结窗落地（L-058）。(b) 板型（10/20/30cm）与"距涨停距离"无三窗稳定 alpha，后者是 pct_chg 变换，不再重测。(c) 新增数据源要先过 `research_coverage_sweep.py` 的覆盖门：三窗都得有足量选中池交集，否则直接记覆盖即死。**
 - 复现：`scripts/research_coverage_sweep.py`（全表三窗覆盖普查 + stk_limits 板型/dist_up 快筛，缓存日志 output/research/coverage_sweep.log）。
 - 相关：L-081（板块/残余日线/北向）、L-065（日线横截面挖尽）、L-075（daily_basic/limit_up_board）、L-078（事件三表）、L-061（pct_chg 价格动量）、L-058（多窗口）、L-071（canonical 口径）。
+
+## L-083 信号"自身质量/置信度"轴（数据完整度/真实性/缺失字段数、confidence/setup_quality/独立性/risk_flags）证伪；并记录候选快照持久化 schema 不对称；v2 维持不改
+
+- 状态：active（否定性 FINDING，关闭 meta-quality / per-signal confidence 方向）；生产维持 v2，不出 v3。
+- 动机：L-082 穷尽外部数据源后，转向"信号自身可靠性"这一不依赖新行情数据的框架轴——直觉上数据越全、置信度越高、风险标记越少的信号应越可靠。两类字段分别存在于两套快照（持久化 schema 不对称）：A 冻结聚合卡上的 data_completeness_score/data_authenticity/evidence_quality_score/data_quality.missing_fields；B 前瞻/run3 backtest_candidates.signal_json 单策略信号上的 confidence/setup_quality/strategy_independence/risk_flags。
+- A 冻结选中池（n=1010，因果净）：data_completeness/evidence_quality 都只有二元、Spearman ±0.04；data_authenticity **常量无区分**；missing_fields 数 nmiss 仅取 {5,6,7}，nmiss=5 +0.388 / nmiss=6 +0.200 / nmiss=7（120 张，12%）-0.219，弱单调但 rho 仅 -0.042。**nmiss 本质是"信号生成当时哪些数据管道已上线"的覆盖伪影**：L-078 已向冻结窗回填 dragon_tiger/margin、L-079 回填 5min，历史"缺失"状态已被当前库污染、不可还原；且 signal_json 根本没持久化这些字段，前瞻/run3 无法对齐，三窗不可复现，判死。
+- B 两个 2026 窗（signal_json，选中=run 内全候选 score≥70）：confidence Spearman +0.007/+0.011、risk_flags 数 +0.009/+0.007≈0 且非单调；strategy_independence **常量**；setup_quality 仅二元、rho +0.027/+0.032（高档 +0.22/+0.26 vs 低档 -0.28/-0.34），方向两窗一致但极弱，且 setup_quality 本就是 final_score 的上游输入（再用=重复计数），冻结快照又未持久化、无法三窗。整体无独立信息，即使补冻结持久化也救不活。
+- 永久规则：**(a) 信号 meta-quality（数据完整度/真实性/缺失字段数/置信度/独立性/risk_flags 数）在选中池无 |Spearman|≥0.05 的稳定区分度，不作为选股否决/加分；"缺数据=信号差"是管道上线进度的覆盖伪影，禁止用当前库反推历史缺失态。(b) 候选/信号快照持久化 schema 不对称（冻结聚合卡 vs 前瞻 signal_json 字段不同），任何想跨三窗用的卡级字段，必须先确认三套快照都持久化了它，否则在研究脚本里就判覆盖即死，不要做到一半发现对齐不了。(c) 已经喂给 final_score 的上游子分（如 setup_quality/evidence）再做否决属重复计数，除非能证明其残差方向三窗稳定。**
+- 复现：`scripts/research_signal_quality_screen.py`（A 冻结因果 + B 两窗 signal_json，自包含）。
+- 相关：L-073⑪（evidence_quality_score 冻结五分位已证伪，本条补全同族字段并扩到两窗）、L-082（覆盖门/快照源）、L-078/L-079（回填污染历史缺失态的具体来源）、L-065（选中池横截面无信息）、L-071（canonical 口径）。
