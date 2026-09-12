@@ -840,3 +840,45 @@
 - 永久规则：**(a) 信号日隔夜跳空/开盘强弱（open/前收、距涨停开盘、集合竞价跳空同族）不得作为选股硬否决或加分落地：它在选中池的表观优势=格间 regime 构成(Simpson)+手写留空偏差，真实递补下第三窗翻号。(b) 任何特征即使过了"三窗 IC 同号+三分位单调+控制已知动量后仍成立+天然阈值"这一整串廉价初筛，仍必须过生产同构【含候选递补】canonical 的三窗配对 CI 下界>0；手写 leave-empty cohort 只能用于预筛、永远不能作为落地依据（再次固化 L-071）。(c) 评分内部（组件聚合权重/逐策略标签/单卡共识数）在当前持久化快照 schema 下不可三窗复现，禁止凭单窗或两窗改这些旋钮；要改须先改造快照持久化全分量并证明三窗可对齐。**
 - 复现：`scripts/research_selected_daily_feat_screen.py`（残余日线特征三窗 IC/单调扫描）、`research_signal_consensus.py`（共识数，证明 run 端折叠）、`research_gap_robust.py`（gap 条件独立/格内/聚集）、`research_gap_levers.py`（手写留空杠杆，展示虚高）、`research_gap_canonical.py`（真实递补 canonical 终审，结果 output/research/gap_canonical.json）。
 - 相关：L-071（canonical/递补口径，本条是其最直接例证）、L-058（多窗口防过拟合）、L-080（外部门控第三窗翻号，同型）、L-083（快照 schema 不对称，本条补全评分内部三杠杆不可复现）、L-081（残余日线列已扫，gap 为其漏网且终审证伪）、L-061/065（选中池横截面无 edge）、L-073（出票结构/日内排名 inert）。
+
+## L-089 LIVE 聚合路径上的三层"末端反转/非龙头"毒区：强势多头发散、长周期 RSI 低位、短线龙头低分，软 cap 重排序把 top30 WR +8.3pp（生产yaml权重）且零整票剔除
+
+- 状态：active（LIVE 已结算路径的正向 FINDING，已落地生产 12 个 strategy.yaml）；与 L-058~L-084 的"冻结三窗证伪"轨道互补——本条用的是 LIVE 真实已结算推荐（去重 241、已结算 205），仲裁的是生产聚合排序而非全市场因子。
+- 三层毒区（已结算 205，全样本 WR45.9/avg-0.72）：①`dsa_trend_score==30`（=trend_status 强势多头/均线完全发散）n15 WR20.0/avg-3.21，逐月 25/0/16.7/33 全差，形态最强实为延伸末端反转，cap58；②`rsi_24∈(0,48)`（中期趋势偏弱、反弹缺支撑）n29 WR34.5/avg-1.97，对照 rsi24>=56 n108 WR53.7/+0.19，cap58；③`shortline_leader_score∈(0,35]`（非板块真龙头缺接力）在前两层残差上仍单调、对照 >52 n75 WR53.3/+0.20，温和 cap62。三层均 soft（hard_veto:false），只把毒区票排到真龙头之后。
+- 金标准（对每笔 rec×背书策略真实 run_strategy 取新鲜分、**逐策略权重直接取 run_strategy 返回的 yaml weight**——生产 `aggregator._compute_strategy_rule_score` 用 signal['weight']，不是任何离线硬编码字典）反事实（当前 yaml 权重）：top 半区 46.7→48.3、top40 47.9→52.1、**top30 48.6→56.9（+8.3pp）**，hard_veto 整票剔除 0。三套权重（HEAD/旧PROD/当前yaml）下每个口径都为正、top30 治疗后收敛到同一 56.9，证明增益不依赖权重调参。收益集中在 top40/top30（生产每日只取最前几只）。
+- 权重口径坑：离线若用过时硬编码权重会得到偏乐观数字（旧字典口径 49.2/55.2/58.3）；stored brk 里的 weight 是推荐当时的冻结值，又与当前 yaml 不同。**离线评估一律用当前 run_strategy 返回的权重。**
+- 停在三层防过拟合：剥净后残差基线已升到 49.6/+0.21；第四层候选（price_volume_fallback 月度反转、放量上涨/high_volume_days 不在白名单且桶小、中单流入非单调、breakout60/上影/broker_rec 小桶疑已被捕获）全部否决。
+- 永久规则：**(a) LIVE 排序优化优先用 soft score_cap 重排序而非 hard_veto 整票杀——主线充足时毒区自然落选、主线不足时仍可补位，下行可控。(b) 一个毒区要同时满足"逐月无强势月 + 跨 regime 同向 + 与已落地因子正交"，且必须在剥掉前序毒区的残差上仍成立才算增量。(c) 阈值/成员集用反事实金标准选（≤35 vs ≤40、full7 vs 去 small-cap、cap58/60/62），不看单桶边际 WR 就拍板。**
+- 复现：离线 `/tmp/live_dedup_data.json`（241 笔）、`/tmp/live_gold_wcmp.py`（base/treat 金标准，yaml 权重）、`/tmp/live_gold_w3.py`（三套权重稳健性）、`/tmp/live_gold4.py`（四向 guard 对比）、`/tmp/live_lomo.py`（逐月留一月稳健性：top30/top40 无任何月份变差）、`/tmp/rebuild_poison_front.py`（幂等重建）；报告 `docs/LIVE路径仲裁-三层毒区相位排序纠错-2026-09-12.md`。
+- 相关：L-090（让本条真正生效的 phase 排序/白名单/缺字段机制）、L-091（金标准 vs 冻结分、小样本 veto 翻案）、L-071（canonical 口径）、L-073（出票结构/重排序杠杆）。
+
+## L-090 策略 phases 是"首个 when 命中即 break"：新增软规则必须置 phases 最前、用 not(hard_veto) 让位、对缺字段加 >0 守卫；evaluator 白名单外字段静默 False
+
+- 状态：active（引擎机制 FINDING，解释了为何"写了规则却不生效"，已据此修正 L-089 落地方式）。
+- 首命中 break 陷阱：`strategy_runner` 对 phases 从上到下找第一个 when 为真者、命中即 break、只应用一个 phase。把新软 cap 按惯例插在 setups 前（phases 末尾）会被更早的宽松软 cap（弱市降权 cap68、趋势跟踪 cap100）抢占——L-089 三层最初因此大量不生效（强势 16 中 7、RSI 41 中 15、leader 34 中 24 被抢占），"对每策略取 min(各 cap)"的离线算法会高估（预测 52.5 实际 50.0）。**新增 phase 若要优先，必须显式放到 phases 最前。**
+- hard_veto 让位：前置软 cap 会反过来抢到既有 hard_veto 前面、架空核心风控（raw 纯条件金标略优但非法覆盖 532 处 veto，多为 high-range 弱市追高否决）。规则：**新软 phase 的 when 必须 `and not(<每个既有 hard_veto 的 when>)`，保证永不覆盖绝对否决；普通软 cap 之间交错顺序差异仅几分、可不让位。** 改共享引擎做"两遍扫描 veto 优先"会改动 125 处现有行为，否决，只在 yaml 内局部 guard。
+- evaluator 两个静默陷阱：①`ALLOWED_NAMES` 白名单外的名字（如字符串字段 trend_status/ma_alignment/volume_status）raise 后被 `evaluate()` 静默吞成 False，规则永远不命中且不报错——必须改用白名单内数值字段（dsa_trend_score==30 严格替代 trend_status=='强势多头'，先验证枚举一一对应、零 null）。②缺失字段被 `_coerce(None)=0.0`，"X<=阈值/ X<阈值"类条件会把缺数据误判成最低值而误触发；生产稳健写法是 `X > 0 and X < 阈值`（真实 LIVE 三字段零缺失，但两个回归测试 fixture 不设字段即暴露此问题）。等值条件 `X==30` 对缺失天然安全。
+- 永久规则：**(a) 改任何 strategy.yaml 的 phases 前，先确认引擎是"首命中 break"还是"全量叠加"；要让某 phase 优先就放最前，并离线逐笔统计它被更早 phase 抢占的比例。(b) 任何前置/新加软 cap 必须对同策略全部既有 hard_veto 做 not(...) 让位，并逐笔验证"我首命中时后续无 hard_veto 命中"的风险数=0。(c) when 里只用 evaluator 白名单内字段，字符串枚举先找对应数值分；所有"小于/低于阈值"条件对可能缺失的字段加 `>0` 数据有效性守卫。**
+- 复现：`/tmp/live_faithful_sim.py`（冻结分首命中模拟，暴露抢占）、`/tmp/live_phase_preempt.py`（抢占诊断）、`app/engine/{strategy_runner,evaluator}.py`。
+- 相关：L-089（被本机制救活的三层毒区）、L-091（冻结分与真实 run 的分歧）、L-071（口径必须与生产同构）。
+
+## L-091 离线评估必须用"真实 run_strategy 金标准"而非历史冻结分；小样本 hard_veto（n=2 WR0%）会被去重大样本（n=16 WR56%）推翻
+
+- 状态：active（方法 FINDING + 一条小样本风控翻案）。
+- 冻结分歧义：recommendations 里逐策略 brk 分数是**历史各版本冻结输出**，不是当前 yaml 重算结果；用 min(冻结分, 新 cap) 或"冻结分首命中"模拟新规则，会与"当前 yaml 首命中"不一致（本轮 33 处），且偏乐观。**权威做法是金标准：对每笔 rec×每个背书策略用当前代码真实调用 `run_strategy` 取新鲜分**（StrategySkill 是 frozen dataclass，做变体用 `dataclasses.replace(sk, contract=con)`），彻底绕开冻结分歧义。本轮最终数字一律以金标准为准。
+- 小样本 hard_veto 翻案：DSA 旧「资金背离否决」证据仅 n=2/WR0%；去重 241 大样本复核资金背离 n=16 **WR56.2%**、主力共振 n=38 WR52.6/+0.85，方向反了（都是正 alpha），遂删除该 hard_veto。hard_veto 是整票杀、代价最高，最不该由个位数样本立。
+- 永久规则：**(a) 评估策略改动对历史推荐的影响，必须用当前生产代码逐笔真实重跑（金标准），禁止用入库冻结分做 min/首命中推算并据此下结论。(b) 任何 hard_veto 立项要求足量去重样本 + 逐月/跨 regime 一致；个位数样本（n<~10）只能做观察标记、不得整票否决，已立的小样本 veto 要在样本扩大后主动复核翻案。(c) 去重口径按生产 `(trade_date,code)` 同 code 合并，未去重的重复推荐会同时虚增样本、扭曲 WR。**
+- 复现：`/tmp/live_gold_wcmp.py`、`/tmp/live_gold_w3.py`、`/tmp/live_gold4.py`（金标准，权重取 run_strategy 返回值）；DSA strategy.yaml 原位保留资金背离翻案注释。
+- 相关：L-089/L-090（同轮落地与机制）、L-071（生产同构口径）、L-058（多窗口/样本量防过拟合）。
+
+## L-092 三层毒区参数平台稳健性确认；三个后续杠杆（chip/dsa 归零、强势 hard_veto、breakout60 加分）逐一证伪——边际 churn 不落地
+
+- 状态：active（否定性 FINDING + 已上线参数的稳健性背书）；生产维持 L-089 三层毒区现状，本轮不改任何生产策略。
+- 平台扫描（内存构造参数化变体跑金标准，不动文件）：rsi 阈值 48 落在 48–52 平台（g30 同为 56.9）、leader 阈值 35 落在 33–38 平台中央、毒区 cap 58/62 落在 55–58 平台、强势 cap 在 48–58 完全无 flip——**已上线参数都在平台而非刀尖，前向 OOS 稳健，无需调参。**
+- 证伪①chip/dsa 权重归零：chip 唯一背书 0/3 全亏、dsa 无 HQ 组 WR31 看似该砍，但金标准 flip 显示归零只是"移出 1 输家+1 中性、却放进另一输家 -3.09"的边界 churn（全局 +0.8pp=1 票噪声），不是干净的赢家替换；**判据：权重/阈值改动必须看 top 集合的逐笔进出，净换入赢家/换出输家才算 alpha，只动 1–2 张边界票且含换入输家=过拟合，不落地。**
+- 证伪②强势毒区改 hard_veto：会整票剔 16 张，其中误杀 3 个赢家（+5.79/+8.99/+1.0），g30/lomo 反降；soft cap58 在 48–58 任意档结果相同。**再次固化 L-089：末端反转毒区用软降权、不用整票否决，给少数真突破留活口。**
+- 证伪③breakout60 正向加分：全样本 breakout60=True n21 WR62/+1.72 vs False WR44/-1.00 看似强正 alpha，但卡级 +4 模拟的增益来自绕过 phase cap（不该顶破毒区）；按生产真实路径在 scoring.rules 逐策略 +4（L122 min(score,cap) 之前、被毒区 cap 罩住）后只剩全局 g30 +1.4（1 票）、g40/LOMO/逐月全不变，为 1 票动 10 个 yaml 不划算。**判据：卡级/聚合层模拟出的增益必须用"能真正写进 strategy.yaml、且不绕过 score_cap"的实现复算一遍，复算后增益消失即证伪。**
+- 成员集复核：S8/R7 被排除的声明式策略在对应毒区队列零背书（limit-up/overnight/small-cap/weak 等），high-position 是 imperative 无 strategy.yaml 无法加 phase，weak-market rsi 仅 n1——成员集完整无遗漏。
+- 永久规则：**(a) 已上线规则要做参数平台扫描（±2~4 档），落在平台中央才算稳健、落在单点尖峰要回退到平台中心。(b) 任何后续杠杆先看 top 集合逐笔 flip 与逐月 LOMO：换入输家或仅 1 票 churn、LOMO/逐月不升的，一律不落地，无论全样本单桶 WR 多好看。(c) 聚合层/card 级"如果加 X 分"的模拟只用于预筛，落地前必须等价改写到 strategy.yaml 评分路径并保留 score_cap 约束再复算。**
+- 复现：`/tmp/live_sens.py`（阈值/cap 平台）、`/tmp/live_wgrid_iso.py`+`/tmp/live_wgrid_lq.py`（chip/dsa 权重网格与逐月）、`/tmp/live_strong_scan.py`（强势强度/hard_veto）、`/tmp/live_breakout_boost.py`（卡级）与 `/tmp/live_bk_impl.py`（忠实 yaml 实现复算，证伪）。
+- 相关：L-089（被背书的三层毒区）、L-090（phase/cap 机制）、L-091（金标准口径）、L-058/L-071（多窗口与生产同构防过拟合）。
