@@ -981,7 +981,7 @@
 - 复现：`backend/scripts/self_improve_state.py reanchor-policy --from-fingerprint <旧指纹> --reason <证据引用> --researcher-id <id>`；测试 `backend/tests/test_self_improve_state_reanchor.py`（3 用例：重锚+历史留痕+migrate 不回退、CAS 拒错指纹、已锚定拒绝）。
 - 相关：L-093/L-094（v3 落地，触发本死锁的合并）、L-096/L-097（state canonical_production 为基线单一事实源，指纹身份是它的键）、L-092（政策版本平台）。
 
-## L-099 D 项前瞻 n「不变」必须先看待结算管道：2026-09-13 实测停滞是 horizon=5 结算滞后 + 08-27~09-08 无 live run，不是政策闸门饿死
+## L-101 D 项前瞻 n「不变」必须先看待结算管道：2026-09-13 实测停滞是 horizon=5 结算滞后 + 08-27~09-08 无 live run，不是政策闸门饿死
 
 - 状态：active（测量能力修复 MEASUREMENT_FIX：self_check 新增待结算管道诊断；本轮不改生产策略、不声称提高收益）。
 - 假设与证伪：本轮主假设「canonical 前瞻样本被政策闸门饿死（近 5 opportunity days 全 `policy_blocked=true`）」**被数据否决**。只读 DB 实测：strict `live_forward` 口径 09-09/09-10/09-11 三日共有 **25 笔独立票（dedup 后仍 25，无跨 run 重复）尚未结算**（horizon=5，最早 09-16 前后才结算）；n=9 自 09-11 零增长是**结算滞后**，不是闸门。`refresh-policy-health` 的 `policy_blocked=true` 记录的是 08-05~08-14 的陈旧 opportunity days，不能用来推断当前。
@@ -993,3 +993,14 @@
 - 证据：`test_self_check_forward_d.py` 新增 3 例（基础/空/排序与类型强转）；`test_self_check_forward_d.py + test_self_check_canonical_baseline.py` **37 passed**。真实 DB 实测输出：`25 笔独立票未结算，分布于 2026-09-09~2026-09-11（3 个交易日）| 按日 2026-09-09:7, 2026-09-10:8, 2026-09-11:10`。
 - 复现：`SELECT` 见 `_fetch_pending_pipeline`；待结算=OFFICIAL_SAMPLE_SQL 同口径 + outcome 未结算的反转。
 - 相关：L-058（时间窗选择偏差）、L-096（live_forward 唯一发布口径，replay 不回填）、L-097/L-098（D 项基线守卫与诊断注册表）、L-067（大表无索引聚合会拖垮诊断链路）。
+## L-100 政策指纹随"执行树"漂移：多实例共享 state 时，从未提交 WIP 的树跑状态工具会让 policy_artifact_mismatch 反复翻动；migrate/refresh 必须记录 identity_context（commit+dirty），且未提交的政策语义改动不得进入 LIVE 导入路径
+
+- 状态：active（测量完整性 MEASUREMENT_FIX + 一条治理隐患标记）。
+- 现象（2026-09-13 实测）：上轮 reanchor 后 state 锚定 main eb78093 的 v3 指纹 8c4821b9、mismatch=false；同日下午从**主树**（checkout 在 feat/strong-bull-ivol-veto-v3@ d3e7e60 且带未提交 WIP）跑 `migrate-state`，identity 变成 9707a4ca → mismatch 又翻 true。main 提交历史零变化——翻动完全来自"状态工具从哪棵树执行"。
+- 根因：`_current_policy_identity` 导入的 `app` 包 = 脚本所在树的工作区代码；主树 WIP 含**未提交的政策语义改动**（production_selection.v3.json 新增 non_main_theme_veto_enabled/toxic_phase_veto_enabled/toxic_phase_pairs/weak_rsi_veto_enabled/weak_rsi_floor + production_policy.py +52 行），canonical_payload 变了指纹就变。多个并行实例共享同一 state 文件但各自从不同树执行 migrate/refresh → mismatch 是"执行树"的函数，不是"政策是否漂移"的函数。
+- 治理隐患（须上报）：若 LIVE API/prefect worker 从主树导入且在 WIP 写入后重启过，等于在执行**从未过证据管道的未提交政策规则**。政策语义只允许以提交进 main 的 artifact + dataclass 形态存在；工作区 WIP 不得作为任何 LIVE/回测口径的依据。
+- 修复：`self_improve_state.py` 新增 `_identity_context()`（执行树 root、HEAD commit、backend dirty、时间戳），在 `migrate_state` / `refresh_policy_health` / `reanchor-policy` 三处落 `governance["identity_context"]` 与 reanchor 留痕，翻动从此可审计（哪棵树、哪个 commit、脏不脏）。
+- live 数据就绪度核查（同轮，只读）：daily_kbars.ivol20 已回填至 2026-09-11（最新日线日），近两周覆盖 93.6–94%；live adapters / risk_features.attach_ivol20_pct 附着点在 main 在位；recommendations 的 feature_snapshot_json.score_line_meta.market_base 覆盖 100%（10/10 交易日全量）；近 14 个交易日仅 08-25 为强牛（3 笔）→ v3 强牛否决近期不触发属预期，非强牛日的负收益（09-03 −2.16、09-09 −0.60、09-10 −1.25）不构成 L-094 回退条件（判据只看强牛月 Δ）。**回退判据可执行性确认：数据、字段、附着点三者齐备。**
+- 永久规则：**(a) 跑 self_improve_state.py（migrate/refresh/reanchor/publish）必须从与 champion commit 一致的干净检出执行；从带政策相关 WIP 的树跑出的 mismatch=true 一律视为噪声，先看 identity_context 再判定。(b) fingerprint 比较只在同一代码修订内有效；跨树/跨修订的指纹差异先归因（dataclass 演化→重锚，WIP→换干净树重跑），不得据此发布或回滚。(c) 政策语义改动（artifact JSON / production_policy dataclass）未提交进 main 前，禁止让任何 LIVE 进程导入该树；发现工作区含未提交政策语义时，值班研究员必须在报告中标记并等待其走证据管道。(d) identity_context 必须随每次健康检查留痕，mismatch 翻动的仲裁依据是 identity_context 而非 mismatch 标志本身。**
+- 复现：`backend/scripts/self_improve_state.py migrate-state`（不同树执行对比 identity_context.commit 与 backend_dirty）；测试 `backend/tests/test_self_improve_state_identity_context.py`（3 例）+ `test_self_improve_state_reanchor.py`（3 例）。
+- 相关：L-099（跨代码版本指纹不可复现→reanchor，本条是其执行树维度的补全）、L-097/L-098（canonical_production 单一事实源与 audit 只读）、L-094（v3 live 回退判据）、L-013（决策时 regime 持久化）。

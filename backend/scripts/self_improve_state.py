@@ -440,6 +440,41 @@ def _current_policy_identity() -> dict[str, Any]:
     }
 
 
+def _identity_context() -> dict[str, Any]:
+    """Code-revision context of the tree this state tool is executing from.
+
+    The policy fingerprint is computed from the imported ``app`` package,
+    which is whatever tree this script file lives in — NOT necessarily main
+    and NOT necessarily clean. With several parallel instances sharing one
+    state file, ``policy_artifact_mismatch`` flaps when a tool run happens to
+    execute from a tree whose uncommitted WIP changes ``canonical_payload()``
+    (observed 2026-09-13: main eb78093 identity 8c4821b9 vs main-tree
+    feature-branch+WIP identity 9707a4ca for the same v3 artifact). Recording
+    the executing tree per health check / reanchor makes those flaps
+    auditable instead of silent.
+    """
+    tree_root = Path(__file__).resolve().parents[2]
+    context: dict[str, Any] = {"tree_root": str(tree_root), "recorded_at": _now_iso()}
+    try:
+        commit = subprocess.run(
+            ["git", "-C", str(tree_root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "-C", str(tree_root), "status", "--porcelain", "--", "backend"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        context["commit"] = commit
+        context["backend_dirty"] = bool(dirty)
+    except Exception as exc:  # git unavailable or not a work tree
+        context["error"] = str(exc)
+    return context
+
+
 def migrate_state(
     memory_dir: Path | None = None,
     *,
@@ -484,6 +519,7 @@ def migrate_state(
         governance["audit_only"] = phase != "production"
         governance.setdefault("strategy_inactive", False)
         governance.setdefault("policy_artifact_fingerprint", identity["fingerprint"])
+        governance["identity_context"] = _identity_context()
         governance["policy_artifact_mismatch"] = (
             governance.get("policy_artifact_fingerprint") != identity["fingerprint"]
             or champion.get("selection_policy", {}).get("fingerprint") != identity["fingerprint"]
@@ -555,6 +591,7 @@ def reanchor_policy_identity(
             "to_selection_policy": dict(identity),
             "reason": reason,
             "researcher_id": researcher_id,
+            "identity_context": _identity_context(),
         }
         champion["selection_policy"] = dict(identity)
         champion["policy_reanchor"] = reanchor_record
@@ -1546,6 +1583,7 @@ def refresh_policy_health(
         governance["phase"] = phase
         governance["audit_only"] = phase != "production"
         governance.update(health)
+        governance["identity_context"] = _identity_context()
         governance["health_checked_at"] = _now_iso()
         state["selection_policy_governance"] = governance
         _atomic_write_json(state_path, state)
