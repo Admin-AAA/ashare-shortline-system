@@ -496,6 +496,89 @@ def migrate_state(
         return state
 
 
+def reanchor_policy_identity(
+    memory_dir: Path | None = None,
+    *,
+    from_fingerprint: str,
+    reason: str,
+    researcher_id: str | None = None,
+    policy_loader: Callable[[], dict[str, Any]] | None = None,
+) -> dict:
+    """CAS-guarded re-anchor of the stored policy identity to the repo artifact.
+
+    Policy fingerprints are code-revision dependent: ``canonical_payload()``
+    evolves with the ``ProductionSelectionPolicy`` dataclass, so a champion
+    registered under an older code revision can never match the current
+    identity even when no artifact rule changed. ``migrate_state`` only
+    ``setdefault``s the governance fingerprint and ``publish_champion`` is
+    gated on ``policy_artifact_mismatch=False``, which deadlocks the release
+    state machine after any landing that changes the payload (e.g. the v3
+    merge). This command is the explicit escape hatch: it re-binds
+    ``canonical_production.selection_policy`` and
+    ``selection_policy_governance.policy_artifact_fingerprint`` to the
+    repository-owned artifact identity, records the transition, and never
+    touches champion metrics / commit / release state.
+    """
+    if not from_fingerprint or not reason:
+        raise ValueError("--from-fingerprint and --reason are required")
+    directory = memory_dir or _memory_dir()
+    state_path = directory / "self-improve-state.json"
+    with _locked(directory):
+        state = _read_json(state_path)
+        identity = dict((policy_loader or _current_policy_identity)())
+        if set(identity) != {"policy_id", "version", "fingerprint"}:
+            raise ValueError("policy_loader must return policy_id/version/fingerprint")
+        champion = dict(state.get("canonical_production") or {})
+        governance = dict(state.get("selection_policy_governance") or {})
+        stored_gov_fp = str(governance.get("policy_artifact_fingerprint") or "")
+        stored_champ = dict(champion.get("selection_policy") or {})
+        if identity["fingerprint"] == from_fingerprint:
+            return {
+                "ok": False,
+                "error": "ALREADY_ANCHORED",
+                "message": "当前 repo 政策指纹与 --from-fingerprint 相同，无需重锚",
+            }
+        if stored_gov_fp != from_fingerprint:
+            return {
+                "ok": False,
+                "error": "CAS_MISMATCH",
+                "message": (
+                    "governance.policy_artifact_fingerprint="
+                    f"{stored_gov_fp!r} != --from-fingerprint {from_fingerprint!r}"
+                ),
+            }
+        reanchor_record = {
+            "at": _now_iso(),
+            "from_fingerprint": from_fingerprint,
+            "to_fingerprint": identity["fingerprint"],
+            "from_selection_policy": stored_champ,
+            "to_selection_policy": dict(identity),
+            "reason": reason,
+            "researcher_id": researcher_id,
+        }
+        champion["selection_policy"] = dict(identity)
+        champion["policy_reanchor"] = reanchor_record
+        governance["policy_artifact_fingerprint"] = identity["fingerprint"]
+        governance["policy_artifact_mismatch"] = (
+            governance.get("policy_artifact_fingerprint") != identity["fingerprint"]
+            or champion.get("selection_policy", {}).get("fingerprint") != identity["fingerprint"]
+        )
+        migration = dict(state.get("state_migration") or {})
+        history = list(migration.get("policy_reanchor_history") or [])
+        history.append(reanchor_record)
+        migration["policy_reanchor_history"] = history
+        migration["policy_reanchored_at"] = reanchor_record["at"]
+        state["state_migration"] = migration
+        state["canonical_production"] = champion
+        state["selection_policy_governance"] = governance
+        _atomic_write_json(state_path, state)
+        return {
+            "ok": True,
+            "policy_artifact_mismatch": governance["policy_artifact_mismatch"],
+            "reanchor": reanchor_record,
+        }
+
+
 def _reject_direct_research_state_patch(state_patch: dict) -> None:
     forbidden = sorted(_FORBIDDEN_RESEARCH_STATE_KEYS.intersection(state_patch))
     if forbidden:
@@ -1781,6 +1864,11 @@ def main() -> None:
     subparsers.add_parser("refresh-policy-health")
     subparsers.add_parser("migrate-state")
 
+    reanchor_parser = subparsers.add_parser("reanchor-policy")
+    reanchor_parser.add_argument("--from-fingerprint", required=True)
+    reanchor_parser.add_argument("--reason", required=True)
+    reanchor_parser.add_argument("--researcher-id", default=None)
+
     commit_parser = subparsers.add_parser("commit")
     commit_parser.add_argument(
         "--state-patch", required=True, type=_json_object
@@ -1864,6 +1952,12 @@ def main() -> None:
         result = refresh_policy_health()
     elif args.command == "migrate-state":
         result = migrate_state()
+    elif args.command == "reanchor-policy":
+        result = reanchor_policy_identity(
+            from_fingerprint=args.from_fingerprint,
+            reason=args.reason,
+            researcher_id=args.researcher_id,
+        )
     elif args.command == "commit":
         result = {
             "error": "DIRECT_STATE_MUTATION_DISABLED",
