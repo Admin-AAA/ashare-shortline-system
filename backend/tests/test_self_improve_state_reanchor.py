@@ -21,7 +21,8 @@ import self_improve_state as sis
 
 @pytest.fixture(autouse=True)
 def _clean_tree(monkeypatch):
-    """reanchor/migrate 的逻辑测试统一假定干净执行树；脏树守卫有专属测试。"""
+    """reanchor/migrate 的逻辑测试统一假定干净且处于 main 生产点的执行树；
+    脏树/分叉树守卫有专属测试（test_self_improve_state_dirty_tree_guard）。"""
     monkeypatch.setattr(
         sis,
         "_identity_context",
@@ -29,6 +30,8 @@ def _clean_tree(monkeypatch):
             "tree_root": "/clean",
             "commit": "clean-commit",
             "backend_dirty": False,
+            "main_tip": "clean-commit",
+            "production_owned": True,
             "recorded_at": "2026-09-13T00:00:00+00:00",
         },
     )

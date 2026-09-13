@@ -38,7 +38,8 @@ from app.services.backtest.policy_experiment import RELEASE_POLICY_FINGERPRINT
 
 @pytest.fixture(autouse=True)
 def _clean_tree(monkeypatch):
-    """状态工具逻辑测试统一假定干净执行树；脏树守卫有专属测试文件。"""
+    """状态工具逻辑测试统一假定干净且处于 main 生产点的执行树；
+    脏树/分叉树守卫有专属测试文件。"""
     import scripts.self_improve_state as _sis
 
     monkeypatch.setattr(
@@ -48,6 +49,8 @@ def _clean_tree(monkeypatch):
             "tree_root": "/clean",
             "commit": "clean-commit",
             "backend_dirty": False,
+            "main_tip": "clean-commit",
+            "production_owned": True,
             "recorded_at": "2026-09-13T00:00:00+00:00",
         },
     )

@@ -44,7 +44,7 @@ VPI rate = VPI=1 的运行数 / 全部已完成运行数
 
 - 任务入口与前后对比：`scripts/self_check.py` 的 G0-G4、`NEXT_ACTION`。
 - 生产 selection：`backend/app/engine/production_policy.py` 与版本化 policy artifact。
-- 统一判定：`evaluate_selection_policy()`、`evaluate_challenger()`、`ReleasePolicy v2`。
+- 统一判定：`evaluate_selection_policy()`、`evaluate_challenger()`、`ReleasePolicy v2`。发布判定必须调用 `evaluate_challenger()`，禁止旁路该唯一生产判定函数。
 - 正式实验：`backend/scripts/run_canonical_backtest_experiment.py`。
 - 正式证据：`backtest_*` 表中的 schema v2 evidence。
 - 状态与发布：`backend/scripts/self_improve_state.py`；禁止直接写状态文件。
@@ -66,7 +66,7 @@ AUDIT -> CANDIDATE_READY -> CANARY_RUNNING -> PRODUCTION
 
 ### 3.1 初始化与隔离
 
-第一条状态命令必须是幂等迁移。随后生成 `researcher_id=si-<timestamp>`，清理过期 claim，claim 一个未占用方向并建立独立 worktree。超过 15 分钟启动 heartbeat。所有命令和清理步骤按 `OPERATIONS.md` 执行。
+第一条状态命令必须是幂等迁移。随后生成 `researcher_id=si-<当前时间戳>`，清理过期 claim，claim 一个未占用方向并建立独立 worktree。超过 15 分钟启动 heartbeat。所有命令和清理步骤按 `OPERATIONS.md` 执行。多窗口 `/loop` 直接调用是本项目唯一使用方式。
 
 生成 `input_fingerprint`，至少绑定 champion/policy、repo commit、ExecutionPolicy、候选快照、数据水位、切分边界、hypothesis 和 changed rule。相同指纹的已完成实验不得重跑，不得重复消费 untouched holdout。
 

@@ -470,6 +470,28 @@ def _identity_context() -> dict[str, Any]:
         ).stdout.strip()
         context["commit"] = commit
         context["backend_dirty"] = bool(dirty)
+        main_tip = ""
+        for ref in ("main", "origin/main"):
+            probe = subprocess.run(
+                ["git", "-C", str(tree_root), "rev-parse", "--verify", "--quiet", ref],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if probe.returncode == 0:
+                main_tip = probe.stdout.strip()
+                if main_tip:
+                    break
+        context["main_tip"] = main_tip or None
+        # production-owned: executing tree is parked exactly at the main
+        # branch tip. A clean worktree on a stale/diverged branch computes a
+        # *different but commited* fingerprint which is not the production
+        # truth (observed 2026-09-13: clean worktree on feat/si-fina-
+        # indicator-pit @31759cf recomputed the v3 identity from pre-merge
+        # code and flipped policy_artifact_mismatch back to true).
+        context["production_owned"] = bool(
+            commit and main_tip and commit == main_tip
+        )
     except Exception as exc:  # git unavailable or not a work tree
         context["error"] = str(exc)
     return context
@@ -481,18 +503,27 @@ def _resolve_policy_identity(
     """Resolve policy identity plus the executing-tree context.
 
     Returns ``(identity, identity_context, repo_owned)``. ``repo_owned`` is
-    False when the executing tree's backend is dirty or git is unavailable:
-    the fingerprint computed there reflects uncommitted WIP rather than the
-    repository-owned artifact, and must not rebind governance state
-    (observed 2026-09-13: ``migrate-state`` executed from the main working
-    tree parked on ``feat/strong-bull-ivol-veto-v3`` with uncommitted policy
-    semantics flipped ``policy_artifact_mismatch`` to true via the WIP
-    fingerprint 9707a4ca, while the clean main tree yields 8c4821b9 for the
-    same v3 artifact).
+    True only when the executing tree is clean AND parked exactly at the
+    main branch tip — i.e. its fingerprint is the production-owned truth.
+    Two failure modes must not rebind governance state:
+
+    - dirty tree (T-102, 2026-09-13): the fingerprint reflects uncommitted
+      WIP rather than any committed artifact (main-tree feature branch +
+      WIP produced 9707a4ca vs main's 8c4821b9 for the same v3 artifact).
+    - clean but diverged tree (T-104, 2026-09-13): a worktree parked on a
+      stale branch is clean, yet its identity reflects that branch's code,
+      not production. ``feat/si-fina-indicator-pit`` @31759cf recomputed the
+      v3 identity from pre-merge code and flipped
+      ``policy_artifact_mismatch`` back to true, reopening the T-098
+      deadlock.
     """
     context = _identity_context()
     identity = dict((policy_loader or _current_policy_identity)())
-    repo_owned = context.get("backend_dirty") is False and "error" not in context
+    repo_owned = (
+        context.get("backend_dirty") is False
+        and context.get("production_owned") is True
+        and "error" not in context
+    )
     return identity, context, repo_owned
 
 
