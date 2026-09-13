@@ -52,6 +52,28 @@ ADDITIONAL_COST_PCT = 0.07
 PL_RATIO_BASELINE: float | None = None  # 旧盈亏比基线受历史成交口径污染，禁止继续作为 champion
 PL_RATIO_TARGET = 2.0      # 北极星 D 项目标（朝 2.0 攻击）
 
+# ── Canonical champion 基线（口径守卫，L-002 / L-094）──────────────────────────
+# D 项的 Δ 只允许对着「与当前生产同口径、且由当前代码重放未修改 production 得到」的
+# champion 基线计算；基线唯一来源是 self-improve state 的 canonical_production。
+# 口径不合格（跨 evidence_class 汇总、非 champion_replay、成本/期限口径不符、数值缺失）
+# 时一律 ok=False —— 退回「只报数、不算 Δ」，绝不用历史/宽口径基线伪造 Δ（L-094：
+# 跨 evidence_class 汇总会把 historical_reconstruction 混入，3.5× 摆动）。
+SELF_IMPROVE_STATE_PATH = os.environ.get(
+    'ASHARE_SELF_IMPROVE_STATE',
+    os.path.expanduser('~/.claude/projects/-Users-wangao/memory/self-improve-state.json'),
+)
+# 唯一可接受的基线来源：当前代码重放未修改 production（非 challenger、非研究重构）
+CANONICAL_BASELINE_SOURCE = 'champion_replay'
+# 唯一可接受的口径关键词：canonical 与 live_forward 必须同时出现
+CANONICAL_CALIBER_TOKENS = ('canonical', 'live_forward')
+# 当前生产重放身份（须与 backend/scripts/si_champion_baseline_rebuild.py 常量一致）：
+# 基线 JSON 里记录的这三项任一不符，说明基线与当前生产退出状态机脱钩，Δ 不可比。
+PRODUCTION_REPLAY_IDENTITY = {
+    'horizon': 5,
+    'production_stop_loss_pct': -4.5,
+    'net_cost_pct': ADDITIONAL_COST_PCT,
+}
+
 # 策略规则引擎（用于 D 项"规则覆盖前瞻校验"——区分历史污染 vs 真退化）
 # 惰性加载：仅在 check_d_rule_coverage 执行时载入一次，避免 A/B/C/E 项承受导入开销
 _SKILLS_CACHE: dict | None = None
@@ -68,6 +90,155 @@ def _load_skills_once() -> dict:
             print(f'  (规则引擎加载失败，跳过 D 项覆盖校验: {type(e).__name__}: {e})')
             _SKILLS_CACHE = {}
     return _SKILLS_CACHE
+
+
+def _numeric_metric(block: dict | None, key: str) -> float | None:
+    """从 state 的 metrics population 块里取数值字段；bool/非数值一律视为缺失。"""
+    if not isinstance(block, dict):
+        return None
+    val = block.get(key)
+    if isinstance(val, bool) or not isinstance(val, (int, float)):
+        return None
+    return float(val)
+
+
+def load_canonical_baseline(path: str | None = None) -> dict:
+    """读 self-improve state 的 canonical_production，过口径守卫后作 D 项基线（纯函数）。
+
+    返回 ``{"ok": bool, "reason": str, "warnings": [str], "baseline": dict | None}``。
+    ``ok=False`` 表示基线不可用于算 Δ（``reason`` 给出唯一原因），调用方必须退回
+    「只报数、不算 Δ」，不得另找历史/宽口径基线顶替。
+
+    口径守卫（硬门禁，任一不过即 ok=False）：
+      1. state 文件存在且可解析，且含 ``canonical_production``；
+      2. ``metrics.source`` 属于 champion_replay（当前代码重放未修改 production）；
+      3. ``metrics.caliber`` 同时含 ``canonical`` 与 ``live_forward``（L-094：跨
+         evidence_class 汇总一律判污染）；
+      4. ``metrics.population_all`` 的 n / win_rate_pct / max_loss_pct / profit_factor
+         齐全且 n > 0；
+      5. 重放身份（horizon / 止损 / 成本）若在 state 中登记，必须与当前生产完全一致。
+
+    软提示（不影响 ok，写进 ``warnings``）：
+      - ``replay_code_revision`` 与当前 HEAD 不同（重放口径未变时无实质影响，但需复核）；
+      - 基线为 ``provisional``（前瞻样本 n < 100），Δ 只能作趋势参考。
+    """
+    warnings: list[str] = []
+    p = Path(path or SELF_IMPROVE_STATE_PATH)
+    if not p.exists():
+        return {"ok": False, "reason": f"state 文件不存在: {p}", "warnings": warnings,
+                "baseline": None}
+    try:
+        state = json.loads(p.read_text())
+    except Exception as exc:  # noqa: BLE001 - 只读诊断，任何解析失败都视为基线不可用
+        return {"ok": False, "reason": f"state 解析失败: {type(exc).__name__}",
+                "warnings": warnings, "baseline": None}
+
+    prod = state.get("canonical_production")
+    if not isinstance(prod, dict):
+        return {"ok": False, "reason": "state 缺 canonical_production", "warnings": warnings,
+                "baseline": None}
+    metrics = prod.get("metrics")
+    if not isinstance(metrics, dict):
+        return {"ok": False, "reason": "canonical_production 缺 metrics", "warnings": warnings,
+                "baseline": None}
+
+    # 守卫 2：来源必须是「重放未修改 production」
+    source = str(metrics.get("source") or "")
+    if source != CANONICAL_BASELINE_SOURCE:
+        return {"ok": False,
+                "reason": f"基线来源非 {CANONICAL_BASELINE_SOURCE}（实为 {source or '缺失'}）",
+                "warnings": warnings, "baseline": None}
+
+    # 守卫 3：口径必须同时含 canonical 与 live_forward
+    caliber = str(metrics.get("caliber") or "")
+    low = caliber.lower()
+    missing = [tok for tok in CANONICAL_CALIBER_TOKENS if tok not in low]
+    if missing:
+        return {"ok": False,
+                "reason": f"基线口径缺 {'/'.join(missing)}（caliber={caliber or '缺失'}）",
+                "warnings": warnings, "baseline": None}
+
+    # 守卫 4：核心指标齐全
+    pop_all = metrics.get("population_all")
+    win_rate = _numeric_metric(pop_all, "win_rate_pct")
+    max_loss = _numeric_metric(pop_all, "max_loss_pct")
+    profit_factor = _numeric_metric(pop_all, "profit_factor")
+    n = _numeric_metric(pop_all, "n")
+    if win_rate is None or max_loss is None or profit_factor is None or not n:
+        return {"ok": False,
+                "reason": "population_all 的 win_rate_pct/max_loss_pct/profit_factor/n 不齐全",
+                "warnings": warnings, "baseline": None}
+
+    # 守卫 5：重放身份（登记了就必须一致）
+    identity = prod.get("replay_identity")
+    if isinstance(identity, dict):
+        drift = {
+            k: (identity.get(k), PRODUCTION_REPLAY_IDENTITY[k])
+            for k in PRODUCTION_REPLAY_IDENTITY
+            if identity.get(k) is not None
+            and float(identity[k]) != float(PRODUCTION_REPLAY_IDENTITY[k])
+        }
+        if drift:
+            detail = ", ".join(f"{k} {got}≠{want}" for k, (got, want) in drift.items())
+            return {"ok": False,
+                    "reason": f"基线重放身份与当前生产不符: {detail}",
+                    "warnings": warnings, "baseline": None}
+
+    # 软提示
+    revision = str(prod.get("replay_code_revision") or prod.get("commit") or "")
+    if revision:
+        warnings.append(
+            f"基线重放代码修订 {revision}（对比当前 HEAD 自行判断是否需按 L-002 重放）")
+    if prod.get("provisional"):
+        warnings.append(
+            f"基线为 provisional：{prod.get('provisional_reason') or '前瞻样本不足'}，"
+            f"Δ 只作趋势参考")
+
+    clean = metrics.get("population_clean_ge_72")
+    legacy = metrics.get("population_legacy_wide")
+    baseline = {
+        "win_rate_pct": win_rate,
+        "max_loss_pct": max_loss,
+        "profit_factor": profit_factor,
+        "n": int(n),
+        "trade_days": _numeric_metric(pop_all, "trade_days"),
+        "avg_net_pct": _numeric_metric(pop_all, "avg_net_return_pct"),
+        "source": source,
+        "caliber": caliber,
+        "commit": prod.get("commit"),
+        "policy_version": (prod.get("selection_policy") or {}).get("version"),
+        "registered_at": prod.get("registered_at"),
+        "provisional": bool(prod.get("provisional")),
+        "clean_ge_72": {
+            "win_rate_pct": _numeric_metric(clean, "win_rate_pct"),
+            "max_loss_pct": _numeric_metric(clean, "max_loss_pct"),
+            "profit_factor": _numeric_metric(clean, "profit_factor"),
+            "n": _numeric_metric(clean, "n"),
+        } if isinstance(clean, dict) else None,
+        "legacy_wide": {
+            "win_rate_pct": _numeric_metric(legacy, "win_rate_pct"),
+            "n": _numeric_metric(legacy, "n"),
+        } if isinstance(legacy, dict) else None,
+    }
+    return {"ok": True, "reason": "ok", "warnings": warnings, "baseline": baseline}
+
+
+def print_canonical_baseline_status(resolved: dict | None = None) -> dict:
+    """打印 D 项基线口径守卫结果，返回解析结果（供 main() 与测试复用）。"""
+    res = resolved if resolved is not None else load_canonical_baseline()
+    if res["ok"]:
+        b = res["baseline"]
+        print(f'  ✅ D 项基线口径守卫通过: canonical {b["caliber"][:60]}… '
+              f'| n={b["n"]} WR={b["win_rate_pct"]}% PF={b["profit_factor"]} '
+              f'maxloss={b["max_loss_pct"]}% | source={b["source"]} '
+              f'| policy v{b["policy_version"]} | commit={b["commit"]}')
+        for warn in res["warnings"]:
+            print(f'     ⚠️ {warn}')
+    else:
+        print(f'  ⛔ D 项基线口径守卫未通过（不算 Δ）: {res["reason"]}')
+        print('     ——按 L-002 须先用当前代码重放未修改 production '
+              '（backend/scripts/si_champion_baseline_rebuild.py）再对外报差值')
+    return res
 
 
 def classify_zero_output_health(filter_audits: list[dict]) -> str:
@@ -1628,11 +1799,22 @@ def _fmt_d_cost(
     m: dict | None,
     baseline_wr: float | None,
     baseline_pl: float | None,
+    *,
+    baseline_pl_kind: str = 'net',
 ) -> None:
-    """打印净成本 D 项块（盈亏比 + 净胜率 + 净平均收益）。"""
+    """打印净成本 D 项块（盈亏比 + 净胜率 + 净平均收益）。
+
+    ``baseline_pl_kind`` 声明基线的口径：``'net'`` = 扣费后（兼容旧调用）；
+    ``'gross'`` = ``executed_return`` 毛口径 —— canonical champion 基线即毛口径
+    （见 ``load_canonical_baseline``，其 win_rate_pct/profit_factor 均由毛收益算出）。
+    口径声明错了会造出假 Δ，故必须显式传入，不再依赖隐式默认。
+    """
     if m is None:
         print(f'  {tag}(净成本): 样本不足')
         return
+    pl_key = 'gross_pl' if baseline_pl_kind == 'gross' else 'net_pl'
+    wr_key = 'gross_wr' if baseline_pl_kind == 'gross' else 'net_wr'
+    base_label = '毛口径' if baseline_pl_kind == 'gross' else '净口径'
     if baseline_wr is None or baseline_pl is None:
         tag_p = (f'✅ 净盈亏比达标(≥{PL_RATIO_TARGET})'
                  if m["net_pl"] >= PL_RATIO_TARGET else '同口径 champion 待重放')
@@ -1641,16 +1823,16 @@ def _fmt_d_cost(
               f'({tag_p}；旧历史基线已失效，不计算 Δ) '
               f'| 平均收益 净 {m["net_avg"]}%/毛 {m["gross_avg"]}%')
         return
-    d_w = round(m["net_wr"] - baseline_wr, 1)
-    tag_w = (f'⚠️ 净胜率下滑 {abs(d_w)}pp' if d_w < 0
-             else f'净胜率高于基线 {d_w}pp')
-    d_p = round(m["net_pl"] - baseline_pl, 2)
+    d_w = round(m[wr_key] - baseline_wr, 1)
+    tag_w = (f'⚠️ 胜率下滑 {abs(d_w)}pp' if d_w < 0
+             else f'胜率高于基线 {d_w}pp')
+    d_p = round(m[pl_key] - baseline_pl, 2)
     if m["net_pl"] >= PL_RATIO_TARGET:
         tag_p = f'✅ 净盈亏比达标(≥{PL_RATIO_TARGET})'
     elif d_p < 0:
-        tag_p = f'⚠️ 净盈亏比低于基线 {abs(d_p)}'
+        tag_p = f'⚠️ 盈亏比低于基线({base_label}) {abs(d_p)}'
     else:
-        tag_p = f'净盈亏比高于基线 {d_p}(未达{PL_RATIO_TARGET}目标)'
+        tag_p = f'盈亏比高于基线({base_label}) {d_p}(未达{PL_RATIO_TARGET}目标)'
     print(f'  {tag}(净成本,扣{ADDITIONAL_COST_PCT}%): 净胜率 {m["net_wr"]}% (毛 {m["gross_wr"]}%, {tag_w}) '
           f'| 盈亏比 净 {m["net_pl"]}/毛 {m["gross_pl"]} ({tag_p}) '
           f'| 平均收益 净 {m["net_avg"]}%/毛 {m["gross_avg"]}%')
@@ -2526,10 +2708,18 @@ def check_d_item(db) -> None:
     回测（btrec_）与 experiment 补跑不纳入北极星 D 项——它们会虚高胜率、
     掩盖真实 formal 表现（回测污染曾使 D 项胜率从真实 59% 虚报到 68%）。
     """
-    # 旧 WR/PF/max-loss 基线来自已废弃的成交口径。
-    # 在当前执行模型下重放 production champion 前，不得计算 Δ 或据此阻断改动。
-    WIN_RATE_BASELINE: float | None = None
-    MAX_LOSS_BASELINE: float | None = None
+    # 基线来自 self-improve state 的 canonical_production，过口径守卫（见
+    # load_canonical_baseline）。口径不合格时保持 None —— 只报数、不算 Δ，且不得
+    # 退回任何历史/宽口径基线顶替（L-002 重放前不得报差值；L-094 跨口径即污染）。
+    _cb = load_canonical_baseline()
+    _cb_base = _cb["baseline"] if _cb["ok"] else None
+    WIN_RATE_BASELINE: float | None = _cb_base["win_rate_pct"] if _cb_base else None
+    MAX_LOSS_BASELINE: float | None = _cb_base["max_loss_pct"] if _cb_base else None
+    # 基线 PF 与 _compute_d_cost 同为 executed_return 毛口径（成本由口径统一声明），
+    # 故按 gross 比较，避免拿毛 PF 去减净 PF 造出假 Δ。
+    PL_BASELINE_CANONICAL: float | None = _cb_base["profit_factor"] if _cb_base else None
+    if not _cb["ok"]:
+        print(f'  ⛔ D 项基线不可用（{_cb["reason"]}）——只报数、不算 Δ')
 
     # 胜率按 (code, trade_date) 去重：同一交易日同一只股票常被多个 formal run 重复推荐
     # （2026-07-08 单日 14 个 run，松发股份被推荐 7 次全部 -5.69% 止损）。去重后反映
@@ -2579,7 +2769,7 @@ def check_d_item(db) -> None:
         fwd_cost = _compute_d_cost(rows, since_date=FORWARD_EPOCH)
         _fmt_d(f'D 项(前瞻≥{FORWARD_EPOCH})', fwd_res, WIN_RATE_BASELINE, MAX_LOSS_BASELINE)
         _fmt_d_cost(f'D 项(前瞻≥{FORWARD_EPOCH})', fwd_cost,
-                    WIN_RATE_BASELINE, PL_RATIO_BASELINE)
+                    WIN_RATE_BASELINE, PL_BASELINE_CANONICAL, baseline_pl_kind='gross')
         # 窗口过窄护栏：近期多个交易日为保护性 0 推荐，已结算 formal 样本常集中于单一
         # 受污染 regime 日（如 07-16：soft@震荡11笔+低线14笔+单日regime风险6笔，均已
         # Contract 拦截）。此低胜率为单日噪声，非 D 项退化，禁止据此循环加 entry 规则。
@@ -2691,11 +2881,15 @@ def check_d_item(db) -> None:
     # （max 3.42% vs exec 2.52%，高点就在触发价附近），并非过早锁利，勿调 callback 参数过拟合。
     _check_exit_reason_breakdown(db)
 
-    # 规则覆盖前瞻校验：区分"历史污染"vs"真退化"
-    if WIN_RATE_BASELINE is not None:
-        check_d_rule_coverage(db, WIN_RATE_BASELINE)
-    else:
-        print('D 项规则覆盖：同口径 champion 尚未重放，跳过旧基线反事实判定')
+    # 规则覆盖前瞻校验：区分"历史污染"vs"真退化"。
+    # 注意口径：本校验跑的是「全部 formal」（含 historical_reconstruction），因此基线
+    # 必须用同口径的 legacy-wide WR，不能借 canonical 的 strict WR 去比 —— 那会跨
+    # evidence_class 汇总出假 Δ（L-094）。state 未登记同口径基线时只列残留毒区不算 Δ。
+    _legacy_wr = ((_cb_base or {}).get("legacy_wide") or {}).get("win_rate_pct")
+    if _legacy_wr is None:
+        print('D 项规则覆盖：state 未登记「全部-formal」同口径基线'
+              '（canonical strict 基线不可跨口径借用，L-094）——只列残留毒区、不算 Δ')
+    check_d_rule_coverage(db, _legacy_wr)
 
 
 def _exit_reason_breakdown_stats(items: list) -> dict[str, dict]:
@@ -3883,7 +4077,8 @@ def _print_forward_veto_counterfactual(rows, skills, win_rate_baseline: float) -
                 f'覆盖反事实后的低 PL 仍被低线污染/单日主导，'
                 f'非「规则覆盖无效」；与上方去污染反事实交叉看，勿加 entry'
             )
-    elif stats["wr"] < win_rate_baseline - 10 and stats["n"] < 30:
+    elif (win_rate_baseline is not None
+          and stats["wr"] < win_rate_baseline - 10 and stats["n"] < 30):
         print(
             f'     ——覆盖反事实后 WR 仍低且 n 小：可能单日 regime；'
             f'与上方「去污染反事实·前瞻」交叉看，勿仅据此加 entry'
@@ -4214,9 +4409,16 @@ def print_north_star_snapshot(snapshot: dict[str, dict]) -> None:
 
 
 def main() -> None:
-    global FORWARD_EPOCH
+    global FORWARD_EPOCH, PL_RATIO_BASELINE
     db = SessionLocal()
     try:
+        # D 项基线口径守卫：启动时一次性解析并显式暴露结果，避免「基线恒为 None →
+        # check_d_rule_coverage / 前瞻验证护栏永久短路」这类静默失效（L-002 / L-094）。
+        _baseline_res = print_canonical_baseline_status()
+        if _baseline_res["ok"]:
+            # 基线 PF 为毛口径；_print_low_score_line_pollution 的 clean 块只把它当
+            # 「是否达标」参考位（其 Δ 需同口径 WR 基线，故仍不参与相减）。
+            PL_RATIO_BASELINE = _baseline_res["baseline"]["profit_factor"]
         FORWARD_EPOCH = _resolve_forward_epoch(db)
         print_north_star_snapshot(build_north_star_snapshot(db))
         check_a_item(db)
