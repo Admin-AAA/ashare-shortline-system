@@ -956,3 +956,18 @@
 - 永久规则：**(a) 任何"基线/对照"必须带口径与身份声明，且由**机器可读的单一事实源**（state `canonical_production`）驱动；把基线写成代码里的 `None` 等同于永久关闭该诊断，属必须修复的静默失效。(b) 基线比对必须 population 对齐：strict（live_forward）基线与 wide（全部 formal）指标不得互相比较；缺少同口径基线时只报数、明确写出"不算 Δ"的理由，绝不用相近口径顶替。(c) 基线 PF/WR 的口径（毛 `executed_return` vs 扣费净）必须在调用处显式传入，不允许隐式默认。(d) 数据寄存器上出现 `historical_reconstruction` / 宽口径混入时按 L-094 拒绝，并写清修复路径。**
 - 吸收位置：`scripts/self_check.py`（`load_canonical_baseline` / `print_canonical_baseline_status` / `_numeric_metric`、`PRODUCTION_REPLAY_IDENTITY`、`check_d_item` 基线解析、`_fmt_d_cost(baseline_pl_kind=…)`、`check_d_rule_coverage`/`_print_forward_veto_counterfactual` 可空基线、`main()` 启动打印）、`backend/tests/test_self_check_canonical_baseline.py`。
 - 相关：L-002（口径变化后须先重放未修改 production 才可比较）、L-094/L-096（Canonical 口径唯一可接受、跨 evidence_class 汇总即污染）、L-086（+8.3pp 口径污染实例）、L-088/L-091（金标准、禁用研究重构下结论）、L-067（健康检查禁止对超大表做函数化日期聚合——本轮 `SELECT MAX(trade_date) FROM daily_kbars` 实测 5 分钟超时，同类坑）。
+
+## L-098 audit 阶段 `canonical_production` 只读是设计约束：诊断口径基线须走 `d_baseline_registry`（publish-finding 可写），且必须显式声明 diagnostic
+
+- 状态：active（测量能力修复 MEASUREMENT_FIX；`scripts/self_check.py` + 单测 30 例；不改生产策略、不声称提高收益）。
+- 问题：T-097 的 D 项守卫已能读 state `canonical_production`，但 `check_d_rule_coverage()`（规则覆盖反事实）跑的是**全部 formal** wide 口径，其基线需要 `population_legacy_wide`（n=368 / WR 42.1%）。而 `publish_champion()` 在 `audit_only=true` 下**一律拒绝**任何含 `canonical_production` 的 patch——即使 `proposed_policy is None`（见 `_autonomous_canary_publish_allowed`：要求 `phase=='canary_passed'` + 完整 Canary 回执 + `proposed_policy` 为 dict，纯元数据更新不可能满足）。所以上一轮移交的"把 legacy_wide 登记进 canonical_production"**在 audit 阶段结构性不可达**，不是流程疏漏。
+- 解决（不绕过状态机）：`publish-finding` 只禁 `canonical_production`/`selection_policy_governance`/`release_state`/`researcher_registry` 四键，其余顶层键合法。新增顶层 `d_baseline_registry`：`{registered_by, populations:{legacy_wide:{source,caliber,win_rate_pct,n,profit_factor,max_loss_pct,evidence}}, replay_identity:{...}}`，由 `_load_d_baseline_registry()` 校验后并入 D 项守卫。
+- 守卫规则（`_load_d_baseline_registry`）：
+  - **优先级**：`canonical_production` 已登记的同名 population / `replay_identity` **始终优先**（champion 注册表权威）；registry 只补缺口，并回填 `legacy_wide_source` 供审计。
+  - **registry 的 legacy_wide 三重硬校验**（任一不过→拒绝采用并留 warning，**绝不**连带拒绝 strict 基线）：①`source` 含 `champion_replay`；②`caliber` 含 wide/legacy/全部/all 之一；③`caliber` 必须显式声明 `diagnostic`（防 wide 诊断口径被误当发布证据，L-094/L-096）；④`n>0` 且 `win_rate_pct` 为数值。
+  - `replay_identity`：`canonical_production` 未登记时回退 registry；漂移照样阻断 strict Δ（身份守卫不可被绕过）。
+- 关键区别（勿混淆）：`canonical_production` = **发布证据**用的 champion 口径（audit 只读）；`d_baseline_registry` = **诊断**用的同源重放口径（仍要求 champion_replay，但不进发布证据链）。两者都必须声明 caliber；wide 口径若想进发布证据链，必须走 L-094 的 canonical live_forward。
+- 证据（2026-09-13）：`backend/tests/test_self_check_canonical_baseline.py` **30 passed**（新增 10 例：优先级、坏 source/缺 diagnostic/指标不全拒绝、身份回退漂移阻断、canonical 身份优先、形态非法仅 warning、printer 显示来源）；`-k "self_check or champion_baseline"` **263 passed / 2 failed**（2 例为 L-097 已核实的既有 A 项失败，与本轮无关）。真实 state 实测：strict 基线守卫通过（n=9/毛WR 55.6%/PF 0.68/maxloss −7.43%），legacy-wide 未登记时正确输出"不算 Δ"。
+- 永久规则：**(a) 研究员在 audit 阶段需要新增**非发布证据**的机器可读基线/注册表时，用 `publish-finding` 写新的顶层键，不要试图改 `canonical_production`（会被 CAS+audit 门禁拒绝，且绕过属违规）；新键必须在消费端做 source/caliber/数值三重校验，损坏只降级不阻断主口径。(b) 任何注册表条目必须显式声明 `diagnostic`（诊断）还是 release evidence；诊断口径永远不得进入 `publish-champion` 证据链。(c) champion 注册表里的同名数据始终优先于研究员注册表，消费端必须回填数据来源标签供审计。**
+- 吸收位置：`scripts/self_check.py`（`_load_d_baseline_registry`、`load_canonical_baseline` 的身份回退与 legacy_wide 覆盖、`legacy_wide_source` 标签、`print_canonical_baseline_status` 的来源显示）、`backend/tests/test_self_check_canonical_baseline.py`。
+- 相关：L-097（D 项基线口径/身份守卫本体）、L-094/L-096（发布证据唯一口径、跨 evidence_class 汇总即污染）、L-086（+8.3pp 口径污染实例）、L-002（重放未修改 production 才可比较）。

@@ -102,6 +102,64 @@ def _numeric_metric(block: dict | None, key: str) -> float | None:
     return float(val)
 
 
+def _load_d_baseline_registry(state: dict) -> dict:
+    """解析 state 的 ``d_baseline_registry``（L-098）。
+
+    背景：audit 阶段 ``publish-champion`` 被设计为**禁止**研究员改写
+    ``canonical_production``（见 ``publish_champion`` 的 audit_only 门禁），而
+    ``publish-finding`` 只能写非 canonical 键。D 项的「全部-formal wide」反事实基线
+    属于**诊断口径**（非发布证据，L-094/L-096 只约束发布证据），故允许经
+    ``publish-finding`` 登记到顶层 ``d_baseline_registry``，由本守卫消费；
+    ``canonical_production`` 里已登记的同名 population 始终优先（champion 注册表权威）。
+
+    本函数只做校验与收集，**绝不**因注册表损坏而拒绝 strict 基线（两者独立）。
+    返回 ``{"legacy_wide": dict|None, "replay_identity": dict|None, "warnings": [str]}``。
+    """
+    warnings: list[str] = []
+    reg = state.get("d_baseline_registry")
+    if not isinstance(reg, dict):
+        return {"legacy_wide": None, "replay_identity": None, "warnings": warnings}
+    pops = reg.get("populations")
+    out: dict = {"legacy_wide": None, "replay_identity": None, "warnings": warnings}
+
+    legacy = pops.get("legacy_wide") if isinstance(pops, dict) else None
+    if isinstance(legacy, dict):
+        cal = str(legacy.get("caliber") or "")
+        low = cal.lower()
+        # 必须显式声明这是「全部-formal / wide」诊断口径，且来源仍是重放未修改 production
+        if "champion_replay" not in str(legacy.get("source") or ""):
+            warnings.append("d_baseline_registry.legacy_wide 的 source 非 champion_replay，拒绝采用")
+        elif not (("wide" in low) or ("legacy" in low) or ("全部" in cal) or ("all" in low)):
+            warnings.append("d_baseline_registry.legacy_wide 的 caliber 未声明 wide/legacy 口径，拒绝采用")
+        elif "diagnostic" not in low and "诊断" not in cal:
+            warnings.append("d_baseline_registry.legacy_wide 的 caliber 未声明 diagnostic（防误当发布证据），拒绝采用")
+        else:
+            wr = _numeric_metric(legacy, "win_rate_pct")
+            n = _numeric_metric(legacy, "n")
+            if wr is None or not n:
+                warnings.append("d_baseline_registry.legacy_wide 指标不齐全（n/win_rate_pct），拒绝采用")
+            else:
+                out["legacy_wide"] = {
+                    "win_rate_pct": wr,
+                    "n": int(n),
+                    "profit_factor": _numeric_metric(legacy, "profit_factor"),
+                    "max_loss_pct": _numeric_metric(legacy, "max_loss_pct"),
+                    "caliber": cal,
+                    "evidence": legacy.get("evidence"),
+                }
+    elif legacy is not None:
+        warnings.append("d_baseline_registry.populations.legacy_wide 形态非法，忽略")
+
+    ident = reg.get("replay_identity")
+    if isinstance(ident, dict) and ident:
+        out["replay_identity"] = {
+            k: ident[k] for k in PRODUCTION_REPLAY_IDENTITY if ident.get(k) is not None
+        }
+    elif ident is not None:
+        warnings.append("d_baseline_registry.replay_identity 形态非法，忽略")
+    return out
+
+
 def load_canonical_baseline(path: str | None = None) -> dict:
     """读 self-improve state 的 canonical_production，过口径守卫后作 D 项基线（纯函数）。
 
@@ -137,6 +195,9 @@ def load_canonical_baseline(path: str | None = None) -> dict:
     if not isinstance(prod, dict):
         return {"ok": False, "reason": "state 缺 canonical_production", "warnings": warnings,
                 "baseline": None}
+    # 诊断口径注册表（L-098）：与 strict 基线独立，损坏只产生 warning 不阻断
+    registry = _load_d_baseline_registry(state)
+    warnings.extend(registry["warnings"])
     metrics = prod.get("metrics")
     if not isinstance(metrics, dict):
         return {"ok": False, "reason": "canonical_production 缺 metrics", "warnings": warnings,
@@ -169,8 +230,11 @@ def load_canonical_baseline(path: str | None = None) -> dict:
                 "reason": "population_all 的 win_rate_pct/max_loss_pct/profit_factor/n 不齐全",
                 "warnings": warnings, "baseline": None}
 
-    # 守卫 5：重放身份（登记了就必须一致）
+    # 守卫 5：重放身份（登记了就必须一致）；canonical_production 未登记时回退
+    # d_baseline_registry.replay_identity（同为 champion_replay 产物，L-098）
     identity = prod.get("replay_identity")
+    if not isinstance(identity, dict):
+        identity = registry["replay_identity"]
     if isinstance(identity, dict):
         drift = {
             k: (identity.get(k), PRODUCTION_REPLAY_IDENTITY[k])
@@ -195,7 +259,10 @@ def load_canonical_baseline(path: str | None = None) -> dict:
             f"Δ 只作趋势参考")
 
     clean = metrics.get("population_clean_ge_72")
-    legacy = metrics.get("population_legacy_wide")
+    _cp_legacy = metrics.get("population_legacy_wide")
+    # canonical_production 已登记的同名 population 优先；否则用 publish-finding 登记
+    # 的诊断口径注册表（audit 阶段禁止改写 canonical_production，L-098）
+    legacy = (_cp_legacy if isinstance(_cp_legacy, dict) else registry["legacy_wide"])
     baseline = {
         "win_rate_pct": win_rate,
         "max_loss_pct": max_loss,
@@ -219,6 +286,10 @@ def load_canonical_baseline(path: str | None = None) -> dict:
             "win_rate_pct": _numeric_metric(legacy, "win_rate_pct"),
             "n": _numeric_metric(legacy, "n"),
         } if isinstance(legacy, dict) else None,
+        "legacy_wide_source": (
+            "canonical_production" if isinstance(_cp_legacy, dict)
+            else ("d_baseline_registry" if isinstance(legacy, dict) else None)
+        ),
     }
     return {"ok": True, "reason": "ok", "warnings": warnings, "baseline": baseline}
 
@@ -228,10 +299,14 @@ def print_canonical_baseline_status(resolved: dict | None = None) -> dict:
     res = resolved if resolved is not None else load_canonical_baseline()
     if res["ok"]:
         b = res["baseline"]
+        _lw = b.get("legacy_wide")
+        _lw_note = (f' | legacy-wide WR={_lw["win_rate_pct"]}% (n={_lw["n"]}, '
+                    f'来自 {b["legacy_wide_source"]})' if _lw and _lw.get("win_rate_pct") is not None
+                    else ' | legacy-wide 基线未登记（规则覆盖反事实不算 Δ）')
         print(f'  ✅ D 项基线口径守卫通过: canonical {b["caliber"][:60]}… '
               f'| n={b["n"]} WR={b["win_rate_pct"]}% PF={b["profit_factor"]} '
               f'maxloss={b["max_loss_pct"]}% | source={b["source"]} '
-              f'| policy v{b["policy_version"]} | commit={b["commit"]}')
+              f'| policy v{b["policy_version"]} | commit={b["commit"]}{_lw_note}')
         for warn in res["warnings"]:
             print(f'     ⚠️ {warn}')
     else:

@@ -208,3 +208,124 @@ def test_status_printer_never_raises_and_reports_reason(tmp_path, capsys):
     out = capsys.readouterr().out
     assert res["ok"] is False
     assert "口径守卫未通过" in out
+
+
+# ── L-098：诊断口径注册表 d_baseline_registry（publish-finding 可写路径）────
+
+def _state_with_registry(registry: dict | object, *, drop_cp_legacy: bool = True) -> dict:
+    """默认剔除 canonical_production 里的 legacy_wide（本轮现实：champion 注册表
+    尚未登记该 population，只能靠 d_baseline_registry 供给）。"""
+    st = _good_state()
+    if drop_cp_legacy:
+        st["canonical_production"]["metrics"].pop("population_legacy_wide", None)
+    if isinstance(registry, dict):
+        st["d_baseline_registry"] = registry
+    elif isinstance(registry, str):
+        st["d_baseline_registry"] = {"populations": registry}  # 故意形态非法
+    return st
+
+
+def _good_registry() -> dict:
+    return {
+        "registered_by": "publish-finding si20260913-1350 (L-098)",
+        "populations": {
+            "legacy_wide": {
+                "source": "champion_replay",
+                "caliber": "formal all-legacy wide, diagnostic only, NOT release evidence",
+                "win_rate_pct": 42.1, "profit_factor": 0.64,
+                "max_loss_pct": -15.16, "n": 368, "trade_days": 40,
+                "evidence": "output/champion_baseline_20260913.json",
+            }
+        },
+    }
+
+
+def test_registry_legacy_wide_is_picked_up(tmp_path):
+    res = sc.load_canonical_baseline(_write(tmp_path, _state_with_registry(_good_registry())))
+    assert res["ok"], res["reason"]
+    lw = res["baseline"]["legacy_wide"]
+    assert lw["win_rate_pct"] == 42.1
+    assert lw["n"] == 368
+    assert res["baseline"]["legacy_wide_source"] == "d_baseline_registry"
+
+
+def test_canonical_production_legacy_wide_wins_over_registry(tmp_path):
+    """champion 注册表权威：canonical_production 已登记时不得被注册表覆盖。"""
+    st = _state_with_registry(_good_registry(), drop_cp_legacy=False)
+    res = sc.load_canonical_baseline(_write(tmp_path, st))
+    assert res["ok"]
+    assert res["baseline"]["legacy_wide"]["win_rate_pct"] == 42.1
+    assert res["baseline"]["legacy_wide_source"] == "canonical_production"
+
+
+def test_registry_bad_source_is_rejected_with_warning(tmp_path):
+    st = _state_with_registry(_good_registry())
+    st["d_baseline_registry"]["populations"]["legacy_wide"]["source"] = "research_rebuild"
+    res = sc.load_canonical_baseline(_write(tmp_path, st))
+    # 注册表损坏不得连带拒绝 strict 基线
+    assert res["ok"], res["reason"]
+    assert res["baseline"]["legacy_wide"] is None
+    assert any("champion_replay" in w for w in res["warnings"])
+
+
+def test_registry_caliber_must_declare_diagnostic(tmp_path):
+    """缺 diagnostic 声明 → 拒绝，防止 wide 诊断口径被误当发布证据（L-094）。"""
+    st = _state_with_registry(_good_registry())
+    st["d_baseline_registry"]["populations"]["legacy_wide"]["caliber"] = (
+        "formal all-legacy wide")
+    res = sc.load_canonical_baseline(_write(tmp_path, st))
+    assert res["ok"]
+    assert res["baseline"]["legacy_wide"] is None
+    assert any("diagnostic" in w for w in res["warnings"])
+
+
+def test_registry_incomplete_metrics_rejected(tmp_path):
+    st = _state_with_registry(_good_registry())
+    st["d_baseline_registry"]["populations"]["legacy_wide"].pop("win_rate_pct")
+    res = sc.load_canonical_baseline(_write(tmp_path, st))
+    assert res["ok"]
+    assert res["baseline"]["legacy_wide"] is None
+    assert any("不齐全" in w for w in res["warnings"])
+
+
+def test_registry_replay_identity_drift_blocks_strict_baseline(tmp_path):
+    """canonical_production 未登记身份时，注册表身份生效 → 漂移必须阻断 strict Δ。"""
+    st = _state_with_registry(_good_registry())
+    st["d_baseline_registry"]["replay_identity"] = {
+        "horizon": 5, "production_stop_loss_pct": -3.0, "net_cost_pct": 0.07}
+    res = sc.load_canonical_baseline(_write(tmp_path, st))
+    assert not res["ok"]
+    assert "重放身份" in res["reason"]
+    assert res["baseline"] is None
+
+
+def test_registry_replay_identity_match_accepted(tmp_path):
+    st = _state_with_registry(_good_registry())
+    st["d_baseline_registry"]["replay_identity"] = deepcopy(sc.PRODUCTION_REPLAY_IDENTITY)
+    res = sc.load_canonical_baseline(_write(tmp_path, st))
+    assert res["ok"], res["reason"]
+
+
+def test_canonical_production_identity_beats_registry_identity(tmp_path):
+    st = _state_with_registry(_good_registry())
+    st["d_baseline_registry"]["replay_identity"] = {
+        "horizon": 3, "production_stop_loss_pct": -4.5, "net_cost_pct": 0.07}
+    st["canonical_production"]["replay_identity"] = deepcopy(sc.PRODUCTION_REPLAY_IDENTITY)
+    res = sc.load_canonical_baseline(_write(tmp_path, st))
+    assert res["ok"], res["reason"]
+
+
+def test_registry_malformed_only_warns(tmp_path):
+    st = _state_with_registry({"populations": "not-a-dict"})
+    res = sc.load_canonical_baseline(_write(tmp_path, st))
+    assert res["ok"], res["reason"]
+    assert res["baseline"]["legacy_wide"] is None
+
+
+def test_status_printer_reports_registry_source(tmp_path, capsys):
+    res = sc.print_canonical_baseline_status(
+        sc.load_canonical_baseline(_write(tmp_path, _state_with_registry(_good_registry()))))
+    out = capsys.readouterr().out
+    assert res["ok"]
+    assert "d_baseline_registry" in out
+    assert "legacy-wide WR=42.1%" in out
