@@ -956,3 +956,14 @@
 - 永久规则：**(a) 任何"基线/对照"必须带口径与身份声明，且由**机器可读的单一事实源**（state `canonical_production`）驱动；把基线写成代码里的 `None` 等同于永久关闭该诊断，属必须修复的静默失效。(b) 基线比对必须 population 对齐：strict（live_forward）基线与 wide（全部 formal）指标不得互相比较；缺少同口径基线时只报数、明确写出"不算 Δ"的理由，绝不用相近口径顶替。(c) 基线 PF/WR 的口径（毛 `executed_return` vs 扣费净）必须在调用处显式传入，不允许隐式默认。(d) 数据寄存器上出现 `historical_reconstruction` / 宽口径混入时按 L-094 拒绝，并写清修复路径。**
 - 吸收位置：`scripts/self_check.py`（`load_canonical_baseline` / `print_canonical_baseline_status` / `_numeric_metric`、`PRODUCTION_REPLAY_IDENTITY`、`check_d_item` 基线解析、`_fmt_d_cost(baseline_pl_kind=…)`、`check_d_rule_coverage`/`_print_forward_veto_counterfactual` 可空基线、`main()` 启动打印）、`backend/tests/test_self_check_canonical_baseline.py`。
 - 相关：L-002（口径变化后须先重放未修改 production 才可比较）、L-094/L-096（Canonical 口径唯一可接受、跨 evidence_class 汇总即污染）、L-086（+8.3pp 口径污染实例）、L-088/L-091（金标准、禁用研究重构下结论）、L-067（健康检查禁止对超大表做函数化日期聚合——本轮 `SELECT MAX(trade_date) FROM daily_kbars` 实测 5 分钟超时，同类坑）。
+
+## L-098 日内"路径形态/量能方向分布"新分时维度三窗筛查证伪；事件/基本面表三窗覆盖复核普查（冻结0或已停更，无新可解锁数据源）
+
+- 状态：active（否定性 FINDING + 覆盖复核普查）；生产政策维持 v3，不改。
+- 适用：任何想用日内路径形状（趋势效率/日内偏度）、量能方向分布（涨跌 bar 量不对称）、尾盘量能集中度做选股否决或加分的尝试；以及后续轮次想"解锁新数据源"时的先查清单。
+- 为何与 L-074/L-079 不同：L-074 的 12 个分时特征全部是水平/分段收益类（gap/am_ret/pm_ret/振幅/rvol/日内mdd/量占比/VWAP/close_off_high/尾盘收益/量价相关）；本轮构造的是【形状/分布】类新维度：trend_eff=|收-开|/Σ|bar间变动|（趋势效率）、vol_dir_imb=(涨bar量-跌bar量)/总量、intraday_skew=日内15min bar收益偏度、close_vol_share=尾盘30min量占比。全部只含信号日收盘前信息、无前视。
+- 三窗结果（v2 选中池，冻结 n499/15min原生 匹配49.4%，前瞻 n718/5min重采样 匹配99.6%，第三窗 run3 n95/5min 匹配100%）：intraday_skew 冻结rho-0.068/前瞻+0.017 直接翻号；close_vol_share 冻结-0.033/前瞻+0.021 翻号；vol_dir_imb 三窗同号但极弱（-0.039/-0.015/-0.156）且五分位非单调；trend_eff 冻结+0.057/前瞻+0.051 同号为唯一幸存者，但第三窗翻为-0.013 且 Q4/Q5 大亏率升到 15.8%（对倒 Q1-Q3 的 5.3%），五分位均值非单调（Q3 最差 -2.87）——按 L-058/L-076 第三窗裁决判死。四个因子在选中池均无 |rho|≥0.05 的跨窗稳定区分度。
+- 覆盖复核普查（2026-09-13 实测，修正 L-082 后新增事实）：news_announcement 2026-03-10 起才有（冻结0，不可三窗）；concept_sector(_stock) 2026-03-23 起（冻结0）；repurchases/share_floats/stock_fina_indicator/block_trades/holder_trades/institutional_surveys 全部 W2 或 W3 为 0（管道停更）；holder_numbers W1 仅 141 股、pledge_stats W1 3492 股但 W3=0。minute_kbars 覆盖：W1 2374 股（15min 密）、W2 5217 股（5min 密）、W3 1419 股（仅 run3 候选回填）。**结论：事件/基本面/文本族在"冻结窗足量覆盖"门下全部不可用，且多数表采集已停更——"换数据维度"在现有管道下没有未开采的表，须先恢复采集或接新源才可重开此轴。**
+- 永久规则：**(a) 日内路径形态/量能方向分布/尾盘量集中度四族因子在选中池三窗证伪，禁止换名重挖（趋势效率、日内实现偏度、涨跌量不对称、尾盘量占比及其单调变换）。(b) L-082 的"覆盖即死"结论需按本条普查口径动态复核：表水位会随采集停更而退化，判定前重跑窗口计数即可（一条 SQL 级普查，成本≈1 分钟）。(c) 分时新维度在冻结窗的 15min 匹配率只有 49.4%，任何分时因子的冻结窗结论都要报匹配率并做匹配/未匹配净收益偏差检验（本轮沿用 L-074 的 +0.193/+0.219 无偏差证据）。**
+- 复现：`backend/scripts/research_intraday_pathshape.py`（自包含，三窗面板+筛查，缓存 output/research/intraday_pathshape_panel.pkl 与 intraday_pathshape_screen.json）；覆盖普查 SQL 见本轮运行记录。
+- 相关：L-074（12 个水平类分时特征证伪，本条补形状/分布类）、L-079（pm_ret 第三窗翻号先例）、L-082（覆盖普查框架，本条动态复核）、L-076/L-058（第三窗裁决）、L-065（换数据维度路线的边界再确认）。
