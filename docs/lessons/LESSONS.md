@@ -1015,3 +1015,14 @@
 - 自动护栏：`test_self_improve_state_dirty_tree_guard.py` 覆盖脏树 migrate 不重绑/不重算、干净树 migrate 重算、干净树 refresh 自愈、脏树 refresh 不动、脏树 reanchor 拒绝。
 - 吸收位置：`self_improve_state.py` 的 `_resolve_policy_identity()` + migrate_state + refresh_policy_health + reanchor_policy_identity；OPERATIONS.md 常用工作流补充说明。
 - 相关：L-098（代码版本漂移与 reanchor 逃生门）、L-100（identity_context 记录）、L-096（发布证据口径）。
+
+## L-103 「干净」不等于「生产真值」：mismatch 自愈重算只允许在 HEAD==main 生产点的执行树发生；干净的分叉 worktree 会用分支代码指纹翻动治理标志
+
+- 状态：active
+- 适用：`backend/scripts/self_improve_state.py` 的 `_resolve_policy_identity()` / `migrate_state` / `refresh_policy_health` / `reanchor_policy_identity`；多实例并行、worktree 常驻的共享 state 场景。
+- 证据：2026-09-13 实测（第四轮值班巡检）——T-102 修复后 `policy_artifact_mismatch` 第三次翻 true。identity_context 显示：另一实例的 worktree `si-si-20260913-1635` 停在 `feat/si-fina-indicator-pit`（31759cf，未合并、落后 main），该树 backend 干净，从那里跑状态工具时 `_resolve_policy_identity` 判定 repo_owned=True，用**分叉分支代码**算出的 v3 指纹重算 mismatch（≠治理注册的 8c4821b9）→ 翻 true。main 提交历史零变化；同一 v3 artifact 在 main 生产点（79d91d3）重算恒为 8c4821b9。L-102 的「干净树即可重算」对 WIP 成立，但对「干净但非生产点」的树不成立——分叉树的指纹是已提交 artifact 的指纹，却不是**生产** artifact 的指纹。
+- 永久规则：**(a) `repo_owned` 必须同时满足三条件：backend 干净、git 可用、HEAD 恰为 main tip（`production_owned`）；任一不满足则 migrate/refresh 只记录 identity_context、不得重绑治理指纹或重算 mismatch，reanchor 拒绝。(b) `identity_context` 必须含 `main_tip` 与 `production_owned` 字段；mismatch 翻动仲裁先看这两个字段再看 commit。(c) 治理指纹重算的合法执行点只有一个：干净且处于 main tip 的树（研究员 worktree ff 到 main tip 后、或 main 检出树）。(d) 分叉分支上算出的指纹差异不得驱动任何发布/回滚决策。**
+- 自动护栏：`backend/tests/test_self_improve_state_dirty_tree_guard.py` 扩至 8 项（新增：分叉树 migrate 不翻 mismatch、分叉树 refresh 不动 mismatch、`_identity_context` 实测 main tip → production_owned）；state 工具族 65 项全过。
+- 复现：在任意落后 main 的干净 worktree 跑 `self_improve_state.py migrate-state`，观察修复前后 `policy_artifact_mismatch` 与 `identity_context.production_owned`。
+- 编号备注：未合并分支 `feat/si-fina-indicator-pit`（31759cf）已占用一个 L-103 编号；按「以 main 为准」规则本条在 main 上取 L-103，该分支合并时需按惯例重编号并修内部交叉引用。
+- 相关：L-102（脏树重绑，本条把守卫从 dirty 收紧到 production_owned）、L-100（identity_context 记录）、L-098（reanchor 逃生门）、L-096（发布证据口径）。
