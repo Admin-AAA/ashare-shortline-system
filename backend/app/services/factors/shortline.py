@@ -489,7 +489,7 @@ class DragonTigerFactor(BaseFactor):
         # R2 修复：只接受带来源验证的机构净买值（防御旧污染输入）。
         # 当前无真实席位来源，inst_net 应为 0；若调用方携带旧代理值（如 1.2），
         # 显式清零，确保 ratio 不被污染为 ±1。待 top_inst 接入后移除此守卫。
-        if inst_net != 0 and not stock.get("dragon_tiger_institution_source_verified"):
+        if inst_net != 0 and stock.get("dragon_tiger_institution_source_verified") is not True:
             inst_net = 0.0
 
         if not stock.get("dragon_tiger_is_on_list"):

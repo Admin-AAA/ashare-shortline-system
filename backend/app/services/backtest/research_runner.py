@@ -11,7 +11,7 @@ It never calls the legacy ``run_backtest`` service and never writes
 """
 from __future__ import annotations
 
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
@@ -138,7 +138,7 @@ MIN_LOOKBACK_CALENDAR_DAYS = 120
 # 注入逻辑发生向后不兼容变化时递增；strategy_profile._compatible_snapshot_id
 # 用同一常量校验候选快照是否由当前契约生成，避免复用旧字段面快照导致策略
 # prefilter 拿到缺失字段（0 信号）。
-RESEARCH_INPUT_SCHEMA_VERSION = 7
+RESEARCH_INPUT_SCHEMA_VERSION = 8
 RESEARCH_SOURCE_VERSION = f"local-daily-kbars/v{RESEARCH_INPUT_SCHEMA_VERSION}"
 RESEARCH_STOCK_METADATA_TEMPORALITY = CURRENT_STATIC
 
@@ -980,23 +980,14 @@ class LocalResearchSnapshotBuilder:
     ) -> dict[str, str | None]:
         """构造信号日→前一可得资金流日期的映射（L-014 strictly-prior-day）。
 
-        遍历信号日序列，取前一信号日作为资金流来源日期；只在 capital_rows_by_date
-        中有数据时返回有效映射，缺失时返回 None。这样可以处理跨周末/节假日的场景，
-        同时确保不会误用信号当日资金流。
+        来源日期来自实际可得记录，独立于信号日采样及窗口边界。
+        每个信号仅接受严格早于该日的最近记录；没有前置记录则保留缺失。
         """
         prior_map: dict[str, str | None] = {}
-        for i, signal_date in enumerate(dates):
-            if i == 0:
-                # 第一个信号日没有前一日，标记为 None
-                prior_map[signal_date] = None
-            else:
-                # 取前一信号日作为资金流来源
-                candidate = dates[i - 1]
-                # 验证该日期在 capital_rows_by_date 中有数据
-                if candidate in capital_rows_by_date and capital_rows_by_date[candidate]:
-                    prior_map[signal_date] = candidate
-                else:
-                    prior_map[signal_date] = None
+        available_dates = sorted(day for day, rows in capital_rows_by_date.items() if rows)
+        for signal_date in dates:
+            index = bisect_left(available_dates, signal_date)
+            prior_map[signal_date] = available_dates[index - 1] if index else None
         return prior_map
 
     def _load_research_capital_flow_rows(
@@ -1012,9 +1003,20 @@ class LocalResearchSnapshotBuilder:
         rows_by_date: dict[str, dict[str, dict[str, Any]]] = {
             d: {} for d in dates
         }
+        if not dates:
+            return rows_by_date
         try:
+            # 首个信号也需要窗口外的前置输入，不能由请求边界制造数据缺失。
+            prior_date = self._session.scalar(
+                select(CapitalFlow.trade_date)
+                .where(CapitalFlow.trade_date < min(dates))
+                .order_by(CapitalFlow.trade_date.desc()).limit(1)
+            )
             flow_rows = self._session.scalars(
-                select(CapitalFlow).where(CapitalFlow.trade_date.in_(tuple(dates)))
+                select(CapitalFlow).where(
+                    CapitalFlow.trade_date >= (prior_date or min(dates)),
+                    CapitalFlow.trade_date < max(dates),
+                )
             ).all()
         except Exception:
             flow_rows = ()

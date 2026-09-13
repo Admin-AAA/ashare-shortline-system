@@ -80,19 +80,24 @@ def test_chip_skill_signal_grounded_in_history():
     历史统计需使用样本身份、执行政策、结算有效性、配对日 CI 的证据输出。
     """
     from app.db.session import SessionLocal
-    from sqlalchemy import text
+    from sqlalchemy import select
+    from app.models.tables import Recommendation, RecommendationOutcome, RecommendationRun
+    from app.services.official_sample_scope import official_sample_conditions
     import json
 
-    db = SessionLocal()
-    # R3: 限定 live_forward (canonical)、有效结算标签、非 provisional
-    rows = db.execute(text(
-        'SELECT r.feature_snapshot_json, o.outcome_label FROM recommendations r '
-        'JOIN recommendation_runs u ON r.run_id=u.run_id '
-        'LEFT JOIN recommendation_outcomes o ON o.recommendation_id=r.recommendation_id '
-        'WHERE u.run_mode="formal" AND u.evaluation_scope="live_forward" '
-        'AND r.feature_snapshot_json IS NOT NULL '
-        'AND o.outcome_label IN ("success", "failed")'
-    )).fetchall()
+    # canonical 身份由唯一选择器定义；结算标签之外仍须验证成交和信号有效性。
+    with SessionLocal() as db:
+        rows = db.execute(
+            select(Recommendation.feature_snapshot_json, RecommendationOutcome.outcome_label, RecommendationOutcome.hit_invalid)
+            .join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id)
+            .join(RecommendationOutcome, RecommendationOutcome.recommendation_id == Recommendation.recommendation_id)
+            .where(
+                *official_sample_conditions(),
+                Recommendation.feature_snapshot_json.is_not(None),
+                RecommendationOutcome.outcome_label.in_(("success", "failed")),
+                RecommendationOutcome.entry_triggered.is_(True),
+            )
+        ).all()
 
     def num(d, k):
         v = d.get(k)
@@ -105,16 +110,16 @@ def test_chip_skill_signal_grounded_in_history():
 
     lab = succ = 0
     sig_n = sig_s = 0
-    for snap, label in rows:
+    for snap, label, hit_invalid in rows:
         d = json.loads(snap) if isinstance(snap, str) else snap
         c = num(d, "chip_concentration")
         if label in ("success", "failed"):
             lab += 1
-            succ += label == "success"
+            succ += label == "success" and not hit_invalid
             bo = d.get("breakout20") in (1, True) or d.get("breakout60") in (1, True)
             if c is not None and 4 < c <= 10 and bo:
                 sig_n += 1
-                sig_s += label == "success"
+                sig_s += label == "success" and not hit_invalid
     base_wr = succ * 100 / lab if lab else 0
     sig_wr = sig_s * 100 / sig_n if sig_n else 0
     # 样本不足是等待前瞻数据，不是代码回归；保留为明确 skip，禁止用小样本 claim lift。
