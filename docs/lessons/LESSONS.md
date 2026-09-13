@@ -1004,3 +1004,13 @@
 - 永久规则：**(a) 跑 self_improve_state.py（migrate/refresh/reanchor/publish）必须从与 champion commit 一致的干净检出执行；从带政策相关 WIP 的树跑出的 mismatch=true 一律视为噪声，先看 identity_context 再判定。(b) fingerprint 比较只在同一代码修订内有效；跨树/跨修订的指纹差异先归因（dataclass 演化→重锚，WIP→换干净树重跑），不得据此发布或回滚。(c) 政策语义改动（artifact JSON / production_policy dataclass）未提交进 main 前，禁止让任何 LIVE 进程导入该树；发现工作区含未提交政策语义时，值班研究员必须在报告中标记并等待其走证据管道。(d) identity_context 必须随每次健康检查留痕，mismatch 翻动的仲裁依据是 identity_context 而非 mismatch 标志本身。**
 - 复现：`backend/scripts/self_improve_state.py migrate-state`（不同树执行对比 identity_context.commit 与 backend_dirty）；测试 `backend/tests/test_self_improve_state_identity_context.py`（3 例）+ `test_self_improve_state_reanchor.py`（3 例）。
 - 相关：L-099（跨代码版本指纹不可复现→reanchor，本条是其执行树维度的补全）、L-097/L-098（canonical_production 单一事实源与 audit 只读）、L-094（v3 live 回退判据）、L-013（决策时 regime 持久化）。
+
+## L-102 脏执行树不仅"漂移"还会"重绑"：migrate-state 用 WIP 指纹重算 mismatch、reanchor 可能把 WIP 指纹写进治理状态；指纹重绑/重算/重锚必须在干净树上执行
+
+- 状态：encoded
+- 适用：`backend/scripts/self_improve_state.py` 的 migrate-state / refresh-policy-health / reanchor-policy；多实例并行共享 self-improve-state.json 的所有场景
+- 证据：2026-09-13 实测——主工作树停在 `feat/strong-bull-ivol-veto-v3`（d3e7e60，早于 T-100 修复）且 backend 带未提交政策语义 WIP，从主树跑 `migrate-state`（每次开局流程第一步）会以 WIP 指纹 9707a4ca 重算 `policy_artifact_mismatch`，把 L-098 重锚后的 false 翻回 true；干净 main 树（32b96e2）同一 v3 artifact 指纹为 8c4821b9。L-100 只做了"记录 identity_context 使翻动可审计"，未阻止脏树写入。修复 commit 见本轮 T-102 提交；测试 `backend/tests/test_self_improve_state_dirty_tree_guard.py`（5 项）+ 既有 58 项全过。
+- 永久规则：(a) `policy_artifact_fingerprint` 的 setdefault/重算、`policy_artifact_mismatch` 的重算、champion selection_policy 的重绑，只在执行树 backend 干净（`backend_dirty=False` 且无 git 错误）时进行；脏树运行仅记录 identity_context。(b) 干净树的 refresh-policy-health 自愈重算 mismatch（脏树污染可被下一次干净树巡检纠正）。(c) reanchor-policy 在脏树上直接拒绝（`DIRTY_TREE`），重锚目标必须是 repo-owned 指纹。(d) 例外：champion selection_policy 缺失/畸形（bootstrap）时总是补绑，否则状态机无法启动。(e) 研究员开局一律从自己干净 worktree 跑状态工具，不得从主工作树跑（主工作树常被并行实例停在 feature 分支+dirty）。
+- 自动护栏：`test_self_improve_state_dirty_tree_guard.py` 覆盖脏树 migrate 不重绑/不重算、干净树 migrate 重算、干净树 refresh 自愈、脏树 refresh 不动、脏树 reanchor 拒绝。
+- 吸收位置：`self_improve_state.py` 的 `_resolve_policy_identity()` + migrate_state + refresh_policy_health + reanchor_policy_identity；OPERATIONS.md 常用工作流补充说明。
+- 相关：L-098（代码版本漂移与 reanchor 逃生门）、L-100（identity_context 记录）、L-096（发布证据口径）。
