@@ -540,13 +540,18 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
         same_day_industry_counts = _same_day_industry_counts(
             self._db, str(snapshot.get("trade_date") or ""), self._run_id,
         )
-        # L-093：附加当日全市场 ivol20 横截面分位，供 v3 强牛×高特质波动否决；
-        # 规则关闭（v1/v2）时该字段不影响任何选择，保持逐位可复现。
         _sel_date = str(snapshot.get("trade_date") or "")
         if _sel_date:
-            from app.services.risk_features import load_ivol20_pct_map, attach_ivol20_pct
-            _ivol_map = load_ivol20_pct_map(self._db, [_sel_date])
-            attach_ivol20_pct(scored_cards, _sel_date, _ivol_map)
+            # L-093：附加当日全市场 ivol20 横截面分位，供 v3 强牛×高特质波动否决；
+            # 规则关闭（v1/v2）时该字段不影响任何选择，保持逐位可复现。读取失败（如迁移
+            # 0018 尚未执行、列暂缺）时保守降级为不带 ivol 字段，否决自然不触发、等同 v2，
+            # 绝不因风险特征缺失而中断整轮选股。
+            try:
+                from app.services.risk_features import load_ivol20_pct_map, attach_ivol20_pct
+                _ivol_map = load_ivol20_pct_map(self._db, [_sel_date])
+                attach_ivol20_pct(scored_cards, _sel_date, _ivol_map)
+            except Exception as _ivol_exc:  # noqa: BLE001
+                logger.warning("ivol20 分位附加失败，本轮保守不做强牛高ivol否决: %s", _ivol_exc)
         policy_result = evaluate_selection_policy(
             scored_cards,
             SelectionPolicyContext(
