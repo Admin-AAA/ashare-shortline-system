@@ -64,6 +64,15 @@ class ProductionSelectionPolicy:
     # 而保持负期望组合（偏多·高潮85）的拦截——单参数叠加无法表达这种二维区分。
     regime_sentiment_line_overrides: tuple[tuple[str, float], ...] = ()
 
+    # L-093 强牛 regime × 高特质波动横截面风险否决（默认关闭，仅 v3 打开）：
+    # 在强牛（可配 regime）当日，把全市场 ivol20 分位 ≥ 阈值的候选卡硬剔除、由下一名
+    # 自然递补（不空仓、不整日 abstain，区别于 L-080 指数趋势择时门控）。卡片须由选择
+    # 咽喉预先附加 ivol20_pct（app.services.risk_features）；缺该字段的卡不参与否决
+    # （保守：数据不全不动既有行为）。三窗口 canonical Δcohort 全正，详见 L-093。
+    strong_high_ivol_veto_enabled: bool = False
+    strong_high_ivol_regimes: tuple[str, ...] = ("强牛",)
+    strong_high_ivol_pct_threshold: float = 0.80
+
     def canonical_payload(self) -> dict[str, Any]:
         return {
             "policy_id": self.policy_id,
@@ -94,6 +103,9 @@ class ProductionSelectionPolicy:
             "climax_output_divisor": self.climax_output_divisor,
             "weak_ice_output_limit": self.weak_ice_output_limit,
             "regime_sentiment_line_overrides": [list(item) for item in self.regime_sentiment_line_overrides],
+            "strong_high_ivol_veto_enabled": self.strong_high_ivol_veto_enabled,
+            "strong_high_ivol_regimes": list(self.strong_high_ivol_regimes),
+            "strong_high_ivol_pct_threshold": self.strong_high_ivol_pct_threshold,
         }
 
     @property
@@ -116,6 +128,7 @@ class ProductionSelectionPolicy:
         tuple_string_fields = {
             "excluded_20cm_buckets",
             "dynamic_soft_floor_disabled_regimes",
+            "strong_high_ivol_regimes",
         }
         if field_name in tuple_string_fields:
             if not isinstance(value, (list, tuple)):
@@ -143,14 +156,16 @@ _POLICY_ARTIFACT_DIR = Path(__file__).resolve().parents[1] / "policies"
 
 def load_production_selection_policy(
     policy_id: str = "production-selection",
-    version: int = 2,
+    version: int = 3,
 ) -> ProductionSelectionPolicy:
     """Load the repository-owned artifact used by production and backtests.
 
-    v1 保留以复现历史；v2 为当前默认（把偏多/震荡/弱势·高潮硬排除到分数线上限，
-    其余组合维持 L-060 不变；依据冻结 244d + 前瞻 117d 双窗口因果重放，见 L-070）。
+    v1 保留以复现历史；v2 = L-070 偏多/震荡/弱势·高潮硬排除（双窗口因果重放）；
+    v3 为当前默认 = v2 全部规则 + L-093 强牛×高特质波动横截面风险否决（三窗口
+    canonical Δcohort 全正 +0.075/+0.143/+0.363，生产代码同构复核，见 L-093）。
+    需要严格复现旧口径时显式传 version=1/2。
     """
-    if policy_id != "production-selection" or version not in (1, 2):
+    if policy_id != "production-selection" or version not in (1, 2, 3):
         raise ValueError(f"unknown production selection policy: {policy_id}@{version}")
     path = _POLICY_ARTIFACT_DIR / f"production_selection.v{version}.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -168,6 +183,9 @@ def load_production_selection_policy(
     )
     payload["regime_sentiment_line_overrides"] = tuple(
         (str(key), float(value)) for key, value in payload.get("regime_sentiment_line_overrides") or ()
+    )
+    payload["strong_high_ivol_regimes"] = tuple(
+        str(value) for value in payload.get("strong_high_ivol_regimes") or ("强牛",)
     )
     policy = ProductionSelectionPolicy(**payload)
     if policy.policy_id != policy_id or policy.version != version:

@@ -205,6 +205,10 @@ class DailyKbar(Base):
     holder_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     profit_efficiency: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # 特质波动（本地计算）：个股日收益对中证500(000905.SH)做20日滚动回归后的残差标准差，
+    # 度量剔除市场beta后的个股特质风险；L-093 强牛regime横截面风险否决使用。T收盘可得，无前视。
+    ivol20: Mapped[float | None] = mapped_column(Float, nullable=True)
+
     # 来源标记
     source: Mapped[str] = mapped_column(String(16), default="tushare")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)

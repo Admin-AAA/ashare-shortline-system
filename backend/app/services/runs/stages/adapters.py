@@ -540,6 +540,13 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
         same_day_industry_counts = _same_day_industry_counts(
             self._db, str(snapshot.get("trade_date") or ""), self._run_id,
         )
+        # L-093：附加当日全市场 ivol20 横截面分位，供 v3 强牛×高特质波动否决；
+        # 规则关闭（v1/v2）时该字段不影响任何选择，保持逐位可复现。
+        _sel_date = str(snapshot.get("trade_date") or "")
+        if _sel_date:
+            from app.services.risk_features import load_ivol20_pct_map, attach_ivol20_pct
+            _ivol_map = load_ivol20_pct_map(self._db, [_sel_date])
+            attach_ivol20_pct(scored_cards, _sel_date, _ivol_map)
         policy_result = evaluate_selection_policy(
             scored_cards,
             SelectionPolicyContext(

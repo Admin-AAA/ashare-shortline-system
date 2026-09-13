@@ -1016,6 +1016,40 @@ def apply_pool_rules(
         if code:
             seen_codes.add(code)
         deduped.append(card)
+    # L-093 强牛 regime × 高特质波动横截面风险否决：强牛当日把全市场 ivol20 分位最高的
+    # 一档候选硬剔除、由其后按 final_score 排序的下一名自然递补（不空仓、不整日 abstain）。
+    # 机制：强牛高潮单元里个股特质风险（剔除市场 beta 后的残差波动）越高，次日跳空止损/
+    # 尾部大亏概率越高；该规则是横截面否决而非 L-080 的指数趋势择时，三窗口 canonical 同向。
+    # 卡片 ivol20_pct 由选择咽喉（live adapters / 回测 policy_experiment）经
+    # risk_features.attach_ivol20_pct 预附；缺字段（数据不全）保守不动，保持 v1/v2 行为。
+    if (
+        selection_policy is not None
+        and getattr(selection_policy, "strong_high_ivol_veto_enabled", False)
+        and _ctx_base in tuple(getattr(selection_policy, "strong_high_ivol_regimes", ()) or ())
+    ):
+        _ivol_thr = float(selection_policy.strong_high_ivol_pct_threshold)
+        kept_after_ivol: list[dict[str, Any]] = []
+        for card in deduped:
+            _ivol_pct = card.get("ivol20_pct")
+            if _ivol_pct is None:
+                kept_after_ivol.append(card)
+                continue
+            try:
+                _ivol_pct = float(_ivol_pct)
+            except (TypeError, ValueError):
+                kept_after_ivol.append(card)
+                continue
+            if _ivol_pct >= _ivol_thr:
+                card["policy_drop_owner"] = "strong_high_ivol_veto"
+                card.setdefault("policy_verdict_steps", []).append({
+                    "rule_id": "strong_high_ivol_veto",
+                    "action": "drop",
+                    "reason": f"{_ctx_base}高特质波动 ivol20 分位 {_ivol_pct:.2f}≥{_ivol_thr:.2f}",
+                    "eliminated": True,
+                })
+                continue
+            kept_after_ivol.append(card)
+        deduped = kept_after_ivol
     result: list[dict[str, Any]] = []
     watchlist: list[dict[str, Any]] = []
     top_final_score = 0.0
