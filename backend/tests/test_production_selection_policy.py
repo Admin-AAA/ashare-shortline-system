@@ -277,3 +277,180 @@ def test_normal_active_market_overrides_restore_output_without_relaxing_weak_mar
     assert strong_climax["effective_score_line"] == 64.0
     assert bullish_active["effective_score_line"] == 71.4
     assert weak_active["effective_score_line"] == 60.0
+
+
+# ---------------------------------------------------------------------------
+# 通用横截面尾部否决（extra_tail_veto_*，L-095）：默认关闭、artifact 声明式开启，
+# 与 L-093 的 strong_high_ivol_veto 同构但因子/方向/阈值参数化。
+# ---------------------------------------------------------------------------
+
+
+def _strong_snapshot() -> dict:
+    """up 76% + 涨停 50 → _market_base = 强牛。"""
+    return {
+        "sample_count": 5000,
+        "up_count": 3800,
+        "down_count": 1200,
+        "limit_up_count": 50,
+        "limit_down_count": 3,
+    }
+
+
+def _oscillation_snapshot() -> dict:
+    """up 40% → _market_base = 震荡。"""
+    return {
+        "sample_count": 5000,
+        "up_count": 2000,
+        "down_count": 3000,
+        "limit_up_count": 50,
+        "limit_down_count": 3,
+    }
+
+
+def _tail_policy(**overrides: object):
+    """在默认策略（v3）上只打开 extra_tail_veto，其余规则不动。"""
+    policy = DEFAULT_PRODUCTION_SELECTION_POLICY.with_rule_patch("extra_tail_veto_enabled", True)
+    for rule_id, value in overrides.items():
+        policy = policy.with_rule_patch(rule_id, value)
+    return policy
+
+
+def _tail_cards() -> list[dict]:
+    """3 张卡：中位分数递减，分位 .20/.90/.10 —— 中间那张落在高尾。
+
+    每次调用都返回全新对象：evaluate_selection_policy 会就地写回
+    policy_drop_owner / policy_verdict_steps，复用同一批 dict 会让上一臂的剔除
+    标记泄漏到下一臂（生产回测咽喉因此显式剥离这两个键，见 L-071/L-095）。
+    """
+    return [
+        {**_card("600001", 99.0), "extra_tail_veto_pct": 0.20},
+        {**_card("600002", 98.0), "extra_tail_veto_pct": 0.90},
+        {**_card("600003", 97.0), "extra_tail_veto_pct": 0.10},
+    ]
+
+
+def test_extra_tail_veto_is_disabled_by_default_and_absent_from_frozen_artifacts() -> None:
+    """默认策略（v3）不得启用该规则；且 v1/v2/v3 artifact 不得含这些键（保持不可变）。"""
+    import json
+    from pathlib import Path
+
+    from app.engine.production_policy import load_production_selection_policy
+
+    assert DEFAULT_PRODUCTION_SELECTION_POLICY.extra_tail_veto_enabled is False
+    assert DEFAULT_PRODUCTION_SELECTION_POLICY.version == 3
+    for version in (1, 2, 3):
+        policy = load_production_selection_policy(version=version)
+        assert policy.extra_tail_veto_enabled is False
+        payload = json.loads(
+            (
+                Path(__file__).resolve().parents[1]
+                / "app"
+                / "policies"
+                / f"production_selection.v{version}.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert not any(key.startswith("extra_tail_veto") for key in payload)
+
+
+def test_extra_tail_veto_high_tail_drops_card_and_backfills_next_ranked() -> None:
+    """direction=high：分位落高尾的卡被硬剔，其后按 final_score 的下一名自然递补。
+
+    出票硬上限由 daily_output_limit 控制（output_count 只影响软底线），这里把它压到 2
+    以便真正观察"剔一张 → 补一张"的递补行为。
+    """
+    context = SelectionPolicyContext(
+        score_line=72.0, output_count=2, market_snapshot=_strong_snapshot()
+    )
+    base_policy = DEFAULT_PRODUCTION_SELECTION_POLICY.with_rule_patch("daily_output_limit", 2)
+    base = evaluate_selection_policy(_tail_cards(), context, base_policy)
+    assert [card["code"] for card in base.recommendations] == ["600001", "600002"]
+
+    policy = _tail_policy(
+        daily_output_limit=2,
+        extra_tail_veto_direction="high",
+        extra_tail_veto_pct_threshold=0.80,
+        extra_tail_veto_regimes=("强牛",),
+    )
+    # evaluate_selection_policy 会就地写回 policy_drop_owner，故每臂都用全新的卡对象。
+    treat = evaluate_selection_policy(_tail_cards(), context, policy)
+
+    # 600002 被剔后，原本排第 3 的 600003 递补进 2 个名额。
+    assert [card["code"] for card in treat.recommendations] == ["600001", "600003"]
+    verdicts = {item.code: item for item in treat.verdicts}
+    assert verdicts["600002"].drop_owner == "extra_tail_veto"
+    assert verdicts["600003"].drop_owner is None
+    assert any(step.rule_id == "extra_tail_veto" for step in verdicts["600002"].steps)
+
+
+def test_extra_tail_veto_low_tail_direction_drops_low_pct_card() -> None:
+    """direction=low：分位落低尾的卡被剔（镜像方向）。"""
+    cards = [
+        {**_card("600001", 99.0), "extra_tail_veto_pct": 0.50},
+        {**_card("600002", 98.0), "extra_tail_veto_pct": 0.05},  # 低尾 → 剔
+        {**_card("600003", 97.0), "extra_tail_veto_pct": 0.60},
+    ]
+    policy = _tail_policy(
+        extra_tail_veto_direction="low",
+        extra_tail_veto_pct_threshold=0.20,
+        extra_tail_veto_regimes=("强牛",),
+    )
+    result = evaluate_selection_policy(
+        list(cards),
+        SelectionPolicyContext(
+            score_line=72.0, output_count=2, market_snapshot=_strong_snapshot()
+        ),
+        policy,
+    )
+
+    assert [card["code"] for card in result.recommendations] == ["600001", "600003"]
+    verdicts = {item.code: item for item in result.verdicts}
+    assert verdicts["600002"].drop_owner == "extra_tail_veto"
+
+
+def test_extra_tail_veto_respects_regime_gate() -> None:
+    """声明 regimes=('强牛',) 时，震荡日不得触发（regime 条件是承重设计）。"""
+    cards = [
+        {**_card("600001", 99.0), "extra_tail_veto_pct": 0.20},
+        {**_card("600002", 98.0), "extra_tail_veto_pct": 0.90},
+    ]
+    policy = _tail_policy(extra_tail_veto_regimes=("强牛",))
+    result = evaluate_selection_policy(
+        list(cards),
+        SelectionPolicyContext(
+            score_line=72.0, output_count=2, market_snapshot=_oscillation_snapshot()
+        ),
+        policy,
+    )
+
+    assert [card["code"] for card in result.recommendations] == ["600001", "600002"]
+    assert all(item.drop_owner != "extra_tail_veto" for item in result.verdicts)
+
+
+def test_extra_tail_veto_missing_percentile_is_conservative_pass() -> None:
+    """缺分位字段（数据不全）的卡保守放行，保证旧版本行为逐位可复现。"""
+    cards = [_card("600001", 99.0), _card("600002", 98.0)]
+    policy = _tail_policy(extra_tail_veto_regimes=("强牛",))
+    result = evaluate_selection_policy(
+        list(cards),
+        SelectionPolicyContext(
+            score_line=72.0, output_count=2, market_snapshot=_strong_snapshot()
+        ),
+        policy,
+    )
+
+    assert [card["code"] for card in result.recommendations] == ["600001", "600002"]
+    assert all(item.drop_owner != "extra_tail_veto" for item in result.verdicts)
+
+
+def test_extra_tail_veto_regimes_patch_stays_hashable_tuple() -> None:
+    """regimes 必须被规范成 tuple，否则 fingerprint 不可哈希。"""
+    policy = _tail_policy(extra_tail_veto_regimes=["强牛", "偏多"])
+    assert policy.extra_tail_veto_regimes == ("强牛", "偏多")
+    assert isinstance(policy.fingerprint, str) and len(policy.fingerprint) == 64
+
+
+def test_default_policy_fingerprint_is_not_pinned_to_legacy_value() -> None:
+    """v3 规则行为未变：默认策略仍启用 L-093 ivol 否决，且 v3 未被改成 v4。"""
+    assert DEFAULT_PRODUCTION_SELECTION_POLICY.strong_high_ivol_veto_enabled is True
+    assert DEFAULT_PRODUCTION_SELECTION_POLICY.strong_high_ivol_regimes == ("强牛",)
+    assert DEFAULT_PRODUCTION_SELECTION_POLICY.strong_high_ivol_pct_threshold == 0.80
