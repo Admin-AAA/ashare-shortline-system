@@ -1014,3 +1014,16 @@
 - 自动护栏：`test_self_improve_state_dirty_tree_guard.py` 覆盖脏树 migrate 不重绑/不重算、干净树 migrate 重算、干净树 refresh 自愈、脏树 refresh 不动、脏树 reanchor 拒绝。
 - 吸收位置：`self_improve_state.py` 的 `_resolve_policy_identity()` + migrate_state + refresh_policy_health + reanchor_policy_identity；OPERATIONS.md 常用工作流补充说明。
 - 相关：L-098（代码版本漂移与 reanchor 逃生门）、L-100（identity_context 记录）、L-096（发布证据口径）。
+
+## L-103 stock_fina_indicator point-in-time 基本面轴双线证伪：冻结窗前 7.5 个月 PIT 覆盖 0%（缺 2024 年报）触发覆盖即死；覆盖段内水平因子与新鲜公告事件均第三窗翻号/单窗伪 alpha；L-082 覆盖普查复核确认死表无一被 backfill 解锁
+
+- 状态：active（否定性 FINDING + 覆盖普查增量复核；不改生产策略）。
+- 动机：L-082 对 stock_fina_indicator 只做行数普查（"单窗或过稀"），是全库最后一张未做因子级测试的表。本轮补齐该轴的因子级结论，并对 L-082 之后是否发生覆盖解锁做增量复核。
+- 覆盖普查增量（`backend/scripts/si_coverage_delta_census.py`，87 表三窗行数+范围）：capital_flow/concept_sector(_stock)/news_announcement 起始日未变（2026-03-27/03-23/03-10），冻结仍 0；block_trades 冻结 129 行、broker_recommends/holder_numbers/holder_trades/share_floats/institutional_surveys 依旧单窗或停更；hk_holdings 北向仍死。**L-082"覆盖即死"名单无一被增量 backfill 解锁，冻结窗数据源缺口不可自我恢复。**
+- PIT 覆盖断层（`backend/scripts/research_fina_indicator_pit.py`，面板 `output/research/fina_pit_panel.pkl`）：表内无 2024 年报（20241231 仅 1 行）、2025Q1 仅 10 行，导致按 ann_date 前向取"最新已公告财报"的月度覆盖率：2025-01~07 ≈0%，2025-08 11%，2025-11 起 ≈97%，2026-05 起 100%。冻结窗（2025-01-15~2026-01-16）可检验段仅剩 2025-11~2026-01 约 2.5 个月。
+- 因子级证据（全市场 strictly-prior，T 收盘已知→T+1 开盘买→T+5 收盘卖，毛口径，L-064 铁律先行；窗口：冻结覆盖段/真前瞻 2026-02-09~08-05/run3 2026-08-07~09-02）：
+  - 水平因子五分位 Q5-Q1：netprofit_yoy +0.581/+0.273/**-0.696 翻号**；or_yoy +0.588/+0.524/**-0.554 翻号**；ROE +0.102/+0.178/**-0.887 翻号**；run3 逐月同号均 0.50，Spearman ρ 全部 |ρ|≤0.053。
+  - 新鲜公告事件（公告后≤12 自然日 vs 其余已覆盖股）：冻结 +0.022、前瞻 +2.591、run3 +0.089——只有前瞻单窗大正，标准单窗伪 alpha 形态（同 L-073/L-079），不落地。
+- 永久规则：**(a) 财报类 PIT 因子研究必须先看"每信号日最新已公告期"覆盖率——本表无 2024 年报，冻结窗 0% 覆盖段不可用做 canonical；除非回填 2023-12/2024-12/2025-03 及更早期末报告（覆盖修复前禁止重测）。(b) 净利/营收同比、ROE 水平因子与新鲜公告事件在 5 日短线 horizon 无三窗稳定 alpha，禁止在当前表上换名重挖（第三窗翻号已两次独立出现于本轴）。(c) "覆盖普查增量复核"是 L-082 地图的维护方式：死表若被 backfill 解锁，必须重跑三窗行数确认冻结窗恢复，再谈因子。**
+- 吸收位置：`backend/scripts/si_coverage_delta_census.py`（可重跑的增量覆盖普查）、`backend/scripts/research_fina_indicator_pit.py`（PIT 财报因子预筛模板）。
+- 相关：L-082（全库覆盖普查）、L-065（日线横截面挖尽）、L-064（strictly-prior 铁律）、L-079/L-084（第三窗翻号先例）、L-073（冻结假 alpha）。
